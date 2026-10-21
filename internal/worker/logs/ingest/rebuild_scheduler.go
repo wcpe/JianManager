@@ -127,6 +127,10 @@ type rebuildOutcome struct {
 	// 故只清 `PublicationPending`，不重建任何天。它与「写成功」是两种不同的完成形态，
 	// 分开记账才不会把「确认」误读成「又写了一遍」。
 	ConfirmedOnly bool
+	// BeyondHotRetention 是因**超出热层保留期**（早于 `now - HotRetention`）被跳过的 UTC 天
+	// （升序）。它们既不是「已发布」也不是「待发布」：热层里永远看不到它们，缺口继续保留在
+	// 账本中（需靠冷层/归档或人工复核），故必须如实上报——绝不能混进 Days 冒充写成功。
+	BeyondHotRetention []string
 	// Err 是本次失败原因（nil 表示完整成功）。
 	Err error
 }
@@ -612,6 +616,16 @@ func (m *Manager) runRebuildRequest(ctx context.Context, req *rebuildRequest) {
 		slog.Info("投影重建本轮有界推进未完成（剩余天留给下一轮，数据仍视为未发布）",
 			"source", req.key, "reason", req.reason,
 			"publishedDays", outcome.Days, "elapsedMs", time.Since(started).Milliseconds())
+	} else if len(outcome.BeyondHotRetention) > 0 {
+		// 有「超出热层保留期」的天被跳过：**不能**落「写入 + 逐字段校验 + 发布均已通过」那句
+		// （那会把没进热层的数据说成已发布）。这里按真进展记账（跳过不是失败：它不会再被
+		// 无限重排），但用醒目级别如实写出「哪些天没发布」。
+		m.rebuilds.stats.Completed.Add(1)
+		m.rebuilds.noteSuccess(req.key)
+		slog.Warn("投影重建完成（部分 UTC 天超出热层保留期，未发布；缺口保留在账本中）",
+			"source", req.key, "reason", req.reason,
+			"publishedDays", outcome.Days, "beyondHotRetentionDays", outcome.BeyondHotRetention,
+			"elapsedMs", time.Since(started).Milliseconds())
 	} else {
 		m.rebuilds.stats.Completed.Add(1)
 		m.rebuilds.noteSuccess(req.key)
@@ -741,8 +755,13 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 	// 「先确认、后重建」：pending 的语义是「上次发布**未获确认**」，而不是「数据一定没写成功」。
 	// 先做一次只读取证（成本 O(全量)，与重建同级，故同样必须由本 worker 承担），
 	// 确认通过即零写入收尾——这正是既有 `tryConfirmPendingPublication` 的语义，逐字保留。
+	//
+	// 超窗口天的收口（2026-10-21）：确认取证同样会把这些天判成「缺失」（VL 查不到就是缺失），
+	// 故 `confirmPendingOutsideLine` 把「超窗口的缺失天」单独回传——它们不计入重建面，
+	// 但必须参与终态判定，否则 pending 会永久为真。
+	var beyondWindow []string
 	if req.confirmPending {
-		confirmed, missingDays, err := m.confirmPendingOutsideLine(ctx, req.source, key)
+		confirmed, missingDays, beyondMissing, err := m.confirmPendingOutsideLine(ctx, req.source, key)
 		if err != nil {
 			return rebuildOutcome{Pending: true, Err: err}
 		}
@@ -756,10 +775,36 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		// 也是「不重复写已经有数据的天」的省流要求（生产单源 57 万条/天，多写一天即多一份 VL 体积）。
 		if len(missingDays) > 0 {
 			req.days = missingDays
+		} else if len(beyondMissing) > 0 {
+			// 待确认的缺失天**全部**超出热层保留期：热层永远看不到它们，没有可重建的面。
+			// 这里必须把请求面清空——否则下面会拿登记时的全部天（含超窗口天）去重建，
+			// 又回到「写 200 却查不到」的假成功循环。
+			req.days = nil
 		}
+		beyondWindow = append(beyondWindow, beyondMissing...)
 	}
+	// 热层可发布窗口过滤（**先于任何写入/校验**）：超窗口的天在热层不可能可见，
+	// 写它们既浪费又会产生「写入 200 但校验恒 0 行」的假成功（见 hot_retention_window.go）。
+	// 过滤结果两段都留着：窗口内的天照原语义推进，超窗口的天如实记账（绝不静默丢弃）。
+	now := time.Now()
+	inWindowDays, beyondDays := m.splitHotRetentionDays(req.days, now)
+	beyondWindow = sortUTCDays(append(beyondWindow, beyondDays...))
+	req.days = inWindowDays
 	if len(req.days) == 0 {
-		return rebuildOutcome{}
+		if len(beyondWindow) == 0 {
+			return rebuildOutcome{}
+		}
+		// 本次请求覆盖的全部天都超出热层保留期：给这件事一个**明确终态**
+		// （清 pending、如实记账、绝不宣称已发布，也绝不解算缺口）。
+		return m.finishRebuildBeyondHotRetention(key, beyondWindow)
+	}
+	if len(beyondWindow) > 0 {
+		// 部分跳过：明确打出「哪些天被跳过、为什么、边界在哪」，否则外部只看得到
+		// 「重建完成」而不知道有数据永远进不了热层。
+		slog.Warn("投影重建跳过超出热层保留期的 UTC 天（不写入、不校验、不计入已发布）",
+			"source", key, "reason", req.reason, "beyondHotRetentionDays", beyondWindow,
+			"rebuildDays", req.days, "hotRetention", m.hotRetention,
+			"hotRetentionBoundary", hotRetentionBoundary(now, m.hotRetention).UTC().Format(time.RFC3339))
 	}
 	// 权威集合与发布快照都在**锁外**取（快照必须先于权威读取，见 publicationSnapshot 的契约）。
 	snapshot := m.capturePublicationSnapshot(req.source, ctx)
@@ -784,7 +829,9 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		"rebuild:"+req.reason)
 	// 释放收口到函数出口（预算提前收束 / ctx 取消 / 写失败一并覆盖）。genRes==nil 时是空操作。
 	defer m.releaseProjectionGeneration(genRes)
-	out := rebuildOutcome{}
+	// BeyondHotRetention 随结论一起回传（含预算提前收束 / ctx 取消 / 写失败等早退分支）：
+	// 「哪些天没发布、以及为什么」不能因为本轮没跑完就丢失。
+	out := rebuildOutcome{BeyondHotRetention: beyondWindow}
 	// 按**天**切片推进（预算可配）：每天写完即发布该天；预算用尽的剩余天留给下一轮——下一轮
 	// 的对账会重新发现它们仍是缺失天（已发布的天条数已够，不会再被判缺失），因此**无需游标状态**，
 	// 天然可续且不重不漏。整窗完成前**不推进回收责任**（releaseRecovery 要求全窗口内容级保证）。
@@ -862,14 +909,19 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 
 // confirmPendingOutsideLine 在**重建 worker goroutine 上**做一次「发布确认」只读取证。
 //
-// 返回（是否已完整可见, 实测缺失天, error）。判据全部来自既有实现
+// 返回（是否已完整可见, 窗口内实测缺失天, 超窗口缺失天, error）。判据全部来自既有实现
 // `tryConfirmPendingPublicationCtx`（一字未改）；本包装只负责：取当前 state、判定在飞、
-// 把「缺失天」如实回传。
+// 把「缺失天」如实回传——并按「热层可发布窗口」把缺失天拆成两段。
+//
+// 为什么要拆（2026-10-21）：确认取证的判据是「VL 查不到就算缺失」，而超出热层保留期的天
+// **必然**查不到（VL 静默丢弃）。若把它们留在缺失天里，重建面就永远包含这些天 ⇒ 写入拿到
+// 200 却校验恒 0 行 ⇒ pending 永久为真。故超窗口的天不计入重建面，但**如实回传**：
+// 调用方据此给 pending 一个明确终态，而不是静默丢弃。
 //
 // 为什么必须由本 worker 承担：它内部会遍历全量事件（`canonicalRecoveryEvents`，生产单源
 // 57 万条）并对每一天做逐字段可见性查询——这正是 O(全量) 的重活。原先它内联跑在对账轮
 // goroutine 上（跑在采集同档），生产现场该源 46 次 `publication_pending` 回退即此。
-func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceConfig, key string) (bool, []string, error) {
+func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceConfig, key string) (bool, []string, []string, error) {
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	inflight := m.publicationInflight[key]
@@ -877,22 +929,85 @@ func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceCo
 	if !saved.PublicationPending {
 		// 已被别人确认/写成功清掉了：无需再确认（也不等于「本次重建成功」，
 		// 调用方按 days 继续重建即可——重建本身幂等）。
-		return false, nil, nil
+		return false, nil, nil, nil
 	}
 	if inflight != 0 {
 		// 该源还有在飞的写入：此刻取证不可信（可能读到写一半的中间态）。留给下一轮。
-		return false, nil, fmt.Errorf("ingest: 投影重建前发布确认不可用：同源有在飞写入")
+		return false, nil, nil, fmt.Errorf("ingest: 投影重建前发布确认不可用：同源有在飞写入")
 	}
 	missingDays := []string{}
 	// receipt 传 nil：重建路径与投递路径不在同一轮内，没有可复用的取证结果（复用只在一轮内成立）。
 	confirmed, err := m.tryConfirmPendingPublicationCtx(ctx, source, key, saved, nil, &missingDays)
 	if err != nil {
-		return false, nil, fmt.Errorf("ingest: 投影重建前发布确认失败: %w", err)
+		return false, nil, nil, fmt.Errorf("ingest: 投影重建前发布确认失败: %w", err)
 	}
 	if confirmed {
-		return true, nil, nil
+		return true, nil, nil, nil
 	}
-	return false, sortUTCDays(missingDays), nil
+	// 超窗口的天**不可能**在热层可见 ⇒ 不得计入「待重建的缺失天」；
+	// 但它们必须如实回传（调用方据此清 pending 并打 WARN），绝不静默丢弃。
+	inWindow, beyond := m.splitHotRetentionDays(missingDays, time.Now())
+	return false, inWindow, beyond, nil
+}
+
+// finishRebuildBeyondHotRetention 给「本次重建面全部超出热层保留期」这件事一个**明确终态**。
+//
+// 为什么必须有终态：超窗口的天永远过不了逐字段校验（VL 静默丢弃），若仍按原语义推进，
+// 结果就是 `PublicationPending` 永久为真 + 重建重试到上限后「已停止自动重试」持续刷——
+// 状态机卡死而数据面毫无进展（这正是 2026-10 生产现场的形态）。
+//
+// 收口动作只有两件：
+//  1. 清 `PublicationPending`（走与 `markPublicationPending` 相同的锁纪律与代次语义）；
+//  2. 打 WARN 如实写明「这些天超出热层保留期，未发布、也不会再自动重建；缺口保留在账本中」。
+//
+// **红线**：绝不调用 `resolveGapsLandedByDelivery` / `releaseRecovery` —— 这些天确实没有
+// 进入热层，缺口必须继续对用户可见（数据诚实性）。也绝不把它们记进 `Days`（那等于宣称已发布）。
+func (m *Manager) finishRebuildBeyondHotRetention(key string, beyond []string) rebuildOutcome {
+	beyond = sortUTCDays(append([]string(nil), beyond...))
+	m.mu.Lock()
+	saved := m.state.Sources[key]
+	pending := saved.PublicationPending
+	m.mu.Unlock()
+	cleared := false
+	if pending {
+		cleared = m.clearPublicationPendingBeyondHotRetention(key, saved.ProjectionGeneration)
+	}
+	now := time.Now()
+	slog.Warn("投影重建跳过全部超出热层保留期的 UTC 天：未发布、也不会再自动重建（缺口保留在账本中）",
+		"source", key, "days", beyond, "hotRetention", m.hotRetention,
+		"hotRetentionBoundary", hotRetentionBoundary(now, m.hotRetention).UTC().Format(time.RFC3339),
+		"publicationPendingCleared", cleared)
+	if pending && !cleared {
+		// 状态在收口期间被别人改过（代次已推进 / 仍有在飞写入）：不清是**正确**的
+		//（把 pending 清掉会把「不确定」说成「确定」）。如实记为未完成，交给下一轮。
+		slog.Warn("发布待定未能在本轮收口（代次已变或有在飞写入，留给下一轮）",
+			"source", key, "days", beyond)
+		return rebuildOutcome{BeyondHotRetention: beyond, Pending: true}
+	}
+	if cleared {
+		slog.Warn("发布待定已收口：待确认天全部超出热层保留期（已清 PublicationPending；不推进任何「已发布」状态）",
+			"source", key, "days", beyond)
+	}
+	return rebuildOutcome{BeyondHotRetention: beyond}
+}
+
+// clearPublicationPendingBeyondHotRetention 清掉 `PublicationPending`（发布待定）。
+//
+// 锁纪律与代次语义与 `markPublicationPending` 保持一致（同锁、同「只在代次仍是本次尝试的
+// 那一个时才写」）：期间若别人已发布到更新的代次，或仍有在飞写入，则**不写**——
+// 那会把状态倒退成「不确定」，反而制造出假的待定。
+func (m *Manager) clearPublicationPendingBeyondHotRetention(key, generation string) bool {
+	m.mu.Lock()
+	cur := m.state.Sources[key]
+	if cur.ProjectionGeneration != generation || m.publicationInflight[key] != 0 || !cur.PublicationPending {
+		m.mu.Unlock()
+		return false
+	}
+	cur.PublicationPending = false
+	m.state.Sources[key] = cur
+	m.mu.Unlock()
+	m.requestPersist()
+	return true
 }
 
 // rebuildYieldFn 返回本次重建的「批间让出」函数（nil 表示不让出）。

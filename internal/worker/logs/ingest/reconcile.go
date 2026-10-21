@@ -127,6 +127,12 @@ type ReconcileReport struct {
 	// Fallback 表示该源放弃增量判定、回退整窗重发（安全兜底）。
 	Fallback       bool   `json:"fallback"`
 	FallbackReason string `json:"fallback_reason,omitempty"`
+	// BeyondHotRetention 是**超出热层保留期**（早于 `now - HotRetention`）的 UTC 天（升序）。
+	//
+	// 它们既**不进入 MissingDays**（不登记重建：VL 对超保留期数据点返回 200 但静默丢弃，
+	// 重写只会得到一次「假成功」，见 hot_retention_window.go），也**不得被当成已发布**。
+	// 这是如实上报的「无法发布到热层」清单：缺口继续对用户可见，需靠冷层/归档或人工复核。
+	BeyondHotRetention []string `json:"beyond_hot_retention,omitempty"`
 	// Queries 是本次实际发出的 count 查询数。
 	Queries int `json:"queries"`
 	// Basis 是报告级依据标记（恒为 count_only）。
@@ -275,7 +281,32 @@ func (m *Manager) reconcileWithExpectation(ctx context.Context, source SourceCon
 	}
 	sourceCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
+	// 先把「超出热层保留期」的天摘出来（**纯本地判定，不花任何查询**）：它们在热层不可能
+	// 可见（VL 对超保留期数据点返回 200 但静默丢弃），因此既不该询问、也绝不能算作缺失天
+	// ——否则每轮对账都会把同一天重新登记重建，永远追不上（生产形态，见
+	// hot_retention_window.go）。但必须如实记进报告：这是「无法发布到热层」的正式记录，
+	// 不是「一致」，更不能被当成已发布。
+	now := time.Now()
+	inWindowDays := make([]string, 0, len(expectation.Days))
 	for _, day := range expectation.Days {
+		if expectation.Counts[day] == 0 {
+			continue
+		}
+		if m.beyondHotRetention(day, now) {
+			report.BeyondHotRetention = append(report.BeyondHotRetention, day)
+			continue
+		}
+		inWindowDays = append(inWindowDays, day)
+	}
+	if len(report.BeyondHotRetention) > 0 {
+		report.BeyondHotRetention = sortUTCDays(report.BeyondHotRetention)
+		// 不静默：这些天「永远不会一致」，运维必须能从日志直接看出原因，
+		// 而不是把 `observed:0 / expected:N` 当成待修的缺失天反复排查。
+		slog.Warn("增量对账跳过超出热层保留期的 UTC 天（热层不可能可见；不算缺失天，也不视为已发布）",
+			"source", key, "days", report.BeyondHotRetention, "hotRetention", m.hotRetention,
+			"hotRetentionBoundary", hotRetentionBoundary(now, m.hotRetention).UTC().Format(time.RFC3339))
+	}
+	for _, day := range inWindowDays {
 		expected := expectation.Counts[day]
 		if expected == 0 {
 			continue

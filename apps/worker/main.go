@@ -1013,6 +1013,31 @@ func runWorker() {
 		verifyChunkEstimatesCfg := cfg.VerifyChunkEstimatesTuning()
 		indexPruneCfg := cfg.LogIndex.IndexPrune()
 		indexCommitCfg := cfg.LogIndex.CommitBudget()
+		// 热层可发布窗口（2026-10-21 生产缺陷修复）：把热层 VL 的 retention 交给 ingest，
+		// 使「早于 now-retention 的 UTC 天」既不被重建、也不被算成对账缺失天。
+		//
+		// 依据（生产证据）：VL 对**超出 retention 的数据点返回 HTTP 200 但静默丢弃**，
+		// 于是重建重放历史天时拿到"成功"却永远校验不过 ⇒ PublicationPending 永久为真 ⇒
+		// 重建重试到上限后放弃，而对账每轮又把该天重新判成缺失 ⇒ 永不收敛。
+		//
+		// 解析口径与 supervisor 一致：空串回退 vlsup.DefaultRetentionPeriod（30d）；
+		// 解析失败只告警并保持零值（= 不启用过滤，行为与改动前逐字一致）——
+		// 配置笔误不该让采集把正常数据当成"不可见"。
+		hotRetention := func() time.Duration {
+			raw := strings.TrimSpace(cfg.LogVL.RetentionPeriod)
+			if raw == "" {
+				raw = vlsup.DefaultRetentionPeriod
+			}
+			period, err := retention.ParseRuntimeTTL(raw)
+			if err != nil {
+				slog.Warn("热层 retention 解析失败：不启用「热层可发布窗口」过滤（行为与改动前一致）",
+					"retentionPeriod", raw, "error", err)
+				return 0
+			}
+			slog.Info("热层可发布窗口已启用：超出热层保留期的 UTC 天不再重建、也不算对账缺失天",
+				"retentionPeriod", raw, "hotRetention", period)
+			return period
+		}()
 		newIngest := func() (*ingest.Manager, error) {
 			return ingest.New(ingest.Options{
 				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
@@ -1076,6 +1101,8 @@ func runWorker() {
 					tuning := cfg.ReconcileReplayTuning()
 					return &tuning
 				}(),
+				// 热层 retention（上一段已解析）：零值 = 未启用窗口过滤（保持改动前行为）。
+				HotRetention: hotRetention,
 				// 兜底环每轮容量（键 log_index.resume_batch_per_round；1 = 每轮一个 = 退回应激行为 ✓）。
 				ResumeBatchPerRound: cfg.ResumeBatchTuning(),
 				// 窗口化背压阈值（键 log_index.resume_backpressure_streak；默认 3 ✓，置 1 = 单轮判定 ✓）。

@@ -470,6 +470,9 @@ type Manager struct {
 	persistClearConflictsHandoffs atomic.Int64
 	// replayBudget 是整窗重发的切片预算（见 ReplayBudget）。
 	replayBudget ReplayBudget
+	// hotRetention 是热层 VL 的 retention 时长，用于「热层可发布窗口」判定
+	// （见 hot_retention_window.go）；0 = 未知/不启用过滤（保持改动前的行为）。
+	hotRetention time.Duration
 	// vlProbeTimeout / vlNotReady 是 VL ready 门禁的读数：probe 超时与「哪些源当前被判未就绪」。
 	// vlNotReady 只用于**状态变化时才打日志**（否则每轮每源刷屏，现场日志会被淹掉）。
 	vlProbeTimeout time.Duration
@@ -951,6 +954,14 @@ type Options struct {
 	ReplayTuning *ReplayTuning
 	// RebuildTuning 是投影重建的限速与重试上限（零值 ⇒ 默认；见 rebuild_scheduler.go）。
 	RebuildTuning *RebuildTuning
+	// HotRetention 是**热层**（HOT namespace）VictoriaLogs 的 retention 时长，用于判定
+	// 「热层可发布窗口」：早于 `now - HotRetention` 的 UTC 天在热层里不可能可见
+	// （VL 对超保留期数据点返回 HTTP 200 但静默丢弃，生产实测），因此既不重建、也不算对账
+	// 缺失天。判据与理由见 hot_retention_window.go。
+	//
+	// 零值语义是「未知 / 不启用过滤」⇒ **保持改动前的行为**（没配置就误滤掉正常数据，
+	// 比不修更糟）。解析留在 main.go 侧完成（ingest 不反向依赖 config 包）。
+	HotRetention time.Duration
 	// RebuildYieldNotify 是重建批间让出的观测口（测试/排障用，生产 nil ⇒ 零开销）。
 	RebuildYieldNotify func()
 	// RebuildRunNotify 是「重建任务开始执行」的观测口（测试/排障用，生产 nil ⇒ 零开销）。
@@ -1983,14 +1994,11 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 
 	// ── 落库（索引规划/Apply/fsync 在 cycleMu 之外；有界，超预算交后台，见 #59）。
 	//
-	// 这里**刻意不动 Catalog**：质量标记的归零路径是"下一次投影发布时由 publishSnapshot 用
-	// identityConflictCount 重算 proj.ConflictCount"（publishSnapshot 的既有行为，本方法不改
-	// 它）。反过来，若要在此处直接把 Catalog 里的 ConflictCount 改写为 0，只能借
-	// PublishProjection——而那是"物理写入后已校验发布"的原子提交入口，用它做派生字段刷新会把
-	// 「已校验发布」这个语义混进一次纯粹的人工凭据变更里（它的 journal 凭据写着
-	// "verified projection publication"），并使"投影清单版本"的因果链变得不可读。
-	// 故本方法只保证：内存与索引里已无冲突记录 ⇒ 下一次发布必然算出 0。
-	// 代价（如实说明）：**已停止投递的源**其标记要等下一次发布才消失（见方法注释末尾）。
+	// 本段**刻意不碰 Catalog**：它只负责把「冲突记录已清空」这个人工凭据落到内存与索引。
+	// 目录侧派生字段 conflict_count 的归零交给第四段（正规重发布 + 带 CAS 的分区对齐）——
+	// 拆成两段是为了让「人工凭据变更」与「投影发布」的因果链各自可读：前者不含任何发布语义，
+	// 后者每次都留下可核对（且**不改变权威代次**）的发布凭据。
+	// 故本段只保证：内存与索引里已无冲突记录 ⇒ 之后任一发布（或第四段的对齐）必然算出 0。
 	durable, err := m.persistClearConflictsTail()
 	if err != nil {
 		return result, err
@@ -2010,9 +2018,12 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 	// ⇒ duplicate_quality=conflict ⇒ 前端导出被永久禁用。运维侧表现为「清了却看不出效果，
 	// 也没有任何入口能推动它」。全仓也没有别的入口能刷新这个派生字段。
 	//
-	// 语义边界（刻意不破坏原设计）：仍**不**手改 catalog 里的字段，而是走同一条
-	// publish → publishSnapshot 正规链路，由它用此刻已为 0 的 identityConflictCount 重算——
-	// 这样「已校验发布」的凭据与因果链保持自洽，只是把「等下一次」变成「现在就做一次」。
+	// 语义边界：仍然**不手改** catalog 里的字段，而是走同一条 publish 链路——
+	// 当前分区由 publishSnapshot 用此刻已为 0 的 identityConflictCount 重算并发布；
+	// 历史日期分区由 resetNamespaceConflictCounts 逐分区以 CAS 对齐派生计数。
+	// 两条都是「提交一次发布」，只是把「等下一次」变成「现在就做一次」。
+	// 注意并发：本段**不持 cycleMu**，与采集轮/投递路径是并发的，故两边写回都必须 CAS；
+	// 输掉竞争的一方只告警「该分区待下次投递刷新」，由赢的那次真实发布留下它自己算出的计数。
 	// 失败只告警不失败：冲突记录本身已清干净（那是本方法的契约），刷新派生字段属尽力而为。
 	//
 	// **不挂在 durable 条件下**（2026-10-20 真机验收修正）：persistClearConflictsTail 在把
@@ -2053,6 +2064,16 @@ func (m *Manager) conflictClearRefreshTargets(requestedKey string, cleared []str
 // 逐源独立：某个源刷新失败不影响其它源，也不影响「冲突已清空」这一既定结果。
 // 不持 cycleMu 调用（本方法由 ClearIdentityConflicts 在释放 cycleMu 之后调用），
 // 由 publishSnapshot 自己走既有锁序。
+//
+// 并发形态（本方法因此**必须**用 CAS 写回）：这里与采集轮 pollOnce 是并发的——
+// 采集轮持 cycleMu 在跑，本方法不持；同一 namespace 的多个源也可能同时走到这里。
+// 于是「读某个分区快照」与「写回它」之间，真实发布（publishSnapshot → PublishProjection，
+// 会重算 ConflictCount/manifest）、权威切换（OWNER_SWITCHED）都可能已经提交。
+// 用旧快照无条件覆盖会把更晚的代次/权威回退掉、并误清真实计数，故：
+//   - 分区级对齐 resetNamespaceConflictCounts 逐分区现读现写 + PublishProjection CAS；
+//   - 当前分区随后再走一次正规发布（publishSnapshot 自身也是 CAS）。
+// 任何一方输掉竞争都只告警「该分区待下次投递刷新」，不中断整个流程——
+// 赢的那次真实发布已经写入了它自己算出的 ConflictCount，无需被本次对齐覆盖。
 func (m *Manager) republishAfterConflictClear(sources []string) {
 	if m == nil || len(sources) == 0 {
 		return
@@ -2131,8 +2152,19 @@ func (m *Manager) projectionConflictCountNonZero(src SourceConfig) bool {
 // 不会再有任何投递去触发发布（源早已停止写入那些天）。因此这里直接写派生字段本身：
 //   - 只改 ConflictCount 这一个派生字段，不动任何物理写入凭据（closed_visible_seq、
 //     manifest、source_projections 全部原样保留）；
-//   - 逐分区走 AppendJournal（带完整 Record），重启时 applyJournalEntry 会重放成同一状态；
+//   - 逐分区走带 CAS 的发布（见 alignPartitionConflictCount），重启时重放成同一状态；
 //   - 幂等：本来就是 0 的分区直接跳过，不产生 journal 噪音。
+//
+// 为什么写回必须 CAS（并发缺陷修正）：本方法由 republishAfterConflictClear 在**不持 cycleMu**
+// 的情况下调用，而采集轮 pollOnce 正持着 cycleMu 在跑。因此在「读快照」与「写回」之间，
+// 采集轮/投递路径完全可能对同一个 key 完成一次真实的投影发布（publishSnapshot →
+// PublishProjection），甚至完成一次 OWNER_SWITCHED。若仍用旧快照无条件覆盖：
+//   - 会拿陈旧代次自增，把更晚的真实代次/权威**回退**掉（旧的 owner 与目录也会被一起写回）；
+//   - 会把那次真实发布算出的 ConflictCount 错误清零 ⇒ 前端误报「无冲突」，数据诚实性受损。
+// 故这里不再自造 journal 项，而是以「刚读到的快照」为 CAS 基准走 PublishProjection：
+// 它按 journal 序号 / owner / 代次 / 目录 / 写路由 / 恢复要求 / 投影清单逐项比对，
+// 中途有任何真实写入赢得竞争即返回 ErrInvalidState —— 那次真实发布自己已写好
+// ConflictCount，不需要（也不允许）被本次对齐覆盖，跳过交给下一次投递即可。
 //
 // 返回实际改写的分区数。
 func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) int {
@@ -2144,6 +2176,8 @@ func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) in
 		if key.StorageNamespace != namespace {
 			continue
 		}
+		// 逐分区现读现写：不预取快照列表，缩窄「读 → 写」窗口；
+		// 窗口再窄也仍存在，故写回那一端必须 CAS（见 alignPartitionConflictCount）。
 		rec, ok := m.cat.Get(key)
 		if !ok || rec == nil || rec.PublishedProjection == nil {
 			continue
@@ -2151,22 +2185,8 @@ func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) in
 		if rec.PublishedProjection.ConflictCount == want {
 			continue
 		}
-		next := rec.Clone()
-		if next.PublishedProjection == nil {
-			continue
-		}
-		before := next.PublishedProjection.ConflictCount
-		next.PublishedProjection.ConflictCount = want
-		next.Generation = rec.Generation + 1
-		if err := m.cat.AppendJournal(catalog.JournalEntry{
-			Key:    key,
-			Record: next,
-			State:  next.MigrationState,
-			// 凭据写明这是**派生字段对齐**，不是一次物理写入后的已校验发布——
-			// 与 PublishProjection 的 "verified projection publication" 语义区分开，
-			// 避免后人把这条记录误读成「又发布了一次内容」。
-			Detail: "derived conflict_count reconciled after identity-conflict clearance",
-		}); err != nil {
+		before, err := m.alignPartitionConflictCount(rec, want)
+		if err != nil {
 			slog.Warn("清空冲突后对齐派生计数失败，该分区待下次投递刷新",
 				"namespace", namespace, "utcDay", key.UTCDay, "error", err)
 			continue
@@ -2176,6 +2196,47 @@ func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) in
 			"namespace", namespace, "utcDay", key.UTCDay, "from", before, "to", want)
 	}
 	return changed
+}
+
+// alignPartitionConflictCount 把 expected 所代表分区快照里的派生字段 ConflictCount 对齐为
+// want，并以 expected 为 CAS 基准原子提交。返回对齐前的值。
+//
+// expected 必须来自 m.cat.Get（携带它当时的 JournalLastSeq），它是**唯一的并发判据**：
+// 从 Get 到提交之间只要有人写过该分区（真实发布、权威切换、其它对齐），
+// PublishProjection 就返回 ErrInvalidState，调用方据此放弃本次对齐。
+//
+// 为什么复用 PublishProjection 而不是自己拼 journal 项：它已经把「权威没变」的全部判据
+// （journal 序号 / owner / 代次 / 目录 / 写路由 / 恢复要求 / 投影清单）写在一处并加锁比对，
+// 复刻一份必然漂移。代价是 journal 凭据沿用 "verified projection publication"——
+// 这与 publishSnapshot 每次发布走的是同一条通道，语义上没有新增歧义。
+//
+// 为什么**不动 Generation**（与旧实现的关键差异）：catalog 契约里 Generation 是查询/写入
+// 权威代次，只有 OWNER_SWITCHED 原子提交才能变更（types.go 的 Record.Generation 注释、
+// invariants.ApplyOwnerSwitch）；而 PublishedProjection.QueryGeneration 必须恒等于它
+// （PublishProjection 的前置校验；查询侧 query/types.go 的 archiveRestored 与
+// grpcsvc.runtimeCatalogReadiness 也按这条判「投影是否已发布」）。派生计数对齐不是一次新的
+// 权威代次，故保持 Generation 不变。旧实现写 next.Generation = rec.Generation + 1，却把
+// QueryGeneration 留在旧值，实测（可复现）造成两个后果：该分区之后**任何一次真实发布都被
+// PublishProjection 前置校验拒绝**（"projection and authority do not match"），且查询侧把
+// 它的投影判成「未发布」。
+// 又因为 PublishProjection 本身禁止改权威（expected/next 的 owner/代次/目录/写路由必须相同），
+// 这两条约束在这里是一致的，不是绕过校验。
+func (m *Manager) alignPartitionConflictCount(expected *catalog.Record, want uint64) (uint64, error) {
+	if m == nil || m.cat == nil || expected == nil {
+		return 0, fmt.Errorf("%w: 缺少 Catalog 或分区快照", catalog.ErrInvalidState)
+	}
+	if expected.PublishedProjection == nil {
+		return 0, fmt.Errorf("%w: 分区快照缺少已发布投影", catalog.ErrInvalidState)
+	}
+	// 克隆后只改派生计数：owner / 代次 / 目录 / 写路由 / 恢复要求 / 投影清单原样保留，
+	// 既满足 PublishProjection 的「发布不得改权威」前置校验，也不会伪造一次新发布。
+	next := expected.Clone()
+	before := next.PublishedProjection.ConflictCount
+	next.PublishedProjection.ConflictCount = want
+	if err := m.cat.PublishProjection(expected, next); err != nil {
+		return before, err
+	}
+	return before, nil
 }
 
 // clearConflictsBusyErr 构造"等不到 cycleMu"的明确错误（区分取消与超预算，便于运维判断）。
@@ -2267,6 +2328,9 @@ func New(opts Options) (*Manager, error) {
 	m.rebuilds.yieldNotify = opts.RebuildYieldNotify
 	m.rebuilds.hookRun = opts.RebuildRunNotify
 	m.replayBudget = replayBudgetOf(opts.ReplayBudget)
+	// 热层可发布窗口（2026-10-21 生产缺陷修复，见 hot_retention_window.go）：
+	// 零值 = 未知/不启用过滤（保持改动前行为）。
+	m.hotRetention = opts.HotRetention
 	m.vlProbeTimeout = opts.VLReadyProbeTimeout
 	m.vlReadyWait = opts.VLReadyWait
 	if tuning := opts.ReplayTuning; tuning != nil {
