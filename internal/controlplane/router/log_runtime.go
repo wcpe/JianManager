@@ -163,6 +163,23 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code, "message": message})
 		return
 	}
+	// 只有**显式单源**裁定才落 CP 侧审计行：这是唯一允许跨过永久缺口的动作（ADR-101），
+	// Worker 侧把它写进可持久化的放弃区间并以本次 metadata 为界，而 CP 侧此前只有一条
+	// 会轮转的运维日志——「谁、何时、凭什么放掉了哪个源」在统一审计视图里查不到。
+	//
+	// 空键自动解算不落行：那不是人工永久裁定，把它也记成「放弃」会让审计面出现从未有人
+	// 做过的裁定（ADR-101 要求人工动作可追溯，不要求为自动路径伪造责任主体）。
+	//
+	// operator 单列进 detail 而非只依赖审计行的 user_id：Agent（API 密钥）通道下 user_id
+	// 写的是 token id，可读主体只存在于 operatorFromRequest 的结果里。
+	if body.StorageNamespace != "" {
+		h.recordAudit(c, "node.log_ingest.abandon_gap", map[string]any{
+			"storageNamespace": body.StorageNamespace,
+			"reason":           strings.TrimSpace(body.Reason),
+			"operator":         operator,
+			"state":            "resolved",
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{"state": "resolved"})
 }
 
@@ -177,7 +194,9 @@ func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
 //  2. 理由必填：它要进审计凭据，故与操作人同走 metadata（同样不受请求体伪造影响）；
 //  3. 指名源须先完成对象授权（与放弃裁定同一判据，防止跨实例/跨组越权）；
 //  4. 不传源键 = 全 Worker 范围：那是**批量**动作，只允许平台管理员（见 authorizeClearAllSources），
-//     否则任何持有 node.manage 的调用方都能一次性清掉整节点所有源的歧义提示。
+//     否则任何持有 node.manage 的调用方都能一次性清掉整节点所有源的歧义提示；
+//  5. 成功清空后在 CP 侧落审计行（见函数末尾的 recordAudit）：清空是永久裁定，
+//     Worker 侧凭据只覆盖各自的源，跨节点的统一审计视图需要 CP 这一行。
 func (h *LogRuntimeHandler) ClearIdentityConflicts(c *gin.Context) {
 	operator, ok := h.operatorFromRequest(c)
 	if !ok {
@@ -241,6 +260,21 @@ func (h *LogRuntimeHandler) ClearIdentityConflicts(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "CLEAR_CONFLICTS_FAILED", "code": code, "message": message})
 		return
 	}
+	// 成功清空后落 CP 侧审计行：这是「清空整节点质量标记」的永久裁定（清空记录不可回滚），
+	// 事后必须能回答「谁、为何、清了哪些源、清了多少条」。审计中间件对本路径不产生 action
+	// （POST /nodes/:id/log-runtime/... 不匹配任何分支），Worker 侧的 clearance 记录随源
+	// payload 存放且只覆盖它自己那条源——CP 侧不落行，跨节点的统一审计视图里就没有这次裁定。
+	//
+	// 计数一并入 detail：clearedCount/clearedSources 与 skippedSources 的对照本身就是凭据
+	// （「请求覆盖了谁」与「实际改了谁」必须能在同一行里对上，见 Worker 侧 skipped_sources 语义）。
+	h.recordAudit(c, "node.log_ingest.clear_conflicts", map[string]any{
+		"storageNamespace": body.StorageNamespace,
+		"reason":           body.Reason,
+		"operator":         operator,
+		"clearedCount":     resp.GetClearedCount(),
+		"clearedSources":   resp.GetClearedSources(),
+		"skippedSources":   resp.GetSkippedSources(),
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"state":          "cleared",
 		"clearedCount":   resp.GetClearedCount(),
@@ -499,17 +533,49 @@ type logMigratePartitionRequest struct {
 }
 
 func (h *LogRuntimeHandler) MigratePartition(c *gin.Context) {
-	client, ok := h.client(c)
+	// 操作人必须在**任何 RPC 之前**解析（对齐同族 resolve-gaps / clear-identity-conflicts /
+	// import-archives）：分区下沉把历史日志挪到冷层，事后必须能回答「谁让它动的」。
+	// Worker 侧该 RPC 不消费操作人，CP 侧不解析就真的没有任何主体记录。
+	operator, ok := h.operatorFromRequest(c)
 	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（分区迁移必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
 		return
 	}
 	var body logMigratePartitionRequest
-	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.StorageNamespace) == "" {
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+		return
+	}
+	body.StorageNamespace = strings.TrimSpace(body.StorageNamespace)
+	if body.StorageNamespace == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
 		return
 	}
 	if _, err := time.Parse("2006-01-02", body.UTCDay); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_UTC_DAY"})
+		return
+	}
+	// 目标归属校验必须在取 client 之前（同 Rehydrate）：命名空间是本端点唯一的越权面，
+	// 此前它被原样下发给**路由节点**的 Worker，任何持有 node.manage 的调用方都能借此
+	// 对该节点上任意实例/任意命名空间发起分区下沉（跨实例组的侧信道 + 数据面扰动）。
+	//
+	// 复用 authorizeArchiveTarget 而不是同文件另外两个判据：
+	//   - authorizeResolveSource 要求完整三段源键（LogSourceID/流/代次），本端点没有代次，
+	//     迁移键是存储命名空间，套不上；
+	//   - authorizeImportNamespace 只做实例级对象授权、不校验节点绑定，放不住
+	//     「拿这个节点的通道去动另一个节点的命名空间」；
+	//   - authorizeArchiveTarget 同时覆盖本端点实际出现的两种形态：`node:<路由节点>`
+	//     （前端面板就是这么调的）与 `inst:<id>`（须实例组授权且实例确实在该节点），
+	//     其余形态一律 400，未知实例/组外/错节点统一 403 且不下发 RPC。
+	if !h.authorizeArchiveTarget(c, body.StorageNamespace) {
+		return
+	}
+	client, ok := h.client(c)
+	if !ok {
 		return
 	}
 	resp, err := client.Worker.LogMigratePartition(c.Request.Context(), &workerpb.LogMigratePartitionRequest{
@@ -532,6 +598,15 @@ func (h *LogRuntimeHandler) MigratePartition(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "MIGRATION_FAILED", "code": code})
 		return
 	}
+	// 成功迁移后落 CP 侧审计行：冷层没有热层的查询能力（要回读必须先把分区恢复回热层），
+	// 所以「哪一天、哪个命名空间被下沉」是运维复盘与容量核算的原始凭据；审计中间件对本路径
+	// 不产生 action，Worker 侧也不记录操作人 ⇒ CP 侧不落行即等于全程无痕。
+	h.recordAudit(c, "node.log_partition.migrate", map[string]any{
+		"storageNamespace": body.StorageNamespace,
+		"utcDay":           body.UTCDay,
+		"targetTier":       "cold",
+		"operator":         operator,
+	})
 	c.JSON(http.StatusOK, gin.H{"state": "migrated", "targetTier": "cold", "storageNamespace": body.StorageNamespace, "utcDay": body.UTCDay})
 }
 
