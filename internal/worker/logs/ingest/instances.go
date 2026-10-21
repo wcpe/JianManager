@@ -720,9 +720,12 @@ func instanceLivePath(binding InstanceBinding) string {
 //
 // 历史实现固定返回 live 文件同目录的 "*.gz"，这对 Bukkit 系成立，但按核心类型区分后必须
 // 由规则表决定：BungeeCord 的轮转产物是 proxy.log.N（数字后缀、**纯文本**，gzip-only 导入器
-// 接不了），其规则的 ArchiveGlob 为空 ⇒ 本函数也返回空，交给 discoverSourceArchives 的
-// 默认回落（live 文件同目录的 *.gz）。实例级路径覆盖时，归档 glob 跟随覆盖后 live 文件的
-// 目录与既有形态（保持与历史一致：同目录同类归档）。
+// 接不了），规则表已为该核型显式给出 `proxy.log.[1-9]*`（见 rules.go 的 bungee 条目）。
+//
+// 实例级路径覆盖时**也要先看规则表**（2026-10-21 修复）：修前该分支硬编码返回同目录 *.gz，
+// 而显式 glob 在 discoverSourceArchives 里是逐字使用的（不放宽），于是「把 live 覆盖到
+// proxy.log.0」的实例其 .1/.2 轮转**永远不可达**——默认发现逻辑已补齐数值轮转，覆盖分支
+// 却把它绕过去了。故改为：有规则就给规则的，没有才回落历史口径 *.gz。
 func fileArchiveGlob(binding InstanceBinding) string {
 	if binding.Mode != pipeline.ModeFilePrimary {
 		return ""
@@ -733,7 +736,14 @@ func fileArchiveGlob(binding InstanceBinding) string {
 		}
 		return ""
 	}
-	// 实例级覆盖：沿用历史口径——live 文件同目录的 *.gz。
+	// 实例级覆盖：规则表优先，无规则才沿用历史口径。
+	//
+	// 基准必须用 **WorkDir** 而不是 live 所在目录：规则表里的 ArchiveGlob 是「相对工作目录」
+	// 的 glob（如 `logs/*.gz`、`proxy.log.[1-9]*`），拼到 live 目录会得到 `logs/logs/*.gz`
+	// 这类不存在的路径。（此处与未覆盖分支同源，仅 override 的 live 位置不同。）
+	if g := Lookup(binding.RuleKey).ArchiveGlob; g != "" {
+		return filepath.Join(binding.WorkDir, filepath.FromSlash(g))
+	}
 	return filepath.Join(filepath.Dir(instanceLivePath(binding)), "*.gz")
 }
 

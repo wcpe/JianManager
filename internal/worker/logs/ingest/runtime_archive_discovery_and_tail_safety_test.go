@@ -325,3 +325,41 @@ func TestDeliveryRetryAfterPartialInsertIsNotTailFastPath(t *testing.T) {
 	require.True(t, m.planDeliveryTail(key, confirmed, fresh, false).Fast,
 		"对照：同一批事件在 pending 清除后必须走尾快路径，否则上面的断言没有区分力")
 }
+
+// TestFileArchiveGlobOverrideUsesRuleTable 锁定「实例级路径覆盖也必须先看规则表」这条判据。
+//
+// 2026-10-21 修复：覆盖分支原先硬编码返回 live 同目录 `*.gz`，而显式 glob 在
+// discoverSourceArchives 里是**逐字使用、不放宽**的 ⇒ 「把 live 覆盖到 proxy.log.0」的
+// BungeeCord 实例，其 `proxy.log.1/.2` 轮转永远不可达（默认发现逻辑已补齐数值轮转，
+// 覆盖分支却把它整个绕过去）。
+//
+// 基准必须是 WorkDir：规则表里的 ArchiveGlob 是「相对工作目录」的 glob，
+// 拼到 live 所在目录会得到 `logs/logs/*.gz` 这类不存在的路径。
+//
+// 转红方式：把覆盖分支改回 `return filepath.Join(filepath.Dir(instanceLivePath(binding)), "*.gz")`，
+// 本用例第一条断言立即转红。
+func TestFileArchiveGlobOverrideUsesRuleTable(t *testing.T) {
+	base := InstanceBinding{
+		UUID: "u1", TargetID: "inst:1", Generation: "g1",
+		Mode:    pipeline.ModeFilePrimary,
+		WorkDir: "/srv/inst1",
+		RuleKey: "bungeecord",
+	}
+
+	// 前置：bungee 规则确实给了非空 ArchiveGlob（否则本用例测的是回落分支，毫无意义）。
+	require.NotEmpty(t, Lookup(base.RuleKey).ArchiveGlob,
+		"前置：bungeecord 规则必须显式给出 ArchiveGlob，否则本用例覆盖不到被测分支")
+
+	// 未覆盖：以 WorkDir 为基准。
+	plain := fileArchiveGlob(base)
+	require.Equal(t, filepath.Join("/srv/inst1", filepath.FromSlash(Lookup(base.RuleKey).ArchiveGlob)), plain)
+
+	// 实例级覆盖：**仍须以 WorkDir 为基准走规则表**，不得退化成 live 同目录的 *.gz。
+	overridden := base
+	overridden.RelativePath = "proxy.log.0"
+	got := fileArchiveGlob(overridden)
+	require.Equal(t, plain, got,
+		"实例级路径覆盖不得改变归档 glob 的判据来源：它只移动 live 位置，不改变轮转命名规则")
+	require.NotEqual(t, filepath.Join("/srv/inst1", "*.gz"), got,
+		"覆盖分支不得退化成 gzip-only：那会让无扩展名的数字轮转永远不可达")
+}

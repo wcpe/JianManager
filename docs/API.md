@@ -3132,6 +3132,16 @@
 
 **2026-10-19 语义修正**：该情形此前归一化为 `ENGINE_NOT_READY`，导致「VL 有数据、采集正常」的节点在日志页显示「日志查询服务未启用」，把排查引向 VL。
 
+`quality`（`LogQuality`）与 `coverage` 正交：覆盖完整**不**代表内容无歧义。CP→浏览器为 snake_case 小写枚举：`quality.duplicate_quality` = `exact` | `unresolved` | `conflict` | `unspecified`，`quality.stats_quality` = `exact` | `partial` | `unavailable` | `unspecified`（wire 上是 `LOG_QUALITY_DUPLICATE_*` / `LOG_QUALITY_STATS_*`；适配层归一，空串与本版本不认识的枚举一律收敛为 `unspecified`）。
+
+`duplicate_quality` 回答「同一事件身份（`event_id`）是否出现内容分歧」，下列任一条成立即**不得**报 `exact`：
+
+- **Worker 单 range 路径**：同一 `event_id` 出现两个不同规范化哈希（`canonical_hash`）⇒ `unresolved`，检出即置、不复位。**同 `event_id` 同哈希的纯重复不降级**——该重复按 `id+哈希` 去重丢弃，不构成内容歧义；把它算进来会让普通重复误封导出
+- **Worker 合并路径**（多 range 并集）：同一 `event_id` 在跨 range 合并时**再次出现**即 ⇒ `unresolved`（哈希相同也置位：该行按 `event_id` 去重丢弃，但质量仍降级——同一事件身份出现在两个分区本就需要归因）。不同哈希的两行都保留给上层归因
+- **Worker planner**：投影 `coverage_complete=false` ⇒ `unresolved`；该投影 `conflict_count>0`（存在未裁定的身份冲突记录）⇒ `conflict`（优先于 `unresolved`，清空须经 `POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts`）
+- **CP 联邦聚合**：逐 Worker 按最差值合并（`conflict > unresolved > unspecified > exact`），任一 Worker 报非 `exact` 即整体降级，不被其它 Worker 的 `exact` 掩盖；未上报（`unspecified`）**也高于** `exact`，不会被当成 `exact` 放行。此外任一目标 `coverage.state` 为 `partial` / `stale` ⇒ 提升为 `unresolved`
+- **导出闸门**：要求 `duplicate_quality=exact` **且** `stats_quality=exact`，否则不交付 NDJSON 附件，并在 `incomplete_reasons` 追加 `quality_<值>` / `stats_<值>`（如 `quality_unresolved`）
+
 查询预算是整请求扫描额度而非每 Worker/range 独享额度：入口 `max_bytes=0` 使用 32 MiB 默认，执行前分配正数子额度，零份额不发请求；正常 `limit` 分页不等于扫描预算耗尽。Search/Stats 顶层保留 Worker 的 partial 原因与预算截断，不能被逐目标成功覆盖；未完整页边界同戳组或扫描截断时不提供可跨过缺失集合的全局游标。固定窗口续页须携原 view 与复合 cursor，不以毫秒时间锚点替代。
 
 实例注册消息 `CreateInstanceRequest` 另增可选字段 `log_target_id=19`、`log_acquire_mode=20`、`log_source_generation=21`，由 CP 统一创建/重连规格下发。Worker 将它们绑定到实例的受管日志采集面：Java 文件主源、通用进程 stdout/stderr 主源；缺字段保持旧 CP 兼容，不凭 UUID 猜测授权数字 ID。采集绑定失败时注册返回 `success=false`；已有实例 Resync 的绑定失败返回 `FailedPrecondition`。绑定持久化及无绑定实例禁止 cutover，见 FR-474 spec。
@@ -3174,18 +3184,39 @@
   - **响应**: `{ view, coverage, fields: string[] }`
   - **状态**: 已注册并有路由层测试；用于在授权范围内列出可检索字段，能力不可用时同样返回结构化 not-ready（不空成功）
 
+### POST /api/v1/nodes/:id/log-runtime/migrate
+
+- **描述**：把某存储命名空间在某 UTC 日的热层分区下沉到**冷层**。`targetTier` 由服务端固定为 `cold`，请求无法指定其它层级。冷层不具备热层的查询能力（回读须先经归档恢复回热层），故本动作是长期影响的人工操作，必须全程留痕。
+- **权限**：路由经 `permRead("node.manage")` 挂载；授权服务未接线时直接 403 `FORBIDDEN`（`日志归档授权未就绪`），不默认放行。
+- **请求**：`{ "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`
+  - `storageNamespace` 去空白后不得为空，否则 400 `INVALID_REQUEST`
+  - `utcDay` 须为 `YYYY-MM-DD`（Go 布局 `2006-01-02`），否则 400 `INVALID_UTC_DAY`
+- **校验顺序**（顺序即优先级，2026-10-21 修正：此前完全不解析操作人、不校验目标归属、不落审计）：
+  1. **操作人**：取认证主体（JWT 用户名 / Agent 的 `agent:<名称>`，兜底 `user:<id>`）；取不到 ⇒ 403 `OPERATOR_UNKNOWN`，且**不下发任何 RPC**
+  2. **请求体**：见上方字段规则 ⇒ 400 `INVALID_REQUEST` / `INVALID_UTC_DAY`
+  3. **目标归属**（复用归档目标判据 `authorizeArchiveTarget`，**在取 Worker client 之前**，拒绝路径不下发 RPC）：
+     - `node:<id>`：只允许指向路由节点自身（**逐字符串比较**，不做数值归一 ⇒ `node:007` 与路由 `7` 不等而 403）；否则 403 `FORBIDDEN`（`仅允许访问本节点归档`）
+     - `inst:<id>`：须通过 `CanAccessInstance`，且该实例确实归属路由节点。`inst:` 后非十进制 ID ⇒ 400 `INVALID_REQUEST`；路由节点本身不存在 ⇒ 404 `NOT_FOUND`；实例不存在或组外 ⇒ 403 `FORBIDDEN`（不区分「不存在」与「无权限」，避免实例存在性枚举）；实例存在但不属于该路由节点 ⇒ 403 `FORBIDDEN`（`目标实例不属于该节点`）
+     - 其它形态（无 `inst:` / `node:` 前缀）⇒ 400 `INVALID_REQUEST`（`target 仅支持 inst:<id> 或 node:<id>`）
+  4. **取 client**：`:id` 非十进制 ⇒ 400 `INVALID_NODE_ID`；节点不存在或无 UUID ⇒ 404 `NODE_NOT_FOUND`；Worker 离线 ⇒ 503 `WORKER_OFFLINE`
+- **响应** (200): `{ "state": "migrated", "targetTier": "cold", "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`
+- **错误**: Worker 返回错误或状态非 `LOG_TASK_SUCCEEDED` ⇒ 409 `MIGRATION_FAILED`（另带 `code`：缺省 `LOG_NOT_READY`，否则取 Worker 错误码）；Worker 不支持该 RPC（Unimplemented）⇒ 501 `WORKER_RPC_FAILED`；其它传输失败 ⇒ 502 `WORKER_RPC_FAILED`
+- **审计**: **仅成功分支**落 `node.log_partition.migrate`（`targetType=node`、`targetId=路由节点`），detail 含 `storageNamespace`、`utcDay`、`targetTier`、`operator`。审计中间件对本路径不产生 action，Worker 侧也不记录操作人 ⇒ CP 侧不落行即等于全程无痕。
+- **状态**: 已注册（`internal/controlplane/router/log_runtime.go`）
+
 ### POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps
 
 - **请求**：可选 `{ "storageNamespace": "完整源键", "reason": "人工裁定理由" }`；`storageNamespace` 在本端点表示完整 `LogSourceID/SourceGeneration`，不是存储分区名。
-- **授权**：非空键须在下发任何裁定 RPC 前绑定真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；节点能力或知道源键不能替代对象授权。畸形键 400；未知实例、组外、错节点或未登记代次统一 403，拒绝路径不发裁定 RPC。操作人取已认证主体，不信任请求 body 自报身份。
-- **语义**：空键仍仅走原整节点自动解算，不能落入永久放弃分支；终局人工放弃需实名、理由及 Worker 证据门禁。成功 `{ "state": "resolved" }`；Worker 拒绝返回 409 `GAP_RESOLUTION_FAILED`，传输失败 502 `WORKER_RPC_FAILED`。
+- **授权**：非空键须在下发任何裁定 RPC 前绑定真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；节点能力或知道源键不能替代对象授权。畸形键 400；未知实例、组外、错节点或未登记代次统一 403，拒绝路径不发裁定 RPC。操作人取已认证主体，不信任请求 body 自报身份；取不到认证主体 ⇒ 403 `OPERATOR_UNKNOWN`，同样不下发 RPC。
+- **语义**：空键仍仅走原整节点自动解算，不能落入永久放弃分支；终局人工放弃需实名、理由及 Worker 证据门禁。成功 `{ "state": "resolved" }`；Worker 拒绝返回 409 `GAP_RESOLUTION_FAILED`（另带 `code`：缺省 `LOG_NOT_READY`，否则取 Worker 错误码；以及 Worker 的 `message`），传输失败 502 `WORKER_RPC_FAILED`。
+- **审计**：**仅当请求体 `storageNamespace` 非空**（显式单源放弃裁定）时，成功分支落 `node.log_ingest.abandon_gap`（`targetType=node`、`targetId=路由节点`），detail 含 `storageNamespace`、`reason`、`operator`、`state`（恒 `resolved`）。**空键的自动解算路径不产生审计**——它不是人工永久裁定，不得在审计面为自动路径伪造责任主体。`operator` 单列于 detail：Agent（API 密钥）通道下审计行的 `user_id` 是 token id，可读主体只存在于该字段。
 
 ### POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts
 
 - **请求**：`{ "storageNamespace": "完整源键（可选）", "reason": "清空理由（必填）" }`。`storageNamespace` 与 resolve-gaps 取同一口径的完整 `LogSourceID/SourceGeneration`；**空 = 清该节点全部持有冲突记录的源**。
 - **语义**：人工确认并清空「身份冲突」记录（同 event_id 异内容、且系统无法按确定性证据裁定）。系统在该形态下保留先到者并跳过冲突行（保留的是正确版本，冲突行从未进入写入面），故清空只移除**诊断记录**、使查询面质量标记不再为 `conflict`/`partial`，**不改动任何日志内容**。
 - **授权**：非空键先做对象授权（与 resolve-gaps 同一判据：真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；畸形键 400，未知实例/组外/错节点/未登记代次 403，拒绝路径不发 RPC）。**空键（批量）额外要求平台管理员**（仅 `node.manage` 的组管理员 403），因为一次调用会清掉整节点所有源的歧义提示。
-- **审计**：操作人取已认证主体（不信任请求 body 自报身份），理由必填；两者均经 `x-jm-operator` / `x-jm-reason` 下传 Worker，并随该源 payload 落库（`identity_conflict_clearances`：操作人 / 理由 / 时间 / 条数 / 被清记录明细）。缺失任一 ⇒ 400 `REASON_REQUIRED` 或 403 `OPERATOR_UNKNOWN`，且**不下发 RPC**。
+- **审计**：操作人取已认证主体（不信任请求 body 自报身份），理由必填；两者均经 `x-jm-operator` / `x-jm-reason` 下传 Worker，并随该源 payload 落库（`identity_conflict_clearances`：操作人 / 理由 / 时间 / 条数 / 被清记录明细）。缺失任一 ⇒ 400 `REASON_REQUIRED` 或 403 `OPERATOR_UNKNOWN`，且**不下发 RPC**。**CP 侧成功后另落一条** `node.log_ingest.clear_conflicts`（`targetType=node`、`targetId=路由节点`），detail 含 `storageNamespace`、`reason`、`operator`、`clearedCount`、`clearedSources`、`skippedSources`——「请求覆盖了谁」与「实际清了谁」必须在同一行里对得上；`operator` 单列的原因同 resolve-gaps（Agent 通道下审计行 `user_id` 是 token id）。
 - **响应**：成功 `{ "state": "cleared", "clearedCount": N, "clearedSources": [...], "skippedSources": [...] }`；`skippedSources` 是计划内但未清的源（期间新增了未经审阅的冲突记录，或本就已无冲突记录）。Worker 拒绝返回 409 `CLEAR_CONFLICTS_FAILED`（含具体原因，如「采集轮忙」），传输失败 502 `WORKER_RPC_FAILED`。
 - **标记消失时机**：Worker 内存与索引里的记录已清空后，`ConflictCount` 由**下一次投影发布**重算为 0。仍在投递的源下次投递即归零；**已停止投递的源**要等其再次投递才归零（本操作不回退任何查询语义，只是不再提示该源的内容歧义）。
 - **状态**: 已注册并有路由层测试（`log_clear_identity_conflicts_test.go`）与 Worker 侧回归（`identity_conflict_clear_test.go`）。
@@ -3370,18 +3401,24 @@
 - **描述**: 写平台默认（批量键值）
 - **权限**: `settings.write`；写审计
 - **关联 FR**: FR-503
-- **请求**: `{ "values": { "log.acq.rules_enabled": "false", ... } }`。仅接受上述 5 个键，含其它键整体拒绝（422）。值语义逐项校验：布尔项 `true|false`；`gz_scan_interval` **留空 = 未配置（回落 worker.yml 基线）**或正的 Go duration；`path_overrides` 留空或 JSON 对象文本，且逐条校验（2026-10-20）：键须为规范的 `inst:<十进制ID>`；值须非空、**非绝对路径**、不含 Windows 盘符/UNC、折叠 `..` 后不得逃出实例工作目录、首尾不得有空白。任一不合返回 422 `BUSINESS_ERROR`。
+- **请求**: `{ "values": { "log.acq.rules_enabled": "false", ... } }`。仅接受上述 5 个键，含其它键整体拒绝（422）。值语义逐项校验：布尔项 `true|false`；`gz_scan_interval` 按下方校验口径；`path_overrides` 留空或 JSON 对象文本，且逐条校验（2026-10-20）：键须为规范的 `inst:<十进制ID>`；值须非空、**非绝对路径**、不含 Windows 盘符/UNC、折叠 `..` 后不得逃出实例工作目录、首尾不得有空白。任一不合返回 422 `BUSINESS_ERROR`。
+- **`log.acq.gz_scan_interval` 校验口径**（顺序敏感；前端 `validateSettingDraft` 与后端 `validateSettingValue` 逐层对齐）：
+  - 空 / 纯空白 ⇒ 合法，语义是**未配置**：Worker 回落该节点 `worker.yml` 的 `log_ingest.archive_scan_interval` 基线。它**不是**「关闭定时扫描」——要停定时扫描只有把 `log.acq.gz_import_enabled` 置 `false`
+  - `time.ParseDuration` 失败或 `d <= 0` ⇒ 拒（含 `0s`：零周期属语义非法，提示不混入越界文案）
+  - `d > math.MaxInt32` 毫秒（≈ 24.855 天）⇒ 拒。下发载体是 int32 毫秒，超限会被截断成错值——`720h`（30 天）截成负数后被 Worker 当作「未配置」，`1200h`（50 天）截成 ≈ 6.96 小时并按错误周期扫描
+  - `d < 1ms` ⇒ 拒。不足 1ms 会被截断成 0，语义变回「未配置」
+  - 错误文案语义：后端逐层给不同提示（「须留空或为正的 Go duration」/「上限约 24 天（协议以 int32 毫秒下发）」/「不得小于 1ms」）；前端用两条独立 i18n key 分别提示「请调小」与「请调大」。前端上界比较前先截断到整毫秒（对齐后端 `d/time.Millisecond` 的整数除法），故 `2147483647.5ms` 合法、`2147483648ms` 被拒
 - **生效**: 经心跳下发 Worker（`effectiveImmediately=false`）
 
 ### GET /api/v1/nodes/:id/settings/log-acquisition
 - **描述**: 读取某节点的**对照视图**（平台默认 / 本节点生效值 / 是否被覆盖）+ 节点名
 - **权限**: `node.read` / `node.manage`
 - **关联 FR**: FR-503
-- **响应** (200): 同平台视图，另含 `nodeUuid` / `nodeName`；`overridden=true` 表示该键**存在**节点级覆盖——**空串也是显式覆盖**（对 `gz_scan_interval` / `path_overrides` 而言即"关闭定时扫描 / 无路径覆盖"）
+- **响应** (200): 同平台视图，另含 `nodeUuid` / `nodeName`；`overridden=true` 表示该键**存在**节点级覆盖——**空串也是显式覆盖**（对 `gz_scan_interval` 而言即「本节点回落 `worker.yml` 基线，且**不再继承平台默认**」，不是「关闭定时扫描」；对 `path_overrides` 而言即「无路径覆盖」）
 
 ### PUT /api/v1/nodes/:id/settings/log-acquisition
 - **描述**: 写某节点的采集覆盖（仅平台管理员）；写审计 `node.log_acq.override.set`
-- **请求/校验**: 同平台端点（键必须属于上述 5 项；服务端自动加 `@node:<uuid>` 后缀，客户端不需要拼）
+- **请求/校验**: 同平台端点（键必须属于上述 5 项；服务端自动加 `@node:<uuid>` 后缀，客户端不需要拼），含 `gz_scan_interval` 的 1ms～`math.MaxInt32` 毫秒上下界判据；节点级置空 = 本节点回落 `worker.yml` 基线（覆盖优先于平台值，不会继承平台默认）
 
 ### DELETE /api/v1/nodes/:id/settings/log-acquisition
 - **描述**: 清除节点级覆盖（恢复继承平台默认，幂等）；仅平台管理员；写审计 `node.log_acq.override.clear`
