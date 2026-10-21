@@ -57,9 +57,32 @@ func ResolveMigrateTarget(cat *catalog.Catalog, storageNamespace, utcDay string)
 		// 该日整节点都没有分区：与精确键落空同一错误面（CP 侧稳定映射为 409）。
 		return MigrateActionStart, notInCatalogErr(key)
 	}
-	// 与 DayManager 同口径取代表记录（records 已按 key 排序，首条即代表）：
-	// 日级迁移要求该日全部记录状态一致，代表记录的状态就是这次请求该看到的真实状态。
-	return migrateActionFor(records[0]), nil
+	// 必须逐条检查该日**全部**记录，不能像改造前那样只取 records[0] 当代表：
+	// 「该日全部记录状态一致」只是 DayManager 推进时的期望，Catalog 并不保证它成立 ——
+	// 某日整体下沉到冷层之后，迟到的写入或新出现的 storage namespace（该日之后才新增的
+	// 实例/日志源）仍会在同一天新建一条 Owner=hot 的分区记录，于是该日会长期处于
+	// 「部分已 COLD、部分仍旧 hot」的混合态。
+	// 若按 records[0] 坍缩成一条：
+	//   - records[0] 恰好已 COLD ⇒ 探针误判 Skip ⇒ 整个迁移请求被当成「已完成」成功返回，
+	//     未迁走的分区再也不会被搬运，热层数据到期后被 retention 直接删除，等于真丢数据；
+	//   - records[0] 恰好未迁 ⇒ 已全部下沉的日被判成还得再迁，做无谓重活。
+	// 所以：只有每条记录都已是 COLD（migrateActionFor 一律给 Skip）才算整日完成；
+	// 只要有一条未完成，就把请求交给迁移流程，绝不 Skip。
+	action := MigrateActionSkip
+	for _, rec := range records {
+		switch migrateActionFor(rec) {
+		case MigrateActionStart:
+			// 任一条需要从起点开始 ⇒ 整日尚未下沉（或与在途记录混杂）。
+			// 这里不替 DayManager 掩盖：BeginDayMigration 会按自身状态机校验并给出准确错误，
+			// 而 Skip 是不可逆的静默丢数据，宁可显式失败。
+			return MigrateActionStart, nil
+		case MigrateActionResume:
+			// 在途迁移：全部未完成记录都在途时保持 Resume，重试走续跑（重新 Start 会与
+			// 状态机「不允许重开在途迁移」冲突并污染状态）。
+			action = MigrateActionResume
+		}
+	}
+	return action, nil
 }
 
 // migrateActionFor 按单条记录推导动作，与改造前日志迁移闭包的三分支逐条对齐。

@@ -124,3 +124,122 @@ func TestResolveMigrateTargetNilCatalog(t *testing.T) {
 	_, err := ResolveMigrateTarget(nil, "node:1", "2026-10-01")
 	require.Error(t, err)
 }
+
+// coldRecord 造一条该日已下沉到冷层的记录（Owner=cold + CLEANED，即迁移完成后的稳态）。
+func coldRecord(namespace, day string) *catalog.Record {
+	return catalog.NewStableRecord(catalog.PartitionKey{StorageNamespace: namespace, UTCDay: day}, catalog.OwnerCold, 2, "cold-"+day)
+}
+
+// inFlightRecord 造一条该日在途迁移的记录（已在途 + 目标冷层有效）。
+func inFlightRecord(namespace, day string) *catalog.Record {
+	rec := hotRecord(namespace, day)
+	rec.MigrationState = catalog.StateDraining
+	rec.TargetOwner = catalog.OwnerCold
+	rec.TargetDirID = "cold-" + day
+	rec.MigrationFromDirID = "hot-" + day
+	return rec
+}
+
+// TestResolveMigrateTargetNodeScopedChecksEveryRecord 是本次缺陷的核心用例：节点维度探针
+// 必须逐条检查该日全部记录，不能取 records[0] 当代表。
+//
+// 缺陷形态（修复前实测）：探针把该日所有分区坍缩成 records[0] 一条。
+//   - 「部分已下沉（首条已冷）」用例中 records[0] 恰好是已 COLD 的记录 ⇒ 旧实现返回 Skip ⇒
+//     整个迁移请求被当成「已完成」成功返回，未迁走的分区永远不会被搬运，热层数据到期后
+//     被 retention 直接删除（真丢数据）。
+//   - 「部分已下沉（首条仍热）」用例则相反，已全部下沉的日会被判成还要再迁（无谓重活）。
+//
+// 转红方式（变异验证）：把 ResolveMigrateTarget 的日级探针改回 `migrateActionFor(records[0])`，
+// 「部分已下沉（首条已冷）」会从 Start 变成 Skip 而失败。
+func TestResolveMigrateTargetNodeScopedChecksEveryRecord(t *testing.T) {
+	const day = "2026-10-01"
+
+	tests := []struct {
+		name string
+		recs []*catalog.Record
+		want MigrateAction
+	}{
+		{
+			// 关键用例：records 按 key 升序，inst:100 / inst:200 已冷 ⇒ 旧实现的代表记录是 Skip。
+			name: "部分已下沉_首条已冷_必须仍要迁移",
+			recs: []*catalog.Record{
+				coldRecord("inst:100", day),
+				coldRecord("inst:200", day),
+				hotRecord("inst:300", day),
+			},
+			want: MigrateActionStart,
+		},
+		{
+			// 反向排列：首条仍热 ⇒ 旧实现恰好也能返回 Start，这里守住「不能因为排序而漂移」。
+			name: "部分已下沉_首条仍热_必须仍要迁移",
+			recs: []*catalog.Record{
+				hotRecord("inst:100", day),
+				coldRecord("inst:200", day),
+				coldRecord("inst:300", day),
+			},
+			want: MigrateActionStart,
+		},
+		{
+			name: "全部已下沉_幂等成功",
+			recs: []*catalog.Record{
+				coldRecord("inst:100", day),
+				coldRecord("inst:200", day),
+				coldRecord("inst:300", day),
+			},
+			want: MigrateActionSkip,
+		},
+		{
+			name: "全部未迁_必须发起迁移",
+			recs: []*catalog.Record{
+				hotRecord("inst:100", day),
+				hotRecord("inst:200", day),
+				hotRecord("inst:300", day),
+			},
+			want: MigrateActionStart,
+		},
+		{
+			// 全在途：重试必须续跑，不能重新 Start（会与状态机冲突）。
+			name: "全部在途_续跑",
+			recs: []*catalog.Record{
+				inFlightRecord("inst:100", day),
+				inFlightRecord("inst:200", day),
+			},
+			want: MigrateActionResume,
+		},
+		{
+			// 冷热混合里夹着在途记录：同样不得 Skip（Skip 会吞掉未完成的下沉）。
+			name: "部分已下沉_含在途_不得跳过",
+			recs: []*catalog.Record{
+				coldRecord("inst:100", day),
+				inFlightRecord("inst:200", day),
+			},
+			want: MigrateActionResume,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := migrateTargetCatalog(t, tt.recs...)
+			// 节点级面板发的就是 `node:<节点ID>`：该键本身不在 Catalog 里，必然走日级探针。
+			action, err := ResolveMigrateTarget(cat, "node:1", day)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, action)
+		})
+	}
+}
+
+// TestResolveMigrateTargetNodeScopedEmptyDayReturnsNotInCatalog 守住空日错误面：
+// 该日一条记录都没有时仍必须是 notInCatalogErr（CP 侧稳定映射 409），不能退化成 Skip。
+func TestResolveMigrateTargetNodeScopedEmptyDayReturnsNotInCatalog(t *testing.T) {
+	const day = "2026-10-01"
+	// 只有别的日期的分区。
+	cat := migrateTargetCatalog(t, coldRecord("inst:317", "2026-09-30"))
+
+	action, err := ResolveMigrateTarget(cat, "node:1", day)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is not in Catalog")
+	require.Equal(t, notInCatalogErr(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: day}).Error(), err.Error(),
+		"空日必须保持 notInCatalogErr 的原文案")
+	// 出错时动作值不参与语义，这里只固定既有实现的返回值，避免无意漂移。
+	require.Equal(t, MigrateActionStart, action)
+}
