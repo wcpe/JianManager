@@ -815,6 +815,21 @@ func runWorker() {
 			slog.Warn("日志分区启动恢复未完成，查询范围降级", "partition", key.String(), "reasons", recovery.PartialReasons)
 		}
 	}
+	// 投影 query_generation 与权威 generation 的一致性自愈（2026-10-21 生产既成损害）。
+	//
+	// 为什么要做：`resetNamespaceConflictCounts` 的旧实现用无 CAS 的 AppendJournal 做派生
+	// 计数对齐，把 Generation 自增 1 却不动 PublishedProjection.QueryGeneration，造出一批
+	// `generation=2 ∧ query_generation=1` 的分区（生产 inst:320 实测 28 个，覆盖 09-20～10-19
+	// 的活跃日期）。这类分区**永远无法再发布**（`PublishProjection` 一进门就
+	// `projection and authority do not match`），采集侧的补投/重建因此恒失败。
+	//
+	// 为什么放在这里：必须在 journal 逻辑恢复完成后（否则读到的是中间态）、在采集/查询
+	// 对外服务之前（否则首轮发布仍会撞前置校验）。修复本身是带 CAS 的单条提交，幂等，
+	// 并发下失败即放弃、下轮再来 —— 不阻塞启动，也不假装成功。
+	if repaired, failed := repairProjectionQueryGenerations(logStack.Catalog); repaired > 0 || failed > 0 {
+		slog.Warn("投影代次一致性自愈完成（历史缺陷的既成损害修复）",
+			"repaired", repaired, "failed", failed)
+	}
 	if vlHTTPClient != nil && coldVLClient != nil && vlSupervisor != nil {
 		hotCfg, hotErr := vlSupervisor.Config(vlsup.NamespaceHot)
 		coldCfg, coldErr := vlSupervisor.Config(vlsup.NamespaceCold)
@@ -1695,6 +1710,37 @@ func runWorker() {
 // localWSAddr 返回仅供本机终端回环桥与本机探针使用的 WebSocket 监听地址。
 func localWSAddr(port int) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
+}
+
+// repairProjectionQueryGenerations 扫描 Catalog 并把「投影 query_generation 落后于权威
+// generation」的分区对齐，返回（修复数, 失败数）。
+//
+// 背景与修法见 catalog.RepairProjectionQueryGeneration 的注释；这里只负责遍历与计数。
+//
+// 为什么逐条独立处理、失败不中断：单个分区的 CAS 冲突（并发发布抢先生效）只应影响它自己，
+// 不该让其余分区也修不上。失败计数会由调用方以 WARN 打出，不静默。
+//
+// 为什么用 `Keys()` 而不是另建索引：分区数量级是「节点数 × 天数」（生产 283 个），
+// 启动扫一遍是 O(分区数) 的内存读，与既有 `StartingRecover()` 同档，无需额外索引。
+func repairProjectionQueryGenerations(cat *catalog.Catalog) (repaired, failed int) {
+	if cat == nil {
+		return 0, 0
+	}
+	for _, key := range cat.Keys() {
+		ok, err := cat.RepairProjectionQueryGeneration(key)
+		if err != nil {
+			failed++
+			slog.Warn("投影代次一致性自愈失败（该分区待下一轮或人工处理）",
+				"partition", key.String(), "error", err)
+			continue
+		}
+		if ok {
+			repaired++
+			slog.Info("投影代次一致性已修复", "partition", key.String(),
+				"detail", "query_generation 对齐到权威 generation，该分区恢复可发布")
+		}
+	}
+	return repaired, failed
 }
 
 // sampleLogIndexPersistLatency 周期性打印采集索引（FR-496，本地 SQLite）的单次持久化耗时

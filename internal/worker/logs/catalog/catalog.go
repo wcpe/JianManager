@@ -223,6 +223,70 @@ func projectionManifest(rec *Record) string {
 	return ""
 }
 
+// RepairProjectionQueryGeneration 把「投影的 QueryGeneration 落后于权威 Generation」的
+// 分区对齐到权威代次，使 `PublishProjection` 的前置校验（`QueryGeneration == Generation`）
+// 重新成立。返回是否真的做了修复。
+//
+// ── 为什么需要它（2026-10-21 生产既成损害）──────────────────────────────────────
+// `resetNamespaceConflictCounts` 的旧实现用无 CAS 的 `AppendJournal` 做「派生计数对齐」，
+// 并把 `Generation` 自增 1 却**不动** `PublishedProjection.QueryGeneration`。于是造出一批
+// `generation=2 ∧ query_generation=1` 的分区（生产实测 inst:320 有 28 个，覆盖 09-20～10-19
+// 的活跃日期）。这类分区此后**永远无法再发布**：`PublishProjection` 一进门就返回
+// `projection and authority do not match`，采集侧的补投/重建因此恒失败。
+//
+// ── 为什么是「把 query_generation 抬到 generation」而不是「把 generation 退回」──────
+// 旧实现自增 `Generation` 之后，后续写入已按**新代次**把数据写进 VL（`projection_generation`
+// 由代次派生）。退回代次会与已落库的数据脱节、并与「代次不得复用」的红线冲突。
+// 抬 `query_generation` 只是把「这条投影属于哪个权威代次」这句话改对，不动任何物理数据。
+//
+// ── 安全边界 ────────────────────────────────────────────────────────────────
+//   · 只处理 `query_generation < generation` 的**落后**形态。反过来（qgen > gen）说明记录
+//     自相矛盾且成因未知，一律不碰，交人工判断。
+//   · 仅当**其余字段**没有别的矛盾时才修：`QueryLocationDirID == OwnerDirID`（否则投影指向
+//     的目录已不是权威目录，属另一类不一致）。
+//   · 走 CAS（比对 `JournalLastSeq` 与 `Generation`）：并发下若别人已发布到更新代次，
+//     本次放弃、不覆盖。
+//   · 刻意**不**碰 `ConflictCount` 等派生值：本函数只修代次一致性这一件事。
+func (c *Catalog) RepairProjectionQueryGeneration(key PartitionKey) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur, ok := c.records[key]
+	if !ok || cur == nil {
+		return false, fmt.Errorf("%w: %s", ErrNotFound, key)
+	}
+	if cur.PublishedProjection == nil {
+		return false, nil
+	}
+	if cur.PublishedProjection.QueryGeneration >= cur.Generation {
+		// 已经一致（或反向矛盾，交由人工）：无事可做。
+		return false, nil
+	}
+	if cur.PublishedProjection.QueryLocationDirID != cur.OwnerDirID {
+		// 目录也已经不一致：属另一类损坏，不在此处一并「修好」。
+		return false, nil
+	}
+	expected := cur.Clone()
+	next := cur.Clone()
+	next.PublishedProjection.QueryGeneration = next.Generation
+	// 代次对齐**不构成**一次权威切换：owner/generation/owner_dir 全部保持不变，
+	// 因此这里不能走 PublishProjection（它要求 QueryGeneration 已等于 Generation），
+	// 而走下面这段**持锁内**的 CAS 提交（调用方已持 c.mu，绝不可再取一次）。
+	// CAS 判据：`JournalLastSeq` 与 `Generation` 仍等于 `expected` 快照。
+	if cur.JournalLastSeq != expected.JournalLastSeq || cur.Generation != expected.Generation {
+		return false, fmt.Errorf("%w: catalog authority changed during repair", ErrInvalidState)
+	}
+	committed := next.Clone()
+	entry := JournalEntry{
+		Key:     committed.Key,
+		Detail:  "derived query_generation repaired to match authority generation",
+		State:   committed.MigrationState,
+	}
+	if _, err := c.commitRecordLocked(committed, entry); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // commitRecordLocked keeps a transition invisible until its full state is
 // durable in the journal. Caller holds c.mu.
 func (c *Catalog) commitRecordLocked(rec *Record, entry JournalEntry) (*Record, error) {

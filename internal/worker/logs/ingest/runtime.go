@@ -7934,9 +7934,23 @@ func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, sour
 // 只要某一轮"绑定者没跑"，位置就停在 R 无人补 ⇒ 报 `no recovery segment covers position R` ✓。
 // 本函数与上述成因**正交**：只要发生一次投递确认，就把 [当前 Reclaim, 已确认投递水位) 补上 ✓。
 //
-// 凭据（不越界未来 + default-deny 未放宽）：Delivery 水位只在「ingest 侧插入 + 逐字段可见性校验 +
-// 已发布投影」之后推进（writeProjectionPlan → RecordHTTPResult），故它就是"已证明另存"的水位 ✓；
+// 凭据（不越界未来 + default-deny 未放宽）：Delivery 水位只在「投递成功被记入 WAL」之后推进
+// （`acquire.Pipeline` 的投递路径 → `WAL.RecordHTTPResult`），故它就是"已证明另存"的水位 ✓；
 // 越过 Delivery 的位置**永远**没有本段覆盖 ⇒ 未确认数据一个字节都不会被跳过 ✓。
+//
+// **一处必须写清的边界（2026-10-21 复核纠正）**：本注释此前写作
+// 「（writeProjectionPlan → RecordHTTPResult）」，这是**不准确的** —— 重建路径
+// （`writeProjectionPlan`）只构造并返回 `pipeline.DeliveryResult`，**从不**把它写进 WAL，
+// 全文 `RecordHTTPResult` 的真实调用点只有「破环直投」（`repairStalledReclaim` 一带）。
+// 后果有两层，都必须知道：
+//   · 重建当天**不会**把 Delivery 推高 ⇒ 重建路径走 `releaseRecovery` 时，那道
+//     `positions.Delivery < to` 闸门会因「Delivery 未前进」而早退，回收责任不推进；
+//   · 但**不能因此认为闸门安全**：若该源在更早的（仍在保留期内的）正常投递中已把
+//     Delivery 推到与本批 `to` 齐平（生产上受影响的源正是 `delivery == read`），
+//     闸门就会放行。所以「本批这些天是否真的发布过」不能只靠 Delivery 判断 ——
+//     这正是 `rebuildDaysInner` 必须**自己**在 `beyondWindow` 非空时直接跳过
+//     `releaseRecovery` 的原因（见该函数尾部注释）。
+//
 // （2026-10-06 曾试把上界放宽到 durable 以解停滞 ✗ —— 被不变量测试当场捉住：覆盖未投递区间会让其
 // WAL 条目被回收 ⇒ 事件再也投不出去 ✗ ⇒ 已撤回；停滞真修点＝让投递水位前进 ✓。）
 // 审计：段名 `delivery-confirmed-<from>-<to>`、路径 `delivery-confirmed://<generation>`，状态链只推进到
