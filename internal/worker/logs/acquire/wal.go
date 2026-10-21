@@ -794,6 +794,21 @@ func (w *WAL) Commit() error {
 	if maxEnd <= w.lastDurableEnd {
 		maxEnd = w.lastDurableEnd
 	}
+	// **账本可能已经比本 WAL 实例更靠前**（2026-10-22 真机缺陷）：
+	// `lastDurableEnd` 只活在内存里，重启后由「当前 WAL 条目」重建（见 L87/L961）——
+	// 而重启时那些条目往往**已被 reclaim 回收**，于是进程内计数从小值开始；另一边
+	// 账本里的 durable 仍是重启前的末端（生产实测 4592494）。此时用小值去推进会撞上
+	// `durable_position must be monotonic`，而该错误被登记为 `WAL_COMMIT_FAILED` 缺口：
+	//   · 采集每轮失败 ⇒ 缺口每轮重建 ⇒ 「登记 → 消解 → 再登记」活循环
+	//     （生产实测 65 条同区间缺口的 id 0..64，每 10s 一转）；
+	//   · 期间该源被标成「不可分类缺口阻塞」，积压不推进。
+	//
+	// 语义上这不是错误而是**正常形态**：durable 是「已耐久到至少这个位置」的下界，
+	// 账本更靠前就说明这些字节早已耐久（reclaim 的前提就是「已证明安全另存」）。
+	// 故先取账本的当前值兜底：推进量只会单调，绝不会因为重启而回退。
+	if p, ok := w.led.Positions(w.key); ok && p.Durable > maxEnd {
+		maxEnd = p.Durable
+	}
 	if maxEnd > 0 {
 		if err := w.led.AdvanceDurable(w.key, maxEnd); err != nil {
 			return err
