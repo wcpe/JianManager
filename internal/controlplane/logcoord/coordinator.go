@@ -1518,7 +1518,10 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 			workerCoverage.Complete = false
 			workerCoverage.PartialReasons = appendUniqueReason(workerCoverage.PartialReasons, reason)
 			workerCoverage.EnumerationState = EnumOpen
-			quality.StatsQuality = StatsQPartial
+			// 失败分支必须按 worst 合并（M-3）：ByWorker 保留 resolver 顺序而不排序，
+			// 无条件赋值会让「后处理的 Worker」冲掉「先处理的 Worker」已上报的更差等级，
+			// 同一份数据仅因解析顺序不同就给出不同的整体质量。
+			quality.StatsQuality = worstStatsQuality(quality.StatsQuality, StatsQPartial)
 			continue
 		}
 		targetIDs := make([]string, 0, len(targets))
@@ -1534,7 +1537,8 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 				}
 				covBy[t.ID] = tc
 			}
-			quality.StatsQuality = StatsQPartial
+			// 同上：按 worst 合并，避免本分支的 partial 覆盖先前 Worker 的 unavailable。
+			quality.StatsQuality = worstStatsQuality(quality.StatsQuality, StatsQPartial)
 			continue
 		}
 		workerView, viewErr, viewOK := workerViewID(view, workerID)
@@ -1546,7 +1550,8 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 				}
 				covBy[t.ID] = tc
 			}
-			quality.StatsQuality = StatsQPartial
+			// 同上：按 worst 合并，避免覆盖先前 Worker 已判定的更差等级。
+			quality.StatsQuality = worstStatsQuality(quality.StatsQuality, StatsQPartial)
 			continue
 		}
 		resp, callErr := client.Stats(ctx, WorkerSearchRequest{
@@ -1574,14 +1579,16 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 				}
 				covBy[t.ID] = tc
 			}
-			quality.StatsQuality = StatsQPartial
+			// 同上：按 worst 合并，避免覆盖先前 Worker 已判定的更差等级。
+			quality.StatsQuality = worstStatsQuality(quality.StatsQuality, StatsQPartial)
 			continue
 		}
 		if resp.Unsupported {
 			for _, t := range targets {
 				covBy[t.ID] = CoverageFromReadiness(t, []string{"log_rpc_unsupported"})
 			}
-			quality.StatsQuality = StatsQUnavailable
+			// 同上：unavailable 是最差等级，不能被其它 Worker 的 partial 冲掉。
+			quality.StatsQuality = worstStatsQuality(quality.StatsQuality, StatsQUnavailable)
 			continue
 		}
 		if bindErr := ensureWorkerViewBinding(view, workerID, targets, resp.ViewID, resp.Targets); bindErr != nil {
@@ -1591,7 +1598,8 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 			for _, t := range targets {
 				covBy[t.ID] = workerErrorCoverage(t, workerID, resp.Targets, resp.Error)
 			}
-			quality.StatsQuality = StatsQPartial
+			// 同上：按 worst 合并，避免覆盖先前 Worker 已判定的更差等级。
+			quality.StatsQuality = worstStatsQuality(quality.StatsQuality, StatsQPartial)
 			continue
 		}
 		// Worker 上报的统计质量按最差值并入（M-3）：它在 coverage 仍 complete 时也可能

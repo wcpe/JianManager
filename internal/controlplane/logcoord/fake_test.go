@@ -59,6 +59,12 @@ type fakeWorker struct {
 	statsTargets []WorkerTargetResult
 	statsTrunc   bool
 	statsCalls   int
+	// statsQuality 覆盖 Stats 上报的质量；nil 表示按真实 Worker 的默认值上报 exact/exact。
+	statsQuality *Quality
+	// statsUnsup 置为非零时，Stats 返回 Unsupported（CP 侧应判 unavailable）。
+	statsUnsup bool
+	// statsErr 非空时，Stats 返回 Error 文本（CP 侧应判 partial）。
+	statsErr string
 
 	facets        []WorkerFacetDimension
 	facetTargets  []WorkerTargetResult
@@ -124,11 +130,18 @@ func (w *fakeWorker) Stats(_ context.Context, req WorkerSearchRequest, _ []strin
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.statsCalls++
+	quality := exactQuality
+	if w.statsQuality != nil {
+		quality = *w.statsQuality
+	}
 	return &WorkerStatsResponse{
-		ViewID:    req.ViewID,
-		Points:    append([]WorkerStatsPoint(nil), w.statsPoints...),
-		Targets:   append([]WorkerTargetResult(nil), w.statsTargets...),
-		Truncated: w.statsTrunc,
+		ViewID:      req.ViewID,
+		Points:      append([]WorkerStatsPoint(nil), w.statsPoints...),
+		Targets:     append([]WorkerTargetResult(nil), w.statsTargets...),
+		Truncated:   w.statsTrunc,
+		Unsupported: w.statsUnsup,
+		Error:       w.statsErr,
+		Quality:     quality,
 	}, nil
 }
 

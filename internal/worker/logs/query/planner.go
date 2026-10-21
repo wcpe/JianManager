@@ -261,14 +261,18 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 				cvs = ClosedVisibleSeqOf(ref.Projection, "default")
 			}
 			manifest = ref.Projection.ManifestVersion
+			// 质量必须按 rank 取 worst 合并，不能无条件覆盖：keys 由 selectKeys 按
+			// key.String() 升序给出，无条件赋值会让「后处理的 target」冲掉「先处理的
+			// target」已判定的更差等级——同一份数据仅因 namespace 命名顺序不同就上报
+			// 不同等级（conflict 被 unresolved 覆盖即丢失唯一的人工修复入口）。
 			if !ref.Projection.CoverageComplete {
 				reasons = appendUniqueStr(reasons, ReasonProjectionIncomplete)
-				res.Quality.DuplicateQuality = DupUnresolved
-				res.Quality.StatsQuality = StatsPartial
+				res.Quality.DuplicateQuality = worstDuplicateQuality(res.Quality.DuplicateQuality, DupUnresolved)
+				res.Quality.StatsQuality = worstStatsQuality(res.Quality.StatsQuality, StatsPartial)
 			}
 			if ref.Projection.ConflictCount > 0 {
-				res.Quality.DuplicateQuality = DupConflict
-				res.Quality.StatsQuality = StatsPartial
+				res.Quality.DuplicateQuality = worstDuplicateQuality(res.Quality.DuplicateQuality, DupConflict)
+				res.Quality.StatsQuality = worstStatsQuality(res.Quality.StatsQuality, StatsPartial)
 			}
 		}
 

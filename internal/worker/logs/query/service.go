@@ -472,11 +472,17 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 				budgetHit = true
 			}
 		}
-		if o.res.DuplicateQuality != "" && o.res.DuplicateQuality != DupExact {
-			resp.Quality.DuplicateQuality = o.res.DuplicateQuality
+		// 空值表示该 range 未上报质量（如不追踪质量的客户端），必须跳过：若把它按
+		// worst 归入 unspecified，未上报的 range 会把 exact 拖成 unspecified。
+		// 非空则按 rank 取 worst —— 这正是上方「partial 质量只累积、不因后完成的
+		// exact 回升」的完整语义。旧实现的 != DupExact 守卫只挡住了「回升到 exact」，
+		// 没挡住两个非 exact 值互相覆盖：range1=conflict + range2=unresolved 时
+		// conflict 被冲成 unresolved，结果随任务完成顺序漂移。
+		if o.res.DuplicateQuality != "" {
+			resp.Quality.DuplicateQuality = worstDuplicateQuality(resp.Quality.DuplicateQuality, o.res.DuplicateQuality)
 		}
-		if o.res.StatsQuality != "" && o.res.StatsQuality != StatsExact {
-			resp.Quality.StatsQuality = o.res.StatsQuality
+		if o.res.StatsQuality != "" {
+			resp.Quality.StatsQuality = worstStatsQuality(resp.Quality.StatsQuality, o.res.StatsQuality)
 		}
 		rangeItems := o.res.Items
 		if cursorKey != nil {
@@ -540,11 +546,15 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	if exhausted && plan.Coverage.Complete {
 		resp.Coverage.EnumerationState = EnumExhausted
 	}
-	if plan.Quality.DuplicateQuality != "" && resp.Quality.DuplicateQuality == DupExact {
-		resp.Quality.DuplicateQuality = plan.Quality.DuplicateQuality
-	}
+	// 重复质量必须按 rank 取 worst 合并，不能「仅在 range 全 exact 时才采纳 plan」：
+	// range 回调（见上）一旦因同 id 异哈希把结果置为 unresolved，旧的 == DupExact 守卫
+	// 即为假，planner 已判定的 conflict 会被整体丢弃——而 conflict 才是带人工修复入口的
+	// 更差等级，丢弃它等于让用户失去唯一的补救指引。
+	resp.Quality.DuplicateQuality = worstDuplicateQuality(resp.Quality.DuplicateQuality, plan.Quality.DuplicateQuality)
 	if !plan.Coverage.Complete {
-		resp.Quality.StatsQuality = StatsPartial
+		// 按 worst 合并而不是直接置 partial：range 可能已上报 StatsUnavailable，
+		// 直接赋值会把「完全拿不到统计」降级成「统计不完整」。
+		resp.Quality.StatsQuality = worstStatsQuality(resp.Quality.StatsQuality, StatsPartial)
 	}
 	// 固定观测口径：端到端总耗时（worker 视角）。
 	slog.Debug("query-timing: total",
@@ -559,7 +569,11 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 	resp.Coverage = plan.Coverage
 	remapCoverageTargets(&resp.Coverage, req.AuthorizedTargets)
 	resp.Quality = plan.Quality
-	resp.Quality.StatsQuality = StatsExact
+	// 此处禁止再把 StatsQuality 无条件重置为 StatsExact（历史遗留）：planner 会因
+	// projection 不完整或 ConflictCount>0 判定 StatsPartial，而该冲突路径不追加任何
+	// coverage 原因，下方的 !plan.Coverage.Complete 兜底不会触发，重置会让分区被错报成
+	// stats_quality=exact。plan 已种入 StatsExact 作为基线，按 rank 取 worst 的结论
+	// 就是保留 plan 值（exact 是最不差者），故直接沿用即可。
 	if plan.View != nil {
 		resp.View = &ViewRef{ViewID: plan.View.ViewID, OrderVersion: plan.View.OrderVersion}
 	}
@@ -590,7 +604,9 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 		launch = int(fanoutLimit)
 		// 必须在发起前记录跳过范围，不能等截短 outcomes 中永远不会发生的下一轮。
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
-		resp.Quality.StatsQuality = StatsPartial
+		// 同上用 worst 合并：这里是「请求前截短」，plan 判定可能是 exact 或 partial，
+		// 直接置 partial 在今天等价，但一旦 plan 未来能给出更差等级就会被冲掉。
+		resp.Quality.StatsQuality = worstStatsQuality(resp.Quality.StatsQuality, StatsPartial)
 	}
 	stopKind := runBudgetTasks(ctx, req.Budget, launch, func(ctx context.Context, idx int, budget Budget) (statsRangeOutcome, uint64) {
 		rng := plan.Ranges[idx]
@@ -621,8 +637,10 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 		for _, reason := range o.res.CoverageReasons {
 			plan.Coverage.MarkIncomplete(reason)
 		}
-		if o.res.StatsQuality != "" && o.res.StatsQuality != StatsExact {
-			resp.Quality.StatsQuality = o.res.StatsQuality
+		// 空值 = 该 range 未上报，跳过（避免把未上报按 unspecified 计入而拖累 exact）；
+		// 非空按 worst 合并，防止多个 range 的非 exact 等级互相覆盖后随完成顺序漂移。
+		if o.res.StatsQuality != "" {
+			resp.Quality.StatsQuality = worstStatsQuality(resp.Quality.StatsQuality, o.res.StatsQuality)
 		}
 		points = mergeStatsPoints(points, o.res.Points)
 		return true
@@ -631,7 +649,9 @@ func (s *Service) Stats(ctx context.Context, req QueryRequest, groupBy []string)
 		plan.Coverage.MarkIncomplete(ReasonBudgetExceeded)
 	}
 	if !plan.Coverage.Complete {
-		resp.Quality.StatsQuality = StatsPartial
+		// 按 worst 合并：range 回调可能已把 StatsUnavailable 累积进来，
+		// 直接置 partial 会把它降级。
+		resp.Quality.StatsQuality = worstStatsQuality(resp.Quality.StatsQuality, StatsPartial)
 	}
 	resp.Points = points
 	resp.Coverage = plan.Coverage
@@ -1028,7 +1048,10 @@ func (s *Service) Tail(ctx context.Context, req QueryRequest, mode TailMode) Tai
 		resp.Exhausted = exhausted && plan.Coverage.Complete
 	}
 	if !plan.Coverage.Complete {
-		resp.Quality.StatsQuality = StatsPartial
+		// 与 Search/Stats 同口径用 worst 合并。本函数内 resp.Quality 只来自 plan
+		// （exact 或 partial），当前不存在可达的 unavailable 降级路径，故这里是
+		// 刻意统一（防止未来 RangeClient 开始上报 unavailable 时又被降级）。
+		resp.Quality.StatsQuality = worstStatsQuality(resp.Quality.StatsQuality, StatsPartial)
 	}
 	resp.Items = items
 	resp.Coverage = plan.Coverage
