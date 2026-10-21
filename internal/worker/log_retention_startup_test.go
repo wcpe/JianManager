@@ -21,7 +21,10 @@ func TestLoadRejectsRetentionMismatchAndRawPolicy(t *testing.T) {
 	cases := []struct{ name, body, errorKey string }{
 		{"热层长于实际", "log_retention:\n  enabled: true\n  hot_retention: 180d\n", "retention_period"},
 		{"冷层长于实际", "log_retention:\n  enabled: true\n  cold_retention: 1000d\n", "cold_retention_period"},
-		{"热层空字符串回退30天", "log_retention:\n  enabled: true\nlog_vl:\n  retention_period: ''\n", "retention_period"},
+		// 空串回退到 vlsup.DefaultRetentionPeriod（2026-10-21 起为 120d）。
+		// 该回退值本身**长于**热窗口 90d，故不再被拒 —— 本用例改为显式给一个
+		// 短于热窗口的值，继续锁住「VL retention 短于热窗口必须启动即拒」这一红线。
+		{"热层短于实际", "log_retention:\n  enabled: true\nlog_vl:\n  retention_period: '30d'\n", "retention_period"},
 		{"冷层空白回退热层", "log_retention:\n  enabled: true\nlog_vl:\n  cold_retention_period: '   '\n", "cold_retention_period"},
 		{"未知等级", "log_retention:\n  enabled: true\n  by_level:\n    mystery: 7d\n", "未知级别"},
 		{"来源非法", "log_retention:\n  enabled: true\n  sources:\n    - match: 'inst:1|*'\n", "match"},

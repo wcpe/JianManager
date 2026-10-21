@@ -118,6 +118,13 @@ const (
 	ReasonCancelled            = "CANCELLED"
 	ReasonUnsupported          = "UNSUPPORTED"
 	ReasonRangeUnavailable     = "RANGE_UNAVAILABLE"
+	// ReasonFilteredOut 表示「粗筛取到的候选行全部被代次/水位等归因条件过滤掉」。
+	//
+	// 为什么要单独一个原因（2026-10-21 架构复审 D4）：合并粗筛先按 top-K 取最新 N 行、
+	// 再在内存里按 `projection_generation` 白名单与 `ClosedVisibleSeq` 过滤。当这 N 行
+	// 全部是旧代次副本（生产 hot 层确有此事）时，本页 0 行但枚举远未结束。
+	// 若不上报该原因，coverage 会显示 complete，用户看到「0 条且无法翻页」而无任何解释。
+	ReasonFilteredOut = "CANDIDATES_FILTERED_OUT"
 	ReasonUnauthorizedTarget   = "UNAUTHORIZED_TARGET"
 )
 

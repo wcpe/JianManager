@@ -39,9 +39,22 @@ const (
 // 也不是 Worker 日志总预算。
 const DefaultHotCacheBytes int64 = 512 * 1024 * 1024
 
-// DefaultRetentionPeriod 是 foundation 阶段的 VL runtime retention 模板。
+// DefaultRetentionPeriod 是受管 VL 的 runtime retention 默认值。
 // 产品 online_retention / move_after_age 与 runtime retention 分离映射（契约 §7）。
-const DefaultRetentionPeriod = "30d"
+//
+// **为什么是 120d 而不是 30d**（2026-10-21 架构复审）：
+// 保留策略的热层窗口默认是 `retention.DefaultHotRetention` = 90d（数据在热层待 90 天后
+// 搬到冷层）。而 VL 的 retention 到期是**直接删**，绕过平台侧「删前归档」。
+// 若 VL retention（30d）短于热窗口（90d），数据在「该搬走」之前就被删掉；
+// 更糟的是 `validateRuntimeRetention` 会因此拒绝启动 —— 即用默认值开启保留策略
+// 会让 Worker 起不来。
+//
+// 取 120d = 90d 热窗口 + 30d 搬运余量：搬运驱动器有充裕时间把分区拷到冷层并校验，
+// 不会出现「还没搬完就被删」的竞态。两个默认值因此自洽。
+//
+// 注意：这是**默认值**。若运维显式配置 `log_vl.retention_period`，仍以配置为准，
+// 并由 `validateRuntimeRetention` 校验与热窗口的余量关系。
+const DefaultRetentionPeriod = "120d"
 
 // DefaultAuthUsername 默认本地鉴权用户名。
 const DefaultAuthUsername = "jm"
@@ -58,6 +71,15 @@ type InstanceConfig struct {
 	MemoryAllowedBytes int64 // 0：HOT 使用 DefaultHotCacheBytes；其他 namespace 省略该 flag
 	AuthUsername       string
 	AuthPassword       string
+	// EnableDelete 打开 VL 的 -delete.enable，使 /delete/* API 可用。
+	//
+	// 为什么需要它（2026-10-21 架构复审）：`projection_generation` 白名单只让旧代次
+	// 「看不见」，**不会让旧行不存在**；而 VL 只追加。在缺删除能力的前提下，任何
+	// 「整窗重写 + 换代次」的设计都必然线性放大体积（生产实测单日 75×、880MB）。
+	// 打开后可由孤儿代次 GC 按 `projection_generation NOT IN (已发布白名单)` 回收。
+	//
+	// 默认关闭（零值）：删除是不可逆操作，必须由运维显式承担；关闭时行为与改动前逐字一致。
+	EnableDelete bool
 }
 
 // DefaultPort 返回 namespace 的默认监听端口。
@@ -163,6 +185,11 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 	}
 	if cache := cfg.EffectiveCacheBytes(); cache > 0 {
 		args = append(args, "-memory.allowedBytes="+strconv.FormatInt(cache, 10))
+	}
+	if cfg.EnableDelete {
+		// 删除 API 默认关闭：它不可逆，且会把「物理回收」这一能力从运维手里交给调用方。
+		// 只有显式配置（log_vl.delete_enabled）才打开，用于孤儿代次 GC / 按级别 TTL。
+		args = append(args, "-delete.enable")
 	}
 	args = append(args,
 		"-httpAuth.username="+cfg.AuthUsername,

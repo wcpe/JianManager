@@ -26,7 +26,9 @@ func TestBuildArgsHotDefaults(t *testing.T) {
 	for _, want := range []string{
 		"-storageDataPath=" + cfg.StorageDataPath,
 		"-httpListenAddr=127.0.0.1:19441",
-		"-retentionPeriod=30d",
+		// 引用常量而非硬编码：默认值会随保留策略调整（2026-10-21 由 30d 改 120d），
+		// 硬编码会让「改默认值」与「测试」永久不同步。
+		"-retentionPeriod=" + DefaultRetentionPeriod,
 		"-memory.allowedBytes=536870912",
 		"-httpAuth.username=jm",
 		"-httpAuth.password=local-only",

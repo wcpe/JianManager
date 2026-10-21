@@ -626,3 +626,40 @@ func TestRemapCoverageTargetsKeepsCompleteWhenAllHealthy(t *testing.T) {
 	require.True(t, cov.Complete)
 	require.Empty(t, cov.PartialReasons)
 }
+
+// TestSearch_ZeroItemsButNotExhaustedStillYieldsCursor 钉住「本页 0 行但枚举未结束必须下发游标」。
+//
+// 缺陷形态（2026-10-21 架构复审 D4）：合并粗筛按 top-K 取「最新 N 行」再在内存里按
+// 代次白名单 / 封闭水位过滤。当这 N 行**全部**被过滤掉时（生产 hot 层确有 880MB
+// 同日旧代次重复数据，极易触发），得到 items=0 且 exhausted=false。
+// 旧实现的下发条件是 `len(items) > 0` ⇒ **不下发游标** ⇒ 用户看到「0 条 + 枚举未结束」
+// 却永远无法翻页 ⇒ 更老的可查数据永久不可达（纯静默缺失，且 coverage 仍报 complete，
+// 导出甚至会给出「成功」的空附件）。
+//
+// 修法：用各 range 已算出的 `SafeBeforeUTC` 作为下一页的时间下界下发游标，
+// 并把 `CANDIDATES_FILTERED_OUT` 计入覆盖原因，不再假装完整。
+//
+// 变异验证：把 `case safeBefore != "":` 分支删掉（退回只在 len(items)>0 时下发）⇒ 转红。
+func TestSearch_ZeroItemsButNotExhaustedStillYieldsCursor(t *testing.T) {
+	c := newCatalogWithHot(t)
+	client := FuncRangeClient{
+		SearchFn: func(ctx context.Context, rng AuthoritativeRange, q RangeQuery) (RangeResult, error) {
+			// 模拟「粗筛拿到了行，但全部被过滤掉」：Items 为空 + 未耗尽 + 给出安全栅栏。
+			return RangeResult{
+				Items:         nil,
+				Exhausted:     false,
+				SafeBeforeUTC: "2026-09-20T09:00:00Z",
+			}, nil
+		},
+	}
+	svc := NewService(NewPlanner(c, nil), client, "b")
+	resp := svc.Search(context.Background(), QueryRequest{RequestID: "z1", Budget: Budget{Limit: 10}})
+
+	require.Nil(t, resp.Err)
+	require.Empty(t, resp.Items, "夹具前提：本页必须 0 行")
+	require.NotEmpty(t, resp.NextCursor,
+		"0 行但枚举未结束时必须下发游标，否则更老数据永久不可达")
+	require.False(t, resp.Exhausted, "枚举未结束")
+	require.False(t, resp.Coverage.Complete,
+		"候选被全部过滤掉时必须计入覆盖原因，不能假装完整")
+}

@@ -603,6 +603,13 @@ type LogVLConfig struct {
 	// 「删前归档」。热层 retention 必须不短于保留策略的热层窗口（默认同为 90d，留出搬运余量），
 	// 冷层则是「冷留存多久」的唯一执行者（用户口径：冷 730 天，所有级别统一）。
 	ColdRetentionPeriod string `mapstructure:"cold_retention_period"`
+	// DeleteEnabled 打开受管 VL 的 -delete.enable（默认 false）。
+	//
+	// 为什么要这个开关：`projection_generation` 白名单只让旧代次「看不见」，
+	// **不会让旧行不存在**；VL 只追加。缺删除能力时，任何「整窗重写 + 换代次」
+	// 都会线性放大体积（生产实测单日 75×、880MB）。打开后可由孤儿代次 GC 回收。
+	// 默认关：删除不可逆，必须运维显式承担。
+	DeleteEnabled bool `mapstructure:"delete_enabled"`
 	HotCacheBytes       int64  `mapstructure:"hot_cache_bytes"`
 	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
 	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
@@ -1664,13 +1671,35 @@ func Load(path string) (*Config, error) {
 	if err := validateLogSources(cfg.LogSources); err != nil {
 		return nil, fmt.Errorf("log_sources: %w", err)
 	}
-	if cfg.LogRetention.Enabled {
+	// **无条件校验保留期一致性**（2026-10-21 架构复审）：旧实现在 `Enabled` 为假时
+	// 整段跳过，于是最危险的组合「搬运关闭 + VL retention 有限」**完全不报错**
+	// ⇒ 热层数据到期被 VictoriaLogs **直接删除**，不写审计、不经「删前归档」、
+	// 不受最后副本保护，而且没人知道。
+	//
+	// 这里分成两种处置：
+	//   · `Enabled=false`（默认）：**只告警不拒绝**——这是出厂默认，直接拒启动会让
+	//     所有既有部署起不来；但必须把「数据会在 N 天后消失」说清楚（见下方 Warn）。
+	//   · `Enabled=true`：保留期必须严格长于热层窗口并留搬运余量，否则拒绝启动。
+	{
 		policy, err := cfg.RetentionPolicy()
 		if err != nil {
 			return nil, err
 		}
 		if err := cfg.validateRuntimeRetention(policy); err != nil {
-			return nil, err
+			if cfg.LogRetention.Enabled {
+				return nil, err
+			}
+			slog.Warn("保留期配置不一致，但保留策略未启用（不阻断启动）：热层数据到期将由 VictoriaLogs 直接删除",
+				"error", err, "hint", "设置 log_retention.enabled: true 并让 hot_retention 短于 VL retention")
+		}
+		if !cfg.LogRetention.Enabled {
+			// 未启用 = 搬运永不发生 = 「没有承接物」。按本项目自己的原则
+			// 「没有承接物就不做减法」，这里必须让运维**明确知道**减法仍然会发生：
+			// 减法的执行者不是我们，而是 VL 自己的 -retentionPeriod。
+			slog.Warn("日志保留策略未启用：hot→cold 搬运不会运行，超出 VL retention 的日志将被 VictoriaLogs 直接删除（无归档、无审计）",
+				"enabled", false,
+				"vlRetention", cfg.LogVL.RetentionPeriod,
+				"hint", "启用 log_retention.enabled 并确认冷层可用，否则请自行承担日志过期即丢失")
 		}
 	}
 	if cfg.EnrollToken == "" && strings.TrimSpace(cfg.EnrollTokenFile) != "" {

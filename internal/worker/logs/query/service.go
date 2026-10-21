@@ -521,13 +521,40 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 		items = items[:limit]
 		exhausted = false
 	}
-	if !exhausted && len(items) > 0 && !budgetHit && !cancelled {
-		next = EncodeCursor(Cursor{
-			ViewID:       viewIDOf(plan.View, req.View),
-			OrderVersion: SortVersion,
-			SortKey:      SortKeyOf(items[len(items)-1]),
-			PageLimit:    limit,
-		})
+	// 游标下发：正常情况用本页最后一条的排序键。
+	//
+	// **但「本页 0 行且枚举未结束」也必须下发游标**（2026-10-21 架构复审 D4）：
+	// 合并粗筛按 top-K 取「最新 N 行」再在内存里按代次/水位过滤；若这 N 行**全部**
+	// 被过滤掉（生产 hot 层确有 880MB 同日旧代次重复数据，极易触发），
+	// 就得到 items=0 且 exhausted=false。此时若不下发游标，用户看到「0 条 + 枚举未结束」
+	// 却**永远无法翻页** ⇒ 更老的可查数据永久不可达（纯静默缺失）。
+	//
+	// 用 `safeBefore`（各 range 已算出的安全时间栅栏）作为下一页的时间下界：
+	// 它保证「这一批粗筛覆盖的时间段已经排空」，翻页从更早处继续即可。
+	if !exhausted && !budgetHit && !cancelled {
+		switch {
+		case len(items) > 0:
+			next = EncodeCursor(Cursor{
+				ViewID:       viewIDOf(plan.View, req.View),
+				OrderVersion: SortVersion,
+				SortKey:      SortKeyOf(items[len(items)-1]),
+				PageLimit:    limit,
+			})
+		case safeBefore != "":
+			// 0 行但粗筛批次已排空：以时间栅栏为游标，让翻页能越过这批无效行。
+			next = EncodeCursor(Cursor{
+				ViewID:       viewIDOf(plan.View, req.View),
+				OrderVersion: SortVersion,
+				SortKey:      SortKey{EventTimeUTC: safeBefore},
+				PageLimit:    limit,
+			})
+			// 同时把「本页 0 行是因为过滤」这件事如实报出来，不让 coverage 假装完整。
+			if plan.Coverage.Complete {
+				plan.Coverage.MarkIncomplete(ReasonFilteredOut)
+			}
+			slog.Debug("查询本页 0 行但枚举未结束：以安全时间栅栏下发游标（避免更老数据不可达）",
+				"safeBefore", safeBefore, "view", viewIDOf(plan.View, req.View))
+		}
 	}
 
 	if cancelled {

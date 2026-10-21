@@ -658,6 +658,9 @@ func runWorker() {
 		vlSupervisor, err = vlsup.New(vlsup.Options{
 			BinaryPath: managedBinary, AssetSHA256: managedSHA,
 			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
+			// 删除能力（默认关）：孤儿代次 GC 与按级别 TTL 的前置条件。
+			// 不打开时 VL 只能靠整日 retention 淘汰，旧代次行永久占盘（生产单日 75×）。
+			DeleteEnabled: cfg.LogVL.DeleteEnabled,
 			RetentionByNamespace: map[vlsup.Namespace]string{
 				// 冷层 retention 是「冷留存多久」的唯一执行者（用户口径：730d，所有级别统一）。
 				vlsup.NamespaceCold: cfg.LogVL.ColdRetentionPeriod,

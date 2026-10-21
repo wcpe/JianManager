@@ -69,6 +69,9 @@ type Options struct {
 	// 因此热层实例的 retention 必须**不短于**保留策略的热层窗口（留出搬运余量），
 	// 冷层实例的 retention 则是「冷留存多久」的唯一执行者。
 	RetentionByNamespace map[Namespace]string
+	// DeleteEnabled 打开 VL 的 -delete.enable（默认关）。
+	// 只有它为真时才允许孤儿代次 GC / 按级别 TTL 真正删除数据；关闭时行为与改动前一致。
+	DeleteEnabled bool
 	// AuthUsername / AuthPassword 本地 Basic-auth；生产必须非空。
 	AuthUsername string
 	AuthPassword string
@@ -123,7 +126,8 @@ type Supervisor struct {
 	retention string
 	// retentionNS 按 namespace 覆盖 retention（空 = 用 retention）。
 	retentionNS map[Namespace]string
-	authUser    string
+	authUser     string
+	deleteEnabled bool
 	authPass    string
 	ports       map[Namespace]int
 	memOverride map[Namespace]int64
@@ -230,7 +234,8 @@ func New(opts Options) (*Supervisor, error) {
 		dataRoot:    opts.DataRoot,
 		retention:   retention,
 		retentionNS: retentionByNS,
-		authUser:    opts.AuthUsername,
+		authUser:     opts.AuthUsername,
+		deleteEnabled: opts.DeleteEnabled,
 		authPass:    opts.AuthPassword,
 		ports:       map[Namespace]int{},
 		memOverride: map[Namespace]int64{},
@@ -291,6 +296,7 @@ func (s *Supervisor) configFor(ns Namespace) InstanceConfig {
 		MemoryAllowedBytes: s.memOverride[ns],
 		AuthUsername:       s.authUser,
 		AuthPassword:       s.authPass,
+		EnableDelete:       s.deleteEnabled,
 	}
 }
 
