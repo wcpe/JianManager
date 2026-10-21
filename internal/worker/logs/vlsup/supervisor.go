@@ -40,6 +40,15 @@ type InstanceStatus struct {
 	PartitionRecoveryComplete bool
 	// QueryReady 查询范围完整可用；同上，与 HealthOK 分离。
 	QueryReady bool
+	// RestartAttempts 运行期看护已连续自动重启的次数。
+	//
+	// 归零条件只有一个：实例重启后**稳定存活**超过看护的稳定窗口。启动成功不清零——
+	// 否则「启动即崩」的循环永远打不满上限，退避与熔断都会失效。
+	RestartAttempts int
+	// RestartsSuspended 表示自动重启已达上限、看护已停止重启（需人工介入）。
+	RestartsSuspended bool
+	// LastRestartError 最近一次自动重启失败的错误；重启成功或稳定存活后清空。
+	LastRestartError string
 }
 
 // Options 构造 Supervisor。
@@ -90,6 +99,20 @@ type instance struct {
 	state  InstanceState
 	proc   Process
 	status InstanceStatus
+
+	// epoch 是显式状态迁移（Start/Stop）的代数。看护在决定重启时记下它，真正重启前
+	// 再比对一次：只要人工动过实例，本轮自愈就放弃——避免「人工刚停、看护又拉起」。
+	epoch uint64
+	// startedAt 本代进程启动成功的时刻（零值表示当前没有成功启动过）。
+	// 看护用它判断「此前健康」：存活不足稳定窗口的实例按启动失败处理，不进重启循环。
+	startedAt time.Time
+	// restartAttempts 连续自动重启次数；restartsSuspended 为真表示已达上限并熔断。
+	restartAttempts   int
+	restartsSuspended bool
+	// nextRestartAt 下一次允许重启的最早时刻（退避；零值表示无限制）。
+	nextRestartAt time.Time
+	// lastRestartErr 最近一次自动重启失败原因（用于告警与状态展示）。
+	lastRestartErr string
 }
 
 // Supervisor 管理 named VL 实例（hot|cold|rehydrate）。
@@ -115,6 +138,22 @@ type Supervisor struct {
 	instances   map[Namespace]*instance
 	budget      CacheBudget
 	guardBlocks int
+
+	// opMu 串行化"会改变进程归属"的操作：显式 Start/Stop 与看护重启。
+	//
+	// 必要性：看护判定崩溃后到真正 fork 之间有一段窗口，若此时人工 Stop，仅靠 s.mu
+	// 无法阻止「停止完成 → 看护又拉起」。用一把操作锁把两者排成先后，再用 epoch 判定
+	// 谁先发生：谁后拿到 opMu，谁看到对方已改动就退让。
+	// 锁序固定为 opMu → mu，guardian 与 Start/Stop 均遵守，避免死锁。
+	opMu sync.Mutex
+
+	// guardMu 保护看护的启停与参数（不参与上述锁序：只做短临界区，不嵌套 opMu/mu）。
+	guardMu     sync.Mutex
+	guardCancel context.CancelFunc
+	guardOpts   GuardianOptions
+	// guardGen 是看护循环的代际号：旧循环退出时只在代际未变时清空 guardCancel，
+	// 避免把新一代的取消函数误清（重启看护后 StopGuardian 失效、goroutine 泄漏）。
+	guardGen int
 }
 
 // DefaultVLMemoryLimitBytes 受管 VL 进程的默认 Go 软内存上限。
@@ -266,9 +305,29 @@ func (s *Supervisor) Config(ns Namespace) (InstanceConfig, error) {
 	return inst.cfg, nil
 }
 
-// Start 校验资产并启动指定 namespace 实例。
-// 流程：VerifyAsset → BuildArgs → Factory.Start → 记录 tag/build id 到 status。
+// Start 校验资产并启动指定 namespace 实例（显式操作）。
+//
+// 与看护重启共享同一把操作锁：显式启动会自增 epoch 并清空看护账面，等于「人工介入后
+// 重新武装自愈」——此前因达上限而熔断的实例，人工 Start 一次即可恢复自动重启资格。
 func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if inst, ok := s.instances[ns]; ok {
+		inst.epoch++
+		inst.restartAttempts = 0
+		inst.restartsSuspended = false
+		inst.nextRestartAt = time.Time{}
+		inst.lastRestartErr = ""
+		s.syncGuardStatusLocked(inst)
+	}
+	s.mu.Unlock()
+	return s.start(ctx, ns)
+}
+
+// start 是 Start 的实现体，调用方须持有 opMu（显式启动或看护重启）。
+// 流程：VerifyAsset → BuildArgs → Factory.Start → 记录 tag/build id 到 status。
+func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	s.mu.Lock()
 	inst, ok := s.instances[ns]
 	if !ok {
@@ -328,6 +387,9 @@ func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
 	s.mu.Lock()
 	inst.proc = proc
 	inst.state = StateRunning
+	// 记录"本代进程启动成功"的时刻：看护据此判定「此前健康」（存活不足稳定窗口不算），
+	// 也据此计算退避后的下一次重启时刻。
+	inst.startedAt = time.Now()
 	inst.status.State = StateRunning
 	inst.status.PID = proc.PID()
 	inst.status.AssetTag = s.assetTag
@@ -380,8 +442,24 @@ func detailSuffix(err error) string {
 	return ": " + err.Error()
 }
 
-// Stop 停止指定 namespace 实例。
+// Stop 停止指定 namespace 实例（显式操作）。
+//
+// 显式停止会自增 epoch：看护即使已在"判定崩溃"的半途，也会因 epoch 不符而放弃本轮重启。
+// 这条保证是「停止中不得被重新拉起」的核心，不能只靠状态字段（状态在 proc.Stop 窗口里
+// 仍是 STOPPING，但看护如果已越过判定点，状态检查就来不及了）。
 func (s *Supervisor) Stop(ctx context.Context, ns Namespace) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if inst, ok := s.instances[ns]; ok {
+		inst.epoch++
+	}
+	s.mu.Unlock()
+	return s.stop(ctx, ns)
+}
+
+// stop 是 Stop 的实现体，调用方须持有 opMu。
+func (s *Supervisor) stop(ctx context.Context, ns Namespace) error {
 	_ = ctx
 	s.mu.Lock()
 	inst, ok := s.instances[ns]
@@ -395,11 +473,16 @@ func (s *Supervisor) Stop(ctx context.Context, ns Namespace) error {
 		inst.status.PID = 0
 		inst.status.HealthOK = false
 		inst.status.QueryReady = false
+		inst.startedAt = time.Time{}
 		s.mu.Unlock()
 		return nil
 	}
+	// 先做状态迁移再释放锁：看护看到的要么是 STOPPING，要么是 STOPPED，
+	// 不会在 proc.Stop 的窗口里把实例误判成「崩溃」。
 	inst.state = StateStopping
 	inst.status.State = StateStopping
+	// 清掉启动时刻：本代进程不再算「此前健康」，避免停止后又被判成可自愈实例。
+	inst.startedAt = time.Time{}
 	proc := inst.proc
 	s.mu.Unlock()
 

@@ -43,10 +43,18 @@ func TestTryReclaim_StillPrunesWhenLedgerDeclinesAdvance(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(100), pos, "首次回收应推进到分段末端")
 
-	// 第二次：水位已等于分段边界 → CoversTo > Reclaim 不成立 → 账本必然报错。
-	// 但水位之下的条目（End=99）必须被剪掉，否则积压永不回落。
+	// 第二次：**构造真实的「账本拒绝推进」形态**。
+	//
+	// 2026-10-20 修正：原先用「回收位置恰好等于分段边界（CoversTo == Reclaim）」来制造拒绝，
+	// 但账本后来修了「Reclaim 已追平读水位时返回幂等成功」——该形态现在**不再报错**（那正是
+	// 补段空转的修复）。本用例要守的意图不变（账本拒绝推进时 WAL 仍须剪枝），故改用仍真实
+	// 存在的拒绝形态：读水位前进到 Reclaim 之前、且没有任何恢复分段覆盖它 ⇒ 存在真洞 ⇒ 哨兵。
+	require.NoError(t, led.AdvanceRead(key, 200))
+	_, err = led.TryReclaim(key)
+	require.Error(t, err, "夹具应处于「账本拒绝继续推进」的状态（Reclaim < Read 且无段覆盖）")
+
 	_, err = wal.TryReclaim()
-	require.Error(t, err, "夹具应处于「账本拒绝继续推进」的状态")
+	require.Error(t, err, "WAL 侧同样应观察到账本拒绝推进")
 	require.Empty(t, wal.Snapshot(),
 		"账本拒绝推进时仍须剪掉水位之下的条目：否则积压永不回落、源永久停在 paused")
 }

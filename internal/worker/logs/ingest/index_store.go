@@ -230,6 +230,22 @@ type indexLedgerCore struct {
 	RecoveryRefs  []ledger.RecoveryRef    `json:"recovery_refs,omitempty"`
 	ErrorCount    int                     `json:"error_count,omitempty"`
 	IngestSeq     uint64                  `json:"ingest_seq,omitempty"`
+	// PositionsFingerprint / PositionsFingerprintAt 是「已确认水位处」的内容采样指纹与它对应的位置
+	// （语义见 ledger.Entry 同名字段）。
+	//
+	// 为什么必须落在本 payload 里（w18 漂移防护的持久化断层修复，2026-10-17）：生产持久化走的是
+	// 本索引（ledgerCoreOf + indexStateToState），而 w18 的指纹此前只被
+	// ledger.Snapshot()/Restore() 搬运——那对方法只有测试在用。于是进程重启或代次补账
+	// （runtime.go 经 saved.Ledger → ledger.Restore 还原）后指纹恒为零值，段 3（acquire 续读前
+	// 校验）按设计把「缺指纹」判为不一致 ⇒ **每次重启都会走对账补齐、禁止按旧偏移续读**，
+	// 恰好是该指纹要消除的「漂移重复摄取」。指纹丢了，防护就等于没装。
+	//
+	// JSON tag 与 ledger.Entry 逐字一致（含 omitempty）：默认零值时不出现在 payload 里，
+	// 于是**从未采样过指纹的源**在升级前后的 payload 字节完全相同——索引按 JSON 字节判变更，
+	// 不做无谓的全量重写；而旧索引缺这两个字段时反序列化得到零值（= 既有的「缺指纹」语义，
+	// 段 3 本就把零值当不一致），因此旧库只读不报错、不触发任何异常路径，由下一轮采样自然补齐。
+	PositionsFingerprint   string `json:"positions_fingerprint,omitempty"`
+	PositionsFingerprintAt uint64 `json:"positions_fingerprint_at,omitempty"`
 }
 
 // splitSourceKey 从组合键回推 LogSourceID/SourceGeneration（键形如 `<log_id>/<generation>`，
@@ -374,6 +390,10 @@ func ledgerCoreOf(entry *ledger.Entry) *indexLedgerCore {
 		Key: entry.Key, Identity: entry.Identity, DeliveryPos: entry.Positions.Delivery,
 		DeliveryState: entry.DeliveryState, Segments: entry.Segments, Rotations: entry.Rotations,
 		RecoveryRefs: entry.RecoveryRefs, ErrorCount: entry.ErrorCount, IngestSeq: entry.IngestSeq,
+		// 指纹必须随其余残余字段一起落库：漏搬即等于「重启后指纹归零 ⇒ 段 3 判不一致 ⇒
+		// 禁止按旧偏移续读」，把 w18 要消除的漂移重复摄取原样放回来（见 indexLedgerCore 注释）。
+		PositionsFingerprint:   entry.PositionsFingerprint,
+		PositionsFingerprintAt: entry.PositionsFingerprintAt,
 	}
 }
 
@@ -636,8 +656,13 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 				RecoveryRefs:    core.RecoveryRefs,
 				ErrorCount:      core.ErrorCount,
 				IngestSeq:       core.IngestSeq,
-				AcquirePaused:   position.AcquirePaused,
-				PauseReason:     position.PauseReason,
+				// 指纹读回：与 ledgerCoreOf 成对，缺一侧就等于断链。旧索引无该字段时
+				// core 上得到的是零值（""/0），这正是段 3 既有的「缺指纹」语义（判不一致、
+				// 走对账补齐），所以这里**不报错、也不特判**——旧库照常加载，由下一轮采样补齐。
+				PositionsFingerprint:   core.PositionsFingerprint,
+				PositionsFingerprintAt: core.PositionsFingerprintAt,
+				AcquirePaused:          position.AcquirePaused,
+				PauseReason:            position.PauseReason,
 			}
 			if entry.Key.LogSourceID == "" || entry.Key.SourceGeneration == "" {
 				entry.Key = ledger.SourceKey{LogSourceID: row.LogSourceID, SourceGeneration: row.SourceGeneration}

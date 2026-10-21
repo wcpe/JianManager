@@ -228,3 +228,68 @@ func TestPartitionDayBoundsApplyToSearchStatsAndFacets(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 3, calls)
 }
+
+// 单 range 路径的质量判定必须与合并路径同口径：
+// 同 id 异哈希是内容已分歧、却共用同一事件身份的歧义副本，两条都要保留给上层归因，
+// 但 duplicate quality **不得**再宣称 exact（否则导出门闸会放行歧义数据）。
+// 回归守护：修复前 searchPage 初始化 DupExact 后再不修改，与 merged.go 的 DupUnresolved 不一致。
+func TestClientSingleRangeMarksUnresolvedOnSameIDDifferentHash(t *testing.T) {
+	body := `{"_time":"2026-09-22T01:02:04Z","_msg":"dup-hash-b","event_id":"e1","log_source_id":"src-1","source_generation":"g1","record_start":"1","record_end":"5","level":"INFO","stream":"stdout","canonical_content_hash":"h2"}
+{"_time":"2026-09-22T01:02:03Z","_msg":"dup-hash-a","event_id":"e1","log_source_id":"src-1","source_generation":"g1","record_start":"1","record_end":"5","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+
+	res, err := client.Search(context.Background(), query.AuthoritativeRange{
+		Key: queryKey(),
+		Projection: &catalog.PublishedProjection{CoveredSourceGenerations: []catalog.SourceGenerationRef{{
+			LogSourceID: "src-1", SourceGeneration: "g1",
+		}}},
+	}, query.RangeQuery{
+		TimeRange: query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
+		Budget:    query.Budget{Limit: 10, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err)
+	// 行集合不变：两个哈希各留一条，交给上层做真实归因。
+	require.Len(t, res.Items, 2)
+	require.ElementsMatch(t, []string{"h1", "h2"}, []string{res.Items[0].CanonicalHash, res.Items[1].CanonicalHash})
+	require.Equal(t, query.DupUnresolved, res.DuplicateQuality)
+}
+
+// 同 id 同哈希只是纯重复：旧实现会丢弃后者，该行为必须保持，
+// 且**不得**因普通重复而降级质量（否则正常数据会被导出闸门误封）。
+func TestClientSingleRangeKeepsExactOnSameIDSameHash(t *testing.T) {
+	body := `{"_time":"2026-09-22T01:02:04Z","_msg":"dup","event_id":"e1","log_source_id":"src-1","source_generation":"g1","record_start":"1","record_end":"5","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}
+{"_time":"2026-09-22T01:02:03Z","_msg":"dup","event_id":"e1","log_source_id":"src-1","source_generation":"g1","record_start":"1","record_end":"5","level":"INFO","stream":"stdout","canonical_content_hash":"h1"}
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})
+	require.NoError(t, err)
+	client, err := New(vl)
+	require.NoError(t, err)
+
+	res, err := client.Search(context.Background(), query.AuthoritativeRange{
+		Key: queryKey(),
+		Projection: &catalog.PublishedProjection{CoveredSourceGenerations: []catalog.SourceGenerationRef{{
+			LogSourceID: "src-1", SourceGeneration: "g1",
+		}}},
+	}, query.RangeQuery{
+		TimeRange: query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
+		Budget:    query.Budget{Limit: 10, MaxBytes: 1 << 20},
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Items, 1)
+	require.Equal(t, "e1", res.Items[0].EventID)
+	require.Equal(t, query.DupExact, res.DuplicateQuality)
+}

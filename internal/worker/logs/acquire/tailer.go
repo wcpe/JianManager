@@ -69,6 +69,12 @@ type FileTailer struct {
 	// maxLinesPerPoll 单次 Poll 的读取行数上限（B1b 准入限流）；0 表示用默认常量。
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	maxLinesPerPoll int
+	// truncationReanchored 标记「刚做过一次纯截断重锚」。
+	// 为什么需要：重锚发生在 PrepareRotation 里，而 PrepareRotation 由 ingest 在 Poll 之前显式调用，
+	// 调用方拿到 false（不是轮转）后紧接着就会 Poll。此时游标已越过歧义区，本轮再走后面的
+	// 重写/水位指纹校验只会对同一段歧义区重复重锚并重复记缺口。故让 Poll 认这个标记并直接收束，
+	// 与 Poll 内原地重写链「本轮不读歧义区、下轮起从新锚续读」保持同一硬序。
+	truncationReanchored bool
 }
 
 // SetMaxLinesPerPoll 覆盖单次 Poll 的读取行数上限（0 表示沿用默认）。供测试与后续配置化使用。
@@ -209,11 +215,62 @@ func (t *FileTailer) PrepareRotation() (bool, error) {
 		}
 		replaced = current != t.identitySHA256
 	}
+	// **纯截断重写优先于轮转判定**（非原子截断：logrotate copytruncate / 应用自行 truncate；
+	// 无 rename、inode 不变、尺寸回退到游标之前）。它不是轮转：既没有 .1 可以让 ArchiveImporter
+	// 接管未读尾部，残留前缀又往往仍是**已投递过的同一批字节**。
+	// 若按轮转处理（cursor 归零 + segmentStart=logicalPos），下一轮就会从文件头重读这段：
+	// 物理内容照旧、逻辑位置却更高 ⇒ 同一批内容以**不同 event_id** 二次投递，而账本零缺口
+	// （查询侧看不出重复，账本也认为一致）✗。故改走 reanchor 同族：锚到 EOF、禁止回头重读，
+	// 并把可能丢失的尾部登记成**可见**缺口 ✓。
+	if t.cursor > 0 && t.isInPlaceTruncationLocked(fi.Size(), replaced, inodeReplaced) {
+		t.reanchorAfterTruncationLocked(fi.Size())
+		// 返回 false：这不是轮转，调用方不得走「闭合旧段 / 接管轮转目标」的交接流程
+		// （那会去找一个根本不存在的轮转段）。
+		return false, nil
+	}
 	if t.cursor > 0 && (fi.Size() < t.cursor || replaced || inodeReplaced) {
 		t.detectRotationLocked()
 		return true, nil
 	}
 	return false, nil
+}
+
+// isInPlaceTruncationLocked 判定「同 inode 的纯截断重写」（不是轮转）。四条判据须同时成立：
+//
+//  1. 尺寸回退到游标之前：尺寸**没有**回退的「保头吞尾」形态由 Poll 里的尾窗指纹那条链负责，
+//     不在此处（否则两条链会抢同一个判定）。
+//  2. 物理身份未变：inode 变了就是真正的同名替换（rename 轮转）——旧内容还在目标文件上，
+//     必须走轮转语义，绝不能被当成「同一份内容」跳过 ✗。
+//     拿不到物理身份（平台/文件系统不支持）时**不判定**：那时无法把「同名替换」与「原地截断」
+//     分开，宁可沿用旧轮转语义（多投一次也好过把真轮转的新文件当成旧内容静默跳过）。
+//  3. 没有可接管的轮转目标：copytruncate 的实质是「先复制、再截断」，此时未读尾部已被复制到
+//     rotateTo 上、由 ArchiveImporter 接管 ⇒ 轮转语义本来就正确；若在此记缺口，等于给正常轮转
+//     报假缺口，而 FILE_REWRITTEN 不在自动消解名单内，会把源永久阻塞。
+//  4. 残留前缀仍是首次观察到的身份前缀（**逐字节相同**），或者短到没有可比对的窗口：
+//     只有这样才能断言「残留字节就是已投递过的那些」。前缀已变的截断是「换了内容从头写」，
+//     那段新字节必须从文件头读出来；若当作重复内容跳过，就变成静默丢内容 ✗。
+func (t *FileTailer) isInPlaceTruncationLocked(size int64, replaced, inodeReplaced bool) bool {
+	if t.cursor == 0 || size >= t.cursor {
+		return false
+	}
+	if !t.identityOK || inodeReplaced {
+		return false
+	}
+	if t.rotationTargetAvailable() {
+		return false
+	}
+	comparable := t.identityBytes > 0 && size >= t.identityBytes
+	return !comparable || !replaced
+}
+
+// rotationTargetAvailable 报告当前是否真的存在可接管的轮转目标。
+// 口径与 PrepareRotation 的「源文件消失」分支一致：只有 rotateTo 真实存在才谈得上接管。
+func (t *FileTailer) rotationTargetAvailable() bool {
+	if t.rotateTo == "" {
+		return false
+	}
+	_, err := os.Stat(t.rotateTo)
+	return err == nil
 }
 
 // Poll 读取文件新增内容。返回本轮完整事件负载。
@@ -233,6 +290,12 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 	_, err := t.PrepareRotation()
 	if err != nil {
 		return nil, err
+	}
+	// 本轮刚做过纯截断重锚：新锚已越过歧义区（残留前缀是已投递过的字节），本轮直接收束，
+	// 不在同一轮里再走下面的重写/水位指纹校验（那会对同一段歧义区重复重锚、重复记缺口）。
+	if t.truncationReanchored {
+		t.truncationReanchored = false
+		return nil, nil
 	}
 	fi, err := os.Stat(t.path)
 	if err != nil {
@@ -502,6 +565,35 @@ func prefixSHA256At(path string, from, size int64) (string, error) {
 // 缺的内容交给既有对账补齐 ✓。调用者负责本轮直接返回（不读歧义区 ✓）。
 func (t *FileTailer) reanchorAtEOFLocked(size int64, detail string) {
 	_ = t.led.RecordGap(t.key, uint64(t.cursor), uint64(size), ledger.GapReasonFileRewritten, detail)
+	t.anchorAtEOFLocked(size)
+}
+
+// reanchorAfterTruncationLocked 是「纯截断重写」的重锚：与 reanchorAtEOFLocked 取同一套锚定动作，
+// 但缺口区间按**真实损失**算，而不是按「被跳过的文件区间」算。
+//
+// 为什么必须区别对待：截断形态里旧的 cursor 大于新 size，若照搬 [cursor, size) 会得到一条
+// 长度为 0 的退缺口（RecordGap 会把 end<start 夹平），等于「有损失却记了个空区间」✗。
+// 真实损失是 **[已确认水位, 已消费位置)**——被截掉的字节再也读不回来（没有轮转目标接管），
+// 故这一整段是否落库只能由对账裁定 ✓。
+// 已确认落库的部分**不记缺口**：那会把一次「没有丢失任何内容」的截断变成源被永久阻塞
+// （FILE_REWRITTEN 不在自动消解名单内，CHANGELOG 记过这条真机教训）。
+func (t *FileTailer) reanchorAfterTruncationLocked(size int64) {
+	durable := uint64(0)
+	if ent := t.led.Get(t.key); ent != nil {
+		durable = ent.Positions.Durable
+	}
+	if durable < t.logicalPos {
+		_ = t.led.RecordGap(t.key, durable, t.logicalPos, ledger.GapReasonFileRewritten,
+			"tailed file truncated in place (same inode, no rotation target holds the tail); unconfirmed tail is unrecoverable, surviving prefix skipped instead of re-delivering it")
+	}
+	t.anchorAtEOFLocked(size)
+	// 通知 Poll：本轮已越过歧义区，直接收束（见字段说明）。
+	t.truncationReanchored = true
+}
+
+// anchorAtEOFLocked 只做「把游标挪到 EOF 并重置段/身份状态」，不碰缺口登记。
+// 抽出来是因为两种重写的**损失区间口径不同**（见两个调用方），而锚定动作必须完全一致。
+func (t *FileTailer) anchorAtEOFLocked(size int64) {
 	t.segmentStart = t.logicalPos
 	t.cursor = size
 	t.lastSize = size

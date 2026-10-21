@@ -402,17 +402,35 @@ func statsPipe(q query.RangeQuery) (string, error) {
 func (c *Client) searchPage(ctx context.Context, params url.Values, q query.RangeQuery, rows uint64, matches func(logtypes.Event) bool) (query.RangeResult, error) {
 	out := query.RangeResult{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}
 	maxBytes := scanLimit(q.Budget)
+	// seen 按「id+哈希」去重：同一事件被重复写入时只保留一条。
 	seen := make(map[string]bool)
+	// hashByID 记录每个 event_id 首次出现的规范化哈希，用于识别「同 id 异哈希」。
+	// 为什么需要它：同 id 异哈希是**无法判定真伪**的歧义副本（内容已分歧，却共用同一事件身份），
+	// 两条都必须保留给上层归因，因此去重键不能只取 event_id；但质量维度必须据此降级，
+	// 否则同一份数据经单 range 路径报 exact、经合并路径（merged.go 对同 id 多哈希置
+	// DupUnresolved）报 unresolved，且导出门闸会放行这份歧义数据。
+	hashByID := make(map[string]string)
 	appendEvents := func(events []logtypes.Event) {
 		for _, ev := range events {
 			if !matches(ev) || (q.CursorSortKey != nil && query.CompareSortKey(query.SortKeyOf(ev), *q.CursorSortKey) <= 0) {
 				continue
 			}
 			key := ev.EventID + "\x00" + ev.CanonicalHash
-			if !seen[key] {
-				seen[key] = true
-				out.Items = append(out.Items, ev)
+			if seen[key] {
+				// 同 id 同哈希的纯重复：已在上方按 id+哈希丢弃，不构成歧义，
+				// 因此这里**不能**降级质量（否则普通重复会把导出误封）。
+				continue
 			}
+			seen[key] = true
+			if prev, ok := hashByID[ev.EventID]; ok {
+				if prev != ev.CanonicalHash {
+					// 同 id 已出现不同哈希 ⇒ 歧义副本；标记一旦置上不回头（与合并路径一致）。
+					out.DuplicateQuality = query.DupUnresolved
+				}
+			} else {
+				hashByID[ev.EventID] = ev.CanonicalHash
+			}
+			out.Items = append(out.Items, ev)
 		}
 	}
 	partial := func(stamp string) {

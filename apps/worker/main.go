@@ -635,6 +635,9 @@ func runWorker() {
 	var coldVLClient *vlsup.Client
 	var rehydrateVLClient *vlsup.Client
 	var vlSupervisor *vlsup.Supervisor
+	// 运行期自愈看护的取消函数（缺陷修复：VL 运行期崩溃后无自愈）。
+	// 必须在 StopAll 之前调用：先停止看护，再停进程，避免"刚停就被看护判成崩溃又拉起"。
+	var cancelVLGuardian context.CancelFunc
 	managedBinary, managedSHA := cfg.LogVL.BinaryPath, cfg.LogVL.AssetSHA256
 	var packageErr error
 	if strings.TrimSpace(cfg.LogVL.PackagePath) != "" {
@@ -686,6 +689,23 @@ func runWorker() {
 			}
 			// FR-476 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
 			go sampleLogBudget(vlSupervisor)
+			// 运行期自愈看护：过去只在启动路径做一次孤儿回收，VL 运行期崩溃（OOM、段损坏）后
+			// 账面只会被读状态时改成 FAILED，进程不会自己起来 ⇒ 采集/查询长期降级，直到人工
+			// 重启 Worker。这里启动守护循环：只重启「此前健康（稳定存活超过窗口）、现已退出」
+			// 的实例；指数退避 + 连续重启上限，达上限熔断并告警；与显式 Start/Stop 互斥。
+			//
+			// 默认开启的理由：判据保守（存活窗口 + 真实退出）、失败有上限（默认 5 次后停手）、
+			// 且不改变任何显式操作语义；关闭用 JIANMANAGER_DISABLE_LOG_VL_GUARDIAN=1
+			// （与 JIANMANAGER_DISABLE_JDK 同口径，避免为开关改配置结构）。
+			if os.Getenv("JIANMANAGER_DISABLE_LOG_VL_GUARDIAN") != "1" {
+				guardCtx, cancelGuard := context.WithCancel(context.Background())
+				cancelVLGuardian = cancelGuard
+				// 兜底：任何提前返回/致命退出路径都不会留下看护 goroutine。
+				defer cancelGuard()
+				if guardErr := vlSupervisor.StartGuardian(guardCtx, vlsup.GuardianOptions{}); guardErr != nil {
+					slog.Warn("VictoriaLogs 运行期看护启动失败（不影响既有行为）", "error", guardErr)
+				}
+			}
 			// 受管 VL 启动是异步的：接线 ingest/查询前先等 HOT 就绪，避免启动期写连接被拒
 			// 导致采集运行时创建失败（重启时序 / Runbook C）。
 			hotReadyCtx, cancelHotReady := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1627,6 +1647,11 @@ func runWorker() {
 		slog.Warn("WS 服务关闭超时", "error", err)
 	}
 	manager.StopAll()
+	// 先停看护再停 VL：反过来的话，停止过程中进程退出会被看护判成崩溃并尝试拉起
+	// （epoch 已挡住，但显式取消更直白，也不留残余 goroutine）。
+	if cancelVLGuardian != nil {
+		cancelVLGuardian()
+	}
 	// 受管 VL 必须随 Worker 一起回收：否则它们会成为孤儿并继续占用 hot/cold/rehydrate
 	// 端口，导致下次启动的新 VL 因端口被占而立即退出（真机事故），采集面长期降级。
 	if vlSupervisor != nil {
