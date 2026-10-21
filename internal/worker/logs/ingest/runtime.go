@@ -5637,12 +5637,36 @@ func (m *Manager) tryConfirmPendingPublication(source SourceConfig, key string, 
 // 取证用的权威集合**顺带**记进 receipt，供同一轮后续的写入面构建复用（见 recoveryReceipt）。
 // 取证结论与是否复用无关：receipt 只是旁路产物。
 func (m *Manager) tryConfirmPendingPublicationWithReceipt(source SourceConfig, key string, saved persistedSource, receipt *recoveryReceipt) (bool, error) {
-	return m.tryConfirmPendingPublicationCtx(context.Background(), source, key, saved, receipt)
+	verdict, err := m.tryConfirmPendingPublicationVerdict(context.Background(), source, key, saved, receipt, nil)
+	return verdict == confirmConfirmed, err
 }
 
+// tryConfirmPendingPublicationCtx 是面向旧调用点的两态包装（仅回答「是否已确认完整可见」）。
+//
+// **新代码请用 `tryConfirmPendingPublicationVerdict`**：两态会把「取证不稳定」与
+// 「无需确认」混成同一个 false，从而丢掉「已测出缺失天」这一可信结论 —— 那正是
+// 重建饥饿的成因。此处保留仅为兼容既有调用点，`missingDays` 出参仍如实回传。
 func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source SourceConfig, key string, saved persistedSource, receipt *recoveryReceipt, missingDays ...*[]string) (bool, error) {
+	var out *[]string
+	if len(missingDays) > 0 {
+		out = missingDays[0]
+	}
+	verdict, err := m.tryConfirmPendingPublicationVerdict(ctx, source, key, saved, receipt, out)
+	return verdict == confirmConfirmed, err
+}
+
+// tryConfirmPendingPublicationCtx 返回**三态结论**（见 confirmVerdict 的注释）：
+//   - confirmConfirmed：VL 已完整可见，pending 已清；
+//   - confirmMissingMeasured：取证完成，`missingDays` 出参是可信的实测缺失天；
+//   - confirmInconclusive：取证没跑完，调用方**不得**据此写任何天。
+//
+// 为什么必须三态而不是 (bool, error)：三态区分的是「证据不可用」与「已测出缺失」，
+// 而旧的两态把它们混成同一个 false —— 上层因此退回登记全量、按升序每轮重写最老一天，
+// 形成永久饥饿（详见 confirmVerdict 的注释）。
+func (m *Manager) tryConfirmPendingPublicationVerdict(ctx context.Context, source SourceConfig, key string, saved persistedSource, receipt *recoveryReceipt, missingDays *[]string) (confirmVerdict, error) {
 	if !saved.PublicationPending {
-		return false, nil
+		// 本就没有待确认的发布：不是「不可用」，而是无需确认。
+		return confirmConfirmed, nil
 	}
 	snapshot := m.capturePublicationSnapshot(source)
 	m.mu.Lock()
@@ -5650,14 +5674,15 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 	inflight := m.publicationInflight[key]
 	m.mu.Unlock()
 	if inflight != 0 {
-		return false, nil
+		// 有在飞写入：此刻取证不可信（可能读到写一半的中间态）。
+		return confirmInconclusive, nil
 	}
 	// 取证与写路径同源：canonicalRecoveryEvents 同时覆盖「段已落」与「内联旧格式」两条路。
 	// 成本 O(段行数) 只在 pending 且非重放时付一次（写完/确认后 pending 即被清），
 	// 而它换掉的是**每一批都整窗重写**的代价（量级远大于此）✓。
 	want, werr := m.canonicalRecoveryEvents(key, saved)
 	if werr != nil || len(want) == 0 {
-		return false, nil
+		return confirmInconclusive, nil
 	}
 	// 取证集合已在手：留给同一轮的写入面构建复用（判据与安全性见 recoveryReceipt）。
 	// 放在这里（而非函数出口）是因为下面的早退分支都会丢掉 want，届时复用本就无意义。
@@ -5667,13 +5692,13 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 	//（本次开发中真实踩到，故此处显式按日拆分，与 reconcile 用例设 verifySource.UTCDay 同法）。
 	grouped, _, gerr := groupEventsByUTCDay(source, want)
 	if gerr != nil || len(grouped) == 0 {
-		return false, nil
+		return confirmInconclusive, nil
 	}
 	missing := []string{}
 	observed := map[string]*catalog.Record{}
 	for day, dayEvents := range grouped {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return confirmInconclusive, err
 		}
 		vs := source
 		vs.UTCDay = day
@@ -5735,7 +5760,7 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 			ok, _, queryErr := m.verifyProjectionQuery(queryCtx, client, vs, generations[0], dayEvents[start:end], allowed, generations)
 			cancel()
 			if ctx.Err() != nil {
-				return false, ctx.Err()
+				return confirmInconclusive, ctx.Err()
 			}
 			if queryErr != nil || !ok {
 				complete = false
@@ -5748,17 +5773,21 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 		}
 	}
 	if len(missing) > 0 {
-		// 已修复的天由白名单内容证据排除，下轮切片只续跑剩余天，不从第一天重新开始。
+		// **已测出缺失天 ⇒ 这是可信结论，必须如实回传**（不再被下面的稳定性校验丢弃）。
+		// 旧实现在这里 `return false, nil` 后还会被三道「证据稳定性」校验拦掉，
+		// 而活跃源那三道几乎必然失败 ⇒ 上层拿不到 missing ⇒ 退回登记全量 ⇒ 饥饿。
 		sort.Strings(missing)
-		if len(missingDays) > 0 && missingDays[0] != nil {
-			*missingDays[0] = missing
+		if missingDays != nil {
+			*missingDays = missing
 		}
-		return false, nil
+		return confirmMissingMeasured, nil
 	}
 	m.publishMu.Lock()
 	if !m.publicationSnapshotCurrentLocked(source, snapshot, nil) {
 		m.publishMu.Unlock()
-		return false, nil
+		// 取证期间本源有新的发布 ⇒ 「已完整可见」这个结论的时点已失效。
+		// 注意：此时 missing 为空，但**并未证明所有天都可见**（证据是过期快照）⇒ 不可据此写。
+		return confirmInconclusive, nil
 	}
 	for day, record := range observed {
 		vs := source
@@ -5766,7 +5795,7 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 		current, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
 		if !sameCatalogAuthority(record, current) || sourcePublicationToken(record, vs) != sourcePublicationToken(current, vs) {
 			m.publishMu.Unlock()
-			return false, nil
+			return confirmInconclusive, nil
 		}
 	}
 	m.mu.Lock()
@@ -5774,7 +5803,7 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 	if m.publicationAttempts[key] != attempt || m.publicationInflight[key] != 0 || cur.ProjectionGeneration != saved.ProjectionGeneration {
 		m.mu.Unlock()
 		m.publishMu.Unlock()
-		return false, nil
+		return confirmInconclusive, nil
 	}
 	cur.PublicationPending = false
 	m.state.Sources[key] = cur
@@ -5786,7 +5815,7 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 		"source", source.LogSourceID, "generation", saved.ProjectionGeneration, "events", len(want))
 	// 持久化：内存已清、落库未跟上时，下次启动仍会整窗重发（安全方向 ✓），故持久化失败不影响本次放行。
 	_ = m.persistHot()
-	return true, nil
+	return confirmConfirmed, nil
 }
 
 // RepublishSkipped 返回「发布确认快路径」累计跳过整窗重发的次数（观测用，单位=次）。

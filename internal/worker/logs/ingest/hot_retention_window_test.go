@@ -775,3 +775,112 @@ func TestWriteFaceEntirelyBeyondRetentionMustFail(t *testing.T) {
 	require.True(t, pending,
 		"必须保持 PublicationPending=true：什么都没写就不能宣称已发布")
 }
+
+// TestConfirmVerdictDistinguishesInconclusiveFromMeasured 钉住三态语义可分。
+//
+// **为什么这个区分是重建饥饿的根治点**（2026-10-21）：旧实现是两态 `(bool, error)`，
+// 把「取证没跑完」与「无需确认」混成同一个 false；上层因此退回「登记时的全量天清单」
+// （升序）+ 默认预算 1 天/轮 ⇒ **每轮重写最老那一天**。若最老那天跨热层保留边界
+// （判据按整天算、仍被当成可发布），它早于边界的事件永远写不进 VL ⇒ 永远校验失败
+// ⇒ 永久饥饿（生产实证 `published=['2026-09-21'] remaining_n=15` 连续六轮不变）。
+//
+// 本用例不制造在飞写入（那会让 `drainRebuilds` 等待而超时），而是直接验证
+// 「无待确认发布」与「已完整确认」这两种常见情形不会退化成 inconclusive，
+// 以及三态枚举本身互不相等——保证上层能据此分支。
+func TestConfirmVerdictDistinguishesInconclusiveFromMeasured(t *testing.T) {
+	require.NotEqual(t, confirmConfirmed, confirmMissingMeasured)
+	require.NotEqual(t, confirmConfirmed, confirmInconclusive)
+	require.NotEqual(t, confirmMissingMeasured, confirmInconclusive,
+		"三态必须互不相等：否则「取证未完成」会被上层误当「已测出缺失」或「无需确认」")
+
+	now := time.Now()
+	_, boundaryDay, _ := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, _, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	events := []logtypes.Event{hotRetentionTestEvent(boundaryDay, 10, 20, "straddling boundary")}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	// 情形一：本就无需确认（pending=false）⇒ 不得报 inconclusive。
+	verdict, err := m.tryConfirmPendingPublicationVerdict(context.Background(), source, key,
+		m.state.Sources[key], nil, nil)
+	require.NoError(t, err)
+	require.NotEqual(t, confirmInconclusive, verdict,
+		"没有待确认发布时不得报「取证未完成」（那会让上层空转）")
+}
+
+// TestReleaseRecoveryBlockedWhenAuthoritativeHasBeyondWindowDays 钉住「护栏判据必须对
+// 权威全量求，不能只看 req.days」。
+//
+// 漏洞形态（2026-10-21 复审发现）：`beyondWindow` 是从 `req.days` 推的，而对账**早已把
+// 超窗口天剔出缺失面**。于是一个「有超窗口天（从未发布）+ 有窗口内天（真缺失）」的源：
+//   · `req.days` 只剩窗口内天 ⇒ `beyondWindow` 为空 ⇒ 护栏不触发；
+//   · 而 `releaseRecovery` 拿的是**权威全量**，其 `to = 权威全量末端`、`from = Reclaim`，
+//     建的是**单个连续区间** ⇒ 超窗口天（位置更早）必然落在区间内
+//     ⇒ 为「从未在热层发布」的区间建副本证明 ⇒ reclaim 越过后 WAL 条目被剪 ⇒ 数据消失。
+//
+// 本用例：权威全量含 beyondDay 与 inWindowDay，但只登记 inWindowDay 重建。
+// 断言 `Reclaim` 不得越过 beyondDay 的区间上界。
+//
+// 变异验证：把护栏判据改回只看 `beyondWindow` ⇒ 本用例转红（Reclaim 越界）。
+func TestReleaseRecoveryBlockedWhenAuthoritativeHasBeyondWindowDays(t *testing.T) {
+	now := time.Now()
+	beyondDay, _, inWindowDay := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	// 权威全量：超窗口天在前（位置 1..10），窗口内天在后（20..30）。
+	events := []logtypes.Event{
+		hotRetentionTestEvent(beyondDay, 1, 10, "beyond window"),
+		hotRetentionTestEvent(inWindowDay, 20, 30, "inside window"),
+	}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source},
+		ReplayBudget: ReplayBudget{MaxDays: 8},
+		HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	pipe, ok := m.pipeFor(key)
+	require.True(t, ok)
+	// 夹具前提：把 Delivery 顶到权威全量末端（=30），让 releaseRecovery 的
+	// `positions.Delivery < to` 闸门**放行**。生产上受影响的源正是 delivery == read，
+	// 闸门在真实场景里挡不住；不顶高就会「平凡通过」（被闸门早退，测不到本缺陷）。
+	require.NoError(t, pipe.WAL().RecordHTTPResult(acquire.DeliveryResult{
+		StartPos: 0, EndPos: 30, HTTPStatus: 200,
+	}))
+	positionsBefore, okPos := pipe.Ledger().Positions(pipe.Key())
+	require.True(t, okPos)
+	require.GreaterOrEqual(t, positionsBefore.Delivery, uint64(30),
+		"夹具前提：Delivery 必须已达权威全量末端，否则闸门会早退（平凡通过）")
+
+	fixture.deleteDay(beyondDay)
+	fixture.deleteDay(inWindowDay)
+
+	// **只登记窗口内那天**（复刻「对账已剔除超窗口天」的真实形态）。
+	okSchedule, reason := m.scheduleRebuildAsync(source, []string{inWindowDay}, "reconcile_missing")
+	require.True(t, okSchedule, "登记必须被接受：%s", reason)
+	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+
+	// 红线：回收不得越过从未在热层发布的超窗口天区间。
+	positionsAfter, okPos2 := pipe.Ledger().Positions(pipe.Key())
+	require.True(t, okPos2)
+	require.LessOrEqual(t, positionsAfter.Reclaim, uint64(10),
+		"权威全量含超窗口天时，reclaim 不得越过它（reclaim %d → %d）",
+		positionsBefore.Reclaim, positionsAfter.Reclaim)
+}

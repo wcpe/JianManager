@@ -761,9 +761,23 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 	// 但必须参与终态判定，否则 pending 会永久为真。
 	var beyondWindow []string
 	if req.confirmPending {
-		confirmed, missingDays, beyondMissing, err := m.confirmPendingOutsideLine(ctx, req.source, key)
+		confirmed, missingDays, beyondMissing, inconclusive, err := m.confirmPendingOutsideLine(ctx, req.source, key)
 		if err != nil {
 			return rebuildOutcome{Pending: true, Err: err}
+		}
+		if inconclusive {
+			// **取证没跑完 ⇒ 本轮一天都不写**（2026-10-21 重建饥饿根治）。
+			//
+			// 为什么不能像旧实现那样「拿不到 missing 就按登记全量重写」：登记全量是按升序
+			// 排的，默认切片预算只够 1 天 ⇒ 每轮重写最老那一天；若那天跨热层保留边界
+			// （判据按整天算，仍被当成可发布），它早于边界的事件**永远写不进 VL**
+			// ⇒ 永远校验失败 ⇒ 永久饥饿（生产实证 remaining_n=15 连续六轮不变）。
+			//
+			// 活跃源每个 poll 都在写、都在发布，那三道稳定性校验几乎必然失败，
+			// 所以这条分支是**常态而非异常**：必须如实返回 pending，等下一轮重取证。
+			slog.Warn("发布确认取证未完成（证据不稳定），本轮不重建任何天（待下一轮重新取证）",
+				"source", key, "reason", req.reason, "registeredDays", len(req.days))
+			return rebuildOutcome{Pending: true}
 		}
 		if confirmed {
 			// 已完整可见：**不做任何重建**（零写入）。这不是「跳过校验」，而是校验已经通过
@@ -914,7 +928,18 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		return out
 	}
 	m.resolveGapsLandedByDelivery(req.source, writeEvents)
-	if len(beyondWindow) > 0 {
+	// **护栏判据必须对「权威全量」求，不能只看 `req.days`**（2026-10-21 复审发现的漏洞）：
+	// `beyondWindow` 是从 `req.days` 推的，而对账**早已把超窗口天剔出缺失面**
+	// ⇒ 一个「有超窗口天(从未发布) + 有窗口内天(真缺失)」的源，`req.days` 里只剩窗口内天
+	// ⇒ `beyondWindow` 为空 ⇒ 护栏不触发 ⇒ `releaseRecovery(权威全量)` 仍会为
+	// 「从未发布的超窗口天」建副本证明（它的位置更早、必然落在那条连续区间内）。
+	authoritativeDays := make([]string, 0, 16)
+	if groupedAll, daysAll, gerr := groupEventsByUTCDay(req.source, events); gerr == nil {
+		_ = groupedAll
+		authoritativeDays = daysAll
+	}
+	_, beyondInAuthoritative := m.splitHotRetentionDays(authoritativeDays, time.Now())
+	if len(beyondWindow) > 0 || len(beyondInAuthoritative) > 0 {
 		// **有跳过天 ⇒ 整窗并未完成，绝不推进回收责任**（2026-10-21 复审发现的缺陷）。
 		//
 		// 为什么不能调 `releaseRecovery`：它取 `to = events[len-1].Record.End`（**权威全量的末端**），
@@ -932,7 +957,9 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		// 跳过天不阻塞账本，缺口继续可见（`resolveGapsLandedByDelivery` 只覆盖实际写入面）。
 		slog.Warn("投影重建有跳过天，未推进回收责任（整窗未完成；WAL 责任保留在原处）",
 			"source", key, "reason", req.reason,
-			"publishedDays", out.Days, "beyondHotRetentionDays", beyondWindow)
+			"publishedDays", out.Days, "beyondHotRetentionDays", beyondWindow,
+			"beyondInAuthoritative", beyondInAuthoritative,
+			"note", "权威全量含超窗口天时，releaseRecovery 的连续区间会把它一并覆盖")
 		return out
 	}
 	if err := m.releaseRecovery(req.source, events); err != nil {
@@ -956,7 +983,7 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 // 为什么必须由本 worker 承担：它内部会遍历全量事件（`canonicalRecoveryEvents`，生产单源
 // 57 万条）并对每一天做逐字段可见性查询——这正是 O(全量) 的重活。原先它内联跑在对账轮
 // goroutine 上（跑在采集同档），生产现场该源 46 次 `publication_pending` 回退即此。
-func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceConfig, key string) (bool, []string, []string, error) {
+func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceConfig, key string) (confirmed bool, inWindowMissing []string, beyondMissing []string, inconclusive bool, err error) {
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	inflight := m.publicationInflight[key]
@@ -964,25 +991,31 @@ func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceCo
 	if !saved.PublicationPending {
 		// 已被别人确认/写成功清掉了：无需再确认（也不等于「本次重建成功」，
 		// 调用方按 days 继续重建即可——重建本身幂等）。
-		return false, nil, nil, nil
+		return false, nil, nil, false, nil
 	}
 	if inflight != 0 {
 		// 该源还有在飞的写入：此刻取证不可信（可能读到写一半的中间态）。留给下一轮。
-		return false, nil, nil, fmt.Errorf("ingest: 投影重建前发布确认不可用：同源有在飞写入")
+		return false, nil, nil, true, nil
 	}
 	missingDays := []string{}
 	// receipt 传 nil：重建路径与投递路径不在同一轮内，没有可复用的取证结果（复用只在一轮内成立）。
-	confirmed, err := m.tryConfirmPendingPublicationCtx(ctx, source, key, saved, nil, &missingDays)
+	verdict, err := m.tryConfirmPendingPublicationVerdict(ctx, source, key, saved, nil, &missingDays)
 	if err != nil {
-		return false, nil, nil, fmt.Errorf("ingest: 投影重建前发布确认失败: %w", err)
+		return false, nil, nil, true, fmt.Errorf("ingest: 投影重建前发布确认失败: %w", err)
 	}
-	if confirmed {
-		return true, nil, nil, nil
+	switch verdict {
+	case confirmConfirmed:
+		return true, nil, nil, false, nil
+	case confirmInconclusive:
+		// **取证没跑完 ⇒ 结论不可用**。调用方必须直接返回 pending、一天都不写；
+		// 若这里返回「无缺失天」，上层会退回登记全量并按升序重写最老一天（饥饿）。
+		return false, nil, nil, true, nil
 	}
+	// confirmMissingMeasured：missingDays 是可信的实测缺失天。
 	// 超窗口的天**不可能**在热层可见 ⇒ 不得计入「待重建的缺失天」；
 	// 但它们必须如实回传（调用方据此清 pending 并打 WARN），绝不静默丢弃。
 	inWindow, beyond := m.splitHotRetentionDays(missingDays, time.Now())
-	return false, inWindow, beyond, nil
+	return false, inWindow, beyond, false, nil
 }
 
 // finishRebuildBeyondHotRetention 给「本次重建面全部超出热层保留期」这件事一个**明确终态**。

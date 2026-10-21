@@ -246,3 +246,34 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 // 调用方必须把它当作「未投递」处理——**不得**推进 Delivery 水位、不得建回收证明，
 // 否则会把「从未进入 VL 的区间」标成已有副本，随后 reclaim 越过后 WAL 条目被剪。
 var errProjectionBeyondHotRetention = errors.New("ingest: projection write face entirely beyond hot retention")
+
+// ── 发布确认取证的三态结论（2026-10-21 重建饥饿根治）──────────────────────────
+//
+// 背景：`tryConfirmPendingPublicationCtx` 是两态的（`(bool, error)`），而它在算出
+// `missing` 之后还有三道「证据稳定性」校验（发布快照未变 / 各天 authority 未变 /
+// attempt 与代次未变）。活跃源每个 poll 都在写、都在发布，这三道**几乎必然失败**，
+// 而它们失败时返回 `(false, nil)` —— 已经算出来的 `missing` **被丢弃**。
+//
+// 上层 `rebuildDaysInner` 拿不到 `missing`，就退回使用「登记时的全量天清单」
+// （`reconcileExpectationDays` = 该源有内容的全部天，升序）。配合默认切片预算
+// 1 天/轮 ⇒ **每轮重写最老那一天**。若最老那天恰好跨热层保留边界（判据按整天算，
+// 故仍被当成「可发布」），它早于边界的事件永远写不进 VL ⇒ 永远校验失败 ⇒
+// **永久饥饿**：pending 永不清零、代次被持续消耗、VL 体积无界增长。
+// 生产实证：`published=['2026-09-21'] remaining_n=15` 连续六轮完全相同。
+//
+// 修法：把结论拆成三态，让「取证不稳定」与「已测出缺失天」不再混为一谈。
+type confirmVerdict int
+
+const (
+	// confirmConfirmed：VL 已完整可见，pending 可以清（原有成功路径）。
+	confirmConfirmed confirmVerdict = iota
+	// confirmMissingMeasured：取证**已完成**，`missing` 是可信的实测缺失天。
+	// 上层应据此收敛重建面，而不是退回登记全量。
+	confirmMissingMeasured
+	// confirmInconclusive：取证**没跑完**（有在飞写入 / 快照失效 / authority 变化 /
+	// attempt 变化 / 取权威集合失败）。此时 `missing` 不可信（可能为空但没测全）。
+	//
+	// **上层必须直接返回 pending 且一天都不写**：把「证据不稳定」当成
+	// 「按老清单重写」正是饥饿的成因；当成「没有缺失」又会谎报完成。
+	confirmInconclusive
+)
