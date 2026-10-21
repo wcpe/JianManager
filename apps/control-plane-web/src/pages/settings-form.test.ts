@@ -6,8 +6,12 @@ import {
   validateSettingDraft,
   hasInvalidDraft,
   MAX_DIRECT_PROBE_TIMEOUT_MS,
+  MAX_LOG_ACQ_GZ_SCAN_INTERVAL_MS,
+  MIN_LOG_ACQ_GZ_SCAN_INTERVAL_MS,
   type DraftDiffItem,
 } from './settings-form'
+import zh from '@/i18n/zh.json'
+import en from '@/i18n/en.json'
 
 const items: DraftDiffItem[] = [
   { key: 'log.level', value: 'info' },
@@ -122,6 +126,66 @@ describe('log.acq.gz_scan_interval（空 = 未配置，不是「关闭」）', (
     // 提示文案本身也承担口径：与 proto 注释 / ARCHITECTURE / Worker 折算保持一致，
     // 否则运维会以为「清空周期 = 停扫描」，而实际是回落到节点 worker.yml 基线。
     expect(validateSettingDraft(key, '0')).toBe('settings.invalidLogAcqScanInterval')
+  })
+})
+
+/**
+ * 上下界（2026-10-21 修正）：该值的下发载体是 **int32 毫秒**，故「是正的 duration」还不够——
+ * 两端各有一条截断陷阱，只校验格式会让前端放行、后端 422，用户只看到「保存失败」而不知道往哪调。
+ * 阈值与后端 validateSettingValue 逐条对齐（`d > math.MaxInt32` / `d < time.Millisecond`）。
+ */
+describe('log.acq.gz_scan_interval 上下界（下发载体是 int32 毫秒）', () => {
+  const key = 'log.acq.gz_scan_interval'
+  const tooLong = 'settings.invalidLogAcqScanIntervalTooLong'
+  const tooShort = 'settings.invalidLogAcqScanIntervalTooShort'
+
+  it('上界与后端 math.MaxInt32 同阈值（≈24.85 天），边界值恰好可接受', () => {
+    expect(MAX_LOG_ACQ_GZ_SCAN_INTERVAL_MS).toBe(2_147_483_647)
+    // 恰好 MaxInt32 ms 合法，再多 1ms 即拒（后端是 `>`，不是 `>=`）。
+    expect(validateSettingDraft(key, '2147483647ms')).toBeUndefined()
+    expect(validateSettingDraft(key, '2147483648ms')).toBe(tooLong)
+    // 亚毫秒余量不会被截断影响，故后端放行——前端也必须放行，不能比后端更严。
+    expect(validateSettingDraft(key, '2147483647.5ms')).toBeUndefined()
+  })
+
+  it('超过约 24 天的周期被拦：720h(30 天) / 1200h(50 天)', () => {
+    // 30 天：截断成负数 ⇒ Worker 归零当「未配置」；50 天：截成 25032704ms ≈ 6.96h ⇒ 按错周期扫。
+    expect(validateSettingDraft(key, '720h')).toBe(tooLong)
+    expect(validateSettingDraft(key, '1200h')).toBe(tooLong)
+  })
+
+  it('不足 1ms 的周期被拦（会被截断成 0 = 未配置）', () => {
+    expect(MIN_LOG_ACQ_GZ_SCAN_INTERVAL_MS).toBe(1)
+    expect(validateSettingDraft(key, '500us')).toBe(tooShort)
+    expect(validateSettingDraft(key, '500µs')).toBe(tooShort)
+    expect(validateSettingDraft(key, '0.5ms')).toBe(tooShort)
+    // 恰好 1ms 合法。
+    expect(validateSettingDraft(key, '1ms')).toBeUndefined()
+  })
+
+  it('放行：空串（= 未配置）与正常区间内的周期', () => {
+    expect(validateSettingDraft(key, '')).toBeUndefined()
+    expect(validateSettingDraft(key, '24h')).toBeUndefined()
+    expect(validateSettingDraft(key, '1h')).toBeUndefined()
+  })
+
+  it('0s 仍按「非法零周期」处理，不落到上下界提示', () => {
+    // 零周期的语义是「空转」，与「太长/太短」是不同原因，提示不能混。
+    expect(validateSettingDraft(key, '0s')).toBe('settings.invalidLogAcqScanInterval')
+    expect(validateSettingDraft(key, '0')).toBe('settings.invalidLogAcqScanInterval')
+  })
+
+  it('上下界给出可区分的提示（便于用户知道该调大还是调小）', () => {
+    expect(tooLong).not.toBe(tooShort)
+    expect(validateSettingDraft(key, '720h')).not.toBe(validateSettingDraft(key, '500us'))
+  })
+
+  it('新增提示文案 zh/en 均已补齐且非空', () => {
+    for (const k of [tooLong, tooShort]) {
+      const shortKey = k.replace(/^settings\./, '') as keyof typeof zh.settings
+      expect(String(zh.settings[shortKey] ?? '').trim()).not.toBe('')
+      expect(String(en.settings[shortKey] ?? '').trim()).not.toBe('')
+    }
   })
 })
 

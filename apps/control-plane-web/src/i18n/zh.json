@@ -3826,6 +3826,8 @@
     "invalidDuration": "须为正的时长，如 30s、1h30m",
     "invalidDirectProbeTimeout": "直探超时不得大于 10s（上界由心跳节拍反推，超出会拖慢心跳采集）",
     "invalidLogAcqScanInterval": "须为正的时长（留空 = 未配置，回落到节点基线；要停扫描请关闭总开关，写 0 非法）",
+    "invalidLogAcqScanIntervalTooLong": "扫描周期过长（上限约 24.85 天；协议以 int32 毫秒下发，更长的值会被截断成错误的周期），请调小",
+    "invalidLogAcqScanIntervalTooShort": "扫描周期过短（下限 1ms；协议以毫秒下发，不足 1ms 会被截断成 0 = 未配置），请调大",
   "invalidNonNegativeInt": "须为非负整数",
     "invalidProxyUrl": "代理地址非法（支持 http/https/socks5）",
     "invalidPlatformPublicBaseUrl": "平台公共基址须为不含查询参数或片段的 HTTP 或 HTTPS 地址",

@@ -3872,6 +3872,8 @@
     "invalidDuration": "Must be a positive duration, e.g. 30s or 1h30m",
     "invalidDirectProbeTimeout": "Direct-probe timeout must not exceed 10s (the bound is derived from the heartbeat cadence)",
     "invalidLogAcqScanInterval": "Must be a positive duration (empty = unset, falls back to the node baseline; disable the master switch to stop scanning; 0 is invalid)",
+    "invalidLogAcqScanIntervalTooLong": "Scan interval is too long (limit ≈ 24.85 days; the protocol carries int32 milliseconds, so longer values are truncated to a wrong interval) — decrease it",
+    "invalidLogAcqScanIntervalTooShort": "Scan interval is too short (minimum 1ms; the protocol carries milliseconds, so shorter values truncate to 0 = unset) — increase it",
   "invalidNonNegativeInt": "Must be a non-negative integer",
     "invalidProxyUrl": "Invalid proxy URL (http/https/socks5 supported)",
     "invalidPlatformPublicBaseUrl": "The platform public base URL must be an HTTP or HTTPS URL without a query or fragment",

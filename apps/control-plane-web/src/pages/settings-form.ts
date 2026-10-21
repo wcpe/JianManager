@@ -31,6 +31,27 @@ export type SettingCategory =
 export const MAX_DIRECT_PROBE_TIMEOUT_MS = 10_000
 
 /**
+ * gz 扫描周期（`log.acq.gz_scan_interval`）的下发上界，毫秒 = math.MaxInt32。
+ *
+ * 该值不是拍脑袋定的：下发给 Worker 的 `gz_scan_interval` 字段是 int32 毫秒
+ * （后端 grpc/handler.go 的 `int32(p.GzScanInterval/time.Millisecond)`），超过 2^31-1 ms
+ * （约 24.85 天）就会整数截断——`720h`(30 天) 截成负数 ⇒ Worker 归零当「未配置」；
+ * `1200h`(50 天) 截成 25032704ms（≈6.96 小时）⇒ 被当成合法周期照用，用户配 50 天却每 7 小时扫一次。
+ * 两者都是「静默失效」，没有报错可循，所以前端必须在提交前就拦住。
+ *
+ * 与后端 `validateSettingValue` 的 `d > math.MaxInt32` 同阈值，**不得独立改动**。
+ */
+export const MAX_LOG_ACQ_GZ_SCAN_INTERVAL_MS = 2_147_483_647
+
+/**
+ * gz 扫描周期下界，毫秒。
+ *
+ * 不足 1ms 会被 `d/time.Millisecond` 截断成 0，而 0 在协议里表示「未配置」，
+ * 语义会从「每 500µs 扫一次」悄悄变成「回落到节点基线」——同样是静默语义漂移。
+ */
+export const MIN_LOG_ACQ_GZ_SCAN_INTERVAL_MS = 1
+
+/**
  * 把平台配置键映射到分类：可编辑项落 logging/logAcquisition/runtime/network/backup/email，只读项落 security。
  *
  * `log.acq.*` 是日志采集配置（FR-503：平台默认 + Worker 覆盖，经心跳下发），
@@ -125,13 +146,31 @@ export function validateSettingDraft(key: string, value: string): string | undef
       // **空 = 未配置**（不是「关闭」）：Worker 折算时回落到节点 worker.yml 基线
       // `log_ingest.archive_scan_interval`。要停定时扫描应关总开关 `log.acq.gz_import_enabled`；
       // 写 0 会被后端判非法（零周期会让扫描空转，协议上 0 只表示未配置）——故此处只放行
-      // 「留空」或「正的 Go duration」，与后端 validateSettingValue 同口径。
+      // 「留空」或「正的 Go duration」。
+      //
+      // 上下界（与后端 validateSettingValue 逐条对齐，2026-10-21 修正）：该值的下发载体是
+      // **int32 毫秒**，所以「正」还不够，两端各有一条截断陷阱，只校验格式会让前端放行、
+      // 后端 422，用户只看到「保存失败」而不知道往哪调。此处与后端同样分成两句：
+      //   上界 —— 超 MaxInt32 ms（约 24.85 天）会截断成负数（当未配置）或错值（照错的周期扫）；
+      //   下界 —— 不足 1ms 会截断成 0，语义变回「未配置」。
       if (v === '') return undefined
       if (!/^([0-9]+(\.[0-9]+)?(ns|us|µs|μs|ms|s|m|h))+$/.test(v)) {
         return 'settings.invalidLogAcqScanInterval'
       }
       const digits = v.replace(/ns|us|µs|μs|ms|s|m|h/g, ' ')
-      return /[1-9]/.test(digits) ? undefined : 'settings.invalidLogAcqScanInterval'
+      if (!/[1-9]/.test(digits)) return 'settings.invalidLogAcqScanInterval'
+      const ms = durationToMillis(v)
+      // 正则已保证可解析，此分支仅为收窄类型（且与后端「解析失败即拒」同口径）。
+      if (ms === undefined) return 'settings.invalidLogAcqScanInterval'
+      // 后端比较的是截断后的毫秒数（d/time.Millisecond），故这里也先取整再比，
+      // 否则 2147483647.5ms 这种「截断后合法」的边界值会被前端误拦。
+      if (Math.trunc(ms) > MAX_LOG_ACQ_GZ_SCAN_INTERVAL_MS) {
+        return 'settings.invalidLogAcqScanIntervalTooLong'
+      }
+      if (ms < MIN_LOG_ACQ_GZ_SCAN_INTERVAL_MS) {
+        return 'settings.invalidLogAcqScanIntervalTooShort'
+      }
+      return undefined
     }
     case 'log.acq.path_overrides': {
       // 空 = 无覆盖；非空须为 JSON 对象文本（值为字符串），形如 {"inst:1":"proxy.log.0"}。
