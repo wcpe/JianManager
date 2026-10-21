@@ -38,6 +38,8 @@ vi.mock('@/api/metrics', () => ({
   useInstanceMetrics: () => ({ data: { tps: 19.8, msptMillis: 28, memoryMb: 2048, heapMaxMb: 4096, cpuPercent: 36, onlinePlayers: 12, probeAvailable: false } }),
   // FR-343：实例概览会请求 TPS 时序，布局测试返回空序列即可。
   useMetricSeries: () => ({ data: { series: [] } }),
+  // 侧栏行尾小字走 `useInstanceWindowMetrics`（内部用批量序列端点）：布局测试给空序列。
+  useMetricSeriesBatch: () => ({ data: { series: {} } }),
 }))
 vi.mock('@/api/serverState', () => ({
   useServerState: () => ({ data: { connected: false, state: { server: { onlinePlayers: 12, maxPlayers: 200 } } } }),
@@ -96,8 +98,12 @@ describe('DashboardPage 宽屏布局', () => {
     expect(shell).not.toHaveAttribute('data-sidebar-layout')
     expect(shell).not.toHaveAttribute('data-sidebar-motion')
 
-    const collapseButtons = screen.getAllByRole('button', { name: '收起侧栏' })
-    await user.click(collapseButtons[1]!)
+    // 【契约变更·本次】折叠入口**只有一处**：侧栏底部的常驻开关。
+    // 顶栏品牌区那个已删除（它在折叠态被条件卸载，正是「缩回去展不开」的成因）；
+    // 底部开关两种状态都常驻，是页面里唯一的出口——因此这里断言它唯一，防止有人再加回一个重复入口。
+    const toggles = screen.getAllByRole('button', { name: '收起侧栏' })
+    expect(toggles).toHaveLength(1)
+    await user.click(toggles[0])
 
     // 目标态与侧栏状态同帧切换：没有中间态，也就没有「两段式位移」。
     expect(shell).not.toHaveAttribute('data-sidebar-target')
@@ -110,7 +116,9 @@ describe('DashboardPage 宽屏布局', () => {
     const { container } = renderWithProviders(<DashboardPage />, { route: '/instances' })
 
     const header = container.querySelector('[data-slot="console-header"]') as HTMLElement
-    expect(header).toHaveClass('h-[53px]')
+    // 【44px 而非 53px】顶栏整体收矮（用户要求「改矮一些、整体比例缩小」）：
+    // 53px 里塞 24px logo + 13px 文字，纵向留白过多。44px 是「logo 24 + 上下 10」的自然高度。
+    expect(header).toHaveClass('h-[44px]')
     expect(container.querySelector('[data-slot="console-workspace-bar"]')).toBeNull()
     expect(within(header).getByRole('navigation', { name: '工作区' })).toBeInTheDocument()
     // 顶栏不输出页名：页名只由内容页的大标题承担。

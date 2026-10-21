@@ -29,6 +29,12 @@ import type { InstanceInfo } from '@/lib/instances/instance-types'
 import { RoleBadge } from '@/components/views/instances/InstanceTableParts'
 import { RuntimeDriftBadge } from '@/components/views/instances/RuntimeDriftNotice'
 import type { RuntimeDriftInfoView } from '@/components/views/instances/RuntimeDriftNotice'
+import { InstanceHeartbeatCell, InstanceMetricsCell } from '@/components/views/instances/InstanceRowMetrics'
+import type { InstanceMetricSnapshot } from '@/components/views/instances/InstanceRowMetrics'
+import { INSTANCE_OPTIONAL_COLUMNS, type InstanceOptionalColumn } from '@/lib/instances/instance-view-prefs'
+
+/** 列设置的缺省可见集（全开）。 */
+const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(INSTANCE_OPTIONAL_COLUMNS)
 
 /** 未知状态的兜底文案键；单列常量是因为登记表是索引签名，取 `.STOPPED` 拿不回确定类型。 */
 const STATUS_LABEL_FALLBACK = 'instances.stopped'
@@ -108,6 +114,18 @@ export interface InstanceRowViewProps {
   provisioning?: boolean
   /** 运行态漂移；无漂移为 `undefined`（行内据此决定是否出标记）。 */
   drift?: RuntimeDriftInfoView
+  /**
+   * 可见窗口批量取数后的行内指标快照（容器注入，本件不取数）。
+   * 缺省或全缺测时，指标列与心跳列以 `--` 呈现（不隐藏列）。
+   */
+  metrics?: InstanceMetricSnapshot
+  /**
+   * 可见的可选列（列设置，容器注入）。固定列（勾选/名称/节点:端口/状态/操作）不参与；
+   * 缺省=全开（与旧行为一致，测试与既有使用点零改动）。
+   */
+  columns?: ReadonlySet<InstanceOptionalColumn>
+  /** 当前表格总列数（列设置会改变它，展开行的 colSpan 必须同步）。缺省 10。 */
+  columnCount?: number
   /** proxy 行内联后端是否展开（跨虚拟窗口卸载仍需保持，故由容器持有）。 */
   proxyExpanded?: boolean
   /** 展开/收起 proxy 行内联后端摘要。 */
@@ -146,6 +164,9 @@ export function InstanceRowView({
   isProxy = false,
   provisioning = false,
   drift,
+  metrics,
+  columns = ALL_OPTIONAL_COLUMNS,
+  columnCount = 10,
   proxyExpanded = false,
   onToggleProxy,
   renderBackends,
@@ -166,10 +187,24 @@ export function InstanceRowView({
   const envLabel = instEnv ? t(`grouping.env_${instEnv}`, { defaultValue: instEnv }) : ''
   // 环境 + 自由标签的完整列表：标签列单行裁剪后，靠 title 仍能看全（见下方标签列注释）。
   const tagsTitle = [envLabel, ...free].filter(Boolean).join(' · ')
+  /**
+   * 异常强化（常态弱化）：崩溃或存在运行态漂移的行给出左侧警示条 + 淡红底。
+   * 只加背景与伪元素，不动行盒高度——虚拟窗口的 36px 模型不受影响（见 INSTANCE_ROW_HEIGHT）。
+   */
+  const attention = inst.status === 'CRASHED' || Boolean(drift)
 
   return (
     <Fragment key={inst.id}>
-      <TableRow data-state={selected ? 'selected' : undefined} style={{ height: INSTANCE_ROW_HEIGHT }}>
+      <TableRow
+        data-state={selected ? 'selected' : undefined}
+        data-attention={attention ? 'true' : undefined}
+        style={{ height: INSTANCE_ROW_HEIGHT }}
+        className={
+          attention
+            ? 'relative bg-status-danger/5 before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-status-danger before:content-[""] hover:bg-status-danger/10'
+            : 'relative'
+        }
+      >
         <TableCell>
           <Checkbox checked={selected} onCheckedChange={onToggleSelect} aria-label={inst.name} />
         </TableCell>
@@ -203,15 +238,18 @@ export function InstanceRowView({
             {drift && <RuntimeDriftBadge pid={drift.pid} cmdline={drift.cmdline} />}
           </div>
         </TableCell>
-        <TableCell className="text-muted-foreground">{inst.type}</TableCell>
+        {columns.has('type') && <TableCell className="text-muted-foreground">{inst.type}</TableCell>}
         {/* 节点:端口（FR-136）：serverPort 已有数据 */}
         <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
           {nodeName}
           {inst.serverPort > 0 && <span className="tabular-nums">:{inst.serverPort}</span>}
         </TableCell>
-        <TableCell>
-          <RoleBadge role={inst.role} />
-        </TableCell>
+        {columns.has('role') && (
+          <TableCell>
+            <RoleBadge role={inst.role} />
+          </TableCell>
+        )}
+        {columns.has('tags') && (
         <TableCell>
           {/* 环境 + 标签**单行**排布（不换行 + 溢出裁剪）：本列是所有列里唯一可被压缩的，
               原先 `flex-wrap` 会按当前列宽把同一份标签折成 2~3 行，行高随之在 36/60/84 之间跳变，
@@ -232,6 +270,7 @@ export function InstanceRowView({
             {!instEnv && free.length === 0 && <span className="text-muted-foreground text-xs">--</span>}
           </div>
         </TableCell>
+        )}
         <TableCell>
           <StatusBadge
             level={instanceStatusLevel(inst.status)}
@@ -239,6 +278,9 @@ export function InstanceRowView({
             pulse={inst.status === 'STARTING' || inst.status === 'STOPPING'}
           />
         </TableCell>
+        {/* 实时指标与活动心跳（可见窗口批量取数注入）：停服/缺测以 `--` 呈现；列设置可隐藏。 */}
+        {columns.has('metrics') && <InstanceMetricsCell snapshot={metrics} />}
+        {columns.has('heartbeat') && <InstanceHeartbeatCell snapshot={metrics} />}
         <TableCell>
           <div className="flex items-center gap-1">
             {/* 主操作随状态，操作进行中禁用防连点（FR-138）；
@@ -298,7 +340,7 @@ export function InstanceRowView({
       </TableRow>
       {isProxy && proxyExpanded && renderBackends && (
         <TableRow className="bg-muted/30 hover:bg-muted/30" style={{ height: INSTANCE_EXPANDED_ROW_HEIGHT }}>
-          <TableCell colSpan={8} className="p-0">
+          <TableCell colSpan={columnCount} className="p-0">
             {/* 展开内容封顶在行高以内并内部滚动：行盒高度恒等于 INSTANCE_EXPANDED_ROW_HEIGHT，
                 与后端条数无关（虚拟模型据此把展开行按常量计入，不需要测量回填）。 */}
             <div className="overflow-auto" style={{ maxHeight: INSTANCE_EXPANDED_ROW_HEIGHT }}>

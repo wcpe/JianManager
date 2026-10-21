@@ -1,34 +1,42 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import type { WorkspaceSidebarProps } from '@/components/views/console/WorkspaceSidebar'
 import { WorkspaceSidebar as WorkspaceSidebarView } from '@/components/views/console/WorkspaceSidebar'
+import { SidebarResourcePanel } from '@/components/views/console/SidebarResourcePanel'
 import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
-import { useNetworks } from '@/api/networks'
+import { useInstanceGroups } from '@/api/instanceGroups'
 import { useNodes } from '@/api/nodes'
+import { useTopology } from '@/api/topology'
 import { useConsoleStore } from '@/stores/console'
 import { usePermissionsStore } from '@/stores/permissions'
 import { useThemeStore } from '@/stores/theme'
+import { useDebounced } from '@/lib/hooks/use-debounced'
+import { recordRecentServer, type StorableInstance } from '@/lib/console/server-selection'
+import { buildKeyMap } from '@/lib/instances/instance-grouping'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
-import ServerSelector from './ServerSelector'
-import SidebarServerList from './SidebarServerList'
+import i18n, { changeLanguage } from '@/i18n'
 
 /**
- * 侧栏资源树随首批实例的加载条数上限。
- * 侧栏只用于定位、每节点默认只列 7 行（`ResourceTree` 的 limit），因此不必拉全集：
- * 节点计数取聚合的权威总数，超出这部分条数的实例由「查看其余 N 个实例」兜底。
+ * 资源面板的实例窗口上限。
+ * 侧栏是**有界窗口**（服务端 `q` 搜索 + 截断提示），不是千级全量列举；
+ * 千级浏览在 `/instances` 页（虚拟化 + 无限分页）里做。
  */
-const RESOURCE_TREE_INSTANCE_LIMIT = 100
+const RESOURCE_PANEL_INSTANCE_LIMIT = 100
+
+/** 资源搜索防抖（键入落定后才下发服务端 q）。 */
+const RESOURCE_SEARCH_DEBOUNCE_MS = 300
 
 /**
  * 工作区侧栏的应用接线层（ADR-102）。
  *
  * 视图本体是受控视图（见 components/views）；本层注入：折叠态与权限快照（store）、工作区解析与当前路径
- * （路由）、资源区四路取数（节点 / 聚合计数 / 首屏实例 / 群组），以及两个自带取数的
- * 子组件（收藏选择器与常驻服务器列）。保留同路径的默认导出与零 props，调用点无需改动。
+ * （路由）、资源面板数据（节点 / 聚合计数 / 实例搜索窗口 / 拓扑成员映射）与资源面板组件本身。
+ * 保留同路径的默认导出与零 props，调用点无需改动。
  */
 export default function WorkspaceSidebar() {
   const { activeWorkspace } = useWorkspaceNavigation()
   const collapsed = useConsoleStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
   const { pathname } = useLocation()
   const navigate = useNavigate()
 
@@ -43,13 +51,50 @@ export default function WorkspaceSidebar() {
   const themeMode = useThemeStore((s) => s.theme)
   const setThemeMode = useThemeStore((s) => s.setTheme)
 
+  // 资源面板的搜索：输入态即时反馈，落定值经防抖后才进服务端 q（护栏：千级走服务端搜索）。
+  const [resourceQuery, setResourceQuery] = useState('')
+  const debouncedQuery = useDebounced(resourceQuery, RESOURCE_SEARCH_DEBOUNCE_MS)
+
   const { data: aggregate } = useInstanceAggregate()
   const { data: nodes } = useNodes()
-  const { data: networks } = useNetworks()
-  // 无 instance.read 时（理论上已被段可见性挡住）不发实例请求，避免注定 403 的调用。
+  const { data: topology } = useTopology()
+
+  /**
+   * 侧栏实例窗口：**服务端搜索**（有界前 N 台 + 截断提示），不做本地全量列举。
+   *
+   * 分组维度不再走 `groupId` 参数：侧栏的「分组方式」是在**已加载窗口内**按维度分段展示
+   * （与列表分组同口径），而不是把窗口替换成某个分组的子集。
+   */
   const { data: search } = useInstanceSearch(
-    { page: 1, pageSize: RESOURCE_TREE_INSTANCE_LIMIT, sort: 'name', order: 'asc' },
+    {
+      page: 1,
+      pageSize: RESOURCE_PANEL_INSTANCE_LIMIT,
+      sort: 'name',
+      order: 'asc',
+      ...(debouncedQuery ? { q: debouncedQuery } : {}),
+    },
     canReadInstances,
+  )
+
+  // 按群组的方式：实例 id → 群组名（拓扑成员映射；与实例列表页「按群组」同一数据源）。
+  const networkKeyOf = useMemo(() => {
+    const groups = (topology?.networks ?? []).map((n) => ({ key: n.name, instanceIds: n.memberInstanceIds }))
+    return buildKeyMap(groups)
+  }, [topology])
+
+  // 按分组的方式：后端组织分组树（`GET /instance-groups`，一次请求、无 per-group N+1）。
+  const { data: groupTree } = useInstanceGroups({ enabled: canReadInstances })
+
+  // 指标取数不在这一层：面板自己按**虚拟可见行**取（见 `SidebarResourcePanel` 的
+  // `visibleInstances`）。此前在这里按整个窗口取前 50 台，导致第 51 台以后永远没指标。
+
+  const openFromPanel = useCallback(
+    (inst: StorableInstance) => {
+      // FR-293：从侧栏进入同样计入「最近打开」（与选择器/直接路由同一入口）。
+      recordRecentServer(inst)
+      navigate(`/instances/${inst.id}`)
+    },
+    [navigate],
   )
 
   // 注入面保持引用稳定，避免视图每次渲染都重建元素树。
@@ -72,8 +117,22 @@ export default function WorkspaceSidebar() {
     [pathname],
   )
   const onNavigate = useCallback((to: string) => navigate(to), [navigate])
-  const renderServerSelector = useCallback(() => <ServerSelector />, [])
-  const renderSidebarServerList = useCallback(() => <SidebarServerList />, [])
+  const renderResourcePanel = useCallback(
+    () => (
+      <SidebarResourcePanel
+        instances={canReadInstances ? (search?.items ?? []) : []}
+        nodes={nodes ?? []}
+        query={resourceQuery}
+        onQueryChange={setResourceQuery}
+        loadedCount={search?.items?.length ?? 0}
+        totalCount={search?.total}
+        onOpen={openFromPanel}
+        networkKeyOf={networkKeyOf}
+        groupTree={groupTree ?? []}
+      />
+    ),
+    [canReadInstances, search, nodes, resourceQuery, openFromPanel, networkKeyOf, groupTree],
+  )
 
   return (
     <WorkspaceSidebarView
@@ -82,16 +141,12 @@ export default function WorkspaceSidebar() {
       data={{
         instanceTotal: aggregate?.total,
         nodes,
-        byNode: aggregate?.byNode,
-        instances: canReadInstances ? search?.items : undefined,
-        networks,
       }}
       permissions={{ nodes: permNodes, isPlatformAdmin: permAdmin, loaded: permLoaded }}
       pathname={pathname}
       renderLink={renderLink}
       onNavigate={onNavigate}
-      renderServerSelector={renderServerSelector}
-      renderSidebarServerList={renderSidebarServerList}
+      renderResourcePanel={renderResourcePanel}
       appVersion={__APP_VERSION__}
       themeSwitcher={{
         colorTheme,
@@ -99,6 +154,11 @@ export default function WorkspaceSidebar() {
         onColorThemeChange: setColorTheme,
         onThemeChange: setThemeMode,
       }}
+      // 语言切换：与 `/settings` 的「外观」共用同一个 `changeLanguage`（写 localStorage +
+      // 改 `<html lang>` + 切 i18n），不另造一份状态。
+      language={{ current: i18n.language, onChange: (lng) => changeLanguage(lng as 'zh' | 'en') }}
+      // 底部折叠/展开开关：顶栏那个在折叠态会卸载，这里必须是常驻出口。
+      onToggleSidebar={toggleSidebar}
     />
   )
 }

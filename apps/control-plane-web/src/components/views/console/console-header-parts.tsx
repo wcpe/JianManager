@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { PanelLeftClose, RotateCw, Search } from 'lucide-react'
+import { RotateCw, Search } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
-import { logoToggleLabelKey } from '@/lib/shared/sidebar-logo'
 import { searchBoxClass } from '@/lib/shared/header-layout'
 
 /**
@@ -21,48 +20,58 @@ import { searchBoxClass } from '@/lib/shared/header-layout'
  */
 export function ConsoleBrandSegment({
   collapsed,
-  onToggleSidebar,
+  onNavigateHome,
 }: {
   collapsed: boolean
-  onToggleSidebar: () => void
+  /** 点击品牌图标+文字跳转首页。 */
+  onNavigateHome: () => void
 }) {
   const { t } = useTranslation()
 
   return (
     <>
+      {/* 品牌图标+文字现在是**首页入口**，不再兼任折叠开关（折叠由右侧独立按钮承担）。 */}
       <button
         type="button"
-        onClick={onToggleSidebar}
-        aria-label={t(logoToggleLabelKey(collapsed))}
-        title={t(logoToggleLabelKey(collapsed))}
+        onClick={onNavigateHome}
+        aria-label={t('nav.home')}
+        title={t('nav.home')}
+        /*
+          【为什么是 `w-fit` + 不做 `flex-1`/`justify-center`】这决定了收缩时图标会不会横移。
+
+          旧实现：展开态 `flex-1`（吃掉整条品牌列宽）、折叠态 `justify-center`，标题用
+          `{!collapsed && …}` 在点击瞬间从 DOM 移除。于是收缩那一刻 `flex-1` 的按钮突然失去内容、
+          在 `min-w-0` 下被撑满，图标被甩到品牌列右侧（实测 left 16 → **109**）；等外层宽度收到位，
+          它又被拉回左缘（109 → **13**），中间单帧跳 96px —— 这就是肉眼看到的「从右边闪现到左边」。
+
+          改法：按钮宽度**由内容决定**（`w-fit`），图标永远贴左，位置与侧栏宽度无关；
+          折叠态图标左缘必然会从 16 变到 13（品牌列 `px-4` 收成 `px-3` 的结果），
+          但那是 3px 的内边距差、且随外层宽度连续变化，不再是 96px 的瞬跳。
+          标题仍按状态渲染（折叠态本就不该保留文字节点）。
+
+          注意：`py-1` 必须两种状态共有。它曾只写在展开分支里，折叠时高度从 36px 瞬跳到 28px，
+          图标周边空间会「抽」一下 —— 同一个族系的毛病，这里一并钉死。
+        */
         className={cn(
-          // `py-1` 必须属于**两种状态共有**：先前它只写在展开分支里，折叠时随 `flex-1 gap-2` 一起消失，
-          // 按钮高度随即从 36px 瞬跳到 28px（`transition-colors` 只过渡颜色、不过渡尺寸），
-          // 于是点 logo 时图标周边空间会「抽」一下——这正是被反复报的「logo 点击缩放」。
-          // 提到公共段后高度恒为 36px（28px 图标 + 上下各 4px），图标在两种状态下位置不动。
-          'flex min-w-0 items-center rounded-md py-1 transition-colors hover:bg-accent/60',
-          collapsed ? 'justify-center' : 'flex-1 gap-2',
+          'flex w-fit min-w-0 items-center rounded-md py-1 transition-colors hover:bg-accent/60',
+          collapsed ? 'gap-0' : 'gap-2',
         )}
       >
-        <span className="grid size-7 shrink-0 place-items-center rounded-md border border-primary/15 bg-card shadow-soft">
-          <img src="/brand/jianmanager-mark.svg" alt="" aria-hidden="true" className="size-6" />
+        {/* logo 外框 28 → 24、图标 24 → 20：与 44px 顶栏等比收缩（上下各留 10px）。 */}
+        <span className="grid size-6 shrink-0 place-items-center rounded-md border border-primary/15 bg-card shadow-soft">
+          <img src="/brand/jianmanager-mark.svg" alt="" aria-hidden="true" className="size-5" />
         </span>
         {!collapsed && (
-          <h2 className="min-w-0 flex-1 truncate text-left text-sm font-bold tracking-tight text-foreground">JianManager</h2>
+          <h2 className="min-w-0 flex-1 truncate text-left text-[13px] font-bold leading-[18px] tracking-tight text-foreground">JianManager</h2>
         )}
       </button>
-      {!collapsed && (
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          aria-label={t('nav.collapseSidebar')}
-          title={t('nav.collapseSidebar')}
-          // `ml-auto` 照原型 `.brand .iconbtn{margin-left:auto}`：收起按钮贴品牌列右缘。
-          className="ml-auto grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-        >
-          <PanelLeftClose className="size-4" />
-        </button>
-      )}
+      {/*
+        【顶栏不再放折叠按钮】用户指定：折叠入口只留侧栏底部那一个。
+        此前这里是 `{!collapsed && …}`——展开态有按钮、折叠态整块卸载，
+        导致「缩回去就无法展开」；底部常驻开关补上后，顶栏这一处成了重复入口，故删除。
+        连带影响：`onToggleSidebar` 在本组件已无用，但保留在 props 里会误导下一个人，
+        因此一并从签名中移除（调用方 `ConsoleHeader` 同步调整）。
+      */}
     </>
   )
 }

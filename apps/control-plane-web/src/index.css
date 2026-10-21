@@ -363,6 +363,10 @@ body {
   border-right: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   transition: width var(--sidebar-motion-duration) var(--motion-easing-standard);
   width: var(--sidebar-expanded-width);
+  /* 内边距 16 → 12：ui 包品牌槽位自带 `px-4`，顶栏收到 44px 后横向也要跟着收一档，
+     否则图标离左缘的距离比纵向留白还大，视觉上会「偏右」。
+     与折叠态（下面那条规则）取同一值——padding 不参与过渡，两态必须相等才无跳动。 */
+  padding-inline: 12px;
 }
 
 /* 【为什么用 :has() 而不是外壳上的 data-sidebar-target】
@@ -375,11 +379,25 @@ body {
    `:has()` 在 Chrome 105+ / Safari 15.4+ / Firefox 121+ 可用。 */
 .jm-console-shell:has([data-slot='console-sidebar'][data-state='collapsed']) .jm-console-header [data-slot='top-nav-brand'] {
   width: var(--sidebar-collapsed-width);
-  /* 折叠态 54px 放不下「16px 内边距 + 10px 间距 + 28px logo」，品牌列收敛为居中的纯 logo，
-     与侧栏折叠态的图标轨同宽同轴（ADR-071 的一条连续竖线由此成立）。 */
+  /*
+    【为什么是 justify-content: flex-start 而不是 center】折叠态 54px 放不下
+    「16px 内边距 + 10px 间距 + 28px logo」，需要收敛内边距与间距——但**绝不能居中**。
+
+    实测证据：`justify-content` 与 `padding-inline` 都**不参与过渡**（只有 width 有 transition）。
+    若折叠态居中，点击瞬间会出现「外层仍是 246px、按钮已缩到 28px、且被居中」的一帧，
+    logo 左缘被算成 (246-28)/2 = **109px**；随后 width 逐帧收窄，居中点跟着左移，
+    最终落到 13px —— 肉眼看到的就是「从右边闪现到左边」的那趟横移。
+    改为贴左后，logo 左缘只由 `padding-inline` 决定，而它是与宽度同节拍变化的连续量。
+  */
   gap: 0;
-  justify-content: center;
-  padding-inline: 0;
+  justify-content: flex-start;
+  /*
+    【内边距与展开态同值】折叠态 54px 里放「12 + 24 = 36px」绰绰有余，没有必须收敛的理由。
+    而 `padding-inline` 与 `justify-content` 一样**不参与过渡**：若折叠态写成 13px，
+    点击瞬间 logo 会横向跳 3px（比原来的 96px 小得多，但仍是可感知的抖动）。
+    保持与展开态同值 → 这两个属性在两种状态下完全相同 → 它们不可能是动画的一部分。
+  */
+  padding-inline: 12px;
 }
 
 /* 顶栏内容在窄视口放不下时按优先级让位，而不是把工具区挤出屏幕（实测：不处理会在

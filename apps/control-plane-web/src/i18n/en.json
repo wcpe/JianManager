@@ -523,7 +523,8 @@
     "instanceConsole": "Instance Console",
     "instanceFiles": "Instance Files",
     "clientPublishWizard": "Client Publish Wizard",
-    "botLoadSession": "Load Test Session"
+    "botLoadSession": "Load Test Session",
+    "home": "Back to home"
   },
   "console": {
     "title": "Ops Console",
@@ -1363,6 +1364,23 @@
   },
   "instances": {
     "title": "Instance Management",
+    "columnsLabel": "Columns",
+    "viewsLabel": "Views",
+    "viewsSaved": "Saved views",
+    "viewsEmpty": "No saved views",
+    "saveView": "Save current view…",
+    "saveViewTitle": "Save current view",
+    "viewNamePlaceholder": "View name",
+    "viewDelete": "Delete view {{name}}",
+    "metrics": {
+      "column": "Live metrics",
+      "heartbeatColumn": "Heartbeat",
+      "tps": "TPS",
+      "cpu": "CPU",
+      "mem": "Mem",
+      "players": "Players",
+      "heartbeatLabel": "Activity heartbeat (last 20 min): {{active}} active, {{down}} down, {{unknown}} unknown"
+    },
     "name": "Name",
     "type": "Type",
     "processType": "Process Type",
@@ -4209,6 +4227,57 @@
     "recent": "Recently opened",
     "empty": "No pinned servers yet. Open \"Select server\" to search and star favorites."
   },
+  "sidebarTools": {
+    "more": "More",
+    "shown": "Shown in sidebar",
+    "stowed": "Stowed",
+    "pinnedSection": "Pinned",
+    "pin": "Pin to sidebar",
+    "unpin": "Stow to bottom",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "emptyZone": "Empty",
+    "dragHint": "Drag to reorder, or move items between the two sections"
+  },
+  "sidebarResource": {
+    "searchPlaceholder": "Search servers",
+    "searchLabel": "Search servers",
+    "filter": "Filter",
+    "filterRunning": "Running",
+    "filterAbnormal": "Abnormal",
+    "filterStopped": "Stopped",
+    "groupMode": "Group by",
+    "modePinned": "Pinned",
+    "modeNode": "By node",
+    "modeNetwork": "By network",
+    "modeTag": "By tag",
+    "modeTopology": "By topology tag",
+    "modeName": "By name",
+    "modeCreated": "By created",
+    "modeGroupTree": "By group",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "ungrouped": "Ungrouped",
+    "empty": "No matching servers",
+    "truncated": "Showing first {{loaded}} / {{total}} — keep typing to narrow down",
+    "peekOpen": "Open console",
+    "peekCreated": "Created",
+    "filterAndGroup": "Filter & group",
+    "peekMetrics": "Live metrics",
+    "peekCpu": "CPU",
+    "peekMem": "Memory",
+    "peekTps": "TPS",
+    "peekPlayers": "Players",
+    "peekHeartbeat": "Heartbeat",
+    "peekNoMetrics": "No live metrics (instance stopped or probe not deployed)",
+    "peekPort": "Port",
+    "sortMode": "Sort by",
+    "sortName": "Name",
+    "sortCreated": "Created time",
+    "sortStatus": "Status (issues first)",
+    "pinnedZone": "Pinned",
+    "pinnedDropHint": "Drop to pin"
+  },
   "licenses": {
     "entry": "Licenses",
     "title": "Open-source licenses",
@@ -5480,5 +5549,10 @@
       "label": "Migration date (that day partition)",
       "help": "The UTC day of the partition to migrate. Partitions are stored per UTC day, and both migration and queries operate on that unit."
     }
+  },
+  "instanceKind": {
+    "plugin": "Plugin",
+    "proxy": "Proxy",
+    "binary": "Binary"
   }
 }

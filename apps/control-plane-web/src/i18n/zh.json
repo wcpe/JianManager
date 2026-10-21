@@ -523,7 +523,8 @@
     "instanceConsole": "实例控制台",
     "instanceFiles": "实例文件",
     "clientPublishWizard": "客户端发布向导",
-    "botLoadSession": "压测会话"
+    "botLoadSession": "压测会话",
+    "home": "返回平台首页"
   },
   "console": {
     "title": "运维控制台",
@@ -1320,6 +1321,23 @@
   },
   "instances": {
     "title": "实例管理",
+    "columnsLabel": "列设置",
+    "viewsLabel": "视图",
+    "viewsSaved": "已保存的视图",
+    "viewsEmpty": "暂无保存的视图",
+    "saveView": "保存当前视图…",
+    "saveViewTitle": "保存当前视图",
+    "viewNamePlaceholder": "视图名称",
+    "viewDelete": "删除视图 {{name}}",
+    "metrics": {
+      "column": "实时指标",
+      "heartbeatColumn": "心跳",
+      "tps": "TPS",
+      "cpu": "CPU",
+      "mem": "内存",
+      "players": "玩家",
+      "heartbeatLabel": "近 20 分钟活动心跳：{{active}} 格活跃、{{down}} 格停摆、{{unknown}} 格缺测"
+    },
     "name": "名称",
     "type": "类型",
     "processType": "启动方式",
@@ -4209,8 +4227,59 @@
     "recent": "最近打开",
     "empty": "暂无常用服务器，打开「选择服务器」搜索并收藏。"
   },
+  "sidebarTools": {
+    "more": "更多",
+    "shown": "显示在侧边栏",
+    "stowed": "已收纳",
+    "pinnedSection": "常用",
+    "pin": "置回侧边栏",
+    "unpin": "收纳到底部",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "emptyZone": "空",
+    "dragHint": "拖动条目可排序，也可在两个分区之间移动"
+  },
+  "sidebarResource": {
+    "searchPlaceholder": "搜索服务器",
+    "searchLabel": "搜索服务器",
+    "filter": "筛选",
+    "filterRunning": "运行中",
+    "filterAbnormal": "异常",
+    "filterStopped": "已停止",
+    "groupMode": "分组方式",
+    "modePinned": "置顶",
+    "modeNode": "按节点",
+    "modeNetwork": "按群组",
+    "modeTag": "按标签",
+    "modeTopology": "按拓扑标签",
+    "modeName": "按名称",
+    "modeCreated": "按创建时间",
+    "modeGroupTree": "按分组",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "ungrouped": "未分组",
+    "empty": "没有匹配的服务器",
+    "truncated": "仅显示前 {{loaded}} / {{total}} 台，输入关键字以缩小范围",
+    "peekOpen": "点击进入控制台",
+    "peekCreated": "创建于",
+    "filterAndGroup": "筛选与分组",
+    "peekMetrics": "运行指标",
+    "peekCpu": "CPU",
+    "peekMem": "内存",
+    "peekTps": "TPS",
+    "peekPlayers": "在线玩家",
+    "peekHeartbeat": "心跳",
+    "peekNoMetrics": "暂无实时指标（实例可能已停止或未部署探针）",
+    "peekPort": "端口",
+    "sortMode": "排序方式",
+    "sortName": "按名称",
+    "sortCreated": "按创建时间",
+    "sortStatus": "按状态（异常优先）",
+    "pinnedZone": "置顶",
+    "pinnedDropHint": "拖到这里置顶"
+  },
   "licenses": {
-    "entry": "开源许可",
+    "entry": "开源协议",
     "title": "开源许可",
     "subtitle": "本产品使用以下开源依赖，版本与许可证于构建期自动扫描生成。",
     "back": "返回",
@@ -5480,5 +5549,10 @@
       "label": "迁移日期（该日分区）",
       "help": "要迁移的分区归属日（UTC）。日志按 UTC 日期分区存储，迁移与查询都以该分区为单位。"
     }
+  },
+  "instanceKind": {
+    "plugin": "插件服",
+    "proxy": "代理",
+    "binary": "二进制"
   }
 }

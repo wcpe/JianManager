@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal } from 'lucide-react'
+import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Columns3, Bookmark, Trash2 } from 'lucide-react'
 import { useInfiniteInstanceSearch, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import type { InstanceListParams, InstanceSearchParams } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
@@ -31,10 +31,29 @@ import type { GroupDimension } from '@/lib/instances/instance-grouping'
 import { runtimeDriftOf } from '@/lib/runtime-assets/runtime-drift'
 import { summarizeInstances, summaryFilterStatus } from '@/lib/instances/instance-summary'
 import type { SummaryFilterKey } from '@/lib/instances/instance-summary'
+import {
+  INSTANCE_OPTIONAL_COLUMNS,
+  readStoredColumns,
+  readStoredViews,
+  writeStoredColumns,
+  writeStoredViews,
+  type InstanceOptionalColumn,
+  type SavedInstanceView,
+} from '@/lib/instances/instance-view-prefs'
 import { DataPanelSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@jianmanager/ui/components/dropdown-menu'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {
@@ -46,6 +65,7 @@ import {
 } from '@jianmanager/ui/components/select'
 import { SCROLL_KEY_PREFIX, buildInstanceTreeRows, VirtualizedGroupedInstanceTable, VirtualizedInstanceTable } from '@/components/views/instances/VirtualizedInstanceTables'
 import { FilterSelect, InstanceRowMenu, InstanceTableHeader } from '@/components/views/instances/InstanceTableParts'
+import { useInstanceWindowMetrics } from '@/components/views/instances/useInstanceWindowMetrics'
 import type { InstanceSortKey, InstanceSortOrder } from '@/components/views/instances/InstanceTableParts'
 import { InstanceRowView } from '@/components/views/instances/InstanceRowView'
 import { BackendsInline, VirtualizedGroupedCardView } from '@/components/views/instances/InstanceCardViews'
@@ -104,6 +124,15 @@ const SEARCH_DEBOUNCE_MS = 300
  */
 function readViewMode(searchParams: URLSearchParams): ViewMode {
   return searchParams.get('view') === 'card' ? 'card' : 'list'
+}
+
+/** 列设置项的文案键（复用既有列名键，不另造同义键）。 */
+const COLUMN_LABEL_KEY: Record<InstanceOptionalColumn, string> = {
+  type: 'instances.type',
+  role: 'instances.role',
+  tags: 'grouping.tagsColumn',
+  metrics: 'instances.metrics.column',
+  heartbeat: 'instances.metrics.heartbeatColumn',
 }
 
 /** 默认分组维度：region/zone 两级（FR-452）。 */
@@ -276,6 +305,13 @@ export default function InstancesPage() {
   const [page, setPage] = useState(() => readPage(searchParams))
   const [pageSize, setPageSize] = useState(() => readPageSize(searchParams))
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  // 列设置（页面重构件）：可见可选列持久化于 jm.instances.columns；缺省全开（旧行为不变）。
+  const [visibleColumns, setVisibleColumns] = useState<Set<InstanceOptionalColumn>>(readStoredColumns)
+  // 保存视图：整串 search 快照 + 列集合（jm.instances.views）。恢复=导航回快照，
+  // 由 `location.search → 状态` 的同步 effect 落全部字段（过滤/分组/排序/页大小天然保真）。
+  const [savedViews, setSavedViews] = useState<SavedInstanceView[]>(readStoredViews)
+  const [saveViewOpen, setSaveViewOpen] = useState(false)
+  const [viewNameDraft, setViewNameDraft] = useState('')
   const scrollStorageKey = useMemo(
     () => `${SCROLL_KEY_PREFIX}${location.pathname}${location.search}`,
     [location.pathname, location.search],
@@ -662,6 +698,66 @@ export default function InstancesPage() {
     })
 
   /**
+   * 可见窗口上报（虚拟表 → 页面）：表格把 `range` 变化回报，页面据此切片实例列表，
+   * 走 useInstanceWindowMetrics 批量取行内指标（≤50/次、300ms 防抖、30s 轮询）后逐行注入。
+   * 下标语义随视图：平铺表按 `instances`、分组树表按 `treeRows`——两者由各自表格的 range 决定。
+   */
+  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number } | null>(null)
+  const handleVisibleRange = useCallback((start: number, end: number) => {
+    setVisibleRange((prev) => (prev && prev.start === start && prev.end === end ? prev : { start, end }))
+  }, [])
+
+  const visibleInstances = useMemo(() => {
+    if (!visibleRange) return []
+    const { start, end } = visibleRange
+    if (groupBy === 'none') return instances.slice(start, end)
+    return treeRows.slice(start, end).flatMap((row) => (row.kind === 'instance' ? [row.instance] : []))
+  }, [groupBy, instances, treeRows, visibleRange])
+
+  const windowMetrics = useInstanceWindowMetrics(visibleInstances)
+
+  /** 列设置：切换可选列可见性并持久化。 */
+  const toggleColumn = (column: InstanceOptionalColumn) => {
+    setVisibleColumns((prev) => {
+      const next = new Set(prev)
+      if (next.has(column)) next.delete(column)
+      else next.add(column)
+      writeStoredColumns(next)
+      return next
+    })
+  }
+
+  /** 当前表格总列数（固定 5 列 + 可见可选列）：占位/组头/展开行的 colSpan 必须同步。 */
+  const columnCount = 10 - (INSTANCE_OPTIONAL_COLUMNS.length - visibleColumns.size)
+
+  /** 应用保存的视图：导航回快照 search（状态由同步 effect 落位），并恢复列集合。 */
+  const applySavedView = (view: SavedInstanceView) => {
+    navigate(`/instances${view.search}`)
+    const next = new Set(view.columns)
+    setVisibleColumns(next)
+    writeStoredColumns(next)
+  }
+
+  /** 保存当前视图（同名覆盖）；快照 = 当前 location.search + 当前列集合。 */
+  const saveCurrentView = () => {
+    const name = viewNameDraft.trim()
+    if (!name) return
+    const next = [
+      ...savedViews.filter((view) => view.name !== name),
+      { name, search: location.search, columns: [...visibleColumns] },
+    ]
+    setSavedViews(next)
+    writeStoredViews(next)
+    setSaveViewOpen(false)
+  }
+
+  const deleteSavedView = (name: string) => {
+    const next = savedViews.filter((view) => view.name !== name)
+    setSavedViews(next)
+    writeStoredViews(next)
+  }
+
+  /**
    * 展开行判据（喂给虚拟高度模型）：与 `renderRow` 的渲染条件完全同源——
    * proxy 画像 + 该 id 在展开集合中。展开会在该实例项下追加一个 `INSTANCE_EXPANDED_ROW_HEIGHT`
    * 高的行，模型必须按同一判据计入，否则其后所有行的定位与滚动条长度都会漂移。
@@ -687,6 +783,9 @@ export default function InstancesPage() {
       isProxy={isProxyInstance(inst)}
       provisioning={isProvisioningInstance(inst)}
       drift={runtimeDriftOf(inst)}
+      metrics={windowMetrics.get(inst.uuid)}
+      columns={visibleColumns}
+      columnCount={columnCount}
       proxyExpanded={expandedProxies.has(inst.id)}
       onToggleProxy={() => toggleProxy(inst.id)}
       renderBackends={() => <BackendsInlineContainer proxyId={inst.id} />}
@@ -796,6 +895,69 @@ export default function InstancesPage() {
             {filtersCollapsed ? t('grouping.showFilters') : t('grouping.hideFilters')}
           </Button>
           <div className="ml-auto flex items-center gap-2">
+            {/* 列设置（页面重构件）：切换可选列可见性，持久化于 jm.instances.columns。 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Columns3 className="size-4" /> {t('instances.columnsLabel')}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                {INSTANCE_OPTIONAL_COLUMNS.map((column) => (
+                  <DropdownMenuCheckboxItem
+                    key={column}
+                    checked={visibleColumns.has(column)}
+                    onCheckedChange={() => toggleColumn(column)}
+                    // 就地多选：保持菜单打开（连续勾选是常态）。
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {t(COLUMN_LABEL_KEY[column])}
+                  </DropdownMenuCheckboxItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {/* 保存视图（页面重构件）：整串 search 快照 + 列集合；恢复由 URL 同步 effect 落位。 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Bookmark className="size-4" /> {t('instances.viewsLabel')}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>{t('instances.viewsSaved')}</DropdownMenuLabel>
+                {savedViews.length === 0 ? (
+                  <DropdownMenuItem disabled>{t('instances.viewsEmpty')}</DropdownMenuItem>
+                ) : (
+                  savedViews.map((view) => (
+                    <DropdownMenuItem key={view.name} onSelect={() => applySavedView(view)}>
+                      <span className="min-w-0 flex-1 truncate">{view.name}</span>
+                      <button
+                        type="button"
+                        aria-label={t('instances.viewDelete', { name: view.name })}
+                        title={t('instances.viewDelete', { name: view.name })}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          deleteSavedView(view.name)
+                        }}
+                        className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-destructive"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </DropdownMenuItem>
+                  ))
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setViewNameDraft('')
+                    setSaveViewOpen(true)
+                  }}
+                >
+                  <Plus className="size-4" /> {t('instances.saveView')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             {hasActiveFilter && (
               <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
                 {t('grouping.clearFilters')}
@@ -1003,6 +1165,8 @@ export default function InstancesPage() {
               totalCount={totalCount}
               onNeedMore={loadMoreInstances}
               isRowExpanded={isRowExpanded}
+              onVisibleRangeChange={handleVisibleRange}
+              columnCount={columnCount}
               scrollStorageKey={scrollStorageKey}
               header={
                 <InstanceTableHeader
@@ -1013,6 +1177,7 @@ export default function InstancesPage() {
                   sortOrder={sortOrder}
                   onSort={setTableSortParam}
                   selectAllLabel={selectAllLabel}
+                  visibleColumns={visibleColumns}
                 />
               }
               renderRow={renderRow}
@@ -1026,6 +1191,8 @@ export default function InstancesPage() {
               onNeedMore={loadMoreInstances}
               onToggleCollapse={toggleGroupCollapsed}
               isRowExpanded={isRowExpanded}
+              onVisibleRangeChange={handleVisibleRange}
+              columnCount={columnCount}
               scrollStorageKey={scrollStorageKey}
               header={
                 <InstanceTableHeader
@@ -1036,6 +1203,7 @@ export default function InstancesPage() {
                   sortOrder={sortOrder}
                   onSort={setTableSortParam}
                   selectAllLabel={selectAllLabel}
+                  visibleColumns={visibleColumns}
                 />
               }
               renderRow={renderRow}
@@ -1046,6 +1214,32 @@ export default function InstancesPage() {
           {groupBy === 'groupTree' && groupManagerOpen && <InstanceGroupManager />}
         </div>
       )}
+
+      {/* 保存视图：命名后落 jm.instances.views（同名覆盖）。 */}
+      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t('instances.saveViewTitle')}</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={viewNameDraft}
+            onChange={(event) => setViewNameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') saveCurrentView()
+            }}
+            placeholder={t('instances.viewNamePlaceholder')}
+            aria-label={t('instances.viewNamePlaceholder')}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveViewOpen(false)}>
+              {t('common.cancel', { defaultValue: '取消' })}
+            </Button>
+            <Button disabled={!viewNameDraft.trim()} onClick={saveCurrentView}>
+              {t('common.save', { defaultValue: '保存' })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DangerConfirm
         open={deleteTarget !== null}

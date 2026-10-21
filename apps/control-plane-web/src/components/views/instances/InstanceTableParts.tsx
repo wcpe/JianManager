@@ -25,6 +25,10 @@ import {
 } from '@jianmanager/ui/components/table'
 import { hasCapability, resolveCapabilities } from '@/lib/instances/capabilities'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
+import { INSTANCE_OPTIONAL_COLUMNS, type InstanceOptionalColumn } from '@/lib/instances/instance-view-prefs'
+
+/** 列设置的缺省可见集（全开；缺省不改变既有表头结构）。 */
+const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(INSTANCE_OPTIONAL_COLUMNS)
 
 /**
  * 实例列表排序键（与 /instances/search 的 `sort` 参数对齐）。
@@ -74,6 +78,7 @@ export function InstanceTableHeader({
   sortOrder,
   onSort,
   selectAllLabel,
+  visibleColumns = ALL_OPTIONAL_COLUMNS,
 }: {
   t: (k: string, options?: Record<string, unknown>) => string
   allSelected: boolean
@@ -87,6 +92,8 @@ export function InstanceTableHeader({
    * 把「全选」理解成「全库全选」而误用批量删除。缺省回落通用文案。
    */
   selectAllLabel?: string
+  /** 可见的可选列（列设置）；缺省全开。固定列（勾选/名称/节点:端口/状态/操作）不受影响。 */
+  visibleColumns?: ReadonlySet<InstanceOptionalColumn>
 }) {
   return (
     <TableHeader className="bg-muted/50">
@@ -113,9 +120,8 @@ export function InstanceTableHeader({
           currentSort={sortKey}
           currentOrder={sortOrder}
           onSort={onSort}
-        />
-        <TableHead>{t('instances.role')}</TableHead>
-        <TableHead>{t('grouping.tagsColumn')}</TableHead>
+        />        {visibleColumns.has('role') && <TableHead>{t('instances.role')}</TableHead>}
+        {visibleColumns.has('tags') && <TableHead>{t('grouping.tagsColumn')}</TableHead>}
         <SortableTableHead
           label={t('instances.status')}
           sortValue="status"
@@ -123,6 +129,9 @@ export function InstanceTableHeader({
           currentOrder={sortOrder}
           onSort={onSort}
         />
+        {/* 行内实时指标与活动心跳（数据由页面按可见窗口批量取数后逐行注入，见 InstanceRowMetrics）。 */}
+        {visibleColumns.has('metrics') && <TableHead>{t('instances.metrics.column')}</TableHead>}
+        {visibleColumns.has('heartbeat') && <TableHead>{t('instances.metrics.heartbeatColumn')}</TableHead>}
         <TableHead>{t('instances.actions')}</TableHead>
       </TableRow>
     </TableHeader>
