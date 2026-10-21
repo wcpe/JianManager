@@ -157,6 +157,19 @@ func BeginMigration(rec *Record, target Owner, targetDirID string) error {
 	rec.TargetDirID = targetDirID
 	rec.TargetGeneration = rec.Generation + 1
 	rec.JournalComplete = false
+	// **必须一并清掉上一轮的校验凭证**（2026-10-22 复审 P1-4）。
+	//
+	// `MarkDayComplete`/`RecordDayVerification` 会无条件对**整日全部**记录置
+	// `LastVerifyCompleted=true` 与 `LastVerifyChecksum`，包括那些从未参与迁移的记录。
+	// 而 `BeginMigration` 此前只重置 `JournalComplete`，把这个凭证留了下来，后果是：
+	// 该记录日后真被迁移时，`DayManager.Resume` 里 `if !rep.LastVerifyCompleted` 直接为假
+	// ⇒ 整段 snapshot/copy/verify 被跳过 ⇒ 直接进入 ATTACHED_STAGING，
+	// 随后 `cleanupHot` 凭这条**陈旧 checksum** 删除热分区
+	// ⇒ 数据从未拷到冷层却被删掉（与本次修复要消灭的丢数据完全同形）。
+	//
+	// 一行重置堵死整类：校验凭证只在「本轮真的校验过」时才该为真。
+	rec.LastVerifyCompleted = false
+	rec.LastVerifyChecksum = ""
 	rec.RecoveryRequired = false
 	rec.PartialReasons = nil
 	rec.MigrationState = StateRoutingFrozen

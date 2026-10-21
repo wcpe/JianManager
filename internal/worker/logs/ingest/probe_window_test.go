@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,14 +23,14 @@ import (
 // 从 vlsup.BuildArgs 解析则锚在「VL 会接受什么」这个外部事实上——探测窗一旦越过它，
 // VL 会以 400 拒绝，`projectionGenerationUsed` 报错并让上游「按未占用继续」，
 // 于是代次重名防护被整条跳过（2026-10-08 生产事故的成因；2026-10-12 我自己又踩了一次）。
-func vlMaxQueryTimeRange(t *testing.T) time.Duration {
+func vlMaxQueryTimeRange(t *testing.T, retention string) time.Duration {
 	t.Helper()
 	const flag = "-search.maxQueryTimeRange="
 	args, err := vlsup.BuildArgs(vlsup.InstanceConfig{
 		Namespace:       vlsup.NamespaceHot,
 		Port:            vlsup.DefaultPort(vlsup.NamespaceHot),
 		StorageDataPath: t.TempDir(),
-		RetentionPeriod: "30d",
+		RetentionPeriod: retention,
 		// 占位凭据：本用例只读启动参数里的 `-search.maxQueryTimeRange`，不发起任何
 		// 需要鉴权的请求。取值沿用本仓既有测试的短占位写法（如 cmdline_test.go 的
 		// `local-only`）——**刻意取短**：PR Hygiene 的凭据扫描按
@@ -71,7 +72,6 @@ func vlMaxQueryTimeRange(t *testing.T) time.Duration {
 //   - 端到端（真实走一次探测，从夹具记录的实际 start/end 复算跨度），确保被测路径**真的**
 //     把窗口构造对了，而不是只有常量对。
 func TestProjectionProbeWindowWithinVLHardLimit(t *testing.T) {
-	limit := vlMaxQueryTimeRange(t)
 
 	// ① 纯时间算术：按被测代码的窗口构造方式复算总跨度。
 	//
@@ -80,11 +80,17 @@ func TestProjectionProbeWindowWithinVLHardLimit(t *testing.T) {
 	// 原先这里写死 `30d`，于是在 `DefaultRetentionPeriod` 提到 120d、
 	// 默认热窗口 90d 之后，用例仍然全绿 —— 而真实覆盖缺口（第 31～90 天）
 	// 已经回来了。写死配置值让守卫对配置变更失明，正是本项目反复吃亏的形态。
-	// **配置一致时（生产正确形态）：探测窗必须覆盖整个 hot retention。**
-	// 这正是 2026-10-10 扩窗的目的，也是 31d 常量在更长保留期下失效的地方。
+	// **探测窗必须覆盖整个 hot retention，且恰好等于「服务端上限」**。
+	//
+	// 这两件事是同一个等式：`QueryTimeRangeLimit()` 派生为 `retention + 1d`，
+	// 而 `hotRetention` 与它同源（都取 cfg.LogVL.RetentionPeriod）⇒
+	//     派生窗 = hotRetention + 1d = 服务端上限
+	// 所以「覆盖保留期」与「不被 VL 400」不冲突，任何钳制都是多余的（2026-10-22 复审 P1-2）。
 	for _, retention := range []time.Duration{
-		30 * 24 * time.Hour, // 生产现役 30d：历史验证过的那组值必须继续通过
-		7 * 24 * time.Hour,  // 更短：退回 31d 下限即可
+		30 * 24 * time.Hour,  // 生产现役 30d
+		90 * 24 * time.Hour,  // 默认热窗口
+		120 * 24 * time.Hour, // DefaultRetentionPeriod
+		7 * 24 * time.Hour,   // 更短：应等于 8d（比 31d 常量小，能区分派生与常量）
 	} {
 		m := &Manager{hotRetention: retention}
 		span := m.projectionProbeWindow()
@@ -92,38 +98,26 @@ func TestProjectionProbeWindowWithinVLHardLimit(t *testing.T) {
 		end := now.Add(projectionProbeFutureSlack)
 		start := end.Add(-span)
 
-		require.LessOrEqual(t, end.Sub(start), limit,
-			"hotRetention=%s 时探测窗总跨度 %s 越过 VL 上限 %s", retention, end.Sub(start), limit)
+		// ① 不得越过 VL 硬上限（否则探测整条 400）。
+		// **上限必须按同一个 retention 派生**：`-search.maxQueryTimeRange` 由
+		// `QueryTimeRangeLimit()` = retention+1d 得出，而 hotRetention 与它同源。
+		// 用固定的 30d 上限去校验 90d 的场景，测的就不是生产形态了。
+		limitForRetention := vlMaxQueryTimeRange(t, fmt.Sprintf("%dd", int(retention.Hours()/24)))
+		require.LessOrEqual(t, end.Sub(start), limitForRetention,
+			"hotRetention=%s 时探测窗总跨度 %s 越过 VL 上限 %s", retention, end.Sub(start), limitForRetention)
+		// ② 上界必须覆盖未来行。
 		require.Greater(t, end.Sub(now), time.Duration(0),
 			"上界必须晚于 now：无日期日志行的事件时间可合法落在未来")
+		// ③ **必须覆盖整个保留期**（这是探测的全部意义）。
 		require.GreaterOrEqual(t, now.Sub(start), retention,
 			"hotRetention=%s 时起点只回看 %s，对更早的同名旧行结构性失明"+
 				"⇒ 探测恒报未占用 ⇒ 代次重名 ⇒ 永不发布（2026-10-08 事故形态）",
 			retention, now.Sub(start))
-		// **精确值断言**：窗口必须等于 retention + 余量，而不是碰巧够用。
+		// ④ **精确值**：窗口 = retention + 余量。
 		// 少了这条，把派生逻辑删掉退回常量也能过（30d+1d == 31d 常量，恰好相同），
-		// 那样本回归就抓不到「派生被移除」——正是本项目反复出现的假绿形态。
+		// 那样本回归抓不到「派生被移除」——本项目反复出现的假绿形态。
 		require.Equal(t, retention+projectionProbeSlackDays*24*time.Hour, span,
-			"探测窗必须精确等于 hotRetention + 余量（实际 %s）", span)
-	}
-
-	// **配置矛盾时（hotRetention 远大于 VL 软上限）：必须服从 VL 硬上限，而不是发出
-	// 必然被 400 的请求。** 这是明确的降级：发一个注定失败的探测，等于把「重名防护」
-	// 换成「每次都探测失败」，比覆盖不全更糟（连「未占用」都拿不到）。
-	//
-	// 生产实测这个矛盾真实存在：`log_vl.retention_period=30d`，
-	// 而 `log_retention.hot_retention` 声明 90d（v9 启动 WARN 已报出）。
-	// 代码能做的只有「别把探测搞崩」；真正的修复是让两个 retention 一致（配置层）。
-	{
-		m := &Manager{hotRetention: 90 * 24 * time.Hour} // 声明的热窗口
-		span := m.projectionProbeWindow()
-		now := time.Now().UTC()
-		end := now.Add(projectionProbeFutureSlack)
-		start := end.Add(-span)
-		require.LessOrEqual(t, end.Sub(start), limit,
-			"配置矛盾时仍必须守住 VL 硬上限，否则探测恒 400、重名防护整条失效")
-		require.Equal(t, projectionProbeSpan, span,
-			"矛盾时应明确降级到 31d 常量（并靠启动 WARN 让人去修配置），不得静默放大")
+			"hotRetention=%s 时探测窗必须精确等于 retention+余量（实际 %s）", retention, span)
 	}
 
 	// ② `hotRetention` 未配置（测试/旧调用方）时必须退回历史验证过的 31d，
@@ -156,9 +150,12 @@ func TestProjectionProbeWindowWithinVLHardLimit(t *testing.T) {
 	spans := append([]time.Duration(nil), fixture.probeSpans...)
 	fixture.mu.Unlock()
 	require.NotEmpty(t, spans, "本用例须真的发出过占用探测查询（否则夹具读数为空，断言会静默失效）")
+	// 该夹具的 Manager 未设 HotRetention ⇒ 探测窗退回 31d 常量，
+	// 故按生产现役 30d 的上限（744h）校验即可。
+	limitDefault := vlMaxQueryTimeRange(t, "30d")
 	for _, span := range spans {
-		require.LessOrEqual(t, span, limit,
-			"实际探测请求的窗口跨度 %s 越过 VL 上限 %s（生产上会被 400 拒绝并静默关闭重名防护）", span, limit)
+		require.LessOrEqual(t, span, limitDefault,
+			"实际探测请求的窗口跨度 %s 越过 VL 上限 %s（生产上会被 400 拒绝并静默关闭重名防护）", span, limitDefault)
 	}
 }
 

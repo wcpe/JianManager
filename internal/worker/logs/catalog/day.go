@@ -188,6 +188,27 @@ func (c *Catalog) MarkDayComplete(utcDay, checksum string) error {
 	if err != nil {
 		return err
 	}
+	// **不得把「从未参与迁移」的记录一并结账**（2026-10-22 复审 P1-2）。
+	//
+	// 混合态日有两种非法残留，都必须在这里拦住：
+	//   · `Owner=hot` 且 `MigrationState=""`   —— 在 `BeginDayMigration` 之后才出现
+	//     （迟到写入 / 新 storage namespace），从未进入迁移；
+	//   · 任何 `Owner=hot` 且已进入迁移的记录 —— 迁移没走完就来结账。
+	//
+	// 旧实现无条件下针对**整日全部**记录置 `JournalComplete/LastVerifyCompleted`：
+	// 一旦该日走到这里，那条 hot 记录就被标成「已完成」，此后所有日级操作
+	// （`activeDayRecords` 按 MigrationState 过滤）都把它当作不参与，
+	// 而它的热分区会在 VL retention 到期时被直接删除 ⇒ 该 namespace 该日数据永久丢失，
+	// 且因为 `JournalComplete=true`，任何一致性检查都不会再报警。
+	//
+	// 为什么要在这里拦而不是只在 `BeginDayMigration` 拦：这个缺口是**两套判据不一致**
+	// 造成的（Begin 按 Owner 纳入、后续按 MigrationState 排除），只补一边会在另一边漏。
+	for _, rec := range records {
+		if rec.Owner == OwnerHot {
+			return fmt.Errorf("%w: UTC day %s still has hot record %s (state=%q); "+
+				"refuse to mark journal complete", ErrIllegalTransition, utcDay, rec.Key, rec.MigrationState)
+		}
+	}
 	for _, rec := range records {
 		rec.JournalComplete = true
 		rec.LastVerifyCompleted = true

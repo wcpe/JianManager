@@ -25,28 +25,58 @@ func (m *DayManager) Start(utcDay string, target catalog.Owner, targetDirID stri
 	return m.Resume(utcDay)
 }
 
+// activeDayRecordsOf 返回该日**仍参与迁移**的记录子集。
+//
+// 与 catalog.activeDayRecords 同口径（空态与 CLEANED 不参与），此处本地实现是因为
+// catalog 侧未导出该函数；两处判据必须始终一致，否则又会出现「一套判据纳入、
+// 另一套判据排除」的夹缝（2026-10-22 复审 P1-1/P1-2 的成因）。
+func activeDayRecordsOf(records []*catalog.Record) []*catalog.Record {
+	active := make([]*catalog.Record, 0, len(records))
+	for _, rec := range records {
+		if rec == nil || rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned {
+			continue
+		}
+		active = append(active, rec)
+	}
+	return active
+}
+
 func (m *DayManager) Resume(utcDay string) error {
 	records := m.cat.RecordsForDay(utcDay)
 	if len(records) == 0 {
 		return fmt.Errorf("lifecycle: UTC day %s not found", utcDay)
 	}
-	if records[0].MigrationState == catalog.StateFailedManual {
-		return fmt.Errorf("lifecycle: manual recovery required")
-	}
-	if records[0].MigrationState == catalog.StateFailedRetryable {
-		resume := catalog.MigrationState("")
-		entries := m.cat.Journal().Entries(records[0].Key)
-		for i := len(entries) - 1; i >= 0; i-- {
-			if entries[i].State == catalog.StateFailedRetryable {
-				resume = entries[i].FromState
-				break
+	// **失败态判定必须基于活跃子集，不能取 `records[0]`**（2026-10-22 复审 P1-1）。
+	//
+	// `records[0]` 是按 key 排序的第一条，混合态日里它很可能是一条已 CLEANED 的记录
+	// （`NewStableRecord` 的默认态就是 CLEANED）。旧代码用它判失败态，后果是：
+	//   · `FAILED_RETRYABLE` 分支被整段跳过 ⇒ 这档唯一的自动恢复路径在混合态日失效；
+	//   · 即便进入，`Journal().Entries(key)` 查的也是**另一条记录**的 journal
+	//     （日级写入口的 journal key 一律是活跃子集首条的 key）；
+	//   · 随后 switch 落到 default ⇒ 裸 return 错误且**不写失败 journal**
+	//     ⇒ 该日停在失败态反复失败，只能人工介入，现场还查不到原因。
+	//
+	// 判据与下面的状态推进保持同源：只看「迁移中」的记录（跳过空态与 CLEANED）。
+	active := activeDayRecordsOf(records)
+	if len(active) > 0 {
+		if active[0].MigrationState == catalog.StateFailedManual {
+			return fmt.Errorf("lifecycle: manual recovery required")
+		}
+		if active[0].MigrationState == catalog.StateFailedRetryable {
+			resume := catalog.MigrationState("")
+			entries := m.cat.Journal().Entries(active[0].Key)
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].State == catalog.StateFailedRetryable {
+					resume = entries[i].FromState
+					break
+				}
 			}
-		}
-		if resume == "" {
-			return fmt.Errorf("lifecycle: day retry state missing")
-		}
-		if _, err := m.cat.AdvanceDay(utcDay, resume); err != nil {
-			return err
+			if resume == "" {
+				return fmt.Errorf("lifecycle: day retry state missing")
+			}
+			if _, err := m.cat.AdvanceDay(utcDay, resume); err != nil {
+				return err
+			}
 		}
 	}
 	representative := records[0].Key

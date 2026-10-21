@@ -257,9 +257,11 @@ func TestRepairProjectionQueryGenerationIsJournalReplayable(t *testing.T) {
 // storage namespace 仍会在同一天新建一条 `Owner=hot` 的记录 ⇒ 该日长期处于
 // 「部分已 COLD、部分仍 hot」的混合态。旧实现对每个日级操作都取 `records[0]` 当基准
 // 并要求**全部**记录同态：
-//   · `BeginDayMigration` 遇到已 COLD 就整日拒绝；
-//   · `AdvanceDay` / `FailDay` / `SwitchDayOwners` 同理；
-//   · `day_manager.Resume` 报 `UTC-day state divergence` 且**不写失败 journal**。
+//
+//	· `BeginDayMigration` 遇到已 COLD 就整日拒绝；
+//	· `AdvanceDay` / `FailDay` / `SwitchDayOwners` 同理；
+//	· `day_manager.Resume` 报 `UTC-day state divergence` 且**不写失败 journal**。
+//
 // 后果是该日**永久不可迁移**，而那条 hot 分区到期被 VL 原生 retention 直接删除
 // ⇒ 该 namespace 该日数据永久丢失，UI 上只留一次迁移失败。
 //
@@ -343,4 +345,99 @@ func TestMixedDayMigrationSkipsSettledRecords(t *testing.T) {
 		require.Equal(t, OwnerCold, hot.Owner, "hot 记录必须切到 cold")
 		require.Equal(t, StateOwnerSwitched, hot.MigrationState)
 	})
+}
+
+// TestMarkDayCompleteRefusesHotResidual 钉住「混合态日不得被结账」。
+//
+// 缺陷形态（2026-10-22 复审 P1-2）：`BeginDayMigration` 按 **Owner** 纳入记录，
+// 而后续日级操作（`activeDayRecords`）按 **MigrationState** 排除空态。两套判据不一致，
+// 于是「`BeginDayMigration` 之后才出现的 `Owner=hot, state=""` 记录」处在夹缝里：
+//
+//	· 它不参与后续推进（被当「不参与」跳过）；
+//	· 但它也不阻止该日走到 `MarkDayComplete`；
+//	· 而 `MarkDayComplete` 无条件对**整日全部**记录置
+//	  `JournalComplete/LastVerifyCompleted` ⇒ 这条从未迁移的 hot 记录被标成「已完成」。
+//
+// 此后任何一致性检查都不再报警，它的热分区在 VL retention 到期时被直接删除
+// ⇒ 该 namespace 该日数据永久丢失。
+//
+// 修法：`MarkDayComplete` 前校验该日不得残留任何 `Owner=hot` 记录。
+//
+// 变异验证：删掉那段 Owner 校验 ⇒ 本用例第一条断言转红。
+func TestMarkDayCompleteRefusesHotResidual(t *testing.T) {
+	const day = "2026-09-21"
+	settledKey := PartitionKey{StorageNamespace: "ns-settled", UTCDay: day}
+	hotKey := PartitionKey{StorageNamespace: "ns-late-hot", UTCDay: day}
+
+	t.Run("有 hot 残留时必须拒绝结账", func(t *testing.T) {
+		c := New(NewMemJournal())
+		// 先做成「尚未结账」的形态（NewStableRecord 默认 JournalComplete=true）。
+		settled := NewStableRecord(settledKey, OwnerCold, 1, "cold-g1")
+		settled.JournalComplete = false
+		settled.LastVerifyCompleted = false
+		require.NoError(t, c.Put(settled))
+		// 「BeginDayMigration 之后才出现」的那条：Owner=hot、state 为空。
+		late := NewStableRecord(hotKey, OwnerHot, 1, "")
+		late.MigrationState = ""
+		late.JournalComplete = false
+		require.NoError(t, c.Put(late))
+
+		err := c.MarkDayComplete(day, "sum-1")
+		require.Error(t, err, "该日仍有 hot 记录时不得结账（否则它会被标成已完成、永不迁移）")
+		require.ErrorIs(t, err, ErrIllegalTransition)
+
+		// 失败的结账不得留下部分变更。
+		rec, ok := c.Get(settledKey)
+		require.True(t, ok)
+		require.False(t, rec.JournalComplete, "失败的结账不得留下部分变更")
+		hot, ok := c.Get(hotKey)
+		require.True(t, ok)
+		require.False(t, hot.JournalComplete, "从未迁移的记录更不得被标成已完成")
+	})
+
+	t.Run("无 hot 残留时必须能正常结账", func(t *testing.T) {
+		c := New(NewMemJournal())
+		settled := NewStableRecord(settledKey, OwnerCold, 1, "cold-g1")
+		settled.JournalComplete = false
+		require.NoError(t, c.Put(settled))
+
+		require.NoError(t, c.MarkDayComplete(day, "sum-1"),
+			"全冷态日必须能结账，否则守卫变成永久阻塞")
+		rec, ok := c.Get(settledKey)
+		require.True(t, ok)
+		require.True(t, rec.JournalComplete)
+		require.Equal(t, "sum-1", rec.LastVerifyChecksum)
+	})
+}
+
+// TestBeginMigrationResetsVerifyCredentials 钉住「新一轮迁移必须清掉上一轮的校验凭证」。
+//
+// 缺陷形态（2026-10-22 复审 P1-4）：`MarkDayComplete`/`RecordDayVerification` 会无条件
+// 对**整日全部**记录置 `LastVerifyCompleted=true` + `LastVerifyChecksum`，包括那些
+// 从未参与迁移的记录。而 `BeginMigration` 只重置了 `JournalComplete`，把凭证留了下来。
+//
+// 后果链：该记录日后真被迁移时，`DayManager.Resume` 里 `if !rep.LastVerifyCompleted`
+// 直接为假 ⇒ 整段 snapshot/copy/verify 被跳过 ⇒ 直接进入 ATTACHED_STAGING，
+// 随后 `cleanupHot` 凭这条**陈旧 checksum** 删除热分区
+// ⇒ 数据从未拷到冷层却被删掉。
+//
+// 变异验证：删掉 `rec.LastVerifyCompleted = false` ⇒ 本用例第一条断言转红。
+func TestBeginMigrationResetsVerifyCredentials(t *testing.T) {
+	const day = "2026-09-22"
+	key := PartitionKey{StorageNamespace: "ns-reuse", UTCDay: day}
+
+	rec := NewStableRecord(key, OwnerHot, 1, "dir-hot")
+	// 上一轮遗留的陈旧凭证（模拟被 MarkDayComplete 无差别打上）。
+	rec.LastVerifyCompleted = true
+	rec.LastVerifyChecksum = "stale-checksum-from-last-round"
+	rec.JournalComplete = true
+
+	require.NoError(t, BeginMigration(rec, OwnerCold, "dir-cold-target"))
+
+	require.False(t, rec.LastVerifyCompleted,
+		"新一轮迁移必须清掉 LastVerifyCompleted；否则 StagingVerify 会跳过 snapshot/copy/verify")
+	require.Empty(t, rec.LastVerifyChecksum,
+		"陈旧 checksum 不得留到新一轮；cleanupHot 会凭它删除从未拷贝的热分区")
+	require.False(t, rec.JournalComplete, "JournalComplete 同样必须重置")
+	require.Equal(t, StateRoutingFrozen, rec.MigrationState)
 }

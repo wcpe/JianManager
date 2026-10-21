@@ -117,11 +117,13 @@ func TestDayManagerResumesBatchFromEveryState(t *testing.T) {
 //
 // 缺陷形态（2026-10-22 复审 P1-1）：混合态日里 `records[0]`（按 key 排序的第一条）
 // 很可能是一条**已 CLEANED** 的记录。旧代码用它取：
-//   · `MigrationFromDirID` / `TargetDirID` / `TargetOwner` —— 目录与目标全是别人的；
-//   · `LastVerifyCompleted` —— 已 CLEANED 记录在 MarkDayComplete 时被置 true
-//     ⇒ `if !records[0].LastVerifyCompleted` 直接为假 ⇒ **整段 snapshot/copy/verify
-//     被跳过**，直接推进到 ATTACHED_STAGING；
-//   · `LastVerifyChecksum` —— 用别人的校验和结账。
+//
+//	· `MigrationFromDirID` / `TargetDirID` / `TargetOwner` —— 目录与目标全是别人的；
+//	· `LastVerifyCompleted` —— 已 CLEANED 记录在 MarkDayComplete 时被置 true
+//	  ⇒ `if !records[0].LastVerifyCompleted` 直接为假 ⇒ **整段 snapshot/copy/verify
+//	  被跳过**，直接推进到 ATTACHED_STAGING；
+//	· `LastVerifyChecksum` —— 用别人的校验和结账。
+//
 // 后果：新 namespace 的当日数据**从未拷到冷层**，却被标成「已迁移」并把日 journal
 // 置完成，随后 Cleanup 清掉旧目录 ⇒ 与本次修复要消灭的丢数据完全同形。
 //
@@ -140,14 +142,23 @@ func TestResumeMixedDayUsesActiveRecordNotFirst(t *testing.T) {
 
 	settled := catalog.NewStableRecord(settledKey, catalog.OwnerCold, 1, "cold-settled")
 	settled.MigrationState = catalog.StateCleaned
-	settled.LastVerifyCompleted = true                      // 已结清：校验"已完成"
+	settled.LastVerifyCompleted = true                        // 已结清：校验"已完成"
 	settled.LastVerifyChecksum = "checksum-of-settled-record" // 别人的校验和
 	settled.MigrationFromDirID = "dir-settled-old"
 	settled.TargetDirID = "dir-settled-new"
 	settled.TargetOwner = catalog.OwnerCold
 	require.NoError(t, cat.Put(settled))
 
-	active := catalog.NewStableRecord(activeKey, catalog.OwnerHot, 1, "")
+	// **活跃记录的 OwnerDirID 必须非空且与 settled 不同**（2026-10-22 复审 P1-3）。
+	//
+	// 若留空（初版写法），三种情形会退化出同一个值 ""：
+	//   ① 取错记录（rep=records[0]）⇒ LastVerifyCompleted=true ⇒ 整段 snapshot/copy
+	//      **从不执行** ⇒ snapshotFromDir 保持零值 "";
+	//   ② 正确取活跃记录 ⇒ 其 OwnerDirID 也是 ""（BeginMigration 从这里赋值）;
+	// 于是断言分不清「没执行」与「执行对了」，`rep = records[0]` 变异**照样全绿** ——
+	// 正是本项目反复中招的假绿形态。给了非空值后三态互异：
+	//   从不执行 "" / 正确 "dir-active-old" / 取错 "dir-settled-old"。
+	active := catalog.NewStableRecord(activeKey, catalog.OwnerHot, 1, "dir-active-old")
 	require.NoError(t, cat.Put(active))
 
 	// 让活跃记录进入 ATTACHED_STAGING 之前的 STAGING_VERIFY（本用例要验的就是这一步）。
@@ -174,10 +185,10 @@ func TestResumeMixedDayUsesActiveRecordNotFirst(t *testing.T) {
 				copiedToDir = toDir
 				return "copy-1", nil
 			},
-			Verify:   func(catalog.PartitionKey, string, string) (string, error) { return "sum-active", nil },
-			Attach:   func(catalog.PartitionKey, string) error { return nil },
-			Detach:   func(catalog.PartitionKey, string) error { return nil },
-			Cleanup:  func(catalog.PartitionKey, string) error { return nil },
+			Verify:  func(catalog.PartitionKey, string, string) (string, error) { return "sum-active", nil },
+			Attach:  func(catalog.PartitionKey, string) error { return nil },
+			Detach:  func(catalog.PartitionKey, string) error { return nil },
+			Cleanup: func(catalog.PartitionKey, string) error { return nil },
 		},
 	}
 
@@ -190,6 +201,6 @@ func TestResumeMixedDayUsesActiveRecordNotFirst(t *testing.T) {
 		"拷贝的目标目录取自已结清记录 ⇒ 代表记录选错（records[0] 而不是活跃子集）")
 	// 活跃记录刚由 BeginMigration 建立，其 OwnerDirID 是空的 ⇒ 快照源目录必须是空串，
 	// 而不是已结清记录的 `dir-settled-old`。这条同时锁住「代表记录来自活跃子集」。
-	require.Equal(t, "", snapshotFromDir,
-		"快照源目录必须来自活跃记录（其 OwnerDirID 为空），不得取已结清记录")
+	require.Equal(t, "dir-active-old", snapshotFromDir,
+		"快照源目录必须是活跃记录自己的 OwnerDirID；\"\" 表示 snapshot 根本没执行（取错记录导致跳过校验）")
 }

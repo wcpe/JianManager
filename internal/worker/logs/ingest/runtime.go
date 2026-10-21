@@ -1858,6 +1858,7 @@ type clearConflictsPlan struct {
 //   - 「冲突记录已清空」是本方法的契约，失败即 error；
 //   - 「派生计数 conflict_count 已对齐」是尽力而为的收尾，失败**不**返回 error，
 //     而是记在 IdentityConflictClearResult.DerivedRefreshFailures 里。
+//
 // 调用方不得因为 err==nil 就认为查询面已恢复正常：还要看 DerivedRefreshFailures 是否为空。
 func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, operator, reason string) (IdentityConflictClearResult, error) {
 	var result IdentityConflictClearResult
@@ -2121,6 +2122,7 @@ func (m *Manager) conflictClearRefreshTargets(requestedKey string, cleared []str
 // 用旧快照无条件覆盖会把更晚的代次/权威回退掉、并误清真实计数，故：
 //   - 分区级对齐 resetNamespaceConflictCounts 逐分区现读现写 + PublishProjection CAS；
 //   - 当前分区随后再走一次正规发布（publishSnapshot 自身也是 CAS）。
+//
 // 任何一方输掉竞争都只告警 + 记入失败清单，不中断整个流程——
 // 赢的那次真实发布已经写入了它自己算出的 ConflictCount，无需被本次对齐覆盖；
 // 而调用方仍能从失败清单里看到「这个源/分区没被本次刷新覆盖」。
@@ -2244,6 +2246,7 @@ func (m *Manager) projectionConflictCountNonZero(src SourceConfig) bool {
 // PublishProjection），甚至完成一次 OWNER_SWITCHED。若仍用旧快照无条件覆盖：
 //   - 会拿陈旧代次自增，把更晚的真实代次/权威**回退**掉（旧的 owner 与目录也会被一起写回）；
 //   - 会把那次真实发布算出的 ConflictCount 错误清零 ⇒ 前端误报「无冲突」，数据诚实性受损。
+//
 // 故这里不再自造 journal 项，而是以「刚读到的快照」为 CAS 基准走 PublishProjection：
 // 它按 journal 序号 / owner / 代次 / 目录 / 写路由 / 恢复要求 / 投影清单逐项比对，
 // 中途有任何真实写入赢得竞争即返回 ErrInvalidState —— 那次真实发布自己已写好
@@ -5588,7 +5591,6 @@ type projectionWritePlan struct {
 	Yield func()
 }
 
-
 // publicationSnapshot 绑定源/日的发布版本，与物理代次尝试号独立。
 type publicationSnapshot struct {
 	epochs map[string]uint64
@@ -8192,13 +8194,14 @@ func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, sour
 // （`writeProjectionPlan`）只构造并返回 `pipeline.DeliveryResult`，**从不**把它写进 WAL，
 // 全文 `RecordHTTPResult` 的真实调用点只有「破环直投」（`repairStalledReclaim` 一带）。
 // 后果有两层，都必须知道：
-//   · 重建当天**不会**把 Delivery 推高 ⇒ 重建路径走 `releaseRecovery` 时，那道
-//     `positions.Delivery < to` 闸门会因「Delivery 未前进」而早退，回收责任不推进；
-//   · 但**不能因此认为闸门安全**：若该源在更早的（仍在保留期内的）正常投递中已把
-//     Delivery 推到与本批 `to` 齐平（生产上受影响的源正是 `delivery == read`），
-//     闸门就会放行。所以「本批这些天是否真的发布过」不能只靠 Delivery 判断 ——
-//     这正是 `rebuildDaysInner` 必须**自己**在 `beyondWindow` 非空时直接跳过
-//     `releaseRecovery` 的原因（见该函数尾部注释）。
+//
+//	· 重建当天**不会**把 Delivery 推高 ⇒ 重建路径走 `releaseRecovery` 时，那道
+//	  `positions.Delivery < to` 闸门会因「Delivery 未前进」而早退，回收责任不推进；
+//	· 但**不能因此认为闸门安全**：若该源在更早的（仍在保留期内的）正常投递中已把
+//	  Delivery 推到与本批 `to` 齐平（生产上受影响的源正是 `delivery == read`），
+//	  闸门就会放行。所以「本批这些天是否真的发布过」不能只靠 Delivery 判断 ——
+//	  这正是 `rebuildDaysInner` 必须**自己**在 `beyondWindow` 非空时直接跳过
+//	  `releaseRecovery` 的原因（见该函数尾部注释）。
 //
 // （2026-10-06 曾试把上界放宽到 durable 以解停滞 ✗ —— 被不变量测试当场捉住：覆盖未投递区间会让其
 // WAL 条目被回收 ⇒ 事件再也投不出去 ✗ ⇒ 已撤回；停滞真修点＝让投递水位前进 ✓。）
@@ -8511,7 +8514,7 @@ const (
 	// 为什么需要余量：本仓历史上把「31d」当作 retention 30d + 1d，那 1 天用于吸收
 	// 「边界那一天的整天跨度」——保留期按时刻算，而碰撞探测按天算，两者差一天。
 	projectionProbeSlackDays = 1
-// projectionProbeFutureSlack 把探测窗的上界从 now 再向后放一天。
+	// projectionProbeFutureSlack 把探测窗的上界从 now 再向后放一天。
 	//
 	// **为什么上界不能取 now（2026-10-12 修复）**：日志行多为「只有时刻、没有日期」的形态
 	// （`[12:00:01] ...`），其事件时间由 normalize 的 applyClock 以 base 为锚就近归日
@@ -8554,30 +8557,32 @@ const (
 // 故改为：`max(常量下限, hotRetention + 余量)`。取 max 而非直接替换，是为了
 // 兼容 hotRetention 未被配置（0 值）的测试与旧调用方 —— 那时退回历史验证过的 31d。
 func (m *Manager) projectionProbeWindow() time.Duration {
-	// 上界一：VL 侧的硬上限（`-search.maxQueryTimeRange`）。超过必被 400 拒绝，
-	// 那会让探测整条失效 —— 比「覆盖不全」更糟（连「未占用」的结论都拿不到）。
-	window := projectionProbeSpan
-	// 上界二：热层保留期 + 余量。理论上不该超过上界一，因为 VL retention 与
-	// hotRetention 本就该一致（不一致时启动期已打 WARN，见 config 的保留期校验）。
-	// 但**配置可以不一致**（生产实测：log_vl.retention_period=30d 而
-	// log_retention.hot_retention 声明 90d），此时必须服从 VL 的硬上限：
-	// 发一个必然被 400 的请求，等于把「重名防护」换成「每次都探测失败」。
-	if m != nil && m.hotRetention > 0 {
-		derived := m.hotRetention + projectionProbeSlackDays*24*time.Hour
-		// 派生值**直接采用**（不再与常量取大）：窗口的语义是「覆盖该保留期」，
-		// 保留期短就该用短窗口——多扫无益，反而把 400 的风险留在那里。
-		// 只有当派生值超出 VL 硬上限时才降级到常量（见下）。
-		window = derived
-		if derived > projectionProbeSpan {
-			// hotRetention 比 31d 大：想覆盖更长的保留期，但不得越过 VL 硬上限。
-			// 这里的取舍是**明确的降级**而非静默：VL 侧若真保留更久，探测就会覆盖不全，
-			// 而那个缺口必须在配置层解决（让两个 retention 一致），不是在这里猜。
-			window = projectionProbeSpan
-		}
+	// **窗口必须覆盖整个热层保留期**：探测的职责是「该名字在保留期内任意一天是否已有旧行」，
+	// 覆盖不到就判「未占用」⇒ 代次重名 ⇒ VL 拒绝重名行 ⇒ 永不发布（2026-10-08 事故形态）。
+	//
+	// 2026-10-22 复审 P1-2 纠正了此前的一个**假两难**：先前担心「派生值超过 VL 硬上限会被
+	// 400 拒绝」，于是加了「超限就钳回 31d」。但 `-search.maxQueryTimeRange` 已由
+	// `QueryTimeRangeLimit()` 派生为 `retention + 1d`，而 `m.hotRetention` 与它读的是
+	// **同一个配置字段**（apps/worker/main.go 两处都取 cfg.LogVL.RetentionPeriod）。
+	// 于是：
+	//     派生窗 = hotRetention + 1d = retention + 1d = 服务端上限   （恒等）
+	// 请求恰好落在 VL「严格大于才拒」的**被接受一侧**，不会 400。所以钳制没有任何保护作用，
+	// 只会在默认 retention=120d 的部署上留下「第 31～120 天探测不到」的原始盲区 ——
+	// 即本次改造声称要修掉的那个缺口原样保留。
+	//
+	// 保留 `max(常量, 派生)` 的意义只是兜住「hotRetention 未配置」（0 值，测试/旧调用方），
+	// 那时退回历史验证过的 31d；其余情况一律用派生值。
+	// 未配置保留期（0 值，测试或旧调用方）⇒ 退回历史验证过的 31d。
+	//
+	// **配置了就一律用派生值，不与常量取大**：取大会让「保留期很短」的部署也去扫 31d，
+	// 而 VL 侧的 `-search.maxQueryTimeRange` 是按同一个 retention 派生的（retention+1d），
+	// 于是 31d > 8d 的窗口会被 400 拒 ⇒ 探测整条失效（比覆盖不全更糟）。
+	// 这个 bug 是本轮夹具（hotRetention=7d）当场抓到的。
+	if m == nil || m.hotRetention <= 0 {
+		return projectionProbeSpan
 	}
-	return window
+	return m.hotRetention + projectionProbeSlackDays*24*time.Hour
 }
-
 
 // nextFreeProjectionGeneration 返回该源在 VL 中尚未出现过的物理代次名。
 //
