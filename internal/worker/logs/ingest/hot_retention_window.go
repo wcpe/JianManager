@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -163,7 +164,14 @@ func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event
 			// 该天没有已发布投影 ⇒ 查询侧本来也查不到它，不作证据。
 			continue
 		}
-		batchVisible, qerr := m.visibleEventsInVL(ctx, client, source, gens, byDay[day])
+		// **必须把 UTCDay 设成该事件所属天**：`verifyProjectionQuery` 会用
+		// `utcDayBounds(source.UTCDay)` 把查询时间窗夹在「源当前天」内
+		// （见 runtime.go 里那段「时间窗必须夹在本源的 UTC 日内」的历史注释）。
+		// 若沿用源当前天，跨天缺口的时间窗会落在错误的一天 ⇒ 恒查不到
+		// ⇒ 事件被判「不可见」⇒ 缺口永远无法消解 ⇒ 阻塞 ResumeAcquire ⇒ 源暂停。
+		daySource := source
+		daySource.UTCDay = day
+		batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, gens, byDay[day])
 		if qerr != nil {
 			slog.Warn("缺口消解前核对 VL 可见性失败：本轮不消解任何缺口（下轮重试）",
 				"source", source.LogSourceID, "utcDay", day, "error", qerr)
@@ -231,3 +239,10 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 	}
 	return out, nil
 }
+
+// errProjectionBeyondHotRetention 表示「本批写入面全部超出热层保留期，注定不可发布」。
+//
+// 与「写入失败」区分开：这不是 VL 出错，而是**本批数据在热层不可能可见**。
+// 调用方必须把它当作「未投递」处理——**不得**推进 Delivery 水位、不得建回收证明，
+// 否则会把「从未进入 VL 的区间」标成已有副本，随后 reclaim 越过后 WAL 条目被剪。
+var errProjectionBeyondHotRetention = errors.New("ingest: projection write face entirely beyond hot retention")

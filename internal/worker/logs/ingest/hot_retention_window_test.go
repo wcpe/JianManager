@@ -675,3 +675,103 @@ func TestEvidenceFaceEqualsActuallyWrittenEvents(t *testing.T) {
 	require.Equal(t, 0, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
 		"反证：用权威全量做证据时缺口确实会被消解，说明本用例能区分两种证据面")
 }
+
+// TestDeliverEvidenceFaceResolvesWhenDataIsActuallyInVL 是上一条用例的**正向配对**。
+//
+// 为什么必须有这一条：只测「查不到 ⇒ 不消解」，无法区分「判定正确」与「永远不消解」。
+// 若 `landedVisibleInVL` 因任何原因（时间窗夹错天、代次白名单取错、过度保守）
+// 恒返回空集，反向用例依然全绿，而生产上缺口会永久滞留 ⇒ 阻塞 `ResumeAcquire`
+// ⇒ 源被暂停（这正是 `gap_autoresolve.go` 文件头描述的 13 小时零数据形态）。
+//
+// 本用例让缺口事件**确实存在于 VL**（不删 fixture 数据），断言缺口被正常消解。
+// 它同时钉住一个具体缺陷：`verifyProjectionQuery` 会用 `utcDayBounds(source.UTCDay)`
+// 把时间窗夹在「源当前天」内，而缺口常属**别的天** ⇒ 若不把 `UTCDay` 设成事件所属天，
+// 时间窗就落在错误的一天、恒查不到 ⇒ 本用例转红。
+func TestDeliverEvidenceFaceResolvesWhenDataIsActuallyInVL(t *testing.T) {
+	now := time.Now()
+	_, boundaryDay, _ := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	// 注意：源的 UTCDay 是**今天**，而事件属于 boundaryDay（30 天前）——
+	// 两者不同正是本用例要覆盖的形态（生产上缺口也几乎总在历史天）。
+	require.NotEqual(t, source.UTCDay, boundaryDay, "夹具前提：源当前天必须与事件所属天不同")
+	events := []logtypes.Event{hotRetentionTestEvent(boundaryDay, 10, 20, "straddling boundary")}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	pipe, ok := m.pipeFor(key)
+	require.True(t, ok)
+	pipe.Ledger().Ensure(pipe.Key(), logtypes.SourceIdentity{
+		LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1",
+	})
+	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 10, 20, ledger.GapReasonDeliverError, "可见数据缺口夹具"))
+	require.Equal(t, 1, pipe.Ledger().UnresolvedGapCount(pipe.Key()), "夹具前提：缺口存在且未解决")
+
+	// **不删 fixture**：数据确实在 VL 里 ⇒ 该缺口应被正常消解。
+	_, err = m.deliver(source, events, false)
+	require.NoError(t, err)
+
+	require.Equal(t, 0, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
+		"数据确实在 VL 里时，缺口必须被消解（否则缺口永久滞留 ⇒ 阻塞采集恢复）")
+	require.Greater(t, fixture.insertCount(), 0, "夹具前提：VL 里必须有数据")
+}
+
+// TestWriteFaceEntirelyBeyondRetentionMustFail 钉住「写入面被过滤为空时**不得**宣称成功」。
+//
+// 为什么这是红线（2026-10-21 复审发现的回归）：`writeDays` 被过滤为空后，按天循环一次
+// 都不跑（`written == nil`），而函数末尾仍会把 `PublicationPending` 清成 false 并返回
+// nil 错误。于是 `deliver` 认为投递成功 ⇒ `acquire.Pipeline` 调 `RecordHTTPResult`
+// 推进 `Delivery` 水位 ⇒ `releaseRecovery` 的 `Delivery >= to` 闸门放行 ⇒ 为**从未写入的
+// 区间**建副本证明 ⇒ `reclaim` 越过它 ⇒ `WAL.pruneReclaimed` 删条目 ⇒ 数据彻底消失，
+// 而账本写着「有副本」。
+//
+// 可达形态：源暂停 ≥ retention(30d) 后 `DeliverPending` 重放一个月前的 durable 条目，
+// 这批旧天会被整段过滤为空。加过滤之前它会去写入并校验失败（响亮的失败），
+// 加了过滤却没加这道闸，就变成「静默的成功」。
+//
+// 变异验证：去掉 `len(writeDays)==0 && len(events)>0` 那段闸 ⇒ 本用例转红
+// （err 变 nil、`PublicationPending` 被清成 false）。
+func TestWriteFaceEntirelyBeyondRetentionMustFail(t *testing.T) {
+	now := time.Now()
+	beyondDay, _, _ := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	// 只造**超窗口天**的事件：整批都会被过滤掉。
+	events := []logtypes.Event{hotRetentionTestEvent(beyondDay, 1, 10, "beyond window only")}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+	fixture.deleteDay(beyondDay)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	insertsBefore := fixture.insertCount()
+	_, written, err := m.writeProjectionPlan(source, events, "projection-allbeyond-1",
+		projectionWritePlan{Write: events, Replace: true})
+
+	require.ErrorIs(t, err, errProjectionBeyondHotRetention,
+		"写入面全部超窗口时必须返回哨兵错误，绝不能返回 nil（nil 会让上游推进投递水位）")
+	require.Empty(t, written, "没有写入任何事件")
+	require.Equal(t, insertsBefore, fixture.insertCount(), "确实一次都没写")
+
+	m.mu.Lock()
+	pending := m.state.Sources[key].PublicationPending
+	m.mu.Unlock()
+	require.True(t, pending,
+		"必须保持 PublicationPending=true：什么都没写就不能宣称已发布")
+}

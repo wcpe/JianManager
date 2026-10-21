@@ -5910,6 +5910,28 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 		}
 	}
 	result := pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}
+	// **全空硬闸（2026-10-21 复审发现的回归，红线级）**：热层过滤把 `writeDays` 清空时，
+	// 下面的循环一次都不跑（`written == nil`），但函数会继续走到末尾把
+	// `PublicationPending` 清成 false 并**返回 nil 错误** ⇒ `deliver` 认为投递成功
+	// ⇒ `acquire.Pipeline` 据此调 `RecordHTTPResult` 推进 `Delivery` 水位
+	// ⇒ `releaseRecovery` 的 `positions.Delivery >= to` 闸门从此放行
+	// ⇒ 为**从未写入的区间**建副本证明 ⇒ `reclaim` 越过它 ⇒ `WAL.pruneReclaimed`
+	// 按 `Record.End <= Reclaim` 删条目 ⇒ **数据彻底消失，而账本写着「有副本」**。
+	//
+	// 为什么这不是理论风险：源暂停 ≥ retention（30d）后 `DeliverPending` 重放一个月前的
+	// durable 条目时，这批旧天会被整段过滤为空 —— 那正是「本地还有、VL 已不可能收」的形态。
+	// 加过滤之前该形态会去写入并**校验失败**（响亮的失败）；加了过滤却没加这道闸，
+	// 就把它变成了「静默的成功」。
+	//
+	// 语义：这不是「无事可做」，而是「本批注定不可发布」⇒ 必须返回错误、保持 pending，
+	// 让调用方**不要**推进投递水位。
+	if len(writeDays) == 0 && len(events) > 0 {
+		m.markPublicationPending(key, generation)
+		slog.Error("整窗写入面全部超出热层保留期：本批不可发布，拒绝宣称成功（保持发布待定）",
+			"source", source.LogSourceID, "generation", generation,
+			"events", len(events), "hotRetention", m.hotRetention)
+		return result, nil, errProjectionBeyondHotRetention
+	}
 	// 累积「真正写入并逐字段校验通过的事件集合」，作为第三个返回值交给调用方做证据面。
 	// 只累加**成功写完的那一天**：任何一天失败都会在下面 return err，调用方拿到的 err 优先。
 	var written []logtypes.Event
