@@ -431,6 +431,11 @@ type Manager struct {
 	reclaimStallMu     sync.Mutex
 	reclaimStallRounds map[string]int // ② 按源"回收停滞轮次"（reclaim 未前进的连续轮数 ✓）
 	reclaimStallLast   map[string]uint64
+	// blockedNoCopy 是「责任转移被拒：该区间还没有确认副本」的计数（2026-10-21 数据丢失修复）。
+	// 单独分账而不并入 blocked* 三类：那三类的语义都是"暂无可推进的区间"（无进展但不是缺陷），
+	// 而这一类是**本来会删掉未投递数据**的拒绝 ⇒ 必须能独立读出来，否则下次现场仍无法区分。
+	// 位置放在既有对齐块**之后**：插进块中间会让 gofmt 重排整块（纯噪声 diff ✗）。
+	blockedNoCopy atomic.Int64
 	// sweepRollingProbes / nsRolling（#66-⑤ 诊断，只读）：兜底环轮转窗口里**实际发起**的
 	// "只滚动/补段"自愈次数与耗时（前置是 O(1) 的"有欠账"判据 ⇒ 健康源不发起 ⇒ 本读数同时是
 	// **成本定界**的证明 ✓）。
@@ -7737,6 +7742,7 @@ type ReclaimRollingStats struct {
 	BlockedConfigHold     int64 // 配置层 hold（连补段都不做 ✓）
 	BlockedNoMaterial     int64 // 无"已确认但未覆盖"的区间（to <= from ✓）
 	BlockedWatermarkMoved int64 // 水位在复读窗口内变化（变则弃 ✓）
+	BlockedNoCopy         int64 // 责任转移被拒：该区间还没有确认副本（否则会删掉未投递数据 ✓）
 	BlockedStallWarns     int64 // ② N 轮无进展的告警次数 ✓
 }
 
@@ -7756,6 +7762,7 @@ func (m *Manager) ReclaimRollingStats() ReclaimRollingStats {
 		BlockedConfigHold:     m.blockedConfigHold.Load(),
 		BlockedNoMaterial:     m.blockedNoMaterial.Load(),
 		BlockedWatermarkMoved: m.blockedWatermark.Load(),
+		BlockedNoCopy:         m.blockedNoCopy.Load(),
 		BlockedStallWarns:     m.blockedStallWarns.Load(),
 	}
 	if last, _ := m.reclaimRollLast.Load().(ReclaimRollSnapshot); last.Steps > 0 || last.Advanced > 0 {
@@ -7810,6 +7817,8 @@ func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, sour
 		m.blockedNoMaterial.Add(1)
 	case "watermark-moved":
 		m.blockedWatermark.Add(1)
+	case "no-confirmed-copy":
+		m.blockedNoCopy.Add(1)
 	}
 	key := ""
 	if p != nil {
@@ -7967,6 +7976,29 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event) 
 	positions, ok := p.Positions()
 	if !ok {
 		return fmt.Errorf("ingest: missing ledger positions for %s", key)
+	}
+	// **责任转移的前置判据：该区间必须已有「确认副本」**（2026-10-21 数据丢失修复）。
+	//
+	// 为什么必须有这道闸：本函数的全部语义都是「WAL 的责任已转移给 projection://<代次>」——
+	// 一旦段走到 RELEASED，`Ledger.tryReclaimLocked` 就会把 `Reclaim` 推到 `ref.CoversTo`
+	// （判据只看段状态，**不看投递水位**），随后 `WAL.pruneReclaimed` 按
+	// `Durable && Record.End <= Reclaim` 丢掉那些条目。也就是说：这里若在没有副本的情况下
+	// 建段，等于**当场把未投递的数据从 WAL 里删掉**，而且账本上还写着"有副本"。
+	//
+	// 现场形态（实测，`source=worker` 自源 + VL 端口不可达）：`acquire.Pipeline.Ingest` 的
+	// suppressRecursiveVL 分支为避免"失败日志再写回 VL"而 `return nil`，投递失败因此被上层
+	// 读成成功 ⇒ 走到本函数 ⇒ 为**从未写入 VL、也不在 canonical 集合里**的区间建段并置
+	// CLEANED ⇒ `reclaim` 越过它 ⇒ WAL 条目被剪 ⇒ 事件彻底消失（数据丢失）。
+	//
+	// 判据取 `Delivery >= to`（`to` 是本批实际投递面末端）：`RecordHTTPResult` 只在投递
+	// 成功后由 `acquire.Pipeline` 调用，故它恰好等价于"这段确实落地过"。不满足即**什么都不做**：
+	// 不建段、不推进、不报错 —— 条目留在 WAL，由维护环的投递欠账步（`Delivery < Read` 时
+	// 触发 `DeliverPending`）在 VL 恢复后重投。返回 nil 而不返回错误是刻意的：调用点
+	// （worker 自源）正是为了避免"失败 -> 记日志 -> 又被自己采集"的递归才吞掉投递错误的，
+	// 这里再抛错会把同一条递归链重新接上。
+	if positions.Delivery < to {
+		m.noteReclaimBlocked("no-confirmed-copy", p, source)
+		return nil
 	}
 	// #61-Z-a：投递确认点补段（共用助手，见 repairStalledReclaim）：先探一次回收，只有被"无段覆盖"
 	// 拒才按"已确认投递水位"补段 ⇒ 把滞回链的根因当场解掉 ✓；再走下面原有的"本批区间"责任转移链
@@ -10534,7 +10566,8 @@ func (m *Manager) noteReclaimStall(p *pipeline.Pipeline, source SourceConfig, po
 			"logSourceID", source.LogSourceID, "rounds", rounds,
 			"read", pos.Read, "durable", pos.Durable, "delivery", pos.Delivery, "reclaim", pos.Reclaim,
 			"blocked_seg_hold", m.blockedSegHold.Load(), "blocked_config_hold", m.blockedConfigHold.Load(),
-			"blocked_no_material", m.blockedNoMaterial.Load(), "blocked_watermark_moved", m.blockedWatermark.Load())
+			"blocked_no_material", m.blockedNoMaterial.Load(), "blocked_watermark_moved", m.blockedWatermark.Load(),
+			"blocked_no_confirmed_copy", m.blockedNoCopy.Load())
 	}
 }
 

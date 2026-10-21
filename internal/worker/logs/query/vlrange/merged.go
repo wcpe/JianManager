@@ -312,10 +312,24 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 			}
 			for _, ev := range segment.Items {
 				if prev, ok := seenHash[ev.EventID]; ok {
-					duplicated = true
 					if prev == ev.CanonicalHash {
+						// 同 id 同哈希 = 内容完全一致的纯重复副本：下面直接丢弃，用户看到的
+						// 结果没有任何歧义 ⇒ 按「不谎报未对账」的取向**不得**降级质量，
+						// 否则普通重复行就会把导出门闸误封（与单 range 路径 client.go 的
+						// searchPage 同口径：只有「同 id 异哈希」才算歧义）。
+						//
+						// 为何本分支在本层实际不可达（2026-10 核实）：canonical_content_hash
+						// 由 (event_time, level, stream, message) 哈希而来，含事件时间 ⇒ 同哈希
+						// 必然同一时刻；而滑段窗口是首尾相接的 [start,end)（windowParams），
+						// 同一时刻不可能落进两段，段内又已被 searchPage 按 id+哈希去重。
+						// 唯一可达的退化情形是「canonical_content_hash 字段缺失导致两行哈希
+						// 都是空串」——此时与单 range 路径行为一致：静默丢弃，同样不降级。
 						continue
 					}
+					// 同 id 异哈希 = 内容已分歧却共用同一事件身份（同一 record 区间被解析出
+					// 不同内容/时间），属无法判定真伪的歧义副本：两条都要保留给上层归因，
+					// 但质量必须降级，不得对外宣称 exact。
+					duplicated = true
 				}
 				seenHash[ev.EventID] = ev.CanonicalHash
 				out.Items = append(out.Items, ev)
@@ -364,8 +378,9 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	out.Exhausted = exhausted
 	out.DuplicateQuality = query.DupExact
 	if duplicated {
-		// 跨 range 并集出现同 id 多哈希：不得对外宣称 exact（与逐 range 路径
-		// 「任一 partial → unresolved」的保守取向一致）。
+		// 跨 range 并集出现**同 id 异哈希**：内容已分歧却共用同一事件身份，两份都保留在
+		// 结果里、且无法判定哪份为真，故不得对外宣称 exact（与单 range 路径
+		// client.go 的判据逐字同源：同 id 同哈希的纯重复不降级）。
 		out.DuplicateQuality = query.DupUnresolved
 	}
 	out.StatsQuality = query.StatsExact

@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
@@ -938,3 +939,117 @@ func TestLogSearch_RealQueryService_ProtocolMismatchCaps(t *testing.T) {
 
 // 编译期断言：Service 满足 workerpb.WorkerServiceServer 子集（嵌入 Unimplemented）。
 var _ workerpb.WorkerServiceServer = (*Service)(nil)
+
+// 归档任务状态映射：archive.TaskState 的取值自带 LOG_TASK_ 前缀，RPC 边界必须
+// 剥掉前缀后再匹配。只认裸值时带前缀的取值会全部落入 default → 成功回灌被报成
+// FAILED 且 error 为空，调用方无法用 state 判定成功。
+//
+// 转红方式（实测）：删掉 taskStateFromString 里的 strings.TrimPrefix 归一化，
+// 全部带前缀用例立刻红；恢复后转绿。
+func TestTaskStateFromString_AllTaskStates(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want workerpb.LogTaskState
+	}{
+		// 全部 archive.TaskState 常量（带前缀形态，生产路径的真实取值）。
+		{"archive.TaskQueued", string(archive.TaskQueued), workerpb.LogTaskState_LOG_TASK_QUEUED},
+		{"archive.TaskRunning", string(archive.TaskRunning), workerpb.LogTaskState_LOG_TASK_RUNNING},
+		{"archive.TaskSucceeded", string(archive.TaskSucceeded), workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
+		{"archive.TaskFailed", string(archive.TaskFailed), workerpb.LogTaskState_LOG_TASK_FAILED},
+		{"archive.TaskCancelled", string(archive.TaskCancelled), workerpb.LogTaskState_LOG_TASK_CANCELLED},
+		// STALE 覆盖超时/租约过期，必须落到专门枚举，不能被吞成 FAILED。
+		{"archive.TaskStale", string(archive.TaskStale), workerpb.LogTaskState_LOG_TASK_STALE},
+
+		// 裸值形态（历史调用方/测试仍在传），剥前缀后语义必须一致。
+		{"bare/QUEUED", "QUEUED", workerpb.LogTaskState_LOG_TASK_QUEUED},
+		{"bare/RUNNING", "RUNNING", workerpb.LogTaskState_LOG_TASK_RUNNING},
+		{"bare/SUCCEEDED", "SUCCEEDED", workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
+		{"bare/SUCCESS", "SUCCESS", workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
+		{"bare/FAILED", "FAILED", workerpb.LogTaskState_LOG_TASK_FAILED},
+		{"bare/CANCELLED", "CANCELLED", workerpb.LogTaskState_LOG_TASK_CANCELLED},
+		{"bare/CANCELED", "CANCELED", workerpb.LogTaskState_LOG_TASK_CANCELLED},
+		{"bare/STALE", "STALE", workerpb.LogTaskState_LOG_TASK_STALE},
+
+		// 大小写与首尾空白容错。
+		{"normalize/lower-prefixed", " log_task_succeeded ", workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
+		{"normalize/lower-bare", "stale", workerpb.LogTaskState_LOG_TASK_STALE},
+
+		// fail-closed：无法识别（含空值、重复前缀）仍归 FAILED，不得凭空报成功。
+		{"unknown/empty", "", workerpb.LogTaskState_LOG_TASK_FAILED},
+		{"unknown/garbage", "NOPE", workerpb.LogTaskState_LOG_TASK_FAILED},
+		{"unknown/double-prefix", "LOG_TASK_LOG_TASK_SUCCEEDED", workerpb.LogTaskState_LOG_TASK_FAILED},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, taskStateFromString(tc.in))
+		})
+	}
+
+	// 反向不变式：每个 archive 常量映射出来的枚举名必须与它自身**同名**。
+	// 这条断言让「archive 新增状态但忘记映射」必然转红，而不是静默落 FAILED。
+	for _, state := range []archive.TaskState{
+		archive.TaskQueued, archive.TaskRunning, archive.TaskSucceeded,
+		archive.TaskFailed, archive.TaskCancelled, archive.TaskStale,
+	} {
+		got := taskStateFromString(string(state))
+		require.Equal(t, string(state), got.String(), "archive 状态 %q 应映射到同名 proto 枚举", state)
+	}
+
+	// 重点回归：成功不得被报成失败（缺陷原貌）。
+	require.Equal(t, workerpb.LogTaskState_LOG_TASK_SUCCEEDED, taskStateFromString(string(archive.TaskSucceeded)))
+	require.NotEqual(t, workerpb.LogTaskState_LOG_TASK_FAILED, taskStateFromString(string(archive.TaskStale)),
+		"STALE 有专门枚举，不能被吞成 FAILED")
+}
+
+// fakeArchiveQuerier 在 fakeQuery 之上补出 ArchiveQuerier 扩展。
+type fakeArchiveQuerier struct {
+	fakeQuery
+	taskID string
+	state  string
+	err    *query.QueryError
+}
+
+func (f *fakeArchiveQuerier) Rehydrate(context.Context, query.QueryRequest, []string) query.ArchiveTaskResponse {
+	return query.ArchiveTaskResponse{TaskID: f.taskID, State: f.state, Err: f.err}
+}
+
+func (f *fakeArchiveQuerier) ArchiveStatus(context.Context, query.QueryRequest, []string) query.ArchiveStatusResponse {
+	return query.ArchiveStatusResponse{}
+}
+
+// LogRehydrate 端到端回归：archive 侧回带前缀的成功状态时，RPC 响应必须是
+// SUCCEEDED 且 error 为空——否则调用方拿到的 {"state":3} 看起来像失败。
+func TestLogRehydrate_PrefixedStateSurvivesRPCMapping(t *testing.T) {
+	cases := []struct {
+		name  string
+		state archive.TaskState
+		want  workerpb.LogTaskState
+	}{
+		{"succeeded", archive.TaskSucceeded, workerpb.LogTaskState_LOG_TASK_SUCCEEDED},
+		{"running", archive.TaskRunning, workerpb.LogTaskState_LOG_TASK_RUNNING},
+		{"queued", archive.TaskQueued, workerpb.LogTaskState_LOG_TASK_QUEUED},
+		{"stale", archive.TaskStale, workerpb.LogTaskState_LOG_TASK_STALE},
+		{"cancelled", archive.TaskCancelled, workerpb.LogTaskState_LOG_TASK_CANCELLED},
+		{"failed", archive.TaskFailed, workerpb.LogTaskState_LOG_TASK_FAILED},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := New(&fakeArchiveQuerier{
+				taskID: "task-1",
+				state:  string(tc.state),
+			}, &fakeViews{})
+
+			resp, err := svc.LogRehydrate(context.Background(), &workerpb.LogRehydrateRequest{
+				ArchiveObjectIds: []string{"obj-1"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, "task-1", resp.GetTaskId())
+			require.Equal(t, tc.want, resp.GetState())
+			require.Nil(t, resp.GetError())
+		})
+	}
+}
+

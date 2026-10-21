@@ -858,22 +858,27 @@ func runWorker() {
 				if target != "cold" {
 					return fmt.Errorf("unsupported lifecycle target %s", target)
 				}
-				key := catalog.PartitionKey{StorageNamespace: namespace, UTCDay: day}
-				rec, ok := logStack.Catalog.Get(key)
-				if !ok {
-					return fmt.Errorf("log partition %s is not in Catalog", key)
-				}
-				if rec.Owner == catalog.OwnerCold {
-					return nil
-				}
-				if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned && rec.TargetOwner.Valid() {
-					return dayManager.Resume(day)
-				}
-				parsed, err := time.Parse("2006-01-02", day)
+				// 探针分流（见 lifecycle.ResolveMigrateTarget）：搬运单位是整天的物理分区，
+				// storageNamespace 只决定「这次调用允许开始吗」。前端节点级面板发的是
+				// `node:<节点ID>`，而 catalog 里该键只在配了 log_sources 节点自身日志源时才存在，
+				// 默认部署只有 `inst:<id>` 分区 ⇒ 精确键必然落空 ⇒ 按钮稳定 409。
+				// 精确键命中时行为不变；只有节点维度目标退化为「本节点该日是否已有分区」。
+				action, err := lifecycle.ResolveMigrateTarget(logStack.Catalog, namespace, day)
 				if err != nil {
 					return err
 				}
-				return dayManager.Start(day, catalog.OwnerCold, parsed.Format("20060102"))
+				switch action {
+				case lifecycle.MigrateActionSkip:
+					return nil
+				case lifecycle.MigrateActionResume:
+					return dayManager.Resume(day)
+				default:
+					parsed, err := time.Parse("2006-01-02", day)
+					if err != nil {
+						return err
+					}
+					return dayManager.Start(day, catalog.OwnerCold, parsed.Format("20060102"))
+				}
 			}))
 		}
 	}

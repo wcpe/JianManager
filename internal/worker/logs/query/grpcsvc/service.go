@@ -837,8 +837,20 @@ func unsupportedErr(msg string) *workerpb.LogError {
 	}
 }
 
+// taskStateFromString 把归档任务状态字符串映射为 proto 枚举。
+//
+// archive.TaskState 的取值自带 LOG_TASK_ 前缀（与 proto 枚举同名，见
+// archive/types.go），而历史调用方与测试也可能传裸值（QUEUED/SUCCEEDED…），
+// 因此这里**先剥前缀再匹配**，两种形态都认。
+// 此前只匹配裸值，带前缀的取值全部落入 default：成功回灌被报成 FAILED 且
+// error 为空，调用方无法用 state 判定成功。
+// 选在映射层归一化而不是改 archive 常量：TaskState 会随 RehydrateJob 的
+// `json:"state"` 出现在持久化快照里，改常量等于改那份表示；proto 枚举是外部契约，
+// 更不能动。无法识别的取值仍 fail-closed 归到 FAILED。
 func taskStateFromString(state string) workerpb.LogTaskState {
-	switch strings.ToUpper(strings.TrimSpace(state)) {
+	// 只剥一层：`LOG_TASK_` 已是两种形态的唯一差异，多剥会把异常输入误判成合法值。
+	norm := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(state)), "LOG_TASK_")
+	switch norm {
 	case "QUEUED":
 		return workerpb.LogTaskState_LOG_TASK_QUEUED
 	case "RUNNING":

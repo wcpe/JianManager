@@ -164,13 +164,34 @@ func (p *VLRehydratePublisher) Publish(ctx context.Context, key PartitionKey, ev
 			maxEnd = value
 		}
 	}
+	// 第三键必须是「分区键」catalog.PartitionKey.String() = namespace/day，**不是**
+	// key.String()（archive.PartitionKey 的 String() 含 /g{generation}）。读取侧统一按
+	// catalog 分区键索引这个向量：query/planner.go 的 targetID 就是 catalog.PartitionKey.String()，
+	// ingest 侧 publishedClosedForSource 读的也是 ClosedVisibleSeq[key.String()]（同样由
+	// catalog.PartitionKey 求得）。HOT 发布（ingest/runtime.go publishSnapshot）写的也是同一个
+	// namespace/day，故这里必须与 HOT 同形；否则同一分区在 owner 切换前后第三键指向不同槽位，
+	// 而读取侧只会退回 "default" 兜底，把 Generation 隔离下的水位差异藏起来。
 	seq[catKey.String()], seq["default"] = maxEnd, maxEnd
+	// 继承既有 ConflictCount，不在此处新建为 0。
+	//
+	// 为什么必须继承：这个字段是 ingest 运行时按 StorageNamespace 汇总的派生值
+	// （identityConflictCount），archive 包没有任何途径重算它。而 Catalog 记录是按
+	// (namespace, utc_day) 唯一的**同一个槽位**——archive 迁移时 lifecycle.migratedProjection
+	// 已把 HOT 当时的计数原样带过来。若这里留空，就等于把「有重复日志待确认」的既有告警
+	// 抹成 exact：rehydrate 成功之后该分区会重新变为可查询
+	// （DefaultPartitionStatus 的 archiveRestored 条件此时全部成立），planner 直接读这个
+	// 字段判定 DupConflict 并据此禁用导出。故只继承——它宁可保留告警，也不会伪造「无冲突」。
+	inheritedConflicts := uint64(0)
+	if rec.PublishedProjection != nil {
+		inheritedConflicts = rec.PublishedProjection.ConflictCount
+	}
 	projection := &catalog.PublishedProjection{
 		ManifestVersion:          "manifest-" + projectionGeneration,
 		ProjectionGeneration:     projectionGeneration,
 		CoveredSourceGenerations: refs,
 		ClosedVisibleSeq:         seq,
 		CoverageComplete:         true,
+		ConflictCount:            inheritedConflicts,
 		QueryLocationDirID:       rec.OwnerDirID,
 		QueryGeneration:          rec.Generation,
 		ProjectionGenerations:    []string{projectionGeneration},

@@ -151,7 +151,7 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 	}
 	// 安全约束（2026-10-19）：实例日志路径必须落在实例自己的 WorkDir 之内。
 	// 在校验**生效后**的位置做，两条来源（CP proto 字段与心跳 path_overrides）一并覆盖。
-	if err := validateInstanceRelativePath(binding.RelativePath); err != nil {
+	if err := validateInstanceRelativePath(binding.WorkDir, binding.RelativePath); err != nil {
 		return err
 	}
 	if !binding.Mode.Valid() {
@@ -669,9 +669,9 @@ func (m *Manager) rollbackRegisterSources(keys []string) {
 	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图
 }
 
-// validateInstanceRelativePath 校验实例级日志路径（安全约束，2026-10-19）。
+// validateInstanceRelativePath 校验实例级日志路径（安全约束，2026-10-19；链接兜底 2026-10-22）。
 //
-// 口径：**必须是相对实例 WorkDir 的路径**，且折叠 `..` 后不得逃出 WorkDir。
+// 口径：**必须是相对实例 WorkDir 的路径**，且折叠 `..`、解析链接之后都不得逃出 WorkDir。
 //
 // 为什么不再允许绝对路径：`log.acq.path_overrides` 由 CP 经心跳下发，语义是「该实例的日志
 // 文件在它自己工作目录里的哪一处」。放行绝对路径时，持有 `settings.write` 的人可以把任意
@@ -679,12 +679,33 @@ func (m *Manager) rollbackRegisterSources(keys []string) {
 // CP 与 Worker 分属不同信任域，Worker 不应无条件信任下发来的物理路径。项目内同类守卫的
 // 既有口径见 service/storage.go（拒绝绝对路径 + 二次 Rel 确认不逃出根）。
 //
+// 为什么还要解析链接（字符串判据的**物理层**缺口）：字符串只能证明「字面路径」在目录内，
+// 证明不了「打开动作实际落到哪」。采集侧打开文件是裸 `os.Open`（acquire/tailer.go 与
+// archive.go），既不带 O_NOFOLLOW、也不先 EvalSymlinks ⇒ 打开动作会跟随链接，工作目录里
+// 一个 `logs/latest.log -> /etc/shadow` 就能让字符串判据全部通过而物理读越界。这与
+// validateWorkDir 拒绝软链工作目录是**同一判据面**（那里的注释已写明「打开动作同样会跟随
+// 它读到约定位置之外的文件」），此前只堵了工作目录本身、没堵目录内的路径，属同一不变量
+// 的缺口。注意规则默认路径（bukkit/waterfall/velocity 的 `logs/latest.log`）本就落在这一面
+// 上：**不需要任何 path_overrides**，只要有人能往工作目录里放一个链接就成立，因此不能因为
+// 「覆盖项只由 settings.write 掌管」就降低本判据的必要性。
+//
 // 空串合法：表示「用规则默认」（Lookup(RuleKey).LiveRelative，内置规则均为相对路径）。
-func validateInstanceRelativePath(rel string) error {
+//
+// 判据分三层，缺一层就有一种绕过面：①**宿主语义**字符串层（本机 filepath，GOOS 绑定）；
+// ②**跨方言**字符串层（POSIX 与 Windows 各判一次，见 pathDialect——补的是「Linux 上判不出
+// Windows 形态」这一可测性缺口，也是 CP 与节点结论一致性的保证）；③**物理落点**层
+// （validateNoLinkEscape，补的是链接跟随）。
+//
+// 三层**都是拒绝条件、取并集**：任一命中即拒绝，都不命中才放行。因此新增后两道绝不会放松
+// 第一道（原 filepath 判据逐字保留）。①② 是纯字符串判定、不碰文件系统，故 workDir 为空也
+// 能判；③ 需要比对基准，只在 workDir 非空时执行。
+func validateInstanceRelativePath(workDir, rel string) error {
 	trimmed := strings.TrimSpace(rel)
 	if trimmed == "" {
 		return nil
 	}
+	// 第一道：宿主语义（原有判据，逐字保留）。这是本机真实生效的那一道，
+	// 不得因下面的跨方言判据而弱化或删除。
 	if filepath.IsAbs(filepath.FromSlash(trimmed)) {
 		return fmt.Errorf("ingest: 实例日志路径须为相对实例工作目录的路径，不接受绝对路径：%q", rel)
 	}
@@ -692,7 +713,188 @@ func validateInstanceRelativePath(rel string) error {
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("ingest: 实例日志路径不得逃出实例工作目录：%q", rel)
 	}
+	// 第二道：与宿主无关的跨方言判据（2026-10-21 补）。
+	//
+	// 为什么必须有这一道：上面那道只看得见**编译期 GOOS**。同一份下发的覆盖值，
+	// Linux 节点上 `C:\logs\a.log`、`..\..\etc\passwd` 会被 `filepath` 判成「合法相对路径」
+	// （反斜杠在 POSIX 里只是普通字符），到了 Windows 节点上却被判绝对/逃逸而拒绝登记，
+	// 表现为「CP 保存成功、实例日志登记失败」或反过来的静默不采。判据若只跟宿主走，
+	// 两端结论就永远可能不一致，而这条路恰恰无法在本机取证（见下方 pathDialect 注释）。
+	//
+	// 方向性：这里对两套方言各判一次、**任一**判为绝对/带卷名/逃逸即拒绝，即只会比原
+	// 判据更严（并集），任何时候都不会放松逃逸防护。代价是 Linux 节点上形如
+	// `C:foo.log` 或 `logs\..\..\x` 的字面文件名也被拒——这类名字在 Windows 上根本
+	// 无法存在，跨平台不可移植，拒绝比「一半平台能跑」更可预期。
+	//
+	// 位置说明：必须排在下面的 workDir 空分支**之前**——本层是纯字符串判定，没有比对
+	// 基准也能得出结论；若放到链接兜底之后，workDir 为空的调用点就会整层跳过。
+	if isAbsWindows(trimmed) {
+		return fmt.Errorf("ingest: 实例日志路径须为相对实例工作目录的路径，不接受 Windows 绝对路径（盘符或 UNC）：%q", rel)
+	}
+	if hasWindowsVolume(trimmed) {
+		return fmt.Errorf("ingest: 实例日志路径不得带 Windows 盘符或 UNC 卷名：%q", rel)
+	}
+	for _, d := range []pathDialect{dialectPOSIX, dialectWindows} {
+		if escapesRoot(trimmed, d) {
+			return fmt.Errorf("ingest: 实例日志路径不得逃出实例工作目录（按 %s 分隔符语义）：%q", d.name, rel)
+		}
+	}
+	// 第三道：物理落点（2026-10-22 补）。前两道都是字符串判据，只能证明「字面路径」在目录内；
+	// 这一道才证明「打开动作落到哪」——采集侧是裸 os.Open（acquire/tailer.go、archive.go），
+	// 会跟随链接，缺了这一道就等于「字符串合法、物理越界」仍可读宿主机任意文件。
+	// workDir 为空时没有比对基准，只能由调用点保证（登记路径必带 WorkDir，见
+	// RegisterInstance 的入参校验），故此处跳过而不是拒绝。
+	if strings.TrimSpace(workDir) == "" {
+		return nil
+	}
+	// 用**宿主语义** Clean 出的 clean 去查落点：那正是 os.Open 实际会打开的字面路径。
+	return validateNoLinkEscape(filepath.Clean(workDir), clean)
+}
+
+// validateNoLinkEscape 补齐「物理落点仍在 root 内」这一判据（rel 已过字符串层校验）。
+//
+// 为什么先探链接再决定要不要解析：绝大多数实例路径上根本没有链接，firstReparseLink 不命中时
+// 只花几个 Readlink 系统调用即可放行，不必让常规情形去付 EvalSymlinks 的代价（本函数经
+// instanceLivePath 出现在生效布局比较路径上，不是热路径但也不该做多余 I/O）。
+func validateNoLinkEscape(root, rel string) error {
+	abs := filepath.Join(root, rel)
+	// 整条链上没有链接级（Unix 符号链接 / Windows 符号链接或 junction）⇒ 打开动作不可能
+	// 离开字面路径，字符串层判据已够。firstReparseLink 对不存在的级只返回错误、不中断扫描，
+	// 故「路径尚未创建」与「无链接」在这条快路径上等价：两者都无链接可跟随。
+	link, target, hasLink := firstReparseLink(abs)
+	if !hasLink {
+		return nil
+	}
+	// 最近的**已存在**祖先：日志文件通常尚未创建，直接对整条路径 EvalSymlinks 会因 ENOENT
+	// 被误判成「解析失败」而把合法路径拦下来。链接只可能存在于已存在的级上，故从落点向上
+	// 找到第一个存在的级，即可覆盖全部可跟随的链接（不存在的级不可能有子级）。
+	probe := abs
+	for {
+		if _, statErr := os.Lstat(probe); statErr == nil {
+			break
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			break
+		}
+		probe = parent
+	}
+	resolvedProbe, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		// 确有链接却解析不出落点（悬空链接、链接环，或含 junction 的更深路径在 Windows 上
+		// 直接报错）⇒ 无法自证仍在目录内，拒绝。宁可让运维把链接换成真实目录，也不放行
+		// 一个 Worker 自己都算不出落点的路径。
+		return fmt.Errorf("ingest: 实例日志路径含无法解析的链接 %q（%q → %q）：%w", rel, link, target, err)
+	}
+	if resolvedProbe == probe {
+		// 确有链接但 EvalSymlinks 原样返回：Windows junction 的已知行为——junction 的 Lstat
+		// 报 ModeIrregular 而非 ModeSymlink，EvalSymlinks 既不解析它、也穿不过它（见
+		// validateWorkDir 注释）。落点无法确定 ⇒ 拒绝，与那里的口径保持逐字一致。
+		return fmt.Errorf("ingest: 实例日志路径含无法解析的链接 %q（%q → %q；Windows junction 不被 EvalSymlinks 解析）", rel, link, target)
+	}
+	// 工作目录**也**要解析后再比对：否则 `/var -> /private/var` 这类平台自身的链接（macOS
+	// 常见，t.TempDir 就在其下）会让两侧基准不同，把完全合法的路径全判成越界。
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		// 工作目录不存在：登记时 validateWorkDir 已拒绝软链工作目录，此处只剩「尚未创建」
+		// 这一种合理情形 ⇒ 其下不可能存在可跟随的链接，放行（与 validateWorkDir 同口径）。
+		return nil
+	}
+	// 二次 Rel 确认不逃出根——与 service/storage.go 的 safeAbs 同一判据写法。
+	relBack, err := filepath.Rel(resolvedRoot, resolvedProbe)
+	if err != nil || relBack == ".." || strings.HasPrefix(relBack, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("ingest: 实例日志路径经链接解析后逃出实例工作目录：%q（%q → %q）", rel, link, resolvedProbe)
+	}
 	return nil
+}
+
+// pathDialect 描述一套路径方言：分隔符集合 + 是否按 Windows 规则识别卷名。
+//
+// 为什么要把语义降级成「数据」而不是直接用 filepath：Go 的 path/filepath 在**编译期**
+// 按 GOOS 绑定实现，Linux 上跑 `go test` 拿到的永远是 POSIX 语义——`filepath.Clean` 会把
+// 反斜杠当普通字符，`..\..\etc\passwd` 因此被判「没有逃逸」。而生产上 Worker 可能落
+// Windows 节点，「Windows 下绝对路径是否被拒、`..\` 能否逃出工作目录」恰恰是最该有
+// 回归证据的一侧。把方言抽成数据后，同一份用例可在任一宿主上跑两种语义，Windows 判据
+// 不再只能靠真机取证。
+type pathDialect struct {
+	name    string // 仅用于报错文案，便于定位是哪套语义判红的
+	seps    string // 该方言视作路径分隔符的字节（Windows 同时认 `\` 与 `/`）
+	windows bool   // 是否按 Windows 规则识别卷名（盘符 / UNC / 设备前缀）
+}
+
+var (
+	dialectPOSIX   = pathDialect{name: "POSIX", seps: "/"}
+	dialectWindows = pathDialect{name: "Windows", seps: `/\`, windows: true}
+)
+
+// isSep 判定字节在本方言下是否为路径分隔符。
+func (d pathDialect) isSep(c byte) bool { return strings.IndexByte(d.seps, c) >= 0 }
+
+// isAbsWindows 按 Windows 语义判定绝对路径（纯字符串判定，不依赖宿主 GOOS）。
+//
+// 判据对齐 GOOS=windows 下的 filepath.IsAbs（见 Go 的 internal/filepathlite/path_windows.go）：
+//   - `C:\logs\a.log`、`C:/logs/a.log` → 绝对（盘符 + 分隔符）
+//   - `C:`、`C:relative`              → **不是**绝对路径（盘符相对），但带卷名，见 hasWindowsVolume
+//   - `\\server\share\x`、`//server/share/x` → 绝对（前两字节皆为分隔符 = UNC）
+//   - `\logs\a.log`                   → 不是绝对路径（Windows 的 IsAbs 对根相对路径返回 false）
+//
+// 唯一比 Windows 更严的例外：卷名成分为 `..` 的畸形串（如 `\\..\x`）在 Go 里卷名长度为 0、
+// IsAbs 为 false，这里判绝对。畸形输入只会因此更早被拒，方向安全。
+func isAbsWindows(p string) bool {
+	if p == "" {
+		return false
+	}
+	if len(p) >= 2 && dialectWindows.isSep(p[0]) && dialectWindows.isSep(p[1]) {
+		return true // UNC 或设备路径
+	}
+	if len(p) >= 2 && p[1] == ':' {
+		return len(p) > 2 && dialectWindows.isSep(p[2])
+	}
+	return false
+}
+
+// hasWindowsVolume 判定路径是否带 Windows 卷名（盘符或 UNC/设备前缀）。
+//
+// 为什么把「带卷名」与「是绝对路径」分开判：`C:relative`、`C:` 是**带卷名但不是绝对路径**
+// 的形态（相对当前盘的工作目录），Windows 的 IsAbs 对它们返回 false。可它们在任何情况下
+// 都不表达「实例工作目录内的一处」：CP 侧 isWindowsAbsPath 早已按 `X:` 前缀整体拒绝，
+// Worker 若放行就与 CP 判据不一致，用户会在 Windows 节点上看到「保存成功但实例日志
+// 登记失败」。这里对齐 CP，按前缀一律拒绝。
+//
+// 注：盘符位置不校验字母范围（与 Go 的 volumeNameLen 一致），非 ASCII 的多字节盘符在此
+// 只会被判为非卷名——那类输入仍会被下面的 POSIX/Windows 逃逸判据各过一遍。
+func hasWindowsVolume(p string) bool {
+	if len(p) >= 2 && p[1] == ':' {
+		return true
+	}
+	return len(p) >= 2 && dialectWindows.isSep(p[0]) && dialectWindows.isSep(p[1])
+}
+
+// escapesRoot 按方言判断相对路径折叠 `.`/`..` 后是否越过根（即逃出实例工作目录）。
+//
+// 为什么手写段游走而不再用 filepath.Clean：Clean 的语义绑定 GOOS，Linux 上
+// `..\..\etc\passwd` 里的反斜杠不参与分隔，Clean 后不带 `..\` 前缀，于是**放行**——
+// 而 Windows 节点上同一串 Clean 成 `..\..\etc\passwd`（前缀 `..\`）必须拒绝。
+// 段游走只把「分隔符集合」当参数，两种方言在任一宿主上都能判。
+//
+// 与 `filepath.Clean` + `..` 前缀比较**等价**（对相对路径而言）：深度一旦下穿到负即逃逸。
+// 故 `..`、`..\..\x`、`logs\..\..\x`、`../../etc/passwd` 均拒绝；`logs/../a.log`、
+// `logs\latest.log` 照常放行（后者的反斜杠在 Windows 上是合法分隔符，不得误伤）。
+func escapesRoot(p string, d pathDialect) bool {
+	depth := 0
+	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return strings.ContainsRune(d.seps, r) }) {
+		switch seg {
+		case ".": // 当前目录不改变深度
+		case "..":
+			depth--
+			if depth < 0 {
+				return true
+			}
+		default:
+			depth++
+		}
+	}
+	return false
 }
 
 // instanceLivePath 按绑定解析实例活动日志的绝对路径（FR-502）。
@@ -710,7 +912,7 @@ func validateInstanceRelativePath(rel string) error {
 // 注意：本函数只影响**物理路径发现**，不改变源标识（sourceID/StorageNamespace）。
 func instanceLivePath(binding InstanceBinding) string {
 	rel := binding.RelativePath
-	if rel == "" || validateInstanceRelativePath(rel) != nil {
+	if rel == "" || validateInstanceRelativePath(binding.WorkDir, rel) != nil {
 		rel = Lookup(binding.RuleKey).LiveRelative
 	}
 	return filepath.Join(binding.WorkDir, filepath.FromSlash(rel))
