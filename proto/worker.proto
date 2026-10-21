@@ -520,10 +520,15 @@ message InstanceMetricSample {
   // 字段号 24/25：13/14 已被预留的 motd/version 占用（spec 原稿写 13/14，实现按现状顺延）。
   int64 gc_count_total = 24;   // Σ serverprobe_gc_count_total{gc=...}
   double gc_time_millis = 25;  // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000
-  // 上方的 motd / version / max_players / player_names / plugins / map / source_mask /
+  // 上方的 motd / version / player_names / plugins / map / source_mask /
   // player_names_partial 是**预留字段**：实时详情链路（GetInstanceMetrics）已端到端提供这些值，
   // 而心跳时序链路（本消息）的 CP 消费者只用到可用位与 players_online；故 Worker 不再每拍填充，
   // 避免 69 实例规模下每 30s 的文本载荷放大（FR-446 审计项 3）。
+  //
+  // max_players 是例外：侧栏要显示「当前/最大人数」（FR-511），而批量的
+  // POST /metrics/series/batch 只能读到存好的时序序列。它是 int32、约 4 字节/实例/拍，
+  // 相比被排除的 motd/名单/插件/图标（KB 级）可忽略，因此本拍填充并由 CP 落 inst_players_max。
+  bool max_players_available = 26;  // max_players 本拍是否真实可用（三源皆无时 false → CP 落 NULL）
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。

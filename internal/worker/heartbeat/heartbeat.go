@@ -508,6 +508,11 @@ func fillInstanceMetricSample(sample *workerpb.InstanceMetricSample, tel *metric
 	sample.Tps = tel.TPS
 	sample.MsptMillis = tel.MSPTMillis
 	sample.PlayersOnline = tel.PlayersOnline
+	// 人数上限（FR-511）：侧栏要显示「当前/最大人数」，而批量指标接口只能读到存好的时序序列，
+	// 因此心跳必须携带。它是 int32（约 4 字节/实例/拍），不像 motd/名单/插件那样放大载荷，
+	// 因此不适用上方「预留给实时详情链路」的排除规则。可用位随值一起带，CP 据此落 NULL 而非伪造 0。
+	sample.MaxPlayers = tel.PlayersMax
+	sample.MaxPlayersAvailable = tel.PlayersMaxAvailable
 	// 在线人数可用位（FR-447）：Query 有响应但缺 numplayers 时为 false，CP 据此落 NULL 断点，
 	// 不把「协议未给出」写成 0 在线。
 	sample.PlayersOnlineAvailable = tel.PlayersOnlineAvailable

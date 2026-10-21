@@ -372,6 +372,15 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		} else {
 			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", nil))
 		}
+
+		// 人数上限（FR-511）：与在线人数同一套「可用才落点」口径，但**不做**上面那条兼容回退——
+		// 上限不像在线人数那样在三源里都必带（SLP 的 `players.max` 必带，Query 的 `maxplayers` 可缺，
+		// 探针不提供），回退会重新引入「伪造上限」。因此只看显式可用位。
+		if im.MaxPlayersAvailable {
+			samples = append(samples, instSample(model.MetricInstPlayersMax, "count", ptr(float64(im.MaxPlayers))))
+		} else {
+			samples = append(samples, instSample(model.MetricInstPlayersMax, "count", nil))
+		}
 	}
 
 	if err := s.Ingest(samples); err != nil {

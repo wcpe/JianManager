@@ -670,6 +670,31 @@ function rangePlan(range: string): { count: number; step: number } {
   }
 }
 
+/**
+ * 把 raw 点按 `bucketMs` 合并成预聚合桶（同桶求均值，与后端 rollup 的 `avg` 列同义）。
+ *
+ * `stepMs` 是原始采样间隔：真实后端读的是 rollup 表，而 mock 没有那张表，
+ * 只能就地聚合；两者对「桶内均值」的口径一致，因此前端看到的行为相同。
+ * 缺测（avg 为 null）的点不参与均值；整桶都缺测时输出 null，保持「缺测不是 0」的语义。
+ */
+function bucketPoints<T extends { avg: number | null }>(
+  points: T[],
+  bucketMs: number,
+  stepMs: number,
+): T[] {
+  if (bucketMs <= stepMs || points.length === 0) return points
+  const perBucket = Math.max(1, Math.round(bucketMs / stepMs))
+  const out: T[] = []
+  for (let i = 0; i < points.length; i += perBucket) {
+    const slice = points.slice(i, i + perBucket)
+    const values = slice.map((p) => p.avg).filter((v): v is number => v != null)
+    const avg = values.length > 0 ? values.reduce((a, b) => a + b, 0) / values.length : null
+    const first = slice[0]
+    if (first) out.push({ ...first, avg })
+  }
+  return out
+}
+
 const MIB = 1024 * 1024
 const GIB = 1024 * MIB
 
@@ -916,6 +941,8 @@ function instanceSeries(range: string) {
     mk('inst_heap_max', 'bytes', 4 * GIB, 0),
     mk('inst_threads', '', 80, 20),
     mk('inst_players_online', '', 12, 8),
+    // 在线人数上限（FR-511）：假数据固定 50，供「当前/最大」显示。
+    mk('inst_players_max', '', 50, 0),
     mk('inst_cpu_pct', '%', 42, 25),
     mk('world_loaded_chunks', '', 600, 200, 'world'),
     mk('world_loaded_chunks', '', 200, 80, 'world_nether'),
@@ -1230,17 +1257,28 @@ export const handlers = [
     }
     const range = body.range ?? '24h'
     const wanted = body.metrics
+    const resolution = body.resolution ?? 'auto'
     const { step } = rangePlan(range)
+    /*
+      【必须真的按 resolution 分档】后端 `queryPoints` 三档分别读 raw / rollup5m / rollup1h，
+      桶数 = 区间 ÷ 粒度。此前 devmock 只按 range 出点、完全忽略 resolution，
+      于是「1h + 5m」和「1h + raw」返回一样多的点——前端据此判断减小载荷的改动**在 mock 下
+      根本测不出来**（实测两者都是 575KB，是假象）。
+      这里只实现 5m 档（rollup5m）的等价语义：把同桶内的点求均值合并；1h 档同理放大桶宽。
+    */
+    const bucketMs = resolution === '1h' ? 3600_000 : resolution === '5m' ? 5 * 60_000 : 0
     const series: Record<string, ReturnType<typeof instanceSeries>> = {}
     let span = 0
     for (const id of targetIds) {
       const all = instanceSeries(range)
       const filtered = wanted?.length ? all.filter((s) => wanted.includes(s.metricKey)) : all
-      series[id] = filtered
+      series[id] = bucketMs > 0
+        ? filtered.map((s) => ({ ...s, points: bucketPoints(s.points, bucketMs, step) }))
+        : filtered
       span = Math.max(span, (filtered[0]?.points.length ?? 0) * step)
     }
     return HttpResponse.json({
-      resolution: 'raw',
+      resolution: bucketMs > 0 ? resolution : 'raw',
       from: iso(-span),
       to: iso(0),
       series,

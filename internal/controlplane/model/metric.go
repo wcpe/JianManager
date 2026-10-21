@@ -55,6 +55,9 @@ const (
 	MetricInstTPS           = "inst_tps"
 	MetricInstMSPT          = "inst_mspt"
 	MetricInstPlayersOnline = "inst_players_online"
+	// MetricInstPlayersMax 在线人数上限（FR-511）：来自 SLP `players.max` / Query `maxplayers`。
+	// 供侧栏与列表显示「当前/最大」；与 `inst_players_online` 成对消费，单看它会误导（重启后归零等）。
+	MetricInstPlayersMax = "inst_players_max"
 	MetricInstHeapUsed      = "inst_heap_used"
 	MetricInstHeapMax       = "inst_heap_max"
 	MetricInstThreads       = "inst_threads"

@@ -455,15 +455,35 @@ func TestFillInstanceMetricSampleTrimsUnconsumedFields(t *testing.T) {
 	assert.True(t, sample.SlpAvailable)
 	assert.True(t, sample.QueryAvailable)
 
-	// 预留字段不填充（减少每拍载荷）。
+	// 预留的文本类字段不填充（减少每拍载荷）。
 	assert.Empty(t, sample.Motd)
 	assert.Empty(t, sample.Version)
 	assert.Empty(t, sample.PlayerNames)
 	assert.Empty(t, sample.Plugins)
 	assert.Empty(t, sample.Map)
-	assert.Zero(t, sample.MaxPlayers)
 	assert.Empty(t, sample.SourceMask)
 	assert.False(t, sample.PlayerNamesPartial)
+
+	// 【契约变更·FR-511】max_players 不再是预留字段：侧栏要显示「当前/最大人数」，
+	// 而批量指标接口只能读到存好的时序，心跳必须携带它。它是 int32（约 4 字节/实例/拍），
+	// 与被排除的 motd/名单/插件/图标（KB 级）不在一个量级，因此不受「减少载荷」约束。
+	assert.Equal(t, int32(20), sample.MaxPlayers)
+	assert.True(t, sample.MaxPlayersAvailable)
+}
+
+// TestFillInstanceMetricSample_MaxPlayersUnavailable 三源都没有人数上限时，
+// 可用位必须为 false —— CP 据此落 NULL 断点，绝不把缺测写成「上限 0 人」。
+func TestFillInstanceMetricSample_MaxPlayersUnavailable(t *testing.T) {
+	tel := metrics.Orchestrate(
+		&metrics.ProbeSnapshot{TPS: 19.5, PlayersOnline: 7},
+		nil,
+		nil,
+	)
+	sample := &workerpb.InstanceMetricSample{InstanceUuid: "u1"}
+	fillInstanceMetricSample(sample, tel)
+
+	assert.Zero(t, sample.MaxPlayers)
+	assert.False(t, sample.MaxPlayersAvailable, "缺测时可用位为 false，CP 落 NULL")
 }
 
 // TestCollectInstanceMetrics_SkipsNonProbeInstances FR-454：探针不适用（代理/通用二进制/Beacon）
