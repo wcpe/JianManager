@@ -27,6 +27,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -365,8 +366,20 @@ func TestMixedRebuildKeepsBeyondWindowGapsVisible(t *testing.T) {
 	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 1, 10, ledger.GapReasonDeliverError, "超窗口天缺口夹具"))
 	gapsBefore := pipe.Ledger().UnresolvedGapCount(pipe.Key())
 	require.Equal(t, 1, gapsBefore)
+
+	// **关键夹具**：把 Delivery 顶到权威全量末端（=30），让 `releaseRecovery` 的
+	// `positions.Delivery < to` 闸门**放行**。
+	//
+	// 为什么必须这样造：生产上受影响的源正是 `delivery == read`（这些天一个月前确实
+	// 投递成功过），闸门在真实场景里**挡不住**。若不顶高 Delivery，本用例会因为闸门
+	// 早退而「平凡通过」——那样的断言咬不住「为超窗口天建副本证明」这个真实缺陷。
+	require.NoError(t, pipe.WAL().RecordHTTPResult(acquire.DeliveryResult{
+		StartPos: 0, EndPos: 30, HTTPStatus: 200,
+	}))
 	positionsBefore, okPos := pipe.Ledger().Positions(pipe.Key())
 	require.True(t, okPos)
+	require.GreaterOrEqual(t, positionsBefore.Delivery, uint64(30),
+		"夹具前提：Delivery 必须已达权威全量末端，否则 releaseRecovery 会因闸门早退（平凡通过）")
 	reclaimBefore := positionsBefore.Reclaim
 
 	insertsBefore := fixture.insertCount()
@@ -402,4 +415,58 @@ func TestMixedRebuildKeepsBeyondWindowGapsVisible(t *testing.T) {
 	reclaimAfter := positionsAfter.Reclaim
 	require.LessOrEqual(t, reclaimAfter, uint64(10),
 		"回收不得越过从未在热层发布的超窗口天区间（reclaim %d → %d）", reclaimBefore, reclaimAfter)
+}
+
+// TestNonConfirmPathDoesNotClearPendingForBeyondWindowOnly 钉住「非确认路径不得清 pending」。
+//
+// 为什么必须单独一条：非确认路径（`reconcile_missing` 走 `scheduleRebuildAsync`，
+// `confirmPending=false`）登记的是对账算出的缺失天，不经发布确认取证。若这种请求的天
+// 恰好全落在超窗口内，就不能把 pending 归因给它们——pending 可能来自**窗口内某天的真实
+// 写入失败**，清掉等于把「不确定」谎报成「确定」（数据诚实性红线）。
+//
+// 与 `TestRebuildAllDaysBeyondHotRetentionSettlesPending`（确认路径）互为对照：
+// 两条路径对同一个「全部超窗口」形态必须有**不同**的 pending 处置。
+func TestNonConfirmPathDoesNotClearPendingForBeyondWindowOnly(t *testing.T) {
+	now := time.Now()
+	beyondDay, _, _ := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	events := []logtypes.Event{hotRetentionTestEvent(beyondDay, 1, 10, "lost beyond window")}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	// pending 置真，模拟「窗口内某天的真实写入失败」留下的发布待定。
+	fixture.deleteDay(beyondDay)
+	m.mu.Lock()
+	st := m.state.Sources[key]
+	st.PublicationPending = true
+	m.state.Sources[key] = st
+	m.mu.Unlock()
+
+	// **非确认路径**：scheduleRebuildAsync ⇒ confirmPending=false。
+	okSchedule, reason := m.scheduleRebuildAsync(source, []string{beyondDay}, "reconcile_missing")
+	require.True(t, okSchedule, "登记必须被接受：%s", reason)
+	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+
+	m.mu.Lock()
+	pending := m.state.Sources[key].PublicationPending
+	m.mu.Unlock()
+	require.True(t, pending,
+		"非确认路径下，全部超窗口的天不得清 PublicationPending（可能掩盖窗口内天的真实失败）")
+
+	// 如实记账仍然要有：跳过必须可见，不能静默。
+	out, hasOut := m.RebuildLastResult(key)
+	require.True(t, hasOut)
+	require.NoError(t, out.Err, "跳过不是失败")
+	require.Equal(t, []string{beyondDay}, out.BeyondHotRetention, "被跳过的天必须如实记录")
+	require.Empty(t, out.Days, "超窗口的天绝不能被记成「已发布」")
 }

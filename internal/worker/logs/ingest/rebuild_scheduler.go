@@ -796,6 +796,20 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		}
 		// 本次请求覆盖的全部天都超出热层保留期：给这件事一个**明确终态**
 		// （清 pending、如实记账、绝不宣称已发布，也绝不解算缺口）。
+		//
+		// **成因校验（2026-10-21 复审加固）**：只有当本次请求**确实**只覆盖超窗口天、
+		// 且路径是「发布确认取证」（`confirmPending`）时，才允许把 pending 归因到它们。
+		//
+		// 为什么必须限定 `confirmPending`：非确认路径（`reconcile_missing` 走
+		// `scheduleRebuildAsync`）登记的是对账算出的缺失天，那些天已经过窗口过滤、
+		// 不可能全是超窗口天。若将来窗口配置变化使这条前提不成立，pending 可能是由
+		// **窗口内某天的真实写入失败**设置的 —— 那时清掉等于把「不确定」谎报成「确定」
+		// （数据诚实性红线）。故非确认路径一律不清 pending，只如实记账交给下一轮。
+		if !req.confirmPending {
+			slog.Warn("投影重建登记的天全部超出热层保留期（非确认路径，不清 PublicationPending，留待下一轮）",
+				"source", key, "reason", req.reason, "beyondHotRetentionDays", beyondWindow)
+			return rebuildOutcome{BeyondHotRetention: beyondWindow, Pending: true}
+		}
 		return m.finishRebuildBeyondHotRetention(key, beyondWindow)
 	}
 	if len(beyondWindow) > 0 {
@@ -900,6 +914,27 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		return out
 	}
 	m.resolveGapsLandedByDelivery(req.source, writeEvents)
+	if len(beyondWindow) > 0 {
+		// **有跳过天 ⇒ 整窗并未完成，绝不推进回收责任**（2026-10-21 复审发现的缺陷）。
+		//
+		// 为什么不能调 `releaseRecovery`：它取 `to = events[len-1].Record.End`（**权威全量的末端**），
+		// 建的是**单个连续区间** `[Reclaim, to]`，并宣称「WAL 责任已转移给 projection://<代次>」。
+		// 超窗口天的位置更早（文件偏移更小），**必然落在这个连续区间内** —— 于是等于为
+		// 「从未在热层发布」的区间建了副本证明。随后 `tryReclaimLocked` 会把 `Reclaim` 推到
+		// `CoversTo`（只看段状态、不看投递水位），`WAL.pruneReclaimed` 按 `Record.End <= Reclaim`
+		// 丢掉条目，而账本上仍写着「有副本」。
+		//
+		// 注意生产上**既有那道 `positions.Delivery < to` 闸门挡不住**：本次受影响的源正是
+		// `delivery == read`（这些天一个月前确实投递成功过），`Delivery >= to` 成立 ⇒ 会继续建段。
+		// 故必须在此显式拦住，而不是依赖下游判据。
+		//
+		// 这与本函数头部的契约一致：「整窗完成（本次请求覆盖的全部天都已发布）」才走尾部收口。
+		// 跳过天不阻塞账本，缺口继续可见（`resolveGapsLandedByDelivery` 只覆盖实际写入面）。
+		slog.Warn("投影重建有跳过天，未推进回收责任（整窗未完成；WAL 责任保留在原处）",
+			"source", key, "reason", req.reason,
+			"publishedDays", out.Days, "beyondHotRetentionDays", beyondWindow)
+		return out
+	}
 	if err := m.releaseRecovery(req.source, events); err != nil {
 		// best-effort：数据已落库这一事实不受影响，下一轮采集路径会再试。
 		slog.Warn("投影重建后推进回收责任失败（下轮重试）", "source", key, "error", err)
