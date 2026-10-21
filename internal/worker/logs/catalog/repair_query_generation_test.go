@@ -12,6 +12,7 @@ package catalog
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -445,4 +446,54 @@ func TestBeginMigrationResetsVerifyCredentials(t *testing.T) {
 		"陈旧 checksum 不得留到新一轮；cleanupHot 会凭它删除从未拷贝的热分区")
 	require.False(t, rec.JournalComplete, "JournalComplete 同样必须重置")
 	require.Equal(t, StateRoutingFrozen, rec.MigrationState)
+}
+
+// TestActiveDayRecordsTreatsHotAsActive 钉住活跃子集的判据口径。
+//
+// 缺陷形态（2026-10-22 终审 P2）：`activeDayRecords` 曾用「MigrationState 是空/CLEANED
+// ⇒ 不参与」一刀切，但 `NewStableRecord` 的**默认态就是 `MigrationState=CLEANED`**
+// （见 types.go）。于是「迁移途中新建的迟到记录」（Owner=hot）天生是 `hot + CLEANED`：
+//
+//	· `BeginDayMigration` 按 Owner 把它纳入（它确实需要迁移）；
+//	· 而 `AdvanceDay`/`SwitchDayOwners`/`FailDay`/`MarkDayComplete` 全部跳过它；
+//	⇒ 该日能走到 CLEANED 而它停在 hot，其热分区到期被 VL 直接删除；
+//	⇒ 或（加了结账守卫后）该日永久无法结账，每轮 sweep 追两条 journal 永不收敛。
+//
+// 判据因此改为「Owner 仍是 hot ⇒ 还有数据没下沉 ⇒ 必须参与」，
+// 与 `BeginDayMigration` 的 Owner 口径对齐，让混合态日有明确出口。
+//
+// 变异验证：把判据改回只按 MigrationState 过滤 ⇒ 第一条断言转红。
+func TestActiveDayRecordsTreatsHotAsActive(t *testing.T) {
+	const day = "2026-09-23"
+
+	cases := []struct {
+		name  string
+		owner Owner
+		state MigrationState
+		want  bool
+	}{
+		{"hot + 空态（迟到新建，尚未开始迁移）", OwnerHot, "", true},
+		{"hot + CLEANED（NewStableRecord 默认态，最容易被误判）", OwnerHot, StateCleaned, true},
+		{"hot + 迁移中", OwnerHot, StateDraining, true},
+		{"cold + CLEANED（已下沉完成，正确跳过）", OwnerCold, StateCleaned, false},
+		{"cold + 迁移中（owner 已切但没走完，仍须参与）", OwnerCold, StateDetached, true},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := PartitionKey{StorageNamespace: "ns-" + strconv.Itoa(i), UTCDay: day}
+			rec := NewStableRecord(key, tc.owner, 1, "dir-1")
+			rec.MigrationState = tc.state
+
+			got := activeDayRecords([]*Record{rec})
+			if tc.want {
+				require.Len(t, got, 1,
+					"owner=%s state=%q 必须参与本次日级操作（否则它的数据永远迁移不到冷层）",
+					tc.owner, tc.state)
+			} else {
+				require.Empty(t, got,
+					"owner=%s state=%q 已下沉完成，不应参与（不是冲突）", tc.owner, tc.state)
+			}
+		})
+	}
 }

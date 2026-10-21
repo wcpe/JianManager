@@ -74,10 +74,35 @@ func (c *Catalog) BeginDayMigration(utcDay string, target Owner, targetDirID str
 func activeDayRecords(records []*Record) []*Record {
 	active := make([]*Record, 0, len(records))
 	for _, rec := range records {
-		if rec == nil || rec.MigrationState == "" || rec.MigrationState == StateCleaned {
+		if rec == nil {
 			continue
 		}
-		active = append(active, rec)
+		// **`Owner=hot` 一律算活跃**，即使 `MigrationState` 是 CLEANED 或空（2026-10-22 终审 P2）。
+		//
+		// 为什么不能用「state 是 CLEANED/空 ⇒ 不参与」一刀切：`NewStableRecord` 的默认态
+		// 正是 `MigrationState=CLEANED`（types.go），于是**迁移途中新建的迟到记录**
+		// （迟到写入 / 新 storage namespace，Owner=hot）天生就是「hot + CLEANED」形态。
+		// 若把它判为「不参与」，就会出现两套判据的夹缝：
+		//   · `BeginDayMigration` 按 Owner 纳入它（它确实是 hot，需要迁移）；
+		//   · 而 `AdvanceDay`/`SwitchDayOwners`/`FailDay`/`MarkDayComplete` 全部跳过它；
+		//   ⇒ 该日能走到 CLEANED 而这条记录停在 hot，其热分区到期被 VL 直接删除；
+		//   或（加了 MarkDayComplete 守卫后）该日永久无法结账 ⇒ 无限重试建不出结论。
+		//
+		// 判据改为「Owner 仍是 hot ⇒ 还有数据没下沉 ⇒ 必须参与」：
+		//   · Owner=hot + 空/CLEANED  → **纳入**（有待迁移的数据）；
+		//   · Owner=hot + 迁移中状态   → 纳入（正在迁移）；
+		//   · Owner=cold/archive      → 跳过（已下沉完成，是「已完成」而不是「冲突」）。
+		// 这样 `activeDayRecords` 与 `BeginDayMigration` 的 Owner 口径一致，
+		// 混合态日既有明确出口（重新 BeginDayMigration 纳入），也不会被静默结账。
+		if rec.Owner == OwnerHot {
+			active = append(active, rec)
+			continue
+		}
+		// Owner 已非 hot，但仍处于迁移中间态（如 Owner 已切但未走到 CLEANED）：
+		// 也要参与，否则会停在半路。
+		if rec.MigrationState != "" && rec.MigrationState != StateCleaned {
+			active = append(active, rec)
+		}
 	}
 	return active
 }
