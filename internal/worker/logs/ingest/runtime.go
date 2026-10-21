@@ -8570,14 +8570,15 @@ func (m *Manager) projectionProbeWindow() time.Duration {
 	// 只会在默认 retention=120d 的部署上留下「第 31～120 天探测不到」的原始盲区 ——
 	// 即本次改造声称要修掉的那个缺口原样保留。
 	//
-	// 保留 `max(常量, 派生)` 的意义只是兜住「hotRetention 未配置」（0 值，测试/旧调用方），
-	// 那时退回历史验证过的 31d；其余情况一律用派生值。
-	// 未配置保留期（0 值，测试或旧调用方）⇒ 退回历史验证过的 31d。
-	//
 	// **配置了就一律用派生值，不与常量取大**：取大会让「保留期很短」的部署也去扫 31d，
 	// 而 VL 侧的 `-search.maxQueryTimeRange` 是按同一个 retention 派生的（retention+1d），
 	// 于是 31d > 8d 的窗口会被 400 拒 ⇒ 探测整条失效（比覆盖不全更糟）。
 	// 这个 bug 是本轮夹具（hotRetention=7d）当场抓到的。
+	//
+	// 常量 `projectionProbeSpan` 如今只剩一个用途：**兜住未配置的调用方**
+	// （`hotRetention == 0`，即测试夹具与不关心保留期的旧调用路径），
+	// 那时退回历史上验证过的 31d（对应 30d retention，生产现役值）。
+	// 它不再是「配置值的下限」，也不再参与任何取大运算。
 	if m == nil || m.hotRetention <= 0 {
 		return projectionProbeSpan
 	}

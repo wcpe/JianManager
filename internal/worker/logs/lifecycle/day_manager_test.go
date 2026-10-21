@@ -194,13 +194,25 @@ func TestResumeMixedDayUsesActiveRecordNotFirst(t *testing.T) {
 
 	require.NoError(t, m.Resume(day))
 
-	// 核心断言：所有目录都必须来自**活跃**记录（m-active），不能是已结清的 a-settled。
-	require.NotEqual(t, "dir-settled-old", snapshotFromDir,
-		"快照的源目录取自已结清记录 ⇒ 代表记录选错（records[0] 而不是活跃子集）")
-	require.NotEqual(t, "dir-settled-new", copiedToDir,
-		"拷贝的目标目录取自已结清记录 ⇒ 代表记录选错（records[0] 而不是活跃子集）")
-	// 活跃记录刚由 BeginMigration 建立，其 OwnerDirID 是空的 ⇒ 快照源目录必须是空串，
-	// 而不是已结清记录的 `dir-settled-old`。这条同时锁住「代表记录来自活跃子集」。
+	// **唯一有判别力的断言**（2026-10-22 复审 P1）。
+	//
+	// 活跃记录自带 `dir-active-old`（夹具里显式给的非空目录），而已结清记录是
+	// `dir-settled-old`。三态因此互异：
+	//   · `""`                 ⇒ snapshot 整段没执行（取错记录 ⇒ LastVerifyCompleted=true ⇒ 跳过校验）
+	//   · `dir-settled-old`    ⇒ snapshot 执行了，但拿的是已结清记录的目录
+	//   · `dir-active-old`     ⇒ 正确：代表记录来自活跃子集
+	//
+	// 为什么必须断言 `dir-active-old` 而不是「不是 settled 的值」：把活跃记录的
+	// OwnerDirID 留空时，`""` 既是「没执行」也是「执行对了」的取值 ⇒ 断言分不清两者，
+	// 声明要防的变异（rep = records[0]）照样全绿。这正是本项目反复中招的假绿形态，
+	// 而当时的注释还写着「其 OwnerDirID 是空的 ⇒ 必须是空串」，会把下一位复审者
+	// 直接引回假绿 —— 该注释已按实际夹具改写。
 	require.Equal(t, "dir-active-old", snapshotFromDir,
 		"快照源目录必须是活跃记录自己的 OwnerDirID；\"\" 表示 snapshot 根本没执行（取错记录导致跳过校验）")
+	// 下面两条是**辅助**断言（对 `rep = records[0]` 变异不具判别力，因为 "" 同时
+	// 不等于这两个值）；保留它们只为在「取到已结清目录」这种更具体的形式下给出提示。
+	require.NotEqual(t, "dir-settled-old", snapshotFromDir,
+		"快照源目录取自已结清记录 ⇒ 代表记录选错（records[0] 而不是活跃子集）")
+	require.NotEqual(t, "dir-settled-new", copiedToDir,
+		"拷贝的目标目录取自已结清记录 ⇒ 代表记录选错（records[0] 而不是活跃子集）")
 }

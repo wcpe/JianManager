@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 )
@@ -205,6 +206,18 @@ func (c *Catalog) MarkDayComplete(utcDay, checksum string) error {
 	// 造成的（Begin 按 Owner 纳入、后续按 MigrationState 排除），只补一边会在另一边漏。
 	for _, rec := range records {
 		if rec.Owner == OwnerHot {
+			// **必须留痕，否则这是无出口的死循环**（2026-10-22 终审 P2）。
+			//
+			// 调用链：`MarkDayComplete` 拒绝 → `Resume` 的 `fail()` → `FAILED_RETRYABLE`
+			// → 下一轮 sweep 又从 `FAILED_RETRYABLE` 恢复到 `DETACHED` → 再次拒绝。
+			// `retention.Mover` 的失败只记 `KeptOriginal`，既不重试计数也不升级到
+			// `FAILED_MANUAL` ⇒ 每轮 sweep 追加 2 条 journal、重跑 Cleanup，永不收敛。
+			// 守卫本身是对的（比静默丢数据好得多），但**拒绝必须可观测**，
+			// 否则运维只看到「这个源一直在失败」却查不到原因。
+			slog.Error("拒绝结账：该 UTC 日仍残留 hot 记录（迁移未覆盖它）",
+				"utcDay", utcDay, "key", rec.Key.String(), "owner", rec.Owner,
+				"migrationState", rec.MigrationState,
+				"hint", "对该日重新执行 BeginDayMigration 以把该记录纳入迁移；或确认它可被丢弃后人工清理")
 			return fmt.Errorf("%w: UTC day %s still has hot record %s (state=%q); "+
 				"refuse to mark journal complete", ErrIllegalTransition, utcDay, rec.Key, rec.MigrationState)
 		}
