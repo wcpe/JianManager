@@ -12,3 +12,17 @@ import { afterEach } from 'vitest'
 afterEach(() => {
   cleanup()
 })
+
+/**
+ * jsdom 垫片：ResizeObserver（缘由：Radix 的 `use-size` 依赖它——Slider 拇指尺寸、
+ * Tooltip/HoverCard 箭头测量等；jsdom 未实现，缺失时渲染期直接抛 ReferenceError）。
+ * 组件在 jsdom 下不依赖真实尺寸（断言只看结构/语义），空实现即可。
+ */
+if (!('ResizeObserver' in globalThis)) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub
+}
