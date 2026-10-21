@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
@@ -59,21 +60,16 @@ func newSlotPipeline(t *testing.T, src SourceConfig) (*Manager, *pipeline.Pipeli
 	return m, p, key
 }
 
-// TestPendingArchivesReusedRotationSlotIsSkippedByPathKey 记录**已知缺口**：
-// 同一路径上的归档内容已换（长度也变），本函数仍按「路径已导入」跳过。
+// TestPendingArchivesReusedRotationSlotIsSkippedByPathKey 记录**保守分支**：
+// 槽位内容已换，但账本里**没有任何内容锚**能证明「还有未投递的字节」⇒ 仍然按路径跳过。
 //
-// 为什么把它写成断言而不是"修掉"：`imported` 键只有路径，而 ingest 侧看不到"这份内容
-// 是否已被活文件 tail 读过"——那要看 acquire 的轮转关联与覆盖前缀。BungeeCord 的
-// java.util.logging 移位改名（proxy.log.0 → proxy.log.1 → proxy.log.2 …）让槽位里的
-// 新内容**通常就是已被 tail 投递过的原活文件内容**，此时重导即重复入库；而
-// `acquire.importArchive` 对「该路径已有 Imported 段」是**整包跳过**
-// （reason: rotation already linked; whole-archive reimport forbidden），
-// 所以只在 ingest 侧放行也导不进来，只会把 scanned 指标变成噪声。
+// 为什么这条不是「已知缺口」而是刻意保留的安全边界：找不到锚 = 这份内容对账本完全陌生。
+// 它既可能是从未读过的新内容（该导入），也可能是「已导入过、记录又被后续轮转覆盖」的旧内容
+// （导入即重复）。两种情形在账本上不可区分，而**重复导入比丢失更糟**
+// （event_id 多副本、inst:318 那类事故）⇒ 只在能证明有未投递字节时才导入。
 //
-// 真实的丢失窗口（本用例**不**覆盖，需跨包修复）：worker 停机期间跨过一次以上轮转时，
-// 复用槽位里的内容**从未被任何链路读过**，而本判据会把它判为已导入 ⇒ 静默丢日志。
-// 根治需要「导入成功时把内容身份（ledger.Segment.ArchiveObjectID 已存在）落账，并在
-// acquire.importArchive 的整包跳过处比对，不同则按 covered-prefix 语义重导」。
+// 真正的丢失窗口（停机跨轮转，锚存在且证明有未投递字节）由
+// TestPendingArchivesReimportsReusedSlotWithUndeliveredTail 守住。
 func TestPendingArchivesReusedRotationSlotIsSkippedByPathKey(t *testing.T) {
 	dir := t.TempDir()
 	src, live := bungeeSlotSource(t, dir)
@@ -91,12 +87,81 @@ func TestPendingArchivesReusedRotationSlotIsSkippedByPathKey(t *testing.T) {
 	}))
 	require.Empty(t, pendingArchives(p, []string{slot}), "同一份内容重复发现必须跳过（幂等）")
 
-	// 槽位复用：内容与长度都换成新的。
+	// 槽位复用：内容与长度都换成新的，但账本里没有能证明「未投递」的锚。
 	require.NoError(t, os.WriteFile(slot,
 		[]byte("[12:30:00] [Server thread/INFO]: second cycle a\n[12:30:01] [Server thread/INFO]: second cycle b\n"), 0o644))
 
 	require.Empty(t, pendingArchives(p, []string{slot}),
-		"已知缺口：路径键判据会把复用槽位的新内容判为已导入（跨包修复前保持保守：不重复导入）")
+		"无内容锚 ⇒ 保持跳过（无法区分「新内容」与「记录已被覆盖的旧内容」，宁可丢失也不重复）")
+}
+
+// TestPendingArchivesReimportsReusedSlotWithUndeliveredTail 是**停机跨轮转**在发现侧的用例：
+// 槽位内容已换，且内容锚证明它有字节从未被投递 ⇒ 必须重新进待导入集合。
+//
+// 修复前必红：判据只有路径 ⇒ `Imported=true` 直接过滤掉 ⇒ 导入器根本没机会看到它
+// ⇒ 静默丢日志（本缺陷的生产形态）。
+func TestPendingArchivesReimportsReusedSlotWithUndeliveredTail(t *testing.T) {
+	dir := t.TempDir()
+	src, live := bungeeSlotSource(t, dir)
+	require.NoError(t, os.WriteFile(live, []byte("[12:00:00] [Server thread/INFO]: live\n"), 0o644))
+	slot := filepath.Join(dir, "proxy.log.1")
+	body := "[11:00:00] [Server thread/INFO]: read-but-not-durable\n[11:10:00] [Server thread/INFO]: written-after-shutdown\n"
+	require.NoError(t, os.WriteFile(slot, []byte(body), 0o644))
+
+	_, p, _ := newSlotPipeline(t, src)
+
+	// 上一轮这个路径上是**别的**内容，已导入。
+	require.NoError(t, p.Ledger().RegisterSegment(p.Key(), ledger.Segment{
+		Path: slot, Kind: ledger.SegmentRotatedText, StartPos: 0, EndPos: 27,
+		Imported: true, ParserVersion: "acquire-v1",
+	}))
+
+	// FileTailer 的锚：这份内容第 0 字节落在逻辑位置 50；读到了 50+首行长度，
+	// 但 durable 水位停在 50（停机时首行尚未确认投递）⇒ 整份都得导。
+	idBytes, idSHA, err := acquire.ContentIdentity(slot)
+	require.NoError(t, err)
+	require.NotEmpty(t, idSHA)
+	require.NoError(t, p.Ledger().RegisterSegment(p.Key(), ledger.Segment{
+		Path: filepath.Join(dir, "proxy.log.0"), Kind: ledger.SegmentRotated,
+		StartPos: 50, EndPos: 50 + uint64(len("[11:00:00] [Server thread/INFO]: read-but-not-durable\n")),
+		IdentityBytes: idBytes, IdentitySHA256: idSHA, ParserVersion: "acquire-v1",
+	}))
+	require.NoError(t, p.Ledger().AdvanceRead(p.Key(), 200))
+	require.NoError(t, p.Ledger().AdvanceDurable(p.Key(), 50))
+
+	require.Equal(t, []string{slot}, pendingArchives(p, []string{slot}),
+		"槽位里这份内容还有从未投递的字节 ⇒ 必须重新待导入（否则就是静默丢日志）")
+}
+
+// TestPendingArchivesSkipsReusedSlotFullyDelivered 是**正常轮转**的守护用例：
+// 槽位内容换成了原活文件内容，而那份内容整份都已投递 ⇒ 必须跳过（不得重复导入）。
+//
+// 这是「把病治成更大的病」的唯一入口（重复入库 = inst:318 那类 event_id 多副本），必须钉住。
+func TestPendingArchivesSkipsReusedSlotFullyDelivered(t *testing.T) {
+	dir := t.TempDir()
+	src, live := bungeeSlotSource(t, dir)
+	require.NoError(t, os.WriteFile(live, []byte("[12:00:00] [Server thread/INFO]: live\n"), 0o644))
+	slot := filepath.Join(dir, "proxy.log.1")
+	body := "[11:00:00] [Server thread/INFO]: delivered-before-rotation\n"
+	require.NoError(t, os.WriteFile(slot, []byte(body), 0o644))
+
+	_, p, _ := newSlotPipeline(t, src)
+	require.NoError(t, p.Ledger().RegisterSegment(p.Key(), ledger.Segment{
+		Path: slot, Kind: ledger.SegmentRotatedText, StartPos: 0, EndPos: 9,
+		Imported: true, ParserVersion: "acquire-v1",
+	}))
+	idBytes, idSHA, err := acquire.ContentIdentity(slot)
+	require.NoError(t, err)
+	require.NoError(t, p.Ledger().RegisterSegment(p.Key(), ledger.Segment{
+		Path: filepath.Join(dir, "proxy.log.0"), Kind: ledger.SegmentRotated,
+		StartPos: 50, EndPos: 50 + uint64(len(body)),
+		IdentityBytes: idBytes, IdentitySHA256: idSHA, ParserVersion: "acquire-v1",
+	}))
+	require.NoError(t, p.Ledger().AdvanceRead(p.Key(), 200))
+	require.NoError(t, p.Ledger().AdvanceDurable(p.Key(), 50+uint64(len(body))))
+
+	require.Empty(t, pendingArchives(p, []string{slot}),
+		"整份都已投递 ⇒ 必须跳过（重导即重复入库）")
 }
 
 // TestPendingArchivesFailedArchiveRependsOnlyAfterFileChanges 钉住 `ImportError` 分支的

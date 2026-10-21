@@ -175,19 +175,36 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 	link, linked := a.led.RotationLinked(a.key, archivePath)
 	ent := a.led.Get(a.key)
 	var existing *ledger.Segment
+	// anchored 非空表示「本路径的已导入记录已过期，但内容锚证明还有未投递字节」：
+	// 此时**不得**沿用 existing 的起点（它属于上一份内容，见 content_anchor.go），
+	// 而要从锚给出的位置续读。
+	var contentAnchor ContentAnchor
+	// anchorCoveredBytes 是这份内容已被投递覆盖的字节数（由内容锚给出）。
+	var anchorCoveredBytes int64
+	anchored := false
 	if ent != nil {
 		for i := range ent.Segments {
 			if ent.Segments[i].Path == archivePath {
 				seg := ent.Segments[i]
 				existing = &seg
 				if seg.Imported {
-					a.skippedAlreadyLinked++
-					return &ImportResult{
-						Skipped:         true,
-						Reason:          "rotation already linked; whole-archive reimport forbidden",
-						ArchiveObjectID: seg.ArchiveObjectID,
-						ResumedFrom:     seg.EndPos,
-					}, nil
+					// 「已导入」不再只看路径：槽位复用（java.util.logging `%g` 的移位改名）会把
+					// 新内容换进同一个路径，必须按**内容身份**复核（判据见 content_anchor.go）。
+					decision := DecideArchiveReimport(ent, &seg)
+					if !decision.Import {
+						a.skippedAlreadyLinked++
+						return &ImportResult{
+							Skipped:         true,
+							Reason:          decision.Reason,
+							ArchiveObjectID: seg.ArchiveObjectID,
+							ResumedFrom:     seg.EndPos,
+						}, nil
+					}
+					contentAnchor = decision.Anchor
+					anchorCoveredBytes = decision.CoveredBytes
+					anchored = true
+					// 陈旧分段的位置属于上一份内容：清掉它，避免下面的起点计算沿用旧 Base。
+					existing = nil
 				}
 				break
 			}
@@ -202,6 +219,13 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		return &ImportResult{Skipped: true, Reason: err.Error()}, nil
 	}
 	objID := ArchiveObjectID(archivePath, size, contentHash)
+	// 内容身份（≤512B 前缀摘要，与 FileTailer 记录活文件身份的口径一致）：
+	// 写进分段的 IdentityBytes/IdentitySHA256，使归档分段成为可跨路径匹配的内容锚。
+	// 代价是**一次有界小读**；失败只降级为「这段没有身份」，不影响导入本身。
+	idBytes, idSHA, idErr := ContentIdentity(archivePath)
+	if idErr != nil {
+		idBytes, idSHA = 0, ""
+	}
 
 	f, err := os.Open(archivePath)
 	if err != nil {
@@ -288,7 +312,14 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 	// resumingMidArchive 标记「本次跳过的前缀来自**本分段上一次读到的地方**」（而不是
 	// 轮转已覆盖前缀）。两种事实在 EOF 分支的处置不同，故必须显式区分。
 	resumingMidArchive := false
-	if existing != nil {
+	if anchored {
+		// 槽位复用（见 content_anchor.go）：起点由**这份内容自己的锚**决定，
+		// 跳过它已投递覆盖的字节前缀。这条分支的存在就是为了「既补上从未投递的尾巴，
+		// 又不把已投递的前缀重导一遍」——两者缺一都会造成事故（丢日志 / 重复入库）。
+		segmentStart = contentAnchor.Base
+		startFrom = contentAnchor.Base + uint64(anchorCoveredBytes)
+		skipBytes = uint64(anchorCoveredBytes)
+	} else if existing != nil {
 		segmentStart = existing.StartPos
 		startFrom = existing.StartPos
 	} else if linked {
@@ -306,28 +337,31 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		}
 		segmentStart = startFrom
 	}
-	if linked {
-		startFrom = link.EndPosFrom
-		if existing != nil {
-			segmentStart = existing.StartPos
+	if !anchored {
+		// 起点已由内容锚决定时不再套用下面的换算：轮转关联与断点续读的坐标都属于**别的**分段。
+		if linked {
+			startFrom = link.EndPosFrom
+			if existing != nil {
+				segmentStart = existing.StartPos
+			}
+			if startFrom > segmentStart {
+				skipBytes = startFrom - segmentStart
+			}
+		} else if existing != nil && existing.EndPos > segmentStart {
+			// **断点续读**（缺陷二修复，2026-10-10）：本归档上次读到 `EndPos`，本次从那里继续。
+			//
+			// 为什么 `EndPos - StartPos` 就是「已消费的归档字节数」：本函数为归档内容分配的
+			// 逻辑位置是**从 StartPos 起按行字节数顺序推进**的（见读循环里的 `pos = end`），
+			// 而读循环总是从归档头部开始顺序读（不 seek）⇒ 已消费字节数 = pos - segmentStart。
+			// 故按该差值丢弃 bufio 前导字节即可精确续读，无需记录额外游标。
+			//
+			// 为什么必须续读（不能靠「重头读 + event_id 幂等」）：那会把 N 轮的总读取量放大成
+			// O(N²)（每轮都要重读并重解析整个归档前缀），对 12.9 万事件级的归档就是几十万次
+			// 无谓解析——分批反而变成新的性能事故。续读让总读取量恒为归档的一遍。
+			skipBytes = existing.EndPos - segmentStart
+			startFrom = existing.EndPos
+			resumingMidArchive = true
 		}
-		if startFrom > segmentStart {
-			skipBytes = startFrom - segmentStart
-		}
-	} else if existing != nil && existing.EndPos > segmentStart {
-		// **断点续读**（缺陷二修复，2026-10-10）：本归档上次读到 `EndPos`，本次从那里继续。
-		//
-		// 为什么 `EndPos - StartPos` 就是「已消费的归档字节数」：本函数为归档内容分配的
-		// 逻辑位置是**从 StartPos 起按行字节数顺序推进**的（见读循环里的 `pos = end`），
-		// 而读循环总是从归档头部开始顺序读（不 seek）⇒ 已消费字节数 = pos - segmentStart。
-		// 故按该差值丢弃 bufio 前导字节即可精确续读，无需记录额外游标。
-		//
-		// 为什么必须续读（不能靠「重头读 + event_id 幂等」）：那会把 N 轮的总读取量放大成
-		// O(N²)（每轮都要重读并重解析整个归档前缀），对 12.9 万事件级的归档就是几十万次
-		// 无谓解析——分批反而变成新的性能事故。续读让总读取量恒为归档的一遍。
-		skipBytes = existing.EndPos - segmentStart
-		startFrom = existing.EndPos
-		resumingMidArchive = true
 	}
 
 	_ = a.led.RegisterSegment(a.key, ledger.Segment{
@@ -335,8 +369,13 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		Kind:            format.kind,
 		StartPos:        segmentStart,
 		ArchiveObjectID: objID, // provenance only
-		Imported:        false,
-		ParserVersion:   a.parser.ParserVersion,
+		// 内容身份：让**归档分段**也成为一个内容锚（槽位复用时要靠它回答「这份内容
+		// 已投递到哪个字节」，见 content_anchor.go）。旧账本里没有这两个字段的存量段
+		// 仍只是路径记录 —— 判据找不到锚时一律保持跳过，故升级不会把历史归档重导一遍。
+		IdentityBytes:  idBytes,
+		IdentitySHA256: idSHA,
+		Imported:       false,
+		ParserVersion:  a.parser.ParserVersion,
 	})
 
 	reader := bufio.NewReader(body)
@@ -423,6 +462,8 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		StartPos:        segmentStart,
 		EndPos:          pos,
 		ArchiveObjectID: objID,
+		IdentityBytes:   idBytes,
+		IdentitySHA256:  idSHA,
 		Imported:        false,
 		ParserVersion:   a.parser.ParserVersion,
 	})
@@ -465,6 +506,10 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 // 已带有自己的形态。
 func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64) error {
 	kind := ledger.SegmentKind("")
+	// 内容身份必须随「已导入」一起落账：它是下一次槽位复用判定的唯一依据
+	// （见 content_anchor.go）。取不到（文件已被删除等）时留空即可——空身份的分段
+	// 不构成锚，判据会保持「跳过」这一既有行为。
+	idBytes, idSHA, _ := ContentIdentity(path)
 	if entry := a.led.Get(a.key); entry != nil {
 		for _, segment := range entry.Segments {
 			if segment.Path == path {
@@ -473,6 +518,10 @@ func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64)
 					end = segment.EndPos
 				}
 				kind = segment.Kind
+				if idSHA == "" {
+					// 本次取不到：沿用分段上已有的身份（它描述的就是这份内容）。
+					idBytes, idSHA = segment.IdentityBytes, segment.IdentitySHA256
+				}
 				break
 			}
 		}
@@ -483,6 +532,7 @@ func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64)
 	return a.led.RegisterSegment(a.key, ledger.Segment{
 		Path: path, Kind: kind, StartPos: start, EndPos: end,
 		ArchiveObjectID: objectID, Imported: true, ParserVersion: a.parser.ParserVersion,
+		IdentityBytes: idBytes, IdentitySHA256: idSHA,
 	})
 }
 

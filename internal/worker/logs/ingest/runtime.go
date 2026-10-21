@@ -4152,10 +4152,20 @@ func pendingArchives(p *pipeline.Pipeline, paths []string) []string {
 	entry := p.Ledger().Get(p.Key())
 	imported := make(map[string]bool)
 	if entry != nil {
-		for _, segment := range entry.Segments {
+		for i := range entry.Segments {
+			segment := entry.Segments[i]
 			// 归档类形态（gzip 与纯文本轮转）统一判定：新增形态若不参与，「已导入」会被反复重发现。
 			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.Imported {
-				imported[filepath.Clean(segment.Path)] = true
+				// 判据**不能只有路径**：轮转槽位会被复用（java.util.logging `%g` 的
+				// `.0→.1`、`.1→.2` 移位改名），同一路径上的内容会换掉。Worker 停机跨过轮转时，
+				// 换进槽位的内容从未被任何链路读过/投递过，按路径判「已导入」就是静默丢日志。
+				//
+				// 判定的真源在 acquire（内容身份 + 内容锚，见 acquire/content_anchor.go）：
+				// 这里必须调同一个函数，否则「发现」与「导入」两处的口径会漂移成
+				// 「发现说已导入 ⇒ 导入器没机会看到它 ⇒ 仍有丢失」。
+				if !acquire.DecideArchiveReimport(entry, &segment).Import {
+					imported[filepath.Clean(segment.Path)] = true
+				}
 				continue
 			}
 			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.ImportError != "" {
