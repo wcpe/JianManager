@@ -216,3 +216,78 @@ func TestResumeMixedDayUsesActiveRecordNotFirst(t *testing.T) {
 	require.NotEqual(t, "dir-settled-new", copiedToDir,
 		"拷贝的目标目录取自已结清记录 ⇒ 代表记录选错（records[0] 而不是活跃子集）")
 }
+
+// TestResumeAutoReinitiatesResidualHotMigration 钉住「残留 hot 记录有自动出口」。
+//
+// 缺陷形态（2026-10-22 终审 P2）：`MarkDayComplete` 的结账守卫拦住「含 Owner=hot
+// 残留的日」是对的（远好于静默丢数据），但没有出口时该日会无解死循环：
+//
+//	MarkDayComplete 拒绝 → fail() → FAILED_RETRYABLE
+//	→ 下轮 sweep 从 FAILED_RETRYABLE 恢复 → 再次拒绝
+//
+// 且 retention.Mover 只记 KeptOriginal，既不重试计数也不升级 FAILED_MANUAL
+// ⇒ 每轮 sweep 追加 2 条 journal、重跑 Cleanup，永不收敛。
+//
+// 这类记录的成因是**必然的**：某日整体下沉到冷层后，迟到的写入或新出现的
+// storage namespace 会在同一天新建一条 hot 记录，而 `NewStableRecord` 的默认态
+// 就是 `MigrationState=CLEANED` ⇒ 天生是 `hot + CLEANED`，既不在迁移路径上
+// （按 state 过滤会被跳过），又会被结账守卫拒绝。
+//
+// 修法：`Resume` 进来先自动为这类记录**重新发起迁移**（`BeginMigration` 允许从
+// `CLEANED` 起跳），目标复用该日既定的 TargetOwner/TargetDirID。
+//
+// 变异验证：删掉 `reinitiateResidualHotMigration` 的调用 ⇒ 本用例转红
+// （残留记录仍停在 CLEANED，没被纳入迁移）。
+func TestResumeAutoReinitiatesResidualHotMigration(t *testing.T) {
+	const day = "2026-09-26"
+	settledKey := catalog.PartitionKey{StorageNamespace: "ns-a-settled", UTCDay: day}
+	lateKey := catalog.PartitionKey{StorageNamespace: "ns-z-late", UTCDay: day}
+
+	cat := catalog.New(catalog.NewMemJournal())
+
+	// 已下沉完成的那条：带上既定的 target，供残留记录复用。
+	settled := catalog.NewStableRecord(settledKey, catalog.OwnerCold, 2, "dir-cold")
+	settled.MigrationState = catalog.StateCleaned
+	settled.TargetOwner = catalog.OwnerCold
+	settled.TargetDirID = "dir-cold"
+	require.NoError(t, cat.Put(settled))
+
+	// 迟到新建的那条：hot + CLEANED（默认态），从未参与迁移。
+	late := catalog.NewStableRecord(lateKey, catalog.OwnerHot, 1, "dir-late")
+	require.Equal(t, catalog.StateCleaned, late.MigrationState, "夹具前提：默认态是 CLEANED")
+	require.Equal(t, catalog.OwnerHot, late.Owner)
+	require.NoError(t, cat.Put(late))
+
+	m := &DayManager{
+		cat: cat,
+		ops: Ops{
+			Drain:    func(catalog.PartitionKey) error { return nil },
+			Snapshot: func(catalog.PartitionKey, string) (string, error) { return "snap", nil },
+			Copy:     func(catalog.PartitionKey, string, string) (string, error) { return "copy", nil },
+			Verify:   func(catalog.PartitionKey, string, string) (string, error) { return "sum", nil },
+			Attach:   func(catalog.PartitionKey, string) error { return nil },
+			Detach:   func(catalog.PartitionKey, string) error { return nil },
+			Cleanup:  func(catalog.PartitionKey, string) error { return nil },
+		},
+	}
+
+	// 触发 Resume：它必须先自动重新发起迁移，把残留记录纳入。
+	_ = m.Resume(day)
+
+	lateRec, ok := cat.Get(lateKey)
+	require.True(t, ok)
+	// **核心断言：这条记录确实被纳入了迁移**。
+	//
+	// 不断言「最终仍是 CLEANED」——本用例的 ops 全部返回成功，`Resume` 会把
+	// 整条 happy path 一次跑完，最终状态回到 CLEANED 是**正确**的收尾。
+	// 要区分「自愈完成」与「从未参与」，看的是迁移痕迹：
+	//   · TargetDirID 被写入（= 走过 BeginMigration 的目标登记）
+	//   · MigrationFromDirID 是本记录自己的 OwnerDirID（= 用的是它自己的数据）
+	//   · owner 已切到 cold（= 权威真的换了）
+	require.Equal(t, "dir-cold", lateRec.TargetDirID,
+		"目标必须复用该日既定目录，不得另起一个（否则冷层出现两份互不相认的副本）")
+	require.Equal(t, "dir-late", lateRec.MigrationFromDirID,
+		"源目录必须是这条记录自己的 OwnerDirID，不能取别的记录的")
+	require.Equal(t, catalog.OwnerCold, lateRec.Owner,
+		"完成后 owner 必须是 cold；若仍是 hot 说明它只是被标记而没真正迁移")
+}

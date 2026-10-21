@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 )
@@ -41,6 +42,51 @@ func activeDayRecordsOf(records []*catalog.Record) []*catalog.Record {
 	return active
 }
 
+// reinitiateResidualHotMigration 为「残留的 hot 记录」重新发起迁移。
+//
+// 判据：`Owner == OwnerHot` 且处于 `""`/`CLEANED`（即不在迁移路径上）。
+// 这类记录是「迁移途中新建的迟到记录」——它还有数据没下沉，必须再走一遍。
+//
+// 目标取该日**已有迁移记录**的 `TargetOwner/TargetDirID`：那是同一天同一个
+// 物理分区的既定目标，不能另起一个新的（否则同一天的记录会被送到不同目录，
+// 冷层出现两份互不相认的副本）。
+//
+// 幂等：已经处于迁移中的 hot 记录不会被重复发起（判据只覆盖 ""/CLEANED）。
+// 无残留时是零开销的一次遍历。
+func (m *DayManager) reinitiateResidualHotMigration(utcDay string, records []*catalog.Record) error {
+	var residual []*catalog.Record
+	var targetOwner catalog.Owner
+	var targetDirID string
+	for _, rec := range records {
+		if rec == nil {
+			continue
+		}
+		// 借同一天已在迁移/已迁移完成的记录取既定目标。
+		if targetDirID == "" && rec.TargetDirID != "" && rec.TargetOwner.Valid() {
+			targetOwner, targetDirID = rec.TargetOwner, rec.TargetDirID
+		}
+		if rec.Owner == catalog.OwnerHot &&
+			(rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned) {
+			residual = append(residual, rec)
+		}
+	}
+	if len(residual) == 0 {
+		return nil
+	}
+	if targetDirID == "" {
+		// 找不到既定目标：说明这一天从未迁移过，不属于「残留」形态。
+		// 交给调用方的初次 BeginDayMigration 处理，这里不擅自决定目标目录。
+		return nil
+	}
+	if _, err := m.cat.BeginDayMigration(utcDay, targetOwner, targetDirID); err != nil {
+		return fmt.Errorf("lifecycle: reinitiate residual migration for %s: %w", utcDay, err)
+	}
+	slog.Warn("该日存在未参与迁移的 hot 残留记录，已自动重新发起迁移（无需人工介入）",
+		"utcDay", utcDay, "residualRecords", len(residual),
+		"targetOwner", targetOwner, "targetDirID", targetDirID)
+	return nil
+}
+
 func (m *DayManager) Resume(utcDay string) error {
 	records := m.cat.RecordsForDay(utcDay)
 	if len(records) == 0 {
@@ -57,6 +103,31 @@ func (m *DayManager) Resume(utcDay string) error {
 	//     ⇒ 该日停在失败态反复失败，只能人工介入，现场还查不到原因。
 	//
 	// 判据与下面的状态推进保持同源：只看「迁移中」的记录（跳过空态与 CLEANED）。
+	// **给残留 hot 记录一个可执行出口**（2026-10-22 终审 P2）。
+	//
+	// 场景：某日已整体下沉到冷层（cold + CLEANED），之后迟到的写入或新出现的
+	// storage namespace 在同一天新建了一条 hot 记录 —— 而 `NewStableRecord` 的默认态
+	// 就是 `MigrationState=CLEANED`（见 types.go）⇒ 它天生是 `hot + CLEANED`，
+	// 既不在迁移路径上（`activeDayRecordsOf` 按 state 过滤，CLEANED 被跳过），
+	// 又会被 `MarkDayComplete` 的守卫拒绝结账。
+	//
+	// 若这里不处理，该日会陷入无解死循环：
+	//   MarkDayComplete 拒绝 → fail() → FAILED_RETRYABLE
+	//   → 下轮 sweep 从 FAILED_RETRYABLE 恢复 → 再次拒绝
+	// 且 `retention.Mover` 的失败只记 `KeptOriginal`，既不重试计数也不升级
+	// `FAILED_MANUAL` ⇒ 每轮 sweep 追加 2 条 journal、重跑 Cleanup，永不收敛。
+	//
+	// 出口 = **重新发起迁移**：`BeginMigration` 的守卫允许从 `CLEANED` 起跳
+	// （只拒绝「已在迁移中」的状态）。重新发起后记录变成 `ROUTING_FROZEN`，
+	// 后续日级操作自然把它纳入，走完 happy path 即被切到 cold，
+	// `MarkDayComplete` 的守卫随之满足。
+	//
+	// 只在「该日**已有**迁移在跑或已跑完」时做，避免干扰初次迁移的入口
+	// （初次迁移由调用方显式 BeginDayMigration 发起，target 由其指定）。
+	if err := m.reinitiateResidualHotMigration(utcDay, records); err != nil {
+		return err
+	}
+	records = m.cat.RecordsForDay(utcDay)
 	active := activeDayRecordsOf(records)
 	if len(active) > 0 {
 		if active[0].MigrationState == catalog.StateFailedManual {

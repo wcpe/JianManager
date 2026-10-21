@@ -12,7 +12,6 @@ package catalog
 
 import (
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -448,52 +447,137 @@ func TestBeginMigrationResetsVerifyCredentials(t *testing.T) {
 	require.Equal(t, StateRoutingFrozen, rec.MigrationState)
 }
 
-// TestActiveDayRecordsTreatsHotAsActive 钉住活跃子集的判据口径。
+// TestHotResidualCanBeReMigratedAndSettled 钉住「hot 残留记录有可执行出口」。
 //
-// 缺陷形态（2026-10-22 终审 P2）：`activeDayRecords` 曾用「MigrationState 是空/CLEANED
-// ⇒ 不参与」一刀切，但 `NewStableRecord` 的**默认态就是 `MigrationState=CLEANED`**
-// （见 types.go）。于是「迁移途中新建的迟到记录」（Owner=hot）天生是 `hot + CLEANED`：
+// 这是 MarkDayComplete 结账守卫的**配套出口**（2026-10-22 终审 P2）。
 //
-//	· `BeginDayMigration` 按 Owner 把它纳入（它确实需要迁移）；
-//	· 而 `AdvanceDay`/`SwitchDayOwners`/`FailDay`/`MarkDayComplete` 全部跳过它；
-//	⇒ 该日能走到 CLEANED 而它停在 hot，其热分区到期被 VL 直接删除；
-//	⇒ 或（加了结账守卫后）该日永久无法结账，每轮 sweep 追两条 journal 永不收敛。
+// 缺陷形态：守卫拦住「含 Owner=hot 残留的日不得结账」是对的（远好于静默丢数据），
+// 但若没有出口，该日会陷入无解死循环：
 //
-// 判据因此改为「Owner 仍是 hot ⇒ 还有数据没下沉 ⇒ 必须参与」，
-// 与 `BeginDayMigration` 的 Owner 口径对齐，让混合态日有明确出口。
+//	MarkDayComplete 拒绝 → Resume 的 fail() → FAILED_RETRYABLE
+//	→ 下轮 sweep 从 FAILED_RETRYABLE 恢复 → 再次拒绝
 //
-// 变异验证：把判据改回只按 MigrationState 过滤 ⇒ 第一条断言转红。
-func TestActiveDayRecordsTreatsHotAsActive(t *testing.T) {
-	const day = "2026-09-23"
+// 且 retention.Mover 的失败只记 KeptOriginal，既不重试计数也不升级 FAILED_MANUAL
+// ⇒ 每轮 sweep 追加 2 条 journal、重跑 Cleanup，永不收敛。
+//
+// 出口就是**对该日重新执行 BeginDayMigration**：`BeginMigration` 的守卫允许从
+// `CLEANED` 起跳（只拒绝「已在迁移中」的状态），而 `Owner=hot + CLEANED` 正是
+// 「迁移途中新建的迟到记录」的默认态（`NewStableRecord` 见 types.go）。
+// 重新发起后它会正常走完 happy path、被 SwitchDayOwners 切到 cold，
+// 于是 MarkDayComplete 的守卫自然满足。
+//
+// 本用例端到端走完整条链路，证明这个出口**真的可行**而不是纸面建议：
+// 若哪天有人收紧了 `BeginMigration` 的起跳条件，或让 `activeDayRecords` 把这类
+// 记录排除在外，本用例会立刻转红。
+func TestHotResidualCanBeReMigratedAndSettled(t *testing.T) {
+	const day = "2026-09-24"
+	hotKey := PartitionKey{StorageNamespace: "ns-hot-late", UTCDay: day}
 
-	cases := []struct {
-		name  string
-		owner Owner
-		state MigrationState
-		want  bool
-	}{
-		{"hot + 空态（迟到新建，尚未开始迁移）", OwnerHot, "", true},
-		{"hot + CLEANED（NewStableRecord 默认态，最容易被误判）", OwnerHot, StateCleaned, true},
-		{"hot + 迁移中", OwnerHot, StateDraining, true},
-		{"cold + CLEANED（已下沉完成，正确跳过）", OwnerCold, StateCleaned, false},
-		{"cold + 迁移中（owner 已切但没走完，仍须参与）", OwnerCold, StateDetached, true},
+	c := New(NewMemJournal())
+	late := NewStableRecord(hotKey, OwnerHot, 1, "dir-late")
+	require.Equal(t, StateCleaned, late.MigrationState,
+		"夹具前提：迟到记录的默认态是 CLEANED（这正是它容易被漏掉的原因）")
+	require.NoError(t, c.Put(late))
+
+	// 出口第一步：重新发起迁移。BeginMigration 必须接受从 CLEANED 起跳。
+	_, err := c.BeginDayMigration(day, OwnerCold, "cold-target")
+	require.NoError(t, err, "必须能从 CLEANED 重新发起迁移，否则结账拒绝就没有出口")
+	rec, ok := c.Get(hotKey)
+	require.True(t, ok)
+	require.Equal(t, StateRoutingFrozen, rec.MigrationState)
+	require.Equal(t, "dir-late", rec.MigrationFromDirID,
+		"源目录必须是该记录自己的 OwnerDirID（不能取别的记录的）")
+
+	// 走完 happy path 的前半段。
+	for _, st := range []MigrationState{
+		StateDraining, StateSnapshotting, StateStagingVerify, StateAttachedStaging,
+	} {
+		_, err = c.AdvanceDay(day, st)
+		require.NoError(t, err, "AdvanceDay → %s", st)
 	}
 
-	for i, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			key := PartitionKey{StorageNamespace: "ns-" + strconv.Itoa(i), UTCDay: day}
-			rec := NewStableRecord(key, tc.owner, 1, "dir-1")
-			rec.MigrationState = tc.state
-
-			got := activeDayRecords([]*Record{rec})
-			if tc.want {
-				require.Len(t, got, 1,
-					"owner=%s state=%q 必须参与本次日级操作（否则它的数据永远迁移不到冷层）",
-					tc.owner, tc.state)
-			} else {
-				require.Empty(t, got,
-					"owner=%s state=%q 已下沉完成，不应参与（不是冲突）", tc.owner, tc.state)
-			}
-		})
+	// 权威切换：这一步把 Owner 从 hot 改成 cold，是出口的关键。
+	proj := map[PartitionKey]*PublishedProjection{
+		hotKey: {ManifestVersion: "pv-1", CoverageComplete: true, QueryLocationDirID: "cold-target"},
 	}
+	_, err = c.SwitchDayOwners(day, OwnerCold, "cold-target", proj)
+	require.NoError(t, err, "SwitchDayOwners 必须成功（hot 残留至此已不再是 hot）")
+
+	for _, st := range []MigrationState{StateQueryLeaseDraining, StateDetached, StateCleaned} {
+		_, err = c.AdvanceDay(day, st)
+		require.NoError(t, err, "AdvanceDay → %s", st)
+	}
+	rec, ok = c.Get(hotKey)
+	require.True(t, ok)
+	require.Equal(t, OwnerCold, rec.Owner, "迁移完成后 owner 必须是 cold")
+
+	// 出口终点：守卫不再拦，该日可以正常结账。
+	require.NoError(t, c.MarkDayComplete(day, "sum"),
+		"hot 残留迁移完成后必须能结账；若此处失败说明出口没有闭环")
+}
+
+// TestMixedDayWithHotResidualCanComplete 钉住「混合态日 + hot 残留」必须能走完全链路。
+//
+// 这是上一条的**混合形态**，也是真实生产形态：某日已整体下沉到冷层（cold + CLEANED），
+// 之后迟到的写入在同一天新建了一条 hot 记录（默认态 CLEANED）。
+//
+// 若活跃判据按「MigrationState 是 CLEANED ⇒ 不参与」一刀切，这条 hot 记录会被
+// 所有日级操作跳过（AdvanceDay / SwitchDayOwners / FailDay / MarkDayComplete），
+// 于是该日要么在 CLEANED 上被静默结账（数据丢失），要么永远卡在结账拒绝。
+//
+// 判据因此按 **Owner** 口径：「Owner 仍是 hot ⇒ 还有数据没下沉 ⇒ 必须参与」。
+// 但仅此还不够：`SwitchDayOwners` 里的 `ApplyOwnerSwitch` 要求记录处于
+// `ATTACHED_STAGING`，而 hot 残留若没被重新发起迁移就仍停在 CLEANED，
+// 直接对它调用必然失败。故完整出口是「重新 BeginDayMigration + 走完 happy path」，
+// 本用例把这条混合形态端到端钉住。
+func TestMixedDayWithHotResidualCanComplete(t *testing.T) {
+	const day = "2026-09-25"
+	settledKey := PartitionKey{StorageNamespace: "ns-a-settled", UTCDay: day}
+	lateKey := PartitionKey{StorageNamespace: "ns-z-late", UTCDay: day}
+
+	c := New(NewMemJournal())
+
+	// 已下沉完成的那条。
+	settled := NewStableRecord(settledKey, OwnerCold, 1, "dir-settled")
+	require.NoError(t, c.Put(settled))
+
+	// 迟到新建的那条：hot + CLEANED（NewStableRecord 默认态）。
+	late := NewStableRecord(lateKey, OwnerHot, 1, "dir-late")
+	require.Equal(t, StateCleaned, late.MigrationState)
+	require.NoError(t, c.Put(late))
+
+	// 重新发起迁移：BeginDayMigration 按 Owner 纳入 hot 那条、跳过已下沉那条。
+	_, err := c.BeginDayMigration(day, OwnerCold, "cold-target")
+	require.NoError(t, err, "混合态日必须能发起迁移")
+
+	lateRec, _ := c.Get(lateKey)
+	require.Equal(t, StateRoutingFrozen, lateRec.MigrationState, "hot 残留必须进入迁移")
+	settledRec, _ := c.Get(settledKey)
+	require.Equal(t, StateCleaned, settledRec.MigrationState, "已下沉记录不得被改动")
+
+	// 只为迟到的那条建投影（已下沉那条不需要切权威）。
+	proj := map[PartitionKey]*PublishedProjection{
+		lateKey: {ManifestVersion: "pv-1", CoverageComplete: true, QueryLocationDirID: "cold-target"},
+	}
+	for _, st := range []MigrationState{
+		StateDraining, StateSnapshotting, StateStagingVerify, StateAttachedStaging,
+	} {
+		_, err = c.AdvanceDay(day, st)
+		require.NoError(t, err, "AdvanceDay → %s", st)
+	}
+
+	// 关键点：SwitchDayOwners 必须只切处于 ATTACHED_STAGING 的记录，
+	// 不能把已 CLEANED 的 settled 一并送进 ApplyOwnerSwitch（那会必失败）。
+	_, err = c.SwitchDayOwners(day, OwnerCold, "cold-target", proj)
+	require.NoError(t, err, "混合态日的权威切换必须成功（已下沉记录要被跳过）")
+
+	for _, st := range []MigrationState{StateQueryLeaseDraining, StateDetached, StateCleaned} {
+		_, err = c.AdvanceDay(day, st)
+		require.NoError(t, err, "AdvanceDay → %s", st)
+	}
+	lateRec, _ = c.Get(lateKey)
+	require.Equal(t, OwnerCold, lateRec.Owner, "迟到记录最终必须切到 cold")
+
+	require.NoError(t, c.MarkDayComplete(day, "sum"),
+		"混合态日全部下沉后必须能结账")
 }

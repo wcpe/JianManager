@@ -94,12 +94,16 @@ func activeDayRecords(records []*Record) []*Record {
 		//   · Owner=cold/archive      → 跳过（已下沉完成，是「已完成」而不是「冲突」）。
 		// 这样 `activeDayRecords` 与 `BeginDayMigration` 的 Owner 口径一致，
 		// 混合态日既有明确出口（重新 BeginDayMigration 纳入），也不会被静默结账。
-		if rec.Owner == OwnerHot {
-			active = append(active, rec)
-			continue
-		}
-		// Owner 已非 hot，但仍处于迁移中间态（如 Owner 已切但未走到 CLEANED）：
-		// 也要参与，否则会停在半路。
+		// 判据保持「按 MigrationState」：空态与 CLEANED 不参与本次推进。
+		//
+		// 曾试过改成「Owner 仍是 hot 就一律纳入」，那是错的：
+		// `hot + CLEANED` 记录若被算作活跃，`SwitchDayOwners` 会把它送进
+		// `ApplyOwnerSwitch`，而后者要求 `ATTACHED_STAGING` ⇒ 必然失败，
+		// 等于把一个「拒绝结账」换成「权威切换报错」。
+		//
+		// `hot + CLEANED` 的**真出口是重新发起迁移**（`BeginMigration` 允许从 CLEANED
+		// 起跳），由 `DayManager.Resume` 自动完成 —— 见该函数的 `reinitiateResidualMigration`。
+		// 一旦重新发起，记录就不再是 CLEANED，本判据自然把它纳入。
 		if rec.MigrationState != "" && rec.MigrationState != StateCleaned {
 			active = append(active, rec)
 		}
