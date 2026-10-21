@@ -445,6 +445,8 @@ func (p *ProvisionService) createBeaconInstance(req ProvisionServerRequest, plan
 		Name:         req.Name,
 		Type:         model.InstanceTypeGeneric,
 		Role:         model.InstanceRoleBeacon,
+		// 二进制类别（FR-511）：Beacon 预设与通用二进制同属这一类。
+		Kind:         model.InstanceKindBinary,
 		ProcessType:  model.ProcessTypeDaemon,
 		JDKID:        0,
 		StartCommand: startCommand,
@@ -834,6 +836,8 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 	return p.instance.Create(CreateInstanceRequest{
 		NodeID: req.NodeID,
 		Name:   req.Name,
+		// 二进制类别（FR-511）：与 Beacon 预设同类，运维视角都是「非 MC 核心的可执行程序」。
+		Kind:   model.InstanceKindBinary,
 		// Type 落 generic：二进制不是 Minecraft Java 进程，落 minecraft_java 会让
 		// docker 端口映射按 25565 约定改写、模板 RAM 需求按 JVM 估算，均不适用。
 		Type:        model.InstanceTypeGeneric,

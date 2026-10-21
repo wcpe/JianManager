@@ -142,6 +142,7 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 	// ── 就地接管：O(1) 无拷贝，同步建实例即完成（工作目录=原目录绝对路径，托管区外例外）。
 	if inPlace {
 		inst, err := s.instance.Create(CreateInstanceRequest{
+			Kind: model.InstanceKindPlugin, // 导入的是 MC 服务端目录（插件服）
 			NodeID: req.NodeID, Name: req.Name, Type: model.InstanceTypeMinecraftJava,
 			Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon, JDKID: req.JDKID,
 			LaunchSpec: string(specJSON), ServerPort: inspect.ServerPort, AutoRestart: true,
@@ -203,6 +204,7 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 // createImportedInstance 建导入实例（结构化启动同 provision，ADR-008；backend 角色可注册代理/可克隆）。
 func (s *ImportServerService) createImportedInstance(req ImportServerRequest, specJSON []byte, inspect *ImportInspectResult, relWorkDir string) (*model.Instance, error) {
 	return s.instance.Create(CreateInstanceRequest{
+		Kind: model.InstanceKindPlugin, // 导入的是 MC 服务端目录（插件服）
 		NodeID: req.NodeID, Name: req.Name, Type: model.InstanceTypeMinecraftJava,
 		Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon, JDKID: req.JDKID,
 		LaunchSpec: string(specJSON), ServerPort: inspect.ServerPort, AutoRestart: true,

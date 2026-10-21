@@ -213,6 +213,9 @@ type CreateInstanceRequest struct {
 	Name             string             `json:"name" binding:"required,min=1,max=128"`
 	Type             model.InstanceType `json:"type" binding:"required"`
 	Role             model.InstanceRole `json:"role"`
+	// Kind 服务端类别（FR-511）：plugin / proxy / binary。留空由 Create 按 type+role 回退推断，
+	// 但各搭建入口应显式传入（它们知道用户的 coreType，比推断准确）。
+	Kind model.InstanceKind `json:"kind"`
 	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
 	StartCommand     string             `json:"startCommand"`
 	JDKID            uint               `json:"jdkId"`
@@ -308,11 +311,20 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		probePort = 0
 	}
 
+	// 类别（FR-511）：调用方显式给了就用它；否则按归一后的 type+role 回退推断。
+	// 放在归一之后——role=beacon 会把 type 改成 generic，若先推断会得到错误的「二进制」/「插件服」边界。
+	kind := req.Kind
+	if !model.ValidInstanceKind(kind) {
+		probe := &model.Instance{Type: instType, Role: role}
+		kind = probe.KindOrInfer()
+	}
+
 	instance := &model.Instance{
 		NodeID:           req.NodeID,
 		Name:             req.Name,
 		Type:             instType,
 		Role:             role,
+		Kind:             kind,
 		ProcessType:      req.ProcessType,
 		StartCommand:     req.StartCommand,
 		JDKID:            req.JDKID,

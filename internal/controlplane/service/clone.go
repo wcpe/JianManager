@@ -207,10 +207,12 @@ func (s *CloneService) cloneAllocAndCreate(src *model.Instance, req CloneInstanc
 
 	// 创建独立新实例（系统分配新目录；同款结构化启动/JDK；新端口）。RCON 已退役（FR-067），治理走探针。
 	dst, err = s.instance.Create(CreateInstanceRequest{
-		NodeID:           src.NodeID,
-		Name:             req.Name,
-		Type:             src.Type,
-		Role:             model.InstanceRoleBackend,
+		NodeID: src.NodeID,
+		Name:   req.Name,
+		Type:   src.Type,
+		Role:   model.InstanceRoleBackend,
+		// 克隆沿用源实例的类别（FR-511）：克隆的是同一份服务端程序，类别必然相同。
+		Kind:             src.KindOrInfer(),
 		ProcessType:      src.ProcessType,
 		StartCommand:     src.StartCommand,
 		JDKID:            src.JDKID,

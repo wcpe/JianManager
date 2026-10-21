@@ -158,6 +158,8 @@ func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.In
 	}
 	inst, err := p.instance.Create(CreateInstanceRequest{
 		NodeID: req.NodeID, Name: req.Name, Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleProxy,
+		// 代理恒为 proxy 类别（FR-511）：与它跑的是 Velocity 还是 BungeeCord 无关。
+		Kind: model.InstanceKindProxy,
 		ProcessType: model.ProcessTypeDaemon, JDKID: req.JDKID, LaunchSpec: string(specJSON),
 		ServerPort: ports.ServerPort, AutoRestart: true, GroupID: req.GroupID,
 	})

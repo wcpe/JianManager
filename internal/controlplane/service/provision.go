@@ -322,10 +322,12 @@ func (p *ProvisionService) createProvisionInstance(req ProvisionServerRequest, c
 		return nil, err
 	}
 	return p.instance.Create(CreateInstanceRequest{
-		NodeID:      req.NodeID,
-		Name:        req.Name,
-		Type:        model.InstanceTypeMinecraftJava,
-		Role:        model.InstanceRoleBackend,
+		NodeID: req.NodeID,
+		Name:   req.Name,
+		Type:   model.InstanceTypeMinecraftJava,
+		Role:   model.InstanceRoleBackend,
+		// 类别由本次搭建选的 coreType 决定（FR-511）：比事后按 type+role 推断准。
+		Kind:        KindForCoreType(req.CoreType),
 		ProcessType: model.ProcessTypeDaemon,
 		JDKID:       req.JDKID,
 		LaunchSpec:  string(specJSON),
