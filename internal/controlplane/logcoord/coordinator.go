@@ -758,7 +758,15 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 		return nil, nil, quality, false, false, Coverage{}, nil, errNoDialer
 	}
 	covByTarget = make(map[string]TargetCoverage)
-	quality.DuplicateQuality = DupExact
+	// 聚合种子必须**显式** exact，绝不能留零值（空串）。语义上种子只表示
+	// 「尚无 Worker 表态时先按最好」，真实取值由各 Worker 上报后按最差值覆盖。
+	//
+	// 为什么零值是错的：空串经 Parse* 归一为 unspecified，而 unspecified 现在
+	// 排在 exact 之上（见 worstDuplicateQuality）——零值种子会把**每一次** Search 的
+	// 聚合结果污染成 unspecified，于是全 exact 的集群也永远导不出任何东西。
+	// 原实现只给 DuplicateQuality 赋了初值、StatsQuality 留空，单 Worker 未上报时
+	// 靠「空种子」歪打正着地拦住了导出；那是种子在替 Worker 表态，属同一类错误。
+	quality = Quality{DuplicateQuality: DupExact, StatsQuality: StatsQExact}
 	workerCoverage.Complete = true
 	workerCoverage.EnumerationState = EnumExhausted
 	order, byWorker := resolved.ByWorker()
@@ -943,46 +951,64 @@ func mergeWorkerCoverage(dst *Coverage, src *Coverage) {
 
 // worstDuplicateQuality 按「越差越优先」合并两个 Worker 上报的重复质量。
 //
-// 为什么需要：Export 的质量闸门只拦截 unresolved/conflict，故聚合必须是保守的——
-// 任一 Worker 报冲突或未决，整体就不能宣称 exact，否则不完整来源会被放行（M-3）。
-// 未知取值按与 unspecified 同级处理，不参与升级判定。
+// 为什么需要：Export 的质量闸门是 fail-closed（QualityBlocksExport：非 exact 即阻断），
+// 故聚合必须同样保守——任一 Worker 报冲突/未决/未上报，整体就不能宣称 exact，
+// 否则不完整来源会被放行（M-3）。
+//
+// 排序（越差越前）：conflict > unresolved > unspecified > exact。
+// unspecified 必须排在 exact **之上**：它代表「这份结果的质量没有任何来源断言过」，
+// 旧实现把它记作最低（rank 0）导致 worst(exact, unspecified) 返回 exact，
+// 于是「w1=exact、w2=未上报」被聚合成 exact，导出闸门看到 exact 就放行——
+// fail-closed 的闸门被聚合侧整个绕过（这就是本函数曾经的缺陷）。
+// unspecified 仍排在 unresolved 之下：后者信息更明确，合并时优先保留可归因的值。
+//
+// 归一化统一走 Parse*：它把 unspecified、空串（proto 缺省 ⇒ 适配层的零值 Quality）
+// 与一切本版本不认识的未来枚举都收敛成 DupUnspecified。三条路径必须同口径——
+// 否则「Worker 未上报」与「Worker 上报了不认识的取值」会各自落在不同 rank 上，
+// 而闸门只认解析后的枚举，两处口径一漂移就又会出现静默放行。
+//
+// 注意调用方：因为 unspecified 现在高于 exact，**聚合种子不能留零值**——
+// 空串会被归一成 unspecified 并立刻污染结果（详见 fanoutSearch 与 Export 的显式种子）。
 func worstDuplicateQuality(a, b DuplicateQuality) DuplicateQuality {
+	pa, pb := ParseDuplicateQuality(string(a)), ParseDuplicateQuality(string(b))
 	rank := func(q DuplicateQuality) int {
-		switch strings.ToLower(string(q)) {
-		case string(DupConflict):
+		switch q {
+		case DupConflict:
+			return 4
+		case DupUnresolved:
 			return 3
-		case string(DupUnresolved):
+		case DupUnspecified:
 			return 2
-		case string(DupExact):
+		default: // 只剩 exact
 			return 1
-		default:
-			return 0
 		}
 	}
-	if rank(b) > rank(a) {
-		return b
+	if rank(pb) > rank(pa) {
+		return pb
 	}
-	return a
+	return pa
 }
 
-// worstStatsQuality 同上，用于统计质量（unavailable > partial > exact）。
+// worstStatsQuality 同上，用于统计质量（unavailable > partial > unspecified > exact）。
+// 排序与归一化理由见 worstDuplicateQuality。
 func worstStatsQuality(a, b StatsQuality) StatsQuality {
+	pa, pb := ParseStatsQuality(string(a)), ParseStatsQuality(string(b))
 	rank := func(q StatsQuality) int {
-		switch strings.ToLower(string(q)) {
-		case string(StatsQUnavailable):
+		switch q {
+		case StatsQUnavailable:
+			return 4
+		case StatsQPartial:
 			return 3
-		case string(StatsQPartial):
+		case StatsQUnspecified:
 			return 2
-		case string(StatsQExact):
+		default: // 只剩 exact
 			return 1
-		default:
-			return 0
 		}
 	}
-	if rank(b) > rank(a) {
-		return b
+	if rank(pb) > rank(pa) {
+		return pb
 	}
-	return a
+	return pa
 }
 
 func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget QueryBudget, workerID string, targets []TargetInfo, tailMode string) (
@@ -1805,7 +1831,9 @@ func (c *Coordinator) Export(ctx context.Context, q Query) (*ExportResult, error
 	searchQ.Budget.MaxBytes = 0
 	var items []Event
 	var last *SearchResponse
-	var exportQuality Quality
+	// 种子必须显式 exact（理由同 fanoutSearch）：空零值会被 Parse* 归一成 unspecified，
+	// 而 unspecified 排在 exact 之上，逐页聚合的第一步就会把全 exact 的导出判成不完整。
+	exportQuality := Quality{DuplicateQuality: DupExact, StatsQuality: StatsQExact}
 	// 累计字节必须跨页累加：原先每页都对 items 从头重算，页数为 p、总行数为 n 时
 	// 总量约 O(n²)（M-2）。此处只对当前页增量累加，判定语义不变。
 	var used uint64
