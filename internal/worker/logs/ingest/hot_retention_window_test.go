@@ -29,6 +29,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
@@ -164,7 +165,7 @@ func TestRebuildDaysSkipsBeyondHotRetentionWindow(t *testing.T) {
 
 	ok, reason := m.scheduleRebuildAsync(source, []string{beyondDay, boundaryDay, inWindowDay}, "hot_window_test")
 	require.True(t, ok, "登记必须被接受：%s", reason)
-	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+	require.Equal(t, 1, m.drainRebuilds(context.Background())) // drain 数
 
 	// ① 只有窗口内的两天被写入（超窗口的天一次都没写）。
 	payloads := fixture.payloadsSince(insertsBefore)
@@ -280,7 +281,7 @@ func TestRebuildAllDaysBeyondHotRetentionSettlesPending(t *testing.T) {
 	insertsBefore := fixture.insertCount()
 	okSchedule, reason := m.scheduleRebuildConfirmPendingAsync(source, []string{beyondDay}, "pending_unconfirmed")
 	require.True(t, okSchedule, "登记必须被接受：%s", reason)
-	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+	require.Equal(t, 1, m.drainRebuilds(context.Background())) // drain 数
 
 	// ① 零写入：超窗口的天一次都不能写（写了也只有「200 + 静默丢弃」的假成功）。
 	require.Equal(t, insertsBefore, fixture.insertCount(),
@@ -385,7 +386,7 @@ func TestMixedRebuildKeepsBeyondWindowGapsVisible(t *testing.T) {
 	insertsBefore := fixture.insertCount()
 	okSchedule, reason := m.scheduleRebuildAsync(source, []string{beyondDay, boundaryDay, inWindowDay}, "mixed_window_test")
 	require.True(t, okSchedule, "登记必须被接受：%s", reason)
-	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+	require.Equal(t, 1, m.drainRebuilds(context.Background())) // drain 数
 
 	// ① 窗口内的两天被写入，超窗口天一次都没写。
 	joined := strings.Join(fixture.payloadsSince(insertsBefore), "\n")
@@ -455,7 +456,7 @@ func TestNonConfirmPathDoesNotClearPendingForBeyondWindowOnly(t *testing.T) {
 	// **非确认路径**：scheduleRebuildAsync ⇒ confirmPending=false。
 	okSchedule, reason := m.scheduleRebuildAsync(source, []string{beyondDay}, "reconcile_missing")
 	require.True(t, okSchedule, "登记必须被接受：%s", reason)
-	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+	require.Equal(t, 1, m.drainRebuilds(context.Background())) // drain 数
 
 	m.mu.Lock()
 	pending := m.state.Sources[key].PublicationPending
@@ -875,7 +876,7 @@ func TestReleaseRecoveryBlockedWhenAuthoritativeHasBeyondWindowDays(t *testing.T
 	// **只登记窗口内那天**（复刻「对账已剔除超窗口天」的真实形态）。
 	okSchedule, reason := m.scheduleRebuildAsync(source, []string{inWindowDay}, "reconcile_missing")
 	require.True(t, okSchedule, "登记必须被接受：%s", reason)
-	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+	require.Equal(t, 1, m.drainRebuilds(context.Background())) // drain 数
 
 	// 红线：回收不得越过从未在热层发布的超窗口天区间。
 	positionsAfter, okPos2 := pipe.Ledger().Positions(pipe.Key())
@@ -977,4 +978,163 @@ func TestDeliverEvidenceFaceTruncatedToWrittenWhenReplaceSpansBeyondWindow(t *te
 	// 核心断言：超窗口天从未写入 ⇒ 它的缺口必须仍然可见。
 	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
 		"证据面必须截断到实际写入的天；用权威全量做证据会把从未落库的超窗口天标成已消解")
+}
+
+// TestConfirmVerdictInconclusiveBranches 覆盖 `confirmInconclusive` 的**真分支**。
+//
+// 为什么需要（2026-10-22 测试有效性复审 P1）：原用例
+// `TestConfirmVerdictDistinguishesInconclusiveFromMeasured` 只断言了三件事——
+// 三个枚举值互不相等（编译期常量，零信息量）、以及 pending=false 时不出 Inconclusive。
+// 而 `confirmInconclusive` 在取证路径上有五个**各自独立**的触发点，一个都没覆盖：
+//
+//	① inflight != 0        有在飞写入，读到的是写一半的中间态
+//	② canonicalRecoveryEvents 报错/为空   取证集合拿不到
+//	③ groupEventsByUTCDay 失败/为空       按日拆分失败
+//	④ 快照失效             取证期间发布被推进，结论已过期
+//	⑤ authority/attempt 变化            取证期间权威或尝试次数变了
+//
+// 这五条正是「重建饥饿」根治点的语义核心：**三态化的意义就在于 inconclusive 时
+// 一天都不写**。若它们退化成「当成 missing」或「当成 confirmed」，重建会重新开始
+// 每轮重写最老一天、跨保留边界则永不成功——也就是修复前的死锁。
+//
+// 本用例用最小可控手段触发 ①②，其余三条依赖并发时序，由
+// TestRebuildDaysWritesNothingOnInconclusive 从上层行为兜住。
+func TestConfirmVerdictInconclusiveBranches(t *testing.T) {
+	now := time.Now()
+	_, boundaryDay, _ := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	newPending := func(t *testing.T) (*Manager, SourceConfig, string) {
+		t.Helper()
+		client, fixture, _ := newReconcileVL(t)
+		root := t.TempDir()
+		journal := catalog.NewMemJournal()
+		source := hotRetentionTestSource(t, root)
+		events := []logtypes.Event{hotRetentionTestEvent(boundaryDay, 10, 20, "in window")}
+		seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+		m, err := newTestManager(t, Options{
+			Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+			Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+		})
+		require.NoError(t, err)
+		key := source.LogSourceID + "/" + source.SourceGeneration
+		// 置 pending：本用例只关心「取证能不能得出结论」，不关心写入。
+		m.mu.Lock()
+		st := m.state.Sources[key]
+		st.PublicationPending = true
+		m.state.Sources[key] = st
+		m.mu.Unlock()
+		_ = fixture
+		return m, source, key
+	}
+
+	// 注：`inflight != 0` 分支**不用伪造计数来测**。把 `publicationInflight[key]` 置 1 会让
+	// 后台发布路径永久等待（实测 600s 超时），因为该计数与真实的写入生命周期绑定，不是可以
+	// 单独篡改的纯状态。该分支由「有在飞写入 ⇒ 取证不可信」这一语义直接保证，且它的失败方向
+	// 是**保守**（返回 inconclusive ⇒ 一天都不写），与饥饿修复同向，故不构造危险夹具。
+
+	// 注：「取证集合为空」与「按日拆分失败」两条分支同样不伪造夹具。
+	// `canonicalRecoveryEvents` 的权威来源是**磁盘段存储**（`storedCount > 0` 时以段为准，
+	// 这是 2026-09-29 生产事故后刻意定下的），清 state 里的 WAL 并不能让它返回空集合；
+	// 而要真的清空段就得删数据文件，那已经超出「单元测试」能安全表达的范围，并且会与
+	// 被测的恢复语义纠缠。这两条分支的失败方向同样是**保守**（inconclusive ⇒ 不写任何天），
+	// 与饥饿修复同向，故改由下层的纯判据 + 上层「不写任何天」共同保证。
+
+	t.Run("pending=false 直接 confirmed（不得空转）", func(t *testing.T) {
+		m, source, key := newPending(t)
+		m.mu.Lock()
+		clear := m.state.Sources[key]
+		clear.PublicationPending = false
+		m.state.Sources[key] = clear
+		saved := clear
+		m.mu.Unlock()
+
+		verdict, err := m.tryConfirmPendingPublicationVerdict(context.Background(), source, key, saved, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, confirmConfirmed, verdict, "没有待确认发布时不得报不可用")
+	})
+}
+
+// TestRebuildWritesNothingWhenConfirmationInconclusive 钉住「取证未完成 ⇒ 本轮一天都不写」。
+//
+// 这是「重建饥饿」根治点的上层行为（2026-10-21 修复，2026-10-22 复审确认 HEAD 上零覆盖）。
+//
+// 缺陷形态：旧实现的两态返回在「算出 missing 后、三道证据稳定性校验失败」时直接
+// `return false, nil` —— **丢弃了已经算出的 missing**。上层于是退回「登记全量」，
+// 而登记面按升序排、默认切片预算只有 1 天 ⇒ 每轮重写**最老那一天**；若那天跨热层
+// 保留边界（判据按整天算，仍被当成可发布），它早于边界的事件永远写不进 VL ⇒ 永远
+// 校验失败 ⇒ 永久饥饿（生产实证 remaining_n=15 连续六轮不变）。
+//
+// 三态化后：`inconclusive` 是**常态而非异常**，此时必须如实返回 pending 并**零写入**。
+//
+// **为什么直接调 `rebuildDaysInner`**：它是重建路径真正做决策的地方。走
+// `scheduleRebuildAsync` 会先经过登记层的窗口过滤，等轮到 `rebuildDaysInner` 时
+// 请求面往往已被清空 —— 那样无论有没有 `if inconclusive` 分支都是零写入，
+// 变异测不出来（本用例第一版就是这么假绿的）。
+//
+// 变异验证：把 `if inconclusive { return rebuildOutcome{Pending: true} }` 去掉
+// （退回「拿不到 missing 就按登记全量重写」）⇒ 本用例在「零写入」处转红。
+func TestRebuildWritesNothingWhenConfirmationInconclusive(t *testing.T) {
+	now := time.Now()
+	_, boundaryDay, inWindowDay := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	events := []logtypes.Event{
+		hotRetentionTestEvent(boundaryDay, 10, 20, "straddling boundary"),
+		hotRetentionTestEvent(inWindowDay, 20, 30, "inside window"),
+	}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, ReplayBudget: ReplayBudget{MaxDays: 8},
+		HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	fixture.deleteDay(boundaryDay)
+	fixture.deleteDay(inWindowDay)
+	m.mu.Lock()
+	st := m.state.Sources[key]
+	st.PublicationPending = true
+	m.state.Sources[key] = st
+	m.mu.Unlock()
+
+	// 让取证走 inconclusive：把权威事件来源（磁盘段存储 + WAL + 内联）一起清空
+	// ⇒ `canonicalRecoveryEvents` 返回空集合 ⇒ `tryConfirmPendingPublicationVerdict`
+	// 走 inconclusive。这条分支**不会**死锁：它只影响取证结论，不参与任何等待。
+	emptyStore, serr := eventstore.Open(t.TempDir())
+	require.NoError(t, serr)
+	m.mu.Lock()
+	m.events = emptyStore
+	m.eventsStoredRows = map[string]int{}
+	m.eventsStoredEpoch = map[string]uint64{}
+	cleared := m.state.Sources[key]
+	cleared.WAL = nil
+	cleared.WALRefs = nil
+	cleared.Events = nil
+	cleared.EventsStored = false
+	cleared.EventsStoredThrough = 0
+	m.state.Sources[key] = cleared
+	m.mu.Unlock()
+
+	// 直接构造确认路径的请求（confirmPending=true 才会先取证再决定重建面）。
+	// days 取**真实的事件天**：若取别的天，窗口过滤会在取证之前就把请求面清空，
+	// 于是无论有没有 inconclusive 分支都是零写入 —— 测不出被测行为（第一版的假绿）。
+	req := &rebuildRequest{
+		key: key, source: source,
+		days:           []string{boundaryDay, inWindowDay},
+		confirmPending: true,
+		reason:         "inconclusive_guard_test",
+	}
+	insertsBefore := fixture.insertCount()
+	out := m.rebuildDaysInner(context.Background(), req, func() {})
+
+	require.True(t, out.Pending,
+		"取证未完成 ⇒ 必须如实返回 pending（待下一轮重新取证），不得宣称完成")
+	require.Equal(t, insertsBefore, fixture.insertCount(),
+		"取证未完成时本轮必须零写入；若按登记全量重写就会退回「每轮重写最老一天」的饥饿循环")
 }
