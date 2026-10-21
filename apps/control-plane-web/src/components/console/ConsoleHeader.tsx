@@ -61,10 +61,13 @@ export default function ConsoleHeader() {
       // `data-slot` 覆盖 ui 包 TopNav 自己的 `top-nav`：外壳的 CSS 与测试都按 `console-header` 取它。
       data-slot="console-header"
       // `flex-none` 覆盖 TopNav 的 `flex-1`（tailwind-merge 后者胜）：外壳是纵向 flex，
-      // 顶栏按内容高度（53px）定高，不能与下方 `console-body` 争抢剩余高度。
+      // 顶栏按内容高度定高，不能与下方 `console-body` 争抢剩余高度。
+      // 【44px 而非原型实测的 53px】53px 里塞的是 24px logo + 13px 文字，纵向留白过多、
+      // 整体比例显得笨重（用户反馈「改矮一些、整体比例缩小」）。收到 44px 后
+      // 「logo 24 + 上下 10」正好贴满，是这条栏在信息密度上的自然高度。
       // 去掉 `backdrop-blur-xl`：顶栏是 `relative`（并非 sticky/fixed），下方没有任何内容
       // 会滚到它底下，模糊永远作用在同一块静止背景上——纯粹的合成层开销，零视觉收益。
-      className="jm-console-header relative z-30 h-[53px] flex-none text-[13px]"
+      className="jm-console-header relative z-30 h-[44px] flex-none text-[12px]"
       brand={<BrandSegment />}
       workspaces={workspaces.map((workspace) => ({
         key: workspace.key,
@@ -168,11 +171,17 @@ function HeaderTools() {
   )
 }
 
-/** 顶栏品牌区（方案 C，ADR-071）：折叠状态与切换动作注入包内展示件，此处只读 console store。 */
+/**
+ * 顶栏品牌区（方案 C，ADR-071）：只读折叠状态（决定是否渲染品牌文字）。
+ *
+ * 折叠开关**不在顶栏**：唯一入口是侧栏底部的常驻按钮（`sidebar-collapse-toggle`）。
+ * 上一版在品牌区右侧放过一个收起按钮，但它在折叠态被 `{!collapsed && …}` 卸载，
+ * 成了「缩回去就展不开」的缺口；补上底部常驻开关后这里便是重复入口，已删除。
+ */
 function BrandSegment() {
   const collapsed = useConsoleStore((s) => s.sidebarCollapsed)
-  const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
-  return <ConsoleBrandSegment collapsed={collapsed} onToggleSidebar={toggleSidebar} />
+  const navigate = useNavigate()
+  return <ConsoleBrandSegment collapsed={collapsed} onNavigateHome={() => navigate('/')} />
 }
 
 /** 靠右常驻搜索入口（FR-179 / FR-241）：开面板动作注入包内展示件，此处只读 console store。 */

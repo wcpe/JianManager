@@ -27,7 +27,7 @@ vi.mock('@/api/notification-feed', () => ({
  * 顶栏布局契约（方案 C / ADR-071；FR-502 阶段 6 补丁）。
  *
  * 补丁改变了顶栏的两件事，本文件锁住它们：
- * 1. **唯一一条 53px 通栏**——工作区切换并回顶栏（原型 `.topbar` 内含 `.space-nav`），
+ * 1. **唯一一条通栏**——工作区切换并回顶栏（原型 `.topbar` 内含 `.space-nav`），
  *    不再有独立的 `console-workspace-bar` 行；
  * 2. **顶栏不输出页名/面包屑**——页名只由内容页 `PageHeader` 承担。
  */
@@ -36,14 +36,15 @@ describe('ConsoleHeader 布局', () => {
     loginMockUser()
   })
 
-  it('顶栏是唯一一条 53px 通栏：品牌区 + 工作区切换 + 操作区，且已下线节点作用域下拉', () => {
+  it('顶栏是唯一一条通栏：品牌区 + 工作区切换 + 操作区，且已下线节点作用域下拉', () => {
     const { container } = renderWithProviders(<ConsoleHeader />, { route: '/instances/1' })
 
     const header = container.querySelector('header') as HTMLElement
     expect(header).toHaveAttribute('data-slot', 'console-header')
     expect(header).toHaveClass('jm-console-header')
-    // 原型顶栏实测 53px（`.topbar` 是 `#app` 的第一条网格行）。
-    expect(header).toHaveClass('h-[53px]')
+    // 【44px 而非原型实测的 53px】用户要求「改矮一些、整体比例缩小」：
+    // 53px 里塞 24px logo + 13px 文字，纵向留白过多。44px 是「logo 24 + 上下 10」的自然高度。
+    expect(header).toHaveClass('h-[44px]')
     // 方案 C：品牌 Logo 移入顶栏品牌区。
     expect(screen.getByText('JianManager')).toBeInTheDocument()
     // FR-502 阶段 6 补丁：工作区切换不再另起一行，顶栏内就有 `.space-nav`。

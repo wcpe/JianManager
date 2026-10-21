@@ -730,16 +730,21 @@ function filterInstancesByQuery(url: URL): MockInstance[] {
   const env = url.searchParams.get('env')
   const tag = url.searchParams.get('tag')
   const networkId = url.searchParams.get('networkId')
+  const groupId = url.searchParams.get('groupId')
   // uuid 精确匹配：供前端把 URL 里的实例 uuid（下钻深链 ?instance=<uuid>）解析成数字 id，
   // 不必为此拉全量实例列表（千级约 1MB/轮）。与真后端 /instances/search?uuid= 对齐。
   const uuid = url.searchParams.get('uuid')
   const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
+  // 组织分组按**子树**过滤（含自身与全部后代），与 GET /instance-groups/:id/instances 同口径。
+  // 前端侧栏选组后直接带 groupId 走服务端过滤，不能靠本地裁剪窗口——成员可能全在窗口之外。
+  const subtreeOf = groupId ? new Set(subtreeInstanceIds(Number(groupId))) : null
   return instances.list((i) => {
     if (uuid && i.uuid !== uuid) return false
     if (nodeId && String(i.nodeId) !== nodeId) return false
     if (status && i.status !== status) return false
     if (role && i.role !== role) return false
     if (q && !i.name.toLowerCase().includes(q)) return false
+    if (subtreeOf && !subtreeOf.has(i.id)) return false
     const tags = parseTags(i.tags)
     if (env && !tags.includes(`env:${env}`)) return false
     if (tag && !tags.includes(tag)) return false

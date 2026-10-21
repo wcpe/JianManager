@@ -1,30 +1,31 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Scale } from 'lucide-react'
+import { Check, Languages, PanelLeftClose, PanelLeftOpen, Scale } from 'lucide-react'
 
-import type { InstanceInfo } from '@/lib/instances/instance-types'
 import type { NodeInfo } from '@/lib/nodes/node-types'
 import { cn } from '@jianmanager/ui'
 import {
-  ResourceTree,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@jianmanager/ui/components/dropdown-menu'
+import {
   SideNav,
   SideNavBottom,
-  SideNavHead,
   SideNavResource,
   SideNavRow,
   SideNavShortcuts,
-  type ResourceNode,
-  type ResourceStatus,
 } from '@jianmanager/ui/components/shell'
 import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
 import type { ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
-import { statusDotKind } from '@/lib/instances/instance-tree'
+import { SidebarPinnedTools, SidebarToolRail } from '@/components/views/console/SidebarToolRail'
 import type { NavEntry } from '@/lib/shared/nav-config'
+import { logoToggleLabelKey } from '@/lib/shared/sidebar-logo'
 import { resolveWorkspacePath } from '@/lib/console/workspace-navigation'
 import type { WorkspaceDef } from '@/lib/console/workspace-navigation'
-import { isDeepLink, landingPathOf } from '@/lib/hooks/use-workspace-navigation'
-import type { MemberStatusCounts } from '@/lib/networks/topology'
+import { isDeepLink } from '@/lib/hooks/use-workspace-navigation'
 
 /**
  * 工作区外壳侧栏（FR-502 阶段 6）：把「资源优先工作区」原型（`.tmp/设计/`）的侧栏接进主控台。
@@ -36,17 +37,20 @@ import type { MemberStatusCounts } from '@/lib/networks/topology'
  * 各装**自己的**入口（`workspace-navigation.ts` 的真实数据），且只做两件事：
  * 定位资源（节点 / 群组 / 收藏）+ 少数几个高频目的地。其余入口走顶栏搜索（Ctrl+K 命令面板）。
  *
- * 【四段结构（原型 `.sidebar`）】
- *   `SideNavHead`      工作区名 + pill，回答「我在哪个工作区」
- *   `SideNavShortcuts` 固定入口（服务器运维：平台首页 / 全部实例 / 节点，带计数）
- *   `SideNavResource`  资源区（唯一可伸缩段）：服务器运维=资源树，其他工作区=分组入口
- *   `SideNavBottom`    底部常驻（服务器运维：群组与拓扑 / 工作台等跨设施入口）
+ * 【四段结构（重构件后的现状）】
+ *   `SideNavShortcuts` 固定入口（服务器运维：平台首页 / 全部实例 / 节点，紧凑高度）——
+ *                      工作区名标题行与分组小标题**已移除**（「侧栏不留标题」是本次要求）；
+ *   常用区            置回的工具（`SidebarPinnedTools`，偏好见 lib/console/sidebar-tools）；
+ *   `SideNavResource`  资源区（唯一可伸缩段）：服务器运维=资源面板（搜索 + 筛选 + 分组方式 +
+ *                      服务器列表，见 SidebarResourcePanel），其他工作区=扁平入口列表；
+ *   `SideNavBottom`    底部常驻：工具图标轨（网络拓扑/分组管理/超级工作台/导播台 + 「更多」
+ *                      收纳菜单，见 SidebarToolRail）与偏好块。
  *
  * 【能力对照：替换时哪些旧能力必须原样留下】
  * - 权限裁剪：与旧侧栏同语义同入口（`workspacesForPermissions` / `workspacesForRole`，FR-431）；
  * - 折叠态：仍由 `useConsoleStore.sidebarCollapsed` 驱动，宽度动画仍走 `jm-*` 那套 CSS
  *   （FR-502 阶段 6 补丁后，宽度过渡只作用于侧栏自身，见 {@link WorkspaceSidebar}）；
- * - 收藏 / 最近打开（FR-293）：`ServerSelector` + `SidebarServerList` 整体搬进「收藏」段，逻辑未改；
+ * - 收藏 / 最近打开（FR-293/240）：并入资源面板（置顶=收藏），存储层未改；
  * - 移动端：`MobileConsoleNav` 不动，本组件在 `<sm` 依旧整条隐藏（`hidden sm:flex`）。
  *
  * 【原缺口已闭合（FR-502 阶段 6 补丁）】
@@ -58,16 +62,6 @@ import type { MemberStatusCounts } from '@/lib/networks/topology'
  * - 非服务器运维工作区在折叠态下只剩图标轨（原型该态显示分组图标行）：本阶段用
  *   「折叠态渲染全部入口图标」实现（见 {@link WorkspaceIconRail}）。
  */
-
-/** 资源导航三段（原型 `.segments` 的三个切换项）。 */
-type ResourceMode = 'nodes' | 'groups' | 'favorites'
-
-/** 三段的文案键：复用既有 i18n（分组维度 / 常驻服务器列），不为侧栏另造同义键。 */
-const RESOURCE_MODE_LABEL_KEY: Record<ResourceMode, string> = {
-  nodes: 'grouping.dim_node',
-  groups: 'grouping.dim_network',
-  favorites: 'sidebarServers.favorites',
-}
 
 /** 一个分组里可直接导航的目的地（登记顺序不变）。 */
 function navigableEntries(group: { children?: NavEntry[] }): NavEntry[] {
@@ -90,12 +84,6 @@ export interface WorkspaceSidebarData {
   instanceTotal?: number
   /** 节点列表。 */
   nodes?: NodeInfo[]
-  /** 按节点的实例计数（聚合权威值，非已加载条数）。 */
-  byNode?: { nodeId: number; count: number }[]
-  /** 资源树首屏实例（前 N 条）。 */
-  instances?: InstanceInfo[]
-  /** 群组列表行。 */
-  networks?: { id: number; name: string; memberCount: number; memberStatus: MemberStatusCounts }[]
 }
 
 /** 权限快照（应用侧注入；`loaded=false` 时不做裁剪，宁可短暂多给也不闪空白）。 */
@@ -124,12 +112,20 @@ export interface WorkspaceSidebarProps {
   renderLink: (args: WorkspaceLinkArgs) => ReactNode
   /** 命令式跳转（资源树 / 群组行）。 */
   onNavigate: (to: string) => void
-  /** 应用侧接线层组件：服务器选择器（收藏 / 最近）。 */
-  renderServerSelector: () => ReactNode
-  /** 应用侧接线层组件：常驻服务器列。 */
-  renderSidebarServerList: () => ReactNode
+  /** 应用侧接线层组件：资源面板（搜索 + 筛选 + 分组方式 + 服务器列表）。 */
+  renderResourcePanel: () => ReactNode
   /** 版本号（Vite 注入常量由外壳提供）。 */
   appVersion: string
+  /** 语言切换（与主题/「更多」并排在同一行）。 */
+  language: { current: string; onChange: (lng: string) => void }
+  /**
+   * 折叠/展开侧栏。
+   *
+   * 【为什么底部也要一个】顶栏那个按钮在折叠态是 `{!collapsed && …}`（DOM 卸载），
+   * 折叠后**整个页面再也找不到展开入口**——用户实测「缩回去就无法展开」。
+   * 侧栏底部这个按钮两种状态都常驻，图标与文案随状态切换（收起 ↔ 展开）。
+   */
+  onToggleSidebar: () => void
   /** 底部主题切换注入面（透传给受控的 {@link ThemeSwitcher}）。 */
   themeSwitcher: Pick<ThemeSwitcherProps, 'colorTheme' | 'theme' | 'onColorThemeChange' | 'onThemeChange'>
 }
@@ -147,10 +143,11 @@ export function WorkspaceSidebar({
   pathname,
   renderLink,
   onNavigate,
-  renderServerSelector,
-  renderSidebarServerList,
+  renderResourcePanel,
   appVersion,
   themeSwitcher,
+  language,
+  onToggleSidebar,
 }: WorkspaceSidebarProps) {
   const { t } = useTranslation()
 
@@ -167,8 +164,16 @@ export function WorkspaceSidebar({
         data-state={collapsed ? 'collapsed' : 'expanded'}
         className="jm-sidebar-drawer flex h-full min-h-0 flex-col"
       >
-        {/* 抽屉是 grid（CSS 指定），只能有一个自动放置的子项；真正的四段列布局放在这一层。 */}
-        <div data-slot="console-sidebar-surface" className="flex min-h-0 flex-col">
+        {/*
+          抽屉是 grid（CSS 指定，`grid-template-rows: minmax(0,1fr)`），只能有一个自动放置的
+          子项；真正的四段列布局放在这一层。
+
+          【必须有 `h-full` + `min-h-0`】grid 子项默认 `min-height:auto`，本层又是 flex 列容器：
+          资源区（`flex-1`）内容再多也会把本层撑到内容高度，底部常驻段随之下移到视口之外——
+          这正是「底部的『显示在侧边栏』显示不出来」的成因。`h-full` 把高度钉在抽屉行高上，
+          `min-h-0` 允许它收缩，`overflow-hidden` 保证超出部分由资源区自己滚。
+        */}
+        <div data-slot="console-sidebar-surface" className="flex h-full min-h-0 flex-col overflow-hidden">
           {activeWorkspace && (
             <WorkspaceSections
               workspace={activeWorkspace}
@@ -178,10 +183,11 @@ export function WorkspaceSidebar({
               pathname={pathname}
               renderLink={renderLink}
               onNavigate={onNavigate}
-              renderServerSelector={renderServerSelector}
-              renderSidebarServerList={renderSidebarServerList}
+              renderResourcePanel={renderResourcePanel}
               appVersion={appVersion}
               themeSwitcher={themeSwitcher}
+              language={language}
+              onToggleSidebar={onToggleSidebar}
             />
           )}
         </div>
@@ -197,10 +203,13 @@ interface SectionsInjected {
   pathname: string
   renderLink: (args: WorkspaceLinkArgs) => ReactNode
   onNavigate: (to: string) => void
-  renderServerSelector: () => ReactNode
-  renderSidebarServerList: () => ReactNode
+  renderResourcePanel: () => ReactNode
   appVersion: string
   themeSwitcher: Pick<ThemeSwitcherProps, 'colorTheme' | 'theme' | 'onColorThemeChange' | 'onThemeChange'>
+  /** 语言切换（`/settings` 也有等价入口，但侧栏底部需要与主题/更多并排的一处快捷入口）。 */
+  language: { current: string; onChange: (lng: string) => void }
+  /** 折叠/展开侧栏（底部常驻，折叠态仍可展开）。 */
+  onToggleSidebar: () => void
 }
 
 /**
@@ -212,48 +221,24 @@ interface SectionsInjected {
  * 只保留侧栏自身与它消费的 {@link useWorkspaceNavigation} 数据源。
  */
 
-/** 四段内容（按工作区分派：服务器运维有资源树与底部常驻，其他工作区给分组入口）。 */
+/** 四段内容（按工作区分派：服务器运维有工具轨/资源面板，其他工作区给扁平入口列表）。 */
 function WorkspaceSections({
   workspace,
   collapsed,
   ...injected
 }: { workspace: WorkspaceDef; collapsed: boolean } & SectionsInjected) {
-  const { t } = useTranslation()
   const isOps = workspace.key === 'ops'
-  // 工作区没有自己的图标字段：取首个分组的图标（服务器运维=总览、观测=活动、运营=玩家、平台=身份），
-  // 与原型 `.workspace-label` 里那个「该工作区通用图标」同义。
-  const HeadIcon = workspace.groups[0]?.icon
-  // 标题点击回到该工作区落地页。直接复用 use-workspace-navigation 的 landingPathOf：
-  // 它本就是「切工作区进该区第一页」的同一套规则（服务器运维 → 平台首页，观测 → 监控总览…），
-  // 复用它才能保证「点标题」与「切工作区」落在同一个页面上，不会各自漂移。
-  const landingTo = landingPathOf(workspace)
-
-  // 标题此前是纯标签，但它位于侧栏顶部、由「图标 + 文字 + 徽章」构成，形状与位置都在说
-  // 「这是导航元素」——用户会反复去点而无反应。现在点击回到本工作区落地页
-  //（「标题回首页」是跨产品惯例）。
-  // 可点态由外壳注入的链接承担，SideNavHead 只收到 `interactive`
-  // 用来补悬停反馈——这样拿到的是真实 `<a href>`：可聚焦、支持中键与新标签页。
-  const head = (
-    <SideNavHead
-      interactive={Boolean(landingTo)}
-      icon={HeadIcon ? <HeadIcon /> : undefined}
-      // pill 只给服务器运维：它确实是资源视图；其他工作区是功能导航，原型的 pill 也只在运维侧出现。
-      pill={isOps ? t('resourceCard.viewGroup') : undefined}
-    >
-      {t(workspace.labelKey)}
-    </SideNavHead>
-  )
+  // 工具集合（网络拓扑/分组管理/超级工作台/导播台）的真源：ops「群组与工作台」组。
+  const toolEntries = isOps
+    ? navigableEntries(workspace.groups.find((group) => group.key === 'opsGroupsWorkbench') ?? {})
+    : []
 
   return (
     <>
-      {landingTo
-        ? injected.renderLink({ to: landingTo, className: 'group block', children: head })
-        : head}
-
       {isOps ? (
         <>
           <OpsShortcuts workspace={workspace} collapsed={collapsed} {...injected} />
-          <OpsResourceSection {...injected} />
+          <SideNavResource>{injected.renderResourcePanel()}</SideNavResource>
         </>
       ) : collapsed ? (
         <WorkspaceIconRail workspace={workspace} {...injected} />
@@ -261,7 +246,7 @@ function WorkspaceSections({
         <WorkspaceGroupSections workspace={workspace} {...injected} />
       )}
 
-      <SidebarBottom workspace={workspace} collapsed={collapsed} {...injected} />
+      <SidebarBottom workspace={workspace} collapsed={collapsed} toolEntries={toolEntries} {...injected} />
     </>
   )
 }
@@ -284,7 +269,8 @@ function OpsShortcuts({
   if (entries.length === 0) return null
 
   return (
-    <SideNavShortcuts>
+    // 紧凑高度（重构件要求）：行高 36→30、字号 11px；标题行移除后顶部补回一点留白。
+    <SideNavShortcuts className="pb-[10px] pt-[10px] [&_[data-slot=side-nav-row]]:min-h-[30px] [&_[data-slot=side-nav-row]]:text-[11px]">
       {entries.map((entry) => (
         <WorkspaceNavRow
           key={entry.to}
@@ -300,43 +286,55 @@ function OpsShortcuts({
 }
 
 /**
- * 侧栏底部常驻段（原型 `.sidebar-bottom`），两件事：
- *
- * 1. 服务器运维的跨设施入口（群组与拓扑 / 工作台）：取 `opsGroupsWorkbench` 分组
- *    （权限裁剪后的真实登记）而不是硬编码两条——原型的两条只是这四个目的地的概称，
- *    按登记渲染才不会丢「分组管理 / 导播台」。其他工作区的跨设施入口在各自的分组列表里。
- * 2. 偏好块（`SidebarPreferences`）：主题色 / 明暗、版本号、开源许可。
- *
- * 底部段对**所有工作区**都存在（第二件事与工作区无关），因此主题切换在任何工作区都够得着。
- */
-function SidebarBottom({
-  workspace,
-  collapsed,
-  ...injected
-}: { workspace: WorkspaceDef; collapsed: boolean } & SectionsInjected) {
-  const group = workspace.key === 'ops' ? workspace.groups.find((item) => item.key === 'opsGroupsWorkbench') : undefined
-  const entries = group ? navigableEntries(group) : []
-
-  return (
-    <SideNavBottom>
-      {entries.map((entry) => (
-        <WorkspaceNavRow
-          key={entry.to}
-          entry={entry}
-          collapsed={collapsed}
-          renderLink={injected.renderLink}
-          pathname={injected.pathname}
-        />
-      ))}
-      <SidebarPreferences
-        collapsed={collapsed}
-        appVersion={injected.appVersion}
-        renderLink={injected.renderLink}
-        themeSwitcher={injected.themeSwitcher}
-      />
+ /**
+  * 侧栏底部常驻段（重构件后）：工具图标轨 + 偏好块。
+  *
+  * 1. 工具图标轨（`SidebarToolRail`）：网络拓扑 / 分组管理 / 超级工作台 / 导播台 收纳为纯图标，
+  *    末尾「更多」菜单可把工具置回侧栏主体（偏好见 lib/console/sidebar-tools）；
+  *    图标语义落在真 `<a href>` 上，中键 / 新标签页可用。
+  * 2. 偏好块（`SidebarPreferences`）：主题色 / 明暗、版本号、开源许可。
+  *
+  * 底部段对**所有工作区**都存在（第二件事与工作区无关），因此主题切换在任何工作区都够得着；
+  * 工具轨只在服务器运维（其工具集合真源所在）渲染。
+  */
+ function SidebarBottom({
+   collapsed,
+   toolEntries,
+   ...injected
+ }: { workspace: WorkspaceDef; collapsed: boolean; toolEntries: NavEntry[] } & SectionsInjected) {
+   // 底部段竖直内边距按本侧栏的实际内容收紧（展开态 10px → 6px）。
+   // 写在 className 上而不是改 ui 包默认值：`SideNavBottom` 是通用容器，
+   // 折叠态 padding 还参与过渡（`p-[8px_6px]`），改默认值会影响其他页面。
+   return (
+     <SideNavBottom className="py-[6px]">
+       {/*
+         两段：
+         1. **显示在侧边栏**的工具行（用户从「更多」里拖回来的，`SidebarPinnedTools`）——
+            这里是它们唯一的落脚点。此前把工具整体收进菜单时漏了这一半，
+            导致「拖进『显示在侧边栏』之后哪儿都不出现」（本次修复）。
+            一个都没放时整段不渲染，底部分隔线也随之消失。
+         2. 偏好块：主题 / 明暗 / 语言 / 更多 同一行 + 版本号与开源协议。
+       */}
+       <SidebarPinnedTools
+         entries={toolEntries}
+         pathname={injected.pathname}
+         renderLink={injected.renderLink}
+         collapsed={collapsed}
+       />
+       <SidebarPreferences
+         collapsed={collapsed}
+         appVersion={injected.appVersion}
+         renderLink={injected.renderLink}
+         themeSwitcher={injected.themeSwitcher}
+         language={injected.language}
+         onToggleSidebar={injected.onToggleSidebar}
+         moreMenu={toolEntries.length > 0
+           ? <SidebarToolRail entries={toolEntries} pathname={injected.pathname} renderLink={injected.renderLink} />
+           : undefined}
+       />
     </SideNavBottom>
-  )
-}
+   )
+ }
 
 /**
  * 底部偏好块（FR-132 版本号与许可 / FR-164 主题色与明暗）。
@@ -353,28 +351,75 @@ function SidebarPreferences({
   appVersion,
   renderLink,
   themeSwitcher,
+  language,
+  moreMenu,
+  onToggleSidebar,
 }: {
   collapsed: boolean
   appVersion: string
   renderLink: (args: WorkspaceLinkArgs) => ReactNode
   themeSwitcher: Pick<ThemeSwitcherProps, 'colorTheme' | 'theme' | 'onColorThemeChange' | 'onThemeChange'>
+  language: { current: string; onChange: (lng: string) => void }
+  /** 三个点「更多」入口：与主题/语言并排在同一行（用户指定）。 */
+  moreMenu?: ReactNode
+  /**
+   * 上方是否有「显示在侧边栏」的工具行。
+   *
+   * 决定本块顶部那条分隔线要不要画：**一个工具都没置回时，上面的工具段整段不渲染，
+   * 这条线下面也没有任何工具**，留着就只是凭空一条横线（用户明确指出要去掉）。
+   */
+  onToggleSidebar: () => void
 }) {
   const { t } = useTranslation()
 
   return (
-    <div data-slot="console-sidebar-preferences" className="mt-[6px] border-t border-border/60 pt-[7px]">
-      {/* 【为什么折叠态不再 `flex-col`】`flex-direction` **不参与过渡**（瞬跳）：折叠瞬间
-          按钮从横排跳成纵排，紧接着侧栏宽度过渡又把它们挤一次——布局连算两遍，
-          视觉上就是「抖两下」。折叠态这里只有 ThemeSwitcher 一个按钮且已是纯图标形态，
-          54px 宽放得下横排，保持同一方向、只切换对齐即可，不必换布局方向。 */}
-      <div className={cn('flex items-center gap-2', collapsed && 'justify-center')}>
-        {/* `compact` 与整栏折叠态同步：折叠态本来就是纯图标。 */}
-        <ThemeSwitcher compact={collapsed} {...themeSwitcher} />
+    <div
+      data-slot="console-sidebar-preferences"
+      className={cn(
+        /*
+          【间距收敛】此前是 `mt-[6px] pt-[7px]`，叠加 `SideNavBottom` 自身的 `p-[10px]`
+          与版本行 `pt-1.5`，在没有工具行时底部区高达 85px（其中 33px 全是留白）——
+          用户反馈「没有放入按钮的时候过于高」。这里把外边距与上内边距压到 2/4，
+          总留白 20px → 低于一行按钮高度，视觉上紧贴边界线。
+        */
+        'mt-[2px] shrink-0 pt-[4px]',
+      )}
+    >
+      {/*
+        一行放齐：主题色 / 明暗（`ThemeSwitcher` 自带两个按钮）+ 语言 + 三个点「更多」。
+        【为什么折成一行】此前它们是两行（主题一行、更多与版本一行），在 246px 宽的侧栏里
+        白白吃掉两行视觉重量；用户明确要求并排。
+        折叠态只隐藏右侧的语言/更多（宽度不够），主题按钮居中——与既有折叠行为一致。
+      */}
+      <div className={cn('flex items-center gap-1.5', collapsed && 'justify-center')}>
+        {/*
+          【折叠态整块不渲染】用户指定：缩放（折叠）后底部只保留折叠按钮——主题色/明暗/语言
+          全部撤走，否则 54px 宽里塞一个配色按钮既挤又容易误触。
+          折叠后这些入口并非消失：展开一次即可，且明暗/语言在 `/settings` 的「外观」也有等价入口。
+          用条件渲染而非 `hidden`：折叠态不需要它们的 DOM（也不该被 Tab 走到）。
+        */}
+        {!collapsed && <ThemeSwitcher compact={collapsed} {...themeSwitcher} />}
+        {!collapsed && <LanguageButton language={language} />}
+        {/* 「更多」与折叠开关靠右；折叠态只剩折叠开关（唯一出口，必须常驻）。 */}
+        <div className={cn('ms-auto flex items-center gap-1', collapsed && 'ms-0')}>
+          {!collapsed && moreMenu}
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            /* 标签描述「将发生的动作」而非当前态：展开时=收起、折叠时=展开。
+               复用 `logoToggleLabelKey` 而不是在这里写三元——那条规则原先服务顶栏 logo，
+               现在顶栏按钮已删、只剩这一处开关，但「按折叠态取标签」的规则是同一份。 */
+            aria-label={t(logoToggleLabelKey(collapsed))}
+            title={t(logoToggleLabelKey(collapsed))}
+            data-testid="sidebar-collapse-toggle"
+            className="flex size-[22px] shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            {collapsed ? <PanelLeftOpen className="size-[15px]" /> : <PanelLeftClose className="size-[15px]" />}
+          </button>
+        </div>
       </div>
 
-      {/* 版本号 + 开源许可行：原先用 `{!collapsed && …}` 条件渲染，折叠即卸载 →
-          又一次布局跳动。改用 grid-rows 收起高度 + 淡出，与侧栏宽度同节拍。
-          `inert` 补齐语义：视觉收起后元素仍在 DOM，不加它读屏与 Tab 仍会走到「开源许可」。 */}
+      {/* 版本号 + 开源协议：仍在最下，与上面一行之间不留额外间距（视觉上是一块）。 */}
       <div
         inert={collapsed ? true : undefined}
         className={cn(
@@ -383,7 +428,8 @@ function SidebarPreferences({
         )}
       >
         <div className="overflow-hidden">
-          <div className="flex items-center justify-between gap-2 px-1 pt-1.5">
+          {/* 版本行与上面一行按钮之间只留 2px：两行本是同一块，多余留白只会把底部区撑高。 */}
+          <div className="flex items-center justify-between gap-2 px-1 pt-[2px]">
             <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground/80">
               <span className="size-1.5 rounded-full bg-status-success" />
               v{appVersion}
@@ -407,24 +453,53 @@ function SidebarPreferences({
 }
 
 /**
- * 非服务器运维工作区的展开态：按分组列出该工作区的全部入口（原型 `.section-nav` +
- * `.section-title`：平台管理「拥有独立且清楚的五组导航」）。
+ * 语言切换（中/英两档，与 `/settings` 的「外观」同源）。
+ *
+ * 为什么用下拉而不是一个「切换」按钮：当前语言要能一眼看出来；两档下拉的点击成本
+ * 与切换按钮相同，但不会在误触后需要再点一次才能回去。
+ */
+function LanguageButton({ language }: { language: { current: string; onChange: (lng: string) => void } }) {
+  const { t } = useTranslation()
+  const current = language.current.startsWith('en') ? 'en' : 'zh'
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={t('settings.language')}
+          title={t('settings.language')}
+          data-testid="sidebar-language"
+          className="flex size-7 shrink-0 items-center justify-center gap-0.5 rounded-md text-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        >
+          <Languages className="size-4" />
+          <span className="text-[9px] font-medium uppercase leading-none">{current}</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="top" className="w-28">
+        {(['zh', 'en'] as const).map((lng) => (
+          <DropdownMenuItem key={lng} className="text-xs" onSelect={() => language.onChange(lng)}>
+            {lng === 'zh' ? '简体中文' : 'English'}
+            {current === lng && <Check className="ml-auto size-3.5" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * 非服务器运维工作区的展开态：列出该工作区的全部入口（**扁平，不渲染分组小标题**）。
  * 资源区是侧栏唯一可滚动段，工作区入口多的（平台 14 条）也不会把底栏顶出屏幕。
  */
 function WorkspaceGroupSections({ workspace, renderLink, pathname }: { workspace: WorkspaceDef } & SectionsInjected) {
-  const { t } = useTranslation()
-
   return (
     <SideNavResource>
-      <div data-slot="console-sidebar-groups" className="min-h-0 flex-1 overflow-y-auto scrollbar-none px-[9px] pb-[14px] pt-[3px]">
+      <div data-slot="console-sidebar-groups" className="min-h-0 flex-1 overflow-y-auto scrollbar-none px-[9px] pb-[14px] pt-[6px]">
         {workspace.groups.map((group) => {
           const entries = navigableEntries(group)
           if (entries.length === 0) return null
           return (
-            <div key={group.key} data-slot="console-sidebar-group">
-              <div className="px-[10px] pb-[5px] pt-[12px] text-[10px] tracking-[.5px] text-muted-foreground/70">
-                {t(group.labelKey)}
-              </div>
+            <div key={group.key} data-slot="console-sidebar-group" className="pt-[2px]">
               {entries.map((entry) => (
                 <WorkspaceNavRow key={entry.to} entry={entry} collapsed={false} renderLink={renderLink} pathname={pathname} />
               ))}
@@ -451,152 +526,6 @@ function WorkspaceIconRail({ workspace, renderLink, pathname }: { workspace: Wor
         <WorkspaceNavRow key={entry.to} entry={entry} collapsed renderLink={renderLink} pathname={pathname} />
       ))}
     </SideNavShortcuts>
-  )
-}
-
-/**
- * 服务器运维的资源区（原型 `.resource-head` + `.resource-search` + `.resource-scroll`）。
- *
- * 三段分工：
- * - **按节点**：`ResourceTree`（节点 → 实例，每节点默认 7 行，其余折叠成跳实例列表的链接）；
- * - **按群组**：群组（Network 软标签）的成员数与健康点，点击进按群组过滤的实例列表。
- *   原型在群组下内联展开成员，本阶段改为跳列表——为每个群组各拉一次详情会让侧栏在
- *   大集群上发出一串请求，收益却只是少点一次；
- * - **收藏**：`ServerSelector` + 常驻服务器列（FR-293 收藏 / 最近打开）。这是旧侧栏的既有能力，
- *   替换时必须原样保留，所以整体搬进来而不是重写。
- *
- * 三段本身按权限收敛（没 node.read 就不该出现节点树），一个都不剩时整段不渲染。
- */
-function OpsResourceSection({
-  data,
-  permissions,
-  onNavigate,
-  renderServerSelector,
-  renderSidebarServerList,
-}: SectionsInjected) {
-  const { t } = useTranslation()
-  const [mode, setMode] = useState<ResourceMode>('nodes')
-  // 权限还没加载时不做隐藏（宁可短暂多给，也不要首帧闪出「资源导航」空白）。
-  const can = (perm: string) =>
-    !permissions.loaded || permissions.isPlatformAdmin || permissions.nodes.has(perm)
-  const modes: ResourceMode[] = []
-  if (can('node.read') && can('instance.read')) modes.push('nodes')
-  if (can('network.read')) modes.push('groups')
-  modes.push('favorites')
-
-  // 权限裁剪让当前段失效时（例如登录后权限下落）自动落到第一个可见段，而不是留下空白。
-  const activeMode = modes.includes(mode) ? mode : modes[0]
-  if (!activeMode) return null
-
-  return (
-    <SideNavResource>
-      <div data-slot="resource-nav-head" className="px-[14px] pb-[10px] pt-[15px]">
-        <div className="mb-[10px] text-[10px] tracking-[.8px] text-muted-foreground/70">{t('nav.resources')}</div>
-        <div
-          data-slot="resource-nav-segments"
-          className="flex w-full items-center gap-[2px] rounded-md border border-border bg-muted p-[3px]"
-        >
-          {modes.map((item) => (
-            <button
-              key={item}
-              type="button"
-              aria-pressed={item === activeMode}
-              data-active={item === activeMode || undefined}
-              onClick={() => setMode(item)}
-              className={cn(
-                'flex-1 whitespace-nowrap rounded-[4px] px-[5px] py-1 text-[11px] text-muted-foreground',
-                'transition-colors duration-[var(--motion-duration-normal)] ease-ios hover:text-foreground',
-                item === activeMode && 'bg-card font-[560] text-foreground shadow-soft',
-              )}
-            >
-              {t(RESOURCE_MODE_LABEL_KEY[item])}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 「定位」入口常驻：三段都靠它做跨全量的服务端搜索，本地的树/列表只负责就近挑选。
-          选择器本体是应用侧接线层（自带取数与路由），故由外壳注入渲染。 */}
-      <div data-slot="resource-nav-selector" className="mx-[14px] mb-[9px]">
-        {renderServerSelector()}
-      </div>
-
-      {activeMode === 'nodes' && (
-        <NodeResourceList data={data} permissions={permissions} onNavigate={onNavigate} />
-      )}
-      {activeMode === 'groups' && <GroupResourceList data={data} onNavigate={onNavigate} />}
-      {activeMode === 'favorites' && (
-        <div data-slot="resource-nav-favorites" className="min-h-0 flex-1 overflow-y-auto scrollbar-none px-[9px] pb-[14px]">
-          {renderSidebarServerList()}
-        </div>
-      )}
-    </SideNavResource>
-  )
-}
-
-/** 「按节点」段：节点 → 实例两级资源树（数据源与实例列表 / 聚合同源）。 */
-function NodeResourceList({
-  data,
-  permissions,
-  onNavigate,
-}: Pick<SectionsInjected, 'data' | 'permissions' | 'onNavigate'>) {
-  const [query, setQuery] = useState('')
-  const canReadInstances =
-    !permissions.loaded || permissions.isPlatformAdmin || permissions.nodes.has('instance.read')
-
-  const tree = useMemo(
-    () =>
-      buildResourceNodes(
-        data?.nodes ?? [],
-        // 无 instance.read 时（理论上已被段可见性挡住）不摆实例，避免展示注定 403 的内容。
-        canReadInstances ? (data?.instances ?? []) : [],
-        data?.byNode ?? [],
-      ),
-    [data, canReadInstances],
-  )
-
-  return (
-    <ResourceTree
-      nodes={tree}
-      query={query}
-      onQueryChange={setQuery}
-      onSelectNode={(node) => onNavigate(`/nodes?node=${node.id}`)}
-      onSelectInstance={(instance) => onNavigate(`/instances/${instance.id}`)}
-      onShowAll={(node) => onNavigate(`/instances?nodeId=${node.id}`)}
-    />
-  )
-}
-
-/**
- * 「按群组」段：群组（Network 软标签）成员数 + 健康点，点击进 `?networkId=` 过滤后的实例列表。
- * 请求按需发生：本组件只在选中该段时挂载，`useNetworks` 因此不会在三段之外被触发。
- */
-function GroupResourceList({ data, onNavigate }: Pick<SectionsInjected, 'data' | 'onNavigate'>) {
-  const { t } = useTranslation()
-  const rows = data?.networks ?? []
-
-  return (
-    <div data-slot="resource-nav-groups" className="min-h-0 flex-1 overflow-y-auto scrollbar-none px-[9px] pb-[14px]">
-      {rows.length === 0 ? (
-        <p className="px-[10px] py-[10px] text-[11px] text-muted-foreground">{t('networks.empty')}</p>
-      ) : (
-        rows.map((network) => (
-          <button
-            key={network.id}
-            type="button"
-            title={network.name}
-            onClick={() => onNavigate(`/instances?networkId=${network.id}`)}
-            className="flex h-[33px] w-full items-center gap-[6px] rounded-[5px] px-[6px] text-left transition-colors duration-[var(--motion-duration-normal)] ease-ios hover:bg-muted"
-          >
-            <span className={cn('size-1.5 shrink-0 rounded-full', groupHealthClass(network.memberStatus))} aria-hidden />
-            <span className="min-w-0 flex-1 truncate text-[11px] font-[570]">{network.name}</span>
-            <span className="min-w-[24px] shrink-0 text-right font-mono text-[10px] text-muted-foreground/70">
-              {network.memberCount}
-            </span>
-          </button>
-        ))
-      )}
-    </div>
   )
 }
 
@@ -650,57 +579,3 @@ function currentPatternOf(pathname: string): string | null {
   return resolveWorkspacePath(pathname)?.pattern ?? null
 }
 
-/** 节点 + 已加载实例 → 资源树的 `ResourceNode[]`。 */
-function buildResourceNodes(
-  nodes: NodeInfo[],
-  instances: InstanceInfo[],
-  byNode: { nodeId: number; count: number }[],
-): ResourceNode[] {
-  const instanceCounts = new Map(byNode.map((item) => [item.nodeId, item.count]))
-  const grouped = new Map<number, InstanceInfo[]>()
-  for (const instance of instances) {
-    const list = grouped.get(instance.nodeId)
-    if (list) list.push(instance)
-    else grouped.set(instance.nodeId, [instance])
-  }
-
-  return nodes.map((node) => {
-    const members = grouped.get(node.id) ?? []
-    return {
-      id: String(node.id),
-      name: node.name,
-      // 节点 status：1=在线，其余（离线/启动中）统一按「非异常但不可用」的灰点处理。
-      status: node.status === 1 ? 'normal' : 'muted',
-      // 计数一律用聚合的权威总数：实例列表只加载了前 N 条，用已加载条数会少报，
-      // 让「查看其余 N 个实例」变成假话。
-      instanceCount: instanceCounts.get(node.id) ?? members.length,
-      instances: members.map((instance) => ({
-        id: String(instance.id),
-        name: instance.name,
-        status: instanceResourceStatus(instance.status),
-      })),
-    }
-  })
-}
-
-/** 实例状态 → 资源树四态。复用仓库既有的状态分类（`statusDotKind`），避免与列表页的点色漂移。 */
-function instanceResourceStatus(status: string): ResourceStatus {
-  switch (statusDotKind(status)) {
-    case 'running':
-      return 'normal'
-    case 'transitioning':
-      return 'warn'
-    case 'crashed':
-      return 'bad'
-    default:
-      return 'muted'
-  }
-}
-
-/** 群组健康点：有崩溃成员=红、有过渡中成员=琥珀、一个都没在跑=灰、否则绿。 */
-function groupHealthClass(counts: MemberStatusCounts): string {
-  if (counts.crashed > 0) return 'bg-status-danger'
-  if (counts.starting > 0 || counts.stopping > 0) return 'bg-status-warning'
-  if (counts.running === 0) return 'bg-muted-foreground/50'
-  return 'bg-status-success'
-}

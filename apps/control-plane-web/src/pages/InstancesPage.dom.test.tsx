@@ -547,4 +547,96 @@ describe('InstancesPage（mock 假后端）', () => {
       INSTANCE_GROUP_ROW_HEIGHT + loaded * INSTANCE_ROW_HEIGHT + EXPANDED_ROW_EXTRA,
     )
   })
+
+  /**
+   * 列设置（页面重构件）：取消勾选「心跳」→ 表头与行内心跳格同步消失；选择持久化到 jm.instances.columns。
+   * 菜单为 modal（打开期间外部 aria-hidden），操作后先关闭再断言页面主体。
+   */
+  it('列设置：隐藏心跳列后表头与行内同步消失，并持久化', async () => {
+    // 只清本特性的键：`localStorage.clear()` 会连登录 token 一起清掉（请求全 401、数据不落）。
+    localStorage.removeItem('jm.instances.columns')
+    localStorage.removeItem('jm.instances.views')
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list' })
+    await screen.findByTestId('instances-table-virtual')
+    // 指标批量取数有 300ms 防抖 + 请求往返：放宽到 5s，避免与默认 1s 等待赛跑。
+    await waitFor(() => expect(screen.getAllByTestId('instance-heartbeat').length).toBeGreaterThan(0), {
+      timeout: 5000,
+    })
+
+    await user.click(screen.getByRole('button', { name: '列设置' }))
+    await user.click(screen.getByRole('menuitemcheckbox', { name: '心跳' }))
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(screen.queryAllByTestId('instance-heartbeat')).toHaveLength(0))
+    const thead = document.querySelector('thead') as HTMLElement
+    expect(within(thead).queryByText('心跳')).toBeNull()
+    expect(JSON.parse(localStorage.getItem('jm.instances.columns') ?? '[]')).not.toContain('heartbeat')
+  })
+
+  /**
+   * 保存视图（应用侧）：菜单列出已存视图；应用后 URL 恢复快照（分组/视图模式随 URL 同步 effect 落位），
+   * 列集合同步恢复（保存时未含的「实时指标」不得出现）。
+   */
+  it('保存视图：应用已存视图恢复 URL 与列集合', async () => {
+    localStorage.removeItem('jm.instances.columns')
+    localStorage.setItem(
+      'jm.instances.views',
+      JSON.stringify([
+        { name: '卡片·按节点', search: '?view=card&groupBy=node', columns: ['type', 'role', 'tags', 'heartbeat'] },
+      ]),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list' })
+
+    await user.click(screen.getByRole('button', { name: '视图' }))
+    await user.click(screen.getByRole('menuitem', { name: '卡片·按节点' }))
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(window.location.search).toContain('groupBy=node'))
+    expect(window.location.search).toContain('view=card')
+
+    // 切回列表视图核对列集合：心跳在、实时指标不在。
+    await user.click(await screen.findByRole('button', { name: '列表视图' }))
+    await screen.findByTestId('instances-table-virtual')
+    const thead = document.querySelector('thead') as HTMLElement
+    expect(within(thead).getByText('心跳')).toBeInTheDocument()
+    expect(within(thead).queryByText('实时指标')).toBeNull()
+  })
+
+  /** 保存视图（保存侧）：命名后落 jm.instances.views，快照含当前 search。 */
+  it('保存视图：命名后落 jm.instances.views（快照含当前 search）', async () => {
+    localStorage.removeItem('jm.instances.views')
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=node' })
+
+    await user.click(screen.getByRole('button', { name: '视图' }))
+    await user.click(screen.getByRole('menuitem', { name: /保存当前视图/ }))
+    await user.type(await screen.findByLabelText('视图名称'), '运维晨检')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => {
+      const views = JSON.parse(localStorage.getItem('jm.instances.views') ?? '[]') as {
+        name: string
+        search: string
+      }[]
+      expect(views).toHaveLength(1)
+      expect(views[0].name).toBe('运维晨检')
+      expect(views[0].search).toContain('groupBy=node')
+    })
+  })
+
+  /** 异常强化（页面重构件）：CRASHED 行带 data-attention 与左侧警示条（不改变行高）。 */
+  it('异常强化：CRASHED 行带 data-attention 与警示样式', async () => {
+    // 本用例只断言渲染结果，不需要模拟用户交互——故不建 userEvent 实例。
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&status=CRASHED' })
+    const surface = await screen.findByTestId('instances-table-virtual')
+
+    await waitFor(() => {
+      expect(surface.querySelector('tbody tr[data-attention="true"]')).not.toBeNull()
+    })
+    const row = surface.querySelector('tbody tr[data-attention="true"]') as HTMLElement
+    expect(row.className).toContain('bg-status-danger/5')
+    expect(row.style.height).toBe(`${INSTANCE_ROW_HEIGHT}px`)
+  })
 })

@@ -279,6 +279,8 @@ export function VirtualizedGroupedInstanceTable({
   renderRow,
   emptyLabel,
   isRowExpanded,
+  onVisibleRangeChange,
+  columnCount = 10,
 }: {
   rows: InstanceTreeRow[]
   totalCount: number
@@ -291,6 +293,10 @@ export function VirtualizedGroupedInstanceTable({
   emptyLabel: string
   /** 展开行判据（与行渲染同源）：展开行多渲染一个 `<tr>`，须按展开行高计入模型。 */
   isRowExpanded?: (inst: InstanceInfo) => boolean
+  /** 可见窗口上报（range 变化即通知）：容器据此切片实例列表批量取行内指标。 */
+  onVisibleRangeChange?: (start: number, end: number) => void
+  /** 当前表格总列数（列设置会改变它；占位/组头/空态的 colSpan 必须同步）。缺省 10。 */
+  columnCount?: number
 }) {
   const heightAt = useCallback(
     (index: number) => {
@@ -323,6 +329,11 @@ export function VirtualizedGroupedInstanceTable({
     }
   }, [loadedCount, onNeedMore, range.end, rows.length, totalCount])
 
+  // 窗口上报（供容器按可见实例批量取行内指标）：range 变化即通知，页面据此切片并取数。
+  useEffect(() => {
+    onVisibleRangeChange?.(range.start, range.end)
+  }, [onVisibleRangeChange, range.start, range.end])
+
   return (
     <div
       ref={containerRef}
@@ -337,7 +348,7 @@ export function VirtualizedGroupedInstanceTable({
           {range.before > 0 && (
             // 窗口上占位（高度来自逐行 sizes 的前缀和）；testid 供「内容总高 = 模型总高」断言取数。
             <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-before">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
+              <TableCell colSpan={columnCount} className="p-0" style={{ height: range.before }} />
             </TableRow>
           )}
           {rows.slice(range.start, range.end).map((row) => row.kind === 'group' ? (
@@ -350,7 +361,7 @@ export function VirtualizedGroupedInstanceTable({
               style={{ height: INSTANCE_GROUP_ROW_HEIGHT }}
               className="sticky top-9 z-10 bg-muted/80 backdrop-blur"
             >
-              <TableCell colSpan={8} className="px-4 py-2">
+              <TableCell colSpan={columnCount} className="px-4 py-2">
                 <InstanceGroupHeaderContent
                   label={row.label}
                   depth={row.depth}
@@ -367,12 +378,12 @@ export function VirtualizedGroupedInstanceTable({
           {range.after > 0 && (
             // 窗口下占位（同上）：展开行的高度必须同样体现在这里，否则滚动条长度与位置映射会漂移。
             <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-after">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
+              <TableCell colSpan={columnCount} className="p-0" style={{ height: range.after }} />
             </TableRow>
           )}
           {rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground">
+              <TableCell colSpan={columnCount} className="text-center text-muted-foreground">
                 {emptyLabel}
               </TableCell>
             </TableRow>
@@ -397,6 +408,8 @@ export function VirtualizedInstanceTable({
   renderRow,
   emptyLabel,
   isRowExpanded,
+  onVisibleRangeChange,
+  columnCount = 10,
 }: {
   instances: InstanceInfo[]
   totalCount: number
@@ -407,6 +420,10 @@ export function VirtualizedInstanceTable({
   emptyLabel: string
   /** 展开行判据（与行渲染同源）：展开行多渲染一个 `<tr>`，须按展开行高计入模型。 */
   isRowExpanded?: (inst: InstanceInfo) => boolean
+  /** 可见窗口上报（range 变化即通知）：容器据此切片实例列表批量取行内指标。 */
+  onVisibleRangeChange?: (start: number, end: number) => void
+  /** 当前表格总列数（列设置会改变它；占位/空态的 colSpan 必须同步）。缺省 10。 */
+  columnCount?: number
 }) {
   // 未加载的尾部（index ≥ instances.length）按实例行常量占位，与占位行盒一致。
   const heightAt = useCallback(
@@ -436,6 +453,11 @@ export function VirtualizedInstanceTable({
     }
   }, [instances.length, onNeedMore, range.end, totalCount])
 
+  // 窗口上报（供容器按可见实例批量取行内指标）：range 变化即通知，页面据此切片并取数。
+  useEffect(() => {
+    onVisibleRangeChange?.(range.start, range.end)
+  }, [onVisibleRangeChange, range.start, range.end])
+
   const visible = []
   for (let index = range.start; index < range.end; index++) {
     visible.push({ index, inst: instances[index] })
@@ -455,7 +477,7 @@ export function VirtualizedInstanceTable({
           {range.before > 0 && (
             // 窗口上占位（高度来自逐行 sizes 的前缀和）；testid 供「内容总高 = 模型总高」断言取数。
             <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-before">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
+              <TableCell colSpan={columnCount} className="p-0" style={{ height: range.before }} />
             </TableRow>
           )}
           {visible.map(({ index, inst }) => (
@@ -463,7 +485,7 @@ export function VirtualizedInstanceTable({
               {inst ? renderRow(inst) : (
                 <TableRow aria-hidden="true" data-testid="instances-row-placeholder">
                   {/* 未加载行的占位：高度与 INSTANCE_ROW_HEIGHT 同源（模型也按它算该行）。 */}
-                  <TableCell colSpan={8} className="p-0" style={{ height: INSTANCE_ROW_HEIGHT }} />
+                  <TableCell colSpan={columnCount} className="p-0" style={{ height: INSTANCE_ROW_HEIGHT }} />
                 </TableRow>
               )}
             </Fragment>
@@ -471,12 +493,12 @@ export function VirtualizedInstanceTable({
           {range.after > 0 && (
             // 窗口下占位（同上）：展开行的高度必须同样体现在这里，否则滚动条长度与位置映射会漂移。
             <TableRow aria-hidden="true" data-testid="instances-virtual-spacer-after">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
+              <TableCell colSpan={columnCount} className="p-0" style={{ height: range.after }} />
             </TableRow>
           )}
           {totalCount === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground">
+              <TableCell colSpan={columnCount} className="text-center text-muted-foreground">
                 {emptyLabel}
               </TableCell>
             </TableRow>
