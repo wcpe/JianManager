@@ -1379,7 +1379,14 @@ func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
 		//
 		// 判据取 `>=` 而非 `==`：Restore 侧会把越界的 Reclaim 归一回 Read，
 		// 运行期一旦出现 Reclaim > Read，同样无前缀可回收，一律按「无事可做」收敛，避免再次自旋。
-		if e.Positions.Reclaim >= e.Positions.Read {
+		//
+		// **上界必须取 max(Read, Durable) 而不是只取 Read**（2026-10-21 回归修复，runbook 用例捉住）：
+		// `AdvanceDurable` 只推进 Durable、**不动 Read**（见其实现），而 Read 由采集侧另行推进。
+		// 因此存在合法状态 `Read=0 ∧ Durable=100 ∧ Reclaim=0`——此时**确有 100 字节待回收**，
+		// 只用 `Reclaim >= Read`（0 >= 0）会误判成「无事可做」⇒ 直接返回成功，
+		// 把「尚未回收的已落盘数据」当成已回收放过（default-deny 被吞）。
+		// 取两者最大值即「待回收前缀的实际上界」：只有连 Durable 都追平，才真的没有前缀。
+		if frontier := max(e.Positions.Read, e.Positions.Durable); e.Positions.Reclaim >= frontier {
 			return e.Positions.Reclaim, nil
 		}
 		// 哨兵（#61-Z-a）："无段覆盖"是**可分类**的一类拒绝 —— 调用方据此判定"存在覆盖洞"并补段，
