@@ -3231,6 +3231,135 @@
 - **状态**: 已注册并有路由层回归（`log_import_archives_test.go`：越权 / 缺操作人 / 缺理由 / Worker 报错不伪装成功 / 审计闭环）。
 - **关联 FR**: FR-504
 
+### GET /api/v1/nodes/:id/log-runtime
+
+- **描述**：读取该节点受管 VictoriaLogs 的运行时状态。CP 经反向隧道代理 Worker（不直连 VictoriaLogs），按 `hot` / `cold` / `rehydrate` 三个命名空间逐个采集。
+- **权限**：路由经 `permRead("node.manage")` 挂载（`RequireAnyPerm`，任一命中即放行）。**无目标级授权**：handler 只按 `:id` 解析节点与隧道 client，不做 `CanAccessInstance` 或归属校验 ⇒ 任何持有 `node.manage` 的自定义角色都能读取任意节点的运行时状态。
+- **请求**：无 body、无 query 参数影响行为；可选 header `X-Request-ID`，作为 `request_id` 下发并由 Worker 回显。CP **不填** `protocol_version`。
+- **错误顺序**（顺序即优先级）：
+  1. `:id` 非十进制 ⇒ 400 `INVALID_NODE_ID`（`0` 可解析成功，随后走第 2 步 ⇒ 404）
+  2. 节点不存在或无 UUID ⇒ 404 `NODE_NOT_FOUND`
+  3. 隧道无 client 或 Worker 离线 ⇒ 503 `WORKER_OFFLINE`
+  4. RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`（另带 `message: <err.Error()>`）
+  5. Worker 回 `error` ⇒ 503，`code == LOG_UNSUPPORTED` 时 501；body 为 `{ "error": "<错误码名>", "message": "<Worker 文案>" }`——注意此处 `error` 是**码名字符串**，与成功响应里的 `error` 对象不同形
+- **响应** (200)：Worker 的 `LogRuntimeStatusResponse` 原样序列化：
+```json
+{
+  "request_id": "…",
+  "supported": true,
+  "instances": [
+    {
+      "namespace": "hot",
+      "state": "RUNNING",
+      "port": 9428,
+      "listen_addr": "127.0.0.1:9428",
+      "storage_data_path": "/var/lib/…",
+      "pid": 1234,
+      "asset_tag": "v1.52.0",
+      "asset_build_id": "…",
+      "asset_sha256": "…",
+      "last_error": "",
+      "health_ok": true,
+      "partition_recovery_complete": true,
+      "query_ready": true
+    }
+  ]
+}
+```
+- **JSON 形状注意**：响应体由 proto 结构体直接 `encoding/json` 序列化（非 protojson），故 `omitempty` 生效——`supported=false`、空 `instances`、空串 / `0` / `false` 的字段**整个不出现**；成功响应里若带 `error`，其 `code` 是**整数枚举**（`LogErrorCode`），不是码名。`instances[].state` 是 supervisor 账面字符串状态，取值 `STOPPED` / `STARTING` / `RUNNING` / `STOPPING` / `FAILED`（与「进程健康」「分区恢复完成」「查询可用」是四件独立的事，见下方三个布尔/字段）。
+- **Worker 侧语义**：`runtime` 未配置 ⇒ `error.code=LOG_UNSUPPORTED`（CP 501）；否则三命名空间逐个取状态，`supported` 置 `true`。`query_ready` = 健康探测通过 **且** catalog 该命名空间下所有键的恢复已完成、投影已发布（`runtimeCatalogReadiness`）；健康探测带 2s 超时。**任一命名空间 `Status()` 出错会写入 `error` 并跳过该命名空间**，而 CP 见 `error` 非空即整体返回 503 ⇒ 其它命名空间已采集到的信息一并丢弃（同一响应无法既报错又给部分状态）。
+- **审计**：**无**。GET 不进入审计中间件（其只记录非 GET），handler 也未调用 `recordAudit`、不解析操作人。
+- **状态**: 已注册；前端 `NodeLogRuntimePanel` 经 `useLogRuntime` 每 10s 轮询。
+
+### POST /api/v1/nodes/:id/log-runtime/:namespace/:action
+
+- **描述**：启动 / 停止 / 重启该节点上某个受管 VictoriaLogs 命名空间实例。CP 只做转发，取值合法性由 Worker 判定。
+- **权限**：同 `GET /nodes/:id/log-runtime`——仅路由级 `node.manage`；**无目标级授权、不解析操作人**。
+- **路径参数**（CP 侧 `ToLower` + `TrimSpace` 后原样下发，**CP 不校验取值集合**）：
+  - `:namespace`：允许 `hot` | `cold` | `rehydrate`（Worker `vlsup.Namespace`）。其它值 ⇒ Worker 回 `LOG_ERROR_UNSPECIFIED` / `unknown VictoriaLogs namespace` ⇒ CP **503**
+  - `:action`：允许 `start` | `stop` | `restart`
+    - `restart` 实现为 `Stop` 后 `Start`；**`Stop` 的错误被丢弃**（`_ = s.runtime.Stop(...)`），只有 `Start` 的错误会上报
+    - 未知 action ⇒ Worker 回 `LOG_NOT_READY` / `unknown VictoriaLogs runtime action "<action>"` ⇒ CP **503**
+    - proto 另声明了 `install`，但本路由下 CP **不下发** `package_url` / `package_sha256`，Worker 的 install 分支因两者为空必然失败（`LOG_ERROR_UNSPECIFIED` / `approved package URL and SHA-256 required`，CP 503；安装器未配置则 `LOG_UNSUPPORTED`，CP 501），且该分支**在命名空间校验之前**、完全不看 `:namespace`。制品安装请走 `POST /api/v1/nodes/:id/log-runtime/install`（另一 handler，另有授权）
+- **请求**：无 body（CP 不读请求体，`Content-Type` 随意）；可选 header `X-Request-ID`。
+- **校验顺序**（顺序即优先级）：
+  1. **先取 client** ⇒ 400 `INVALID_NODE_ID` / 404 `NODE_NOT_FOUND` / 503 `WORKER_OFFLINE`——**早于**下面的路径参数校验（节点解析失败时不会得到 400 `INVALID_RUNTIME_ACTION`）
+  2. `namespace` 或 `action` 去空白后为空 ⇒ 400 `INVALID_RUNTIME_ACTION`。Gin 要求两段均非空，故实际上只在「整个段是空白字符」（如 `%20`）时可达
+  3. 下发 RPC（`request_id` 取 `X-Request-ID`；`protocol_version`、`package_url`、`package_sha256` 均不填）
+  4. RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`（另带 `message`）
+  5. Worker 回 `error` ⇒ 503，`code == LOG_UNSUPPORTED` 时 501；body `{ "error": "<码名>", "message": "…" }`
+  6. 成功 ⇒ 202 Accepted
+- **响应** (202)：`LogTaskResponse` 原样序列化：`{ "task_id": "…", "state": 2, "error": {...} }`。`state` 是**整数枚举**（`LogTaskState`：`QUEUED=0`、`RUNNING=1`、`SUCCEEDED=2`、`FAILED=3`、`CANCELLED=4`、`STALE=5`）；因 `omitempty`，`state=0` 时该字段**不出现**。前端当前不读取该字段。
+- **审计**：**无**。POST 不匹配审计中间件的动作推导（`determineActionWithBody` 对 `/nodes/:id/log-runtime/...` 返回空 action，中间件据此不落行），handler 也不解析操作人、不调用 `recordAudit` ⇒ 启停 / 重启受管 VL 实例**全程无痕**，与同族 `migrate` / `resolve-gaps` / `import-archives` 的留痕口径不一致（如实记录现状）。
+- **状态**: 已注册；前端仅使用 `start` / `stop` / `restart` 与三个命名空间（`useControlLogRuntime`）。
+
+### GET /api/v1/nodes/:id/log-archive/status
+
+- **描述**：查询某归档分区下若干归档对象是否**存在且校验通过**，返回可用 / 缺失两组对象 ID 及覆盖情况。
+- **权限**：路由级 `node.manage`，**另有目标级授权** `authorizeArchiveTarget`（M-4B）；授权校验在**取 Worker client 之前**执行，拒绝路径不下发 RPC。
+- **Query 参数**：
+  - `target`：归档目标。空 / 全空白 = 路由节点自身（下发时补成 `node:<id>`）；非空须为 `inst:<id>` 或 `node:<id>`
+  - `from` / `to`：时间范围，原样作为 `time_range.from_utc` / `to_utc`
+  - `objectIds`：逗号分隔的归档对象 ID 列表，逐项去空白、空项丢弃（不去重）
+  - 由 CP 固定填充：`protocol_version="log-query/1"`、`budget.limit=200`
+- **目标授权规则与错误**（顺序即优先级）：
+  - 授权服务未接线 ⇒ 403 `FORBIDDEN`（`日志归档授权未就绪`）
+  - 无访问上下文 ⇒ 403 `FORBIDDEN`（`权限不足`）
+  - 空 target ⇒ 放行
+  - `inst:<id>`：`inst:` 后非十进制 ⇒ 400 `INVALID_REQUEST`（`target 无效`）；`CanAccessInstance` 内部错误 ⇒ 500 `INTERNAL_ERROR`；无权限 ⇒ 403 `FORBIDDEN`（`无权访问该实例归档`）；路由节点不存在 ⇒ 404 `NOT_FOUND`（`节点不存在`；`:id` 非数字时经 `parseUintOrZero` 归 0 同样落此分支，即返回 404 而非 400 `INVALID_NODE_ID`）；实例服务未接线 ⇒ 500 `INTERNAL_ERROR`；实例不存在 ⇒ 403（与无权限同码，不区分以避免实例存在性枚举）；实例存在但不属于该路由节点 ⇒ 403 `FORBIDDEN`（`目标实例不属于该节点`）
+  - `node:<id>`：与路由 `:id` 做**字符串逐字比较**（不做数值归一）⇒ `node:007` 对路由 `7` 判 403 `FORBIDDEN`（`仅允许访问本节点归档`）
+  - 其它形态（无 `inst:` / `node:` 前缀）⇒ 400 `INVALID_REQUEST`（`target 仅支持 inst:<id> 或 node:<id>`）
+- **后续错误**：取 client ⇒ 400 `INVALID_NODE_ID` / 404 `NODE_NOT_FOUND` / 503 `WORKER_OFFLINE`；RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`（含 `message`）；Worker 回 `error` ⇒ **503** `{ "error": "<码名>", "message": "…" }`
+- **响应** (200)：`LogArchiveStatusResponse` 原样序列化：
+```json
+{
+  "request_id": "…",
+  "coverage": {
+    "complete": true,
+    "partial_reasons": [],
+    "targets": [
+      { "target_id": "node:1", "state": 1, "reasons": [], "closed_visible_seq": "…", "catalog_generation": "…" }
+    ],
+    "enumeration_state": 1
+  },
+  "available_archive_object_ids": ["…"],
+  "missing_archive_object_ids": ["…"]
+}
+```
+- **字段说明**：`coverage.targets[].state` 与 `coverage.enumeration_state` 在 JSON 里是**整数枚举**；`partial_reasons` / `reasons` 是字符串码（如 `ARCHIVE_NOT_RESTORED`、`UNSUPPORTED`、`NO_CATALOG_AUTHORITY`）。`available_archive_object_ids` = 在 manifest 中命中且内容哈希校验通过；`missing_archive_object_ids` = manifest 无该 ID、取对象失败或哈希不符（三者不区分）。
+- **Worker 侧语义（决定实际结果）**：planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`archive status disabled on this worker`）；归档后端未接线 ⇒ `LOG_UNSUPPORTED`；registry 不可用 ⇒ `LOG_UNSUPPORTED` 且 coverage 标 `UNSUPPORTED`。分区键由**首个** `authorized_targets` 生成：单段 target（`node:1` / `inst:317`）的 UTC 日取 `from_utc` 前 10 字符，**`from` 缺失或长度不足 ⇒ `LOG_NOT_READY`（`archive target must include a UTC day or query range`）**；多段 target 形如 `<namespace>/<YYYY-MM-DD>`，可选 `/<YYYY-MM-DD>/g<N>` 指定代次。manifest 不存在 ⇒ `LOG_NOT_READY` + coverage `ARCHIVE_NOT_RESTORED`；逐对象「manifest 无该 ID / 取对象失败 / 内容哈希不符」一律计入 `missing`，任一缺失即把 coverage 标为不完整。
+- **错误映射不一致**：本端点（及下方 rehydrate）对 `LOG_UNSUPPORTED` **不做 501 映射**，一律 503；同族 `GET /log-runtime` 与 `POST /log-runtime/:namespace/:action` 会映射为 501。属当前真貌，如实记录。
+- **审计**：**无**（GET 不进审计中间件；handler 不调 `recordAudit`、不解析操作人）。
+- **状态**: 已注册；**当前无调用方**（前端与其它后端均无引用），仅有 M-4B 目标授权回归 `log_archive_authz_test.go`。
+
+### POST /api/v1/nodes/:id/log-archive/rehydrate
+
+- **描述**：把归档对象回灌（Rehydrate）为可查询投影，使冷 / 归档层历史重新可被查询面读取。按归档分区为单位成立受管任务。
+- **权限**：路由级 `node.manage` + 目标级授权（判据与错误码完全同 `GET /log-archive/status`）。
+- **请求体**：
+  - `archiveObjectIds`：**必填且非空数组**。**实测缺参 / 空数组 / body 非合法 JSON 均返回 400 `INVALID_REQUEST`（`archiveObjectIds required`）**，且这一步**早于目标授权与取 client**
+  - `target`：可选，同 status 的 `target` 判据；空 = 本节点自身
+  - `fromUtc` / `toUtc`：可选，覆盖 `time_range`。**target 为单段时 Worker 用 `fromUtc` 前 10 字符作 UTC 日**，故留空会 503（`archive target must include a UTC day or query range`）。Query 上的 `from` / `to` 在本端点**会被 body 值无条件覆盖**（恒忽略 query 时间）
+  - CP 不校验 `archiveObjectIds` 的元素内容、不去重：空串元素只会把集合撑大，通常触发下方「完整对象集」拒绝
+  - CP 固定 `protocol_version="log-query/1"`、`budget.limit=200`
+- **校验顺序**：请求体 ⇒ 目标授权（400 / 403 / 404 / 500，见 status 节）⇒ 取 client（400 / 404 / 503）⇒ RPC ⇒ 502 ⇒ `error` ⇒ 503 ⇒ 202
+- **响应** (202)：`LogTaskResponse` 原样序列化 `{ "task_id": "…", "state": <int>, "error": {...} }`。
+- **`state` 现值异常（需确认）**：Worker 侧 `res.State` 取的是 `LOG_TASK_SUCCEEDED` 这类**带前缀**字符串，而 RPC 边界的 `taskStateFromString` 只识别 `QUEUED` / `RUNNING` / `SUCCEEDED` / `SUCCESS` / `CANCELLED` / `CANCELED` / `STALE` 这些**裸值**，前缀形式一律落入 `default` ⇒ `LOG_TASK_FAILED`。故**成功回灌也会得到 `{"task_id":"…","state":3}` 且无 `error`**；`state` 目前不能作为成功判据。（本文件只记录现状；是否修复另议。）
+- **Worker 侧语义（决定 503 的真实条件）**：
+  - planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`rehydrate disabled on this worker`）
+  - 归档后端未接线 ⇒ `LOG_UNSUPPORTED`（`rehydrate unimplemented on this worker`）
+  - 投影发布器未就绪 ⇒ `LOG_NOT_READY`（`rehydrate projection publisher is not ready`）
+  - 分区键无法成立（target 单段且无 `from`）⇒ `LOG_NOT_READY`
+  - manifest 不存在 / `coverage.complete=false` / 枚举状态非 `EXHAUSTED` ⇒ `LOG_NOT_READY`（`archive generation has no closed, verified manifest`）
+  - **`archiveObjectIds` 必须是该分区 manifest 的完整对象集合**（长度相等且逐个命中），否则 `LOG_NOT_READY`（`rehydrate requires the full closed archive object set`）——**不支持只回灌子集**
+  - 无已验证的规范化事件 ⇒ `LOG_NOT_READY`（`archive has no verified canonical events`）
+  - 加载对象失败 ⇒ `LOG_NOT_READY`（可重试），并给该分区打 `REHYDRATE_FAILED` 标记
+  - 并发合并：同分区任务已在跑（`waiters>1`）⇒ 直接返回既有 `task_id` / `state`，**不重复发布**
+  - 发布失败 ⇒ 任务置 `LOG_TASK_FAILED` + `LOG_NOT_READY`（可重试），并标记该分区回灌失败
+  - 注意：以上 `LOG_NOT_READY` 经 CP 一律变成 **503**（不是 409），与 `migrate` / `resolve-gaps` 的 409 口径不同
+- **审计**：**无**。handler 不解析操作人、不调用 `recordAudit`；POST 也不匹配审计中间件的动作推导 ⇒ 回灌这类「读取 + 校验 + 发布归档事件」的重操作**不产生任何 CP 审计行**，与同族人工动作的留痕口径不一致（如实记录现状）。
+- **状态**: 已注册；**当前无调用方**；仅有目标授权回归 `log_archive_authz_test.go`。
+
 ### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）
 
 > 路由：`internal/controlplane/router/log_cutover.go`，在 `router.go` 经 `permRead("node.manage")` 挂载；handler 再判 **平台管理员**。PUT 写审计 `log.cutover.update`。**默认 `enabled=false`**。

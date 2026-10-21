@@ -82,8 +82,14 @@ type logAcqMergedValue struct {
 // 覆盖、心跳按「值非空」判定，于是节点级覆盖为空串时界面显示「已覆盖为空」，实际却继续
 // 按平台值下发；运维看到「本节点已关闭」而该节点仍在按小时扫描，且**无法对单节点关闭**。
 //
-// 空串是合法值（gz_scan_interval 空 = 关闭定时扫描、path_overrides 空 = 无覆盖），
-// 故这里一律以**键是否存在**（ok）为准：空串覆盖即「显式关闭/清空」，不得回落继承平台值。
+// 空串是合法值（gz_scan_interval 空 = **未配置**，由该节点 worker.yml 的
+// `log_ingest.archive_scan_interval` 基线决定周期——不是「关闭定时扫描」；path_overrides 空 = 无覆盖），
+// 故这里一律以**键是否存在**（ok）为准：空串覆盖即「显式不指定/清空」，不得回落继承平台值。
+//
+// 为什么必须把「空 = 关闭」这个说法纠正掉（2026-10-20 审查）：proto 契约是「0 = 未配置 ⇒ 回落基线」，
+// Worker 的 ArchiveScanInterval() 也只在 >0 时才采用本值。若注释与界面都说成「关闭」，运维会以为
+// 该节点已停扫、实际仍按基线周期在扫——这是最难排查的一类静默配置错误。真正能停掉定时扫描的
+// 只有把 log.acq.gz_import_enabled 置 false。
 func (s *SettingsService) mergeLogAcqValues(overrides map[string]string, nodeUUID string) map[string]logAcqMergedValue {
 	keys := LogAcqPlatformKeys()
 	out := make(map[string]logAcqMergedValue, len(keys))

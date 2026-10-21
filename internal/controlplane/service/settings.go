@@ -441,6 +441,36 @@ func isWindowsAbsPath(p string) bool {
 	return len(p) >= 2 && ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':'
 }
 
+// escapesUnderWindowsSeparators 判断路径按 Windows 分隔符（`\` 与 `/`）折叠 `.`/`..` 后
+// 是否逃出根。
+//
+// 为什么 CP 需要单独一道（2026-10-21 补）：CP 跑 Linux 时 `filepath.Clean` 只把 `/` 当
+// 分隔符，`..\..\etc\passwd` 会原样保留、不带 `../` 前缀，于是宿主判据**放行**；可它下发
+// 给 Windows 节点后会被 Worker 判为逃逸、直接拒绝登记——与盘符/UNC 完全同一类
+// 「保存成功但实例日志登记失败」，而 isWindowsAbsPath 只能拦住后者。
+//
+// 判据与 Worker 侧 validateInstanceRelativePath 里的 escapesRoot（dialectWindows）**同源**
+// （internal/worker/logs/ingest/instances.go）：深度下穿到负即逃逸。两处必须同步改动，
+// 否则 CP 与 Worker 的结论会再次分叉。
+//
+// 注意本函数**只做收紧**：它仅在原本放行的值上追加拒绝，不改变任何既有放行结论。
+func escapesUnderWindowsSeparators(p string) bool {
+	depth := 0
+	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		switch seg {
+		case ".": // 当前目录不改变深度
+		case "..":
+			depth--
+			if depth < 0 {
+				return true
+			}
+		default:
+			depth++
+		}
+	}
+	return false
+}
+
 // writeValues 是 Update / UpdateNodeScoped 共用的落库 + 应用实现（调用方已完成校验）。
 func (s *SettingsService) writeValues(values map[string]string) error {
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -971,9 +1001,15 @@ func validateSettingValue(key, val string) error {
 				// Windows 形态（盘符 / UNC）在 Linux 的 CP 上 IsAbs 为 false，但下发给
 				// Windows 节点时会被 Worker 判为绝对路径并拒绝登记——届时表现为
 				// 「保存成功、实例日志登记失败」。这里提前拒掉。
-				if isWindowsAbsPath(trimmed) {
-					return fmt.Errorf("%w: 路径覆盖不支持 Windows 盘符或 UNC 路径（%s = %q）", ErrSettingValueInvalid, target, p)
-				}
+			if isWindowsAbsPath(trimmed) {
+				return fmt.Errorf("%w: 路径覆盖不支持 Windows 盘符或 UNC 路径（%s = %q）", ErrSettingValueInvalid, target, p)
+			}
+			// Windows 分隔符下的逃逸与盘符/UNC 同属「CP 放行、Windows 节点必拒」的一类：
+			// 下面那道宿主判据在 Linux 上把 `..\..\etc\passwd` 当普通文件名放行，
+			// 到 Windows 节点才失败。这里提前拒掉，让用户在保存时就看到错误。
+			if escapesUnderWindowsSeparators(trimmed) {
+				return fmt.Errorf("%w: 路径覆盖不得逃出实例工作目录（按 Windows 分隔符语义）（%s = %q）", ErrSettingValueInvalid, target, p)
+			}
 				clean := filepath.Clean(filepath.FromSlash(trimmed))
 				if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 					return fmt.Errorf("%w: 路径覆盖不得逃出实例工作目录（%s = %q）", ErrSettingValueInvalid, target, p)

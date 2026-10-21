@@ -650,7 +650,37 @@ func (h *LogRuntimeHandler) Status(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// Control 经反向隧道启停/重启 Worker 上的 VictoriaLogs 运行时。
+//
+// 为什么必须补操作人与审计：启停/重启会直接中断该节点日志的查询面与写入面，是**有副作用的
+// 写操作**；而审计中间件对 POST /nodes/:id/log-runtime/... 不产生 action，Worker 侧
+// LogRuntimeControl 也不消费操作人 ⇒ 不在这里留痕，一次误停在生产上就查不到「谁干的」。
+//
+// 为什么不在这里做目标级授权（与 migrate / rehydrate 的差异，已按实际取值核实，不是想当然）：
+// 本端点的 `:namespace` 是 **VictoriaLogs 运行时命名空间**，合法取值只有 hot / cold /
+// rehydrate（Worker 侧 LogRuntimeControl 逐个比对 vlsup.NamespaceHot/Cold/Rehydrate 之后才
+// 落到 Start/Stop/Restart；前端 LogRuntimeInstance["namespace"] 也是同一组字面量）。它回答的是
+// 「动这个节点上的哪个日志库进程」，既不携带 node:/inst: 前缀，也不指向任何租户对象。
+// 而同族的 authorizeArchiveTarget 只承认空串 / inst:<id> / node:<id>，其余一律 400 ——
+// 硬套在这里会把 hot/start 这类正常调用打成 400，等于用错误的语义换一个「看着补齐」的勾。
+// 三个命名空间属于同一节点的同一套日志基础设施，不存在跨实例组或跨节点的可见性差异，
+// 故目标面隔离由**节点级权限**承担（见下面的 requireNodes），不做实例级授权。
 func (h *LogRuntimeHandler) Control(c *gin.Context) {
+	// 操作人必须在**任何 RPC 之前**解析（同族纪律）：取不到主体就不下发请求。
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（日志运行时启停必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
+	// 节点级权限校验：路由门虽已挂 node.manage，但写操作不应只依赖挂载点——一旦本 handler
+	// 被复用到更宽的路由组，静默失去写门是查不出来的（与 asset / node 等 handler 的自查同口径）。
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	client, ok := h.client(c)
 	if !ok {
 		return
@@ -676,6 +706,15 @@ func (h *LogRuntimeHandler) Control(c *gin.Context) {
 		c.JSON(status, gin.H{"error": resp.GetError().GetCode().String(), "message": resp.GetError().GetMessage()})
 		return
 	}
+	// 成功受理后落 CP 侧审计行：命名空间 + 动作是复盘「停的是哪一层日志库」的唯一凭据，
+	// operator 单列进 detail（Agent 通道下 user_id 写的是 token id，可读主体只在这里）。
+	// 只记成功受理：Worker 报错走上面的分支，不落行，避免审计证明一次从未发生的启停。
+	h.recordAudit(c, "node.log_runtime.control", map[string]any{
+		"namespace": ns,
+		"action":    action,
+		"operator":  operator,
+		"state":     resp.GetState().String(),
+	})
 	c.JSON(http.StatusAccepted, resp)
 }
 
@@ -814,6 +853,15 @@ func (h *LogRuntimeHandler) ArchiveStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// rehydrateTarget 把请求里的 target 归一成审计口径：与 archiveQueryBase 的默认值一致，
+// 空 target 表示「本节点自身」。
+func rehydrateTarget(c *gin.Context, target string) string {
+	if trimmed := strings.TrimSpace(target); trimmed != "" {
+		return trimmed
+	}
+	return "node:" + c.Param("id")
+}
+
 type logRehydrateRequest struct {
 	ArchiveObjectIDs []string `json:"archiveObjectIds"`
 	Target           string   `json:"target"`
@@ -821,7 +869,22 @@ type logRehydrateRequest struct {
 	ToUTC            string   `json:"toUtc"`
 }
 
+// Rehydrate 把冷层归档对象恢复回可查询面（读取 + 校验 + 发布归档事件）。
+//
+// 为什么必须补操作人与审计：它会把归档数据重新写进查询面，是「谁在什么时候把哪批对象放回了
+// 可查范围」必须能回答的高影响动作。目标级授权（authorizeArchiveTarget）此前已补齐，但操作人
+// 从未解析、CP 侧也不落行——Worker 侧 LogRehydrate 同样不消费操作人，等于全程无痕。
 func (h *LogRuntimeHandler) Rehydrate(c *gin.Context) {
+	// 操作人必须在**任何 RPC 之前**解析（同族纪律）：取不到主体就不下发请求。
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（归档恢复必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
 	var body logRehydrateRequest
 	if err := c.ShouldBindJSON(&body); err != nil || len(body.ArchiveObjectIDs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "archiveObjectIds required"})
@@ -848,5 +911,17 @@ func (h *LogRuntimeHandler) Rehydrate(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": resp.GetError().GetCode().String(), "message": resp.GetError().GetMessage()})
 		return
 	}
+	// 成功受理后落 CP 侧审计行。target 按 archiveQueryBase 的口径归一（空 target 即本节点
+	// 自身）：否则同一件事在审计里会出现「空」与「node:<id>」两副面孔，事后无法按目标检索。
+	// 归档对象 ID 一并入 detail——「把哪批对象放回了可查范围」正是这次操作的实质。
+	// 只记成功受理：Worker 报错走上面两个分支，不落行，避免审计证明一次从未发生的恢复。
+	h.recordAudit(c, "node.log_archive.rehydrate", map[string]any{
+		"target":           rehydrateTarget(c, body.Target),
+		"archiveObjectIds": body.ArchiveObjectIDs,
+		"fromUtc":          body.FromUTC,
+		"toUtc":            body.ToUTC,
+		"operator":         operator,
+		"state":            resp.GetState().String(),
+	})
 	c.JSON(http.StatusAccepted, resp)
 }
