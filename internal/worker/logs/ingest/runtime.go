@@ -1793,6 +1793,14 @@ func (m *Manager) ResolveCoveredGapsForSource(ctx context.Context, storageNamesp
 const clearIdentityConflictsCycleMuWait = 5 * time.Second
 
 // IdentityConflictClearResult 是清空操作的逐源结果（审计凭据的对外可读部分）。
+//
+// 注意这里有两件**不同**的事，结果必须分开表达（2026-10-21 复审缺陷 B7）：
+//   - 「冲突记录已清空」= ClearedCount / ClearedSources，本操作的契约，失败会返回 error；
+//   - 「派生计数（conflict_count）已对齐」= 尽力而为，失败**不**让整个操作失败，
+//     但必须落在 DerivedRefreshFailures 里对调用方可观测。
+//
+// 早前后者失败只打一行 Warn 就从结果里消失了，于是 API 返回 clearedCount=3、无 error，
+// 运维以为已生效，而历史分区的 conflict_count 仍是旧值、查询/导出继续被拦。
 type IdentityConflictClearResult struct {
 	// ClearedCount 本次真正清空的冲突记录条数（跨源合计）。
 	ClearedCount int
@@ -1801,6 +1809,15 @@ type IdentityConflictClearResult struct {
 	// SkippedSources 计划内但**未**清空的源键（升序）：或期间被并发写新增了冲突记录
 	// （见三段式复验），或本就已无冲突记录（幂等目标态）。
 	SkippedSources []string
+	// DerivedRefreshFailures 派生计数**没能刷新**的分区/源清单（按发现顺序，有界）。
+	//
+	// 语义：冲突记录本身已清空（那是本操作的契约），但这些位置的已发布投影里
+	// conflict_count 仍是旧值 ⇒ 查询覆盖到这些日期时仍会报 duplicate_quality=conflict、
+	// 导出仍被拦。**历史分区尤其危险**：它们不会再有任何投递触发 publishSnapshot，
+	// 所以「待下次投递刷新」对它们是永久性的，没有自发重试路径。
+	//
+	// 为什么放进结果而不是只打日志：这是运维判断「清空是否真的生效」的唯一凭据。
+	DerivedRefreshFailures []string `json:"derived_refresh_failures,omitempty"`
 }
 
 // clearConflictsPlan 是「清空身份冲突」第一段（持锁）取到的**逐源计划快照**。
@@ -1836,6 +1853,12 @@ type clearConflictsPlan struct {
 // 三段式（照 #55-B / #58 范式，理由同 ResolveCoveredGapsForSource）：第一段持锁只做守卫与
 // 逐源计划快照（O(待清记录数)，有界 ≤ maxIdentityConflictRecords/源）→ 锁外无重活 →
 // 第三段复验后做最小变更；最重的 persist 在临界区之外。
+//
+// 返回值的两件事必须分开读（2026-10-21 复审缺陷 B7）：
+//   - 「冲突记录已清空」是本方法的契约，失败即 error；
+//   - 「派生计数 conflict_count 已对齐」是尽力而为的收尾，失败**不**返回 error，
+//     而是记在 IdentityConflictClearResult.DerivedRefreshFailures 里。
+// 调用方不得因为 err==nil 就认为查询面已恢复正常：还要看 DerivedRefreshFailures 是否为空。
 func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, operator, reason string) (IdentityConflictClearResult, error) {
 	var result IdentityConflictClearResult
 	if m == nil {
@@ -1906,7 +1929,11 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 		// 投影里 conflict_count 却还是旧值」的现场——实测 inst:320 clearedCount=0、
 		// 索引已无记录，而 catalog 快照仍是 3（seq 1846 / projection-336），查询因此一直报
 		// conflict、导出被永久禁用。若在此直接返回，就再没有任何入口能纠正它。
-		m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, nil))
+		// 结果里的失败项必须由调用方看到（见 DerivedRefreshFailures 的注释）：
+		// 「冲突已清空」是真成功，因此这里**不**返回 error；但「派生计数已对齐」是另一件事，
+		// 失败必须可观测，否则本分支就是典型的假成功（clearedCount=0、无 error、查询仍报 conflict）。
+		result.DerivedRefreshFailures = append(result.DerivedRefreshFailures,
+			m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, nil))...)
 		return result, nil
 	}
 
@@ -1983,7 +2010,10 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 		// 而 catalog 里那次发布写下的 conflict_count 仍是 3 —— 陈旧快照恰恰出现在这里。
 		// 若直接返回，就再没有任何入口能纠正它（该源无新数据投递，publishSnapshot 不会自发重跑）。
 		// 故此处同样走一次「按需重发布」：内部有「快照已是 0 就跳过」的门槛，不会白付开销。
-		m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, nil))
+		// 失败项照样并进结果：本分支最需要它——「一条都没清」时运维唯一的判断依据就是
+		// 「派生计数到底刷新了没有」。
+		result.DerivedRefreshFailures = append(result.DerivedRefreshFailures,
+			m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, nil))...)
 		return result, nil
 	}
 	sort.Strings(result.ClearedSources)
@@ -2024,13 +2054,26 @@ func (m *Manager) ClearIdentityConflicts(ctx context.Context, storageNamespace, 
 	// 两条都是「提交一次发布」，只是把「等下一次」变成「现在就做一次」。
 	// 注意并发：本段**不持 cycleMu**，与采集轮/投递路径是并发的，故两边写回都必须 CAS；
 	// 输掉竞争的一方只告警「该分区待下次投递刷新」，由赢的那次真实发布留下它自己算出的计数。
-	// 失败只告警不失败：冲突记录本身已清干净（那是本方法的契约），刷新派生字段属尽力而为。
+	//
+	// 失败**不**让本方法失败：冲突记录本身已清干净（那是本方法的契约），刷新派生字段属尽力而为。
+	// 但失败必须能被调用方看到（2026-10-21 复审缺陷 B7）：
+	//   - 「冲突已清空」与「派生计数已对齐」是**两件事**，后者失败不能让前者看起来像失败；
+	//   - 也不能因为前者成功就把后者失败吞掉——历史分区不会再有任何投递触发 publishSnapshot，
+	//     「待下次投递刷新」对它们是永久性的，没有任何自发重试路径；
+	//   - 因此这里把失败项如实并进结果结构（DerivedRefreshFailures），逐条 Warn 日志照旧保留，
+	//     使 API 调用方 / 运维能区分「清了」与「生效了」。
 	//
 	// **不挂在 durable 条件下**（2026-10-20 真机验收修正）：persistClearConflictsTail 在把
 	// 索引落库交办后台时返回 durable=false（受 persist 预算影响，属常态而非失败），
 	// 而派生字段的刷新与「索引是否已同步落库」无关——重发布走的是另一条正规链路。
 	// 早前把刷新放在 durable 分支里，导致交办后台时静默跳过，表现为「清了但计数不动」。
-	m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, result.ClearedSources))
+	result.DerivedRefreshFailures = append(result.DerivedRefreshFailures,
+		m.republishAfterConflictClear(m.conflictClearRefreshTargets(key, result.ClearedSources))...)
+	if len(result.DerivedRefreshFailures) > 0 {
+		// 汇总一条：逐条失败已在各自位置 Warn 过，这一条负责「别让人以为全都生效了」。
+		slog.Warn("清空身份冲突：冲突记录已清空，但有分区的派生计数未能刷新（查询/导出仍可能被拦）",
+			"failed", len(result.DerivedRefreshFailures), "detail", result.DerivedRefreshFailures)
+	}
 	return result, nil
 }
 
@@ -2065,6 +2108,12 @@ func (m *Manager) conflictClearRefreshTargets(requestedKey string, cleared []str
 // 不持 cycleMu 调用（本方法由 ClearIdentityConflicts 在释放 cycleMu 之后调用），
 // 由 publishSnapshot 自己走既有锁序。
 //
+// 返回值是**没能刷新派生计数**的清单（2026-10-21 复审缺陷 B7）：这里的失败不构成操作失败
+// （冲突记录确实已清空，那是 ClearIdentityConflicts 的契约），但绝不能只留在日志里——
+// 历史日期分区不会再有任何投递触发 publishSnapshot，一旦这次失败，它们的 conflict_count
+// 就永久停在旧值，查询/导出继续被拦。调用方把它并进结果结构，使「清了」与「生效了」
+// 可区分。
+//
 // 并发形态（本方法因此**必须**用 CAS 写回）：这里与采集轮 pollOnce 是并发的——
 // 采集轮持 cycleMu 在跑，本方法不持；同一 namespace 的多个源也可能同时走到这里。
 // 于是「读某个分区快照」与「写回它」之间，真实发布（publishSnapshot → PublishProjection，
@@ -2072,12 +2121,14 @@ func (m *Manager) conflictClearRefreshTargets(requestedKey string, cleared []str
 // 用旧快照无条件覆盖会把更晚的代次/权威回退掉、并误清真实计数，故：
 //   - 分区级对齐 resetNamespaceConflictCounts 逐分区现读现写 + PublishProjection CAS；
 //   - 当前分区随后再走一次正规发布（publishSnapshot 自身也是 CAS）。
-// 任何一方输掉竞争都只告警「该分区待下次投递刷新」，不中断整个流程——
-// 赢的那次真实发布已经写入了它自己算出的 ConflictCount，无需被本次对齐覆盖。
-func (m *Manager) republishAfterConflictClear(sources []string) {
+// 任何一方输掉竞争都只告警 + 记入失败清单，不中断整个流程——
+// 赢的那次真实发布已经写入了它自己算出的 ConflictCount，无需被本次对齐覆盖；
+// 而调用方仍能从失败清单里看到「这个源/分区没被本次刷新覆盖」。
+func (m *Manager) republishAfterConflictClear(sources []string) []string {
 	if m == nil || len(sources) == 0 {
-		return
+		return nil
 	}
+	var failures []string
 	for _, sourceKey := range sources {
 		m.mu.Lock()
 		src, ok := m.sources[sourceKey]
@@ -2093,8 +2144,13 @@ func (m *Manager) republishAfterConflictClear(sources []string) {
 		}
 		// 先把该 namespace 下**所有日期分区**的派生计数对齐（这才是查询窗口覆盖历史日期时
 		// 仍报 conflict 的根源：29 个历史分区各自 cc=3，而它们不会再有任何投递去触发发布）。
-		if n := m.resetNamespaceConflictCounts(src.StorageNamespace, 0); n > 0 {
-			slog.Info("清空冲突后已对齐历史分区的派生计数", "namespace", src.StorageNamespace, "partitions", n)
+		_, resetFailures := m.resetNamespaceConflictCounts(src.StorageNamespace, 0)
+		if len(resetFailures) > 0 {
+			slog.Warn("清空冲突后仍有分区的派生计数未能对齐（历史分区不会再有投递，需人工介入）",
+				"namespace", src.StorageNamespace, "partitions", len(resetFailures))
+			for _, f := range resetFailures {
+				failures = appendDerivedRefreshFailure(failures, "namespace "+src.StorageNamespace+"/"+f)
+			}
 		}
 		// 再让当前分区的投影走一次正规发布：它除了 ConflictCount 还会重算 manifest 等
 		// 同源派生字段，保持「最后一行为一次真实发布」的因果可读性。
@@ -2103,16 +2159,43 @@ func (m *Manager) republishAfterConflictClear(sources []string) {
 		if err != nil {
 			slog.Warn("清空冲突后重发布：取权威事件失败，派生计数待下次投递刷新",
 				"source", sourceKey, "error", err)
+			failures = appendDerivedRefreshFailure(failures,
+				"source "+sourceKey+": 取权威事件失败，当前分区派生计数未刷新: "+err.Error())
 			continue
 		}
 		gen := p.Key().SourceGeneration
 		if err := m.publishSnapshot(src, gen, events, true, nil, nil, false); err != nil {
 			slog.Warn("清空冲突后重发布：派生计数刷新失败，待下次投递再试",
 				"source", sourceKey, "error", err)
+			failures = appendDerivedRefreshFailure(failures,
+				"source "+sourceKey+": 当前分区重发布失败，派生计数未刷新: "+err.Error())
 			continue
 		}
 		slog.Info("清空冲突后已重发布投影，冲突计数应已归零", "source", sourceKey, "events", len(events))
 	}
+	return failures
+}
+
+// maxDerivedRefreshFailures 是 IdentityConflictClearResult.DerivedRefreshFailures 的条数上限。
+//
+// 为什么要封顶：分区数量级是「节点数 × 天数」（生产 283 个），同一 namespace 下的源又可能
+// 多个，若不封顶，这条结果会随分区数无界增长并被塞进 API 响应与审计日志。汇总仍是
+// 「至少这么多处失败」——封顶只会让清单更短，绝不会让失败消失（末尾会留一条截断提示）。
+const maxDerivedRefreshFailures = 32
+
+// appendDerivedRefreshFailure 把一条「派生计数刷新失败」计入清单，并做有界截断。
+//
+// 截断只影响逐条列举，不影响「存在失败」这一事实：清单非空 ⇔ 确有未刷新的位置，
+// 这正是调用方与运维的唯一判据（见 IdentityConflictClearResult.DerivedRefreshFailures）。
+func appendDerivedRefreshFailure(failures []string, item string) []string {
+	if len(failures) < maxDerivedRefreshFailures {
+		return append(failures, item)
+	}
+	if len(failures) == maxDerivedRefreshFailures {
+		return append(failures,
+			fmt.Sprintf("…以及更多未能逐条列出的刷新失败（已达上限 %d 项）", maxDerivedRefreshFailures))
+	}
+	return failures
 }
 
 // projectionConflictCountNonZero 报告该 **namespace 下是否还有分区**的 ConflictCount 非 0。
@@ -2166,12 +2249,18 @@ func (m *Manager) projectionConflictCountNonZero(src SourceConfig) bool {
 // 中途有任何真实写入赢得竞争即返回 ErrInvalidState —— 那次真实发布自己已写好
 // ConflictCount，不需要（也不允许）被本次对齐覆盖，跳过交给下一次投递即可。
 //
-// 返回实际改写的分区数。
-func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) int {
+// 返回（实际改写的分区数, 没能刷新的分区/源清单）。
+//
+// 为什么失败项必须作为返回值交出去（2026-10-21 复审缺陷 B7）：早前这里对失败只打一行 Warn
+// 就 continue，于是「清了 3 条冲突」与「派生计数有没有真的对齐」在对外结果上无法区分——
+// 运维拿到 clearedCount=3 且无 error，会认为已生效。而失败的分区（例如处于
+// `QueryGeneration != Generation` 不一致态、被 PublishProjection 一进门就拒的那些）
+// 若属历史日期，**不会再有任何投递**来触发 publishSnapshot ⇒ 「待下次投递刷新」对它们
+// 是永久性的，没有自发重试路径。故失败必须能传回调用方，由结果结构如实报出。
+func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) (changed int, failures []string) {
 	if m == nil || m.cat == nil || namespace == "" {
-		return 0
+		return 0, nil
 	}
-	changed := 0
 	for _, key := range m.cat.Keys() {
 		if key.StorageNamespace != namespace {
 			continue
@@ -2180,6 +2269,9 @@ func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) in
 		// 窗口再窄也仍存在，故写回那一端必须 CAS（见 alignPartitionConflictCount）。
 		rec, ok := m.cat.Get(key)
 		if !ok || rec == nil || rec.PublishedProjection == nil {
+			// 没有已发布投影的分区同样刷不上派生计数，必须报出去（查询侧会把它们
+			// 按「投影未发布」处理，但调用方无从得知是哪几个分区）。
+			failures = append(failures, key.UTCDay+": 分区没有已发布投影（无法对齐派生计数）")
 			continue
 		}
 		if rec.PublishedProjection.ConflictCount == want {
@@ -2187,15 +2279,16 @@ func (m *Manager) resetNamespaceConflictCounts(namespace string, want uint64) in
 		}
 		before, err := m.alignPartitionConflictCount(rec, want)
 		if err != nil {
-			slog.Warn("清空冲突后对齐派生计数失败，该分区待下次投递刷新",
+			slog.Warn("清空冲突后对齐派生计数失败，该分区待下次投递刷新（历史分区不会再有投递）",
 				"namespace", namespace, "utcDay", key.UTCDay, "error", err)
+			failures = append(failures, key.UTCDay+": "+err.Error())
 			continue
 		}
 		changed++
 		slog.Info("清空冲突后已对齐分区派生计数",
 			"namespace", namespace, "utcDay", key.UTCDay, "from", before, "to", want)
 	}
-	return changed
+	return changed, failures
 }
 
 // alignPartitionConflictCount 把 expected 所代表分区快照里的派生字段 ConflictCount 对齐为
@@ -5309,17 +5402,19 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	if len(toWrite) == 0 {
 		// 只用相同内容重复或已裁定保留的事件作为落库证据；被丢弃的冲突变体不得消解其区间缺口。
 		//
-		// **但证据面还要再排除「热层不可能可见」的天**（2026-10-21 真机缺陷）：
-		// 本分支的语义是「本地已有、无需重写」，而「本地有」不等于「VL 里有」——
-		// 超出热层保留期的天，VL 会把写入静默丢弃，本地段里却仍然留着。若直接用 `landed`
-		// 消解缺口，就会把**从未进入 VL** 的区间标成 `delivery confirmed`（生产实测：
-		// `inst:317` 的 `[7583541,7585609)` 因此被消解，而 VL 该源最新只到 7583541），
-		// 随后 `reclaim` 被推到 `read_pos`，这笔欠账再无信号。
+		// **但「本地有」不等于「VL 里有」**（2026-10-21 真机缺陷，生产主要命中路径）：
+		// 本分支的语义是「这些事件已在本地段里，无需重写」，而本地段是权威副本、
+		// 与 VL 的可见性**没有必然关系**。生产实测：`inst:317` 的区间
+		// `[7583541,7585609)` 里 7 条事件（event_time=2026-10-21）在本地段、却**从未进过 VL**
+		// （该源 VL 上界恰为 7583541 = 缺口起点）。旧代码直接拿 `landed` 消解，于是把
+		// 「投递失败」标成 `delivery confirmed for this range`，`reclaim` 随后越过该区间，
+		// 这笔欠账在账本里彻底消失（`SELECT COUNT(*) FROM gap WHERE resolved=0` = 0）。
 		//
-		// 这条分支是生产上的**主要命中路径**：那些天的数据早在本地段里，
-		// 所以 `toWrite` 恒为空、每次投递都从这里返回 204 —— 这也是为什么只修
-		// 「写入成功后按 `written` 取证据」还不够。
-		m.resolveGapsLandedByDelivery(source, m.evidenceWithinHotRetention(source, landed))
+		// **为什么不能只按「热层保留期窗口」过滤**（我上一版就是这么修的，不够）：
+		// 窗口过滤只能剔除「这天在热层不可能可见」，而生产缺失的那天（2026-10-21）
+		// **恰在窗口内** —— 它是「窗口内某天的真实投递失败」。判别维度必须是
+		// **「这批事件在 VL 里到底查不查得到」**，而不是「这天是否过期」。
+		m.resolveGapsLandedByDelivery(source, m.landedVisibleInVL(source, landed))
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
 	// 权威全量的构建是 O(段行数)（生产单源实测可达 70 万行 ≈ 6 秒）；只有「整窗重发」语义

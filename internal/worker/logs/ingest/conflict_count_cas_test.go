@@ -158,8 +158,10 @@ func TestResetNamespaceConflictCountsAlignsAllPartitionsWithoutConcurrency(t *te
 	require.NoError(t, cat.Put(casTestRecord(otherKey.StorageNamespace, otherKey.UTCDay, 1, 4)))
 	m := &Manager{cat: cat}
 
-	require.Equal(t, len(partitions), m.resetNamespaceConflictCounts(ns, 0),
+	changed, failures := m.resetNamespaceConflictCounts(ns, 0)
+	require.Equal(t, len(partitions), changed,
 		"该 namespace 下所有未对齐分区都应被改写")
+	require.Empty(t, failures, "无并发、投影自洽 ⇒ 不应有刷新失败项")
 
 	for _, p := range partitions {
 		rec, ok := cat.Get(catalog.PartitionKey{StorageNamespace: ns, UTCDay: p.day})
@@ -177,7 +179,9 @@ func TestResetNamespaceConflictCountsAlignsAllPartitionsWithoutConcurrency(t *te
 
 	seqAfterFirst := cat.Journal().LastSeq()
 	require.EqualValues(t, len(partitions), seqAfterFirst, "每个被对齐的分区各落一条 journal")
-	require.Zero(t, m.resetNamespaceConflictCounts(ns, 0), "幂等：已对齐的分区不应再产生 journal 项")
+	changedAgain, failuresAgain := m.resetNamespaceConflictCounts(ns, 0)
+	require.Zero(t, changedAgain, "幂等：已对齐的分区不应再产生 journal 项")
+	require.Empty(t, failuresAgain, "幂等调用不应产生失败项（已对齐 ≠ 刷新失败）")
 	require.EqualValues(t, seqAfterFirst, cat.Journal().LastSeq(), "幂等调用不得产生 journal 噪音")
 
 	// 重启重放后仍是同一状态：派生计数为 want、代次与 QueryGeneration 一致。
@@ -198,7 +202,8 @@ func TestResetNamespaceConflictCountsAlignsAllPartitionsWithoutConcurrency(t *te
 // 形态：该分区的已发布投影本身不自洽（QueryGeneration != Generation，历史遗留），
 // PublishProjection 的前置校验会拒绝——不是并发冲突，同样只告警跳过。
 // 断言：其余分区照常对齐，坏分区保持原样（它的投影本就不自洽，查询侧已按「未发布」处理），
-// 且整轮不 panic、不中断。
+// 且整轮不 panic、不中断；**并且坏分区必须出现在失败清单里**（缺陷 B7：这些分区若属历史
+// 日期，不会再有任何投递来触发发布，只告警等于永久沉默，运维无从知道要人工介入）。
 func TestResetNamespaceConflictCountsSkipsInconsistentPartition(t *testing.T) {
 	cat := catalog.New(catalog.NewMemJournal())
 	const ns = "inst:cas-skip"
@@ -211,8 +216,11 @@ func TestResetNamespaceConflictCountsSkipsInconsistentPartition(t *testing.T) {
 	require.NoError(t, cat.Put(casTestRecord(ns, goodDay, 2, 5)))
 	m := &Manager{cat: cat}
 
-	require.Equal(t, 1, m.resetNamespaceConflictCounts(ns, 0),
+	changed, failures := m.resetNamespaceConflictCounts(ns, 0)
+	require.Equal(t, 1, changed,
 		"只有能通过校验的分区被对齐，其余跳过且不中断整轮")
+	require.Len(t, failures, 1, "坏分区必须如实出现在失败清单里，不能被静默跳过")
+	require.Contains(t, failures[0], broken.Key.UTCDay, "失败项必须指明是哪个分区")
 
 	stillBroken, ok := cat.Get(broken.Key)
 	require.True(t, ok)

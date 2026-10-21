@@ -1,10 +1,13 @@
 package ingest
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
 // ── 热层可发布窗口（2026-10-21 生产缺陷修复）────────────────────────────────────
@@ -82,43 +85,149 @@ func (m *Manager) splitHotRetentionDays(days []string, now time.Time) (inWindow,
 	return sortUTCDays(inWindow), sortUTCDays(beyond)
 }
 
-// evidenceWithinHotRetention 从一批「已落库」事件里剔出**热层不可能可见**的天，
-// 返回可用作缺口消解证据的子集。
+// ── 「本地有 vs VL 有」的证据面判定（2026-10-21 真机缺陷，第二版修复）──────────────
 //
-// 为什么需要它（2026-10-21 真机缺陷，生产主要命中路径）：`deliver` 有一条
-// 「本地已有、无需重写」的分支（`len(toWrite)==0`）。它直接拿 `landed` 去
-// `resolveGapsLandedByDelivery`，而 `landed` 只证明「本地段里有这些事件」，
-// 不证明「VL 里有」。超出热层保留期的天，VL 对写入返回 200 但**静默丢弃**，
-// 本地段却完好保留 —— 于是从未进入 VL 的区间被消解成 `delivery confirmed`。
+// 第一版修的是「按热层保留期窗口过滤证据面」，**判别维度选错了**：
+// 它证明的是「这天在窗口内」，而缺陷要证明的是「这批事件确实在 VL 里」。
+// 生产上真实缺失的那天（`inst:317` 的 2026-10-21）**恰在窗口内**，
+// 所以窗口过滤根本不会命中它 —— 缺口照样被消解成 `delivery confirmed`，
+// 而 VL 里该源上界正是缺口起点（7583541），一行业务数据都没有。
 //
-// 生产实测：`inst:317` 的 `[7583541,7585609)`（10-21，2068 字节）被如此消解，
-// 而 VL 该源最新只到 7583541；随后 `reclaim` 被推到 `read_pos`，欠账再无信号。
+// 正确判据只能是**向 VL 实际查询**：只把「查得到」的事件当作证据面，
+// 查不到的（本地段有、VL 无）必须保留缺口并显式告警。
+
+// landedVisibleInVL 从一批「本地段里已有」的事件中，只挑出**在 VL 中确实查得到**的那些，
+// 作为缺口消解的证据面；查不到的原样留在外面（其缺口因此不被消解）。
 //
-// 保守边界：`retention<=0`（未配置）或事件取不到天时**一律保留**，
-// 即零配置下行为与改动前逐字一致。
-func (m *Manager) evidenceWithinHotRetention(source SourceConfig, events []logtypes.Event) []logtypes.Event {
-	if m == nil || len(events) == 0 || m.hotRetention <= 0 {
-		return events
+// ── 为什么必须是「查 VL」而不是「判窗口」（2026-10-21 真机缺陷的第二次修复）──────
+// 第一版用「这天是否超出热层保留期」做过滤，判别维度错误：生产上真实缺失的那天是
+// `inst:317` 的 2026-10-21，**在窗口内**，窗口过滤不会命中 ⇒ 缺口仍被消解成
+// `delivery confirmed`，而 VL 该源上界恰为缺口起点（7583541）、零行数据。
+//
+// ── 查询口径 ────────────────────────────────────────────────────────────
+// 用**已发布代次白名单**（`publishedSourceProjectionGenerations`）+ `event_id:in(...)` 查，
+// 与查询侧「能查到」的定义一致：不要求它属于本次代次（缺口事件可能属旧代次），
+// 只要求「按当前已发布白名单能查到」——这正是「用户查得到」的等价条件。
+//
+// ── 保守边界（任何不确定都**不消解**）─────────────────────────────────────
+//   · 没有 VL 客户端 / 取不到 catalog 记录 / 白名单为空 ⇒ 原样返回（退化为改动前行为）；
+//   · 查询失败（网络、超时、4xx）⇒ 原样返回：宁可缺口多留一轮，也不能凭猜测抹平欠账；
+//   · `landed` 为空 ⇒ 直接返回。
+//
+// 查到一部分时返回那一部分：查不到的事件必然不被计入，其缺口保持可见并落 WARN。
+func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event) []logtypes.Event {
+	if m == nil || len(landed) == 0 || m.cat == nil {
+		return landed
 	}
-	now := time.Now()
-	out := make([]logtypes.Event, 0, len(events))
-	skippedDays := make(map[string]struct{})
-	for _, ev := range events {
-		day, err := eventUTCDay(source, ev)
-		if err == nil && m.beyondHotRetention(day, now) {
-			skippedDays[day] = struct{}{}
+	client, _, err := m.clientForSource(source)
+	if err != nil || client == nil {
+		return landed
+	}
+	// **必须按每个事件所属的分区取白名单**，不能统一用 `source.UTCDay`：
+	// 缺口跨越历史天（生产实测缺口在 10-21，而源的当前天可能是今天），
+	// 用当前天分区的白名单去查历史天的事件必然查不到，会把「可见」误判成「不可见」。
+	generationsByDay := make(map[string][]string)
+	generationsFor := func(day string) ([]string, bool) {
+		if gens, ok := generationsByDay[day]; ok {
+			return gens, len(gens) > 0
+		}
+		rec, ok := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
+		if !ok || rec == nil || rec.PublishedProjection == nil {
+			generationsByDay[day] = nil
+			return nil, false
+		}
+		gens := publishedSourceProjectionGenerations(rec.PublishedProjection, source)
+		generationsByDay[day] = gens
+		return gens, len(gens) > 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), m.verifyBackoffMax*4+time.Second)
+	defer cancel()
+	// 按天分组后各组用各自的白名单批量查询（见上方 generationsFor 的理由）。
+	visible := make([]logtypes.Event, 0, len(landed))
+	byDay := make(map[string][]logtypes.Event)
+	order := make([]string, 0, 4)
+	for _, ev := range landed {
+		day, derr := eventUTCDay(source, ev)
+		if derr != nil || day == "" {
+			// 取不到天：保守地不作证据（不消解对应缺口）。
 			continue
 		}
-		out = append(out, ev)
-	}
-	if len(skippedDays) > 0 {
-		days := make([]string, 0, len(skippedDays))
-		for day := range skippedDays {
-			days = append(days, day)
+		if _, seen := byDay[day]; !seen {
+			order = append(order, day)
 		}
-		slog.Warn("投递证据面排除超出热层保留期的事件（不消解其缺口：该区间不可能在 VL 可见）",
-			"source", source.LogSourceID, "beyondHotRetentionDays", sortUTCDays(days),
-			"hotRetention", m.hotRetention)
+		byDay[day] = append(byDay[day], ev)
 	}
-	return out
+	for _, day := range order {
+		gens, ok := generationsFor(day)
+		if !ok {
+			// 该天没有已发布投影 ⇒ 查询侧本来也查不到它，不作证据。
+			continue
+		}
+		batchVisible, qerr := m.visibleEventsInVL(ctx, client, source, gens, byDay[day])
+		if qerr != nil {
+			slog.Warn("缺口消解前核对 VL 可见性失败：本轮不消解任何缺口（下轮重试）",
+				"source", source.LogSourceID, "utcDay", day, "error", qerr)
+			return landed
+		}
+		visible = append(visible, batchVisible...)
+	}
+	visibleSet := make(map[string]struct{}, len(visible))
+	for _, ev := range visible {
+		visibleSet[ev.EventID] = struct{}{}
+	}
+	missing := make([]logtypes.Event, 0)
+	kept := make([]logtypes.Event, 0, len(visible))
+	for _, ev := range landed {
+		if _, ok := visibleSet[ev.EventID]; ok {
+			kept = append(kept, ev)
+			continue
+		}
+		missing = append(missing, ev)
+	}
+	if len(missing) > 0 {
+		ids := make([]string, 0, len(missing))
+		for _, ev := range missing {
+			ids = append(ids, ev.EventID)
+		}
+		slog.Warn("本地段有、VL 查不到：这些事件不得作为缺口消解证据（缺口保持可见）",
+			"source", source.LogSourceID, "missingCount", len(missing),
+			"visibleCount", len(visible), "sampleEventIDs", ids[:min(len(ids), 3)])
+	}
+	return visible
+}
+
+// visibleEventsInVL 用**一次**查询取出这批事件里在 VL 可见的那些（按已发布代次白名单）。
+//
+// 分批上限取 `verifyChunkEvents` 同量级：单次 LogsQL 的 `event_id:in(...)` 过长会被拒，
+// 且过大的响应体不值得为一个只读核对付成本。超限时按批切分、逐批查询后合并。
+func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, source SourceConfig,
+	generations []string, events []logtypes.Event) ([]logtypes.Event, error) {
+	const batch = 512
+	out := make([]logtypes.Event, 0, len(events))
+	for start := 0; start < len(events); start += batch {
+		end := start + batch
+		if end > len(events) {
+			end = len(events)
+		}
+		ok, _, err := m.verifyProjectionQuery(ctx, client, source, generations[0], events[start:end], nil, generations)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			// 本批未能凑齐 ⇒ 再逐条确认本批内哪些可见（批内通常很小，成本可控）。
+			for _, ev := range events[start:end] {
+				one, _, oneErr := m.verifyProjectionQuery(ctx, client, source, generations[0],
+					[]logtypes.Event{ev}, nil, generations)
+				if oneErr != nil {
+					return nil, oneErr
+				}
+				if one {
+					out = append(out, ev)
+				}
+			}
+			continue
+		}
+		out = append(out, events[start:end]...)
+	}
+	return out, nil
 }

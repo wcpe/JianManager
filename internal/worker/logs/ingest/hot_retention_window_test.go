@@ -580,8 +580,11 @@ func TestDeliverEvidenceFaceExcludesUnwrittenDays(t *testing.T) {
 	pipe.Ledger().Ensure(pipe.Key(), logtypes.SourceIdentity{
 		LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1",
 	})
-	// 缺口放在**超窗口天**的区间 (1,10)：本次不会写它 ⇒ 绝不能被消解。
-	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 1, 10, ledger.GapReasonDeliverError, "超窗口天缺口夹具"))
+	// **缺口放在窗口内的天**（区间 10..20 = boundaryDay）：这正是生产的真实形态。
+	// 之前的用例把缺口放在超窗口天（1..10），只能证明「过期天不被消解」，
+	// 而生产缺失的那天（inst:317 的 2026-10-21）**在窗口内** —— 判别维度必须是
+	// 「VL 查不查得到」，不是「这天是否过期」。
+	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 10, 20, ledger.GapReasonDeliverError, "窗口内天缺口夹具"))
 	gapsBefore := pipe.Ledger().UnresolvedGapCount(pipe.Key())
 	require.Equal(t, 1, gapsBefore, "夹具前提：缺口必须存在且未解决")
 
@@ -590,7 +593,7 @@ func TestDeliverEvidenceFaceExcludesUnwrittenDays(t *testing.T) {
 
 	// 核心断言：超窗口天从未写入 ⇒ 它的缺口必须仍然可见。
 	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
-		"超窗口天的缺口绝不能被「部分写入」的证据面消解（它从未进入 VL）")
+		"窗口内天若在 VL 查不到，其缺口绝不能被「本地段已有」的证据面消解")
 }
 // TestEvidenceFaceEqualsActuallyWrittenEvents 钉住「自动消解缺口的证据面必须等于**真正写进去的**
 // 事件」，而不是「计划写入面」。
@@ -665,7 +668,7 @@ func TestEvidenceFaceEqualsActuallyWrittenEvents(t *testing.T) {
 	// ② 红线：用这个证据面消解时，超窗口天的缺口必须仍然可见。
 	m.resolveGapsLandedByDelivery(source, written)
 	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
-		"超窗口天的缺口绝不能被「部分写入」的证据面消解（它从未进入 VL）")
+		"窗口内天若在 VL 查不到，其缺口绝不能被「本地段已有」的证据面消解")
 
 	// ③ 反证：若误用权威全量做证据（修复前的行为），该缺口就会被消解 —— 证明本断言咬得住。
 	m.resolveGapsLandedByDelivery(source, events)

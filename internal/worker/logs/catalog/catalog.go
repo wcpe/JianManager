@@ -225,7 +225,18 @@ func projectionManifest(rec *Record) string {
 
 // RepairProjectionQueryGeneration 把「投影的 QueryGeneration 落后于权威 Generation」的
 // 分区对齐到权威代次，使 `PublishProjection` 的前置校验（`QueryGeneration == Generation`）
-// 重新成立。返回是否真的做了修复。
+// 重新成立。
+//
+// ── 返回值的三种语义（必须区分开，2026-10-21 复审补记的可观测性缺口）──────────────
+//   - repaired=true                       ：本次**真的**提交了一次对齐（落 journal，重放后仍成立）；
+//   - repaired=false ∧ needsManual==""    ：**无需修复**（投影与权威已一致）；
+//   - repaired=false ∧ needsManual!=""    ：**不修，但也绝不静默**——该分区属于「只能交人工」
+//     的形态，needsManual 是给人看的原因文案。调用方必须把它计入并单独打出来。
+//
+// 为什么「不修」也必须报出来：这三种形态既不会被修复、也不会返回 error，早前调用方只在
+// 「修复数或失败数 > 0」时打日志 ⇒ 现场看到的是「自愈完成」，而实际上还有 N 个分区永久
+// 不可发布，日志里一个字都没有。沉默的「不修」在可观测性上等价于「假装健康」，
+// 与既成损害（28 个分区长期不可发布）的发现过程完全一致：正是因为没人报。
 //
 // ── 为什么需要它（2026-10-21 生产既成损害）──────────────────────────────────────
 // `resetNamespaceConflictCounts` 的旧实现用无 CAS 的 `AppendJournal` 做「派生计数对齐」，
@@ -244,37 +255,54 @@ func projectionManifest(rec *Record) string {
 //     自相矛盾且成因未知，一律不碰，交人工判断。
 //   · 仅当**其余字段**没有别的矛盾时才修：`QueryLocationDirID == OwnerDirID`（否则投影指向
 //     的目录已不是权威目录，属另一类不一致）。
-//   · 走 CAS（比对 `JournalLastSeq` 与 `Generation`）：并发下若别人已发布到更新代次，
-//     本次放弃、不覆盖。
+//   · 并发安全由**全程持 `c.mu` 写锁**保证（见下方提交处的注释）：所有写者都取同一把锁，
+//     本函数内不存在可插入的临界区空隙，因此**没有**内部快照比对式 CAS，也不需要。
 //   · 刻意**不**碰 `ConflictCount` 等派生值：本函数只修代次一致性这一件事。
-func (c *Catalog) RepairProjectionQueryGeneration(key PartitionKey) (bool, error) {
+func (c *Catalog) RepairProjectionQueryGeneration(key PartitionKey) (repaired bool, needsManual string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cur, ok := c.records[key]
 	if !ok || cur == nil {
-		return false, fmt.Errorf("%w: %s", ErrNotFound, key)
+		return false, "", fmt.Errorf("%w: %s", ErrNotFound, key)
 	}
 	if cur.PublishedProjection == nil {
-		return false, nil
+		// 没有已发布投影：既没有「落后的 QueryGeneration」可修，也无从判断它是否发布过。
+		// 这是「只能交人工」的形态之一 —— 调用方必须看到它，否则该分区会一直不可查询。
+		return false, "分区没有已发布投影（无从判断代次是否落后，需人工确认该分区应否有投影）", nil
 	}
-	if cur.PublishedProjection.QueryGeneration >= cur.Generation {
-		// 已经一致（或反向矛盾，交由人工）：无事可做。
-		return false, nil
+	qgen, gen := cur.PublishedProjection.QueryGeneration, cur.Generation
+	if qgen == gen {
+		// 已一致：真正的「无需修复」。
+		return false, "", nil
+	}
+	if qgen > gen {
+		// 反向矛盾（投影声称属于更晚的代次）：成因未知，任何自动化改写都可能掩盖一次真实的
+		// 权威切换事故（代次不得回退，而「把 generation 抬到 qgen」等于凭空造一次权威前进），
+		// 故一律不碰。
+		return false, fmt.Sprintf("投影 query_generation=%d 大于权威 generation=%d（反向矛盾，成因未知）", qgen, gen), nil
 	}
 	if cur.PublishedProjection.QueryLocationDirID != cur.OwnerDirID {
-		// 目录也已经不一致：属另一类损坏，不在此处一并「修好」。
-		return false, nil
+		// 目录也已经不一致：属另一类损坏（投影指向的目录已不是权威目录）。只抬代次会把
+		// 这层损坏一起藏起来 —— 该分区即使「能发布」也读不到正确数据。
+		return false, fmt.Sprintf("投影目录与权威目录不一致（query_location_dir_id=%q owner_dir_id=%q）",
+			cur.PublishedProjection.QueryLocationDirID, cur.OwnerDirID), nil
 	}
-	expected := cur.Clone()
 	next := cur.Clone()
-	next.PublishedProjection.QueryGeneration = next.Generation
+	next.PublishedProjection.QueryGeneration = gen
 	// 代次对齐**不构成**一次权威切换：owner/generation/owner_dir 全部保持不变，
 	// 因此这里不能走 PublishProjection（它要求 QueryGeneration 已等于 Generation），
-	// 而走下面这段**持锁内**的 CAS 提交（调用方已持 c.mu，绝不可再取一次）。
-	// CAS 判据：`JournalLastSeq` 与 `Generation` 仍等于 `expected` 快照。
-	if cur.JournalLastSeq != expected.JournalLastSeq || cur.Generation != expected.Generation {
-		return false, fmt.Errorf("%w: catalog authority changed during repair", ErrInvalidState)
-	}
+	// 而是在持锁内直接提交（调用方已持 c.mu，绝不可再取一次）。
+	//
+	// 关于并发与「CAS」（2026-10-21 复审修正，早前注释与实现不符）：本函数**没有**内部 CAS。
+	// 早前这里写了一段「比对 expected 快照的 JournalLastSeq / Generation」的比较，但 expected
+	// 就是 cur 在同一临界区内的克隆，两者之间不存在任何可插入的执行点 ⇒ 条件恒为假、
+	// ErrInvalidState 在本函数内不可达，宣称的「并发下若别人已发布到更新代次则本次放弃」
+	// 并不成立。真正的保证是另外两条，写在这里以免再被误读：
+	//   1. 并发安全由全程持有 c.mu 写锁给出：所有写者（PublishProjection / AppendJournal /
+	//      SwitchOwner / 本函数）都取同一把锁，临界区内不可能有别的提交插进来；
+	//   2. 下面这次提交会推进 JournalLastSeq，于是任何**此前**取过快照的外部写者，
+	//      其 PublishProjection 的 CAS（按 journal 序号 / owner / 代次 / 目录逐项比对）
+	//      必然失败并放弃，不会用旧快照覆盖本函数刚写下的状态。
 	committed := next.Clone()
 	entry := JournalEntry{
 		Key:     committed.Key,
@@ -282,9 +310,9 @@ func (c *Catalog) RepairProjectionQueryGeneration(key PartitionKey) (bool, error
 		State:   committed.MigrationState,
 	}
 	if _, err := c.commitRecordLocked(committed, entry); err != nil {
-		return false, err
+		return false, "", err
 	}
-	return true, nil
+	return true, "", nil
 }
 
 // commitRecordLocked keeps a transition invisible until its full state is

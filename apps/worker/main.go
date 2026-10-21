@@ -826,9 +826,23 @@ func runWorker() {
 	// 为什么放在这里：必须在 journal 逻辑恢复完成后（否则读到的是中间态）、在采集/查询
 	// 对外服务之前（否则首轮发布仍会撞前置校验）。修复本身是带 CAS 的单条提交，幂等，
 	// 并发下失败即放弃、下轮再来 —— 不阻塞启动，也不假装成功。
-	if repaired, failed := repairProjectionQueryGenerations(logStack.Catalog); repaired > 0 || failed > 0 {
-		slog.Warn("投影代次一致性自愈完成（历史缺陷的既成损害修复）",
-			"repaired", repaired, "failed", failed)
+	if repaired, failed, needsManual := repairProjectionQueryGenerations(logStack.Catalog); repaired > 0 || failed > 0 || len(needsManual) > 0 {
+		if repaired > 0 || failed > 0 {
+			slog.Warn("投影代次一致性自愈完成（历史缺陷的既成损害修复）",
+				"repaired", repaired, "failed", failed)
+		}
+		// 需人工处置的分区**单独**一条 WARN（2026-10-21 复审修正）：这些分区既没被修好、
+		// 也没返回 error，若与上面那条汇总混在一起或干脆不报，运维看到的就是「自愈完成」，
+		// 而实际上它们永久不可发布（PublishProjection 恒拒），且没有任何别的入口能发现。
+		if len(needsManual) > 0 {
+			sample := needsManual
+			if len(sample) > maxNeedsManualPartitionsLogged {
+				sample = sample[:maxNeedsManualPartitionsLogged]
+			}
+			slog.Warn("投影代次一致性自愈：存在需人工处置的分区（未自动修复，也不会自愈）",
+				"count", len(needsManual), "partitions", sample,
+				"truncated", len(needsManual) > len(sample))
+		}
 	}
 	if vlHTTPClient != nil && coldVLClient != nil && vlSupervisor != nil {
 		hotCfg, hotErr := vlSupervisor.Config(vlsup.NamespaceHot)
@@ -1713,21 +1727,26 @@ func localWSAddr(port int) string {
 }
 
 // repairProjectionQueryGenerations 扫描 Catalog 并把「投影 query_generation 落后于权威
-// generation」的分区对齐，返回（修复数, 失败数）。
+// generation」的分区对齐，返回（修复数, 失败数, 需人工处置的分区清单）。
 //
-// 背景与修法见 catalog.RepairProjectionQueryGeneration 的注释；这里只负责遍历与计数。
+// 背景与修法见 catalog.RepairProjectionQueryGeneration 的注释；这里只负责遍历与汇总。
+//
+// 第三个返回值是 2026-10-21 复审补上的可观测性缺口：该自愈对三种形态**不修也不报错**
+// （分区没有已发布投影 / 投影代次反向矛盾 / 投影目录与权威目录不一致）。早前调用方只在
+// 「修复数或失败数 > 0」时打日志 ⇒ 这些分区既不计数也不留痕，运维完全看不到「还有 N 个
+// 待人工」。它们必须被汇总出来单独打一条 WARN，否则沉默的「不修」等于假装健康。
 //
 // 为什么逐条独立处理、失败不中断：单个分区的 CAS 冲突（并发发布抢先生效）只应影响它自己，
 // 不该让其余分区也修不上。失败计数会由调用方以 WARN 打出，不静默。
 //
 // 为什么用 `Keys()` 而不是另建索引：分区数量级是「节点数 × 天数」（生产 283 个），
 // 启动扫一遍是 O(分区数) 的内存读，与既有 `StartingRecover()` 同档，无需额外索引。
-func repairProjectionQueryGenerations(cat *catalog.Catalog) (repaired, failed int) {
+func repairProjectionQueryGenerations(cat *catalog.Catalog) (repaired, failed int, needsManual []string) {
 	if cat == nil {
-		return 0, 0
+		return 0, 0, nil
 	}
 	for _, key := range cat.Keys() {
-		ok, err := cat.RepairProjectionQueryGeneration(key)
+		ok, manual, err := cat.RepairProjectionQueryGeneration(key)
 		if err != nil {
 			failed++
 			slog.Warn("投影代次一致性自愈失败（该分区待下一轮或人工处理）",
@@ -1738,10 +1757,20 @@ func repairProjectionQueryGenerations(cat *catalog.Catalog) (repaired, failed in
 			repaired++
 			slog.Info("投影代次一致性已修复", "partition", key.String(),
 				"detail", "query_generation 对齐到权威 generation，该分区恢复可发布")
+			continue
+		}
+		if manual != "" {
+			needsManual = append(needsManual, key.String()+": "+manual)
 		}
 	}
-	return repaired, failed
+	return repaired, failed, needsManual
 }
+
+// maxNeedsManualPartitionsLogged 限制「需人工」清单在**单条日志行**里的条数。
+//
+// 汇总条数（count）永远是准确的，被截断的只是逐条列举：分区数量级是「节点数 × 天数」
+// （生产 283 个），若全部属于需人工形态，一整行几百个键会让这条日志本身失去可读性。
+const maxNeedsManualPartitionsLogged = 20
 
 // sampleLogIndexPersistLatency 周期性打印采集索引（FR-496，本地 SQLite）的单次持久化耗时
 // P50/P95/Max 与本窗口的写入行数/删除行数/字节数。

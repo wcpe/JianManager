@@ -72,7 +72,7 @@ func mustRecordWithProjection(c *Catalog, key PartitionKey, proj *PublishedProje
 // TestRepairProjectionQueryGenerationFixesStalePartition 固定「落后的分区能被修好，
 // 且修好后可以继续正常发布」。
 //
-// 为什么它能转红：把 `RepairProjectionQueryGeneration` 改成直接 `return false, nil`
+// 为什么它能转红：把 `RepairProjectionQueryGeneration` 改成直接 `return false, "", nil`
 // （不做任何修复）⇒ 记录仍是 `gen=2, qgen=1`、后续 `PublishProjection` 仍报
 // `projection and authority do not match` ⇒ 两条断言同时失败。
 func TestRepairProjectionQueryGenerationFixesStalePartition(t *testing.T) {
@@ -93,9 +93,10 @@ func TestRepairProjectionQueryGenerationFixesStalePartition(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidState,
 		"夹具前提：修复前该分区必须无法发布（projection and authority do not match）")
 
-	fixed, err := c.RepairProjectionQueryGeneration(testKey())
+	fixed, manual, err := c.RepairProjectionQueryGeneration(testKey())
 	require.NoError(t, err)
 	require.True(t, fixed, "落后的分区必须被修好")
+	require.Empty(t, manual, "能自动修好的分区不属于「需人工」")
 
 	after, ok := c.Get(testKey())
 	require.True(t, ok)
@@ -117,12 +118,18 @@ func TestRepairProjectionQueryGenerationFixesStalePartition(t *testing.T) {
 	require.NoError(t, err, "修好之后该分区必须能重新发布")
 
 	// 幂等：再修一次不应再改动任何东西。
-	again, err := c.RepairProjectionQueryGeneration(testKey())
+	again, manual, err := c.RepairProjectionQueryGeneration(testKey())
 	require.NoError(t, err)
 	require.False(t, again, "已一致的分区不得被重复修复")
+	require.Empty(t, manual, "已一致 ⇒ 既不需要修复，也不属于「需人工」")
 }
 
-// TestRepairProjectionQueryGenerationLeavesHealthyAndAmbiguousRecords 固定「不误修」边界。
+// TestRepairProjectionQueryGenerationLeavesHealthyAndAmbiguousRecords 固定「不误修」边界，
+// 并固定「不修也必须报」：三种只能交人工的形态都要有非空的 needsManual 原因。
+//
+// 为什么「不修也要报」必须被钉住（2026-10-21 复审缺陷 A4）：早前这三种形态一律
+// `return false, nil`，调用方只在「修复数或失败数 > 0」时打日志 ⇒ 它们既不计数也不留痕，
+// 运维看到的是「自愈完成」，实际还有 N 个分区永久不可发布。
 func TestRepairProjectionQueryGenerationLeavesHealthyAndAmbiguousRecords(t *testing.T) {
 	t.Run("健康记录不动", func(t *testing.T) {
 		c := New(nil)
@@ -134,25 +141,41 @@ func TestRepairProjectionQueryGenerationLeavesHealthyAndAmbiguousRecords(t *test
 		err := c.PublishProjection(c.mustGet(t), mustRecordWithProjection(c, testKey(), proj))
 		require.NoError(t, err)
 
-		fixed, err := c.RepairProjectionQueryGeneration(testKey())
+		fixed, manual, err := c.RepairProjectionQueryGeneration(testKey())
 		require.NoError(t, err)
 		require.False(t, fixed, "已一致的记录不得被修复")
+		require.Empty(t, manual, "健康记录不属于「需人工」：needsManual 必须为空，否则 WARN 会误报")
 	})
 
 	t.Run("反向矛盾不动_交人工", func(t *testing.T) {
 		c := New(nil)
 		require.NoError(t, c.Put(NewStableRecord(testKey(), OwnerHot, 1, "hot-g1")))
 		// query_generation 反而**大于** generation：成因未知，一律不碰。
-		proj := &PublishedProjection{
+		//
+		// 造法必须走 AppendJournal：`PublishProjection` 的前置校验恰好会拒绝这种形态
+		// （qgen != gen 一律拒），用它造夹具根本造不出来——早前这个子用例因此实际只测到了
+		// 「没有已发布投影」那一条分支，名不副实（2026-10-21 复审一并修正）。
+		cur, ok := c.Get(testKey())
+		require.True(t, ok)
+		reversed := cur.Clone()
+		reversed.PublishedProjection = &PublishedProjection{
 			ManifestVersion: "pv-1", CoverageComplete: true,
 			QueryLocationDirID: "hot-g1", QueryGeneration: 5,
 		}
-		err := c.PublishProjection(c.mustGet(t), mustRecordWithProjection(c, testKey(), proj))
-		require.Error(t, err, "夹具前提：这种记录本就过不了发布前置校验")
+		require.NoError(t, c.AppendJournal(JournalEntry{
+			Key: reversed.Key, Record: reversed, State: reversed.MigrationState,
+		}))
 
-		fixed, err := c.RepairProjectionQueryGeneration(testKey())
+		fixed, manual, err := c.RepairProjectionQueryGeneration(testKey())
 		require.NoError(t, err)
 		require.False(t, fixed, "反向矛盾（qgen > gen）不得被自动修复，应交人工判断")
+		require.NotEmpty(t, manual, "反向矛盾必须报成「需人工」，不得静默返回无需修复")
+		require.Contains(t, manual, "反向矛盾", "原因文案必须说清是哪种形态")
+
+		still, ok := c.Get(testKey())
+		require.True(t, ok)
+		require.EqualValues(t, 5, still.PublishedProjection.QueryGeneration, "反向矛盾分区不得被改写")
+		require.EqualValues(t, 1, still.Generation, "权威代次不得被抬到 qgen（那等于凭空造一次权威前进）")
 	})
 
 	t.Run("目录也不一致时不动", func(t *testing.T) {
@@ -164,20 +187,22 @@ func TestRepairProjectionQueryGenerationLeavesHealthyAndAmbiguousRecords(t *test
 		broken.PublishedProjection.QueryLocationDirID = "some-old-dir"
 		require.NoError(t, c.AppendJournal(JournalEntry{Key: broken.Key, Record: broken, State: broken.MigrationState}))
 
-		fixed, err := c.RepairProjectionQueryGeneration(testKey())
+		fixed, manual, err := c.RepairProjectionQueryGeneration(testKey())
 		require.NoError(t, err)
 		require.False(t, fixed, "目录已不一致的记录不得只修代次（会掩盖另一类损坏）")
+		require.NotEmpty(t, manual, "目录不一致必须报成「需人工」")
 	})
 
 	t.Run("不存在或无投影", func(t *testing.T) {
 		c := New(nil)
-		_, err := c.RepairProjectionQueryGeneration(testKey())
+		_, _, err := c.RepairProjectionQueryGeneration(testKey())
 		require.ErrorIs(t, err, ErrNotFound)
 
 		require.NoError(t, c.Put(NewStableRecord(testKey(), OwnerHot, 1, "hot-g1")))
-		fixed, err := c.RepairProjectionQueryGeneration(testKey())
+		fixed, manual, err := c.RepairProjectionQueryGeneration(testKey())
 		require.NoError(t, err)
 		require.False(t, fixed, "没有已发布投影时无事可做")
+		require.NotEmpty(t, manual, "没有已发布投影必须报成「需人工」，不得静默返回无需修复")
 	})
 }
 
@@ -209,9 +234,10 @@ func TestRepairProjectionQueryGenerationIsJournalReplayable(t *testing.T) {
 		Detail: "derived conflict_count reconciled after identity-conflict clearance",
 	}))
 
-	fixed, err := c.RepairProjectionQueryGeneration(testKey())
+	fixed, manual, err := c.RepairProjectionQueryGeneration(testKey())
 	require.NoError(t, err)
 	require.True(t, fixed)
+	require.Empty(t, manual)
 	// 重放：修复必须仍然成立，不能被 journal 回滚。
 	reopenedStore, err := NewJSONLFileStore(path)
 	require.NoError(t, err)
