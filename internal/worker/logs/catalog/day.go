@@ -233,7 +233,13 @@ func (c *Catalog) FailDay(utcDay string, to MigrationState, detail string) ([]*R
 	// 若要求全一致，失败本身都记不下来 ⇒ 现场连「为什么失败」都查不到。
 	active := activeDayRecords(records)
 	if len(active) == 0 {
-		return records, nil
+		// **不能返回成功**（2026-10-22 复审 P2-8）：`FailDay` 的契约是「把失败记下来」，
+		// 没有任何可失败的记录意味着这次调用**什么也没做**，返回 nil 会让调用方
+		// （`DayManager.Resume` 的 `fail()` 闭包）误以为失败已入账，而现场查不到任何记录。
+		// 与 `AdvanceDay`/`BeginDayMigration` 的空子集语义不同：那两个是幂等推进，
+		// 空子集本来就等于「已完成」，返回成功是诚实的。
+		return nil, fmt.Errorf("%w: UTC day %s has no record participating in migration (state=%q)",
+			ErrIllegalTransition, utcDay, to)
 	}
 	from := active[0].MigrationState
 	for _, rec := range active {

@@ -376,10 +376,15 @@ func TestMarkDayCompleteRefusesHotResidual(t *testing.T) {
 		settled.JournalComplete = false
 		settled.LastVerifyCompleted = false
 		require.NoError(t, c.Put(settled))
-		// 「BeginDayMigration 之后才出现」的那条：Owner=hot、state 为空。
-		late := NewStableRecord(hotKey, OwnerHot, 1, "")
-		late.MigrationState = ""
-		late.JournalComplete = false
+		// 「BeginDayMigration 之后才出现」的那条：用 **NewStableRecord 的真实默认态**。
+		//
+		// 关键（2026-10-22 复审 P2）：`NewStableRecord` 的默认 `MigrationState` 是
+		// `StateCleaned`、`JournalComplete` 是 `true`（见 types.go）。初版夹具手工把
+		// state 设成 `""`，于是把守卫收窄为「只拦 `Owner==hot && state==""`」时本用例
+		// 照样全绿 —— 而那个收窄恰好放过真正危险的 `hot + CLEANED`
+		// （它同时还会被 `activeDayRecords` 永久跳过）。用默认态夹具才能钉住两个 half。
+		late := NewStableRecord(hotKey, OwnerHot, 1, "dir-late-hot")
+		require.Equal(t, StateCleaned, late.MigrationState, "夹具前提：迟到记录的默认态是 CLEANED")
 		require.NoError(t, c.Put(late))
 
 		err := c.MarkDayComplete(day, "sum-1")
@@ -390,9 +395,9 @@ func TestMarkDayCompleteRefusesHotResidual(t *testing.T) {
 		rec, ok := c.Get(settledKey)
 		require.True(t, ok)
 		require.False(t, rec.JournalComplete, "失败的结账不得留下部分变更")
-		hot, ok := c.Get(hotKey)
-		require.True(t, ok)
-		require.False(t, hot.JournalComplete, "从未迁移的记录更不得被标成已完成")
+		// 迟到的 hot 记录在 `NewStableRecord` 默认态下 `JournalComplete` 本就是 true
+		// （见 types.go），所以这里不断言它；有意义的是「它必须阻止整日结账」——
+		// 上面的 require.Error 已经钉住。若守卫被收窄成 `state==""`，本子用例转红。
 	})
 
 	t.Run("无 hot 残留时必须能正常结账", func(t *testing.T) {

@@ -345,7 +345,7 @@ func TestMixedRebuildKeepsBeyondWindowGapsVisible(t *testing.T) {
 
 	m, err := newTestManager(t, Options{
 		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
-		Sources: []SourceConfig{source},
+		Sources:      []SourceConfig{source},
 		ReplayBudget: ReplayBudget{MaxDays: 8},
 		HotRetention: hotRetentionTestRetention,
 	})
@@ -596,6 +596,7 @@ func TestDeliverEvidenceFaceExcludesUnwrittenDays(t *testing.T) {
 	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
 		"窗口内天若在 VL 查不到，其缺口绝不能被「本地段已有」的证据面消解")
 }
+
 // TestEvidenceFaceEqualsActuallyWrittenEvents 钉住「自动消解缺口的证据面必须等于**真正写进去的**
 // 事件」，而不是「计划写入面」。
 //
@@ -824,10 +825,11 @@ func TestConfirmVerdictDistinguishesInconclusiveFromMeasured(t *testing.T) {
 //
 // 漏洞形态（2026-10-21 复审发现）：`beyondWindow` 是从 `req.days` 推的，而对账**早已把
 // 超窗口天剔出缺失面**。于是一个「有超窗口天（从未发布）+ 有窗口内天（真缺失）」的源：
-//   · `req.days` 只剩窗口内天 ⇒ `beyondWindow` 为空 ⇒ 护栏不触发；
-//   · 而 `releaseRecovery` 拿的是**权威全量**，其 `to = 权威全量末端`、`from = Reclaim`，
-//     建的是**单个连续区间** ⇒ 超窗口天（位置更早）必然落在区间内
-//     ⇒ 为「从未在热层发布」的区间建副本证明 ⇒ reclaim 越过后 WAL 条目被剪 ⇒ 数据消失。
+//
+//	· `req.days` 只剩窗口内天 ⇒ `beyondWindow` 为空 ⇒ 护栏不触发；
+//	· 而 `releaseRecovery` 拿的是**权威全量**，其 `to = 权威全量末端`、`from = Reclaim`，
+//	  建的是**单个连续区间** ⇒ 超窗口天（位置更早）必然落在区间内
+//	  ⇒ 为「从未在热层发布」的区间建副本证明 ⇒ reclaim 越过后 WAL 条目被剪 ⇒ 数据消失。
 //
 // 本用例：权威全量含 beyondDay 与 inWindowDay，但只登记 inWindowDay 重建。
 // 断言 `Reclaim` 不得越过 beyondDay 的区间上界。
@@ -850,7 +852,7 @@ func TestReleaseRecoveryBlockedWhenAuthoritativeHasBeyondWindowDays(t *testing.T
 
 	m, err := newTestManager(t, Options{
 		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
-		Sources: []SourceConfig{source},
+		Sources:      []SourceConfig{source},
 		ReplayBudget: ReplayBudget{MaxDays: 8},
 		HotRetention: hotRetentionTestRetention,
 	})
@@ -894,8 +896,10 @@ func TestReleaseRecoveryBlockedWhenAuthoritativeHasBeyondWindowDays(t *testing.T
 // 但实测它走的是 `deliver` 里 `len(toWrite)==0` 的**早退快路径**（本批事件已全在本地段里，
 // 直接由 `landedVisibleInVL` 判可见性），根本没走到赋值点
 // (`runtime.go` 的 `evidence = written`)：
-//   · 把 `evidence = written` 删掉（退回 `evidence = expected`），它**依然通过**；
-//   · ingest 包内所有 Gap/Evidence/Deliver/HotRetention/Rebuild/Projection 用例全绿。
+//
+//	· 把 `evidence = written` 删掉（退回 `evidence = expected`），它**依然通过**；
+//	· ingest 包内所有 Gap/Evidence/Deliver/HotRetention/Rebuild/Projection 用例全绿。
+//
 // 即这条最严重真机缺陷的修复当时**零覆盖**。本用例补的就是那个缺口。
 //
 // 夹具关键：必须同时满足三件事，缺一不可。
@@ -980,79 +984,25 @@ func TestDeliverEvidenceFaceTruncatedToWrittenWhenReplaceSpansBeyondWindow(t *te
 		"证据面必须截断到实际写入的天；用权威全量做证据会把从未落库的超窗口天标成已消解")
 }
 
-// TestConfirmVerdictInconclusiveBranches 覆盖 `confirmInconclusive` 的**真分支**。
+// 关于 `confirmInconclusive` 的分支覆盖：**这里刻意不放一个「看起来覆盖了」的用例**。
 //
-// 为什么需要（2026-10-22 测试有效性复审 P1）：原用例
-// `TestConfirmVerdictDistinguishesInconclusiveFromMeasured` 只断言了三件事——
-// 三个枚举值互不相等（编译期常量，零信息量）、以及 pending=false 时不出 Inconclusive。
-// 而 `confirmInconclusive` 在取证路径上有五个**各自独立**的触发点，一个都没覆盖：
+// 历史（2026-10-22 复审 P1）：曾有一个 TestConfirmVerdictInconclusiveBranches，文档写着
+// 「用最小可控手段触发 ①②」，但函数体只剩一个 `pending=false ⇒ confirmed` 子用例 ——
+// 那正是 `tryConfirmPendingPublicationVerdict` 的第一个早退分支，与 inflight /
+// canonicalRecoveryEvents-空 **毫无关系**。把 8 个 `return confirmInconclusive` 中
+// 任意一个改成 `confirmConfirmed`，它照样全绿。也就是说：声称覆盖，实际零覆盖，
+// 而且因为名字和文档都在说「覆盖了」，比没有这个用例更危险（下一位复审者会跳过它）。
 //
-//	① inflight != 0        有在飞写入，读到的是写一半的中间态
-//	② canonicalRecoveryEvents 报错/为空   取证集合拿不到
-//	③ groupEventsByUTCDay 失败/为空       按日拆分失败
-//	④ 快照失效             取证期间发布被推进，结论已过期
-//	⑤ authority/attempt 变化            取证期间权威或尝试次数变了
+// 为什么不在单元层硬造这五条分支：
+//   · `inflight != 0`：把 `publicationInflight[key]` 置 1 会让后台发布路径永久等待
+//     （实测 600s 超时），该计数与真实写入生命周期绑定，不是可以单独篡改的纯状态；
+//   · `canonicalRecoveryEvents` 为空 / `groupEventsByUTCDay` 失败：权威来源是**磁盘段
+//     存储**（`storedCount > 0` 时以段为准，这是 2026-09-29 生产事故后刻意定下的），
+//     要让它真空就得删数据文件，已超出单元测试能安全表达的范围。
 //
-// 这五条正是「重建饥饿」根治点的语义核心：**三态化的意义就在于 inconclusive 时
-// 一天都不写**。若它们退化成「当成 missing」或「当成 confirmed」，重建会重新开始
-// 每轮重写最老一天、跨保留边界则永不成功——也就是修复前的死锁。
-//
-// 本用例用最小可控手段触发 ①②，其余三条依赖并发时序，由
-// TestRebuildDaysWritesNothingOnInconclusive 从上层行为兜住。
-func TestConfirmVerdictInconclusiveBranches(t *testing.T) {
-	now := time.Now()
-	_, boundaryDay, _ := hotRetentionTestDays(now, hotRetentionTestRetention)
-
-	newPending := func(t *testing.T) (*Manager, SourceConfig, string) {
-		t.Helper()
-		client, fixture, _ := newReconcileVL(t)
-		root := t.TempDir()
-		journal := catalog.NewMemJournal()
-		source := hotRetentionTestSource(t, root)
-		events := []logtypes.Event{hotRetentionTestEvent(boundaryDay, 10, 20, "in window")}
-		seedProjection(t, client, root, journal, catalog.New(journal), source, events)
-		m, err := newTestManager(t, Options{
-			Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
-			Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
-		})
-		require.NoError(t, err)
-		key := source.LogSourceID + "/" + source.SourceGeneration
-		// 置 pending：本用例只关心「取证能不能得出结论」，不关心写入。
-		m.mu.Lock()
-		st := m.state.Sources[key]
-		st.PublicationPending = true
-		m.state.Sources[key] = st
-		m.mu.Unlock()
-		_ = fixture
-		return m, source, key
-	}
-
-	// 注：`inflight != 0` 分支**不用伪造计数来测**。把 `publicationInflight[key]` 置 1 会让
-	// 后台发布路径永久等待（实测 600s 超时），因为该计数与真实的写入生命周期绑定，不是可以
-	// 单独篡改的纯状态。该分支由「有在飞写入 ⇒ 取证不可信」这一语义直接保证，且它的失败方向
-	// 是**保守**（返回 inconclusive ⇒ 一天都不写），与饥饿修复同向，故不构造危险夹具。
-
-	// 注：「取证集合为空」与「按日拆分失败」两条分支同样不伪造夹具。
-	// `canonicalRecoveryEvents` 的权威来源是**磁盘段存储**（`storedCount > 0` 时以段为准，
-	// 这是 2026-09-29 生产事故后刻意定下的），清 state 里的 WAL 并不能让它返回空集合；
-	// 而要真的清空段就得删数据文件，那已经超出「单元测试」能安全表达的范围，并且会与
-	// 被测的恢复语义纠缠。这两条分支的失败方向同样是**保守**（inconclusive ⇒ 不写任何天），
-	// 与饥饿修复同向，故改由下层的纯判据 + 上层「不写任何天」共同保证。
-
-	t.Run("pending=false 直接 confirmed（不得空转）", func(t *testing.T) {
-		m, source, key := newPending(t)
-		m.mu.Lock()
-		clear := m.state.Sources[key]
-		clear.PublicationPending = false
-		m.state.Sources[key] = clear
-		saved := clear
-		m.mu.Unlock()
-
-		verdict, err := m.tryConfirmPendingPublicationVerdict(context.Background(), source, key, saved, nil, nil)
-		require.NoError(t, err)
-		require.Equal(t, confirmConfirmed, verdict, "没有待确认发布时不得报不可用")
-	})
-}
+// 取而代之，这里守的是**上层可观测的行为契约**：取证没跑完时一天都不写、
+// 并如实返回 pending。见 TestRebuildWritesNothingWhenConfirmationInconclusive
+// （它直接调 rebuildDaysInner，并已实测「去掉 if inconclusive 分支 ⇒ 转红」）。
 
 // TestRebuildWritesNothingWhenConfirmationInconclusive 钉住「取证未完成 ⇒ 本轮一天都不写」。
 //

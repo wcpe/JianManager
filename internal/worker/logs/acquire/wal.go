@@ -807,6 +807,13 @@ func (w *WAL) Commit() error {
 	// 账本更靠前就说明这些字节早已耐久（reclaim 的前提就是「已证明安全另存」）。
 	// 故先取账本的当前值兜底：推进量只会单调，绝不会因为重启而回退。
 	if p, ok := w.led.Positions(w.key); ok && p.Durable > maxEnd {
+		// **不能静默**（2026-10-22 复审 P2-6）：这条分支意味着「进程内的 durable 计数
+		// 落后于账本」。正常重启后由 WAL 条目重建时不会有落差（落差 = 条目已被 reclaim），
+		// 而**截断重锚**（同 inode 尺寸回退）也会走到这里 —— 那是真实的状态分歧，
+		// 修复前会以 monotonic 错误响亮报出，修复后必须留下痕迹才不至于变成静默。
+		// 生产 v9/v10 正是此分支在生效（reclaim 已推进而进程内计数回退），此前一行日志都没有。
+		slog.Warn("WAL durable 计数落后于账本，按账本兜底（不回退已耐久水位）",
+			"key", w.key.String(), "walMaxEnd", maxEnd, "ledgerDurable", p.Durable)
 		maxEnd = p.Durable
 	}
 	if maxEnd > 0 {
