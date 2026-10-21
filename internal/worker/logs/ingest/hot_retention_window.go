@@ -1,7 +1,10 @@
 package ingest
 
 import (
+	"log/slog"
 	"time"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
 // ── 热层可发布窗口（2026-10-21 生产缺陷修复）────────────────────────────────────
@@ -77,4 +80,45 @@ func (m *Manager) splitHotRetentionDays(days []string, now time.Time) (inWindow,
 		inWindow = append(inWindow, day)
 	}
 	return sortUTCDays(inWindow), sortUTCDays(beyond)
+}
+
+// evidenceWithinHotRetention 从一批「已落库」事件里剔出**热层不可能可见**的天，
+// 返回可用作缺口消解证据的子集。
+//
+// 为什么需要它（2026-10-21 真机缺陷，生产主要命中路径）：`deliver` 有一条
+// 「本地已有、无需重写」的分支（`len(toWrite)==0`）。它直接拿 `landed` 去
+// `resolveGapsLandedByDelivery`，而 `landed` 只证明「本地段里有这些事件」，
+// 不证明「VL 里有」。超出热层保留期的天，VL 对写入返回 200 但**静默丢弃**，
+// 本地段却完好保留 —— 于是从未进入 VL 的区间被消解成 `delivery confirmed`。
+//
+// 生产实测：`inst:317` 的 `[7583541,7585609)`（10-21，2068 字节）被如此消解，
+// 而 VL 该源最新只到 7583541；随后 `reclaim` 被推到 `read_pos`，欠账再无信号。
+//
+// 保守边界：`retention<=0`（未配置）或事件取不到天时**一律保留**，
+// 即零配置下行为与改动前逐字一致。
+func (m *Manager) evidenceWithinHotRetention(source SourceConfig, events []logtypes.Event) []logtypes.Event {
+	if m == nil || len(events) == 0 || m.hotRetention <= 0 {
+		return events
+	}
+	now := time.Now()
+	out := make([]logtypes.Event, 0, len(events))
+	skippedDays := make(map[string]struct{})
+	for _, ev := range events {
+		day, err := eventUTCDay(source, ev)
+		if err == nil && m.beyondHotRetention(day, now) {
+			skippedDays[day] = struct{}{}
+			continue
+		}
+		out = append(out, ev)
+	}
+	if len(skippedDays) > 0 {
+		days := make([]string, 0, len(skippedDays))
+		for day := range skippedDays {
+			days = append(days, day)
+		}
+		slog.Warn("投递证据面排除超出热层保留期的事件（不消解其缺口：该区间不可能在 VL 可见）",
+			"source", source.LogSourceID, "beyondHotRetentionDays", sortUTCDays(days),
+			"hotRetention", m.hotRetention)
+	}
+	return out
 }

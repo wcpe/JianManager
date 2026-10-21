@@ -892,7 +892,7 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 			// 限速：天内的插入批之间与校验簇之间主动让出 CPU（yield 为 nil 时零行为差异）。
 			Yield: yield,
 		}
-		if _, err := m.writeProjectionPlan(req.source, events, generation, plan); err != nil {
+		if _, _, err := m.writeProjectionPlan(req.source, events, generation, plan); err != nil {
 			out.Pending = true
 			out.Err = fmt.Errorf("ingest: 投影重建失败: %w", err)
 			return out

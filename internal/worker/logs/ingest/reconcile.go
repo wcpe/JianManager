@@ -733,7 +733,7 @@ func (m *Manager) runReplayWindow(ctx context.Context, item startupSource, windo
 			// 见 projectionWritePlan.Yield 的安全边界）。
 			Yield: m.rebuildYieldFn(),
 		}
-		if _, err := m.writeProjectionPlan(item.source, item.events, window.generation, plan); err != nil {
+		if _, _, err := m.writeProjectionPlan(item.source, item.events, window.generation, plan); err != nil {
 			return false, err
 		}
 		window.days = window.days[1:]

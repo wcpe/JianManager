@@ -5308,7 +5308,18 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	timing.mark("toWrite")
 	if len(toWrite) == 0 {
 		// 只用相同内容重复或已裁定保留的事件作为落库证据；被丢弃的冲突变体不得消解其区间缺口。
-		m.resolveGapsLandedByDelivery(source, landed)
+		//
+		// **但证据面还要再排除「热层不可能可见」的天**（2026-10-21 真机缺陷）：
+		// 本分支的语义是「本地已有、无需重写」，而「本地有」不等于「VL 里有」——
+		// 超出热层保留期的天，VL 会把写入静默丢弃，本地段里却仍然留着。若直接用 `landed`
+		// 消解缺口，就会把**从未进入 VL** 的区间标成 `delivery confirmed`（生产实测：
+		// `inst:317` 的 `[7583541,7585609)` 因此被消解，而 VL 该源最新只到 7583541），
+		// 随后 `reclaim` 被推到 `read_pos`，这笔欠账再无信号。
+		//
+		// 这条分支是生产上的**主要命中路径**：那些天的数据早在本地段里，
+		// 所以 `toWrite` 恒为空、每次投递都从这里返回 204 —— 这也是为什么只修
+		// 「写入成功后按 `written` 取证据」还不够。
+		m.resolveGapsLandedByDelivery(source, m.evidenceWithinHotRetention(source, landed))
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
 	// 权威全量的构建是 O(段行数)（生产单源实测可达 70 万行 ≈ 6 秒）；只有「整窗重发」语义
@@ -5391,11 +5402,28 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		tail.Events = toWrite
 		plan.Tail = &tail
 	}
-	result, err := m.writeProjectionPlan(source, expected, generation, plan)
+	result, written, err := m.writeProjectionPlan(source, expected, generation, plan)
 	if err != nil {
 		return result, err
 	}
 	timing.mark("write")
+	// **证据面必须等于「真正写进去的」，不能是「计划写的」**（2026-10-21 真机缺陷修复）。
+	//
+	// 上面 `evidence` 取的是权威全量 / 本批 `toWrite`，而 `writeProjectionPlan` 内部
+	// **按天循环**，且会把超出热层保留期的天**整段跳过**（写进 VL 也只会被静默丢弃）。
+	// 两者一旦不等，`resolveGapsLandedByDelivery` 就会用「计划写入面」的区间去覆盖缺口，
+	// 把**从未落库**的区间标成 `delivery confirmed` —— 账本从此忘掉这笔欠账。
+	//
+	// 真机铁证（修复前）：`inst:317` 权威全量跨 10-12～10-21（`record_end` 到 7585609），
+	// 但过滤后只写了 09-21 一天（5492 条、`record_end` 仅到 ~955K）。旧代码用全量做证据，
+	// 于是 10-21 的缺口 `[7583541,7585609)` 被消解成 `delivery confirmed`，而 VL 里
+	// 该源最新只到 7583541（实测查询为空）。更糟的是 `reclaim` 随后被推到 `read_pos`，
+	// 这笔 2068 字节的欠账再没有任何信号提示。
+	//
+	// 为什么改用「函数回传的已写入集合」而不是「对 evidence 再做一次窗口过滤」：窗口过滤只能剔除
+	// 超窗口天，解决不了「计划写全量、实际只写部分天」这个更一般的不一致（本缺陷正是后者）。
+	// 唯一可靠的证据是**函数实际写成功的那批事件**。
+	evidence = written
 	// 投递成功（写 VL + 逐字段可见性校验 + catalog 发布）= 该写入面已确认落库 → 自动消解
 	// 被它完全覆盖的缺口。这是缺陷 A 的「成功后自动消解」出口：重投成功即清零，不再依赖人工。
 	m.resolveGapsLandedByDelivery(source, evidence)
@@ -5437,6 +5465,7 @@ type projectionWritePlan struct {
 	// 校验判据、发布判据与错误处理——即它无法把失败变成成功，也无法把成功变成失败。
 	Yield func()
 }
+
 
 // publicationSnapshot 绑定源/日的发布版本，与物理代次尝试号独立。
 type publicationSnapshot struct {
@@ -5669,21 +5698,29 @@ func (m *Manager) tryConfirmPendingPublicationCtx(ctx context.Context, source So
 func (m *Manager) RepublishSkipped() int64 { return m.republishSkipped.Load() }
 
 func (m *Manager) writeProjection(source SourceConfig, events []logtypes.Event, generation string, writeEvents, archiveEvents []logtypes.Event, replace bool) (pipeline.DeliveryResult, error) {
-	return m.writeProjectionPlan(source, events, generation, projectionWritePlan{
+	res, _, err := m.writeProjectionPlan(source, events, generation, projectionWritePlan{
 		Write: writeEvents, Archive: archiveEvents, Replace: replace,
 	})
+	return res, err
 }
 
 // writeProjectionPlan 是 writeProjection 的完整形态：按计划写入 VL、校验、发布、落段。
 //
 // events 恒为权威全量（用于段存储补齐与 persist）；实际写入面由 plan 决定。
-func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Event, generation string, plan projectionWritePlan) (pipeline.DeliveryResult, error) {
+// writeProjectionPlan 返回（投递结果, **真正写入并逐字段校验通过的事件**, error）。
+//
+// 第三个返回值是「证据面」的唯一可靠来源：`plan.Write` 是**计划**写的，而本函数内部
+// 按天循环、且会把超出热层保留期的天整段跳过 —— 计划面与落库面可能不等。调用方若用
+// 计划面去消解缺口，会把从未落库的区间标成「已确认投递」（2026-10-21 真机缺陷）。
+//
+// 为什么不能用入参 `plan` 回填：Go 按值传参，函数内对 plan 的字段写入传不回调用方。
+func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Event, generation string, plan projectionWritePlan) (pipeline.DeliveryResult, []logtypes.Event, error) {
 	if len(events) == 0 {
-		return pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}, nil
+		return pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}, nil, nil
 	}
 	for _, event := range events {
 		if event.Record.End <= event.Record.Start {
-			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, fmt.Errorf("ingest: zero-width event %s", event.EventID)
+			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, nil, fmt.Errorf("ingest: zero-width event %s", event.EventID)
 		}
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
@@ -5693,7 +5730,7 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	m.publishMu.Lock()
 	if !m.publicationSnapshotCurrentLocked(source, plan.Snapshot, plan.Days) {
 		m.publishMu.Unlock()
-		return pipeline.DeliveryResult{}, errPublicationStale
+		return pipeline.DeliveryResult{}, nil, errPublicationStale
 	}
 	m.mu.Lock()
 	if m.publicationAttempts == nil {
@@ -5723,25 +5760,25 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	// 「代次不得重名」的保护不依赖这一次落库：取名前的 VL 占用探测（nextFreeProjectionGeneration）
 	// 才是主判据 ✓；最坏情况（进程在落库前崩溃）只会让该代次重取一次名 → 探测拦下 ✓ 不丢数据。
 	if err := m.persistHot(); err != nil {
-		return pipeline.DeliveryResult{}, err
+		return pipeline.DeliveryResult{}, nil, err
 	}
 	grouped, days, err := groupEventsByUTCDay(source, events)
 	if err != nil {
-		return pipeline.DeliveryResult{}, err
+		return pipeline.DeliveryResult{}, nil, err
 	}
 	archiveGrouped, _, err := groupEventsByUTCDay(source, plan.Archive)
 	if err != nil {
-		return pipeline.DeliveryResult{}, err
+		return pipeline.DeliveryResult{}, nil, err
 	}
 	writeGrouped, writeDays, err := groupEventsByUTCDay(source, plan.Write)
 	if err != nil {
-		return pipeline.DeliveryResult{}, err
+		return pipeline.DeliveryResult{}, nil, err
 	}
 	switch {
 	case len(plan.Days) > 0:
 		// 增量补天：写入面已由调用方按天过滤；这里只校验二者一致并固定顺序。
 		if err := sameUTCDays(writeDays, plan.Days); err != nil {
-			return pipeline.DeliveryResult{}, err
+			return pipeline.DeliveryResult{}, nil, err
 		}
 		writeDays = sortUTCDays(plan.Days)
 	case plan.Replace:
@@ -5778,6 +5815,9 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 		}
 	}
 	result := pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}
+	// 累积「真正写入并逐字段校验通过的事件集合」，作为第三个返回值交给调用方做证据面。
+	// 只累加**成功写完的那一天**：任何一天失败都会在下面 return err，调用方拿到的 err 优先。
+	var written []logtypes.Event
 	for _, day := range writeDays {
 		daySource := source
 		daySource.UTCDay = day
@@ -5786,8 +5826,10 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 			result.HTTPStatus = dayResult.HTTPStatus
 		}
 		if writeErr != nil {
-			return result, writeErr
+			return result, nil, writeErr
 		}
+		// 该天写入 + 校验已通过 ⇒ 这批事件确实落库，可作证据。
+		written = append(written, writeGrouped[day]...)
 	}
 	m.mu.Lock()
 	saved = m.state.Sources[key]
@@ -5804,10 +5846,10 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	// 省掉 appendEvents 的 Count（末段校准 = O(末段行数)）与全量比对。
 	if plan.Tail != nil {
 		if err := m.appendEventTail(key, *plan.Tail); err != nil {
-			return result, err
+			return result, written, err
 		}
 	} else if err := m.appendEvents(key, events); err != nil {
-		return result, err
+		return result, written, err
 	}
 	// 这里**不再**单独落库一次：本批次引发的 state 变更（投影代次 / 发布待定 / 段覆盖水位）
 	// 会被随后任意一次 persist 覆盖，而 persist 是「按变更源重建 + 全量根表比对」的增量落库——
@@ -5821,7 +5863,7 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	// 崩溃语义没有变弱：投影状态最多晚一次落库到达索引（≤1 轮），而恢复路径本来就不依赖
 	// state 里的投影标记——事件段存储是权威集合（见 canonicalRecoveryEvents），代次重名由
 	// VL 侧占用探测兜底（见 nextFreeProjectionGeneration）。
-	return result, nil
+	return result, written, nil
 }
 
 // appendEvents 把该源的 canonical 事件集合同步到磁盘段，并把该源标记为“事件体已落段”。

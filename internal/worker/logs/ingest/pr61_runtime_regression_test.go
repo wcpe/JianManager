@@ -76,12 +76,12 @@ func TestPR61OldReplayCompletionCannotClearNewPending(t *testing.T) {
 		}
 	}()
 	h := ingestTestEvents("same", "g1", 0, 1, "h")
-	_, err = m.writeProjectionPlan(src, h, "projection-1", projectionWritePlan{Write: h, Replace: true})
+	_, _, err = m.writeProjectionPlan(src, h, "projection-1", projectionWritePlan{Write: h, Replace: true})
 	require.NoError(t, err)
 	oldSnapshot := m.capturePublicationSnapshot(src)
 	oldDone := make(chan error, 1)
 	go func() {
-		_, err := m.writeProjectionPlan(src, h, "projection-2", projectionWritePlan{Write: h, Replace: true, Snapshot: oldSnapshot})
+		_, _, err := m.writeProjectionPlan(src, h, "projection-2", projectionWritePlan{Write: h, Replace: true, Snapshot: oldSnapshot})
 		oldDone <- err
 	}()
 	select {
@@ -90,7 +90,7 @@ func TestPR61OldReplayCompletionCannotClearNewPending(t *testing.T) {
 		t.Fatal("旧重放未进入实际插入屏障")
 	}
 	hb := append(append([]logtypes.Event(nil), h...), ingestTestEvents("same", "g1", 1, 1, "b")...)
-	_, err = m.writeProjectionPlan(src, hb, "projection-3", projectionWritePlan{Write: hb, Replace: true})
+	_, _, err = m.writeProjectionPlan(src, hb, "projection-3", projectionWritePlan{Write: hb, Replace: true})
 	require.NoError(t, err)
 	// 已过期建窗不得先改共享代次；实际接纳仍须由 writeProjectionPlan 完成。
 	item := startupSource{source: src, key: key, events: h, snapshot: oldSnapshot}
@@ -102,7 +102,7 @@ func TestPR61OldReplayCompletionCannotClearNewPending(t *testing.T) {
 	hbc := append(append([]logtypes.Event(nil), hb...), ingestTestEvents("same", "g1", 2, 1, "c")...)
 	latestDone := make(chan error, 1)
 	go func() {
-		_, err := m.writeProjectionPlan(src, hbc, "projection-4", projectionWritePlan{Write: hbc, Replace: true})
+		_, _, err := m.writeProjectionPlan(src, hbc, "projection-4", projectionWritePlan{Write: hbc, Replace: true})
 		latestDone <- err
 	}()
 	select {
@@ -304,7 +304,7 @@ func TestPR61CrossDayProjectionCompactionPreservesHistory(t *testing.T) {
 	key := src.LogSourceID + "/" + src.SourceGeneration
 	p := m.pipes[key]
 	all := ingestTestEvents(src.LogSourceID, src.SourceGeneration, 0, 1, "seed")
-	_, err = m.writeProjectionPlan(src, all, "seed", projectionWritePlan{Write: all, Replace: true})
+	_, _, err = m.writeProjectionPlan(src, all, "seed", projectionWritePlan{Write: all, Replace: true})
 	require.NoError(t, err)
 	for i := 1; i <= 65; i++ {
 		batch := ingestTestEvents(src.LogSourceID, src.SourceGeneration, i, 1, fmt.Sprintf("batch %d", i))

@@ -515,7 +515,7 @@ func TestReplacePlanSkipsBeyondHotRetention(t *testing.T) {
 	insertsBefore := fixture.insertCount()
 
 	// 整窗重发：Write 是权威全量（含超窗口天），Replace=true。
-	_, err = m.writeProjectionPlan(source, events, "projection-replace-1",
+	_, _, err = m.writeProjectionPlan(source, events, "projection-replace-1",
 		projectionWritePlan{Write: events, Replace: true})
 	require.NoError(t, err, "整窗重发必须成功（超窗口天被跳过，不应因校验失败而报错）")
 
@@ -524,4 +524,151 @@ func TestReplacePlanSkipsBeyondHotRetention(t *testing.T) {
 		"整窗重发绝不能再写超窗口天（VL 返回 200 却静默丢弃 ⇒ 校验恒失败 ⇒ pending 永远清不掉）")
 	require.Contains(t, joined, "straddling boundary", "跨越边界当天必须仍按可发布处理")
 	require.Contains(t, joined, "inside window", "窗口内的天必须照常写入")
+}
+
+// TestDeliverEvidenceFaceExcludesUnwrittenDays 钉住「`deliver` 自动消解缺口时，证据面必须等于
+// **真正写进去的**事件」，而不是「计划写入面（权威全量）」。
+//
+// 现场缺陷（2026-10-21 真机，本轮最严重的一处）：`inst:317` 的权威全量跨 10-12～10-21
+// （`record_end` 到 7585609），热层过滤后实际只写了 09-21 一天（5492 条、`record_end` 到 ~955K）。
+// 旧代码用 `evidence = expected`（权威全量）做消解证据，于是区间 `[7583541, 7585609)`
+// （10-21 那 2068 字节）被 `CoveredByPositionRanges` 判为「已覆盖」，缺口被写成
+// `resolution="delivery confirmed for this range"` —— 而 VL 里该源最新只到 7583541（实测为空）。
+// 随后 `reclaim` 被推到 `read_pos`，这笔欠账再没有任何信号。
+//
+// 更值得记住的是：它是**修热层窗口时引入的**。修之前 09-20 超窗口 ⇒ 校验失败 ⇒
+// `writeProjectionPlan` 返回 err ⇒ 走不到消解（响亮的失败）；修之后该天被跳过、其余天写成功
+// ⇒ 走到消解，反而把「投递失败」改写成「已确认投递」（静默的成功）。
+//
+// **为什么必须走 `deliver` 而不是直连 `writeProjectionPlan`**：证据面是在 `deliver` 里构造的。
+// 直连写入函数再自己调 `resolveGapsLandedByDelivery` 测的是「我传什么就被消解什么」，
+// 完全绕过了被测逻辑 —— 这正是本用例第一版「变异不转红」的原因。
+func TestDeliverEvidenceFaceExcludesUnwrittenDays(t *testing.T) {
+	now := time.Now()
+	beyondDay, boundaryDay, inWindowDay := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	events := []logtypes.Event{
+		hotRetentionTestEvent(beyondDay, 1, 10, "beyond window"),
+		hotRetentionTestEvent(boundaryDay, 10, 20, "straddling boundary"),
+		hotRetentionTestEvent(inWindowDay, 20, 30, "inside window"),
+	}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	// 生产形态：数据在热层查不到 + 账本写着「发布待定」⇒ 走整窗重发（replace=true）。
+	fixture.deleteDay(beyondDay)
+	fixture.deleteDay(boundaryDay)
+	fixture.deleteDay(inWindowDay)
+	m.mu.Lock()
+	st := m.state.Sources[key]
+	st.PublicationPending = true
+	m.state.Sources[key] = st
+	m.mu.Unlock()
+
+	pipe, ok := m.pipeFor(key)
+	require.True(t, ok)
+	pipe.Ledger().Ensure(pipe.Key(), logtypes.SourceIdentity{
+		LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1",
+	})
+	// 缺口放在**超窗口天**的区间 (1,10)：本次不会写它 ⇒ 绝不能被消解。
+	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 1, 10, ledger.GapReasonDeliverError, "超窗口天缺口夹具"))
+	gapsBefore := pipe.Ledger().UnresolvedGapCount(pipe.Key())
+	require.Equal(t, 1, gapsBefore, "夹具前提：缺口必须存在且未解决")
+
+	_, err = m.deliver(source, events, false)
+	require.NoError(t, err, "整窗重发必须成功（超窗口天被跳过，其余天写入）")
+
+	// 核心断言：超窗口天从未写入 ⇒ 它的缺口必须仍然可见。
+	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
+		"超窗口天的缺口绝不能被「部分写入」的证据面消解（它从未进入 VL）")
+}
+// TestEvidenceFaceEqualsActuallyWrittenEvents 钉住「自动消解缺口的证据面必须等于**真正写进去的**
+// 事件」，而不是「计划写入面」。
+//
+// 现场缺陷（2026-10-21 真机，最严重的一处）：`inst:317` 的权威全量跨 10-12～10-21
+// （`record_end` 到 7585609），热层过滤后实际只写了 09-21 一天（5492 条、`record_end` 到 ~955K）。
+// 旧代码用 `evidence = expected`（权威全量）做消解证据，于是区间
+// `[7583541, 7585609)`（10-21 那 2068 字节）被 `CoveredByPositionRanges` 判为「已覆盖」，
+// 缺口被写成 `resolution="delivery confirmed for this range"`；而 VL 里该源最新只到 7583541。
+// 随后 `reclaim` 被推到 `read_pos`，这笔欠账再没有任何信号。
+//
+// 更值得记住的是：这个缺陷是**修热层窗口时引入的**。修之前 09-20 超窗口 ⇒ 校验失败 ⇒
+// `writeProjectionPlan` 返回 err ⇒ 走不到消解那一步（响亮的失败）；修之后该天被跳过、
+// 剩下的天写成功 ⇒ 走到消解，反而把「投递失败」的缺口改写成了「已确认投递」（静默的成功）。
+//
+// 判据：写入面只含某天时，落在**其他天**区间上的缺口绝不能被消解。
+func TestEvidenceFaceEqualsActuallyWrittenEvents(t *testing.T) {
+	now := time.Now()
+	beyondDay, boundaryDay, inWindowDay := hotRetentionTestDays(now, hotRetentionTestRetention)
+
+	client, fixture, _ := newReconcileVL(t)
+	root := t.TempDir()
+	journal := catalog.NewMemJournal()
+	source := hotRetentionTestSource(t, root)
+	// 三天：超窗口天排最前（位置 1..10），窗口内两天在后（10..30）。
+	events := []logtypes.Event{
+		hotRetentionTestEvent(beyondDay, 1, 10, "beyond window"),
+		hotRetentionTestEvent(boundaryDay, 10, 20, "straddling boundary"),
+		hotRetentionTestEvent(inWindowDay, 20, 30, "inside window"),
+	}
+	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
+
+	m, err := newTestManager(t, Options{
+		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
+		Sources: []SourceConfig{source}, HotRetention: hotRetentionTestRetention,
+	})
+	require.NoError(t, err)
+	key := source.LogSourceID + "/" + source.SourceGeneration
+
+	pipe, ok := m.pipeFor(key)
+	require.True(t, ok)
+	pipe.Ledger().Ensure(pipe.Key(), logtypes.SourceIdentity{
+		LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1",
+	})
+	// 在**超窗口天**的区间 (1,10) 上放一个投递错误缺口。该区间本次不会被写入
+	// ⇒ 绝不能被消解（它从未落库，VL 里不可能有）。
+	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 1, 10, ledger.GapReasonDeliverError, "超窗口天缺口夹具"))
+	gapsBefore := pipe.Ledger().UnresolvedGapCount(pipe.Key())
+	require.Equal(t, 1, gapsBefore, "夹具前提：缺口必须存在且未解决")
+
+	fixture.deleteDay(beyondDay)
+	fixture.deleteDay(boundaryDay)
+	fixture.deleteDay(inWindowDay)
+
+	// 直接驱动写入计划（Replace=true 会让 Write 扩展为权威全量，正好复刻整窗重发形态）。
+	plan := projectionWritePlan{Write: events, Replace: true}
+	result, written, err := m.writeProjectionPlan(source, events, "projection-evidence-1", plan)
+	require.NoError(t, err)
+	require.NotZero(t, result.HTTPStatus)
+
+	// ① `Written` 必须只含**真正写入的天**（超窗口天被跳过）。
+	writtenDays := make(map[string]struct{}, 3)
+	for _, ev := range written {
+		day, derr := eventUTCDay(source, ev)
+		require.NoError(t, derr)
+		writtenDays[day] = struct{}{}
+	}
+	require.NotContains(t, writtenDays, beyondDay,
+		"超窗口天不得出现在「真正写入」集合里（它被跳过、一次都没写）")
+	require.Contains(t, writtenDays, inWindowDay, "窗口内的天必须被写入")
+
+	// ② 红线：用这个证据面消解时，超窗口天的缺口必须仍然可见。
+	m.resolveGapsLandedByDelivery(source, written)
+	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
+		"超窗口天的缺口绝不能被「部分写入」的证据面消解（它从未进入 VL）")
+
+	// ③ 反证：若误用权威全量做证据（修复前的行为），该缺口就会被消解 —— 证明本断言咬得住。
+	m.resolveGapsLandedByDelivery(source, events)
+	require.Equal(t, 0, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
+		"反证：用权威全量做证据时缺口确实会被消解，说明本用例能区分两种证据面")
 }
