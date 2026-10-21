@@ -177,6 +177,69 @@ func TestMetric_IngestHeartbeat_PlayersAvailableFromDirectProbe(t *testing.T) {
 	require.Nil(t, tps.Points[0].Avg)
 }
 
+// TestMetric_IngestHeartbeat_PlayersMaxLandsSeries 人数上限可用时落 inst_players_max（FR-511）。
+// 侧栏「当前/最大人数」依赖这条序列——批量指标接口只能读到存好的时序，心跳不落就永远没有。
+func TestMetric_IngestHeartbeat_PlayersMaxLandsSeries(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true,
+			PlayersOnline:          16,
+			PlayersOnlineAvailable: true,
+			MaxPlayers:             50,
+			MaxPlayersAvailable:    true,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	playersMax := findSeries(instSeries, model.MetricInstPlayersMax, "")
+	require.NotNil(t, playersMax, "上限可用时落 inst_players_max 序列")
+	require.NotNil(t, playersMax.Points[0].Avg)
+	require.Equal(t, 50.0, *playersMax.Points[0].Avg)
+	// 同一拍在线人数与上限并存，前端才能拼出「16/50」。
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.Equal(t, 16.0, *players.Points[0].Avg)
+}
+
+// TestMetric_IngestHeartbeat_PlayersMaxUnavailableWritesNull 上限缺测时写 NULL 断点，
+// **不做**在线人数那条「探针/SLP 可用就回退」的兼容判定——上限不像在线人数在三源里都必带，
+// 回退会重新引入「伪造上限」（例如把 0 当成「上限 0 人」）。
+func TestMetric_IngestHeartbeat_PlayersMaxUnavailableWritesNull(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true, // 就连 SLP 可用也不回退
+			PlayersOnline:          5,
+			PlayersOnlineAvailable: true,
+			MaxPlayers:             0, // 未置可用位：视为缺测，不写 0
+			MaxPlayersAvailable:    false,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	playersMax := findSeries(instSeries, model.MetricInstPlayersMax, "")
+	require.NotNil(t, playersMax, "仍写一条断点序列")
+	require.Len(t, playersMax.Points, 1)
+	require.Nil(t, playersMax.Points[0].Avg, "上限缺测写 NULL，绝不写 0")
+}
+
 // TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample 中间版本 Worker（有直探、置 SlpAvailable
 // 与真实 PlayersOnline，但缺 players_online_available）仍落真实值而非 NULL（FR-446 复审 N1）：
 // SLP 命中的实例在线人数被误判为缺测会污染全网总在线合计与 bot 容量采样。

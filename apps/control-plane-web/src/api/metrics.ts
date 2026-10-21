@@ -164,10 +164,35 @@ export function useMetricSeriesBatch(params: {
   /** 聚合粒度档位（FR-221）；auto/留空=按区间自动选档。 */
   resolution?: MetricResolution
   enabled?: boolean
+  /**
+   * 刷新令牌：参与查询键，值变化即视为一次新请求。
+   *
+   * 【为什么需要】调用方按节拍刷新同一批目标时，`targetIds` 不变 → 查询键不变 → React Query
+   * 直接命中缓存、连 `refetchInterval` 都不会另起一次（键相同就是同一条查询）。有了令牌，
+   * 「同一目标集合重新拉一遍」才有明确的表达方式；不传时恒为 0，既有调用点行为不变。
+   */
+  refreshToken?: number
 }) {
-  const { scope, targetIds, range, metrics, resolution, enabled = true } = params
+  const {
+    scope,
+    targetIds,
+    range,
+    metrics,
+    resolution,
+    enabled = true,
+    refreshToken = 0,
+  } = params
+  const targetsKey = targetIds.join(',')
   return useQuery({
-    queryKey: ['metricSeriesBatch', scope, targetIds.join(','), range, metrics?.join(',') ?? '', resolution ?? 'auto'],
+    queryKey: [
+      'metricSeriesBatch',
+      scope,
+      targetsKey,
+      range,
+      metrics?.join(',') ?? '',
+      resolution ?? 'auto',
+      refreshToken,
+    ],
     queryFn: async () => {
       const { data } = await api.post<MetricSeriesBatchResponse>('/metrics/series/batch', {
         scope,
@@ -180,6 +205,8 @@ export function useMetricSeriesBatch(params: {
     },
     enabled: enabled && targetIds.length > 0,
     refetchInterval: 30_000,
+    // 目标集合变化（如 /instances 可见窗口滚动）会改查询键：保留上一批数据避免整表指标闪空。
+    placeholderData: keepPreviousData,
   })
 }
 
