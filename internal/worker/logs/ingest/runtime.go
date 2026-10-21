@@ -5348,12 +5348,15 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	// 本轮内「权威集合」的复用凭据：pending 未获确认时，下面的取证与写入面构建问的是同一份
 	// 输入，凭据成立即复用（判据与安全性见 recoveryReceipt）。非 pending 轮恒为 nil ⇒ 零开销。
 	var receipt *recoveryReceipt
+	var missingWriteDays []string
 	if saved.PublicationPending && !replay {
 		receipt = &recoveryReceipt{}
 		if ok, cerr := m.tryConfirmPendingPublicationWithReceipt(source, key, saved, receipt); cerr == nil && ok {
 			// 本地快照同步：否则下方 L3876/L3892 会再次把 replace 拉回整窗重发。
 			saved.PublicationPending = false
 		}
+		// 取证测出的缺失天（可能为空）：仅当判定是 confirmMissingMeasured 时才有值。
+		missingWriteDays = receipt.missingDays
 	}
 	var seen map[string]eventIdentity
 	if tail.Fast {
@@ -5463,7 +5466,31 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	timing.mark("probe")
 	writeEvents := toWrite
 	if saved.PublicationPending {
-		writeEvents = expected
+		// **pending 重试只写「真正缺的那些天」，不再整窗重写全源**（2026-10-21 架构复审）。
+		//
+		// 旧实现：pending ⇒ `writeEvents = expected`（该源**权威全量**，含全部历史天）
+		// ⇒ `writeProjectionPlan` 的 replace 分支把 `writeDays` 展开为全部天
+		// ⇒ **每一天都整份重写一遍**，且每次都换新代次、旧代次的行永不删除。
+		// 这是 VL 体积放大到 75× 的直接原因（生产 inst:318 单日 13 万条 → 984 万行）。
+		//
+		// 更糟的是它是**正反馈**：行数越多 ⇒ 该天查询越慢（VL 对 projection_generation
+		// 无索引，过滤发生在扫描阶段）⇒ 校验越容易超时 ⇒ 再失败 ⇒ 再整窗重写。
+		//
+		// 现在：若本轮取证已测出「实测缺失天」，就只写那些天；取证不可用（或没有缺失天
+		// 信息）时才退回旧的整窗语义 —— 这是保守方向，不会漏写。
+		if len(missingWriteDays) > 0 {
+			converged, cErr := eventsForDays(source, expected, missingWriteDays)
+			if cErr != nil || len(converged) == 0 {
+				// 收敛失败（天解析不出事件）：退回整窗，保守不漏写。
+				converged = expected
+			}
+			writeEvents = converged
+			slog.Warn("发布待定重试收敛到实测缺失天（不再整窗重写全源）",
+				"source", source.LogSourceID, "missingDays", missingWriteDays,
+				"writeEvents", len(writeEvents), "authoritative", len(expected))
+		} else {
+			writeEvents = expected
+		}
 	}
 	// 取代 vs 累积（2026-09-30 生产实证）：`expected` 是该源的**全量** canonical 集 ✓，
 	// `toWrite` 是**本批** ✓，且本批恒为全量的子集 ✓。故当两者**条数相等**时，本次写入
@@ -5637,7 +5664,13 @@ func (m *Manager) tryConfirmPendingPublication(source SourceConfig, key string, 
 // 取证用的权威集合**顺带**记进 receipt，供同一轮后续的写入面构建复用（见 recoveryReceipt）。
 // 取证结论与是否复用无关：receipt 只是旁路产物。
 func (m *Manager) tryConfirmPendingPublicationWithReceipt(source SourceConfig, key string, saved persistedSource, receipt *recoveryReceipt) (bool, error) {
-	verdict, err := m.tryConfirmPendingPublicationVerdict(context.Background(), source, key, saved, receipt, nil)
+	var missing []string
+	verdict, err := m.tryConfirmPendingPublicationVerdict(context.Background(), source, key, saved, receipt, &missing)
+	if receipt != nil && verdict == confirmMissingMeasured && len(missing) > 0 {
+		// 把实测缺失天带出去：调用方据此把 pending 重试的写入面收敛到这些天，
+		// 不再整窗重写全源（VL 体积放大的直接原因）。
+		receipt.missingDays = append([]string(nil), missing...)
+	}
 	return verdict == confirmConfirmed, err
 }
 
@@ -9120,6 +9153,10 @@ type recoveryReceipt struct {
 	walLen int
 	inline int
 	events []logtypes.Event
+	// missingDays 是本次发布确认取证**实测出的缺失天**（仅当 verdict 为
+	// confirmMissingMeasured 时有效）。用于让 pending 重试把写入面收敛到这些天，
+	// 而不是整窗重写全源（那是 VL 体积放大到 75× 的直接原因，见 writeEvents 处的注释）。
+	missingDays []string
 }
 
 // rememberCanonicalRecovery 记下本次构建结果与当时的输入读数（供同一轮内复用）。
@@ -9216,6 +9253,15 @@ func (m *Manager) publishSnapshot(source SourceConfig, projectionGeneration stri
 	// 封闭水位只来自本次校验面，实时 Durable 或事件段水位不构成本次发布证据。
 	maxEnd := batchMax
 	if maxEnd == 0 {
+		// `record_end` 全为 0 ⇒ 本次发布面不推进白名单（保持既有「空发布面」语义）。
+		//
+		// **但不能静默**（2026-10-21 复审）：调用方会把 nil 当成功，而白名单没动
+		// ⇒ 后续按 `record_end <= ClosedVisibleSeq` 过滤时该源整段不可见。
+		// 这里留一条 WARN + 明确措辞，让「发布面为空」在排障时可见；
+		// 不改成 error 是因为零宽度/构造夹具确实是合法输入（既有用例依赖该语义）。
+		slog.Warn("本次发布面的 record_end 全为 0：白名单不会推进（该源该日可能仍不可见）",
+			"source", source.LogSourceID, "generation", projectionGeneration, "utcDay", source.UTCDay,
+			"events", len(events), "replace", replace)
 		return nil
 	}
 	// 串行化「读当前 → 应用本源投影 → CAS 写回」整段：共享 namespace 的多个源在并发采集轮下
@@ -9283,7 +9329,20 @@ func (m *Manager) publishSnapshot(source SourceConfig, projectionGeneration stri
 	} else {
 		scope.ProjectionGenerations = appendUniqueGeneration(scope.ProjectionGenerations, projectionGeneration)
 	}
-	if !replace && scope.ClosedVisibleSeq > maxEnd {
+	// **封闭可见水位必须无条件单调**（2026-10-21 复审发现的静默丢数据缺陷）：
+	// 旧实现在 `replace` 时**跳过**了单调取大，直接写 `maxEnd = 本次 events 的最大 record_end`。
+	// 一旦权威集合因段丢失/重建而**收缩**（崩溃后 `canonicalRecoveryEvents` 变短），
+	// 新 maxEnd 会小于历史值 ⇒ 读侧按 `record_end <= ClosedVisibleSeq` 过滤时，
+	// **已可见的行被判为不可见而消失**（数据仍在 VL，只是查不到）。
+	//
+	// 为什么不能假设「replace 一定覆盖得更全」：replace 只保证「用新代次取代旧白名单」，
+	// 不保证「新代的 record_end 更大」——段收缩、按天切片、部分失败都会让它更小。
+	// 若真的需要水位回退（权威确实收缩），必须是一次显式、带告警的降级动作，
+	// 而不是这里静默赋值。
+	if scope.ClosedVisibleSeq > maxEnd {
+		slog.Warn("封闭可见水位未随本次发布前进（权威集合可能收缩），保持单调以免已可见数据消失",
+			"source", source.LogSourceID, "generation", projectionGeneration, "utcDay", source.UTCDay,
+			"previousClosed", scope.ClosedVisibleSeq, "currentMaxEnd", maxEnd, "replace", replace)
 		maxEnd = scope.ClosedVisibleSeq
 	}
 	scope.ClosedVisibleSeq = maxEnd
