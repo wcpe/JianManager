@@ -8506,7 +8506,12 @@ const (
 	// 因此窗口两端**必须一起**受本常量约束：`end - start ≤ projectionProbeSpan`。
 	// 取 31d 的依据见下（等于 VL 硬上限，落在被接受的一侧）。
 	projectionProbeSpan = 31 * 24 * time.Hour
-	// projectionProbeFutureSlack 把探测窗的上界从 now 再向后放一天。
+	// projectionProbeSlackDays 是探测窗在保留期之外多留的余量（天）。
+	//
+	// 为什么需要余量：本仓历史上把「31d」当作 retention 30d + 1d，那 1 天用于吸收
+	// 「边界那一天的整天跨度」——保留期按时刻算，而碰撞探测按天算，两者差一天。
+	projectionProbeSlackDays = 1
+// projectionProbeFutureSlack 把探测窗的上界从 now 再向后放一天。
 	//
 	// **为什么上界不能取 now（2026-10-12 修复）**：日志行多为「只有时刻、没有日期」的形态
 	// （`[12:00:01] ...`），其事件时间由 normalize 的 applyClock 以 base 为锚就近归日
@@ -8530,6 +8535,49 @@ const (
 	// 触发上面描述的整条防护失效。故实际窗口是 [now-30d, now+1d]，总跨度恰 31d。
 	projectionProbeFutureSlack = 24 * time.Hour
 )
+
+// projectionProbeWindow 返回代次占用探测窗的**总跨度**。
+//
+// **必须由热层保留期派生，不能是常量**（2026-10-22 复审 P1-3）。
+//
+// 这个窗口的职责是：找出「同名代次在该保留期内的任意一天是否已有旧行」。因为
+// 「整窗重发」的校验会把新代次的行与旧代次混在一起，只要旧行还可能在保留期内被查到，
+// 就必须能探测到，否则 `projectionGenerationUsed` 判「未占用」⇒ VL 侧拒绝重名行
+// （`unexpected or duplicate projection event_id`）⇒ 永不发布 ⇒ 采集停摆。
+// 这正是 2026-10-08 那次事故的形态（当时窗口 1d，硬编码 31d 修的）。
+//
+// 但 31d 是**常量**，而保留期是可配置的：`DefaultRetentionPeriod` 在 2026-10-22
+// 提到 120d、默认热窗口 90d 之后，31d 的探测窗只覆盖保留期的前 31 天 ——
+// 第 31～90 天的同名旧行探测不到，重名防护在原地方重新失效。
+// 也就是说「把上限从 31d 改成由 retention 派生」这件事只做了一半就停了。
+//
+// 故改为：`max(常量下限, hotRetention + 余量)`。取 max 而非直接替换，是为了
+// 兼容 hotRetention 未被配置（0 值）的测试与旧调用方 —— 那时退回历史验证过的 31d。
+func (m *Manager) projectionProbeWindow() time.Duration {
+	// 上界一：VL 侧的硬上限（`-search.maxQueryTimeRange`）。超过必被 400 拒绝，
+	// 那会让探测整条失效 —— 比「覆盖不全」更糟（连「未占用」的结论都拿不到）。
+	window := projectionProbeSpan
+	// 上界二：热层保留期 + 余量。理论上不该超过上界一，因为 VL retention 与
+	// hotRetention 本就该一致（不一致时启动期已打 WARN，见 config 的保留期校验）。
+	// 但**配置可以不一致**（生产实测：log_vl.retention_period=30d 而
+	// log_retention.hot_retention 声明 90d），此时必须服从 VL 的硬上限：
+	// 发一个必然被 400 的请求，等于把「重名防护」换成「每次都探测失败」。
+	if m != nil && m.hotRetention > 0 {
+		derived := m.hotRetention + projectionProbeSlackDays*24*time.Hour
+		// 派生值**直接采用**（不再与常量取大）：窗口的语义是「覆盖该保留期」，
+		// 保留期短就该用短窗口——多扫无益，反而把 400 的风险留在那里。
+		// 只有当派生值超出 VL 硬上限时才降级到常量（见下）。
+		window = derived
+		if derived > projectionProbeSpan {
+			// hotRetention 比 31d 大：想覆盖更长的保留期，但不得越过 VL 硬上限。
+			// 这里的取舍是**明确的降级**而非静默：VL 侧若真保留更久，探测就会覆盖不全，
+			// 而那个缺口必须在配置层解决（让两个 retention 一致），不是在这里猜。
+			window = projectionProbeSpan
+		}
+	}
+	return window
+}
+
 
 // nextFreeProjectionGeneration 返回该源在 VL 中尚未出现过的物理代次名。
 //
@@ -8968,7 +9016,7 @@ func (m *Manager) projectionGenerationUsed(ctx context.Context, client *vlsup.Cl
 	// 由 end 反推而非用 now-span 是刻意的：后者会在 slack>0 时把总跨度撑到 span+slack
 	// （实测踩过：31d+1d=32d > VL 上限 ⇒ 探测被 400 拒绝 ⇒ 重名防护整条失效）。
 	probeEnd := now.Add(projectionProbeFutureSlack)
-	probeStart := probeEnd.Add(-projectionProbeSpan)
+	probeStart := probeEnd.Add(-m.projectionProbeWindow())
 	params := url.Values{
 		"query": {selector + " | fields _time | sort by (_time desc) | limit 1"},
 		"start": {probeStart.Format(time.RFC3339Nano)},

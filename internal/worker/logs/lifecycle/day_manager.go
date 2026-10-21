@@ -71,6 +71,7 @@ func (m *DayManager) Resume(utcDay string) error {
 		//
 		// 判据：已 CLEANED/空态 = 不参与本次迁移（早已下沉完成）；其余必须在同一状态。
 		state := catalog.MigrationState("")
+		var rep *catalog.Record
 		for _, rec := range records {
 			if rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned {
 				continue
@@ -78,6 +79,7 @@ func (m *DayManager) Resume(utcDay string) error {
 			if state == "" {
 				state = rec.MigrationState
 				representative = rec.Key
+				rep = rec
 				continue
 			}
 			if rec.MigrationState != state {
@@ -87,6 +89,21 @@ func (m *DayManager) Resume(utcDay string) error {
 		if state == "" {
 			// 该日已无迁移中的记录：视为已完成（幂等）。
 			return nil
+		}
+		// **rep 必须与 state 同源取自活跃子集**（2026-10-22 复审 P1-1）。
+		//
+		// 下面的所有目录/校验和/目标都必须读 `rep`，绝不能退回 `records[0]`：
+		// `records[0]` 是按 key 排序的第一条，混合态日里它很可能是一条已 CLEANED 的记录，
+		// 而它的 `LastVerifyCompleted` 在 MarkDayComplete 时已被置 true ⇒
+		// `if !rep.LastVerifyCompleted` 恒假 ⇒ 整段 snapshot/copy/verify 被跳过，
+		// 直接推进到 ATTACHED_STAGING ⇒ 新 namespace 的当日数据从未拷到冷层，
+		// 却被标成「已迁移」并清理旧目录（与本次修复要消灭的丢数据同形）。
+		//
+		// 这条路径在混合态判定统一之前是**不可达**的（会先报 divergence 退出），
+		// 所以必须与判定统一一起改：否则是把「响亮失败」换成「静默丢数据」。
+		if rep == nil {
+			// 理论上不可达（state != "" 意味着 loop 里赋过值）；显式失败胜过空指针。
+			return fail("locate-representative", fmt.Errorf("lifecycle: no active record for %s", utcDay))
 		}
 		switch state {
 		case catalog.StateRoutingFrozen:
@@ -105,7 +122,7 @@ func (m *DayManager) Resume(utcDay string) error {
 		case catalog.StateSnapshotting:
 			if m.ops.Snapshot != nil {
 				var err error
-				snapshotID, err = m.ops.Snapshot(representative, records[0].MigrationFromDirID)
+				snapshotID, err = m.ops.Snapshot(representative, rep.MigrationFromDirID)
 				if err != nil {
 					return fail("snapshot", err)
 				}
@@ -114,10 +131,10 @@ func (m *DayManager) Resume(utcDay string) error {
 				return fail("advance-staging-verify", err)
 			}
 		case catalog.StateStagingVerify:
-			if !records[0].LastVerifyCompleted {
+			if !rep.LastVerifyCompleted {
 				if snapshotID == "" && m.ops.Snapshot != nil {
 					var err error
-					snapshotID, err = m.ops.Snapshot(representative, records[0].MigrationFromDirID)
+					snapshotID, err = m.ops.Snapshot(representative, rep.MigrationFromDirID)
 					if err != nil {
 						return fail("resume-snapshot", err)
 					}
@@ -125,7 +142,7 @@ func (m *DayManager) Resume(utcDay string) error {
 				copyID := ""
 				if m.ops.Copy != nil {
 					var err error
-					copyID, err = m.ops.Copy(representative, snapshotID, records[0].TargetDirID)
+					copyID, err = m.ops.Copy(representative, snapshotID, rep.TargetDirID)
 					if err != nil {
 						return fail("copy", err)
 					}
@@ -133,7 +150,7 @@ func (m *DayManager) Resume(utcDay string) error {
 				checksum := ""
 				if m.ops.Verify != nil {
 					var err error
-					checksum, err = m.ops.Verify(representative, copyID, records[0].TargetDirID)
+					checksum, err = m.ops.Verify(representative, copyID, rep.TargetDirID)
 					if err != nil {
 						return fail("verify", err)
 					}
@@ -150,7 +167,7 @@ func (m *DayManager) Resume(utcDay string) error {
 			}
 		case catalog.StateAttachedStaging:
 			if m.ops.Attach != nil {
-				if err := m.ops.Attach(representative, records[0].TargetDirID); err != nil {
+				if err := m.ops.Attach(representative, rep.TargetDirID); err != nil {
 					return fail("attach", err)
 				}
 			}
@@ -162,7 +179,7 @@ func (m *DayManager) Resume(utcDay string) error {
 				}
 				projections[rec.Key] = migratedProjection(rec.PublishedProjection, rec.TargetDirID, generation)
 			}
-			if _, err := m.cat.SwitchDayOwners(utcDay, records[0].TargetOwner, records[0].TargetDirID, projections); err != nil {
+			if _, err := m.cat.SwitchDayOwners(utcDay, rep.TargetOwner, rep.TargetDirID, projections); err != nil {
 				return fail("owner-switch", err)
 			}
 		case catalog.StateOwnerSwitched:
@@ -183,7 +200,7 @@ func (m *DayManager) Resume(utcDay string) error {
 				}
 			}
 			if m.ops.Detach != nil {
-				if err := m.ops.Detach(representative, records[0].MigrationFromDirID); err != nil {
+				if err := m.ops.Detach(representative, rep.MigrationFromDirID); err != nil {
 					return fail("detach", err)
 				}
 			}
@@ -192,11 +209,11 @@ func (m *DayManager) Resume(utcDay string) error {
 			}
 		case catalog.StateDetached:
 			if m.ops.Cleanup != nil {
-				if err := m.ops.Cleanup(representative, records[0].MigrationFromDirID); err != nil {
+				if err := m.ops.Cleanup(representative, rep.MigrationFromDirID); err != nil {
 					return fail("cleanup", err)
 				}
 			}
-			checksum := records[0].LastVerifyChecksum
+			checksum := rep.LastVerifyChecksum
 			if checksum == "" {
 				return fail("journal-complete", fmt.Errorf("verification checksum missing"))
 			}
