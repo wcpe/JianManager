@@ -12,8 +12,15 @@ export interface InstanceInfo {
   nodeId: number
   name: string
   type: string
-  /** 群组服角色（FR-032）：proxy / backend / universal。 */
+  /** 群组服角色（FR-032）：proxy / backend / universal / beacon。 */
   role: string
+  /**
+   * 服务端类别（FR-511）：`plugin` / `proxy` / `binary`。
+   *
+   * 与 `role` 正交——`role` 描述群组拓扑角色，本字段描述「跑的是什么程序」。
+   * 旧后端/旧数据可能为空：一律经 `instanceKindOf()` 回退推断，不要直接判断真值。
+   */
+  kind?: string
   processType: string
   status: string
   /** 当前状态原因，主要用于 CRASHED：异步委托失败的具体错误（如「实例未绑定 JDK…」），供前端显示。 */

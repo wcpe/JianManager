@@ -29,6 +29,55 @@ const (
 	InstanceTypeGeneric       InstanceType = "generic"
 )
 
+// InstanceKind 实例的「服务端类别」——面向运维的三分法（FR-511）。
+//
+// 【为什么还要这个字段】现有两个维度都答不出这个问题：
+//   - `type` 只有 minecraft_java / generic，只知道「是不是 Java 服务端」，分不出插件服与代理；
+//   - `role` 虽能标识 proxy，但它描述的是**群组拓扑角色**，与「跑的是什么程序」正交——
+//     一个代理本身也可能是以二进制方式部署的。
+//
+// 真正的依据是搭建时选的 `coreType`（paper / spongevanilla / velocity / binary…），
+// 此前只写进 `provision_spec` 这段 JSON 里，列表响应不解析它。
+// 这里把它落成独立列：可索引、可筛选、可排序，且不必让前端去解析 JSON 字符串。
+//
+// 旧数据（本字段为空）由 KindOrInfer 回退推断，不会显示成空白。
+type InstanceKind string
+
+const (
+	// InstanceKindPlugin 插件服：Paper / Bukkit / Spigot / Purpur 等 MC 服务端核心。
+	InstanceKindPlugin InstanceKind = "plugin"
+	// InstanceKindProxy 代理：Velocity / BungeeCord / Waterfall。
+	InstanceKindProxy InstanceKind = "proxy"
+	// InstanceKindBinary 其他二进制：Beacon 等非 MC 核心的可执行程序。
+	InstanceKindBinary InstanceKind = "binary"
+)
+
+// ValidInstanceKind 校验类别枚举。
+func ValidInstanceKind(k InstanceKind) bool {
+	switch k {
+	case InstanceKindPlugin, InstanceKindProxy, InstanceKindBinary:
+		return true
+	}
+	return false
+}
+
+// KindOrInfer 返回本实例的类别；字段为空（旧数据/未识别）时按 type+role 回退推断。
+//
+// 回退规则刻意保守——只在有把握时给结论，其余归「插件服」（列表里最常见的一类），
+// 避免旧数据里大量实例显示成「未知」而丢失信息量。
+func (i *Instance) KindOrInfer() InstanceKind {
+	if ValidInstanceKind(i.Kind) {
+		return i.Kind
+	}
+	if i.Role == InstanceRoleProxy {
+		return InstanceKindProxy
+	}
+	if i.Type == InstanceTypeGeneric {
+		return InstanceKindBinary
+	}
+	return InstanceKindPlugin
+}
+
 // InstanceRole 实例角色。
 //
 // 分两类语义：
@@ -127,6 +176,8 @@ type Instance struct {
 	NodeID      uint           `gorm:"not null;index" json:"nodeId"`
 	Name        string         `gorm:"type:varchar(128);not null;index" json:"name"`
 	Type        InstanceType   `gorm:"type:varchar(64);not null" json:"type"`
+	// Kind 服务端类别（FR-511）：plugin / proxy / binary。空值=旧数据，读时经 KindOrInfer 回退。
+	Kind InstanceKind `gorm:"type:varchar(16);default:'';index" json:"kind"`
 	Role        InstanceRole   `gorm:"type:varchar(16);default:universal;index" json:"role"`
 	ProcessType ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
 	Status      InstanceStatus `gorm:"type:varchar(32);default:STOPPED;index" json:"status"`

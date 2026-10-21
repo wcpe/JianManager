@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // paperAPIBase 是 PaperMC 下载 API 根（FR-034/035 核心下载源：paper/velocity/waterfall）。
@@ -651,6 +652,26 @@ func IsVelocityCore(coreType string) bool {
 }
 
 func project(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+// KindForCoreType 把搭建用的 coreType 映射成面向运维的「服务端类别」（FR-511）。
+//
+// 三分法（用户确认的粒度，不细分 Paper/Spigot/Bukkit）：
+//   - 代理：velocity / waterfall / bungeecord
+//   - 二进制：binary / beacon（以及任何非 MC 核心的通用二进制）
+//   - 插件服：其余 MC 服务端核心（paper / spongevanilla / spongeforge / purpur …）
+//
+// 【为什么「其余」归插件服而不是报错】coreType 是开放集合（新增核心不该逼迫本函数同步），
+// 而 MC Java 服务端的绝大多数形态都是「装插件的服务端」。未知值归到最常见的一类，
+// 比让整行显示「未知」更有信息量；真出现非插件服的新核心时，`Instance.Kind` 显式赋值优先。
+func KindForCoreType(coreType string) model.InstanceKind {
+	switch project(coreType) {
+	case "velocity", "waterfall", "bungeecord":
+		return model.InstanceKindProxy
+	case CoreTypeBinary, CoreTypeBeacon:
+		return model.InstanceKindBinary
+	}
+	return model.InstanceKindPlugin
+}
 
 type mavenMetadata struct {
 	Versioning struct {
