@@ -5,7 +5,7 @@
 > 本文不含任何真实凭据、真实端点、参考项目名称或绝对路径；所有示例地址均为文档保留段。
 >
 > **与初版草稿的差异已按实际实现就地修订**，并在受影响处标「实现偏差」说明为什么改。
-> 未实现项不在此处假装已实现：§8 探测端点、§4.3 私网放行设置、真实上游验收（T9）仍是待办，
+> 未实现项不在此处假装已实现：§4.3 私网放行设置、审计流水、真实上游验收（T9）仍是待办，
 > 它们在任务拆分里保持未勾选。
 
 ## 1. 背景与目标
@@ -180,17 +180,41 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 - **错误分类**（统一 code，附脱敏后的上游摘要）：`upstream_auth`(401/403)、`upstream_rate_limited`(429)、`upstream_rejected`(400/422)、`upstream_error`(5xx)、`upstream_timeout`、`upstream_unreachable`(DNS/TCP/TLS)、`egress_denied`、`upstream_stream_truncated`、`protocol_unsupported`、`capability_unsupported`。
 - 能力不足要**显式**：未声明 `capabilities_tools` 时带工具请求直接 422 `capability_unsupported`，不静默丢工具。
 
-## 8. 探测与真实测试（**未实现**）
+## 8. 探测与真实测试（**已实现**）
 
-> 本节描述的是**设计意图，当前代码里没有这两个端点**。如实标注，避免把它读成已交付能力：
-> 管理员目前只能「填完保存 → 等真正聊天时才知道对不对」，这正是 FR-514 原文要求「提供显式
-> 连接/单模型测试」而尚未满足的部分。
+两种动作都由**显式按钮/接口**触发，绝不在输入框失焦、列表刷新或保存后自动发请求——
+模型调用按次计费，把「保存」与「调用上游」绑定等于让每一次手滑都产生费用。
+前端每个供应商行、每个模型行各一个按钮，请求进行中该行按钮禁用（防连点重复付费）。
 
-两种动作都由**显式按钮/接口**触发，绝不在输入框失焦、列表刷新或保存后自动发请求。
+- **供应商探测** `POST .../providers/:id/test`：用该供应商下**第一个启用模型**跑一次最小补全。
+  返回 `ok`、`latencyMs`、`classifiedError?`、`message?`。供应商下没有任何模型时明确报错
+  （无法探测就是无法探测，不假装通过）。**实现偏差**：草稿设想「优先官方模型列表端点，
+  不可用时退化」，落地直接只用最小补全——列模型端点各协议路径不同（`/models` vs `/v1/models`），
+  且部分网关只实现推理端点，列模型反而更容易误报「不通」；要验证的本来就是「能不能说话」。
+- **单模型真实测试** `POST .../models/:id/test`：跑**一次**最小补全（固定提示，不接用户数据、
+  不执行任何工具）。返回 `ok`、`latencyMs`、`textPreview`(≤200 字符)、`promptTokens`/`outputTokens`
+  （可空）、`toolCallParsed`、`classifiedError?`、`message?`。
+  请求体可选 `{"withTools":true}`：额外验证工具参数能否解析完整。
+- **上游失败仍回 200**：`ok:false` 是**结论**，不是本次 HTTP 请求失败。把「密钥错」映射成 401
+  会让前端误以为自己的登录态失效并弹重新登录；把「上游 5xx」映射成 502 会让管理员以为面板坏了。
+  只有请求级问题（对象不存在 404、非管理员 403、参数不合规 422）才走错误响应。
+- 两者都不写会话表、不产生 run，与 FR-515 的聊天路径完全分离。
+- **审计：仍未写**（见 §12 第 7 条）。
 
-- **供应商探测**（规划）：`POST .../providers/:id/test`。一次轻量鉴权探测（优先官方模型列表端点，不可用时退化为最小文本补全）。返回 `ok`、`latencyMs`、`modelCount?`、`classifiedError?`。不发业务数据。
-- **单模型真实测试**（规划）：`POST .../models/:id/test`。用该模型跑**一次**最小文本补全（固定提示，不接用户数据、不执行工具），返回 `ok`、`latencyMs`、`textPreview`(≤200 字符)、`usage?`（可空）、`toolCallParsed`（是否成功解析出工具调用，仅当请求带工具 schema 时）、`classifiedError?`。
-- 两者都不写会话表、不产生 run，与 FR-515 的聊天路径完全分离；都写审计（仅元数据）。
+**凭据解析顺序**（探测与未来运行循环共用同一实现）：`none` 不发密钥头；`env` **只读进程环境**，
+变量未设置时**在发请求前**报错（否则会得到一个 401，把「变量没配」误报成「密钥不对」）；
+`stored` 解密，失败时明确提示重新录入而**不**降级为无密钥。
+
+**分类码**（`ai.ErrorCode`）：`upstream_auth`(401/403) / `upstream_rate_limited`(429) /
+`upstream_rejected`(其余 4xx) / `upstream_error`(5xx) / `upstream_timeout` / `upstream_unreachable` /
+`upstream_stream_truncated` / `egress_denied` / `egress_proxy_unsupported` / `capability_unsupported` /
+`tool_call_invalid`。前端据码给**处置建议**（换密钥 / 稍后重试 / 查网络 / 放行地址），不解析 message。
+
+**脱敏**：上游错误体先按模式掩蔽疑似凭据（`sk-*` / `AIza*` / `Bearer *` / JSON 里的
+`api_key|token|secret|authorization` 字段值），再截断到 512 字节。**为什么必须做**：上游的 401
+经常回显它收到的那个密钥（"Incorrect API key provided: sk-xxx"），这段文本会进 message、
+进前端提示、可能进日志与截图。掩蔽只针对「看起来就是密钥」的片段，保留其余诊断信息——
+模型名写错时正是靠上游那句话排查。
 
 ## 9. 任务拆分（可顺序执行）
 
@@ -202,7 +226,8 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 - [x] T6 路由与权限：`router/assistant.go`，管理员子域显式 `IsPlatformAdmin`，普通用户 `/models`；403/401 与真源测试。
 - [x] T7 前端：`api/assistant.ts`、`pages/AssistantSettingsPage.tsx`、`components/views/settings/AssistantSettingsView.tsx`、路由与导航最小追加、devmock `assistant` 域。
 - [ ] T8 文档同步：本批已补 API.md / ARCHITECTURE.md / CHANGELOG / PRD / 本 spec。
-- [ ] **T8b 探测端点**（§8）：`POST .../providers/:id/test` 与 `.../models/:id/test` 尚未实现。
+- [x] **T8b 探测端点**（§8）：`POST .../providers/:id/test` 与 `.../models/:id/test` 已实现，
+  含凭据解析、30s 预算、分类码与上游错误体脱敏；前端每行一个按钮（请求中禁用）。
 - [ ] **T8c 私网放行配置**（§4.3 / §6.2）：`allow_private_cidrs` 字段与管理 UI 尚未实现。
 - [ ] T9 真实供应商验收：三协议各一条真实上游（凭据经环境变量注入），由用户确认通过。**未做**。
 - [ ] T10 迁移回放验证：空库首启 → 停 → 二启 → 三启、脏环境读回默认指针。**未单独成文**。
@@ -225,7 +250,7 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 | # | 标准 | 状态 |
 |---|---|---|
 | 1 | 三协议可分别登记并接通（真实上游，凭据环境变量注入），各自都能返回文本增量 | ❌ **未验**：仅有报文构造与 SSE 分帧单测 |
-| 2 | 支持工具的上游能解析出**完整参数**的工具调用并标记 `toolCallParsed=true` | 🟡 解析逻辑有单测；`toolCallParsed` 属 §8 未实现的测试端点 |
+| 2 | 支持工具的上游能解析出**完整参数**的工具调用并标记 `toolCallParsed=true` | ✅ 解析逻辑有单测；`toolCallParsed` 由 §8 测试端点产出，含「声明 tools 但参数不完整 → tool_call_invalid」路径 |
 | 3 | 管理员可设/换/清默认模型；并发改默认只有一个成功 | ✅ 服务层 + 路由测试覆盖（11 + 9 项） |
 | 4 | 停用默认模型后读摘要回 `defaultModelId=null`（**不清指针**，见 §4.4 实现偏差） | ✅ 读时解析，有测试 |
 | 5 | 非管理员调任一管理端接口 → 403；未登录 → 401 | ✅ 路由测试覆盖 |
@@ -246,7 +271,8 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 2. **代理场景下钉 IP 不成立 → 显式报错**（§6.1 第 6 条）。这会让「配了全局出站代理」的部署必须为供应商域加 `NO_PROXY` 才能用 AI。**取舍已确认接受**：静默直连会让配了代理的部署出现意外绕过路径，比报错难排查。
 3. **复用拉取密钥那套 `KeyEncryptor` 与同一主密钥**（不新增 env）。已在 `apps/control-plane/main.go` 装配处按此实现；若将来希望 AI 用独立密钥，需另立 ADR。
 4. **删除策略取硬删除 + 拒删被引用供应商**；FR-515 会话表**须用模型快照文本而非外键**（对本批之后的约束，见 §4.4）。
-5. 探测「优先模型列表端点」依赖上游是否支持（§8 未实现，此风险尚未兑现）。
+5. 探测原先设想「优先模型列表端点、不支持则退化」——落地改为只用最小补全（§8 实现偏差）；
+   代价是探测本身会产生一次极小的付费调用。
 6. 冻结的数值预算为初值，**未逐项回归验证**（§6.2 缺口 9）。
 7. **本批未写审计流水**：供应商/模型的增删改（尤其「改 baseUrl」与「清空凭据」）目前不留审计痕迹。
    这与平台其它管理动作的惯例不一致，属已知缺口；补齐时须注意**只记元数据**，

@@ -255,10 +255,24 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 「模型停用」或「其供应商停用」时把该行排除在摘要之外，并在默认模型不可用时让 `defaultModelId`
 回 `null`，而不是指向一个调不通的模型。
 
+**探测与分类错误**：`POST .../providers/:id/test`（用首个启用模型）与 `.../models/:id/test`
+（单模型，可带 `withTools` 验证工具参数完整性）。两者都**只由按钮触发**、30s 预算、
+不写会话不产生 run。上游失败一律回 **HTTP 200 + `ok:false` + `classifiedError`**：
+把「密钥错」映射成 401 会让前端误以为登录态失效，把「上游 5xx」映射成 502 会让管理员
+以为面板坏了。分类码（`ai.ErrorCode`）分 `upstream_auth` / `rate_limited` / `rejected` /
+`error` / `timeout` / `unreachable` / `stream_truncated` / `egress_denied` /
+`egress_proxy_unsupported` / `capability_unsupported` / `tool_call_invalid`，
+前端据码给处置建议，不解析文案。
+
+**上游错误体脱敏**：先按模式掩蔽疑似凭据（`sk-*` / `AIza*` / `Bearer *` / JSON 里
+`api_key|token|secret|authorization` 的值），再截断至 512 字节。**为什么必须做**：
+上游 401 常回显它收到的密钥（"Incorrect API key provided: sk-xxx"），这段文本会进
+`message`、进前端提示、可能进日志与截图——而日志与截图里的密钥比内存里的更难收回。
+
 **与既有 MCP 网关的关系**：本轮**不改** `/api/v1/mcp` 契约。该端点只认 `jmat_` Agent Token，
 人类 JWT 依然不能充当 MCP 凭据（`AgentOrJWT` 中间件目前只有注释、无实现）。
 助手对业务工具的受限委托需要一个**用户委托执行器**（以登录用户身份、在用户权限内、经逐调用确认执行），
-属 FR-515/516 范畴。首批只提供配置面与协议适配，**不宣称助手可用**。
+属 FR-515/516 范畴。首批只提供配置面、协议适配与探测，**不宣称助手可用**。
 
 ### 4.2 Bot 目标实例与执行节点（FR-351 / ADR-074）
 

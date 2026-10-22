@@ -4354,6 +4354,42 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 ### DELETE /api/v1/assistant/admin/models/:id
 - **描述**: 删除模型。若它是当前默认模型，**同一事务内清空默认指针**，不留悬空引用。
 
+### POST /api/v1/assistant/admin/providers/:id/test
+- **描述**: 显式探测供应商连通性（用该供应商下第一个启用模型跑一次最小补全）。
+- **权限**: 平台管理员
+- **响应** (200):
+  ```json
+  { "ok": true, "latencyMs": 412 }
+  ```
+  失败时**仍是 200**（这是结论，不是请求失败）：
+  ```json
+  { "ok": false, "latencyMs": 12000, "classifiedError": "upstream_auth",
+    "message": "upstream_auth（HTTP 401）: …" }
+  ```
+- **错误**: 404 不存在 / 422 该供应商下没有模型（无模型可探测，不假装通过）
+- **说明**:
+  - 上游失败不映射成 401/502——把「密钥错」映射成 401 会让前端误以为登录态失效，
+    把「上游 5xx」映射成 502 会让管理员以为面板坏了。
+  - `message` 已脱敏：上游回显的密钥按模式掩蔽（`sk-***`）后截断至 512 字节。
+  - 不写会话、不产生 run；前端每行按钮在请求中禁用，防连点重复付费。
+
+### POST /api/v1/assistant/admin/models/:id/test
+- **描述**: 用该模型跑一次最小补全（固定提示，不带用户数据、**不执行任何工具**）。
+- **权限**: 平台管理员
+- **请求体**（可空）: `{ "withTools": true }`
+- **响应** (200):
+  ```json
+  { "ok": true, "latencyMs": 830, "textPreview": "pong",
+    "promptTokens": 9, "outputTokens": 2, "toolCallParsed": false }
+  ```
+- **错误**: 404 不存在 / 422 `withTools=true` 但该模型未声明 `tools` 能力
+- **说明**:
+  - `promptTokens` / `outputTokens` 为 `null` 表示上游未报告（不补 0）。
+  - 未声明 tools 却要求工具验证**显式拒绝**，不静默去掉工具再测——后者会给出 `ok:true` 的假绿。
+  - `textPreview` ≤200 字符。
+
+> 分类码全集与「管理员该做什么」的对应表见 `docs/specs/ai-provider-models/api.md` §7。
+
 ### PUT /api/v1/assistant/admin/settings/default-model
 - **描述**: 设置或清空默认模型。
 - **请求体**: `{ "modelId": 1 }` 或 `{ "modelId": null }`（清空）
