@@ -164,6 +164,34 @@ describe('OverviewPage（mock 假后端）', () => {
   })
 
   /*
+    可用率 SLO 不单独占卡（用户选择「塞进现有卡片」），并入趋势卡头部。
+    两条语义要守住：① 有证据时按 target 达标情况着色；② `applicable=false`
+    （窗口内无可用证据、分母为 0）必须显示「不适用」，不能显示成 0% ——
+    否则读者会把它读成「完全不可用」。
+  */
+  it('趋势卡头部展示可用率，无证据时显示「不适用」而非 0%', async () => {
+    const { unmount } = renderWithProviders(<OverviewPage />, { route: '/' })
+    const trend = await screen.findByTestId('overview-player-trend')
+    await waitFor(() => expect(within(trend).getByText(/可用率/)).toBeInTheDocument())
+    unmount()
+
+    server.use(
+      http.get(API('/metrics/slo'), () =>
+        HttpResponse.json({
+          scope: 'platform', availability: 0, totalSamples: 0, upSamples: 0,
+          incidents: 3, activeIncidents: 1, mttrSeconds: null, mtbfSeconds: null,
+          budgetAllowedSec: 0, budgetBurnedSec: 0, target: 0.995,
+          approximatedBuckets: false, applicable: false,
+        }),
+      ),
+    )
+    renderWithProviders(<OverviewPage />, { route: '/' })
+    const trend2 = await screen.findByTestId('overview-player-trend')
+    await waitFor(() => expect(within(trend2).getByText('不适用')).toBeInTheDocument())
+    expect(within(trend2).queryByText('0.00%')).toBeNull()
+  })
+
+  /*
     【结构变更·本轮】首页底部那张「不限量无限滚动」的实例表已移除。
     它与「服务器」页的完整版本重复（那边有搜索/筛选/分组/批量操作），
     同时是本页渲染量的大头（约 783 个元素、单次主线程阻塞约 360ms）。
