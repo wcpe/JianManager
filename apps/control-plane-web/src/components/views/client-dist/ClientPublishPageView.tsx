@@ -33,7 +33,7 @@ import {
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
-import { PageHeader, PageShell, Segment, Segments } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageShell, ScopeBar, Segment, Segments } from '@jianmanager/ui/components/layout'
 import { Progress } from '@jianmanager/ui/components/progress'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -487,7 +487,8 @@ export function ClientPublishPageView({
     // 全量对齐：外壳与页头改用布局层原语，与创建实例向导同处理——它是窄栏流程页，
     // 保留 mx-auto max-w-4xl；返回语义由面包屑承载，原先左侧的返回按钮去掉
     // （与向导页同理：它与页名并列时，读屏会先念按钮再念标题）。
-    // channelId 并入 description（等宽），不单独占一行。
+    // channelId 原并入 description。它是本次发布的运行时目标（等宽标识），
+    // 收进问号 tooltip 会让「发到哪个频道」变成不悬停就看不到——挪进 ScopeBar 说明位常驻。
     <PageShell className="mx-auto max-w-4xl" data-page="client-publish">
       <PageHeader
         title={
@@ -496,18 +497,15 @@ export function ClientPublishPageView({
             {t('clientVersions.publish', '发布新版本')}
           </span>
         }
-        description={
-          <>
-            {t('clientVersions.wizardDesc', '拖入文件/文件夹本地暂存并编排（此时不上传），点「发布」才批量上传并发布。本期为未压缩（codec=none）发布。')}
-            {' · '}
-            <span className="font-mono">{channelId}</span>
-          </>
-        }
+        description={t('clientVersions.wizardDesc', '拖入文件/文件夹本地暂存并编排（此时不上传），点「发布」才批量上传并发布。本期为未压缩（codec=none）发布。')}
         breadcrumbs={[
           { label: t('nav.clientChannels'), to: '/client-channels' },
           { label: t('clientVersions.publish', '发布新版本') },
         ]}
       />
+      {channelId && (
+        <ScopeBar note={<span className="font-mono">{channelId}</span>} />
+      )}
       <EmbeddedUpdaterSummary info={updaterInfo} />
 
       <PublishStepIndicator step={step} />

@@ -10,7 +10,7 @@ import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, ChevronDown, ChevronRight, Package, ScrollText, Search, Wrench } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -115,11 +115,7 @@ export function LicensesPageView({
     <PageShell data-page="licenses">
       <PageHeader
         title={t('licenses.title')}
-        description={
-          generatedAt
-            ? t('licenses.generatedAt', { time: new Date(generatedAt).toLocaleString() })
-            : undefined
-        }
+        description={t('licenses.subtitle')}
         actions={
           <Button variant="ghost" size="sm" onClick={onBack} className="gap-1.5">
             <ArrowLeft className="size-4" />
@@ -128,7 +124,16 @@ export function LicensesPageView({
         }
       />
 
-      <p className="text-sm text-muted-foreground">{t('licenses.subtitle')}</p>
+      {/* 生成时间原在页头 description 里。它是构建期写入的运行时数据（随清单变化），
+          不是页面说明——收进问号 tooltip 会让管理员不悬停就看不到清单何时生成。
+          挪进 ScopeBar 说明位，保持常驻可见。 */}
+      <ScopeBar
+        note={
+          generatedAt
+            ? t('licenses.generatedAt', { time: new Date(generatedAt).toLocaleString() })
+            : undefined
+        }
+      />
 
       {!isLoading && !isError && deps.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
