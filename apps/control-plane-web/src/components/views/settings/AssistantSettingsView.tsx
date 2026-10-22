@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Pencil, Trash2, Star } from 'lucide-react'
+import { Plus, Pencil, Trash2, Star, PlugZap } from 'lucide-react'
 import {
   Alert,
   AlertDescription,
@@ -54,6 +54,10 @@ export interface AssistantSettingsViewProps {
   onUpdateModel: (id: number, payload: ModelPayload) => Promise<boolean>
   onDeleteModel: (id: number) => Promise<boolean>
   onSetDefaultModel: (modelId: number | null) => Promise<boolean>
+  /** 显式探测供应商连通性（按钮触发，绝不自动调用）。 */
+  onTestProvider: (id: number) => Promise<void>
+  /** 用指定模型跑一次最小补全；withTools 时额外验证工具参数完整性。 */
+  onTestModel: (id: number, withTools: boolean) => Promise<void>
 }
 
 /** 供应商表单草稿。 */
@@ -176,6 +180,8 @@ export function AssistantSettingsView({
   onUpdateModel,
   onDeleteModel,
   onSetDefaultModel,
+  onTestProvider,
+  onTestModel,
 }: AssistantSettingsViewProps) {
   const { t } = useTranslation()
   const providerList = providers ?? []
@@ -186,6 +192,9 @@ export function AssistantSettingsView({
   const [modelDraft, setModelDraft] = useState<ModelDraft | null>(null)
   const [pendingDeleteProvider, setPendingDeleteProvider] = useState<AssistantProvider | null>(null)
   const [pendingDeleteModel, setPendingDeleteModel] = useState<AssistantModel | null>(null)
+  // 正在测试的行 id：只用来禁用该行按钮，避免连点产生多次付费调用。
+  const [testingProviderId, setTestingProviderId] = useState<number | null>(null)
+  const [testingModelId, setTestingModelId] = useState<number | null>(null)
 
   /** 提交供应商表单。 */
   const submitProvider = async () => {
@@ -226,6 +235,27 @@ export function AssistantSettingsView({
       modelDraft.id === null ? await onCreateModel(payload) : await onUpdateModel(modelDraft.id, payload)
     if (ok) setModelDraft(null)
   }
+
+  /** 探测供应商：包一层「置忙 → 调用 → 复位」，避免同一行被连点。 */
+  const runTestProvider = async (id: number) => {
+    setTestingProviderId(id)
+    try {
+      await onTestProvider(id)
+    } finally {
+      setTestingProviderId(null)
+    }
+  }
+
+  /** 测试模型，同上。 */
+  const runTestModel = async (id: number, withTools: boolean) => {
+    setTestingModelId(id)
+    try {
+      await onTestModel(id, withTools)
+    } finally {
+      setTestingModelId(null)
+    }
+  }
+
 
   return (
     <PageShell data-page="assistant-settings">
@@ -312,6 +342,16 @@ export function AssistantSettingsView({
                           <Button
                             variant="ghost"
                             size="icon"
+                            aria-label={t('assistant.testProvider', '测试连接')}
+                            title={t('assistant.testProvider', '测试连接')}
+                            disabled={testingProviderId === p.id}
+                            onClick={() => void runTestProvider(p.id)}
+                          >
+                            <PlugZap className="size-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             aria-label={t('common.edit', '编辑')}
                             onClick={() => setProviderDraft(providerDraftOf(p))}
                           >
@@ -367,7 +407,7 @@ export function AssistantSettingsView({
                 <TableBody>
                   {modelList.map((m) => {
                     const isDefault = defaultModelId === m.id
-                    return (
+  return (
                       <TableRow key={m.id}>
                         <TableCell>
                           <div className="flex items-center gap-1.5">
@@ -398,6 +438,16 @@ export function AssistantSettingsView({
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={t('assistant.testModel', '测试模型')}
+                              title={t('assistant.testModel', '测试模型')}
+                              disabled={testingModelId === m.id}
+                              onClick={() => void runTestModel(m.id, m.tools)}
+                            >
+                              <PlugZap className="size-4" />
+                            </Button>
                             <Button
                               variant="ghost"
                               size="icon"
