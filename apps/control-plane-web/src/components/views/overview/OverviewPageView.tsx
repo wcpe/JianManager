@@ -788,6 +788,7 @@ export function OverviewPageView({
     <PageShell data-page="overview">
       <PageHeader
         title={t('dashboard.title')}
+        description={t('dashboard.subtitle')}
         actions={<RangePicker value={range} onChange={onRangeChange} />}
       />
 

@@ -226,7 +226,7 @@ export function BackupStoragesPageView({
     // 全量对齐：标题上移到页面级 PageHeader（页名只出现一次、且在页面最上面），
     // 卡片头只留计数与操作。原先也没有 data-page，迁移时补上。
     <PageShell data-page="backup-storages">
-      <PageHeader title={t('backupStorages.title', '备份存储后端')} />
+      <PageHeader title={t('backupStorages.title', '备份存储后端')} description={t('backupStorages.subtitle')} />
       <TableCard>
         <TableCardHeader
           count={t('backupStorages.cardCount', { total: (storages ?? []).length })}

@@ -201,7 +201,7 @@ export function UsersPageView({
     // 全量对齐：标题上移到页面级 PageHeader（页名只出现一次、且在页面最上面），
     // 卡片头只留计数与操作（TableCardHeader.title 已改为可选）。
     <PageShell data-page="users">
-      <PageHeader title={t('users.title')} />
+      <PageHeader title={t('users.title')} description={t('users.subtitle')} />
       <TableCard>
         <TableCardHeader
           count={t('users.cardCount', { total: totalUsers })}

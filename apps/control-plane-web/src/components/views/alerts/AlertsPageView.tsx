@@ -751,7 +751,7 @@ export function AlertsPageView({
     // 阶段 6 页面迁移：外壳与页头改用布局层原语。
     // 标题字号由 text-2xl 统一到布局规范的 text-xl（PageHeader 的固定字号）。
     <PageShell data-page="alerts">
-      <PageHeader title={t('alerts.title')} />
+      <PageHeader title={t('alerts.title')} description={t('alerts.subtitle')} />
 
       <Tabs value={tab} onValueChange={(v) => onTabChange(v as AlertTab)} className="w-full">
         <TabsList className="mb-4">
