@@ -115,7 +115,7 @@ function SessionPageBody({ runId }: { runId: number | string }) {
     // 页头由 SessionHeader 渲染，它已改用布局层 ObjectPageHeader：运行名 → title，
     // 五个实时状态（运行状态/判定/阶段/时长/目标实例）→ metrics（判定保留三态语义色），
     // 返回 Bots 与实时流状态 → breadcrumbs，停止/取消/报告下载 → actions。
-    <PageShell className="mx-auto max-w-7xl p-1 sm:p-0" data-testid="bot-load-session-page">
+    <PageShell className="mx-auto max-w-7xl" data-testid="bot-load-session-page">
       <SessionHeader run={run} streamStatus={String(streamStatus)} reportReady={reportReady} />
 
       <Tabs value={tab} onValueChange={setTab}>

@@ -33,7 +33,7 @@ export default function InstanceFilesPage() {
     // 阶段 6 页面迁移：外壳改用 PageShell 的 tool 变体（gap-0 p-0），再补回本页原有的 p-3
     // ——它是自带滚动的文件浏览器工具页，不需要 PageShell 默认的 px-[25px] py-[22px]。
     // data-testid 由 PageShell spread 透传。
-    <PageShell variant="tool" className="p-3" data-testid="instance-files-page">
+    <PageShell variant="tool" className="p-[clamp(8px,1vw,16px)]" data-testid="instance-files-page">
       <header className="mb-2 flex shrink-0 items-center gap-2">
         <Button asChild size="sm" variant="ghost" className="h-8 gap-1 px-2">
           <Link to={`/instances/${instanceId}?tab=resource`}>
