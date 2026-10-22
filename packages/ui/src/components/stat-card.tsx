@@ -86,7 +86,7 @@ export function StatCard({
         `flex flex-col px-3 py-2.5 ${cardSurface} ${cardSurfaceTone.solid}`,
         clickable &&
           'text-left transition-colors hover:border-primary/40 hover:shadow-soft-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
-        clickable && (active ? 'border-primary bg-primary/[0.04] ring-1 ring-primary/25' : 'border-border'),
+        clickable && (active ? 'border-primary bg-primary/[0.04] ring-1 ring-primary/25' : 'border-border/55'),
         className,
       )}
     >

@@ -61,7 +61,8 @@
 
   /* ── 非主题维度：状态色语义固定，不随主题变 ── */
   --destructive: #dc2626;
-  --radius: 0.375rem;
+  /* 全局圆角基准 = 5px。各级 --radius-* 在 theme-map.css 里全部等于此值（统一视觉半径）。 */
+  --radius: 5px;
   /* 首访资源减重：原 1437.5KB 背景位图（console-bg-light.png，全站唯一重物 ✗）
      替换为同基调的柔和渐变（0KB ✓）。视觉一致性由设计 token 保证：沿用 background/muted。
      如需恢复位图：把 url('/brand/console-bg-light.png') 换回即可（文件已移出 public ✗）。 */

@@ -119,21 +119,61 @@
   --text-title--line-height: 1.5rem;
   --text-title--letter-spacing: -0.01em;
 
-  --radius-sm: calc(var(--radius) - 3px);
-  --radius-md: calc(var(--radius) - 1px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
+  /*
+    【圆角分档：大容器 5px，小元素按比例缩】此前是「一个 --radius 推导五档」：
+      --radius = 6px → sm 3 / md 5 / lg 6 / xl 10 / 2xl 14
+    实际使用分布极不均衡（rounded-md 280 处、lg 134、sm 32、xl 14），
+    于是同一页里 5px 与 10px 并存——实测某页 28 个带边框容器中 21 个 5px、
+    5 个 10px、1 个 6px、1 个 0px，「圆角不统一」是肉眼可见的事实。
+
+    **但小元素不能跟着放大到 5px**。一个 18px 高的徽标、1px 高的进度条若用 5px 半径，
+    会接近胶囊形甚至失真——半径是绝对长度，而视觉重量取决于它与元素尺寸的比例。
+    这正是 GitHub Primer 把 radius 分成 `small / medium / large` 三档的原因：
+    容器用大档、控件用中档、微元素用小档，比例才平衡。
+
+    因此：
+    - `--radius`（基准）= 5px，五档 `--radius-*` **全部等于 5px**——
+      它们是「容器级」半径，覆盖卡片、面板、输入框、按钮、下拉、弹窗。
+    - 新增三档**微元素**半径，供徽标 / 图标按钮 / 进度条 / 热力图格子使用：
+        --radius-micro 2px   进度条、细条、1-2px 级
+        --radius-tiny  3px   徽标、计数块（≤20px 高）
+        --radius-mini  4px   图标按钮、小方块（20-24px）
+      这三档不放 Tailwind 的 `rounded-*` 命名空间（那些名字已被容器档占用），
+      调用方写 `rounded-[var(--radius-tiny)]`，取值仍由本文件单点决定。
+
+    这样「统一」的含义是准确的：**同一层级的元素半径一致**，而不是所有尺寸一个值。
+  */
+  --radius: 5px;
+  --radius-sm: 5px;
+  --radius-md: 5px;
+  --radius-lg: 5px;
+  --radius-xl: 5px;
+  --radius-2xl: 5px;
+
+  /* 微元素半径（不随容器档放大，按元素尺寸取比例） */
+  --radius-micro: 2px;
+  --radius-tiny: 3px;
+  --radius-mini: 4px;
 
   /* 设计底座（FR-163）：柔和弱阴影 + 主色晕染抬升 + 统一动效 token + 呼吸灯。
      品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
-  --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
-  --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
-  /* 抬升阶梯向上补齐。沿用 soft/lift 的既有取值不动（53 + 19 处依赖），只补更高两档，
-     并统一用语义名而非内建 shadow-sm/md/lg（覆盖内建会波及全站其它 29 处）。
-     语义：flat(无) < soft(卡片) < lift(悬停抬升) < overlay(浮层) < modal(模态)。 */
-  --shadow-overlay: 0 12px 32px -8px rgb(var(--shadow-color) / 0.18), 0 4px 10px -4px rgb(var(--shadow-color) / 0.10);
-  --shadow-modal: 0 24px 56px -12px rgb(var(--shadow-color) / 0.26), 0 8px 20px -6px rgb(var(--shadow-color) / 0.12);
+  /*
+    【阴影重调：更薄、更贴地】原 soft 是两层叠加（各 5% 不透明度、1px 与 3px 偏移），
+    在 5px 小圆角下显得「糊了一圈灰边」，卡片之间挨在一起时分不清是阴影还是描边。
+
+    新口径：
+    - soft 只留一层极近的接触阴影（1px / 3%），作用是「卡片贴在底面上」而不是「发灰」；
+    - lift 保留抬升感但收窄扩散、降低不透明度，hover 时是「轻轻浮起」而非「跳出来」；
+    - overlay / modal 同步收敛，浮层靠遮罩与层级区分，不靠重阴影。
+
+    三个原则：偏移随层级增大、模糊半径约为偏移的 2 倍、不透明度随层级递增但整体克制。
+  */
+  --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.03);
+  --shadow-soft-2: 0 1px 3px rgb(var(--shadow-color) / 0.05), 0 1px 2px -1px rgb(var(--shadow-color) / 0.04);
+  --shadow-lift: 0 4px 12px -4px rgb(var(--shadow-color) / 0.10), 0 1px 3px -1px rgb(var(--shadow-color) / 0.06);
+  /* 抬升阶梯向上补齐。语义：flat(无) < soft(卡片) < lift(悬停抬升) < overlay(浮层) < modal(模态)。 */
+  --shadow-overlay: 0 8px 24px -8px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
+  --shadow-modal: 0 16px 40px -12px rgb(var(--shadow-color) / 0.20), 0 4px 12px -6px rgb(var(--shadow-color) / 0.10);
   /* ── 全局动效收敛（FR-244）：唯一的动画词汇表，任何交互动效都从这里取值，禁止再散落硬编码毫秒 ──
        时长 token：--motion-duration-fast(120)｜normal(180)｜slow(320)｜route(360)｜progress-*(进度条专用)。
        缓动 token：--motion-easing-standard（iOS 收敛缓动，别名 --ease-ios，Tailwind 用 ease-ios）｜--motion-easing-emphasized。

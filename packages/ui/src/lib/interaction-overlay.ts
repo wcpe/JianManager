@@ -47,9 +47,19 @@ export const shadowTransition =
  * 视觉收益极小，代价是每个卡片成为一个独立合成层（实测禁用后侧栏开合过渡
  * 51.6fps→58.8fps）。因此默认不带模糊，需要真毛玻璃的场景（下方确有内容滚动）
  * 由调用方显式加回。
+ *
+ * 【边框为什么降到 55% 不透明度】卡片原本用实色 `border`（`--border`，浅色下 #d7dce3）。
+ * 配上已收敛的极淡阴影后，一圈实线反而成了最重的视觉元素——同一屏十几张卡片，
+ * 边框连起来像表格线，「卡片」读起来更像「格子」。
+ *
+ * 现在边框降到 55%：**它仍在那里**（用于界定边界，尤其相邻卡片贴合时），
+ * 但不再是视觉主角，让底色与留白承担分块。这与 Primer / Linear 的做法一致——
+ * 容器的边界靠「底色差 + 极淡描边」表达，而不是靠实线分割。
+ *
+ * 需要更强边界感的场景（如可点击卡片 hover）由调用方显式加深，不在此处一刀切。
  */
 export const cardSurface =
-  'rounded-xl border text-card-foreground shadow-soft'
+  'rounded-xl border border-border/55 text-card-foreground shadow-soft'
 
 /**
  * 卡片底色的强弱档位。
@@ -76,7 +86,14 @@ export const cardSurfaceTone = {
 export type CardSurfaceTone = keyof typeof cardSurfaceTone
 
 /** 中性悬停涂层：浅色主色底（accent）+ 对应前景色。 */
-export const hoverOverlay = 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50'
+/**
+ * 中性悬停涂层：浅色主色底（accent）+ 对应前景色。
+ *
+ * 取值从「实色 accent」改为「accent/70」：实色 hover 在密集工具栏里会跳出来抢注意力，
+ * 一排按钮鼠标掠过时像在闪烁；70% 的浅涂足够表达「指针在这上面」，又不改变该区域的
+ * 视觉重量。深色模式再降一档（/40），因为深色底上浅色涂层的观感差异被放大。
+ */
+export const hoverOverlay = 'hover:bg-accent/70 hover:text-accent-foreground dark:hover:bg-accent/40'
 
 /**
  * 中性按压涂层：同色系加深一档，与悬停可区分。
@@ -106,15 +123,24 @@ export type PressTone = 'primary' | 'destructive' | 'secondary' | 'neutral'
  *
  * 供 `cva` 变体表使用：按压色必须落在控件自身色系内（见模块头注释），
  * 逐个变体手写容易漏，且漏掉的那个不会报错、只会静默没有按压反馈。
+ *
+ * 【按压梯度必须与 hover 拉开距离】原取值为 primary/80，而实心按钮的 hover 是
+ * primary/90——两者只差 10% 不透明度，在浅色底上几乎不可分辨：鼠标悬停时按钮已经
+ * 变了一次色，按下时几乎没有进一步变化，用户会怀疑「点没点中」。运维台操作延迟本就
+ * 明显，这一点尤其致命。
+ *
+ * 现在的梯度：常态 100% → hover 90% → active 75%（相差 15%，肉眼可辨且不突兀）。
+ * destructive 与 secondary 同理拉开。neutral（outline/ghost）走 accent 涂层，
+ * 其 hover/active 已由 `hoverOverlay` 与 `pressOverlay` 分别定义，梯度同样成立。
  */
 export function pressOverlayClass(tone: PressTone): string {
   switch (tone) {
     case 'primary':
-      return 'active:bg-primary/80'
+      return 'active:bg-primary/75'
     case 'destructive':
-      return 'active:bg-destructive/85 dark:active:bg-destructive/75'
+      return 'active:bg-destructive/75 dark:active:bg-destructive/70'
     case 'secondary':
-      return 'active:bg-secondary/70'
+      return 'active:bg-secondary/65'
     case 'neutral':
     default:
       return pressOverlay
