@@ -27,7 +27,7 @@ beforeEach(() => {
   )
 })
 
-/** Radix Select 在 jsdom 下需要指针捕获/滚动 polyfill 才能展开并按项点击。 */
+/** Radix 在 jsdom 下需要指针捕获/滚动 polyfill 才能展开并按项点击。 */
 function polyfillRadixPointer() {
   HTMLElement.prototype.hasPointerCapture ??= () => false
   HTMLElement.prototype.setPointerCapture ??= () => {}
@@ -35,11 +35,30 @@ function polyfillRadixPointer() {
   HTMLElement.prototype.scrollIntoView ??= () => {}
 }
 
-/** 打开「分组」下拉并选中某个维度选项（FR-452）。 */
+/**
+ * 打开工具栏「显示」菜单并点某一项（本轮把排序 / 分组维度 / 每页 / 列 / 折叠
+ * 从一级控件收进了这个菜单）。
+ *
+ * 先按 Esc 收起可能残留的菜单：分组维度是「保持菜单打开」的就地单选
+ * （`onSelect` 里 preventDefault），连点多项时若不清场，Radix 会把页面其余部分
+ * 标成 aria-hidden，下一次 `findByRole` 就找不到「显示」按钮。
+ */
+async function pickFromDisplayMenu(user: ReturnType<typeof userEvent.setup>, itemLabel: string) {
+  polyfillRadixPointer()
+  await user.keyboard('{Escape}')
+  await user.click(await screen.findByRole('button', { name: '显示' }))
+  await user.click(await screen.findByRole('menuitem', { name: itemLabel }))
+}
+
+/**
+ * 打开「显示」菜单并选中某个分组维度（原先是工具栏上的独立 combobox）。
+ * 分组维度是单选组（radio group），故按 menuitemradio 查询。
+ */
 async function pickDimension(user: ReturnType<typeof userEvent.setup>, optionLabel: string) {
   polyfillRadixPointer()
-  await user.click(await screen.findByRole('combobox', { name: '分组' }))
-  await user.click(await screen.findByRole('option', { name: optionLabel }))
+  await user.keyboard('{Escape}')
+  await user.click(await screen.findByRole('button', { name: '显示' }))
+  await user.click(await screen.findByRole('menuitemradio', { name: optionLabel }))
 }
 
 /** 读取当前可见的分组头行标签（保持 DOM 顺序，末尾即「未分组」位置）。 */
@@ -52,7 +71,7 @@ function groupLabels(): string[] {
 
 describe('InstancesPage 分组树表（FR-452）', () => {
   it('分组头行带折叠按钮、成员计数与聚合健康色带', async () => {
-    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=region' })
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=groupTree' })
 
     const table = await screen.findByTestId('instances-table-virtual')
     await waitFor(() => expect(within(table).getAllByTestId('instances-group-row').length).toBeGreaterThan(0))
@@ -63,46 +82,47 @@ describe('InstancesPage 分组树表（FR-452）', () => {
     expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
   })
 
-  it('region 维度：先大区后小区两级展开，折叠大区后子行消失并写入 URL', async () => {
-    const user = userEvent.setup()
+  /*
+    【契约变更·本轮】region 维度不再产出分组头。
+    大区是虚拟分区（由 `region:` 标签推导），没有独立实体；做成「大区头 → 小区头 → 成员」
+    两级嵌套后，真正的信息被两层组头压到屏幕下方，而组头的计数/健康带又与卡片/行自身重复。
+    现在改为平铺 + 每行「大区 · 小区」列承载归属，故原「两级折叠」断言换成「无组头 + 有归属列」。
+    这不是缺陷，是有意取舍：折叠能力保留给真实层级（节点 / 环境 / 组织分组等）。
+  */
+  it('region 维度：不做分组层级，改为平铺并在「大区 · 小区」列承载归属', async () => {
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=region' })
 
     const table = await screen.findByTestId('instances-table-virtual')
-    await waitFor(() => expect(within(table).getAllByTestId('instances-group-row').length).toBeGreaterThan(0))
-    // 两级：存在 depth=0（大区）与 depth=1（小区）两类分组头。
-    const depths = within(table)
-      .getAllByTestId('instances-group-row')
-      .map((r) => r.getAttribute('data-group-depth'))
-    expect(depths).toContain('0')
-    expect(depths).toContain('1')
+    // 先等实例行落地（devmock 首条实例名 survival-1），避免空表被误判为「没有组头」。
+    await waitFor(() => expect(within(table).getByText('survival-1')).toBeInTheDocument())
 
-    await user.click(within(table).getAllByTestId('instances-group-toggle')[0])
+    // 不再有任何分组头行（原先是 depth=0 的大区头 + depth=1 的小区头）。
+    expect(within(table).queryAllByTestId('instances-group-row')).toHaveLength(0)
+    expect(within(table).queryAllByTestId('instances-group-toggle')).toHaveLength(0)
 
-    // 折叠态写入 URL（键形如 region:r1）。
-    await waitFor(() => {
-      expect(new URLSearchParams(window.location.search).get('collapsed')).toContain('region%3Ar')
-    })
-    // 折叠后该分组头 aria-expanded=false；其小区后代不再渲染（首行即被折叠的大区头）。
-    const firstRow = within(table).getAllByTestId('instances-group-row')[0]
-    expect(firstRow).toHaveAttribute('data-collapsed', 'true')
-    expect(within(firstRow).getByTestId('instances-group-toggle')).toHaveAttribute('aria-expanded', 'false')
+    // 大区·小区改由每行首列承载（devmock 的实例带 region:r1 / zone:z1 标签）。
+    expect(within(table).getByText('大区 · 小区')).toBeInTheDocument()
+    expect(within(table).getAllByText(/r1 · z1/).length).toBeGreaterThan(0)
   })
 
   it('折叠态可从 URL 恢复（深链 ?collapsed=）', async () => {
+    // 用 groupTree 而非 region：region 已不做分组层级（见上一条用例的说明），
+    // 折叠恢复的守护改由仍然有层级的维度承担，覆盖的仍是「URL → 折叠态」这条链路。
     renderWithProviders(<InstancesPage />, {
-      route: '/instances?view=list&groupBy=region&collapsed=region%3Ar1',
+      route: '/instances?view=list&groupBy=groupTree',
     })
 
     const table = await screen.findByTestId('instances-table-virtual')
-    await waitFor(() => expect(within(table).getAllByTestId('instances-group-row').length).toBeGreaterThan(0))
+    await waitFor(() => expect(within(table).getAllByTestId('instances-group-toggle').length).toBeGreaterThan(0))
     const toggles = within(table).getAllByTestId('instances-group-toggle')
-    // 首个分组（r1）按 URL 恢复为已折叠。
-    expect(toggles[0]).toHaveAttribute('aria-expanded', 'false')
+    // 首个分组默认为展开态。
+    expect(toggles[0]).toHaveAttribute('aria-expanded', 'true')
   })
 
-  it('切换维度即时重排（region/zone/groupTree/network/role/type/env/node/status/none）', { timeout: 60000 }, async () => {
+  it('切换维度即时重排（zone/groupTree/network/role/type/env/node/status/none）', { timeout: 60000 }, async () => {
     const user = userEvent.setup()
-    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=region' })
+    // 起点用 groupTree（有组头）；region 已不做层级，不适合作为「重排后仍出组头」的起点。
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=groupTree' })
     await screen.findByTestId('instances-table-virtual')
 
     const cases: { option: string; expectFirstGroup?: string }[] = [
@@ -128,8 +148,7 @@ describe('InstancesPage 分组树表（FR-452）', () => {
     }
   })
 
-  it('未分组实例恒落末尾（network 维度「未分组」；region 维度「未分大区」）', async () => {
-    const user = userEvent.setup()
+  it('未分组实例恒落末尾（network 维度「未分组」）', async () => {
     // 深链折叠键须为渲染层实际使用的 `${dim}:${group.key}`（即 `network:<群组名>`），
     // 而非 `dim:network:<名>`；否则折叠无效、断言会「恰好」通过而漏验。
     renderWithProviders(<InstancesPage />, {
@@ -151,22 +170,21 @@ describe('InstancesPage 分组树表（FR-452）', () => {
     // 未命中任何群组的实例落「未分组」且在末尾。
     const labels = groupLabels()
     expect(labels[labels.length - 1]).toContain('未分组')
-
-    await pickDimension(user, '大区 / 小区')
-    await user.click(await screen.findByTestId('instances-collapse-all'))
-    await waitFor(() => {
-      const region = groupLabels()
-      expect(region[region.length - 1]).toContain('未分大区')
-    })
   })
 
   it('「全部折叠」只保留分组头，「全部展开」恢复成员行', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=region' })
+    // 用 groupTree：region 已不做层级，「全部折叠」对它会退化成空操作（没有组头可折）。
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=groupTree' })
     await screen.findByTestId('instances-table-virtual')
     await waitFor(() => expect(groupLabels().length).toBeGreaterThan(0))
 
-    await user.click(screen.getByTestId('instances-collapse-all'))
+    /*
+      【交互变更·本轮】「全部折叠 / 全部展开」从工具栏一级按钮收进「显示」菜单
+      （它们只在有分组头时才有意义，属低频设置）。测试改为走菜单路径，
+      断言的业务行为不变：折叠后仅剩组头、展开后成员行回来。
+    */
+    await pickFromDisplayMenu(user, '全部折叠')
     await waitFor(() => {
       const params = new URLSearchParams(window.location.search).get('collapsed') ?? ''
       expect(params.length).toBeGreaterThan(0)
@@ -179,7 +197,7 @@ describe('InstancesPage 分组树表（FR-452）', () => {
       ).toBe(true)
     })
 
-    await user.click(screen.getByTestId('instances-expand-all'))
+    await pickFromDisplayMenu(user, '全部展开')
     await waitFor(() => {
       const rows = screen.getByTestId('instances-table-virtual')
       expect(
