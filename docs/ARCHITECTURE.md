@@ -926,11 +926,13 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 | 层 | 位置 | 管的范围 |
 |---|---|---|
 | 布局规范层 | `packages/ui/src/components/layout/` | 「一页内部怎么摆」——页内骨架、留白与纵向节奏、滚动模型 |
-| 导航外壳层 | `packages/ui/src/components/shell/` | 「页与页之间共用的骨架」——顶栏 / 资源侧栏 / 页面区三件套 |
+| 导航原语层 | `packages/ui/src/components/nav/` | 「页与页之间共用的那几条栏」——顶栏 / 资源侧栏 / 对象页头 / 命令面板 |
 
 **布局规范层**（阶段 3）：内容页布局的唯一出处——`PageShell` 三壳态（`default` 整页滚动 / `fixed` 固定视口、内部区域自行滚动，用于列表页与设置页，使工具栏与表头常驻 / `tool` 全占满、无外层留白，用于终端与文件等自带滚动的工具页）、`PageHeader`（规范第一条：内容页第一个子元素恒为它）、`ScopeBar`、`SummaryStrip`、`Toolbar`、`PlatformTabs`，以及 `TwoCol` / `ThreeCol` / `MetricGrid` / `CardsGrid` / `SettingsLayout` 网格原语，页面不再各自手写 `space-y-*` / `grid-cols-*` 骨架类名；`Panel` 增三段式 `footer` 槽（头 / 身 / 脚），使「工具条 + 数据区 + 页脚」成为标准形状（向后兼容的新增槽）。试点 = 审计页 `AuditPage`。
 
-**导航外壳层**（阶段 4）：把「顶栏 + 资源侧栏 + 页面区」三件套收敛为唯一出处——`AppShell`（骨架，顶栏高 53px）、`TopNav`（四工作区切换 + 品牌 / 检索 / 操作槽）、`SideNav`（展开 246px、折叠 54px；`SideNavHead` / `SideNavShortcuts` / `SideNavResource` / `SideNavBottom` 分区）、`ResourceTree`（资源树，限流展开与查询）、`CommandPalette`（⌘K 全局检索）、`ObjectPageHeader`（对象页头：面包屑 + 指标 + 工具）。两层边界写在各自 `index.ts` 注释里并互为引用，不可混用：页内布局不进外壳层，共用骨架不进页面。
+**导航原语层**（阶段 4，原「导航外壳层」）：只收敛**能在不同页面重复摆放的导航构件**——`TopNav`（四工作区切换 + 品牌 / 检索 / 操作槽）、`SideNav`（展开 246px、折叠 54px；`SideNavHead` / `SideNavShortcuts` / `SideNavResource` / `SideNavBottom` 分区）、`CommandPalette`（⌘K 全局检索）、`ObjectPageHeader`（对象页头：面包屑 + 指标 + 工具），以及供**应用侧自建侧栏**复用的五件通用原语——`SidebarShell`（外壳：自己注入 `--sidebar-collapsed-width` / `--sidebar-expanded-width`，脱离主控台外壳也独立可用）、`SidebarGroup`（可折叠分组容器）、`SidebarFooter`（底部一行图标按钮）、`SidebarRail`（折叠态图标钢轨）、`SidebarSection`（分区标题）。原「整体外壳」组件 `AppShell` 与资源树 `ResourceTree` 零引用，已删除（导航原语不该自带页面骨架；资源树由调用方在 `SideNavResource` 槽位自行渲染）。两层边界写在 `index.ts` 注释里并互为引用，不可混用：页内布局不进本层，本层不规定页面内部怎么摆。
+
+**原语 / 业务的切分判据**（ADR-103）：通用件只接字符串 / 数字 / 布尔 / 回调 / `ReactNode`；一旦需要 `WorkspaceDef`、`NavEntry`、实例数这类业务类型，就留在应用侧。据此 `WorkspaceSidebar` 只保留业务面（工作区解析、权限裁剪、分组树、计数取数、路由激活判定 `currentPatternOf`、`navigableEntries`、`WorkspaceNavRow` 的链接与 `aria-*` 语义），骨架一律用上面五个原语 + 既有的 `SideNavRow`（行的折叠动画只有一处真源，不另造行组件）。
 
 迁移策略：新层先落地，由控件博物馆的整合预览页（`apps/ui-museum` 的 `ShellPreview`，用原型同口径假数据）在真浏览器按四工作区验收；主控台页面按 FR-507 逐个迁移，迁移期间新旧并存、未迁移页不受影响。
 
@@ -1259,7 +1261,9 @@ Bot 页面 → 创建压测会话 → 选择目标实例 + bot 数量
 packages/ui/                      # @jianmanager/ui 通用 UI/token/charts/helper 源码包（FR-273，FR-283 迁仓库根）
   src/styles/                     # 设计底座单一真源：theme-map / tokens / themes / motion + index 汇总（FR-502 阶段 1）
   src/components/layout/          # 内容页布局规范层：PageShell / PageHeader / ScopeBar / SummaryStrip / Toolbar / PlatformTabs / 网格原语（FR-502 阶段 3）
-  src/components/shell/           # 导航骨架外壳层：AppShell / TopNav / SideNav / ResourceTree / CommandPalette / ObjectPageHeader（FR-502 阶段 4）
+  src/components/nav/             # 导航原语层：TopNav / SideNav 及分段 / CommandPalette / ObjectPageHeader
+                                  # + 侧栏通用原语：SidebarShell / SidebarGroup / SidebarFooter /
+                                  #   SidebarRail / SidebarSection（FR-502 阶段 4）
   src/lib/                        # 设计系统自用 helper（12 个：brush / chart-hover / color-contrast /
                                   # combobox / focus-ring / interaction-overlay / monitor-metrics / stat-card /
                                   # theme / threshold / tone / utils）；业务 lib 不在此（ADR-103）
