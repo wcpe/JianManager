@@ -35,6 +35,46 @@ export const interactionTransition =
 export const shadowTransition =
   'transition-[box-shadow] duration-[var(--motion-duration-slow)] ease-ios'
 
+/**
+ * 卡片类表面的基础样式：圆角 + 描边 + 卡片底 + 柔和阴影。
+ *
+ * **为什么要有这个常量**：`Card`、`Panel`、`StatCard` 三个组件此前各自手写
+ * `rounded-lg border bg-card/95 shadow-soft`——三处取值巧合一致，但没有任何机制保证
+ * 它们今后仍然一致。改圆角要改三处、漏一处就静默漂移；这正是「整体样式不统一」的来源。
+ * 现在收敛为一处：三者都引用本常量，改一次全站跟随。
+ *
+ * 关于 `bg-card/95` 与 `backdrop-blur`：底色本身 95% 不透明，模糊只作用于透出的 5%，
+ * 视觉收益极小，代价是每个卡片成为一个独立合成层（实测禁用后侧栏开合过渡
+ * 51.6fps→58.8fps）。因此默认不带模糊，需要真毛玻璃的场景（下方确有内容滚动）
+ * 由调用方显式加回。
+ */
+export const cardSurface =
+  'rounded-xl border text-card-foreground shadow-soft'
+
+/**
+ * 卡片底色的强弱档位。
+ *
+ * 【为什么需要收敛】替换前全站有 `bg-card/30`、`/35`、`/40`、`/45`、`/50`、`/60`、`/70`、
+ * `/80`、`/90`、`/95`、`/96`、`/98` 共 **12 种**任意透明度。这些数字没有可分辨的语义——
+ * 没人能说清 `/45` 与 `/50` 该用哪个，实际上它们来自不同时期的不同人各自微调。
+ * 视觉上它们几乎不可区分（5% 的差在浅色底上肉眼难辨），却让「统一」无从谈起。
+ *
+ * 现在按**承载关系**分三档，每档有明确含义：
+ * - `solid`  — 页面级主容器（默认）。卡片独立成块，需要最实的底。
+ * - `subtle` — 嵌套在另一个容器**内部**的次级卡片。略透，让层次退后一层。
+ * - `faint`  — 列表行、内联块、树节点等**成排出现**的轻量容器。最透，避免一片死白。
+ *
+ * 需要更弱的存在感时不要再写新的透明度——先问「它属于哪一种承载关系」，
+ * 三档覆盖不了再加档，并在此处说明理由。
+ */
+export const cardSurfaceTone = {
+  solid: 'bg-card/95',
+  subtle: 'bg-card/70',
+  faint: 'bg-card/40',
+} as const
+
+export type CardSurfaceTone = keyof typeof cardSurfaceTone
+
 /** 中性悬停涂层：浅色主色底（accent）+ 对应前景色。 */
 export const hoverOverlay = 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50'
 
