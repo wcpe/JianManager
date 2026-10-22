@@ -9,7 +9,7 @@ import * as React from 'react'
 
 import { cn } from '../lib/utils'
 import { toneChipClass, type Tone } from '../lib/tone'
-import { shadowTransition } from '../lib/interaction-overlay'
+import { shadowTransition, cardSurface, cardSurfaceTone } from '../lib/interaction-overlay'
 
 /**
  * 分区面板（FR-061/FR-163）：大圆角 + 柔和阴影统一卡片原语，
@@ -59,7 +59,10 @@ export function Panel({
         // 58.8fps / p95 16.8ms，严重掉帧由 10 帧降到 2 帧。Panel 是其中 22 个的来源，
         // 而全仓 <Panel> 有 183 处调用，是单点收益最大的一处。
         // 需要真毛玻璃效果的场景（下方确有内容滚动）请显式传 className 加回。
-        'flex min-h-0 flex-col rounded-lg border bg-card/95 text-card-foreground shadow-soft',
+        // 基础表面（圆角/描边/底色/阴影）与 `Card`、`StatCard` 共用同一常量，
+        // 改一处三者一起跟随——见 lib/interaction-overlay 的 cardSurface 注释。
+        // 此前是各自手写的 `rounded-lg border bg-card/95 shadow-soft`，三处巧合一致但无保证。
+        `flex min-h-0 flex-col ${cardSurface} ${cardSurfaceTone.solid}`,
         hoverable &&
           // FR-176：hover 只换阴影不位移（`hover:shadow-lift`）。
           // FR-244：时长/缓动取 motion token（slow≈320ms），不写定值。
