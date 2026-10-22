@@ -445,19 +445,21 @@ function StatusFilterPills({
       {items.map((it) => {
         const on = active.has(it.key)
         return (
-          <button
+          <Button
             key={it.key}
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={() => onToggle(it.key)}
             aria-pressed={on}
             className={cn(
-              'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors',
+              'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-normal transition-colors',
               on ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent text-muted-foreground hover:bg-accent/60',
             )}
           >
             <span className={cn('size-1.5 rounded-full', it.className)} />
             {it.label}
-          </button>
+          </Button>
         )
       })}
     </div>

@@ -520,14 +520,17 @@ function EnvVarsEditor({
               aria-label={t('instances.dockerEnvValue')}
               className={cn(inputClass, 'mt-0 font-mono')}
             />
-            <button
+            {/* 纯图标删除：与左侧输入框同高，故保留 p-1.5 尺寸，用 invisible + auto */}
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => onChange(pairs.filter((_, idx) => idx !== i))}
               aria-label={t('common.delete')}
               className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-destructive"
             >
               <X className="size-4" />
-            </button>
+            </Button>
           </div>
         ))}
         <Button type="button" size="sm" variant="outline" onClick={() => onChange([...pairs, { id: nextEnvPairId(), key: '', value: '' }])}>

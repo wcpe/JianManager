@@ -211,22 +211,32 @@ export function InstanceRowView({
         <TableCell className="font-medium">
           <div className="flex items-center gap-1.5">
             {isProxy && (
-              <button
+              // 纯图标：展开该代理已注册的后端列表。
+              // 原样式无固定盒模型（宽度即图标本身），故 invisible + auto 保住紧凑占位；
+              // 用 icon-xs 会插入 24px 方块，撑宽「实例名」列的排版。
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
                 onClick={onToggleProxy}
                 aria-label={t('proxy.manageBackends')}
                 className="text-muted-foreground hover:text-foreground"
               >
                 {proxyExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-              </button>
+              </Button>
             )}
-            <button
+            {/* 实例名：表格单元格里的行内跳转，外观是文本链接，取 invisible + auto。
+                显式写 text-[13px]（= 全局正文基准）：Button 基础类带 text-sm(14px)，
+                不覆盖会让表格里的实例名比同列其它文字大一号。 */}
+            <Button
               type="button"
-              className="text-left text-primary hover:underline"
+              variant="invisible"
+              size="auto"
+              className="text-left text-[13px] text-primary hover:underline"
               onClick={() => onOpenInstance?.(inst.id)}
             >
               {inst.name}
-            </button>
+            </Button>
             {/* 就地导入徽章（FR-302）：工作目录在托管区外，删除实例不删原目录。 */}
             {inst.workDirInPlace && (
               <Badge variant="outline" className="shrink-0 border-amber-500/50 text-amber-600 dark:text-amber-400">

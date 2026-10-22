@@ -419,13 +419,20 @@ function AuditRow({
   const { label: actionLabel, showsRawKey } = resolveActionLabel(t, log.action)
   return (
     <div ref={rowRef} data-audit-row-id={log.id} className={cn('border-border/60', !isLast && 'border-b')}>
-      <button
+      {/*
+        展开/收起整行：语义是一次「切换详情」的按钮动作，但视觉上是一行表格数据，
+        因此走 invisible + auto（不自带任何外壳），样式全部由下方 className 决定。
+        `justify-start` 去掉 Button 基础类的居中：这一行是左对齐的多列排布。
+      */}
+      <Button
+        variant="invisible"
+        size="auto"
         type="button"
         onClick={onToggle}
         aria-expanded={open}
         disabled={!hasDetail}
         className={cn(
-          'flex w-full items-center gap-3 px-3 py-2 text-left text-xs transition-colors',
+          'flex w-full items-center justify-start gap-3 px-3 py-2 text-left text-xs transition-colors',
           hasDetail ? 'hover:bg-accent/50' : 'cursor-default',
         )}
       >
@@ -461,7 +468,7 @@ function AuditRow({
           </span>
         )}
         <span className="w-28 shrink-0 font-mono text-[11px] text-muted-foreground">{log.ip}</span>
-      </button>
+      </Button>
       {open && hasDetail && (
         <div className="bg-muted/30 px-3 pb-3 pl-10">
           {log.failed && log.error && (

@@ -243,11 +243,14 @@ export function BotLoadWizard({
         <ScrollableDialogBody className="space-y-4 py-1">
           <nav aria-label={t('botsLoad.wizardSteps')} className="flex flex-wrap gap-1">
             {WIZARD_STEPS.map((s, i) => (
-              <button
+              <Button
                 key={s}
                 type="button"
+                variant="outline"
+                size="xs"
                 className={cn(
-                  'rounded-md border px-2.5 py-1 text-xs',
+                  // px-2.5：保留原横向内距（xs 档默认 px-2，步骤名带序号会更挤）
+                  'px-2.5',
                   draft.step === s
                     ? 'border-primary bg-primary/10 font-semibold'
                     : 'text-muted-foreground hover:text-foreground',
@@ -256,7 +259,7 @@ export function BotLoadWizard({
                 onClick={() => go(s)}
               >
                 {i + 1}. {t(`botsLoad.step_${s}`)}
-              </button>
+              </Button>
             ))}
           </nav>
 

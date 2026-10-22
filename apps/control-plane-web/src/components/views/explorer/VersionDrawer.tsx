@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@jianmanager/ui/components/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
 import { UnifiedDiff } from '@/components/views/common/UnifiedDiff'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -112,29 +113,40 @@ export default function VersionDrawer({
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">#{v.id}</span>
                       <div className="flex gap-2 shrink-0">
-                        <button
+                        {/* 三处都是密集小字号文本动作，视觉必须保持纯文字：
+                            取 invisible + auto，选中态的字重/颜色仍由 className 表达。
+                            三处都显式写 text-xs（= 原 <li> 的继承值）：Button 基础类带 text-sm，
+                            不覆盖会把 12px 的版本动作放大到 14px。 */}
+                        <Button
                           type="button"
-                          className={diffFrom === v.id ? 'font-semibold text-primary' : 'text-primary hover:underline'}
+                          variant="invisible"
+                          size="auto"
+                          className={diffFrom === v.id ? 'text-xs font-semibold text-primary' : 'text-xs text-primary hover:underline'}
                           onClick={() => pickFrom(v.id)}
                         >
                           {t('fileVersions.diffFrom')}
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
-                          className={diffTo === v.id ? 'font-semibold text-primary' : 'text-primary hover:underline'}
+                          variant="invisible"
+                          size="auto"
+                          className={diffTo === v.id ? 'text-xs font-semibold text-primary' : 'text-xs text-primary hover:underline'}
                           onClick={() => pickTo(v.id)}
                         >
                           {t('fileVersions.diffTo')}
-                        </button>
-                        {/* 回滚按钮禁用时屏蔽指针事件，否则 hover:underline 仍会触发下划线，看着像能点。 */}
-                        <button
+                        </Button>
+                        {/* 回滚按钮禁用时屏蔽指针事件，否则 hover:underline 仍会触发下划线，看着像能点。
+                            该屏蔽类现在与 Button 自带的 disabledState 同义，保留仅为不改变原样式来源。 */}
+                        <Button
                           type="button"
-                          className="text-amber-600 hover:underline disabled:pointer-events-none disabled:opacity-50"
+                          variant="invisible"
+                          size="auto"
+                          className="text-xs text-amber-600 hover:underline disabled:pointer-events-none disabled:opacity-50"
                           disabled={rollbackPending}
                           onClick={() => setRollbackTarget(v.id)}
                         >
                           {t('fileVersions.rollback')}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                     <div className="mt-0.5 flex justify-between gap-2 text-muted-foreground">

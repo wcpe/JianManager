@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { ListChecks } from 'lucide-react'
 
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
 import { Progress } from '@jianmanager/ui/components/progress'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@jianmanager/ui/components/tooltip'
@@ -53,17 +54,19 @@ export function TasksMenu({ tasks: input, onOpenTask }: TasksMenuProps) {
   return (
     <DropdownMenu>
       {/* 纯文字提示的图标入口 → Tooltip（提示文案随活跃任务数变化，仍是纯文本）。
-          注意：Tooltip 与 DropdownMenu 各需一个 asChild 触发器合并到同一个 <button> 上，
+          注意：Tooltip 与 DropdownMenu 各需一个 asChild 触发器合并到同一个按钮元素上，
           嵌套 asChild 会让 ref 被内层 Slot 独占——因此不把两者叠在一起，
-          而是让 DropdownMenuTrigger 包 button、Tooltip 单独包在触发器外层并复用同一按钮元素。 */}
+          而是让 DropdownMenuTrigger 包 Button、Tooltip 单独包在触发器外层并复用同一按钮元素。 */}
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               aria-label={t('header.tasks')}
               className={cn(
-                'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-accent/60',
+                'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-normal transition-colors hover:bg-accent/60',
                 active.length > 0 ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
               )}
             >
@@ -76,7 +79,7 @@ export function TasksMenu({ tasks: input, onOpenTask }: TasksMenuProps) {
               ) : (
                 <ListChecks className="size-4" />
               )}
-            </button>
+            </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent>

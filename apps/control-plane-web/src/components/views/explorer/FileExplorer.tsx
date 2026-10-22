@@ -51,6 +51,7 @@ import {
   scrollableDialogContentClass,
   ScrollableDialogBody,
 } from '@jianmanager/ui/components/scrollable-dialog'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
@@ -902,63 +903,75 @@ function ContextMenu({
       data-testid="fe-context-menu"
       onClick={(e) => e.stopPropagation()}
     >
-      <button
+      <Button
         type="button"
-        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+        variant="invisible"
+        size="auto"
+        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm font-normal hover:bg-accent"
         onClick={onNewFolder}
       >
         <FolderPlus className="size-4" />
         {t('fileExplorer.newFolder', '新建文件夹')}
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+        variant="invisible"
+        size="auto"
+        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm font-normal hover:bg-accent"
         data-testid="fe-menu-multi-dir"
         onClick={onNewMultiDir}
       >
         <FolderTree className="size-4" />
         {t('fileExplorer.newMultiDir', '新建多级目录')}
-      </button>
+      </Button>
       {onUploadFiles && (
-        <button
+        <Button
           type="button"
-          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+          variant="invisible"
+          size="auto"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm font-normal hover:bg-accent"
           data-testid="fe-menu-upload-files"
           onClick={onUploadFiles}
         >
           <Upload className="size-4" />
           {t('fileExplorer.uploadFilesHere', '上传文件到此')}
-        </button>
+        </Button>
       )}
       {onUploadFolder && (
-        <button
+        <Button
           type="button"
-          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+          variant="invisible"
+          size="auto"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm font-normal hover:bg-accent"
           data-testid="fe-menu-upload-folder"
           onClick={onUploadFolder}
         >
           <FolderUp className="size-4" />
           {t('fileExplorer.uploadFolderHere', '上传文件夹到此')}
-        </button>
+        </Button>
       )}
       {!isRoot && (
         <>
-          <button
+          <Button
             type="button"
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+            variant="invisible"
+            size="auto"
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm font-normal hover:bg-accent"
             onClick={onRename}
           >
             <Pencil className="size-4" />
             {t('fileExplorer.rename', '重命名')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-destructive hover:bg-destructive/10"
+            variant="invisible"
+            size="auto"
+            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm font-normal text-destructive hover:bg-destructive/10"
             onClick={onDelete}
           >
             <Trash2 className="size-4" />
             {t('common.delete', '删除')}
-          </button>
+          </Button>
         </>
       )}
     </ContextMenuSurface>
@@ -1006,10 +1019,11 @@ function MultiDirDialog({
           </DialogDescription>
         </DialogHeader>
         <ScrollableDialogBody className="space-y-3">
-          <textarea
+          {/* 组件库 Textarea 自带边框/圆角/焦点环，这里只保留等宽字体、高度与缩放相关样式 */}
+          <Textarea
             autoFocus
             rows={4}
-            className="w-full resize-y rounded-md border bg-background p-2 font-mono text-xs"
+            className="resize-y font-mono text-xs"
             placeholder={t('fileExplorer.multiDirPlaceholder', 'mods/extra\nconfig/client/hud')}
             value={input}
             data-testid="fe-multi-dir-input"

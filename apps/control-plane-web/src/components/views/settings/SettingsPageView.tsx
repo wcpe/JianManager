@@ -231,12 +231,15 @@ export function SettingsPageView({
               const Icon = CATEGORY_ICON[c]
               const dirtyHere = c === category && currentDirty
               return (
-                <button
+                // 分类导航项：整行可点、选中态靠淡染底色，视觉自绘，故取 invisible + auto。
+                <Button
                   key={c}
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   onClick={() => requestSwitch(c)}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
+                    'flex w-full items-center justify-start gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-normal transition-colors',
                     category === c
                       ? 'bg-primary/10 font-medium text-primary'
                       : 'text-foreground/80 hover:bg-accent/60',
@@ -251,7 +254,7 @@ export function SettingsPageView({
                       title={t('settings.unsavedDot')}
                     />
                   )}
-                </button>
+                </Button>
               )
             })}
           </nav>

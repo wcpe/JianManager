@@ -20,8 +20,8 @@
  import { Check, Pin, Search, SlidersHorizontal } from 'lucide-react'
 
  import { cn } from '@jianmanager/ui'
-import { focusRing } from '@jianmanager/ui/lib/focus-ring'
- import { instanceStatusLevel } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
+import { instanceStatusLevel } from '@jianmanager/ui'
  import { Badge } from '@jianmanager/ui/components/badge'
 import {
   DropdownMenu,
@@ -355,27 +355,24 @@ export function SidebarResourcePanel({
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               aria-label={t('sidebarResource.filterAndGroup')}
               title={t('sidebarResource.filterAndGroup')}
               className={cn(
-                'flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-                /*
-                  【必须显式关掉原生 outline】这是原生 `<button>`（不是库里的 Button），菜单关闭后
-                  焦点回到触发按钮，浏览器便画出默认的 `outline: rgb(16,16,16) auto 1px`——
-                  在浅色侧栏上就是用户看到的那圈「黑边」。键盘可达性改由库统一的细焦点环承担
-                  （focusRing：2px 主色 + 40% 底），既符合 FR-176 的收敛宽度，也不再出现黑框。
-                */
-                'focus-visible:outline-none',
-                focusRing,
+                'flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-1.5 text-[11px] font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                // 【焦点环改由 Button 承担】此前这里手写 `focus-visible:outline-none` + focusRing
+                // 来压掉 Chrome 默认的黑框；换成库里的 Button 后，它自带 outline-none 与
+                // 同源（FR-176，2px 主色 + 40% 底）的焦点环，手写那两段已多余。
                 (statusFilter.size > 0 || mode !== DEFAULT_GROUP_MODE || sort !== DEFAULT_SORT_MODE) && 'border-primary/50 text-primary',
               )}
             >
               <SlidersHorizontal className="size-3.5 shrink-0" />
               {/* 当前分组方式与筛选状态都在这一个按钮上：侧栏横向空间紧张，不再单独占一个下拉。 */}
               <span className="max-w-[64px] truncate">{t(GROUP_MODE_LABEL_KEY[mode])}</span>
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
             {/*
@@ -526,7 +523,7 @@ function GroupTreeBranch({ label, depth, count }: { label: string; depth: number
   return (
     <div
       data-slot="sidebar-resource-group-branch"
-      className="flex h-[26px] items-center gap-1 rounded-[5px] text-[11px] font-medium text-foreground/80"
+      className="flex h-[26px] items-center gap-1 rounded-[var(--radius)] text-[11px] font-medium text-foreground/80"
       style={{ paddingLeft: `${6 + depth * 14}px` }}
     >
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -540,7 +537,7 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <div
       data-slot="sidebar-resource-group-head"
-      className="flex h-[26px] items-center gap-1 rounded-[5px] px-[6px] text-[10px] tracking-[.5px] text-muted-foreground/70"
+      className="flex h-[26px] items-center gap-1 rounded-[var(--radius)] px-[6px] text-[10px] tracking-[.5px] text-muted-foreground/70"
     >
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">{count}</span>
@@ -639,31 +636,36 @@ function PinnedZone({
           key={`pin:${rowId(row)}`}
           data-testid="sidebar-pinned-row"
           className={cn(
-            'group/pin flex h-[28px] items-center gap-1 rounded-[5px] pr-[3px] transition-colors hover:bg-muted',
+            'group/pin flex h-[28px] items-center gap-1 rounded-[var(--radius)] pr-[3px] transition-colors hover:bg-muted',
             draggingId === rowId(row) && 'opacity-50',
           )}
         >
-          <button
+          {/* 行主体是「状态点 + 名称 + 人数」的整行可点区，按钮外壳由本行自身布局决定 */}
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={() => onOpen(toStorable(row))}
             title={`${rowName(row)} · ${nodeLabelOf.get(rowNodeId(row)) ?? `#${rowNodeId(row)}`}`}
-            className="flex min-w-0 flex-1 items-center gap-[6px] rounded-[5px] px-[6px] text-left focus-visible:outline-none"
+            className="flex min-w-0 flex-1 items-center gap-[6px] rounded-[var(--radius)] px-[6px] text-left"
           >
             <InstanceStatusDot status={rowStatus(row)} />
             <span className="min-w-0 flex-1 truncate text-[12px] font-[570] text-foreground/90">{rowName(row)}</span>
             <span className="shrink-0 text-right font-mono text-[10px] tabular-nums leading-[15px] text-muted-foreground/60">
               {row.kind === 'instance' ? rowPlayerText(metrics.get(row.inst.uuid)) : ''}
             </span>
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={() => onUnpin(rowId(row))}
             aria-label={`${t('sidebarResource.unpin')}：${rowName(row)}`}
             title={t('sidebarResource.unpin')}
-            className="flex size-[20px] shrink-0 items-center justify-center rounded-[4px] text-primary opacity-0 transition-opacity hover:bg-muted-foreground/10 group-hover/pin:opacity-100 focus-visible:opacity-100"
+            className="flex size-[20px] shrink-0 items-center justify-center rounded-[var(--radius-mini)] text-primary opacity-0 transition-opacity hover:bg-muted-foreground/10 group-hover/pin:opacity-100 focus-visible:opacity-100"
           >
             <Pin className="size-3 fill-current" />
-          </button>
+          </Button>
         </div>
       ))}
     </div>
@@ -720,15 +722,18 @@ function ServerRow({
           : undefined
       }
       onDragEnd={draggable ? () => onDragStateChange?.(null) : undefined}
-      className="group/row flex h-[32px] items-center gap-1 rounded-[5px] pr-[3px] transition-colors hover:bg-muted"
+      className="group/row flex h-[32px] items-center gap-1 rounded-[var(--radius)] pr-[3px] transition-colors hover:bg-muted"
     >
       <HoverCard openDelay={300} closeDelay={80}>
         <HoverCardTrigger asChild>
-          <button
+          {/* 整行可点（两行信息 + 人数），视觉全由 className 决定；悬停预览卡的触发器也复用本按钮 */}
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={onOpen}
             title={`${name} · ${nodeLabel}`}
-            className="flex min-w-0 flex-1 items-center gap-[6px] rounded-[5px] px-[6px] py-[2px] text-left focus-visible:outline-none"
+            className="flex min-w-0 flex-1 items-center gap-[6px] rounded-[var(--radius)] px-[6px] py-[2px] text-left"
             style={indent > 0 ? { paddingLeft: `${6 + indent * 14}px` } : undefined}
           >
             <InstanceStatusDot status={status} />
@@ -749,7 +754,7 @@ function ServerRow({
               */}
               <span className="flex h-[12px] items-center gap-1 overflow-hidden">
                 {inst && (
-                  <span className="shrink-0 rounded-[3px] border border-border/70 bg-muted/60 px-[3px] text-[9px] leading-[11px] text-muted-foreground">
+                  <span className="shrink-0 rounded-[var(--radius-tiny)] border border-border/70 bg-muted/60 px-[3px] text-[9px] leading-[11px] text-muted-foreground">
                     {t(INSTANCE_KIND_LABEL_KEY[instanceKindOf(inst)])}
                   </span>
                 )}
@@ -772,25 +777,27 @@ function ServerRow({
             <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/60">
               {inst ? rowPlayerText(metrics.get(inst.uuid)) : ''}
             </span>
-          </button>
+          </Button>
         </HoverCardTrigger>
         <HoverCardContent>
           <ServerPeekCard row={row} nodeLabel={nodeLabel} metrics={metrics} />
         </HoverCardContent>
       </HoverCard>
-      <button
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={onTogglePin}
         aria-label={`${t(pinned ? 'sidebarResource.unpin' : 'sidebarResource.pin')}：${name}`}
         title={t(pinned ? 'sidebarResource.unpin' : 'sidebarResource.pin')}
         data-testid="sidebar-resource-pin"
         className={cn(
-          'flex size-[20px] shrink-0 items-center justify-center rounded-[4px] text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted-foreground/10 hover:text-foreground group-hover/row:opacity-100 focus-visible:opacity-100',
+          'flex size-[20px] shrink-0 items-center justify-center rounded-[var(--radius-mini)] text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted-foreground/10 hover:text-foreground group-hover/row:opacity-100 focus-visible:opacity-100',
           pinned && 'opacity-100 text-primary',
         )}
       >
         <Pin className={cn('size-3.5', pinned && 'fill-current')} />
-      </button>
+      </Button>
     </div>
   )
 }
@@ -897,7 +904,7 @@ function ServerPeekCard({
               <span
                 key={i}
                 className={cn(
-                  'flex-1 rounded-[1px]',
+                  'flex-1 rounded-[var(--radius-micro)]',
                   b === true ? 'bg-status-success' : b === false ? 'bg-status-danger' : 'bg-muted-foreground/25',
                 )}
               />

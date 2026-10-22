@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Star, ChevronDown, FileText, Search } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@jianmanager/ui/components/collapsible'
 import type { ConfigDiscoverResult } from '@/lib/config-explorer/config-contracts'
 import { groupDiscovered, baseNameOf } from '@/lib/config-explorer/config-discover'
@@ -72,22 +73,28 @@ export function FavoritesBarView({
                   className="group flex items-center gap-1 px-2 py-0.5 hover:bg-accent/40"
                   title={p}
                 >
-                  <button
+                  <Button
                     type="button"
-                    className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                    variant="invisible"
+                    size="auto"
+                    // 文件名整行可点：无按钮外壳
+                    className="flex min-w-0 flex-1 items-center justify-start gap-1 text-left"
                     onClick={() => onOpen(p)}
                   >
                     <FileText className="size-3.5 shrink-0 text-muted-foreground" />
                     <span className="truncate">{baseNameOf(p)}</span>
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="invisible"
+                    size="auto"
+                    // 收藏星标：纯图标控件，颜色由 className 决定
                     className="shrink-0 text-amber-500 hover:text-amber-600"
                     title={t('configExplorer.unfavorite')}
                     onClick={() => onToggleFavorite(p)}
                   >
                     <Star className="size-3.5 fill-current" />
-                  </button>
+                  </Button>
                 </div>
               ))
             )}
@@ -132,9 +139,12 @@ export function FavoritesBarView({
                           className="group flex items-center gap-1 px-2 py-0.5 hover:bg-accent/40"
                           title={file.path}
                         >
-                          <button
+                          <Button
                             type="button"
-                            className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                            variant="invisible"
+                            size="auto"
+                            // 文件名整行可点：无按钮外壳
+                            className="flex min-w-0 flex-1 items-center justify-start gap-1 text-left"
                             onClick={() => onOpen(file.path)}
                           >
                             <FileText
@@ -144,9 +154,12 @@ export function FavoritesBarView({
                               )}
                             />
                             <span className="truncate">{baseNameOf(file.path)}</span>
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
+                            variant="invisible"
+                            size="auto"
+                            // 收藏星标：纯图标控件；未收藏态默认透明、行悬停才浮现
                             className={cn(
                               'shrink-0 hover:text-amber-600',
                               fav ? 'text-amber-500' : 'text-muted-foreground/40 opacity-0 group-hover:opacity-100',
@@ -155,7 +168,7 @@ export function FavoritesBarView({
                             onClick={() => onToggleFavorite(file.path)}
                           >
                             <Star className={cn('size-3.5', fav && 'fill-current')} />
-                          </button>
+                          </Button>
                         </div>
                       )
                     })}

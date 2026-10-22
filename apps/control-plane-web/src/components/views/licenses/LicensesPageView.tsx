@@ -352,8 +352,12 @@ function DependencyTable({
                           {/* 展开开关是**真按钮**：此前整行靠 `<tr onClick>`，而 `<tr>` 不可聚焦、
                               也没有 role/键盘处理，键盘与读屏用户完全无法展开。
                               按钮带 aria-expanded 表达开合态；点击不再冒泡到行，避免双触发。 */}
-                          <button
+                          {/* 纯图标开关 → ghost + icon-xs：悬停底色、焦点环与按压反馈由
+                              Button 统一提供；尺寸取 size-5 与行高对齐（icon-xs 的 24px 会让 36px 行盒顶上多出空白）。 */}
+                          <Button
                             type="button"
+                            variant="ghost"
+                            size="icon-xs"
                             aria-expanded={isOpen}
                             aria-label={d.name}
                             data-testid="license-toggle"
@@ -361,10 +365,10 @@ function DependencyTable({
                               e.stopPropagation()
                               onToggle(key)
                             }}
-                            className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                            className="size-5 text-muted-foreground"
                           >
                             {isOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                          </button>
+                          </Button>
                         </TableCell>
                         <TableCell className="font-medium">
                           <span className="flex items-center gap-2">

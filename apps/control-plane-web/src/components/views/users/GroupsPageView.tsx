@@ -218,14 +218,17 @@ export function GroupsPageView({
                     // 「+N」是纯符号，各语言一致（无硬编码文案）；可访问名借用既有键
                     // 「管理「{{name}}」成员」——读屏听到的是「+3，管理「运维组」成员」这种可操作提示。
                     // 点击直接开该组的成员面板，省得用户再去找「成员」按钮。
-                    <button
+                    // 视觉是自绘的胶囊药丸（描边 + 弱色），故取 invisible + auto 保留原样式。
+                    <Button
                       type="button"
+                      variant="invisible"
+                      size="auto"
                       onClick={() => onOpenPanel(g.id, 'members')}
                       aria-label={t('groups.manageMembers', { name: g.name })}
-                      className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                      className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-normal text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                     >
                       +{g.members.length - MEMBER_PILL_LIMIT}
-                    </button>
+                    </Button>
                   )}
                 </div>
               )}

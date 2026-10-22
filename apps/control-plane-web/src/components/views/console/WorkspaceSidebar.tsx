@@ -4,6 +4,7 @@ import { Check, Languages, PanelLeftClose, PanelLeftOpen, Scale } from 'lucide-r
 
 import type { NodeInfo } from '@/lib/nodes/node-types'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -391,8 +392,10 @@ function SidebarPreferences({
         {/* 「更多」与折叠开关靠右；折叠态只剩折叠开关（唯一出口，必须常驻）。 */}
         <div className={cn('ms-auto flex items-center gap-1', collapsed && 'ms-0')}>
           {!collapsed && moreMenu}
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={onToggleSidebar}
             /* 标签描述「将发生的动作」而非当前态：展开时=收起、折叠时=展开。
                复用 `logoToggleLabelKey` 而不是在这里写三元——那条规则原先服务顶栏 logo，
@@ -403,7 +406,7 @@ function SidebarPreferences({
             className="flex size-[22px] shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           >
             {collapsed ? <PanelLeftOpen className="size-[15px]" /> : <PanelLeftClose className="size-[15px]" />}
-          </button>
+          </Button>
         </div>
       </SidebarFooter>
 
@@ -452,8 +455,10 @@ function LanguageButton({ language }: { language: { current: string; onChange: (
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           aria-label={t('settings.language')}
           title={t('settings.language')}
           data-testid="sidebar-language"
@@ -461,7 +466,7 @@ function LanguageButton({ language }: { language: { current: string; onChange: (
         >
           <Languages className="size-4" />
           <span className="text-[9px] font-medium uppercase leading-none">{current}</span>
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="w-28">
         {(['zh', 'en'] as const).map((lng) => (

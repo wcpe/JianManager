@@ -6,6 +6,7 @@ import { Copy, FileWarning } from 'lucide-react'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { cn } from '@jianmanager/ui'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@jianmanager/ui/components/accordion'
+import { Button } from '@jianmanager/ui/components/button'
 import type { CrashSnapshot, CrashTrend } from '@/lib/instances/crash'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
@@ -261,14 +262,19 @@ function CrashSnapshotItem({
         {snapshot.tailOutput ? (
           <>
             <div className="flex justify-end">
-              <button
+              {/* 贴边的小字动作，自带 hover:bg-muted 的就近底色，故 invisible + auto 保原样。
+                  显式写 text-[11px]：Button 基础类带 text-sm，而 text-meta 是自定义字号 token，
+                  会被 tailwind-merge 当作与 text-muted-foreground 冲突而吞掉，必须落到实值上。 */}
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
                 onClick={() => void copySnapshot()}
-                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 <Copy className="size-3" />
                 {t('serverConsole.crashCopy')}
-              </button>
+              </Button>
             </div>
             <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-meta leading-relaxed text-foreground">
               {snapshot.tailOutput}

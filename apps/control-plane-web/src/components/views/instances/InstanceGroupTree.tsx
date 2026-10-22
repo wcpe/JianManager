@@ -383,51 +383,66 @@ function GroupRow({
         }
       }}
     >
-      <button
+      {/* 折叠箭头：纯图标，无子节点的组保留原 invisible 占位以维持对齐。
+          原样式只有 px-0.5（约 18px 宽），若用 icon-xs 会撑到 24px 顶开树行缩进，
+          故取 invisible + auto 让 px-0.5 继续决定宽度。 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={onToggle}
         aria-label={t('instanceGroups.toggle')}
         className={cn('shrink-0 px-0.5 text-muted-foreground hover:text-foreground', !row.hasChildren && 'invisible')}
       >
         {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-      </button>
-      <button
+      </Button>
+      {/* 组名：占满剩余宽度、外观是树节点文字，取 invisible + auto */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={onSelect}
         className={cn('flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left text-sm', selected && 'font-medium')}
       >
         <span className="min-w-0 flex-1 truncate">{row.name}</span>
         <span className="shrink-0 tabular-nums text-xs opacity-60">{row.instanceCount}</span>
-      </button>
-      {/* hover 操作：建子组 / 改名 / 删 */}
+      </Button>
+      {/* hover 操作：建子组 / 改名 / 删。原样式宽度只有 px-1（约 20px），
+          用 icon-xs 会撑到 24px 推开树行，故一律 invisible + auto 保住原占位。 */}
       <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={onCreateChild}
           aria-label={t('instanceGroups.newChild')}
           title={t('instanceGroups.newChild')}
           className="px-1 text-muted-foreground hover:text-primary"
         >
           <Plus className="size-3.5" />
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={onRename}
           aria-label={t('instanceGroups.rename')}
           title={t('instanceGroups.rename')}
           className="px-1 text-muted-foreground hover:text-foreground"
         >
           <Pencil className="size-3.5" />
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={onDelete}
           aria-label={t('common.delete')}
           title={t('common.delete')}
           className="px-1 text-muted-foreground hover:text-destructive"
         >
           <Trash2 className="size-3.5" />
-        </button>
+        </Button>
       </div>
     </div>
   )

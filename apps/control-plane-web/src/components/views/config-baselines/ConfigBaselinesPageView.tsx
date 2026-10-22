@@ -29,6 +29,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash } from '@/lib/config-explorer/config-baseline'
 import type { ScopeKind } from '@/lib/config-explorer/config-baseline'
@@ -502,9 +503,10 @@ export function BaselineEditorDialogView({
 
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('baselines.content')}</label>
-            <textarea
+            {/* 组件库 Textarea 自带边框/圆角/焦点环，这里只保留固定高度与等宽字体 */}
+            <Textarea
               aria-label={t('baselines.content')}
-              className="h-40 w-full rounded-md border bg-background px-2 py-1.5 font-mono text-xs"
+              className="h-40 font-mono text-xs"
               value={content}
               onChange={(e) => setContent(e.target.value)}
             />

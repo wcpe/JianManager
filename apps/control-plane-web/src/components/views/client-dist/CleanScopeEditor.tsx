@@ -16,6 +16,7 @@ import { buildFileTreeWithDirs, collectAllDirPaths, buildCleanMap, computeDirVis
 import type { CleanMark, DirVisualState, ManifestFileLike, TreeDir } from '@/lib/client-dist/client-publish-wizard'
 import { ContextMenuSurface, cn } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────
@@ -306,9 +307,12 @@ export function CleanScopeEditor({
               placeholder={t('clientVersions.customDirPlaceholder', '输入目录路径如 mods 或 config/foo，回车添加')}
               data-testid="custom-dir-input"
             />
-            <button
+            <Button
               type="button"
-              className="shrink-0 rounded border px-2 py-1 text-xs hover:bg-accent"
+              variant="outline"
+              size="xs"
+              // px-2 / py-1：保留原内距（xs 档默认 px-2 但无纵向内距）
+              className="shrink-0 px-2 py-1"
               onClick={() => {
                 const v = customDirInput.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
                 if (!v || extraDirs.includes(v)) { setCustomDirInput(''); return }
@@ -318,7 +322,7 @@ export function CleanScopeEditor({
               data-testid="custom-dir-add-btn"
             >
               {t('clientVersions.customDirAdd', '添加')}
-            </button>
+            </Button>
           </div>
           {extraDirs.length > 0 && (
             <div className="flex flex-wrap gap-1">
@@ -328,15 +332,19 @@ export function CleanScopeEditor({
                   className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono"
                 >
                   {d}
-                  <button
+                  <Button
                     type="button"
+                    variant="invisible"
+                    size="auto"
+                    // 标签内的小 × ：无外壳纯图标控件，颜色由下方 className 决定
                     className="text-muted-foreground hover:text-destructive"
                     onClick={() => onExtraDirsChange(extraDirs.filter((x) => x !== d))}
+                    aria-label={t('clientVersions.cleanExcludeTagRemove', '移除')}
                     data-testid="custom-dir-remove"
                     data-dir={d}
                   >
                     <X className="size-3" />
-                  </button>
+                  </Button>
                 </span>
               ))}
             </div>
@@ -384,33 +392,40 @@ function ScopeContextMenu({
       data-testid="clean-scope-context-menu"
       onClick={(e) => e.stopPropagation()}
     >
-      <button
+      <Button
         type="button"
-        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+        variant="invisible"
+        size="auto"
+        // 右键菜单项：整行可点，视觉由 ContextMenuSurface 与下方 className 决定
+        className="flex w-full items-center justify-start gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
         onClick={() => onMark('clean')}
         data-testid="clean-scope-mark-clean"
       >
         <Eraser className="size-4 text-red-500" />
         {t('clientVersions.cleanScopeMarkClean', '标记为清理')}
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+        variant="invisible"
+        size="auto"
+        className="flex w-full items-center justify-start gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
         onClick={() => onMark('exclude')}
         data-testid="clean-scope-mark-exclude"
       >
         <ShieldCheck className="size-4 text-green-500" />
         {t('clientVersions.cleanScopeMarkExclude', '标记为排除')}
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
-        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-accent"
+        variant="invisible"
+        size="auto"
+        className="flex w-full items-center justify-start gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-accent"
         onClick={() => onMark('none')}
         data-testid="clean-scope-unmark"
       >
         <Ban className="size-4" />
         {t('clientVersions.cleanScopeUnmark', '取消标记')}
-      </button>
+      </Button>
     </ContextMenuSurface>
   )
 }
@@ -458,8 +473,11 @@ function DirScopeRow({ dir, depth }: { dir: TreeDir; depth: number }) {
         {/* 左侧色条 */}
         <span className={cn('absolute left-0 top-0 h-full w-1 rounded-l', STATE_BAR[state])} />
         {/* 折叠箭头 */}
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
+          // 折叠箭头：纯图标控件，无外壳；尺寸由 aria-label 之外的原 className 决定
           className="shrink-0"
           onClick={(e) => {
             e.stopPropagation()
@@ -470,7 +488,7 @@ function DirScopeRow({ dir, depth }: { dir: TreeDir; depth: number }) {
           data-dir-path={dir.path}
         >
           <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', !collapsed && 'rotate-90')} />
-        </button>
+        </Button>
         {collapsed ? (
           <Folder className="size-4 shrink-0 text-amber-500" />
         ) : (
@@ -557,8 +575,11 @@ export function CleanExcludeInput({ value, onChange, placeholder, disabled }: Cl
           >
             {tag}
             {!disabled && (
-              <button
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
+                // 标签内的小 × ：纯图标控件，无外壳
                 className="text-muted-foreground hover:text-destructive"
                 onClick={() => onChange(value.filter((x) => x !== tag))}
                 aria-label={t('clientVersions.cleanExcludeTagRemove', '移除')}
@@ -566,7 +587,7 @@ export function CleanExcludeInput({ value, onChange, placeholder, disabled }: Cl
                 data-tag={tag}
               >
                 <X className="size-3" />
-              </button>
+              </Button>
             )}
           </span>
         ))}

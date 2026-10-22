@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 
 /**
  * 统一通知条目（站内信 / 告警混合；字段取渲染与快捷跳转所需）。
@@ -61,8 +62,12 @@ export function NotificationBell({ unread, items, onOpenItem, onViewAll }: Notif
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        {/* 页眉图标入口：28px（p-1.5 + 16px 图标）是页眉图标位的既定尺寸，
+            用 ghost 的 size-8 会整体放大 4px 并把右上角未读徽标顶偏，故取 invisible+auto 保留原内边距 */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           aria-label={t('header.notifications')}
           className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
@@ -72,7 +77,7 @@ export function NotificationBell({ unread, items, onOpenItem, onViewAll }: Notif
               {unread > 99 ? '99+' : unread}
             </span>
           )}
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
         <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium">
@@ -103,7 +108,13 @@ function NotificationPreviewRow({ item, onOpen }: { item: NotificationFeedEntry;
   const { t } = useTranslation()
   const sourceLabel = item.source === 'alert' ? t('notificationCenter.badgeAlert') : t('notificationCenter.badgeMessage')
   return (
-    <button type="button" onClick={onOpen} className="flex w-full items-start gap-2 px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent/60">
+    <Button
+      type="button"
+      variant="invisible"
+      size="auto"
+      onClick={onOpen}
+      className="flex w-full items-start gap-2 px-2 py-1.5 text-left text-xs font-normal transition-colors hover:bg-accent/60"
+    >
       <span className={cn('mt-1 size-1.5 shrink-0 rounded-full', feedLevelDotClass(item.level))} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
@@ -123,6 +134,6 @@ function NotificationPreviewRow({ item, onOpen }: { item: NotificationFeedEntry;
         <p className="text-[11px] text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</p>
       </div>
       {!item.read && <span className="mt-1 size-1.5 shrink-0 rounded-full bg-primary" />}
-    </button>
+    </Button>
   )
 }

@@ -5,6 +5,7 @@ import { Box, CornerDownLeft, Network, Search, Server, Terminal } from 'lucide-r
 import { cn } from '@jianmanager/ui'
 import { instanceStatusLevel } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 import { Kbd } from '@jianmanager/ui/components/kbd'
 import { searchPalette } from '@/lib/console/command-palette'
 import type { PaletteEntry, PaletteSources } from '@/lib/console/command-palette'
@@ -170,9 +171,13 @@ export default function CommandPalette({
                 ? { onMouseEnter: () => onPrefetchRoute(target), onFocus: () => onPrefetchRoute(target) }
                 : {}
               return (
-                <button
+                // 结果行：整行可点、无按钮外观（键盘导航由上方输入框统一接管），故 invisible + auto。
+                // data-palette-row 是滚动定位锚点，须随 props 透传到真实 button 上。
+                <Button
                   key={entry.key}
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   data-palette-row={i}
                   {...intentProps}
                   onMouseMove={() => setSelected(i)}
@@ -199,7 +204,7 @@ export default function CommandPalette({
                     {t(`palette.kind.${entry.kind}`)}
                   </span>
                   {active && <CornerDownLeft className="size-3.5 shrink-0 text-muted-foreground" />}
-                </button>
+                </Button>
               )
             })
           )}

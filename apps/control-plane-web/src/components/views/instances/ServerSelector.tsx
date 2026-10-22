@@ -6,6 +6,7 @@ import { Search, Server, Star, X } from 'lucide-react'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { cn, useFocusTrap } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 import type { HoverPrefetcher, StoredInstance } from '@/lib/console/server-selection'
 
 /** 选择器行所需的实例最小信息（外壳可传结构兼容的更宽类型）。 */
@@ -161,9 +162,17 @@ export default function ServerSelector({
                 <h2 className="truncate text-sm font-semibold">{t('serverSelector.title')}</h2>
                 <p className="truncate text-xs text-muted-foreground">{t('serverSelector.subtitle', { count: totalCount })}</p>
               </div>
-              <button type="button" onClick={() => onOpenChange(false)} aria-label={t('common.close')} className="rounded p-1.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground">
+              {/* 纯图标关闭：需与标题两行同高，故保留 p-1.5 原样，用 invisible + auto */}
+              <Button
+                type="button"
+                variant="invisible"
+                size="auto"
+                onClick={() => onOpenChange(false)}
+                aria-label={t('common.close')}
+                className="rounded p-1.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+              >
                 <X className="size-4" />
-              </button>
+              </Button>
             </div>
 
             <div className="space-y-2 border-b p-3">
@@ -181,9 +190,12 @@ export default function ServerSelector({
               </label>
               <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('grouping.groupBy')}>
                 {(['node', 'status'] as const).map((dim) => (
-                  <button
+                  // 分组维度切换：无边框的轻量开关，选中态靠底色的 font-medium 表达，取 invisible + auto
+                  <Button
                     key={dim}
                     type="button"
+                    variant="invisible"
+                    size="auto"
                     onClick={() => setGroupBy(dim)}
                     className={cn(
                       'rounded-md px-2 py-1 text-xs transition-colors',
@@ -191,7 +203,7 @@ export default function ServerSelector({
                     )}
                   >
                     {t(`serverSelector.group_${dim}`)}
-                  </button>
+                  </Button>
                 ))}
                 <span className="ml-auto text-xs text-muted-foreground">{t('serverSelector.loaded', { count: items.length })}</span>
               </div>
@@ -305,18 +317,28 @@ function StoredInstanceRow({
       onMouseEnter={() => prefetcher.enter(instance.id)}
       onMouseLeave={() => prefetcher.leave()}
     >
-      <button type="button" onClick={() => onOpen(instance)} className="min-w-0 flex-1 px-2 py-1.5 text-left text-sm">
+      {/* 实例条目：整行左侧可点区域，两行文字自带排版，故 invisible + auto */}
+      <Button
+        type="button"
+        variant="invisible"
+        size="auto"
+        onClick={() => onOpen(instance)}
+        className="min-w-0 flex-1 px-2 py-1.5 text-left text-sm"
+      >
         <span className="block truncate">{instance.name}</span>
         <span className="block truncate text-meta text-muted-foreground">{instance.status}</span>
-      </button>
-      <button
+      </Button>
+      {/* 收藏星标：纯图标切换，需保留 p-1.5 触达面积，故 invisible + auto */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={() => onToggleFavorite(instance)}
         aria-label={t(favorite ? 'serverSelector.unfavoriteName' : 'serverSelector.favoriteName', { name: instance.name })}
         className={cn('rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground', favorite && 'text-status-warning')}
       >
         <Star className={cn('size-4', favorite && 'fill-current')} />
-      </button>
+      </Button>
     </div>
   )
 }
@@ -344,20 +366,30 @@ function InstanceRow({
       onMouseEnter={() => prefetcher.enter(instance.id)}
       onMouseLeave={() => prefetcher.leave()}
     >
-      <button type="button" onClick={() => onOpen(instance)} className="min-w-0 flex flex-1 items-center gap-2 text-left">
+      {/* 表格化列表行：整行左侧可点，行高由父容器 h-9 定，故 invisible + auto */}
+      <Button
+        type="button"
+        variant="invisible"
+        size="auto"
+        onClick={() => onOpen(instance)}
+        className="min-w-0 flex flex-1 items-center gap-2 text-left"
+      >
         <span className="size-2 shrink-0 rounded-full bg-primary" />
         <span className="min-w-0 flex-1 truncate">{instance.name}</span>
         <span className="hidden shrink-0 text-meta text-muted-foreground sm:inline">{nodeName ?? `#${instance.nodeId}`}</span>
         <span className="shrink-0 text-meta text-muted-foreground">{instance.status}</span>
-      </button>
-      <button
+      </Button>
+      {/* 收藏星标：纯图标切换，紧凑尺寸由 p-1 决定，故 invisible + auto */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={() => onToggleFavorite(instance)}
         aria-label={t(favorite ? 'serverSelector.unfavoriteName' : 'serverSelector.favoriteName', { name: instance.name })}
         className={cn('rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground', favorite && 'text-status-warning')}
       >
         <Star className={cn('size-4', favorite && 'fill-current')} />
-      </button>
+      </Button>
     </div>
   )
 }

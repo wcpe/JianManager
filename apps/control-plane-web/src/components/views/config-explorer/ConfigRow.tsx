@@ -2,6 +2,7 @@ import * as React from 'react'
 import { LayoutGrid, List } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
 
@@ -55,8 +56,11 @@ function ToggleSeg({
   children: React.ReactNode
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
+      // 药丸分段开关：底色/圆角/内距全由下方 className 表达，Button 只提供语义与焦点环
       onClick={onClick}
       aria-pressed={active}
       title={label}
@@ -66,7 +70,7 @@ function ToggleSeg({
       )}
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -92,9 +96,12 @@ export function ConfigSummaryChips({ chips }: { chips: SummaryChip[] }) {
           c.tone && c.tone !== 'primary' ? toneDotClass(c.tone) : undefined
         const clickable = !!c.onClick
         return (
-          <button
+          <Button
             key={i}
             type="button"
+            variant="invisible"
+            size="auto"
+            // 汇总 chip：独立成块的圆角描边药丸，外观全部由 className 决定
             onClick={c.onClick}
             disabled={!clickable}
             aria-pressed={clickable ? !!c.active : undefined}
@@ -110,7 +117,7 @@ export function ConfigSummaryChips({ chips }: { chips: SummaryChip[] }) {
             {dotClass && <span className={cn('size-1.5 rounded-full', dotClass)} />}
             <span>{c.label}</span>
             <span className="font-semibold text-foreground">{c.value}</span>
-          </button>
+          </Button>
         )
       })}
     </div>

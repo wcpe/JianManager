@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { useTranslation } from 'react-i18next'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
+import { Button } from '@jianmanager/ui/components/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
@@ -491,20 +492,14 @@ export default function ProvisionServerDialogView({
           </ScrollableDialogBody>
 
           <DialogFooter className="flex-row justify-end pt-2">
-            <button
-              type="button"
-              onClick={close}
-              className="px-4 py-2 text-sm border rounded-md hover:bg-accent"
-            >
+            {/* 对话框按钮取标准两档：次动作用 outline、主动作用 default，
+                禁用态与焦点环由 Button 统一（原手写 disabled:pointer-events-none 重复）。 */}
+            <Button type="button" variant="outline" onClick={close}>
               {t('common.cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || hasErrors(errors) || !!jdkBlockText}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:pointer-events-none disabled:opacity-50 hover:bg-primary/90"
-            >
+            </Button>
+            <Button type="submit" disabled={submitting || hasErrors(errors) || !!jdkBlockText}>
               {submitting ? t('provision.provisioning') : t('provision.submit')}
-            </button>
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

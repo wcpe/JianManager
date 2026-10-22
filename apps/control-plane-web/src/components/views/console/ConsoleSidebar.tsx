@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -148,15 +149,18 @@ function SidebarContent({
       {/* 滚动条隐藏但保留滚动（FR-131）：scrollbar-none 工具类见 index.css */}
       <nav className={cn('min-h-0 flex-1 space-y-1 overflow-y-auto scrollbar-none p-2', compact && 'px-1.5')}>
         {compact && (
-          <button
+          /* 折叠态只留图标、无按钮外观（整宽图标行），故用 invisible+auto 把视觉交还原样式 */
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={onToggleSidebar}
             aria-label={t('nav.expandSidebar')}
             title={t('nav.expandSidebar')}
             className="mb-1 grid w-full place-items-center rounded-md py-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           >
             <PanelLeftOpen className="size-4" />
-          </button>
+          </Button>
         )}
         {groups.map((g) =>
           compact ? (
@@ -232,20 +236,23 @@ function ExpandableGroup({
 
   return (
     <div>
-      <button
+      {/* 侧栏分组头是「整行可点击」的行内条目，视觉由自身 bg/hover 决定 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={() => onToggleGroup(group.key)}
         aria-expanded={!groupClosed}
         data-active={hasActiveChild ? 'true' : 'false'}
         className={cn(
-          'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors hover:bg-accent/60',
+          'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-normal transition-colors hover:bg-accent/60',
           hasActiveChild ? 'bg-card/70 font-semibold text-foreground shadow-soft' : 'text-foreground/80',
         )}
       >
         <Icon className="size-4 shrink-0" />
         <span className="flex-1 truncate text-left">{t(group.labelKey)}</span>
         {groupClosed ? <ChevronRight className="size-3.5 opacity-60" /> : <ChevronDown className="size-3.5 opacity-60" />}
-      </button>
+      </Button>
 
       <div
         data-slot="sidebar-nav-group-content"
@@ -335,18 +342,21 @@ function LanguageSwitcher({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        {/* Radix asChild 需要可透传 ref/props 的元素；Button 本身渲染原生 button 并透传，故可承接 */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           aria-label={t(`language.${currentLang}`)}
           title={t(`language.${currentLang}`)}
           className={cn(
-            'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground',
+            'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] font-normal text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground',
             compact ? 'px-0 py-0' : 'ml-auto',
           )}
         >
           <Languages className="size-4 shrink-0" />
           {!compact && <span className="truncate">{t(`language.${currentLang}`)}</span>}
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align={compact ? 'center' : 'end'} className="w-32">
         {(['zh', 'en'] as const).map((lng) => (

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { cn } from '@jianmanager/ui'
 import { NativeSelect } from '@jianmanager/ui/components/native-select'
@@ -164,14 +165,17 @@ export function HealthWall({
         </div>
         {nodes.length > shown.length && (
           <div className="mt-3 text-center">
-            <button
+            {/* 朴素的次级按钮：描边 + 小号，直接落 outline + xs。 */}
+            <Button
               type="button"
+              variant="outline"
+              size="xs"
               data-testid="health-wall-more"
               onClick={() => setVisible((v) => v + HEALTH_WALL_PAGE_SIZE)}
-              className="rounded border bg-background px-3 py-1 text-xs text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground"
             >
               显示更多（剩余 {nodes.length - shown.length} 台）
-            </button>
+            </Button>
           </div>
         )}
         {truncated && (

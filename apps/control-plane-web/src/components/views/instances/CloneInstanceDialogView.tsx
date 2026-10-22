@@ -180,9 +180,12 @@ export default function CloneInstanceDialogView({
               <FieldLabel>{t('clone.mode', '复制范围')}</FieldLabel>
               <div className="mt-1 flex gap-1 rounded-md border bg-muted/30 p-1 text-sm">
                 {(['quick', 'advanced'] as const).map((m) => (
-                  <button
+                  // 分段选择里的单段：靠 flex-1 均分与选中底色成型，自身无按钮盒，取 invisible + auto
+                  <Button
                     key={m}
                     type="button"
+                    variant="invisible"
+                    size="auto"
                     onClick={() => setMode(m)}
                     className={cn(
                       'flex-1 rounded px-2 py-1.5 transition-colors',
@@ -190,7 +193,7 @@ export default function CloneInstanceDialogView({
                     )}
                   >
                     {t(`clone.mode_${m}`, m === 'quick' ? '快速复制' : '高级复制')}
-                  </button>
+                  </Button>
                 ))}
               </div>
               {mode === 'quick' ? (

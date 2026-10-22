@@ -123,14 +123,19 @@ export default function InstanceTagsDialog({
                 {freeTags.map((tg) => (
                   <Badge key={tg} variant="secondary" className="font-normal gap-1">
                     {tg}
-                    <button
+                    {/* 标签内的删除叉：尺寸必须贴合 Badge 行高，故用 invisible + auto 保留原样。
+                        显式写 text-xs（= Badge 的字号）：Button 基础类带 text-sm，
+                        不覆盖会让「×」比标签文字明显大一圈、顶高 Badge。 */}
+                    <Button
                       type="button"
+                      variant="invisible"
+                      size="auto"
                       onClick={() => setFreeTags((prev) => prev.filter((x) => x !== tg))}
-                      className="text-muted-foreground hover:text-foreground"
+                      className="text-xs text-muted-foreground hover:text-foreground"
                       aria-label={t('grouping.removeTag')}
                     >
                       ×
-                    </button>
+                    </Button>
                   </Badge>
                 ))}
               </div>

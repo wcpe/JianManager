@@ -141,7 +141,7 @@ export function UpdateHeatmap({ series }: { series: ObservabilitySeriesPoint[] }
                         key={cell.key}
                         role="img"
                         aria-label={label}
-                        className="h-3 w-3 rounded-[2px] bg-primary"
+                        className="h-3 w-3 rounded-[var(--radius-micro)] bg-primary"
                         style={{ opacity: lv >= 0 ? LEVEL_OPACITY[lv] : 0.04 }}
                         title={label}
                         data-level={lv}
@@ -156,7 +156,7 @@ export function UpdateHeatmap({ series }: { series: ObservabilitySeriesPoint[] }
             <div className="mt-2 flex items-center justify-end gap-1.5 text-[10px] text-muted-foreground">
               <span>{t('clientDistObs.heatmapLess', '少')}</span>
               {LEVEL_OPACITY.map((o) => (
-                <div key={o} className="size-3 rounded-[2px] bg-primary" style={{ opacity: o }} />
+                <div key={o} className="size-3 rounded-[var(--radius-micro)] bg-primary" style={{ opacity: o }} />
               ))}
               <span>{t('clientDistObs.heatmapMore', '多')}</span>
             </div>

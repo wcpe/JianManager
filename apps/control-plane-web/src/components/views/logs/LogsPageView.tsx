@@ -492,9 +492,12 @@ export function LogsPageView({
           disabled: view === 'platform',
         })}
 
-        {/* 实时跟随开关 pill，靠右 */}
-        <button
+        {/* 实时跟随开关 pill，靠右。视觉是一枚自绘圆角药丸（跟随态换状态色），
+            故取 invisible + auto：按钮语义/焦点环/按压由 Button 统一，盒模型与配色仍归本处。 */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           aria-pressed={follow}
           onClick={onToggleFollow}
           disabled={legacyView}
@@ -507,7 +510,7 @@ export function LogsPageView({
         >
           <Radio className={cn('size-3.5', follow && 'animate-pulse')} />
           {t('logs.follow')}
-        </button>
+        </Button>
       </div>
 
       {/* 洞察栏固定占位（高度恒为 min-h-8）：此前仅在联邦活跃且有数据时整条插入，
@@ -798,8 +801,12 @@ function LevelPill({
 }) {
   const status = level ? logLevelStatus(level) : null
   return (
-    <button
+    // 级别筛选 chip：胶囊底与状态色点都是自绘视觉，故取 invisible + auto 保留原样式，
+    // 只把按钮语义/焦点环/禁用口径交给 Button。
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
       aria-pressed={active}
       onClick={onClick}
       className={cn(
@@ -820,7 +827,7 @@ function LevelPill({
         />
       )}
       {children}
-    </button>
+    </Button>
   )
 }
 

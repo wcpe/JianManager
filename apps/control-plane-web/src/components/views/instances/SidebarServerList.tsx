@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Star } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import InstanceStatusDot from '@/components/views/instances/InstanceStatusDot'
 import type { StoredInstance } from '@/lib/console/server-selection'
 
@@ -121,17 +122,25 @@ function ServerRow({
   const { t } = useTranslation()
   return (
     <div data-testid="sidebar-server-row" className="flex items-center gap-0.5 rounded-md transition-colors hover:bg-accent/60">
-      <button
+      {/* 侧栏实例条目：整行左侧可点，悬停底色在父容器上，故 invisible + auto。
+          显式写 text-[13px]（= --text-body）：Button 基础类带 text-sm；改用固定值而非
+          text-body 是因为后者属自定义 token，会与 text-foreground/90 一起被判为冲突而丢失。 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={() => onOpen(item)}
         title={`${item.name} · ${nodeName}`}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-body text-foreground/90"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-foreground/90"
       >
         <InstanceStatusDot status={status} />
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
-      </button>
-      <button
+      </Button>
+      {/* 收藏星标：纯图标切换，紧凑尺寸靠 p-1.5 保留，故 invisible + auto */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={() => onToggleFavorite(item)}
         aria-label={t(favorite ? 'serverSelector.unfavoriteName' : 'serverSelector.favoriteName', { name: item.name })}
         className={cn(
@@ -140,7 +149,7 @@ function ServerRow({
         )}
       >
         <Star className={cn('size-3.5', favorite && 'fill-current')} />
-      </button>
+      </Button>
     </div>
   )
 }

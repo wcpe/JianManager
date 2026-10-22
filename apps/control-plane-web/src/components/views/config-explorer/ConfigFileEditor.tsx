@@ -243,15 +243,23 @@ export function ConfigFileEditor({
         </span>
         <div className="flex items-center gap-1.5">
           <div className="flex overflow-hidden rounded-md border text-xs">
-            <button
+            {/*
+              模式切换是「已分段」的连体按钮组：外层容器出边框与圆角，段内只负责底色。
+              故用 invisible + auto（不自带外框），选中态仍按原样由底色表达。
+            */}
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               className={`px-2 py-1 ${mode === 'text' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
               onClick={() => setMode('text')}
             >
               {t('configExplorer.modeText')}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               disabled={!schema}
               title={schema ? '' : t('configExplorer.noSchema')}
               className={`px-2 py-1 disabled:pointer-events-none disabled:opacity-40 ${
@@ -260,7 +268,7 @@ export function ConfigFileEditor({
               onClick={() => schema && setMode('form')}
             >
               {t('configExplorer.modeForm')}
-            </button>
+            </Button>
           </div>
           {readData && (
             <Badge variant={readData.validation.valid ? 'secondary' : 'destructive'}>

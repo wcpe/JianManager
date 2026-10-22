@@ -242,8 +242,11 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose, search }: 
           <ul className="divide-y">
             {hits.map((h, i) => (
               <li key={`${h.path}:${h.line}:${i}`}>
-                <button
-                  className="flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left hover:bg-accent"
+                <Button
+                  type="button"
+                  variant="invisible"
+                  size="auto"
+                  className="flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-[13px] font-normal hover:bg-accent"
                   onClick={() => onOpenHit(h.path, h.line)}
                 >
                   <span className="flex w-full items-baseline gap-1 truncate text-xs font-medium">
@@ -257,7 +260,7 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose, search }: 
                       {highlightMatch(h.snippet, query)}
                     </span>
                   )}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

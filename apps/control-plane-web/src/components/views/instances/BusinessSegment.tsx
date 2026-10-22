@@ -182,7 +182,11 @@ export default function BusinessSegment({
                         const active = selected?.domain === domain && selected.action.action === action.action
                         return (
                           <li key={action.action}>
-                            <button
+                            {/* 动作条目是整行可点的列表项，选中态靠底色表达，故 invisible + auto */}
+                            <Button
+                              type="button"
+                              variant="invisible"
+                              size="auto"
                               className={cn(
                                 'flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors duration-200',
                                 active ? 'bg-accent font-medium text-primary' : 'hover:bg-accent/60',
@@ -197,7 +201,7 @@ export default function BusinessSegment({
                               ) : (
                                 <ShieldAlert className="ml-auto size-3 shrink-0 text-status-danger" aria-hidden />
                               )}
-                            </button>
+                            </Button>
                           </li>
                         )
                       })}

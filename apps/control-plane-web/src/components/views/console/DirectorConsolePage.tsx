@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, type ReactNode } fro
 import { useTranslation } from 'react-i18next'
 import { Clapperboard, Pause, Play, SkipForward } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { sceneStatus } from '@/lib/director/director'
 import type { DirectorState } from '@/lib/director/director'
 import type { WorkspacePreset } from '@/lib/console/workspace-preset'
@@ -127,8 +128,10 @@ export function DirectorConsolePage({
         </div>
 
         <div className="ml-auto flex items-center gap-1.5">
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             disabled={!canCarousel}
             onClick={() => onCarouselChange(!carouselOn)}
             title={carouselOn ? t('director.carouselStop') : t('director.carouselStart')}
@@ -141,11 +144,13 @@ export function DirectorConsolePage({
           >
             {carouselOn ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
             {carouselOn ? t('director.carouselOn') : t('director.carousel')}
-          </button>
+          </Button>
           {/* 禁用态一律用 pointer-events-none 屏蔽指针：只降透明度的话 hover 仍会点亮，
               变成「看起来能点、点了没反应」。cursor 声明在指针事件被屏蔽后必然失效，故不保留。 */}
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             disabled={scenes.length < 2}
             onClick={() => onAdvance()}
             title={t('director.next')}
@@ -153,7 +158,7 @@ export function DirectorConsolePage({
             className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
           >
             <SkipForward className="size-4" />
-          </button>
+          </Button>
           {renderAddSceneMenu({ userPresets })}
         </div>
       </div>

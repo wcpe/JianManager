@@ -274,9 +274,12 @@ export function SystemUpdateWorkerAssetTableRow({
       <TableCell><SystemUpdateWorkerAssetCacheBadge cached={row.cached} /></TableCell>
       {/* 全量 64 位 hash 铺开会把表格挤宽；截断展示（前 8…后 8），title 悬停看全量、点击复制全量。 */}
       <TableCell className="whitespace-nowrap font-mono text-[11px]">
+        {/* SHA256 复制：截断小字 + 图标，视觉是纯文本，故取 invisible + auto。 */}
         {row.sha256 ? (
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             className="inline-flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
             title={row.sha256}
             aria-label={t('systemUpdate.copySha', '复制 SHA256')}
@@ -288,7 +291,7 @@ export function SystemUpdateWorkerAssetTableRow({
           >
             <span>{`${row.sha256.slice(0, 8)}…${row.sha256.slice(-8)}`}</span>
             <Copy className="size-3" />
-          </button>
+          </Button>
         ) : (
           '-'
         )}

@@ -6,6 +6,7 @@ import { buildFileTree, collectSubtreeFiles, isSelfOrDescendant, moveDirToDir, m
 import type { ManifestFileLike, TreeDir, TreeFile } from '@/lib/client-dist/client-publish-wizard'
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import {
   Select,
@@ -225,9 +226,12 @@ function DirRow({ dir, depth, ...rest }: LevelProps) {
             data-dir-path={dir.path}
           />
         )}
-        <button
+        <Button
           type="button"
-          className="flex flex-1 items-center gap-1.5 text-left"
+          variant="invisible"
+          size="auto"
+          // 目录头整行可点（同时承担拖拽源）：无按钮外壳，布局与拖拽事件全部保留
+          className="flex flex-1 items-center justify-start gap-1.5 text-left"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           draggable={!readonly}
@@ -271,7 +275,7 @@ function DirRow({ dir, depth, ...rest }: LevelProps) {
               size: formatFileSize(dir.totalSize),
             })}
           </span>
-        </button>
+        </Button>
       </div>
       {open && (
         <TreeLevel dir={dir} depth={depth + 1} {...rest} />
@@ -377,14 +381,17 @@ function FileRow({
           </SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground whitespace-nowrap">{formatFileSize(file.size)}</span>
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
+          // 删除图标：纯图标控件，红字由 className 决定
           className="text-destructive hover:opacity-70"
           onClick={() => onRemove?.(file.index)}
           aria-label={t('common.delete', '删除')}
         >
           <Trash2 className="size-4" />
-        </button>
+        </Button>
       </div>
     </div>
   )

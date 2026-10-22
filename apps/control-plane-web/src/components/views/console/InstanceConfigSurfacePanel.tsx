@@ -230,8 +230,10 @@ function SurfaceRow({
       {/* 来源二态切换；启动项仅有内联态，不提供文件引用（后端拒绝，见 config_source.go 注）。 */}
       {!startup && (
         <div className="inline-flex shrink-0 rounded-full bg-muted p-0.5" role="group" aria-label={t('configSurface.sourceLabel')}>
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             aria-pressed={isInline}
             onClick={() =>
               onChange({
@@ -246,23 +248,25 @@ function SurfaceRow({
               })
             }
             className={cn(
-              'rounded-full px-2.5 py-1 text-[11px] transition-colors',
+              'rounded-full px-2.5 py-1 text-[11px] font-normal transition-colors',
               isInline ? 'bg-card font-semibold text-foreground shadow-soft' : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {t('configSurface.sourceInline')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             aria-pressed={!isInline}
             onClick={() => onChange({ source: 'file' })}
             className={cn(
-              'rounded-full px-2.5 py-1 text-[11px] transition-colors',
+              'rounded-full px-2.5 py-1 text-[11px] font-normal transition-colors',
               !isInline ? 'bg-card font-semibold text-foreground shadow-soft' : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {t('configSurface.sourceFile')}
-          </button>
+          </Button>
         </div>
       )}
 

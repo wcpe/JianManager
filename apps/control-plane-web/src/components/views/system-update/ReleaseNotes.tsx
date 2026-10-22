@@ -12,6 +12,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Separator } from '@jianmanager/ui/components/separator'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { isSafeExternalLink, confirmOpenMessage } from '@/lib/system-update/release-notes-link'
 
 /** ReleaseNotes 的 props。 */
@@ -107,13 +108,23 @@ function createMarkdownComponents(confirmOpen: (href: string) => void): Componen
   pre: ({ children }) => (
     <pre className="my-2 overflow-auto rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">{children}</pre>
   ),
+  // 表格：交给组件库 Table 系列（自带横向滚动容器，故不再另套 overflow 外壳）。
+  // markdown 表格是「网格观感」：保留每格边框，用 border-collapse 覆盖组件默认的 border-separate；
+  // 行级边框与悬停高亮对只读文档表无意义（且会与单元格边框双线），故在 TableRow 上抵消。
   table: ({ children }) => (
-    <div className="my-2 overflow-x-auto">
-      <table className="w-full border-collapse text-xs">{children}</table>
-    </div>
+    <Table className="border-collapse text-xs" containerClassName="my-2">
+      {children}
+    </Table>
   ),
-  th: ({ children }) => <th className="border border-border bg-muted/60 px-2 py-1 text-left font-medium">{children}</th>,
-  td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
+  thead: ({ children }) => <TableHeader>{children}</TableHeader>,
+  tbody: ({ children }) => <TableBody>{children}</TableBody>,
+  tr: ({ children }) => <TableRow className="border-b-0 hover:bg-transparent">{children}</TableRow>,
+  th: ({ children }) => (
+    <TableHead className="border border-border bg-muted/60 px-2 py-1">{children}</TableHead>
+  ),
+  td: ({ children }) => (
+    <TableCell className="whitespace-normal border border-border px-2 py-1">{children}</TableCell>
+  ),
   img: ({ src, alt }) => <img src={typeof src === 'string' ? src : undefined} alt={alt} className="my-2 max-w-full rounded" />,
   }
 }

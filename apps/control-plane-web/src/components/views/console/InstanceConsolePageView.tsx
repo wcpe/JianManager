@@ -278,8 +278,10 @@ export function InstanceConsolePageView({
             </div>
             {/* FR-417：失败原因常是一段带路径/堆栈的长文本，要贴去搜索或问人——
                 原先只能拖选。复制走 copyToClipboard（含 HTTP 非安全上下文兜底），回执经 onNotify 上报。 */}
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => {
                 void copyToClipboard(`${t('serverConsole.lastStartFailed')}: ${startFailReason}`).then((ok) => {
                   if (ok) onNotify?.('success', t('common.copied'))
@@ -287,11 +289,11 @@ export function InstanceConsolePageView({
                 })
               }}
               aria-label={t('serverConsole.copyFailReason')}
-              className="mt-0.5 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-status-danger/15"
+              className="mt-0.5 flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs font-normal hover:bg-status-danger/15"
             >
               <Copy className="size-3" />
               {t('common.copy')}
-            </button>
+            </Button>
           </div>
         )}
         {/* 搭建中状态横幅（FR-331）：琥珀而非红（是进行时不是失败），随 provision 任务终态清 reason 自动消失。 */}
@@ -453,27 +455,31 @@ export function InstanceConsolePageView({
               <span className="rounded-full border bg-muted/70 px-2 py-0.5 text-[11px] text-muted-foreground md:hidden">
                 {node?.name ?? t('console.unknownNode', { id: instance.nodeId })} · <span className="font-mono">:{instance.serverPort || '—'}</span>
               </span>
-              <button
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
                 onClick={() => setMetricsBarOpen(false)}
                 aria-expanded={metricsBarOpen}
-                className="flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 <ChevronUp className="size-3" />
                 {t('serverConsole.collapseMetrics', '收起指标')}
-              </button>
+              </Button>
             </div>
           )}
           {!metricsBarOpen && (
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => setMetricsBarOpen(true)}
               aria-expanded={metricsBarOpen}
-              className="mt-1 flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="mt-1 flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <ChevronDown className="size-3" />
               {t('serverConsole.expandMetrics', '展开指标')}
-            </button>
+            </Button>
           )}
         </Card>
 

@@ -16,6 +16,7 @@
  */
 import { lazy, Suspense, useEffect, useMemo, type ReactNode, type UIEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Popover, PopoverContent, PopoverTrigger } from '@jianmanager/ui/components/popover'
@@ -324,13 +325,19 @@ export function GaugeAttributionTooltip({
       */}
       <Popover open={active} onOpenChange={(next) => { if (next !== active) onToggle() }}>
         <PopoverTrigger asChild>
-          <button
+          {/* 仪表卡整块是归因浮层的触发区：外观为零、只承载可点区域，
+              故取 invisible + auto；asChild 让 Button 把样式与键盘语义一并交给触发器。 */}
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             aria-label={t('dashboard.resourceAttributionLabel', { label })}
-            className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-accent/40"
+            // `[&_svg…]:size-auto`：Button 基类会把无 size-* 类的 svg 强制成 size-4，
+            // 而仪表环形图的 svg 靠 width/height 属性取尺寸，这里必须交还原属性。
+            className="rounded-sm hover:bg-accent/40 [&_svg:not([class*='size-'])]:size-auto"
           >
             {children}
-          </button>
+          </Button>
         </PopoverTrigger>
         <PopoverContent
           align="center"

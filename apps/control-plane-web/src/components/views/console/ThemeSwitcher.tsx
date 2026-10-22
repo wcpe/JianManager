@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Check, Monitor, Moon, Palette, Sun, type LucideIcon } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { COLOR_THEMES, type ColorTheme, type ThemeMode } from '@jianmanager/ui/lib/theme'
 import {
   DropdownMenu,
@@ -73,8 +74,10 @@ export function ThemeSwitcher({
     >
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             aria-label={t('colorTheme.label')}
             title={t(`colorTheme.${colorTheme}`)}
             className="relative grid size-7 shrink-0 place-items-center rounded-md text-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground"
@@ -86,7 +89,7 @@ export function ThemeSwitcher({
               className="absolute right-0.5 bottom-0.5 size-1.5 rounded-full border border-background"
               style={{ backgroundColor: COLOR_SWATCHES[colorTheme] }}
             />
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align={compact ? 'center' : 'start'} className="w-40">
           {COLOR_THEMES.map((value) => {
@@ -121,14 +124,16 @@ export function ThemeSwitcher({
         <div className="overflow-hidden">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
                 aria-label={t('theme.toggle')}
                 title={t(`theme.${theme}`)}
                 className="grid size-7 shrink-0 place-items-center rounded-md text-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground"
               >
                 <ModeIcon className="size-4" />
-              </button>
+              </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent side="top" align={compact ? 'center' : 'end'} className="w-40">
               {MODE_OPTIONS.map(({ value, icon: Icon, labelKey }) => (

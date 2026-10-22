@@ -20,6 +20,7 @@ import {
   ScrollableDialogBody,
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 import { validateRequired } from '@/lib/shared/form-validation'
 
 /** 视图只需要展示用字段；组的 id 等归属信息留在应用容器（请求由容器发出）。 */
@@ -116,10 +117,11 @@ export function GroupEditDialogView({
 
             <div>
               <FieldLabel>{t('groups.description')}</FieldLabel>
-              <textarea
+              {/* 组件库 Textarea 自带边框/圆角/焦点环，这里只保留与上方输入框对齐的间距 */}
+              <Textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+                className="mt-1"
                 rows={2}
               />
             </div>

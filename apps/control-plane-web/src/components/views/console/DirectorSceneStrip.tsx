@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Gauge, Trash2, Zap } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { Slider } from '@jianmanager/ui/components/slider'
 import { MAX_PREHEAT_LIMIT, MIN_PREHEAT_LIMIT, sceneStatus } from '@/lib/director/director'
 import type { DirectorState, SceneStatus } from '@/lib/director/director'
@@ -138,9 +139,11 @@ function SceneThumb({
       <span className="max-w-[10rem] truncate font-medium">{name}</span>
       {active && <Zap className="size-3 shrink-0" />}
 
-      {/* 删除（hover 显，不抢点击瞬切） */}
-      <button
+      {/* 删除（hover 显，不抢点击瞬切）。尺寸 max 16px 且靠 group-hover 显隐，库的按钮盒会撑开卡片 → 保留原样式的透明按钮 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={(e) => {
           e.stopPropagation()
           onRemove()
@@ -150,7 +153,7 @@ function SceneThumb({
         className="ml-0.5 hidden size-4 shrink-0 place-items-center rounded text-muted-foreground/60 hover:text-destructive group-hover:grid"
       >
         <Trash2 className="size-3" />
-      </button>
+      </Button>
     </div>
   )
 }

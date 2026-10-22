@@ -117,13 +117,16 @@ export function SessionOverview({ run, live, onNavigate }: SessionOverviewProps)
             <ul className="space-y-1 text-sm">
               {Object.entries(run.failureSummary ?? {}).map(([k, v]) => (
                 <li key={k} className="flex justify-between">
-                  <button
+                  <Button
                     type="button"
-                    className="text-primary hover:underline"
+                    variant="link"
+                    size="auto"
+                    // 行内文本链接式：无盒模型（size=auto 交出尺寸），仅保留主色 + 悬停下划线
+                    className="px-0 text-primary hover:underline"
                     onClick={() => onNavigate?.('failures', { category: k })}
                   >
                     {t(`botLoad.failureCategory.${k}`, k)}
-                  </button>
+                  </Button>
                   <span className="tabular-nums">{v}</span>
                 </li>
               ))}

@@ -295,16 +295,19 @@ export default function NodeJDKPanel({
       {/* 分段切换：固定高度的工具条，切换不致下方内容上下重排 */}
       <div className="flex items-center gap-1 rounded-md border bg-muted/30 p-1 text-sm">
         {(['list', 'install', 'register'] as JDKTab[]).map((k) => (
-          <button
+          // 分段切换：选中态是自绘的「白底 + 阴影」胶囊，故取 invisible + auto 保留原视觉。
+          <Button
             key={k}
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={() => setTab(k)}
-            className={`flex-1 rounded px-3 py-1.5 transition-colors ${
+            className={`flex-1 rounded px-3 py-1.5 font-normal transition-colors ${
               tab === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'
             }`}
           >
             {t(`artifactCache.jdkTab.${k}`)}
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -339,9 +342,12 @@ export default function NodeJDKPanel({
               ['managed', t('nodes.jdkManaged'), managedCount],
               ['external', t('nodes.jdkExternal'), allJdks.length - managedCount],
             ] as const).map(([key, label, count]) => (
-              <button
+              // 来源筛选 chips：胶囊描边与选中态染色均为自绘，故取 invisible + auto。
+              <Button
                 key={key}
                 type="button"
+                variant="invisible"
+                size="auto"
                 onClick={() => setSourceFilter(key)}
                 aria-pressed={sourceFilter === key}
                 className={cn(
@@ -353,7 +359,7 @@ export default function NodeJDKPanel({
               >
                 {label}
                 <span className="font-semibold tabular-nums">{count}</span>
-              </button>
+              </Button>
             ))}
           </div>
 
@@ -396,35 +402,44 @@ export default function NodeJDKPanel({
                     {/* 路径被 truncate 截断时，完整路径靠 Tooltip 呈现（原来是原生 title） */}
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <button
+                        {/* 路径复制：等宽小字 + 图标，视觉是纯文本，故取 invisible + auto。
+                            提示由外层 Tooltip 承载（原为原生 title），可访问名不受影响。 */}
+                        <Button
                           type="button"
-                          className="mt-0.5 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+                          variant="invisible"
+                          size="auto"
+                          className="mt-0.5 flex max-w-full items-center justify-start gap-1 font-mono text-xs font-normal text-muted-foreground transition-colors hover:text-foreground"
                           onClick={() => void copyPath(j.path)}
                         >
                           <span className="truncate">{j.path}</span>
                           <Copy className="size-3 shrink-0" />
-                        </button>
+                        </Button>
                       </TooltipTrigger>
                       <TooltipContent>{j.path}</TooltipContent>
                     </Tooltip>
                   </div>
                   {sourceBadge(j.managed)}
-                  <button
+                  {/* 纯图标 → ghost + icon-xs（无可见文案，可访问名仍来自 aria-label）。 */}
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-xs"
                     aria-label={t('nodes.jdkEdit', '编辑')}
-                    className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
                     onClick={() => openEdit(j)}
                   >
                     <Pencil className="size-4" />
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-xs"
                     aria-label={t('common.delete')}
-                    className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
+                    className="shrink-0 text-muted-foreground hover:text-status-danger"
                     onClick={() => setPendingDel(j)}
                   >
                     <Trash2 className="size-4" />
-                  </button>
+                  </Button>
                 </Card>
               ))}
             </div>
@@ -446,22 +461,27 @@ export default function NodeJDKPanel({
                     <Badge variant="secondary" className="bg-accent font-medium text-primary">
                       Java {j.majorVersion}
                     </Badge>
-                    <button
+                    {/* 纯图标 → ghost + icon-xs（网格卡片内的编辑/删除）。 */}
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-xs"
                       aria-label={t('nodes.jdkEdit', '编辑')}
-                      className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                      className="shrink-0 text-muted-foreground hover:text-foreground"
                       onClick={() => openEdit(j)}
                     >
                       <Pencil className="size-4" />
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-xs"
                       aria-label={t('common.delete')}
-                      className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
+                      className="shrink-0 text-muted-foreground hover:text-status-danger"
                       onClick={() => setPendingDel(j)}
                     >
                       <Trash2 className="size-4" />
-                    </button>
+                    </Button>
                   </div>
                   <dl className="space-y-1 text-xs">
                     <div className="flex items-center justify-between">
@@ -477,15 +497,18 @@ export default function NodeJDKPanel({
                       <dd>{sourceBadge(j.managed)}</dd>
                     </div>
                   </dl>
-                  <button
+                  {/* 路径复制：等宽小字整行，视觉是纯文本，故取 invisible + auto。 */}
+                  <Button
                     type="button"
-                    className="mt-2 flex w-full items-center gap-1 border-t pt-2 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                    variant="invisible"
+                    size="auto"
+                    className="mt-2 flex w-full items-center justify-start gap-1 border-t pt-2 font-mono text-[11px] font-normal text-muted-foreground transition-colors hover:text-foreground"
                     title={j.path}
                     onClick={() => void copyPath(j.path)}
                   >
                     <span className="truncate">{j.path}</span>
                     <Copy className="size-3 shrink-0" />
-                  </button>
+                  </Button>
                 </Card>
               ))}
             </div>

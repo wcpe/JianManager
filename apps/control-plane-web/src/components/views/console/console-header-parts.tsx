@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search } from 'lucide-react'
 import { cardSurfaceTone, cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@jianmanager/ui/components/tooltip'
 import { Kbd } from '@jianmanager/ui/components/kbd'
 import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
@@ -34,8 +35,14 @@ export function ConsoleBrandSegment({
   return (
     <>
       {/* 品牌图标+文字现在是**首页入口**，不再兼任折叠开关（折叠由右侧独立按钮承担）。 */}
-      <button
+      {/*
+        品牌图标+文字现在是**首页入口**。视觉上是导航标识而非按钮，
+        故走 invisible + auto（不自带外壳），宽度/内距/间距全部由下方 className 决定。
+      */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={onNavigateHome}
         aria-label={t('nav.home')}
         title={t('nav.home')}
@@ -54,9 +61,12 @@ export function ConsoleBrandSegment({
 
           注意：`py-1` 必须两种状态共有。它曾只写在展开分支里，折叠时高度从 36px 瞬跳到 28px，
           图标周边空间会「抽」一下 —— 同一个族系的毛病，这里一并钉死。
+
+          `justify-start` 抵消 Button 基础类的 `justify-center`：否则折叠态图标会被居中到按钮中段，
+          等于把上面这段修好的贴左行为又推回去。
         */
         className={cn(
-          'flex w-fit min-w-0 items-center rounded-md py-1 transition-colors hover:bg-accent/60',
+          'flex w-fit min-w-0 items-center justify-start rounded-md py-1 transition-colors hover:bg-accent/60',
           collapsed ? 'gap-0' : 'gap-2',
         )}
       >
@@ -67,7 +77,7 @@ export function ConsoleBrandSegment({
         {!collapsed && (
           <h2 className="min-w-0 flex-1 truncate text-left text-[13px] font-bold leading-[18px] tracking-tight text-foreground">JianManager</h2>
         )}
-      </button>
+      </Button>
       {/*
         【顶栏不再放折叠按钮】用户指定：折叠入口只留侧栏底部那一个。
         此前这里是 `{!collapsed && …}`——展开态有按钮、折叠态整块卸载，
@@ -93,24 +103,26 @@ export function ConsoleSearchBox({ onOpenPalette }: { onOpenPalette: () => void 
     // 搜索入口与图标组之间要更松一档，否则两者会贴成一个整块。
     // `data-slot` 供外壳 CSS 在窄视口压缩本槽位（顶栏挤不下时先牺牲它，见 index.css）。
     <div data-slot="console-header-search" className={cn(searchBoxClass(), 'mr-[6px]')}>
-      <button
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={onOpenPalette}
         aria-label={t('header.searchPlaceholder')}
-        // 这是输入样式的 <button> 控件（h-8 定高、圆角与阴影跟随控件规范），不是承载内容的卡片，
+        // 这是输入样式的按钮控件（h-8 定高、圆角与阴影跟随控件规范），不是承载内容的卡片，
         // 因此不套 Card（其 flex-col/gap-4/py-4 与 rounded-xl 都要逐项覆盖，只会更脆）。
-        // 但底色属于「卡片白盒」的同一语义轴，仍收敛到三档常量（原 bg-card/90 → subtle 档），
-        // 消除 bg-card/90 这类任意透明度。
+        // 但底色属于「卡片白盒」的同一语义轴，仍收敛到三档常量（原 bg-card/90 → subtle 档）。
+        // invisible + auto 不提供任何外壳，h-8/内距/边框/阴影全部由下面这串类名决定。
         className={cn(
           cardSurfaceTone.subtle,
-          'flex h-8 w-full items-center gap-2 rounded-md border pl-2.5 pr-2 text-xs text-muted-foreground shadow-soft transition-colors hover:bg-muted/55',
+          'flex h-8 w-full items-center justify-start gap-2 rounded-md border pl-2.5 pr-2 text-xs text-muted-foreground shadow-soft transition-colors hover:bg-muted/55',
         )}
       >
         <Search className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">{t('header.searchPlaceholder')}</span>
         {/* 键帽统一走 Kbd：`border` 是此处特有的描边诉求（原实现有），其余外观由组件提供。 */}
         <Kbd className="hidden border xl:inline-flex">Ctrl K</Kbd>
-      </button>
+      </Button>
     </div>
   )
 }

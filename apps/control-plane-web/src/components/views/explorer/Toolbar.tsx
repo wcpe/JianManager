@@ -194,37 +194,49 @@ export default function Toolbar({
               aria-label={t('files.pathBreadcrumb')}
               className="flex min-w-0 shrink items-center gap-0.5 overflow-x-auto text-xs text-muted-foreground"
             >
-              <button
+              {/* 面包屑是「输入框之外的备用地址栏」，视觉必须像纯文本而非按钮，
+                  故取 invisible + auto：按钮语义与焦点环由 Button 统一提供，
+                  内边距/圆角/悬停底色仍沿用下面手写的 className。
+                  两处都显式写 text-xs（= 原父级 nav 的继承值）：Button 基础类带 text-sm，
+                  不显式覆盖就会把 12px 的路径字放大到 14px。 */}
+              <Button
                 type="button"
-                className="shrink-0 rounded px-1 hover:bg-accent hover:text-foreground"
+                variant="invisible"
+                size="auto"
+                className="shrink-0 rounded px-1 text-xs hover:bg-accent hover:text-foreground"
                 onClick={() => onNavigate('')}
               >
                 /
-              </button>
+              </Button>
               {crumbs.map((c) => (
                 <span key={c.path} className="flex shrink-0 items-center gap-0.5">
                   <ChevronRight className="size-3" />
-                  <button
+                  <Button
                     type="button"
-                    className="rounded px-1 hover:bg-accent hover:text-foreground"
+                    variant="invisible"
+                    size="auto"
+                    className="rounded px-1 text-xs hover:bg-accent hover:text-foreground"
                     onClick={() => onNavigate(c.path)}
                   >
                     {c.name}
-                  </button>
+                  </Button>
                 </span>
               ))}
             </nav>
             {/* 面包屑右侧空白即「切到地址栏」的点击区（Windows 资源管理器同款），
-                同时承载目录汇总——既省一条横栏，又让这块空白有信息量。 */}
-            <button
+                同时承载目录汇总——既省一条横栏，又让这块空白有信息量。
+                整行弹性铺满（flex-1），外观完全由 className 决定，故 invisible + auto。 */}
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               className="min-w-0 flex-1 truncate rounded px-1 py-0.5 text-left text-[11px] text-muted-foreground hover:bg-accent/60"
               aria-label={t('files.editPath')}
               title={t('files.editPath')}
               onClick={startEditPath}
             >
               {summary}
-            </button>
+            </Button>
           </>
         )}
       </div>

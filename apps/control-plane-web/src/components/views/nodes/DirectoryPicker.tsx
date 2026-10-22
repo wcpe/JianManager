@@ -87,14 +87,17 @@ export default function DirectoryPicker({
 
       <div className="max-h-56 overflow-y-auto rounded border bg-background">
         {data?.parent !== undefined && data.parent !== '' && (
-          <button
+          // 目录行是「整行可点」：外观完全由 className 决定，故取 invisible + auto。
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={() => onNavigate(data.parent!)}
-            className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-accent"
+            className="flex w-full items-center justify-start gap-2 px-2 py-1.5 text-left text-sm font-normal hover:bg-accent"
           >
             <FolderUp className="size-4 shrink-0 text-muted-foreground" />
             <span>..</span>
-          </button>
+          </Button>
         )}
         {isLoading ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">{t('common.loading')}</p>
@@ -104,15 +107,18 @@ export default function DirectoryPicker({
           <p className="px-2 py-2 text-xs text-muted-foreground">{t('artifactCache.browseEmpty')}</p>
         ) : (
           data.dirs.map((d) => (
-            <button
+            // 同上一处：目录行整行可点，取 invisible + auto 保留原布局与悬停底色。
+            <Button
               key={d.path}
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => onNavigate(d.path)}
-              className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-accent"
+              className="flex w-full items-center justify-start gap-2 px-2 py-1.5 text-left text-sm font-normal hover:bg-accent"
             >
               <Folder className="size-4 shrink-0 text-muted-foreground" />
               <span className="truncate">{d.name}</span>
-            </button>
+            </Button>
           ))
         )}
       </div>

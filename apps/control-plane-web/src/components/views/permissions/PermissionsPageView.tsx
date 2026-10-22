@@ -377,16 +377,21 @@ function PermissionsCatalogPanel({
               // 行间距用包裹层的 padding 而不是行的 margin：量测取的是包裹层的 offsetHeight，
               // 而 margin 不计入 offsetHeight——留 margin 会让每行都少算一段间距。
               <div key={row.key} data-catalog-row-key={row.key} className="pb-1">
-                <button
+                {/* 菜单项整块可点，表面（圆角/描边/底色）取自 Card 同源常量，
+                    故取 invisible + auto：外壳零视觉，只由 className 决定外观。 */}
+                <Button
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   data-testid={`permissions-role-${row.role.key}`}
                   onClick={() => onSelectionChange({ kind: 'role', id: row.role.id })}
-                  // 菜单项是整块可点击的 <button>（自带 button 语义与键盘行为），换成 Card 的 div
-                  // 会把语义退回 div，故保留元素、改取 Card 同源的表面常量：圆角/描边由一处决定。
                   className={cn(
                     cardSurface,
                     cardSurfaceTone.solid,
-                    'w-full px-2.5 py-2 text-left transition-colors',
+                    // block + whitespace-normal：Button 基类默认 inline-flex/nowrap，会破坏
+                    // 本行「上下两段、描述两行截断」的排版；font-normal 抵消基类的 font-medium
+                    // （加粗只落在标题那一行）。
+                    'block w-full whitespace-normal px-2.5 py-2 text-left font-normal transition-colors',
                     active
                       ? 'border-primary bg-primary/12 shadow-sm'
                       : 'border-border hover:border-primary/40 hover:bg-accent/40',
@@ -402,22 +407,25 @@ function PermissionsCatalogPanel({
                     )}
                   </div>
                   <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{row.role.description}</div>
-                </button>
+                </Button>
               </div>
             )
           }
           const active = selection?.kind === 'user' && selection.id === row.user.id
           return (
             <div key={row.key} data-catalog-row-key={row.key} className="pb-1">
-              <button
+              {/* 同上：用户行整块可点，零视觉外壳 + 原表面常量。 */}
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
                 data-testid={`permissions-user-${row.user.id}`}
                 onClick={() => onSelectionChange({ kind: 'user', id: row.user.id })}
-                // 同上：保留 <button> 元素，只统一表面样式常量。
                 className={cn(
                   cardSurface,
                   cardSurfaceTone.solid,
-                  'w-full px-2.5 py-2 text-left transition-colors',
+                  // 同角色行：block + whitespace-normal 还原两行堆叠，font-normal 抵消基类字重。
+                  'block w-full whitespace-normal px-2.5 py-2 text-left font-normal transition-colors',
                   active
                     ? 'border-primary bg-primary/12 shadow-sm'
                     : 'border-border hover:border-primary/40 hover:bg-accent/40',
@@ -425,7 +433,7 @@ function PermissionsCatalogPanel({
               >
                 <div className={cn('truncate text-[13px]', active ? 'font-semibold text-primary' : 'font-medium')}>{row.user.username}</div>
                 <div className="text-[11px] text-muted-foreground">{t(ROLE_LABEL_KEY[row.user.role] ?? 'users.roleUnknown', { role: row.user.role })}</div>
-              </button>
+              </Button>
             </div>
           )
         })}

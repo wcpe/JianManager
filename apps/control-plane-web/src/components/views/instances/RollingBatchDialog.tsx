@@ -149,9 +149,13 @@ export default function RollingBatchDialog({
             <Field label={t('rolling.ratio')}>
               <div className="flex flex-wrap gap-1">
                 {RATIO_PRESETS.map((p) => (
-                  <button
+                  // 比例胶囊是「描边 + 半透明填充」的开关片，选中态靠 border-primary/bg-primary/10 表达；
+                  // 若换用 outline 变体会引入阴影与 hover 底色，改变观感，故取 invisible + auto 保原样式。
+                  <Button
                     key={p}
                     type="button"
+                    variant="invisible"
+                    size="auto"
                     aria-pressed={ratioPercent === p}
                     onClick={() => setRatioPercent(p)}
                     className={cn(
@@ -160,7 +164,7 @@ export default function RollingBatchDialog({
                     )}
                   >
                     {p === 100 ? t('rolling.ratioAll') : `${p}%`}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </Field>

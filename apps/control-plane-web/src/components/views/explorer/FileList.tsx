@@ -26,6 +26,7 @@ import { isArchiveName, isClassName } from '@/lib/file-browser/file-entry'
 import type { SelectionState, ClickModifiers } from '@/lib/explorer/explorer-selection'
 import { isSelected } from '@/lib/explorer/explorer-selection'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { sortFiles, toggleSort } from '@/lib/file-browser/file-sort'
 import type { FileSortState, FileSortKey, FileViewMode } from '@/lib/file-browser/file-sort'
 import { formatFileSize } from '@/lib/shared/format-file-size'
@@ -121,8 +122,10 @@ export default function FileList({
   }
 
   const headerBtn = (key: FileSortKey, label: string, className?: string) => (
-    <button
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
       className={cn(
         'inline-flex items-center gap-0.5 text-left text-[11px] font-medium text-muted-foreground hover:text-foreground',
         className,
@@ -131,7 +134,7 @@ export default function FileList({
     >
       {label}
       {sort.key === key && <ArrowUpDown className="size-3 opacity-70" />}
-    </button>
+    </Button>
   )
 
   return (

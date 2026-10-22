@@ -348,8 +348,11 @@ function BotGroupBlock({
   return (
     <div className="rounded-lg border">
       <div className="flex items-center gap-2 px-3 py-2">
-        <button
+        {/* 分组标题本身是展开/收起开关：外观是标题文字，故 invisible + auto */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={() => setOpen((v) => !v)}
           // 标题基色已继承卡片前景色（WorkspaceCard 的 text-card-foreground 与 foreground 同值），
           // hover:text-foreground 不会产生可见变化，故按同卡族可点文本的既有写法取 primary。
@@ -358,7 +361,7 @@ function BotGroupBlock({
           <ChevronRight className={cn('size-4 transition-transform', open && 'rotate-90')} />
           <span>{label}</span>
           <span className="text-xs text-muted-foreground">({bots.length})</span>
-        </button>
+        </Button>
         <div className="ml-auto">
           <Select onValueChange={(v: string) => void runGroupBehavior(v)} disabled={pending}>
             <SelectTrigger className="h-7 w-32 text-xs">

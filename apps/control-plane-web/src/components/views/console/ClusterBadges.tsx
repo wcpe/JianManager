@@ -9,6 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
+import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
 import { slotVisibility, visibilityClass } from '@/lib/shared/header-layout'
 
@@ -174,15 +175,21 @@ function ClusterStatPopover({
       }}
     >
       <DropdownMenuTrigger asChild>
-        <button
+        {/*
+          顶栏指标徽章：图标 + 数值的紧凑控件，无按钮外壳（invisible + auto），外观全由 className 决定。
+          `justify-start` 抵消 Button 基础类的居中；图形与数字要贴左排布。
+        */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           title={`${label}: ${value}`}
           aria-label={`${label}: ${value}`}
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="flex items-center justify-start gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
           <Icon className={cn('size-3.5', danger && 'text-status-danger')} />
           <span className={cn('tabular-nums', danger && 'font-medium text-status-danger')}>{value}</span>
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
         <div className="px-2 py-1.5 text-xs font-medium">{label}</div>
