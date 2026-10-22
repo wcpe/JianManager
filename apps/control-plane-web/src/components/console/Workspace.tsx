@@ -36,6 +36,7 @@ const TemplatesPage = lazy(ROUTE_CHUNKS['/templates'])
 const RuntimeAssetsPage = lazy(ROUTE_CHUNKS['/runtime-assets'])
 const AlertsPage = lazy(ROUTE_CHUNKS['/alerts'])
 const SettingsPage = lazy(ROUTE_CHUNKS['/settings'])
+const AssistantSettingsPage = lazy(ROUTE_CHUNKS['/settings/ai'])
 const StoragePage = lazy(ROUTE_CHUNKS['/storage'])
 const LogsPage = lazy(ROUTE_CHUNKS['/logs'])
 const StatisticsPage = lazy(ROUTE_CHUNKS['/statistics'])
@@ -200,6 +201,15 @@ export default function Workspace() {
             <Route path="observability" element={<Navigate to="/monitor" replace />} />
             <Route path="storage" element={<StoragePage />} />
             <Route path="settings" element={<SettingsPage />} />
+            {/* AI 助手配置（FR-514）：供应商/模型/默认模型，仅平台管理员。 */}
+            <Route
+              path="settings/ai"
+              element={
+                <RequirePlatformAdmin>
+                  <AssistantSettingsPage />
+                </RequirePlatformAdmin>
+              }
+            />
             <Route path="database" element={<RequirePlatformAdmin><DatabasePage /></RequirePlatformAdmin>} />
             <Route path="system-update" element={<RequirePlatformAdmin><SystemUpdatePage /></RequirePlatformAdmin>} />
             <Route path="agent-tokens" element={<RequirePlatformAdmin><AgentTokensPage /></RequirePlatformAdmin>} />

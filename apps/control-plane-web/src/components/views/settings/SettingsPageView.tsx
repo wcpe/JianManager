@@ -152,6 +152,13 @@ export interface SettingsPageViewProps {
   onLanguageChange: (language: 'zh' | 'en') => void
   /** 出站连通性测试入口插槽（网络/运行时分类各一处）；缺省则该分类不渲染测试入口。 */
   renderOutboundTest?: (args: SettingsOutboundTestArgs) => ReactNode
+  /**
+   * AI 助手配置入口插槽（FR-514）。
+   *
+   * 走插槽而非在此处 import 路由：视图不认识 react-router（ADR-102 b 范式），
+   * 且该入口只有平台管理员可见——角色与路由都由外壳决定。
+   */
+  assistantEntry?: ReactNode
 }
 
 /**
@@ -174,6 +181,7 @@ export function SettingsPageView({
   language,
   onLanguageChange,
   renderOutboundTest,
+  assistantEntry,
 }: SettingsPageViewProps) {
   const { t } = useTranslation()
   // 可编辑项的本地草稿：仅存用户改动；展示值回退到后端当前生效值（draft[key] ?? it.value）。
@@ -258,6 +266,9 @@ export function SettingsPageView({
               )
             })}
           </nav>
+          {/* AI 助手配置单独成页（它管的是多实体 CRUD，不是键值设置），
+              故在分类导航之外单列一个入口，避免把两种形态混进同一套表单。 */}
+          {assistantEntry && <div className="mt-2 border-t border-border/60 pt-2">{assistantEntry}</div>}
         </aside>
 
         {/* 右侧：当前分类面板。fixed 壳态下外壳不再滚动，故内容区自行溢出滚动

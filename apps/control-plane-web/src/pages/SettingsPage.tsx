@@ -1,6 +1,8 @@
 // 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做平台配置取数/保存、客户端偏好（主题/语言）落盘与出站测试按钮接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router'
+import { Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
@@ -78,6 +80,18 @@ export default function SettingsPage() {
             label={t('diagnostics.testJdkSource', '测试 JDK 下载源')}
           />
         )
+      }
+      assistantEntry={
+        isPlatformAdmin(role) ? (
+          // AI 助手配置（FR-514）：多实体 CRUD，单独成页，不并入键值设置分类。
+          <Link
+            to="/settings/ai"
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors duration-hover ease-ios hover:bg-accent/70 hover:text-foreground"
+          >
+            <Sparkles className="size-4 shrink-0" />
+            {t('assistant.title', 'AI 助手')}
+          </Link>
+        ) : undefined
       }
     />
   )
