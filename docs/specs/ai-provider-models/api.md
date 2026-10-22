@@ -2,6 +2,7 @@
 
 > 状态：**实现中**——已实现端点与本文 §2～§5 逐条对应；§6 的探测/测试端点、
 > §7 的私网放行设置、§10 的审计事件**均未实现**，逐处标「未实现」。
+> 探测与单模型测试（§3.6 / §4.5）已实现，含分类码、上游错误体脱敏与 30s 预算。
 > 关联 PRD：FR-514　·　设计见 [spec.md](spec.md)
 > 依赖共享契约：[../ai-assistant/shared-contracts.md](../ai-assistant/shared-contracts.md)（本文只定义配置面，不定义会话/事件/工具契约）。
 > 示例地址一律为文档保留段（`example.com`、`192.0.2.0/24`）；示例凭据均为占位，不得写入真实值。
@@ -131,10 +132,28 @@
 - **不级联**：级联会让一批模型在没有任何提示的情况下消失，而管理员通常只是想停掉一个供应商
   （停用用 `enabled=false`，模型原样保留）。
 
-### 3.6 POST /api/v1/assistant/admin/providers/:id/test — **未实现**
+### 3.6 POST /api/v1/assistant/admin/providers/:id/test — FR-514
 
-设计意图（spec §8）：显式探测，`200 {"ok":true,"latencyMs":412,"modelCount":24}`。
-当前没有该端点，**不要据本文预期它存在**。
+显式探测：用该供应商下**第一个启用模型**跑一次最小补全。
+
+成功：
+```json
+{ "ok": true, "latencyMs": 412 }
+```
+
+失败（**仍是 HTTP 200**——这是结论，不是请求失败）：
+```json
+{ "ok": false, "latencyMs": 12000,
+  "classifiedError": "upstream_auth",
+  "message": "upstream_auth（HTTP 401）: {\"error\":{\"message\":\"Incorrect API key provided: sk-***\"}}" }
+```
+
+- `classifiedError` ∈ §7 分类码；`message` 已脱敏（上游回显的密钥被掩蔽为 `sk-***`）。
+- `latencyMs` 是服务端实测耗时，含网络往返。
+- 供应商下没有任何模型 → `422 INVALID_CONFIG`（无模型可探测，不假装通过）。
+- 不存在 → `404`；非平台管理员 → `403`。
+- **实现偏差**：不含 `modelCount`，也不再「优先列模型端点」——见 spec §8。
+- 不写会话、不产生 run；每行按钮在请求中禁用（防连点重复付费）。
 
 ### 3.7 GET /api/v1/assistant/admin/providers/:id/models — **未实现**
 
@@ -200,9 +219,30 @@
   因为删除是不可逆的，留悬空指针会让每次读摘要都要处理一种本可消除的状态。）
 - 不存在 → `404`。
 
-### 4.5 POST /api/v1/assistant/admin/models/:id/test — **未实现**
+### 4.5 POST /api/v1/assistant/admin/models/:id/test — FR-514
 
-设计意图（spec §8）：单模型真实补全测试。当前没有该端点。
+单模型**真实**补全测试：跑一次最小补全（固定提示，不带用户数据、**不执行任何工具**）。
+
+请求体（可空）：
+```json
+{ "withTools": true }
+```
+
+成功：
+```json
+{
+  "ok": true, "latencyMs": 830, "textPreview": "pong",
+  "promptTokens": 9, "outputTokens": 2, "toolCallParsed": false
+}
+```
+
+- `promptTokens` / `outputTokens` 为 `null` 表示**上游未报告**（不补 0；两者各自可空）。
+- `toolCallParsed` 仅在 `withTools:true` 时有判定意义：能解析出**参数完整**的工具调用才为 `true`。
+- `withTools:true` 而该模型未声明 `tools` → `422 INVALID_CONFIG`。
+  **不静默去掉工具再测**：那会给出 `ok:true` 的假绿（管理员以为工具链路验证过了，实际没带工具）。
+- 失败仍是 HTTP 200 + `ok:false` + `classifiedError`；原因同 §3.6。
+- `textPreview` ≤200 字符（超出截断并加省略号）。
+- 不写会话、不产生 run；不写审计（见 §9）。
 
 ### 4.6 PUT /api/v1/assistant/admin/settings/default-model — FR-514
 
@@ -240,9 +280,9 @@
 | `PUT /api/v1/assistant/admin/models/:id` | `IsPlatformAdmin` | ✅ |
 | `DELETE /api/v1/assistant/admin/models/:id` | `IsPlatformAdmin` | ✅ |
 | `PUT /api/v1/assistant/admin/settings/default-model` | `IsPlatformAdmin` | ✅ |
-| `POST .../providers/:id/test` | `IsPlatformAdmin` | ❌ 未实现 |
+| `POST .../providers/:id/test` | `IsPlatformAdmin` | ✅ |
 | `GET .../providers/:id/models` | `IsPlatformAdmin` | ❌ 未实现 |
-| `POST .../models/:id/test` | `IsPlatformAdmin` | ❌ 未实现 |
+| `POST .../models/:id/test` | `IsPlatformAdmin` | ✅ |
 | `GET/PUT .../admin/settings` | `IsPlatformAdmin` | ❌ 未实现（收窄为 default-model） |
 
 后续 FR-515 的会话/run 端点、FR-517 的 MCP 端点**不在本文范围**，不得据本文推导其契约。
@@ -266,12 +306,29 @@
 
 ## 7. 出站失败的错误面
 
-配置面（CRUD）**不会**发起上游请求，因此本批不存在「调用模型失败」的 HTTP 错误码语义。
-协议适配层定义了统一的错误分类（`upstream_auth` / `upstream_rate_limited` /
-`upstream_rejected` / `upstream_error` / `upstream_timeout` / `upstream_unreachable` /
-`upstream_stream_truncated` / `egress_denied` / `egress_proxy_unsupported` /
-`capability_unsupported` / `tool_call_invalid`），但它们目前**只作为内部错误类型存在**，
-由未来的 FR-515 运行循环消费；本批没有任何端点把它们投影成 HTTP 响应。
+配置面（CRUD）**不会**发起上游请求。只有 §3.6 / §4.5 两个探测端点会真的出站，
+它们把上游失败作为**结论**（HTTP 200 + `ok:false` + `classifiedError`）返回，
+不用 4xx/5xx 表达上游状态——理由见 §3.6。
+
+分类码全集（`ai.ErrorCode`，前端据此给处置建议而非解析文案）：
+
+| 分类码 | 触发 | 管理员该做什么 |
+|---|---|---|
+| `upstream_auth` | 401 / 403 | 换密钥、查该密钥是否被允许用此模型 |
+| `upstream_rate_limited` | 429 | 稍后重试，或查配额 |
+| `upstream_rejected` | 其余 4xx | 确认模型标识与协议是否匹配 |
+| `upstream_error` | 5xx | 供应商侧问题，稍后重试 |
+| `upstream_timeout` | context 截止 / 网络超时 | 查目标可达性与出口网络 |
+| `upstream_unreachable` | DNS / TCP / TLS 失败 | 查域名解析与连通性 |
+| `upstream_stream_truncated` | 流提前结束、无终止信号 | 链路不稳或上游提前断开 |
+| `egress_denied` | 被受保护出站拒绝（私网、元数据、重定向等） | 目标地址被禁止 |
+| `egress_proxy_unsupported` | 目标需经代理、无法固定 IP | 配 `NO_PROXY` 或改直连 |
+| `capability_unsupported` | 未声明能力却被要求 | 勾上对应能力或换模型 |
+| `tool_call_invalid` | 工具参数不完整/非 JSON 对象 | 换更擅长按 schema 输出的模型 |
+
+**上游错误体脱敏**：先按模式掩蔽疑似凭据（`sk-*` / `AIza*` / `Bearer *` /
+JSON 里 `api_key|token|secret|authorization` 的值），再截断至 512 字节。
+保留其余诊断文本（模型名写错时正靠那句话排查）。
 
 ## 8. 凭据与加密器
 
