@@ -4,6 +4,7 @@ import type { Bounded, ProbeServerState, ServerSection, ServerStateResponse, Jvm
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { Segment, Segments } from '@jianmanager/ui/components/layout'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
@@ -77,39 +78,45 @@ function BoundedTable<T>({
   const shown = collapsible && !expanded ? items.slice(0, COLLAPSE_THRESHOLD) : items
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-xs">
-        <thead>
-          <tr className="border-b text-left text-muted-foreground">
+    <div>
+      {/* Table 自带横向滚动容器，原先手写的 overflow-x-auto 外壳不再需要 */}
+      <Table className="text-xs">
+        <TableHeader className="bg-muted/40">
+          <TableRow>
             {columns.map((c) => (
-              <th key={c.header} className={cn('px-2 py-1 font-medium', c.className)}>
+              <TableHead key={c.header} className={c.className}>
                 {c.header}
-              </th>
+              </TableHead>
             ))}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {shown.map((row, i) => (
-            <tr key={rowKey(row, i)} className="border-b border-border/40 last:border-0">
+            <TableRow key={rowKey(row, i)}>
               {columns.map((c) => (
-                <td key={c.header} className={cn('px-2 py-1 tabular-nums', c.className)}>
+                <TableCell key={c.header} className={cn('tabular-nums', c.className)}>
                   {c.cell(row)}
-                </td>
+                </TableCell>
               ))}
-            </tr>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
       <div className="flex items-center justify-between gap-2 px-2 py-1 text-meta text-muted-foreground">
         {data?.truncated && <span>{t('serverState.truncatedNote', { total: data.total })}</span>}
         {collapsible && (
-          <button
+          // 表格页脚右侧的「展开全部/收起」：外观是同排纯文字链接，故 invisible + auto。
+          // 显式写 text-[11px]（= 原父级 text-meta）：Button 基础类带 text-sm，
+          // 且 text-meta 会与 text-primary 一起被 tailwind-merge 判为冲突而丢失，必须落到实值。
+          <Button
             type="button"
-            className="ml-auto text-primary hover:underline"
+            variant="invisible"
+            size="auto"
+            className="ml-auto text-[11px] text-primary hover:underline"
             onClick={() => setExpanded((e) => !e)}
           >
             {expanded ? t('serverState.collapse') : t('serverState.showAll', { total: items.length })}
-          </button>
+          </Button>
         )}
       </div>
     </div>

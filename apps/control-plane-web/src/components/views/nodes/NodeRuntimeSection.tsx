@@ -210,27 +210,33 @@ export default function NodeRuntimeSection({
                     {[rt.version, rt.arch].filter(Boolean).join(' · ')}
                   </span>
                 </div>
-                <button
+                {/* 路径复制：等宽小字，视觉是纯文本，故取 invisible + auto。 */}
+                <Button
                   type="button"
-                  className="mt-0.5 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  variant="invisible"
+                  size="auto"
+                  className="mt-0.5 flex max-w-full items-center justify-start gap-1 font-mono text-xs font-normal text-muted-foreground transition-colors hover:text-foreground"
                   title={rt.path}
                   onClick={() => void copyPath(rt.path)}
                 >
                   <span className="truncate">{rt.path}</span>
                   <Copy className="size-3 shrink-0" />
-                </button>
+                </Button>
               </div>
               <span className={cn('whitespace-nowrap text-xs', rt.managed ? 'font-medium text-primary' : 'text-muted-foreground')}>
                 {rt.managed ? t('nodes.jdkManaged') : t('nodes.jdkExternal')}
               </span>
-              <button
+              {/* 纯图标删除 → ghost + icon-xs */}
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-xs"
                 aria-label={t('common.delete')}
-                className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
+                className="shrink-0 text-muted-foreground hover:text-status-danger"
                 onClick={() => setPendingDel(rt)}
               >
                 <Trash2 className="size-4" />
-              </button>
+              </Button>
             </Card>
           ))}
         </div>

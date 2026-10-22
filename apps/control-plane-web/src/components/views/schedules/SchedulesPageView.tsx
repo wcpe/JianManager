@@ -315,14 +315,17 @@ export function ScheduleFormDialogView({
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">{t('schedules.presets')}:</span>
                 {CRON_PRESETS.map((p) => (
-                  <button
+                  // cron 预设是行内小描边按钮：标准次级按钮，直接落 outline + xs。
+                  <Button
                     key={p.expr}
                     type="button"
+                    variant="outline"
+                    size="xs"
                     onClick={() => setForm({ ...form, cronExpr: p.expr })}
-                    className="rounded border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent"
+                    className="text-muted-foreground"
                   >
                     {t(p.labelKey)}
-                  </button>
+                  </Button>
                 ))}
               </div>
               <Input

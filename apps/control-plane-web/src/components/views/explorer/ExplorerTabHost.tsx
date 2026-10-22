@@ -240,43 +240,53 @@ export default function ExplorerTabHost({
                   : 'border-transparent bg-transparent text-muted-foreground hover:bg-accent/50',
               )}
             >
-              <button
+              <Button
                 type="button"
-                className="min-w-0 truncate font-medium"
+                variant="invisible"
+                size="auto"
+                className="min-w-0 truncate text-xs font-medium"
                 onClick={() => setState((s) => activateTab(s, tab.id))}
                 title={tab.title}
               >
                 {tab.dirty ? '• ' : ''}
                 {tab.title}
-              </button>
-              <button
+              </Button>
+              {/* 标签条上的三个小动作钮是 16px 紧凑位（p-0.5 + size-3 图标），
+                  库的 icon-xs 是 24px 会把整条标签撑高，故用 invisible+auto 保原尺寸 */}
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
                 className="rounded p-0.5 opacity-60 hover:bg-accent hover:opacity-100"
                 title={t('files.floatPop')}
                 aria-label={t('files.floatPop')}
                 onClick={() => onFloat(tab.id)}
               >
                 <PanelTop className="size-3" />
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="invisible"
+                size="auto"
                 className="rounded p-0.5 opacity-60 hover:bg-accent hover:opacity-100"
                 title={t('files.openInBrowserTab')}
                 aria-label={t('files.openInBrowserTab')}
                 onClick={() => onOpenBrowser(tab.id)}
               >
                 <ExternalLink className="size-3" />
-              </button>
+              </Button>
               {state.tabs.length > 1 && (
-                <button
+                <Button
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   className="rounded p-0.5 opacity-60 hover:bg-destructive/10 hover:text-destructive hover:opacity-100"
                   title={t('common.close')}
                   aria-label={t('common.close')}
                   onClick={() => onCloseTab(tab.id)}
                 >
                   <X className="size-3" />
-                </button>
+                </Button>
               )}
             </div>
           ))}

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 
 /** 分段项：键 + i18n 标签键。 */
 export interface SegmentPillOption<T extends string> {
@@ -58,14 +59,16 @@ export function SegmentPills<T extends string>({
       className={cn('inline-flex shrink-0 rounded-full bg-muted p-0.5', className)}
     >
       {options.map(({ key, labelKey }) => (
-        <button
+        <Button
           key={key}
           ref={key === value ? activeRef : undefined}
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={() => onChange(key)}
           aria-pressed={value === key}
           className={cn(
-            'rounded-full transition-colors',
+            'rounded-full font-normal transition-colors',
             size === 'sm' ? 'px-2.5 py-0.5 text-xs' : 'px-3 py-1 text-xs',
             value === key
               ? 'bg-card font-semibold text-foreground shadow-soft'
@@ -73,7 +76,7 @@ export function SegmentPills<T extends string>({
           )}
         >
           {t(labelKey)}
-        </button>
+        </Button>
       ))}
     </div>
   )

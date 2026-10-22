@@ -184,9 +184,12 @@ export default function NodeArtifactCachePanel({
                     )}
                     {it.version && <span className="shrink-0 text-xs text-muted-foreground">{it.version}</span>}
                   </div>
-                  <button
+                  {/* SHA256 复制：一行等宽小字 + 图标，视觉是纯文本，故取 invisible + auto。 */}
+                  <Button
                     type="button"
-                    className="mt-0.5 flex items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    variant="invisible"
+                    size="auto"
+                    className="mt-0.5 flex items-center justify-start gap-1 font-mono text-xs font-normal text-muted-foreground transition-colors hover:text-foreground"
                     title={it.sha256}
                     onClick={async () => {
                       const ok = await copyToClipboard(it.sha256)
@@ -195,20 +198,23 @@ export default function NodeArtifactCachePanel({
                   >
                     <span>{it.sha256.slice(0, 12)}…</span>
                     <Copy className="size-3" />
-                  </button>
+                  </Button>
                 </div>
                 <div className="shrink-0 text-right">
                   <div className="font-mono text-sm font-medium">{formatFileSize(it.size)}</div>
                   <div className="text-[11px] text-muted-foreground">{fmtTime(it.lastUsedAt)}</div>
                 </div>
-                <button
+                {/* 纯图标删除 → ghost + icon-xs：无可见文案，可访问名仍由 aria-label 提供。 */}
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-xs"
                   aria-label={t('artifactCache.evict')}
-                  className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
+                  className="shrink-0 text-muted-foreground hover:text-status-danger"
                   onClick={() => setPendingEvict(it)}
                 >
                   <Trash2 className="size-4" />
-                </button>
+                </Button>
               </Card>
             ))
           )}

@@ -4,6 +4,7 @@ import { Copy, History } from 'lucide-react'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import type { LogEntry } from '@/lib/console/console-log-types'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 
 export interface StoppedLogsViewProps {
   instanceId: number
@@ -60,14 +61,16 @@ export function StoppedLogsView({
       <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5 text-xs">
         <span className="truncate text-gray-300">{t('instanceDetail.stoppedShowingHistory', { status })}</span>
         <div className="flex shrink-0 items-center gap-3">
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             onClick={() => void copyAll()}
-            className="flex items-center gap-1 text-gray-400 hover:text-gray-100"
+            className="flex items-center gap-1 text-xs font-normal text-gray-400 hover:text-gray-100"
           >
             <Copy className="size-3" />
             {t('instanceDetail.consoleCopyLogs')}
-          </button>
+          </Button>
           {renderLink?.({
             to: `/logs?instanceId=${instanceId}`,
             className: 'text-blue-400 hover:underline',

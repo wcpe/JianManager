@@ -753,19 +753,22 @@ function AssetSection({
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-1">
           {ASSET_TYPES.map((ty) => (
-            <button
+            // 类型筛选 chips：实心/浅底两态是自绘配色，故取 invisible + auto 保留原视觉。
+            <Button
               key={ty}
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => setFilter((f) => ({ ...f, type: ty }))}
               className={cn(
-                'rounded px-2 py-0.5 text-xs transition-colors',
+                'rounded px-2 py-0.5 text-xs font-normal transition-colors',
                 filter.type === ty
                   ? 'bg-primary text-primary-foreground'
                   : 'bg-muted text-muted-foreground hover:bg-accent',
               )}
             >
               {ty === 'all' ? t('runtimeAssets.typeAll') : ty}
-            </button>
+            </Button>
           ))}
         </div>
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">

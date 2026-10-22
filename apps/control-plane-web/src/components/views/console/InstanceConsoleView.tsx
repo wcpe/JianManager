@@ -504,32 +504,38 @@ export function InstanceConsoleView({
             </span>
             {/* 禁用态用 pointer-events-none 屏蔽指针：只降透明度时 hover 仍会点亮，
                 变成「看起来能点、点了没反应」；指针事件既已屏蔽，cursor 声明必为死代码故不留。 */}
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => moveSearchMatch(-1)}
               disabled={matches.length === 0}
               aria-label={t('instanceDetail.terminalSearchPrevious')}
-              className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
+              className="rounded px-1.5 py-0.5 text-xs font-normal text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
             >
               ↑
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => moveSearchMatch(1)}
               disabled={matches.length === 0}
               aria-label={t('instanceDetail.terminalSearchNext')}
-              className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
+              className="rounded px-1.5 py-0.5 text-xs font-normal text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:pointer-events-none disabled:opacity-40"
             >
               ↓
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => setSearchVisible(false)}
               aria-label={t('instanceDetail.terminalSearchClose')}
-              className="rounded px-1.5 py-0.5 text-gray-400 hover:bg-white/10 hover:text-gray-100"
+              className="rounded px-1.5 py-0.5 text-xs font-normal text-gray-400 hover:bg-white/10 hover:text-gray-100"
             >
               x
-            </button>
+            </Button>
           </div>
         )}
 
@@ -541,18 +547,20 @@ export function InstanceConsoleView({
             {/* 分段控件容器：三段过滤收进一个凹槽，选中段浮起——替代原先散装文字钮。 */}
             <div role="group" aria-label={t('instanceDetail.consoleFilterLabel')} className="flex shrink-0 items-center gap-0.5 rounded-md bg-white/[0.06] p-0.5">
               {LEVEL_FILTERS.map((option) => (
-                <button
+                <Button
                   key={option.value}
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   onClick={() => setLevelFilter(option.value)}
                   aria-pressed={levelFilter === option.value}
                   className={cn(
-                    'rounded px-2 py-0.5 font-medium transition-colors',
+                    'rounded px-2 py-0.5 text-[11px] font-medium transition-colors',
                     levelFilter === option.value ? 'bg-white/15 text-gray-100' : 'text-gray-400 hover:text-gray-200',
                   )}
                 >
                   {t(option.labelKey)}
-                </button>
+                </Button>
               ))}
             </div>
             {levelFilter !== 'all' && (
@@ -562,46 +570,52 @@ export function InstanceConsoleView({
               </span>
             )}
             {/* 自动换行开关（可用性增强）：长行折行显示，宽表格式的堆栈在窄 pane 里不再横向滚。 */}
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => setWrapText((v) => !v)}
               aria-pressed={wrapText}
               title={t('instanceDetail.consoleWrapToggle')}
               className={cn(
-                'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 transition-colors',
+                'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-normal transition-colors',
                 wrapText ? 'bg-white/15 text-gray-100' : 'hover:bg-white/10 hover:text-gray-200',
               )}
             >
               <WrapText className="size-3" />
               {t('instanceDetail.consoleWrapToggle')}
-            </button>
+            </Button>
             {/* 命令历史开关（可用性修复）：原先是 absolute right-1 top-1 的悬浮钮，
                 和工具条右侧的复制菜单重叠（窄 pane 必撞）——收编进工具条成为正常 flex 项。 */}
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => setDrawerOpen((v) => !v)}
               aria-expanded={drawerOpen}
               title={t('instanceDetail.terminalHistory')}
               className={cn(
-                'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 transition-colors',
+                'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-normal transition-colors',
                 drawerOpen ? 'bg-white/15 text-gray-100' : 'hover:bg-white/10 hover:text-gray-200',
               )}
             >
               <History className="size-3" />
               {t('instanceDetail.terminalHistory')}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect()
                 setMenu({ x: rect.left, y: rect.bottom })
               }}
               aria-label={t('instanceDetail.consoleCopyMenu')}
-              className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-white/10 hover:text-gray-200"
+              className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-normal hover:bg-white/10 hover:text-gray-200"
             >
               <Copy className="size-3" />
               {t('instanceDetail.consoleCopyMenu')}
-            </button>
+            </Button>
           </div>
           <ConsoleOutputView
             ref={outputRef}
@@ -630,22 +644,26 @@ export function InstanceConsoleView({
             historyActions={
               <>
                 {/* 同上：跳转按钮禁用时也要屏蔽指针，避免 hover 背景仍亮起。 */}
-                <button
+                <Button
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   onClick={jumpToStartup}
                   disabled={jumping}
-                  className="rounded px-1.5 py-0.5 hover:bg-white/10 hover:text-gray-200 disabled:pointer-events-none disabled:opacity-50"
+                  className="rounded px-1.5 py-0.5 text-xs font-normal hover:bg-white/10 hover:text-gray-200 disabled:pointer-events-none disabled:opacity-50"
                 >
                   {t('instanceDetail.consoleJumpToStartup')}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   onClick={() => setTimeJumpOpen(true)}
                   disabled={jumping}
-                  className="rounded px-1.5 py-0.5 hover:bg-white/10 hover:text-gray-200 disabled:pointer-events-none disabled:opacity-50"
+                  className="rounded px-1.5 py-0.5 text-xs font-normal hover:bg-white/10 hover:text-gray-200 disabled:pointer-events-none disabled:opacity-50"
                 >
                   {t('instanceDetail.consoleJumpToTime')}
-                </button>
+                </Button>
               </>
             }
             immersive={immersive}
@@ -667,12 +685,14 @@ export function InstanceConsoleView({
                 <div className="p-2 text-xs text-gray-500">{t('instanceDetail.terminalHistoryEmpty')}</div>
               ) : (
                 [...history].reverse().map((cmd, i) => (
-                  <button
+                  <Button
                     key={`${i}-${cmd}`}
                     type="button"
+                    variant="invisible"
+                    size="auto"
                     onClick={() => submitCommand(cmd)}
                     aria-label={cmd}
-                    className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-white/10"
+                    className="group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] font-normal transition-colors hover:bg-white/10"
                     title={cmd}
                   >
                     {/* 序号 = 最近使用排序（1=最近），等宽数字列让长短命令对齐 */}
@@ -681,7 +701,7 @@ export function InstanceConsoleView({
                     </span>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs text-gray-200">{cmd}</span>
                     <CornerDownLeft className="size-3 shrink-0 text-gray-600 opacity-0 transition-opacity group-hover:opacity-100" />
-                  </button>
+                  </Button>
                 ))
               )}
             </div>

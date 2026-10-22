@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, File, Folder, FolderOpen, Loader2, MoreVertical } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -174,8 +175,12 @@ function StaticDirRow({
   const [open, setOpen] = useState(true)
   return (
     <>
-      <button
+      {/* 目录行：整行可点击但外观是条目而非按钮，取 invisible + auto；
+          缩进仍由 style.paddingLeft 按层级计算，className 原样保留。 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-[background-color] hover:bg-accent"
         style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
         onClick={() => setOpen((v) => !v)}
@@ -193,7 +198,7 @@ function StaticDirRow({
         <span className="ml-auto shrink-0 text-xs text-muted-foreground">
           {t('fileBrowser.dirSummary', { n: dir.fileCount, size: formatFileSize(dir.totalSize) })}
         </span>
-      </button>
+      </Button>
       {open && (
         <StaticLevel
           dir={dir}
@@ -358,8 +363,12 @@ function LazyDirRow({
   const [open, setOpen] = useState(false)
   return (
     <>
-      <button
+      {/* 目录行：整行可点击但外观是条目而非按钮，取 invisible + auto；
+          缩进仍由 style.paddingLeft 按层级计算，className 原样保留。 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-[background-color] hover:bg-accent"
         style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
         onClick={() => setOpen((v) => !v)}
@@ -374,7 +383,7 @@ function LazyDirRow({
           <Folder className="size-4 shrink-0 text-amber-500" />
         )}
         <span className="truncate font-medium">{entry.name}</span>
-      </button>
+      </Button>
       {open && (
         <LazyDirChildren
           source={source}
@@ -416,9 +425,14 @@ function FileRow({
       )}
       style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
     >
-      <button
+      {/* 文件条目：占满行内剩余宽度，视觉与左侧目录行同档（无底色无常驻边框），
+          故取 invisible + auto，让行高/间距完全由 className 与父容器决定。
+          gap-2 与 Button 基础类同值，故不重复。 */}
+      <Button
         type="button"
-        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        variant="invisible"
+        size="auto"
+        className="flex min-w-0 flex-1 items-center text-left"
         onClick={() => onSelect(file.entry)}
       >
         <File className="size-4 shrink-0 text-muted-foreground" />
@@ -428,17 +442,22 @@ function FileRow({
             {formatFileSize(file.entry.size)}
           </span>
         )}
-      </button>
+      </Button>
       {visibleActions.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
+            {/* 纯图标触发器：默认隐形（opacity-0），行 hover 或菜单展开时才浮现。
+                原尺寸只有图标本身（无内边距），用 invisible + auto 保持这个紧凑占位，
+                换成 icon-xs 会撑到 24px 并与文件名的 ml-auto 布局抢宽度。 */}
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100"
               aria-label={t('fileBrowser.actions')}
             >
               <MoreVertical className="size-4" />
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {visibleActions.map((a) => (

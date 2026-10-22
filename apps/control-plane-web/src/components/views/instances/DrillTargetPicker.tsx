@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { InstancePicker } from '@/components/views/instances/InstancePicker'
 import { NativeSelect } from '@jianmanager/ui/components/native-select'
+import { Button } from '@jianmanager/ui/components/button'
 import type { InstancePickerItemView } from '@/components/views/instances/InstancePicker'
 
 /** 实例候选行（与 InstancePicker 的视图类型同源）。 */
@@ -40,9 +41,11 @@ function Crumb({ label, onClick, active }: { label: string; onClick?: () => void
     return <span className={active ? 'font-medium text-foreground' : 'text-muted-foreground'}>{label}</span>
   }
   return (
-    <button type="button" onClick={onClick} className="text-primary hover:underline">
+    // 面包屑中可回跳的一节：外观是同排纯文本，故 invisible + auto。
+    // 显式写 text-xs（= 外层容器继承值）：Button 基础类带 text-sm，不覆盖会把面包屑放大。
+    <Button type="button" variant="invisible" size="auto" onClick={onClick} className="text-xs text-primary hover:underline">
       {label}
-    </button>
+    </Button>
   )
 }
 

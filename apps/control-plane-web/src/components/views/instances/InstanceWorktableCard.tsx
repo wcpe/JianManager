@@ -181,8 +181,12 @@ export function InstanceWorktableCard({
           <Icon className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <button
+          {/* 卡片标题即进详情入口：外观是纯标题文字，取 invisible + auto。
+              onClick 内部 stopPropagation 阻止冒泡到卡片自身的选中逻辑，原样保留。 */}
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
             className="block max-w-full truncate text-left text-sm font-semibold hover:text-primary"
             onClick={(e) => {
               e.stopPropagation()
@@ -191,7 +195,7 @@ export function InstanceWorktableCard({
             title={inst.name}
           >
             {inst.name}
-          </button>
+          </Button>
           <div className="mt-0.5 flex items-center gap-1.5">
             <StatusBadge
               level={level}

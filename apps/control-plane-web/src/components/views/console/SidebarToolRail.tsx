@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 import { GripVertical, MoreHorizontal } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { Separator } from '@jianmanager/ui/components/separator'
 import {
   DropdownMenu,
@@ -65,7 +66,7 @@ export function SidebarPinnedTools({
               // 与资源区行同款：真 `<a href>`，中键/新标签页可用（护栏要求语义落在可聚焦元素上）。
               ariaCurrent: pathname === entry.to || pathname.startsWith(`${entry.to}/`) ? 'page' : undefined,
               className: (active: boolean) =>
-                `flex min-w-0 flex-1 items-center gap-[7px] rounded-[5px] px-[6px] py-[3px] text-[11px] transition-colors ${
+                `flex min-w-0 flex-1 items-center gap-[7px] rounded-[var(--radius)] px-[6px] py-[3px] text-[11px] transition-colors ${
                   active ? 'bg-accent/60 text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 }`,
               children: (
@@ -219,17 +220,20 @@ function ToolMoreMenu({ entries }: { entries: NavEntry[] }) {
       <DropdownMenuTrigger asChild>
         {/*
           用户指定：**纯三个点小图标**，不写字。位置由 `SidebarPreferences.moreMenu` 决定——
-          在「版本号 / 开源协议」那一行的正上方。`aria-label` 落在真 `<button>` 上（护栏要求）。
+          在「版本号 / 开源协议」那一行的正上方。`aria-label` 落在真按钮上（护栏要求）。
+          22px 的小图标位由 className 定尺寸，故取 invisible+auto 不叠按钮盒。
         */}
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           aria-label={t('sidebarTools.more')}
           title={t('sidebarTools.more')}
           data-testid="sidebar-tools-more"
           className="ml-auto flex size-[22px] items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
         >
           <MoreHorizontal className="size-[15px]" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" side="top" className="w-60">
         <div

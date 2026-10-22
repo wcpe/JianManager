@@ -191,12 +191,18 @@ function ChannelWorkbench({
               <ArrowLeft className="size-4" />
               {t('clientChannels.backToList', '返回列表')}
             </Button>
-            <button
-              className="text-destructive hover:underline text-sm"
+            {/* 文本动作（删除频道）：用 link 变体表达「看起来是文字、语义是按钮」。
+                沿用仓库既有写法（size=xs + h-auto p-0）把盒模型交还文字本身，
+                字号补回原实现的 text-sm，危险色覆盖 link 默认主色。 */}
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto gap-0 rounded-none p-0 text-sm text-destructive hover:text-destructive"
               onClick={() => setDeleteChannel(true)}
             >
               {t('clientChannels.deleteChannel', '删除频道')}
-            </button>
+            </Button>
           </>
         }
         onNavigate={(to: string) => {

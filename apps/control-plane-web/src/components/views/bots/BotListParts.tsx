@@ -150,9 +150,18 @@ export function PeekRow({ bot, onOpen }: { bot: BotInfo; onOpen: () => void }) {
   const { t } = useTranslation()
   return (
     <li className="flex items-center justify-between py-1.5">
-      <button type="button" onClick={onOpen} className="truncate text-left font-medium hover:underline">
+      <Button
+        type="button"
+        variant="invisible"
+        size="auto"
+        // 窥视行里的 Bot 名本身就是入口：无按钮外壳，只是可点文字。
+        // `block`：Button 基础类是 inline-flex，而 truncate（text-overflow）在 flex 容器上
+        // 对匿名文本项不生效；它作为 flex 子项本就会被块化成块级盒，故显式写 block 保住省略号。
+        className="block max-w-full truncate text-left font-medium hover:underline"
+        onClick={onOpen}
+      >
         {bot.name}
-      </button>
+      </Button>
       <div className="flex items-center gap-4">
         <span className={cn('text-xs', STATUS_COLOR[bot.status] ?? 'text-muted-foreground')}>
           {t(`bots.status_${bot.status}`, bot.status)}

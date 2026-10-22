@@ -149,14 +149,17 @@ export function BotGroupRow({
           <Checkbox checked={checked} onCheckedChange={onCheck} aria-label={t('bots.select')} />
         </TableCell>
         <TableCell>
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
+            // 分组名 + 折叠箭头：视觉上是单元格里的一段文字，故不自带按钮外壳（invisible + auto）
+            className="flex items-center justify-start gap-1.5 text-left font-medium hover:underline"
             onClick={onToggleExpand}
-            className="flex items-center gap-1.5 text-left font-medium hover:underline"
           >
             <span className="text-muted-foreground">{expanded ? '▾' : '▸'}</span>
             <span className="truncate">{group.label || group.key}</span>
-          </button>
+          </Button>
         </TableCell>
         <TableCell>
           <BotHealthBar total={group.total} online={group.online} />

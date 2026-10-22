@@ -162,23 +162,29 @@ export default function NodeGlobalPackagesSection({
                     </Badge>
                   )}
                   {p.latest && (
-                    <button
+                    // 纯图标升级 → ghost + icon-xs
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="icon-xs"
                       aria-label={t('pkg.upgrade', '升级')}
-                      className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
+                      className="shrink-0 text-muted-foreground hover:text-primary"
                       onClick={() => void submitInstall(p.name)}
                     >
                       <ArrowUpCircle className="size-4" />
-                    </button>
+                    </Button>
                   )}
-                  <button
+                  {/* 纯图标卸载 → ghost + icon-xs */}
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-xs"
                     aria-label={t('pkg.remove', '卸载')}
-                    className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
+                    className="shrink-0 text-muted-foreground hover:text-status-danger"
                     onClick={() => setPendingDel(p.name)}
                   >
                     <Trash2 className="size-4" />
-                  </button>
+                  </Button>
                 </Card>
               ))}
             </div>

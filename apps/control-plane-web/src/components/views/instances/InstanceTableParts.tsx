@@ -158,15 +158,21 @@ export function SortableTableHead({
   const orderLabel = currentOrder === 'desc' ? t('grouping.orderDesc') : t('grouping.orderAsc')
   return (
     <TableHead aria-sort={active ? (currentOrder === 'desc' ? 'descending' : 'ascending') : 'none'}>
-      <button
+      {/* 表头排序：外观是表头文字而非按钮，故 invisible + auto，
+          手写的紧凑内边距与 hover 底色原样保留。
+          显式写 text-[11px] font-semibold（= TableHead classic 档的继承值）：Button 基础类
+          带 text-sm font-medium，不覆盖会把表头文字放大并减轻字重。 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={() => onSort(sortValue)}
         aria-label={active ? t('grouping.sortHeaderActive', { label, order: orderLabel }) : t('grouping.sortHeader', { label })}
-        className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-left text-[11px] font-semibold transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         <span>{label}</span>
         <ArrowUpDown className={cn('size-3.5', active ? 'text-primary' : 'text-muted-foreground/60')} aria-hidden="true" />
-      </button>
+      </Button>
     </TableHead>
   )
 }

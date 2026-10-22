@@ -185,7 +185,15 @@ function NetworkListView({
         return (
           <Panel key={n.id} hoverable className="px-0" bodyClassName="px-4 py-3">
             <div className="flex items-start justify-between gap-3">
-              <button onClick={() => onView(n.id)} className="min-w-0 text-left group">
+              {/* 群组名区块整体可点（点了进详情）：视觉是纯文本块，
+                  故取 invisible + auto 保留 group/text-left 布局，按钮语义与焦点环由 Button 提供。 */}
+              <Button
+                type="button"
+                variant="invisible"
+                size="auto"
+                onClick={() => onView(n.id)}
+                className="block min-w-0 text-left font-normal group"
+              >
                 <div className="flex items-center gap-2">
                   <span className="font-semibold group-hover:text-primary transition-colors">{n.name}</span>
                   <span className="text-xs text-muted-foreground">
@@ -193,7 +201,7 @@ function NetworkListView({
                   </span>
                 </div>
                 {n.description && <p className="mt-0.5 truncate text-sm text-muted-foreground">{n.description}</p>}
-              </button>
+              </Button>
               <div className="flex shrink-0 items-center gap-3">
                 <Button size="xs" variant="ghost" className="text-primary hover:text-primary" onClick={() => onView(n.id)}>
                   {t('networks.manage')}

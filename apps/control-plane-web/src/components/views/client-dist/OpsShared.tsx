@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- 共享展示件与格式化/常量同文件导出（仅影响 Fast Refresh） */
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Panel } from '@jianmanager/ui/components/panel'
 import type { MetricRange } from '@jianmanager/ui'
@@ -248,13 +249,20 @@ export function LinkableDistPanel({
         <ul className="space-y-2.5">
           {buckets.map((b) => (
             <li key={b.key} className="space-y-1">
-              <button type="button" className="flex w-full items-baseline justify-between text-left text-sm" onClick={() => onPick(b.key)}>
+              <Button
+                type="button"
+                variant="invisible"
+                size="auto"
+                // 分桶行：整行可点（键名 + 计数两端对齐），无按钮外壳
+                className="flex w-full items-baseline justify-between text-left text-sm"
+                onClick={() => onPick(b.key)}
+              >
                 <span className="font-medium text-primary underline-offset-2 hover:underline">{b.key}</span>
                 <span className="tabular-nums text-muted-foreground">
                   {b.count}
                   <span className="ml-1.5 text-xs">{(b.pct * 100).toFixed(0)}%</span>
                 </span>
-              </button>
+              </Button>
               <MiniBar value={b.pct * 100} level="info" />
             </li>
           ))}

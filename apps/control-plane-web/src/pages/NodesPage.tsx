@@ -367,21 +367,27 @@ export default function NodesPage() {
       >
         {collapsed ? (
           <div className="flex min-h-0 flex-1 flex-col items-center gap-1.5 p-2">
-            <button
+            {/* 纯图标收缩/展开：无可见文案，可访问名来自 aria-label / tooltip。 */}
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={toggleCollapsed}
               aria-label={t('nodes.expandList')}
               title={t('nodes.expandList')}
-              className="grid size-9 w-full place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+              className="w-full text-muted-foreground hover:text-foreground"
             >
               <ChevronsRight className="size-4" />
-            </button>
+            </Button>
             <div className="flex min-h-0 flex-1 flex-col items-center gap-1.5 overflow-y-auto scrollbar-none">
               {isArchive
                 ? filteredArchived.map((node) => (
-                    <button
+                    // 窄轨归档节点格：36px 方块描边 + 选中态自绘，故取 invisible + auto。
+                    <Button
                       key={node.id}
                       type="button"
+                      variant="invisible"
+                      size="auto"
                       onClick={() => setSelectedId(node.id)}
                       title={node.name}
                       aria-label={node.name}
@@ -393,7 +399,7 @@ export default function NodesPage() {
                       )}
                     >
                       {node.name.slice(0, 1).toUpperCase()}
-                    </button>
+                    </Button>
                   ))
                 : filtered.map((node) => (
                     <NodeRailIcon
@@ -410,15 +416,17 @@ export default function NodesPage() {
             <div className="shrink-0 space-y-2 border-b p-3">
               <div className="flex items-center justify-between gap-2">
                 <h1 className="text-sm font-bold">{t('nodes.title')}</h1>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-sm"
                   onClick={toggleCollapsed}
                   aria-label={t('nodes.collapseList')}
                   title={t('nodes.collapseList')}
-                  className="grid size-7 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                  className="text-muted-foreground hover:text-foreground"
                 >
                   <ChevronsLeft className="size-4" />
-                </button>
+                </Button>
               </div>
               {/* 活跃 | 归档 页面级分段（FR-393，URL ?view=） */}
               <Segments className="w-full" aria-label={t('nodes.title')}>

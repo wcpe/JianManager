@@ -9,6 +9,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { INSTANCE_EXPANDED_ROW_HEIGHT, INSTANCE_ROW_HEIGHT } from '@/components/views/instances/InstanceRowView'
 import { memberHealth } from '@/lib/networks/topology'
@@ -277,8 +278,13 @@ export function InstanceGroupHeaderContent({
       {/* 子层加一条竖向引导线，把「从属关系」画出来；顶层不需要。 */}
       {!isTop && <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />}
 
-      <button
+      {/* 分组折叠箭头：纯图标按钮。两档尺寸（顶层 size-5 / 子层 size-4）必须由 className 保留——
+          icon-xs 自带 size-6 会撑到 24px，把分组头行撑高、破坏虚拟滚动的定高模型，
+          故取 invisible + auto 让 size-5/size-4 继续生效。 */}
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
         onClick={onToggle}
         aria-expanded={!collapsed}
         aria-label={
@@ -298,7 +304,7 @@ export function InstanceGroupHeaderContent({
         ) : (
           <ChevronDown className={isTop ? 'size-3.5' : 'size-3'} />
         )}
-      </button>
+      </Button>
 
       {/*
         名字与计数的排布也分两档：

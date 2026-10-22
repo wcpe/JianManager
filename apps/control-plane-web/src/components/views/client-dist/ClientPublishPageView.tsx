@@ -806,14 +806,17 @@ export function UploadProgressBar({ progress, onCancel }: UploadProgressBarProps
                 })}
           </span>
           <span className="tabular-nums font-medium text-foreground">{pct}%</span>
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
+            // 进度条右侧的「取消」：图标 + 文字的小型销毁向动作，外观由下方 className 决定
             className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-destructive hover:bg-destructive/10"
             onClick={onCancel}
           >
             <X className="size-3.5" />
             {t('common.cancel', '取消')}
-          </button>
+          </Button>
         </span>
       </div>
       <Progress className="h-1.5 w-full bg-muted" value={pct} aria-label={t('tasks.progress')} />

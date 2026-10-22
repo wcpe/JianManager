@@ -4,6 +4,7 @@ import { AlertTriangle, Copy } from 'lucide-react'
 
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 
 /** 一条近期日志（结构化子集）。 */
 export interface ActivityLogEntry {
@@ -129,14 +130,17 @@ function FeedRow({
         {meta && <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{meta}</p>}
       </div>
       {onCopy && (
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={onCopy}
           title={t('common.copy')}
+          aria-label={t('common.copy')}
           className="shrink-0 rounded-sm p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
         >
           <Copy className="size-3" />
-        </button>
+        </Button>
       )}
     </div>
   )

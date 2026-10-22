@@ -980,19 +980,22 @@ export default function InstancesPage() {
                   savedViews.map((view) => (
                     <DropdownMenuItem key={view.name} onSelect={() => applySavedView(view)}>
                       <span className="min-w-0 flex-1 truncate">{view.name}</span>
-                      <button
+                      <Button
                         type="button"
+                        variant="ghost"
+                        size="icon-xs"
                         aria-label={t('instances.viewDelete', { name: view.name })}
                         title={t('instances.viewDelete', { name: view.name })}
+                        // 菜单项内的次级动作：按下不得触发 Radix 的项选择，故阻止冒泡链。
                         onPointerDown={(event) => event.stopPropagation()}
                         onClick={(event) => {
                           event.stopPropagation()
                           deleteSavedView(view.name)
                         }}
-                        className="rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-destructive"
+                        className="text-muted-foreground/70 hover:text-destructive"
                       >
                         <Trash2 className="size-3.5" />
-                      </button>
+                      </Button>
                     </DropdownMenuItem>
                   ))
                 )}

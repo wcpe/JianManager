@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { GripVertical, Maximize2, Minimize2, X } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 
 /**
  * 统一卡壳（FR-166）：grip 拖拽手柄 + 实例·功能标签 + 全屏 + 关闭，内嵌卡内容。
@@ -67,10 +68,14 @@ function WorkspaceCardImpl({
       className="h-full min-h-0 gap-0 overflow-hidden py-0"
     >
       <div className="flex shrink-0 items-center gap-1.5 border-b px-2 py-1.5">
-        {/* grip 拖拽手柄：仅此处可发起拖拽（draggableHandle）；只读卡（导播台）不显。 */}
+        {/* grip 拖拽手柄：仅此处可发起拖拽（draggableHandle）；只读卡（导播台）不显。
+            RGL 靠 `.workspace-card-grip` 类选择器绑定拖拽，Button 渲染的仍是真 <button> 且类名保留，
+            选择器语义不变；它没有任何按钮外观，故 invisible + icon-xs。 */}
         {!readOnly && (
-          <button
+          <Button
             type="button"
+            variant="invisible"
+            size="icon-xs"
             aria-label={t('workspace.dragHandle')}
             title={t('workspace.dragHandle')}
             className={cn(
@@ -82,7 +87,7 @@ function WorkspaceCardImpl({
             onClick={(e) => e.preventDefault()}
           >
             <GripVertical className="size-4" />
-          </button>
+          </Button>
         )}
         <div className={cn('flex min-w-0 flex-1 items-baseline gap-1.5', readOnly && 'pl-1')}>
           <span className="truncate text-xs font-semibold tracking-wide text-foreground">{title}</span>
@@ -90,24 +95,30 @@ function WorkspaceCardImpl({
         </div>
         {!readOnly && (
           <>
-            <button
+            {/* 全屏切换：纯图标，尺寸固定 size-6，故 ghost + icon-xs */}
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-xs"
               aria-label={fullscreen ? t('workspace.exitFullscreen') : t('workspace.fullscreen')}
               title={fullscreen ? t('workspace.exitFullscreen') : t('workspace.fullscreen')}
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="size-6 shrink-0 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={onToggleFullscreen}
             >
               {fullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-            </button>
-            <button
+            </Button>
+            {/* 关闭卡片：纯图标，悬停取 destructive 色系（焦点环仍走主色，因关闭仅是移除视图、不销毁数据） */}
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-xs"
               aria-label={t('common.close')}
               title={t('common.close')}
-              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+              className="size-6 shrink-0 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
               onClick={onClose}
             >
               <X className="size-3.5" />
-            </button>
+            </Button>
           </>
         )}
       </div>

@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 import { clampChartPoints, formatLatencyMs } from '@/lib/bot-load/bot-load-metrics'
 import type { BotLoadMetricPoint } from '@/lib/bot-load/bot-load-types'
 import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
@@ -135,14 +136,17 @@ export function SessionMetrics({
     <div className="space-y-6" data-testid="session-metrics">
       <div className="flex flex-wrap items-center gap-2">
         {(['15m', '1h', 'all'] as const).map((k) => (
-          <button
+          <Button
             key={k}
             type="button"
-            className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${range === k ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-accent/50'}`}
+            variant="outline"
+            size="xs"
+            // px-2.5 / py-1：保留原内距（xs 档默认 px-2 且无纵向内距，会显得更扁）
+            className={`px-2.5 py-1 transition-colors ${range === k ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-accent/50'}`}
             onClick={() => onRangeChange(k)}
           >
             {t(`botLoad.range.${k}`)}
-          </button>
+          </Button>
         ))}
         {isLoading && <span className="text-xs text-muted-foreground">{t('common.loading')}</span>}
         {isError && (

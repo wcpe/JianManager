@@ -1,6 +1,7 @@
 import { useEffect, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { instanceStatusLevel } from '@jianmanager/ui/lib/threshold'
 import { useCardColumns } from '@/lib/hooks/use-card-columns'
@@ -257,13 +258,16 @@ export function BackendsInline({ registrations, isLoading = false, onOpenInstanc
             <li key={r.id} className="flex items-center gap-3 text-sm">
               <span className="text-muted-foreground">{r.priority}</span>
               {b ? (
-                <button
+                // 行内跳转链接：与相邻纯文本同排，取 invisible + auto
+                <Button
                   type="button"
+                  variant="invisible"
+                  size="auto"
                   className="font-medium text-primary hover:underline"
                   onClick={() => onOpenInstance(b.id)}
                 >
                   {b.name}
-                </button>
+                </Button>
               ) : (
                 <span className="font-medium">{r.alias || `#${r.backendId}`}</span>
               )}

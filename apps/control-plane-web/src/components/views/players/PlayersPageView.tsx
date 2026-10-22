@@ -30,6 +30,7 @@ import {
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PlatformTab, PlatformTabs } from '@jianmanager/ui/components/layout'
 import {
   Select,
   SelectContent,
@@ -1058,24 +1059,21 @@ export function PlayersPageView({
     <PageShell data-page="players">
       <PageHeader title={t('players.title')} description={t('players.subtitle')} />
 
-      <div className="flex gap-1 mb-4 border-b" role="tablist">
+      {/* 页签条走组件库 PlatformTabs：role=tablist + role=tab + aria-selected/aria-controls
+          与手写版语义等价，视觉（下划线选中 + hover 浅底）由组件库统一维护。 */}
+      <PlatformTabs className="mb-4">
         {PLAYER_TABS.map((key) => (
-          <button
+          <PlatformTab
             key={key}
-            type="button"
-            role="tab"
-            id={tabDomId(key)}
-            aria-selected={tab === key}
-            aria-controls={panelDomId(key)}
+            active={tab === key}
+            tabId={tabDomId(key)}
+            panelId={panelDomId(key)}
             onClick={() => onTabChange(key)}
-            className={`px-3 py-2 text-sm -mb-px border-b-2 ${
-              tab === key ? 'border-primary text-foreground font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
           >
             {t(`players.tab_${key}`)}
-          </button>
+          </PlatformTab>
         ))}
-      </div>
+      </PlatformTabs>
 
       {/* 四个区块按 Tab 条件挂载（与原页一致）：区块内的本地 UI 状态随切换重置；
           数据侧由容器的 enabled 开关保住「未激活不取数/不订阅」的时机。 */}

@@ -464,11 +464,15 @@ function TaskRow({
   return (
     <div ref={rowRef} data-task-row-id={task.taskId} className={cn('border-border/60', !isLast && 'border-b')}>
       <div className="flex items-center">
-        <button
+        {/* 任务行整行可点（展开详情）：外观全由 className 决定，故取 invisible + auto；
+            aria-expanded 等语义原样保留。 */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={onToggle}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent/50"
+          className="flex min-w-0 flex-1 items-center justify-start gap-3 px-3 py-2.5 text-left text-sm font-normal transition-colors hover:bg-accent/50"
         >
           <ChevronRight
             className={cn(
@@ -494,7 +498,7 @@ function TaskRow({
           <span className="w-40 shrink-0 font-mono text-[11px] text-muted-foreground">
             {new Date(task.updatedAt).toLocaleString()}
           </span>
-        </button>
+        </Button>
         <span className="flex w-20 shrink-0 justify-center px-2">
           {!isTerminalTask(task) && (
             <CancelTaskButton

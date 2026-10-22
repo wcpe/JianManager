@@ -489,9 +489,12 @@ export function ConsoleImmersiveMode({
               <p className="px-3 py-4 text-sm text-muted-foreground">{t('instanceDetail.consoleImmersiveNoInstance')}</p>
             ) : (
               pickerItems.map((instance, index) => (
-                <button
+                <Button
                   key={instance.id}
                   type="button"
+                  variant="invisible"
+                  size="auto"
+                  // 实例候选行：整行可点，无按钮外壳；data-* 钩子供键盘高亮与测试使用
                   data-picker-option="true"
                   data-picker-active={index === activePickerIndex ? 'true' : undefined}
                   onClick={() => chooseInstance(instance.id)}
@@ -502,7 +505,7 @@ export function ConsoleImmersiveMode({
                 >
                   <span className="min-w-0 truncate font-medium">{instance.name}</span>
                   <span className="ml-3 shrink-0 font-mono text-xs text-muted-foreground">{instance.status}</span>
-                </button>
+                </Button>
               ))
             )}
           </div>
@@ -584,15 +587,18 @@ function ImmersiveHeader({
         <HeaderAction icon={Plus} label={t('instanceDetail.consoleImmersiveAddPane')} onClick={onAdd} variant="primary" />
         <HeaderAction icon={PanelLeftClose} label={t('instanceDetail.consoleImmersiveSplitHorizontal')} onClick={onSplitHorizontal} disabled={maximized} iconOnly />
         <HeaderAction icon={PanelTop} label={t('instanceDetail.consoleImmersiveSplitVertical')} onClick={onSplitVertical} disabled={maximized} iconOnly />
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
+          // 沉浸态顶栏的「退出」：深底上的描边控件，配色与边框由 className 决定（不走主题 token）
           aria-label={t('instanceDetail.consoleImmersiveExit')}
           onClick={onExit}
           className="ml-1 inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 text-xs font-medium text-slate-200 transition-colors hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-200"
         >
           <X className="size-3.5" />
           <span className="hidden sm:inline">{t('instanceDetail.consoleImmersiveExit')}</span>
-        </button>
+        </Button>
       </span>
     </header>
   )
@@ -616,14 +622,17 @@ function HeaderAction({
   iconOnly?: boolean
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
+      // 分屏操作：图标（可带文字）的紧凑控件，深底配色由 className 的三档变体决定
       aria-label={label}
       title={label}
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-slate-300 transition-colors disabled:pointer-events-none disabled:opacity-35',
+        'inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-slate-300 transition-colors disabled:pointer-events-none disabled:opacity-35',
         variant === 'primary' && 'border border-transparent bg-slate-100 font-medium text-slate-900 hover:bg-white hover:text-slate-900',
         variant === 'ghost' && 'border border-white/10 bg-white/5 hover:bg-white/10 hover:text-white',
         variant === 'danger' && 'border border-white/10 bg-white/5 hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-200',
@@ -631,7 +640,7 @@ function HeaderAction({
     >
       <Icon className="size-4" />
       {!iconOnly && <span className="hidden text-xs font-medium sm:inline">{label}</span>}
-    </button>
+    </Button>
   )
 }
 
@@ -715,8 +724,11 @@ function ImmersivePane({
 
 function PaneAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
+      // 窗格操作（最大化/关闭）：纯图标小控件，min-h-7 与内距由 className 维持
       aria-label={label}
       title={label}
       onClick={onClick}
@@ -724,7 +736,7 @@ function PaneAction({ label, onClick, children }: { label: string; onClick: () =
       className="inline-flex min-h-7 items-center justify-center rounded-md px-1 text-slate-400 transition-colors hover:bg-white/10 hover:text-white"
     >
       {children}
-    </button>
+    </Button>
   )
 }
 

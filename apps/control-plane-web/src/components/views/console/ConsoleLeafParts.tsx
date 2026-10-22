@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Activity, Bot, Box, ChevronDown, ChevronRight, Server } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
@@ -105,10 +106,13 @@ export function BotWorktableCard({
             <Icon className="size-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
+              // 分组标题即折叠开关：视觉上是一行文字，无按钮外壳
               onClick={onToggleExpand}
-              className="flex max-w-full items-center gap-1 text-left text-sm font-semibold hover:text-primary"
+              className="flex max-w-full items-center justify-start gap-1 text-left text-sm font-semibold hover:text-primary"
               title={group.label || group.key}
             >
               {expanded ? (
@@ -117,7 +121,7 @@ export function BotWorktableCard({
                 <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
               )}
               <span className="truncate">{group.label || group.key}</span>
-            </button>
+            </Button>
             <div className="mt-0.5 text-xs text-muted-foreground">
               {t('bots.healthTooltip', { online: group.online, total: group.total })}
             </div>

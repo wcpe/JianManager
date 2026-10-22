@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 import { hasErrors, validateFields, validateHost, validatePort, validateRequired } from '@/lib/shared/form-validation'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
 
@@ -243,9 +244,10 @@ export function BotStressSessionDialog({
                   {t('bots.restoreTemplate')}
                 </Button>
               </div>
-              <textarea
+              {/* 组件库 Textarea 自带边框/圆角/焦点环，这里只保留等宽字体与高度/缩放相关样式 */}
+              <Textarea
                 aria-label={t('bots.orchestrationYaml')}
-                className="min-h-72 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm leading-5 shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                className="min-h-72 resize-y font-mono text-sm leading-5"
                 value={orchestrationYaml}
                 onChange={(e) => setOrchestrationYaml(e.target.value)}
                 spellCheck={false}

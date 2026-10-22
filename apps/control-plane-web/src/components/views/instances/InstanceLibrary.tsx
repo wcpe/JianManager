@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, GripVertical, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Button } from '@jianmanager/ui/components/button'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { useDebounced } from '@/lib/hooks/use-debounced'
@@ -167,15 +168,18 @@ export default function InstanceLibrary({
   if (collapsed) {
     return (
       <div className="flex w-12 shrink-0 flex-col items-center border-r bg-card/40 py-2">
-        <button
+        {/* 纯图标展开按钮（收起态侧边窄条） */}
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-sm"
           onClick={onToggleCollapsed}
           aria-label={t('superWorkbench.expandLibrary')}
           title={t('superWorkbench.expandLibrary')}
-          className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
         >
           <PanelLeftOpen className="size-4" />
-        </button>
+        </Button>
       </div>
     )
   }
@@ -185,15 +189,17 @@ export default function InstanceLibrary({
     <div className="flex w-64 shrink-0 flex-col border-r bg-card/40">
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
         <span className="flex-1 truncate text-sm font-semibold">{t('superWorkbench.libraryTitle')}</span>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           onClick={onToggleCollapsed}
           aria-label={t('superWorkbench.collapseLibrary')}
           title={t('superWorkbench.collapseLibrary')}
-          className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
         >
           <PanelLeftClose className="size-4" />
-        </button>
+        </Button>
       </div>
 
       <div className="shrink-0 px-3 py-2">
@@ -339,8 +345,13 @@ function InstanceLibraryRow({
             className="size-3.5 shrink-0"
           />
         </span>
-        <button
+        {/* 纯图标展开箭头：触发「是否展示功能按钮」，不参与行的拖拽/选中。
+            原样式 grid size-5（20px），用 icon-xs 会撑到 24px 挤压同一行的实例名，
+            故取 invisible + auto 并保留 size-5 与 grid 定位。 */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           onClick={onToggleExpand}
           aria-expanded={expanded}
           aria-label={t('superWorkbench.toggleInstanceFunctions', {
@@ -350,7 +361,7 @@ function InstanceLibraryRow({
           className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:text-foreground"
         >
           {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-        </button>
+        </Button>
         <InstanceStatusDot status={instance.status} />
         <span className="min-w-0 flex-1 truncate">{instance.name}</span>
         <GripVertical className="size-3.5 shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground" />

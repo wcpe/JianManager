@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 import type { NavGroup, NavSection } from '@/lib/shared/nav-config'
@@ -100,14 +101,16 @@ export function MobileConsoleNav({ groups, pathname, renderLink }: MobileConsole
         >
           <div className="mb-1 flex items-center justify-between px-2 py-1 text-xs font-medium text-muted-foreground">
             <span>{t(panelGroup.labelKey)}</span>
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={closePanel}
               className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
               aria-label="收起移动导航"
             >
               <ChevronDown className="size-4" />
-            </button>
+            </Button>
           </div>
           <div className="grid gap-1">
             {panelGroup.children?.map((item) => (
@@ -159,13 +162,16 @@ export function MobileConsoleNav({ groups, pathname, renderLink }: MobileConsole
           }
 
           return (
-            <button
+            /* 底部主域格子是「图标 + 文字」的整格可点块，撑满网格列，故保原布局不套按钮盒 */
+            <Button
               key={group.key}
               type="button"
+              variant="invisible"
+              size="auto"
               aria-expanded={openKey === group.key}
               onClick={() => togglePanel(group)}
               className={cn(
-                'relative flex min-w-0 flex-col items-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] transition-[background-color,color,transform] duration-150 ease-ios active:scale-[0.97]',
+                'relative flex min-w-0 flex-col items-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-normal transition-[background-color,color,transform] duration-150 ease-ios active:scale-[0.97]',
                 active || openKey === group.key
                   ? 'bg-accent text-primary'
                   : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
@@ -173,7 +179,7 @@ export function MobileConsoleNav({ groups, pathname, renderLink }: MobileConsole
             >
               <Icon className="size-4" />
               <span className="w-full truncate text-center">{t(group.labelKey)}</span>
-            </button>
+            </Button>
           )
         })}
       </div>

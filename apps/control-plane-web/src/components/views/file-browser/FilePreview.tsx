@@ -55,13 +55,18 @@ export default function FilePreview({ entry, content, loading, onDownload, theme
           <span className="ml-2 flex shrink-0 items-center gap-2 text-muted-foreground">
             {content.truncated && <span>{t('fileBrowser.truncated')}</span>}
             {onDownload && (
-              <button
+              // 头部工具区的小字号文本动作，靠 hover 变色表达可点，故 invisible + auto。
+              // 显式写 text-xs（= 原父级继承值）：Button 基础类带 text-sm，
+              // 不覆盖会把「下载」撑得比同排的文件名与截断提示都大。
+              <Button
                 type="button"
-                className="inline-flex items-center gap-1 hover:text-foreground"
+                variant="invisible"
+                size="auto"
+                className="inline-flex items-center gap-1 text-xs hover:text-foreground"
                 onClick={() => onDownload(entry)}
               >
                 <Download className="size-3.5" /> {t('fileBrowser.download')}
-              </button>
+              </Button>
             )}
           </span>
         </div>

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
+import { Button } from '@jianmanager/ui/components/button'
 
 /**
  * 客户端分发端到端流程图（FR-194，纯前端，增强 FR-187）。
@@ -26,11 +27,15 @@ export default function ClientDistFlowGuide() {
     // 手风琴式折叠卡：Card 自带纵向 gap，折叠头/内容各自贴边，故置零 gap 与 padding
     //（原实现靠无 padding 的根容器 + 内部自管留白）。
     <Card surface="faint" className="overflow-hidden py-0">
-      <button
+      <Button
         type="button"
+        variant="invisible"
+        size="auto"
+        // 折叠卡头部整行可点：无按钮外壳，圆角/内距/悬停底都由下方 className 决定。
+        // focus-visible 相关类在此已由 Button 统一提供（见 lib/focus-ring），原手写的两条一并去掉。
+        className="flex w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:bg-accent/40"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="flex items-center gap-2">
           <Route className="size-4 text-primary" />
@@ -42,7 +47,7 @@ export default function ClientDistFlowGuide() {
           </span>
         </span>
         <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
-      </button>
+      </Button>
 
       {open && (
         <div className="space-y-4 border-t px-4 pb-4 pt-4">

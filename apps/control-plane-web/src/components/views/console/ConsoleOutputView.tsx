@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { parseAnsi } from '@/lib/console/console-ansi'
@@ -328,16 +329,21 @@ function ConsoleRow({
       {/* 命令回显用 `>` 标记与服务端输出区分：本地回显不等服务端确认（spec §2.2）。 */}
       {line.kind === 'command' && <span className="shrink-0 select-none text-sky-500">{'>'}</span>}
       {block && (
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
+          // 堆栈块折叠开关：控制台行内的纯图标微控件。
+          // `text-[length:inherit]` 是必需的：Button 基础类带 `text-sm`，而控制台字号由外层
+          // 容器的 inline `fontSize` 决定（用户可调），若不显式交还字号，这一格会固定成 14px。
           data-console-stack-toggle="true"
           onClick={() => onToggleBlock?.(block)}
           aria-expanded={!collapsed}
           aria-label={collapsed ? t('instanceDetail.consoleStackExpand') : t('instanceDetail.consoleStackCollapse')}
-          className="shrink-0 select-none rounded px-1 leading-none text-gray-400 hover:bg-white/10 hover:text-gray-100"
+          className="shrink-0 select-none rounded px-1 leading-none text-[length:inherit] text-gray-400 hover:bg-white/10 hover:text-gray-100"
         >
           {collapsed ? '▶' : '▼'}
-        </button>
+        </Button>
       )}
       {line.ts && (
         <span className="shrink-0 text-gray-600">
@@ -370,14 +376,17 @@ function ConsoleRow({
         </span>
       )}
       {block && (
-        <button
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
+          // 与上一处同理：字号继承控制台的 inline fontSize，故显式 text-[length:inherit]。
           onClick={() => onCopyBlock?.(block)}
           // 常驻 DOM、只用透明度隐藏：按条件挂载会在悬停瞬间插入节点，让行内容左右抖动。
           className="shrink-0 rounded px-1 text-[0.85em] leading-normal text-gray-400 opacity-0 hover:bg-white/10 hover:text-gray-100 focus:opacity-100 group-hover:opacity-100"
         >
           {t('instanceDetail.consoleStackCopyBlock')}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -888,13 +897,16 @@ export function ConsoleOutputView({
         >
           {history.error ? (
             // 失败不能只在控制台里 console.error：给出可点的重试，否则用户只会看到「不再加载了」。
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
+              // 字号继承横幅的 text-xs（Button 基础类自带 text-sm，需显式交还）
               onClick={onLoadEarlier}
-              className="rounded px-1 text-amber-400 underline decoration-dotted hover:bg-white/10"
+              className="rounded px-1 text-[length:inherit] text-amber-400 underline decoration-dotted hover:bg-white/10"
             >
               {t('instanceDetail.consoleBacktrackFailed')}
-            </button>
+            </Button>
           ) : history.loading ? (
             <span role="status">{t('instanceDetail.consoleBacktrackLoading')}</span>
           ) : history.exhausted ? (
@@ -960,13 +972,16 @@ export function ConsoleOutputView({
             className="flex items-center gap-2 border-b border-white/10 bg-sky-500/10 px-2 py-1 text-xs text-sky-200"
           >
             <span>{t('instanceDetail.consoleRangeFilterActive', { count: scoped.length })}</span>
-            <button
+            <Button
               type="button"
+              variant="invisible"
+              size="auto"
+              // 字号继承横幅的 text-xs
               onClick={() => setRangeFilter(null)}
-              className="rounded bg-white/10 px-1.5 py-0.5 text-gray-200 hover:bg-white/20"
+              className="rounded bg-white/10 px-1.5 py-0.5 text-[length:inherit] text-gray-200 hover:bg-white/20"
             >
               {t('instanceDetail.consoleRangeFilterExit')}
-            </button>
+            </Button>
           </div>
         )}
         {rows.length === 0 ? (
@@ -1007,36 +1022,64 @@ export function ConsoleOutputView({
           <span className="px-1 text-gray-400">
             {t('instanceDetail.consoleSelectionCount', { count: selectedLines.length })}
           </span>
-          <button type="button" onClick={copySelection} className="rounded px-1.5 py-0.5 hover:bg-white/10">
-            {t('instanceDetail.consoleSelectionCopy')}
-          </button>
-          <button type="button" onClick={saveSelection} className="rounded px-1.5 py-0.5 hover:bg-white/10">
-            {t('instanceDetail.consoleSelectionSave')}
-          </button>
-          <button type="button" onClick={onlyThisRange} className="rounded px-1.5 py-0.5 hover:bg-white/10">
-            {t('instanceDetail.consoleSelectionOnly')}
-          </button>
-          <button
+          {/*
+            选区工具条的四个动作：无边框的纯文字按钮，悬停才浮现浅色底。
+            走 invisible + auto 保留原尺寸；`text-[length:inherit]` 让字号随工具条的 text-xs，
+            而不是被 Button 基础类的 text-sm 顶掉。
+          */}
+          <Button
             type="button"
+            variant="invisible"
+            size="auto"
+            onClick={copySelection}
+            className="rounded px-1.5 py-0.5 text-[length:inherit] hover:bg-white/10"
+          >
+            {t('instanceDetail.consoleSelectionCopy')}
+          </Button>
+          <Button
+            type="button"
+            variant="invisible"
+            size="auto"
+            onClick={saveSelection}
+            className="rounded px-1.5 py-0.5 text-[length:inherit] hover:bg-white/10"
+          >
+            {t('instanceDetail.consoleSelectionSave')}
+          </Button>
+          <Button
+            type="button"
+            variant="invisible"
+            size="auto"
+            onClick={onlyThisRange}
+            className="rounded px-1.5 py-0.5 text-[length:inherit] hover:bg-white/10"
+          >
+            {t('instanceDetail.consoleSelectionOnly')}
+          </Button>
+          <Button
+            type="button"
+            variant="invisible"
+            size="auto"
             onClick={() => selection.clear()}
-            className="rounded px-1.5 py-0.5 text-gray-400 hover:bg-white/10 hover:text-gray-100"
+            className="rounded px-1.5 py-0.5 text-[length:inherit] text-gray-400 hover:bg-white/10 hover:text-gray-100"
           >
             {t('instanceDetail.consoleSelectionCancel')}
-          </button>
+          </Button>
         </div>
       )}
 
       {/* 上滚暂停时的返回浮标：带未读计数，点击即回到底部并恢复跟随。 */}
       {!follow && (
-        <button
+        <Button
           type="button"
+          // 主色实心胶囊：页面上唯一的主动作，取 default 变体拿主色底；
+          // size="auto" 交出高度与圆角，胶囊的内距/圆角由 className 决定（不被 h-9 拉高）。
+          size="auto"
           onClick={jumpToBottom}
-          className="absolute bottom-3 right-4 rounded-full bg-primary px-3 py-1 text-xs font-medium text-primary-foreground shadow-lg hover:opacity-90"
+          className="absolute bottom-3 right-4 rounded-full px-3 py-1 text-xs font-medium shadow-lg"
         >
           {unseen > 0
             ? t('instanceDetail.consoleJumpToBottomCount', { count: unseen })
             : t('instanceDetail.consoleJumpToBottom')}
-        </button>
+        </Button>
       )}
     </div>
   )

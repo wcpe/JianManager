@@ -101,18 +101,21 @@ export function NodePMConfigSection({
         <span className="mb-1 block text-xs text-muted-foreground">{t('pmConfig.pmLabel', '包管理器')}</span>
         <div className="flex gap-2">
           {PMS.map((p) => (
-            <button
+            // PM 选择 chips：选中态是自绘描边 + 淡染，故取 invisible + auto 保留原视觉。
+            <Button
               key={p}
               type="button"
+              variant="invisible"
+              size="auto"
               onClick={() => setPm(p)}
-              className={`flex items-center gap-1 rounded-md border px-3 py-1 text-sm ${
+              className={`flex items-center gap-1 rounded-md border px-3 py-1 text-sm font-normal ${
                 pm === p ? 'border-primary bg-primary/5 font-medium' : 'hover:bg-accent/50'
               }`}
             >
               {pm === p && <Check className="size-3.5" />}
               {p}
               {p === data?.pm && data?.pmVersion ? ` (${data.pmVersion})` : ''}
-            </button>
+            </Button>
           ))}
         </div>
       </div>

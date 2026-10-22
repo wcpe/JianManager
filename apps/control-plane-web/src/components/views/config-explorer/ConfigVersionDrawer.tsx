@@ -9,6 +9,7 @@
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Button } from '@jianmanager/ui/components/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
 import { UnifiedDiff } from '@/components/views/common/UnifiedDiff'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -118,29 +119,36 @@ export default function ConfigVersionDrawer({
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium">#{v.id}</span>
                       <div className="flex shrink-0 gap-2">
-                        <button
+                        {/* 版本行内的三个文字动作：无外框，纯文字按钮（invisible + auto 交出全部盒模型） */}
+                        <Button
                           type="button"
+                          variant="invisible"
+                          size="auto"
                           className={diffFrom === v.id ? 'font-semibold text-primary' : 'text-primary hover:underline'}
                           onClick={() => onDiffSelect(v.id, diffTo)}
                         >
                           {t('configExplorer.diffFrom')}
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
+                          variant="invisible"
+                          size="auto"
                           className={diffTo === v.id ? 'font-semibold text-primary' : 'text-primary hover:underline'}
                           onClick={() => onDiffSelect(diffFrom, v.id)}
                         >
                           {t('configExplorer.diffTo')}
-                        </button>
+                        </Button>
                         {/* 回滚按钮禁用时屏蔽指针事件，否则 hover:underline 仍会触发下划线，看着像能点。 */}
-                        <button
+                        <Button
                           type="button"
+                          variant="invisible"
+                          size="auto"
                           className="text-amber-600 hover:underline disabled:pointer-events-none disabled:opacity-50"
                           disabled={rollbackPending}
                           onClick={() => setRollbackTarget(v.id)}
                         >
                           {t('configExplorer.rollback')}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                     <div className="mt-0.5 truncate text-muted-foreground">

@@ -68,14 +68,17 @@ export function SessionFailures({
     <div className="space-y-4" data-testid="session-failures">
       <div className="grid gap-2 sm:grid-cols-5">
         {FAILURE_CATEGORIES.map((cat) => (
-          <button
+          <Button
             key={cat}
             type="button"
-            // 失败分类筛选片是整块可点击的 <button>（自带 button 语义与键盘行为），换成 Card 的 div
-            // 会退回 div 语义；故保留元素、改取 Card 同源的表面常量（未选中态为 solid 档）。
+            // 失败分类筛选片是整块可点击的卡片（自带 button 语义与键盘行为），换成 Card 的 div
+            // 会退回 div 语义；故用 Button 的 invisible + auto 承接语义，外观仍取 Card 同源的
+            // 表面常量（未选中态为 solid 档）。justify-start + 竖排：内容按「标题 / 数值」两行堆叠。
+            variant="invisible"
+            size="auto"
             className={cn(
               cardSurface,
-              'p-3 text-left transition-colors',
+              'flex w-full flex-col items-stretch justify-start gap-0 p-3 text-left transition-colors',
               filter.category === cat
                 ? 'border-primary bg-primary/5'
                 : cn(cardSurfaceTone.solid, 'hover:bg-accent/50'),
@@ -84,7 +87,7 @@ export function SessionFailures({
           >
             <div className="text-xs text-muted-foreground">{t(`botLoad.failureCategory.${cat}`)}</div>
             <div className="text-lg font-semibold tabular-nums">{failureSummary[cat] ?? 0}</div>
-          </button>
+          </Button>
         ))}
       </div>
 

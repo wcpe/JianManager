@@ -194,12 +194,18 @@ export function NodeListRow({
   const online = node.status === 1
   const level = nodeStatusLevel(node.status)
   return (
-    <button
+    // 列表行整行可点：卡片式外观（描边/圆角/选中态）全由 className 决定，
+    // 故取 invisible + auto —— 按钮语义与焦点环交给 Button，视觉保持原样。
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
       onClick={onSelect}
       aria-current={selected}
       className={cn(
-        'w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
+        // block + font-normal：Button 基类是 inline-flex/font-medium，会把三行子块排成一行、
+        // 且把 host 与水位的弱化文字一并加粗，故在此显式还原。
+        'block w-full rounded-lg border px-2.5 py-2 text-left font-normal transition-colors',
         selected ? 'border-primary/40 bg-accent' : 'border-transparent hover:bg-accent/50',
         !online && 'opacity-60',
       )}
@@ -230,7 +236,7 @@ export function NodeListRow({
           </Badge>
         )}
       </div>
-    </button>
+    </Button>
   )
 }
 
@@ -247,8 +253,11 @@ export function NodeRailIcon({
   const online = node.status === 1
   const level = nodeStatusLevel(node.status)
   return (
-    <button
+    // 窄轨节点格：36px 方块的描边/选中态都是自绘，故取 invisible + auto。
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
       onClick={onSelect}
       aria-current={selected}
       title={`${node.name} · ${node.host}`}
@@ -264,7 +273,7 @@ export function NodeRailIcon({
         style={{ backgroundColor: `var(--status-${level === 'neutral' ? 'info' : level})` }}
         aria-hidden
       />
-    </button>
+    </Button>
   )
 }
 /** 归档列表行：名称 / host / 下线时间（FR-393）。 */
@@ -280,11 +289,15 @@ export function ArchivedNodeListRow({
   const { t } = useTranslation()
   const when = node.deletedAt ? new Date(node.deletedAt).toLocaleString() : '--'
   return (
-    <button
+    // 归档列表行：整行可点、外观自绘，故取 invisible + auto。
+    <Button
       type="button"
+      variant="invisible"
+      size="auto"
       onClick={onSelect}
       className={cn(
-        'flex w-full flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors',
+        // font-normal：抵消基类的 font-medium，三行里只有名称该加粗（由子元素控制）。
+        'flex w-full flex-col gap-0.5 rounded-lg border px-3 py-2 text-left font-normal transition-colors',
         selected ? 'border-primary/40 bg-primary/5' : 'border-transparent hover:bg-accent/50',
       )}
     >
@@ -293,6 +306,6 @@ export function ArchivedNodeListRow({
       <span className="truncate text-[11px] text-muted-foreground">
         {t('nodes.deletedAt')}: {when}
       </span>
-    </button>
+    </Button>
   )
 }

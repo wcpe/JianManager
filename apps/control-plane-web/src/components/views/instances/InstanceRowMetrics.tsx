@@ -120,7 +120,7 @@ export function InstanceHeartbeatCell({ snapshot }: { snapshot?: InstanceMetricS
           <span
             key={i}
             className={cn(
-              'w-[2px] rounded-[1px]',
+              'w-[2px] rounded-[var(--radius-micro)]',
               b === true ? 'bg-status-success' : b === false ? 'bg-status-danger' : 'bg-muted-foreground/25',
             )}
           />

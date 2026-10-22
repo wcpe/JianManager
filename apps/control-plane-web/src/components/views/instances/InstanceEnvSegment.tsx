@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Plus, Save, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Table, TableBody, TableCell, TableRow } from '@jianmanager/ui/components/table'
 
 interface EnvRow {
   /** 行 id：只服务于渲染 key，不参与保存载荷（保存只取 k/v）。 */
@@ -68,16 +69,18 @@ export default function InstanceEnvSegment({
         <div className="p-3">
           {runtimeAvailable && runtimeEntries.length > 0 ? (
             <div className="max-h-96 overflow-auto rounded-md border">
-              <table className="w-full text-xs">
-                <tbody>
+              {/* Table 自带外层横向滚动容器，纵向滚动与圆角边框仍由本层控制 */}
+              <Table className="text-xs">
+                <TableBody>
                   {runtimeEntries.map(([k, v]) => (
-                    <tr key={k} className="border-b align-top last:border-0">
-                      <td className="whitespace-nowrap px-2 py-1 font-mono font-medium text-muted-foreground">{k}</td>
-                      <td className="break-all px-2 py-1 font-mono">{v}</td>
-                    </tr>
+                    <TableRow key={k}>
+                      <TableCell className="whitespace-nowrap px-2 py-1 align-top font-mono font-medium text-muted-foreground">{k}</TableCell>
+                      {/* whitespace-normal：抵消 TableCell 基类的 whitespace-nowrap，让 break-all 长值能换行 */}
+                      <TableCell className="whitespace-normal break-all px-2 py-1 align-top font-mono">{v}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">{note || t('env.runtimeUnavailable')}</p>

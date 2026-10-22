@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next'
 import { Database } from 'lucide-react'
 import type { DbTableInfo } from '@/lib/database/db-contracts'
 import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 
 /** 表选择与取数由应用容器维护，包内仅展示左侧表树和右侧内容。 */
 export interface DatabaseExplorerViewProps {
@@ -55,9 +56,11 @@ export function DatabaseExplorerView({
           {tables?.map((tb) => {
             const active = tb.name === activeTable
             return (
-              <button
+              <Button
                 key={tb.name}
                 type="button"
+                variant="invisible"
+                size="auto"
                 onClick={() => onSelectTable(tb.name)}
                 // 当前选中项原先只靠「颜色 + 字重」表达：读屏与色觉障碍用户都读不出来。
                 // aria-current 表达「当前项」，aria-pressed 表达「这是个可切换的选中态」，
@@ -65,7 +68,7 @@ export function DatabaseExplorerView({
                 aria-current={active ? 'true' : undefined}
                 aria-pressed={active}
                 className={cn(
-                  'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors',
+                  'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[13px] font-normal transition-colors',
                   active
                     ? 'bg-primary/10 font-medium text-primary'
                     : 'text-foreground/80 hover:bg-accent/60',
@@ -75,7 +78,7 @@ export function DatabaseExplorerView({
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {tb.rowCount < 0 ? '?' : tb.rowCount}
                 </span>
-              </button>
+              </Button>
             )
           })}
         </div>

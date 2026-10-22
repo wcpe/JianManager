@@ -23,6 +23,49 @@ const NO_RAW_SELECT = {
     '禁止直接使用原生 <select>：改用 @jianmanager/ui/components/select 的 Select（固定小枚举）或 native-select 的 NativeSelect（保留原生语义但统一外观）。确需原生写法请加 eslint-disable 并注明原因。',
 }
 
+/**
+ * 禁止直接用原生 `<textarea>`：改用 `@jianmanager/ui/components/textarea`。
+ *
+ * 与 select 规则同理，只是没有「必须保留原生」的强需求场景——
+ * textarea 的样式收敛（圆角/边框色/焦点环/禁用态）本来就是纯视觉问题，
+ * 没有 form 原生提交之类的硬约束。
+ */
+const NO_RAW_TEXTAREA = {
+  selector: "JSXOpeningElement[name.name='textarea']",
+  message:
+    '禁止直接使用原生 <textarea>：改用 @jianmanager/ui/components/textarea 的 Textarea（已统一圆角、边框色、焦点环与禁用态）。确需原生写法请加 eslint-disable 并注明原因。',
+}
+
+/**
+ * 禁止直接用原生 `<table>` / `<thead>` / `<tbody>` / `<tr>` / `<td>` / `<th>`：
+ * 改用 `@jianmanager/ui/components/table` 的对应组件。
+ *
+ * 【为什么整组禁】只禁 `<table>` 不够——有人可以绕过外层用 `<div role="table">`
+ * 或直接写 `<tr>`，那样样式同样会漂移。六个标签成组禁止，才能保证表格的
+ * 边框、行悬停、单元格内距都走同一套取值。
+ *
+ * 【豁免】虚拟化表格（用 `div` + 行内 `height` 自己算行的场景）不受本规则影响，
+ * 因为它本来就不写 `<table>`；若确有必须用原生表格结构的特殊场景，
+ * 加 `eslint-disable-next-line no-restricted-syntax -- 原因`。
+ */
+const NO_RAW_TABLE = {
+  selector:
+    "JSXOpeningElement[name.name=/^(table|thead|tbody|tfoot|tr|td|th)$/]",
+  message:
+    '禁止直接使用原生 table 标签：改用 @jianmanager/ui/components/table 的 Table / TableHeader / TableBody / TableRow / TableHead / TableCell。确需原生写法请加 eslint-disable 并注明原因。',
+}
+
+/**
+ * 【为什么不禁原生 `<button>`】213 处原生 button 里，有相当一部分是
+ * **按规范就该保留原生**的：树节点（需精确控制 `role="treeitem"` / `aria-level` /
+ * `aria-expanded`）、第三方库要求的目标元素（Radix asChild）、依赖原生拖拽事件的元素。
+ * GitHub Primer 的做法也是让 `ActionList.Item` 独立成组件、而不是把一切塞进 Button。
+ *
+ * 全面禁止会逼着这些场景去写大量 `eslint-disable`，反而让豁免注释失去警示作用。
+ * 因此 button 靠「组件库提供 `variant="invisible"` + `size="auto"`」引导收敛，
+ * 不做 lint 强制。新增按钮时优先用 `Button`，只有确属上述三类才写原生。
+ */
+
 export default defineConfig([
   // .tmp/ 是过程性暂存目录（探针脚本、中间产物），本就被 .gitignore 忽略；
   // 它不该让 lint 变红——否则每个临时脚本都会污染仓库级 lint 结果。
@@ -54,7 +97,7 @@ export default defineConfig([
     files: ['src/**/*.{ts,tsx}'],
     ignores: ['src/**/*.test.{ts,tsx}', 'src/**/*.dom.test.{ts,tsx}'],
     rules: {
-      'no-restricted-syntax': ['error', NO_RAW_SELECT],
+      'no-restricted-syntax': ['error', NO_RAW_SELECT, NO_RAW_TEXTAREA, NO_RAW_TABLE],
     },
   },
 ])

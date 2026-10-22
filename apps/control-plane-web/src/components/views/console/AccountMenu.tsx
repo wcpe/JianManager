@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { LogOut, UserRound } from 'lucide-react'
 
 import { Avatar, AvatarFallback } from '@jianmanager/ui/components/avatar'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,10 +34,17 @@ export function AccountMenu({ username, role, onLogout }: AccountMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
+        {/*
+          账户入口：图标 + 用户名组成的紧凑控件，没有按钮边框与底色，
+          因此走 invisible + auto（不自带任何外壳），外观全部由下方 className 决定。
+          `justify-start` 抵消 Button 基础类的居中，让头像始终贴左。
+        */}
+        <Button
           type="button"
+          variant="invisible"
+          size="auto"
           aria-label={t('header.account')}
-          className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="flex items-center justify-start gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
           {/*
             头像位改用组件库 Avatar：主控台没有图片头像源（后端不存用户头像），
@@ -52,7 +60,7 @@ export function AccountMenu({ username, role, onLogout }: AccountMenuProps) {
           <span className="hidden max-w-32 truncate text-xs font-medium text-foreground sm:block">
             {username ?? t('header.account')}
           </span>
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         <div className="px-2 py-1.5">

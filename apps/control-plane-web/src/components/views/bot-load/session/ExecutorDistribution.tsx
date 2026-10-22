@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import type { BotLoadAllocation, BotLoadMetricPoint } from '@/lib/bot-load/bot-load-types'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 import { Button } from '@jianmanager/ui/components/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 
 export function ExecutorDistribution({
   allocations,
@@ -22,33 +23,34 @@ export function ExecutorDistribution({
   return (
     <div data-testid="executor-distribution" className="space-y-2">
       <h3 className="text-sm font-semibold">{t('botLoad.executorDistribution')}</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b text-xs text-muted-foreground">
-            <tr>
-              <th className="py-1.5 pr-2">{t('botLoad.node')}</th>
-              <th className="py-1.5 pr-2">{t('botLoad.planned')}</th>
-              <th className="py-1.5 pr-2">{t('botLoad.active')}</th>
-              <th className="py-1.5 pr-2">{t('botLoad.health')}</th>
-              <th className="py-1.5 pr-2">RSS</th>
-              <th className="py-1.5 pr-2">eventLoop p95</th>
-              <th className="py-1.5" />
-            </tr>
-          </thead>
-          <tbody>
+      <div>
+        {/* Table 自带外层横向滚动容器，故去掉原来的 overflow-x-auto 外壳 */}
+        <Table className="text-left text-sm">
+          <TableHeader className="bg-muted/40">
+            <TableRow>
+              <TableHead>{t('botLoad.node')}</TableHead>
+              <TableHead>{t('botLoad.planned')}</TableHead>
+              <TableHead>{t('botLoad.active')}</TableHead>
+              <TableHead>{t('botLoad.health')}</TableHead>
+              <TableHead>RSS</TableHead>
+              <TableHead>eventLoop p95</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {allocations.map((a) => {
               const live = byNode.get(a.executorNodeId)
               return (
-                <tr key={a.batchId} className="border-b border-border/50">
-                  <td className="py-1.5 pr-2 font-medium">{a.executorNodeName}</td>
-                  <td className="py-1.5 pr-2 tabular-nums">{a.plannedCount}</td>
-                  <td className="py-1.5 pr-2 tabular-nums">{live?.activeBots ?? '—'}</td>
-                  <td className="py-1.5 pr-2">{live?.health ?? '—'}</td>
-                  <td className="py-1.5 pr-2 tabular-nums">{formatFileSize(live?.rssBytes, { fallback: '—' })}</td>
-                  <td className="py-1.5 pr-2 tabular-nums">
+                <TableRow key={a.batchId}>
+                  <TableCell className="font-medium">{a.executorNodeName}</TableCell>
+                  <TableCell className="tabular-nums">{a.plannedCount}</TableCell>
+                  <TableCell className="tabular-nums">{live?.activeBots ?? '—'}</TableCell>
+                  <TableCell>{live?.health ?? '—'}</TableCell>
+                  <TableCell className="tabular-nums">{formatFileSize(live?.rssBytes, { fallback: '—' })}</TableCell>
+                  <TableCell className="tabular-nums">
                     {live?.eventLoopP95Ms != null ? `${live.eventLoopP95Ms} ms` : '—'}
-                  </td>
-                  <td className="py-1.5 text-right">
+                  </TableCell>
+                  <TableCell className="text-right">
                     {onFilterNode && (
                       <Button
                         size="xs"
@@ -58,12 +60,12 @@ export function ExecutorDistribution({
                         {t('botLoad.filterBots')}
                       </Button>
                     )}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               )
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   )

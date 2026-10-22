@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FileCog, FileText } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import { Panel } from '@jianmanager/ui/components/panel'
 
@@ -55,12 +56,14 @@ export function GenericConfigSegment({ files, isLoading = false, renderEditor }:
               <ul className="space-y-0.5">
                 {files.map((f) => (
                   <li key={f.path}>
-                    <button
+                    <Button
                       type="button"
+                      variant="invisible"
+                      size="auto"
                       onClick={() => setSelected(f.path)}
                       aria-pressed={active === f.path}
                       className={cn(
-                        'flex w-full items-center gap-1.5 truncate rounded px-2 py-1 text-left text-xs transition-colors',
+                        'flex w-full items-center gap-1.5 truncate rounded px-2 py-1 text-left text-xs font-normal transition-colors',
                         active === f.path
                           ? 'bg-accent font-medium text-primary'
                           : 'text-muted-foreground hover:bg-muted hover:text-foreground',
@@ -72,7 +75,7 @@ export function GenericConfigSegment({ files, isLoading = false, renderEditor }:
                         <FileText className="size-3.5 shrink-0" />
                       )}
                       <span className="truncate">{f.path}</span>
-                    </button>
+                    </Button>
                   </li>
                 ))}
               </ul>

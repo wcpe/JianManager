@@ -10,6 +10,7 @@ import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { cn } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 
 interface CommandPlanEditorProps {
   value: BotLoadCommandSchedule
@@ -120,9 +121,10 @@ export function CommandPlanEditor({ value, onChange, serverErrors = [] }: Comman
 
       {mode === 'yaml' ? (
         <div className="space-y-2">
-          <textarea
+          {/* 组件库 Textarea 自带边框/圆角/焦点环，这里只保留等宽字体与高度/缩放相关样式 */}
+          <Textarea
             aria-label={t('botsLoad.modeYaml')}
-            className="min-h-64 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm leading-5 shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="min-h-64 resize-y font-mono text-sm leading-5"
             value={yamlText}
             onChange={(e) => setYamlText(e.target.value)}
             spellCheck={false}
