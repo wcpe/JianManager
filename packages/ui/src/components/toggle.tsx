@@ -31,15 +31,27 @@ import { cn } from "../lib/utils"
  * 需要「就地切换呈现」且要 `type="multiple"` 或多选能力时用 `ToggleGroup`，
  * 否则用更轻的 `Segments`。
  */
+/*
+  【分段控件的视觉口径】三道边界要同时说清，否则凹槽与选中块会糊成一片：
+
+  1. 轨道（segmentTrack）：`bg-muted` 凹槽 + `border` 外框。凹槽比页面底色深一档，
+     让「这一组是可切换的」在未操作时就能看出来；外框只保留极淡描边（40% 不透明度），
+     因为凹槽本身已经有边界，实线框会与外层卡片边框形成「框中框」的噪音。
+  2. 未选中项（segmentItem）：透明底、次要文字色。不设 hover 底色——凹槽内的
+     小块 hover 会把它撑成一个「假选中块」，与真正的选中态混淆；只提升文字对比度。
+  3. 选中项（segmentItemActive）：卡片底色 + 极浅阴影 + 加粗。阴影用 1px/4%
+     而不是内建 shadow-sm：凹槽内空间小，阴影稍重就像贴纸浮起来，破坏「嵌在槽里的块」。
+*/
 export const segmentTrack =
-  'inline-flex shrink-0 items-center gap-[2px] rounded-lg border bg-muted p-[3px]'
+  'inline-flex shrink-0 items-center gap-[2px] rounded-lg border border-border/40 bg-muted p-[3px]'
 
 /** 分段轨内的单个分段项（未选中态）。选中态见 `segmentItemActive`。 */
 export const segmentItem =
-  'rounded-md px-[10px] py-1 text-[11px] whitespace-nowrap text-muted-foreground transition-colors duration-[var(--motion-duration-normal)] ease-ios hover:text-foreground'
+  'rounded-md px-[10px] py-1 text-[11px] whitespace-nowrap text-muted-foreground transition-[color,background-color] duration-[var(--motion-duration-normal)] ease-ios hover:text-foreground'
 
-/** 分段项的选中态：抬为卡片底色 + 浅阴影 + 加粗。 */
-export const segmentItemActive = 'bg-card font-medium text-foreground shadow-sm'
+/** 分段项的选中态：抬为卡片底色 + 极浅阴影 + 加粗。 */
+export const segmentItemActive =
+  'bg-card font-medium text-foreground shadow-[0_1px_2px_rgb(var(--shadow-color)/0.04)]'
 
 const toggleVariants = cva(
   cn(
@@ -62,7 +74,8 @@ const toggleVariants = cva(
         segment: cn(
           segmentItem,
           "hover:bg-transparent data-[state=on]:bg-card data-[state=on]:font-medium",
-          "data-[state=on]:text-foreground data-[state=on]:shadow-sm",
+          "data-[state=on]:text-foreground",
+          "data-[state=on]:shadow-[0_1px_2px_rgb(var(--shadow-color)/0.04)]",
           "focus-visible:ring-2 focus-visible:ring-ring/40",
         ),
       },
