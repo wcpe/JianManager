@@ -94,21 +94,23 @@ body {
    改成 attachment: fixed 后，背景相对**视口**定位与缩放：侧栏怎么动、页面滚不滚，
    图都完全不动，两层也自动像素级对齐。祖先链（console-shell → console-body →
    console-content → main）均无 transform/filter，不会让 fixed 退化成 scroll。 */
+/*
+  工作区底色：只取 token，不铺位图/渐变。
+  底色统一由 `--background` 决定（亮色=纯白），需要改配色时改 token 即可。
+*/
 .jm-workspace-bg {
   background-color: var(--background);
-  background-image: var(--workspace-bg-image);
-  background-position: center;
-  background-size: cover;
-  background-attachment: fixed;
+  background-image: none;
 }
 
 .jm-console-shell {
   --sidebar-collapsed-width: 3.5rem;
   --sidebar-expanded-width: 15rem;
   --sidebar-motion-duration: var(--motion-duration-slow);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--card) 82%, transparent), transparent 38%),
-    var(--background);
+  /* 外壳只提供宽度/动效变量与底色入口；底色取 --background（纯白）。
+     原先这里叠了一层 card 渐变，把纯白抬成带色的浅灰——现在去掉，
+     让 token 成为唯一来源。 */
+  background: var(--background);
 }
 
 .jm-top-loading-track {
@@ -166,22 +168,13 @@ body {
   width: var(--sidebar-collapsed-width);
 }
 
+/*
+  侧栏抽屉：只保留**布局与动画**相关的声明（grid 分区、宽度跟随、合成层）。
+  底色与分隔线已交给组件库的 `bg-sidebar` / `border-sidebar-border`
+  （见 packages/ui/src/components/nav/SideNav.tsx），此处不再重复定义颜色——
+  否则应用侧 CSS 与组件库 utility 会互相覆盖，改一处另一处不跟随。
+*/
 .jm-sidebar-drawer {
-  /*
-    【侧栏改用「下沉一档」的底，而不是与内容区同色】此前侧栏是与卡片混出来的近白色，
-    与右侧内容区只差 1% 明度，两者之间仅靠一条 1px 描边区分——整屏因此显得寡淡、
-    看不出「哪边是导航、哪边是工作区」。
-    改为向 `--muted`（比 background 更深一档的界面色）偏：
-    侧栏 = 下沉的面板，内容区 = 抬起的纸面，层次关系一眼可辨。
-    仍用 `color-mix` 混合而不是取纯色，是为了让每个主题色都能自动跟着偏。
-  */
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--muted) 92%, var(--card)) 0%, color-mix(in srgb, var(--muted) 76%, var(--background)) 100%),
-    var(--muted);
-  /* 右缘阴影加深一档：侧栏是「压在」内容区下面的一层，投影方向要成立。 */
-  box-shadow:
-    1px 0 0 color-mix(in srgb, var(--border) 82%, transparent),
-    18px 0 40px -34px rgb(var(--shadow-color) / 0.55);
   display: grid;
   grid-template-areas: 'sidebar';
   grid-template-rows: minmax(0, 1fr);
@@ -357,11 +350,14 @@ body {
     color var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
+/*
+  顶栏背景走 token（与侧栏、内容区一致），不写死颜色。
+  颜色本身由 `--background`（纯白）决定——改 token 即改配色，这里只保留
+  「顶栏需要一条底部分隔线 + 轻微投影」这一结构性描述。
+*/
 .jm-console-header {
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--card) 94%, transparent), color-mix(in srgb, var(--card) 84%, transparent)),
-    color-mix(in srgb, var(--card) 92%, transparent);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 82%, transparent), 0 14px 28px -30px rgb(var(--shadow-color) / 0.35);
+  background: var(--background);
+  box-shadow: 0 1px 0 var(--border), 0 14px 28px -30px rgb(var(--shadow-color) / 0.35);
   transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
@@ -460,11 +456,14 @@ body {
 
 .jm-console-main {
   /*
-    【内容区抬成「纸面」】原先是 background 与 card 的 92/8 混色，与侧栏几乎同明度，
-    整屏是一块平板。现在改成比 background 更亮、带一点点色相的纸面：
-    `card`（纯白）与 `background` 之间取 70/30，既不是刺眼纯白，也明确「浮在导航之上」。
+    内容区背景：取 --background（按 shadcn 约定它就是应用默认底色，亮色为纯白）。
+
+    【必须同时去掉 background-image】该元素同时带 `jm-workspace-bg` 类，那个类会铺一层
+    渐变。background-image 绘制在 background-color **之上**，只改颜色不动渐变时，
+    实测底色仍是被渐变抬过的灰白，看起来「没改成白」。这里显式置 none。
   */
-  background-color: color-mix(in srgb, var(--card) 70%, var(--background));
+  background-color: var(--background);
+  background-image: none;
   /*
     【左侧加一道内阴影】侧栏是下沉层、内容区是抬起层，交界处需要一点「纸面被压住」的暗部，
     否则两者的层次只靠色差表达，在低对比显示器上会糊在一起。
@@ -572,7 +571,9 @@ body {
 }
 
 .dark .jm-console-main {
+  /* 深色下同样去掉底层渐变，让 --background 成为唯一来源（与亮色的处理对齐）。 */
   background-color: var(--background);
+  background-image: none;
 }
 
 .dark .jm-toolbar-surface {
