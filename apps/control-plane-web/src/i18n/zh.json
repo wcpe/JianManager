@@ -446,7 +446,7 @@
     "uploading": "上传中…"
   },
   "nav": {
-    "platformHome": "平台首页",
+    "platformHome": "首页",
     "servers": "服务器",
     "nodes": "节点",
     "instances": "实例",
@@ -467,7 +467,7 @@
     "settings": "设置",
     "alerts": "告警",
     "logs": "日志中心",
-    "allInstances": "全部服务器",
+    "allInstances": "服务器",
     "monitor": "监控",
     "observability": "观测",
     "statistics": "统计分析",
@@ -623,7 +623,7 @@
     "loginFailed": "登录失败"
   },
   "dashboard": {
-    "title": "平台首页",
+    "title": "首页",
     "nodesOnline": "{{count}} 在线",
     "nodesTotal": "{{count}} 总计",
     "instancesTotal": "{{count}} 总计",
@@ -1322,7 +1322,7 @@
     "actionFailed": "制品版本操作失败"
   },
   "instances": {
-    "title": "实例管理",
+    "title": "服务器",
     "columnsLabel": "列设置",
     "viewsLabel": "视图",
     "viewsSaved": "已保存的视图",

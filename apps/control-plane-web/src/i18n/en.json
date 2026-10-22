@@ -446,7 +446,7 @@
     "uploading": "Uploading…"
   },
   "nav": {
-    "platformHome": "Platform Home",
+    "platformHome": "Home",
     "servers": "Servers",
     "nodes": "Nodes",
     "instances": "Instances",
@@ -467,7 +467,7 @@
     "settings": "Settings",
     "alerts": "Alerts",
     "logs": "Log Center",
-    "allInstances": "All Servers",
+    "allInstances": "Servers",
     "monitor": "Monitoring",
     "observability": "Observability",
     "statistics": "Analytics",
@@ -645,7 +645,7 @@
     "loading": "Loading..."
   },
   "dashboard": {
-    "title": "Platform Home",
+    "title": "Home",
     "nodesOnline": "{{count}} Online",
     "nodesTotal": "{{count}} Total",
     "instancesTotal": "{{count}} Total",
@@ -1365,7 +1365,7 @@
     "actionFailed": "Artifact version action failed"
   },
   "instances": {
-    "title": "Instance Management",
+    "title": "Servers",
     "columnsLabel": "Columns",
     "viewsLabel": "Views",
     "viewsSaved": "Saved views",

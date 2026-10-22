@@ -47,10 +47,10 @@ describe('ConsoleSidebar 六域控制台 IA（FR-431）', () => {
     useConsoleStore.setState({ sidebarCollapsed: false, collapsedGroups: {} })
   })
 
-  it('出现六域顶层 + 平台首页', () => {
+  it('出现六域顶层 + 首页', () => {
     const { container } = renderWithProviders(<ConsoleSidebar />)
     expect(container.querySelector('aside')).toHaveAttribute('data-slot', 'console-sidebar')
-    expect(screen.getByRole('link', { name: '平台首页' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: '首页' })).toHaveAttribute('href', '/')
     expect(screen.getByRole('button', { name: '服务器' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '群组网络' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '工作台' })).toBeInTheDocument()
@@ -155,7 +155,7 @@ describe('折叠态分类图标导航（FR-332）', () => {
     expect(screen.getByRole('link', { name: '观测' })).toHaveAttribute('href', '/monitor')
     expect(screen.getByRole('link', { name: '客户端分发' })).toHaveAttribute('href', '/client-channels')
     expect(screen.getByRole('link', { name: '平台设置' })).toHaveAttribute('href', '/users')
-    expect(screen.getByRole('link', { name: '平台首页' })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: '首页' })).toHaveAttribute('href', '/')
   })
 
   it('分类下任意子路由命中时分类图标显示激活态', () => {
