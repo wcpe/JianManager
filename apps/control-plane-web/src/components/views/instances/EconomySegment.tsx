@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Coins, Loader2, RefreshCw, Search, ShieldAlert } from 'lucide-react'
+import { Coins, Loader2, Search, ShieldAlert } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
@@ -107,16 +108,16 @@ export default function EconomySegment({
           <h3 className="text-sm font-semibold">{t('economy.title')}</h3>
           <p className="truncate text-xs text-muted-foreground">{t('economy.subtitle')}</p>
         </div>
-        <Button
-          size="sm"
+        {/* 刷新按钮改用包内原语：在途旋转 + 禁用由 `pending` 统一表达。
+            胶囊外观与紧凑高度是本处特有诉求，故用 className 覆盖（原 h-7 rounded-full px-3 保留）。 */}
+        <RefreshButton
           variant="outline"
-          className="ml-auto h-7 rounded-full px-3 text-xs"
+          iconSize="size-3.5"
+          pending={manifestRefreshing}
           onClick={onRefreshManifest}
-          disabled={manifestRefreshing}
-        >
-          <RefreshCw className={cn('mr-1 size-3.5', manifestRefreshing && 'animate-spin')} />
-          {t('economy.refresh')}
-        </Button>
+          label={t('economy.refresh')}
+          className="ml-auto h-7 rounded-full px-3 text-xs"
+        />
       </div>
 
       {manifestLoading && (

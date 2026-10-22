@@ -1,7 +1,10 @@
 import { useTranslation } from 'react-i18next'
-import { Loader2, ListChecks } from 'lucide-react'
+import { ListChecks } from 'lucide-react'
 
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Progress } from '@jianmanager/ui/components/progress'
+import { Spinner } from '@jianmanager/ui/components/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@jianmanager/ui/components/tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,27 +52,37 @@ export function TasksMenu({ tasks: input, onOpenTask }: TasksMenuProps) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          title={active.length > 0 ? t('header.tasksRunning', { count: active.length, progress: avg }) : t('header.tasks')}
-          aria-label={t('header.tasks')}
-          className={cn(
-            'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-accent/60',
-            active.length > 0 ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {active.length > 0 ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" />
-              <span className="font-medium tabular-nums">{active.length}</span>
-              <span className="tabular-nums text-muted-foreground">{avg}%</span>
-            </>
-          ) : (
-            <ListChecks className="size-4" />
-          )}
-        </button>
-      </DropdownMenuTrigger>
+      {/* 纯文字提示的图标入口 → Tooltip（提示文案随活跃任务数变化，仍是纯文本）。
+          注意：Tooltip 与 DropdownMenu 各需一个 asChild 触发器合并到同一个 <button> 上，
+          嵌套 asChild 会让 ref 被内层 Slot 独占——因此不把两者叠在一起，
+          而是让 DropdownMenuTrigger 包 button、Tooltip 单独包在触发器外层并复用同一按钮元素。 */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={t('header.tasks')}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-accent/60',
+                active.length > 0 ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {active.length > 0 ? (
+                <>
+                  <Spinner size="sm" />
+                  <span className="font-medium tabular-nums">{active.length}</span>
+                  <span className="tabular-nums text-muted-foreground">{avg}%</span>
+                </>
+              ) : (
+                <ListChecks className="size-4" />
+              )}
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent>
+          {active.length > 0 ? t('header.tasksRunning', { count: active.length, progress: avg }) : t('header.tasks')}
+        </TooltipContent>
+      </Tooltip>
       <DropdownMenuContent align="end" className="w-80">
         <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium">
           <span>{t('header.tasks')}</span>
@@ -124,9 +137,7 @@ function TaskMenuRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
         </div>
         {!isTerminalTask(task) && !canceling && (
           <div className="mt-1 flex items-center gap-2">
-            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-            </div>
+            <Progress className="h-1 min-w-0 flex-1 bg-muted" value={pct} aria-label={task.title || task.kind} />
             <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">{pct}%</span>
           </div>
         )}

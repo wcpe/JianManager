@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { formatRatio } from '@/lib/bot-load/bot-load-metrics'
 import { sumCommandCounts } from '@/lib/bot-load/bot-load-session-store'
@@ -52,10 +53,12 @@ export function SessionOverview({ run, live, onNavigate }: SessionOverviewProps)
       <DisclaimerBanner />
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-lg border bg-card p-4">
+        {/* 卡片容器统一走共享 Card：圆角/描边/底色/阴影由 Card 决定；gap-0 关掉其默认 gap，
+            沿用原 space-y 的纵向节奏，p-4 保持原有内边距。 */}
+        <Card className="p-4">
           <ConnectionFunnel counts={lc} />
-        </section>
-        <section className="rounded-lg border bg-card p-4 space-y-3">
+        </Card>
+        <Card className="p-4 space-y-3">
           <h3 className="text-sm font-semibold">{t('botLoad.commandPlanProgress')}</h3>
           <p className="text-xs text-muted-foreground">{t('botLoad.sentMeansChatOnly')}</p>
           <ul className="space-y-2 text-sm">
@@ -80,25 +83,25 @@ export function SessionOverview({ run, live, onNavigate }: SessionOverviewProps)
               {run.barrier.timedOut}
             </p>
           </div>
-        </section>
+        </Card>
       </div>
 
-      <section className="rounded-lg border bg-card p-4">
+      <Card className="p-4">
         <h3 className="mb-3 text-sm font-semibold">{t('botLoad.thresholdVerdict')}</h3>
         <ThresholdVerdict reasons={run.verdictReasons ?? []} />
-      </section>
+      </Card>
 
-      <section className="rounded-lg border bg-card p-4">
+      <Card className="p-4">
         <ExecutorDistribution
           allocations={run.allocations ?? []}
           latestMetric={latestMetric}
           onFilterNode={(nodeId) => onNavigate?.('bots', { node: String(nodeId) })}
         />
-      </section>
+      </Card>
 
       {(live.warnings.length > 0 || Object.keys(run.failureSummary ?? {}).length > 0) && (
         <section className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-lg border bg-card p-4">
+          <Card className="p-4">
             <h3 className="mb-2 text-sm font-semibold">{t('botLoad.recentWarnings')}</h3>
             <ul className="space-y-1 text-sm">
               {live.warnings.slice(0, 10).map((w) => (
@@ -108,8 +111,8 @@ export function SessionOverview({ run, live, onNavigate }: SessionOverviewProps)
               ))}
               {live.warnings.length === 0 && <li className="text-muted-foreground">{t('botLoad.none')}</li>}
             </ul>
-          </div>
-          <div className="rounded-lg border bg-card p-4">
+          </Card>
+          <Card className="p-4">
             <h3 className="mb-2 text-sm font-semibold">{t('botLoad.failureSummary')}</h3>
             <ul className="space-y-1 text-sm">
               {Object.entries(run.failureSummary ?? {}).map(([k, v]) => (
@@ -125,7 +128,7 @@ export function SessionOverview({ run, live, onNavigate }: SessionOverviewProps)
                 </li>
               ))}
             </ul>
-          </div>
+          </Card>
         </section>
       )}
     </div>
@@ -134,10 +137,10 @@ export function SessionOverview({ run, live, onNavigate }: SessionOverviewProps)
 
 function Kpi({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border bg-card p-3">
+    <Card className="p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
-    </div>
+    </Card>
   )
 }
 
@@ -186,7 +189,7 @@ export function SessionConfig({ run, onNotify }: SessionConfigProps) {
     <div className="space-y-4" data-testid="session-config">
       <p className="text-sm text-muted-foreground">{t('botLoad.configSnapshotHint')}</p>
 
-      <section className="rounded-lg border bg-card p-4 space-y-2">
+      <Card className="p-4 space-y-2">
         <h3 className="text-sm font-semibold">{t('botLoad.target')}</h3>
         <dl className="grid gap-1 text-sm sm:grid-cols-2">
           <div>
@@ -206,9 +209,9 @@ export function SessionConfig({ run, onNotify }: SessionConfigProps) {
             <dd>{run.targetBots}</dd>
           </div>
         </dl>
-      </section>
+      </Card>
 
-      <section className="rounded-lg border bg-card p-4 space-y-2">
+      <Card className="p-4 space-y-2">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold">{t('botLoad.connection')}</h3>
           <Button size="xs" variant="ghost" onClick={() => copy(JSON.stringify(safeConfig, null, 2))}>
@@ -219,9 +222,9 @@ export function SessionConfig({ run, onNotify }: SessionConfigProps) {
           {JSON.stringify(safeConfig, null, 2)}
         </pre>
         <p className="text-xs text-muted-foreground">{t('botLoad.noSecretsShown')}</p>
-      </section>
+      </Card>
 
-      <section className="rounded-lg border bg-card p-4 space-y-2">
+      <Card className="p-4 space-y-2">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold">{t('botLoad.commandPlan')}</h3>
           <Button size="xs" variant="ghost" disabled={!yaml} onClick={() => copy(yaml)}>
@@ -231,16 +234,16 @@ export function SessionConfig({ run, onNotify }: SessionConfigProps) {
         <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-xs whitespace-pre-wrap">
           {yaml || t('botLoad.noCommands')}
         </pre>
-      </section>
+      </Card>
 
-      <section className="rounded-lg border bg-card p-4 space-y-2">
+      <Card className="p-4 space-y-2">
         <h3 className="text-sm font-semibold">{t('botLoad.thresholds')}</h3>
         <pre className="overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
           {JSON.stringify(run.thresholds ?? {}, null, 2)}
         </pre>
-      </section>
+      </Card>
 
-      <section className="rounded-lg border bg-card p-4 space-y-2">
+      <Card className="p-4 space-y-2">
         <h3 className="text-sm font-semibold">{t('botLoad.allocations')}</h3>
         <ul className="space-y-1 text-sm">
           {(run.allocations ?? []).map((a) => (
@@ -255,7 +258,7 @@ export function SessionConfig({ run, onNotify }: SessionConfigProps) {
             <li className="text-muted-foreground">{t('botLoad.noExecutors')}</li>
           )}
         </ul>
-      </section>
+      </Card>
     </div>
   )
 }

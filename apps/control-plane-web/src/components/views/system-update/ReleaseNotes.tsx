@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
+import { Separator } from '@jianmanager/ui/components/separator'
 import { isSafeExternalLink, confirmOpenMessage } from '@/lib/system-update/release-notes-link'
 
 /** ReleaseNotes 的 props。 */
@@ -97,7 +98,8 @@ function createMarkdownComponents(confirmOpen: (href: string) => void): Componen
   blockquote: ({ children }) => (
     <blockquote className="my-1.5 border-l-2 border-border pl-3 text-muted-foreground">{children}</blockquote>
   ),
-  hr: () => <hr className="my-3 border-border" />,
+  // 分隔线：markdown 的 <hr> 是纯装饰，交给组件库的 Separator（自带 role 语义处理）
+  hr: () => <Separator className="my-3" />,
   // 行内代码与代码块共用 <code>；react-markdown v9 不再传 inline，按是否含换行/语言类名区分由 pre 包裹。
   code: ({ children, className }) => (
     <code className={`rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] ${className ?? ''}`}>{children}</code>

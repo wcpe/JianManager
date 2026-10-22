@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@jianmanager/ui/components/button'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
 import {
   Table,
   TableBody,
@@ -15,8 +16,7 @@ import type { BotLoadRunEvent } from '@/lib/bot-load/bot-load-types'
 export const SESSION_EVENTS_PAGE_SIZE = 50
 
 /** 事件类型筛选项（服务端按 `type` 过滤）。 */
-const EVENT_TYPES = [
-  'run-state',
+const EVENT_TYPES = [  'run-state',
   'stage',
   'barrier',
   'scenario-action',
@@ -27,6 +27,12 @@ const EVENT_TYPES = [
   'safety-stop',
   'report-ready',
 ] as const
+
+/**
+ * 「全部类型」的哨兵值：Radix Select 的 item 不接受空字符串（空串被它用来表示未选中），
+ * 而本视图对外契约是 `''` 代表全部（父组件与请求参数都按空串判），故在控件的边界上做一次映射。
+ */
+const ALL_TYPES = '__all__'
 
 export interface SessionEventsData {
   items: BotLoadRunEvent[]
@@ -83,19 +89,23 @@ export function SessionEvents({
   return (
     <div className="space-y-3" data-testid="session-events">
       <div className="flex flex-wrap gap-2">
-        <select
-          className="h-8 rounded-md border bg-background px-2 text-sm"
-          value={typeFilter}
-          onChange={(e) => onTypeFilterChange(e.target.value)}
-          aria-label={t('botLoad.eventType')}
-        >
-          <option value="">{t('botLoad.allTypes')}</option>
-          {EVENT_TYPES.map((ty) => (
-            <option key={ty} value={ty}>
-              {ty}
-            </option>
-          ))}
-        </select>
+        {/* 事件类型是代码内固定枚举（+「全部」）→ 走组件库 Select（Radix），
+            与其它筛选器同款触发器样式与键盘导航。
+            注意：Radix Select 不接受空字符串作为 item value（会与「未选中」冲突），
+            故「全部」用哨兵值 ALL_TYPES 表达。 */}
+        <Select value={typeFilter === '' ? ALL_TYPES : typeFilter} onValueChange={(v) => onTypeFilterChange(v === ALL_TYPES ? '' : v)}>
+          <SelectTrigger aria-label={t('botLoad.eventType')} size="sm" className="w-auto">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_TYPES}>{t('botLoad.allTypes')}</SelectItem>
+            {EVENT_TYPES.map((ty) => (
+              <SelectItem key={ty} value={ty}>
+                {ty}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="overflow-x-auto rounded-lg border">
@@ -137,25 +147,17 @@ export function SessionEvents({
         </Table>
       </div>
 
-      <div className="flex justify-between text-xs text-muted-foreground">
-        <span>{t('botLoad.totalCount', { count: total })}</span>
-        <div className="flex gap-2">
-          <Button size="xs" variant="ghost" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
-            {t('bots.prevPage')}
-          </Button>
-          <span>
-            {page}/{totalPages}
-          </span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page >= totalPages}
-            onClick={() => onPageChange(page + 1)}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        onChange={onPageChange}
+        totalLabel={t('botLoad.totalCount', { count: total })}
+        // 此处原文案是裸「页码/总页数」（无「第…页」包装），PaginationBar 默认拼接与之等价。
+        prevLabel={t('bots.prevPage')}
+        nextLabel={t('bots.nextPage')}
+        className="text-xs"
+      />
     </div>
   )
 }

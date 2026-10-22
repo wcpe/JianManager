@@ -7,10 +7,11 @@
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Cable, RefreshCw } from 'lucide-react'
+import { Cable } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageShell, Segment, Segments } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import {
   Table,
   TableBody,
@@ -141,27 +142,24 @@ export function McpActivityPageView({
         description={t('mcpActivity.subtitle')}
         actions={
           <>
-            <div
-              className="flex items-center gap-1 rounded-md border p-0.5"
-              role="group"
-              aria-label={t('mcpActivity.window')}
-            >
+            <Segments aria-label={t('mcpActivity.window')}>
               {WINDOW_PRESETS.map((w) => (
-                <Button
+                <Segment
                   key={w}
-                  variant={windowValue === w ? 'secondary' : 'ghost'}
-                  size="sm"
-                  aria-pressed={windowValue === w}
+                  active={windowValue === w}
                   onClick={() => onWindowChange(w)}
                 >
                   {t(`mcpActivity.window_${w}`)}
-                </Button>
+                </Segment>
               ))}
-            </div>
-            <Button variant="outline" size="sm" onClick={onRefresh} disabled={isFetching}>
-              <RefreshCw className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`} />
-              {t('mcpActivity.refresh')}
-            </Button>
+            </Segments>
+            <RefreshButton
+              variant="outline"
+              iconSize="size-3.5"
+              pending={isFetching}
+              onClick={onRefresh}
+              label={t('mcpActivity.refresh')}
+            />
             <Button variant="outline" size="sm" onClick={onCopyEndpoint}>
               {t('mcpActivity.copyUrl')}
             </Button>

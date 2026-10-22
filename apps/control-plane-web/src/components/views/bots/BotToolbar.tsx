@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
-import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import {
   Select,
   SelectContent,
@@ -95,23 +95,17 @@ export function BotToolbar({
       </Select>
 
       <div className="ml-auto flex items-center gap-2">
-        <div className="flex items-center gap-1 rounded-md border p-0.5">
-          <span className="px-2 text-xs text-muted-foreground">{t('bots.groupBy')}</span>
-          {/* 分组维度是「选中的那一档」而不是动作按钮：补 aria-pressed（同页 ViewToggle 已有正确写法），
-              否则读屏只知道按钮文案、不知道当前按哪个维度分组。 */}
+        {/* 分组维度收敛到布局层分段原语：凹槽轨道 + 选中块由 `Segments` 一处决定。
+            维度标题移到轨道**外部**——`Segments` 是 `role="tablist"`，把纯文本留在轨道里会
+            成为 tablist 的非 tab 子节点（无效 ARIA 结构）。 */}
+        <span className="px-2 text-xs text-muted-foreground">{t('bots.groupBy')}</span>
+        <Segments aria-label={t('bots.groupBy')}>
           {GROUP_BY_DIMS.map((dim) => (
-            <Button
-              key={dim}
-              type="button"
-              size="xs"
-              variant={groupBy === dim ? 'default' : 'ghost'}
-              aria-pressed={groupBy === dim}
-              onClick={() => onGroupBy(dim)}
-            >
+            <Segment key={dim} active={groupBy === dim} onClick={() => onGroupBy(dim)}>
               {t(`bots.groupDim_${dim}`)}
-            </Button>
+            </Segment>
           ))}
-        </div>
+        </Segments>
         <ViewToggle
           value={view}
           onChange={onView}

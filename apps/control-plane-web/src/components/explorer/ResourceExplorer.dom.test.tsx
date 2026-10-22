@@ -275,13 +275,14 @@ describe('ResourceExplorer（mock 假后端）', () => {
     await user.click(back)
     expect(await screen.findByText('locked.txt')).toBeInTheDocument()
 
-    // 三视图切换
-    await user.click(screen.getByRole('button', { name: '大图标' }))
-    expect(screen.getByRole('button', { name: '大图标' })).toHaveAttribute('aria-pressed', 'true')
-    await user.click(screen.getByRole('button', { name: '列表' }))
-    expect(screen.getByRole('button', { name: '列表' })).toHaveAttribute('aria-pressed', 'true')
-    await user.click(screen.getByRole('button', { name: '详细信息' }))
-    expect(screen.getByRole('button', { name: '详细信息' })).toHaveAttribute('aria-pressed', 'true')
+    // 三视图切换已收敛为分段控件（Segments/Segment）：每段是 role=tab，
+    // 选中态由 aria-selected 表达（原 button + aria-pressed）。
+    await user.click(screen.getByRole('tab', { name: '大图标' }))
+    expect(screen.getByRole('tab', { name: '大图标' })).toHaveAttribute('aria-selected', 'true')
+    await user.click(screen.getByRole('tab', { name: '列表' }))
+    expect(screen.getByRole('tab', { name: '列表' })).toHaveAttribute('aria-selected', 'true')
+    await user.click(screen.getByRole('tab', { name: '详细信息' }))
+    expect(screen.getByRole('tab', { name: '详细信息' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('FR-422：分段/导航/面包屑/工具/视图同处一条横栏，面包屑只一份', async () => {
@@ -301,7 +302,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(within(bar).getByRole('button', { name: '上传' })).toBeInTheDocument()
     expect(within(bar).getByRole('button', { name: '搜索' })).toBeInTheDocument()
     expect(within(bar).getByRole('button', { name: '更多操作' })).toBeInTheDocument()
-    expect(within(bar).getByRole('button', { name: '详细信息' })).toBeInTheDocument()
+    expect(within(bar).getByRole('tab', { name: '详细信息' })).toBeInTheDocument()
 
     // 病症之一是「路径输入框里一份、下面再渲染一份」——现在全局只有一份路径 UI。
     expect(screen.getAllByRole('navigation', { name: '路径导航' })).toHaveLength(1)

@@ -6,8 +6,10 @@ import { capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifacts/artif
 import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { ArtifactCacheItem, ArtifactCacheView } from '@/lib/artifacts/artifact-cache'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { Input } from '@jianmanager/ui/components/input'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Progress } from '@jianmanager/ui/components/progress'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 
 /** 把 Unix 秒格式化为本地日期时间；0/空回「—」。 */
@@ -91,7 +93,7 @@ export default function NodeArtifactCachePanel({
   return (
     <div className="space-y-3">
       {/* 头部：容量条（占用/上限）+ 上限设置 + 一键清空（常驻稳定区，布局不跳） */}
-      <div className="space-y-2 rounded-md border bg-card px-3 py-2.5">
+      <Card className="gap-0 space-y-2 px-3 py-2.5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="min-w-[200px] flex-1">
             <div className="mb-1.5 flex items-baseline gap-2">
@@ -101,9 +103,11 @@ export default function NodeArtifactCachePanel({
               <span className="text-xs text-muted-foreground">/ {describeCap(capBytes)}</span>
             </div>
             {capBytes > 0 && (
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${usagePct}%` }} />
-              </div>
+              <Progress
+                className="h-1.5 bg-muted"
+                value={usagePct}
+                aria-label={t('artifactCache.total')}
+              />
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -132,7 +136,7 @@ export default function NodeArtifactCachePanel({
           </Button>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* 列表：搜索 + 行卡片（FR-195） */}
       {isLoading ? (
@@ -161,9 +165,10 @@ export default function NodeArtifactCachePanel({
             <p className="py-6 text-center text-sm text-muted-foreground">{t('artifactCache.empty')}</p>
           ) : (
             filteredItems.map((it) => (
-              <div
+              /* 列表行：Card 只作统一外壳，行内布局与 hover 涂层原样保留。 */
+              <Card
                 key={it.sha256}
-                className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5 transition-colors hover:bg-muted/40"
+                className="flex-row items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
               >
                 <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent text-primary">
                   <FileArchive className="size-[18px]" />
@@ -204,7 +209,7 @@ export default function NodeArtifactCachePanel({
                 >
                   <Trash2 className="size-4" />
                 </button>
-              </div>
+              </Card>
             ))
           )}
         </div>

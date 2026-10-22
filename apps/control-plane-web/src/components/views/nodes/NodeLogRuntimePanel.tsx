@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { CircleHelp } from 'lucide-react'
 import { Archive, CheckCheck, Download, LoaderCircle, Play, RotateCw, Square, Upload } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { Badge } from '@jianmanager/ui/components/badge'
 
 /** 日志运行时的三个分区命名空间（与 proto 对齐）。 */
@@ -159,10 +160,16 @@ export default function NodeLogRuntimePanel({
             onClick={() => fileInput.current?.click()} disabled={busy || !!assetsError}>
             {pending?.upload ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
           </Button>
-          <Button type="button" size="sm" variant="outline" title="刷新运行时状态" aria-label="刷新运行时状态"
-            onClick={onRefresh} disabled={fetching}>
-            <RotateCw className={fetching ? 'size-4 animate-spin' : 'size-4'} />
-          </Button>
+          {/* 刷新运行时状态：改用包内原语，旋转/禁用由 pending 统一表达；
+              原 RotateCw 图标按钮与 RefreshButton 的 RotateCw 同源，观感不变。 */}
+          <RefreshButton
+            variant="outline"
+            size="sm"
+            pending={fetching}
+            onClick={onRefresh}
+            title="刷新运行时状态"
+            aria-label="刷新运行时状态"
+          />
           <Button type="button" size="sm" onClick={() => void onInstall()} disabled={busy || !online || !approvedCached}>
             {pending?.install ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Download className="mr-1 size-4" />}
             {t('logsRuntime.asset.dispatch')}

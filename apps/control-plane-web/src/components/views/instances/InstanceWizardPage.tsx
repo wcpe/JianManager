@@ -7,6 +7,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { Switch } from '@jianmanager/ui/components/switch'
 import { cn } from '@jianmanager/ui'
 import { validateRequired, validateResourceLimitNumber, validateFields } from '@/lib/shared/form-validation'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
@@ -344,10 +345,13 @@ export function InstanceWizardPage({
               <input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} onBlur={() => gate.touch('startCommand')} className={cn(inputClass, 'font-mono')} placeholder="java -Xmx2G -jar server.jar nogui" aria-invalid={!!gate.show('startCommand', errors.startCommand)} />
               <p className="mt-1.5 text-xs text-muted-foreground">{isDocker ? t('instances.startCommandDockerHint') : t('instances.startCommandHint')}</p>
             </Field>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={autoRestart} onChange={(e) => setAutoRestart(e.target.checked)} />
-              {t('instanceDetail.autoRestart')}
-            </label>
+            <div className="flex items-center gap-2 text-sm">
+              {/* 启用/禁用语义走 Switch；Radix Switch 是 button，故用 id + label htmlFor 关联文案 */}
+              <Switch id="wizard-auto-restart" checked={autoRestart} onCheckedChange={setAutoRestart} />
+              <label htmlFor="wizard-auto-restart" className="cursor-pointer">
+                {t('instanceDetail.autoRestart')}
+              </label>
+            </div>
           </div>
         )}
 

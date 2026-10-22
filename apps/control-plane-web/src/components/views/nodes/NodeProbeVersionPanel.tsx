@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 
 /**
  * 可选探针版本（本组件所需的最小结构）。
@@ -61,8 +62,9 @@ export default function NodeProbeVersionPanel({
         <h3 className="text-sm font-semibold">{t('probe.nodeVersionTitle')}</h3>
         <p className="mt-1 text-xs text-muted-foreground">{t('probe.nodeVersionHint')}</p>
       </div>
-      <select
-        className="h-9 w-full max-w-md rounded-md border bg-background px-2 text-sm"
+      {/* 版本候选来自后端探针版本目录（数量随升级累积），不用 Radix Select 全量挂载 → NativeSelect */}
+      <NativeSelect
+        className="w-full max-w-md"
         value={String(versionId)}
         disabled={saving}
         onChange={(event) => {
@@ -71,7 +73,7 @@ export default function NodeProbeVersionPanel({
       >
         <option value="0">{t('probe.nodeInherit', { version: catalog.versions.find((version) => version.id === catalog.package.defaultVersionId)?.version || '—' })}</option>
         {versions.map((version) => <option key={version.id} value={version.id}>{version.version}</option>)}
-      </select>
+      </NativeSelect>
     </div>
   )
 }

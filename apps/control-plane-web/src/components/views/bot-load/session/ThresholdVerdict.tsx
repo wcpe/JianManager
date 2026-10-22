@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, CircleDashed, MinusCircle, XCircle } from 'lucide-react'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import type { BotLoadVerdictReason } from '@/lib/bot-load/bot-load-types'
 import { formatLatencyMs, formatRatio } from '@/lib/bot-load/bot-load-metrics'
 
@@ -11,9 +12,12 @@ export function ThresholdVerdict({ reasons }: { reasons: BotLoadVerdictReason[] 
   return (
     <ul className="space-y-2" data-testid="threshold-verdict">
       {reasons.map((r) => (
+        // 列表项本身就是 <li>（<ul> 的直接子元素必须是 li，换成 Card 的 div 会破坏列表语义），
+        // 故保留元素、改取 Card 同源的表面常量：圆角/描边/底色/阴影由 packages/ui 一处决定
+        // （原 bg-card → faint 档，成排出现的内联块）。
         <li
           key={`${r.key}-${r.stageIndex ?? 'run'}`}
-          className="flex items-start gap-2 rounded border bg-card px-3 py-2 text-sm"
+          className={cn(cardSurface, cardSurfaceTone.faint, 'flex items-start gap-2 px-3 py-2 text-sm')}
         >
           <VerdictIcon state={r.state} />
           <div className="min-w-0 flex-1">

@@ -32,7 +32,8 @@ describe('HealthPanel（FR-450 · ADR-102 a 范式）', () => {
     expect(screen.getByText(':25565')).toBeInTheDocument()
     expect(screen.getByText(':25577')).toBeInTheDocument()
     // 端口卡数量 = 已声明数（probePort 未给 → 不渲染第 3 张）。
-    expect(container.querySelectorAll('[data-testid="health-panel"] .rounded-md.border.bg-card').length).toBe(2)
+    // 端口卡已统一为组件库 Card；按 `data-slot` 定位（类名会随设计底座演进，槽位是稳定契约）。
+    expect(container.querySelectorAll('[data-testid="health-panel"] [data-slot="card"]').length).toBe(2)
   })
 
   it('无任何端口时给出空态而非空网格', () => {

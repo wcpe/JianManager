@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Backpack, Heart, Drumstick, Sparkles, Gamepad2, Loader2, RefreshCw, Search, ShieldAlert, WifiOff } from 'lucide-react'
+import { Backpack, Heart, Drumstick, Sparkles, Gamepad2, Loader2, Search, ShieldAlert, WifiOff } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
+import { Card } from '@jianmanager/ui/components/card'
 import {
   Dialog,
   DialogContent,
@@ -102,16 +104,16 @@ export default function InventorySegment({
           <h3 className="text-sm font-semibold">{t('inventory.title')}</h3>
           <p className="truncate text-xs text-muted-foreground">{t('inventory.subtitle')}</p>
         </div>
-        <Button
-          size="sm"
+        {/* 刷新按钮改用包内原语：在途旋转 + 禁用由 `pending` 统一表达。
+            胶囊外观与紧凑高度是本处特有诉求，故用 className 覆盖（原 h-7 rounded-full px-3 保留）。 */}
+        <RefreshButton
           variant="outline"
-          className="ml-auto h-7 rounded-full px-3 text-xs"
+          iconSize="size-3.5"
+          pending={manifestRefreshing}
           onClick={onRefreshManifest}
-          disabled={manifestRefreshing}
-        >
-          <RefreshCw className={cn('mr-1 size-3.5', manifestRefreshing && 'animate-spin')} />
-          {t('inventory.refresh')}
-        </Button>
+          label={t('inventory.refresh')}
+          className="ml-auto h-7 rounded-full px-3 text-xs"
+        />
       </div>
 
       {manifestLoading && (
@@ -509,14 +511,16 @@ function SlotGrid({ items, size }: { items: RawItemSlot[]; size: number }) {
     return <p className="text-xs text-muted-foreground">{t('inventory.empty')}</p>
   }
   return (
-    <div
-      className="grid w-fit gap-1 rounded-xl border bg-card p-2 shadow-soft"
+    /* 物品格子网格：Card 只作外壳；网格靠自身 grid-template-columns 定列宽，
+       Card 的 flex-col 会被 grid 覆盖，故不需额外复位；gap-1 沿用原格间距。 */
+    <Card
+      className="grid w-fit gap-1 p-2"
       style={{ gridTemplateColumns: `repeat(${SLOTS_PER_ROW}, minmax(0, 1fr))` }}
     >
       {grid.map((cell, idx) => (
         <Slot key={idx} cell={cell} slot={idx} />
       ))}
-    </div>
+    </Card>
   )
 }
 

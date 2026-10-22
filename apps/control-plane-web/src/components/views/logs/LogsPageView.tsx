@@ -18,6 +18,7 @@ import { AlertTriangle, Download, Info, MoreHorizontal, Radio } from 'lucide-rea
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { PageHeader, PageShell, Segment, Segments } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { cn } from '@jianmanager/ui'
@@ -971,24 +972,29 @@ function LogFooter({
       </div>
     )
   }
+  /**
+   * 翻页边界的判定基准。
+   *
+   * 联邦 tail-first 模式的「下一页」能否点由服务端游标决定（`canNext`），不能只比页码；
+   * 而 `PaginationBar` 的禁用态固定由 `page / totalPages` 推出。于是这里把显式可翻性
+   * **折算**成一对用于判定的总页数：还能翻就给 `page + 1`（下一页可点），翻不动就给 `page`
+   * （下一页禁用）。省略 `canNext` 时（legacy 页码模式）直接用原总页数。
+   *
+   * 注意 `pageLabel` 仍用原 `totalPages`——显示的「第 X / Y 页」不该被这套判定改写。
+   */
+  const navTotalPages = canNext === undefined ? totalPages : canNext ? Math.max(totalPages, page + 1) : page
   return (
-    <div className="flex shrink-0 items-center justify-between border-t px-3 py-2 text-sm text-muted-foreground">
-      <span>{t('logs.totalCount', { count: total })}</span>
-      <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" disabled={page <= 1} onClick={onPrev}>
-          {t('logs.prevPage')}
-        </Button>
-        <span>{t('logs.pageInfo', { page, totalPages })}</span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={canNext === undefined ? page >= totalPages : !canNext}
-          onClick={onNext}
-        >
-          {t('logs.nextPage')}
-        </Button>
-      </div>
-    </div>
+    <PaginationBar
+      page={page}
+      totalPages={navTotalPages}
+      total={total}
+      onChange={(next) => (next > page ? onNext() : onPrev())}
+      totalLabel={t('logs.totalCount', { count: total })}
+      pageLabel={t('logs.pageInfo', { page, totalPages })}
+      prevLabel={t('logs.prevPage')}
+      nextLabel={t('logs.nextPage')}
+      className="shrink-0 border-t px-3 py-2 text-sm text-muted-foreground"
+    />
   )
 }
 

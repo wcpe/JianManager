@@ -13,6 +13,7 @@ import { cn } from '@jianmanager/ui/lib/utils'
 import { normalizeColumns, normalizeRows, rowKeys, shouldShowEmptyRow } from '@/lib/database/db-rows-view'
 import { Input } from '@jianmanager/ui/components/input'
 import { Button } from '@jianmanager/ui/components/button'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import {
   Select,
   SelectContent,
@@ -240,27 +241,15 @@ export function DatabaseRowsView({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex items-center gap-3">
-          <span>{t('database.pageOf', { page, total: totalPages })}</span>
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={page <= 1}
-              onClick={() => onPageChange(Math.max(1, page - 1))}
-            >
-              {t('database.prev')}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={page >= totalPages}
-              onClick={() => onPageChange(page + 1)}
-            >
-              {t('database.next')}
-            </Button>
-          </div>
-        </div>
+        {/* 页码与翻页走通用受控分页器；左侧 pageSize 选择器仍是本视图自有控制项。 */}
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          onChange={onPageChange}
+          pageLabel={t('database.pageOf', { page, total: totalPages })}
+          prevLabel={t('database.prev')}
+          nextLabel={t('database.next')}
+        />
       </div>
     </div>
   )

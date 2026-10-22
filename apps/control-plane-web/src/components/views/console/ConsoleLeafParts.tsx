@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Activity, Bot, Box, ChevronDown, ChevronRight, Server } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Card } from '@jianmanager/ui/components/card'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
@@ -95,7 +96,8 @@ export function BotWorktableCard({
   const { icon: Icon, tone } = dimVisual(groupBy)
 
   return (
-    <div className="flex flex-col rounded-xl border bg-card text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift">
+    // 卡片视觉交给 Card（圆角/描边/底色/阴影同源）；hover 抬升属本组件交互，经 className 保留。
+    <Card className="py-0 transition-[box-shadow] duration-300 ease-ios hover:shadow-lift">
       <div className="flex flex-col gap-3 p-4">
         <div className="flex items-center gap-3">
           <Checkbox checked={checked} onCheckedChange={onCheck} aria-label={t('bots.select')} />
@@ -130,7 +132,7 @@ export function BotWorktableCard({
         <div className="flex items-center justify-end gap-1 border-t pt-3">{actions}</div>
       </div>
       {expanded && children && <div className="border-t bg-muted/30">{children}</div>}
-    </div>
+    </Card>
   )
 }
 

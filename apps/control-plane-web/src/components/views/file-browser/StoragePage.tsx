@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import {
   Folder,
   HardDrive,
-  RefreshCw,
   Snowflake,
   Trash2,
 } from 'lucide-react'
@@ -11,6 +10,8 @@ import {
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
+import { Card } from '@jianmanager/ui/components/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -168,10 +169,11 @@ function StatCard({
   accent?: boolean
 }) {
   return (
-    <div className="rounded-md border bg-card px-3 py-2">
+    // 汇总指标小卡：并列成排的轻量承载块 → faint 档；纵向节奏由内部两行自定，故 gap 置零。
+    <Card surface="faint" className="px-3 py-2">
       <div className={cn('text-lg font-bold tabular-nums', accent && 'text-primary')}>{value}</div>
       <div className="text-[11px] text-muted-foreground">{label}</div>
-    </div>
+    </Card>
   )
 }
 
@@ -432,15 +434,15 @@ function BrowserSection({
     <Panel
       title={t('storage.browserTitle')}
       actions={
-        <Button
+        // 纯图标刷新：可访问名走 aria-label，尺寸回到原 `icon-xs` + `size-3.5` 观感。
+        <RefreshButton
           variant="ghost"
           size="icon-xs"
+          iconSize="size-3.5"
           className="text-muted-foreground"
           onClick={onRefresh}
           aria-label={t('storage.refresh')}
-        >
-          <RefreshCw className="size-3.5" />
-        </Button>
+        />
       }
       bodyClassName="p-0"
     >

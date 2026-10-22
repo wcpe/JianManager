@@ -99,6 +99,23 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
 }
 
+/**
+ * 操作组件库 Select（Radix 组合控件）：原生 `<select>` 的 `selectOptions` 对它不适用。
+ *
+ * 先点触发器展开，再按文本点到真正的 `[role="option"]` 上。三处 HTMLElement 桩是 jsdom 缺的
+ * Pointer Capture / scrollIntoView —— Radix 的 SelectContent 在展开与选项滚动时会调用它们。
+ */
+async function pickRadixOption(triggerName: string, optionText: string) {
+  HTMLElement.prototype.hasPointerCapture ??= () => false
+  HTMLElement.prototype.setPointerCapture ??= () => {}
+  HTMLElement.prototype.releasePointerCapture ??= () => {}
+  HTMLElement.prototype.scrollIntoView ??= () => {}
+  await userEvent.click(screen.getByRole('combobox', { name: triggerName }))
+  const option = (await screen.findByText(optionText)).closest('[role="option"]')
+  expect(option).not.toBeNull()
+  await userEvent.click(option as HTMLElement)
+}
+
 function renderDialog(props: Partial<Props> = {}) {
   const merged = {
     selected,
@@ -165,7 +182,8 @@ describe('RollingBatchDialog 策略表单（FR-457 · ADR-102 b 范式）', () =
 
     expect(screen.queryByLabelText('命令')).not.toBeInTheDocument()
 
-    await user.selectOptions(screen.getByLabelText('动作'), 'command')
+    // 动作下拉已换成组件库 Select（Radix），原生 selectOptions 不适用
+    await pickRadixOption('动作', '下发命令')
     expect(screen.getByLabelText('命令')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '开始编排' })).toBeDisabled()
 

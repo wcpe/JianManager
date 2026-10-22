@@ -14,6 +14,8 @@ import { useTranslation } from 'react-i18next'
 import { Check, History, Upload } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -129,7 +131,8 @@ export function ClientUpdaterCoreSelectorView({
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2">
-        <div className="rounded-lg border bg-card p-3">
+        {/* 概览指标小卡：并列于页面的主容器，用默认 solid 档；纵向间距由内部 mt 控制故 gap 置零。 */}
+        <Card className="p-3">
           <div className="text-[11px] text-muted-foreground">{t('clientCore.latestArchived', '最新归档版本')}</div>
           <div className="mt-1 font-mono text-lg font-semibold">
             {latestVersion ? displayCoreVersion(latestVersion) : '—'}
@@ -137,8 +140,8 @@ export function ClientUpdaterCoreSelectorView({
           <div className="mt-1 text-[11px] text-muted-foreground">
             {latestVersion ? `${latestVersion.sha256.slice(0, 12)}… · ${formatFileSize(latestVersion.size)}` : t('clientCore.noVersionsShort', '暂无归档')}
           </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3">
+        </Card>
+        <Card className="p-3">
           <div className="text-[11px] text-muted-foreground">{t('clientCore.currentSelected', '当前选定版本')}</div>
           <div className="mt-1 font-mono text-lg font-semibold">
             {selectedVersion ? displayCoreVersion(selectedVersion) : latestVersion ? t('clientCore.followLatest', '跟随最新') : '—'}
@@ -148,7 +151,7 @@ export function ClientUpdaterCoreSelectorView({
               ? `${selectedVersion.sha256.slice(0, 12)}… · ${formatFileSize(selectedVersion.size)}`
               : t('clientCore.followLatestHint', '频道未固定版本时，客户端使用最新归档 updater-core。')}
           </div>
-        </div>
+        </Card>
       </div>
 
       <div className="overflow-hidden rounded-lg border">
@@ -312,7 +315,7 @@ function UploadCoreDialog({
             </span>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={select} onChange={(e) => setSelect(e.target.checked)} />
+            <Checkbox checked={select} onCheckedChange={(v) => setSelect(v === true)} />
             {t('clientCore.selectAfterUpload', '上传后立即选为当前频道版本')}
           </label>
         </form>

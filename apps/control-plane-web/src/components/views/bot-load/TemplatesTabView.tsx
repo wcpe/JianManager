@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Copy, Pencil, Plus, Trash2, Play } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { summarizeCommandSchedule, summarizeLoadProfile } from '@/lib/bot-load/bot-load-summaries'
 import type { BotLoadTemplate } from '@/lib/bot-load/bot-load-types'
@@ -208,23 +209,17 @@ export function TemplatesTabView({
         </div>
       )}
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{t('bots.totalCount', { count: total })}</span>
-        <div className="flex items-center gap-2">
-          <Button size="xs" variant="ghost" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
-            {t('bots.prevPage')}
-          </Button>
-          <span>{t('bots.pageOf', { page, totalPages })}</span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page >= totalPages}
-            onClick={() => onPageChange(page + 1)}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        onChange={onPageChange}
+        totalLabel={t('bots.totalCount', { count: total })}
+        pageLabel={t('bots.pageOf', { page, totalPages })}
+        prevLabel={t('bots.prevPage')}
+        nextLabel={t('bots.nextPage')}
+        className="text-xs"
+      />
     </div>
   )
 }

@@ -12,11 +12,12 @@
  *        apps/control-plane-web/src/components/ImportServerWizard.dom.test.tsx
  * @since FR-508（组件受控化迁包；原 FR-302 导入现有服务器向导、FR-374 权限失败诊断与就地写预检）
  */
-import { useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { HardDriveDownload, MapPin, Truck, ShieldAlert } from 'lucide-react'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { RadioGroup, RadioGroupItem } from '@jianmanager/ui/components/radio-group'
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Button } from '@jianmanager/ui/components/button'
 import {
@@ -721,6 +722,9 @@ function ImportInspectStep({
   onSuggestMigrate,
 }: ImportInspectStepProps) {
   const { t } = useTranslation()
+  // 每个 radio 的 label 关联 id 必须全局唯一：向导可能同时挂多个（如抽屉里再开一份），
+  // 用路径派生的固定字符串会撞车。故取 React 的实例级 id 作前缀。
+  const jarOptionIdPrefix = useId()
 
   return (
     <>
@@ -757,24 +761,41 @@ function ImportInspectStep({
           <p className="mt-1 text-sm text-destructive">{t('importServer.noJars')}</p>
         ) : (
           <div className="mt-1 max-h-48 space-y-1 overflow-y-auto rounded border p-1.5">
-            {result.jars.map((j) => (
-              <label key={j.path} className="flex cursor-pointer items-start gap-2 rounded px-1.5 py-1 text-sm hover:bg-accent">
-                <input
-                  type="radio"
-                  name="import-jar"
-                  className="mt-1"
-                  checked={jarPath === j.path}
-                  onChange={() => onPickJar(j.path)}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-mono text-xs">{j.path}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {formatFileSize(j.size)}
-                    {j.mainClassHint ? ` · Main-Class: ${j.mainClassHint}` : ''}
-                  </span>
-                </span>
-              </label>
-            ))}
+            {/*
+              jar 候选是**互斥单选**（一个实例只能挂一个核心 jar）→ 组件库 RadioGroup。
+              换掉原生 radio 的实质收益：Radix 把 `role=radiogroup` + 方向键在项间移动选中
+              （原生同名 name 的 radio 也有方向键，但焦点环/禁用态/aria-invalid 各自一套，
+              与全站 Checkbox 口径不同）；此项数不受控（探测到的 jar 可能几十个），
+              故按 path 取值而不是按下标——下标会随探测结果顺序漂移。
+            */}
+            <RadioGroup
+              value={jarPath}
+              onValueChange={onPickJar}
+              aria-label={t('importServer.jarSection')}
+              className="gap-0"
+            >
+              {result.jars.map((j, index) => {
+                // 显式 id 把 label 关联到 Radix 渲染出的 button：label 的隐式包裹对 button
+                // 虽有定义但各引擎处理不一，显式 htmlFor 才没有歧义；同时 label 的文本（路径 +
+                // 大小 + Main-Class）成为该 radio 的可访问名，读屏听到的是完整候选信息。
+                const itemId = `${jarOptionIdPrefix}-${index}`
+                return (
+                  <div
+                    key={j.path}
+                    className="flex items-start gap-2 rounded py-1 text-sm hover:bg-accent"
+                  >
+                    <RadioGroupItem id={itemId} value={j.path} className="mt-1" />
+                    <label htmlFor={itemId} className="min-w-0 flex-1 cursor-pointer px-1.5">
+                      <span className="block truncate font-mono text-xs">{j.path}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {formatFileSize(j.size)}
+                        {j.mainClassHint ? ` · Main-Class: ${j.mainClassHint}` : ''}
+                      </span>
+                    </label>
+                  </div>
+                )
+              })}
+            </RadioGroup>
           </div>
         )}
       </div>
@@ -828,34 +849,46 @@ interface ImportModeStepProps {
 
 function ImportModeStep({ mode, writePrecheckFailed, onModeChange }: ImportModeStepProps) {
   const { t } = useTranslation()
+  // label↔radio 的关联 id：同 ImportInspectStep，用实例级 useId 前缀避免多处挂载撞车。
+  const modeOptionIdPrefix = useId()
 
   return (
     <div className="space-y-2">
-      {([
-        { value: 'in_place' as const, icon: MapPin, title: t('importServer.modeInPlace'), desc: t('importServer.modeInPlaceDesc') },
-        { value: 'migrate' as const, icon: Truck, title: t('importServer.modeMigrate'), desc: t('importServer.modeMigrateDesc') },
-      ]).map((opt) => (
-        <label
-          key={opt.value}
-          className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
-            mode === opt.value ? 'border-primary bg-primary/5' : 'hover:bg-accent/50'
-          }`}
-        >
-          <input
-            type="radio"
-            name="import-mode"
-            className="mt-1"
-            checked={mode === opt.value}
-            onChange={() => onModeChange(opt.value)}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-1.5 text-sm font-medium">
-              <opt.icon className="size-3.5" /> {opt.title}
-            </span>
-            <span className="mt-0.5 block text-xs text-muted-foreground">{opt.desc}</span>
-          </span>
-        </label>
-      ))}
+      {/*
+        导入方式是**互斥二选一**且两项都需要整块说明文案 → RadioGroup + 卡片式行。
+        卡片高亮与描边仍由本视图按选中值给（Radix 只管 a11y 与键盘），故 RadioGroup 不另设网格。
+        label 用 htmlFor 显式关联而不是包裹 radio：组件库的 radio 渲染为 button，
+        隐式包裹关联在不同引擎上行为不一致，显式关联没有歧义；且整块文案因此成为该项的可访问名。
+      */}
+      <RadioGroup
+        value={mode}
+        onValueChange={(next) => onModeChange(next as ImportServerMode)}
+        aria-label={t('importServer.stepMode')}
+        className="gap-2"
+      >
+        {([
+          { value: 'in_place' as const, icon: MapPin, title: t('importServer.modeInPlace'), desc: t('importServer.modeInPlaceDesc') },
+          { value: 'migrate' as const, icon: Truck, title: t('importServer.modeMigrate'), desc: t('importServer.modeMigrateDesc') },
+        ]).map((opt) => {
+          const itemId = `${modeOptionIdPrefix}-${opt.value}`
+          return (
+            <div
+              key={opt.value}
+              className={`flex items-start gap-3 rounded-lg border p-3 transition-colors ${
+                mode === opt.value ? 'border-primary bg-primary/5' : 'hover:bg-accent/50'
+              }`}
+            >
+              <RadioGroupItem id={itemId} value={opt.value} className="mt-1" />
+              <label htmlFor={itemId} className="min-w-0 flex-1 cursor-pointer">
+                <span className="flex items-center gap-1.5 text-sm font-medium">
+                  <opt.icon className="size-3.5" /> {opt.title}
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{opt.desc}</span>
+              </label>
+            </div>
+          )
+        })}
+      </RadioGroup>
       {mode === 'in_place' && writePrecheckFailed && (
         <p className="text-xs text-destructive" data-testid="import-inplace-blocked">
           {t('importServer.precheckBlocked')}

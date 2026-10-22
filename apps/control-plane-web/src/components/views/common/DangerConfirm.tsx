@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Loader2, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, ShieldAlert } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -9,9 +9,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
+import { Spinner } from '@jianmanager/ui/components/spinner'
 import { useDangerPermission, type DangerScope } from '@/lib/shared/danger'
 
 /**
@@ -101,10 +103,28 @@ export default function DangerConfirm({
         </DialogHeader>
 
         {denied ? (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-            <span>{t('danger.denied')}</span>
-          </div>
+          // 越权提示：原为手写 `border-destructive/40 bg-destructive/10` 块，改用包的 destructive 档。
+          //
+          // 【视觉会变淡，这是有意接受的一致性代价】包的 destructive 变体是 `bg-card text-destructive`
+          // 加 base 层的 --border，即「卡片底 + 红字」，没有淡红底。本处因此从「淡红底红边」变为
+          // 「卡片底红字」——与第一批已改的 CapacityPlan / SystemUpdatePageView 保持同一套破坏性提示外观，
+          // 也把"破坏性提示长什么样"的决定权收归组件一处（否则每处都在各自微调红底浓度）。
+          // 醒目度由三处兜住：红字、DialogTitle 里的红三角图标、以及这道提示出现时确认按钮必然 disabled。
+          //
+          // 内边距压回 px-3 py-2：DialogContent 本身是 `p-6` + `grid gap-4`，这条提示是弹窗正文里的一格。
+          // 若沿用 Alert 默认的 px-4 py-3，它会比上方 DialogHeader 与下方 DialogFooter 各多缩进一段
+          // （6-4=2px 与 6-3=3px 的错位），弹窗内两侧对齐被打散；保留原内边距则与替换前逐像素一致，
+          // 不存在叠加问题——className 走 twMerge，px/py 是覆盖而非累加。
+          //
+          // 图标位置：原 flex 里的 ShieldAlert 改为 Alert 的首个 svg 子元素——组件对 `has-[>svg]` 自动切
+          // 三列栅格（图标列 + 文案列），等价于原来的 `flex items-start gap-2`，不必再手写 flex。
+          //
+          // 保留组件默认 role="alert"：本弹窗内没有第二种 alert/status 语义块，不与既有 a11y 断言争位；
+          // 越权是「点了删除才浮现的阻断结论」，值得被播报一次。
+          <Alert variant="destructive" className="px-3 py-2">
+            <ShieldAlert aria-hidden />
+            <AlertDescription className="text-sm">{t('danger.denied')}</AlertDescription>
+          </Alert>
         ) : (
           confirmText && (
             <div className="space-y-2">
@@ -129,7 +149,7 @@ export default function DangerConfirm({
             {t('common.cancel')}
           </Button>
           <Button variant="destructive" disabled={!canConfirm || pending} onClick={handleConfirm}>
-            {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
+            {pending && <Spinner aria-hidden />}
             {confirmLabel ?? t('common.delete')}
           </Button>
         </DialogFooter>

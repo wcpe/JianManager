@@ -257,8 +257,8 @@ export default function App() {
               </Panel>
             </Section>
 
-        {/* 主题矩阵：阶段 7 的验证台。外壳预览已移除——它展示的是应用级骨架
-            （AppShell/TopNav/SideNav）而非可复用的控件，不属于本博物馆的展品范围。 */}
+        {/* 主题矩阵：阶段 7 的验证台。导航原语预览已移除——它展示的是应用级导航栏
+            （TopNav/SideNav）而非可复用的控件，不属于本博物馆的展品范围。 */}
         <Section id="themes" active={section} title="主题矩阵" hint="5 套主题色 × 明暗，控件随变量实时跟变">
           <ThemeMatrix />
         </Section>

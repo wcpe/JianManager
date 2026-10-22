@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { TimeSeriesChart } from '@jianmanager/ui/charts/TimeSeriesChart'
 import type { ChartReferenceLine, ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import { RangePicker } from '@jianmanager/ui/charts/RangePicker'
@@ -133,9 +134,11 @@ function ProbeUpdateCard({
       </div>
       <div className="flex flex-wrap items-center gap-2 px-2 pb-2 text-xs">
         <label className="text-muted-foreground" htmlFor={`probe-version-${instanceId}`}>{t('probe.instanceVersion')}</label>
-        <select
+        {/* 可选探针版本来自后端目录（数量不受控）→ 原生下拉 + 统一外观 */}
+        <NativeSelect
           id={`probe-version-${instanceId}`}
-          className="h-8 min-w-52 rounded-md border bg-background px-2 text-xs"
+          className="min-w-52 w-auto text-xs"
+          size="sm"
           value={String(data.selectionVersionId)}
           disabled={data.changing || data.selectableVersions.length === 0}
           onChange={(event) => void changeVersion(event.target.value)}
@@ -146,7 +149,7 @@ function ProbeUpdateCard({
           {data.selectableVersions.map((version) => (
             <option key={version.id} value={version.id}>{version.version}</option>
           ))}
-        </select>
+        </NativeSelect>
         <span className="text-muted-foreground">{t('probe.switchHint')}</span>
       </div>
       {!data.versionId && (

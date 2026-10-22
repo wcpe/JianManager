@@ -167,10 +167,21 @@ body {
 }
 
 .jm-sidebar-drawer {
+  /*
+    【侧栏改用「下沉一档」的底，而不是与内容区同色】此前侧栏是与卡片混出来的近白色，
+    与右侧内容区只差 1% 明度，两者之间仅靠一条 1px 描边区分——整屏因此显得寡淡、
+    看不出「哪边是导航、哪边是工作区」。
+    改为向 `--muted`（比 background 更深一档的界面色）偏：
+    侧栏 = 下沉的面板，内容区 = 抬起的纸面，层次关系一眼可辨。
+    仍用 `color-mix` 混合而不是取纯色，是为了让每个主题色都能自动跟着偏。
+  */
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, transparent) 0%, color-mix(in srgb, var(--card) 86%, transparent) 100%),
-    color-mix(in srgb, var(--background) 88%, var(--card));
-  box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 76%, transparent), 10px 0 30px -28px rgb(var(--shadow-color) / 0.45);
+    linear-gradient(180deg, color-mix(in srgb, var(--muted) 92%, var(--card)) 0%, color-mix(in srgb, var(--muted) 76%, var(--background)) 100%),
+    var(--muted);
+  /* 右缘阴影加深一档：侧栏是「压在」内容区下面的一层，投影方向要成立。 */
+  box-shadow:
+    1px 0 0 color-mix(in srgb, var(--border) 82%, transparent),
+    18px 0 40px -34px rgb(var(--shadow-color) / 0.55);
   display: grid;
   grid-template-areas: 'sidebar';
   grid-template-rows: minmax(0, 1fr);
@@ -439,8 +450,27 @@ body {
   }
 }
 
+/* 侧栏内部的输入控件（搜索框）与资源行：在「下沉」的侧栏底色上再做一层微凹，
+   否则纯白的输入框贴在同色底上会像贴纸，而不是嵌进面板里。 */
+.jm-console-sidebar [data-slot='sidebar-resource-toolbar'] input {
+  background-color: color-mix(in srgb, var(--card) 62%, var(--muted));
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+  box-shadow: inset 0 1px 2px rgb(var(--shadow-color) / 0.04);
+}
+
 .jm-console-main {
-  background-color: color-mix(in srgb, var(--background) 92%, var(--card));
+  /*
+    【内容区抬成「纸面」】原先是 background 与 card 的 92/8 混色，与侧栏几乎同明度，
+    整屏是一块平板。现在改成比 background 更亮、带一点点色相的纸面：
+    `card`（纯白）与 `background` 之间取 70/30，既不是刺眼纯白，也明确「浮在导航之上」。
+  */
+  background-color: color-mix(in srgb, var(--card) 70%, var(--background));
+  /*
+    【左侧加一道内阴影】侧栏是下沉层、内容区是抬起层，交界处需要一点「纸面被压住」的暗部，
+    否则两者的层次只靠色差表达，在低对比显示器上会糊在一起。
+    用 inset 阴影而不是 border：它不占布局宽度，且能跟着侧栏宽度过渡自动贴边。
+  */
+  box-shadow: inset 12px 0 18px -18px rgb(var(--shadow-color) / 0.5);
 }
 
 .jm-page-stack {

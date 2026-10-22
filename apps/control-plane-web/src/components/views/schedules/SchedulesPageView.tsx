@@ -29,6 +29,7 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { Switch } from '@jianmanager/ui/components/switch'
 import {
   Table,
   TableBody,
@@ -373,14 +374,12 @@ export function ScheduleFormDialogView({
               </div>
             )}
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={form.enabled}
-                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-              />
-              {t('schedules.enabled')}
-            </label>
+            {/* 「启用」是开关语义（不是列表多选）→ 组件库 Switch。
+                Switch 渲染成 button，包在 <label> 里点文字不会翻转，故用 id + htmlFor 关联。 */}
+            <div className="flex items-center gap-2 text-sm">
+              <Switch id="schedule-enabled" checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v === true })} />
+              <label htmlFor="schedule-enabled" className="cursor-pointer">{t('schedules.enabled')}</label>
+            </div>
           </ScrollableDialogBody>
 
           <DialogFooter className="pt-4">

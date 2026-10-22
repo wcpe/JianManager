@@ -10,9 +10,10 @@
 import { useTranslation } from 'react-i18next'
 import { Bell } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageShell, Segment, Segments } from '@jianmanager/ui/components/layout'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import type { StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { cn } from '@jianmanager/ui/lib/utils'
 
@@ -163,30 +164,23 @@ export function NotificationCenterPageView({
 
       {/* 类型筛选 + 仅未读 + 关键字 */}
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
-        <div className="flex gap-1 rounded-lg border p-0.5">
+        <Segments aria-label={t('notificationCenter.title')}>
           {sourceTabs.map((tab) => (
-            <button
+            <Segment
               key={tab.key}
-              type="button"
+              active={query.source === tab.value}
               onClick={() => onPatchFilter({ source: tab.value })}
-              className={cn(
-                'rounded-md px-3 py-1 text-sm font-medium transition-colors',
-                query.source === tab.value
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
-              )}
             >
               {tab.label}
-            </button>
+            </Segment>
           ))}
-        </div>
+        </Segments>
 
         <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
-            className="size-4 accent-primary"
+          <Checkbox
+            className="size-4"
             checked={query.unread ?? false}
-            onChange={(e) => onPatchFilter({ unread: e.target.checked || undefined })}
+            onCheckedChange={(v) => onPatchFilter({ unread: v === true || undefined })}
           />
           {t('notificationCenter.onlyUnread')}
         </label>

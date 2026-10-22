@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Columns3, Bookmark, Trash2 } from 'lucide-react'
+import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Columns3, Bookmark, Trash2, ServerCog, CircleCheck, CircleSlash, TriangleAlert } from 'lucide-react'
 import { useInfiniteInstanceSearch, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import type { InstanceListParams, InstanceSearchParams } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
@@ -42,8 +42,9 @@ import {
 } from '@/lib/instances/instance-view-prefs'
 import { DataPanelSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
-import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
-import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { ViewToggle } from '@jianmanager/ui/components/view-toggle'
+import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -55,6 +56,7 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { Input } from '@jianmanager/ui/components/input'
 import {
   Select,
@@ -568,36 +570,46 @@ export default function InstancesPage() {
     const next = statusFilter === (target ?? ALL) ? ALL : (target ?? ALL)
     setStatusFilterParam(next)
   }
-  const summaryChips: SummaryChip[] = [
+
+  /*
+    KPI 卡：把 summaryChips 同一批数据换成「图标 + 大数字」形态。
+    刻意**不加**「总在线玩家」这张卡——它的口径是跨全部实例求和，
+    与「按状态筛选」不是同一维度，点它筛什么说不清；先不引入这个歧义。
+  */
+  const summaryStatCards = [
     {
       key: 'all',
       label: t('grouping.all'),
-      count: counts.total,
+      value: counts.total.toLocaleString('zh-CN'),
+      icon: ServerCog,
+      tone: 'neutral' as const,
       active: statusFilter === ALL,
       onClick: () => resetFilters(),
     },
     {
       key: 'running',
       label: t('instances.running'),
-      count: counts.running,
-      level: 'success',
-      breathing: counts.running > 0,
+      value: counts.running.toLocaleString('zh-CN'),
+      icon: CircleCheck,
+      tone: 'success' as const,
       active: statusFilter === 'RUNNING',
       onClick: () => applySummaryFilter('running'),
     },
     {
       key: 'stopped',
       label: t('instances.stopped'),
-      count: counts.stopped,
-      level: 'neutral',
+      value: counts.stopped.toLocaleString('zh-CN'),
+      icon: CircleSlash,
+      tone: 'neutral' as const,
       active: statusFilter === 'STOPPED',
       onClick: () => applySummaryFilter('stopped'),
     },
     {
       key: 'crashed',
       label: t('instances.crashed'),
-      count: counts.crashed,
-      level: 'danger',
+      value: counts.crashed.toLocaleString('zh-CN'),
+      icon: TriangleAlert,
+      tone: 'danger' as const,
       active: statusFilter === 'CRASHED',
       onClick: () => applySummaryFilter('crashed'),
     },
@@ -804,8 +816,21 @@ export default function InstancesPage() {
   return (
     // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
     // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
-    <PageShell data-page="instances">
+    /*
+      variant="fixed"：本页的滚动发生在**表格内部**（虚拟表自带滚动容器 + 表头吸顶），
+      不是整页滚动。`default` 变体给的是 `overflow-auto` 的整页滚动容器，它会让
+      页内那个 `flex-1` 表格永远拿不到「视口剩余高度」（父级没有确定高度可分配），
+      结果退回按内容撑高、又被外层滚动——两层滚动叠加，表格底部被推出视口。
+      fixed 变体是 `overflow-hidden`，高度被钉在视口内，`flex-1` 才有意义。
+    */
+    <PageShell data-page="instances" variant="fixed">
+      {/*
+        【页头只留小标题 + 右侧按钮】此前标题下还有一行「42 台服务器 · 36 运行中 · 3 异常 ·
+        2,431 在线玩家」的统计副标题——那些数字已经由下面的 KPI 卡片承担，两处重复表达同一信息，
+        既占高度又分散注意力。现在标题行只负责「我在哪一页」这一件事。
+      */}
       <PageHeader
+        className="[&_[data-slot=page-header]]:gap-0"
         title={t('instances.title')}
         actions={
           // flex-wrap：四个入口按钮在移动端（390px）超行宽须换行——修 v0.15.0 验收 e2e
@@ -827,19 +852,36 @@ export default function InstancesPage() {
         }
       />
 
-      {/* 汇总头：运行/停止/崩溃计数，可点设筛选（FR-136） + 视图切换 */}
-      <div className="flex items-center gap-2">
-        <SummaryChips chips={summaryChips} className="flex-1" />
-        <ViewToggle
-          value={view}
-          onChange={setViewParam}
-          cardLabel={t('grouping.viewCard')}
-          listLabel={t('grouping.viewList')}
-        />
+      {/*
+        概览区：KPI 卡片（图标 + 大数字，可点一键筛选）。
+        与原来的 SummaryChips（一排 pill）相比，这里读的是**数字**而不是文字——
+        「有多少台在跑、有多少台挂了」是这一页最先被扫的信息，值得给到卡片级的权重。
+        卡片直接复用 ui 包的 `StatCard`，只额外传 `onClick` / `active`；
+        激活态由 `statusFilter` 驱动，点同一张再点一次即取消（与旧 chip 行为一致）。
+      */}
+      <div role="group" aria-label={t('instances.summaryLabel')} className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
+        {summaryStatCards.map((card) => (
+          <StatCard
+            key={card.key}
+            label={card.label}
+            value={card.value}
+            icon={<card.icon className="size-3.5" aria-hidden="true" />}
+            tone={card.tone}
+            onClick={card.onClick}
+            active={card.active}
+          />
+        ))}
       </div>
 
       {/* 多维筛选 + 分组视图（FR-047/137）：sticky + 可折叠，避免长筛选条在移动端翻屏。 */}
-      <div className="sticky top-16 z-20 jm-toolbar-surface space-y-2 p-2">
+      {/*
+        工具栏收成一张明确的卡片：此前它只是 `jm-toolbar-surface`（半透明白底），
+        与页面底色差不到 1% 明度，视觉上是「飘着的一排控件」而不是「一块工具区」。
+        改成带描边与内边距的实心面板后，搜索 / 筛选 / 视图切换才有归属。
+      */}
+      {/* 吸附工具栏：Card 承载统一表面（圆角/描边/底色/阴影）。
+          原为块级容器且内部两段无间距，故 gap 置零；sticky 定位与毛玻璃按需保留。 */}
+      <Card className="sticky top-16 z-20 p-2.5 backdrop-blur-sm">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-52 flex-1 sm:flex-none">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -895,6 +937,13 @@ export default function InstancesPage() {
             {filtersCollapsed ? t('grouping.showFilters') : t('grouping.hideFilters')}
           </Button>
           <div className="ml-auto flex items-center gap-2">
+            {/* 视图切换：卡片 / 列表。与筛选条同一行——它是「怎么看这份数据」的一部分。 */}
+            <ViewToggle
+              value={view}
+              onChange={setViewParam}
+              cardLabel={t('grouping.viewCard')}
+              listLabel={t('grouping.viewList')}
+            />
             {/* 列设置（页面重构件）：切换可选列可见性，持久化于 jm.instances.columns。 */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -1056,7 +1105,7 @@ export default function InstancesPage() {
             )}
           </div>
         )}
-      </div>
+      </Card>
 
       <ProvisionServerDialog open={showProvision} onClose={() => setShowProvision(false)} />
       <ProvisionProxyDialog open={showProvisionProxy} onClose={() => setShowProvisionProxy(false)} />
@@ -1110,7 +1159,13 @@ export default function InstancesPage() {
           <DataPanelSkeleton rows={12} />
         </div>
       ) : (
-        <div className="space-y-3">
+        /*
+          数据区用 flex 列：让内部的虚拟表靠 `flex-1` 吃掉剩余高度（表格容器已改成 flex-1）。
+          此前这里是 `div.space-y-3`——纯块级、不分配高度，表格只能用
+          `max-h-[calc(100vh-20rem)]` 猜一个定值，页面一变高就算错、把列表顶出视口。
+          `min-h-0` 是 flex 列里子项可收缩的前提，缺了它表格仍会被内容撑高、溢出照旧。
+        */
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
           {selectedIds.length > 0 && (
             <InstanceBatchBar selected={selectedInstances} onClear={clearSelection} onRetainFailed={setSelectedIds} />
           )}

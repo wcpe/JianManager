@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 import { GripVertical, MoreHorizontal } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Separator } from '@jianmanager/ui/components/separator'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -252,7 +253,8 @@ function ToolMoreMenu({ entries }: { entries: NavEntry[] }) {
           }}
         >
         {zone('shown', t('sidebarTools.shown'), shownEntries)}
-        <div className="my-1 h-px bg-border" />
+        {/* 两组工具之间的纯装饰分隔线 */}
+        <Separator decorative className="my-1" />
         {zone('stowed', t('sidebarTools.stowed'), stowedEntries)}
         <p className="border-t border-border/60 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground/60">
           {t('sidebarTools.dragHint')}

@@ -37,7 +37,9 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -188,7 +190,8 @@ export function InstanceConsolePageView({
 
   // Tab 栏：激活项滚进视野 + 仅在真溢出时加边缘渐隐。
   const tabRefs = useRef(new Map<TabKey, HTMLButtonElement>())
-  const navRef = useRef<HTMLElement>(null)
+  // Tab 栏容器由 `<nav>` 改为 Card（渲染为 div），故 ref 类型随之收窄为 HTMLDivElement。
+  const navRef = useRef<HTMLDivElement>(null)
   const [navOverflowing, setNavOverflowing] = useState(false)
   useEffect(() => {
     const el = navRef.current
@@ -315,7 +318,11 @@ export function InstanceConsolePageView({
         {runtimeDriftBanner}
         {/* 瘦身顶栏（FR-412）：标题只留实例名（原「服务器控制台 /」前缀与无信息副标题已删），
             节点/端口/运行时长压成一行内联元信息，指标从 7 格 MetaCell 网格改为可收起的 pill 条。 */}
-        <header className={cn('flex-none rounded-lg border bg-card/95 px-3 py-2 shadow-soft backdrop-blur-sm', instanceStatusGlowClass(instance.status))}>
+        {/* 顶栏卡片：Card 渲染为 div。原 <header> 位于 <main> 之内（DashboardPage 的
+            `[data-slot="console-main"]`），按 HTML-AAM 映射为 generic 而非 banner landmark，
+            换成 div 不丢 landmark 语义。`instanceStatusGlowClass` 是状态光晕业务特性，
+            必须以 className 透传（Card 只当容器，光晕是装饰），backdrop-blur-sm 亦保留。 */}
+        <Card className={cn('flex-none gap-0 px-3 py-2 backdrop-blur-sm', instanceStatusGlowClass(instance.status))}>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex min-w-0 items-center gap-2">
               <StatusBadge
@@ -468,11 +475,15 @@ export function InstanceConsolePageView({
               {t('serverConsole.expandMetrics', '展开指标')}
             </button>
           )}
-        </header>
+        </Card>
 
         {/* WAI-ARIA tabs（可用性增强）：方向键循环 + roving tabindex + aria-selected；
-            溢出时两侧渐隐提示可横滚，激活项由 effect 自动滚进视野。 */}
-        <nav
+            溢出时两侧渐隐提示可横滚，激活项由 effect 自动滚进视野。
+            原 `<nav>` 显式带 `role="tablist"`（已覆盖其 navigation landmark 语义），故直接换成
+            Card 不丢语义；ref / 键盘处理 / 溢出测量都留在同一节点上。
+            补 `flex-row` 覆盖 Card 自带的 `flex-col`（原为横向按钮条）；
+            内边距沿用原 `px-2 pt-1.5`，用 `py-0` 抵掉 Card 默认的 `py-4`。 */}
+        <Card
           ref={navRef}
           role="tablist"
           aria-label={t('serverConsole.instanceTabs')}
@@ -492,7 +503,7 @@ export function InstanceConsolePageView({
             }
           }}
           className={cn(
-            'flex flex-none gap-1 overflow-x-auto rounded-lg border bg-card/95 px-2 pt-1.5 shadow-soft backdrop-blur-sm',
+            'flex-none flex-row gap-1 overflow-x-auto px-2 py-0 pt-1.5 backdrop-blur-sm',
             navOverflowing && '[mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]',
           )}
         >
@@ -526,7 +537,7 @@ export function InstanceConsolePageView({
               </Fragment>
             )
           })}
-        </nav>
+        </Card>
 
         {/* 页签 keep-alive（FR-295）：访问过的页签全部保持挂载，非活跃者 Activity 隐藏——
             DOM/本地状态（终端缓冲、文件树展开态、未保存草稿）保留，轮询自动暂停。
@@ -683,17 +694,22 @@ export function InstanceConsoleOverviewPanel({
       </div>
 
       {/* 探针缺失横幅是世界语义专属（FR-448）：非 MC 实例（proxy/generic/beacon）本不该有
-          ServerProbe，横幅只会误导；与顶栏 showProbeChip 的 mcSemantics 门控保持一致。 */}
+          ServerProbe，横幅只会误导；与顶栏 showProbeChip 的 mcSemantics 门控保持一致。
+
+          语义覆盖为 note（Alert 默认 role="alert"）：本页已有明确的角色分工——
+          「上次启动失败」独占 alert（需立刻打断）、「搭建中」独占 status（进行时播报）。
+          这条是「数据可信度的常驻说明」，既非紧急告警也非进行中，用 note 才不抢那两个角色
+          （与 bot-load/session/DisclaimerBanner 的既有约定一致）。 */}
       {mcSemantics && !probeConnected && (
-        <div className="rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
-          {t('serverConsole.probeUnavailable')}
-        </div>
+        <Alert variant="warning" role="note" className="py-2">
+          <AlertDescription className="text-xs">{t('serverConsole.probeUnavailable')}</AlertDescription>
+        </Alert>
       )}
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
         {/* 左栏 62%：图表在上（占 42% 高）、日志表在下吃满剩余——日志需要横向空间放消息全文。 */}
         <div className="flex min-h-0 flex-[1.6] flex-col gap-2">
-          <section className="flex min-h-0 flex-[0_0_42%] flex-col rounded-lg border bg-card shadow-soft">
+          <Card className="min-h-0 flex-[0_0_42%] py-0">
             <h2 className="flex-none border-b px-3 py-2 text-sm font-semibold">{mcSemantics ? `${t('serverConsole.tps')} / ${t('serverConsole.mspt')}` : t('serverConsole.nonMcTitle')}</h2>
             {!mcSemantics ? (
               <div className="flex min-h-0 flex-1 items-center justify-center px-3 text-center text-xs text-muted-foreground">
@@ -718,9 +734,9 @@ export function InstanceConsoleOverviewPanel({
                 {hasProbe ? t('serverConsole.noSeriesYet') : t('serverConsole.probeUnavailable')}
               </div>
             )}
-          </section>
+          </Card>
 
-          <section className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card shadow-soft">
+          <Card className="min-h-0 flex-1 py-0">
             <div className="flex flex-none items-center justify-between gap-2 border-b px-3 py-2">
               <h2 className="text-sm font-semibold">{t('serverConsole.logsPreview')}</h2>
               {/* 预览只有 8 行：给一条到日志中心的出口（FR-403 页面接受 ?instanceId=），行与全量接起来。 */}
@@ -761,17 +777,17 @@ export function InstanceConsoleOverviewPanel({
                 </TableBody>
               </Table>
             </div>
-          </section>
+          </Card>
         </div>
 
         {/* 右栏 38%：三卡合流（FR-423）——最近事件 + 关注事项 + 崩溃诊断同一条时间线。 */}
-        <section className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card shadow-soft">
+        <Card className="min-h-0 flex-1 py-0">
           <div className="flex flex-none items-center justify-between gap-2 border-b px-3 py-2">
             <h2 className="text-sm font-semibold">{t('serverConsole.activityFeed')}</h2>
             <span className="text-[11px] text-muted-foreground">{t('serverConsole.activityFeedHint')}</span>
           </div>
           {activityFeed}
-        </section>
+        </Card>
       </div>
     </div>
   )

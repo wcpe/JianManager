@@ -82,7 +82,8 @@ describe('EditInstanceConfigDialog（FR-233 · ADR-102 b 范式）', () => {
 
     expect(screen.getByRole('heading', { name: '编辑实例配置 · docker-mc' })).toBeInTheDocument()
     expect(screen.getByDisplayValue('java -jar server.jar nogui')).toBeInTheDocument()
-    expect(screen.getByRole('checkbox')).toBeChecked()
+    // 自动重启是「启用/禁用」开关，语义角色为 switch（原为 checkbox，统一到组件库 Switch 后）
+    expect(screen.getByRole('switch', { name: '崩溃自动重启' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByRole('button', { name: '不指定（使用系统 Java）' })).toBeInTheDocument()
   })
 
@@ -99,7 +100,8 @@ describe('EditInstanceConfigDialog（FR-233 · ADR-102 b 范式）', () => {
     await user.clear(screen.getByDisplayValue('java -jar server.jar nogui'))
     await user.type(screen.getByPlaceholderText('java -Xmx2G -jar server.jar nogui'), 'java -Xmx4G -jar server.jar')
     await pickJdk(user, 'Temurin 17 (17.0.9)')
-    await user.click(screen.getByRole('checkbox'))
+    // 自动重启是启用类开关（Switch → role=switch），点开关本体翻转
+    await user.click(screen.getByRole('switch', { name: '崩溃自动重启' }))
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))

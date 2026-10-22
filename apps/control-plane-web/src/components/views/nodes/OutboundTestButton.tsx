@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { CheckCircle2, Loader2, Plug, XCircle } from 'lucide-react'
+import { CheckCircle2, Plug, XCircle } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Spinner } from '@jianmanager/ui/components/spinner'
 
 /** 出站测试结果（容器注入）。 */
 export interface OutboundTestResult {
@@ -65,7 +66,7 @@ export function OutboundTestButton({
           />
         )}
         <Button size="sm" variant="outline" onClick={() => onTest(target)} disabled={!canTest}>
-          {pending ? <Loader2 className="size-4 animate-spin" /> : <Plug className="size-4" />}
+          {pending ? <Spinner /> : <Plug className="size-4" />}
           {label}
         </Button>
         {!pending && result && (

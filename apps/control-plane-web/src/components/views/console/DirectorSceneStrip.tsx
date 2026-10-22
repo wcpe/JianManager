@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Gauge, Trash2, Zap } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Slider } from '@jianmanager/ui/components/slider'
 import { MAX_PREHEAT_LIMIT, MIN_PREHEAT_LIMIT, sceneStatus } from '@/lib/director/director'
 import type { DirectorState, SceneStatus } from '@/lib/director/director'
 
@@ -60,16 +61,25 @@ export function DirectorSceneStrip({
         <span className="tabular-nums">
           {preheatCount}/{machine.limit}
         </span>
-        <input
-          type="range"
+        {/*
+          并发上限是**离散小整数区间**（1..6），原生 range 在这里尤其难受：
+          `accent-primary` 只在 Chromium 生效，其余引擎滑块外观不可控；窄至 w-20 时，
+          6 格的可点击精度也不足。Slider 取语义 token（主题切换无需逐套重调），
+          拇指带 aria-valuenow，键盘/读屏能拿到「当前上限是几」。
+          `w-20`（80px）保持原占位宽度，右侧 '已预热/上限' 读数仍同源。
+        */}
+        <Slider
           min={MIN_PREHEAT_LIMIT}
           max={MAX_PREHEAT_LIMIT}
           step={1}
-          value={machine.limit}
-          onChange={(e) => onLimitChange(Number(e.target.value))}
+          value={[machine.limit]}
+          onValueChange={([next]) => {
+            // 单拇指且 min/max 已界定，越界只可能来自异常输入；仍走 clamp 保持原语义。
+            if (next != null) onLimitChange(next)
+          }}
           aria-label={t('director.preheatLimit')}
           title={t('director.preheatLimitHint', { max: MAX_PREHEAT_LIMIT })}
-          className="h-1.5 w-20 cursor-pointer accent-primary"
+          className="w-20"
         />
       </div>
     </div>

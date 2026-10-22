@@ -1,6 +1,16 @@
-import { cn } from '@jianmanager/ui'
+import { Switch } from '@jianmanager/ui/components/switch'
 
-/** 启用开关（受控）：复用告警页既有 toggle 样式，统一 role=switch + a11y。 */
+/**
+ * 启用开关（受控）：列表行里的「开/关」语义控件。
+ *
+ * 实现已收敛到组件库的 {@link Switch}（Radix 原语）：此前这里手写了一整套
+ * button[role=switch] + 轨道/滑块 span 与位移 class，和组件库的 Switch 表达同一件事，
+ * 两套焦点环、禁用态与过渡时长各写各的。对外契约（checked / onChange(next) / disabled /
+ * role=switch / aria-checked）保持不变，调用方无需改动。
+ *
+ * `onLabel` / `offLabel` 仍走原生 title：它们是随状态变化的悬停提示，不是纯装饰标签，
+ * 而 Tooltip 需要额外 Provider 且内容是静态文本，此处用原生 title 更贴合。
+ */
 export function ConfigSwitch({
   checked,
   onChange,
@@ -19,25 +29,12 @@ export function ConfigSwitch({
   offLabel?: string
 }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
+    <Switch
+      checked={checked}
+      disabled={disabled}
       aria-label={label}
       title={checked ? onLabel : offLabel}
-      disabled={disabled}
-      onClick={() => onChange(!checked)}
-      className={cn(
-        'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-300 ease-ios disabled:opacity-50',
-        checked ? 'bg-primary' : 'bg-muted-foreground/30',
-      )}
-    >
-      <span
-        className={cn(
-          'inline-block size-4 transform rounded-full bg-background shadow transition-transform duration-300 ease-ios',
-          checked ? 'translate-x-4' : 'translate-x-0.5',
-        )}
-      />
-    </button>
+      onCheckedChange={(next) => onChange(next)}
+    />
   )
 }

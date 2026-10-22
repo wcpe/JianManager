@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 import { Copy, KeyRound, Plus } from 'lucide-react'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
@@ -927,9 +928,12 @@ function PlaintextRevealDialog({
           <DialogDescription>{t('agentTokens.revealDesc', { name })}</DialogDescription>
         </DialogHeader>
         <ScrollableDialogBody className="space-y-3">
-          <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
-            {t('agentTokens.revealWarning')}
-          </div>
+          {/* 明文密钥警示：改用 Alert 的 warning 档（原手写 border-status-warning/40 + bg 与组件同源）。
+              内边距压回 p-2：对话框正文是紧凑信息流，Alert 默认 px-4 py-3 会明显撑高。
+              本页无 role="alert"/status 断言冲突，保留组件内置的 role="alert"——一次性明文出现时值得被播报。 */}
+          <Alert variant="warning" className="p-2 text-xs">
+            <AlertDescription className="text-xs">{t('agentTokens.revealWarning')}</AlertDescription>
+          </Alert>
           <div className="space-y-1">
             <div className="text-xs font-medium text-muted-foreground">{t('agentTokens.reveal.plaintext')}</div>
             <div className="flex items-start gap-2 rounded-md border bg-muted/50 p-2">

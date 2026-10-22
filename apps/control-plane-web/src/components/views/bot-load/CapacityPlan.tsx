@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next'
+import { AlertTriangle } from 'lucide-react'
 import type { BotLoadAllocation, BotLoadNodeCapacity, BotLoadPreflightResult } from '@/lib/bot-load/bot-load-types'
+import { Alert, AlertDescription, AlertTitle } from '@jianmanager/ui/components/alert'
 import {
   Table,
   TableBody,
@@ -9,6 +11,8 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 
 interface CapacityPlanProps {
   nodes?: BotLoadNodeCapacity[]
@@ -74,11 +78,10 @@ export function CapacityPlan({
                   <TableRow key={n.nodeId} className={cn(!selectable && 'opacity-60')}>
                     {executorMode === 'manual' && (
                       <TableCell>
-                        <input
-                          type="checkbox"
+                        <Checkbox
                           checked={selectedNodeIds.includes(n.nodeId)}
                           disabled={!selectable}
-                          onChange={() => onToggleNode(n.nodeId)}
+                          onCheckedChange={() => onToggleNode(n.nodeId)}
                           aria-label={n.nodeName}
                         />
                       </TableCell>
@@ -111,25 +114,34 @@ export function CapacityPlan({
       )}
 
       {preflight && preflight.blockers.length > 0 && (
-        <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3" role="alert">
-          <p className="mb-1 text-sm font-semibold text-destructive">{t('botsLoad.blockers')}</p>
-          <ul className="list-disc space-y-1 pl-5 text-sm">
-            {preflight.blockers.map((b, i) => (
-              <li key={i}>{b.message}</li>
-            ))}
-          </ul>
-        </div>
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>{t('botsLoad.blockers')}</AlertTitle>
+          <AlertDescription>
+            {/* AlertDescription 是 justify-items-start 的 grid：列表不显式占满会缩成内容宽，
+                导致条目在长文案下换行位置不一致。 */}
+            <ul className="w-full list-disc space-y-1 pl-5">
+              {preflight.blockers.map((b, i) => (
+                <li key={i}>{b.message}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
       )}
 
       {preflight && preflight.warnings.length > 0 && (
-        <div className="rounded-lg border border-status-warning/40 bg-status-warning/10 p-3">
-          <p className="mb-1 text-sm font-semibold">{t('botsLoad.warnings')}</p>
-          <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-            {preflight.warnings.map((w, i) => (
-              <li key={i}>{w.message}</li>
-            ))}
-          </ul>
-        </div>
+        <Alert variant="warning">
+          <AlertTriangle />
+          <AlertTitle>{t('botsLoad.warnings')}</AlertTitle>
+          <AlertDescription>
+            {/* 同上：列表需占满描述列宽，条目换行才一致。 */}
+            <ul className="w-full list-disc space-y-1 pl-5">
+              {preflight.warnings.map((w, i) => (
+                <li key={i}>{w.message}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
       )}
 
       {preflight?.planToken && preflight.expiresAt && (
@@ -143,10 +155,10 @@ export function CapacityPlan({
 
 function Metric({ label, value, danger }: { label: string; value: string; danger?: boolean }) {
   return (
-    <div className="rounded-lg border bg-card p-3 shadow-soft">
+    <Card className="p-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={cn('mt-1 text-lg font-semibold tabular-nums', danger && 'text-destructive')}>{value}</p>
-    </div>
+    </Card>
   )
 }
 

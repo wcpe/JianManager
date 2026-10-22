@@ -7,6 +7,7 @@ import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import {
   Table,
   TableBody,
@@ -321,12 +322,13 @@ function BackupsPanel({
 
   const createActions = (
     <>
-      {/* 存储选择保留只读下拉（列表消费，缺省本地）；仓库增删改属独立页（FR-338）。 */}
-      <select
-        className="rounded border bg-background p-1.5 text-xs"
+      {/* 存储选择保留只读下拉（列表消费，缺省本地）；仓库增删改属独立页（FR-338）。
+          候选来自后端、数量不受控 → 只用统一样式的 NativeSelect，不换 Radix Select。 */}
+      <NativeSelect
+        className="w-auto text-xs"
+        size="sm"
         value={storageId ?? ''}
         onChange={(e) => setStorageId(e.target.value ? Number(e.target.value) : undefined)}
-        title={t('backups.selectStorage')}
         aria-label={t('backups.selectStorage')}
       >
         <option value="">{t('backups.localStorage')}</option>
@@ -335,7 +337,7 @@ function BackupsPanel({
             {s.name}
           </option>
         ))}
-      </select>
+      </NativeSelect>
       <Button size="sm" onClick={() => void handleCreate(false)} disabled={creating}>
         {t('backups.createFull')}
       </Button>

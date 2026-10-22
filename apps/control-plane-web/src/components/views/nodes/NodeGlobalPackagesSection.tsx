@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUpCircle, Loader2, Package, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { ArrowUpCircle, Package, Search, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
+import { Card } from '@jianmanager/ui/components/card'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 
 /**
@@ -89,9 +92,17 @@ export default function NodeGlobalPackagesSection({
         <span className="text-sm font-medium">{t('pkg.title', '全局包')}</span>
         {data?.pm && <Badge variant="outline" className="text-xs">{data.pm}</Badge>}
         <span className="flex-1" />
-        <Button variant="ghost" size="sm" onClick={onRefresh} disabled={isFetching} aria-label={t('common.refresh', '刷新')}>
-          {isFetching ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-        </Button>
+        {/*
+          刷新：原先「在途显 Spinner / 否则显刷新图标」的三元，由 `pending` 旋转图标统一覆盖。
+          `size="sm"` 显式保留：原按钮就是这个盒子尺寸，纯图标态默认会取 `icon-sm`。
+        */}
+        <RefreshButton
+          variant="ghost"
+          size="sm"
+          pending={isFetching}
+          onClick={onRefresh}
+          aria-label={t('common.refresh', '刷新')}
+        />
       </div>
 
       {/* 安装表单：包名 + 可选版本（空=latest）。 */}
@@ -111,7 +122,7 @@ export default function NodeGlobalPackagesSection({
           className="h-8 w-36 text-xs"
         />
         <Button size="sm" disabled={installing || !name.trim()} onClick={() => void submitInstall(name, version)}>
-          {installing ? <Loader2 className="size-4 animate-spin" /> : t('pkg.install', '安装')}
+          {installing ? <Spinner /> : t('pkg.install', '安装')}
         </Button>
       </div>
 
@@ -141,7 +152,8 @@ export default function NodeGlobalPackagesSection({
           ) : (
             <div className="space-y-1.5">
               {pkgs.map((p) => (
-                <div key={p.name} className="flex items-center gap-2.5 rounded-md border bg-card px-3 py-2 text-sm transition-colors hover:bg-muted/40">
+                /* 列表行：Card 只作统一外壳，行内布局与 hover 涂层原样保留。 */
+                <Card key={p.name} className="flex-row items-center gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-muted/40">
                   <span className="min-w-0 flex-1 truncate font-mono text-xs" title={p.name}>{p.name}</span>
                   <span className="text-xs text-muted-foreground">{p.version}</span>
                   {p.latest && (
@@ -167,7 +179,7 @@ export default function NodeGlobalPackagesSection({
                   >
                     <Trash2 className="size-4" />
                   </button>
-                </div>
+                </Card>
               ))}
             </div>
           )}

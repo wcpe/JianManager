@@ -2,6 +2,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
+import { Card } from '@jianmanager/ui/components/card'
 import { clampChartPoints, formatLatencyMs } from '@/lib/bot-load/bot-load-metrics'
 import type { BotLoadMetricPoint } from '@/lib/bot-load/bot-load-types'
 import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
@@ -244,11 +245,11 @@ function ChartBlock({
   children: React.ReactNode
 }) {
   return (
-    <section className="rounded-lg border bg-card p-4">
+    <Card className="p-4">
       <h3 className="text-sm font-semibold">{title}</h3>
       <p className="mb-3 text-xs text-muted-foreground">{summary}</p>
       {children}
-    </section>
+    </Card>
   )
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient } from '@tanstack/react-query'
 import { db } from '@jianmanager/devmock/db'
@@ -90,13 +90,23 @@ describe('MockControlPanel', () => {
     expect(screen.getByTestId('mock-latency-preset-0')).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('滑杆可自由设置延迟（不受预设档位限制）', () => {
+  it('滑杆可自由设置延迟（不受预设档位限制）', async () => {
+    const user = userEvent.setup()
     render(<MockControlPanel />)
 
-    fireEvent.change(screen.getByTestId('mock-latency-range'), { target: { value: '1750' } })
+    // 组件库 Slider 的拇指不是原生 input，不能 fireEvent.change；
+    // 按可访问名取 role=slider，再用键盘步进（step=50）验证取值回写（不受预设档位限制）。
+    const slider = screen.getByRole('slider', { name: '接口延迟（毫秒）' })
+    expect(slider).toHaveAttribute('aria-valuenow', '0')
+    slider.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(getMockLatency()).toBe(50)
+    expect(screen.getByTestId('mock-latency-value')).toHaveTextContent('50 ms')
 
-    expect(getMockLatency()).toBe(1750)
-    expect(screen.getByTestId('mock-latency-value')).toHaveTextContent('1750 ms')
+    // End 到上界（MOCK_LATENCY_MAX=3000）——验证 max 约束随 props 生效。
+    await user.keyboard('{End}')
+    expect(getMockLatency()).toBe(3000)
+    expect(screen.getByTestId('mock-latency-value')).toHaveTextContent('3000 ms')
   })
 
   it('切换数据量档位后按新规模重播种假后端', async () => {

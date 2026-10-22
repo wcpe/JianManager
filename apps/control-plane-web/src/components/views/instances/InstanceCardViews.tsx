@@ -6,7 +6,7 @@ import { instanceStatusLevel } from '@jianmanager/ui/lib/threshold'
 import { useCardColumns } from '@/lib/hooks/use-card-columns'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import {
-  INSTANCE_GROUP_ROW_HEIGHT,
+  groupRowHeight,
   InstanceGroupHeaderContent,
   useStoredVirtualScroll,
   type InstanceTreeRow,
@@ -141,8 +141,9 @@ export function VirtualizedGroupedCardView({
   }, [rows, columns])
 
   // 逐行高度：组头行比卡片行矮，故传数组（与 VirtualizedGroupedInstanceTable 同一做法）。
+  // 组头再按层级分两档（顶层横幅 / 子层标签行），与行盒行内 style 同源。
   const sizes = useMemo(
-    () => flowRows.map((row) => (row.kind === 'group' ? INSTANCE_GROUP_ROW_HEIGHT : CARD_ROW_HEIGHT)),
+    () => flowRows.map((row) => (row.kind === 'group' ? groupRowHeight(row.group.depth) : CARD_ROW_HEIGHT)),
     [flowRows],
   )
   const {
@@ -186,8 +187,10 @@ export function VirtualizedGroupedCardView({
                 data-group-depth={row.group.depth}
                 data-collapsed={row.group.collapsed ? 'true' : 'false'}
                 // 组头行高写进行盒：与逐行 sizes 用的是同一个常量，二者不会静默分叉。
-                style={{ top, height: INSTANCE_GROUP_ROW_HEIGHT }}
-                className="absolute inset-x-0 flex items-center rounded-md bg-muted/60 px-3 backdrop-blur"
+                style={{ top, height: groupRowHeight(row.group.depth) }}
+                // 底色由 `InstanceGroupHeaderContent` 自己按层级画（顶层横幅 / 子层无底色），
+                // 外层这里不再铺底——否则子层会被套上一层灰块，又变回「三层等高」的样子。
+                className="absolute inset-x-0 flex items-center px-3"
               >
                 <InstanceGroupHeaderContent
                   label={row.group.label}

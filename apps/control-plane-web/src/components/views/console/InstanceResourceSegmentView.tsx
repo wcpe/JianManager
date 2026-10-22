@@ -8,6 +8,7 @@
  */
 import { Activity, type ReactNode } from 'react'
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 import { SegmentPills } from '@/components/views/console/SegmentPills'
 import type { SegmentPillOption } from '@/components/views/console/SegmentPills'
 import type { ResourceSegment } from '@/lib/instances/instance-console-tabs'
@@ -60,7 +61,7 @@ export default function InstanceResourceSegmentView({
   envContent,
 }: InstanceResourceSegmentViewProps) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-soft">
+    <Card className="min-h-0 flex-1 overflow-hidden py-0">
       <div className="flex flex-none items-center gap-1 border-b px-2 py-1.5">
         {/* 不传 ariaLabel：分组名若用「文件配置」会与本页签（tabpanel）的名字撞可访问性名称——
             原实现刻意只用「文件」区分段名；各段按钮自带可见文案 + aria-pressed，无需额外命名。 */}
@@ -87,6 +88,6 @@ export default function InstanceResourceSegmentView({
           {envContent}
         </div>
       </Activity>
-    </div>
+    </Card>
   )
 }

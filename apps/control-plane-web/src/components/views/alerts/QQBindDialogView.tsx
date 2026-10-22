@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RefreshCw } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import {
   Dialog,
   DialogContent,
@@ -248,10 +248,18 @@ export function QQBindDialogView({
           <Button type="button" variant="outline" onClick={onClose}>
             {t('alerts.qqBindManual')}
           </Button>
-          <Button type="button" variant="secondary" disabled={creating} onClick={regenerate}>
-            <RefreshCw className="size-3.5" />
-            {phase === 'exhausted' ? t('alerts.qqBindRegenerate') : t('alerts.qqBindRefresh')}
-          </Button>
+          {/*
+            重新生成二维码：原按钮未写 `size`，与页脚「手工填写」同取默认尺寸；
+            显式传 `size="default"` 以免落回带文案时的 `sm`，把页脚两个按钮拉成一高一低。
+          */}
+          <RefreshButton
+            variant="secondary"
+            size="default"
+            iconSize="size-3.5"
+            pending={creating}
+            onClick={regenerate}
+            label={phase === 'exhausted' ? t('alerts.qqBindRegenerate') : t('alerts.qqBindRefresh')}
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>

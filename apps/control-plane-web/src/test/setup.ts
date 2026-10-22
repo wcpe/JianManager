@@ -62,6 +62,22 @@ if (typeof Range !== 'undefined') {
 }
 
 /**
+ * jsdom 缺 `ResizeObserver`：Radix 的 Popper 系组件（Tooltip / DropdownMenu 的定位内容）
+ * 通过 `@radix-ui/react-use-size` 观测触发器尺寸，缺少该构造器会在 layout effect 里抛
+ * `ReferenceError: ResizeObserver is not defined`——测试**仍然全绿**，但 vitest 记为
+ * Uncaught Exception 并以非零码退出。这里给一个只满足契约的空实现（不回调）：
+ * jsdom 下没有真实布局，尺寸观测对这些断言没有意义。
+ */
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverStub implements ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
+}
+
+/**
  * jsdom 组件 / 页面测试的全局 setup（FR-196，vitest dom project）。
  * onUnhandledRequest:'error' 是有意的覆盖闸：未 mock 的请求即让测试失败，逼域簇补齐 handler。
  * 每例后卸载 DOM + 重置 handler 覆盖 + 假后端 + 注入 + 鉴权态（localStorage / store），保证用例隔离

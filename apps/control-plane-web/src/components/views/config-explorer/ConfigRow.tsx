@@ -2,6 +2,7 @@ import * as React from 'react'
 import { LayoutGrid, List } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
 
 /**
@@ -161,9 +162,12 @@ export function ConfigRow({
   className?: string
 }) {
   return (
-    <div
+    // 配置行卡片 → 统一 Card（圆角/描边/底色/阴影由组件决定）。
+    // 原为横排 flex 行，故显式 flex-row 覆盖 Card 默认的 flex-col；
+    // hover 换阴影保留在 className（shadow-lift 不在 Card 基础样式内）。
+    <Card
       className={cn(
-        'flex items-center gap-3 rounded-xl border bg-card px-4 py-3 text-card-foreground shadow-soft',
+        'flex-row items-center gap-3 px-4 py-3',
         'transition-[box-shadow] duration-300 ease-ios hover:shadow-lift',
         className,
       )}
@@ -193,6 +197,6 @@ export function ConfigRow({
       </div>
       {meta && <div className="hidden shrink-0 text-right text-xs text-muted-foreground sm:block">{meta}</div>}
       {trailing && <div className="flex shrink-0 items-center gap-2">{trailing}</div>}
-    </div>
+    </Card>
   )
 }

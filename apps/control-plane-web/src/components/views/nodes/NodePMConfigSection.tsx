@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Loader2, Plus, Trash2 } from 'lucide-react'
+import { Check, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Spinner } from '@jianmanager/ui/components/spinner'
 
 /** registry 条目（与后端契约对齐）。 */
 export interface PMRegistryEntry {
@@ -165,7 +166,7 @@ export function NodePMConfigSection({
 
       <div className="flex justify-end">
         <Button size="sm" onClick={handleSave} disabled={saving}>
-          {saving ? <Loader2 className="size-4 animate-spin" /> : null}
+          {saving ? <Spinner /> : null}
           {t('pmConfig.save', '保存配置')}
         </Button>
       </div>

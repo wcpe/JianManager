@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 import type { NavGroup, NavSection } from '@/lib/shared/nav-config'
 
@@ -91,10 +92,11 @@ export function MobileConsoleNav({ groups, pathname, renderLink }: MobileConsole
       className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/96 px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2 shadow-[0_-16px_32px_-28px_rgb(var(--shadow-color)/0.45)] backdrop-blur-xl sm:hidden"
     >
       {panelGroup && (
-        <div
+        // 卡片视觉交给 Card；data-slot / data-state 是测试与 CSS 动画契约，必须透传。
+        <Card
           data-slot="mobile-nav-panel"
           data-state={panelState}
-          className="jm-mobile-nav-panel absolute inset-x-2 bottom-[calc(100%+0.5rem)] overflow-hidden rounded-lg border bg-card/98 p-2 shadow-lift"
+          className="jm-mobile-nav-panel absolute inset-x-2 bottom-[calc(100%+0.5rem)] overflow-hidden p-2 shadow-lift"
         >
           <div className="mb-1 flex items-center justify-between px-2 py-1 text-xs font-medium text-muted-foreground">
             <span>{t(panelGroup.labelKey)}</span>
@@ -128,7 +130,7 @@ export function MobileConsoleNav({ groups, pathname, renderLink }: MobileConsole
               <MobileSection key={section.labelKey} section={section} onNavigate={closePanel} renderLink={renderLink} />
             ))}
           </div>
-        </div>
+        </Card>
       )}
 
       <div className="grid grid-cols-5 gap-1">

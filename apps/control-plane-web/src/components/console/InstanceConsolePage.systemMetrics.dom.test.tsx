@@ -83,7 +83,9 @@ describe('InstanceConsolePage 无探针可用性契约（FR-343 / FR-446/447）'
     // MSPT（方案 B）：探针缺失时不渲染任何分段/KPI 单元格。
     expect(screen.queryAllByText('MSPT').filter((el) => el.tagName === 'P' || el.tagName === 'SPAN')).toHaveLength(0)
 
-    const chart = screen.getByRole('heading', { name: 'TPS / MSPT' }).closest('section') as HTMLElement
+    // 该卡片容器已由手写 `<section>` 换成共享 Card（渲染为 div + data-slot="card"），
+    // 故定位方式随之改为按 data-slot 取整块卡片，断言内容不变。
+    const chart = screen.getByRole('heading', { name: 'TPS / MSPT' }).closest('[data-slot="card"]') as HTMLElement
     expect(within(chart).getByText('探针未连入，部分在线玩家与世界数据为预览值')).toBeInTheDocument()
     expect(chart.querySelector('.grid-cols-24')).not.toBeInTheDocument()
     expect(screen.queryByText('TPS 低于 18，建议检查插件或实体数量')).not.toBeInTheDocument()

@@ -4,6 +4,7 @@ import { Cpu, MemoryStick, Users, Zap, Play, Square, RotateCw, Route, Box } from
 
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
@@ -161,8 +162,17 @@ export function InstanceWorktableCard({
   const tpsLabel = !running ? '--' : tpsAvailable ? (metrics?.tps ?? 0).toFixed(1) : unavailable
 
   return (
-    <div
-      className={cn('group flex cursor-pointer flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift', instanceStatusGlowClass(inst.status, true))}
+    /*
+      整块可点击（进入工作区）→ 保留原 onClick 语义与 interactive 的 hover 抬升；
+      业务特性全部留在 className/children 里：
+      - 状态光晕 `instanceStatusGlowClass`（伪元素画外圈，依赖容器自身圆角继承）；
+      - `hover:shadow-lift` 悬停反馈；
+      - 卡内各段自带 `mt-3` 节奏，故 gap-0 保持原纵向间距。
+      注：`@/test/ui-details` 的 FR-176 守护测试断言本文件保留 hover:shadow-lift，勿删。
+    */
+    <Card
+      interactive
+      className={cn('group cursor-pointer gap-0 p-4 hover:shadow-lift', instanceStatusGlowClass(inst.status, true))}
       onClick={() => onOpen?.(inst.id)}
     >
       {/* 头部：图标块 + 名称 + 状态（运行呼吸灯）+ 菜单 */}
@@ -292,7 +302,7 @@ export function InstanceWorktableCard({
           )}
         </div>
       </div>
-    </div>
+    </Card>
   )
 }
 

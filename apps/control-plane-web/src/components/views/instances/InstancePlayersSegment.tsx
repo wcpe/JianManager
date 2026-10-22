@@ -2,6 +2,7 @@ import { useId, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ListChecks, ShieldBan, Users } from 'lucide-react'
 
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Button } from '@jianmanager/ui/components/button'
 import {
   Dialog,
@@ -199,9 +200,11 @@ function OnlinePlayersPanel({
     // flex-none：玩家数少时不被拉高，空白落到栏位空隙（spec §3.2 内容驱动卡）。
     <Panel className="flex-none" icon={<Users className="size-3.5" />} title={t('players.tab_online')}>
       {degraded && (
-        <div className="mb-3 rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
-          {t('players.degraded', { names: backend?.instanceName ?? `#${instanceId}` })}
-        </div>
+        <Alert variant="warning" className="mb-3 py-2">
+          <AlertDescription className="text-xs">
+            {t('players.degraded', { names: backend?.instanceName ?? `#${instanceId}` })}
+          </AlertDescription>
+        </Alert>
       )}
       {onlineLoading ? (
         <RowsSkeleton />

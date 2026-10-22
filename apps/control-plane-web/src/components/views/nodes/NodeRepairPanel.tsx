@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Copy, RotateCw, ShieldCheck, Trash2 } from 'lucide-react'
+import { Alert, AlertDescription, AlertTitle } from '@jianmanager/ui/components/alert'
 import { Button } from '@jianmanager/ui/components/button'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -108,22 +109,25 @@ export default function NodeRepairPanel({
     <div className="space-y-3">
       {/* 当前节点疑似诊断：命中可疑信号则醒目提示，否则给「未见异常」绿条 */}
       {selfSuspect ? (
-        <div className="space-y-1.5 rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-sm">
-          <div className="flex items-center gap-2 font-medium text-status-warning">
-            <AlertTriangle className="size-4 shrink-0" />
-            {t('nodeRepair.selfSuspect')}
-          </div>
-          <ul className="list-disc space-y-0.5 pl-6 text-xs text-muted-foreground">
-            {selfSuspect.reasons.map((r, i) => (
-              <li key={i}>{r}</li>
-            ))}
-          </ul>
-        </div>
+        <Alert variant="warning">
+          <AlertTriangle />
+          <AlertTitle>{t('nodeRepair.selfSuspect')}</AlertTitle>
+          <AlertDescription>
+            {/* 列表须占满描述列宽，否则 AlertDescription 的 justify-items-start 会把 ul 缩到内容宽。 */}
+            <ul className="w-full list-disc space-y-0.5 pl-6 text-xs">
+              {selfSuspect.reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
       ) : (
-        <div className="flex items-center gap-2 rounded-md border border-status-success/30 bg-status-success/10 px-3 py-2 text-sm text-status-success">
-          <ShieldCheck className="size-4 shrink-0" />
-          {t('nodeRepair.selfHealthy')}
-        </div>
+        <Alert variant="success">
+          <ShieldCheck />
+          <AlertDescription className="self-center text-status-success">
+            {t('nodeRepair.selfHealthy')}
+          </AlertDescription>
+        </Alert>
       )}
 
       {/* 孤立资源统计（修复前评估影响面） */}

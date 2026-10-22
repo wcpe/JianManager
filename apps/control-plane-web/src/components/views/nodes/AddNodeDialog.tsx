@@ -121,6 +121,15 @@ function AutoInstallTab({ issued, onCopyResult }: { issued: IssuedEnrollTokenVie
       <CommandBlock title={t('nodes.enroll.linux', 'Linux / macOS')} command={issued.installCommandLinux} onCopyResult={onCopyResult} />
       <CommandBlock title={t('nodes.enroll.windows', 'Windows (PowerShell)')} command={issued.installCommandWindows} onCopyResult={onCopyResult} />
       <ManualInstallSection issued={issued} onCopyResult={onCopyResult} />
+      {/*
+        【为什么这一处不换成 Alert 的 warning 档】原样式虽有 status-warning 的淡底与描边，但文字是
+        `text-muted-foreground`（灰字）而非 status-warning——**这是刻意的**：换 Alert 会把文字一并染成
+        琥珀色，让它从「补充说明」升级成「警告」，凭空提高这条信息的优先级。
+        内容也印证这个判断：这句讲的是"万一公网源没配好可以怎么办"（追加 --binary 参数），
+        是前置条件说明而非错误或风险告警；上方那两条一键命令才是本 Tab 的主体。
+        Alert 组件没有「淡底 + 灰字」这一档，硬套只能在 warning 上再改回灰字，
+        等于把变体的语义又抹掉——所以保留手写块，仅记录判断依据避免后续反复。
+      */}
       <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
         {t('nodes.enroll.hint', '公网下载源未配置时，请先把 Worker 二进制拷到目标机器，并在命令末尾追加 --binary <路径>（Windows 用 -Binary <路径>）。')}
       </div>
@@ -152,6 +161,7 @@ function ManualConnectTab({ issued, onCopyResult }: { issued: IssuedEnrollTokenV
         <CommandBlock title={t('nodes.enroll.linux', 'Linux / macOS')} command={linuxRun} onCopyResult={onCopyResult} />
         <CommandBlock title={t('nodes.enroll.windows', 'Windows (PowerShell)')} command={winRun} onCopyResult={onCopyResult} />
       </div>
+      {/* 同 AutoInstallTab 的判断：token 有效期属操作前提说明（灰字），不是警告，保留手写块不套 warning。 */}
       <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
         {t('nodes.enroll.manualConnectHint')}
       </div>

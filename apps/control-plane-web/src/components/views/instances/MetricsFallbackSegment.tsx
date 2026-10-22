@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Card } from '@jianmanager/ui/components/card'
 import { ProcessPanel } from '@/components/views/instances/ProcessPanel'
 import type { ProcessMetricsView } from '@/components/views/instances/ProcessPanel'
 
@@ -76,9 +77,10 @@ export function DirectProbeSummary({ summary }: { summary?: DirectProbeSummaryDa
 
 function DirectProbeStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border bg-card p-2">
+    /* 直探统计格：Card 只作外壳；格内两段紧排文本靠 mt-1 控距，故 gap-0。 */
+    <Card className="gap-0 p-2">
       <p className="text-muted-foreground">{label}</p>
       <p className="mt-1 truncate font-mono text-sm font-semibold">{value}</p>
-    </div>
+    </Card>
   )
 }

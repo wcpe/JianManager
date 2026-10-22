@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
-import { Folder, FolderUp, RefreshCw, Check } from 'lucide-react'
+import { Folder, FolderUp, Check } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 
 /** 目录浏览数据（本组件所需的最小结构；外壳传 API 返回项会结构兼容）。 */
 export interface BrowseDirView {
@@ -67,15 +68,21 @@ export default function DirectoryPicker({
         <code className="flex-1 truncate rounded bg-background px-2 py-1 text-xs font-mono" title={current || '/'}>
           {current || t('artifactCache.browseRoots')}
         </code>
-        <button
-          type="button"
+        {/*
+          刷新按钮：改用包内原语，在途旋转 + 禁用由 `pending` 统一表达（原为手写旋转类名）。
+          显式取 `icon-xs`：此处是路径行内的紧凑工具位，原实现只有 p-1 的体量，
+          用默认的 icon-sm 会把这一行撑高。
+        */}
+        <RefreshButton
+          variant="ghost"
+          size="icon-xs"
+          iconSize="size-3.5"
+          pending={isFetching}
           onClick={onRefresh}
-          disabled={isFetching}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
           title={t('common.refresh')}
-        >
-          <RefreshCw className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`} />
-        </button>
+          aria-label={t('common.refresh')}
+          className="text-muted-foreground"
+        />
       </div>
 
       <div className="max-h-56 overflow-y-auto rounded border bg-background">

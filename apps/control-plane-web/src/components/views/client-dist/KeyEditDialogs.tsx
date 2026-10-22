@@ -289,6 +289,11 @@ function EditKeyForm({
               </span>
             </label>
             {value.trim() !== '' && (
+              // 【为什么不用 Alert】这是**输入联动提示**，不是页面级告警：它随「新密钥值」这一格非空即时出现、
+              // 清空即消失，语义是"你正在改的这格有副作用"，紧贴该输入框才是正确位置。
+              // 若换成 Alert destructive 档，底色从 bg-destructive/5 变成 bg-card、描边从红变灰，
+              // 在弹窗表单内部会显得比周围输入框还淡，反而削弱提醒。
+              // `/5` 淡底同样有意：它在整个编辑过程中持续可见（只要输入非空），满浓度红底会压过保存按钮。
               <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {t(
                   'clientChannels.editKeyValueWarn',

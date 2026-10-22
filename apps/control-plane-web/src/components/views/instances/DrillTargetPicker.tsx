@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { InstancePicker } from '@/components/views/instances/InstancePicker'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import type { InstancePickerItemView } from '@/components/views/instances/InstancePicker'
 
 /** 实例候选行（与 InstancePicker 的视图类型同源）。 */
@@ -135,12 +136,14 @@ export function DrillTargetPicker({
       </div>
 
       {/* 当前层 → 下钻到下一级的下拉 */}
+      {/* 节点/世界候选来自后端（数量不受控）→ 原生下拉 + 统一外观 */}
       {target.kind === 'platform' && nodes.length > 0 && (
-        <select
+        <NativeSelect
           aria-label={t('monitor.drill.toInstances')}
           value=""
           onChange={(e) => e.target.value && onChange({ kind: 'node', uuid: e.target.value })}
-          className="h-7 rounded-md border bg-background px-2 text-xs"
+          size="sm"
+          className="w-auto text-xs"
         >
           <option value="">{t('monitor.nodes')}…</option>
           {nodes.map((n) => (
@@ -148,7 +151,7 @@ export function DrillTargetPicker({
               {n.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       )}
 
       {target.kind === 'node' && (
@@ -169,13 +172,14 @@ export function DrillTargetPicker({
       )}
 
       {target.kind === 'instance' && worlds.length > 0 && (
-        <select
+        <NativeSelect
           aria-label={t('monitor.drill.toWorlds')}
           value={target.world ?? ''}
           onChange={(e) =>
             onChange({ kind: 'instance', uuid: target.uuid, nodeUuid: target.nodeUuid, world: e.target.value || undefined })
           }
-          className="h-7 rounded-md border bg-background px-2 text-xs"
+          size="sm"
+          className="w-auto text-xs"
         >
           <option value="">{t('monitor.drill.pickWorld')}</option>
           {worlds.map((w) => (
@@ -183,7 +187,7 @@ export function DrillTargetPicker({
               {w}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       )}
     </div>
   )

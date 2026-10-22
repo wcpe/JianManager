@@ -12,11 +12,13 @@
  */
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { GitCompareArrows, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { GitCompareArrows, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import {
   Dialog,
@@ -282,10 +284,14 @@ export function BaselineDriftPanelView({
       bodyClassName="p-0"
       actions={
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" disabled={isFetching} onClick={onRefresh} data-testid="baseline-drift-refresh">
-            <RefreshCw className={`mr-1 size-3.5 ${isFetching ? 'animate-spin' : ''}`} />
-            {t('baselines.refresh')}
-          </Button>
+          <RefreshButton
+            variant="ghost"
+            iconSize="size-3.5"
+            pending={isFetching}
+            onClick={onRefresh}
+            label={t('baselines.refresh')}
+            data-testid="baseline-drift-refresh"
+          />
           <Button
             size="sm"
             disabled={converging || !drift || drift.drifted === 0}
@@ -426,9 +432,10 @@ export function BaselineEditorDialogView({
           <div>
             <label className="mb-1 block text-xs font-medium text-muted-foreground">{t('baselines.scope')}</label>
             <div className="flex gap-2">
-              <select
+              <NativeSelect
                 aria-label={t('baselines.scopeKind')}
-                className="h-8 w-32 shrink-0 rounded-md border bg-background px-2 text-sm"
+                className="w-32 shrink-0"
+                size="sm"
                 value={kind}
                 onChange={(e) => setKind(e.target.value as ScopeKind)}
               >
@@ -440,12 +447,15 @@ export function BaselineEditorDialogView({
                     {t(`baselines.scopeKind_${k}`)}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
               {kind === 'group' ? (
-                <select
+                // 分组候选来自分组树（节点数随集群增长，可达数百上千），
+                // 不能用 Radix Select 全量挂载选项 → 统一样式的原生下拉。
+                <NativeSelect
                   aria-label={t('baselines.scopeValue')}
                   data-testid="baseline-scope-value"
-                  className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs"
+                  className="min-w-0 flex-1"
+                  size="sm"
                   value={scopeValue}
                   onChange={(e) => setScopeValue(e.target.value)}
                 >
@@ -458,7 +468,7 @@ export function BaselineEditorDialogView({
                   {orphanGroup && (
                     <option value={scopeValue}>{t('baselines.scopeGroupOrphan', { id: scopeValue })}</option>
                   )}
-                </select>
+                </NativeSelect>
               ) : (
                 kind !== 'all' && (
                   <Input

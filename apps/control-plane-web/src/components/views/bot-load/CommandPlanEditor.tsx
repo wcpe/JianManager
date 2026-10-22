@@ -7,7 +7,9 @@ import { validateCommandSchedule } from '@/lib/bot-load/bot-load-validation'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 
 interface CommandPlanEditorProps {
   value: BotLoadCommandSchedule
@@ -102,24 +104,17 @@ export function CommandPlanEditor({ value, onChange, serverErrors = [] }: Comman
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex rounded-md border p-0.5">
-          <Button
-            type="button"
-            size="xs"
-            variant={mode === 'structured' ? 'default' : 'ghost'}
-            onClick={() => (mode === 'yaml' ? switchToStructured() : undefined)}
-          >
+        {/* 结构化 / YAML 两档收敛到分段原语。注意两个 onClick 语义并不对称，原样保留：
+            「结构化」在已处于该模式时不做任何事（避免无谓重写 value）；
+            「YAML」始终走 switchToYaml——它内部会校验并可能拒绝切换（把错误落到 yamlError）。 */}
+        <Segments aria-label={t('botsLoad.modeStructured')}>
+          <Segment active={mode === 'structured'} onClick={() => (mode === 'yaml' ? switchToStructured() : undefined)}>
             {t('botsLoad.modeStructured')}
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant={mode === 'yaml' ? 'default' : 'ghost'}
-            onClick={switchToYaml}
-          >
+          </Segment>
+          <Segment active={mode === 'yaml'} onClick={switchToYaml}>
             {t('botsLoad.modeYaml')}
-          </Button>
-        </div>
+          </Segment>
+        </Segments>
         <span className="text-xs text-muted-foreground">{t('botsLoad.commandPlanHint')}</span>
       </div>
 
@@ -168,10 +163,10 @@ export function CommandPlanEditor({ value, onChange, serverErrors = [] }: Comman
             {value.commands.map((cmd, index) => {
               const base = `commandSchedule.commands[${index}]`
               return (
-                <li
-                  key={`${cmd.id}-${index}`}
-                  className={cn('rounded-lg border bg-card p-3 shadow-soft', errorMap.has(`${base}.command`) && 'border-destructive')}
-                >
+                <li key={`${cmd.id}-${index}`}>
+                  {/* Card 渲染为 div，不能顶替 <li>（会破坏父级 <ul> 的列表语义与 listitem 角色），
+                      故作为列表项内部的卡片容器；圆角/描边/底色/阴影统一由 Card 提供。 */}
+                  <Card className={cn('gap-0 p-3', errorMap.has(`${base}.command`) && 'border-destructive')}>
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-muted-foreground">
                       {t('botsLoad.stepN', { n: index + 1 })}
@@ -264,6 +259,7 @@ export function CommandPlanEditor({ value, onChange, serverErrors = [] }: Comman
                       />
                     </div>
                   </div>
+                  </Card>
                 </li>
               )
             })}

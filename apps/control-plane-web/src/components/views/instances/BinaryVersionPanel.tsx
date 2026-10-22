@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowDownUp, Package } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { Panel } from '@jianmanager/ui/components/panel'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 
@@ -159,12 +160,14 @@ export default function BinaryVersionPanel({
       bodyClassName="p-2.5"
       actions={
         <div className="flex items-center gap-2">
-          <select
+          {/* 候选是制品库版本（数量随发布累积，可达数百）→ 原生下拉 + 统一外观 */}
+          <NativeSelect
             aria-label={t('serverConsole.binaryVersionTargetLabel')}
             value={target}
             onChange={(e) => setTarget(e.target.value === '' ? '' : Number(e.target.value))}
             disabled={!view.bound || view.noLibraryVersion || instanceLive || !canWrite}
-            className="h-8 rounded-md border bg-transparent px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            size="sm"
+            className="w-auto text-xs"
           >
             <option value="">{t('serverConsole.binaryVersionPickTarget')}</option>
             {view.candidates.map((c) => (
@@ -172,7 +175,7 @@ export default function BinaryVersionPanel({
                 {c.version || c.filename} (asset#{c.assetId})
               </option>
             ))}
-          </select>
+          </NativeSelect>
           <Button
             size="sm"
             disabled={target === '' || upgrading || !view.bound || instanceLive || !canWrite}

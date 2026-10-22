@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Activity, Radio } from 'lucide-react'
 
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Card } from '@jianmanager/ui/components/card'
 import { cn } from '@jianmanager/ui'
 
 type Reachability = 'reachable' | 'unreachable' | 'timeout' | 'unknown'
@@ -74,13 +75,14 @@ export function HealthPanel({ status, serverPort, queryPort, probePort, serverSt
             <p className="text-muted-foreground">{t('health.noPort')}</p>
           ) : (
             ports.map((p) => (
-              <div key={p.label} className="rounded-md border bg-card p-2">
+              /* 端口卡：Card 只作外壳；卡内两段紧排文本靠 mt-1 控距，故 gap-0。 */
+              <Card key={p.label} className="gap-0 p-2">
                 <div className="flex items-center gap-1.5 text-muted-foreground">
                   <Activity className="size-3.5 shrink-0" />
                   <span>{p.label}</span>
                 </div>
                 <p className="mt-1 font-mono text-sm font-semibold tabular-nums">:{p.value}</p>
-              </div>
+              </Card>
             ))
           )}
         </div>

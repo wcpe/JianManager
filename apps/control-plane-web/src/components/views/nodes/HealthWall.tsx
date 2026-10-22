@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { cn } from '@jianmanager/ui'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { HEALTH_WALL_SORTS, formatPct, healthLevelLabel, healthLevelTone, healthWallSortLabel, summarizeHealthWall } from '@/lib/metrics/health-wall'
 import { toneChipClass } from '@jianmanager/ui/lib/tone'
 import type { HealthLevel, HealthWallNode, HealthWallSort } from '@/lib/metrics/health-wall-types'
@@ -188,20 +189,24 @@ export function HealthWall({
       data-testid="health-wall"
       title="集群健康墙"
       actions={
+        // 排序是固定枚举（4 个键），本可走 Radix Select；但这是页头 actions 里的窄条控件，
+        // 原生 select 的紧凑高度与「点开就是系统列表」更贴合此处（也是测试按 testid 直接
+        // selectOptions 的既有契约），故只换成统一外观的 NativeSelect，语义与交互不变。
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           排序
-          <select
+          <NativeSelect
             value={sort}
             onChange={(event) => onSortChange(event.target.value as HealthWallSort)}
             data-testid="health-wall-sort"
-            className="rounded border bg-background px-2 py-1 text-xs"
+            size="sm"
+            className="w-auto text-xs"
           >
             {HEALTH_WALL_SORTS.map((key) => (
               <option key={key} value={key}>
                 {healthWallSortLabel(key)}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
       }
       bodyClassName="p-3"

@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RotateCw, Search } from 'lucide-react'
-import { cn } from '@jianmanager/ui'
+import { Search } from 'lucide-react'
+import { cardSurfaceTone, cn } from '@jianmanager/ui'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@jianmanager/ui/components/tooltip'
+import { Kbd } from '@jianmanager/ui/components/kbd'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { searchBoxClass } from '@/lib/shared/header-layout'
 
 /**
@@ -94,13 +97,19 @@ export function ConsoleSearchBox({ onOpenPalette }: { onOpenPalette: () => void 
         type="button"
         onClick={onOpenPalette}
         aria-label={t('header.searchPlaceholder')}
-        className="flex h-8 w-full items-center gap-2 rounded-md border bg-card/90 pl-2.5 pr-2 text-xs text-muted-foreground shadow-soft transition-colors hover:bg-muted/55"
+        // 这是输入样式的 <button> 控件（h-8 定高、圆角与阴影跟随控件规范），不是承载内容的卡片，
+        // 因此不套 Card（其 flex-col/gap-4/py-4 与 rounded-xl 都要逐项覆盖，只会更脆）。
+        // 但底色属于「卡片白盒」的同一语义轴，仍收敛到三档常量（原 bg-card/90 → subtle 档），
+        // 消除 bg-card/90 这类任意透明度。
+        className={cn(
+          cardSurfaceTone.subtle,
+          'flex h-8 w-full items-center gap-2 rounded-md border pl-2.5 pr-2 text-xs text-muted-foreground shadow-soft transition-colors hover:bg-muted/55',
+        )}
       >
         <Search className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">{t('header.searchPlaceholder')}</span>
-        <kbd className="hidden shrink-0 rounded border bg-background px-1.5 py-0.5 text-[10px] font-medium xl:inline-block">
-          Ctrl K
-        </kbd>
+        {/* 键帽统一走 Kbd：`border` 是此处特有的描边诉求（原实现有），其余外观由组件提供。 */}
+        <Kbd className="hidden border xl:inline-flex">Ctrl K</Kbd>
       </button>
     </div>
   )
@@ -121,15 +130,29 @@ export function ConsoleRefreshButton({ onRefresh }: { onRefresh: () => void | Pr
     })
   }
   return (
-    <button
-      type="button"
-      onClick={refresh}
-      disabled={spinning}
-      aria-label={t('header.refresh')}
-      title={t('header.refresh')}
-      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
-    >
-      <RotateCw className={cn('size-4', spinning && 'animate-spin')} />
-    </button>
+    // 纯文字提示的图标按钮 → 组件库 Tooltip（视觉一致、延迟可控）。
+    // 原生 title 仍是 aria-label 之外的冗余，去掉不影响可访问名；Tooltip 的 Content
+    // 会经 aria-describedby 关联到触发元素，读屏同样能拿到这句提示。
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/*
+          【为什么换成 RefreshButton】此处原本是包内 `RefreshButton` 的手写翻版
+          （同样的图标 + 旋转 + 禁用 + 提示），两份实现各自演化必然分叉。
+          改用它之后，旋转时长、禁用口径、在途语义都由组件库一处决定。
+          `variant="ghost"` + `size="icon-sm"` 保持原先「无边框图标按钮」的观感。
+        */}
+        <span>
+          <RefreshButton
+            variant="ghost"
+            pending={spinning}
+            onClick={refresh}
+            aria-label={t('header.refresh')}
+            iconSize="size-4"
+            className="text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{t('header.refresh')}</TooltipContent>
+    </Tooltip>
   )
 }

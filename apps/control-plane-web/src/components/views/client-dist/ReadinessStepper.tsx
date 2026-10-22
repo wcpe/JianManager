@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowRight, Check } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { readinessCompletedCount } from '@/lib/client-dist/client-readiness'
 import type { ReadinessStep, ReadinessStepId } from '@/lib/client-dist/client-readiness'
 
@@ -59,7 +60,9 @@ export function ReadinessStepper({ steps, onCta }: { steps: ReadinessStep[]; onC
   const allReady = completed === steps.length
 
   return (
-    <div className="rounded-xl border bg-card/40 p-4 space-y-3">
+    // 嵌套在频道工作台内的次级卡片 → surface="faint"（原 bg-card/40）；
+    // 原 block 容器的 space-y-3 等价换成 flex 容器的 gap-3，避免与 Card 默认 gap-4 叠加。
+    <Card surface="faint" className="p-4 gap-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h2 className="text-sm font-semibold">{t('clientChannels.readinessTitle', '接入就绪度')}</h2>
         <span className="text-xs text-muted-foreground">
@@ -114,6 +117,6 @@ export function ReadinessStepper({ steps, onCta }: { steps: ReadinessStep[]; onC
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }

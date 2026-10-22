@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { cn } from '@jianmanager/ui'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { mergeMeasuredRowHeights } from '@/lib/shared/row-heights'
 import { permDomainExplain, permExplain } from '@/lib/permissions/permission-explain'
@@ -381,11 +381,15 @@ function PermissionsCatalogPanel({
                   type="button"
                   data-testid={`permissions-role-${row.role.key}`}
                   onClick={() => onSelectionChange({ kind: 'role', id: row.role.id })}
+                  // 菜单项是整块可点击的 <button>（自带 button 语义与键盘行为），换成 Card 的 div
+                  // 会把语义退回 div，故保留元素、改取 Card 同源的表面常量：圆角/描边由一处决定。
                   className={cn(
-                    'w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
+                    cardSurface,
+                    cardSurfaceTone.solid,
+                    'w-full px-2.5 py-2 text-left transition-colors',
                     active
                       ? 'border-primary bg-primary/12 shadow-sm'
-                      : 'border-border bg-card hover:border-primary/40 hover:bg-accent/40',
+                      : 'border-border hover:border-primary/40 hover:bg-accent/40',
                   )}
                 >
                   <div className="flex items-center gap-1.5">
@@ -409,11 +413,14 @@ function PermissionsCatalogPanel({
                 type="button"
                 data-testid={`permissions-user-${row.user.id}`}
                 onClick={() => onSelectionChange({ kind: 'user', id: row.user.id })}
+                // 同上：保留 <button> 元素，只统一表面样式常量。
                 className={cn(
-                  'w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
+                  cardSurface,
+                  cardSurfaceTone.solid,
+                  'w-full px-2.5 py-2 text-left transition-colors',
                   active
                     ? 'border-primary bg-primary/12 shadow-sm'
-                    : 'border-border bg-card hover:border-primary/40 hover:bg-accent/40',
+                    : 'border-border hover:border-primary/40 hover:bg-accent/40',
                 )}
               >
                 <div className={cn('truncate text-[13px]', active ? 'font-semibold text-primary' : 'font-medium')}>{row.user.username}</div>
@@ -549,9 +556,11 @@ function PermissionsMatrixPanel({
               const onCount = group.nodes.filter((n) => checkedIds.has(n.id)).length
               const allOn = onCount === group.nodes.length && group.nodes.length > 0
               return (
+                // 权限域分组卡：section 自带 region 语义（带标题的分组），换成 Card 的 div 会丢，
+                // 故保留元素、改取 Card 同源的表面常量（原 bg-card → solid 档）。圆角/描边/阴影统一。
                 <section
                   key={group.domain}
-                  className="mb-3 overflow-hidden rounded-lg border border-border bg-card"
+                  className={cn(cardSurface, cardSurfaceTone.solid, 'mb-3 overflow-hidden')}
                   data-testid={`permissions-domain-${group.domain}`}
                 >
                   <header className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/60 px-3 py-2">

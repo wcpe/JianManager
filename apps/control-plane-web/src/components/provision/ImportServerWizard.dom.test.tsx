@@ -129,8 +129,10 @@ describe('ImportServerWizard（FR-302 / FR-374）', () => {
     expect(await screen.findByText('就地接管')).toBeInTheDocument()
     expect(screen.getByText('搬进托管区')).toBeInTheDocument()
 
-    // 选「搬进托管区」
-    const modeRadios = document.querySelectorAll('input[name="import-mode"]')
+    // 选「搬进托管区」。
+    // 模式二选一已从原生 input[type=radio] 换成组件库 RadioGroup（Radix）——
+    // 渲染出的是 role="radio" 的按钮而非 input，故按角色取；每项带 aria-label=标题。
+    const modeRadios = screen.getAllByRole('radio')
     expect(modeRadios).toHaveLength(2)
     await user.click(modeRadios[1] as HTMLElement)
 

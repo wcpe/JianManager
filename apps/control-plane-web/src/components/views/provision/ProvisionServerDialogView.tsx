@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
@@ -427,14 +428,26 @@ export default function ProvisionServerDialogView({
           </div>
 
           {jdkBlockText && (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
-              <span>{jdkBlockText}</span>{' '}
-              {link(
-                '/runtime-assets',
-                'font-medium underline underline-offset-2',
-                t('provision.goInstallJdk'),
-              )}
-            </div>
+            // JDK 版本阻塞提示：原为手写 `border-destructive/40 bg-destructive/10` 块，改用包的 destructive 档。
+            // 内边距保持 px-2.5 py-2（Alert 默认 px-4 py-3 在窄弹窗里吃掉太多横向空间）。
+            //
+            // 跳转链接为什么不放 AlertAction：AlertAction 是 <div> 区块，会把「去 JDK 面板安装」排到
+            // 文案下方、读屏先读完整段阻塞原因再读到链接——但更要命的是 AlertAction 无法与文案构成
+            // 一个句子，英文语序下「Go install a JDK」会脱离前半句独立成行。
+            // 这里让链接留在 AlertDescription 的同一个 <p> 里（原布局即行内），DOM 顺序＝朗读顺序＝
+            // 视觉顺序：先阻塞原因、后动作入口，三者一致。role 用组件默认的 alert（本弹窗无其它 alert 竞态）。
+            <Alert variant="destructive" className="px-2.5 py-2 text-xs">
+              <AlertDescription className="text-xs">
+                <p>
+                  {jdkBlockText}{' '}
+                  {link(
+                    '/runtime-assets',
+                    'font-medium underline underline-offset-2',
+                    t('provision.goInstallJdk'),
+                  )}
+                </p>
+              </AlertDescription>
+            </Alert>
           )}
           {!jdkBlockText && jdkWarnText && (
             <p className="text-xs text-amber-600 dark:text-amber-400">{jdkWarnText}</p>

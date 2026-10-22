@@ -10,6 +10,7 @@ import {
   Route,
 } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 
 /**
  * 客户端分发端到端流程图（FR-194，纯前端，增强 FR-187）。
@@ -22,7 +23,9 @@ export default function ClientDistFlowGuide() {
   const [open, setOpen] = useState(false)
 
   return (
-    <div className="rounded-xl border bg-card/40">
+    // 手风琴式折叠卡：Card 自带纵向 gap，折叠头/内容各自贴边，故置零 gap 与 padding
+    //（原实现靠无 padding 的根容器 + 内部自管留白）。
+    <Card surface="faint" className="overflow-hidden py-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -94,7 +97,7 @@ export default function ClientDistFlowGuide() {
           </div>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
