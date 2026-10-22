@@ -97,3 +97,20 @@
   - [x] 发布侧：相对上版算文件块级 patch（zstd patch-from），patch 内容寻址入库
   - [x] manifest 文件项带 patch 引用（oldhash→newhash）
   - [x] 客户端：有旧文件 + 有 patch 则下 patch 应用，否则下全量；应用后 sha256 校验
+
+#### FR-513: 节点主机级观测采集补全（首页悬浮卡取证深度）
+- **优先级**: P2 | **状态**: 计划 | **依赖**: 无 | **关联 API**: `GET /metrics/resource-attribution`（扩展）、Worker 心跳上报
+- **描述**: 首页三个资源球（CPU/负载/内存）的悬浮卡目前只能展示节点归因、Top 实例与 Top **受管**进程——因为 Worker 端只采了这些。对标宝塔首页的悬浮卡深度，还需要**主机级**观测数据。前端卡片已按「结论徽标 → 分段标题 → 明细行」的层次做好（FR-512 落地），数据一到即可填充，无需再改版式。
+- **缺口清单**（前端已预留位置，当前留空）:
+  - **1/5/15 分钟平均负载**：现只有 `loadAvg`（load1/核数）单值。需从 `/proc/loadavg` 取三档，proto/心跳补三个字段
+  - **活动进程数 / 总进程数**：需从 `/proc/stat` 的 `processes` 与 `/proc/loadavg` 的运行/总线程数派生
+  - **CPU 时间构成**（user / nice / system / idle / iowait / irq / softirq / steal / guest / guest_nice）：需从 `/proc/stat` 首行十列取值并按差值归一
+  - **整机 top-N 进程**：现有 `useProcessTop` 只覆盖**受管进程树**（实例的子进程），拿不到整机 top5。需 Worker 侧按 `ps`/`/proc` 排序后上报（注意：需脱敏，只上报 PID/comm/CPU%/RSS，不带上报完整 cmdline）
+  - **磁盘逐挂载点用量**：现只有 `node_disk_used` 单值。宝塔按 `/`、`/usr`、`/var`、`/tmp`、`/home` 分列展示，需要按挂载点采集
+- **验收**:
+  - [ ] Worker 心跳新增主机级观测字段（负载三档、进程计数、CPU 时间构成、整机 top-N、分挂载点磁盘）
+  - [ ] proto `Heartbeat` 与 Control Plane 落库字段同步（向上兼容：旧 Worker 心跳缺字段时置 null，前端显 `--`）
+  - [ ] `GET /metrics/resource-attribution` 返回上述字段
+  - [ ] 首页悬浮卡填充新字段（版式已就位，只需接数据）
+  - [ ] 采集开销受控：不做高频 `ps` 全表扫描，进程快照随心跳节流（建议 ≤ 1 次/10s）
+  - [ ] 隐私边界：进程信息只上报 comm 与指标，不上报完整命令行参数
