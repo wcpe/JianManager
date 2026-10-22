@@ -1,9 +1,9 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做六个查询取数、两处受控状态（时间窗 / 归因 Tooltip）
-// 与三处接线（健康墙、链接、按需续取守卫）。
-import { useCallback, useDeferredValue, useState } from 'react'
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做五个查询取数、两处受控状态（时间窗 / 归因 Tooltip）
+// 与两处接线（健康墙、链接）。
+import { useDeferredValue, useState } from 'react'
 import { Link } from 'react-router'
 import { useNodes } from '@/api/nodes'
-import { useInfiniteInstanceSearch, useInstanceSearch } from '@/api/instances'
+import { useInstanceSearch } from '@/api/instances'
 import { useTasks } from '@/api/tasks'
 import { useAlertEvents } from '@/api/alerts'
 import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution } from '@/api/metrics'
@@ -47,10 +47,15 @@ export default function OverviewPage() {
     sort: 'name',
     order: 'asc',
   })
-  const instancesQuery = useInfiniteInstanceSearch({ sort: 'name', order: 'asc' })
   const tasksQuery = useTasks({ limit: 5 })
   const alertsQuery = useAlertEvents({ resolved: false, pageSize: 5 })
   const { data: overview } = useMetricOverview(range)
+  /*
+    【首页不再自带实例列表】原先这里还跑着 `useInfiniteInstanceSearch`（不限量无限滚动）
+    并在页底铺全量实例表——它与「服务器」页的完整版本重复，且是本页渲染量的大头
+    （约 783 个元素、单次主线程阻塞约 360ms）。移除后整页元素数与阻塞都随之下降；
+    要看实例去「服务器」页，那里有搜索、筛选、分组与批量操作。
+  */
   // 【为什么用 useDeferredValue】本页渲染约 783 个元素，而 `useMetricOverview` 每 10 秒轮询一次
   // （见 api/metrics.ts），每次更新都会让整页重渲染——实测单次主线程阻塞约 360ms，
   // 且 30 秒观测里稳定复现 4 次（间隔精确 10s）。用户点击侧栏时与之叠加，阻塞可达 900ms，
@@ -63,20 +68,6 @@ export default function OverviewPage() {
   const deferredOverview = useDeferredValue(overview)
   const attribution = useResourceAttribution(activeGauge !== null, activeGauge === 'memory' ? 'memory' : 'cpu')
   const platformObservability = usePlatformObservabilityOverview(canSeePlatformObs)
-  const instanceRows = instancesQuery.data?.pages.flatMap((p) => p.items) ?? []
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = instancesQuery
-
-  /**
-   * 滚动到近底时续取下一页。
-   *
-   * 守卫（有没有下一页 / 是否正在取）留在容器：视图只上报「用户滚到底了」，不持查询状态，
-   * 也就不会把分页判定漏进包内的虚拟滚动逻辑（与 InstancesPage 的 `loadMoreInstances` 同范式）。
-   */
-  const loadMoreInstances = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage()
-    }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
 
   return (
     <OverviewPageView
@@ -104,8 +95,6 @@ export default function OverviewPage() {
       platformOverviewError={platformObservability.isError}
       // 健康墙本体是应用侧接线层（自持取数 + 排序状态），故按块注入；权限门禁与视图同一开关。
       renderHealthWall={() => <HealthWall enabled={canSeePlatformObs} />}
-      instances={instanceRows}
-      onNeedMoreInstances={loadMoreInstances}
       // 包内不认识 react-router：下钻链接（异常项 / 任务项 / 归因 Tooltip / 「查看全部」）统一经插槽渲染。
       renderLink={({ href, className, testId, children }) => (
         <Link to={href} className={className} data-testid={testId}>

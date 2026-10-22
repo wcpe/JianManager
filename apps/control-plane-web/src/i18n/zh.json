@@ -672,7 +672,10 @@
       "stale": "陈旧",
       "offline": "离线",
       "unavailable": "不可用"
-    }
+    },
+    "needsAttention": "需要处理",
+    "nothingToDo": "没有需要处理的项",
+    "attentionFailed": "加载失败"
   },
   "metrics": {
     "tab": "监控",
