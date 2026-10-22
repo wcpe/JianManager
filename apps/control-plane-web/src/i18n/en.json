@@ -697,7 +697,21 @@
     },
     "needsAttention": "Needs attention",
     "nothingToDo": "Nothing needs attention",
-    "attentionFailed": "Failed to load"
+    "attentionFailed": "Failed to load",
+    "loadVerdict": {
+      "success": "Normal",
+      "warning": "Elevated",
+      "danger": "Too high"
+    },
+    "attributionByNode": "By node",
+    "attributionTopInstances": "Top instances",
+    "attributionTopProcesses": "Top managed processes",
+    "playerTrend": "Player online trend",
+    "trendPeak": "Peak",
+    "trendAvg": "Daily avg",
+    "playerRanking": "Top 5 players",
+    "trendUnavailable": "Failed to load trend",
+    "rankingUnavailable": "Failed to load ranking"
   },
   "metrics": {
     "tab": "Monitor",

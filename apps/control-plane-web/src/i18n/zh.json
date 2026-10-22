@@ -675,7 +675,21 @@
     },
     "needsAttention": "需要处理",
     "nothingToDo": "没有需要处理的项",
-    "attentionFailed": "加载失败"
+    "attentionFailed": "加载失败",
+    "loadVerdict": {
+      "success": "正常",
+      "warning": "偏高",
+      "danger": "过高"
+    },
+    "attributionByNode": "按节点",
+    "attributionTopInstances": "Top 实例",
+    "attributionTopProcesses": "Top 受管进程",
+    "playerTrend": "玩家在线趋势",
+    "trendPeak": "峰值",
+    "trendAvg": "日均",
+    "playerRanking": "玩家 Top5",
+    "trendUnavailable": "趋势加载失败",
+    "rankingUnavailable": "排行加载失败"
   },
   "metrics": {
     "tab": "监控",
