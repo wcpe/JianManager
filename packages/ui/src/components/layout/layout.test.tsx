@@ -73,10 +73,17 @@ describe('PageShell 三种壳态', () => {
 })
 
 describe('PageHeader 页头', () => {
-  it('渲染标题，并用二级文本承载描述', () => {
-    render(<PageHeader title="实例" description="跨节点查找服务器。" />)
+  it('渲染标题，并把说明收进标题旁的问号图标', () => {
+    const { container } = render(<PageHeader title="实例" description="跨节点查找服务器。" />)
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('实例')
-    expect(screen.getByText('跨节点查找服务器。')).toBeInTheDocument()
+
+    // 说明不再渲染成标题下方的整行小字——页头里不应出现任何 <p>。
+    expect(container.querySelectorAll('p')).toHaveLength(0)
+
+    // 改为可聚焦的问号按钮，可访问名即说明文案本身，读屏直接念内容。
+    const help = container.querySelector('[data-slot="page-header-help"]')
+    expect(help).toBeInTheDocument()
+    expect(help).toHaveAttribute('aria-label', '跨节点查找服务器。')
   })
 
   it('数字计数按 zh-CN 千分位展示，字符串计数原样保留', () => {
