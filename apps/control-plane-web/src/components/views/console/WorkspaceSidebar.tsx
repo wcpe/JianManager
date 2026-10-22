@@ -11,12 +11,13 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import {
-  SideNav,
+  SidebarFooter,
+  SidebarShell,
   SideNavBottom,
   SideNavResource,
   SideNavRow,
   SideNavShortcuts,
-} from '@jianmanager/ui/components/shell'
+} from '@jianmanager/ui/components/nav'
 import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
 import type { ThemeSwitcherProps } from '@/components/views/console/ThemeSwitcher'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
@@ -28,39 +29,21 @@ import type { WorkspaceDef } from '@/lib/console/workspace-navigation'
 import { isDeepLink } from '@/lib/hooks/use-workspace-navigation'
 
 /**
- * 工作区外壳侧栏（FR-502 阶段 6）：把「资源优先工作区」原型（`.tmp/设计/`）的侧栏接进主控台。
+ * 工作区外壳侧栏（FR-502 阶段 6）：把「资源优先工作区」原型的侧栏接进主控台。
  *
- * 【与 `ConsoleSidebar` 的关系：新增，不替换文件】
- * 本文件是 `ConsoleSidebar.tsx` 的**接替者**，但旧文件保留不删——渐进替换才有回退路径，
- * 旧侧栏的六域 IA 也仍是 `workspace-navigation.test.ts` 的对照物。差异只在「侧栏装什么」：
- * 旧侧栏把六域 37 条路由铺成可展开长列表（原型要修的正是这一点），新侧栏把四个工作区
- * 各装**自己的**入口（`workspace-navigation.ts` 的真实数据），且只做两件事：
- * 定位资源（节点 / 群组 / 收藏）+ 少数几个高频目的地。其余入口走顶栏搜索（Ctrl+K 命令面板）。
+ * 【与 `ConsoleSidebar` 的关系：新增，不替换文件】旧侧栏把六域 37 条路由铺成可展开长列表
+ * （原型要修的正是这一点），新侧栏把四个工作区各装**自己的**入口，只做两件事：
+ * 定位资源（节点 / 群组 / 收藏）+ 少数几个高频目的地，其余入口走 ⌘K 命令面板。
  *
- * 【四段结构（重构件后的现状）】
- *   `SideNavShortcuts` 固定入口（服务器运维：平台首页 / 全部实例 / 节点，紧凑高度）——
- *                      工作区名标题行与分组小标题**已移除**（「侧栏不留标题」是本次要求）；
- *   常用区            置回的工具（`SidebarPinnedTools`，偏好见 lib/console/sidebar-tools）；
- *   `SideNavResource`  资源区（唯一可伸缩段）：服务器运维=资源面板（搜索 + 筛选 + 分组方式 +
- *                      服务器列表，见 SidebarResourcePanel），其他工作区=扁平入口列表；
- *   `SideNavBottom`    底部常驻：工具图标轨（网络拓扑/分组管理/超级工作台/导播台 + 「更多」
- *                      收纳菜单，见 SidebarToolRail）与偏好块。
+ * 【ADR-103 后的分工】纯展示的侧栏骨架（外壳 / 底栏 / 行）由 `@jianmanager/ui` 的
+ * `components/nav` 提供；本文件只留**业务**：工作区解析、权限裁剪、分组树、计数取数、
+ * 路由激活判定与链接渲染。判据是 props 类型——通用件只接字符串/数字/布尔/回调/节点，
+ * 一旦需要 `WorkspaceDef` / `NavEntry` / 实例数这类业务类型，就必须留在这一侧。
  *
- * 【能力对照：替换时哪些旧能力必须原样留下】
- * - 权限裁剪：与旧侧栏同语义同入口（`workspacesForPermissions` / `workspacesForRole`，FR-431）；
- * - 折叠态：仍由 `useConsoleStore.sidebarCollapsed` 驱动，宽度动画仍走 `jm-*` 那套 CSS
- *   （FR-502 阶段 6 补丁后，宽度过渡只作用于侧栏自身，见 {@link WorkspaceSidebar}）；
- * - 收藏 / 最近打开（FR-293/240）：并入资源面板（置顶=收藏），存储层未改；
- * - 移动端：`MobileConsoleNav` 不动，本组件在 `<sm` 依旧整条隐藏（`hidden sm:flex`）。
- *
- * 【原缺口已闭合（FR-502 阶段 6 补丁）】
- * - 导航行的链接语义：`SideNavRow` 曾渲染 `<button>` + `navigate()`，拿不到 `<a href>` 的
- *   中键 / 新标签页语义。根因是 `<a>` 不允许嵌 `<button>`——只要行组件自己渲染 button，
- *   调用方就永远包不出真链接。现已把行组件改为渲染 `<div>`（只负责外观与激活态样式），
- *   由本文件的 `WorkspaceNavRow` 在外层包 `<Link>`，得到真 `<a href>`。
- *   行样式本身仍只有 ui 包一处真源，本文件不复制它的 class。
- * - 非服务器运维工作区在折叠态下只剩图标轨（原型该态显示分组图标行）：本阶段用
- *   「折叠态渲染全部入口图标」实现（见 {@link WorkspaceIconRail}）。
+ * 【四段结构】`SideNavShortcuts` 固定入口（服务器运维：平台首页 / 全部实例 / 节点）——
+ * 工作区名标题行与分组小标题已移除（「侧栏不留标题」）；常用区置回的工具
+ * （`SidebarPinnedTools`）；`SideNavResource` 资源区（唯一可伸缩段）；`SideNavBottom`
+ * 底部常驻（工具行 + 偏好块）。折叠仍由 `useConsoleStore.sidebarCollapsed` 驱动。
  */
 
 /** 一个分组里可直接导航的目的地（登记顺序不变）。 */
@@ -69,15 +52,14 @@ function navigableEntries(group: { children?: NavEntry[] }): NavEntry[] {
 }
 
 /**
- * 控制台侧栏（FR-502 阶段 6）：`ConsoleSidebar` 的接替者。默认导出，供 `DashboardPage` 直接挂载。
- *
- * 【折叠动画：宽度过渡只由侧栏自己承担（FR-502 阶段 6 补丁）】
- * 旧外壳把宽度过渡放在内层 `jm-sidebar-drawer`、再给内容区加 `clip-path` + `translate3d` 补偿，
- * 靠「JS 320ms 定时器 + CSS 320ms 过渡」两个时钟对齐来假装内容没动。补丁改为原型 `.sidebar` 的做法：
- * **外层 `jm-console-sidebar` 自己过渡宽度**（`index.css`），内层抽屉 `width: 100%` 跟随，
- * 内容区是同一 flex 行的兄弟节点，宽度变化时自然回流、不再被平移。
- * 因此这里只需保留抽屉容器（它仍带来明暗两套表面样式），不再需要「瞬跳 / 补偿」那套配对动画。
+ * 当前路径命中的登记项（`workspace-navigation.ts` 的匹配结果）。
+ * 激活判定统一走它而不是各写一遍 `startsWith`：这样 `/instances/new` 归向导、
+ * `/instances/:id` 归实例控制台，与工作区归属判定同一套优先级。
  */
+function currentPatternOf(pathname: string): string | null {
+  return resolveWorkspacePath(pathname)?.pattern ?? null
+}
+
 /** 侧栏资源数据源（ADR-102：应用侧取数后注入；字段为组件所需投影）。 */
 export interface WorkspaceSidebarData {
   /** 实例聚合权威总数（`/instances` 计数，与页眉同源）。 */
@@ -131,18 +113,21 @@ export interface WorkspaceSidebarProps {
 }
 
 /**
- * 控制台侧栏（FR-502 阶段 6）：`ConsoleSidebar` 的接替者。
+ * 控制台侧栏（FR-502 阶段 6）：`ConsoleSidebar` 的接替者。受控视图——数据与路由一律由
+ * props 注入，本文件不触达 api / store / 路由（ADR-102）。
  *
- * 数据与路由一律由 props 注入（ADR-102）：本视图不触达 api / store / 路由。
+ * 【折叠动画：宽度过渡只由侧栏自己承担】旧外壳把宽度过渡放在内层 `jm-sidebar-drawer`、
+ * 再给内容区加 `clip-path` + `translate3d` 补偿，靠「JS 320ms 定时器 + CSS 320ms 过渡」
+ * 两个时钟对齐来假装内容没动。现改为原型 `.sidebar` 的做法：外层 `jm-console-sidebar`
+ * 自己过渡宽度（`index.css`），内层抽屉 `width:100%` 跟随，内容区是同一 flex 行的兄弟节点，
+ * 宽度变化时自然回流。因此这里只需保留抽屉容器（它带来明暗两套表面样式）。
  */
 export function WorkspaceSidebar({
   collapsed,
   activeWorkspace,
   data,
-  permissions,
   pathname,
   renderLink,
-  onNavigate,
   renderResourcePanel,
   appVersion,
   themeSwitcher,
@@ -151,11 +136,25 @@ export function WorkspaceSidebar({
 }: WorkspaceSidebarProps) {
   const { t } = useTranslation()
 
+  // `permissions` 与 `onNavigate` 仍在契约里：前者由接线层用于解析 `activeWorkspace`
+  // 与资源面板的权限收敛（裁剪发生在导航登记侧，不在本视图逐条判断），后者由注入的
+  // 资源面板自己消费（`onOpen`）。本视图因此不再读取这两个字段，但保留其声明——
+  // 接线层仍在传，删掉会改变公共契约。
+
+  // 工作区切换已并回顶栏 `TopNav` 的 `workspaces` 槽位（顶栏恢复成唯一一条通栏），
+  // 本模块不再导出顶栏部件。
+  const isOps = activeWorkspace?.key === 'ops'
+  // 工具集合（网络拓扑/分组管理/超级工作台/导播台）的真源：ops「群组与工作台」组。
+  const toolEntries = isOps
+    ? navigableEntries(activeWorkspace.groups.find((group) => group.key === 'opsGroupsWorkbench') ?? {})
+    : []
+
   return (
-    <SideNav
+    <SidebarShell
       collapsed={collapsed}
+      // 外壳（ui 包）默认写 `data-slot="sidebar-shell"`；主控台的 CSS 与测试都按
+      // `console-sidebar` 这套既有钩子定位，故在此覆盖，迁到包里是纯结构迁移。
       data-slot="console-sidebar"
-      data-state={collapsed ? 'collapsed' : 'expanded'}
       aria-label={activeWorkspace ? `${t(activeWorkspace.labelKey)}导航` : undefined}
       className="jm-console-sidebar hidden h-full min-h-0 shrink-0 sm:flex"
     >
@@ -175,90 +174,76 @@ export function WorkspaceSidebar({
         */}
         <div data-slot="console-sidebar-surface" className="flex h-full min-h-0 flex-col overflow-hidden">
           {activeWorkspace && (
-            <WorkspaceSections
-              workspace={activeWorkspace}
-              collapsed={collapsed}
-              data={data}
-              permissions={permissions}
-              pathname={pathname}
-              renderLink={renderLink}
-              onNavigate={onNavigate}
-              renderResourcePanel={renderResourcePanel}
-              appVersion={appVersion}
-              themeSwitcher={themeSwitcher}
-              language={language}
-              onToggleSidebar={onToggleSidebar}
-            />
+            <>
+              {isOps ? (
+                <>
+                  <OpsShortcuts
+                    workspace={activeWorkspace}
+                    collapsed={collapsed}
+                    data={data}
+                    renderLink={renderLink}
+                    pathname={pathname}
+                  />
+                  <SideNavResource>{renderResourcePanel()}</SideNavResource>
+                </>
+              ) : (
+                <WorkspaceEntrySections
+                  workspace={activeWorkspace}
+                  collapsed={collapsed}
+                  renderLink={renderLink}
+                  pathname={pathname}
+                />
+              )}
+
+              <SideNavBottom className="py-[6px]">
+                {/*
+                  两段：
+                  1. **显示在侧边栏**的工具行（用户从「更多」里拖回来的，`SidebarPinnedTools`）——
+                     这里是它们唯一的落脚点。一个都没放时整段不渲染，底部分隔线也随之消失。
+                  2. 偏好块：主题 / 明暗 / 语言 / 更多 同一行 + 版本号与开源协议。
+                */}
+                <SidebarPinnedTools
+                  entries={toolEntries}
+                  pathname={pathname}
+                  renderLink={renderLink}
+                  collapsed={collapsed}
+                />
+                <SidebarPreferences
+                  collapsed={collapsed}
+                  appVersion={appVersion}
+                  renderLink={renderLink}
+                  themeSwitcher={themeSwitcher}
+                  language={language}
+                  onToggleSidebar={onToggleSidebar}
+                  moreMenu={
+                    toolEntries.length > 0
+                      ? <SidebarToolRail entries={toolEntries} pathname={pathname} renderLink={renderLink} />
+                      : undefined
+                  }
+                />
+              </SideNavBottom>
+            </>
           )}
         </div>
       </div>
-    </SideNav>
+    </SidebarShell>
   )
 }
 
-/** 各段共用的注入面（避免逐层重复声明）。 */
-interface SectionsInjected {
-  data?: WorkspaceSidebarData
-  permissions: WorkspaceSidebarPermissions
-  pathname: string
-  renderLink: (args: WorkspaceLinkArgs) => ReactNode
-  onNavigate: (to: string) => void
-  renderResourcePanel: () => ReactNode
-  appVersion: string
-  themeSwitcher: Pick<ThemeSwitcherProps, 'colorTheme' | 'theme' | 'onColorThemeChange' | 'onThemeChange'>
-  /** 语言切换（`/settings` 也有等价入口，但侧栏底部需要与主题/更多并排的一处快捷入口）。 */
-  language: { current: string; onChange: (lng: string) => void }
-  /** 折叠/展开侧栏（底部常驻，折叠态仍可展开）。 */
-  onToggleSidebar: () => void
-}
-
-/**
- * 工作区切换（FR-502 阶段 6 补丁：已并回顶栏 `ConsoleHeader`，不再独立成行）。
- *
- * 阶段 6 曾在此处导出 `ConsoleWorkspaceBar`，以「不动 ConsoleHeader」为代价换渐进替换；
- * 本补丁把工作区切换并进 ui 包 `TopNav` 的 `workspaces` 槽位后，顶栏恢复成原型那样
- * **唯一一条 53px 通栏**（其下才是「侧栏 + 内容」），本模块不再导出顶栏部件，
- * 只保留侧栏自身与它消费的 {@link useWorkspaceNavigation} 数据源。
- */
-
-/** 四段内容（按工作区分派：服务器运维有工具轨/资源面板，其他工作区给扁平入口列表）。 */
-function WorkspaceSections({
-  workspace,
-  collapsed,
-  ...injected
-}: { workspace: WorkspaceDef; collapsed: boolean } & SectionsInjected) {
-  const isOps = workspace.key === 'ops'
-  // 工具集合（网络拓扑/分组管理/超级工作台/导播台）的真源：ops「群组与工作台」组。
-  const toolEntries = isOps
-    ? navigableEntries(workspace.groups.find((group) => group.key === 'opsGroupsWorkbench') ?? {})
-    : []
-
-  return (
-    <>
-      {isOps ? (
-        <>
-          <OpsShortcuts workspace={workspace} collapsed={collapsed} {...injected} />
-          <SideNavResource>{injected.renderResourcePanel()}</SideNavResource>
-        </>
-      ) : collapsed ? (
-        <WorkspaceIconRail workspace={workspace} {...injected} />
-      ) : (
-        <WorkspaceGroupSections workspace={workspace} {...injected} />
-      )}
-
-      <SidebarBottom workspace={workspace} collapsed={collapsed} toolEntries={toolEntries} {...injected} />
-    </>
-  )
-}
-
-/** 服务器运维的固定三段（原型 `.main-shortcuts`）：平台首页 / 全部服务器 / 节点，后两项带计数。 */
+/** 服务器运维的固定三段：平台首页 / 全部服务器 / 节点，后两项带计数。 */
 function OpsShortcuts({
   workspace,
   collapsed,
   data,
   renderLink,
   pathname,
-}: { workspace: WorkspaceDef; collapsed: boolean } & SectionsInjected) {
+}: {
+  workspace: WorkspaceDef
+  collapsed: boolean
+  data?: WorkspaceSidebarData
+  renderLink: (args: WorkspaceLinkArgs) => ReactNode
+  pathname: string
+}) {
   // 计数与页眉同一数据源：聚合查询键与 `ConsoleHeader` 一致，命中它的缓存、不额外发请求。
   const counts: Record<string, number | undefined> = {
     '/instances': data?.instanceTotal,
@@ -286,65 +271,75 @@ function OpsShortcuts({
 }
 
 /**
- /**
-  * 侧栏底部常驻段（重构件后）：工具图标轨 + 偏好块。
-  *
-  * 1. 工具图标轨（`SidebarToolRail`）：网络拓扑 / 分组管理 / 超级工作台 / 导播台 收纳为纯图标，
-  *    末尾「更多」菜单可把工具置回侧栏主体（偏好见 lib/console/sidebar-tools）；
-  *    图标语义落在真 `<a href>` 上，中键 / 新标签页可用。
-  * 2. 偏好块（`SidebarPreferences`）：主题色 / 明暗、版本号、开源许可。
-  *
-  * 底部段对**所有工作区**都存在（第二件事与工作区无关），因此主题切换在任何工作区都够得着；
-  * 工具轨只在服务器运维（其工具集合真源所在）渲染。
-  */
- function SidebarBottom({
-   collapsed,
-   toolEntries,
-   ...injected
- }: { workspace: WorkspaceDef; collapsed: boolean; toolEntries: NavEntry[] } & SectionsInjected) {
-   // 底部段竖直内边距按本侧栏的实际内容收紧（展开态 10px → 6px）。
-   // 写在 className 上而不是改 ui 包默认值：`SideNavBottom` 是通用容器，
-   // 折叠态 padding 还参与过渡（`p-[8px_6px]`），改默认值会影响其他页面。
-   return (
-     <SideNavBottom className="py-[6px]">
-       {/*
-         两段：
-         1. **显示在侧边栏**的工具行（用户从「更多」里拖回来的，`SidebarPinnedTools`）——
-            这里是它们唯一的落脚点。此前把工具整体收进菜单时漏了这一半，
-            导致「拖进『显示在侧边栏』之后哪儿都不出现」（本次修复）。
-            一个都没放时整段不渲染，底部分隔线也随之消失。
-         2. 偏好块：主题 / 明暗 / 语言 / 更多 同一行 + 版本号与开源协议。
-       */}
-       <SidebarPinnedTools
-         entries={toolEntries}
-         pathname={injected.pathname}
-         renderLink={injected.renderLink}
-         collapsed={collapsed}
-       />
-       <SidebarPreferences
-         collapsed={collapsed}
-         appVersion={injected.appVersion}
-         renderLink={injected.renderLink}
-         themeSwitcher={injected.themeSwitcher}
-         language={injected.language}
-         onToggleSidebar={injected.onToggleSidebar}
-         moreMenu={toolEntries.length > 0
-           ? <SidebarToolRail entries={toolEntries} pathname={injected.pathname} renderLink={injected.renderLink} />
-           : undefined}
-       />
-    </SideNavBottom>
-   )
- }
+ * 非服务器运维工作区的入口列表：展开态按分组分段、折叠态摊平为图标。
+ *
+ * 【折叠态为什么另走一条分支】只剩 54px，装不下文字，原型
+ * （`.sidebar.collapsed .section-nav`）就是这个形态：把该工作区的**全部**入口压成图标行。
+ * 图标行自带 title，悬停即知去向；行数多时该段自行滚动（折叠态 `SideNavShortcuts`
+ * 会撑满余高，正是图标段该占的位置）。
+ *
+ * 展开态的分组各自成段却不渲染小标题（「侧栏不留标题」由用户指定），
+ * 因此每组只留 `pt-[2px]` 的段间距。
+ */
+function WorkspaceEntrySections({
+  workspace,
+  collapsed,
+  renderLink,
+  pathname,
+}: {
+  workspace: WorkspaceDef
+  collapsed: boolean
+  renderLink: (args: WorkspaceLinkArgs) => ReactNode
+  pathname: string
+}) {
+  if (collapsed) {
+    const entries = workspace.groups.flatMap((group) => navigableEntries(group))
+    if (entries.length === 0) return null
+    return (
+      <SideNavShortcuts className="overflow-y-auto scrollbar-none">
+        {entries.map((entry) => (
+          <WorkspaceNavRow key={entry.to} entry={entry} collapsed renderLink={renderLink} pathname={pathname} />
+        ))}
+      </SideNavShortcuts>
+    )
+  }
+
+  return (
+    <SideNavResource>
+      {/* 资源区是侧栏唯一可滚动段：入口多的（平台 14 条）也不会把底栏顶出屏幕。 */}
+      <div
+        data-slot="console-sidebar-groups"
+        className="min-h-0 flex-1 overflow-y-auto scrollbar-none px-[9px] pb-[14px] pt-[6px]"
+      >
+        {workspace.groups.map((group) => {
+          const entries = navigableEntries(group)
+          if (entries.length === 0) return null
+          return (
+            <div key={group.key} data-slot="console-sidebar-group" className="pt-[2px]">
+              {entries.map((entry) => (
+                <WorkspaceNavRow
+                  key={entry.to}
+                  entry={entry}
+                  collapsed={false}
+                  renderLink={renderLink}
+                  pathname={pathname}
+                />
+              ))}
+            </div>
+          )
+        })}
+      </div>
+    </SideNavResource>
+  )
+}
 
 /**
  * 底部偏好块（FR-132 版本号与许可 / FR-164 主题色与明暗）。
  *
  * 为什么在「照原型换侧栏」时还留着它：这三项当前**只有侧栏这一个入口**——
  * `/settings` 的「外观」分组明说不重复主题色（见 `SettingsPage` 注释，FR-164），
- * 版本号也只在旧侧栏页脚渲染。原型把「外观」收进 `/settings`、把 `/licenses` 当普通页面，
- * 但那是**阶段 7 的迁移目标**：在 `/settings` 真正接住主题色与版本之前删掉本块，
- * 等于把已交付的入口抹掉。阶段 7 补齐后本块即可整段删除。
- * 语言切换不在此列：`/settings` 的「外观」已有等价入口，故不再重复一份。
+ * 版本号也只在旧侧栏页脚渲染。在 `/settings` 真正接住主题色与版本之前删掉本块，
+ * 等于把已交付的入口抹掉。
  */
 function SidebarPreferences({
   collapsed,
@@ -362,12 +357,6 @@ function SidebarPreferences({
   language: { current: string; onChange: (lng: string) => void }
   /** 三个点「更多」入口：与主题/语言并排在同一行（用户指定）。 */
   moreMenu?: ReactNode
-  /**
-   * 上方是否有「显示在侧边栏」的工具行。
-   *
-   * 决定本块顶部那条分隔线要不要画：**一个工具都没置回时，上面的工具段整段不渲染，
-   * 这条线下面也没有任何工具**，留着就只是凭空一条横线（用户明确指出要去掉）。
-   */
   onToggleSidebar: () => void
 }) {
   const { t } = useTranslation()
@@ -387,15 +376,14 @@ function SidebarPreferences({
     >
       {/*
         一行放齐：主题色 / 明暗（`ThemeSwitcher` 自带两个按钮）+ 语言 + 三个点「更多」。
-        【为什么折成一行】此前它们是两行（主题一行、更多与版本一行），在 246px 宽的侧栏里
-        白白吃掉两行视觉重量；用户明确要求并排。
-        折叠态只隐藏右侧的语言/更多（宽度不够），主题按钮居中——与既有折叠行为一致。
+        此前它们是两行，在 246px 宽的侧栏里白白吃掉两行视觉重量（用户要求并排）。
+        行排布（并排、等距、不换行）交给 ui 包的 `SidebarFooter`，这里只剩折叠态的居中分支。
       */}
-      <div className={cn('flex items-center gap-1.5', collapsed && 'justify-center')}>
+      <SidebarFooter className={cn(collapsed && 'justify-center')}>
         {/*
           【折叠态整块不渲染】用户指定：缩放（折叠）后底部只保留折叠按钮——主题色/明暗/语言
-          全部撤走，否则 54px 宽里塞一个配色按钮既挤又容易误触。
-          折叠后这些入口并非消失：展开一次即可，且明暗/语言在 `/settings` 的「外观」也有等价入口。
+          全部撤走，否则 54px 宽里塞一个配色按钮既挤又容易误触。折叠后这些入口并非消失：
+          展开一次即可，且明暗/语言在 `/settings` 的「外观」也有等价入口。
           用条件渲染而非 `hidden`：折叠态不需要它们的 DOM（也不该被 Tab 走到）。
         */}
         {!collapsed && <ThemeSwitcher compact={collapsed} {...themeSwitcher} />}
@@ -417,7 +405,7 @@ function SidebarPreferences({
             {collapsed ? <PanelLeftOpen className="size-[15px]" /> : <PanelLeftClose className="size-[15px]" />}
           </button>
         </div>
-      </div>
+      </SidebarFooter>
 
       {/* 版本号 + 开源协议：仍在最下，与上面一行之间不留额外间距（视觉上是一块）。 */}
       <div
@@ -488,48 +476,6 @@ function LanguageButton({ language }: { language: { current: string; onChange: (
 }
 
 /**
- * 非服务器运维工作区的展开态：列出该工作区的全部入口（**扁平，不渲染分组小标题**）。
- * 资源区是侧栏唯一可滚动段，工作区入口多的（平台 14 条）也不会把底栏顶出屏幕。
- */
-function WorkspaceGroupSections({ workspace, renderLink, pathname }: { workspace: WorkspaceDef } & SectionsInjected) {
-  return (
-    <SideNavResource>
-      <div data-slot="console-sidebar-groups" className="min-h-0 flex-1 overflow-y-auto scrollbar-none px-[9px] pb-[14px] pt-[6px]">
-        {workspace.groups.map((group) => {
-          const entries = navigableEntries(group)
-          if (entries.length === 0) return null
-          return (
-            <div key={group.key} data-slot="console-sidebar-group" className="pt-[2px]">
-              {entries.map((entry) => (
-                <WorkspaceNavRow key={entry.to} entry={entry} collapsed={false} renderLink={renderLink} pathname={pathname} />
-              ))}
-            </div>
-          )
-        })}
-      </div>
-    </SideNavResource>
-  )
-}
-
-/**
- * 非服务器运维工作区的折叠态：只剩 54px，装不下分组标题与文字，改为把该工作区的
- * 全部入口压成图标行（原型 `.sidebar.collapsed .section-nav` 就是这个形态）。
- * 图标行自带 title，鼠标悬停即知去向；行数多时该段自行滚动（折叠态 `SideNavShortcuts` 撑满余高）。
- */
-function WorkspaceIconRail({ workspace, renderLink, pathname }: { workspace: WorkspaceDef } & SectionsInjected) {
-  const entries = workspace.groups.flatMap((group) => navigableEntries(group))
-  if (entries.length === 0) return null
-
-  return (
-    <SideNavShortcuts className="overflow-y-auto scrollbar-none">
-      {entries.map((entry) => (
-        <WorkspaceNavRow key={entry.to} entry={entry} collapsed renderLink={renderLink} pathname={pathname} />
-      ))}
-    </SideNavShortcuts>
-  )
-}
-
-/**
  * 一行工作区导航（FR-502 阶段 6）：统一 `SideNavRow` 的调用口径。
  * 行样式只有 ui 包一处真源，这里只负责「激活判定 / 折叠态可访问名 / 链接语义」三件事。
  *
@@ -558,7 +504,7 @@ function WorkspaceNavRow({
   return renderLink({
     to: entry.to,
     ariaCurrent: active ? 'page' : undefined,
-    // 折叠态只剩图标：文字节点被 `hidden` 隐藏，无障碍名必须由 aria-label 兜住。
+    // 折叠态只剩图标：文字节点宽度收到 0，无障碍名必须由 aria-label 兜住。
     ariaLabel: collapsed ? label : undefined,
     title: label,
     className: 'block',
@@ -569,13 +515,3 @@ function WorkspaceNavRow({
     ),
   })
 }
-
-/**
- * 当前路径命中的登记项（`workspace-navigation.ts` 的匹配结果）。
- * 激活判定统一走它而不是各写一遍 `startsWith`：这样 `/instances/new` 归向导、
- * `/instances/:id` 归实例控制台，与工作区归属判定同一套优先级。
- */
-function currentPatternOf(pathname: string): string | null {
-  return resolveWorkspacePath(pathname)?.pattern ?? null
-}
-

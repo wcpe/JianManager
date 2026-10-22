@@ -5,7 +5,7 @@ import { Server } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
+import { ObjectPageHeader } from '@jianmanager/ui/components/nav'
 import { NodeActionsMenu } from '@/components/views/nodes/NodeListParts'
 import type { NodeInfo } from '@/lib/nodes/node-types'
 

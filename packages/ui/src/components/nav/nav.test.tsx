@@ -1,68 +1,21 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { AppShell } from './AppShell'
-import { ResourceTree, type ResourceNode } from './ResourceTree'
 import { SideNav, SideNavBottom, SideNavHead, SideNavResource, SideNavRow, SideNavShortcuts } from './SideNav'
+import { SidebarFooter } from './SidebarFooter'
+import { SidebarGroup } from './SidebarGroup'
+import { SidebarRail } from './SidebarRail'
+import { SidebarSection } from './SidebarSection'
+import { SidebarShell } from './SidebarShell'
 import { TopNav } from './TopNav'
 
 /**
- * 导航骨架外壳测试（FR-502 阶段 4）。
+ * 导航原语测试（FR-502 阶段 4；原 `shell.test.tsx`）。
  *
  * 与阶段 3 的布局层测试同一取向：不测视觉，只锁**结构性契约**与**交互行为**——
- * `data-slot` / `data-*` 钩子、槽位透传、回调参数、折叠态、以及资源树最关键的那条
- * 「默认只列 7 个实例」限流规则（后续页面迁移与阶段 5 接路由都会依赖这些契约保持稳定）。
+ * `data-slot` / `data-*` 钩子、槽位透传、回调参数、折叠态（后续页面迁移与阶段 5
+ * 接路由都会依赖这些契约保持稳定）。
  */
-describe('AppShell 应用外壳', () => {
-  it('顶栏固定 53px，主体撑满剩余高度', () => {
-    render(
-      <AppShell topbar={<span>顶栏</span>} data-testid="shell">
-        <span>页面</span>
-      </AppShell>,
-    )
-    const shell = screen.getByTestId('shell')
-    expect(shell).toHaveAttribute('data-slot', 'app-shell')
-    expect(shell.className).toContain('h-dvh')
-
-    const topbar = shell.querySelector('[data-slot="app-shell-topbar"]')
-    expect(topbar).toBeInTheDocument()
-    expect(topbar!.className).toContain('h-[53px]')
-    expect(topbar!.className).toContain('shrink-0')
-
-    const body = shell.querySelector('[data-slot="app-shell-body"]')
-    expect(body!.className).toContain('min-h-0')
-    expect(body!.className).toContain('min-w-0')
-  })
-
-  it('页面区占剩余宽度并自身滚动（页面内有滚动模型时内层先滚）', () => {
-    render(<AppShell data-testid="shell">页面</AppShell>)
-    const main = screen.getByTestId('shell').querySelector('[data-slot="app-shell-main"]')!
-    expect(main.className).toContain('flex-1')
-    expect(main.className).toContain('overflow-auto')
-    expect(main.tagName).toBe('MAIN')
-    expect(main).toHaveTextContent('页面')
-  })
-
-  it('不传 topbar / sidebar 时仍渲染主体（登录、独立认证页复用同一外壳）', () => {
-    const { container } = render(<AppShell />)
-    expect(screen.queryByRole('banner')).toBeNull()
-    expect(container.querySelector('[data-slot="app-shell-topbar"]')).toBeNull()
-    expect(container.querySelector('[data-slot="app-shell-body"]')).toBeInTheDocument()
-  })
-
-  it('槽位内容与 className 合并而非替换', () => {
-    render(
-      <AppShell className="custom-x" topbar={<span>栏</span>} sidebar={<span>栏侧</span>}>
-        页面
-      </AppShell>,
-    )
-    const shell = screen.getByRole('main').parentElement!.parentElement!
-    expect(shell.className).toContain('custom-x')
-    expect(shell.className).toContain('h-dvh')
-    expect(screen.getByText('栏侧')).toBeInTheDocument()
-  })
-})
-
 describe('TopNav 顶栏', () => {
   const workspaces = [
     { key: 'servers', label: '服务器运维', active: true },
@@ -275,154 +228,147 @@ describe('SideNav 资源侧栏', () => {
   })
 })
 
-describe('ResourceTree 资源树：展开与限流', () => {
-  const makeNodes = (count: number, extra: Partial<ResourceNode> = {}): ResourceNode[] => [
-    {
-      id: 'node-east-02',
-      name: 'node-east-02',
-      status: 'normal',
-      instances: Array.from({ length: count }, (_, index) => ({
-        id: `i-${index + 1}`,
-        name: `survival-${index + 1}`,
-        status: 'normal' as const,
-      })),
-      ...extra,
-    },
-  ]
+/**
+ * 侧栏通用原语（ADR-103 拆分判据）：外壳 / 分组 / 底栏 / 钢轨 / 分区标题。
+ *
+ * 这五个件是给「应用侧自建侧栏」用的通用件，因此断言只锁两件事：
+ * ① **自给自足**——外壳自己注入宽度变量，脱离主控台外壳也能工作；
+ * ② **只认基础值**——props 是字符串/数字/布尔/回调/节点，出现业务类型就说明分错了。
+ */
+describe('侧栏通用原语', () => {
+  describe('SidebarShell 外壳', () => {
+    it('自己注入折叠/展开宽度变量（不依赖宿主提供）', () => {
+      const { container } = render(
+        <SidebarShell>
+          <SideNavShortcuts>
+            <SideNavRow>首页</SideNavRow>
+          </SideNavShortcuts>
+        </SidebarShell>,
+      )
+      const aside = container.querySelector('[data-slot="sidebar-shell"]') as HTMLElement
+      expect(aside).toBeInTheDocument()
+      // 行组件读这两个变量算居中 padding；外壳不注入时它只能退回 fallback。
+      expect(aside.style.getPropertyValue('--sidebar-expanded-width')).toBe('246px')
+      expect(aside.style.getPropertyValue('--sidebar-collapsed-width')).toBe('54px')
+      expect(aside.className).toContain('transition-[width]')
+    })
 
-  it('节点行：展开开关 + 状态点 + 名称 + 实例数徽章；默认折叠', () => {
-    const { container } = render(<ResourceTree nodes={makeNodes(3)} />)
-    const node = container.querySelector('[data-slot="resource-tree-node"]')!
-    expect(node).not.toHaveAttribute('data-open')
-    expect(node.querySelector('[data-slot="resource-status-dot"]')).toHaveAttribute(
-      'data-status',
-      'normal',
-    )
-    expect(node.querySelector('[data-slot="resource-tree-node-count"]')).toHaveTextContent('3')
-    expect(screen.queryByText('survival-1')).toBeNull()
+    it('宽度可覆盖，且折叠态同时体现在 data-collapsed 与 data-state', () => {
+      const { container } = render(
+        <SidebarShell collapsed expandedWidth={300} collapsedWidth={64}>
+          <span>内容</span>
+        </SidebarShell>,
+      )
+      const aside = container.querySelector('[data-slot="sidebar-shell"]') as HTMLElement
+      expect(aside.style.getPropertyValue('--sidebar-expanded-width')).toBe('300px')
+      expect(aside.style.getPropertyValue('--sidebar-collapsed-width')).toBe('64px')
+      expect(aside).toHaveAttribute('data-collapsed', 'true')
+      expect(aside).toHaveAttribute('data-state', 'collapsed')
+    })
 
-    const toggle = screen.getByRole('button', { name: '展开 node-east-02' })
-    expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    fireEvent.click(toggle)
-    expect(screen.getByRole('button', { name: '收起 node-east-02' })).toHaveAttribute(
-      'aria-expanded',
-      'true',
-    )
-    expect(node).toHaveAttribute('data-open', 'true')
-    expect(screen.getByText('survival-1')).toBeInTheDocument()
+    it('折叠态通过共享 context 下发给行（复用 SideNavRow，不另造行）', () => {
+      const { container } = render(
+        <SidebarShell collapsed>
+          <SideNavShortcuts>
+            <SideNavRow count={3}>全部实例</SideNavRow>
+          </SideNavShortcuts>
+        </SidebarShell>,
+      )
+      const row = container.querySelector('[data-slot="side-nav-row"]') as HTMLElement
+      // 行的折叠动画仍由 ui 包一处真源负责：这里只确认外壳能把状态传下去。
+      expect(row.className).toContain('gap-0')
+      expect(row.querySelector('[data-slot="side-nav-count"]')!.className).toContain('max-w-0')
+    })
   })
 
-  it('恰好 7 个实例：全部列出，不出现「查看其余」', () => {
-    render(<ResourceTree nodes={makeNodes(7)} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开 node-east-02' }))
-    expect(document.querySelectorAll('[data-slot="resource-tree-instance"]')).toHaveLength(7)
-    expect(document.querySelector('[data-slot="resource-tree-more"]')).toBeNull()
+  describe('SidebarGroup 分组容器', () => {
+    it('默认展开：标题 + 计数 + 内容都在，且不带开合语义', () => {
+      const { container } = render(
+        <SidebarGroup title="常用" count={12}>
+          <span>条目</span>
+        </SidebarGroup>,
+      )
+      const group = container.querySelector('[data-slot="sidebar-group"]') as HTMLElement
+      expect(group).toHaveTextContent('常用')
+      expect(group.querySelector('[data-slot="sidebar-group-count"]')).toHaveTextContent('12')
+      expect(group).toHaveTextContent('条目')
+      expect(group.querySelector('button')).toBeNull()
+      expect(container.querySelector('[data-slot="sidebar-group-trigger"]')).toBeNull()
+    })
+
+    it('可折叠：用 aria-expanded 表达状态，收起走 grid-rows 0fr + inert（不是卸载）', () => {
+      const { container } = render(
+        <SidebarGroup title="分组" collapsible defaultOpen={false}>
+          <span>条目</span>
+        </SidebarGroup>,
+      )
+      const trigger = container.querySelector('[data-slot="sidebar-group-trigger"]') as HTMLElement
+      expect(trigger).toHaveAttribute('aria-expanded', 'false')
+      // 内容仍在 DOM（收起是过渡，不是卸载）：只有 grid 行高归零 + 不可交互。
+      const body = trigger.nextElementSibling as HTMLElement
+      expect(body.className).toContain('grid-rows-[0fr]')
+      expect(body).toHaveAttribute('inert')
+      expect(body).toHaveTextContent('条目')
+    })
+
+    it('可折叠：点击开合，受控与非受控都走 onOpenChange', () => {
+      const onOpenChange = vi.fn()
+      const { container } = render(
+        <SidebarGroup title="分组" collapsible onOpenChange={onOpenChange}>
+          <span>条目</span>
+        </SidebarGroup>,
+      )
+      const trigger = container.querySelector('[data-slot="sidebar-group-trigger"]') as HTMLElement
+      expect(trigger).toHaveAttribute('aria-expanded', 'true')
+      fireEvent.click(trigger)
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+      expect(trigger).toHaveAttribute('aria-expanded', 'false')
+      expect(trigger.nextElementSibling?.className).toContain('grid-rows-[0fr]')
+    })
   })
 
-  it('第 8 个实例起被折叠成「查看其余 1 个实例」', () => {
-    render(<ResourceTree nodes={makeNodes(8)} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开 node-east-02' }))
-    expect(document.querySelectorAll('[data-slot="resource-tree-instance"]')).toHaveLength(7)
-    expect(screen.queryByText('survival-8')).toBeNull()
-    expect(screen.getByRole('button', { name: '查看其余 1 个实例' })).toBeInTheDocument()
+  describe('SidebarFooter 底栏', () => {
+    it('一行并排：自带 flex 排布，子节点按序渲染', () => {
+      const { container } = render(
+        <SidebarFooter className="custom">
+          <button type="button">A</button>
+          <button type="button">B</button>
+        </SidebarFooter>,
+      )
+      const footer = container.querySelector('[data-slot="sidebar-footer"]') as HTMLElement
+      expect(footer.className).toContain('flex')
+      expect(footer.className).toContain('items-center')
+      expect(footer.className).toContain('custom')
+      expect(footer.querySelectorAll('button')).toHaveLength(2)
+    })
   })
 
-  it('实例数远超 7 时链接数字反映缺口；点击回传节点', () => {
-    const onShowAll = vi.fn()
-    render(<ResourceTree nodes={makeNodes(20)} onShowAll={onShowAll} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开 node-east-02' }))
-    const more = screen.getByRole('button', { name: '查看其余 13 个实例' })
-    fireEvent.click(more)
-    expect(onShowAll).toHaveBeenCalledWith(expect.objectContaining({ id: 'node-east-02' }))
+  describe('SidebarRail 钢轨', () => {
+    it('竖向堆叠、图标居中、自行滚动（行数多时不把底栏顶出视口）', () => {
+      const { container } = render(
+        <SidebarRail>
+          <span>图标</span>
+        </SidebarRail>,
+      )
+      const rail = container.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+      expect(rail.className).toContain('flex-col')
+      expect(rail.className).toContain('items-center')
+      expect(rail.className).toContain('overflow-y-auto')
+      expect(rail.className).toContain('min-h-0')
+    })
   })
 
-  it('只下发了部分实例时，用 instanceCount / hiddenCount 如实声明总量', () => {
-    render(<ResourceTree nodes={[makeNodes(3, { instanceCount: 60, hiddenCount: 2 })[0]!]} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开 node-east-02' }))
-    // 3 条已下发 + 2 条未下发 → 60 - 3 + 2
-    expect(screen.getByRole('button', { name: '查看其余 59 个实例' })).toBeInTheDocument()
-  })
+  describe('SidebarSection 分区标题', () => {
+    it('默认不画分隔线，divider 时用 border-t（不额外插 hr 占高度）', () => {
+      const { container: plain } = render(<SidebarSection title="最近" />)
+      const plainEl = plain.querySelector('[data-slot="sidebar-section"]') as HTMLElement
+      expect(plainEl.className).not.toContain('border-t')
+      expect(plainEl).toHaveTextContent('最近')
 
-  it('visibleLimit 可调（大屏可放宽到 12）', () => {
-    render(<ResourceTree nodes={makeNodes(20)} visibleLimit={12} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开 node-east-02' }))
-    expect(document.querySelectorAll('[data-slot="resource-tree-instance"]')).toHaveLength(12)
-    expect(screen.getByRole('button', { name: '查看其余 8 个实例' })).toBeInTheDocument()
-  })
-
-  it('点击实例行回传实例与所属节点', () => {
-    const onSelectInstance = vi.fn()
-    render(<ResourceTree nodes={makeNodes(3)} onSelectInstance={onSelectInstance} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开 node-east-02' }))
-    fireEvent.click(screen.getByRole('button', { name: 'survival-2' }))
-    expect(onSelectInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'i-2', name: 'survival-2' }),
-      expect.objectContaining({ id: 'node-east-02' }),
-    )
-  })
-})
-
-describe('ResourceTree 资源树：状态与搜索', () => {
-  const nodes: ResourceNode[] = [
-    {
-      id: 'n1',
-      name: 'node-east-02',
-      status: 'warn',
-      instances: [
-        { id: 'i1', name: 'lobby-01', status: 'bad' },
-        { id: 'i2', name: 'lobby-02', status: 'muted' },
-      ],
-    },
-    {
-      id: 'n2',
-      name: 'node-west-01',
-      status: 'normal',
-      instances: [{ id: 'i3', name: 'survival-01', status: 'normal' }],
-    },
-  ]
-
-  it('状态点三态（含已停机的中性态）由 data-status 暴露', () => {
-    const { container } = render(<ResourceTree nodes={nodes} />)
-    fireEvent.click(screen.getByRole('button', { name: '展开 node-east-02' }))
-    const dots = container.querySelectorAll('[data-slot="resource-status-dot"]')
-    expect(Array.from(dots).map((dot) => dot.getAttribute('data-status'))).toEqual([
-      'warn',
-      'bad',
-      'muted',
-      'normal',
-    ])
-  })
-
-  it('输入搜索词触发 onQueryChange', () => {
-    const onQueryChange = vi.fn()
-    render(<ResourceTree nodes={nodes} query="" onQueryChange={onQueryChange} />)
-    fireEvent.change(screen.getByLabelText('搜索资源树'), { target: { value: 'lobby' } })
-    expect(onQueryChange).toHaveBeenCalledWith('lobby')
-  })
-
-  it('搜索命中实例名：只留匹配实例、节点自动展开、其余节点过滤掉', () => {
-    const { container } = render(<ResourceTree nodes={nodes} query="lobby" />)
-    expect(container.querySelectorAll('[data-slot="resource-tree-node"]')).toHaveLength(1)
-    expect(container.querySelector('[data-slot="resource-tree-node"]')).toHaveAttribute('data-open', 'true')
-    expect(screen.getByText('lobby-01')).toBeInTheDocument()
-    expect(screen.queryByText('survival-01')).toBeNull()
-  })
-
-  it('搜索命中节点名时保留该节点下全部实例', () => {
-    render(<ResourceTree nodes={nodes} query="west" />)
-    expect(screen.getByText('survival-01')).toBeInTheDocument()
-    expect(screen.queryByText('lobby-01')).toBeNull()
-  })
-
-  it('无匹配时给出空态', () => {
-    const { container } = render(<ResourceTree nodes={nodes} query="不存在的资源" />)
-    expect(container.querySelector('[data-slot="resource-tree-empty"]')).toHaveTextContent('没有匹配资源')
-    expect(container.querySelectorAll('[data-slot="resource-tree-node"]')).toHaveLength(0)
-  })
-
-  it('只传 query 不传 onQueryChange 时由外部搜索框驱动，不渲染内置输入框', () => {
-    const { container } = render(<ResourceTree nodes={nodes} query="lobby" />)
-    expect(container.querySelector('[data-slot="resource-tree-search"]')).toBeNull()
-    expect(container.querySelector('[data-slot="resource-tree"]')).toHaveAttribute('data-query', 'lobby')
+      const { container: divided } = render(<SidebarSection title="最近" divider />)
+      const dividedEl = divided.querySelector('[data-slot="sidebar-section"]') as HTMLElement
+      expect(dividedEl.className).toContain('border-t')
+      expect(dividedEl.querySelector('hr')).toBeNull()
+    })
   })
 })

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowLeft, Download, Loader2, Square, XCircle } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
-import { ObjectPageHeader, type ObjectTone } from '@jianmanager/ui/components/shell'
+import { ObjectPageHeader, type ObjectTone } from '@jianmanager/ui/components/nav'
 import {
   Dialog,
   DialogContent,
