@@ -46,7 +46,12 @@
   --accent-foreground: var(--seed-brand-ink, oklch(0.440 calc(var(--seed-chroma) * 4.6) var(--seed-hue)));
 
   /* ── 结构维度（从种子派生）── */
-  --background: var(--seed-surface, oklch(0.970 calc(var(--seed-chroma) * 0.30) var(--seed-hue)));
+  /*
+    亮色页面底 = 纯白。按 shadcn 的 token 约定，`--background` 就是应用的默认底色，
+    组件的 `bg-background` 全部指向它；此前是 oklch(0.970) 的浅灰，
+    于是顶栏/内容区看起来「不是纯白」。需要灰底时改这一个 token 即可，组件不用动。
+  */
+  --background: var(--seed-surface, #ffffff);
   --foreground: var(--seed-content, oklch(0.245 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
   --card: var(--seed-card, #ffffff);
   --card-foreground: var(--seed-content, oklch(0.245 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
@@ -58,6 +63,37 @@
   --muted-foreground: var(--seed-content-3, oklch(0.545 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
   --border: var(--seed-line, oklch(0.893 var(--seed-chroma) var(--seed-hue)));
   --input: var(--seed-line, oklch(0.893 var(--seed-chroma) var(--seed-hue)));
+
+  /*
+    ── 侧栏系列（shadcn 标准的 sidebar token 组）──
+
+    【为什么必须补齐这一组】shadcn 的 token 表里，侧栏是**独立的一套表面**：
+      --sidebar / --sidebar-foreground / --sidebar-primary / --sidebar-accent /
+      --sidebar-border / --sidebar-ring
+    它们存在的原因很实际：侧栏是常驻的大面积导航区，它的底色、hover 态、分隔线
+    与正文区不是同一套取值——正文区的 `muted` 拿来当侧栏 hover，往往太淡或太亮。
+
+    本项目此前完全没有这组 token，于是侧栏的所有颜色只能写在
+    `apps/control-plane-web/src/index.css` 的 `.jm-sidebar-drawer` 之类自定义类里，
+    换主题/改配色都要在应用侧改 CSS——这正是「样式散落在 index.css」的根源。
+
+    现在按 shadcn 补齐，组件侧即可写 `bg-sidebar` / `border-sidebar-border` /
+    `hover:bg-sidebar-accent`，不再需要任何自定义 CSS。
+
+    取值：亮色侧栏与内容区**同为纯白**（用户明确要求），层次由 `--sidebar-border`
+    那条竖线表达，而不是靠明度差。
+
+    `--sidebar-primary` 是侧栏内的高强调色（选中项、CTA）；`--sidebar-accent`
+    是侧栏内的 hover/选中底——前者用品牌色，后者用极淡的品牌色。
+  */
+  --sidebar: var(--seed-sidebar, #ffffff);
+  --sidebar-foreground: var(--seed-content, oklch(0.245 calc(var(--seed-chroma) * 2.2) var(--seed-hue)));
+  --sidebar-primary: var(--seed-brand, oklch(0.55 0.12 160));
+  --sidebar-primary-foreground: var(--seed-on-brand, #ffffff);
+  --sidebar-accent: var(--seed-brand-weak, oklch(0.955 calc(var(--seed-chroma) * 1.4) var(--seed-hue)));
+  --sidebar-accent-foreground: var(--seed-brand-ink, oklch(0.440 calc(var(--seed-chroma) * 4.6) var(--seed-hue)));
+  --sidebar-border: var(--seed-line, oklch(0.893 var(--seed-chroma) var(--seed-hue)));
+  --sidebar-ring: var(--seed-brand, oklch(0.55 0.12 160));
 
   /* ── 非主题维度：状态色语义固定，不随主题变 ── */
   --destructive: #dc2626;
@@ -156,6 +192,20 @@
   --muted-foreground: var(--seed-content-3, oklch(0.720 calc(var(--seed-chroma) * 0.92) var(--seed-hue)));
   --border: var(--seed-line, oklch(0.328 var(--seed-chroma) var(--seed-hue)));
   --input: var(--seed-line-strong, oklch(0.400 calc(var(--seed-chroma) * 1.10) var(--seed-hue)));
+
+  /*
+    深色侧栏：与内容区同源（--background），层次由 --sidebar-border 表达。
+    亮色下侧栏与内容区都是纯白、深色下都是同一个深底——两侧一致，
+    这样切换明暗时侧栏不会突然「跳成另一种颜色」。
+  */
+  --sidebar: var(--seed-sidebar, var(--seed-surface, oklch(0.189 calc(var(--seed-chroma) * 0.50) var(--seed-hue))));
+  --sidebar-foreground: var(--seed-content, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --sidebar-primary: var(--seed-brand, oklch(0.76 0.12 160));
+  --sidebar-primary-foreground: var(--seed-on-brand, oklch(0.20 0.04 160));
+  --sidebar-accent: var(--seed-brand-weak, oklch(0.330 calc(var(--seed-chroma) * 0.90) var(--seed-hue)));
+  --sidebar-accent-foreground: var(--seed-content, oklch(0.940 calc(var(--seed-chroma) * 0.45) var(--seed-hue)));
+  --sidebar-border: var(--seed-line, oklch(0.328 var(--seed-chroma) var(--seed-hue)));
+  --sidebar-ring: var(--seed-brand, oklch(0.76 0.12 160));
 
   --destructive: #f87171;
 

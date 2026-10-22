@@ -35,8 +35,16 @@ export function SideNav({
       <aside
         data-slot="side-nav"
         data-collapsed={collapsed || undefined}
+        /*
+          【侧栏表面走 sidebar token 组，不用 card】原先这里是 `bg-card`——
+          语义上是「卡片色」，只是碰巧也是白色。改用 `bg-sidebar` +
+          `border-sidebar-border` 后，侧栏的底色与分隔线归 sidebar token 管，
+          换主题/调配色只改 token，组件一行不动（shadcn 标准做法）。
+
+          组件侧只写 utility，不再需要应用侧 `.jm-sidebar-drawer { background: ... }`。
+        */
         className={cn(
-          'flex min-h-0 flex-col overflow-hidden border-r border-border bg-card',
+          'flex min-h-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar',
           collapsed ? 'w-[54px]' : 'w-[246px]',
           className,
         )}
@@ -263,8 +271,10 @@ export function SideNavRow({
         // 是瞬跳的：折叠瞬间 `px-[10px]→px-0`、`gap-[9px]→gap-0` 直接跳变，视觉上就是
         // 「炸」一下的撕裂感。纳入过渡并与侧栏宽度同节拍（slow + ease-ios），
         // 宽度、间距、内边距三者同步，才像一个整体动画。
-        'transition-[background-color,color,gap,padding] duration-[var(--motion-duration-slow)] ease-ios hover:bg-muted hover:text-foreground',
-        active && 'bg-accent font-[630] text-accent-foreground',
+        'transition-[background-color,color,gap,padding] duration-[var(--motion-duration-slow)] ease-ios hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+        /* 选中态用 sidebar-accent 底 + sidebar-accent-foreground 字：
+           侧栏内的强调色由此 token 组统一，不再借用正文区的 accent。 */
+        active && 'bg-sidebar-accent font-[630] text-sidebar-accent-foreground',
         // 【折叠态为什么不用 justify-center】`justify-content` **不参与过渡**（瞬跳）。
         // 折叠一开始它就立刻把「图标 + 尚未收窄的文字 + 徽章」当成一个整体居中，图标被推到偏左；
         // 等文字宽度过渡完毕，居中基准才变成「只剩图标」，图标于是"闪"回中间——

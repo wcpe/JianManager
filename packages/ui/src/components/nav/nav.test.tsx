@@ -145,12 +145,14 @@ describe('SideNav 资源侧栏', () => {
     expect(head.querySelector('[data-slot="side-nav-pill"]')).toHaveTextContent('资源视图')
   })
 
-  it('导航行区分当前项：data-active + accent 底色（aria-current 归调用方的链接）', () => {
+  it('导航行区分当前项：data-active + sidebar-accent 底色（aria-current 归调用方的链接）', () => {
     const { container } = renderSideNav()
     const rows = [...container.querySelectorAll('[data-slot="side-nav-row"]')]
     const active = rows.find((r) => r.getAttribute('data-active') === 'true')!
     expect(active).toHaveTextContent('集群总览')
-    expect(active.className).toContain('bg-accent')
+    // 侧栏行改用 shadcn 的 sidebar token 组（--sidebar-accent），不再借用正文区的 accent：
+    // 侧栏是常驻导航区，它的 hover/选中底与正文区不是同一套取值。
+    expect(active.className).toContain('bg-sidebar-accent')
 
     const idle = rows.find((r) => r.textContent?.includes('群组与拓扑'))!
     expect(idle).not.toHaveAttribute('data-active')
