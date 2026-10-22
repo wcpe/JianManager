@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Eye, Maximize2, Minimize2, Pencil, Play, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
+import { Toggle } from '@jianmanager/ui/components/toggle'
 import { cn } from '@jianmanager/ui'
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleView'
@@ -201,16 +202,22 @@ export function TerminalPane({
             <RotateCcw className="mr-1 size-3.5" />
             {t('instanceDetail.terminalReconnect')}
           </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="size-7 rounded-md"
-            onClick={() => setTerminalSearchOpen(true)}
+          {/*
+            搜索是**单个开关态**（点开即开、面板关闭即关），不是动作按钮 —— 正是 Toggle 的语义
+            （data-state=on/off + aria-pressed）。此前用 Button + 手写 aria-pressed，二者靠人肉
+            保持一致：Button 的 variant 不会随 pressed 变化，data-state 也不存在，于是
+            「它是开关还是动作」在 DOM 上读不出来。Toggle 把状态与样式绑定（on 时自动底色）。
+            这里只改用 Toggle 承载状态语义，尺寸沿用工具栏的 28px 紧凑盒。
+          */}
+          <Toggle
+            size="sm"
+            pressed={terminalSearchOpen}
+            onPressedChange={setTerminalSearchOpen}
+            className="size-7 min-w-0 rounded-md px-0 data-[state=on]:bg-accent"
             aria-label={t('instanceDetail.terminalSearchOpen', { defaultValue: '搜索终端' })}
-            aria-pressed={terminalSearchOpen}
           >
             <Search className="size-3.5" />
-          </Button>
+          </Toggle>
           <Button size="icon" variant="ghost" className="size-7 rounded-md" onClick={() => adjustFont(-1)} aria-label={t('instanceDetail.terminalFontDown')}>
             <ZoomOut className="size-3.5" />
           </Button>
@@ -218,16 +225,16 @@ export function TerminalPane({
           <Button size="icon" variant="ghost" className="size-7 rounded-md" onClick={() => adjustFont(1)} aria-label={t('instanceDetail.terminalFontUp')}>
             <ZoomIn className="size-3.5" />
           </Button>
-          <Button
+          {/* 全屏同样是**单个开关态**（再次点击退出全屏），不是一次性动作 → 同 Toggle。 */}
+          <Toggle
             size="sm"
-            variant="ghost"
-            className="h-7 rounded-md px-2 text-xs"
-            onClick={() => setFullscreen((v) => !v)}
-            aria-pressed={fullscreen}
+            pressed={fullscreen}
+            onPressedChange={setFullscreen}
+            className="h-7 min-w-0 rounded-md px-2 text-xs data-[state=on]:bg-accent"
           >
             {fullscreen ? <Minimize2 className="mr-1 size-3.5" /> : <Maximize2 className="mr-1 size-3.5" />}
             {fullscreen ? t('instanceDetail.terminalExitFullscreen') : t('instanceDetail.terminalFullscreen')}
-          </Button>
+          </Toggle>
           <Button
             size="sm"
             variant="ghost"

@@ -19,6 +19,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -28,7 +29,6 @@ import {
 import { breadcrumbs } from '@/lib/shared/paths'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 import type { FileViewMode } from '@/lib/file-browser/file-sort'
-import { cn } from '@jianmanager/ui'
 
 interface ToolbarProps {
   currentDir: string
@@ -332,9 +332,13 @@ export default function Toolbar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* 视图切换留在最右端（FR-375 三视图） */}
+      {/* 视图切换留在最右端（FR-375 三视图）。
+          这里用 `Segments`/`Segment`：三段与「当前视图」严格互斥，正是分段语义。
+          只是段内只有图标、没有文案——可访问名靠 `aria-label` + `title` 补足，
+          `Segment` 的 `role="tab"`/`aria-selected` 也精确表达了「选了哪一档」，
+          比原先的 `aria-pressed` 更贴合「就地切换呈现」。 */}
       {onViewModeChange && (
-        <div className="flex shrink-0 items-center rounded-md border p-0.5">
+        <Segments aria-label={t('files.viewMode')}>
           {(
             [
               { m: 'details' as const, icon: LayoutList, label: t('files.viewDetails') },
@@ -342,22 +346,18 @@ export default function Toolbar({
               { m: 'icons' as const, icon: LayoutGrid, label: t('files.viewIcons') },
             ] as const
           ).map(({ m, icon: Icon, label }) => (
-            <button
+            <Segment
               key={m}
-              type="button"
               title={label}
               aria-label={label}
-              aria-pressed={viewMode === m}
-              className={cn(
-                'rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground',
-                viewMode === m && 'bg-accent text-foreground',
-              )}
+              active={viewMode === m}
               onClick={() => onViewModeChange(m)}
+              className="px-1.5 py-1"
             >
               <Icon className="size-3.5" />
-            </button>
+            </Segment>
           ))}
-        </div>
+        </Segments>
       )}
     </div>
   )

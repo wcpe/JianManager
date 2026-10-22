@@ -212,7 +212,9 @@
     "removeTag": "移除标签",
     "tagsSaved": "标签已保存",
     "viewCard": "卡片视图",
-    "viewList": "列表视图"
+    "viewList": "列表视图",
+    "levelPrimary": "大区",
+    "levelSecondary": "小区"
   },
   "instanceGroups": {
     "manage": "管理分组",
@@ -1430,7 +1432,8 @@
       "launch": "告诉平台怎么启动这个服——用哪种方式跑、什么启动命令、用哪个 JDK。Minecraft 类型的工作目录由系统自动分配，不用填。",
       "advanced": "用 Docker 容器方式运行时，填镜像，可选填 CPU / 内存限额（留空=不限制）。",
       "review": "核对下面的信息，没问题就点「创建」。"
-    }
+    },
+    "summaryLabel": "实例状态概览"
   },
   "diagnostics": {
     "reachable": "可达",
@@ -1783,6 +1786,7 @@
     "viewDetails": "详细信息",
     "viewList": "列表",
     "viewIcons": "大图标",
+    "viewMode": "文件视图",
     "colName": "名称",
     "colModTime": "修改时间",
     "colType": "类型",

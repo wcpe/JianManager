@@ -1,14 +1,16 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Boxes, Coffee, Copy, Download, Hexagon, Loader2, Radar, Trash2 } from 'lucide-react'
+import { Boxes, Coffee, Copy, Download, Hexagon, Radar, Trash2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Card } from '@jianmanager/ui/components/card'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Input } from '@jianmanager/ui/components/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
+import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 
@@ -185,9 +187,10 @@ export default function NodeRuntimeSection({
       ) : (
         <div className="space-y-2">
           {rows.map((rt) => (
-            <div
+            /* 列表行：Card 只作统一外壳，行内布局与 hover 涂层原样保留。 */
+            <Card
               key={`${rt.type}-${rt.id}`}
-              className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5 transition-colors hover:bg-muted/40"
+              className="flex-row items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
             >
               <div
                 className={cn(
@@ -228,7 +231,7 @@ export default function NodeRuntimeSection({
               >
                 <Trash2 className="size-4" />
               </button>
-            </div>
+            </Card>
           ))}
         </div>
       )}
@@ -273,7 +276,7 @@ export default function NodeRuntimeSection({
               {t('common.cancel')}
             </Button>
             <Button onClick={() => void submitInstall()} disabled={!installMajorValid || installing}>
-              {installing && <Loader2 className="size-4 animate-spin" />}
+              {installing && <Spinner />}
               {t('nodes.runtimeLib.installConfirm')}
             </Button>
           </DialogFooter>
@@ -289,7 +292,7 @@ export default function NodeRuntimeSection({
           <ScrollableDialogBody className="space-y-2">
             {scanning ? (
               <p className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
+                <Spinner />
                 {t('nodes.runtimeLib.scanning')}
               </p>
             ) : !candidates || candidates.length === 0 ? (
@@ -340,7 +343,7 @@ export default function NodeRuntimeSection({
               {t('common.cancel')}
             </Button>
             <Button onClick={() => void onRegisterSelected()} disabled={selectedCount === 0 || registering}>
-              {registering && <Loader2 className="size-4 animate-spin" />}
+              {registering && <Spinner />}
               {t('nodes.runtimeLib.register', { count: selectedCount })}
             </Button>
           </DialogFooter>

@@ -37,6 +37,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
+import { Separator } from '@jianmanager/ui/components/separator'
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 import type { ConsoleOutputHandle } from '@/components/views/console/ConsoleOutputView'
@@ -778,7 +779,8 @@ export function InstanceConsoleView({
               >
                 {t('instanceDetail.consoleSaveLog')}
               </button>
-              <div className="my-1 border-t border-white/10" />
+              {/* 菜单项之间的纯装饰分隔线。控制台是深色自定义表面，只保留原来的半透明白描边色 */}
+              <Separator decorative className="my-1 bg-white/10" />
               <button
                 type="button"
                 role="menuitem"

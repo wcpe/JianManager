@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { History, Save, X } from 'lucide-react'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import EditorShortcutsHelp from '@/components/views/explorer/editor/EditorShortcutsHelp'
 import type { ConfigReadResult, CrossCheckIssue, FieldSchema, ModelSchema, ValidationIssue } from '@/lib/config-explorer/config-contracts'
 
@@ -296,7 +298,13 @@ export function ConfigFileEditor({
           <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
             {schema?.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
             {fieldGroups.map((group) => (
-              <fieldset key={group.name} className="space-y-2 rounded-md border bg-card/35 p-3">
+              // 字段分组保留 <fieldset>/<legend> 的表单语义（换成 Card 的 div 会丢掉
+              // 「一组字段」的可访问名与分组关系），因此复用 Card 同源的表面常量，
+              // 让圆角/描边/底色/阴影仍由 packages/ui 一处决定。原 bg-card/35 → faint 档。
+              <fieldset
+                key={group.name}
+                className={cn('space-y-2 p-3', cardSurface, cardSurfaceTone.faint)}
+              >
                 <legend className="px-1 text-xs font-medium text-muted-foreground">{group.name}</legend>
                 {group.fields.map(({ key, schema: fs }) => {
                   const val = formDraft[key] ?? ''
@@ -311,21 +319,24 @@ export function ConfigFileEditor({
                       </label>
                       <div className="col-span-2 space-y-1">
                         {fs.type === 'bool' ? (
-                          <select
+                          <NativeSelect
                             id={inputId}
-                            className="w-full rounded bg-muted px-2 py-1.5 text-xs"
+                            className="w-full"
+                            size="sm"
                             value={val === 'true' ? 'true' : 'false'}
                             onChange={(e) => onChange(e.target.value)}
                           >
                             <option value="true">true</option>
                             <option value="false">false</option>
-                          </select>
+                          </NativeSelect>
                         ) : fs.choices && fs.choices.length > 0 ? (
-                          <select
+                          // `fs.choices` 由配置 schema 提供，长度不受控 → 原生下拉 + 统一外观
+                          <NativeSelect
                             id={inputId}
                             aria-invalid={!!error}
                             aria-describedby={error ? errorId : undefined}
-                            className="w-full rounded bg-muted px-2 py-1.5 text-xs"
+                            className="w-full"
+                            size="sm"
                             value={val}
                             onChange={(e) => onChange(e.target.value)}
                           >
@@ -334,7 +345,7 @@ export function ConfigFileEditor({
                                 {c}
                               </option>
                             ))}
-                          </select>
+                          </NativeSelect>
                         ) : (
                           <input
                             id={inputId}

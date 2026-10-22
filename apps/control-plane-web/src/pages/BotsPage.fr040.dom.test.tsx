@@ -37,11 +37,12 @@ describe('FR-040 全局 Bot 管理页重构', () => {
     renderWithProviders(<BotsPage />, { route: '/bots' })
 
     await screen.findByRole('button', { name: '生存服' })
-    await userEvent.click(screen.getByRole('button', { name: '节点' }))
+    // 分组维度已收敛为分段控件（Segments/Segment）：维度是 role=tab，聚合组卡仍是 button。
+    await userEvent.click(screen.getByRole('tab', { name: '节点' }))
     expect(await screen.findByRole('button', { name: '主节点' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '边缘节点' })).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: '行为' }))
+    await userEvent.click(screen.getByRole('tab', { name: '行为' }))
     expect(await screen.findByRole('button', { name: 'guard' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'follow' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'patrol' })).toBeInTheDocument()
@@ -62,7 +63,8 @@ describe('FR-040 全局 Bot 管理页重构', () => {
     await userEvent.click(within(survivalCard).getByRole('combobox'))
     await userEvent.click(await screen.findByRole('option', { name: '设为巡逻' }))
 
-    await userEvent.click(screen.getByRole('button', { name: '行为' }))
+    // 分组维度是分段控件（role=tab）；聚合组卡本身仍是 button。
+    await userEvent.click(screen.getByRole('tab', { name: '行为' }))
     const patrolButton = await screen.findByRole('button', { name: 'patrol' })
     const patrolCard = patrolButton.closest('div.flex-col') as HTMLElement
     await waitFor(() => expect(within(patrolCard).getByText('3')).toBeInTheDocument())

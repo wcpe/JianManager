@@ -9,6 +9,7 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Progress } from '@jianmanager/ui/components/progress'
 import {
   Dialog,
   DialogContent,
@@ -378,9 +379,14 @@ export function PluginManager({
               )}
             </div>
             {uploadProgress && (
-              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${uploadPercent(uploadProgress)}%` }} />
-              </div>
+              <Progress
+                className="mt-2 h-1.5 bg-muted"
+                value={uploadPercent(uploadProgress)}
+                aria-label={t('plugins.uploadProgress', {
+                  name: uploadProgress.fileName,
+                  percent: uploadPercent(uploadProgress),
+                })}
+              />
             )}
           </div>
         </Panel>

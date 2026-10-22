@@ -3,6 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { Progress } from '@jianmanager/ui/components/progress'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -93,18 +96,19 @@ export default function RollingBatchDialog({
         ) : (
           <div className="space-y-3">
             <Field label={t('rolling.action')}>
-              <select
-                aria-label={t('rolling.action')}
-                className="h-8 w-full rounded-md border bg-background px-2 text-sm"
-                value={action}
-                onChange={(e) => setAction(e.target.value as InstanceBatchAction)}
-              >
-                <option value="restart">{t('instanceBatch.restart')}</option>
-                <option value="start">{t('instanceBatch.start')}</option>
-                <option value="stop">{t('instanceBatch.stop')}</option>
-                <option value="kill">{t('instanceBatch.kill')}</option>
-                <option value="command">{t('instanceBatch.command')}</option>
-              </select>
+              {/* 动作是 5 项固定枚举，走组件库 Select（Radix）——统一触发器样式与键盘导航 */}
+              <Select value={action} onValueChange={(v) => setAction(v as InstanceBatchAction)}>
+                <SelectTrigger aria-label={t('rolling.action')} className="w-full" size="sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="restart">{t('instanceBatch.restart')}</SelectItem>
+                  <SelectItem value="start">{t('instanceBatch.start')}</SelectItem>
+                  <SelectItem value="stop">{t('instanceBatch.stop')}</SelectItem>
+                  <SelectItem value="kill">{t('instanceBatch.kill')}</SelectItem>
+                  <SelectItem value="command">{t('instanceBatch.command')}</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
 
             {action === 'command' && (
@@ -162,7 +166,7 @@ export default function RollingBatchDialog({
             </Field>
 
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={failFast} onChange={(e) => setFailFast(e.target.checked)} />
+              <Checkbox checked={failFast} onCheckedChange={(v) => setFailFast(v === true)} />
               {t('rolling.failFast')}
             </label>
           </div>
@@ -258,9 +262,13 @@ function ProgressBar({ op }: { op: RollingOp }) {
         <span>{totalBatches(op)} {t('rolling.batches')}</span>
         <span className="font-mono">{done}/{op.requested}</span>
       </div>
-      <div className="h-2 overflow-hidden rounded bg-muted">
-        <div className={cn('h-full', op.failed > 0 ? 'bg-status-warning' : 'bg-primary')} style={{ width: `${Math.max(2, pct)}%` }} />
-      </div>
+      {/* 原实现给宽度取了 `Math.max(2, pct)` 的下限，让 0% 时也留一小截可视色块；
+          改由指示条 min-w-[2%] 表达，`value` 仍报真实百分比（读屏数字不吃这个视觉下限）。 */}
+      <Progress
+        className={cn('h-2 rounded bg-muted [&_[data-slot=progress-indicator]]:min-w-[2%]', op.failed > 0 && '[&_[data-slot=progress-indicator]]:bg-status-warning')}
+        value={pct}
+        aria-label={t('tasks.progress')}
+      />
     </div>
   )
 }

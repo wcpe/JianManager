@@ -6,6 +6,7 @@ import { buildFileTree, collectSubtreeFiles, isSelfOrDescendant, moveDirToDir, m
 import type { ManifestFileLike, TreeDir, TreeFile } from '@/lib/client-dist/client-publish-wizard'
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Card } from '@jianmanager/ui/components/card'
 import {
   Select,
   SelectContent,
@@ -90,9 +91,11 @@ export function ClientFileTree({
 
   return (
     <DragContext.Provider value={drag}>
-      <div
+      {/* 树节点容器（成排出现的轻量承载面）→ surface="faint"；结构与虚拟化/拖拽逻辑不动。 */}
+      <Card
+        surface="faint"
         className={cn(
-          'rounded-lg border bg-card/30 p-1 text-sm',
+          'gap-0 p-1 text-sm',
           !readonly && dragOverPath === '' && 'ring-2 ring-primary/50',
         )}
         data-testid="tree-root"
@@ -124,7 +127,7 @@ export function ClientFileTree({
           onPlatformChange={onPlatformChange}
           onRemove={onRemove}
         />
-      </div>
+      </Card>
     </DragContext.Provider>
   )
 }

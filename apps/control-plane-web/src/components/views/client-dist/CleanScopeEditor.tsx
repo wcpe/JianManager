@@ -15,6 +15,7 @@ import { ChevronRight, Eraser, Ban, ShieldCheck, Folder, FolderOpen, X } from 'l
 import { buildFileTreeWithDirs, collectAllDirPaths, buildCleanMap, computeDirVisualState, exportMarkings, getDescendantDirPaths } from '@/lib/client-dist/client-publish-wizard'
 import type { CleanMark, DirVisualState, ManifestFileLike, TreeDir } from '@/lib/client-dist/client-publish-wizard'
 import { ContextMenuSurface, cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────
@@ -257,8 +258,10 @@ export function CleanScopeEditor({
 
   return (
     <ScopeContext.Provider value={ctx}>
-      <div
-        className={cn('rounded-lg border bg-card/30 p-1 text-sm', cleanAll && 'opacity-60')}
+      {/* 清理范围树容器（成排出现的轻量承载面）→ surface="faint"；树结构与勾选逻辑不动。 */}
+      <Card
+        surface="faint"
+        className={cn('gap-0 p-1 text-sm', cleanAll && 'opacity-60')}
         data-testid="clean-scope-tree"
         data-clean-all={cleanAll || undefined}
       >
@@ -269,7 +272,7 @@ export function CleanScopeEditor({
             </li>
           ))}
         </ul>
-      </div>
+      </Card>
 
       {/* 颜色图例 */}
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">

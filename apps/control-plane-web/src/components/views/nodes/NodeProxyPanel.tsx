@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Globe } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 
 /**
@@ -119,20 +120,13 @@ function NodeProxyForm({
       {/* 模式单选：继承全局 / 自定义 */}
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-muted-foreground">{t('nodeProxy.mode')}</p>
-        <div className="inline-flex rounded-md border p-0.5">
+        <Segments aria-label={t('nodeProxy.mode')}>
           {(['inherit', 'custom'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              className={`rounded px-3 py-1 text-sm transition-colors ${
-                mode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
+            <Segment key={m} active={mode === m} onClick={() => setMode(m)}>
               {t(`nodeProxy.${m}`)}
-            </button>
+            </Segment>
           ))}
-        </div>
+        </Segments>
       </div>
 
       {mode === 'inherit' ? (

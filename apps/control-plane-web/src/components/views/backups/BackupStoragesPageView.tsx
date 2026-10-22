@@ -9,6 +9,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Database, Pencil, Trash2, Zap } from 'lucide-react'
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
@@ -353,9 +354,11 @@ export function BackupStoragesPageView({
             </DialogTitle>
           </DialogHeader>
           {editing && editing.backupCount > 0 && (
-            <p className="text-xs rounded-md border border-status-warning/40 bg-status-warning/10 text-status-warning px-3 py-2">
-              {t('backupStorages.editInUseHint', '该后端已被备份引用：修改 Endpoint/Bucket/前缀不会迁移已有备份对象，可能影响旧备份的恢复定位。')}
-            </p>
+            <Alert variant="warning" className="py-2">
+              <AlertDescription className="text-xs">
+                {t('backupStorages.editInUseHint', '该后端已被备份引用：修改 Endpoint/Bucket/前缀不会迁移已有备份对象，可能影响旧备份的恢复定位。')}
+              </AlertDescription>
+            </Alert>
           )}
           <form id="backup-storage-form" onSubmit={submit}>
             <ScrollableDialogBody className="grid grid-cols-1 md:grid-cols-2 gap-3">

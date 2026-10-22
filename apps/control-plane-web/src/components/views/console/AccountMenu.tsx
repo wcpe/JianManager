@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { LogOut, UserRound } from 'lucide-react'
 
+import { Avatar, AvatarFallback } from '@jianmanager/ui/components/avatar'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,9 +38,17 @@ export function AccountMenu({ username, role, onLogout }: AccountMenuProps) {
           aria-label={t('header.account')}
           className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
-          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
-            <UserRound className="size-3.5" />
-          </span>
+          {/*
+            头像位改用组件库 Avatar：主控台没有图片头像源（后端不存用户头像），
+            但「图片加载失败自动回落 Fallback」正是纯图标/首字母头像的正确承载形态——
+            以后接上头像上传只需在 Fallback 之前插一个 <AvatarImage>，布局与尺寸钩子不用动。
+            size="sm" 是 24px，与此前手写的 `size-6` 一致，故布局零位移。
+          */}
+          <Avatar size="sm">
+            <AvatarFallback className="bg-primary/15 text-primary">
+              <UserRound className="size-3.5" />
+            </AvatarFallback>
+          </Avatar>
           <span className="hidden max-w-32 truncate text-xs font-medium text-foreground sm:block">
             {username ?? t('header.account')}
           </span>

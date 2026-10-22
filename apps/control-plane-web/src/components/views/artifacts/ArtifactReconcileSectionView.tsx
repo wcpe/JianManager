@@ -11,8 +11,10 @@ import { RefreshCw, Settings2 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { Input } from '@jianmanager/ui/components/input'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { Switch } from '@jianmanager/ui/components/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { cn } from '@jianmanager/ui'
@@ -136,11 +138,14 @@ function Pager({ page, total, pageSize, onChange }: { page: number; total: numbe
   const { t } = useTranslation()
   const pages = Math.max(1, Math.ceil(total / pageSize))
   return (
-    <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
-      <Button variant="outline" size="xs" disabled={page <= 1} onClick={() => onChange(page - 1)}>{t('artifactReconcile.previous')}</Button>
-      <span>{page} / {pages}</span>
-      <Button variant="outline" size="xs" disabled={page >= pages} onClick={() => onChange(page + 1)}>{t('artifactReconcile.next')}</Button>
-    </div>
+    <PaginationBar
+      page={page}
+      totalPages={pages}
+      onChange={onChange}
+      prevLabel={t('artifactReconcile.previous')}
+      nextLabel={t('artifactReconcile.next')}
+      className="justify-end text-xs"
+    />
   )
 }
 
@@ -232,7 +237,11 @@ export function ArtifactReconcileSectionView({
         <DialogContent className={scrollableDialogContentClass}>
           <DialogHeader><DialogTitle>{t('artifactReconcile.settingsTitle')}</DialogTitle><DialogDescription>{t('artifactReconcile.settingsDescription')}</DialogDescription></DialogHeader>
           <ScrollableDialogBody className="space-y-4">
-            <label className="flex items-center justify-between gap-3 text-sm"><span>{t('artifactReconcile.enabled')}</span><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /></label>
+            <div className="flex items-center justify-between gap-3 text-sm">
+              {/* 启用/禁用语义走 Switch（原来是一个裸 checkbox，无统一样式与焦点环） */}
+              <label htmlFor="artifact-reconcile-enabled" className="cursor-pointer">{t('artifactReconcile.enabled')}</label>
+              <Switch id="artifact-reconcile-enabled" checked={enabled} onCheckedChange={setEnabled} />
+            </div>
             <label className="block space-y-1 text-sm"><span>{t('artifactReconcile.intervalHours')}</span><Input type="number" min={1} max={720} value={intervalHours} onChange={(event) => setIntervalHours(Number(event.target.value))} /></label>
             {settings?.nextRunAt && <p className="text-xs text-muted-foreground">{t('artifactReconcile.nextRunAt', { time: new Date(settings.nextRunAt).toLocaleString() })}</p>}
           </ScrollableDialogBody>

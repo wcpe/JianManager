@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@jianmanager/ui/components/button'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Input } from '@jianmanager/ui/components/input'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import type { BotLoadRunBot } from '@/lib/bot-load/bot-load-types'
 
@@ -95,11 +96,12 @@ export function SessionBots({ filter, onFilterChange, data, isLoading, isError }
           <TableHeader className="bg-muted/40">
             <TableRow>
               <TableHead className="w-10">
-                <input
-                  type="checkbox"
+                {/* 列表多选 → 组件库 Checkbox（统一尺寸/焦点环/点击热区）。
+                    Radix 的回调是 onCheckedChange(boolean | 'indeterminate')，故显式折算成 void。 */}
+                <Checkbox
                   aria-label={t('botLoad.selectPage')}
                   checked={items.length > 0 && items.every((b) => selected.has(b.uuid))}
-                  onChange={togglePage}
+                  onCheckedChange={() => togglePage()}
                 />
               </TableHead>
               <TableHead>{t('botLoad.botName')}</TableHead>
@@ -114,10 +116,9 @@ export function SessionBots({ filter, onFilterChange, data, isLoading, isError }
             {items.map((b) => (
               <TableRow key={b.uuid}>
                 <TableCell>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected.has(b.uuid)}
-                    onChange={() => toggle(b.uuid)}
+                    onCheckedChange={() => toggle(b.uuid)}
                     aria-label={b.name}
                   />
                 </TableCell>
@@ -151,32 +152,17 @@ export function SessionBots({ filter, onFilterChange, data, isLoading, isError }
         </Table>
       </div>
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          {t('botLoad.totalCount', { count: total })} · {t('botLoad.selectedCount', { count: selected.size })}
-        </span>
-        <div className="flex items-center gap-2">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={filter.page <= 1}
-            onClick={() => onFilterChange({ page: filter.page - 1 })}
-          >
-            {t('bots.prevPage')}
-          </Button>
-          <span>
-            {filter.page}/{totalPages}
-          </span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={filter.page >= totalPages}
-            onClick={() => onFilterChange({ page: filter.page + 1 })}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={filter.page}
+        totalPages={totalPages}
+        total={total}
+        onChange={(next) => onFilterChange({ page: next })}
+        totalLabel={`${t('botLoad.totalCount', { count: total })} · ${t('botLoad.selectedCount', { count: selected.size })}`}
+        // 此处原文案是裸「页码/总页数」（无「第…页」包装），PaginationBar 默认拼接与之等价。
+        prevLabel={t('bots.prevPage')}
+        nextLabel={t('bots.nextPage')}
+        className="text-xs"
+      />
     </div>
   )
 }

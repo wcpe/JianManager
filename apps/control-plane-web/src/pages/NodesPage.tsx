@@ -8,6 +8,7 @@ import type { NodeDeleteBlockedInstance } from '@/api/nodes'
 import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
 import { useMetricSeries, useMetricSeriesBatch } from '@/api/metrics'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { cardSurface, cardSurfaceTone } from '@jianmanager/ui/lib/interaction-overlay'
 import { Input } from '@jianmanager/ui/components/input'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
@@ -355,7 +356,12 @@ export default function NodesPage() {
       {/* 左栏：可收缩节点列表（窄图标轨 ⇄ 展开），收缩态持久 */}
       <aside
         className={cn(
-          'flex min-h-0 shrink-0 flex-col rounded-lg border bg-card/95 shadow-soft backdrop-blur-sm transition-[width] duration-200 ease-ios',
+          // 保留 <aside>（complementary 地标）而非换成 Card：语义不能丢。
+          // 视觉仍由 packages/ui 单点决定——圆角/描边/底色/阴影引用共享常量，
+          // 与 Card 同源，不在这里写死。
+          'flex min-h-0 shrink-0 flex-col backdrop-blur-sm transition-[width] duration-200 ease-ios',
+          cardSurface,
+          cardSurfaceTone.solid,
           collapsed ? 'w-full lg:w-14' : 'w-full lg:w-72',
         )}
       >

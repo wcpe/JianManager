@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { Bounded, ProbeServerState, ServerSection, ServerStateResponse, JvmSection, ClassloaderSection, SchedulerSection, ListenersSection, WorldEntry } from '@/lib/console/server-state'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
+import { Segment, Segments } from '@jianmanager/ui/components/layout'
 import { cn } from '@jianmanager/ui'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
@@ -393,21 +394,18 @@ export default function ServerStateSegment({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-meta text-muted-foreground">{t('serverState.autoRefresh', '自动刷新')}</span>
-          <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+          <Segments aria-label={t('serverState.autoRefresh', '自动刷新')}>
             {AUTO_REFRESH_OPTIONS.map((o) => (
-              <button
+              <Segment
                 key={o.key}
-                type="button"
-                className={cn(
-                  'rounded px-1.5 py-0.5 text-meta tabular-nums',
-                  autoRefreshMs === o.ms ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent',
-                )}
+                active={autoRefreshMs === o.ms}
                 onClick={() => onAutoRefreshChange(o.ms)}
+                className="tabular-nums px-1.5 py-0.5"
               >
                 {o.key === 'off' ? t('serverState.autoOff', '关') : o.key}
-              </button>
+              </Segment>
             ))}
-          </div>
+          </Segments>
           <Button size="sm" variant="outline" disabled={fetching} onClick={onRefresh}>
             {fetching ? t('serverState.loading') : t('serverState.refresh')}
           </Button>

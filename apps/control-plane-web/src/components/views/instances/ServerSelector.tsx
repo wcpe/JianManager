@@ -5,6 +5,7 @@ import { Search, Server, Star, X } from 'lucide-react'
 
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { cn, useFocusTrap } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 import type { HoverPrefetcher, StoredInstance } from '@/lib/console/server-selection'
 
 /** 选择器行所需的实例最小信息（外壳可传结构兼容的更宽类型）。 */
@@ -113,26 +114,45 @@ export default function ServerSelector({
 
   return (
     <>
-      <button
-        type="button"
+      {/*
+        触发按钮：原为手写卡片样式的 <button>，改用 Card 统一圆角/描边/底色/阴影。
+        原底色 `bg-card/80` 属次级档 → surface="subtle"。
+        语义：Card 渲染 div，故补 role/tabIndex 与 Enter/Space 键处理，
+        保住键盘可达与 `getByRole('button')` 的可访问性契约（焦点陷阱关闭后要靠它还原焦点）。
+      */}
+      <Card
+        surface="subtle"
+        role="button"
+        tabIndex={0}
         onClick={() => onOpenChange(true)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onOpenChange(true)
+          }
+        }}
         aria-label={t('serverSelector.open')}
-        className="flex w-full items-center gap-2 rounded-md border bg-card/80 px-2.5 py-2 text-left text-body text-foreground shadow-soft transition-colors hover:bg-accent/60"
+        className="w-full flex-row items-center gap-2 px-2.5 py-2 text-left text-body transition-colors hover:bg-accent/60"
       >
         <Server className="size-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate">{t('serverSelector.open')}</span>
-      </button>
+      </Card>
 
       {/* Portal 到 body：侧栏祖先带 transform/contain（FR-131 折叠动画）会给 fixed 建立包含块，
           内联渲染会把全屏模态压到侧栏宽度内。渲染到 body 逃出该包含块，覆盖整个视口居中。 */}
       {open && createPortal(
         <div className="fixed inset-0 z-[58] flex items-start justify-center bg-black/45 p-4 pt-[10vh]" role="presentation" onClick={() => onOpenChange(false)}>
-          <div
+          {/*
+            弹层面板：只把「圆角/描边/底色/阴影」交给 Card，浮层定位、max-h、溢出裁切
+            与分段结构（标题栏 border-b + 内容区 flex-1）全部保留。
+            Card 默认带 py-4/gap-4，会把标题栏与内容区推开并撑破 max-h，故 py-0/gap-0 归零。
+          */}
+          <Card
             ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-label={t('serverSelector.title')}
-            className="flex max-h-[76vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lift"
+            className="max-h-[76vh] w-full max-w-3xl gap-0 overflow-hidden py-0 shadow-lift"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -222,7 +242,7 @@ export default function ServerSelector({
                 </div>
               )}
             </div>
-          </div>
+          </Card>
         </div>,
         document.body,
       )}

@@ -4,6 +4,8 @@ import { Box, CornerDownLeft, Network, Search, Server, Terminal } from 'lucide-r
 
 import { cn } from '@jianmanager/ui'
 import { instanceStatusLevel } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
+import { Kbd } from '@jianmanager/ui/components/kbd'
 import { searchPalette } from '@/lib/console/command-palette'
 import type { PaletteEntry, PaletteSources } from '@/lib/console/command-palette'
 
@@ -123,8 +125,13 @@ export default function CommandPalette({
       onClick={close}
       role="presentation"
     >
-      <div
-        className="flex max-h-[60vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-lift"
+      {/*
+        面板容器：只换「圆角/描边/底色/阴影」，全屏定位、max-h、溢出裁切与
+        搜索栏（border-b）/ 结果列表（flex-1 滚动）两段结构原样保留。
+        Card 默认 py-4/gap-4 会把两段推开并撑破 max-h，故 py-0/gap-0 归零。
+      */}
+      <Card
+        className="max-h-[60vh] w-full max-w-xl gap-0 overflow-hidden py-0 shadow-lift"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal
@@ -145,9 +152,7 @@ export default function CommandPalette({
             aria-label={t('palette.placeholder')}
             className="h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
-          <kbd className="hidden shrink-0 rounded border bg-muted px-1.5 py-0.5 text-micro text-muted-foreground sm:inline-block">
-            Esc
-          </kbd>
+          <Kbd className="hidden border sm:inline-flex">Esc</Kbd>
         </div>
 
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -199,7 +204,7 @@ export default function CommandPalette({
             })
           )}
         </div>
-      </div>
+      </Card>
     </div>
   )
 }

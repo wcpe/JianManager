@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { ExternalLink, FileText, Save } from 'lucide-react'
 import type { ConfigSourceKind, ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { Input } from '@jianmanager/ui/components/input'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { cn } from '@jianmanager/ui'
 
 /**
@@ -175,7 +177,7 @@ function SurfaceEditor({
       </div>
 
       {groups.map(({ group, items: groupItems }) => (
-        <section key={group} className="rounded-lg border bg-card">
+        <Card key={group} className="py-0">
           <h3 className="border-b px-3 py-2 text-xs font-semibold text-muted-foreground">{group}</h3>
           <div className="divide-y">
             {groupItems.map((it) => (
@@ -189,7 +191,7 @@ function SurfaceEditor({
               />
             ))}
           </div>
-        </section>
+        </Card>
       ))}
     </div>
   )
@@ -268,9 +270,12 @@ function SurfaceRow({
       <div className="min-w-0 flex-1">
         {isInline ? (
           choices.length > 0 ? (
-            <select
+            // `choices` 来自配置项自身枚举，长度不受控（可能上百）——不用 Radix Select 全量
+            // 挂载选项，改走样式统一、语义原生的 NativeSelect。
+            <NativeSelect
               aria-label={item.description || item.itemKey}
-              className="h-8 w-full rounded-md border bg-background px-2 font-mono text-xs"
+              className="w-full font-mono text-xs"
+              size="sm"
               value={draft.inlineValue}
               onChange={(e) => onChange({ inlineValue: e.target.value, inlineEdited: true })}
             >
@@ -280,7 +285,7 @@ function SurfaceRow({
                   {c}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           ) : (
             <Input
               aria-label={item.description || item.itemKey}

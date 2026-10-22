@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { Card } from '@jianmanager/ui/components/card'
 
 import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance, isRebuildingInstance } from '@/api/instances'
 import { usePermissionsStore } from '@/stores/permissions'
@@ -107,7 +108,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   )
 
   if (!instance) {
-    return <div className="rounded-lg border bg-card p-6 text-sm text-muted-foreground shadow-soft">{t('serverConsole.noInstance')}</div>
+    return <Card className="p-6 text-sm text-muted-foreground">{t('serverConsole.noInstance')}</Card>
   }
 
   // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮禁用 + tooltip 引导看任务中心，
@@ -227,10 +228,10 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
     if (!cardType) return null
     // 去掉原 min-h-[520px]（FR-422）：卡片吃满剩余高度，内部自行滚动。
     return (
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-soft">
+      <Card className="min-h-0 flex-1 overflow-hidden py-0">
         {/* persistTerminal：终端连接由管理器常驻，页签隐藏/切换不断 WS（FR-295）。 */}
         <WorkspaceCardBody instanceId={instance.id} type={cardType} persistTerminal />
-      </div>
+      </Card>
     )
   }
 

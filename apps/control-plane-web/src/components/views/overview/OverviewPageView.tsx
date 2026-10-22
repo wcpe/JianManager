@@ -18,6 +18,7 @@ import { lazy, Suspense, useEffect, useMemo, type ReactNode, type UIEvent } from
 import { useTranslation } from 'react-i18next'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Popover, PopoverContent, PopoverTrigger } from '@jianmanager/ui/components/popover'
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
@@ -311,20 +312,32 @@ export function GaugeAttributionTooltip({
   )
   return (
     <Panel bodyClassName="relative flex items-center justify-center py-3">
-      <button
-        type="button"
-        aria-label={t('dashboard.resourceAttributionLabel', { label })}
-        aria-expanded={active}
-        className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-accent/40"
-        onClick={onToggle}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape' && active) onToggle()
-        }}
-      >
-        {children}
-      </button>
-      {active && (
-        <div role="tooltip" data-testid="overview-resource-attribution" className="absolute left-2 right-2 top-[calc(100%-0.25rem)] z-30 rounded-md border bg-popover p-3 text-left text-xs text-popover-foreground shadow-soft">
+      {/*
+        归因浮层此前是「button + active 时渲染一个 absolute 定位的 div」：位置靠
+        `top-[calc(100%-0.25rem)]` 硬算，仪表卡换尺寸/换方向就会错位；也没有点击外部关闭、
+        没有焦点管理、Escape 要自己写键处理。这些都是**有锚点的非模态浮层**的通用需求，
+        正是 Popover 的职责范围（本仓 popover.tsx 文件头写明的分工：菜单装动作列表，
+        Popover 装任意内容）。
+        Popover 之后：锚点由 Radix 定位到面板（不再依赖父级 relative），
+        点击外部/ Escape 关闭、焦点归还全部由原语托管，本视图只保留「开合态上报」。
+        受控：容器据开合态决定是否发起归因请求（enabled），故 open 必须由 props 驱动。
+      */}
+      <Popover open={active} onOpenChange={(next) => { if (next !== active) onToggle() }}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={t('dashboard.resourceAttributionLabel', { label })}
+            className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring hover:bg-accent/40"
+          >
+            {children}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="center"
+          side="bottom"
+          data-testid="overview-resource-attribution"
+          className="w-[min(22rem,calc(100vw-2rem))] text-left text-xs"
+        >
           {isLoading && <p className="text-muted-foreground">{t('dashboard.resourceAttributionLoading')}</p>}
           {isError && <p className="text-muted-foreground">{t('dashboard.resourceAttributionUnavailable')}</p>}
           {data && (
@@ -355,8 +368,8 @@ export function GaugeAttributionTooltip({
               <p className="text-[11px] text-muted-foreground">{t('dashboard.resourceObservation')}</p>
             </div>
           )}
-        </div>
-      )}
+        </PopoverContent>
+      </Popover>
     </Panel>
   )
 }

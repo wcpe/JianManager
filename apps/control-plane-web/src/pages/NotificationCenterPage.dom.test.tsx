@@ -30,7 +30,8 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
     renderWithProviders(<NotificationCenterPage />)
     await screen.findByText('JDK 安装完成')
 
-    await userEvent.click(screen.getByRole('button', { name: '消息' }))
+    // 来源筛选已收敛为分段控件（Segments/Segment）：每段是 role=tab，不再是 button。
+    await userEvent.click(screen.getByRole('tab', { name: '消息' }))
     expect(await screen.findByText('JDK 安装完成')).toBeInTheDocument()
     // 告警规则名不应再出现。
     expect(screen.queryAllByText('CPU 过载告警')).toHaveLength(0)
@@ -42,7 +43,8 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
     renderWithProviders(<NotificationCenterPage />)
     await screen.findAllByText('CPU 过载告警')
 
-    await userEvent.click(screen.getByRole('button', { name: '告警' }))
+    // 来源筛选已收敛为分段控件（Segments/Segment）：每段是 role=tab，不再是 button。
+    await userEvent.click(screen.getByRole('tab', { name: '告警' }))
     expect((await screen.findAllByText('CPU 过载告警')).length).toBeGreaterThan(0)
     expect(screen.queryAllByText('JDK 安装完成')).toHaveLength(0)
     expect(screen.queryAllByText('备份失败')).toHaveLength(0)

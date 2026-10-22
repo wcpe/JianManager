@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronLeft, ChevronRight, Users } from 'lucide-react'
+import { Users } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
-import { Button } from '@jianmanager/ui/components/button'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@jianmanager/ui/components/sheet'
 import {
@@ -116,15 +116,15 @@ export function MachineListPanelView({
         </TableBody>
       </Table>
       {total > 20 && (
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
-            <ChevronLeft className="size-3.5" />
-          </Button>
-          <span className="text-xs tabular-nums text-muted-foreground">{page} / {totalPages}</span>
-          <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => onPageChange(page + 1)}>
-            <ChevronRight className="size-3.5" />
-          </Button>
-        </div>
+        // 原实现只有图标箭头（无任何文字），这里补上文案，读屏与窄屏都能听懂。
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          onChange={onPageChange}
+          prevLabel={t('bots.prevPage')}
+          nextLabel={t('bots.nextPage')}
+          className="mt-2 justify-end"
+        />
       )}
 
       <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>

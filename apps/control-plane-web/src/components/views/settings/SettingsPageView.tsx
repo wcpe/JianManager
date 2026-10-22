@@ -12,7 +12,7 @@ import { useState, type Dispatch, type ReactNode, type SetStateAction } from 're
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Palette, ScrollText, Cpu, HeartPulse, Archive, Lock, ShieldAlert, Network, Mail, ExternalLink, type LucideIcon } from 'lucide-react'
-import { cn } from '@jianmanager/ui'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -221,8 +221,11 @@ export function SettingsPageView({
       <PageHeader title={t('settings.title')} description={t('settings.subtitle')} />
 
       <SettingsLayout>
-        {/* 内部侧边栏：分类导航 */}
-        <aside className="rounded-lg border bg-card/80 p-2 shadow-soft">
+        {/* 内部侧边栏：分类导航。
+            该元素是导航陆标（<aside> → complementary），换成 Card 渲染的 div 会丢掉语义，
+            故保留元素、改取 Card 同源的表面常量：圆角/描边/底色/阴影由 packages/ui 一处决定
+            （原 bg-card/80 → subtle 档，嵌套在设置页壳内的次级容器）。 */}
+        <aside className={cn(cardSurface, cardSurfaceTone.subtle, 'p-2')}>
           <nav className="space-y-0.5">
             {categories.map((c) => {
               const Icon = CATEGORY_ICON[c]

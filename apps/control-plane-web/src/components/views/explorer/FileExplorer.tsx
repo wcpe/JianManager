@@ -31,6 +31,7 @@ import type { ConflictResolution, LocalUnit, ManifestFileLike, TreeDir, TreeFile
 import { ContextMenuSurface, cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import {
   Dialog,
   DialogContent,
@@ -629,9 +630,11 @@ export default function FileExplorer({
           />
         )}
 
-        <div
+        {/* 树节点容器（成排出现的轻量承载面）→ surface="faint"；树结构与虚拟化/拖拽不动。 */}
+        <Card
+          surface="faint"
           className={cn(
-            'rounded-lg border bg-card/30 p-1 text-sm transition-colors',
+            'gap-0 p-1 text-sm transition-colors',
             !readonly && (dropActive || dragOverPath !== null) && 'ring-2 ring-primary/50',
           )}
           data-testid="fe-tree-root"
@@ -663,7 +666,7 @@ export default function FileExplorer({
           }}
         >
           <TreeLevel dir={tree} depth={0} />
-        </div>
+        </Card>
 
         {resolving && (
           <p className="text-xs text-muted-foreground animate-pulse">{t('fileExplorer.processing', '处理中…')}</p>

@@ -11,6 +11,7 @@ import { ScrollText } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {
@@ -331,27 +332,14 @@ export function AgentCallLogsPageView({
       )}
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-end gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page <= 1}
-            onClick={() => onQueryChange({ page: Math.max(1, page - 1) })}
-          >
-            {t('agentCallLogs.prev')}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {page} / {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page >= totalPages}
-            onClick={() => onQueryChange({ page: page + 1 })}
-          >
-            {t('agentCallLogs.next')}
-          </Button>
-        </div>
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          onChange={(next) => onQueryChange({ page: next })}
+          prevLabel={t('agentCallLogs.prev')}
+          nextLabel={t('agentCallLogs.next')}
+          className="justify-end"
+        />
       )}
     </PageShell>
   )

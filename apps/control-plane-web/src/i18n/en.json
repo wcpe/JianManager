@@ -212,7 +212,9 @@
     "removeTag": "Remove tag",
     "tagsSaved": "Tags saved",
     "viewCard": "Card view",
-    "viewList": "List view"
+    "viewList": "List view",
+    "levelPrimary": "Region",
+    "levelSecondary": "Zone"
   },
   "instanceGroups": {
     "manage": "Manage groups",
@@ -1473,7 +1475,8 @@
       "launch": "Tell the platform how to start it — process type, start command, and which JDK. For Minecraft, the work directory is assigned automatically.",
       "advanced": "When running via Docker, set the image and optional CPU / memory limits (blank = unlimited).",
       "review": "Double-check the details below, then click Create."
-    }
+    },
+    "summaryLabel": "Instance status overview"
   },
   "diagnostics": {
     "reachable": "Reachable",
@@ -1804,6 +1807,7 @@
     "viewDetails": "Details",
     "viewList": "List",
     "viewIcons": "Large icons",
+    "viewMode": "File view",
     "colName": "Name",
     "colModTime": "Date modified",
     "colType": "Type",

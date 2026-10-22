@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 import { Eye, RotateCcw, Upload } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { Segment, Segments } from '@jianmanager/ui/components/layout'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import {
   Dialog,
@@ -281,25 +282,17 @@ function VersionDetailDialog({ version, detail, isLoading, previewSlot, onClose 
   )
 }
 
-/** 结构 / 预览视图切换（分段按钮，FR-214）。 */
+/** 结构 / 预览视图切换（分段控件，FR-214）。 */
 function ViewToggle({ view, onChange }: { view: 'structure' | 'preview'; onChange: (v: 'structure' | 'preview') => void }) {
   const { t } = useTranslation()
   return (
-    <div className="inline-flex rounded-lg border p-0.5 text-xs">
-      <button
-        type="button"
-        className={`rounded-md px-2.5 py-1 transition-colors ${view === 'structure' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-        onClick={() => onChange('structure')}
-      >
+    <Segments aria-label={t('clientVersions.view')}>
+      <Segment active={view === 'structure'} onClick={() => onChange('structure')}>
         {t('clientVersions.viewStructure', '结构')}
-      </button>
-      <button
-        type="button"
-        className={`rounded-md px-2.5 py-1 transition-colors ${view === 'preview' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-        onClick={() => onChange('preview')}
-      >
+      </Segment>
+      <Segment active={view === 'preview'} onClick={() => onChange('preview')}>
         {t('clientVersions.viewPreview', '预览')}
-      </button>
-    </div>
+      </Segment>
+    </Segments>
   )
 }

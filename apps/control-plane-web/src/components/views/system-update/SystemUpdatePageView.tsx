@@ -22,6 +22,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2, Clock, Copy, Download } from 'lucide-react'
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
@@ -29,6 +30,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { ReleaseNotes } from '@/components/views/system-update/ReleaseNotes'
@@ -360,10 +362,10 @@ export function SystemUpdateWorkerAssetsPanel({
       </div>
 
       {assetsErrorMessage && (
-        <div className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertCircle className="mt-0.5 size-4 shrink-0" />
-          <span>{assetsErrorMessage}</span>
-        </div>
+        <Alert variant="destructive" className="mx-4 mt-3">
+          <AlertCircle />
+          <AlertDescription>{assetsErrorMessage}</AlertDescription>
+        </Alert>
       )}
 
       <div className="overflow-x-auto">
@@ -982,20 +984,24 @@ export function SystemUpdatePageView({
                   : t('systemUpdate.lastChecked', '上次检查：{{time}}', { time: lastChecked })}
               </span>
             )}
-            <Button onClick={onRefresh} disabled={refreshing}>
-              <RefreshCw className={refreshing ? 'size-4 animate-spin' : 'size-4'} />
-              {t('systemUpdate.checkUpdate', '检查更新')}
-            </Button>
+            {/* 「检查更新」就是重新拉取版本状态 → 刷新语义，改用包内原语。
+                原按钮是默认 `default` 变体（页头主操作），故显式传 variant，不改观感。 */}
+            <RefreshButton
+              variant="default"
+              pending={refreshing}
+              onClick={onRefresh}
+              label={t('systemUpdate.checkUpdate', '检查更新')}
+            />
           </>
         }
       />
 
       {/* 刷新失败保留旧缓存数据，仅在「从未有过任何结果」时才整屏报错；否则错误经 toast 提示（容器侧）。 */}
       {checkErrorMessage && !result && (
-        <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <AlertCircle className="mt-0.5 size-4 shrink-0" />
-          <span>{checkErrorMessage}</span>
-        </div>
+        <Alert variant="destructive">
+          <AlertCircle />
+          <AlertDescription>{checkErrorMessage}</AlertDescription>
+        </Alert>
       )}
 
       {/* 缓存为空且尚未拉到结果时的占位（首次进页且刷新未回时短暂可见）。 */}
@@ -1007,11 +1013,15 @@ export function SystemUpdatePageView({
         </div>
       )}
 
+      {/* 未配源是「警示」而非「失败」：原先手写 amber-500 硬编码色，
+          改用包内 warning 变体后着色统一走 --status-warning 令牌，明暗主题自适应。 */}
       {result && notConfigured && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
-          <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-600" />
-          <span>{t('systemUpdate.notConfigured', '未配置更新源（feed_url）。请在 control-plane.yml 的 update 段配置更新源后再检查更新。')}</span>
-        </div>
+        <Alert variant="warning">
+          <AlertCircle />
+          <AlertDescription>
+            {t('systemUpdate.notConfigured', '未配置更新源（feed_url）。请在 control-plane.yml 的 update 段配置更新源后再检查更新。')}
+          </AlertDescription>
+        </Alert>
       )}
 
       {/* 未配源也渲染当前版本（后端 CheckUpdate 无条件返回 CP+各节点版本，FR-110）；

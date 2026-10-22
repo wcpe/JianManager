@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next'
 import { Bot, ChevronRight, Gauge } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
@@ -227,7 +229,24 @@ export default function BotSegment({
                   notify={notify}
                 />
               ))}
-              <Pagination page={page} totalPages={totalPages} total={total} onChange={onPageChange} />
+              {/* 单页时只报总数：一对必然禁用的翻页按钮不传达任何信息（与替换前一致）。 */}
+              {totalPages <= 1 ? (
+                <p className="px-1 pt-1 text-xs text-muted-foreground">
+                  {t('bots.totalCount', { count: total })}
+                </p>
+              ) : (
+                <PaginationBar
+                  page={page}
+                  totalPages={totalPages}
+                  total={total}
+                  onChange={onPageChange}
+                  totalLabel={t('bots.totalCount', { count: total })}
+                  pageLabel={t('bots.pageOf', { page, totalPages })}
+                  prevLabel={t('bots.prevPage')}
+                  nextLabel={t('bots.nextPage')}
+                  className="px-1 pt-1"
+                />
+              )}
             </div>
           )}
         </Panel>
@@ -275,10 +294,11 @@ function SummaryCard({
   tone: 'neutral' | 'online' | 'connecting' | 'error'
 }) {
   return (
-    <div className="rounded-lg border bg-card px-4 py-3">
+    /* 概览卡：Card 只作外壳；标签与数值两段紧排、原 py-3 上下留白保留，故 gap-0。 */
+    <Card className="gap-0 px-4 py-3">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={cn('mt-1 text-2xl font-semibold tabular-nums', TONE_CLASS[tone])}>{value}</p>
-    </div>
+    </Card>
   )
 }
 
@@ -581,45 +601,6 @@ function BotBatchBar({
         }}
         onCancel={() => setConfirm(null)}
       />
-    </div>
-  )
-}
-
-/** 分页器：上一页/下一页 + 当前页/总页数 + 总数。 */
-function Pagination({
-  page,
-  totalPages,
-  total,
-  onChange,
-}: {
-  page: number
-  totalPages: number
-  total: number
-  onChange: (page: number) => void
-}) {
-  const { t } = useTranslation()
-  if (totalPages <= 1) {
-    return <p className="px-1 pt-1 text-xs text-muted-foreground">{t('bots.totalCount', { count: total })}</p>
-  }
-  return (
-    <div className="flex items-center justify-between px-1 pt-1">
-      <span className="text-xs text-muted-foreground">{t('bots.totalCount', { count: total })}</span>
-      <div className="flex items-center gap-2">
-        <Button size="xs" variant="outline" disabled={page <= 1} onClick={() => onChange(page - 1)}>
-          {t('bots.prevPage')}
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          {t('bots.pageOf', { page, totalPages })}
-        </span>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={page >= totalPages}
-          onClick={() => onChange(page + 1)}
-        >
-          {t('bots.nextPage')}
-        </Button>
-      </div>
     </div>
   )
 }

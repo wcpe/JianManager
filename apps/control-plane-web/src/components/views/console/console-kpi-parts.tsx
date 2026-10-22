@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 
 /**
  * 服务器控制台总览的 KPI 卡与派生纯函数（FR-269）。
@@ -10,7 +11,7 @@ import { cn } from '@jianmanager/ui'
 /** 总览 KPI 卡：图标 + 标签 + 等宽值 + 进度条（危险态着色）。 */
 export function KpiCard({ icon: Icon, label, value, sub, progress, danger }: { icon: LucideIcon; label: string; value: string; sub?: string; progress: number; danger?: boolean }) {
   return (
-    <div className="rounded-lg border bg-card p-2 shadow-soft">
+    <Card className="p-2">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[11px] text-muted-foreground">{label}</p>
@@ -22,7 +23,7 @@ export function KpiCard({ icon: Icon, label, value, sub, progress, danger }: { i
       <div className="mt-2 h-1.5 overflow-hidden rounded-sm bg-muted">
         <div className={cn('h-full rounded-sm', danger ? 'bg-status-danger' : progress > 80 ? 'bg-status-warning' : 'bg-primary')} style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} />
       </div>
-    </div>
+    </Card>
   )
 }
 

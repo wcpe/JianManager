@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowRightLeft, CircleCheck, HardDrive, MoreHorizontal, Pencil, Trash2, Zap } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Dialog,
@@ -28,6 +29,7 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { Progress } from '@jianmanager/ui/components/progress'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import {
   Table,
@@ -475,8 +477,9 @@ export function ArtifactStoragesPageView({
       />
 
       {/* 在途迁移进度卡（FR-348）：任务非终态时展示，轮询推进（启停规则归容器）；可强制停止（重新发起即续跑）。 */}
+      {/* 卡片底色取 subtle（页面壳内的次级卡片）；内部各段自带 space-y-2 节奏，故 Card 默认 gap 置零。 */}
       {migrationActive && migrationTask && (
-        <div className="rounded-lg border bg-card p-4 space-y-2">
+        <Card surface="subtle" className="p-4 space-y-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <span className="text-sm font-medium">
               {t('artifactStorages.migrate.inProgress', '存量迁移进行中 → {{name}}', { name: migrationInfo?.targetName ?? '' })}
@@ -490,19 +493,19 @@ export function ArtifactStoragesPageView({
               {t('artifactStorages.migrate.stop', '强制停止')}
             </Button>
           </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-primary transition-all"
-              style={{ width: `${Math.max(0, Math.min(100, migrationTask.progress))}%` }}
-            />
-          </div>
+          <Progress
+            className="h-1.5 bg-muted"
+            value={Math.max(0, Math.min(100, migrationTask.progress))}
+            aria-label={t('tasks.progress')}
+          />
           {migrationInfo && <p className="text-xs text-muted-foreground">{migCountersText}</p>}
-        </div>
+        </Card>
       )}
 
       {/* 上次迁移摘要（终态）：状态 + 四计数；有失败条时给失败明细入口（重试=重新发起）。 */}
+      {/* 上次迁移摘要卡：横排内容行，显式 flex-row 覆盖 Card 默认纵向堆叠。 */}
       {migrationTask && isTerminalTask(migrationTask) && migrationInfo && (
-        <div className="rounded-lg border bg-card px-4 py-3 flex items-center justify-between gap-3 flex-wrap text-sm">
+        <Card surface="subtle" className="flex-row items-center justify-between gap-3 flex-wrap px-4 py-3 text-sm">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">
               {t('artifactStorages.migrate.lastRun', '上次迁移 → {{name}}', { name: migrationInfo.targetName })}
@@ -521,7 +524,7 @@ export function ArtifactStoragesPageView({
               {t('artifactStorages.migrate.failures', '失败明细')}
             </Button>
           )}
-        </div>
+        </Card>
       )}
 
       {/* 方案 A「精工卡片」：页面标题 + 功能说明 + 主操作全部收进卡片头。 */}

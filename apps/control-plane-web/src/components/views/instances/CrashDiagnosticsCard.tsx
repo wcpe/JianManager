@@ -1,10 +1,11 @@
 /* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, Copy, FileWarning } from 'lucide-react'
+import { Copy, FileWarning } from 'lucide-react'
 
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { cn } from '@jianmanager/ui'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@jianmanager/ui/components/accordion'
 import type { CrashSnapshot, CrashTrend } from '@/lib/instances/crash'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
@@ -57,15 +58,6 @@ export default function CrashDiagnostics({ snapshots, trend, notify }: CrashDiag
   // 记录展开的快照 id 集合：允许同时展开多条对比（如连崩场景）。
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set())
 
-  const toggle = (id: number) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
   // 容器恒存在（testid 挂在此层）：快照是异步数据，若空态与列表各自是根节点，
   // 拿到的节点引用会在数据到达时被换掉，调用方（含测试）无法在同一容器内等待。
   return (
@@ -84,17 +76,25 @@ export default function CrashDiagnostics({ snapshots, trend, notify }: CrashDiag
             <span className="ml-auto font-normal text-muted-foreground">{t('serverConsole.crashKeepHint')}</span>
           </div>
           {trend && <CrashTrendPanel trend={trend} />}
-          <ul className="space-y-1.5 p-2">
+          {/*
+            快照列表是**同构的并列展开项**（每条一次崩溃，可同时展开多条做横向对比）——
+            这正是 Accordion type="multiple" 的形态（单开会逼着用户「展开一条先收起上一条」，
+            而 FR-470 的场景恰恰是连崩时对比不同根因）。
+            换原语的实质收益：每个触发器的 aria-expanded / aria-controls / region 关联由 Radix 维护，
+            展开态也不再是本组件自己维护的 Set（此前 expand 状态与 DOM 靠条件渲染手工同步）；
+            方向键在上/下条之间移动焦点、Enter/空格开合也一并获得。
+            `collapsible` 对 multiple 恒真（Radix 内建），故每条都能独立收起。
+          */}
+          <Accordion
+            type="multiple"
+            value={snapshots.filter((snap) => expanded.has(snap.id)).map((snap) => String(snap.id))}
+            onValueChange={(values) => setExpanded(new Set(values.map(Number)))}
+            className="space-y-1.5 p-2"
+          >
             {snapshots.map((snap) => (
-              <CrashSnapshotRow
-                key={snap.id}
-                snapshot={snap}
-                expanded={expanded.has(snap.id)}
-                onToggle={() => toggle(snap.id)}
-                notify={notify}
-              />
+              <CrashSnapshotItem key={snap.id} snapshot={snap} notify={notify} />
             ))}
-          </ul>
+          </Accordion>
         </>
       )}
     </div>
@@ -189,15 +189,11 @@ function RootCauseBadge({ cause, count }: { cause: string; count?: number }) {
   )
 }
 
-function CrashSnapshotRow({
+function CrashSnapshotItem({
   snapshot,
-  expanded,
-  onToggle,
   notify,
 }: {
   snapshot: CrashSnapshot
-  expanded: boolean
-  onToggle: () => void
   notify: CrashDiagnosticsNotice
 }) {
   const { t } = useTranslation()
@@ -224,13 +220,10 @@ function CrashSnapshotRow({
   }
 
   return (
-    <li className="rounded-md border bg-muted/50">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-2 text-left text-xs hover:bg-muted/80"
-      >
+    // 外观（圆角描边 + 弱底）留在 Item 上，Accordion 原语只负责行为与 aria 关联；
+    // 触发器内不再手写箭头——accordion.tsx 的 Trigger 自带旋转 chevron（data-state 驱动）。
+    <AccordionItem value={String(snapshot.id)} className="rounded-md border bg-muted/50 last:border-b">
+      <AccordionTrigger className="flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-2 text-left text-xs hover:bg-muted/80 hover:no-underline">
         <span className="font-mono text-muted-foreground">{new Date(snapshot.occurredAt).toLocaleString()}</span>
         {snapshot.rootCause && <RootCauseBadge cause={snapshot.rootCause} />}
         <span className="rounded-full bg-status-danger/10 px-2 py-0.5 font-mono font-medium text-status-danger">
@@ -244,50 +237,48 @@ function CrashSnapshotRow({
         <span className="font-mono text-muted-foreground">
           {t('serverConsole.crashDuration')} {formatCrashDuration(snapshot.durationMs)}
         </span>
-        <ChevronDown className={cn('ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
-      </button>
-      {expanded && (
-        <div className="space-y-2 border-t px-2.5 py-2">
-          {snapshot.confidence !== undefined && snapshot.confidence > 0 && (
-            <p className="text-meta text-muted-foreground">
-              {t('serverConsole.crashConfidence', { percent: Math.round(snapshot.confidence * 100) })}
-            </p>
-          )}
-          {evidence.length > 0 && (
-            <div data-testid="crash-evidence" className="space-y-0.5">
-              <div className="text-meta text-muted-foreground">{t('serverConsole.crashEvidence')}</div>
-              <ul className="space-y-0.5 rounded-sm bg-muted p-2">
-                {evidence.map((line, idx) => (
-                  <li key={`${idx}-${line}`} className="truncate font-mono text-meta text-foreground" title={line}>
-                    {line}
-                  </li>
-                ))}
-              </ul>
+      </AccordionTrigger>
+      {/* AccordionContent 的 className 落在其内层 div 上（见 accordion.tsx），故留白在这里给一次即可。 */}
+      <AccordionContent className="space-y-2 border-t px-2.5 py-2 pb-2">
+        {snapshot.confidence !== undefined && snapshot.confidence > 0 && (
+          <p className="text-meta text-muted-foreground">
+            {t('serverConsole.crashConfidence', { percent: Math.round(snapshot.confidence * 100) })}
+          </p>
+        )}
+        {evidence.length > 0 && (
+          <div data-testid="crash-evidence" className="space-y-0.5">
+            <div className="text-meta text-muted-foreground">{t('serverConsole.crashEvidence')}</div>
+            <ul className="space-y-0.5 rounded-sm bg-muted p-2">
+              {evidence.map((line, idx) => (
+                <li key={`${idx}-${line}`} className="truncate font-mono text-meta text-foreground" title={line}>
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {snapshot.correlation && <CrashCorrelationBlock correlation={snapshot.correlation} />}
+        {snapshot.tailOutput ? (
+          <>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void copySnapshot()}
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <Copy className="size-3" />
+                {t('serverConsole.crashCopy')}
+              </button>
             </div>
-          )}
-          {snapshot.correlation && <CrashCorrelationBlock correlation={snapshot.correlation} />}
-          {snapshot.tailOutput ? (
-            <>
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => void copySnapshot()}
-                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <Copy className="size-3" />
-                  {t('serverConsole.crashCopy')}
-                </button>
-              </div>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-meta leading-relaxed text-foreground">
-                {snapshot.tailOutput}
-              </pre>
-            </>
-          ) : (
-            <p className="text-xs text-muted-foreground">{t('serverConsole.crashNoOutput')}</p>
-          )}
-        </div>
-      )}
-    </li>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-sm bg-muted p-2 font-mono text-meta leading-relaxed text-foreground">
+              {snapshot.tailOutput}
+            </pre>
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('serverConsole.crashNoOutput')}</p>
+        )}
+      </AccordionContent>
+    </AccordionItem>
   )
 }
 

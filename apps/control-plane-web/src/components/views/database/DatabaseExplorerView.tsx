@@ -9,7 +9,7 @@ import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Database } from 'lucide-react'
 import type { DbTableInfo } from '@/lib/database/db-contracts'
-import { cn } from '@jianmanager/ui/lib/utils'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 
 /** 表选择与取数由应用容器维护，包内仅展示左侧表树和右侧内容。 */
 export interface DatabaseExplorerViewProps {
@@ -33,8 +33,11 @@ export function DatabaseExplorerView({
 
   return (
     <div className="flex min-h-0 flex-1 gap-4">
-      {/* 左：表树 */}
-      <aside className="flex w-56 shrink-0 flex-col rounded-lg border bg-card/40">
+      {/* 左：表树。
+          该容器是页面级导航陆标（<aside> 自带 complementary 语义），换成 Card 渲染的 div
+          会丢掉该语义，故保留元素、改取 Card 同源的表面常量：圆角/描边/底色仍由
+          packages/ui 一处决定（原 bg-card/40 → faint 档，成列出现的内联承载面）。 */}
+      <aside className={cn('flex w-56 shrink-0 flex-col', cardSurface, cardSurfaceTone.faint)}>
         <div className="flex items-center gap-2 border-b px-3 py-2 text-sm font-medium">
           <Database className="size-4" />
           <span>{t('database.tables')}</span>

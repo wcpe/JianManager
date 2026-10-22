@@ -35,7 +35,8 @@ function renderPanel(metrics?: Parameters<typeof ProcessPanel>[0]['metrics']) {
 /** 取某个统计卡的数值文本。 */
 function statValue(label: string): string {
   const panel = screen.getByTestId('process-panel')
-  const card = Array.from(panel.querySelectorAll('div.rounded-md')).find((d) => d.textContent?.startsWith(label))!
+  // 统计格已统一为组件库 Card；按 `data-slot` 定位（类名会随设计底座演进，槽位是稳定契约）。
+  const card = Array.from(panel.querySelectorAll('[data-slot="card"]')).find((d) => d.textContent?.startsWith(label))!
   return within(card as HTMLElement).getAllByText(/.+/).pop()!.textContent!.trim()
 }
 

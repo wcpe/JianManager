@@ -18,11 +18,16 @@
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Coffee, Cpu, Package, RefreshCw, SearchX, Trash2, Upload } from 'lucide-react'
+import { Coffee, Cpu, Package, SearchX, Trash2, Upload } from 'lucide-react'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Progress } from '@jianmanager/ui/components/progress'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
+import { Card } from '@jianmanager/ui/components/card'
 import { Input } from '@jianmanager/ui/components/input'
 import {
   Dialog,
@@ -281,11 +286,10 @@ export function RuntimeAssetsInstancePickerView({
               {instances.slice(range.start, range.end).map((inst) => (
                 <li key={inst.id} style={{ height: CANDIDATE_ROW_PX }}>
                   <label className="flex h-full cursor-pointer items-start gap-2 rounded p-2 hover:bg-muted/60">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       className="mt-1"
                       checked={selected.includes(inst.id)}
-                      onChange={(e) => onToggle(inst.id, e.target.checked)}
+                      onCheckedChange={(v) => onToggle(inst.id, v === true)}
                     />
                     <span className="min-w-0 text-sm">
                       <span className="block font-medium">{inst.name}</span>
@@ -417,10 +421,11 @@ export function RuntimeAssetsPageView({
 /** 一个汇总指标小卡（数字 + 标签）。 */
 function StatCard({ label, value, accent }: { label: string; value: ReactNode; accent?: boolean }) {
   return (
-    <div className="rounded-md border bg-card px-3 py-2">
+    // 汇总指标小卡：并列成排的轻量承载块 → faint 档；纵向节奏由内部两行自定，故 gap 置零。
+    <Card surface="faint" className="px-3 py-2">
       <div className={cn('text-lg font-bold tabular-nums', accent && 'text-primary')}>{value}</div>
       <div className="text-[11px] text-muted-foreground">{label}</div>
-    </div>
+    </Card>
   )
 }
 
@@ -464,10 +469,12 @@ function JDKSection({
               ? t('runtimeAssets.lastSync', { time: formatRelativeTime(syncedAt) })
               : t('runtimeAssets.neverSynced')}
           </span>
-          <Button variant="outline" size="sm" disabled={refreshing} onClick={onRefresh}>
-            <RefreshCw className={cn('size-4', refreshing && 'animate-spin')} />
-            {t('runtimeAssets.refresh')}
-          </Button>
+          <RefreshButton
+            variant="outline"
+            pending={refreshing}
+            onClick={onRefresh}
+            label={t('runtimeAssets.refresh')}
+          />
         </div>
       </div>
 
@@ -762,10 +769,9 @@ function AssetSection({
           ))}
         </div>
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={filter.onlyReferenced}
-            onChange={(e) => setFilter((f) => ({ ...f, onlyReferenced: e.target.checked }))}
+            onCheckedChange={(v) => setFilter((f) => ({ ...f, onlyReferenced: v === true }))}
           />
           {t('runtimeAssets.onlyReferenced')}
         </label>
@@ -890,16 +896,18 @@ function ImportAssetDialog({
         <ScrollableDialogBody className="space-y-3">
           <label className="block space-y-1 text-sm">
             <span className="font-medium">{t('runtimeAssets.importType')}</span>
-            <select
+            {/* 类型是固定枚举，但这里在表单里承担原生语义（label 包裹 + 受控），
+                且筛选条尺寸紧凑 → 用统一样式的 NativeSelect */}
+            <NativeSelect
               value={type}
               onChange={(e) => setType(e.target.value as AssetType)}
               disabled={importing}
-              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              className="w-full"
             >
               {IMPORTABLE_ASSET_TYPES.map((ty) => (
                 <option key={ty} value={ty}>{ty}</option>
               ))}
-            </select>
+            </NativeSelect>
           </label>
           <label className="block space-y-1 text-sm">
             <span className="font-medium">{t('runtimeAssets.importFile')}</span>
@@ -927,12 +935,11 @@ function ImportAssetDialog({
                 <span className="truncate">{file?.name}</span>
                 <span className="font-mono tabular-nums">{importPercent(progress.loaded, progress.total)}%</span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-primary transition-[width]"
-                  style={{ width: `${importPercent(progress.loaded, progress.total)}%` }}
-                />
-              </div>
+              <Progress
+                className="h-1.5 bg-muted"
+                value={importPercent(progress.loaded, progress.total)}
+                aria-label={t('runtimeAssets.importProgressLabel')}
+              />
             </div>
           )}
         </ScrollableDialogBody>
@@ -1157,11 +1164,10 @@ function PluginBatchDeployDialog({
             <div className="space-y-2 rounded border p-2">
               {pluginAssets.map((asset) => (
                 <label key={asset.id} className="flex cursor-pointer items-start gap-2 rounded p-2 hover:bg-muted/60">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     className="mt-1"
                     checked={selectedAssetIds.includes(asset.id)}
-                    onChange={(e) => toggleAsset(asset.id, e.target.checked)}
+                    onCheckedChange={(v) => toggleAsset(asset.id, v === true)}
                   />
                   <span className="min-w-0 text-sm">
                     <span className="block font-medium">{asset.name || asset.filename}</span>

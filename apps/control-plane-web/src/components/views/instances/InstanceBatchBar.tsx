@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Separator } from '@jianmanager/ui/components/separator'
 import { Layers } from 'lucide-react'
 import {
   Dialog,
@@ -159,7 +160,7 @@ export default function InstanceBatchBar({
         {t('instanceBatch.clear')}
       </Button>
 
-      <div className="mx-2 h-5 w-px bg-border" />
+      <Separator orientation="vertical" className="mx-2 h-5" />
 
       <Input
         value={command}
@@ -177,7 +178,7 @@ export default function InstanceBatchBar({
         {t('instanceBatch.command')}
       </Button>
 
-      <div className="mx-2 h-5 w-px bg-border" />
+      <Separator orientation="vertical" className="mx-2 h-5" />
 
       <Button
         variant="outline"
@@ -216,7 +217,7 @@ export default function InstanceBatchBar({
         {t('instanceBatch.kill')}
       </Button>
 
-      <div className="mx-2 h-5 w-px bg-border" />
+      <Separator orientation="vertical" className="mx-2 h-5" />
 
       {/* 集群级滚动/分批/灰度编排（FR-457）：打开策略对话框，不再一次性扇出。 */}
       <Button

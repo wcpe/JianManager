@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Boxes, Loader2, Play, RefreshCw, ShieldAlert } from 'lucide-react'
+import { Boxes, Loader2, Play, ShieldAlert } from 'lucide-react'
 
 import { Button } from '@jianmanager/ui/components/button'
+import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { cn } from '@jianmanager/ui'
@@ -127,16 +128,16 @@ export default function BusinessSegment({
           <h3 className="text-sm font-semibold">{t('business.title')}</h3>
           <p className="truncate text-xs text-muted-foreground">{t('business.subtitle')}</p>
         </div>
-        <Button
-          size="sm"
+        {/* 刷新按钮改用包内原语：在途旋转 + 禁用由 `pending` 统一表达。
+            胶囊外观与紧凑高度是本处特有诉求，故用 className 覆盖（原 h-7 rounded-full px-3 保留）。 */}
+        <RefreshButton
           variant="outline"
-          className="ml-auto h-7 rounded-full px-3 text-xs"
+          iconSize="size-3.5"
+          pending={manifestRefreshing}
           onClick={onRefreshManifest}
-          disabled={manifestRefreshing}
-        >
-          <RefreshCw className={cn('mr-1 size-3.5', manifestRefreshing && 'animate-spin')} />
-          {t('business.refresh')}
-        </Button>
+          label={t('business.refresh')}
+          className="ml-auto h-7 rounded-full px-3 text-xs"
+        />
       </div>
 
       {manifestLoading && (

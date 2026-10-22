@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Wrench } from 'lucide-react'
 
 import DangerConfirm from '@/components/views/common/DangerConfirm'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@jianmanager/ui/components/alert'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
@@ -132,32 +133,37 @@ export function RuntimeDriftBanner({
   const { t } = useTranslation()
 
   return (
-    <div
-      role="alert"
+    // 三列栅格（图标 / 文案 / 动作）：Alert 默认两列，而「接管」按钮必须留在文案右侧——
+    // 控制台是固定视口的信息密集布局，把动作排到文案下方会平白多占一行高。
+    <Alert
+      variant="warning"
       data-testid="runtime-drift-banner"
-      className="flex items-start gap-2 rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning"
+      className="has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr_auto] px-3 py-2 text-xs"
     >
-      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className="font-semibold">{t('serverConsole.runtimeDriftTitle')}</p>
-        <p className="mt-0.5 break-words">{t('serverConsole.runtimeDriftDesc', { pid })}</p>
+      <AlertTriangle />
+      {/* AlertTitle 默认 line-clamp-1：本标题是诊断结论，窄视口/长语种下被截断会丢失语义，故放开。 */}
+      <AlertTitle className="line-clamp-none font-semibold">{t('serverConsole.runtimeDriftTitle')}</AlertTitle>
+      <AlertDescription className="gap-0.5 text-xs">
+        <p className="break-words">{t('serverConsole.runtimeDriftDesc', { pid })}</p>
         {/* 命令行摘要：常是判断「这是不是我们那台服」的关键证据，可换行完整展示。 */}
         {cmdline && (
-          <p className="mt-0.5 break-all font-mono text-meta opacity-90">
+          <p className="break-all font-mono text-meta opacity-90">
             {t('serverConsole.runtimeDriftCmdline')}
             {': '}
             {cmdline}
           </p>
         )}
-      </div>
-      <RuntimeDriftAdoptButton
-        instanceName={instanceName}
-        pid={pid}
-        canOperate={canOperate}
-        adopting={adopting}
-        onAdopt={onAdopt}
-        className="shrink-0"
-      />
-    </div>
+      </AlertDescription>
+      <AlertAction className="col-start-3 row-start-1 mt-0">
+        <RuntimeDriftAdoptButton
+          instanceName={instanceName}
+          pid={pid}
+          canOperate={canOperate}
+          adopting={adopting}
+          onAdopt={onAdopt}
+          className="shrink-0"
+        />
+      </AlertAction>
+    </Alert>
   )
 }

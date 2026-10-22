@@ -241,7 +241,8 @@ describe('NodesPage（mock 假后端）', () => {
     expect(searchPageSize).toBe('12')
 
     // 切换对比指标（TPS→MSPT）仍是单条批量查询，不回退 N 条逐实例请求。
-    await user.click(await screen.findByRole('button', { name: 'MSPT' }))
+    // 指标档位已收敛为分段控件（Segments/Segment）：是 role=tab，不再是 button。
+    await user.click(await screen.findByRole('tab', { name: 'MSPT' }))
     await waitFor(() => expect(batchCount).toBe(2))
   })
 

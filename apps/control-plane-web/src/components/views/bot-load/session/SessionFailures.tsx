@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { FAILURE_CATEGORIES } from '@/lib/bot-load/bot-load-filters'
 import type { BotLoadFailure } from '@/lib/bot-load/bot-load-types'
@@ -68,7 +71,15 @@ export function SessionFailures({
           <button
             key={cat}
             type="button"
-            className={`rounded-lg border p-3 text-left transition-colors ${filter.category === cat ? 'border-primary bg-primary/5' : 'bg-card hover:bg-accent/50'}`}
+            // 失败分类筛选片是整块可点击的 <button>（自带 button 语义与键盘行为），换成 Card 的 div
+            // 会退回 div 语义；故保留元素、改取 Card 同源的表面常量（未选中态为 solid 档）。
+            className={cn(
+              cardSurface,
+              'p-3 text-left transition-colors',
+              filter.category === cat
+                ? 'border-primary bg-primary/5'
+                : cn(cardSurfaceTone.solid, 'hover:bg-accent/50'),
+            )}
             onClick={() => onFilterChange({ category: filter.category === cat ? undefined : cat, page: 1 })}
           >
             <div className="text-xs text-muted-foreground">{t(`botLoad.failureCategory.${cat}`)}</div>
@@ -113,13 +124,12 @@ export function SessionFailures({
             {items.map((f) => (
               <TableRow key={f.id}>
                 <TableCell>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={f.botUuid ? selected.has(f.botUuid) : false}
                     disabled={!f.botUuid}
                     // 读屏需要知道勾的是哪个 Bot（行内还有时间/类别/错误码，光看「复选框」无从判断）。
                     aria-label={f.botUuid ?? f.id}
-                    onChange={() => {
+                    onCheckedChange={() => {
                       if (!f.botUuid) return
                       const uuid = f.botUuid
                       setSelected((prev) => {
@@ -167,30 +177,17 @@ export function SessionFailures({
         </Table>
       </div>
 
-      <div className="flex justify-between text-xs text-muted-foreground">
-        <span>{t('botLoad.totalCount', { count: total })}</span>
-        <div className="flex gap-2">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={filter.page <= 1}
-            onClick={() => onFilterChange({ page: filter.page - 1 })}
-          >
-            {t('bots.prevPage')}
-          </Button>
-          <span>
-            {filter.page}/{totalPages}
-          </span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={filter.page >= totalPages}
-            onClick={() => onFilterChange({ page: filter.page + 1 })}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={filter.page}
+        totalPages={totalPages}
+        total={total}
+        onChange={(next) => onFilterChange({ page: next })}
+        totalLabel={t('botLoad.totalCount', { count: total })}
+        // 此处原文案是裸「页码/总页数」（无「第…页」包装），PaginationBar 默认拼接与之等价。
+        prevLabel={t('bots.prevPage')}
+        nextLabel={t('bots.nextPage')}
+        className="text-xs"
+      />
 
       <FailureTraceDrawer failure={trace} open={trace != null} onOpenChange={(o) => !o && setTrace(null)} />
     </div>

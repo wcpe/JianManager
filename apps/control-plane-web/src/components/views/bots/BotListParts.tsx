@@ -11,8 +11,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import { Card } from '@jianmanager/ui/components/card'
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { BotHealthBar } from '@/components/views/console/BotHealthBar'
 import type { BotInfo } from '@/lib/bots/bot'
 import type { BotStatusCounts } from '@/lib/bots/bot-list'
@@ -34,30 +36,35 @@ export function SummaryCards({
   byStatus?: Record<string, number>
 }) {
   const { t } = useTranslation()
+  // `tone` 驱动数值语义色（中性/成功/警告/危险），与全站状态色板同源。
   const cards = [
-    { key: 'total', label: t('bots.total'), value: counts.total, color: 'text-foreground' },
-    { key: 'online', label: t('bots.online'), value: counts.online, color: 'text-status-success' },
-    { key: 'connecting', label: t('bots.connecting'), value: counts.connecting, color: 'text-status-warning' },
-    { key: 'error', label: t('bots.abnormal'), value: counts.error, color: 'text-status-danger' },
+    { key: 'total', label: t('bots.total'), value: counts.total, tone: 'default' as const },
+    { key: 'online', label: t('bots.online'), value: counts.online, tone: 'success' as const },
+    { key: 'connecting', label: t('bots.connecting'), value: counts.connecting, tone: 'warning' as const },
+    { key: 'error', label: t('bots.abnormal'), value: counts.error, tone: 'danger' as const },
   ]
   return (
     <div className="mb-4 space-y-3">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {cards.map((card) => (
-          <div key={card.key} className="rounded-xl border bg-card p-4 shadow-soft">
-            <p className="text-sm text-muted-foreground">{card.label}</p>
-            <p className={cn('mt-1 text-2xl font-bold tabular-nums', card.color)}>{loading ? '—' : card.value}</p>
-            {card.key === 'total' && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t('bots.distribution', { instances: dist.instances, nodes: dist.nodes })}
-              </p>
-            )}
-          </div>
+          <StatCard
+            key={card.key}
+            label={card.label}
+            value={loading ? '—' : card.value}
+            valueTone={card.tone}
+            sub={
+              card.key === 'total'
+                ? t('bots.distribution', { instances: dist.instances, nodes: dist.nodes })
+                : undefined
+            }
+            // 与网格一致的呼吸感：StatCard 默认 py-2.5 偏紧，概览卡给到 py-4。
+            className="px-4 py-4"
+          />
         ))}
       </div>
       {/* 舰队健康条（FR-147）：按全局 byStatus 多段着色 connected/connecting/error/stopped */}
       {fleetTotal > 0 && (
-        <div className="rounded-xl border bg-card p-3 shadow-soft">
+        <Card className="gap-2 px-3 py-3">
           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
             <span>{t('bots.fleetHealth')}</span>
             <LegendDot className="bg-status-success" label={t('bots.statusKind.online')} />
@@ -66,7 +73,7 @@ export function SummaryCards({
             <LegendDot className="bg-muted-foreground/40" label={t('bots.status_stopped')} />
           </div>
           <BotHealthBar total={fleetTotal} online={counts.online} byStatus={byStatus} />
-        </div>
+        </Card>
       )}
     </div>
   )

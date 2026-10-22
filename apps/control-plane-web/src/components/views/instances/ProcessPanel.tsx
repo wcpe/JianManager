@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Cpu, Gauge, MemoryStick, Timer, Waypoints } from 'lucide-react'
 
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Card } from '@jianmanager/ui/components/card'
 import { cn } from '@jianmanager/ui'
 
 /** 进程指标（本组件所需的最小结构；外壳传 API 返回项会结构兼容）。 */
@@ -75,13 +76,14 @@ function ProcessStat({
   tone?: 'warn'
 }) {
   return (
-    <div className="rounded-md border bg-card p-2">
+    /* 统计格：Card 只作外壳；格内是两段紧排文本（标签 + 数值，靠 mt-1 控距），故 gap-0。 */
+    <Card className="gap-0 p-2">
       <div className="flex items-center gap-1.5 text-muted-foreground">
         <Icon className="size-3.5 shrink-0" />
         <span>{label}</span>
       </div>
       <p className={cn('mt-1 font-mono text-sm font-semibold tabular-nums', tone === 'warn' && 'text-status-warning')}>{value}</p>
-    </div>
+    </Card>
   )
 }
 

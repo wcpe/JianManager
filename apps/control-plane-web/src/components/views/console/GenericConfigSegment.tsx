@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FileCog, FileText } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 import { Panel } from '@jianmanager/ui/components/panel'
 
 /** 发现的配置文件条目（容器经 useConfigDiscover 取数）。 */
@@ -79,13 +80,13 @@ export function GenericConfigSegment({ files, isLoading = false, renderEditor }:
           </div>
         </Panel>
 
-        <div className="flex min-h-[320px] min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card shadow-soft">
+        <Card className="min-h-[320px] min-w-0 flex-1 overflow-hidden py-0">
           {active ? (
             renderEditor({ path: active, onClose: () => setSelected(null) })
           ) : (
             <p className="p-4 text-xs text-muted-foreground">{t('config2.selectHint')}</p>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   )

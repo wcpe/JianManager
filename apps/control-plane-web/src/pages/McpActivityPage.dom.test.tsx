@@ -35,8 +35,13 @@ const ACTIVITY_URL = '/agent/mcp/activity'
 // 测试仍会绿而线上显示的是 '168h0m0s'。
 // 注意：请求侧断言（params.window）仍是入参原样 '24h' / '168h'，不要跟着改成 duration 形态。
 
-/** 统计窗口档位按钮所在分组（分组名取自 i18n 的 mcpActivity.window）。 */
-const windowGroup = () => screen.getByRole('group', { name: /统计窗口|Window/ })
+/**
+ * 统计窗口档位控件（轨道名取自 i18n 的 mcpActivity.window）。
+ *
+ * 档位已收敛为分段控件（Segments/Segment）：轨道是 role=tablist，每档是 role=tab，
+ * 因此不再按 `group` 取容器、也不再有 `aria-pressed`（选中态改由 `aria-selected` 表达）。
+ */
+const windowSegments = () => screen.getByRole('tablist', { name: /统计窗口|Window/ })
 
 // 档位值原样进 URL 的 window 参数，后端按 Go duration 解析并限定 1h~168h。
 // 这层契约单测必须自己兜住：否则「加一档 + 补 i18n」就能让测试全绿，只在真机被 400 拒绝
@@ -124,7 +129,7 @@ describe('McpActivityPage（DOM）', () => {
     expect(screen.getByText(/claude-code ×120/)).toBeInTheDocument()
     // 默认窗口 24h 且请求带上 window 参数
     expect(mockedApi.get).toHaveBeenCalledWith(ACTIVITY_URL, { params: { window: '24h' } })
-    expect(screen.getByRole('button', { name: '24 小时' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('tab', { name: '24 小时' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('切换窗口后按新窗口重新请求', async () => {
@@ -133,15 +138,15 @@ describe('McpActivityPage（DOM）', () => {
 
     const user = userEvent.setup()
     renderWithProviders(<McpActivityPage />)
-    // 档位按钮文案来自 i18n（键名与档位值同名），这里按分组内顺序定位第二档，
+    // 档位按钮文案来自 i18n（键名与档位值同名），这里按轨道内顺序定位第二档，
     // 免得断言绑死在文案上。
-    const presets = within(windowGroup()).getAllByRole('button')
+    const presets = within(windowSegments()).getAllByRole('tab')
     await user.click(presets[1])
 
     await waitFor(() => {
       expect(mockedApi.get).toHaveBeenCalledWith(ACTIVITY_URL, { params: { window: '168h' } })
     })
-    expect(presets[1]).toHaveAttribute('aria-pressed', 'true')
+    expect(presets[1]).toHaveAttribute('aria-selected', 'true')
   })
 
   describe('窗口档位与后端可解析性契约', () => {

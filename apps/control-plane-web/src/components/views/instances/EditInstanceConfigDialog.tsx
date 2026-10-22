@@ -14,6 +14,7 @@ import {
 import { Button } from '@jianmanager/ui/components/button'
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { Switch } from '@jianmanager/ui/components/switch'
 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type EditInstanceConfigNotice = (kind: 'success' | 'error', message: string) => void
@@ -107,10 +108,14 @@ export default function EditInstanceConfigDialog({
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{t('instances.jdkBindingHint')}</p>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={restart} onChange={(e) => setRestart(e.target.checked)} />
-              {t('instanceDetail.autoRestart')}
-            </label>
+            <div className="flex items-center gap-2 text-sm">
+              {/* 开关语义（启用/禁用）用 Switch；标签用 id + aria-labelledby 关联，
+                  不再依赖 label 包裹——Radix Switch 渲染的是 button，包在 label 里点文字不会翻转。 */}
+              <Switch id="edit-instance-auto-restart" checked={restart} onCheckedChange={setRestart} />
+              <label htmlFor="edit-instance-auto-restart" className="cursor-pointer">
+                {t('instanceDetail.autoRestart')}
+              </label>
+            </div>
           </ScrollableDialogBody>
           <DialogFooter className="pt-4">
             <Button type="button" variant="outline" onClick={onClose}>

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Copy, Download, FolderOpen, Loader2, Package, PackageCheck, Pencil, Coffee, Search, Trash2 } from 'lucide-react'
+import { Copy, Download, FolderOpen, Package, PackageCheck, Pencil, Coffee, Search, Trash2 } from 'lucide-react'
+import { Card } from '@jianmanager/ui/components/card'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -9,6 +10,8 @@ import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Spinner } from '@jianmanager/ui/components/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@jianmanager/ui/components/tooltip'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
@@ -324,7 +327,7 @@ export default function NodeJDKPanel({
           {/* 同步反馈（FIX-5）：登记后 / 打开面板时列表从节点同步（GET /jdks 的 syncFromWorker）显式提示，不再静默「卡住无反馈」。 */}
           {isFetching && !isLoading && (
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" />
+              <Spinner size="xs" />
               {t('nodes.jdkSyncing')}
             </p>
           )}
@@ -367,9 +370,10 @@ export default function NodeJDKPanel({
           ) : view === 'list' ? (
             <div className="space-y-2">
               {filteredJdks.map((j) => (
-                <div
+                /* 列表行：Card 只作统一外壳（圆角/描边/底色/阴影），行内布局与 hover 涂层原样保留。 */
+                <Card
                   key={j.id}
-                  className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5 transition-colors hover:bg-muted/40"
+                  className="flex-row items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/40"
                 >
                   <div
                     className={cn(
@@ -389,15 +393,20 @@ export default function NodeJDKPanel({
                         <span className="text-xs text-muted-foreground">{[j.version, j.arch].filter(Boolean).join(' · ')}</span>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      className="mt-0.5 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
-                      title={j.path}
-                      onClick={() => void copyPath(j.path)}
-                    >
-                      <span className="truncate">{j.path}</span>
-                      <Copy className="size-3 shrink-0" />
-                    </button>
+                    {/* 路径被 truncate 截断时，完整路径靠 Tooltip 呈现（原来是原生 title） */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="mt-0.5 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+                          onClick={() => void copyPath(j.path)}
+                        >
+                          <span className="truncate">{j.path}</span>
+                          <Copy className="size-3 shrink-0" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>{j.path}</TooltipContent>
+                    </Tooltip>
                   </div>
                   {sourceBadge(j.managed)}
                   <button
@@ -416,13 +425,14 @@ export default function NodeJDKPanel({
                   >
                     <Trash2 className="size-4" />
                   </button>
-                </div>
+                </Card>
               ))}
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               {filteredJdks.map((j) => (
-                <div key={j.id} className="rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40">
+                /* 网格卡片：内部各行自带 mt-* 节奏，故把 Card 默认的 gap-4 归零，保持原纵向间距。 */
+                <Card key={j.id} className="gap-0 p-3 transition-colors hover:bg-muted/40">
                   <div className="mb-2.5 flex items-center gap-2.5">
                     <div
                       className={cn(
@@ -476,7 +486,7 @@ export default function NodeJDKPanel({
                     <span className="truncate">{j.path}</span>
                     <Copy className="size-3 shrink-0" />
                   </button>
-                </div>
+                </Card>
               ))}
             </div>
           )}
@@ -566,7 +576,7 @@ export default function NodeJDKPanel({
                 {t('artifactCache.browse', '浏览')}
               </Button>
               <Button type="button" variant="outline" size="sm" disabled={!pathInput.trim() || probing} onClick={() => void runProbe(pathInput.trim())}>
-                {probing ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+                {probing ? <Spinner size="sm" /> : <Search className="size-3.5" />}
                 {t('nodes.jdkDetect', '检测')}
               </Button>
             </div>
@@ -584,6 +594,11 @@ export default function NodeJDKPanel({
                 <ProbeRow label={t('nodes.jdkArch')} value={probed.arch} />
               </dl>
             ) : (
+              // 【为什么不用 Alert】这是**字段级校验反馈**，不是页面级提示条：它紧贴在路径输入框下方，
+              // 描述"你刚填的这格不行"。同类字段错误在全仓的标准形态是 FieldError 的 `text-xs text-destructive`
+              // 纯文字，这里已属加强版。若换成 Alert destructive 档，底色会从 bg-destructive/5 变成 bg-card、
+              // 描边从红变灰——在表单内部反而更像"普通说明块"，醒目度是降级。
+              // `/5` 淡底是刻意的：校验错误常在输入过程中反复出现，满浓度红底会持续闪烁式干扰。
               <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {t('nodes.jdkProbeInvalid', '所选目录不是有效的 JDK')}{probed.error ? `: ${probed.error}` : ''}
               </p>

@@ -10,11 +10,13 @@
  */
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, Ban, Loader2, Wifi } from 'lucide-react'
+import { ChevronRight, Ban, Wifi } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Alert, AlertDescription } from '@jianmanager/ui/components/alert'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Progress } from '@jianmanager/ui/components/progress'
 import {
   Select,
   SelectContent,
@@ -29,7 +31,9 @@ import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/tasks/task-status'
 import type { Task, TaskLog, TaskState } from '@/lib/tasks/task-status'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { mergeMeasuredRowHeights } from '@/lib/shared/row-heights'
-import { cn } from '@jianmanager/ui'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
+import { Spinner } from '@jianmanager/ui/components/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@jianmanager/ui/components/tooltip'
 
 /** 任务状态 → Badge 变体与文案键。 */
 const STATE_META: Record<TaskState, { variant: 'default' | 'secondary' | 'destructive' | 'outline'; key: string }> = {
@@ -81,7 +85,9 @@ const MAX_LOG_LINES = 500
 /** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
 const FALLBACK_VIEWPORT_PX = 640
 /** 详情里网络失败引导的两个链接入口统一样式（原页两处字面量相同，抽一处避免分叉）。 */
-const DETAIL_LINK_CLASS = 'font-medium underline underline-offset-2 hover:text-amber-800 dark:hover:text-amber-300'
+// 原先 hover 写死 amber-800/amber-300，与所在的 warning 告警条同属"暖色系但不同源"的色板分裂；
+// 改为跟随父级 currentColor 的不透明度变化，链接颜色完全由 Alert 的 status-warning 决定。
+const DETAIL_LINK_CLASS = 'font-medium underline underline-offset-2 hover:opacity-80'
 
 /**
  * 任务中心筛选条件（受控）。
@@ -516,17 +522,26 @@ function CancelTaskButton({ task, canceling, onCancelTask }: {
   const label = t('tasks.forceStop', '强制停止')
   return (
     <>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 px-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
-        disabled={canceling || task.cancelRequested}
-        onClick={() => setConfirm(true)}
-        aria-label={label}
-        title={label}
-      >
-        {canceling ? <Loader2 className="size-3.5 animate-spin" /> : <Ban className="size-3.5" />}
-      </Button>
+      {/* 图标按钮的纯文字提示 → Tooltip（Provider 由应用根统一提供；禁用态不弹由
+          Radix 语义决定——Buttton 的 disabled 会让触发器不触发悬停，与原 title 的观感差异
+          仅在「禁用时不再提示」，而禁用原因已由行内文案说明） */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            disabled={canceling || task.cancelRequested}
+            onClick={() => setConfirm(true)}
+            aria-label={label}
+          >
+            {canceling ? <Spinner size="sm" /> : <Ban className="size-3.5" />}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+      {/* 危险确认框的触发元素是被 Tooltip 包住的按钮，故放在 Tooltip 之外、
+          与它同级——保持原 DOM 顺序（按钮 → 对话框）不变 */}
       <DangerConfirm
         open={confirm}
         title={t('tasks.forceStopTitle', '强制停止任务?')}
@@ -566,19 +581,16 @@ function ProgressBar({
   const shown = terminal && !failed ? 100 : pct
   return (
     <div className="flex items-center gap-2">
-      <div
-        className="h-1.5 w-28 overflow-hidden rounded-full bg-muted"
-        role="progressbar"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
+      {/* 视觉宽度与播报值在原实现里是分开算的（失败时条拉满、播报仍取实际完成度），
+          故 `value` 给视觉宽度、`aria-valuenow` 单独覆盖成 shown，保持两者口径不变。
+          Radix 还会按 `value` 生成 aria-valuetext，这里显式清掉，避免读屏优先念它。 */}
+      <Progress
+        className={cn('h-1.5 w-28 bg-muted', failed && '[&_[data-slot=progress-indicator]]:bg-destructive')}
+        value={failed ? 100 : pct}
         aria-valuenow={shown}
-      >
-        <div
-          className={cn('h-full rounded-full transition-all', failed ? 'bg-destructive' : 'bg-primary')}
-          style={{ width: `${failed ? 100 : pct}%` }}
-        />
-      </div>
+        aria-valuetext={undefined}
+        aria-label={label}
+      />
       <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">{shown}%</span>
     </div>
   )
@@ -609,16 +621,35 @@ function TaskDetail({ error, detail, renderLink }: {
       {error && (
         <div>
           <p className="mb-1 text-[11px] font-medium text-destructive">{t('tasks.error')}</p>
-          <pre className="overflow-x-auto rounded-md border border-destructive/40 bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all text-destructive">
+          {/* 代码展示块保留 <pre> 元素（承空白折叠与等宽语义，换成 Card 的 div 需手写
+              whitespace-pre-wrap/font-mono 手工复刻），只把表面样式换成 Card 同源常量：
+              圆角/描边/底色/阴影由 packages/ui 一处决定。 */}
+          <pre
+            className={cn(
+              cardSurface,
+              cardSurfaceTone.solid,
+              'overflow-x-auto border-destructive/40 p-2 font-mono text-[11px] whitespace-pre-wrap break-all text-destructive',
+            )}
+          >
             {error}
           </pre>
           {isNetworkDownloadFailure(error) && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+            // 网络失败引导：原为手写 `border-amber-500/40 bg-amber-500/10` + `text-amber-700 dark:text-amber-400`，
+            // 是全仓唯一绕开 --status-warning 状态色板的告警条（其余同类提示都走语义色）。
+            // 换 Alert 的 warning 档后色板归一，明暗主题由令牌自适应，本地不再有 dark: 分支。
+            //
+            // 两个跳转链接留在 AlertDescription 内（不用 AlertAction）：原布局是「图标 + 文案 + 链接」挤在一行、
+            // 窄了才换行，放进独立的 AlertAction 槽会无条件多占一行。此处以 flex-wrap 复刻原排布，
+            // DOM 顺序仍是「图标 → 说明 → 代理入口 → 镜像入口」，即朗读顺序与视觉顺序一致。
+            // 内边距压到 px-2.5 py-2：这一段嵌在失败详情里，与上方 <pre> 同尺寸才不突兀。
+            <Alert variant="warning" className="mt-1.5 px-2.5 py-2 text-[11px]">
               <Wifi className="size-3.5 shrink-0" />
-              <span>{t('tasks.networkFailureHint', '出站网络不可达：下载源疑似被墙或超时。可配置出站代理或更换下载镜像源后重试。')}</span>
-              {link('/settings', t('tasks.networkFailureProxyLink', '去配置出站代理'))}
-              {link('/runtime-assets', t('tasks.networkFailureMirrorLink', '更换下载源/镜像'))}
-            </div>
+              <AlertDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                <span>{t('tasks.networkFailureHint', '出站网络不可达：下载源疑似被墙或超时。可配置出站代理或更换下载镜像源后重试。')}</span>
+                {link('/settings', t('tasks.networkFailureProxyLink', '去配置出站代理'))}
+                {link('/runtime-assets', t('tasks.networkFailureMirrorLink', '更换下载源/镜像'))}
+              </AlertDescription>
+            </Alert>
           )}
         </div>
       )}
@@ -636,7 +667,14 @@ function TaskDetail({ error, detail, renderLink }: {
                 {t('instances.loadedOfTotal', { loaded: visibleLogs.length, total: logs.length })}
               </p>
             )}
-            <pre className="max-h-64 overflow-auto rounded-md border bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
+            {/* 同上：日志代码块保留 <pre>，表面样式取 Card 同源常量（原 bg-card → solid 档）。 */}
+            <pre
+              className={cn(
+                cardSurface,
+                cardSurfaceTone.solid,
+                'max-h-64 overflow-auto p-2 font-mono text-[11px] whitespace-pre-wrap break-all text-foreground',
+              )}
+            >
               {visibleLogs.map((l) => l.line).join('\n')}
             </pre>
           </>

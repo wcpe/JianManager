@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import {
   Select,
   SelectContent,
@@ -218,23 +219,17 @@ export function BotGroupPeek({ items, total, isLoading = false, page, onPage, on
           <PeekRow key={bot.id} bot={bot} onOpen={() => onOpenBot(bot.id)} />
         ))}
       </ul>
-      <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-        <span>{t('bots.peekTotal', { total: count })}</span>
-        <div className="flex items-center gap-2">
-          <Button size="xs" variant="ghost" disabled={page <= 1} onClick={() => onPage(Math.max(1, page - 1))}>
-            {t('bots.prevPage')}
-          </Button>
-          <span>{t('bots.pageOf', { page, totalPages })}</span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page >= totalPages}
-            onClick={() => onPage(Math.min(totalPages, page + 1))}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
+      <PaginationBar
+        page={page}
+        totalPages={totalPages}
+        total={count}
+        onChange={onPage}
+        totalLabel={t('bots.peekTotal', { total: count })}
+        pageLabel={t('bots.pageOf', { page, totalPages })}
+        prevLabel={t('bots.prevPage')}
+        nextLabel={t('bots.nextPage')}
+        className="mt-2 text-xs"
+      />
     </div>
   )
 }

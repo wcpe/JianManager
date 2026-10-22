@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, GripVertical, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { useDebounced } from '@/lib/hooks/use-debounced'
@@ -327,14 +328,17 @@ function InstanceLibraryRow({
           selected ? 'bg-primary/10' : 'hover:bg-accent/50',
         )}
       >
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggleSelect}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={t('superWorkbench.selectInstance', { name: instance.name })}
-          className="size-3.5 shrink-0 accent-primary"
-        />
+        {/* 列表多选 → 组件库 Checkbox。
+            原实现在 checkbox 上 stopPropagation，防止点勾选同时触发行自身的拖拽/选中；
+            Radix 把点击交给内部 button 承载，故把拦截放在包裹层上，行为与原来一致。 */}
+        <span onClick={(e) => e.stopPropagation()} className="inline-flex">
+          <Checkbox
+            checked={selected}
+            onCheckedChange={() => onToggleSelect()}
+            aria-label={t('superWorkbench.selectInstance', { name: instance.name })}
+            className="size-3.5 shrink-0"
+          />
+        </span>
         <button
           type="button"
           onClick={onToggleExpand}

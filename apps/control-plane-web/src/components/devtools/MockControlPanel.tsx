@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { Bug, Database, Gauge, Minimize2, RefreshCw, RotateCcw, ScrollText, Timer } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { Slider } from '@jianmanager/ui/components/slider'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { setMockRequestLog } from '@jianmanager/devmock/browser'
 import {
   MOCK_DATA_SCALES,
@@ -157,7 +159,10 @@ export function MockControlPanel(): ReactElement {
     <aside
       data-testid="mock-control-panel"
       aria-label="Mock 调试面板"
-      className={`${PANEL_ANCHOR} w-80 rounded-lg border border-border bg-card p-3 text-card-foreground shadow-lg`}
+      // 该面板是浮动调层（固定定位、shadow-lg 浮层级），不属于页面内容层的卡片；
+      // 且元素是 <aside>（complementary 语义），换成 Card 的 div 会丢语义。
+      // 因此保留元素与浮层阴影，只把圆角/描边/卡片底换成 Card 同源常量（原 bg-card → solid 档）。
+      className={cn(PANEL_ANCHOR, cardSurface, cardSurfaceTone.solid, 'w-80 p-3 shadow-lg')}
     >
       <header className="mb-2 flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 text-xs font-semibold">
@@ -216,17 +221,22 @@ export function MockControlPanel(): ReactElement {
             </Button>
           ))}
         </div>
-        <input
-          type="range"
+        {/*
+          组件库 Slider 取代原生 range：原注释担心「自定义外观在明暗/五套主题下都要重调」，
+          但那是针对**手写** range 的顾虑——Slider 的轨道/已填充段/拇指全部取语义 token
+          （bg-muted / bg-primary / border-primary / bg-background），主题切换由 token 解析承担，
+          不存在逐主题重调。原生 range 反而有两个实打实的缺陷：`accent-primary` 只影响
+          Chromium 的默认滑块，Firefox/Safari 外观不可控；且 `step=50` 的取值只能靠键盘微调，
+          没有「拖到哪了」的可读反馈（Radix 拇指自带 aria-valuenow/valuetext）。
+        */}
+        <Slider
           min={0}
           max={MOCK_LATENCY_MAX}
           step={50}
-          value={latency}
+          value={[latency]}
           data-testid="mock-latency-range"
           aria-label="接口延迟（毫秒）"
-          // 原生 range 只取 accent-primary 上色，其余交给语义 token：自定义外观在明暗/五套主题下都要重调，不划算
-          className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary"
-          onChange={(event) => applyLatency(Number(event.target.value))}
+          onValueChange={([next]) => applyLatency(next ?? 0)}
         />
       </section>
 

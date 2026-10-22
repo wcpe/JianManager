@@ -110,14 +110,19 @@ describe('DirectorSceneStrip（FR-168 导播台缩略图条受控视图）', () 
   })
 
   it('并发上限滑块显示「已预热/上限」并回传新值。', async () => {
+    const user = userEvent.setup()
     const { onLimitChange } = renderStrip()
     const slider = screen.getByRole('slider', { name: '并发上限' })
-    expect(slider).toHaveValue('3')
+    // Slider 的拇指是 span（非原生 input），当前值由 aria-valuenow 表达。
+    expect(slider).toHaveAttribute('aria-valuenow', '3')
     expect(screen.getByText('2/3')).toBeInTheDocument()
 
-    // 滑块 range 值直接改（userEvent 对 range 输入支持有限）。
-    const { fireEvent } = await import('@testing-library/react')
-    fireEvent.change(slider, { target: { value: '5' } })
-    expect(onLimitChange).toHaveBeenCalledWith(5)
+    // step=1：方向键右 +1。受控视图下 machine.limit 由 props 决定，故一次按键回传 4。
+    slider.focus()
+    await user.keyboard('{ArrowRight}')
+    expect(onLimitChange).toHaveBeenLastCalledWith(4)
+    // End 直接到上界（MAX_PREHEAT_LIMIT=6），验证区间约束随 props 生效。
+    await user.keyboard('{End}')
+    expect(onLimitChange).toHaveBeenLastCalledWith(6)
   })
 })

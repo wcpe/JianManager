@@ -17,6 +17,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Input } from '@jianmanager/ui/components/input'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PaginationBar } from '@jianmanager/ui/components/pagination'
 import { Panel } from '@jianmanager/ui/components/panel'
 import {
   Select,
@@ -512,26 +513,18 @@ export function AlertEventsTabView({
       </Panel>
 
       {total > 0 && (
-        <div className="flex items-center justify-end gap-3 text-sm text-muted-foreground">
-          <span>{t('alerts.totalEvents', { count: total })}</span>
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={page <= 1}
-            onClick={() => onFilterChange({ ...filter, page: page - 1 })}
-          >
-            {t('alerts.prevPage')}
-          </Button>
-          <span>{t('alerts.pageOf', { page, total: totalPages })}</span>
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={page >= totalPages}
-            onClick={() => onFilterChange({ ...filter, page: page + 1 })}
-          >
-            {t('alerts.nextPage')}
-          </Button>
-        </div>
+        // 翻页只换 UI：页码仍由 filter.page 持有，改动照旧经 onFilterChange 上报（夹取由 PaginationBar 负责）。
+        <PaginationBar
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          onChange={(next) => onFilterChange({ ...filter, page: next })}
+          totalLabel={t('alerts.totalEvents', { count: total })}
+          pageLabel={t('alerts.pageOf', { page, total: totalPages })}
+          prevLabel={t('alerts.prevPage')}
+          nextLabel={t('alerts.nextPage')}
+          className="justify-end gap-3 text-sm"
+        />
       )}
     </div>
   )

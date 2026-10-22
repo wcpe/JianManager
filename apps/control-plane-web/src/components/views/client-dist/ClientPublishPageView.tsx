@@ -32,7 +32,9 @@ import {
 } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { Card } from '@jianmanager/ui/components/card'
+import { PageHeader, PageShell, Segment, Segments } from '@jianmanager/ui/components/layout'
+import { Progress } from '@jianmanager/ui/components/progress'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import FileExplorer from '@/components/views/explorer/FileExplorer'
@@ -510,7 +512,9 @@ export function ClientPublishPageView({
 
       <PublishStepIndicator step={step} />
 
-      <div className="rounded-xl border bg-card/40 p-5 space-y-4">
+      {/* 发布向导主工作区卡片：嵌套在页面壳内承载步骤内容，原 bg-card/40 → surface="faint"。
+          内部各 step 自带 space-y 节奏，故 Card 默认 gap 置零。 */}
+      <Card surface="faint" className="p-5 space-y-4">
         {step === 'files' && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
@@ -693,7 +697,7 @@ export function ClientPublishPageView({
             {progress && <UploadProgressBar progress={progress} onCancel={cancelUpload} />}
           </div>
         )}
-      </div>
+      </Card>
 
       <div className="flex items-center justify-between gap-2">
         <Button variant="outline" disabled={publishing} onClick={() => (step === 'files' ? attemptCancel() : onStepChange(prevStep(step)))}>
@@ -812,9 +816,7 @@ export function UploadProgressBar({ progress, onCancel }: UploadProgressBarProps
           </button>
         </span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${pct}%` }} />
-      </div>
+      <Progress className="h-1.5 w-full bg-muted" value={pct} aria-label={t('tasks.progress')} />
     </div>
   )
 }
@@ -825,26 +827,18 @@ export interface ReviewViewToggleProps {
   onChange: (v: 'structure' | 'preview') => void
 }
 
-/** 预览步骤的结构 / 内容预览视图切换（分段按钮，FR-214）。 */
+/** 预览步骤的结构 / 内容预览视图切换（分段控件，FR-214）。 */
 export function ReviewViewToggle({ view, onChange }: ReviewViewToggleProps) {
   const { t } = useTranslation()
   return (
-    <div className="inline-flex rounded-lg border p-0.5 text-xs">
-      <button
-        type="button"
-        className={cn('rounded-md px-2.5 py-1 transition-colors', view === 'structure' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
-        onClick={() => onChange('structure')}
-      >
+    <Segments aria-label={t('clientVersions.view')}>
+      <Segment active={view === 'structure'} onClick={() => onChange('structure')}>
         {t('clientVersions.viewStructure', '结构')}
-      </button>
-      <button
-        type="button"
-        className={cn('rounded-md px-2.5 py-1 transition-colors', view === 'preview' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
-        onClick={() => onChange('preview')}
-      >
+      </Segment>
+      <Segment active={view === 'preview'} onClick={() => onChange('preview')}>
         {t('clientVersions.viewPreview', '预览')}
-      </button>
-    </div>
+      </Segment>
+    </Segments>
   )
 }
 

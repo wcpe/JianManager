@@ -2,6 +2,7 @@ import { memo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { GripVertical, Maximize2, Minimize2, X } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
+import { Card } from '@jianmanager/ui/components/card'
 
 /**
  * 统一卡壳（FR-166）：grip 拖拽手柄 + 实例·功能标签 + 全屏 + 关闭，内嵌卡内容。
@@ -55,9 +56,15 @@ function WorkspaceCardImpl({
   const { t } = useTranslation()
 
   return (
-    <div
+    /*
+      卡壳只把「圆角/描边/底色/阴影」交给 Card；卡头 / 卡体 两段的自有布局原样保留：
+      卡头自带分隔线与 px-2 py-1.5、卡体 `min-h-0 flex-1 overflow-hidden` 承载终端/编辑器，
+      故把 Card 默认的 py-4 / gap-4 归零，避免撑高卡头与卡体、破坏网格行高与全屏铺满。
+      拖拽手柄（grip）与全屏/关闭交互仍在 children 里，未改动。
+    */
+    <Card
       data-card-id={cardId}
-      className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card text-card-foreground shadow-soft"
+      className="h-full min-h-0 gap-0 overflow-hidden py-0"
     >
       <div className="flex shrink-0 items-center gap-1.5 border-b px-2 py-1.5">
         {/* grip 拖拽手柄：仅此处可发起拖拽（draggableHandle）；只读卡（导播台）不显。 */}
@@ -108,7 +115,7 @@ function WorkspaceCardImpl({
       <div className="min-h-0 flex-1 overflow-hidden">
         {bodySlot}
       </div>
-    </div>
+    </Card>
   )
 }
 

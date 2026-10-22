@@ -3,13 +3,15 @@ import { useTranslation } from 'react-i18next'
 import { ArrowRight, Check, DownloadCloud, Plus } from 'lucide-react'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { Card } from '@jianmanager/ui/components/card'
 import { deriveReadiness, readinessCompletedCount } from '@/lib/client-dist/client-readiness'
 import type { ClientChannel } from '@/lib/client-dist/client-channel-types'
 /** 空状态大引导卡：说明用途 + 主 CTA「创建第一个分发频道」。 */
 export function EmptyChannelsGuide({ onCreate }: { onCreate: () => void }) {
   const { t } = useTranslation()
   return (
-    <div className="rounded-xl border border-dashed bg-card/40 p-10 text-center flex flex-col items-center gap-4">
+    // 虚线描边是空状态的语义（非实体容器），故用 className 覆盖 Card 的实线 border
+    <Card surface="faint" className="border-dashed p-10 text-center items-center gap-4">
       <span className="grid size-14 place-items-center rounded-full bg-primary/10 text-primary">
         <DownloadCloud className="size-7" />
       </span>
@@ -25,7 +27,7 @@ export function EmptyChannelsGuide({ onCreate }: { onCreate: () => void }) {
       <Button onClick={onCreate} size="lg">
         <Plus className="size-4" /> {t('clientChannels.createFirst', '创建分发频道')}
       </Button>
-    </div>
+    </Card>
   )
 }
 
@@ -40,10 +42,20 @@ export function ChannelCard({ channel, onOpen }: { channel: ClientChannel; onOpe
   const ready = completed === steps.length
 
   return (
-    <button
-      type="button"
+    // 整块可点击卡片 → Card 的 interactive（hover 抬升 + 焦点环）；额外 hover 涂层沿用原值。
+    // 语义：原为 <button>，Card 渲染 div，故补 role/tabIndex 与 Enter/Space 键处理保持键盘可达。
+    <Card
+      interactive
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="group text-left rounded-xl border bg-card/40 p-4 transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+      className="group cursor-pointer p-4 hover:bg-accent/40"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -76,6 +88,6 @@ export function ChannelCard({ channel, onOpen }: { channel: ClientChannel; onOpe
           </span>
         )}
       </div>
-    </button>
+    </Card>
   )
 }

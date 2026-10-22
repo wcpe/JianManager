@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
 import { useTranslation } from 'react-i18next'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { RangePicker, type MetricRange } from '@jianmanager/ui/charts/RangePicker'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import { formatFileSize } from '@/lib/shared/format-file-size'
@@ -60,18 +61,15 @@ export function NodeInstanceCompare({
     <Panel
       title={t('nodes.instanceCompare')}
       actions={
-        <div className="inline-flex rounded-md border p-0.5">
+        // 轨道名复用面板既有标题键：本分段切换的正是「对比哪个实例指标」。
+        // `role=tablist` 需要可达名，否则读屏只念「标签页列表」。
+        <Segments aria-label={t('nodes.instanceCompare')}>
           {COMPARE_METRICS.map((m) => (
-            <button
-              key={m.key}
-              type="button"
-              onClick={() => onMetricChange(m.key)}
-              className={`rounded px-2 py-0.5 text-xs ${metric === m.key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-            >
+            <Segment key={m.key} active={metric === m.key} onClick={() => onMetricChange(m.key)}>
               {t(m.labelKey)}
-            </button>
+            </Segment>
           ))}
-        </div>
+        </Segments>
       }
     >
       {total > COMPARE_TARGET_CAP && (

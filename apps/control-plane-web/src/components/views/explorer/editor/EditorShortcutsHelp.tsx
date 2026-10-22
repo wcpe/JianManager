@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Keyboard } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { Kbd } from '@jianmanager/ui/components/kbd'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -42,9 +43,8 @@ export default function EditorShortcutsHelp() {
               className="flex items-center justify-between gap-3 rounded px-2 py-1 text-xs"
             >
               <span className="truncate">{r.label}</span>
-              <kbd className="shrink-0 rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-                {r.keys}
-              </kbd>
+              {/* 快捷键组合用等宽字体更易分辨，其余外观由 Kbd 统一。 */}
+              <Kbd className="border font-mono">{r.keys}</Kbd>
             </div>
           ))}
         </div>

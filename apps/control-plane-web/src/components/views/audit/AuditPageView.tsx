@@ -24,7 +24,7 @@ import { formatAuditDetail } from '@/lib/audit/audit-filters'
 import type { AuditFilterState } from '@/lib/audit/audit-filters'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { mergeMeasuredRowHeights } from '@/lib/shared/row-heights'
-import { cn } from '@jianmanager/ui'
+import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 
 /**
  * Combobox 用空串表示「未选」，无法承载一个可点选的「全部」项，故另设哨兵。
@@ -473,7 +473,15 @@ function AuditRow({
             </>
           )}
           <p className="mb-1 text-[11px] font-medium text-muted-foreground">{t('audit.detail')}</p>
-          <pre className="overflow-x-auto rounded-md border bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
+          {/* 代码展示块保留 <pre>（承空白折叠与等宽语义），表面样式取 Card 同源常量：
+              圆角/描边/底色/阴影由 packages/ui 一处决定（原 bg-card → solid 档）。 */}
+          <pre
+            className={cn(
+              cardSurface,
+              cardSurfaceTone.solid,
+              'overflow-x-auto p-2 font-mono text-[11px] whitespace-pre-wrap break-all text-foreground',
+            )}
+          >
             {detail}
           </pre>
         </div>

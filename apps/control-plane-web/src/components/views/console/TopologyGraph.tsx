@@ -12,6 +12,8 @@ import { buildTopology, groupTopologyByDimension, layoutTopologyGrouped } from '
 import type { LaidBand, LaidNode, ProxyRegistrations, TopoInstanceInput } from '@/lib/networks/topology'
 import { instanceStatusLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 import { cn } from '@jianmanager/ui'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 
 /** 拓扑节点盒尺寸（像素）。 */
 const NODE_W = 168
@@ -281,30 +283,32 @@ export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, o
           />
         </div>
         <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-          <input type="checkbox" checked={onlyMatch} onChange={(e) => setOnlyMatch(e.target.checked)} className="size-3.5" />
+          <Checkbox checked={onlyMatch} onCheckedChange={(v) => setOnlyMatch(v === true)} className="size-3.5" />
           {t('networks.topoOnlyMatch', { defaultValue: 'Only matches' })}
         </label>
-        {/* 层级维度选择器（FR-453）：与列表页共用 GroupDimension，默认 region 两级。 */}
+        {/* 层级维度选择器（FR-453）：与列表页共用 GroupDimension，默认 region 两级。
+            4 项固定枚举，但位于页头工具栏的紧凑行内 → 用样式统一、语义原生的 NativeSelect。 */}
         <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           {t('networks.topoLayer', { defaultValue: 'Layer' })}
-          <select
+          <NativeSelect
             value={dim}
             onChange={(e) => setDim(e.target.value as GroupDimension)}
             aria-label={t('networks.topoLayer', { defaultValue: 'Layer' })}
             data-testid="topology-dimension"
-            className="h-7 rounded-md border bg-background px-1.5 text-xs"
+            size="sm"
+            className="w-auto text-xs"
           >
             {GROUP_DIMENSIONS.map((d) => (
               <option key={d} value={d}>
                 {t(`grouping.dim_${d}`)}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <span className="mx-1 h-4 w-px bg-border" aria-hidden />
         <StatusFilterPills active={activeStatus} onToggle={toggleStatus} t={t} />
         <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-          <input type="checkbox" checked={showDisabled} onChange={(e) => setShowDisabled(e.target.checked)} className="size-3.5" />
+          <Checkbox checked={showDisabled} onCheckedChange={(v) => setShowDisabled(v === true)} className="size-3.5" />
           {t('networks.topoShowDisabled', { defaultValue: 'Disabled links' })}
         </label>
       </div>

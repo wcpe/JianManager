@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Box } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Card } from '@jianmanager/ui/components/card'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { nodeStatusLevel } from '@/lib/nodes/node-list'
@@ -121,16 +122,26 @@ export function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; inst
   const statusLabel = node.maintenance ? t('nodes.maintenance') : online ? t('nodes.online') : t('nodes.offline')
 
   return (
-    <button
-      type="button"
+    /* 整块可点击卡片 → Card 的 interactive（hover 抬升 + 焦点环）；额外 hover 涂层沿用原值。
+       语义：原为 <button>，Card 渲染 div，故补 role/tabIndex 与 Enter/Space 键处理保持键盘可达。 */
+    <Card
+      interactive
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
       // 整张卡片是一个按钮，若不指定可访问名，读屏会把卡片里的全部文本（名 / host /
       // 核数 / 内存 / 实例数 / 三项水位）串成一长串念出来；而且那串里含「在线」与数字，
       // 会与状态 chip 的正则断言互相干扰（实测触发 strict mode 冲突）。
       // 收敛为「节点名 + 状态」——状态 chip 已是页面级的概览，卡片这里表达的是「这台怎么样」。
       aria-label={`${node.name} ${statusLabel}`}
       className={cn(
-        'flex flex-col gap-2 rounded-lg border bg-card p-3 text-left shadow-soft transition-colors hover:bg-accent/40',
+        'cursor-pointer gap-2 p-3 text-left transition-colors hover:bg-accent/40',
         !online && 'opacity-70',
       )}
     >
@@ -163,7 +174,7 @@ export function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; inst
         <RowUsage label={t('nodes.memory')} pct={(node.memoryUsage ?? 0) * 100} online={online} />
         <RowUsage label={t('nodes.disk')} pct={(node.diskUsage ?? 0) * 100} online={online} />
       </div>
-    </button>
+    </Card>
   )
 }
 

@@ -12,6 +12,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Download } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import type { ClientPullKey } from '@/lib/client-dist/client-channel-types'
 import { formatFileSize } from '@/lib/shared/format-file-size'
@@ -206,8 +207,10 @@ export function ClientIntegrationGuideView({
         </p>
         <label className="flex flex-col gap-1 mt-2">
           <span className="text-xs text-muted-foreground">{t('clientGuide.keySelectLabel', '选择拉取密钥')}</span>
-          <select
-            className="border rounded px-2 py-1 text-sm bg-background"
+          // 密钥候选来自后端（数量不受控），且选项里带 disabled 项 →
+          // 原生下拉语义更贴切，用统一样式的 NativeSelect 而非 Radix Select。
+          <NativeSelect
+            className="w-auto"
             value={selectedKeyId}
             onChange={(e) => onSelectKey(e.target.value)}
             disabled={revealing}
@@ -218,7 +221,7 @@ export function ClientIntegrationGuideView({
                 {key.name} · {key.keyPrefix}…{key.expiresAt ? '' : ` · ${t('clientChannels.neverExpires', '永不过期')}`}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         {selectedKey && revealedKeyPlaintext && (
           <p className="text-xs text-status-success">

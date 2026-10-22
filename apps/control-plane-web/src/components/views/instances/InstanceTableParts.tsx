@@ -95,8 +95,10 @@ export function InstanceTableHeader({
   /** 可见的可选列（列设置）；缺省全开。固定列（勾选/名称/节点:端口/状态/操作）不受影响。 */
   visibleColumns?: ReadonlySet<InstanceOptionalColumn>
 }) {
+  // 表头是「列的定义」，应当比数据行更轻、比组头更淡：`bg-muted/50` 与组头的 `bg-muted/80`
+  // 只差一档，滚动起来两者糊成一片。改为近乎底色 + 上缘一条实线，靠**线**而不是**块**分隔。
   return (
-    <TableHeader className="bg-muted/50">
+    <TableHeader className="border-t border-border/70 bg-muted/25">
       <TableRow>
         <TableHead className="w-10">
           <Checkbox

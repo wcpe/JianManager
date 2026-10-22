@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
-import { Loader2, CheckCircle2, XCircle, Wifi } from 'lucide-react'
+import { CheckCircle2, XCircle, Wifi } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import { Spinner } from '@jianmanager/ui/components/spinner'
 
 /** 节点存活探测结果（本组件所需的最小结构；外壳传 API 返回项会结构兼容）。 */
 export interface PingResultView {
@@ -35,7 +36,7 @@ export function PingNodeButton({ result, pending = false, isError = false, onPin
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" variant="outline" onClick={onPing} disabled={pending}>
-        {pending ? <Loader2 className="size-4 animate-spin" /> : <Wifi className="size-4" />}
+        {pending ? <Spinner /> : <Wifi className="size-4" />}
         {t('diagnostics.testNode', '测试节点存活')}
       </Button>
       {!pending && res && (

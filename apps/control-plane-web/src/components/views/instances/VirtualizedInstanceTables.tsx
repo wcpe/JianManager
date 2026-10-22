@@ -2,13 +2,13 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { Badge } from '@jianmanager/ui/components/badge'
 import {
   Table,
   TableBody,
   TableCell,
   TableRow,
 } from '@jianmanager/ui/components/table'
+import { Card } from '@jianmanager/ui/components/card'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { INSTANCE_EXPANDED_ROW_HEIGHT, INSTANCE_ROW_HEIGHT } from '@/components/views/instances/InstanceRowView'
 import { memberHealth } from '@/lib/networks/topology'
@@ -22,10 +22,19 @@ export const SCROLL_KEY_PREFIX = 'jm.instances.scroll:'
  * 分组头行高（px）：与实例行同样是**导出常量 = 行盒行内 style** 的「声明值即真实值」，
  * 供逐行 `sizes` 与分组头行共用。
  *
- * 数值依据（实测）：分组头单元格内容 = 折叠按钮（`size-5` = 20）+ `py-2`（16）= 36，
- * 行高取其上的 44（`h-11` 的旧值），实测行盒恰为 44。
+ * 【为什么分两档】顶层是横幅（有底色、上下留白），子层是轻量标签行（无底色、更紧凑）。
+ * 两档高度差本身就是层级信号之一——若都用 44，层级只能靠颜色表达，弱到看不出区别。
+ * 这也是虚拟化必须知道的事：`sizes` 逐行按 depth 取值，与行盒行内 style 严格同源，
+ * 否则组头一高一矮会让滚动位置逐段漂移。
  */
-export const INSTANCE_GROUP_ROW_HEIGHT = 44
+export const INSTANCE_GROUP_ROW_HEIGHT = 48
+/** 子层（小区 / 子组）组头行高：比顶层矮一档，视觉上明确「挂在上面那一条横幅下」。 */
+export const INSTANCE_SUBGROUP_ROW_HEIGHT = 34
+
+/** 按层级取组头行高（顶层横幅 / 子层标签行）。 */
+export function groupRowHeight(depth: number): number {
+  return depth === 0 ? INSTANCE_GROUP_ROW_HEIGHT : INSTANCE_SUBGROUP_ROW_HEIGHT
+}
 
 /**
  * 逐行高度模型（变高虚拟窗口）：与行盒的行内 style 同源——组头用组头常量、
@@ -238,8 +247,36 @@ export function InstanceGroupHeaderContent({
   onToggle: () => void
 }) {
   const { t } = useTranslation()
+  const isTop = depth === 0
+  /*
+    【为什么重做第二遍】上一版给两层都加了层级徽标（「大区」「小区」）+ 竖向色条 + 计数，
+    结果三层（r1 / z1 / z2）长得几乎一样，都是一行 44px 的等高块：
+    用户读到的不是「大区里有小区」，而是「三个并列的路由条目」——反而更乱。
+
+    根因是**三层同构**：层级靠装饰（颜色深浅、字号 1px）区分，而结构完全一样。
+    这次改成**两种形态**，让层级由结构本身表达：
+
+    - **顶层（大区 / 类型）= 横幅**：占满整行、有底色与上下留白，
+      是这一段的「大标题」；它把下面的内容**包起来**，而不是与它们并列。
+    - **子层（小区 / 服组）= 轻量标签行**：无底色、无边框，只有缩进 + 左侧细引导线 +
+      小三角，读者一眼就知道「这是上面那条横幅的一部分」。
+
+    这样即使不看文字，光凭「有底色 vs 无底色」就能分出层级。
+  */
   return (
-    <div className="flex items-center gap-2" style={{ paddingLeft: depth * 16 }}>
+    <div
+      className={
+        isTop
+          ? // 顶层：横向铺开，靠底色与字重立住「段标题」的身份。
+            'flex min-w-0 items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5 ring-1 ring-border/60 ring-inset'
+          : // 子层：无底色，只有缩进与引导线，视觉上挂在顶层下面。
+            'flex min-w-0 items-center gap-1.5 py-0.5'
+      }
+      style={isTop ? undefined : { paddingLeft: 10 + (depth - 1) * 18 }}
+    >
+      {/* 子层加一条竖向引导线，把「从属关系」画出来；顶层不需要。 */}
+      {!isTop && <span aria-hidden="true" className="h-3 w-px shrink-0 bg-border" />}
+
       <button
         type="button"
         onClick={onToggle}
@@ -250,12 +287,46 @@ export function InstanceGroupHeaderContent({
             : t('grouping.collapseGroup', { name: label })
         }
         data-testid="instances-group-toggle"
-        className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className={
+          isTop
+            ? 'inline-flex size-5 shrink-0 items-center justify-center rounded text-foreground/70 transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40'
+            : 'inline-flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40'
+        }
       >
-        {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+        {collapsed ? (
+          <ChevronRight className={isTop ? 'size-3.5' : 'size-3'} />
+        ) : (
+          <ChevronDown className={isTop ? 'size-3.5' : 'size-3'} />
+        )}
       </button>
-      <span className="text-sm font-medium">{label}</span>
-      <Badge variant="outline" className="font-normal">{count}</Badge>
+
+      {/*
+        名字与计数的排布也分两档：
+        - 顶层：名字在前、计数紧随，字重 600 / 13px；
+        - 子层：12px / 500，计数用更淡的等宽数字。
+        刻意**不再放层级徽标**——层级已经由「有没有底色」表达了，
+        再加一枚「大区/小区」标签属于同一信息说两遍（上一版正是栽在这里）。
+      */}
+      <span
+        className={
+          isTop
+            ? 'truncate text-[13px] font-semibold tracking-tight text-foreground'
+            : 'truncate text-[12px] font-medium text-foreground/75'
+        }
+      >
+        {label}
+      </span>
+
+      <span
+        className={
+          isTop
+            ? 'shrink-0 rounded bg-background px-1.5 font-mono text-[10.5px] tabular-nums text-muted-foreground'
+            : 'shrink-0 font-mono text-[10.5px] tabular-nums text-muted-foreground/60'
+        }
+      >
+        {count}
+      </span>
+
       <GroupHealthBand health={health} />
     </div>
   )
@@ -304,7 +375,8 @@ export function VirtualizedGroupedInstanceTable({
       // index 由虚拟窗口按 [0, rows.length) 给出，故 row 恒存在；判空只为收窄类型，
       // 兜底取实例行常量，与平铺表的「越界项按实例行占位」同判据。
       if (row === undefined) return INSTANCE_ROW_HEIGHT
-      if (row.kind === 'group') return INSTANCE_GROUP_ROW_HEIGHT
+      // 组头行高按层级取值（顶层横幅 / 子层标签行），与行盒行内 style 同源。
+      if (row.kind === 'group') return groupRowHeight(row.depth)
       return instanceRowHeight(isRowExpanded?.(row.instance) === true)
     },
     [isRowExpanded, rows],
@@ -335,12 +407,31 @@ export function VirtualizedGroupedInstanceTable({
   }, [onVisibleRangeChange, range.start, range.end])
 
   return (
-    <div
+    /*
+      虚拟化外壳：**只换外观，不碰几何**。
+      Card 自带 `flex flex-col gap-4 py-4`，其中 `gap`/`py` 会改变滚动容器的可滚动内容高度、
+      进而影响「视口高 → 可视行数」的推算，故这里用 `block`、`gap-0`、`py-0` 逐一还原成
+      「一个纯滚动块」：ref 仍挂在同一个 div 上、`flex-1` + `min-h-0` + `overflow-auto` 原样保留，
+      行高模型（逐行 sizes / 组头常量 / 占位行行内 style）完全不动。
+    */
+    <Card
       ref={containerRef}
       onScroll={handleScroll}
       data-testid="instances-table-virtual"
       data-total-count={totalCount}
-      className="max-h-[calc(100vh-20rem)] min-h-72 overflow-auto rounded-lg border bg-card/95 shadow-soft"
+      /*
+            高度策略：`flex-1` 吃掉父级剩余高度，而不是 `max-h-[calc(100vh-20rem)]` 猜出来的定值。
+
+            原写法按「视口高度减去 20rem」估算——20rem 是当时页面其他部分的高度。
+            但页面顶部多了 KPI 卡、工具栏改成卡片、间距也调过之后，这个常量就失准了：
+            实测表格容器 bottom 落在 1002px、视口只有 900px，**整块列表溢出屏幕 102px**，
+            用户必须滚动整页才能看到表格底部，而表格自己又内滚——两层滚动叠加，
+            这正是「看起来草台」的直接来源之一。
+
+            `flex-1` + `min-h-0` 让浏览器自己算：父链是 flex 列，剩余空间由布局决定，
+            以后再加工具栏或调整间距都不会把表格顶出视口。
+          */
+      className="block min-h-0 flex-1 gap-0 overflow-auto py-0"
     >
       <Table>
         {header}
@@ -358,10 +449,16 @@ export function VirtualizedGroupedInstanceTable({
               data-group-depth={row.depth}
               data-collapsed={row.collapsed ? 'true' : 'false'}
               // 组头行高写进行盒（不再用单元格的 `h-11`）：声明值与逐行 sizes 是同一个常量。
-              style={{ height: INSTANCE_GROUP_ROW_HEIGHT }}
-              className="sticky top-9 z-10 bg-muted/80 backdrop-blur"
+              style={{ height: groupRowHeight(row.depth) }}
+              /*
+                【组头不再用整块灰底】原来是 `bg-muted/80 + backdrop-blur`：一整行 44px 的灰条，
+                视觉上比表头还重，把「组」压成了「分隔条」，反而看不出它在承载一棵子树。
+                改成：底色只到 `bg-muted/40`（比表头更淡），下缘一条主色发丝线作为段的分界，
+                让组头读起来像「这一段的标题」而不是「一条横杠」。
+              */
+              className="sticky top-9 z-10 border-b border-primary/15 bg-muted/40 backdrop-blur"
             >
-              <TableCell colSpan={columnCount} className="px-4 py-2">
+              <TableCell colSpan={columnCount} className="px-4 py-1.5">
                 <InstanceGroupHeaderContent
                   label={row.label}
                   depth={row.depth}
@@ -390,7 +487,7 @@ export function VirtualizedGroupedInstanceTable({
           )}
         </TableBody>
       </Table>
-    </div>
+    </Card>
   )
 }
 
@@ -464,12 +561,25 @@ export function VirtualizedInstanceTable({
   }
 
   return (
-    <div
+    /* 外壳同 VirtualizedGroupedInstanceTable：只换外观不碰几何（block / gap-0 / py-0 还原纯滚动块）。 */
+    <Card
       ref={containerRef}
       onScroll={handleScroll}
       data-testid="instances-table-virtual"
       data-total-count={totalCount}
-      className="max-h-[calc(100vh-20rem)] min-h-72 overflow-auto rounded-lg border bg-card/95 shadow-soft"
+      /*
+            高度策略：`flex-1` 吃掉父级剩余高度，而不是 `max-h-[calc(100vh-20rem)]` 猜出来的定值。
+
+            原写法按「视口高度减去 20rem」估算——20rem 是当时页面其他部分的高度。
+            但页面顶部多了 KPI 卡、工具栏改成卡片、间距也调过之后，这个常量就失准了：
+            实测表格容器 bottom 落在 1002px、视口只有 900px，**整块列表溢出屏幕 102px**，
+            用户必须滚动整页才能看到表格底部，而表格自己又内滚——两层滚动叠加，
+            这正是「看起来草台」的直接来源之一。
+
+            `flex-1` + `min-h-0` 让浏览器自己算：父链是 flex 列，剩余空间由布局决定，
+            以后再加工具栏或调整间距都不会把表格顶出视口。
+          */
+      className="block min-h-0 flex-1 gap-0 overflow-auto py-0"
     >
       <Table>
         {header}
@@ -505,7 +615,7 @@ export function VirtualizedInstanceTable({
           )}
         </TableBody>
       </Table>
-    </div>
+    </Card>
   )
 }
 

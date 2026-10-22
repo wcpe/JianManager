@@ -13,6 +13,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import {
   Table,
   TableBody,
@@ -248,17 +249,17 @@ export function BackupsPageView({
           <>
             {/* 实例选择器由外壳注入：候选走服务端搜索，视图不持实例候选与查询状态。 */}
             {renderInstancePicker({ value: selected, onChange: onInstanceChange })}
-            <select
-              className="p-2 border rounded bg-background text-sm"
+            {/* 存储位置候选来自后端（数量随运维增长），不走 Radix Select 全量挂载；
+                用统一样式的 NativeSelect 保留原生语义，aria-label 保持原有读屏契约。 */}
+            <NativeSelect
+              className="w-auto"
               value={storageId ?? ''}
               onChange={(e) => setStorageId(e.target.value ? Number(e.target.value) : undefined)}
-              // 仅有 title 时可达名依赖 tooltip 提示；补显式 aria-label 让读屏稳定念出字段名。
-              title={t('backups.selectStorage', '存储位置')}
               aria-label={t('backups.selectStorage', '存储位置')}
             >
               <option value="">{t('backups.localStorage', '本地')}</option>
               {(storages ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            </NativeSelect>
             {hasInstance && (
               <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
             )}
