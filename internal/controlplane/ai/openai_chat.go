@@ -268,16 +268,18 @@ func buildChatMessages(req Request) []chatMessage {
 	return out
 }
 
-// upstreamError 把非 2xx 响应转成脱敏错误。
+// upstreamError 把非 2xx 响应转成**已分类且脱敏**的错误。
 //
-// 只回状态码与**截断后的**上游消息：上游错误体可能回显请求内容（含凭据回显、
-// 内部地址），不能原样透传进日志或 UI。
+// 只回状态码与**截断后的**上游消息：上游错误体可能回显请求内容（含我们自己发出去的
+// 密钥——"Incorrect API key provided: sk-xxx" 是常见形态），不能原样透传进日志或 UI。
+// 因此先按模式掩蔽疑似凭据，再截断；同时带上分类码，
+// 使配置页的「测试连接」能区分密钥错、限流与服务端故障。
 func upstreamError(resp *http.Response) error {
 	const limit = 512
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, limit))
-	msg := strings.TrimSpace(string(raw))
+	msg := RedactUpstreamBody(strings.TrimSpace(string(raw)))
 	if len(msg) > limit {
 		msg = msg[:limit] + "…"
 	}
-	return fmt.Errorf("上游返回 %d: %s", resp.StatusCode, msg)
+	return NewUpstreamError(ClassifyStatus(resp.StatusCode), resp.StatusCode, msg)
 }
