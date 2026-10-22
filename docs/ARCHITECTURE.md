@@ -220,6 +220,46 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 
 **与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388 / FR-395）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。
 
+### 4.1.2 内置 AI 助手与模型接入（FR-514 / ADR-105）
+
+助手**以纯 Go 在 CP 内实现**，不引入 Node.js 运行时、不接入外部 agent 框架。理由是它要读写的对象——
+实例、节点、配置、日志——全部位于 CP 内部 service 层，经 MCP 或 HTTP 回环转一圈只会增加延迟与失败面；
+而三进程模型的约束（ADR-064）针对的是「运行游戏服与探针」，与 CP 自身的进程内能力无关。
+
+**分层**：`internal/controlplane/ai/`（协议适配，无业务知识）→ `service/assistant.go`（配置 CRUD 与校验）
+→ `router/assistant.go`（HTTP 门面）→ `platform/httpclient/protected.go`（受保护出站）。
+协议适配器只把内部请求模型翻成厂商报文，并把 SSE 流还原成统一增量事件；它不碰数据库，也不决定用哪个模型。
+
+| 层 | 职责 | 关键约束 |
+|---|---|---|
+| `ai` | 三协议适配（`openai-chat` / `openai-responses` / `anthropic`） | 分帧、半截事件、`[DONE]`、错误体各自的差异在适配器内消化，不泄漏到上层 |
+| `service` | 供应商/模型/默认模型 CRUD、可用性解析 | 乐观并发 `version`；`(providerId, modelId)` 唯一；删除前后置校验 |
+| `router` | HTTP 契约、错误码映射 | 配置面仅 `IsPlatformAdmin`；摘要面对所有登录用户 |
+| `httpclient` | 出站请求构造 | 仅 `https`，拒 userinfo/query/fragment |
+
+**两个必须记住的陷阱**（都已用测试钉住）：
+
+- `requirePlatformAdmin(c)` **名字误导**——它只校验 `node.manage` 业务权限节点。用它守 AI 配置面，
+  等于把「改写模型端点」的权力交给任何持该节点的运维，而改端点即可把全部对话内容导向自建服务。
+  AI 配置一律走 `UserAccess.IsPlatformAdmin`。
+- `KeyEncryptor` 为 `nil` 时 `Encrypt` 返回**空串且不报错**。调用方若不做显式拦截，「已保存凭据」
+  会静默变成空值，直到第一次调用模型才以 401 的形式暴露，且现场无任何线索。
+
+**凭据生命周期**：模式三态 `none` / `env` / `stored`。`env` 只在数据库里存**变量名**
+（须匹配 `JIANMANAGER_ASSISTANT_[A-Z0-9_]{1,64}`），值由运行环境提供；`stored` 存 AES-256-GCM 密文，
+与既有拉取密钥共用同一主密钥域。响应永不含密文，也不含明文，只有 `hasCredential` 布尔。
+编辑时凭据三态（省略=保留 / 非空=替换 / `clearCredential`=清除并降级为 `none`），因此改显示名不会丢密钥。
+
+**引用完整性**：供应商下仍有模型时**拒绝删除而不级联**——级联会让一批模型在没有提示的情况下消失。
+删除默认模型在同事务内清空指针；**停用不清指针**（停用可恢复，删除不可），但可用性解析会在
+「模型停用」或「其供应商停用」时把该行排除在摘要之外，并在默认模型不可用时让 `defaultModelId`
+回 `null`，而不是指向一个调不通的模型。
+
+**与既有 MCP 网关的关系**：本轮**不改** `/api/v1/mcp` 契约。该端点只认 `jmat_` Agent Token，
+人类 JWT 依然不能充当 MCP 凭据（`AgentOrJWT` 中间件目前只有注释、无实现）。
+助手对业务工具的受限委托需要一个**用户委托执行器**（以登录用户身份、在用户权限内、经逐调用确认执行），
+属 FR-515/516 范畴。首批只提供配置面与协议适配，**不宣称助手可用**。
+
 ### 4.2 Bot 目标实例与执行节点（FR-351 / ADR-074）
 
 `Bot.InstanceID` 始终表示被测目标实例，也是权限、指标与可选 ServerProbe 观测的归属；`Bot.ExecutorNodeID` 表示实际运行 Mineflayer 的 Worker。所有 Bot 创建、删除、停止、行为、命令、状态刷新与事件订阅统一经 `BotExecutorResolver` 解析：`ExecutorNodeID` 非空时优先，否则回退 `Instance.NodeID`，既有普通 Bot 与 V1 压测会话保持兼容；`WorkerID` 仅用于兼容展示，不作路由真源。
@@ -725,6 +765,8 @@ Notification ──N:1──▶ User (user_id, 收件人)    # V2 FR-183（站�
 AlertRule ──1:N──▶ AlertEvent
 AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON 软引用, FR-085 通知路由)
 QQGatewayConnection ──1:N──▶ QQDiscoveredGroup  # FR-495（逻辑归属 source_app_id → app_id，无硬外键；通道存 openid 字符串副本，删群不级联）
+AssistantProvider ──1:N──▶ AssistantModel        # FR-514（(provider_id, model_id) 复合唯一；供应商下有模型时拒删不级联）
+AssistantModel ──1:1──▶ AssistantSettings        # FR-514（单行表存默认模型指针；删除模型同事务清空指针）
 ```
 
 ### 核心表
@@ -748,6 +790,9 @@ QQGatewayConnection ──1:N──▶ QQDiscoveredGroup  # FR-495（逻辑归�
 | bot_load_batches (FR-351) | uuid, stress_session_id(FK), executor_node_id(FK), ordinal, planned_count/accepted_count/connected_count/failed_count, state(planned/dispatching/running/stopped/failed), idempotency_key, connect_start_at, connect_interval_ms, last_error, started_at, ended_at；UNIQUE(stress_session_id,ordinal)，单批 planned_count≤50 |
 | bot_load_action_results (FR-352) | stress_session_id(FK), bot_id(FK), cohort_key, step_id, action_run_id(UNIQUE), attempt, status(running/succeeded/failed/timed_out/cancelled), error_code(冻结枚举), message, duration_ms, correlation_token(INDEX), started_at, ended_at, result_json(≤16KiB，超限带截断元数据)；仅记录动作开始与首终态，不逐条追加普通挥击 |
 | bots | uuid, instance_id(FK，目标实例/权限归属), stress_session_id(FK，可空), executor_node_id(FK，可空；为空回退目标实例节点), load_batch_id(FK，可空), name, status, desired_state(running/stopped，FR-365 CP 期望态), reconnect_count(累计自动重连，FR-365), worker_epoch/worker_epoch_generation, last_event_seq, last_seen_at/connected_at, desired_state_generation(协议 generation 唯一映射，不另建 generation 列), config_hash, cohort_key, last_error, config(JSON), behavior, worker_id(仅兼容展示) |
+| assistant_providers (FR-514) | name(UNIQUE), protocol(openai-chat/openai-responses/anthropic), base_url(仅 https origin), enabled, credential_mode(none/env/stored), credential_env(仅 env 模式，存变量名不存值), credential_ciphertext(AES-256-GCM 密文，仅 stored 模式；**任何响应都不回显**), version(乐观并发)。凭据模式为 env 时不落密文、为 none 时两者皆空 |
+| assistant_models (FR-514) | provider_id(FK), model_id(上游原始标识), display_name, streaming, tools, context_window/max_output_tokens(可空=未声明，非 0), enabled, version。**UNIQUE(provider_id, model_id)**——不同网关提供同名模型是常态，故唯一性必须带上供应商；GORM 侧索引列名须与字段名 `ProviderID` 一致，否则会退化成 `model_id` 全局唯一 |
+| assistant_settings (FR-514) | 单行表，default_model_id(可空，NULL=未配置默认模型)。指向的模型被删除时在同一事务内清空；模型或供应商仅停用时**不清指针**，改由读时可用性解析把它排除在摘要外 |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), **origin(空=普通备份 / snapshot=快照底链)**, parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2), checksum/checksum_algo(归档完整性, FR-171)。`origin=snapshot` 的备份被 `backup.retention_days` **豁免**（其生命周期由 `snapshot.retention_days` 独占管理），否则默认 14 天会先于快照的 30 天裁掉底链，使快照全部变成指向软删行的死链 |
 | process_metric_snapshots | node_uuid, instance_uuid, pid, name, cpu_percent, rss_bytes, read_bytes_per_sec, write_bytes_per_sec, user, command_summary(截断脱敏), sampled_at（受管实例进程 TOPN 短期快照，按 48h TTL 清理，FR-170；FR-407 诊断仅读最近窗口样本，不新增长期明细表） |
 | backup_storages | name, active_name_key（仅活跃行保存名称并唯一，软删清空）, type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl, last_test_at/last_test_ok/last_test_message（FR-057/FR-152；backupCount/usedBytes 从 backups 聚合） |

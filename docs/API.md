@@ -4245,3 +4245,117 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
   "details": { "maxInstances": 10, "currentInstances": 10 }
 }
 ```
+
+## AI 助手配置（FR-514 / ADR-105）
+
+内置 AI 助手的模型接入配置面。**管理面与只读面分开**：可用模型摘要对所有登录用户开放，
+供应商/模型/默认模型仅平台管理员。凭据**永不回显**——响应里只有 `hasCredential` 标志。
+
+> 边界：人类 JWT 不进入 `/api/v1/mcp`（该端点仍只认 `jmat_` Agent Token，见上文）。
+> 助手对业务工具的受限委托与逐调用确认属 FR-515/516，尚未实现。
+
+### 通用约定
+
+| 项 | 说明 |
+|---|---|
+| 协议枚举 | `openai-chat` / `openai-responses` / `anthropic` |
+| 凭据模式 | `none` / `env` / `stored` |
+| 乐观并发 | 供应商与模型均带 `version`；写入携带过期 version 返回 **409** |
+| 错误映射 | 404 不存在 / 409 冲突或在用 / 422 参数不合规 / 403 非平台管理员 |
+| 地址校验 | 仅 `https`（明文 http 回 422）、不得含 userinfo / query / fragment |
+
+### GET /api/v1/assistant/models
+- **描述**: 当前用户可用的模型摘要与默认模型。只含协议与能力，**不含**端点与任何凭据。
+- **关联 FR**: FR-514
+- **权限**: 任意已登录用户
+- **响应** (200):
+  ```json
+  {
+    "items": [
+      { "id": 1, "modelId": "gpt-4o-mini", "displayName": "快速模型",
+        "protocol": "openai-chat", "streaming": true, "tools": true }
+    ],
+    "defaultModelId": 1
+  }
+  ```
+- 说明：只列「模型启用且其供应商也启用」的行；`defaultModelId` 仅在默认模型确实可用时非 null，
+  否则回 `null` 让前端展示「未配置默认模型」，而不是指向一个不可用的模型。
+
+### GET /api/v1/assistant/admin/providers
+- **描述**: 全量供应商（含停用）。
+- **权限**: 平台管理员（`UserAccess.IsPlatformAdmin`；**不按业务权限节点放行**）
+- **响应** (200):
+  ```json
+  { "items": [ {
+      "id": 1, "name": "主供应商", "protocol": "openai-chat",
+      "baseUrl": "https://api.example.com/v1",
+      "credentialMode": "stored", "credentialEnv": null,
+      "hasCredential": true, "enabled": true, "version": 3,
+      "createdAt": "2026-10-22T10:00:00Z", "updatedAt": "2026-10-22T10:00:00Z"
+  } ] }
+  ```
+- 说明：`credentialEnv` 回显**变量名**（不是值）；密文字段不在任何响应中出现。
+
+### POST /api/v1/assistant/admin/providers
+- **描述**: 创建供应商。
+- **权限**: 平台管理员
+- **请求体**:
+  | 字段 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | name | string | 是 | 1-64 字符，全平台唯一 |
+  | protocol | string | 是 | 协议枚举 |
+  | baseUrl | string | 是 | 仅 https origin（可含固定路径前缀） |
+  | enabled | bool | 否 | 默认 true |
+  | credentialMode | string | 是 | 凭据模式枚举 |
+  | credentialEnv | string | 条件 | 仅 `env` 模式；须匹配 `^JIANMANAGER_ASSISTANT_[A-Z0-9_]{1,64}$` |
+  | credentialSecret | string | 条件 | 仅 `stored` 模式；**创建时必填** |
+- **响应** (201): 供应商视图（同列表项）
+- **错误**: 409 名称重复 / 422 参数不合规 / 422 `ENCRYPTOR_UNAVAILABLE`（未配置加密器却提交 stored 凭据）
+
+### GET /api/v1/assistant/admin/providers/:id
+- **描述**: 单个供应商详情。
+- **权限**: 平台管理员
+- **错误**: 404 不存在
+
+### PUT /api/v1/assistant/admin/providers/:id
+- **描述**: 更新供应商。
+- **请求体**: 同创建 + `version`（乐观并发）+ `clearCredential`
+- **凭据三态**:
+  - `credentialSecret` **省略或为空** → **保留**原密文（改个显示名不会丢密钥）
+  - `credentialSecret` **非空** → 替换
+  - `clearCredential: true` → 清除，且模式自动降为 `none`（不留「stored 但无密文」的悬空态）
+- **错误**: 409 version 不匹配 / 404 不存在 / 422 参数不合规
+
+### DELETE /api/v1/assistant/admin/providers/:id
+- **描述**: 删除供应商。
+- **错误**: **409 `IN_USE`（该供应商下仍有模型时不删，不级联）** / 404 不存在
+
+### GET /api/v1/assistant/admin/models
+- **描述**: 全量模型，含 `providerName` / `protocol` / `providerEnabled` 回填（前端不必为显示一个名字再拉供应商）。
+- **权限**: 平台管理员
+
+### POST /api/v1/assistant/admin/models
+- **请求体**:
+  | 字段 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | providerId | uint | 是 | 必须存在 |
+  | modelId | string | 是 | 上游原始标识，**同一供应商下唯一** |
+  | displayName | string | 否 | ≤128 字符 |
+  | streaming / tools | bool | 否 | 显式能力声明 |
+  | contextWindow / maxOutputTokens | int? | 否 | 留空表示未声明（不是 0） |
+  | enabled | bool | 否 | 默认 true |
+- **错误**: 409 同供应商下 modelId 重复 / 422 供应商不存在或参数不合规
+
+> 唯一约束是 `(providerId, modelId)` 而非 `modelId` 全局唯一——不同网关提供同名模型是常态。
+
+### PUT /api/v1/assistant/admin/models/:id
+- **描述**: 更新模型（带 `version`）。
+
+### DELETE /api/v1/assistant/admin/models/:id
+- **描述**: 删除模型。若它是当前默认模型，**同一事务内清空默认指针**，不留悬空引用。
+
+### PUT /api/v1/assistant/admin/settings/default-model
+- **描述**: 设置或清空默认模型。
+- **请求体**: `{ "modelId": 1 }` 或 `{ "modelId": null }`（清空）
+- **校验**: 目标模型必须存在且**启用**，其供应商也必须**启用**
+- **错误**: 422 模型不存在/已停用/供应商已停用 / 409 version 冲突
