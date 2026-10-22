@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 
 import { Panel } from '@jianmanager/ui/components/panel'
-import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
 import { Button } from '@jianmanager/ui/components/button'
 import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { Card } from '@jianmanager/ui/components/card'
@@ -120,8 +120,8 @@ export default function StoragePage({
 
   return (
     // 全量对齐：外壳与页头改用布局层原语。原先无 data-page，迁移时补上。
-    // 图标随 title 进 h1（PageHeader 无独立 icon 槽，且该图标无 aria 语义）；
-    // 存储基址由独立一行降为描述的一部分（等宽），仍保留 title 供悬停看全。
+    // 图标随 title 进 h1（PageHeader 无独立 icon 槽，且该图标无 aria 语义）。
+    // 存储基址是运行时数据（随部署变化），不适合收进页头的问号 tooltip——挪进 ScopeBar 常驻。
     <PageShell data-page="storage">
       <PageHeader
         title={
@@ -130,12 +130,9 @@ export default function StoragePage({
             {t('storage.title')}
           </span>
         }
-        description={
-          <>
-            {t('storage.subtitle')} · <span className="font-mono" title={data.base}>{data.base}</span>
-          </>
-        }
+        description={t('storage.subtitle')}
       />
+      <ScopeBar note={<span className="font-mono" title={data.base}>{data.base}</span>} />
 
       <OverviewSection data={data} />
       <DirUsageSection

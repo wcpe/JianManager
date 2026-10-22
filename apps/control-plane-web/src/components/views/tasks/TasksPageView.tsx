@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { ListSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { ListSkeleton, PageHeader, PageShell, ScopeBar } from '@jianmanager/ui/components/layout'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { isNetworkDownloadFailure } from '@/lib/client-dist/download-failure'
 import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/tasks/task-status'
@@ -277,15 +277,20 @@ export function TasksPageView({
 
   return (
     // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
-    // 计数说明（「已加载 X / 共 Y」）是文字而非纯数字，故走 description 而不是 count。
+    //
+    // 「共 X 条 · 已加载 Y」挪进 ScopeBar 的说明位：它是随滚动与筛选实时变化的运行时数据，
+    // 不属于页面说明。收进页头的问号 tooltip 会变成「不悬停就看不到加载进度」的信息降级。
     <PageShell data-page="tasks">
-      <PageHeader
-        title={t('tasks.title')}
-        description={total !== undefined && !isError ? t('tasks.countSummary', { total: totalCount, loaded: tasks.length }) : undefined}
-      />
+      <PageHeader title={t('tasks.title')} />
 
       {/* 筛选条（FR-227） */}
-      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
+      <ScopeBar
+        note={
+          total !== undefined && !isError
+            ? t('tasks.countSummary', { total: totalCount, loaded: tasks.length })
+            : undefined
+        }
+      >
         <Input
           value={keyword}
           onChange={(e) => onChangeFilters({ keyword: e.target.value })}
@@ -305,7 +310,7 @@ export function TasksPageView({
             {t('common.reset', '重置')}
           </Button>
         )}
-      </div>
+      </ScopeBar>
 
       {/* FR-502 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与筛选条先渲染，
           数据区用同壳骨架（同一张 Panel + 同一条吸附列头 + 行占位）顶上，数据到达原地替换。 */}

@@ -216,7 +216,14 @@ describe('McpActivityPage（DOM）', () => {
       'href',
       '/agent-tokens',
     )
-    // 会话时代的踢线按钮不得残留
-    expect(screen.queryByRole('button', { name: /踢线|Kick/i })).not.toBeInTheDocument()
+    // 会话时代的踢线按钮不得残留。
+    //
+    // 【为何排除 page-header-help】页面说明已从标题下小字收进页头的问号图标，
+    // 该按钮的可访问名就是说明全文，而说明里含「不再有会话可连接或踢线」这句话——
+    // 于是它会被 /踢线/ 命中。它是说明入口、不是动作按钮，踢线动作仍须不存在。
+    const actionButtons = screen
+      .queryAllByRole('button', { name: /踢线|Kick/i })
+      .filter((el) => !el.matches('[data-slot="page-header-help"]'))
+    expect(actionButtons).toHaveLength(0)
   })
 })
