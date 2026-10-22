@@ -14,13 +14,40 @@ import { cn } from "../lib/utils"
 
 function TooltipProvider({
   delayDuration = 0,
+  children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
-  return <TooltipPrimitive.Provider data-slot="tooltip-provider" delayDuration={delayDuration} {...props} />
+  return (
+    <TooltipPrimitive.Provider data-slot="tooltip-provider" delayDuration={delayDuration} {...props}>
+      {/* 标记「已在上文」，让 `Tooltip` 不再重复包一层 Provider。 */}
+      <TooltipProviderPresent.Provider value={true}>{children}</TooltipProviderPresent.Provider>
+    </TooltipPrimitive.Provider>
+  )
 }
 
+/**
+ * 【为什么这里自带 Provider】Radix 的 `Tooltip.Root` 必须处在 `Tooltip.Provider` 内，
+ * 否则运行期直接抛 `\`Tooltip\` must be used within \`TooltipProvider\``。
+ *
+ * 此前约定「调用方负责包 Provider」，实际后果是：任何独立渲染该组件的场景（单测直接
+ * `render(<X/>)`、组件博物馆预览、将来插件复用）都会炸，而报错点落在被测组件内部，
+ * 排查成本远高于收益。切换成本却只是多一层 Provider——Radix 的 Provider 本身可嵌套且
+ * 无额外 DOM，重复包裹是安全的（内层覆盖外层配置）。
+ *
+ * 因此改为**自带兜底**：检测到外层已有 Provider 时直接复用（共享 delayDuration 等配置），
+ * 没有时才自己包一层。全局 Provider（`App.tsx`）依旧保留，用来统一 `delayDuration`。
+ */
+const TooltipProviderPresent = React.createContext(false)
+
 function Tooltip({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
+  const inherited = React.useContext(TooltipProviderPresent)
+  const root = <TooltipPrimitive.Root data-slot="tooltip" {...props} />
+  if (inherited) return root
+  return (
+    <TooltipProvider>
+      <TooltipProviderPresent.Provider value={true}>{root}</TooltipProviderPresent.Provider>
+    </TooltipProvider>
+  )
 }
 
 function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
