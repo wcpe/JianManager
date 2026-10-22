@@ -191,6 +191,62 @@ describe('Button 加载态与提示（FR-502 阶段 6）', () => {
     expect(className).toContain('focus-visible:ring-ring/40')
     expect(className).not.toContain('focus-visible:ring-[3px]')
     // 按压反馈：此前多数变体只有 hover 没有 active
-    expect(className).toContain('active:bg-primary/80')
+    // 取值为 primary/75 而非/80：与 hover 的 primary/90 拉开 15% 梯度，
+    // 原来只差 10% 在浅色底上几乎不可分辨（见 lib/interaction-overlay 的 pressOverlayClass 注释）
+    expect(className).toContain('active:bg-primary/75')
+  })
+})
+
+/**
+ * `invisible` 变体用于「整行可点击 / 纯图标 / 卡片外壳」这类需要按钮语义、
+ * 但视觉完全由内容决定的场景（清理原生 button 时的主要承接方式）。
+ *
+ * 这组用例守的是两类**编译与结构测试都发现不了**的回归——它们只在真机上肉眼可见，
+ * 恰恰是「组件库统一」最容易翻车的地方。
+ */
+describe('Button invisible 变体的排版复位', () => {
+  it('字号与字重跟随父级，不被基础类的 text-sm / font-medium 撑开', () => {
+    render(
+      <Button variant="invisible" size="auto">
+        行内条目
+      </Button>,
+    )
+    const cls = screen.getByRole('button').className
+
+    // 关键：text-inherit 只重置颜色，字号/字重必须另有显式复位
+    expect(cls).toContain('text-[length:inherit]')
+    expect(cls).toContain('font-[weight:inherit]')
+  })
+
+  it('不引入 flex 间距：整行容器的内部元素不会被凭空撑开 8px', () => {
+    render(
+      <Button variant="invisible" size="auto">
+        <span>图标</span>
+        <span>文字</span>
+      </Button>,
+    )
+    const cls = screen.getByRole('button').className
+    expect(cls).toContain('gap-0')
+  })
+
+  it('auto 尺寸不施加盒模型（高度/内边距/圆角全部交还调用方）', () => {
+    render(
+      <Button variant="invisible" size="auto">
+        内容
+      </Button>,
+    )
+    const cls = screen.getByRole('button').className
+    expect(cls).toContain('h-auto')
+    expect(cls).toContain('p-0')
+    expect(cls).toContain('rounded-none')
+  })
+
+  it('调用方仍可用 className 覆盖（twMerge 后写胜出）', () => {
+    render(
+      <Button variant="invisible" size="auto" className="text-[13px]">
+        内容
+      </Button>,
+    )
+    expect(screen.getByRole('button').className).toContain('text-[13px]')
   })
 })

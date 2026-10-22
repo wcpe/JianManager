@@ -64,7 +64,7 @@ export function SidebarGroup({
       {count !== undefined && (
         <span
           data-slot="sidebar-group-count"
-          className="ml-auto shrink-0 rounded-[3px] bg-muted px-[5px] text-[10px] leading-[16px] text-muted-foreground"
+          className="ml-auto shrink-0 rounded-[var(--radius-tiny)] bg-muted px-[5px] text-[10px] leading-[16px] text-muted-foreground"
         >
           {count}
         </span>

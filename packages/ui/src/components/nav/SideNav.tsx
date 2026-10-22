@@ -110,7 +110,7 @@ export function SideNavHead({
             <span
               data-slot="side-nav-pill"
               // letter-spacing 在 pill 上归零：11px 的 +.5px 会给 9px 小徽章带来明显字距。
-              className="ml-auto shrink-0 rounded-[3px] bg-muted px-[5px] py-px text-[9px] tracking-normal"
+              className="ml-auto shrink-0 rounded-[var(--radius-tiny)] bg-muted px-[5px] py-px text-[9px] tracking-normal"
             >
               {pill}
             </span>
@@ -302,7 +302,7 @@ export function SideNavRow({
         <span
           data-slot="side-nav-count"
           className={cn(
-            'shrink-0 rounded-[3px] bg-muted px-[5px] font-mono text-[10px] leading-[18px]',
+            'shrink-0 rounded-[var(--radius-tiny)] bg-muted px-[5px] font-mono text-[10px] leading-[18px]',
             // margin 同样纳入过渡：`ml-auto → ml-0` 若瞬跳，折叠瞬间图标会被横向弹一下。
             'transition-[opacity,max-width,padding,margin] duration-[var(--motion-duration-slow)] ease-ios',
             active && 'bg-card text-accent-foreground',
