@@ -116,7 +116,8 @@ describe('InstancesPage（mock 假后端）', () => {
    * 组头行确实渲染、挂载卡数仍在单一视口窗口量级。
    */
   it('分组卡片视图使用单个虚拟容器，不为每组重复网格', async () => {
-    const { unmount } = renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=region' })
+    // 起点用 groupTree（region 已不做分组层级，不会产出组头行）。
+    const { unmount } = renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=groupTree' })
 
     const surface = await screen.findByTestId('instances-card-virtual')
     expect(screen.queryAllByTestId('instances-card-virtual')).toHaveLength(1)
@@ -124,8 +125,12 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThan(40)
     unmount()
 
-    // tag 维度的分组数更多（旧实现下段数随之放大），单一窗口下挂载量仍与分组数无关。
-    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=tag' })
+    /*
+      第二个维度改用 env（分组数多于 groupTree，能放大「分段实现」的挂载量差异）。
+      原先写的 `groupBy=tag` 不在 GROUP_DIMENSIONS 里、会被解析回退成不分组，
+      那样「挂载量仍与分组数无关」这条断言其实没验到分组场景——顺手修正。
+    */
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=env' })
     const tagged = await screen.findByTestId('instances-card-virtual')
     expect(screen.queryAllByTestId('instances-card-virtual')).toHaveLength(1)
     await waitFor(() => expect(within(tagged).queryAllByTestId('instances-card-group-row').length).toBeGreaterThan(0))
@@ -173,6 +178,7 @@ describe('InstancesPage（mock 假后端）', () => {
 
   it('初始 URL 会恢复搜索、状态、列表视图和分组视图', async () => {
     const requests = collectInstanceRequests()
+    const user = userEvent.setup()
     try {
       renderWithProviders(<InstancesPage />, {
         route: '/instances?q=survival&status=RUNNING&view=list&groupBy=node&sort=name&order=desc&pageSize=50',
@@ -180,9 +186,16 @@ describe('InstancesPage（mock 假后端）', () => {
 
       expect(await screen.findByRole('searchbox', { name: '搜索实例' })).toHaveValue('survival')
       expect(screen.getByRole('button', { name: '列表视图' })).toHaveAttribute('aria-pressed', 'true')
-      expect(screen.getByRole('combobox', { name: '排序字段' })).toHaveTextContent('名称')
-      expect(screen.getByRole('combobox', { name: '排序方向' })).toHaveTextContent('降序')
-      expect(screen.getByRole('combobox', { name: '每页数量' })).toHaveTextContent('50 条')
+      /*
+        【交互变更·本轮】排序字段 / 排序方向 / 每页数量 / 分组维度从工具栏的独立下拉
+        收进了「显示」菜单。URL → 状态 → 请求参数这条链路没变，但界面上不再有
+        combobox，故把「界面回显」的断言改为「打开菜单能看到对应项被选中」。
+      */
+      await user.click(screen.getByRole('button', { name: '显示' }))
+      expect(screen.getByRole('menuitemradio', { name: '名称' })).toBeChecked()
+      expect(screen.getByRole('menuitemradio', { name: '降序' })).toBeChecked()
+      expect(screen.getByRole('menuitemradio', { name: '50 条' })).toBeChecked()
+      await user.keyboard('{Escape}')
       expect((await screen.findAllByText('node-a')).length).toBeGreaterThan(0)
       await waitFor(() => {
         const search = requests.urls
@@ -219,16 +232,18 @@ describe('InstancesPage（mock 假后端）', () => {
     }
   })
 
-  it('筛选工具条可折叠，避免小屏长工具条横向翻屏', async () => {
+  it('筛选面板可折叠，避免小屏长工具条横向翻屏', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstancesPage />, { route: '/instances' })
 
-    expect(await screen.findByRole('button', { name: '收起筛选' })).toBeInTheDocument()
+    // 【交互变更·本轮】「展开筛选 / 收起筛选」两个文案统一为一个「筛选」按钮
+    // （开合由 aria-expanded 表达，文案不再随状态变化）。
+    expect(await screen.findByRole('button', { name: '筛选' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: '群组' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: '收起筛选' }))
+    await user.click(screen.getByRole('button', { name: '筛选' }))
 
-    expect(screen.getByRole('button', { name: '展开筛选' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: '筛选' })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByRole('combobox', { name: '群组' })).not.toBeInTheDocument()
   })
 
@@ -559,12 +574,22 @@ describe('InstancesPage（mock 假后端）', () => {
     const user = userEvent.setup()
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list' })
     await screen.findByTestId('instances-table-virtual')
+
+    /*
+      【缺省变更·本轮】心跳列不再默认可见（默认只开类型/角色/标签，避免 5 列全开时
+      表格横向溢出、把「状态/操作」挤出视口）。故用例先经「显示 › 列」把它打开，
+      再验证「取消勾选后表头与行内同步消失」——断言的仍是列设置的联动与持久化。
+    */
+    await user.click(screen.getByRole('button', { name: '显示' }))
+    await user.click(screen.getByRole('menuitemcheckbox', { name: '心跳' }))
+    await user.keyboard('{Escape}')
+
     // 指标批量取数有 300ms 防抖 + 请求往返：放宽到 5s，避免与默认 1s 等待赛跑。
     await waitFor(() => expect(screen.getAllByTestId('instance-heartbeat').length).toBeGreaterThan(0), {
       timeout: 5000,
     })
 
-    await user.click(screen.getByRole('button', { name: '列设置' }))
+    await user.click(screen.getByRole('button', { name: '显示' }))
     await user.click(screen.getByRole('menuitemcheckbox', { name: '心跳' }))
     await user.keyboard('{Escape}')
 

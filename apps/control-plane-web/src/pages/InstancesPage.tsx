@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Columns3, Bookmark, Trash2, ServerCog, CircleCheck, CircleSlash, TriangleAlert } from 'lucide-react'
+import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Settings2, Bookmark, Trash2, ServerCog, CircleCheck, CircleSlash, TriangleAlert, ChevronDown } from 'lucide-react'
 import { useInfiniteInstanceSearch, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import type { InstanceListParams, InstanceSearchParams } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
@@ -51,6 +51,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
@@ -58,13 +60,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import { Input } from '@jianmanager/ui/components/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
 import { SCROLL_KEY_PREFIX, buildInstanceTreeRows, VirtualizedGroupedInstanceTable, VirtualizedInstanceTable } from '@/components/views/instances/VirtualizedInstanceTables'
 import { FilterSelect, InstanceRowMenu, InstanceTableHeader } from '@/components/views/instances/InstanceTableParts'
 import { useInstanceWindowMetrics } from '@/components/views/instances/useInstanceWindowMetrics'
@@ -554,6 +549,12 @@ export default function InstancesPage() {
 
   const hasActiveFilter =
     searchQuery.trim() !== '' || networkId !== ALL || env !== ALL || tag !== ALL || nodeId !== ALL || statusFilter !== ALL
+  /**
+   * 生效中的筛选条件数：给「筛选」按钮的徽标用。
+   * 只数面板里的五个维度，不含搜索词——搜索框自己就可见，重复计入会让人误以为
+   * 还有一个没找到的筛选条件。
+   */
+  const activeFilterCount = [networkId, env, tag, nodeId, statusFilter].filter((v) => v !== ALL).length
   const resetFilters = () => {
     setSearchQuery('')
     setNetworkId(ALL)
@@ -674,6 +675,11 @@ export default function InstancesPage() {
     return (
       <InstanceRowMenu
         inst={inst}
+        // 生命周期动作同时出现在行内主按钮与「⋯」菜单：列表行内只留当前状态最常用的那一个，
+        // 卡片视图没有行内按钮，全靠菜单——两处共用同一批 mutation，不走第二条路径。
+        onStart={() => start.mutate(inst.id)}
+        onStop={() => stop.mutate(inst.id)}
+        onRestart={() => restart.mutate(inst.id)}
         onTags={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
         onEditConfig={() => setEditConfigTarget(inst)}
         onLimits={() => setLimitsTarget({
@@ -739,8 +745,8 @@ export default function InstancesPage() {
     })
   }
 
-  /** 当前表格总列数（固定 5 列 + 可见可选列）：占位/组头/展开行的 colSpan 必须同步。 */
-  const columnCount = 10 - (INSTANCE_OPTIONAL_COLUMNS.length - visibleColumns.size)
+  /** 当前表格总列数（固定 6 列 + 可见可选列）：占位/组头/展开行的 colSpan 必须同步。 */
+  const columnCount = 11 - (INSTANCE_OPTIONAL_COLUMNS.length - visibleColumns.size)
 
   /** 应用保存的视图：导航回快照 search（状态由同步 effect 落位），并恢复列集合。 */
   const applySavedView = (view: SavedInstanceView) => {
@@ -803,12 +809,10 @@ export default function InstancesPage() {
       renderBackends={() => <BackendsInlineContainer proxyId={inst.id} />}
       starting={start.isPending && start.variables === inst.id}
       stopping={stop.isPending && stop.variables === inst.id}
-      restarting={restart.isPending && restart.variables === inst.id}
       menu={buildMenu(inst)}
       onOpenInstance={openInstance}
       onStart={() => start.mutate(inst.id)}
       onStop={() => stop.mutate(inst.id)}
-      onRestart={() => restart.mutate(inst.id)}
       onKill={() => setKillTarget({ id: inst.id, name: inst.name })}
     />
   )
@@ -834,21 +838,39 @@ export default function InstancesPage() {
         title={t('instances.title')}
         description={t('instances.subtitle')}
         actions={
-          // flex-wrap：四个入口按钮在移动端（390px）超行宽须换行——修 v0.15.0 验收 e2e
-          // 抓出的移动端横向溢出 120px（FR-302 加第 4 按钮后顶爆无 wrap 的一行）。
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => setShowProvision(true)}>
-              <Zap className="size-4" /> {t('provision.entry')}
-            </Button>
-            <Button variant="outline" onClick={() => setShowProvisionProxy(true)}>
-              <Globe className="size-4" /> {t('proxy.entry')}
-            </Button>
-            <Button variant="outline" onClick={() => setShowImport(true)}>
-              <HardDriveDownload className="size-4" /> {t('importServer.entry')}
-            </Button>
-            <Button onClick={() => navigate('/instances/new')}>
+          /*
+            【四种新建入口收成一个分裂按钮】
+            「一键搭建 / 搭建代理 / 导入现有服务器 / 创建实例」四个并列按钮占满整个页头右侧，
+            每个都是同样权重，用户无法一眼分出主次——而它们其实是同一件事（弄一个实例出来）
+            的四种方式。改为：主按钮直接进最常用的「创建实例」，右侧▾ 展开另外三种。
+            主次由此分明，页头宽度也不再被四个按钮吃掉。
+          */
+          <div className="flex items-stretch">
+            <Button onClick={() => navigate('/instances/new')} className="rounded-r-none">
               <Plus className="size-4" /> {t('instances.createInstance')}
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  aria-label={t('instances.moreCreateWays')}
+                  title={t('instances.moreCreateWays')}
+                  className="rounded-l-none border-l border-primary-foreground/25 px-1.5"
+                >
+                  <ChevronDown className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onSelect={() => setShowProvision(true)}>
+                  <Zap className="size-4" /> {t('provision.entry')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setShowProvisionProxy(true)}>
+                  <Globe className="size-4" /> {t('proxy.entry')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setShowImport(true)}>
+                  <HardDriveDownload className="size-4" /> {t('importServer.entry')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         }
       />
@@ -882,6 +904,17 @@ export default function InstancesPage() {
       */}
       {/* 吸附工具栏：Card 承载统一表面（圆角/描边/底色/阴影）。
           原为块级容器且内部两段无间距，故 gap 置零；sticky 定位与毛玻璃按需保留。 */}
+      {/*
+        【工具栏收敛为「一行主导航 + 一个可折叠筛选面板」】
+        改前是 4 行控件（搜索/排序/页大小/收起筛选 → 卡片列表切换/列设置/视图/折叠展开 →
+        群组/环境/标签/节点/状态 → 分组），其中「排序/排序方向/每页条数/列设置/保存视图/
+        全部折叠/全部展开」都是低频设置，却与「搜索」和「卡片/列表」同为一级可见，
+        一级控件因此被淹没，用户每次都要在四行里找。
+
+        现在一级只留三个动作：搜索、看哪种视图（卡片/列表）、筛什么（带条件数徽标）；
+        其余按语义归入两个菜单——「显示」放呈现相关的（排序/每页/列/分组维度/折叠），
+        「视图」只放保存的快照。低频不再占位，但功能一个都没删。
+      */}
       <Card className="sticky top-16 z-20 p-2.5 backdrop-blur-sm">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-52 flex-1 sm:flex-none">
@@ -895,78 +928,118 @@ export default function InstancesPage() {
               className="h-8 pl-8"
             />
           </div>
-          <Select value={sortKey} onValueChange={(v) => setSortKeyParam(v as InstanceSortKey)}>
-            <SelectTrigger size="sm" className="w-36" aria-label={t('grouping.sortBy')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="createdAt">{t('grouping.sort_createdAt')}</SelectItem>
-              <SelectItem value="name">{t('grouping.sort_name')}</SelectItem>
-              <SelectItem value="status">{t('grouping.sort_status')}</SelectItem>
-              <SelectItem value="nodeId">{t('grouping.sort_nodeId')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={sortOrder} onValueChange={(v) => setSortOrderParam(v as InstanceSortOrder)}>
-            <SelectTrigger size="sm" className="w-28" aria-label={t('grouping.sortOrder')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="asc">{t('grouping.orderAsc')}</SelectItem>
-              <SelectItem value="desc">{t('grouping.orderDesc')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={String(pageSize)} onValueChange={setPageSizeParam}>
-            <SelectTrigger size="sm" className="w-28" aria-label={t('grouping.pageSize')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {INSTANCE_PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)}>
-                  {t('grouping.pageSizeValue', { count: size })}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setFiltersCollapsed((v) => !v)}
-            aria-expanded={!filtersCollapsed}
-            aria-controls="instances-advanced-filters"
-          >
-            <SlidersHorizontal className="size-4" />
-            {filtersCollapsed ? t('grouping.showFilters') : t('grouping.hideFilters')}
-          </Button>
           <div className="ml-auto flex items-center gap-2">
-            {/* 视图切换：卡片 / 列表。与筛选条同一行——它是「怎么看这份数据」的一部分。 */}
+            {/* 视图切换：卡片 / 列表。一级常驻——它决定「怎么看这份数据」。 */}
             <ViewToggle
               value={view}
               onChange={setViewParam}
               cardLabel={t('grouping.viewCard')}
               listLabel={t('grouping.viewList')}
             />
-            {/* 列设置（页面重构件）：切换可选列可见性，持久化于 jm.instances.columns。 */}
+            {/* 筛选：面板开合 + 生效条件数徽标——徽标让「我筛过东西」无需展开即可见。 */}
+            <Button
+              variant={filtersCollapsed ? 'outline' : 'default'}
+              size="sm"
+              onClick={() => setFiltersCollapsed((v) => !v)}
+              aria-expanded={!filtersCollapsed}
+              aria-controls="instances-advanced-filters"
+            >
+              <SlidersHorizontal className="size-4" />
+              {t('grouping.filter')}
+              {activeFilterCount > 0 && (
+                <span className="rounded-full bg-background/25 px-1.5 text-[11px] tabular-nums">
+                  {activeFilterCount}
+                </span>
+              )}
+            </Button>
+            {/* 显示：排序 / 排序方向 / 分组维度 / 每页 / 列 / 折叠——「这份数据怎么排布」。 */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
-                  <Columns3 className="size-4" /> {t('instances.columnsLabel')}
+                  <Settings2 className="size-4" /> {t('grouping.display')}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>{t('grouping.sortBy')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={sortKey} onValueChange={(v) => setSortKeyParam(v as InstanceSortKey)}>
+                  {(['createdAt', 'name', 'status', 'nodeId'] as const).map((key) => (
+                    <DropdownMenuRadioItem
+                      key={key}
+                      value={key}
+                      // 就地单选：保持菜单打开，避免「改一项就要重开一次」。
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {t(`grouping.sort_${key}`)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t('grouping.sortOrder')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={sortOrder} onValueChange={(v) => setSortOrderParam(v as InstanceSortOrder)}>
+                  <DropdownMenuRadioItem value="asc" onSelect={(event) => event.preventDefault()}>
+                    {t('grouping.orderAsc')}
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="desc" onSelect={(event) => event.preventDefault()}>
+                    {t('grouping.orderDesc')}
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t('grouping.groupBy')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={groupBy} onValueChange={(v) => setGroupByParam(v as GroupDimension)}>
+                  {GROUP_DIMENSIONS.map((dim) => (
+                    <DropdownMenuRadioItem key={dim} value={dim} onSelect={(event) => event.preventDefault()}>
+                      {t(`grouping.dim_${dim}`)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t('grouping.pageSize')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={String(pageSize)} onValueChange={setPageSizeParam}>
+                  {INSTANCE_PAGE_SIZES.map((size) => (
+                    <DropdownMenuRadioItem
+                      key={size}
+                      value={String(size)}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {t('grouping.pageSizeValue', { count: size })}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t('instances.columnsLabel')}</DropdownMenuLabel>
                 {INSTANCE_OPTIONAL_COLUMNS.map((column) => (
                   <DropdownMenuCheckboxItem
                     key={column}
                     checked={visibleColumns.has(column)}
                     onCheckedChange={() => toggleColumn(column)}
-                    // 就地多选：保持菜单打开（连续勾选是常态）。
                     onSelect={(event) => event.preventDefault()}
                   >
                     {t(COLUMN_LABEL_KEY[column])}
                   </DropdownMenuCheckboxItem>
                 ))}
+                {/* 折叠控制只在有分组头时才有意义（平铺视图无处可折叠）。 */}
+                {groupBy !== 'none' && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => setAllCollapsed(true, allCollapsibleGroupKeys)}>
+                      {t('grouping.collapseAll')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={collapsedGroups.size === 0}
+                      onSelect={() => setAllCollapsed(false, [])}
+                    >
+                      {t('grouping.expandAll')}
+                    </DropdownMenuItem>
+                    {groupBy === 'groupTree' && (
+                      <DropdownMenuItem onSelect={() => setGroupManagerOpen((v) => !v)}>
+                        <FolderTree className="size-4" /> {t('instanceGroups.manage')}
+                      </DropdownMenuItem>
+                    )}
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
-            {/* 保存视图（页面重构件）：整串 search 快照 + 列集合；恢复由 URL 同步 effect 落位。 */}
+            {/* 视图：只放保存的快照（整串 search + 列集合），与「显示」菜单分工明确。 */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -1011,48 +1084,10 @@ export default function InstancesPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {hasActiveFilter && (
-              <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
-                {t('grouping.clearFilters')}
-              </Button>
-            )}
-            {/* FR-452：分组树表提供全部折叠/展开（长列表一屏可管）。 */}
-            {groupBy !== 'none' && view === 'list' && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  data-testid="instances-collapse-all"
-                  onClick={() => setAllCollapsed(true, allCollapsibleGroupKeys)}
-                >
-                  {t('grouping.collapseAll')}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  data-testid="instances-expand-all"
-                  disabled={collapsedGroups.size === 0}
-                  onClick={() => setAllCollapsed(false, [])}
-                >
-                  {t('grouping.expandAll')}
-                </Button>
-              </>
-            )}
-            {/* 组织分组视图（FR-165）收敛为 groupTree 维度；分组管理入口随之挂在该维度下。 */}
-            {groupBy === 'groupTree' && (
-              <Button
-                variant={groupManagerOpen ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setGroupManagerOpen((v) => !v)}
-                aria-pressed={groupManagerOpen}
-              >
-                <FolderTree className="size-4" /> {t('instanceGroups.manage')}
-              </Button>
-            )}
           </div>
         </div>
         {!filtersCollapsed && (
-          <div id="instances-advanced-filters" className="flex flex-wrap items-center gap-2">
+          <div id="instances-advanced-filters" className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2">
             <FilterSelect
               label={t('grouping.filterNetwork')}
               value={networkId}
@@ -1090,22 +1125,10 @@ export default function InstancesPage() {
               onChange={setStatusFilterParam}
               options={Object.entries(statusConfig).map(([k, v]) => ({ value: k, label: v.text }))}
             />
-            {(
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">{t('grouping.groupBy')}</span>
-                <Select value={groupBy} onValueChange={(v) => setGroupByParam(v as GroupDimension)}>
-                  <SelectTrigger size="sm" className="w-36" aria-label={t('grouping.groupBy')}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {GROUP_DIMENSIONS.map((dim) => (
-                      <SelectItem key={dim} value={dim}>
-                        {t(`grouping.dim_${dim}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            {hasActiveFilter && (
+              <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
+                {t('grouping.clearFilters')}
+              </Button>
             )}
           </div>
         )}
