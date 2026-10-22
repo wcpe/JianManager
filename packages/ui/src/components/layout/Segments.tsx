@@ -1,6 +1,9 @@
 import * as React from 'react'
 
 import { cn } from '../../lib/utils'
+// 视觉取值与 `ToggleGroup` 的 `segment` 变体共用一处（见 toggle.tsx 的 segmentTrack 注释）：
+// 同一个「就地切换呈现」交互，站内不应有两种外观。
+import { segmentTrack, segmentItem, segmentItemActive } from '../toggle'
 
 /**
  * 分段控件（FR-502 阶段 6 收尾）：同一维度的少数几种互斥视图之间的切换。
@@ -22,10 +25,7 @@ export function Segments({ className, children, ...props }: React.ComponentProps
     <div
       role="tablist"
       data-slot="segments"
-      className={cn(
-        'inline-flex shrink-0 items-center gap-[2px] rounded-lg border bg-muted p-[3px]',
-        className,
-      )}
+      className={cn(segmentTrack, className)}
       {...props}
     >
       {children}
@@ -53,12 +53,7 @@ export function Segment({
       aria-selected={active}
       data-slot="segment"
       data-active={active || undefined}
-      className={cn(
-        'rounded-md px-[10px] py-1 text-[11px] whitespace-nowrap text-muted-foreground',
-        'transition-colors duration-[var(--motion-duration-normal)] ease-ios hover:text-foreground',
-        active && 'bg-card font-medium text-foreground shadow-sm',
-        className,
-      )}
+      className={cn(segmentItem, active && segmentItemActive, className)}
       {...props}
     >
       {children}
