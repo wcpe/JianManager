@@ -360,14 +360,17 @@ export function GaugeAttributionTooltip({
             variant="invisible"
             size="auto"
             aria-label={t('dashboard.resourceAttributionLabel', { label })}
-            // `[&_svg…]:size-auto`：Button 基类会把无 size-* 类的 svg 强制成 size-4，
-            // 而仪表环形图的 svg 靠 width/height 属性取尺寸，这里必须交还原属性。
             /*
-              【不再给悬停底色】此前这里是 `hover:bg-accent/40`——鼠标扫过三个球时整块卡片
-              轮流闪一下浅底，既干扰读数，又没有传达任何信息（球本身已用环形与数值表达状态）。
-              开合的可发现性由指针形状 + 可访问名 + 键盘聚焦环提供，不靠变色。
+              【悬停反馈：不动背景色，改提亮环 + 轻微抬起】
+              用户要求保留 hover 反馈，但原先的 `hover:bg-accent/40` 是整块卡变浅底——
+              三个球并排时鼠标扫过会轮流闪一下，反而干扰读数。
+
+              改成两处更克制的信号：
+              - 整块轻微上浮 1px（translate 不参与布局，不会推动三卡高度）；
+              - 环的描边加粗（`[&_circle]` 选择器命中 ResourceGauge 的进度环），
+                提亮但不遮挡数值，也不改变卡片底色。
             */
-            className="rounded-sm [&_svg:not([class*='size-'])]:size-auto"
+            className="group rounded-sm transition-transform duration-[var(--motion-duration-fast)] ease-ios hover:-translate-y-px [&_svg:not([class*='size-'])]:size-auto [&_svg_circle:last-child]:transition-[stroke-width] [&_svg_circle:last-child]:duration-[var(--motion-duration-fast)] hover:[&_svg_circle:last-child]:stroke-[10] focus-visible:[&_svg_circle:last-child]:stroke-[10]"
           >
             {children}
           </Button>
@@ -570,11 +573,17 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
   else if (points.length >= 2) {
     const w = 640
     const h = 84
-    const min = Math.min(...points)
-    // 纵轴上限取序列自身最大值（不是 peakValue），保证 span 恒为正、坐标不越界。
-    const span = seriesMax - min || 1
+    /*
+      纵轴从 0 起算，而不是从序列最小值起算。
+
+      踩过的坑：一开始用 `min..max` 当纵轴范围，等于把「最低点」也拉到画布底部——
+      玩家数在 65~370 之间波动时，曲线会被撑成满幅锯齿，看起来像抖动剧烈的故障信号，
+      而实际只是正常昼夜起伏。从 0 起算后，起伏比例与真实量级一致。
+      代价是低位时曲线贴近底部，但这正是「现在人少」的直观表达。
+    */
+    const span = seriesMax || 1
     const line = points
-      .map((v, i) => `${(i / (points.length - 1)) * w},${h - ((v - min) / span) * (h - 12) - 6}`)
+      .map((v, i) => `${(i / (points.length - 1)) * w},${h - (v / span) * (h - 12) - 6}`)
       .join(' L ')
     chart = (
       /*

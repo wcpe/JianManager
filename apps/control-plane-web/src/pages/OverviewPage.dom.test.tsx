@@ -133,15 +133,27 @@ describe('OverviewPage（mock 假后端）', () => {
     ② 球不再因悬停变色——此前 `hover:bg-accent/40` 让三张卡轮流闪浅底，干扰读数。
     两条都是易被后人「顺手改回去」的样式，故用断言钉住。
   */
-  it('球体：有结论句，且不再有悬停底色', async () => {
+  it('球体：有结论句，悬停反馈走描边而非背景色', async () => {
     renderWithProviders(<OverviewPage />, { route: '/' })
 
     const cpu = await screen.findByRole('button', { name: '总 CPU 资源归因' })
     // ① 结论句与环同属一张卡：按 resourceLevel 分档，CPU 47% 落 success → 「正常」。
     const card = cpu.closest('[data-slot="panel"]') as HTMLElement
     expect(within(card).getByText('正常')).toBeInTheDocument()
-    // ② 触发区不带 hover 底色类（改回 hover:bg-accent/* 会在此失败）。
-    expect(cpu.className).not.toMatch(/hover:bg-accent/)
+
+    /*
+      ② 悬停反馈的形态：不用背景色，改用「环描边加粗」。
+      用户要保留 hover 反馈，但原来整块卡变浅底（hover:bg-accent/*）在三个球并排时
+      会轮流闪一下，干扰读数。故断言：
+      - 不带**着色**的 hover:bg-*（`variant="invisible"` 自带的 hover:bg-transparent
+        表示「背景不变」，与这里要守的规则同向，故排除它）；
+      - 带 hover 下加粗描边的规则（反馈仍然存在，只是换了载体）。
+    */
+    const paintHoverBg = (cpu.className.match(/hover:bg-\S+/g) ?? []).filter(
+      (cls) => cls !== 'hover:bg-transparent',
+    )
+    expect(paintHoverBg).toHaveLength(0)
+    expect(cpu.className).toMatch(/hover:.*stroke-\[10\]/)
   })
 
   it('首页渲染玩家趋势与玩家 Top5', async () => {
