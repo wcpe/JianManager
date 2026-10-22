@@ -16,7 +16,7 @@
  */
 import { Fragment, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, Play, Square, X } from 'lucide-react'
 
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
@@ -24,17 +24,17 @@ import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { TableCell, TableRow } from '@jianmanager/ui/components/table'
 import { instanceStatusLevel } from '@jianmanager/ui'
-import { envOf, freeTagsOf } from '@/lib/instances/instance-grouping'
+import { envOf, freeTagsOf, regionOf, zoneOf } from '@/lib/instances/instance-grouping'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 import { RoleBadge } from '@/components/views/instances/InstanceTableParts'
 import { RuntimeDriftBadge } from '@/components/views/instances/RuntimeDriftNotice'
 import type { RuntimeDriftInfoView } from '@/components/views/instances/RuntimeDriftNotice'
 import { InstanceHeartbeatCell, InstanceMetricsCell } from '@/components/views/instances/InstanceRowMetrics'
 import type { InstanceMetricSnapshot } from '@/components/views/instances/InstanceRowMetrics'
-import { INSTANCE_OPTIONAL_COLUMNS, type InstanceOptionalColumn } from '@/lib/instances/instance-view-prefs'
+import { DEFAULT_COLUMNS, type InstanceOptionalColumn } from '@/lib/instances/instance-view-prefs'
 
-/** 列设置的缺省可见集（全开）。 */
-const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(INSTANCE_OPTIONAL_COLUMNS)
+/** 列设置的缺省可见集（常用三列，与 `readStoredColumns` 的缺省一致）。 */
+const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(DEFAULT_COLUMNS)
 
 /** 未知状态的兜底文案键；单列常量是因为登记表是索引签名，取 `.STOPPED` 拿不回确定类型。 */
 const STATUS_LABEL_FALLBACK = 'instances.stopped'
@@ -124,7 +124,7 @@ export interface InstanceRowViewProps {
    * 缺省=全开（与旧行为一致，测试与既有使用点零改动）。
    */
   columns?: ReadonlySet<InstanceOptionalColumn>
-  /** 当前表格总列数（列设置会改变它，展开行的 colSpan 必须同步）。缺省 10。 */
+  /** 当前表格总列数（列设置会改变它，展开行的 colSpan 必须同步）。缺省 11。 */
   columnCount?: number
   /** proxy 行内联后端是否展开（跨虚拟窗口卸载仍需保持，故由容器持有）。 */
   proxyExpanded?: boolean
@@ -136,9 +136,7 @@ export interface InstanceRowViewProps {
   starting?: boolean
   /** 停止在途。 */
   stopping?: boolean
-  /** 重启在途。 */
-  restarting?: boolean
-  /** 「⋯」次要操作菜单元素（标签 / 配置 / 限额 / 代理后端 / 克隆 / 接管 / 删除，由容器渲染）。 */
+  /** 「⋯」次要操作菜单元素（生命周期 / 标签 / 配置 / 限额 / 代理后端 / 克隆 / 接管 / 删除，由容器渲染）。 */
   menu: ReactNode
   /** 打开实例控制台（容器注入路由跳转）。 */
   onOpenInstance?: (id: number) => void
@@ -146,8 +144,6 @@ export interface InstanceRowViewProps {
   onStart: () => void
   /** 停止。 */
   onStop: () => void
-  /** 重启。 */
-  onRestart: () => void
   /** 强杀（过渡态）：接入回调后由容器弹二次确认框，行内不直发写请求。 */
   onKill: () => void
 }
@@ -166,18 +162,16 @@ export function InstanceRowView({
   drift,
   metrics,
   columns = ALL_OPTIONAL_COLUMNS,
-  columnCount = 10,
+  columnCount = 11,
   proxyExpanded = false,
   onToggleProxy,
   renderBackends,
   starting = false,
   stopping = false,
-  restarting = false,
   menu,
   onOpenInstance,
   onStart,
   onStop,
-  onRestart,
   onKill,
 }: InstanceRowViewProps) {
   const { t } = useTranslation()
@@ -187,6 +181,11 @@ export function InstanceRowView({
   const envLabel = instEnv ? t(`grouping.env_${instEnv}`, { defaultValue: instEnv }) : ''
   // 环境 + 自由标签的完整列表：标签列单行裁剪后，靠 title 仍能看全（见下方标签列注释）。
   const tagsTitle = [envLabel, ...free].filter(Boolean).join(' · ')
+  // 大区 · 小区：两者都有时用「·」分隔，只有一个时直接显示那个，都没有则显示占位符。
+  // 大区是虚拟分区（由 region: 标签推导），不做折叠层级，只作为一列归属信息呈现。
+  const region = regionOf(inst)
+  const zone = zoneOf(inst)
+  const regionZoneLabel = region && zone ? `${region} · ${zone}` : region || zone
   /**
    * 异常强化（常态弱化）：崩溃或存在运行态漂移的行给出左侧警示条 + 淡红底。
    * 只加背景与伪元素，不动行盒高度——虚拟窗口的 36px 模型不受影响（见 INSTANCE_ROW_HEIGHT）。
@@ -207,6 +206,10 @@ export function InstanceRowView({
       >
         <TableCell>
           <Checkbox checked={selected} onCheckedChange={onToggleSelect} aria-label={inst.name} />
+        </TableCell>
+        {/* 大区 · 小区：大区是虚拟分区，不做折叠层级，以一列文字交代归属（与卡片左上角同源）。 */}
+        <TableCell className="text-muted-foreground whitespace-nowrap">
+          {regionZoneLabel || <span className="opacity-60">--</span>}
         </TableCell>
         <TableCell className="font-medium">
           <div className="flex items-center gap-1.5">
@@ -292,56 +295,53 @@ export function InstanceRowView({
         {columns.has('metrics') && <InstanceMetricsCell snapshot={metrics} />}
         {columns.has('heartbeat') && <InstanceHeartbeatCell snapshot={metrics} />}
         <TableCell>
-          <div className="flex items-center gap-1">
-            {/* 主操作随状态，操作进行中禁用防连点（FR-138）；
-                搭建中硬性禁启（FR-331），tooltip 由外层 span 承载（禁用态 pointer-events-none）。 */}
+          {/*
+            【操作列只留图标】此前启动/停止/重启/强杀都是**文字**按钮（「强制终止」就占约 60px），
+            四档状态叠加行尾「⋯」后把本列撑到 135px，导致表格在 1280 宽下横向溢出、
+            「⋯」被挤出视口。改为图标按钮：可访问名与 tooltip 仍在（aria-label / title），
+            视觉宽度降到约 24px/个，一键操作的能力一点没减。
+
+            行内只保留**当前状态下最常用**的那一个（停止态=启动、运行态=停止、过渡态=强杀），
+            重启等偶发动作统一收进「⋯」菜单——与卡片视图可用动作保持一致。
+          */}
+          <div className="flex items-center gap-0.5">
             {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
-              <span title={provisioning ? t('instances.provisioningBlocked') : undefined}>
+              <span title={provisioning ? t('instances.provisioningBlocked') : t('instances.start')}>
                 <Button
                   variant="ghost"
-                  size="xs"
+                  size="icon-xs"
                   disabled={provisioning || starting}
                   onClick={onStart}
                   aria-label={t('instances.start')}
                   className="text-green-600 hover:text-green-700"
                 >
-                  {starting ? t('instances.processing') : t('instances.start')}
+                  <Play className="size-3.5" />
                 </Button>
               </span>
             )}
             {inst.status === 'RUNNING' && (
-              <>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={stopping}
-                  onClick={onStop}
-                  aria-label={t('instances.stop')}
-                  className="text-yellow-600 hover:text-yellow-700"
-                >
-                  {stopping ? t('instances.processing') : t('instances.stop')}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={restarting}
-                  onClick={onRestart}
-                  aria-label={t('instances.restart')}
-                  className="text-blue-600 hover:text-blue-700"
-                >
-                  {restarting ? t('instances.processing') : t('instances.restart')}
-                </Button>
-              </>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                disabled={stopping}
+                onClick={onStop}
+                aria-label={t('instances.stop')}
+                title={t('instances.stop')}
+                className="text-yellow-600 hover:text-yellow-700"
+              >
+                <Square className="size-3.5" />
+              </Button>
             )}
             {(inst.status === 'STARTING' || inst.status === 'STOPPING') && (
               <Button
                 variant="ghost"
-                size="xs"
+                size="icon-xs"
                 onClick={onKill}
                 aria-label={t('instances.kill')}
+                title={t('instances.kill')}
                 className="text-yellow-600 hover:text-yellow-700"
               >
-                {t('instances.kill')}
+                <X className="size-3.5" />
               </Button>
             )}
             {menu}
