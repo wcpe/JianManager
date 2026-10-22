@@ -1191,11 +1191,27 @@ export const handlers = [
     const url = new URL(info.request.url)
     const range = url.searchParams.get('range') ?? '24h'
     const { count, step } = rangePlan(range)
+    /*
+      totals 必须与 `/observability/overview` 的 health 同源。
+
+      此前这里是写死的 `nodeCount: 2 / onlineNodeCount: 2 / runningInstances: 720`，
+      而平台健康那侧是按 db('nodes') + db('instances') 真算的（1/2 在线、242 运行中）。
+      结果同一屏上「运行实例」同时显示 720 和 242、「节点」同时显示 2/2 和 1/2——
+      运营看到两个互相打架的数字，会直接不信这一页。
+
+      真实后端 `/metrics/overview` 是据 Node/Instance 当前值汇总的
+      （见 service/metric.go 的 overviewTotals），故 mock 也照同一口径派生，
+      而不是另写一份假数。
+    */
+    const nodes = db<ObsNode>('nodes').list((n) => !n.deletedAt)
+    const insts = db<ObsInstance>('instances').list()
+    const onlineNodes = nodes.filter((n) => n.status === 1)
+    const runningInstances = insts.filter((i) => i.status === 'RUNNING').length
     return HttpResponse.json({
       totals: {
-        nodeCount: 2,
-        onlineNodeCount: 2,
-        runningInstances: 720,
+        nodeCount: nodes.length,
+        onlineNodeCount: onlineNodes.length,
+        runningInstances,
         cpuPct: 47,
         loadAvg: 38,
         memUsedBytes: 120 * GIB,
