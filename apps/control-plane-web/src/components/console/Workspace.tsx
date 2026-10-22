@@ -80,7 +80,19 @@ export default function Workspace() {
   const isInstanceRoute = /^\/instances\/\d+/.test(location.pathname)
   // 权限配置页：固定视口高度，仅中栏滚动（与实例控制台同款骨架）
   const isPermissionsRoute = location.pathname === '/permissions' || location.pathname.startsWith('/permissions')
-  const isFixedViewportRoute = isInstanceRoute || isPermissionsRoute
+  /**
+   * 实例**列表页**也走固定视口骨架。
+   *
+   * 列表页的滚动发生在虚拟表内部（表头吸顶 + 容器内滚），整页不该再滚一层。
+   * 此前只把 `/instances/:id`（详情）纳入固定视口，列表页走的是整页滚动：
+   * 外层 `overflow-auto` + `min-h-full` 的路由容器不给子级确定高度，
+   * 于是表格的 `flex-1` 拿不到可分配空间、退回按内容撑高（实测 8294px），
+   * 被外层再滚一次——两层滚动叠加，表格底部直接被推出视口。
+   * `^/instances(/|$)` 只匹配列表本身，详情路由仍由上面的 `isInstanceRoute` 命中，
+   * 两者互不干扰（且都已包含在下面的或运算里）。
+   */
+  const isInstanceListRoute = /^\/instances\/?$/.test(location.pathname)
+  const isFixedViewportRoute = isInstanceRoute || isInstanceListRoute || isPermissionsRoute
   // 路由过渡容器 key 仅按 pathname——同页仅 query 变化（如发布向导 ?step= 步骤切换、列表筛选、
   // tab 切换）不得 remount 路由子树，否则会清空页内本地状态（如发布向导本地暂存的 drafts）。
   // 页面级切换（pathname 变）仍会换 key 重放进场动画。
@@ -110,7 +122,14 @@ export default function Workspace() {
   return (
     // 实例路由走视口自适应骨架（FR-422）：外层不滚动，滚动收口到页内卡片；
     // 顶栏与 Tab 栏因此常驻可见，底部不再随屏幕变大而留白。其他路由保持整页滚动不变。
-    <div className={isFixedViewportRoute ? 'jm-workspace-bg flex h-full w-full flex-col overflow-hidden p-3' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
+    // 两条骨架分支的外边距必须同值（曾为 p-3 / p-3 sm:p-5 lg:p-6，固定视口页因此紧一档）。
+    <div
+      className={
+        isFixedViewportRoute
+          ? 'jm-workspace-bg flex h-full w-full flex-col overflow-hidden p-[clamp(6px,0.8vw,12px)]'
+          : 'jm-workspace-bg h-full w-full overflow-auto p-[clamp(6px,0.8vw,12px)] [scrollbar-gutter:stable]'
+      }
+    >
       <div
         key={routeKey}
         data-slot="workspace-route-transition"
