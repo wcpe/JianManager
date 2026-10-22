@@ -711,7 +711,10 @@
     "trendAvg": "Daily avg",
     "playerRanking": "Top 5 players",
     "trendUnavailable": "Failed to load trend",
-    "rankingUnavailable": "Failed to load ranking"
+    "rankingUnavailable": "Failed to load ranking",
+    "availability": "Availability",
+    "notApplicable": "N/A",
+    "sloHint": "Availability in window; target {{target}}, error budget burned {{burned}}s / allowed {{allowed}}s"
   },
   "metrics": {
     "tab": "Monitor",

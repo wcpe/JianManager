@@ -689,7 +689,10 @@
     "trendAvg": "日均",
     "playerRanking": "玩家 Top5",
     "trendUnavailable": "趋势加载失败",
-    "rankingUnavailable": "排行加载失败"
+    "rankingUnavailable": "排行加载失败",
+    "availability": "可用率",
+    "notApplicable": "不适用",
+    "sloHint": "窗口内可用性；目标 {{target}}，误差预算已用 {{burned}}s / 允许 {{allowed}}s"
   },
   "metrics": {
     "tab": "监控",

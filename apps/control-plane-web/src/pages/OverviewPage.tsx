@@ -6,7 +6,7 @@ import { useNodes } from '@/api/nodes'
 import { useInstanceSearch } from '@/api/instances'
 import { useTasks } from '@/api/tasks'
 import { useAlertEvents } from '@/api/alerts'
-import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, usePlayerTrend, useInstanceRanking } from '@/api/metrics'
+import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, usePlayerTrend, useInstanceRanking, useSLO } from '@/api/metrics'
 import { HealthWall } from '@/components/nodes/HealthWall'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
@@ -79,6 +79,12 @@ export default function OverviewPage() {
   */
   const playerTrend = usePlayerTrend({ range, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })
   const playerRanking = useInstanceRanking({ metric: 'inst_players_online', window: '5m', limit: 5 })
+  /*
+    可用性 SLO（FR-463）：不单独占卡，并入趋势卡头部一行。
+    它属于「长期健康」指标而非日常盯盘指标，但顺手看到又有价值（用户选择塞进现有卡片）。
+    目标经 target 参数下发；口径与监控页同一接口，避免两处各算一套。
+  */
+  const slo = useSLO({ scope: 'platform', range })
 
   return (
     <OverviewPageView
@@ -112,6 +118,7 @@ export default function OverviewPage() {
       playerRanking={playerRanking.data}
       playerRankingLoading={playerRanking.isLoading}
       playerRankingError={playerRanking.isError}
+      slo={slo.data}
       // 包内不认识 react-router：下钻链接（异常项 / 任务项 / 归因 Tooltip / 「查看全部」）统一经插槽渲染。
       renderLink={({ href, className, testId, children }) => (
         <Link to={href} className={className} data-testid={testId}>

@@ -33,6 +33,7 @@ import type { InstanceInfo } from '@/lib/instances/instance-types'
 import type { Task, TaskState } from '@/lib/tasks/task-status'
 import type { PlayerTrendResult } from '@/lib/players/player-trend'
 import type { RankingResult } from '@/lib/instances/ranking'
+import type { SLOResult as SLOResultView } from '@/lib/metrics/slo'
 import { instanceStatusLevel, resourceLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 
 /**
@@ -532,17 +533,22 @@ export interface OverviewTrendPanelProps {
   isError: boolean
   testId: string
   className?: string
+  /**
+   * 可用性 SLO 快照（FR-463）。不单独占卡——挂在趋势卡头部一行带过，
+   * 细节（MTTR / MTBF / 误差预算）留给监控页。
+   */
+  slo?: SLOResultView
 }
 
 /**
- * 玩家在线趋势卡（FR-469）：全网合计曲线 + 峰值/日均。
+ * 玩家在线趋势卡（FR-469）：全网合计曲线 + 峰值/日均，头部附带可用率。
  *
  * 曲线用轻量内联 SVG 而不是 recharts：本页对渲染成本很敏感（趋势图已有实测
  * 246ms/4 张的教训，见文件头关于懒加载的说明），而这张图只需一条折线、
  * 无需坐标轴/图例/交互，用 recharts 等于为一根线引入整套 SVG 生成逻辑。
  * 精确读数由「峰值 / 日均」两个数字给出，曲线只承担形状（涨跌、尖峰）。
  */
-export function OverviewTrendPanel({ trend, isLoading, isError, testId, className }: OverviewTrendPanelProps) {
+export function OverviewTrendPanel({ trend, isLoading, isError, testId, className, slo }: OverviewTrendPanelProps) {
   const { t } = useTranslation()
   const points = (trend?.trend ?? []).map((p) => p.avg).filter((v) => typeof v === 'number')
   /*
@@ -596,8 +602,14 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
       <svg
         viewBox={`0 0 ${w} ${h}`}
         preserveAspectRatio="none"
-        className="w-full"
-        style={{ height: h, display: 'block' }}
+        /*
+          `h-full` + 父级 flex-1：本行由「玩家 Top5」的内容高度撑起（它是三栏里最高的），
+          若图表固定 84px，趋势卡下半部会留下约 75px 空白（真机截图可见），
+          看着像内容没加载完。让图表吃掉剩余高度，两张卡就等高且都填满。
+          注意保留 `minHeight`：容器极窄时不至于把曲线压成一条线。
+        */
+        className="h-full w-full"
+        style={{ minHeight: h, display: 'block' }}
         role="img"
         aria-label={t('dashboard.playerTrend', '玩家在线趋势')}
       >
@@ -613,13 +625,42 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
       className={className}
       title={t('dashboard.playerTrend', '玩家在线趋势')}
       actions={
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {t('dashboard.trendPeak', '峰值')} {Math.round(peak)} · {t('dashboard.trendAvg', '日均')} {Math.round(dailyAvg)}
+        <span className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+          {/*
+            可用率一行带过：`applicable=false` 时（窗口内无可用证据、分母为 0）
+            显示「不适用」而不是 0%——否则读者会把它读成「完全不可用」。
+            颜色按 target 达标与否分级：达标 muted、未达标红。
+          */}
+          {slo && (
+            <span
+              className="inline-flex items-center gap-1"
+              title={t('dashboard.sloHint', '窗口内可用性；目标 {{target}}，误差预算已用 {{burned}}s / {{allowed}}s', {
+                target: `${(slo.target * 100).toFixed(1)}%`,
+                burned: Math.round(slo.budgetBurnedSec),
+                allowed: Math.round(slo.budgetAllowedSec),
+              })}
+            >
+              {t('dashboard.availability', '可用率')}
+              {slo.applicable ? (
+                <span
+                  className="font-semibold"
+                  style={{ color: slo.availability >= slo.target ? 'var(--status-success)' : 'var(--status-danger)' }}
+                >
+                  {(slo.availability * 100).toFixed(2)}%
+                </span>
+              ) : (
+                <span className="text-muted-foreground">{t('dashboard.notApplicable', '不适用')}</span>
+              )}
+            </span>
+          )}
+          <span>
+            {t('dashboard.trendPeak', '峰值')} {Math.round(peak)} · {t('dashboard.trendAvg', '日均')} {Math.round(dailyAvg)}
+          </span>
         </span>
       }
-      bodyClassName="p-3"
+      bodyClassName="p-3 flex flex-1 flex-col"
     >
-      {chart}
+      <div className="min-h-0 flex-1">{chart}</div>
     </Panel>
   )
 }
@@ -777,6 +818,8 @@ export interface OverviewPageViewProps {
   playerRankingLoading?: boolean
   /** 排行取数失败。 */
   playerRankingError?: boolean
+  /** 平台可用性 SLO（FR-463）；不单独占卡，并入趋势卡头部一行。 */
+  slo?: SLOResultView
   /** 链接渲染插槽（缺省原生 `<a href>`）。 */
   renderLink?: (args: OverviewLinkArgs) => ReactNode
 }
@@ -816,6 +859,7 @@ export function OverviewPageView({
   playerRanking,
   playerRankingLoading = false,
   playerRankingError = false,
+  slo,
   renderLink,
 }: OverviewPageViewProps) {
   const { t } = useTranslation()
@@ -1076,13 +1120,14 @@ export function OverviewPageView({
               两块都做**局部降级**：任一取不到只影响自己那张卡，不牵连同屏其他区块。
             */}
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-              <OverviewTrendPanel
-                trend={playerTrend}
-                isLoading={playerTrendLoading}
-                isError={playerTrendError}
-                testId="overview-player-trend"
-                className="lg:col-span-2"
-              />
+        <OverviewTrendPanel
+          trend={playerTrend}
+          isLoading={playerTrendLoading}
+          isError={playerTrendError}
+          testId="overview-player-trend"
+          className="lg:col-span-2"
+          slo={slo}
+        />
               <OverviewRankingPanel
                 ranking={playerRanking}
                 isLoading={playerRankingLoading}
