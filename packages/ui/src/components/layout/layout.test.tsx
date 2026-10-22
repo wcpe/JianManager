@@ -165,22 +165,32 @@ describe('Toolbar 工具条', () => {
 })
 
 describe('PlatformTabs 工作区页签', () => {
-  it('标记当前页签并暴露 aria-current', () => {
+  /*
+    【语义已从 navigation 改为 tablist】原用例断言 `aria-current="page"` + `role=navigation`，
+    但组件实际用途是「同一份数据的几个视图就地切换」（内容面板在同页内挂载卸载），
+    用 `aria-current` 会让读屏念成「当前页面」而不是「已选中的页签」。
+    现按 WAI-ARIA Tabs 模式给完整语义，用例随之更新——这是有意的破坏性变更，
+    不是缺陷。键盘导航另有 platform-tabs.test.tsx 专项覆盖。
+  */
+  it('标记当前页签并暴露 aria-selected', () => {
     render(
       <PlatformTabs>
         <PlatformTab active>身份与访问</PlatformTab>
         <PlatformTab>运行时与内容</PlatformTab>
       </PlatformTabs>,
     )
-    const activeTab = screen.getByRole('button', { name: '身份与访问' })
+    const activeTab = screen.getByRole('tab', { name: '身份与访问' })
     expect(activeTab).toHaveAttribute('data-active', 'true')
-    expect(activeTab).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('button', { name: '运行时与内容' })).not.toHaveAttribute('data-active')
+    expect(activeTab).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: '运行时与内容' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    )
   })
 
-  it('页签容器语义为 nav', () => {
+  it('页签容器语义为 tablist', () => {
     render(<PlatformTabs aria-label="平台管理分组" />)
-    expect(screen.getByRole('navigation', { name: '平台管理分组' })).toBeInTheDocument()
+    expect(screen.getByRole('tablist', { name: '平台管理分组' })).toBeInTheDocument()
   })
 })
 

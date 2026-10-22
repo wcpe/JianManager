@@ -85,6 +85,43 @@ const buttonVariants = cva(
         ),
         ghost: interactionOverlay,
         link: "text-primary underline-offset-4 hover:underline active:text-primary/80",
+        /*
+          invisible（借鉴 GitHub Primer 的同名变体）：**零视觉外壳**，只保留焦点环与按压反馈。
+
+          【为什么需要它】站内大量「整行可点击」的地方此前都是原生 `<button>` 手写样式：
+          树节点行、列表行、纯图标小控件、卡片外壳。它们**语义上是按钮**（点了要执行动作），
+          但**视觉上不该像按钮**（没有底色、没有内边距、没有最小高度）。
+
+          给 `Button` 加这一档之后，这些场景可以用同一个组件承接，从而：
+          - 键盘可达性与焦点环统一（手写版本大部分漏了 focus-visible）；
+          - 禁用态口径统一（`disabledState`）；
+          - 语义统一（真 `<button>`，而非给 `<div>` 挂 onClick）。
+
+          **与 `ghost` 的区别**：ghost 仍有按钮盒（内边距、最小高度、圆角、hover 底色），
+          invisible 连这些都没有——它是「把按钮变成一块透明可点区域」。
+          传 `className` 即可把尺寸/内边距完全交还调用方。
+
+          **不替代专用组件**：需要精确控制 `role`/`aria-level`/`aria-expanded` 的树节点，
+          仍应直接用原生元素（Primer 也是让 ActionList.Item 独立成组件，而不是塞进 Button）。
+        */
+        invisible:
+          /*
+            【必须把字号/字重/间距也归零】`Button` 的基础类含
+            `text-sm font-medium gap-2 shrink-0`，而只写 `text-inherit` 只重置**颜色**，
+            字号与字重仍继承基础类——于是「原本靠父级继承 13px 正文」的行内按钮，
+            换成 invisible 后会被撑成 14px 加粗、并自带 8px 间距。
+
+            这个回归编译不报错、单测测不出（DOM 结构没变），只有真机肉眼可见，
+            正是「组件库统一」最容易翻车的地方。所以这里把影响排版的各项全部显式复位。
+            需要固定字号的调用方仍可用 `className` 覆盖（twMerge 后写胜出）。
+          */
+          cn(
+            "bg-transparent p-0 text-inherit shadow-none hover:bg-transparent active:bg-transparent",
+            // 字号/字重跟随父级，不继承基础类的 text-sm / font-medium
+            "text-[length:inherit] font-[weight:inherit]",
+            // 不参与 flex 间距与收缩：invisible 用于整行容器时，gap 会撑开内部元素
+            "gap-0 shrink",
+          ),
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
@@ -95,6 +132,12 @@ const buttonVariants = cva(
         "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-8",
         "icon-lg": "size-10",
+        /**
+         * 不施加任何盒模型：高度、内边距、圆角全部交还调用方。
+         * 配 `variant="invisible"` 使用，用于「整行可点击 / 纯图标 / 卡片外壳」这类
+         * 需要按钮语义但视觉由内容决定的场景（见 variant 的 invisible 注释）。
+         */
+        auto: "h-auto min-w-0 rounded-none p-0",
       },
     },
     defaultVariants: {

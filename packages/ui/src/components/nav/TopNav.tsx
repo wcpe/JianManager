@@ -121,7 +121,7 @@ export function TopNav({
             <span className="truncate">{searchLabel}</span>
             <kbd
               data-slot="top-nav-shortcut"
-              className="ml-auto shrink-0 rounded-[4px] border border-border bg-card px-[5px] font-mono text-[10px] leading-[18px] text-muted-foreground"
+              className="ml-auto shrink-0 rounded-[var(--radius-mini)] border border-border bg-card px-[5px] font-mono text-[10px] leading-[18px] text-muted-foreground"
             >
               {searchShortcut}
             </kbd>

@@ -203,7 +203,7 @@ export function ObjectPageHeader({
             <span
               data-slot="object-icon"
               aria-hidden
-              className="flex size-10 shrink-0 items-center justify-center rounded-[9px] border border-primary/15 bg-primary/10 text-primary [&_svg]:size-[22px] max-md:size-[33px]"
+              className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius)] border border-primary/15 bg-primary/10 text-primary [&_svg]:size-[22px] max-md:size-[33px]"
             >
               {icon}
             </span>

@@ -299,7 +299,7 @@ function TableCard({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="table-card"
       className={cn(
-        "overflow-hidden rounded-[10px] border border-border bg-card text-card-foreground",
+        "overflow-hidden rounded-[var(--radius)] border border-border bg-card text-card-foreground",
         "shadow-[0_1px_2px_rgba(16,24,40,.05),0_8px_24px_-12px_rgba(16,24,40,.16)]",
         className,
       )}
