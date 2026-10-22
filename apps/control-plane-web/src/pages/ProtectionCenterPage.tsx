@@ -185,6 +185,7 @@ export default function ProtectionCenterPage() {
     <PageShell data-page="client-dist-ops">
       <PageHeader
         title={t('nav.clientDistOps')}
+        description={t('clientDistOps.subtitle')}
         actions={
           <>
             {isPlatformAdmin && channelPicker}

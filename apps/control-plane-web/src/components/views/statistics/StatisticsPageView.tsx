@@ -200,6 +200,7 @@ export function StatisticsPageView({
     <PageShell data-page="statistics">
       <PageHeader
         title={t('statistics.title')}
+        description={t('statistics.subtitle')}
         actions={<RangePicker value={range} onChange={onRangeChange} />}
       />
 

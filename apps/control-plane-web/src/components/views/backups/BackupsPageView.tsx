@@ -245,6 +245,7 @@ export function BackupsPageView({
     <PageShell data-page="backups">
       <PageHeader
         title={t('backups.title', '备份管理')}
+        description={t('backups.subtitle')}
         actions={
           <>
             {/* 实例选择器由外壳注入：候选走服务端搜索，视图不持实例候选与查询状态。 */}

@@ -322,6 +322,7 @@ export function LogsPageView({
             )}
           </>
         }
+        description={t('logs.subtitle')}
         actions={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

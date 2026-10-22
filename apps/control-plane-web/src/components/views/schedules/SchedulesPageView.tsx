@@ -507,7 +507,7 @@ export function SchedulesPageView({
     // 卡片头随之只留计数与操作（TableCardHeader 的 title 已改为可选）。
     // PageHeader 必须是第一个子元素，故汇总筛选条排到它之后。
     <PageShell data-page="schedules">
-      <PageHeader title={t('schedules.title')} />
+      <PageHeader title={t('schedules.title')} description={t('schedules.subtitle')} />
 
       {/* 汇总筛选条保持在卡片外（作用于列表视图的可见行）。 */}
       <ConfigSummaryChips

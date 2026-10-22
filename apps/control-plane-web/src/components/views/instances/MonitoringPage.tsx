@@ -379,6 +379,7 @@ export default function MonitoringPage(props: MonitoringPageProps) {
     <PageShell data-page="monitoring">
       <PageHeader
         title={t('monitor.title')}
+        description={t('monitor.subtitle')}
         actions={
           <>
             <ResolutionPicker value={resolution} onChange={onResolutionChange} />

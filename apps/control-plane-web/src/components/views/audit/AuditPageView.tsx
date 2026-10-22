@@ -224,6 +224,7 @@ export function AuditPageView({
     <PageShell>
       <PageHeader
         title={t('audit.title')}
+        description={t('audit.subtitle')}
         actions={
           <>
             <Button variant="outline" size="sm" onClick={onExport} disabled={logs.length === 0}>

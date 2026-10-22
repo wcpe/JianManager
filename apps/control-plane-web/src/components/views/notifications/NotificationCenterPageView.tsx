@@ -155,6 +155,7 @@ export function NotificationCenterPageView({
     <PageShell data-page="notifications">
       <PageHeader
         title={t('notificationCenter.title')}
+        description={t('notificationCenter.subtitle')}
         actions={
           <Button variant="outline" size="sm" onClick={onMarkAllRead} disabled={markingAll}>
             {t('notificationCenter.markAllRead')}

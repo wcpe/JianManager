@@ -624,6 +624,7 @@
   },
   "dashboard": {
     "title": "首页",
+    "subtitle": "集群总览：资源水位、异常实例、近期任务与告警、健康墙与趋势。点任一指标可下钻到对应实体。",
     "nodesOnline": "{{count}} 在线",
     "nodesTotal": "{{count}} 总计",
     "instancesTotal": "{{count}} 总计",
@@ -729,6 +730,7 @@
   },
   "monitor": {
     "title": "监控",
+    "subtitle": "节点与实例的指标时序：拖选择条缩放时间窗，悬停查看该时刻各序列取值。",
     "target": "对象",
     "platform": "平台（集群）",
     "nodes": "节点",
@@ -1323,6 +1325,7 @@
   },
   "instances": {
     "title": "服务器",
+    "subtitle": "全部受管服务器实例。支持批量启停、克隆、迁移与按列视图；点行进入实例控制台。",
     "columnsLabel": "列设置",
     "viewsLabel": "视图",
     "viewsSaved": "已保存的视图",
@@ -1998,6 +2001,7 @@
   },
   "bots": {
     "title": "Bot 管理",
+    "subtitle": "挂载在实例上的 Bot 与压测舰队：连接配置、行为模式与运行状态。",
     "createBot": "创建 Bot",
     "name": "名称",
     "instance": "实例",
@@ -2146,6 +2150,7 @@
   },
   "schedules": {
     "title": "定时任务",
+    "subtitle": "定时任务：按 cron 表达式在指定实例上重复执行命令，可查看执行计划与历史。",
     "name": "名称",
     "instance": "实例",
     "instanceId": "实例 ID",
@@ -2212,6 +2217,7 @@
   },
   "backups": {
     "title": "备份管理",
+    "subtitle": "实例备份的创建、校验与恢复。恢复会覆盖当前文件，不可撤销。",
     "selectInstance": "选择实例",
     "selectInstanceDesc": "请先选择一个实例查看备份列表",
     "createBackup": "创建备份",
@@ -2936,6 +2942,7 @@
   },
   "audit": {
     "title": "审计日志",
+    "subtitle": "平台操作审计：谁在何时对哪个对象做了什么。日志只追加，不提供修改与删除。",
     "time": "时间",
     "user": "用户",
     "action": "操作",
@@ -3423,6 +3430,7 @@
   },
   "logs": {
     "title": "日志中心",
+    "subtitle": "按实例聚合的日志检索：支持时间范围、级别与关键字过滤，可实时跟随新日志。",
     "viewLabel": "日志视图",
     "view_platform": "平台日志",
     "view_node_instance": "节点/实例日志",
@@ -3572,6 +3580,7 @@
   },
   "users": {
     "title": "用户管理",
+    "subtitle": "平台账号与角色：成员、组管理员、平台管理员三档，决定可访问的资源范围。",
     "createUser": "创建用户",
     "inviteUser": "邀请用户",
     "invitations": "邀请列表",
@@ -3624,6 +3633,7 @@
   },
   "groups": {
     "title": "用户组管理",
+    "subtitle": "用户组是权限与资源的边界：组内成员只能访问被授权的实例与节点。",
     "createGroup": "创建用户组",
     "members": "成员",
     "instanceQuota": "实例配额",
@@ -3652,6 +3662,7 @@
   },
   "alerts": {
     "title": "告警管理",
+    "subtitle": "告警规则、事件与通知通道。规则按指标或事件维度评估，命中后经通道推送。",
     "rules": "告警规则",
     "events": "告警事件",
     "createRule": "创建规则",
@@ -4395,6 +4406,7 @@
   },
   "clientDistOps": {
     "title": "客户端分发运维",
+    "subtitle": "客户端分发运维：密钥与频道的限速、封禁与保护策略，以及可疑来源的处置记录。",
     "tabOverview": "总览",
     "tabStatistics": "统计",
     "tabMonitor": "实时监控",
@@ -4764,6 +4776,7 @@
   },
   "statistics": {
     "title": "统计",
+    "subtitle": "跨实例的统计分析：按时间范围聚合玩家、在线时长与资源用量。",
     "placeholder": "统计页建设中",
     "nodes": "节点",
     "instances": "实例",
@@ -4795,6 +4808,7 @@
   },
   "tasks": {
     "title": "任务中心",
+    "subtitle": "平台异步任务队列：下载、安装、备份、迁移等长耗时操作的进度与结果。",
     "task": "任务",
     "stateLabel": "状态",
     "progress": "进度",
@@ -4852,6 +4866,7 @@
   },
   "notificationCenter": {
     "title": "通知中心",
+    "subtitle": "站内通知收件箱：告警与系统消息按来源归档，可标记已读。",
     "sourceAll": "全部",
     "sourceMessage": "消息",
     "sourceAlert": "告警",

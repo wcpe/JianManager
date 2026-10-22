@@ -92,6 +92,7 @@ export default function BotsPage() {
     <PageShell data-page="bots">
       <PageHeader
         title={t('bots.title')}
+        description={t('bots.subtitle')}
         actions={
           (tab === 'sessions' || tab === 'templates') && (
             <Button variant="outline" onClick={() => setShowWizard(true)}>

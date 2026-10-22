@@ -646,6 +646,7 @@
   },
   "dashboard": {
     "title": "Home",
+    "subtitle": "Cluster overview: resource levels, abnormal instances, recent tasks and alerts, health wall and trends. Click any metric to drill down.",
     "nodesOnline": "{{count}} Online",
     "nodesTotal": "{{count}} Total",
     "instancesTotal": "{{count}} Total",
@@ -751,6 +752,7 @@
   },
   "monitor": {
     "title": "Monitoring",
+    "subtitle": "Node and instance metric time series: drag the brush to zoom, hover to read each series at that moment.",
     "target": "Target",
     "platform": "Platform (cluster)",
     "nodes": "Nodes",
@@ -1366,6 +1368,7 @@
   },
   "instances": {
     "title": "Servers",
+    "subtitle": "All managed server instances. Batch start/stop, clone, migrate and column views; click a row to open its console.",
     "columnsLabel": "Columns",
     "viewsLabel": "Views",
     "viewsSaved": "Saved views",
@@ -2019,6 +2022,7 @@
   },
   "bots": {
     "title": "Bot Management",
+    "subtitle": "Bots and load-test fleets attached to instances: connection config, behavior mode and runtime status.",
     "createBot": "Create Bot",
     "name": "Name",
     "instance": "Instance",
@@ -2167,6 +2171,7 @@
   },
   "schedules": {
     "title": "Schedules",
+    "subtitle": "Scheduled tasks: repeat commands on target instances via cron expressions, with plans and run history.",
     "name": "Name",
     "instance": "Instance",
     "instanceId": "Instance ID",
@@ -2233,6 +2238,7 @@
   },
   "backups": {
     "title": "Backup Management",
+    "subtitle": "Create, verify and restore instance backups. Restoring overwrites current files and cannot be undone.",
     "selectInstance": "Select an instance to view backups",
     "selectInstanceDesc": "Please select an instance below to view its backup list",
     "createBackup": "Create Backup",
@@ -2957,6 +2963,7 @@
   },
   "audit": {
     "title": "Audit Log",
+    "subtitle": "Platform audit trail: who did what to which object and when. Append-only, with no edit or delete.",
     "time": "Time",
     "user": "User",
     "action": "Action",
@@ -3444,6 +3451,7 @@
   },
   "logs": {
     "title": "Log Center",
+    "subtitle": "Per-instance log search with time range, level and keyword filters, plus live follow.",
     "viewLabel": "Log view",
     "view_platform": "Platform Logs",
     "view_node_instance": "Node / Instance Logs",
@@ -3593,6 +3601,7 @@
   },
   "users": {
     "title": "User Management",
+    "subtitle": "Platform accounts and roles: member, group admin and platform admin decide which resources are reachable.",
     "createUser": "Create User",
     "inviteUser": "Invite User",
     "invitations": "Invitations",
@@ -3645,6 +3654,7 @@
   },
   "groups": {
     "title": "Group Management",
+    "subtitle": "User groups are the boundary for permissions and resources: members can only reach authorized instances and nodes.",
     "createGroup": "Create Group",
     "members": "Members",
     "instanceQuota": "Instance Quota",
@@ -3673,6 +3683,7 @@
   },
   "alerts": {
     "title": "Alert Management",
+    "subtitle": "Alert rules, events and notification channels. Rules evaluate by metric or event dimension and push through channels.",
     "rules": "Alert Rules",
     "events": "Alert Events",
     "createRule": "Create Rule",
@@ -4395,6 +4406,7 @@
   },
   "clientDistOps": {
     "title": "Client Distribution Ops",
+    "subtitle": "Client distribution ops: rate limits, blocks and protection for keys and channels, plus action records for suspicious sources.",
     "tabOverview": "Overview",
     "tabStatistics": "Statistics",
     "tabMonitor": "Realtime",
@@ -4764,6 +4776,7 @@
   },
   "statistics": {
     "title": "Statistics",
+    "subtitle": "Cross-instance analytics: aggregate players, playtime and resource usage over a time range.",
     "placeholder": "Statistics page under construction",
     "nodes": "Nodes",
     "instances": "Instances",
@@ -4795,6 +4808,7 @@
   },
   "tasks": {
     "title": "Task Center",
+    "subtitle": "Platform async task queue: progress and results of downloads, installs, backups, migrations and other long-running work.",
     "task": "Task",
     "stateLabel": "State",
     "progress": "Progress",
@@ -4852,6 +4866,7 @@
   },
   "notificationCenter": {
     "title": "Notification Center",
+    "subtitle": "In-app notification inbox: alerts and system messages grouped by source, markable as read.",
     "sourceAll": "All",
     "sourceMessage": "Messages",
     "sourceAlert": "Alerts",

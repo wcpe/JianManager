@@ -134,6 +134,7 @@ export function GroupsPageView({
     <PageShell data-page="groups">
       <PageHeader
         title={t('groups.title')}
+        description={t('groups.subtitle')}
         actions={<Button onClick={() => setShowCreate(true)}>+ {t('groups.createGroup')}</Button>}
       />
 
