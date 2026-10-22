@@ -231,6 +231,12 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.MetricRollup5m{},
 		&model.MetricRollup1h{},
 		&model.PlatformSetting{},
+		// AI 助手配置底座（FR-514，见 ADR-105）：供应商、模型与单行全局设置。
+		// 与 PlatformSetting 的字符串键覆盖层分开——这三张表有唯一约束、默认模型指针
+		// 与乐观并发版本，塞进标量键会把约束全让给应用层自己守。
+		&model.AssistantProvider{},
+		&model.AssistantModel{},
+		&model.AssistantSetting{},
 		&model.ClientChannel{},
 		&model.ClientPullKey{},
 		&model.ClientVersion{},
