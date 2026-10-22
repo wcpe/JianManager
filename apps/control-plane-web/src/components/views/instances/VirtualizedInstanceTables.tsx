@@ -104,41 +104,24 @@ export function buildInstanceTreeRows(
   }
   const rows: InstanceTreeRow[] = []
   if (dim === 'region') {
-    for (const region of groups) {
-      const regionKey = `region:${region.key}`
-      const regionCollapsed = collapsed.has(regionKey)
-      rows.push({
-        kind: 'group',
-        key: `group:${regionKey}`,
-        collapseKey: regionKey,
-        label: labelOf(region.key, 0),
-        depth: 0,
-        count: region.instances.length,
-        health: memberHealth(region.instances),
-        collapsed: regionCollapsed,
-      })
-      if (regionCollapsed) continue
-      const zones = region.children ?? [{ key: '', instances: region.instances }]
-      for (const zone of zones) {
-        const zoneKey = `region:${region.key}/zone:${zone.key}`
-        const zoneCollapsed = collapsed.has(zoneKey)
-        rows.push({
-          kind: 'group',
-          key: `group:${zoneKey}`,
-          collapseKey: zoneKey,
-          label: labelOf(zone.key, 1),
-          depth: 1,
-          count: zone.instances.length,
-          health: memberHealth(zone.instances),
-          collapsed: zoneCollapsed,
-        })
-        if (zoneCollapsed) continue
-        for (const instance of zone.instances) {
-          rows.push({ kind: 'instance', key: `instance:${instance.id}`, instance })
-        }
-      }
-    }
-    return rows
+    /*
+      【大区/小区不再做层级】大区是虚拟分区（由 `region:` 标签推导），没有独立实体；
+      做成「大区头 → 小区头 → 成员」两级嵌套后，真正的信息（哪台服）被两层组头压到屏幕下方，
+      而两层组头的成员计数与健康色带又与卡片/行自身重复表达。
+
+      现在 region 维度**不产出组头**：直接平铺成员行，大区·小区改由每张卡/每行的
+      左上角文字承载（见 InstanceWorktableCard 与 InstanceRowView 的 region·zone 段）。
+      行序仍按大区→小区排列（聚合函数已排序），只是不再画分隔行。
+    */
+    return groups.flatMap((region) =>
+      (region.children ?? [{ key: '', instances: region.instances }]).flatMap((zone) =>
+        zone.instances.map((instance) => ({
+          kind: 'instance' as const,
+          key: `instance:${instance.id}`,
+          instance,
+        })),
+      ),
+    )
   }
   if (dim === 'groupTree') {
     // 多级层级展开：组头 → 直接成员 → 子组（递归）；折叠即隐藏整棵子树。
@@ -357,7 +340,7 @@ export function VirtualizedGroupedInstanceTable({
   emptyLabel,
   isRowExpanded,
   onVisibleRangeChange,
-  columnCount = 10,
+  columnCount = 11,
 }: {
   rows: InstanceTreeRow[]
   totalCount: number
@@ -372,7 +355,7 @@ export function VirtualizedGroupedInstanceTable({
   isRowExpanded?: (inst: InstanceInfo) => boolean
   /** 可见窗口上报（range 变化即通知）：容器据此切片实例列表批量取行内指标。 */
   onVisibleRangeChange?: (start: number, end: number) => void
-  /** 当前表格总列数（列设置会改变它；占位/组头/空态的 colSpan 必须同步）。缺省 10。 */
+  /** 当前表格总列数（列设置会改变它；占位/组头/空态的 colSpan 必须同步）。缺省 11。 */
   columnCount?: number
 }) {
   const heightAt = useCallback(
@@ -512,7 +495,7 @@ export function VirtualizedInstanceTable({
   emptyLabel,
   isRowExpanded,
   onVisibleRangeChange,
-  columnCount = 10,
+  columnCount = 11,
 }: {
   instances: InstanceInfo[]
   totalCount: number
@@ -525,7 +508,7 @@ export function VirtualizedInstanceTable({
   isRowExpanded?: (inst: InstanceInfo) => boolean
   /** 可见窗口上报（range 变化即通知）：容器据此切片实例列表批量取行内指标。 */
   onVisibleRangeChange?: (start: number, end: number) => void
-  /** 当前表格总列数（列设置会改变它；占位/空态的 colSpan 必须同步）。缺省 10。 */
+  /** 当前表格总列数（列设置会改变它；占位/空态的 colSpan 必须同步）。缺省 11。 */
   columnCount?: number
 }) {
   // 未加载的尾部（index ≥ instances.length）按实例行常量占位，与占位行盒一致。

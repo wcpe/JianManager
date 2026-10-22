@@ -39,6 +39,15 @@ export interface InstanceWorktableCardInstanceView {
   memLimitMb?: number
   /** 状态原因（失败原因或搭建中提示，二者共用该字段）。 */
   statusReason?: string
+  /**
+   * 大区 / 小区（由外壳从实例标签 `region:` / `zone:` 解析后注入）。
+   *
+   * 【为什么放在卡片而不是分组头】大区是虚拟分区、没有独立实体，做成折叠层级后
+   * 两层组头把真正的信息压到屏幕下方。改为卡面左上角一行文字：既保留归属信息，
+   * 又不占额外的行。任一为空时该段退化为另一项，两者都空则不渲染。
+   */
+  region?: string
+  zone?: string
 }
 
 /** 实时指标（本组件所需的最小结构）。 */
@@ -161,6 +170,11 @@ export function InstanceWorktableCard({
   const tpsAvailable = running && (metrics?.probeAvailable ?? false)
   const tpsLabel = !running ? '--' : tpsAvailable ? (metrics?.tps ?? 0).toFixed(1) : unavailable
 
+  // 大区 · 小区：两者都有时用「·」分隔；只有一个时直接显示那个；都没有则不渲染整行。
+  const region = inst.region?.trim() ?? ''
+  const zone = inst.zone?.trim() ?? ''
+  const regionZoneLabel = region && zone ? `${region} · ${zone}` : region || zone
+
   return (
     /*
       整块可点击（进入工作区）→ 保留原 onClick 语义与 interactive 的 hover 抬升；
@@ -175,6 +189,17 @@ export function InstanceWorktableCard({
       className={cn('group cursor-pointer gap-0 p-4 hover:shadow-lift', instanceStatusGlowClass(inst.status, true))}
       onClick={() => onOpen?.(inst.id)}
     >
+      {/* 左上角：大区 · 小区。大区是虚拟分区，不做折叠层级，只以一行小字交代归属；
+          两者都空时不占位（不留空行，卡片高度由构造不变）。 */}
+      {regionZoneLabel && (
+        <div
+          data-testid="instance-card-region-zone"
+          className="mb-2 truncate text-micro text-muted-foreground"
+          title={regionZoneLabel}
+        >
+          {regionZoneLabel}
+        </div>
+      )}
       {/* 头部：图标块 + 名称 + 状态（运行呼吸灯）+ 菜单 */}
       <div className="flex items-center gap-3">
         <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl', toneChipClass(statusTone(inst.status)))}>

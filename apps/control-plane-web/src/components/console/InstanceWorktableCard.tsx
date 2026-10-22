@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { useStartInstance, useStopInstance, useRestartInstance, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import { runtimeDriftOf } from '@/lib/runtime-assets/runtime-drift'
+import { regionOf, zoneOf } from '@/lib/instances/instance-grouping'
 import { useInstanceMetrics } from '@/api/metrics'
 import { resolveCapabilities } from '@/lib/instances/capabilities'
 import { InstanceWorktableCard as InstanceWorktableCardView } from '@/components/views/instances/InstanceWorktableCard'
@@ -46,7 +47,13 @@ export function InstanceWorktableCard({
 
   return (
     <InstanceWorktableCardView
-      inst={inst}
+      inst={{
+        ...inst,
+        // 大区/小区由标签推导后注入视图：视图不解析标签格式（那是领域知识），
+        // 只负责把给定文字画到左上角。
+        region: regionOf(inst),
+        zone: zoneOf(inst),
+      }}
       nodeName={nodeName}
       isProxy={isProxy}
       provisioning={provisioning}

@@ -42,9 +42,20 @@ export function envOf(inst: Pick<InstanceInfo, 'tags'>): string {
   return ''
 }
 
-/** 实例的自由标签（剔除 env: 前缀的环境标签）。 */
+/**
+ * 实例的自由标签（剔除已单独成列/成组的前缀标签）。
+ *
+ * 剔除 `env:`（环境）、`region:`（大区）、`zone:`（小区）三种前缀：
+ * 前两者在列表里各有独立列与独立筛选，后者（大区·小区）已由专属列/卡片左上角承载；
+ * 留在自由标签里会把同一信息画第二遍，还挤占本就不宽的行宽。
+ */
 export function freeTagsOf(inst: Pick<InstanceInfo, 'tags'>): string[] {
-  return parseTags(inst.tags).filter((t) => !t.startsWith(ENV_TAG_PREFIX))
+  return parseTags(inst.tags).filter(
+    (t) =>
+      !t.startsWith(ENV_TAG_PREFIX) &&
+      !t.startsWith(REGION_TAG_PREFIX) &&
+      !t.startsWith(ZONE_TAG_PREFIX),
+  )
 }
 
 /**
