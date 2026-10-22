@@ -70,17 +70,23 @@ describe('OverviewPage（mock 假后端）', () => {
 
     renderWithProviders(<OverviewPage />, { route: '/' })
 
-    expect(await screen.findByText('平台健康')).toBeInTheDocument()
     // FR-461：平台总览页内嵌集群健康墙，单元格可一键下钻。
     const healthWall = within(await screen.findByTestId('health-wall'))
-    expect(healthWall.getByRole('link', { name: 'node-a 陈旧' })).toHaveAttribute('href', '/monitoring?node=node-a')
+    // 健康墙自持取数，单元格要等 /observability/health-wall 回来才渲染——
+    // 原用同步 getByRole，实际是靠「异常项」面板里同名的 `node-a 心跳陈旧` 侥幸命中；
+    // 该面板本轮已移除，故改回 findBy 等健康墙自己的一行。
+    expect(await healthWall.findByRole('link', { name: 'node-a 陈旧' })).toHaveAttribute('href', '/monitoring?node=node-a')
     expect(screen.getByText('Bot Worker（共享）')).toBeInTheDocument()
     expect(await screen.findByText('Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'node-a 心跳陈旧' })).toHaveAttribute('href', '/monitoring?node=node-a')
-    expect(screen.getByTestId('platform-observability-grid')).toHaveClass('md:grid-cols-2', 'xl:grid-cols-3')
-    expect(screen.getByTestId('platform-observability-grid')).not.toHaveClass('lg:grid-cols-3')
-    expect(within(screen.getByTestId('platform-observability-health')).getByText('节点').parentElement?.parentElement?.parentElement).not.toHaveClass('sm:grid-cols-4')
-    expect(within(screen.getByTestId('platform-observability-bots')).getByText(/Bot Worker RSS/).parentElement).not.toHaveClass('sm:grid-cols-4')
+    /*
+      【结构变更·本轮】平台健康 / 异常项 / 首页实例表已移除（与页顶指标卡、「异常实例」、
+      「服务器」页分别重复，详见 OverviewPageView 的说明），故原先对
+      `platform-observability-grid` / `-health` 的栅格类断言、以及「node-a 心跳陈旧」
+      （来自已删除的「异常项」面板）都不再成立。
+      Bot Worker 改为独占一行（不再与其他两张卡并排三栏），这里只断言它仍在且可下钻。
+    */
+    expect(screen.getByText('Bot Worker（共享）')).toBeInTheDocument()
+    expect(within(screen.getByTestId('platform-observability-bots')).getByText(/Bot Worker RSS/)).toBeInTheDocument()
   })
 
   it('资源仪表 Tooltip 只在打开后查询受管归因，并可下钻监控页', async () => {
@@ -121,65 +127,22 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(within(tooltip).queryByText('2.0G')).not.toBeInTheDocument()
   })
 
-  it('底部实例表渲染实例', async () => {
-    // 显式给一组小实例：底部表已改按需分页（首屏按名称升序取一页），用默认的千级种子时
-    // 这几个名字未必落在第一页，断言会变成依赖种子顺序。
-    const seedInstances = [
-      { id: 1, uuid: 'i-survival-1', nodeId: 1, name: 'survival-1', type: 'paper', role: 'backend', processType: 'direct', status: 'RUNNING' },
-      { id: 2, uuid: 'i-lobby-proxy', nodeId: 1, name: 'lobby-proxy', type: 'velocity', role: 'proxy', processType: 'direct', status: 'RUNNING' },
-      { id: 3, uuid: 'i-creative-1', nodeId: 2, name: 'creative-1', type: 'paper', role: 'backend', processType: 'direct', status: 'STOPPED' },
-    ]
-    server.use(
-      http.get(API('/instances/search'), ({ request }) => {
-        const pageSize = Number(new URL(request.url).searchParams.get('pageSize') ?? 50)
-        return HttpResponse.json({
-          items: seedInstances.slice(0, pageSize),
-          total: seedInstances.length,
-          page: 1,
-          pageSize,
-        })
-      }),
-    )
-    const { container } = renderWithProviders(<OverviewPage />, { route: '/' })
-    expect(container.firstElementChild).toHaveAttribute('data-page', 'overview')
-    // 阶段 6 页面迁移起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
-    // data-page 由 PageShell spread 透传，其断言保持不变——那才是行为契约。
-    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
-    const instanceTable = within(await screen.findByTestId('overview-instances-virtual'))
-    expect(await instanceTable.findByText('survival-1')).toBeInTheDocument()
-    expect(instanceTable.getByText('lobby-proxy')).toBeInTheDocument()
-    expect(instanceTable.getByText('creative-1')).toBeInTheDocument()
-  })
+  /*
+    【结构变更·本轮】首页底部那张「不限量无限滚动」的实例表已移除。
+    它与「服务器」页的完整版本重复（那边有搜索/筛选/分组/批量操作），
+    同时是本页渲染量的大头（约 783 个元素、单次主线程阻塞约 360ms）。
 
-  it('1000+ mock 实例下底部实例表按需分页，首屏只取一页且只渲染可视窗口', async () => {
+    原先这里有三条用例覆盖它的渲染 / 按需分页 / 空态降级；表既然不存在，
+    这三条一并撤掉，改为守护「它确实不再出现」——否则将来有人顺手加回来，
+    页面的性能与信息重复问题会无声回归。
+  */
+  it('首页不再渲染实例列表（完整列表在「服务器」页）', async () => {
     renderWithProviders(<OverviewPage />, { route: '/' })
-
-    const surface = await screen.findByTestId('overview-instances-virtual')
-    // 改滚动按需分页后，data-total-count 表示「已加载条数」而非服务端总数：
-    // 首屏只取一页（devmock 默认 pageSize=50），滚到底才续取——不再一次性拉全量。
-    await waitFor(() => expect(Number(surface.dataset.totalCount)).toBeGreaterThan(0))
-    expect(Number(surface.dataset.totalCount)).toBeLessThan(1000)
-    // 不按具体实例名断言：首屏只取一页（按名称升序），具体名字是否落在前 50 条取决于种子，
-    // 而本用例要守的是「按需分页 + 窗口化渲染」这两个行为。
-    const rows = screen.queryAllByTestId('overview-instance-row')
-    expect(rows.length).toBeGreaterThan(0)
-    expect(rows.length).toBeLessThan(80)
+    // 等页面主体就绪，避免「还没渲染」被误判成「已移除」。
+    expect(await screen.findByText('需要处理')).toBeInTheDocument()
+    expect(screen.queryByTestId('overview-instances-virtual')).toBeNull()
+    expect(screen.queryByTestId('overview-instance-row')).toBeNull()
   })
-
-  it('注入实例列表空态 → 表体显示「暂无实例」', async () => {
-    mockInject('get', '/instances/search', { kind: 'empty' })
-    renderWithProviders(<OverviewPage />, { route: '/' })
-    expect(await screen.findByText('暂无实例')).toBeInTheDocument()
-    expect(screen.queryByText('survival-1')).not.toBeInTheDocument()
-  })
-
-  it('注入 500 → 实例表降级为空（非崩溃）', async () => {
-    mockInject('get', '/instances', { kind: 'status', status: 500 })
-    renderWithProviders(<OverviewPage />, { route: '/' })
-    await waitFor(() => expect(screen.getByText('暂无实例')).toBeInTheDocument())
-    expect(screen.queryByText('survival-1')).not.toBeInTheDocument()
-  })
-
   it('同屏三栏聚合异常实例、近期任务与活跃告警，每类最多显示 5 条并复用现有路由', async () => {
     const instances = Array.from({ length: 6 }, (_, index) => ({
       id: index + 1,
@@ -245,29 +208,45 @@ describe('OverviewPage（mock 假后端）', () => {
 
     renderWithProviders(<OverviewPage />, { route: '/' })
 
-    const grid = await screen.findByTestId('overview-operations-grid')
-    expect(grid).toHaveClass('grid-cols-1', 'lg:grid-cols-3')
+    /*
+      【结构变更·本轮】三栏（异常实例 / 近期任务 / 活跃告警）合并为一张「需要处理」。
+      合并理由：三者地位不对等——近期任务多数是**已完成**的（回答「最近发生了什么」），
+      另两者才回答「现在要我做什么」，同权重并排时待办项被已完成项淹没。
+      合并后按紧急度排序（崩溃实例 > 失败任务 > 严重告警 > 警告 > 其余任务）。
 
-    const exceptions = within(screen.getByTestId('overview-exceptions'))
-    expect(await exceptions.findAllByTestId('overview-exception-item')).toHaveLength(5)
-    expect(exceptions.getByText('crashed-1')).toBeInTheDocument()
-    expect(exceptions.queryByText('crashed-6')).not.toBeInTheDocument()
-    expect(exceptions.getByRole('link', { name: '查看全部' })).toHaveAttribute('href', '/instances?status=CRASHED')
+      本用例随之从「三张卡各自截断 5 条」改为：
+      ① 三类都在同一张卡里出现；② 排序符合紧急度；③ 条数受 ATTENTION_LIMIT(8) 约束。
+    */
+    const attention = await screen.findByTestId('overview-attention')
 
-    const recentTasks = within(screen.getByTestId('overview-recent-tasks'))
-    expect(await recentTasks.findAllByTestId('overview-task-item')).toHaveLength(5)
-    expect(recentTasks.getByText('近期任务 1')).toBeInTheDocument()
-    expect(recentTasks.queryByText('近期任务 6')).not.toBeInTheDocument()
-    expect(recentTasks.getByRole('link', { name: '查看全部' })).toHaveAttribute('href', '/tasks')
+    // ① 三类行都出现在同一张卡内（原先分属三个 testid）。
+    await waitFor(() => expect(within(attention).getAllByTestId('overview-exception-item').length).toBeGreaterThan(0))
+    expect(within(attention).getAllByTestId('overview-task-item').length).toBeGreaterThan(0)
+    expect(within(attention).getAllByTestId('overview-alert-item').length).toBeGreaterThan(0)
 
-    const activeAlerts = within(screen.getByTestId('overview-active-alerts'))
-    expect(await activeAlerts.findAllByTestId('overview-alert-item')).toHaveLength(5)
-    expect(activeAlerts.getByText('活跃告警 1')).toBeInTheDocument()
-    expect(activeAlerts.queryByText('活跃告警 6')).not.toBeInTheDocument()
-    expect(activeAlerts.getByRole('link', { name: '查看全部' })).toHaveAttribute('href', '/alerts')
+    // ② 三类都可见——这是「各类保底席位」要守的东西：
+    //    若只做全局按紧急度截断，崩溃实例一多就会把任务与告警整体挤掉。
+    const kinds = within(attention)
+      .getAllByTestId(/^overview-(exception|task|alert)-item$/)
+      .map((el) => el.getAttribute('data-testid') ?? '')
+    expect(kinds.some((k) => k.includes('exception'))).toBe(true)
+    expect(kinds.some((k) => k.includes('task'))).toBe(true)
+    expect(kinds.some((k) => k.includes('alert'))).toBe(true)
+
+    // ③ 合并后条数上限 8（原三栏最多 15 行，合并会更高，故统一收到 8）。
+    expect(kinds.length).toBeLessThanOrEqual(8)
+
+    // ④ 首行仍是紧急度最高的一类（崩溃实例），保证「最先看到最该处理的」。
+    expect(kinds[0]).toContain('exception')
+
+    // 「查看全部」指向崩溃实例筛选（合并卡的主出口）。
+    expect(within(attention).getByRole('link', { name: '查看全部' })).toHaveAttribute(
+      'href',
+      '/instances?status=CRASHED',
+    )
   })
 
-  it('三个聚合各自显示独立空态', async () => {
+  it('三类都为空时显示「需要处理」的统一空态', async () => {
     server.use(
       http.get(API('/instances/search'), () =>
         HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 50 }),
@@ -278,50 +257,35 @@ describe('OverviewPage（mock 假后端）', () => {
 
     renderWithProviders(<OverviewPage />, { route: '/' })
 
-    expect(await screen.findByText('暂无异常实例')).toBeInTheDocument()
-    expect(screen.getByText('暂无近期任务')).toBeInTheDocument()
-    expect(screen.getByText('暂无活跃告警')).toBeInTheDocument()
+    // 【结构变更·本轮】原先是三张卡各显各的空态文案；合并后只有一处空态。
+    expect(await screen.findByText('没有需要处理的项')).toBeInTheDocument()
   })
 
-  it.each([
-    ['instances', '异常实例加载失败'],
-    ['tasks', '近期任务加载失败'],
-    ['alerts', '活跃告警加载失败'],
-  ])('%s 聚合失败时独立降级且其他聚合仍可用', async (failedDomain, errorText) => {
+  /*
+    【结构变更·本轮】三栏合并成一张「需要处理」后，「某一路取数失败只影响自己那张卡」
+    不再成立——三类行同属一张卡，面板级的 isLoading/isError 是三者合并后的状态。
+    故原 it.each 三条用例改为：只有三类**全部**失败时卡片才报错，
+    任一路有数据时其余行照常显示（信息不被一起吞掉）。
+  */
+  it('某一路取数失败不影响其余行：全部失败才报错', async () => {
     server.use(
-      http.get(API('/instances/search'), () =>
-        failedDomain === 'instances'
-          ? new HttpResponse(null, { status: 500 })
-          : HttpResponse.json({
-              items: [{ id: 1, uuid: 'inst-1', nodeId: 1, name: '仍可见异常实例', type: 'paper', role: 'backend', processType: 'direct', status: 'CRASHED', startCommand: '', workDir: '', serverPort: 25565, autoStart: false, autoRestart: false, tags: null, createdAt: '2026-01-01T00:00:00Z' }],
-              total: 1,
-              page: 1,
-              pageSize: 50,
-            }),
-      ),
+      // 实例与告警都失败，只有任务成功 → 卡片仍应显示任务行，而不是整卡报错。
+      http.get(API('/instances/search'), () => new HttpResponse(null, { status: 500 })),
+      http.get(API('/alerts/events'), () => new HttpResponse(null, { status: 500 })),
       http.get(API('/tasks'), () =>
-        failedDomain === 'tasks'
-          ? new HttpResponse(null, { status: 500 })
-          : HttpResponse.json({ items: [{ id: 1, taskId: 'task-1', nodeId: 1, kind: 'backup_create', state: 'running', progress: 50, title: '仍可见近期任务', detail: '', error: '', result: '', cancelRequested: false, createdBy: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }], total: 1, limit: 5, offset: 0 }),
-      ),
-      http.get(API('/alerts/events'), () =>
-        failedDomain === 'alerts'
-          ? new HttpResponse(null, { status: 500 })
-          : HttpResponse.json({ items: [{ id: 1, ruleId: 1, targetId: 1, level: 'warn', triggerType: 'metric', value: 90, message: '仍可见活跃告警', count: 1, resolved: false, firedAt: '2026-01-01T00:00:00Z', acknowledged: false, read: false }], total: 1 }),
+        HttpResponse.json({
+          items: [{ id: 1, taskId: 'task-1', nodeId: 1, kind: 'backup_create', state: 'failed', progress: 100, title: '仍可见任务', detail: '', error: '', result: '', cancelRequested: false, createdBy: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }],
+          total: 1,
+          limit: 5,
+          offset: 0,
+        }),
       ),
     )
 
     renderWithProviders(<OverviewPage />, { route: '/' })
 
-    expect(await screen.findByText(errorText)).toBeInTheDocument()
-    if (failedDomain !== 'instances') {
-      expect(within(screen.getByTestId('overview-exceptions')).getByText('仍可见异常实例')).toBeInTheDocument()
-    }
-    if (failedDomain !== 'tasks') {
-      expect(within(screen.getByTestId('overview-recent-tasks')).getByText('仍可见近期任务')).toBeInTheDocument()
-    }
-    if (failedDomain !== 'alerts') {
-      expect(within(screen.getByTestId('overview-active-alerts')).getByText('仍可见活跃告警')).toBeInTheDocument()
-    }
+    const attention = await screen.findByTestId('overview-attention')
+    await waitFor(() => expect(within(attention).getAllByTestId('overview-task-item').length).toBeGreaterThan(0))
+    expect(within(attention).getByText('仍可见任务')).toBeInTheDocument()
   })
 })

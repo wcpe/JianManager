@@ -694,7 +694,10 @@
       "stale": "Stale",
       "offline": "Offline",
       "unavailable": "Unavailable"
-    }
+    },
+    "needsAttention": "Needs attention",
+    "nothingToDo": "Nothing needs attention",
+    "attentionFailed": "Failed to load"
   },
   "metrics": {
     "tab": "Monitor",

@@ -14,7 +14,7 @@
  * @since FR-508（组件受控化迁包；原页 FR-061 旗舰总览、FR-060 聚合历史曲线、FR-402 平台全景观测、
  *        FR-432 平台观测区权限对齐、FR-461 集群健康墙、FR-502 阶段 6 布局原语与渲染补丁）
  */
-import { lazy, Suspense, useEffect, useMemo, type ReactNode, type UIEvent } from 'react'
+import { lazy, Suspense, useEffect, useMemo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
@@ -24,7 +24,6 @@ import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { RangePicker } from '@jianmanager/ui/charts/RangePicker'
 import type { ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import type { MetricRange } from '@jianmanager/ui/charts/RangePicker'
@@ -33,7 +32,6 @@ import type { AlertEventInfo } from '@/lib/alerts/alert-contracts'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 import type { Task, TaskState } from '@/lib/tasks/task-status'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
-import { useVirtualRows } from '@/lib/shared/virtual-list'
 
 /**
  * 首页趋势图（FR-060）**懒加载**：recharts 不能留在落地页的同步依赖里。
@@ -68,19 +66,15 @@ const TREND_CHART_HEIGHT = 220
 const AGGREGATION_LIMIT = 5
 
 /**
- * 概览底部实例表行高（px）：**声明值 = 真实值**——同一个常量既喂虚拟窗口（`itemSize`），
- * 也写成行盒的行内 style，不由类名反推（先例：`views/logs/LogsPageView` 的 `ROW_HEIGHT`）。
+ * 「需要处理」合并列表的显示条数。
  *
- * 数值依据（实测）：行内最高内容是状态徽章（`StatusBadge` 高 20，含行内基线间隙约 21）
- * 加上 `TableCell` 的 `py-1.5`（12）≈ 33；这里取 36 使概览与实例页共用同一行高栅格
- * （36 = 24px 控件 + 12px 内距），只要行内容不超过 24px 行盒就恒为 36。
- * 原先声明 42：既比真实行盒高（滚动条偏长），又没有任何行盒去承载它。
+ * 原先是三张卡各 5 条（合计最多 15 行、分三栏并排）。合并成一张后若仍按 15 行铺，
+ * 会比原来更高；取 8 条即可覆盖常见规模，且页高收在原三栏高度以内。
  */
-const OVERVIEW_INSTANCE_ROW_HEIGHT = 36
+const ATTENTION_LIMIT = 8
 
 /**
- * 趋势序列降采样（FR-502 阶段 6 补丁）。
- *
+ * 概览底部实例表行高（px）：**声明值 = 真实值**——同一个常量既喂虚拟窗口（`itemSize`），
  * 24h 范围服务端返回 **96 点/条**，而首页图表高 180px、宽约 400px——96 点远超实际可分辨的
  * 像素密度，纯属渲染负担。recharts 是 SVG 实现、**每个点都生成 DOM**：实测 4 个图表 × 96 点
  * 在容器宽度变化时重绘一次要 **546ms**（trace 佐证：单个 RunTask 内 `FireAnimationFrame` →
@@ -446,40 +440,6 @@ export interface PlatformPanelProps {
   isError: boolean
 }
 
-/** 平台健康（FR-402）：节点在线、运行实例、跨节点资源与活跃告警/任务计数。 */
-export function PlatformHealthPanel({ data, isLoading, isError }: PlatformPanelProps) {
-  const { t } = useTranslation()
-  return (
-    <OverviewAggregationPanel testId="platform-observability-health" title={t('dashboard.platformHealth')} to="/monitoring" isLoading={isLoading} isError={isError} isEmpty={!data} emptyText={t('dashboard.noData')} errorText={t('dashboard.platformOverviewUnavailable')}>
-      {data && <div className="space-y-3 p-3 text-sm">
-        <div className="grid grid-cols-2 gap-2">
-          <StatCard className="min-w-0" label={t('dashboard.nodes')} value={`${data.health.onlineNodeCount}/${data.health.nodeCount}`} sub={t('dashboard.online')} />
-          <StatCard className="min-w-0" label={t('dashboard.runningInstances')} value={String(data.health.runningInstanceCount)} sub={t('dashboard.instances')} />
-          <StatCard className="min-w-0" label={t('dashboard.totalCpu')} value={displayNumber(data.resources.cpuPct, '%')} sub={t(`dashboard.freshness.${data.resources.freshness}`)} />
-          <StatCard className="min-w-0" label={t('dashboard.totalMem')} value={data.resources.memoryUsedBytes == null ? '--' : fmtBytes(data.resources.memoryUsedBytes)} sub={data.resources.memoryTotalBytes == null ? '--' : fmtBytes(data.resources.memoryTotalBytes)} />
-        </div>
-        <div className="grid grid-cols-1 gap-2 border-t pt-2 sm:grid-cols-2">
-          <p className="text-muted-foreground">{t('dashboard.activeAlerts', { count: data.alerts.length })}</p>
-          <p className="text-muted-foreground">{t('dashboard.activeTasks', { count: data.tasks.length })}</p>
-        </div>
-      </div>}
-    </OverviewAggregationPanel>
-  )
-}
-
-/** 平台异常（FR-402）：心跳陈旧、崩溃实例等，逐条带下钻地址（最多 5 条）。 */
-export function PlatformExceptionsPanel({ data, isLoading, isError }: PlatformPanelProps) {
-  const { t } = useTranslation()
-  return (
-    <OverviewAggregationPanel testId="platform-observability-exceptions" title={t('dashboard.platformExceptions')} to="/monitoring" isLoading={isLoading} isError={isError} isEmpty={!data || data.exceptions.length === 0} emptyText={t('dashboard.noData')} errorText={t('dashboard.platformOverviewUnavailable')}>
-      <div className="divide-y">
-        {data?.exceptions.slice(0, 5).map((item) => <OverviewLink key={`${item.kind}-${item.nodeId ?? item.instanceId}`} href={item.href} className="block px-3 py-2 text-sm hover:bg-muted/40">{item.title}</OverviewLink>)}
-      </div>
-    </OverviewAggregationPanel>
-  )
-}
-
-/** 平台共享 Bot 运行时（FR-402）：共享进程口径下的 RSS/CPU/活跃数/事件循环 P95。 */
 export function PlatformBotRuntimePanel({ data, isLoading, isError }: PlatformPanelProps) {
   const { t } = useTranslation()
   const bots = data?.bots
@@ -501,106 +461,6 @@ export function PlatformBotRuntimePanel({ data, isLoading, isError }: PlatformPa
   )
 }
 
-/** 底部密集实例表属性。 */
-export interface OverviewInstancePanelProps {
-  /** 已加载的实例行（分页信封拍平后的全集，容器负责服务端分页）。 */
-  instances: InstanceInfo[]
-  /**
-   * 滚动近底上报。
-   * **是否还有下一页 / 是否正在取**由容器守卫（视图不持查询状态），故这里只表达「用户滚到底了」。
-   */
-  onNeedMore: () => void
-}
-
-/**
- * 底部密集实例表（FR-061）：虚拟窗口渲染 + 滚动按需续取。
- *
- * 千级实体口径：虚拟化的 total 用「已加载条数」而非服务端 total——表格只渲染已到手的行，
- * 未加载的部分靠滚动触发容器续取（与 InstancesPage 的 `onNeedMore` 是同一套做法）。
- * 虚拟窗口是纯 UI 状态，留本组件；分页游标与取数在容器。
- */
-export function OverviewInstancePanel({ instances, onNeedMore }: OverviewInstancePanelProps) {
-  const { t } = useTranslation()
-  const {
-    containerRef: instanceContainerRef,
-    onScroll: handleInstanceScrollBase,
-    range: instanceRange,
-  } = useVirtualRows({
-    total: instances.length,
-    itemSize: OVERVIEW_INSTANCE_ROW_HEIGHT,
-    overscan: 8,
-    fallbackViewportSize: 420,
-  })
-  const visibleInstances = instances.slice(instanceRange.start, instanceRange.end)
-
-  /**
-   * 滚动到底再取下一页。
-   *
-   * useVirtualRows 的 onScroll 不接受事件参数——它自己从 containerRef.current 读 scrollTop
-   * （见 lib/virtual-list.ts）。这里先触发它更新虚拟窗口，再用事件本身判断是否近底。
-   */
-  const handleInstanceScroll = (e: UIEvent<HTMLDivElement>) => {
-    handleInstanceScrollBase()
-    const el = e.currentTarget
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 240
-    if (nearBottom) onNeedMore()
-  }
-
-  return (
-    <Panel title={t('dashboard.instanceList')} bodyClassName="p-0" className="overflow-hidden">
-      <div
-        ref={instanceContainerRef}
-        onScroll={handleInstanceScroll}
-        data-testid="overview-instances-virtual"
-        data-total-count={instances.length}
-        className="max-h-[420px] overflow-auto"
-      >
-        <Table>
-          <TableHeader className="sticky top-0 z-10 bg-card">
-            <TableRow>
-              <TableHead>{t('instances.name')}</TableHead>
-              <TableHead>{t('instances.type')}</TableHead>
-              <TableHead>{t('instances.status')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {instanceRange.before > 0 && (
-              <TableRow aria-hidden="true">
-                <TableCell colSpan={3} className="p-0" style={{ height: instanceRange.before }} />
-              </TableRow>
-            )}
-            {visibleInstances.map((inst) => (
-              // 行高写进行盒：与 itemSize 同源，滚动条长度因而不虚长。
-              <TableRow
-                key={inst.id}
-                data-testid="overview-instance-row"
-                style={{ height: OVERVIEW_INSTANCE_ROW_HEIGHT }}
-              >
-                <TableCell className="font-medium">{inst.name}</TableCell>
-                <TableCell className="text-muted-foreground">{inst.type}</TableCell>
-                <TableCell>
-                  <StatusBadge level={instanceStatusLevel(inst.status)} label={inst.status} />
-                </TableCell>
-              </TableRow>
-            ))}
-            {instanceRange.after > 0 && (
-              <TableRow aria-hidden="true">
-                <TableCell colSpan={3} className="p-0" style={{ height: instanceRange.after }} />
-              </TableRow>
-            )}
-            {instances.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={3} className="h-16 text-center text-muted-foreground">
-                  {t('instances.empty')}
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-    </Panel>
-  )
-}
 
 /**
  * 受控边界（ADR-102 a 范式）：**不取数、不发请求、不弹 toast**。
@@ -663,10 +523,6 @@ export interface OverviewPageViewProps {
   platformOverviewError: boolean
   /** 集群健康墙插槽（FR-461）：取数与排序在应用侧接线层，插槽缺省或无权时不渲染。 */
   renderHealthWall?: () => ReactNode
-  /** 底部密集实例表的已加载行（容器拍平分页信封后注入，服务端分页语义不变）。 */
-  instances: InstanceInfo[]
-  /** 实例表滚动近底上报（续取守卫在容器）。 */
-  onNeedMoreInstances: () => void
   /** 链接渲染插槽（缺省原生 `<a href>`）。 */
   renderLink?: (args: OverviewLinkArgs) => ReactNode
 }
@@ -700,8 +556,6 @@ export function OverviewPageView({
   platformOverviewLoading,
   platformOverviewError,
   renderHealthWall,
-  instances,
-  onNeedMoreInstances,
   renderLink,
 }: OverviewPageViewProps) {
   const { t } = useTranslation()
@@ -723,6 +577,92 @@ export function OverviewPageView({
   const exceptionRows = (exceptionInstances ?? []).slice(0, AGGREGATION_LIMIT)
   const recentTaskRows = (recentTasks ?? []).slice(0, AGGREGATION_LIMIT)
   const activeAlertRows = (activeAlerts ?? []).slice(0, AGGREGATION_LIMIT)
+
+  /**
+   * 「需要处理」统一列表（本轮结构重排）。
+   *
+   * 【为什么合并】原先并排三栏：异常实例 / 近期任务 / 活跃告警。但三栏地位并不对等——
+   * 「近期任务」里多数是**已完成**的（它回答「最近发生了什么」），而前两者回答的是
+   * 「现在需要我做什么」。三者同权重并排时，真正要动手的项被「已完成」的噪音淹没。
+   *
+   * 合并后按**紧急度**排序，一眼看到最先该处理的那条：
+   * 崩溃实例(0) > 失败任务(1) > 活跃告警(2，按告警级别再分) > 其余任务(3)。
+   * 严重度同分时保持各自原有顺序（稳定排序），避免每 10 秒轮询时行序跳动。
+   *
+   * 条数上限取 `ATTENTION_LIMIT`：合并后若仍各给 5 条会变成 15 行，比原先更高；
+   * 取 8 条既覆盖常见规模，又把页高收在原来的三栏高度以内。
+   */
+  type AttentionRow = {
+    key: string
+    /** 越小越紧急。 */
+    rank: number
+    /** 来源类别：用于「各类保底席位」，避免某一类被整体挤掉。 */
+    kind: 'exception' | 'task' | 'alert'
+    label: string
+    badge: ReactNode
+    href?: string
+    testId: string
+  }
+  /*
+    【为什么不是简单全局截断】直接按紧急度排序再 `slice(0, 8)` 会有个副作用：
+    崩溃实例一多（比如 20 台），8 个位置全被它占满，失败任务与告警**永远露不出来**——
+    而「有失败任务」恰恰是用户更该知道的事。故按类别**保底**各留席位：
+    每类先各取至多 3 条，剩余的席位再按紧急度回填。这样任一类别有内容就一定可见，
+    同时整体仍按紧急度排序，最先看到的还是最该处理的。
+  */
+  const PER_KIND_FLOOR = 3
+  const allAttention: AttentionRow[] = [
+    ...exceptionRows.map((instance) => ({
+      key: `inst:${instance.id}`,
+      // 崩溃实例排最前：它是唯一「已经在损失可用性」的一类。
+      rank: 0,
+      kind: 'exception' as const,
+      label: instance.name,
+      badge: <StatusBadge level={instanceStatusLevel(instance.status)} label={instance.status} />,
+      href: `/instances/${instance.id}`,
+      testId: 'overview-exception-item',
+    })),
+    ...recentTaskRows.map((task) => {
+      const failed = taskStatusLevel(task.state) === 'danger'
+      return {
+        key: `task:${task.taskId}`,
+        // 失败任务与崩溃实例同级紧迫；进行中/已完成的排到告警之后。
+        rank: failed ? 1 : 3,
+        kind: 'task' as const,
+        label: task.title,
+        badge: (
+          <StatusBadge
+            level={task.cancelRequested ? 'warning' : taskStatusLevel(task.state)}
+            label={task.cancelRequested ? t('tasks.state.canceling', '取消中') : t(`tasks.state.${task.state}`)}
+          />
+        ),
+        href: `/tasks?task=${encodeURIComponent(task.taskId)}`,
+        testId: 'overview-task-item',
+      }
+    }),
+    ...activeAlertRows.map((alert) => ({
+      key: `alert:${alert.id}`,
+      // 告警按自身级别细分：严重(1.5) 次于失败任务，警告(2) 再次之。
+      rank: levelStatusLevel(alert.level) === 'danger' ? 1.5 : 2,
+      kind: 'alert' as const,
+      label: alert.message,
+      badge: <StatusBadge level={levelStatusLevel(alert.level)} label={t(`alerts.level_${alert.level}`, alert.level)} />,
+      // 告警行不是链接（迁包前即是纯展示行），故不给 href。
+      testId: 'overview-alert-item',
+    })),
+  ].sort((a, b) => a.rank - b.rank)
+
+  // 各类保底席位 → 剩余席位按紧急度回填 → 最终仍按紧急度排序输出。
+  const floorPicked = new Set<string>()
+  for (const kind of ['exception', 'task', 'alert'] as const) {
+    allAttention.filter((r) => r.kind === kind).slice(0, PER_KIND_FLOOR).forEach((r) => floorPicked.add(r.key))
+  }
+  const attentionRows = allAttention
+    .filter((r) => floorPicked.has(r.key))
+    .slice(0, ATTENTION_LIMIT)
+    .concat(allAttention.filter((r) => !floorPicked.has(r.key)))
+    .slice(0, ATTENTION_LIMIT)
+    .sort((a, b) => a.rank - b.rank)
 
   /**
    * 四条趋势合成一张图（FR-502 阶段 6 补丁）。
@@ -814,99 +754,72 @@ export function OverviewPageView({
         <StatCard label={t('dashboard.onlinePlayers')} value={String(totals?.onlinePlayers ?? 0)} sub={t('nav.players')} />
       </div>
 
-      <div data-testid="overview-operations-grid" className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <OverviewAggregationPanel
-          testId="overview-exceptions"
-          title="异常实例"
-          to="/instances?status=CRASHED"
-          isLoading={exceptionLoading}
-          isError={exceptionError}
-          isEmpty={exceptionRows.length === 0}
-          emptyText="暂无异常实例"
-          errorText="异常实例加载失败"
-          renderLink={renderLink}
-        >
-          <div className="divide-y">
-            {exceptionRows.map((instance) => (
+      {/*
+        【三栏 → 一张「需要处理」卡】原先并排 异常实例 / 近期任务 / 活跃告警，
+        三者地位并不对等：近期任务多数是**已完成**的（回答「最近发生了什么」），
+        前两者才回答「现在要我做什么」。同权重并排时，要动手的项被已完成项淹没。
+        合并后按紧急度排序（崩溃实例 > 失败任务 > 严重告警 > 警告 > 其余任务），
+        一眼看到最先该处理的那条；条数与紧迫度口径见 `attentionRows` 与 `ATTENTION_LIMIT`。
+      */}
+      <OverviewAggregationPanel
+        testId="overview-attention"
+        title={t('dashboard.needsAttention', '需要处理')}
+        to="/instances?status=CRASHED"
+        isLoading={exceptionLoading || recentTasksLoading || activeAlertsLoading}
+        isError={exceptionError && recentTasksError && activeAlertsError}
+        isEmpty={attentionRows.length === 0}
+        emptyText={t('dashboard.nothingToDo', '没有需要处理的项')}
+        errorText={t('dashboard.attentionFailed', '加载失败')}
+        renderLink={renderLink}
+      >
+        <div className="divide-y">
+          {attentionRows.map((row) => {
+            const body = (
+              <>
+                <span className="min-w-0 truncate text-sm font-medium" title={row.label}>
+                  {row.label}
+                </span>
+                {row.badge}
+              </>
+            )
+            // 有 href 的行走链接（实例 / 任务）；告警行是纯展示行，保持 div 不挂链接。
+            return row.href ? (
               <OverviewLink
-                key={instance.id}
-                href={`/instances/${instance.id}`}
-                testId="overview-exception-item"
+                key={row.key}
+                href={row.href}
+                testId={row.testId}
                 className="flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-muted/40"
                 renderLink={renderLink}
               >
-                <span className="min-w-0 truncate text-sm font-medium">{instance.name}</span>
-                <StatusBadge level={instanceStatusLevel(instance.status)} label={instance.status} />
+                {body}
               </OverviewLink>
-            ))}
-          </div>
-        </OverviewAggregationPanel>
-
-        <OverviewAggregationPanel
-          testId="overview-recent-tasks"
-          title="近期任务"
-          to="/tasks"
-          isLoading={recentTasksLoading}
-          isError={recentTasksError}
-          isEmpty={recentTaskRows.length === 0}
-          emptyText="暂无近期任务"
-          errorText="近期任务加载失败"
-          renderLink={renderLink}
-        >
-          <div className="divide-y">
-            {recentTaskRows.map((task) => (
-              <OverviewLink
-                key={task.taskId}
-                href={`/tasks?task=${encodeURIComponent(task.taskId)}`}
-                testId="overview-task-item"
-                className="flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-muted/40"
-                renderLink={renderLink}
-              >
-                <span className="min-w-0 truncate text-sm font-medium">{task.title}</span>
-                <StatusBadge
-                  level={task.cancelRequested ? 'warning' : taskStatusLevel(task.state)}
-                  label={task.cancelRequested ? t('tasks.state.canceling', '取消中') : t(`tasks.state.${task.state}`)}
-                />
-              </OverviewLink>
-            ))}
-          </div>
-        </OverviewAggregationPanel>
-
-        <OverviewAggregationPanel
-          testId="overview-active-alerts"
-          title="活跃告警"
-          to="/alerts"
-          isLoading={activeAlertsLoading}
-          isError={activeAlertsError}
-          isEmpty={activeAlertRows.length === 0}
-          emptyText="暂无活跃告警"
-          errorText="活跃告警加载失败"
-          renderLink={renderLink}
-        >
-          {/* 告警行不是链接（迁包前即是纯展示行），故不挂链接插槽。 */}
-          <div className="divide-y">
-            {activeAlertRows.map((alert) => (
+            ) : (
               <div
-                key={alert.id}
-                data-testid="overview-alert-item"
+                key={row.key}
+                data-testid={row.testId}
                 className="flex items-center justify-between gap-3 px-3 py-2.5"
               >
-                <span className="min-w-0 truncate text-sm font-medium" title={alert.message}>{alert.message}</span>
-                <StatusBadge level={levelStatusLevel(alert.level)} label={t(`alerts.level_${alert.level}`, alert.level)} />
+                {body}
               </div>
-            ))}
-          </div>
-        </OverviewAggregationPanel>
-      </div>
+            )
+          })}
+        </div>
+      </OverviewAggregationPanel>
 
-      {/* 平台全景观测（FR-402）：权限门禁在容器判定后注入，无权时整区不渲染。 */}
-      {canSeePlatformObs && (
-          <div data-testid="platform-observability-grid" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <PlatformHealthPanel data={platformOverview} isLoading={platformOverviewLoading} isError={platformOverviewError} />
-            <PlatformExceptionsPanel data={platformOverview} isLoading={platformOverviewLoading} isError={platformOverviewError} />
-            <PlatformBotRuntimePanel data={platformOverview} isLoading={platformOverviewLoading} isError={platformOverviewError} />
-          </div>
-      )}
+      {/*
+        【平台健康 / 异常项 / 首页实例表三块已移除】数据口径修好之后（mock 的 totals 曾写死，
+        导致同一屏上「运行实例」既是 720 又是 242），这三块的重复一眼可见：
+
+        - 平台健康：4 个 StatCard 与页顶的指标卡**逐项相同**（节点 / 运行实例 / 总 CPU / 总内存）。
+          同一组数字在首屏出现两遍，第二遍不提供任何新信息，只是把下面的内容推低约 150px。
+        - 异常项：读 `platformOverview.exceptions`，与读 `/instances/search?status=CRASHED`
+          的「异常实例」表达同一件事，两个数据源还常对不上（一个空、一个有内容）。
+        - 首页实例表：不限量无限滚动铺全部实例，与「服务器」页的完整版本重复；
+          它同时是本页渲染量的大头（改前实测约 783 个元素、单次主线程阻塞约 360ms）。
+
+        移除后信息一项不丢：指标在页顶、异常在「需要处理」、完整实例列表在「服务器」页。
+      */}
+      {canSeePlatformObs && <PlatformBotRuntimePanel data={platformOverview} isLoading={platformOverviewLoading} isError={platformOverviewError} />}
 
       {/* FR-461：逐台集群健康墙（热力矩阵 + 分级 + 排序 + 一键下钻）——本体是应用侧接线层，经插槽注入。 */}
       {canSeePlatformObs && renderHealthWall?.()}
@@ -929,9 +842,6 @@ export function OverviewPageView({
           />
         </Suspense>
       </Panel>
-
-      {/* 底部：密集实例表（虚拟窗口 + 滚动按需续取） */}
-      <OverviewInstancePanel instances={instances} onNeedMore={onNeedMoreInstances} />
     </PageShell>
   )
 }
