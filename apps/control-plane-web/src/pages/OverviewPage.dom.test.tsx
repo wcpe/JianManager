@@ -128,6 +128,30 @@ describe('OverviewPage（mock 假后端）', () => {
   })
 
   /*
+    球体的两个交互契约（本轮）：
+    ① 环下方有「结论句」——首页第一眼要判断，不只有百分比读数；
+    ② 球不再因悬停变色——此前 `hover:bg-accent/40` 让三张卡轮流闪浅底，干扰读数。
+    两条都是易被后人「顺手改回去」的样式，故用断言钉住。
+  */
+  it('球体：有结论句，且不再有悬停底色', async () => {
+    renderWithProviders(<OverviewPage />, { route: '/' })
+
+    const cpu = await screen.findByRole('button', { name: '总 CPU 资源归因' })
+    // ① 结论句与环同属一张卡：按 resourceLevel 分档，CPU 47% 落 success → 「正常」。
+    const card = cpu.closest('[data-slot="panel"]') as HTMLElement
+    expect(within(card).getByText('正常')).toBeInTheDocument()
+    // ② 触发区不带 hover 底色类（改回 hover:bg-accent/* 会在此失败）。
+    expect(cpu.className).not.toMatch(/hover:bg-accent/)
+  })
+
+  it('首页渲染玩家趋势与玩家 Top5', async () => {
+    renderWithProviders(<OverviewPage />, { route: '/' })
+    // 两块都靠各自接口取数，故等它们落地（避免用同步 query 抢在请求前）。
+    expect(await screen.findByTestId('overview-player-trend')).toBeInTheDocument()
+    expect(await screen.findByTestId('overview-player-ranking')).toBeInTheDocument()
+  })
+
+  /*
     【结构变更·本轮】首页底部那张「不限量无限滚动」的实例表已移除。
     它与「服务器」页的完整版本重复（那边有搜索/筛选/分组/批量操作），
     同时是本页渲染量的大头（约 783 个元素、单次主线程阻塞约 360ms）。

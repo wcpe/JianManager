@@ -6,7 +6,7 @@ import { useNodes } from '@/api/nodes'
 import { useInstanceSearch } from '@/api/instances'
 import { useTasks } from '@/api/tasks'
 import { useAlertEvents } from '@/api/alerts'
-import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution } from '@/api/metrics'
+import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, usePlayerTrend, useInstanceRanking } from '@/api/metrics'
 import { HealthWall } from '@/components/nodes/HealthWall'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
@@ -68,6 +68,17 @@ export default function OverviewPage() {
   const deferredOverview = useDeferredValue(overview)
   const attribution = useResourceAttribution(activeGauge !== null, activeGauge === 'memory' ? 'memory' : 'cpu')
   const platformObservability = usePlatformObservabilityOverview(canSeePlatformObs)
+  /*
+    【首页补两个区块】
+    - 玩家在线趋势：游戏服首页最该回答「现在多少人在玩、高峰在哪」，而这条数据早就有了，
+      首页却一直没有。
+    - 玩家 Top5：哪几台服在承载玩家，便于快速定位热点与做容量决策。
+
+    两者都走现成接口（/metrics/players/trend、/metrics/instances/ranking），不新造契约。
+    趋势自带 peakValue / dailyAvg / hourlyDist，无需前端二次聚合。
+  */
+  const playerTrend = usePlayerTrend({ range, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })
+  const playerRanking = useInstanceRanking({ metric: 'inst_players_online', window: '5m', limit: 5 })
 
   return (
     <OverviewPageView
@@ -95,6 +106,12 @@ export default function OverviewPage() {
       platformOverviewError={platformObservability.isError}
       // 健康墙本体是应用侧接线层（自持取数 + 排序状态），故按块注入；权限门禁与视图同一开关。
       renderHealthWall={() => <HealthWall enabled={canSeePlatformObs} />}
+      playerTrend={playerTrend.data}
+      playerTrendLoading={playerTrend.isLoading}
+      playerTrendError={playerTrend.isError}
+      playerRanking={playerRanking.data}
+      playerRankingLoading={playerRanking.isLoading}
+      playerRankingError={playerRanking.isError}
       // 包内不认识 react-router：下钻链接（异常项 / 任务项 / 归因 Tooltip / 「查看全部」）统一经插槽渲染。
       renderLink={({ href, className, testId, children }) => (
         <Link to={href} className={className} data-testid={testId}>
