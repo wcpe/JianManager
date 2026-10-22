@@ -54,13 +54,13 @@ describe('加载中：页头/筛选条先渲染，数据区转骨架', () => {
     expectDataSkeleton()
   })
 
-  it('实例管理：标题与工具条先渲染，数据区是骨架', () => {
+  it('服务器：标题与工具条先渲染，数据区是骨架', () => {
     loginMockUser()
     mockInject('get', '/instances/search', { kind: 'delay', ms: NEVER_MS })
     mockInject('get', '/instances/aggregate', { kind: 'delay', ms: NEVER_MS })
     renderWithProviders(<InstancesPage />)
 
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('实例管理')
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('服务器')
     expect(screen.getByLabelText('搜索实例')).toBeInTheDocument()
     // 实例列表页的数据区骨架自带列表外壳（计数行 + 列表容器），不是裸行。
     expect(document.querySelector('[data-slot="data-skeleton"]')).toBeInTheDocument()

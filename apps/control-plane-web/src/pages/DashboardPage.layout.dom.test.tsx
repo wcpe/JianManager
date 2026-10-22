@@ -134,7 +134,7 @@ describe('DashboardPage 宽屏布局', () => {
 
     await user.click(within(mobileNav).getByRole('button', { name: '服务器' }))
     expect(mobileNav.querySelector('[data-slot="mobile-nav-panel"]')).toHaveAttribute('data-state', 'open')
-    expect(within(mobileNav).getByRole('link', { name: '全部服务器' })).toBeInTheDocument()
+    expect(within(mobileNav).getByRole('link', { name: '服务器' })).toBeInTheDocument()
     expect(within(mobileNav).getByRole('link', { name: '节点' })).toBeInTheDocument()
   })
 

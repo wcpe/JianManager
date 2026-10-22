@@ -43,7 +43,7 @@ describe('FR-037 运维控制台 Shell（mock 假后端）', () => {
     // 【FR-509 更新】侧栏重构删除了 `ServerSelector`（「选择服务器」按钮）与「按节点」分组方式下拉：
     // 资源定位改为资源面板内的「搜索 + 固定三段（置顶 / 后端分组树 / 标签）」。
     // 与 `WorkspaceSidebar.dom.test.tsx` 的「无选择服务器」断言对齐——两处不得再互相矛盾。
-    expect(within(sidebar).getByRole('link', { name: '平台首页' })).toBeInTheDocument()
+    expect(within(sidebar).getByRole('link', { name: '首页' })).toBeInTheDocument()
     expect(within(sidebar).queryByRole('button', { name: '选择服务器' })).not.toBeInTheDocument()
     expect(within(sidebar).queryByRole('button', { name: '按节点' })).not.toBeInTheDocument()
     // 资源面板仍在：搜索框是它的一部分（定位能力没有丢，只是换了形状）。

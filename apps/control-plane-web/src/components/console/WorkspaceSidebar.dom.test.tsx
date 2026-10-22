@@ -124,14 +124,14 @@ describe('WorkspaceSidebar 工作区侧栏（重构件）', () => {
     expect(aside).toHaveAttribute('aria-label', '服务器运维导航')
   })
 
-  it('固定入口来自真实登记：平台首页 / 全部服务器 / 节点，实例与节点带计数', () => {
+  it('固定入口来自真实登记：首页 / 服务器 / 节点，实例与节点带计数', () => {
     const { container } = renderWithProviders(<WorkspaceSidebar />, { route: '/instances' })
     const shortcuts = container.querySelector('[data-slot="side-nav-shortcuts"]') as HTMLElement
 
-    expect(within(shortcuts).getByRole('link', { name: /平台首页/ })).toBeInTheDocument()
+    expect(within(shortcuts).getByRole('link', { name: '首页' })).toBeInTheDocument()
     // 计数口径：实例总数取聚合（42），节点数取节点列表长度（2）。
-    expect(within(shortcuts).getByRole('link', { name: /全部服务器/ })).toHaveTextContent('42')
-    expect(within(shortcuts).getByRole('link', { name: /节点/ })).toHaveTextContent('2')
+    expect(within(shortcuts).getByRole('link', { name: /^服务器/ })).toHaveTextContent('42')
+    expect(within(shortcuts).getByRole('link', { name: /^节点/ })).toHaveTextContent('2')
   })
 
   it('底部只剩「更多」入口；已收纳的工具不在底部占位', () => {
@@ -287,8 +287,8 @@ describe('WorkspaceSidebar 工作区侧栏（重构件）', () => {
     const resource = aside.querySelector('[data-slot="side-nav-resource"]') as HTMLElement
     // 资源区收起方式同头段：grid-rows 0fr + 淡出（`hidden` 不可过渡，会触发二次布局）。
     expect(resource).toHaveClass('grid-rows-[0fr]')
-    expect(screen.getByRole('link', { name: '平台首页' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: '全部服务器' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '首页' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '服务器' })).toBeInTheDocument()
   })
 
   it('权限收敛：无 instance.read 时资源面板不渲染实例行（空态）', () => {
@@ -301,7 +301,7 @@ describe('WorkspaceSidebar 工作区侧栏（重构件）', () => {
     expect(screen.getByText('没有匹配的服务器')).toBeInTheDocument()
     // 权限裁剪与旧侧栏同语义：无 instance.read / node.read 时对应入口不出现；
     // 组内可读的入口照常保留（服务器运维域仍可进群组与工作台）。
-    expect(screen.queryByRole('link', { name: /全部服务器/ })).toBeNull()
+    expect(screen.queryByRole('link', { name: '服务器' })).toBeNull()
     expect(screen.queryByRole('link', { name: /节点/ })).toBeNull()
     // 工具默认全部「已收纳」，底部只留「更多」入口——故这里断言入口在、链接不在。
     expect(screen.getByTestId('sidebar-tools-more')).toBeInTheDocument()
