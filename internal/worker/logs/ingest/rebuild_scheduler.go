@@ -154,6 +154,20 @@ type rebuildAttemptState struct {
 	abandoned bool
 	// abandonReason 是放弃原因（含最后一次失败原因与代次列表），排障与运维面据此定性。
 	abandonReason string
+	// totalRebuilds 是该源自上次成功以来的**绝对重建次数**（不分类别、不清零于退回）。
+	//
+	// 为什么要独立于 `attempts`（2026-10-22 代码审查）：`attempts` 只统计确定性失败
+	// （`rebuildFailureExternal` 刻意不计次，避免 VL 抖动把源判死 —— 那个设计意图是对的）。
+	// 但「外部条件」包含**代次占用探测失败**，而每次重建都会把整窗数据**完整重写一遍**，
+	// 旧副本又不会被清理（`delete_enabled: false` 时 VL 只能靠 retention 淘汰）。
+	// 于是「探测失败 → 按未占用继续 → 换代次重写 → 再失败」可以无限循环：
+	// 生产实测 `inst:318` 单日留下 **295 个代次 / 984 万行 / 127 倍重复 / 880MB**。
+	//
+	// 60 源规模下这条通道会按源数线性复制（VL 查询内存只有 256MiB，探测失败会常态化），
+	// 最坏 60 × 4 份 × 6.9MB ≈ 1.65GB/天 的纯浪费，27 天窗口 ≈ 45GB。
+	// 因此需要一个**不看失败类别**的硬顶：外部失败仍可重试，但每源每天的
+	// 整窗重写份数不得无限增长。
+	totalRebuilds int
 	// generations 是本轮连续失败期间**已尝试过的投影代次**（有界，用于排障看清
 	// 「它到底建了多少版」，这正是生产现场最难判的一点）。
 	generations []string
@@ -375,11 +389,27 @@ func (s *rebuildScheduler) startupPendingKeys() []string {
 	return keys
 }
 
-// noteSuccess 记一次成功：清空该源的重试台账（真进展 ⇒ 计数归零是可验证的语义）。
+// noteSuccess 记一次成功：清空该源的**连续失败**台账（真进展 ⇒ 计数归零是可验证的语义）。
+//
+// **但保留 `totalRebuilds`**（2026-10-22 代码审查，127 倍重复的真因）：
+// 旧实现直接 `delete(s.attempts, key)` 把整个状态删掉，于是「某天成功、某天失败」
+// 交替出现时，确定性失败计数每次都被清零 ⇒ 永不放弃 ⇒ 无限换代次重写。
+// 这解释了生产 `inst:318` 单日 **295 个代次 / 127 倍重复 / 880MB**：
+// 它远大于 `maxAttempts=4`，因为计数一直在被成功重置。
+//
+// 语义上两者不同：`attempts` 是「连续失败了几次」（成功该归零），
+// `totalRebuilds` 是「累计往 VL 写了几份看不见的完整副本」（成功也不该抹掉已占的磁盘）。
 func (s *rebuildScheduler) noteSuccess(key string) {
 	s.mu.Lock()
-	delete(s.attempts, key)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if st := s.attempts[key]; st != nil {
+		// 只重置连续失败与退避，保留累计副本数。
+		st.attempts = 0
+		st.abandoned = false
+		st.abandonReason = ""
+		st.nextAllowedAt = time.Time{}
+		st.lastErr = nil
+	}
 }
 
 // rebuildFailureExternal / rebuildFailureDeterministic 是重建失败的**两个类别**。
@@ -447,6 +477,15 @@ func (m *Manager) classifyRebuildFailure(key string, err error) rebuildFailureCl
 // 关键：这里的「放弃」只停**自动再建一版**，绝不改善任何发布/水位/缺口状态
 // （见文件头「不丢数据 / 不把失败伪装成成功」）。因此放弃是安全的：数据仍在账本、
 // 缺口仍可见、前端仍报「覆盖不完整」。
+// maxTotalRebuildsOf 返回「每源重建副本份数」的硬上限。
+//
+// 与 maxAttemptsOf 的乘积关系（默认 2×4=8）是刻意的：确定性失败那条锁先到达
+// （4 次），外部失败则靠这条兜住（8 份）。之所以留 2 倍而不是相等，
+// 是因为外部失败本就允许更多重试（VL 抖动会自愈），只是不允许**无界**。
+func (s *rebuildScheduler) maxTotalRebuildsOf() int {
+	return 2 * s.maxAttemptsOf()
+}
+
 func (s *rebuildScheduler) noteFailure(key, generation string, err error, class rebuildFailureClass) (abandoned bool, nextAllowed time.Time, attempts int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -458,6 +497,16 @@ func (s *rebuildScheduler) noteFailure(key, generation string, err error, class 
 	// 只有确定性失败消耗「放弃预算」：外部条件失败不消耗，故 VL 抖动不会把源判死。
 	if class == rebuildFailureDeterministic {
 		st.attempts++
+	}
+	// 副本份数只在**真的往 VL 写了数据**时累加（见 totalRebuilds 的注释）。
+	//
+	// 判据取 `errProjectionVerifyFailed`（= 写入成功但逐字段校验未过）：只有这个形态
+	// 才真的往 VL 落了一份完整副本，且旧副本不会被清理，正是 127 倍放大的来源。
+	// 纯粹的「插入 500 / VL 未就绪 / ctx 超时」没有产生副本，**不计** ——
+	// 这也是既有 TestRebuildExternalFailureNeverAbandons 的语义（VL 抖动不该把源判死），
+	// 两者不冲突：那把锁管「该不该判死」，这把锁管「已经写了几份」。
+	if errors.Is(err, errProjectionVerifyFailed) {
+		st.totalRebuilds++
 	}
 	st.lastErr = err
 	st.lastFailureAt = time.Now()
@@ -472,6 +521,24 @@ func (s *rebuildScheduler) noteFailure(key, generation string, err error, class 
 		st.abandonReason = fmt.Sprintf("连续 %d 次重建失败后停止自动重试；已尝试代次 %v；最后失败：%v",
 			st.attempts, st.generations, err)
 		return true, time.Time{}, st.attempts
+	}
+	// **绝对副本上限：不看失败类别，写够份数就停**（2026-10-22 代码审查）。
+	//
+	// 与上面的「确定性失败上限」是两把不同的锁：
+	//   · 上面那把问「这个源该不该判死」——外部抖动不该判死，所以只算确定性失败；
+	//   · 这把问「已经往 VL 里写了多少份完整副本」——**外部失败也会写副本**，
+	//     所以必须不分类别地数。缺了这把，探测失败（外部）可以无限重写，
+	//     生产实测单日累积 295 个代次 / 127 倍重复。
+	//
+	// 取值 2×maxAttempts（默认 4 ⇒ 8 份）：给外部重试留出足够空间
+	// （VL 抖动一阵后仍能自愈），但把「无界放大」变成「有界浪费」。
+	if st.totalRebuilds >= s.maxTotalRebuildsOf() {
+		st.abandoned = true
+		st.abandonReason = fmt.Sprintf(
+			"该源已累计重建 %d 次（含外部条件失败），达到副本份数上限 %d，停止自动重试以防 VL 体积无界放大；"+
+				"已尝试代次 %v；最后失败：%v",
+			st.totalRebuilds, s.maxTotalRebuildsOf(), st.generations, err)
+		return true, time.Time{}, st.totalRebuilds
 	}
 	// 指数退避：base * 2^(attempts-1)，封顶 max。
 	//

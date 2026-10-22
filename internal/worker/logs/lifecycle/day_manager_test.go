@@ -291,3 +291,64 @@ func TestResumeAutoReinitiatesResidualHotMigration(t *testing.T) {
 	require.Equal(t, catalog.OwnerCold, lateRec.Owner,
 		"完成后 owner 必须是 cold；若仍是 hot 说明它只是被标记而没真正迁移")
 }
+
+// TestResumeDoesNotReinitiateWhileMigrationInFlight 钉住「有在飞迁移时不得重新发起」。
+//
+// 缺陷形态（2026-10-22 代码审查 P0，本仓库自己引入）：
+// `reinitiateResidualHotMigration` 为残留记录调 `BeginDayMigration`，而后者会对该日
+// **所有** hot 记录调 `BeginMigration`。混合态日必然出现「某条正在迁移 + 另一条迟到新建」：
+//
+//	BeginMigration 只接受稳定态（空 / CLEANED / 失败态），
+//	对 ROUTING_FROZEN…DETACHED 会返回 `begin from <state>`
+//
+// 于是整日初始化失败、每轮 sweep 重复报错 —— 比原本「只在结账时卡住」更早卡死，
+// 且连 MarkDayComplete 的留痕都到不了。原提交声称的「无需人工介入」在这条路径上不成立。
+//
+// 修法：该日存在迁移中间态记录时**不插手**（交给正常推进）；只有该日完全静止、
+// 只剩残留时才重新发起。
+//
+// 变异验证：删掉 `reinitiateResidualHotMigration` 里那段在飞检查 ⇒ 本用例转红
+// （实际报 `reinitiate residual migration …: begin from SNAPSHOTTING`）。
+func TestResumeDoesNotReinitiateWhileMigrationInFlight(t *testing.T) {
+	const day = "2026-09-27"
+	inflightKey := catalog.PartitionKey{StorageNamespace: "ns-a-inflight", UTCDay: day}
+	lateKey := catalog.PartitionKey{StorageNamespace: "ns-z-late", UTCDay: day}
+
+	cat := catalog.New(catalog.NewMemJournal())
+
+	// 一条正在迁移的记录：hot + SNAPSHOTTING，已登记既定 target。
+	inflight := catalog.NewStableRecord(inflightKey, catalog.OwnerHot, 1, "dir-inflight")
+	inflight.MigrationState = catalog.StateSnapshotting
+	inflight.TargetOwner = catalog.OwnerCold
+	inflight.TargetDirID = "dir-cold-target"
+	require.NoError(t, cat.Put(inflight))
+
+	// 迟到新建的残留：hot + CLEANED（默认态）。
+	late := catalog.NewStableRecord(lateKey, catalog.OwnerHot, 1, "dir-late")
+	require.Equal(t, catalog.StateCleaned, late.MigrationState, "夹具前提：默认态是 CLEANED")
+	require.NoError(t, cat.Put(late))
+
+	m := &DayManager{
+		cat: cat,
+		ops: Ops{
+			Drain:    func(catalog.PartitionKey) error { return nil },
+			Snapshot: func(catalog.PartitionKey, string) (string, error) { return "snap", nil },
+			Copy:     func(catalog.PartitionKey, string, string) (string, error) { return "copy", nil },
+			Verify:   func(catalog.PartitionKey, string, string) (string, error) { return "sum", nil },
+			Attach:   func(catalog.PartitionKey, string) error { return nil },
+			Detach:   func(catalog.PartitionKey, string) error { return nil },
+			Cleanup:  func(catalog.PartitionKey, string) error { return nil },
+		},
+	}
+
+	// 核心断言：不得因为「另一条记录正在迁移中」而整体失败。
+	err := m.Resume(day)
+	require.NoError(t, err,
+		"混合态日（迁移中 + 迟到残留）必须能正常推进；报 begin from/divergence 说明重新发起错误地插手了在飞迁移")
+
+	// 在飞的那条应被正常推进（SNAPSHOTTING → 更远），而不是被重新发起打断。
+	inflightRec, ok := cat.Get(inflightKey)
+	require.True(t, ok)
+	require.NotEqual(t, catalog.StateSnapshotting, inflightRec.MigrationState,
+		"在飞记录必须被正常推进，而不是被重新发起打断")
+}

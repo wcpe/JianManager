@@ -73,6 +73,26 @@ func (m *DayManager) reinitiateResidualHotMigration(utcDay string, records []*ca
 	if len(residual) == 0 {
 		return nil
 	}
+	// **该日已有迁移在飞时不得重新发起**（2026-10-22 P0）。
+	//
+	// 重新发起会把残留记录推到 `ROUTING_FROZEN`，而正在迁移的那条可能已到
+	// `SNAPSHOTTING`/`ATTACHED_STAGING` ⇒ 同一天出现状态分歧 ⇒ `Resume` 的同态校验
+	// 报 `UTC-day state divergence` ⇒ 整日无法推进、每轮 sweep 重复失败。
+	//
+	// 有在飞迁移时正确的做法是**什么都不做**：残留记录会在该日推进到
+	// `DETACHED→CLEANED` 过程中被 `activeDayRecords` 纳入（它此时仍是 hot），
+	// 或在该日结账时被 `MarkDayComplete` 的守卫拒绝并留痕。
+	// 真正的重新发起只适用于「该日已完全静止、只剩残留」的形态。
+	for _, rec := range records {
+		if rec == nil {
+			continue
+		}
+		if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned &&
+			!catalog.IsFailure(rec.MigrationState) {
+			// 有记录正处在迁移中间态：交给正常推进，不插手。
+			return nil
+		}
+	}
 	if targetDirID == "" {
 		// 找不到既定目标：说明这一天从未迁移过，不属于「残留」形态。
 		// 交给调用方的初次 BeginDayMigration 处理，这里不擅自决定目标目录。
@@ -85,6 +105,24 @@ func (m *DayManager) reinitiateResidualHotMigration(utcDay string, records []*ca
 		"utcDay", utcDay, "residualRecords", len(residual),
 		"targetOwner", targetOwner, "targetDirID", targetDirID)
 	return nil
+}
+
+// hasUnmigratedHotResidual 报告该日是否还有「未纳入迁移」的 hot 记录。
+//
+// 判据与 reinitiateResidualHotMigration 完全一致：`Owner==hot` 且处于
+// `""`/`CLEANED`（即不在迁移路径上）。两处必须同源，否则会出现
+// 「一边认为有残留、另一边认为没有」的夹缝。
+func (m *DayManager) hasUnmigratedHotResidual(utcDay string) bool {
+	for _, rec := range m.cat.RecordsForDay(utcDay) {
+		if rec == nil {
+			continue
+		}
+		if rec.Owner == catalog.OwnerHot &&
+			(rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *DayManager) Resume(utcDay string) error {
@@ -309,6 +347,29 @@ func (m *DayManager) Resume(utcDay string) error {
 				return fail("advance-detached", err)
 			}
 		case catalog.StateDetached:
+			// **该日仍有未纳入迁移的 hot 残留 ⇒ 本轮不结账**（2026-10-22 P0 配套）。
+			//
+			// 混合态日可能同时有「已走到 DETACHED 的记录」和「迟到新建的 hot+CLEANED 残留」。
+			// 此时直接结账会被 `MarkDayComplete` 的守卫拒绝（数据诚实性要求，那是对的），
+			// 但那个拒绝会把整日推进 FAILED_RETRYABLE，白白丢掉已经走完的进度。
+			//
+			// 正确处置：**先不结账，把残留留到下一轮**。下一轮进来时该日已无在飞迁移
+			// （DETACHED 不算中间态的一个「推进中」状态？——它算，见下方判断），
+			// 于是 `reinitiateResidualHotMigration` 会把残留推起来，
+			// 再走一遍即可正常结账。这样既不丢数据，也不制造状态分歧。
+			//
+			// 为什么不能在本轮顺手重新发起：那会把残留推到 ROUTING_FROZEN，
+			// 与当前 rep 的 DETACHED 形成状态分歧（见 reinitiateResidualHotMigration 的注释）。
+			if m.hasUnmigratedHotResidual(utcDay) {
+				// **返回 nil 而不是错误**：这是有意的、可自愈的推迟，不是失败。
+				// 下一轮 sweep 会再进来，届时该日已无在飞迁移，
+				// `reinitiateResidualHotMigration` 会把残留推起来，走完即可结账。
+				// 若返回错误，调用方会把它计入失败、可能触发 FAILED_RETRYABLE
+				// 并丢掉已经走完的进度（DETACHED 之前的 snapshot/copy/verify 全白做）。
+				slog.Warn("该日仍有未纳入迁移的 hot 残留，推迟到下一轮完成结账（无需人工介入）",
+					"utcDay", utcDay)
+				return nil
+			}
 			if m.ops.Cleanup != nil {
 				if err := m.ops.Cleanup(representative, rep.MigrationFromDirID); err != nil {
 					return fail("cleanup", err)

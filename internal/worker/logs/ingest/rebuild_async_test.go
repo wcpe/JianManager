@@ -463,3 +463,49 @@ func TestRebuildFailureNeverMasksAsSuccess(t *testing.T) {
 			"重建失败绝不得消解缺口（那等于宣称数据已可见）")
 	}
 }
+
+// TestRebuildSuccessDoesNotResetCopyBudget 钉住「成功只重置连续失败，不清累计副本数」。
+//
+// 缺陷形态（2026-10-22 代码审查，60 源上线的硬阻塞之一）：
+// 生产 `inst:318` 单日留下 **295 个代次 / 984 万行 / 127 倍重复 / 880MB**。
+// 这个数字远大于 `maxAttempts=4`，说明放弃预算**一直在被重置**——
+// 旧 `noteSuccess` 直接 `delete(s.attempts, key)` 删掉整个状态，
+// 于是「某天成功、某天失败」交替时，连续失败计数每次清零 ⇒ 永不放弃 ⇒ 无限换代次，
+// 而每换一次就把整窗数据**完整重写一遍**，旧副本又不清理
+// （`delete_enabled: false` 时 VL 只能靠 retention 淘汰）。
+//
+// 语义上两者本就该分开：
+//
+//	· `attempts`        = 连续失败了几次（成功该归零，否则一次抖动永久污染退避）
+//	· `totalRebuilds`   = 累计往 VL 写了几份看不见的完整副本（成功也不该抹掉已占的磁盘）
+//
+// 本用例直接测状态机，不需要 VL 夹具——它要守的正是「状态怎么记」这件事本身。
+//
+// 变异验证：把 `noteSuccess` 改回 `delete(s.attempts, key)` ⇒ 本用例转红。
+func TestRebuildSuccessDoesNotResetCopyBudget(t *testing.T) {
+	s := newRebuildScheduler()
+	s.maxAttempts = 3
+	const key = "ns/g1"
+
+	// 写满副本预算：每次都是「写入成功但校验不过」（errProjectionVerifyFailed）。
+	for i := 0; i < 2*3; i++ {
+		s.noteFailure(key, "projection-x", errProjectionVerifyFailed, rebuildFailureDeterministic)
+		// 每个循环里插一次成功：模拟生产中「某天成功、某天失败」的真实交替。
+		s.noteSuccess(key)
+	}
+
+	st, ok := s.snapshot(key)
+	require.True(t, ok)
+	require.Equal(t, 2*3, st.totalRebuilds,
+		"成功不得清掉累计副本数；否则上限永远追不上 ⇒ 无限换代次（生产实测 127 倍重复）")
+	require.Equal(t, 0, st.attempts,
+		"成功必须重置连续失败计数（否则一次抖动会永久污染退避）")
+
+	// 再失败一次：累计副本超上限 ⇒ 必须放弃。
+	abandoned, _, _ := s.noteFailure(key, "projection-y", errProjectionVerifyFailed, rebuildFailureDeterministic)
+	require.True(t, abandoned,
+		"副本份数达到上限后必须停止自动重试；否则每轮成功都能把上限清零")
+	reason, _ := s.snapshot(key)
+	require.Contains(t, reason.abandonReason, "已累计重建",
+		"放弃原因必须点明是副本份数超限，而不是笼统的连续失败次数")
+}

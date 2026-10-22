@@ -47,6 +47,21 @@ func (c *Catalog) BeginDayMigration(utcDay string, target Owner, targetDirID str
 		if rec.Owner != OwnerHot {
 			return nil, fmt.Errorf("%w: %s owner=%s", ErrIllegalTransition, rec.Key, rec.Owner)
 		}
+		// **已在迁移中的记录直接跳过，不要重新发起**（2026-10-22 P0）。
+		//
+		// `BeginMigration` 只接受「稳定态」（空 / CLEANED / 失败态），对
+		// ROUTING_FROZEN…DETACHED 这些中间态会返回 `begin from <state>`。
+		// 而混合态日一定会出现「某条正在迁移 + 另一条迟到新建」的组合：
+		// 迟到写入/新 namespace 会在迁移途中新建 `hot + CLEANED` 记录。
+		// 若此时对本日整体重新 `BeginDayMigration`，遍历到那条中间态记录就会报错
+		// ⇒ 整日无法推进、每轮 sweep 重复失败（比原来「只在结账时卡住」更早卡死）。
+		//
+		// 跳过是语义正确的：这些记录**本来就在迁移路径上**，本次操作对它们无任何
+		// 待办事项（推进由 `AdvanceDay` 负责）。只有稳定态的 hot 记录才需要
+		// 「重新发起」。
+		if rec.MigrationState != "" && rec.MigrationState != StateCleaned && !IsFailure(rec.MigrationState) {
+			continue
+		}
 		if err := BeginMigration(rec, target, targetDirID); err != nil {
 			return nil, err
 		}
