@@ -60,6 +60,7 @@ export const ROUTE_CHUNKS = {
   '/statistics': () => import('@/pages/StatisticsPage'),
   '/storage': () => import('@/pages/StoragePage'),
   '/settings': () => import('@/pages/SettingsPage'),
+  '/settings/ai': () => import('@/pages/AssistantSettingsPage'),
   '/database': () => import('@/pages/DatabasePage'),
   '/system-update': () => import('@/pages/SystemUpdatePage'),
   '/agent-tokens': () => import('@/pages/AgentTokensPage'),
