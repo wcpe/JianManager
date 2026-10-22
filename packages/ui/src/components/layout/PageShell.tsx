@@ -27,7 +27,22 @@ export function PageShell({
       data-slot="page-shell"
       data-variant={variant}
       className={cn(
-        'flex min-h-0 flex-1 flex-col gap-[17px] px-[25px] py-[22px]',
+        /*
+          【为什么是「近左上加轻内边距 + 随视口伸缩」】此前写死 `px-[25px] py-[22px]`：
+          在 1280 宽下边距占比尚可，但在 1920 上显得内容被挤在中间一块窄条里，
+          而在 1024 上又偏紧。改成 clamp 后，小屏收到 16px（内容优先）、大屏最多 28px
+          （留白更从容），中间连续过渡——它同时满足「内容铺满」与「不贴边」两个要求。
+
+          `ps-*`（padding-inline-start）而不是 `px-*`：用户要求**左对齐**，
+          左右边距可以不对称——左侧紧跟侧栏（窄），右侧多留一点呼吸（宽）。
+        */
+        'flex min-h-0 flex-1 flex-col gap-[12px]',
+        // 用户要求「更靠近左上方」，上/左已收到近乎贴边的程度（上 4-10 / 左 6-14）；
+        // 右侧保留更宽的呼吸（内容以左对齐为主，右侧多留白不显局促）。
+        'ps-[clamp(6px,0.9vw,14px)] pe-[clamp(16px,2vw,36px)]',
+        'pt-[clamp(4px,0.6vh,10px)] pb-[clamp(14px,1.8vh,24px)]',
+        // `w-full` + `max-w-none`：铺满内容区，不做居中收窄（用户要求铺满整页）。
+        'w-full min-w-0',
         variant === 'default' && 'overflow-auto',
         variant === 'fixed' && 'overflow-hidden',
         variant === 'tool' && 'gap-0 p-0',

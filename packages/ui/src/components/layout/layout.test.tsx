@@ -40,8 +40,12 @@ describe('PageShell 三种壳态', () => {
     expect(shell).toHaveAttribute('data-slot', 'page-shell')
     expect(shell).toHaveAttribute('data-variant', 'default')
     expect(shell.className).toContain('overflow-auto')
-    expect(shell.className).toContain('px-[25px]')
-    expect(shell.className).toContain('py-[22px]')
+    // 留白由 clamp 驱动（左侧紧跟侧栏窄、右侧多留呼吸），两条分支必须同源；
+    // 不写死像素值——旋钮在 PageShell 里，断言只锁「它是 clamp 且左右不对称」。
+    expect(shell.className).toContain('ps-[clamp(')
+    expect(shell.className).toContain('pe-[clamp(')
+    expect(shell.className).toContain('pt-[clamp(')
+    expect(shell.className).toContain('pb-[clamp(')
     expect(shell).toHaveTextContent('内容')
   })
 

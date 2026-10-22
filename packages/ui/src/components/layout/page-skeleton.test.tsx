@@ -19,7 +19,12 @@ describe('PageSkeleton 壳态', () => {
     expect(root).toHaveAttribute('data-variant', 'default')
     expect(root).toHaveAttribute('aria-busy', 'true')
     // 与真实页同壳：page-skeleton 就套在 page-shell 上，留白/间隙不会在替换时变化。
-    expect(container.querySelector('[data-slot="page-skeleton"][data-variant="default"]')).toHaveClass('px-[25px]', 'py-[22px]', 'overflow-auto')
+    // 只锁「留白来自 clamp 且带滚动模型」，不锁具体像素——留白旋钮在 PageShell 里，
+    // 写死数值会让每次调间距都留下一处过时断言。
+    const shell = container.querySelector('[data-slot="page-skeleton"][data-variant="default"]')!
+    expect(shell).toHaveClass('overflow-auto')
+    expect(shell.className).toMatch(/\bps-\[clamp\(/)
+    expect(shell.className).toMatch(/\bpt-\[clamp\(/)
   })
 
   it('fixed 壳态：固定视口、内部区域自行滚动', () => {
@@ -84,7 +89,7 @@ describe('PageSkeleton 结构（与真实页面同构）', () => {
     render(<PageSkeleton className="custom-x" data-testid="skeleton" />)
     const root = screen.getByTestId('skeleton')
     expect(root.className).toContain('custom-x')
-    expect(root.className).toContain('px-[25px]')
+    expect(root.className).toContain('ps-[clamp(')
   })
 })
 
