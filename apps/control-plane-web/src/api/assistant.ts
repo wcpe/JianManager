@@ -221,3 +221,57 @@ export function useSetDefaultModel() {
     onSuccess: invalidate,
   })
 }
+
+/** 供应商探测结论。ok=false 是结论而非请求失败。 */
+export interface AssistantProbeResult {
+  ok: boolean
+  latencyMs: number
+  modelCount?: number
+  /**
+   * 分类码（如 upstream_auth / upstream_rate_limited / egress_denied）。
+   * 前端据它给出处置建议，不解析 message。
+   */
+  classifiedError?: string
+  message?: string
+}
+
+/** 单模型测试结论。 */
+export interface AssistantModelTestResult {
+  ok: boolean
+  latencyMs: number
+  textPreview?: string
+  /** 上游未报告时为 null（不是 0）。 */
+  promptTokens: number | null
+  outputTokens: number | null
+  toolCallParsed: boolean
+  classifiedError?: string
+  message?: string
+}
+
+/**
+ * 探测供应商连通性。
+ *
+ * 失败**不会**抛异常到调用方的 catch：上游失败是「结论」（ok=false + 分类码），
+ * 只有供应商不存在、非管理员这类请求级问题才会 reject。
+ */
+export function useTestProvider() {
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.post<AssistantProbeResult>(`/assistant/admin/providers/${id}/test`)
+      return data
+    },
+  })
+}
+
+/** 用指定模型跑一次最小补全（带工具时额外验证参数完整性，不执行工具）。 */
+export function useTestModel() {
+  return useMutation({
+    mutationFn: async ({ id, withTools }: { id: number; withTools?: boolean }) => {
+      const { data } = await api.post<AssistantModelTestResult>(
+        `/assistant/admin/models/${id}/test`,
+        { withTools: withTools ?? false },
+      )
+      return data
+    },
+  })
+}
