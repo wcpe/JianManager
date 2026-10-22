@@ -2,7 +2,9 @@ package router
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -238,5 +240,73 @@ func TestAssistantInvalidConfigReturns422(t *testing.T) {
 func TestAssistantNotFoundReturns404(t *testing.T) {
 	f := newAssistantTestFixture(t)
 	code, _ := doAssistantReq(t, f.router, http.MethodGet, "/api/v1/assistant/admin/providers/9999", f.adminToken, "")
+	require.Equal(t, http.StatusNotFound, code)
+}
+
+// 探测端点：上游失败仍是 200 + ok:false，而不是把上游状态码透传给面板。
+//
+// 为什么这条必须单独测：把「密钥错了」映射成 401，前端会误以为**自己的登录态**
+// 失效并弹出重新登录；把「上游 5xx」映射成 502，则会让管理员以为是面板的服务坏了。
+// 探测的语义是「给你一个结论」，所以永远是 200，结论体里带分类码。
+func TestAssistantTestModelUpstreamFailureIsStill200(t *testing.T) {
+	f := newAssistantTestFixture(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"Incorrect API key provided: sk-leak-1234567890"}}`))
+	}))
+	defer srv.Close()
+
+	code, body := doAssistantReq(t, f.router, http.MethodPost, "/api/v1/assistant/admin/providers", f.adminToken,
+		`{"name":"探测用","protocol":"openai-chat","baseUrl":"`+srv.URL+`","credentialMode":"none","enabled":true}`)
+	require.Equal(t, http.StatusCreated, code, "建供应商失败: %s", body)
+	var p struct {
+		ID uint `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &p))
+
+	code, body = doAssistantReq(t, f.router, http.MethodPost,
+		"/api/v1/assistant/admin/models", f.adminToken,
+		fmt.Sprintf(`{"providerId":%d,"modelId":"m1","enabled":true,"streaming":true,"tools":false}`, p.ID))
+	require.Equal(t, http.StatusCreated, code, "建模型失败: %s", body)
+	var m struct {
+		ID uint `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &m))
+
+	code, body = doAssistantReq(t, f.router, http.MethodPost,
+		fmt.Sprintf("/api/v1/assistant/admin/models/%d/test", m.ID), f.adminToken, `{}`)
+	require.Equal(t, http.StatusOK, code, "上游失败应是结论而非请求错误: %s", body)
+	require.Contains(t, body, `"ok":false`, "应回 ok:false: %s", body)
+	require.Contains(t, body, `"upstream_auth"`, "应带分类码: %s", body)
+	require.NotContains(t, body, "leak-1234567890", "上游回显的密钥必须被掩蔽: %s", body)
+}
+
+// 探测端点：非管理员一律 403（与其它管理端子域同一判据）。
+//
+// 其中 manageToken 持有 node.manage 仍须被拒——这是对「误用 requirePlatformAdmin
+// 那个只校验 node.manage 的 helper」的直接证伪。
+func TestAssistantProbeRequiresPlatformAdmin(t *testing.T) {
+	f := newAssistantTestFixture(t)
+	for _, token := range []string{f.manageToken, f.plainToken} {
+		code, _ := doAssistantReq(t, f.router, http.MethodPost,
+			"/api/v1/assistant/admin/providers/1/test", token, "")
+		require.Equal(t, http.StatusForbidden, code, "非平台管理员不得探测供应商")
+		code, _ = doAssistantReq(t, f.router, http.MethodPost,
+			"/api/v1/assistant/admin/models/1/test", token, "")
+		require.Equal(t, http.StatusForbidden, code, "非平台管理员不得测试模型")
+	}
+	// 未登录 401。
+	code, _ := doAssistantReq(t, f.router, http.MethodPost, "/api/v1/assistant/admin/models/1/test", "", "")
+	require.Equal(t, http.StatusUnauthorized, code)
+}
+
+// 探测端点：对象不存在回 404。
+func TestAssistantProbeNotFound(t *testing.T) {
+	f := newAssistantTestFixture(t)
+	code, _ := doAssistantReq(t, f.router, http.MethodPost,
+		"/api/v1/assistant/admin/providers/9999/test", f.adminToken, "")
+	require.Equal(t, http.StatusNotFound, code)
+	code, _ = doAssistantReq(t, f.router, http.MethodPost,
+		"/api/v1/assistant/admin/models/9999/test", f.adminToken, "")
 	require.Equal(t, http.StatusNotFound, code)
 }

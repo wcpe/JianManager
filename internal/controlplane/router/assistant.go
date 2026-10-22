@@ -56,11 +56,14 @@ func (h *AssistantHandler) RegisterRoutes(r *gin.RouterGroup) {
 		admin.GET("/providers/:id", h.GetProvider)
 		admin.PUT("/providers/:id", h.UpdateProvider)
 		admin.DELETE("/providers/:id", h.DeleteProvider)
+		// 显式探测：管理员的按钮触发，绝不自动调用（模型调用按次计费）。
+		admin.POST("/providers/:id/test", h.TestProvider)
 
 		admin.GET("/models", h.ListModels)
 		admin.POST("/models", h.CreateModel)
 		admin.PUT("/models/:id", h.UpdateModel)
 		admin.DELETE("/models/:id", h.DeleteModel)
+		admin.POST("/models/:id/test", h.TestModel)
 
 		admin.PUT("/settings/default-model", h.SetDefaultModel)
 	}
@@ -299,6 +302,51 @@ func (h *AssistantHandler) SetDefaultModel(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
+}
+
+// TestProvider POST /assistant/admin/providers/:id/test — 显式探测供应商连通性。
+//
+// **上游失败仍回 200**：`ok:false` 是探测的**结论**，不是本次请求失败。
+// 若把「密钥错了」映射成 401，前端会误以为自己的登录态失效并触发重新登录；
+// 把「上游 5xx」映射成 502，则会让管理员以为是面板自己的服务出问题。
+// 真正的请求级错误（供应商不存在、出站未初始化）仍走 respondAssistantErr。
+func (h *AssistantHandler) TestProvider(c *gin.Context) {
+	id, ok := parseAssistantID(c)
+	if !ok {
+		return
+	}
+	res, err := h.svc.TestProvider(c.Request.Context(), id)
+	if err != nil {
+		respondAssistantErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// TestModel POST /assistant/admin/models/:id/test — 用指定模型跑一次最小补全。
+//
+// 请求体可选 `{"withTools":true}`：额外验证工具调用能否解析出完整参数（不执行任何工具）。
+func (h *AssistantHandler) TestModel(c *gin.Context) {
+	id, ok := parseAssistantID(c)
+	if !ok {
+		return
+	}
+	// 请求体允许为空（前端只点按钮时不必构造 body），因此不把绑定错误当致命。
+	var req modelTestRequest
+	_ = c.ShouldBindJSON(&req)
+
+	res, err := h.svc.TestModel(c.Request.Context(), id, req.WithTools)
+	if err != nil {
+		respondAssistantErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// modelTestRequest 单模型测试的请求体。全字段可选。
+type modelTestRequest struct {
+	// WithTools 额外要求一次工具调用并验证参数完整性。
+	WithTools bool `json:"withTools"`
 }
 
 // respondAssistantErr 把 service 错误映射成 HTTP 语义。
