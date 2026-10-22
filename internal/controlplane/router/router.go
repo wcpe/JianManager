@@ -125,6 +125,8 @@ type Services struct {
 	// PlatformObservability 是平台管理员首页的有界总览读模型（FR-402）。
 	PlatformObservability *service.PlatformObservabilityService
 	Settings              *service.SettingsService
+	// Assistant AI 助手供应商/模型配置（FR-514，见 ADR-105）；nil 时 /assistant 端点关闭。
+	Assistant *service.AssistantService
 	// OrphanRuntime 实例反向对账无主运行时列表/确认处置（FR-326）；nil 时端点关闭。
 	OrphanRuntime *service.OrphanRuntimeTracker
 	// BotReclaim 失效 Bot 回收列表/确认处置（FR-460）；nil 时端点关闭。
@@ -616,6 +618,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.Settings != nil {
 			settingsHandler := NewSettingsHandler(svcs.Settings)
 			settingsHandler.RegisterRoutes(permRead("settings.read", "settings.write", "license.read"))
+		}
+
+		// AI 助手配置（FR-514，见 ADR-105）：可用模型摘要对所有登录用户开放，
+		// 管理子域由 handler 内部按 IsPlatformAdmin 把守（不挂 permRead——
+		// 供应商配置掌握出站地址与凭据引用，不能按业务权限节点放行）。
+		if svcs.Assistant != nil {
+			NewAssistantHandler(svcs.Assistant).RegisterRoutes(protected.Group("/assistant"))
 		}
 
 		if svcs.OrphanRuntime != nil {

@@ -696,6 +696,22 @@ func main() {
 	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
 	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
 	settingsSvc := service.NewSettingsService(db, cfg)
+	// AI 助手配置（FR-514，见 ADR-105）：供应商/模型与默认模型。
+	// 凭据复用既有主密钥（clientChannelSvc 已装配的同一把 KeyEncryptor），
+	// 不为 AI 新增第二套密钥——否则运维要同时备份两份，任一份丢失都不可解密。
+	// 出站走受保护工厂：默认只允许 https 公网、拒绝云元数据、默认禁重定向。
+	assistantSvc := service.NewAssistantService(db, keyEncryptor)
+	assistantSvc.SetEgress(httpclient.NewGuard(httpclient.GuardOptions{
+		Timeout: 60 * time.Second,
+		// 代理配置只用于判定「是否必须拒绝」：一旦目标会被代理接管，
+		// 无法固定已校验 IP，受保护出站会明确报错而不是静默直连。
+		Proxy: cfg.Proxy,
+	}))
+	if err := assistantSvc.EnsureSetting(); err != nil {
+		// 设置行初始化失败不应阻断 CP 启动：AI 配置页会显示不可用，
+		// 其余功能（含经典首页）不受影响。
+		slog.Warn("AI 助手设置初始化失败，配置页可能不可用", "error", err)
+	}
 	// GitHub API 令牌改从设置面板读生效值（github.token，DB > update.github_token 基线）：
 	// 自更新与 ServerProbe 制品版本库同步共用同一读取器，保存即生效、无需重启（FR-409）。
 	githubTokenReader := func() string { return settingsSvc.EffectiveValue(service.SettingKeyGitHubToken) }
@@ -854,6 +870,7 @@ func main() {
 		CapacityTrend:           capacityTrendAlerter,
 		PlatformObservability:   platformObservabilitySvc,
 		Settings:                settingsSvc,
+		Assistant:               assistantSvc,
 		OrphanRuntime:           orphanRuntimeSvc,
 		BotReclaim:              botReclaimSvc,
 		ProbeUpdate:             probeUpdateSvc,

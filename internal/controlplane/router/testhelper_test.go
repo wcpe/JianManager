@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,6 +29,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -93,6 +95,33 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	return setupTestRouterWithPool(db, cpgrpc.NewClientPool())
 }
 
+// assistantOrDefault 返回调用方指定的 AI 服务，未指定时用默认（宽松出站）装配。
+func assistantOrDefault(provided *service.AssistantService, db *gorm.DB) *service.AssistantService {
+	if provided != nil {
+		return provided
+	}
+	return newTestAssistantService(db)
+}
+
+// newTestAssistantService 装配可用的 AI 配置服务（FR-514）。
+//
+// 用 dev 加密器（测试不碰生产密钥）与放行私网的受保护出站——测试服务跑在
+// 127.0.0.1 上的 httptest，不放行回环则探测类用例永远被准入拦住，
+// 那样测到的只是「准入生效」，测不到被测逻辑本身。
+func newTestAssistantService(db *gorm.DB) *service.AssistantService {
+	enc, _, err := service.ResolveKeyEncryptor("", true, "")
+	if err != nil {
+		enc = nil
+	}
+	svc := service.NewAssistantService(db, enc)
+	svc.SetEgress(httpclient.NewGuard(httpclient.GuardOptions{
+		AllowInsecure: true,
+		AllowPrivate:  []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")},
+	}))
+	_ = svc.EnsureSetting()
+	return svc
+}
+
 // setupTestRouterWithBeacon 同 setupTestRouter，但装配 Beacon 拉取服务（FR-444）：
 // pullEnabled=false 时模拟「配了端点未开能力」，endpoint 指向不可达地址以覆盖失败路径。
 func setupTestRouterWithBeacon(db *gorm.DB, endpoint string, pullEnabled bool) *gin.Engine {
@@ -137,6 +166,20 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 // setupTestRouterWithOptions 是测试路由装配的真身：beaconSync 为 nil 时 /beacon/topology
 // 端点不注册（等价「未部署 Beacon」，用于验证未配置协同时平台其余功能不受影响）。
 func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *service.BeaconSyncService) *gin.Engine {
+	return setupTestRouterFull(db, pool, beaconSync, nil)
+}
+
+// setupTestRouterWithAssistantOverride 与 setupTestRouterWithOptions 等价，
+// 但可覆盖 AI 配置服务（FR-514）。
+//
+// 默认装配用宽松出站（放行 http 与回环），让探测类用例能打 httptest；
+// 需要验证「严格准入拒绝明文 http」的用例则传入自己的严格实例。
+// assistant 为 nil 时用默认装配。
+func setupTestRouterWithAssistantOverride(db *gorm.DB, assistant *service.AssistantService) *gin.Engine {
+	return setupTestRouterFull(db, cpgrpc.NewClientPool(), nil, assistant)
+}
+
+func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *service.BeaconSyncService, assistant *service.AssistantService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{
 		Secret:     "test-secret-key-for-testing",
@@ -243,6 +286,7 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 		Audit:                 service.NewAuditService(db),
 		Authz:                 authzSvc,
 		Settings:              service.NewSettingsService(db, &config.Config{}),
+		Assistant:             assistantOrDefault(assistant, db),
 		ClientChannel:         service.NewClientChannelService(db),
 		ClientVersion:         service.NewClientVersionService(db, assetSvc, service.NewClientChannelService(db)),
 		ClientDistSecurity:    service.NewClientDistSecurityService(db, service.NewClientChannelService(db), service.NewClientVersionService(db, assetSvc, service.NewClientChannelService(db))),
