@@ -65,8 +65,9 @@ func (AssistantProvider) TableName() string { return "assistant_providers" }
 // 而「哪个供应商的哪个 ID 可用」是管理员在配置时确认的事实。
 type AssistantModel struct {
 	ID         uint `gorm:"primaryKey" json:"id"`
-	ProviderID uint `gorm:"index;not null" json:"providerId"`
-	// ModelID 上游原始模型标识，同一供应商下唯一。
+	ProviderID uint `gorm:"not null;uniqueIndex:idx_assistant_model_provider_model" json:"providerId"`
+	// ModelID 上游原始模型标识，同一供应商下唯一（跨供应商允许同名——
+	// 不同网关提供同名模型是常态，全局唯一会挡住「A 网关和 B 网关都有 gpt-4o」）。
 	ModelID     string `gorm:"size:256;not null;uniqueIndex:idx_assistant_model_provider_model" json:"modelId"`
 	DisplayName string `gorm:"size:128" json:"displayName"`
 	// Streaming / Tools 是显式能力声明，不从名称猜测；未声明的能力不投喂给运行器。
