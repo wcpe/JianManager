@@ -1390,22 +1390,55 @@ export const handlers = [
     const range = url.searchParams.get('range') ?? '7d'
     const tz = url.searchParams.get('tz') ?? 'UTC'
     const { count, step } = rangePlan(range)
-    const trend = makeSeriesPoints(count, step, 220, 160)
+    /*
+      玩家在线曲线单独生成，**不复用 makeSeriesPoints**。
+
+      后者用 `sin(i / 3)` 造周期：每 19 个点就一个完整正弦周期，96 点会画出 5 个
+      规整的波峰——看起来像示波器信号，而不是玩家在线数。真实玩家数随昼夜节律
+      单峰起伏（晚上高、凌晨低）叠加随机抖动，故这里按「时间戳 → 当地小时」造曲线：
+      以 20 点为峰、6 点为谷，按时间跨度铺满一个昼夜周期。
+    */
+    const nowMs = Date.now()
+    const trend = Array.from({ length: count }, (_, idx) => {
+      const tMs = nowMs - (count - 1 - idx) * step
+      const hour = new Date(tMs).getUTCHours() + new Date(tMs).getUTCMinutes() / 60
+      // 昼夜节律：20 点峰、6 点谷（cos 在 hour=20 取 +1，hour=8 取 -1）。
+      const diurnal = Math.cos(((hour - 20) / 24) * 2 * Math.PI)
+      // 固定种子的伪随机抖动，保证同一请求内可复现、不同时段不呆板。
+      const jitter = Math.sin(idx * 12.9898) * 0.35
+      const v = 220 + 160 * diurnal * 0.9 + 30 * jitter
+      const avg = Math.max(10, Number(v.toFixed(2)))
+      return {
+        ts: new Date(tMs).toISOString(),
+        avg,
+        min: Number((avg * 0.92).toFixed(2)),
+        max: Number((avg * 1.08).toFixed(2)),
+      }
+    })
     const shift = tzHourOffset(tz)
     const dist = Array.from({ length: 24 }, (_, h) => {
       const local = (h + shift + 24) % 24
       // 双峰：晚间 20 点与午后 14 点高峰。
       return Number((120 + 90 * Math.exp(-((local - 20) ** 2) / 8) + 45 * Math.exp(-((local - 14) ** 2) / 12)).toFixed(1))
     })
-    const peak = Math.max(...dist)
+    /*
+      peakValue 必须与 `trend` 同源。
+
+      此前它取的是 **hourlyDist（24 时段分布）的峰值**，而曲线画的是 `trend` 序列——
+      两个不同来源，数值自然对不上（实测标签显示峰值 212，曲线却冲到 380）。
+      前端于是出现「标签低于曲线最高点」的自相矛盾读数。
+      真实后端同样以曲线序列为准，故这里也按 `trend` 求峰值与日均。
+    */
+    const trendVals = trend.map((p) => p.avg).filter((v) => typeof v === 'number')
+    const peak = trendVals.length ? Math.max(...trendVals) : 0
     const body: PlayerTrendInfo = {
       resolution: '5m',
       timezone: tz,
       trend,
       hourlyDist: dist,
-      peakValue: peak,
+      peakValue: Number(peak.toFixed(1)),
       peakAt: iso(-3600_000),
-      dailyAvg: Number((dist.reduce((a, b) => a + b, 0) / 24).toFixed(1)),
+      dailyAvg: Number((trendVals.reduce((a, b) => a + b, 0) / (trendVals.length || 1)).toFixed(1)),
     }
     return HttpResponse.json(body)
   }),

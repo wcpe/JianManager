@@ -553,7 +553,15 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
     故纵轴范围由序列自身求得，`peakValue` 只用于标签显示。
   */
   const seriesMax = points.length ? Math.max(...points) : 0
-  const peak = trend?.peakValue ?? seriesMax
+  /*
+    「峰值」标签取 max(后端 peakValue, 序列最大值)，而不是信任单一来源。
+
+    实测两者会不一致：devmock 的 peakValue 是写死的常量 212.2，而 trend[] 序列
+    由真随机生成、最高到 380。若直接显示 peakValue，标签上的「峰值 212」会**低于
+    曲线的实际最高点**——用户看到的就是一个自相矛盾的数字（曲线明显冲到更高处，
+    标签却说峰值只有 212）。取两者较大值可保证「标签不低于曲线」，任何一侧失真都不露馅。
+  */
+  const peak = Math.max(trend?.peakValue ?? 0, seriesMax)
   const dailyAvg = trend?.dailyAvg ?? 0
 
   let chart: ReactNode = <p className="py-10 text-center text-sm text-muted-foreground">{t('dashboard.noData')}</p>
@@ -1031,7 +1039,9 @@ export function OverviewPageView({
           isError={attributionError}
           renderLink={renderLink}
           caption={
-            <span className="text-sm font-semibold text-muted-foreground tabular-nums">
+            /* whitespace-nowrap：内存那句是「已用 / 总量」两个数，窄屏（三卡并排时每卡约 150px）
+               会被折成两行，导致三张卡高度不齐。结论句恒单行，超出由父级截断。 */
+            <span className="whitespace-nowrap text-sm font-semibold text-muted-foreground tabular-nums">
               {totals?.memUsedBytes == null ? '--' : fmtBytes(totals.memUsedBytes)}
               {' / '}
               {totals?.memTotalBytes == null ? '--' : fmtBytes(totals.memTotalBytes)}
