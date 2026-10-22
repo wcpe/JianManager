@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { ArrowUpDown, Wrench } from 'lucide-react'
+import { ArrowUpDown, Play, RotateCw, Square, Wrench } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
@@ -108,6 +108,7 @@ export function InstanceTableHeader({
             title={selectAllLabel}
           />
         </TableHead>
+        <TableHead>{t('instances.regionZone')}</TableHead>
         <SortableTableHead
           label={t('instances.name')}
           sortValue="name"
@@ -223,6 +224,9 @@ export function FilterSelect({
  */
 export function InstanceRowMenu({
   inst,
+  onStart,
+  onStop,
+  onRestart,
   onTags,
   onEditConfig,
   onLimits,
@@ -232,6 +236,12 @@ export function InstanceRowMenu({
   onDelete,
 }: {
   inst: InstanceInfo
+  /** 启动（非停止态不出现）。 */
+  onStart?: () => void
+  /** 停止（停止态不出现）。 */
+  onStop?: () => void
+  /** 重启（仅运行态出现）。 */
+  onRestart?: () => void
   onTags: () => void
   onEditConfig: () => void
   onLimits: () => void
@@ -254,6 +264,27 @@ export function InstanceRowMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {/*
+          生命周期动作（启动 / 停止 / 重启）按状态出现在菜单顶部。
+          列表行内只保留「当前状态最常用」的那一个按钮，其余落在这里——
+          卡片视图没有行内按钮，三档全部从这里走，两个视图的可用动作因此一致。
+        */}
+        {stopped && onStart && (
+          <DropdownMenuItem onSelect={onStart} data-testid="instance-menu-start">
+            <Play className="size-3.5" /> {t('instances.start')}
+          </DropdownMenuItem>
+        )}
+        {!stopped && onStop && (
+          <DropdownMenuItem onSelect={onStop} data-testid="instance-menu-stop">
+            <Square className="size-3.5" /> {t('instances.stop')}
+          </DropdownMenuItem>
+        )}
+        {inst.status === 'RUNNING' && onRestart && (
+          <DropdownMenuItem onSelect={onRestart} data-testid="instance-menu-restart">
+            <RotateCw className="size-3.5" /> {t('instances.restart')}
+          </DropdownMenuItem>
+        )}
+        {(onStart || onStop || onRestart) && <DropdownMenuSeparator />}
         <DropdownMenuItem onSelect={onEditConfig}>{t('instances.editConfig')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={onTags}>{t('grouping.editTags')}</DropdownMenuItem>
         {inst.processType === 'docker' && (
