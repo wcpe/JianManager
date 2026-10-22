@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Server } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
-import { ObjectPageHeader } from '@jianmanager/ui/components/shell'
+import { ObjectPageHeader } from '@jianmanager/ui/components/nav'
 import type { ArchivedNode } from '@/lib/nodes/node-types'
 
 export interface ArchivedNodeDetailPaneProps {
