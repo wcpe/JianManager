@@ -45,6 +45,9 @@ interface MockModel {
 let providers: MockProvider[] = []
 let models: MockModel[] = []
 let defaultModelId: number | null = null
+// 出站放行段与设置的乐观并发版本（与后端 assistant_settings 单行同构）。
+let allowPrivateCidrs: string[] = []
+let settingsVersion = 1
 let nextProviderId = 1
 let nextModelId = 1
 
@@ -261,18 +264,113 @@ export const handlers = [
     return HttpResponse.json({ message: '已删除' })
   }),
 
-  domainRoute('put', '/assistant/admin/settings/default-model', async ({ request }) => {
+  // 助手全局设置（默认模型 + 出站放行段）按**单例资源**整体读写，
+  // 与后端 GET/PUT /assistant/admin/settings 同构。
+  domainRoute('get', '/assistant/admin/settings', ({ request }) => {
     const denied = deniedFor({ request })
     if (denied) return denied
-    const body = (await request.json()) as { modelId: number | null }
-    if (body.modelId !== null) {
-      const target = models.find((m) => m.id === body.modelId)
+    return HttpResponse.json({
+      defaultModelId,
+      allowPrivateCidrs: allowPrivateCidrs,
+      version: settingsVersion,
+      // mock 环境按 dev 处理（后端 dev_mode 才允许 http 明文）。
+      insecureAllowed: true,
+    })
+  }),
+
+  domainRoute('put', '/assistant/admin/settings', async ({ request }) => {
+    const denied = deniedFor({ request })
+    if (denied) return denied
+    const body = (await request.json()) as {
+      defaultModelId?: number | null
+      allowPrivateCidrs?: string[]
+      version?: number
+    }
+    // 与后端一致的 version 乐观并发。
+    if (body.version !== undefined && body.version !== 0 && body.version !== settingsVersion) {
+      return HttpResponse.json({ error: 'CONFLICT', message: '数据已被他人修改，请刷新后重试' }, { status: 409 })
+    }
+    const nextDefault = body.defaultModelId ?? null
+    if (nextDefault !== null) {
+      const target = models.find((m) => m.id === nextDefault)
       if (!target) return HttpResponse.json({ error: 'INVALID_CONFIG', message: '模型不存在' }, { status: 422 })
       if (!target.enabled) {
         return HttpResponse.json({ error: 'INVALID_CONFIG', message: '不能把已停用的模型设为默认' }, { status: 422 })
       }
+      const prov = providers.find((p) => p.id === target.providerId)
+      if (!prov?.enabled) {
+        return HttpResponse.json({ error: 'INVALID_CONFIG', message: '该模型的供应商已停用' }, { status: 422 })
+      }
     }
-    defaultModelId = body.modelId
-    return HttpResponse.json({ message: '已保存' })
+    // CIDR 逐项校验：非法项整单拒绝并点名（与后端同语义）。
+    const nextCidrs: string[] = []
+    for (const raw of body.allowPrivateCidrs ?? []) {
+      const item = String(raw).trim()
+      if (item === '') continue
+      if (!/^[0-9a-fA-F.:]+\/\d{1,3}$/.test(item)) {
+        return HttpResponse.json(
+          { error: 'INVALID_CONFIG', message: `参数不合规: 不是合法的 CIDR「${item}」（示例：10.0.0.0/8 或 192.168.1.0/24）` },
+          { status: 422 },
+        )
+      }
+      if (!nextCidrs.includes(item)) nextCidrs.push(item)
+    }
+    // 整体替换语义：未提供的字段等于置空。
+    defaultModelId = nextDefault
+    allowPrivateCidrs = nextCidrs
+    settingsVersion += 1
+    return HttpResponse.json({
+      defaultModelId,
+      allowPrivateCidrs,
+      version: settingsVersion,
+      insecureAllowed: true,
+    })
+  }),
+
+  // 探测端点：**上游失败仍是 200 + ok:false**（与后端一致的结论语义）。
+  // mock 里没有真实上游，故固定返回一条「看起来像上游拒绝」的结论，
+  // 让前端的结果块（分类码 + 处置建议）能被真实渲染出来。
+  domainRoute('post', '/assistant/admin/providers/:id/test', ({ request, params }) => {
+    const denied = deniedFor({ request })
+    if (denied) return denied
+    const id = Number(params.id)
+    if (!providers.some((p) => p.id === id)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '对象不存在' }, { status: 404 })
+    }
+    const hasModel = models.some((m) => m.providerId === id)
+    if (!hasModel) {
+      return HttpResponse.json(
+        { error: 'INVALID_CONFIG', message: '参数不合规: 该供应商下还没有模型，无法探测（请先添加一个模型）' },
+        { status: 422 },
+      )
+    }
+    return HttpResponse.json({ ok: true, latencyMs: 412 })
+  }),
+
+  domainRoute('post', '/assistant/admin/models/:id/test', ({ request, params }) => {
+    const denied = deniedFor({ request })
+    if (denied) return denied
+    const id = Number(params.id)
+    const target = models.find((m) => m.id === id)
+    if (!target) return HttpResponse.json({ error: 'NOT_FOUND', message: '对象不存在' }, { status: 404 })
+    const withTools = target.tools
+    if (withTools) {
+      return HttpResponse.json({
+        ok: true,
+        latencyMs: 830,
+        textPreview: 'pong',
+        promptTokens: 9,
+        outputTokens: 2,
+        toolCallParsed: true,
+      })
+    }
+    return HttpResponse.json({
+      ok: true,
+      latencyMs: 620,
+      textPreview: 'pong',
+      promptTokens: 9,
+      outputTokens: 2,
+      toolCallParsed: false,
+    })
   }),
 ]
