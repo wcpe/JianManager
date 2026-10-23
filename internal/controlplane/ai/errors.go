@@ -149,6 +149,16 @@ func isTruncatedErr(err error) bool {
 // 为什么必须做：上游的 401 错误体经常**回显它收到的那个密钥**（"Incorrect API key
 // provided: sk-xxx"）。这段文本会进 message、进前端提示、可能进日志——等于把
 // 本来只在服务端内存里流转的凭据写进了可读面。管理员自己知道密钥，但日志与截图不会。
+//
+// 关于 `Bearer`（踩过的坑）：Go 的 regexp 是 RE2，**不支持**负向前瞻，所以无法写成
+// 「authorization 后面跟的不是 Bearer」。而 `Authorization: Bearer eyJ...` 里的
+// `Bearer` 本身符合「一串字母」的取值特征，会被 header 规则当成密钥掩成
+// `Authorization: *** ***`——诊断词 "Bearer" 就没了。
+//
+// 解法不是占位符（占位符同样会被 header 规则再掩一次），而是**用值的形态区分**：
+// 真实 token 至少含一个非字母字符（`.` `-` `_` 数字）或者很长；而 `Bearer` 是纯字母
+// 且只有 6 位。因此把 header 规则的取值要求写成「长度 ≥8」——`Bearer` 恰好被排除，
+// 短 token 由前一条前缀规则（sk-/AIza）兜住。
 var upstreamSecretPatterns = []struct {
 	re   *regexp.Regexp
 	repl string
@@ -157,10 +167,21 @@ var upstreamSecretPatterns = []struct {
 	{regexp.MustCompile(`sk-[A-Za-z0-9._\-]{6,}`), "sk-***"},
 	// Google 风格 AIza...
 	{regexp.MustCompile(`AIza[A-Za-z0-9._\-]{6,}`), "AIza***"},
-	// Authorization: Bearer xxx
-	{regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._\-]{6,}`), "${1}***"},
 	// JSON 里的密钥字段：保留字段名，掩掉值（便于看出「是哪个字段被拒」）。
 	{regexp.MustCompile(`(?i)("(?:api[-_]?key|access[-_]?token|secret|authorization)"\s*:\s*")[^"]*(")`), "${1}***${2}"},
+	// 「回显密钥」的常见句式：上游把收到的密钥原样写在句子里，键名不以 sk- 等前缀开头时
+	// 前面几条都抓不到。这里按**句式**抓「provided: xxx」这类形态，只掩掉冒号后的那段，
+	// 保留句式本身（它说明了失败原因）。
+	//
+	// 这一条是端到端验证里实测发现的：上游返回 `Incorrect API key provided: bad-key` 时，
+	// 前缀规则完全失效，密钥原文会原样进 message。
+	{regexp.MustCompile(`(?i)(api[ _-]?key[^:]{0,40}:\s*)[A-Za-z0-9._\-]{4,}`), "${1}***"},
+	// Authorization: Bearer <token>：整段换成 `Bearer ***`，保留 "Bearer" 这个诊断词。
+	// 放在 header 规则之前，且要求 token ≥8 位（Bearer 自带的值是 6 位字母，故不会被这条吃掉）。
+	{regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._\-]{8,}`), "${1}***"},
+	// x-api-key: xxx / Authorization: xxx。
+	// 取值要求 ≥8 位：既覆盖真实 token，又不会把紧随其后的 `Bearer` 当成值（它只有 6 位）。
+	{regexp.MustCompile(`(?i)((?:x-api-key|authorization)\s*[:=]\s*)[A-Za-z0-9._\-]{8,}`), "${1}***"},
 }
 
 // RedactUpstreamBody 掩蔽上游错误体中的疑似凭据。

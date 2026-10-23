@@ -116,6 +116,21 @@ func TestRedactUpstreamBody(t *testing.T) {
 			mustNotContain: []string{"totally-secret-value"},
 			mustContain:    []string{"api_key", "gpt-4o-mini"},
 		},
+		{
+			// 真实上游的常见句式，且密钥**没有** sk- 前缀时前缀规则抓不到。
+			// 这条是端到端验证里实测暴露的：`Incorrect API key provided: bad-key`
+			// 曾原样进 message。
+			name:           "回显密钥的句式（无前缀密钥）",
+			in:             `{"error":{"message":"Incorrect API key provided: bad-key"}}`,
+			mustNotContain: []string{"bad-key"},
+			mustContain:    []string{"Incorrect API key"},
+		},
+		{
+			name:           "x-api-key 头回显",
+			in:             `invalid x-api-key: plainsecretvalue`,
+			mustNotContain: []string{"plainsecretvalue"},
+			mustContain:    []string{"x-api-key"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
