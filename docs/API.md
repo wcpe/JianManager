@@ -4390,39 +4390,37 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 
 > 分类码全集与「管理员该做什么」的对应表见 `docs/specs/ai-provider-models/api.md` §7。
 
-### GET /api/v1/assistant/admin/settings/egress
-- **描述**: 读取出站准入的私网放行段。
+### GET /api/v1/assistant/admin/settings
+- **描述**: 读取助手全局设置（默认模型 + 出站准入放行段）。两者同属 `assistant_settings`
+  单行，故按**单例资源**整体读写，与 `/api/v1/settings` 同构。
 - **权限**: 平台管理员
 - **响应** (200):
   ```json
-  { "allowPrivateCidrs": ["10.0.0.0/8"], "version": 2, "insecureAllowed": false }
+  { "defaultModelId": 12, "allowPrivateCidrs": ["10.0.0.0/8"], "version": 3, "insecureAllowed": false }
   ```
 - **说明**: `insecureAllowed` 是**只读回显**，表示当前部署是否接受 `http://` 明文目标
   （仅 dev 部署为 true）。放行网段不等于放行明文——两者是独立开关。
 
-### PUT /api/v1/assistant/admin/settings/egress
-- **描述**: 写入放行段，**保存后立即重建出站工厂生效**，无需重启。
+### PUT /api/v1/assistant/admin/settings
+- **描述**: 整体替换助手全局设置，**放行段变化时立即重建出站工厂生效**，无需重启。
 - **权限**: 平台管理员
 - **请求体**:
   ```json
-  { "allowPrivateCidrs": ["10.0.0.0/8", "192.168.1.0/24"], "version": 2 }
+  { "defaultModelId": 12, "allowPrivateCidrs": ["10.0.0.0/8"], "version": 3 }
   ```
+- **整体替换语义**：未提供的字段等于置空——不传 `defaultModelId` 即清空默认模型，
+  `allowPrivateCidrs` 传空即不放行任何私网段。因此「请求体即最终状态」，
+  不必区分「省略」与「显式 null」。
 - **响应** (200): 与 GET 同构（返回生效后的值与自增后的 version）
 - **校验**:
-  - 每项必须是合法 CIDR；**非法项整单拒绝并指出是哪一项**（不静默丢弃——
-    静默丢弃会变成「保存成功、行为不变、无提示」）。
+  - `defaultModelId` 非空时：模型必须存在，且自身与所属供应商都已启用。
+  - `allowPrivateCidrs` 每项必须是合法 CIDR；**非法项整单拒绝并指出是哪一项**
+    （不静默丢弃——静默丢弃会变成「保存成功、行为不变、无提示」）。
   - 自动规范化（掩掉主机位）与去重：`10.0.0.1/8` 与 `10.0.0.0/8` 视为同一段。
-  - 空数组表示禁止一切非公网目标。
-- **错误**: 409 `version` 不匹配 / 422 非法 CIDR / 404 设置未初始化
+- **错误**: 409 `version` 不匹配 / 422 非法 CIDR、默认模型不可用 / 404 设置未初始化
 - **不变量**: 云元数据地址段**永远拒绝**，即便被显式放行也不生效。
 
-> 每次写入都记审计 `assistant.settings.egress`。
-
-### PUT /api/v1/assistant/admin/settings/default-model
-- **描述**: 设置或清空默认模型。
-- **请求体**: `{ "modelId": 1 }` 或 `{ "modelId": null }`（清空）
-- **校验**: 目标模型必须存在且**启用**，其供应商也必须**启用**
-- **错误**: 422 模型不存在/已停用/供应商已停用 / 409 version 冲突
+> 每次写入都记审计 `assistant.settings.update`（detail 含 `defaultModelId` 与 `allowPrivateCidrs`）。
 
 ### AI 配置面的审计事件
 
@@ -4435,9 +4433,107 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 | `assistant.provider.delete` | `assistant_provider` | name（删除前先取，删完就查不到） |
 | `assistant.model.create` / `.update` | `assistant_model` | providerId, modelId, enabled |
 | `assistant.model.delete` | `assistant_model` | id |
-| `assistant.settings.default` | `assistant_settings` | defaultModelId（清空记 `"null"`） |
-| `assistant.settings.egress` | `assistant_settings` | allowPrivateCidrs |
+| `assistant.settings.update` | `assistant_settings` | defaultModelId（清空记 `"null"`）与 allowPrivateCidrs（一个端点承载两类设置，故记录两类值） |
 | `assistant.provider.test` / `assistant.model.test` | 对应类型 | ok, classifiedError, latencyMs（模型另含 withTools/toolCallParsed） |
 
 > 探测会产生**可能计费**的真实上游调用，因此也留痕；但只记结论元数据，不记 `message`
 > （它可能含上游回显的片段）。
+
+## AI 助手对话运行时（FR-515 Phase D）
+
+> 覆盖 spec [fr-515-agent-runtime.md](specs/ai-assistant/fr-515-agent-runtime.md) §6 的全部端点。
+> 会话是**私有**数据：所有读写按 `owner_user_id` 收敛，权限判据是会话归属而非权限节点——
+> 组管理员也不是他人会话的所有者（§3 冻结项）。
+>
+> **越权与不存在一律 404**（不区分）：分开回 403 与 404 等于提供「这个 id 存在吗」的探测接口。
+
+### 统一错误码
+
+| `error` | HTTP | 触发条件 |
+|---|---|---|
+| `CONVERSATION_NOT_FOUND` | 404 | 会话不存在**或不属于当前用户** |
+| `RUN_NOT_FOUND` | 404 | run 不存在**或不属于当前用户** |
+| `CONVERSATION_BUSY` | 409 | 该会话已有活跃 run；响应体**必带** `runId`（供前端接续观察，§5.2） |
+| `IDEMPOTENCY_CONFLICT` | 409 | 同一 `Idempotency-Key` 被用于内容不同的请求（§6.1） |
+| `CONFLICT` | 409 | run 已被另一方推进（乐观并发 CAS 失败） |
+| `BUDGET_EXCEEDED` | 429 | 该用户跨会话活跃 run 已达上限（`CONCURRENT_RUNS_PER_USER`） |
+| `INVALID_CURSOR` | 400 | `cursor` / `before` / `after` 不合法；**`after` 超过该 run 的 maxSeq 也是 400（不是 410）**（§6.2） |
+| `INVALID_REQUEST` | 400 | 请求体或 `limit` 不合法 |
+| `MODEL_UNAVAILABLE` | 503 | 会话选定/默认模型不可用（停用、已删、供应商停用等） |
+| `INTERNAL_ERROR` | 500 | 其它 |
+
+> **为什么 `after` 越界是 400 而不是 410**：事件永不因保留策略被删，补读游标不会因过期失效。
+> 越界只可能是伪造游标或跨 run 误用，此时 410 会让前端误判「历史已被清理」而永久放弃补读。
+
+### 会话
+
+#### GET /api/v1/assistant/conversations
+- **描述**: 当前用户的会话列表，按 `updated_at` 倒序。
+- **查询**: `cursor`（上一页 `nextCursor`）、`limit`（默认 20，上限 100）
+- **响应** (200): `{ "items": [ … ], "nextCursor": "v1:N" }`；`nextCursor` 为空表示没有更多
+
+#### POST /api/v1/assistant/conversations
+- **描述**: 新建会话。
+- **请求体**: `{ "title": "…", "modelId": 1 }`，两字段均可省略（`title` 省缺为「新会话」，
+  首轮提交时按用户消息截取；`modelId` 省缺表示跟随全局默认模型）
+- **响应** (201): 会话对象
+
+#### GET /api/v1/assistant/conversations/:id
+- **描述**: 会话详情 + 最近消息（一次往返即可渲染首屏）。
+- **查询**: `limit`（最近消息条数）
+- **响应** (200): `{ "conversation": { … }, "messages": [ … ] }`
+
+#### PATCH /api/v1/assistant/conversations/:id
+- **描述**: 改标题 / 换模型。
+- **请求体**: `{ "title": "…", "modelId": 1 }`；`modelId` 三态——缺省=不改、`null`=清空（回跟随默认模型）、数字=改用该模型
+- **响应** (200): 会话对象
+
+#### DELETE /api/v1/assistant/conversations/:id
+- **描述**: 软删除自己的会话（消息与事件随之不可读但**不物理删除**）。
+- **响应** (200): `{ "deleted": true }`
+- **错误**: 409 `CONVERSATION_BUSY`（已有活跃 run，需先取消）
+
+#### GET /api/v1/assistant/conversations/:id/messages
+- **描述**: 消息分页，按时间正序返回。
+- **查询**: `before`（比该消息 id 更早的 N 条）、`limit`
+- **响应** (200): `{ "items": [ … ] }`
+- **错误**: 400 `INVALID_CURSOR`（`before` 非正整数）
+
+#### POST /api/v1/assistant/conversations/:id/runs
+- **描述**: 提交一轮对话，异步推进。
+- **请求头**: `Idempotency-Key`（前端**必须**带；绑定 `(ownerUserId, conversationId)`，由数据库唯一约束保证）
+- **请求体**: `{ "text": "…", "contextSnapshot": { … } }`
+- **响应**: **202** `{ "runId": 1, "conversationId": 1, "status": "queued" }`
+  （202 而非 201：返回的是「已受理、正在后台推进」的运行，不是已完成的资源）
+- **幂等**: 同键同内容 → 回原 `runId` 且不新建 run；同键异内容 → 409 `IDEMPOTENCY_CONFLICT`
+- **错误**: 409 `CONVERSATION_BUSY`（带 `runId`）/ 429 `BUDGET_EXCEEDED` / 503 `MODEL_UNAVAILABLE`
+
+### 运行与事件
+
+#### GET /api/v1/assistant/runs/:runId/events
+- **描述**: 补读事件，返回 **JSON 数组**（不是 `{items:[]}`）。
+- **查询**: `after`（上次收到的最大 `seq`，缺省 0 = 从头补）
+- **响应** (200):
+  ```json
+  [ { "seq": 1, "type": "text_delta", "data": { "text": "你" },
+      "messageId": 2, "createdAt": "2026-10-23T10:00:00Z" } ]
+  ```
+- **错误**: 400 `INVALID_CURSOR`（`after` 非整数或超出该 run 的 maxSeq）/ 404 `RUN_NOT_FOUND`
+
+#### GET /api/v1/assistant/runs/:runId/stream
+- **描述**: SSE 观察流（**fetch + Bearer**，不用 `EventSource`——不把 JWT 放进 URL）。
+- **查询**: `after`（缺省 0）
+- **响应头**: `Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`、`X-Accel-Buffering: no`
+- **帧格式**: `event: <type>\ndata: <json>\n\n`，`data` 为上面 `/events` 的同款帧（含 `seq`）。
+  事件类型见 spec §5.3 最小集（`text_delta` / `tool_call` / `tool_status` / `tool_result` /
+  `usage` / `context_warning` / `error` / `run_end`）。
+- **行为**: 先把 `seq > after` 的历史事件补发完，再持续推送新事件；无新事件时每 15 秒发一行
+  注释帧 `: ping`。读到 `run_end`（每 run 恰好一条）即结束。
+- **实现现状**: 服务端**暂无事件订阅机制**，此端点以 400ms 间隔轮询事件表实现（Phase D 临时实现）；
+  帧格式与断线补读语义不随实现变化。
+- **错误**: 在写 SSE 头**之前**校验归属与游标，故 404/400 仍是普通 JSON 响应。
+
+#### POST /api/v1/assistant/runs/:runId/cancel
+- **描述**: 停止本轮。**幂等**——已终态再取消返回 200（「已经停住」即达成目的）。
+- **响应** (200): `{ "cancelled": true, "runId": 1 }`
+- **错误**: 404 `RUN_NOT_FOUND`

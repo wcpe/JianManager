@@ -244,27 +244,29 @@
 - `textPreview` ≤200 字符（超出截断并加省略号）。
 - 不写会话、不产生 run；不写审计（见 §9）。
 
-### 4.6 PUT /api/v1/assistant/admin/settings/default-model — FR-514
+### 4.6 GET / PUT /api/v1/assistant/admin/settings — FR-514
+
+助手全局设置（默认模型 + 出站放行段）按**单例资源**整体读写，与 `/api/v1/settings` 同构。
 
 ```json
-{ "modelId": 12, "version": 4 }
+{ "defaultModelId": 12, "allowPrivateCidrs": ["10.0.0.0/8"], "version": 4, "insecureAllowed": true }
 ```
 
-清空默认：
-
-```json
-{ "modelId": null, "version": 4 }
-```
-
-- 成功 `200 {"message":"已保存"}`。
-- 目标模型必须存在且**启用**，其供应商也必须**启用** → 否则 `422 INVALID_CONFIG`。
+- **整体替换语义**：未提供的字段等于置空——不传 `defaultModelId` 即清空默认模型，
+  `allowPrivateCidrs` 传空即不放行任何私网段。因此「请求体即最终状态」，
+  不必区分「省略」与「显式 null」（那种区分在 JSON 里本就难以可靠表达）。
+- `defaultModelId` 非空时必须存在、且自身与所属供应商都已启用 → 否则 `422 INVALID_CONFIG`。
+- `allowPrivateCidrs` 逐项校验，非法项**整单拒绝并点名哪一项**；自动规范化与去重。
 - `version` 不匹配 → `409 CONFLICT`。
-- **实现偏差**：初版设计是 `GET/PUT /admin/settings` 一体化（含 `allowPrivateCidrs`）。
-  落地收窄为单一动作端点，理由：设置表当时只有「默认模型」一个字段，
-  为一个字段做「读整个设置对象 → 改 → 整体写回」会让前端多一次往返、多一个可写错的整体状态。
-  **`GET /admin/settings` 未实现**（默认模型已由 `GET /assistant/models` 的 `defaultModelId` 提供），
-  **`allowPrivateCidrs` 未实现**（见 spec §4.3 / §6.2 缺口）。
+- `insecureAllowed` 只读，PUT 时忽略：它由部署模式（dev 与否）决定，不是可配置项。
+- 放行段变化时后端**立即重建出站工厂**（见 spec §4.3），默认模型变更不触发重建。
+- **实现偏差（两次）**：初版设计本就是 `GET/PUT /admin/settings` 一体化，落地时收窄成
+  `settings/default-model` 单动作端点（理由是当时设置只有一个字段）；后来加上放行段后
+  又出现两个动作端点，与 `/api/v1/settings` 的单例资源写法不一致。
+  **现已合并回单例资源 `GET/PUT /admin/settings`**，这两个动作端点已移除（无过渡别名）——
+  它们从未发布，保留别名只会留下永久存在的两套写法。
 
+## 5. 端点汇总与权限
 ## 5. 端点汇总与权限
 
 | 端点 | 权限判据 | 状态 |
@@ -279,11 +281,10 @@
 | `POST /api/v1/assistant/admin/models` | `IsPlatformAdmin` | ✅ |
 | `PUT /api/v1/assistant/admin/models/:id` | `IsPlatformAdmin` | ✅ |
 | `DELETE /api/v1/assistant/admin/models/:id` | `IsPlatformAdmin` | ✅ |
-| `PUT /api/v1/assistant/admin/settings/default-model` | `IsPlatformAdmin` | ✅ |
+| `GET/PUT /api/v1/assistant/admin/settings` | `IsPlatformAdmin` | ✅ |
 | `POST .../providers/:id/test` | `IsPlatformAdmin` | ✅ |
 | `GET .../providers/:id/models` | `IsPlatformAdmin` | ❌ 未实现 |
 | `POST .../models/:id/test` | `IsPlatformAdmin` | ✅ |
-| `GET/PUT .../admin/settings` | `IsPlatformAdmin` | ❌ 未实现（收窄为 default-model） |
 
 后续 FR-515 的会话/run 端点、FR-517 的 MCP 端点**不在本文范围**，不得据本文推导其契约。
 `/api/v1/mcp` 契约本批**未改动**，仍只认 `jmat_` Agent Token。

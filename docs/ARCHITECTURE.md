@@ -270,6 +270,11 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 上游 401 常回显它收到的密钥（"Incorrect API key provided: sk-xxx"），这段文本会进
 `message`、进前端提示、可能进日志与截图——而日志与截图里的密钥比内存里的更难收回。
 
+**助手的设置面是单例资源**：默认模型与出站放行段同属 `assistant_settings` 单行，因此
+也共用一个 `GET/PUT /api/v1/assistant/admin/settings`（整体替换，与 `/api/v1/settings` 同构），
+不再拆成 `settings/default-model` 与 `settings/egress` 两个动作端点——
+同一张表两种写法会让并发的 `version` 语义难以讲清，且前端要维护两套乐观并发。
+
 **出站准入的私网放行（DB 驱动）**：`assistant_settings.allow_private_cidrs` 存放行段
 （TEXT + JSON 数组），仅平台管理员可写、每次写入留审计 `assistant.settings.egress`。
 装配层把「用放行段造 Guard」收敛成**一个工厂**（`SetEgressFactory`），因为
