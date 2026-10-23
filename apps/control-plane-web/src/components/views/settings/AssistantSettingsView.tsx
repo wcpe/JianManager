@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, Pencil, Trash2, Star, PlugZap } from 'lucide-react'
 import {
@@ -6,9 +6,11 @@ import {
   AlertDescription,
   Badge,
   Button,
+  FieldLabel,
   Input,
   NativeSelect,
   Panel,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -17,12 +19,21 @@ import {
   TableRow,
 } from '@jianmanager/ui'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
+import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
-import { ASSISTANT_CREDENTIAL_MODES, ASSISTANT_PROTOCOLS } from '@/api/assistant'
+import {
+  ASSISTANT_CREDENTIAL_MODES,
+  ASSISTANT_PROTOCOLS,
+  credentialModeLabelKey,
+  protocolLabelKey,
+} from '@/api/assistant'
 import type {
   AssistantAvailableModel,
+  AssistantEgressSettings,
+  AssistantModelTestResult,
+  AssistantProbeResult,
   AssistantModel,
   AssistantProvider,
   ModelPayload,
@@ -58,6 +69,18 @@ export interface AssistantSettingsViewProps {
   onTestProvider: (id: number) => Promise<void>
   /** 用指定模型跑一次最小补全；withTools 时额外验证工具参数完整性。 */
   onTestModel: (id: number, withTools: boolean) => Promise<void>
+  /**
+   * 最近一次探测结果（key = `provider:<id>` / `model:<id>`）。
+   *
+   * 结果放行内而不是只弹 toast：分类建议是**要照着做**的内容
+   * （换密钥 / 稍后重试 / 配 NO_PROXY），塞进 3 秒消失的提示等于没给。
+   */
+  probeResults?: Record<string, AssistantProbeResult | AssistantModelTestResult>
+  /** 出站准入设置（私网放行段）。 */
+  egress?: AssistantEgressSettings
+  egressSaving?: boolean
+  /** 保存放行段；返回是否成功。 */
+  onSaveEgress: (cidrs: string[]) => Promise<boolean>
 }
 
 /** 供应商表单草稿。 */
@@ -163,6 +186,162 @@ function intOrNull(raw: string): number | null {
   return Number.isFinite(n) && Number.isInteger(n) ? n : null
 }
 
+/**
+ * 地址的**本地**校验（不发请求）。
+ *
+ * 为什么要在输入时校验：后端只在保存时回 422，用户得先填完、点保存、看报错、
+ * 再回来改——而这类错误（少了 https、粘了带 query 的地址）都能在输入时就判出来。
+ * 这里**不重复**后端的全部规则（比如 DNS 可达性），只挡语法层面的错，
+ * 判定真源仍在服务端；提示语措辞也按「可能」而非「一定」写。
+ *
+ * 返回 i18n key 与是否阻断保存。
+ */
+function validateBaseUrl(raw: string): { key: string; fallback: string; blocking: boolean } | null {
+  const value = raw.trim()
+  if (value === '') {
+    return { key: 'assistant.urlEmpty', fallback: '地址不能为空。', blocking: true }
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return {
+      key: 'assistant.urlInvalid',
+      fallback: '不是合法的 URL（需含 https:// 与主机名）。',
+      blocking: true,
+    }
+  }
+  if (parsed.protocol !== 'https:') {
+    // http 只在 dev 部署被后端放行；前端不知道部署模式，故提示为「生产只接受 https」，
+    // 让用户在点保存前就知道该改什么。
+    return {
+      key: 'assistant.urlNotHttps',
+      fallback: '生产部署只接受 https；当前地址将被拒绝。',
+      blocking: false,
+    }
+  }
+  if (parsed.search !== '' || parsed.hash !== '') {
+    return { key: 'assistant.urlHasQuery', fallback: '地址不能带 query 参数。', blocking: true }
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    return {
+      key: 'assistant.urlHasUserInfo',
+      fallback: '地址不能内嵌用户名或密码。',
+      blocking: true,
+    }
+  }
+  return null
+}
+
+/**
+ * 粗检是否为 CIDR（形如 `1.2.3.4/24` 或 IPv6）。
+ *
+ * 只用于「添加按钮是否可点」与就地提示，**不是**权威校验：
+ * 网段合法性由后端解析判定，前端这层仅省掉一次必然失败的往返。
+ */
+function looksLikeCIDR(raw: string): boolean {
+  const value = raw.trim()
+  if (value === '') return false
+  return /^[0-9a-fA-F.:]+\/\d{1,3}$/.test(value)
+}
+
+/**
+ * 探测结论块（行内展示）。
+ *
+ * 刻意做成「就地、可停留、可选中的」一块内容而不是 toast：
+ * 这里最要紧的信息是**下一步该做什么**（换密钥 / 稍后重试 / 配 NO_PROXY），
+ * 它是需要照着操作并可能复述给同事的，3 秒消失的提示承载不了。
+ */
+function ProbeResultBlock({
+  result,
+  kind,
+}: {
+  result: AssistantProbeResult | AssistantModelTestResult
+  kind: 'provider' | 'model'
+}) {
+  const { t } = useTranslation()
+  const ok = result.ok
+  // 模型测试结果里才有这些字段；供应商探测没有。
+  const withModel = 'toolCallParsed' in result
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={
+        ok
+          ? 'mt-2 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs'
+          : 'mt-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs'
+      }
+    >
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className={ok ? 'font-medium text-foreground' : 'font-medium text-destructive'}>
+          {ok ? t('assistant.probeOk', '连通正常') : t('assistant.probeFailed', '测试失败')}
+        </span>
+        <span className="text-muted-foreground">
+          {t('assistant.probeLatency', '耗时')} {result.latencyMs} ms
+        </span>
+        {result.classifiedError ? (
+          // 分类码用等宽字体：它是要被复制进工单/搜索的东西。
+          <code className="rounded bg-background/80 px-1 py-0.5 font-mono text-[11px]">
+            {result.classifiedError}
+          </code>
+        ) : null}
+        {withModel && ok ? (
+          <span className="text-muted-foreground">
+            {t('assistant.probeTools', '工具参数')}{' '}
+            {result.toolCallParsed ? t('assistant.probeToolsOk', '已解析') : t('assistant.probeToolsNo', '未验证')}
+          </span>
+        ) : null}
+      </div>
+      {/* 失败时给出分类对应的处置建议——这是管理员真正要的东西。 */}
+      {!ok ? (
+        <p className="mt-1 text-muted-foreground">
+          {probeHintText(result.classifiedError, t) || result.message}
+        </p>
+      ) : null}
+      {withModel && ok && result.textPreview ? (
+        <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={result.textPreview}>
+          {kind === 'model' ? `→ ${result.textPreview}` : result.textPreview}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * 分类码 → 处置建议。
+ *
+ * 与容器侧的 toast 文案共用同一套 key：两处必须说同一件事，
+ * 否则用户会在提示里看到一种解释、在结果块里看到另一种。
+ */
+function probeHintText(code: string | undefined, t: (k: string, fb: string) => string): string {
+  switch (code) {
+    case 'upstream_auth':
+      return t('assistant.hintAuth', '上游拒绝认证：请检查密钥是否正确、是否过期，以及该密钥是否被允许使用此模型。')
+    case 'upstream_rate_limited':
+      return t('assistant.hintRateLimited', '上游限流：请稍后再试，或检查该密钥的配额。')
+    case 'upstream_rejected':
+      return t('assistant.hintRejected', '上游拒绝了请求：请确认模型标识与所选协议是否匹配。')
+    case 'upstream_error':
+      return t('assistant.hintUpstreamError', '上游服务端错误：问题在供应商一侧，请稍后重试。')
+    case 'upstream_timeout':
+      return t('assistant.hintTimeout', '请求超时：请检查目标地址是否可达，以及网络出口是否正常。')
+    case 'upstream_unreachable':
+      return t('assistant.hintUnreachable', '无法连接到上游：请检查域名解析与网络连通性。')
+    case 'upstream_stream_truncated':
+      return t('assistant.hintTruncated', '上游响应意外中断：可能是链路不稳定或上游提前关闭了连接。')
+    case 'egress_denied':
+      return t('assistant.hintEgressDenied', '被出站准入拒绝：目标地址属于内网或被禁止的范围；如需放行，请到「出站准入」区块添加网段。')
+    case 'egress_proxy_unsupported':
+      return t('assistant.hintProxyUnsupported', '该目标会经代理出站，无法固定目标 IP，因此被拒绝。请为该域名配置 NO_PROXY，或改用直连。')
+    case 'tool_call_invalid':
+      return t('assistant.hintToolCallInvalid', '工具调用参数不完整：该模型可能不擅长严格按 schema 输出工具参数。')
+    default:
+      return ''
+  }
+}
+
 /** AI 助手配置页。 */
 export function AssistantSettingsView({
   isPlatformAdmin,
@@ -182,6 +361,10 @@ export function AssistantSettingsView({
   onSetDefaultModel,
   onTestProvider,
   onTestModel,
+  probeResults,
+  egress,
+  egressSaving = false,
+  onSaveEgress,
 }: AssistantSettingsViewProps) {
   const { t } = useTranslation()
   const providerList = providers ?? []
@@ -195,6 +378,18 @@ export function AssistantSettingsView({
   // 正在测试的行 id：只用来禁用该行按钮，避免连点产生多次付费调用。
   const [testingProviderId, setTestingProviderId] = useState<number | null>(null)
   const [testingModelId, setTestingModelId] = useState<number | null>(null)
+  // 新增放行段的草稿。
+  const [egressDraft, setEgressDraft] = useState('')
+  // 地址的本地校验结果（仅用于就地提示；真源仍在后端）。
+  const urlIssue = providerDraft ? validateBaseUrl(providerDraft.baseUrl) : null
+  // 摘要条用的派生值：都是已取回数据的本地聚合，不额外发请求。
+  const providersEnabledCount = providerList.filter((p) => p.enabled).length
+  const defaultModelName = (() => {
+    if (defaultModelId === null || defaultModelId === undefined) return null
+    const hit = modelList.find((m) => m.id === defaultModelId)
+    if (!hit) return null
+    return hit.displayName || hit.modelId
+  })()
 
   /** 提交供应商表单。 */
   const submitProvider = async () => {
@@ -281,12 +476,35 @@ export function AssistantSettingsView({
         </Alert>
       ) : (
         <>
-          {available.length === 0 && (
+          {available.length === 0 ? (
             <Alert variant="info">
               <AlertDescription>
                 {t('assistant.notConfigured', '尚未配置可用模型。添加供应商与模型后，助手才能开始工作。')}
               </AlertDescription>
             </Alert>
+          ) : (
+            /* 摘要条：这些数字此前已经取回却只用于「未配置」判断，
+               管理员在页面上看不到「我现在到底有几个能用的模型」。 */
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-border/60 bg-muted/30 px-4 py-2.5 text-sm">
+              <span className="text-muted-foreground">
+                {t('assistant.summaryProviders', '供应商')}
+                <span className="ml-1.5 font-medium text-foreground">
+                  {providersEnabledCount} / {providerList.length}
+                </span>
+              </span>
+              <span className="text-muted-foreground">
+                {t('assistant.summaryModels', '可用模型')}
+                <span className="ml-1.5 font-medium text-foreground">
+                  {available.length} / {modelList.length}
+                </span>
+              </span>
+              <span className="text-muted-foreground">
+                {t('assistant.summaryDefault', '默认模型')}
+                <span className="ml-1.5 font-medium text-foreground">
+                  {defaultModelName ?? t('assistant.summaryDefaultUnset', '未设置')}
+                </span>
+              </span>
+            </div>
           )}
 
           {/* 供应商 */}
@@ -301,9 +519,16 @@ export function AssistantSettingsView({
             }
           >
             {providerList.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                {t('assistant.providersEmpty', '还没有供应商。')}
-              </p>
+              <EmptyState
+                title={t('assistant.providersEmpty', '还没有供应商')}
+                description={t('assistant.providersEmptyHint', '供应商提供模型来源与凭据；没有它，助手无法调用任何模型。')}
+                action={
+                  <Button size="sm" onClick={() => setProviderDraft(emptyProviderDraft())}>
+                    <Plus className="size-4" />
+                    {t('assistant.addProvider', '添加供应商')}
+                  </Button>
+                }
+              />
             ) : (
               <Table>
                 <TableHeader>
@@ -317,16 +542,30 @@ export function AssistantSettingsView({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {providerList.map((p) => (
-                    <TableRow key={p.id}>
+                  {providerList.map((p) => {
+                    const probe = probeResults?.[`provider:${p.id}`]
+                    return (
+                    <Fragment key={p.id}>
+                    <TableRow>
                       <TableCell className="font-medium">{p.name}</TableCell>
-                      <TableCell className="text-muted-foreground">{p.protocol}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {/* 不再裸显示 openai-chat 这类内部枚举值——i18n 里早有对应名称。 */}
+                        {(() => {
+                          const key = protocolLabelKey(p.protocol)
+                          return key ? t(key, p.protocol) : p.protocol
+                        })()}
+                      </TableCell>
                       <TableCell className="max-w-[22rem] truncate text-muted-foreground" title={p.baseUrl}>
                         {p.baseUrl}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">
-                          <span className="text-muted-foreground">{p.credentialMode}</span>
+                          <span className="text-muted-foreground">
+                            {(() => {
+                              const key = credentialModeLabelKey(p.credentialMode)
+                              return key ? t(key, p.credentialMode) : p.credentialMode
+                            })()}
+                          </span>
                           {p.hasCredential ? (
                             <Badge variant="secondary">{t('assistant.credentialSet', '已配置')}</Badge>
                           ) : null}
@@ -368,7 +607,16 @@ export function AssistantSettingsView({
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    {probe ? (
+                      <TableRow key={`${p.id}-probe`} className="hover:bg-transparent">
+                        <TableCell colSpan={6} className="pt-0">
+                          <ProbeResultBlock result={probe} kind="provider" />
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                    </Fragment>
+                    )
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -407,8 +655,10 @@ export function AssistantSettingsView({
                 <TableBody>
                   {modelList.map((m) => {
                     const isDefault = defaultModelId === m.id
-  return (
-                      <TableRow key={m.id}>
+                    const probe = probeResults?.[`model:${m.id}`]
+                    return (
+                      <Fragment key={m.id}>
+                      <TableRow>
                         <TableCell>
                           <div className="flex items-center gap-1.5">
                             <span className="font-mono text-xs">{m.modelId}</span>
@@ -476,11 +726,110 @@ export function AssistantSettingsView({
                           </div>
                         </TableCell>
                       </TableRow>
+                      {probe ? (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={6} className="pt-0">
+                            <ProbeResultBlock result={probe} kind="model" />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                      </Fragment>
                     )
                   })}
                 </TableBody>
               </Table>
             )}
+          </Panel>
+
+          {/* 出站准入：AI 出站能打到哪些非公网地址。
+              这是页面上唯一能「扩大可达范围」的地方，因此风险提示与逐条校验都要显式。 */}
+          <Panel title={t('assistant.egressTitle', '出站准入')}>
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  'assistant.egressSubtitle',
+                  '默认只允许 https 公网目标；云元数据地址永远拒绝。只有在这里显式填写的网段才会被放行。',
+                )}
+              </p>
+              <Alert variant="warning">
+                <AlertDescription>
+                  {t(
+                    'assistant.egressRisk',
+                    '放行后，该网段内任何能被 HTTP 访问的服务都可能成为模型请求的目标。请只填你确实要接的模型网关所在网段。',
+                  )}
+                </AlertDescription>
+              </Alert>
+
+              {egress && egress.allowPrivateCidrs.length > 0 ? (
+                <ul className="divide-y divide-border/60 rounded-md border border-border/60">
+                  {egress.allowPrivateCidrs.map((cidr) => (
+                    <li key={cidr} className="flex items-center justify-between gap-2 px-3 py-2">
+                      <code className="font-mono text-xs">{cidr}</code>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={t('assistant.egressRemove', '移除该网段')}
+                        disabled={egressSaving}
+                        onClick={() =>
+                          void onSaveEgress(egress.allowPrivateCidrs.filter((c) => c !== cidr))
+                        }
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState
+                  title={t('assistant.egressEmpty', '没有放行任何私网段')}
+                  description={t('assistant.egressEmptyHint', '只接公网模型供应商时保持为空即可。')}
+                />
+              )}
+
+              {/* 新增一条网段：前端只做「是否像 CIDR」的粗检，真源仍在后端。 */}
+              <div className="flex items-start gap-2">
+                <div className="flex-1 space-y-1">
+                  <FieldLabel htmlFor="assistant-egress-cidr">
+                    {t('assistant.egressAddLabel', '添加网段')}
+                  </FieldLabel>
+                  <Input
+                    id="assistant-egress-cidr"
+                    value={egressDraft}
+                    placeholder="192.0.2.0/24"
+                    onChange={(e) => setEgressDraft(e.target.value)}
+                  />
+                  {egressDraft.trim() !== '' && !looksLikeCIDR(egressDraft) ? (
+                    <span className="block text-xs text-destructive">
+                      {t('assistant.egressInvalid', '格式应为 CIDR，例如 10.0.0.0/8 或 192.168.1.0/24。')}
+                    </span>
+                  ) : null}
+                </div>
+                <Button
+                  className="mt-6"
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    egressSaving || egressDraft.trim() === '' || !looksLikeCIDR(egressDraft)
+                  }
+                  onClick={async () => {
+                    const next = [...(egress?.allowPrivateCidrs ?? []), egressDraft.trim()]
+                    if (await onSaveEgress(next)) setEgressDraft('')
+                  }}
+                >
+                  <Plus className="size-4" />
+                  {t('assistant.egressAdd', '添加')}
+                </Button>
+              </div>
+
+              {egress && !egress.insecureAllowed ? (
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'assistant.egressInsecureOff',
+                    '当前部署只接受 https 目标；即使放行网段，http:// 地址仍会被拒绝。',
+                  )}
+                </p>
+              ) : null}
+            </div>
           </Panel>
         </>
       )}
@@ -498,17 +847,22 @@ export function AssistantSettingsView({
           <ScrollableDialogBody className="space-y-3">
             {providerDraft && (
               <>
-                <label className="block space-y-1">
-                  <span className="text-sm font-medium">{t('assistant.name', '名称')}</span>
+                <div className="space-y-1">
+                  <FieldLabel htmlFor="assistant-provider-name" required>
+                    {t('assistant.name', '名称')}
+                  </FieldLabel>
                   <Input
+                    id="assistant-provider-name"
                     value={providerDraft.name}
                     onChange={(e) => setProviderDraft({ ...providerDraft, name: e.target.value })}
                   />
-                </label>
-                <label className="block space-y-1">
-                  <span className="text-sm font-medium">{t('assistant.protocolLabel', '协议')}</span>
+                </div>
+                <div className="space-y-1">
+                  <FieldLabel htmlFor="assistant-provider-protocol" required>
+                    {t('assistant.protocolLabel', '协议')}
+                  </FieldLabel>
                   <NativeSelect
-                    aria-label={t('assistant.protocolLabel', '协议')}
+                    id="assistant-provider-protocol"
                     value={providerDraft.protocol}
                     onChange={(e) => setProviderDraft({ ...providerDraft, protocol: e.target.value })}
                   >
@@ -518,22 +872,43 @@ export function AssistantSettingsView({
                       </option>
                     ))}
                   </NativeSelect>
-                </label>
-                <label className="block space-y-1">
-                  <span className="text-sm font-medium">{t('assistant.baseUrl', '地址')}</span>
+                </div>
+                <div className="space-y-1">
+                  <FieldLabel htmlFor="assistant-provider-base-url" required>
+                    {t('assistant.baseUrl', '地址')}
+                  </FieldLabel>
                   <Input
+                    id="assistant-provider-base-url"
                     value={providerDraft.baseUrl}
                     placeholder="https://api.example.com/v1"
+                    aria-invalid={urlIssue?.blocking === true}
                     onChange={(e) => setProviderDraft({ ...providerDraft, baseUrl: e.target.value })}
                   />
-                  <span className="block text-xs text-muted-foreground">
-                    {t('assistant.baseUrlHint', '仅支持 https，不能带 query 或内嵌凭据。')}
-                  </span>
-                </label>
-                <label className="block space-y-1">
-                  <span className="text-sm font-medium">{t('assistant.credentialLabel', '凭据')}</span>
+                  {/* 输入时就地提示，而不是等保存后 422：这类错误（少了 https、
+                      粘了带 query 的地址）都能在本地判出来。 */}
+                  {urlIssue ? (
+                    <span
+                      className={
+                        urlIssue.blocking
+                          ? 'block text-xs text-destructive'
+                          : 'block text-xs text-muted-foreground'
+                      }
+                    >
+                      {/* 带中文兜底：缺词条时也不让页面显示裸 i18n key。 */}
+                      {t(urlIssue.key, urlIssue.fallback)}
+                    </span>
+                  ) : (
+                    <span className="block text-xs text-muted-foreground">
+                      {t('assistant.baseUrlHint', '仅支持 https，不能带 query 或内嵌凭据。')}
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <FieldLabel htmlFor="assistant-provider-credential-mode">
+                    {t('assistant.credentialLabel', '凭据')}
+                  </FieldLabel>
                   <NativeSelect
-                    aria-label={t('assistant.credentialLabel', '凭据')}
+                    id="assistant-provider-credential-mode"
                     value={providerDraft.credentialMode}
                     onChange={(e) =>
                       setProviderDraft({
@@ -549,42 +924,94 @@ export function AssistantSettingsView({
                       </option>
                     ))}
                   </NativeSelect>
-                </label>
+                </div>
                 {providerDraft.credentialMode === 'env' && (
-                  <label className="block space-y-1">
-                    <span className="text-sm font-medium">{t('assistant.credentialEnv', '环境变量名')}</span>
+                  <div className="space-y-1">
+                    <FieldLabel htmlFor="assistant-provider-credential-env" required>
+                      {t('assistant.credentialEnv', '环境变量名')}
+                    </FieldLabel>
                     <Input
+                      id="assistant-provider-credential-env"
                       value={providerDraft.credentialEnv}
                       placeholder="JIANMANAGER_ASSISTANT_PROVIDER_KEY"
                       onChange={(e) => setProviderDraft({ ...providerDraft, credentialEnv: e.target.value })}
                     />
-                  </label>
+                    <span className="block text-xs text-muted-foreground">
+                      {t('assistant.credentialEnvHint', '只读进程环境，不读文件；变量须以 JIANMANAGER_ASSISTANT_ 开头。')}
+                    </span>
+                  </div>
                 )}
                 {providerDraft.credentialMode === 'stored' && (
-                  <label className="block space-y-1">
-                    <span className="text-sm font-medium">{t('assistant.credentialSecret', 'API 密钥')}</span>
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <FieldLabel htmlFor="assistant-provider-credential-secret">
+                        {t('assistant.credentialSecret', 'API 密钥')}
+                      </FieldLabel>
+                      {/* 三态显式化：以前「已保存」只能靠「留空＝保留」这一句提示表达，
+                          用户看不出当前到底有没有存过密钥、也无法明确清除。 */}
+                      {providerDraft.hasCredential ? (
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant="secondary">{t('assistant.credentialSet', '已配置')}</Badge>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() =>
+                              setProviderDraft({
+                                ...providerDraft,
+                                credentialSecret: '',
+                                clearCredential: true,
+                              })
+                            }
+                          >
+                            {t('assistant.credentialClear', '清除')}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
                     <Input
+                      id="assistant-provider-credential-secret"
                       type="password"
                       value={providerDraft.credentialSecret}
+                      disabled={providerDraft.clearCredential}
                       placeholder={
-                        providerDraft.hasCredential
-                          ? t('assistant.credentialKeepHint', '留空表示保留已保存的密钥')
-                          : ''
+                        providerDraft.clearCredential
+                          ? t('assistant.credentialWillClear', '保存后将清除已存密钥')
+                          : providerDraft.hasCredential
+                            ? t('assistant.credentialKeepHint', '留空表示保留已保存的密钥')
+                            : t('assistant.credentialRequiredHint', '必填：保存后仅显示「已配置」')
                       }
                       onChange={(e) =>
                         setProviderDraft({ ...providerDraft, credentialSecret: e.target.value })
                       }
                     />
-                  </label>
+                    {providerDraft.clearCredential ? (
+                      <span className="block text-xs text-destructive">
+                        {t('assistant.credentialClearWarning', '将清除密钥并把凭据模式改为「无」。')}
+                      </span>
+                    ) : null}
+                  </div>
                 )}
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                {/* 用设计系统的 Switch 而不是原生 checkbox：
+                    原生控件在各浏览器的默认尺寸与焦点环都不受 token 控制，
+                    且这里语义本来就是「开关」而非「多项选择之一」。 */}
+                <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-3 py-2">
+                  <div className="min-w-0">
+                    <FieldLabel htmlFor="assistant-provider-enabled" className="block">
+                      {t('assistant.enabled', '启用')}
+                    </FieldLabel>
+                    <span className="block text-xs text-muted-foreground">
+                      {t('assistant.enabledHint', '停用后该供应商不参与可用模型摘要，也不可被探测。')}
+                    </span>
+                  </div>
+                  <Switch
+                    id="assistant-provider-enabled"
                     checked={providerDraft.enabled}
-                    onChange={(e) => setProviderDraft({ ...providerDraft, enabled: e.target.checked })}
+                    onCheckedChange={(v) => setProviderDraft({ ...providerDraft, enabled: v })}
+                    aria-label={t('assistant.enabled', '启用')}
                   />
-                  {t('assistant.enabled', '启用')}
-                </label>
+                </div>
               </>
             )}
           </ScrollableDialogBody>
@@ -644,22 +1071,46 @@ export function AssistantSettingsView({
                   />
                 </label>
                 <div className="grid grid-cols-2 gap-3">
-                  <label className="block space-y-1">
-                    <span className="text-sm font-medium">{t('assistant.contextWindow', '上下文窗口')}</span>
-                    <Input
-                      value={modelDraft.contextWindow}
-                      placeholder={t('assistant.optional', '可留空')}
-                      onChange={(e) => setModelDraft({ ...modelDraft, contextWindow: e.target.value })}
-                    />
-                  </label>
-                  <label className="block space-y-1">
-                    <span className="text-sm font-medium">{t('assistant.maxOutput', '输出上限')}</span>
-                    <Input
-                      value={modelDraft.maxOutputTokens}
-                      placeholder={t('assistant.optional', '可留空')}
-                      onChange={(e) => setModelDraft({ ...modelDraft, maxOutputTokens: e.target.value })}
-                    />
-                  </label>
+                  <div className="space-y-1">
+                    <FieldLabel htmlFor="assistant-model-context-window">
+                      {t('assistant.contextWindow', '上下文窗口')}
+                    </FieldLabel>
+                    <div className="relative">
+                      <Input
+                        id="assistant-model-context-window"
+                        type="number"
+                        min={1}
+                        inputMode="numeric"
+                        className="pr-12"
+                        value={modelDraft.contextWindow}
+                        placeholder={t('assistant.undeclared', '未声明')}
+                        onChange={(e) => setModelDraft({ ...modelDraft, contextWindow: e.target.value })}
+                      />
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                        tokens
+                      </span>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <FieldLabel htmlFor="assistant-model-max-output">
+                      {t('assistant.maxOutput', '输出上限')}
+                    </FieldLabel>
+                    <div className="relative">
+                      <Input
+                        id="assistant-model-max-output"
+                        type="number"
+                        min={1}
+                        inputMode="numeric"
+                        className="pr-12"
+                        value={modelDraft.maxOutputTokens}
+                        placeholder={t('assistant.undeclared', '未声明')}
+                        onChange={(e) => setModelDraft({ ...modelDraft, maxOutputTokens: e.target.value })}
+                      />
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                        tokens
+                      </span>
+                    </div>
+                  </div>
                 </div>
                 <div className="flex gap-4 text-sm">
                   <label className="flex items-center gap-2">

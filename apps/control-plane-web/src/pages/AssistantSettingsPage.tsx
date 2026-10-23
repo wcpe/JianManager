@@ -1,11 +1,14 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth'
 import { isPlatformAdmin } from '@/lib/shared/roles'
 import {
   useAssistantAdminModels,
+  useAssistantEgress,
   useAssistantModels,
   useAssistantProviders,
+  useSetAssistantEgress,
   useCreateModel,
   useCreateProvider,
   useDeleteModel,
@@ -16,7 +19,12 @@ import {
   useUpdateModel,
   useUpdateProvider,
 } from '@/api/assistant'
-import type { ModelPayload, ProviderPayload } from '@/api/assistant'
+import type {
+  AssistantModelTestResult,
+  AssistantProbeResult,
+  ModelPayload,
+  ProviderPayload,
+} from '@/api/assistant'
 import { AssistantSettingsView } from '@/components/views/settings/AssistantSettingsView'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
@@ -85,6 +93,12 @@ export default function AssistantSettingsPage() {
   const setDefaultModel = useSetDefaultModel()
   const testProvider = useTestProvider()
   const testModel = useTestModel()
+  const egressQuery = useAssistantEgress(admin)
+  const setEgress = useSetAssistantEgress()
+  // 探测结果按 `provider:<id>` / `model:<id>` 存，供视图就地展示（不只有 toast）。
+  const [probeResults, setProbeResults] = useState<
+    Record<string, AssistantProbeResult | AssistantModelTestResult>
+  >({})
 
   const saving =
     createProvider.isPending ||
@@ -156,16 +170,34 @@ export default function AssistantSettingsPage() {
       }
       onTestProvider={async (id: number) => {
         try {
-          reportProbe(await testProvider.mutateAsync(id), t('assistant.providerLabel', '供应商'))
+          const res = await testProvider.mutateAsync(id)
+          setProbeResults((prev) => ({ ...prev, [`provider:${id}`]: res }))
+          reportProbe(res, t('assistant.providerLabel', '供应商'))
         } catch (err) {
           toast.error(errMessage(err, t('assistant.testRequestFailed', '测试请求失败')))
         }
       }}
       onTestModel={async (id: number, withTools: boolean) => {
         try {
-          reportProbe(await testModel.mutateAsync({ id, withTools }), t('assistant.modelLabel', '模型'))
+          const res = await testModel.mutateAsync({ id, withTools })
+          setProbeResults((prev) => ({ ...prev, [`model:${id}`]: res }))
+          reportProbe(res, t('assistant.modelLabel', '模型'))
         } catch (err) {
           toast.error(errMessage(err, t('assistant.testRequestFailed', '测试请求失败')))
+        }
+      }}
+      probeResults={probeResults}
+      egress={egressQuery.data}
+      egressSaving={setEgress.isPending}
+      onSaveEgress={async (cidrs: string[]) => {
+        const version = egressQuery.data?.version ?? 0
+        try {
+          await setEgress.mutateAsync({ allowPrivateCidrs: cidrs, version })
+          toast.success(t('assistant.egressSaved', '出站放行段已保存并立即生效'))
+          return true
+        } catch (err) {
+          toast.error(errMessage(err, t('assistant.egressSaveFailed', '保存放行段失败')))
+          return false
         }
       }}
     />
