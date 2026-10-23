@@ -16,7 +16,8 @@ import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
-import { FieldError } from '@jianmanager/ui/components/field-label'
+import { FieldError, FieldLabel } from '@jianmanager/ui/components/field-label'
+import { Switch } from '@jianmanager/ui/components/switch'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell, SettingsLayout } from '@jianmanager/ui/components/layout'
 import {
@@ -551,7 +552,11 @@ function EditableRow({ item, value, onChange }: EditableRowProps) {
     <div className="flex items-center justify-between gap-4 px-3 py-2">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium truncate">{settingLabel(t, item.key)}</p>
+          {/* 用 FieldLabel 而不是 <p>：它是真正的 label 元素，屏幕阅读器可关联到控件；
+              设置项的控件在同行右侧，故用 aria-labelledby 关联而不是 htmlFor（无 id 可用）。 */}
+          <FieldLabel id={`setting-label-${item.key}`} className="truncate">
+            {settingLabel(t, item.key)}
+          </FieldLabel>
           {item.overridden && <Badge variant="secondary">{t('settings.overridden', '已覆盖')}</Badge>}
           {!item.effectiveImmediately && (
             // FR-158：非即时项标注生效时机（hover 展开说明）。
@@ -564,15 +569,19 @@ function EditableRow({ item, value, onChange }: EditableRowProps) {
       </div>
       {item.key === 'debug.mode' ? (
         // 调试模式开关（FR-225）：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
-        <Select value={value} onValueChange={onChange}>
-          <SelectTrigger size="sm" className="w-40" aria-label={settingLabel(t, item.key)}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="true">{t('settings.debugOn', '开启')}</SelectItem>
-            <SelectItem value="false">{t('settings.debugOff', '关闭')}</SelectItem>
-          </SelectContent>
-        </Select>
+        // 用 Switch 而非 true/false 下拉：它是开关语义，下拉把二值状态做成了「选项」，
+        // 读起来像有第三种可能。提交值仍转回字符串，保持后端契约不变。
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={value === 'true'}
+            disabled={!item.editable}
+            onCheckedChange={(v) => onChange(v ? 'true' : 'false')}
+            aria-label={settingLabel(t, item.key)}
+          />
+          <span className="w-8 text-xs text-muted-foreground">
+            {value === 'true' ? t('settings.debugOn', '开启') : t('settings.debugOff', '关闭')}
+          </span>
+        </div>
       ) : item.key === 'log.level' ? (
         <Select value={value} onValueChange={onChange}>
           <SelectTrigger size="sm" className="w-40" aria-label={settingLabel(t, item.key)}>
@@ -628,7 +637,11 @@ function ReadOnlyRow({ item }: { item: SettingsItemView }) {
     <div className="flex items-center justify-between gap-4 px-3 py-2">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium truncate">{settingLabel(t, item.key)}</p>
+          {/* 用 FieldLabel 而不是 <p>：它是真正的 label 元素，屏幕阅读器可关联到控件；
+              设置项的控件在同行右侧，故用 aria-labelledby 关联而不是 htmlFor（无 id 可用）。 */}
+          <FieldLabel id={`setting-label-${item.key}`} className="truncate">
+            {settingLabel(t, item.key)}
+          </FieldLabel>
           {item.sensitive && <Badge variant="outline">{t('settings.masked', '已脱敏')}</Badge>}
         </div>
         <p className="text-xs text-muted-foreground font-mono">{item.key}</p>
