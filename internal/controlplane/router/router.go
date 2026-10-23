@@ -624,7 +624,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 管理子域由 handler 内部按 IsPlatformAdmin 把守（不挂 permRead——
 		// 供应商配置掌握出站地址与凭据引用，不能按业务权限节点放行）。
 		if svcs.Assistant != nil {
-			NewAssistantHandler(svcs.Assistant).RegisterRoutes(protected.Group("/assistant"))
+			NewAssistantHandler(svcs.Assistant, svcs.Audit).RegisterRoutes(protected.Group("/assistant"))
 		}
 
 		if svcs.OrphanRuntime != nil {
