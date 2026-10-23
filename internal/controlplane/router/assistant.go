@@ -91,6 +91,10 @@ func (h *AssistantHandler) RegisterRoutes(r *gin.RouterGroup) {
 		admin.POST("/models/:id/test", h.TestModel)
 
 		admin.PUT("/settings/default-model", h.SetDefaultModel)
+		// 出站准入的私网放行段：改一下就能扩大 AI 可达的内网范围，故仅平台管理员，
+		// 且写入必留审计。
+		admin.GET("/settings/egress", h.GetEgress)
+		admin.PUT("/settings/egress", h.UpdateEgress)
 	}
 }
 
@@ -415,6 +419,51 @@ func (h *AssistantHandler) TestModel(c *gin.Context) {
 type modelTestRequest struct {
 	// WithTools 额外要求一次工具调用并验证参数完整性。
 	WithTools bool `json:"withTools"`
+}
+
+// egressRequest 出站放行段请求体。
+type egressRequest struct {
+	// AllowPrivateCIDRs 要放行的私网段；空数组表示禁止一切非公网目标。
+	AllowPrivateCIDRs []string `json:"allowPrivateCidrs"`
+	Version           int      `json:"version"`
+}
+
+// GetEgress GET /assistant/admin/settings/egress
+func (h *AssistantHandler) GetEgress(c *gin.Context) {
+	view, err := h.svc.GetEgress()
+	if err != nil {
+		respondAssistantErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
+}
+
+// UpdateEgress PUT /assistant/admin/settings/egress
+//
+// 保存后**立即重建出站工厂**：AllowPrivate 在构造 Guard 时被编译进拨号器，
+// 不重建就等于「保存成功但行为不变」——那是最难自查的一类故障。
+func (h *AssistantHandler) UpdateEgress(c *gin.Context) {
+	var req egressRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求体格式不正确"})
+		return
+	}
+	if err := h.svc.SetEgressAllowPrivate(req.AllowPrivateCIDRs, req.Version); err != nil {
+		respondAssistantErr(c, err)
+		return
+	}
+	if h.audit != nil {
+		// 放行段直接决定「模型能打到哪些内网服务」，属高影响配置，必须留痕。
+		h.audit.RecordResultSafe(currentUserID(c), "assistant.settings.egress", "assistant_settings", "1",
+			marshalAuditDetail(map[string]any{"allowPrivateCidrs": req.AllowPrivateCIDRs}),
+			c.ClientIP(), true, "")
+	}
+	view, err := h.svc.GetEgress()
+	if err != nil {
+		respondAssistantErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, view)
 }
 
 // respondAssistantErr 把 service 错误映射成 HTTP 语义。
