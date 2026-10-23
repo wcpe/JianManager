@@ -1,6 +1,6 @@
 # 功能规格：AI 供应商、模型与管理配置（FR-514）
 
-> 状态：**实现中（配置面与协议接入层已落地，探测端点与真实上游验收未做）**　·　关联 PRD：FR-514　·　范围：仅 FR-514
+> 状态：**实现中（配置面、协议接入层与探测端点均已落地；真实上游验收与跨重启验证未做）**　·　关联 PRD：FR-514　·　范围：仅 FR-514
 > 共享契约（消息/事件/上下文/工具风险）见 [../ai-assistant/shared-contracts.md](../ai-assistant/shared-contracts.md)，本文不复述。
 > 本文不含任何真实凭据、真实端点、参考项目名称或绝对路径；所有示例地址均为文档保留段。
 >
@@ -17,13 +17,13 @@
 
 ## 2. 现状核实（只读结论）
 
-- 平台设置是**白名单字符串键**覆盖模型（[internal/controlplane/service/settings.go](internal/controlplane/service/settings.go)、[internal/controlplane/router/settings.go](internal/controlplane/router/settings.go#L65-L71)），只适合标量；多供应商/多模型不能塞进字符串键。
-- 管理员面已有 `settings` 分组（[internal/controlplane/router/router.go](internal/controlplane/router/router.go#L617-L618)），但写权限走 `requireNodes(...)` 这类 helper；本 FR 的**唯一真源**是显式 `UserAccess.IsPlatformAdmin`（[internal/controlplane/middleware/auth.go](internal/controlplane/middleware/auth.go#L83-L100) 已按该字段放行），不再叠加 helper。
-- 已有可逆加密器 `*service.KeyEncryptor` 与三轨解析 `ResolveKeyEncryptor`（[internal/controlplane/service/client_key_crypto.go](internal/controlplane/service/client_key_crypto.go)），在 [apps/control-plane/main.go](apps/control-plane/main.go#L423-L446) 装配后 `SetKeyEncryptor` 注入各 service；`nil` 加密器是既有降级语义。
-- 出站已有共享客户端工厂与代理配置（[internal/platform/httpclient/provider.go](internal/platform/httpclient/provider.go)、[docs/adr/037-outbound-proxy.md](docs/adr/037-outbound-proxy.md)）；代理**不是** SSRF 防护，不能复用来做目的地址准入。
+- 平台设置是**白名单字符串键**覆盖模型（[internal/controlplane/service/settings.go](../../../internal/controlplane/service/settings.go)、[internal/controlplane/router/settings.go](../../../internal/controlplane/router/settings.go#L65-L71)），只适合标量；多供应商/多模型不能塞进字符串键。
+- 管理员面已有 `settings` 分组（[internal/controlplane/router/router.go](../../../internal/controlplane/router/router.go#L617-L618)），但写权限走 `requireNodes(...)` 这类 helper；本 FR 的**唯一真源**是显式 `UserAccess.IsPlatformAdmin`（[internal/controlplane/middleware/auth.go](../../../internal/controlplane/middleware/auth.go#L83-L100) 已按该字段放行），不再叠加 helper。
+- 已有可逆加密器 `*service.KeyEncryptor` 与三轨解析 `ResolveKeyEncryptor`（[internal/controlplane/service/client_key_crypto.go](../../../internal/controlplane/service/client_key_crypto.go)），在 [apps/control-plane/main.go](../../../apps/control-plane/main.go#L423-L446) 装配后 `SetKeyEncryptor` 注入各 service；`nil` 加密器是既有降级语义。
+- 出站已有共享客户端工厂与代理配置（[internal/platform/httpclient/provider.go](../../../internal/platform/httpclient/provider.go)、[docs/adr/037-outbound-proxy.md](../../../docs/adr/037-outbound-proxy.md)）；代理**不是** SSRF 防护，不能复用来做目的地址准入。
 - 现有出站测试按钮只用于代理/JDK 源连通性，不是模型协议探测。
-- 数据库只有 SQLite（`database.AutoMigrate` 追加模型，见 [internal/controlplane/database/database.go](internal/controlplane/database/database.go#L117-L135)）；本 FR 不扩任何数据库后端，不承诺 MySQL 表结构。
-- 设置 UI 是单页分类（[apps/control-plane-web/src/pages/SettingsPage.tsx](apps/control-plane-web/src/pages/SettingsPage.tsx)），路由懒加载表在 [apps/control-plane-web/src/lib/shared/route-chunks.ts](apps/control-plane-web/src/lib/shared/route-chunks.ts)。
+- 数据库只有 SQLite（`database.AutoMigrate` 追加模型，见 [internal/controlplane/database/database.go](../../../internal/controlplane/database/database.go#L117-L135)）；本 FR 不扩任何数据库后端，不承诺 MySQL 表结构。
+- 设置 UI 是单页分类（[apps/control-plane-web/src/pages/SettingsPage.tsx](../../../apps/control-plane-web/src/pages/SettingsPage.tsx)），路由懒加载表在 [apps/control-plane-web/src/lib/shared/route-chunks.ts](../../../apps/control-plane-web/src/lib/shared/route-chunks.ts)。
 
 ## 3. 冻结的共同选择
 
@@ -99,7 +99,7 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 但**没有把它接到任何可持久化设置上**，即当前部署下「内网自托管模型网关」无法通过配置放行，
 只能靠改代码注入。这是一处**已知缺口**，不是「设计上不需要」：要真正放开必须补一个
 「管理员显式填 CIDR + 明确风险提示」的入口，因为一旦可配，就等于给出一条把模型流量导向内网的通道，
-必须与「谁能改」一起设计（当前配置面只有平台管理员，可接受）。在补上之前，**不要把 §6.5 读成已生效**。
+必须与「谁能改」一起设计（当前配置面只有平台管理员，可接受）。在补上之前，**本 FR 不具备「内网放行可配置」这项能力**。
 
 ### 4.4 语义约束
 
@@ -163,22 +163,49 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 8. **私网显式放行没有配置入口**（见 §4.3）：`GuardOptions.AllowPrivate` 存在且生效，
    但没有持久化字段与管理 UI，故实际部署中「自托管内网模型网关」只能改代码放行。
    补齐时必须同时给风险提示与权限门（当前配置面已是平台管理员，故只需补 UI 与字段）。
-9. **预算数值**（连接/响应头/流空闲超时、单行事件与单次响应上限）在 `GuardOptions` 里有默认值，
-   但**未按协议分别标定**；草稿 §6.10 列的 4MiB/8MiB/64KiB 属设计意图，落地后未逐项回归验证。
+9. **出站预算字段尚未存在**（更正：早期措辞称「在 `GuardOptions` 里有默认值」，**与代码不符**）。
+   `GuardOptions`（`protected.go` L45-L62）实际只有 `AllowPrivate` / `AllowInsecure` / `Timeout` /
+   `AllowSameOriginRedirect` / `Proxy` / `NoProxy` 六项，**没有**响应头超时、流空闲超时、
+   单行事件上限、单次响应体上限这些字段。当前这些约束分散在各协议适配器的局部实现里，未统一、
+   也未按协议分别标定；初版草稿拟议的 4MiB/8MiB/64KiB 属设计意图，落地后未逐项回归验证。
+10. **`ValidateBaseURL` 只做静态 URL 校验**，不承担保存阶段的 DNS/IP 准入；真正的地址准入只在拨号点
+   （`Guard.dialContext`）发生。因此「保存时通过校验」不等于「该地址当时是公网可达」。
+11. **origin 绑定未实现**：现有 `AllowPrivate` 只有 CIDR，没有「精确 origin + CIDR」的绑定语义。
+   FR-517 要求按 origin 精确放行自托管目标，需在 `GuardOptions` 上扩展，属 FR-517 的前置任务。
 
 ## 7. 协议适配
 
 统一内部事件（供 FR-515 复用，模型层不泄漏上游 schema）：`text_delta`、`tool_call_start`、
-`tool_args_delta`、`tool_call_end`、`usage`、`end`、`error`。
+`tool_args_delta`、`tool_call_end`、`usage`、`end`。**没有 `error` 事件类型**——适配器的错误
+通过 `Stream` 的返回值（Go `error`）表达，不混进事件流（见 `ai/types.go` 的注释：两套语义并存会让
+调用方分不清「收到 error 后还有没有数据」）。运行时若需要向浏览器广播错误，那是 **FR-515 的持久化
+`run` 事件**，与这里的适配器事件是**不同层次的东西**，不得混为一谈、也不得反向塞回适配器枚举。
 （**实现偏差**：草稿写作 `tool_call_args_delta` 与 `finish(reason)`，落地简化为 `tool_args_delta`
 与 `end`——`end` 事件自身携带结束原因字段，不必把原因编进类型名，否则每种原因都要多一个事件类型。）
 
 - 三协议各自实现「构造最小请求」与「流解析」；请求只带：模型 ID、system/user 文本、可选工具 schema、`stream=true`。
 - **toolcall**：按上游分片累积；`end` 时要求 `id`、`name` 非空且参数是**可解析的 JSON 对象**；任一不满足即 `tool_call_invalid`，不产出可执行调用。多工具调用必须按上游 index/id 独立归并，不得串味。
-- **usage 可空**：上游未给用量时事件 `usage=null`，**不补 0**；`prompt/completion/total` 三字段各自可空。
+- **usage 可空**：上游未给用量时事件 `usage=null`，**不补 0**；当前 `Usage` 只有 `InputTokens` / `OutputTokens`
+  两个指针字段（`ai/types.go`），**没有** `prompt/completion/total` 三字段——不要把 OpenAI 的字段名当内部模型。
 - **提前 EOF**：未收到正常结束信号即断流 → `upstream_stream_truncated`，已累计文本不当作成功终态上报。
 - **错误分类**（统一 code，附脱敏后的上游摘要）：`upstream_auth`(401/403)、`upstream_rate_limited`(429)、`upstream_rejected`(400/422)、`upstream_error`(5xx)、`upstream_timeout`、`upstream_unreachable`(DNS/TCP/TLS)、`egress_denied`、`upstream_stream_truncated`、`protocol_unsupported`、`capability_unsupported`。
 - 能力不足要**显式**：未声明 `capabilities_tools` 时带工具请求直接 422 `capability_unsupported`，不静默丢工具。
+
+### 7.1 已知缺陷：Responses 协议的工具历史回放无法配对（**必须由 FR-515 修**）
+
+现有实现（`internal/controlplane/ai/openai_responses.go` L248-L276 `buildResponsesInput`）把 assistant 历史中的
+工具调用降级成一条普通 assistant 文本（`"[调用工具 X 参数 Y]"`），**从不产出 `function_call` 项**，
+却把工具结果作为 `function_call_output` 发出。后果：
+
+- `function_call_output` 缺少与之配对的 `function_call`（无匹配 `call_id`），上游会因请求不合法而拒绝；
+- 即便某些上游宽容，模型看到的也不是「我调用过工具、这是结果」的结构化历史，多轮工具循环的语义已丢失。
+
+**这一缺陷在本 FR 的验收范围内看不出来**：FR-514 只做「单次最小补全」与探测，不跑工具循环；
+但 FR-515/516 的多轮工具循环一旦跨轮回放历史，Responses 协议必然失败。
+
+修复不只是补一个分支：`responsesInput`（同文件 L39-L46）需扩展 `Name` / `Arguments` / `CallID` 字段以承载
+`function_call` 项，并保证 `function_call` 与 `function_call_output` 按 `call_id` 一一配对、顺序一致。
+本 FR 不修（避免扩大已交付面的改动），已记入 PRD 的「待归真」。
 
 ## 8. 探测与真实测试（**已实现**）
 
@@ -186,7 +213,10 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 模型调用按次计费，把「保存」与「调用上游」绑定等于让每一次手滑都产生费用。
 前端每个供应商行、每个模型行各一个按钮，请求进行中该行按钮禁用（防连点重复付费）。
 
-- **供应商探测** `POST .../providers/:id/test`：用该供应商下**第一个启用模型**跑一次最小补全。
+- **供应商探测** `POST .../providers/:id/test`：用该供应商下的模型跑一次最小补全。
+  选择顺序：**优先第一个启用模型；若没有启用模型，回退到任意一个（按 id 升序）**——
+  探测的是「供应商连通性与凭据」而不是「那个模型是否该对外可用」，故停用模型同样能验证。
+  供应商下**一个模型都没有**时才明确报错。（与实现一致，见 `service/assistant_probe.go` 的 `TestProvider`。）
   返回 `ok`、`latencyMs`、`classifiedError?`、`message?`。供应商下没有任何模型时明确报错
   （无法探测就是无法探测，不假装通过）。**实现偏差**：草稿设想「优先官方模型列表端点，
   不可用时退化」，落地直接只用最小补全——列模型端点各协议路径不同（`/models` vs `/v1/models`），
@@ -211,10 +241,27 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 `tool_call_invalid`。前端据码给**处置建议**（换密钥 / 稍后重试 / 查网络 / 放行地址），不解析 message。
 
 **脱敏**：上游错误体先按模式掩蔽疑似凭据（`sk-*` / `AIza*` / `Bearer *` / JSON 里的
-`api_key|token|secret|authorization` 字段值），再截断到 512 字节。**为什么必须做**：上游的 401
-经常回显它收到的那个密钥（"Incorrect API key provided: sk-xxx"），这段文本会进 message、
-进前端提示、可能进日志与截图。掩蔽只针对「看起来就是密钥」的片段，保留其余诊断信息——
-模型名写错时正是靠上游那句话排查。
+`api_key|token|secret|authorization` 字段值 / `api key … : <值>` 句式 / `x-api-key: <值>`），
+再截断到 512 字节。**为什么必须做**：上游的 401 经常回显它收到的那个密钥
+（"Incorrect API key provided: sk-xxx"），这段文本会进 message、进前端提示、可能进日志与截图。
+掩蔽只针对「看起来就是密钥」的片段，保留其余诊断信息——模型名写错时正是靠上游那句话排查。
+
+**一处实测教训（`Bearer` 与 RE2）**：`Authorization: Bearer eyJ…` 里的 `Bearer` 本身是一串
+字母，会被 header 规则当成密钥掩成 `Authorization: *** ***`，把诊断词一起丢掉；想用负向前瞻
+排除它是不行的（Go 的 regexp 是 RE2，不支持 `(?!…)`）。最终按**值的形态**区分：
+header 规则要求取值 ≥8 位，而 `Bearer` 恰好 6 位，天然被排除。
+（中间试过「先占位再还原」，但占位符同样会被 header 规则再掩一次，方向本身是错的。）
+
+### 8.1 验证现状（截至 2026-10-23）
+
+| 验证形式 | 状态 | 说明 |
+|---|---|---|
+| 单测（报文构造 + SSE 分帧 + 分类 + 脱敏） | ✅ | 不依赖网络 |
+| **三协议模拟上游端到端** | ✅ | 走真实 service 路径（DB 行 → 凭据解密 → 受保护出站 → 协议适配 → 分类），三个协议各覆盖文本、工具调用解析、供应商探测；另验证错误密钥归 `upstream_auth` 且密钥被掩蔽。**用的是模拟上游，不是真实供应商** |
+| **真实供应商** | ❌ **未验** | 本机无任何真实凭据。可执行入口已就绪：`internal/controlplane/service/assistant_live_test.go`，注入 `JIANMANAGER_ASSISTANT_LIVE_*` 后 `go test -run TestAssistantLive` 即完成；缺变量时它 skip 并明写「未验证而非通过」 |
+
+**模拟通过 ≠ 真实通过**：模拟上游只能证明「我们按文档实现的解析，在按同一份文档回帧时走得通」。
+文档与实现有偏差时只有真实上游能暴露——这正是上表第 3 行仍未打勾的原因。
 
 ## 9. 任务拆分（可顺序执行）
 
