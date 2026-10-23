@@ -25,6 +25,16 @@ export const ASSISTANT_CREDENTIAL_MODES = [
   { value: 'stored', labelKey: 'assistant.credential.stored' },
 ] as const
 
+/** 协议值的展示名 i18n key（未知值回退为原值本身，避免显示空白）。 */
+export function protocolLabelKey(protocol: string): string | null {
+  return ASSISTANT_PROTOCOLS.find((p) => p.value === protocol)?.labelKey ?? null
+}
+
+/** 凭据模式值的展示名 i18n key。 */
+export function credentialModeLabelKey(mode: string): string | null {
+  return ASSISTANT_CREDENTIAL_MODES.find((m) => m.value === mode)?.labelKey ?? null
+}
+
 /** 供应商视图（后端永不下发明文或密文，只给 hasCredential 标志）。 */
 export interface AssistantProvider {
   id: number
@@ -272,6 +282,49 @@ export function useTestModel() {
         { withTools: withTools ?? false },
       )
       return data
+    },
+  })
+}
+
+/** 出站准入设置（私网放行段）。 */
+export interface AssistantEgressSettings {
+  /** 已放行的私网网段（规范化后的字符串，如 "10.0.0.0/8"）。 */
+  allowPrivateCidrs: string[]
+  version: number
+  /** 当前部署是否接受 http:// 明文目标（dev 环境才为真），只读回显。 */
+  insecureAllowed: boolean
+}
+
+/** 读取出站准入设置。 */
+export function useAssistantEgress(enabled = true) {
+  return useQuery({
+    queryKey: ['assistant', 'egress'],
+    queryFn: async () => {
+      const { data } = await api.get<AssistantEgressSettings>('/assistant/admin/settings/egress')
+      return data
+    },
+    enabled,
+  })
+}
+
+/**
+ * 保存放行段。
+ *
+ * 保存后后端会**立即重建出站工厂**，因此这里必须让探测结果与列表失效：
+ * 否则页面还显示「上次被 egress_denied 拒绝」的旧结论，而实际已经放行了。
+ */
+export function useSetAssistantEgress() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: { allowPrivateCidrs: string[]; version: number }) => {
+      const { data } = await api.put<AssistantEgressSettings>(
+        '/assistant/admin/settings/egress',
+        payload,
+      )
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant'] })
     },
   })
 }
