@@ -2034,6 +2034,9 @@ function rowToItem(r: SettingsRow) {
 
 db<SettingsRow>('settings', () => [
   { id: 1, key: 'log.level', value: 'info', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
+  // debug.mode 是唯一的布尔型平台设置，前端用 Switch 呈现（值仍是 "true"/"false" 字符串）。
+  // 种子必须包含它，否则「开关能正确提交字符串」这条契约在 mock 环境里无法被验证。
+  { id: 100, key: 'debug.mode', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
   {
     id: 2,
     key: 'graceful_stop.timeout',
