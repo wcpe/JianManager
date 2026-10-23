@@ -31,7 +31,7 @@ import {
 } from '@/api/assistant'
 import type {
   AssistantAvailableModel,
-  AssistantEgressSettings,
+  AssistantAdminSettings,
   AssistantModelTestResult,
   AssistantProbeResult,
   AssistantModel,
@@ -76,10 +76,10 @@ export interface AssistantSettingsViewProps {
    * （换密钥 / 稍后重试 / 配 NO_PROXY），塞进 3 秒消失的提示等于没给。
    */
   probeResults?: Record<string, AssistantProbeResult | AssistantModelTestResult>
-  /** 出站准入设置（私网放行段）。 */
-  egress?: AssistantEgressSettings
-  egressSaving?: boolean
-  /** 保存放行段；返回是否成功。 */
+  /** 助手全局设置（默认模型 + 出站放行段）。 */
+  settings?: AssistantAdminSettings
+  settingsSaving?: boolean
+  /** 保存放行段（后端整体替换，其余字段由容器补齐）；返回是否成功。 */
   onSaveEgress: (cidrs: string[]) => Promise<boolean>
 }
 
@@ -362,8 +362,8 @@ export function AssistantSettingsView({
   onTestProvider,
   onTestModel,
   probeResults,
-  egress,
-  egressSaving = false,
+  settings,
+  settingsSaving = false,
   onSaveEgress,
 }: AssistantSettingsViewProps) {
   const { t } = useTranslation()
@@ -760,18 +760,18 @@ export function AssistantSettingsView({
                 </AlertDescription>
               </Alert>
 
-              {egress && egress.allowPrivateCidrs.length > 0 ? (
+              {settings && settings.allowPrivateCidrs.length > 0 ? (
                 <ul className="divide-y divide-border/60 rounded-md border border-border/60">
-                  {egress.allowPrivateCidrs.map((cidr) => (
+                  {settings.allowPrivateCidrs.map((cidr) => (
                     <li key={cidr} className="flex items-center justify-between gap-2 px-3 py-2">
                       <code className="font-mono text-xs">{cidr}</code>
                       <Button
                         variant="ghost"
                         size="icon"
                         aria-label={t('assistant.egressRemove', '移除该网段')}
-                        disabled={egressSaving}
+                        disabled={settingsSaving}
                         onClick={() =>
-                          void onSaveEgress(egress.allowPrivateCidrs.filter((c) => c !== cidr))
+                          void onSaveEgress(settings.allowPrivateCidrs.filter((c) => c !== cidr))
                         }
                       >
                         <Trash2 className="size-4" />
@@ -809,10 +809,10 @@ export function AssistantSettingsView({
                   variant="outline"
                   size="sm"
                   disabled={
-                    egressSaving || egressDraft.trim() === '' || !looksLikeCIDR(egressDraft)
+                    settingsSaving || egressDraft.trim() === '' || !looksLikeCIDR(egressDraft)
                   }
                   onClick={async () => {
-                    const next = [...(egress?.allowPrivateCidrs ?? []), egressDraft.trim()]
+                    const next = [...(settings?.allowPrivateCidrs ?? []), egressDraft.trim()]
                     if (await onSaveEgress(next)) setEgressDraft('')
                   }}
                 >
@@ -821,7 +821,7 @@ export function AssistantSettingsView({
                 </Button>
               </div>
 
-              {egress && !egress.insecureAllowed ? (
+              {settings && !settings.insecureAllowed ? (
                 <p className="text-xs text-muted-foreground">
                   {t(
                     'assistant.egressInsecureOff',

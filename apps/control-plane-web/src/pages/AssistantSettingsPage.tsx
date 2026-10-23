@@ -5,21 +5,21 @@ import { useAuthStore } from '@/stores/auth'
 import { isPlatformAdmin } from '@/lib/shared/roles'
 import {
   useAssistantAdminModels,
-  useAssistantEgress,
   useAssistantModels,
+  useAssistantSettings,
   useAssistantProviders,
-  useSetAssistantEgress,
+  useSaveAssistantSettings,
   useCreateModel,
   useCreateProvider,
   useDeleteModel,
   useDeleteProvider,
-  useSetDefaultModel,
   useTestModel,
   useTestProvider,
   useUpdateModel,
   useUpdateProvider,
 } from '@/api/assistant'
 import type {
+  AssistantAdminSettingsPayload,
   AssistantModelTestResult,
   AssistantProbeResult,
   ModelPayload,
@@ -90,11 +90,10 @@ export default function AssistantSettingsPage() {
   const createModel = useCreateModel()
   const updateModel = useUpdateModel()
   const deleteModel = useDeleteModel()
-  const setDefaultModel = useSetDefaultModel()
   const testProvider = useTestProvider()
   const testModel = useTestModel()
-  const egressQuery = useAssistantEgress(admin)
-  const setEgress = useSetAssistantEgress()
+  const settingsQuery = useAssistantSettings(admin)
+  const saveSettings = useSaveAssistantSettings()
   // 探测结果按 `provider:<id>` / `model:<id>` 存，供视图就地展示（不只有 toast）。
   const [probeResults, setProbeResults] = useState<
     Record<string, AssistantProbeResult | AssistantModelTestResult>
@@ -107,7 +106,7 @@ export default function AssistantSettingsPage() {
     createModel.isPending ||
     updateModel.isPending ||
     deleteModel.isPending ||
-    setDefaultModel.isPending
+    saveSettings.isPending
 
   /** 统一的「执行 → 提示 → 返回是否成功」包装。 */
   const run = async (fn: () => Promise<unknown>, successKey: string): Promise<boolean> => {
@@ -139,6 +138,32 @@ export default function AssistantSettingsPage() {
     toast.error(hint || result.message || t('assistant.testFailed', '{{label}}测试失败', { label }))
   }
 
+  /**
+   * 保存助手全局设置（**整体替换**）。
+   *
+   * 因为后端是单例资源整体 PUT，任何一处改动都必须带上其余字段的当前值——
+   * 否则未传的字段会被置空。这里集中一处做合并，避免每个调用点各自拼装漏项。
+   */
+  const saveAssistantSettings = async (
+    patch: Partial<Pick<AssistantAdminSettingsPayload, 'defaultModelId' | 'allowPrivateCidrs'>>,
+    successKey: string,
+  ): Promise<boolean> => {
+    const current = settingsQuery.data
+    try {
+      await saveSettings.mutateAsync({
+        defaultModelId:
+          patch.defaultModelId !== undefined ? patch.defaultModelId : (current?.defaultModelId ?? null),
+        allowPrivateCidrs: patch.allowPrivateCidrs ?? current?.allowPrivateCidrs ?? [],
+        version: current?.version ?? 0,
+      })
+      toast.success(t(successKey, '已保存'))
+      return true
+    } catch (err) {
+      toast.error(errMessage(err, t('assistant.saveFailed', '保存失败')))
+      return false
+    }
+  }
+
   return (
     <AssistantSettingsView
       isPlatformAdmin={admin}
@@ -166,7 +191,7 @@ export default function AssistantSettingsPage() {
       }
       onDeleteModel={(id: number) => run(() => deleteModel.mutateAsync(id), 'assistant.modelDeleted')}
       onSetDefaultModel={(modelId: number | null) =>
-        run(() => setDefaultModel.mutateAsync(modelId), 'assistant.defaultSet')
+        saveAssistantSettings({ defaultModelId: modelId }, 'assistant.defaultSet')
       }
       onTestProvider={async (id: number) => {
         try {
@@ -187,19 +212,11 @@ export default function AssistantSettingsPage() {
         }
       }}
       probeResults={probeResults}
-      egress={egressQuery.data}
-      egressSaving={setEgress.isPending}
-      onSaveEgress={async (cidrs: string[]) => {
-        const version = egressQuery.data?.version ?? 0
-        try {
-          await setEgress.mutateAsync({ allowPrivateCidrs: cidrs, version })
-          toast.success(t('assistant.egressSaved', '出站放行段已保存并立即生效'))
-          return true
-        } catch (err) {
-          toast.error(errMessage(err, t('assistant.egressSaveFailed', '保存放行段失败')))
-          return false
-        }
-      }}
+      settings={settingsQuery.data}
+      settingsSaving={saveSettings.isPending}
+      onSaveEgress={(cidrs: string[]) =>
+        saveAssistantSettings({ allowPrivateCidrs: cidrs }, 'assistant.egressSaved')
+      }
     />
   )
 }

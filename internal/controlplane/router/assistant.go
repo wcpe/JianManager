@@ -90,11 +90,10 @@ func (h *AssistantHandler) RegisterRoutes(r *gin.RouterGroup) {
 		admin.DELETE("/models/:id", h.DeleteModel)
 		admin.POST("/models/:id/test", h.TestModel)
 
-		admin.PUT("/settings/default-model", h.SetDefaultModel)
-		// 出站准入的私网放行段：改一下就能扩大 AI 可达的内网范围，故仅平台管理员，
-		// 且写入必留审计。
-		admin.GET("/settings/egress", h.GetEgress)
-		admin.PUT("/settings/egress", h.UpdateEgress)
+		// 助手全局设置（默认模型 + 出站放行段）按**单例资源**整体读写，
+		// 与 /api/v1/settings 同构；拆成两个动作端点会让同一张表出现两种写法。
+		admin.GET("/settings", h.GetSettings)
+		admin.PUT("/settings", h.UpdateSettings)
 	}
 }
 
@@ -337,35 +336,6 @@ func (h *AssistantHandler) DeleteModel(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
-// defaultModelRequest 设置默认模型请求体（modelId 为 null 表示清空）。
-type defaultModelRequest struct {
-	ModelID *uint `json:"modelId"`
-	Version int   `json:"version"`
-}
-
-// SetDefaultModel PUT /assistant/admin/settings/default-model
-func (h *AssistantHandler) SetDefaultModel(c *gin.Context) {
-	var req defaultModelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求体格式不正确"})
-		return
-	}
-	if err := h.svc.SetDefaultModel(req.ModelID, req.Version); err != nil {
-		respondAssistantErr(c, err)
-		return
-	}
-	if h.audit != nil {
-		// 清空（nil）必须与「没设过」区分开，故显式记 "null"。
-		value := "null"
-		if req.ModelID != nil {
-			value = itoaID(*req.ModelID)
-		}
-		h.audit.RecordResultSafe(currentUserID(c), "assistant.settings.default", "assistant_settings", "1",
-			marshalAuditDetail(map[string]any{"defaultModelId": value}), c.ClientIP(), true, "")
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
-}
-
 // TestProvider POST /assistant/admin/providers/:id/test — 显式探测供应商连通性。
 //
 // **上游失败仍回 200**：`ok:false` 是探测的**结论**，不是本次请求失败。
@@ -421,16 +391,19 @@ type modelTestRequest struct {
 	WithTools bool `json:"withTools"`
 }
 
-// egressRequest 出站放行段请求体。
-type egressRequest struct {
-	// AllowPrivateCIDRs 要放行的私网段；空数组表示禁止一切非公网目标。
+// assistantSettingsRequest 助手全局设置请求体（**整体替换**语义）。
+//
+// 未提供的字段等于置空：不传 defaultModelId 即清空默认模型，allowPrivateCidrs 传空
+// 即不放行任何私网段。这样「请求体即最终状态」，不必区分「省略」与「显式 null」。
+type assistantSettingsRequest struct {
+	DefaultModelID    *uint    `json:"defaultModelId"`
 	AllowPrivateCIDRs []string `json:"allowPrivateCidrs"`
 	Version           int      `json:"version"`
 }
 
-// GetEgress GET /assistant/admin/settings/egress
-func (h *AssistantHandler) GetEgress(c *gin.Context) {
-	view, err := h.svc.GetEgress()
+// GetSettings GET /assistant/admin/settings
+func (h *AssistantHandler) GetSettings(c *gin.Context) {
+	view, err := h.svc.GetSettings()
 	if err != nil {
 		respondAssistantErr(c, err)
 		return
@@ -438,27 +411,39 @@ func (h *AssistantHandler) GetEgress(c *gin.Context) {
 	c.JSON(http.StatusOK, view)
 }
 
-// UpdateEgress PUT /assistant/admin/settings/egress
+// UpdateSettings PUT /assistant/admin/settings
 //
-// 保存后**立即重建出站工厂**：AllowPrivate 在构造 Guard 时被编译进拨号器，
-// 不重建就等于「保存成功但行为不变」——那是最难自查的一类故障。
-func (h *AssistantHandler) UpdateEgress(c *gin.Context) {
-	var req egressRequest
+// 保存后 service 会在放行段变化时**立即重建出站工厂**：AllowPrivate 在构造 Guard 时
+// 被编译进拨号器，不重建就等于「保存成功但行为不变」——那是最难自查的一类故障。
+func (h *AssistantHandler) UpdateSettings(c *gin.Context) {
+	var req assistantSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求体格式不正确"})
 		return
 	}
-	if err := h.svc.SetEgressAllowPrivate(req.AllowPrivateCIDRs, req.Version); err != nil {
+	if err := h.svc.SaveSettings(service.SaveSettingsParams{
+		DefaultModelID:    req.DefaultModelID,
+		AllowPrivateCIDRs: req.AllowPrivateCIDRs,
+		Version:           req.Version,
+	}); err != nil {
 		respondAssistantErr(c, err)
 		return
 	}
 	if h.audit != nil {
-		// 放行段直接决定「模型能打到哪些内网服务」，属高影响配置，必须留痕。
-		h.audit.RecordResultSafe(currentUserID(c), "assistant.settings.egress", "assistant_settings", "1",
-			marshalAuditDetail(map[string]any{"allowPrivateCidrs": req.AllowPrivateCIDRs}),
-			c.ClientIP(), true, "")
+		// 一个端点承载两类设置，故用单一 action + 记录**两类值**：
+		// 事后能回答「那一刻默认模型与放行段各是什么」，而不只是「有人改过设置」。
+		// 清空必须与「没设过」区分开，故 null 显式记为 "null"。
+		defaultModel := "null"
+		if req.DefaultModelID != nil {
+			defaultModel = itoaID(*req.DefaultModelID)
+		}
+		h.audit.RecordResultSafe(currentUserID(c), "assistant.settings.update", "assistant_settings", "1",
+			marshalAuditDetail(map[string]any{
+				"defaultModelId":    defaultModel,
+				"allowPrivateCidrs": req.AllowPrivateCIDRs,
+			}), c.ClientIP(), true, "")
 	}
-	view, err := h.svc.GetEgress()
+	view, err := h.svc.GetSettings()
 	if err != nil {
 		respondAssistantErr(c, err)
 		return

@@ -246,7 +246,7 @@ describe('AssistantSettingsView 输入与输出优化', () => {
 
   it('egress 区块：空态 + 非法 CIDR 时禁用添加 + 风险提示', async () => {
     const user = userEvent.setup()
-    renderView({ egress: { allowPrivateCidrs: [], version: 1, insecureAllowed: false } })
+    renderView({ settings: { defaultModelId: null, allowPrivateCidrs: [], version: 1, insecureAllowed: false } })
 
     expect(screen.getByText('没有放行任何私网段')).toBeInTheDocument()
     // 放行会扩大可达范围，风险提示必须始终可见。
@@ -269,7 +269,7 @@ describe('AssistantSettingsView 输入与输出优化', () => {
     const user = userEvent.setup()
     const onSaveEgress = vi.fn().mockResolvedValue(true)
     renderView({
-      egress: { allowPrivateCidrs: ['10.0.0.0/8'], version: 1, insecureAllowed: true },
+      settings: { defaultModelId: null, allowPrivateCidrs: ['10.0.0.0/8'], version: 1, insecureAllowed: true },
       onSaveEgress,
     })
 
