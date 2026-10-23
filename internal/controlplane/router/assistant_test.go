@@ -147,7 +147,8 @@ func TestAssistantAdminRejectsNodeManageRole(t *testing.T) {
 		{http.MethodGet, "/api/v1/assistant/admin/providers", ""},
 		{http.MethodGet, "/api/v1/assistant/admin/models", ""},
 		{http.MethodPost, "/api/v1/assistant/admin/providers", `{"name":"x","protocol":"openai-chat","baseUrl":"https://api.example.com","credentialMode":"none"}`},
-		{http.MethodPut, "/api/v1/assistant/admin/settings/default-model", `{"modelId":null}`},
+		{http.MethodPut, "/api/v1/assistant/admin/settings", `{"defaultModelId":null}`},
+		{http.MethodGet, "/api/v1/assistant/admin/settings", ""},
 	} {
 		code, body := doAssistantReq(t, f.router, tc.method, tc.path, f.manageToken, tc.body)
 		require.Equalf(t, http.StatusForbidden, code,
@@ -186,8 +187,9 @@ func TestAssistantAdminLifecycle(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(body), &created))
 
-	code, body = doAssistantReq(t, f.router, http.MethodPut, "/api/v1/assistant/admin/settings/default-model", f.adminToken,
-		`{"modelId":`+itoa(created.ID)+`}`)
+	// 整体替换语义：只传 defaultModelId，放行段因此被清空（本用例不涉及放行段）。
+	code, body = doAssistantReq(t, f.router, http.MethodPut, "/api/v1/assistant/admin/settings", f.adminToken,
+		`{"defaultModelId":`+itoa(created.ID)+`}`)
 	require.Equal(t, http.StatusOK, code, "设置默认模型失败: %s", body)
 
 	code, body = doAssistantReq(t, f.router, http.MethodGet, "/api/v1/assistant/models", f.plainToken, "")
@@ -350,8 +352,8 @@ func TestAssistantAuditRecordsWithoutSecrets(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(body), &m))
 
 	code, body = doAssistantReq(t, f.router, http.MethodPut,
-		"/api/v1/assistant/admin/settings/default-model", f.adminToken,
-		fmt.Sprintf(`{"modelId":%d,"version":0}`, m.ID))
+		"/api/v1/assistant/admin/settings", f.adminToken,
+		fmt.Sprintf(`{"defaultModelId":%d,"version":0}`, m.ID))
 	require.Equal(t, http.StatusOK, code, "设默认失败: %s", body)
 
 	code, _ = doAssistantReq(t, f.router, http.MethodDelete,
@@ -372,7 +374,7 @@ func TestAssistantAuditRecordsWithoutSecrets(t *testing.T) {
 	}
 	for _, want := range []string{
 		"assistant.provider.create", "assistant.provider.update",
-		"assistant.model.create", "assistant.settings.default", "assistant.model.delete",
+		"assistant.model.create", "assistant.settings.update", "assistant.model.delete",
 	} {
 		require.True(t, actions[want], "缺少审计事件 %s（实际 %v）", want, actions)
 	}

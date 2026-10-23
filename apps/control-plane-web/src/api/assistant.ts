@@ -221,16 +221,6 @@ export function useDeleteModel() {
   })
 }
 
-/** 设置默认模型（null 表示清空）。 */
-export function useSetDefaultModel() {
-  const invalidate = useInvalidateAssistant()
-  return useMutation({
-    mutationFn: async (modelId: number | null) => {
-      await api.put('/assistant/admin/settings/default-model', { modelId })
-    },
-    onSuccess: invalidate,
-  })
-}
 
 /** 供应商探测结论。ok=false 是结论而非请求失败。 */
 export interface AssistantProbeResult {
@@ -286,21 +276,30 @@ export function useTestModel() {
   })
 }
 
-/** 出站准入设置（私网放行段）。 */
-export interface AssistantEgressSettings {
-  /** 已放行的私网网段（规范化后的字符串，如 "10.0.0.0/8"）。 */
+/** 助手全局设置（默认模型 + 出站放行段，单例资源整体读写）。 */
+export interface AssistantAdminSettings {
+  /** 默认模型；null 表示未设置。 */
+  defaultModelId: number | null
+  /** 已放行的私网段（规范化后的字符串，如 "10.0.0.0/8"）。 */
   allowPrivateCidrs: string[]
   version: number
   /** 当前部署是否接受 http:// 明文目标（dev 环境才为真），只读回显。 */
   insecureAllowed: boolean
 }
 
-/** 读取出站准入设置。 */
-export function useAssistantEgress(enabled = true) {
+/** 保存参数的**整体替换**语义：未提供的字段等于置空。 */
+export interface AssistantAdminSettingsPayload {
+  defaultModelId: number | null
+  allowPrivateCidrs: string[]
+  version: number
+}
+
+/** 读取助手全局设置。 */
+export function useAssistantSettings(enabled = true) {
   return useQuery({
-    queryKey: ['assistant', 'egress'],
+    queryKey: ['assistant', 'settings'],
     queryFn: async () => {
-      const { data } = await api.get<AssistantEgressSettings>('/assistant/admin/settings/egress')
+      const { data } = await api.get<AssistantAdminSettings>('/assistant/admin/settings')
       return data
     },
     enabled,
@@ -308,19 +307,16 @@ export function useAssistantEgress(enabled = true) {
 }
 
 /**
- * 保存放行段。
+ * 保存助手全局设置（整体替换）。
  *
- * 保存后后端会**立即重建出站工厂**，因此这里必须让探测结果与列表失效：
- * 否则页面还显示「上次被 egress_denied 拒绝」的旧结论，而实际已经放行了。
+ * 保存后后端会在放行段变化时**立即重建出站工厂**，因此要让整组 assistant 缓存失效：
+ * 否则页面还显示「上次被 egress_denied 拒绝」的旧探测结论，而实际已经放行。
  */
-export function useSetAssistantEgress() {
+export function useSaveAssistantSettings() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: { allowPrivateCidrs: string[]; version: number }) => {
-      const { data } = await api.put<AssistantEgressSettings>(
-        '/assistant/admin/settings/egress',
-        payload,
-      )
+    mutationFn: async (payload: AssistantAdminSettingsPayload) => {
+      const { data } = await api.put<AssistantAdminSettings>('/assistant/admin/settings', payload)
       return data
     },
     onSuccess: () => {

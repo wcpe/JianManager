@@ -351,7 +351,7 @@ func TestAssistantDefaultModelLifecycle(t *testing.T) {
 	}
 
 	id := m.ID
-	if err := s.SetDefaultModel(&id, 0); err != nil {
+	if err := s.SaveSettings(SaveSettingsParams{DefaultModelID: &id}); err != nil {
 		t.Fatalf("设置默认模型失败: %v", err)
 	}
 	_, defaultID, err := s.AvailableModels()
@@ -368,7 +368,7 @@ func TestAssistantDefaultModelLifecycle(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("停用模型失败: %v", err)
 	}
-	if err := s.SetDefaultModel(&id, 0); !errors.Is(err, ErrAssistantInvalid) {
+	if err := s.SaveSettings(SaveSettingsParams{DefaultModelID: &id}); !errors.Is(err, ErrAssistantInvalid) {
 		t.Fatalf("停用的模型不应能设为默认，实际 %v", err)
 	}
 
@@ -409,7 +409,7 @@ func TestAssistantAvailableModelsRespectsProviderEnabled(t *testing.T) {
 		t.Fatalf("创建模型失败: %v", err)
 	}
 	id := m.ID
-	if err := s.SetDefaultModel(&id, 0); err != nil {
+	if err := s.SaveSettings(SaveSettingsParams{DefaultModelID: &id}); err != nil {
 		t.Fatalf("设置默认失败: %v", err)
 	}
 

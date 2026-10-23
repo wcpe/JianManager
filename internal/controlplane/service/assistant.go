@@ -573,50 +573,6 @@ func (s *AssistantService) EnsureSetting() error {
 	return nil
 }
 
-// SetDefaultModel 设置默认模型（校验模型可用；nil 表示清空）。
-func (s *AssistantService) SetDefaultModel(modelID *uint, version int) error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		var setting model.AssistantSetting
-		if err := tx.First(&setting, 1).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("%w: 助手设置尚未初始化", ErrAssistantInvalid)
-			}
-			return fmt.Errorf("查询设置失败: %w", err)
-		}
-		if version != 0 && version != setting.Version {
-			return ErrAssistantConflict
-		}
-		if modelID != nil {
-			var m model.AssistantModel
-			if err := tx.First(&m, *modelID).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return fmt.Errorf("%w: 模型不存在", ErrAssistantInvalid)
-				}
-				return fmt.Errorf("查询模型失败: %w", err)
-			}
-			if !m.Enabled {
-				return fmt.Errorf("%w: 不能把已停用的模型设为默认", ErrAssistantInvalid)
-			}
-			var p model.AssistantProvider
-			if err := tx.First(&p, m.ProviderID).Error; err != nil {
-				return fmt.Errorf("查询供应商失败: %w", err)
-			}
-			if !p.Enabled {
-				return fmt.Errorf("%w: 该模型的供应商已停用", ErrAssistantInvalid)
-			}
-		}
-		res := tx.Model(&model.AssistantSetting{}).Where("id = ? AND version = ?", 1, setting.Version).
-			Updates(map[string]any{"default_model_id": modelID, "version": setting.Version + 1})
-		if res.Error != nil {
-			return fmt.Errorf("更新默认模型失败: %w", res.Error)
-		}
-		if res.RowsAffected == 0 {
-			return ErrAssistantConflict
-		}
-		return nil
-	})
-}
-
 // AvailableModel 普通用户可见的模型摘要（**不含**端点与凭据字段）。
 type AvailableModel struct {
 	ID          uint   `json:"id"`

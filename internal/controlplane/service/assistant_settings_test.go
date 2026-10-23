@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 出站准入的私网放行段（FR-514 §4.3 / §6.2 缺口 8）。
+// 助手全局设置：出站准入放行段（FR-514 §4.3 / §6.2 缺口 8）。
 //
 // 这组用例守三件事：
 //  1. 非法 CIDR 必须**拒绝并指出是哪一项**，不能静默丢弃；
@@ -44,7 +44,7 @@ func TestEgressRejectsInvalidCIDRWithItem(t *testing.T) {
 	s := newEgressTestService(t)
 
 	// 混入一项非法值：必须整体拒绝，并在消息里点名该项。
-	err := s.SetEgressAllowPrivate([]string{"10.0.0.0/8", "这不是CIDR"}, 1)
+	err := s.SaveSettings(SaveSettingsParams{AllowPrivateCIDRs: []string{"10.0.0.0/8", "这不是CIDR"}, Version: 1})
 	if !errors.Is(err, ErrAssistantInvalid) {
 		t.Fatalf("应拒绝非法 CIDR，实际 %v", err)
 	}
@@ -53,7 +53,7 @@ func TestEgressRejectsInvalidCIDRWithItem(t *testing.T) {
 	}
 
 	// 被拒绝时不得写库：放行段仍应为空。
-	view, gerr := s.GetEgress()
+	view, gerr := s.GetSettings()
 	if gerr != nil {
 		t.Fatalf("读取失败: %v", gerr)
 	}
@@ -66,10 +66,10 @@ func TestEgressNormalizesAndDeduplicates(t *testing.T) {
 	s := newEgressTestService(t)
 
 	// 主机位应被掩掉、重复项应合并：否则 10.0.0.1/8 与 10.0.0.0/8 会被当成两条。
-	if err := s.SetEgressAllowPrivate([]string{" 10.0.0.1/8 ", "10.0.0.0/8", "192.168.1.0/24"}, 1); err != nil {
+	if err := s.SaveSettings(SaveSettingsParams{AllowPrivateCIDRs: []string{" 10.0.0.1/8 ", "10.0.0.0/8", "192.168.1.0/24"}, Version: 1}); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
-	view, err := s.GetEgress()
+	view, err := s.GetSettings()
 	if err != nil {
 		t.Fatalf("读取失败: %v", err)
 	}
@@ -90,11 +90,11 @@ func TestEgressNormalizesAndDeduplicates(t *testing.T) {
 
 func TestEgressVersionConflict(t *testing.T) {
 	s := newEgressTestService(t)
-	if err := s.SetEgressAllowPrivate([]string{"10.0.0.0/8"}, 1); err != nil {
+	if err := s.SaveSettings(SaveSettingsParams{AllowPrivateCIDRs: []string{"10.0.0.0/8"}, Version: 1}); err != nil {
 		t.Fatalf("首次保存失败: %v", err)
 	}
 	// 用过期 version 再写：必须冲突，而不是覆盖别人的改动。
-	if err := s.SetEgressAllowPrivate([]string{"10.1.0.0/16"}, 1); !errors.Is(err, ErrAssistantConflict) {
+	if err := s.SaveSettings(SaveSettingsParams{AllowPrivateCIDRs: []string{"10.1.0.0/16"}, Version: 1}); !errors.Is(err, ErrAssistantConflict) {
 		t.Fatalf("过期 version 应冲突，实际 %v", err)
 	}
 }
@@ -135,7 +135,7 @@ func TestEgressTakesEffectImmediately(t *testing.T) {
 	}
 
 	// 放行后（不重建 service，只保存设置）：应立即可达。
-	if err := s.SetEgressAllowPrivate([]string{cidr}, 1); err != nil {
+	if err := s.SaveSettings(SaveSettingsParams{AllowPrivateCIDRs: []string{cidr}, Version: 1}); err != nil {
 		t.Fatalf("保存放行段失败: %v", err)
 	}
 	after, err := s.TestModel(context.Background(), m.ID, false)
@@ -151,7 +151,7 @@ func TestEgressMetadataStillBlockedWhenWhitelisted(t *testing.T) {
 	// metadata 地址段永远拒绝：即便管理员把 169.254.0.0/16 显式放行也不生效。
 	// 这条不因「新增了管理员可改的放行入口」而松动。
 	s := newEgressTestService(t)
-	if err := s.SetEgressAllowPrivate([]string{"169.254.0.0/16"}, 1); err != nil {
+	if err := s.SaveSettings(SaveSettingsParams{AllowPrivateCIDRs: []string{"169.254.0.0/16"}, Version: 1}); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
 
@@ -186,7 +186,7 @@ func TestEgressMetadataStillBlockedWhenWhitelisted(t *testing.T) {
 func TestApplyStoredEgressOnStartup(t *testing.T) {
 	// 重启场景：新实例启动时 ApplyStoredEgress 应把库里的放行段装进 Guard。
 	s := newEgressTestService(t)
-	if err := s.SetEgressAllowPrivate([]string{"127.0.0.1/32"}, 1); err != nil {
+	if err := s.SaveSettings(SaveSettingsParams{AllowPrivateCIDRs: []string{"127.0.0.1/32"}, Version: 1}); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
 
