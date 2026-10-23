@@ -259,8 +259,9 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 （单模型，可带 `withTools` 验证工具参数完整性）。两者都**只由按钮触发**、30s 预算、
 不写会话不产生 run。上游失败一律回 **HTTP 200 + `ok:false` + `classifiedError`**：
 把「密钥错」映射成 401 会让前端误以为登录态失效，把「上游 5xx」映射成 502 会让管理员
-以为面板坏了。分类码（`ai.ErrorCode`）分 `upstream_auth` / `rate_limited` / `rejected` /
-`error` / `timeout` / `unreachable` / `stream_truncated` / `egress_denied` /
+以为面板坏了。分类码（`ai.ErrorCode`，**机器码带 `upstream_` 前缀**，与代码枚举逐字一致）分
+`upstream_auth` / `upstream_rate_limited` / `upstream_rejected` / `upstream_error` /
+`upstream_timeout` / `upstream_unreachable` / `upstream_stream_truncated` / `egress_denied` /
 `egress_proxy_unsupported` / `capability_unsupported` / `tool_call_invalid`，
 前端据码给处置建议，不解析文案。
 
@@ -268,6 +269,20 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 `api_key|token|secret|authorization` 的值），再截断至 512 字节。**为什么必须做**：
 上游 401 常回显它收到的密钥（"Incorrect API key provided: sk-xxx"），这段文本会进
 `message`、进前端提示、可能进日志与截图——而日志与截图里的密钥比内存里的更难收回。
+
+**出站准入的私网放行（DB 驱动）**：`assistant_settings.allow_private_cidrs` 存放行段
+（TEXT + JSON 数组），仅平台管理员可写、每次写入留审计 `assistant.settings.egress`。
+装配层把「用放行段造 Guard」收敛成**一个工厂**（`SetEgressFactory`），因为
+`AllowPrivate` 在 `NewGuard` 时被编译进拨号器、没有可变入口。因此保存设置后
+service 会**立即重建 Guard**——不重建就成了「保存成功但行为不变」，
+而管理员的预期是「点了保存就生效」。启动时 `ApplyStoredEgress` 装配；
+解析失败只告警不清空（静默清空会让内网网关无预兆全断且无线索）。
+
+三件事必须同时成立才允许这个入口存在：① 只有平台管理员能写；② 写入必留审计；
+③ **云元数据段永远拒绝**，即便被显式放行也不生效（不变量写在 `protected.go`，
+不因新增入口而松动）。放行网段与放行 `http://` 明文是**两个独立开关**：
+后者只在 dev 部署开启，视图里以只读的 `insecureAllowed` 回显，避免管理员
+「改了 CIDR 却发现 http 仍不通」。
 
 **与既有 MCP 网关的关系**：本轮**不改** `/api/v1/mcp` 契约。该端点只认 `jmat_` Agent Token，
 人类 JWT 依然不能充当 MCP 凭据（`AgentOrJWT` 中间件目前只有注释、无实现）。

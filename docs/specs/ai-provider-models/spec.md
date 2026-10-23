@@ -92,14 +92,24 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `default_model_id` | *uint，可空 | **指针单行**，不做多行 bool |
+| `allow_private_cidrs` | text（JSON 数组），空 | 出站准入放行的私网段；**显式 column 名**（默认蛇形会把 `CIDRs` 拆成 `c_id_rs`） |
 | `version` | int | 乐观并发 |
 
-**实现偏差**：初版草稿列了 `allow_private_cidrs`（管理员显式放行的私网段）。**本批未实现**——
-受保护出站已具备 `GuardOptions.AllowPrivate` 能力（`internal/platform/httpclient/protected.go`），
-但**没有把它接到任何可持久化设置上**，即当前部署下「内网自托管模型网关」无法通过配置放行，
-只能靠改代码注入。这是一处**已知缺口**，不是「设计上不需要」：要真正放开必须补一个
-「管理员显式填 CIDR + 明确风险提示」的入口，因为一旦可配，就等于给出一条把模型流量导向内网的通道，
-必须与「谁能改」一起设计（当前配置面只有平台管理员，可接受）。在补上之前，**本 FR 不具备「内网放行可配置」这项能力**。
+`allow_private_cidrs` **已实现**（TEXT + JSON 数组，随 `Version` 乐观并发）。
+
+**存 DB 还是配置文件**：选 DB + 管理 UI。自托管网关的网段常随环境调整，
+强制改文件+重启会让运维绕过它（比如干脆把网关暴露到公网）。风险改由「谁能改」控制：
+仅平台管理员可写、每次写入留审计 `assistant.settings.egress`。
+**放行网段与放行 `http://` 明文是两个独立开关**——后者只在 dev 部署开启
+（`cfg.Server.DevMode`），视图以只读 `insecureAllowed` 回显，避免「改了 CIDR 却发现 http 仍不通」。
+
+**生效机制**：`AllowPrivate` 在 `NewGuard` 时被编译进拨号器，没有可变入口。
+因此装配层提供工厂 `SetEgressFactory`，保存设置后 service **立即重建 Guard**——
+不重建就是「保存成功但行为不变」。启动时 `ApplyStoredEgress` 装配；
+解析失败只告警不清空（静默清空会让内网网关无预兆全断且无线索）。
+
+**校验**：非法项**整单拒绝并点名哪一项**（静默丢弃会变成最难查的一类问题）；
+自动规范化（掩主机位）与去重，`10.0.0.1/8` 与 `10.0.0.0/8` 视为同一段。
 
 ### 4.4 语义约束
 
@@ -160,9 +170,8 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 
 ### 6.2 未实现 / 已知缺口
 
-8. **私网显式放行没有配置入口**（见 §4.3）：`GuardOptions.AllowPrivate` 存在且生效，
-   但没有持久化字段与管理 UI，故实际部署中「自托管内网模型网关」只能改代码放行。
-   补齐时必须同时给风险提示与权限门（当前配置面已是平台管理员，故只需补 UI 与字段）。
+8. ~~私网显式放行没有配置入口~~ → **已实现**（见 §4.3）：DB 字段 + 管理 UI + 即时重建 + 审计。
+   注意仍不实现的是 §6.2 第 11 条的「origin 精确绑定」（FR-517 前置）。
 9. **出站预算字段尚未存在**（更正：早期措辞称「在 `GuardOptions` 里有默认值」，**与代码不符**）。
    `GuardOptions`（`protected.go` L45-L62）实际只有 `AllowPrivate` / `AllowInsecure` / `Timeout` /
    `AllowSameOriginRedirect` / `Proxy` / `NoProxy` 六项，**没有**响应头超时、流空闲超时、
@@ -191,21 +200,27 @@ GORM 会把两列拆成两个独立唯一索引，`(provider_id, model_id)` 就�
 - **错误分类**（统一 code，附脱敏后的上游摘要）：`upstream_auth`(401/403)、`upstream_rate_limited`(429)、`upstream_rejected`(400/422)、`upstream_error`(5xx)、`upstream_timeout`、`upstream_unreachable`(DNS/TCP/TLS)、`egress_denied`、`upstream_stream_truncated`、`protocol_unsupported`、`capability_unsupported`。
 - 能力不足要**显式**：未声明 `capabilities_tools` 时带工具请求直接 422 `capability_unsupported`，不静默丢工具。
 
-### 7.1 已知缺陷：Responses 协议的工具历史回放无法配对（**必须由 FR-515 修**）
+### 7.1 已修复：Responses 协议的工具历史回放配对（2026-10-23）
 
-现有实现（`internal/controlplane/ai/openai_responses.go` L248-L276 `buildResponsesInput`）把 assistant 历史中的
-工具调用降级成一条普通 assistant 文本（`"[调用工具 X 参数 Y]"`），**从不产出 `function_call` 项**，
-却把工具结果作为 `function_call_output` 发出。后果：
+**状态：已修复**（提交 `e93a4739`），本文保留记录以免日后被改回去。
 
-- `function_call_output` 缺少与之配对的 `function_call`（无匹配 `call_id`），上游会因请求不合法而拒绝；
-- 即便某些上游宽容，模型看到的也不是「我调用过工具、这是结果」的结构化历史，多轮工具循环的语义已丢失。
+原缺陷：`buildResponsesInput` 把 assistant 历史中的工具调用降级成一条普通 assistant 文本
+（`"[调用工具 X 参数 Y]"`），**从不产出 `function_call` 项**，却把工具结果作为 `function_call_output` 发出。
+后果是 `function_call_output` 找不到配对的 `function_call`（无匹配 `call_id`），上游判请求不合法；
+即便某些上游宽容，模型也读不到「我调用过工具、这是结果」的结构化历史，多轮工具循环语义丢失。
 
-**这一缺陷在本 FR 的验收范围内看不出来**：FR-514 只做「单次最小补全」与探测，不跑工具循环；
+**这个缺陷在本 FR 自己的验收范围内看不出来**：FR-514 只做「单次最小补全」与探测，不跑工具循环；
 但 FR-515/516 的多轮工具循环一旦跨轮回放历史，Responses 协议必然失败。
 
-修复不只是补一个分支：`responsesInput`（同文件 L39-L46）需扩展 `Name` / `Arguments` / `CallID` 字段以承载
-`function_call` 项，并保证 `function_call` 与 `function_call_output` 按 `call_id` 一一配对、顺序一致。
-本 FR 不修（避免扩大已交付面的改动），已记入 PRD 的「待归真」。
+现在的正确实现与两条硬约束：
+
+- `responsesInput` 承载 `function_call` 项（`call_id` / `name` / `arguments`），与 `function_call_output`
+  按 **`call_id`** 一一配对，`function_call` 必须排在其 output 之前；
+- **不要给 `function_call` 填 `id`**：`id` 是上游为「输出项」分配的标识（形如 `fc_…`），我们没有保存过它；
+  拿 `callId` 冒充属于凭空伪造，会让上游按一个不存在的项 id 去定位。`id` 在输入项里是可选字段，省略即可。
+
+回归在 `ai/responses_input_test.go`，包括「结果倒序回灌仍按 call_id 正确定位」与「空正文不产出空 message」
+两个容易写错的边界。
 
 ## 8. 探测与真实测试（**已实现**）
 
@@ -259,6 +274,9 @@ header 规则要求取值 ≥8 位，而 `Bearer` 恰好 6 位，天然被排除
 | 单测（报文构造 + SSE 分帧 + 分类 + 脱敏） | ✅ | 不依赖网络 |
 | **三协议模拟上游端到端** | ✅ | 走真实 service 路径（DB 行 → 凭据解密 → 受保护出站 → 协议适配 → 分类），三个协议各覆盖文本、工具调用解析、供应商探测；另验证错误密钥归 `upstream_auth` 且密钥被掩蔽。**用的是模拟上游，不是真实供应商** |
 | **真实供应商** | ❌ **未验** | 本机无任何真实凭据。可执行入口已就绪：`internal/controlplane/service/assistant_live_test.go`，注入 `JIANMANAGER_ASSISTANT_LIVE_*` 后 `go test -run TestAssistantLive` 即完成；缺变量时它 skip 并明写「未验证而非通过」 |
+| 凭据跨重启有效 | ✅ | 文件型 SQLite + 新连接模拟重启；另断言换主密钥时解密失败但**密文原样保留** |
+| 审计留痕 | ✅ | 9 类事件；断言 detail 不含明文密钥/密文/密钥字段名，且 `credentialChanged` 可见 |
+| 私网放行 | ✅ | 非法项拒绝并点名、规范化去重、version 冲突、保存后**立即生效**、metadata 即便放行仍拒、启动装配 |
 
 **模拟通过 ≠ 真实通过**：模拟上游只能证明「我们按文档实现的解析，在按同一份文档回帧时走得通」。
 文档与实现有偏差时只有真实上游能暴露——这正是上表第 3 行仍未打勾的原因。
