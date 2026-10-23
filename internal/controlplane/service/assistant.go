@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strings"
 	"time"
@@ -41,6 +42,16 @@ type AssistantService struct {
 	// egress 受保护出站工厂；配置阶段用它校验 BaseURL，探测/测试阶段用它发请求。
 	// 用具体类型而非接口：它没有需要被 mock 的多实现，测试直接用真实工厂 + httptest。
 	egress *httpclient.Guard
+	// egressFactory 用「当前放行段」重建出站工厂；由装配层注入。
+	//
+	// 为什么需要工厂而不是直接改 egress 的字段：AllowPrivate 在 NewGuard 里被编译进
+	// Transport 的拨号器，没有可变入口。与其给 Guard 加一个「运行期改策略」的后门
+	// （那会让「谁能改准入」变成两处真相），不如让 service 持有重建能力。
+	// 为 nil 表示不可重建（测试或未装配），此时写设置仍成功但不即时生效，
+	// 由调用方在启动时完成装配——这比静默假装生效安全。
+	egressFactory func(allowPrivate []netip.Prefix) *httpclient.Guard
+	// allowInsecure 装配层是否放开了 http 明文（仅回显用，判定真源在 Guard 里）。
+	allowInsecure bool
 }
 
 // NewAssistantService 构造服务。
@@ -53,6 +64,13 @@ func NewAssistantService(db *gorm.DB, enc *KeyEncryptor) *AssistantService {
 
 // SetEgress 注入受保护出站工厂。未注入时配置校验与探测都会明确报错。
 func (s *AssistantService) SetEgress(g *httpclient.Guard) { s.egress = g }
+
+// SetEgressFactory 注入「按放行段重建出站工厂」的能力（FR-514 私网放行）。
+//
+// 装配层传入的工厂应当固化其余参数（超时、代理、AllowInsecure），只让放行段变化。
+func (s *AssistantService) SetEgressFactory(f func(allowPrivate []netip.Prefix) *httpclient.Guard) {
+	s.egressFactory = f
+}
 
 // ── 供应商 ─────────────────────────────────────────────────────────────
 

@@ -93,10 +93,22 @@ func (AssistantModel) TableName() string { return "assistant_models" }
 type AssistantSetting struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// DefaultModelID 可空：未配置默认模型是合法状态（助手应给出明确引导而非报错）。
-	DefaultModelID *uint     `json:"defaultModelId"`
-	Version        int       `gorm:"not null;default:1" json:"version"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	DefaultModelID *uint `json:"defaultModelId"`
+	// AllowPrivateCIDRs 出站准入放行的私网段（JSON 数组文本，空 = 一律禁止非公网目标）。
+	//
+	// 为什么存在设置表而不是配置文件：这是**部署期与运行期都要能改**的策略——
+	// 自托管模型网关的网段常随环境调整，要求改文件+重启会让运维绕过它（比如直接把
+	// 网关暴露到公网）。风险由「谁能改」控制：只有平台管理员能写，且写入必留审计。
+	//
+	// 用 TEXT + JSON 而不是独立表：它只是单行设置里的一个字段，
+	// 独立表会让「读设置」多一次 join 而毫无收益（条数是个位数）。
+	//
+	// 显式 column：GORM 的默认蛇形转换把 `CIDRs` 拆成 `c_id_rs`
+	// （缩写与复数被逐字母拆开），得到 `allow_private_c_id_rs` 这种没法读的列名。
+	AllowPrivateCIDRs string    `gorm:"column:allow_private_cidrs;type:text" json:"allowPrivateCidrs"`
+	Version           int       `gorm:"not null;default:1" json:"version"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // TableName 固定表名。

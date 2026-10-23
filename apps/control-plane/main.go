@@ -8,6 +8,7 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -701,16 +702,32 @@ func main() {
 	// 不为 AI 新增第二套密钥——否则运维要同时备份两份，任一份丢失都不可解密。
 	// 出站走受保护工厂：默认只允许 https 公网、拒绝云元数据、默认禁重定向。
 	assistantSvc := service.NewAssistantService(db, keyEncryptor)
-	assistantSvc.SetEgress(httpclient.NewGuard(httpclient.GuardOptions{
-		Timeout: 60 * time.Second,
-		// 代理配置只用于判定「是否必须拒绝」：一旦目标会被代理接管，
-		// 无法固定已校验 IP，受保护出站会明确报错而不是静默直连。
-		Proxy: cfg.Proxy,
-	}))
+	// 出站工厂的构造收敛到一处：放行段来自 DB（管理员可改），其余参数固化。
+	// 这样「改了放行段要重建工厂」这件事只有一个实现，不会出现装配与运行期两套策略。
+	assistantEgress := func(allowPrivate []netip.Prefix) *httpclient.Guard {
+		return httpclient.NewGuard(httpclient.GuardOptions{
+			Timeout: 60 * time.Second,
+			// 代理配置只用于判定「是否必须拒绝」：一旦目标会被代理接管，
+			// 无法固定已校验 IP，受保护出站会明确报错而不是静默直连。
+			Proxy:        cfg.Proxy,
+			AllowPrivate: allowPrivate,
+			// 明文 http 仅 dev 放开：模型请求带供应商凭据、响应含业务数据，
+			// 生产上容忍明文等于把这些暴露在同网段。
+			AllowInsecure: cfg.Server.DevMode,
+		})
+	}
+	assistantSvc.SetEgressFactory(assistantEgress)
+	assistantSvc.SetEgress(assistantEgress(nil))
+	assistantSvc.SetAllowInsecure(cfg.Server.DevMode)
 	if err := assistantSvc.EnsureSetting(); err != nil {
 		// 设置行初始化失败不应阻断 CP 启动：AI 配置页会显示不可用，
 		// 其余功能（含经典首页）不受影响。
 		slog.Warn("AI 助手设置初始化失败，配置页可能不可用", "error", err)
+	}
+	// 把库里已保存的放行段装进出站工厂。失败只告警不阻断启动——
+	// 但要如实告警：静默用空放行段会让「昨天还能连的内网网关今天全断了」且无线索。
+	if err := assistantSvc.ApplyStoredEgress(); err != nil {
+		slog.Warn("AI 出站放行段装配失败，将按「不放行任何私网」运行", "error", err)
 	}
 	// GitHub API 令牌改从设置面板读生效值（github.token，DB > update.github_token 基线）：
 	// 自更新与 ServerProbe 制品版本库同步共用同一读取器，保存即生效、无需重启（FR-409）。
