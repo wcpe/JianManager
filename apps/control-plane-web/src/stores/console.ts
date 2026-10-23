@@ -66,6 +66,13 @@ interface ConsoleState {
   /** 全局命令面板是否打开（FR-241 Ctrl+K，不持久）。 */
   commandPaletteOpen: boolean
   /**
+   * 助手浮窗是否打开（FR-519）。
+   *
+   * 放 store 而不是 DashboardPage 的局部 state：顶栏入口与浮窗本体分处两棵树，
+   * 且浮窗必须**跨路由常驻**（路由切换不卸载），因此开关不能绑在某个页面的生命周期上。
+   */
+  assistantDockOpen: boolean
+  /**
    * 上次选择的工作区键（FR-502 阶段 6，持久）。
    * 类型故意保持 `string`：工作区键的唯一真源在导航数据层，store 不该反向依赖它；
    * 消费方（`WorkspaceSidebar`）会按当前可见工作区列表校验，陈旧值自然失效。
@@ -78,6 +85,7 @@ interface ConsoleState {
   toggleSidebar: () => void
   /** 打开/关闭全局命令面板（FR-241）。 */
   setCommandPaletteOpen: (open: boolean) => void
+  setAssistantDockOpen: (open: boolean) => void
   /** 记住用户选过的工作区（FR-502 阶段 6）：仅供顶栏在路由判不出工作区时兜底高亮。 */
   setLastWorkspaceKey: (key: string) => void
 }
@@ -87,6 +95,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   collapsedGroups: loadJSON<Record<string, boolean>>(COLLAPSED_GROUPS_KEY, {}),
   sidebarCollapsed: loadBool(SIDEBAR_COLLAPSED_KEY, false),
   commandPaletteOpen: false,
+  assistantDockOpen: false,
   lastWorkspaceKey: loadString(LAST_WORKSPACE_KEY, null),
   setSelectedNodeId: (nodeId) => {
     persist(SELECTED_NODE_KEY, nodeId === null ? null : String(nodeId))
@@ -105,6 +114,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
       return { sidebarCollapsed: next }
     }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setAssistantDockOpen: (open) => set({ assistantDockOpen: open }),
   setLastWorkspaceKey: (key) => {
     persist(LAST_WORKSPACE_KEY, key)
     set({ lastWorkspaceKey: key })

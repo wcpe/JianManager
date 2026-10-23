@@ -17,6 +17,7 @@ import { ClusterBadges, STAT_POPOVER_MAX_ROWS } from '@/components/views/console
 import type { ClusterSlot } from '@/components/views/console/ClusterBadges'
 import { AccountMenu } from '@/components/views/console/AccountMenu'
 import { ConsoleBrandSegment, ConsoleRefreshButton, ConsoleSearchBox } from '@/components/views/console/console-header-parts'
+import { AssistantDockTrigger } from '@/components/views/assistant/AssistantDock'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
 
 /**
@@ -86,6 +87,7 @@ export default function ConsoleHeader() {
  */
 function HeaderTools() {
   const navigate = useNavigate()
+  const setAssistantDockOpen = useConsoleStore((s) => s.setAssistantDockOpen)
   // 常驻弹层的数据在这里取（弹层无 enabled 开关，与改前挂载即取一致）；视图侧只渲染与上报意图。
   const { data: taskPage } = useTasks()
   const { data: unread = 0 } = useFeedUnreadCount()
@@ -119,6 +121,9 @@ function HeaderTools() {
     <>
       <SearchBox />
       <div className="flex items-center gap-0.5 sm:gap-1">
+        {/* 助手入口（FR-519 §5.4「点击顶栏入口打开/聚焦浮窗」）：
+            只切 store 里的开关，浮窗本体挂在壳层，故此处不持有开合状态。 */}
+        <AssistantDockTrigger onOpen={() => setAssistantDockOpen(true)} />
         <RefreshButton />
         <ClusterBadges
           online={overview?.totals.onlineNodeCount ?? 0}

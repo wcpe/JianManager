@@ -12,6 +12,7 @@ import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
  * 「hover 预取过的 chunk」与「点下去要等的 chunk」是同一个（否则预取会静默失效）。
  */
 const OverviewPage = lazy(ROUTE_CHUNKS['/'])
+const AssistantHomePage = lazy(ROUTE_CHUNKS['/assistant-home'])
 const MonitoringPage = lazy(ROUTE_CHUNKS['/monitor'])
 const NodesPage = lazy(ROUTE_CHUNKS['/nodes'])
 const InstancesPage = lazy(ROUTE_CHUNKS['/instances'])
@@ -75,6 +76,18 @@ function RequirePlatformAdmin({ children }: { children: ReactNode }) {
  * 跨实例超级工作台（FR-167）走 `/super`，全幅渲染（自带左侧实例库 + 画布，无统一内边距）。
  * 工作区导播台（FR-168）走 `/director`，同为全幅（场景舞台 + 缩略图条，多预设预热瞬切）。
  */
+/**
+ * 首页模式选择器（FR-520）。
+ *
+ * 只读 URL 上的 `home` 参数，**不持任何本地状态**：这样「切到经典 → 刷新」仍停在经典，
+ * 且两种模式可以互相直链。缺省（无参数或其它值）为 AI 首页。
+ */
+function HomeRoute() {
+  const location = useLocation()
+  const home = new URLSearchParams(location.search).get('home')
+  return home === 'classic' ? <OverviewPage /> : <AssistantHomePage />
+}
+
 export default function Workspace() {
   const { t } = useTranslation()
   const location = useLocation()
@@ -150,7 +163,11 @@ export default function Workspace() {
           }
         >
           <Routes>
-            <Route index element={<OverviewPage />} />
+            {/* 首页模式（FR-520 §9.1）：`?home=classic` 走经典仪表盘，否则默认 AI 首页。
+                刻意在**路由层**二选一而不是页内条件渲染：后者会让两套查询同时存活，
+                与「只挂载当前模式的数据查询」直接冲突。
+                深链 `/?home=classic` 刷新仍落经典模式（查询参数由路由保证，不存内存态）。 */}
+            <Route index element={<HomeRoute />} />
             <Route path="monitor" element={<MonitoringPage />} />
             <Route path="nodes" element={<NodesPage />} />
             <Route path="instances" element={<InstancesPage />} />

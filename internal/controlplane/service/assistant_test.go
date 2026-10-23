@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -464,5 +465,46 @@ func TestAssistantAvailableModelsExcludesSensitiveFields(t *testing.T) {
 	got := models[0]
 	if got.ModelID != "m1" || got.Protocol != model.AssistantProtocolOpenAIChat {
 		t.Fatalf("摘要字段异常: %+v", got)
+	}
+}
+
+// 可用模型摘要必须带**供应商名称**（FR-519 §5.1 要在界面明示「数据发给谁」），
+// 但绝不能带端点与凭据。
+//
+// 这条边界值得单独钉住：它是「用户知情权」与「不暴露配置面」的交界线，
+// 后来者很容易为了做「发送给谁」的提示而顺手把 baseUrl 也带出来。
+func TestAvailableModelsCarriesProviderNameOnly(t *testing.T) {
+	s, _ := newAssistantTestService(t, testEncryptor(t))
+	p, err := s.CreateProvider(baseProviderParams()) // baseUrl = https://api.example.com/v1
+	if err != nil {
+		t.Fatalf("建供应商失败: %v", err)
+	}
+	if _, err := s.CreateModel(SaveModelParams{
+		ProviderID: p.ID, ModelID: "m1", DisplayName: "通用对话", Enabled: true, Streaming: true,
+	}); err != nil {
+		t.Fatalf("建模型失败: %v", err)
+	}
+
+	items, _, err := s.AvailableModels()
+	if err != nil {
+		t.Fatalf("取摘要失败: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("应有 1 条，实际 %d", len(items))
+	}
+	if items[0].ProviderName != p.Name {
+		t.Fatalf("应带供应商名 %q，实际 %q", p.Name, items[0].ProviderName)
+	}
+
+	// 序列化后逐字段核对：不得出现端点、凭据模式、密文等任何配置面字段。
+	raw, err := json.Marshal(items[0])
+	if err != nil {
+		t.Fatalf("序列化失败: %v", err)
+	}
+	body := string(raw)
+	for _, forbidden := range []string{"api.example.com", "baseUrl", "credentialMode", "credentialEnc", "hasCredential"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("摘要不得包含 %q，实际 %s", forbidden, body)
+		}
 	}
 }

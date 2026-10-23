@@ -72,6 +72,8 @@ export interface AssistantModel {
 /** 普通用户可见的模型摘要。 */
 export interface AssistantAvailableModel {
   id: number
+  /** 供应商显示名（仅名称；不含端点与凭据）。用于「数据将发送给谁」的告知。 */
+  providerName: string
   modelId: string
   displayName: string
   protocol: string

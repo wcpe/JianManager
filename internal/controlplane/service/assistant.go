@@ -573,14 +573,21 @@ func (s *AssistantService) EnsureSetting() error {
 	return nil
 }
 
-// AvailableModel 普通用户可见的模型摘要（**不含**端点与凭据字段）。
+// AvailableModel 普通用户可见的模型摘要（**不含端点与凭据字段**）。
+//
+// 关于 ProviderName：早先这里刻意不带供应商名（理由是「普通用户不需要知道有几个供应商」），
+// 但 FR-519 §5.1 要求界面上明示「相关数据将发送给 <供应商>」——这是**用户知情权**，
+// 不是暴露组织信息：用户要知道自己的提问发给谁。因此补上名称，
+// 仍然**不含** baseUrl / 凭据引用 / 密文（那些才是真正的敏感面）。
 type AvailableModel struct {
-	ID          uint   `json:"id"`
-	ModelID     string `json:"modelId"`
-	DisplayName string `json:"displayName"`
-	Protocol    string `json:"protocol"`
-	Streaming   bool   `json:"streaming"`
-	Tools       bool   `json:"tools"`
+	ID uint `json:"id"`
+	// ProviderName 供应商显示名（仅名称，不含端点与凭据）。
+	ProviderName string `json:"providerName"`
+	ModelID      string `json:"modelId"`
+	DisplayName  string `json:"displayName"`
+	Protocol     string `json:"protocol"`
+	Streaming    bool   `json:"streaming"`
+	Tools        bool   `json:"tools"`
 }
 
 // AvailableModels 返回所有登录用户可用的模型摘要与默认模型 ID。
@@ -609,12 +616,13 @@ func (s *AssistantService) AvailableModels() ([]AvailableModel, *uint, error) {
 		}
 		available[r.ID] = true
 		out = append(out, AvailableModel{
-			ID:          r.ID,
-			ModelID:     r.ModelID,
-			DisplayName: r.DisplayName,
-			Protocol:    p.Protocol,
-			Streaming:   r.Streaming,
-			Tools:       r.Tools,
+			ID:           r.ID,
+			ProviderName: p.Name,
+			ModelID:      r.ModelID,
+			DisplayName:  r.DisplayName,
+			Protocol:     p.Protocol,
+			Streaming:    r.Streaming,
+			Tools:        r.Tools,
 		})
 	}
 	var setting model.AssistantSetting
