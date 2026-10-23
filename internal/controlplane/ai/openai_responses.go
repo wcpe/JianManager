@@ -36,12 +36,23 @@ type responsesRequest struct {
 }
 
 // responsesInput 输入项。
+//
+// 一个结构体承载三类项（message / function_call / function_call_output），靠 Type 区分：
+// 它们在同一条 input 数组里按顺序排列，上游要求 function_call 与 function_call_output
+// 通过 call_id 配对且顺序一致。
 type responsesInput struct {
 	Type    string `json:"type,omitempty"`
 	Role    string `json:"role,omitempty"`
 	Content string `json:"content,omitempty"`
+	// function_call 专用：调用标识、工具名与**原始参数 JSON 文本**。
+	//
+	// 参数必须是字符串而不是对象：Responses 的 function_call.arguments 是
+	// 上游自己流式吐出来的一段文本，回放时原样送回最安全——重新序列化会改变
+	// 键序与空白，可能被对端判为「与我发出时不一致」。
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 	// function_call_output 专用
-	CallID string `json:"call_id,omitempty"`
 	Output string `json:"output,omitempty"`
 }
 
@@ -245,6 +256,16 @@ func (s *openAIResponsesStreamer) Stream(ctx context.Context, req Request, emit 
 // buildResponsesInput 把内部消息转成 Responses 输入项。
 //
 // 工具结果在 Responses 里是独立的 function_call_output 项，不是 role=tool 的消息。
+// buildResponsesInput 把内部消息历史翻成 Responses 的 input 数组。
+//
+// 关键约束：**assistant 的工具调用必须回放成 `function_call` 项，不能降级成文本**。
+// 曾经这里把调用写成一条 `message`（"[调用工具 X 参数 Y]"），而工具结果仍以
+// `function_call_output` 发出——于是 output 找不到配对的 function_call（call_id 无从匹配），
+// 上游会判请求不合法；即便某些上游宽容，模型看到的也不是「我调用过工具、这是结果」
+// 的结构化历史，多轮工具循环的语义已经丢了。
+//
+// 顺序：函数调用按 ToolCalls 原序输出，且必须整体出现在对应 output 之前。
+// 不排序、不去重——去重会掩盖上层「同一次调用被重复登记」的真实缺陷。
 func buildResponsesInput(in []Message) []responsesInput {
 	out := make([]responsesInput, 0, len(in))
 	for _, m := range in {
@@ -256,16 +277,16 @@ func buildResponsesInput(in []Message) []responsesInput {
 				Output: m.Content,
 			})
 		case "assistant":
+			// 纯文本先出（保持「先说话、再调用」的原始顺序）。
 			if m.Content != "" {
 				out = append(out, responsesInput{Type: "message", Role: "assistant", Content: m.Content})
 			}
 			for _, call := range m.ToolCalls {
-				// 历史工具调用以 message + 文本形式回放会丢语义，这里用注释性文本
-				// 保留「曾调用过什么」的可追溯性；真正配对靠 function_call_output。
 				out = append(out, responsesInput{
-					Type:    "message",
-					Role:    "assistant",
-					Content: fmt.Sprintf("[调用工具 %s 参数 %s]", call.ToolName, call.Args),
+					Type:      "function_call",
+					CallID:    call.CallID,
+					Name:      call.ToolName,
+					Arguments: call.Args,
 				})
 			}
 		default:
