@@ -4390,8 +4390,54 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
 
 > 分类码全集与「管理员该做什么」的对应表见 `docs/specs/ai-provider-models/api.md` §7。
 
+### GET /api/v1/assistant/admin/settings/egress
+- **描述**: 读取出站准入的私网放行段。
+- **权限**: 平台管理员
+- **响应** (200):
+  ```json
+  { "allowPrivateCidrs": ["10.0.0.0/8"], "version": 2, "insecureAllowed": false }
+  ```
+- **说明**: `insecureAllowed` 是**只读回显**，表示当前部署是否接受 `http://` 明文目标
+  （仅 dev 部署为 true）。放行网段不等于放行明文——两者是独立开关。
+
+### PUT /api/v1/assistant/admin/settings/egress
+- **描述**: 写入放行段，**保存后立即重建出站工厂生效**，无需重启。
+- **权限**: 平台管理员
+- **请求体**:
+  ```json
+  { "allowPrivateCidrs": ["10.0.0.0/8", "192.168.1.0/24"], "version": 2 }
+  ```
+- **响应** (200): 与 GET 同构（返回生效后的值与自增后的 version）
+- **校验**:
+  - 每项必须是合法 CIDR；**非法项整单拒绝并指出是哪一项**（不静默丢弃——
+    静默丢弃会变成「保存成功、行为不变、无提示」）。
+  - 自动规范化（掩掉主机位）与去重：`10.0.0.1/8` 与 `10.0.0.0/8` 视为同一段。
+  - 空数组表示禁止一切非公网目标。
+- **错误**: 409 `version` 不匹配 / 422 非法 CIDR / 404 设置未初始化
+- **不变量**: 云元数据地址段**永远拒绝**，即便被显式放行也不生效。
+
+> 每次写入都记审计 `assistant.settings.egress`。
+
 ### PUT /api/v1/assistant/admin/settings/default-model
 - **描述**: 设置或清空默认模型。
 - **请求体**: `{ "modelId": 1 }` 或 `{ "modelId": null }`（清空）
 - **校验**: 目标模型必须存在且**启用**，其供应商也必须**启用**
 - **错误**: 422 模型不存在/已停用/供应商已停用 / 409 version 冲突
+
+### AI 配置面的审计事件
+
+供应商/模型的增删改与探测均写审计（`detail` **按白名单逐字段构造**，不含明文密钥/密文）：
+
+| action | targetType | detail 字段 |
+|---|---|---|
+| `assistant.provider.create` | `assistant_provider` | name, protocol, credentialMode |
+| `assistant.provider.update` | `assistant_provider` | 同上 + `credentialChanged`（布尔，**不记值**） |
+| `assistant.provider.delete` | `assistant_provider` | name（删除前先取，删完就查不到） |
+| `assistant.model.create` / `.update` | `assistant_model` | providerId, modelId, enabled |
+| `assistant.model.delete` | `assistant_model` | id |
+| `assistant.settings.default` | `assistant_settings` | defaultModelId（清空记 `"null"`） |
+| `assistant.settings.egress` | `assistant_settings` | allowPrivateCidrs |
+| `assistant.provider.test` / `assistant.model.test` | 对应类型 | ok, classifiedError, latencyMs（模型另含 withTools/toolCallParsed） |
+
+> 探测会产生**可能计费**的真实上游调用，因此也留痕；但只记结论元数据，不记 `message`
+> （它可能含上游回显的片段）。
