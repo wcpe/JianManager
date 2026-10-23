@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,11 +17,35 @@ import (
 // 「持有某个业务节点」，与「平台管理员」不是一回事，不能拿来当管理员门禁。
 type AssistantHandler struct {
 	svc *service.AssistantService
+	// audit 允许为 nil（测试或未装配时）——审计缺失不该让配置面不可用。
+	audit *service.AuditService
 }
 
 // NewAssistantHandler 构造处理器。
-func NewAssistantHandler(svc *service.AssistantService) *AssistantHandler {
-	return &AssistantHandler{svc: svc}
+func NewAssistantHandler(svc *service.AssistantService, audit *service.AuditService) *AssistantHandler {
+	return &AssistantHandler{svc: svc, audit: audit}
+}
+
+// auditProvider 记录供应商维度的审计。
+//
+// detail 按**白名单逐字段拼**，绝不序列化请求体再裁剪：后者在新增字段时
+// （比如哪天给供应商加了个 header 配置）会静默把敏感值带进审计表，
+// 而审计表是要被检索、导出、长期保留的。
+func (h *AssistantHandler) auditProvider(c *gin.Context, action, targetID string, detail map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	h.audit.RecordResultSafe(currentUserID(c), action, "assistant_provider", targetID,
+		marshalAuditDetail(detail), c.ClientIP(), true, "")
+}
+
+// auditModel 同上，模型维度。
+func (h *AssistantHandler) auditModel(c *gin.Context, action, targetID string, detail map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	h.audit.RecordResultSafe(currentUserID(c), action, "assistant_model", targetID,
+		marshalAuditDetail(detail), c.ClientIP(), true, "")
 }
 
 // requireAssistantAdmin AI 管理面的平台管理员门禁（FR-514，见 ADR-105）。
@@ -138,6 +163,9 @@ func (h *AssistantHandler) CreateProvider(c *gin.Context) {
 		respondAssistantErr(c, err)
 		return
 	}
+	h.auditProvider(c, "assistant.provider.create", itoaID(created.ID), map[string]any{
+		"name": created.Name, "protocol": created.Protocol, "credentialMode": created.CredentialMode,
+	})
 	c.JSON(http.StatusCreated, created)
 }
 
@@ -171,6 +199,12 @@ func (h *AssistantHandler) UpdateProvider(c *gin.Context) {
 		respondAssistantErr(c, err)
 		return
 	}
+	// 只记「凭据是否被动过」的布尔，不记任何值：审计表会被检索与长期保留。
+	h.auditProvider(c, "assistant.provider.update", itoaID(updated.ID), map[string]any{
+		"name": updated.Name, "protocol": updated.Protocol,
+		"credentialMode":    updated.CredentialMode,
+		"credentialChanged": strings.TrimSpace(req.CredentialSecret) != "" || req.ClearCredential,
+	})
 	c.JSON(http.StatusOK, updated)
 }
 
@@ -180,10 +214,16 @@ func (h *AssistantHandler) DeleteProvider(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 删除前先取一次名字：删完就查不到了，而审计里「删了哪个」比「删了 id=7」有用得多。
+	name := ""
+	if existing, gerr := h.svc.GetProvider(id); gerr == nil {
+		name = existing.Name
+	}
 	if err := h.svc.DeleteProvider(id); err != nil {
 		respondAssistantErr(c, err)
 		return
 	}
+	h.auditProvider(c, "assistant.provider.delete", itoaID(id), map[string]any{"name": name})
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
@@ -249,6 +289,9 @@ func (h *AssistantHandler) CreateModel(c *gin.Context) {
 		respondAssistantErr(c, err)
 		return
 	}
+	h.auditModel(c, "assistant.model.create", itoaID(created.ID), map[string]any{
+		"providerId": created.ProviderID, "modelId": created.ModelID, "enabled": created.Enabled,
+	})
 	c.JSON(http.StatusCreated, created)
 }
 
@@ -268,6 +311,9 @@ func (h *AssistantHandler) UpdateModel(c *gin.Context) {
 		respondAssistantErr(c, err)
 		return
 	}
+	h.auditModel(c, "assistant.model.update", itoaID(updated.ID), map[string]any{
+		"providerId": updated.ProviderID, "modelId": updated.ModelID, "enabled": updated.Enabled,
+	})
 	c.JSON(http.StatusOK, updated)
 }
 
@@ -277,10 +323,13 @@ func (h *AssistantHandler) DeleteModel(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// 审计里只记 id：模型没有独立 GET 端点，为一个审计字段新增公开查询方法不值得。
+	// 供应商那边有 GetProvider，故能记下名字。
 	if err := h.svc.DeleteModel(id); err != nil {
 		respondAssistantErr(c, err)
 		return
 	}
+	h.auditModel(c, "assistant.model.delete", itoaID(id), map[string]any{"id": id})
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
@@ -301,6 +350,15 @@ func (h *AssistantHandler) SetDefaultModel(c *gin.Context) {
 		respondAssistantErr(c, err)
 		return
 	}
+	if h.audit != nil {
+		// 清空（nil）必须与「没设过」区分开，故显式记 "null"。
+		value := "null"
+		if req.ModelID != nil {
+			value = itoaID(*req.ModelID)
+		}
+		h.audit.RecordResultSafe(currentUserID(c), "assistant.settings.default", "assistant_settings", "1",
+			marshalAuditDetail(map[string]any{"defaultModelId": value}), c.ClientIP(), true, "")
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
 
@@ -320,6 +378,11 @@ func (h *AssistantHandler) TestProvider(c *gin.Context) {
 		respondAssistantErr(c, err)
 		return
 	}
+	// 探测会产生一次真实的上游调用（可能计费），必须留痕；
+	// 只记结论元数据，不记 message（它可能含上游回显的片段）。
+	h.auditProvider(c, "assistant.provider.test", itoaID(id), map[string]any{
+		"ok": res.OK, "classifiedError": res.ClassifiedError, "latencyMs": res.LatencyMs,
+	})
 	c.JSON(http.StatusOK, res)
 }
 
@@ -340,6 +403,11 @@ func (h *AssistantHandler) TestModel(c *gin.Context) {
 		respondAssistantErr(c, err)
 		return
 	}
+	// 同上：model.test 直连上游且可能计费，留痕但只记元数据。
+	h.auditModel(c, "assistant.model.test", itoaID(id), map[string]any{
+		"ok": res.OK, "classifiedError": res.ClassifiedError, "latencyMs": res.LatencyMs,
+		"withTools": req.WithTools, "toolCallParsed": res.ToolCallParsed,
+	})
 	c.JSON(http.StatusOK, res)
 }
 

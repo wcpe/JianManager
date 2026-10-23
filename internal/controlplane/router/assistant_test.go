@@ -29,6 +29,8 @@ type assistantTestFixture struct {
 	adminToken  string
 	manageToken string // 持有 node.manage 但非平台管理员
 	plainToken  string // 无任何权限的普通成员
+	// db 供审计类断言直接查表（审计是「写进去的东西」，只能从存储侧验证）。
+	db *gorm.DB
 }
 
 func newAssistantTestFixture(t *testing.T) assistantTestFixture {
@@ -56,6 +58,7 @@ func newAssistantTestFixture(t *testing.T) assistantTestFixture {
 
 	return assistantTestFixture{
 		router:      r,
+		db:          db,
 		adminToken:  getTokenForUser(t, r, "ai_admin", "password123"),
 		manageToken: getTokenForUser(t, r, "ai_manage", "password123"),
 		plainToken:  getTokenForUser(t, r, "ai_plain", "password123"),
@@ -309,4 +312,84 @@ func TestAssistantProbeNotFound(t *testing.T) {
 	code, _ = doAssistantReq(t, f.router, http.MethodPost,
 		"/api/v1/assistant/admin/models/9999/test", f.adminToken, "")
 	require.Equal(t, http.StatusNotFound, code)
+}
+
+// 审计留痕（FR-514 交付缺口补齐）。
+//
+// 这组用例的重点不是「有没有写审计」，而是**写进去的 detail 里绝不能有密钥**。
+// 审计表会被检索、导出、长期保留——一旦凭据进去，就等于把只在服务端内存里流转的
+// 密钥复制到一个人人可查的地方，而且删不掉（历史行不会因为换密钥而消失）。
+func TestAssistantAuditRecordsWithoutSecrets(t *testing.T) {
+	f := newAssistantTestFixture(t)
+	db := f.db
+
+	const secret = "sk-audit-must-not-leak-9876543210"
+	code, body := doAssistantReq(t, f.router, http.MethodPost, "/api/v1/assistant/admin/providers", f.adminToken,
+		`{"name":"审计用","protocol":"openai-chat","baseUrl":"https://api.example.com","credentialMode":"stored","credentialSecret":"`+secret+`","enabled":true}`)
+	require.Equal(t, http.StatusCreated, code, "创建失败: %s", body)
+
+	var p struct {
+		ID uint `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &p))
+
+	// 更新：改显示名但不动凭据，detail 里 credentialChanged 应为 false。
+	code, body = doAssistantReq(t, f.router, http.MethodPut,
+		fmt.Sprintf("/api/v1/assistant/admin/providers/%d", p.ID), f.adminToken,
+		fmt.Sprintf(`{"name":"审计用改名","protocol":"openai-chat","baseUrl":"https://api.example.com","credentialMode":"stored","version":%s}`,
+			jsonField(t, body, "version")))
+	require.Equal(t, http.StatusOK, code, "更新失败: %s", body)
+
+	// 模型：创建 + 设默认 + 删除。
+	code, body = doAssistantReq(t, f.router, http.MethodPost, "/api/v1/assistant/admin/models", f.adminToken,
+		fmt.Sprintf(`{"providerId":%d,"modelId":"m-audit","enabled":true,"streaming":true}`, p.ID))
+	require.Equal(t, http.StatusCreated, code, "建模型失败: %s", body)
+	var m struct {
+		ID uint `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &m))
+
+	code, body = doAssistantReq(t, f.router, http.MethodPut,
+		"/api/v1/assistant/admin/settings/default-model", f.adminToken,
+		fmt.Sprintf(`{"modelId":%d,"version":0}`, m.ID))
+	require.Equal(t, http.StatusOK, code, "设默认失败: %s", body)
+
+	code, _ = doAssistantReq(t, f.router, http.MethodDelete,
+		fmt.Sprintf("/api/v1/assistant/admin/models/%d", m.ID), f.adminToken, "")
+	require.Equal(t, http.StatusOK, code)
+
+	// 断言：审计行存在，且 detail 全局不含密钥/密文字样。
+	var rows []model.AuditLog
+	require.NoError(t, db.Where("action LIKE ?", "assistant.%").Order("id asc").Find(&rows).Error)
+	require.NotEmpty(t, rows, "应有 assistant.* 审计行")
+
+	actions := map[string]bool{}
+	for _, r := range rows {
+		actions[r.Action] = true
+		require.NotContains(t, r.Detail, secret, "审计 detail 不得含明文密钥（action=%s）", r.Action)
+		require.NotContains(t, r.Detail, "credentialEnc", "审计 detail 不得含密文字段（action=%s）", r.Action)
+		require.NotContains(t, r.Detail, "credentialSecret", "审计 detail 不得含密钥字段名（action=%s）", r.Action)
+	}
+	for _, want := range []string{
+		"assistant.provider.create", "assistant.provider.update",
+		"assistant.model.create", "assistant.settings.default", "assistant.model.delete",
+	} {
+		require.True(t, actions[want], "缺少审计事件 %s（实际 %v）", want, actions)
+	}
+
+	// 「凭据是否被动过」必须可见：否则审计无法回答「这次改动会不会影响密钥」。
+	var updateRow model.AuditLog
+	require.NoError(t, db.Where("action = ?", "assistant.provider.update").First(&updateRow).Error)
+	require.Contains(t, updateRow.Detail, `"credentialChanged":false`,
+		"未改凭据时应记 false，实际 %s", updateRow.Detail)
+}
+
+// jsonField 从响应体里取一个标量字段的原始文本（用于回传 version）。
+func jsonField(t *testing.T, body, key string) string {
+	t.Helper()
+	var m map[string]any
+	require.NoErrorf(t, json.Unmarshal([]byte(body), &m), "响应体不是对象: %s", body)
+	raw, err := json.Marshal(m[key])
+	require.NoError(t, err)
+	return string(raw)
 }
