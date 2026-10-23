@@ -4,6 +4,8 @@ import { useLocation } from 'react-router'
 import { TopLoadingBar } from '@/components/views/common/TopLoadingBar'
 import { useInstanceEvents } from '@/api/events'
 import ConsoleHeader from '@/components/console/ConsoleHeader'
+import { AssistantDock } from '@/components/views/assistant/AssistantDock'
+import { useConsoleStore } from '@/stores/console'
 import WorkspaceSidebar from '@/components/console/WorkspaceSidebar'
 import CommandPalette from '@/components/console/CommandPalette'
 import MobileConsoleNav from '@/components/console/MobileConsoleNav'
@@ -45,6 +47,9 @@ export default function DashboardPage() {
   // routeKey 必须含 location.key——否则同一路径上重复点击不产生变化、进度条不再重播。
   const location = useLocation()
   const pendingCount = useIsFetching() + useIsMutating()
+  // 助手浮窗开关放在 console store（顶栏入口与浮窗分处两棵树，且浮窗需跨路由常驻）。
+  const assistantOpen = useConsoleStore((s) => s.assistantDockOpen)
+  const setAssistantOpen = useConsoleStore((s) => s.setAssistantDockOpen)
 
   return (
     <div
@@ -68,6 +73,9 @@ export default function DashboardPage() {
       <MobileConsoleNav />
       {/* 全局命令面板（FR-241）：始终挂载以监听 Ctrl+K，打开时覆盖全屏。 */}
       <CommandPalette />
+      {/* 全局助手浮窗（FR-519）：挂在壳层而非页面里，因此跨路由不卸载、
+          会话与 run 不受路由切换影响（关闭浮窗也不停止 run）。 */}
+      <AssistantDock open={assistantOpen} onOpenChange={setAssistantOpen} />
     </div>
   )
 }

@@ -23,6 +23,8 @@
 /** 路由表键 → chunk 加载器。值写成箭头函数（模块级只建一次），调用方才不会每次渲染新建 import。 */
 export const ROUTE_CHUNKS = {
   '/': () => import('@/pages/OverviewPage'),
+  // AI 首页（FR-520）：与经典首页互斥挂载，由路由层按 ?home 二选一。
+  '/assistant-home': () => import('@/pages/AssistantHomePage'),
   '/monitor': () => import('@/pages/MonitoringPage'),
   '/nodes': () => import('@/pages/NodesPage'),
   '/instances': () => import('@/pages/InstancesPage'),
