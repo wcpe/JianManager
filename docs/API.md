@@ -3101,9 +3101,9 @@
 
 ---
 
-## Worker 日志平台（FR-473～484，地基 + 接线中）
+## Worker 日志平台（FR-473～484，2026-10-22 回归修复中）
 
-> **接线状态（FR-483 对账）**：Shared Contracts 已冻结。CP `main` 已装配 `logcoord.Assemble`，Worker `main` 已装配持久 Catalog、采集运行时、受管 VL（VictoriaLogs，选型见 ADR-094）supervisor、RangeClient、归档 Provider 和 Log RPC。配置受管 VL 时能力真实可用；未配置或不健康时仍明确返回 `LOG_UNSUPPORTED`。联邦、runtime status/control、归档状态/恢复管理面已注册；cutover **默认关闭**。Runbook A/B/C、失败态矩阵（DOM 19 项 + 真浏览器）与发布级性能（30 分钟压测 + 64 源容量曲线）均已真机验收通过；证据在 `.tmp/fr433-experiments/`。
+> **接线与验收边界（FR-483 对账）**：Shared Contracts 基线已冻结，既有 CP/Worker 联邦、采集、持久 Catalog、受管 VL、RangeClient、归档与管理面已装配，cutover 默认关闭；能力禁用/未就绪须结构化失败，不能空成功。当前页导出和顶层覆盖字段已按实际代码及定向 HTTP→CP→Adapter→Service 回归对账，见下文及 [协调器规格](specs/cp-log-query-coordinator/spec.md)。历史验收见 [受控记录](specs/worker-log-platform-contract/acceptance-record.md)。本节标题日期保留修复批次定位；当前本轮代码修复及已覆盖回归、指定真实 VL/浏览器原 scope 已收口，250ms 首屏、长稳与追加故障覆盖等专项延期且未计通过，范围统一见 [收口声明及验收表](specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)，不外推全部分支或新增生产验收。
 
 ### Worker Log RPC 摘要（gRPC，`proto/worker.proto`）
 
@@ -3116,11 +3116,11 @@
 | `LogStats` | `LogStatsRequest` → `LogStatsResponse` | 可合并聚合；`time_bucket` + `group_by` | 同上 |
 | `LogFields` | `LogFieldsRequest` → `LogFieldsResponse` | 可查询字段 + coverage | 同上 |
 | `LogFacets` | `LogFacetsRequest` → `LogFacetsResponse` | 受控维度 Facets；高基数 `truncated` | 同上 |
-| `LogTail` | `LogTailRequest` → stream `LogEvent` | FOLLOW_LIVE / VIEW_BOUNDED | `VIEW_BOUNDED` 可走 VL；`FOLLOW_LIVE` 仍显式 unsupported |
+| `LogTail` | `LogTailRequest` → stream `LogEvent` | FOLLOW_LIVE / VIEW_BOUNDED | `VIEW_BOUNDED` 复用固定 view；支持动态读的 RangeClient 可执行有界 `FOLLOW_LIVE`（默认 1 秒、最多 30 秒），不支持者明确 unsupported |
 | `LogRehydrate` | `LogRehydrateRequest` → `LogTaskResponse` | Deep Archive 回灌（FR-478） | Worker Registry/Rehydrate 已接线；CP 节点归档管理面可触发 |
 | `LogArchiveStatus` | `LogArchiveStatusRequest` → `LogArchiveStatusResponse` | 归档对象 available/missing + coverage | Worker 真实 manifest/provider 查询；CP 节点归档管理面可查询 |
 
-公共请求基座 `LogQueryRequestBase`：`request_id` / `protocol_version` / `time_range`（UTC 闭开）/ `authorized_targets`（CP 计算；`online_only` 仅显式选择）/ `budget`（limit/max_bytes/timeout_ms/max_fanout）/ `view`（view_id/cursor/order_version）/ `filter` / `permission_scope` / `cancellation_token`。响应统一携带 `LogCoverage`（complete/partial_reasons/targets/enumeration_state）与 `LogQuality`。
+公共请求基座 `LogQueryRequestBase`：`request_id` / `protocol_version` / `time_range`（UTC 闭开）/ `authorized_targets`（CP 计算；`online_only` 仅显式选择）/ `budget`（limit/max_bytes/timeout_ms/max_fanout）/ `view`（view_id/cursor/order_version）/ `filter` / `permission_scope` / `cancellation_token`。Search/Stats 响应携带 `LogCoverage` 与 `LogQuality`；Fields/Facets 当前 proto 只有 coverage、字段/维度值及现有截断证据，没有 `LogQuality`，不得虚构 Worker quality。CP Facets 的统计质量可依据覆盖/截断保守派生，Fields 无独立 quality 字段。
 
 `LogSearchResponse.ingest_position_gaps` 是独立的人工永久放弃位置凭据，不表示查询时间覆盖缺口。`IngestPositionGap` 原字段 1～6 保持 `storage_namespace/from/to/reason_code/operator/at_utc`，仅追加 `log_source_id=7`、`source_generation=8`（来自真实源键）；既有 RPC 与 `fr433/v1` 不变。CP Search 与门面可选返回 `ingest_position_gaps[]`：`worker_id` 为可信路由绑定的 Worker UUID，`from/to` 为无损十进制字符串，其余字段沿用上述 snake_case。空集合省略，旧 Worker 未提供的真实源/代次字段省略，禁止从 namespace 或结果事件推断；不同 Worker/源/代次的凭据不得按 namespace 合并。即使 `items=[]` 也可返回凭据；它不参与 `coverage`、`quality` 或 Export 闸门判断。
 
@@ -3150,23 +3150,31 @@
 
 - **`GET /api/v1/logs/federation`** — 前端门面（FR-482）：内部调用 Search，返回 `{ok,sourceTag,items,coverage,quality,view,notes,…}`；coverage/quality 为 FR-473 snake_case
 - **`GET /api/v1/logs/federation/search|stats|facets`** / **`POST /api/v1/logs/federation/export`** — FR-480 精确端点；导出 incomplete 时不返回 NDJSON 附件
-- **状态**: CP `main` 已 `logcoord.Assemble` 并注册路由；受管 VL 可用时走真实 RangeClient，缺失能力时返回 `LOG_UNSUPPORTED`（非空成功）。LogsPage 探测门面，404 降级 legacy `/logs`。远程正常联邦和浏览器正常导出已通过，失败态矩阵仍待
+- **状态**: 既有 Assemble/门面路由保留；本批真实 Worker view、覆盖和当前页导出已通过定向 HTTP 跨层回归，真实 VL/浏览器与持续性能仍待联合验收。LogsPage 探测门面，404 可降级 legacy `/logs`，不得将其它错误伪装为完整零结果。
 
 > 服务层真源：`internal/controlplane/logcoord` + `internal/worker/logs/query`。联邦侧经过 Worker-local View、Catalog、coverage 和权限校验；能力不可用时仍返回结构化 not-ready，禁止空成功。**CP 为浏览器唯一入口**；覆盖语义继承 FR-473。
 
 - **`GET /api/v1/logs/federation`** — 跨 Worker 联邦检索（FR-480）
   - **关联 FR**: FR-479, FR-480, FR-482
   - **权限**: 认证用户；资源收敛到授权实例；平台/全量视图仅平台管理员
-  - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`limit`、`cursor`、`orderVersion`
+  - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`viewId`、`limit`、`cursor`、`orderVersion`；续页使用原 view 和入页 cursor，固定时间/筛选/授权 scope 不能悄悄改变。
   - **筛选语义**: `level` 与 `source` 在 CP 侧组合进单一 `filter` 表达式（wire 契约只有该字段），取值走白名单防注入。`source` 取 `instance`/`worker`/`control_plane`，按事件 `log_source_id` 前缀（`inst:`/`node:`）推导——事件结构不含类别字段，前端来源下拉与其不同构，故两侧用同一套前缀约定对齐。`control_plane` 类日志只落 CP 库、不进联邦数据面，该值会诚实返回零结果而非放行全量。
-  - **响应**: `{ view, coverage, quality, items[], nextCursor, exhausted }`
-  - **状态**: logcoord + HTTP + **生产 Assemble（pool/node/instance）**；远程与真机联邦 Search/Stats/Facets/Export 通过，失败态矩阵（DOM 19 项 + 真浏览器）已验收
+  - **响应**: `{ view, coverage, quality, items[], next_cursor, exhausted }`；门面另含 `ok/sourceTag/notes`，不把前端内部 camelCase 名称当作原始 HTTP 字段。
+  - **状态**: 既有 logcoord + HTTP + Assemble 保留；本批定向跨层回归通过，真实多进程/浏览器联合验收未完成。Fast 首屏以实际 Worker Search 的 view/vector 原子绑定，缓存保留同一引用；任一 Worker 未证明安全页边界时无新 cursor、`exhausted=false`，可见 `PAGE_RETRY_REQUIRED` 供同页重试。
 
-- **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`** / **`POST /api/v1/logs/federation/export`**
-  - Stats/Facets/Export 语义继承 FR-473/480；导出缺口/截断/超预算 **不交付成功附件**
-  - 导出物化预算（行数/累计字节）由 CP 配置 `log_export.max_rows` / `log_export.max_bytes` 决定，默认 10000 行 / 64MiB。请求侧 `limit` **只能收紧**（取配置与请求值的较小者），放宽必须改配置——导出是单次请求读全量并在内存物化 NDJSON 的操作，请求侧可放大即等于无界资源入口。前端导出固定携带 `limit`（`FEDERATED_EXPORT_REQUEST_LIMIT`），不再依赖服务端默认值
-  - 阻断响应（200 JSON，`artifact: null`）除既有 `incomplete_reasons` 外，新增 `limits: { max_rows, max_bytes, rows }` 回传本次实际采用的上限与实取行数；预算类阻断的 `incomplete_reasons` 同时含笼统码 `budget_exceeded` 与精确码 `row_limit_exceeded` / `byte_budget_exceeded`，供 UI 给出「缩小时间范围或调大配置」的可操作提示
-  - **状态**: 聚合与导出门禁已注册到 HTTP；真实 managed VL 结果路径与真机联邦已通过，跨 Tier/失败态矩阵已验收
+- **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`**
+  - 继承 Search 的 scope/view 与 FR-473/480 语义；Stats 返回独立 coverage/quality，Facets 保留顶层 coverage、`truncated` 与逐维度截断信息，任一来源 partial/截断时 CP `quality.stats_quality=partial`，不能把空桶报为精确 0。
+  - HTTP 聚合结果可能使用 4s 同参缓存；它不构成点击下载时的新鲜授权/质量证明，当前页导出不借用该缓存。
+
+- **`POST /api/v1/logs/federation/export`** — 三种界面范围复用此端点，不新增 Worker Export RPC。
+  - **参数位置**：全部使用 query，继承 `from/to`、筛选、目标、`onlineOnly`、`viewId`、`cursor`、`limit`；不接收客户端原始行作为产物来源。
+  - **`range=all`（默认）**：省略 range 保持兼容；服务端清除 cursor，导出当前有效时间窗内全部匹配，不因界面位于后页漏掉前页。显式自选时间段改变 scope 时使用匹配新 view，不能混用旧 viewId。
+  - **`range=page`**：必须有已存在且匹配的 `viewId`，入页 cursor 首屏省略；使用该 view 固定 page limit，指定非零 `limit` 时必须相等，省略/0 沿 view。前端须显式携带点击时页面的 limit，不能把整窗导出上限代入当前页。
+  - **新鲜闸门**：服务端禁用 Search 缓存并对同 view 新鲜 Search、直接 Stats，重新复核主体/授权、coverage 完整、无 pending/partial 原因、重复与统计质量均 exact、无预算截断；页面和 Stats 共用本请求累计字节预留；显式超时贯穿整次页导出，取消沿请求上下文传播。仅物化服务端实际当前逻辑页，页面无须把整个 Search 集合枚举到尾。
+  - **错误**：未知 range 或 page 缺 viewId ⇒ 400 `INVALID_REQUEST`；view 不存在 ⇒ 400；固定 scope/filter/time/onlineOnly 或非零 page limit 不匹配 ⇒ 409 `VIEW_STALE`（`errorCode=LOG_VIEW_STALE`）；主体/授权范围变化 ⇒ 403 `FORBIDDEN`（`errorCode=LOG_VIEW_AUTHZ_DENIED`）。
+  - **成功**：200 `application/x-ndjson` + attachment。完整性/质量/pending/预算阻断返回 200 JSON、`export_incomplete=true`、`incomplete_reasons[]`、`artifact:null`，不交付附件；`limits:{max_rows,max_bytes,rows}` 回传实际采用上限与实取行数，预算原因含 `budget_exceeded` 及 `row_limit_exceeded`/`byte_budget_exceeded` 等精确码。
+  - **物化预算**：CP `log_export.max_rows/max_bytes` 默认 10000 行/64MiB，请求只能收紧；page limit 仍受固定 view 与配置共同约束，不能以当前页名义绕过预算。
+  - **验收边界**：本批已通过定向 HTTP→CP→Adapter→Service 回归和跨 Worker Reader 字节/并发追加验证；不含真实网络、真实 VL 或浏览器下载验收。
 
 - **`GET /api/v1/logs/federation/tail`** — 实时跟随（FR-482）
   - **关联 FR**: FR-479, FR-480, FR-482
@@ -3174,7 +3182,7 @@
   - **Query**: 继承 Search 的筛选参数，另加 `mode`
     - `mode=FOLLOW_LIVE`（默认）— 有界动态窗口，随水位前移返回新事件；LogsPage「实时跟随」即用此档
     - `mode=VIEW_BOUNDED` — 在既有 view 边界内取尾（不随水位扩展）
-  - **响应**: 同 Search `{ view, coverage, quality, items[], nextCursor, exhausted }`；`coverage.enumerationState=OPEN` 表示窗口仍在推进
+  - **响应**: 同 Search `{ view, coverage, quality, items[], next_cursor, exhausted }`；`coverage.enumeration_state=OPEN` 表示窗口仍在推进
   - **状态**: 已注册并有路由层测试（`log_federation_test.go` 覆盖 `mode=FOLLOW_LIVE`）；前端 `LOGS_FEDERATION_TAIL_PATH` 按 `follow` 态轮询
 
 - **`GET /api/v1/logs/federation/fields`** — 可用字段发现（FR-479）
@@ -3186,23 +3194,24 @@
 
 ### POST /api/v1/nodes/:id/log-runtime/migrate
 
-- **描述**：把某存储命名空间在某 UTC 日的热层分区下沉到**冷层**。`targetTier` 由服务端固定为 `cold`，请求无法指定其它层级。冷层不具备热层的查询能力（回读须先经归档恢复回热层），故本动作是长期影响的人工操作，必须全程留痕。
-- **权限**：路由经 `permRead("node.manage")` 挂载；授权服务未接线时直接 403 `FORBIDDEN`（`日志归档授权未就绪`），不默认放行。
+- **描述**：以存储 namespace 与 UTC 日定位准入，迁移 Worker 的同一物理 UTC 日固定批次到**冷层**，可能涉及多个 namespace；入口 namespace 不是物理隔离或搬运范围。`targetTier` 由服务端固定为 `cold`，请求无法指定其它层级。COLD 是受管 VL 可查询层，健康客户端与 Catalog 权威就绪时可直接查询，不等同必须 Rehydrate 的 DEEP。迁移仍会长期改变物理 owner/目录与恢复责任，须确认 UTC 日和目标范围并留审计；物理日批次/退休屏障正在联合复验。
+- **权限**：`node.manage` 路由门 + 平台管理员主体（`getAccess.IsPlatformAdmin`），并保留操作者、入口 namespace 格式与节点绑定校验；单实例组授权不代表已获同物理日全部成员授权。非平台主体返回 403 `FORBIDDEN`，message 为 `整物理 UTC 日日志迁移仅限平台管理员`，RPC 调用数为 0；不新增权限 schema，也不把此平台门扩大到普通 runtime control。授权服务未就绪仍失败关闭。
 - **请求**：`{ "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`
   - `storageNamespace` 去空白后不得为空，否则 400 `INVALID_REQUEST`
   - `utcDay` 须为 `YYYY-MM-DD`（Go 布局 `2006-01-02`），否则 400 `INVALID_UTC_DAY`
-- **校验顺序**（顺序即优先级，2026-10-21 修正：此前完全不解析操作人、不校验目标归属、不落审计）：
-  1. **操作人**：取认证主体（JWT 用户名 / Agent 的 `agent:<名称>`，兜底 `user:<id>`）；取不到 ⇒ 403 `OPERATOR_UNKNOWN`，且**不下发任何 RPC**
-  2. **请求体**：见上方字段规则 ⇒ 400 `INVALID_REQUEST` / `INVALID_UTC_DAY`
-  3. **目标归属**（复用归档目标判据 `authorizeArchiveTarget`，**在取 Worker client 之前**，拒绝路径不下发 RPC）：
+- **校验顺序**（handler 内；外层 `node.manage` 路由门先行，2026-10-22 整日授权收口）：
+  1. **操作人**：取认证主体（JWT 用户名 / Agent 的 `agent:<名称>`，兜底 `user:<id>`）；取不到 ⇒ 403 `OPERATOR_UNKNOWN`，且不下发 RPC。
+  2. **请求体**：JSON/namespace 非空/UTC 日格式 ⇒ 400 `INVALID_REQUEST` / `INVALID_UTC_DAY`。
+  3. **平台主体**：`getAccess.IsPlatformAdmin` 必须为真，否则 403 `FORBIDDEN`，不下发 RPC。
+  4. **入口探针归属**（保留 `authorizeArchiveTarget`，在取 Worker client 前；不是单 namespace 搬运授权）：
      - `node:<id>`：只允许指向路由节点自身（**逐字符串比较**，不做数值归一 ⇒ `node:007` 与路由 `7` 不等而 403）；否则 403 `FORBIDDEN`（`仅允许访问本节点归档`）
      - `inst:<id>`：须通过 `CanAccessInstance`，且该实例确实归属路由节点。`inst:` 后非十进制 ID ⇒ 400 `INVALID_REQUEST`；路由节点本身不存在 ⇒ 404 `NOT_FOUND`；实例不存在或组外 ⇒ 403 `FORBIDDEN`（不区分「不存在」与「无权限」，避免实例存在性枚举）；实例存在但不属于该路由节点 ⇒ 403 `FORBIDDEN`（`目标实例不属于该节点`）
      - 其它形态（无 `inst:` / `node:` 前缀）⇒ 400 `INVALID_REQUEST`（`target 仅支持 inst:<id> 或 node:<id>`）
-  4. **取 client**：`:id` 非十进制 ⇒ 400 `INVALID_NODE_ID`；节点不存在或无 UUID ⇒ 404 `NODE_NOT_FOUND`；Worker 离线 ⇒ 503 `WORKER_OFFLINE`
-- **响应** (200): `{ "state": "migrated", "targetTier": "cold", "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`
+  5. **取 client**：`:id` 非十进制 ⇒ 400 `INVALID_NODE_ID`；节点不存在或无 UUID ⇒ 404 `NODE_NOT_FOUND`；Worker 离线 ⇒ 503 `WORKER_OFFLINE`
+- **响应** (200): `{ "state": "migrated", "targetTier": "cold", "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`。`storageNamespace` 仅回显入口定位目标，不是完整受影响成员清单；物理日批次/逐记录 journal 才记录固定成员与进度。
 - **错误**: Worker 返回错误或状态非 `LOG_TASK_SUCCEEDED` ⇒ 409 `MIGRATION_FAILED`（另带 `code`：缺省 `LOG_NOT_READY`，否则取 Worker 错误码）；Worker 不支持该 RPC（Unimplemented）⇒ 501 `WORKER_RPC_FAILED`；其它传输失败 ⇒ 502 `WORKER_RPC_FAILED`
-- **审计**: **仅成功分支**落 `node.log_partition.migrate`（`targetType=node`、`targetId=路由节点`），detail 含 `storageNamespace`、`utcDay`、`targetTier`、`operator`。审计中间件对本路径不产生 action，Worker 侧也不记录操作人 ⇒ CP 侧不落行即等于全程无痕。
-- **状态**: 已注册（`internal/controlplane/router/log_runtime.go`）
+- **审计**: **仅成功分支**落 `node.log_partition.migrate`（`targetType=node`、`targetId=路由节点`），detail 含 `migrationScope=physical_utc_day`、入口 `storageNamespace`、`utcDay`、`targetTier`、`operator`；失败不写成功迁移行。审计由 handler 主动记录，不依赖通用中间件。
+- **状态**：真实 RBAC 反例已红转绿，定向 `TestSixModulePhysicalDayMigration|TestLogMigratePartition` 回归退出码 0；CP 末轮完整普通、分范围 race/vet 的准确范围见 [CP 规格](specs/cp-log-query-coordinator/spec.md)。特定真实双 VL/三启证据见 [Lifecycle 规格](specs/worker-log-lifecycle/spec.md)；真后端 Chromium 已验证确认单 POST 收 409 时无假成功/重放，准确短验范围见 [共享规格](specs/worker-log-platform-contract/spec.md#2026-10-22-有限真实联合短验与剩余门禁)，不是浏览器成功搬迁或本批全部失败矩阵、独立最终复核与生产验收通过。
 
 ### POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps
 
@@ -3274,7 +3283,7 @@
 ### POST /api/v1/nodes/:id/log-runtime/:namespace/:action
 
 - **描述**：启动 / 停止 / 重启该节点上某个受管 VictoriaLogs 命名空间实例。CP 只做转发，取值合法性由 Worker 判定。
-- **权限**：同 `GET /nodes/:id/log-runtime`——仅路由级 `node.manage`；**无目标级授权、不解析操作人**。
+- **权限**：路由级 `node.manage`，handler 另以 `requireNodes("node.manage")` 复核；任何 RPC 前从已认证上下文解析操作人，缺失返回 403 `OPERATOR_UNKNOWN`。这里的 namespace 仅指 `hot/cold/rehydrate` 三个节点级日志基础设施进程，不是 `inst:`/`node:` 业务目标，不套用实例归属授权。
 - **路径参数**（CP 侧 `ToLower` + `TrimSpace` 后原样下发，**CP 不校验取值集合**）：
   - `:namespace`：允许 `hot` | `cold` | `rehydrate`（Worker `vlsup.Namespace`）。其它值 ⇒ Worker 回 `LOG_ERROR_UNSPECIFIED` / `unknown VictoriaLogs namespace` ⇒ CP **503**
   - `:action`：允许 `start` | `stop` | `restart`
@@ -3283,14 +3292,14 @@
     - proto 另声明了 `install`，但本路由下 CP **不下发** `package_url` / `package_sha256`，Worker 的 install 分支因两者为空必然失败（`LOG_ERROR_UNSPECIFIED` / `approved package URL and SHA-256 required`，CP 503；安装器未配置则 `LOG_UNSUPPORTED`，CP 501），且该分支**在命名空间校验之前**、完全不看 `:namespace`。制品安装请走 `POST /api/v1/nodes/:id/log-runtime/install`（另一 handler，另有授权）
 - **请求**：无 body（CP 不读请求体，`Content-Type` 随意）；可选 header `X-Request-ID`。
 - **校验顺序**（顺序即优先级）：
-  1. **先取 client** ⇒ 400 `INVALID_NODE_ID` / 404 `NODE_NOT_FOUND` / 503 `WORKER_OFFLINE`——**早于**下面的路径参数校验（节点解析失败时不会得到 400 `INVALID_RUNTIME_ACTION`）
-  2. `namespace` 或 `action` 去空白后为空 ⇒ 400 `INVALID_RUNTIME_ACTION`。Gin 要求两段均非空，故实际上只在「整个段是空白字符」（如 `%20`）时可达
-  3. 下发 RPC（`request_id` 取 `X-Request-ID`；`protocol_version`、`package_url`、`package_sha256` 均不填）
-  4. RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`（另带 `message`）
-  5. Worker 回 `error` ⇒ 503，`code == LOG_UNSUPPORTED` 时 501；body `{ "error": "<码名>", "message": "…" }`
-  6. 成功 ⇒ 202 Accepted
+  1. 解析已认证操作人，缺失 ⇒ 403 `OPERATOR_UNKNOWN`；再复核 `node.manage`，失败不发 RPC。
+  2. 取 client ⇒ 400 `INVALID_NODE_ID` / 404 `NODE_NOT_FOUND` / 503 `WORKER_OFFLINE`，早于路径参数空值校验。
+  3. `namespace` 或 `action` 去空白后为空 ⇒ 400 `INVALID_RUNTIME_ACTION`；只在空白路径段等异常输入时可达。
+  4. 下发 RPC（`request_id` 取 `X-Request-ID`；`protocol_version`、`package_url`、`package_sha256` 均不填）。
+  5. RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`；Worker 回 `error` ⇒ 503，`LOG_UNSUPPORTED` ⇒ 501，body `{ "error": "<码名>", "message": "…" }`。
+  6. 成功受理写 CP 审计，再返回 202 Accepted。
 - **响应** (202)：`LogTaskResponse` 原样序列化：`{ "task_id": "…", "state": 2, "error": {...} }`。`state` 是**整数枚举**（`LogTaskState`：`QUEUED=0`、`RUNNING=1`、`SUCCEEDED=2`、`FAILED=3`、`CANCELLED=4`、`STALE=5`）；因 `omitempty`，`state=0` 时该字段**不出现**。前端当前不读取该字段。
-- **审计**：**无**。POST 不匹配审计中间件的动作推导（`determineActionWithBody` 对 `/nodes/:id/log-runtime/...` 返回空 action，中间件据此不落行），handler 也不解析操作人、不调用 `recordAudit` ⇒ 启停 / 重启受管 VL 实例**全程无痕**，与同族 `migrate` / `resolve-gaps` / `import-archives` 的留痕口径不一致（如实记录现状）。
+- **审计**：成功受理由 handler 写 `node.log_runtime.control`，目标为路由节点，detail 包含 `namespace/action/operator/state`。Worker 错误或传输失败不写成功受理行；不依赖通用 POST 审计中间件推导动作。
 - **状态**: 已注册；前端仅使用 `start` / `stop` / `restart` 与三个命名空间（`useControlLogRuntime`）。
 
 ### GET /api/v1/nodes/:id/log-archive/status
@@ -3335,16 +3344,15 @@
 ### POST /api/v1/nodes/:id/log-archive/rehydrate
 
 - **描述**：把归档对象回灌（Rehydrate）为可查询投影，使冷 / 归档层历史重新可被查询面读取。按归档分区为单位成立受管任务。
-- **权限**：路由级 `node.manage` + 目标级授权（判据与错误码完全同 `GET /log-archive/status`）。
+- **权限**：路由级 `node.manage` + 目标级授权（同 `GET /log-archive/status`）；任何 RPC 与请求体处理前解析已认证操作人，缺失返回 403 `OPERATOR_UNKNOWN`。
 - **请求体**：
-  - `archiveObjectIds`：**必填且非空数组**。**实测缺参 / 空数组 / body 非合法 JSON 均返回 400 `INVALID_REQUEST`（`archiveObjectIds required`）**，且这一步**早于目标授权与取 client**
+  - `archiveObjectIds`：必填且非空数组；在操作人解析通过后，缺参、空数组或非法 JSON 返回 400 `INVALID_REQUEST`（`archiveObjectIds required`），早于目标授权与取 client。
   - `target`：可选，同 status 的 `target` 判据；空 = 本节点自身
   - `fromUtc` / `toUtc`：可选，覆盖 `time_range`。**target 为单段时 Worker 用 `fromUtc` 前 10 字符作 UTC 日**，故留空会 503（`archive target must include a UTC day or query range`）。Query 上的 `from` / `to` 在本端点**会被 body 值无条件覆盖**（恒忽略 query 时间）
   - CP 不校验 `archiveObjectIds` 的元素内容、不去重：空串元素只会把集合撑大，通常触发下方「完整对象集」拒绝
   - CP 固定 `protocol_version="log-query/1"`、`budget.limit=200`
-- **校验顺序**：请求体 ⇒ 目标授权（400 / 403 / 404 / 500，见 status 节）⇒ 取 client（400 / 404 / 503）⇒ RPC ⇒ 502 ⇒ `error` ⇒ 503 ⇒ 202
-- **响应** (202)：`LogTaskResponse` 原样序列化 `{ "task_id": "…", "state": <int>, "error": {...} }`。
-- **`state` 现值异常（需确认）**：Worker 侧 `res.State` 取的是 `LOG_TASK_SUCCEEDED` 这类**带前缀**字符串，而 RPC 边界的 `taskStateFromString` 只识别 `QUEUED` / `RUNNING` / `SUCCEEDED` / `SUCCESS` / `CANCELLED` / `CANCELED` / `STALE` 这些**裸值**，前缀形式一律落入 `default` ⇒ `LOG_TASK_FAILED`。故**成功回灌也会得到 `{"task_id":"…","state":3}` 且无 `error`**；`state` 目前不能作为成功判据。（本文件只记录现状；是否修复另议。）
+- **校验顺序**：操作人（403）⇒ 请求体（400）⇒ 目标授权（400 / 403 / 404 / 500，见 status 节）⇒ 取 client（400 / 404 / 503）⇒ RPC（失败 502）⇒ Worker `error`（503）⇒ 成功受理审计 ⇒ 202。
+- **响应** (202)：`LogTaskResponse` 原样序列化 `{ "task_id": "…", "state": <int>, "error": {...} }`。任务状态映射兼容 `LOG_TASK_` 前缀与裸值，只剥一层前缀；成功映射 `SUCCEEDED=2`，未知状态仍失败关闭为 `FAILED=3`，不再把成功回灌统一报成失败。
 - **Worker 侧语义（决定 503 的真实条件）**：
   - planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`rehydrate disabled on this worker`）
   - 归档后端未接线 ⇒ `LOG_UNSUPPORTED`（`rehydrate unimplemented on this worker`）
@@ -3357,7 +3365,7 @@
   - 并发合并：同分区任务已在跑（`waiters>1`）⇒ 直接返回既有 `task_id` / `state`，**不重复发布**
   - 发布失败 ⇒ 任务置 `LOG_TASK_FAILED` + `LOG_NOT_READY`（可重试），并标记该分区回灌失败
   - 注意：以上 `LOG_NOT_READY` 经 CP 一律变成 **503**（不是 409），与 `migrate` / `resolve-gaps` 的 409 口径不同
-- **审计**：**无**。handler 不解析操作人、不调用 `recordAudit`；POST 也不匹配审计中间件的动作推导 ⇒ 回灌这类「读取 + 校验 + 发布归档事件」的重操作**不产生任何 CP 审计行**，与同族人工动作的留痕口径不一致（如实记录现状）。
+- **审计**：成功受理由 handler 写 `node.log_archive.rehydrate`，目标为路由节点，detail 包含归一后的 `target`、`archiveObjectIds`、`fromUtc/toUtc`、`operator` 和任务 `state`。拒绝或 Worker/传输失败不写成功受理行。
 - **状态**: 已注册；**当前无调用方**；仅有目标授权回归 `log_archive_authz_test.go`。
 
 ### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）

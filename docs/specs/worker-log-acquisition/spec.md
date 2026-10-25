@@ -1,6 +1,44 @@
 # 功能规格：Worker 日志采集与持久化通道（FR-474）
 
-> 状态：实现中（Worker 配置化 FileTailer → WAL → VL → PublishedProjection 运行时已接线；远程强杀、ACK UNKNOWN→REPLAY_REQUIRED、projection-backed reclaim 已通过，磁盘满/人工恢复矩阵仍待验）　·　关联 PRD：FR-474　·　依赖：FR-473
+> 状态：已交付@v0.24.0（既有采集链路和历史验收保留；本轮物理定位、持久提交资格、证据分离及恢复责任修复与已覆盖回归完成）
+> 本次提交/功能修复验收不承诺性能、长稳或全部故障覆盖；追加最终 ACKLoss、严格完整 Worker 静默 766 等延期且未计通过，统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-474　·　依赖：FR-473
+
+## 2026-10-22 修复契约与待验收项
+
+本节保留本批修复约束；本轮代码修复及已覆盖回归按顶部声明收口，下文旧候选待验记录保留原时点、不冒当前全域通过；共享语义继承 [Shared Contracts](../worker-log-platform-contract/spec.md)。
+
+- **物理与逻辑位置分离**：源分段同时保留逻辑起点与文件物理起点，续读以所属分段映射换算；指纹绑定源代次、分段身份、逻辑与物理采点、窗口长度及摘要。缺字段的旧状态保持“证据未知”，不得伪造匹配或把逻辑水位直接用于文件 Seek；重锚后的映射与指纹须经二启、三启保持一致。
+- **持久提交资格是所有投递入口的前置门**：正常采集、暂停源排空、append 被拒后的排空必须等待对应批次的索引提交成功。WAL 内存中的 durable 标记不代表索引已提交；后台交办、`Incomplete`、提交失败或超时均不能外发该批事件，后续成功重试才可放行。
+- **三种证据不能互相升级**：`Positions.Delivery` 仅是请求结果连续前缀；ACK 只能来自真实 `REQUEST_DONE`；`VerifiedRuns` 只能来自完整逐字段可见性核验。条数相同、最大位置、恢复责任转移或人工裁定均不生成核验凭据。自动缺口消解仍要求精确连续区间与原因允许名单，人工永久裁定另存审计。
+- **读入前限制字节**：单行与单轮读取独立有界；活文件暂时 EOF 不能提交无换行的半行。UTF-8、CRLF 和跨轮续写必须保持正文与源字节位置完整；超长记录须受管隔离或背压，不能裸截断并跳过源责任。归档发现、导入和恢复不得递归占用同源操作门；归档状态区分可接管、证据不足与读取失败。
+- **恢复责任先审计后摘引用**：`CLEANED` 记录先在锁外按有界批次持久归档并取得回执，再短锁复核状态、hold、消费者与候选身份；失败或并发变化则保留活动引用。完整审计历史独立保留且可随累计清理增长，不是总空间常数；活动引用也只在正常解除/归档窗口下收敛，长期故障/hold 不承诺固定条数。最大结束位置不是恢复分段实际可取证明，不能据此降低 WAL 正文引用。
+- **物化成本独立计账**：按源、UTC 日、稳定内容窗口预留并持久记录成本；部分写、ACK 未知及“写成功但发布 CAS 失效”均消耗实际或保守成本。耗尽只阻止再造副本，不阻止只读取证、合法复用、正常尾采与有界 WAL 排空。迁移冻结期必须先取得 Catalog 物理日写许可才可写入、核验和发布。
+
+待验收：对应反例正式回归红转绿；旧 JSON/SQLite 与残留 WAL、归档、事件段环境的首启→二启→三启及回滚后再启；逐轮核对位置、指纹、缺口、审计与恢复责任。`SIGKILL` 恢复不等同真实断电耐久。
+
+### 当前恢复与回执合同（2026-10-24）
+
+C1/026 保原 capture、完整 ACK 正文、current pipe/PP token、锁外归档身份及真实 RO receiver；owner ctx/原预算贯穿 proof，发布锁与新 permit 后复验截止及父 authority/token/target。混合 immutable 历史另证，活 WAL 子集仍须实际 SQL 资格；r028 每当前成员完整 Marshal/新 Body/FP，仅严格旧 complete-index 条件下省 SHA，歧义全部 fallback，新资格不提前发布。inline/ref 正文、局部 lease/hold 公平、条件回收及 Stop 真 join 均保持；细节与最新验收统一见 [共享契约](../worker-log-platform-contract/spec.md#2026-10-24-验证状态r028性能-hold)。
+
+### durable outbox r4 接缝（本地候选已实现，联合验收中）
+
+Worker 组合根内部 `Options.DeferredDelivery=true`，独立 Manager 默认 `false`、同步兼容；无新产品配置/RPC/schema/WAL 格式或预算。新事件仍先写原 WAL，有界待办只存 source-key。`CommitAndQualify/DeliverQualified` 和 `CommitIdentity` 将真实 actual-plan SQLite 完成资格与外发分开，身份包括 EventID、canonical hash、record 区间及完整正文摘要，generic nil/水位/旧 pipe 不替代本批资格。
+
+实际 G 可以写 immutable 历史 X+活 WAL Y：`CaptureDeliverySubset` 捕获原 cut 下活动成员，Y 必须获实际 SQL 回执，X 则由固定历史行界与摘要重读证明；不要求全部正文都在当前 WAL，也不因 X 缺席而跳过 Y。written hint 保原 full actual-set 的 count/window/digest/cut/成员和历史证明，不存正文，RO 恢复重建完整集合后复核；候选级冲突走既有裁定，namespace 历史诊断不封禁健康源，真冲突留 WAL。
+
+每源 guard 覆盖全入口，局部 lease/条件回收保留 hold 公平与人工审计出口，Stop 真 join 后关资源。归档采样前先 `ReserveAppend`，忙态无 sampler 副作用；只对同对象/原游标 CAS 回退未接收部分并关 reader，已接收前缀及可提交新尾保留。自动重试由现有 SyncArchiveScan 接线驱动。准确协议及未知写/语义 Err 边界见 [共享契约](../worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中)。以下旧包测/双短仅属原 source，r4 的 ordinary/race、完整 Worker、Search 与正式性能仍待真实重绑，不标交付。
+
+### 已落地领域字段与已冻结读取接口（集成验收中）
+
+- `Segment.PhysicalStart`（`physical_start`）是逻辑 `StartPos` 对应的文件偏移；`PhysicalMappingKnown`（`physical_mapping_known`）区分真实 0 与旧状态缺证据。映射为 `PhysicalStart + (logicalPos - StartPos)`，越界不能推断匹配。`ResolveContentAnchor` 拒绝未知映射；旧非零 live 在 Poll/PrepareRotation 前稳定以 `PHYSICAL_MAPPING_UNKNOWN` 背压，旧有逻辑/身份的归档断点返回 `ArchiveUnknown`，不升级为已知 0，须外部归属证明或人工恢复。对应三条真实反例红转绿且 acquire/pipeline 包回归通过，不能据此关闭 Manager/SQLite 整链验收。
+- `Entry.ConfirmedFingerprint` 绑定 `SegmentPath/SegmentStartPos/SegmentIdentityBytes/SegmentIdentitySHA256/LogicalPos/PhysicalOffset/WindowBytes/SHA256`；登记经 `SetConfirmedFingerprint` 核对现存分段映射与身份，相同证据幂等，旧平面摘要不会自动升级成绑定证据。文件替换时先 PrepareRotation 并校验旧凭据，再刷新确认线，不能先采样新文件再给旧段贴指纹；新增真实反例已红转绿。
+- `RequestDoneRanges/DeliveryEvidence/FoldSpansUnknown` 字段已落地；本批最终证据契约要求真实请求完成 ACK 独立且最高，诊断按 State 精确归并并保留跨 State 重叠，UNKNOWN 优先旧 NOT_SENT，不能吞掉后续未知结果，也不从 Delivery/Reclaim 反造 ACK；混合态、相邻折叠、粗化失精度与 JSON 三启定向回归已过，完整长跑/SQLite 消费及最终门禁仍待。旧已裁且无证据的区间诚实为 no_evidence/UNKNOWN。任何折叠精度缺失（旧缺字段或超精确子区间上限后粗化）标记 `FoldSpansUnknown` 并让人工永久放弃整批拒绝，不能把凸包内健康字节标成丢失；旧粗化状态三启不能洗白为精确。
+- 已冻结 `acquire.ReadLimits{MaxLineBytes, MaxBytesPerPoll}` 与 `pipeline.Options.ReadLimits`：零字段沿 `DefaultReadLimits()`，默认物理行 256KiB、每轮 4MiB，包含换行且独立于 WAL 限额；归并后每轮额度至少比单行上限多 1 字节。超长行以 `ReadLimitError`/`READ_LINE_TOO_LONG` 留可见责任，停在原行首，放宽配置后续读而非拆成普通事件；acquire/pipeline 同内容末轮正式定向、完整包 test/race/vet 均退出码 0。此采集/管道绿不代替 Manager 持久完成门、交办/Incomplete 零外发与整 Worker 联合验收。
+- 归档三态接口冻结为 `ArchiveCovered/ArchiveTail/ArchiveUnknown`；发现层使用 `Pipeline.AssessArchive`，未知对象保留原物与旧身份并稳定隔离，不能仅用 `!Import` 把未知当“已覆盖”。
+- `Options.MaterializationLimits` 的 rebuild 内部默认为每稳定内容窗口 4 次、同源/UTC 日滚动 1h 内 8 次；本批另已批准 live_compaction 每窗口/小时各 4 次，所有 Class 共享默认 1GiB 小时 wire 硬顶，并在生产显式为必要压缩保留其中 1/4。类别/保留尚在实施复验，准确兼容与安全初始策略见 [索引规格 §2.8](../log-index-sqlite/spec.md#28-物化类别与必要压缩保留已批准实施复验中)。这不是采样/丢弃预算、全 Worker 磁盘/RSS 上限或性能最优值；端到端守门、正常尾采与重启重新资格证据仍待完成。
+- `archiveCleanedRecovery` 每轮最多 `min(16, MaxRows, CycleMaxRows)` 条，超时/仓储失败保留活动责任；`RecoveryArchiveRecord` 携完整 Key/Ref/Fingerprint，回执含 Key/SegmentID/Fingerprint/非空 ArchiveID，`AcquireRecoveryUse` 的幂等释放跟踪实际消费者。实际 SQLite 归档调度及 hold 竞态复验尚未完成。
+- 投递源码已消费 Catalog `AcquireWritePermit/ReleaseWritePermit`，许可目标用于选择固定 owner/目录客户端；完整写入→校验→发布的所有入口覆盖及冻结日零外写仍须联合证明。
+- 新增交办后静默欠账修复：按源登记 `durableDeliveryRetry`，复用既有 poll 与有界 replay 排空器，每轮重新取得真实持久提交资格，不靠新输入、暂停或伪造缺口；按已有自愈间隔重试，旧观察不得清除新登记，未落库时仍零外发。766 条超过单次 500 条排空且随后无新输入的正式反例已红转绿。真实 60 源短验 r2 已无 400，但 quiet 后耐久交办欠账缺少重调暴露该问题；后续相同生产处理内容的双 60 源 30s 稳态/故障恢复短验已完成 64000 条逐 ID/hash/位置/SQL 责任排空。精确故障注入、固定 view 与真浏览器范围见 [联合短验证据](../worker-log-platform-contract/spec.md#2026-10-22-有限真实联合短验与剩余门禁)；这不是正式性能长窗或所有恢复场景完成。
 
 ## 1. 背景与目标
 

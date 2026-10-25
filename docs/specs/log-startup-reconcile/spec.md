@@ -1,8 +1,26 @@
 # 重启增量对账（源 × UTC 天，条数级）（FR-497）
 
-> 状态：🚧 开发中　·　关联 PRD：FR-497　·　分支：feat/log-platform-hardening
+> 状态：开发中（日志恢复子项本轮证据分离、稳定窗口物化预算、热层窗口及重启修复与已覆盖回归完成；整 FR 的自动收养 T7、60 源重启 ≤60s/随机强杀 100 次仍未完成验收）
+> 本次提交/功能修复验收不代表整个 FR 交付；性能、长稳及追加故障覆盖延期，统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-497　·　分支：feat/log-platform-hardening
 > 关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
 > 依赖：FR-496（采集索引 SQLite 与 `projection` 记账面）　·　被依赖：FR-498（规模压测的「60 源重启 ≤60s」判据）
+
+## 2026-10-22 恢复证据与成本修复约束
+
+以下保留本批修复约束，当前代码修复及已覆盖回归已收口，历史候选进度不替代顶部声明与共享验收表，也不代表自动收养 T7 或全部重启规模验收通过；共用 [采集修复契约](../worker-log-acquisition/spec.md) 与 [索引修复契约](../log-index-sqlite/spec.md)。
+
+- 条数级对账只证明当前条数，不产生真实 `REQUEST_DONE`/ACK 或逐字段 `VerifiedRuns`；未确认的请求结果、核验证据与恢复责任保持独立，最大结束位置不能代替可取恢复来源。
+- 重建成本以源、UTC 日和稳定内容窗口持久化，写前预留，实际/未知写入及发布 CAS 失败记账；不能以改变 attempt 或重启刷新额度。预算耗尽不阻止只读取证、可证明复用、正常尾采和有界排空。
+- 热层窗口过滤不写、不验证也不宣称已发布；全部超窗口的 pending 收口须证明对应不确定范围已被覆盖，不能清除窗口内真实失败。混合窗口不以权威全量末端转移从未发布区间的 WAL 责任。
+- 候选公平调度以实际完成源推进；共享准入必须确定性原子检查，不能按“多跑几次碰绿”代替并发上界证明。
+
+待验收：条数相同但内容变化的证据隔离、物化预算跨重启/CAS 冲突/未知结果、真实脏环境二启/三启与回滚后再启、超热窗与混合窗责任不丢、候选并发反例结论。`60 源重启 ≤60s` 与持续负载门禁仍须实测，不能由功能测试推导。
+
+### durable outbox r4 的恢复边界（本地候选已实现，联合验收中）
+
+written attempt 是每源有界内存 hint，不保存正文、不是第二个发送队列，也不能跨重启继承成功。RO 确认按原代次/真实 permit 物理目标重建原 full actual-set：活动 WAL Y 重取原 cut/成员及实际 SQL 回执，已回收历史 X 另从 immutable eventstore/受控 inline 固定行界、摘要重读；保留原 count/window/digest，不用当前 cut 冒原 cut。未知结果先只读不重插，语义 Err 不冒作 Pending/copies；只有实测 missing 才交既有预算重建。
+
+冲突只针对 actual candidates 及权威兄弟，namespace 历史诊断不封禁健康源；预存变体由既有裁定选真实合法赢家，真冲突保留 WAL/可见责任，不能按 ID 洗白。归档 Busy 在采样前原子 reservation 阶段拒绝，未改变 sampler；同对象/原游标 CAS 仅回退未接收部分并关 reader，已接收前缀及新尾 COMMIT 不丢。自动重试依赖既有 SyncArchiveScan 装配，不只依赖 Manager.Start。新恢复/停机/归档矩阵、完整 Worker 与性能仍按 r4 真实结果联合验收，旧 v8 短验不背书新 hash；详细 [共享契约](../worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中) 为准。
 
 ## 1. 背景与目标
 

@@ -1,6 +1,47 @@
 # 功能规格：Deep Archive 与 Rehydrate（FR-478）
 
-> 状态：实现中（Remote S3 Provider、Worker Archive Registry/Rehydrate RPC 已接线；**真机 RustFS S3 验收通过**：受管 Raw Put/校验/幂等登记、manifest 封存、对象往返、Rehydrate 任务租约/同 mergeKey 复用/磁盘预留拒绝/完成；manifest engine 记录真实 VL build_id；发布 generation 清理矩阵待验）　·　关联 PRD：FR-478　·　依赖：FR-477
+> 状态：已交付@v0.24.0（本轮读取前资源准入、预留/流式硬界、重复合并及取消释放修复与已覆盖回归完成；既有归档/Rehydrate 及 RustFS S3 验收历史保留，未新增生产 S3 认证）
+> 本次提交/功能修复验收不承诺性能、长稳或全部故障覆盖；已有结果及延期范围统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-478　·　依赖：FR-477
+
+## 2026-10-22 Rehydrate 资源预算修复契约
+
+以下内部接口已实现，当前已覆盖回归按顶部声明收口；下文旧候选进度保留原时点，不据局部证据宣称全部 RPC/生产 S3 新验收通过；不改变旧 `NewQueryBackend` 构造或新增 proto/Worker RPC。
+
+- `QueryBackend.SetResourceBudget(RehydrateResourceBudget)` 接收两个闭包：`Admit(context.Context) error`、`ReserveStaging(context.Context, int64) (func(), error)`；装配复用运行时 controller 的后台准入与 staging 预留。
+- 对象 IO 前根据受检 manifest 大小保守预留，读取过程中执行流式硬字节上界；预留持有到 IO、校验、发布真实结束，不能等进入 publisher 后才临时加门，也不重复计算同一预留。
+- manager 在昂贵读取前 Start，以同 mergeKey 合并真实在途重复请求；完成后只保留有界任务摘要，不让正文长期挂在任务结果。复用历史成功任务不能代替当前 projection/readiness 验证，失效后的再次重建须有独立证据。
+- 取消/TTL 禁止新使用者，但必须等实际 IO goroutine 退出才释放 consumer pin 与预留；不能只因调用方先返回就清理仍在使用的对象或目录。
+- 预算拒绝按现有协议保留 `LOG_NOT_READY`、可重试和 `ARCHIVE_NOT_RESTORED` 语义，未恢复不能变成完整零结果；对象集、权限 scope 与归档身份仍须一致。
+
+归档包初步闭环回归已执行且退出码 0：
+
+```bash
+GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOMAXPROCS=2 go test -p 1 ./internal/worker/logs/archive -count=1 -v
+GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOMAXPROCS=2 go test -p 1 ./internal/worker/logs/archive -race -count=1
+```
+
+定向计量已证明：准入拒绝/unknown 时零对象读取；对象谎报 1 字节时只读 2 字节后拒绝；manifest 超界读至 4MiB+1 后拒绝且 raw 读取为 0；合法完成重试不再读正文，本地真实文件与 typed controller 联合路径保留原物和 WALDrain。覆盖 REHYDRATE_FAILED 语义，不等于完整 S3/生产验收。
+
+S3 Download 非 2xx 错误路径另已闭合红转绿：应用层最多排空 64KiB 后 Close，取消会 Close 解除阻塞；保留原 HTTP 错误、成功 body 不预消费且不输出错误正文，不修改其它操作的全局 drain 语义。401/403/429/503 等构造错误已计量，未承诺 TCP 底层零预取。
+
+追加两包回归均退出码 0：
+
+```bash
+go test -p 1 ./internal/worker/logs/archive ./internal/worker/storage -count=1 -v
+go test -p 1 ./internal/worker/logs/archive ./internal/worker/storage -race -count=1
+go vet -p 1 ./internal/worker/logs/archive ./internal/worker/storage
+```
+
+manifest 预扫已与 `encoding/json` 强类型字段折叠对齐：对重复/大小写/Unicode/转义后的同一受控容器拒绝处理，不能借同名容器绕过数量界；原始对象文件名仍区分大小写。生产预扫文件叶子测试/race 及包含该增量的完整 archive+storage 两包末轮 test/race/vet 均退出码 0，8 个本范围源码/测试文件各轮前后 SHA-256 一致；1025 对象在强类型解码前拒绝、大小写不同两对象真实恢复仍通过。这不等于真实 MinIO 或生产验收。
+
+真实 MinIO 环境门控测试未执行，不作为通过项。待联合验收：Worker 整链与实际对象存储、取消/TTL 跨层 pin 及最终审查；不能由包测推定生产可用或全局 RSS 已达标。
+
+### 已落地内部边界（2026-10-22，回归与装配验收中）
+
+- 读取前预算 setter 已落地；本地、内存与真实 S3 Provider 的可选流式 `OpenArchiveObject` 接缝不支持时明确拒绝，不回退全量 `Get`。硬界为 manifest 4MiB、对象 1024、原始合计 64MiB、单行 1MiB、事件 100000；超界保持 not-ready/未恢复，不伪空成功。
+- manifest 预留 32MiB，Unmarshal 前先检查 JSON 嵌套不超过 64 层、raw_files/校验对象等集合至多 1024、source/一般容器至多 100000，再复核强类型元数据总量，避免小正文的大量空对象放大。正文预留为 `4×原始总字节 + 事件数×2048 + 2×min(原始字节,1MiB) + 32KiB`；实际流最多读取每对象声明大小加 1 字节后判超界，并核对 ByteCount/记录数。metadata/body 预留持有到真实 IO、校验、Publish/Complete 结束及瞬时正文摘除。
+- 仅 QueryBackend 生产任务完成后摘除 `entry.events`、`Result.Events` 和逐事件 `OriginalTimes`，保留任务/租约/状态、分区与临时目录引用；通用 Manager.Complete/RestoreEvents 不改，现有 Worker RPC 从未返回这些正文/逐事件时间 map。
+- QueryBackend 另保留至多 128 条 summary；`PublishedRehydrateSummary(taskID)` 返回 `RehydrateSummary{TaskID,EventCount,TimeRange,Verified,Published}`，时间范围为最早事件至末事件加 1ns 的开界，不保存逐事件时间 map。缺摘要不代表历史任务未成功；成功任务复用须由 `CanReuseRehydrate` 检查当前发布凭据，不以历史成功代替 Catalog/Query readiness。
 
 ## 1. 背景与目标
 
@@ -36,7 +77,7 @@
 
 ## 6. 风险 / 待定
 
-- FR-473 已冻结；本规格仍须完成发布 generation 清理矩阵和发布级验收，未完成前保持开发中。真机 RustFS S3 验收（登记/幂等/manifest/往返/Rehydrate 任务）已通过，证据见 `.tmp/fr433-experiments/D-deep/`。
+- FR-473 基线已冻结；发布 generation 清理矩阵、本批资源预算与发布级验收未完成前保持开发中。既有 RustFS S3 历史验收见 [受控记录](../worker-log-platform-contract/acceptance-record.md)，不以临时过程产物替代当前联合验收。
 - 具体 VL tag、资产哈希和兼容矩阵由 FR-476 资产审批冻结。
 
 ## 3.1 Archive 与 Rehydrate 契约

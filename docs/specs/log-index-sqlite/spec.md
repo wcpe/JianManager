@@ -1,7 +1,10 @@
 # 采集索引迁移至本地 SQLite（FR-496）
 
-> 状态：🔨 开发中（实现已落地并在生产运行：迁移/SQLite 索引/`log_index.*` 配置面均已接线；剩余项见 §3 第 7 条与 PRD FR-496 状态列）　·　关联 PRD：FR-496　·　关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
+> 状态：已交付@v0.24.0（本轮完整状态映射、真实范围剪枝预算、持久回执及本地迁移/脏状态三开修复与已覆盖回归完成；既有历史保留，不冒新增生产部署复验或断电认证）
+> 本次提交/功能修复验收仅按既有证据覆盖范围收口；性能、长稳及追加故障覆盖延期，统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-496　·　关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
 > 依赖：无（可先行）　·　被依赖：FR-497（增量对账依赖索引可精确记账）
+
+本轮已覆盖完整增量字段往返、真实删除/周期预算、审计持久回执和兼容迁移；旧已完成 v1 裁剪桥接按原来源 SHA/全态凭据校验，keep=0/2 的三开提交进度及负控已过，适配器与 stateindex 完整普通/race 退出 0。结合最终完整 ingest/全 Go 证据收口本次修复，不把局部三开外推为新生产部署或断电通过。下文旧候选“待验/仍在执行”按原时点保留，当前范围以顶部声明及共享验收表为准。
 
 ## 1. 背景与目标
 
@@ -85,8 +88,8 @@ CREATE TABLE instance_binding (
 - 迁移凭据存在 meta 的 `legacy_json_migration_v1`：来源/映射/整态指纹、总行数、已提交前缀与完成标志；每个前缀进度与对应行在同一事务提交。重启续跑须核对来源及实际已提交行内容，不只相信行数或缓存指纹；未完成迁移拒绝普通索引写入。无凭据的非空库只在全量逐值等价时允许接管，否则拒绝覆盖。
 - 迁移失败、来源变化或校验不一致 → 拒绝启动采集并明确报错（不静默降级），保留两侧供人工处置。最终校验使用只读快照，短写事务复核版本与凭据后才标完成；旧 JSON 在提交期间改变时不归档。
 - 旧文件还含 `source_configs` 与 `instances`（实例绑定，stdout/stderr 采集依赖），**一并迁移**并在校验中逐项比对。
-- **回滚步骤（写成脚本 `scripts/rollback-log-index.sh`）**：停止 Worker → 归档现有 `ingest.index.db` → 把归档的旧 JSON 改回 `ingest.state.json` → 启动 Worker；因两格式共用同一语义层（游标/缺口/投影），回滚不需要反向导出。
-- 保留 JSON 只读导出（`ingest.index.db` → 导出命令）供排障与回滚；全表读取共用一个只读事务的 WAL 快照，不能把独立连接并发提交前后的多代状态拼在同一份结果里。
+- **回滚仅是备份时点的受控恢复，不是无损降级承诺**：停止 Worker，完整保全新 SQLite 的一致状态（含需要的 WAL 状态）、独立恢复审计与物化成本证据后，才可按已核对的旧 JSON 备份时点恢复；须另行确定升级后增量的可回放范围，以及旧版忽略新物理映射/指纹/ACK 等字段的边界。不得让旧二进制直接打开新元数据，也不能以“无需反向导出”推定迁移后最新状态已保全；生产回滚演练仍未验收。
+- `ExportIndexJSON` 只读导出活动 `State/Load` 的旧 JSON 形状，不含独立 `recovery_audit`/`materialization_attempt`，只能作排障与受控回滚参考，不能当完整备份或无损降级。全表读取共用一个只读事务的 WAL 快照，不能把独立连接并发提交前后的多代状态拼在同一份结果里。
 - 持久化计划在实际快照临界区分配顺序令牌，提交门内整份拒绝被较新接纳计划超越的旧计划（包括根行、派生行和剪枝）；部分提交/`Incomplete` 同样推进接纳门槛，出门后重新规划。`persistCovered` 只能单调推进；并非要求实时 revision 一直不变，避免持续采集让所有计划饥饿。
 - scoped 映射先区分根行与变化源派生行，未变化源不构建 gap/batch/WAL 再丢弃；恢复新发现正文缺失等实际修订时保留 dirty，由后续持久化覆盖，不能用恢复登记动作将其提前标 clean。
 - 提交门回归以真实首次 `enqueue` 屏障建立等待顺序：普通 FIFO/后到优先先获门与完整提交 coalescing 分开验证；合并短路须按每个请求的准确声明号核对 `persistCovered`，不能用 sleep 猜队列，也不能因未实际获门就跳过优先权断言。回归：`TestPersistGateFairFIFO`、`TestPersistGatePriorityFirst`、`TestPersistGateCoalescedWaitersKeepFIFO`。
@@ -94,9 +97,9 @@ CREATE TABLE instance_binding (
 ### 2.4 索引有界化：历史投递批次（`delivery_batch`）裁剪
 
 **问题（FR-498 实测 @60 源）**：索引里唯一随总量线性增长的表是 `delivery_batch`（≈**5 MB/天 @60 源**），
-且原先**没有任何裁剪路径**——60 源长跑会把索引无界撑大，与 §1 的目标（写入成本随总量解耦、索引稳态
-不随总量增长）相悖。其余表在稳态下是 1–2.5 MiB 量级：`source_wal` 已按条目 UPSERT/删除，`gap`/
-`position`/`projection`/`source_aux` 与总量无关。
+且原先**没有任何裁剪路径**——60 源长跑会把索引无界撑大，与 §1 的目标（写入成本随总量解耦）相悖。
+历史稳态夹具中其余活动表约 1–2.5MiB，但不能外推所有表/aux 恒定：本批精确请求诊断随真实空洞或
+结果分区增长，独立 CLEANED 审计历史随累计清理增长；长期故障/hold 也会延长活动窗口，见 §2.6。
 
 **消费者与判据（列全，不凭感觉）**：`delivery_batch` 行的完整读链只有一条——
 
@@ -235,6 +238,43 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
 
 **配置键**：`log_index.persist.*`，登记见 §6；非法值（非正行数/耗时）一律回退默认——配置误写不得
 让切分失效（那会把达标线交还给配置运气）。
+
+### 2.6 2026-10-22 完整状态与真实预算修复（修复中）
+
+本节是批准的修复目标，尚未验收；§2.4/§2.5 的历史成本数据不能证明这些新边界已成立。
+
+- **完整往返**：`Gap.FoldSpans`（折叠前子区间）及其粗化/未知标记、永久裁定区间与审计尾、分段物理起点/绑定指纹、投递批次、恢复责任及物化台账逐字段往返。旧行缺少增量字段时保持原缺证据语义；旧 SQLite/JSON 迁移必须可续跑，不能仅抬映射版本让旧库拒启动，也不能漏字段后仍宣称逐字段一致。
+- **请求结果与恢复责任分离**：`Positions.Delivery` 保持请求结果连续前缀，恢复转移与 reclaim 不能被当成真实 ACK 或逐字段可见性证明。§2.4 的历史裁剪归一化不得掩盖水位/凭据差异；剪枝前后须核对该证据语义，而非只核对行数。
+- **范围删除按实际变化行计费**：不能把删除整源/整范围记作 1 个逻辑操作。写入、离散删除与范围剪枝共用真实事务行数、周期行数和耗时预算；分批上界及中断恢复可观察，未提交部分保持可续跑。单个 SQL 执行耗时与提交单元目标不同，不能把调度检查承诺为操作系统级绝对时延保证。
+- **审计先存后裁**：`CLEANED` 恢复引用的完整审计按有界批次持久归档并返回回执，之后才允许领域层短锁复核候选、hold 与消费者并摘活动引用；失败不裁。“有界”指每批工作，不表示完整历史总空间固定：独立历史随累计清理增长，活动引用随未解除/未归档窗口增长；故障或长期 hold 下不能承诺固定条数。审计归档与物化成本属于 Worker 本地日志元数据，不存全文日志或 CP 业务数据。
+- **持久物化窗口**：按源、UTC 日、稳定内容窗口持久预留并结算，重启不能清空预算；实际写入、未知结果及发布 CAS 失败均计成本。额度耗尽只禁止再造副本，仍允许只读取证、合法复用和正常尾采。
+
+待验收：真实范围删除大批次的最大事务/周期变化行、完整增量字段往返、旧映射桥接与迁移中断续跑、审计失败零裁剪、并发 hold 复核、物化账本重启不重置；旧环境迁移→首启→二启→三启及回滚后再启逐轮比对。SQLite 进程崩溃恢复与真正断电耐久分开，不以 `synchronous=NORMAL` 或 `SIGKILL` 单项推导断电零丢失。
+
+### durable outbox r4 的 actual-plan 资格（本地候选已实现，联合验收中）
+
+本轮不新增表/列，不改 WAL 格式。外发资格只取真实 SQLite 完成的 actual plan 与同一 pipe 的活动 WAL 身份交集，包含 EventID、canonical hash、record range 和完整正文摘要；提交子集/失败、后台交办/Incomplete、generic nil、缓存旧计划或更高水位均不能替代本批回执。资格是内存精确许可，不是原始请求 ACK、VerifiedRuns 或投影发布凭据。
+
+混合历史 X+活 WAL Y 时，Y 的 actual-plan receipt 必须独立成立，不能因 X 不在 WAL 而跳过；X 另以 immutable eventstore/受控 inline 历史固定行界、摘要证明。full actual-set 的原 digest/cut/成员须保留并重建复核，不能用当前 cut 冒原 cut，也不把历史证明伪装成 SQL 回执。原 schema/持久化格式与审计/物化表边界不变；详细 [r4 契约](../worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中) 和新门禁仍在联合验收，旧 v8 回归不作新 hash 证明。
+
+### 2.7 已落地仓储与适配边界（2026-10-22，联合复验中）
+
+- `gap` 增量列包含 `fold_spans/fold_span_merges/fold_spans_unknown/reason_code/resolved_at_utc/resolved_by`，贯穿指纹、UPSERT、读取与旧表补列；`ConfirmedFingerprint/RequestDoneRanges/DeliveryEvidence` 进入 `indexLedgerCore` 双向映射，缺证据不造值。
+- 领域 `CLEANED` 状态的完整历史落独立 `recovery_audit` 表，而不是一个名为 CLEANED 的表：键为 `(source_key,ref_key)`，保存 fingerprint、完整 payload、payload SHA 与 archive_id；同身份不同正文拒绝，持久提交成功才回回执。每条 payload 上限 512KiB，批次受事务/周期行预算约束，分页 `ListRecoveryAudit` 为 1～200 条；不进入活动 State/Load/mirror/aux。
+- `materialization_attempt` 保存源、UTC 日、稳定 window、候选物理 generation、状态、预留/实际字节、创建时间及 verified/published，唯一键为 `(source_key,utc_day,window_key,generation)`。`ReserveMaterialization/UpdateMaterialization/ListMaterializations` 为内部仓储接口；预留即计费不退款，同候选再次预留只返回旧记录、不再授予写许可，published 不能先于 verified。
+- window 不包含物理代次，按排序后的事件身份、canonical hash 与位置摘要标识相同规范内容；窗口累计副本和源/日滚动小时次数/字节分别限制。未知结果保守计 `max(reserved_bytes,written_bytes)`；窗口耗尽没有自动时间重置，小时门给出最早计费加 1h 的 retryAt。调用方只读核验/合法复用不应重新预留。
+- 范围 DELETE 依据真实可删主键按 `min(pruneDeleteBatchRows, MaxRows)` 切批；只同步 `DELETE RETURNING` 实际主键对应的 mirror，删净才推进剪枝水位。所有真实删除进入事务与周期行预算，子集统计不能重复相加。
+- 旧 JSON 映射 v1→v2 桥先严格核对同一原始来源 SHA 与完整 v1 StateSHA；只有旧迁移已完整提交、原来源双水位授权且实际存储逐列匹配时，才承认合法批次裁剪，不拿裁后子集哈希冒充完整凭据。`LegacyStateSHA/LegacyCommitted/LegacyPruneKeeps` 固定完整旧凭据、前缀与每源精确尾窗形态，续迁不得重新推断改变；来源变化、全态哈希伪造、未完成迁移或水位外删改均拒绝。对应原红/绿与负控已过，索引范围末轮 race 仍在执行，不把定向桥绿外推全包。旧映射不豁免新字段一致性；PASSIVE checkpoint 的 busy 次数与剩余 frames/未完成时长/WAL 高水位分开，`busy=0` 不等于全部归并完成。
+
+首轮定向适配回归已执行且退出码 0：`go test -p=1 ./internal/worker/logs/ingest/stateindex ./internal/worker/logs/ingest -run 'TestIndex|TestMigration|TestCompletedMigration|TestWALPrune' -count=1 -timeout=240s`。之后新增的独立审计三开、混合态三开、物化重启与完整 Manager 调度闭环仍待最终复验，不把首轮定向结果外推为全部逐字段迁移通过。
+
+### 2.8 物化类别与必要压缩保留（已批准，实施/复验中）
+
+- 已落地 `MaterializationRequest.Class/MaterializationReservation.Class`，只接受 `rebuild/live_compaction`；旧空值与旧表新列默认 `rebuild`，不能通过任意新类别绕预算。Class 不进候选唯一键，同源/日/window/generation 跨 Class 也不再授予第二次写许可；List 返回全类别且逐记录带 Class，消费方须过滤匹配类别与验证凭据。
+- 安全初始策略：rebuild 每稳定窗口 4 次、每小时 8 次；live_compaction 独立每窗口 4 次、每小时 4 次，必要压缩失败也计费。所有 Class 共享同源/UTC 日滚动小时总字节硬顶，当前内部默认 1GiB，不是各自再获 1GiB。
+- 已落地 `MaterializationLimits.CompactionReserveBytes`，G 生产默认须显式传总小时字节的 1/4。仓储对 rebuild 类别小时计费字节另约束 `<= HourlyBytes-reserve`，并对所有 Class 总计费字节约束 `<= HourlyBytes`；live 可用保留及剩余共享额度，实际计费取 `max(reserved,written)`。仓储旧调用 reserve=0 兼容，自定义值须满足 `0 <= reserve <= HourlyBytes` 并拒绝溢出；生产消费与三开边界测试仍在复验。
+- 这是安全初始策略，不是经性能实验选出的最优默认，也不保证任意大输入或无限失败下压缩必成；额度不足仍可只读取证/安全复用与退避，不永久 abandon 整源或无限追加 micro generation。
+- 正常 active-tail 安全追加、重启后只读取证重新取得资格与必要压缩必须各有正式回归，不能继承未知写资格。该小时 wire 字节保留与磁盘 WAL/staging/Export 的 25% 空间预留属于不同维度，不能混算。
 
 ## 3. 验收标准
 

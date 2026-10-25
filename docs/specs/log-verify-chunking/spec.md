@@ -1,9 +1,25 @@
 # 投影校验的分簇与读回量上界（FR-498 采集侧 P0 续：verify 占比 85.6%）
 
-> 状态：🔨 开发中　·　关联 PRD：FR-498（单机 60 实例规模压测与容量基线）·　分支：feat/log-platform-hardening
+> 状态：已延后（FR-498 性能/容量长稳专项未完成；分簇与回执相关代码修复及已覆盖回归完成，历史读数和失败门限保留）
+> 本次提交/功能修复验收不承诺 250ms 首屏、原 9×30min 长窗或全部故障覆盖；延期范围与现有结果统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-498（单机 60 实例规模压测与容量基线）·　分支：feat/log-platform-hardening
 > 关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）
 > 依赖：`docs/specs/log-acquire-concurrency/spec.md`（跨源并发）、FR-473~484（采集/投递/投影契约）
 > 被依赖：无（**不改任何对外契约字段与 wire 语义**；改动只在 Worker 内部校验调度）
+
+## 2026-10-22 持续调优验收边界
+
+本轮代码修复及已覆盖回归完成，后续性能/长稳调优已延期，以下方法与旧候选待验记录保留原门限和历史归属。历史分簇读回量和短夹具吞吐只用于定位，不能代替 [Shared Contracts §6.6](../worker-log-platform-contract/spec.md#66-初始工程性能判据) 的延迟、RSS、磁盘和预留门禁。
+
+- 先短预检，再按 10→30→60 源递增；60 源同资源、同负载比较三档已冻结校验参数。每个正式稳态窗口与 503 恢复窗口分别持续 30 分钟，不缩成几十秒宣称达标。
+- 记录真实生成行/字节、持久确认与实际查询集合；Worker 与 VL 分开记录 CPU/RSS/heap/GC/IO，报告前台成功与失败延迟、503/取消、verify 吞吐、积压斜率、事务实际变化行、WAL/staging/Export 预留及物化放大。
+- 缓存或查询并发只在瓶颈证据支持时做单因素对照；保留失败样本，不用超时丢弃后仅统计成功请求的 p95/p99。
+- 硬件或系统 quota 不符合 4vCPU/8GiB 时如实登记差异；`GOMAXPROCS` 不等于 CPU quota。未执行的正式窗口、Windows 运行时或真正断电不标通过。
+
+### durable outbox r4 校验预算（本地候选已实现，联合验收中）
+
+固定 12 次按原始校验簇定格，沿用同 ctx/截止和原始 UTC 窗，不按后续 Poll 续期，也不因切成多个 12KiB query 子片就提前耗尽完整证据所需份额。子片只缩 ID 集合，仍逐字段核对 `_time/_msg/event_id/level/stream/canonical_content_hash` 并跨响应去重；probe 只决定何时做完整证据轮，不能充作 VerifiedRuns、ACK、发布或回收证据。语义 Err 保留其类别，不转换为 Pending/copies；未知 written 先 RO 确认原实际目标。
+
+公共 runtime 测试 fixture 的六字段响应改用 RawMessage，保留原缺失/null/错误类型/UTF8与转义，非六字段路径保持原始行，按 payload SHA 缓存等价元信息；这是测试响应协议修正，不是新生产能力，也不改测试预算/断言/输入。当前新完整 Worker 1s/9 窗、Search 与正式 9×30min 尚待真实结果；旧 FAST 大于 250ms、精确样本为 0，不能标达标或最优。详见 [r4 契约](../worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中)。
 
 ## 1. 背景与目标
 

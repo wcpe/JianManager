@@ -1,9 +1,24 @@
 # 采集轮跨源并发与持久化门控（FR-498 采集侧饱和修复）
 
-> 状态：🔨 开发中　·　关联 PRD：FR-498（单机 60 实例规模压测与容量基线）·　分支：feat/log-platform-hardening
+> 状态：已延后（FR-498 性能/容量长稳专项；本轮有界排空、持久提交资格及并发代码修复与已覆盖回归完成，历史读数保留）
+> 本次提交/功能修复验收不承诺性能、长稳或全部故障覆盖；延期范围与现有结果统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-498（单机 60 实例规模压测与容量基线）·　分支：feat/log-platform-hardening
 > 关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
 > 依赖：FR-473~484（采集/投递/投影契约）、FR-496（采集索引 SQLite）、FR-497（启动增量对账）、FR-499（登记路径与长临界区解耦，`docs/specs/log-ingest-register-lock/spec.md`）
 > 被依赖：无（本项为吞吐根因修复，不改任何对外契约字段与 wire 语义）
+
+## 2026-10-22 并发与持久资格修复边界
+
+本批目标是让正常采集、暂停源排空及拒绝后排空共用对应批次的持久提交资格；后台交办、部分提交、`Incomplete`、失败或超时均不放行外发。共享资源准入必须原子检查并覆盖真实在途任务，预算超额保留有界 WAL 排空，不用杀实例或丢数据代替降级。完整契约见 [采集规格](../worker-log-acquisition/spec.md) 与 [索引规格](../log-index-sqlite/spec.md)。
+
+本轮持久化失败零外发、成功重试后放行、确定性交错下的原子并发上界、取消与恢复按已有具名回归及最终整包证据收口；下文旧候选进度保留原时点，当前以顶部声明和共享验收表为准。历史吞吐/持久化数字不等于本批达标；持续调优方法见 [校验分簇规格](../log-verify-chunking/spec.md)。
+
+### durable outbox r4 的并发边界（本地候选已实现，联合验收中）
+
+生产组合内部开启异步 source-key 出站，独立 Manager 默认同步；不是新正文队列或产品键。短锁内提交/捕获既有 WAL，锁外取得 actual-plan 资格并执行网络/逐字段校验，同步兼容路径也不持采集状态锁跨 IO。每源唯一 guard 覆盖普通/重放/重建/维护/归档入口，只有仍 active 的 owner ctx 可重入，旧 ctx 不复活。
+
+局部 prefix/range lease 与 hold 公平轮转避免反复同一头部耗尽预算，非相交新尾可提交。最终当前正文/ACK/ledger target 的纯内存条件复核与裁剪原子执行，拒绝保留责任；不持全 WAL 锁跨网络/journal。Stop 先关准入、取消并 join 真实在途 WG 后 flush/close，不将取消/等待超时当作已退出。归档采样前原子 reservation 只跨采样/Append，忙态无 sampler 副作用；新并发/停机矩阵与 raw 完整 Worker 仍须按 r4 重绑，旧全门不代替新结果。完整协议见 [共享契约](../worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中)。
+
+**r8d 轮尾与资格边界**：仅生产 deferred=true 组合的私有轮尾将 best-effort 元数据交既有后台通道，strict 新批外发前 actual-plan SQL 真完成门不变。WAL 短锁内深复制全 Fields，锁外同 plan 复用完整 BodyJSON/身份；live 精确歧义回退正文重算，无 EventID 全局缓存，不松正文/ACK/PP 条件。指定受控 60 源/20 批单次耐久门已通过，限域及精确值见 [共享规格](../worker-log-platform-contract/spec.md#durable-outbox-r8d单次受控耐久门通过联合验收中)；这不替代新全仓、双短/live、Search 或长期门禁，旧 r4 未测口径保持历史归属。
 
 ## 1. 背景与目标
 

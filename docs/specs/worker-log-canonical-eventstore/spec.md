@@ -1,6 +1,30 @@
 # 功能规格：canonical 事件体落盘 compact（FR-484）
 
-> 状态：实现中（eventstore 追加段 + ingest 读写路径改造已完成；阶段 2/3/4 实测通过；ADR-095 与 PRD/ARCHITECTURE/CHANGELOG/契约 §6.6 已对账）　·　关联 PRD：FR-484　·　依赖：FR-473（Shared Contracts 已冻结）　·　分支：feature/fr-log-platform-foundation
+> 状态：已交付@v0.24.0（本轮清单缺失、严格末行容错、冻结字节界及目录身份兼容修复与已覆盖回归完成，合法配置注册、两源 Append/三启已有具名证据；既有落盘与容量历史保留）
+> 本次提交/功能修复验收不承诺性能、长稳或全部故障覆盖，也不冒 Windows 运行或断电认证；已有结果及延期范围统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-484　·　依赖：FR-473（Shared Contracts 已冻结）　·　分支：feature/fr-log-platform-foundation
+
+## 2026-10-22 事件段读取修复契约
+
+本节保留修复约束，本轮修复及已覆盖回归按顶部声明收口，下文旧候选进度保留原时点，不把历史容量读数用于证明本批正确性；不改变 [ADR-095](../../adr/095-canonical-event-store-on-disk.md) 的权威集合与裁剪禁则。
+
+- 已登记或存在事件段的目录缺失 MANIFEST 时必须明确损坏，不能伪装成合法空源；只有可证明的新空目录可以初始化。
+- 只容忍最终物理段最后一条未完成写入的非换行尾记录。带换行的非法 JSON、中间坏行或读错误均硬失败，不得以“尾段”名义吞掉任意损坏。
+- 读取在短锁下深拷贝完整 manifest、段列表和每段冻结字节界，然后锁外执行文件 IO 与用户回调；并发 Append 不得使旧读取看到新追加行，也不能让回调重入产生死锁。
+- 超出单事件编码硬界等非法输入须在落盘前拒绝；Append 失败不能污染已持久集合或让后续读取/重开变成脏段。上游生产 Multiline 默认有界不代替存储自身校验，此失败状态机补充仍在修复/复验。
+- 目录身份编码必须在真实合法注册链上无歧义；如需新编码，保留旧 `Manifest.Key` 与旧目录可读兼容，不能批量重命名现有数据目录。撞名候选须经真实入口证明，不能凭不可能注册的键宣称漏洞成立。
+
+待验收：清单缺失、严格末行损坏分类、阻塞回调与并发追加的冻结读面、锁外 IO/回调、真实注册链目录身份及兼容恢复；未完成测试不标通过。
+
+### 当前实现对账（2026-10-22，联合验收未完成）
+
+- 新建源目录使用 `source-` 加原始源键完整 SHA-256 的 64 位十六进制串；Open 校验摘要目录与 `Manifest.Key` 一致，重复 Key 拒绝。旧有效清单目录按其原始 Key 原位读取，不批量重命名；空目录不反推身份。
+- 有段却无、空、坏清单，只有清单临时文件或存在清单外段时返回 `ErrCorrupt`。统一行解码上限为 8MiB；只允许未封闭末段在真实 EOF 处的无换行半行恢复，完整坏行、封段半行和非 EOF IO 错误硬失败。
+- `Store.Snapshot` 返回 [ReadSnapshot](../../../internal/worker/logs/eventstore/snapshot.go)：成功清单深副本、每段完整 `Bytes` 边界及固定文件身份的逻辑读引用。`Count/Iterate` 使用同一快照；追加、滚段或 Store 关闭不扩展旧读取集合，用户回调在锁外，Close 禁新读而不提前关闭在途调用正在使用的句柄。此引用不授权删除或转移上游恢复责任。
+- `OpenReadOnly(root)` 不创建缺失根，Append 返回 `ErrReadOnly`，读取只以只读方式验证完整前缀，不截断/Sync/写 MANIFEST，Close 不写；正常 Open 仍负责受控崩溃校准。读取快照使用逐段惰性 open/close 与 `os.SameFile`/完整字节界复核，避免同时持有全部段 FD；换段/缩水明确失败，不承诺抵御恶意外部删除。NOFILE64 及 0444 文件/0555 目录的只读取证、SHA 不变/暂停写者/三启正式定向回归已退出码 0；隔离只读挂载能力探测被内核拒绝，故权限测试不能冒作 EROFS 挂载验收。共享 `ExportEventStatus --at` 正式回归已退出码 0：0444/0555 路径的半行前缀定位三轮与完整坏记录三轮拒绝均保持段/MANIFEST SHA 不变；此定向 ingest 测试不等于 ingest 全包通过。
+- 目录同步先验证打开/目录类型并传播 Close 错误；非 Windows 仅豁免明确 `os.ErrInvalid` 能力错误，真实 Sync 失败传播。Windows 不对只读目录句柄 Sync、不承诺目录项断电耐久，文件 fsync/rename 错误仍传播；事件段完整包（含跨包注册测试）的 Windows/amd64 `go test -c` 交叉编译退出码 0，不是 Windows 运行或断电通过。
+- 合法目录身份候选已证实可达：`worker.Load → Manager.Register → Append → 三次关闭/重开` 接纳构造源 `inst:41/a-b` 与 `inst:41/a:b`，逐源身份、正文与 Manifest.Key 保持隔离；这是合法配置的数据隔离缺陷，不是未认证越权。
+- 最新 `go test -p 1 ./internal/worker/logs/eventstore -count=1 -timeout=180s -v`、该完整包 race/vet 与范围 lint 均退出码 0，包含新增输入拒绝、低 NOFILE、只读、身份保护、目录能力及原注册链。此前因其它模块在途接缝退出 1 的尝试保留，不作为行为反例或覆盖最新绿证；范围 lint 不等于全仓 lint，整批串行最终门禁仍待完成。
+- 输入预检的纯编码微基准（每批 1000 条、每条 512 字节，不含磁盘 IO/fsync）中位耗时约为单次编码的 1.80 倍、分配约 2 倍；这是两遍编码的局部成本，不是 Append 总耗时、CPU 硬配额或 60 源性能结论，仍须联合性能门禁。
 
 ## 1. 背景与目标
 
@@ -47,9 +71,9 @@ FR-484 把 canonical 事件体从「state.json 内联 + 内存常驻」改为「
 <worker-root>/var/log/
   ingest.state.json        # 仅元数据（ledger/WAL/代次/EventsStored 标志）
   events/
-    <source-key-hash>/
-      MANIFEST.json        # 段清单（含 format_version、段元数据）
-      <seq>.ndjson         # 追加式事件段（每行一个 Event JSON）
+    source-<完整SHA256>/  # 新源目录；旧有效目录原位兼容
+      MANIFEST.json        # 段清单（含版本、原始源键、段元数据）
+      seg-<seq>.ndjson     # 追加式事件段（每行一个规范事件）
 ```
 
 - 段为 **NDJSON**：追加写 + 逐行可解析，允许流式读回而不 materialize 全量；
@@ -60,9 +84,9 @@ FR-484 把 canonical 事件体从「state.json 内联 + 内存常驻」改为「
 
 | 情形 | 行为 |
 |---|---|
-| 最后一段尾部截断 | **可恢复**：丢弃不完整尾行，保留已完整写入的事件 |
-| 中间段存在坏行 | **硬失败**（`ErrCorrupt`）：不静默跳段，避免产生静默数据缺口 |
-| MANIFEST 缺失/不可解析 | 硬失败，交由调用方决定是否重建 |
+| 未封闭末段在真实 EOF 处有无换行半行 | 可恢复：只截掉该未完成尾记录，保留完整行；封段不适用 |
+| 完整坏行、非 EOF 读错、封段半行或单行超过 8MiB | 硬失败（`ErrCorrupt`），不以“最后一段”掩盖损坏 |
+| 存在事件段但 MANIFEST 缺失/空/不可解析，或存在清单外段 | 硬失败；新空目录不反推源身份，不伪装已有源为空 |
 | MANIFEST 版本不支持 | 硬失败 |
 
 ### 3.3 ingest 读写路径改造
@@ -130,7 +154,7 @@ FR-484 把 canonical 事件体从「state.json 内联 + 内存常驻」改为「
 
 A/B 对照（同机同负载，HEAD 基线 vs 本改动）：`state.json` **77 803 KiB → 177.9 KiB**；基线 900s 未完成采集且 RSS 达 2853 MiB，本改动 110s 完成。
 
-证据：[`acceptance-real.md`](acceptance-real.md)（受控）+ `.tmp/fr444-experiments/phase5-attribution.md`（归因与 A/B，不入库）。
+历史容量证据见受控 [验收记录](acceptance-real.md)；它不替代 2026-10-22 批次的正确性与持续性能复验。
 
 > **⚠ 数字更正（2026-09-24）**：本节先前发布的「64/128/150 源稳态 = 25.9/30.9/35.8 MiB」及
 > 「峰值 64 源 ≈538MiB / 150 源 ≈1152MiB」均为**错误读数**，已按上表更正：

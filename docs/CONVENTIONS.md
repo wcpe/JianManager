@@ -39,6 +39,17 @@ proto/                  # Protobuf 定义
 - 不要在 service 层直接写 SQL，通过 repository 封装
 - Migration 使用 GORM AutoMigrate
 
+### 日志数据面配置与证据
+
+- Worker 本地 SQLite 只存日志元数据，不存 CP 业务数据或全文查询库；迁移/字段扩展必须与 [索引规格](specs/log-index-sqlite/spec.md) 逐字段往返和旧状态兼容要求一致。
+- 持久提交资格、请求结果前缀、真实 ACK、逐字段可见性凭据和恢复责任分开建模；后台交办或内存 durable 标记不能当提交成功。`CLEANED` 活动引用必须先取得有界持久审计回执、再短锁复核消费者/hold 后裁剪；IO 不跨共享锁。
+- 日志运行时默认值只由实现的公共默认入口产生，配置层只绑定、校验与兼容回退；时长复用批准版本解析，不能在不同装配层各自解释月份或舍入精度。准确键、默认、非法值与启层条件见 [运行时规格](specs/worker-victorialogs-runtime/spec.md) 和 [成本治理规格](specs/log-cost-governance/spec.md)；本批新增键在实现核对前只属于修复目标。
+- **生效时点必须标明**：`worker.yml`/环境变量的启动期键（包括 `log.level`/`log.format`）修改后需重启 Worker，不因使用 `LevelVar` 就声称支持热更新。CP 注册/心跳下发的 `log.acq.*` 仅按其已实现白名单动态应用；namespace 启停/健康恢复不等于任意 YAML 配置热加载。
+- 产品搬运年龄、native TTL、复制校验/恢复 SLA 与恢复副本责任是不同量；有限 TTL 即使有缓冲也不是最后副本永久保证。生产删除三闸默认全关；仅隔离构造数据可为边界验证启用删除，不得把测试配置写成生产默认。
+- cache、Go 软限制、RSS、磁盘和全局预算分别计量；未知样本保留 unknown，显式停止的进程可记录已知 0。准入必须覆盖实际在途/预留并保留有界 WAL 排空，不能通过杀实例或丢数据满足预算。
+- 单物理行/单轮读取界不等于逻辑 Multiline 缓存界；生产 pipeline 的有限默认只从一个公共入口取得，Manager/Worker 不另造值。独立 Normalizer 库零值语义与显式合法限制保持，溢出须以既有部分事件状态承接完整原文和源区间，不靠 eventstore 拒绝超大事件代替上游有界性；见 [归一化规格](specs/worker-log-normalizer/spec.md)。
+- 2026-10-22 批次验收尚在进行：功能包测、真实 VL/浏览器、持续性能、`SIGKILL` 与真正断电证据分开；未运行不标通过。完整边界见 [Shared Contracts](specs/worker-log-platform-contract/spec.md)。
+
 ### 并发与锁
 - 共享锁的临界区不得跨越慢操作：`Poll` / 投递（VL 写）/ 持久化（索引、DB 事务）/ `Flush` / `Close` / 跨进程调用（gRPC、HTTP、子进程 IO）一律在锁外
 - 新增或修改锁时，在获取点注释**锁序**（完整链路，如 `cycleMu → registerMu → pendingMu → mu`）与**最坏持有时长**及量化口径；量化持续有排队者的锁不得用 `TryLock`（Go `sync.Mutex` 饥饿模式下锁空闲也返回 false）

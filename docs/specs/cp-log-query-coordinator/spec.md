@@ -1,6 +1,37 @@
 # 功能规格：CP 跨 Worker 日志查询协调器（FR-480）
 
-> 状态：实现中（logcoord + 联邦 HTTP + **生产装配**：CP `main` 经 `logcoord.Assemble(pool, nodeSvc, instanceSvc)` 注入；TunnelDialer=`PoolClientFactory`；`inst:`/`node:` 目标解析与真实 Readiness（状态∩隧道）已落地。`*` 全量/历史持有者目录与远程真机联邦仍待验收）　·　关联 PRD：FR-480　·　依赖：FR-479
+> 状态：已交付@v0.24.0（本轮真实 Worker view 绑定、覆盖保真、整请求预算及当前页导出修复与已覆盖回归完成；既有联邦装配和验收历史保留）
+> 本次提交/功能修复验收只覆盖既有具名回归及指定真实 live，不承诺性能、长稳或全部故障覆盖；已有结果及延期范围统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-480　·　依赖：FR-479
+
+## 2026-10-22 联邦与导出修复契约
+
+本节保留修复约束，准确 HTTP 字段以 [API 参考](../../API.md) 为准；本轮已覆盖回归及指定真实 live 按顶部声明和共享验收表收口，下文旧候选待验记录保留原时点，不冒全部联邦/浏览器分支通过。
+
+- Fast 首屏汇总 Worker Search 实际返回的 view/vector，完整原子存入 CP 后才向浏览器公开 CP view/cursor；后页禁止用空 Worker ViewID 隐式重建最新集合。普通、快速及缓存路径必须使用同一真实引用与授权集合。
+- Search/Stats 保留逐 Worker 顶层 coverage、partial 原因与 quality；Fields/Facets 保留现有 wire 的 coverage/截断证据，CP Facets 按覆盖/截断保守派生统计质量。当前 Fields/Facets proto 没有 `LogQuality`，Fields 不虚构独立 quality；顶层失败不能被逐目标 success 覆盖。任一参与 Worker 失败或安全排序边界未证明时，允许 partial 行但不生成跨越未知范围的全局 cursor，`exhausted=false`，调用方须能重试同页。
+- 规划、实际 Worker RPC、分页补取与合并共用整请求字节/时间/并发预算；公平正数预留，零份额不拨号、不建 view、不执行查询。请求默认预算与执行期剩余额度不能混用。
+- **当前页导出 HTTP 已实现并通过定向跨层回归**：复用既有 `POST /api/v1/logs/federation/export?range=page`；服务端禁用 Search 缓存并直接执行同 view Stats，复核授权、完整 coverage、无 pending、exact quality 与预算后只物化该逻辑页，不使用客户端原始行。`all` 兼容清除 cursor 导整窗；准确参数、0/省略 limit、400/403/409 与 200 JSON 阻断见 [API 当前契约](../../API.md#日志联邦查询端点fr-479480482http-已注册)。不新增 Worker Export RPC；真实网络/VL/浏览器仍待联合验收。
+- 全部匹配导出当前有效窗口内全部匹配；显式自选时间段改变范围时创建匹配的新 view，不能夹带旧 view。三种范围在数据刚好相同时可以产生相同内容，验收要证明范围正确而非强求文件不同。
+- 下载前必须再次复核权限；pending、partial、歧义、超预算或取消时不交付成功附件。CP 缓存淘汰/取消不等于 Worker 跨节点即时释放租约，现有协议仍以 Worker 有界 TTL 兜底。
+
+定向回归（2026-10-22）：以下命令已执行且退出码 0，覆盖首屏真实 view、缓存/并发追加、未知页边界、Fields/Facets 顶层摘要与实际 Reader 字节、零份额不拨号、取消上下文、page/all 兼容及新鲜导出闸门；不是网络、真实 VL 或浏览器验收。
+
+```bash
+go test -p 1 ./internal/controlplane/logcoord -run 'TestReview05|TestSixModule' -count=1 -timeout=180s -v
+go test -p 1 ./internal/controlplane/router -run TestSixModuleHTTP -count=1 -timeout=180s -v
+```
+
+后续两处独立复核增量已红转绿；logcoord 完整普通/race、router 完整普通、迁移/page HTTP 增量 race 与两包 vet 已通过。完整 router 单独重跑退出码 0，此前依赖/夹具编译失败尝试保留，不删测试或当作行为红证。
+
+```bash
+go test -p 1 ./internal/controlplane/logcoord -count=1 -timeout=240s
+go test -p 1 ./internal/controlplane/router -count=1 -timeout=600s
+go test -race -p 1 ./internal/controlplane/logcoord -count=1 -timeout=300s
+go test -race -p 1 ./internal/controlplane/router -run 'TestSixModuleHTTP|TestSixModulePhysicalDayMigration|TestLogMigratePartition' -count=1 -timeout=180s
+go vet -p 1 ./internal/controlplane/logcoord ./internal/controlplane/router
+```
+
+这些是准确的分范围组件证据，不是 router 全包 race 或全仓门禁；此前跨层组件回归为进程内 PB 调用，不能冒作网络证据。后续真实 CP/Worker/VL 的非空 940 条固定 view Search/Stats/Export 集合与真后端 Chromium 下载/取消指定场景已通过，详见 [有限联合短验](../worker-log-platform-contract/spec.md#2026-10-22-有限真实联合短验与剩余门禁)。该短验不代表全部多节点/迁移失败矩阵、全 Go 末门或正式性能完成。
 
 ## 1. 背景与目标
 

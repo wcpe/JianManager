@@ -1,6 +1,7 @@
 # 功能规格：日志成本治理（分层 / 采样 / 保留）
 
-> 状态：**部分落地**（采样、保留及冷层驱动器已接线；本轮修复的完整回归与真机复验尚须单独核验，不沿用历史自证作为当前通过结论；观测面与分级验证等边界见 §7）
+> 状态：开发中、部分落地（本轮统一时长、TTL 余量、删除时间边界、资源准入与物理日续跑修复及已覆盖回归完成；事件体段/归档对象回收、搬运/删除指标等未实现边界仍见 §7，gz 导入接线归 FR-504、长期吸存观测仍未验，不将整 FR 标交付）
+> 本次提交/功能修复验收不承诺性能、长稳或全部故障覆盖；延期专项与已有结果统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)，生产删除三闸默认全关。
 > 关联 PRD：**FR-501**　·　ADR：**ADR-098**（日志保留、分层与归档）/**ADR-099**（成本治理与不变量 R）
 > 关联：FR-498（采集侧成本）、FR-477（分区 Catalog 与冷热 Lifecycle）、FR-474（容量门禁）
 > 实测环境：本地 VictoriaLogs **v1.52.0**（真二进制，独立数据目录，未触碰生产）
@@ -11,6 +12,28 @@
 `worker-log-platform-contract/spec.md` 为准。
 
 ---
+
+## 2026-10-22 修复约束与待验收边界
+
+本节保留修复约束；本轮代码修复及已覆盖回归按顶部范围声明收口，历史候选“待验/未完成”保留原时点，当前结果以共享验收表为准，不从方案推定未实现功能可用。
+
+- 受管 VL 参数和余量计算复用批准版本的统一 native TTL 解析，支持小数且不预先取整成天；产品 TTL 的分钟/永久保留等策略语义单独解析，不能把二者单位混用。旧配置键维持回退兼容；仅启用相应层时才要求明确正的复制校验/恢复 SLA、实际接收端/driver 与可执行 native TTL 余量。
+- 有限 native TTL 到期仍会原生淘汰，不受平台显式删除三闸保护；即使配置缓冲，也不能承诺搬运无限失败时“最后副本永存”。产品搬运年龄、受管 VL 淘汰时间和恢复副本约束分开呈现，失败须在余量内处置。
+- 生产删除三闸继续默认全关，Sweeper 不接入常态装配。隔离构造数据上的删除验证，必须由代码白名单生成半开 `_time < cutoff`；核对 cutoff 前后 1ns、其它源/级别与任务完成后的保留集合，不能仅凭任务受理返回成功。
+- 冷层驱动复用物理日固定批次、逐记录 journal、真实 write permit/lease/read pin 与退休屏障；Owner 已切 COLD 或清理等待不是完整成功。目标日已存在的 HOT 残留走受控逻辑补录，不覆盖旧 COLD，不把正常 pending 永久跳过。
+- cache、Go 软限制、RSS、磁盘和全局预算分别约束；unknown 不能当 0，停止进程的 0-known 与未采样不同。控制器启动立即有界采样，前台/后台/预留准入消费真实预算，同时保留有界 WAL 排空。
+
+待联合验收：统一时长、资源准入、迁移与查询/恢复整链及正式稳态性能；各组件已验证范围见对应规格，不把历史变异或短夹具外推整批通过。默认关闭不创建新分层策略，但既有 Frozen 责任仍由独立恢复 loop 续跑。真实短验 r2 的 steady/recovery 无 400 不等于欠账排空：quiet 后耐久交办未重调问题经 766 条正式回归红转绿，后续双 60 源 30s 稳态/恢复各 64000 条对账已通过；该 [有限联合证据](../worker-log-platform-contract/spec.md#2026-10-22-有限真实联合短验与剩余门禁) 不替代正式长窗。9×30min 未启动，约 371ms 的 FAST 短验 p95 有并行测试干扰，不能标性能达标或最优。
+
+### 当前调优裁定（2026-10-24）
+
+raw 耐久批门与短验数据正确性不替代首屏、完整 Search 或恢复全覆盖；当前性能仍 HOLD，长矩阵未运行；相关性能、长稳和追加故障覆盖专项已延期，不再阻塞本次功能修复提交，生产默认不改。机制保持原准入、重放、物化与 proof 预算，回执优化不靠缓存全文或再造副本换速度；准确读数与剩余条件验证统一见 [验证状态](../worker-log-platform-contract/spec.md#2026-10-24-验证状态r028性能-hold)。旧失败/HOLD 与过程证据保留交付索引，以下原有候选记录按历史时点理解。
+
+### durable outbox r4 成本边界（本地候选已实现，联合验收中）
+
+固定 12 次按原始校验簇重排，既有物化/资源额度不调大；未知 written 先 RO，语义 Err 不转 Pending/copies，不以重复插入掩盖不确定结果。新事件仍由原 WAL 承接，actual-set 历史成员另保 immutable 证明，不能跳过活 WAL 子集 SQL 资格；不通过丢弃或过早回收换吞吐。旧 v8 全门、双短与 live 的原 hash 结论保留，新 r4 ordinary/race、全仓/raw Worker 1s/Search/双短/live/安全及 9 窗仍待绑定真实结果。FAST 短验曾大于 250ms、精确样本为 0，9×30min 继续 blocked，不记最优、验收或交付；准确协议见 [共享契约](../worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中)。
+
+**r8d 单次事实刷新**：当前受控 4vCPU/8GiB/noSwap、60 源工作集的 20×1000 闭合事件真实 SQL 完成门已通过，精确读数及旧 run4～run7 失败/HOLD 历史见 [共享规格](../worker-log-platform-contract/spec.md#durable-outbox-r8d单次受控耐久门通过联合验收中)。这不是长期/最优或整个性能验收；轮尾 best-effort 元数据改交既有后台通道不改变 strict 新批 actual-plan SQL 门、正文/ACK/PP 责任，不新增预算或配置。新全仓、双短/live、Search 和 9×30min 仍待，本节旧 r4“1s 未测”仅指其原候选时点。
 
 ## 1. 不变量 R（区间守恒）——本项的一等不变量
 
@@ -170,6 +193,14 @@ const (
 
 ---
 
+### 2026-10-22 隔离删除边界验证
+
+`ClientDeleter` 只接受代码白名单可生成的规范级别/源过滤器，将时间限制直接合入 filter；批准引擎的闭区间用 `cutoff-1ns` 实现 `_time < cutoff`，不再把独立 start/end 当删除边界。纳秒范围溢出/下溢拒绝。
+
+已在核验 SHA 的批准 v1.52.0、独立回环端口与全新构造数据根验证：输入 6 条，任务完成后精确保留 4 条，cutoff 本身、之后 1ns、其它源与其它级别保留，之前的目标记录删除，隔离引擎正常退出。恢复旧错误 adapter 的隔离 overlay 对同一集合断言真实转红，非编译失败。仅该隔离测试启用 delete，生产三闸与 Sweeper 装配不变。
+
+复验入口：`JM_VL_BIN="$VL_BINARY" go test -p 1 ./internal/worker/logs/retention -run TestApprovedVLDeleteContractExactNanosecondSet -count=1 -v`；`VL_BINARY` 应由本地批准资产注入，测试内核对审批 SHA，缺该环境导致 Skip 不算通过。完整资源/故障/持续性能仍待联合验收。
+
 ## 5. 实测：VictoriaLogs v1.52.0 能力边界
 
 | 能力 | 实测结果 |
@@ -178,7 +209,7 @@ const (
 | `/delete/*` | **存在**，真实路由是 `/delete/run_task`、`/delete/active_tasks`、`/delete/stop_task`（不是 `/delete`） |
 | 删除调用形态 | `POST /delete/run_task?filter=<LogsQL>[&start=][&end=]` → `{"task_id":"..."}`；`filter` 是参数名（不是 `query`/`match[]`）；`| delete` 管道**不**被接受 |
 | 门禁 | 未开 `-delete.enable` → 400 `requests to /delete/* are disabled`；受 basic auth 保护（无凭据 401） |
-| 生效时延 | **即时**（实测 t+0s 已不可查；`active_tasks` 为空 = 任务已完成） |
+| 生效时点 | 异步后台任务；需等待该 task 从 `active_tasks` 消失并核对精确保留集合，受理不等于完成 |
 | per-level 真删 | 实测可行：`filter=level:debug` 删净 debug、info/error 原样保留 |
 | `-retention.maxDiskSpaceUsageBytes` / `maxDiskUsagePercent` | **存在**（超限自动丢最老 per-day 分区），**尚未接线** |
 

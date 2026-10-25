@@ -4,6 +4,80 @@
 >
 > 本规格是 FR-473～484 的开发前闸门。它定义正式版契约基线；后续发现问题允许通过显式评审修订，但必须同步依赖模块、兼容规则和测试。未通过本规格的验收，不得按模块全面开发 Lifecycle、Archive 或 CP 联邦。
 
+### 2026-10-25 功能修复收口与延期专项
+
+**本次提交仅收口本轮代码修复及已有证据覆盖的功能回归，不承诺性能达标、长期稳定或全部故障覆盖。** 用户已接受功能修复收口、性能专项延期；FR-473～484 的既有交付历史保留，FR-475 按 Linux 范围交付、Windows 运行时未认证；FR-496 的本地迁移与脏状态三开按已有集成证据收口，不冒新增生产部署复验。FR-497 全自动收养 T7 等未验项、FR-501 未实现的回收/指标等仍保持开发中；FR-498 性能/容量长稳专项标记延期，需求和门限不改。
+
+250ms 首屏性能、原 9×30min 长窗、追加最终 ACKLoss 覆盖、严格完整 Worker 静默 766 及 Worker fileCPU 诊断均从本次功能修复收口的阻塞条件移为**延期专项**：分别仍是未达标、未执行或未完成验证，绝非通过或降门。已有回归、质量、raw COMMIT 与指定真实 live 的有效范围见下表；各证据保留自己的源码/输入归属，本次仅更新文档状态，不把旧 seal 或旧执行结果重标为新文档内容下的实跑。原失败、HOLD、skip 和尚未覆盖分支继续保留；下文有日期的旧候选“待验/禁跑/交付状态不动”等措辞只描述当时，不覆盖本节范围裁定。
+
+### 2026-10-22 修复批次范围与验收
+
+本批针对采集、账本/SQLite、处理/事件段/生命周期、VL 运行时、查询协调及日志面板的既有契约缺陷实施修复，不改变事件身份、源代次、三进程边界或默认删除闸门。当前状态为 **r028 代码修复及已覆盖功能回归完成、完整质量门相对基线通过（余留 CFR 条件未测）、live 原 scope 已完成；性能 HOLD 并延期**。旧 v8 指定联合短场景只对其原源码成立；本次功能修复收口不等于全部缺陷核销、整平台全交付或性能认证。
+
+- 采集恢复必须保存可重建的物理/逻辑位置映射和分段绑定指纹；活文件瞬时 EOF 不是完整行边界。单行/单轮读取预算之外，生产 pipeline 的逻辑 Multiline 缓冲也须有有限默认，溢出显式承接原文与源区间并集，不改独立 Normalizer 库零值语义、不另造 ID 算法或丢弃源责任。
+- WAL 的内存 durable 标记、索引提交资格、请求结果前缀、REQUEST_DONE 与 VerifiedRuns 分别代表不同证据；所有投递入口共用提交资格门，交办后静默也须沿既有 poll 有界重取资格，未实际提交前零外发，不能依赖新输入或伪造缺口解锁。自动缺口消解共用精确连续区间和原因允许名单。
+- SQLite 对缺口子区间、裁定审计、定位凭据及恢复责任逐字段往返；范围删除计入真实事务/周期行预算。活动恢复引用只有先保存完整审计、取得持久回执并复核 hold/消费者后才能裁剪。
+- 重建成本绑定源、UTC 日及稳定内容窗口；物化成功但发布 CAS 失效、部分写和 ACK 未知均消耗相应成本预算。预算不得阻断只读取证、合法复用和正常尾采。
+- 生命周期按物理 UTC 日冻结写入接纳并排空在途写者；同批成员持久固定，逐记录 journal 后状态不得被批摘要覆盖。已有 COLD 同日内容不得被覆盖或直接拼接底层存储文件，迟到 HOT 残留须经受控补录与逐字段校验转移责任。
+- Query View 固定完整逐源投影并获得真实有界租约；实际读取使用 read pin，取消/到期不得提前拆除仍在读取的目录。纯迁移保留可读旧引用，集合改变则明确失效。未证明全局安全分页边界不得推进游标。
+- CP 首屏保存真实 Worker view；Fields/Facets 的顶层覆盖、截断和整请求预算不得在适配/合并中丢失。面板三种导出分别是当前页、当前有效窗全部匹配和显式自选时间段；改范围须新建匹配 view，范围碰巧相同时允许内容相同。当前页复用既有导出 HTTP 的 `range=page`，要求同 view、入页 cursor 与 limit，禁用 Search 缓存并新鲜复核同 view Stats、权限与覆盖，不接收客户端原始行；该 HTTP 增量已实现并通过定向跨层回归；真实 VL 与真后端 Chromium 的指定短场景已通过，准确范围见下述联合短验，不外推所有场景或正式性能验收。
+- VL 配置统一版本化时长语义，显式区分 native TTL、产品搬运年龄及恢复副本；有限 TTL 不代表无限最后副本保护。运行期启动/恢复须有真实业务接线，预算采样须接到有界准入；独立诊断必须脱敏、有界且不递归写 VL。
+
+完成判据是原反例纳入正式回归并红转绿、旧状态兼容迁移及脏环境首启/二启/三启逐字段一致、真实隔离 VL 的迁移/租约/分页/导出链通过，并按本规格 §6.6 分列正确性与资源门禁。当前已覆盖功能回归与完整质量门的结果见下表；§6.6 未达性能和未执行长窗移至延期专项，不更改原判据。全仓 lint 仍有存量失败，本批新增为 0，不称 raw 全绿，也不关闭规则造绿。生产配置变更、部署/发布、Windows 运行时和真正断电验证不因本批本地修复自动获得授权或视为已完成。
+
+### 2026-10-24 验证状态（r028，性能 HOLD）
+
+当前机制已实施，验收结果按各自冻结输入归属，不挪用旧源证据；原有历史段落保留原时点。既有正式历史参见 [验收记录](acceptance-record.md)，中间 FAIL/HOLD 与研究流水保留交付审计索引，不在本节重贴。
+
+- 新批仍须真实 actual-complete Apply 的精确资格；混合历史以 immutable 证据另证，活动 WAL 子集不跳 SQL 门。轻 receipt 索引只有同 owner、old cut≤new cut、seq-revision 全组唯一 captured-Durable 才能省重复 SHA；每当前成员仍完整 Marshal、新 SQL Body/FP，歧义、未来、Restore/Replay、refs 水合和 Commit 态变化严格 fallback，最终 old-receipt 精确 live 交集及指针/current-pipe CAS 不变，无全文缓存。
+- RO 补证保原 capture、完整当前 ACK 正文及 current-pipe/PP-token 短 CAS，不借最大水位；STAGED 先锁外持久归档 lookup 保身份，再绑定真实 RO receiver。ACKLoss 仍 Unknown，written 尾确认不饿死更早实测 missing 修复；源 owner ctx/原共享查询与物化预算贯穿 proof，最终发布锁后验 attempt 截止，新 permit 后重验父 authority/token/target。有界连续 prefix/局部 lease/hold 公平和 Stop 真 join 保持，网络与归档 SQL 不跨 WAL 锁；证据不足保债，不将现场未采 hint/Verified 的初因说成全部定案。
+- selector 仅等价分组，完整源/代次/closed、字段、排序/tie 和预算保持；inline/ref 的正文语义不变。无新产品 API、schema、配置、队列/线程或预算，有限增量安全复核不等于全面认证。
+
+| 最新验收项 | 实际结果与限域 |
+|---|---|
+| 完整隔离 ingest race | 硬 4CPU/8GiB/0swap：797 pass、0 fail、3 原 skip；binary/Docker/converter 均退出 0 |
+| 普通全 Go | 7517 pass、68 包、0 fail、9 test skip，另 5 无测试包；跳过为原 8 加 grpc CFR 的 TLS 条件 skip，decompiler CFR 本轮 PASS，剩余 CFR 条件未测不作覆盖 |
+| vet / lint / build | vet 与 CP/Worker build 均退出 0；原规则 lint 454→416、新增 0、raw exit 1 仍为存量，不称 raw 全绿；各门首尾输入核对一致 |
+| raw 耐久批门 | 原 60 源 drain 与 20×1000 真实 SQL COMMIT 通过；p95=0.805227885s、max=0.846686539s、0 超 1s，仅此受控工作集 |
+| 6/30 steady / recovery | 各 64000 条、60 源 drain、Stats/Export 数据正确性 PASS；FAST 首屏 p95=516.801758ms / 608.351093ms，均超 250ms。恢复实见 503=44、ACKLoss=0，ACKLoss 本轮未覆盖，不能称恢复全覆盖或伪报原 120s drain 失败 |
+| r028 live / 正常容量 | 原严格基础 15 项及第 16 项确认 409 已通过；当前页/时间窗下载、同 view 校验、半开边界和 native 在途取消隔离成立，仅限原 scope，不扩为 TanStack observer E2E 或未覆盖历史/迁移成功分支。正常 800×60 容量路径已验证，不外推独立 pressure、复杂 PP 或 RSS 硬界 |
+| 延期：首屏/长稳与最终故障覆盖 | 原 250ms 首屏门未达，原 9×30min 未执行；r028 恢复 ACKLoss=0，追加最终 ACKLoss 覆盖未验。未放宽门限，均不计通过 |
+| 延期：严格完整 Worker 静默 766 | 准备阶段失败，未进入原 120s 恢复窗，仍为 PARTIAL；原 SQLite 局部回归不替代完整 Worker 证明，不裁定为产品 quiet 反例 |
+| 延期：性能诊断 | 引擎诊断 FAST p95=416.487991ms，仍未达 250ms，不能当正式完整 Search 成绩；Worker fileCPU 业务取证未执行，无新性能或产品根因结论 |
+
+首屏 FAST Pending 不充作完整 Search 样本，Stats 亦不替 Search 分母。此前短档及最后 2/30 steady 均未同时满足正确性与首屏门，失败原证保留；完整 Worker 特定延期766补证的私有夹具协议已对齐、目标766已真实追加，但原18s锁期已采 typed-Deferred 增量为0（另2个非Deferred返回的具体 error 未知，不判 BUSY 或非 BUSY；亚秒尾未采，不推全程从未返回），未进入原120s恢复，证据仍不足、非产品quiet反例；原SQLite单测静默766只属原scope，不替代该完整Worker证明；性能仍 HOLD，9×1800s 未运行，连同追加最终 ACKLoss、严格完整 Worker 静默 766 和 Worker fileCPU 诊断延期；本轮不再为这些专项继续调优或重跑，不改变原输入/门限。PRD 按 FR 分别归真，生产默认不变；不称最优、长期稳定、全部验收或生产投产。
+
+### durable outbox r8d（单次受控耐久门通过，联合验收中）
+
+以下为旧候选时点的历史记录；最新状态以前述验证节为准。
+
+当前 17 文件候选清单 SHA-256 为 `b6837cb8abad3731d36f8405e912b152b84596065aea7943c9b468934850ae04`，独立增量审查未报告新 P1。生产 deferred=true 组合的私有轮尾仅将 best-effort 元数据交给既有后台持久化通道；新批外发仍受原严格 actual-plan 真实 SQL 完成门约束，未把交办当完成。WAL 短锁捕获私有全 Fields 快照，同 plan 的身份与 BodyJSON 来自同次完整编码；live 精确复核遇歧义回退完整正文，不建 EventID 全局缓存，不放松正文/ACK/PP 门，也无 RPC、schema、产品配置或预算变化。
+
+一次受控 **4vCPU/8GiB/noSwap、60 源工作集**的 raw run8 已通过 drain 与原 `p95≤1s` 耐久门：20×1000 个闭合事件全部真实到达 SQL COMMIT 前缀，p95=`0.609764603s`、max=`0.719532125s`、超过 1s 为 `0/20`，raw 退出码 0。这只是该次工作集/20 批门的实测，不称最优、长期稳定、全部验收或生产投产。旧 run4 p95≈1.987s、run5≈1.913s、run6 因真实缺陷 HOLD、run7≈1.214s 均保留；跨 run 宿主负载不同，不把差值当严格性能收益。
+
+新全仓、新双短/live、Search 与正式 9×30min 仍待真实结果，旧 v8/r4 的门和 live 不能套给新 hash。下述“1s 未跑”等描述保留其旧候选时点，不否定本次 r8d 单次门，也不把本次通过泛化到其余未测项。
+
+### durable outbox r4（本地候选已实现，联合验收中）
+
+本节对应 r4 的 16 文件冻结候选（清单 SHA-256 `802bbfe6dc895c801145de00b3034da22124b796c9193caf5261572e06168344`）。三个只读代码补审未报阻断，有限范围安全核对为 0 finding；这些不是新候选全 Go、实际 Worker 或性能验收。旧 v8 的全门、双短、live 及其失败历史保留，不能沿用为 r4 最终绿。
+
+- **组合与耐久资格**：Worker 生产组合根内部显式 `Options.DeferredDelivery=true`，独立 Manager 默认 `false`、保持同步兼容。不新增产品键、RPC、schema、WAL 格式或预算。原始新事件先耐久进入既有 WAL，调度器仅合并有界 source-key、不保存正文；外发前以真实 SQLite 完成的 actual plan 核对活动 WAL 子集的 `CommitIdentity{EventID,CanonicalHash,Record,BodyDigest}`。在该生产 outbox 路径中，generic nil、内存 durable、更高水位、交办/Incomplete、旧 pipe 或旧计划都不能授予资格；资格、原始请求 ACK、VerifiedRuns 与 PublishedProjection 互不升级。
+- **混合实际写集合**：actual-set 可以包含已回收的 immutable 历史 X 与活动 WAL Y，不能要求所有正文仍在当前 WAL，也不能因 X 不在 WAL 而跳过 Y 的 SQL 回执。`CaptureDeliverySubset` 分出活动成员与历史候选；Y 必须取得 actual-plan receipt，X 则重读原追加式 eventstore/受控 inline 历史的固定行界、原位置和摘要证据。written hint 只保留原 full actual-set 的窗口/count/digest、原 cut/成员及历史证明，不缓存正文；恢复时重建完整集合再逐项校验，不把当前 cut 冒作原 cut、不让后续追加扩集合。
+- **候选、单飞与回收**：冲突判据只针对本源 actual write candidates 及其真实权威兄弟，namespace 聚合历史诊断不硬封禁健康源；合法预存变体沿既有裁定选真实赢家，真冲突仍留 WAL 与可见责任。所有正常/重放/重建/维护/同步入口共用每源 guard，只有仍 active 的 owner ctx 可重入。局部 prefix/range lease、hold 公平轮转与原子条件回收防止旧头部反复占预算；网络 IO 不持全 WAL 锁，最终当前正文/ACK/ledger target 的条件复核失败不抬水位、不裁证明。精确永久丢失的人工审计出口独立保留，不伪造 ACK。Stop 关准入、取消并 join 真实在途任务后才 flush/close，取消或等待超时不等于任务已退出。
+- **未知写与归档忙态**：已 written 但结果未知先按原代次/实际 permit 物理目标 RO 确认，不重新插入；语义 Err 保留原类别，不冒作 Pending 或新 copies。归档在采样前用 `ReserveAppend` 原子 reservation 确保窗口可追加，忙态不先消耗 sampler；reservation 只跨采样/Append，不跨 Commit/journal/网络。`ErrWALWindowBusy` 快速可重试，同对象/原游标 CAS 只回退未接收部分并关闭 reader，已接收前缀保留，新尾非相交边界仍可 COMMIT；自动续试依赖现有 `SyncArchiveScan`，不是只启动 Manager 就会重试。
+- **固定校验预算与测试协议**：固定 12 次按原始校验簇定格，同 ctx/截止/原窗贯穿 12KiB query 子片、六字段核对与跨响应去重；probe 不是发布/回收证据，不能按 Poll 续预算或把子片结果拼成完整证明。六字段为 `_time/_msg/event_id/level/stream/canonical_content_hash`。公共测试 fixture 本轮以 RawMessage 保留缺失/null/错误类型/转义并按 payload SHA 保证等价，只是测试响应协议修正，不夸为新增生产能力。
+
+当前新 ordinary/race、全仓门、raw 完整 Worker 1s、Search、双短/live 与 9 窗仍待绑定 r4 的真实结果；旧 FAST 短验大于 250ms、精确 Search 样本为 0，不能记性能达标或最优。正式 9×30min 仍 blocked，保持无 Git/依赖/生产/Windows 操作授权，不改 FR 已交付状态。
+
+### 2026-10-22 有限真实联合短验与剩余门禁
+
+本节是旧 v8 源码的历史真实结论，保留其原 hash、环境和失败记录；不作为上述 r4 候选的重新验收证明。
+
+- 同一生产处理实现 `5bc8dba5…`、联合源码清单 `6d5856fa…` 的真实 CP/Worker/VL，完成两个 60 源、30s 负载窗（稳态/故障恢复）；各含预热共 64000 条，在 120s 排空上界内逐事件 ID、canonical hash、位置与 SQLite 恢复责任对账完整，重复为 0、末端 backlog/未回收责任为 0。恢复臂实际注入 VL 503 共 54 次、ACK 丢失 5 次；非空 940 条固定 view 的 Search/Stats/Export 集合一致、Stats 为 exact。此结果闭合指定静默欠账短场景，不宣称永久无故障或全部失败矩阵完成。
+- 另用相同 Go 内容与前端 `b9ae9dfc…` 的 Go 同源正式静态页完成本地真 Chromium live 验证：index 与 142 个资产逐 SHA 核对，非 Vite/devmock。64000 底库由独立 API 全量对账；浏览器只验合法 LogsQL 的 1s、1800 条非空 scope，两页各 100、全部/自选段各 1800 且同 SHA，并核对 `[from,to)`、原生 abort、离线导出不下载、不重放。迁移首击/取消零 POST，确认仅 1 POST 并由真实 409 前置条件拒绝、无假成功；这不是浏览器迁移成功或全底库 UI 验收。
+- 上述是 bare-local 正确性短验，不是生产部署、4C/8GiB/SSD 性能或 §6.6 达标。FAST 首屏短验 p95 约 371ms，伴随并行测试，不能标为性能达标或最优。正式 9×30min 矩阵尚未启动。
+- 最终全 Go 门仍受 PollOverlap 测试时序修复阻挡；新增 race 跳过或弱化原 3ms 门禁的尝试已拒绝并撤回，严格三例 race 已实际通过，仍不能代替当前全 Go/全仓末门。各次源码漂移、环境失败与失效窗口不作最终同内容证据，旧红证不覆盖。
+
 ## 1. 背景与目标
 
 现有日志查询以 CP `logs` 表为中心，无法提供 Worker 本地持久化、分层生命周期、跨 Worker 覆盖状态和可解释失败语义。FR-473 定义所有后续 FR 共用的身份、投递、查询、权限、资源和生命周期边界。
@@ -75,6 +149,9 @@
 | 证据 | 能说明什么 | 不能说明什么 |
 |---|---|---|
 | Worker 本地校验通过 | 序列化、字段和时间检查通过 | VL 已接受或已耐久 |
+| 对应批次索引提交成功 | 本批事件取得投递资格；交办/`Incomplete` 不成立 | 远端已接受或已核验 |
+| `REQUEST_DONE` 精确区间 | 该区间有真实请求完成 ACK | 逐字段可见或长期可恢复 |
+| `VerifiedRuns` 精确区间 | 该区间完成逐字段可见性证明 | 存在新的 HTTP ACK 或无限保留保证 |
 | HTTP 请求成功 | 请求完成 | 所有记录逐条入库、持久落盘或可恢复 |
 | 按 event_id 查询核验成功 | 核验时对应事件可见 | 后续掉电仍可恢复、没有重复 |
 | 受管恢复分段提交成功 | Worker 有可定位、可校验的恢复来源 | VL 当前索引完整或统计无重复 |
@@ -142,7 +219,7 @@
 
 `PublishedProjection` 是一次 Catalog 持久提交发布的不可变对象，至少包含 projection manifest/version、covered source generations、`closed_visible_seq` 向量、coverage/conflict summary、query location/generation reference。数据文件和索引先完成准备与核验，再原子发布该对象；读取方不能分别取“最新 manifest”和“最新水位”自行组合。重放沿用原 `ingest_seq`，不重新分配接纳序号；空洞只阻塞所属源分段，其他源可独立推进；空洞解决且对应 projection 发布后，原源前缀才继续推进。
 
-实现对账补充（2026-09-23）：投影发布必须以物理写入前观察到的 Catalog journal 序号、owner、generation、写入路由和 manifest 为条件执行一次原子提交。核验期间若迁移或其他投影发布者已经推进 Catalog，旧写入者保留恢复责任并隔离重试，不得把旧结果挂到新 owner，也不得覆盖先提交的 manifest。投影请求发出前持久登记 `publication_pending`；写入或发布任一步骤结果不确定时，该标记保持，后续批次与重启都必须从受管事件集合构建新的隔离 generation，核验并发布后才能解除。
+实现对账补充（2026-09-23）：投影发布必须以物理写入前观察到的 Catalog journal 序号、owner、generation、写入路由和 manifest 为条件执行一次原子提交。核验期间若迁移或其他投影发布者已经推进 Catalog，旧写入者保留恢复责任并隔离重试，不得把旧结果挂到新 owner，也不得覆盖先提交的 manifest。投影请求发出前持久登记 `publication_pending`；写入或发布任一步骤结果不确定时先保留该标记；具备受管已写候选证据时优先按原集合只读取证，证据不足保持不确定并沿既有预算/恢复路径，仍依赖既有 reconcile/恢复调度，不承诺每种无 hint 的 queryErr 都能独立静默自愈。单日副本复用后源级仍待确认时返回 Partial，普通入口也由既有按源唯一退避 timer 续做全 source 逐字段确认及版本/Catalog 条件复核；确认成功可零新写、零新代次解除旧标记，只有实测 missing 才交既有预算重建。尚无新 publication attempt 的 WAL-only 新尾若处于旧 closed 外，不必阻止旧发布确认，但不得因此给新尾补 ACK、扩大 closed、回收 WAL/SQL 责任或宣称 readiness 完整；真正的新发布版本、同 record 异内容或权威变化仍须重新取证，不能用旧确认洗白。
 
 ### 5.2 迁移状态
 
@@ -171,22 +248,25 @@ VL 进程健康、分区恢复完成、查询范围完整可用是三个独立�
 
 - 规范化筛选、绝对 UTC 时间范围和稳定复合排序；
 - 固定授权目标集合（或用户显式选择的“仅在线”集合）；
-- 每个目标的 `closed_visible_seq`、Catalog `generation`、owner 和读取租约；跨 Worker view 是各目标固定读取位置组成的向量，不承诺所有 Worker 同一物理时刻的全局事务快照；
+- 每个目标的完整逐源 projection（源身份/代次、该源 projection generations、封闭水位）与固定 owner/目录引用；跨 Worker view 是各目标真实 Worker view 和固定读取位置组成的向量，不承诺所有 Worker 同一物理时刻的全局事务快照；
+- 与选取引用原子登记的非零有界 TTL 租约，以及每次实际读取独立取得的 request read pin；取消/到期/淘汰禁止新读，已有 pin 直到实际 goroutine 退出才释放。租约 delta 不覆盖发布记录，也不推进导致物化 CAS 失效的发布 revision；
 - 创建时的覆盖状态、能力版本和视图过期时间；
-- `view_id`、签名版本和失效原因。
+- `view_id`、签名版本和失效原因；Worker 只接受本进程签发且未消费的一次创建票据，已关闭/过期或重启前 ID 不能复活；容量超额明确预算失败，不临时改选新集合。
 
 后续 Cursor 只能引用该 view。`closed_visible_seq` 是不含可见性空洞的封闭前缀：此前所有接纳位置都有明确处理结果，明确隔离/排除的记录仍计入 coverage。服务端必须以该前缀或等效不可变投影约束每一页，不能重新查询动态最新集合。Cursor 只携带 `(view_id, logical_sort_key, page_limit)`，不把 watermark 当作未执行的提示字段。
 
 ### 6.2 视图失效
 
 - 权限在每次请求和下载时重新校验；权限撤销优先于固定数据集；
-- 数据集合变化（重建、重新解析、补录、删除）破坏 `closed_visible_seq` 时，返回 `VIEW_STALE`；纯迁移只要旧租约仍能读取原固定集合，不自动失效；
+- 普通追加继续使用旧冻结 projection；源集合增删、逐源缩水、重建/重新解析/补录替换或删除使原集合不可读时返回 `VIEW_STALE`，不能只比较最大水位。纯迁移只要旧租约仍能读取原固定 owner/目录集合，不自动失效，新 view 才选新 owner；
 - Rehydrate 完成后不得悄悄把 DEEP 数据加入旧 view；可等待并创建新 view，或使旧 Cursor 明确失效；
 - view 到期、取消或超过资源预算时返回明确状态，不把 `items=[]` 当作完整零结果。
 
 ### 6.3 响应状态
 
-所有查询响应必须包含 `view_id`、`complete`、`partial_reasons[]`、目标覆盖摘要、排序版本、`closed_visible_seq` 向量摘要、取消/预算状态，以及独立的 `duplicate_quality`、`stats_quality` 和 `enumeration_state`；完整性、重复质量、统计质量和枚举结束不是同一维度。稳定排序为 `(event_time DESC, log_source_id ASC, source_generation ASC, record_start DESC, record_end DESC, event_id ASC)`，不得使用本地自增 ID 作为跨 Worker 唯一排序。
+查询语义须分别表达固定 view、完整性/partial 原因/目标覆盖、排序与封闭向量、取消/预算状态、重复质量、统计质量和枚举结束；这些不是同一维度。现有 Search/Stats wire 携带独立 `LogQuality`，Fields/Facets wire 未声明该字段时不得虚构 Worker quality；须无损保留现有 coverage/截断证据，CP Facets 可据此保守派生统计质量，Fields 不伪造独立 quality。稳定排序为 `(event_time DESC, log_source_id ASC, source_generation ASC, record_start DESC, record_end DESC, event_id ASC)`，不得使用本地自增 ID 作为跨 Worker 唯一排序。
+
+任一参与 range/Worker 失败或全局安全页边界未证明时可返回 partial 行，但不发跨越未知范围的新 cursor，`exhausted=false`，明确同页重试；`next_cursor` 为空不能改写成历史完整。
 
 Tail 使用显式 `FOLLOW_LIVE`（动态流）或 `VIEW_BOUNDED`（固定视图尾部）语义；两者不可混称。
 
@@ -246,6 +326,7 @@ Export 是 CP Coordinator 的业务操作，不新增 Worker Export RPC：CP 使
 
 - CP 负责用户授权和目标集合；隧道负责已认证 Worker 身份、消息完整性和取消传播；Worker 负责 scope、view 签名、Catalog 范围和资源预算验证。三者不是复制一套业务鉴权引擎。
 - CP 和 Worker 双侧校验 `Search/Stats/Fields/Facets/Tail/Rehydrate/Export` scope；授权目标集合由 CP 计算并签入 view；Worker 不接受浏览器直连。
+- 物理 UTC 整日迁移可能跨 namespace，CP 必须在 RPC 前要求平台管理员主体与原 `node.manage`，并保留操作者、namespace 格式/节点绑定检查；入口 namespace 仅是探针，单实例组授权不能升级为整日授权。普通 runtime control 的原节点权限不因此收紧。
 - `move_after_age`、产品 `online_retention` 和 VL runtime retention 分离映射；底层自动清理不得绕过产品保留和最后有效副本保护。合法部署组合：HOT-only、HOT+COLD、HOT+DEEP、HOT+COLD+DEEP。COLD 关闭且 Archive 开启时必须显式选择 Raw-only/rehydrate 策略，不得隐式丢弃历史。
 - Worker 资源预算独立列出 WAL、HOT、COLD、staging、Rehydrate、查询并发、临时导出空间和 RSS；512MiB 只是 HOT cache 模板。
 - 导出允许 CP 临时产物，必须有大小/期限/权限和清理预算；下载前复核权限，成功产物完成校验后才公开，不转入 `logs` 表或长期查询索引。
