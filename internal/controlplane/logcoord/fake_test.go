@@ -105,7 +105,7 @@ func (w *fakeWorker) Search(_ context.Context, req WorkerSearchRequest) (*Worker
 		quality = *w.searchQuality
 	}
 	resp := &WorkerSearchResponse{
-		ViewID:      req.ViewID,
+		ViewID:      firstNonEmpty(req.ViewID, "worker-view-"+w.workerID),
 		Items:       append([]Event(nil), w.searchItems...),
 		Targets:     append([]WorkerTargetResult(nil), w.searchTarget...),
 		Exhausted:   !w.searchTrunc,

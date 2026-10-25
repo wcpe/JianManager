@@ -30,7 +30,7 @@ func (w *pr61Worker) Search(ctx context.Context, req WorkerSearchRequest) (*Work
 	w.muBudget.Unlock()
 	resp, err := mapSearchResponse(w.searchPB, nil)
 	if resp != nil {
-		resp.ViewID = req.ViewID
+		resp.ViewID = firstNonEmpty(req.ViewID, "worker-view-"+w.workerID)
 	}
 	return resp, err
 }
@@ -41,7 +41,7 @@ func (w *pr61Worker) Stats(ctx context.Context, req WorkerSearchRequest, dims []
 	w.muBudget.Unlock()
 	resp, err := mapStatsResponse(w.statsPB, nil)
 	if resp != nil {
-		resp.ViewID = req.ViewID
+		resp.ViewID = firstNonEmpty(req.ViewID, "worker-view-"+w.workerID)
 	}
 	return resp, err
 }

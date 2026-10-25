@@ -50,7 +50,7 @@ func (w *cursorWorker) Search(_ context.Context, req WorkerSearchRequest) (*Work
 		items = items[:limit]
 		exhausted = false
 	}
-	return &WorkerSearchResponse{ViewID: req.ViewID, Items: items, Exhausted: exhausted,
+	return &WorkerSearchResponse{ViewID: firstNonEmpty(req.ViewID, "wv-"+w.id), Items: items, Exhausted: exhausted,
 		NextCursor: "worker-next", Targets: []WorkerTargetResult{{TargetID: w.target, State: CoverageSuccess, CatalogGeneration: "1"}},
 		Quality: exactQuality}, nil
 }

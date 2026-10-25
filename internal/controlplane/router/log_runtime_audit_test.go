@@ -117,16 +117,19 @@ func TestLogMigratePartitionAuthorizesTarget(t *testing.T) {
 		token     string
 		status    int
 	}{
-		// 前端面板按节点命名空间调用（NodeLogRuntimePanel），必须继续可用。
-		{"own_node_namespace", fmt.Sprintf("node:%d", node.ID), managerToken, http.StatusOK},
-		// 存储命名空间的实际形态是 inst:<id>（Worker catalog 以 binding.TargetID 为键）。
-		{"own_instance_namespace", fmt.Sprintf("inst:%d", owned.ID), managerToken, http.StatusOK},
+		// namespace 只是整物理日的探针，组内 node.manage 不能授权整日其他组成员。
+		{"own_node_namespace", fmt.Sprintf("node:%d", node.ID), managerToken, http.StatusForbidden},
+		{"own_instance_namespace", fmt.Sprintf("inst:%d", owned.ID), managerToken, http.StatusForbidden},
+		{"admin_own_node_namespace", fmt.Sprintf("node:%d", node.ID), adminToken, http.StatusOK},
+		{"admin_own_instance_namespace", fmt.Sprintf("inst:%d", owned.ID), adminToken, http.StatusOK},
 		{"cross_group", fmt.Sprintf("inst:%d", otherGroup.ID), managerToken, http.StatusForbidden},
 		{"other_node", fmt.Sprintf("node:%d", otherNode.ID), managerToken, http.StatusForbidden},
 		{"roll_up_group_instance_on_other_node", fmt.Sprintf("inst:%d", remote.ID), managerToken, http.StatusForbidden},
-		{"malformed", "whatever-the-caller-wants", managerToken, http.StatusBadRequest},
-		// 平台管理员也不是万能通行证：越界命名空间同样被拒。
+		{"malformed_scoped_user", "whatever-the-caller-wants", managerToken, http.StatusForbidden},
+		// 平台管理员仍须通过原格式和节点归属检查。
+		{"admin_malformed", "whatever-the-caller-wants", adminToken, http.StatusBadRequest},
 		{"admin_other_node", fmt.Sprintf("node:%d", otherNode.ID), adminToken, http.StatusForbidden},
+		{"admin_instance_on_other_node", fmt.Sprintf("inst:%d", remote.ID), adminToken, http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -152,8 +155,8 @@ func TestLogMigratePartitionAuthorizesTarget(t *testing.T) {
 // Worker 报错时不得留下成功审计。
 //
 // 为什么必须落 CP 侧：审计中间件对本路径不产生 action（POST /nodes/:id/log-runtime/...
-// 不匹配任何分支），Worker 侧该 RPC 既不校验也不记录操作人——冷层还缺热层查询能力，
-// 「哪一天被下沉」是复盘与容量核算的原始凭据。
+// 不匹配任何分支），Worker 侧该 RPC 既不校验也不记录操作人；冷热层均按权威位置查询，
+// 「谁触发哪个物理日迁移」仍是复盘与容量核算的原始凭据。
 //
 // 转红方式：删掉 handler 末尾的 recordAudit 调用——本用例在「必须有一条迁移审计」处变红。
 func TestLogMigratePartitionRecordsAudit(t *testing.T) {
@@ -184,7 +187,8 @@ func TestLogMigratePartitionRecordsAudit(t *testing.T) {
 	require.False(t, audit.Failed)
 	var detail map[string]any
 	require.NoError(t, json.Unmarshal([]byte(audit.Detail), &detail), "detail 应为 JSON：%s", audit.Detail)
-	require.Equal(t, namespace, detail["storageNamespace"], "detail 必须记录被下沉的命名空间")
+	require.Equal(t, namespace, detail["storageNamespace"], "detail 必须记录触发探针命名空间")
+	require.Equal(t, "physical_utc_day", detail["migrationScope"], "审计不能把单探针伪装成实际迁移范围")
 	require.Equal(t, "2026-10-02", detail["utcDay"], "detail 必须记录分区日")
 	require.Equal(t, "cold", detail["targetTier"])
 	require.Equal(t, "admin", detail["operator"], "可读主体必须入 detail（Agent 通道的 user_id 是 token id）")

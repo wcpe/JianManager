@@ -559,18 +559,14 @@ func (h *LogRuntimeHandler) MigratePartition(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_UTC_DAY"})
 		return
 	}
-	// 目标归属校验必须在取 client 之前（同 Rehydrate）：命名空间是本端点唯一的越权面，
-	// 此前它被原样下发给**路由节点**的 Worker，任何持有 node.manage 的调用方都能借此
-	// 对该节点上任意实例/任意命名空间发起分区下沉（跨实例组的侧信道 + 数据面扰动）。
-	//
-	// 复用 authorizeArchiveTarget 而不是同文件另外两个判据：
-	//   - authorizeResolveSource 要求完整三段源键（LogSourceID/流/代次），本端点没有代次，
-	//     迁移键是存储命名空间，套不上；
-	//   - authorizeImportNamespace 只做实例级对象授权、不校验节点绑定，放不住
-	//     「拿这个节点的通道去动另一个节点的命名空间」；
-	//   - authorizeArchiveTarget 同时覆盖本端点实际出现的两种形态：`node:<路由节点>`
-	//     （前端面板就是这么调的）与 `inst:<id>`（须实例组授权且实例确实在该节点），
-	//     其余形态一律 400，未知实例/组外/错节点统一 403 且不下发 RPC。
+	// namespace 只是存在性探针，Worker 实际搬运整物理 UTC 日的全部命名空间。
+	// 单实例组授权不能代表组外日成员已获授权；沿全量导入判据要求平台管理员，不新增权限节点。
+	access := getAccess(c)
+	if access == nil || !access.IsPlatformAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "整物理 UTC 日日志迁移仅限平台管理员"})
+		return
+	}
+	// 全范围主体仍须通过原探针格式与节点绑定检查，不能借本节点通道迁移别处目标。
 	if !h.authorizeArchiveTarget(c, body.StorageNamespace) {
 		return
 	}
@@ -598,10 +594,10 @@ func (h *LogRuntimeHandler) MigratePartition(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "MIGRATION_FAILED", "code": code})
 		return
 	}
-	// 成功迁移后落 CP 侧审计行：冷层没有热层的查询能力（要回读必须先把分区恢复回热层），
-	// 所以「哪一天、哪个命名空间被下沉」是运维复盘与容量核算的原始凭据；审计中间件对本路径
-	// 不产生 action，Worker 侧也不记录操作人 ⇒ CP 侧不落行即等于全程无痕。
+	// 冷层仍可按 Catalog 权威位置查询；审计记录触发探针、整日影响范围和操作人。
+	// 本路径不由通用审计中间件记录 action，且 Worker RPC 不消费操作人，因此必须在 CP 留痕。
 	h.recordAudit(c, "node.log_partition.migrate", map[string]any{
+		"migrationScope":   "physical_utc_day",
 		"storageNamespace": body.StorageNamespace,
 		"utcDay":           body.UTCDay,
 		"targetTier":       "cold",

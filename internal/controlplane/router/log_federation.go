@@ -784,7 +784,24 @@ func (h *LogFederationHandler) Export(c *gin.Context) {
 	if !ok {
 		return
 	}
-	res, err := h.coord.Export(c.Request.Context(), q)
+	exportRange := c.DefaultQuery("range", "all")
+	if exportRange != "all" && exportRange != "page" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "range 仅支持 all 或 page"})
+		return
+	}
+	if exportRange == "page" && q.ViewID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "当前页导出必须提供匹配的 viewId"})
+		return
+	}
+	var res *logcoord.ExportResult
+	var err error
+	if exportRange == "page" {
+		res, err = h.coord.ExportPage(c.Request.Context(), q)
+	} else {
+		// 整窗导出不能继承列表入页游标，否则会静默漏掉此前的逻辑页。
+		q.Cursor = ""
+		res, err = h.coord.Export(c.Request.Context(), q)
+	}
 	if err != nil {
 		writeFederationError(c, err)
 		return

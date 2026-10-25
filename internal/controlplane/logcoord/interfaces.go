@@ -98,6 +98,8 @@ type WorkerFacetsResponse struct {
 	ViewID      string                 `json:"view_id"`
 	Dimensions  []WorkerFacetDimension `json:"dimensions"`
 	Targets     []WorkerTargetResult   `json:"targets"`
+	Coverage    *Coverage              `json:"coverage,omitempty"`
+	Truncated   bool                   `json:"truncated"`
 	Unsupported bool                   `json:"unsupported"`
 	Error       string                 `json:"error,omitempty"`
 }
@@ -113,10 +115,21 @@ type WorkerClient interface {
 	Facets(ctx context.Context, req WorkerSearchRequest, dimensions []string, dimensionLimit uint32) (*WorkerFacetsResponse, error)
 }
 
+// WorkerFieldsResponse 保留字段枚举的顶层覆盖与截断，空字段也不能丢失不完整证据。
 type WorkerFieldsResponse struct {
 	ViewID      string               `json:"view_id"`
 	Fields      []string             `json:"fields"`
 	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Truncated   bool                 `json:"truncated"`
 	Unsupported bool                 `json:"unsupported"`
 	Error       string               `json:"error,omitempty"`
+}
+
+// WorkerSnapshotBinding 是单次读取实际使用的 Worker 快照；仅在扇出汇总后发布。
+type WorkerSnapshotBinding struct {
+	WorkerID string
+	ViewID   string
+	Targets  []WorkerTargetResult
+	Error    string
 }

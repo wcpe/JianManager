@@ -118,7 +118,11 @@ func (a *WorkerClientAdapter) Fields(ctx context.Context, req WorkerSearchReques
 	if resp == nil {
 		return &WorkerFieldsResponse{Error: "empty_worker_response"}, nil
 	}
-	out := &WorkerFieldsResponse{Fields: append([]string(nil), resp.GetFields()...)}
+	out := &WorkerFieldsResponse{
+		Fields:   append([]string(nil), resp.GetFields()...),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+	}
+	out.Truncated = coverageBudgetCut(out.Coverage)
 	if resp.GetView() != nil {
 		out.ViewID = resp.GetView().GetViewId()
 	}
@@ -452,17 +456,16 @@ func mapFacetsResponse(resp *workerpb.LogFacetsResponse, err error) (*WorkerFace
 	if resp == nil {
 		return &WorkerFacetsResponse{Error: "empty_worker_response"}, nil
 	}
-	if e := resp.GetError(); e != nil {
-		out := &WorkerFacetsResponse{Error: e.GetMessage()}
-		if e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED {
-			out.Unsupported = true
-		}
-		out.Targets = mapCoverageTargets(resp.GetCoverage().GetTargets())
-		return out, nil
-	}
 	out := &WorkerFacetsResponse{
-		ViewID:  resp.GetView().GetViewId(),
-		Targets: mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		ViewID:    resp.GetView().GetViewId(),
+		Targets:   mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage:  coverageFromProto(resp.GetCoverage()),
+		Truncated: resp.GetTruncated(),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+		return out, nil
 	}
 	// proto LogFacetValue 扁平带 dimension；按维重组。
 	order := make([]string, 0, 4)

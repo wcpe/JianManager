@@ -100,6 +100,13 @@ func BuildExportWithCut(view View, coverage Coverage, quality Quality, items []E
 	}
 
 	var reasons []string
+	if coverage.Pending {
+		reasons = append(reasons, "coverage_pending")
+	}
+	if coverage.Complete && len(coverage.PartialReasons) > 0 {
+		reasons = append(reasons, "coverage_incomplete")
+		reasons = append(reasons, coverage.PartialReasons...)
+	}
 	if !coverage.Complete {
 		reasons = append(reasons, "coverage_incomplete")
 		reasons = append(reasons, coverage.PartialReasons...)
