@@ -19,6 +19,8 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/platform/vlruntime"
+	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
@@ -587,8 +589,8 @@ type LogQueryConfig struct {
 	Password string `mapstructure:"password"`
 }
 
-// LogVLConfig enables the managed HOT/COLD/Rehydrate supervisor. Empty BinaryPath
-// keeps externally managed localhost VL compatibility mode.
+// LogVLConfig 配置受管 HOT/COLD/Rehydrate；未指定资产时兼容外部回环 VL。
+// cache、Go 软限制与 RSS 是不同维度，不能互相充当硬内存上限。
 type LogVLConfig struct {
 	BinaryPath      string `mapstructure:"binary_path"`
 	PackagePath     string `mapstructure:"package_path"`
@@ -600,7 +602,7 @@ type LogVLConfig struct {
 	// ColdRetentionPeriod 冷层（COLD namespace）的 VL runtime retention。
 	//
 	// 为什么要独立于 RetentionPeriod：VL 的 retention 到期是**直接删**，绕过平台侧
-	// 「删前归档」。热层 retention 必须不短于保留策略的热层窗口（默认同为 90d，留出搬运余量），
+	// 「删前归档」。启层时热层原生窗口须覆盖产品热窗口、UTC 日边界和显式搬运/恢复预算，
 	// 冷层则是「冷留存多久」的唯一执行者（用户口径：冷 730 天，所有级别统一）。
 	ColdRetentionPeriod string `mapstructure:"cold_retention_period"`
 	// DeleteEnabled 打开受管 VL 的 -delete.enable（默认 false）。
@@ -609,15 +611,89 @@ type LogVLConfig struct {
 	// **不会让旧行不存在**；VL 只追加。缺删除能力时，任何「整窗重写 + 换代次」
 	// 都会线性放大体积（生产实测单日 75×、880MB）。打开后可由孤儿代次 GC 回收。
 	// 默认关：删除不可逆，必须运维显式承担。
-	DeleteEnabled bool `mapstructure:"delete_enabled"`
-	HotCacheBytes       int64  `mapstructure:"hot_cache_bytes"`
+	DeleteEnabled bool  `mapstructure:"delete_enabled"`
+	HotCacheBytes int64 `mapstructure:"hot_cache_bytes"`
 	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
 	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
-	HotPort          int   `mapstructure:"hot_port"`
-	ColdPort         int   `mapstructure:"cold_port"`
-	RehydratePort    int   `mapstructure:"rehydrate_port"`
-	StartCold        bool  `mapstructure:"start_cold"`
-	StartRehydrate   bool  `mapstructure:"start_rehydrate"`
+	// NamespaceBudgets 显式按层覆盖预算；零字段沿用旧键和各层有限模板。
+	NamespaceBudgets map[string]LogVLNamespaceBudget `mapstructure:"namespace_budgets"`
+	// Budget 区分全局日志磁盘与数据面 RSS，并限制临时空间预留。
+	Budget         LogVLRuntimeBudget `mapstructure:"budget"`
+	HotPort        int                `mapstructure:"hot_port"`
+	ColdPort       int                `mapstructure:"cold_port"`
+	RehydratePort  int                `mapstructure:"rehydrate_port"`
+	StartCold      bool               `mapstructure:"start_cold"`
+	StartRehydrate bool               `mapstructure:"start_rehydrate"`
+}
+
+// LogVLNamespaceBudget 表达单层 cache、Go 软限制与 RSS 准入阈值。
+// RSS 为零不设置该层上界；Go 软限制的负值兼容旧键，表示不注入 GOMEMLIMIT。
+type LogVLNamespaceBudget struct {
+	CacheBytes         int64 `mapstructure:"cache_bytes"`
+	GoMemoryLimitBytes int64 `mapstructure:"go_memory_limit_bytes"`
+	RSSBytes           int64 `mapstructure:"rss_bytes"`
+}
+
+// LogVLRuntimeBudget 分开约束日志磁盘占用、聚合 RSS 与三类临时预留。
+// 全局零值表示不配置该维度的上界，不会从 cache 或另一维度猜测。
+type LogVLRuntimeBudget struct {
+	DiskBytes    int64                   `mapstructure:"disk_bytes"`
+	RSSBytes     int64                   `mapstructure:"rss_bytes"`
+	Reservations LogVLReservationBudgets `mapstructure:"reservations"`
+}
+
+// LogVLReservationBudgets 是 WAL、迁移暂存和临时导出的独立预留上限。
+type LogVLReservationBudgets struct {
+	WAL     int64 `mapstructure:"wal"`
+	Staging int64 `mapstructure:"staging"`
+	Export  int64 `mapstructure:"export"`
+}
+
+// RuntimeBudget 将新键与旧内存键归并为运行时唯一预算，拒绝拼错层名和负上界。
+func (c LogVLConfig) RuntimeBudget() (vlsup.RuntimeBudget, error) {
+	namespaces := vlsup.DefaultNamespaceBudgets()
+	if c.HotCacheBytes < 0 {
+		return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.hot_cache_bytes 必须非负")
+	}
+	for ns, budget := range namespaces {
+		if ns == vlsup.NamespaceHot && c.HotCacheBytes > 0 {
+			budget.CacheBytes = c.HotCacheBytes
+		}
+		if c.MemoryLimitBytes != 0 {
+			budget.GoMemoryLimitBytes = c.MemoryLimitBytes
+		}
+		namespaces[ns] = budget
+	}
+	for name, override := range c.NamespaceBudgets {
+		ns := vlsup.Namespace(name)
+		budget, ok := namespaces[ns]
+		if !ok {
+			return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.namespace_budgets 含未知层 %q", name)
+		}
+		if override.CacheBytes < 0 || override.RSSBytes < 0 {
+			return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.namespace_budgets.%s 的 cache_bytes/rss_bytes 必须非负", name)
+		}
+		if override.CacheBytes != 0 {
+			budget.CacheBytes = override.CacheBytes
+		}
+		if override.GoMemoryLimitBytes != 0 {
+			budget.GoMemoryLimitBytes = override.GoMemoryLimitBytes
+		}
+		budget.RSSBytes = override.RSSBytes
+		namespaces[ns] = budget
+	}
+	budget := vlsup.RuntimeBudget{
+		Namespaces: namespaces, DiskBytes: c.Budget.DiskBytes, RSSBytes: c.Budget.RSSBytes,
+		Reservations: map[vlsup.ReservationKind]int64{
+			vlsup.ReservationWAL:     c.Budget.Reservations.WAL,
+			vlsup.ReservationStaging: c.Budget.Reservations.Staging,
+			vlsup.ReservationExport:  c.Budget.Reservations.Export,
+		},
+	}
+	if _, err := vlsup.NewBudgetController(budget); err != nil {
+		return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.budget: %w", err)
+	}
+	return budget, nil
 }
 
 // DefaultMaxWALBytes 是单源 WAL **当前积压**的字节上限默认值。
@@ -781,6 +857,8 @@ func validateLogSources(sources []LogSourceConfig) error {
 // 不能让运维在查询结果里发现；与登记阶段拒绝非法源级时区是同一取舍。
 // 见 docs/specs/worker-log-normalizer/spec.md §3.4。
 type LogIngestConfig struct {
+	// ReadLimits 在分配整行正文之前限制单行和单轮读入，零字段沿用采集模板。
+	ReadLimits LogReadLimitsConfig `mapstructure:"read_limits"`
 	// TimeZone 解释日志行内 [HH:MM:SS] 所用的节点级默认时区：空串 = UTC（既有行为）；
 	// "local" = 跟随节点进程本地时区（TZ）；其余按 IANA 名解析（如 Asia/Hong_Kong）。
 	// 源可用 SourceConfig.TimeZone 覆盖本默认。
@@ -830,6 +908,34 @@ type LogIngestConfig struct {
 	// 如 "2m"）。空串表示用默认（ingest.defaultResolveGapsMaxDuration）。
 	// 它服务于**没有 deadline 的调用方**（RPC/HTTP 侧自有截止时间，ctx 会先到点）。
 	ResolveGapsMaxDuration string `mapstructure:"resolve_gaps_max_duration"`
+}
+
+// LogReadLimitsConfig 配置单物理行与单轮读取字节上界，包含换行字节。
+type LogReadLimitsConfig struct {
+	MaxLineBytes    int   `mapstructure:"max_line_bytes"`
+	MaxBytesPerPoll int64 `mapstructure:"max_bytes_per_poll"`
+}
+
+// IngestReadLimits 归并采集默认并拒绝不能容纳一行的配置，绝不把超长记录截断成普通事件。
+func (c *Config) IngestReadLimits() (acquire.ReadLimits, error) {
+	limits := acquire.DefaultReadLimits()
+	if c == nil {
+		return limits, nil
+	}
+	raw := c.LogIngest.ReadLimits
+	if raw.MaxLineBytes < 0 || raw.MaxBytesPerPoll < 0 {
+		return acquire.ReadLimits{}, fmt.Errorf("log_ingest.read_limits 必须非负，零表示使用默认")
+	}
+	if raw.MaxLineBytes > 0 {
+		limits.MaxLineBytes = raw.MaxLineBytes
+	}
+	if raw.MaxBytesPerPoll > 0 {
+		limits.MaxBytesPerPoll = raw.MaxBytesPerPoll
+	}
+	if int64(limits.MaxLineBytes) >= limits.MaxBytesPerPoll {
+		return acquire.ReadLimits{}, fmt.Errorf("log_ingest.read_limits.max_bytes_per_poll 必须大于 max_line_bytes，才能保留换行边界")
+	}
+	return limits, nil
 }
 
 // LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
@@ -929,6 +1035,14 @@ type LogRetentionConfig struct {
 	ColdRetention string `mapstructure:"cold_retention"`
 	// Trigger 搬运触发口径（年龄 + 磁盘水位取先到）。
 	Trigger LogRetentionTriggerConfig `mapstructure:"trigger"`
+	// Migration 是启层时必须明确声明的有限复制校验与故障恢复 SLA。
+	Migration LogRetentionMigrationConfig `mapstructure:"migration"`
+}
+
+// LogRetentionMigrationConfig 声明搬运所需余量，不代表无限失败下的最后副本保证。
+type LogRetentionMigrationConfig struct {
+	CopyVerifyBudget string `mapstructure:"copy_verify_budget"`
+	RecoveryBudget   string `mapstructure:"recovery_budget"`
 }
 
 // LogRetentionTriggerConfig 搬运触发口径（键 `log_retention.trigger.*`）。
@@ -1059,15 +1173,15 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	return p, nil
 }
 
-// validateRuntimeRetention 对照 vlsup.New 的实际回退：全局空串为 30d，
-// 冷层空白覆盖沿用全局。相等保留期兼容默认值，但不是扫描/搬运余量或无限失败保护。
+// validateRuntimeRetention 使用与子进程相同的默认和解析规则，启层必须留出明确迁移余量。
+// 有限原生 TTL 在故障超出声明 SLA 时仍可能淘汰，不能替代独立副本。
 func (c *Config) validateRuntimeRetention(p retention.Policy) error {
-	hotRaw := c.LogVL.RetentionPeriod
+	hotRaw := strings.TrimSpace(c.LogVL.RetentionPeriod)
 	if hotRaw == "" {
 		hotRaw = vlsup.DefaultRetentionPeriod
 	}
-	coldRaw := c.LogVL.ColdRetentionPeriod
-	if strings.TrimSpace(coldRaw) == "" {
+	coldRaw := strings.TrimSpace(c.LogVL.ColdRetentionPeriod)
+	if coldRaw == "" {
 		coldRaw = hotRaw
 	}
 	for _, check := range []struct {
@@ -1083,8 +1197,44 @@ func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 			return fmt.Errorf("%s: %w", check.key, err)
 		}
 		if actual < check.declared {
-			return fmt.Errorf("%s 实际生效 %q (%s) 短于 log_retention 声明 %s；VL 原生淘汰会绕过搬运与最后副本保护", check.key, check.raw, actual, check.declared)
+			return fmt.Errorf("%s 实际生效 %q (%s) 短于 log_retention 声明 %s；VL 原生淘汰不受应用删除开关保护", check.key, check.raw, actual, check.declared)
 		}
+	}
+	if !p.Enabled {
+		return nil
+	}
+	requirements := retention.RuntimeHeadroom{DriverInterval: p.Trigger.Normalize().Interval}
+	if _, err := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
+		return fmt.Errorf("log_vl.retention_period: %w", err)
+	}
+	if strings.TrimSpace(c.LogVL.BinaryPath) == "" && strings.TrimSpace(c.LogVL.PackagePath) == "" {
+		return fmt.Errorf("log_vl: 启用分层需要受管 binary_path 或 package_path，外部 HOT-only 无接收端/搬运驱动")
+	}
+	if strings.TrimSpace(c.LogVL.BinaryPath) != "" && strings.TrimSpace(c.LogVL.PackagePath) == "" && strings.TrimSpace(c.LogVL.AssetSHA256) == "" {
+		return fmt.Errorf("log_vl.asset_sha256: 启用分层需要明确受管资产校验")
+	}
+	if c.LogVL.Username == "" || c.LogVL.Password == "" {
+		return fmt.Errorf("log_vl: 启用分层需要非空本地鉴权凭据")
+	}
+	if !c.LogVL.StartCold {
+		return fmt.Errorf("log_vl.start_cold: 启用分层必须显式启用 COLD 接收端")
+	}
+	for _, field := range []struct {
+		key string
+		raw string
+		dst *time.Duration
+	}{
+		{"copy_verify_budget", c.LogRetention.Migration.CopyVerifyBudget, &requirements.CopyVerifyBudget},
+		{"recovery_budget", c.LogRetention.Migration.RecoveryBudget, &requirements.RecoveryBudget},
+	} {
+		d, err := retention.ParseTTL(strings.TrimSpace(field.raw))
+		if err != nil || d <= 0 {
+			return fmt.Errorf("log_retention.migration.%s 必须显式声明正的有限时长", field.key)
+		}
+		*field.dst = d
+	}
+	if _, err := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
+		return fmt.Errorf("log_vl.retention_period: %w", err)
 	}
 	return nil
 }
@@ -1484,11 +1634,26 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.username", "")
 	v.SetDefault("log_vl.password", "")
 	v.SetDefault("log_vl.data_root", "")
-	v.SetDefault("log_vl.retention_period", "90d")
-	v.SetDefault("log_vl.cold_retention_period", "730d")
-	v.SetDefault("log_retention.hot_retention", "90d")
-	v.SetDefault("log_retention.cold_retention", "730d")
-	v.SetDefault("log_vl.hot_cache_bytes", int64(512*1024*1024))
+	v.SetDefault("log_vl.retention_period", vlruntime.DefaultRetentionPeriod)
+	v.SetDefault("log_vl.cold_retention_period", vlruntime.DefaultColdRetentionPeriod)
+	v.SetDefault("log_retention.hot_retention", vlruntime.DefaultHotRetention.String())
+	v.SetDefault("log_retention.cold_retention", vlruntime.DefaultColdRetentionPeriod)
+	v.SetDefault("log_vl.hot_cache_bytes", vlsup.DefaultHotCacheBytes)
+	v.SetDefault("log_vl.memory_limit_bytes", int64(0))
+	v.SetDefault("log_vl.delete_enabled", false)
+	// 只为零值可覆盖的键登记默认；按层模板由 RuntimeBudget 统一归并，不能盖掉旧键。
+	for _, ns := range []string{"hot", "cold", "rehydrate"} {
+		for _, key := range []string{"cache_bytes", "go_memory_limit_bytes", "rss_bytes"} {
+			v.SetDefault("log_vl.namespace_budgets."+ns+"."+key, int64(0))
+		}
+	}
+	v.SetDefault("log_vl.budget.disk_bytes", int64(0))
+	v.SetDefault("log_vl.budget.rss_bytes", int64(0))
+	v.SetDefault("log_vl.budget.reservations.wal", int64(0))
+	v.SetDefault("log_vl.budget.reservations.staging", int64(0))
+	v.SetDefault("log_vl.budget.reservations.export", int64(0))
+	v.SetDefault("log_retention.migration.copy_verify_budget", "")
+	v.SetDefault("log_retention.migration.recovery_budget", "")
 	v.SetDefault("log_vl.hot_port", 0)
 	v.SetDefault("log_vl.cold_port", 0)
 	v.SetDefault("log_vl.rehydrate_port", 0)
@@ -1534,6 +1699,8 @@ func Load(path string) (*Config, error) {
 	// 采集归一化的节点级默认字符集（复审 P2-3）：留空 = auto。中文 locale 的 JVM 与 Worker
 	// 同机部署且日志为 GBK 时配 gbk 即可（显式声明优于自动判定）。
 	v.SetDefault("log_ingest.charset", "")
+	v.SetDefault("log_ingest.read_limits.max_line_bytes", 0)
+	v.SetDefault("log_ingest.read_limits.max_bytes_per_poll", int64(0))
 	v.SetDefault("log_ingest.multiline_unclosed_timeout", "")
 	v.SetDefault("log_ingest.archive_scan_interval", "")
 	// 整节点解算预算（2026-10-02 缺陷修复）：0/空 = 用 ingest 包默认（256 源 / 2m）。
@@ -1693,14 +1860,21 @@ func Load(path string) (*Config, error) {
 				"error", err, "hint", "设置 log_retention.enabled: true 并让 hot_retention 短于 VL retention")
 		}
 		if !cfg.LogRetention.Enabled {
-			// 未启用 = 搬运永不发生 = 「没有承接物」。按本项目自己的原则
-			// 「没有承接物就不做减法」，这里必须让运维**明确知道**减法仍然会发生：
-			// 减法的执行者不是我们，而是 VL 自己的 -retentionPeriod。
-			slog.Warn("日志保留策略未启用：hot→cold 搬运不会运行，超出 VL retention 的日志将被 VictoriaLogs 直接删除（无归档、无审计）",
-				"enabled", false,
-				"vlRetention", cfg.LogVL.RetentionPeriod,
-				"hint", "启用 log_retention.enabled 并确认冷层可用，否则请自行承担日志过期即丢失")
+			slog.Warn("日志自动搬运关闭：原生有限 TTL 仍独立淘汰；关闭应用删除不等于永久保留或已有冷层副本",
+				"automaticMigration", false, "nativeRetention", cfg.LogVL.RetentionPeriod,
+				"coldNativeRetention", cfg.LogVL.ColdRetentionPeriod, "applicationDeleteEnabled", cfg.LogVL.DeleteEnabled)
+		} else {
+			slog.Info("日志分层仅在声明的有限搬运/恢复预算内留出余量；原生 TTL 不提供无限故障下最后副本保证",
+				"nativeRetention", cfg.LogVL.RetentionPeriod,
+				"copyVerifyBudget", cfg.LogRetention.Migration.CopyVerifyBudget,
+				"recoveryBudget", cfg.LogRetention.Migration.RecoveryBudget)
 		}
+	}
+	if _, err := cfg.LogVL.RuntimeBudget(); err != nil {
+		return nil, err
+	}
+	if _, err := cfg.IngestReadLimits(); err != nil {
+		return nil, err
 	}
 	if cfg.EnrollToken == "" && strings.TrimSpace(cfg.EnrollTokenFile) != "" {
 		data, readErr := os.ReadFile(cfg.EnrollTokenFile)

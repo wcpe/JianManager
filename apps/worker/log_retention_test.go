@@ -122,7 +122,7 @@ func TestRetentionDriverResumesRetryableWithoutNewBegin(t *testing.T) {
 }
 
 func TestRetentionAdapterSkipsActiveManualAndUnknown(t *testing.T) {
-	for _, state := range []catalog.MigrationState{catalog.StateRoutingFrozen, catalog.StateFailedManual, catalog.MigrationState("UNKNOWN")} {
+	for _, state := range []catalog.MigrationState{catalog.StateFailedManual, catalog.MigrationState("UNKNOWN")} {
 		t.Run(string(state), func(t *testing.T) {
 			cat, keys := retentionCatalogFixture(t)
 			_, err := cat.BeginDayMigration(keys[0].UTCDay, catalog.OwnerCold, "cold")
@@ -151,6 +151,28 @@ func TestRetentionAdapterSkipsActiveManualAndUnknown(t *testing.T) {
 				require.Error(t, err)
 			}
 		})
+	}
+}
+
+// 正常 pending 不能因 Owner 或 InFlight 被驱动器永久跳过。
+func TestRetentionAdapterResumesNormalPendingPhysicalDay(t *testing.T) {
+	cat, keys := retentionCatalogFixture(t)
+	_, err := cat.BeginDayMigration(keys[0].UTCDay, catalog.OwnerCold, "20260101")
+	require.NoError(t, err)
+	calls := 0
+	ops := lifecycle.Ops{Snapshot: func(catalog.PartitionKey, string) (string, error) { calls++; return "snapshot", nil }, Copy: func(catalog.PartitionKey, string, string) (string, error) { return "copy", nil }, Verify: func(catalog.PartitionKey, string, string) (string, error) { return "proof", nil }}
+	manager := lifecycle.NewDayManager(cat, ops, nil)
+	policy := retention.DefaultPolicy()
+	policy.Enabled = true
+	driver := retention.NewDriver(policy, newCatalogPartitionLister(cat), newDayManagerMover(manager, cat), nil)
+	result, err := driver.Step(context.Background(), time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Greater(t, result.Moved, 0)
+	require.Equal(t, 1, calls)
+	for _, key := range keys {
+		record, _ := cat.Get(key)
+		require.Equal(t, catalog.OwnerCold, record.Owner)
+		require.Equal(t, catalog.StateCleaned, record.MigrationState)
 	}
 }
 

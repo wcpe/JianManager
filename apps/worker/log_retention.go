@@ -26,6 +26,21 @@ func newCatalogPartitionLister(cat *catalog.Catalog) retention.PartitionLister {
 			return nil, nil
 		}
 		keys := cat.Keys()
+		pending := make(map[string]bool)
+		for _, day := range cat.PhysicalDayMigrations() {
+			pending[day.UTCDay] = true
+		}
+		blocked := make(map[string]bool)
+		for _, key := range keys {
+			if rec, ok := cat.Get(key); ok && rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned {
+				_, err := catalog.HappyIndex(rec.MigrationState)
+				if rec.MigrationState == catalog.StateFailedManual || (err != nil && rec.MigrationState != catalog.StateFailedRetryable) {
+					blocked[key.UTCDay] = true
+				} else {
+					pending[key.UTCDay] = true
+				}
+			}
+		}
 		out := make([]retention.PartitionRef, 0, len(keys))
 		for _, key := range keys {
 			rec, ok := cat.Get(key)
@@ -33,14 +48,13 @@ func newCatalogPartitionLister(cat *catalog.Catalog) retention.PartitionLister {
 				// Keys 与 Get 之间的不一致（并发删除）不是错误：跳过即可。
 				continue
 			}
-			retryable := rec.MigrationState == catalog.StateFailedRetryable &&
-				rec.TargetOwner == catalog.OwnerCold && rec.TargetDirID != ""
+			retryable := pending[key.UTCDay] && !blocked[key.UTCDay]
 			out = append(out, retention.PartitionRef{
 				StorageNamespace: key.StorageNamespace,
 				// 直接沿用 catalog 的日期写法（解析层两种都认，避免在这里做格式转换）。
 				UTCDay: key.UTCDay,
 				Owner:  string(rec.Owner),
-				// 活动/手工/未知状态均不自动覆盖；只有明确的冷层可重试失败进入续跑。
+				// 正常未完成批次也必须续跑；手工和未知状态继续隔离。
 				InFlight: rec.MigrationState != "" &&
 					rec.MigrationState != catalog.StateCleaned && !retryable,
 				Retryable: retryable,
@@ -73,6 +87,30 @@ func newDayManagerMover(mgr *lifecycle.DayManager, cat *catalog.Catalog) retenti
 			return "", fmt.Errorf("日志分区 %s 不在 Catalog 中", key)
 		}
 		canonicalDay := parsed.Format("2006-01-02")
+		pending := false
+		if physical, ok := cat.PhysicalDay(canonicalDay); ok {
+			pending = physical.Frozen
+		}
+		hotResidual := false
+		for _, member := range cat.RecordsForDay(canonicalDay) {
+			hotResidual = hotResidual || member.Owner == catalog.OwnerHot
+			if member.MigrationState != "" && member.MigrationState != catalog.StateCleaned {
+				_, stateErr := catalog.HappyIndex(member.MigrationState)
+				if member.MigrationState == catalog.StateFailedManual || (stateErr != nil && member.MigrationState != catalog.StateFailedRetryable) {
+					return "", fmt.Errorf("日志分区 %s 迁移状态 %s 需要人工处理", member.Key, member.MigrationState)
+				}
+				pending = true
+			}
+		}
+		if pending {
+			if err := mgr.Resume(canonicalDay); err != nil {
+				return "", err
+			}
+			if physical, ok := cat.PhysicalDay(canonicalDay); ok {
+				return physical.TargetDirID, nil
+			}
+			return rec.OwnerDirID, nil
+		}
 		if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned {
 			_, stateErr := catalog.HappyIndex(rec.MigrationState)
 			if rec.MigrationState == catalog.StateFailedManual || (stateErr != nil && rec.MigrationState != catalog.StateFailedRetryable) {
@@ -86,8 +124,8 @@ func newDayManagerMover(mgr *lifecycle.DayManager, cat *catalog.Catalog) retenti
 			}
 			return rec.TargetDirID, nil
 		}
-		if rec.Owner == catalog.OwnerCold {
-			// 只有稳定冷层才能幂等成功，不能跳过未完成的清理。
+		if rec.Owner == catalog.OwnerCold && !hotResidual {
+			// 只有整日稳定冷层才能幂等成功，不能遗漏另一成员的 HOT 残留。
 			return rec.OwnerDirID, nil
 		}
 		dirID := parsed.Format("20060102")

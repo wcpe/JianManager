@@ -515,9 +515,7 @@ func runWorker() {
 	// 继续占用 hot/cold 端口 ⇒ 新 worker 报 `hot exited immediately after start`（现场 ✓，只能靠
 	// RangeClient 接旧实例 ⇒ 采集面降级 ✗）。判据＝**本 data 根**（cmdline 含根 ＋ exe 在根下，两道都过 ✓）
 	// ⇒ 不误杀他进程 ✓；回收本身有界（每个孤儿 TERM→5s→KILL ✓）；非 Linux（无 /proc）仅 Debug 降级 ✓。
-	if reaped, err := vlsup.ReapOrphans(root.Base(), "startup", func(o vlsup.OrphanMatch) {
-		slog.Warn("已回收本节点 vlsup 孤儿（启前）", "pid", o.PID, "cmdline", o.Cmdline, "exe", o.Exe)
-	}); err != nil {
+	if reaped, err := vlsup.ReapOrphans(root.Base(), "startup", logReapedVLOrphan); err != nil {
 		slog.Debug("vlsup 孤儿回收不可用（非致命）", "error", err)
 	} else if len(reaped) > 0 {
 		slog.Warn("启前 vlsup 孤儿回收完成", "count", len(reaped), "pids", reaped)
@@ -635,6 +633,19 @@ func runWorker() {
 	var coldVLClient *vlsup.Client
 	var rehydrateVLClient *vlsup.Client
 	var vlSupervisor *vlsup.Supervisor
+	var managedClients *managedLogClients
+	budgetConfig, budgetErr := cfg.LogVL.RuntimeBudget()
+	if budgetErr != nil {
+		slog.Error("日志资源预算配置非法", "error", budgetErr)
+		return
+	}
+	resourceBudget, budgetErr := vlsup.NewBudgetController(budgetConfig)
+	if budgetErr != nil {
+		slog.Error("日志资源预算控制器创建失败", "error", budgetErr)
+		return
+	}
+	logRuntimeCtx, cancelLogRuntime := context.WithCancel(context.Background())
+	defer cancelLogRuntime()
 	// 运行期自愈看护的取消函数（缺陷修复：VL 运行期崩溃后无自愈）。
 	// 必须在 StopAll 之前调用：先停止看护，再停进程，避免"刚停就被看护判成崩溃又拉起"。
 	var cancelVLGuardian context.CancelFunc
@@ -658,8 +669,7 @@ func runWorker() {
 		vlSupervisor, err = vlsup.New(vlsup.Options{
 			BinaryPath: managedBinary, AssetSHA256: managedSHA,
 			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
-			// 删除能力（默认关）：孤儿代次 GC 与按级别 TTL 的前置条件。
-			// 不打开时 VL 只能靠整日 retention 淘汰，旧代次行永久占盘（生产单日 75×）。
+			// 删除三闸保持默认关闭；原生整日 TTL 仍独立运行，不提供永久副本保证。
 			DeleteEnabled: cfg.LogVL.DeleteEnabled,
 			RetentionByNamespace: map[vlsup.Namespace]string{
 				// 冷层 retention 是「冷留存多久」的唯一执行者（用户口径：730d，所有级别统一）。
@@ -671,15 +681,24 @@ func runWorker() {
 				vlsup.NamespaceCold:      cfg.LogVL.ColdPort,
 				vlsup.NamespaceRehydrate: cfg.LogVL.RehydratePort,
 			},
-			MemoryAllowedBytes: map[vlsup.Namespace]int64{vlsup.NamespaceHot: cfg.LogVL.HotCacheBytes},
-			// 受管 VL 进程 Go 软内存上限（契约 §6.6 RSS 预算）。
+			NamespaceBudgets: budgetConfig.Namespaces,
+			// 新键已归并旧 cache/Go 软限制；RSS 另由唯一控制器执行真实准入。
 			MemoryLimitBytes: cfg.LogVL.MemoryLimitBytes,
 		})
 		if err != nil {
 			slog.Error("VictoriaLogs supervisor 创建失败", "error", err)
-		} else if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceHot); err != nil {
-			slog.Error("VictoriaLogs HOT 启动失败", "error", err)
 		} else {
+			// 先装配所有固定地址，首次关闭或失败不影响后续运行期启动的业务接线。
+			if clients, clientErr := newManagedLogClients(vlSupervisor); clientErr != nil {
+				slog.Error("VictoriaLogs 固定客户端装配失败", "error", clientErr)
+			} else {
+				managedClients = clients
+				vlHTTPClient, coldVLClient, rehydrateVLClient = clients.Hot, clients.Cold, clients.Rehydrate
+				rangeClient = clients.Ranges
+			}
+			if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceHot); err != nil {
+				slog.Error("VictoriaLogs HOT 启动失败，保留运行期恢复接线", "error", err)
+			}
 			if cfg.LogVL.StartCold {
 				if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceCold); err != nil {
 					slog.Error("VictoriaLogs COLD 启动失败", "error", err)
@@ -690,8 +709,6 @@ func runWorker() {
 					slog.Error("VictoriaLogs Rehydrate 启动失败", "error", err)
 				}
 			}
-			// FR-476 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
-			go sampleLogBudget(vlSupervisor)
 			// 运行期自愈看护：过去只在启动路径做一次孤儿回收，VL 运行期崩溃（OOM、段损坏）后
 			// 账面只会被读状态时改成 FAILED，进程不会自己起来 ⇒ 采集/查询长期降级，直到人工
 			// 重启 Worker。这里启动守护循环：只重启「此前健康（稳定存活超过窗口）、现已退出」
@@ -716,33 +733,8 @@ func runWorker() {
 				slog.Warn("VictoriaLogs HOT 未在超时内就绪，采集/查询将保持降级", "error", waitErr)
 			}
 			cancelHotReady()
-			if vlClient, clientErr := vlSupervisor.ClientFor(vlsup.NamespaceHot); clientErr == nil {
-				vlHTTPClient = vlClient
-				hotRange, _ := vlrange.New(vlClient)
-				tiered := &vlrange.Tiered{Hot: hotRange}
-				for _, ns := range []vlsup.Namespace{vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
-					status, statusErr := vlSupervisor.Status(ns)
-					if statusErr != nil || status.State != vlsup.StateRunning {
-						continue
-					}
-					client, clientErr := vlSupervisor.ClientFor(ns)
-					if clientErr != nil {
-						continue
-					}
-					rangeClient, rangeErr := vlrange.New(client)
-					if rangeErr != nil {
-						continue
-					}
-					if ns == vlsup.NamespaceCold {
-						tiered.Cold = rangeClient
-						coldVLClient = client
-					} else {
-						tiered.Rehydrate = rangeClient
-						rehydrateVLClient = client
-					}
-				}
-				rangeClient = tiered
-				slog.Info("VictoriaLogs supervisor RangeClient 已接线", "baseURL", vlClient.BaseURL())
+			if managedClients != nil {
+				slog.Info("VictoriaLogs 三层固定客户端已装配；进程健康与 Catalog/投影就绪分别判定")
 			}
 		}
 	}
@@ -769,6 +761,17 @@ func runWorker() {
 			}
 		}
 	}
+	logBudgetRoots := []string{root.Abs("var/log")}
+	if strings.TrimSpace(cfg.LogVL.DataRoot) != "" {
+		logBudgetRoots = append(logBudgetRoots, cfg.LogVL.DataRoot)
+	}
+	// 先获得有界采样，昂贵后台工作才有准入依据；之后只更新同一控制器。
+	externalHot := vlSupervisor == nil && vlHTTPClient != nil
+	resourceBudget.Update(sampleLogResources(vlSupervisor, logBudgetRoots, externalHot))
+	slog.Info("日志资源预算准入已装配；零全局上界只计量，Go 软限制不是 RSS 硬限",
+		"diskBudgetBytes", budgetConfig.DiskBytes, "rssBudgetBytes", budgetConfig.RSSBytes,
+		"namespaceBudgets", budgetConfig.Namespaces, "reservationBudgets", budgetConfig.Reservations)
+	go sampleLogBudget(logRuntimeCtx, vlSupervisor, resourceBudget, logBudgetRoots, externalHot)
 	var logJournal catalog.Journal
 	// 日志容量读数（磁盘使用率 / WAL 上限）的**唯一**构造点：采集侧容量门禁与
 	// 保留策略的磁盘触发共用同一份提供者。两者各采一次磁盘迟早会给出不同结论，
@@ -800,6 +803,9 @@ func runWorker() {
 	// 保留策略驱动器（G6）。声明在这里（而非 lifecycle 块内）是因为它要在采集运行时
 	// 启动之后才有意义：搬运的是已经落库的分区，采集还没起来时搬没有意义。
 	var logRetentionDriver *retention.Driver
+	var logDayManager *lifecycle.DayManager
+	var logMigrationRecoveryDone <-chan struct{}
+	migrationInput := &dayMigrationInputBridge{}
 	if store, journalErr := catalog.NewJSONLFileStore(root.Abs("var/log/catalog.journal.jsonl")); journalErr != nil {
 		slog.Error("日志 Catalog journal 打开失败，查询面保持无权威分区", "error", journalErr)
 	} else if journal, journalErr := catalog.NewJournalWithStore(store); journalErr != nil {
@@ -809,6 +815,12 @@ func runWorker() {
 		slog.Info("日志 Catalog journal 已恢复", "path", root.Abs("var/log/catalog.journal.jsonl"), "entries", journal.LastSeq())
 	}
 	logStack := logassemble.Build(logJournal, rangeClient, version.Version)
+	logStack.LogRPC.SetResourceBudget(resourceBudget)
+	defer func() {
+		if closeErr := logStack.LogRPC.Close(); closeErr != nil {
+			slog.Warn("日志查询视图退出清理失败", "error", closeErr)
+		}
+	}()
 	logStack.LogRPC.SetRuntimeCatalog(logStack.Catalog)
 	// FR-477：先完成 Catalog/journal 逻辑恢复，再开放 Log RPC；物理目录残留
 	// 不能替代 owner/generation 权威。不可查询范围保持 recovery-required，
@@ -856,7 +868,10 @@ func runWorker() {
 			hotCfg.StorageDataPath, coldCfg.StorageDataPath, logStack.Catalog); lifecycleErr != nil {
 			slog.Error("日志 Lifecycle 物理适配器创建失败", "error", lifecycleErr)
 		} else {
+			physical.ResourceBudget = resourceBudget
+			physical.CanonicalDayInput = migrationInput.input
 			dayManager := lifecycle.NewDayManager(logStack.Catalog, physical.Ops(), physical)
+			logDayManager = dayManager
 			// 保留策略驱动器（G6）：把 catalog 的日分区按「年龄 + 磁盘水位取先到」搬到冷层。
 			// 没有它，HOT 永不自动转 COLD——plan/executor/Mover 都对，但没人周期性把它们串起来。
 			if retentionPolicy, policyErr := cfg.RetentionPolicy(); policyErr != nil {
@@ -864,24 +879,9 @@ func runWorker() {
 			} else if retentionPolicy.Enabled {
 				logRetentionDriver = retention.NewDriver(retentionPolicy,
 					newCatalogPartitionLister(logStack.Catalog),
-					newDayManagerMover(dayManager, logStack.Catalog),
+					readyRetentionMover(newDayManagerMover(dayManager, logStack.Catalog), managedClients, resourceBudget),
 					newDiskPercentReader(logCapacityProvider))
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
-			}
-			resumedDays := make(map[string]bool)
-			for _, key := range logStack.Catalog.Keys() {
-				rec, ok := logStack.Catalog.Get(key)
-				if !ok || rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned ||
-					!rec.TargetOwner.Valid() || rec.TargetDirID == "" || rec.MigrationFromDirID == "" {
-					continue
-				}
-				if resumedDays[key.UTCDay] {
-					continue
-				}
-				resumedDays[key.UTCDay] = true
-				if resumeErr := dayManager.Resume(key.UTCDay); resumeErr != nil {
-					slog.Error("日志分区迁移启动恢复失败", "partition", key.String(), "error", resumeErr)
-				}
 			}
 			logStack.LogRPC.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(ctx context.Context, namespace, day, target string) error {
 				if err := ctx.Err(); err != nil {
@@ -889,6 +889,14 @@ func runWorker() {
 				}
 				if target != "cold" {
 					return fmt.Errorf("unsupported lifecycle target %s", target)
+				}
+				if err := resourceBudget.Admit(vlsup.WorkBackground); err != nil {
+					return err
+				}
+				for _, owner := range []catalog.Owner{catalog.OwnerHot, catalog.OwnerCold} {
+					if err := managedClients.ready(ctx, owner); err != nil {
+						return err
+					}
 				}
 				// 探针分流（见 lifecycle.ResolveMigrateTarget）：搬运单位是整天的物理分区，
 				// storageNamespace 只决定「这次调用允许开始吗」。前端节点级面板发的是
@@ -972,8 +980,23 @@ func runWorker() {
 			})
 			rehydrateManager = rehydrate
 			backend := archive.NewQueryBackend(registry, rehydrate)
+			backend.SetResourceBudget(archive.RehydrateResourceBudget{
+				Admit: func(ctx context.Context) error {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					return resourceBudget.Admit(vlsup.WorkBackground)
+				},
+				ReserveStaging: func(ctx context.Context, bytes int64) (func(), error) {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+					return resourceBudget.Reserve(vlsup.ReservationStaging, bytes)
+				},
+			})
 			if rehydrateVLClient != nil {
-				backend.SetPublisher(&archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: rehydrateVLClient})
+				backend.SetPublisher(readyRehydratePublisher{clients: managedClients,
+					publisher: &archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: rehydrateVLClient}})
 			}
 			logStack.SetArchiveBackend(backend)
 			slog.Info("日志归档运行时已装配", "provider", provider.Kind())
@@ -1052,7 +1075,7 @@ func runWorker() {
 		// 于是重建重放历史天时拿到"成功"却永远校验不过 ⇒ PublicationPending 永久为真 ⇒
 		// 重建重试到上限后放弃，而对账每轮又把该天重新判成缺失 ⇒ 永不收敛。
 		//
-		// 解析口径与 supervisor 一致：空串回退 vlsup.DefaultRetentionPeriod（30d）；
+		// 解析口径与 supervisor 的唯一默认一致；有限 TTL 不等于独立永久副本。
 		// 解析失败只告警并保持零值（= 不启用过滤，行为与改动前逐字一致）——
 		// 配置笔误不该让采集把正常数据当成"不可见"。
 		hotRetention := func() time.Duration {
@@ -1070,10 +1093,21 @@ func runWorker() {
 				"retentionPeriod", raw, "hotRetention", period)
 			return period
 		}()
+		readLimits, limitsErr := cfg.IngestReadLimits()
+		if limitsErr != nil {
+			slog.Error("日志读取预算非法", "error", limitsErr)
+			return
+		}
 		newIngest := func() (*ingest.Manager, error) {
 			return ingest.New(ingest.Options{
-				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
+				DeferredDelivery: true,
+				Root:             root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
 				Journal: logStack.Catalog.Journal(), Archive: archiveRegistry, Sources: sources,
+				ResourceBudget: resourceBudget,
+				WALReserve: func(bytes int64) (func(), error) {
+					return resourceBudget.Reserve(vlsup.ReservationWAL, bytes)
+				},
+				ReadLimits: &readLimits,
 				// 采集归一化的节点级默认时区（缺陷 C，键 log_ingest.time_zone）：源未显式配置时
 				// 生效，空串 = UTC（零配置零行为变化）。中文 locale 的 JVM 与 Worker 同机部署时
 				// 配 local 即可对齐本地时间；非法值已在 config.Load 阶段启动即拒。
@@ -1165,22 +1199,9 @@ func runWorker() {
 					}
 					return false, ""
 				},
-				VLRoute: func(source ingest.SourceConfig) (*vlsup.Client, bool, error) {
-					target, ok := logStack.Catalog.RouteWrite(catalog.PartitionKey{
-						StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
-					}, source.UTCDay)
-					if !ok {
-						return vlHTTPClient, false, nil
-					}
-					switch target.Owner {
-					case catalog.OwnerHot:
-						return vlHTTPClient, target.Frozen, nil
-					case catalog.OwnerCold:
-						return coldVLClient, target.Frozen, nil
-					default:
-						return nil, target.Frozen, fmt.Errorf("ingest: Catalog write owner %s requires an explicit recovery path", target.Owner)
-					}
-				},
+				VLRoute:            managedLogWriteRoute(logStack.Catalog, managedClients, vlHTTPClient),
+				VLReadRoute:        managedLogReadRoute(managedClients, vlHTTPClient),
+				VLWritePermitRoute: managedLogPermitRoute(managedClients, vlHTTPClient),
 			})
 		}
 		// 采集运行时创建失败不再一次性放弃（2026-09-28 生产教训：一次瞬时失败即让整个采集
@@ -1208,6 +1229,7 @@ func runWorker() {
 			register.SetLogIngestHealth(false, ingestErr.Error())
 		} else {
 			logIngest = manager
+			migrationInput.manager.Store(manager)
 			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
 			// FR-502 §3.4：把 log_sources 配置接线到实例注册路径。
@@ -1285,6 +1307,18 @@ func runWorker() {
 				}
 			}()
 			go manager.Start(ingestCtx)
+			// 自动保留默认关闭不代表可以遗弃既有Frozen日；恢复循环只Resume已持久责任。
+			if recovery := newLogPhysicalDayRecovery(logDayManager, logStack.Catalog, managedClients, resourceBudget); recovery != nil {
+				logMigrationRecoveryDone = runLogPhysicalDayRecovery(logRuntimeCtx, recovery.step, nil)
+				defer func() {
+					cancelLogRuntime()
+					waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancelWait()
+					if !awaitLogPhysicalDayRecovery(waitCtx, logMigrationRecoveryDone) {
+						slog.Warn("日志迁移恢复仍有在途操作，持久责任保留；未伪造物理IO已取消")
+					}
+				}()
+			}
 			// 应用本地快照的策略（FR-503）：采集运行时构造完成后立即生效，不等首拍心跳。
 			manager.SetAcqPolicy(acqPolicy)
 			// 定时归档导入扫描（FR-504）：周期由采集策略驱动（面板可配、心跳热更新），
@@ -1311,7 +1345,7 @@ func runWorker() {
 			// 只打"暂停 / 有未消解缺口 / 有回放在飞"的源 ✓，正常源不打，避免刷屏 ✓。
 			go sampleResumeDiagnostics(ingestCtx, manager)
 			// 保留策略驱动器：首轮立即执行（启动时正是「停机期间攒下的过期分区」最需要处理的时刻），
-			// 之后按 log_retention.sweep.interval 周期跑。与采集运行时共用同一 ctx 生命周期。
+			// 之后按 log_retention.trigger.interval 周期跑。与采集运行时共用同一 ctx 生命周期。
 			if logRetentionDriver != nil {
 				go logRetentionDriver.Run(ingestCtx)
 				slog.Info("日志冷热分层驱动器已启动", "interval", logRetentionDriver.Interval().String())
@@ -1711,6 +1745,13 @@ func runWorker() {
 		slog.Warn("WS 服务关闭超时", "error", err)
 	}
 	manager.StopAll()
+	cancelLogRuntime()
+	if err := logStack.LogRPC.Close(); err != nil {
+		slog.Warn("日志查询视图关闭失败", "error", err)
+	}
+	if !awaitLogPhysicalDayRecovery(shutdownCtx, logMigrationRecoveryDone) {
+		slog.Warn("日志迁移恢复仍有实际在途操作，停止新调度并保留恢复责任")
+	}
 	// 先停看护再停 VL：反过来的话，停止过程中进程退出会被看护判成崩溃并尝试拉起
 	// （epoch 已挡住，但显式取消更直白，也不留残余 goroutine）。
 	if cancelVLGuardian != nil {
@@ -2013,27 +2054,37 @@ func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Lat
 	)
 }
 
-// sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-476 / 契约 §6.6）。
-// 每次采样以 Debug 记录实际数值（供 Runbook C 取证）；状态变化时升为 Info/Warn。
-func sampleLogBudget(sup *vlsup.Supervisor) {
+// sampleLogBudget 更新真实准入所使用的唯一预算控制器，采样失败保持未知而非伪造零。
+func sampleLogBudget(ctx context.Context, sup *vlsup.Supervisor, budget *vlsup.BudgetController, roots []string, externalHot bool) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	last := vlsup.BudgetOK
-	for range ticker.C {
-		verdict := sup.SampleBudget()
-		slog.Debug("日志资源预算采样",
-			"state", string(verdict.State),
-			"vlRssBytes", verdict.Sample.ProcessRSSBytes,
-			"diskUsagePercent", verdict.Sample.DiskUsagePercent,
-		)
-		if verdict.State == last {
-			continue
+	last := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sample := sampleLogResources(sup, roots, externalHot)
+			budget.Update(sample)
+			foregroundErr, backgroundErr := budget.Admit(vlsup.WorkForeground), budget.Admit(vlsup.WorkBackground)
+			state := fmt.Sprint(foregroundErr, ";", backgroundErr)
+			snapshot := budget.Snapshot()
+			slog.Debug("日志资源预算采样", "workerRssBytes", sample.WorkerRSSBytes,
+				"workerRssKnown", sample.WorkerRSSKnown, "namespaceRss", sample.Namespaces,
+				"diskUsagePercent", sample.DiskUsagePercent, "diskKnown", sample.DiskKnown,
+				"logDiskBytes", sample.DiskUsedBytes, "logDiskBytesKnown", sample.DiskBytesKnown,
+				"reservedBytes", snapshot.TotalReservedBytes,
+				"reservedWalBytes", snapshot.Reserved[vlsup.ReservationWAL],
+				"reservedStagingBytes", snapshot.Reserved[vlsup.ReservationStaging],
+				"reservedExportBytes", snapshot.Reserved[vlsup.ReservationExport])
+			if state != last {
+				if foregroundErr != nil || backgroundErr != nil {
+					slog.Warn("日志资源预算准入受限；WAL 仍允许有界排空", "foreground", foregroundErr, "background", backgroundErr)
+				} else {
+					slog.Info("日志资源预算准入正常")
+				}
+				last = state
+			}
 		}
-		if verdict.State == vlsup.BudgetOK {
-			slog.Info("日志资源预算恢复正常", "state", string(verdict.State))
-		} else {
-			slog.Warn("日志资源预算降级", "state", string(verdict.State), "reasons", verdict.Reasons)
-		}
-		last = verdict.State
 	}
 }

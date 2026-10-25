@@ -111,12 +111,21 @@ func TestLoadSamplingThroughRealManagerWALAndDelivery(t *testing.T) {
 						var row struct {
 							Generation string `json:"projection_generation"`
 							Source     string `json:"log_source_id"`
+							ID         string `json:"event_id"`
 						}
 						if json.Unmarshal([]byte(line), &row) != nil || !strings.Contains(query, "projection_generation:="+strconv.Quote(row.Generation)) {
 							continue
 						}
 						if strings.Contains(query, "log_source_id:=") && !strings.Contains(query, "log_source_id:="+strconv.Quote(row.Source)) {
 							continue
+						}
+						// 同代次尾部校验只请求本批ID；夹具不能忽略选择器后返回额外历史行。
+						if start := strings.Index(query, "event_id:in("); start >= 0 {
+							selector := query[start+len("event_id:in("):]
+							end := strings.IndexByte(selector, ')')
+							if end < 0 || !strings.Contains(selector[:end], strconv.Quote(row.ID)) {
+								continue
+							}
 						}
 						if limit > 0 && count >= limit {
 							break
@@ -137,12 +146,14 @@ func TestLoadSamplingThroughRealManagerWALAndDelivery(t *testing.T) {
 				require.NoError(t, os.WriteFile(path, []byte(body), 0600))
 				sources = append(sources, ingest.SourceConfig{LogSourceID: id, SourceGeneration: "g1", Path: path, StorageNamespace: id, UTCDay: time.Now().UTC().Format("2006-01-02")})
 			}
-			m, err := ingest.New(ingest.Options{Root: root, VL: client, Catalog: catalog.New(catalog.NewMemJournal()), Sources: sources[:1], Sampling: cfg.SamplingPolicy(), VerificationTimeout: 200 * time.Millisecond, Reconcile: &ingest.ReconcileConfig{Enabled: false}, ReconcileLoop: &ingest.ReconcileLoopConfig{Enabled: false}, MultilineUnclosedTimeout: time.Millisecond})
+			cat := catalog.New(catalog.NewMemJournal())
+			m, err := ingest.New(ingest.Options{Root: root, VL: client, Catalog: cat, Sources: sources[:1], Sampling: cfg.SamplingPolicy(), VerificationTimeout: 200 * time.Millisecond, Reconcile: &ingest.ReconcileConfig{Enabled: false}, ReconcileLoop: &ingest.ReconcileLoopConfig{Enabled: false}, MultilineUnclosedTimeout: time.Millisecond})
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = m.Stop() })
 			require.NoError(t, m.WaitStartupRecovery(context.Background()))
 			require.NoError(t, m.Register(sources[1]), "后登记源必须沿用策略但创建独立pipeline")
 			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			done := make(chan struct{})
 			go func() { m.Start(ctx); close(done) }()
 			seen := map[string]bool{}
@@ -158,6 +169,40 @@ func TestLoadSamplingThroughRealManagerWALAndDelivery(t *testing.T) {
 				}
 			}
 			timer.Stop()
+			// HTTP收到WARN只是请求到达；取消前必须等逐源发布凭据与canonical实际落盘。
+			require.Eventually(t, func() bool {
+				store, openErr := eventstore.OpenReadOnly(filepath.Join(root, "var", "log", "events"))
+				if openErr != nil {
+					return false
+				}
+				defer func() { _ = store.Close() }()
+				for _, source := range sources {
+					record, exists := cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay})
+					if !exists || record.PublishedProjection == nil || !record.PublishedProjection.CoverageComplete {
+						return false
+					}
+					closed := false
+					for _, scope := range record.PublishedProjection.SourceProjections {
+						if scope.LogSourceID == source.LogSourceID && scope.SourceGeneration == source.SourceGeneration && scope.ClosedVisibleSeq >= uint64(len(body)) {
+							closed = true
+						}
+					}
+					if !closed {
+						return false
+					}
+					count, hasFinalWARN := 0, false
+					if err := store.Iterate(source.LogSourceID+"/"+source.SourceGeneration, func(event logtypes.Event) error {
+						count++
+						if event.Level == "WARN" && event.Record.End == uint64(len(body)) {
+							hasFinalWARN = true
+						}
+						return nil
+					}); err != nil || count != tc.expected || !hasFinalWARN {
+						return false
+					}
+				}
+				return true
+			}, 5*time.Second, 10*time.Millisecond, "必须等真实发布/落盘屏障，不能把HTTP请求到达当完成")
 			cancel()
 			<-done
 			require.NoError(t, m.Stop())

@@ -18,9 +18,12 @@ import (
 func TestRetentionDurationsDecodeThroughLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.yml")
-	yaml := `
+	yaml := wiringManagedReceiverYAML + `
 log_retention:
   enabled: true
+  migration:
+    copy_verify_budget: 2h
+    recovery_budget: 24h
   hot_retention: 90d
   cold_retention: 730d
   trigger:
@@ -84,9 +87,12 @@ log_retention:
 func TestRetentionTriggerIntervalTakesEffect(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.yml")
-	yaml := `
+	yaml := wiringManagedReceiverYAML + `
 log_retention:
   enabled: true
+  migration:
+    copy_verify_budget: 2h
+    recovery_budget: 24h
   trigger:
     interval: 3m
 `

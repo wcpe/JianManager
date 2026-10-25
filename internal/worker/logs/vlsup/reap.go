@@ -37,9 +37,9 @@ var ErrReapUnsupported = errors.New("vlsup: 孤儿回收需要 /proc 扫描面�
 
 // OrphanMatch 汇总"本节点孤儿"的两道证据（供日志与测试断言 ✓）。
 type OrphanMatch struct {
-	PID     int
-	Cmdline string
-	Exe     string
+	PID       int
+	Exe       string
+	Namespace Namespace
 }
 
 // matchesOwnOrphan 是判据本体（纯函数 ⇒ 可被测试直接喂样例 ✓）。
@@ -90,7 +90,15 @@ func scanOwnOrphans(dataRoot string, selfPID int) ([]OrphanMatch, error) {
 			continue
 		}
 		if matchesOwnOrphan(cmdline, exe, dataRoot) {
-			out = append(out, OrphanMatch{PID: pid, Cmdline: cmdline, Exe: exe})
+			// 原始命令行只参与本地归属判据，绝不进入返回值、回调或日志。
+			var ns Namespace
+			for _, candidate := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+				if strings.Contains(cmdline, string(os.PathSeparator)+string(candidate)+string(os.PathSeparator)+"data") {
+					ns = candidate
+					break
+				}
+			}
+			out = append(out, OrphanMatch{PID: pid, Exe: exe, Namespace: ns})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })

@@ -47,11 +47,11 @@ func TestLoadRejectsRetentionMismatchAndRawPolicy(t *testing.T) {
 func TestLoadRetentionDefaultsMonthsAndDisabledCompatibility(t *testing.T) {
 	for _, body := range []string{
 		"{}\n",
-		"log_retention:\n  enabled: true\n",
-		"log_retention:\n  enabled: true\nlog_vl:\n  retention_period: '3'\n  cold_retention_period: 24M\n",
-		"log_retention:\n  enabled: true\nlog_vl:\n  retention_period: 13w\n  cold_retention_period: 2y\n",
-		"log_retention:\n  enabled: true\n  hot_retention: 30d\n  cold_retention: 30d\nlog_vl:\n  retention_period: ''\n  cold_retention_period: ' '\n",
 		"log_retention:\n  enabled: false\n  hot_retention: 180d\n  cold_retention: 1000d\nlog_vl:\n  retention_period: ''\n  cold_retention_period: ''\n",
+		wiringValidLayerYAML(),
+		strings.Replace(wiringValidLayerYAML(), "  start_cold: true", "  start_cold: true\n  retention_period: '3'\n  cold_retention_period: 24M", 1),
+		// 13w=91d 不能覆盖 UTC 日边界与复制恢复 SLA，改用仍合法且足额的周单位。
+		strings.Replace(wiringValidLayerYAML(), "  start_cold: true", "  start_cold: true\n  retention_period: 14w\n  cold_retention_period: 2y", 1),
 	} {
 		if _, err := loadLogPolicyFixture(t, body); err != nil {
 			t.Errorf("兼容配置不得被拒: %q: %v", body, err)
