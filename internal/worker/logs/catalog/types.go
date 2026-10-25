@@ -67,6 +67,8 @@ type QueryLeaseRef struct {
 	LeaseID    string    `json:"lease_id"`
 	ViewID     string    `json:"view_id"`
 	Generation uint64    `json:"generation"`
+	Owner      Owner     `json:"owner,omitempty"`
+	DirID      string    `json:"dir_id,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	Holder     string    `json:"holder,omitempty"`
@@ -180,7 +182,7 @@ type Record struct {
 	ConflictGeneration string `json:"conflict_generation,omitempty"`
 }
 
-// Clone 返回记录的浅层可变副本（切片元素共享，测试/恢复用）。
+// Clone 返回记录及嵌套投影的深副本，读取方不能改写权威对象。
 func (r *Record) Clone() *Record {
 	if r == nil {
 		return nil

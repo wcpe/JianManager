@@ -34,6 +34,11 @@ type InstanceStatus struct {
 	AssetBuildID    string
 	AssetSHA256     string
 	LastError       string
+	// 退出证据来自真实进程的单一Wait；不是读取status时的墙钟。
+	StartedAt     time.Time
+	ExitedAt      time.Time
+	ExitCode      int
+	ExitCodeKnown bool
 	// HealthOK 表示最近一次 HTTP /health 成功；不蕴含分区恢复或查询可用。
 	HealthOK bool
 	// PartitionRecoveryComplete 分区恢复完成；foundation 不自动推断，保持 false 直至上层登记。
@@ -81,8 +86,10 @@ type Options struct {
 	MemoryAllowedBytes map[Namespace]int64
 	// MemoryLimitBytes 受管 VL 进程的 Go 软内存上限（GOMEMLIMIT，字节）。
 	// 0 使用 DefaultVLMemoryLimitBytes；负值表示不注入（保留 VL 默认行为）。
-	// 用于约束单 Worker 日志数据面 RSS（契约 §6.6）。
+	// 仅为Go软目标，不承诺RSS或mmap硬上限。
 	MemoryLimitBytes int64
+	// NamespaceBudgets 分别配置各层cache、Go软限制、RSS判据；优先于兼容字段。
+	NamespaceBudgets map[Namespace]NamespaceBudget
 	// Factory 进程工厂；nil 使用 RealFactory。测试注入 fake。
 	Factory CmdFactory
 	// Sink 独立失败 sink；nil 使用 slog 默认 IndependentLoggerSink。
@@ -109,6 +116,8 @@ type instance struct {
 	// startedAt 本代进程启动成功的时刻（零值表示当前没有成功启动过）。
 	// 看护用它判断「此前健康」：存活不足稳定窗口的实例按启动失败处理，不进重启循环。
 	startedAt time.Time
+	// stableObserved 只由活态越过稳定窗口置位；死亡后的墙钟不能生成资格。
+	stableObserved bool
 	// restartAttempts 连续自动重启次数；restartsSuspended 为真表示已达上限并熔断。
 	restartAttempts   int
 	restartsSuspended bool
@@ -125,18 +134,18 @@ type Supervisor struct {
 	dataRoot  string
 	retention string
 	// retentionNS 按 namespace 覆盖 retention（空 = 用 retention）。
-	retentionNS map[Namespace]string
-	authUser     string
+	retentionNS   map[Namespace]string
+	authUser      string
 	deleteEnabled bool
-	authPass    string
-	ports       map[Namespace]int
-	memOverride map[Namespace]int64
-	factory     CmdFactory
-	sink        Sink
-	allowVLRec  bool
-	assetTag    string
-	assetBuild  string
-	newClient   func(baseURL, user, pass string) (*Client, error)
+	authPass      string
+	ports         map[Namespace]int
+	memOverride   map[Namespace]int64
+	factory       CmdFactory
+	sink          Sink
+	allowVLRec    bool
+	assetTag      string
+	assetBuild    string
+	newClient     func(baseURL, user, pass string) (*Client, error)
 
 	mu          sync.Mutex
 	instances   map[Namespace]*instance
@@ -162,9 +171,8 @@ type Supervisor struct {
 
 // DefaultVLMemoryLimitBytes 受管 VL 进程的默认 Go 软内存上限。
 //
-// 取值依据：契约 §6.6「单 Worker 日志数据面 RSS ≤ 1GiB（不含 page cache）」。Worker 进程自身约
-// 0.3GiB，故给单 VL 进程 512MiB 软上限，使默认配置（HOT-only）整体留在 1GiB 以内。
-// GOMEMLIMIT 是 Go 软上限（引导 GC 更早回收），不是硬 cgroup 限制。
+// 保留512MiB的Go软目标基线，不据此推断Worker+各层RSS总量。
+// GOMEMLIMIT不含所有RSS/mmap/page cache，实际准入必须消费独立RSS采样与预算。
 const DefaultVLMemoryLimitBytes int64 = 512 << 20
 
 // vlProcessEnv 依据配置构造受管 VL 进程的额外环境变量。
@@ -194,15 +202,46 @@ func New(opts Options) (*Supervisor, error) {
 	if opts.AuthUsername == "" || opts.AuthPassword == "" {
 		return nil, fmt.Errorf("vlsup: local basic-auth username/password are required")
 	}
-	factory := opts.Factory
-	if factory == nil {
-		// 默认真实工厂：注入 VL 进程级 Go 软内存上限（GOMEMLIMIT），使受管 VL RSS 受预算约束
-		// （契约 §6.6 单 Worker 日志数据面 RSS ≤ 1GiB；-memory.allowedBytes 只约束 cache 不约束 Go heap）。
-		factory = RealFactory{Env: vlProcessEnv(opts.MemoryLimitBytes)}
-	}
 	sink := opts.Sink
 	if sink == nil {
 		sink = IndependentLoggerSink{}
+	}
+	budgets := DefaultNamespaceBudgets()
+	for ns, n := range opts.MemoryAllowedBytes {
+		if !ValidNamespace(ns) || n < 0 {
+			return nil, fmt.Errorf("vlsup: 非法兼容cache预算 %q", ns)
+		}
+	}
+	for ns, b := range opts.NamespaceBudgets {
+		if !ValidNamespace(ns) || b.CacheBytes < 0 || b.RSSBytes < 0 {
+			return nil, fmt.Errorf("vlsup: 非法namespace预算 %q", ns)
+		}
+	}
+	for ns, b := range budgets {
+		if n, ok := opts.MemoryAllowedBytes[ns]; ok && n > 0 {
+			b.CacheBytes = n
+		}
+		if opts.MemoryLimitBytes != 0 {
+			b.GoMemoryLimitBytes = opts.MemoryLimitBytes
+		}
+		if n, ok := opts.NamespaceBudgets[ns]; ok {
+			if n.CacheBytes != 0 {
+				b.CacheBytes = n.CacheBytes
+			}
+			if n.GoMemoryLimitBytes != 0 {
+				b.GoMemoryLimitBytes = n.GoMemoryLimitBytes
+			}
+			b.RSSBytes = n.RSSBytes
+		}
+		budgets[ns] = b
+	}
+	factory := opts.Factory
+	if factory == nil {
+		env := map[Namespace][]string{}
+		for ns, b := range budgets {
+			env[ns] = vlProcessEnv(b.GoMemoryLimitBytes)
+		}
+		factory = RealFactory{Env: vlProcessEnv(opts.MemoryLimitBytes), NamespaceEnv: env, DiagnosticSink: sink, Secrets: []string{opts.AuthPassword}}
 	}
 	retention := opts.RetentionPeriod
 	if retention == "" {
@@ -229,24 +268,24 @@ func New(opts Options) (*Supervisor, error) {
 		}
 	}
 	s := &Supervisor{
-		binPath:     opts.BinaryPath,
-		assetSHA:    opts.AssetSHA256,
-		dataRoot:    opts.DataRoot,
-		retention:   retention,
-		retentionNS: retentionByNS,
-		authUser:     opts.AuthUsername,
+		binPath:       opts.BinaryPath,
+		assetSHA:      opts.AssetSHA256,
+		dataRoot:      opts.DataRoot,
+		retention:     retention,
+		retentionNS:   retentionByNS,
+		authUser:      opts.AuthUsername,
 		deleteEnabled: opts.DeleteEnabled,
-		authPass:    opts.AuthPassword,
-		ports:       map[Namespace]int{},
-		memOverride: map[Namespace]int64{},
-		factory:     factory,
-		sink:        sink,
-		allowVLRec:  opts.AllowVLRecursiveSink,
-		assetTag:    tag,
-		assetBuild:  build,
-		newClient:   newClient,
-		instances:   map[Namespace]*instance{},
-		budget:      DefaultCacheBudget(),
+		authPass:      opts.AuthPassword,
+		ports:         map[Namespace]int{},
+		memOverride:   map[Namespace]int64{},
+		factory:       factory,
+		sink:          sink,
+		allowVLRec:    opts.AllowVLRecursiveSink,
+		assetTag:      tag,
+		assetBuild:    build,
+		newClient:     newClient,
+		instances:     map[Namespace]*instance{},
+		budget:        DefaultCacheBudget(),
 	}
 	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
 		port := DefaultPort(ns)
@@ -254,9 +293,7 @@ func New(opts Options) (*Supervisor, error) {
 			port = p
 		}
 		s.ports[ns] = port
-		if m, ok := opts.MemoryAllowedBytes[ns]; ok {
-			s.memOverride[ns] = m
-		}
+		s.memOverride[ns] = budgets[ns].CacheBytes
 		s.instances[ns] = &instance{
 			cfg:   s.configFor(ns),
 			state: StateStopped,
@@ -351,10 +388,12 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	s.mu.Unlock()
 
 	fail := func(err error) error {
+		err = s.safeError(err)
 		s.mu.Lock()
 		inst.state = StateFailed
 		inst.status.State = StateFailed
 		inst.status.LastError = err.Error()
+		s.syncProcessStatusLocked(inst)
 		s.mu.Unlock()
 		if blocked := reportViaSink(s.sink, s.allowVLRec, string(ns), err); blocked {
 			s.mu.Lock()
@@ -378,24 +417,40 @@ func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	if err != nil {
 		return fail(err)
 	}
-	proc, err := s.factory.Start(ctx, s.binPath, args)
+	var proc Process
+	startedAt := time.Now()
+	if factory, ok := s.factory.(namespaceCmdFactory); ok {
+		proc, err = factory.StartNamespace(ctx, ns, s.binPath, args)
+	} else {
+		proc, err = s.factory.Start(ctx, s.binPath, args)
+	}
 	if err != nil {
 		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
 	}
+	if handle, ok := proc.(ExecHandle); ok {
+		startedAt = handle.Snapshot().StartedAt
+	}
+	s.mu.Lock()
+	inst.proc = proc
+	inst.startedAt = startedAt
+	inst.stableObserved = false
+	s.syncProcessStatusLocked(inst)
+	s.mu.Unlock()
 	// 启动后必须确认进程真存活：Start 成功只代表 fork/exec 成功，二进制仍可能立即退出
 	// （真机实测：数据目录缺失时 VL 秒退，控制面却报「启动成功」）。此处给一个极短窗口
 	// 让失败进程暴露，并把已退出的进程句柄立即回收，避免僵尸堆积。
-	if exited, waitErr := waitStartupLiveness(ctx, proc, startLivenessWindow); exited {
+	if exited, waitErr := waitStartupLiveness(ctx, proc, startLivenessWindow); exited || waitErr != nil {
 		_ = proc.Stop(DefaultStopGrace)
-		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s", ns, detailSuffix(waitErr)))
+		detail := processExitDetail(proc)
+		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s%s", ns, detailSuffix(waitErr), detail))
 	}
 
 	s.mu.Lock()
 	inst.proc = proc
 	inst.state = StateRunning
-	// 记录"本代进程启动成功"的时刻：看护据此判定「此前健康」（存活不足稳定窗口不算），
-	// 也据此计算退避后的下一次重启时刻。
-	inst.startedAt = time.Now()
+	// StartedAt取真实exec证据；启动观察窗口不从实际存活时长中扣除。
+	inst.startedAt = startedAt
+	s.syncProcessStatusLocked(inst)
 	inst.status.State = StateRunning
 	inst.status.PID = proc.PID()
 	inst.status.AssetTag = s.assetTag
@@ -480,6 +535,7 @@ func (s *Supervisor) stop(ctx context.Context, ns Namespace) error {
 		inst.status.HealthOK = false
 		inst.status.QueryReady = false
 		inst.startedAt = time.Time{}
+		inst.stableObserved = false
 		s.mu.Unlock()
 		return nil
 	}
@@ -489,15 +545,17 @@ func (s *Supervisor) stop(ctx context.Context, ns Namespace) error {
 	inst.status.State = StateStopping
 	// 清掉启动时刻：本代进程不再算「此前健康」，避免停止后又被判成可自愈实例。
 	inst.startedAt = time.Time{}
+	inst.stableObserved = false
 	proc := inst.proc
 	s.mu.Unlock()
 
 	var err error
 	if proc != nil {
-		err = proc.Stop(DefaultStopGrace)
+		err = s.safeError(proc.Stop(DefaultStopGrace))
 	}
 
 	s.mu.Lock()
+	s.syncProcessStatusLocked(inst)
 	inst.proc = nil
 	inst.state = StateStopped
 	inst.status.State = StateStopped
@@ -615,9 +673,9 @@ func (s *Supervisor) Health(ctx context.Context, ns Namespace) error {
 	base := "http://" + ListenAddr(cfg.Port)
 	cli, err := s.newClient(base, cfg.AuthUsername, cfg.AuthPassword)
 	if err != nil {
-		return err
+		return s.safeError(err)
 	}
-	herr := cli.Health(ctx)
+	herr := s.safeError(cli.Health(ctx))
 
 	s.mu.Lock()
 	if herr == nil {
@@ -674,7 +732,8 @@ func (s *Supervisor) ClientFor(ns Namespace) (*Client, error) {
 	}
 	cfg := inst.cfg
 	s.mu.Unlock()
-	return s.newClient("http://"+ListenAddr(cfg.Port), cfg.AuthUsername, cfg.AuthPassword)
+	client, err := s.newClient("http://"+ListenAddr(cfg.Port), cfg.AuthUsername, cfg.AuthPassword)
+	return client, s.safeError(err)
 }
 
 // Status 返回 namespace 状态快照。
@@ -696,6 +755,7 @@ func (s *Supervisor) Status(ns Namespace) (InstanceStatus, error) {
 // 报 RUNNING 而实际端口无监听；故在任何状态读取点都以进程句柄为准校正，避免误导性成功上报。
 // 调用方须持有 s.mu。
 func (s *Supervisor) reconcileExitedLocked(inst *instance) {
+	s.syncProcessStatusLocked(inst)
 	if inst == nil || inst.proc == nil || inst.state != StateRunning {
 		return
 	}
@@ -707,7 +767,7 @@ func (s *Supervisor) reconcileExitedLocked(inst *instance) {
 	inst.status.HealthOK = false
 	inst.status.QueryReady = false
 	if inst.status.LastError == "" {
-		inst.status.LastError = "managed VictoriaLogs process exited unexpectedly"
+		inst.status.LastError = s.safeError(fmt.Errorf("managed VictoriaLogs process exited unexpectedly%s", processExitDetail(inst.proc))).Error()
 	}
 }
 
@@ -741,7 +801,12 @@ func (s *Supervisor) EnforceCacheBudget(cacheBytes int64) error {
 func (s *Supervisor) Budget() CacheBudget {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.budget
+	out := s.budget
+	out.SubBudgets = make(map[string]int64, len(s.budget.SubBudgets))
+	for key, value := range s.budget.SubBudgets {
+		out.SubBudgets[key] = value
+	}
+	return out
 }
 
 // SetSubBudget 登记一项 Worker 日志子预算（wal/staging/export/cold/rehydrate/projection/rss）。
@@ -802,10 +867,14 @@ func (s *Supervisor) SampleBudget() BudgetVerdict {
 	for _, pid := range pids {
 		if rss, err := SampleProcessRSSBytes(pid); err == nil {
 			sample.ProcessRSSBytes += rss
+		} else {
+			sample.RSSUnknown = true
 		}
 	}
 	if pct, err := SampleDiskUsagePercent(dataRoot); err == nil {
 		sample.DiskUsagePercent = pct
+	} else {
+		sample.DiskUnknown = true
 	}
 	return EvaluateBudget(budget, sample, DefaultBudgetThresholds())
 }

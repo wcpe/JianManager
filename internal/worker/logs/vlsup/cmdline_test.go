@@ -42,16 +42,14 @@ func TestBuildArgsHotDefaults(t *testing.T) {
 	}
 }
 
-func TestBuildArgsColdOmitsDefaultCache(t *testing.T) {
+func TestBuildArgsColdHasExplicitBoundedDefaultCache(t *testing.T) {
 	cfg := baseCfg(NamespaceCold)
 	args, err := BuildArgs(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range args {
-		if strings.HasPrefix(a, "-memory.allowedBytes=") {
-			t.Fatalf("cold without override must omit cache flag, got %v", args)
-		}
+	if !containsArg(args, "-memory.allowedBytes="+FormatCacheBytesForFlag(DefaultColdCacheBytes)) {
+		t.Fatal("冷层默认必须显式有限cache，不能回退宿主60%")
 	}
 	if !containsArg(args, "-httpListenAddr=127.0.0.1:19442") {
 		t.Fatalf("cold port mismatch: %v", args)
@@ -98,8 +96,8 @@ func TestEffectiveCacheBytes(t *testing.T) {
 		t.Fatalf("hot default cache: got %d want %d", got, DefaultHotCacheBytes)
 	}
 	cold := baseCfg(NamespaceCold)
-	if got := cold.EffectiveCacheBytes(); got != 0 {
-		t.Fatalf("cold default should omit cache, got %d", got)
+	if got := cold.EffectiveCacheBytes(); got != DefaultColdCacheBytes {
+		t.Fatalf("冷层必须取显式有限默认，got %d", got)
 	}
 }
 

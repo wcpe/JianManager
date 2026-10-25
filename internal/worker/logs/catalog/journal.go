@@ -23,6 +23,10 @@ type JournalEntry struct {
 	// Records is a single-line atomic batch for all logical namespaces sharing
 	// one physical VictoriaLogs UTC-day partition.
 	Records []*Record `json:"records,omitempty"`
+	// LeaseDelta 仅变更读租约，不改变发布 CAS 使用的记录修订。
+	LeaseDelta *LeaseDelta `json:"lease_delta,omitempty"`
+	// DayMigration 保存物理日固定批次及物理步骤进度。
+	DayMigration *PhysicalDayMigration `json:"day_migration,omitempty"`
 	// State 是本条 journal 记录的迁移状态（幂等重放目标）。
 	State MigrationState `json:"state"`
 	// FromState 变更前状态，便于失败恢复定位。
@@ -72,11 +76,12 @@ type MemJournal struct {
 	entries []JournalEntry
 	byKey   map[PartitionKey][]int
 	nextSeq uint64
+	leases  *leaseDeltaLog
 }
 
 // NewMemJournal 创建空的内存 journal。
 func NewMemJournal() *MemJournal {
-	return &MemJournal{byKey: make(map[PartitionKey][]int)}
+	return &MemJournal{byKey: make(map[PartitionKey][]int), leases: &leaseDeltaLog{}}
 }
 
 // Append 追加 journal 项。实现分配单调 seq；若调用方指定 seq，必须大于当前 last。
@@ -221,9 +226,10 @@ func (s *JSONLFileStore) LoadEntries() ([]JournalEntry, error) {
 
 // JournalWithStore 组合内存 journal 与可选文件 store：每次 Append 同步写 store。
 type JournalWithStore struct {
-	mu    sync.Mutex
-	mem   *MemJournal
-	store Store
+	mu     sync.Mutex
+	mem    *MemJournal
+	store  Store
+	leases *leaseDeltaLog
 }
 
 // NewJournalWithStore 创建带可选持久化的 journal。store 为 nil 时退化为纯内存。
@@ -236,9 +242,17 @@ type JournalWithStore struct {
 //   - 同 seq 且内容完全相同 ⇒ 视为精确重复，跳过 ✓；
 //   - 同 seq 但内容不同 ⇒ **真损坏，仍拒绝** ✗（判据不放宽）；
 //   - seq==0 ⇒ 写入器不可能产生（Append 必先分配 seq）⇒ 拒绝 ✗。
+//
 // 发现乱序时显式告警（可见，不静默 ✗）。
 func NewJournalWithStore(store Store) (*JournalWithStore, error) {
-	j := &JournalWithStore{mem: NewMemJournal(), store: store}
+	j := &JournalWithStore{mem: NewMemJournal(), store: store, leases: &leaseDeltaLog{}}
+	if store != nil {
+		if file, ok := store.(*JSONLFileStore); ok {
+			j.leases.path = file.path + ".leases"
+		} else {
+			j.leases.unavailable = true
+		}
+	}
 	if store == nil {
 		return j, nil
 	}
@@ -354,12 +368,18 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 	}
 	var lastAuth *JournalEntry
 	for _, e := range entries {
+		if e.LeaseDelta != nil || (e.DayMigration != nil && len(e.Records) == 0 && e.Record == nil) {
+			continue
+		}
+		fullRecord := false
 		if len(e.Records) > 0 {
 			matched := false
 			for _, candidate := range e.Records {
 				if candidate != nil && candidate.Key == rec.Key {
 					*rec = *candidate.Clone()
 					e.Owner, e.Generation, e.DirID = candidate.Owner, candidate.Generation, candidate.OwnerDirID
+					e.State, e.JournalComplete = candidate.MigrationState, candidate.JournalComplete
+					fullRecord = true
 					matched = true
 					break
 				}
@@ -375,6 +395,8 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 			// 完整 Record 是新版 journal 的权威后状态；同步填充旧格式兼容字段，
 			// 避免 AuthorityCommit 将缺省顶层字段误判为一次“切到空权威”。
 			e.Owner, e.Generation, e.DirID = e.Record.Owner, e.Record.Generation, e.Record.OwnerDirID
+			e.State, e.JournalComplete = e.Record.MigrationState, e.Record.JournalComplete
+			fullRecord = true
 		}
 		if e.JournalComplete {
 			rec.JournalComplete = true
@@ -412,7 +434,7 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 			if e.Generation != 0 {
 				rec.Generation = e.Generation
 			}
-			if e.DirID != "" {
+			if e.DirID != "" && !fullRecord {
 				rec.OwnerDirID = e.DirID
 				rec.WriteRoute.Owner = rec.Owner
 				rec.WriteRoute.DirID = e.DirID

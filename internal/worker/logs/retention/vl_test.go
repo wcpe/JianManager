@@ -52,7 +52,7 @@ func TestClientDeleterBuildsRequest(t *testing.T) {
 	})
 
 	cutoff := baseTime.Add(-DefaultTTLDebug)
-	id, err := d.RunDeleteTask(context.Background(), `level:DEBUG AND log_source_id:"inst:147"`, cutoff)
+	id, err := d.RunDeleteTask(context.Background(), `level:="DEBUG" AND log_source_id:="inst:147"`, cutoff)
 	if err != nil {
 		t.Fatalf("下发删除任务失败：%v", err)
 	}
@@ -62,13 +62,15 @@ func TestClientDeleterBuildsRequest(t *testing.T) {
 	if gotPath != "/delete/run_task" {
 		t.Errorf("路径应为 /delete/run_task，得到 %q", gotPath)
 	}
-	if got := gotQuery.Get("filter"); got != `level:DEBUG AND log_source_id:"inst:147"` {
-		t.Errorf("过滤器必须原样送达，得到 %q", got)
+	wantFilter, err := boundedDeleteFilter(`level:="DEBUG" AND log_source_id:="inst:147"`, cutoff)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// end 必须是策略算出的 cutoff，逐纳秒一致。
-	if got := gotQuery.Get("end"); got != cutoff.UTC().Format(time.RFC3339Nano) {
-		t.Errorf("end 必须是策略截止时间 %q，得到 %q（取错会一路删到最新数据）",
-			cutoff.UTC().Format(time.RFC3339Nano), got)
+	if got := gotQuery.Get("filter"); got != wantFilter {
+		t.Errorf("必须发送带严格截止的白名单filter，得到 %q", got)
+	}
+	if got := gotQuery.Get("end"); got != "" {
+		t.Errorf("批准版不消费独立end，不得假装其有效: %q", got)
 	}
 	// 不得设置 start：保留期的作用是「保留最近 N」，设下界反而会漏掉更早的历史。
 	if _, ok := gotQuery["start"]; ok {
@@ -84,7 +86,7 @@ func TestClientDeleterRejectsMissingTaskID(t *testing.T) {
 	d, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{}`))
 	})
-	if _, err := d.RunDeleteTask(context.Background(), "level:DEBUG", baseTime); err == nil {
+	if _, err := d.RunDeleteTask(context.Background(), `level:="DEBUG"`, baseTime); err == nil {
 		t.Fatal("缺少 task_id 必须报错——否则失败的删除会被记成已下发")
 	}
 }
@@ -93,7 +95,7 @@ func TestClientDeleterRejectsMalformedBody(t *testing.T) {
 	d, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`not-json`))
 	})
-	if _, err := d.RunDeleteTask(context.Background(), "level:DEBUG", baseTime); err == nil {
+	if _, err := d.RunDeleteTask(context.Background(), `level:="DEBUG"`, baseTime); err == nil {
 		t.Fatal("响应不是 JSON 必须报错")
 	}
 }
@@ -104,7 +106,7 @@ func TestClientDeleterSurfacesHTTPError(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte("requests to /delete/* are disabled; pass -delete.enable command-line flag for enabling them"))
 	})
-	_, err := d.RunDeleteTask(context.Background(), "level:DEBUG", baseTime)
+	_, err := d.RunDeleteTask(context.Background(), `level:="DEBUG"`, baseTime)
 	if err == nil {
 		t.Fatal("VL 拒绝时必须报错")
 	}
@@ -114,7 +116,7 @@ func TestClientDeleterSurfacesHTTPError(t *testing.T) {
 }
 
 func TestClientDeleterWithoutClientFails(t *testing.T) {
-	if _, err := (ClientDeleter{}).RunDeleteTask(context.Background(), "level:DEBUG", baseTime); err == nil {
+	if _, err := (ClientDeleter{}).RunDeleteTask(context.Background(), `level:="DEBUG"`, baseTime); err == nil {
 		t.Fatal("客户端未就绪必须报错而不是静默成功")
 	}
 }
@@ -150,7 +152,11 @@ func TestSweeperToRealHTTPEndToEnd(t *testing.T) {
 	}
 	want := map[string]string{}
 	for lvl, ttl := range p.ByLevel {
-		want["level:"+lvl] = baseTime.Add(-ttl).UTC().Format(time.RFC3339Nano)
+		filter, err := boundedDeleteFilter("level:=\""+lvl+"\"", baseTime.Add(-ttl))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[filter] = ""
 	}
 	for _, r := range reqs {
 		expected, ok := want[r.filter]

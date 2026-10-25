@@ -45,17 +45,12 @@ func TestQueryTimeRangeLimitFollowsRetention(t *testing.T) {
 		})
 	}
 
-	t.Run("非法 retention 回落到默认而非 31d", func(t *testing.T) {
-		// 空值/乱码不能让上限缩回 31d —— 那会把「覆盖不全」的静默失败重新引入。
+	t.Run("非法retention明确拒绝而非静默回退", func(t *testing.T) {
 		for _, bad := range []string{"", "  ", "abc", "0d", "-5d"} {
 			cfg := InstanceConfig{RetentionPeriod: bad}
-			got := cfg.QueryTimeRangeLimit()
-			def, err := parseRetentionDuration(DefaultRetentionPeriod)
-			require.NoError(t, err)
-			limit, err := time.ParseDuration(got)
-			require.NoError(t, err)
-			require.Greater(t, limit, def,
-				"非法输入 %q 必须回落到默认 retention 派生值（实际 %s）", bad, got)
+			require.Empty(t, cfg.QueryTimeRangeLimit())
+			_, err := cfg.QueryTimeRangeLimitChecked()
+			require.Error(t, err)
 		}
 	})
 }

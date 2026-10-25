@@ -47,7 +47,20 @@ func ResolveMigrateTarget(cat *catalog.Catalog, storageNamespace, utcDay string)
 	}
 	key := catalog.PartitionKey{StorageNamespace: storageNamespace, UTCDay: utcDay}
 	if rec, ok := cat.Get(key); ok {
-		return migrateActionFor(rec), nil
+		if day, ok := cat.PhysicalDay(utcDay); ok && day.Frozen {
+			return MigrateActionResume, nil
+		}
+		action := migrateActionFor(rec)
+		for _, member := range cat.RecordsForDay(utcDay) {
+			next := migrateActionFor(member)
+			if next == MigrateActionResume {
+				return next, nil
+			}
+			if next == MigrateActionStart {
+				action = next
+			}
+		}
+		return action, nil
 	}
 	if !isNodeScopedNamespace(storageNamespace) {
 		return MigrateActionStart, notInCatalogErr(key)
@@ -90,13 +103,12 @@ func migrateActionFor(rec *catalog.Record) MigrateAction {
 	if rec == nil {
 		return MigrateActionStart
 	}
-	if rec.Owner == catalog.OwnerCold {
-		// 已在冷层：重复调用必须幂等成功，否则重试会把「已经好了」报成失败。
-		return MigrateActionSkip
-	}
 	if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned && rec.TargetOwner.Valid() {
 		// 在途迁移：续跑。重新 Start 会与状态机的「不允许重开在途迁移」冲突并污染状态。
 		return MigrateActionResume
+	}
+	if rec.Owner == catalog.OwnerCold {
+		return MigrateActionSkip
 	}
 	return MigrateActionStart
 }

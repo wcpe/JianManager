@@ -36,10 +36,14 @@ func (s IndependentLoggerSink) WritesIntoVL() bool { return false }
 
 // ReportFailure 实现 Sink。
 func (s IndependentLoggerSink) ReportFailure(instance string, err error) {
-	if s.Logger == nil || err == nil {
+	if err == nil {
 		return
 	}
-	s.Logger.Error("vlsup supervisor failure", "instance", instance, "error", err)
+	logger := s.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Error("vlsup 独立进程诊断", "instance", instance, "error", err)
 }
 
 // RecordingSink 用于测试：记录上报，并可模拟“写入 VL 管道”的非法 sink。

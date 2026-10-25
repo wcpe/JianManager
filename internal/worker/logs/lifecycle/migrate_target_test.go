@@ -106,17 +106,16 @@ func TestResolveMigrateTargetExactKeyKeepsLegacyBranches(t *testing.T) {
 	}
 }
 
-// TestResolveMigrateTargetExactNodePartitionPreferred 覆盖真配了节点自身日志源的部署：
-// catalog 里确实存在 `node:<id>` 分区时，精确键优先，不得走到日级退化分支。
+// TestResolveMigrateTargetExactNodePartitionPreferred 保留精确键准入，但动作仍以完整物理日为准。
 func TestResolveMigrateTargetExactNodePartitionPreferred(t *testing.T) {
 	const day = "2026-10-01"
-	// node:1 自身已是冷层，同日的实例分区仍是热层。精确键优先 ⇒ 幂等成功，而不是又迁一整天。
+	// node:1 已在冷层不能掩盖同一物理日的实例 HOT 残留。
 	self := catalog.NewStableRecord(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: day}, catalog.OwnerCold, 2, "cold")
 	cat := migrateTargetCatalog(t, self, hotRecord("inst:317", day))
 
 	action, err := ResolveMigrateTarget(cat, "node:1", day)
 	require.NoError(t, err)
-	require.Equal(t, MigrateActionSkip, action)
+	require.Equal(t, MigrateActionStart, action)
 }
 
 // TestResolveMigrateTargetNilCatalog 覆盖未接线 Catalog：必须报错而不是乐观放行。

@@ -15,9 +15,22 @@ import (
 //   - 启动先 Recover，再为 Catalog 选定的 owner 建 QueryPlanner 路由；
 //   - 不实现 VL 进程控制。
 type Catalog struct {
-	mu      sync.RWMutex
-	records map[PartitionKey]*Record
-	journal Journal
+	mu               sync.RWMutex
+	records          map[PartitionKey]*Record
+	journal          Journal
+	views            map[string]*queryLeaseState
+	leaseByPartition map[PartitionKey]map[string]QueryLeaseRef
+	pendingViews     map[string]time.Time
+	viewEpoch        string
+	nextView         uint64
+	leaseLog         QueryLeaseJournal
+	leaseInitErr     error
+	leaseDirtyOps    int
+	leaseDirtyBytes  int
+	leaseRevision    uint64
+	permits          map[uint64]*WritePermit
+	nextPermit       uint64
+	days             map[string]*PhysicalDayMigration
 }
 
 // New 创建 Catalog。journal 为 nil 时使用内存 journal。
@@ -26,11 +39,20 @@ func New(journal Journal) *Catalog {
 		journal = NewMemJournal()
 	}
 	c := &Catalog{
-		records: make(map[PartitionKey]*Record),
-		journal: journal,
+		records:      make(map[PartitionKey]*Record),
+		journal:      journal,
+		views:        make(map[string]*queryLeaseState),
+		pendingViews: make(map[string]time.Time),
+		permits:      make(map[uint64]*WritePermit),
+		days:         make(map[string]*PhysicalDayMigration),
 	}
 	for _, entry := range journal.Snapshot() {
 		c.applyJournalEntry(entry)
+	}
+	// 新进程签发全新 epoch，持久租约只作孤儿回收，不复活旧请求。
+	c.initializeQueryLeases()
+	for _, rec := range c.records {
+		rec.QueryLeases = nil
 	}
 	return c
 }
@@ -39,12 +61,23 @@ func (c *Catalog) applyJournalEntry(entry JournalEntry) {
 	if c == nil {
 		return
 	}
+	if entry.LeaseDelta != nil {
+		// 兼容旧日志中的读租约；旧进程请求已经结束，不带入新 epoch。
+		return
+	}
+	if entry.DayMigration != nil {
+		c.days[entry.DayMigration.UTCDay] = entry.DayMigration.Clone()
+		if len(entry.Records) == 0 && entry.Record == nil {
+			return
+		}
+	}
 	if len(entry.Records) > 0 {
 		for _, item := range entry.Records {
 			if item == nil {
 				continue
 			}
 			rec := item.Clone()
+			c.preserveLeasesLocked(rec)
 			rec.JournalLastSeq = entry.Seq
 			c.records[rec.Key] = rec
 		}
@@ -52,6 +85,7 @@ func (c *Catalog) applyJournalEntry(entry JournalEntry) {
 	}
 	if entry.Record != nil {
 		rec := entry.Record.Clone()
+		c.preserveLeasesLocked(rec)
 		rec.JournalLastSeq = entry.Seq
 		c.records[entry.Key] = rec
 		return
@@ -95,10 +129,20 @@ func (c *Catalog) applyJournalEntry(entry JournalEntry) {
 	rec.PartialReasons = append([]string(nil), entry.PartialReasons...)
 }
 
+// authorityJournalRecord 不把派生读租约复制进永久权威历史。
+func authorityJournalRecord(rec *Record) *Record {
+	out := rec.Clone()
+	if out != nil {
+		out.QueryLeases = nil
+	}
+	return out
+}
+
 func (c *Catalog) commitBatchLocked(records []*Record, entry JournalEntry) ([]*Record, error) {
 	entry.Records = make([]*Record, 0, len(records))
 	for _, rec := range records {
-		entry.Records = append(entry.Records, rec.Clone())
+		c.preserveLeasesLocked(rec)
+		entry.Records = append(entry.Records, authorityJournalRecord(rec))
 	}
 	if err := c.journal.Append(entry); err != nil {
 		return nil, err
@@ -175,6 +219,19 @@ func (c *Catalog) Keys() []PartitionKey {
 func (c *Catalog) AppendJournal(entry JournalEntry) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if entry.Record != nil {
+		entry.Record = authorityJournalRecord(entry.Record)
+	}
+	if entry.Records != nil {
+		records := make([]*Record, len(entry.Records))
+		for i, record := range entry.Records {
+			records[i] = authorityJournalRecord(record)
+		}
+		entry.Records = records
+	}
+	if entry.DayMigration != nil {
+		entry.DayMigration = entry.DayMigration.Clone()
+	}
 	if err := c.journal.Append(entry); err != nil {
 		return err
 	}
@@ -200,6 +257,17 @@ func (c *Catalog) PublishProjection(expected, next *Record) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	current := c.records[next.Key]
+	{
+		if day := c.days[next.Key.UTCDay]; day != nil && day.Frozen {
+			permitted := false
+			for _, permit := range c.permits {
+				permitted = permitted || permit.Key == next.Key
+			}
+			if !permitted {
+				return ErrPhysicalDayFrozen
+			}
+		}
+	}
 	if expected == nil {
 		if current != nil {
 			return fmt.Errorf("%w: Catalog authority created during projection verification", ErrInvalidState)
@@ -251,13 +319,14 @@ func projectionManifest(rec *Record) string {
 // 抬 `query_generation` 只是把「这条投影属于哪个权威代次」这句话改对，不动任何物理数据。
 //
 // ── 安全边界 ────────────────────────────────────────────────────────────────
-//   · 只处理 `query_generation < generation` 的**落后**形态。反过来（qgen > gen）说明记录
-//     自相矛盾且成因未知，一律不碰，交人工判断。
-//   · 仅当**其余字段**没有别的矛盾时才修：`QueryLocationDirID == OwnerDirID`（否则投影指向
-//     的目录已不是权威目录，属另一类不一致）。
-//   · 并发安全由**全程持 `c.mu` 写锁**保证（见下方提交处的注释）：所有写者都取同一把锁，
-//     本函数内不存在可插入的临界区空隙，因此**没有**内部快照比对式 CAS，也不需要。
-//   · 刻意**不**碰 `ConflictCount` 等派生值：本函数只修代次一致性这一件事。
+//
+//	· 只处理 `query_generation < generation` 的**落后**形态。反过来（qgen > gen）说明记录
+//	  自相矛盾且成因未知，一律不碰，交人工判断。
+//	· 仅当**其余字段**没有别的矛盾时才修：`QueryLocationDirID == OwnerDirID`（否则投影指向
+//	  的目录已不是权威目录，属另一类不一致）。
+//	· 并发安全由**全程持 `c.mu` 写锁**保证（见下方提交处的注释）：所有写者都取同一把锁，
+//	  本函数内不存在可插入的临界区空隙，因此**没有**内部快照比对式 CAS，也不需要。
+//	· 刻意**不**碰 `ConflictCount` 等派生值：本函数只修代次一致性这一件事。
 func (c *Catalog) RepairProjectionQueryGeneration(key PartitionKey) (repaired bool, needsManual string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -305,9 +374,9 @@ func (c *Catalog) RepairProjectionQueryGeneration(key PartitionKey) (repaired bo
 	//      必然失败并放弃，不会用旧快照覆盖本函数刚写下的状态。
 	committed := next.Clone()
 	entry := JournalEntry{
-		Key:     committed.Key,
-		Detail:  "derived query_generation repaired to match authority generation",
-		State:   committed.MigrationState,
+		Key:    committed.Key,
+		Detail: "derived query_generation repaired to match authority generation",
+		State:  committed.MigrationState,
 	}
 	if _, err := c.commitRecordLocked(committed, entry); err != nil {
 		return false, "", err
@@ -318,7 +387,8 @@ func (c *Catalog) RepairProjectionQueryGeneration(key PartitionKey) (repaired bo
 // commitRecordLocked keeps a transition invisible until its full state is
 // durable in the journal. Caller holds c.mu.
 func (c *Catalog) commitRecordLocked(rec *Record, entry JournalEntry) (*Record, error) {
-	entry.Record = rec.Clone()
+	c.preserveLeasesLocked(rec)
+	entry.Record = authorityJournalRecord(rec)
 	if err := c.journal.Append(entry); err != nil {
 		return nil, err
 	}
@@ -510,6 +580,7 @@ func (c *Catalog) StartingRecover() map[PartitionKey]RecoveryView {
 		rec.RecoveryRequired = view.RecoveryRequired
 		rec.PartialReasons = view.PartialReasons
 		rec.MigrationState = view.MigrationState
+		c.preserveLeasesLocked(rec)
 		out[key] = view
 	}
 	return out

@@ -25,6 +25,23 @@ type Ops struct {
 	Detach     func(key catalog.PartitionKey, dirID string) error
 	// Cleanup runs only after DETACHED is durably recorded.
 	Cleanup func(key catalog.PartitionKey, dirID string) error
+	// RepairDay 在已有不同 COLD 日上只补录固定残留成员，不覆盖原物。
+	RepairDay func(DayRepairRequest) (*DayRepairResult, error)
+}
+
+// DayRepairRequest 的 Members 是已冻结的原始投影白名单，不是实时目录扫描。
+type DayRepairRequest struct {
+	UTCDay      string
+	BatchID     uint64
+	TargetDirID string
+	Members     []*catalog.Record
+}
+
+// DayRepairResult 只有逐字段验证完成后才能返回；调用方再原子发布对应白名单。
+type DayRepairResult struct {
+	Checksum    string
+	CopyID      string
+	Projections map[catalog.PartitionKey]*catalog.PublishedProjection
 }
 
 // StateObserver 在关键状态推进后回调（测试可断言 staging 不可查询等）。

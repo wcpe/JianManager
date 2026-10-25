@@ -2,312 +2,437 @@ package catalog
 
 import (
 	"fmt"
-	"log/slog"
 	"sort"
 	"time"
 )
 
 func (c *Catalog) dayRecordsLocked(utcDay string) ([]*Record, error) {
-	var records []*Record
+	var out []*Record
 	for key, rec := range c.records {
 		if key.UTCDay == utcDay {
-			records = append(records, rec.Clone())
+			out = append(out, rec.Clone())
 		}
 	}
-	if len(records) == 0 {
+	if len(out) == 0 {
 		return nil, fmt.Errorf("%w: UTC day %s", ErrNotFound, utcDay)
 	}
-	sort.Slice(records, func(i, j int) bool { return records[i].Key.String() < records[j].Key.String() })
-	return records, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Key.String() < out[j].Key.String() })
+	return out, nil
 }
 
-func (c *Catalog) BeginDayMigration(utcDay string, target Owner, targetDirID string) ([]*Record, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// activeDayRecords 仅用于旧记录升级；新批成员始终来自持久白名单。
+func activeDayRecords(records []*Record) []*Record {
+	var out []*Record
+	for _, rec := range records {
+		if rec != nil && rec.MigrationState != "" && rec.MigrationState != StateCleaned {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+func (c *Catalog) ensureDayLocked(utcDay string) (*PhysicalDayMigration, error) {
+	if day := c.days[utcDay]; day != nil {
+		return day.Clone(), nil
+	}
 	records, err := c.dayRecordsLocked(utcDay)
 	if err != nil {
 		return nil, err
 	}
-	// **跳过已下沉的记录，只推进仍需迁移的子集**（2026-10-21 架构复审 D2）。
-	//
-	// 旧实现要求「该日每一条记录都是 hot」，遇到一条已 COLD 就整日拒绝。而混合态
-	// **必然会发生**：某日整体下沉到冷层之后，迟到的写入或新出现的 storage namespace
-	// 仍会在同一天新建一条 Owner=hot 的记录（migrate_target.go 的注释自己承认这一点）。
-	// 后果是该日**永久不可迁移**：迁移按钮恒报错，那条 hot 分区到期被 VL 原生删除
-	// ⇒ 该 namespace 该日数据永久丢失，UI 上只留一次迁移失败。
-	//
-	// 语义：已 COLD 的记录是「已完成」而不是「冲突」，跳过即可；只对 hot 子集做
-	// BeginMigration。若一条 hot 都没有，说明该日已全部下沉，按幂等成功返回。
-	active := make([]*Record, 0, len(records))
-	for _, rec := range records {
-		if rec.Owner == OwnerCold || rec.Owner == OwnerArchive {
-			// 已下沉：本次无事可做，计入 skipped（不报错）。
-			continue
-		}
-		if rec.Owner != OwnerHot {
-			return nil, fmt.Errorf("%w: %s owner=%s", ErrIllegalTransition, rec.Key, rec.Owner)
-		}
-		// **已在迁移中的记录直接跳过，不要重新发起**（2026-10-22 P0）。
-		//
-		// `BeginMigration` 只接受「稳定态」（空 / CLEANED / 失败态），对
-		// ROUTING_FROZEN…DETACHED 这些中间态会返回 `begin from <state>`。
-		// 而混合态日一定会出现「某条正在迁移 + 另一条迟到新建」的组合：
-		// 迟到写入/新 namespace 会在迁移途中新建 `hot + CLEANED` 记录。
-		// 若此时对本日整体重新 `BeginDayMigration`，遍历到那条中间态记录就会报错
-		// ⇒ 整日无法推进、每轮 sweep 重复失败（比原来「只在结账时卡住」更早卡死）。
-		//
-		// 跳过是语义正确的：这些记录**本来就在迁移路径上**，本次操作对它们无任何
-		// 待办事项（推进由 `AdvanceDay` 负责）。只有稳定态的 hot 记录才需要
-		// 「重新发起」。
-		if rec.MigrationState != "" && rec.MigrationState != StateCleaned && !IsFailure(rec.MigrationState) {
-			continue
-		}
-		if err := BeginMigration(rec, target, targetDirID); err != nil {
-			return nil, err
-		}
-		active = append(active, rec)
-	}
+	active := activeDayRecords(records)
 	if len(active) == 0 {
-		// 整日已全部下沉：幂等成功，不做任何提交。
-		return records, nil
+		return nil, ErrNotFound
 	}
-	return c.commitBatchLocked(active, JournalEntry{Key: active[0].Key, State: StateRoutingFrozen,
-		Detail: "begin physical UTC-day migration", AtUnixMilli: time.Now().UnixMilli()})
+	rep := active[0]
+	day := &PhysicalDayMigration{UTCDay: utcDay, TargetOwner: rep.TargetOwner, TargetDirID: rep.TargetDirID, Frozen: true}
+	groups := make(map[string]int)
+	for _, rec := range active {
+		if !rec.TargetOwner.Valid() || rec.TargetDirID == "" || rec.TargetOwner != day.TargetOwner || rec.TargetDirID != day.TargetDirID {
+			return nil, fmt.Errorf("%w: legacy day has conflicting migration targets", ErrInvalidState)
+		}
+		resume := MigrationState("")
+		if rec.MigrationState == StateFailedRetryable {
+			resume = c.legacyResumeStateLocked(rec.Key)
+			if resume == "" {
+				return nil, fmt.Errorf("%w: legacy retry state proof missing", ErrInvalidState)
+			}
+		}
+		signature := fmt.Sprintf("%s|%s|%s|%t|%s", rec.Owner, rec.MigrationState, resume, rec.LastVerifyCompleted, rec.LastVerifyChecksum)
+		index, found := groups[signature]
+		if !found {
+			index = len(day.Batches)
+			groups[signature] = index
+			day.Batches = append(day.Batches, DayMigrationBatch{ID: uint64(index + 1), State: rec.MigrationState, ResumeState: resume, Checksum: rec.LastVerifyChecksum})
+		}
+		day.Batches[index].Members = append(day.Batches[index].Members, authorityJournalRecord(rec))
+	}
+	_, err = c.commitDayLocked(day, nil, JournalEntry{Detail: "adopt legacy fixed physical-day batch"})
+	return day, err
 }
 
-// activeDayRecords 返回该日**仍参与迁移**的记录子集（2026-10-22 复审 P0-1）。
-//
-// 为什么需要它：混合态 UTC 日必然出现 —— 某日整体下沉到冷层后，迟到的写入或
-// 新出现的 storage namespace 仍会在同一天新建一条 `Owner=hot` 的记录
-// （migrate_target.go 的注释自己承认这一点）。旧实现里每个日级操作都用
-// `records[0].MigrationState` 当基准并要求**全部**记录同态，于是混合态日
-// 会在链条的某一步必然报 divergence，而且往往**不写失败 journal** ⇒
-// 该日永久不可迁移、写路由却已冻结，最终数据被 VL retention 删除。
-//
-// 判据：`""`（旧 journal 兼容）与 `CLEANED`（已下沉完成）不参与本次迁移；
-// 其余记录必须处于同一状态 —— 那才是真正的「同一次迁移内不同步」，仍须拒绝。
-func activeDayRecords(records []*Record) []*Record {
-	active := make([]*Record, 0, len(records))
-	for _, rec := range records {
-		if rec == nil {
-			continue
+func (c *Catalog) legacyResumeStateLocked(key PartitionKey) MigrationState {
+	entries := c.journal.Entries(key)
+	fallback := MigrationState("")
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		state := MigrationState("")
+		for _, record := range entry.Records {
+			if record != nil && record.Key == key {
+				state = record.MigrationState
+				break
+			}
 		}
-		// **`Owner=hot` 一律算活跃**，即使 `MigrationState` 是 CLEANED 或空（2026-10-22 终审 P2）。
-		//
-		// 为什么不能用「state 是 CLEANED/空 ⇒ 不参与」一刀切：`NewStableRecord` 的默认态
-		// 正是 `MigrationState=CLEANED`（types.go），于是**迁移途中新建的迟到记录**
-		// （迟到写入 / 新 storage namespace，Owner=hot）天生就是「hot + CLEANED」形态。
-		// 若把它判为「不参与」，就会出现两套判据的夹缝：
-		//   · `BeginDayMigration` 按 Owner 纳入它（它确实是 hot，需要迁移）；
-		//   · 而 `AdvanceDay`/`SwitchDayOwners`/`FailDay`/`MarkDayComplete` 全部跳过它；
-		//   ⇒ 该日能走到 CLEANED 而这条记录停在 hot，其热分区到期被 VL 直接删除；
-		//   或（加了 MarkDayComplete 守卫后）该日永久无法结账 ⇒ 无限重试建不出结论。
-		//
-		// 判据改为「Owner 仍是 hot ⇒ 还有数据没下沉 ⇒ 必须参与」：
-		//   · Owner=hot + 空/CLEANED  → **纳入**（有待迁移的数据）；
-		//   · Owner=hot + 迁移中状态   → 纳入（正在迁移）；
-		//   · Owner=cold/archive      → 跳过（已下沉完成，是「已完成」而不是「冲突」）。
-		// 这样 `activeDayRecords` 与 `BeginDayMigration` 的 Owner 口径一致，
-		// 混合态日既有明确出口（重新 BeginDayMigration 纳入），也不会被静默结账。
-		// 判据保持「按 MigrationState」：空态与 CLEANED 不参与本次推进。
-		//
-		// 曾试过改成「Owner 仍是 hot 就一律纳入」，那是错的：
-		// `hot + CLEANED` 记录若被算作活跃，`SwitchDayOwners` 会把它送进
-		// `ApplyOwnerSwitch`，而后者要求 `ATTACHED_STAGING` ⇒ 必然失败，
-		// 等于把一个「拒绝结账」换成「权威切换报错」。
-		//
-		// `hot + CLEANED` 的**真出口是重新发起迁移**（`BeginMigration` 允许从 CLEANED
-		// 起跳），由 `DayManager.Resume` 自动完成 —— 见该函数的 `reinitiateResidualMigration`。
-		// 一旦重新发起，记录就不再是 CLEANED，本判据自然把它纳入。
-		if rec.MigrationState != "" && rec.MigrationState != StateCleaned {
-			active = append(active, rec)
+		if entry.Record != nil && entry.Record.Key == key {
+			state = entry.Record.MigrationState
+		} else if len(entry.Records) == 0 && entry.Key == key && state == "" {
+			state = entry.State
+		}
+		if IsHappyPath(state) && state != StateCleaned {
+			return state
+		}
+		if fallback == "" && IsFailure(state) && IsHappyPath(entry.FromState) && entry.FromState != StateCleaned {
+			fallback = entry.FromState
 		}
 	}
-	return active
+	return fallback
+}
+
+// BeginDayMigration 先持久冻结日级接纳，再等真实在途写者完成；重调不混入新成员。
+func (c *Catalog) BeginDayMigration(utcDay string, target Owner, targetDirID string) ([]*Record, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !target.Valid() || target == OwnerHot || targetDirID == "" {
+		return nil, fmt.Errorf("%w: valid non-HOT target required", ErrInvalidState)
+	}
+	day := c.days[utcDay].Clone()
+	if day == nil {
+		records, err := c.dayRecordsLocked(utcDay)
+		if err != nil {
+			return nil, err
+		}
+		if len(activeDayRecords(records)) > 0 {
+			day, err = c.ensureDayLocked(utcDay)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			day = &PhysicalDayMigration{UTCDay: utcDay, TargetOwner: target, TargetDirID: targetDirID, Frozen: true}
+			if _, err = c.commitDayLocked(day, nil, JournalEntry{Detail: "freeze physical-day write admission"}); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if day.TargetOwner != target || day.TargetDirID != targetDirID {
+		return nil, fmt.Errorf("%w: fixed physical-day target differs", ErrInvalidState)
+	}
+	if batch := day.batch(); batch != nil && batch.State != StateCleaned {
+		return c.batchRecordsLocked(day)
+	}
+	return c.beginResidualLocked(day)
+}
+
+func (c *Catalog) beginResidualLocked(day *PhysicalDayMigration) ([]*Record, error) {
+	if !day.Frozen {
+		day.Frozen = true
+		if _, err := c.commitDayLocked(day, nil, JournalEntry{Detail: "freeze residual physical-day admission"}); err != nil {
+			return nil, err
+		}
+	}
+	if c.dayPermitCountLocked(day.UTCDay) > 0 {
+		return nil, ErrWritePermitsActive
+	}
+	records, err := c.dayRecordsLocked(day.UTCDay)
+	if err != nil {
+		return nil, err
+	}
+	batch := DayMigrationBatch{ID: uint64(len(day.Batches) + 1), State: StateRoutingFrozen}
+	var changed []*Record
+	for _, rec := range records {
+		if rec.Owner != OwnerHot {
+			continue
+		}
+		if rec.MigrationState != "" && rec.MigrationState != StateCleaned {
+			return nil, fmt.Errorf("%w: HOT member already belongs to a batch", ErrInvalidState)
+		}
+		batch.Members = append(batch.Members, authorityJournalRecord(rec))
+		if err := BeginMigration(rec, day.TargetOwner, day.TargetDirID); err != nil {
+			return nil, err
+		}
+		changed = append(changed, rec)
+	}
+	if len(changed) == 0 {
+		if len(day.Batches) == 0 {
+			day.Frozen = false
+			if _, err := c.commitDayLocked(day, nil, JournalEntry{Detail: "stable non-HOT physical day requires no migration"}); err != nil {
+				return nil, err
+			}
+		}
+		return records, nil
+	}
+	day.Batches = append(day.Batches, batch)
+	return c.commitDayLocked(day, changed, JournalEntry{Key: changed[0].Key, State: StateRoutingFrozen, Detail: "begin fixed physical-day migration batch"})
+}
+
+// BeginResidualDayMigration 只在前批已转移责任后为遗留 HOT 创建另一个固定批次。
+func (c *Catalog) BeginResidualDayMigration(utcDay string) ([]*Record, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	day, err := c.ensureDayLocked(utcDay)
+	if err != nil {
+		return nil, err
+	}
+	if batch := day.batch(); batch != nil {
+		state := batch.State
+		if state == StateFailedRetryable {
+			state = batch.ResumeState
+		}
+		rank, err := HappyIndex(state)
+		if err != nil || rank < happyIndex[StateOwnerSwitched] {
+			return nil, fmt.Errorf("%w: previous batch has not transferred responsibility", ErrInvalidState)
+		}
+	}
+	return c.beginResidualLocked(day)
 }
 
 func (c *Catalog) AdvanceDay(utcDay string, to MigrationState) ([]*Record, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	records, err := c.dayRecordsLocked(utcDay)
+	day, err := c.ensureDayLocked(utcDay)
 	if err != nil {
 		return nil, err
 	}
-	// **只推进参与本次迁移的记录**（2026-10-21 架构复审 D2，与 BeginDayMigration 同源）。
-	//
-	// 旧实现取 `records[0].MigrationState` 当基准并要求全一致，混合态日（部分已 COLD、
-	// 部分仍 hot）必然报 `divergent states` ⇒ 迁移永久卡死。而混合态一定会发生
-	// （迟到写入/新 namespace 会在已下沉的那天新建 hot 记录）。
-	//
-	// 判据：只有 `MigrationState != ""` 的记录在迁移中；已 CLEANED / 空态的记录
-	// （包括早已下沉完成的）不参与本次推进。子集内部仍要求状态一致——那是真正的
-	// 不一致（同一次迁移里各记录不同步），必须继续拒。
-	active := activeDayRecords(records)
-	if len(active) == 0 {
-		// 没有任何记录在迁移中：幂等成功（调用方可能重试）。
-		return records, nil
+	batch := day.batch()
+	if batch == nil {
+		return nil, ErrWritePermitsActive
 	}
-	from := active[0].MigrationState
-	for _, rec := range active {
+	records, err := c.batchRecordsLocked(day)
+	if err != nil {
+		return nil, err
+	}
+	if to == StateOwnerSwitched {
+		if batch.State != StateFailedRetryable || batch.ResumeState != StateOwnerSwitched {
+			return nil, fmt.Errorf("%w: use SwitchDayOwners for initial authority switch", ErrIllegalTransition)
+		}
+		for _, rec := range records {
+			if rec.Owner != day.TargetOwner || rec.OwnerDirID != day.TargetDirID || rec.Generation != rec.TargetGeneration || rec.PublishedProjection == nil || rec.PublishedProjection.QueryGeneration != rec.Generation || rec.PublishedProjection.QueryLocationDirID != rec.OwnerDirID || !rec.LastVerifyCompleted || rec.LastVerifyChecksum == "" {
+				return nil, fmt.Errorf("%w: committed authority proof missing", ErrInvalidState)
+			}
+		}
+	}
+	if to == StateSnapshotting && c.dayPermitCountLocked(utcDay) > 0 {
+		return nil, ErrWritePermitsActive
+	}
+	if to == StateDetached {
+		if ok, reason := c.canRetireDayLocked(utcDay, time.Now().UTC()); !ok {
+			return nil, fmt.Errorf("%w: %s", ErrPhysicalDayNotRetirable, reason)
+		}
+	}
+	from := batch.State
+	if to == StateCleaned {
+		for _, rec := range records {
+			if !rec.JournalComplete || !rec.LastVerifyCompleted || len(rec.ResidualDirs) != 0 {
+				return nil, fmt.Errorf("%w: cleanup and journal proof required", ErrInvalidState)
+			}
+		}
+	}
+	for _, rec := range records {
 		if rec.MigrationState != from {
-			return nil, fmt.Errorf("%w: UTC-day records have divergent states", ErrInvalidState)
+			return nil, fmt.Errorf("%w: fixed batch has divergent states", ErrInvalidState)
 		}
 		if err := Transition(rec, to); err != nil {
 			return nil, err
 		}
-		if to == StateSnapshotting && rec.TargetGeneration == 0 {
-			rec.TargetGeneration = rec.MigrationFromGeneration + 1
+		rec.RecoveryRequired = false
+	}
+	batch.State = to
+	if to == StateCleaned {
+		complete := true
+		for _, b := range day.Batches {
+			complete = complete && b.State == StateCleaned
+		}
+		if complete {
+			day.Frozen = false
 		}
 	}
-	return c.commitBatchLocked(active, JournalEntry{Key: active[0].Key, State: to, FromState: from,
-		Detail: "advance physical UTC-day migration", AtUnixMilli: time.Now().UnixMilli()})
+	return c.commitDayLocked(day, records, JournalEntry{Key: records[0].Key, State: to, FromState: from, Detail: "advance fixed physical-day batch"})
 }
 
 func (c *Catalog) RecordDayVerification(utcDay, checksum string) error {
 	if checksum == "" {
-		return fmt.Errorf("%w: verification checksum required", ErrInvalidState)
+		return fmt.Errorf("%w: checksum required", ErrInvalidState)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	records, err := c.dayRecordsLocked(utcDay)
+	day, err := c.ensureDayLocked(utcDay)
 	if err != nil {
 		return err
 	}
+	records, err := c.batchRecordsLocked(day)
+	if err != nil {
+		return err
+	}
+	if day.batch() == nil {
+		return ErrInvalidState
+	}
+	day.batch().Checksum = checksum
 	for _, rec := range records {
 		rec.LastVerifyCompleted = true
 		rec.LastVerifyChecksum = checksum
 	}
-	_, err = c.commitBatchLocked(records, JournalEntry{Key: records[0].Key, State: records[0].MigrationState,
-		Detail: "UTC-day staging copy verified", AtUnixMilli: time.Now().UnixMilli()})
+	_, err = c.commitDayLocked(day, records, JournalEntry{Key: records[0].Key, State: day.batch().State, Detail: "fixed physical-day batch verified"})
 	return err
 }
 
 func (c *Catalog) SwitchDayOwners(utcDay string, target Owner, targetDirID string, projections map[PartitionKey]*PublishedProjection) ([]*Record, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	records, err := c.dayRecordsLocked(utcDay)
+	day, err := c.ensureDayLocked(utcDay)
 	if err != nil {
 		return nil, err
 	}
-	// **只切换「迁移中」的记录**（2026-10-22 复审 P0-2 同源）：`ApplyOwnerSwitch` 要求
-	// 记录处于 `ATTACHED_STAGING`，而混合态日里已下沉的记录是 `CLEANED` ⇒ 对全部记录
-	// 调用必然失败，导致该日永远切不过去。已完成的记录跳过即可（它已经是目标 owner）。
-	active := activeDayRecords(records)
-	for _, rec := range active {
-		projection := projections[rec.Key]
-		generation := rec.TargetGeneration
-		if generation == 0 {
-			generation = rec.MigrationFromGeneration + 1
+	if day.TargetOwner != target || day.TargetDirID != targetDirID {
+		return nil, ErrInvalidState
+	}
+	records, err := c.batchRecordsLocked(day)
+	if err != nil {
+		return nil, err
+	}
+	if day.batch() == nil {
+		return nil, ErrInvalidState
+	}
+	for _, rec := range records {
+		if !rec.LastVerifyCompleted || rec.LastVerifyChecksum == "" {
+			return nil, fmt.Errorf("%w: member was not verified", ErrInvalidState)
 		}
-		if err := ApplyOwnerSwitch(rec, target, targetDirID, generation, projection); err != nil {
+		if err := ApplyOwnerSwitch(rec, target, targetDirID, rec.TargetGeneration, projections[rec.Key]); err != nil {
 			return nil, err
 		}
 	}
-	if len(active) == 0 {
-		return records, nil
-	}
-	return c.commitBatchLocked(active, JournalEntry{Key: active[0].Key, State: StateOwnerSwitched,
-		FromState: StateAttachedStaging, AuthorityCommit: true,
-		Detail: "UTC-day owner-switched atomic commit", AtUnixMilli: time.Now().UnixMilli()})
+	day.batch().State = StateOwnerSwitched
+	return c.commitDayLocked(day, records, JournalEntry{Key: records[0].Key, State: StateOwnerSwitched, FromState: StateAttachedStaging, AuthorityCommit: true, Detail: "fixed physical-day owner switch"})
 }
 
 func (c *Catalog) ClearDayResiduals(utcDay string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	records, err := c.dayRecordsLocked(utcDay)
+	day, err := c.ensureDayLocked(utcDay)
+	if err != nil {
+		return err
+	}
+	if ok, reason := c.canRetireDayLocked(utcDay, time.Now().UTC()); !ok {
+		return fmt.Errorf("%w: %s", ErrPhysicalDayNotRetirable, reason)
+	}
+	records, err := c.batchRecordsLocked(day)
 	if err != nil {
 		return err
 	}
 	for _, rec := range records {
 		rec.ResidualDirs = nil
 	}
-	_, err = c.commitBatchLocked(records, JournalEntry{Key: records[0].Key, State: records[0].MigrationState,
-		Detail: "UTC-day residual directories cleared", AtUnixMilli: time.Now().UnixMilli()})
+	_, err = c.commitDayLocked(day, records, JournalEntry{Key: records[0].Key, Detail: "clear fixed-batch retired directories"})
 	return err
 }
 
 func (c *Catalog) MarkDayComplete(utcDay, checksum string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	records, err := c.dayRecordsLocked(utcDay)
+	for key, rec := range c.records {
+		if key.UTCDay == utcDay && rec.Owner == OwnerHot {
+			return fmt.Errorf("%w: HOT authority remains", ErrIllegalTransition)
+		}
+	}
+	day, err := c.ensureDayLocked(utcDay)
 	if err != nil {
 		return err
 	}
-	// **不得把「从未参与迁移」的记录一并结账**（2026-10-22 复审 P1-2）。
-	//
-	// 混合态日有两种非法残留，都必须在这里拦住：
-	//   · `Owner=hot` 且 `MigrationState=""`   —— 在 `BeginDayMigration` 之后才出现
-	//     （迟到写入 / 新 storage namespace），从未进入迁移；
-	//   · 任何 `Owner=hot` 且已进入迁移的记录 —— 迁移没走完就来结账。
-	//
-	// 旧实现无条件下针对**整日全部**记录置 `JournalComplete/LastVerifyCompleted`：
-	// 一旦该日走到这里，那条 hot 记录就被标成「已完成」，此后所有日级操作
-	// （`activeDayRecords` 按 MigrationState 过滤）都把它当作不参与，
-	// 而它的热分区会在 VL retention 到期时被直接删除 ⇒ 该 namespace 该日数据永久丢失，
-	// 且因为 `JournalComplete=true`，任何一致性检查都不会再报警。
-	//
-	// 为什么要在这里拦而不是只在 `BeginDayMigration` 拦：这个缺口是**两套判据不一致**
-	// 造成的（Begin 按 Owner 纳入、后续按 MigrationState 排除），只补一边会在另一边漏。
+	if ok, reason := c.canRetireDayLocked(utcDay, time.Now().UTC()); !ok {
+		return fmt.Errorf("%w: %s", ErrIllegalTransition, reason)
+	}
+	records, err := c.batchRecordsLocked(day)
+	if err != nil {
+		return err
+	}
 	for _, rec := range records {
-		if rec.Owner == OwnerHot {
-			// **必须留痕，否则这是无出口的死循环**（2026-10-22 终审 P2）。
-			//
-			// 调用链：`MarkDayComplete` 拒绝 → `Resume` 的 `fail()` → `FAILED_RETRYABLE`
-			// → 下一轮 sweep 又从 `FAILED_RETRYABLE` 恢复到 `DETACHED` → 再次拒绝。
-			// `retention.Mover` 的失败只记 `KeptOriginal`，既不重试计数也不升级到
-			// `FAILED_MANUAL` ⇒ 每轮 sweep 追加 2 条 journal、重跑 Cleanup，永不收敛。
-			// 守卫本身是对的（比静默丢数据好得多），但**拒绝必须可观测**，
-			// 否则运维只看到「这个源一直在失败」却查不到原因。
-			slog.Error("拒绝结账：该 UTC 日仍残留 hot 记录（迁移未覆盖它）",
-				"utcDay", utcDay, "key", rec.Key.String(), "owner", rec.Owner,
-				"migrationState", rec.MigrationState,
-				"hint", "对该日重新执行 BeginDayMigration 以把该记录纳入迁移；或确认它可被丢弃后人工清理")
-			return fmt.Errorf("%w: UTC day %s still has hot record %s (state=%q); "+
-				"refuse to mark journal complete", ErrIllegalTransition, utcDay, rec.Key, rec.MigrationState)
+		if !rec.LastVerifyCompleted || rec.LastVerifyChecksum == "" || checksum == "" {
+			return ErrInvalidState
 		}
-	}
-	for _, rec := range records {
 		rec.JournalComplete = true
-		rec.LastVerifyCompleted = true
-		rec.LastVerifyChecksum = checksum
 	}
-	_, err = c.commitBatchLocked(records, JournalEntry{Key: records[0].Key, State: records[0].MigrationState,
-		JournalComplete: true, Detail: "UTC-day journal complete", AtUnixMilli: time.Now().UnixMilli()})
+	_, err = c.commitDayLocked(day, records, JournalEntry{Key: records[0].Key, JournalComplete: true, Detail: "fixed-batch journal complete"})
 	return err
 }
 
 func (c *Catalog) FailDay(utcDay string, to MigrationState, detail string) ([]*Record, error) {
-	if to != StateFailedRetryable && to != StateFailedManual {
-		return nil, fmt.Errorf("%w: invalid day failure state", ErrIllegalTransition)
+	if !IsFailure(to) {
+		return nil, ErrIllegalTransition
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	records, err := c.dayRecordsLocked(utcDay)
+	day, err := c.ensureDayLocked(utcDay)
 	if err != nil {
 		return nil, err
 	}
-	// **只在迁移中的子集上打失败标**（同上）：混合态日里已下沉记录是 CLEANED，
-	// 若要求全一致，失败本身都记不下来 ⇒ 现场连「为什么失败」都查不到。
-	active := activeDayRecords(records)
-	if len(active) == 0 {
-		// **不能返回成功**（2026-10-22 复审 P2-8）：`FailDay` 的契约是「把失败记下来」，
-		// 没有任何可失败的记录意味着这次调用**什么也没做**，返回 nil 会让调用方
-		// （`DayManager.Resume` 的 `fail()` 闭包）误以为失败已入账，而现场查不到任何记录。
-		// 与 `AdvanceDay`/`BeginDayMigration` 的空子集语义不同：那两个是幂等推进，
-		// 空子集本来就等于「已完成」，返回成功是诚实的。
-		return nil, fmt.Errorf("%w: UTC day %s has no record participating in migration (state=%q)",
-			ErrIllegalTransition, utcDay, to)
+	batch := day.batch()
+	if batch == nil {
+		return nil, ErrInvalidState
 	}
-	from := active[0].MigrationState
-	for _, rec := range active {
-		if rec.MigrationState != from {
-			return nil, fmt.Errorf("%w: UTC-day records have divergent states", ErrInvalidState)
-		}
+	records, err := c.batchRecordsLocked(day)
+	if err != nil {
+		return nil, err
+	}
+	from := batch.State
+	if from == to {
+		return records, nil
+	}
+	for _, rec := range records {
 		if err := Transition(rec, to); err != nil {
 			return nil, err
 		}
 		rec.RecoveryRequired = true
 	}
-	return c.commitBatchLocked(active, JournalEntry{Key: active[0].Key, State: to, FromState: from,
-		Detail: detail, AtUnixMilli: time.Now().UnixMilli()})
+	if from != StateFailedRetryable {
+		batch.ResumeState = from
+	}
+	batch.State = to
+	return c.commitDayLocked(day, records, JournalEntry{Key: records[0].Key, State: to, FromState: from, Detail: detail})
+}
+
+// CompletePhysicalDay 只在全日屏障通过且物理清理成功后一次结清所有已转移批次。
+func (c *Catalog) CompletePhysicalDay(utcDay string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	day, err := c.ensureDayLocked(utcDay)
+	if err != nil {
+		return err
+	}
+	if ok, reason := c.canRetireDayLocked(utcDay, time.Now().UTC()); !ok {
+		return fmt.Errorf("%w: %s", ErrPhysicalDayNotRetirable, reason)
+	}
+	var records []*Record
+	seen := map[PartitionKey]bool{}
+	for i := range day.Batches {
+		batch := &day.Batches[i]
+		if batch.Checksum == "" {
+			return ErrInvalidState
+		}
+		for _, member := range batch.Members {
+			if seen[member.Key] {
+				continue
+			}
+			seen[member.Key] = true
+			rec := c.records[member.Key].Clone()
+			if rec.Owner == OwnerHot {
+				return ErrPhysicalDayNotRetirable
+			}
+			rec.MigrationState = StateCleaned
+			rec.JournalComplete = true
+			rec.RecoveryRequired = false
+			rec.ResidualDirs = nil
+			records = append(records, rec)
+		}
+		batch.State = StateCleaned
+	}
+	day.Frozen = false
+	_, err = c.commitDayLocked(day, records, JournalEntry{Detail: "complete all transferred physical-day batches"})
+	return err
 }

@@ -531,10 +531,11 @@ func TestVLPartitionOpsVerifyRejectsTamperedCopy(t *testing.T) {
 	}
 
 	ops := &VLPartitionOps{
-		HotDataRoot:  hotRoot,
-		ColdDataRoot: coldRoot,
-		snapshots:    make(map[catalog.PartitionKey]string),
-		verified:     make(map[catalog.PartitionKey]string),
+		ResourceBudget: testCatalogBudget(t),
+		HotDataRoot:    hotRoot,
+		ColdDataRoot:   coldRoot,
+		snapshots:      make(map[catalog.PartitionKey]string),
+		verified:       make(map[catalog.PartitionKey]string),
 	}
 	copyID, err := ops.copySnapshot(key, snapshotDir, "")
 	if err != nil {

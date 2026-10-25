@@ -199,7 +199,7 @@ func TestBuildFilterShapesAndQuotesSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("全实例档应可用：%v", err)
 	}
-	if got != "level:DEBUG" {
+	if got != `level:="DEBUG"` {
 		t.Errorf("全实例档过滤器应为 level:DEBUG，得到 %q", got)
 	}
 
@@ -208,17 +208,17 @@ func TestBuildFilterShapesAndQuotesSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("来源档应可用：%v", err)
 	}
-	want := `level:WARN AND log_source_id:"inst:147"`
+	want := `level:="WARN" AND log_source_id:="inst:147"`
 	if got != want {
 		t.Errorf("来源档过滤器\n 期望 %q\n 得到 %q", want, got)
 	}
 
 	// 别名归一：WARNING/FATAL 等在归一化阶段已折成规范级别，这里也必须一致。
 	for _, c := range []struct{ in, want string }{
-		{"warning", "level:WARN"},
-		{"FATAL", "level:ERROR"},
-		{"severe", "level:ERROR"},
-		{"trace", "level:TRACE"},
+		{"warning", `level:="WARN"`},
+		{"FATAL", `level:="ERROR"`},
+		{"severe", `level:="ERROR"`},
+		{"trace", `level:="TRACE"`},
 	} {
 		if got, err := buildFilter("", c.in); err != nil || got != c.want {
 			t.Errorf("级别别名 %q 应归一为 %q，得到 %q（err=%v）", c.in, c.want, got, err)
@@ -516,10 +516,10 @@ func TestSweeperSubmitsCorrectFilterAndCutoff(t *testing.T) {
 		filter string
 		ttl    time.Duration
 	}{
-		{"level:DEBUG", DefaultTTLDebug},
-		{"level:INFO", DefaultTTLInfo},
-		{"level:WARN", DefaultTTLWarn},
-		{"level:ERROR", DefaultTTLError},
+		{`level:="DEBUG"`, DefaultTTLDebug},
+		{`level:="INFO"`, DefaultTTLInfo},
+		{`level:="WARN"`, DefaultTTLWarn},
+		{`level:="ERROR"`, DefaultTTLError},
 	} {
 		got, ok := byFilter[c.filter]
 		if !ok {
@@ -563,7 +563,7 @@ func TestSweeperThrottlesRepeatedFilters(t *testing.T) {
 // 保留清理是后台省空间动作，一次 VL 抖动不该让整轮作废——那会让过期数据一直留着。
 func TestSweeperIsolatesPerTargetFailures(t *testing.T) {
 	p := discardPolicy()
-	fd := &fakeDeleter{failFor: "level:WARN"}
+	fd := &fakeDeleter{failFor: `level:="WARN"`}
 	sw := NewSweeper(p, fd)
 
 	res, err := sw.Sweep(context.Background(), baseTime, []string{"inst:1"}, DefaultScanLevels())

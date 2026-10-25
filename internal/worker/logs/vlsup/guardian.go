@@ -228,6 +228,7 @@ func (s *Supervisor) checkNamespace(ctx context.Context, ns Namespace, opts Guar
 	//    启动成功不清零——否则"启动→秒崩"的循环每次都会把计数抹回 0，退避与上限全部失效。
 	if inst.state == StateRunning && inst.proc != nil && !inst.proc.Exited() &&
 		!inst.startedAt.IsZero() && now.Sub(inst.startedAt) >= opts.StableWindow {
+		inst.stableObserved = true
 		if inst.restartAttempts != 0 || inst.restartsSuspended || inst.lastRestartErr != "" {
 			inst.restartAttempts = 0
 			inst.restartsSuspended = false
@@ -247,8 +248,13 @@ func (s *Supervisor) checkNamespace(ctx context.Context, ns Namespace, opts Guar
 		return
 	}
 
-	// ③ 只重启「此前健康」的实例：存活不足稳定窗口的按启动失败处理，不进重启循环。
-	if now.Sub(inst.startedAt) < opts.StableWindow {
+	// ③ 资格仅来自活态曾过窗或真实退出证据；死亡后经过的墙钟不计为存活。
+	stable := inst.stableObserved
+	if handle, ok := inst.proc.(ExecHandle); ok {
+		snapshot := handle.Snapshot()
+		stable = stable || (!snapshot.StartedAt.IsZero() && !snapshot.ExitedAt.IsZero() && snapshot.ExitedAt.Sub(snapshot.StartedAt) >= opts.StableWindow)
+	}
+	if !stable {
 		s.mu.Unlock()
 		return
 	}
@@ -287,7 +293,7 @@ func (s *Supervisor) checkNamespace(ctx context.Context, ns Namespace, opts Guar
 	s.syncGuardStatusLocked(inst)
 	s.mu.Unlock()
 
-	err := s.restartCrashed(ctx, ns, epoch)
+	err := s.safeError(s.restartCrashed(ctx, ns, epoch))
 
 	switch {
 	case errors.Is(err, errGuardAborted):

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,17 +18,23 @@ import (
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
+
+var ErrColdDayExists = errors.New("lifecycle: COLD destination already exists with different content")
 
 type VLPartitionOps struct {
 	Hot, Cold                 *vlsup.Client
 	HotDataRoot, ColdDataRoot string
 	Catalog                   *catalog.Catalog
+	CanonicalDayInput         func(*catalog.Record) ([]logtypes.Event, error)
+	ResourceBudget            *vlsup.BudgetController
 
-	mu        sync.Mutex
-	snapshots map[catalog.PartitionKey]string
-	verified  map[catalog.PartitionKey]string
+	reservations map[string]func()
+	mu           sync.Mutex
+	snapshots    map[catalog.PartitionKey]string
+	verified     map[catalog.PartitionKey]string
 }
 
 func NewVLPartitionOps(hot, cold *vlsup.Client, hotRoot, coldRoot string, cat *catalog.Catalog) (*VLPartitionOps, error) {
@@ -35,13 +42,14 @@ func NewVLPartitionOps(hot, cold *vlsup.Client, hotRoot, coldRoot string, cat *c
 		return nil, fmt.Errorf("lifecycle: HOT/COLD clients, data roots and Catalog are required")
 	}
 	return &VLPartitionOps{Hot: hot, Cold: cold, HotDataRoot: hotRoot, ColdDataRoot: coldRoot,
-		Catalog: cat, snapshots: make(map[catalog.PartitionKey]string), verified: make(map[catalog.PartitionKey]string)}, nil
+		Catalog: cat, snapshots: make(map[catalog.PartitionKey]string), verified: make(map[catalog.PartitionKey]string), reservations: make(map[string]func())}, nil
 }
 
 func (v *VLPartitionOps) Ops() Ops {
 	return Ops{
 		Drain: v.drain, Snapshot: v.snapshot, Copy: v.copySnapshot, Verify: v.verifyCopy,
 		Attach: v.attachCold, LeaseDrain: v.drainLeases, Detach: v.detachHot, Cleanup: v.cleanupHot,
+		RepairDay: v.repairDay,
 	}
 }
 
@@ -59,7 +67,10 @@ func (v *VLPartitionOps) withTimeout(fn func(context.Context) error) error {
 	return fn(ctx)
 }
 
-func (v *VLPartitionOps) drain(catalog.PartitionKey) error {
+func (v *VLPartitionOps) drain(key catalog.PartitionKey) error {
+	if err := v.Catalog.CheckPhysicalDayDrained(key.UTCDay); err != nil {
+		return err
+	}
 	return v.withTimeout(func(ctx context.Context) error {
 		_, err := v.Hot.Post(ctx, "/internal/force_flush", nil)
 		return err
@@ -67,6 +78,12 @@ func (v *VLPartitionOps) drain(catalog.PartitionKey) error {
 }
 
 func (v *VLPartitionOps) snapshot(key catalog.PartitionKey, _ string) (string, error) {
+	if err := v.Catalog.CheckPhysicalDayDrained(key.UTCDay); err != nil {
+		return "", err
+	}
+	if err := v.prepareHotSource(key); err != nil {
+		return "", err
+	}
 	day, err := dayName(key)
 	if err != nil {
 		return "", err
@@ -117,11 +134,14 @@ func (v *VLPartitionOps) copySnapshot(key catalog.PartitionKey, snapshotID, _ st
 		if sourceErr == nil && verifyErr == nil && sourceDigest == destDigest {
 			return dest, nil
 		}
-		return "", fmt.Errorf("lifecycle: COLD destination already exists with different content")
+		return "", ErrColdDayExists
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
+		return "", err
+	}
+	if err := v.reserveTree("copy/"+key.UTCDay, snapshotID); err != nil {
 		return "", err
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(dest), ".staging-"+day+"-")
@@ -199,6 +219,9 @@ func (v *VLPartitionOps) drainLeases(key catalog.PartitionKey, oldGeneration uin
 }
 
 func (v *VLPartitionOps) detachHot(key catalog.PartitionKey, _ string) error {
+	if ok, reason := v.Catalog.CanRetirePhysicalDay(key.UTCDay); !ok {
+		return fmt.Errorf("%w: %s", catalog.ErrPhysicalDayNotRetirable, reason)
+	}
 	day, err := dayName(key)
 	if err != nil {
 		return err
@@ -214,6 +237,9 @@ func (v *VLPartitionOps) detachHot(key catalog.PartitionKey, _ string) error {
 }
 
 func (v *VLPartitionOps) cleanupHot(key catalog.PartitionKey, _ string) error {
+	if ok, reason := v.Catalog.CanRetirePhysicalDay(key.UTCDay); !ok {
+		return fmt.Errorf("%w: %s", catalog.ErrPhysicalDayNotRetirable, reason)
+	}
 	day, err := dayName(key)
 	if err != nil {
 		return err
@@ -230,6 +256,18 @@ func (v *VLPartitionOps) cleanupHot(key catalog.PartitionKey, _ string) error {
 	if checksum == "" {
 		return fmt.Errorf("lifecycle: target responsibility was not verified")
 	}
+	if err := v.withTimeout(func(ctx context.Context) error {
+		active, err := partitionActive(ctx, v.Hot, day)
+		if err != nil {
+			return err
+		}
+		if active {
+			return fmt.Errorf("lifecycle: refusing cleanup of attached HOT partition")
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	hotPartition := filepath.Join(v.HotDataRoot, "partitions", day)
 	if err := requirePathUnder(filepath.Join(v.HotDataRoot, "partitions"), hotPartition); err != nil {
 		return err
@@ -243,10 +281,24 @@ func (v *VLPartitionOps) cleanupHot(key catalog.PartitionKey, _ string) error {
 			return err
 		})
 	}
+	v.releaseReservations(key.UTCDay)
 	return nil
 }
 
 func (v *VLPartitionOps) AllowDetach(key catalog.PartitionKey, _, _ string) (bool, string) {
+	if ok, reason := v.Catalog.CanRetirePhysicalDay(key.UTCDay); !ok {
+		return false, reason
+	}
+	if day, ok := v.Catalog.PhysicalDay(key.UTCDay); ok {
+		for _, batch := range day.Batches {
+			if batch.LogicalRepair {
+				if err := v.verifyAllDayReceivers(key.UTCDay); err != nil {
+					return false, err.Error()
+				}
+				return true, "verified controlled canonical receiver"
+			}
+		}
+	}
 	v.mu.Lock()
 	checksum := v.verified[key]
 	v.mu.Unlock()

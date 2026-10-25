@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wcpe/JianManager/internal/platform/vlruntime"
 )
 
 // 推荐保留期（用户决策 D1）。这套值只在运维「启用保留」后生效；
@@ -19,26 +21,15 @@ const (
 	DefaultTTLError = 90 * 24 * time.Hour
 )
 
-// DefaultHotRetention 是热层保留窗口的默认值，与既有受管 VL 的 `-retentionPeriod: 30d`
-// 对齐（用户决策：热层保持现状 30d，快查靠热层、长留靠冷层）。
-//
-// 为什么不让它默认按级别 TTL 取最长档（那是 90d，ERROR 那一档）：
-// 那会让热层实际保留 90 天，比现状**多**留两个月——与「省热层空间」的目标相反。
-// 级别 TTL 表达的是「各级别希望被留多久」，而热层窗口是「多快搬到冷层」，
-// 两者是不同的量，故各自有独立默认：热层 30d 搬走，冷层 365d 长留。
-// DefaultHotRetention 是热层保留窗口的默认值（用户最终口径：**热 90 天**）。
-//
-// 语义定稿：D1 的分级档位（debug 3d / info 7d / warn 30d / error 90d）表达的是
-// **「在热层停留多久」**；冷层则**所有级别统一**（见 DefaultColdRetention）——
-// 即「热的几个月、冷的两年」。到期动作不变：**搬**（不裸删，双闸默认关）。
-const DefaultHotRetention = 90 * 24 * time.Hour
+// DefaultHotRetention 复用唯一默认热窗口；到期默认搬运而非裸删。
+const DefaultHotRetention = vlruntime.DefaultHotRetention
 
 // DefaultColdRetention 是冷层保留期的默认值（用户最终口径：**冷 730 天**）。
 //
 // 冷层**不按级别分档**：热层按级别是为了「快查最近的高价值级别 + 尽快腾出热层空间」，
 // 而冷层的目的只有一个——**长期留存**。对冷层再做一套级别档位，
 // 只会让「同一条日志在两层的保留期不一致」变成常态，而那种不一致没有运维价值。
-const DefaultColdRetention = 730 * 24 * time.Hour
+const DefaultColdRetention = vlruntime.DefaultColdRetention
 
 // 执行器默认值。
 const (
@@ -395,7 +386,7 @@ func DescribeDeleteExecutor(p Policy) string {
 	}
 	if !DeleteExecutorWired {
 		return "删除执行器未接线：sweep.vl_sweep=true 只让计划进入「只计划」档，" +
-			"本版本不会产生任何删除调用（第三闸 -delete.enable 不可达）"
+			"本版本生产Sweeper不会产生删除调用（开启VL第三闸不能替代执行器装配）"
 	}
 	return "删除执行器已接线（仍需受管 VL 带 -delete.enable，否则下发被拒）"
 }
@@ -406,7 +397,7 @@ func DescribeDeleteExecutor(p Policy) string {
 // 那一档的实际效果只是「计划可审计」。
 func (p Policy) Describe() string {
 	if !p.Enabled {
-		return "disabled"
+		return "disabled；平台搬运/删除关闭不影响VL有限原生TTL独立淘汰，不是永久保留保证"
 	}
 	n := p.Normalize()
 	keys := make([]string, 0, len(n.ByLevel))
@@ -423,7 +414,7 @@ func (p Policy) Describe() string {
 		// 措辞与 DescribeDeleteExecutor 一致：本版本没有删除执行器的生产构造点。
 		mode = "planned-only"
 	}
-	return fmt.Sprintf("%s overrides=%d (%s)；%s",
+	return fmt.Sprintf("%s overrides=%d (%s)；%s；有限原生TTL仍独立淘汰，平台保留原物不构成无限故障保证",
 		mode, len(p.Sources), strings.Join(parts, " "), DescribeDeleteExecutor(n))
 }
 

@@ -338,6 +338,7 @@ func TestMixedDayMigrationSkipsSettledRecords(t *testing.T) {
 			ManifestVersion: "pv-1", CoverageComplete: true,
 			QueryLocationDirID: "cold-g2", QueryGeneration: 2,
 		}
+		require.NoError(t, c.RecordDayVerification(day, "verified-member"))
 		_, err = c.SwitchDayOwners(day, OwnerCold, "cold-g2",
 			map[PartitionKey]*PublishedProjection{keyHot: proj})
 		require.NoError(t, err, "混合态日必须能完成权威切换（旧实现对已 COLD 记录调 ApplyOwnerSwitch 必失败）")
@@ -400,18 +401,18 @@ func TestMarkDayCompleteRefusesHotResidual(t *testing.T) {
 		// 上面的 require.Error 已经钉住。若守卫被收窄成 `state==""`，本子用例转红。
 	})
 
-	t.Run("无 hot 残留时必须能正常结账", func(t *testing.T) {
+	t.Run("仅全冷但缺批次和验证凭据时不得伪结账", func(t *testing.T) {
 		c := New(NewMemJournal())
 		settled := NewStableRecord(settledKey, OwnerCold, 1, "cold-g1")
 		settled.JournalComplete = false
 		require.NoError(t, c.Put(settled))
 
-		require.NoError(t, c.MarkDayComplete(day, "sum-1"),
-			"全冷态日必须能结账，否则守卫变成永久阻塞")
+		require.Error(t, c.MarkDayComplete(day, "sum-1"),
+			"Owner 已在冷层不能替代固定批次和真实接收凭据")
 		rec, ok := c.Get(settledKey)
 		require.True(t, ok)
-		require.True(t, rec.JournalComplete)
-		require.Equal(t, "sum-1", rec.LastVerifyChecksum)
+		require.False(t, rec.JournalComplete)
+		require.Empty(t, rec.LastVerifyChecksum)
 	})
 }
 
@@ -500,10 +501,11 @@ func TestHotResidualCanBeReMigratedAndSettled(t *testing.T) {
 	proj := map[PartitionKey]*PublishedProjection{
 		hotKey: {ManifestVersion: "pv-1", CoverageComplete: true, QueryLocationDirID: "cold-target"},
 	}
+	require.NoError(t, c.RecordDayVerification(day, "sum"))
 	_, err = c.SwitchDayOwners(day, OwnerCold, "cold-target", proj)
 	require.NoError(t, err, "SwitchDayOwners 必须成功（hot 残留至此已不再是 hot）")
 
-	for _, st := range []MigrationState{StateQueryLeaseDraining, StateDetached, StateCleaned} {
+	for _, st := range []MigrationState{StateQueryLeaseDraining, StateDetached} {
 		_, err = c.AdvanceDay(day, st)
 		require.NoError(t, err, "AdvanceDay → %s", st)
 	}
@@ -512,8 +514,11 @@ func TestHotResidualCanBeReMigratedAndSettled(t *testing.T) {
 	require.Equal(t, OwnerCold, rec.Owner, "迁移完成后 owner 必须是 cold")
 
 	// 出口终点：守卫不再拦，该日可以正常结账。
+	require.NoError(t, c.ClearDayResiduals(day))
 	require.NoError(t, c.MarkDayComplete(day, "sum"),
 		"hot 残留迁移完成后必须能结账；若此处失败说明出口没有闭环")
+	_, err = c.AdvanceDay(day, StateCleaned)
+	require.NoError(t, err)
 }
 
 // TestMixedDayWithHotResidualCanComplete 钉住「混合态日 + hot 残留」必须能走完全链路。
@@ -568,16 +573,20 @@ func TestMixedDayWithHotResidualCanComplete(t *testing.T) {
 
 	// 关键点：SwitchDayOwners 必须只切处于 ATTACHED_STAGING 的记录，
 	// 不能把已 CLEANED 的 settled 一并送进 ApplyOwnerSwitch（那会必失败）。
+	require.NoError(t, c.RecordDayVerification(day, "sum"))
 	_, err = c.SwitchDayOwners(day, OwnerCold, "cold-target", proj)
 	require.NoError(t, err, "混合态日的权威切换必须成功（已下沉记录要被跳过）")
 
-	for _, st := range []MigrationState{StateQueryLeaseDraining, StateDetached, StateCleaned} {
+	for _, st := range []MigrationState{StateQueryLeaseDraining, StateDetached} {
 		_, err = c.AdvanceDay(day, st)
 		require.NoError(t, err, "AdvanceDay → %s", st)
 	}
 	lateRec, _ = c.Get(lateKey)
 	require.Equal(t, OwnerCold, lateRec.Owner, "迟到记录最终必须切到 cold")
 
+	require.NoError(t, c.ClearDayResiduals(day))
 	require.NoError(t, c.MarkDayComplete(day, "sum"),
 		"混合态日全部下沉后必须能结账")
+	_, err = c.AdvanceDay(day, StateCleaned)
+	require.NoError(t, err)
 }

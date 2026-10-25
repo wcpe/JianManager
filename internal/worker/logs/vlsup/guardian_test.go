@@ -57,14 +57,10 @@ func TestGuardianRestartsPreviouslyHealthyCrashedInstance(t *testing.T) {
 	clock := newFakeClock()
 	opts := guardianTestOptions(clock)
 
-	// 稳定窗口内退出：按启动失败处理，不应触发重启（保守性判据）。
-	clock.Advance(5 * time.Second)
-	factory.procs[0].exitImmediately()
+	// 必须在活态观察到越过稳定窗口，不能在死后等待墙钟补足资格。
+	clock.Advance(31 * time.Second)
 	s.checkOnce(ctx, opts)
-	require.Equal(t, 1, factory.startCount(), "存活不足稳定窗口不应被当成可自愈崩溃")
-
-	// 越过稳定窗口后仍处于退出态 ⇒ 判定为「此前健康、现已退出」，重启一次。
-	clock.Advance(26 * time.Second)
+	factory.procs[0].exitImmediately()
 	s.checkOnce(ctx, opts)
 	require.Equal(t, 2, factory.startCount(), "崩溃后应自动重启一次")
 	require.Len(t, factory.procs, 2)
@@ -85,11 +81,11 @@ func TestGuardianStopsAfterMaxRestartsAndAlerts(t *testing.T) {
 	s := newTestSupervisor(t, factory, sink, false)
 	ctx := context.Background()
 	require.NoError(t, s.Start(ctx, NamespaceHot))
-	factory.procs[0].exitImmediately()
-
 	clock := newFakeClock()
 	clock.Advance(31 * time.Second)
 	opts := guardianTestOptions(clock)
+	s.checkOnce(ctx, opts)
+	factory.procs[0].exitImmediately()
 
 	// 第 1 次尝试失败。
 	factory.failNext = errors.New("boom-1")
@@ -224,7 +220,8 @@ func TestGuardianResetsAfterStableRecoveryAndManualStartRearms(t *testing.T) {
 	clock.Advance(31 * time.Second)
 	opts := guardianTestOptions(clock)
 
-	// 先制造一次失败尝试（计数 1）。
+	// 活态过窗后再制造失败尝试（计数1）。
+	s.checkOnce(ctx, opts)
 	factory.procs[0].exitImmediately()
 	factory.failNext = errors.New("boom")
 	s.checkOnce(ctx, opts)
