@@ -11,6 +11,9 @@ import (
 // Service 必须映射为 LOG_UNSUPPORTED，不得返回空完整结果。
 var ErrRangeClientUnimplemented = errors.New("query: range client unimplemented")
 
+// ErrRangeQueryBudget 表示物理查询文本不能在批准引擎硬界内安全表达。
+var ErrRangeQueryBudget = errors.New("query: physical query text budget exceeded")
+
 // RangeQuery 是对单个 AuthoritativeRange 的执行参数。
 type RangeQuery struct {
 	RequestID   string

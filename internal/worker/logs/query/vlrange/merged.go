@@ -2,6 +2,7 @@ package vlrange
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -129,6 +130,9 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 			}
 		}
 	}
+	if scoped && !hasExpressibleCoverage {
+		return false
+	}
 	if hasExpressibleCoverage {
 		// selectorQuery 有可表达的来源约束时不会回退 namespace；必须命中其中一项。
 		if !covered {
@@ -161,7 +165,7 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 	}
 
 	// range 级前缀水位。
-	if rng.ClosedVisibleSeq > 0 && ev.Record.End > rng.ClosedVisibleSeq {
+	if (!scoped || rng.ClosedVisibleSeq > 0) && ev.Record.End > rng.ClosedVisibleSeq {
 		return false
 	}
 	return true
@@ -189,6 +193,12 @@ func mergedSearchQuery(sources []string, q query.RangeQuery) string {
 // （query.MergeableScope ok）；任一不满足即返回错误——由调用方降级回逐 range
 // 执行，绝不静默放大可见范围。
 func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery) (query.RangeResult, error) {
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+	return c.searchMerged(query.WithPhysicalReadBudget(ctx, q.Budget), rngs, q, nil)
+}
+
+func (c *Client) searchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery, physicalSources []string) (query.RangeResult, error) {
 	if c == nil || c.vl == nil {
 		return query.RangeResult{}, query.ErrRangeClientUnimplemented
 	}
@@ -220,8 +230,14 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 			}
 		}
 	}
+	if physicalSources != nil {
+		sources = physicalSources
+	}
 	// 查询文本确定性：来源排序后拼接（便于日志/调试对照，不影响命中集合）。
 	sort.Strings(sources)
+	if !physicalQueryFits(mergedSearchQuery(sources, q), q.Filter) {
+		return c.splitMergedSources(ctx, rngs, sources, q)
+	}
 
 	// 窗口 = 组内各天分区的**并集**（跨天一次查）。按天拆分会让 VL 对每个窗口
 	// 独立全扫（"窗口内匹配行数 < limit"时无法 top-K 早停）——实测 154 源 24h
@@ -335,6 +351,12 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 				out.Items = append(out.Items, ev)
 			}
 			if err != nil {
+				if errors.Is(err, query.ErrRangeQueryBudget) {
+					out.Exhausted = false
+					out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+					out.StatsQuality = query.StatsPartial
+					return out, err
+				}
 				if len(out.Items) == 0 {
 					return out, err
 				}

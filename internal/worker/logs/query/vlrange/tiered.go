@@ -12,9 +12,11 @@ import (
 // namespace is a visible range failure; it never falls back to HOT data.
 type Tiered struct {
 	Hot, Cold, Rehydrate *Client
+	// Ready 每次读取检查对应实例健康，不把 HTTP 健康冒充 Catalog 发布就绪。
+	Ready func(context.Context, catalog.Owner) error
 }
 
-func (t *Tiered) forRange(rng query.AuthoritativeRange) (*Client, error) {
+func (t *Tiered) forRange(ctx context.Context, rng query.AuthoritativeRange) (*Client, error) {
 	if t == nil {
 		return nil, fmt.Errorf("vlrange: tiered client is unavailable")
 	}
@@ -30,11 +32,16 @@ func (t *Tiered) forRange(rng query.AuthoritativeRange) (*Client, error) {
 	if selected == nil {
 		return nil, fmt.Errorf("vlrange: authoritative namespace %s is not ready", rng.Owner)
 	}
+	if t.Ready != nil {
+		if err := t.Ready(ctx, rng.Owner); err != nil {
+			return nil, fmt.Errorf("vlrange: authoritative namespace %s unavailable: %w", rng.Owner, err)
+		}
+	}
 	return selected, nil
 }
 
 func (t *Tiered) Search(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.RangeResult, error) {
-	c, err := t.forRange(rng)
+	c, err := t.forRange(ctx, rng)
 	if err != nil {
 		return query.RangeResult{}, err
 	}
@@ -47,7 +54,7 @@ func (t *Tiered) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	if len(rngs) == 0 {
 		return query.RangeResult{}, fmt.Errorf("vlrange: empty merged range set")
 	}
-	c, err := t.forRange(rngs[0])
+	c, err := t.forRange(ctx, rngs[0])
 	if err != nil {
 		return query.RangeResult{}, err
 	}
@@ -55,7 +62,7 @@ func (t *Tiered) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 }
 
 func (t *Tiered) Stats(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.StatsResult, error) {
-	c, err := t.forRange(rng)
+	c, err := t.forRange(ctx, rng)
 	if err != nil {
 		return query.StatsResult{}, err
 	}
@@ -63,7 +70,7 @@ func (t *Tiered) Stats(ctx context.Context, rng query.AuthoritativeRange, q quer
 }
 
 func (t *Tiered) Tail(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, mode query.TailMode) (query.RangeResult, error) {
-	c, err := t.forRange(rng)
+	c, err := t.forRange(ctx, rng)
 	if err != nil {
 		return query.RangeResult{}, err
 	}
@@ -71,7 +78,7 @@ func (t *Tiered) Tail(ctx context.Context, rng query.AuthoritativeRange, q query
 }
 
 func (t *Tiered) Fields(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.FieldsResult, error) {
-	c, err := t.forRange(rng)
+	c, err := t.forRange(ctx, rng)
 	if err != nil {
 		return query.FieldsResult{}, err
 	}
@@ -79,7 +86,7 @@ func (t *Tiered) Fields(ctx context.Context, rng query.AuthoritativeRange, q que
 }
 
 func (t *Tiered) Facets(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, dimensions []string, limit uint32) (query.RangeFacetsResult, error) {
-	c, err := t.forRange(rng)
+	c, err := t.forRange(ctx, rng)
 	if err != nil {
 		return query.RangeFacetsResult{}, err
 	}
@@ -87,7 +94,7 @@ func (t *Tiered) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 }
 
 func (t *Tiered) FollowLive(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.RangeResult, error) {
-	c, err := t.forRange(rng)
+	c, err := t.forRange(ctx, rng)
 	if err != nil {
 		return query.RangeResult{}, err
 	}

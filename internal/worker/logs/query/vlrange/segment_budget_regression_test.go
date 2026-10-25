@@ -17,8 +17,8 @@ func TestPR61MergedSegmentsShareRemainingBytes(t *testing.T) {
 	newer := `{"_time":"2026-10-08T10:00:00Z","event_id":"new","log_source_id":"src-a","source_generation":"g1","record_start":"1","record_end":"2"}` + "\n"
 	older := `{"_time":"2026-09-01T10:00:00Z","event_id":"old","log_source_id":"src-b","source_generation":"g1","record_start":"1","record_end":"2"}` + "\n"
 	ranges := []query.AuthoritativeRange{
-		{Key: catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-10-08"}, Owner: catalog.OwnerHot},
-		{Key: catalog.PartitionKey{StorageNamespace: "src-b", UTCDay: "2026-09-01"}, Owner: catalog.OwnerHot},
+		{Key: catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-10-08"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 10},
+		{Key: catalog.PartitionKey{StorageNamespace: "src-b", UTCDay: "2026-09-01"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 10},
 	}
 	for _, remaining := range []uint64{0, 20} {
 		t.Run(fmt.Sprint(remaining), func(t *testing.T) {

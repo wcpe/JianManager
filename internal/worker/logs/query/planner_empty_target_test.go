@@ -28,9 +28,9 @@ func coverageEntryFor(cov Coverage, targetID string) *TargetCoverage {
 func TestPlanner_AuthorizedTargetWithoutPartitionInWindowIsEmptySuccess(t *testing.T) {
 	cat := catalog.New(nil)
 	// inst:153：最后分区早于窗口（静默源）；inst:160：窗口内有分区（对照）。
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:153", UTCDay: "2026-09-27"}, catalog.OwnerHot, 1, "hot-153")))
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:160", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-160")))
 
 	req := PlanRequest{
@@ -77,7 +77,7 @@ func TestPlanner_AuthorizedTargetWithoutPartitionInWindowIsEmptySuccess(t *testi
 // 目标误拆成 ns/day，故判据必须「先按整串当命名空间找」。
 func TestPlanner_EmptySuccessCoverageForSlashNamespace(t *testing.T) {
 	cat := catalog.New(nil)
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "ns/game-1", UTCDay: "2026-09-20"}, catalog.OwnerHot, 1, "hot-old")))
 
 	p := NewPlanner(cat, nil)
@@ -97,7 +97,7 @@ func TestPlanner_EmptySuccessCoverageForSlashNamespace(t *testing.T) {
 // 宁可让 CP 判 missing_coverage，也不把「不知道」粉饰成「空」。
 func TestPlanner_UnknownAuthorizedTargetNotFabricatedAsEmptySuccess(t *testing.T) {
 	cat := catalog.New(nil)
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:160", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-160")))
 
 	p := NewPlanner(cat, nil)
@@ -143,7 +143,7 @@ func TestPlanner_UnknownAuthorizedTargetNotFabricatedAsEmptySuccess(t *testing.T
 // 改成什么都不做（仅删除该行）⇒ 断言②（必须有条目）立即红——两条路都被本用例封死。
 func TestPlanner_ReusePathMustNotFabricateEmptySuccessForUnplannedTarget(t *testing.T) {
 	cat := catalog.New(nil)
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:160", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-160")))
 
 	tr := TimeRange{FromUTC: "2026-10-11T00:00:00Z", ToUTC: "2026-10-12T00:00:00Z"}
@@ -161,7 +161,7 @@ func TestPlanner_ReusePathMustNotFabricateEmptySuccessForUnplannedTarget(t *test
 		"前置：创建时无 Catalog 记录的目标不得被补空成功")
 
 	// 视图冻结后 inst:170 才有可查记录（新源开始写日志），且它**仍在**本次授权集合内。
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:170", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-170")))
 
 	reused := p.Plan(PlanRequest{

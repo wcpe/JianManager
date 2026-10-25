@@ -218,6 +218,21 @@ func New(q QueryService, views ViewLookup) *Service {
 	return &Service{query: q, views: views, enabled: q != nil}
 }
 
+// SetResourceBudget 将 Worker 共享资源预算交给真实查询面。
+func (s *Service) SetResourceBudget(budget query.ResourceBudget) {
+	if target, ok := s.query.(interface{ SetResourceBudget(query.ResourceBudget) }); ok {
+		target.SetResourceBudget(budget)
+	}
+}
+
+// Close 在 Worker 停机时释放固定视图，但不提前解除在途读取 pin。
+func (s *Service) Close() error {
+	if target, ok := s.query.(interface{ Close() error }); ok {
+		return target.Close()
+	}
+	return nil
+}
+
 // NewDisabled 构造显式禁用的服务（老 Worker / 未启用日志平台）。
 func NewDisabled() *Service {
 	return &Service{enabled: false}
@@ -395,9 +410,11 @@ func unauthorizedSearch(req *workerpb.LogSearchRequest, err error) *workerpb.Log
 	}
 }
 
-// LogCreateView creates the Worker-local view used by subsequent federated calls.
+// LogCreateView 创建后续联邦请求复用的 Worker 固定视图。
 func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateViewRequest) (*workerpb.LogCreateViewResponse, error) {
-	_ = ctx
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	if !s.plannerReady() {
 		return &workerpb.LogCreateViewResponse{
 			RequestId: requestIDOfQuery(req.GetQuery()),
@@ -412,7 +429,22 @@ func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateView
 			Error:     &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_UNAUTHORIZED, Message: err.Error()},
 		}, nil
 	}
-	resp := s.query.OpenView(qreq)
+	var resp query.SearchResponse
+	if contextual, ok := s.query.(interface {
+		OpenViewContext(context.Context, query.QueryRequest) query.SearchResponse
+	}); ok {
+		resp = contextual.OpenViewContext(ctx, qreq)
+	} else {
+		resp = s.query.OpenView(qreq)
+	}
+	if ctx.Err() != nil {
+		if target, ok := s.query.(interface{ ReleaseView(string) error }); ok && resp.View != nil {
+			if err := target.ReleaseView(resp.View.ViewID); err != nil {
+				slog.Warn("取消建View后的租约清理失败", "err", err)
+			}
+		}
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	s.fillClosedVisibleSeq(&resp.Coverage, viewIDOf(resp.View, qreq.View))
 	return &workerpb.LogCreateViewResponse{
 		RequestId: resp.RequestID,

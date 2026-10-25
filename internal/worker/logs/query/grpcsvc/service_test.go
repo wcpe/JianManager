@@ -65,6 +65,28 @@ func (f *fakeQuery) Tail(_ context.Context, req query.QueryRequest, mode query.T
 	return f.tail
 }
 
+type fakeContextQuery struct {
+	fakeQuery
+	received context.Context
+}
+
+func (f *fakeContextQuery) OpenViewContext(ctx context.Context, req query.QueryRequest) query.SearchResponse {
+	f.received = ctx
+	return f.OpenView(req)
+}
+
+func TestLogCreateViewPreservesCallerContextWhenSupported(t *testing.T) {
+	queryService := &fakeContextQuery{fakeQuery: fakeQuery{caps: query.CapabilitiesResponse{Supported: true}}}
+	svc := New(queryService, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := svc.LogCreateView(ctx, &workerpb.LogCreateViewRequest{Query: &workerpb.LogQueryRequestBase{
+		RequestId: "context-view", AuthorizedTargets: &workerpb.LogAuthorizedTargets{TargetIds: []string{"instance"}},
+	}})
+	require.NoError(t, err)
+	require.Same(t, ctx, queryService.received, "真实Worker建view入口必须保留调用deadline/cancel，不能重新改用Background")
+}
+
 type fakeViews struct {
 	views map[string]*query.QueryView
 }
@@ -897,7 +919,10 @@ func TestLogSearch_RealQueryService_ClosedVisibleSeqFromPlannerView(t *testing.T
 func TestLogSearch_RealQueryService_UnimplementedClient(t *testing.T) {
 	key := catalog.PartitionKey{StorageNamespace: "ns/game-1", UTCDay: "2026-09-20"}
 	c := catalog.New(nil)
-	require.NoError(t, c.Put(catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-g1")))
+	record := catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-g1")
+	record.PublishedProjection = &catalog.PublishedProjection{ManifestVersion: "fixture-v1", CoverageComplete: true,
+		QueryLocationDirID: "hot-g1", QueryGeneration: 1, ClosedVisibleSeq: map[string]uint64{key.String(): 100}}
+	require.NoError(t, c.Put(record))
 
 	planner := query.NewPlanner(c, nil)
 	qs := query.NewService(planner, nil, "old-worker") // nil → UnimplementedRangeClient
@@ -922,7 +947,10 @@ func TestLogSearch_RealQueryService_UnimplementedClient(t *testing.T) {
 func TestLogSearch_RealQueryService_ProtocolMismatchCaps(t *testing.T) {
 	key := catalog.PartitionKey{StorageNamespace: "ns/game-1", UTCDay: "2026-09-20"}
 	c := catalog.New(nil)
-	require.NoError(t, c.Put(catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-g1")))
+	record := catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-g1")
+	record.PublishedProjection = &catalog.PublishedProjection{ManifestVersion: "fixture-v1", CoverageComplete: true,
+		QueryLocationDirID: "hot-g1", QueryGeneration: 1, ClosedVisibleSeq: map[string]uint64{key.String(): 100}}
+	require.NoError(t, c.Put(record))
 	planner := query.NewPlanner(c, nil)
 	qs := query.NewService(planner, nil, "b")
 	svc := New(qs, planner)
@@ -1052,4 +1080,3 @@ func TestLogRehydrate_PrefixedStateSurvivesRPCMapping(t *testing.T) {
 		})
 	}
 }
-

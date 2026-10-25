@@ -68,9 +68,10 @@ func TestRangeMatchesEventPredicates(t *testing.T) {
 	// 非 scoped：接受 CoveredSourceGenerations 的 (src-b, gen-b)，
 	// 且 projection_generation 必须 ∈ {pgen-B}。
 	nonScoped := query.AuthoritativeRange{
-		TargetID: "inst:2",
-		Key:      queryKey(),
-		Owner:    catalog.OwnerHot,
+		TargetID:         "inst:2",
+		Key:              queryKey(),
+		Owner:            catalog.OwnerHot,
+		ClosedVisibleSeq: 1000,
 		Projection: &catalog.PublishedProjection{
 			CoveredSourceGenerations: []catalog.SourceGenerationRef{{LogSourceID: "src-b", SourceGeneration: "gen-b"}},
 			ProjectionGenerations:    []string{"pgen-B"},
@@ -78,9 +79,10 @@ func TestRangeMatchesEventPredicates(t *testing.T) {
 	}
 	// 无 Projection：回退 StorageNamespace 相等。
 	plain := query.AuthoritativeRange{
-		TargetID: "inst:3",
-		Key:      catalog.PartitionKey{StorageNamespace: "src-c", UTCDay: "2026-09-22"},
-		Owner:    catalog.OwnerHot,
+		TargetID:         "inst:3",
+		Key:              catalog.PartitionKey{StorageNamespace: "src-c", UTCDay: "2026-09-22"},
+		Owner:            catalog.OwnerHot,
+		ClosedVisibleSeq: 10,
 	}
 
 	cases := []struct {
@@ -101,7 +103,7 @@ func TestRangeMatchesEventPredicates(t *testing.T) {
 		{"无 Projection：按 namespace 命中", plain, mergedTestEvent("src-c", "any", "", 10), true},
 		{"无 Projection：来源不符", plain, mergedTestEvent("src-d", "any", "", 10), false},
 		{
-			"scoped 全 scope generation 为空 → 回退 namespace",
+			"scoped 无物理代次不得回退 namespace",
 			query.AuthoritativeRange{
 				TargetID: "inst:4",
 				Key:      catalog.PartitionKey{StorageNamespace: "src-e", UTCDay: "2026-09-22"},
@@ -109,12 +111,12 @@ func TestRangeMatchesEventPredicates(t *testing.T) {
 				Projection: &catalog.PublishedProjection{
 					SourceProjections: []catalog.SourceProjection{{
 						SourceGenerationRef:   catalog.SourceGenerationRef{LogSourceID: "src-e", SourceGeneration: "gen-e"},
-						ProjectionGenerations: nil, // 空 → selectorQuery 会回退 NS
+						ProjectionGenerations: nil, // 空代次无已发布读取证据
 					}},
 				},
 			},
 			mergedTestEvent("src-e", "gen-e", "whatever", 10),
-			true,
+			false,
 		},
 	}
 	for _, tc := range cases {
@@ -166,9 +168,10 @@ func TestSearchMergedFiltersDedupesAndAttributes(t *testing.T) {
 
 	// 两个 range：scoped(src-a) + 非 scoped(src-b)——同 Owner 同天 → 合并。
 	nonScoped := query.AuthoritativeRange{
-		TargetID: "inst:2",
-		Key:      catalog.PartitionKey{StorageNamespace: "src-b", UTCDay: "2026-09-22"},
-		Owner:    catalog.OwnerHot,
+		TargetID:         "inst:2",
+		Key:              catalog.PartitionKey{StorageNamespace: "src-b", UTCDay: "2026-09-22"},
+		Owner:            catalog.OwnerHot,
+		ClosedVisibleSeq: 10,
 		Projection: &catalog.PublishedProjection{
 			CoveredSourceGenerations: []catalog.SourceGenerationRef{{LogSourceID: "src-b", SourceGeneration: "gen-b"}},
 			ProjectionGenerations:    []string{"pgen-B"},

@@ -87,7 +87,7 @@ func TestTieredArchiveSearchUsesRehydrateClientAndCoveredSourceSelector(t *testi
 				{LogSourceID: "source-b", SourceGeneration: "g7"},
 			},
 		},
-	}, query.RangeQuery{Budget: query.Budget{Limit: 10}})
+	}, query.RangeQuery{ClosedVisibleSeq: 10, Budget: query.Budget{Limit: 10}})
 	require.NoError(t, err)
 	require.Len(t, res.Items, 1)
 	require.Zero(t, hotCalls)
@@ -253,8 +253,9 @@ func TestClientSingleRangeMarksUnresolvedOnSameIDDifferentHash(t *testing.T) {
 			LogSourceID: "src-1", SourceGeneration: "g1",
 		}}},
 	}, query.RangeQuery{
-		TimeRange: query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
-		Budget:    query.Budget{Limit: 10, MaxBytes: 1 << 20},
+		TimeRange:        query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
+		ClosedVisibleSeq: 10,
+		Budget:           query.Budget{Limit: 10, MaxBytes: 1 << 20},
 	})
 	require.NoError(t, err)
 	// 行集合不变：两个哈希各留一条，交给上层做真实归因。
@@ -285,8 +286,9 @@ func TestClientSingleRangeKeepsExactOnSameIDSameHash(t *testing.T) {
 			LogSourceID: "src-1", SourceGeneration: "g1",
 		}}},
 	}, query.RangeQuery{
-		TimeRange: query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
-		Budget:    query.Budget{Limit: 10, MaxBytes: 1 << 20},
+		TimeRange:        query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
+		ClosedVisibleSeq: 10,
+		Budget:           query.Budget{Limit: 10, MaxBytes: 1 << 20},
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Items, 1)

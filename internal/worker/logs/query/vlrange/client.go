@@ -47,6 +47,9 @@ func (c *Client) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 	if c == nil || c.vl == nil {
 		return query.RangeResult{}, query.ErrRangeClientUnimplemented
 	}
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+	ctx = query.WithPhysicalReadBudget(ctx, q.Budget)
 	params, empty, err := c.params(rng, q)
 	if err != nil {
 		return query.RangeResult{}, err
@@ -54,16 +57,24 @@ func (c *Client) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 	if empty {
 		return query.RangeResult{Exhausted: true, DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
 	}
-	params.Set("query", searchQuery(rng, q))
+	text := searchQuery(rng, q)
+	if !physicalQueryFits(text, q.Filter) {
+		// 长代次列表只粗筛有界来源，完整冻结谓词仍由逐行归因执行。
+		boundedRange := rng
+		boundedRange.ClosedVisibleSeq = q.ClosedVisibleSeq
+		return c.SearchMerged(ctx, []query.AuthoritativeRange{boundedRange}, q)
+	}
+	params.Set("query", text)
 	params.Set("limit", strconv.FormatUint(lookaheadRows(q), 10))
 	return c.searchPage(ctx, params, q, lookaheadRows(q), func(ev logtypes.Event) bool {
-		return q.ClosedVisibleSeq == 0 || ev.Record.End <= q.ClosedVisibleSeq
+		// 现代 scope 在 LogsQL 中已逐源封闭；旧格式的零水位绝不解释成无限。
+		return rng.Projection != nil && len(rng.Projection.SourceProjections) > 0 && q.ClosedVisibleSeq == 0 || ev.Record.End <= q.ClosedVisibleSeq
 	})
 }
 
 // Stats uses the LogsQL stats pipe so aggregation happens in VL over the
 // authoritative range, then maps each NDJSON row to the worker aggregate type.
-func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.StatsResult, error) {
+func (c *Client) statsSelector(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, selector string) (query.StatsResult, error) {
 	if c == nil || c.vl == nil {
 		return query.StatsResult{}, query.ErrRangeClientUnimplemented
 	}
@@ -78,7 +89,7 @@ func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q quer
 	if empty {
 		return query.StatsResult{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
 	}
-	params.Set("query", selectorQuery(rng, q)+pipe)
+	params.Set("query", selector+pipe)
 	var out query.StatsResult
 	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), 0, func(line []byte) error {
 		point, err := statsFromJSON(line, q)
@@ -136,6 +147,9 @@ func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 	if limit == 0 {
 		limit = 100
 	}
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+	ctx = query.WithPhysicalReadBudget(ctx, q.Budget)
 	var out query.RangeFacetsResult
 	for _, dimension := range dimensions {
 		if !validField(dimension) || dimension == "event_id" || dimension == "message" || dimension == "_time" {
@@ -155,6 +169,9 @@ func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 			return out, err
 		}
 		out.CoverageReasons = append(out.CoverageReasons, stats.CoverageReasons...)
+		if stats.StatsQuality == query.StatsPartial || len(stats.CoverageReasons) > 0 {
+			out.Truncated = true
+		}
 		if len(stats.Points) > int(limit) {
 			out.Truncated = true
 		}
@@ -296,6 +313,12 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	scoped := rng.Projection != nil && len(rng.Projection.SourceProjections) > 0
 	var covered []string
 	if scoped {
+		type scopeGroup struct {
+			predicate string
+			sources   []string
+		}
+		groups := make([]scopeGroup, 0, len(rng.Projection.SourceProjections))
+		indices := make(map[string]int, len(rng.Projection.SourceProjections))
 		for _, scope := range rng.Projection.SourceProjections {
 			generations := make([]string, 0, len(scope.ProjectionGenerations))
 			for _, generation := range scope.ProjectionGenerations {
@@ -304,9 +327,24 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 			if len(generations) == 0 {
 				continue
 			}
-			covered = append(covered, `(log_source_id:="`+escape(scope.LogSourceID)+`" AND source_generation:="`+
-				escape(scope.SourceGeneration)+`" AND (`+strings.Join(generations, " OR ")+`) AND record_end:<=`+
-				strconv.FormatUint(scope.ClosedVisibleSeq, 10)+`)`)
+			// 只以完整非来源谓词分组，不能把不同代次或水位与来源做笛卡尔积。
+			predicate := `source_generation:="` + escape(scope.SourceGeneration) + `" AND (` +
+				strings.Join(generations, " OR ") + `) AND record_end:<=` + strconv.FormatUint(scope.ClosedVisibleSeq, 10)
+			index, exists := indices[predicate]
+			if !exists {
+				index = len(groups)
+				indices[predicate] = index
+				groups = append(groups, scopeGroup{predicate: predicate})
+			}
+			groups[index].sources = append(groups[index].sources, `log_source_id:="`+escape(scope.LogSourceID)+`"`)
+		}
+		// 分组与成员均按首次出现顺序输出；单成员保持原谓词形状。
+		for _, group := range groups {
+			sources := group.sources[0]
+			if len(group.sources) > 1 {
+				sources = "(" + strings.Join(group.sources, " OR ") + ")"
+			}
+			covered = append(covered, "("+sources+" AND "+group.predicate+")")
 		}
 	} else if rng.Projection != nil {
 		for _, src := range rng.Projection.CoveredSourceGenerations {
@@ -315,9 +353,13 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 			}
 		}
 	}
-	if len(covered) > 0 {
+	switch {
+	case scoped && len(covered) == 0:
+		// 已声明逐源投影却无任何物理代次，不能降级回命名空间无界读取。
+		parts = append(parts, "record_end:<0")
+	case len(covered) > 0:
 		parts = append(parts, "("+strings.Join(covered, " OR ")+")")
-	} else if rng.Key.StorageNamespace != "" {
+	case rng.Key.StorageNamespace != "":
 		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
 	}
 	if rng.Projection != nil && !scoped {
@@ -332,7 +374,7 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 			parts = append(parts, "("+strings.Join(terms, " OR ")+")")
 		}
 	}
-	if q.ClosedVisibleSeq > 0 {
+	if !scoped || q.ClosedVisibleSeq > 0 {
 		parts = append(parts, "record_end:<="+strconv.FormatUint(q.ClosedVisibleSeq, 10))
 	}
 	base := "*"
@@ -538,9 +580,18 @@ func (c *Client) searchPage(ctx context.Context, params url.Values, q query.Rang
 func (c *Client) stream(ctx context.Context, params url.Values, maxBytes, maxRows uint64, consume func([]byte) error) (uint64, bool, error) {
 	var read, rows uint64
 	truncated := false
+	if !physicalQueryFits(params.Get("query"), params.Get("extra_filters")) {
+		return 0, false, query.ErrRangeQueryBudget
+	}
 	if maxBytes == 0 {
 		return 0, true, nil
 	}
+	admittedBytes, refund, err := query.ReservePhysicalRead(ctx, maxBytes)
+	if err != nil {
+		return 0, false, err
+	}
+	maxBytes = admittedBytes
+	defer func() { refund(read) }()
 	actual, err := c.vl.StreamBudget(ctx, queryPath, params, maxBytes, func(body io.Reader) error {
 		// 在读入前限制真实字节数，Scanner 预读和超大单行也不能突破预留额度。
 		n := maxBytes
@@ -708,8 +759,8 @@ func rawFloat(fields map[string]json.RawMessage, key string) float64 {
 }
 
 func escape(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `"`, `\"`)
+	quoted := strconv.Quote(s)
+	return quoted[1 : len(quoted)-1]
 }
 
 func validField(s string) bool {

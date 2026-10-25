@@ -101,8 +101,8 @@ func newMergedDupClient(t *testing.T, rows []mergedDupRow) *Client {
 // 各自以 StorageNamespace 作来源约束，行按自身 UTC 天归因到对应 range。
 func mergedDupRanges() []query.AuthoritativeRange {
 	return []query.AuthoritativeRange{
-		{Key: catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot},
-		{Key: catalog.PartitionKey{StorageNamespace: "src-b", UTCDay: "2026-07-01"}, Owner: catalog.OwnerHot},
+		{Key: catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 10},
+		{Key: catalog.PartitionKey{StorageNamespace: "src-b", UTCDay: "2026-07-01"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 10},
 	}
 }
 
@@ -151,7 +151,7 @@ func TestMergedPureDuplicateInsideSingleSegmentKeepsExactQuality(t *testing.T) {
 		{at: "2026-09-22T10:00:01Z", eventID: "dup", hash: "h-same", msg: "dup", source: "src-a"},
 	})
 	res, err := client.SearchMerged(context.Background(), []query.AuthoritativeRange{
-		{Key: catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot},
+		{Key: catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 10},
 	}, query.RangeQuery{
 		TimeRange: query.TimeRange{FromUTC: "2026-09-22T00:00:00Z", ToUTC: "2026-09-23T00:00:00Z"},
 		Budget:    query.Budget{Limit: 100, MaxBytes: 1 << 20},

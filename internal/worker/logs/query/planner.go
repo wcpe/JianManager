@@ -1,11 +1,9 @@
 package query
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +13,7 @@ import (
 
 // PlanRequest 是 QueryPlanner 输入。
 type PlanRequest struct {
-	// Transient avoids registering an immutable view for an internal live cycle.
+	// Transient 使用每轮短租约，不登记可跨请求复用的实时尾流视图。
 	Transient bool
 	RequestID string
 	// TimeRange 绝对 UTC；为空表示不限制分区日。
@@ -29,12 +27,8 @@ type PlanRequest struct {
 	RequireCold bool
 	// RequireArchive 为 true 时，若 ARCHIVE 未恢复 → partial / ARCHIVE_NOT_RESTORED。
 	RequireArchive bool
-	// AllowProjectionDrift 为 true 时，视图复用校验豁免「投影清单版本（ManifestVersion）变化」判 stale。
-	//
-	// 只允许「单次操作自己创建视图、自己读完」的导出路径置位（CP logcoord.Export 逐页 Search）：
-	// 该路径不存在「前端旧 view_id 跨请求复用」场景，故投影漂移是源仍在实时追加内容的正常现象。
-	// 其余维度一律不豁免：分区记录消失、无权威副本、目录/代次变化、closed_visible_seq 缩水
-	// （数据变少）仍必须 VIEW_STALE。详见 validateViewAgainstCatalog。
+	// AllowProjectionDrift 保留旧导出请求的线缆兼容；不再豁免原集合或租约校验。
+	// 正常追加统一读取冻结投影，任何请求都不能把最新逐源列表混入旧 view。
 	AllowProjectionDrift bool
 }
 
@@ -53,14 +47,17 @@ type PlanResult struct {
 type Planner struct {
 	cat    CatalogSource
 	status StatusFunc
-	// mu 保护 views/viewSeq（并发 Search/Stats/Tail）。
+	// mu 保护本进程活动视图与到期回收器（并发 Search/Stats/Tail）。
 	mu sync.Mutex
-	// views 内存视图注册表（foundation；生产持久化由后续 FR 承担）。
+	// views 保存本进程固定视图；重启不复活旧 ID，物理保护由 Catalog 有界租约承担。
 	views map[string]*QueryView
-	// viewSeq 保证 ViewID 单调唯一（Windows 时钟粒度下 UnixNano 可能碰撞）。
-	viewSeq uint64
 	// now 可注入便于测试。
-	now func() time.Time
+	now         func() time.Time
+	ttl         time.Duration
+	maxViews    int
+	timers      map[string]*time.Timer
+	activeViews map[string]time.Time
+	closed      bool
 }
 
 // maxRetainedViews 内存视图注册表上限。
@@ -73,18 +70,24 @@ const maxRetainedViews = 4096
 
 // pruneViewsLocked 在插入前回收过期/超量的视图。调用方须持有 p.mu。
 func (p *Planner) pruneViewsLocked() {
-	if len(p.views) < maxRetainedViews {
-		return
-	}
 	now := p.now()
-	// 先删过期视图。
-	for id, v := range p.views {
-		if !v.ExpiresAt.IsZero() && !now.Before(v.ExpiresAt) {
-			delete(p.views, id)
+	drop := func(id string) {
+		delete(p.views, id)
+		delete(p.activeViews, id)
+		if timer := p.timers[id]; timer != nil {
+			timer.Stop()
+			delete(p.timers, id)
+		}
+		if p.cat != nil {
+			logLeaseCleanupError(p.cat.ReleaseQueryView(id))
 		}
 	}
-	// 仍超量：按创建时间淘汰最旧的，直至低于上限。
-	for len(p.views) >= maxRetainedViews {
+	for id, v := range p.views {
+		if !now.Before(v.ExpiresAt) {
+			drop(id)
+		}
+	}
+	for len(p.views) >= p.maxViews {
 		oldestID := ""
 		var oldest time.Time
 		for id, v := range p.views {
@@ -95,21 +98,13 @@ func (p *Planner) pruneViewsLocked() {
 		if oldestID == "" {
 			break
 		}
-		delete(p.views, oldestID)
+		drop(oldestID)
 	}
 }
 
 // NewPlanner 构造 Planner。status 为 nil 时使用 DefaultPartitionStatus。
 func NewPlanner(cat CatalogSource, status StatusFunc) *Planner {
-	if status == nil {
-		status = DefaultPartitionStatus
-	}
-	return &Planner{
-		cat:    cat,
-		status: status,
-		views:  make(map[string]*QueryView),
-		now:    time.Now,
-	}
+	return NewPlannerWithOptions(cat, status, Options{})
 }
 
 // GetView 返回已登记视图。
@@ -117,7 +112,7 @@ func (p *Planner) GetView(viewID string) (*QueryView, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	v, ok := p.views[viewID]
-	return v, ok
+	return cloneQueryView(v), ok
 }
 
 // Views 返回全部视图副本（测试/诊断）。
@@ -126,7 +121,7 @@ func (p *Planner) Views() map[string]QueryView {
 	defer p.mu.Unlock()
 	out := make(map[string]QueryView, len(p.views))
 	for k, v := range p.views {
-		out[k] = *v
+		out[k] = *cloneQueryView(v)
 	}
 	return out
 }
@@ -149,10 +144,21 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		},
 	}
 
-	// —— 视图校验（有 view_id 时复用固定集合；generation 不匹配 → VIEW_STALE）——
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed || p.cat == nil {
+		res.Err = newErr(ErrCodeNotReady, "query planner unavailable")
+		res.Coverage.MarkIncomplete(ReasonNoCatalogAuthority)
+		return res
+	}
+	logLeaseCleanupError(p.cat.PruneQueryLeases(p.now()))
+
+	// —— 视图校验：读取位置与逐源集合必须仍由原租约保护 ——
 	if req.ViewRef != nil && req.ViewRef.ViewID != "" {
 		p.mu.Lock()
-		view, ok := p.views[req.ViewRef.ViewID]
+		stored, ok := p.views[req.ViewRef.ViewID]
+		view := cloneQueryView(stored)
 		p.mu.Unlock()
 		if !ok {
 			res.Err = newErr(ErrCodeViewStale, fmt.Sprintf("unknown view_id %q", req.ViewRef.ViewID))
@@ -167,6 +173,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			return res
 		}
 		if !view.ExpiresAt.IsZero() && !p.now().Before(view.ExpiresAt) {
+			logLeaseCleanupError(p.ReleaseView(view.ViewID))
 			res.Err = newErr(ErrCodeViewStale, "view expired")
 			res.Coverage.EnumerationState = EnumStale
 			return res
@@ -178,6 +185,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			return res
 		}
 		res.View = view
+		res.Quality = view.Quality
 		// 分页：按 view 固定的 target 与 generation 选 range（不重新选最新集合）。
 		p.planRangesForView(req, view, &res)
 		return res
@@ -186,8 +194,19 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 	// —— 首次请求：创建固定视图 ——
 	keys := p.selectKeys(req)
 	var ranges []AuthoritativeRange
+	createdAt := p.now()
+	// 签发前先回收本地过期/超量视图，不能被 Catalog 容量闸挡在淘汰动作之前。
+	p.mu.Lock()
+	p.pruneViewsLocked()
+	p.mu.Unlock()
+	viewID, issueErr := p.cat.NewQueryViewID(createdAt)
+	if issueErr != nil {
+		res.Err = snapshotQueryError(issueErr)
+		res.Coverage.MarkIncomplete(ReasonBudgetExceeded)
+		return res
+	}
 	view := &QueryView{
-		ViewID:             p.newViewID(),
+		ViewID:             viewID,
 		OrderVersion:       SortVersion,
 		TimeRange:          req.TimeRange,
 		TargetIDs:          make([]string, 0, len(keys)),
@@ -196,9 +215,32 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		Owners:             make(map[string]string, len(keys)),
 		DirIDs:             make(map[string]string, len(keys)),
 		ProjectionVersions: make(map[string]string, len(keys)),
+		Projections:        make(map[string]*catalog.PublishedProjection, len(keys)),
+		LeaseIDs:           make(map[string]string, len(keys)),
+		Transient:          req.Transient,
 		QueryableTargets:   make(map[string]bool, len(keys)),
 		TargetCoverage:     make(map[string]TargetCoverage, len(keys)),
-		CreatedAt:          p.now(),
+		CreatedAt:          createdAt,
+	}
+	view.ExpiresAt = view.CreatedAt.Add(p.ttl)
+	snapshots, err := p.cat.SnapshotAndLease(catalog.QuerySnapshotRequest{ViewID: view.ViewID,
+		Holder: "worker-query", Keys: keys, Now: view.CreatedAt, TTL: p.ttl})
+	if err != nil {
+		logLeaseCleanupError(p.cat.ReleaseQueryView(view.ViewID))
+		res.Err = snapshotQueryError(err)
+		if res.Err.Code == ErrCodeBudgetExceeded {
+			res.Coverage.MarkIncomplete(ReasonBudgetExceeded)
+		} else {
+			res.Coverage.MarkIncomplete(ReasonRangeUnavailable)
+		}
+		return res
+	}
+	byKey := make(map[catalog.PartitionKey]catalog.QuerySnapshot, len(snapshots))
+	for _, snapshot := range snapshots {
+		byKey[snapshot.Key] = snapshot
+		if snapshot.ExpiresAt.Before(view.ExpiresAt) {
+			view.ExpiresAt = snapshot.ExpiresAt
+		}
 	}
 
 	for _, key := range keys {
@@ -215,22 +257,31 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			continue
 		}
 
-		// Catalog 权威：唯一查询副本入口（staging/residual 已被 OwnerForQuery 排除）。
-		ref := catalog.OwnerForQuery(rec)
-		if !ref.OK {
-			// fallback：Catalog 实例方法
-			if r2, ok2 := p.cat.OwnerForQuery(key); ok2 {
-				ref = r2
+		// 权威位置只用同锁捕获并登记租约的快照；Get 仅提供诊断状态。
+		snapshot, snapOK := byKey[key]
+		if !snapOK {
+			// 未获取物理租约只能保留不可读覆盖；诊断分类不产生历史读取权。
+			view.Projections[targetID] = nil
+			diagnostic := catalog.OwnerForQuery(rec)
+			status := p.status(key, rec, diagnostic)
+			reasons := append([]string{ReasonNoCatalogAuthority}, status.NotReadyReasons...)
+			reasons = append(reasons, classifyStatus(req, rec, diagnostic, status)...)
+			for _, reason := range rec.PartialReasons {
+				reasons = appendUniqueStr(reasons, reason)
 			}
-		}
-		if !ref.OK {
-			res.Coverage.AddTarget(TargetCoverage{
-				TargetID: targetID,
-				State:    CoverageNotReady,
-				Reasons:  []string{ReasonNoCatalogAuthority},
-			})
+			state := CoverageNotReady
+			if hasStr(reasons, ReasonArchiveNotRestored) {
+				state = CoverageArchiveMiss
+			}
+			res.Coverage.AddTarget(TargetCoverage{TargetID: targetID, State: state, Reasons: reasons})
 			continue
 		}
+
+		projection, prefixKnown := freezeProjection(key, snapshot.Projection)
+		ref := catalog.QueryRef{OK: true, Owner: snapshot.Owner, DirID: snapshot.DirID,
+			Generation: snapshot.Generation, Projection: projection}
+		view.LeaseIDs[targetID] = snapshot.LeaseID
+		view.Projections[targetID] = cloneProjection(projection)
 
 		// 防御：staging 目录即使被误写进 ref 也不得入选。
 		if ref.DirID != "" && rec.TargetDirID != "" && ref.DirID == rec.TargetDirID &&
@@ -247,6 +298,10 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		}
 
 		st := p.status(key, rec, ref)
+		if !prefixKnown {
+			st.Queryable = false
+			st.NotReadyReasons = appendUniqueStr(st.NotReadyReasons, ReasonProjectionIncomplete)
+		}
 		reasons := classifyStatus(req, rec, ref, st)
 		for _, reason := range rec.PartialReasons {
 			reasons = appendUniqueStr(reasons, reason)
@@ -256,10 +311,8 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 		cvs := uint64(0)
 		manifest := ""
 		if ref.Projection != nil {
+			// 明确的零上界不能再借用 default 或其他来源的更大水位。
 			cvs = ClosedVisibleSeqOf(ref.Projection, targetID)
-			if cvs == 0 {
-				cvs = ClosedVisibleSeqOf(ref.Projection, "default")
-			}
 			manifest = ref.Projection.ManifestVersion
 			// 质量必须按 rank 取 worst 合并，不能无条件覆盖：keys 由 selectKeys 按
 			// key.String() 升序给出，无条件赋值会让「后处理的 target」冲掉「先处理的
@@ -339,7 +392,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			DirID:            ref.DirID,
 			Generation:       ref.Generation,
 			ClosedVisibleSeq: cvs,
-			Projection:       ref.Projection,
+			Projection:       cloneProjection(ref.Projection),
 		})
 	}
 
@@ -364,13 +417,14 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 	//
 	// record=true：此刻视图尚未登记（下面的 p.views[...] 还没执行）⇒ 无并发读者，可安全写回。
 	p.coverEmptyAuthorizedTargets(req, view, &res)
-	if !req.Transient {
-		p.mu.Lock()
-		p.pruneViewsLocked()
-		p.views[view.ViewID] = view
-		p.mu.Unlock()
+	view.Quality = res.Quality
+	if err := p.registerView(view); err != nil {
+		logLeaseCleanupError(p.cat.ReleaseQueryView(view.ViewID))
+		res.Err = newErr(ErrCodeNotReady, err.Error())
+		res.Coverage.MarkIncomplete(ReasonRangeUnavailable)
+		return res
 	}
-	res.View = view
+	res.View = cloneQueryView(view)
 	return res
 }
 
@@ -458,89 +512,29 @@ func (p *Planner) catalogHasQueryableRecord(allKeys []catalog.PartitionKey, name
 	return false
 }
 
-// validateViewAgainstCatalog 检查固定视图是否仍可对齐 Catalog。
-// 纯迁移（旧租约仍可读原集合）不自动失效；generation 变化 / 数据集合破坏 closed_visible_seq → VIEW_STALE。
-//
-// allowProjectionDrift 只豁免「投影清单版本变化」这一条分支（见下方标注），其余分支一律保留。
-func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage, allowProjectionDrift bool) *QueryError {
-	for targetID, wantGen := range view.Generations {
-		key, ok := parseTargetKey(targetID)
+// validateViewAgainstCatalog 由 Catalog 原子验证租约及原集合仍然可读。
+// 正常追加不改旧 projection；历史读取权不会借默认 OwnerForQuery 获得。
+func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage, _ bool) *QueryError {
+	for id, projection := range view.Projections {
+		if projection != nil {
+			continue
+		}
+		key, ok := parseTargetKey(id)
 		if !ok {
 			continue
 		}
-		rec, ok := p.cat.Get(key)
-		if !ok {
-			cov.AddTarget(TargetCoverage{
-				TargetID:          targetID,
-				State:             CoverageStale,
-				Reasons:           []string{ReasonNoCatalogRecord},
-				ClosedVisibleSeq:  view.ClosedVisibleSeq[targetID],
-				CatalogGeneration: wantGen,
-			})
-			return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s catalog record missing", view.ViewID, targetID))
-		}
-		ref := catalog.OwnerForQuery(rec)
-		if !ref.OK {
-			return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s no catalog authority", view.ViewID, targetID))
-		}
-		if ref.Generation != wantGen {
-			cov.AddTarget(TargetCoverage{
-				TargetID:          targetID,
-				State:             CoverageStale,
-				Reasons:           []string{ReasonConflictGeneration},
-				ClosedVisibleSeq:  view.ClosedVisibleSeq[targetID],
-				CatalogGeneration: ref.Generation,
-				Owner:             string(ref.Owner),
-				DirID:             ref.DirID,
-			})
-			return newErr(ErrCodeViewStale,
-				fmt.Sprintf("view %s target %s generation mismatch view=%d catalog=%d",
-					view.ViewID, targetID, wantGen, ref.Generation))
-		}
-		// owner/dir 切换但 generation 未变时以 Catalog 为准仍可能 stale（不应发生）。
-		if wantDir, ok := view.DirIDs[targetID]; ok && wantDir != "" && ref.DirID != wantDir {
-			return newErr(ErrCodeViewStale,
-				fmt.Sprintf("view %s target %s dir mismatch view=%s catalog=%s",
-					view.ViewID, targetID, wantDir, ref.DirID))
-		}
-		if wantVersion, ok := view.ProjectionVersions[targetID]; ok {
-			currentVersion := ""
-			if ref.Projection != nil {
-				currentVersion = ref.Projection.ManifestVersion
-			}
-			// 投影清单版本漂移：内容清单变化（源仍在实时追加日志时**必然**发生）。
-			//
-			// 为什么可以按请求豁免（而非放宽校严）：ManifestVersion 只哈希 SourceProjections 内容清单,
-			// 「数据变少」由紧随其后的 closed_visible_seq 缩水分支独立把关，因此内容追加走本分支、
-			// 数据丢失走下一分支——豁免本分支不会放过任何数据丢失场景。
-			//
-			// 为什么必须能豁免：导出是「单次操作自己 CreateView、自己逐页读完」，耗时可达数十秒，
-			// 期间任意源写入新投影都会让 165 个目标全部降级 partial，导出永远拿不到附件
-			// （生产实证：只要玩家的业务服务器在跑，导出就永远失败）。
-			// 该路径不存在「前端旧 view_id 跨请求复用」，故原设计意图（防旧 view_id 复用）在此不适用。
-			if wantVersion != currentVersion && !allowProjectionDrift {
-				cov.AddTarget(TargetCoverage{TargetID: targetID, State: CoverageStale, Reasons: []string{ReasonConflictGeneration}})
-				return newErr(ErrCodeViewStale, fmt.Sprintf("view %s target %s projection changed", view.ViewID, targetID))
-			}
-		}
-		// closed_visible_seq 破坏：Catalog projection 前缀小于视图固定值。
-		if ref.Projection != nil {
-			cur := ClosedVisibleSeqOf(ref.Projection, targetID)
-			want := view.ClosedVisibleSeq[targetID]
-			if cur > 0 && want > 0 && cur < want {
-				cov.AddTarget(TargetCoverage{
-					TargetID:          targetID,
-					State:             CoverageStale,
-					Reasons:           []string{ReasonProjectionIncomplete},
-					ClosedVisibleSeq:  cur,
-					CatalogGeneration: ref.Generation,
-				})
-				return newErr(ErrCodeViewStale,
-					fmt.Sprintf("view %s target %s closed_visible_seq shrunk view=%d catalog=%d",
-						view.ViewID, targetID, want, cur))
-			}
+		if record, exists := p.cat.Get(key); exists && record.PublishedProjection != nil {
+			return newErr(ErrCodeViewStale, "previously unavailable target has a new projection")
 		}
 	}
+	release, err := p.cat.PinLeasedRead(view.ViewID, p.now())
+	if err != nil {
+		for _, id := range view.TargetIDs {
+			cov.AddTarget(TargetCoverage{TargetID: id, State: CoverageStale, Reasons: []string{ReasonConflictGeneration}})
+		}
+		return newErr(ErrCodeViewStale, fmt.Sprintf("view %s lease stale: %v", view.ViewID, err))
+	}
+	release()
 	return nil
 }
 
@@ -573,33 +567,7 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 		ownerStr := view.Owners[targetID]
 		cvs := view.ClosedVisibleSeq[targetID]
 
-		rec, ok := p.cat.Get(key)
-		if !ok {
-			res.Coverage.AddTarget(TargetCoverage{
-				TargetID: targetID,
-				State:    CoverageNotReady,
-				Reasons:  []string{ReasonNoCatalogRecord},
-			})
-			continue
-		}
-		ref := catalog.OwnerForQuery(rec)
-		if ref.Generation != wantGen || (wantDir != "" && ref.DirID != wantDir) {
-			res.Err = newErr(ErrCodeViewStale, "view generation/dir changed during plan")
-			res.Coverage.EnumerationState = EnumStale
-			return
-		}
-
-		var owner catalog.Owner
-		switch ownerStr {
-		case string(catalog.OwnerHot):
-			owner = catalog.OwnerHot
-		case string(catalog.OwnerCold):
-			owner = catalog.OwnerCold
-		case string(catalog.OwnerArchive):
-			owner = catalog.OwnerArchive
-		default:
-			owner = ref.Owner
-		}
+		owner := catalog.Owner(ownerStr)
 
 		if original, ok := view.TargetCoverage[targetID]; ok {
 			res.Coverage.AddTarget(original)
@@ -627,7 +595,7 @@ func (p *Planner) planRangesForView(req PlanRequest, view *QueryView, res *PlanR
 			DirID:            wantDir,
 			Generation:       wantGen,
 			ClosedVisibleSeq: cvs,
-			Projection:       ref.Projection,
+			Projection:       cloneProjection(view.Projections[targetID]),
 		})
 	}
 	// 复用路径的**未规划授权目标**必须显式上报「未就绪」（F1，2026-10-12 终审修复）：
@@ -782,22 +750,12 @@ func assertDisjoint(ranges []AuthoritativeRange) {
 	}
 }
 
-// newViewID 生成不可预测的 Worker 本地视图 ID。
-//
-// 原实现用 UnixNano + 自增序号，可被枚举：视图复用路径的授权校验（`planRangesForView`）
-// 依赖「视图创建时的目标」作为读取范围，猜中 ID 就能以更窄的当前授权复用更宽的视图
-// （M-4A/M-9）。改用 128 位加密随机数；失败时退回原方案以保证仍能生成唯一 ID
-// （viewSeq 单调，不依赖时钟粒度）。
-func (p *Planner) newViewID() string {
-	p.mu.Lock()
-	p.viewSeq++
-	seq := p.viewSeq
-	p.mu.Unlock()
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return fmt.Sprintf("view-%d-%d", p.now().UnixNano(), seq)
+// snapshotQueryError 保留容量拒绝的可恢复语义，不把合法负载过载误报为永久 stale。
+func snapshotQueryError(err error) *QueryError {
+	if errors.Is(err, catalog.ErrQueryAdmission) {
+		return &QueryError{Code: ErrCodeBudgetExceeded, Message: err.Error(), Retryable: true, RetryAfter: 1000}
 	}
-	return "view-" + strconv.FormatUint(seq, 36) + "-" + hex.EncodeToString(buf[:])
+	return newErr(ErrCodeNotReady, fmt.Sprintf("query snapshot unavailable: %v", err))
 }
 
 func appendUniqueStr(list []string, v string) []string {
