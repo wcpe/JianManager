@@ -10,7 +10,8 @@ import NodeLogRuntimePanel from './NodeLogRuntimePanel'
 
 describe('NodeLogRuntimePanel', () => {
   it('shows process health separately from query readiness and installs only a cached asset', async () => {
-    loginMockUser()
+    const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+    loginMockUser(`mock.${payload}.sig`)
     let installs = 0
     let migrations = 0
     let resolutions = 0
@@ -46,13 +47,16 @@ describe('NodeLogRuntimePanel', () => {
     fireEvent.change(screen.getByLabelText('迁移日期（该日分区）'), { target: { value: '2026-09-23' } })
     // HOT→COLD 目标改由相邻问号解释，按钮文案统一为「迁移分区」。
     await user.click(screen.getByRole('button', { name: '迁移分区' }))
+    expect(migrations).toBe(0)
+    await user.click(screen.getByRole('button', { name: '确认迁移' }))
     await waitFor(() => expect(migrations).toBe(1))
     await user.click(screen.getByRole('button', { name: '核销已覆盖缺口' }))
     await waitFor(() => expect(resolutions).toBe(1))
   })
 
   it('keeps asset deployment disabled while offline or uncached', async () => {
-    loginMockUser()
+    const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
+    loginMockUser(`mock.${payload}.sig`)
     server.use(
       http.get(API('/log-runtime/assets'), () => HttpResponse.json({ assets: [{ tag: 'v1.52.0', os: 'linux', arch: 'amd64', cached: false }] })),
       http.get(API('/nodes/1/log-runtime'), () => HttpResponse.json({ error: { message: 'LOG_NOT_READY' }, instances: [] })),

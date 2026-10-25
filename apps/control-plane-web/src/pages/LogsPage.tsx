@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { AlertTriangle, Download, Info, MoreHorizontal, PackageOpen, Radio } from 'lucide-react'
-import { useLegacyLogs, useLogs, exportLogs, type LogQueryParams } from '@/api/logs'
+import { useLegacyLogs, useLogs, exportLogs, exportCurrentLogPage, type LogQueryParams } from '@/api/logs'
 import {
 	buildFederationResult,
+  describeLogAggregate,
+  isLogRequestCanceled,
 	exportFederatedLogs,
 	FederatedExportIncompleteError,
 	isRateLimitError,
@@ -20,6 +22,8 @@ import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
 import { ImportArchivesDialog } from '@/components/ImportArchivesDialog'
+import { LogExportRangeDialog } from '@/components/LogExportRangeDialog'
+import { useDebounced } from '@/lib/use-debounced'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -38,12 +42,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons, type CoverageBannerProps } from '@/lib/logs-federation'
+import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons, type CoverageBannerProps, type IngestPositionGap } from '@/lib/logs-federation'
 import type { LogEntry } from '@/api/logs'
 import {
   logLevelStatus,
   timeRangeToParams,
-  buildExportParams,
+  normalizeLogScope,
+  logScopeKey,
   computeVirtualWindow,
   windowForAnchor,
   TIME_RANGE_PRESETS,
@@ -184,6 +189,7 @@ export default function LogsPage() {
     return Number.isFinite(n) && n > 0 ? n : null
   })
   const [keyword, setKeyword] = useState('')
+  const debouncedKeyword = useDebounced(keyword.trim(), 250)
     // 默认 24h（2026-09-30 实测依据）：默认「全部时间」会让每个目标的全部分区参与查询——
     // 默认窗＝**15 分钟**（w21 快首屏 ✗）：搜索页首屏走 CP 快路径（Query.Fast ⇒ resolveForQueryFast，
     // 省每 Worker 一次 OpenView 往返 ＋ 未校验标记 Coverage.Pending ✓），窗口越小首屏越快；
@@ -194,58 +200,47 @@ export default function LogsPage() {
 	const [federationCursors, setFederationCursors] = useState<Record<number,
 		Pick<LogQueryParams, 'from' | 'to'> & { viewId?: string; cursor?: string }
 	>>({})
+  const [appliedKeyword, setAppliedKeyword] = useState(debouncedKeyword)
+  if (appliedKeyword !== debouncedKeyword) {
+    // 去抖后的条件生效时才回首页；输入中的旧页仍作占位，不抢先读旧条件首页。
+    setAppliedKeyword(debouncedKeyword)
+    setPage(1)
+    setFederationCursors({})
+  }
   // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
   const [onlineOnly, setOnlineOnly] = useState(false)
   const [follow, setFollow] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [exportRangeOpen, setExportRangeOpen] = useState(false)
+  const exportRequest = useRef<AbortController | null>(null)
+  useEffect(() => () => exportRequest.current?.abort(), [])
   /**
    * 时间窗锚点：非跟随态下冻结，避免每次渲染 `new Date()` 使 useLogs /
    * useLogsFederation 的 queryKey 每毫秒变化导致请求风暴（FR-482 接线后暴露）。
    * 跟随态在渲染时取当前时间，配合 refetchInterval 滚动时间窗。
    */
+  // 仅显式切换范围/跟随时更新锚点，首屏不再由 effect 生成近重复查询。
   const [rangeAnchor, setRangeAnchor] = useState(() => Date.now())
-  useEffect(() => {
-    // 时间范围/跟随态变化时重置锚点：读取挂钟的「同步外部时间」语义，非渲染期纯计算。
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setRangeAnchor(Date.now())
-  }, [range, follow])
-
-  // 跟随态时间桶：**由 interval 驱动的 state**，不再在渲染期取挂钟分桶。
-  // 旧实现的渲染期分桶有双重触发：跨桶时 queryKey 变化触发一次请求，同时
-  // refetchInterval 到点又触发一次 ⇒ 同一份数据成对双发（生产 cp.out 里同参数成对请求
-  // 仅相差约 6ms 正是此）。改为「桶滚动＝唯一触发源」：跟随态下主查询
-  // refetchInterval=false（见下），每个 tick 恰好一次请求。
-  // 分桶仍然必要：`from` 逐毫秒变化会让 queryKey 每次渲染都变、响应永远落不到地。
-  // 跟随态不下发 `to`（见 timeParamsFor）：时钟偏移下的未来时间戳事件仍可见。
   const [followAnchorMs, setFollowAnchorMs] = useState(() => bucketFloor(Date.now()))
-  useEffect(() => {
-    if (!follow) return
-    const timer = window.setInterval(() => {
-      // 只在真正跨桶时改变 state：同一桶内返回原值 → React 跳过重渲染 → 不发请求。
-      setFollowAnchorMs((prev) => {
-        const next = bucketFloor(Date.now())
-        return next === prev ? prev : next
-      })
-    }, FOLLOW_INTERVAL)
-    return () => window.clearInterval(timer)
-  }, [follow])
 
   const timeParams = timeParamsFor(
     range,
     follow ? new Date(followAnchorMs) : new Date(rangeAnchor),
     follow,
   )
-  const params: LogQueryParams = {
+  const scope = normalizeLogScope({
     view,
-    page: follow ? 1 : page,
-    pageSize: PAGE_SIZE,
     ...(view === 'all' && source ? { source } : {}),
-    ...(level ? { level } : {}),
+    level,
     ...(nodeId !== null ? { nodeId } : {}),
     ...(instanceId !== null ? { instanceId } : {}),
-    ...(keyword.trim() ? { keyword: keyword.trim() } : {}),
+    keyword: debouncedKeyword,
+    ...(view !== 'platform' && view !== 'legacy' && onlineOnly ? { onlineOnly: true } : {}),
     ...timeParams,
-  }
+    ...(!follow && page > 1 ? { from: federationCursors[page]?.from, to: federationCursors[page]?.to } : {}),
+  })
+  const params: LogQueryParams = { ...scope, page: follow ? 1 : page, pageSize: PAGE_SIZE }
+  const scopeKey = logScopeKey(scope)
 
   const legacyMode = view === 'legacy'
   // 平台视图的权威来源是 CP 经典日志接口；联邦数据只覆盖节点/实例日志。
@@ -260,13 +255,7 @@ export default function LogsPage() {
 		// 续页不解析游标、不从日志时间重建窗口，保留纳秒同戳组和原视图身份。
 		...(!follow && page > 1 ? federationCursors[page] : {}),
 	}
-  const federationQuery = useLogsFederation(federationParams, {
-	enabled: federationEnabled,
-	// 跟随态：时间桶 state（上）是唯一触发源，此处必须为 false，否则同拍双发。
-	// `all` 预设没有 `from`（窗口无边界 ⇒ 分桶不改变 queryKey），此时无桶可滚，
-	// 才退回 interval 作为那一次触发；两种情况都只有**一个**触发源。
-	refetchInterval: follow && !timeParams.from ? FOLLOW_INTERVAL : false,
-	})
+  const federationQuery = useLogsFederation(federationParams, { enabled: federationEnabled })
   /**
    * 最近一份「联邦可用且带 items」的成功结果，用于限流期间继续渲染已有行。
    *
@@ -305,7 +294,7 @@ export default function LogsPage() {
   // 不改身份」：键不变 ⇒ 保留项继续被复用，而新查询若 429（生产该端点 23.8%），
   // 页面就把**上一个来源/未过滤**的行渲染成新筛选的结果（例如只看 worker 却显示 control_plane 的行）。
   // `onlineOnly` 尤其容易漏判成「只是排序/展示开关」——它实际是服务端过滤条件。
-  const filterKey = `${view}|${source}|${onlineOnly}|${instanceId ?? ''}|${nodeId ?? ''}|${level}|${keyword.trim()}|${range}`
+  const filterKey = follow ? `${logScopeKey({ ...scope, from: undefined, to: undefined })}|${range}` : scopeKey
   const latestFederation = federationQuery.data
   /**
    * 「这一轮请求真的拿到结果了」——用于清除闩锁。
@@ -324,6 +313,7 @@ export default function LogsPage() {
   }
   if (
     !federationQuery.isError
+    && !federationQuery.isPlaceholderData
     && latestFederation
     && !latestFederation.degraded
     && Array.isArray(latestFederation.response.items)
@@ -430,51 +420,66 @@ export default function LogsPage() {
    * 「联邦不可用 ⇒ 空且非成功」的语义上，无需各处重复判断。
    */
   const classicAuthoritative = !federationEnabled
-  const { data, isLoading: classicLoading, isError: classicError, refetch: refetchLogs } = useLogs(params, {
-    refetchInterval: follow && !federationEnabled ? FOLLOW_INTERVAL : false,
-    enabled: !legacyMode && classicAuthoritative,
-  })
-	const aggregateParams: Record<string, unknown> = {
-		...timeParams,
-		...(view === 'all' && source ? { source } : {}),
-		...(level ? { level } : {}),
-		...(nodeId !== null ? { nodeId } : {}),
-		...(instanceId !== null ? { instanceId } : {}),
-		...(keyword.trim() ? { keyword: keyword.trim() } : {}),
-		// 注意：**不得**把搜索的 viewId 带入聚合参数 ✗——stats/facets 是各自固定条件的独立查询，
-		// 复用搜索视图会被 CP 按 F-006 语义拒（409 VIEW_STALE；实测 stats 与 facets 两呼皆 409 ✓）。
-		// 去除后二者各自重建视图，服务端校验一字不动 ✗。
-	}
+  const classicQuery = useLogs(params, { enabled: !legacyMode && classicAuthoritative })
+  const { data, isLoading: classicLoading, isError: classicError, refetch: refetchLogs } = classicQuery
+  // 同条件的聚合可复用搜索视图；实际时间窗与在线目标必须逐字段同源。
+  const aggregateParams: Record<string, unknown> = {
+    ...scope,
+    ...(federation?.response.viewId ? { viewId: federation.response.viewId } : {}),
+  }
 	// Tail无永久位置字段：复用既有Search每30秒刷新证据，固定窗口避免每个3秒轮询桶重查。
 	const followEvidenceQuery = useLogsFederation({
-		...aggregateParams,
-		...timeParamsFor(range, new Date(rangeAnchor), true),
+    ...normalizeLogScope({ ...scope, ...timeParamsFor(range, new Date(rangeAnchor), true), to: undefined }),
 		limit: 1,
-		...(onlineOnly ? { onlineOnly: true } : {}),
-	}, { enabled: federationEnabled && follow, refetchInterval: follow ? 30_000 : false })
-	const ingestPositionGaps = follow
-		? followEvidenceQuery.data?.response.ingestPositionGaps ?? []
-		: federation?.response.ingestPositionGaps ?? []
+  }, { enabled: federationEnabled && follow && !federationQuery.isFetching })
+  const mainFetching = federationEnabled ? federationQuery.isFetching : classicQuery.isFetching
+  const refetchMain = federationEnabled ? federationQuery.refetch : refetchLogs
+  useEffect(() => {
+    if (!follow || mainFetching || followEvidenceQuery.isFetching || exporting) return
+    // 上一轮真正落定后再计时，慢请求不会被新桶打断，也不会形成重叠轮询。
+    const timer = window.setTimeout(() => {
+      if (timeParams.from) setFollowAnchorMs(bucketFloor(Date.now()))
+      else void refetchMain()
+    }, FOLLOW_INTERVAL)
+    return () => window.clearTimeout(timer)
+  }, [follow, mainFetching, followEvidenceQuery.isFetching, exporting, timeParams.from, refetchMain])
+
+  const positionScopeKey = logScopeKey({ ...scope, from: undefined, to: undefined })
+  const [positionEvidence, setPositionEvidence] = useState<{ scopeKey: string; gaps: IngestPositionGap[] } | null>(null)
+  const freshEvidence = follow
+    ? followEvidenceQuery.isSuccess && !followEvidenceQuery.isPlaceholderData && !followEvidenceQuery.data.degraded
+      ? followEvidenceQuery.data.response.ingestPositionGaps : undefined
+    : federationEnabled && federationSettled && federationActive ? federation?.response.ingestPositionGaps : undefined
+  if (freshEvidence && (positionEvidence?.scopeKey !== positionScopeKey || positionEvidence?.gaps !== freshEvidence)) {
+    // Tail和永久位置证据串行；新证据在途时保留同目标已获得的凭据，禁止跨目标占位复用。
+    setPositionEvidence({ scopeKey: positionScopeKey, gaps: freshEvidence })
+  }
+  const ingestPositionGaps = positionEvidence?.scopeKey === positionScopeKey ? positionEvidence.gaps : []
 	// 编排（§1 延后串行）：① 主列表先出——stats/facets 均已 gate 在「主查询有数据且拿到 viewId」之后 ✓；
 	// ② stats → facets 再串行——facets 额外等 stats 落定（成功或失败），
 	// 任一时刻最多一个聚合请求在飞 ⇒ 不再与主列表/彼此并发挤 VL 的 maxConcurrentRequests=2 两个槽 ✗。
 	const federationStats = useLogsFederationStats(
 		{ ...aggregateParams, groupBy: 'level' },
-		federationActive && !follow && !!federation?.response.viewId,
+		federationActive && !follow && !federationQuery.isPlaceholderData && !federationQuery.isFetching && !!federation?.response.viewId,
 	)
 	const federationFacets = useLogsFederationFacets(
 		{ ...aggregateParams, dimensions: 'level,stream', dimensionLimit: 8 },
-		federationActive && !follow && !!federation?.response.viewId
+		federationActive && !follow && !federationQuery.isPlaceholderData && !federationQuery.isFetching && !!federation?.response.viewId
 			&& (federationStats.isSuccess || federationStats.isError),
 	)
 	// Stats 计数来自后端 `agg.count`（wire 真源）；兼容扁平 `count`。
-	const statsCount = federationStats.data?.points?.reduce(
-		(sum, point) => sum + Number(point.agg?.count ?? point.count ?? 0),
-		0,
-	)
-	const levelFacets = federationFacets.data?.dimensions?.find((dimension) => dimension.dimension === 'level')?.values ?? []
-	// 洞察栏是否有真实内容（决定是否挂 testid；占位容器本身始终渲染以稳定高度）。
-	const insightsVisible = federationActive && (statsCount !== undefined || levelFacets.length > 0)
+  const statsPoints = federationStats.data?.points
+  const statsCount = !federationStats.isError && Array.isArray(statsPoints)
+    && statsPoints.every((point) => Number.isFinite(point.agg?.count ?? point.count) && Number(point.agg?.count ?? point.count) >= 0)
+    ? statsPoints.reduce((sum, point) => sum + Number(point.agg?.count ?? point.count), 0) : undefined
+  const statsSummary = describeLogAggregate(federationStats.data)
+  const facetsSummary = describeLogAggregate(federationFacets.data)
+  const levelDimension = federationFacets.data?.dimensions?.find((dimension) => dimension.dimension === 'level')
+  const levelFacets = !federationFacets.isError ? levelDimension?.values ?? [] : []
+  const facetsTruncated = facetsSummary.truncated || federationFacets.data?.dimensions?.some((dimension) => dimension.truncated) === true
+  const insightsVisible = federationActive && !federationQuery.isPlaceholderData && (
+    federationStats.isSuccess || federationStats.isError || federationFacets.isSuccess || federationFacets.isError
+  )
   /**
    * 列表主数据源。限流中断时回落到 {@link lastGoodFederation} 的最近一份成功列表：
    * 已有行继续可见（不清空），绝不把限流呈成「暂无日志」。
@@ -525,6 +530,7 @@ export default function LogsPage() {
   const resetTo = useCallback(
     <T,>(setter: (v: T) => void) =>
       (v: T) => {
+        exportRequest.current?.abort()
         setter(v)
         setPage(1)
         setFederationCursors({})
@@ -549,6 +555,7 @@ export default function LogsPage() {
    */
   const switchView = useCallback(
     (candidate: (typeof LOG_VIEWS)[number]) => {
+      exportRequest.current?.abort()
       setView(candidate)
       setPage(1)
       setFederationCursors({})
@@ -565,6 +572,9 @@ export default function LogsPage() {
   const exportBlockedByFederation =
     !!federation && !classicExportAllowed && !federation.exportAffordance.showDownload
   const exportDisabled = legacyMode || exporting || total === 0 || exportBlockedByFederation
+    || keyword.trim() !== debouncedKeyword
+    || (federationEnabled ? federationQuery.isFetching || federationQuery.isPlaceholderData || federationQuery.isError
+      : classicQuery.isFetching || classicQuery.isPlaceholderData || classicQuery.isError)
 	// federated 探测（FR-482）未落地前，items 可能暂时为空——此时不得判为「空结果」，
 	// 否则会先闪 empty-state（且 404 降级期间显示非成功空态），把尚未就绪误报成失败。
 	// 故把「联邦探测未完成」并入 loading：只有探测结束、数据源确定后才允许判空。
@@ -594,22 +604,44 @@ export default function LogsPage() {
 		? (federation?.classified.emptySuccessAllowed ?? false)
 		: (!federation || federation.classified.emptySuccessAllowed)
 
-  const handleExport = async (scope: LogExportScope) => {
-    if (exportDisabled) return
+  const handleExport = async (exportScope: LogExportScope, bounds?: { from: string; to: string }) => {
+    if (exportDisabled || exportRequest.current) return
+    if (exportScope === 'range' && !bounds) { setExportRangeOpen(true); return }
+    if (exportScope === 'currentPage' && follow) {
+      // Tail 没有固定页身份；先暂停并建立 Search 页，不能把另一页伪装成当前页。
+      setFollow(false)
+      setRangeAnchor(followAnchorMs)
+      toast.info(t('logs.exportPauseFollow'))
+      return
+    }
+    const controller = new AbortController()
+    exportRequest.current = controller
     setExporting(true)
+    const frozenScope = normalizeLogScope({ ...scope, ...bounds })
+    const matchingView = logScopeKey(frozenScope) === scopeKey && !follow ? federation?.response.viewId : undefined
+    const frozenPage = structuredClone(federation?.response.items ?? [])
     try {
-		if (federationActive) {
-			// 导出同样**不得复用过期视图** ✗：仅当当前响应确实带 viewId 时携带（视图来自最近一次查询 ⇒
-			// 与当前条件同源 ✓）；否则省去 viewId，由 CP 按当前条件重建视图。
-			await exportFederatedLogs({
-				...buildExportParams(params, scope),
-				...(federation.response.viewId ? { viewId: federation.response.viewId } : {}),
-			})
-		} else {
-			await exportLogs(buildExportParams(params, scope))
-		}
+      if (federationActive) {
+        await exportFederatedLogs({
+          ...frozenScope,
+          ...(matchingView ? { viewId: matchingView } : {}),
+          ...(exportScope === 'currentPage'
+            ? { range: 'page', limit: PAGE_SIZE, ...(federationParams.cursor ? { cursor: federationParams.cursor } : {}) }
+            : { range: 'all' }),
+        }, { signal: controller.signal, ...(exportScope === 'currentPage' ? { pageItems: frozenPage } : {}) })
+      } else if (exportScope === 'currentPage') {
+        await exportCurrentLogPage({ ...frozenScope, page, pageSize: PAGE_SIZE }, structuredClone(data?.items ?? []), controller.signal)
+      } else {
+        await exportLogs(frozenScope, controller.signal)
+      }
+      setExportRangeOpen(false)
       toast.success(t('logs.exportStarted'))
     } catch (error) {
+      if (controller.signal.aborted || isLogRequestCanceled(error)) return
+      if (error instanceof Error && error.message === 'LOG_PAGE_CHANGED') {
+        toast.error(t('logs.exportPageChanged'))
+        return
+      }
       // 导出闸阻断（覆盖/质量/预算未过）与传输失败分开呈现：前者给出后端原因，
       // 让用户知道「为什么没有文件」，而不是以为功能坏了。
       if (error instanceof FederatedExportIncompleteError && error.reasons.length > 0) {
@@ -631,6 +663,7 @@ export default function LogsPage() {
         toast.error(t('logs.exportFailed'))
       }
     } finally {
+      if (exportRequest.current === controller) exportRequest.current = null
       setExporting(false)
     }
   }
@@ -727,15 +760,26 @@ export default function LogsPage() {
             {EXPORT_SCOPES.map((scope) => (
               <DropdownMenuItem
                 key={scope}
-                disabled={scope === 'range' && range === 'all'}
-                onSelect={() => handleExport(scope)}
+                onSelect={() => void handleExport(scope)}
               >
                 {t(`logs.exportScope_${scope}`)}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        {exporting && (
+          <Button size="sm" variant="outline" onClick={() => exportRequest.current?.abort()}>{t('common.cancel')}</Button>
+        )}
       </div>
+      <LogExportRangeDialog
+        key={`${scopeKey}|${exportRangeOpen}`}
+        open={exportRangeOpen}
+        from={scope.from}
+        to={scope.to}
+        pending={exporting}
+        onOpenChange={(open) => { if (!open) exportRequest.current?.abort(); setExportRangeOpen(open) }}
+        onConfirm={(bounds) => void handleExport('range', bounds)}
+      />
 
       <div
         className="jm-toolbar-surface flex flex-wrap gap-1 p-1"
@@ -813,13 +857,17 @@ export default function LogsPage() {
 
         <Input
           value={keyword}
-          onChange={(e) => resetTo(setKeyword)(e.target.value)}
+          onChange={(e) => { exportRequest.current?.abort(); setKeyword(e.target.value) }}
           placeholder={t('logs.searchPlaceholder')}
           className="h-9 w-52"
         />
         <Select
           value={range}
-          onValueChange={(v: string) => resetTo(setRange)(v as TimeRangePreset)}
+          onValueChange={(v: string) => {
+            setRangeAnchor(Date.now())
+            setFollowAnchorMs(bucketFloor(Date.now()))
+            resetTo(setRange)(v as TimeRangePreset)
+          }}
         >
           {/* data-testid 供 e2e 定位：默认窗与选项文案都会漂移（见 e2e/navigation-benchmark.spec.ts），
               按 testid 定位才不会被「最近 15 分钟 / 最近 24 小时」这类文案变化打红。 */}
@@ -916,6 +964,9 @@ export default function LogsPage() {
           type="button"
           aria-pressed={follow}
 		  onClick={() => {
+      exportRequest.current?.abort()
+      setRangeAnchor(Date.now())
+      setFollowAnchorMs(bucketFloor(Date.now()))
 			setFollow((f) => !f)
 			setPage(1)
 			setFederationCursors({})
@@ -943,16 +994,29 @@ export default function LogsPage() {
 		  {...(insightsVisible ? { 'data-testid': 'logs-federation-insights' } : {})}
 		  className="flex min-h-8 flex-wrap items-center gap-2 border-y px-1 py-1 text-xs text-muted-foreground"
 		>
-		  {federationActive && statsCount !== undefined && (
-			<span>{t('logs.statsEvents', { count: statsCount })}</span>
-		  )}
-		  {levelFacets.map((facet) => (
-			<StatusBadge
-			  key={facet.value}
-			  level={logLevelStatus(facet.value.toLowerCase())}
-			  label={`${facet.value} ${facet.count}`}
-			/>
-		  ))}
+      {insightsVisible && (
+        <>
+          <span data-testid="logs-stats-summary" role={federationStats.isError ? 'alert' : 'status'} title={statsSummary.reasons.join(', ')}>
+            {federationStats.isError ? t('logs.aggregateFailed', { kind: t('logs.aggregateStats') })
+              : statsCount !== undefined ? t(statsSummary.exact ? 'logs.statsEvents' : 'logs.statsObservedEvents', { count: statsCount })
+                : t('logs.aggregateUnknown', { kind: t('logs.aggregateStats') })}
+            {!federationStats.isError && !statsSummary.exact && ` · ${t(statsSummary.partial ? 'logs.aggregatePartial' : statsSummary.pending ? 'logs.aggregatePending' : 'logs.aggregateUnverified')}`}
+            {!federationStats.isError && !statsSummary.qualityExact && ` · ${t('logs.aggregateQuality', { quality: statsSummary.quality })}`}
+            {statsSummary.truncated && ` · ${t('logs.aggregateTruncated')}`}
+          </span>
+          <span data-testid="logs-facets-summary" role={federationFacets.isError ? 'alert' : 'status'} title={facetsSummary.reasons.join(', ')}>
+            {federationFacets.isError ? t('logs.aggregateFailed', { kind: t('logs.aggregateFacets') })
+              : t('logs.aggregateFacets')}
+            {!federationFacets.isError && !facetsSummary.exact && ` · ${t(facetsSummary.partial ? 'logs.aggregatePartial' : facetsSummary.pending ? 'logs.aggregatePending' : 'logs.aggregateUnverified')}`}
+            {!federationFacets.isError && !facetsSummary.qualityExact && ` · ${t('logs.aggregateQuality', { quality: facetsSummary.quality })}`}
+            {facetsTruncated && ` · ${t('logs.aggregateTruncated')}`}
+          </span>
+          {levelFacets.map((facet) => (
+            <StatusBadge key={facet.value} level={logLevelStatus(facet.value.toLowerCase())}
+              label={`${facet.value} ${facet.count}${facetsSummary.exact && !facetsTruncated ? '' : ` (${t('logs.aggregateObserved')})`}`} />
+          ))}
+        </>
+      )}
 		</div>
 	  )}
 

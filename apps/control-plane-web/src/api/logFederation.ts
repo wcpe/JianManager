@@ -9,8 +9,11 @@
  *
  * 本模块无 React 组件依赖；LogsPage 只消费 {@link LogsFederationResult}。
  */
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useEffect } from 'react'
+import { hashKey, keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CanceledError, isCancel } from 'axios'
 import api from '@/api/client'
+import { downloadLogBlob, sameLogItems } from '@/api/logs'
 import {
   PARTIAL_REASONS,
   classifyLogViewState,
@@ -129,6 +132,7 @@ export interface LogsFederationResult {
  * 与「联邦可用但结果不完整」区分：后者带 coverage 语义，不降级、也不当空成功。
  */
 export function isFederationUnavailable(error: unknown): boolean {
+  if (isLogRequestCanceled(error)) return false
   const status = (error as { response?: { status?: number } } | null)?.response?.status
   if (typeof status === 'number') {
     // 502/503/504：dev server 代理无法连接后端时由代理返回（CI 无 CP 即此情形）；
@@ -554,6 +558,22 @@ export function rateLimitRetryDelay(attempt: number): number {
     RATE_LIMIT_QUERY_RETRY_DELAYS_MS[RATE_LIMIT_QUERY_RETRY_DELAYS_MS.length - 1]
 }
 
+/** 主动取消不是传输失败，不能触发降级或错误横幅。 */
+export function isLogRequestCanceled(error: unknown): boolean {
+  return isCancel(error) || (error instanceof Error && error.name === 'AbortError')
+}
+
+/** 短退避也消费取消信号，退出后不再向过期条件重发请求。 */
+function waitForLogRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new CanceledError()); return }
+    const finish = () => { signal?.removeEventListener('abort', abort); resolve() }
+    const timer = setTimeout(finish, ms)
+    const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new CanceledError()) }
+    signal?.addEventListener('abort', abort, { once: true })
+  })
+}
+
 /** 带短退避重试的 GET：**仅对 429（限流）重试**，其它错误原样抛出。 */
 export async function getWithRateLimitRetry<T>(
   path: string,
@@ -561,15 +581,26 @@ export async function getWithRateLimitRetry<T>(
   delaysMs: number[] = [...RATE_LIMIT_RETRY_DELAYS_MS],
 ): Promise<{ data: T }> {
   for (let attempt = 0; ; attempt++) {
+    if (config?.signal?.aborted) throw new CanceledError()
     try {
       return await api.get<T>(path, config)
     } catch (error) {
-      if (!isRateLimitError(error) || attempt >= delaysMs.length) {
-        throw error
-      }
-      await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]))
+      if (isLogRequestCanceled(error) || !isRateLimitError(error) || attempt >= delaysMs.length) throw error
+      await waitForLogRetry(delaysMs[attempt], config?.signal as AbortSignal | undefined)
     }
   }
+}
+
+/** 禁用observer不等于取消；仅取消精确身份且已无活跃消费者的在途日志查询。 */
+function useCancelDisabledLogQuery(namespace: string, params: Record<string, unknown>, enabled: boolean) {
+  const client = useQueryClient()
+  const requestHash = hashKey([namespace, params])
+  useEffect(() => {
+    if (enabled) return
+    const pending = client.getQueryCache().get(requestHash)
+    if (!pending || pending.state.fetchStatus !== 'fetching' || pending.isActive()) return
+    void client.cancelQueries({ predicate: (query) => query.queryHash === requestHash && !query.isActive() })
+  }, [client, enabled, requestHash])
 }
 
 /**
@@ -580,30 +611,15 @@ export function useLogsFederation(
   params: Record<string, unknown>,
   options: { enabled?: boolean; refetchInterval?: number | false } = {},
 ) {
-  // 跟随态：时间桶每 3 秒滚动 ⇒ queryKey 变化、请求随之滚动（见下方 retry 说明）。
+  // 跟随由页面在上一轮完成后调度；它只用短退避，避免轮询再次放大限流。
   const isFollowMode = asString(params.tailMode) !== undefined
-  return useQuery({
+  const query = useQuery({
     queryKey: ['logsFederation', params],
-    /**
-     * 持久 429 时**抛出**而不是返回失败信封。
-     *
-     * 根因（生产 636 次 429）：queryFn 内部吞错 ⇒ react-query 视为成功 ⇒ 页面无从区分
-     * 「查到 0 条」与「没查到」。抛出后由页面保留上一份成功列表并给出显式限流提示。
-     *
-     * 重试分两层，且**跟随态只保留内层**（实测证据，非推测）：
-     * ① {@link getWithRateLimitRetry} 的短退避（250/600ms，合计约 0.85s）吸收瞬时抖动；
-     * ② 非跟随态（queryKey 稳定）再叠加 react-query 重试（500/1000ms）——
-     *    此时一次失败会真正落定，值得为它多试几次。
-     *
-     * 跟随态必须关掉第 ② 层：每 3 秒滚动时间桶 ⇒ queryKey 每次都变、旧 key 在途请求被取消，
-     * 超过一个桶周期的退避**永远等不到落定**，于是 isError 从不置位、限流提示一次都不渲染
-     * （假后端持续 429、前进 9 个 tick 实测复现），用户只看到「数据不再更新」却没有原因；
-     * 同时每个 tick 的尝试次数被放大到 9 次——在服务端已经限流（CP 按 ClientIP 分桶
-     * 10 req/s、桶 20，全 SPA 共用）时继续加压只会延长限流窗口，是生产 429 的放大器。
-     */
+    // 限流耗尽必须抛出，页面保留上次行并显示失败；不能吞成成功空结果。
+    // 静态查询另有外层限流预算；跟随只用可取消的250/600ms短退避，完成后再调度下一轮。
     retry: isFollowMode ? false : rateLimitRetry,
     retryDelay: rateLimitRetryDelay,
-    queryFn: async (): Promise<LogsFederationResult> => {
+    queryFn: async ({ signal }): Promise<LogsFederationResult> => {
       try {
 		const requestParams = { ...params }
 		const tailMode = asString(requestParams.tailMode)
@@ -619,6 +635,7 @@ export function useLogsFederation(
         const { data } = await getWithRateLimitRetry<LogsFederationEnvelope>(path, {
           params: requestParams,
           timeout: 60_000,
+          signal,
         })
         const envelope = data && typeof data === 'object' ? data : {}
         // 日志查询引擎未就绪（受管 VL 未配置/未启动）时降级到经典 `/logs` 路径：
@@ -633,6 +650,7 @@ export function useLogsFederation(
         }
         return buildFederationResult(envelope, { degraded: false })
       } catch (error) {
+        if (signal.aborted || isLogRequestCanceled(error)) throw error
         // 持久限流：必须抛出，让 react-query 保留上一份 data 并置 isError；
         // 返回限流信封会被当成"成功"，页面无从区分「没查到」与「查到 0 条」。
         if (isRateLimitError(error)) {
@@ -655,6 +673,7 @@ export function useLogsFederation(
       }
     },
     enabled: options.enabled ?? true,
+    refetchOnWindowFocus: false,
 	refetchInterval: options.refetchInterval,
     // 覆盖状态变化不频繁；跟随轮询时由页面 key 带动 refetch。
     staleTime: 30_000,
@@ -664,6 +683,8 @@ export function useLogsFederation(
     // 新数据到达即自动替换。
     placeholderData: keepPreviousData,
   })
+  useCancelDisabledLogQuery('logsFederation', params, options.enabled ?? true)
+  return query
 }
 
 export interface FederationStatsAggregate {
@@ -682,9 +703,15 @@ export interface FederationStatsPoint {
 	count?: number
 }
 
-export interface FederationStatsResponse {
-	points?: FederationStatsPoint[]
-	coverage?: FederationCoverageBody
+export interface FederationAggregateResponse {
+  coverage?: FederationCoverageBody
+  quality?: LogsFederationEnvelope['quality']
+  truncated?: boolean
+  view?: LogsFederationEnvelope['view']
+}
+
+export interface FederationStatsResponse extends FederationAggregateResponse {
+  points?: FederationStatsPoint[]
 }
 
 export interface FederationFacetValue {
@@ -698,9 +725,28 @@ export interface FederationFacetDimension {
 	truncated?: boolean
 }
 
-export interface FederationFacetsResponse {
-	dimensions?: FederationFacetDimension[]
-	coverage?: FederationCoverageBody
+export interface FederationFacetsResponse extends FederationAggregateResponse {
+  dimensions?: FederationFacetDimension[]
+}
+
+/** 聚合自身的覆盖、质量与截断分别呈现；未知质量不宣称精确或至少。 */
+export function describeLogAggregate(result: FederationAggregateResponse | undefined) {
+  const coverage = result?.coverage
+  const quality = normalizeQuality(result?.quality)
+  const reasons = normalizeReasons(coverage?.partialReasons ?? coverage?.partial_reasons)
+  const partial = reasons.length > 0 || (coverage?.complete === false && coverage.pending !== true)
+  const pending = coverage?.pending === true
+  const qualityExact = quality?.duplicateQuality === 'EXACT' && quality.statsQuality === 'EXACT'
+  const truncated = result?.truncated === true
+  return {
+    exact: coverage?.complete === true && !pending && reasons.length === 0 && qualityExact && !truncated,
+    partial,
+    pending,
+    qualityExact,
+    quality: quality ? `${quality.duplicateQuality} / ${quality.statsQuality}` : 'UNKNOWN',
+    truncated,
+    reasons,
+  }
 }
 
 /**
@@ -711,26 +757,30 @@ export interface FederationFacetsResponse {
  * 两条请求。失败不阻断页面——洞察栏是可选装饰，行列表与横幅不受其影响。
  */
 export function useLogsFederationStats(params: Record<string, unknown>, enabled: boolean) {
-	return useQuery({
+	const query = useQuery({
 		queryKey: ['logsFederationStats', params],
-		queryFn: async () =>
-			(await getWithRateLimitRetry<FederationStatsResponse>('/logs/federation/stats', { params })).data,
+		queryFn: async ({ signal }) =>
+			(await getWithRateLimitRetry<FederationStatsResponse>('/logs/federation/stats', { params, signal, timeout: 60_000 })).data,
 		enabled,
 		retry: rateLimitRetry,
 		retryDelay: rateLimitRetryDelay,
 	})
+  useCancelDisabledLogQuery('logsFederationStats', params, enabled)
+  return query
 }
 
 /** 联邦维度聚合（洞察栏级别分布）；重试策略与 stats 同源，失败同样不阻断页面。 */
 export function useLogsFederationFacets(params: Record<string, unknown>, enabled: boolean) {
-	return useQuery({
+	const query = useQuery({
 		queryKey: ['logsFederationFacets', params],
-		queryFn: async () =>
-			(await getWithRateLimitRetry<FederationFacetsResponse>('/logs/federation/facets', { params })).data,
+		queryFn: async ({ signal }) =>
+			(await getWithRateLimitRetry<FederationFacetsResponse>('/logs/federation/facets', { params, signal, timeout: 60_000 })).data,
 		enabled,
 		retry: rateLimitRetry,
 		retryDelay: rateLimitRetryDelay,
 	})
+  useCancelDisabledLogQuery('logsFederationFacets', params, enabled)
+  return query
 }
 
 /**
@@ -818,19 +868,25 @@ export function parseExportBlockedReasons(text: string): string[] {
 export const FEDERATED_EXPORT_REQUEST_LIMIT = 1_000_000
 
 /** 在同一联邦 Query View 上物化并下载经覆盖校验的 NDJSON。 */
-export async function exportFederatedLogs(params: Record<string, unknown>): Promise<void> {
+export async function exportFederatedLogs(
+  params: Record<string, unknown>,
+  options: { signal?: AbortSignal; pageItems?: readonly unknown[] } = {},
+): Promise<void> {
   const exportParams = { ...params }
   delete exportParams.page
   delete exportParams.pageSize
-  delete exportParams.cursor
-  // 不删 limit：调用方未显式指定时补上导出专用上限（见 FEDERATED_EXPORT_REQUEST_LIMIT 注释）。
-  if (asPositiveNumber(exportParams.limit) === undefined) {
+  if (exportParams.range !== 'page') delete exportParams.cursor
+  // 当前页必须沿固定视图的入页游标和原页大小；全窗才使用导出预算。
+  if (exportParams.range === 'page') {
+    if (!asString(exportParams.viewId) || asPositiveNumber(exportParams.limit) === undefined) throw new Error('LOG_PAGE_VIEW_REQUIRED')
+  } else if (asPositiveNumber(exportParams.limit) === undefined) {
     exportParams.limit = FEDERATED_EXPORT_REQUEST_LIMIT
   }
   const response = await api.post(LOGS_FEDERATION_PATH + '/export', null, {
     params: exportParams,
     responseType: 'blob',
     timeout: 120_000,
+    signal: options.signal,
   })
   const contentType = String(response.headers['content-type'] ?? '')
   if (!contentType.includes('application/x-ndjson')) {
@@ -844,10 +900,10 @@ export async function exportFederatedLogs(params: Record<string, unknown>): Prom
     }
     throw new FederatedExportIncompleteError(report.reasons, report.limits)
   }
-  const url = URL.createObjectURL(response.data as Blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `logs-federation-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`
-  anchor.click()
-  URL.revokeObjectURL(url)
+  if (options.pageItems) {
+    const text = await (response.data as Blob).text()
+    const items: unknown[] = text.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as unknown)
+    if (!sameLogItems(options.pageItems, items)) throw new Error('LOG_PAGE_CHANGED')
+  }
+  downloadLogBlob(response.data as Blob, 'logs-federation', options.signal)
 }

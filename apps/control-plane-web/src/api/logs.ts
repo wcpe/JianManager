@@ -72,8 +72,8 @@ export interface LogCursorPage {
  * 不走 useQuery：回溯是「按用户滚动逐页累积」的命令式流程，缓存键会随 cursor 变化而无限增长，
  * 且页与页之间必须严格串行（上一页的 nextCursor 是下一页的入参），交给 react-query 反而更绕。
  */
-export async function fetchLogCursorPage(params: LogCursorParams): Promise<LogCursorPage> {
-  const { data } = await api.get<LogCursorPage>('/logs', { params })
+export async function fetchLogCursorPage(params: LogCursorParams, signal?: AbortSignal): Promise<LogCursorPage> {
+  const { data } = await api.get<LogCursorPage>('/logs', { params, signal })
   return data
 }
 
@@ -96,8 +96,8 @@ export interface UseLogsOptions {
 export function useLogs(params: LogQueryParams, options: UseLogsOptions = {}) {
   return useQuery({
     queryKey: ['logs', params],
-    queryFn: async () => {
-      const { data } = await api.get<LogPage>('/logs', { params })
+    queryFn: async ({ signal }) => {
+      const { data } = await api.get<LogPage>('/logs', { params, signal })
       return data
     },
     placeholderData: (prev) => prev,
@@ -117,29 +117,54 @@ export function useLegacyLogs(params: LogQueryParams, enabled: boolean) {
   delete legacyParams.view
   return useQuery({
     queryKey: ['logsLegacy', legacyParams],
-    queryFn: async () => (await api.get<LegacyLogPage>('/logs/legacy', { params: { ...legacyParams, source: 'legacy' } })).data,
+    queryFn: async ({ signal }) => (await api.get<LegacyLogPage>('/logs/legacy', { params: { ...legacyParams, source: 'legacy' }, signal })).data,
     enabled,
     placeholderData: (prev) => prev,
   })
 }
 
-/**
- * 按当前筛选导出日志为 NDJSON 文件并触发浏览器下载（GET /logs/export）。
- * 经 api 客户端发起，自动携带鉴权并复用 401 刷新；分页参数不参与导出。
- */
-export async function exportLogs(params: LogQueryParams): Promise<void> {
+/** 仅在请求仍属于当前页面时下载，卸载或用户取消后不得偷偷交付附件。 */
+export function downloadLogBlob(blob: Blob, prefix: string, signal?: AbortSignal): void {
+  signal?.throwIfAborted()
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${prefix}-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`
+  anchor.click()
+  // 等浏览器消费点击后再回收，避免真实浏览器中附件偶发为空。
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+/** 对比完整原始行而非虚拟挂载行或展示映射；键顺序不影响内容身份。 */
+export function sameLogItems(left: readonly unknown[], right: readonly unknown[]): boolean {
+  const canonical = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+    if (value && typeof value === 'object') {
+      return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, v]) => `${JSON.stringify(key)}:${canonical(v)}`).join(',')}}`
+    }
+    return JSON.stringify(value) ?? 'null'
+  }
+  return canonical(left) === canonical(right)
+}
+
+/** 经典当前页重新鉴权并核对完整行；变化时要求刷新，不下载旧敏感行。 */
+export async function exportCurrentLogPage(
+  params: LogQueryParams,
+  frozenItems: readonly LogEntry[],
+  signal?: AbortSignal,
+): Promise<void> {
+  const { data } = await api.get<LogPage>('/logs', { params, signal })
+  if (!sameLogItems(frozenItems, data.items)) throw new Error('LOG_PAGE_CHANGED')
+  const ndjson = data.items.map((entry) => JSON.stringify(entry)).join('\n')
+  downloadLogBlob(new Blob([ndjson + (ndjson ? '\n' : '')], { type: 'application/x-ndjson' }), 'logs-page', signal)
+}
+
+/** 全部匹配及显式时间段交由服务端枚举，不带页码。 */
+export async function exportLogs(params: LogQueryParams, signal?: AbortSignal): Promise<void> {
   const exportParams: LogQueryParams = { ...params }
   delete exportParams.page
   delete exportParams.pageSize
-
-  const { data } = await api.get('/logs/export', {
-    params: exportParams,
-    responseType: 'blob',
-  })
-  const url = URL.createObjectURL(data as Blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `logs-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson`
-  a.click()
-  URL.revokeObjectURL(url)
+  const { data } = await api.get('/logs/export', { params: exportParams, responseType: 'blob', signal })
+  downloadLogBlob(data as Blob, 'logs', signal)
 }

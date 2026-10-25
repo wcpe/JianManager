@@ -533,7 +533,7 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		expect(screen.queryByTestId('logs-export-blocked')).not.toBeInTheDocument()
 	})
 
-	it('Stats 与 level Facets 洞察展示（stats/facets 各自重建视图，不携带搜索 viewId）', async () => {
+	it('Stats 与 level Facets 复用同scope搜索视图，独立完整且质量精确时显示精确计数', async () => {
 		loginMockUser()
 		server.use(
 			http.get(API('/logs/federation'), () => HttpResponse.json({
@@ -541,15 +541,14 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 				coverage: { complete: true, targets: [], enumeration_state: 'EXHAUSTED' },
 				quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
 			})),
-			// F-006 实测：聚合查询复用搜索 viewId 会被 CP 拒（409 VIEW_STALE），
-			// 故 stats/facets 按各自固定条件独立重建视图——此处断言**不带** viewId。
+      // 服务端允许同scope复用固定视图；不要再让旧的错配观察固化成错误契约。
 			http.get(API('/logs/federation/stats'), ({ request }) => {
-				expect(new URL(request.url).searchParams.get('viewId')).toBeNull()
-				return HttpResponse.json({ points: [{ dimensions: { level: 'ERROR' }, count: 42 }], coverage: { complete: true } })
+				expect(new URL(request.url).searchParams.get('viewId')).toBe('cv-insights')
+				return HttpResponse.json({ points: [{ dimensions: { level: 'ERROR' }, count: 42 }], coverage: { complete: true }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' } })
 			}),
 			http.get(API('/logs/federation/facets'), ({ request }) => {
-				expect(new URL(request.url).searchParams.get('viewId')).toBeNull()
-				return HttpResponse.json({ dimensions: [{ dimension: 'level', values: [{ value: 'ERROR', count: 42 }] }], coverage: { complete: true } })
+				expect(new URL(request.url).searchParams.get('viewId')).toBe('cv-insights')
+				return HttpResponse.json({ dimensions: [{ dimension: 'level', values: [{ value: 'ERROR', count: 42 }] }], coverage: { complete: true }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' } })
 			}),
 		)
 		renderWithProviders(<LogsPage />)
@@ -569,7 +568,7 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 			})),
 			// 后端 StatsPoint 真源：points[].agg.count（非顶层 count）。
 			http.get(API('/logs/federation/stats'), () =>
-				HttpResponse.json({ points: [{ agg: { count: 3, sum: 0, min: 0, max: 0, has_min_max: true } }], coverage: { complete: true } }),
+				HttpResponse.json({ points: [{ agg: { count: 3, sum: 0, min: 0, max: 0, has_min_max: true } }], coverage: { complete: true }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' } }),
 			),
 			http.get(API('/logs/federation/facets'), () =>
 				HttpResponse.json({ dimensions: [{ dimension: 'level', values: [{ value: '', count: 3 }] }], coverage: { complete: true } }),

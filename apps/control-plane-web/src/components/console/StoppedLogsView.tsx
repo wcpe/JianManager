@@ -15,9 +15,15 @@ import { cn } from '@jianmanager/ui'
  */
 export default function StoppedLogsView({ instanceId, status }: { instanceId: number; status: string }) {
   const { t } = useTranslation()
-  const { data, isLoading } = useLogs({ instanceId, source: 'instance', pageSize: 300 })
-  // 后端按 time DESC 返回（最新在前）；正序展示（旧→新）贴近终端，最新在底部。
-  const entries = data?.items ? data.items.slice().reverse() : []
+  const history = useLogs({ instanceId, source: 'instance', pageSize: 300 })
+  const { data, isLoading, isError, error, isPlaceholderData } = history
+  const statusCode = (error as { response?: { status?: number } } | null)?.response?.status
+  const errorCode = (error as { code?: string } | null)?.code
+  const errorKey = statusCode === 403 ? 'instanceDetail.historyForbidden'
+    : errorCode === 'ECONNABORTED' || errorCode === 'ETIMEDOUT' ? 'instanceDetail.historyTimeout'
+      : 'instanceDetail.historyLoadError'
+  // 后端按 time DESC 返回；跨实例占位页不属于本实例，不能冒充旧行。
+  const entries = !isPlaceholderData && data?.items ? data.items.slice().reverse() : []
   const bodyRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     // 加载后滚到底部（最新日志），贴近终端体验。
@@ -54,9 +60,17 @@ export default function StoppedLogsView({ instanceId, status }: { instanceId: nu
           </a>
         </div>
       </div>
+      {isError && (
+        <div role="alert" className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2 text-xs text-status-warning">
+          <span>{t(errorKey)}{entries.length > 0 && ` · ${t('instanceDetail.historyStale')}`}</span>
+          <button type="button" className="shrink-0 underline" disabled={history.isFetching} onClick={() => void history.refetch()}>{t('logsFederation.action.retry')}</button>
+        </div>
+      )}
       <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto p-2 font-mono text-xs leading-relaxed text-gray-300">
-        {isLoading ? (
+        {isLoading || isPlaceholderData ? (
           <p className="text-gray-500">{t('common.loading')}</p>
+        ) : isError && entries.length === 0 ? (
+          <p className="text-gray-500">{t('instanceDetail.historyNotLoaded')}</p>
         ) : entries.length === 0 ? (
           // 空态居中卡片：原先一行灰字吊在左上角， pane 大半空白显得像坏了。
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">

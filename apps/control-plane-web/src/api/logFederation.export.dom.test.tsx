@@ -86,6 +86,27 @@ describe('exportFederatedLogs 请求形态', () => {
     }
   })
 
+  it('当前页保留入页游标和固定页大小，核对完整原始事件后才下载服务端附件', async () => {
+    const items = [{ event_id: 'event-101', source_generation: 'g-1', fields: { original: '不能被展示映射丢掉' } }]
+    postMock.mockResolvedValue({ headers: { 'content-type': 'application/x-ndjson' }, data: new Blob([JSON.stringify(items[0]) + '\n']) })
+    await exportFederatedLogs({ range: 'page', viewId: 'fixed-view', cursor: 'opaque-page-2', limit: 100 }, { pageItems: items })
+    const [, , config] = postMock.mock.calls[0] as [string, unknown, { params: Record<string, unknown> }]
+    expect(config.params).toEqual({ range: 'page', viewId: 'fixed-view', cursor: 'opaque-page-2', limit: 100 })
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('当前页缺view或limit不能伪装成全窗导出', async () => {
+    await expect(exportFederatedLogs({ range: 'page', limit: 100 })).rejects.toThrow('LOG_PAGE_VIEW_REQUIRED')
+    await expect(exportFederatedLogs({ range: 'page', viewId: 'view' })).rejects.toThrow('LOG_PAGE_VIEW_REQUIRED')
+    expect(postMock).not.toHaveBeenCalled()
+  })
+
+  it('合法完整零行全窗附件仍可下载，不把空文件误当失败', async () => {
+    postMock.mockResolvedValue({ headers: { 'content-type': 'application/x-ndjson' }, data: new Blob([]) })
+    await exportFederatedLogs({ range: 'all' })
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+  })
+
   it('阻断报告 → 抛出结构化错误并携带 reasons 与 limits', async () => {
     postMock.mockResolvedValue(
       blockedResponse({

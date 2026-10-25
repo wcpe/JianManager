@@ -5,6 +5,9 @@ import { CircleHelp } from 'lucide-react'
 import { Archive, CheckCheck, Download, LoaderCircle, Play, RotateCw, Square, Upload } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
+import DangerConfirm from '@/components/DangerConfirm'
+import { useAuthStore } from '@/stores/auth'
+import { usePermissionsStore } from '@/stores/permissions'
 import {
   useApprovedLogAssets,
   useControlLogRuntime,
@@ -57,6 +60,9 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
   online: boolean
 }) {
   const { t } = useTranslation()
+  const role = useAuthStore((state) => state.role)
+  // 有效平台身份包含角色模板绑定；加载后的显式否定不能被旧JWT数字角色覆盖。
+  const isPlatformAdmin = usePermissionsStore((state) => state.loaded ? state.isPlatformAdmin : role === 10)
   const fileInput = useRef<HTMLInputElement>(null)
   const runtime = useLogRuntime(nodeId, true)
   const assets = useApprovedLogAssets(true)
@@ -66,6 +72,24 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
 	const migrate = useMigrateLogPartition(nodeId)
 	const resolveGaps = useResolveLogIngestGaps(nodeId)
 	const [migrationDay, setMigrationDay] = useState('')
+  const [migrationTarget, setMigrationTarget] = useState<{ nodeId: number; storageNamespace: string; utcDay: string } | null>(null)
+  const [migrationError, setMigrationError] = useState('')
+  const migrationInFlight = useRef(false)
+  const confirmMigration = () => {
+    if (!migrationTarget || migrationInFlight.current || !isPlatformAdmin) return
+    migrationInFlight.current = true
+    setMigrationError('')
+    migrate.mutate({ storageNamespace: migrationTarget.storageNamespace, utcDay: migrationTarget.utcDay, targetNodeId: migrationTarget.nodeId }, {
+      onSuccess: () => { toast.success(t('logsRuntime.migration.success')); setMigrationTarget(null) },
+      onError: (error) => {
+        const response = (error as { response?: unknown }).response
+        const message = !response ? t('logsRuntime.migration.unknown') : errorMessage(error)
+        setMigrationError(message)
+        toast.error(message)
+      },
+      onSettled: () => { migrationInFlight.current = false },
+    })
+  }
   const normalizedArch = arch.toLowerCase() === 'x64' ? 'amd64' : arch.toLowerCase()
   const approved = assets.data?.find((asset) => asset.os === os.toLowerCase() && asset.arch === normalizedArch)
   const busy = upload.isPending || install.isPending || control.isPending || migrate.isPending || resolveGaps.isPending
@@ -182,15 +206,29 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
 			className="h-8 rounded-md border bg-background px-2 text-sm" />
 		  <span title={t('logsRuntime.date.help')}><CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.date.help')} /></span>
 		</span>
-		<Button type="button" size="sm" variant="outline" disabled={busy || !online || !migrationDay}
-		  onClick={() => migrate.mutate({ storageNamespace: `node:${nodeId}`, utcDay: migrationDay }, {
-			onSuccess: () => toast.success('分区已迁移到 COLD'),
-			onError: (error) => toast.error(errorMessage(error)),
-		  })}>
+		<Button type="button" size="sm" variant="outline" disabled={busy || !online || !migrationDay || !isPlatformAdmin}
+      title={!isPlatformAdmin ? t('logsRuntime.migration.denied') : undefined}
+      onClick={() => {
+        setMigrationError('')
+        setMigrationTarget({ nodeId, storageNamespace: `node:${nodeId}`, utcDay: migrationDay })
+      }}>
 		  {migrate.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <Archive className="mr-1 size-4" />}
 		  {t('logsRuntime.namespace.migrate')}
 		</Button>
+      {!isPlatformAdmin && <span className="text-xs text-muted-foreground">{t('logsRuntime.migration.denied')}</span>}
 	  </div>
+      {/* 本端点统一用有效平台身份开窗并守卫提交，不改变全局危险操作的数字角色契约。 */}
+      <DangerConfirm
+        open={migrationTarget !== null && isPlatformAdmin}
+        title={t('logsRuntime.migration.title')}
+        description={migrationTarget ? `${t('logsRuntime.migration.description', {
+          node: migrationTarget.nodeId, namespace: migrationTarget.storageNamespace, day: migrationTarget.utcDay,
+        })}${migrationError ? `\n${migrationError}` : ''}` : ''}
+        confirmLabel={t('logsRuntime.migration.confirm')}
+        pending={migrate.isPending}
+        onConfirm={confirmMigration}
+        onCancel={() => { if (!migrationInFlight.current) setMigrationTarget(null) }}
+      />
     </section>
   )
 }
