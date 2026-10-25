@@ -26,7 +26,7 @@ dependencies {
     // 制品按 contract §2 artifact.codec=zstd 压缩；zstd-jni 是轻量、广用的 zstd 绑定（兼容 Java 8）。
     implementation("com.github.luben:zstd-jni:1.5.6-4")
 
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

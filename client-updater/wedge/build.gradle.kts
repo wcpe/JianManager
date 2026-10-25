@@ -14,7 +14,7 @@ dependencies {
     // 动态加载其 jar（契约 §6.3，便于 FR-091 自更新替换）。CoreLoaderTest 只需 jar 文件路径，
     // 经下方 test.dependsOn(:updater-core:jar) + systemProperty 注入（而非 project 依赖，
     // 否则 Java 8 楔子无法把 Java 17 的 updater-core 放上 runtime classpath）。
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
