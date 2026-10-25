@@ -368,7 +368,7 @@ func TestClearIdentityConflictsClearsConflictCountSeenByPlanner(t *testing.T) {
 	require.Equal(t, uint64(2), rec.PublishedProjection.ConflictCount,
 		"夹具前提：发布投影应把该源的冲突计数写进 Catalog")
 
-	planner := query.NewPlanner(qtestCatalog{m.cat}, nil)
+	planner := query.NewPlanner(m.cat, nil)
 	before := planQuality(t, planner, key2)
 	require.Equal(t, query.DupConflict, before.DuplicateQuality,
 		"夹具前提：有冲突时 planner 必须报 DupConflict（= 前端「有重复日志待确认」）")
@@ -449,13 +449,4 @@ func planQuality(t *testing.T, planner *query.Planner, key catalog.PartitionKey)
 	t.Helper()
 	res := planner.Plan(query.PlanRequest{TargetIDs: []string{key.String()}})
 	return res.Quality
-}
-
-// qtestCatalog 把 *catalog.Catalog 适配成 planner 需要的接口（最小面）。
-type qtestCatalog struct{ cat *catalog.Catalog }
-
-func (q qtestCatalog) Keys() []catalog.PartitionKey                         { return q.cat.Keys() }
-func (q qtestCatalog) Get(key catalog.PartitionKey) (*catalog.Record, bool) { return q.cat.Get(key) }
-func (q qtestCatalog) OwnerForQuery(key catalog.PartitionKey) (catalog.QueryRef, bool) {
-	return q.cat.OwnerForQuery(key)
 }

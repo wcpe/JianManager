@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,10 +49,11 @@ type reconcileVLRow struct {
 // reconcileVLFixture 是「可对账的内存 VL」：除写入与内容查询外，还实现只读的 stats count
 // 查询，并允许测试直接删/改某天的记录（模拟人为删除与内容缺失两种现场）。
 type reconcileVLFixture struct {
-	mu           sync.Mutex
-	rows         []reconcileVLRow
-	inserts      [][]byte
-	statsQueries int
+	mu             sync.Mutex
+	rows           []reconcileVLRow
+	inserts        [][]byte
+	statsQueries   int
+	contentQueries int
 	// insertAttempts 统计插入请求次数（含被 failInsert / silentDropInsert 拦下的那些）：
 	// 「循环重写了多少次」靠它可数，而不是靠落库行数（后者在 drop 形态下恒为 0）。
 	insertAttempts int
@@ -63,6 +65,8 @@ type reconcileVLFixture struct {
 	//（模拟「写入自称成功、数据却永远不可见」= 2026-10-09 生产循环的形态：
 	// `投影写入结束 status=200` 之后 `投影校验完成` 恒报 not fully visible）。
 	silentDropInsert bool
+	// queryGate 非 nil 时每次内容查询都挂住，用于把「确认取证进行中」钉在确定位置。
+	queryGate *queryGate
 }
 
 func (f *reconcileVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +94,11 @@ func (f *reconcileVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// drop：**声称成功**但数据不可见 —— 这正是生产循环的形态（校验随后必然失败）。
 		w.WriteHeader(http.StatusOK)
 	case "/select/logsql/query":
+		f.mu.Lock()
+		f.contentQueries++
+		gate := f.queryGate
+		f.mu.Unlock()
+		gate.block()
 		f.serveContentQuery(w, r)
 	case reconcileStatsPath:
 		f.serveStats(w, r)
@@ -172,6 +181,12 @@ func (f *reconcileVLFixture) statsQueryCount() int {
 	return f.statsQueries
 }
 
+func (f *reconcileVLFixture) contentQueryCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.contentQueries
+}
+
 // payloadsSince 返回第 index 次之后的全部插入载荷（用于断言「重启后到底写了什么」）。
 func (f *reconcileVLFixture) payloadsSince(index int) []string {
 	f.mu.Lock()
@@ -190,6 +205,26 @@ func (f *reconcileVLFixture) setStallStats(stall bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stallStats = stall
+}
+
+// queryGate 让测试在「确认取证的真实查询」途中挂住，从而与真实新尾发布精确重叠。
+// 生产恒为 nil（零开销）。**只挂住第一次查询**：后续查询（包括新尾自己的校验查询）必须照常
+// 返回，否则挂住的就不是「确认与尾巴重叠」而是把整个源都堵死了。
+//   - entered：第一次查询已进入（通知测试可以推进新尾）；
+//   - release：测试放行该查询。
+type queryGate struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	used    atomic.Bool
+}
+
+func (g *queryGate) block() {
+	if g == nil || g.used.Swap(true) {
+		return // 只拦第一枪
+	}
+	g.once.Do(func() { close(g.entered) })
+	<-g.release
 }
 
 // rowCount 返回当前 VL 中的行数（只读；供幂等用例断言"前提确实成立"）。
@@ -233,6 +268,7 @@ type reconcileSelectorFilter struct {
 	sourceGeneration string
 	generations      []string
 	recordEndMax     uint64
+	eventIDs         map[string]struct{}
 }
 
 var (
@@ -255,6 +291,15 @@ func parseReconcileSelector(selector string) reconcileSelectorFilter {
 	}
 	if match := reconcileRecordEndPattern.FindStringSubmatch(selector); match != nil {
 		filter.recordEndMax, _ = strconv.ParseUint(match[1], 10, 64)
+	}
+	if _, raw, exists := strings.Cut(selector, "event_id:in("); exists {
+		raw, _, _ = strings.Cut(raw, ")")
+		filter.eventIDs = make(map[string]struct{})
+		for _, quoted := range strings.Split(raw, ",") {
+			if id, err := strconv.Unquote(strings.TrimSpace(quoted)); err == nil {
+				filter.eventIDs[id] = struct{}{}
+			}
+		}
 	}
 	return filter
 }
@@ -280,6 +325,11 @@ func (f reconcileSelectorFilter) match(row reconcileVLRow) bool {
 	}
 	if f.recordEndMax > 0 && row.RecordEnd > f.recordEndMax {
 		return false
+	}
+	if f.eventIDs != nil {
+		if _, ok := f.eventIDs[row.EventID]; !ok {
+			return false
+		}
 	}
 	return true
 }

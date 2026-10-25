@@ -98,7 +98,7 @@ func sortedSourceKeys(m *Manager) []string {
 	return keys
 }
 
-// projectionCovered 报告该源当前是否「已发布投影完整」（即整节点解算的准入判据）。
+// projectionCovered 报告该源当前是否「已发布投影完整」（即整节点解算的准入判据之一）。
 func projectionCovered(m *Manager, key string) bool {
 	m.mu.Lock()
 	pipe, ok := m.pipes[key]
@@ -110,6 +110,63 @@ func projectionCovered(m *Manager, key string) bool {
 	}
 	_, complete := m.publishedClosedForSource(source, saved)
 	return complete
+}
+
+// resolveAdmissionReady 报告该源是否已满足 resolveOneSourceGaps 的**完整**准入前提：
+// 投影完整且封闭前缀 / 回收水位都不落后于 Durable。
+//
+// 为什么必须与实现同口径：只查「投影完整」是不够的——采集轮刚把新行读入并落 WAL 时，
+// Durable 会瞬时超前于已发布封闭前缀与回收水位，此时解算会按设计明确拒绝
+// （不得用落后于 Durable 的证据解缺口）。夹具若只按「投影完整」前置，就会把这种
+// **正确的保守拒绝**当成解算失败（实测 -race 下三个 resolve 用例即因此转红）。
+func resolveAdmissionReady(m *Manager, key string) bool {
+	m.mu.Lock()
+	pipe, ok := m.pipes[key]
+	source := m.sources[key]
+	saved := m.state.Sources[key]
+	m.mu.Unlock()
+	if !ok || pipe == nil {
+		return false
+	}
+	closed, complete := m.publishedClosedForSource(source, saved)
+	if !complete {
+		return false
+	}
+	entry := pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return false
+	}
+	return closed >= entry.Positions.Durable && entry.Positions.Reclaim >= entry.Positions.Durable
+}
+
+// logResolveAdmissionState 只读记录真实前置，区分未发布、未确认投递与回收停滞。
+func logResolveAdmissionState(t *testing.T, m *Manager, key string) {
+	t.Helper()
+	m.mu.Lock()
+	pipe := m.pipes[key]
+	source := m.sources[key]
+	saved := m.state.Sources[key]
+	sourceErr := m.sourceErrs[source.LogSourceID]
+	m.mu.Unlock()
+	if pipe == nil {
+		t.Logf("解算准备未就绪 source=%s pipeline=nil", key)
+		return
+	}
+	closed, complete, scanErr := m.publishedClosedForSourceCtx(context.Background(), source, saved)
+	entry := pipe.Ledger().Get(pipe.Key())
+	walEntries, walBytes := pipe.WAL().Backlog()
+	m.replayMu.Lock()
+	_, replayPending := m.replayPending[key]
+	_, replayInflight := m.replayInflight[key]
+	m.replayMu.Unlock()
+	if entry == nil {
+		t.Logf("解算准备未就绪 source=%s ledger=nil", key)
+		return
+	}
+	t.Logf("解算准备 source=%s closed=%d complete=%t scanErr=%v positions=%+v pending=%t generation=%s verified=%v WAL=%d/%d replayPending=%t replayInflight=%t sourceErr=%q delivery=%s requestDone=%v gaps=%d errors=%d",
+		key, closed, complete, scanErr, entry.Positions, saved.PublicationPending, saved.ProjectionGeneration, saved.VerifiedRuns,
+		walEntries, walBytes, replayPending, replayInflight, sourceErr, entry.DeliveryState, entry.RequestDoneRanges,
+		pipe.Ledger().UnresolvedGapCount(pipe.Key()), entry.ErrorCount)
 }
 
 // primeCompleteProjections 驱动采集轮到「每个源的投影都完整已发布」为止。
@@ -136,6 +193,9 @@ func primeCompleteProjections(t *testing.T, m *Manager) {
 	lastPending := -1
 	for {
 		m.pollOnce()
+		// 手动夹具没有启动容量兜底环；必须消费耐久交办待办，取得真实请求确认与回收证明。
+		// 对账重建只能证明投影可见，不能替代 Pipeline.DeliverPending 的 ACK 与 WAL 排空。
+		m.drainScheduledReplay()
 		// 手动夹具没有调用 Start，必须补驱生产常驻对账轮，恢复耐久交办后的待投递欠账。
 		// 准备期对账服从既有停滞期限，不用无界背景轮绕过完整投影的前置验证。
 		roundCtx, cancel := context.WithDeadline(context.Background(), deadline)
@@ -151,11 +211,17 @@ func primeCompleteProjections(t *testing.T, m *Manager) {
 		}
 		var pending []string
 		for _, key := range sortedSourceKeys(m) {
-			if !projectionCovered(m, key) {
+			if !resolveAdmissionReady(m, key) {
 				pending = append(pending, key)
 			}
 		}
-		if len(pending) == 0 {
+		m.replayMu.Lock()
+		replayIdle := len(m.replayPending) == 0 && len(m.replayInflight) == 0
+		m.replayMu.Unlock()
+		if len(pending) == 0 && replayIdle {
+			for _, key := range sortedSourceKeys(m) {
+				logResolveAdmissionState(t, m, key)
+			}
 			return
 		}
 		if raceEnabled {
@@ -165,6 +231,9 @@ func primeCompleteProjections(t *testing.T, m *Manager) {
 			lastPending = len(pending)
 		}
 		if time.Now().After(deadline) {
+			for _, key := range pending {
+				logResolveAdmissionState(t, m, key)
+			}
 			t.Fatalf("夹具未能在时限内发布完整投影：未就绪源 %v", pending)
 		}
 		time.Sleep(20 * time.Millisecond)

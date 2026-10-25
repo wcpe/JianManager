@@ -508,7 +508,7 @@ func TestSilentSourceExitIsMarkedAsNoCopy(t *testing.T) {
 	m.pollOnce()
 	entry := pipe.Ledger().Get(pipe.Key())
 	require.Equal(t, logtypes.DeliveryRequestDone, entry.DeliveryState)
-	tailStart := entry.Positions.Read + 1
+	tailStart := entry.Positions.Read
 	require.GreaterOrEqual(t, entry.Positions.Reclaim, entry.Positions.Read, "① 之后回收应已追上读位置")
 
 	// ② 尾部批次：只进 WAL（不提交）——read 前进、durable 停在上一批末端，且没有任何分段覆盖它。
@@ -525,10 +525,21 @@ func TestSilentSourceExitIsMarkedAsNoCopy(t *testing.T) {
 	require.Less(t, entry.Positions.Reclaim, entry.Positions.Read, "夹具：尾部无分段覆盖")
 	require.LessOrEqual(t, entry.Positions.Reclaim, entry.Positions.Durable)
 
-	// ③ 静默源出口：为「已全部投递、但无分段覆盖的尾部」补段并推进回收。
+	// ③ 仅有UNKNOWN恢复结论而无真实ACK/当前VL行时，不能冒充已确认副本。
 	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
 	entry = pipe.Ledger().Get(pipe.Key())
-	require.Greater(t, entry.Positions.Reclaim, uint64(0))
+	require.Equal(t, tailStart, entry.Positions.Reclaim, "缺证据负控必须保留尾部责任")
+	for _, ref := range entry.RecoveryRefs {
+		require.False(t, strings.HasPrefix(ref.SegmentID, "manual-recovery-"))
+	}
+	// 补齐真实物理写、逐字段校验、发布与独立HTTP ACK，但不调用常规恢复释放口。
+	_, err = m.deliver(source, tail, false)
+	require.NoError(t, err)
+	require.NoError(t, pipe.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: tailStart, EndPos: tailEnd, HTTPStatus: 200}))
+	require.Len(t, m.landedVisibleInVL(source, tail), 1)
+	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
+	entry = pipe.Ledger().Get(pipe.Key())
+	require.Equal(t, tailEnd, entry.Positions.Reclaim)
 
 	var manual *ledger.RecoveryRef
 	for index := range entry.RecoveryRefs {

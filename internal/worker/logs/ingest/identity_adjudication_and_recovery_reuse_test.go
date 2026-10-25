@@ -256,11 +256,14 @@ func TestDeliverReusesCanonicalSetAcrossPendingConfirm(t *testing.T) {
 
 	m.mu.Lock()
 	cur := m.state.Sources[key]
+	m.mu.Unlock()
 	require.NotEmpty(t, cur.ProjectionGeneration)
 	stored, err := m.canonicalRecoveryEvents(key, cur)
 	require.NoError(t, err)
 	full := len(stored)
 	require.NotZero(t, full)
+	m.mu.Lock()
+	cur = m.state.Sources[key]
 	cur.PublicationPending = true
 	m.state.Sources[key] = cur
 	m.mu.Unlock()
@@ -268,16 +271,18 @@ func TestDeliverReusesCanonicalSetAcrossPendingConfirm(t *testing.T) {
 	deleteDay() // 复核必然不完整 ⇒ 回落整窗重发（这一轮里会发生两次构建）
 
 	identity := logtypes.SourceIdentity{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1"}
+	// 补历史窗口而非追加新尾，确保真正进入发布确认与权威集合复用路径。
 	batch := []logtypes.Event{
-		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 30, End: 40},
-			"2026-09-24T01:00:00Z", "2026-09-24T01:00:01Z", "INFO", "stdout", "reuse batch"),
+		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 0, End: 1},
+			"2026-09-22T03:00:00Z", "2026-09-22T03:00:01Z", "INFO", "stdout", "reuse batch"),
 	}
+	require.False(t, m.planDeliveryTail(key, cur, batch, false).Fast)
 
 	_, err = m.deliver(source, batch, false)
 	require.NoError(t, err)
 
 	require.Equal(t, int64(1), m.CanonicalRecoveryReuses(),
 		"pending 轮内取证结果必须被写入面构建复用（否则每轮白付一次 O(段行数) 重建）")
-	require.Equal(t, full, payloadEventCount(payloads()),
-		"复用不得缩小写入面：仍必须整窗重发权威全量")
+	require.Equal(t, full+len(batch), payloadEventCount(payloads()),
+		"复用不得缩小写入面：整窗包含既有权威全量与本批新增历史事件")
 }

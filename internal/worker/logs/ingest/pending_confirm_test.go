@@ -53,20 +53,26 @@ func TestPendingConfirmSkipsFullRepublishWhenVLComplete(t *testing.T) {
 
 	m.mu.Lock()
 	cur := m.state.Sources[key]
+	m.mu.Unlock()
 	require.NotEmpty(t, cur.ProjectionGeneration, "夹具应已有已发布代次")
 	stored, err := m.canonicalRecoveryEvents(key, cur)
 	require.NoError(t, err)
 	require.NotEmpty(t, stored, "夹具应已把事件读入本源（段或内联）")
+	m.mu.Lock()
+	cur = m.state.Sources[key]
 	cur.PublicationPending = true
 	m.state.Sources[key] = cur
 	m.mu.Unlock()
 
-	// 本批＝一条**新**事件（不在已存集合里）⇒ 若判据回落整窗重发，载荷应为全量（>1）✗。
+	// 历史窗口的新事件不满足新尾判据，必须实际走发布确认而非尾部解耦路径。
 	identity := logtypes.SourceIdentity{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1"}
 	batch := []logtypes.Event{
-		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 30, End: 40},
-			"2026-09-24T01:00:00Z", "2026-09-24T01:00:01Z", "INFO", "stdout", "pending-confirm batch"),
+		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 0, End: 1},
+			"2026-09-22T03:00:00Z", "2026-09-22T03:00:01Z", "INFO", "stdout", "pending-confirm batch"),
 	}
+	nonPending := cur
+	nonPending.PublicationPending = false
+	require.False(t, m.planDeliveryTail(key, nonPending, batch, false).Fast, "夹具必须覆盖历史发布确认")
 
 	_, err = m.deliver(source, batch, false)
 	require.NoError(t, err)
@@ -86,12 +92,15 @@ func TestPendingConfirmFallsBackWhenVLMissing(t *testing.T) {
 
 	m.mu.Lock()
 	cur := m.state.Sources[key]
+	m.mu.Unlock()
 	gen := cur.ProjectionGeneration
 	require.NotEmpty(t, gen)
 	stored, err := m.canonicalRecoveryEvents(key, cur)
 	require.NoError(t, err)
 	full := len(stored)
 	require.NotZero(t, full)
+	m.mu.Lock()
+	cur = m.state.Sources[key]
 	cur.PublicationPending = true
 	m.state.Sources[key] = cur
 	m.mu.Unlock()
@@ -101,15 +110,18 @@ func TestPendingConfirmFallsBackWhenVLMissing(t *testing.T) {
 
 	identity := logtypes.SourceIdentity{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1"}
 	batch := []logtypes.Event{
-		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 30, End: 40},
-			"2026-09-24T01:00:00Z", "2026-09-24T01:00:01Z", "INFO", "stdout", "pending-confirm batch"),
+		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 0, End: 1},
+			"2026-09-22T03:00:00Z", "2026-09-22T03:00:01Z", "INFO", "stdout", "pending-confirm batch"),
 	}
+	nonPending := cur
+	nonPending.PublicationPending = false
+	require.False(t, m.planDeliveryTail(key, nonPending, batch, false).Fast, "夹具必须覆盖历史发布确认")
 
 	_, err = m.deliver(source, batch, false)
 	require.NoError(t, err)
 
 	require.Zero(t, m.RepublishSkipped(), "VL 缺行不得跳过重发（判据不放宽）✗")
 	got := payloadEventCount(payloads())
-	require.Equal(t, full, got,
-		"缺行必须照旧整窗重发：写入面＝权威全量（本批走归档/段面，见 projectionWritePlan.Archive）✓")
+	require.Equal(t, full+len(batch), got,
+		"缺行必须照旧整窗重发：写入面包含既有权威全量与本批新增历史事件")
 }

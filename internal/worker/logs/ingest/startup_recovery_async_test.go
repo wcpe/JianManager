@@ -325,93 +325,71 @@ func TestStartupReplayBoundedForSameSourceDay(t *testing.T) {
 	fixture.silentDropInsert = true
 	fixture.deleteDay("2026-09-22")
 
-	// 反复走**启动恢复的登记入口**（复刻"重启一次又来一轮"的循环）。
+	// 只闸新增物理副本，不永久封禁按源只读取证；首份seed已占一份，最多再新增两份。
+	m.materializationLimits.WindowCopies = 3
+	clock := time.Now()
+	m.rebuilds.now = func() time.Time { return clock }
 	rejected := 0
-	writes := make([]int, 0, 3)
-	backoffChecked := false
+	writes := make([]int, 0, 2)
 	for round := 1; round <= 6; round++ {
+		before := fixture.insertAttemptCount()
 		ok, skip := m.scheduleStartupRebuildTask(source, []string{"2026-09-22"}, startupReplayReasonMissing)
-		if !ok {
-			rejected++
-			require.Equal(t, "rebuild_abandoned", skip,
-				"第 %d 轮必须被「已放弃」拒绝（这才是有界）；实际原因 %s", round, skip)
-			continue
-		}
-		require.Equal(t, 1, m.drainRebuilds(context.Background()), "第 %d 轮登记必须被执行", round)
+		require.True(t, ok, "退避外必须允许重新取证：%s", skip)
+		require.Equal(t, 1, m.drainRebuilds(context.Background()))
 		out, hasOut := m.RebuildLastResult(key)
 		require.True(t, hasOut)
-		require.Error(t, out.Err, "第 %d 轮的失败必须可取证", round)
-		writes = append(writes, fixture.insertAttemptCount())
-		// **退避拒绝路径**（`scheduleLocked` 返回 false，而不是 `scheduleStartup` 的提前返回）：
-		// 这是最容易漏掉的一条——它必须同样「不记 pending」，否则该键会永远等不到结论。
-		// 只查一次（第一次失败后必然在退避窗口内），避免把用例变成对计时器的测量。
-		if !backoffChecked {
-			backoffChecked = true
-			okBackoff, skipBackoff := m.scheduleStartupRebuildTask(source, []string{"2026-09-22"}, startupReplayReasonMissing)
-			require.False(t, okBackoff)
-			require.Equal(t, "rebuild_backoff", skipBackoff, "退避窗口内必须被可解释地拒绝")
-			require.True(t, m.rebuildsPendingLeakFree(),
-				"退避拒绝不得在未结论台账里留下永远不会出结论的键（否则就绪面永久 not-ready）")
+		require.Error(t, out.Err)
+		require.Empty(t, out.Days, "失败不能伪报某日已完成")
+		if round <= 2 {
+			require.Greater(t, fixture.insertAttemptCount(), before, "前两轮必须真实写后校验失败")
+			writes = append(writes, fixture.insertAttemptCount())
+		} else {
+			rejected++
+			require.ErrorIs(t, out.Err, ErrMaterializationBudget)
+			require.True(t, out.Pending)
+			require.Equal(t, before, fixture.insertAttemptCount(), "预算用尽后零新增物理写")
 		}
-		// 清退避窗口：本用例测的是**上限**，不是计时。
-		m.rebuilds.mu.Lock()
-		if st := m.rebuilds.attempts[key]; st != nil {
-			st.nextAllowedAt = time.Time{}
-		}
-		m.rebuilds.mu.Unlock()
+		okBackoff, skipBackoff := m.scheduleStartupRebuildTask(source, []string{"2026-09-22"}, startupReplayReasonMissing)
+		require.False(t, okBackoff)
+		require.Equal(t, "rebuild_backoff", skipBackoff)
+		require.True(t, m.rebuildsPendingLeakFree(), "拒绝登记不能残留永远不会完成的键")
+		state, ok := m.rebuilds.snapshot(key)
+		require.True(t, ok)
+		clock = state.nextAllowedAt.Add(time.Second)
 	}
-	require.GreaterOrEqual(t, rejected, 4,
-		"上限 2 之后的所有轮次都必须被拒（6 轮里至少 4 轮）——否则就是生产那个无界重写循环")
-	require.LessOrEqual(t, len(writes), 2, "写入次数必须受上限约束（这正是 VL 体积的止血点）")
-	// 前两轮确实各写了一遍（确认夹具造出了"写完却校验不过"的循环形态，而不是空流程）。
-	for i := 1; i < len(writes); i++ {
-		require.Greater(t, writes[i], writes[i-1], "每轮失败前都确实又写了一遍")
-	}
+	require.Equal(t, 4, rejected, "同一稳定窗口后四轮必须均被持久物化预算拒绝新增副本")
+	require.Len(t, writes, 2)
+	require.Greater(t, writes[1], writes[0])
+	_, abandoned := m.RebuildAbandonedReason(key)
+	require.False(t, abandoned, "副本预算不能退化成永久停源")
+	require.Zero(t, m.RebuildStats().Completed, "尚未真正恢复时不能冒称完成")
+	require.Positive(t, m.RebuildStats().BackoffSkipped)
+	require.False(t, m.CutoverReadiness().LedgerReady, "未完成的历史发布责任必须继续阻塞就绪")
+	rows, err := m.index.ListMaterializations(context.Background(), key, "2026-09-22", "", 0, 200)
+	require.NoError(t, err)
+	require.Len(t, rows, 3, "原seed和两次未知物理写都须持久计费")
+	require.Empty(t, m.StartupRecoveryStatus().ReplaysInFlight)
+	require.True(t, m.rebuildsPendingLeakFree())
 
-	// **有界必须可见**：放弃原因可读（含已尝试代次），且读数留痕。
-	reason, abandoned := m.RebuildAbandonedReason(key)
-	require.True(t, abandoned)
-	require.Contains(t, reason, "projection-", "放弃原因必须点名已尝试的代次：%s", reason)
-	require.Positive(t, m.RebuildStats().Abandoned, "放弃次数必须进读数")
-	require.Positive(t, m.RebuildStats().AbandonedSkips, "被拒的登记也必须进读数")
-
-	// **不静默丢数据**：放弃与拒绝绝不能被当成「已恢复」。
-	// 走一次完整的启动恢复登记，确认它把"已放弃"记成失败（而不是跳过或成功）。
-	m.mu.Lock()
-	m.startupRecovery = startupRecoveryState{}
-	m.mu.Unlock()
-	summary := m.scheduleStartupReplays(
-		[]startupSource{{source: source, key: key, events: reconcileTestEvents()}},
-		[]ReconcileReport{{Fallback: false, MissingDays: []string{"2026-09-22"}}},
-	)
-	require.Zero(t, summary.Scheduled, "已放弃的源不得被登记成「已在重发」")
-	require.Equal(t, 1, summary.Skipped)
-	require.Contains(t, summary.SkipReasons[0], "rebuild_abandoned")
-	status := m.StartupRecoveryStatus()
-	require.Positive(t, status.Failed, "放弃必须记入启动恢复失败（就绪面据此保持 not-ready）")
-	require.Contains(t, strings.Join(status.Reasons, " "), "已放弃自动重试",
-		"失败原因必须点名「已放弃」，而不是一句笼统的失败：%v", status.Reasons)
-	require.False(t, m.CutoverReadiness().LedgerReady,
-		"源未真正恢复 ⇒ 不得宣告就绪（缺口由数据面照实呈现）")
-
-	// 决定性一步：放弃之后**不再有任何新写入**。
-	insertsBefore := fixture.insertCount()
+	// 外部恢复原已发布副本后，只读取证仍可成功，不新增任何物理副本，也不永久封禁来源。
+	fixture.mu.Lock()
+	fixture.silentDropInsert = false
+	fixture.mu.Unlock()
+	payload, err := projectionPayload(reconcileTestEvents()[:2], "projection-1")
+	require.NoError(t, err)
+	_, err = client.InsertJSONLines(context.Background(), payload)
+	require.NoError(t, err)
+	insertsBefore := fixture.insertAttemptCount()
 	ok, skip := m.scheduleStartupRebuildTask(source, []string{"2026-09-22"}, startupReplayReasonMissing)
-	require.False(t, ok)
-	require.Equal(t, "rebuild_abandoned", skip)
-	require.Zero(t, m.drainRebuilds(context.Background()), "已放弃后不得再有任务可执行")
-	require.Equal(t, insertsBefore, fixture.insertCount(), "放弃后不得再有新写入")
-
-	// **未被登记的源绝不能进入「未结论」台账**（否则就绪面会被永久阻塞）。
-	//
-	// 为什么必须单独断言：`startupPending` 是「登记成功」与「就绪可判」的耦合点。若在登记被拒时
-	// 也把它记进去（例如"先记 pending 再排队"的写法），该源就永远等不到一个不会到来的结论 ⇒
-	// `startup_replay_in_flight` 永久置位 ⇒ 平台永远不可切换。这是比"重发没做"更严重的静默故障。
-	// 转红方式（变异 M-S5，见报告）：把 `scheduleStartup` 里的 pending 登记提到
-	// `scheduleLocked` 之前（登记失败也记 pending）——本断言即刻变红。
-	require.Empty(t, m.StartupRecoveryStatus().ReplaysInFlight,
-		"被拒的登记不得进入未结论台账（否则就绪面永久 not-ready）")
-	require.True(t, m.rebuildsPendingLeakFree(), "未结论台账不得残留任何永远不会出结论的键")
+	require.True(t, ok, "%s", skip)
+	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+	out, ok := m.RebuildLastResult(key)
+	require.True(t, ok)
+	require.NoError(t, out.Err)
+	require.True(t, out.ConfirmedOnly)
+	require.Equal(t, insertsBefore, fixture.insertAttemptCount(), "预算用尽后的恢复必须只读确认，不再写全窗")
+	require.False(t, savedSource(t, m, key).PublicationPending)
+	require.True(t, m.rebuildsPendingLeakFree())
 }
 
 // rebuildsPendingLeakFree 报告「未结论台账里没有任何既不在飞、也不在待办的键」。

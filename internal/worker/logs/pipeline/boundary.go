@@ -43,6 +43,9 @@ type NormalizeBoundary struct {
 	// 只在「下一行到达」时才能比较；而超时要回答的是「**已经没有新行**多久了」——
 	// 只有墙钟能给出答案（见 FlushStaleUnclosed）。
 	lastPendingAt time.Time
+	// limitContinuation 说明当前无头续行继承了上一段的容量截断，闭合时不能伪装普通 RAW。
+	limitContinuation  bool
+	limitPartialEvents int
 }
 
 // NewNormalizeBoundary 创建边界钩子。opts.Source.ParserVersion 为空时使用 normalize.ParserVersion。
@@ -114,6 +117,7 @@ func (b *NormalizeBoundary) Feed(line []byte, absPos, recordEnd uint64) (eventEn
 	}
 	var lastEnd uint64
 	for _, ev := range out {
+		ev = b.annotateLimitContinuation(ev, b.lineBase+len(b.linePos)-1, false)
 		remapped := b.remap(ev)
 		b.completed = append(b.completed, remapped)
 		lastEnd = remapped.Record.End
@@ -132,6 +136,7 @@ func (b *NormalizeBoundary) FlushPartial() ([]byte, uint64, bool) {
 	if !ok {
 		return nil, 0, false
 	}
+	ev = b.annotateLimitContinuation(ev, b.lineBase+len(b.linePos)-1, true)
 	remapped := b.remap(ev)
 	b.completed = append(b.completed, remapped)
 	b.seq++
@@ -147,6 +152,7 @@ func (b *NormalizeBoundary) FlushComplete() ([]byte, uint64, bool) {
 	if !ok {
 		return nil, 0, false
 	}
+	ev = b.annotateLimitContinuation(ev, b.lineBase+len(b.linePos)-1, true)
 	remapped := b.remap(ev)
 	b.completed = append(b.completed, remapped)
 	b.seq++
@@ -165,6 +171,7 @@ func (b *NormalizeBoundary) FlushUnclosed(reason string) ([]byte, uint64, bool) 
 	if !ok {
 		return nil, 0, false
 	}
+	ev = b.annotateLimitContinuation(ev, b.lineBase+len(b.linePos)-1, true)
 	remapped := b.remap(ev)
 	b.completed = append(b.completed, remapped)
 	b.seq++
@@ -237,12 +244,37 @@ func (b *NormalizeBoundary) trimLinePos() {
 // Stats 返回最近一次统计快照。
 func (b *NormalizeBoundary) Stats() normalize.Stats {
 	st := b.n.Result().Stats
+	st.RawEvents -= b.limitPartialEvents
+	st.PartialEvents += b.limitPartialEvents
 	b.lastStats = st
 	return st
 }
 
 // EventsEmitted 返回本边界累计产出事件数。
 func (b *NormalizeBoundary) EventsEmitted() int { return b.seq }
+
+// annotateLimitContinuation 保留容量截断后的无头续行语义，不改变正文、区间或规范哈希。
+// 即时 RAW 行是新边界，不是续片；只有已进入未闭合缓冲的尾片才标成 PARTIAL。
+func (b *NormalizeBoundary) annotateLimitContinuation(ev logtypes.Event, currentLine int, closing bool) logtypes.Event {
+	status := ev.Fields[normalize.FieldParseStatus]
+	if status == string(normalize.StatusTruncated) {
+		b.limitContinuation = true
+		return ev
+	}
+	if status == string(normalize.StatusRaw) && b.limitContinuation && (closing || int(ev.Record.End) < currentLine) {
+		if ev.Fields == nil {
+			ev.Fields = make(map[string]string)
+		}
+		ev.Fields[normalize.FieldParseStatus] = string(normalize.StatusPartial)
+		ev.Fields["multiline_limit_continuation"] = "true"
+		if ev.Fields[normalize.FieldMultilineUnclosed] == "" {
+			ev.Fields[normalize.FieldMultilineUnclosed] = "buffer_limit"
+		}
+		b.limitPartialEvents++
+	}
+	b.limitContinuation = false
+	return ev
+}
 
 // remap 将 normalize 的行号 record 映射为绝对源位置，并重算 event_id。
 //

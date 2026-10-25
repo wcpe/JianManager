@@ -111,19 +111,30 @@ func (m *Manager) splitHotRetentionDays(days []string, now time.Time) (inWindow,
 // 只要求「按当前已发布白名单能查到」——这正是「用户查得到」的等价条件。
 //
 // ── 保守边界（任何不确定都**不消解**）─────────────────────────────────────
-//   · 没有 VL 客户端 / 取不到 catalog 记录 / 白名单为空 ⇒ 原样返回（退化为改动前行为）；
-//   · 查询失败（网络、超时、4xx）⇒ 原样返回：宁可缺口多留一轮，也不能凭猜测抹平欠账；
-//   · `landed` 为空 ⇒ 直接返回。
+//
+//	· 没有 VL 客户端 / 取不到 catalog 记录 / 白名单为空 ⇒ 空证据；
+//	· 查询失败（网络、超时、4xx）⇒ 空证据：宁可缺口多留一轮，也不能凭猜测抹平欠账；
+//	· `landed` 为空 ⇒ 直接返回。
 //
 // 查到一部分时返回那一部分：查不到的事件必然不被计入，其缺口保持可见并落 WARN。
 func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event) []logtypes.Event {
+	return m.landedVisibleInVLCtx(context.Background(), source, landed)
+}
+
+func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConfig, landed []logtypes.Event) []logtypes.Event {
 	if m == nil || len(landed) == 0 || m.cat == nil {
-		return landed
+		return nil
 	}
-	client, _, err := m.clientForSource(source)
-	if err != nil || client == nil {
-		return landed
+	// Raw事件在外发时已按稳定IngestTime规范化；回收/重复取证必须使用同一时间与内容哈希口径。
+	canonical := make([]logtypes.Event, 0, len(landed))
+	for _, event := range landed {
+		normalized, err := normalizeCanonicalEvent(event)
+		if err != nil {
+			return nil
+		}
+		canonical = append(canonical, normalized)
 	}
+	landed = canonical
 	// **必须按每个事件所属的分区取白名单**，不能统一用 `source.UTCDay`：
 	// 缺口跨越历史天（生产实测缺口在 10-21，而源的当前天可能是今天），
 	// 用当前天分区的白名单去查历史天的事件必然查不到，会把「可见」误判成「不可见」。
@@ -133,7 +144,7 @@ func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event
 			return gens, len(gens) > 0
 		}
 		rec, ok := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
-		if !ok || rec == nil || rec.PublishedProjection == nil {
+		if !ok || rec == nil || rec.PublishedProjection == nil || !rec.PublishedProjection.CoverageComplete {
 			generationsByDay[day] = nil
 			return nil, false
 		}
@@ -141,7 +152,7 @@ func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event
 		generationsByDay[day] = gens
 		return gens, len(gens) > 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), m.verifyBackoffMax*4+time.Second)
+	ctx, cancel := context.WithTimeout(parent, m.verifyBackoffMax*4+time.Second)
 	defer cancel()
 	// 按天分组后各组用各自的白名单批量查询（见上方 generationsFor 的理由）。
 	visible := make([]logtypes.Event, 0, len(landed))
@@ -171,11 +182,23 @@ func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event
 		// ⇒ 事件被判「不可见」⇒ 缺口永远无法消解 ⇒ 阻塞 ResumeAcquire ⇒ 源暂停。
 		daySource := source
 		daySource.UTCDay = day
-		batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, gens, byDay[day])
+		rec, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
+		client, qerr := m.publishedEvidenceClient(daySource, rec)
+		if qerr != nil || client == nil {
+			return nil
+		}
+		closed := publishedEvidenceClosed(rec, daySource)
+		candidates := make([]logtypes.Event, 0, len(byDay[day]))
+		for _, event := range byDay[day] {
+			if event.Record.End <= closed {
+				candidates = append(candidates, event)
+			}
+		}
+		batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, gens, candidates)
 		if qerr != nil {
 			slog.Warn("缺口消解前核对 VL 可见性失败：本轮不消解任何缺口（下轮重试）",
 				"source", source.LogSourceID, "utcDay", day, "error", qerr)
-			return landed
+			return nil
 		}
 		visible = append(visible, batchVisible...)
 	}
@@ -201,7 +224,7 @@ func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event
 			"source", source.LogSourceID, "missingCount", len(missing),
 			"visibleCount", len(visible), "sampleEventIDs", ids[:min(len(ids), 3)])
 	}
-	return visible
+	return kept
 }
 
 // visibleEventsInVL 用**一次**查询取出这批事件里在 VL 可见的那些（按已发布代次白名单）。
@@ -210,6 +233,9 @@ func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event
 // 且过大的响应体不值得为一个只读核对付成本。超限时按批切分、逐批查询后合并。
 func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, source SourceConfig,
 	generations []string, events []logtypes.Event) ([]logtypes.Event, error) {
+	if len(generations) == 0 || client == nil {
+		return nil, errors.New("ingest: 当前已发布证据面不可用")
+	}
 	const batch = 512
 	out := make([]logtypes.Event, 0, len(events))
 	for start := 0; start < len(events); start += batch {

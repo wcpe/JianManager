@@ -116,18 +116,17 @@ func TestPendingArchivesReimportsReusedSlotWithUndeliveredTail(t *testing.T) {
 		Imported: true, ParserVersion: "acquire-v1",
 	}))
 
-	// FileTailer 的锚：这份内容第 0 字节落在逻辑位置 50；读到了 50+首行长度，
-	// 但 durable 水位停在 50（停机时首行尚未确认投递）⇒ 整份都得导。
-	idBytes, idSHA, err := acquire.ContentIdentity(slot)
+	// 通过真实FileTailer建立映射、指纹与首行ACK；末行仍在multiline缓冲中，不能伪造known标记。
+	require.NoError(t, os.WriteFile(live, []byte(body), 0o644))
+	_, err := p.Poll()
 	require.NoError(t, err)
-	require.NotEmpty(t, idSHA)
-	require.NoError(t, p.Ledger().RegisterSegment(p.Key(), ledger.Segment{
-		Path: filepath.Join(dir, "proxy.log.0"), Kind: ledger.SegmentRotated,
-		StartPos: 50, EndPos: 50 + uint64(len("[11:00:00] [Server thread/INFO]: read-but-not-durable\n")),
-		IdentityBytes: idBytes, IdentitySHA256: idSHA, ParserVersion: "acquire-v1",
-	}))
-	require.NoError(t, p.Ledger().AdvanceRead(p.Key(), 200))
-	require.NoError(t, p.Ledger().AdvanceDurable(p.Key(), 50))
+	decision, err := p.AssessArchive(slot)
+	require.NoError(t, err)
+	require.Equal(t, acquire.ArchiveTail, decision.Disposition)
+	positions, ok := p.Positions()
+	require.True(t, ok)
+	require.Positive(t, positions.Delivery, "前缀必须有真实HTTP ACK")
+	require.Less(t, positions.Delivery, uint64(len(body)), "后缀必须尚未确认，才能构造真实待导入尾部")
 
 	require.Equal(t, []string{slot}, pendingArchives(p, []string{slot}),
 		"槽位里这份内容还有从未投递的字节 ⇒ 必须重新待导入（否则就是静默丢日志）")
@@ -150,15 +149,17 @@ func TestPendingArchivesSkipsReusedSlotFullyDelivered(t *testing.T) {
 		Path: slot, Kind: ledger.SegmentRotatedText, StartPos: 0, EndPos: 9,
 		Imported: true, ParserVersion: "acquire-v1",
 	}))
-	idBytes, idSHA, err := acquire.ContentIdentity(slot)
+	require.NoError(t, os.WriteFile(live, []byte(body), 0o644))
+	_, err := p.Poll()
 	require.NoError(t, err)
-	require.NoError(t, p.Ledger().RegisterSegment(p.Key(), ledger.Segment{
-		Path: filepath.Join(dir, "proxy.log.0"), Kind: ledger.SegmentRotated,
-		StartPos: 50, EndPos: 50 + uint64(len(body)),
-		IdentityBytes: idBytes, IdentitySHA256: idSHA, ParserVersion: "acquire-v1",
-	}))
-	require.NoError(t, p.Ledger().AdvanceRead(p.Key(), 200))
-	require.NoError(t, p.Ledger().AdvanceDurable(p.Key(), 50+uint64(len(body))))
+	_, err = p.Flush()
+	require.NoError(t, err)
+	positions, ok := p.Positions()
+	require.True(t, ok)
+	require.Equal(t, uint64(len(body)), positions.Delivery, "整份内容必须经真实投递ACK确认")
+	decision, err := p.AssessArchive(slot)
+	require.NoError(t, err)
+	require.Equal(t, acquire.ArchiveCovered, decision.Disposition, "只有真实指纹与映射确认后才能跳过")
 
 	require.Empty(t, pendingArchives(p, []string{slot}),
 		"整份都已投递 ⇒ 必须跳过（重导即重复入库）")

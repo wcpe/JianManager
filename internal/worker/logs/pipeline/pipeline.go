@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -47,7 +49,7 @@ type Options struct {
 	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串为 auto。
 	// 未知取值在 New 处直接失败——按源声明错字符集会静默产出乱码，属于必须暴露的配置错误。
 	Charset string
-	// Limits 多行上限。
+	// Limits 多行上限；零字段在生产组合根补为 1MiB/512 行，显式非零限制原样保留。
 	Limits normalize.Limits
 	// Capacity 可选容量预算；零值用 acquire.DefaultCapacityBudget。
 	Capacity         *acquire.CapacityBudget
@@ -56,8 +58,14 @@ type Options struct {
 	SuppressRecursiveVL bool
 	// ReclaimProof 在请求结果已登记且投影完成后登记恢复责任证明。
 	ReclaimProof func(events []logtypes.Event) error
+	// ContextReclaimProof优先于旧hook，沿同一投递owner传递取消、绝对截止与查询预算。
+	ContextReclaimProof func(context.Context, []logtypes.Event) error
 	// DurablePersist 在 WAL 提交后、HTTP 投递前写入耐久快照。
 	DurablePersist func() error
+	// DeferredDelivery非nil时真实耐久后仅登记source-key；独立库默认仍同步完成投递。
+	DeferredDelivery func()
+	CommittedPersist func(context.Context, []acquire.CommitIdentity) error
+	ContextDelivery  func(context.Context, []logtypes.Event, bool) (DeliveryResult, error)
 	// Ledger/WAL 可由 Worker 生产运行时注入持久恢复实例；为空时创建内存实例。
 	Ledger *ledger.Ledger
 	WAL    *acquire.WAL
@@ -70,30 +78,41 @@ type Options struct {
 	WALLimits *acquire.WALLimits
 	// MaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数上限（回放限速）；0 表示沿用默认。
 	MaxReplayEventsPerDrain int
+	// ReadLimits 在读取原始正文前独立限制单行和单轮字节。
+	ReadLimits *acquire.ReadLimits
+	// WALReserve 为条目取得长期字节预留，直到实际剪枝才释放。
+	WALReserve func(int64) (func(), error)
 }
 
 // Pipeline 端到端：tail/stdio → normalize → WAL → DeliveryHook → CanReclaim 门禁。
 type Pipeline struct {
-	mode          AcquireMode
-	key           ledger.SourceKey
-	led           *ledger.Ledger
-	wal           *acquire.WAL
-	inner         *acquire.Pipeline
-	tailer        *acquire.FileTailer
-	imp           *acquire.ArchiveImporter
-	bound         *NormalizeBoundary
-	hook          DeliveryHook
-	reclaimProof  func(events []logtypes.Event) error
-	src           logtypes.SourceIdentity
-	normalizeOpts normalize.Options
-	reader        io.Reader
+	mode                AcquireMode
+	key                 ledger.SourceKey
+	led                 *ledger.Ledger
+	wal                 *acquire.WAL
+	inner               *acquire.Pipeline
+	tailer              *acquire.FileTailer
+	imp                 *acquire.ArchiveImporter
+	bound               *NormalizeBoundary
+	hook                DeliveryHook
+	reclaimProof        func(events []logtypes.Event) error
+	contextReclaimProof func(context.Context, []logtypes.Event) error
+	src                 logtypes.SourceIdentity
+	normalizeOpts       normalize.Options
+	reader              io.Reader
 	// stdioBuf STDIO 会话内未消费行缓冲。
 	stdioRead uint64
 	// deliveredCount 累计已进入投递钩子的事件数（测试断言用）。
 	//
 	// 原先保留 []logtypes.Event 全量切片，会随会话内总事件数线性增长却无人读取内容
 	// （FR-484 阶段5：64 源实测 ≈36MB），故只保留计数。
-	deliveredCount int
+	deliveredCount   atomic.Int64
+	deferredDelivery func()
+	contextDelivery  func(context.Context, []logtypes.Event, bool) (DeliveryResult, error)
+	// 默认同步组合的拒绝回退只记原子待办，采集解锁后在原调用栈/ctx排空。
+	fallbackDrain atomic.Bool
+	// acquired仅是当前采集临界区的有限局部批次引用；解锁时移交调用栈并立刻清空，不作排队正文。
+	acquired []logtypes.Event
 	// lineMode false=normalize 多行；测试可切 LineHook 对照。
 	useNormalize bool
 	// sampler 采集侧采样器（每源一个，跨批保留窗口状态）。nil = 未启用。
@@ -113,26 +132,11 @@ type Pipeline struct {
 	// 原子量：本结构既被采集轮 worker 调用（pollSource 路径），也被归档扫描路径调用，
 	// 两者可并发碰同一个源 ⇒ 普通 int64 会构成数据竞争。
 	archiveImportDeferred atomic.Int64
-	// mu 是**单源串行锁**：把「同一个 Pipeline 的全部读写入口」串行化（SAMPLING-1）。
-	//
-	// 为什么必须有：采集轮把 `cycleMu` 收窄为只覆盖读快照段之后，worker 在**分发之前**就放锁，
-	// 于是 `Stop` / `PrepareCutoverReadiness` / `ImportArchivesNow`（它们仍以 `cycleMu` 当「与
-	// 采集轮互斥」的手段）会与在飞 worker 同时进到**同一个 Pipeline**：
-	//   · `Sampler` 内部无锁（自述「由采集轮对单个源串行调用」已不再成立），两个 goroutine 同时
-	//     `Process` ⇒ `s.sigs` 并发 map 写 ⇒ `fatal error: concurrent map writes`（整个 Worker 退出）；
-	//   · `Flush` 与 `Poll` 并发操作同一个 `NormalizeBoundary` / `FileTailer`（本包此前零同步原语）；
-	//   · `RefreshDegrade` 读写 `lastDegradeSample`。
-	// 这些都是**同一源**上的并发，与「跨源并发」无关 ⇒ 用一把 per-pipeline 锁收口，而不是把
-	// `cycleMu` 重新扩大（那正是 D 修复要拆掉的覆盖面，会把 worker 执行期重新绑回与解算/登记/
-	// 停止共用的全局锁）。
-	//
-	// **锁序**：`Pipeline.mu` → 调用方（Manager）侧的全部锁。交付钩子 / 落库钩子 / 归档归属钩子
-	// 都在持本锁时被回调，故调用方**不得**在持有共享锁（如 `Manager.mu`）时调用下面的入口。
-	// 既有生产调用点均满足（`Stop` / `PrepareCutoverReadiness` / `ImportArchivesNow` 都是先放
-	// `m.mu` 再逐源调用）。
-	//
-	// **刻意不覆盖 `TryReclaim`**：它经 `ReclaimProof` 钩子在持本锁的调用链内被回调，
-	// 一并加锁会自锁；它只碰 ledger/WAL（两者各自带锁）故不需要本锁。
+	// mu只串行化采集状态：tailer/boundary/sampler与Append。单轮工作量仍受读取字节界限制。
+	// 锁序为p.mu→ledger/WAL叶子锁；调用方先释放Manager.mu，不能反向等待采集锁。
+	// Commit/SQLite、逻辑guard等待、网络/verify/退避和ReclaimProof全部在本锁外执行。
+	// 投递单飞由inner逻辑许可负责，不能再把这个采集锁当投递owner。
+	// TryReclaim只使用ledger/WAL自有锁，回调不重取p.mu，避免恢复责任链自锁。
 	mu sync.Mutex
 }
 
@@ -189,6 +193,10 @@ func New(opts Options) (*Pipeline, error) {
 	if !normalize.IsValidCharset(opts.Charset) {
 		return nil, fmt.Errorf("pipeline: 未知日志字符集 %q（支持 auto/utf-8/gbk/gb18030）", opts.Charset)
 	}
+	multilineLimits, err := productionMultilineLimits(opts.Limits)
+	if err != nil {
+		return nil, err
+	}
 	nopts := normalize.Options{
 		Source:        src,
 		Stream:        stream,
@@ -196,12 +204,16 @@ func New(opts Options) (*Pipeline, error) {
 		Location:      opts.Location,
 		Charset:       opts.Charset,
 		BaseTime:      opts.BaseTime,
-		Limits:        opts.Limits,
+		Limits:        multilineLimits,
 	}
 	bound := NewNormalizeBoundary(nopts)
 
 	inner := acquire.NewPipeline(led, key, wal)
 	inner.SetDurablePersist(opts.DurablePersist)
+	inner.SetCommittedPersist(opts.CommittedPersist)
+	if opts.DeferredDelivery != nil && opts.CommittedPersist == nil {
+		return nil, fmt.Errorf("pipeline: deferred delivery requires exact committed persistence")
+	}
 	if opts.Capacity != nil {
 		inner.SetCapacityBudget(*opts.Capacity)
 	}
@@ -219,18 +231,21 @@ func New(opts Options) (*Pipeline, error) {
 	}
 
 	p := &Pipeline{
-		mode:          mode,
-		key:           key,
-		led:           led,
-		wal:           wal,
-		inner:         inner,
-		bound:         bound,
-		hook:          opts.Delivery,
-		reclaimProof:  opts.ReclaimProof,
-		src:           src,
-		normalizeOpts: nopts,
-		reader:        opts.Reader,
-		useNormalize:  true,
+		mode:                mode,
+		key:                 key,
+		led:                 led,
+		wal:                 wal,
+		inner:               inner,
+		bound:               bound,
+		hook:                opts.Delivery,
+		reclaimProof:        opts.ReclaimProof,
+		contextReclaimProof: opts.ContextReclaimProof,
+		src:                 src,
+		normalizeOpts:       nopts,
+		reader:              opts.Reader,
+		useNormalize:        true,
+		deferredDelivery:    opts.DeferredDelivery,
+		contextDelivery:     opts.ContextDelivery,
 	}
 	if opts.Sampling.Enabled {
 		p.sampler = sampling.New(opts.Sampling)
@@ -243,19 +258,14 @@ func New(opts Options) (*Pipeline, error) {
 	}
 	p.imp = acquire.NewArchiveImporter(led, key)
 
-	if opts.Delivery != nil {
-		inner.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
-			res, err := p.hook.Deliver(events, replay)
-			if err != nil {
-				return 0, res.AckLost, err
-			}
-			p.deliveredCount += len(events)
-			return res.HTTPStatus, res.AckLost, nil
-		})
+	if opts.Delivery != nil || opts.ContextDelivery != nil {
+		inner.SetDeliverContext(p.deliverContext)
 	}
 	// #56：追加被拒时的**调度**接线（见 Options.AppendRejected）。
 	if opts.AppendRejected != nil {
 		inner.SetAppendRejectedHook(opts.AppendRejected)
+	} else {
+		inner.SetAppendRejectedHook(func() { p.fallbackDrain.Store(true) })
 	}
 
 	switch mode {
@@ -286,7 +296,37 @@ func New(opts Options) (*Pipeline, error) {
 			ParserVersion: src.ParserVersion,
 		})
 	}
+	if opts.ReadLimits != nil {
+		if err := p.SetReadLimits(*opts.ReadLimits); err != nil {
+			return nil, err
+		}
+	}
+	if opts.WALReserve != nil {
+		if err := wal.SetByteReservation(opts.WALReserve); err != nil {
+			return nil, err
+		}
+	}
 	return p, nil
+}
+
+// SetReadLimits 将同一读取前预算应用于活文件和有限归档。
+func (p *Pipeline) SetReadLimits(limits acquire.ReadLimits) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.imp.SetReadLimits(limits); err != nil {
+		return err
+	}
+	if p.tailer != nil {
+		return p.tailer.SetReadLimits(limits)
+	}
+	return nil
+}
+
+// CloseArchiveReaders 释放归档在途句柄；不改变账本或原物责任。
+func (p *Pipeline) CloseArchiveReaders() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.imp.Close()
 }
 
 // Mode 返回当前采集模式。
@@ -307,25 +347,132 @@ func (p *Pipeline) WAL() *acquire.WAL { return p.wal }
 // 为什么需要它：暂停期间 FileTailer 不再读取，采集轮便不再产生新批次；而投递、回收与
 // 恢复评估都挂在「有新批次」的路径上——不自愈就永远停摆（生产实证停 13+ 小时）。
 func (p *Pipeline) DeliverPending() (bool, error) {
+	return p.DeliverPendingContext(context.Background())
+}
+
+// AcquireDeliveryGuard转交唯一逻辑owner；采集入口不取此许可，因而不等待VL。
+func (p *Pipeline) AcquireDeliveryGuard(ctx context.Context) (context.Context, func(), error) {
+	return p.inner.AcquireDeliveryGuard(ctx)
+}
+func (p *Pipeline) OwnsDeliveryGuard(ctx context.Context) bool { return p.inner.OwnsDeliveryGuard(ctx) }
+func (p *Pipeline) HasPendingDelivery(ctx context.Context) (bool, error) {
+	return p.inner.HasPendingDelivery(ctx)
+}
+
+// DeliverPendingContext只取得逻辑投递许可；网络/验证/回收证明都不持采集p.mu。
+func (p *Pipeline) DeliverPendingContext(ctx context.Context) (bool, error) {
 	if p == nil || p.inner == nil {
 		return false, nil
 	}
-	// 与 Poll / Flush / ImportArchive 共用同一把 per-pipeline 锁（SAMPLING-1）：
-	// 本方法同样会走 emit→采样→WAL，且 `selfHealPausedSource` 与兜底环可能并发对同一源发起。
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	events, err := p.inner.DeliverPending()
+	ctx, release, err := p.AcquireDeliveryGuard(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	events, err := p.inner.DeliverPendingContext(ctx)
 	if err != nil || len(events) == 0 {
 		return false, err
 	}
-	// 与正常投递路径同构（见 ingest）：投递成功后登记恢复责任证明，否则回收门禁不会放行，
-	// 「积压回落 → 低水位 → 恢复采集」这一链在暂停源上永远打不开。
-	if p.DeliveryState() != logtypes.DeliveryUnknown && p.reclaimProof != nil {
-		if proofErr := p.reclaimProof(events); proofErr != nil {
+	if p.DeliveryState() == logtypes.DeliveryUnknown && p.deferredDelivery != nil {
+		return false, nil
+	}
+	if p.DeliveryState() != logtypes.DeliveryUnknown {
+		if proofErr := p.reclaimContext(ctx, events); proofErr != nil {
 			return true, proofErr
 		}
 	}
 	return true, nil
+}
+
+func (p *Pipeline) deliverContext(ctx context.Context, events []logtypes.Event, replay bool) (int, bool, error) {
+	p.mu.Lock()
+	hook, contextual := p.hook, p.contextDelivery
+	p.mu.Unlock()
+	var res DeliveryResult
+	var err error
+	if contextual != nil {
+		res, err = contextual(ctx, events, replay)
+	} else if hook != nil {
+		res, err = hook.Deliver(events, replay)
+	}
+	if err == nil {
+		p.deliveredCount.Add(int64(len(events)))
+	}
+	return res.HTTPStatus, res.AckLost, err
+}
+
+// finishAcquisition是所有采集入口唯一的锁外提交点。dispatch永不执行旧投递成功尾段。
+func (p *Pipeline) finishAcquisition(outErr *error) {
+	p.finishAcquisitionContext(context.Background(), outErr)
+}
+
+func (p *Pipeline) finishAcquisitionContext(ctx context.Context, outErr *error) {
+	events := p.acquired
+	p.acquired = nil
+	p.mu.Unlock()
+	defer func() {
+		if p.fallbackDrain.Swap(false) {
+			if p.deferredDelivery != nil {
+				for _, entry := range p.wal.Snapshot() {
+					if entry.Durable {
+						p.deferredDelivery()
+						break
+					}
+				}
+				return
+			}
+			if _, err := p.DeliverPendingContext(ctx); err != nil {
+				*outErr = errors.Join(*outErr, err)
+			}
+		}
+	}()
+	if len(events) == 0 {
+		return
+	}
+	if err := p.finishEvents(ctx, events); err != nil {
+		*outErr = errors.Join(*outErr, err)
+	}
+}
+
+func (p *Pipeline) finishEvents(ctx context.Context, events []logtypes.Event) error {
+	qualified, err := p.inner.CommitAndQualify(ctx, events)
+	if err != nil {
+		return err
+	}
+	if p.deferredDelivery != nil {
+		p.deferredDelivery()
+		return nil
+	}
+	ctx, release, err := p.AcquireDeliveryGuard(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := p.inner.DeliverQualified(ctx, qualified); err != nil {
+		return err
+	}
+	if p.DeliveryState() != logtypes.DeliveryUnknown {
+		return p.reclaimContext(ctx, events)
+	}
+	return nil
+}
+
+// reclaimContext在采集锁外仅选一个hook；旧nil/default调用与旧hook语义保持不变。
+func (p *Pipeline) reclaimContext(ctx context.Context, events []logtypes.Event) error {
+	if p.contextReclaimProof != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return p.contextReclaimProof(ctx, events)
+	}
+	if p.reclaimProof != nil {
+		return p.reclaimProof(events)
+	}
+	return nil
+}
+
+func (p *Pipeline) RecordDeliveryResult(ctx context.Context, events []logtypes.Event, result DeliveryResult) error {
+	return p.inner.RecordDeliveryResult(ctx, events, result.HTTPStatus, result.AckLost)
 }
 
 // EvaluateResume 在不产生投递的前提下，按滞回条件评估一次采集恢复（返回是否已恢复）。
@@ -347,10 +494,14 @@ func (p *Pipeline) FileTailer() *acquire.FileTailer { return p.tailer }
 // 只保留计数而不保留事件内容：后者会随会话内总事件数线性增长却无人读取内容
 // （FR-484 阶段5 实测 64 源 ≈36MB）。若将来确有读取事件内容的需求，应先明确
 // 保留窗口与释放时机，不要恢复无界切片。
-func (p *Pipeline) DeliveredCount() int { return p.deliveredCount }
+func (p *Pipeline) DeliveredCount() int { return int(p.deliveredCount.Load()) }
 
 // EventsEmitted 返回 normalize 边界累计事件数。
-func (p *Pipeline) EventsEmitted() int { return p.bound.EventsEmitted() }
+func (p *Pipeline) EventsEmitted() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.bound.EventsEmitted()
+}
 
 // SetRotateTarget 更新轮转目标。
 func (p *Pipeline) SetRotateTarget(path string) {
@@ -400,12 +551,12 @@ func (p *Pipeline) RebaseCurrentSegment(pos uint64) error {
 // 为什么仍必须在此闭合（而不是把缓冲区留到新文件）：轮转后的恢复责任靠 ConfirmRotationCoverage
 // 把 covered 推到 Durable，gz 导入按 `startFrom - segmentStart` 跳过已读前缀；未闭合的 pending
 // 行不在 Durable 里，留着它会让 gz 重导入**重喂同一批行**，把堆栈行重复拼进事件。
-func (p *Pipeline) FlushClosedSegment() ([]logtypes.Event, error) {
+func (p *Pipeline) FlushClosedSegment() (batch []logtypes.Event, errOut error) {
 	if p == nil || p.bound == nil {
 		return nil, nil
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer p.finishAcquisition(&errOut)
 	p.bound.FlushUnclosed(normalize.UnclosedReasonCrossRotation)
 	events := p.bound.DrainEvents()
 	if len(events) == 0 {
@@ -435,12 +586,12 @@ func (p *Pipeline) ConfirmRotationCoverage() error {
 // 超时强制闭合把它落成一条显式 PARTIAL 事件并推进 durable，链路重新可推进。
 //
 // 返回本批产出的事件（已过采样收口与 WAL/账本），可直接投递；无可冲刷时返回 nil。
-func (p *Pipeline) FlushStaleMultiline(now time.Time, timeout time.Duration) ([]logtypes.Event, error) {
+func (p *Pipeline) FlushStaleMultiline(now time.Time, timeout time.Duration) (batch []logtypes.Event, errOut error) {
 	if p == nil || p.bound == nil || timeout <= 0 {
 		return nil, nil
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer p.finishAcquisition(&errOut)
 	events, ok := p.bound.FlushStaleUnclosed(now, timeout, normalize.UnclosedReasonIdle)
 	if !ok || len(events) == 0 {
 		return nil, nil
@@ -450,9 +601,9 @@ func (p *Pipeline) FlushStaleMultiline(now time.Time, timeout time.Duration) ([]
 
 // Poll 读取增量：FILE_PRIMARY tail / STDIO 行流 → normalize 事件 → WAL → delivery。
 // 返回本批已入 WAL 的完整事件（不含仍在缓冲的半条）。
-func (p *Pipeline) Poll() ([]logtypes.Event, error) {
+func (p *Pipeline) Poll() (batch []logtypes.Event, errOut error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer p.finishAcquisition(&errOut)
 	return p.pollLocked()
 }
 
@@ -517,9 +668,14 @@ func (p *Pipeline) pollStdio() ([]logtypes.Event, error) {
 }
 
 // Flush 冲刷多行半条事件（崩溃/轮转前）。显式 PARTIAL/OK 状态，不静默丢。
-func (p *Pipeline) Flush() ([]logtypes.Event, error) {
+func (p *Pipeline) Flush() (batch []logtypes.Event, errOut error) {
+	return p.FlushContext(context.Background())
+}
+
+// FlushContext允许独立同步组合在关停的当前调用栈内完成既有冲刷；生产outbox仍只本地耐久。
+func (p *Pipeline) FlushContext(ctx context.Context) (batch []logtypes.Event, errOut error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer p.finishAcquisitionContext(ctx, &errOut)
 	return p.flushLocked()
 }
 
@@ -527,6 +683,9 @@ func (p *Pipeline) Flush() ([]logtypes.Event, error) {
 func (p *Pipeline) flushLocked() ([]logtypes.Event, error) {
 	// tailer.FlushPartial → boundary.FlushPartial → normalize.FlushPartial。
 	if p.tailer != nil {
+		if _, err := p.tailer.FlushPhysicalEOF(); err != nil {
+			return nil, err
+		}
 		_, _, _ = p.tailer.FlushPartial()
 	} else {
 		_, _, _ = p.bound.FlushPartial()
@@ -542,9 +701,9 @@ func (p *Pipeline) flushLocked() ([]logtypes.Event, error) {
 //
 // 两段必须在**同一段临界区**内完成（SAMPLING-1）：否则「Poll 之后、Flush 之前」正是
 // `Stop` / 预备切换的 `Flush` 能插进来的窗口，一次 Drain 会与它交错两次。
-func (p *Pipeline) Drain() ([]logtypes.Event, error) {
+func (p *Pipeline) Drain() (batch []logtypes.Event, errOut error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer p.finishAcquisition(&errOut)
 	polled, err := p.pollLocked()
 	flushed, ferr := p.flushLocked()
 	out := append(append([]logtypes.Event{}, polled...), flushed...)
@@ -632,18 +791,11 @@ func (p *Pipeline) sampleEvents(events []logtypes.Event) []logtypes.Event {
 }
 
 // ingest WAL append → Commit → DeliveryHook。容量/缺口由 acquire.Pipeline 处理。
-func (p *Pipeline) ingest(events []logtypes.Event) error {
-	if err := p.inner.Ingest(events); err != nil {
+func (p *Pipeline) ingest(events []logtypes.Event, reservations ...*acquire.AppendReservation) error {
+	if err := p.inner.AppendEvents(events, reservations...); err != nil {
 		return err
 	}
-	if p.DeliveryState() == logtypes.DeliveryUnknown {
-		// An UNKNOWN request cannot be reclaimed from HTTP status alone. The
-		// recovery path must first reconcile it from a durable projection.
-		return nil
-	}
-	if p.reclaimProof != nil {
-		return p.reclaimProof(events)
-	}
+	p.acquired = append(p.acquired, events...)
 	return nil
 }
 
@@ -759,6 +911,14 @@ func (p *Pipeline) archiveImportBatchSize() int {
 	return size
 }
 
+// AssessArchive 与实际导入共用三态裁定，并把未知槽位写入稳定可见的隔离状态。
+// 发现层不能仅检查 Import=false 后隐藏未知内容。
+func (p *Pipeline) AssessArchive(path string) (acquire.ReimportDecision, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.imp.AssessArchive(path)
+}
+
 // ImportArchive 导入一个归档（gzip 压缩归档或纯文本轮转归档）；已关联轮转时跳过整包，禁止双计。
 //
 // 形态由**文件头**判定后分流（见下方 import 调用处的说明），两种形态共用本方法的其余全部
@@ -789,12 +949,23 @@ func (p *Pipeline) archiveImportBatchSize() int {
 //   - 续读位置来自账本分段（可持久化），故进程重启后仍从断点续读，不重复读已消费前缀；
 //   - 因此「丢」不可能发生（每段要么已落库、要么仍在待导入集合里），
 //     而「重」由既有 event_id + 位置账本幂等收敛（本修复不新增判据）。
-func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
+func (p *Pipeline) ImportArchive(path string) (imported *acquire.ImportResult, errOut error) {
 	// 与 Poll / Flush 共用同一把 per-pipeline 锁（SAMPLING-1）：本方法会走
 	// `sampleEvents`（`Sampler.Process` → `s.sigs`）与 `ingest`（WAL/投递/回收证明），
 	// 而归档导入入口（手动 + 定时扫描）与在飞采集 worker 是两条独立 goroutine。
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer p.finishArchiveAcquisition(path, &imported, &errOut)
+	var acceptedThrough uint64
+	hadPrefix := false
+	if entry := p.led.Get(p.key); entry != nil {
+		for _, segment := range entry.Segments {
+			if segment.Path == path {
+				acceptedThrough = segment.EndPos
+				hadPrefix = true
+				break
+			}
+		}
+	}
 	// 先给回收一次机会，再评估本轮余量。
 	//
 	// 为什么这一步不能省（现场「不自愈」形态的机制本体）：`acquire.Pipeline.Ingest` 在每次
@@ -885,32 +1056,87 @@ func (p *Pipeline) ImportArchive(path string) (*acquire.ImportResult, error) {
 	// 而 Events 才是「实际落库的那批」。两者口径不同不能混用，否则现场无法判断归档是否完整。
 	result.ImportedCount = len(events)
 
-	// 采样收口仍作用于放行的那批（整批一次，口径不随切批漂移）。
-	sampled := p.sampleEvents(events)
-	result.Events = sampled
-
-	var ingestErr error
-	if len(sampled) > 0 {
-		// 逐批走完整链路：WAL 追加 → Commit(durable) → 投递 → 结果落账。
-		ingestErr = p.ingest(sampled)
+	var cursor ledger.Segment
+	cursorFound := false
+	if entry := p.led.Get(p.key); entry != nil {
+		for _, segment := range entry.Segments {
+			if segment.Path == path {
+				cursor = segment
+				cursorFound = true
+				break
+			}
+		}
+	}
+	// 在消耗Burst/Budget/summary及签名淘汰状态之前原子预留追加窗；发布lease不能在检查后抢入。
+	// 锁序仍为采集p.mu→WAL短元数据锁，reservation只跨采样/Append，不跨Commit、journal或网络。
+	reservation, ingestErr := p.wal.ReserveAppend(events)
+	if ingestErr == nil {
+		defer reservation.Release()
+		sampled := p.sampleEvents(events)
+		result.Events = sampled
+		if len(sampled) > 0 {
+			ingestErr = p.ingest(sampled, reservation)
+		}
+		reservation.Release()
+	}
+	if errors.Is(ingestErr, acquire.ErrWALWindowBusy) {
+		if !cursorFound || len(current.Events) == 0 {
+			return &result, errors.Join(ingestErr, errors.New("pipeline: 缺少精确归档回退凭据，保持可见未接收责任"))
+		}
+		if !hadPrefix {
+			acceptedThrough = cursor.StartPos
+		}
+		from := current.Events[0].Record.Start
+		gapErr := p.led.RecordGap(p.key, from, current.Events[len(current.Events)-1].Record.End, ledger.GapReasonAppendRejected, ingestErr.Error())
+		rollbackErr := p.imp.RewindUnaccepted(cursor, from, acceptedThrough)
+		result.Events = nil
+		result.ImportedCount = 0
+		result.Partial = true
+		return &result, errors.Join(ingestErr, gapErr, rollbackErr)
 	}
 	if ingestErr != nil {
 		// 本批未落库：如实上报（不伪装成成功），且**不置 Imported** ⇒ 下一轮重来。
 		return &result, ingestErr
 	}
 
-	// 「已导入」只在**归档真的读完**（Partial=false）且本批已 durable 覆盖时才置位。
-	// 这是与「读了一半就算导入完成」最要紧的区别：后者会把未读到的尾部静默丢掉。
-	if !result.Partial {
-		pos, ok := p.Positions()
-		if ok && len(sampled) > 0 && pos.Durable >= sampled[len(sampled)-1].Record.End {
-			if markErr := p.imp.MarkImported(path, result.ArchiveObjectID,
-				sampled[0].Record.Start, sampled[len(sampled)-1].Record.End); markErr != nil {
-				return &result, markErr
+	// Imported由锁外真实耐久完成后的复核点登记，不能只信内存Durable。
+	return &result, nil
+}
+
+func (p *Pipeline) finishArchiveAcquisition(path string, imported **acquire.ImportResult, outErr *error) {
+	var expected ledger.Segment
+	found := false
+	if entry := p.led.Get(p.key); entry != nil {
+		for _, segment := range entry.Segments {
+			if segment.Path == path {
+				expected, found = segment, true
+				break
 			}
 		}
 	}
-	return &result, nil
+	p.finishAcquisition(outErr)
+	result := *imported
+	if *outErr != nil || result == nil || result.Skipped || result.Partial || len(result.Events) == 0 || !found {
+		return
+	}
+	// 锁序仅p.mu→ledger叶子；复核归档对象与读取游标，禁止旧EOF给后来替换/续读的归档授证。
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry := p.led.Get(p.key)
+	if entry == nil {
+		return
+	}
+	for _, current := range entry.Segments {
+		if current.Path != path {
+			continue
+		}
+		if current.ArchiveObjectID != expected.ArchiveObjectID || current.StartPos != expected.StartPos || current.EndPos != expected.EndPos || current.IdentitySHA256 != expected.IdentitySHA256 || current.IdentityBytes != expected.IdentityBytes || current.ObservedSize != expected.ObservedSize || current.ObservedModNano != expected.ObservedModNano {
+			*outErr = fmt.Errorf("pipeline: archive changed while durable commit was in flight")
+			return
+		}
+		*outErr = p.imp.MarkImported(path, result.ArchiveObjectID, result.Events[0].Record.Start, result.Events[len(result.Events)-1].Record.End)
+		return
+	}
 }
 
 func archiveUTCDay(path string) (time.Time, error) {
@@ -971,18 +1197,11 @@ func (p *Pipeline) archiveBaseDay(path string) (time.Time, bool) {
 
 // SetDelivery 运行时替换投递钩子。
 func (p *Pipeline) SetDelivery(h DeliveryHook) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.hook = h
-	p.inner.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
-		if h == nil {
-			return 0, false, nil
-		}
-		res, err := h.Deliver(events, replay)
-		if err != nil {
-			return 0, res.AckLost, err
-		}
-		p.deliveredCount += len(events)
-		return res.HTTPStatus, res.AckLost, nil
-	})
+	p.contextDelivery = nil
+	p.inner.SetDeliverContext(p.deliverContext)
 }
 
 // SuppressedReplayDrains 转发 acquire 层的「冗余整窗重投抑制」读数（#60-Z1）。
@@ -992,6 +1211,11 @@ func (p *Pipeline) SuppressedReplayDrains() int64 { return p.inner.SuppressedRep
 // HTTP 2xx / REQUEST_DONE 单独不得回收；需恢复分段责任已转移且无 hold。
 func (p *Pipeline) TryReclaim() (uint64, error) {
 	return p.wal.TryReclaim()
+}
+
+// TryReclaimThrough把当前发布证明的上界传给WAL原子正文闸，不能由旧宽分段越界。
+func (p *Pipeline) TryReclaimThrough(through uint64) (uint64, error) {
+	return p.wal.TryReclaimThrough(through)
 }
 
 // SelfFailureReasons 转发**最近自愈失败原因**（新→旧、有界 ✓；见 acquire.noteSelfFailure ✓）。
@@ -1088,7 +1312,7 @@ func (p *Pipeline) DeliveryState() logtypes.DeliveryState {
 }
 
 // Stats 返回 normalize 统计（事件数与行数分列）。
-func (p *Pipeline) Stats() normalize.Stats { return p.bound.Stats() }
+func (p *Pipeline) Stats() normalize.Stats { p.mu.Lock(); defer p.mu.Unlock(); return p.bound.Stats() }
 
 // EnsurePathFile 便捷：校验 FILE_PRIMARY 路径存在。
 func EnsurePathFile(path string) error {

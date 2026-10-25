@@ -97,8 +97,13 @@ func TestRebuildSourceBuildRunsOutsideMutex(t *testing.T) {
 	require.Empty(t, rebuilt.WALRefs, "段未覆盖（eventsStored=false）时不得把条目降级为引用")
 	require.Len(t, rebuilt.WAL, len(entries), "段未覆盖时必须全部内联保存（绝不丢正文）")
 
-	// B1a 契约：段已覆盖的条目只写引用，其余仍内联，且事件体已在段时不得写回内联切片。
+	// 最大末端本身不是正文证据：没有实际段时即使声明水位也必须保留全部正文。
 	task.eventsStored, task.through = true, entries[0].Event.Record.End
+	rebuilt = m.buildRebuiltSourceOutsideLock(task)
+	require.Empty(t, rebuilt.WALRefs)
+	require.Len(t, rebuilt.WAL, len(entries))
+	// 正向前提必须真实落段并fsync，不能只手填maxEnd伪造正文可取证明。
+	require.NoError(t, m.appendEvents(key, []logtypes.Event{entries[0].Event}))
 	rebuilt = m.buildRebuiltSourceOutsideLock(task)
 	require.Len(t, rebuilt.WALRefs, 1, "已被段覆盖的条目必须降级为引用")
 	require.Len(t, rebuilt.WAL, len(entries)-1, "其余条目必须内联保存")

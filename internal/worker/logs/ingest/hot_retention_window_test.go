@@ -589,10 +589,12 @@ func TestDeliverEvidenceFaceExcludesUnwrittenDays(t *testing.T) {
 	gapsBefore := pipe.Ledger().UnresolvedGapCount(pipe.Key())
 	require.Equal(t, 1, gapsBefore, "夹具前提：缺口必须存在且未解决")
 
-	_, err = m.deliver(source, events, false)
-	require.NoError(t, err, "整窗重发必须成功（超窗口天被跳过，其余天写入）")
+	result, err := m.deliver(source, events, false)
+	require.Error(t, err, "本地重复但当前VL全部缺失时，必须拒绝虚假204并交预算化恢复")
+	require.NotEqual(t, 204, result.HTTPStatus)
+	require.Positive(t, m.RebuildStats().Scheduled)
 
-	// 核心断言：超窗口天从未写入 ⇒ 它的缺口必须仍然可见。
+	// 核心断言：未实际写入的窗口不能由本地正文消解，超窗口天也不例外。
 	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
 		"窗口内天若在 VL 查不到，其缺口绝不能被「本地段已有」的证据面消解")
 }
@@ -672,10 +674,16 @@ func TestEvidenceFaceEqualsActuallyWrittenEvents(t *testing.T) {
 	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
 		"窗口内天若在 VL 查不到，其缺口绝不能被「本地段已有」的证据面消解")
 
-	// ③ 反证：若误用权威全量做证据（修复前的行为），该缺口就会被消解 —— 证明本断言咬得住。
+	// ③ 下游现在还会独立核对当前VL；即使调用方误传权威全量，也不能洗掉未写区间。
 	m.resolveGapsLandedByDelivery(source, events)
-	require.Equal(t, 0, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
-		"反证：用权威全量做证据时缺口确实会被消解，说明本用例能区分两种证据面")
+	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()), "权威正文不是逐字段可见性凭据")
+	// ④ 真正补回该天并发布后才允许消解，避免把保守拒绝实现成永远不解。
+	m.hotRetention = 0
+	_, restored, err := m.writeProjectionPlan(source, events, "projection-evidence-2", projectionWritePlan{Write: events[:1]})
+	require.NoError(t, err)
+	require.Len(t, restored, 1)
+	m.resolveGapsLandedByDelivery(source, restored)
+	require.Zero(t, pipe.Ledger().UnresolvedGapCount(pipe.Key()), "真实写入、逐字段校验并发布后才取得消解资格")
 }
 
 // TestDeliverEvidenceFaceResolvesWhenDataIsActuallyInVL 是上一条用例的**正向配对**。

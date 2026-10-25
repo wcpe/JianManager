@@ -169,23 +169,33 @@ func TestWriteProjectionDayReplacePathFiltersInsertions(t *testing.T) {
 
 // TestWriteProjectionDayTailPathUnaffected —— ② 接线：增量尾部不受影响。
 //
-// 场景：tailPlanned=true（增量尾部快路径）⇒ 不过滤，本批逐条照写。
-// 用一个**全新的**代次名（尾部路径的正常形态：代次由 nextFreeProjectionGeneration 新分配）。
+// 场景：tailPlanned=true（增量尾部快路径）⇒ 不做写前过滤，真实新尾逐条照写。
+// 新代次和新事件身份都必须真实独立；把旧已发布事件复制到新代不是合法的增量尾部。
 func TestWriteProjectionDayTailPathUnaffected(t *testing.T) {
 	m, _, source, events, fixture := newWriteIdempotencyFixture(t)
 	daySource := daySourceFor(t, source, events)
 
+	var start uint64
+	for _, event := range events {
+		start = max(start, event.Record.End)
+	}
 	dayEvents := make([]logtypes.Event, 0, len(events))
 	for _, event := range events {
 		if day, err := eventUTCDay(source, event); err == nil && day == daySource.UTCDay {
-			dayEvents = append(dayEvents, event)
+			end := start + event.Record.End - event.Record.Start
+			dayEvents = append(dayEvents, logtypes.BuildEvent(event.Source, logtypes.RecordRange{Start: start, End: end},
+				event.EventTimeUTC, event.IngestTimeUTC, event.Level, event.Stream, event.Message+"：真实新尾部"))
+			start = end
 		}
 	}
 	require.NotEmpty(t, dayEvents)
 
 	insertsBefore := fixture.insertCount()
+	queriesBefore := fixture.contentQueryCount()
 	_, err := m.writeProjectionDay(daySource, dayEvents, dayEvents, "projection-tail-fresh", nil, false, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, len(dayEvents), payloadEventCount(fixture.payloadsSince(insertsBefore)),
 		"增量尾部不走过滤：本批就是新数据，须逐条照写")
+	require.Equal(t, queriesBefore+1, fixture.contentQueryCount(), "只做一次逐字段并集校验，不能新增写前去重查询")
+	require.Len(t, m.landedVisibleInVL(daySource, dayEvents), len(dayEvents), "新尾必须在真实PP中恰好可见一次")
 }

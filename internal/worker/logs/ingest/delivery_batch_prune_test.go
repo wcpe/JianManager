@@ -308,6 +308,9 @@ func TestComparisonStateNormalizesPruneProgressOnly(t *testing.T) {
 		{Start: 500, End: 800, State: logtypes.DeliveryReplayRequired},
 	})
 	pruned := entryWith([]ledger.DeliveryBatch{})
+	// 实际裁剪前保全独立请求结果；删批次不能顺带删掉确认或未知证据。
+	pruned.RequestDoneRanges = ledger.RequestDoneRangesOf(&full)
+	pruned.DeliveryEvidence = ledger.DeliveryEvidenceOf(&full)
 
 	require.Equal(t,
 		comparisonState(stateWith(pruned)).Sources["node:1/g1"].Ledger,

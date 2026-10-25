@@ -69,14 +69,15 @@ func newLaggingSourceFixture(t *testing.T) laggingFixture {
 	require.NotNil(t, p)
 	identity := logtypes.SourceIdentity{LogSourceID: src.LogSourceID, SourceGeneration: src.SourceGeneration, ParserVersion: "v1"}
 	for i := 0; i < 5; i++ {
-		start := uint64(i * 5)
-		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: start + 4},
+		start := uint64(max(0, i*5-1))
+		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: uint64(i*5 + 4)},
 			"2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", "lagging")
 		require.NoError(t, p.WAL().Append(ev))
 	}
 	require.NoError(t, p.WAL().Commit())
 	// 投递水位 = 24（区间 [0,24] 连续 ✓）：这是补段的上界，不越界未来 ✓。
 	require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: 0, EndPos: 24, HTTPStatus: 200}))
+	primeConfirmedWALProjection(t, m, src, p, 24)
 	m.SetSelfHealInterval(time.Nanosecond)
 	// 投递面**必失败**（确定性桩）：现场"没人能走到投递确认面"的形态 ✓。
 	p.SetDelivery(pipeline.FuncHook(func([]logtypes.Event, bool) (pipeline.DeliveryResult, error) {
@@ -231,18 +232,16 @@ func newDeliveryBacklogFixture(t *testing.T) laggingFixture {
 	require.NotNil(t, p)
 	identity := logtypes.SourceIdentity{LogSourceID: src.LogSourceID, SourceGeneration: src.SourceGeneration, ParserVersion: "v1"}
 	for i := 0; i < 5; i++ {
-		start := uint64(i * 5)
-		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: start + 4},
+		start := uint64(max(0, i*5-1))
+		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: uint64(i*5 + 4)},
 			"2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", "delivery-backlog")
 		require.NoError(t, p.WAL().Append(ev))
 	}
 	require.NoError(t, p.WAL().Commit())
 	// 只确认前缀 [0,9] ⇒ read=24、delivery=9（投递欠账 15 ✓，与现场同形：reclaim 追平 delivery ✓）。
 	require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: 0, EndPos: 9, HTTPStatus: 200}))
-	// 投递桩**成功**（300 ⇒ 调用方按 2xx 记账 ✓）：本用例考"能否被驱动到投递面"，不考 ingest 落库 ✓。
-	p.SetDelivery(pipeline.FuncHook(func([]logtypes.Event, bool) (pipeline.DeliveryResult, error) {
-		return pipeline.DeliveryResult{HTTPStatus: 200}, nil
-	}))
+	primeConfirmedWALProjection(t, m, src, p, 9)
+	// 保留真实Manager投递钩子，后续探测必须真正落库，不能用裸200代替可见副本。
 	// 先把**回收**欠账清零（补段 + 推进）⇒ 本用例只考 ⑥ 的投递步（⑤ 的回收分支在此恒不触发 ✓）。
 	require.NoError(t, m.repairStalledReclaim(p, src))
 	_, _ = p.TryReclaim()

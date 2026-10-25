@@ -1,0 +1,241 @@
+package ingest
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
+)
+
+// 用生产映射与真实SQLite替换快照后再恢复采集器，避免只验证结构体相等。
+func indexReloadAcquire(t *testing.T, path string, key ledger.SourceKey, led *ledger.Ledger, wal *acquire.WAL) (*ledger.Ledger, *acquire.WAL) {
+	t.Helper()
+	m := &Manager{}
+	rows, err := m.stateToIndexState(&persistedState{Sources: map[string]persistedSource{key.String(): {Ledger: led.Snapshot(), WAL: wal.Snapshot()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := stateindex.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		stats, err := s.Apply(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !stats.Incomplete {
+			break
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = stateindex.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := indexStateToState(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored := ledger.New()
+	if err := restored.Restore(saved.Sources[key.String()].Ledger); err != nil {
+		t.Fatal(err)
+	}
+	restoredWAL := acquire.NewWAL(restored, key)
+	if err := restoredWAL.Restore(saved.Sources[key.String()].WAL); err != nil {
+		t.Fatal(err)
+	}
+	return restored, restoredWAL
+}
+
+func TestIndexOldPhysicalMappingRemainsUnknownAcrossThreePolls(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "latest.log")
+	if err := os.WriteFile(path, []byte("surviving-durable-prefix\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	key := ledger.SourceKey{LogSourceID: "sqlite-unknown-physical", SourceGeneration: "g1"}
+	led := ledger.New()
+	wal := acquire.NewWAL(led, key)
+	idBytes, idSHA, err := acquire.ContentIdentity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := led.AdvanceRead(key, 1530); err != nil {
+		t.Fatal(err)
+	}
+	if err := led.AdvanceDurable(key, 1530); err != nil {
+		t.Fatal(err)
+	}
+	if err := led.RegisterSegment(key, ledger.Segment{Path: path, Kind: ledger.SegmentLive, StartPos: 1530, EndPos: 1530, IdentityBytes: idBytes, IdentitySHA256: idSHA}); err != nil {
+		t.Fatal(err)
+	}
+	for round := 1; round <= 3; round++ {
+		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led, wal)
+		entry := led.Get(key)
+		if entry.Segments[0].PhysicalMappingKnown {
+			t.Fatalf("第%d次重开替旧数据伪造物理映射", round)
+		}
+		if _, ok := acquire.ResolveContentAnchor(entry, path, int64(len("surviving-durable-prefix\n")), 1530); ok {
+			t.Fatalf("第%d次重开把未知映射当内容锚", round)
+		}
+		tailer := acquire.NewFileTailer(led, key, path, wal, nil)
+		if events, err := tailer.Poll(); err == nil || len(events) != 0 {
+			t.Fatalf("第%d次重开未背压或重造事件ID：%+v %v", round, events, err)
+		}
+		if entry := led.Get(key); entry.Segments[0].PhysicalMappingKnown || len(entry.Gaps) != 1 {
+			t.Fatalf("未知物理映射没有保持稳定可见：%+v", entry)
+		}
+	}
+}
+
+func TestIndexTruncatedPhysicalMappingActuallyPollsAfterThreeRestarts(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "latest.log")
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, fmt.Sprintf("[00:00:%02d] line-%02d padding padding padding padding", i, i))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	key := ledger.SourceKey{LogSourceID: "sqlite-truncation", SourceGeneration: "g1"}
+	led := ledger.New()
+	wal := acquire.NewWAL(led, key)
+	tailer := acquire.NewFileTailer(led, key, path, wal, acquire.NewLineHook())
+	events, err := tailer.Poll()
+	if err != nil || len(events) != 30 {
+		t.Fatalf("初读：%d %v", len(events), err)
+	}
+	if err := wal.Append(events...); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	originalEnd := tailer.LogicalPos()
+	prefix := strings.Join(lines[:5], "\n") + "\n"
+	if err := os.Truncate(path, int64(len(prefix))); err != nil {
+		t.Fatal(err)
+	}
+	if rotated, err := tailer.PrepareRotation(); err != nil || rotated {
+		t.Fatalf("纯截断被判轮转：%v %v", rotated, err)
+	}
+	if events, err := tailer.Poll(); err != nil || len(events) != 0 {
+		t.Fatalf("截断残留重读：%d %v", len(events), err)
+	}
+	for round := 1; round <= 3; round++ {
+		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led, wal)
+		tailer = acquire.NewFileTailer(led, key, path, wal, nil)
+		if events, err := tailer.Poll(); err != nil || len(events) != 0 {
+			t.Fatalf("第%d次SQLite重启残留前缀被重投：%d %v", round, len(events), err)
+		}
+		if tailer.LogicalPos() != originalEnd {
+			t.Fatalf("第%d次SQLite重启逻辑EOF变化", round)
+		}
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("fresh\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	events, err = tailer.Poll()
+	if err != nil || len(events) != 1 || events[0].Record.Start != originalEnd {
+		t.Fatalf("追加没有沿用原逻辑EOF：%+v %v", events, err)
+	}
+}
+
+func TestIndexRotatedConfirmedFingerprintActuallyPollsAfterThreeRestarts(t *testing.T) {
+	root := t.TempDir()
+	live, rotated := filepath.Join(root, "latest.log"), filepath.Join(root, "latest.log.1")
+	old, current := strings.Repeat("old-old-old\n", 70), strings.Repeat("new-new-new\n", 140)
+	if err := os.WriteFile(live, []byte(old), 0600); err != nil {
+		t.Fatal(err)
+	}
+	key := ledger.SourceKey{LogSourceID: "sqlite-old-fingerprint", SourceGeneration: "g1"}
+	led := ledger.New()
+	wal := acquire.NewWAL(led, key)
+	tailer := acquire.NewFileTailer(led, key, live, wal, nil)
+	tailer.SetRotateTarget(rotated)
+	events, err := tailer.Poll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Append(events...); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := led.RecordDelivery(key, 0, uint64(len(old)), "REQUEST_DONE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tailer.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(live, rotated); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(live, []byte(current), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tailer.PrepareRotation(); err != nil || !changed {
+		t.Fatalf("真实轮转未识别：%v %v", changed, err)
+	}
+	events, err = tailer.Poll()
+	if err != nil || len(events) != 140 {
+		t.Fatalf("新live未完整采集：%d %v", len(events), err)
+	}
+	if err := wal.Append(events...); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	for round := 1; round <= 3; round++ {
+		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led, wal)
+		tailer = acquire.NewFileTailer(led, key, live, wal, nil)
+		f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString("fresh-after-restart\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		events, err = tailer.Poll()
+		if err != nil || len(events) != 1 {
+			t.Fatalf("第%d次SQLite重启把旧段指纹套新live：%d %v", round, len(events), err)
+		}
+		if led.UnresolvedGapCount(key) != 0 {
+			t.Fatalf("第%d次SQLite重启产生假FILE_REWRITTEN：%+v", round, led.Get(key).Gaps)
+		}
+		if err := wal.Append(events...); err != nil {
+			t.Fatal(err)
+		}
+		if err := wal.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

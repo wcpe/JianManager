@@ -1,15 +1,14 @@
 package acquire
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -53,6 +52,9 @@ type ArchiveImporter struct {
 	backfilled int
 	// importedEvents 累计导入事件数。
 	importedEvents int
+	readLimits     ReadLimits
+	hashState      *archiveHashState
+	readSession    *archiveReadSession
 }
 
 // NewArchiveImporter 创建导入器。
@@ -63,7 +65,7 @@ func NewArchiveImporter(led *ledger.Ledger, key ledger.SourceKey) *ArchiveImport
 		ParserVersion:    "acquire-v1",
 	}
 	led.Ensure(key, identity)
-	return &ArchiveImporter{led: led, key: key, parser: identity}
+	return &ArchiveImporter{led: led, key: key, parser: identity, readLimits: DefaultReadLimits()}
 }
 
 // SetOwnerRegistry 注入跨代次归属注册表（见 ArchiveImporter.lookupOwner）。
@@ -77,6 +79,53 @@ func (a *ArchiveImporter) SetBackfill(fn func(ownerGeneration, archivePath, obje
 	a.backfill = fn
 }
 
+// AssessArchive 是发现与执行共用的三态入口；未知槽位稳定登记可见缺口且保留原物及旧身份。
+// 未知物理内容没有可信逻辑区间，因此只在旧段末端登记零宽诊断，不虚构字节归属。
+func (a *ArchiveImporter) AssessArchive(path string) (ReimportDecision, error) {
+	entry := a.led.Get(a.key)
+	var segment *ledger.Segment
+	if entry != nil {
+		for i := range entry.Segments {
+			if entry.Segments[i].Path == path {
+				copy := entry.Segments[i]
+				segment = &copy
+				break
+			}
+		}
+	}
+	decision := DecideArchiveReimport(entry, segment)
+	if decision.Disposition != ArchiveUnknown || segment == nil {
+		return decision, nil
+	}
+	window, sum, identityErr := ContentIdentity(path)
+	observedSize, observedMod := int64(-1), int64(0)
+	if info, err := os.Stat(path); err == nil {
+		observedSize, observedMod = info.Size(), info.ModTime().UnixNano()
+	}
+	detail := fmt.Sprintf("%s: path=%q observed_size=%d identity_bytes=%d identity_sha256=%s identity_error=%v; %s", ArchiveUnknownReason, filepath.Clean(path), observedSize, window, sum, identityErr, decision.Reason)
+	alreadyRecorded := false
+	for _, gap := range entry.Gaps {
+		if gap.Reason == ArchiveUnknownReason && gap.Detail == detail {
+			alreadyRecorded = true
+			break
+		}
+	}
+	if !alreadyRecorded {
+		if err := a.led.RecordGap(a.key, segment.EndPos, segment.EndPos, ArchiveUnknownReason, detail); err != nil {
+			return decision, err
+		}
+	}
+	// Imported 保持旧内容的事实，不能因隔离清零后让下一轮误走首次整包导入。
+	if segment.ImportError != detail || segment.ObservedSize != observedSize || segment.ObservedModNano != observedMod {
+		segment.ImportError = detail
+		segment.ObservedSize, segment.ObservedModNano = observedSize, observedMod
+		if err := a.led.RegisterSegment(a.key, *segment); err != nil {
+			return decision, err
+		}
+	}
+	return decision, nil
+}
+
 // Backfilled 返回按原代次补账的次数（观测/测试用）。
 func (a *ArchiveImporter) Backfilled() int { return a.backfilled }
 
@@ -85,9 +134,11 @@ func (a *ArchiveImporter) RefusedForeign() int { return a.refusedForeign }
 
 // ImportResult 归档导入结果。
 type ImportResult struct {
-	Skipped bool
-	Reason  string
-	Events  []logtypes.Event
+	// Disposition 为未知时没有导入授权，原物与旧身份保留等待恢复归属。
+	Disposition ArchiveDisposition
+	Skipped     bool
+	Reason      string
+	Events      []logtypes.Event
 	// ArchiveObjectID provenance only。
 	ArchiveObjectID string
 	// ImportedCount 本次导入事件数。
@@ -127,7 +178,7 @@ func HashFile(path string) (string, int64, error) {
 // ImportGzip 流式导入 gzip 归档。
 // 若 rotation 已将该归档链接为逻辑源分段且已 Import，跳过整包重导入。
 //
-// 等价于 ImportGzipBounded(archivePath, 0)（不限量）——一次读完整包，行为与本修复前一致。
+// 等价于 ImportGzipBounded(archivePath, 0)：不设事件数上限，但仍受独立单行/单轮字节预算约束。
 func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) {
 	return a.importArchive(archivePath, 0, formatGzip)
 }
@@ -135,7 +186,7 @@ func (a *ArchiveImporter) ImportGzip(archivePath string) (*ImportResult, error) 
 // ImportGzipBounded 是**有界**导入：单次最多产出 maxEvents 个事件，读满即停并回
 // Partial=true + 已消费位置（ResumedFrom/segment EndPos），调用方下一轮再调一次继续读。
 //
-// maxEvents<=0 表示不限量（等价 ImportGzip）。
+// maxEvents<=0 只表示不设事件数上限（等价 ImportGzip），字节预算始终生效。
 //
 // 为什么要分批（缺陷二，2026-10-10 生产实测）：原实现把整个 gz 的事件一次性返回，
 // 而调用方随后的单次 WAL 追加量 = 整个归档的事件数。`inst:220/file` 的 544,278 行 gz
@@ -146,8 +197,8 @@ func (a *ArchiveImporter) ImportGzipBounded(archivePath string, maxEvents int) (
 	return a.importArchive(archivePath, maxEvents, formatGzip)
 }
 
-// ImportText 导入**纯文本轮转归档**（BungeeCord 的 `proxy.log.N`）；不限量（等价
-// ImportTextBounded(archivePath, 0)）。
+// ImportText 导入纯文本轮转归档（BungeeCord 的 `proxy.log.N`），等价 ImportTextBounded(path, 0)。
+// 不设事件数上限，但不会绕过读取前的单行/单轮字节界。
 //
 // 形态不在这里判定：调用方必须先用 DetectArchiveFormat 判定，再调用对应入口。
 // 本入口是「已确定是纯文本」时的执行者，因此它不会把 gzip 归档当纯文本读（那会产出
@@ -165,7 +216,7 @@ func (a *ArchiveImporter) ImportTextBounded(archivePath string, maxEvents int) (
 	return a.importArchive(archivePath, maxEvents, formatRotatedText)
 }
 
-// importArchive 是导入的**唯一实现**（maxEvents<=0 表示不限量）。
+// importArchive 是导入的唯一实现；maxEvents<=0 只取消事件数限制，不取消字节预算。
 //
 // format 只决定两件事：登记到账本分段的形态，以及「字节流 → 行文本流」的解码方式。
 // 其余一切（归属闸、断点续读、有界分批、事件字段与 record 范围、缺口原因码）对两种形态
@@ -187,37 +238,51 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 			if ent.Segments[i].Path == archivePath {
 				seg := ent.Segments[i]
 				existing = &seg
-				if seg.Imported {
+				if seg.ImportError == ledger.ArchiveCursorUncertain {
+					return nil, fmt.Errorf("acquire: 未接收归档游标不确定，保留原物和缺口，拒绝EOF完成: %w", ledger.ErrArchiveCursorPrecondition)
+				}
+				if seg.Imported || ledger.IsArchiveSegmentKind(seg.Kind) || seg.Kind == ledger.SegmentRotated {
 					// 「已导入」不再只看路径：槽位复用（java.util.logging `%g` 的移位改名）会把
 					// 新内容换进同一个路径，必须按**内容身份**复核（判据见 content_anchor.go）。
-					decision := DecideArchiveReimport(ent, &seg)
+					decision, assessErr := a.AssessArchive(archivePath)
+					if assessErr != nil {
+						return nil, assessErr
+					}
 					if !decision.Import {
 						a.skippedAlreadyLinked++
 						return &ImportResult{
+							Disposition:     decision.Disposition,
 							Skipped:         true,
 							Reason:          decision.Reason,
 							ArchiveObjectID: seg.ArchiveObjectID,
 							ResumedFrom:     seg.EndPos,
 						}, nil
 					}
-					contentAnchor = decision.Anchor
-					anchorCoveredBytes = decision.CoveredBytes
-					anchored = true
-					// 陈旧分段的位置属于上一份内容：清掉它，避免下面的起点计算沿用旧 Base。
-					existing = nil
+					if decision.Anchor.Path != "" {
+						contentAnchor = decision.Anchor
+						anchorCoveredBytes = decision.CoveredBytes
+						anchored = true
+						// 陈旧分段的位置属于上一份内容，必须改用当前内容自己的锚。
+						existing = nil
+					}
 				}
 				break
 			}
 		}
 	}
 
-	contentHash, size, err := HashFile(archivePath)
+	limits := a.readLimits
+	contentHash, size, hashedBytes, hashReady, err := a.hashArchiveBounded(archivePath, limits.MaxBytesPerPoll)
 	if err != nil {
 		// 权限/损坏：记缺口，不拖死后续源。
 		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveUnreadable, err.Error())
 		_ = a.markFailed(archivePath, format.kind, ledger.GapReasonArchiveUnreadable+": "+err.Error())
 		return &ImportResult{Skipped: true, Reason: err.Error()}, nil
 	}
+	if !hashReady {
+		return &ImportResult{Disposition: ArchiveTail, Skipped: true, Partial: true, Reason: "archive provenance digest pending within read byte budget"}, nil
+	}
+	bodyBudget := limits.MaxBytesPerPoll - hashedBytes
 	objID := ArchiveObjectID(archivePath, size, contentHash)
 	// 内容身份（≤512B 前缀摘要，与 FileTailer 记录活文件身份的口径一致）：
 	// 写进分段的 IdentityBytes/IdentitySHA256，使归档分段成为可跨路径匹配的内容锚。
@@ -227,24 +292,21 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		idBytes, idSHA = 0, ""
 	}
 
-	f, err := os.Open(archivePath)
+	// 打开一次有限读会话，分批间保留有界 bufio；重启时跳过旧前缀也受每轮预算约束。
+	session, err := a.archiveSession(archivePath, objID, format, ^uint64(0), bodyBudget)
 	if err != nil {
-		_ = a.led.RecordGap(a.key, 0, 0, ledger.GapReasonArchiveOpenFailed, err.Error())
-		_ = a.markFailed(archivePath, format.kind, ledger.GapReasonArchiveOpenFailed+": "+err.Error())
-		return &ImportResult{Skipped: true, Reason: err.Error(), ArchiveObjectID: objID}, nil
+		reason, prefix := format.decodeFailureReason, format.decodeFailurePrefix
+		if _, pathErr := err.(*os.PathError); pathErr || reason == "" {
+			reason, prefix = ledger.GapReasonArchiveOpenFailed, ""
+		}
+		if gapErr := a.led.RecordGap(a.key, 0, 0, reason, err.Error()); gapErr != nil {
+			return nil, errors.Join(err, gapErr)
+		}
+		if markErr := a.markFailed(archivePath, format.kind, reason+": "+err.Error()); markErr != nil {
+			return nil, errors.Join(err, markErr)
+		}
+		return &ImportResult{Skipped: true, Reason: prefix + err.Error(), ArchiveObjectID: objID}, nil
 	}
-	defer f.Close()
-
-	body, err := format.decode(f)
-	if err != nil {
-		// 形态不可解（当前只有 gzip 有这一阶段）：隔离/缺口可见。
-		// 纯文本轮转没有容器头可校验，故它**不会**走到这里——也就不需要新的缺口原因码
-		// （新原因若不在自动消解白名单里，就会成为「源暂停后永久停采」的新入口）。
-		_ = a.led.RecordGap(a.key, 0, 0, format.decodeFailureReason, err.Error())
-		_ = a.markFailed(archivePath, format.kind, format.decodeFailureReason+": "+err.Error())
-		return &ImportResult{Skipped: true, Reason: format.decodeFailurePrefix + err.Error(), ArchiveObjectID: objID}, nil
-	}
-	defer body.Close()
 
 	// 归属闸（2026-10-02）：归档只允许导入到**它所属的那个代次**。
 	//
@@ -308,7 +370,7 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 
 	// 接管起点：已链接轮转跳过 FileTailer 已读的物理前缀；历史归档按
 	// ledger 最大逻辑位置顺序追加。失败重试沿用首次登记的 StartPos。
-	var startFrom, segmentStart, skipBytes uint64
+	var startFrom, segmentStart, skipBytes, physicalStart uint64
 	// resumingMidArchive 标记「本次跳过的前缀来自**本分段上一次读到的地方**」（而不是
 	// 轮转已覆盖前缀）。两种事实在 EOF 分支的处置不同，故必须显式区分。
 	resumingMidArchive := false
@@ -316,11 +378,11 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		// 槽位复用（见 content_anchor.go）：起点由**这份内容自己的锚**决定，
 		// 跳过它已投递覆盖的字节前缀。这条分支的存在就是为了「既补上从未投递的尾巴，
 		// 又不把已投递的前缀重导一遍」——两者缺一都会造成事故（丢日志 / 重复入库）。
-		segmentStart = contentAnchor.Base
-		startFrom = contentAnchor.Base + uint64(anchorCoveredBytes)
+		segmentStart, physicalStart = contentAnchor.Base, contentAnchor.PhysicalStart
+		startFrom = contentAnchor.Base + uint64(anchorCoveredBytes) - physicalStart
 		skipBytes = uint64(anchorCoveredBytes)
 	} else if existing != nil {
-		segmentStart = existing.StartPos
+		segmentStart, physicalStart = existing.StartPos, existing.PhysicalStart
 		startFrom = existing.StartPos
 	} else if linked {
 		startFrom = link.EndPosFrom
@@ -338,6 +400,7 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		segmentStart = startFrom
 	}
 	if !anchored {
+		skipBytes = physicalStart
 		// 起点已由内容锚决定时不再套用下面的换算：轮转关联与断点续读的坐标都属于**别的**分段。
 		if linked {
 			startFrom = link.EndPosFrom
@@ -345,7 +408,7 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 				segmentStart = existing.StartPos
 			}
 			if startFrom > segmentStart {
-				skipBytes = startFrom - segmentStart
+				skipBytes = physicalStart + startFrom - segmentStart
 			}
 		} else if existing != nil && existing.EndPos > segmentStart {
 			// **断点续读**（缺陷二修复，2026-10-10）：本归档上次读到 `EndPos`，本次从那里继续。
@@ -358,16 +421,18 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 			// 为什么必须续读（不能靠「重头读 + event_id 幂等」）：那会把 N 轮的总读取量放大成
 			// O(N²)（每轮都要重读并重解析整个归档前缀），对 12.9 万事件级的归档就是几十万次
 			// 无谓解析——分批反而变成新的性能事故。续读让总读取量恒为归档的一遍。
-			skipBytes = existing.EndPos - segmentStart
+			skipBytes = physicalStart + existing.EndPos - segmentStart
 			startFrom = existing.EndPos
 			resumingMidArchive = true
 		}
 	}
 
 	_ = a.led.RegisterSegment(a.key, ledger.Segment{
-		Path:            archivePath,
-		Kind:            format.kind,
-		StartPos:        segmentStart,
+		Path:          archivePath,
+		Kind:          format.kind,
+		StartPos:      segmentStart,
+		PhysicalStart: physicalStart, PhysicalMappingKnown: true,
+		EndPos:          startFrom,
 		ArchiveObjectID: objID, // provenance only
 		// 内容身份：让**归档分段**也成为一个内容锚（槽位复用时要靠它回答「这份内容
 		// 已投递到哪个字节」，见 content_anchor.go）。旧账本里没有这两个字段的存量段
@@ -378,9 +443,23 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		ParserVersion:  a.parser.ParserVersion,
 	})
 
-	reader := bufio.NewReader(body)
-	if skipBytes > 0 {
-		if _, err := io.CopyN(io.Discard, reader, int64(skipBytes)); err != nil {
+	if session.offset > skipBytes {
+		session, err = a.archiveSession(archivePath, objID, format, skipBytes, bodyBudget)
+		if err != nil {
+			return nil, err
+		}
+	}
+	reader := session.reader
+	workRemaining := bodyBudget
+	if skipBytes > session.offset {
+		toSkip := skipBytes - session.offset
+		if toSkip > uint64(workRemaining) {
+			toSkip = uint64(workRemaining)
+		}
+		n, skipErr := io.CopyN(io.Discard, reader, int64(toSkip))
+		session.offset += uint64(n)
+		workRemaining -= n
+		if err := skipErr; err != nil {
 			if err == io.EOF {
 				// 前缀比归档内容还长。**只有**「跳过的是轮转已覆盖前缀」才能据此断定
 				// 「归档已被覆盖」（既有语义，逐字保留）。
@@ -406,6 +485,10 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 			_ = a.led.RecordGap(a.key, startFrom, startFrom, ledger.GapReasonArchiveReadError, err.Error())
 			return &ImportResult{Skipped: true, Reason: err.Error(), ArchiveObjectID: objID, ResumedFrom: startFrom}, nil
 		}
+		if session.offset < skipBytes {
+			return &ImportResult{Disposition: ArchiveTail, Skipped: true, Partial: true,
+				Reason: "archive resume prefix pending within read byte budget", ArchiveObjectID: objID, ResumedFrom: startFrom}, nil
+		}
 	}
 	var events []logtypes.Event
 	pos := startFrom
@@ -413,15 +496,26 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 	// 「读满上限但还有剩余」的**唯一可靠判据**（见 ImportResult.Partial 的说明）。
 	reachedEOF := false
 
-	for {
+	for (maxEvents <= 0 || len(events) < maxEvents) && workRemaining > int64(limits.MaxLineBytes) {
 		// 有界导入（缺陷二）：读满本批即停。已读位置由下方的 RegisterSegment 落回账本
 		// （EndPos），故下一轮从断点续读而不是从头重读 —— 这是「分批不丢、不重」的关键：
 		//   不丢 = 未读部分仍在归档里且归档未被标为已导入 ⇒ 下一轮必然重新发现；
 		//   不重 = 已读前缀的位置已记录，续读时按字节跳过（见下方 skipBytes 计算）。
-		if maxEvents > 0 && len(events) >= maxEvents {
+		line, err := readPhysicalLine(reader, limits.MaxLineBytes)
+		if limitErr, ok := err.(*ReadLimitError); ok {
+			limitErr.Path, limitErr.LogicalStart, limitErr.PhysicalFrom = archivePath, pos, int64(session.offset)
+			gapErr := a.recordArchiveReadLimit(limitErr)
+			closeErr := a.Close()
+			return &ImportResult{Disposition: ArchiveTail, Events: events, ArchiveObjectID: objID,
+				ImportedCount: len(events), ResumedFrom: startFrom, Partial: true, Reason: limitErr.Error()}, errors.Join(limitErr, gapErr, closeErr)
+		}
+		if err == errReadRoundBudget {
+			// 本轮未获得完整物理行，回滚到该行首部；下一轮仍由原归档负责，不拆分投递。
+			_ = a.Close()
 			break
 		}
-		line, err := reader.ReadString('\n')
+		workRemaining -= int64(len(line))
+		session.offset += uint64(len(line))
 		if len(line) == 0 && err != nil {
 			// 本次读取未拿到任何字节：若是非 EOF 错误（截断 gzip 的典型收尾形态——
 			// 已成功读出行之后，下一次读取以 unexpected EOF 结束），必须留下可见缺口。
@@ -433,7 +527,12 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 			reachedEOF = err == io.EOF
 			break
 		}
-		raw := strings.TrimRight(line, "\n")
+		// 归档原始事件沿用只剥离 LF 的口径，CR 由下游统一归一；原始范围仍包含 CRLF。
+		rawLine := line
+		if len(rawLine) > 0 && rawLine[len(rawLine)-1] == '\n' {
+			rawLine = rawLine[:len(rawLine)-1]
+		}
+		raw := string(rawLine)
 		end := pos + uint64(len(line))
 		ev := logtypes.BuildEvent(a.parser, logtypes.RecordRange{Start: pos, End: end},
 			"", "", "", "archive", raw)
@@ -455,11 +554,15 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		}
 	}
 
+	if reachedEOF {
+		_ = a.Close()
+	}
 	// 更新分段结束位置（逻辑源累计：startFrom + 归档内容长度）。
 	_ = a.led.RegisterSegment(a.key, ledger.Segment{
-		Path:            archivePath,
-		Kind:            format.kind,
-		StartPos:        segmentStart,
+		Path:          archivePath,
+		Kind:          format.kind,
+		StartPos:      segmentStart,
+		PhysicalStart: physicalStart, PhysicalMappingKnown: true,
 		EndPos:          pos,
 		ArchiveObjectID: objID,
 		IdentityBytes:   idBytes,
@@ -491,7 +594,8 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 		ImportedCount:   len(events),
 		ResumedFrom:     startFrom,
 		// 读满上限但未见到 EOF ⇒ 归档还有剩余 ⇒ 调用方下一轮必须续读（见 ImportGzipBounded）。
-		Partial: maxEvents > 0 && !reachedEOF,
+		Disposition: ArchiveTail,
+		Partial:     !reachedEOF,
 	}, nil
 }
 
@@ -504,8 +608,32 @@ func (a *ArchiveImporter) importArchive(archivePath string, maxEvents int, forma
 // 账本随即失真。既无分段时按 gzip 登记——这不是"猜形态"，而是保持既有调用口径：
 // 形态感知的导入路径（importArchive）总在调用前先登记分段，故带形态的归档到这里必然
 // 已带有自己的形态。
+// RewindUnaccepted在WAL明确未接收时仅退当前对象游标；关闭单一reader在ledger锁外，重启仍由持久cursor续读。
+func (a *ArchiveImporter) RewindUnaccepted(expected ledger.Segment, from, acceptedThrough uint64) error {
+	stable := true
+	if state := a.hashState; state != nil && state.path == expected.Path {
+		info, err := os.Stat(expected.Path)
+		if err != nil {
+			stable = false
+		} else {
+			dev, ino, _ := fileIdentity(info)
+			stable = info.Size() == state.size && info.ModTime().UnixNano() == state.mod && dev == state.dev && ino == state.ino
+		}
+	}
+	var closeErr error
+	if a.readSession != nil && a.readSession.path == expected.Path {
+		if a.readSession.objectID != expected.ArchiveObjectID {
+			stable = false
+		}
+		closeErr = a.Close()
+	}
+	cursorErr := a.led.RewindArchiveCursor(a.key, expected, from, acceptedThrough, stable)
+	return errors.Join(cursorErr, closeErr)
+}
+
 func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64) error {
 	kind := ledger.SegmentKind("")
+	physicalStart, physicalMappingKnown := uint64(0), true
 	// 内容身份必须随「已导入」一起落账：它是下一次槽位复用判定的唯一依据
 	// （见 content_anchor.go）。取不到（文件已被删除等）时留空即可——空身份的分段
 	// 不构成锚，判据会保持「跳过」这一既有行为。
@@ -514,6 +642,7 @@ func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64)
 		for _, segment := range entry.Segments {
 			if segment.Path == path {
 				start = segment.StartPos
+				physicalStart, physicalMappingKnown = segment.PhysicalStart, segment.PhysicalMappingKnown
 				if segment.EndPos > end {
 					end = segment.EndPos
 				}
@@ -529,10 +658,16 @@ func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64)
 	if !ledger.IsArchiveSegmentKind(kind) {
 		kind = ledger.SegmentGzip
 	}
+	var observedSize, observedMod int64
+	if info, err := os.Stat(path); err == nil {
+		observedSize, observedMod = info.Size(), info.ModTime().UnixNano()
+	}
 	return a.led.RegisterSegment(a.key, ledger.Segment{
 		Path: path, Kind: kind, StartPos: start, EndPos: end,
+		PhysicalStart: physicalStart, PhysicalMappingKnown: physicalMappingKnown,
 		ArchiveObjectID: objectID, Imported: true, ParserVersion: a.parser.ParserVersion,
 		IdentityBytes: idBytes, IdentitySHA256: idSHA,
+		ObservedSize: observedSize, ObservedModNano: observedMod,
 	})
 }
 

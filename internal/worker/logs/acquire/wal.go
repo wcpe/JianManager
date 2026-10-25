@@ -3,6 +3,8 @@
 package acquire
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -45,19 +47,578 @@ type WALRef struct {
 //
 // covered 传 nil 时全部内联（等价于旧的 Snapshot）。
 func (w *WAL) SnapshotSplit(covered func(logtypes.Event) bool) (refs []WALRef, inline []WALEntry) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	for _, e := range w.entries {
-		if covered != nil && covered(e.Event) {
-			refs = append(refs, WALRef{
-				Seq: e.Seq, Appended: e.Appended, Durable: e.Durable, Replay: e.Replay,
-				EventID: e.Event.EventID, RecordStart: e.Event.Record.Start, RecordEnd: e.Event.Record.End,
-			})
-			continue
-		}
-		inline = append(inline, e)
+	refs, inline, err := w.snapshotSplit(covered, nil)
+	if err != nil {
+		panic("acquire: 未启用身份编码的WAL快照不应返回编码错误: " + err.Error())
 	}
 	return refs, inline
+}
+
+// SnapshotWindow只捕获原投递记录窗，硬限条数；未提交、跨边界或新增变体均不得借旧hint确认。
+func (w *WAL) SnapshotWindow(from, to uint64, limit int, filters ...func(logtypes.Event) bool) ([]WALEntry, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out []WALEntry
+	for _, entry := range w.entries {
+		if entry.Event.Record.End <= from || entry.Event.Record.Start >= to {
+			continue
+		}
+		// 谓词只见私有副本：调用方留存或改写map都不得反写活WAL正文。
+		if len(filters) > 0 && !filters[0](cloneWALEvent(entry.Event)) {
+			continue
+		}
+		if !entry.Durable || entry.Event.Record.Start < from || entry.Event.Record.End > to || len(out) >= limit {
+			return nil, fmt.Errorf("acquire: 原written记录窗已变化或未提交")
+		}
+		entry.reservation = nil
+		entry.Event = cloneWALEvent(entry.Event)
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+type walWindow struct {
+	mu           sync.RWMutex
+	id, from, to uint64
+	mutation     bool
+}
+
+// AppendReservation在采样前原子预留原记录窗，阻止检查后插入发布lease；仅是短期准入，不授耐久或ACK资格。
+type AppendReservation struct {
+	owner  *WAL
+	window *walWindow
+}
+
+// ReserveAppend不修改条目或水位；持有期间只有显式携带该凭据的Append能修改原窗。
+func (w *WAL) ReserveAppend(events []logtypes.Event) (*AppendReservation, error) {
+	window := &walWindow{mutation: true}
+	for i, event := range events {
+		if i == 0 || event.Record.Start < window.from {
+			window.from = event.Record.Start
+		}
+		if event.Record.End > window.to {
+			window.to = event.Record.End
+		}
+	}
+	// 汇总可能承接离散输入，准入覆盖其整个标量窗，不能漏掉输入间隙中的既有发布lease。
+	span := logtypes.Event{Record: logtypes.RecordRange{Start: window.from, End: window.to}}
+	unlock := w.lockMutation([]logtypes.Event{span}, false)
+	if unlock == nil {
+		return nil, ErrWALWindowBusy
+	}
+	defer unlock()
+	if w.windows == nil {
+		w.windows = make(map[*walWindow]struct{})
+	}
+	w.nextWindow++
+	window.id = w.nextWindow
+	window.mu.Lock()
+	w.windows[window] = struct{}{}
+	w.windowVersion++
+	return &AppendReservation{owner: w, window: window}, nil
+}
+
+// Release结束本次采样到追加的原子准入，重复调用无副作用；不得跨网络或持久化IO持有。
+func (reservation *AppendReservation) Release() {
+	if reservation == nil || reservation.owner == nil {
+		return
+	}
+	w := reservation.owner
+	w.mu.Lock()
+	if _, ok := w.windows[reservation.window]; ok {
+		delete(w.windows, reservation.window)
+		w.windowVersion++
+		reservation.window.mu.Unlock()
+	}
+	w.mu.Unlock()
+}
+
+// ErrWALWindowChanged表示当前正文已变化，旧接收证明不能推进发布或责任。
+var ErrWALWindowChanged = fmt.Errorf("acquire: WAL原窗完整身份已变化")
+
+// ErrWALWindowBusy为可重试发布窗背压，不是容量暂停；调用者保留原物和精确责任后续读。
+var ErrWALWindowBusy = fmt.Errorf("acquire: WAL发布窗暂忙，请保留原物并重试")
+
+// lockMutation在等待同窗发布IO前先释放WAL锁；窗口注册版本复验消除新租约与追加的准入竞态。
+func (w *WAL) lockMutation(events []logtypes.Event, all bool, reservations ...*AppendReservation) func() {
+	for {
+		w.mu.Lock()
+		var reserved *walWindow
+		if len(reservations) > 0 && reservations[0] != nil {
+			reservation := reservations[0]
+			_, valid := w.windows[reservation.window]
+			if reservation.owner != w || !valid {
+				w.mu.Unlock()
+				return nil
+			}
+			reserved = reservation.window
+			for _, event := range events {
+				if event.Record.Start < reserved.from || event.Record.End > reserved.to {
+					w.mu.Unlock()
+					return nil
+				}
+			}
+		}
+		version := w.windowVersion
+		var windows []*walWindow
+		for window := range w.windows {
+			if window == reserved {
+				continue
+			}
+			intersects := all
+			for _, event := range events {
+				if event.Record.Start < window.to && event.Record.End > window.from {
+					intersects = true
+					break
+				}
+			}
+			if intersects {
+				windows = append(windows, window)
+			}
+		}
+		w.mu.Unlock()
+		sort.Slice(windows, func(i, j int) bool { return windows[i].id < windows[j].id })
+		for i, window := range windows {
+			if all {
+				window.mu.Lock()
+				continue
+			}
+			if !window.mu.TryLock() {
+				for j := i - 1; j >= 0; j-- {
+					windows[j].mu.Unlock()
+				}
+				return nil
+			}
+		}
+		w.mu.Lock()
+		if w.windowVersion == version {
+			return func() {
+				w.mu.Unlock()
+				for i := len(windows) - 1; i >= 0; i-- {
+					windows[i].mu.Unlock()
+				}
+			}
+		}
+		w.mu.Unlock()
+		for i := len(windows) - 1; i >= 0; i-- {
+			windows[i].mu.Unlock()
+		}
+	}
+}
+
+// EnableQualifiedReclaim启用新组合的完整正文ACK闸；只内存状态，默认同步组合不变。
+func (w *WAL) EnableQualifiedReclaim() { w.mu.Lock(); w.qualifiedReclaim = true; w.mu.Unlock() }
+
+// RecordCurrentResults在同一WAL临界区复核当前完整正文并登记精确响应，避免核对后再记ACK的竞态。
+func (w *WAL) RecordCurrentResults(events []logtypes.Event, results []DeliveryResult, cuts ...*walCapture) error {
+	expected := make(map[CommitIdentity]struct{}, len(events))
+	wanted := make(map[string]struct{}, len(events))
+	for _, event := range events {
+		id, err := CommitIdentityOf(event)
+		if err != nil {
+			return err
+		}
+		expected[id] = struct{}{}
+		wanted[id.EventID] = struct{}{}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	matched := make([]int, 0, len(events))
+	for i, entry := range w.entries {
+		_, sameID := wanted[entry.Event.EventID]
+		overlaps := false
+		for _, event := range events {
+			if event.Record.Start < entry.Event.Record.End && event.Record.End > entry.Event.Record.Start {
+				overlaps = true
+				break
+			}
+		}
+		if !sameID && !overlaps {
+			continue
+		}
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			return err
+		}
+		if _, ok := expected[id]; !ok {
+			if len(cuts) > 0 && cuts[0] != nil && cuts[0].owner == w && entry.appendRevision <= cuts[0].revision {
+				continue
+			}
+			return ErrWALWindowChanged
+		}
+		if !entry.Durable {
+			return ErrWALWindowChanged
+		}
+		matched = append(matched, i)
+	}
+	for _, result := range results {
+		if err := w.recordHTTPResultLocked(result); err != nil {
+			return err
+		}
+	}
+	acked := len(results) > 0
+	for _, result := range results {
+		acked = acked && result.HTTPStatus >= 200 && result.HTTPStatus < 300 && !result.AckLost
+	}
+	if acked {
+		for _, i := range matched {
+			id, err := CommitIdentityOf(w.entries[i].Event)
+			if err != nil {
+				return err
+			}
+			w.entries[i].acknowledged = &id
+		}
+	}
+	return nil
+}
+
+// AcquireCurrentWindow只为最终本地CAS/转段取得区间读租约；调用方禁止在租约内做VL查询或退避。
+// 完整身份在租约取得后同一WAL快照重验；不存在全局采集锁跨Catalog IO，窗外新尾可继续Append/Commit。
+func (w *WAL) AcquireCurrentWindow(events []logtypes.Event, requirePresent bool, filter func(logtypes.Event) bool, protectPrefix ...bool) (func(), error) {
+	prefix := len(protectPrefix) > 0 && protectPrefix[0]
+	return w.AcquireCapturedWindow(events, requirePresent, filter, prefix, nil)
+}
+
+// AcquireCapturedWindow在已完成的canonical裁定之后使用原捕获边界；旧兄弟只保留责任，不授证或跳债务。
+func (w *WAL) AcquireCapturedWindow(events []logtypes.Event, requirePresent bool, filter func(logtypes.Event) bool, prefix bool, capture *DeliveryCapture) (func(), error) {
+	expected := make(map[CommitIdentity]struct{}, len(events))
+	wanted := make(map[string]struct{}, len(events))
+	var from, to uint64
+	for i, event := range events {
+		id, err := CommitIdentityOf(event)
+		if err != nil {
+			return nil, err
+		}
+		expected[id] = struct{}{}
+		wanted[id.EventID] = struct{}{}
+		if i == 0 || id.Record.Start < from {
+			from = id.Record.Start
+		}
+		if id.Record.End > to {
+			to = id.Record.End
+		}
+	}
+	window := &walWindow{from: from, to: to}
+	if prefix {
+		window.from = 0
+	}
+	w.mu.Lock()
+	for existing := range w.windows {
+		if existing.mutation && window.from < existing.to && window.to > existing.from {
+			w.mu.Unlock()
+			return nil, ErrWALWindowBusy
+		}
+	}
+	if w.windows == nil {
+		w.windows = make(map[*walWindow]struct{})
+	}
+	w.nextWindow++
+	window.id = w.nextWindow
+	// window尚未暴露，无竞争的读锁必须与注册同一元数据临界区完成，mutation不能穿过间隙。
+	window.mu.RLock()
+	w.windows[window] = struct{}{}
+	w.windowVersion++
+	w.mu.Unlock()
+	if w.windowRegistered != nil {
+		w.windowRegistered()
+	}
+	release := func() { window.mu.RUnlock(); w.mu.Lock(); delete(w.windows, window); w.windowVersion++; w.mu.Unlock() }
+	w.mu.Lock()
+	seen := make(map[CommitIdentity]struct{}, len(expected))
+	var checkErr error
+	members := 0
+	for _, entry := range w.entries {
+		if prefix && entry.Event.Record.Start < from && (filter == nil || filter(cloneWALEvent(entry.Event))) && !w.reclaimEntryQualifiedLocked(entry) {
+			checkErr = ErrWALWindowChanged
+			break
+		}
+		_, sameID := wanted[entry.Event.EventID]
+		inWindow := entry.Event.Record.Start < to && entry.Event.Record.End > from && (filter == nil || filter(cloneWALEvent(entry.Event)))
+		if !sameID && !inWindow {
+			continue
+		}
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			checkErr = err
+			break
+		}
+		if _, ok := expected[id]; !ok {
+			if capture != nil && capture.owner == w && entry.appendRevision <= capture.revision {
+				continue
+			}
+			checkErr = ErrWALWindowChanged
+			break
+		}
+		if !entry.Durable {
+			checkErr = ErrWALWindowChanged
+			break
+		}
+		seen[id] = struct{}{}
+		if capture != nil && capture.owner == w && capture.token != 0 && entry.captureToken == capture.token {
+			if entry.captureBody != id.BodyDigest {
+				checkErr = ErrWALWindowChanged
+				break
+			}
+			members++
+		}
+	}
+	if capture != nil && capture.owner == w && capture.token != 0 {
+		// 完整actual集合可含已回收历史；WAL只要求原标记活成员全在且正文未变。
+		if members != capture.members {
+			checkErr = ErrWALWindowChanged
+		}
+	} else if requirePresent && len(seen) != len(expected) {
+		checkErr = ErrWALWindowChanged
+	}
+	w.mu.Unlock()
+	if checkErr != nil {
+		release()
+		return nil, checkErr
+	}
+	return release, nil
+}
+
+// WALCommitSnapshot只属于一份实际持久化计划；owner、原cut和成员序号一起绑定完整私有正文。
+// 不进入WAL格式或跨调用缓存，引用条目的身份同样取自分流前的完整正文。
+type WALCommitSnapshot struct {
+	*WALCommitIndex
+	entries    []WALEntry
+	referenced []bool
+	bodies     [][]byte
+	identities map[CommitIdentity]struct{}
+	// 仅观测实际编码调用次数，不参与资格、分流或提交；用于区分省SHA与错误省Marshal。
+	marshaledEvents int
+	hashedEvents    int
+}
+
+// WALCommitIndex仅保留本计划完整身份的轻量成员索引，不反向引用快照、正文、Fields或编码字节。
+// 它不是提交证明；只能与实际完整Apply后发布的同份回执做精确交集，不能单独授予任何新资格。
+type WALCommitIndex struct {
+	owner *WAL
+	cut   uint64
+	// bySeqRevision 记录捕获时各(seq,本次捕获revision)分组内的全部成员（含当时非Durable者）。
+	// Restore会给多条不同正文同一revision且旧主键允许同Seq ⇒ 分组可能多值或多Durable态，
+	// 任一处不一致都必须由调用方保守重算。
+	bySeqRevision map[walSeqRevision][]walCapturedMember
+}
+
+// walCapturedMember 是捕获时的成员身份与其Durable态；两者共同决定该组能否被复用。
+type walCapturedMember struct {
+	identity CommitIdentity
+	durable  bool
+}
+
+type walSeqRevision struct {
+	seq      uint64
+	revision uint64
+}
+
+// uniqueCapturedIdentity 只有整组成员身份一致**且**全部在捕获时已Durable才算无歧义。
+// 后来才Commit的成员在捕获时未入 identities，若按组复用就会把它误算成同组别的成员。
+func uniqueCapturedIdentity(bucket []walCapturedMember) (CommitIdentity, bool) {
+	if len(bucket) == 0 {
+		return CommitIdentity{}, false
+	}
+	first := bucket[0]
+	for _, other := range bucket[1:] {
+		if other != first {
+			return CommitIdentity{}, false
+		}
+	}
+	if !first.durable {
+		return CommitIdentity{}, false
+	}
+	return first.identity, true
+}
+
+// LiveCommittedIdentities 用本计划已捕获的完整身份复核当前仍存活的Durable条目。
+//
+// 复用条件（缺一不可）：同owner、捕获在该计划的cut、且live条目未被后续写入替换
+// （appendRevision <= cut）、且该(seq,revision)分组在本计划里身份唯一。
+// 其余情形——计划之外、原非Durable后来才Commit、capture后被替换/hydrate/Restore、
+// 分组歧义——一律按当前完整JSON重算，绝不借旧摘要或丢弃成员。
+// 返回重算条数供计算次数回归断言；不写WAL格式、不建跨调用缓存。
+func (snapshot *WALCommitSnapshot) LiveCommittedIdentities(owner *WAL) (map[CommitIdentity]struct{}, int, error) {
+	if snapshot == nil {
+		return nil, 0, ErrWALWindowChanged
+	}
+	return snapshot.WALCommitIndex.LiveCommittedIdentities(owner)
+}
+
+// LiveCommittedIdentities沿用原完整计划的同owner/cut/全组唯一判据；nil索引仍严格逐条重算。
+// 计数只反映实际完整JSON编码条数，不把摘要去重后的集合大小当编码次数。
+func (index *WALCommitIndex) LiveCommittedIdentities(owner *WAL) (map[CommitIdentity]struct{}, int, error) {
+	if owner == nil || (index != nil && index.owner != owner) {
+		return nil, 0, ErrWALWindowChanged
+	}
+	// 锁序仅WAL.mu；持锁只遍历轻量成员并复制需回退的私有Event，完整JSON编码仍在锁外。
+	owner.mu.Lock()
+	out := make(map[CommitIdentity]struct{}, len(owner.entries))
+	var recompute []logtypes.Event
+	for _, entry := range owner.entries {
+		if !entry.Durable {
+			continue
+		}
+		if index != nil && entry.appendRevision <= index.cut {
+			if identity, ok := uniqueCapturedIdentity(index.bySeqRevision[walSeqRevision{entry.Seq, entry.appendRevision}]); ok {
+				out[identity] = struct{}{}
+				continue
+			}
+		}
+		recompute = append(recompute, cloneWALEvent(entry.Event))
+	}
+	owner.mu.Unlock()
+	for _, event := range recompute {
+		identity, err := CommitIdentityOf(event)
+		if err != nil {
+			return nil, len(recompute), err
+		}
+		out[identity] = struct{}{}
+	}
+	return out, len(recompute), nil
+}
+
+// SnapshotSplitCommitted保留既有接口；昂贵编码仅作用于锁内定格、Fields深复制后的私有值。
+func (w *WAL) SnapshotSplitCommitted(covered func(logtypes.Event) bool) ([]WALRef, []WALEntry, map[CommitIdentity]struct{}, error) {
+	snapshot, err := w.SnapshotSplitCommittedPlan(covered, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	refs, inline, identities := snapshot.SplitCommitted()
+	return refs, inline, identities, nil
+}
+
+// SnapshotSplitCommittedPlan在原锁内定格元数据、refs分流和完整正文，锁外只编码该私有快照。
+// copied仅供确定性编码边界测试；生产nil，回调不持WAL锁，不增加读取或更改资格条件。
+// committed只接收已实际完整Apply回执的轻量索引；始终完整Marshal当前私有正文，仅省可证明未变成员的SHA。
+func (w *WAL) SnapshotSplitCommittedPlan(covered func(logtypes.Event) bool, copied func(), committed ...*WALCommitIndex) (*WALCommitSnapshot, error) {
+	w.mu.Lock()
+	snapshot := &WALCommitSnapshot{WALCommitIndex: &WALCommitIndex{owner: w, cut: w.revision}, entries: make([]WALEntry, len(w.entries)), referenced: make([]bool, len(w.entries))}
+	for i, entry := range w.entries {
+		entry.reservation = nil
+		entry.Event = cloneWALEvent(entry.Event)
+		snapshot.entries[i] = entry
+		if covered != nil {
+			// 谓词不取得私有编码输入的可变别名，分流仍与原WAL捕获同一线性化点。
+			snapshot.referenced[i] = covered(cloneWALEvent(entry.Event))
+		}
+	}
+	w.mu.Unlock()
+	if copied != nil {
+		copied()
+	}
+	var previous *WALCommitIndex
+	if len(committed) > 0 && committed[0] != nil && committed[0].owner == w && committed[0].cut <= snapshot.cut {
+		previous = committed[0]
+	}
+	snapshot.bodies = make([][]byte, len(snapshot.entries))
+	snapshot.identities = make(map[CommitIdentity]struct{}, len(snapshot.entries))
+	snapshot.bySeqRevision = make(map[walSeqRevision][]walCapturedMember, len(snapshot.entries))
+	for i, entry := range snapshot.entries {
+		body, err := json.Marshal(entry.Event)
+		snapshot.marshaledEvents++
+		if err != nil {
+			return nil, err
+		}
+		group := walSeqRevision{entry.Seq, entry.appendRevision}
+		var identity CommitIdentity
+		var reused bool
+		if previous != nil && entry.Durable && entry.appendRevision <= previous.cut {
+			identity, reused = uniqueCapturedIdentity(previous.bySeqRevision[group])
+		}
+		if !reused {
+			identity = CommitIdentity{EventID: entry.Event.EventID, CanonicalHash: entry.Event.CanonicalHash, Record: entry.Event.Record, BodyDigest: sha256.Sum256(body)}
+			snapshot.hashedEvents++
+		}
+		if entry.Durable {
+			snapshot.identities[identity] = struct{}{}
+		}
+		// 分组必须覆盖**全部**捕获成员：同Seq同revision下只要存在一条非Durable或正文不同者，
+		// 该组就不再唯一 ⇒ 调用方保守重算，绝不把后来才Commit的成员误当作已捕获的Durable成员。
+		snapshot.bySeqRevision[group] = append(snapshot.bySeqRevision[group], walCapturedMember{identity: identity, durable: entry.Durable})
+		if !snapshot.referenced[i] {
+			snapshot.bodies[i] = body
+		}
+	}
+	return snapshot, nil
+}
+
+// SplitCommitted只导出分离副本；共享状态或调用方改Fields不能反写同计划的编码正文。
+func (snapshot *WALCommitSnapshot) SplitCommitted() ([]WALRef, []WALEntry, map[CommitIdentity]struct{}) {
+	var refs []WALRef
+	var inline []WALEntry
+	for i, entry := range snapshot.entries {
+		if snapshot.referenced[i] {
+			refs = append(refs, walReferenceOf(entry))
+		} else {
+			entry.Event = cloneWALEvent(entry.Event)
+			inline = append(inline, entry)
+		}
+	}
+	identities := make(map[CommitIdentity]struct{}, len(snapshot.identities))
+	for identity := range snapshot.identities {
+		identities[identity] = struct{}{}
+	}
+	return refs, inline, identities
+}
+
+// VisitEncoded只按原owner/cut/ordinal访问本计划原字节，不读取当前WAL或按EventID折叠兄弟。
+func (snapshot *WALCommitSnapshot) VisitEncoded(owner *WAL, inline func(WALEntry, []byte), reference func(WALRef)) error {
+	if snapshot == nil || owner == nil || snapshot.owner != owner {
+		return ErrWALWindowChanged
+	}
+	for _, entry := range snapshot.entries {
+		if entry.appendRevision > snapshot.cut {
+			return ErrWALWindowChanged
+		}
+	}
+	for i, entry := range snapshot.entries {
+		if !snapshot.referenced[i] {
+			entry.Event = cloneWALEvent(entry.Event)
+			inline(entry, snapshot.bodies[i])
+		}
+	}
+	for i, entry := range snapshot.entries {
+		if snapshot.referenced[i] {
+			reference(walReferenceOf(entry))
+		}
+	}
+	return nil
+}
+
+func walReferenceOf(entry WALEntry) WALRef {
+	return WALRef{Seq: entry.Seq, Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay,
+		EventID: entry.Event.EventID, RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End}
+}
+
+func (w *WAL) snapshotSplit(covered func(logtypes.Event) bool, identities map[CommitIdentity]struct{}) (refs []WALRef, inline []WALEntry, err error) {
+	w.mu.Lock()
+	entries := make([]WALEntry, len(w.entries))
+	referenced := make([]bool, len(w.entries))
+	for i, entry := range w.entries {
+		entry.reservation = nil
+		entry.Event = cloneWALEvent(entry.Event)
+		entries[i] = entry
+		if covered != nil {
+			referenced[i] = covered(cloneWALEvent(entry.Event))
+		}
+	}
+	w.mu.Unlock()
+	for i, entry := range entries {
+		if identities != nil && entry.Durable {
+			identity, encodeErr := CommitIdentityOf(entry.Event)
+			if encodeErr != nil {
+				return nil, nil, encodeErr
+			}
+			identities[identity] = struct{}{}
+		}
+		if referenced[i] {
+			refs = append(refs, walReferenceOf(entry))
+		} else {
+			inline = append(inline, entry)
+		}
+	}
+	return refs, inline, nil
 }
 
 // RestoreMixed 恢复内存 WAL：inline 为内联正文条目，refs 为引用条目（正文经 hydrate 取回）。
@@ -68,8 +629,8 @@ func (w *WAL) SnapshotSplit(covered func(logtypes.Event) bool) (refs []WALRef, i
 // 回放标记随 refs 双向往返（ACQ-1）：`WALRef.Replay` 落到重建条目的 `WALEntry.Replay` 上，
 // 否则重启后回放条目会重新计入闸视图（见 WALRef.Replay 的说明 ✓）。
 func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool)) []WALRef {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	unlock := w.lockMutation(nil, true)
+	defer unlock()
 	entries := append([]WALEntry(nil), inline...)
 	var missing []WALRef
 	for _, r := range refs {
@@ -81,6 +642,20 @@ func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventI
 		entries = append(entries, WALEntry{Seq: r.Seq, Event: ev, Appended: r.Appended, Durable: r.Durable, Replay: r.Replay})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
+	if w.revision == ^uint64(0) {
+		w.reservationErr = fmt.Errorf("acquire: WAL恢复捕获序号已耗尽")
+		return append([]WALRef(nil), refs...)
+	}
+	w.revision++
+	w.pendingEpoch++
+	for i := range entries {
+		entries[i].Event = cloneWALEvent(entries[i].Event)
+		entries[i].acknowledged = nil
+		entries[i].appendRevision = w.revision
+		entries[i].captureToken = 0
+		entries[i].captureBody = [32]byte{}
+	}
+	w.restoreReservationsLocked(entries)
 	w.entries = entries
 	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
 	for _, entry := range entries {
@@ -137,6 +712,14 @@ type WALEntry struct {
 	// 仍被同一把尺挡住 ✓，回放不再自锁 ✓。标记落在条目上（而不是计数器）：属精确归因，
 	// 且随剪枝自动守恒 ✓。
 	Replay bool `json:"replay,omitempty"`
+	// reservation 仅属于本进程；快照恢复必须重新向当前预算取得长期预留。
+	reservation *walByteReservation
+	// 只属于本进程的真实ACK完整身份；恢复必须清空，不能从旧位置水位重造。
+	acknowledged *CommitIdentity `json:"-"`
+	// 与本次完整身份捕获边界比较，区分早已存在的未选兄弟和网络后新增/替换者。
+	appendRevision uint64   `json:"-"`
+	captureToken   uint64   `json:"-"`
+	captureBody    [32]byte `json:"-"`
 }
 
 // DeliveryResult 请求级投递结果模拟。
@@ -153,8 +736,21 @@ type WAL struct {
 	mu  sync.Mutex
 	led *ledger.Ledger
 	key ledger.SourceKey
+	// 仅最终发布/责任转移的短期区间租约；不持正文、不跨VL查询，窗外追加不等待它。
+	windows          map[*walWindow]struct{}
+	windowVersion    uint64
+	nextWindow       uint64
+	qualifiedReclaim bool
+	revision         uint64
+	nextCapture      uint64
+	// pendingEpoch仅重定位进程内选批槽位；删项/恢复/替换才推进，纯追加保留轮转公平性。
+	pendingEpoch uint64
 
-	entries []WALEntry
+	entries        []WALEntry
+	reserveBytes   func(int64) (func(), error)
+	reservationErr error
+	// windowRegistered仅为确定性交错测试观测注册线性化点；生产nil，不改变锁或正文语义。
+	windowRegistered func()
 	// fsync 持久提交钩子；nil 视为成功（测试可注入失败）。
 	fsync func() error
 
@@ -312,6 +908,8 @@ func (w *WAL) noteEntryAddedLocked(entry WALEntry) {
 }
 
 func (w *WAL) noteEntryDroppedLocked(entry WALEntry) {
+	w.pendingEpoch++
+	entry.reservation.close()
 	b := walEntryBytes(entry)
 	w.totalBytes -= b
 	if entry.Replay {
@@ -658,12 +1256,17 @@ func (w *WAL) SetFsync(fn func() error) {
 // 整个临界区互斥 ⇒ 任何并发的常规 `Append` 只要落进这个窗口，就会被标成回放（被闸视图剔除
 // ⇒ 红线失效）并走进放去重（同哈希即丢弃 ⇒ 常规采集行被静默吞掉）。
 func (w *WAL) Append(events ...logtypes.Event) error {
-	return w.appendLocked(originAcquire, events...)
+	return w.appendLocked(originAcquire, nil, events...)
+}
+
+// AppendReserved仅消费本次记录窗的采样准入，仍经过原容量、正文预留与账本追加判据。
+func (w *WAL) AppendReserved(reservation *AppendReservation, events ...logtypes.Event) error {
+	return w.appendLocked(originAcquire, reservation, events...)
 }
 
 // AppendReplay 见 Append 的说明（红线：常规采集不得走本入口 ✓）。
 func (w *WAL) AppendReplay(events ...logtypes.Event) error {
-	return w.appendLocked(originReplay, events...)
+	return w.appendLocked(originReplay, nil, events...)
 }
 
 // walOrigin 标识一次追加的来源（**入参传递**，不在实例上留状态 ✓）。
@@ -678,9 +1281,17 @@ const (
 
 // appendLocked 是 Append / AppendReplay 的共同实现：整个追加在**同一个临界区**内完成，
 // 来源由入参给出（无跨调用的可变状态 ⇒ 并发互不污染 ✓）。
-func (w *WAL) appendLocked(origin walOrigin, events ...logtypes.Event) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+func (w *WAL) appendLocked(origin walOrigin, reservation *AppendReservation, events ...logtypes.Event) error {
+	private := make([]logtypes.Event, len(events))
+	for i, event := range events {
+		private[i] = cloneWALEvent(event)
+	}
+	events = private
+	unlock := w.lockMutation(events, false, reservation)
+	if unlock == nil {
+		return ErrWALWindowBusy
+	}
+	defer unlock()
 	replay := origin == originReplay
 
 	// #66-③：高频路径 —— 旧实现这里 Get（深克隆）一次、判闸处再 Get 一次（每次追加两发 ✗）。
@@ -693,6 +1304,10 @@ func (w *WAL) appendLocked(origin walOrigin, events ...logtypes.Event) error {
 		return fmt.Errorf("acquire: paused (%s); must record gap, not silent drop", st.PauseReason)
 	}
 
+	if w.revision == ^uint64(0) {
+		return fmt.Errorf("acquire: WAL捕获序号已耗尽，拒绝回绕")
+	}
+	w.revision++
 	// #179 上游根修：回放/补账入口先与既有条目对账，杜绝"同一 id 写两遍"✗（详见函数注释 ✓）。
 	// 判据取**本次入参** origin（ACQ-2）：常规采集轮不得走进放去重 ✓。
 	if replay && len(events) > 0 {
@@ -702,15 +1317,21 @@ func (w *WAL) appendLocked(origin walOrigin, events ...logtypes.Event) error {
 		}
 	}
 
-	for _, ev := range events {
-		newEntry := WALEntry{
-			Replay:   replay,
-			Seq:      uint64(len(w.entries) + 1),
-			Event:    ev,
-			Appended: true,
-		}
-		w.entries = append(w.entries, newEntry)
-		w.noteEntryAddedLocked(newEntry) // #66-②：积压计数增量维护
+	if w.reservationErr != nil {
+		return w.reservationErr
+	}
+	newEntries := make([]WALEntry, len(events))
+	for i, ev := range events {
+		newEntries[i] = WALEntry{Replay: replay, Seq: uint64(len(w.entries) + i + 1), Event: ev, Appended: true, appendRevision: w.revision}
+	}
+	leases, err := reserveWALEntries(newEntries, w.reserveBytes)
+	if err != nil {
+		return err
+	}
+	for i := range newEntries {
+		newEntries[i].reservation = leases[i]
+		w.entries = append(w.entries, newEntries[i])
+		w.noteEntryAddedLocked(newEntries[i]) // 预算与积压都跟随实际条目生命周期。
 	}
 	// read_position 可先推进；durable 等 Commit。
 	end := lastRecordEnd(events, st.Positions.Read)
@@ -759,8 +1380,13 @@ func (w *WAL) adjudicateReplayDuplicatesLocked(events []logtypes.Event) []logtyp
 		sameSpan := existing.Record.Start == ev.Record.Start && existing.Record.End == ev.Record.End
 		sameLine := existing.Level == ev.Level && existing.Stream == ev.Stream && existing.Message == ev.Message
 		if sameSpan && sameLine {
+			w.pendingEpoch++
 			w.entries[idx].Event = ev // 胜者原位替换：静止态收敛为同一内容 ✓
 			w.entries[idx].Replay = true
+			w.entries[idx].acknowledged = nil
+			w.entries[idx].appendRevision = w.revision
+			w.entries[idx].captureToken = 0
+			w.entries[idx].captureBody = [32]byte{}
 			slog.Warn("回放去重：同区间仅时间不同 ⇒ 替换既有条目并追加更正版待投递",
 				"key", keyLabel, "event_id", ev.EventID, "start", ev.Record.Start, "end", ev.Record.End)
 			out = append(out, ev)
@@ -775,6 +1401,9 @@ func (w *WAL) adjudicateReplayDuplicatesLocked(events []logtypes.Event) []logtyp
 func (w *WAL) Commit() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.reservationErr != nil {
+		return w.reservationErr
+	}
 
 	if w.fsync != nil {
 		if err := w.fsync(); err != nil {
@@ -834,7 +1463,10 @@ func (w *WAL) Commit() error {
 func (w *WAL) RecordHTTPResult(res DeliveryResult) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.recordHTTPResultLocked(res)
+}
 
+func (w *WAL) recordHTTPResultLocked(res DeliveryResult) error {
 	var state logtypes.DeliveryState
 	switch {
 	case res.AckLost:
@@ -875,7 +1507,48 @@ func (w *WAL) RecoverySegmentID() string {
 
 // TryReclaim 经账本 CanReclaim 门禁尝试推进 reclaim_position，并回收 WAL 中已被
 // reclaim 前缀覆盖的事件（否则内存会随采集总量线性增长——真机 64 源实测曾致 Worker RSS 2GiB）。
-func (w *WAL) TryReclaim() (uint64, error) {
+func (w *WAL) TryReclaim() (uint64, error) { return w.TryReclaimThrough(^uint64(0)) }
+
+// TryReclaimThrough供当前发布证明的责任转移出口限定实际目标，不以旧宽分段越过证明外沿。
+func (w *WAL) TryReclaimThrough(through uint64) (uint64, error) {
+	w.mu.Lock()
+	if w.qualifiedReclaim {
+		// 此WAL短临界只做内存身份复核/账本推进/剪枝；窗外采集最多等这段内存工作，不跨任何IO。
+		unknown := make([]logtypes.RecordRange, 0, len(w.entries))
+		for _, pending := range w.entries {
+			if !w.reclaimEntryQualifiedLocked(pending) {
+				unknown = append(unknown, pending.Event.Record)
+			}
+		}
+		var abandoned []ledger.GapAbandonment
+		pos, err := w.led.TryReclaimIf(w.key, func(proof ledger.ReclaimTarget) bool {
+			if proof.Target > through {
+				return false
+			}
+			abandoned = proof.Abandonments
+			for _, record := range unknown {
+				if record.Start < proof.Target && !walRecordAbandoned(record, proof.Abandonments) {
+					return false
+				}
+			}
+			return true
+		})
+		if abandoned == nil {
+			if entry := w.led.Get(w.key); entry != nil {
+				abandoned = entry.Abandonments
+			}
+		}
+		if err == nil {
+			w.pruneReclaimedLocked(pos, abandoned)
+		} else if err != ledger.ErrReclaimPrecondition {
+			if positions, ok := w.led.Positions(w.key); ok {
+				w.pruneReclaimedLocked(positions.Reclaim, abandoned)
+			}
+		}
+		w.mu.Unlock()
+		return pos, err
+	}
+	w.mu.Unlock()
 	pos, err := w.led.TryReclaim(w.key)
 	if err != nil {
 		// 账本拒绝**推进**（典型：回收位置恰好触到恢复分段边界，CoversTo > Reclaim 不成立）时，
@@ -901,17 +1574,46 @@ func (w *WAL) TryReclaim() (uint64, error) {
 // 走出暂停——现场表现正是「积压已回落但暂不能恢复采集」之后永远停住。
 // 该分支只多一次 O(条目数) 的积压统计，而它本就被本方法的调用路径（每轮采集一次）覆盖。
 func (w *WAL) pruneReclaimed(pos uint64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pruneReclaimedLocked(pos, nil)
+}
+
+func walEntryAbandoned(entry WALEntry, proofs []ledger.GapAbandonment) bool {
+	return walRecordAbandoned(entry.Event.Record, proofs)
+}
+
+func walRecordAbandoned(record logtypes.RecordRange, proofs []ledger.GapAbandonment) bool {
+	if record.End <= record.Start {
+		return false
+	}
+	// 人工凭据是闭区间，record为半开；只按精确并集推进，不填凸包的健康洞，也不做无保护to+1。
+	through := record.Start
+	for {
+		next := through
+		for _, proof := range proofs {
+			if proof.ReasonCode != ledger.GapReasonPermanentlyLost || proof.Operator == "" || proof.From > through || proof.To < through {
+				continue
+			}
+			if proof.To >= record.End-1 {
+				return true
+			}
+			if proof.To+1 > next {
+				next = proof.To + 1
+			}
+		}
+		if next == through {
+			return false
+		}
+		through = next
+	}
+}
+
+func (w *WAL) pruneReclaimedLocked(pos uint64, abandoned []ledger.GapAbandonment) {
 	if pos == 0 {
-		// 该分支不剪条目，但仍要按同一临界区访问、并与 maybeResumeBacklogLocked 的
-		// 「调用方需持 w.mu」契约保持一致：否则它与 Append/backlogLocked 并发时
-		// 会读到撕裂的积压状态（且 Go 竞态检测会直接报数据竞争）。
-		w.mu.Lock()
-		defer w.mu.Unlock()
 		w.maybeResumeBacklogLocked()
 		return
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
 	// #66-①：**增量** prune —— 只删"从头部起的连续可回收前缀"（条目按 seq 追加 ⇒ 正常情形下
 	// "可回收"就是一段前缀 ✓）⇒ 用**头偏移窗**，并把已删前缀**置零**（窗口仍指向同一底层数组，
 	// 不置零就等于继续持有已丢弃事件的正文 ✗ —— 原实现正是为此改用"新数组" ✗，但那会
@@ -921,7 +1623,7 @@ func (w *WAL) pruneReclaimed(pos uint64) {
 	cut := 0
 	for cut < len(w.entries) {
 		e := w.entries[cut]
-		if !(e.Durable && e.Event.Record.End <= pos) {
+		if !e.Durable || e.Event.Record.End > pos || (!w.reclaimEntryQualifiedLocked(e) && !walEntryAbandoned(e, abandoned)) {
 			break
 		}
 		cut++
@@ -940,7 +1642,7 @@ func (w *WAL) pruneReclaimed(pos uint64) {
 		w.pruneSinceSweep = 0
 		kept := w.entries[:0]
 		for _, entry := range w.entries {
-			if entry.Durable && entry.Event.Record.End <= pos {
+			if entry.Durable && entry.Event.Record.End <= pos && (w.reclaimEntryQualifiedLocked(entry) || walEntryAbandoned(entry, abandoned)) {
 				w.noteEntryDroppedLocked(entry) // #66-②：完整清扫的删除同样要记账
 				continue
 			}
@@ -955,20 +1657,452 @@ func (w *WAL) pruneReclaimed(pos uint64) {
 	w.maybeResumeBacklogLocked()
 }
 
+// reclaimEntryQualifiedLocked只认当前完整正文的实际ACK，内存stamp不能由恢复范围或最大位置重造。
+func (w *WAL) reclaimEntryQualifiedLocked(entry WALEntry) bool {
+	if !w.qualifiedReclaim {
+		return true
+	}
+	if entry.acknowledged == nil {
+		return false
+	}
+	id, err := CommitIdentityOf(entry.Event)
+	return err == nil && id == *entry.acknowledged
+}
+
 // Snapshot 返回 WAL 内事件（测试/恢复用）。
 func (w *WAL) Snapshot() []WALEntry {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	out := make([]WALEntry, len(w.entries))
 	copy(out, w.entries)
+	for i := range out {
+		out[i].reservation = nil
+		out[i].Event = cloneWALEvent(out[i].Event)
+	}
 	return out
+}
+
+// cloneWALEvent只复制可变字段；正文字符串只读共享，不另造正文队列。
+func cloneWALEvent(event logtypes.Event) logtypes.Event {
+	if event.Fields != nil {
+		fields := make(map[string]string, len(event.Fields))
+		for key, value := range event.Fields {
+			fields[key] = value
+		}
+		event.Fields = fields
+	}
+	return event
+}
+
+// DeliveryCapture只携带原WAL实例、同锁捕获版号和实际写入成员token；不携正文或逐ID表。
+type DeliveryCapture struct {
+	owner    *WAL
+	revision uint64
+	token    uint64
+	members  int
+}
+type walCapture = DeliveryCapture
+
+// CapturedSiblings只返回本批ID在原捕获前已存在的完整兄弟，供既有canonical裁定；新变体不能借cut变旧。
+func (w *WAL) CapturedSiblings(events []logtypes.Event, capture *DeliveryCapture) ([]logtypes.Event, error) {
+	if capture == nil || capture.owner != w {
+		return nil, ErrWALWindowChanged
+	}
+	wanted := make(map[string]struct{}, len(events))
+	for _, event := range events {
+		wanted[event.EventID] = struct{}{}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out []logtypes.Event
+	for _, entry := range w.entries {
+		if _, ok := wanted[entry.Event.EventID]; !ok {
+			continue
+		}
+		if entry.appendRevision > capture.revision || !entry.Durable {
+			return nil, ErrWALWindowChanged
+		}
+		out = append(out, cloneWALEvent(entry.Event))
+	}
+	return out, nil
+}
+
+// CaptureAcknowledgedPrefix同锁捕获有界、连续、实际耐久且完整正文已ACK的前缀及原cut。
+// 不看恢复段或hold，避免无段覆盖的修复反过来依赖既有段；返回正文只含私有Fields副本。
+func (w *WAL) CaptureAcknowledgedPrefix(from, to uint64, limit int) ([]logtypes.Event, *DeliveryCapture, error) {
+	if limit <= 0 || limit > 500 {
+		return nil, nil, fmt.Errorf("acquire: ACK前缀成员超出有界窗口")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	capture := &DeliveryCapture{owner: w, revision: w.revision}
+	window := make([]WALEntry, 0, limit)
+	for _, entry := range w.entries {
+		if entry.Event.Record.End <= from || entry.Event.Record.Start >= to {
+			continue
+		}
+		if len(window) >= limit {
+			break
+		}
+		window = append(window, entry)
+	}
+	sort.Slice(window, func(i, j int) bool { return window[i].Event.Record.Start < window[j].Event.Record.Start })
+	events := make([]logtypes.Event, 0, len(window))
+	end := from
+	for _, entry := range window {
+		if entry.Event.Record.Start < end {
+			// 同位置旧兄弟也不能借已选正文的ACK；保留歧义位置之后的全部责任，只留下其前面的连续段。
+			for len(events) > 0 && events[len(events)-1].Record.End > entry.Event.Record.Start {
+				events = events[:len(events)-1]
+			}
+			break
+		}
+		if entry.Event.Record.Start != end || entry.Event.Record.End <= end || entry.Event.Record.End > to || !entry.Durable || !w.reclaimEntryQualifiedLocked(entry) || entry.acknowledged == nil {
+			break
+		}
+		events = append(events, cloneWALEvent(entry.Event))
+		end = entry.Event.Record.End
+	}
+	if len(events) == 0 {
+		return events, capture, nil
+	}
+	ok, err := w.capturedMembersAcknowledgedLocked(events, capture)
+	if err != nil || !ok {
+		return nil, nil, ErrWALWindowChanged
+	}
+	return events, capture, nil
+}
+
+// CapturedMembersAcknowledged只读核对原cut中的完整正文ACK；应在既有窗口租约内、登记Verified之前调用。
+// 锁序仅WAL.mu，不取ledger锁、不查段/hold、不写ACK或水位；不会泄露任何内部切片或可写正文。
+func (w *WAL) CapturedMembersAcknowledged(events []logtypes.Event, capture *DeliveryCapture) (bool, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.capturedMembersAcknowledgedLocked(events, capture)
+}
+
+func (w *WAL) capturedMembersAcknowledgedLocked(events []logtypes.Event, capture *DeliveryCapture) (bool, error) {
+	if capture == nil || capture.owner != w || len(events) == 0 || len(events) > 500 {
+		return false, ErrWALWindowChanged
+	}
+	expected := make(map[CommitIdentity]struct{}, len(events))
+	wanted := make(map[string]struct{}, len(events))
+	var from, to uint64
+	for i, event := range events {
+		id, err := CommitIdentityOf(event)
+		if err != nil {
+			return false, err
+		}
+		expected[id] = struct{}{}
+		wanted[id.EventID] = struct{}{}
+		if i == 0 || id.Record.Start < from {
+			from = id.Record.Start
+		}
+		to = max(to, id.Record.End)
+	}
+	seen := make(map[CommitIdentity]struct{}, len(expected))
+	for _, entry := range w.entries {
+		_, sameID := wanted[entry.Event.EventID]
+		if !sameID && (entry.Event.Record.End <= from || entry.Event.Record.Start >= to) {
+			continue
+		}
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			return false, err
+		}
+		if _, ok := expected[id]; !ok || entry.appendRevision > capture.revision || !entry.Durable || entry.acknowledged == nil || id != *entry.acknowledged {
+			return false, nil
+		}
+		seen[id] = struct{}{}
+	}
+	return len(seen) == len(expected), nil
+}
+
+// CaptureDelivery把不透明捕获边界与完整身份在同一WAL快照取得，不能由重试当前版号重造原边界。
+func (w *WAL) CaptureDelivery(events []logtypes.Event) ([]logtypes.Event, []CommitIdentity, *DeliveryCapture, error) {
+	capture := &DeliveryCapture{}
+	body, ids, err := w.captureCommitted(events, capture)
+	return body, ids, capture, err
+}
+
+// CaptureDeliverySubset在同一快照区分实际候选的活WAL与缺席历史，缺席正文仍须由调用者证明真源。
+// 继承原cut时绝不以当前revision洗白捕获后的新变体；未提交的命中也不能冒充历史。
+func (w *WAL) CaptureDeliverySubset(events []logtypes.Event, original *DeliveryCapture) ([]logtypes.Event, []logtypes.Event, []CommitIdentity, *DeliveryCapture, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	capture := &DeliveryCapture{owner: w, revision: w.revision}
+	if original != nil {
+		if original.owner != w {
+			return nil, nil, nil, nil, ErrWALWindowChanged
+		}
+		*capture = *original
+	}
+	wanted := make(map[CommitIdentity]struct{}, len(events))
+	wantedIDs := make(map[string]struct{}, len(events))
+	for _, event := range events {
+		id, err := CommitIdentityOf(event)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		wanted[id] = struct{}{}
+		wantedIDs[id.EventID] = struct{}{}
+	}
+	found := make(map[CommitIdentity]logtypes.Event, len(wanted))
+	for _, entry := range w.entries {
+		if _, sameID := wantedIDs[entry.Event.EventID]; !sameID {
+			continue
+		}
+		if entry.appendRevision > capture.revision {
+			return nil, nil, nil, nil, ErrWALWindowChanged
+		}
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if _, selected := wanted[id]; !selected {
+			continue
+		}
+		if !entry.Durable || entry.appendRevision > capture.revision {
+			return nil, nil, nil, nil, ErrWALWindowChanged
+		}
+		found[id] = entry.Event
+	}
+	var active, historical []logtypes.Event
+	var ids []CommitIdentity
+	for _, event := range events {
+		id, err := CommitIdentityOf(event)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if body, ok := found[id]; ok {
+			active = append(active, cloneWALEvent(body))
+			ids = append(ids, id)
+		} else {
+			historical = append(historical, cloneWALEvent(event))
+		}
+	}
+	return active, historical, ids, capture, nil
+}
+
+// MarkDeliveryMembers只在唯一投递owner真正准备物理写入时标记本批WAL成员，不影响新采集qualification。
+func (w *WAL) MarkDeliveryMembers(events []logtypes.Event, capture *DeliveryCapture) (*DeliveryCapture, error) {
+	if capture == nil || capture.owner != w {
+		return nil, ErrWALWindowChanged
+	}
+	expected := make(map[CommitIdentity]struct{}, len(events))
+	for _, event := range events {
+		id, err := CommitIdentityOf(event)
+		if err != nil {
+			return nil, err
+		}
+		expected[id] = struct{}{}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	found := make(map[CommitIdentity]struct{}, len(expected))
+	matched := make(map[int]CommitIdentity)
+	for i, entry := range w.entries {
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := expected[id]; ok && entry.Durable {
+			if entry.appendRevision > capture.revision {
+				return nil, ErrWALWindowChanged
+			}
+			found[id] = struct{}{}
+			matched[i] = id
+		}
+	}
+	if len(found) != len(expected) {
+		return nil, ErrWALWindowChanged
+	}
+	w.nextCapture++
+	marked := *capture
+	marked.token = w.nextCapture
+	marked.members = len(matched)
+	for i, id := range matched {
+		w.entries[i].captureToken = marked.token
+		w.entries[i].captureBody = id.BodyDigest
+	}
+	return &marked, nil
+}
+
+// SnapshotDeliveryMembers只重取原实际写入成员；未选旧兄弟不计入count，新替换清mark后必使证明失败。
+func (w *WAL) SnapshotDeliveryMembers(capture *DeliveryCapture, count int) ([]WALEntry, error) {
+	if capture == nil || capture.owner != w || capture.token == 0 {
+		return nil, ErrWALWindowChanged
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out []WALEntry
+	for _, entry := range w.entries {
+		if entry.captureToken != capture.token {
+			continue
+		}
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			return nil, err
+		}
+		if !entry.Durable || id.BodyDigest != entry.captureBody || len(out) >= count {
+			return nil, ErrWALWindowChanged
+		}
+		entry.Event = cloneWALEvent(entry.Event)
+		entry.reservation = nil
+		out = append(out, entry)
+	}
+	if len(out) != count {
+		return nil, ErrWALWindowChanged
+	}
+	return out, nil
+}
+
+func (w *WAL) ClearDeliveryMembers(capture *DeliveryCapture) {
+	if capture == nil || capture.owner != w || capture.token == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := range w.entries {
+		if w.entries[i].captureToken == capture.token {
+			w.entries[i].captureToken = 0
+			w.entries[i].captureBody = [32]byte{}
+		}
+	}
+}
+
+// CaptureCommitted在同一WAL快照中逐条匹配完整身份，不按EventID或最大位置借用资格。
+func (w *WAL) CaptureCommitted(events []logtypes.Event) ([]logtypes.Event, []CommitIdentity, error) {
+	return w.captureCommitted(events, nil)
+}
+
+func (w *WAL) captureCommitted(events []logtypes.Event, cut *walCapture) ([]logtypes.Event, []CommitIdentity, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	required := make([]CommitIdentity, len(events))
+	wanted := make(map[string]struct{}, len(events))
+	for i, event := range events {
+		id, err := CommitIdentityOf(event)
+		if err != nil {
+			return nil, nil, err
+		}
+		required[i] = id
+		wanted[event.EventID] = struct{}{}
+	}
+	found := make(map[CommitIdentity]logtypes.Event, len(events))
+	for _, entry := range w.entries {
+		if !entry.Durable {
+			continue
+		}
+		if _, ok := wanted[entry.Event.EventID]; !ok {
+			continue
+		}
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			return nil, nil, err
+		}
+		found[id] = entry.Event
+	}
+	captured := make([]logtypes.Event, 0, len(events))
+	for _, id := range required {
+		stored, ok := found[id]
+		if !ok {
+			return nil, nil, fmt.Errorf("acquire: batch contains an event without a matching WAL commit: %s", id.EventID)
+		}
+		captured = append(captured, cloneWALEvent(stored))
+	}
+	if cut != nil {
+		cut.owner = w
+		cut.revision = w.revision
+	}
+	return captured, required, nil
+}
+
+// SnapshotPending有界复制正文并轮转选择；精确ACK身份独立于reclaim，hold旧头不阻塞新尾。
+func (w *WAL) SnapshotPending(limit, cursor int, acknowledged map[CommitIdentity]struct{}) ([]WALEntry, int, map[CommitIdentity]struct{}, error) {
+	return w.snapshotPending(limit, cursor, acknowledged, nil)
+}
+
+// 排空宿主在同一WAL锁内复核槽位版本，旧索引不能对收缩后len取模而跨过未选前缀。
+// epoch不是提交或ACK凭据；资格、实际成员与已发布正文仍由原闸逐项核验。
+func (w *WAL) snapshotPending(limit, cursor int, acknowledged map[CommitIdentity]struct{}, epoch *uint64) ([]WALEntry, int, map[CommitIdentity]struct{}, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if epoch != nil {
+		if *epoch != w.pendingEpoch {
+			cursor = 0
+		}
+		*epoch = w.pendingEpoch
+	}
+	live := make(map[CommitIdentity]struct{}, len(acknowledged))
+	if len(w.entries) == 0 {
+		return nil, 0, live, nil
+	}
+	cursor %= len(w.entries)
+	out := make([]WALEntry, 0, min(limit, len(w.entries)))
+	next := cursor
+	selectedSuffix := false
+	for i := 0; i < len(w.entries); i++ {
+		index := (cursor + i) % len(w.entries)
+		entry := w.entries[index]
+		if !entry.Durable {
+			continue
+		}
+		id, err := CommitIdentityOf(entry.Event)
+		if err != nil {
+			return nil, cursor, nil, err
+		}
+		if _, done := acknowledged[id]; done {
+			live[id] = struct{}{}
+			continue
+		}
+		if len(out) >= limit || index < cursor && selectedSuffix {
+			continue
+		}
+		if index >= cursor {
+			selectedSuffix = true
+		}
+		entry.reservation = nil
+		entry.Event = cloneWALEvent(entry.Event)
+		out = append(out, entry)
+		next = (index + 1) % len(w.entries)
+	}
+	return out, next, live, nil
+}
+
+// CommittedIdentities仅返回仍保留WAL中的摘要，用来有界裁剪本进程提交回执。
+func (w *WAL) CommittedIdentities() (map[CommitIdentity]struct{}, error) {
+	return w.committedIdentities(nil)
+}
+
+func (w *WAL) committedIdentities(copied func()) (map[CommitIdentity]struct{}, error) {
+	w.mu.Lock()
+	events := make([]logtypes.Event, 0, len(w.entries))
+	for _, entry := range w.entries {
+		if entry.Durable {
+			events = append(events, cloneWALEvent(entry.Event))
+		}
+	}
+	w.mu.Unlock()
+	if copied != nil {
+		copied()
+	}
+	out := make(map[CommitIdentity]struct{}, len(events))
+	for _, event := range events {
+		identity, err := CommitIdentityOf(event)
+		if err != nil {
+			return nil, err
+		}
+		out[identity] = struct{}{}
+	}
+	return out, nil
 }
 
 // Restore 将持久 WAL 快照恢复到内存。账本水位由 Ledger.Restore 恢复，
 // WAL 只重建待核验事件集合，避免重启后依赖进程内存判断投递结果。
 func (w *WAL) Restore(entries []WALEntry) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	unlock := w.lockMutation(nil, true)
+	defer unlock()
 	for _, entry := range entries {
 		if entry.Event.Source.LogSourceID != "" && entry.Event.Source.LogSourceID != w.key.LogSourceID {
 			return fmt.Errorf("acquire: wal restore source mismatch %q", entry.Event.Source.LogSourceID)
@@ -977,7 +2111,21 @@ func (w *WAL) Restore(entries []WALEntry) error {
 			return fmt.Errorf("acquire: wal restore generation mismatch %q", entry.Event.Source.SourceGeneration)
 		}
 	}
-	w.entries = append([]WALEntry(nil), entries...)
+	restored := append([]WALEntry(nil), entries...)
+	if w.revision == ^uint64(0) {
+		return fmt.Errorf("acquire: WAL恢复捕获序号已耗尽")
+	}
+	w.revision++
+	w.pendingEpoch++
+	for i := range restored {
+		restored[i].Event = cloneWALEvent(restored[i].Event)
+		restored[i].acknowledged = nil
+		restored[i].appendRevision = w.revision
+		restored[i].captureToken = 0
+		restored[i].captureBody = [32]byte{}
+	}
+	w.restoreReservationsLocked(restored)
+	w.entries = restored
 	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
 	for _, entry := range entries {
 		if entry.Durable && entry.Event.Record.End > w.lastDurableEnd {
@@ -987,7 +2135,7 @@ func (w *WAL) Restore(entries []WALEntry) error {
 	// 恢复完立刻判一次闸：索引里的**持久积压**可能已经越界，此时必须当场暂停，而不是等下一次
 	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
 	w.enforceBacklogLimitLocked()
-	return nil
+	return w.reservationErr
 }
 
 func lastRecordEnd(events []logtypes.Event, fallback uint64) uint64 {

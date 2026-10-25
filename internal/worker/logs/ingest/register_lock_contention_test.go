@@ -31,7 +31,8 @@ import (
 // 临界区而不等 cycleMu）在两种构建下都保留 ✓。**生产口径（非 -race）实测数字**（同一夹具，
 // 见下方 TestRegisterInstanceLatencyBudgetUnderSaturation 的日志输出口径）：
 //   - 登记耗时：85.5ms / 168.6µs（两次忙期采样），8 次登记最坏 **35.6ms**（预算 1s）✓；
-//   - 忙期单轮采集（= cycleMu 单次持有）：**1.91s / 1.91s**（另一轮 651ms）；
+//   - 忙期**整轮采集墙钟**：**1.91s / 1.91s**（另一轮 651ms）。注意这不是 cycleMu 的
+//     持有时长——cycleMu 只包 poll 工作集快照（runtime.go:3764 上锁、3784 释放）；
 //   - `m.mu` 单次最长持有：**27.4ms**（观测到 12 次释放）。
 // 实现见 race_on_test.go / race_off_test.go 的 raceEnabled（构建标签 `race`，**不使用
 // testing.Short** ✗——Short 表达的是"跑得少一点"，而这里豁免的是"检测器放大了绝对时间"）。
@@ -126,8 +127,13 @@ func newBusyIngestFixture(t *testing.T, sources, linesPerSource int, insertDelay
 	return &busyIngestFixture{manager: m, fixture: fixture, root: root}
 }
 
-// pollRound 是一次**显式驱动**的采集轮。pollOnce 全程持有 cycleMu，因此「本轮时长」就是
-// 该锁的单次持有时长——直接测时长，不做锁探测。
+// pollRound 是一次**显式驱动**的采集轮。这里测的是**整轮墙钟**，不是 cycleMu 的持有时长：
+// pollOnce 只在「读本轮工作集快照」这一段持 cycleMu（runtime.go:3764 上锁、3784 释放，
+// workers 在锁内读取），其后分发 / Poll / 落库 / VL 投递全在锁外。
+//
+// 口径纠正（2026-10-24）：本文件此前写「pollOnce 全程持有 cycleMu，本轮时长就是该锁的
+// 单次持有时长」，与实现不符，已改正。被测性质是「采集轮**进行中**登记能否返回」，
+// 不依赖锁被持有多久；轮时长只用来证明「该轮确实足够长、登记不是被秒回」。
 //
 // 为什么不能改用「TryLock 探锁」量化 cycleMu 的持有时间：Go 的 sync.Mutex 在有等待者
 // 排队超过 1ms 后进入饥饿模式，此时所有权由 Unlock 直接交给队首等待者、`mutexStarving`
@@ -224,6 +230,16 @@ func instanceBindingFor(index int) (uuid, targetID, generation string) {
 	return fmt.Sprintf("uuid-busy-%d", index), fmt.Sprintf("inst:%d", 900+index), "gen-20261001"
 }
 
+// registerOutcome 是**登记返回那一刻**的取样：耗时、错误，以及当时整轮是否已经结束。
+//
+// roundDone 必须在 RegisterInstance 返回后立刻读（见调用点注释）：它是「登记必须在该轮结束
+// 之前返回」这条结构断言的唯一有效取样点。
+type registerOutcome struct {
+	err       error
+	elapsed   time.Duration
+	roundDone bool
+}
+
 // TestRegisterInstanceNotBlockedBySaturatedPollRound 是事故的直接回归。
 //
 // 两个子用例对应 CP 的两条真实调用：
@@ -236,6 +252,9 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 	// 测试取 1s：既远小于真实 10s（留出 CI 抖动余量），又必须远小于忙期单轮时长，
 	// 否则该用例无法区分「被长临界区挡住」与「正常登记开销」。
 	const registerDeadline = time.Second
+	// roundDeadline 是等待整轮采集结束的上界（原实现里写作字面量 30s，提到常量只为让
+	// 「等登记返回」与「等整轮结束」共用同一个界，取值未变）。
+	const roundDeadline = 30 * time.Second
 	// insertDelay 是单次 VL 插入的注入延迟。取值从 200ms 提到 800ms（FR-498 并发采集轮之后）：
 	// 轮内采集已跨源并发重叠，单轮时长不再等于「各源之和」而是「最慢源的路径」，200ms × 2 批
 	// 在 6 源并发下只能造出 ≈0.9s 的忙期 → 触发下方「夹具未制造出长于登记截止时间的忙期」的
@@ -244,6 +263,18 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 	const insertDelay = 800 * time.Millisecond
 	const busySources = 6
 	const linesPerSource = 600
+	// roundPollConcurrency 是本用例正式轮的源并发度，**只影响本夹具的轮内提交粒度**：
+	// 本用例断言的是「采集轮进行中登记能否返回」，不是跨源并行吞吐（那是
+	// TestPollRoundOverlapsSourceWaits 的职责），因此把该轮设为逐源串行不改变被测性质。
+	//
+	// 为什么必须设 1（2026-10-23 实测）：持久化门是单持有者，一次提交的行数随「同时已有
+	// WAL 的源数」放大——6 源并发时首个持门者要提交 3618 行，-race 下耗时 3.15–3.22s，
+	// 越过 stateindex 的每周期墙钟预算（DefaultCycleMaxDuration=3s）⇒ Incomplete=true ⇒
+	// 连持门者自己也被交办 ⇒ 轮内零投递、夹具造不出忙期（失败在前置，与被测性质无关）。
+	// 逐源串行后每次提交只覆盖一个源的 600 行，远低于该周期预算；且单调用者=门口无排队，
+	// 生产默认 30ms 等门预算也不会被触发。**不改任何预算**：等门 30ms、周期 3s、
+	// 800ms 插入延迟、1s 登记门、30s 轮尾全部原值。
+	const roundPollConcurrency = 1
 
 	for _, tc := range []struct {
 		name        string
@@ -255,6 +286,9 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newBusyIngestFixture(t, busySources, linesPerSource, insertDelay)
 			m := fx.manager
+			// 仅本用例：正式轮逐源串行（理由见 roundPollConcurrency 注释）。默认并发
+			// 8 的生产口径不变，同文件另一用例仍是默认并发。
+			m.pollConcurrency = roundPollConcurrency
 			uuid, targetID, generation := instanceBindingFor(0)
 			workDir := t.TempDir()
 
@@ -270,34 +304,49 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 			fx.fixture.waitForInsertInFlight(t, 10*time.Second)
 			require.False(t, round.finished(), "夹具未造出忙期：整轮在登记前就已结束")
 
-			result := make(chan error, 1)
+			// 「登记是否在该轮结束之前返回」必须在**登记返回的那一刻**取样。
+			//
+			// 2026-10-23 纠偏：原实现在 select 超时（1s）之后才读 round.finished()，而这个夹具
+			// 又强制要求整轮 >1s —— 于是无论登记有没有被挡住，1s 时整轮必然还在跑，inRound 恒为
+			// true：该"结构性断言"实际上没有判别力（-race 下唯一的判别就靠被豁免的绝对阈值，
+			// 等于没有）。改为在 goroutine 里紧跟 RegisterInstance 返回后立刻取样，断言才真正
+			// 表达"登记必须在该轮结束之前返回"，且在两种构建下都成立（不放宽、不新增 skip）。
+			result := make(chan registerOutcome, 1)
 			started := time.Now()
 			go func() {
-				result <- m.RegisterInstance(InstanceRegistration{
+				err := m.RegisterInstance(InstanceRegistration{
 					UUID: uuid, TargetID: targetID, Generation: generation,
 					Mode: string(pipeline.ModeStdioPrimary), WorkDir: workDir,
 				})
+				// 取样点必须在返回之后、任何其它工作之前。
+				result <- registerOutcome{
+					err:       err,
+					elapsed:   time.Since(started),
+					roundDone: round.finished(),
+				}
 			}()
 
-			var elapsed time.Duration
-			var registerErr error
+			// 等待登记真正返回（旧实现会一直等到整轮结束）；上界与整轮上界一致，避免挂死。
+			var outcome registerOutcome
 			select {
-			case registerErr = <-result:
-				elapsed = time.Since(started)
-			case <-time.After(registerDeadline):
-				elapsed = time.Since(started)
+			case outcome = <-result:
+			case <-time.After(roundDeadline):
+				t.Fatalf("登记在 %s 内未返回（整轮仍未结束）", roundDeadline)
 			}
-			inRound := !round.finished()
-			roundElapsed := round.waitFinished(t, 30*time.Second)
-			t.Logf("单轮采集（= cycleMu 单次持有）%s；登记耗时 %s；登记返回时整轮是否仍在跑=%v",
+			elapsed := outcome.elapsed
+			registerErr := outcome.err
+			inRound := !outcome.roundDone
+			roundElapsed := round.waitFinished(t, roundDeadline)
+			// 口径：这是**整轮采集墙钟**，不是 cycleMu 持有时间（cycleMu 只包快照段）。
+			t.Logf("整轮采集墙钟 %s；登记耗时 %s；登记返回当刻整轮是否仍在跑=%v",
 				roundElapsed, elapsed, inRound)
 
-			// 前置条件：夹具确实造出了远长于登记截止时间的忙期长临界区。
-			// 少了这条断言，用例可能在「根本没有长临界区」时假绿。
+			// 前置条件：该轮确实远长于登记截止时间（否则「轮内返回」无从判别）。
+			// 注意口径：这里证明的是「轮足够长」，不是「cycleMu 被持有得足够久」。
 			require.Greater(t, roundElapsed, registerDeadline,
-				"夹具未制造出长于登记截止时间的忙期临界区，用例失去判别力")
+				"夹具未制造出长于登记截止时间的采集轮，用例失去判别力")
 			// 判别性断言：登记必须在整轮采集**结束之前**返回。
-			// 旧实现取 cycleMu（整轮全程持有），必然要等本轮跑完才返回。
+			// 旧实现（pollOnce 整轮持 cycleMu + 登记也取 cycleMu）必然要等本轮跑完才返回。
 			require.True(t, inRound,
 				"登记直到整轮采集结束才返回（耗时 %s，单轮 %s）：仍被长临界区阻塞", elapsed, roundElapsed)
 			require.NoError(t, registerErr)
@@ -342,8 +391,13 @@ func TestRegisterInstanceNotBlockedBySaturatedPollRound(t *testing.T) {
 // TestRegisterInstanceLatencyBudgetUnderSaturation 量化登记路径的等待面：
 // 登记只应等待「短临界区」（m.mu：建管道、写索引），不应等待 cycleMu（整轮采集）。
 //
-// 判据用两个量对比而不是绝对阈值：忙期单轮持有 cycleMu 的时长，与登记实际耗时。
+// 判据用两个量对比而不是绝对阈值：忙期**整轮采集墙钟**，与登记实际耗时。
 // 两者相差一个数量级（≥4x）以上，才说明阻塞源被换成了短锁。
+//
+// 口径纠正（2026-10-24）：此前写作「忙期单轮持有 cycleMu 的时长」，与实现不符——
+// cycleMu 只包 poll 工作集快照（runtime.go:3764 上锁、3784 释放），其后分发 / Poll /
+// 落库 / VL 投递全在锁外，故整轮墙钟 ≠ cycleMu 持有时长。被测性质是「登记不等整轮」，
+// 不是「锁被持有得久」。
 func TestRegisterInstanceLatencyBudgetUnderSaturation(t *testing.T) {
 	if raceEnabled {
 		t.Skip("竞态检测器把索引写入放大约 10–20×（同一夹具：生产口径最坏 35.6ms vs 预算 1s；" +
@@ -380,7 +434,7 @@ func TestRegisterInstanceLatencyBudgetUnderSaturation(t *testing.T) {
 			worst = l
 		}
 	}
-	t.Logf("忙期：单轮采集（cycleMu 持有）%s；m.mu 单次最长持有 %s（观测到 %d 次释放，%d 次失败采样）；登记 8 次最坏 %s",
+	t.Logf("忙期：整轮采集墙钟 %s（cycleMu 只包快照段，非全程持有）；m.mu 单次最长持有 %s（观测到 %d 次释放，%d 次失败采样）；登记 8 次最坏 %s",
 		roundElapsed, muMax, muHolds, muFails, worst)
 	// 前置条件：夹具确实造出了忙期。
 	require.Greater(t, roundElapsed, 100*time.Millisecond, "夹具未制造出忙期")

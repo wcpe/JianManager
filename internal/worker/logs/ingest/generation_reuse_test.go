@@ -43,7 +43,10 @@ func TestRecoveryAvoidsProjectionGenerationAlreadyInVL(t *testing.T) {
 	first, err := newTestManager(t, opts)
 	require.NoError(t, err)
 	first.pollOnce()
+	first.markPublicationPending(key, savedSource(t, first, key).ProjectionGeneration)
+	require.True(t, savedSource(t, first, key).PublicationPending, "夹具必须真实进入需恢复的待发布状态，而非已完整可见的只读确认")
 	require.NoError(t, first.Stop())
+	require.True(t, savedSource(t, first, key).PublicationPending)
 	require.NotEmpty(t, fixture.writes, "首启应产生投影写入")
 
 	// 现场注入：把「当前代次」的那一行原样复制一份、只改代次名为「下一次重放本会选用的名字」

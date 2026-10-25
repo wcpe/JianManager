@@ -17,6 +17,7 @@ package ingest
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,13 +175,17 @@ func TestRebuildRetryBoundedAndVisible(t *testing.T) {
 	})
 	require.NoError(t, err)
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	m.materializationLimits.WindowCopies = 3
+	clock := time.Now()
+	m.rebuilds.now = func() time.Time { return clock }
 
 	// **生产形态**：写入自称成功、数据永远不可见。
 	fixture.silentDropInsert = true
 	fixture.deleteDay("2026-09-22")
 
-	writesSeen := make([]int, 0, 3)
-	for attempt := 1; attempt <= 3; attempt++ {
+	// 首次seed本身已计入一份真实副本，本轮只剩两次新增预算。
+	writesSeen := make([]int, 0, 2)
+	for attempt := 1; attempt <= 2; attempt++ {
 		ok, reason := m.scheduleRebuildAsync(source, []string{"2026-09-22"}, "test_loop")
 		require.True(t, ok, "第 %d 次登记应被接受（上限是 3）：%s", attempt, reason)
 		require.Equal(t, 1, m.drainRebuilds(context.Background()),
@@ -193,12 +198,10 @@ func TestRebuildRetryBoundedAndVisible(t *testing.T) {
 		require.Error(t, out.Err, "第 %d 次的失败必须可取证", attempt)
 		require.Empty(t, out.Days, "失败绝不产生「已完成的天」")
 		writesSeen = append(writesSeen, fixture.insertAttemptCount())
-		// 清退避窗口，让"下一次登记"测的是上限而不是计时。
-		m.rebuilds.mu.Lock()
-		if st := m.rebuilds.attempts[key]; st != nil {
-			st.nextAllowedAt = time.Time{}
-		}
-		m.rebuilds.mu.Unlock()
+		// 推进假时钟跨过真实退避，不直接改写解禁字段。
+		state, ok := m.rebuilds.snapshot(key)
+		require.True(t, ok)
+		clock = state.nextAllowedAt.Add(time.Second)
 	}
 	// 循环形态确认：这三次都真的又写了一遍（否则测的不是"写完却校验不过"的循环）。
 	for i := 1; i < len(writesSeen); i++ {
@@ -206,22 +209,20 @@ func TestRebuildRetryBoundedAndVisible(t *testing.T) {
 			"每次失败前都确实又写了一遍（这正是循环重写的形态）")
 	}
 
-	// 第 3 次失败后：必须**放弃**，且原因可读（含已尝试代次与最后失败原因）。
-	reason, abandoned := m.RebuildAbandonedReason(key)
-	require.True(t, abandoned, "连续确定性失败达上限后必须放弃自动重试（否则就是生产那个无界循环）")
-	require.Contains(t, reason, "连续 3 次重建失败后停止自动重试", "放弃原因必须可读：%s", reason)
-	require.Contains(t, reason, "projection-", "放弃原因必须点名已尝试的代次（现场最难判的一点）")
-
-	// 放弃后：登记一律被拒（且原因可归类），**不再产生任何新写入**。
-	insertsBefore := fixture.insertCount()
-	ok, skip := m.scheduleRebuildAsync(source, []string{"2026-09-22"}, "test_after_abandon")
-	require.False(t, ok, "已放弃后不得再登记")
-	require.Equal(t, "rebuild_abandoned", skip, "跳过原因必须可归类")
-	require.Zero(t, m.drainRebuilds(context.Background()), "已放弃后不得再有任务可执行")
-	require.Equal(t, insertsBefore, fixture.insertCount(),
-		"放弃后不得再有新写入（这正是 281GB 的止血点）")
-	require.Positive(t, m.RebuildStats().Abandoned, "放弃次数必须进读数")
-	require.Positive(t, m.RebuildStats().AbandonedSkips, "被拒的登记也必须进读数")
+	// 不能用永久停源代替副本上限：仍可登记只读确认，但新增物化必须被持久窗口预算挡住。
+	_, abandoned := m.RebuildAbandonedReason(key)
+	require.False(t, abandoned)
+	insertsBefore := fixture.insertAttemptCount()
+	ok, skip := m.scheduleRebuildAsync(source, []string{"2026-09-22"}, "test_after_window_budget")
+	require.True(t, ok, "预算只闸物理新增，不封禁调度器：%s", skip)
+	require.Equal(t, 1, m.drainRebuilds(context.Background()))
+	require.Equal(t, insertsBefore, fixture.insertAttemptCount(), "同一稳定窗口达到上限后零新增副本")
+	out, _ := m.RebuildLastResult(key)
+	require.ErrorIs(t, out.Err, ErrMaterializationBudget)
+	require.True(t, out.Pending, "预算用尽不得假报历史已发布")
+	rows, listErr := m.index.ListMaterializations(context.Background(), key, "2026-09-22", "", 0, 200)
+	require.NoError(t, listErr)
+	require.Len(t, rows, 3, "每个已发生/未知物理写入必须持久计费")
 }
 
 // TestRebuildExternalFailureNeverAbandons 固定**反面**：外部条件失败（VL 未就绪/插入 5xx）
@@ -483,29 +484,31 @@ func TestRebuildFailureNeverMasksAsSuccess(t *testing.T) {
 //
 // 变异验证：把 `noteSuccess` 改回 `delete(s.attempts, key)` ⇒ 本用例转红。
 func TestRebuildSuccessDoesNotResetCopyBudget(t *testing.T) {
-	s := newRebuildScheduler()
-	s.maxAttempts = 3
+	m, err := newTestManager(t, Options{Root: t.TempDir(), Catalog: catalog.New(nil)})
+	require.NoError(t, err)
+	m.materializationLimits.WindowCopies = 3
+	source := SourceConfig{LogSourceID: "ns", SourceGeneration: "g1", UTCDay: "2026-09-22"}
 	const key = "ns/g1"
-
-	// 写满副本预算：每次都是「写入成功但校验不过」（errProjectionVerifyFailed）。
-	for i := 0; i < 2*3; i++ {
-		s.noteFailure(key, "projection-x", errProjectionVerifyFailed, rebuildFailureDeterministic)
-		// 每个循环里插一次成功：模拟生产中「某天成功、某天失败」的真实交替。
-		s.noteSuccess(key)
+	events := []logtypes.Event{hotRetentionTestEvent(source.UTCDay, 10, 20, "稳定内容")}
+	for i := 0; i < 3; i++ {
+		reservation, release, err := m.reserveMaterialization(context.Background(), source, fmt.Sprintf("projection-%d", i+1), events)
+		require.NoError(t, err)
+		release()
+		require.NoError(t, m.updateMaterialization(context.Background(), reservation, "published", true, true, "预算状态机夹具"))
+		m.rebuilds.noteFailure(key, "projection-x", errProjectionVerifyFailed, rebuildFailureDeterministic)
+		m.rebuilds.noteSuccess(key)
 	}
-
-	st, ok := s.snapshot(key)
+	// 成功只能清连续失败退避，不能退款持久窗口副本预算。
+	_, release, err := m.reserveMaterialization(context.Background(), source, "projection-next", events)
+	if release != nil {
+		release()
+	}
+	require.ErrorIs(t, err, ErrMaterializationBudget)
+	rows, listErr := m.index.ListMaterializations(context.Background(), key, source.UTCDay, "", 0, 200)
+	require.NoError(t, listErr)
+	require.Len(t, rows, 3)
+	st, ok := m.rebuilds.snapshot(key)
 	require.True(t, ok)
-	require.Equal(t, 2*3, st.totalRebuilds,
-		"成功不得清掉累计副本数；否则上限永远追不上 ⇒ 无限换代次（生产实测 127 倍重复）")
-	require.Equal(t, 0, st.attempts,
-		"成功必须重置连续失败计数（否则一次抖动会永久污染退避）")
-
-	// 再失败一次：累计副本超上限 ⇒ 必须放弃。
-	abandoned, _, _ := s.noteFailure(key, "projection-y", errProjectionVerifyFailed, rebuildFailureDeterministic)
-	require.True(t, abandoned,
-		"副本份数达到上限后必须停止自动重试；否则每轮成功都能把上限清零")
-	reason, _ := s.snapshot(key)
-	require.Contains(t, reason.abandonReason, "已累计重建",
-		"放弃原因必须点明是副本份数超限，而不是笼统的连续失败次数")
+	require.Zero(t, st.attempts)
+	require.False(t, st.abandoned, "预算只阻止再造副本，不能永久停源")
 }

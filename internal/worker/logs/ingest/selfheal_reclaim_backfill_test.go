@@ -53,14 +53,15 @@ func newStalledPausedSourceFixture(t *testing.T) (*Manager, SourceConfig, *pipel
 	p.WAL().SetLimits(4, 0) // 积压上限 4 ⇒ 第 5 条追加即越界 ⇒ 源暂停（现场"顶闸"形态 ✓）
 	identity := logtypes.SourceIdentity{LogSourceID: src.LogSourceID, SourceGeneration: src.SourceGeneration, ParserVersion: "v1"}
 	for i := 0; i < 5; i++ {
-		start := uint64(i * 5)
-		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: start + 4},
+		start := uint64(max(0, i*5-1))
+		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: uint64(i*5 + 4)},
 			"2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", "stalled")
 		require.NoError(t, p.WAL().Append(ev))
 	}
 	require.NoError(t, p.WAL().Commit())
 	// 投递水位：5 条全部已确认（区间 [0,24] 连续 ✓）——这是补段的上界（不越界未来 ✓）。
 	require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: 0, EndPos: 24, HTTPStatus: 200}))
+	primeConfirmedWALProjection(t, m, src, p, 24)
 	m.SetSelfHealInterval(time.Nanosecond) // 自愈按源限频：压到必然过期，回归走真实路径 ✓
 	// 投递面**必失败**（确定性桩）：现场"没人能走到投递确认面"的形态 ✓
 	//（排空 ⇒ 投递失败 ⇒ proof 面不执行 ⇒ 只有恢复/自愈面能治这个洞 ✓）。

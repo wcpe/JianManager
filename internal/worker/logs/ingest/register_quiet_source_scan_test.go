@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,9 +28,27 @@ import (
 // `Iterate` 会因 byKey 未命中而**静默返回 nil**（不打日志），判别器就失效了。
 func removeSegmentFiles(t *testing.T, eventsRoot, key string) {
 	t.Helper()
-	// 目录名按 eventstore 的命名惯例做字符替换（`/`→`_`、`:`→`-`，见 sectionDirName）。
-	dirName := strings.NewReplacer("/", "_", "\\", "_", ":", "-").Replace(key)
-	dir := filepath.Join(eventsRoot, dirName)
+	// 兼容旧目录与无损摘要目录，按有效清单原始 Key 找目标，不复制生产命名算法。
+	dirs, err := os.ReadDir(eventsRoot)
+	require.NoError(t, err)
+	dir := ""
+	for _, candidate := range dirs {
+		if !candidate.IsDir() {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(eventsRoot, candidate.Name(), "MANIFEST.json"))
+		if readErr != nil {
+			continue
+		}
+		var manifest struct {
+			Key string `json:"key"`
+		}
+		if json.Unmarshal(data, &manifest) == nil && manifest.Key == key {
+			dir = filepath.Join(eventsRoot, candidate.Name())
+			break
+		}
+	}
+	require.NotEmpty(t, dir, "必须找到清单归属目标源的事件目录")
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	removed := 0

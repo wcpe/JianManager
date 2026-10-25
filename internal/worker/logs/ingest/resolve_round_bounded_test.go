@@ -50,6 +50,8 @@ func TestResolveGapsRoundIsBoundedAndYields(t *testing.T) {
 	}
 	m, err := newTestManager(t, Options{
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
+		// 3000条按真实12KiB查询界拆片，准备期不能被小夹具默认200ms截断；扫描预算在后续独立注入。
+		VerificationTimeout: 2 * time.Second,
 	})
 	require.NoError(t, err)
 	key := source.LogSourceID + "/" + source.SourceGeneration

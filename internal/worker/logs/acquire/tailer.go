@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,6 +43,9 @@ type FileTailer struct {
 	active bool
 	// segmentStart 是当前 live 文件在逻辑源中的基址；cursor 始终是文件内偏移。
 	segmentStart uint64
+	// physicalStart 是 segmentStart 对应的物理字节偏移，纯截断重锚后不再为零。
+	physicalStart        uint64
+	physicalMappingKnown bool
 	// identity 固定取首次观察到的前缀，追加写不会改变；同路径替换时用于检测轮转。
 	identityBytes  int64
 	identitySHA256 string
@@ -69,6 +73,12 @@ type FileTailer struct {
 	// maxLinesPerPoll 单次 Poll 的读取行数上限（B1b 准入限流）；0 表示用默认常量。
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
 	maxLinesPerPoll int
+	// readLimits 在读取原始正文前限制单行与单轮字节，独立于追加后的 WAL 限额。
+	readLimits ReadLimits
+	// pendingPhysicalLine 只记录活文件半行的存在；持久游标仍留在半行首部，重启可原样重拼。
+	pendingPhysicalLine bool
+	// closedEvents 保存轮转闭合时由逐行钩子产出的事件，下一次 Poll 统一返回。
+	closedEvents []logtypes.Event
 	// truncationReanchored 标记「刚做过一次纯截断重锚」。
 	// 为什么需要：重锚发生在 PrepareRotation 里，而 PrepareRotation 由 ingest 在 Poll 之前显式调用，
 	// 调用方拿到 false（不是轮转）后紧接着就会 Poll。此时游标已越过歧义区，本轮再走后面的
@@ -79,6 +89,16 @@ type FileTailer struct {
 
 // SetMaxLinesPerPoll 覆盖单次 Poll 的读取行数上限（0 表示沿用默认）。供测试与后续配置化使用。
 func (t *FileTailer) SetMaxLinesPerPoll(n int) { t.maxLinesPerPoll = n }
+
+// SetReadLimits 设置读取前的独立字节预算；失败不改变现有配置。
+func (t *FileTailer) SetReadLimits(limits ReadLimits) error {
+	normalized, err := limits.normalized()
+	if err != nil {
+		return err
+	}
+	t.readLimits = normalized
+	return nil
+}
 
 // NewFileTailer 创建 tailer。hook 为 nil 时使用逐行 LineHook。
 func NewFileTailer(led *ledger.Ledger, key ledger.SourceKey, path string, wal *WAL, hook EventBoundaryHook) *FileTailer {
@@ -101,20 +121,23 @@ func NewFileTailer(led *ledger.Ledger, key ledger.SourceKey, path string, wal *W
 		}
 	}
 	if live.Path == "" {
-		live = ledger.Segment{Path: path, Kind: ledger.SegmentLive, ParserVersion: identity.ParserVersion}
+		live = ledger.Segment{Path: path, Kind: ledger.SegmentLive, ParserVersion: identity.ParserVersion, PhysicalMappingKnown: true}
 		_ = led.RegisterSegment(key, live)
 	}
 	t := &FileTailer{
-		led:            led,
-		key:            key,
-		path:           path,
-		hook:           hook,
-		wal:            wal,
-		parser:         identity,
-		sourceCategory: logtypes.SourceInstance,
-		segmentStart:   live.StartPos,
-		identityBytes:  live.IdentityBytes,
-		identitySHA256: live.IdentitySHA256,
+		led:                  led,
+		key:                  key,
+		path:                 path,
+		hook:                 hook,
+		wal:                  wal,
+		parser:               identity,
+		sourceCategory:       logtypes.SourceInstance,
+		readLimits:           DefaultReadLimits(),
+		segmentStart:         live.StartPos,
+		physicalStart:        live.PhysicalStart,
+		physicalMappingKnown: live.PhysicalMappingKnown,
+		identityBytes:        live.IdentityBytes,
+		identitySHA256:       live.IdentitySHA256,
 	}
 	// cursor resume：从账本 durable/read 重建。崩溃后 read 可回退到 pending 多行首行。
 	if ent := led.Get(key); ent != nil {
@@ -127,7 +150,7 @@ func NewFileTailer(led *ledger.Ledger, key ledger.SourceKey, path string, wal *W
 			base = t.segmentStart
 		}
 		t.logicalPos = base
-		t.cursor = int64(base - t.segmentStart)
+		t.cursor = int64(t.physicalStart + base - t.segmentStart)
 		t.lastSize = t.cursor
 		t.active = false
 	}
@@ -169,11 +192,17 @@ func (t *FileTailer) RebaseCurrentSegment(pos uint64) error {
 // current path. This lets ArchiveImporter recover an unread rotated tail before
 // bytes from the replacement latest.log receive logical positions.
 func (t *FileTailer) PrepareRotation() (bool, error) {
+	if err := t.checkPhysicalMapping(); err != nil {
+		return false, err
+	}
 	fi, err := os.Stat(t.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			if t.rotateTo != "" {
-				if _, rotateErr := os.Stat(t.rotateTo); rotateErr == nil && t.cursor > 0 {
+				if _, rotateErr := os.Stat(t.rotateTo); rotateErr == nil && (t.cursor > 0 || t.pendingPhysicalLine) {
+					if err := t.closeRotatedPhysicalLine(); err != nil {
+						return false, err
+					}
 					t.detectRotationLocked()
 					return true, nil
 				}
@@ -202,13 +231,13 @@ func (t *FileTailer) PrepareRotation() (bool, error) {
 	// 在那种形态下都会判为「未轮转」，导致新文件前 cursor 字节被静默跳过。
 	// 只在已消费过字节（cursor > 0）时判定：cursor == 0 时没有需要接管的已读前缀。
 	inodeReplaced := false
-	if t.cursor > 0 && t.identityOK {
+	if (t.cursor > 0 || t.pendingPhysicalLine) && t.identityOK {
 		if dev, ino, ok := fileIdentity(fi); ok && (dev != t.identityDev || ino != t.identityIno) {
 			inodeReplaced = true
 		}
 	}
 	replaced := false
-	if t.cursor > 0 && t.identityBytes > 0 && fi.Size() >= t.identityBytes {
+	if (t.cursor > 0 || t.pendingPhysicalLine) && t.identityBytes > 0 && fi.Size() >= t.identityBytes {
 		current, hashErr := filePrefixSHA256(t.path, t.identityBytes)
 		if hashErr != nil {
 			return false, hashErr
@@ -228,7 +257,10 @@ func (t *FileTailer) PrepareRotation() (bool, error) {
 		// （那会去找一个根本不存在的轮转段）。
 		return false, nil
 	}
-	if t.cursor > 0 && (fi.Size() < t.cursor || replaced || inodeReplaced) {
+	if (t.cursor > 0 || t.pendingPhysicalLine) && (fi.Size() < t.cursor || replaced || inodeReplaced) {
+		if err := t.closeRotatedPhysicalLine(); err != nil {
+			return false, err
+		}
 		t.detectRotationLocked()
 		return true, nil
 	}
@@ -282,11 +314,9 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 	if ent.AcquirePaused {
 		return nil, fmt.Errorf("acquire: tailer paused (%s)", ent.PauseReason)
 	}
-	// 已确认水位指纹（w18 漂移防护段 2）在**顶部**刷新：投递线可能在"本轮无新数据"时前进，
-	// 而那种 Poll 不会走到读循环之后 ⇒ 若只挂在尾部，指纹会停旧水位、段 3 判定即失真 ✗。
-	// 本方法自带"水位未前进不重采样"的短路，故每 Poll 一次的代价是 O(1) ✓。
-	t.refreshConfirmedFingerprintLocked()
-
+	if err := t.checkPhysicalMapping(); err != nil {
+		return nil, err
+	}
 	_, err := t.PrepareRotation()
 	if err != nil {
 		return nil, err
@@ -297,17 +327,13 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 		t.truncationReanchored = false
 		return nil, nil
 	}
+	events := t.closedEvents
+	t.closedEvents = nil
 	fi, err := os.Stat(t.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// 文件消失：可能是轮转中间态；若设置了 rotateTo 且存在则接管。
-			if t.rotateTo != "" {
-				if _, rerr := os.Stat(t.rotateTo); rerr == nil {
-					t.detectRotationLocked()
-					return t.Poll()
-				}
-			}
-			return nil, nil
+			// PrepareRotation 已完成一次幂等交接；活文件仍缺失时等待下一轮，不能递归重查同一路径。
+			return events, nil
 		}
 		return nil, err
 	}
@@ -322,8 +348,10 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 			from = 0
 		}
 		if cur, herr := prefixSHA256At(t.path, from, t.cursor-from); herr == nil && cur != t.tailSHA256 {
-			t.reanchorAtEOFLocked(fi.Size(), "tailed file rewritten in place (same inode, header intact); re-anchored at EOF with visible gap")
-			return nil, nil // 本轮不读歧义区；下轮起从新锚续读 ✓
+			if err := t.reanchorAtEOFLocked(fi.Size(), "tailed file rewritten in place (same inode, header intact); re-anchored at EOF with visible gap"); err != nil {
+				return events, err
+			}
+			return events, nil // 本轮不读歧义区；下轮起从新锚续读。
 		}
 	}
 
@@ -351,20 +379,40 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 			// "有水位但无指纹"，一律重锚会给出假缺口并打断导入 ✗（ingest 用例实测）。
 			// 防护由已采样的情形承担：部署后段 2 会在水位前进时写入指纹 ⇒ 之后的重启走 ①② ✓。
 		default:
-			from := int64(at) - 512
-			if from < 0 {
-				from = 0
+			bound, boundOK := t.led.ConfirmedFingerprint(t.key)
+			physicalAt, window := int64(0), int64(0)
+			if boundOK {
+				if bound.SegmentPath != t.path || bound.SegmentStartPos != t.segmentStart || bound.SegmentIdentitySHA256 != t.identitySHA256 {
+					// 投递落后时凭据仍属于旧段；绝不拿旧段的逻辑采点读取当前新文件。
+					break
+				}
+				physicalAt, window, fingerprint = bound.PhysicalOffset, bound.WindowBytes, bound.SHA256
+			} else {
+				// 旧平面凭据没有跨段定位证明。仅兼容零基址原文件，其他情况保持未知，不伪造绑定。
+				if t.segmentStart != 0 || t.physicalStart != 0 || at > t.logicalPos {
+					break
+				}
+				physicalAt = int64(at)
+				window = physicalAt
+				if window > 512 {
+					window = 512
+				}
 			}
-			cur, herr := prefixSHA256At(t.path, from, int64(at)-from)
+			cur, herr := prefixSHA256At(t.path, physicalAt-window, window)
 			if herr != nil || cur != fingerprint {
-				t.reanchorAtEOFLocked(fi.Size(), "resume fingerprint mismatch at confirmed watermark; refusing to re-read history from stale offset")
-				return nil, nil
+				if err := t.reanchorAtEOFLocked(fi.Size(), "resume fingerprint mismatch at confirmed watermark; refusing to re-read history from stale offset"); err != nil {
+					return events, err
+				}
+				return events, nil
 			}
 		}
 	}
 
+	// 必须先识别轮转并核验旧凭据，再采样新确认线；否则会先读新文件，再给旧物理段贴摘要。
+	// 放在无新数据的返回之前，投递线单独前进时仍能及时保存凭据。
+	t.refreshConfirmedFingerprintLocked()
 	if fi.Size() == t.cursor {
-		return nil, nil
+		return events, nil
 	}
 
 	f, err := os.Open(t.path)
@@ -377,8 +425,9 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 		return nil, err
 	}
 
-	reader := bufio.NewReader(f)
-	var events []logtypes.Event
+	limits := t.readLimits
+	round := &roundReader{reader: f, remaining: limits.MaxBytesPerPoll}
+	reader := bufio.NewReaderSize(round, 32<<10)
 	lineStart := t.logicalPos
 
 	// 准入限流（B1b）：本轮最多处理 maxLines 行，到额度即停在**行边界**——余下部分留在文件里、
@@ -389,24 +438,31 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 	}
 	linesRead := 0
 
-	for {
-		line, err := reader.ReadString('\n')
-		if len(line) == 0 && err != nil {
+	// 为一整行留下额度，不能在单轮末尾把半行送进解析器，也不跨轮累积无界片段。
+	for round.remaining+int64(reader.Buffered()) > int64(limits.MaxLineBytes) {
+		line, err := readPhysicalLine(reader, limits.MaxLineBytes)
+		if limitErr, ok := err.(*ReadLimitError); ok {
+			limitErr.Path, limitErr.LogicalStart, limitErr.PhysicalFrom = t.path, lineStart, t.cursor
+			return events, errors.Join(limitErr, t.recordReadLimit(limitErr))
+		}
+		if err != nil && err != io.EOF && err != errReadRoundBudget {
+			return events, err
+		}
+		if len(line) == 0 {
 			break
 		}
+		if line[len(line)-1] != '\n' {
+			// 活文件的瞬时 EOF 不是物理行边界：原始字节留在源上，游标不跨过半行。
+			t.pendingPhysicalLine = true
+			break
+		}
+		t.pendingPhysicalLine = false
 		linesRead++
-		hasNL := len(line) > 0 && line[len(line)-1] == '\n'
-		raw := line
-		if hasNL {
-			raw = line[:len(line)-1]
-		}
+		raw := physicalLineBody(line)
 		absPos := lineStart
-		lineEnd := absPos + uint64(len(raw))
-		if hasNL {
-			lineEnd++ // 计入换行
-		}
+		lineEnd := absPos + uint64(len(line))
 
-		eventEnd, complete, emit := t.hook.Feed([]byte(raw), absPos, lineEnd)
+		eventEnd, complete, emit := t.hook.Feed(raw, absPos, lineEnd)
 		// 逐行完整事件：record_end 取到换行之后，保证 durable cursor 与文件偏移一致。
 		if complete && emit && eventEnd <= absPos+uint64(len(raw)) {
 			eventEnd = lineEnd
@@ -501,17 +557,27 @@ func (t *FileTailer) detectRotationLocked() {
 		covered = entry.Positions.Durable
 	}
 	_ = t.led.LinkRotation(t.key, from, to, covered)
+	fingerprint, fingerprintOK := t.led.ConfirmedFingerprint(t.key)
 	_ = t.led.RegisterSegment(t.key, ledger.Segment{
-		Path:           to,
-		Kind:           ledger.SegmentRotated,
-		StartPos:       t.segmentStart,
-		EndPos:         t.logicalPos,
-		IdentityBytes:  t.identityBytes,
-		IdentitySHA256: t.identitySHA256,
-		ParserVersion:  t.parser.ParserVersion,
+		Path:                 to,
+		Kind:                 ledger.SegmentRotated,
+		StartPos:             t.segmentStart,
+		PhysicalStart:        t.physicalStart,
+		PhysicalMappingKnown: t.physicalMappingKnown,
+		EndPos:               t.logicalPos,
+		IdentityBytes:        t.identityBytes,
+		IdentitySHA256:       t.identitySHA256,
+		ParserVersion:        t.parser.ParserVersion,
 	})
+	if fingerprintOK && fingerprint.SegmentPath == t.path && fingerprint.SegmentStartPos == t.segmentStart {
+		fingerprint.SegmentPath = to
+		_ = t.led.SetConfirmedFingerprint(t.key, fingerprint)
+	}
 	t.segmentStart = t.logicalPos
+	t.physicalStart, t.physicalMappingKnown = 0, true
 	t.cursor = 0
+	t.pendingPhysicalLine = false
+	t.tailSHA256, t.tailHashAt = "", 0
 	t.active = false
 	t.identityBytes = 0
 	t.identitySHA256 = ""
@@ -539,6 +605,7 @@ func (t *FileTailer) ConfirmRotationCoverage() error {
 func (t *FileTailer) registerLiveSegment() error {
 	return t.led.RegisterSegment(t.key, ledger.Segment{
 		Path: t.path, Kind: ledger.SegmentLive, StartPos: t.segmentStart,
+		PhysicalStart: t.physicalStart, PhysicalMappingKnown: t.physicalMappingKnown,
 		EndPos: t.logicalPos, IdentityBytes: t.identityBytes,
 		IdentitySHA256: t.identitySHA256, ParserVersion: t.parser.ParserVersion,
 	})
@@ -563,9 +630,17 @@ func prefixSHA256At(path string, from, size int64) (string, error) {
 
 // reanchorAtEOFLocked 把游标锚到 EOF 并登记**可见**缺口（w18 防护：禁止按旧偏移回读历史内容 ✗）——
 // 缺的内容交给既有对账补齐 ✓。调用者负责本轮直接返回（不读歧义区 ✓）。
-func (t *FileTailer) reanchorAtEOFLocked(size int64, detail string) {
-	_ = t.led.RecordGap(t.key, uint64(t.cursor), uint64(size), ledger.GapReasonFileRewritten, detail)
+func (t *FileTailer) reanchorAtEOFLocked(size int64, detail string) error {
+	end := t.logicalPos
+	if size > t.cursor {
+		end += uint64(size - t.cursor)
+	}
+	if err := t.led.RecordGap(t.key, t.logicalPos, end, ledger.GapReasonFileRewritten, detail); err != nil {
+		return err
+	}
+	t.logicalPos = end
 	t.anchorAtEOFLocked(size)
+	return nil
 }
 
 // reanchorAfterTruncationLocked 是「纯截断重写」的重锚：与 reanchorAtEOFLocked 取同一套锚定动作，
@@ -595,7 +670,9 @@ func (t *FileTailer) reanchorAfterTruncationLocked(size int64) {
 // 抽出来是因为两种重写的**损失区间口径不同**（见两个调用方），而锚定动作必须完全一致。
 func (t *FileTailer) anchorAtEOFLocked(size int64) {
 	t.segmentStart = t.logicalPos
+	t.physicalStart, t.physicalMappingKnown = uint64(size), true
 	t.cursor = size
+	t.pendingPhysicalLine = false
 	t.lastSize = size
 	t.active = false
 	t.identityBytes, t.identitySHA256, t.tailSHA256, t.tailHashAt = 0, "", "", 0
@@ -622,20 +699,27 @@ func (t *FileTailer) refreshConfirmedFingerprintLocked() {
 	if at, fp, ok := t.led.PositionsFingerprint(t.key); ok && at == watermark && fp != "" {
 		return // 水位未前进，指纹仍有效 ✓
 	}
-	const window = 512
-	from := int64(watermark) - window
-	if from < 0 {
-		from = 0
+	// 只在已确认水位确属当前物理段时采样；边界处属于前段，不能查新文件。
+	if watermark <= t.segmentStart || watermark > t.logicalPos || !t.physicalMappingKnown || t.identityBytes <= 0 || t.identitySHA256 == "" {
+		return
 	}
-	size := int64(watermark) - from
+	physicalAt := int64(t.physicalStart + watermark - t.segmentStart)
+	size := physicalAt
+	if size > 512 {
+		size = 512
+	}
 	if size <= 0 {
 		return
 	}
-	fingerprint, err := prefixSHA256At(t.path, from, size)
+	fingerprint, err := prefixSHA256At(t.path, physicalAt-size, size)
 	if err != nil {
 		return
 	}
-	_ = t.led.SetPositionsFingerprint(t.key, watermark, fingerprint)
+	_ = t.led.SetConfirmedFingerprint(t.key, ledger.ConfirmedFingerprint{
+		SegmentPath: t.path, SegmentStartPos: t.segmentStart,
+		SegmentIdentityBytes: t.identityBytes, SegmentIdentitySHA256: t.identitySHA256,
+		LogicalPos: watermark, PhysicalOffset: physicalAt, WindowBytes: size, SHA256: fingerprint,
+	})
 }
 
 // refreshTailHashLocked 维护「游标前 512B 窗口」指纹（每次 Poll 收束后调用一次，O(512) ✓）。

@@ -140,13 +140,15 @@ func TestPipeline_RotationNoDoubleCount(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, p.FileTailer().RotationCount(), 1)
 
-	// 登记已导入的轮转分段 + 链接，禁止归档整包重放。
+	// 已覆盖夹具必须保留当前压缩内容的身份；只有路径和旧链接时应视为未知，而不是伪造零缺口。
 	key := p.Key()
+	identityBytes, identitySHA, identityErr := acquire.ContentIdentity(gzPath)
+	require.NoError(t, identityErr)
+	info, statErr := os.Stat(gzPath)
+	require.NoError(t, statErr)
 	require.NoError(t, p.Ledger().RegisterSegment(key, ledger.Segment{
-		Path:     gzPath,
-		Kind:     ledger.SegmentGzip,
-		EndPos:   logicalAfterLive,
-		Imported: true,
+		Path: gzPath, Kind: ledger.SegmentGzip, EndPos: logicalAfterLive, Imported: true,
+		IdentityBytes: identityBytes, IdentitySHA256: identitySHA, ObservedSize: info.Size(),
 	}))
 	require.NoError(t, p.Ledger().LinkRotation(key, latest, gzPath, logicalAfterLive))
 

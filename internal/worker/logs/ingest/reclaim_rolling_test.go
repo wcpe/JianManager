@@ -76,6 +76,7 @@ func newRollingReclaimFixture(t *testing.T, n int) (*Manager, []SourceConfig, []
 		require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{
 			StartPos: 0, EndPos: reclaimRollDelivery, HTTPStatus: 200,
 		}))
+		primeConfirmedWALProjection(t, m, src, p, reclaimRollDelivery)
 		// 陈旧覆盖段（现场形态 ✓）。
 		segID := fmt.Sprintf("projection-recovery-stale-%d", i)
 		require.NoError(t, p.BindRecoverySegment(segID, "projection://stale", 0, reclaimRollStaleCover))
@@ -146,6 +147,7 @@ func TestRollingReclaimKeepsUpWithGeneration(t *testing.T) {
 		require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{
 			StartPos: reclaimRollDelivery, EndPos: reclaimRollDelivery + gen, HTTPStatus: 200,
 		}))
+		primeConfirmedWALProjection(t, m, srcs[i], p, reclaimRollDelivery+gen)
 		m.selfHealPausedSource(srcs[i], p)
 	}
 	var advanced2 uint64

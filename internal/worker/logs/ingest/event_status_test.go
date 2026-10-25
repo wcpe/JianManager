@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
@@ -28,7 +29,8 @@ import (
 // TestDeriveEventStatusCoversAllStates 构造「四种态 + 已放弃」各一段，固定判据与优先级。
 func TestDeriveEventStatusCoversAllStates(t *testing.T) {
 	facts := EventStatusFacts{
-		Positions: logtypes.Positions{Read: 1000, Durable: 800, Delivery: 300, Reclaim: 100},
+		Positions:         logtypes.Positions{Read: 1000, Durable: 800, Delivery: 300, Reclaim: 100},
+		RequestDoneRanges: []ledger.PositionRange{{From: 0, To: 300}},
 		Batches: []ledger.DeliveryBatch{
 			{Start: 300, End: 400, State: logtypes.DeliveryUnknown},        // 已发未认
 			{Start: 400, End: 500, State: logtypes.DeliveryReplayRequired}, // 未发（待重放）
@@ -53,10 +55,10 @@ func TestDeriveEventStatusCoversAllStates(t *testing.T) {
 		return pointReport.Segments[0]
 	}
 
-	// 已认：诚实连续前缀（delivery_position=300）之内。
+	// 已认必须来自真实请求完成区间，不能由请求结果前缀推出。
 	// 注意 pos 从 1 起探测：位置 (0,0) 是「整源」查询的哨兵值（见 eventStatusBounds）。
 	require.Equal(t, EventStateAcked, probe(1).State)
-	require.Equal(t, "delivery_prefix", probe(1).Basis)
+	require.Equal(t, "request_done_range", probe(1).Basis)
 	require.Equal(t, EventStateAcked, probe(149).State)
 	require.Equal(t, EventStateAcked, probe(300).State)
 
@@ -120,7 +122,8 @@ func TestDeriveEventStatusClippedInterval(t *testing.T) {
 	require.Equal(t, EventStateVerified, report.Segments[0].State, "区间起点落在校验段内 → 该段从查询起点开始")
 	require.Equal(t, uint64(15), report.Segments[0].From)
 	require.Equal(t, uint64(20), report.Segments[0].To)
-	require.Equal(t, EventStateAcked, report.Segments[1].State)
+	require.Equal(t, EventStateUnknown, report.Segments[1].State, "只有Delivery水位但无独立凭据的旧历史必须未知")
+	require.Equal(t, "no_evidence", report.Segments[1].Basis)
 	require.Equal(t, EventStateUnsent, report.Segments[2].State)
 }
 
@@ -213,8 +216,9 @@ func TestExportEventStatusCLIEndToEnd(t *testing.T) {
 	for _, segment := range report.Segments {
 		states[segment.State] = true
 	}
-	require.True(t, states[EventStateAcked] || states[EventStateVerified],
-		"已落库区间必须能判为已认/已校验")
+	require.True(t, states[EventStateUnknown], "旧索引只有请求位置、没有独立确认或逐字段校验证据，必须诚实未知")
+	require.False(t, states[EventStateAcked], "离线诊断不得由Delivery前缀补造成功回执")
+	require.False(t, states[EventStateVerified], "没有逐字段凭据不能假报已校验")
 
 	// --at 时间点查询：真打开事件段定位（端到端）。
 	out.Reset()
@@ -227,6 +231,42 @@ func TestExportEventStatusCLIEndToEnd(t *testing.T) {
 
 	// 未知源：必须报错（而不是静默给空结论）。
 	require.Error(t, ExportEventStatus(root, []string{"--source=node:nope"}, &out))
+}
+
+// TestExportEventStatusCLIUsesPersistedRequestReceipts 给旧位置夹具补真实账本回执的持久化正控。
+func TestExportEventStatusCLIUsesPersistedRequestReceipts(t *testing.T) {
+	root := t.TempDir()
+	key := ledger.SourceKey{LogSourceID: "node:receipt", SourceGeneration: "g1"}
+	led := ledger.New()
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
+	require.NoError(t, led.RecordDelivery(key, 0, 400, logtypes.DeliveryRequestDone))
+	require.NoError(t, led.RecordDelivery(key, 400, 800, logtypes.DeliveryUnknown))
+	entry := led.Get(key)
+	entry.Positions.Read, entry.Positions.Durable = 1000, 1000
+	manager := &Manager{root: root}
+	rows, err := manager.stateToIndexState(&persistedState{Sources: map[string]persistedSource{key.String(): {Ledger: []ledger.Entry{*entry}}}})
+	require.NoError(t, err)
+	store, err := stateindex.Open(manager.indexPath())
+	require.NoError(t, err)
+	_, err = store.Apply(rows)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	for round := 1; round <= 3; round++ {
+		var out bytes.Buffer
+		require.NoError(t, ExportEventStatus(root, []string{"--source=" + key.String()}, &out))
+		var payload struct {
+			Reports []EventStatusReport `json:"reports"`
+		}
+		require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
+		require.Len(t, payload.Reports, 1)
+		states := map[EventState]bool{}
+		for _, segment := range payload.Reports[0].Segments {
+			states[segment.State] = true
+		}
+		require.True(t, states[EventStateAcked], "第%d次实开：真实请求成功凭据必须可见", round)
+		require.True(t, states[EventStateSentUnacked], "第%d次实开：UNKNOWN不得因Delivery越过而变成成功", round)
+		require.False(t, states[EventStateVerified], "没有逐字段校验证据不能升级状态")
+	}
 }
 
 // TestParseEventStatusArgsAcceptsSpaceSeparatedAndRejectsUnknown 锁定参数解析形态：

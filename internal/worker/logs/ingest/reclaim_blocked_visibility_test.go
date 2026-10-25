@@ -32,7 +32,7 @@ func TestBackfillBlockedCategoriesAreVisible(t *testing.T) {
 		logtypes.Positions{Reclaim: pos.Reclaim, Delivery: pos.Reclaim}))
 	// ③ watermark-moved：传入水位与账本当前值不一致（变则弃）✓。
 	require.NoError(t, f.m.backfillDeliveryConfirmedCoverage(f.p, f.src, gen,
-		logtypes.Positions{Reclaim: pos.Reclaim + 99, Delivery: pos.Reclaim + 100}))
+		logtypes.Positions{Reclaim: pos.Reclaim + 1, Delivery: pos.Delivery}))
 
 	after := f.m.ReclaimRollingStats()
 	require.Equal(t, base.BlockedConfigHold+1, after.BlockedConfigHold, "配置层 hold 必须计数 ✓")

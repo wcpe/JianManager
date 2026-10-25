@@ -3,6 +3,7 @@ package ingest
 import (
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -95,8 +96,9 @@ func TestPublishPreservesOtherSourcesInSharedNamespace(t *testing.T) {
 }
 
 type projectionVLFixture struct {
-	mu     sync.Mutex
-	writes [][]byte
+	mu       sync.Mutex
+	writes   [][]byte
+	rowCache []projectionFixturePayload
 	// probes 记录「代次占用探测」查询原文（`| fields _time | limit 1`，复审 P2-11 回归的读数）。
 	probes []string
 	// probeSpans 记录每次代次占用探测的**窗口跨度**（end−start），用于「总跨度不得越过 VL 硬上限」
@@ -122,6 +124,78 @@ type queryWindowRecord struct {
 	HasWindow bool
 }
 
+// 缓存仅属于测试HTTP真源，逐payload的实际字节SHA守卫直接修改、重排或删除writes的情形。
+type projectionFixturePayload struct {
+	digest [32]byte
+	rows   []projectionFixtureRow
+}
+
+type projectionFixtureRow struct {
+	generation, source, id string
+	line, verification     []byte
+	when                   time.Time
+	validTime              bool
+}
+
+// 六字段按原始JSON值投影，缺失/null/错误类型/UTF8与转义不能被typed string洗白或筛掉。
+func projectionFixtureVerification(line []byte) []byte {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(line, &fields); err != nil || fields == nil {
+		// 原四字段筛选已接纳的未知行仍须返回，不能在新增投影步骤静默消失。
+		return append([]byte(nil), line...)
+	}
+	projected := []byte{'{'}
+	for _, key := range [...]string{"_time", "_msg", "event_id", "level", "stream", "canonical_content_hash"} {
+		value, present := fields[key]
+		if !present {
+			continue
+		}
+		if len(projected) > 1 {
+			projected = append(projected, ',')
+		}
+		projected = append(projected, '"')
+		projected = append(projected, key...)
+		projected = append(projected, '"', ':')
+		projected = append(projected, value...)
+	}
+	return append(projected, '}')
+}
+
+func (f *projectionVLFixture) refreshFixtureRowsLocked() {
+	if len(f.rowCache) != len(f.writes) {
+		next := make([]projectionFixturePayload, len(f.writes))
+		copy(next, f.rowCache)
+		f.rowCache = next
+	}
+	for i, payload := range f.writes {
+		digest := sha256.Sum256(payload)
+		if f.rowCache[i].digest == digest {
+			continue
+		}
+		entry := projectionFixturePayload{digest: digest}
+		for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
+			// 过滤元信息只解原有四字段，错误类型的其他证据字段必须原样暴露给真实校验器。
+			var row struct {
+				ProjectionGeneration string `json:"projection_generation"`
+				EventTimeUTC         string `json:"_time"`
+				LogSourceID          string `json:"log_source_id"`
+				EventID              string `json:"event_id"`
+			}
+			if json.Unmarshal([]byte(line), &row) != nil {
+				continue
+			}
+			when, err := time.Parse(time.RFC3339Nano, row.EventTimeUTC)
+			entry.rows = append(entry.rows, projectionFixtureRow{
+				generation: "projection_generation:=" + strconv.Quote(row.ProjectionGeneration),
+				source:     "log_source_id:=" + strconv.Quote(row.LogSourceID),
+				id:         strconv.Quote(row.EventID), line: append([]byte(line), '\n'),
+				verification: append(projectionFixtureVerification([]byte(line)), '\n'), when: when, validTime: err == nil,
+			})
+		}
+		f.rowCache[i] = entry
+	}
+}
+
 func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/health":
@@ -131,6 +205,7 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		payload, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
 		f.writes = append(f.writes, payload)
+		f.refreshFixtureRowsLocked()
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	case "/select/logsql/query":
@@ -160,31 +235,49 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.refreshFixtureRowsLocked()
 		count := 0
-		for _, payload := range f.writes {
-			for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
-				var row struct {
-					ProjectionGeneration string `json:"projection_generation"`
-					EventTimeUTC         string `json:"_time"`
-					LogSourceID          string `json:"log_source_id"`
-				}
-				if json.Unmarshal([]byte(line), &row) != nil || !strings.Contains(selector, "projection_generation:="+strconv.Quote(row.ProjectionGeneration)) {
+		verifyFields := strings.Contains(selector, projectionVerifyFields)
+		filterSource := strings.Contains(selector, "log_source_id:=")
+		_, ids, filtered := strings.Cut(selector, "event_id:in(")
+		if filtered {
+			ids, _, _ = strings.Cut(ids, ")")
+		}
+		for _, payload := range f.rowCache {
+			for _, row := range payload.rows {
+				if !strings.Contains(selector, row.generation) {
 					continue
 				}
-				if strings.Contains(selector, "log_source_id:=") && !strings.Contains(selector, "log_source_id:="+strconv.Quote(row.LogSourceID)) {
+				if filterSource && !strings.Contains(selector, row.source) {
 					continue
 				}
-				when, timeErr := time.Parse(time.RFC3339Nano, row.EventTimeUTC)
-				if timeErr == nil && ((!from.IsZero() && when.Before(from)) || (!to.IsZero() && when.After(to))) {
+				if filtered && !strings.Contains(ids, row.id) {
+					continue
+				}
+				if row.validTime && ((!from.IsZero() && row.when.Before(from)) || (!to.IsZero() && row.when.After(to))) {
 					continue
 				}
 				if limit > 0 && count >= limit {
 					return
 				}
-				_, _ = w.Write(append([]byte(line), '\n'))
+				if verifyFields {
+					_, _ = w.Write(row.verification)
+				} else {
+					_, _ = w.Write(row.line)
+				}
 				count++
 			}
 		}
+	case reconcileStatsPath:
+		// 对账必须统计实际存入的行，不能用404把每次重启伪装成需要整窗重建。
+		f.mu.Lock()
+		rows := make([]reconcileVLRow, 0)
+		for _, payload := range f.writes {
+			rows = append(rows, parseReconcileRows(payload)...)
+		}
+		f.mu.Unlock()
+		stats := reconcileVLFixture{rows: rows}
+		stats.serveStats(w, r)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -308,7 +401,7 @@ func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
 	positions, ok := pipe.Positions()
 	require.True(t, ok)
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "operator review"))
-	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, positions.Reclaim, "TEST", "covered"))
+	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, positions.Reclaim, ledger.GapReasonDeliverError, "covered"))
 	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
 	resolvedEntry := pipe.Ledger().Get(pipe.Key())
 	require.False(t, resolvedEntry.AcquirePaused)
@@ -322,7 +415,13 @@ func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
 	_, err = os.Stat(filepath.Join(root, "var", "log", "ingest.index.db"))
 	require.NoError(t, err)
 
-	// 新 Manager 从索引库恢复同一 source，在新 projection generation 中重建事件。
+	// 完整关闭再用脏数据重开；已完整可见的集合不能仅因重启再造物理副本。
+	_, err = pipe.Flush()
+	require.NoError(t, err)
+	beforeRestart := durableEvents(t, m, "node:1/g1")
+	require.NoError(t, m.Stop())
+	writesBeforeRestart := len(fixture.writes)
+	beforeRecord, _ := cat.Get(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()})
 	cat2 := catalog.New(cat.Journal())
 	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{{
 		LogSourceID: "node:1", SourceGeneration: "g1", Path: logPath,
@@ -330,10 +429,11 @@ func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
 	}}})
 	require.NoError(t, err)
 	m2.pollOnce()
-	require.Contains(t, string(fixture.writes[len(fixture.writes)-1]), "projection-2")
+	require.Equal(t, writesBeforeRestart, len(fixture.writes), "已核验完整集合重启后不应重写")
+	require.Equal(t, beforeRestart, durableEvents(t, m2, "node:1/g1"), "重启前后权威内容逐字段不漂移")
 	rec2, ok := cat2.Get(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()})
 	require.True(t, ok)
-	require.Equal(t, "projection-2", rec2.PublishedProjection.ProjectionGeneration)
+	require.Equal(t, sourcePublicationToken(beforeRecord, m2.sources["node:1/g1"]), sourcePublicationToken(rec2, m2.sources["node:1/g1"]))
 }
 
 func TestManagerAckLossDefersReclaimUntilProjectionReplay(t *testing.T) {
@@ -351,13 +451,19 @@ func TestManagerAckLossDefersReclaimUntilProjectionReplay(t *testing.T) {
 	require.Equal(t, logtypes.DeliveryUnknown, entry.DeliveryState)
 	require.Zero(t, entry.Positions.Reclaim)
 
-	os.Unsetenv("JIANMANAGER_LOG_INJECT_ACK_LOSS")
+	require.NoError(t, m.Stop())
+	require.NoError(t, os.Unsetenv("JIANMANAGER_LOG_INJECT_ACK_LOSS"))
 	cat2 := catalog.New(cat.Journal())
 	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{source}})
 	require.NoError(t, err)
 	entry2 := m2.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
 	require.Equal(t, logtypes.DeliveryReplayRequired, entry2.DeliveryState)
-	require.NotZero(t, entry2.Positions.Reclaim)
+	require.Zero(t, entry2.Positions.Reclaim, "UNKNOWN恢复可要求重放，不能冒充真实请求ACK")
+	_, err = m2.pipes["ack:1/g1"].DeliverPending()
+	require.NoError(t, err)
+	entry2 = m2.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
+	require.Equal(t, logtypes.DeliveryRequestDone, entry2.DeliveryState)
+	require.NotZero(t, entry2.Positions.Reclaim, "真实重试取得ACK与当前逐字段证据后才可回收")
 }
 
 func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
@@ -407,7 +513,14 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 	afterLoss, ok := cat.Get(key)
 	require.True(t, ok)
 	require.Equal(t, []string{"projection-1"}, afterLoss.PublishedProjection.ProjectionGenerations)
-	require.Equal(t, "projection-2", manager.state.Sources[source.LogSourceID+"/"+source.SourceGeneration].ProjectionGeneration)
+	lostState := savedSource(t, manager, source.LogSourceID+"/"+source.SourceGeneration)
+	require.Equal(t, first.PublishedProjection.ProjectionGeneration, lostState.ProjectionGeneration)
+	require.True(t, lostState.PublicationPending, "响应丢失必须保留待确认责任")
+	require.Equal(t, sourcePublicationToken(first, source), sourcePublicationToken(afterLoss, source), "失败追加不能越过旧读面封闭水位")
+	manager.mu.Lock()
+	_, qualifiedAfterLoss := manager.activeTails[source.LogSourceID+"/"+source.SourceGeneration]
+	manager.mu.Unlock()
+	require.False(t, qualifiedAfterLoss, "响应未知必须先撤销活跃追加资格")
 	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	require.NoError(t, err)
 	_, err = f.WriteString("[12:00:05] [Server thread/INFO]: following batch\n[12:00:06] [Server thread/INFO]: following boundary\n")
@@ -415,20 +528,66 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 	require.NoError(t, f.Close())
 	manager.pollOnce()
 	continued, _ := cat.Get(key)
-	require.Equal(t, []string{"projection-3"}, continued.PublishedProjection.ProjectionGenerations, "retry without restart must replace any partially published attempt")
+	continuedState := savedSource(t, manager, source.LogSourceID+"/"+source.SourceGeneration)
+	require.NotEqual(t, lostState.ProjectionGeneration, continuedState.ProjectionGeneration, "未知代次不得重新取得追加资格")
+	require.True(t, continuedState.PublicationPending, "新尾发布不能抹掉旧未知窗口责任")
+	require.Equal(t, []string{first.PublishedProjection.ProjectionGeneration}, continued.PublishedProjection.ProjectionGenerations, "未知旧窗口尚未补齐，新尾只能写物理行，不能越过旧封闭前缀")
+	require.Equal(t, publishedEvidenceClosed(first, source), publishedEvidenceClosed(continued, source))
 	fixture.mu.Lock()
 	lastPayload := string(fixture.writes[len(fixture.writes)-1])
 	fixture.mu.Unlock()
-	require.Contains(t, lastPayload, "uncertain", "must recover prior durable events before advancing their closed prefix")
+	require.NotContains(t, lastPayload, "uncertain", "新尾不应为历史未知窗口再造副本；旧责任仍须保留")
+	pipe := manager.pipes[source.LogSourceID+"/"+source.SourceGeneration]
+	_, err = pipe.Flush()
+	require.Error(t, err, "旧未知窗口未确认前，最后一条也不能替它伪造发布/ACK")
+	require.NoError(t, manager.persist())
+	loaded, err := manager.loadStateFromIndex()
+	require.NoError(t, err)
+	beforeRestart, err := manager.canonicalRecoveryEvents(pipe.Key().String(), loaded.Sources[pipe.Key().String()])
+	require.NoError(t, err)
+	require.Len(t, beforeRestart, 6, "当前段加真实持久WAL必须完整保留所有响应未知正文")
+	require.NoError(t, manager.Stop())
+	fixture.mu.Lock()
+	writesBeforeRestart := len(fixture.writes)
+	fixture.mu.Unlock()
 
 	recoveredCatalog := catalog.New(journal)
 	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: journal, Sources: []SourceConfig{source}})
 	require.NoError(t, err)
-	require.Equal(t, "projection-4", recovered.state.Sources[source.LogSourceID+"/"+source.SourceGeneration].ProjectionGeneration)
+	afterRestart, err := recovered.canonicalRecoveryEvents(pipe.Key().String(), savedSource(t, recovered, pipe.Key().String()))
+	require.NoError(t, err)
+	require.Equal(t, eventSetDigest(beforeRestart), eventSetDigest(afterRestart), "重启后的完整权威集合不能漏掉响应未知的正文")
+	fixture.mu.Lock()
+	writesAfterRestart := len(fixture.writes)
+	fixture.mu.Unlock()
+	require.Equal(t, writesBeforeRestart+1, writesAfterRestart, "未知窗口重启恢复只允许一次预算化完整副本，不可每批复制")
 	rec, ok := recoveredCatalog.Get(key)
 	require.True(t, ok)
-	require.Equal(t, []string{"projection-4"}, rec.PublishedProjection.ProjectionGenerations)
-	require.NotContains(t, rec.PublishedProjection.ProjectionGenerations, "projection-2")
+	require.Len(t, rec.PublishedProjection.ProjectionGenerations, 1, "完整副本校验通过后才切换白名单")
+	require.NotContains(t, rec.PublishedProjection.ProjectionGenerations, lostState.ProjectionGeneration)
+	require.Len(t, recovered.landedVisibleInVL(source, afterRestart), len(beforeRestart))
+	materializations, err := recovered.index.ListMaterializations(context.Background(), pipe.Key().String(), source.UTCDay, "", 0, 200)
+	require.NoError(t, err)
+	require.Len(t, materializations, 1)
+	require.True(t, materializations[0].Verified)
+	require.True(t, materializations[0].Published)
+	require.Positive(t, materializations[0].ReservedBytes)
+	recovered.mu.Lock()
+	_, restoredQualification := recovered.activeTails[pipe.Key().String()]
+	recovered.mu.Unlock()
+	require.False(t, restoredQualification, "重启不能盲恢复未知代次的进程内资格")
+	_, err = recovered.pipes[pipe.Key().String()].DeliverPending()
+	require.NoError(t, err)
+	require.NoError(t, recovered.Stop())
+	third, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal, Sources: []SourceConfig{source}})
+	require.NoError(t, err)
+	fixture.mu.Lock()
+	writesAfterThird := len(fixture.writes)
+	fixture.mu.Unlock()
+	require.Equal(t, writesAfterRestart, writesAfterThird, "已完整恢复的脏环境三启不能再造副本")
+	thirdEvents, err := third.canonicalRecoveryEvents(pipe.Key().String(), savedSource(t, third, pipe.Key().String()))
+	require.NoError(t, err)
+	require.Equal(t, eventSetDigest(afterRestart), eventSetDigest(thirdEvents))
 }
 
 func TestManagerDoesNotExposeProjectionWhenJournalAppendFails(t *testing.T) {
@@ -591,9 +750,16 @@ func TestManagerNewBatchPublishesIsolatedView(t *testing.T) {
 	m.pollOnce()
 	second, ok := cat.Get(partition)
 	require.True(t, ok)
-	require.Equal(t, "projection-2", second.PublishedProjection.ProjectionGeneration)
-	require.Equal(t, []string{"projection-1", "projection-2"}, second.PublishedProjection.ProjectionGenerations)
-	require.Equal(t, query.ErrCodeViewStale, planner.Plan(query.PlanRequest{ViewRef: &query.ViewRef{ViewID: old.ViewID}}).Err.Code)
+	require.Equal(t, first.PublishedProjection.ProjectionGeneration, second.PublishedProjection.ProjectionGeneration, "已确认活跃尾不按批再造代次")
+	require.Equal(t, []string{"projection-1"}, second.PublishedProjection.ProjectionGenerations)
+	require.Greater(t, publishedEvidenceClosed(second, source), publishedEvidenceClosed(first, source), "白名单不增长但本批精确可见水位必须推进")
+	held := planner.Plan(query.PlanRequest{ViewRef: &query.ViewRef{ViewID: old.ViewID}})
+	require.Nil(t, held.Err, "物理位置未切换时，已有租约视图仍应可读")
+	require.Equal(t, publishedEvidenceClosed(first, source), held.View.ClosedVisibleSeq[partition.String()], "旧view必须固定旧封闭前缀，不能跟随后续追加漂移")
+	fresh := planner.Plan(query.PlanRequest{TargetIDs: []string{"node:1"}})
+	require.Nil(t, fresh.Err)
+	require.NotEqual(t, old.ViewID, fresh.View.ViewID)
+	require.Equal(t, publishedEvidenceClosed(second, source), fresh.View.ClosedVisibleSeq[partition.String()])
 	require.Len(t, durableEvents(t, m, "node:1/g1"), 3)
 	require.Len(t, fixture.writes, 2)
 	require.NotContains(t, string(fixture.writes[1]), "first", "normal batches write only the new immutable micro-generation")
@@ -686,9 +852,9 @@ func TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears(t *t
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: held\n[12:00:02] [Server thread/INFO]: boundary\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("held raw line\n"), 0o600))
 	source := SourceConfig{LogSourceID: "node:hold", SourceGeneration: "g1", Path: path,
-		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:hold", UTCDay: "2026-09-23"}
+		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:hold", UTCDay: runtimeTestUTCDay()}
 	journal := catalog.NewMemJournal()
 	cat := catalog.New(journal)
 	held, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{source},
@@ -704,6 +870,7 @@ func TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears(t *t
 	require.Empty(t, entry.RecoveryRefs[0].ReleaseReason)
 	require.Equal(t, "projection:projection-1", entry.RecoveryRefs[0].ResponsibilityReceiver)
 
+	require.NoError(t, held.Stop())
 	var resumedGeneration string
 	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
 		Sources: []SourceConfig{source}, RecoveryHold: func(_ SourceConfig, generation string) (bool, string) {
@@ -711,19 +878,30 @@ func TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears(t *t
 			return false, ""
 		}})
 	require.NoError(t, err)
-	require.Equal(t, "projection-2", resumedGeneration)
-	require.Equal(t, "projection-2", recovered.state.Sources["node:hold/g1"].ProjectionGeneration)
+	// 完整副本重启只读确认后仍须通过真实投递资格门触发hold重新评估，不靠强制整窗复制释放。
+	_, err = recovered.pipes["node:hold/g1"].DeliverPending()
+	require.NoError(t, err)
+	require.NotEmpty(t, resumedGeneration)
+	require.Equal(t, savedSource(t, recovered, "node:hold/g1").ProjectionGeneration, resumedGeneration)
 	entry = recovered.pipes["node:hold/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "node:hold", SourceGeneration: "g1"})
 	require.Equal(t, entry.Positions.Durable, entry.Positions.Reclaim)
 	require.Empty(t, entry.Gaps)
-	require.Len(t, entry.RecoveryRefs, 1, "restart resumes the existing held responsibility record")
-	for _, ref := range entry.RecoveryRefs {
-		require.Contains(t, ref.SegmentID, "projection-1")
-		require.Equal(t, logtypes.RecoveryCleaned, ref.State)
-		require.False(t, ref.HasHold)
-		require.Equal(t, logtypes.ReleaseProjectionBacked, ref.ReleaseReason)
-		require.Equal(t, "projection:projection-2", ref.ResponsibilityReceiver)
-	}
+	require.Empty(t, entry.RecoveryRefs, "已完成责任转移的记录必须归档，不再常驻活动列表")
+	records, receipts, archiveErr := recovered.ListRecoveryArchive(context.Background(), entry.Key, "", 16)
+	require.NoError(t, archiveErr)
+	require.Len(t, records, 1, "重启恢复必须完整保留原held责任的持久审计")
+	require.Len(t, receipts, 1)
+	ref := records[0].Ref
+	require.Contains(t, ref.SegmentID, "projection-1")
+	require.Equal(t, logtypes.RecoveryCleaned, ref.State)
+	require.False(t, ref.HasHold)
+	require.Equal(t, logtypes.ReleaseProjectionBacked, ref.ReleaseReason)
+	require.Equal(t, "projection:"+resumedGeneration, ref.ResponsibilityReceiver)
+	require.Equal(t, ledger.RecoveryArchiveFingerprint(entry.Key, ref), records[0].Fingerprint)
+	require.Equal(t, records[0].Fingerprint, receipts[0].Fingerprint)
+	require.Equal(t, entry.Key, receipts[0].Key)
+	require.Equal(t, ref.SegmentID, receipts[0].SegmentID)
+	require.NotEmpty(t, receipts[0].ArchiveID)
 	recovered.pollOnce()
 	entry = recovered.pipes["node:hold/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "node:hold", SourceGeneration: "g1"})
 	require.Empty(t, entry.Gaps, "replaying the pending line after restart must not manufacture a zero-width event")
@@ -762,9 +940,15 @@ func TestManagerRoutesStableColdOwnerAndKeepsFrozenStagingUnpublished(t *testing
 				return cold, target.Frozen, nil
 			}})
 			require.NoError(t, err)
-			manager.pollOnce()
+			if tc.frozen {
+				_, pollErr := manager.pipes["node:routed/g1"].Poll()
+				require.ErrorIs(t, pollErr, catalog.ErrPhysicalDayFrozen, "冻结必须先拒绝真实物理写")
+				require.Empty(t, coldFixture.writes)
+			} else {
+				manager.pollOnce()
+				require.Len(t, coldFixture.writes, 1)
+			}
 			require.Empty(t, hotFixture.writes)
-			require.Len(t, coldFixture.writes, 1)
 			rec, ok := cat.Get(key)
 			require.True(t, ok)
 			if tc.frozen {

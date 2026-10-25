@@ -28,7 +28,7 @@ import (
 // 完全由「位置落在哪个区间 + 该区间的证据」推出，多写一份就是多一个会漂移的真源。
 //
 // 因此本视图只从**既有事实**派生（不新增任何持久化状态）：
-//   - `positions.delivery_position`：诚实的连续前缀（其内的位置都已确认投递）；
+//   - `positions.delivery_position`：请求结果连续前缀，只用于查询边界，不作为成功确认；
 //   - `delivery_batches`：批次级四值（NOT_SENT / UNKNOWN / REQUEST_DONE / REPLAY_REQUIRED）；
 //   - `verified_runs`：逐字段可见性校验通过的连续区间（已校验）；
 //   - `abandonments`：人工裁定永久丢失的区间（已放弃）；
@@ -38,14 +38,14 @@ import (
 //
 //	ABANDONED    落在放弃凭据区间内 —— 最强事实：该区间**永远不会**有数据（人工裁定 + 留痕）
 //	VERIFIED     落在逐字段校验通过区间内 —— 已确认落库且内容级校验通过
-//	ACKED        落在 delivery_position 之内，或落在 REQUEST_DONE 批次内 —— 请求已确认完成
+//	ACKED        落在独立 REQUEST_DONE 区间或批次内 —— 请求已确认完成
 //	SENT_UNACKED 落在 UNKNOWN 批次内 —— 请求已发出但结果未知（可能已落库，未确认）
 //	UNSENT       其余：在 WAL 里等待投递（含 durable 未确认前缀）、NOT_SENT/REPLAY_REQUIRED
 //	             批次、或落在已登记缺口内（此时 Reason 给出缺口原因）
 //
 // 优先级说明：放弃凭据的区间本就不会与 delivery 前缀重叠（放弃只作用于未解决缺口），
 // 保留其最高优先级是为了让"人工裁定"永远压过其它证据；VERIFIED 高于 ACKED 是因为
-// 它是更强的证据（内容级）；批次被裁剪过的历史区间靠 delivery 前缀（判 ACKED）兜底。
+// 它是更强的证据（内容级）；旧历史缺失独立证据时明确返回 UNKNOWN，绝不靠水位补造 ACK。
 //
 // ## 出口
 //
@@ -56,11 +56,13 @@ import (
 type EventState string
 
 const (
+	// EventStateUnknown 历史已裁剪但没有独立请求结果证据，不能由水位补造确认。
+	EventStateUnknown EventState = "UNKNOWN"
 	// EventStateUnsent 未发（尚无成功投递凭证；可能在 WAL 中等待，或落在已登记缺口内）。
 	EventStateUnsent EventState = "UNSENT"
 	// EventStateSentUnacked 已发未认（请求已发出，结果未知）。
 	EventStateSentUnacked EventState = "SENT_UNACKED"
-	// EventStateAcked 已认（请求已确认完成；落在诚实连续前缀内）。
+	// EventStateAcked 已认，必须具备独立请求完成区间或批次凭据。
 	EventStateAcked EventState = "ACKED"
 	// EventStateVerified 已校验（逐字段可见性校验通过）。
 	EventStateVerified EventState = "VERIFIED"
@@ -71,8 +73,9 @@ const (
 // EventStatusFacts 是派生所需的事实集合（全部来自既有账本/持久化，不新增状态位）。
 type EventStatusFacts struct {
 	Positions logtypes.Positions
-	// Batches 是批次级投递结果（可能已被裁剪：被裁的历史区间靠 Positions.Delivery 兜底）。
-	Batches []ledger.DeliveryBatch
+	// Batches 承接仍在批次和裁剪前保留的精确请求结果，不从位置水位推断。
+	Batches           []ledger.DeliveryBatch
+	RequestDoneRanges []ledger.PositionRange
 	// VerifiedRuns 是逐字段可见性校验通过的连续区间。
 	VerifiedRuns []ledger.PositionRange
 	// Abandonments 是人工裁定永久丢失的区间凭据。
@@ -149,6 +152,15 @@ func DeriveEventStatus(source string, facts EventStatusFacts, from, to uint64) E
 	if facts.Positions.Delivery < ^uint64(0) {
 		addPoint(facts.Positions.Delivery+1, to+1)
 	}
+	if facts.Positions.Reclaim < ^uint64(0) {
+		addPoint(facts.Positions.Reclaim+1, to+1)
+	}
+	for _, run := range facts.RequestDoneRanges {
+		addPoint(run.From, to+1)
+		if run.To < ^uint64(0) {
+			addPoint(run.To+1, to+1)
+		}
+	}
 	for _, batch := range facts.Batches {
 		addPoint(batch.Start, to+1)
 		if batch.End < ^uint64(0) {
@@ -222,9 +234,11 @@ func eventStatusBounds(facts EventStatusFacts, from, to uint64) (uint64, uint64)
 			ceiling = batch.End
 		}
 	}
-	for _, run := range facts.VerifiedRuns {
-		if run.To > ceiling {
-			ceiling = run.To
+	for _, ranges := range [][]ledger.PositionRange{facts.VerifiedRuns, facts.RequestDoneRanges} {
+		for _, run := range ranges {
+			if run.To > ceiling {
+				ceiling = run.To
+			}
 		}
 	}
 	for _, ab := range facts.Abandonments {
@@ -252,9 +266,14 @@ func classifyEventStatus(facts EventStatusFacts, from, to uint64) EventStatusSeg
 	if coveringRanges(facts.VerifiedRuns, from, to) {
 		return EventStatusSegment{From: from, To: to, State: EventStateVerified, Basis: "verified_run"}
 	}
-	if to <= facts.Positions.Delivery {
-		// 诚实的连续前缀：其内位置都已确认投递（批次可能已被裁剪，故这是兜底证据）。
-		return EventStatusSegment{From: from, To: to, State: EventStateAcked, Basis: "delivery_prefix"}
+	if coveringRanges(facts.RequestDoneRanges, from, to) {
+		return EventStatusSegment{From: from, To: to, State: EventStateAcked, Basis: "request_done_range"}
+	}
+	// 仍保留的真实成功批次同样是独立证据，优先于先前未知请求的结果。
+	for _, batch := range facts.Batches {
+		if batch.State == logtypes.DeliveryRequestDone && batch.Start <= from && to <= batch.End {
+			return EventStatusSegment{From: from, To: to, State: EventStateAcked, Basis: "delivery_batch", BatchState: string(batch.State)}
+		}
 	}
 	if batch, ok := coveringBatch(facts.Batches, from, to); ok {
 		segment := EventStatusSegment{From: from, To: to, Basis: "delivery_batch", BatchState: string(batch.State)}
@@ -274,6 +293,9 @@ func classifyEventStatus(facts EventStatusFacts, from, to uint64) EventStatusSeg
 			From: from, To: to, State: EventStateUnsent, Basis: "gap",
 			Reason: strings.TrimSpace(gap.Reason + " " + gap.Detail),
 		}
+	}
+	if to <= facts.Positions.Delivery || to <= facts.Positions.Reclaim {
+		return EventStatusSegment{From: from, To: to, State: EventStateUnknown, Basis: "no_evidence"}
 	}
 	return EventStatusSegment{From: from, To: to, State: EventStateUnsent, Basis: "no_evidence"}
 }
@@ -297,12 +319,19 @@ func coveringAbandonment(items []ledger.GapAbandonment, from, to uint64) (ledger
 }
 
 func coveringBatch(items []ledger.DeliveryBatch, from, to uint64) (ledger.DeliveryBatch, bool) {
+	var first ledger.DeliveryBatch
+	found := false
 	for _, item := range items {
 		if item.Start <= from && to <= item.End {
-			return item, true
+			if item.State == logtypes.DeliveryUnknown {
+				return item, true
+			}
+			if !found {
+				first, found = item, true
+			}
 		}
 	}
-	return ledger.DeliveryBatch{}, false
+	return first, found
 }
 
 func coveringGap(items []ledger.Gap, from, to uint64) (ledger.Gap, bool) {
@@ -372,7 +401,8 @@ func (m *Manager) SourceEventStatus(query EventStatusQuery) (EventStatusReport, 
 	facts.DeliveryPos = readSideDeliveryPos(p)
 	if entry := p.Ledger().Get(p.Key()); entry != nil {
 		facts.Positions = entry.Positions
-		facts.Batches = append([]ledger.DeliveryBatch(nil), entry.DeliveryBatches...)
+		facts.Batches = ledger.DeliveryEvidenceOf(entry)
+		facts.RequestDoneRanges = ledger.RequestDoneRangesOf(entry)
 		facts.Abandonments = append([]ledger.GapAbandonment(nil), entry.Abandonments...)
 		facts.Gaps = append([]ledger.Gap(nil), entry.Gaps...)
 	}
@@ -532,7 +562,7 @@ func ExportEventStatus(root string, args []string, out io.Writer) error {
 		if info, statErr := os.Stat(eventsRoot); statErr != nil || !info.IsDir() {
 			return fmt.Errorf("ingest: --at 需要事件段目录 %s（不存在或不可读），请改用 --from/--to 位置区间", eventsRoot)
 		}
-		eventsStore, err = eventstore.Open(eventsRoot)
+		eventsStore, err = eventstore.OpenReadOnly(eventsRoot)
 		if err != nil {
 			return err
 		}
@@ -543,7 +573,10 @@ func ExportEventStatus(root string, args []string, out io.Writer) error {
 		facts := eventStatusFactsOfPersisted(state.Sources[key])
 		report := DeriveEventStatus(key, facts, derefOrZeroUint64(options.from), derefOrZeroUint64(options.to))
 		if options.at != "" {
-			moment, _ := time.Parse(time.RFC3339Nano, options.at) // 参数解析已校验格式
+			moment, err := time.Parse(time.RFC3339Nano, options.at)
+			if err != nil {
+				return fmt.Errorf("ingest: 事件状态时间点无效: %w", err)
+			}
 			located, ok, err := locateEventAtOrAfter(eventsStore, key, moment.UTC())
 			if err != nil {
 				return err
@@ -578,7 +611,8 @@ func eventStatusFactsOfPersisted(saved persistedSource) EventStatusFacts {
 		if index == 0 {
 			facts.Positions = entry.Positions
 		}
-		facts.Batches = append(facts.Batches, entry.DeliveryBatches...)
+		facts.Batches = append(facts.Batches, ledger.DeliveryEvidenceOf(&entry)...)
+		facts.RequestDoneRanges = append(facts.RequestDoneRanges, ledger.RequestDoneRangesOf(&entry)...)
 		facts.Abandonments = append(facts.Abandonments, entry.Abandonments...)
 		facts.Gaps = append(facts.Gaps, entry.Gaps...)
 	}

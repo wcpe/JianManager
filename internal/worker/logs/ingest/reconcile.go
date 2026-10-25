@@ -696,6 +696,18 @@ func (m *Manager) releaseReplayWindow(window *replayWindow) {
 // 幂等：同一天的重发按 event_id 身份 + 逐字段可见性校验为准；重复只生成新代次并取代旧代次，
 // 不产生重复数据（既有语义，逐字保持）。
 func (m *Manager) runReplayWindow(ctx context.Context, item startupSource, window *replayWindow) (bool, error) {
+	ctx, release, guardErr := m.acquireSourceDelivery(ctx, item.source)
+	if guardErr != nil {
+		return false, guardErr
+	}
+	defer release()
+	if item.snapshot != nil {
+		owned := *item.snapshot
+		owned.ctx = ctx
+		item.snapshot = &owned
+	} else {
+		item.snapshot = m.capturePublicationSnapshot(item.source, ctx)
+	}
 	budget := m.replayBudget
 	started := time.Now()
 	sent := 0

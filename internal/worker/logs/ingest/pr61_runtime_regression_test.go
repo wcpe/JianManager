@@ -238,6 +238,9 @@ func TestPR61MigrationSmallCyclesAndRestarts(t *testing.T) {
 	require.NoError(t, err)
 	desired, err := m.stateToIndexState(fixture)
 	require.NoError(t, err)
+	// 版本一夹具必须使用真实旧映射，不能混入本轮新增的独立确认凭据。
+	desired, err = legacyMappingV1(desired)
+	require.NoError(t, err)
 	migration, err := store.BeginMigration(context.Background(), fmt.Sprintf("%x", sha256.Sum256(data)), 1, desired)
 	require.NoError(t, err)
 	stats, err := store.ResumeMigration(context.Background(), migration)

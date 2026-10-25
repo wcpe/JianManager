@@ -38,10 +38,8 @@ package acquire
 // 别人的 Base 去跳过本文件的前缀——实测产生过 1 字节的碎片事件（把 `...-old` 的尾巴当成
 // 一条日志导入）。按内容找锚天然免疫槽位错位。
 //
-// 为什么「找不到锚」必须保持跳过：找不到锚 = 这份内容对账本完全陌生。它既可能是从未读过的
-// 新内容（该导入），也可能是「已导入过、但记录已被后续轮转覆盖」的旧内容（导入即重复）。
-// 两种情形在账本上不可区分，而**重复导入比丢失更糟**（event_id 多副本、inst:318 那类事故），
-// 故此处刻意保守：只在**能证明还有未投递字节**时才导入。
+// 找不到锚不等于已覆盖：陌生内容不能盲目导入，也不能成功消失。
+// 裁定返回未知，由发现与导入共用的 AssessArchive 登记稳定可见缺口并保留原物。
 
 import (
 	"os"
@@ -60,6 +58,8 @@ const contentIdentityBytes int64 = 512
 type ContentAnchor struct {
 	// Base 该内容第 0 字节对应的逻辑位置。
 	Base uint64
+	// PhysicalStart 是逻辑 Base 对应的物理起点；重锚前的存活前缀不能再分配新身份。
+	PhysicalStart uint64
 	// Covered 该内容已投递/已导入覆盖到的逻辑位置（exclusive）。
 	Covered uint64
 	// Path 提供该锚的账本分段路径（诊断用）。
@@ -68,18 +68,30 @@ type ContentAnchor struct {
 
 // CoveredBytes 返回该内容已被覆盖的字节数（有界到 [0, size]）。
 func (a ContentAnchor) CoveredBytes(size int64) int64 {
-	if a.Covered <= a.Base {
+	if a.Covered < a.Base {
 		return 0
 	}
-	span := a.Covered - a.Base
+	span := a.PhysicalStart + a.Covered - a.Base
 	if size >= 0 && span >= uint64(size) {
 		return size
 	}
 	return int64(span)
 }
 
+// ArchiveDisposition 明确区分已覆盖、可按原锚补尾和无法证明归属三种状态。
+type ArchiveDisposition string
+
+const (
+	ArchiveCovered ArchiveDisposition = "covered"
+	ArchiveTail    ArchiveDisposition = "tail"
+	ArchiveUnknown ArchiveDisposition = "unknown"
+	// ArchiveUnknownReason 不在可自动消解允许名单内，须恢复归属证据或人工裁定。
+	ArchiveUnknownReason = "ARCHIVE_CONTENT_UNKNOWN"
+)
+
 // ReimportDecision 是「已导入分段是否必须重新导入」的裁定结果。
 type ReimportDecision struct {
+	Disposition ArchiveDisposition
 	// Import 为 true 表示必须导入（槽位内容已被换掉，且内容锚证明还有未投递字节）。
 	Import bool
 	// Anchor 该内容自己的锚（Import 为 true 时有效）。
@@ -99,29 +111,41 @@ type ReimportDecision struct {
 // 三条分支（顺序即优先级）：
 //  1. 内容没变（分段记录的前缀身份 == 文件当前前缀身份）⇒ 跳过。这是主流形态，
 //     也是「已投递内容不得重复导入」的守护点。
-//  2. 内容变了 / 分段是旧账本（无身份）⇒ 找**内容锚**。找不到 ⇒ 跳过（保守：重复导入比丢失更糟）。
+//  2. 内容变了 / 分段是旧账本（无身份）⇒ 找内容锚。找不到 ⇒ 未知，必须登记可见隔离。
 //  3. 找到锚 ⇒ 算已覆盖字节数：覆盖满 ⇒ 跳过（它是被移位改名挪过来的已投递内容）；
 //     没覆盖满 ⇒ 导入（剩下的是**从未被任何链路投递过**的字节）。
 func DecideArchiveReimport(entry *ledger.Entry, segment *ledger.Segment) ReimportDecision {
-	if segment == nil || !segment.Imported {
-		// 未标记已导入：不属本裁定的范围（由调用方走「待导入」）。
-		return ReimportDecision{Import: true, Reason: "segment is not marked imported"}
+	if segment == nil {
+		return ReimportDecision{Disposition: ArchiveTail, Import: true, Reason: "archive has not been registered"}
+	}
+	if !segment.Imported {
+		if !segment.PhysicalMappingKnown && (segment.StartPos != 0 || segment.EndPos != 0 || segment.IdentityBytes > 0 || segment.IdentitySHA256 != "" || segment.ArchiveObjectID != "") && (ledger.IsArchiveSegmentKind(segment.Kind) || segment.Kind == ledger.SegmentRotated) {
+			return ReimportDecision{Disposition: ArchiveUnknown, Reason: "archive checkpoint has no proven physical/logical mapping"}
+		}
+		// 进行中的归档也可能被槽位复用；只有内容身份未变化才可沿用旧断点。
+		// tailer 的 rotated 明文可合法转换为 gzip，不能把编码变化错判为陌生归档。
+		if !ledger.IsArchiveSegmentKind(segment.Kind) || segment.IdentityBytes <= 0 || segment.IdentitySHA256 == "" {
+			return ReimportDecision{Disposition: ArchiveTail, Import: true, Reason: "segment is not marked imported"}
+		}
+		if sum, err := filePrefixSHA256(segment.Path, segment.IdentityBytes); err == nil && sum == segment.IdentitySHA256 {
+			return ReimportDecision{Disposition: ArchiveTail, Import: true, Reason: "same archive content has an unfinished checkpoint"}
+		}
 	}
 	size, err := archiveFileSize(segment.Path)
 	if err != nil {
 		// stat 失败：文件可能刚被轮转删除。保持跳过——不能让一次瞬时的 stat 失败
 		// 变成「每轮重试同一个不存在的归档」。
-		return ReimportDecision{Reason: "archived file vanished; keeping whole-archive skip"}
+		return ReimportDecision{Disposition: ArchiveUnknown, Reason: "archive unavailable; coverage cannot be proved"}
 	}
 	if size == 0 {
 		// 空归档（java.util.logging 的 0 字节 `.lck` 就是这种）：没有字节可导。
-		return ReimportDecision{Reason: "empty archive; nothing to import"}
+		return ReimportDecision{Disposition: ArchiveCovered, Reason: "empty archive; nothing to import"}
 	}
 	// ① 内容没变（快路：已导入记录自己就是这份内容的锚）。
 	if segment.IdentitySHA256 != "" && segment.IdentityBytes > 0 && size >= segment.IdentityBytes {
-		if window, sum, idErr := ContentIdentity(segment.Path); idErr == nil &&
-			window == segment.IdentityBytes && sum == segment.IdentitySHA256 {
-			return ReimportDecision{Reason: "same content already imported; whole-archive reimport forbidden"}
+		if sum, idErr := filePrefixSHA256(segment.Path, segment.IdentityBytes); idErr == nil && sum == segment.IdentitySHA256 &&
+			(segment.ObservedSize == size || (segment.ObservedSize == 0 && segment.EndPos >= segment.StartPos && segment.EndPos-segment.StartPos >= uint64(size))) {
+			return ReimportDecision{Disposition: ArchiveCovered, Reason: "same content already imported; whole-archive reimport forbidden"}
 		}
 	}
 	// ②③ 内容变了 / 旧账本：只能靠内容锚证明「还有没人投递过的字节」。
@@ -131,18 +155,18 @@ func DecideArchiveReimport(entry *ledger.Entry, segment *ledger.Segment) Reimpor
 	}
 	anchor, ok := ResolveContentAnchor(entry, segment.Path, size, durable)
 	if !ok {
-		// 找不到锚 = 这份内容对账本完全陌生。它既可能是从未读过的新内容（该导入），也可能是
-		// 「已导入过、记录又被后续轮转覆盖」的旧内容（导入即重复）。两者在账本上不可区分，
-		// 而重复导入比丢失更糟（event_id 多副本）⇒ 刻意保守，保持跳过。
-		return ReimportDecision{Reason: "no content anchor for current slot content; keeping whole-archive skip"}
+		// 未知内容保持原物，不分配新逻辑身份；调用方必须登记可见隔离，不能冒充已覆盖。
+		return ReimportDecision{Disposition: ArchiveUnknown, Reason: "no content anchor for current slot content; archive quarantined for ownership recovery"}
 	}
 	covered := anchor.CoveredBytes(size)
 	if covered >= size {
 		return ReimportDecision{
-			Reason: "slot content already covered by delivered bytes; whole-archive reimport forbidden",
+			Disposition: ArchiveCovered,
+			Reason:      "slot content already covered by delivered bytes; whole-archive reimport forbidden",
 		}
 	}
 	return ReimportDecision{
+		Disposition:  ArchiveTail,
 		Import:       true,
 		Anchor:       anchor,
 		CoveredBytes: covered,
@@ -206,7 +230,7 @@ func ResolveContentAnchor(entry *ledger.Entry, path string, size int64, durable 
 	bestCovered := int64(-1)
 	for i := range entry.Segments {
 		seg := &entry.Segments[i]
-		if seg.IdentitySHA256 == "" || seg.IdentityBytes <= 0 {
+		if !seg.PhysicalMappingKnown || seg.IdentitySHA256 == "" || seg.IdentityBytes <= 0 {
 			continue
 		}
 		window := seg.IdentityBytes
@@ -234,7 +258,7 @@ func ResolveContentAnchor(entry *ledger.Entry, path string, size int64, durable 
 		if covered < seg.StartPos {
 			continue
 		}
-		candidate := ContentAnchor{Base: seg.StartPos, Covered: covered, Path: seg.Path}
+		candidate := ContentAnchor{Base: seg.StartPos, PhysicalStart: seg.PhysicalStart, Covered: covered, Path: seg.Path}
 		// 按「已覆盖字节数」比较而不是按绝对位置：不同锚的 Base 可能不同，
 		// 比绝对位置会挑到「Base 更大但实际覆盖更少」的锚 ⇒ 多导 ⇒ 重复入库。
 		if coveredBytes := candidate.CoveredBytes(size); coveredBytes > bestCovered {

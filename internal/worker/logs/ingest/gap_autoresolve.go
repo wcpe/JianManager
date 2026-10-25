@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -93,19 +94,25 @@ func (m *Manager) resolveGapsLandedByDelivery(source SourceConfig, events []logt
 	}
 	// 连续覆盖区间，而不是 [min(Start), max(End)] 凸包：写入面里两个事件之间的任何空洞
 	// 都意味着那段字节**没有**被本次写入覆盖（典型：append 被拒的批次从未进 WAL）。
-	runs := gapRangesOfEvents(events)
+	proof := m.capturePublishedEvidence(source, events)
+	runs := gapRangesOfEvents(proof.events)
 	if len(runs) == 0 {
 		return
 	}
 	// 先登记区间级凭据（与是否存在缺口无关）：WAL 条目被回收后，这是「已发布投影证据」出口
 	// 唯一成立的区间级凭据，缺了它该出口就只能在末端水位上空转（见 autoResolveGapsFromPublished）。
-	m.recordVerifiedRuns(key, runs)
-	entry := pipe.Ledger().Get(pipe.Key())
-	if entry == nil || ledger.UnresolvedGapCountOf(entry) == 0 {
-		return
-	}
-	resolved, err := pipe.Ledger().ResolveGapsCoveredByRanges(pipe.Key(), runs,
-		gapResolutionDeliveryRetry, gapAutoResolvableReasons...)
+	resolved := 0
+	err := m.applyPublishedEvidence(source, proof, func(currentRuns []ledger.PositionRange) error {
+		m.recordVerifiedRuns(key, currentRuns)
+		entry := pipe.Ledger().Get(pipe.Key())
+		if entry == nil || ledger.UnresolvedGapCountOf(entry) == 0 {
+			return nil
+		}
+		var resolveErr error
+		resolved, resolveErr = pipe.Ledger().ResolveGapsCoveredByRanges(pipe.Key(), currentRuns,
+			gapResolutionDeliveryRetry, gapAutoResolvableReasons...)
+		return resolveErr
+	})
 	if err != nil {
 		slog.Warn("投递成功后自动消解缺口失败（下轮重试）",
 			"logSourceID", source.LogSourceID, "error", err)
@@ -360,14 +367,19 @@ func (m *Manager) autoResolveGapsFromPublished(source SourceConfig, p *pipeline.
 		// 没有成立的全量发布证据：不得凭空消解（缺口语义红线）。
 		return false
 	}
-	// 区间级凭据：只认「写 VL 后逐字段校验通过」的连续区间，并以已发布封闭水位为上界。
-	runs := clipPositionRanges(m.verifiedRuns(key), closed)
-	if len(runs) == 0 {
-		// 没有任何逐字段校验凭据：不得按末端水位消解（那会把从未校验过的区间一并宣称已落库）。
+	// 旧 VerifiedRuns 只代表过去，必须与当前白名单逐字段可见证明求交。
+	proof, err := m.currentPublishedRuns(context.Background(), source, saved)
+	if err != nil || len(proof.events) == 0 {
 		return false
 	}
-	resolved, err := p.Ledger().ResolveGapsCoveredByRanges(p.Key(), runs,
-		gapResolutionPublished, gapAutoResolvableReasons...)
+	runs := gapRangesOfEvents(proof.events)
+	resolved := 0
+	err = m.applyPublishedEvidence(source, proof, func(currentRuns []ledger.PositionRange) error {
+		var resolveErr error
+		resolved, resolveErr = p.Ledger().ResolveGapsCoveredByRanges(p.Key(), currentRuns,
+			gapResolutionPublished, gapAutoResolvableReasons...)
+		return resolveErr
+	})
 	if err != nil {
 		slog.Warn("已发布投影证据自动消解缺口失败（下轮重试）",
 			"logSourceID", source.LogSourceID, "error", err)
@@ -499,22 +511,4 @@ func (m *Manager) verifiedRuns(key string) []ledger.PositionRange {
 	defer m.mu.Unlock()
 	saved := m.state.Sources[key]
 	return append([]ledger.PositionRange(nil), saved.VerifiedRuns...)
-}
-
-// clipPositionRanges 把区间集合裁到 [0, ceiling] 内（超出部分截断，完全在 ceiling 之上的丢弃）。
-//
-// 用途：把「逐字段校验覆盖区间」这一凭据限制在已发布封闭水位之下——水位之上的写入虽已校验通过，
-// 但尚未被标记为「已发布覆盖」，不应作为「已发布投影证据」用于消解。
-func clipPositionRanges(runs []ledger.PositionRange, ceiling uint64) []ledger.PositionRange {
-	out := make([]ledger.PositionRange, 0, len(runs))
-	for _, r := range runs {
-		if r.From > ceiling {
-			continue
-		}
-		if r.To > ceiling {
-			r.To = ceiling
-		}
-		out = append(out, r)
-	}
-	return ledger.MergePositionRanges(out)
 }

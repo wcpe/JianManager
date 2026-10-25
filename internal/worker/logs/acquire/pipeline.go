@@ -1,9 +1,14 @@
 package acquire
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
@@ -31,7 +36,17 @@ type Pipeline struct {
 	// 返回 httpStatus 与 ackLost。
 	deliver func(events []logtypes.Event, replay bool) (httpStatus int, ackLost bool, err error)
 	// durablePersist 将已提交的 WAL/账本持久化；失败时禁止对下游发请求。
-	durablePersist func() error
+	durablePersist   func() error
+	committedPersist func(context.Context, []CommitIdentity) error
+	deliverContext   func(context.Context, []logtypes.Event, bool) (int, bool, error)
+	// guard是每源逻辑许可；只隔离投递，不阻止采集状态变化。stateMu为诊断叶子锁。
+	guard   chan struct{}
+	stateMu sync.Mutex
+	// 精确成功身份只保留仍在WAL中的条目；游标按插入槽轮转，不能用最大Delivery跳洞。
+	acknowledged    map[CommitIdentity]struct{}
+	drainCursor     int
+	drainEpoch      uint64
+	lastDrainDigest [32]byte
 	// suppressRecursiveVL source=worker 时抑制采集失败写回 VL。
 	suppressRecursiveVL bool
 	// workerSelfFailures 本地计数（可观测，不进入 VL）。
@@ -214,16 +229,126 @@ func NewPipeline(led *ledger.Ledger, key ledger.SourceKey, wal *WAL) *Pipeline {
 		key:    key,
 		wal:    wal,
 		budget: DefaultCapacityBudget(),
+		guard:  make(chan struct{}, 1),
 	}
 }
 
 // SetDeliver 注入投递函数（HTTP 2xx / ACK 丢失模拟）。
 func (p *Pipeline) SetDeliver(fn func(events []logtypes.Event, replay bool) (int, bool, error)) {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
 	p.deliver = fn
 }
 
 // SetDurablePersist 将磁盘提交插入 WAL.Commit 与投递之间。
 func (p *Pipeline) SetDurablePersist(fn func() error) { p.durablePersist = fn }
+
+type deliveryCaptureKey struct{}
+
+// WithDeliveryCapture只传递原WAL不透明快照，不授予SQL提交或ACK资格。
+func WithDeliveryCapture(ctx context.Context, capture *DeliveryCapture) context.Context {
+	return context.WithValue(ctx, deliveryCaptureKey{}, capture)
+}
+func DeliveryCaptureFromContext(ctx context.Context) *DeliveryCapture {
+	if ctx == nil {
+		return nil
+	}
+	capture, _ := ctx.Value(deliveryCaptureKey{}).(*DeliveryCapture)
+	return capture
+}
+
+// CommitIdentity绑定完整事件，不按EventID折叠同ID异哈希或不同正文的条目。
+type CommitIdentity struct {
+	EventID       string
+	CanonicalHash string
+	Record        logtypes.RecordRange
+	BodyDigest    [32]byte
+}
+
+// CommitIdentityOf把包括可变扩展字段在内的完整正文绑定到回执，不能只信调用方提供的canonical hash。
+func CommitIdentityOf(event logtypes.Event) (CommitIdentity, error) {
+	body, err := json.Marshal(event)
+	if err != nil {
+		return CommitIdentity{}, err
+	}
+	return CommitIdentity{event.EventID, event.CanonicalHash, event.Record, sha256.Sum256(body)}, nil
+}
+
+// QualifiedSnapshot仅授予本次外发资格，不代表HTTP成功或恢复责任已经转移。
+type QualifiedSnapshot struct {
+	owner  *Pipeline
+	events []logtypes.Event
+	used   bool
+	cut    walCapture
+}
+
+type deliveryGuardKey struct{}
+type deliveryGuardOwner struct {
+	pipe   *Pipeline
+	active atomic.Bool
+}
+
+// OwnsDeliveryGuard只认当前仍持有的许可；退出后的旧ctx不能绕开新owner。
+func (p *Pipeline) OwnsDeliveryGuard(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	owner, _ := ctx.Value(deliveryGuardKey{}).(*deliveryGuardOwner)
+	return owner != nil && owner.pipe == p && owner.active.Load()
+}
+
+// AcquireDeliveryGuard的唯一owner通过ctx传递；嵌套叶子调用复用同一许可，不重复等待自己。
+func (p *Pipeline) AcquireDeliveryGuard(ctx context.Context) (context.Context, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if p.OwnsDeliveryGuard(ctx) {
+		return ctx, func() {}, nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx, nil, ctx.Err()
+	case p.guard <- struct{}{}:
+	}
+	var once sync.Once
+	owner := &deliveryGuardOwner{pipe: p}
+	owner.active.Store(true)
+	return context.WithValue(ctx, deliveryGuardKey{}, owner), func() { once.Do(func() { owner.active.Store(false); <-p.guard }) }, nil
+}
+
+// SetCommittedPersist选用逐条实际提交回执；接入后不能回退generic nil资格。
+func (p *Pipeline) SetCommittedPersist(fn func(context.Context, []CommitIdentity) error) {
+	p.committedPersist = fn
+	if fn != nil {
+		p.wal.EnableQualifiedReclaim()
+	}
+}
+
+// SetDeliverContext把实际调用的取消/预算传到底层，不借后续Poll延长在飞尝试。
+func (p *Pipeline) SetDeliverContext(fn func(context.Context, []logtypes.Event, bool) (int, bool, error)) {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	p.deliverContext = fn
+}
+
+func (p *Pipeline) hasDelivery() bool {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return p.deliver != nil || p.deliverContext != nil
+}
+
+func (p *Pipeline) send(ctx context.Context, events []logtypes.Event, replay bool) (int, bool, error) {
+	p.stateMu.Lock()
+	contextual, deliver := p.deliverContext, p.deliver
+	p.stateMu.Unlock()
+	if contextual != nil {
+		return contextual(ctx, events, replay)
+	}
+	if deliver == nil {
+		return 0, false, nil
+	}
+	return deliver(events, replay)
+}
 
 // SetCapacityBudget 设置资源预算。
 func (p *Pipeline) SetCapacityBudget(b CapacityBudget) { p.budget = b }
@@ -253,7 +378,11 @@ func (p *Pipeline) handleAppendRejected() {
 }
 
 // WALAppendedBytesTotal 返回本进程累计追加的估算字节（观测口径，不作门禁）。
-func (p *Pipeline) WALAppendedBytesTotal() uint64 { return p.walAppendedBytesTotal }
+func (p *Pipeline) WALAppendedBytesTotal() uint64 {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return p.walAppendedBytesTotal
+}
 
 func (p *Pipeline) SetCapacityProvider(fn func() (CapacityBudget, error)) { p.budgetProvider = fn }
 
@@ -261,7 +390,11 @@ func (p *Pipeline) SetCapacityProvider(fn func() (CapacityBudget, error)) { p.bu
 func (p *Pipeline) SetSourceWorker(v bool) { p.suppressRecursiveVL = v }
 
 // WorkerSelfFailures 返回 worker 自源失败计数（本地，未入 VL）。
-func (p *Pipeline) WorkerSelfFailures() int { return p.workerSelfFailures }
+func (p *Pipeline) WorkerSelfFailures() int {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return p.workerSelfFailures
+}
 
 // Ingest 完整事件：容量门禁 → WAL append → fsync commit → delivery。
 // IngestReplay 与 Ingest 同语义，但把写入标记为**恢复期回放/补账**（见 WAL.AppendReplay 的注释 ✓）。
@@ -284,6 +417,18 @@ func (p *Pipeline) IngestReplay(events []logtypes.Event) error {
 }
 
 func (p *Pipeline) Ingest(events []logtypes.Event) error {
+	if err := p.AppendEvents(events); err != nil {
+		return err
+	}
+	qualified, err := p.CommitAndQualify(context.Background(), events)
+	if err != nil {
+		return err
+	}
+	return p.DeliverQualified(context.Background(), qualified)
+}
+
+// AppendEvents只修改采集状态和WAL；提交、SQLite资格与网络均由锁外阶段完成。
+func (p *Pipeline) AppendEvents(events []logtypes.Event, reservations ...*AppendReservation) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -344,7 +489,13 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 	if _, err := p.wal.TryReclaim(); err != nil {
 		p.noteSelfFailure(err.Error())
 	}
-	if err := p.wal.Append(events...); err != nil {
+	var appendErr error
+	if len(reservations) > 0 {
+		appendErr = p.wal.AppendReserved(reservations[0], events...)
+	} else {
+		appendErr = p.wal.Append(events...)
+	}
+	if err := appendErr; err != nil {
 		// append 失败（含已暂停）：补 gap，禁止静默。
 		// 被暂停（含积压上限）时，仍把 WAL 里**已 durable、未确认投递**的条目发出去：
 		// 投递不能挂在摄取上，否则暂停即断流 → 已读未投的积压永不外发 →
@@ -359,27 +510,55 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		p.noteSelfFailure(err.Error())
 		return err
 	}
+	p.stateMu.Lock()
 	for _, ev := range events {
 		p.walAppendedBytesTotal += uint64(len(ev.Message) + len(ev.EventID) + 64)
 	}
+	p.stateMu.Unlock()
 
-	// durable：fsync/equivalent commit。
+	return nil
+}
+
+// CommitAndQualify必须在采集锁外调用；真实完成回执仅绑定本次捕获的逐条完整正文。
+func (p *Pipeline) CommitAndQualify(ctx context.Context, events []logtypes.Event) (*QualifiedSnapshot, error) {
+	if len(events) == 0 {
+		return &QualifiedSnapshot{owner: p}, nil
+	}
 	if err := p.wal.Commit(); err != nil {
-		_ = p.led.RecordGap(p.key, gapStart, gapEnd, ledger.GapReasonWALCommitFailed, err.Error())
+		if gapErr := p.led.RecordGap(p.key, events[0].Record.Start, events[len(events)-1].Record.End, ledger.GapReasonWALCommitFailed, err.Error()); gapErr != nil {
+			p.noteSelfFailure(gapErr.Error())
+		}
 		p.noteSelfFailure(err.Error())
+		if p.appendRejectedHook != nil {
+			p.appendRejectedHook()
+		}
+		return nil, err
+	}
+	var cut walCapture
+	captured, err := p.persistCommittedBatchContext(ctx, events, &cut)
+	if err != nil {
+		return nil, err
+	}
+	return &QualifiedSnapshot{owner: p, events: captured, cut: cut}, nil
+}
+
+// DeliverQualified只消费本管道的一次性资格；真实响应仍单独决定ACK与回收责任。
+func (p *Pipeline) DeliverQualified(ctx context.Context, qualified *QualifiedSnapshot) error {
+	ctx, release, err := p.AcquireDeliveryGuard(ctx)
+	if err != nil {
 		return err
 	}
-	if p.durablePersist != nil {
-		if err := p.durablePersist(); err != nil {
-			p.noteSelfFailure(err.Error())
-			return fmt.Errorf("acquire: persist durable WAL: %w", err)
-		}
+	defer release()
+	if qualified == nil || qualified.owner != p || qualified.used {
+		return fmt.Errorf("acquire: invalid or consumed commit qualification")
 	}
-
-	if p.deliver == nil {
+	qualified.used = true
+	events := qualified.events
+	if len(events) == 0 || !p.hasDelivery() {
 		return nil
 	}
-	status, ackLost, err := p.deliver(events, false)
+	gapStart, gapEnd := events[0].Record.Start, events[len(events)-1].Record.End
+	status, ackLost, err := p.send(WithDeliveryCapture(ctx, &qualified.cut), events, false)
 	if err != nil && p.suppressRecursiveVL {
 		// worker 自源：失败只计本地，不递归写 VL。
 		p.noteSelfFailure(err.Error())
@@ -391,14 +570,13 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		return err
 	}
 	// HTTP 2xx → REQUEST_DONE only；AckLost → UNKNOWN（恢复责任保留）。
-	res := p.wal.RecordHTTPResult(DeliveryResult{
-		StartPos:   gapStart,
-		EndPos:     gapEnd,
-		HTTPStatus: status,
-		AckLost:    ackLost,
-	})
-	if res != nil {
-		return res
+	if err := p.recordHTTPResults(events, status, ackLost, &qualified.cut); err != nil {
+		return err
+	}
+	if status >= 200 && status < 300 && !ackLost {
+		if err := p.resolveReadLimitBackpressure(events); err != nil {
+			p.noteSelfFailure(err.Error())
+		}
 	}
 	// 投递结果落账后**顺手推进回收**：这是正常投递路径里应有的回收点。
 	//
@@ -412,6 +590,41 @@ func (p *Pipeline) Ingest(events []logtypes.Event) error {
 		p.noteSelfFailure(err.Error())
 	}
 	return nil
+}
+
+// persistCommittedBatch 为捕获的事件集合取得本次真实持久化资格，不缓存跨请求凭据。
+// 回调必须在对应快照真正保存后返回 nil；超时、交办和不完整快照都必须返回错误。
+// 失败不回退账本 Durable，也不改已完成的 fsync；后续所有外发入口都重新走此门。
+func (p *Pipeline) persistCommittedBatch(events []logtypes.Event) ([]logtypes.Event, error) {
+	return p.persistCommittedBatchContext(context.Background(), events)
+}
+
+func (p *Pipeline) persistCommittedBatchContext(ctx context.Context, events []logtypes.Event, cuts ...*walCapture) ([]logtypes.Event, error) {
+	if err := p.wal.ReservationError(); err != nil {
+		return nil, err
+	}
+	var cut *walCapture
+	if len(cuts) > 0 {
+		cut = cuts[0]
+	}
+	captured, required, err := p.wal.captureCommitted(events, cut)
+	if err != nil {
+		return nil, err
+	}
+	if p.committedPersist != nil {
+		if err := p.committedPersist(ctx, required); err != nil {
+			p.noteSelfFailure(err.Error())
+			return nil, fmt.Errorf("acquire: persist durable WAL: %w", err)
+		}
+		return captured, nil
+	}
+	if p.durablePersist != nil {
+		if err := p.durablePersist(); err != nil {
+			p.noteSelfFailure(err.Error())
+			return nil, fmt.Errorf("acquire: persist durable WAL: %w", err)
+		}
+	}
+	return captured, nil
 }
 
 // EvaluateResume 暴露「推进回收 + 按滞回评估恢复」的只读入口（见 WAL.EvaluateResume）。
@@ -439,10 +652,20 @@ func (p *Pipeline) EvaluateResume() bool {
 // 返回事件集合而不是布尔值：投递成功是「已确认落库」的证据，上层要用它的区间消解缺口、
 // 并据此登记恢复责任证明（与正常投递路径同构）。
 func (p *Pipeline) DeliverPending() ([]logtypes.Event, error) {
-	if p == nil || p.deliver == nil {
+	return p.DeliverPendingContext(context.Background())
+}
+
+// DeliverPendingContext对有限保留正文重新取证；调用者取消时停止等待同源许可。
+func (p *Pipeline) DeliverPendingContext(ctx context.Context) ([]logtypes.Event, error) {
+	if p == nil || !p.hasDelivery() {
 		return nil, nil
 	}
-	pending, err := p.deliverPendingBestEffort()
+	ctx, release, err := p.AcquireDeliveryGuard(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	pending, err := p.deliverPendingBestEffortContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -454,6 +677,23 @@ func (p *Pipeline) DeliverPending() ([]logtypes.Event, error) {
 		p.noteSelfFailure(reclaimErr.Error())
 	}
 	return pending, nil
+}
+
+// HasPendingDelivery只检查未取得本进程精确ACK的保留条目，不用reclaim或Delivery最大水位猜测。
+func (p *Pipeline) HasPendingDelivery(ctx context.Context) (bool, error) {
+	_, release, err := p.AcquireDeliveryGuard(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	// 只读探测不消费真实游标版本，避免探测见过prune后让下一批沿旧位置继续。
+	epoch := p.drainEpoch
+	entries, _, live, err := p.wal.snapshotPending(1, p.drainCursor, p.acknowledged, &epoch)
+	if err != nil {
+		return false, err
+	}
+	p.acknowledged = live
+	return len(entries) > 0, nil
 }
 
 // noteSelfFailure 本地可观测失败；source=worker 禁止递归 VL。
@@ -469,11 +709,28 @@ func (p *Pipeline) DeliverPending() ([]logtypes.Event, error) {
 // 限速的口径是「每采集轮一批」：采集轮持续在跑，故这只是把一次尖峰摊成若干轮，
 // **不丢数据**（未发的条目留在 WAL、位置账本不变，下一轮接着发）。
 func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
-	if p.deliver == nil {
+	return p.DeliverPendingContext(context.Background())
+}
+
+func (p *Pipeline) deliverPendingBestEffortContext(ctx context.Context) ([]logtypes.Event, error) {
+	if !p.hasDelivery() {
 		return nil, nil
 	}
-	entries := p.wal.Snapshot()
 	cap0 := p.replayDrainLimit()
+	nextCursor, nextEpoch := p.drainCursor, p.drainEpoch
+	var entries []WALEntry
+	if p.committedPersist != nil {
+		if err := p.wal.Commit(); err != nil {
+			return nil, err
+		}
+		var err error
+		entries, nextCursor, p.acknowledged, err = p.wal.snapshotPending(cap0, p.drainCursor, p.acknowledged, &nextEpoch)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		entries = p.wal.Snapshot()
+	}
 	pending := make([]logtypes.Event, 0, len(entries))
 	for _, e := range entries {
 		if !e.Durable {
@@ -487,6 +744,18 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	if len(pending) == 0 {
 		return nil, nil
 	}
+	// 排空和拒绝后的兜底也必须重新取得真实提交资格；失败后不信任上轮的内存 Durable。
+	// pending 在调用持久化前捕获，回调期间新增的条目不会混入本次授权集合。
+	var cut walCapture
+	captured, persistErr := p.persistCommittedBatchContext(ctx, pending, &cut)
+	if persistErr != nil {
+		return nil, persistErr
+	}
+	pending = captured
+	if p.committedPersist != nil {
+		// 未取得本批真实提交资格不得偷走队列进度；后续纯追加仍按已接纳版本继续轮转。
+		p.drainCursor, p.drainEpoch = nextCursor, nextEpoch
+	}
 	// #60-Z1：冗余整窗重投抑制（见 replayGateState 的说明）——排空是投递面**唯一**走 replay=true 的入口，
 	// 而 replay=true 在 ingest 侧 = 整窗 replace（重建权威全量 + 发新代次）⇒ 滞留期重复触发 = 反复重投同一段。
 	// 失败判定与投递结果同批记账（见 noteReplayDrain：失败 ⇒ 不退避 ⇒ 立即可重试）。
@@ -494,6 +763,27 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	outcomeFailed := false
 	now := time.Now()
 	suppress, progressed := p.replayDrainDecision(now)
+	if p.committedPersist != nil {
+		ids := make([]CommitIdentity, 0, len(pending))
+		for _, event := range pending {
+			id, err := CommitIdentityOf(event)
+			if err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return nil, err
+		}
+		digest := sha256.Sum256(encoded)
+		// 新的精确批次不是旧水位的冗余尝试；hold或乱序洞不能抑制未尝试的新尾。
+		if digest != p.lastDrainDigest {
+			suppress = false
+			progressed = true
+		}
+		defer func() { p.lastDrainDigest = digest }()
+	}
 	// #7 复盘定点（**只观测、零判据改动** ✗）：滞留期排空"碎批 2–840"的根因三判一 ——
 	//   抑制跳轮 ✗ ／ 快照碎批（snapshot/durable 大而 pending 小）✗ ／ 读数口径错（碎批其实来自常规轮）✓。
 	//
@@ -521,24 +811,106 @@ func (p *Pipeline) deliverPendingBestEffort() ([]logtypes.Event, error) {
 	// 兜底环单轮 61 分钟、其余源全部饿死 ✗✗）。常规排空**不需要**该语义：补齐已确认数据
 	// 走 append 幂等即可（幂等由位置账本＋消费端 event_id 去重保证 ✓）；真正需要"重建权威"
 	// 的修复场景由 ingest 侧自身的 `PublicationPending`／代次耗尽判据触发 ✓。故传 `false`。
-	status, ackLost, err := p.deliver(pending, false)
+	status, ackLost, err := p.send(WithDeliveryCapture(ctx, &cut), pending, false)
 	if err != nil {
 		// 失败不改状态、不记 gap：源本就处于暂停，重试留给下一轮（失败不进入退避 ⇒ 节奏不变 ✓）。
 		outcomeFailed = true
 		p.noteSelfFailure(err.Error())
 		return nil, err
 	}
-	if res := p.wal.RecordHTTPResult(DeliveryResult{
-		StartPos:   pending[0].Record.Start,
-		EndPos:     pending[len(pending)-1].Record.End,
-		HTTPStatus: status,
-		AckLost:    ackLost,
-	}); res != nil {
+	if res := p.recordHTTPResults(pending, status, ackLost, &cut); res != nil {
 		outcomeFailed = true // 结果登记失败同样属"未推进"：不得进退避
 		p.noteSelfFailure(res.Error())
 		return nil, res
 	}
+	if status >= 200 && status < 300 && !ackLost {
+		if err := p.resolveReadLimitBackpressure(pending); err != nil {
+			p.noteSelfFailure(err.Error())
+		}
+	}
 	return pending, nil
+}
+
+// RecordDeliveryResult供已持同一逻辑许可的维护入口登记真实结果，复用精确区间与ACK身份记账。
+func (p *Pipeline) RecordDeliveryResult(ctx context.Context, events []logtypes.Event, status int, ackLost bool) error {
+	_, release, err := p.AcquireDeliveryGuard(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if capture := DeliveryCaptureFromContext(ctx); capture != nil {
+		return p.recordHTTPResults(events, status, ackLost, capture)
+	}
+	return p.recordHTTPResults(events, status, ackLost)
+}
+
+// recordHTTPResults 只登记本次实际外发区间的连续并集，不把插入顺序首尾当作覆盖证明。
+// 恢复条目可晚追加更早的记录；只排序独立区间副本，事件顺序和下游身份裁定保持不变。
+func (p *Pipeline) recordHTTPResults(events []logtypes.Event, status int, ackLost bool, cuts ...*walCapture) error {
+	ranges := make([]logtypes.RecordRange, 0, len(events))
+	for _, event := range events {
+		if event.Record.End < event.Record.Start {
+			return fmt.Errorf("acquire: invalid delivered record [%d,%d)", event.Record.Start, event.Record.End)
+		}
+		ranges = append(ranges, event.Record)
+	}
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].Start == ranges[j].Start {
+			return ranges[i].End < ranges[j].End
+		}
+		return ranges[i].Start < ranges[j].Start
+	})
+	merged := ranges[:0]
+	for _, span := range ranges {
+		if len(merged) > 0 && span.Start <= merged[len(merged)-1].End {
+			if span.End > merged[len(merged)-1].End {
+				merged[len(merged)-1].End = span.End
+			}
+			continue
+		}
+		merged = append(merged, span)
+	}
+	results := make([]DeliveryResult, 0, len(merged))
+	for _, span := range merged {
+		results = append(results, DeliveryResult{StartPos: span.Start, EndPos: span.End, HTTPStatus: status, AckLost: ackLost})
+	}
+	if p.committedPersist != nil {
+		if err := p.wal.RecordCurrentResults(events, results, cuts...); err != nil {
+			return err
+		}
+	} else {
+		for _, result := range results {
+			if err := p.wal.RecordHTTPResult(result); err != nil {
+				return err
+			}
+		}
+	}
+	if p.committedPersist != nil && status >= 200 && status < 300 && !ackLost {
+		if p.acknowledged == nil {
+			p.acknowledged = make(map[CommitIdentity]struct{})
+		}
+		for _, event := range events {
+			id, err := CommitIdentityOf(event)
+			if err != nil {
+				return err
+			}
+			p.acknowledged[id] = struct{}{}
+		}
+	}
+	return nil
+}
+
+// resolveReadLimitBackpressure 只在真实提交及请求成功后，按本批精确区间解除长行背压诊断。
+// 其他原因（尤其未知归档、重写与缺失正文）不进入此专用允许名单。
+func (p *Pipeline) resolveReadLimitBackpressure(events []logtypes.Event) error {
+	ranges := make([]ledger.PositionRange, 0, len(events))
+	for _, event := range events {
+		if event.Record.End > event.Record.Start {
+			ranges = append(ranges, ledger.PositionRange{From: event.Record.Start, To: event.Record.End - 1})
+		}
+	}
+	_, err := p.led.ResolveGapsCoveredByRanges(p.key, ranges, "read byte backpressure resolved by the complete committed line and successful request", ReadLineTooLongReason)
+	return err
 }
 
 // logDrainDiag 打「排空取批诊断」一行（#7 复盘定点取证，见 deliverPendingBestEffort ✓）。
@@ -564,6 +936,8 @@ func (p *Pipeline) logDrainDiag(pendingN, snapshotN, durableN int, cap0 int, sup
 }
 
 func (p *Pipeline) noteSelfFailure(reason string) {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
 	p.workerSelfFailures++
 	// **原因必须可读**（2026-10-05 ✓）：此前是 `_ = reason` ⇒ 自愈失败只留一个计数、原因永远查不到 ✗
 	// —— 与"实现存在但不可达"同族，这次是"**值存在但被丢弃**" ✓。收进**有界环形缓冲**（沿用
@@ -589,6 +963,8 @@ func (p *Pipeline) SelfFailureReasons() []string {
 	if p == nil {
 		return nil
 	}
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
 	out := make([]string, 0, len(p.selfFailureReasons))
 	for i := len(p.selfFailureReasons) - 1; i >= 0; i-- {
 		out = append(out, p.selfFailureReasons[i])

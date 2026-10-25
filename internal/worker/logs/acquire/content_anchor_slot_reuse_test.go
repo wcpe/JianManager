@@ -77,7 +77,8 @@ func registerContentAnchor(t *testing.T, fx slotFixture, anchorPath string, base
 	require.NoError(t, fx.led.RegisterSegment(fx.key, ledger.Segment{
 		Path: anchorPath, Kind: ledger.SegmentRotated,
 		StartPos: base, EndPos: read,
-		IdentityBytes: idBytes, IdentitySHA256: idSHA,
+		PhysicalMappingKnown: true,
+		IdentityBytes:        idBytes, IdentitySHA256: idSHA,
 		ParserVersion: "acquire-v1",
 	}))
 }

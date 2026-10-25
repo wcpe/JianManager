@@ -35,6 +35,29 @@ import (
 //   - 4 条 durable 存量（区间连续、从 0 起 —— 投递水位要求"从回收位置起连续"）；
 //   - 只把**前 2 条**登记为已确认投递（后 2 条保持未确认 ⇒ 用于证明"不越界未来" ✓）；
 //   - 全程**不经过投递路径** ⇒ 一个恢复分段都没有（洞的形态 ✓）。
+//
+// primeConfirmedWALProjection 建立真实VL行、逐字段校验与发布面，不伪造恢复分段或回收水位。
+func primeConfirmedWALProjection(t *testing.T, m *Manager, source SourceConfig, p *pipeline.Pipeline, through uint64) {
+	t.Helper()
+	var events []logtypes.Event
+	seen := make(map[string]string)
+	for _, entry := range p.WAL().Snapshot() {
+		if !entry.Durable || entry.Event.Record.End > through {
+			continue
+		}
+		if hash, duplicate := seen[entry.Event.EventID]; duplicate {
+			require.Equal(t, hash, entry.Event.CanonicalHash, "本夹具只允许重复的相同正文，不能吞身份变体")
+			continue
+		}
+		seen[entry.Event.EventID] = entry.Event.CanonicalHash
+		events = append(events, entry.Event)
+	}
+	require.NotEmpty(t, events, "夹具必须先有真实已提交正文")
+	_, err := m.deliver(source, events, false)
+	require.NoError(t, err)
+	require.Len(t, m.landedVisibleInVL(source, events), len(events), "ACK之外还须有当前已发布的逐字段证据")
+}
+
 func newReclaimBackfillFixture(t *testing.T, drainLimit int) (*Manager, SourceConfig, string, *pipeline.Pipeline) {
 	t.Helper()
 	client, _ := newProjectionVL(t)
@@ -57,14 +80,15 @@ func newReclaimBackfillFixture(t *testing.T, drainLimit int) (*Manager, SourceCo
 	require.NotNil(t, p)
 	identity := logtypes.SourceIdentity{LogSourceID: src.LogSourceID, SourceGeneration: src.SourceGeneration, ParserVersion: "v1"}
 	for i := 0; i < 4; i++ {
-		start := uint64(i * 5)
-		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: start + 4},
+		start := uint64(max(0, i*5-1))
+		ev := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: start, End: uint64(i*5 + 4)},
 			"2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", fmt.Sprintf("seed-%d", i))
 		require.NoError(t, p.WAL().Append(ev))
 	}
 	require.NoError(t, p.WAL().Commit())
 	// 投递水位：只确认前 2 条（区间 [0,9] 连续 ✓）。
 	require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: 0, EndPos: 9, HTTPStatus: 200}))
+	primeConfirmedWALProjection(t, m, src, p, 9)
 	return m, src, key, p
 }
 
@@ -97,11 +121,8 @@ func TestDeliveryConfirmedBackfillUnblocksReclaim(t *testing.T) {
 	require.True(t, errors.Is(err, ledger.ErrReclaimNoSegment),
 		"前置红形态：回收必须被\"无段覆盖\"拒（现场文案），实测 %v", err)
 
-	// 绿：投递确认点补段 —— 直接驱动**生产三条路径共用的入口** `releaseRecovery`（正常批次 / 排空 /
-	// 对账都调它 ✓）。不绕道 `DeliverPending`：那会额外耦合排空面的限速/抑制/状态闸（与本修复无关 ✗）。
-	require.NoError(t, m.releaseRecovery(src, []logtypes.Event{
-		{EventID: "confirmed", Record: logtypes.RecordRange{Start: 0, End: 9}},
-	}))
+	// 历史洞由维护面独立取证修复；正常投递只转移本批精确责任，不再每批全源扫描。
+	require.NoError(t, m.repairStalledReclaim(p, src))
 
 	refs := deliveryConfirmedRefs(t, p)
 	require.Len(t, refs, 1, "必须补出唯一一段「投递确认」覆盖段")

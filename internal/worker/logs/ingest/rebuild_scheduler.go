@@ -59,6 +59,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
@@ -227,6 +228,17 @@ type rebuildScheduler struct {
 	yieldNotify func()
 	// hookRun 是「任务开始执行」的观测口（仅测试用，生产 nil）。
 	hookRun func(key string)
+	// 假时钟仅替换调度读数，不绕过队列、单飞与退避。
+	now func() time.Time
+	// confirmTimers 保存每源至多一个「待触发的只读确认重排」定时器（见 scheduleConfirmRequeue）。
+	confirmTimers map[string]*time.Timer
+}
+
+func (s *rebuildScheduler) clockNow() time.Time {
+	if s != nil && s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 func newRebuildScheduler() *rebuildScheduler {
@@ -274,7 +286,7 @@ func (s *rebuildScheduler) scheduleStartup(req *rebuildRequest, reason string) b
 	req.startupReplay = true
 	req.reason = reason
 	if req.enqueuedAt.IsZero() {
-		req.enqueuedAt = time.Now()
+		req.enqueuedAt = s.clockNow()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -306,7 +318,7 @@ func (s *rebuildScheduler) schedule(req *rebuildRequest, reason string) bool {
 	}
 	req.reason = reason
 	if req.enqueuedAt.IsZero() {
-		req.enqueuedAt = time.Now()
+		req.enqueuedAt = s.clockNow()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -325,7 +337,7 @@ func (s *rebuildScheduler) scheduleLocked(req *rebuildRequest) bool {
 		if st.abandoned {
 			return false
 		}
-		if now := time.Now(); now.Before(st.nextAllowedAt) {
+		if now := s.clockNow(); now.Before(st.nextAllowedAt) {
 			return false
 		}
 	}
@@ -403,8 +415,9 @@ func (s *rebuildScheduler) noteSuccess(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if st := s.attempts[key]; st != nil {
-		// 只重置连续失败与退避，保留累计副本数。
+		// 进程内台账只控制退避；物化副本预算已独立按源、日、内容窗口持久保存。
 		st.attempts = 0
+		st.totalRebuilds = 0
 		st.abandoned = false
 		st.abandonReason = ""
 		st.nextAllowedAt = time.Time{}
@@ -477,15 +490,6 @@ func (m *Manager) classifyRebuildFailure(key string, err error) rebuildFailureCl
 // 关键：这里的「放弃」只停**自动再建一版**，绝不改善任何发布/水位/缺口状态
 // （见文件头「不丢数据 / 不把失败伪装成成功」）。因此放弃是安全的：数据仍在账本、
 // 缺口仍可见、前端仍报「覆盖不完整」。
-// maxTotalRebuildsOf 返回「每源重建副本份数」的硬上限。
-//
-// 与 maxAttemptsOf 的乘积关系（默认 2×4=8）是刻意的：确定性失败那条锁先到达
-// （4 次），外部失败则靠这条兜住（8 份）。之所以留 2 倍而不是相等，
-// 是因为外部失败本就允许更多重试（VL 抖动会自愈），只是不允许**无界**。
-func (s *rebuildScheduler) maxTotalRebuildsOf() int {
-	return 2 * s.maxAttemptsOf()
-}
-
 func (s *rebuildScheduler) noteFailure(key, generation string, err error, class rebuildFailureClass) (abandoned bool, nextAllowed time.Time, attempts int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -509,19 +513,17 @@ func (s *rebuildScheduler) noteFailure(key, generation string, err error, class 
 		st.totalRebuilds++
 	}
 	st.lastErr = err
-	st.lastFailureAt = time.Now()
+	st.lastFailureAt = s.clockNow()
 	if generation != "" {
 		// 有界记录已尝试代次：它正是现场最难判的「到底建了多少版」。
 		if len(st.generations) < 8 {
 			st.generations = append(st.generations, generation)
 		}
 	}
-	if class == rebuildFailureDeterministic && st.attempts >= s.maxAttemptsOf() {
-		st.abandoned = true
-		st.abandonReason = fmt.Sprintf("连续 %d 次重建失败后停止自动重试；已尝试代次 %v；最后失败：%v",
-			st.attempts, st.generations, err)
-		return true, time.Time{}, st.attempts
-	}
+	// 自动重建永不按源永久封禁：只读确认与已有副本复用必须在退避后继续。
+	// 真正的新增物理写入由持久化窗口预算单独约束。
+	st.abandoned = false
+	st.abandonReason = ""
 	// **绝对副本上限：不看失败类别，写够份数就停**（2026-10-22 代码审查）。
 	//
 	// 与上面的「确定性失败上限」是两把不同的锁：
@@ -532,14 +534,7 @@ func (s *rebuildScheduler) noteFailure(key, generation string, err error, class 
 	//
 	// 取值 2×maxAttempts（默认 4 ⇒ 8 份）：给外部重试留出足够空间
 	// （VL 抖动一阵后仍能自愈），但把「无界放大」变成「有界浪费」。
-	if st.totalRebuilds >= s.maxTotalRebuildsOf() {
-		st.abandoned = true
-		st.abandonReason = fmt.Sprintf(
-			"该源已累计重建 %d 次（含外部条件失败），达到副本份数上限 %d，停止自动重试以防 VL 体积无界放大；"+
-				"已尝试代次 %v；最后失败：%v",
-			st.totalRebuilds, s.maxTotalRebuildsOf(), st.generations, err)
-		return true, time.Time{}, st.totalRebuilds
-	}
+
 	// 指数退避：base * 2^(attempts-1)，封顶 max。
 	//
 	// 对**外部条件**失败：attempts 不增长 ⇒ 恒以 base 退避——「VL 抖一次不必等十分钟」，
@@ -552,7 +547,7 @@ func (s *rebuildScheduler) noteFailure(key, generation string, err error, class 
 			break
 		}
 	}
-	st.nextAllowedAt = time.Now().Add(delay)
+	st.nextAllowedAt = s.clockNow().Add(delay)
 	return false, st.nextAllowedAt, st.attempts
 }
 
@@ -641,6 +636,12 @@ func (m *Manager) RunRebuildWorker(ctx context.Context) {
 
 // runRebuildRequest 执行一次重建请求（在工作 goroutine 上，绝不阻塞采集主线）。
 func (m *Manager) runRebuildRequest(ctx context.Context, req *rebuildRequest) {
+	m.runRebuildRequestMode(ctx, req, false)
+}
+
+// drainMode 为 true 时表示由 drainRebuilds 同步驱动（测试与显式排空），
+// 这种模式下不自我重排：否则「重排→立即再执行→再重排」会把一次排空变成无界循环。
+func (m *Manager) runRebuildRequestMode(ctx context.Context, req *rebuildRequest, drainMode bool) {
 	if m.rebuilds == nil {
 		return
 	}
@@ -709,6 +710,122 @@ func (m *Manager) runRebuildRequest(ctx context.Context, req *rebuildRequest) {
 	}
 	m.rebuilds.mu.Lock()
 	m.rebuilds.doneLocked(req.key)
+	m.rebuilds.mu.Unlock()
+	// 锁顺序：先放 s.mu 再读 state（needReconfirmPending 取 m.mu），不与其它持 m.mu 再取 s.mu 的
+	// 路径构成反向序。
+	//
+	// 需要续做的两种出口都要覆盖（生产 r5 同批出现）：
+	//   · outcome.Pending && Err == nil —— 取证 inconclusive（与在飞写入重叠、证据不稳）；
+	//   · Err 是**发布快照/CAS 失效** —— 确认期间权威或本源发布版本变了：这不是数据失败，
+	//     只是「本轮取证时点失效」，必须重取一次才能收口。
+	// 共同前提都是「该源 still pending」，故用 needReconfirmPending 兜住不越界；真正的写失败/
+	// 503/缺行仍按既有退避与放弃预算走，不会借这条路径清标志。drain 期间不重排，避免把
+	// 一次同步排空变成无界循环。
+	// 普通重建也可能复用副本后仍欠源级确认，不能因入口标志为false丢掉静默源的最后唤醒。
+	requeue := needReconfirmPending(m, req.key) &&
+		((outcome.Pending && outcome.Err == nil) || errors.Is(outcome.Err, errPublicationStale) ||
+			errors.Is(outcome.Err, catalog.ErrInvalidState))
+	if requeue && !drainMode {
+		m.scheduleConfirmRequeue(req)
+	}
+}
+
+// scheduleConfirmRequeue 为该源安排一次「退避后重排只读确认」，同一源最多保留一个待触发定时器。
+//
+// 为什么要按 key 去重（2026-10-22 复审）：单飞只限制**在飞**任务，不限制已结束任务遗留的
+// 待触发定时器；多轮任务各自 AfterFunc 会让同一源攒出多条确认待办，放大只读开销。
+// 到达退避时刻若登记仍被退避拒绝，就顺延到退避解禁时刻再试一次，绝不静默丢弃唤醒。
+func (m *Manager) scheduleConfirmRequeue(req *rebuildRequest) {
+	if m == nil || m.rebuilds == nil || req == nil || m.managerStopped() {
+		return
+	}
+	key := req.key
+	m.rebuilds.mu.Lock()
+	if m.rebuilds.closed {
+		m.rebuilds.mu.Unlock()
+		return
+	}
+	if m.rebuilds.confirmTimers == nil {
+		m.rebuilds.confirmTimers = make(map[string]*time.Timer)
+	}
+	if _, exists := m.rebuilds.confirmTimers[key]; exists {
+		m.rebuilds.mu.Unlock()
+		return // 已有待触发定时器：合并，不再加一个
+	}
+	delay := m.confirmRequeueBackoffOf()
+	var timer *time.Timer
+	timer = time.AfterFunc(delay, func() {
+		m.rebuilds.mu.Lock()
+		if m.rebuilds.confirmTimers[key] == timer {
+			delete(m.rebuilds.confirmTimers, key)
+		}
+		m.rebuilds.mu.Unlock()
+		m.fireConfirmRequeue(req)
+	})
+	m.rebuilds.confirmTimers[key] = timer
+	m.rebuilds.mu.Unlock()
+}
+
+// fireConfirmRequeue 在定时器到期时真正登记确认任务；被退避挡住就顺延，不丢唤醒。
+func (m *Manager) fireConfirmRequeue(req *rebuildRequest) {
+	if m == nil || m.rebuilds == nil || req == nil || m.managerStopped() || !needReconfirmPending(m, req.key) {
+		return
+	}
+	// worker ctx可先于Manager.Stop关闭调度器；关闭是终态，不得当队列拥挤反复续火。
+	m.rebuilds.mu.Lock()
+	closed := m.rebuilds.closed
+	m.rebuilds.mu.Unlock()
+	if closed {
+		return
+	}
+	ok, reason := m.scheduleRebuildConfirmPendingAsync(req.source, m.pendingConfirmDays(req.key), "pending_reconfirm")
+	if ok {
+		return
+	}
+	// 退避未解禁（或队列满/在飞）：按剩余退避再排一次。这里仍是**一次性定时器**，
+	// 不是循环 goroutine；pending 一旦被清或 Manager 停止，下一次触发会直接返回。
+	wait := m.confirmRequeueBackoffOf()
+	if st, exists := m.rebuilds.snapshot(req.key); exists && time.Now().Before(st.nextAllowedAt) {
+		if remain := time.Until(st.nextAllowedAt); remain > 0 {
+			wait = remain
+		}
+	}
+	slog.Warn("发布确认重排被跳过，按退避顺延重试",
+		"source", req.key, "skip", reason, "retryIn", wait.Truncate(time.Millisecond).String())
+	m.scheduleConfirmRequeueDelay(req, wait)
+}
+
+// scheduleConfirmRequeueDelay 与 scheduleConfirmRequeue 同义，只是可指定等待时长（顺延用）。
+func (m *Manager) scheduleConfirmRequeueDelay(req *rebuildRequest, delay time.Duration) {
+	if m == nil || m.rebuilds == nil || req == nil || m.managerStopped() {
+		return
+	}
+	if delay <= 0 {
+		delay = time.Millisecond
+	}
+	key := req.key
+	m.rebuilds.mu.Lock()
+	if m.rebuilds.closed {
+		m.rebuilds.mu.Unlock()
+		return
+	}
+	if m.rebuilds.confirmTimers == nil {
+		m.rebuilds.confirmTimers = make(map[string]*time.Timer)
+	}
+	if _, exists := m.rebuilds.confirmTimers[key]; exists {
+		m.rebuilds.mu.Unlock()
+		return
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(delay, func() {
+		m.rebuilds.mu.Lock()
+		if m.rebuilds.confirmTimers[key] == timer {
+			delete(m.rebuilds.confirmTimers, key)
+		}
+		m.rebuilds.mu.Unlock()
+		m.fireConfirmRequeue(req)
+	})
+	m.rebuilds.confirmTimers[key] = timer
 	m.rebuilds.mu.Unlock()
 }
 
@@ -818,7 +935,45 @@ func (m *Manager) rebuildDays(ctx context.Context, req *rebuildRequest) rebuildO
 
 // rebuildDaysInner 是重建的执行主体（yield 由调用方给定：worker 传让出钩子，同步入口传 nil）。
 func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yield func()) rebuildOutcome {
+	ctx, release, guardErr := m.acquireSourceDelivery(ctx, req.source)
+	if guardErr != nil {
+		return rebuildOutcome{Pending: true, Err: guardErr}
+	}
+	defer release()
+	ctx = context.WithValue(ctx, earlierWrittenRepairWorkerKey{}, &earlierWrittenRepairWorkBudget{started: time.Now()})
 	key := req.key
+	m.mu.Lock()
+	written := m.activeWrittenAttemptLocked(key)
+	m.mu.Unlock()
+	if req.confirmPending || (m.deferredDelivery && written != nil && (!written.measuredMissing || written.parent != nil)) {
+		if handled, _, err := m.confirmWrittenAttempt(ctx, req.source, nil); handled {
+			if err != nil {
+				if ctx.Err() != nil {
+					return rebuildOutcome{Pending: true, Err: ctx.Err()}
+				}
+				if verifyErrorIsSemantic(err) || vlsup.IsPermanent(err) {
+					return rebuildOutcome{Pending: true, Err: err}
+				}
+				if errors.Is(err, ErrVerifyDeferred) || errors.Is(err, errWrittenReadOnlyVerify) {
+					return rebuildOutcome{Pending: true}
+				}
+				return rebuildOutcome{Pending: true, Err: err}
+			}
+			m.mu.Lock()
+			pending := m.state.Sources[key].PublicationPending
+			m.mu.Unlock()
+			if pending {
+				return rebuildOutcome{Pending: true}
+			}
+			return rebuildOutcome{Days: append([]string(nil), req.days...), ConfirmedOnly: true}
+		}
+	}
+	if m.resourceBudget != nil {
+		if err := m.resourceBudget.Admit(vlsup.WorkBackground); err != nil {
+			return rebuildOutcome{Pending: true, Err: err}
+		}
+	}
+	receipt := &recoveryReceipt{}
 	// 「先确认、后重建」：pending 的语义是「上次发布**未获确认**」，而不是「数据一定没写成功」。
 	// 先做一次只读取证（成本 O(全量)，与重建同级，故同样必须由本 worker 承担），
 	// 确认通过即零写入收尾——这正是既有 `tryConfirmPendingPublication` 的语义，逐字保留。
@@ -828,7 +983,7 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 	// 但必须参与终态判定，否则 pending 会永久为真。
 	var beyondWindow []string
 	if req.confirmPending {
-		confirmed, missingDays, beyondMissing, inconclusive, err := m.confirmPendingOutsideLine(ctx, req.source, key)
+		confirmed, missingDays, beyondMissing, inconclusive, err := m.confirmPendingOutsideLine(ctx, req.source, key, receipt)
 		if err != nil {
 			return rebuildOutcome{Pending: true, Err: err}
 		}
@@ -906,7 +1061,7 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	m.mu.Unlock()
-	events, err := m.canonicalRecoveryEvents(key, saved)
+	events, err := m.canonicalRecoveryEventsReusing(key, saved, receipt)
 	if err != nil {
 		return rebuildOutcome{Err: fmt.Errorf("ingest: 投影重建取权威集合失败: %w", err)}
 	}
@@ -921,7 +1076,7 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 	// 保证（重建 worker 的单飞只覆盖自己那张 inflight 表）⇒ 并发取名会撞名。
 	// 释放必须覆盖全部返回路径（含预算提前收束、ctx 取消、写失败），故用 defer 收口。
 	generation, genRes := m.reserveProjectionGeneration(req.source, saved.ProjectionGeneration,
-		"rebuild:"+req.reason)
+		"rebuild:"+req.reason, ctx)
 	// 释放收口到函数出口（预算提前收束 / ctx 取消 / 写失败一并覆盖）。genRes==nil 时是空操作。
 	defer m.releaseProjectionGeneration(genRes)
 	// BeyondHotRetention 随结论一起回传（含预算提前收束 / ctx 取消 / 写失败等早退分支）：
@@ -968,10 +1123,29 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 			remaining = remaining[1:]
 			continue
 		}
+		daySource := req.source
+		daySource.UTCDay = day
+		reused, reuseErr := m.tryReuseMaterialization(ctx, daySource, dayEvents, snapshot, yield)
+		if reuseErr != nil {
+			out.Pending = true
+			out.Err = reuseErr
+			return out
+		}
+		if reused {
+			out.Days = append(out.Days, day)
+			remaining = remaining[1:]
+			continue
+		}
 		plan := projectionWritePlan{
 			Write: dayEvents, Replace: true, Days: []string{day}, Snapshot: snapshot,
 			// 限速：天内的插入批之间与校验簇之间主动让出 CPU（yield 为 nil 时零行为差异）。
 			Yield: yield,
+		}
+		m.mu.Lock()
+		hint := m.activeWrittenAttemptLocked(key)
+		m.mu.Unlock()
+		if hint != nil && hint.measuredMissing && hint.day == day {
+			plan.WrittenRepair = hint
 		}
 		if _, _, err := m.writeProjectionPlan(req.source, events, generation, plan); err != nil {
 			out.Pending = true
@@ -985,6 +1159,12 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		if yield != nil {
 			yield()
 		}
+	}
+	// 副本复用只完成本轮目标天的Catalog发布，不等于源级剩余责任已由完整证据收口。
+	// PP仍在时如实交既有按源定时器续做只读确认；不能假Completed或提前消解/回收，也不裸清PP。
+	if needReconfirmPending(m, key) {
+		out.Pending = true
+		return out
 	}
 	// 整窗完成（本次请求覆盖的全部天都已发布）：与既有重发路径同一出口——
 	// 消解被本次写入面覆盖的缺口、推进回收责任。**未完成时绝不走到这里**
@@ -1029,7 +1209,10 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 			"note", "权威全量含超窗口天时，releaseRecovery 的连续区间会把它一并覆盖")
 		return out
 	}
-	if err := m.releaseRecovery(req.source, events); err != nil {
+	if m.deferredDelivery {
+		m.scheduleConfirmedReplay(key)
+	}
+	if err := m.releaseRecovery(req.source, events, ctx); err != nil {
 		// best-effort：数据已落库这一事实不受影响，下一轮采集路径会再试。
 		slog.Warn("投影重建后推进回收责任失败（下轮重试）", "source", key, "error", err)
 	}
@@ -1050,23 +1233,30 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 // 为什么必须由本 worker 承担：它内部会遍历全量事件（`canonicalRecoveryEvents`，生产单源
 // 57 万条）并对每一天做逐字段可见性查询——这正是 O(全量) 的重活。原先它内联跑在对账轮
 // goroutine 上（跑在采集同档），生产现场该源 46 次 `publication_pending` 回退即此。
-func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceConfig, key string) (confirmed bool, inWindowMissing []string, beyondMissing []string, inconclusive bool, err error) {
+func (m *Manager) confirmPendingOutsideLine(ctx context.Context, source SourceConfig, key string, receipts ...*recoveryReceipt) (confirmed bool, inWindowMissing []string, beyondMissing []string, inconclusive bool, err error) {
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	inflight := m.publicationInflight[key]
 	m.mu.Unlock()
 	if !saved.PublicationPending {
-		// 已被别人确认/写成功清掉了：无需再确认（也不等于「本次重建成功」，
-		// 调用方按 days 继续重建即可——重建本身幂等）。
-		return false, nil, nil, false, nil
+		if !m.deferredDelivery {
+			// 默认同步组合保留旧重建入口语义。
+			return false, nil, nil, false, nil
+		}
+		// 等待guard期间可能已由真实投递收口；仍以当前完整正文逐字段确认，不能再无谓物化。
+		saved.PublicationPending = true
 	}
 	if inflight != 0 {
 		// 该源还有在飞的写入：此刻取证不可信（可能读到写一半的中间态）。留给下一轮。
 		return false, nil, nil, true, nil
 	}
 	missingDays := []string{}
-	// receipt 传 nil：重建路径与投递路径不在同一轮内，没有可复用的取证结果（复用只在一轮内成立）。
-	verdict, err := m.tryConfirmPendingPublicationVerdict(ctx, source, key, saved, nil, &missingDays)
+	// 同一任务的确认与重建共享不可变轮内凭据，绝不跨任务常驻整源正文。
+	var receipt *recoveryReceipt
+	if len(receipts) > 0 {
+		receipt = receipts[0]
+	}
+	verdict, err := m.tryConfirmPendingPublicationVerdict(ctx, source, key, saved, receipt, &missingDays)
 	if err != nil {
 		return false, nil, nil, true, fmt.Errorf("ingest: 投影重建前发布确认失败: %w", err)
 	}
@@ -1274,6 +1464,59 @@ func (m *Manager) scheduleRebuildTask(source SourceConfig, days []string, reason
 	return true, ""
 }
 
+// needReconfirmPending 报告「该源是否仍需再做一次发布确认」。
+//
+// 只在 pending 仍为真时需要：确认成功的唯一终态就是清掉它。读不到状态时不重排（保守）。
+func needReconfirmPending(m *Manager, key string) bool {
+	if m == nil || m.managerStopped() {
+		return false
+	}
+	m.mu.Lock()
+	saved := m.state.Sources[key]
+	m.mu.Unlock()
+	return saved.PublicationPending
+}
+
+// managerStopped 报告 Manager 是否已进入停止流程（停止后不再重排确认任务）。
+func (m *Manager) managerStopped() bool {
+	if m == nil {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopped
+}
+
+// confirmRequeueBackoff 是「确认取证未出结论」后重排下一次只读确认的退避时长。
+//
+// 取值远小于失败重试的 30s 基数：确认是**纯只读**的 O(全量) 取证，不产生任何物理写入，
+// 因此可以在绝对窗口内多试几次；而它仍然是有界的——同一源同时最多一个在飞确认，
+// 每次重排都由一次性定时器触发，且 pending 已被清掉时不再登记（见 runRebuildRequest）。
+const confirmRequeueBackoff = 5 * time.Second
+
+// confirmRequeueBackoffOf 允许测试注入更短的退避（生产恒为 confirmRequeueBackoff）。
+func (m *Manager) confirmRequeueBackoffOf() time.Duration {
+	if m != nil && m.confirmRequeueBackoff > 0 {
+		return m.confirmRequeueBackoff
+	}
+	return confirmRequeueBackoff
+}
+
+// pendingConfirmDays 给出「重新确认」任务的登记天集合。
+//
+// 确认取证本身按权威事件的实际 UTC 天分组，不依赖入参天的内容；这里只需要一个非空集合来
+// 通过既有登记判据（`len(days)==0` 即 scheduler_unavailable）。优先用已知的待确认天，
+// 否则退回源登记日——绝不借此扩展任何写入面（该任务只读取证）。
+func (m *Manager) pendingConfirmDays(key string) []string {
+	m.mu.Lock()
+	source := m.sources[key]
+	m.mu.Unlock()
+	if source.UTCDay != "" {
+		return []string{source.UTCDay}
+	}
+	return []string{time.Now().UTC().Format("2006-01-02")}
+}
+
 // markPublicationPending 如实登记「该代次的发布尚未完成」。
 //
 // 只在代次仍是本次尝试的那一个时才写（否则说明期间别人已经成功发布到更新的代次，
@@ -1314,7 +1557,7 @@ func (m *Manager) drainRebuilds(ctx context.Context) int {
 		if req == nil {
 			return ran
 		}
-		m.runRebuildRequest(ctx, req)
+		m.runRebuildRequestMode(ctx, req, true)
 		ran++
 	}
 }

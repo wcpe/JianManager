@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
@@ -78,9 +79,29 @@ func (m *Manager) readLegacyState() (*persistedState, error) {
 //   - 非空库 + 旧文件仍在：说明上次迁移在「提交后、归档前」中断，或索引被人工改动——
 //     逐字段一致则补归档继续启动；不一致则拒绝启动，不静默以任何一侧覆盖另一侧。
 func (m *Manager) migrateLegacyState(legacy *persistedState) error {
-	desired, err := m.stateToIndexState(legacy)
+	// 只有旧来源入口需要从完整历史提取独立证据；稳态根行映射不能重复扫描未变化历史。
+	withEvidence := *legacy
+	withEvidence.Sources = make(map[string]persistedSource, len(legacy.Sources))
+	for key, saved := range legacy.Sources {
+		saved.Ledger = append([]ledger.Entry(nil), saved.Ledger...)
+		if len(saved.Ledger) > 0 {
+			entry := &saved.Ledger[0]
+			entry.RequestDoneRanges = ledger.RequestDoneRangesOf(entry)
+			entry.DeliveryEvidence = ledger.DeliveryEvidenceOf(entry)
+		}
+		withEvidence.Sources[key] = saved
+	}
+	desired, err := m.stateToIndexState(&withEvidence)
 	if err != nil {
 		return fmt.Errorf("ingest: 旧状态无法映射为索引行（拒绝启动采集）: %w", err)
+	}
+	// 比对会重算派生前缀，因此先保留来源原始双水位；不能把重算值当作旧裁剪授权。
+	pruneThrough := make(map[string]uint64, len(legacy.Sources))
+	for key, saved := range legacy.Sources {
+		if len(saved.Ledger) > 0 {
+			positions := saved.Ledger[0].Positions
+			pruneThrough[key] = min(positions.Reclaim, positions.Delivery)
+		}
 	}
 	// 绑定原始字节而非归一化后的 JSON：来源即使只被人工重新编码也不能静默续用旧凭据。
 	data, err := os.ReadFile(m.statePath)
@@ -100,9 +121,13 @@ func (m *Manager) migrateLegacyState(legacy *persistedState) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	completed, err := m.index.CompletedMigration(ctx, sourceSHA, 1)
+	completed, err := m.index.CompletedMigration(ctx, sourceSHA, 2)
 	if err != nil {
-		return fmt.Errorf("ingest: 迁移来源凭据无效（拒绝启动采集）: %w", err)
+		// 已完成或未完成的旧凭据都要经来源与旧前缀验真后升级，不能仅因映射升版拒启。
+		if _, legacyErr := m.index.CompletedMigration(ctx, sourceSHA, 1); legacyErr != nil {
+			return fmt.Errorf("ingest: 迁移来源凭据无效（拒绝启动采集）: %w", err)
+		}
+		completed = false
 	}
 	if completed {
 		// 已验全的来源允许既有明确剪枝进度；无凭据或未完成的半库绝不走此豁免。
@@ -119,7 +144,11 @@ func (m *Manager) migrateLegacyState(legacy *persistedState) error {
 		}
 		return m.archiveLegacyState()
 	}
-	migration, err := m.index.BeginMigration(ctx, sourceSHA, 1, desired)
+	legacyRows, err := legacyMappingV1(desired)
+	if err != nil {
+		return err
+	}
+	migration, err := m.index.BeginMigrationV2WithPrune(ctx, sourceSHA, desired, legacyRows, pruneThrough)
 	if err != nil {
 		return fmt.Errorf("ingest: 采集索引与旧状态文件不一致或迁移凭据无效（拒绝启动采集）: %w", err)
 	}
@@ -158,6 +187,38 @@ func (m *Manager) migrateLegacyState(legacy *persistedState) error {
 	return m.archiveLegacyState()
 }
 
+// legacyMappingV1 精确重建旧映射漏掉的新字段，仅用于验证旧凭据，绝不作为新状态的一致性豁免。
+func legacyMappingV1(current stateindex.State) (stateindex.State, error) {
+	legacy := current
+	legacy.Gaps = append([]stateindex.GapRow(nil), current.Gaps...)
+	for i := range legacy.Gaps {
+		gap := &legacy.Gaps[i]
+		gap.FoldSpans, gap.FoldSpanMerges, gap.FoldSpansUnknown = nil, 0, false
+		gap.ReasonCode, gap.ResolvedAtUTC, gap.ResolvedBy = "", "", ""
+	}
+	legacy.Aux = append([]stateindex.AuxRow(nil), current.Aux...)
+	for i := range legacy.Aux {
+		if len(legacy.Aux[i].Payload) == 0 {
+			continue
+		}
+		var aux indexAux
+		if err := json.Unmarshal(legacy.Aux[i].Payload, &aux); err != nil {
+			return stateindex.State{}, err
+		}
+		if aux.LedgerCore != nil {
+			aux.LedgerCore.ConfirmedFingerprint = nil
+			aux.LedgerCore.RequestDoneRanges = nil
+			aux.LedgerCore.DeliveryEvidence = nil
+		}
+		payload, err := json.Marshal(aux)
+		if err != nil {
+			return stateindex.State{}, err
+		}
+		legacy.Aux[i].Payload = payload
+	}
+	return legacy, nil
+}
+
 // archiveLegacyState 把旧 JSON 改名归档（保留一个版本，不删除）。
 // 归档名带 .migrated 后缀；若已被占用则追加时间戳，绝不覆盖已归档版本。
 func (m *Manager) archiveLegacyState() error {
@@ -181,6 +242,81 @@ func (m *Manager) loadStateFromIndex() (*persistedState, error) {
 		return nil, err
 	}
 	return indexStateToState(rows)
+}
+
+// ArchiveRecovery 是账本历史审计仓储适配；只有独立表提交成功才产生领域回执。
+func (m *Manager) ArchiveRecovery(ctx context.Context, records []ledger.RecoveryArchiveRecord) ([]ledger.RecoveryArchiveReceipt, error) {
+	if m == nil || m.index == nil {
+		return nil, fmt.Errorf("ingest: 恢复审计仓储不可用")
+	}
+	rows := make([]stateindex.RecoveryAuditRow, 0, len(records))
+	for _, record := range records {
+		if err := ledger.ValidateRecoveryArchiveRecord(record); err != nil {
+			return nil, err
+		}
+		payload, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, stateindex.RecoveryAuditRow{SourceKey: record.Key.String(), RefKey: record.Ref.SegmentID, Fingerprint: record.Fingerprint, Payload: payload})
+	}
+	committed, err := m.index.AppendRecoveryAudit(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+	receipts := make([]ledger.RecoveryArchiveReceipt, 0, len(committed))
+	for i, row := range committed {
+		receipts = append(receipts, ledger.RecoveryArchiveReceipt{Key: records[i].Key, SegmentID: row.RefKey, Fingerprint: row.Fingerprint, ArchiveID: row.ArchiveID})
+	}
+	return receipts, nil
+}
+
+func decodeRecoveryArchive(row stateindex.RecoveryAuditRow) (ledger.RecoveryArchiveRecord, ledger.RecoveryArchiveReceipt, error) {
+	var record ledger.RecoveryArchiveRecord
+	if err := json.Unmarshal(row.Payload, &record); err != nil {
+		return record, ledger.RecoveryArchiveReceipt{}, err
+	}
+	if err := ledger.ValidateRecoveryArchiveRecord(record); err != nil {
+		return record, ledger.RecoveryArchiveReceipt{}, err
+	}
+	if record.Key.String() != row.SourceKey || record.Ref.SegmentID != row.RefKey || record.Fingerprint != row.Fingerprint || row.ArchiveID == "" {
+		return record, ledger.RecoveryArchiveReceipt{}, fmt.Errorf("ingest: 恢复审计身份与正文不匹配")
+	}
+	return record, ledger.RecoveryArchiveReceipt{Key: record.Key, SegmentID: record.Ref.SegmentID, Fingerprint: record.Fingerprint, ArchiveID: row.ArchiveID}, nil
+}
+
+func (m *Manager) LookupRecovery(ctx context.Context, key ledger.SourceKey, segmentID string) (ledger.RecoveryArchiveRecord, ledger.RecoveryArchiveReceipt, bool, error) {
+	if m == nil || m.index == nil {
+		return ledger.RecoveryArchiveRecord{}, ledger.RecoveryArchiveReceipt{}, false, fmt.Errorf("ingest: 恢复审计仓储不可用")
+	}
+	row, found, err := m.index.LookupRecoveryAudit(ctx, key.String(), segmentID)
+	if err != nil || !found {
+		return ledger.RecoveryArchiveRecord{}, ledger.RecoveryArchiveReceipt{}, false, err
+	}
+	record, receipt, err := decodeRecoveryArchive(row)
+	return record, receipt, err == nil, err
+}
+
+// ListRecoveryArchive 按稳定分段键分页读取历史，不回填活动 aux 或恢复引用。
+func (m *Manager) ListRecoveryArchive(ctx context.Context, key ledger.SourceKey, afterSegmentID string, limit int) ([]ledger.RecoveryArchiveRecord, []ledger.RecoveryArchiveReceipt, error) {
+	if m == nil || m.index == nil {
+		return nil, nil, fmt.Errorf("ingest: 恢复审计仓储不可用")
+	}
+	rows, err := m.index.ListRecoveryAudit(ctx, key.String(), afterSegmentID, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	records := make([]ledger.RecoveryArchiveRecord, 0, len(rows))
+	receipts := make([]ledger.RecoveryArchiveReceipt, 0, len(rows))
+	for _, row := range rows {
+		record, receipt, err := decodeRecoveryArchive(row)
+		if err != nil {
+			return nil, nil, err
+		}
+		records = append(records, record)
+		receipts = append(receipts, receipt)
+	}
+	return records, receipts, nil
 }
 
 // --- 状态 ↔ 行 映射 -------------------------------------------------------------
@@ -244,8 +380,11 @@ type indexLedgerCore struct {
 	// 于是**从未采样过指纹的源**在升级前后的 payload 字节完全相同——索引按 JSON 字节判变更，
 	// 不做无谓的全量重写；而旧索引缺这两个字段时反序列化得到零值（= 既有的「缺指纹」语义，
 	// 段 3 本就把零值当不一致），因此旧库只读不报错、不触发任何异常路径，由下一轮采样自然补齐。
-	PositionsFingerprint   string `json:"positions_fingerprint,omitempty"`
-	PositionsFingerprintAt uint64 `json:"positions_fingerprint_at,omitempty"`
+	PositionsFingerprint   string                       `json:"positions_fingerprint,omitempty"`
+	PositionsFingerprintAt uint64                       `json:"positions_fingerprint_at,omitempty"`
+	ConfirmedFingerprint   *ledger.ConfirmedFingerprint `json:"confirmed_fingerprint,omitempty"`
+	RequestDoneRanges      []ledger.PositionRange       `json:"request_done_ranges,omitempty"`
+	DeliveryEvidence       []ledger.DeliveryBatch       `json:"delivery_evidence,omitempty"`
 }
 
 // splitSourceKey 从组合键回推 LogSourceID/SourceGeneration（键形如 `<log_id>/<generation>`，
@@ -394,6 +533,9 @@ func ledgerCoreOf(entry *ledger.Entry) *indexLedgerCore {
 		// 禁止按旧偏移续读」，把 w18 要消除的漂移重复摄取原样放回来（见 indexLedgerCore 注释）。
 		PositionsFingerprint:   entry.PositionsFingerprint,
 		PositionsFingerprintAt: entry.PositionsFingerprintAt,
+		ConfirmedFingerprint:   entry.ConfirmedFingerprint,
+		RequestDoneRanges:      entry.RequestDoneRanges,
+		DeliveryEvidence:       entry.DeliveryEvidence,
 	}
 }
 
@@ -439,10 +581,6 @@ func (m *Manager) stateToIndexStateScopedOpt(st *persistedState, changed []strin
 }
 
 // ledgerRowsOf 把「首个账本条目」拆成 position/gap/delivery_batch 行（spec §2.2 各表只存一处）。
-func ledgerRowsOf(key string, saved persistedSource, core *indexLedgerCore) (stateindex.PositionRow, *stateindex.ProjectionRow, []stateindex.GapRow, []stateindex.BatchRow, error) {
-	return ledgerRowsOfOpt(key, saved, core, false)
-}
-
 func ledgerRowsOfOpt(key string, saved persistedSource, core *indexLedgerCore, skipDerived bool) (stateindex.PositionRow, *stateindex.ProjectionRow, []stateindex.GapRow, []stateindex.BatchRow, error) {
 	position := stateindex.PositionRow{Key: key}
 	projection := &stateindex.ProjectionRow{
@@ -463,10 +601,20 @@ func ledgerRowsOfOpt(key string, saved persistedSource, core *indexLedgerCore, s
 	}
 	gaps := make([]stateindex.GapRow, 0, len(entry.Gaps))
 	for index, gap := range entry.Gaps {
+		var spans []byte
+		if len(gap.FoldSpans) > 0 {
+			var err error
+			spans, err = json.Marshal(gap.FoldSpans)
+			if err != nil {
+				return position, projection, nil, nil, fmt.Errorf("ingest: 编码缺口精确区间失败: %w", err)
+			}
+		}
 		gaps = append(gaps, stateindex.GapRow{
 			ID: int64(index), Key: key,
 			StartPos: gap.StartPos, EndPos: gap.EndPos, Reason: gap.Reason, Detail: gap.Detail,
-			Resolved: gap.Resolved, Resolution: gap.Resolution,
+			Resolved: gap.Resolved, Resolution: gap.Resolution, FoldSpans: spans,
+			FoldSpanMerges: gap.FoldSpanMerges, FoldSpansUnknown: gap.FoldSpansUnknown, ReasonCode: gap.ReasonCode,
+			ResolvedAtUTC: gap.ResolvedAtUTC, ResolvedBy: gap.ResolvedBy,
 		})
 	}
 	batches := make([]stateindex.BatchRow, 0, len(entry.DeliveryBatches))
@@ -485,6 +633,29 @@ func ledgerRowsOfOpt(key string, saved persistedSource, core *indexLedgerCore, s
 // 恢复期回放/补账），只落在内存条目上时，重启后回放条目会退回「常规积压」并把源重新推过闸
 // （闸视图 = 总量 − 回放），而这恰好发生在最需要它的时刻（恢复期回放与进程重启是同一场景）。
 // 两侧（内联与引用）都要带，否则引用态条目重启后丢标记。
+// walRowsOfPlan只消费同一WAL owner/cut/ordinal的私有计划；身份摘要与SQL Body使用同一次完整JSON编码。
+// 旧转换入口仍照常编码；没有私有计划时不得猜测或按ID/长度拼接旧正文。
+func (m *Manager) walRowsOfPlan(key string, saved persistedSource, encoded *acquire.WALCommitSnapshot, owner *acquire.WAL) ([]stateindex.WALRow, error) {
+	if encoded == nil {
+		return m.walRowsOf(key, saved)
+	}
+	rows := make([]stateindex.WALRow, 0, len(saved.WAL)+len(saved.WALRefs))
+	err := encoded.VisitEncoded(owner, func(entry acquire.WALEntry, body []byte) {
+		rows = append(rows, stateindex.WALRow{
+			Key: key, Seq: entry.Seq, EventID: entry.Event.EventID,
+			RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End,
+			Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay, Body: body,
+			FP: walBodyFP(entry.Event),
+		})
+	}, func(ref acquire.WALRef) {
+		rows = append(rows, stateindex.WALRow{
+			Key: key, Seq: ref.Seq, EventID: ref.EventID, RecordStart: ref.RecordStart, RecordEnd: ref.RecordEnd,
+			Appended: ref.Appended, Durable: ref.Durable, Replay: ref.Replay,
+		})
+	})
+	return rows, err
+}
+
 func (m *Manager) walRowsOf(key string, saved persistedSource) ([]stateindex.WALRow, error) {
 	rows := make([]stateindex.WALRow, 0, len(saved.WAL)+len(saved.WALRefs))
 	for _, entry := range saved.WAL {
@@ -578,9 +749,17 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 	}
 	gaps := make(map[string][]ledger.Gap, len(rows.Gaps))
 	for _, row := range rows.Gaps {
+		var spans []ledger.PositionRange
+		if len(row.FoldSpans) > 0 {
+			if err := json.Unmarshal(row.FoldSpans, &spans); err != nil {
+				return nil, fmt.Errorf("ingest: 解析 %s 缺口精确区间失败: %w", row.Key, err)
+			}
+		}
 		gaps[row.Key] = append(gaps[row.Key], ledger.Gap{
 			StartPos: row.StartPos, EndPos: row.EndPos, Reason: row.Reason, Detail: row.Detail,
-			Resolved: row.Resolved, Resolution: row.Resolution,
+			Resolved: row.Resolved, Resolution: row.Resolution, FoldSpans: spans,
+			FoldSpanMerges: row.FoldSpanMerges, FoldSpansUnknown: row.FoldSpansUnknown || (len(spans) == 0 && strings.Contains(row.Detail, "超上限折叠")), ReasonCode: row.ReasonCode,
+			ResolvedAtUTC: row.ResolvedAtUTC, ResolvedBy: row.ResolvedBy,
 		})
 	}
 	batches := make(map[string][]ledger.DeliveryBatch, len(rows.Batches))
@@ -661,6 +840,9 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 				// 走对账补齐），所以这里**不报错、也不特判**——旧库照常加载，由下一轮采样补齐。
 				PositionsFingerprint:   core.PositionsFingerprint,
 				PositionsFingerprintAt: core.PositionsFingerprintAt,
+				ConfirmedFingerprint:   core.ConfirmedFingerprint,
+				RequestDoneRanges:      core.RequestDoneRanges,
+				DeliveryEvidence:       core.DeliveryEvidence,
 				AcquirePaused:          position.AcquirePaused,
 				PauseReason:            position.PauseReason,
 			}
@@ -723,6 +905,12 @@ func normalizePersistedState(st *persistedState) {
 			entry := &saved.Ledger[index]
 			if entry.Gaps == nil {
 				entry.Gaps = []ledger.Gap{}
+			}
+			for i := range entry.Gaps {
+				gap := &entry.Gaps[i]
+				if len(gap.FoldSpans) == 0 && strings.Contains(gap.Detail, "超上限折叠") {
+					gap.FoldSpansUnknown = true
+				}
 			}
 			if entry.DeliveryBatches == nil {
 				entry.DeliveryBatches = []ledger.DeliveryBatch{}
@@ -803,6 +991,8 @@ func comparisonState(st *persistedState) *persistedState {
 	for key, saved := range st.Sources {
 		for index := range saved.Ledger {
 			entry := &saved.Ledger[index]
+			entry.RequestDoneRanges = ledger.RequestDoneRangesOf(entry)
+			entry.DeliveryEvidence = ledger.DeliveryEvidenceOf(entry)
 			entry.DeliveryBatches = prunedBatchesForComparison(entry)
 			entry.Positions.Delivery = ledger.ContiguousDeliveryEnd(entry.DeliveryBatches, entry.Positions.Reclaim)
 		}

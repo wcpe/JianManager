@@ -199,6 +199,7 @@ func TestSelfHealReclaimAdvanceClearsBackoff(t *testing.T) {
 		logtypes.RecordRange{Start: 0, End: 99}, "2026-10-10T00:00:00Z", "2026-10-10T00:00:01Z", "INFO", "stdout", "stall")))
 	require.NoError(t, p.WAL().Commit())
 	require.NoError(t, p.WAL().RecordHTTPResult(acquire.DeliveryResult{StartPos: 0, EndPos: 99, HTTPStatus: 200}))
+	primeConfirmedWALProjection(t, m, src, p, 99)
 	require.NoError(t, p.Ledger().PauseAcquire(p.Key(), "TEST_STALL: backlog over limit (fixture)"))
 
 	// 自愈面步 0 补段并推进回收 ⇒ 这是**进展** ⇒ 退避必须被清掉。

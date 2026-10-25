@@ -34,6 +34,7 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	rec, ok := cat.Get(catalog.PartitionKey{StorageNamespace: "inst:1", UTCDay: runtimeTestUTCDay()})
 	require.True(t, ok)
 	require.Len(t, rec.PublishedProjection.SourceProjections, 2)
+	require.NoError(t, m.Stop())
 	restarted, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
 	require.NoError(t, err)
 	require.Len(t, restarted.pipes, 2, "sources restore without CP or config replay")
@@ -44,7 +45,7 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	require.NoError(t, os.Remove(restarted.rawInstancePath(restarted.state.Instances["uuid-1"], "stdout")))
 	require.Error(t, restarted.AppendInstanceOutput("uuid-1", "stdout", []byte("not captured\n")))
 	require.False(t, restarted.CutoverReadiness().LedgerReady)
-	require.ErrorContains(t, restarted.ResolveCoveredGaps(context.Background()), "projection alone cannot resolve")
+	require.Error(t, restarted.ResolveCoveredGaps(context.Background()), "全节点自动路径不得将Raw写失败宣称已恢复")
 
 	// 显式人工确认路径（FR-485 后续）：自动路径对 Raw 写失败一律拒绝，
 	// 而**指名源**的解法应成功——这正是「自动拒绝 vs 管理员显式确认」的分工。
@@ -56,6 +57,7 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 		}
 	}
 	require.NotEmpty(t, stdoutKey, "夹具应含 stdout 源")
+	require.ErrorContains(t, restarted.resolveOneSourceGaps(context.Background(), stdoutKey, restarted.pipes[stdoutKey], restarted.sources[stdoutKey]), "projection alone cannot resolve", "逐源断言必须咬住Raw失败专用闸，不依赖全节点枚举先遇到哪个源")
 	require.NoError(t, restarted.ResolveCoveredGapsForSource(context.Background(), stdoutKey, "test-operator"),
 		"显式人工确认应能解开 Raw 写失败缺口")
 	// 未知名与空名都要被明确拒绝，不能静默成功。
