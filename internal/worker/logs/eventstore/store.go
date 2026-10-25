@@ -13,8 +13,9 @@ package eventstore
 
 import (
 	"bufio"
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,9 @@ const (
 // ErrCorrupt 表示段内容损坏（非尾部截断），调用方必须硬失败而不是继续。
 var ErrCorrupt = errors.New("eventstore: corrupt segment")
 
+// ErrReadOnly 表示只读取证实例拒绝任何追加或持久修复。
+var ErrReadOnly = errors.New("eventstore: read-only store")
+
 // SegmentMeta 描述一个已封闭/在写的段。只存元数据，不持事件体。
 type SegmentMeta struct {
 	Seq     int    `json:"seq"`
@@ -54,7 +58,7 @@ type SegmentMeta struct {
 }
 
 // Manifest 是段清单。与段内容一起构成可校验的持久结构。
-// Key 保存**原始 source key**：目录名经过字符净化，不能反推回 key，必须显式持久化。
+// Key 保存原始源键；旧目录有损净化、新目录使用稳定摘要，两者都不能反推原始键。
 type Manifest struct {
 	Version  int           `json:"version"`
 	Key      string        `json:"key"`
@@ -63,32 +67,53 @@ type Manifest struct {
 
 // Store 管理多个 source key 的事件段。并发安全。
 type Store struct {
-	mu     sync.Mutex
-	root   string
-	maxSeg int64
-	byKey  map[string]*section
+	// 全局锁只保护源映射与配置，最长为关闭时复制源指针，不跨文件操作或源写锁。
+	mu       sync.Mutex
+	root     string
+	maxSeg   int64
+	byKey    map[string]*section
+	closed   bool
+	readOnly bool
 }
 
 type section struct {
-	dir      string
-	manifest Manifest
-	// active 是正在追加的段文件句柄；封段后置 nil。
+	// 锁序为源写锁到清单锁；写锁可跨本源校准与耐久写入，但不跨全局锁或任何回调。
+	mu          sync.Mutex
+	dir         string
+	manifest    Manifest
+	initialized bool
+	closed      bool
+	readOnly    bool
+	writeErr    error
+	// 工作清单只归写锁所有；读侧只在短锁内复制成功发布的清单，不能看见在途追加。
+	viewMu     sync.RWMutex
+	committed  Manifest
+	verified   bool
 	active     *os.File
 	activeMeta *SegmentMeta
-	// verified 表示本进程已校准过该源末段（清单计数与物理完整行一致）。
-	// 校准只做一次：此后段由本进程单写入者维护，计数随写入递增而保持准确。
-	verified bool
 }
 
 // Open 打开（必要时创建）事件体根目录并载入各源清单。
 func Open(root string) (*Store, error) {
+	return openStore(root, false)
+}
+
+// OpenReadOnly 只读取证已存在的根；不创建目录，不截断尾部，也不发布校准清单。
+// 只读实例固定本次打开的源清单，并以实际完整行校验前缀；不能用于追加或移交恢复责任。
+func OpenReadOnly(root string) (*Store, error) {
+	return openStore(root, true)
+}
+
+func openStore(root string, readOnly bool) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("eventstore: root is required")
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("eventstore: create root: %w", err)
+	if !readOnly {
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return nil, fmt.Errorf("eventstore: create root: %w", err)
+		}
 	}
-	s := &Store{root: root, maxSeg: DefaultSegmentBytes, byKey: map[string]*section{}}
+	s := &Store{root: root, maxSeg: DefaultSegmentBytes, byKey: map[string]*section{}, readOnly: readOnly}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, fmt.Errorf("eventstore: read root: %w", err)
@@ -102,12 +127,17 @@ func Open(root string) (*Store, error) {
 		if err != nil {
 			return nil, err
 		}
-		// 以清单内的原始 key 建索引；目录名是净化后的，不可反推。
-		key := mf.Key
-		if key == "" {
-			key = e.Name() // 兼容早期无 Key 字段的清单
+		// 空目录没有源身份，不从有损目录名猜测原始键。
+		if mf.Key == "" {
+			continue
 		}
-		s.byKey[key] = &section{dir: dir, manifest: mf}
+		if isDigestDirName(e.Name()) && e.Name() != sectionDirName(mf.Key) {
+			return nil, fmt.Errorf("%w: manifest key does not match directory %s", ErrCorrupt, dir)
+		}
+		if _, duplicate := s.byKey[mf.Key]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate source key %q", ErrCorrupt, mf.Key)
+		}
+		s.byKey[mf.Key] = &section{dir: dir, manifest: cloneManifest(mf), committed: cloneManifest(mf), initialized: true, readOnly: readOnly}
 	}
 	return s, nil
 }
@@ -123,129 +153,142 @@ func (s *Store) SetMaxSegmentBytes(n int64) {
 }
 
 func sectionDirName(key string) string {
-	// 与 raw/ 的命名惯例一致：内容可读、文件系统安全。
-	repl := strings.NewReplacer("/", "_", "\\", "_", ":", "-")
-	return repl.Replace(key)
+	digest := sha256.Sum256([]byte(key))
+	return "source-" + hex.EncodeToString(digest[:])
+}
+
+func isDigestDirName(name string) bool {
+	if !strings.HasPrefix(name, "source-") || len(name) != len("source-")+sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(name, "source-"))
+	return err == nil
+}
+
+func cloneManifest(mf Manifest) Manifest {
+	mf.Segments = append([]SegmentMeta(nil), mf.Segments...)
+	return mf
 }
 
 func loadManifest(dir string) (Manifest, error) {
-	mf := Manifest{Version: manifestVer}
+	var mf Manifest
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return mf, fmt.Errorf("eventstore: read section %s: %w", dir, err)
+	}
+	physical := make(map[string]bool)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), segmentPrefix) && strings.HasSuffix(entry.Name(), segmentSuffix) {
+			if entry.IsDir() {
+				return mf, fmt.Errorf("%w: segment is a directory in %s", ErrCorrupt, dir)
+			}
+			physical[entry.Name()] = true
+		}
+	}
 	b, err := os.ReadFile(filepath.Join(dir, manifestName))
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) && len(physical) == 0 {
 		return mf, nil
 	}
 	if err != nil {
-		return mf, fmt.Errorf("eventstore: read manifest: %w", err)
+		return mf, fmt.Errorf("%w: read manifest %s: %w", ErrCorrupt, dir, err)
 	}
 	if len(b) == 0 {
-		return mf, nil
+		return mf, fmt.Errorf("%w: empty manifest in %s", ErrCorrupt, dir)
 	}
 	if err := json.Unmarshal(b, &mf); err != nil {
-		return mf, fmt.Errorf("eventstore: decode manifest %s: %w", dir, err)
+		return mf, fmt.Errorf("%w: decode manifest %s: %w", ErrCorrupt, dir, err)
 	}
 	if mf.Version != manifestVer {
-		return mf, fmt.Errorf("eventstore: unsupported manifest version %d in %s", mf.Version, dir)
+		return mf, fmt.Errorf("%w: unsupported manifest version %d in %s", ErrCorrupt, mf.Version, dir)
+	}
+	if mf.Key == "" {
+		return mf, fmt.Errorf("%w: manifest has no source key in %s", ErrCorrupt, dir)
 	}
 	mf.SortSegments()
+	seenSeq := make(map[int]bool, len(mf.Segments))
+	for i, meta := range mf.Segments {
+		if meta.Seq != i+1 || seenSeq[meta.Seq] || meta.Count < 0 || meta.Bytes < 0 ||
+			meta.Name != fmt.Sprintf("%s%06d%s", segmentPrefix, meta.Seq, segmentSuffix) ||
+			(i < len(mf.Segments)-1 && !meta.Sealed) {
+			return mf, fmt.Errorf("%w: invalid segment metadata in %s", ErrCorrupt, dir)
+		}
+		seenSeq[meta.Seq] = true
+		if !physical[meta.Name] {
+			return mf, fmt.Errorf("%w: missing segment %s in %s", ErrCorrupt, meta.Name, dir)
+		}
+		delete(physical, meta.Name)
+	}
+	if len(physical) != 0 {
+		return mf, fmt.Errorf("%w: unlisted durable segment in %s", ErrCorrupt, dir)
+	}
 	return mf, nil
 }
 
-// calibrateLocked 校准末段：清单计数必须与物理完整行一致。
-//
-// 崩溃（进程被杀/断电）可能在末段留下**没有换行的半行**，而清单计数在写入时递增、
-// 随同一次 fsync 落盘，故清单可能声称比物理完整行更多的条目。若不校准：
-//   - 后续 `Append` 会紧接半行继续写，把半行与新行粘成坏行；
-//   - `Count` 虚高，调用方会按错误的前缀长度截取权威集合，静默跳过缺失事件（M-8）。
-//
-// 校准把末段截到最后一条完整行并按实际内容回填元数据；被截掉的事件若仍在 durable WAL
-// 中，会在 `canonicalRecoveryEvents` 里重新进入集合，因此不丢数据。反向偏差（清单偏低、
-// 文件已有多行完整行）同样在此修正，使计数与物理内容一致。
-//
-// 只处理最后一段：密封段在封段前已逐次 fsync 且不再写入，不可能残留半行。
+// calibrateLocked 首次校验完整段，只修复未封末段在真实文件末尾的半行与清单滞后。
+// 完整坏行及非文件末尾读取错误不能成为缩短权威集合的理由。
 func (sec *section) calibrateLocked() error {
-	if sec.verified {
+	return sec.calibrateLockedContext(context.Background())
+}
+
+func (sec *section) calibrateLockedContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sec.viewMu.RLock()
+	verified := sec.verified
+	sec.viewMu.RUnlock()
+	if verified {
 		return nil
 	}
-	if len(sec.manifest.Segments) == 0 {
-		sec.verified = true
-		return nil
+	if sec.readOnly {
+		return sec.verifyReadOnlyLocked(ctx)
 	}
-	last := &sec.manifest.Segments[len(sec.manifest.Segments)-1]
-	if last.Sealed {
-		sec.verified = true
-		return nil
+	if !sec.initialized {
+		if err := os.MkdirAll(sec.dir, 0o700); err != nil {
+			return fmt.Errorf("eventstore: create section: %w", err)
+		}
+		mf, err := loadManifest(sec.dir)
+		if err != nil {
+			return err
+		}
+		if mf.Key != "" && mf.Key != sec.manifest.Key {
+			return fmt.Errorf("%w: existing directory belongs to %q", ErrCorrupt, mf.Key)
+		}
+		if mf.Key != "" {
+			sec.manifest = mf
+		} else if err := sec.writeManifestLocked(); err != nil {
+			return err
+		}
+		sec.initialized = true
 	}
-	path := filepath.Join(sec.dir, last.Name)
-	f, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("%w: open last segment %s: %v", ErrCorrupt, path, err)
-	}
-	br := bufio.NewReaderSize(f, 256<<10)
-	var (
-		count   int
-		offset  int64
-		firstID string
-		lastID  string
-		minEnd  uint64
-		maxEnd  uint64
-	)
-	for {
-		line, readErr := br.ReadBytes('\n')
-		if len(line) > 0 && line[len(line)-1] == '\n' {
-			if body := bytes.TrimSpace(line); len(body) > 0 {
-				var ev logtypes.Event
-				if err := json.Unmarshal(body, &ev); err != nil {
-					// 带换行的完整行却解析失败：属中间段级损坏，必须硬失败而不是猜测。
-					f.Close()
-					return fmt.Errorf("%w: bad line in %s: %v", ErrCorrupt, path, err)
-				}
-				count++
-				if firstID == "" {
-					firstID = ev.EventID
-				}
-				lastID = ev.EventID
-				if minEnd == 0 || ev.Record.End < minEnd {
-					minEnd = ev.Record.End
-				}
-				if ev.Record.End > maxEnd {
-					maxEnd = ev.Record.End
-				}
+	candidate := cloneManifest(sec.manifest)
+	changed := false
+	for i, meta := range candidate.Segments {
+		last := i == len(candidate.Segments)-1
+		actual, err := calibrateSegment(ctx, sec.dir, meta, last)
+		if err != nil {
+			return err
+		}
+		if actual != meta {
+			if !last || meta.Sealed {
+				return fmt.Errorf("%w: sealed segment metadata mismatch in %s", ErrCorrupt, meta.Name)
 			}
-			offset += int64(len(line))
-		}
-		if readErr != nil {
-			// io.EOF：尾部无换行的半行到此为止，其后字节不构成完整事件。
-			break
+			candidate.Segments[i] = actual
+			changed = true
 		}
 	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("eventstore: close last segment after calibration: %w", err)
-	}
-	st, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("eventstore: stat last segment %s: %v", path, err)
-	}
-	truncate := offset < st.Size()
-	metaChanged := last.Count != count || last.Bytes != offset ||
-		last.FirstID != firstID || last.LastID != lastID ||
-		last.MinEnd != minEnd || last.MaxEnd != maxEnd
-	if truncate {
-		if err := os.Truncate(path, offset); err != nil {
-			return fmt.Errorf("eventstore: truncate partial line in %s: %w", path, err)
-		}
-	}
-	if metaChanged || truncate {
-		last.Count = count
-		last.Bytes = offset
-		last.FirstID = firstID
-		last.LastID = lastID
-		last.MinEnd = minEnd
-		last.MaxEnd = maxEnd
+	previous := sec.manifest
+	sec.manifest = candidate
+	if changed {
 		if err := sec.writeManifestLocked(); err != nil {
+			sec.manifest = previous
 			return err
 		}
 	}
+	sec.viewMu.Lock()
+	sec.committed = cloneManifest(candidate)
 	sec.verified = true
+	sec.viewMu.Unlock()
 	return nil
 }
 
@@ -257,32 +300,60 @@ func (s *Store) section(key string, create bool) (*section, error) {
 	if !create {
 		return nil, fmt.Errorf("eventstore: unknown source %q", key)
 	}
-	dir := filepath.Join(s.root, sectionDirName(key))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("eventstore: create section: %w", err)
+	if key == "" {
+		return nil, fmt.Errorf("eventstore: source key is required")
 	}
-	sec = &section{dir: dir, manifest: Manifest{Version: manifestVer, Key: key}}
+	dir := filepath.Join(s.root, sectionDirName(key))
+	mf := Manifest{Version: manifestVer, Key: key}
+	sec = &section{dir: dir, manifest: mf, committed: cloneManifest(mf)}
 	s.byKey[key] = sec
 	return sec, nil
 }
 
 // Append 追加事件到该源的活跃段；必要时封段。整批完成后 fsync 一次。
-// 调用方必须在元数据引用这些事件**之前**成功返回。
+// 调用方必须在元数据引用这些事件**之前**成功返回，且返回前不能并发修改输入事件或字段映射。
 func (s *Store) Append(key string, events []logtypes.Event) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
 	if len(events) == 0 {
 		return nil
 	}
+	if err := validateAppendEvents(events); err != nil {
+		return err
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		return os.ErrClosed
+	}
 	sec, err := s.section(key, true)
+	maxSeg := s.maxSeg
+	s.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	// 追加前必须校准：否则会紧接崩溃残留的半行继续写，把半行与新行粘成坏行。
+	sec.mu.Lock()
+	defer sec.mu.Unlock()
+	if sec.closed {
+		return os.ErrClosed
+	}
+	if sec.writeErr != nil {
+		return fmt.Errorf("eventstore: reopen required after failed append: %w", sec.writeErr)
+	}
 	if err := sec.calibrateLocked(); err != nil {
 		return err
 	}
-	if err := sec.openActive(s.maxSeg); err != nil {
+	if err := sec.appendLocked(events, maxSeg); err != nil {
+		// 失败批次可以已写到磁盘，但本进程读侧只能使用先前成功清单；重开后再校准恢复。
+		sec.writeErr = err
+		return err
+	}
+	return nil
+}
+
+func (sec *section) appendLocked(events []logtypes.Event, maxSeg int64) error {
+	if err := sec.openActive(maxSeg); err != nil {
 		return err
 	}
 	w := bufio.NewWriterSize(sec.active, 256<<10)
@@ -291,24 +362,16 @@ func (s *Store) Append(key string, events []logtypes.Event) error {
 		if err != nil {
 			return fmt.Errorf("eventstore: marshal event: %w", err)
 		}
+		if len(data)+1 > maxEventLineBytes {
+			return fmt.Errorf("eventstore: event exceeds %d-byte line limit", maxEventLineBytes)
+		}
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("eventstore: write segment: %w", err)
 		}
 		if err := w.WriteByte('\n'); err != nil {
 			return fmt.Errorf("eventstore: write segment: %w", err)
 		}
-		sec.activeMeta.Count++
-		if sec.activeMeta.FirstID == "" {
-			sec.activeMeta.FirstID = ev.EventID
-		}
-		sec.activeMeta.LastID = ev.EventID
-		end := ev.Record.End
-		if sec.activeMeta.MinEnd == 0 || end < sec.activeMeta.MinEnd {
-			sec.activeMeta.MinEnd = end
-		}
-		if end > sec.activeMeta.MaxEnd {
-			sec.activeMeta.MaxEnd = end
-		}
+		addEventMeta(sec.activeMeta, ev)
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("eventstore: flush segment: %w", err)
@@ -316,70 +379,87 @@ func (s *Store) Append(key string, events []logtypes.Event) error {
 	if err := sec.active.Sync(); err != nil {
 		return fmt.Errorf("eventstore: fsync segment: %w", err)
 	}
-	if st, err := sec.active.Stat(); err == nil {
-		sec.activeMeta.Bytes = st.Size()
+	st, err := sec.active.Stat()
+	if err != nil {
+		return fmt.Errorf("eventstore: stat segment: %w", err)
 	}
+	sec.activeMeta.Bytes = st.Size()
 	sec.upsertMetaLocked()
-	if sec.activeMeta.Bytes >= s.maxSeg {
+	if sec.activeMeta.Bytes >= maxSeg {
 		if err := sec.sealLocked(); err != nil {
 			return err
 		}
 	}
-	// 清单在段内容落盘之后再原子替换，保持「先内容、后引用」的顺序。
 	return sec.writeManifestLocked()
 }
 
-// Iterate 流式读回该源全部事件（按段序、段内行序）。回调返回错误即中止。
-// 只容忍**最后一段**的尾部截断；中间段坏行返回 ErrCorrupt。
-func (s *Store) Iterate(key string, fn func(logtypes.Event) error) error {
-	s.mu.Lock()
-	sec, ok := s.byKey[key]
-	s.mu.Unlock()
-	if !ok {
-		return nil
+// Iterate 按一次固定快照流式读回完整事件，回调可重入本存储；返回错误即中止。
+func (s *Store) Iterate(key string, fn func(logtypes.Event) error) (result error) {
+	snapshot, err := s.Snapshot(key)
+	if err != nil {
+		return err
 	}
-	mf := sec.manifest
-	for i := range mf.Segments {
-		last := i == len(mf.Segments)-1
-		if err := readSegment(sec.dir, mf.Segments[i], last, fn); err != nil {
-			return err
+	defer func() {
+		if closeErr := snapshot.Close(); closeErr != nil {
+			result = errors.Join(result, closeErr)
 		}
-	}
-	return nil
+	}()
+	return snapshot.Iterate(fn)
 }
 
-// Count 返回该源已存的**完整**事件数。
-//
-// 不能直接累加清单计数：末段可能因崩溃残留半行，使清单计数高于物理完整行数，
-// 调用方若按该值截取权威集合会静默跳过缺失事件（M-8）。故先校准末段再计数。
+// Count 返回成功提交且经首次校准的完整事件数，不把在途追加的元数据当作权威。
+// 需要计数与后续遍历严格同集合时，应复用同一 ReadSnapshot。
 func (s *Store) Count(key string) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sec, ok := s.byKey[key]
-	if !ok {
+	sec := s.lookup(key)
+	if sec == nil {
 		return 0, nil
 	}
-	if err := sec.calibrateLocked(); err != nil {
+	if err := sec.ensureVerified(); err != nil {
 		return 0, err
 	}
+	sec.viewMu.RLock()
+	defer sec.viewMu.RUnlock()
 	n := 0
-	for _, m := range sec.manifest.Segments {
-		n += m.Count
+	for _, meta := range sec.committed.Segments {
+		n += meta.Count
 	}
 	return n, nil
 }
 
-// Segments 返回该源段元数据副本（诊断/测试）。
-func (s *Store) Segments(key string) []SegmentMeta {
+func (s *Store) lookup(key string) *section {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sec, ok := s.byKey[key]
-	if !ok {
+	return s.byKey[key]
+}
+
+func (sec *section) ensureVerified() error {
+	return sec.ensureVerifiedContext(context.Background())
+}
+
+func (sec *section) ensureVerifiedContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sec.viewMu.RLock()
+	verified := sec.verified
+	sec.viewMu.RUnlock()
+	if verified {
 		return nil
 	}
-	out := make([]SegmentMeta, len(sec.manifest.Segments))
-	copy(out, sec.manifest.Segments)
-	return out
+	sec.mu.Lock()
+	defer sec.mu.Unlock()
+	return sec.calibrateLockedContext(ctx)
+}
+
+// Segments 返回最近成功提交的元数据副本，不触发扫描或暴露在途写入。
+func (s *Store) Segments(key string) []SegmentMeta {
+	sec := s.lookup(key)
+	if sec == nil {
+		return nil
+	}
+	sec.viewMu.RLock()
+	defer sec.viewMu.RUnlock()
+	return append([]SegmentMeta(nil), sec.committed.Segments...)
 }
 
 // DayMaxEnd 按 UTC 日聚合「该日最大 record_end」，流式读取、不materialize全量事件。
@@ -398,12 +478,22 @@ func (s *Store) DayMaxEnd(key string, dayOf func(logtypes.Event) (string, error)
 // 为什么必须可取消：段扫描的成本随源数据量增长（生产单源段达数十万行、全库 18GB），而本函数的
 // 调用方（ingest 的整节点解算）是一个会被 HTTP/RPC 截止时间打断的显式运维动作。不可取消即意味着
 // 「调用方已经放弃等待，服务端还在为没人要的响应扫盘」——这正是 2026-10-02 现场 30 分钟停摆的形态。
-func (s *Store) DayMaxEndCtx(ctx context.Context, key string, dayOf func(logtypes.Event) (string, error)) (map[string]uint64, error) {
+func (s *Store) DayMaxEndCtx(ctx context.Context, key string, dayOf func(logtypes.Event) (string, error)) (out map[string]uint64, result error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	out := map[string]uint64{}
-	err := s.Iterate(key, func(ev logtypes.Event) error {
+	snapshot, err := s.snapshotContext(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := snapshot.Close(); closeErr != nil {
+			out = nil
+			result = errors.Join(result, closeErr)
+		}
+	}()
+	out = map[string]uint64{}
+	err = snapshot.iterateContext(ctx, func(ev logtypes.Event) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -425,15 +515,23 @@ func (s *Store) DayMaxEndCtx(ctx context.Context, key string, dayOf func(logtype
 // Close 关闭活跃段句柄。
 func (s *Store) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	var firstErr error
+	s.closed = true
+	sections := make([]*section, 0, len(s.byKey))
 	for _, sec := range s.byKey {
+		sections = append(sections, sec)
+	}
+	s.mu.Unlock()
+	var firstErr error
+	for _, sec := range sections {
+		sec.mu.Lock()
+		sec.closed = true
 		if sec.active != nil {
 			if err := sec.active.Close(); err != nil && firstErr == nil {
 				firstErr = err
 			}
 			sec.active = nil
 		}
+		sec.mu.Unlock()
 	}
 	return firstErr
 }
@@ -446,7 +544,7 @@ func (sec *section) openActive(maxSeg int64) error {
 	if len(sec.manifest.Segments) > 0 {
 		last := &sec.manifest.Segments[len(sec.manifest.Segments)-1]
 		if !last.Sealed {
-			f, err := os.OpenFile(filepath.Join(sec.dir, last.Name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			f, err := os.OpenFile(filepath.Join(sec.dir, last.Name), os.O_APPEND|os.O_WRONLY, 0o600)
 			if err != nil {
 				return fmt.Errorf("eventstore: open active segment: %w", err)
 			}
@@ -456,7 +554,7 @@ func (sec *section) openActive(maxSeg int64) error {
 		}
 	}
 	name := fmt.Sprintf("%s%06d%s", segmentPrefix, len(sec.manifest.Segments)+1, segmentSuffix)
-	f, err := os.OpenFile(filepath.Join(sec.dir, name), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(filepath.Join(sec.dir, name), os.O_CREATE|os.O_EXCL|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("eventstore: create segment: %w", err)
 	}
@@ -518,62 +616,30 @@ func (sec *section) writeManifestLocked() error {
 	if err := os.Rename(tmp, filepath.Join(sec.dir, manifestName)); err != nil {
 		return fmt.Errorf("eventstore: publish manifest: %w", err)
 	}
-	// 目录项本身也要 fsync，否则断电后 rename 可能丢失。
-	return syncDir(sec.dir)
+	// 目录项也必须耐久；只有所有发布步骤成功后，才能向读侧提交清单。
+	if err := syncDir(sec.dir); err != nil {
+		return fmt.Errorf("eventstore: sync manifest directory: %w", err)
+	}
+	sec.viewMu.Lock()
+	sec.committed = cloneManifest(sec.manifest)
+	sec.viewMu.Unlock()
+	return nil
 }
 
-// syncDir 对目录 fsync，保证 rename 的目录项耐久（仓库既有代码未处理这一点）。
+// syncDir 先验证目录，再执行平台明确支持的目录同步；Windows 不承诺目录项断电耐久。
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
-	defer d.Close()
-	if err := d.Sync(); err != nil {
-		// 某些文件系统不支持目录 fsync；不因此判定失败。
-		if errors.Is(err, os.ErrInvalid) {
-			return nil
-		}
-		return nil
-	}
-	return nil
-}
-
-// readSegment 读单个段。last 为真时容忍尾部截断；否则坏行即 ErrCorrupt。
-func readSegment(dir string, meta SegmentMeta, last bool, fn func(logtypes.Event) error) error {
-	path := filepath.Join(dir, meta.Name)
-	f, err := os.Open(path)
+	info, err := d.Stat()
 	if err != nil {
-		return fmt.Errorf("%w: open %s: %v", ErrCorrupt, path, err)
+		return errors.Join(err, d.Close())
 	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), 8<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(strings.TrimSpace(string(line))) == 0 {
-			continue
-		}
-		var ev logtypes.Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			if last {
-				// 尾部截断（进程被杀/断电留下的半行）：到此为止，保留已读完整行。
-				return nil
-			}
-			return fmt.Errorf("%w: bad line in %s: %v", ErrCorrupt, path, err)
-		}
-		if err := fn(ev); err != nil {
-			return err
-		}
+	if !info.IsDir() {
+		return errors.Join(fmt.Errorf("eventstore: expected directory: %s", dir), d.Close())
 	}
-	if err := sc.Err(); err != nil {
-		if last {
-			return nil // 允许尾段读取中断
-		}
-		return fmt.Errorf("%w: read %s: %v", ErrCorrupt, path, err)
-	}
-	return nil
+	return errors.Join(syncDirectoryHandle(d), d.Close())
 }
 
 // SortSegments 按 Seq 升序（载入后规整，防御清单被外部编辑）。

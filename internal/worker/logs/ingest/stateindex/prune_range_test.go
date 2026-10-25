@@ -219,7 +219,12 @@ func TestWALPruneStatementsDoNotGrowWithPrunedRows(t *testing.T) {
 func TestWALPruneDeleteIsBatchedUnderLargeRanges(t *testing.T) {
 	const pruned = pruneDeleteBatchRows + 500 // 超出单批上界 ⇒ 必须切批
 	root := t.TempDir()
-	store, err := OpenWithBudget(root+"/ingest.index.db", DefaultCommitBudget())
+	// 本例单独检验语句和真实行数上界：固定自适应下界，给竞态插桩留出整轮完成时间。
+	// 默认周期墙钟和小行数预算仍由各自用例严格守住，不能在本例混成不确定的语句数断言。
+	budget := DefaultCommitBudget()
+	budget.MinRows = budget.MaxRows
+	budget.CycleMaxDuration = time.Minute
+	store, err := OpenWithBudget(root+"/ingest.index.db", budget)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	const key = "node:prune/g1"
@@ -238,12 +243,15 @@ func TestWALPruneDeleteIsBatchedUnderLargeRanges(t *testing.T) {
 		[]WALPrune{{Owner: key, EndThrough: uint64(10 + pruned*10)}})
 	require.NoError(t, err)
 	require.Equal(t, pruned, stats.RangePruned, "剪枝行数不变（谓词逐字未动 ✓）")
+	require.LessOrEqual(t, stats.MaxChunkRows, budget.MaxRows, "每个真实事务仍不得越过原行数硬上界")
+	require.False(t, stats.Incomplete, "语句数断言必须针对已完成的整轮")
 	// 核心断言（切批）：单条无界 DELETE ⇒ 恒为 1 条 ⇒ 转红 ✓。
 	require.GreaterOrEqual(t, stats.Statements, 2,
 		"超过单批上界(%d)时必须切批：语句数 %d（单条无界 DELETE 会让单元耗时无界 ✗）",
 		pruneDeleteBatchRows, stats.Statements)
-	// 上界：只允许按批增长（不能退化成逐行 2500 条 ✗）。
-	require.LessOrEqual(t, stats.Statements, pruned/pruneDeleteBatchRows+3,
+	// 上界同时服从真实事务行预算；范围语句不能为了少发语句而越过提交单元。
+	batchRows := min(pruneDeleteBatchRows, store.budget.MaxRows)
+	require.LessOrEqual(t, stats.Statements, pruned/batchRows+3,
 		"语句数只允许按批线性增长（实测 %d 条）", stats.Statements)
 	// 逐行等价：未耐久行（≤水位）必须仍在库 ✓；水位之上的耐久行也必须在 ✓。
 	rows := walRowsOf(t, store, key)

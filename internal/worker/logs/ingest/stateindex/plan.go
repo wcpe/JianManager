@@ -62,10 +62,11 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 		appendRow(tblGap, row.Key, rowData{
 			key: mirrorKey(row.Key, row.ID),
 			fp: fingerprint(row.StartPos, row.EndPos, row.Reason, nullableText(row.Detail), row.Resolved,
-				nullableText(row.Resolution)),
+				nullableText(row.Resolution), nullableBytes(row.FoldSpans), row.FoldSpanMerges, row.ReasonCode, row.ResolvedAtUTC, row.ResolvedBy, row.FoldSpansUnknown),
 			values: func() ([]any, error) {
 				return []any{row.Key, row.ID, toInt64(row.StartPos), toInt64(row.EndPos), row.Reason,
-					nullableText(row.Detail), boolToInt(row.Resolved), nullableText(row.Resolution)}, nil
+					nullableText(row.Detail), boolToInt(row.Resolved), nullableText(row.Resolution), nullableBytes(row.FoldSpans),
+					int64(row.FoldSpanMerges), row.ReasonCode, row.ResolvedAtUTC, row.ResolvedBy, boolToInt(row.FoldSpansUnknown)}, nil
 			},
 		})
 	}
@@ -157,6 +158,7 @@ type Migration struct {
 	rows        []pendingRow
 	record      migrationRecord
 	dataVersion int64
+	legacyRows  []pendingRow
 }
 
 type migrationRecord struct {
@@ -166,6 +168,10 @@ type migrationRecord struct {
 	Total          int    `json:"total"`
 	Committed      int    `json:"committed"`
 	Complete       bool   `json:"complete"`
+	// 升级期间保留已验真的旧前缀证明，不能把旧行当作无凭据数据，也不能跳过新字段补写。
+	LegacyStateSHA   string `json:"legacy_state_sha,omitempty"`
+	LegacyCommitted  int    `json:"legacy_committed,omitempty"`
+	LegacyPruneKeeps string `json:"legacy_prune_keeps,omitempty"`
 }
 
 const migrationMetaKey = "legacy_json_migration_v1"
@@ -201,6 +207,21 @@ func (s *Store) CompletedMigration(ctx context.Context, sourceSHA string, mappin
 // BeginMigration 校验来源、映射和实际已提交行后取得迁移所有权；无凭据非空库只接受完全等价的状态。
 // 来源校验值应由调用方对旧 JSON 的原始字节计算 SHA256；同一映射的行顺序在重启后仍然确定。
 func (s *Store) BeginMigration(ctx context.Context, sourceSHA string, mappingVersion int, desired State) (*Migration, error) {
+	return s.beginMigration(ctx, sourceSHA, mappingVersion, desired, nil, nil)
+}
+
+// BeginMigrationV2 先验原始来源及版本一已提交前缀，再以可续跑覆盖计划补齐版本二字段。
+func (s *Store) BeginMigrationV2(ctx context.Context, sourceSHA string, desired, legacy State) (*Migration, error) {
+	return s.beginMigration(ctx, sourceSHA, 2, desired, &legacy, nil)
+}
+
+// BeginMigrationV2WithPrune 仅在版本一已完成且全态哈希相符时接受可精确推导的批次裁剪。
+// through 必须来自同一来源原始状态的 min(Reclaim, Delivery)，不能使用索引现值或重算前缀。
+func (s *Store) BeginMigrationV2WithPrune(ctx context.Context, sourceSHA string, desired, legacy State, through map[string]uint64) (*Migration, error) {
+	return s.beginMigration(ctx, sourceSHA, 2, desired, &legacy, through)
+}
+
+func (s *Store) beginMigration(ctx context.Context, sourceSHA string, mappingVersion int, desired State, legacy *State, through map[string]uint64) (*Migration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.readOnly || s.migration != nil {
@@ -213,40 +234,29 @@ func (s *Store) BeginMigration(ctx context.Context, sourceSHA string, mappingVer
 	if err := Validate(desired); err != nil {
 		return nil, err
 	}
-	plans, err := planState(desired, time.Now().UnixMilli())
+	migration, err := s.buildMigration(sourceSHA, mappingVersion, desired)
 	if err != nil {
 		return nil, err
 	}
-	migration := &Migration{store: s}
-	for table, owners := range plans {
-		for _, rows := range owners {
-			for _, row := range rows {
-				// 固定编码结果，防止调用方改动原始切片后让凭据与后续写入的正文脱节。
-				values, err := row.values()
-				if err != nil {
-					return nil, err
-				}
-				row.values = func() ([]any, error) { return values, nil }
-				migration.rows = append(migration.rows, pendingRow{table: table, row: row})
-			}
-		}
-	}
-	sort.Slice(migration.rows, func(i, j int) bool {
-		a, b := migration.rows[i], migration.rows[j]
-		if a.table != b.table {
-			return writeOrderRank[a.table] < writeOrderRank[b.table]
-		}
-		return a.row.key < b.row.key
-	})
-	hash := sha256.New()
-	encoder := json.NewEncoder(hash)
-	for _, pending := range migration.rows {
-		values, _ := pending.row.values()
-		if err := encoder.Encode([]any{pending.table, migrationValues(pending.table, values)}); err != nil {
+	var oldMapping *Migration
+	if legacy != nil {
+		if err := Validate(*legacy); err != nil {
 			return nil, err
 		}
+		oldMapping, err = s.buildMigration(sourceSHA, 1, *legacy)
+		if err != nil {
+			return nil, err
+		}
+		if len(oldMapping.rows) != len(migration.rows) {
+			return nil, errors.New("stateindex: 旧映射升级不能改变行身份集合")
+		}
+		for i := range migration.rows {
+			if oldMapping.rows[i].table != migration.rows[i].table || oldMapping.rows[i].row.key != migration.rows[i].row.key {
+				return nil, errors.New("stateindex: 旧映射升级行身份不一致")
+			}
+		}
+		migration.legacyRows = oldMapping.rows
 	}
-	migration.record = migrationRecord{SourceSHA: strings.ToLower(sourceSHA), MappingVersion: mappingVersion, StateSHA: hex.EncodeToString(hash.Sum(nil)), Total: len(migration.rows)}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, err
@@ -262,6 +272,48 @@ func (s *Store) BeginMigration(ctx context.Context, sourceSHA string, mappingVer
 		original, existed = stored, exists
 		prefix := -1
 		if exists {
+			if stored.MappingVersion == 1 && mappingVersion == 2 && oldMapping != nil {
+				if !oldMapping.sameOwner(stored) || stored.LegacyStateSHA != "" || stored.LegacyPruneKeeps != "" {
+					return errors.New("stateindex: 旧迁移来源、映射或已提交前缀凭据不一致")
+				}
+				if _, err := oldMapping.validateRows(ctx, reader, stored.Committed); err != nil {
+					if !stored.Complete || through == nil {
+						return err
+					}
+					// 原始全态凭据已先验真；仅在完成之后才允许同一来源能逐列证明的裁剪。
+					migration, oldMapping, err = s.prunedLegacyMigration(ctx, reader, sourceSHA, desired, *legacy, through, "", true)
+					if err != nil {
+						return err
+					}
+					if _, err := oldMapping.validateRows(ctx, reader, len(oldMapping.rows)); err != nil {
+						return err
+					}
+					migration.record.LegacyCommitted = len(oldMapping.rows)
+				} else {
+					migration.record.LegacyCommitted = stored.Committed
+				}
+				migration.record.LegacyStateSHA = stored.StateSHA
+				return nil
+			}
+			if stored.LegacyStateSHA != "" {
+				if oldMapping == nil || oldMapping.record.StateSHA != stored.LegacyStateSHA || stored.LegacyCommitted < 0 || stored.LegacyCommitted > len(oldMapping.rows) {
+					return errors.New("stateindex: 旧迁移升级桥凭据不一致")
+				}
+				if stored.LegacyPruneKeeps != "" {
+					if through == nil {
+						return errors.New("stateindex: 旧批次裁剪续迁缺少原始水位授权")
+					}
+					migration, oldMapping, err = s.prunedLegacyMigration(ctx, reader, sourceSHA, desired, *legacy, through, stored.LegacyPruneKeeps, false)
+					if err != nil {
+						return err
+					}
+					if stored.LegacyCommitted != len(oldMapping.rows) {
+						return errors.New("stateindex: 已完成旧裁剪形态的行数凭据改变")
+					}
+				}
+				migration.record.LegacyStateSHA = stored.LegacyStateSHA
+				migration.record.LegacyCommitted = stored.LegacyCommitted
+			}
 			if !migration.sameOwner(stored) {
 				return errors.New("stateindex: 迁移来源、映射或进度凭据不一致，保留两侧状态")
 			}
@@ -288,7 +340,7 @@ func (s *Store) BeginMigration(ctx context.Context, sourceSHA string, mappingVer
 		if err := checkMigrationSnapshot(ctx, conn, version, original, existed); err != nil {
 			return err
 		}
-		if !existed {
+		if !existed || original.MappingVersion != mappingVersion {
 			return writeMigrationRecord(ctx, conn, migration.record)
 		}
 		return nil
@@ -299,6 +351,51 @@ func (s *Store) BeginMigration(ctx context.Context, sourceSHA string, mappingVer
 	migration.dataVersion = version
 	s.migration = migration
 	s.migrationPending = !migration.record.Complete
+	return migration, nil
+}
+
+// buildMigration 固定编码后的行及其规范哈希；版本一只在来源桥验证时使用旧八列缺口映射。
+func (s *Store) buildMigration(sourceSHA string, mappingVersion int, desired State) (*Migration, error) {
+	plans, err := planState(desired, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	migration := &Migration{store: s}
+	for table, owners := range plans {
+		for _, rows := range owners {
+			for _, row := range rows {
+				values, err := row.values()
+				if err != nil {
+					return nil, err
+				}
+				row.values = func() ([]any, error) { return values, nil }
+				migration.rows = append(migration.rows, pendingRow{table: table, row: row})
+			}
+		}
+	}
+	sort.Slice(migration.rows, func(i, j int) bool {
+		a, b := migration.rows[i], migration.rows[j]
+		if a.table != b.table {
+			return writeOrderRank[a.table] < writeOrderRank[b.table]
+		}
+		return a.row.key < b.row.key
+	})
+	hash := sha256.New()
+	encoder := json.NewEncoder(hash)
+	for _, pending := range migration.rows {
+		values, err := pending.row.values()
+		if err != nil {
+			return nil, err
+		}
+		normalized := migrationValues(pending.table, values)
+		if mappingVersion == 1 && pending.table == tblGap {
+			normalized = normalized[:8]
+		}
+		if err := encoder.Encode([]any{pending.table, normalized}); err != nil {
+			return nil, err
+		}
+	}
+	migration.record = migrationRecord{SourceSHA: strings.ToLower(sourceSHA), MappingVersion: mappingVersion, StateSHA: hex.EncodeToString(hash.Sum(nil)), Total: len(migration.rows)}
 	return migration, nil
 }
 
@@ -429,7 +526,7 @@ func (s *Store) FinalizeMigration(ctx context.Context, migration *Migration) err
 }
 
 func (m *Migration) sameOwner(record migrationRecord) bool {
-	return record.SourceSHA == m.record.SourceSHA && record.MappingVersion == m.record.MappingVersion && record.StateSHA == m.record.StateSHA && record.Total == m.record.Total && record.Committed >= 0 && record.Committed <= record.Total && (!record.Complete || record.Committed == record.Total)
+	return record.SourceSHA == m.record.SourceSHA && record.MappingVersion == m.record.MappingVersion && record.StateSHA == m.record.StateSHA && record.Total == m.record.Total && record.LegacyStateSHA == m.record.LegacyStateSHA && record.LegacyCommitted == m.record.LegacyCommitted && record.LegacyPruneKeeps == m.record.LegacyPruneKeeps && record.Committed >= 0 && record.Committed <= record.Total && (!record.Complete || record.Committed == record.Total)
 }
 
 type migrationQuery interface {
@@ -446,7 +543,7 @@ func migrationReadSnapshot(ctx context.Context, conn *sql.Conn, read func(migrat
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer rollbackReadTransaction(tx)
 	return version, read(tx)
 }
 
@@ -508,7 +605,18 @@ func (m *Migration) validateRows(ctx context.Context, conn migrationQuery, commi
 		limit = len(m.rows)
 	}
 	var expected [tableCount]map[string]rowData
-	for _, pending := range m.rows[:limit] {
+	expectedCount := limit
+	if m.record.LegacyCommitted > expectedCount {
+		expectedCount = m.record.LegacyCommitted
+	}
+	if expectedCount > len(m.rows) || (m.record.LegacyStateSHA != "" && len(m.legacyRows) != len(m.rows)) {
+		return 0, errors.New("stateindex: 迁移升级前缀越界")
+	}
+	for i := 0; i < expectedCount; i++ {
+		pending := m.rows[i]
+		if i >= limit {
+			pending = m.legacyRows[i]
+		}
 		if expected[pending.table] == nil {
 			expected[pending.table] = make(map[string]rowData)
 		}
@@ -549,7 +657,7 @@ func (m *Migration) validateRows(ctx context.Context, conn migrationQuery, commi
 			return count, err
 		}
 	}
-	if committed >= 0 && count != committed {
+	if committed >= 0 && count != expectedCount {
 		return count, errors.New("stateindex: 迁移凭据对应的已提交行缺失，保留两侧状态")
 	}
 	return count, nil

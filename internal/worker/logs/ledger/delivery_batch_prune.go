@@ -20,11 +20,11 @@ import (
 // 读者 A 的三个调用点的 floor 都是 reclaim：RecordDelivery、Restore、以及 FR-496 迁移校验的
 // comparisonState（ingest/index_store.go 的 ledger.ContiguousDeliveryEnd）。
 //
-// 读者 B 是**第二个有语义的读者**（此前被漏掉，PR #61 审查 LEDGER-1 补上）：它按批次状态把
-// 区间判成 ACKED（REQUEST_DONE）/ SENT_UNACKED（UNKNOWN）/ UNSENT（NOT_SENT、REPLAY_REQUIRED），
-// 优先级为「放弃凭据 → 已校验区间 → **delivery 前缀** → **批次** → 缺口 → 无证据」。
-// 也就是说：位置 ≤ Positions.Delivery 的区间由**前缀**兜底判 ACKED，与批次在不在无关；
-// 位置 > Positions.Delivery 的区间才依赖批次列表区分「已确认」与「已发出未确认」。
+// 读者 B 按证据将区间判为 ACKED（真实 REQUEST_DONE）、SENT_UNACKED（UNKNOWN）或
+// UNSENT（NOT_SENT、REPLAY_REQUIRED）；请求结果前缀本身从来不是成功回执。
+// RecordDelivery 和 Restore 在裁剪之前将真实成功压缩到 RequestDoneRanges，将各状态的精确
+// 区间保存到 DeliveryEvidence；诊断先判独立成功证据，再判 UNKNOWN，最后读取其余状态。
+// 已经裁剪且没有保留证据的旧状态只能表示未知，不能从 Delivery/Reclaim 反推 ACK。
 //
 // 除此之外只有 Entry.clone() 的深拷贝，没有别的读者。
 //
@@ -42,8 +42,8 @@ import (
 //
 //	⇒ batch.End <= Positions.Reclaim 的条目对读者 A 是恒等元。
 //
-// 但恒等元性质**只在水位处成立**，对读者 B 不成立：读者 B 在位置 > Delivery 时按批次判态。
-// 因此水位必须再夹一层下界 Delivery：
+// 恒等元性质只证明读者 A 的连续前缀，不能替代读者 B 的成功/未知证据。
+// 读者 B 所需区间已先独立保存，水位仍保守夹一层 Delivery，保持既有裁剪边界：
 //
 //	⇒ 判据取 watermark = min(Reclaim, Delivery)，被裁条目满足 End <= Delivery。
 //
@@ -51,16 +51,16 @@ import (
 //
 //   - 读者 A：Delivery <= Reclaim 时水位就是 Reclaim，与改动前逐字节相同；Delivery < Reclaim 时
 //     水位取 Delivery（更 conservative 的下界），被裁集合是原恒等元集合的子集 ⇒ 仍是恒等元。
-//   - 读者 B：被裁条目满足 End <= Delivery，其覆盖的所有位置都 ≤ Delivery，而那段由**前缀**兜底
-//     判 ACKED、根本不读批次 ⇒ 判态逐段相同。未被裁的条目（End > Delivery，含 (Delivery, Reclaim]
-// 这一段）正是读者 B 唯一能区分「已确认 / 已发出未确认」的证据，必须留下。
+//   - 读者 B：各请求状态已分别精确归并、跨状态重叠保留，真实成功单独归并，均在批次摘除前保存。
+//     独立证据不随本函数裁剪；UNKNOWN/NOT_SENT 不因水位越过而变成成功，已确认请求也不会失证。
+//     未被水位越过的批次仍全部保留，不把保守范围外的历史提前摘除。
 //
 // 为什么 Reclaim 会越过 Delivery（这不是理论形态）：tryReclaimLocked 的**凭据放行**分支
 // （区间内已有人工裁定的永久丢失空洞时，target 无条件取 ref.CoversTo）与**责任已转移**分支
 // （RecoveryWALResponsibilityXfer 下允许覆盖未确认事件）都会把 Reclaim 推到分段末端 CoversTo，
 // 而 Positions.Delivery 只在 RecordDelivery / Restore 重算，TryReclaim **从不重算它**。
-// 于是暂停 / 空闲源上 (Delivery, Reclaim] 这一段长期存在：若按旧判据裁掉，诊断面会把已确认
-// 落库的区间报成 UNSENT（basis=no_evidence）——把「已发送」说成「未发送」，会误导事件级排障。
+// 于是暂停或空闲源上 (Delivery, Reclaim] 可以长期存在；继续保守保留这一段批次。
+// 独立证据只说明请求结果，不宣称逐字段可见或已耐久；后两者仍需各自验证证明。
 //
 // # 单调性（为什么裁过一次之后永远安全）
 //
@@ -131,7 +131,7 @@ func (c DeliveryBatchPruneConfig) Normalized() DeliveryBatchPruneConfig {
 //
 // watermark 由调用方给出，**必须是 deliveryBatchWatermark 算出的 min(Reclaim, Delivery)**：
 // 直接传 Reclaim 会越过 Positions.Delivery，把读者 B（event_status 按批次判态）在
-// (Delivery, Reclaim] 上唯一可用的证据裁掉（见文件头 LEDGER-1 论证）。
+// (Delivery, Reclaim] 上的批次提前裁掉；请求状态已另有精确证据，仍不放宽此安全边界。
 //
 // watermark 为 0 时一律不裁：水位 0 表示尚无任何字节被裁定安全（与 acquire.WAL.pruneReclaimed
 // 同口径），此时连零长度退化条目也不动。
@@ -235,9 +235,8 @@ func (l *Ledger) DeliveryBatchPrune() DeliveryBatchPruneConfig {
 // 为什么夹 Delivery 这一层（LEDGER-1）：reclaim 可以越过 delivery——凭据放行与「责任已转移」
 // 都会把 Reclaim 推到恢复分段末端 CoversTo，而 Positions.Delivery 只在 RecordDelivery / Restore
 // 重算、TryReclaim 从不重算它。区间 (Delivery, Reclaim] 是诊断面（event_status 按批次判态）
-// 唯一能区分「已确认 / 已发出未确认」的证据，按旧判据（水位 = Reclaim）裁掉它，等于把已确认
-// 落库的区间报成「未发送」。夹上 Delivery 后被裁条目满足 End <= Delivery，其覆盖位置由
-// delivery 前缀兜底判 ACKED，两个读者的判态都逐段不变。完整论证见文件头。
+// 历史请求结果仍值得保守保留。夹上 Delivery 后被裁条目满足 End <= Delivery；诊断所需的
+// ACK 与未知请求区间已经独立持久化，绝不再用 delivery 前缀兜底判成功。完整论证见文件头。
 //
 // 顺序不可换：必须先取 min 再比较，绝不能「Delivery 为 0 就当没裁过」——Delivery = 0 且
 // Reclaim > 0 是真实形态（从未成功投递过却已有责任转移），此时水位 0 ⇒ 一条都不裁，
@@ -264,6 +263,8 @@ func (l *Ledger) pruneDeliveryBatchesLocked(e *Entry) {
 	if e == nil || !l.batchPrune.Enabled {
 		return
 	}
+	// 即使条目来自旧快照或内部恢复入口，也先补建真实区间证据，不能先摘批次再补证据。
+	ensureDeliveryEvidence(e)
 	watermark := deliveryBatchWatermark(e)
 	// 去重键是（Reclaim, 水位）两者：Reclaim 前进而水位未前进（Delivery 滞后）时同样没有新条目
 	// 可裁，仍要跳过；只有水位真正前进才值得再扫一次列表。

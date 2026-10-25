@@ -604,7 +604,8 @@ func TestStoreConcurrentWriterSerialized(t *testing.T) {
 }
 
 func TestStoreLatencySampling(t *testing.T) {
-	store := newTestStore(t)
+	// 本例固定每次写入一个提交单元以核采样计数；耗时分片有独立严格回归，不受宿主负载混入。
+	store := newTestStoreWithBudget(t, CommitBudget{Target: time.Minute})
 	for i := 1; i <= 20; i++ {
 		if _, err := store.Apply(batchState(i)); err != nil {
 			t.Fatalf("写入失败: %v", err)

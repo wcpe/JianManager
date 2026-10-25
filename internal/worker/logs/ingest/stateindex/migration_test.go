@@ -256,7 +256,8 @@ func TestMigrationRejectsUnownedPartialAndAcceptsExact(t *testing.T) {
 // TestMigrationCrashDiscardsRowsAndProgress 同时检验数据与凭据在真正的进程中断后保留同一个前缀。
 func TestMigrationCrashDiscardsRowsAndProgress(t *testing.T) {
 	if path := os.Getenv("STATEINDEX_MIGRATION_CRASH_PATH"); path != "" {
-		store, err := OpenWithBudget(path, CommitBudget{MaxRows: 3, MinRows: 3, CycleMaxRows: 6})
+		// 此例验证崩溃保留的精确三行前缀，不能让宿主争用提前触发与此无关的时间切片。
+		store, err := OpenWithBudget(path, CommitBudget{MaxRows: 3, MinRows: 3, CycleMaxRows: 6, Target: time.Minute})
 		if err != nil {
 			t.Fatal(err)
 		}

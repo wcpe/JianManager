@@ -67,17 +67,20 @@ func IsArchiveSegmentKind(kind SegmentKind) bool {
 
 // Segment 账本中的一个物理源分段。
 type Segment struct {
-	Path            string      `json:"path"`
-	Kind            SegmentKind `json:"kind"`
-	StartPos        uint64      `json:"start_pos"`                   // 相对逻辑源的起始位置
-	EndPos          uint64      `json:"end_pos"`                     // 已登记的结束位置（exclusive）
-	IdentityBytes   int64       `json:"identity_bytes,omitempty"`    // live 文件稳定前缀长度
-	IdentitySHA256  string      `json:"identity_sha256,omitempty"`   // 检测同路径替换，不能参与 event_id
-	ArchiveObjectID string      `json:"archive_object_id,omitempty"` // provenance only
-	Imported        bool        `json:"imported"`
-	ImportError     string      `json:"import_error,omitempty"`
-	ObservedSize    int64       `json:"observed_size,omitempty"`
-	ObservedModNano int64       `json:"observed_mod_unix_nano,omitempty"`
+	Path     string      `json:"path"`
+	Kind     SegmentKind `json:"kind"`
+	StartPos uint64      `json:"start_pos"` // 相对逻辑源的起始位置
+	EndPos   uint64      `json:"end_pos"`   // 已登记的结束位置（exclusive）
+	// PhysicalStart 是逻辑 StartPos 对应的文件偏移；存在标志区分真实零偏移与旧状态缺证据。
+	PhysicalStart        uint64 `json:"physical_start,omitempty"`
+	PhysicalMappingKnown bool   `json:"physical_mapping_known,omitempty"`
+	IdentityBytes        int64  `json:"identity_bytes,omitempty"`    // live 文件稳定前缀长度
+	IdentitySHA256       string `json:"identity_sha256,omitempty"`   // 检测同路径替换，不能参与 event_id
+	ArchiveObjectID      string `json:"archive_object_id,omitempty"` // provenance only
+	Imported             bool   `json:"imported"`
+	ImportError          string `json:"import_error,omitempty"`
+	ObservedSize         int64  `json:"observed_size,omitempty"`
+	ObservedModNano      int64  `json:"observed_mod_unix_nano,omitempty"`
 	// BaseDay 是该段**首次导入时固化**的无日期时刻锚点日（UTC，形如 "2006-01-02"）。
 	//
 	// 为什么需要（2026-10-20 真机验收根因）：只有时刻、没有日期格式的日志行（如 BungeeCord
@@ -89,8 +92,8 @@ type Segment struct {
 	// 前端禁用导出。生产实测：inst:318 单次启动 6.6 万条裁定，累计 13.2 万条。
 	//
 	// 因此把首次导入所用的日期固化在本字段，重导一律复用 ⇒ 同一段永远得同一哈希 ✓。
-	BaseDay string `json:"base_day,omitempty"`
-	ParserVersion   string      `json:"parser_version"`
+	BaseDay       string `json:"base_day,omitempty"`
+	ParserVersion string `json:"parser_version"`
 }
 
 // RotationLink latest.log → rotated → .gz 的逻辑源连续关联。
@@ -131,11 +134,13 @@ type Gap struct {
 	// 夹间的健康字节谎报成「永久丢失」——而凭据比缺口活得久（缺口会被裁剪），误报会长期留存，
 	// 运维据此可能重复补账。故落凭据时必须按 FoldSpans 逐段展开（见 AbandonGapsThrough）。
 	FoldSpans []PositionRange `json:"fold_spans,omitempty"`
+	// FoldSpansUnknown 表示旧状态缺证据或触及子区间预算丢失精度，禁止拿凸包生成永久丢失裁定。
+	FoldSpansUnknown bool `json:"fold_spans_unknown,omitempty"`
 	// FoldSpanMerges 是 FoldSpans 因触及 DefaultMaxFoldSpansPerGap 而**被合并掉的段数**
 	// （>0 表示该折叠条目的子区间已退化：最旧若干段被并成一条凸包，可能覆盖夹间健康位置）。
 	//
-	// 为什么要显式记账：内存有界是硬约束，极端规模下退化不可避免；但退化**不得静默**——
-	// 运维读到非零值即知这条凭据是粗粒度裁定，需按区间整体复核，而不是逐段核对。
+	// 为什么要显式记账：内存有界是硬约束，但退化不能换取虚假裁定；非零值会置 Unknown，
+	// 拒绝自动将该诊断凸包转成永久丢失凭据，必须补齐独立精确证据后再处置。
 	FoldSpanMerges int `json:"fold_span_merges,omitempty"`
 }
 
@@ -302,6 +307,12 @@ func (l *Ledger) AbandonGapsThrough(key SourceKey, position uint64, ab GapAbando
 	entry, err := l.require(key)
 	if err != nil {
 		return 0, err
+	}
+	// 整批先预检，避免前半批已裁定、后半批才发现证据缺失而留下部分成功。
+	for _, gap := range entry.Gaps {
+		if !gap.Resolved && gap.EndPos <= position && (gap.FoldSpansUnknown || gap.FoldSpanMerges > 0) {
+			return 0, fmt.Errorf("ledger: folded gap [%d,%d] lacks exact evidence", gap.StartPos, gap.EndPos)
+		}
 	}
 	at := ab.AtUTC
 	if at == "" {
@@ -660,11 +671,17 @@ type Entry struct {
 	// 迁移兼容：旧账本无这两个字段，加载时得到零值即可，不改变任何既有字段语义。
 	PositionsFingerprint   string `json:"positions_fingerprint,omitempty"`
 	PositionsFingerprintAt uint64 `json:"positions_fingerprint_at,omitempty"`
+	// ConfirmedFingerprint 保存可核对物理分段的采点，旧平面指纹不能补造这些证据。
+	ConfirmedFingerprint *ConfirmedFingerprint `json:"confirmed_fingerprint,omitempty"`
 
 	// DeliveryState 最近批次投递状态；不能用位置编码 UNKNOWN。
 	DeliveryState logtypes.DeliveryState `json:"delivery_state"`
 	// DeliveryBatches 批次结果；delivery_position 只反映连续前缀。
 	DeliveryBatches []DeliveryBatch `json:"delivery_batches"`
+	// RequestDoneRanges 仅承接真实 REQUEST_DONE；请求结果前缀和回收水位都不能生成 ACK。
+	RequestDoneRanges []PositionRange `json:"request_done_ranges,omitempty"`
+	// DeliveryEvidence 按状态保存精确区间并保留跨状态重叠，历史批次裁剪不能丢掉 UNKNOWN 等证据。
+	DeliveryEvidence []DeliveryBatch `json:"delivery_evidence,omitempty"`
 
 	Segments  []Segment      `json:"segments"`
 	Rotations []RotationLink `json:"rotations"`
@@ -696,6 +713,8 @@ type Entry struct {
 	// 采集都重扫一遍列表——正是 deliveryPrunedThrough 要消除的那个固定税。两者一起判才算
 	// 「这个 (Reclaim, 水位) 组合已经处理过」。同样是进程内状态，语义与重启归零同上。
 	deliveryPrunedWatermark uint64
+	// deliveryEvidenceReady 只避免反复扫描历史批次；恢复时归零并重建，不能用它替代持久证据。
+	deliveryEvidenceReady bool
 
 	// gapMergedTotal / gapFoldedTotal 是缺口定界的进程内计数（观测用，同 deliveryPrunedThrough：
 	// 小写字段不落库、不参与索引映射与 JSON 快照，重启归零）。
@@ -727,6 +746,12 @@ type Ledger struct {
 	// DefaultDeliveryBatchPruneConfig 与 delivery_batch_prune.go 的判据与证明）。
 	// 它是内存与索引两侧同时有界的唯一开关：账本自己持批次列表，故裁剪点必须在这里。
 	batchPrune DeliveryBatchPruneConfig
+	// recoveryArchive 是独立历史审计仓储；任何仓储调用必须在账本锁外执行。
+	recoveryArchive RecoveryArchiveStore
+	// recoveryArchiveEpoch 使锁外历史查询与并发摘除之间的 SegmentID 重绑可重试。
+	recoveryArchiveEpoch uint64
+	// recoveryUses 只承接当前进程真实持有者，重启后已退出的消费者不应形成永久租约。
+	recoveryUses map[recoveryUseKey]uint64
 }
 
 // New 创建空账本。
@@ -810,8 +835,16 @@ func (l *Ledger) SetPositionsFingerprint(key SourceKey, at uint64, fingerprint s
 	if !ok || entry == nil {
 		return false
 	}
+	if entry.PositionsFingerprint == fingerprint && entry.PositionsFingerprintAt == at {
+		return true
+	}
 	entry.PositionsFingerprint = fingerprint
 	entry.PositionsFingerprintAt = at
+	// 旧调用只提供平面摘要，不能给先前的分段绑定贴上新采点。
+	if entry.ConfirmedFingerprint != nil && (entry.ConfirmedFingerprint.LogicalPos != at || entry.ConfirmedFingerprint.SHA256 != fingerprint) {
+		entry.ConfirmedFingerprint = nil
+	}
+	l.touch(key)
 	return true
 }
 
@@ -892,9 +925,15 @@ func (l *Ledger) Restore(entries []Entry) error {
 			return fmt.Errorf("ledger: invalid restore key %q", entry.Key.String())
 		}
 		copy := entry.clone()
-		// Recompute the derived delivery prefix after replay. A single-byte
-		// source line delimiter between adjacent event spans is known coverage,
-		// while larger holes remain unresolved and block the prefix.
+		for i := range copy.Gaps {
+			// 旧状态可能只有退化计数而没有 Unknown 字段，不能让历史凸包获得精确裁定资格。
+			if copy.Gaps[i].FoldSpanMerges > 0 {
+				copy.Gaps[i].FoldSpansUnknown = true
+			}
+		}
+		// 恢复时只从仍在的真实批次补建诊断证据，已裁旧历史或回收下界不能补造 ACK。
+		copy.deliveryEvidenceReady = false
+		ensureDeliveryEvidence(copy)
 		// **落库态归一 + 告警**（用户 2026-10-05 明确 ✓）：不静默修 ✗（否则"越界怎么来的"永远查不出 ✓）、
 		// 也不崩溃 ✗（会把恢复期直接打死 ✓）；带上源与两值**原样** ✓。
 		// 注（A 案）：这是 **Restore 侧**的归一 ✓，与"回收侧夹取"（B 案，暂不装 ✗）分开 ——
@@ -907,6 +946,7 @@ func (l *Ledger) Restore(entries []Entry) error {
 		}
 		copy.Positions.Delivery = contiguousDeliveryEnd(copy.DeliveryBatches, copy.Positions.Reclaim)
 		l.entries[entry.Key] = copy
+		l.touch(entry.Key)
 	}
 	return nil
 }
@@ -1004,7 +1044,10 @@ func (l *Ledger) RecordDelivery(key SourceKey, start, end uint64, state logtypes
 	if state == "" {
 		return fmt.Errorf("ledger: delivery state must not be empty; UNKNOWN is a state not a position")
 	}
-	e.DeliveryBatches = append(e.DeliveryBatches, DeliveryBatch{Start: start, End: end, State: state})
+	ensureDeliveryEvidence(e)
+	batch := DeliveryBatch{Start: start, End: end, State: state}
+	e.DeliveryBatches = append(e.DeliveryBatches, batch)
+	preserveDeliveryEvidence(e, batch)
 	e.DeliveryState = state
 	l.pruneDeliveryBatchesLocked(e)
 	e.Positions.Delivery = contiguousDeliveryEnd(e.DeliveryBatches, e.Positions.Reclaim)
@@ -1115,6 +1158,37 @@ func (l *Ledger) RegisterSegment(key SourceKey, seg Segment) error {
 }
 
 // LinkRotation 登记 latest.log → rotated/.gz 关联。generation 必须沿用被接管内容。
+// ArchiveCursorUncertain阻止未接收尾被EOF误标导入；沿用已有ImportError字段，不改变序列化格式。
+const ArchiveCursorUncertain = "unaccepted-archive-cursor"
+
+var ErrArchiveCursorPrecondition = fmt.Errorf("ledger: archive cursor precondition rejected")
+
+// RewindArchiveCursor只回退同对象未接收后缀；纯标量CAS，不碰成功前缀、其他分段或任何IO。
+func (l *Ledger) RewindArchiveCursor(key SourceKey, expected Segment, from, acceptedThrough uint64, objectStable bool) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry, err := l.require(key)
+	if err != nil {
+		return err
+	}
+	for i, current := range entry.Segments {
+		if current.Path != expected.Path {
+			continue
+		}
+		if !objectStable || current != expected || current.Imported || !IsArchiveSegmentKind(current.Kind) || current.ArchiveObjectID == "" || from < acceptedThrough || from < current.StartPos || from > current.EndPos {
+			if current.ArchiveObjectID == expected.ArchiveObjectID {
+				entry.Segments[i].ImportError = ArchiveCursorUncertain
+			}
+			return ErrArchiveCursorPrecondition
+		}
+		entry.Segments[i].EndPos = from
+		entry.Segments[i].Imported = false
+		entry.Segments[i].ImportError = ""
+		return nil
+	}
+	return ErrArchiveCursorPrecondition
+}
+
 func (l *Ledger) LinkRotation(key SourceKey, fromPath, toPath string, endPosFrom uint64) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -1220,24 +1294,7 @@ func (l *Ledger) ResumeAcquire(key SourceKey) error {
 
 // RegisterRecovery 登记受管恢复分段引用。
 func (l *Ledger) RegisterRecovery(key SourceKey, ref RecoveryRef) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	e, err := l.require(key)
-	if err != nil {
-		return err
-	}
-	for _, r := range e.RecoveryRefs {
-		if r.SegmentID == ref.SegmentID {
-			if r.Path != ref.Path || r.CoversFrom != ref.CoversFrom || r.CoversTo != ref.CoversTo {
-				return fmt.Errorf("ledger: recovery segment %s identity conflict", ref.SegmentID)
-			}
-			// Idempotent restart binding must not erase an advanced state, hold,
-			// receiver or release proof.
-			return nil
-		}
-	}
-	e.RecoveryRefs = append(e.RecoveryRefs, ref)
-	return nil
+	return l.registerRecovery(key, ref)
 }
 
 // TransitionRecovery 推进恢复分段责任状态。
@@ -1338,19 +1395,39 @@ func (l *Ledger) SetRecoveryHold(key SourceKey, segmentID string, hasHold bool) 
 // 无论回收是否放行，都用**最终**水位裁一次历史投递批次（水位是本方法唯一的输入、裁剪幂等）；
 // 因此「回收被门禁挡住」的源同样会被裁剪，不会因为挡着就长期保留无用历史。
 func (l *Ledger) TryReclaim(key SourceKey) (uint64, error) {
+	return l.TryReclaimIf(key, nil)
+}
+
+// ErrReclaimPrecondition表示实际回收目标未获调用方的精确当前证明，不是缺恢复段。
+var ErrReclaimPrecondition = fmt.Errorf("ledger: reclaim precondition rejected")
+
+// ReclaimTarget只携带本次原门禁选出的实际目标与分离值凭据，不泄露账本内部指针或切片。
+type ReclaimTarget struct {
+	From, Target  uint64
+	State         logtypes.RecoverySegmentState
+	ReleaseReason logtypes.ReleaseReason
+	Abandonments  []GapAbandonment
+}
+
+// TryReclaimIf只在原门禁算出真实目标后同锁执行纯内存条件；条件禁止IO、外部锁和重入账本。
+// 条件拒绝不推进水位也不裁投递证据；nil逐字保留旧TryReclaim语义。
+func (l *Ledger) TryReclaimIf(key SourceKey, allow func(ReclaimTarget) bool) (uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e, err := l.require(key)
 	if err != nil {
 		return 0, err
 	}
-	pos, err := l.tryReclaimLocked(e)
+	pos, err := l.tryReclaimLocked(e, allow)
+	if err == ErrReclaimPrecondition {
+		return pos, err
+	}
 	l.pruneDeliveryBatchesLocked(e)
 	return pos, err
 }
 
 // tryReclaimLocked 是 TryReclaim 的门禁主体。调用方必须已持写锁。
-func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
+func (l *Ledger) tryReclaimLocked(e *Entry, conditions ...func(ReclaimTarget) bool) (uint64, error) {
 	// 选取覆盖当前 reclaim 前缀的恢复分段。
 	var ref *RecoveryRef
 	for i := range e.RecoveryRefs {
@@ -1406,7 +1483,7 @@ func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
 		// 就把回收推到任意位置；hold 优先于凭据（hold 是运维显式钉住，凭据是裁定丢失，两者冲突时
 		// 以"不许动"为准）。
 		if ab, ok := l.abandonmentIntersectingLocked(e, e.Positions.Reclaim, ref.CoversTo); ok {
-			slog.Warn("回收链凭「永久丢失」凭据跨过空洞（该空洞由人工裁定且留有审计凭据）",
+			slog.Warn("回收链发现「永久丢失」审计凭据（待精确条件复核，尚未推进水位）",
 				"logSourceID", e.Key.LogSourceID, "sourceGeneration", e.Key.SourceGeneration,
 				"reclaimFrom", e.Positions.Reclaim, "segmentCoversTo", ref.CoversTo,
 				"abandonedFrom", ab.From, "abandonedTo", ab.To,
@@ -1425,6 +1502,12 @@ func (l *Ledger) tryReclaimLocked(e *Entry) (uint64, error) {
 	}
 	if target <= e.Positions.Reclaim {
 		return e.Positions.Reclaim, nil
+	}
+	if len(conditions) > 0 && conditions[0] != nil {
+		proof := ReclaimTarget{From: e.Positions.Reclaim, Target: target, State: ref.State, ReleaseReason: ref.ReleaseReason, Abandonments: append([]GapAbandonment(nil), e.Abandonments...)}
+		if !conditions[0](proof) {
+			return e.Positions.Reclaim, ErrReclaimPrecondition
+		}
 	}
 	e.Positions.Reclaim = target
 	return e.Positions.Reclaim, nil
@@ -1461,9 +1544,18 @@ func (e *Entry) clone() *Entry {
 	}
 	cp := *e
 	cp.DeliveryBatches = append([]DeliveryBatch(nil), e.DeliveryBatches...)
+	cp.RequestDoneRanges = append([]PositionRange(nil), e.RequestDoneRanges...)
+	cp.DeliveryEvidence = append([]DeliveryBatch(nil), e.DeliveryEvidence...)
+	if e.ConfirmedFingerprint != nil {
+		fingerprint := *e.ConfirmedFingerprint
+		cp.ConfirmedFingerprint = &fingerprint
+	}
 	cp.Segments = append([]Segment(nil), e.Segments...)
 	cp.Rotations = append([]RotationLink(nil), e.Rotations...)
 	cp.Gaps = append([]Gap(nil), e.Gaps...)
+	for i := range cp.Gaps {
+		cp.Gaps[i].FoldSpans = append([]PositionRange(nil), e.Gaps[i].FoldSpans...)
+	}
 	cp.Abandonments = append([]GapAbandonment(nil), e.Abandonments...)
 	cp.RecoveryRefs = append([]RecoveryRef(nil), e.RecoveryRefs...)
 	return &cp

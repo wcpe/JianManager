@@ -80,6 +80,12 @@ CREATE TABLE IF NOT EXISTS gap (
   detail     TEXT,
   resolved   INTEGER NOT NULL DEFAULT 0,
   resolution TEXT,
+  fold_spans BLOB,
+  fold_span_merges INTEGER NOT NULL DEFAULT 0,
+  reason_code TEXT NOT NULL DEFAULT '',
+  resolved_at_utc TEXT NOT NULL DEFAULT '',
+  resolved_by TEXT NOT NULL DEFAULT '',
+  fold_spans_unknown INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (key, id)
 ) WITHOUT ROWID;
 -- 兼容已被旧版本建过表的库：老库会残留这个冗余索引，显式删除（幂等，不存在时无操作）。
@@ -186,6 +192,13 @@ type GapRow struct {
 	Detail     string
 	Resolved   bool
 	Resolution string
+	// FoldSpans 是上层精确折叠区间的规范 JSON，独立于凸包范围，不在存储层推断。
+	FoldSpans        []byte
+	FoldSpanMerges   int
+	FoldSpansUnknown bool
+	ReasonCode       string
+	ResolvedAtUTC    string
+	ResolvedBy       string
 }
 
 // ProjectionRow 是 projection 表的一行（投影发布状态）。
@@ -282,7 +295,7 @@ func (c Counts) Empty() bool {
 var loadColumns = [tableCount][]string{
 	tblSource:          {"key", "log_source_id", "source_generation", "storage_namespace", "updated_at"},
 	tblPosition:        {"key", "read_pos", "durable_pos", "reclaim_pos", "acquire_paused", "pause_reason"},
-	tblGap:             {"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution"},
+	tblGap:             {"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution", "fold_spans", "fold_span_merges", "reason_code", "resolved_at_utc", "resolved_by", "fold_spans_unknown"},
 	tblProjection:      {"key", "generation", "events_stored_through", "pending", "updated_at"},
 	tblInstanceBinding: {"uuid", "namespace", "generation", "mode", "work_dir", "rule_key", "relative_path"},
 	tblSourceAux:       {"key", "config", "payload"},
@@ -357,17 +370,19 @@ var specs = [tableCount]tableSpec{
 	tblGap: {
 		name:      "gap",
 		keyCols:   []string{"key", "id"},
-		mirrorSQL: "SELECT key, id, start_pos, end_pos, reason, detail, resolved, resolution FROM gap",
-		upsert: `INSERT INTO gap (key, id, start_pos, end_pos, reason, detail, resolved, resolution)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		mirrorSQL: "SELECT key, id, start_pos, end_pos, reason, detail, resolved, resolution, fold_spans, fold_span_merges, reason_code, resolved_at_utc, resolved_by, fold_spans_unknown FROM gap",
+		upsert: `INSERT INTO gap (key, id, start_pos, end_pos, reason, detail, resolved, resolution, fold_spans, fold_span_merges, reason_code, resolved_at_utc, resolved_by, fold_spans_unknown)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(key, id) DO UPDATE SET start_pos=excluded.start_pos, end_pos=excluded.end_pos,
 				reason=excluded.reason, detail=excluded.detail, resolved=excluded.resolved,
-				resolution=excluded.resolution`,
+				resolution=excluded.resolution, fold_spans=excluded.fold_spans, fold_span_merges=excluded.fold_span_merges,
+				reason_code=excluded.reason_code, resolved_at_utc=excluded.resolved_at_utc, resolved_by=excluded.resolved_by, fold_spans_unknown=excluded.fold_spans_unknown`,
 		upsertBatch: "INSERT INTO gap (%s) VALUES %s",
-		columns:     []string{"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution"},
+		columns:     []string{"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution", "fold_spans", "fold_span_merges", "reason_code", "resolved_at_utc", "resolved_by", "fold_spans_unknown"},
 		onConflict: `ON CONFLICT(key, id) DO UPDATE SET start_pos=excluded.start_pos, end_pos=excluded.end_pos,
 			reason=excluded.reason, detail=excluded.detail, resolved=excluded.resolved,
-			resolution=excluded.resolution`,
+			resolution=excluded.resolution, fold_spans=excluded.fold_spans, fold_span_merges=excluded.fold_span_merges,
+			reason_code=excluded.reason_code, resolved_at_utc=excluded.resolved_at_utc, resolved_by=excluded.resolved_by, fold_spans_unknown=excluded.fold_spans_unknown`,
 		deleteStmt: "DELETE FROM gap WHERE key = ? AND id = ?",
 		orderBy:    "key, id",
 	},
@@ -471,35 +486,35 @@ func fingerprint(values ...any) uint64 {
 func encodeValue(h interface{ Write([]byte) (int, error) }, value any) {
 	switch v := value.(type) {
 	case nil:
-		_, _ = h.Write([]byte{0})
+		writeFingerprint(h, []byte{0})
 	case bool:
 		// 与 INTEGER 读回值同编：SQLite 没有布尔类型，写入 1/0、读回 int64。
-		_, _ = h.Write([]byte{2})
+		writeFingerprint(h, []byte{2})
 		if v {
 			encodeInt(h, 1)
 		} else {
 			encodeInt(h, 0)
 		}
 	case int64:
-		_, _ = h.Write([]byte{2})
+		writeFingerprint(h, []byte{2})
 		encodeInt(h, v)
 	case int:
-		_, _ = h.Write([]byte{2})
+		writeFingerprint(h, []byte{2})
 		encodeInt(h, int64(v))
 	case uint64:
-		_, _ = h.Write([]byte{2})
+		writeFingerprint(h, []byte{2})
 		encodeInt(h, int64(v))
 	case string:
-		_, _ = h.Write([]byte{3})
+		writeFingerprint(h, []byte{3})
 		encodeBytes(h, []byte(v))
 	case []byte:
 		// 与 TEXT 读回值同编：驱动对 TEXT 给 string、对 BLOB 给 []byte，二者逻辑内容相同时
 		// 必须同指纹（nullableBytes 写入的 []byte 会以 TEXT 形态读回）。
-		_, _ = h.Write([]byte{3})
+		writeFingerprint(h, []byte{3})
 		encodeBytes(h, v)
 	default:
 		// 其余类型（不应出现）按字符串处理，保证不会静默当成相同内容。
-		_, _ = h.Write([]byte{9})
+		writeFingerprint(h, []byte{9})
 		encodeBytes(h, []byte(fmt.Sprintf("%v", v)))
 	}
 }
@@ -510,7 +525,7 @@ func encodeInt(h interface{ Write([]byte) (int, error) }, v int64) {
 	for i := 0; i < 8; i++ {
 		buf[i] = byte(uv >> (8 * i))
 	}
-	_, _ = h.Write(buf[:])
+	writeFingerprint(h, buf[:])
 }
 
 func encodeBytes(h interface{ Write([]byte) (int, error) }, b []byte) {
@@ -519,8 +534,15 @@ func encodeBytes(h interface{ Write([]byte) (int, error) }, b []byte) {
 	for i := 0; i < 8; i++ {
 		buf[i] = byte(n >> (8 * i))
 	}
-	_, _ = h.Write(buf[:])
-	_, _ = h.Write(b)
+	writeFingerprint(h, buf[:])
+	writeFingerprint(h, b)
+}
+
+// writeFingerprint 的写入方始终是内存哈希；若内部实现违约，不能返回残缺指纹伪装一致。
+func writeFingerprint(h interface{ Write([]byte) (int, error) }, data []byte) {
+	if _, err := h.Write(data); err != nil {
+		panic(fmt.Errorf("stateindex: 写入内存指纹失败: %w", err))
+	}
 }
 
 // mirrorKey 把主键列值编码为镜像表的键。
@@ -652,14 +674,6 @@ func toInt64(v uint64) int64 {
 		return math.MaxInt64
 	}
 	return int64(v)
-}
-
-// toUint64 把库中读回的整数还原为无符号位置/序号。
-func toUint64(v int64) uint64 {
-	if v <= 0 {
-		return 0
-	}
-	return uint64(v)
 }
 
 // sortState 对 State 的各切片按稳定顺序归一化（不改变任何语义，只固定行序）。

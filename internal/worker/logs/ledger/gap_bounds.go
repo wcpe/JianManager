@@ -183,6 +183,13 @@ func (l *Ledger) recordGapLocked(e *Entry, start, end uint64, reason, detail str
 		if !rangesTouch(gap.StartPos, gap.EndPos, start, end) {
 			continue
 		}
+		if len(gap.FoldSpans) > 0 {
+			// 已折叠条目再吸收相邻失败时，凸包与精确子区间必须一起扩展。
+			spans, merges := capFoldSpans(append(gap.FoldSpans, PositionRange{From: start, To: end}))
+			gap.FoldSpans = spans
+			gap.FoldSpanMerges += merges
+			gap.FoldSpansUnknown = gap.FoldSpansUnknown || gap.FoldSpanMerges > 0
+		}
 		if start < gap.StartPos {
 			gap.StartPos = start
 		}
@@ -285,13 +292,8 @@ const DefaultMaxFoldSpansPerGap = DefaultMaxUnresolvedGapsPerSource
 
 // capFoldSpans 归一化并封顶精确子区间，返回 (子区间, 被合并掉的条数)。
 //
-// **触发上限时的退化方向（这是本函数唯一需要审慎的地方）**：把多余子区间并成一条**凸包**，
-// 该凸包会覆盖夹间健康位置。这看似与 LEDGER-2 的修复目标冲突，但两者优先级不同：
-//   - 内存有界是**硬约束**（无界会让进程 OOM，后果是整机失效）；
-//   - 凭据精确性是**正确性约束**，但只在「人工放弃」这一条路径上被消费，且退化后仍有
-//     显式痕迹（MergedSpans>0 写进 Detail 并计入观测），运维据此知道该凭据是粗粒度裁定。
-//
-// 也就是说：退化不是静默的，且只在极端规模（单缺口 >64 段精确子区间）下发生。
+// 超上限时多余子区间只保留有界凸包用于诊断。凸包会覆盖夹间健康位置，不能成为裁定凭据；
+// 调用方必须累计返回的合并数并置 FoldSpansUnknown，使人工放弃整批拒绝而非扩大丢失区间。
 func capFoldSpans(spans []PositionRange) ([]PositionRange, int) {
 	kept := normalizeFoldSpans(spans)
 	if len(kept) <= DefaultMaxFoldSpansPerGap {
@@ -310,6 +312,9 @@ func capFoldSpans(spans []PositionRange) ([]PositionRange, int) {
 // gapEvidenceSpans 返回该缺口的**精确**证据区间：折叠产生的缺口按其子区间展开，其余缺口
 // 即其自身区间。放弃裁定的凭据必须按本函数逐段落，绝不用凸包冒充（LEDGER-2）。
 func gapEvidenceSpans(g Gap) []PositionRange {
+	if g.FoldSpansUnknown || g.FoldSpanMerges > 0 {
+		return nil
+	}
 	if len(g.FoldSpans) == 0 {
 		return []PositionRange{{From: g.StartPos, To: g.EndPos}}
 	}
@@ -371,8 +376,12 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 		// merged 本身可能已是上一次折叠的产物，用凸包会把上次的夹间健康位置重新吞回来
 		// （实测形态：100 条缺口折叠后 spans 退化成 [{10,3869},{3970,3979}]，第 1 段即凸包）。
 		spans := gapEvidenceSpans(merged)
+		previousMerges := merged.FoldSpanMerges
 		for _, index := range victims[1:] {
 			gap := e.Gaps[index]
+			// 缺失证据一旦参与折叠仍须可见，不能靠其它已知子区间洗成精确凭据。
+			merged.FoldSpansUnknown = merged.FoldSpansUnknown || gap.FoldSpansUnknown
+			previousMerges += gap.FoldSpanMerges
 			// 同理：受害者自身可能也已折叠过，展开它的精确子区间。
 			spans = append(spans, gapEvidenceSpans(gap)...)
 			if gap.StartPos < merged.StartPos {
@@ -384,10 +393,12 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 			merged.Detail = mergedGapDetail(merged.Detail, gap.Detail, merged.StartPos, merged.EndPos)
 		}
 		merged.FoldSpans, merged.FoldSpanMerges = capFoldSpans(spans)
+		merged.FoldSpanMerges += previousMerges
+		merged.FoldSpansUnknown = merged.FoldSpansUnknown || merged.FoldSpanMerges > 0
 		merged.Detail = foldedGapDetail(merged.Detail, len(victims), merged.StartPos, merged.EndPos)
 		if merged.FoldSpanMerges > 0 {
-			// 退化不得静默（见 FoldSpanMerges 的说明）：把粗粒度裁定的痕迹写进唯一的可读面。
-			merged.Detail = fmt.Sprintf("%s（精确子区间已合并 %d 段：该条目为粗粒度裁定，放弃时按整段记凭据）",
+			// 精度丢失不可靠后续折叠洗白，诊断凸包绝不再转成永久丢失裁定。
+			merged.Detail = fmt.Sprintf("%s（精确子区间已合并 %d 段：证据不完整，拒绝按凸包放弃）",
 				merged.Detail, merged.FoldSpanMerges)
 		}
 		merged.Resolved = false
