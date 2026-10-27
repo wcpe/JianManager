@@ -264,7 +264,14 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			view.Projections[targetID] = nil
 			diagnostic := catalog.OwnerForQuery(rec)
 			status := p.status(key, rec, diagnostic)
-			reasons := append([]string{ReasonNoCatalogAuthority}, status.NotReadyReasons...)
+			// 归档权威不能报成「没有 Catalog 权威」：那是配置/记录缺失的措辞，
+			// 而这里的真相是「权威在归档、本地未恢复」。原因不同，处置动作也不同
+			// （一个是查配置，一个是执行 rehydrate），故按 owner 分开取首个原因。
+			lead := ReasonNoCatalogAuthority
+			if rec != nil && rec.Owner == catalog.OwnerArchive {
+				lead = ReasonArchiveNotRestored
+			}
+			reasons := append([]string{lead}, status.NotReadyReasons...)
 			reasons = append(reasons, classifyStatus(req, rec, diagnostic, status)...)
 			for _, reason := range rec.PartialReasons {
 				reasons = appendUniqueStr(reasons, reason)
@@ -273,7 +280,15 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			if hasStr(reasons, ReasonArchiveNotRestored) {
 				state = CoverageArchiveMiss
 			}
-			res.Coverage.AddTarget(TargetCoverage{TargetID: targetID, State: state, Reasons: reasons})
+			res.Coverage.AddTarget(TargetCoverage{
+				TargetID: targetID,
+				State:    state,
+				Reasons:  reasons,
+				// 归档权威的位置如实带上：审计要看的是「正本在哪」，
+				// 而不是一个空白的 dir_id（那会让现场以为记录坏了）。
+				Owner: string(recOwner(rec)),
+				DirID: recOwnerDirID(rec),
+			})
 			continue
 		}
 
@@ -721,10 +736,21 @@ func parseTargetKey(targetID string) (catalog.PartitionKey, bool) {
 
 func classifyStatus(req PlanRequest, rec *catalog.Record, ref catalog.QueryRef, st PartitionStatus) []string {
 	var reasons []string
+	// 归档权威的判定必须以**记录**为准，不能只看 ref：
+	// `OwnerForQuery` 在 owner_dir 为空时会返回 OK=false，此时 ref.Owner 是空串，
+	// 若只看 ref 就会把「已归档但本地无副本」误报成「没有 Catalog 权威」——
+	// 运维看到的将是 NO_CATALOG_AUTHORITY（像配置丢了），而不是
+	// ARCHIVE_NOT_RESTORED（像归档需要恢复）。两者处置动作完全不同。
+	archivedAuthority := (rec != nil && rec.Owner == catalog.OwnerArchive) || ref.Owner == catalog.OwnerArchive
 	if st.ColdConfigured && !st.ColdReady && (req.RequireCold || ref.Owner == catalog.OwnerCold) {
 		reasons = appendUniqueStr(reasons, ReasonColdMissing)
 	}
-	if st.ArchiveConfigured && !st.ArchiveRestored && (req.RequireArchive || ref.Owner == catalog.OwnerArchive) {
+	if st.ArchiveConfigured && !st.ArchiveRestored && (req.RequireArchive || archivedAuthority) {
+		reasons = appendUniqueStr(reasons, ReasonArchiveNotRestored)
+	}
+	// 归档权威：正本在归档，热层可能已被回收。本地没有对齐的已恢复投影时，
+	// 除了「未恢复」还必须显式标出「该读归档」，否则调用方会按 HOT 缺失去猜。
+	if archivedAuthority && !st.ArchiveRestored {
 		reasons = appendUniqueStr(reasons, ReasonArchiveNotRestored)
 	}
 	// 冷层已配置但不可用，且查询覆盖需要历史层时：不阻塞 HOT range，但必须 partial。
@@ -777,4 +803,19 @@ func hasStr(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// recOwner / recOwnerDirID 是 nil 安全的记录读取，供覆盖登记使用。
+func recOwner(rec *catalog.Record) catalog.Owner {
+	if rec == nil {
+		return ""
+	}
+	return rec.Owner
+}
+
+func recOwnerDirID(rec *catalog.Record) string {
+	if rec == nil {
+		return ""
+	}
+	return rec.OwnerDirID
 }

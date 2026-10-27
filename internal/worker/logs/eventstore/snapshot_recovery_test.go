@@ -322,6 +322,11 @@ func TestFailedManifestPublicationCannotLeakUncommittedMetadata(t *testing.T) {
 	key := "inst:1/file/g1"
 	s, err := Open(root)
 	require.NoError(t, err)
+	// 本用例验证的不变量是「清单发布**失败**时不得把未提交元数据泄给读侧」，因此必须
+	// 钉住「每次追加都落清单」的策略才有故障可注入：生产默认策略允许未封末段的派生
+	// 元数据滞后一批（此时根本不会尝试发布，也就谈不上泄露），滞后路径的等价约束由
+	// manifest_sync_policy_test.go 的 TestDeferredManifest* 系列用例覆盖。
+	s.SetManifestSyncPolicy(1, 0)
 	require.NoError(t, s.Append(key, []logtypes.Event{ev(1)}))
 	before := s.Segments(key)
 	snapshot, err := s.Snapshot(key)

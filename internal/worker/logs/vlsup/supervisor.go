@@ -84,6 +84,9 @@ type Options struct {
 	Ports map[Namespace]int
 	// MemoryAllowedBytes 可选 per-namespace cache 覆盖；HOT 缺省 DefaultHotCacheBytes。
 	MemoryAllowedBytes map[Namespace]int64
+	// MemoryAllowedPercent 非 0 时改用 VL 官方推荐的 -memory.allowedPercent，
+	// 让 VL 按宿主机可用内存自适应；显式 MemoryAllowedBytes 仍优先。
+	MemoryAllowedPercent int
 	// MemoryLimitBytes 受管 VL 进程的 Go 软内存上限（GOMEMLIMIT，字节）。
 	// 0 使用 DefaultVLMemoryLimitBytes；负值表示不注入（保留 VL 默认行为）。
 	// 仅为Go软目标，不承诺RSS或mmap硬上限。
@@ -140,6 +143,7 @@ type Supervisor struct {
 	authPass      string
 	ports         map[Namespace]int
 	memOverride   map[Namespace]int64
+	memPercent    int
 	factory       CmdFactory
 	sink          Sink
 	allowVLRec    bool
@@ -278,6 +282,7 @@ func New(opts Options) (*Supervisor, error) {
 		authPass:      opts.AuthPassword,
 		ports:         map[Namespace]int{},
 		memOverride:   map[Namespace]int64{},
+		memPercent:    opts.MemoryAllowedPercent,
 		factory:       factory,
 		sink:          sink,
 		allowVLRec:    opts.AllowVLRecursiveSink,
@@ -326,14 +331,15 @@ func (s *Supervisor) configFor(ns Namespace) InstanceConfig {
 		port = DefaultPort(ns)
 	}
 	return InstanceConfig{
-		Namespace:          ns,
-		Port:               port,
-		StorageDataPath:    StoragePathUnder(s.dataRoot, ns),
-		RetentionPeriod:    s.retentionFor(ns),
-		MemoryAllowedBytes: s.memOverride[ns],
-		AuthUsername:       s.authUser,
-		AuthPassword:       s.authPass,
-		EnableDelete:       s.deleteEnabled,
+		Namespace:            ns,
+		Port:                 port,
+		StorageDataPath:      StoragePathUnder(s.dataRoot, ns),
+		RetentionPeriod:      s.retentionFor(ns),
+		MemoryAllowedBytes:   s.memOverride[ns],
+		MemoryAllowedPercent: s.memPercent,
+		AuthUsername:         s.authUser,
+		AuthPassword:         s.authPass,
+		EnableDelete:         s.deleteEnabled,
 	}
 }
 

@@ -78,6 +78,26 @@ func (s *Service) OpenViewContext(ctx context.Context, req QueryRequest) SearchR
 	return resp
 }
 
+// noRangeError 为「一条权威 range 都选不出来」生成**明确**的错误。
+//
+// 为什么不能统一回一句 "no authoritative ranges; coverage partial"（2026-10 改造）：
+// 该分区已归档时，热层目录**可能已被回收**，正确处置是「需要先恢复（rehydrate）」，
+// 而通用 PARTIAL 无法把它与「没配置/没记录/预算耗尽」区分开。更危险的是反方向：
+// 若这里改成「返回成功 + 0 行」，运维会以为这一天根本没有产生日志——
+// 静默的空结果比报错有用一百倍地危险（报错会有人查，空结果不会）。
+//
+// 因此只要覆盖原因里出现「归档未恢复」且没有任何可读 range，就返回
+// LOG_ARCHIVE_MISSING + 可直接执行的原因文案；其余情况保持既有 LOG_PARTIAL
+// （不改变既有语义，避免让「预算截断」被误报成「归档缺失」）。
+func noRangeError(cov Coverage) *QueryError {
+	if hasStr(cov.PartialReasons, ReasonArchiveNotRestored) {
+		return newErr(ErrCodeArchiveMissing,
+			"全部命中分区都只有归档副本且本地未恢复（ARCHIVE_NOT_RESTORED）：请先对目标分区执行归档恢复（rehydrate），"+
+				"本 Worker 当前不会读取归档对象，也不会把这种情况当成「没有日志」")
+	}
+	return newErr(ErrCodePartial, "no authoritative ranges; coverage partial")
+}
+
 // StatsResponse 对应 LogStatsResponse。
 type StatsResponse struct {
 	RequestID string       `json:"request_id"`
@@ -398,7 +418,7 @@ func (s *Service) Search(ctx context.Context, req QueryRequest) SearchResponse {
 	if len(plan.Ranges) == 0 {
 		// 无 range 且 coverage 不完整：不得伪装空成功。
 		if !plan.Coverage.Complete {
-			resp.Err = newErr(ErrCodePartial, "no authoritative ranges; coverage partial")
+			resp.Err = noRangeError(plan.Coverage)
 			return resp
 		}
 		resp.Exhausted = true

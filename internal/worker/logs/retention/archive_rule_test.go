@@ -400,7 +400,9 @@ func TestArchivePrefersMoveEvenWhenDiscardIsExplicit(t *testing.T) {
 	hv := time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
 	mv := &fakeMover{}
 
-	plan := p.PlanArchive(hv, archiveFixture(), true)
+	// 第四个参数留 false：本用例守的是「搬运 vs discard」的次序，
+	// 「搬运 vs 导出归档」的次序由 archive_copy 的专项用例守。
+	plan := p.PlanArchive(hv, archiveFixture(), true, false)
 	if len(plan) == 0 {
 		t.Fatal("前置条件：夹具应产出计划")
 	}

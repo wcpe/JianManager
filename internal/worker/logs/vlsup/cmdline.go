@@ -59,8 +59,11 @@ type InstanceConfig struct {
 	StorageDataPath    string
 	RetentionPeriod    string
 	MemoryAllowedBytes int64 // 0：HOT 使用 DefaultHotCacheBytes；其他 namespace 省略该 flag
-	AuthUsername       string
-	AuthPassword       string
+	// MemoryAllowedPercent 非 0 且 MemoryAllowedBytes<=0 时改用 VL 官方推荐的
+	// -memory.allowedPercent，让 VL 按宿主机可用内存自适应，避免换机器要改配置。
+	MemoryAllowedPercent int
+	AuthUsername         string
+	AuthPassword         string
 	// EnableDelete 打开 VL 的 -delete.enable，使 /delete/* API 可用。
 	//
 	// 为什么需要它（2026-10-21 架构复审）：`projection_generation` 白名单只让旧代次
@@ -144,6 +147,9 @@ func (c InstanceConfig) Validate() error {
 	if c.MemoryAllowedBytes < 0 {
 		return fmt.Errorf("vlsup: memory.allowedBytes must be >= 0")
 	}
+	if c.MemoryAllowedPercent < 0 || c.MemoryAllowedPercent > 100 {
+		return fmt.Errorf("vlsup: memory.allowedPercent must be within [0,100]")
+	}
 	return nil
 }
 
@@ -174,7 +180,12 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		"-search.maxQueryTimeRange=" + queryLimit,
 		"-search.maxQueueDuration=2s",
 	}
-	if cache := cfg.EffectiveCacheBytes(); cache > 0 {
+	// 官方推荐用 -memory.allowedPercent 让 VL 按宿主机可用内存自适应；
+	// 显式配置百分比时优先于字节上限，避免换机器还要改配置。
+	// 注意：hot_cache_bytes 仍作为内部 cache 预算记账使用，两者语义不同。
+	if cfg.MemoryAllowedPercent > 0 {
+		args = append(args, "-memory.allowedPercent="+strconv.Itoa(cfg.MemoryAllowedPercent))
+	} else if cache := cfg.EffectiveCacheBytes(); cache > 0 {
 		args = append(args, "-memory.allowedBytes="+strconv.FormatInt(cache, 10))
 	}
 	if cfg.EnableDelete {

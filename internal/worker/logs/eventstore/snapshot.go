@@ -13,8 +13,11 @@ import (
 )
 
 // ReadSnapshot 固定清单、文件身份及完整字节边界，调用方必须关闭以释放逻辑读取引用。
-// 本包只追加而不回收或替换既有段，因此按读取者保活即可；每次遍历只同时打开一段。
+// 本包只追加而不回收或替换既有段（唯一例外是显式调用的 Prune，见 prune.go），
+// 因此按读取者保活即可；每次遍历只同时打开一段。
 // 追加、滚动及 Store.Close 不改变集合；本引用不授权回收，也不保证恶意外部删除后仍可读。
+// 逻辑引用存续期间本实例在该源上登记为「在途读者」，Prune 据此拒绝回收——否则前移段名会让
+// 已复制清单里的路径失效。
 type ReadSnapshot struct {
 	mu       sync.Mutex
 	manifest Manifest
@@ -22,6 +25,8 @@ type ReadSnapshot struct {
 	readers  int
 	closed   bool
 	released bool
+	// onRelease 在逻辑引用真正释放时调用一次（向源登记归还读取引用）；nil 表示无需归还。
+	onRelease func()
 }
 
 type frozenSegment struct {
@@ -36,11 +41,11 @@ func (s *Store) Snapshot(key string) (*ReadSnapshot, error) {
 	return s.snapshotContext(context.Background(), key)
 }
 
-func (s *Store) snapshotContext(ctx context.Context, key string) (*ReadSnapshot, error) {
+func (s *Store) snapshotContext(ctx context.Context, key string) (snapshot *ReadSnapshot, result error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	snapshot := &ReadSnapshot{manifest: Manifest{Version: manifestVer, Key: key}}
+	snapshot = &ReadSnapshot{manifest: Manifest{Version: manifestVer, Key: key}}
 	sec := s.lookup(key)
 	if sec == nil {
 		return snapshot, nil
@@ -48,10 +53,24 @@ func (s *Store) snapshotContext(ctx context.Context, key string) (*ReadSnapshot,
 	if err := sec.ensureVerifiedContext(ctx); err != nil {
 		return nil, err
 	}
-	sec.viewMu.RLock()
+	// 登记逻辑读取引用：判定「是否正在回收」与登记必须在同一临界区，否则可能与 Prune
+	// 的「有读者就不回收」判据互相漏看，让读者拿到随后被前移的段路径。
+	sec.viewMu.Lock()
+	if sec.pruneActive {
+		sec.viewMu.Unlock()
+		return nil, errPruneInProgress
+	}
 	snapshot.manifest = cloneManifest(sec.committed)
 	dir := sec.dir
-	sec.viewMu.RUnlock()
+	sec.liveSnapshots++
+	sec.viewMu.Unlock()
+	registered := true
+	defer func() {
+		// 构造失败时同样要归还引用，否则该源会被一个不存在的读者永久挡住回收。
+		if registered {
+			sec.releaseSnapshot()
+		}
+	}()
 	for _, meta := range snapshot.manifest.Segments {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -66,7 +85,18 @@ func (s *Store) snapshotContext(ctx context.Context, key string) (*ReadSnapshot,
 		}
 		snapshot.segments = append(snapshot.segments, frozenSegment{meta: meta, identity: stat, path: path})
 	}
+	snapshot.onRelease = sec.releaseSnapshot
+	registered = false
 	return snapshot, nil
+}
+
+// releaseSnapshot 归还一次逻辑读取引用。
+func (sec *section) releaseSnapshot() {
+	sec.viewMu.Lock()
+	if sec.liveSnapshots > 0 {
+		sec.liveSnapshots--
+	}
+	sec.viewMu.Unlock()
 }
 
 // Manifest 返回固定清单的深副本，可作同一内容窗口的元数据凭据。
@@ -110,6 +140,8 @@ func (snapshot *ReadSnapshot) iterateContext(ctx context.Context, fn func(logtyp
 		snapshot.readers--
 		if snapshot.closed && snapshot.readers == 0 {
 			snapshot.released = true
+			// 回到源登记处归还读取引用：此后回收才可以前移这些段名。
+			snapshot.releaseRefLocked()
 		}
 		snapshot.mu.Unlock()
 	}()
@@ -132,8 +164,21 @@ func (snapshot *ReadSnapshot) Close() error {
 	snapshot.closed = true
 	if snapshot.readers == 0 {
 		snapshot.released = true
+		snapshot.releaseRefLocked()
 	}
 	return nil
+}
+
+// releaseRefLocked 在逻辑引用真正释放时（且仅一次）归还源读取登记。
+// 调用方必须持有 snapshot.mu：released 只在该锁内被置真。
+func (snapshot *ReadSnapshot) releaseRefLocked() {
+	if snapshot.onRelease == nil {
+		return
+	}
+	release := snapshot.onRelease
+	// 先摘掉回调再调用：重复 Close 或「Close 后再遍历」都不会重复归还。
+	snapshot.onRelease = nil
+	release()
 }
 
 func (segment frozenSegment) iterate(ctx context.Context, fn func(logtypes.Event) error) (result error) {

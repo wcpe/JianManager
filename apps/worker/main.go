@@ -581,6 +581,11 @@ func runWorker() {
 	})
 
 	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
+	//
+	// 本函数只同步完成「快速首拨」（每条 PID 记录拨一次），首拨失败的记录转后台按
+	// recover.retry_backoff 序列继续重试（最长 ≈127s）。故下面的运行期孤儿扫描不会被接管重试
+	// 拖住——旧实现把重试串行摊在启动主流程上，一条不可达记录即把扫描器推迟 127s（N 条线性累加），
+	// 启动窗口内完全没有扫描能力。接管重试与扫描并行的并发隔离见 process.takeoverProtects。
 	recovered, recoverErr := manager.RecoverDaemonInstances()
 	if recoverErr != nil {
 		slog.Warn("恢复 daemon 实例失败", "error", recoverErr)
@@ -684,6 +689,9 @@ func runWorker() {
 			NamespaceBudgets: budgetConfig.Namespaces,
 			// 新键已归并旧 cache/Go 软限制；RSS 另由唯一控制器执行真实准入。
 			MemoryLimitBytes: cfg.LogVL.MemoryLimitBytes,
+			// 官方推荐按可用内存百分比自适应；显式 hot_cache_bytes 时由
+			// EffectiveCacheBytes 走 allowedBytes，此处仅作默认路径。
+			MemoryAllowedPercent: cfg.LogVL.MemoryAllowedPercent,
 		})
 		if err != nil {
 			slog.Error("VictoriaLogs supervisor 创建失败", "error", err)
@@ -859,6 +867,25 @@ func runWorker() {
 				"truncated", len(needsManual) > len(sample))
 		}
 	}
+	// 已归档但热层尚未回收的分区（FR-501 回收闭环的可观测面）。
+	//
+	// 为什么会存在这种状态：权威态先改 ARCHIVED、再删热层。若进程恰在两步之间退出，
+	// 就会留下一份「数据安全、盘没省下来」的残留副本。这是**安全方向**的不一致
+	// （数据多一份而不是少一份），但必须有人知道——否则它永远不会被清理。
+	// 这里只报出来，不自动重试：自动删除必须重新过三闸与 Catalog 复核，
+	// 由保留策略的下一轮驱动承担（那是唯一持有完整判据的地方）。
+	if pending := logStack.Catalog.PendingArchiveReclaims(); len(pending) > 0 {
+		sample := pending
+		if len(sample) > maxNeedsManualPartitionsLogged {
+			sample = sample[:maxNeedsManualPartitionsLogged]
+		}
+		keys := make([]string, 0, len(sample))
+		for _, key := range sample {
+			keys = append(keys, key.String())
+		}
+		slog.Warn("存在已归档但热层未回收的分区（数据安全、磁盘未释放；下一轮保留策略会按三闸重试）",
+			"count", len(pending), "partitions", keys, "truncated", len(pending) > len(sample))
+	}
 	if vlHTTPClient != nil && coldVLClient != nil && vlSupervisor != nil {
 		hotCfg, hotErr := vlSupervisor.Config(vlsup.NamespaceHot)
 		coldCfg, coldErr := vlSupervisor.Config(vlsup.NamespaceCold)
@@ -881,6 +908,60 @@ func runWorker() {
 					newCatalogPartitionLister(logStack.Catalog),
 					readyRetentionMover(newDayManagerMover(dayManager, logStack.Catalog), managedClients, resourceBudget),
 					newDiskPercentReader(logCapacityProvider))
+				// 导出归档（FR-501，硬规则的次选路径）：搬不了冷层时导出为独立副本。
+				//
+				// 默认关闭（`log_retention.archive_copy.enabled=false`）。这里**不做**任何
+				// 默认兜底目录：没有目的地就不装出口，计划阶段于是不会产出 archive_copy，
+				// 到期分区继续落 blocked（保留原物）——与本次改动之前的行为完全一致。
+				if retentionPolicy.ArchiveCopy.Enabled {
+					root := strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
+					if root == "" {
+						// RetentionPolicy 已经在解析期拒过空 root，这里再挡一次是防御性的：
+						// 万一将来有人把那段校验挪走，也不能让「开关开了但没有目的地」静默变成空转。
+						slog.Error("导出归档已启用但未配置根目录，归档出口未装配（到期分区将继续保留原物）",
+							"key", "log_retention.archive_copy.root")
+					} else {
+						// 导出器住在 logs/archive（manifest/Provider 契约的家），
+						// 但「冻结快照怎么取、能读哪里」属于物理布局，仍由 lifecycle 提供，
+						// 在这里注入——依赖方向因此保持单向：lifecycle 不认识 archive。
+						exporter := archive.NewArchiveCopyExporter(logStack.Catalog, physical.ExportSnapshot, archive.NewLocalArchive(root))
+						logRetentionDriver.Executor().SetArchiveExporter(retention.ArchiveExporterFunc(
+							func(ctx context.Context, namespace, day string) (retention.ArchiveExportResult, error) {
+								sum, err := exporter.Export(ctx, namespace, day)
+								if err != nil {
+									return retention.ArchiveExportResult{}, err
+								}
+								return retention.ArchiveExportResult{
+									ObjectCount:      sum.ObjectCount,
+									SourceBytes:      sum.SourceBytes,
+									StoredBytes:      sum.StoredBytes,
+									Location:         sum.Location,
+									ProviderKind:     sum.ProviderKind,
+									ObjectPrefix:     sum.ObjectPrefix,
+									ManifestChecksum: sum.ManifestChecksum,
+									CoverageComplete: sum.CoverageComplete,
+								}, nil
+							}))
+						// 「已归档」权威态迁移出口 + 热层回收出口（FR-501 回收热层闭环）。
+						//
+						// 三个出口必须成套装配才有回收：导出证明「副本可信」、authority 证明
+						// 「Catalog 已承认正本在归档」、remover 才允许真的删。缺 authority 时
+						// 执行器会拒绝删除（否则查询面会指向一个不存在的目录），这是硬判据。
+						//
+						// 三闸（discard + sweep.vl_sweep + log_vl.delete_enabled）仍然默认全关：
+						// 装配这几个出口**不等于**允许删，删不删由 Policy.DeleteGatesOpen 决定。
+						logRetentionDriver.Executor().SetArchiveAuthority(newCatalogArchiveAuthority(logStack.Catalog))
+						logRetentionDriver.Executor().SetRemover(retention.RemoverFunc(physical.RemoveArchivedPartition))
+						if ok, reason := logRetentionDriver.Executor().ArchiveReadyForReclaim(); !ok {
+							slog.Info("日志归档热层回收未就绪（导出仍会执行，原物保留）", "reason", reason)
+						} else {
+							slog.Warn("日志归档热层回收已就绪：三闸全开时将删除已归档分区的热层数据",
+								"archiveRoot", root)
+						}
+						slog.Info("日志导出归档已装配（搬不了冷层时导出为独立副本；回收热层仍需删除三闸全开）",
+							"root", root, "provider", archive.NewLocalArchive(root).Kind())
+					}
+				}
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
 			}
 			logStack.LogRPC.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(ctx context.Context, namespace, day, target string) error {
@@ -1057,6 +1138,10 @@ func runWorker() {
 		// 预算（log_index.persist.*）分别经 LogIndexConfig 的映射收敛为归一化默认（裁剪默认
 		// 开启；切分默认每提交单元 512 行、目标 40ms——真源是 stateindex.DefaultCommitBudget）。
 		persistYieldCfg, persistHotBudgetCfg, persistPriorityStreak := cfg.PersistGateTuning()
+		// 事件段清单落盘滞后上界（键 log_index.persist.manifest_sync_every / manifest_sync_interval）：
+		// 默认 0/0 = 只在段集合变化时落清单。机械盘上一次追加的耐久调用由 3 次降到 1 次，
+		// 清单里未封末段的派生元数据允许滞后（重启由 eventstore 校准精确补齐，不丢事件体）。
+		manifestSyncEveryCfg, manifestSyncIntervalCfg := cfg.EventStoreManifestTuning()
 		verifyBudgetCfg, verifyMaxQueriesPerChunk := cfg.VerifyQueryTuning()
 		// 每源每轮校验预算与可见性错开（键 log_index.verify.round_budget / visibility_floor）：
 		// 回退修复 ② —— 该预算在 f237ae32 引入时只有注释没有接线，默认 1.5s 在
@@ -1068,6 +1153,9 @@ func runWorker() {
 		verifyChunkEstimatesCfg := cfg.VerifyChunkEstimatesTuning()
 		indexPruneCfg := cfg.LogIndex.IndexPrune()
 		indexCommitCfg := cfg.LogIndex.CommitBudget()
+		// 事件段回收（键 log_retention.eventstore_prune.*）：默认关闭。
+		// 水位判据与安全论证见 internal/worker/logs/ingest/eventstore_prune.go 文件头。
+		eventStorePruneCfg := cfg.LogRetention.EventStorePrune.EventStorePrune()
 		// 热层可发布窗口（2026-10-21 生产缺陷修复）：把热层 VL 的 retention 交给 ingest，
 		// 使「早于 now-retention 的 UTC 天」既不被重建、也不被算成对账缺失天。
 		//
@@ -1125,11 +1213,16 @@ func runWorker() {
 				IndexPrune: &indexPruneCfg,
 				// 索引持久化切分（FR-498 P0）：按行数 + 耗时双上界切成多个提交单元。
 				IndexCommit: &indexCommitCfg,
+				// 事件段回收（键 log_retention.eventstore_prune.*）：默认关闭，需显式开启。
+				EventStorePrune: &eventStorePruneCfg,
 				// 持久化门公平性（键 log_index.persist.cycle_yield / priority_streak）：
 				// 让路窗口决定「恢复链 ↔ 采集轮」的权衡，老化阈值决定优先权的反饿保护。
 				PersistYield:          persistYieldCfg,
 				PersistHotBudget:      persistHotBudgetCfg,
 				PersistPriorityStreak: persistPriorityStreak,
+				// 事件段清单落盘滞后上界（同上）：0/0 = 只在段集合变化时落清单。
+				EventStoreManifestSyncEvery:    manifestSyncEveryCfg,
+				EventStoreManifestSyncInterval: manifestSyncIntervalCfg,
 				// 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义，正常路径零等待。
 				VerifyBudget:             verifyBudgetCfg,
 				VerifyMaxQueriesPerChunk: verifyMaxQueriesPerChunk,
@@ -1345,10 +1438,20 @@ func runWorker() {
 			// 只打"暂停 / 有未消解缺口 / 有回放在飞"的源 ✓，正常源不打，避免刷屏 ✓。
 			go sampleResumeDiagnostics(ingestCtx, manager)
 			// 保留策略驱动器：首轮立即执行（启动时正是「停机期间攒下的过期分区」最需要处理的时刻），
-			// 之后按 log_retention.trigger.interval 周期跑。与采集运行时共用同一 ctx 生命周期。
+			// 之后每天在 log_retention.trigger.sweep_at_hour 指定的本地整点跑一轮（默认凌晨 3 点）。
+			// 与采集运行时共用同一 ctx 生命周期。
 			if logRetentionDriver != nil {
 				go logRetentionDriver.Run(ingestCtx)
-				slog.Info("日志冷热分层驱动器已启动", "interval", logRetentionDriver.Interval().String())
+				slog.Info("日志冷热分层驱动器已启动", "schedule", logRetentionDriver.DescribeSchedule())
+			}
+			// 事件段回收（键 log_retention.eventstore_prune.*）：**默认关闭**，需运维显式开启。
+			// 与上面的保留驱动器刻意不同：它**不在启动时立即跑一轮**（回收的是平台自己的暂存段，
+			// 早一天晚一天没有正确性差别，而重启风暴下每次启动都全量扫段是纯 IO 浪费）。
+			// 只打「已启用」一种日志：关闭是默认策略，不是配置丢失。
+			if eventStorePruneCfg.Enabled {
+				go manager.RunEventStorePrune(ingestCtx, eventStorePruneCfg)
+				slog.Info("事件段回收已启用（回收平台暂存段，原档仍在各服务器的文本日志里）",
+					"schedule", fmt.Sprintf("每天 %02d:00", eventStorePruneCfg.Normalized().SweepAtHour))
 			}
 			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
 		}
@@ -1515,6 +1618,29 @@ func runWorker() {
 	wsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	wsMux.HandleFunc("/ws/terminal", terminalServer.Handler())
 	wsMux.HandleFunc("/ws/plugin-bridge", pluginBridge.Handler())
+	// 日志保留策略的读数端点（Prometheus 文本格式）。
+	// 挂载位置与 pprof 同口径：同一个 **127.0.0.1 绑定**的 mux ⇒ **不新增暴露面** ✓
+	// （wsAddr 由 localWSAddr 固定回环，见下）。要跨机抓取请走 SSH 隧道或节点上的本地
+	// exporter，别把这个 mux 绑到 0.0.0.0——它没有令牌门，与 pprof 一样只靠回环隔离。
+	// 取舍说明：读数只有 8 个标量，故手写文本格式而不引 prometheus/client_golang（见
+	// retention.MetricsHandler 的注释）；logRetentionDriver 可能为 nil（保留策略未启用），
+	// 处理器照样输出全零序列 + jm_log_retention_driver_enabled 0，抓取侧不必写特殊分支。
+	// 事件段回收读数同理由 logIngest 提供：它可能为 nil（采集运行时创建失败），此时
+	// 回收序列输出 0、jm_log_eventstore_prune_enabled 0，同样是「全零而非缺序列」。
+	//
+	// 这里必须先判 nil 再作接口实参：logIngest 是 *ingest.Manager，直接把 nil 指针塞进
+	// 接口会得到**非 nil 的接口值**（带类型的 nil），MetricsHandler 里的 `prune != nil`
+	// 会因此为真，随后调用方法解引用 nil 指针 —— 表现为「采集没起来时抓 /metrics 直接 panic」。
+	var pruneSource retention.EventStorePruneSource
+	if logIngest != nil {
+		pruneSource = logIngest
+	}
+	wsMux.HandleFunc("/metrics", retention.MetricsHandler(logRetentionDriver, pruneSource))
+	// 运行期日志等级调整（GET 读 / POST 改）。
+	// 同样挂在 127.0.0.1 回环 mux 上，不新增暴露面；只调等级不改格式、不持久化，
+	// 重启后回到 log.level 配置值（见 retention.LogLevelController 的边界说明）。
+	// 这里正是 logLevelVar 注释里预留的接线点：此前它是 runWorker 的局部量、无任何可达入口。
+	wsMux.HandleFunc("/debug/log-level", retention.NewLogLevelController(logLevelVar).Handler())
 
 	wsAddr := localWSAddr(wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}

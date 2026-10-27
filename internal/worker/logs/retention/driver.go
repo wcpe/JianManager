@@ -28,15 +28,50 @@ type Trigger struct {
 	DiskPercent float64 `mapstructure:"disk_percent"`
 	// MinAge 磁盘触发时的最小分区年龄（自当天结束起算）；<=0 取 DefaultTriggerMinAge。
 	MinAge time.Duration `mapstructure:"min_age"`
-	// Interval 冷层**搬运**的调度周期（Driver.Run 的 tick 间隔）；<=0 取 DefaultDriverInterval。
+	// Interval 冷层**搬运**的调度周期（`Driver.Run` 在 ticker 兼容档下的间隔）；<=0 取 DefaultDriverInterval。
 	//
 	// 为什么必须独立于 `sweep.interval`（RET-4，2026-10-11）：`log_retention.sweep.interval`
 	// 的语义是「删除执行器的扫描间隔」，而搬运与删除是两条独立的路径。复用同一个键意味着
 	// 运维为了调删除节奏去改它，会连带改变搬运节奏（反之亦然），调参副作用不可见。
 	// 两者的合理取值也不同：删除扫描 1h 足够（删是幂等的，间隔只影响过期数据多留多久），
 	// 而搬运是「到期数据的默认动作」，间隔即「到期后最多多久才搬」，长间隔会让热层超期占用。
+	//
+	// 本键**只在** `sweep_at_hour` 显式配成 SweepAtHourIntervalTicker(-1) 时才决定搬运节奏；
+	// 默认的「每日固定时刻」调度不看它（见 SweepAtHour）。
 	Interval time.Duration `mapstructure:"interval"`
+	// SweepAtHour 每日搬运触发的**整点小时**（进程本地时区，0..23）；缺省 DefaultSweepAtHour（凌晨 3 点）。
+	//
+	// 为什么从「固定间隔 ticker」改成「每天固定时刻」（用户口径：「不是 30 天每时每刻都在搬运，
+	// 应该做到一天检查搬一次」「需要凌晨 3 点」）：日志按 **UTC 日**分区，一天只产生一个新分区，
+	// 于是间隔 ticker（旧默认 15m）的绝大多数轮次都在空转——列完分区、算出计划、发现全部未到点，
+	// 然后过一会儿再来一遍。而「到期后最多多久才搬」的真实粒度本来就是**天**：分区以整天为界，
+	// 早几小时的搬运换不来任何收益，只换来无意义的扫描与日志噪声。
+	//
+	// 时区选择：用**进程本地时区**的整点，而不是 UTC。理由：
+	//   - 用户说的「凌晨 3 点」是运维的墙上时间，运维按本地时区作息（凌晨 3 点是业务低峰），
+	//     若解释成 UTC，在东八区会落到北京时间 11:00——业务高峰，正是最不该搬的时候；
+	//   - 与分区口径的关系：分区边界是 UTC 日，本地凌晨 3 点**必然落在**「刚结束的 UTC 日之后
+	//     若干小时」（东八区 = UTC 19:00，即 UTC 日切后 19h；西五区 = UTC 08:00，即 UTC 日切后 8h），
+	//     两种偏移下「昨天的分区」都已封口完毕，既不会碰到正在写入的当前 UTC 分区，
+	//     也不会让刚封口的分区等太久。故本地整点是安全且更贴合运维直觉的选择。
+	//   - 代价：多节点跨时区部署时各节点在不同墙上时刻搬运。可接受——搬运是各节点独立动作，
+	//     不需要节点间同步；需要严格对齐时把各节点进程时区统一（或统一写 UTC 的 19 点）。
+	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
+
+// SweepAtHourIntervalTicker 是 SweepAtHour 的**兼容档**取值：不启用每日固定时刻调度，
+// 回退到按 Trigger.Interval 的间隔 ticker（本项引入前的旧行为）。
+//
+// 保留它而不是直接删掉 Interval 键：存量配置里 `trigger.interval` 是真实存在且被文档化过的键，
+// 删掉会让它被 viper 静默丢弃（本包已经吃过一次「键配了不生效」的亏，见 B1），
+// 而「静默丢弃」比「多一个显式的兼容档」危险得多。
+const SweepAtHourIntervalTicker = -1
+
+// DefaultSweepAtHour 每日搬运触发的默认小时：凌晨 3 点（本地时区）。
+//
+// 取 3 点的理由：业务低峰、且离本地午夜有 3 小时余量——UTC 日分区的封口、迟到事件的补录、
+// 上一轮未完成的迁移都还在「最近几小时」的窗口内，凌晨 3 点动手不会与正在写入的路径抢同一分区。
+const DefaultSweepAtHour = 3
 
 // DefaultTriggerMinAge 是磁盘触发时的最小分区年龄。
 //
@@ -44,11 +79,14 @@ type Trigger struct {
 // 又必须明显短于热层窗口（30d），才能让「提前搬」真的提前。
 const DefaultTriggerMinAge = 7 * 24 * time.Hour
 
-// DefaultDriverInterval 是冷层搬运的默认调度周期。
+// DefaultDriverInterval 是冷层搬运在 ticker 兼容档下的默认调度周期。
 //
 // 取 15 分钟而不是沿用删除扫描的 1h：搬运是**到期数据的默认动作**，间隔即「到期后最多
 // 多久才搬」，而热层 TTL 与 VL 原生 retention 之间没有余量，长间隔会让超期数据继续占着热层。
 // 单轮只是列举分区 + 算计划（只有到点分区才真的搬），代价与间隔不成问题。
+//
+// 默认调度是「每天固定时刻」（见 DefaultSweepAtHour），本值只在 `sweep_at_hour: -1`
+// 的兼容档下生效；保留它是为了让存量的 `trigger.interval` 配置不变成静默失效的死键。
 const DefaultDriverInterval = 15 * time.Minute
 
 // Normalize 补齐缺省。
@@ -58,6 +96,13 @@ func (t Trigger) Normalize() Trigger {
 	}
 	if t.Interval <= 0 {
 		t.Interval = DefaultDriverInterval
+	}
+	// 越界值归一为默认值，保证运行期不会出现「每天 25 点」这类怪行为；
+	// 真正的拒错在 Validate（启用时启动即拒）。
+	// 注意 0 是**有效值**（本地午夜 0 点），所以「未配置」不能用 0 表达：
+	// 生产装配路径（DefaultPolicy / config.RetentionPolicy）总会填入具体值。
+	if t.SweepAtHour < SweepAtHourIntervalTicker || t.SweepAtHour > 23 {
+		t.SweepAtHour = DefaultSweepAtHour
 	}
 	return t
 }
@@ -113,8 +158,9 @@ func parseUTCDay(raw string) (time.Time, bool) {
 // PlanArchiveWithTrigger 在年龄口径之外叠加磁盘水位触发（取先到）。
 //
 // diskPercent <= 0 或未达阈值时，行为与 PlanArchive 完全一致（纯年龄）。
-func (p Policy) PlanArchiveWithTrigger(now time.Time, partitions []PartitionRef, moverAvailable bool, diskPercent float64) []ArchivePlanTarget {
-	out := p.PlanArchive(now, partitions, moverAvailable)
+// archiverAvailable 语义与 PlanArchive 的第四个参数一致。
+func (p Policy) PlanArchiveWithTrigger(now time.Time, partitions []PartitionRef, moverAvailable, archiverAvailable bool, diskPercent float64) []ArchivePlanTarget {
+	out := p.PlanArchive(now, partitions, moverAvailable, archiverAvailable)
 	if len(out) == 0 {
 		return out
 	}
@@ -186,19 +232,25 @@ type Driver struct {
 	exec     *ArchiveExecutor
 	disk     DiskReader
 	interval time.Duration
+	// sweepAtHour 每日触发时刻（本地整点）；SweepAtHourIntervalTicker 表示回退 ticker 兼容档。
+	sweepAtHour int
 }
 
 // NewDriver 创建驱动器。disk 为 nil 时只按年龄触发。
 //
-// 调度周期取 `trigger.interval`（搬运自己的键），**不再**复用 `sweep.interval`（删除扫描间隔）：
-// 两者语义不同，共用会变成不可见的调参耦合（见 Trigger.Interval 的说明）。
+// 调度口径取 `trigger.sweep_at_hour`（每天该本地整点跑一轮，默认凌晨 3 点）；
+// 只有把该键显式配成 -1 时才回退 `trigger.interval` 的间隔 ticker（旧行为）。
+// 两者都**不再**复用 `sweep.interval`（删除扫描间隔）：语义不同，共用会变成不可见的调参耦合
+// （见 Trigger.Interval 的说明）。
 func NewDriver(policy Policy, lister PartitionLister, mover Mover, disk DiskReader) *Driver {
+	trig := policy.Trigger.Normalize()
 	return &Driver{
-		policy:   policy,
-		lister:   lister,
-		exec:     NewArchiveExecutor(policy, mover),
-		disk:     disk,
-		interval: policy.Trigger.Normalize().Interval,
+		policy:      policy,
+		lister:      lister,
+		exec:        NewArchiveExecutor(policy, mover),
+		disk:        disk,
+		interval:    trig.Interval,
+		sweepAtHour: trig.SweepAtHour,
 	}
 }
 
@@ -211,7 +263,9 @@ func (d *Driver) SetPolicy(p Policy) {
 	if d.exec != nil {
 		d.exec.SetPolicy(p)
 	}
-	d.interval = p.Trigger.Normalize().Interval
+	trig := p.Trigger.Normalize()
+	d.interval = trig.Interval
+	d.sweepAtHour = trig.SweepAtHour
 }
 
 // Executor 返回内部执行器（观测面读 Stats 用）。
@@ -223,11 +277,45 @@ func (d *Driver) Executor() *ArchiveExecutor {
 }
 
 // Interval 返回调度间隔。
+//
+// 只在 ticker 兼容档（SweepAtHour = -1）下决定节奏；每日固定时刻调度不看它。
 func (d *Driver) Interval() time.Duration {
 	if d == nil || d.interval <= 0 {
 		return DefaultSweepInterval
 	}
 	return d.interval
+}
+
+// SweepAtHour 返回每日触发时刻（本地整点 0..23）；返回 SweepAtHourIntervalTicker 表示 ticker 兼容档。
+func (d *Driver) SweepAtHour() int {
+	if d == nil {
+		return DefaultSweepAtHour
+	}
+	return d.sweepAtHour
+}
+
+// DescribeSchedule 返回调度口径的一句话说明（启动日志用）。
+//
+// 为什么要有它：改成每日固定时刻之后，日志里若还只打「interval=15m」，读到的人会以为
+// 仍是按分钟级周期在搬——调度口径是本功能的**主要参数**，读日志必须能一眼确认它。
+func (d *Driver) DescribeSchedule() string {
+	if d == nil {
+		return "未装配"
+	}
+	if h := d.SweepAtHour(); h >= 0 {
+		return fmt.Sprintf("每天 %02d:00（进程本地时区 %s）执行一轮", h, localZoneLabel())
+	}
+	return fmt.Sprintf("按间隔 %s 执行一轮（ticker 兼容档）", d.Interval())
+}
+
+// localZoneLabel 返回本地时区标识，取不到名字时退回偏移量。
+func localZoneLabel() string {
+	if name, _ := time.Now().Zone(); name != "" {
+		return name
+	}
+	// 容器里常拿不到时区名（无 /etc/localtime、无 TZ），退回偏移量——
+	// 至少能看出「本地 3 点」与 UTC 差多少，不至于让人以为按 UTC 在跑。
+	return time.Now().Format("-07:00")
 }
 
 // Step 执行一轮：列分区 → 过滤 → 算计划（年龄 + 磁盘取先到）→ 执行。
@@ -264,7 +352,14 @@ func (d *Driver) Step(ctx context.Context, now time.Time) (DriverResult, error) 
 		// 读数拿不到就退回纯年龄口径：磁盘读数失败不是「盘满了」的证据，
 		// 用猜测去触发提前归档会让「紧急」这个词失去意义。
 	}
-	plan := d.policy.PlanArchiveWithTrigger(now, candidates, d.exec != nil && d.exec.mover != nil, diskPercent)
+	// 两条归档路径的可用性分别传入：冷层断了但归档还通，是必须能表达的真实状态。
+	// 归档侧用 ArchiverAvailable()（= 装配了出口 **且** 策略开关打开），
+	// 与执行阶段同一判据，避免「计划说能导、执行说不能」。
+	var archiverAvailable bool
+	if d.exec != nil {
+		archiverAvailable = d.exec.ArchiverAvailable()
+	}
+	plan := d.policy.PlanArchiveWithTrigger(now, candidates, d.exec != nil && d.exec.mover != nil, archiverAvailable, diskPercent)
 
 	// 计划里未到点的目标交给执行器（它会记 NotDue）；到点的按动作执行。
 	outcomes := d.exec.ExecutePlanned(ctx, now, plan)
@@ -287,17 +382,25 @@ func (d *Driver) Step(ctx context.Context, now time.Time) (DriverResult, error) 
 	return res, nil
 }
 
-// Run 周期调度 Step，直到 ctx 结束。
+// Run 按调度口径反复执行 Step，直到 ctx 结束。
 //
-// 首轮**立即执行**（不等待第一个 tick）：启动时正是「上一次停机期间攒下的过期分区」
-// 最需要处理的时刻，等一个间隔才动手会让停机越久恢复越慢。
+// 调度口径（默认）：**每天在本地时间的 SweepAtHour 整点跑一轮**（默认凌晨 3 点）。
+// 只有 SweepAtHour 配成 SweepAtHourIntervalTicker(-1) 时才回退到 Interval 间隔 ticker。
+//
+// 为什么不是间隔 ticker（见 Trigger.SweepAtHour 的完整说明）：分区按 UTC 天切，
+// 一天只产生一个新分区，分钟级/小时级 ticker 的轮次几乎全部空转。
+//
+// 首轮**立即执行**（不等第一个目标时刻），这是**有意保留**的既有语义，不是没改干净：
+//   - 原设计的理由仍然成立且更重要：启动时正是「上一次停机期间攒下的过期分区」最需要
+//     处理的时刻；若首轮也要等到明天凌晨 3 点，一次重启就可能让超期分区多压一整天。
+//   - 而且迁移失败的重试也需要「启动即续跑」——Retryable 的迁移只有在后续轮次里才会被续跑，
+//     等一整天等于把一次失败放大成一天的中断。
+//   - 故：**每次进程启动先跑一轮，之后按每日固定时刻跑**。热层因此至多多留一天（一次重启），
+//     这是可接受的代价，而「重启即刻恢复」是不可省的。
 func (d *Driver) Run(ctx context.Context) {
 	if d == nil || !d.policy.Enabled {
 		return
 	}
-	interval := d.Interval()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 	for {
 		res, err := d.Step(ctx, time.Now())
 		if err != nil {
@@ -310,10 +413,62 @@ func (d *Driver) Run(ctx context.Context) {
 				"listed", res.Listed, "skipped", res.Skipped, "due", res.Due,
 				"moved", res.Moved, "keptOriginal", res.KeptOriginal, "notDue", res.NotDue)
 		}
-		select {
-		case <-ctx.Done():
+		if !d.waitNext(ctx, time.Now()) {
 			return
-		case <-ticker.C:
 		}
 	}
+}
+
+// waitNext 等到下一个触发时刻，返回 false 表示 ctx 已结束。
+//
+// 用 time.Timer 而不是 time.Sleep：等待期间必须能被 ctx 及时打断（进程退出、
+// 采集运行时重建），否则一天的长等待会让关闭流程挂住最多 24 小时。
+func (d *Driver) waitNext(ctx context.Context, now time.Time) bool {
+	timer := time.NewTimer(d.untilNext(now))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// untilNext 返回从 now 到下一次触发还有多久。
+func (d *Driver) untilNext(now time.Time) time.Duration {
+	if h := d.SweepAtHour(); h >= 0 {
+		return nextSweepAt(now, h).Sub(now)
+	}
+	// ticker 兼容档：等价于旧行为的下一次 tick。
+	return d.Interval()
+}
+
+// SweepWaitBudget 返回「分区到点 → 驱动器真的开始搬」的最坏等待预算（启层余量校验用）。
+//
+// 每日固定时刻调度下最坏等待是**一整天**：分区若在当天目标时刻后一瞬到点，就要等到明天的整点。
+// 余量校验必须按这个上界预留——若仍按 ticker 的 15m 计算，
+// 「原生 TTL 只比热窗口多一两天」的配置会通过校验，然后在真机上被 VL 原生淘汰抢先删掉，
+// 而这正是这条校验存在的理由。
+func (p Policy) SweepWaitBudget() time.Duration {
+	trig := p.Trigger.Normalize()
+	if trig.SweepAtHour >= 0 {
+		return 24 * time.Hour
+	}
+	return trig.Interval
+}
+
+// nextSweepAt 返回 now 之后的下一个 hour 整点（时区跟随 now 的时区）。
+//
+// 「之后」是**严格**大于：轮次跑完时若正好落在整点（或整点后的极短时间），
+// 用严格大于可以避免「刚跑完就立刻再跑一轮」的空转；首轮的立即执行已经覆盖了
+// 「启动时刻恰好就是目标时刻」这一场景，故不会漏掉当天的那一轮。
+//
+// 跨日顺延用 AddDate(0, 0, 1) 而不是 +24h：前者保持墙上时刻的整点不变，
+// 在有夏令时的时区里不会漂成 2 点或 4 点。
+func nextSweepAt(now time.Time, hour int) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
 }

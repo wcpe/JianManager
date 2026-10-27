@@ -69,6 +69,10 @@
 
 > **2026-10-11 订正（G10 口径）**：本节标题与原文宣称的「运行期」不成立——`apps/worker/main.go` 里的 `logLevelVar` 是 `runWorker` 的**局部变量**，只用于构造 `slog.HandlerOptions{Level: …}`，没有任何可达的调整入口（既无设置项、无 RPC/HTTP 端点，也无信号处理）。实际语义是**启动期生效、调整需重启**。原决策「把等级装配上、非法值启动即拒」继续有效；「运行期动态调级」如仍要做，须另立入口（属 G10 未实现项）。
 
+> **2026-10-26 订正（推翻上一条订正的结论）**：上条所述「运行期动态调级须另立入口（属 G10 未实现项）」**已完成**。入口为 `retention.NewLogLevelController(*slog.LevelVar)`，注册在 `apps/worker/main.go` 的 `wsMux` 路径 `/debug/log-level`：`GET` 读当前等级，`POST` 设置新等级。实机已验：`info → debug` 后即刻输出 `level=DEBUG` 行，无需重启。
+> 边界（与实现注释一致，勿夸大）：① 只调**等级**，不改格式（json/text 在装配期定型，改它须重建 handler）；② 只影响本进程已装配的 handler，子进程（wrapper/java/VL）日志不受影响；③ **不持久化**，重启回到 `log.level` 配置值——运行期调级是应急手段，不该悄悄改掉配置文件里声明的事实；④ 无鉴权，依赖与 pprof 相同的 127.0.0.1 回环绑定不新增暴露面。
+> 本节标题与正文所述「现场排障改等级需改配置并重启 Worker」自此**不再成立**。
+
 ### 7. 多租户配额（D4）：先可见性，后强制
 
 - 现有 `GroupQuota` 只有 `MaxInstances/MaxBots/MaxStorageMB` 与 `EnforceMode(alert|throttle|stop)`，**没有日志量维度**；

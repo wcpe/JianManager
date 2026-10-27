@@ -32,7 +32,7 @@ func TestRV014PeriodicAdoptionIsolation(t *testing.T) {
 				return 2, nil
 			}
 			if mode == "归属失败" {
-				f.m.recoverVerifyOwner = func(int, string, string, bool) bool { return false }
+				f.m.adoptVerifyOwner = func(int, string, string, bool) (bool, string) { return false, "test_denied" }
 			}
 			if mode == "拨号失败" {
 				f.m.recoverDial = func(*daemonStrategy, string) error { return errors.New("不可达") }

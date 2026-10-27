@@ -111,6 +111,14 @@ type Sweep struct {
 	Interval time.Duration `mapstructure:"interval"`
 	// Timeout 单次删除请求超时；<=0 取 DefaultSweepTimeout。
 	Timeout time.Duration `mapstructure:"timeout"`
+	// VLDeleteEnabled 报告受管 VL 进程是否带 `-delete.enable`（VL 侧那一道闸）。
+	//
+	// 为什么这一闸要放进本包：它是删除三闸里的第三道，而三闸的判定必须只有一个来源
+	// （见 Policy.DeleteGatesOpen）。若把「VL 是否允许删除」留在装配侧自己记着，
+	// 迟早会出现「策略说三闸全开、VL 其实没开」的分裂读数。
+	//
+	// 本字段只**声明事实**，不负责打开 VL 的参数（那是 vlsup 的事）。
+	VLDeleteEnabled bool `mapstructure:"-"`
 }
 
 // DefaultSweepTimeout 单次删除请求超时。
@@ -143,6 +151,50 @@ type Policy struct {
 	// 执行（见 vlsup 的按 namespace retention）。放在策略里是为了让「热多久 / 冷多久」
 	// 在同一处可读、可校验，而不是散在两个配置段里各说各话。
 	ColdRetention time.Duration `mapstructure:"cold_retention"`
+	// ArchiveCopy 是硬规则的**次选**路径：搬不了冷层时导出为独立副本。
+	//
+	// 默认关闭（零行为变化）：它把数据写到另一个目的地，那是运维必须明确授权的事——
+	// 「归档根目录写在哪、写多少、谁来清理」都不是平台能替运维默认的。
+	ArchiveCopy ArchiveCopyPolicy `mapstructure:"archive_copy"`
+}
+
+// ArchiveCopyPolicy 是「导出归档」这条次选路径的开关。
+//
+// 为什么只有一个开关：目的地/压缩/manifest 布局都属于实现细节，由装配侧（谁能提供
+// 归档 Provider、根目录在哪）决定；策略层只该回答「允不允许把到期数据导出」。
+type ArchiveCopyPolicy struct {
+	// Enabled 是否允许在搬不了冷层时导出为独立副本（默认 false）。
+	//
+	// 打开它**不等于**允许删热层：回收还要过删除三闸（见 Policy.DeleteGatesOpen）。
+	Enabled bool `mapstructure:"enabled"`
+}
+
+// DeleteGatesOpen 报告**删除三闸**是否同时成立，第二返回值是未成立的原因。
+//
+// 三闸（护栏要求默认全关，且三者**相互独立**）：
+//  1. 意图闸 `log_retention.discard`：运维显式声明「我知道这会永久删掉日志」；
+//  2. 执行闸 `log_retention.sweep.vl_sweep`：运维显式打开删除执行路径；
+//  3. VL 侧闸 `log_vl.delete_enabled`：受管 VL 进程真的带 `-delete.enable`
+//     （VL 自身默认关，没这条参数时 /delete/* 一律 400）。
+//
+// 为什么回收热层也要过这三闸而不能另造一套：`ActionArchiveCopy` 校验通过后的那一步
+// 与 `ActionDiscard` 删的是**同一样东西**（一个日分区的热层数据），后果同样是不可逆的。
+// 换一条路径就换一套闸门，等于把「三闸」变成「看情况几闸」——而闸门数量正是它的安全论证。
+//
+// 注意本方法**不做任何副作用判断**（不检查出口是否装配）：那是调用方的第二层判据，
+// 两者都要满足才允许删。这里只回答「运维授权是否齐了」这一个问题。
+func (p Policy) DeleteGatesOpen() (bool, string) {
+	n := p.Normalize()
+	if !n.Discard {
+		return false, "意图闸 log_retention.discard 未打开"
+	}
+	if !n.Sweep.VLSweep {
+		return false, "执行闸 log_retention.sweep.vl_sweep 未打开"
+	}
+	if !n.Sweep.VLDeleteEnabled {
+		return false, "VL 侧闸 log_vl.delete_enabled 未打开（受管 VL 缺 -delete.enable）"
+	}
+	return true, ""
 }
 
 // DefaultPolicy 返回 D1 推荐的保留策略。
@@ -160,6 +212,7 @@ func DefaultPolicy() Policy {
 			"ERROR": DefaultTTLError,
 		},
 		Sweep:         Sweep{Interval: DefaultSweepInterval, Timeout: DefaultSweepTimeout},
+		Trigger:       Trigger{SweepAtHour: DefaultSweepAtHour},
 		HotRetention:  DefaultHotRetention,
 		ColdRetention: DefaultColdRetention,
 	}
@@ -229,6 +282,13 @@ func (p Policy) Validate() error {
 	}
 	if math.IsNaN(p.Trigger.DiskPercent) || math.IsInf(p.Trigger.DiskPercent, 0) || p.Trigger.DiskPercent < 0 || p.Trigger.DiskPercent > 100 {
 		return fmt.Errorf("retention: trigger.disk_percent 必须在 0..100，得到 %v", p.Trigger.DiskPercent)
+	}
+	// 每日触发时刻：0..23 是本地整点，-1 是「回退间隔 ticker」的兼容档；其余一律拒绝。
+	// 为什么启动即拒而不是归一：时刻配错的后果是「搬运永远在业务高峰跑」（写错 13 与 3 只差一个数字），
+	// 现场只会表现为「盘上涨得比预期快」，从日志里几乎看不出来。归一化会把这种配置事故静默吃掉。
+	if p.Trigger.SweepAtHour < SweepAtHourIntervalTicker || p.Trigger.SweepAtHour > 23 {
+		return fmt.Errorf("retention: trigger.sweep_at_hour 必须在 %d..23（%d = 回退间隔 ticker，0 = 本地午夜），得到 %d",
+			SweepAtHourIntervalTicker, SweepAtHourIntervalTicker, p.Trigger.SweepAtHour)
 	}
 	for k, v := range p.ByLevel {
 		if LevelKeyOf(k) == "" {

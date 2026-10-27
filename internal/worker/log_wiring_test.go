@@ -293,3 +293,49 @@ func TestVerifyAndHotBudgetKeysBindFromYAML(t *testing.T) {
 		t.Fatalf("非法值应原样交由 ingest 归一化（非正 → 默认），实测 %d", badBudget.MaxPerSecond)
 	}
 }
+
+// TestEventStoreManifestTuningKeysBindFromYAML 守住机械盘 IO 收敛的两枚旋钮真的从 YAML
+// 绑到 ingest 档位（键 log_index.persist.manifest_sync_every / manifest_sync_interval）。
+//
+// 为什么必须钉住：这两个键的默认值（0/0）本身就"很省"，所以「没接线」在功能上看不出来
+// （生产照常运行、照常省 IO），运维想调新鲜度时才会发现改了没反应 —— 正是本文件开头说的
+// 那一类「配置存在但没装配点」的缺陷。
+func TestEventStoreManifestTuningKeysBindFromYAML(t *testing.T) {
+	root := t.TempDir()
+	yml := filepath.Join(root, "worker.yml")
+	if err := os.WriteFile(yml, []byte(strings.Join([]string{
+		"log_index:",
+		"  persist:",
+		"    manifest_sync_every: 12",
+		"    manifest_sync_interval: 45s",
+	}, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("写测试 yml 失败: %v", err)
+	}
+	cfg, err := Load(yml)
+	if err != nil {
+		t.Fatalf("载入测试 yml 失败: %v", err)
+	}
+	every, interval := cfg.EventStoreManifestTuning()
+	if every != 12 {
+		t.Fatalf("log_index.persist.manifest_sync_every 未绑定：%d", every)
+	}
+	if interval != 45*time.Second {
+		t.Fatalf("log_index.persist.manifest_sync_interval 未绑定：%v", interval)
+	}
+	// 默认（零配置）= 两维都不设上界 ⇒ 只在段集合变化时落清单（最省 IO 且不丢事件体）。
+	cfg.LogIndex.Persist.ManifestSyncEvery = 0
+	cfg.LogIndex.Persist.ManifestSyncInterval = ""
+	if every, interval := cfg.EventStoreManifestTuning(); every != 0 || interval != 0 {
+		t.Fatalf("零配置必须回退 (0,0)，实测 (%d,%v)", every, interval)
+	}
+	// 非法 duration 回退 0 而不是让滞后上界变成负/未定义。
+	cfg.LogIndex.Persist.ManifestSyncInterval = "不是时长"
+	if _, interval := cfg.EventStoreManifestTuning(); interval != 0 {
+		t.Fatalf("非法 manifest_sync_interval 必须回退 0，实测 %v", interval)
+	}
+	// 负值按 0 处理：「不想滞后」应写 1，而不是负数（负数不该被解释成"更激进地滞后"）。
+	cfg.LogIndex.Persist.ManifestSyncEvery = -5
+	if every, _ := cfg.EventStoreManifestTuning(); every != 0 {
+		t.Fatalf("负的 manifest_sync_every 必须按 0 处理，实测 %d", every)
+	}
+}

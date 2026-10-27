@@ -20,6 +20,8 @@ func TestPolicyRejectsRawExecutionValues(t *testing.T) {
 		{Enabled: true, Trigger: Trigger{DiskPercent: 101}},
 		{Enabled: true, Trigger: Trigger{MinAge: -time.Hour}},
 		{Enabled: true, Trigger: Trigger{Interval: -time.Hour}},
+		{Enabled: true, Trigger: Trigger{SweepAtHour: 24}},
+		{Enabled: true, Trigger: Trigger{SweepAtHour: -2}},
 	} {
 		if err := p.Validate(); err == nil {
 			t.Errorf("必须拒绝原始非法策略：%+v", p)

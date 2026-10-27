@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
@@ -37,6 +38,17 @@ const (
 	manifestName  = "MANIFEST.json"
 	manifestVer   = 1
 )
+
+// segmentFileName 是段文件的唯一命名来源：清单校验、追加建段、回收前移都必须走它，
+// 避免「Seq 与文件名」的对应关系在多处各写一遍而分叉。
+func segmentFileName(seq int) string {
+	return fmt.Sprintf("%s%06d%s", segmentPrefix, seq, segmentSuffix)
+}
+
+// isSegmentName 报告名字是否落在段命名空间内（与 loadManifest 的物理段识别同一判据）。
+func isSegmentName(name string) bool {
+	return strings.HasPrefix(name, segmentPrefix) && strings.HasSuffix(name, segmentSuffix)
+}
 
 // ErrCorrupt 表示段内容损坏（非尾部截断），调用方必须硬失败而不是继续。
 var ErrCorrupt = errors.New("eventstore: corrupt segment")
@@ -74,6 +86,10 @@ type Store struct {
 	byKey    map[string]*section
 	closed   bool
 	readOnly bool
+	// manifestSyncEvery / manifestSyncInterval 是新建源的清单落盘策略模板
+	// （见 SetManifestSyncPolicy；默认零值 = 只在段集合变化时落盘）。
+	manifestSyncEvery    int
+	manifestSyncInterval time.Duration
 }
 
 type section struct {
@@ -91,6 +107,27 @@ type section struct {
 	verified   bool
 	active     *os.File
 	activeMeta *SegmentMeta
+	// liveSnapshots 是在途 ReadSnapshot 计数（受 viewMu 保护）。
+	// 回收会前移段名，使已复制清单的读者手里那条路径失效，故有读者时一律不回收。
+	liveSnapshots int
+	// pruneActive 表示该源正在回收（受 viewMu 保护）：此刻清单与段名可能短暂不一致，
+	// 新读者必须被挡住而不是拿到撕裂视图。
+	pruneActive bool
+	// manifestSyncEvery / manifestSyncInterval 是本源「清单落盘收敛」的两个上界
+	// （≤0 表示该维度不设上界；两者都为 0 即「只在段集合变化时落盘」）。见 manifestPersistDueLocked。
+	manifestSyncEvery    int
+	manifestSyncInterval time.Duration
+	// manifestDirtyAppends 是自上次清单落盘以来的追加次数（受 mu 保护）。
+	manifestDirtyAppends int
+	// manifestPersistedAt 是上次清单落盘完成的时刻（受 mu 保护；零值表示尚未落盘）。
+	manifestPersistedAt time.Time
+	// manifestDirty 表示内存清单有**未落盘**的变更（受 mu 保护）。
+	// 它存在的意义：策略允许把「派生元数据」的落盘滞后，但**干净关闭必须收尾**——
+	// 否则一次正常停机也会在磁盘上留下滞后清单，让运维看到的 MANIFEST.json 与实际段不符。
+	manifestDirty bool
+	// segmentCreated 表示本批追加新建了段（受 mu 保护）。段集合是**非派生**信息：
+	// 清单与物理段不一致会让重启直接硬失败（unlisted durable segment），故它的落盘永不滞后。
+	segmentCreated bool
 }
 
 // Open 打开（必要时创建）事件体根目录并载入各源清单。
@@ -123,6 +160,11 @@ func openStore(root string, readOnly bool) (*Store, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
+		// 回收前滚必须早于清单载入：中途崩溃的目录对 loadManifest 而言是「清单与物理段不符」，
+		// 先把它收敛到某一份完整清单再校验，才谈得上「失败即拒绝启动」。
+		if err := recoverPruneJournal(dir, !readOnly); err != nil {
+			return nil, err
+		}
 		mf, err := loadManifest(dir)
 		if err != nil {
 			return nil, err
@@ -137,7 +179,8 @@ func openStore(root string, readOnly bool) (*Store, error) {
 		if _, duplicate := s.byKey[mf.Key]; duplicate {
 			return nil, fmt.Errorf("%w: duplicate source key %q", ErrCorrupt, mf.Key)
 		}
-		s.byKey[mf.Key] = &section{dir: dir, manifest: cloneManifest(mf), committed: cloneManifest(mf), initialized: true, readOnly: readOnly}
+		s.byKey[mf.Key] = &section{dir: dir, manifest: cloneManifest(mf), committed: cloneManifest(mf), initialized: true, readOnly: readOnly,
+			manifestSyncEvery: s.manifestSyncEvery, manifestSyncInterval: s.manifestSyncInterval}
 	}
 	return s, nil
 }
@@ -150,6 +193,41 @@ func (s *Store) SetMaxSegmentBytes(n int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.maxSeg = n
+}
+
+// SetManifestSyncPolicy 设置「清单落盘收敛」的两个上界（0 表示该维度不设上界）。
+//
+// 背景（机械盘 IO 收敛，2026-xx）：追加路径原先**每批**都重写并 fsync 清单
+// （`write tmp` → `fsync` → `rename` → `fsync(dir)`），叠加段数据自身的 fsync，一次
+// `Append` 就是 3 次耐久调用。而清单里**未封末段**的 count/bytes/minEnd/maxEnd/首末身份
+// 都是**可从段内容逐字段重算**的派生信息（`scanSegment`/`calibrateSegment`），因此
+// 「清单暂时落后于实物」在重启时会被校准精确修复，不丢任何事件体。
+//
+// 语义边界（不降级安全性）：
+//   - **段集合**变化（新建段、段被封印）永远**立即**落盘 —— 否则重启会看到
+//     `unlisted durable segment`（不可接受）或把已封段当未封段；
+//   - 未封末段的**派生元数据**允许滞后，由 `calibrateSegment` 在下次打开时按实物精确重建；
+//   - 进程内读侧（快照/计数）**立即**看到新元数据（`publishManifestLocked`），不受本策略影响。
+//
+// every > 0 表示「最多滞后 every 次追加」；interval > 0 表示「最多滞后一个时间窗」。
+// 两者都为 0（默认）= 只在段集合变化时落盘 —— 这是机械盘上的最优设置，且不丢数据。
+func (s *Store) SetManifestSyncPolicy(every int, interval time.Duration) {
+	if every < 0 {
+		every = 0
+	}
+	if interval < 0 {
+		interval = 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.manifestSyncEvery = every
+	s.manifestSyncInterval = interval
+	for _, sec := range s.byKey {
+		sec.mu.Lock()
+		sec.manifestSyncEvery = every
+		sec.manifestSyncInterval = interval
+		sec.mu.Unlock()
+	}
 }
 
 func sectionDirName(key string) string {
@@ -208,7 +286,7 @@ func loadManifest(dir string) (Manifest, error) {
 	seenSeq := make(map[int]bool, len(mf.Segments))
 	for i, meta := range mf.Segments {
 		if meta.Seq != i+1 || seenSeq[meta.Seq] || meta.Count < 0 || meta.Bytes < 0 ||
-			meta.Name != fmt.Sprintf("%s%06d%s", segmentPrefix, meta.Seq, segmentSuffix) ||
+			meta.Name != segmentFileName(meta.Seq) ||
 			(i < len(mf.Segments)-1 && !meta.Sealed) {
 			return mf, fmt.Errorf("%w: invalid segment metadata in %s", ErrCorrupt, dir)
 		}
@@ -305,7 +383,8 @@ func (s *Store) section(key string, create bool) (*section, error) {
 	}
 	dir := filepath.Join(s.root, sectionDirName(key))
 	mf := Manifest{Version: manifestVer, Key: key}
-	sec = &section{dir: dir, manifest: mf, committed: cloneManifest(mf)}
+	sec = &section{dir: dir, manifest: mf, committed: cloneManifest(mf),
+		manifestSyncEvery: s.manifestSyncEvery, manifestSyncInterval: s.manifestSyncInterval}
 	s.byKey[key] = sec
 	return sec, nil
 }
@@ -376,6 +455,8 @@ func (sec *section) appendLocked(events []logtypes.Event, maxSeg int64) error {
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("eventstore: flush segment: %w", err)
 	}
+	// 段数据 fsync：**不可省** —— 调用方（ingest）在元数据里引用这些事件之前，本批必须耐久。
+	observeSync(obsSyncSegment)
 	if err := sec.active.Sync(); err != nil {
 		return fmt.Errorf("eventstore: fsync segment: %w", err)
 	}
@@ -385,12 +466,27 @@ func (sec *section) appendLocked(events []logtypes.Event, maxSeg int64) error {
 	}
 	sec.activeMeta.Bytes = st.Size()
 	sec.upsertMetaLocked()
+	// setChanged：段集合（新建段 / 封印标记）发生变化 ⇒ 清单**必须**立即落盘，不可滞后。
+	// 段集合是**非派生**信息：清单与物理段不一致会让重启直接硬失败（unlisted durable segment）。
+	setChanged := sec.segmentCreated
+	sec.segmentCreated = false
 	if sec.activeMeta.Bytes >= maxSeg {
 		if err := sec.sealLocked(); err != nil {
 			return err
 		}
+		setChanged = true
 	}
-	return sec.writeManifestLocked()
+	sec.manifestDirty = true
+	if setChanged || sec.manifestPersistDueLocked() {
+		// 走持久化：清单发布只允许发生在**落盘成功之后**（失败不得把候选元数据泄给读侧，
+		// 见 TestFailedManifestPublicationCannotLeakUncommittedMetadata）。
+		return sec.persistManifestLocked()
+	}
+	// 清单滞后但**可校准修复**：未封末段的 count/bytes/首末身份/覆盖区间都是派生值，
+	// 下次打开由 calibrateSegment 按段内容逐字段重算（事件体本身已 fsync，一个不丢）。
+	// 但进程内读者不能滞后——否则重算差集时以为事件还不存在，会重复追加放大写入。
+	sec.publishManifestLocked()
+	return nil
 }
 
 // Iterate 按一次固定快照流式读回完整事件，回调可重入本存储；返回错误即中止。
@@ -531,6 +627,16 @@ func (s *Store) Close() error {
 			}
 			sec.active = nil
 		}
+		// 干净关闭**尽力**把滞后的清单收尾（见 manifestDirty 的说明）：停机后磁盘上的
+		// MANIFEST.json 与实际段一致，运维与只读取证看到的才是真身，而不是「待校准」状态。
+		//
+		// 为什么这里的失败**不**传播给调用方：收尾只是一次便利性的收敛，不是正确性依赖——
+		// 清单滞后本来就被「下次打开按段内容精确校准」兜住（与崩溃走同一条恢复路径）。
+		// 而 Close 的既有契约是「关句柄」，若在清单路径损坏时新增一个关闭期错误，会让
+		// Worker 停机流程凭空多出一种失败态，收益与代价不相称。
+		if sec.manifestDirty && sec.initialized && !sec.readOnly {
+			_ = sec.persistManifestLocked()
+		}
 		sec.mu.Unlock()
 	}
 	return firstErr
@@ -553,7 +659,7 @@ func (sec *section) openActive(maxSeg int64) error {
 			return nil
 		}
 	}
-	name := fmt.Sprintf("%s%06d%s", segmentPrefix, len(sec.manifest.Segments)+1, segmentSuffix)
+	name := segmentFileName(len(sec.manifest.Segments) + 1)
 	f, err := os.OpenFile(filepath.Join(sec.dir, name), os.O_CREATE|os.O_EXCL|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("eventstore: create segment: %w", err)
@@ -561,6 +667,10 @@ func (sec *section) openActive(maxSeg int64) error {
 	sec.active = f
 	sec.manifest.Segments = append(sec.manifest.Segments, SegmentMeta{Seq: len(sec.manifest.Segments) + 1, Name: name})
 	sec.activeMeta = &sec.manifest.Segments[len(sec.manifest.Segments)-1]
+	// 段集合变化**必须**在本批末尾落盘（见 appendLocked 的 setChanged）。
+	// 不在这里提前落盘的理由：既有契约是「段数据 fsync 先于清单发布」，且崩溃恢复回归
+	// （snapshot_recovery_test.go）显式验证「数据已耐久、清单发布失败」这一现场必须可观测。
+	sec.segmentCreated = true
 	_ = maxSeg
 	return nil
 }
@@ -594,7 +704,48 @@ func (sec *section) sealLocked() error {
 	return nil
 }
 
+// writeManifestLocked 把清单**落盘**并在成功后**发布**给读侧。
+//
+// 保留这个名字（而不是让调用点直呼 persistManifestLocked）是为了让「段集合变化 / 校准修复 /
+// 建库 / 回收前移」这些**必须耐久**的路径有一个语义明确、不会被误改成滞后写入的入口；
+// 真正的落盘实现见 persistManifestLocked。
 func (sec *section) writeManifestLocked() error {
+	return sec.persistManifestLocked()
+}
+
+// publishManifestLocked 只把当前清单**发布**给读侧（快照/计数/按天覆盖），不做任何磁盘 IO。
+//
+// 与持久化分离的理由见 SetManifestSyncPolicy：清单里未封末段的派生元数据允许比实物滞后，
+// 但**进程内读者不能滞后**——否则读者会认为刚追加的事件还不存在（重算差集后重复追加）。
+func (sec *section) publishManifestLocked() {
+	sec.viewMu.Lock()
+	sec.committed = cloneManifest(sec.manifest)
+	sec.viewMu.Unlock()
+}
+
+// manifestPersistDueLocked 判断「派生元数据滞后」是否已达配置上界（0/0 表示不设上界）。
+func (sec *section) manifestPersistDueLocked() bool {
+	if sec.manifestSyncEvery <= 0 && sec.manifestSyncInterval <= 0 {
+		return false
+	}
+	sec.manifestDirtyAppends++
+	if sec.manifestSyncEvery > 0 && sec.manifestDirtyAppends >= sec.manifestSyncEvery {
+		return true
+	}
+	if sec.manifestSyncInterval > 0 {
+		if sec.manifestPersistedAt.IsZero() || time.Since(sec.manifestPersistedAt) >= sec.manifestSyncInterval {
+			return true
+		}
+	}
+	return false
+}
+
+// persistManifestLocked 把清单原子落盘（tmp → fsync → rename → fsync(dir)），成功后发布给读侧。
+//
+// 一次调用含 **2 次耐久 syscall**（清单文件 fsync + 目录 fsync），因此调用点必须受
+// SetManifestSyncPolicy / 段集合变化 的约束，不得在每次追加时无条件执行（机械盘每次
+// fsync 都是一次寻道；实测本路径是采集持久化的主要 IO 放大源）。
+func (sec *section) persistManifestLocked() error {
 	data, err := json.MarshalIndent(sec.manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("eventstore: marshal manifest: %w", err)
@@ -605,6 +756,7 @@ func (sec *section) writeManifestLocked() error {
 		return fmt.Errorf("eventstore: create manifest tmp: %w", err)
 	}
 	if _, err = f.Write(data); err == nil {
+		observeSync(obsSyncManifestFile)
 		err = f.Sync()
 	}
 	if closeErr := f.Close(); err == nil {
@@ -620,9 +772,10 @@ func (sec *section) writeManifestLocked() error {
 	if err := syncDir(sec.dir); err != nil {
 		return fmt.Errorf("eventstore: sync manifest directory: %w", err)
 	}
-	sec.viewMu.Lock()
-	sec.committed = cloneManifest(sec.manifest)
-	sec.viewMu.Unlock()
+	sec.manifestDirtyAppends = 0
+	sec.manifestPersistedAt = time.Now()
+	sec.manifestDirty = false
+	sec.publishManifestLocked()
 	return nil
 }
 
@@ -639,6 +792,7 @@ func syncDir(dir string) error {
 	if !info.IsDir() {
 		return errors.Join(fmt.Errorf("eventstore: expected directory: %s", dir), d.Close())
 	}
+	observeSync(obsSyncDirectory)
 	return errors.Join(syncDirectoryHandle(d), d.Close())
 }
 

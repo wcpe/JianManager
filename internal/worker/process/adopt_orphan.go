@@ -29,31 +29,39 @@ import (
 // 单一真源：worker 配置层（internal/worker/config.go 的 orphan_scan.auto_adopt）引用本常量。
 const DefaultOrphanAutoAdopt = true
 
-// AdoptUnmanagedDaemonInstances 执行一轮「未纳管活进程」自动收养（FR-497③）。返回成功收养数与观测结果。
+// unmanagedLiveRecord 一条「未纳管的活进程对」记录（FR-497③ 发现阶段产物，纯观测、无副作用）。
+type unmanagedLiveRecord struct {
+	instanceUUID string
+	rec          *daemon.PIDRecord
+}
+
+// discoverUnmanagedLiveRecords 是 FR-497③ 的**发现阶段**：枚举 PID 目录，返回本轮全部「PID 记录有效、
+// wrapper 与 Java 均存活、且本 Worker 尚未纳管」的记录。不拨号、不登记、不落审计、不碰进程。
 //
-// 逐条 PID 记录的判定顺序（任一前置条件不满足即跳过，绝不处置）：
+// 判据与收养阶段的前置条件逐条一致（见 AdoptUnmanagedDaemonInstances 的 1~3 条），故两个阶段不会分歧：
 //  1. 记录有效：WrapperPID / JavaPID 均 >0 且互不相同；记录内 InstanceUUID 非空时必须与文件名一致；
-//  2. wrapper 与 Java **均存活**（任一不活即跳过：wrapper 死/Java 活属周期扫描的处置域，不是收养域）；
-//  3. 未纳管（内存表无该 UUID，或有但无 strategy 且状态不属「可能仍有活进程」三态）——已纳管则跳过（幂等）；
-//  4. 归属复核通过（wrapper 分支带环境 UUID 确证，Java 分支按 cmdline/cwd 匹配；复核不过只告警不收养）。
+//  2. wrapper 与 Java **均存活**（任一不活即跳过：wrapper 死/Java 活属周期扫描的处置域，不是本相）；
+//  3. 未纳管（内存表无该 UUID，或有但无 strategy 且状态不属「可能仍有活进程」三态）——已纳管则跳过（幂等）。
 //
-// 收养动作 = 构造 daemon 策略 + **单次** reconnect 拨号 + 登记 RUNNING（复用 FR-459 熔断态恢复）。
-// 拨号失败只告警并保留 PID 文件，交由下一轮扫描重试（不在扫描轮内做长退避，避免拖住整轮扫描）。
-func (m *Manager) AdoptUnmanagedDaemonInstances() (int, []OrphanFinding) {
-	if m == nil || m.pidDir == "" {
-		return 0, nil
-	}
+// 刻意**止于「存活」而不含归属复核**：复核是**收养动作**的安全闸（见 adoptUnmanagedRecord），而发现阶段
+// 不做任何处置，无须它的保护。若把复核塞进发现阶段，Windows（无 /proc，wrapper 分支 fail-closed）会连
+// 告警都发不出，平台重新回到「磁盘在跑、控制面完全沉默」的原始缺陷（见下方 FR-497③ 背景）。
+//
+// 成本很轻——一次 PID 目录枚举 + 每条记录两次存活探测（/proc 读取），与既有 scanWrapperGone 同量级，
+// 故开关关闭时可直接复用这条发现逻辑，无须另开一条重度扫描路径。
+//
+// 返回的 error 仅表示 PID 目录读取失败（IsNotExist 已归一为「无记录、无错误」），由调用方决定告警口径。
+func (m *Manager) discoverUnmanagedLiveRecords() ([]unmanagedLiveRecord, error) {
 	entries, err := os.ReadDir(m.pidDir)
 	if err != nil {
-		// PID 目录不存在（尚未产生任何 daemon 实例）属正常，不告警。
-		if !os.IsNotExist(err) {
-			slog.Warn("未纳管活进程收养：读取 PID 目录失败，本轮跳过", "dir", m.pidDir, "error", err)
+		// PID 目录不存在（尚未产生任何 daemon 实例）属正常，不当错误上抛。
+		if os.IsNotExist(err) {
+			return nil, nil
 		}
-		return 0, nil
+		return nil, err
 	}
 
-	adopted := 0
-	findings := make([]OrphanFinding, 0)
+	out := make([]unmanagedLiveRecord, 0)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pid") {
 			continue
@@ -75,26 +83,90 @@ func (m *Manager) AdoptUnmanagedDaemonInstances() (int, []OrphanFinding) {
 		if m.instanceAdoptedOrLive(instanceUUID) {
 			continue // 已纳管：幂等跳过（不重复拨号、不重复登记、不重复审计）
 		}
-		ok := m.adoptUnmanagedRecord(instanceUUID, rec)
-		finding := OrphanFinding{
-			Kind:         OrphanKindUnmanagedLiveRuntime,
-			InstanceUUID: instanceUUID,
-			WorkDir:      rec.WorkDir,
-			PIDs:         []int{rec.WrapperPID, rec.JavaPID},
-			Adopted:      ok,
-			Detail: fmt.Sprintf("PID 目录中未纳管的活进程对：wrapper(pid=%d) 与 Java(pid=%d) 均存活",
-				rec.WrapperPID, rec.JavaPID),
+		if m.takeoverPendingHas(instanceUUID) {
+			// 该实例的启动接管仍在后台按序列重试（FR-455① 的重试窗口）。此相若并发拨号，会与接管
+			// 争抢 wrapper 只保留最新一条的控制连接，且可能先于接管登记、令接管的二次确认白丢一条
+			// 有效连接。让路给启动接管；接管收尾后本相下一轮自然接手（幂等跳过已登记者）。
+			continue
 		}
+		out = append(out, unmanagedLiveRecord{instanceUUID: instanceUUID, rec: rec})
+	}
+	return out, nil
+}
+
+// AdoptUnmanagedDaemonInstances 执行一轮「未纳管活进程」自动收养（FR-497③）。返回成功收养数与观测结果。
+//
+// 发现判据见 discoverUnmanagedLiveRecords（1~3 条），此后第 4 条前置条件：
+//  4. 归属复核通过（判据见 adoptUnmanagedRecord 与其调用的复核入口；复核不过只告警不收养）。
+//
+// 收养动作 = 构造 daemon 策略 + **单次** reconnect 拨号 + 登记 RUNNING（复用 FR-459 熔断态恢复）。
+// 拨号失败只告警并保留 PID 文件，交由下一轮扫描重试（不在扫描轮内做长退避，避免拖住整轮扫描）。
+func (m *Manager) AdoptUnmanagedDaemonInstances() (int, []OrphanFinding) {
+	if m == nil || m.pidDir == "" {
+		return 0, nil
+	}
+	records, err := m.discoverUnmanagedLiveRecords()
+	if err != nil {
+		slog.Warn("未纳管活进程收养：读取 PID 目录失败，本轮跳过", "dir", m.pidDir, "error", err)
+		return 0, nil
+	}
+
+	adopted := 0
+	findings := make([]OrphanFinding, 0, len(records))
+	for _, r := range records {
+		ok := m.adoptUnmanagedRecord(r.instanceUUID, r.rec)
 		if ok {
 			adopted++
 		}
-		findings = append(findings, finding)
+		findings = append(findings, unmanagedLiveFinding(r, ok))
 	}
 	return adopted, findings
 }
 
+// DiscoverUnmanagedDaemonInstances 执行一轮「未纳管活进程」的**只发现不处置**观测（FR-497③）。
+//
+// 用途：`orphan_scan.auto_adopt=false` 时仍有观测能力——规格 §2.3/§4 的口径是「`false` 只关收养」，
+// 故开关关闭只应关闭**收养动作**（归属复核 + 重连 + 登记），不该关闭「发现并发告警」这件事本身。
+// 否则开关一关，磁盘上跑着服务器而平台彻底沉默，运维连线索都没有（正是本 FR 要收敛的缺陷形态）。
+//
+// 与 AdoptUnmanagedDaemonInstances 共用同一发现判据与同一枚举顺序，区别仅在于**不重连、不登记**；
+// 返回的 finding 一律 Adopted=false，绝不调用 Start / killTree / signalTree（护栏五.1 同口径）。
+// 告警与审计的**按变化去重**由调用方（OrphanScanner）负责——那是扫描节奏的降噪职责，不属于发现逻辑。
+func (m *Manager) DiscoverUnmanagedDaemonInstances() []OrphanFinding {
+	if m == nil || m.pidDir == "" {
+		return nil
+	}
+	records, err := m.discoverUnmanagedLiveRecords()
+	if err != nil {
+		slog.Warn("未纳管活进程发现：读取 PID 目录失败，本轮跳过", "dir", m.pidDir, "error", err)
+		return nil
+	}
+	findings := make([]OrphanFinding, 0, len(records))
+	for _, r := range records {
+		findings = append(findings, unmanagedLiveFinding(r, false))
+	}
+	return findings
+}
+
+// unmanagedLiveFinding 由一条发现记录构造观测结果；adopted 表示本轮是否已实际收养成功。
+// PIDs 固定为 [wrapperPID, javaPID]，顺序即语义（与 adoptUnmanagedRecord 的取值一致）。
+func unmanagedLiveFinding(r unmanagedLiveRecord, adopted bool) OrphanFinding {
+	return OrphanFinding{
+		Kind:         OrphanKindUnmanagedLiveRuntime,
+		InstanceUUID: r.instanceUUID,
+		WorkDir:      r.rec.WorkDir,
+		PIDs:         []int{r.rec.WrapperPID, r.rec.JavaPID},
+		Adopted:      adopted,
+		Detail: fmt.Sprintf("PID 目录中未纳管的活进程对：wrapper(pid=%d) 与 Java(pid=%d) 均存活",
+			r.rec.WrapperPID, r.rec.JavaPID),
+	}
+}
+
 // adoptableRecord 校验 PID 记录本身是否具备「有效」形态（FR-497③）：
 // wrapper/java PID 齐备且互异；记录内 UUID 非空时必须与 PID 文件名一致（不符即陈旧/错配，跳过）。
+// 本条只做「记录形态校验」，不构成归属证明；归属必须再由 verifyAdoptOwnership 的强特征确证。
+// 注意：这里**刻意不要求 WorkDir 非空**——发现阶段也复用本函数，而缺工作目录的记录仍应被观测到并
+// 发告警（只是不能收养）；收养所需的「记录内容校验」在 adoptUnmanagedRecord 内单独把关。
 func adoptableRecord(fileUUID string, rec *daemon.PIDRecord) bool {
 	if rec == nil || fileUUID == "" {
 		return false
@@ -127,29 +199,31 @@ func (m *Manager) instanceAdoptedOrLive(uuid string) bool {
 // adoptUnmanagedRecord 对一条未纳管的活进程记录执行收养：归属复核 → 单次拨号 → 登记 RUNNING。
 // 返回 true 表示已登记为 RUNNING（收养成功）；false 表示被复核拦截或拨号失败（只告警，PID 文件保留）。
 //
-// 安全闸（与 FR-455① / ADR-093 同口径）：配送任何动作之前先做归属复核——wrapper 分支必须确证
-// （argv 形如 `<worker> daemon` **且** /proc/<pid>/environ 携带本实例 UUID），Java 分支按 cmdline/cwd
-// 匹配工作目录。任一不通过即放弃收养（`orphan.adopt_blocked`），**不杀、不重启、保留 PID 文件**——
-// 收养是非破坏动作，复核不过的代价只是「这次不接管」，而非「误杀」。
+// 安全闸（与 FR-455① / ADR-093 同口径，但**判据更严**）：配送任何动作之前先做归属复核——
+// wrapper 分支必须 argv 形如 `<worker> daemon` **且** 进程环境携带本实例 UUID；Java 分支必须有强特征
+// （实例 UUID 出现在 cmdline 或进程环境）。cwd / cmdline 含工作目录这类弱特征**单独不足以判真**
+// （`DefaultVerifyAdoptOwnership`）：收养会把 wrapper 子树迁进实例 cgroup 并取得其控制权，一旦按 cwd
+// 单特征误收养，后续 Stop / Kill 就会打到无关进程上。任一不通过即放弃收养（`orphan.adopt_blocked`），
+// **不杀、不重启、保留 PID 文件**——收养是非破坏动作，复核不过的代价只是「这次不接管」，而非「误杀」。
 //
 // 拨号目标取自 PID 记录的 socket 地址（实例级唯一），拨通即证明该实例的 wrapper 正在服务。
 func (m *Manager) adoptUnmanagedRecord(instanceUUID string, rec *daemon.PIDRecord) bool {
-	if !m.verifyProcessOwnership(rec.WrapperPID, instanceUUID, rec.WorkDir, true) {
+	if ok, evidence := m.verifyAdoptOwnership(rec.WrapperPID, instanceUUID, rec.WorkDir, true); !ok {
 		m.auditOrphan("orphan.adopt_blocked", instanceUUID,
-			fmt.Sprintf(`{"instanceUuid":%q,"pid":%d,"role":"wrapper","reason":"ownership_unverified","workDir":%q}`,
-				instanceUUID, rec.WrapperPID, rec.WorkDir),
-			false, "wrapper 归属复核不通过，拒绝收养（PID 可能已被复用）")
+			fmt.Sprintf(`{"instanceUuid":%q,"pid":%d,"role":"wrapper","reason":"ownership_unverified","evidence":%q,"workDir":%q}`,
+				instanceUUID, rec.WrapperPID, evidence, rec.WorkDir),
+			false, "wrapper 归属复核不通过，拒绝收养（PID 可能已被复用，或仅有 cwd 等弱特征）")
 		slog.Warn("未纳管活进程归属复核不通过（wrapper 分支），只告警不收养，保留 PID 文件",
-			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "workDir", rec.WorkDir)
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "workDir", rec.WorkDir, "evidence", evidence)
 		return false
 	}
-	if !m.verifyProcessOwnership(rec.JavaPID, instanceUUID, rec.WorkDir, false) {
+	if ok, evidence := m.verifyAdoptOwnership(rec.JavaPID, instanceUUID, rec.WorkDir, false); !ok {
 		m.auditOrphan("orphan.adopt_blocked", instanceUUID,
-			fmt.Sprintf(`{"instanceUuid":%q,"pid":%d,"role":"java","reason":"ownership_unverified","workDir":%q}`,
-				instanceUUID, rec.JavaPID, rec.WorkDir),
-			false, "Java 归属复核不通过，拒绝收养（PID 可能已被复用）")
+			fmt.Sprintf(`{"instanceUuid":%q,"pid":%d,"role":"java","reason":"ownership_unverified","evidence":%q,"workDir":%q}`,
+				instanceUUID, rec.JavaPID, evidence, rec.WorkDir),
+			false, "Java 归属复核不通过，拒绝收养（PID 可能已被复用，或仅有 cwd 等弱特征）")
 		slog.Warn("未纳管活进程归属复核不通过（Java 分支），只告警不收养，保留 PID 文件",
-			"instanceId", instanceUUID, "javaPid", rec.JavaPID, "workDir", rec.WorkDir)
+			"instanceId", instanceUUID, "javaPid", rec.JavaPID, "workDir", rec.WorkDir, "evidence", evidence)
 		return false
 	}
 

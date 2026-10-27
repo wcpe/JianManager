@@ -137,6 +137,11 @@ func (c *Catalog) PendingPhysicalDays() []string {
 		}
 	}
 	for day, state := range c.days {
+		// 归档冻结由保留策略的归档链路推进，不属于 COLD 迁移恢复责任：
+		// 让恢复循环去 Resume 它，只会每轮报「缺少固定批次」式的噪音告警。
+		if state.TargetOwner == OwnerArchive {
+			continue
+		}
 		if state.Frozen {
 			pending[day] = true
 		}
@@ -206,6 +211,11 @@ func (c *Catalog) writeAdmissionLocked(key PartitionKey) (WriteTarget, error) {
 		return WriteTarget{}, ErrPhysicalDayFrozen
 	}
 	if rec := c.records[key]; rec != nil {
+		if rec.Owner == OwnerArchive {
+			// 正本已在归档：热层副本可能已被回收，任何写入都只能被显式拒绝，
+			// 绝不允许按 owner 猜一个新的物理位置（那会造出「归档后又长出热数据」的分区）。
+			return WriteTarget{}, fmt.Errorf("%w: %s", ErrPartitionArchived, key)
+		}
 		if rec.WriteRoute.Frozen {
 			return WriteTarget{}, ErrPhysicalDayFrozen
 		}

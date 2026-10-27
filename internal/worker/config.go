@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -193,6 +194,10 @@ type OrphanScanConfig struct {
 	// （verifyProcessOwnership）通过即自动重连并登记为 RUNNING——**不重启也不杀进程**；复核不通过
 	// 只告警。显式 false 只关收养，其余三态孤儿扫描与告警不变；见
 	// docs/specs/auto-adopt-orphans/spec.md。默认口径的单一真源为 process.DefaultOrphanAutoAdopt。
+	//
+	// 关闭时**同时关闭对这些进程对的处置**：未纳管即不在受管集合中，它们本会被运行期扫描的
+	// direct 相判为无主进程；`dispose_policy=auto` 若照旧 killTree，等于用处置策略绕过运维
+	// 「这些进程我来管」的明示意图。故关闭时该类在 auto 档降级为 warn（WARN + 审计留痕）。
 	AutoAdopt bool `mapstructure:"auto_adopt"`
 }
 
@@ -421,6 +426,20 @@ type LogIndexPersistConfig struct {
 	// PriorityStreak 是**老化阈值**（键 log_index.persist.priority_streak）：连续授予优先档
 	// （采集轮/登记/解算）多少次后必须放行一次普通档（恢复/重放链），防止反方向饿死。0/空 = 默认 8。
 	PriorityStreak int `mapstructure:"priority_streak"`
+	// ManifestSyncEvery 是事件段清单「派生元数据滞后」的**次数上界**（键
+	// log_index.persist.manifest_sync_every）：每 N 次追加至少落一次清单。0（默认）= 不设次数上界。
+	//
+	// 背景：一次 Append 原先固定触发 3 次耐久调用（段数据 fsync + 清单 fsync + 目录 fsync）。
+	// 清单里未封末段的 count/bytes/首末身份/覆盖区间都是**可从段内容逐字段重算**的派生值
+	// （eventstore.calibrateSegment），因此允许滞后不会丢事件体。机械盘上（现场 ROTA=1、
+	// 75 IOPS）这是采集持久化的主要寻道来源；默认 0 即「只在段集合变化时落清单」。
+	ManifestSyncEvery int `mapstructure:"manifest_sync_every"`
+	// ManifestSyncInterval 是同一滞后策略的**时间上界**（duration 字符串；键
+	// log_index.persist.manifest_sync_interval）：距上次落盘超过该时长就落一次。空/0 = 不设时间上界。
+	//
+	// 它与 ManifestSyncEvery 是「或」的关系，两个都设 0 表示完全由段集合变化驱动
+	// （最省 IO：8 MiB 一段，段滚动本身就是天然的次数上界）。
+	ManifestSyncInterval string `mapstructure:"manifest_sync_interval"`
 }
 
 // CommitBudget 把本地配置面收敛为 stateindex 的提交单元预算（非法值一律回退归一化默认）。
@@ -451,6 +470,14 @@ func (c LogIndexConfig) IndexPrune() ledger.DeliveryBatchPruneConfig {
 
 // CommitBudget 返回可直接交给 ingest.Options.IndexCommit 的提交单元预算。
 func (c LogIndexConfig) CommitBudget() stateindex.CommitBudget { return c.Persist.CommitBudget() }
+
+// EventStorePrune 返回可直接交给 ingest.Options.EventStorePrune 的事件段回收配置。
+//
+// 归一化在 ingest 侧也做一次（eventStorePruneConfigOf），这里只做透传：
+// 越界的小时数不会因为「配置层没管」而变成高频调度。
+func (c LogRetentionEventStorePruneConfig) EventStorePrune() ingest.EventStorePruneConfig {
+	return ingest.EventStorePruneConfig{Enabled: c.Enabled, SweepAtHour: c.SweepAtHour}.Normalized()
+}
 
 // RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
 type RecoverConfig struct {
@@ -615,6 +642,10 @@ type LogVLConfig struct {
 	HotCacheBytes int64 `mapstructure:"hot_cache_bytes"`
 	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
 	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
+	// MemoryAllowedPercent 非 0 时用 VL 官方推荐的 -memory.allowedPercent，
+	// 让 VL 按宿主机可用内存自适应；显式 hot_cache_bytes 仍优先。
+	// 默认 10（256GiB 机器约 25GiB 上限，实际用量远低）。
+	MemoryAllowedPercent int `mapstructure:"memory_allowed_percent"`
 	// NamespaceBudgets 显式按层覆盖预算；零字段沿用旧键和各层有限模板。
 	NamespaceBudgets map[string]LogVLNamespaceBudget `mapstructure:"namespace_budgets"`
 	// Budget 区分全局日志磁盘与数据面 RSS，并限制临时空间预留。
@@ -1037,6 +1068,54 @@ type LogRetentionConfig struct {
 	Trigger LogRetentionTriggerConfig `mapstructure:"trigger"`
 	// Migration 是启层时必须明确声明的有限复制校验与故障恢复 SLA。
 	Migration LogRetentionMigrationConfig `mapstructure:"migration"`
+	// EventStorePrune 是「事件段回收」的配置面（键 `log_retention.eventstore_prune.*`）。
+	EventStorePrune LogRetentionEventStorePruneConfig `mapstructure:"eventstore_prune"`
+	// ArchiveCopy 是「导出为独立副本」的配置面（键 `log_retention.archive_copy.*`）。
+	ArchiveCopy LogRetentionArchiveCopyConfig `mapstructure:"archive_copy"`
+}
+
+// LogRetentionArchiveCopyConfig 是硬规则次选路径「导出归档」的配置面。
+//
+// 定位：`move_to_cold` 搬不了（COLD 不可用）时的**替代 blocked** 的路径——
+// 导出一份独立副本 + 逐文件回读校验，校验通过且删除三闸全开时才允许回收热层。
+//
+// 为什么需要 Root：导出必须写到一个**独立于热层与冷层**的目的地，否则「副本」不成立。
+// 没有默认值——平台不该替运维决定归档写在哪块盘上（写错盘与写不下都是现场事故）。
+// 启用但 Root 为空 ⇒ 启动即拒（见 Config.RetentionPolicy），不允许「开了开关但没处写」。
+type LogRetentionArchiveCopyConfig struct {
+	// Enabled 是否允许在搬不了冷层时导出为独立副本（默认 false）。
+	Enabled bool `mapstructure:"enabled"`
+	// Root 归档目的地根目录（`archive.LocalArchive` 的 Root）。
+	//
+	// 布局由 archive 包固定：`<root>/<storage_namespace>/<utc_day>/g<generation>/…`，
+	// manifest 落在分区根下的 `manifest.json`（与 FR-478 的 `logs/archive` 契约一致）。
+	Root string `mapstructure:"root"`
+}
+
+// LogRetentionEventStorePruneConfig 是事件段回收（eventstore.Prune）的自动接线配置。
+//
+// 它与 VL 的保留期（hot_retention / cold_retention）是**两条独立的删除路径**：
+//   - VL 保留期删的是「查询面上的日分区」（原档的索引副本）；
+//   - 本项回收的是「平台的暂存段」（投递完成前的重放来源）。
+//
+// 为什么要独立开关：本项回收的是事件段的**唯一副本**，属删除类能力，用户护栏要求默认全关；
+// 而 VL 保留期（`log_retention.enabled`）默认只搬运不删除，两者语义与风险量级不同，
+// 不能共用一个开关——否则「想关段回收」会被迫连 VL 冷热分层一起关掉。
+//
+// 水位判据（安全论证见 internal/worker/logs/ingest/eventstore_prune.go 文件头）：
+//
+//	watermark = min(Positions.Reclaim, 逐字段校验覆盖的连续前缀末端)
+//
+// 注意**不是** Positions.Delivery：它的语义是「所有字节均有请求结果的连续前缀末端」，
+// 请求失败同样会把推上去，用它当水位会删掉仍需重放的事件正文。
+type LogRetentionEventStorePruneConfig struct {
+	// Enabled 是否允许自动回收事件段（默认 false）。关闭时连水位都不计算。
+	Enabled bool `mapstructure:"enabled"`
+	// SweepAtHour 每日触发的本地整点（0..23，默认 3）；越界回退默认。
+	//
+	// 写成 int 而不是「字符串 + 空 = 默认」：本键的 0 是合法值（午夜），没有可用哨兵，
+	// 因此沿用 LogRetentionTriggerConfig.SweepAtHour 的约定——未配置时由 SetDefault 注入默认值。
+	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
 
 // LogRetentionMigrationConfig 声明搬运所需余量，不代表无限失败下的最后副本保证。
@@ -1063,6 +1142,17 @@ type LogRetentionTriggerConfig struct {
 	// `sweep.interval` 当作调度旋钮呈现 ⇒ 形成"文档说的键不生效、生效的键配不了"的死旋钮。
 	// 空/非法回退 DefaultDriverInterval。
 	Interval string `mapstructure:"interval"`
+	// SweepAtHour 是**每日搬运触发的本地整点**（字符串，如 "3" 表示凌晨 3 点；默认 3）。
+	//
+	// 为什么是字符串而不是 int：本结构体的另两个键（min_age / interval）都用「字符串 + 空 = 默认」
+	// 的约定，而同包其它「0 是有效值」的键没有可用哨兵（0 点就是合法的午夜），
+	// 用 int 会让"未配置"与"配成 0 点"不可区分 —— 前者必须取默认 3 点，后者是用户明确的午夜。
+	// 写成字符串后空串即"未配置"，与 min_age / interval 的读法完全一致。
+	//
+	// 取值：0..23 为本地整点；-1 表示**不启用每日调度**，回退到上面的 Interval 间隔 ticker
+	// （保留旧行为的兼容档，避免存量 `trigger.interval` 变成静默失效的死键）。
+	// 其余值启动即拒（时刻写错只会表现成"搬运在业务高峰跑"，从日志里极难发现）。
+	SweepAtHour string `mapstructure:"sweep_at_hour"`
 }
 
 // LogRetentionSource 某个来源的保留期覆盖。
@@ -1103,7 +1193,20 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 			VLSweep:  cfg.Sweep.VLSweep,
 			Interval: cfg.Sweep.Interval,
 			Timeout:  cfg.Sweep.Timeout,
+			// 第三闸（VL 侧）来自 log_vl.delete_enabled：它是受管 VL 进程的参数事实，
+			// 由 vlsup 按同一配置位注入 -delete.enable。两处读同一个键，避免「策略以为开了、
+			// VL 其实没开」的分裂读数（见 retention.Policy.DeleteGatesOpen）。
+			VLDeleteEnabled: c.LogVL.DeleteEnabled,
 		},
+		ArchiveCopy: retention.ArchiveCopyPolicy{Enabled: cfg.ArchiveCopy.Enabled},
+	}
+	// 导出归档启用但没给目的地 ⇒ 启动即拒。
+	//
+	// 为什么用拒绝而不是「静默按未启用处理」：静默处理会让运维以为归档在跑
+	// （策略说 enabled=true），而到期数据继续占着热层直到盘满——这正是本功能要避免的结局。
+	// 反过来，把「没有目的地」显式挡在启动阶段，问题在第一次部署时就暴露。
+	if cfg.ArchiveCopy.Enabled && strings.TrimSpace(cfg.ArchiveCopy.Root) == "" {
+		return retention.Policy{}, fmt.Errorf("log_retention.archive_copy.root 不能为空（启用导出归档必须给出独立的目的地根目录）")
 	}
 	if strings.TrimSpace(cfg.HotRetention) != "" {
 		d, err := retention.ParseTTL(cfg.HotRetention)
@@ -1134,6 +1237,19 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 			return retention.Policy{}, fmt.Errorf("log_retention.trigger.interval: %w", err)
 		}
 		p.Trigger.Interval = d
+	}
+
+	// 每日搬运触发时刻（默认凌晨 3 点）。空 = 默认值；-1 = 回退上面的 interval ticker 兼容档。
+	// 不在这里做范围判断以外的事：0..23 的有效性由 retention.Policy.Validate 统一拦
+	// （启动即拒，与 hot_retention 等键同一取舍）。
+	p.Trigger.SweepAtHour = retention.DefaultSweepAtHour
+	if raw := strings.TrimSpace(cfg.Trigger.SweepAtHour); raw != "" {
+		hour, err := strconv.Atoi(raw)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf(
+				"log_retention.trigger.sweep_at_hour: 无法解析 %q（应为本地整点小时数 0..23，或 -1 表示回退间隔 ticker）", raw)
+		}
+		p.Trigger.SweepAtHour = hour
 	}
 	if len(cfg.ByLevel) > 0 {
 		p.ByLevel = make(map[string]time.Duration, len(cfg.ByLevel))
@@ -1235,6 +1351,23 @@ func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 	}
 	if _, err := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
 		return fmt.Errorf("log_vl.retention_period: %w", err)
+	}
+	// 每日固定时刻调度（默认凌晨 3 点）把「到点 → 开始搬」的最坏等待从 ticker 的 15m
+	// 放宽到一整天（见 retention.Policy.SweepWaitBudget），于是上面那条按 interval 预留扫描余量的
+	// 校验，对**余量偏紧**的存量配置不再足够。这里只**告警不拒绝**：那些配置在升级前是被接受的
+	// （启动即拒会让存量节点升不上来），但按新口径确实差了一点，必须在启动日志里点名，
+	// 否则「少留了一天」永远不会有人看见。
+	dailyReqs := retention.RuntimeHeadroom{
+		DriverInterval:   p.SweepWaitBudget(),
+		CopyVerifyBudget: requirements.CopyVerifyBudget,
+		RecoveryBudget:   requirements.RecoveryBudget,
+	}
+	if dailyReqs.DriverInterval != requirements.DriverInterval { // ticker 兼容档下两个口径相同，不重复告警
+		if _, tight := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), dailyReqs); tight != nil {
+			slog.Warn("原生TTL相对热窗口的余量按每日调度口径偏紧（不阻断启动，但 VL 原生淘汰可能抢先删）",
+				"hotRetention", p.HotWindow().String(), "nativeRetention", hotRaw,
+				"scheduleWait", dailyReqs.DriverInterval.String(), "error", tight)
+		}
 	}
 	return nil
 }
@@ -1476,6 +1609,25 @@ func (c *Config) PersistGateTuning() (persistYield, hotBudget time.Duration, pri
 	return persistYield, hotBudget, c.LogIndex.Persist.PriorityStreak
 }
 
+// EventStoreManifestTuning 把事件段清单的「落盘滞后上界」两枚旋钮收敛为 ingest 配置面
+// （键 log_index.persist.manifest_sync_every / manifest_sync_interval）。
+//
+// 口径：两者都为 0/空 = 只在段集合变化时落清单（最省 IO，且崩溃不丢事件体）；
+// 负值按 0 处理（「我不想让它滞后」应该写成 1 / 一个正的时长，而不是负数）。
+// 非法 duration 一律回退 0（默认方向 = 更省 IO，且安全性不依赖该上界）。
+func (c *Config) EventStoreManifestTuning() (every int, interval time.Duration) {
+	if c == nil {
+		return 0, 0
+	}
+	if c.LogIndex.Persist.ManifestSyncEvery > 0 {
+		every = c.LogIndex.Persist.ManifestSyncEvery
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.ManifestSyncInterval)); err == nil && d > 0 {
+		interval = d
+	}
+	return every, interval
+}
+
 // IngestResolveGapsBudget 把 `log_ingest.resolve_gaps_*` 收敛为 ingest 的预算配置面。
 //
 // 口径：源数 ≤0 或 duration 空串 ⇒ 用默认（零配置零行为变化）；duration 非空必须是合法
@@ -1639,6 +1791,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_retention.hot_retention", vlruntime.DefaultHotRetention.String())
 	v.SetDefault("log_retention.cold_retention", vlruntime.DefaultColdRetentionPeriod)
 	v.SetDefault("log_vl.hot_cache_bytes", vlsup.DefaultHotCacheBytes)
+	// VL 官方推荐按可用内存百分比自适应；显式设为 0 可退回按 hot_cache_bytes 的旧行为。
+	v.SetDefault("log_vl.memory_allowed_percent", 10)
 	v.SetDefault("log_vl.memory_limit_bytes", int64(0))
 	v.SetDefault("log_vl.delete_enabled", false)
 	// 只为零值可覆盖的键登记默认；按层模板由 RuntimeBudget 统一归并，不能盖掉旧键。
@@ -1654,6 +1808,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.budget.reservations.export", int64(0))
 	v.SetDefault("log_retention.migration.copy_verify_budget", "")
 	v.SetDefault("log_retention.migration.recovery_budget", "")
+	// 事件段回收：默认关闭（删除类能力，用户护栏要求默认全关）+ 每日本地 3 点。
+	v.SetDefault("log_retention.eventstore_prune.enabled", false)
+	v.SetDefault("log_retention.eventstore_prune.sweep_at_hour", 3)
+	// 导出归档（硬规则次选路径）：默认关闭，且默认不给根目录——没有目的地就不该有这条路径。
+	v.SetDefault("log_retention.archive_copy.enabled", false)
+	v.SetDefault("log_retention.archive_copy.root", "")
 	v.SetDefault("log_vl.hot_port", 0)
 	v.SetDefault("log_vl.cold_port", 0)
 	v.SetDefault("log_vl.rehydrate_port", 0)
@@ -1725,6 +1885,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_index.reclaim_roll.budget", "")
 	v.SetDefault("log_index.persist.priority_streak", 0)
 	v.SetDefault("log_index.persist.hot_budget", "")
+	// 事件段清单的落盘滞后上界（机械盘 IO 收敛）：0/空 = 只在段集合变化时落清单。
+	// 未封末段的 count/bytes/首末身份是派生值，重启由 eventstore 校准逐字段重算 ⇒ 不丢事件体；
+	// 一次追加的耐久调用由 3 次（段数据 + 清单 + 目录）降到 1 次（段数据，不可省）。
+	// 想让清单更"新鲜"可配 manifest_sync_every=N 或 manifest_sync_interval=30s（或两者）。
+	v.SetDefault("log_index.persist.manifest_sync_every", 0)
+	v.SetDefault("log_index.persist.manifest_sync_interval", "")
 	// 校验查询的全局天花板（2026-10-03 现场 ×410 重试风暴）：0 = 用 ingest 默认（30/s、6 在飞、单簇 12 次）。
 	v.SetDefault("log_index.verify.max_per_second", 0)
 	v.SetDefault("log_index.verify.max_in_flight", 0)

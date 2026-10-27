@@ -1,6 +1,6 @@
 # 功能规格：日志成本治理（分层 / 采样 / 保留）
 
-> 状态：开发中、部分落地（本轮统一时长、TTL 余量、删除时间边界、资源准入与物理日续跑修复及已覆盖回归完成；事件体段/归档对象回收、搬运/删除指标等未实现边界仍见 §7，gz 导入接线归 FR-504、长期吸存观测仍未验，不将整 FR 标交付）
+> 状态：开发中、部分落地（本轮统一时长、TTL 余量、删除时间边界、资源准入与物理日续跑修复及已覆盖回归完成；事件体**段回收已接线**（默认关闭，`log_retention.eventstore_prune.*`），`/metrics` 已输出保留/搬运、导出归档与事件段回收序列；归档对象回收未实现、导出归档的生产回收出口未装配等边界见 §7，gz 导入接线归 FR-504、长期吸存观测仍未验，不将整 FR 标交付）
 > 本次提交/功能修复验收不承诺性能、长稳或全部故障覆盖；延期专项与已有结果统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)，生产删除三闸默认全关。
 > 关联 PRD：**FR-501**　·　ADR：**ADR-098**（日志保留、分层与归档）/**ADR-099**（成本治理与不变量 R）
 > 关联：FR-498（采集侧成本）、FR-477（分区 Catalog 与冷热 Lifecycle）、FR-474（容量门禁）
@@ -87,6 +87,7 @@ raw 耐久批门与短验数据正确性不替代首屏、完整 Search 或恢�
 | `log_retention.hot_retention` | `90d` | 热层窗口：超期即搬运到冷层（用户最终口径） |
 | `log_retention.cold_retention` | `730d` | 冷层保留期（**所有级别统一**；由 COLD 实例 `-retentionPeriod` 执行） |
 | `log_retention.trigger.disk_percent` / `min_age` | `0` / `7d` | 磁盘水位提前搬运（取先到）；`0` = 只按年龄 |
+| `log_retention.trigger.sweep_at_hour` | `3` | 每日固定时刻执行一轮（进程本地时区）；`-1` = 回退 `trigger.interval` 的 ticker 兼容档 |
 | `log_retention.discard` | `false` | **意图闸**：显式允许直接删 |
 | `log_retention.by_level.*` | D1 档位 | 按级别 TTL（`3d`/`7d`/`30d`/`90d`，支持 `d`/`w`） |
 | `log_retention.sources[].match` / `by_level` | — | 来源级覆盖（`*` 后缀为前缀匹配） |
@@ -141,12 +142,15 @@ COLD 默认保留期为 730d、所有级别统一，HOT 默认 90d；按 namespa
 保留期到期数据**绝不裸删**，三选一，①为默认：
 1. **首选**：搬运到 COLD（复用 `ROUTING_FROZEN→…→CLEANED` 状态机）——搬运成功 + 校验通过
    才允许 HOT 侧回收；搬运失败 = **保留原物 + 告警**（宁占盘不丢数据）；
-2. 次选：导出为独立副本（接口已留，实现见 §7）；
+2. 次选：**导出为独立副本**（`retention.ActionArchiveCopy`）——已实现，见 §4.1；
+   导出 + 逐文件回读校验通过**且删除三闸全开**才允许回收热层，否则副本与原物并存。
+   **当前生产未装配 `Remover`**，故实际形态恒为「导出+校验成功 ⇒ 保留原物」（热层不释放），理由见 §4.1 与 §7；
 3. **仅当**配置显式 `discard: true` 才允许直接删。
 
-**次序不可调换**（`retention.PlanArchive`）：搬运判在删除**之前**。即使运维显式写了
-`discard: true`，只要冷层路径可用，默认动作仍是**搬运**。`discard` 的作用是解除
-「没有归档路径时的阻塞」，不是把默认动作从搬运改成删除。
+**次序不可调换**（`retention.PlanArchive`）：`move_to_cold` → `archive_copy` → `discard` → `blocked`。
+搬运判在导出与删除**之前**。即使运维显式写了 `discard: true`，只要冷层路径可用，默认动作仍是
+**搬运**；即使 `discard: true`，只要有归档目的地，默认动作也是**导出归档**而不是删除——
+`discard` 的作用是解除「没有归档路径时的阻塞」，不是把默认动作改成删除。
 **该次序是变异实验 N13 暴露出来的真实缺陷**：初版把 `discard` 判在前面，
 语义变成「只要曾显式开启过删除，默认动作就永久变成删除」，与规则意图相反。
 
@@ -156,11 +160,52 @@ COLD 默认保留期为 730d、所有级别统一，HOT 默认 90d；按 namespa
 默认路径永远是搬运（数据仍在、仍可查），使**所有配置错误的最坏后果从「数据永久丢失」
 降级为「盘没省下来」**。
 
+### 4.1 次选路径 `archive_copy`（导出 → 压缩 → 校验 → 回收）
+
+**语义**：搬不了冷层、但有归档目的地时，导出一份独立副本，而不是留一堆 blocked 的原物。
+它是 `blocked` 的替代，不是 `move_to_cold` 的替代（次序见 D4）。
+
+| 环节 | 实现 | 复用而非新造 |
+|---|---|---|
+| 冻结 | `lifecycle.VLPartitionOps.snapshot` | 既有双闸 `catalog.CheckPhysicalDayDrained`（`day.Frozen` 为真 + `dayPermitCountLocked`==0）+ `prepareHotSource`（force_flush）+ `/internal/partition/snapshot/create`（返回长度必须为 1 且位于受管 snapshots 根下） |
+| 压缩 | 逐文件 gzip（`gzip.BestCompression`），归档内路径 `raw/files/<源相对路径>.gz` | 压缩头留空（不写 Name/ModTime）⇒ 同输入同输出，重跑幂等 |
+| 清单 | `archive.Manifest`（`archive-manifest/v1`） | 与 FR-478 `logs/archive` 同一 manifest 契约：`checksums`（sha256）/`raw_files`/`coverage`/`time_range` |
+| 校验 | 每个对象 `Put` 后**回读 + sha256 比对 + 解压还原比对源字节**；manifest 也回读并重新 `Validate` | `archive.ContentHash` / `archive.ObjectIDOf` / `UnmarshalManifest` |
+| 回收 | `Remover.RemovePartition`，前置 `retention.Policy.DeleteGatesOpen()` **与 Catalog 权威态迁移** | **与 `ActionDiscard` 同一套三闸**；生产实现 `VLPartitionOps.RemoveArchivedPartition` 每次删除前都重新向 `catalog.CanReclaimArchivedDay` 取结论（拒绝「带病调用」），并先 detach 再删目录（在 VL 持句柄时删只会解链接、磁盘不释放） |
+
+**不变量（每条都有对应用例）**：
+
+- 导出失败 / 校验不通过 ⇒ `ArchiveKeptOriginal`，**绝不触达回收**，并**解除**导出期建立的物理日冻结；
+- 导出+校验成功但三闸未全开 ⇒ `ArchiveCopiedKeptOriginal`（副本与原物并存），**零删除**，权威态不变；
+- 三闸全开但删除出口未装配 ⇒ 同上（宁占盘不假报回收）；
+- 三闸全开但**未装配归档权威态出口** ⇒ 同上：没有 ARCHIVED 权威态就不许删；
+- 权威态迁移成功但删除失败 ⇒ `ArchiveCopiedKeptOriginal` + **回滚 ARCHIVED→HOT**（恢复 owner/dir/generation/原投影/写路由），`ArchiveRolledBack` 计数 +1；
+- 删除成功 ⇒ `ArchiveCopied` + `ArchiveCopyReclaimed`，并标记 `HotReclaimed`；
+- 已回收后**拒绝**回滚（数据已不在热层，回滚等于伪造）；
+- `MarkArchived` 对同 `(provider, prefix)` **幂等**：重跑不追加 journal、不改归档时刻；不同归档位置一律拒绝（一天两份归档必须人工裁定）；
+- `retryable`（已有 COLD 迁移失败待续跑）**不会**被导出归档「救」成 `archive_copy`：
+  导出不推进也不修复迁移状态机，保持 `blocked` 才是诚实的。
+
+**默认关闭**：`log_retention.archive_copy.enabled: false`；启用但 `root` 为空 ⇒ 启动即拒。
+
+**接线现状（2026-10）**：导出口、归档权威态出口（`newCatalogArchiveAuthority`）与删除出口
+（`physical.RemoveArchivedPartition`）在 `apps/worker` **均已装配**；三闸仍默认全关，
+故默认部署形态依然是「导出 + 校验成功 ⇒ 保留原物」。装配 `ArchiveReadyForReclaim()` 在启动日志
+打印「是否已具备回收条件」，使现场能一眼分辨「没开导出」与「开了导出但闸门没开」。
+导出**目的地当前仅本地目录**；`archive.RemoteS3Provider`（S3/MinIO）已存在但未接线，SFTP/WebDAV 无实现。
+
+**已知限制（如实登记）**：归档按**物理日**冻结（`partitions/<utc-day>/` 装着当天所有命名空间），
+回收同样按日删除，且 `CanReclaimArchivedDay` 要求该日**无 HOT 残留**——因此一天有多个命名空间时，
+需要它们都被归档后才回收，中间轮次是「已归档 + 保留原物」。若进程恰在 `MarkArchived` 与删除之间退出，
+会留下「已归档但热层未回收」的安全方向残留，启动日志会点名报出（`PendingArchiveReclaims`），
+由下一轮保留策略按三闸重试。
+
+
 ### D5 观测面 — 部分采纳（见 §7）
 运行期可动态调整日志等级（debug 用于现场定位、平时压到 info 以降开销）——
-**部分落地**：`log.level`/`log.format` 现在**有装配点**（此前 `log.level: debug` 完全未接到 slog handler），
-但装配出的 `slog.LevelVar` 是 `runWorker` 的局部量、**没有任何可达的调整入口** ⇒ 实际语义是
-**启动期生效、调整需重启**；**运行期调整仍未接线**（见 §6.8 与 §7）。
+**已落地**：`log.level`/`log.format` 有装配点（此前 `log.level: debug` 完全未接到 slog handler），
+且装配出的 `slog.LevelVar` 已通过 `/debug/log-level` 暴露为运行期可调入口（GET 读当前值 / POST 改值），
+做到**改级别不重启**（见 §6.8 与 §7）。边界：只调等级不改格式、不持久化、仅影响本进程 handler。
 
 ---
 
@@ -169,11 +214,16 @@ COLD 默认保留期为 730d、所有级别统一，HOT 默认 90d；按 namespa
 ```go
 const (
   ActionMoveToCold  = "move_to_cold"  // 首选
-  ActionArchiveCopy = "archive_copy"  // 次选（接口已留）
+  ActionArchiveCopy = "archive_copy"  // 次选（已实现，见 §4.1）
   ActionDiscard     = "discard"       // 仅显式 discard 可达
   ActionBlocked     = "blocked"       // 无归档路径且未显式放弃 ⇒ 保留原物 + 告警
 )
 ```
+
+执行结果（`ArchiveOutcome.Result`）除既有 `moved`/`kept_original`/`discarded`/`not_due` 外，
+新增 `copied`（导出+校验成功且热层已回收）与 `copied_kept_original`
+（导出+校验成功但保留原物）。两者都「原物还在」但成因相反，合并会让
+「归档一直在成功、只是闸门没开」与「归档一直失败」在读数上无法区分。
 
 **删除过滤器由本包生成，绝不从配置读**（安全关键）。VL 的删除接口接受 LogsQL 过滤器，
 若把配置字符串直接当过滤器，一次误写（`filter: "*"`）就能在几分钟内删掉全部日志且不可逆。
@@ -254,6 +304,29 @@ const (
 - `TestArchiveExplicitDiscardIsReachable` — **正向对照**：显式放弃后删除确实可达（否则 Rule3 恒真）
 - `TestArchiveSkipsUnparseableDay` — 日期不可解析不猜、不动手
 
+#### 6.4.1 次选路径 `archive_copy`（`logs/retention` + `logs/lifecycle`）
+
+- `TestArchiveCopyPlannedWhenMoverMissingButArchiverReady` — 有归档目的地 ⇒ 计划 `archive_copy` 而非 `blocked`
+- `TestArchiveCopyNeverOutranksMoveToCold` — **次序**：冷层可用时仍搬运，且**零导出调用**
+- `TestArchiveCopyOutranksDiscard` — **次序**：有归档目的地时即使 `discard: true` 也不裸删
+- `TestArchiveCopyExportFailureKeepsOriginal` — 导出失败 ⇒ 保留原物，**零回收**
+- `TestArchiveCopyVerificationFailureKeepsOriginal` — 校验不通过 ⇒ 保留原物，**零回收**
+- `TestArchiveCopyReclaimRequiresAllThreeGates` — 三闸（`discard` / `vl_sweep` / `delete_enabled`）逐闸为缺 ⇒ 均 `copied_kept_original`，**零回收**
+- `TestArchiveCopyReclaimsWhenVerifiedAndGatesOpen` — 校验通过 + 三闸全开 ⇒ `copied` 且回收
+- `TestArchiveCopyWithoutRemoverKeepsOriginal` — 三闸开但无删除出口 ⇒ 保留原物（不假报回收）
+- `TestArchiveCopyReclaimFailureKeepsOriginal` — 回收本身失败 ⇒ 保留原物 + 告警
+- `TestArchiveCopyDisabledKeepsBlockedBehaviour` — 默认关闭 ⇒ 行为与改动前完全一致（零导出调用）
+- `TestArchiveCopyEnabledWithoutExporterStaysBlocked` — 开关开但出口未装配 ⇒ 仍 `blocked`（不承诺做不到的事）
+- `TestArchiveCopyNeverSubstitutesForMigrationRetry` — `retryable` 迁移不被导出「救」成 archive_copy
+- `TestDeleteGatesOpenReportsMissingGate` — 三闸判定点名缺失的那道闸
+- `TestExportTreeGzipRoundTrip` — **gzip 往返一致性**（含空文件边界）
+- `TestExportTreeManifestFollowsArchiveContract` — manifest 字段/`checksums`/`coverage`/`time_range`/`object_id` 逐项对齐 FR-478 契约
+- `TestExportTreeIsIdempotent` — 重跑导出产出**逐字节相同**的 manifest
+- `TestExportTreeFailsWhenReadBackTampered` — 回读被篡改 ⇒ 报错（校验真的在跑）
+- `TestExportTreeRejectsEmptySnapshot` — 空快照不得产出成功（否则空副本 + 三闸 = 永久删除）
+- `TestExportTreeRejectsSymlink` — 快照内符号链接一律拒绝
+- 配置接线（`internal/worker`）：`TestRetentionArchiveCopyDefaultsOff`、`TestRetentionArchiveCopyEnabledWithoutRootRejected`、`TestRetentionArchiveCopyAndVLDeleteGateTakesEffect`、`TestRetentionArchiveCopyRootFromConfig`
+
 ### 6.5 `logs/retention`（策略 / 计划 / 执行器 / HTTP）
 - `TestDefaultPolicyMatchesRecommendedTTLs`、`TestNormalizeFillsMissingLevelWithRecommended`、`TestEffectiveTTLUnknownLevelIsKeepForever`、`TestEffectiveTTLSourceOverridePrecedence`、`TestValidateRejectsHazardousConfig`
 - `TestBuildFilterRejectsInjection`（12 类注入载荷）、`TestBuildFilterShapesAndQuotesSource`
@@ -277,9 +350,8 @@ const (
 ## 6.8 配置接线（`internal/worker`）
 
 - `TestLogLevelIsParsedAndRejectsGarbage` — `log.level` **有装配点**且非法值启动即拒。
-  装配用 `slog.LevelVar`，但该变量是 `apps/worker/main.go` 中 `runWorker` 的**局部量**，
-  只喂给 `slog.HandlerOptions{Level: …}`，无设置项/RPC/端点/信号可触及 ⇒
-  **启动期生效、调整需重启**，不构成「运行期调级」
+  装配用 `slog.LevelVar`，并已通过 `retention.NewLogLevelController` + `/debug/log-level`
+  暴露为**运行期可调**（GET 读 / POST 改）⇒ 构成「运行期调级」；边界见 §6.8（只调等级不改格式、不持久化）
 - `TestLogFormatIsParsedAndRejectsGarbage` — `log.format` 同上
 - `TestMaxWALBytesHasFiniteDefault` — WAL 字节上界默认有限，且高于正常稳态量级
 - `TestWALBudgetNoticeNamesTheUnlimitedCase` — 显式不限必须被点名
@@ -307,11 +379,12 @@ const (
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 冷层搬运**驱动器** | **已接线** | `retention.Driver`（`Step` 可单测 + `Run` 周期调度，首轮立即执行）；生产适配层 `apps/worker/log_retention.go` 把 `catalog` 分区与 `lifecycle.DayManager` 接成 `PartitionLister`/`Mover`，在采集运行时之后随同一 ctx 启动。触发口径 = 年龄 + 磁盘水位**取先到**（`log_retention.trigger.*`，默认只按年龄）；磁盘读数复用采集侧**同一份** `ingest.DiskCapacityProvider`。磁盘触发带 `min_age` 下限（默认 7d）：盘再满也不搬正在写的日分区 |
-| `ActionArchiveCopy`（导出独立副本） | 仅留接口 | `retention` 已定义动作与结果语义，执行分支未实现 |
-| eventstore 段/归档对象的回收 | 未做 | `logs/eventstore` 目前无 `Prune`/`Trim`/`Reclaim`；段是「权威事件集合」的承载体，加保留必须带**下界**（有界保留）且**不得破坏** `deliverTailPlan` 的水位语义（段只换介质不裁剪） |
+| 冷层搬运**驱动器** | **已接线** | `retention.Driver`（`Step` 可单测 + `Run` **每日固定时刻调度**，时刻由 `log_retention.trigger.sweep_at_hour` 决定（默认 3 点、进程本地时区），启动首轮立即执行）；生产适配层 `apps/worker/log_retention.go` 把 `catalog` 分区与 `lifecycle.DayManager` 接成 `PartitionLister`/`Mover`，在采集运行时之后随同一 ctx 启动。触发口径 = 年龄 + 磁盘水位**取先到**（`log_retention.trigger.*`，默认只按年龄）；磁盘读数复用采集侧**同一份** `ingest.DiskCapacityProvider`。磁盘触发带 `min_age` 下限（默认 7d）：盘再满也不搬正在写的日分区 |
+| `ActionArchiveCopy`（导出独立副本） | **已闭环**（含热层回收） | 计划/执行/压缩/清单/校验全链路：`retention` 侧第四支 + `ArchiveExporter` 接口 + 三闸判定；落地实现 `lifecycle.ArchiveCopyExporter`（冻结快照、逐文件 gzip、`archive.Manifest` 契约、回读 sha256 + 解压还原双校验 + manifest 重校验），并输出归档证据（`ProviderKind`/`ObjectPrefix`/`ManifestChecksum`/`CoverageComplete`）；配置 `log_retention.archive_copy.{enabled,root}`（默认关闭，启用但无 root 启动即拒）；`apps/worker` 装配 `archive.NewLocalArchive(root)` 导出器、`newCatalogArchiveAuthority` 权威态出口与 `physical.RemoveArchivedPartition` 删除出口。<br>**热层回收（2026-10 打通）**：次序为 `冻结物理日 → 导出+校验 → MarkArchived（Catalog journal）→ 删除热层 → MarkHotReclaimed`。`MarkArchived` 把 `Owner` 改为 `archive`、`OwnerDirID` 改为归档标识（不再指向热层目录）、清空旧投影、冻结写入路由，并把归档证据（provider/prefix/manifest sha256/coverage/归档时刻/迁移前权威快照）与退役热层目录一并落盘；删除失败 `RollbackArchived` 恢复 owner/dir/generation/原投影与写入路由（查询能力不丢）；已回收后拒绝回滚。删除前 `catalog.CanReclaimArchivedDay` 复核四项：同日无 HOT 残留、归档证据完整、无在途写许可、无活跃查询租约/视图。`MarkArchived` 对同 `(provider,prefix)` 幂等（不追加 journal、不改归档时刻）。<br>**每一条未归档的退出路径都会解除物理日冻结**（导出失败/三闸未全开/无删除出口/权威态迁移失败），否则该日会永久拒绝写入。<br>**查询面**：ARCHIVED 且本地未恢复 ⇒ `LOG_COVERAGE_ARCHIVE_MISSING` + `ARCHIVE_NOT_RESTORED`（不再误报 `NO_CATALOG_AUTHORITY`），Search 无任何可读 range 时返回 `LOG_ARCHIVE_MISSING`（**不是**空成功）；已恢复（对齐投影）⇒ `archive` tier ⇒ Rehydrate 客户端。<br>**目的地范围**：当前仅本地目录（`archive.NewLocalArchive`）；S3/MinIO 的 `archive.RemoteS3Provider` 已存在但**未接线**，SFTP/WebDAV 无实现。<br>**未做**：归档对象自身的回收（桶内生命周期）与长期吸存验证 |
+
+| eventstore 段/归档对象的回收 | **部分接线**（段已接、归档对象未做） | `eventstore.Store.Prune` 已接入自动调用路径：`ingest.Manager.PruneEventStoreSegments`（实现在 `internal/worker/logs/ingest/eventstore_prune.go`），由 `Manager.RunEventStorePrune` 按**每日本地整点**驱动（默认 3 点），在 `apps/worker/main.go` 与保留驱动器同 ctx 启动。**默认关闭**（`log_retention.eventstore_prune.enabled`，删除类能力默认全关），需显式开启。<br>水位判据 = `min(Positions.Reclaim, 逐字段校验覆盖的连续前缀末端)`：<br>① **不是** `Positions.Delivery`——它的语义是「所有字节均有**请求结果**的连续前缀末端」，请求失败（`DeliveryUnknown`）同样会推进它，用它当水位会删掉仍需重放的事件正文；<br>② 逐字段校验证据取 `persistedSource.VerifiedRuns`（区间集合，相接会被合并），只取**锚点所在那一段**的末端（锚点 = 段内最小 `record_end`），绝不取「所有区间的最大末端」——那会把中间空洞一并宣称已覆盖；<br>③ 夹 `Reclaim` 是因为 WAL 只丢 `record_end <= Reclaim` 的条目，否则被回收身份会从「段内 seen 集合」消失却仍留在 durable WAL ⇒ 被重新判缺、重新追加、VL 出现重复行；<br>④ `VerifiedRuns` 的有界保留（`maxVerifiedRunsPerSource = 64`）丢的是**位置最旧**的区间 ⇒ 锚点段先消失 ⇒ 水位退化 0 ⇒ 少删（安全方向），不可能抬高水位。<br>契约变更：段不再是「VL 数据根丢失后重建 projection 的权威集合」，改为「投递完成前的暂存与重放来源，投递并逐字段校验通过后可回收」——原档由用户在各服务器保留文本日志，平台不承担长期保存责任。<br>回收后 `invalidateEventStoreRowCaches` 推进 `eventsStoredEpoch` 并丢弃 `eventsStoredRows`/`storedCoverageMemo`；`proof.rows` 类判据保持原样（回收后是 fail-loud 的 `errPublicationStale`，不放宽）。<br>**仍未做**：归档对象的回收路径；`CanonicalDayMigrationInput` 对被回收天会硬失败（响亮）、`locateEventAtOrAfter` 对被回收区间只能看到剩余段 |
 | COLD/Rehydrate 的 VL 启动参数 | **部分接线** | 按 namespace 差异化 `-retentionPeriod` 已接线，HOT/COLD 默认 90d/730d；此项不等于开启原生空间淘汰或删除，删除仍受既有三闸且默认不开 |
-| G10 观测面对外暴露点 | **部分** | `ArchiveStats`/`SweepStats`/`DriverResult`/`sampling.Stats` 已具备读数，驱动器每轮打印 listed/skipped/due/moved/keptOriginal/notDue；**指标端点未接线**。`log.level` 已接线（装配为 `slog.LevelVar`，**启动期生效、调整需重启**）——该 LevelVar 是 `runWorker` 的局部量、无任何可达调整入口，**运行期调级未做**（见 §6.8） |
+| G10 观测面对外暴露点 | **部分** | `ArchiveStats`/`SweepStats`/`DriverResult`/`sampling.Stats` 已具备读数，驱动器每轮打印 listed/skipped/due/moved/keptOriginal/notDue；`/metrics` 端点**已接线**（Prometheus 格式实机 200），序列由 8 条扩到 **18 条**——新增 3 条导出归档序列（`jm_log_retention_archive_{copied,copy_reclaimed,copy_kept_original}_total`）+ 1 条回滚序列（`jm_log_retention_archive_rolled_back_total`，已迁移 ARCHIVED 但回收失败而退回 HOT 的次数）+ 6 条事件段回收序列（`jm_log_eventstore_prune_{enabled,last_run_timestamp_seconds,reclaimed_segments_total,reclaimed_bytes_total,reclaimed_events_total,failures}`），未启用时同样输出 0 而非缺序列；事件段回收读数取 `Manager.LastEventStorePrune()` 快照而非现算（抓取高频，现算会把一次抓取变成一次全量段扫描）。`log.level` 已接线，且运行期调级**已做**：`/debug/log-level`（GET 读 / POST 改）实机验证 info→debug 即刻出现 DEBUG 行；边界为只调等级不改格式、不持久化、仅本进程 handler |
 | 分级验证（info/debug 只存不验） | 未做 | 需落在 `ingest/runtime.go` 的 `verifyProjection` 调用点（该文件由并行工作流持有） |
 | 按级别独立热层保留 | 未做（可选路径） | 需把级别分流到不同存储命名空间（见 §4 已知边界），属数据面重构 |
 | `log_capacity.max_wal_bytes` 有限默认 + 告警 | **已做** | 默认由 `0`（不限）改为 `DefaultMaxWALBytes`（512MiB，远高于正常稳态的 KB 量级，只在真失控时触发 PAUSED + 登记缺口）；显式写 0 时启动日志点名提醒（`WALBudgetNotice`），使「没配」与「配成不限」不再不可区分 |
@@ -323,4 +396,7 @@ const (
 
 - 采样：`log_ingest.sampling.enabled: false`（即默认值）⇒ `Process` 恒等返回入参，逐指令等价于改动前。
 - 保留：`log_retention.enabled: false`（默认）⇒ 不计算、不暴露、不删除。
-- 删除路径：`sweep.vl_sweep: false`（默认）**或** `discard: false`（默认），任一即可关闭；两者独立。
+- 导出归档：`log_retention.archive_copy.enabled: false`（默认）⇒ 不装配导出器、不产出 `archive_copy` 目标，
+  行为与改动前逐指令等价。
+- 删除路径：`sweep.vl_sweep: false`（默认）**或** `discard: false`（默认）**或** `log_vl.delete_enabled: false`（默认），
+  任一即可关闭；三者独立（`archive_copy` 的回收热层走**同一套**三闸，不是另立一套）。

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
@@ -62,6 +63,137 @@ func newCatalogPartitionLister(cat *catalog.Catalog) retention.PartitionLister {
 		}
 		return out, nil
 	})
+}
+
+// newCatalogArchiveAuthority 把 catalog 的「已归档」权威态接成 retention 的迁移出口。
+//
+// 为什么这一层必须存在（而不是让 retention 直接 import catalog）：
+// 保留策略只该回答「副本可信吗、能删吗」两个问题，分区 Catalog 是 Worker 的内部真源；
+// 让策略包依赖它，等于把「权威态怎么改」的细节扩散到判定层，日后任何 Catalog 字段演进
+// 都要穿透策略包。这里只做类型搬运，两个类型各自演进互不影响。
+//
+// 语义要点（全部由 catalog 侧的不变量保证，本层不重写判定）：
+//   - MarkArchived 幂等：同一归档位置重跑不会产生第二条归档记录；
+//   - MarkArchived 会先确认没有活跃查询租约，避免把「正在读的位置」掀掉；
+//   - RollbackArchived 在热层已回收后拒绝回滚；
+//   - 证据不完整（无 prefix / checksum / 对象数为 0）一律拒绝。
+type catalogArchiveAuthority struct {
+	cat *catalog.Catalog
+	now func() time.Time
+}
+
+func newCatalogArchiveAuthority(cat *catalog.Catalog) retention.ArchiveAuthority {
+	if cat == nil {
+		return nil
+	}
+	return &catalogArchiveAuthority{cat: cat, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (a *catalogArchiveAuthority) key(namespace, day string) (catalog.PartitionKey, error) {
+	parsed, err := parsePartitionDay(day)
+	if err != nil {
+		return catalog.PartitionKey{}, err
+	}
+	// Catalog 的日期写法是 `2006-01-02`（与 retention 兼容的 `20060102` 归一到这里）。
+	return catalog.PartitionKey{StorageNamespace: namespace, UTCDay: parsed.Format("2006-01-02")}, nil
+}
+
+func (a *catalogArchiveAuthority) FreezeForArchive(ctx context.Context, namespace, day string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := a.key(namespace, day)
+	if err != nil {
+		return err
+	}
+	// 冻结粒度是**物理日**（VL 的 partitions/<utc-day>/ 目录装着当天所有命名空间），
+	// 故这里用 Catalog 写法归一后的日期，而不是命名空间。
+	return a.cat.FreezeDayForArchive(key.UTCDay, "archive:"+key.UTCDay)
+}
+
+func (a *catalogArchiveAuthority) ReleaseArchiveFreeze(ctx context.Context, namespace, day string, reason string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := a.key(namespace, day)
+	if err != nil {
+		return err
+	}
+	// 该日仍有其它**已归档**成员时保持冻结：归档工作尚未结束，
+	// 把一天的一部分写成 HOT、另一部分已在归档，会让「删目录」变成不可能安全的操作。
+	for _, rec := range a.cat.RecordsForDay(key.UTCDay) {
+		if rec != nil && rec.Owner == catalog.OwnerArchive {
+			return nil
+		}
+	}
+	return a.cat.AbortArchiveFreeze(key.UTCDay, reason)
+}
+
+func (a *catalogArchiveAuthority) MarkArchived(ctx context.Context, namespace, day string, ev retention.ArchiveEvidence) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := a.key(namespace, day)
+	if err != nil {
+		return err
+	}
+	_, _, err = a.cat.MarkArchived(key, catalog.ArchiveEvidence{
+		ProviderKind:     ev.ProviderKind,
+		ObjectPrefix:     ev.ObjectPrefix,
+		ManifestChecksum: ev.ManifestChecksum,
+		Coverage: catalog.ArchiveCoverage{
+			ObjectCount: ev.ObjectCount,
+			SourceBytes: ev.SourceBytes,
+			StoredBytes: ev.StoredBytes,
+			Complete:    ev.CoverageComplete,
+		},
+		ArchivedAt: ev.At,
+	}, a.now())
+	return err
+}
+
+func (a *catalogArchiveAuthority) RollbackArchived(ctx context.Context, namespace, day string, reason string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := a.key(namespace, day)
+	if err != nil {
+		return err
+	}
+	stillArchived, err := a.cat.RollbackArchived(key, reason, a.now())
+	if err != nil {
+		return err
+	}
+	if !stillArchived {
+		// 该日已没有任何归档成员 ⇒ 解除归档冻结，把写入接纳还给仍在 HOT 的分区。
+		// 解除失败不掩盖原始回滚结果：冻结残留只会让该日拒绝写入（报错可见），
+		// 而数据仍然完整；返回错误会让调用方误以为回滚失败。
+		if err := a.cat.AbortArchiveFreeze(key.UTCDay, "归档全部回滚"); err != nil {
+			slog.Warn("日志归档冻结解除失败（该物理日将继续拒绝写入，数据仍完整）",
+				"day", key.UTCDay, "error", err)
+		}
+	}
+	return nil
+}
+
+func (a *catalogArchiveAuthority) MarkHotReclaimed(ctx context.Context, namespace, day string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	key, err := a.key(namespace, day)
+	if err != nil {
+		return err
+	}
+	if _, err := a.cat.MarkArchiveReclaimed(key, a.now()); err != nil {
+		return err
+	}
+	// 全日完成归档后解除冻结；仍有 HOT 成员时 CompleteArchiveFreeze 会拒绝，
+	// 这属于正常中间态（其他命名空间还没归档），不作为错误上抛。
+	if err := a.cat.CompleteArchiveFreeze(key.UTCDay); err != nil {
+		slog.Debug("日志归档日冻结尚未满足解除条件（其余命名空间仍待归档）",
+			"day", key.UTCDay, "error", err)
+	}
+	return nil
 }
 
 // newDayManagerMover 把 lifecycle 状态机接成 Mover。
@@ -178,5 +310,21 @@ func retentionPolicyLogFields(policy retention.Policy) []any {
 		"hotRetention", policy.HotWindow().String(),
 		"trigger", logRetentionTriggerSummary(policy),
 		"discard", policy.Discard,
+		// 次选路径的开关与「删除三闸是否全开」必须进启动日志：
+		// archive_copy 打开后，到期分区会真的被导出（写盘/写对象存储），而回收是否发生
+		// 取决于三闸。读日志的人要能一眼分辨「没开导出」与「开了导出但闸门关着」。
+		"archiveCopy", policy.ArchiveCopy.Enabled,
+		"deleteGates", deleteGateSummary(policy),
 	}
+}
+
+// deleteGateSummary 汇总删除三闸的开启状态（启动日志用）。
+//
+// 措辞与 retention.Policy.DeleteGatesOpen 对齐：只有三闸全开才写 all-open，
+// 否则逐条列出未开的那几道——「差一道」与「差三道」的处置动作完全不同。
+func deleteGateSummary(policy retention.Policy) string {
+	if open, reason := policy.DeleteGatesOpen(); !open {
+		return "closed: " + reason
+	}
+	return "all-open（discard + sweep.vl_sweep + log_vl.delete_enabled）"
 }

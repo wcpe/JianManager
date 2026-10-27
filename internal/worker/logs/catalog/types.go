@@ -14,6 +14,15 @@ import (
 )
 
 // Owner 是分区权威存储层。Catalog 为每个 (storage_namespace, utc_day) 维护唯一 owner。
+//
+// 第三态 OwnerArchive 就是「已归档（ARCHIVED）」权威态：
+//   - 正本在归档目的地（manifest + 逐对象 sha256 + coverage 是权威证据，见 ArchiveEvidence）；
+//   - 热层副本**可以**回收（回收后 OwnerDirID 指向归档标识，不再指向任何物理热层目录）；
+//   - 查询面按「本地是否已恢复」决定可读性：有对齐的 PublishedProjection ⇒ 读 Rehydrate namespace；
+//     否则显式降级为 ARCHIVE_NOT_RESTORED（绝不指向已删除的热层目录、绝不静默返回空结果）。
+//
+// 该取值此前只被 rehydrate 侧引用而**没有任何生产迁移路径能到达**（全仓仅测试构造），
+// 故本次把它作为唯一权威态接通，而不是再造一个语义重复的第四态。
 type Owner string
 
 const (
@@ -30,6 +39,78 @@ func (o Owner) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// ArchiveCoverage 是归档覆盖范围的权威摘要（由导出侧逐文件枚举得出）。
+type ArchiveCoverage struct {
+	// ObjectCount 归档对象数；0 表示没有任何可读证据，禁止据此回收热层。
+	ObjectCount int `json:"object_count"`
+	// SourceBytes 源侧（冻结快照）字节数合计，压缩前。
+	SourceBytes int64 `json:"source_bytes"`
+	// StoredBytes 归档侧字节数合计，即压缩后落盘量。
+	StoredBytes int64 `json:"stored_bytes"`
+	// Complete 报告导出侧枚举是否已穷尽（缺此证明即不得声明「已归档」）。
+	Complete bool `json:"complete"`
+}
+
+// ArchiveEvidence 是「正本已在归档」的权威证据。
+//
+// 为什么这些字段必须落在 Catalog 记录里（而不是只写在归档 manifest 里）：
+// 删除热层是一个**不可逆**动作，它必须以「Catalog 承认这一天已归档」为前提。
+// 若证据只在归档侧，查询规划器仍会认为该分区属 HOT 权威并指向即将被删的目录——
+// 这正是此前不敢放行删除的原因。证据入 Catalog 后，删除前后每步都有单一真源可查：
+// 何时（ArchivedAt）、去哪（ProviderKind + ObjectPrefix）、清单校验和（ManifestChecksum）、
+// 覆盖范围（Coverage）、以及回收是否真的发生（HotReclaimed）。
+type ArchiveEvidence struct {
+	// ProviderKind 归档目的地类型（如 local / s3）。
+	ProviderKind string `json:"provider_kind"`
+	// ObjectPrefix 归档对象前缀，形如 namespace/day/g{generation}。
+	ObjectPrefix string `json:"object_prefix"`
+	// ManifestChecksum 写盘后**回读**的 manifest 字节 sha256。
+	ManifestChecksum string `json:"manifest_checksum"`
+	// Coverage 覆盖范围。
+	Coverage ArchiveCoverage `json:"coverage"`
+	// ArchivedAt 迁移到 ARCHIVED 权威态的时刻（UTC）。
+	ArchivedAt time.Time `json:"archived_at"`
+
+	// —— 迁移前权威快照：回滚的唯一依据（回滚必须把查询能力原样还给热层）——
+	PrevOwner      Owner                `json:"prev_owner"`
+	PrevDirID      string               `json:"prev_dir_id"`
+	PrevGeneration uint64               `json:"prev_generation"`
+	PrevProjection *PublishedProjection `json:"prev_projection,omitempty"`
+
+	// HotReclaimed 报告热层是否已真的回收。false 表示「已归档但热层残留」——
+	// 这是安全方向（数据多存一份、盘没省下来），但必须可观测，故单独成字段。
+	HotReclaimed bool `json:"hot_reclaimed"`
+	// HotReclaimedAt 热层回收完成时刻。
+	HotReclaimedAt time.Time `json:"hot_reclaimed_at,omitempty"`
+	// RollbackCount 归档→热层回滚的累计次数（回收失败被退回 HOT 的次数）。
+	RollbackCount int `json:"rollback_count,omitempty"`
+	// LastRollbackReason 最近一次回滚原因（审计用）。
+	LastRollbackReason string `json:"last_rollback_reason,omitempty"`
+}
+
+// Clone 返回证据的深副本（嵌套投影不得被读取方改写）。
+func (e *ArchiveEvidence) Clone() *ArchiveEvidence {
+	if e == nil {
+		return nil
+	}
+	out := *e
+	if e.PrevProjection != nil {
+		out.PrevProjection = (&Record{PublishedProjection: e.PrevProjection}).Clone().PublishedProjection
+	}
+	return &out
+}
+
+// ArchiveAuthorityID 返回归档权威位置的可读标识。
+//
+// 它**不是**物理目录：OwnerDirID 在 ARCHIVED 态指向归档标识而不是热层目录，
+// 于是「已删除的热层目录」不可能再被 OwnerForQuery / IsQueryPlannerVisible 选中。
+func (e *ArchiveEvidence) ArchiveAuthorityID() string {
+	if e == nil {
+		return ""
+	}
+	return "archive:" + e.ProviderKind + ":" + e.ObjectPrefix
 }
 
 // PartitionKey 唯一标识一条 Catalog 记录。
@@ -180,6 +261,21 @@ type Record struct {
 	PartialReasons   []string `json:"partial_reasons,omitempty"`
 	// ConflictGeneration 非空表示 journal/目录对照出现冲突 generation。
 	ConflictGeneration string `json:"conflict_generation,omitempty"`
+
+	// ArchiveEvidence 非空表示本分区此前/当前的价值来自归档（ARCHIVED 权威态）。
+	//
+	// 与 Owner 的关系：`Owner == OwnerArchive` 时它是**当前**权威证据；
+	// Owner 已回滚为 HOT 时它保留为**历史**审计（回滚次数、原因），此时不得据此删除热层。
+	ArchiveEvidence *ArchiveEvidence `json:"archive_evidence,omitempty"`
+
+	// RetiredHotDirs 是「已归档、热层副本已回收」的目录登记。
+	//
+	// 单独成字段而**不**放进 ResidualDirs：ResidualDirs 参与
+	// IsMigrationComplete 的「迁移未完成」判定，而归档完成后的热层回收集合
+	// 恰恰是**已完成**的正常形态——混用会让每个已归档分区永久显示为迁移未完成。
+	// 它们仍必须被 QueryPlanner 排除（见 excludedQueryDirs），否则 VL 重新 attach
+	// 一个旧目录就能把已删除数据的位置塞回查询面。
+	RetiredHotDirs []PhysicalDir `json:"retired_hot_dirs,omitempty"`
 }
 
 // Clone 返回记录及嵌套投影的深副本，读取方不能改写权威对象。
@@ -200,6 +296,10 @@ func (r *Record) Clone() *Record {
 	if r.PartialReasons != nil {
 		c.PartialReasons = append([]string(nil), r.PartialReasons...)
 	}
+	if r.RetiredHotDirs != nil {
+		c.RetiredHotDirs = append([]PhysicalDir(nil), r.RetiredHotDirs...)
+	}
+	c.ArchiveEvidence = r.ArchiveEvidence.Clone()
 	if r.PublishedProjection != nil {
 		pp := *r.PublishedProjection
 		if r.PublishedProjection.ClosedVisibleSeq != nil {
