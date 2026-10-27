@@ -400,3 +400,28 @@ const (
   行为与改动前逐指令等价。
 - 删除路径：`sweep.vl_sweep: false`（默认）**或** `discard: false`（默认）**或** `log_vl.delete_enabled: false`（默认），
   任一即可关闭；三者独立（`archive_copy` 的回收热层走**同一套**三闸，不是另立一套）。
+
+### 7.9 S3/MinIO 接线真机冒烟（2026-10-27）
+
+配置面用例只能证明「键被解析、非法值被拒」，证明不了「真的装配了 S3 provider」。因此用真二进制做了一次启动冒烟：
+
+```
+# provider=s3
+→ msg="日志导出归档已装配（搬不了冷层时导出为独立副本；回收热层仍需删除三闸全开）" provider=s3 root=""
+→ msg="日志归档热层回收未就绪（导出仍会执行，原物保留）" reason="意图闸 log_retention.discard 未打开"
+
+# provider=minio（其余不变）
+→ provider=minio root=""
+
+# 删掉 bucket
+→ ERROR 加载 Worker 配置失败 error="log_retention.archive_copy.bucket 不能为空（provider=s3 必须给出桶名）"
+
+# provider: gcs
+→ ERROR 加载 Worker 配置失败 error="log_retention.archive_copy.provider 不支持 \"gcs\"（支持 local / s3 / minio）"
+```
+
+**注意 `provider=minio` 时 Kind 真的是 `minio` 而不是 `s3`**——这正是本次顺手修的既有缺陷：原装配对 `provider: minio` 也调 `NewRemoteS3Provider`，`Kind()` 恒报 `s3`，于是 Catalog 的 `ArchiveEvidence.ProviderKind` 里 MinIO 与 AWS 分不出来。
+
+**本次冒烟未验证的**：没有真的把对象写进 S3。原因：需要可用的 S3/MinIO 端点。FR-478 已有 env 门控的真机 MinIO 测试（`internal/worker/storage/s3_realminio_test.go`，靠 `JM_ACC_MINIO_ENDPOINT/BUCKET/AK/SK`），但它验的是 `storage` 包自己的上传/下载/删除，**不是**`archive.RemoteS3Provider` 在导出路径上的三重校验。后者要验，需要一个真桶 + 一个可导出的冻结快照——本轮未做。
+
+**为什么这个缺口不能再拖**：导出的三重校验（回读 sha256、解压逐字节、manifest 重校验）全都是通过 `Provider.Get` 做的，而 `RemoteS3Provider.Get` 是全对象 `io.ReadAll`。在本地盘上这没问题，在 S3 上是每次校验多一次完整下行。这是**成本**问题而非正确性问题，但它意味着「小文件很多的分区」在 S3 上的导出代价会跟文件数线性放大——需在真桶上量一次才能说准。
