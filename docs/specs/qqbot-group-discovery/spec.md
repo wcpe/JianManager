@@ -1,8 +1,10 @@
 # 功能规格：QQ 机器人扫码接入与已发现群列表
 
-> 状态：开发中（真机验收通过；**群聊路径已下线、控制台改为扫码绑定**，见 §5.1）　·　关联 PRD：FR-495（增强 FR-494）　·　分支：feat/qqbot-notification-channel
+> 状态：开发中（真机验收通过；**群聊投递路径已下线、控制台改为扫码绑定**，见 §5.1）　·　关联 PRD：FR-495（增强 FR-494）　·　分支：feat/qqbot-notification-channel
 
 > **2026-09-29 后续变更**：平台拒绝群主动消息（`40034105`），前端群聊路径（目标类型选择、已发现群下拉）**已下线**；控制台新增**扫码绑定**——经 `q.qq.com` 绑定页自动取得 `appId`/`appSecret`/`user_openid`，密钥落 `<dataRoot>/etc/qq/`、前端只填 `${QQ-<appId>}`。本说明涉及的分享链接/网关/群发现端点保留（平台开放后可复用）。回落目录与 CP 主密钥的隔离见 FR-494 spec。
+
+> **状态真实面貌（2026-10-27 核对，以代码为准）**：本 FR 的前端部分**不是「待验」，而是已被主动拆除**。拆除决策的记录位置有两处：拆除方案 `.narrafork/plans/plan-qq-channel-onboarding-ux--ba5rt6SwZmzXSr95.md`（决策 2「群聊删到什么程度」，不入库、仅本地保留）与生产代码里的论证注释 `apps/control-plane-web/src/pages/alerts/ChannelDialog.tsx`（`targetType` 固定单聊的原因）；类型层收敛为单值见 `alert-helpers.ts` 的 `QQTargetType = 'c2c'`，行为由 DOM 回归 `ChannelDialog.dom.test.tsx`「存量群聊通道：保存时 targetType 被纠正为 c2c 并给出提示」钉住。**建通道（前端选群入口）与「QQ 接入」视图均已不存在**；如需恢复属**新建工作**，不是「待验」。后端 group 投递配置、三个群发现/分享端点、`qq_discovered_groups` / `qq_gateway_connections` 两表全部保留（详见 §3.2、§5.2）。
 
 ## 1. 背景与目标
 
@@ -16,11 +18,11 @@ FR-494 交付了 QQ 机器人通知通道，但 `targetId`（`group_openid`）�
 - **单机器人共享**：一个机器人进多个群，所有 `qq` 通道共用 `appId`/`appSecret`，只换 `targetId`。个人主体机器人名额有限（5 个），共用最省配额；token 缓存也是按 `appId` 设计的。
 - **WebSocket 事件接收**：官方「不依赖公网服务器部署」，符合不暴露入站端口的约束。代价是 CP 维护一条长连接（心跳 + 断线重连）。
 
-目标：
+目标（**历史目标**：下列第 3 条已被 2026-09-29 产品决策推翻，现实交付见 §5.2）：
 
 - 后端可生成机器人分享链接并以前端二维码展示（二维码渲染在前端，后端只返回 URL）。
 - CP 常驻一条 QQ 网关 WebSocket 连接，收到 `GROUP_ADD_ROBOT` 即落库 `group_openid`。
-- 前端通道表单的「目标 openid」改为「已发现群」下拉 + 手工输入兜底。
+- ~~前端通道表单的「目标 openid」改为「已发现群」下拉 + 手工输入兜底。~~ → 已下线：前端只做**只读观测**（网关状态 + 已发现群列表），不提供选群建通道入口。
 - 保持 FR-494 的纯出站投递能力不变；事件链路故障不影响告警发送。
 
 ## 2. 需求（要什么）
@@ -29,14 +31,13 @@ FR-494 交付了 QQ 机器人通知通道，但 `targetId`（`group_openid`）�
 - 二维码展示：前端把分享 URL 渲染为二维码；二维码需可刷新（重新生成链接）。
 - 网关连接：CP 维护按 `appId` 的网关连接（单连接，不分片），订阅 `intents = 1<<25`（`GROUP_AND_C2C_EVENT`），自动重连，连接状态对外可见。
 - 已发现群：收到 `GROUP_ADD_ROBOT` 落库（`group_openid`、`op_member_openid`、`timestamp`，按 `group_openid` 去重）；前端提供已发现群列表查询。
-- 通道表单：`targetType=group` 时优先从已发现群下拉选择，仍保留手工输入（兼容单聊 `c2c` 与历史数据）。
+- 通道表单：`targetType=group` 时优先从已发现群下拉选择，仍保留手工输入（兼容单聊 `c2c` 与历史数据）。**（已推翻）** 现状：`targetType` 固定 `c2c` 且无可编辑控件，存量 `group` 通道保存时自动纠正为单聊并提示。
 - 连接与投递解耦：网关连接断开/未配置时，`qq` 通道的告警投递不受影响（投递只用 HTTP，本来就不依赖网关）。
 
 ### 范围内
 
 - 后端：分享链接生成（`POST /v2/generate_url_link`）、网关连接管理（`GET /gateway` → WSS → Identify → 心跳 → 重连/Resume）、`GROUP_ADD_ROBOT` 事件落库、已发现群查询 API、网关连接状态查询 API。
-- 前端：分享二维码展示与刷新、通道表单的群下拉（`group` 时）+ 手工输入兜底、已发现群管理视图（列表）。
-- 测试：单测覆盖事件解析、去重落库、重连退避；DOM 回归覆盖表单下拉渲染。
+- 前端：分享二维码展示与刷新（已随拆除下线）、**只读接入状态观测区**（网关状态 + 已发现群列表，见 §3.2）。
 - 文档：PRD 新增 FR-495 条目与验收标准、API 端点文档、ARCHITECTURE 事件链路章节。
 
 ### 范围外
@@ -93,13 +94,22 @@ FR-494 交付了 QQ 机器人通知通道，但 `targetId`（`group_openid`）�
 
 ### 3.2 前端
 
-- 通道表单（`targetType=group` 时）：「目标群」下拉（数据来自 `GET /qq/groups`，展示 `group_openid` + 发现时间）+ 「手工输入 openid」切换；`c2c` 时保持纯手工输入。
-- 新增「QQ 接入」视图（挂在通道页内或独立小节，实现时定）：分享二维码展示（前端用 `qrcode` 相关轻量库或 `<canvas>` 自绘，**不要手写二维码编码**）、刷新按钮、网关连接状态徽标、已发现群列表。
-- 二维码库选型：项目原本零二维码依赖，实际新增 **`react-qr-code@^2.2.0`**（`dist.unpackedSize` 约 19.9 KB，含 `qrcode-generator` 依赖；对比 `qrcode.react` 约 115 KB 小约 5.8 倍）。渲染为 SVG，无 canvas/浏览器 API 依赖，jsdom 中可直接断言。
+现实交付（以代码为准，2026-10-27 核对）：
+
+- **建通道的选群入口已不存在**：`targetType` 前端收敛为单值 `c2c`（`alerts/alert-helpers.ts` 的 `QQTargetType`），对话框只只读展示「单聊（平台不支持群主动消息）」，提交前一律归一为 `c2c`（`ChannelDialog.tsx` `handleSubmit`）；存量 `group` 通道保存时自动纠正并提示。不提供群下拉、不提供「手工输入 openid」切换按钮，也不承认存量 `group` 值。
+- **扫码绑定**（替代原「QQ 接入」视图）：入口在通道对话框「机器人凭证」分区，扫码一次自动回填 `appId` / `${QQ-<appId>}` 引用名 / 单聊 `user_openid`；手工填写路径始终保留作兜底。轮询 2s、二维码过期自动重申请**上限 3 次**（平台实测约 9 次即 `100017` 限流）。
+- **只读接入状态观测区**（2026-10-27 补强）：QQ 通道对话框内新增「接入状态（只读）」面板（`pages/alerts/QQConnectivityPanel.tsx`），包含：
+  - **QQ 网关状态**：徽章（connected / connecting / disconnected / error / 未知）+ `appId` + 最近事件相对时间 + 后端 `lastError` 原文；4014 类错误额外给本地化可操作提示（明确指向 `1<<25 GROUP_AND_C2C_EVENT` 权限），4914/4915 不造泛化建议；查询失败只在区块内联错误 + 重试，**不弹 toast**。30s 轮询（`QQ_GATEWAY_POLL_MS`）。
+  - **已发现群（N）**：折叠区，列表展示 `group_openid` 前 8 位 + 首次/最近发现相对时间；N 取信封 `total`（后端默认一页 20 条，用 `items.length` 会静默少报）；末尾附固定免责文案「QQ 平台已不支持群主动消息，这些群当前无法接收告警；此处仅作接入状态观测」。
+  - 两个区块均按 `alert.manage` 门禁：无该权限时整块不渲染，**也不发注定 403 的请求**。
+  - **约束**：本面板是纯观测，不得为它补回群选择控件或手工输入 `group_openid` 的入口（那等于交付一个用不了的功能）。
+- ~~通道表单（`targetType=group` 时）：「目标群」下拉 + 「手工输入 openid」切换；`c2c` 时保持纯手工输入。~~（已拆除）
+- ~~新增「QQ 接入」视图（分享二维码展示与刷新、网关状态徽标、已发现群列表）。~~（已拆除；分享链接前端调用点随之移除，见 §6 关于 `100017` 限流的风险条目）
+- 二维码库选型：项目原本零二维码依赖，实际新增 **`react-qr-code@^2.2.0`**（`dist.unpackedSize` 约 19.9 KB，含 `qrcode-generator` 依赖；对比 `qrcode.react` 约 115 KB 小约 5.8 倍）。渲染为 SVG，无 canvas/浏览器 API 依赖，jsdom 中可直接断言。现服务于**扫码绑定**二维码（分享链接二维码已随拆除下线）。
 
 ### 3.3 Mock 与测试数据
 
-- devmock：`/qq/groups` 返回两条假群；`/qq/share-link` 返回固定假 URL；`/qq/gateway/status` 返回 connected。前端 DOM 回归不依赖真实网关。
+- devmock：`/qq/groups` 返回两条假群；`/qq/share-link` 返回固定假 URL；`/qq/gateway/status` 返回 connected。前端 DOM 回归不依赖真实网关。契约形状由 `packages/devmock/src/qq-discovery-contract.test.ts` 钉住（信封 `{items,total}` + 响应不含 `appSecret`），因为前端 `normalizeQQDiscoveredGroupsPage` 的信封分支只能靠真实形状打到。
 
 ## 4. 任务拆分
 
@@ -108,17 +118,20 @@ FR-494 交付了 QQ 机器人通知通道，但 `targetId`（`group_openid`）�
 - [x] 后端测试：事件解析与去重、重连退避状态机（用假 WSS 服务端）、端点鉴权与参数校验。
 - [x] 交叉复核并修复：心跳 goroutine 每次重连泄漏、Op9 会话失效未处理（会导致「连上但永不再收事件」的假绿灯）、退避档位不复位、ACK 超时不断开、`Stop()` 抹掉人工介入诊断；补齐 Resume / Op9 / ACK 超时 / goroutine 不泄漏的回归用例（含变异验证）。
 - [x] 前端：二维码展示与刷新、群下拉 + 手工兜底、接入视图与状态徽标；接入小节按 `alert.manage` 门禁（只读用户不再看到必然失败的写请求）。
-- [x] 前端测试：helper 与表单 DOM 回归（devmock 覆盖三端点，且信封形状与真实后端一致）。
+  - **2026-10-27 更正**：此条原勾选为过时勾选——上述群下拉 / 接入视图 / 分享二维码均已在 2026-09-29 被**主动拆除**（拆除方案 `.narrafork/plans/plan-qq-channel-onboarding-ux--ba5rt6SwZmzXSr95.md` 决策 2；代码注释 `ChannelDialog.tsx` `targetType` 固定单聊那段）。实际交付的前端为：**扫码绑定**（轮询 2s、自动重申请上限 3）+ **只读接入状态观测区**（网关状态 + 已发现群，见 §3.2）。如需恢复群前端，属新建工作而非「待验」。
+- [x] 前端测试：helper 与表单 DOM 回归（devmock 覆盖三端点，且信封形状与真实后端一致）。**2026-10-27 补**：`QQConnectivityPanel.dom.test.tsx` 九个用例覆盖网关四态 + 群 0/N 条 + 无权限不发请求 + 「无任何群选择控件」边界；`alert-helpers.test.ts` / `alerts.test.ts` 覆盖展示映射与 `total` 归一化。
 - [x] 真机冒烟验证（真实二进制，非单测）：CP 启动不被网关阻塞、两张新表与唯一索引建成、三个端点鉴权生效（401）、未配置 `qq` 通道时安静待机不写库。**并据此抓到并修复了测试覆盖不到的盲区**——建连失败只落日志、退避前清空 `last_error`，导致配置错误在 UI 上表现为永远「连接中」。
 - [x] 文档同步：PRD（FR-495 条目 + 验收标准 + 索引）、API.md、ARCHITECTURE.md。
-- [ ] 真机验收：测试号扫码 → 进群 → 后端出现该群 → 选群建通道 → 测试发送到达。
+- [ ] 真机验收（**不可按原描述执行**）：测试号扫码 → 进群 → 后端出现该群 → 选群建通道 → 测试发送到达。
+  - 前四步（扫码 / 进群 / 落库）已于 2026-09-29 真机通过（§5.1）；**「选群建通道」已无 UI 入口**、「群测试发送到达」被平台以 `40034105` 拒绕不过，故末两步**不可达**。剩下可验的部分（单聊扫码绑定 → 落库 → 单聊测试发送到达）**已由真机覆盖**；本行保留仅为记录「原验收路径已失效」，不再作为待办。若平台开放群主动消息，应新立 FR 重做前端入口并重跑全链路。
 
 ## 5. 验收标准
 
-- 分享：调分享端点可拿到分享 URL（**实测返回短链 `https://bot.q.qq.com/s/<码>`**，非文档示例的旧格式），前端原样渲染为可扫二维码；刷新后重新生成。
+- 分享：~~调分享端点可拿到分享 URL，前端原样渲染为可扫二维码；刷新后重新生成。~~ → **前端已拆除**（无 `useCreateQQShareLink` 调用点），分享链接现在只：经 `POST /api/v1/alerts/qq/share-link` 验端点可用。**不补回刷新按钮的理由**：平台实测约 9 次即 `100017` 限流（§6），而运维主路径已改为扫码绑定（不需要分享链接），接它只能造一个会把自己限死的按钮。
 - 网关：CP 启动后网关连接状态为 connected（需机器人已申请 `1<<25` 权限；无权限时状态为 error 且错误信息明确指向 intent 权限）。
 - 发现：测试号把机器人拉进群后 1 分钟内，已发现群列表出现该 `group_openid`（附操作人 openid 与时间）；重复进群不产生重复条目。
-- 建通道：通道表单 `group` 类型可从下拉选群提交，提交的 `targetId` 与所选群一致；手工输入仍可用。
+- 建通道：~~通道表单 `group` 类型可从下拉选群提交~~ → **已失效**：入口已拆除。现行验收为反向断言——通道对话框不得出现任何群选择控件，存量 `group` 通道保存后被纠正为 `c2c`（DOM 回归 `ChannelDialog.dom.test.tsx` 与 `QQConnectivityPanel.dom.test.tsx` 共同钉住）。
+- 只读观测：`qq` 通道对话框中可看到网关状态徽标（connected/connecting/disconnected/error/未知）与后端 `last_error` 原文；4014 类错误额外出现指向 `1<<25 GROUP_AND_C2C_EVENT` 的可操作提示；已发现群区计数取信封 `total`、列表仅展示前 8 位 openid 与首次/最近发现时间，并常驻「这些群当前无法接收告警」免责文案；两个查询失败只在区块内联报错（不弹 toast）；无 `alert.manage` 时整块不渲染且不请求。
 - 解耦：网关断开时 `qq` 通道测试发送仍成功（投递走 HTTP，不依赖网关）。
 - 密钥安全：分享/状态/群列表三个端点的响应均不含 `appSecret`；前端任何位置不出现密钥明文。
 - 自动化验证：
@@ -152,6 +165,25 @@ FR-494 交付了 QQ 机器人通知通道，但 `targetId`（`group_openid`）�
 - 官方 `tencent-connect` 组织自有仓库维护者表态：「群内的主动消息平台侧不支持，暂时无法实现」「不推荐使用群聊方式接入，后续群聊不会支持完整功能，推荐使用私聊」。
 - 官方文档的频控表（未认证 30qpm、每群 1000 条/天）与实测行为**相互矛盾**，属文档描述超前于平台实现。
 - 结论：**群聊主动推送不能作为交付承诺**；可行的主动通道是**单聊**，群内消息只能在有 `msg_id`（成员 @ 后 5 分钟 / 5 次）或 `event_id`（如 `GROUP_ADD_ROBOT`）时做**被动回复**。
+
+## 5.2 已拆除 vs 待验：真实边界（2026-10-27）
+
+> 本节是为了消除一个反复被误读的状态：PRD 曾写「建通道与前端**待验**」，而实际上那块前端**已被主动拆除**。
+> 「待验」意味着东西做了、只差验证；「已拆除」意味着东西**不存在**。两者对后续决策的含义完全相反。
+
+| 能力 | 当前真实状态 | 证据位置 |
+|---|---|---|
+| 建通道时的「已发现群」下拉 / 手工+列表切换 | **已拆除**（不存在） | `ChannelDialog.tsx` 无该区块；DOM 回归 `ChannelDialog.dom.test.tsx`「群聊彻底下线」系列反向断言 |
+| 「QQ 接入」独立视图（分享二维码 + 群列表） | **已拆除**（`QQOnboardingSection.tsx` 不存在） | 仓库内无此文件；`useCreateQQShareLink` 无调用点 |
+| 分享链接的前端入口与刷新按钮 | **已拆除**（后端端点保留） | `api/alerts.ts` `useCreateQQShareLink` 无调用点 |
+| `targetType=group` 选择控件 | **已拆除**，且类型收敛为 `QQTargetType = 'c2c'` | `alert-helpers.ts`；`ChannelDialog.tsx` `handleSubmit` 归一 |
+| 存量 `group` 通道的纠正 | **已实现并验证**（自愈而非阻截） | `ChannelDialog.dom.test.tsx` 存量群聊用例 |
+| 后端 group 投递分支 | **保留且仍正确** | `channel_notifier.go` `qqMessageSegment`（group→`groups` 段）+ 单测用例 |
+| 三个群发现/分享端点 + 两个新表 | **保留且在线**（`alert.manage` 门禁） | `router/alert.go`；`model/qq_discovery.go` |
+| 网关状态 / 已发现群的可视化 | **只读观测已实现**（本次），**不可选** | `QQConnectivityPanel.tsx`；`QQConnectivityPanel.dom.test.tsx` |
+| 群主动消息投递 | **平台拒绝，不可交付** | §5.1 `40034105`；`bot_state.allow_proactive_msg=false` |
+
+**如此定界的理由**：保留后端并接入只读观测，是「平台开放后可即时启用」与「当前不把死路交给运维」两者唯一能同时成立的组合。恢复群前端不是「把拆除的勾补回来」，而是一次**新功能**：需要新 UI、新测试、新产品决策（进群事件无归因、手选群的交互怎么设计），并且必须先确认平台已允许群主动消息，否则做完仍然收不到告警。
 
 ## 6. 风险 / 待定
 
