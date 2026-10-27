@@ -232,3 +232,48 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 > **落库前置**：以上 action 已登记到 CP 强白名单与 proto action 注释；审计仍须经已认证 Worker 通道及既有范围校验，未知 action 不放行，见 §5。`orphan.scan_detected` 为既有 action（三态孤儿的 warn 档同用），开关关闭路径复用同一枚举值，不新增审计输入面；降级留痕复用既有 `orphan.scan_dispose_blocked`（「处置被拦截」语义），以 detail 的 `reason` 与「归属复核不过」（`reason=ownership_unverified`）、「启动接管在飞」（`reason=startup_takeover_inflight`）区分，同样不新增审计输入面。
 
 **新增代码入口**：`Manager.AdoptUnmanagedDaemonInstances`（一轮收养）、`Manager.DiscoverUnmanagedDaemonInstances`（只发现不处置，供 `auto_adopt=false` 用）、`Manager.discoverUnmanagedLiveRecords`（两路共用的发现判据）、`OrphanScanner.SetAutoAdopt`、`OrphanScanner.Start`（立即一轮）、`OrphanScanner.ScanOnce`（第 0 相）、`OrphanScanner.warnUnmanagedNotAdopted`（关闭开关时的去重告警）；新增 `OrphanKindUnmanagedLiveRuntime` 与 `OrphanFinding.Adopted`。§2.5 降级链：`OrphanScanner.setUnmanagedLiveGuard` / `resetUnmanagedLiveGuard`（保护快照每轮重建）、`OrphanScanner.unmanagedLiveGuardHit`（PID / 工作目录双口径命中）、`OrphanScanner.scanDirectOrphans`（命中即跳过 `handleDirectOrphan`）、`OrphanScanner.warnDowngradedDirectOrphans` + `newlyDowngraded`（去重留痕）。
+
+### 5.1 收紧不破坏现有收养：生产环境值的等价性验证（2026-10-27）
+
+§5 已记「子串匹配已收窄」，但那里只有单测形状的推理。收紧判据的最大风险不是「旧缺陷修不好」，而是**把本来能用的收养也拦掉**——那样生产上从「可能误杀」变成「完全收养不了」，后果更直接。因此另做了两项实证：
+
+**① 生产 wrapper 的真实环境值**（`/proc/<wrapper pid>/environ`，原样摘）：
+
+```
+JM_DAEMON_WRAPPER_CONFIG={"instance_uuid":"17b4cbb9-d3f0-48e9-b943-31dd0d869676","start_command":"java -Xms1024M -Xmx1024M -jar paper-1.20.1-196.jar nogui","stop_command":"stop","work_dir":"/home/wxys233/servers/game-01",...}
+```
+
+UUID 两侧是 `"`（JSON 引号），不属 UUID 字符集 ⇒ **命中**，现有收养路径不受影响。
+
+**② 复刻实现逻辑的等价性表**（7 个形态）：
+
+| 形态 | 期望 | 实测 |
+|---|---|---|
+| 生产真实环境值（JSON 内 UUID 被引号包裹） | 通过 | ✅ 通过 |
+| 他实例 UUID = 本实例 UUID + `-aa` 后缀 | 拒绝 | ✅ 拒绝 |
+| 前缀污染 `aa<uuid>` | 拒绝 | ✅ 拒绝 |
+| 路径包裹 `/srv/<uuid>/server.jar` | 通过 | ✅ 通过 |
+| `MONITOR_TARGETS=sandbox-<uuid>-replica` | 拒绝 | ✅ 拒绝 |
+| 纯 UUID 值（整条值就是 UUID） | 通过 | ✅ 通过 |
+| 无关内容 | 拒绝 | ✅ 拒绝 |
+
+⇒ **生产形态不变（仍收养），而三种污染形态全部被拦**。这是「收紧不破坏现有能力」的直接证据。
+
+**注意这条证据的边界**：它验的是**判据函数**在真实环境值上的行为，不是「生产上真的收养成功」——后者需要一次真实的未纳管进程对才能验，本轮未做。两者不能互相替代。
+
+### 5.2 收养后下游链路的真机补验（2026-10-27）
+
+原先「收养 → 心跳 RUNNING / 健康巡检 / Stop」只有单测，且用替身进程（无 stdin 协议、无 SIGTERM 处理、无日志输出）代替真实服务端。本次补上真夹具：
+
+- 夹具：`internal/worker/process/testdata/mcstub/MinecraftServerStub.java`，**只用 JDK 自带 API**（不依赖任何 Minecraft 服务端 jar）：能按行写日志（供采集侧观察）、处理 SIGTERM 优雅退出、能被 stdin 的 `stop` 命令终止。
+- 覆盖：收养后 `GetAllInstanceStates` 报 RUNNING 且 PID 为夹具真实 PID；健康巡检真的检查到该实例（`state==StateRunning` 不被跳过）且区分探针可达/不可达两形态；`StopContext` 后 java 进程真的退出且不误杀无关进程。
+
+**顺带修掉的真缺陷**：收养实例无启动宽限期——`StartedAt` 零值使 `warmupRemaining` 返回 0，健康巡检第一拍就开始判死，而收养正是最需要宽限的场景（刚接管的实例探测链路未必立刻通）。两条登记路径（新建 / 就地补齐）都补写纪元，回归 `TestFR497_AdoptedHealthScanHasStartupWarmup`（删掉该赋值即转红）。
+
+**仍未验的（不得外推）**：
+
+| 项 | 为什么没做 |
+|---|---|
+| Windows 真机 | 本机是 Linux。该平台无 `/proc`（environ 读不到 ⇒ 两个分支都 fail-closed）、`OpenProcess`/`taskkill` 行为、`samePath` 大小写敏感性均未实机验证。仅到 `GOOS=windows go build/vet` 通过 |
+| 真实 MC 服务端（Paper/Bungee）| 夹具是自写的 stub。它证明的是「控制链路与进程生命周期正确」，不是「真 Paper 启动行为」——两者边界不同 |
+| 真实 `systemctl restart` 下的收养 | FR-500 已在本项外覆盖（三臂实验）；两者的交叉（重启后收养 + 巡检 + Stop 一次跑通）本轮未做 |
