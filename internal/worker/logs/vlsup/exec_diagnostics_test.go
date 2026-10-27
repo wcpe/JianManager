@@ -136,12 +136,21 @@ func TestExecHandleNormalStopIsSingleWaitAndExitZero(t *testing.T) {
 	for !strings.Contains(strings.Join(h.Snapshot().Diagnostics, " "), "ready") && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
+	// grace 是「等子进程优雅退出」的预算，超了就走 Kill ⇒ ExitCode=-1。
+	//
+	// 固定 1 秒在普通构建下很宽裕，但在 -race 下不够：竞态检测器把整条路径放慢几倍，
+	// 子进程收尾往往赶不上，于是「正常停止 ⇒ ExitCode==0」变红，而那个 -1 只是插桩开销。
+	// 故只放宽预算，**三条断言（Stopped / ExitCodeKnown / ExitCode==0）一字不改**。
+	grace := time.Second
+	if raceEnabled {
+		grace = 5 * time.Second
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := h.Stop(time.Second); err != nil {
+			if err := h.Stop(grace); err != nil {
 				t.Error(err)
 			}
 		}()
