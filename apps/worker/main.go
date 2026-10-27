@@ -972,14 +972,17 @@ func runWorker() {
 				}
 				// 归档对象自身的回收（FR-501）：把归档目的地里**已过保留期**的副本删掉。
 				//
-				// 为什么它挂在 `archive_copy.enabled` 之下：没有目的地就没有可清的对象，
-				// 此时即便 archive_object_retention.enabled 为真也无从下手。注意**反方向不成立**——
-				// 开了导出不等于授权清除（删除比写入危险得多），清除仍要过同一套三闸。
+				// 装配条件是「本项生效 **且** 有归档根」，**不**要求 archive_copy.enabled：
+				// 「停止写新归档，但仍要清理旧归档」是一个真实且合理的运维动作
+				// （例如归档盘快满了、或已经决定不再新增归档）。若把它绑在导出开关上，
+				// 那个动作就只能靠「继续导出 + 同时清理」来实现——反而多写数据。
+				// 注意**反方向不成立**：开了导出不等于授权清除（删除比写入危险得多），
+				// 清除仍要过同一套三闸。
 				//
 				// 三个出口必须成套：lister 提供候选、authority 提供「已清除」权威态、
 				// store 才是真正删除对象的那一步。任一缺失都让 reclaimer 为空，
 				// 于是启动日志会明确写出「未装配」——而不是一个永远不动的计数器。
-				if retentionPolicy.ArchiveCopy.Enabled && retentionPolicy.ArchiveObjectRetention.Active() {
+				if retentionPolicy.ArchiveObjectRetention.Active() {
 					root := strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
 					if root != "" {
 						provider := archive.NewLocalArchive(root)
@@ -993,14 +996,15 @@ func runWorker() {
 							slog.Info("归档对象回收已装配但删除三闸未全开（一个对象都不会删）", "reason", gateReason)
 						} else {
 							slog.Warn("归档对象回收已就绪：三闸全开时将按保留期删除归档目的地里的副本",
-								"root", root, "retention", retentionPolicy.ArchiveObjectRetention.Retention.String())
+								"root", root, "retention", retentionPolicy.ArchiveObjectRetention.Retention.String(),
+								"archiveCopyEnabled", retentionPolicy.ArchiveCopy.Enabled)
 						}
+					} else {
+						// 开关开了但没有归档根 ⇒ 不知道去哪清。必须显式说出来：
+						// 静默不装配会让运维以为「配了 enabled 就在跑」，而归档纹丝不动。
+						slog.Warn("归档对象回收已启用，但未配置归档根目录，本项不会生效",
+							"hint", "需要在 log_retention.archive_copy.root 给出归档目的地根目录")
 					}
-				} else if retentionPolicy.ArchiveObjectRetention.Enabled {
-					// 开关开了但导出没开 ⇒ 没有目的地可清。这里必须显式说出来：
-					// 静默不装配会让运维以为「配了 enabled 就在跑」，而归档纹丝不动。
-					slog.Warn("归档对象回收已启用，但导出归档未启用（没有归档目的地可供清除），本项不会生效",
-						"hint", "需要同时开启 log_retention.archive_copy.enabled 并给出 root")
 				}
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
 			}
