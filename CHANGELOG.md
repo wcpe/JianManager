@@ -8,6 +8,16 @@
 
 > 本段为 `v0.24.0` 开发版归档区；正式发版时整理为新版本段。
 
+### 新增
+- **导出归档目的地接线 S3/MinIO（FR-501，2026-10-27，未发布）**：此前后者只能写本地目录，副本与热层同机同盘 ⇒ 单盘故障/整机报废时副本跟着没，「删前归档」只剩「省空间」而丢了「保一份」。现 `log_retention.archive_copy.provider` 支持 `local`（默认）/`s3`/`minio`，新增 endpoint/bucket/region/prefix/access_key/secret_key/use_ssl；复用 FR-478 已真机验过的 SigV4 `archive.RemoteS3Provider`，不新造协议也不新造凭证模型。目的地不完整（local 无 root / s3|minio 无 endpoint 或 bucket / provider 写错）一律**启动即拒**；构造失败只降级导出器（不装出口 ⇒ 到期分区落 blocked 保留原物），不让 Worker 启动失败。顺手修了既有装配对 `provider: minio` 也走 S3 构造函数、导致 Kind 恒报 `s3`（归档证据里因此分不出 MinIO/AWS）的分支。
+  已验证：四组配置面用例（缺键各拒且点名缺失键、未知 provider、逐字段 YAML 解析、默认 local + 校验无副作用）；`go build ./...`、`go vet ./...` 退出 0；`go test ./internal/worker/ -run TestRetentionArchiveCopy` 全绿。
+  **未接线**：归档对象自身的回收（桶内生命周期）仍没做，需先裁定「删了归档对象后权威态该怎么表达」——若仍留 `Owner=archive`，查询面会报 `LOG_ARCHIVE_MISSING`（意思是「缺失」，但真相是「已按保留期清除」），那是撒谎。
+- **FR-500 形式化验收记录（2026-10-27）**：三臂实验用当前 HEAD 重建二进制重做，**重做时先撞上脚本自己的平凡通过缺陷**——第一版判据是「wrapper 与 java 都不在 ⇒ red PASS」，而「不在」既可能是被 SIGTERM 打死也可能是压根没启动；首次重跑就把后者判成 PASS。真实起因两处：`$SERVERS/$UUID` 目录不存在（Go 的 `exec.Cmd.Dir` 不存在时报的是 `fork/exec /usr/bin/sh: no such file or directory`，看上去像 sh 没了）与 worker PID 在 exec 之前就被 pgrep 读空。已补 `require_alive` 前置守卫（三个进程 SIGTERM 前必须 PID 非空且存活，否则整轮作废而非判 PASS/FAIL），三臂此后均真绿：red = 三者同处单元 cgroup 且 SIGTERM 后双双 DEAD；fixed-adopt / fixed-self = 单元 cgroup 只剩 worker、SIGTERM 后双双 ALIVE。
+  生产取证：19/19 实例已在 `jianmanager-daemons/<uuid>`（57 个叶目录中 19 个有成员，每个恰好 2 进程，java 的 PPid 为 wrapper ⇒ 先迁后生），19 条 `moved=2`；单元 cgroup 内的 java 全是 Gradle/Kotlin daemon，**零游戏服**。
+  **新登记一处部署形态漂移**：本机生产 CP/Worker 被 systemd 收养进 `vantaloom-runtime.service`（`KillMode=control-group`），带 `KillMode=process` 的 `jm-prod-worker.service` 在册但 inactive，`jm-worker-node-main.service.d/10-killmode.conf` 已成孤儿 drop-in。该形态下运行期隔离是**唯一防线**，Worker 启动自检已如实告警。未做本机生产单元主动重启（需停机窗口人工执行），因此 PRD 不升级为已交付。
+- **FR-499 生产复验产物（2026-10-27）**：量化读数重测于高负载机械盘宿主——整轮采集墙钟 **11.95s** 时登记仍 **1.246ms** 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms。澄清 PRD 原记的「CP 连通性超时残余」**不是网络层**，而是事故当时 `CreateInstance` 中登记那一步的 `DeadlineExceeded`。未做真实 CP→Worker gRPC 上的端到端计时（需可丢弃 lab 环境，生产上发起有真实副作用）。
+- **FR-498 降强度压测与 fileCPU 取证（2026-10-27）**：按用户要求不跑原 9×30min、适配机械盘目标机。60 源 × 30 行/s × 120s 跑两次（L1 档），均 `paused=0` / `gap=0`、checkpoint 后 WAL 归 0。**首次拿到 fileCPU 分列**：`%usr` p50=191% / `%system` p50=16% / `%wait` p50=**3%** ⇒ Worker **不是在等磁盘而是在算**（VL 的 `%wait` 恒 0）。**机械盘量化**：`aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%、`wrqm` 20–52%。**新发现一项确定不达标**：索引持久化 p95 = **98–100 ms**（验收线 50 ms）。同夹具两次稳态达成率相差 13 pp（80.4% ↔ 93.7%）⇒ 直接实证了「load≈150 宿主上不能得出容量结论」。原门限（250ms 首屏、9×30min、持久化 ≤50ms）与失败记录**全部原样保留**，FR-498 仍为⏸️已延后。
+
 ### 修复
 - **日志功能修复收口与专项延期（2026-10-25，未发布）**：本轮代码修复及已覆盖功能回归收口；各 FR 按实际范围归真，既有交付历史保留，FR-497/501 未完成范围继续开发中，FR-498 延后。250ms 首屏仍未达，原 9×30min 未执行，追加最终 ACKLoss 覆盖、严格完整 Worker 静默 766 与 Worker fileCPU 诊断未完成，均为延期专项，不再阻塞本次功能修复提交，不放宽原阈值、不伪报通过；结果与限制统一见 [收口范围及验收表](docs/specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。
 - **r028 回执与恢复修复（2026-10-24，未发布）**：完整 actual-Apply 与精确身份/CAS 闸保持，每成员仍完整编码及写新 SQL 正文，仅严格复用旧合格摘要；RO 恢复、混合历史、inline/ref 正文与完整 tie/字段语义不放宽。
