@@ -88,6 +88,52 @@ type ArchiveEvidence struct {
 	RollbackCount int `json:"rollback_count,omitempty"`
 	// LastRollbackReason 最近一次回滚原因（审计用）。
 	LastRollbackReason string `json:"last_rollback_reason,omitempty"`
+
+	// —— 归档对象自身的回收（FR-501「归档对象回收」，桶内生命周期）——
+	//
+	// 为什么这四个字段构成**独立的终态**，而不是把 Owner 改成一个新的 `purged` 取值：
+	// Owner 的语义是「正本在哪一层」（hot/cold/archive），而归档对象被按保留期清除之后
+	// 发生的事不是「正本搬去了另一层」——是**这一层的副本没了**。若为此新增
+	// `OwnerPurged`，全仓十余处 `Owner == OwnerHot / OwnerCold / OwnerArchive` 的
+	// switch 都会落进各自的 default 分支（TierOf 会返回一个不存在的 tier、
+	// NamespaceForOwner 会去找不存在的 namespace、writeAdmissionLocked 的
+	// 「已归档拒绝写入」判据会失效改走「按 owner 猜位置」），而它们的 default 分支
+	// 各写各的、无人审计 ⇒ 一个数据已经不在的选择会伪装成「另一个存储层」。
+	// 保持 Owner=OwnerArchive（权威确实在归档目的地这一层，只是该层的副本被清掉了），
+	// 把「已清除」表达为证据的属性，查询面据 Purged 给出**可区分**的原因
+	// （ARCHIVE_PURGED，而不是谎报 LOG_ARCHIVE_MISSING）。
+
+	// PurgeRequestedAt 本轮「归档对象回收」的**开始**时刻（已落 journal）。
+	//
+	// 为什么开始时刻要单独记：回收是「先改权威态、再逐对象删、成功才标完成」的三步，
+	// 进程在第二步中途退出时，记录上只会留下这个时刻。运维据此能区分
+	// 「从未尝试过」与「尝试过、删了一半」——两者的人工处置完全不同
+	// （前者等下一轮，后者必须人工比对归档目录里还剩什么）。
+	PurgeRequestedAt time.Time `json:"purge_requested_at,omitempty"`
+	// Purged 报告归档对象的副本是否**已全部**按保留期清除（终态）。
+	//
+	// 为 true 时该分区在本地既没有热层副本（若 HotReclaimed）也没有归档对象：
+	// 数据已按保留期真实消失，查询面必须显式说「已清除、不可恢复」，
+	// 绝不能再报「未恢复（去 rehydrate）」——那条建议此刻是一条死路。
+	Purged bool `json:"purged,omitempty"`
+	// PurgedAt 清除完成时刻（UTC）。
+	PurgedAt time.Time `json:"purged_at,omitempty"`
+	// PurgeReason 清除原因（保留期到期 / 手工处置），审计用。
+	PurgeReason string `json:"purge_reason,omitempty"`
+	// PurgeAttempts 累计尝试次数。**回滚不清零**：它记录的是「这个分区被尝试清除过几次」，
+	// 一次失败尝试是真实发生过的事故，不能因为退回原态就从审计里消失。
+	PurgeAttempts int `json:"purge_attempts,omitempty"`
+	// LastPurgeError 最近一次清除失败的原因（回滚时写入）。
+	LastPurgeError string `json:"last_purge_error,omitempty"`
+}
+
+// ArchiveObjectPurged 报告该分区的归档对象副本是否已按保留期清除。
+//
+// 单独成方法而不是让调用方各自判 `ev.Purged`：这个判断在查询面与观测面有多个调用点，
+// 而「证据为 nil」与「证据存在但未清除」必须被同一处代码区分开
+// （nil 证据意味着记录不自洽，绝不是「已清除」）。
+func (e *ArchiveEvidence) ArchiveObjectPurged() bool {
+	return e != nil && e.Purged
 }
 
 // Clone 返回证据的深副本（嵌套投影不得被读取方改写）。
