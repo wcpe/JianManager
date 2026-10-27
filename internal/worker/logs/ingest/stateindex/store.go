@@ -74,18 +74,51 @@ const (
 
 // DefaultCommitMaxRows / DefaultCommitMinRows / DefaultCommitTarget 是提交单元预算的默认值。
 //
-// 取值依据（FR-498 实测，60 源 × 60 行/s，真进程夹具 + 独立复刻探针）：
-//   - 行成本近似线性且可测——写入 26.5 µs/行、删除 29.1 µs/行（批量前口径；批量化后单提交单元
-//     p50 降到 ≈13 µs/行）；
-//   - **MaxRows=512**：同夹具实测单提交单元 p50 ≈ 12.5 ms、p95 ≈ 40.6 ms；1024 行进制的 p95
-//     已达 47 ms（探针）/ 58–64 ms（60 源真机档），贴着 50 ms 验收线没有余量。512 让 p95 留出
-//     ≈20 % 余量，代价只有「提交次数翻倍」——60 源实测写入 ≈ 3.7 k 行/s ⇒ 约 7 次提交/秒，
-//     每次 BEGIN+COMMIT 开销 ≈0.1 ms，合计 ≈1 ms/s，对吞吐无可测影响。
+// # MaxRows 的重新取值（FR-498 性能根治，2026-10-27）
+//
+// 原值 512，依据是「512 让 p95 留出 ≈20% 余量」——那是在**开发机空载**下测的（p95≈40.6ms）。
+// 生产真机（19 实例、机械盘、load 60–150）实测 p95=81ms、p50=22ms，
+// 尾巴是验收线 1.6 倍，原前提被推翻。
+//
+// 归因（四条探针，均在真实 Store.ApplyScoped 路径上、交替执行排除机器噪声）：
+//   - **body 不是主因**：body 从 nil→714B（生产均值）只把 p95 从 19.22ms 抬到 33.33ms；
+//     而 714B→4KB（6 倍字节）只再抬 10ms。拆表/BODY 延迟写均被证伪：
+//     SQLite 的 UPDATE 无论改哪几列都要重写**整行**，把 body 从 SET 里去掉反而因多一个分支更慢；
+//     且同主键行的 body 在三条真实路径上会被改写（回放原位替换 acquire/wal.go:1384、
+//     inline↔ref 双向切换 ingest/durable_outbox_test.go:2801-2813、ingest_time 变化），
+//     所以「只在首次 INSERT 写 body」会直接破坏崩溃重放语义。
+//   - **表规模不是主因**：8192 行/9.2MB 库 p95=49.90ms vs 94044 行/104.6MB 库 p95=41.33ms。
+//   - **包装层不是主因**：绕开 stateindex 直接发同形态多值 upsert，p95=75.17ms（比走 Store 还慢）。
+//   - **单元行数呈近似线性（本机 load≈83、body 714B、单源 8192 行，四档交替各 80 轮）**：
+//     512 行 → 单单元 p95=43.30ms；256 → 27.31ms；128 → 13.96ms；64 → 7.00ms。
+//     完成同一份 512 行工作的**周期总耗时**几乎不变（104.8 / 105.9 / 114.4 / 113.3 ms）。
+//
+// ⇒ 结论：尾巴 = 宿主噪声**按单元总成本放大**后透传到单次提交。噪声的绝对幅度与
+// 「一次提交做多少活」成正比，所以把单元做小就是直接压缩尾巴，而总吞吐不付代价
+// （周期总耗时不变，只是被切成更多次提交）。
+//
+// 取 **128**：它给出生产 p95 的估算值 ≈ 81ms × (128/512) ≈ 20ms（本机实测 13.96ms，
+// 对 50ms 线有 3.6× 余量）。256 在本机也过线（27.31ms），但生产 p95 是本机的 1.9 倍，
+// 512→256 只压缩 2 倍、没有余量吸收生产那种 load 60–150 的尖峰；128 才留出安全阀。
+// 不取 64 是因为 p99/max 反而抬升（60 / 122.63ms）：单元越小，固定开销（BEGIN/COMMIT、
+// 语句拼接）与噪声命中次数越多，而验收线看 p95——128 是四档里 p95 与 p99 的平衡点。
+//
+// # 其余旋钮
+//
 //   - MinRows=64：保证再慢的机器也不退化成逐行（逐行会让语句解析重新成为主导成本）。
-//   - Target=40 ms：自适应控制器的收敛点，验收线 50 ms 留 25 % 余量吸收抖动（硬上界 = 目标 × 5/4）。
+//   - Target=40 ms：自适应控制器的收敛点。**必须与 MaxRows 一起读**：控制器只在
+//     elapsed > Target 时收缩，所以 Target 就是「允许单元跑多慢」的实际上限——
+//     原来 40ms 配合 512 行意味着「允许单单元跑到 40ms」，而验收线是 50ms，只留 25% 余量，
+//     一旦碰上宿主尖峰就直接越线。保持 40ms 但把 MaxRows 降到 128 后，
+//     「跑满 128 行也只用了目标的一半」，控制器不再长期顶在 MaxRows 收缩下限附近抖动。
+//   - MinRows=32：自适应收缩的下限。**从 64 降到 32 是因为 MaxRows 降到了 128**：
+//     控制器的最小收缩步是「减半」，若 MinRows 仍为 64 则 128→64 一步就见底，
+//     控制器实质上退化为二档开关（128 或 64），失去连续调节能力（见 adaptBudget）。
+//     32 行仍远高于「逐行」量级（语句解析不会重新成为主导成本：批量仍 32 行/语句，
+//     即 MinRows 下每个单元恰好一条语句），故不会退化。
 const (
-	DefaultCommitMaxRows = 512
-	DefaultCommitMinRows = 64
+	DefaultCommitMaxRows = 128
+	DefaultCommitMinRows = 32
 	DefaultCommitTarget  = 40 * time.Millisecond
 	// DefaultCycleMaxRows 是单次 ApplyScoped 的行数预算默认值。
 	//
@@ -474,6 +507,13 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 		}
 	}
 	if err := addColumnIfMissing(ctx, db, "materialization_attempt", "class", "TEXT NOT NULL DEFAULT 'rebuild'"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	// FR-498 增量迁移：丢弃 source_wal 上的冗余索引（既有库不会因为 DDL 改了而自动少一条索引，
+	// 必须显式 DROP）。语义与查询面见 schema.go 里 extensionDDL 的注释；这里是纯维护面
+	// 减小（每次写少维护一棵 b-tree），不改任何一行的取值。
+	if err := dropRedundantIndexes(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1440,8 +1480,9 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		if budget < 1 {
 			budget = 1
 		}
-		// 每周期总预算同时**封顶本单元的行数**：否则一个单元（默认 ≤512 行）就能越过整周期预算，
-		// 「一次调用做多少」立刻失真（配置 8 行/周期却一次写了 512 行）。耗时维度仍以单元为粒度，
+		// 每周期总预算同时**封顶本单元的行数**：否则一个单元（默认 ≤DefaultCommitMaxRows 行）
+		// 就能越过整周期预算，「一次调用做多少」立刻失真（配置 8 行/周期却一次写了满预算行）。
+		// 耗时维度仍以单元为粒度，
 		// 故单次调用实际耗时可上浮「一个单元」（其自身由 hardLimit 兜住）。
 		if remaining := s.budget.CycleMaxRows - cycleRows; remaining > 0 && remaining < budget {
 			budget = remaining
@@ -1648,10 +1689,32 @@ func (s *Store) runUnit(ctx context.Context, conn *sql.Conn, body func() error) 
 //   - 实测耗时 < 目标/2 且本单元用满了预算：温和扩张 25%（上限 MaxRows）；
 //   - 其余（含未用满预算的短单元）：不动——短单元的行数/耗时比被每单元的固定开销污染，
 //     用它推预算会把「小周期」误读成「每行很慢」。
+//
+// # 两个必须守住的边界（FR-498，2026-10-27）
+//
+//   - 下限夹取用 **min(MinRows, MaxRows)** 而不是直接 MinRows。这是**防御性**的：
+//     `CommitBudget.Normalized` 已保证 MinRows ≤ MaxRows，故合法配置下两写法等价；
+//     但它让“超目标 ⇒ 下次行数不多于本次”这条不变量对**任意输入**都成立
+//     （例如诊断代码直接改 `s.budget`），不会因夹取顺序把“收缩”退化成“抬回 MaxRows”。
+//     对应守卫：budget_adapt_test.go 的 TestAdaptBudgetNeverGrowsAfterOverrun。
+//   - 扩张步受 MaxRows 约束，收缩步不低于下限。
+//
+// # 已知行为：20–40ms 是死区（不是 bug，但阅读数时必须知道）
+//
+// 控制器只在 elapsed > Target(40ms) 时收缩、在 elapsed < Target/2(20ms) 且用满预算时扩张。
+// 所以单元耗时落在 [20ms, 40ms] 时**既不收缩也不扩张**，预算停在“上一次动作后的值”。
+// 这意味着生产真机的 p50=22ms（落在死区）**不足以**推出“预算稳定顶在 MaxRows”——
+// 真实形态更可能是“开库 512 → 某个 >40ms 的单元把它砍到 ~250 → 之后 22ms 让它停在那里”。
+// 想确认实时预算，请看 `Samples()` 里每条 Sample.Rows() 的分布（那才是单元实际行数），
+// 而不是 `Latency.MaxRows`（那是环内单单元最大行数，不是当前预算）。
 func (s *Store) adaptBudget(rows int, elapsed time.Duration) {
 	target := s.budget.Target
 	if rows <= 0 || elapsed <= 0 || target <= 0 {
 		return
+	}
+	floor := s.budget.MinRows
+	if floor > s.budget.MaxRows {
+		floor = s.budget.MaxRows
 	}
 	next := s.rowBudget
 	switch {
@@ -1663,8 +1726,8 @@ func (s *Store) adaptBudget(rows int, elapsed time.Duration) {
 	case elapsed < target/2 && rows >= s.rowBudget:
 		next = s.rowBudget + s.rowBudget/4
 	}
-	if next < s.budget.MinRows {
-		next = s.budget.MinRows
+	if next < floor {
+		next = floor
 	}
 	if next > s.budget.MaxRows {
 		next = s.budget.MaxRows
@@ -2003,6 +2066,37 @@ func replayFlag(values []any) bool {
 //
 // 为什么不用「直接 ALTER 并忽略 duplicate column 错误」：那会把「列已存在」与「真错误」
 // 混为一谈，且错误串随 SQLite 版本漂移。查 table_info 是显式、可读、可测的判据。
+//
+// redundantIndexes 是本包确认与主键自动索引**完全重叠**、可安全丢弃的二级索引。
+//
+// 判据（缺一不可）：
+//   - 它的列是某张表主键的**严格前缀**（或与主键同列），因此 `sqlite_autoindex_*` 已经
+//     按同一列序建了索引，所有以它为前缀的查询都能改走主键索引；
+//   - 查询面上**实测**无退化：删后 `EXPLAIN QUERY PLAN` 对全部生产语句仍走索引、不落
+//     TEMP B-TREE（加载查询与范围剪枝谓词两条都要验）。
+//
+// 为什么值得做：rowid 表上每次 INSERT/UPDATE 要为**每一条**索引各写一棵 b-tree 条目。
+// 与主键前缀重复的那条索引是纯的写放大：行数越多、每次提交要写的页越多，而它换不来
+// 任何查询收益。gap 表当初已经按同样理由去掉了 idx_gap_key_resolved（见 specDDL 注释）；
+// source_wal 的 idx_source_wal_key 是遗漏的那一处。
+var redundantIndexes = []struct{ table, index string }{
+	{"source_wal", "idx_source_wal_key"},
+}
+
+// dropRedundantIndexes 幂等地丢弃 redundantIndexes 里的索引（既有库不会因为 DDL 改了
+// 而自动少一条索引，必须显式 DROP）。索引不存在时 DROP INDEX IF EXISTS 是空操作。
+//
+// 安全性：DROP INDEX 只改维护面，**不改任何一行的取值**，也不影响读一致性——
+// 唯一的代价是「本来能命中它的查询」要换一棵索引，而这正是上面判据要逐条实测的东西。
+func dropRedundantIndexes(ctx context.Context, db *sql.DB) error {
+	for _, target := range redundantIndexes {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s", target.index)); err != nil {
+			return fmt.Errorf("stateindex: 丢弃 %s 上的冗余索引 %s 失败: %w", target.table, target.index, err)
+		}
+	}
+	return nil
+}
+
 func addColumnIfMissing(ctx context.Context, db *sql.DB, table, column, def string) error {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {

@@ -1028,7 +1028,7 @@ func indexPruneConfigOf(configured *ledger.DeliveryBatchPruneConfig) ledger.Deli
 	return configured.Normalized()
 }
 
-// indexCommitBudgetOf 归一化「提交单元预算」：nil 表示用默认（每提交单元 512 行、目标 40ms；
+// indexCommitBudgetOf 归一化「提交单元预算」：nil 表示用默认（每提交单元 128 行、目标 40ms；
 // 真源是 stateindex.DefaultCommitMaxRows / DefaultCommitTarget，此处不再复写具体数字以免再次漂移）。
 // 非法值（非正行数/耗时）在 stateindex.Normalized 里回退默认——配置误写不得让切分失效。
 func indexCommitBudgetOf(configured *stateindex.CommitBudget) stateindex.CommitBudget {

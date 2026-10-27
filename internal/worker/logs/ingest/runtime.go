@@ -898,8 +898,9 @@ type Options struct {
 	// 判据与安全论证见 eventstore_prune.go 的文件头。
 	EventStorePrune *EventStorePruneConfig
 	// IndexCommit 是索引持久化「提交单元预算」的配置面（FR-498 P0，键 log_index.persist.*，
-	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每提交单元 512 行、目标 40ms、
-	// 下限 64 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget）。
+	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每提交单元 128 行、目标 40ms、
+	// 下限 32 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget。
+	// FR-498 性能根治把 512/64 降为 128/32：单单元 p95 随行数近似线性，依据见 DefaultCommitMaxRows 注释）。
 	// 单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
 	IndexCommit *stateindex.CommitBudget
 	// ReconcileYield / ReconcileSliceEvents 是**对账 CPU 让路**的配置面（键 log_reconcile.yield /

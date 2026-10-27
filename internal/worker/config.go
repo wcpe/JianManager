@@ -282,7 +282,7 @@ func (c LogReconcileConfig) ReconcileConfig() ingest.ReconcileConfig {
 // LogIndexConfig 采集索引（FR-496）的配置面，键为 `log_index.*`。
 //
 // 默认口径的单一真源在两个实现包里：ledger.DefaultDeliveryBatchPruneConfig（默认开启裁剪）
-// 与 stateindex.DefaultCommitBudget（每提交单元 512 行、目标 40ms）。本类型只做 YAML →
+// 与 stateindex.DefaultCommitBudget（每提交单元 128 行、目标 40ms）。本类型只做 YAML →
 // ingest.Options 的搬运，非法值一律回退默认——配置误写不得让裁剪失效或让切分消失
 // （那会把「单次持久化 ≤50ms」的达标线交还给配置运气）。见
 // docs/specs/log-index-sqlite/spec.md §3.4（切分）与 §6（配置键登记）。
@@ -393,10 +393,13 @@ func (c LogIndexBatchPruneConfig) DeliveryBatchPruneConfig() ledger.DeliveryBatc
 
 // LogIndexPersistConfig 是索引持久化提交单元预算的配置面（键 `log_index.persist.*`）。
 type LogIndexPersistConfig struct {
-	// MaxTxRows 单个提交单元（一次 IMMEDIATE 事务）的行数上限；非正回退默认 512
-	// （真源是 stateindex.DefaultCommitMaxRows）。
+	// MaxTxRows 单个提交单元（一次 IMMEDIATE 事务）的行数上限；非正回退默认 128
+	// （真源是 stateindex.DefaultCommitMaxRows；FR-498 性能根治从 512 降到 128，
+	// 依据见该常量的注释：单单元 p95 随行数近似线性，512→128 把尾巴压到 1/4，
+	// 而完成同一份工作的周期总耗时不变）。
 	MaxTxRows int `mapstructure:"max_tx_rows"`
-	// MinTxRows 自适应收缩的下限（再慢也不退化成逐行）；非正/大于上限时回退默认 64。
+	// MinTxRows 自适应收缩的下限（再慢也不退化成逐行）；非正/大于上限时回退默认 32
+	// （真源是 stateindex.DefaultCommitMinRows）。
 	MinTxRows int `mapstructure:"min_tx_rows"`
 	// TxDurationTarget 单个提交单元的耗时目标（duration 字符串，默认 40ms）；非法/非正回退默认。
 	// 执行中的耗时硬上界取它的 5/4（默认 50ms = 验收线「单次持久化 ≤50ms」本身）。

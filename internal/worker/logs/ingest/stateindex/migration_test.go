@@ -525,8 +525,13 @@ func TestMigrationDefaultCommitBudgetRemainsBounded(t *testing.T) {
 		}
 	}
 	budget := store.CommitBudget()
-	if budget.MaxRows != 512 || budget.Target != 40*time.Millisecond {
-		t.Fatalf("迁移不能放大默认单元: %+v", budget)
+	// 断言的意图是「迁移不得把默认单元**放大**」——因此比较基准必须是默认真源，
+	// 而不是写死的数字。写成 512 会在默认值调整时变成假阳性：
+	// FR-498 性能根治把 DefaultCommitMaxRows 从 512 降到 128，本用例原本就因此转红，
+	// 但真正的语义（迁移不放大）一直成立。
+	if budget.MaxRows != DefaultCommitMaxRows || budget.Target != DefaultCommitTarget {
+		t.Fatalf("迁移不能放大默认单元：期望 MaxRows=%d Target=%v，实际 %+v",
+			DefaultCommitMaxRows, DefaultCommitTarget, budget)
 	}
 	if err := store.FinalizeMigration(context.Background(), migration); err != nil {
 		t.Fatal(err)

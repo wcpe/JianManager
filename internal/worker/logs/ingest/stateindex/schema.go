@@ -148,7 +148,19 @@ CREATE TABLE IF NOT EXISTS source_wal (
   fp           INTEGER NOT NULL,
   PRIMARY KEY (key, seq, event_id, record_start, record_end)
 );
-CREATE INDEX IF NOT EXISTS idx_source_wal_key ON source_wal(key);
+-- FR-498（2026-10-27）：**不**再建 idx_source_wal_key（那是一条 CREATE INDEX ON source_wal(key)）。
+--
+-- 那条索引是主键 (key, seq, event_id, record_start, record_end) 的**严格前缀**：
+-- rowid 表上 PRIMARY KEY 会自带 sqlite_autoindex_source_wal_1（按同一列序），
+-- 再建一条 (key) 只是把同一前缀再写一遍——**每次 INSERT/UPDATE 都要多维护一棵索引 b-tree**，
+-- 而查询面上没有任何收益。实测（本机 sda、104MB 生产规模库）：
+--   - 范围剪枝谓词 key=? AND durable=1 AND record_end<=?：删索引后走
+--     sqlite_autoindex_source_wal_1 (key=?)，与原来走 idx_source_wal_key 的访问路径一致；
+--   - 加载查询 SELECT ... ORDER BY key,seq,event_id,record_start,record_end：
+--     仍然 SCAN ... USING INDEX sqlite_autoindex_source_wal_1，无 TEMP B-TREE。
+-- 与 gap 表的处置同源（见上方 specDDL 里 gap 的注释：idx_gap_key_resolved 的前缀与主键
+-- 前缀完全重复，去掉它不损失任何查询面）；source_wal 当初漏了这一处。
+-- 既有库由 Open 的「丢弃冗余索引」幂等迁移负责 DROP（见 dropRedundantIndexes）。
 CREATE TABLE IF NOT EXISTS delivery_batch (
   key       TEXT NOT NULL REFERENCES source(key),
   ordinal   INTEGER NOT NULL,
