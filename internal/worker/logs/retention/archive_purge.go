@@ -132,8 +132,10 @@ func (t ArchivePurgeTarget) String() string {
 // 判定次序（与「删前归档」同构，**先判能不能删，再判该不该删**）：
 //
 //  1. 已清除（Purged）⇒ 不动手（幂等重跑不重复计数）；
-//  2. Catalog 侧复核有阻塞原因（待恢复标记 / 热层未回收 / 证据不全）⇒ 不动手；
-//  3. 保留期未到 ⇒ 不动手；
+//  2. 自带阻塞条件的候选（热层未回收 / 待恢复标记）⇒ 不动手——**这里不依赖调用方**
+//     把这些条件折算成 BlockedReason：判据本身在纯函数里重述一遍，两个来源任一
+//     认为不安全就不动手。只留一个来源时，任何调用方漏填都会静默变成「删了唯一一份副本」；
+//  3. 保留期未到 / 缺归档时刻 ⇒ 不动手；
 //  4. 否则 Due=true。
 //
 // 注意**不看**配置开关与三闸：那是执行器与调用方的判据。把它们塞进纯函数会让
@@ -151,7 +153,16 @@ func (p Policy) PlanArchiveObjectPurge(now time.Time, refs []ArchivedObjectRef) 
 		case ref.Purged:
 			t.Reason = "归档对象已清除"
 		case ref.BlockedReason != "":
+			// 调用方（Catalog 适配层）已复核并给出原因：原样透传，不改写措辞——
+			// 观测面与拒绝路径必须说同一句话，否则现场会去查两个不同的东西。
 			t.Reason = ref.BlockedReason
+		case !ref.HotReclaimed:
+			// 热层仍在：此刻归档是「多存一份」的第二份。删掉它再让热层回收跑一轮，
+			// 最后一份就没了——而那天本不该消失。
+			t.Reason = "热层副本尚未回收，清除归档对象会先于热层回收丢掉一份副本"
+		case ref.RecoveryRequired:
+			// 恢复失败还挂着：归档是唯一可用副本，清除等于把「还能救」判成「救不回来」。
+			t.Reason = "分区存在待恢复标记，归档对象仍是唯一可用副本"
 		case ref.ArchivedAt.IsZero():
 			// 没有归档时刻就无从计算保留期：不猜（猜短了会提前删掉仍有义务保留的副本）。
 			t.Reason = "缺少归档时刻，无法计算保留期"

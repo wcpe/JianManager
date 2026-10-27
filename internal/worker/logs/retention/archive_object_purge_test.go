@@ -801,6 +801,56 @@ func TestArchiveObjectRetentionNormalizeSweepAtHour(t *testing.T) {
 	}
 }
 
+// 契约：候选自带「热层未回收 / 待恢复标记」时，纯函数**自己**就拒绝，不依赖调用方。
+//
+// 为什么要在两处各判一次：`BlockedReason` 由适配层（Catalog 复核）填。若判据只活在那里，
+// 任何新调用方（运维端点、别的调度器、将来的热更路径）漏填一次，就会静默变成
+// 「删掉了那天唯一一份副本」。纯函数里重述一遍的代价是几行，收益是这道闸不再
+// 取决于调用方的自觉。
+func TestPlanArchiveObjectPurgeRefusesSelfEvidentBlockers(t *testing.T) {
+	p := threeGatePurgePolicy(purgeRetention)
+
+	notReclaimed := archivedRef(false)
+	notReclaimed.HotReclaimed = false
+	recoveryRequired := archivedRef(false)
+	recoveryRequired.UTCDay = "2025-02-01"
+	recoveryRequired.RecoveryRequired = true
+
+	plan := p.PlanArchiveObjectPurge(purgeNow(), []ArchivedObjectRef{notReclaimed, recoveryRequired})
+	if len(plan) != 2 {
+		t.Fatalf("应产出 2 条判定，得到 %d", len(plan))
+	}
+	// 计划按 (namespace, day) 排序，故按日期取而不是按下标取——
+	// 用下标会让用例依赖排序细节，改排序就假红。
+	byDay := map[string]ArchivePurgeTarget{}
+	for _, target := range plan {
+		byDay[target.Ref.UTCDay] = target
+		if target.Due {
+			t.Errorf("自带阻塞条件的候选不得判为到期（即便 BlockedReason 为空）：%s", target)
+		}
+	}
+	if got := byDay["2025-03-01"]; !strings.Contains(got.Reason, "热层") {
+		t.Errorf("热层未回收的原因应点名热层，得到 %q", got.Reason)
+	}
+	if got := byDay["2025-02-01"]; !strings.Contains(got.Reason, "待恢复") {
+		t.Errorf("待恢复标记的原因应点名它，得到 %q", got.Reason)
+	}
+
+	// 执行侧同样不得动手（两道闸各守一层，这里确认最终效果）。
+	store := newFakeObjectStore("raw/files/a.gz")
+	auth := &fakePurgeAuthority{}
+	r := NewArchiveObjectReclaimer(p, &fakePurgeLister{refs: []ArchivedObjectRef{notReclaimed}}, store, auth)
+	if _, err := r.Step(context.Background(), purgeNow()); err != nil {
+		t.Fatalf("单轮执行失败：%v", err)
+	}
+	if got := store.deletedCount(); got != 0 {
+		t.Fatalf("热层未回收时不得删除任何对象，实际删除 %d", got)
+	}
+	if _, purged, _ := auth.snapshot(); len(purged) != 0 {
+		t.Fatalf("热层未回收时不得标记已清除，得到 %v", purged)
+	}
+}
+
 // 契约：**保留期为空时一天都不判到期**——即便策略对象是手工构造的（绕过配置校验）。
 //
 // 这条咬的是一类隐蔽的默认值注入：只要有人让 `ArchiveObjectRetentionPolicy.Normalize()`

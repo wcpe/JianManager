@@ -90,6 +90,18 @@ mutate M6 internal/worker/logs/retention/archive_purge.go \
   'case false && ref.Purged:' \
   ./internal/worker/logs/retention -run 'TestArchiveObjectPurgeSkipsAlreadyPurgedCandidate'
 
+echo "== 变异 6b：纯函数只靠调用方的 BlockedReason（漏填即删唯一副本）=="
+mutate M6b internal/worker/logs/retention/archive_purge.go \
+  'case !ref.HotReclaimed:' \
+  'case false && !ref.HotReclaimed:' \
+  ./internal/worker/logs/retention -run 'TestPlanArchiveObjectPurgeRefusesSelfEvidentBlockers'
+
+echo "== 变异 6c：纯函数不看待恢复标记 =="
+mutate M6c internal/worker/logs/retention/archive_purge.go \
+  'case ref.RecoveryRequired:' \
+  'case false && ref.RecoveryRequired:' \
+  ./internal/worker/logs/retention -run 'TestPlanArchiveObjectPurgeRefusesSelfEvidentBlockers'
+
 echo "== 变异 7：Catalog 请求步不落 journal（只改内存）=="
 mutate M7 internal/worker/logs/catalog/archive_purge.go \
   'committed, err := c.commitRecordLocked(next, JournalEntry{
