@@ -32,6 +32,8 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import { QQBindDialog, type QQBindFill } from './QQBindDialog'
+import { QQConnectivityPanel } from './QQConnectivityPanel'
+import { usePermissionsStore } from '@/stores/permissions'
 import {
   channelUsesURL,
   channelIsTelegram,
@@ -74,6 +76,10 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
   const update = useUpdateAlertChannel()
   const isEdit = !!channel
   const initialCfg = parseConfig(channel?.config)
+  // 接入状态观测区需要 alert.manage：`GET /qq/groups` 与 `/qq/gateway/status` 都挂在这道门上
+  // （internal/controlplane/router/alert.go），只读用户即使点了编辑也会拿到 403。与其在工作区
+  // 里渲染两个注定失败的区块，不如整个不渲染——否则只是把 403 换个地方展示。
+  const canManage = usePermissionsStore((s) => s.hasPerm('alert.manage'))
 
   const [type, setType] = useState(channel?.type ?? 'inapp')
   const [name, setName] = useState(channel?.name ?? '')
@@ -387,6 +393,11 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
                 />
                 <p className="text-xs text-muted-foreground mt-1">{t('alerts.qqBaseUrlHint')}</p>
               </Panel>
+
+              {/* 分区四：接入状态（FR-495）——只读观测：网关连没连、机器人进了哪些群。
+                  刻意不提供群选择/建群通道入口：群主动消息被平台拒（40034105），给入口
+                  等于给运维一个用不了的功能。 */}
+              {canManage && <QQConnectivityPanel />}
             </>
           )}
 
