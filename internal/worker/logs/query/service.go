@@ -86,10 +86,19 @@ func (s *Service) OpenViewContext(ctx context.Context, req QueryRequest) SearchR
 // 若这里改成「返回成功 + 0 行」，运维会以为这一天根本没有产生日志——
 // 静默的空结果比报错有用一百倍地危险（报错会有人查，空结果不会）。
 //
-// 因此只要覆盖原因里出现「归档未恢复」且没有任何可读 range，就返回
-// LOG_ARCHIVE_MISSING + 可直接执行的原因文案；其余情况保持既有 LOG_PARTIAL
-// （不改变既有语义，避免让「预算截断」被误报成「归档缺失」）。
+// 因此：
+//   - 有「归档已按保留期清除」的原因 ⇒ LOG_ARCHIVE_PURGED。它**必须**先判、且**必须**
+//     与 LOG_ARCHIVE_MISSING 分开：前者是「平台按保留期删掉了，恢复不了」，
+//     后者是「副本还在归档里，只是本地没恢复，去 rehydrate」——处置动作完全相反。
+//     复用 MISSING 会让用户反复点恢复、反复得到第二条错误，最后仍要人工解释。
+//   - 有「归档未恢复」且没有任何可读 range ⇒ LOG_ARCHIVE_MISSING；
+//   - 其余情况保持既有 LOG_PARTIAL（不改变既有语义，避免让「预算截断」被误报成「归档缺失」）。
 func noRangeError(cov Coverage) *QueryError {
+	if hasStr(cov.PartialReasons, ReasonArchivePurged) {
+		return newErr(ErrCodeArchivePurged,
+			"全部命中分区的归档副本已按保留期清除（ARCHIVE_PURGED）：这段日志确实不再保存，"+
+				"无法通过恢复取回；如需延长保留期请调整 log_retention.archive_object_retention.retention")
+	}
 	if hasStr(cov.PartialReasons, ReasonArchiveNotRestored) {
 		return newErr(ErrCodeArchiveMissing,
 			"全部命中分区都只有归档副本且本地未恢复（ARCHIVE_NOT_RESTORED）：请先对目标分区执行归档恢复（rehydrate），"+

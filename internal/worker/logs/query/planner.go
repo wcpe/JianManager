@@ -268,7 +268,16 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			// 而这里的真相是「权威在归档、本地未恢复」。原因不同，处置动作也不同
 			// （一个是查配置，一个是执行 rehydrate），故按 owner 分开取首个原因。
 			lead := ReasonNoCatalogAuthority
-			if rec != nil && rec.Owner == catalog.OwnerArchive {
+			// 归档对象已按保留期清除（FR-501 归档对象回收）时，原因**必须**是 ARCHIVE_PURGED。
+			//
+			// 与 ARCHIVE_NOT_RESTORED 分开的理由是**处置动作相反**：前者是「平台按保留期
+			// 删掉了，取不回来」，后者是「副本还在归档里，去 rehydrate」。
+			// 复用 MISSING 会让用户反复点恢复、反复得到第二条错误，最后仍要人工解释。
+			//
+			// 这里也不能返回空成功：数据确实不在了，静默的 0 行会被读成「那天没有日志」。
+			if purgedArchive(rec) {
+				lead = ReasonArchivePurged
+			} else if rec != nil && rec.Owner == catalog.OwnerArchive {
 				lead = ReasonArchiveNotRestored
 			}
 			reasons := append([]string{lead}, status.NotReadyReasons...)
@@ -277,7 +286,9 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 				reasons = appendUniqueStr(reasons, reason)
 			}
 			state := CoverageNotReady
-			if hasStr(reasons, ReasonArchiveNotRestored) {
+			// 两种「归档副本不可读」共用 CoverageArchiveMiss（proto 没有更细的枚举，
+			// 不为此扩已冻结的 wire 契约），区分度由 reason 与 error code 承担。
+			if hasStr(reasons, ReasonArchiveNotRestored) || hasStr(reasons, ReasonArchivePurged) {
 				state = CoverageArchiveMiss
 			}
 			res.Coverage.AddTarget(TargetCoverage{
@@ -734,6 +745,14 @@ func parseTargetKey(targetID string) (catalog.PartitionKey, bool) {
 	}, true
 }
 
+// purgedArchive 报告该分区的归档副本是否已按保留期清除（FR-501 归档对象回收）。
+//
+// 抽成单函数而不是在多处各写一遍判断：这个条件决定「用户看到的是『已清除』还是
+// 『去恢复一下』」，而两处措辞一旦分叉，用户就会在两条互斥的引导之间来回。
+func purgedArchive(rec *catalog.Record) bool {
+	return rec != nil && rec.Owner == catalog.OwnerArchive && rec.ArchiveEvidence.ArchiveObjectPurged()
+}
+
 func classifyStatus(req PlanRequest, rec *catalog.Record, ref catalog.QueryRef, st PartitionStatus) []string {
 	var reasons []string
 	// 归档权威的判定必须以**记录**为准，不能只看 ref：
@@ -742,10 +761,20 @@ func classifyStatus(req PlanRequest, rec *catalog.Record, ref catalog.QueryRef, 
 	// 运维看到的将是 NO_CATALOG_AUTHORITY（像配置丢了），而不是
 	// ARCHIVE_NOT_RESTORED（像归档需要恢复）。两者处置动作完全不同。
 	archivedAuthority := (rec != nil && rec.Owner == catalog.OwnerArchive) || ref.Owner == catalog.OwnerArchive
+	// 归档对象已按保留期清除时**不再**报「未恢复」：那条建议此刻是死路。
+	//
+	// 注意这里不能只把 archivedAuthority 置假——下面还有一条按 `req.RequireArchive`
+	// 独立追加的分支（那是「调用方要求归档层」的判据，不走 archivedAuthority）。
+	// 只改一处会在「显式要求归档层」的请求上留下「已清除 + 请去恢复」并存，
+	// 而这正是本用例集里 M14 变异的形态：单点修复看着对，实际只堵了一半。
+	purged := purgedArchive(rec)
+	if purged {
+		archivedAuthority = false
+	}
 	if st.ColdConfigured && !st.ColdReady && (req.RequireCold || ref.Owner == catalog.OwnerCold) {
 		reasons = appendUniqueStr(reasons, ReasonColdMissing)
 	}
-	if st.ArchiveConfigured && !st.ArchiveRestored && (req.RequireArchive || archivedAuthority) {
+	if st.ArchiveConfigured && !st.ArchiveRestored && (req.RequireArchive || archivedAuthority) && !purged {
 		reasons = appendUniqueStr(reasons, ReasonArchiveNotRestored)
 	}
 	// 归档权威：正本在归档，热层可能已被回收。本地没有对齐的已恢复投影时，
@@ -757,7 +786,7 @@ func classifyStatus(req PlanRequest, rec *catalog.Record, ref catalog.QueryRef, 
 	if req.RequireCold && st.ColdConfigured && !st.ColdReady {
 		reasons = appendUniqueStr(reasons, ReasonColdMissing)
 	}
-	if req.RequireArchive && st.ArchiveConfigured && !st.ArchiveRestored {
+	if req.RequireArchive && st.ArchiveConfigured && !st.ArchiveRestored && !purged {
 		reasons = appendUniqueStr(reasons, ReasonArchiveNotRestored)
 	}
 	_ = rec

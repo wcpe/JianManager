@@ -38,6 +38,7 @@ const (
 	ErrCodeBudgetExceeded      ErrorCode = "LOG_BUDGET_EXCEEDED"
 	ErrCodeNotReady            ErrorCode = "LOG_NOT_READY"
 	ErrCodeArchiveMissing      ErrorCode = "LOG_ARCHIVE_MISSING"
+	ErrCodeArchivePurged       ErrorCode = "LOG_ARCHIVE_PURGED"
 	ErrCodeDuplicateUnresolved ErrorCode = "LOG_ERR_DUPLICATE_UNRESOLVED"
 	ErrCodeRecoveryRequired    ErrorCode = "LOG_RECOVERY_REQUIRED"
 	ErrCodeCancelled           ErrorCode = "LOG_CANCELLED"
@@ -105,6 +106,15 @@ const (
 const (
 	ReasonColdMissing          = "COLD_MISSING"
 	ReasonArchiveNotRestored   = "ARCHIVE_NOT_RESTORED"
+	// ReasonArchivePurged 表示「该分区的归档副本已按保留期清除」。
+	//
+	// 为什么必须与 ARCHIVE_NOT_RESTORED 分开（而不是复用 LOG_ARCHIVE_MISSING）：
+	// 两者对用户的**处置动作完全相反**——未恢复是「点一下 rehydrate 就能看」，
+	// 已清除是「这段日志确实不在了，任何操作都取不回来」。
+	// 复用 MISSING 会让界面把「已按保留期删除」显示成「历史日志尚未取回」，
+	// 用户点恢复、恢复失败、再报错，最后还是要人来解释——而那时用户已经
+	// 对「平台说数据在、其实不在」这件事失去了信任。
+	ReasonArchivePurged = "ARCHIVE_PURGED"
 	ReasonRehydrateFailed      = "REHYDRATE_FAILED"
 	ReasonStagingExcluded      = "STAGING_EXCLUDED"
 	ReasonRecoveryRequired     = "RECOVERY_REQUIRED"
@@ -472,6 +482,20 @@ func DefaultPartitionStatus(key catalog.PartitionKey, rec *catalog.Record, ref c
 	_ = key
 	if !ref.OK {
 		return PartitionStatus{Queryable: false, NotReadyReasons: []string{ReasonNoCatalogAuthority}}
+	}
+	// 已按保留期清除（FR-501 归档对象回收）：Queryable 恒为假，且原因不能是
+	// ARCHIVE_NOT_RESTORED——那条建议（去 rehydrate）此时是死路。
+	//
+	// 这里必须**在** Recover 之前判并直接返回：Recover 只看 Owner/Dir，不认清除标记，
+	// 若走正常分支，status 会带着一份「查询能力在归档」的形态进 classifyStatus，
+	// 于是出现「已清除 + 请去恢复」这种自相矛盾的原因组合。
+	if rec != nil && rec.Owner == catalog.OwnerArchive && rec.ArchiveEvidence.ArchiveObjectPurged() {
+		return PartitionStatus{
+			Queryable:         false,
+			ArchiveConfigured: true,
+			ArchiveRestored:   false,
+			NotReadyReasons:   []string{ReasonArchivePurged},
+		}
 	}
 	rv := catalog.Recover(rec)
 	archiveRestored := rv.Queryable && ref.Owner == catalog.OwnerArchive && !rec.RecoveryRequired &&

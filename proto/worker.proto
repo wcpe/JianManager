@@ -2403,6 +2403,13 @@ enum LogErrorCode {
   LOG_RECOVERY_REQUIRED = 8;
   LOG_CANCELLED = 9;
   LOG_UNSUPPORTED = 10;
+  // 归档副本已按保留期清除（FR-501 归档对象回收）。
+  //
+  // 与 LOG_ARCHIVE_MISSING 分开的理由是**处置动作相反**：MISSING 是「归档还在、
+  // 只是本地没恢复 ⇒ 去 rehydrate」；PURGED 是「归档已按保留期删掉 ⇒ 取不回来了」。
+  // 合成一个码会让界面把「已按保留期删除」显示成「历史日志尚未取回」，
+  // 用户点恢复、恢复失败、再报错，最后仍要人工解释。
+  LOG_ARCHIVE_PURGED = 11;
 }
 
 enum LogTailMode {
