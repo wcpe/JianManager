@@ -19,6 +19,33 @@
 - **FR-498 降强度压测与 fileCPU 取证（2026-10-27）**：按用户要求不跑原 9×30min、适配机械盘目标机。60 源 × 30 行/s × 120s 跑两次（L1 档），均 `paused=0` / `gap=0`、checkpoint 后 WAL 归 0。**首次拿到 fileCPU 分列**：`%usr` p50=191% / `%system` p50=16% / `%wait` p50=**3%** ⇒ Worker **不是在等磁盘而是在算**（VL 的 `%wait` 恒 0）。**机械盘量化**：`aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%、`wrqm` 20–52%。**新发现一项确定不达标**：索引持久化 p95 = **98–100 ms**（验收线 50 ms）。同夹具两次稳态达成率相差 13 pp（80.4% ↔ 93.7%）⇒ 直接实证了「load≈150 宿主上不能得出容量结论」。原门限（250ms 首屏、9×30min、持久化 ≤50ms）与失败记录**全部原样保留**，FR-498 仍为⏸️已延后。
 
 ### 修复
+- **FR-497③ 三项登记缺口补齐（2026-10-27，未发布）**：收养链路此前有三处「仍未做到」，本轮补上并留下可转红证据。
+  ① **Java 分支负例**：原端到端负例都停在 wrapper 分支（`wrapper_argv_mismatch`）、唯一的 Java 分支拒绝是注入桩，
+  函数层断言不覆盖动作侧。新增端到端用例：wrapper 用真实形态（argv `<worker> daemon` + 环境带本实例 UUID，真通过），
+  Java 只有弱特征 → `weak_evidence_only`，断言 `orphan.adopt_blocked` 带 `role=java` 与被拒 PID、零拨号、零杀、PID 文件保留；
+  另补「Java 携带他实例 UUID」（实测 cwd 命中 ⇒ `weak_evidence_only`，cwd 无关 ⇒ `uuid_evidence_missing`）与
+  **子串污染**负例。② **子串污染是真实缺陷并已修**：`processEnvMatchesInstance` 原对「NUL 换空格后的整块环境」做
+  `strings.Contains`，凡值里**出现过**本实例 UUID 这段字符即判「我就是该实例」（他实例 UUID 以本实例 UUID 为前缀、
+  `MONITOR_TARGETS=sandbox-<uuid>-replica` 等），误判方向是「认错实例」——收养后取得该 PID 控制权、Stop 打到别人身上。
+  改为按 NUL 切条目、取 `=` 后的值、UUID 须**自成 token**（前后不得紧邻 hex / `-`）；该谓词同时服务强杀路径的
+  wrapper 分支，故一并收紧（方向与 ADR-093 一致：只会少杀）。③ **收养后的心跳 / 巡检 / Stop 用真实 java 过关**：
+  新增最小游戏服夹具 `internal/worker/process/testdata/mcstub/MinecraftServerStub.java`（只用 JDK API、Java 8 兼容、
+  不依赖 MC 服务端 jar；周期日志、读 stdin 的 `stop` 走优雅关服、SIGTERM hook、可选 `/metrics` 与日志落盘；无 java
+  则 skip）与「把测试二进制复制成名为 `worker` 的文件并以 `worker daemon` argv 独立 spawn」的真实 wrapper 夹具
+  （进程内 wrapper 的 argv 不是 wrapper 形态，wrapper 分支与真实 Stop 永远断言不到）。覆盖：心跳报 RUNNING 且 PID 为
+  真实 wrapper PID；巡检确实检查到该实例（探针可达 ⇒ healthy、不可达 ⇒ 3 拍 `HealthFaultDead`）；`StopContext` 后 java
+  真退出、记 STOPPED、stale 策略丢弃、PID 文件清理，且**停止走 wrapper 控制帧**（java 日志出现 `console command: stop`
+  与完整关服序列、无「优雅停止超时，强制终止 Java」），无关实例与无关进程均不被波及。④ **收养无启动宽限期是真实缺陷
+  并已修**：两条登记路径原都不写 `Instance.StartedAt`，而 `warmupRemaining` 在纪元为零值时返回 0 ⇒「做了宽限」变成
+  「完全没有宽限」；叠加「PID 记录只有 ProbePort、无 ServerPort，未部署 ServerProbe 时无人监听 ⇒ 响应维度恒失败」，
+  一个刚被接管、可能正常服务的服务器会在 3 拍（≈90s）后被判假死。收养与启动接管两处都补写纪元；`ServerPort` 缺失
+  导致的误判源本身未修（要改 wrapper→PID 文件协议，属另一 FR），如实登记。⑤ **Windows**：代码层已落
+  `//go:build windows` 断言「环境读不到 ⇒ 两分支 fail-closed」+ 跨平台 UUID token 边界用例，
+  `GOOS=windows go build/vet ./internal/worker/process/` 通过；**真机未验**（`OpenProcess` 语义、`taskkill /T /F`
+  终止范围与异步窗口、PID 复用判据、`samePath` 大小写不敏感）已逐条登记。
+  变异验证：子串匹配改回 `strings.Contains` ⇒ 三条污染用例转红；删 Java 分支复核 ⇒ 三条负例转红；删 `StartedAt` ⇒
+  宽限期用例转红；跳过 `ControlStop` 改强杀 ⇒ Stop 用例转红；收养不记 RUNNING ⇒ 心跳/巡检用例转红。均恢复后转绿。
+  细节见 [收养规格 §4 验收 2c~2e / 6a~6d 与 §5](docs/specs/auto-adopt-orphans/spec.md)。
 - **日志功能修复收口与专项延期（2026-10-25，未发布）**：本轮代码修复及已覆盖功能回归收口；各 FR 按实际范围归真，既有交付历史保留，FR-497/501 未完成范围继续开发中，FR-498 延后。250ms 首屏仍未达，原 9×30min 未执行，追加最终 ACKLoss 覆盖、严格完整 Worker 静默 766 与 Worker fileCPU 诊断未完成，均为延期专项，不再阻塞本次功能修复提交，不放宽原阈值、不伪报通过；结果与限制统一见 [收口范围及验收表](docs/specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。
 - **r028 回执与恢复修复（2026-10-24，未发布）**：完整 actual-Apply 与精确身份/CAS 闸保持，每成员仍完整编码及写新 SQL 正文，仅严格复用旧合格摘要；RO 恢复、混合历史、inline/ref 正文与完整 tie/字段语义不放宽。
   无外部接口/schema/配置或预算变化；完整质量相对基线通过（余留 CFR 条件未测、lint raw 存量仍红），指定 live 原 scope 已通过，本次功能修复可收口，性能仍 HOLD 并延期。准确结果见 [验证状态](docs/specs/worker-log-platform-contract/spec.md#2026-10-24-验证状态r028性能-hold)。

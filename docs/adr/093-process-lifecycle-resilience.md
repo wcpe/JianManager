@@ -91,3 +91,29 @@
 
 **已改文件**：`internal/worker/process/orphan_scan.go`（`OrphanScanner` 新增 `unmanagedLive` 保护快照 + `setUnmanagedLiveGuard` / `resetUnmanagedLiveGuard` / `unmanagedLiveGuardHit` / `warnDowngradedDirectOrphans` / `newlyDowngraded`；`scanDirectOrphans` 命中即降级）、`orphan_scan_unmanaged_downgrade_test.go`（新增六条回归）；规格同步见 `docs/specs/auto-adopt-orphans/spec.md` 新增 §2.5 与 §4 验收 4b~4f、§6 配置键/审计/代码入口。
 
+
+## 订正（2026-10-27）：归属判据的 UUID 匹配收窄为 token 边界
+
+**发现**：决策 1 的归属复核落到实现后，`processEnvMatchesInstance` 对「`/proc/<pid>/environ` 的 NUL 换空格后的整块环境」做 `strings.Contains(environ, instanceUUID)`。环境变量的**值**是任意字符串，于是一切实体只要在某个值里**出现过**本实例 UUID 这段字符，就会被判成「这个进程就是该实例」：
+
+- 他实例的 UUID 恰好以本实例 UUID 为前缀（UUID 是变长文本片段，前缀相同不互斥）；
+- 某个变量的值里带实例目录名 / 监控目标列表（`MONITOR_TARGETS=sandbox-<uuid>-replica`），也就是「看过这个 UUID」而不是「我就是它」；
+- 两个 UUID 拼接后的中段。
+
+误判方向与决策 1 的宽口径**不同**：宽口径（`cwd == workDir`）的误判是「把无关进程当成该实例」，后果是误杀；本条误判是「把**别的实例**的进程当成本实例」，而收养路径会取得该 PID 的控制权——后续 `Stop` / `Kill` 打到的正是**另一个实例**。强杀路径的 wrapper 分支用的是同一个谓词，故同样受影响。
+
+**订正**：`readProcessEnviron` 保留原始 NUL（不再换空格），`processEnvMatchesInstance` 按 NUL 切条目、取 `=` 之后的值、要求 UUID 在值里**自成 token**——命中位置前后不得紧邻 UUID 字符集（hex 数字与 `-`）。`DefaultVerifyAdoptOwnership` 的 Java 分支 cmdline 判定同样换用该谓词。
+
+**为什么不是「保持 contains」**：归属复核的语义是「这个进程**就是**该实例」，不是「某处出现过这串字符」。值里出现过是弱得多的证据，而收养给它的后果是不可逆的控制权转移。收窄只会让判据更保守（少判真 ⇒ 少收养 / 少杀），方向与决策 1「宁可多等一轮，不可误杀」一致。
+
+**已改文件**：`internal/worker/process/owner_verify.go`（`readProcessEnviron` 返回原始串、`processEnvMatchesInstance` 按条目取值 + `containsUUIDToken` / `isUUIDCharAt`、Java 分支 cmdline 判定改用它）；回归 `adopt_javabranch_linux_test.go` 的 `TestFR497_JavaBranchSubstringPollutionRejected` / `TestFR497_WrapperBranchSubstringPollutionRejected` 与 `adopt_ownership_platform_test.go`（`TestContainsUUIDToken_Boundaries`）；规格同步见 `docs/specs/auto-adopt-orphans/spec.md` §2.1 / §5。
+
+## 订正（2026-10-27）：收养登记必须写 `StartedAt`（启动宽限期纪元）
+
+**发现**：FR-497③ 的两条收养登记路径（新建 / 就地补齐）都没有写 `Instance.StartedAt`，而 FR-459 的 `warmupRemaining` 在纪元为零值时返回 0——「做了宽限」变成「完全没有宽限」。叠加收养实例的既有形态（PID 记录只有 `ProbePort`、没有 `ServerPort`；未部署 ServerProbe 时该端口无人监听 ⇒ 响应维度恒失败），一个**刚被接管、完全可能正在正常服务**的服务器会在 `SuspicionThreshold` 拍（默认 3 × 30s ≈ 90s）后被判 `HealthFaultDead`。
+
+**订正**：收养的两条登记路径写上 `StartedAt = time.Now()`；同一语义位置上的 `registerAdoptedDaemon`（启动接管）同步补写，避免两条接管路径口径不一。
+
+**边界（一字不放宽）**：这不是「放宽假死判定」——宽限期只把结论从「死」改成「不明」，越过宽限期后照常判定（回归用例同时断言这一点）。**误判源本身未修**：`ServerPort` 缺失来自 PID 记录格式（记录里没有 server-port 字段），补它要改 wrapper→PID 文件协议，属另一 FR。
+
+**已改文件**：`internal/worker/process/adopt_orphan.go`、`recover_orphan.go`；回归 `TestFR497_AdoptedHealthScanHasStartupWarmup`（删掉赋值即转红）；规格同步见 `docs/specs/auto-adopt-orphans/spec.md` §2.2 / §5。

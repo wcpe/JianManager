@@ -28,7 +28,7 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 | 复核对象 | 调用 | 通过条件（实现真源：`DefaultVerifyAdoptOwnership`） |
 |---|---|---|
 | wrapper | `verifyAdoptOwnership(WrapperPID, uuid, workDir, true)` | `/proc/<pid>/cmdline` 形如 `<worker 二进制> daemon` **且** `/proc/<pid>/environ` 携带本实例 UUID（`JM_DAEMON_WRAPPER_CONFIG` JSON 内）。单凭 argv 不判真——argv 对**任何**实例的 wrapper 都相同 |
-| Java | `verifyAdoptOwnership(JavaPID, uuid, workDir, false)` | **强特征**：cmdline 含实例 UUID，或 `/proc/<pid>/environ` 携带本实例 UUID（daemon 模式下 Java 由 wrapper 以 `composeEnv(os.Environ(), cfg)` 拉起，继承 `JM_DAEMON_WRAPPER_CONFIG`） |
+| Java | `verifyAdoptOwnership(JavaPID, uuid, workDir, false)` | **强特征**：cmdline 含实例 UUID，或 `/proc/<pid>/environ` 携带本实例 UUID（daemon 模式下 Java 由 wrapper 以 `composeEnv(os.Environ(), cfg)` 拉起，继承 `JM_DAEMON_WRAPPER_CONFIG`）。**UUID 必须自成 token**（前后不得紧邻 hex / `-`），按 NUL 切条目取 `=` 后的值比对——见 §5 子串匹配订正 |
 
 - **强特征 / 弱特征的分界**：实例 UUID（出现在 cmdline 或进程环境）是强特征，唯一标识该实例；`cmdline` 含工作目录绝对路径、进程 `cwd` 等于工作目录是**弱特征，单独不足以判真**（环境读到但无本实例 UUID 时一律不判真）。
 - **两者都通过**才收养；任一不通过 → `orphan.adopt_blocked` 审计（success=false，detail 带 `evidence` 说明拦截口径，如 `wrapper_argv_mismatch` / `env_uuid_missing` / `weak_evidence_only` / `uuid_evidence_missing`）+ WARN，**不收养、不杀、保留 PID 文件**，下一轮扫描重试。
@@ -48,7 +48,7 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 
 1. 构造 `daemonStrategy`（`WorkDir` / `ProbePort` 取自 PID 记录，与 `RecoverDaemonInstances` 同源）；
 2. **单次** reconnect 拨号 `daemon.Dial(rec.SocketAddr)`；失败 → `orphan.adopt_failed` 审计 + WARN，保留 PID 文件，**下一轮再试**（不在扫描轮内做 127s 递增退避，避免拖住扫描周期；节奏交给 `orphan_scan.interval`）；
-3. 成功 → `SetWrapperPID(rec.WrapperPID)` → 登记为 RUNNING：内存表无该 UUID 时新建 `&Instance{State: RUNNING, WorkDir, ProbePort, strategy, processType: daemon, AutoRestart: !restored}`；**已有登记但脱管**（典型：Worker 硬崩后 CP `ResyncInstances` 按 STOPPED 重登记而磁盘进程仍在跑）时**就地补齐运行态**并保留 CP 已下发的规格（`StartCommand` / `StopCommand` / `EnvVars` / JDK / 端口等）——整条覆盖会让后续 `Restart` 拿着空启动命令去拉起新 wrapper。两条路径都复用 FR-459 的熔断态恢复（`restorePersistedCircuit` + `disarmAutoRestart`，与启动接管同口径）；随后落 `orphan.auto_adopted` 审计（success=true）。
+3. 成功 → `SetWrapperPID(rec.WrapperPID)` → 登记为 RUNNING：内存表无该 UUID 时新建 `&Instance{State: RUNNING, StartedAt: now, WorkDir, ProbePort, strategy, processType: daemon, AutoRestart: !restored}`；**两条路径都必须写 `StartedAt`**（FR-459 启动宽限期纪元，见 §5 缺陷登记；漏写会让刚接管的实例直接无宽限期）；**已有登记但脱管**（典型：Worker 硬崩后 CP `ResyncInstances` 按 STOPPED 重登记而磁盘进程仍在跑）时**就地补齐运行态**并保留 CP 已下发的规格（`StartCommand` / `StopCommand` / `EnvVars` / JDK / 端口等）——整条覆盖会让后续 `Restart` 拿着空启动命令去拉起新 wrapper。两条路径都复用 FR-459 的熔断态恢复（`restorePersistedCircuit` + `disarmAutoRestart`，与启动接管同口径）；随后落 `orphan.auto_adopted` 审计（success=true）。
 
 登记前在锁内**二次确认未纳管**（拨号期间可能有并发路径抢先，如启动接管或 CP 重推后的人工 Start）：若已有 strategy 或已属「可能仍有活进程」状态，则丢弃本次连接（`strategy.Close()`：只断连接、不下发停止帧、不杀进程），保证 wrapper 的控制连接不被两个 strategy 争抢。
 
@@ -118,7 +118,8 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 - [x] T4 回归四条（收养非破坏 / 复核不过只告警 / 重复扫描幂等 / 关闭开关不收养），逐条实测转红后还原
 - [x] T5 `go build ./...`、`CGO_ENABLED=0 go build ./apps/worker`、`gofmt -l`、`go vet`、`go test` 全过
 - [ ] T6 文档同步：本文档 §6 常量/审计登记（PRD 状态与 ADR 由 FR-497 主线统一更新，本次不动）
-- [ ] T7 真机验收（需用户确认）：A/B/C/D 四臂已过（C 臂仅至 wrapper 分支），Java 分支负例与收养后真机行为未验，见 §4 真机清单
+- [ ] T7 真机验收（需用户确认）：A/B/C/D 四臂已过；**C 臂的 Java 分支负例已补齐（实现层，见 §4 验收 2c~2e）**；
+      收养后的下游链路（心跳 / 巡检 / Stop）已由真实 java 进程夹具验证（§4 验收 6a~6d），**但真机仍未跑**，见 §4 真机清单
 - [x] T8 组合风险修复（§2.5）：`auto_adopt=false` 时未纳管活进程对在 `dispose_policy=auto` 下降级为 warn（不处置 + WARN + 降级审计）；单测六条（4b~4f）逐条实测转红后还原，`go build ./...`、`go test ./internal/worker/process/`、`go test -race` 全过
 
 ## 4. 验收标准
@@ -129,6 +130,9 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 | 2 | 归属复核不通过时**只告警**（`orphan.adopt_blocked`），不收养、不杀、保留 PID 文件 | 单测（负例：wrapper 分支 / Java 分支各一） |
 | 2a | **弱特征不判真**：`cwd` 恰好等于 `workDir`（或 cmdline 含工作目录）但无实例 UUID 强特征的无关进程，即便「wrapper 与 Java 均活、PID 记录有效」也**拒绝收养**：不拨号、不纳管、不杀、保留 PID 文件，审计 `evidence` 标注拦截口径（`weak_evidence_only` / `wrapper_argv_mismatch`） | 单测（真实进程：目录内两个无关 `sleep`，端到端经 `ScanOnce`） |
 | 2b | **真实形态仍可收养**：wrapper 为 `argv` 形如 `<worker> daemon` **且** 环境携带本实例 UUID、Java 的 cwd 为 workDir **且** 继承 `JM_DAEMON_WRAPPER_CONFIG` → 收养成功、PID 不变、零杀；单凭 argv（环境无 UUID）不判真 | 单测（真实进程，不注入复核桩） |
+| 2c | **Java 分支负例（端到端）**：wrapper 分支**真实通过**（argv 形如 daemon + 环境带本实例 UUID），Java 只有弱特征（cwd == workDir、环境无本实例 UUID）→ Java 分支拒 `weak_evidence_only`；`orphan.adopt_blocked` 的 detail 带 `role=java` 与被拒 PID，零拨号、零杀、PID 文件保留 | 单测（真实进程 + 真实 `DefaultVerifyAdoptOwnership`） |
+| 2d | **Java 携带他实例 UUID**：环境里是本实例之外的另一 UUID → 不判属。实测口径：cwd == workDir ⇒ `weak_evidence_only`；cwd 无关 ⇒ `uuid_evidence_missing`（两种形态各一条） | 单测（真实进程） |
+| 2e | **子串污染不得判属**：环境值里出现本实例 UUID 这段字符但其前后紧邻 UUID 字符集（hex / `-`）——如他实例 UUID 以本实例 UUID 为前缀、或 `MONITOR_TARGETS=sandbox-<uuid>-replica` —— Java 与 wrapper 两个分支都不得判通过；完整 token（JSON 值、路径分隔包裹）仍须判通过 | 单测（真实进程；改回整块 `strings.Contains` 即转红） |
 | 3 | 重复扫描**幂等**：已纳管不重复拨号、不重复登记、不重复审计；收养前后 PID 不变 | 单测 |
 | 4 | 关闭开关（`orphan_scan.auto_adopt=false` / `SetAutoAdopt(false)`）后不自动收养，但**仍发现并告警**（WARN + `orphan.scan_detected`，`Adopted=false`、不拨号、不登记、不杀），且同一进程对按变化去重不重复刷审计 | 单测 |
 | 4a | 关闭开关且**无**未纳管活进程时不产生噪音日志与审计 | 单测 |
@@ -138,7 +142,11 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 | 4e | 已纳管实例不受降级影响：受管 RUNNING 进程跳过；脱管后按 STOPPED 重登记、目录下有残留 Java 的实例仍按 `dispose_policy` 处置 | 单测 |
 | 4f | `dispose_policy=warn` 行为与审计形态不变（不产生降级留痕） | 单测 |
 | 5 | 收养失败（socket 仍拨不通）不产生任何破坏：只告警 + 保留 PID 文件，下一轮重试 | 单测（负例） |
-| 6 | 收养后实例与既有纳管实例同等：心跳快照报 RUNNING、健康巡检覆盖、`Stop` 等既有操作可用 | 单测（快照断言）+ 真机 |
+| 6 | 收养后实例与既有纳管实例同等：心跳快照报 RUNNING、健康巡检覆盖、`Stop` 等既有操作可用 | 单测（快照断言）+ **真实 java 进程夹具** + 真机 |
+| 6a | 收养后 `GetAllInstanceStates()` 报 RUNNING，PID 为夹具真实 wrapper PID（与该 PID 记录一致、且真存活） | 测（真实 wrapper 子进程 + 真实 java） |
+| 6b | 收养后健康巡检**确实检查到该实例**（`ScanOnce` 报告含该 UUID，未被 `state != RUNNING` 跳过），探针可达时判 healthy | 测（真实 java 监听 `/metrics`） |
+| 6c | 探针不可达（记录声明 ProbePort 但无人监听）⇒ 连续 `SuspicionThreshold` 拍后 `HealthFaultDead`（默认 warn 不重启）；**收养必须写 `StartedAt`**，否则刚接管就判假死（缺陷回归） | 测（真实 java，不监听端口） |
+| 6d | `StopContext` 后 java 真退出、实例记 STOPPED、stale 策略丢弃、PID 文件清理；**停止走的是 wrapper 控制帧**（java 日志出现 `console command: stop` 与完整关服序列，且无「优雅停止超时，强制终止 Java」）；无关进程（另一实例的 wrapper/java、一个无关 `sleep`）不被波及 | 测（真实 wrapper 控制帧 + 真实 java stdin） |
 | 7 | 启动窗口（`Start` 后立即一轮）与运行期周期（ticker）两条入口都生效 | 单测 + 真机 |
 
 **真机清单（须用户确认，逐项确认「服务器不受影响、PID 不变、无孤儿遗留」）**：
@@ -151,19 +159,52 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 | D 开关 | 配 `orphan_scan.auto_adopt: false` 重启 Worker | 不收养（仍只告警），实例不受影响 |
 
 **已覆盖**：A / B / D 三臂成立（启动窗口收养、运行期收养、开关关闭不收养）；C 臂达成「拒绝收养且不杀任何进程」，
-但只在 **wrapper 分支**返回，Java 分支负例未单独构造。
+原先只在 **wrapper 分支**返回，**Java 分支负例已按验收 2c~2e 补齐**（真实进程 + 真实复核，不注入桩）。
 
-**残留（如实登记）**：① 收养后「心跳快照报 RUNNING / 健康巡检覆盖 / `Stop` 可用」仅单测快照断言，
-真机部分以 `sleep` 代替真实 MC 服务端，**未验真实 MC 进程形态**；② Windows 未实机验证（见 §5，收养在该平台不生效、仅告警）。
+**测试夹具（新增，随仓库提交）**：
+- `internal/worker/process/testdata/mcstub/MinecraftServerStub.java`——最小游戏服夹具（只用 JDK API、
+  Java 8 兼容、不依赖 MC 服务端 jar）：周期日志、读 stdin 的 `stop` 走优雅关服、SIGTERM hook、
+  可选 `/metrics` 监听、可选日志文件落盘。无 java/javac 的环境一律 `t.Skip`，不影响 CI。
+- `internal/worker/process/adopt_realwrapper_linux_test.go`——把**测试二进制复制成名为 `worker` 的文件**
+  并以 `worker daemon` 的 argv 独立 spawn，让 wrapper 的 `/proc/cmdline` 与真实形态一致；
+  这是「wrapper 分支真实通过」与「Stop 走真实控制帧」两条断言的前提（进程内 wrapper 做不到）。
+
+**残留（如实登记）**：① 收养后的三条下游链路（心跳报 RUNNING / 健康巡检覆盖 / `Stop` 走 wrapper
+控制帧）已由**真实 java 进程夹具**验证：`internal/worker/process/testdata/mcstub/`
+（`TestFR497_Adopted*` 族，见 §4 验收 6a~6d）；**但真机（生产 Worker + 真 MC 服务端）仍未跑**，故本条仍属
+「实现层已验、真机未跑」而不是已验收；② Windows 未实机验证（见 §5，收养在该平台不生效、仅告警）。
 
 ## 5. 风险 / 待定
 
 - **Windows 未实机验证（已知降级）**：Windows 无 `/proc`，`processEnvMatchesInstance` 读不到 wrapper 环境 → wrapper 分支复核 fail-closed → **收养在 Windows 上不会生效**（只告警）。这是刻意取向（宁可不收养，绝不误纳管），但意味着该平台仍是原来的「只告警」行为。彻底解决需 Windows 侧读进程环境（PEB / `NtQueryInformationProcess`）或改 wrapper 启动参数携带 UUID——属另一 FR，且会触碰 wrapper 协议（本 FR 不做）。**未在 Windows 实机验证。**
+  代码层已落地、但**只在 Linux 上编译校验过**的部分：`adopt_ownership_windows_test.go`（`//go:build windows`）
+  断言「环境读不到 ⇒ 两分支都 fail-closed」，`adopt_ownership_platform_test.go`（无构建约束）断言
+  UUID token 边界对 Windows 路径形态（反斜杠、盘符）不误判；`GOOS=windows go build/vet ./internal/worker/process/` 通过。
+  **仍需真机验**（本 FR 未做，如实登记）：`IsPIDAlive` 的 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`
+  语义（权限不足时会误判「不在」）、`taskkill /T /F` 的终止范围与异步窗口、PID 复用判据（本项目只用
+  PID 数字，不校验进程创建时刻）、以及 `samePath` 在 Windows 上**大小写不敏感**（当前实现是字符串比较，
+  `C:\A` ≠ `c:\a`；只影响「cwd 命中」这类弱特征与强杀路径的宽口径，方向偏保守）。
 - **装配已接线**：`apps/worker/main.go` 将 `cfg.OrphanScan.AutoAdoptEnabled()` 传给 `SetAutoAdopt`；`auto_adopt: false` 仅关闭收养，`disabled=true` 仍整体关闭周期扫描。配置关闭与真实服务器持续运行的实机验收仍须单独记录。
 - **单轮单次拨号**：socket 瞬时抖动时本次不收养，等下一轮（≤`orphan_scan.interval`，默认 60s）。取舍：扫描轮内做长退避会拖住整轮（含 direct/docker 相），且启动接管已承担长退避。
 - **复核口径的误判率**（与 restart-resilience §5 同源）：过宽会放过非本实例记录、过窄会永远不收养。本 FR 的收养路径**只认强特征**（实例 UUID），弱特征（cwd / cmdline 含工作目录）不判真——取向是「宁可这一轮不收养，绝不误纳管一个无关进程」，代价是 `/proc` 环境不可读或被启动命令 `env -i` 清空时该实例不会被收养（仍告警）。强杀路径（`verifyProcessOwnership`）的宽口径**不受本 FR 影响**，仍按 restart-resilience §5 的标定计划推进。
 - **wrapper cwd 不是归属证据**：真实 wrapper 由 Worker 以 `exec.Command(exe, "daemon")` 拉起、**不设置 `cmd.Dir`**（继承 Worker 的 cwd），故其 cwd 通常不等于实例 workDir；wrapper 分支只能靠「argv 形如 daemon + 环境 UUID」判真。任何「按 cwd 判断 wrapper 归属」的实现都既会误判真、也会漏判真。
 - **收养与人工 Stop 的竞态**：PID 文件由 wrapper 退出时清理，正常情况下「刚被 Stop 的实例」不会留下有效 PID 记录；但若清理失败又恰逢 Java 未退净，可能被收养回 RUNNING。已由「wrapper 与 Java 均活」+ 归属复核双重收敛；极端场景待真机观察。
+- **收养必须写 `StartedAt`（本次补验修复的缺陷）**：两条登记路径原都未写 `Instance.StartedAt`，而
+  `warmupRemaining` 在纪元为零值时返回 0 ——「做了宽限」变成「完全没有宽限」。与另一条既有形态
+  （PID 记录只有 `ProbePort`、没有 `ServerPort`；未部署 ServerProbe 时该端口无人监听 ⇒ 响应维度恒失败）
+  叠加，一个**刚被接管、可能正在正常服务**的服务器会在 `SuspicionThreshold` 拍（默认 3 × 30s ≈ 90s）
+  后被判 `HealthFaultDead`。已修（收养 + 启动接管两处都写纪元），回归见测试
+  `TestFR497_AdoptedHealthScanHasStartupWarmup`（删掉该赋值即转红）。
+  **仍未修**：`ServerPort` 缺失导致的「响应维度只能落 ProbePort」本身没变——它是 PID 记录格式的
+  历史约束（记录里没有 server-port 字段），补它要改 wrapper→PID 文件协议，属另一 FR。当前取向是
+  宽限期把误判推后（给 CP 补齐规格的时间），而不是消除误判源。
+- **归属判据的子串匹配已收窄（本次补验修复的缺陷）**：`processEnvMatchesInstance` 原对「NUL 换空格后的
+  整块环境」做 `strings.Contains`，于是任何一处**出现过**本实例 UUID 这段字符的值都被判成「我就是该实例」
+  （他实例 UUID 以本实例 UUID 为前缀、`MONITOR_TARGETS=sandbox-<uuid>-replica` 等）。现改为按 NUL 切条目、
+  取 `=` 后的值、并要求 UUID 在值里**自成 token**（前后不得紧邻 hex / `-`）。该谓词同时服务
+  `DefaultVerifyProcessOwnership` 的 wrapper 分支，故强杀路径的 wrapper 归属判定一并收紧——方向与
+  ADR-093 一致（收窄只会「少杀」）。回归见 `TestFR497_JavaBranchSubstringPollutionRejected` 与
+  `TestFR497_WrapperBranchSubstringPollutionRejected`。
 - **审计白名单已登记**：CP `ReportOrphanAudit` 的强白名单已含 `orphan.auto_adopted/adopt_blocked/adopt_failed`，proto action 注释亦已同步；未知 action 仍拒绝，不因收养放宽审计输入边界。该接线不替代远端审计落库与归属场景实机验收。
 
 ## 6. 关键常量 / 配置键 / 审计 action 登记（实现-文档对齐）
