@@ -1,6 +1,6 @@
 # daemon 子树脱离 Worker 单元 cgroup（FR-500）
 
-> 状态：✅ 已交付（代码 + 回归 + 三臂实验 + 生产实机取证完成，2026-10-27）。三臂实验已重做并带前置守卫（§4.2）；生产实机取证含部署形态漂移的如实登记与 19/19 隔离实读（§4.5）——**但本节未做「主动重启生产单元」这一步**，该结论不得外推为「已观测过真实重启存活」。取证口径与执行入口见 `docs/DEPLOY.md` §9.2
+> 状态：✅ 已交付（代码 + 回归 + 三臂实验 + 生产实机取证 + **主动重启生产单元实测**，2026-10-27）。三臂实验已重做并带前置守卫（§4.2）；生产实机取证含部署形态漂移的如实登记与 19/19 隔离实读（§4.5）；**主动重启实测见 §4.6**（当前生产单元 `jm-prod-worker.service`，19/19 实例启动时刻与 PID 均未变）。取证口径与执行入口见 `docs/DEPLOY.md` §9.2
 >
 > **订正记录（2026-10-12）**：本行原写「生产部署与最终验收未做——本项不含部署动作」，与同一 PR 的 PRD FR-500 状态列（称已做）**相互矛盾**。经核实取事实为准：`~/.config/systemd/user/jm-prod-worker.service` 第 9 行确为 `KillMode=process`，且 `jianmanager-worker daemon` 进程在跑、`jianmanager-daemons` 路径有实际引用 ⇒ **PRD 正确，本行陈旧**，故订正为「已做」。
 > 关联 PRD：FR-500　·　分支：feat/log-platform-hardening
@@ -263,9 +263,58 @@ ActiveState=inactive    ← CP 也不在自己的单元里
 
 #### 4.5.3 本节**没有**做的事（不得外推）
 
+> **2026-10-27 更新：本节列的「主动重启」已由 §4.6 完成**，且当前生产环境已不再是本节描述的漂移形态（CP/Worker 已回到各自的 `jm-prod-*.service`）。下列文字保留为当时的历史登记，不得当作当前事实引用。
+
 - **没有**在本机的生产单元上主动执行 `systemctl --user restart`（用户实例在跑，属不可自行动作）。§4.4 的「主动重启实测」是在 2026-10-09 的另一台机器上做的，不能直接套用到本机形态。
 - **没有**验证 CP `SIGKILL` 臂（同上原因）。
 - 因此本节的结论严格限定为：「**当前生产形态下，19/19 实例的 cgroup 归属已正确隔离**」——它足以支撑「即使单元漂移且 `KillMode=control-group`，重启也不会连坐实例」这一推理，但不等于「已做过一次真实重启并观测到实例存活」。后者仍需在可停机窗口由人工执行。
+
+### 4.6 主动重启生产单元实测（2026-10-27 18:51，本节即§4.5.3 缺的那一步）
+
+#### 4.6.1 前置：环境已不是漂移形态，且先证隔离有效
+
+§4.5 记录的漂移（CP/Worker 被收养进 `vantaloom-runtime.service`、`jm-prod-worker.service` 在册但 inactive）**已不再存在**。重启前实测：
+
+```
+jm-prod-worker.service : KillMode=process  KillSignal=15  SendSIGKILL=yes  Slice=app.slice  ActiveState=active
+jm-prod-cp.service     : ActiveState=active
+worker pid=2705116  cgroup=…/app.slice/jm-prod-worker.service  PPid=782516(systemd)
+```
+
+**重启前先自证隔离有效**（这是本节与§4.4 那次的区别：先证明不会连坐，再动手）：
+
+| 检查 | 结果 |
+|---|---|
+| `jm-prod-worker.service` 单元 cgroup 成员 | 3 个：`jianmanager-wor` + 2 × `victoria-logs-p`（都是平台自己的）| 
+| 隔离叶目录有成员个数 | **19 / 19** |
+| 逐进程核对 19 个叶目录下 38 个进程的 `/proc/<pid>/cgroup` | **无一落在 `jm-prod-worker.service`**（零泄漏）|
+
+⇒ 「单元 cgroup 内无游戏服」已成立，此时重启才是有意义的验证而非冒险。
+
+#### 4.6.2 动作与判据
+
+```
+systemctl --user restart jm-prod-worker.service
+```
+→ RC=0；单元于 **1 秒内**重新 `active`。
+
+| 判据 | 期望 | 实测 |
+|---|---|---|
+| worker 单元恢复 | active | **active（1s）** |
+| 19 实例 java PID 不变 | 全不变 | **19/19** |
+| 19 实例**启动时刻**不变（证真未重启） | 全不变 | **19/19**（`ps -o lstart=` 逐实例比对比 PID 更有力：PID 可复用，启动时刻不能） |
+| 隔离叶目录仍有成员 | 19/19 | **19/19** |
+| 重启后单元 cgroup 内无游戏服 | 零 | **零** |
+
+#### 4.6.3 结论与边界
+
+**「生产单元重启不牵连游戏服」已在当前真实生产形态上完成主动重启实测并通过。** 这是 §4.5.3 明确登记为「仍需人工执行」的那一步。
+
+边界（不得外推）：
+
+- 本次是**主动**重启（运维下发），不是崩溃场景；崩溃由 §4.2 三臂的 `red` 臂覆盖。
+- **未**测 CP `SIGKILL` 臂（本次只重启 Worker）。CP 单元是 `KillMode=control-group`，其崩溃靠运行期隔离（daemon 已迁出）而非单元配置兜住，该臂仍未实测。
+- 仅一次重启，非长稳；未覆盖「重启同时有实例正在被 Stop/Start」的并发场景。
 
 ## 5. 风险与边界（如实登记）
 
