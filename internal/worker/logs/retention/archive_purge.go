@@ -209,7 +209,12 @@ type ArchiveObjectStore interface {
 	DeleteArchiveObject(ctx context.Context, providerKind, objectPrefix, relPath string) error
 	// RemoveArchivePartition 删除已清空的归档分区目录（尽力而为）。
 	//
-	// 它删除的只是**已经不装数据的空目录**：失败不改变「对象已清除」这个事实，
+	// 实现方必须删掉**本分区子树**（`<root>/<ns>/<day>/g<gen>`），包括对象删完后
+	// 剩下的 `raw/files/` 空骨架——只用 `os.Remove` 会在非空子目录上报 ENOTEMPTY，
+	// 于是每个分区都留一个骨架、每轮告警。同时**不得**越过该子树：root 与 day 目录
+	// 可能还有别的 generation / 别的日期，删它们等于把整个归档史删掉。
+	//
+	// 它删的只是**已经不装数据的目录**：失败不改变「对象已清除」这个事实，
 	// 因此调用方只记录告警、不把整轮判失败（见 execute 的说明）。
 	RemoveArchivePartition(ctx context.Context, providerKind, objectPrefix string) error
 }
