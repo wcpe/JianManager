@@ -527,6 +527,13 @@ func runWorker() {
 	}
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
+	// procManager 与 manager 同一实例，只是给它一个**不会被日志采集代码块遮蔽**的名字。
+	//
+	// 为什么不直接用 manager：下方日志采集段会写 `manager, ingestErr = newIngest()`，
+	// 把同名变量改成 `*ingest.Manager`。那个遮蔽是既有的、改动面很大的，而吸存需要的是
+	// 进程管理器（要拿实例的 WorkDir），两类 Manager 类型名相近但不能互换——
+	// 留着同名只用一次容易在下一个人改代码时静默传错。
+	procManager := manager
 	// 接管重试窗口（FR-455①）：Worker 重启后对存活 wrapper 的 reconnect 重试序列（默认 ≈127s），
 	// 覆盖分钟级瞬时故障；必须在下方 RecoverDaemonInstances 之前装配，否则该轮接管仍用默认序列。
 	manager.SetRecoverRetryBackoff(cfg.Recover.RetryBackoffSequence())
@@ -1516,6 +1523,26 @@ func runWorker() {
 				go manager.RunEventStorePrune(ingestCtx, eventStorePruneCfg)
 				slog.Info("事件段回收已启用（回收平台暂存段，原档仍在各服务器的文本日志里）",
 					"schedule", fmt.Sprintf("每天 %02d:00", eventStorePruneCfg.Normalized().SweepAtHour))
+			}
+			// 实例本地 gz 吸存（ADR-098 §5）：把各实例 logs/*.log.gz 以**文件身份原样**
+			// 吸存到归档（与 Deep Archive 同一个 provider）。
+			//
+			// 三条边界（写在这里以免日后被当成优化点）：
+			//   - 只归档文件，不下探解析、不入事件流（它不是 canonical 事件的副本，是原始证据）；
+			//   - **不删不搬实例本地 .gz**（用户明确要留作最后备份）；
+			//   - 幂等靠 object_id（内容 sha256 + 大小），重跑不产生第二份。
+			//
+			// 没归档能力（archiveRegistry 为 nil）时不装配——吸存的目的地就是它。
+			if archiveRegistry != nil {
+				adoptCfg := cfg.LogArchive.InstanceGzAdopt.Normalized()
+				logAdoptSchedule(adoptCfg.Enabled, adoptCfg.SweepAtHour)
+				if adoptCfg.Enabled {
+					if adopter := newInstanceGzAdopter(archiveRegistry, procManager); adopter != nil {
+						go runInstanceGzAdopt(ingestCtx, adopter, adoptCfg.SweepAtHour)
+					}
+				}
+			} else {
+				slog.Info("实例 gz 吸存未装配：本次没有可用的归档目的地（log_archive）")
 			}
 			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
 		}

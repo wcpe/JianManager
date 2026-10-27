@@ -1194,6 +1194,23 @@ func (c LogRetentionArchiveCopyConfig) ValidateArchiveCopyDestination() error {
 	return nil
 }
 
+// Normalized 把非法配置收敛到安全默认（不拒启：本项不影响安全边界，
+// 与 budget 类参数同一口径——丢一个不合法的时刻不值得让节点升不上来）。
+func (c LogArchiveInstanceGzAdoptConfig) Normalized() LogArchiveInstanceGzAdoptConfig {
+	out := c
+	if out.SweepAtHour < 0 || out.SweepAtHour > 23 {
+		// 越界即告警并用默认值，而不是拒启。
+		//
+		// 为什么不拒：本项只控制「每日几点开始扫描并吸存」。吸存是只增不删、幂等的动作，
+		// 时刻写错只是推迟一天，没有正确性后果。把它做成启动即拒，会把一个手误放大成
+		// 「整个节点起不来」——那正是 2026-10-27 `copy_verify_budget` 那次事故的形态。
+		slog.Warn("log_archive.instance_gz_adopt.sweep_at_hour 越界，回退默认 4 点（本项不拒启）",
+			"configured", out.SweepAtHour)
+		out.SweepAtHour = 4
+	}
+	return out
+}
+
 // LogRetentionEventStorePruneConfig 是事件段回收（eventstore.Prune）的自动接线配置。
 //
 // 它与 VL 的保留期（hot_retention / cold_retention）是**两条独立的删除路径**：
@@ -1916,6 +1933,25 @@ type LogArchiveConfig struct {
 	Prefix    string `mapstructure:"prefix"`
 	AccessKey string `mapstructure:"access_key"`
 	SecretKey string `mapstructure:"secret_key"`
+	// InstanceGzAdopt 是 ADR-098 §5「实例本地 logs/*.log.gz 归档吸存」的调度面。
+	InstanceGzAdopt LogArchiveInstanceGzAdoptConfig `mapstructure:"instance_gz_adopt"`
+}
+
+// LogArchiveInstanceGzAdoptConfig 是实例 gz 吸存的开关与时刻。
+//
+// 默认**开**——这与删除类能力（默认全关）的口径刻意相反，理由不是标尺不一致：
+// 吸存只**增加**一份副本，不删任何东西（连实例本地的 .gz 也不动，见 ADR-098 §5 第 4 条）。
+// 它唯一的代价是归档盘占用，而那正是「吸存」这个动作的目的。
+// 反之若默认关，则默认部署下这条能力永远为零调用——正是此前它被登记为
+// 「骨架具备、生产零调用」的原因。
+//
+// 关掉它不会删除任何已吸存的副本。
+type LogArchiveInstanceGzAdoptConfig struct {
+	// Enabled 控制每日扫描；默认 true。
+	Enabled bool `mapstructure:"enabled"`
+	// SweepAtHour 是每日执行的小时（进程本地时区），默认 4 点——
+	// 比保留驱动器与归档对象回收（都是 3 点）错开一小时，避开同一个 IO 高峰。
+	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
 
 // Load 从配置文件和环境变量加载 Worker 配置（FR-080，见 ADR-020）。
@@ -2030,6 +2066,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_archive.prefix", "logs")
 	v.SetDefault("log_archive.access_key", "")
 	v.SetDefault("log_archive.secret_key", "")
+	// 实例 gz 吸存（ADR-098 §5）：默认**开**——它只增加副本、不删任何东西。
+	// 默认 4 点，与保留驱动器/归档对象回收（都是 3 点）错开，避开同一个 IO 高峰。
+	v.SetDefault("log_archive.instance_gz_adopt.enabled", true)
+	v.SetDefault("log_archive.instance_gz_adopt.sweep_at_hour", 4)
 	// 采集归一化的节点级默认时区（缺陷 C）：留空 = UTC，未配置时零行为变化。
 	// 中文 locale 的 JVM 与 Worker 同机部署时配 `local` 即可对齐本地时间。
 	v.SetDefault("log_ingest.time_zone", "")

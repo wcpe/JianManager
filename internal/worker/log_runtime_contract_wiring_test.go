@@ -76,7 +76,9 @@ func TestWiringLayeringHasExplicitFiniteSLA(t *testing.T) {
 	}
 	for _, tc := range []struct{ name, from, to, want string }{
 		{"接收端未启", "start_cold: true", "start_cold: false", "start_cold"},
-		{"缺复制校验预算", "copy_verify_budget: 2h", "copy_verify_budget: ''", "copy_verify_budget"},
+		// 「未声明」不再拒启（2026-10-27 升级兼容性修正）：缺省取保守默认 1h。
+		// 但「显式写 0」仍必须拒——那是表达了「用不了」的意图，静默改成默认等于把意图掉包。
+		{"复制校验预算显式为零", "copy_verify_budget: 2h", "copy_verify_budget: 0s", "copy_verify_budget"},
 		{"恢复预算非正", "recovery_budget: 24h", "recovery_budget: 0", "recovery_budget"},
 		{"鉴权不完整", "password: fixture-password", "password: ''", "log_vl"},
 		{"未校验资产", "asset_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "asset_sha256: ''", "asset_sha256"},
