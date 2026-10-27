@@ -37,6 +37,11 @@
 **硬性要求**：创建任何发版 commit 与 tag **之前**，必须先确认**基线提交**（发版 commit 的父提交，即当前主干 tip）在远程 CI 上**全绿**。
 
 - **唯一判定依据是远程 CI 结论，不得用本地测试结果替代。** 本地 `go test` / `vitest` 全绿**不能**代替 CI：开发机负载与环境差异会让两者不等价（实例：本机 `load average ≈ 30` 时前端 vitest 因 10s `testTimeout` 批量假失败，而**同一提交**在 CI 上 2349 用例全绿）。
+  - **2026-10-27 补充：`go test` 同样会因宿主机载批量假失败，不只是前端的 `testTimeout`。** 当 `load average` 达 100–190（本机 40 核上常驻 104 个 java、多个 worker 与生产 CP/Worker）时，以下两类失败与代码无关：
+    - **包级超时**：`panic: test timed out after 10m0s` + `running tests: <某用例>`。这不是用例失败，是整包在负载下跑不完 10m 默认时限。仓库已有 `scripts/go-test.sh` / `go-test-race.sh` 的分组与超时机制，可用 `CORE_TIMEOUT` / `RACE_TIMEOUT` 放宽。
+    - **负载敏感的性能断言**：实测至少 4 条（`TestSortEventsHandlesLargeReversedInput` 500ms 线实测 505ms、`TestSingleCommitLatencyBoundedAtScale` 50ms 线实测 66ms、`TestLoadSamplingThroughRealManagerWALAndDelivery` 报「未投递全部源」、`TestWiringRecoveryLoopRetriesWithRetentionDisabled` 报「条件恢复后没有续跑」）——**前两条是耗时阈值，后两条是 `Eventually` 类等待条件**，同一个逻辑在各次运行间的差别可达数十倍。
+  - **区分方法（必须做，不能默认是环境噪声）**：先 `cat /proc/loadavg` 记下负载，再对失败用例**单跑 3 次**（`go test ./pkg/ -run '^TestX$' -count=3`）。若单跑全绿且耗时远低于阈值，才能判为负载噪声；否则必须按真缺陷排查。**`WARNING: DATA RACE` 计数为 0 是「没有数据竞争」的直接证据**，与用例断言失败是两回事，不得混为一谈。
+  - 本条不构成放宽门禁的理由：真缺陷在单跑时同样会红；而负载噪声下的红不得被当成「已修复」也不得被当成「代码问题」。两方向都必须拿单跑证据说话。
 - **CI 红即禁止发版，flake 变红同样禁止。** flake 不是豁免理由——它使门禁本身不可信，必须先使其变绿（修 spec 稳定性，或重跑并确认结论为 success）再发版。
 - 核对命令（要求 `conclusion == "success"` 且 `headSha` 等于待发版的基线提交）：
   ```sh
