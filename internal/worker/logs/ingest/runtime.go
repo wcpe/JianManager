@@ -4130,6 +4130,16 @@ func isDecimalDigits(s string) bool {
 
 func pendingArchives(p *pipeline.Pipeline, paths []string) []string {
 	entry := p.Ledger().Get(p.Key())
+	// 存量分段的内容身份补建（2026-10-28）：`content_anchor.go` 2026-10-21 才引入，
+	// 它上线前登记的分段没有任何身份 ⇒ `ResolveContentAnchor` 不会把它们当候选锚
+	// ⇒ 永远找不到锚 ⇒ 一律 `ARCHIVE_CONTENT_UNKNOWN` ⇒ 被本函数永久跳过。
+	// 补建身份只能从**盘上的真实字节**算（`acquire.ContentIdentity`），不新增任何放行路径：
+	// 补完后仍走原判据 `DecideArchiveReimport` 决定导/跳。幂等（已有身份直跳），
+	// 只在文件大小与登记时一致时补（槽位复用防护）。
+	if acquire.BackfillLegacySegmentIdentities(p.Key(), p.Ledger()) > 0 {
+		// 身份变了，必须重取账本快照——旧快照里这些分段仍是「无身份」。
+		entry = p.Ledger().Get(p.Key())
+	}
 	imported := make(map[string]bool)
 	if entry != nil {
 		for i := range entry.Segments {
