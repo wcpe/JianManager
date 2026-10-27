@@ -1072,6 +1072,46 @@ type LogRetentionConfig struct {
 	EventStorePrune LogRetentionEventStorePruneConfig `mapstructure:"eventstore_prune"`
 	// ArchiveCopy 是「导出为独立副本」的配置面（键 `log_retention.archive_copy.*`）。
 	ArchiveCopy LogRetentionArchiveCopyConfig `mapstructure:"archive_copy"`
+	// ArchiveObjectRetention 是「归档对象自身的回收」的配置面
+	// （键 `log_retention.archive_object_retention.*`）。
+	ArchiveObjectRetention LogRetentionArchiveObjectRetentionConfig `mapstructure:"archive_object_retention"`
+}
+
+// LogRetentionArchiveObjectRetentionConfig 是归档目的地自身保留期的配置面。
+//
+// 定位：`archive_copy` 回答「到期数据往哪写一份副本」，本项回答「那份副本留多久」。
+// 没有本项时归档目的地**只增不减**——热层清得再干净，归档桶仍按天累积
+// （spec §7 的「归档对象自身的回收未做」正是这条）。
+//
+// 两道配置分家的理由：写副本与删副本的风险量级不同（删除不可逆）。
+// 合成一个开关会让「想清旧归档、但不想再导出新的」变成不可能，也会让
+// 「打开导出」顺带获得删归档的授权。
+//
+// 为什么 Retention 是字符串而不是 time.Duration：与 hot_retention 同一取舍——
+// Go 的 time.ParseDuration 不认 `d`/`w`，而归档保留期天然按天写（如 730d）。
+// 用 time.Duration 会让 viper 解码 `730d` 直接失败，连带**整个 Load 失败**。
+//
+// 默认值口径：enabled=false、retention 空。**空 = 不启用**，不补默认天数。
+// 平台不该替运维决定「归档留几年」：补一个 730d 意味着打开开关就承诺两年后无条件删除，
+// 而那个数字是合规/成本口径的事，必须由运维说出口。
+type LogRetentionArchiveObjectRetentionConfig struct {
+	// Enabled 是否允许按保留期清除归档对象（默认 false）。
+	//
+	// 打开它**仍然不是**删除授权：执行侧还要过与热层删除**同一套**三闸
+	// （`discard` + `sweep.vl_sweep` + `log_vl.delete_enabled`），默认全关。
+	Enabled bool `mapstructure:"enabled"`
+	// Retention 归档副本保留期（自 ArchiveEvidence.ArchivedAt 起算）；空 = 不启用。
+	//
+	// 支持 `730d` / `104w` / `17520h` 等写法（经 retention.ParseTTL 解析）。
+	// 启用但为空 ⇒ 启动即拒（与 archive_copy.root 同一取舍：
+	// 静默按未启用处理会让运维以为归档在按保留期清理，而它一条都没删）。
+	Retention string `mapstructure:"retention"`
+	// SweepAtHour 每日触发的本地整点（0..23，默认 3）。
+	//
+	// 写成 int 并靠 SetDefault 注入默认值：0 是合法值（午夜），没有可用哨兵，
+	// 与 eventstore_prune.sweep_at_hour 同一约定。越界值启动即拒
+	// （时刻写错只会表现成「清理在业务高峰跑」，从日志里几乎看不出来）。
+	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
 
 // LogRetentionArchiveCopyConfig 是硬规则次选路径「导出归档」的配置面。
@@ -1271,6 +1311,35 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 		if err := cfg.ArchiveCopy.ValidateArchiveCopyDestination(); err != nil {
 			return retention.Policy{}, err
 		}
+	}
+	// 归档对象回收：开了开关就必须给出保留期，否则启动即拒。
+	//
+	// 与 archive_copy.root 同一取舍——「开了但没参数」在生产表现为「什么都没发生」：
+	// 运维看到 enabled=true，去面板看归档仍然一天天涨，而日志里没有任何报错。
+	// 静默空转是这类「默认关闭 + 必须显式配置」的功能最典型的现场。
+	if cfg.ArchiveObjectRetention.Enabled && strings.TrimSpace(cfg.ArchiveObjectRetention.Retention) == "" {
+		return retention.Policy{}, fmt.Errorf(
+			"log_retention.archive_object_retention.retention 不能为空（启用归档对象回收必须给出明确的保留期，如 730d）")
+	}
+	if raw := strings.TrimSpace(cfg.ArchiveObjectRetention.Retention); raw != "" {
+		d, err := retention.ParseTTL(raw)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf("log_retention.archive_object_retention.retention: %w", err)
+		}
+		// 解析成 0 表示「永久保留」——对**删除**类配置来说这是个陷阱：
+		// 运维写 "0" 的直觉可能是「立刻删」，而语义恰好相反。
+		// 明确拒绝，避免「以为配了保留期，实际一条都不会删」。
+		if d <= 0 {
+			return retention.Policy{}, fmt.Errorf(
+				"log_retention.archive_object_retention.retention 必须为正的有限时长，得到 %q（0 表示永久保留，与「启用回收」相矛盾）", raw)
+		}
+		p.ArchiveObjectRetention.Retention = d
+	}
+	p.ArchiveObjectRetention.Enabled = cfg.ArchiveObjectRetention.Enabled
+	p.ArchiveObjectRetention.SweepAtHour = cfg.ArchiveObjectRetention.SweepAtHour
+	if h := p.ArchiveObjectRetention.SweepAtHour; h < 0 || h > 23 {
+		return retention.Policy{}, fmt.Errorf(
+			"log_retention.archive_object_retention.sweep_at_hour 必须在 0..23（本地整点），得到 %d", h)
 	}
 	if strings.TrimSpace(cfg.HotRetention) != "" {
 		d, err := retention.ParseTTL(cfg.HotRetention)
@@ -1887,6 +1956,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_retention.archive_copy.access_key", "")
 	v.SetDefault("log_retention.archive_copy.secret_key", "")
 	v.SetDefault("log_retention.archive_copy.use_ssl", false)
+	// 归档对象自身的回收：默认关闭、默认**无保留期**、每日本地 3 点。
+	// 不开 `retention` 的默认值是有意的：平台不替运维决定「归档留几年」
+	// （730d 是例子里最常见的值，但它属于合规/成本口径，必须由运维说出口）。
+	v.SetDefault("log_retention.archive_object_retention.enabled", false)
+	v.SetDefault("log_retention.archive_object_retention.retention", "")
+	v.SetDefault("log_retention.archive_object_retention.sweep_at_hour", 3)
 	v.SetDefault("log_vl.hot_port", 0)
 	v.SetDefault("log_vl.cold_port", 0)
 	v.SetDefault("log_vl.rehydrate_port", 0)
