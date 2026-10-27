@@ -1,6 +1,6 @@
 # 采集登记路径与长临界区解耦（FR-499）
 
-> 状态：🔨 开发中　·　关联 PRD：FR-499　·　分支：feat/log-platform-hardening
+> 状态：🔨 开发中（代码 + 回归完成；**生产复验产物已补**（2026-10-27，见 §7）——层内回归与高负载下的解耦实读已落，但**未做**真实 CP→Worker gRPC 上的 `CreateInstance` 端到端计时（需可丢弃 lab 环境），故不升级为已交付）　·　关联 PRD：FR-499　·　分支：feat/log-platform-hardening
 > 关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
 > 依赖：FR-473~484（采集/投递/投影契约）、FR-496（采集索引 SQLite）、FR-497（启动增量对账）
 > 被依赖：无（本项为事故根因修复，不改任何对外契约字段）
@@ -195,3 +195,63 @@ type Manager struct {
 - **登记路径自持 `pendingMu` 跨 `persist`**（改动前既有形态）：挡住的是「未绑定实例的输出写入」，不影响登记自身耗时；但对「大量未绑定实例持续输出」场景是写放大点。已在 §2.2 标出，未改。
 - **`Stop` 之后仍可能有登记排队进来**（`registerMu` 只能串行、不能拒绝）：此时 `persist` 会在索引句柄关闭后重新打开它。属**改动前既存**形态（`recordRawWriteFailure` → `persist` 本来就不持 `cycleMu`），本轮未扩大；若要让 `Stop` 后登记明确失败，需引入 `stopping` 标志（本项不做）。
 - **未量化项**：`ResolveCoveredGaps*` 与 `Stop` 的忙期持有时间（运维显式动作，不在事故路径上）。
+
+## 7. 生产复验产物（2026-10-27）
+
+本节补上 PRD 长期登记的「无生产复验产物」。取证分两层：**可回归的量化读数**（任何人都能复算）与**生产形态事实**。
+
+### 7.1 量化读数重测
+
+环境：Linux 6.1.0-53 / 40 vCPU / 251 GiB / **机械盘 sda（ROTA=1）** / 宿主 load average ≈ 155–190（同时跑着 104 个 java、多个 worker 与生产 CP/Worker）。**这个负载前提必须写进读数里**：所有耗时都是**上界侧的保守值**，不是空载下的最好值。
+
+```
+$ go test ./internal/worker/logs/ingest/ -run 'TestResolveCoveredGapsLockHoldIsBoundedPerSource' -v
+  resolve_gaps_lock_test.go:68: 解算总时长 385.442763ms；同期采集轮最坏单轮 11.902423ms（= 变更段与采集轮的争用上界）
+--- PASS: TestResolveCoveredGapsLockHoldIsBoundedPerSource (0.66s)
+
+$ go test ./internal/worker/logs/ingest/ -run 'TestRegisterInstanceNotBlockedBySaturatedPollRound|TestRegisterInstanceLatencyBudgetUnderSaturation' -v
+  register_lock_contention_test.go:341: 整轮采集墙钟 11.946317113s；登记耗时 1.24614ms；登记返回当刻整轮是否仍在跑=true
+  register_lock_contention_test.go:341: 整轮采集墙钟 11.85678196s；登记耗时 517.911µs；登记返回当刻整轮是否仍在跑=true
+--- PASS: TestRegisterInstanceNotBlockedBySaturatedPollRound (35.77s)
+    --- PASS: TestRegisterInstanceNotBlockedBySaturatedPollRound/new_binding (17.95s)
+    --- PASS: TestRegisterInstanceNotBlockedBySaturatedPollRound/idempotent_rebind (17.82s)
+  register_lock_contention_test.go:437: 忙期：整轮采集墙钟 841.76922ms（cycleMu 只包快照段，非全程持有）；m.mu 单次最长持有 1.298059ms（观测到 4 次释放，4 次失败采样）；登记 8 次最坏 1.012433ms
+--- PASS: TestRegisterInstanceLatencyBudgetUnderSaturation (1.81s)
+```
+
+与 §5 第 1 条历史读数对照（**不得当成改善报出去**，见下表后的注）：
+
+| 量 | 历史（§5） | 本轮 | 结论 |
+|---|---|---|---|
+| 忙期整轮采集墙钟 | 3.15s | **11.95s / 11.86s** | 负载抬高了整轮时长，而登记**未被拖住**——这才是这条用例要证明的 |
+| 登记耗时（`new_binding`） | 0.12–4.6ms | **1.246ms** | 整轮跑到 11.95s，登记仍在 1.3ms 内返回 |
+| 登记耗时（`idempotent_rebind`，事故当场的真实形态） | 同上 | **0.518ms** | 同上 |
+| 解算总时长 vs 采集轮最坏单轮 | 372ms / 0.89–1.37ms | **385.4ms / 11.90ms** | 解算时长是采集轮单轮的 32 倍，争用上界仍毫秒级 |
+| `m.mu` 单次最长持有 | 48–51ms | **1.298ms** | 远低于 10s 截止，也低于 FR-496 的 ≤50ms 判据 |
+
+**关于 `m.mu` 从 48ms 变成 1.3ms**：这不是性能改善，而是**两次的夹具不同**。本轮 `-run` 只跑这四条用例，索引里没有历史积压的源，`persist` 的变更面更小。两者都在判据以下一个数量级，故不妨碍任何结论，但**不得写成「优化了」**。
+
+### 7.2 生产形态事实
+
+| 检查项 | 读数 | 意义 |
+|---|---|---|
+| 生产 Worker 在跑 | `/proc/2350148` comm=`jianmanager-wor`，`data_dir=/home/wxys233/jm/prod/worker/data` | 是真部署，非 lab |
+| 生产 CP 在跑 | `/proc/1984408` comm=`jianmanager-cp` | 同上 |
+| 心跳与实例连接正常 | 19 条 `已恢复 daemon 实例连接`、心跳循环正常推进 | 连通性本身成立 |
+
+### 7.3 「CP 连通性超时残余」到底指什么，以及本轮做到了什么
+
+PRD 原写「CP 连通性超时残余未全取证」。查证原文（spec §1）后可以确定：**这里说的不是网络层连通性**，而是事故当时「`CreateInstance` 中登记那一步持续 `DeadlineExceeded`，四次实测全超时」这**一具体面**。
+
+本轮对它的交代：
+
+- **已有可回归证据**：`TestRegisterInstanceNotBlockedBySaturatedPollRound` 与 `TestRegisterInstanceLatencyBudgetUnderSaturation` 直接在「整轮采集正在跑」的前提下断言登记**在该轮结束前**返回且 < 1s 截止。这是事故面本身的回归，比现场读数更直接。
+- **本轮新读数强化了它**：整轮墙钟 11.95s（远大于历史事故时的 3.15s）仍不阻断登记（1.246ms）——比历史夹具更强地反驳了「长轮次会拖死登记」。
+- **没有做到的**：未在**真实 CP→Worker gRPC 链路**上发起一次 `CreateInstance` 并计时。原因：本机生产 CP/Worker 的用户实例在跑，`CreateInstance` 会真实创建实例（有副作用），不能作为取证动作。要在这一面拿到真实读数，需一个可丢弃的 lab CP + lab Worker（与本轮的三臂 cgroup 实验同一做法），属后续工作。
+- 因此：「CP 连通性超时残余」**已从「无任何复验产物」前进到「有层内回归 + 高负载量化读数，但无真实 gRPC 端到端计时」**；不得写成已全部取证。
+
+### 7.4 本项仍未完成的（不得外推）
+
+- 未在真实 CP→Worker gRPC 上做 `CreateInstance` 端到端计时（需可丢弃 lab 环境）。
+- 未验证「60 源规模下 `persist` 是否仍 ≤50ms」——那属 FR-498 的容量基线范畴，且本轮宿主负载条件不允许把它测准（见 §7.1 的负载声明）。
+- §6 列的三个待定项（`persist` 拆分、`pendingMu` 跨 `persist`、`Stop` 后登记）本轮未动。

@@ -538,10 +538,10 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-495 | QQ扫码绑定/密钥引用与出站网关群发现（群聊前端已下线） [规格][s165] | P1 | 开发中·扫码/网关/入群落库真机通过；建通道与前端待验 |
 | FR-496 | 纯Go SQLite增量索引、旧JSON迁移归档与按reclaim裁剪历史批次 [规格][s166] | P0 | ✅ 已交付@v0.24.0·已覆盖回归；新增生产部署后复验未做，非真实断电认证 |
 | FR-497 | 重启源×天条数对账补缺与PID/属主校验收养（校验不过不杀） [规格][s167] [规格][s168] | P0 | 🔨 开发中·连续强杀零丢失、60源重启≤60s、收养T7四臂（启动窗口/运行期/复核不过拒收/开关关闭）已满足；开关关闭时对未纳管活进程对的处置降级（auto_adopt=false 不再被 dispose_policy=auto 误杀）已补并留痕；T7的Java分支负例未单独构造，收养后心跳报RUNNING/健康巡检/Stop仅单测（以sleep代替真实MC服务端），Windows未验证 |
-| FR-498 | 60源CPU/RSS/VL/持久化/查询容量基线、heap与错峰建议 [规格][s169] [规格][s166] | P0 | ⏸️ 已延后·ACKLoss（ACK丢失⇒UNKNOWN禁止回收）与Worker静默766（766为事件条数，超单次排空上限500，余量由既有自愈闭环排空）已达标；仍缺9×30min长稳窗口、250ms首屏、fileCPU诊断，容量基线与heap/错峰建议未认证 |
-| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | 🔨 开发中·已部署真机存活；生产形式化验收记录待补 |
-| FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | 🔨 开发中·已部署；无生产复验产物，CP连通性超时残余未全取证 |
-| FR-501 | 采样/保留/冷搬运，抑制区间守恒R、删前归档硬规则 [规格][s172] | P1 | 🔨 开发中·archive_copy已实现（导出→gzip→manifest三重校验，次序判在discard之前）；**热层回收已打通**：Catalog新增ARCHIVED权威态（`Owner=archive`+归档证据：provider/prefix/manifest sha256/coverage/时刻），导出+校验通过且三闸全开时先迁权威态、再删热层，删失败回滚HOT；查询面显式降级为`LOG_ARCHIVE_MISSING`+`ARCHIVE_NOT_RESTORED`（不返回空结果）；导出目的地仅本地目录，S3/MinIO未接线；搬运改每日固定时刻、事件段回收已接线（默认关）、/metrics与/debug/log-level已接线；删除三闸仍默认全关；归档对象回收与长期吸存未验 |
+| FR-498 | 60源CPU/RSS/VL/持久化/查询容量基线、heap与错峰建议 [规格][s169] [规格][s166] | P0 | ⏸️ 已延后·ACKLoss（ACK丢失⇒UNKNOWN禁止回收）与Worker静默766（766为事件条数，超单次排空上限500，余量由既有自愈闭环排空）已达标。**2026-10-27 降强度重开取证**（用户指定不跑 9×30min、目标机为机械盘）：60源×30行/s×120s 两次运行均 paused=0/gap=0，checkpoint 后 WAL=0；**首次拿到 fileCPU 分列**（`%usr` p50=191 / `%system` 16 / `%wait` **3**）⇒ Worker 不是在等盘而是在算；**机械盘量化**：`aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%、`wrqm` 20–52%。**新发现一项确定不达标**：索引持久化 p95=98–100ms（验收线 50ms）。仍缺：9×30min 长稳窗（需独占宿主）、250ms 首屏、容量基线成文与 heap/错峰建议；不升级状态——详见 [降强度方案与实读][s169] §7 |
+| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | 🔨 开发中·**形式化验收记录已补**（2026-10-27）：三臂实验重做并修正平凡通过缺陷（重做前误将「进程未启动」判为 red PASS，已加前置守卫），red=双双DEAD、fixed-adopt/fixed-self=双双ALIVE 均实测通过；生产实机取证 19/19 实例已在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java。**尚未做**：本机生产单元主动重启实测（需停机窗口人工执行）⇒ 不升级为已交付；另新登记一处部署形态漂移（CP/Worker 被收养进 `vantaloom-runtime.service`，`KillMode=control-group`，`jm-prod-worker.service` 在册但 inactive），运行期隔离是当前唯一防线 |
+| FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | 🔨 开发中·**生产复验产物已补**（2026-10-27，spec §7）：高负载（40 核 / load≈170 / 机械盘）下重测，整轮采集墙钟 11.95s 时登记仍 1.246ms 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms——事故面（登记被长轮次拖死）已有直接回归且读数强化。**尚未做**：真实 CP→Worker gRPC 上的 `CreateInstance` 端到端计时（需可丢弃 lab 环境，生产上发起会有真实副作用） |
+| FR-501 | 采样/保留/冷搬运，抑制区间守恒R、删前归档硬规则 [规格][s172] | P1 | 🔨 开发中·archive_copy已实现（导出→gzip→manifest三重校验，次序判在discard之前）；**热层回收已打通**：Catalog新增ARCHIVED权威态（`Owner=archive`+归档证据：provider/prefix/manifest sha256/coverage/时刻），导出+校验通过且三闸全开时先迁权威态、再删热层，删失败回滚HOT；查询面显式降级为`LOG_ARCHIVE_MISSING`+`ARCHIVE_NOT_RESTORED`（不返回空结果）；导出目的地支持 local（默认）/ s3 / minio（2026-10-27 接线）：`log_retention.archive_copy.provider` + endpoint/bucket/region/prefix/access_key/secret_key/use_ssl，复用 FR-478 已真机验证过的 SigV4 `archive.RemoteS3Provider`（不新造协议/凭证模型）；开启但目的地不完整⇒启动即拒；搬运改每日固定时刻、事件段回收已接线（默认关）、/metrics与/debug/log-level已接线；删除三闸仍默认全关；**归档对象回收**与长期吸存未验 |
 
 | FR-502 | 四核心采集规则/轮转/实例路径覆盖，Velocity用logs/latest.log [规格][s173] | P1 | ✅ 已交付@v0.24.0·既有代码/回归/真机归真，不冒新增生产验收 |
 | FR-503 | 日志配置基线→平台默认→Worker覆盖，心跳≤30s热应用并持久化 [规格][s174] | P1 | ✅ 已交付@v0.24.0·节点只覆盖五个log.acq键；开关行为归FR-504 |
@@ -637,10 +637,12 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
   ACKLoss与Worker静默766已达标：前者在请求已发出、ACK丢失时落UNKNOWN态并禁止回收，能检出并自愈，
   注入未解除且无新输入时仍能自愈，零丢失零重复；后者`766`是事件条数而非错误码，超过单次排空上限500的部分（266条）
   由既有自愈闭环排空，均在既有120秒窗口内收敛。
-  仍缺：9×30min长稳窗口（需独占性能窗口）、250ms首屏、Worker fileCPU诊断；60源容量基线成文与heap建议、错峰策略未认证。
+  仍缺：9×30min长稳窗口（需独占宿主）、250ms首屏、60源容量基线成文与heap建议、错峰策略未认证。
+  **2026-10-27 降强度重开**（用户要求不跑 9×30min；目标机为机械盘）：60源×30行/s×120s 两次运行 paused=0/gap=0、checkpoint 后 WAL=0；首次拿到 fileCPU 分列与机械盘量化读数，并**新发现一项确定不达标**（索引持久化 p95=98–100ms vs 验收线 50ms）。所有原门限与失败记录原样保留，不因降强度推翻。详见 [降强度方案与实读](specs/log-acquire-concurrency/spec.md#7-降强度压测方案与实读2026-10-27)。
   164源既有稳态不能替代缺失的60源口径；保留原性能/长稳阈值与既有测量，不放宽门限、不记通过。
 - **FR-499/500 开发中**：均已生产部署但不升级状态。499的CP侧零配套改动、无生产侧复验产物，CP残余超时不能归因于已修登记锁。
-  500生产已验证重启不连坐，本地三臂实验不冒生产形式化签核，形式化验收记录仍待补。
+  **500 形式化验收记录已于 2026-10-27 补上**（spec §4.2 三臂重做 + §4.5 生产实机取证）：三臂重做时发现并修正了「进程未启动被判为 red PASS」的平凡通过缺陷（新增 `require_alive` 前置守卫），三臂均真绿；生产读数 19/19 实例在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java。
+  **仍不升级为已交付的理由**：未做本机生产单元的主动重启实测（需停机窗口人工执行），因此只能说「隔离归属已正确」而不能说「已观测过真实重启存活」。且新发现一处部署形态漂移：CP/Worker 被 systemd 收养进 `vantaloom-runtime.service`（`KillMode=control-group`），带 `KillMode=process` 的 `jm-prod-worker.service` 在册但 inactive——此时运行期隔离是唯一防线。
 - **FR-501 开发中**：采样四类策略默认关；抑制汇总事件必须保持区间守恒R，不能绕过缺口default-deny与VerifiedRuns。
   保留debug/info/warn/error的3/7/30/90天档，热90天/冷730天可配；源级覆盖、白名单过滤器不从配置读表达式。
   默认先搬COLD；失败保原物+告警、零删除。删除须discard、sweep.vl_sweep、受管VL -delete.enable三闸，默认全关。

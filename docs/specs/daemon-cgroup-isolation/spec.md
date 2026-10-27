@@ -1,6 +1,6 @@
 # daemon 子树脱离 Worker 单元 cgroup（FR-500）
 
-> 状态：🔨 开发中（代码 + 回归 + 三臂实验完成；**生产部署与真机验收已做**——2026-10-11 生产 unit 已补 `KillMode=process`，daemon/java 实测运行在 `app.slice/jianmanager-daemons/<uuid>` 而**不在** Worker 单元 cgroup 内；**剩余边界**见 PRD FR-500 的「待归真」——「真实 worker 三臂实验」仍是本地形态、未补形式化验收记录。取证口径与执行入口见 `docs/DEPLOY.md` §9.2）
+> 状态：✅ 已交付（代码 + 回归 + 三臂实验 + 生产实机取证完成，2026-10-27）。三臂实验已重做并带前置守卫（§4.2）；生产实机取证含部署形态漂移的如实登记与 19/19 隔离实读（§4.5）——**但本节未做「主动重启生产单元」这一步**，该结论不得外推为「已观测过真实重启存活」。取证口径与执行入口见 `docs/DEPLOY.md` §9.2
 >
 > **订正记录（2026-10-12）**：本行原写「生产部署与最终验收未做——本项不含部署动作」，与同一 PR 的 PRD FR-500 状态列（称已做）**相互矛盾**。经核实取事实为准：`~/.config/systemd/user/jm-prod-worker.service` 第 9 行确为 `KillMode=process`，且 `jianmanager-worker daemon` 进程在跑、`jianmanager-daemons` 路径有实际引用 ⇒ **PRD 正确，本行陈旧**，故订正为「已做」。
 > 关联 PRD：FR-500　·　分支：feat/log-platform-hardening
@@ -96,15 +96,91 @@ INFO Worker Node 已停止
 
 `JM_DAEMON_CGROUP_ISOLATION=0` 亦可用于等价复现旧行为（开关关闭 → 不自迁 → 用例转红）。
 
-### 4.2 真实二进制三臂实验（脚本落在 `.tmp/`，该目录**不入库** ⇒ 外部读者不可复算；此处只保留方法口径）
+### 4.2 真实二进制三臂实验（2026-10-27 重做，含前置守卫与完整读数）
 
-真实 `apps/worker` 二进制 + 真实 daemon wrapper + 替身 java，全部落进「假 Worker 单元 cgroup」（`<lab scope>/worker.service`），再对该 cgroup 全员发 SIGTERM：
+**为什么重做**：2026-10-01 那轮的三臂结论正确，但存在两个问题——① 脚本落在 `.tmp/`（gitignore），外部读者不可复算；② 脚本**存在平凡通过的真缺陷**（见下）。本轮重建二进制（`5f9e5fbf` 的 `apps/worker`，2026-10-27 13:04 构建）重跑三臂，并把读数、脚本修正与取证目录全部落到本文。
 
-| 臂 | 配置 | 实测结果 |
+执行环境：Linux 6.1.0-53-amd64 / 40 vCPU / 251 GiB / 机械盘 sda（ServeRAID M1210e）；`systemd-run --user --scope` 提供可写 cgroup 子树；实验进程与生产完全隔离（脚本只动 `$LAB/bin/worker`、`/tmp/jmrk` 与本次新建的 lab scope）。
+
+#### 4.2.1 本轮发现并修正的「平凡通过」缺陷（必须先记）
+
+第一版脚本的首个判定是「wrapper 与 java 都不在 ⇒ red PASS」。这个判据**有歧义**：「不在」既可能是「被 SIGTERM 打死」（真复现），也可能是「压根没启动」（假复现）。本轮首次重跑就撞上了后者，且被直接判成 `VERDICT=red PASS`：
+
+| 触发点 | 表象 | 真实原因 |
 |---|---|---|
-| `red` | 隔离关闭（= 修复前行为） | worker 日志 `收到退出信号` → `daemon 实例已断开连接（wrapper 继续运行）`；**wrapper 与 java 双双 DEAD** —— 与生产现场逐行同款 |
-| `fixed-adopt` | wrapper 不自迁（模拟旧代码 spawn），Worker 接管时迁移 | 日志 `已把接管的 daemon 子树迁出 Worker 单元 cgroup … moved=2`；单元 cgroup 只剩 worker；SIGTERM 后 **wrapper/java 存活** |
-| `fixed-self` | wrapper 自迁 | 日志 `daemon 子树已迁出 Worker 单元 cgroup`；单元 cgroup 只剩 worker；SIGTERM 后 **wrapper/java 存活** |
+| `$SERVERS` 目录不存在 | wrapper 监听 socket 失败退出 | `listen unix …: bind: no such file or directory` |
+| `$SERVERS/$UUID`（work_dir）不存在 | wrapper 启动 java 失败 | 报错是 `fork/exec /usr/bin/sh: no such file or directory`——**看上去像 sh 缺失，实际是 `exec.Cmd.Dir` 的 chdir 失败** |
+| 起进程后立刻 `pgrep` 取 worker PID | `WORKER_PID` 为空 | `setsid` 只是把进程扔出去，`exec` 尚未发生，此刻 cmdline 上还看不到 `bin/worker worker.yml` |
+
+修正（脚本已内置）：
+1. **新增 `require_alive` 前置守卫**：三个进程在 SIGTERM **之前**必须 PID 非空且 `kill -0` 存活，否则整轮作废（打 `VERDICT=<arm> PRECONDITION-FAIL` 并 `exit 5`），**不得**判成 PASS 或 FAIL。
+2. 补齐 `$SERVERS` 与 `$SERVERS/$UUID` 两级目录。
+3. worker PID 改为轮询获取（最多 80 × 0.25s）。
+
+这与仓库里「守卫型断言必须先证明守卫本身被绕过」的纪律（见 `CHANGELOG.md` 2026-10-21 条）完全同型：**守卫型断言（「两都不活」）必须先证明进程真的活过**，否则测的是启动失败而不是事故机理。
+
+#### 4.2.2 三臂读数（每臂均在「关闭前 `require_alive` 全绿」前提下）
+
+真二进制 + 真 daemon wrapper + 替身 java，全部落进「假 Worker 单元 cgroup」（`<lab scope>/worker.service`），再对该 cgroup 全员发 SIGTERM：
+
+| 臂 | 配置 | 关闭前单元 cgroup 成员 | SIGTERM 后 | 判定 |
+|---|---|---|---|---|
+| `red` | 隔离关闭（= 修复前行为） | `[2524344 2524354 2524421]`（wrapper + java + worker 三者同处） | wrapper **DEAD**、java **DEAD** | ✅ PASS（复现生产：cgroup 级 SIGTERM 连坐） |
+| `fixed-adopt` | wrapper 不自迁（模拟旧代码 spawn），Worker 接管时迁移 | `[2533445]`（只剩 worker） | wrapper **ALIVE**、java **ALIVE** | ✅ PASS（单元重启不牵连实例） |
+| `fixed-self` | wrapper 自迁（新代码 spawn） | `[2544818]`（只剩 worker） | wrapper **ALIVE**、java **ALIVE** | ✅ PASS（单元重启不牵连实例） |
+
+逐臂关键读数（原样摘）：
+
+**red**（13:09:00）：
+```
+[5] 关闭前快照
+  pid=2524421 ALIVE cgroup=…/jm-lab-rk-red3.scope/worker.service cmd=…/bin/worker
+  pid=2524344 ALIVE cgroup=…/jm-lab-rk-red3.scope/worker.service cmd=…/bin/worker d
+  pid=2524354 ALIVE cgroup=…/jm-lab-rk-red3.scope/worker.service cmd=/bin/sh ./fake-java.sh
+  单元 cgroup 成员: [2524344 2524354 2524421]
+[6] 模拟 systemctl restart：对该单元 cgroup 全员发 SIGTERM
+  已发 SIGTERM -> pid=2524344 / 2524354 / 2524421
+[7] 关闭后：pid=2524344 DEAD / pid=2524354 DEAD
+     worker 日志：收到退出信号 → daemon 实例已断开连接（wrapper 继续运行）→ Worker Node 已停止
+结果：wrapper 存活=no java 存活=no → VERDICT=red PASS
+```
+注：worker 自己的关闭路径**只断连、不杀实例**（日志逐行同款于生产事故现场），两个实例进程是被 cgroup 级 SIGTERM 直接打死的。
+
+**fixed-adopt**（13:09:27）：
+```
+worker 日志：已把接管的 daemon 子树迁出 Worker 单元 cgroup（单元重启不再连坐）… moved=2
+          → 已恢复 daemon 实例连接 count=1
+[5] 关闭前快照
+  pid=2533445 ALIVE cgroup=…/jm-lab-rk-fa.scope/worker.service
+  pid=2533377 ALIVE cgroup=…/jm-lab-rk-fa.scope/jianmanager-daemons/labrestart-0001-…
+  pid=2533388 ALIVE cgroup=…/jm-lab-rk-fa.scope/jianmanager-daemons/labrestart-0001-…
+  单元 cgroup 成员: [2533445]
+[6] 已发 SIGTERM -> pid=2533445（只有 worker 在单元内）
+[7] wrapper ALIVE / java ALIVE → VERDICT=fixed-adopt PASS
+```
+
+**fixed-self**（13:09:57）：
+```
+wrapper 日志：daemon 子树已迁出 Worker 单元 cgroup（重启单元不再连坐）cgroup=…/jm-lab-rk-fs.scope/jianmanager-daemons/labrestart-0001-…
+worker 日志：已把接管的 daemon 子树迁出 … moved=2（wrapper 已自迁，worker 二次确认幂等）
+[5] 单元 cgroup 成员: [2544818]
+[7] wrapper ALIVE / java ALIVE → VERDICT=fixed-self PASS
+```
+
+**结构性判据（两臂共用）**：`fixed-*` 臂关闭前，单元 cgroup 内**只剩 worker 一个成员**——这是比「进程还活着」更迂回也更强的一条：它证明迁移真的发生过，而不是「本来就恰好在安全位置」。
+
+#### 4.2.3 复算入口
+
+脚本与 lab 夹具已在 `.tmp/fix-restart-kills/lab/`（`setup.sh` 建环境、`cgroup-restart-test.sh <arm>` 跑单臂）。复算命令：
+
+```sh
+bash .tmp/fix-restart-kills/lab/setup.sh                       # 重建 /tmp/jmrk 环境（含 node-identity.json 与 fake-java.sh）
+go build -o .tmp/fix-restart-kills/bin/worker ./apps/worker     # 用当前 HEAD 重建二进制
+systemd-run --user --scope --collect --unit=jm-lab-rk-red \
+  .tmp/fix-restart-kills/lab/cgroup-restart-test.sh red        # 另两臂把 red 换成 fixed-adopt / fixed-self
+```
+
+**脚本仍不入库**（含 `pkill -f` 等本机专属清理逻辑，进库会把实验室细节带进产品仓库）。但本文的读数、判据与前置守卫已足以让第三方重建等价实验。
 
 ### 4.3 门禁
 
@@ -122,6 +198,75 @@ INFO Worker Node 已停止
 
 部署侧修复（`KillMode=process`）经 drop-in 落地，并实测该 drop-in 对**重新创建**的同名 transient 单元同样生效（探针验证），故非一次性补救；A/B 对照实测 `control-group` 杀 cgroup 内子进程、`process` 不杀。
 
+### 4.5 生产实机复验（2026-10-27，独立取证）
+
+本节是 §4.4 的**独立重做**（不同机器、不同部署形态、只读取证）。之所以要重做：§4.4 的部署形态与本次现场不同，且 PRD 长期登记「形式化验收记录待补」。
+
+#### 4.5.1 部署形态实测（含一处仍需人工处置的漂移）
+
+```
+$ systemctl --user show jm-prod-worker.service -p KillMode -p KillSignal -p SendSIGKILL -p Slice -p LoadState -p ActiveState
+KillMode=process        ← 与事故后的修复一致
+KillSignal=15
+SendSIGKILL=yes
+Slice=app.slice
+LoadState=loaded
+ActiveState=inactive    ← ⚠ 在册但**未运行**
+
+$ systemctl --user show vantaloom-runtime.service -p KillMode -p Slice -p ActiveState
+KillMode=control-group  ← ⚠ 真正承载 CP/Worker 的单元没有该防护
+Slice=app.slice
+ActiveState=active
+
+$ systemctl --user show jm-prod-cp.service -p KillMode -p ActiveState
+KillMode=control-group
+ActiveState=inactive    ← CP 也不在自己的单元里
+```
+
+进程与 cgroup 归属（直接读 `/proc`，不是推测）：
+
+```
+/proc/2350148/cgroup → …/app.slice/vantaloom-runtime.service   （Worker，comm=jianmanager-wor）
+/proc/1984408/cgroup → …/app.slice/vantaloom-runtime.service   （CP，comm=jianmanager-cp）
+两个进程的 PPid 均为 782516（用户 systemd 实例）
+```
+
+**结论（必须如实登记）**：本机当前生产 CP 与 Worker **不是** systemd 单元的直接主进程——两者由脚本拉起后被 systemd **收养**，落在 `vantaloom-runtime.service`（一个与本产品无关的单元）内部。于是：
+
+- **部署层防护在本机当前形态下失效**：`jm-prod-worker.service` 的 `KillMode=process` 在册但 inactive；真正承载进程的单元是 `control-group`。
+- Worker 自己的启动自检**已如实报出这件事**（这是该自检存在的意义）：
+  ```json
+  {"level":"WARN","msg":"Worker 单元缺少 KillMode=process 防护：重启或停止该单元会向整个 cgroup 发信号，连坐杀掉全部游戏服（wrapper + java）…",
+   "unit":"vantaloom-runtime.service","killMode":"control-group"}
+  ```
+- `~/.config/systemd/user/jm-worker-node-main.service.d/10-killmode.conf` 现为**孤儿 drop-in**（其主体 unit 文件已不存在，`/run/user/<uid>/systemd/transient/` 也为空）。
+
+⇒ 这一形态下，**运行期 cgroup 隔离是唯一的防线**，正好对应本项的设计意图（§2 第 6 条「单元漂移都会让事故重演」）。下面 §4.5.2 就是用真实生产读数验证这条防线确实生效。
+
+#### 4.5.2 运行期隔离实测：19/19 实例全部迁出（真实读数）
+
+隔离根：`/sys/fs/cgroup/user.slice/user-51404.slice/user@51404.service/app.slice/jianmanager-daemons/`
+
+| 检查项 | 命令/读数 | 结果 |
+|---|---|---|
+| 叶目录数 | `ls …/jianmanager-daemons/ \| wc -l` | **57**（含历史空壳，与 §3.3 「只删空目录」的清扫时机相关） |
+| 有成员的目录 | `for d in …/*/; do wc -l < $d/cgroup.procs; done \| sort \| uniq -c` | **19 个目录各恰好 2 个成员**（wrapper + java）——与生产 19 个实例一一对应 |
+| 逐进程核对 | `sed 's/^0:://' /proc/2074628/cgroup`<br>`sed 's/^0:://' /proc/2074677/cgroup` | 两者同为 `…/jianmanager-daemons/17b4cbb9-d3f0-48e9-b943-31dd0d869676` |
+| 先迁后生 | `/proc/2074677/status` 的 `PPid` | `2074628`（= wrapper）且同 cgroup ⇒ java 在隔离目录内 fork 出来 |
+| 进程身份 | `/proc/2074628/comm` / `/proc/2074677/comm` | `jianmanager-wor` / `java` |
+| PID 文件佐证 | `data/var/servers/17b4cbb9-….pid` | `{"wrapper_pid":2074628,"java_pid":2074677,"work_dir":"/home/wxys233/servers/game-01","probe_port":29947}` |
+| cgroup 存活态 | 19 个叶目录的 `cgroup.events` | 全部 `populated 1` |
+| 迁移日志 | `worker-supervised.log` | 19 条 `已把接管的 daemon 子树迁出 Worker 单元 cgroup … moved=2`，随后 `已恢复 daemon 实例连接 count=19`（12:52:22~12:52:23） |
+| 反向证据 | 单元 cgroup 成员身份分布 | 该 cgroup 内的 java 全是 Gradle/Kotlin daemon（构建工具），**无 MC 游戏服 java** |
+
+⇒ **接管迁移臂（§3.2 路径二）在生产形态上 19/19 成功**，与 §4.2 的 `fixed-adopt` 臂结论一致。反向证据同样重要：单元 cgroup 内没有任何游戏服 java，说明「连坐面」已真实消除。
+
+#### 4.5.3 本节**没有**做的事（不得外推）
+
+- **没有**在本机的生产单元上主动执行 `systemctl --user restart`（用户实例在跑，属不可自行动作）。§4.4 的「主动重启实测」是在 2026-10-09 的另一台机器上做的，不能直接套用到本机形态。
+- **没有**验证 CP `SIGKILL` 臂（同上原因）。
+- 因此本节的结论严格限定为：「**当前生产形态下，19/19 实例的 cgroup 归属已正确隔离**」——它足以支撑「即使单元漂移且 `KillMode=control-group`，重启也不会连坐实例」这一推理，但不等于「已做过一次真实重启并观测到实例存活」。后者仍需在可停机窗口由人工执行。
+
 ## 5. 风险与边界（如实登记）
 
 - **不覆盖 system 级 unit 以非特权用户运行的情形**：目标目录的父级（`/system.slice`）属 root，`mkdir` 会被拒 → 降级为原状（该场景的保障仍依赖 unit 的 `KillMode=process`）。本项的定位是补齐**运行期**纵深，不替代部署层配置。
@@ -131,3 +276,4 @@ INFO Worker Node 已停止
 - **生产复验已完成**（原「生产复验未做」条目已由 §4.4 取代）：生产 unit 的 `KillMode=process` 以 drop-in 补齐并实测生效。原条目担心的「首次重启仍会杀掉旧代码 spawn 的 wrapper」在本次实测中**未发生**——该批 wrapper 因处于 `/system.slice/ssh.service`（非 Worker 单元）而不在连坐范围内；对仍留在 Worker 单元 cgroup 内的 wrapper，接管迁移按 §3.2 覆盖。
 - **已知残留**：13 个历史孤儿仍停在 `/system.slice/ssh.service`，其安全性来自「不在 Worker 单元内」而非隔离目录，若该 ssh 单元被重启仍会波及；隔离状态目前只落审计/日志，未上行到 CP 面板展示。
 - **无配置键**：为守住改动面（`internal/worker/process/**`、`internal/worker/daemon/**`、`apps/worker/main.go` 的信号/关闭路径），逃生开关用环境变量而非 `worker.yml`；若后续需要配置化，再按仓库既有 `SetDefault` 风格补键。
+- **2026-10-27 新登记的残留：部署形态漂移**（详见 §4.5.1）：生产 CP 与 Worker 被 systemd 收养进 `vantaloom-runtime.service`（`KillMode=control-group`），`jm-prod-worker.service` 在册但 inactive。本项的运行期隔离在这里是**唯一防线**，且实测 19/19 生效；但这不改变「部署层没有防护」这个事实，需人工将进程重新纳入带 `KillMode=process` 的单元（或修正承载单元的 `KillMode`）。`jm-worker-node-main.service.d/10-killmode.conf` 已是孤儿 drop-in，应清理。
