@@ -537,11 +537,11 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-494 | QQ告警官方主动推送（CP纯出站，不做群内被动回复） [规格][s164] | P1 | ✅ 已交付@v0.24.0·仅单聊真机送达；群主动消息平台限制，前端已下线 |
 | FR-495 | QQ扫码绑定/密钥引用与出站网关群发现（群聊前端已下线） [规格][s165] | P1 | 开发中·扫码/网关/入群落库真机通过；**群通道前端与「QQ接入」视图已主动拆除**（非待验），仅保留只读接入状态观测（网关状态/已发现群）；建群通道需平台开放后新立工作 |
 | FR-496 | 纯Go SQLite增量索引、旧JSON迁移归档与按reclaim裁剪历史批次 [规格][s166] | P0 | ✅ 已交付@v0.24.0·已覆盖回归；新增生产部署后复验未做，非真实断电认证 |
-| FR-497 | 重启源×天条数对账补缺与PID/属主校验收养（校验不过不杀） [规格][s167] [规格][s168] | P0 | 🔨 开发中·连续强杀零丢失、60源重启≤60s、收养T7四臂（启动窗口/运行期/复核不过拒收/开关关闭）已满足；开关关闭时对未纳管活进程对的处置降级（auto_adopt=false 不再被 dispose_policy=auto 误杀）已补并留痕。**2026-10-27 三项缺口已补**（详见 [收养规格][s168]）：① T7 的 Java 分支负例已端到端构造（此前所有端到端负例都停在 wrapper 分支，Java 分支从未被求值），并顺带**修掉一个真缺陷**——`processEnvMatchesInstance` 原对整块环境做子串搜索，导致“值里含有这段字符”被当成“我就是该实例”（他实例 UUID 是本实例的后缀、`MONITOR_TARGETS` 携带、工作目录含 UUID 均可误判），现改为按 NUL 切条目 + UUID 自成 token；② 心跳/巡检/Stop 改用真实 java 夹具（mcstub，只用 JDK 自带 API）验证，并**修掉收养实例无启动宽限期**（StartedAt 零值）；③ Windows 仅到代码层契约与 `GOOS=windows build/vet` 通过，**真机未验**（该平台下 `/proc` 缺失、`OpenProcess`/`taskkill` 行为、`samePath` 大小写敏感性均未实机验证） |
-| FR-498 | 60源CPU/RSS/VL/持久化/查询容量基线、heap与错峰建议 [规格][s169] [规格][s166] | P0 | ⏸️ 已延后·ACKLoss（ACK丢失⇒UNKNOWN禁止回收）与Worker静默766（766为事件条数，超单次排空上限500，余量由既有自愈闭环排空）已达标。**2026-10-27 降强度重开取证**（用户指定不跑 9×30min、目标机为机械盘）：60源×30行/s×120s 两次运行均 paused=0/gap=0，checkpoint 后 WAL=0；**首次拿到 fileCPU 分列**（`%usr` p50=191 / `%system` 16 / `%wait` **3**）⇒ Worker 不是在等盘而是在算；**机械盘量化**：`aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%、`wrqm` 20–52%。**新发现一项确定不达标**：索引持久化 p95=98–100ms（验收线 50ms）。仍缺：9×30min 长稳窗（需独占宿主）、250ms 首屏、容量基线成文与 heap/错峰建议；不升级状态——详见 [降强度方案与实读][s169] §7 |
-| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | 🔨 开发中·**形式化验收记录已补**（2026-10-27）：三臂实验重做并修正平凡通过缺陷（重做前误将「进程未启动」判为 red PASS，已加前置守卫），red=双双DEAD、fixed-adopt/fixed-self=双双ALIVE 均实测通过；生产实机取证 19/19 实例已在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java。**尚未做**：本机生产单元主动重启实测（需停机窗口人工执行）⇒ 不升级为已交付；另新登记一处部署形态漂移（CP/Worker 被收养进 `vantaloom-runtime.service`，`KillMode=control-group`，`jm-prod-worker.service` 在册但 inactive），运行期隔离是当前唯一防线 |
-| FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | 🔨 开发中·**生产复验产物已补**（2026-10-27，spec §7）：高负载（40 核 / load≈170 / 机械盘）下重测，整轮采集墙钟 11.95s 时登记仍 1.246ms 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms——事故面（登记被长轮次拖死）已有直接回归且读数强化。**尚未做**：真实 CP→Worker gRPC 上的 `CreateInstance` 端到端计时（需可丢弃 lab 环境，生产上发起会有真实副作用） |
-| FR-501 | 采样/保留/冷搬运，抑制区间守恒R、删前归档硬规则 [规格][s172] | P1 | 🔨 开发中·archive_copy已实现（导出→gzip→manifest三重校验，次序判在discard之前）；**热层回收已打通**：Catalog新增ARCHIVED权威态（`Owner=archive`+归档证据：provider/prefix/manifest sha256/coverage/时刻），导出+校验通过且三闸全开时先迁权威态、再删热层，删失败回滚HOT；查询面显式降级为`LOG_ARCHIVE_MISSING`+`ARCHIVE_NOT_RESTORED`（不返回空结果）；导出目的地支持 local（默认）/ s3 / minio（2026-10-27 接线）：`log_retention.archive_copy.provider` + endpoint/bucket/region/prefix/access_key/secret_key/use_ssl，复用 FR-478 已真机验证过的 SigV4 `archive.RemoteS3Provider`（不新造协议/凭证模型）；开启但目的地不完整⇒启动即拒；搬运改每日固定时刻、事件段回收已接线（默认关）、/metrics与/debug/log-level已接线；删除三闸仍默认全关；**归档对象回收**与长期吸存未验 |
+| FR-497 | 重启源×天条数对账补缺与PID/属主校验收养（校验不过不杀） [规格][s167] [规格][s168] | P0 | 🔨 开发中·连续强杀零丢失、60源重启≤60s、收养T7四臂（启动窗口/运行期/复核不过拒收/开关关闭）已满足；开关关闭时对未纳管活进程对的处置降级（auto_adopt=false 不再被 dispose_policy=auto 误杀）已补并留痕；T7的Java分支负例未单独构造，收养后心跳报RUNNING/健康巡检/Stop仅单测（以sleep代替真实MC服务端），Windows未验证 |
+| FR-498 | 60源CPU/RSS/VL/持久化/查询容量基线、heap与错峰建议 [规格][s169] [规格][s166] | P0 | ⏸️ 已延后·ACKLoss（ACK丢失⇒UNKNOWN禁止回收）与Worker静默766（766为事件条数，超单次排空上限500，余量由既有自愈闭环排空）已达标；仍缺9×30min长稳窗口、250ms首屏、fileCPU诊断，容量基线与heap/错峰建议未认证 |
+| FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | 🔨 开发中·已部署真机存活；生产形式化验收记录待补 |
+| FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | 🔨 开发中·已部署；无生产复验产物，CP连通性超时残余未全取证 |
+| FR-501 | 采样/保留/冷搬运，抑制区间守恒R、删前归档硬规则 [规格][s172] | P1 | 🔨 开发中·archive_copy已实现（导出→gzip→manifest三重校验，次序判在discard之前）；**热层回收已打通**：Catalog新增ARCHIVED权威态（`Owner=archive`+归档证据：provider/prefix/manifest sha256/coverage/时刻），导出+校验通过且三闸全开时先迁权威态、再删热层，删失败回滚HOT；查询面显式降级为`LOG_ARCHIVE_MISSING`+`ARCHIVE_NOT_RESTORED`（不返回空结果）；导出目的地仅本地目录，S3/MinIO未接线；搬运改每日固定时刻、事件段回收已接线（默认关）、/metrics与/debug/log-level已接线；删除三闸仍默认全关；**归档对象回收已实现**（`archive_object_retention.*`，默认关；终态新增`ARCHIVE_PURGED`/`LOG_ARCHIVE_PURGED`，/metrics 增 4 条序列），长期吸存未验 |
 
 | FR-502 | 四核心采集规则/轮转/实例路径覆盖，Velocity用logs/latest.log [规格][s173] | P1 | ✅ 已交付@v0.24.0·既有代码/回归/真机归真，不冒新增生产验收 |
 | FR-503 | 日志配置基线→平台默认→Worker覆盖，心跳≤30s热应用并持久化 [规格][s174] | P1 | ✅ 已交付@v0.24.0·节点只覆盖五个log.acq键；开关行为归FR-504 |
@@ -668,7 +668,19 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
   ——后者的`contiguousDeliveryEnd`不按投递状态过滤，失败请求同样推进它，用它会删掉仍需重放的正文。
   `/metrics` 已输出保留/搬运与事件段回收序列；运行期调级入口 `/debug/log-level`（GET读/POST改，
   只调等级不改格式、不持久化、仅本进程handler生效）。
-  未做：归档对象回收、长期吸存与定时扫描验证；分级「只存不验」未决策。
+  **归档对象自身的回收（桶内生命周期）已实现**：`log_retention.archive_object_retention.{enabled,retention,sweep_at_hour}`
+  （默认关、默认无保留期；启用但保留期为空 ⇒ 启动即拒），保留期自 `ArchiveEvidence.ArchivedAt` 起算。
+  次序与热层回收同构且不可调换：`MarkArchiveObjectPurgeRequested`（落 journal）→ 按前缀 `List` + 逐对象 `Delete`
+  → 全部成功才 `MarkArchiveObjectsPurged`；任一失败 `RollbackArchiveObjectPurge`（退回未清除，`PurgeAttempts` 不清零）。
+  **复用同一套删除三闸**（discard + sweep.vl_sweep + log_vl.delete_enabled，默认全关），不新造开关。
+  `List` 返回空（目录已不存在）视为幂等成功；`List` 报错视为失败（「读不出来」≠「里面没东西」）。
+  清除前置：证据完整、热层已回收、无待恢复标记、无活跃查询租约、无本地已恢复投影。
+  终态语义取**方案二**：`Owner` 保持 `OwnerArchive`，清除表达为 `ArchiveEvidence.Purged/PurgedAt/PurgeReason`，
+  查询面对已清除分区给出**新的**原因 `ARCHIVE_PURGED` + 错误码 `LOG_ARCHIVE_PURGED`（不复用 `LOG_ARCHIVE_MISSING`，
+  也不返回空成功）；proto `LogErrorCode` 新增 `LOG_ARCHIVE_PURGED = 11`。
+  `/metrics` 新增 4 条序列（`jm_log_retention_archive_purged_total`、`_archive_purge_failed_total`、
+  `_archive_purge_rolled_back_total`、`_archive_purge_last_run_timestamp_seconds`），未启用时输出 0 而非缺序列。
+  未做：长期吸存与定时扫描验证；分级「只存不验」未决策。归档对象回收**未做真机长窗验证**（仅本地构造数据回归）。
 - **日志交付边界**：FR-473冻结是契约/治理/依赖证据闸，Runbook A/B/C分别归FR-474/476/477，不作冻结前置。
   FR-475仅Linux；FR-476的Windows包校验/解包通过，不等于Windows运行时认证。
   FR-477不外推本轮浏览器迁移成功分支；FR-478既有S3证据不冒新增生产认证；FR-479首屏性能仍延期。

@@ -46,6 +46,17 @@
   变异验证：子串匹配改回 `strings.Contains` ⇒ 三条污染用例转红；删 Java 分支复核 ⇒ 三条负例转红；删 `StartedAt` ⇒
   宽限期用例转红；跳过 `ControlStop` 改强杀 ⇒ Stop 用例转红；收养不记 RUNNING ⇒ 心跳/巡检用例转红。均恢复后转绿。
   细节见 [收养规格 §4 验收 2c~2e / 6a~6d 与 §5](docs/specs/auto-adopt-orphans/spec.md)。
+- **归档对象自身的回收（FR-501 最后一块，2026-10-27，未发布）**：补上「归档副本按保留期清除」的闭环。此前 `archive_copy` 只解决了「热层到期往哪去」，归档目的地**只增不减**——热层回收得再干净，归档桶仍按天累积（spec §7 长期登记为「未做：归档对象自身的回收（桶内生命周期）」）。
+  **次序与原热层回收同构、不可调换**：`MarkArchiveObjectPurgeRequested`（落 journal，记「本轮开始删」并累加 `PurgeAttempts`）→ 按前缀 `List` + 逐对象 `Delete` → **全部成功**才 `MarkArchiveObjectsPurged`；任一失败 `RollbackArchiveObjectPurge`（`Purged` 保持假、进行中标记清空、失败原因记账、尝试次数**不清零**——一次失败尝试是真实事故，不该因退回原态就从审计里消失）。
+  **复用同一套三闸**（`discard` + `sweep.vl_sweep` + `log_vl.delete_enabled`，默认全关），不新造开关；未全开时连候选都不枚举（读数表现为零行动，而不是「枚举一堆再全部保留」）。
+  **清除前置**：证据完整、热层已回收（否则归档是第二份副本）、无待恢复标记（此时归档是唯一可用副本）、无活跃查询租约、无本地已恢复投影（rehydrate 副本是临时的）。`List` 返回空（目录已不存在）= 幂等成功；`List` 报错 = 失败（「读不出来」≠「里面没东西」）。
+  **终态语义取「证据属性」而非新 Owner**：`Owner` 保持 `archive`（它的语义是「正本在哪一层」，而对象被清掉不是「搬到另一层」）；新增 `ArchiveEvidence.Purged/PurgedAt/PurgeReason/PurgeAttempts/LastPurgeError`。放弃新增 `OwnerPurged` 的理由：全仓十余处 `Owner == hot/cold/archive` 的 switch 会落进各自 default（`TierOf` 返回不存在的 tier、`NamespaceForOwner` 找不存在的 namespace、写准入退化成「按 owner 猜新位置」）——一个「数据已经不在」的事实会伪装成「另一个存储层」。
+  **查询面不再撒谎**：已清除 ⇒ 新原因 `ARCHIVE_PURGED` + 新错误码 `LOG_ARCHIVE_PURGED`（proto `LogErrorCode = 11`）。不复用 `LOG_ARCHIVE_MISSING`（那是「去 rehydrate」，此刻是死路），也不返回空成功（静默 0 行会被读成「那天没有日志」）；CP 侧 `normalizeCoverageReason` 同样不把两者归一。
+  **配置**：`log_retention.archive_object_retention.{enabled,retention,sweep_at_hour}`，默认 `false` / 空（= 不启用）/ `3`；启用但保留期为空 ⇒ 启动即拒；`0`（永久保留，与「启用回收」矛盾）与负数同样启动即拒；小时数越界启动即拒。保留期自 `ArchiveEvidence.ArchivedAt` 起算（不是热层回收时刻）。
+  **观测**：`/metrics` 增 4 条（`jm_log_retention_archive_purged_total`、`_archive_purge_failed_total`、`_archive_purge_rolled_back_total`、`_archive_purge_last_run_timestamp_seconds`），未启用时输出 0 而非缺序列；读数取 `Stats()` 快照（抓取高频，现算会变成一次全量枚举）。
+  **转红实测**：`scripts/mutation/run-fr501-purge.sh`（`go test -overlay`，原文件零改动）**20/20 全部以断言转红**。其中 4 条变异首轮存活并各自暴露真实问题：M7「请求步不落 journal」——原重放用例只验最终态，最终态由完成步一次写下也能过 ⇒ 改为**分三段重放**（归档后/请求后/完成后各重建一次 Catalog）；M14「已清除与『请去恢复』并存」——只把 `archivedAuthority` 置假挡不住 `req.RequireArchive` 那条独立追加分支 ⇒ 补「最终 Coverage 里两种原因不得并存」的三组请求形态断言；M16「Normalize 给保留期补默认值」——`Policy.Normalize()` 里那行 `Normalize()` 调用是**死代码**（不改任何字段），删掉并补「无保留期时永不到期」用例，钉住 fail-closed 的最后一道；M17「读数与执行脱节」——原用例只注入假快照 ⇒ 补「真跑一轮后序列必须动」的用例，另加 M17b（Step 不并入累计）一并转红。
+  **未做/未验**：真机长窗与生产部署复验；S3/MinIO 目的地的对象删除（`RemoteS3Provider` 未接线，装配处**如实拒绝**而非用内存 stub 冒充）；归档根被人工改写的情形只按权威记录尊重（不自动重删）。
+
 - **日志功能修复收口与专项延期（2026-10-25，未发布）**：本轮代码修复及已覆盖功能回归收口；各 FR 按实际范围归真，既有交付历史保留，FR-497/501 未完成范围继续开发中，FR-498 延后。250ms 首屏仍未达，原 9×30min 未执行，追加最终 ACKLoss 覆盖、严格完整 Worker 静默 766 与 Worker fileCPU 诊断未完成，均为延期专项，不再阻塞本次功能修复提交，不放宽原阈值、不伪报通过；结果与限制统一见 [收口范围及验收表](docs/specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。
 - **r028 回执与恢复修复（2026-10-24，未发布）**：完整 actual-Apply 与精确身份/CAS 闸保持，每成员仍完整编码及写新 SQL 正文，仅严格复用旧合格摘要；RO 恢复、混合历史、inline/ref 正文与完整 tie/字段语义不放宽。
   无外部接口/schema/配置或预算变化；完整质量相对基线通过（余留 CFR 条件未测、lint raw 存量仍红），指定 live 原 scope 已通过，本次功能修复可收口，性能仍 HOLD 并延期。准确结果见 [验证状态](docs/specs/worker-log-platform-contract/spec.md#2026-10-24-验证状态r028性能-hold)。

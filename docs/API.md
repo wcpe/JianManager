@@ -3335,7 +3335,8 @@
   "missing_archive_object_ids": ["…"]
 }
 ```
-- **字段说明**：`coverage.targets[].state` 与 `coverage.enumeration_state` 在 JSON 里是**整数枚举**；`partial_reasons` / `reasons` 是字符串码（如 `ARCHIVE_NOT_RESTORED`、`UNSUPPORTED`、`NO_CATALOG_AUTHORITY`）。`available_archive_object_ids` = 在 manifest 中命中且内容哈希校验通过；`missing_archive_object_ids` = manifest 无该 ID、取对象失败或哈希不符（三者不区分）。
+- **字段说明**：`coverage.targets[].state` 与 `coverage.enumeration_state` 在 JSON 里是**整数枚举**；`partial_reasons` / `reasons` 是字符串码（如 `ARCHIVE_NOT_RESTORED`、`ARCHIVE_PURGED`、`UNSUPPORTED`、`NO_CATALOG_AUTHORITY`）。`available_archive_object_ids` = 在 manifest 中命中且内容哈希校验通过；`missing_archive_object_ids` = manifest 无该 ID、取对象失败或哈希不符（三者不区分）。
+- **`ARCHIVE_PURGED` 与 `ARCHIVE_NOT_RESTORED` 不可互换**（FR-501 归档对象回收）：前者是「归档副本已按保留期清除，恢复不了」，后者是「副本还在归档里、只是本地未恢复，去 rehydrate」，两者的处置动作**相反**。`LogSearch` 在无任何可读 range 时据此返回 `LOG_ARCHIVE_PURGED`（proto `LogErrorCode = 11`）或 `LOG_ARCHIVE_MISSING`（= 6），**不返回空成功**；两者在 CP 侧也不归一（`normalizeCoverageReason` 保持 `ARCHIVE_PURGED` 原样）。
 - **Worker 侧语义（决定实际结果）**：planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`archive status disabled on this worker`）；归档后端未接线 ⇒ `LOG_UNSUPPORTED`；registry 不可用 ⇒ `LOG_UNSUPPORTED` 且 coverage 标 `UNSUPPORTED`。分区键由**首个** `authorized_targets` 生成：单段 target（`node:1` / `inst:317`）的 UTC 日取 `from_utc` 前 10 字符，**`from` 缺失或长度不足 ⇒ `LOG_NOT_READY`（`archive target must include a UTC day or query range`）**；多段 target 形如 `<namespace>/<YYYY-MM-DD>`，可选 `/<YYYY-MM-DD>/g<N>` 指定代次。manifest 不存在 ⇒ `LOG_NOT_READY` + coverage `ARCHIVE_NOT_RESTORED`；逐对象「manifest 无该 ID / 取对象失败 / 内容哈希不符」一律计入 `missing`，任一缺失即把 coverage 标为不完整。
 - **错误映射不一致**：本端点（及下方 rehydrate）对 `LOG_UNSUPPORTED` **不做 501 映射**，一律 503；同族 `GET /log-runtime` 与 `POST /log-runtime/:namespace/:action` 会映射为 501。属当前真貌，如实记录。
 - **审计**：**无**（GET 不进审计中间件；handler 不调 `recordAudit`、不解析操作人）。
