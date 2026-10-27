@@ -1422,6 +1422,20 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	return p, nil
 }
 
+// defaultCopyVerifyBudget / defaultRecoveryBudget 是「未声明时」的保守默认值。
+//
+// 取值依据：它们只参与 `ValidateRuntimeHeadroom` 的**余量评估**
+// （`required = 24h + DriverInterval + CopyVerifyBudget + RecoveryBudget`），
+// 不控制任何实际执行路径——所以「缺省」不会让功能少做一步，只会让余量估算偏保守。
+//
+// 取 1h 的理由：真机上单日分区的导出 + 三重校验是分钟级（见 log-cost-governance spec），
+// 1h 给出 60× 上界余量；恢复同理。取得更大只会无谓抬高余量门，
+// 让「hot 27d / native 30d」这类余量只剩 3d 的存量配置被误拒。
+const (
+	defaultCopyVerifyBudget = time.Hour
+	defaultRecoveryBudget   = time.Hour
+)
+
 // validateRuntimeRetention 使用与子进程相同的默认和解析规则，启层必须留出明确迁移余量。
 // 有限原生 TTL 在故障超出声明 SLA 时仍可能淘汰，不能替代独立副本。
 func (c *Config) validateRuntimeRetention(p retention.Policy) error {
@@ -1469,16 +1483,31 @@ func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 		return fmt.Errorf("log_vl.start_cold: 启用分层必须显式启用 COLD 接收端")
 	}
 	for _, field := range []struct {
-		key string
-		raw string
-		dst *time.Duration
+		key      string
+		raw      string
+		dst      *time.Duration
+		fallback time.Duration
 	}{
-		{"copy_verify_budget", c.LogRetention.Migration.CopyVerifyBudget, &requirements.CopyVerifyBudget},
-		{"recovery_budget", c.LogRetention.Migration.RecoveryBudget, &requirements.RecoveryBudget},
+		{"copy_verify_budget", c.LogRetention.Migration.CopyVerifyBudget, &requirements.CopyVerifyBudget, defaultCopyVerifyBudget},
+		{"recovery_budget", c.LogRetention.Migration.RecoveryBudget, &requirements.RecoveryBudget, defaultRecoveryBudget},
 	} {
 		d, err := retention.ParseTTL(strings.TrimSpace(field.raw))
-		if err != nil || d <= 0 {
-			return fmt.Errorf("log_retention.migration.%s 必须显式声明正的有限时长", field.key)
+		if err != nil {
+			return fmt.Errorf("log_retention.migration.%s 无法解析：%w", field.key, err)
+		}
+		if d <= 0 {
+			// 显式写了 0 / 负数要拒：那是“声明了一个用不了的预算”，静默改成默认等于把运维的意图掉包。
+			if strings.TrimSpace(field.raw) != "" {
+				return fmt.Errorf("log_retention.migration.%s 必须为正的有限时长，实际 %q", field.key, field.raw)
+			}
+			// **未声明则取默认值，而不是拒启**。
+			//
+			// 为什么（2026-10-27 真机事故）：这两项原本要求必须显式声明，而 SetDefault 给的是空串、
+			// `configs/worker.yml` 样例也没写。于是**任何升级前合法的存量配置**（包括正在生产跑的
+			// 那份）升级后都启动失败。这直接违反本函数下方自己写下的那条原则：
+			// 「启动即拒会让存量节点升不上来」。预算类参数缺的是“耗时上界”而非安全边界，
+			// 有安全默认值可用，没有强制人工指定的必要。
+			d = field.fallback
 		}
 		*field.dst = d
 	}
