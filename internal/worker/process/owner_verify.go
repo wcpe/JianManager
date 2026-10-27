@@ -10,8 +10,14 @@ import (
 	psproc "github.com/shirou/gopsutil/v4/process"
 )
 
-// readProcessEnviron 读取进程环境块（Linux: /proc/<pid>/environ），NUL 分隔转空格便于 contains。
+// readProcessEnviron 读取进程环境块（Linux: /proc/<pid>/environ，条目间 NUL 分隔），返回**原始**串。
 // 平台不支持（如 Windows/macOS 无 /proc）或权限不足时返回错误，调用方保守处理。
+//
+// 为什么保留 NUL 而不再「转空格便于 contains」（缺陷修复 2026-11）：环境变量的**值**里可以含空格
+// （JM_DAEMON_WRAPPER_CONFIG 的 JSON 就是一整条含空格的 `{"instance_uuid": ".."}`），把 NUL 换成
+// 空格后无法再区分「值里的空格」与「两个变量之间的边界」，只能退化成对整块做子串搜索——而值本来就
+// 是任意字符串，子串搜索正是 processEnvMatchesInstance 误判的入口（见那里的注释）。按 NUL 切分是
+// 环境块唯一的真实边界，保留它，让上层能按条目精确比对。
 func readProcessEnviron(pid int) (string, error) {
 	if pid <= 0 {
 		return "", os.ErrInvalid
@@ -20,7 +26,7 @@ func readProcessEnviron(pid int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.ReplaceAll(string(b), "\x00", " "), nil
+	return string(b), nil
 }
 
 // DefaultVerifyProcessOwnership 以进程侧证据判定 pid 是否确属 instanceUUID 对应的受管进程（FR-455①）。
@@ -134,7 +140,7 @@ func DefaultVerifyAdoptOwnership(pid int, instanceUUID, workDir string, expectWr
 		return true, "daemon_argv+env_uuid"
 	}
 
-	if envHasUUID || strings.Contains(cmdline, instanceUUID) {
+	if envHasUUID || containsUUIDToken(cmdline, instanceUUID) {
 		return true, "uuid_evidence"
 	}
 	// 仅剩弱特征（cmdline 含工作目录 / cwd 等于工作目录）或毫无特征：一律不判真。
@@ -154,6 +160,21 @@ func DefaultVerifyAdoptOwnership(pid int, instanceUUID, workDir string, expectWr
 // wrapper 把实例 UUID 放在 env（JM_DAEMON_WRAPPER_CONFIG JSON 内），argv 不含。读
 // /proc/<pid>/environ 做精确归属确认；instanceUUID 为空（无从比对）或环境读不到一律返回 false
 // （保守：无法确认即不判属，杜绝按 argv 空判误杀）。
+//
+// 匹配口径（缺陷修复 2026-11）：按 NUL 切条目 → 取 `=` 之后的**值** → 在值里按 UUID 边界搜索。
+// 此前是对「NUL 换空格后的整块环境」做 strings.Contains，两个方向都错：
+//   - **误判真**（收养/强杀都会打错进程）：环境是一堆任意字符串，只要某条变量的值里**含有**本实例
+//     UUID 这段字符就判属——例如 MONITOR_TARGETS="…<uuid>…"、实例工作目录里带 uuid、或另一个实例的
+//     UUID 恰好包含本实例 UUID 这段字符（UUID 是变长文本，前缀相同的两条并不互斥）。这些都是「看过
+//     这个 UUID」而不是「我就是这个实例」，按它判属等于把归属判据降级成字符串出现过。
+//   - **边界不清**：`abc<uuid>def` 与 `<uuid>` 同判，无法解释「为什么判属」。
+//
+// 现在要求 UUID 在值里**自成 token**：前后不得紧邻十六进制字符或 `-`（UUID 自身的字符集），于是
+// `JM_DAEMON_WRAPPER_CONFIG={"instance_uuid":"<uuid>",…}` 通过（前后是定界符），
+// `OTHER=<uuid>-older`、`X=abc<uuid>` 一律不通过。
+//
+// 影响面：本函数同时被 DefaultVerifyProcessOwnership 的 wrapper 分支使用，故强杀路径的 wrapper 归属
+// 判定一并收紧。方向与 ADR-093 一致——收窄只会「少杀」，不会「误杀」。
 func processEnvMatchesInstance(pid int, instanceUUID string) bool {
 	if instanceUUID == "" {
 		return false
@@ -162,7 +183,54 @@ func processEnvMatchesInstance(pid int, instanceUUID string) bool {
 	if err != nil || environ == "" {
 		return false
 	}
-	return strings.Contains(environ, instanceUUID)
+	for _, entry := range strings.Split(environ, "\x00") {
+		if entry == "" {
+			continue
+		}
+		_, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if containsUUIDToken(value, instanceUUID) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsUUIDToken 判定 s 中是否出现「自成 token」的 uuid：命中位置的前后字符都不得属 UUID 字符集
+// （十六进制数字与 `-`）。
+//
+// 为什么要有它而不是 strings.Contains：UUID 是变长文本片段，`<uuid>` 完全可以作为更长的十六进制/
+// 连字符串的子串出现（`<uuid>-older`、`aa<uuid>`、两个 UUID 拼接后的中段）。纯子串匹配把这些全都
+// 判成「携带本实例 UUID」，而归属复核的语义是「这个进程**就是**该实例」，不是「某处出现过这串字符」。
+func containsUUIDToken(s, uuid string) bool {
+	if s == "" || uuid == "" {
+		return false
+	}
+	for from := 0; from+len(uuid) <= len(s); {
+		i := strings.Index(s[from:], uuid)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(uuid)
+		if !isUUIDCharAt(s, start-1) && !isUUIDCharAt(s, end) {
+			return true
+		}
+		// 该命中被边界否掉：从下一个字节继续找（可能还有更靠后的一处合法出现）。
+		from = start + 1
+	}
+	return false
+}
+
+// isUUIDCharAt 报告 s[i] 是否属 UUID 字符集（越界视为「不属」）。
+func isUUIDCharAt(s string, i int) bool {
+	if i < 0 || i >= len(s) {
+		return false
+	}
+	c := s[i]
+	return c == '-' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 // looksLikeJianManagerDaemon 判定 cmdline 是否为 JianManager worker 的 daemon 子命令（wrapper 标识）。
