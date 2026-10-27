@@ -983,27 +983,39 @@ func runWorker() {
 				// store 才是真正删除对象的那一步。任一缺失都让 reclaimer 为空，
 				// 于是启动日志会明确写出「未装配」——而不是一个永远不动的计数器。
 				if retentionPolicy.ArchiveObjectRetention.Active() {
-					root := strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
-					if root != "" {
-						provider := archive.NewLocalArchive(root)
+					// 目的地与导出侧**同源**：用同一个构造器（newArchiveCopyProvider）
+					// 按 `archive_copy.provider` 选 local / s3 / minio。
+					//
+					// 此前这里硬编码 `archive.NewLocalArchive(root)`，于是配了 s3 导出
+					// 的人在回收侧拿不到 provider，只能如实拒绝——「导出已能写 s3、却永远
+					// 不会清理 s3」就是这么来的。
+					//
+					// 注意：这里**不复用**导出器那个 provider 实例（两者不同 goroutine，
+					// 各自持有自己的连接状态更安全），但必须是**同一个目的地配置**。
+					provider, providerErr := newArchiveCopyProvider(cfg.LogRetention.ArchiveCopy)
+					if providerErr != nil {
+						slog.Warn("归档对象回收目的地构造失败，回收未装配（归档副本将继续累积）",
+							"provider", cfg.LogRetention.ArchiveCopy.ArchiveProviderKind(), "error", providerErr)
+					} else {
+						// root 只对本地目录有意义（清空目录骨架）；对象存储传空串。
+						root := ""
+						if provider.Kind() == archive.KindLocal {
+							root = strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
+						}
 						logArchivePurge = newArchiveObjectReclaimer(retentionPolicy, logStack.Catalog, provider, root)
 						if logArchivePurge == nil {
 							slog.Warn("归档对象回收已启用但出口装配失败（将在 /metrics 与下方日志中体现为零行动）",
-								"root", root)
+								"provider", provider.Kind())
 						} else if ok, reason := logArchivePurge.Ready(); !ok {
 							slog.Warn("归档对象回收出口不完整，本轮不会删除任何对象", "reason", reason)
 						} else if open, gateReason := retentionPolicy.DeleteGatesOpen(); !open {
 							slog.Info("归档对象回收已装配但删除三闸未全开（一个对象都不会删）", "reason", gateReason)
 						} else {
 							slog.Warn("归档对象回收已就绪：三闸全开时将按保留期删除归档目的地里的副本",
-								"root", root, "retention", retentionPolicy.ArchiveObjectRetention.Retention.String(),
+								"provider", provider.Kind(), "root", root,
+								"retention", retentionPolicy.ArchiveObjectRetention.Retention.String(),
 								"archiveCopyEnabled", retentionPolicy.ArchiveCopy.Enabled)
 						}
-					} else {
-						// 开关开了但没有归档根 ⇒ 不知道去哪清。必须显式说出来：
-						// 静默不装配会让运维以为「配了 enabled 就在跑」，而归档纹丝不动。
-						slog.Warn("归档对象回收已启用，但未配置归档根目录，本项不会生效",
-							"hint", "需要在 log_retention.archive_copy.root 给出归档目的地根目录")
 					}
 				}
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -168,12 +167,21 @@ func newArchiveProviderObjectStore(provider archive.Provider, root string) reten
 	if provider == nil {
 		return nil
 	}
-	if provider.Kind() != archive.KindLocal {
-		slog.Warn("归档对象回收暂只支持本地目录 Provider，已跳过装配",
-			"providerKind", provider.Kind())
-		return nil
+	// 本地与对象存储的差异只在「删完对象后要不要清空目录骨架」：
+	//
+	//   - 本地目录（KindLocal）对象是文件，删完会剩下一串空子目录，不清就会永远留骨架；
+	//   - S3/MinIO 是扁平键空间，**没有目录**，对象删完就结束了，也没有"空目录"要收。
+	//
+	// 两边的对象删除本身走同一个 `Provider.Delete`，所以除了这一步之外完全同构。
+	// 此前这里硬要求 KindLocal，把 s3/minio 直接判为不支持（装配处如实拒绝）——
+	// 那是对的保守做法，但留下了「导出已能写 s3、却永远不会清理 s3」的口子。
+	switch provider.Kind() {
+	case archive.KindLocal:
+		return &archiveProviderObjectStore{provider: provider, root: root}
+	default:
+		// 其他 Provider（s3 / minio）不需要 root：见 RemoveArchivePartition 的分支。
+		return &archiveProviderObjectStore{provider: provider}
 	}
-	return &archiveProviderObjectStore{provider: provider, root: root}
 }
 
 // providerKindMatches 复核 Catalog 记录的 provider 与已装配的是同一个。
@@ -227,6 +235,12 @@ func (s *archiveProviderObjectStore) RemoveArchivePartition(ctx context.Context,
 	if err := s.providerKindMatches(providerKind); err != nil {
 		return err
 	}
+	// 对象存储（s3 / minio）没有目录：对象已经在 DeleteArchiveObject 里逐个删完了，
+	// 这里没有“空目录骨架”要收。**不能**用 root 做任何文件系统操作——因为 s3 的
+	// root 为空，而把空 root 拼进路径会落到相对路径上（工作目录之下），那是灾难。
+	if s.provider.Kind() != archive.KindLocal {
+		return nil
+	}
 	if s.root == "" {
 		return nil
 	}
@@ -256,13 +270,15 @@ func (s *archiveProviderObjectStore) RemoveArchivePartition(ctx context.Context,
 
 // newArchiveObjectReclaimer 装配「归档对象自身的回收」。
 //
-// 返回 nil 表示本次不启用（开关关着 / 没有归档目的地 / 目的地不是本地目录）。
+// 返回 nil 表示本次不启用（开关关着 / 没有归档目的地）。
 // 调用方据此决定是否启动调度，以及启动日志里怎么描述——**未启用的形态必须能被
 // 一眼读出来**，否则「归档一直在涨」与「清理在跑但一条没删」在现场分不清。
 //
-// provider 由调用方传入（与导出器共用同一个实例）：两处各造一个 LocalArchive
-// 在功能上等价，但一旦将来换成带连接池/凭证刷新的 Provider，两份实例会各自
+// provider 由调用方传入（与导出器共用同一个实例）：两处各造一个 Provider
+// 在功能上等价，但一旦换成带连接池/凭证刷新的 Provider，两份实例会各自
 // 持有一份状态，而「导出写到哪」与「清除读的是哪」必须是同一个目的地。
+//
+// root 只对本地目录 Provider 有意义（清空目录骨架）；对象存储传空串即可。
 func newArchiveObjectReclaimer(
 	policy retention.Policy,
 	cat *catalog.Catalog,
