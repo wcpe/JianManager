@@ -2220,6 +2220,13 @@ func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Lat
 		"p95ms", latency.P95.Milliseconds(),
 		"maxMs", latency.Max.Milliseconds(),
 		"maxRows", latency.MaxRows,
+		// 空转周期（零差异、不开事务）单独读数：它们**不进**上面的 p50/p95/max——
+		// 那几个字段只描述提交单元（验收线约束的对象）。空转耗时的主体是规划
+		// （scopeState + Validate + planState），是真实成本但不属于这条线。
+		// 两者混算的后果有实例：2026-10-27 真机 p50=2ms 与 p95=107ms 相差两个量级，
+		// 归因就错在了“提交偶发变慢”上。
+		"noopCount", latency.NoopCount,
+		"noopP95ms", latency.NoopP95.Milliseconds(),
 		"rowsWrittenDelta", delta.RowsWritten,
 		"rowsDeletedDelta", delta.RowsDeleted,
 		"bytesWrittenDelta", delta.BytesWritten,
