@@ -223,11 +223,27 @@ log:
 #                                      # log_vl.delete_enabled）；三闸未全开时是「副本与原物并存」，
 #                                      # 不是「只有副本」。这是有意的：多留一份盘 ≪ 少一份数据。
 #     enabled: false                   # 默认 false：它会把数据写到另一个目的地，必须显式授权
+#     provider: local                  # local（默认）| s3 | minio。
+#                                      # 为什么允许 s3/minio：导出归档的价值在「另存一份」——若目的地只能
+#                                      # 与热层同机同盘，单盘故障/整机报废时副本跟着没，「删前归档」只剩
+#                                      # 「省空间」而丢了「保一份」。复用 FR-478 已在真机 RustFS 验过的
+#                                      # SigV4 客户端，不新造协议也不新造凭证模型。
 #     root: /var/lib/jianmanager/log-archive
-#                                      # 归档根目录（启用时必填，为空则**启动即拒**）。
+#                                      # [provider=local] 归档根目录（启用且 provider=local 时必填，
+#                                      # 为空则**启动即拒**）。
 #                                      # 布局由 archive 包固定：<root>/<namespace>/<utc_day>/g<gen>/
 #                                      # 其中 manifest.json 与 raw/files/<源相对路径>.gz 构成一份完整副本。
 #                                      # 请放在**独立于热层与冷层的盘**上，否则省不下空间也保不了险。
+#     endpoint: s3.example.com:9000    # [provider=s3|minio] 必填（不带 scheme，scheme 由 use_ssl 决定）
+#     bucket: jm-log-archive           # [provider=s3|minio] 必填；省略或留空则**启动即拒**
+#     region: us-east-1                # [provider=s3|minio] SigV4 区域
+#     prefix: logs/retention           # [provider=s3|minio] 对象键前缀；前缀之后仍是 <ns>/<day>/g<gen>/
+#     access_key: ${JM_ARCHIVE_AK}     # 凭证只写 ${ENV} 引用，不写明文（见 .claude/rules/config-files.md）
+#     secret_key: ${JM_ARCHIVE_SK}
+#     use_ssl: true                    # 默认 false
+#                                      # 目的地不完整（local 无 root / s3|minio 无 endpoint 或 bucket /
+#                                      # provider 写错）一律启动即拒：静默按「未启用」处理会让运维以为
+#                                      # 归档在跑，而到期数据继续占着热层直到盘满。
 #   eventstore_prune:                  # 事件段回收（平台自己的暂存段，见 spec §7）
 #     enabled: false                   # 默认 false：删除类能力默认全关，必须显式开启
 #                                      # 回收的是「投递完成前的暂存与重放来源」，投递并逐字段校验

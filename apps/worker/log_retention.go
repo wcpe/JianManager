@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	workercfg "github.com/wcpe/JianManager/internal/worker"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
+	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
+	workerstorage "github.com/wcpe/JianManager/internal/worker/storage"
 )
 
 // 本文件是保留策略的**生产适配层**：把既有真源（catalog / lifecycle / 容量门禁读数）
@@ -327,4 +331,57 @@ func deleteGateSummary(policy retention.Policy) string {
 		return "closed: " + reason
 	}
 	return "all-open（discard + sweep.vl_sweep + log_vl.delete_enabled）"
+}
+
+// newArchiveCopyProvider 按配置构造「导出归档」目的地（FR-501）。
+//
+// 为什么要抽成函数并返回 error 而不是就地 if 分支：三条目的地（local / s3 / minio）
+// 各有自己的前置条件，失败时必须能让装配层**单独降级**（不装导出器 ⇒ 计划阶段不产出
+// archive_copy ⇒ 到期分区继续落 blocked 保留原物），而不是让整个 Worker 启动失败。
+// 这个降级方向与 `main.go` 里既有的「开关开了但没目的地」那条分支完全一致。
+//
+// 为什么不复用 `log_archive.*` 的配置：FR-478 的 Deep Archive 是**查询面**的归档后端
+// （Rehydrate/查询路由用），FR-501 的导出归档是**保留面**的删除前承接物。两者可以指向
+// 同一个桶（运维想共用时把键写成一样即可），但不应该隐式捆在一起——
+// 「给查询面开了深归档」不该顺带把「到期分区开始往外导出」也打开，反之亦然。
+//
+// 复用点仅限下层的 `archive.RemoteS3Provider`（同一份 SigV4 客户端、同一套对象键布局、
+// 同一个 `archive.Provider` 接口），不新造协议也不新造凭证模型。
+func newArchiveCopyProvider(cfg workercfg.LogRetentionArchiveCopyConfig) (archive.Provider, error) {
+	switch cfg.ArchiveProviderKind() {
+	case "local":
+		root := strings.TrimSpace(cfg.Root)
+		if root == "" {
+			return nil, fmt.Errorf("log_retention.archive_copy.root 为空")
+		}
+		// 与 `log_retention.archive_copy.root` 的文档口径一致：根目录是**磁盘绝对路径**，
+		// 不做数据根派生。归档目的地写错盘是现场事故，不能靠隐式约定猜位置。
+		return archive.NewLocalArchive(root), nil
+	case "s3", "minio":
+		storageCfg := workerstorage.Config{
+			Type:      workerstorage.TypeS3,
+			Endpoint:  strings.TrimSpace(cfg.Endpoint),
+			Bucket:    strings.TrimSpace(cfg.Bucket),
+			Region:    strings.TrimSpace(cfg.Region),
+			Prefix:    strings.TrimSpace(cfg.Prefix),
+			AccessKey: strings.TrimSpace(cfg.AccessKey),
+			SecretKey: cfg.SecretKey,
+			UseSSL:    cfg.UseSSL,
+		}
+		// 凭证只在这里作为已解析值使用；日志与错误信息里一律不回显。
+		if cfg.ArchiveProviderKind() == "minio" {
+			provider, err := archive.NewRemoteMinioProvider(storageCfg)
+			if err != nil {
+				return nil, fmt.Errorf("log_retention.archive_copy: 构造 MinIO 归档 Provider 失败：%w", err)
+			}
+			return provider, nil
+		}
+		provider, err := archive.NewRemoteS3Provider(storageCfg)
+		if err != nil {
+			return nil, fmt.Errorf("log_retention.archive_copy: 构造 S3 归档 Provider 失败：%w", err)
+		}
+		return provider, nil
+	default:
+		return nil, fmt.Errorf("log_retention.archive_copy.provider 不支持 %q", cfg.Provider)
+	}
 }

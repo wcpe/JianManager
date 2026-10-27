@@ -1085,11 +1085,73 @@ type LogRetentionConfig struct {
 type LogRetentionArchiveCopyConfig struct {
 	// Enabled 是否允许在搬不了冷层时导出为独立副本（默认 false）。
 	Enabled bool `mapstructure:"enabled"`
-	// Root 归档目的地根目录（`archive.LocalArchive` 的 Root）。
+	// Provider 归档目的地类型：local（默认）| s3 | minio。
+	//
+	// 为什么这里要允许 s3/minio（FR-501 收尾）：导出归档的价值在「另存一份」——
+	// 若目的地只能是与热层同机同盘的本地目录，那么单盘故障/整机报废时副本跟着没，
+	// 「删前归档」这条硬规则就只剩「省空间」而丢掉了「保一份」。
+	// Provider 抽象（`archive.Provider`）与真实 SigV4 实现（`archive.RemoteS3Provider`，
+	// 底层 `internal/worker/storage/s3.go`）早由 FR-478 交付并在真机 RustFS 上验过，
+	// 本项只是把同一个接口接到导出侧——不新造协议、不新造凭证模型。
+	Provider string `mapstructure:"provider"`
+	// Root 归档目的地根目录（`provider=local` 时必填；`archive.LocalArchive` 的 Root）。
 	//
 	// 布局由 archive 包固定：`<root>/<storage_namespace>/<utc_day>/g<generation>/…`，
 	// manifest 落在分区根下的 `manifest.json`（与 FR-478 的 `logs/archive` 契约一致）。
 	Root string `mapstructure:"root"`
+	// —— 以下仅在 provider=s3|minio 时生效，语义与 `log_archive.*` 完全一致（同一份
+	// `storage.Config`，同一个 SigV4 客户端）——
+	// Endpoint 对象存储端点（如 s3.example.com:9000，不带 scheme；scheme 由 UseSSL 决定）。
+	Endpoint string `mapstructure:"endpoint"`
+	// Bucket 桶名。
+	Bucket string `mapstructure:"bucket"`
+	// Region SigV4 区域，缺省 us-east-1。
+	Region string `mapstructure:"region"`
+	// Prefix 对象键前缀（与本地布局相同，前缀之后仍是 `<ns>/<day>/g<gen>/…`）。
+	Prefix string `mapstructure:"prefix"`
+	// AccessKey/SecretKey 明文凭证引用。
+	//
+	// 与 `log_archive.secret_key` 同一纪律：只接受 `${ENV}` 引用，不在 yaml 里写死明文
+	// （见 .claude/rules/config-files.md）。解析在装配处完成，本结构只承载已解析值。
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+	// UseSSL 是否启用 TLS。
+	UseSSL bool `mapstructure:"use_ssl"`
+}
+
+// ArchiveProviderKind 归一化归档目的地类型（空 = local）。
+func (c LogRetentionArchiveCopyConfig) ArchiveProviderKind() string {
+	kind := strings.ToLower(strings.TrimSpace(c.Provider))
+	if kind == "" {
+		return "local"
+	}
+	return kind
+}
+
+// ValidateArchiveCopyDestination 校验「导出归档的目的地是否真的给全了」。
+//
+// 为什么这件事必须挡在启动阶段（而不是等到第一次导出时才发现）：
+// 静默按「未启用」处理会让运维以为归档在跑（策略说 enabled=true），而到期数据
+// 继续占着热层直到盘满——这正是本功能要避免的结局。反过来对 s3/minio 分支
+// 少判一个键，就会在第一次导出时以「对象键拼不出来」的形式失败，而那时**热层
+// 已经冻结**，退出路径还要解冻，失败面比启动拒绝大得多。
+func (c LogRetentionArchiveCopyConfig) ValidateArchiveCopyDestination() error {
+	switch c.ArchiveProviderKind() {
+	case "local":
+		if strings.TrimSpace(c.Root) == "" {
+			return fmt.Errorf("log_retention.archive_copy.root 不能为空（启用导出归档必须给出独立的目的地根目录）")
+		}
+	case "s3", "minio":
+		if strings.TrimSpace(c.Endpoint) == "" {
+			return fmt.Errorf("log_retention.archive_copy.endpoint 不能为空（provider=%s 必须给出对象存储端点）", c.ArchiveProviderKind())
+		}
+		if strings.TrimSpace(c.Bucket) == "" {
+			return fmt.Errorf("log_retention.archive_copy.bucket 不能为空（provider=%s 必须给出桶名）", c.ArchiveProviderKind())
+		}
+	default:
+		return fmt.Errorf("log_retention.archive_copy.provider 不支持 %q（支持 local / s3 / minio）", c.Provider)
+	}
+	return nil
 }
 
 // LogRetentionEventStorePruneConfig 是事件段回收（eventstore.Prune）的自动接线配置。
@@ -1205,8 +1267,10 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	// 为什么用拒绝而不是「静默按未启用处理」：静默处理会让运维以为归档在跑
 	// （策略说 enabled=true），而到期数据继续占着热层直到盘满——这正是本功能要避免的结局。
 	// 反过来，把「没有目的地」显式挡在启动阶段，问题在第一次部署时就暴露。
-	if cfg.ArchiveCopy.Enabled && strings.TrimSpace(cfg.ArchiveCopy.Root) == "" {
-		return retention.Policy{}, fmt.Errorf("log_retention.archive_copy.root 不能为空（启用导出归档必须给出独立的目的地根目录）")
+	if cfg.ArchiveCopy.Enabled {
+		if err := cfg.ArchiveCopy.ValidateArchiveCopyDestination(); err != nil {
+			return retention.Policy{}, err
+		}
 	}
 	if strings.TrimSpace(cfg.HotRetention) != "" {
 		d, err := retention.ParseTTL(cfg.HotRetention)
@@ -1813,7 +1877,16 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_retention.eventstore_prune.sweep_at_hour", 3)
 	// 导出归档（硬规则次选路径）：默认关闭，且默认不给根目录——没有目的地就不该有这条路径。
 	v.SetDefault("log_retention.archive_copy.enabled", false)
+	// 默认 local：把默认值定成 s3 会让「本地目录已够用」的部署凭空多出一套凭证要求。
+	v.SetDefault("log_retention.archive_copy.provider", "local")
 	v.SetDefault("log_retention.archive_copy.root", "")
+	v.SetDefault("log_retention.archive_copy.endpoint", "")
+	v.SetDefault("log_retention.archive_copy.bucket", "")
+	v.SetDefault("log_retention.archive_copy.region", "us-east-1")
+	v.SetDefault("log_retention.archive_copy.prefix", "")
+	v.SetDefault("log_retention.archive_copy.access_key", "")
+	v.SetDefault("log_retention.archive_copy.secret_key", "")
+	v.SetDefault("log_retention.archive_copy.use_ssl", false)
 	v.SetDefault("log_vl.hot_port", 0)
 	v.SetDefault("log_vl.cold_port", 0)
 	v.SetDefault("log_vl.rehydrate_port", 0)

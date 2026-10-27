@@ -914,17 +914,19 @@ func runWorker() {
 				// 默认兜底目录：没有目的地就不装出口，计划阶段于是不会产出 archive_copy，
 				// 到期分区继续落 blocked（保留原物）——与本次改动之前的行为完全一致。
 				if retentionPolicy.ArchiveCopy.Enabled {
-					root := strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
-					if root == "" {
-						// RetentionPolicy 已经在解析期拒过空 root，这里再挡一次是防御性的：
-						// 万一将来有人把那段校验挪走，也不能让「开关开了但没有目的地」静默变成空转。
-						slog.Error("导出归档已启用但未配置根目录，归档出口未装配（到期分区将继续保留原物）",
-							"key", "log_retention.archive_copy.root")
+					// 目的地的三种形态（local / s3 / minio）都在 newArchiveCopyProvider 里构造，
+					// 失败一律**只降级导出器**、不让 Worker 启动失败：拿不到目的地时正确的行为
+					// 是「不出副本、保留原物」，而不是「整个节点起不来」。方向与本次改动之前
+					// 「开关开了但没目的地」那条分支完全一致（blocked + 保留原物）。
+					provider, providerErr := newArchiveCopyProvider(cfg.LogRetention.ArchiveCopy)
+					if providerErr != nil {
+						slog.Error("导出归档目的地构造失败，归档出口未装配（到期分区将继续保留原物）",
+							"provider", cfg.LogRetention.ArchiveCopy.ArchiveProviderKind(), "error", providerErr)
 					} else {
 						// 导出器住在 logs/archive（manifest/Provider 契约的家），
 						// 但「冻结快照怎么取、能读哪里」属于物理布局，仍由 lifecycle 提供，
 						// 在这里注入——依赖方向因此保持单向：lifecycle 不认识 archive。
-						exporter := archive.NewArchiveCopyExporter(logStack.Catalog, physical.ExportSnapshot, archive.NewLocalArchive(root))
+						exporter := archive.NewArchiveCopyExporter(logStack.Catalog, physical.ExportSnapshot, provider)
 						logRetentionDriver.Executor().SetArchiveExporter(retention.ArchiveExporterFunc(
 							func(ctx context.Context, namespace, day string) (retention.ArchiveExportResult, error) {
 								sum, err := exporter.Export(ctx, namespace, day)
@@ -956,10 +958,12 @@ func runWorker() {
 							slog.Info("日志归档热层回收未就绪（导出仍会执行，原物保留）", "reason", reason)
 						} else {
 							slog.Warn("日志归档热层回收已就绪：三闸全开时将删除已归档分区的热层数据",
-								"archiveRoot", root)
+								"provider", provider.Kind())
 						}
+						// 日志里只打 kind 与「本地根目录」；s3/minio 的 endpoint/bucket 也不打
+						// 是刻意的：现场日志常被导出传阅，少一个泄漏面。
 						slog.Info("日志导出归档已装配（搬不了冷层时导出为独立副本；回收热层仍需删除三闸全开）",
-							"root", root, "provider", archive.NewLocalArchive(root).Kind())
+							"provider", provider.Kind(), "root", strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root))
 					}
 				}
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
