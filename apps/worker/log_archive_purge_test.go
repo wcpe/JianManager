@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,6 +20,10 @@ import (
 // 为什么用真实文件权限而不是注入假 error：这一层测的就是「真实 Provider 的 Delete
 // 返回真错误时，执行器与 Catalog 会不会一起退回原态」。用假 error 会把
 // LocalArchive 对这些错误的实际处理方式整个跳过。
+//
+// **以 root 运行时这个手段无效**：root 无视目录写位，删除依旧成功，于是本用例
+// 会停在「期望删除失败但删掉了」。那不是被测代码的问题，而是构造手段的边界，
+// 因此返回 errSkipChmodIneffective 让调用方跳过，而不是让它在 CI 上假红。
 func chmodReadOnly(t *testing.T, dir string) error {
 	t.Helper()
 	if err := os.Chmod(dir, 0o555); err != nil {
@@ -25,8 +31,21 @@ func chmodReadOnly(t *testing.T, dir string) error {
 	}
 	// 测试结束后恢复可写，否则 t.TempDir 的清理会失败。
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	// 写完只读后实测一次：能删掉文件说明权限位不生效（典型为 root）。
+	// 用真实的删除尝试判断，比查 euid 更准（capabilities、容器用户映射都会影响）。
+	probe := filepath.Join(dir, ".chmod-probe")
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
+		// 写不进去说明目录确实变只读了，正是想要的效果。
+		return nil
+	}
+	if err := os.Remove(probe); err == nil {
+		return errSkipChmodIneffective
+	}
 	return nil
 }
+
+// errSkipChmodIneffective 表示「权限位在这个环境下不阻止删除」，调用方应跳过用例。
+var errSkipChmodIneffective = errors.New("chmod 只读对当前用户无效（以 root 运行时删除仍会成功）")
 
 // 本文件是「归档对象回收」的**端到端**回归：真实 catalog + 真实本地归档目录 +
 // 本包的生产适配层（newCatalogArchivedObjectLister / newArchiveProviderObjectStore /
@@ -164,7 +183,12 @@ func TestE2E_ArchiveObjectPurgeFailureKeepsBothSidesHonest(t *testing.T) {
 		StorageNamespace: key.StorageNamespace, UTCDay: key.UTCDay, Generation: 1,
 	}
 	filesDir := archive.NewLocalArchive(root).PartitionDir(akey)
-	require.NoError(t, chmodReadOnly(t, filesDir))
+	if err := chmodReadOnly(t, filesDir); err != nil {
+		if errors.Is(err, errSkipChmodIneffective) {
+			t.Skipf("跳过：%v；本用例靠目录只读制造真实删除失败，权限位不生效就无法构造", err)
+		}
+		require.NoError(t, err)
+	}
 
 	lister := newCatalogArchivedObjectLister(cat)
 	store := newArchiveProviderObjectStore(archive.NewLocalArchive(root), root)

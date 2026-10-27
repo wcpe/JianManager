@@ -659,8 +659,9 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
   该日无 HOT 残留、归档证据完整、无在途写许可、无活跃读取租约/视图。
   查询面：ARCHIVED 且本地未恢复时显式降级为 `LOG_COVERAGE_ARCHIVE_MISSING` + `ARCHIVE_NOT_RESTORED`，
   Search 无任何可读 range 时返回 `LOG_ARCHIVE_MISSING`（**不是**空成功）；已恢复（有对齐投影）则按
-  `archive` tier 路由到 Rehydrate 客户端。导出目的地当前仅本地目录；S3/MinIO 的 `RemoteS3Provider`
-  已存在但未接线。
+  `archive` tier 路由到 Rehydrate 客户端。导出目的地支持 `local`（默认）/ `s3` / `minio`（2026-10-27 接线，
+  复用 FR-478 已真机验过的 SigV4 `archive.RemoteS3Provider`）；目的地不完整（local 缺 root、s3/minio 缺
+  endpoint/bucket）一律**启动即拒**，构造失败只降级导出器而不让 Worker 启动失败。SFTP/WebDAV 无实现。
   搬运调度由每小时ticker改为**每日固定时刻**（`log_retention.trigger.sweep_at_hour`，默认3点、进程本地时区），
   保留启动首轮立即执行；年龄与磁盘水位先到触发，磁盘触发min_age=7d；人工/周期迁移判据相同。
   `eventstore` 段回收已实现并接线（`log_retention.eventstore_prune.enabled`，默认关）：
