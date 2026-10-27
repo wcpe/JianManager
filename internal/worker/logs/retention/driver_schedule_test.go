@@ -122,7 +122,7 @@ func TestDriverScheduleModeSelection(t *testing.T) {
 }
 
 // TestDriverRunUsesDailySchedule 验证 Run 的循环体：**首轮立即执行**，之后进入长等待
-//（下一个每日时刻），且 ctx 取消能及时退出。
+// （下一个每日时刻），且 ctx 取消能及时退出。
 //
 // 目标时刻取「当前小时 +2」，使下一次触发至少在 1 小时后——这样 800ms 观察窗口内
 // 若还跑出第二轮，就说明调度退回了短间隔 tick。
@@ -138,20 +138,25 @@ func TestDriverRunUsesDailySchedule(t *testing.T) {
 		d.Run(ctx)
 		close(done)
 	}()
-	// 首轮立即执行：等到搬运真的发生（而不是靠 sleep 猜）。
+	// 首轮立即执行：等到搬运真的发生（而不是靠固定等待猜）。
+	//
+	// **读 calls 必须走 count()（2026-10-27）**：`d.Run` 在另一个 goroutine 里写 calls，
+	// 此处对同一 slice 头的无同步读写在 `-race` 下会直接报 DATA RACE。
+	// 这不是调度实现的并发问题，而是本用例的代价：它靠「轮询一个会被并发写的记录」来
+	// 断定首轮已发生。夹具侧加锁后，这里用 count() 就同时拿到正确值与无竞争。
 	deadline := time.Now().Add(5 * time.Second)
-	for len(mv.calls) == 0 && time.Now().Before(deadline) {
+	for mv.count() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if len(mv.calls) == 0 {
+	if mv.count() == 0 {
 		cancel()
 		<-done
 		t.Fatal("首轮必须立即执行，不等第一个目标时刻（启动时正是过期分区最需要处理的时候）")
 	}
-	callsAfterFirstRound := len(mv.calls)
+	callsAfterFirstRound := mv.count()
 	// 每日调度下，第二轮至少要到下一个整点：800ms 内绝不应再跑。
 	time.Sleep(800 * time.Millisecond)
-	if got := len(mv.calls); got != callsAfterFirstRound {
+	if got := mv.count(); got != callsAfterFirstRound {
 		cancel()
 		<-done
 		t.Fatalf("每日调度不得在 800ms 内跑第二轮，首轮 %d 次调用后变成 %d 次", callsAfterFirstRound, got)
@@ -179,7 +184,7 @@ func TestDriverRunDisabledDoesNotRun(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("策略未启用时 Run 必须直接返回，不得进入等待循环")
 	}
-	if len(mv.calls) != 0 {
-		t.Fatalf("策略未启用时不得搬运，却搬了 %v", mv.calls)
+	if mv.count() != 0 {
+		t.Fatalf("策略未启用时不得搬运，却搬了 %v", mv.snapshot())
 	}
 }
