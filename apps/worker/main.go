@@ -811,6 +811,10 @@ func runWorker() {
 	// 保留策略驱动器（G6）。声明在这里（而非 lifecycle 块内）是因为它要在采集运行时
 	// 启动之后才有意义：搬运的是已经落库的分区，采集还没起来时搬没有意义。
 	var logRetentionDriver *retention.Driver
+	// 归档对象自身的回收（FR-501 的最后一块）：把「归档目的地里的副本」按保留期清掉。
+	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
+	// 且必须与 /metrics 的读数出口共用同一个实例。
+	var logArchivePurge *retention.ArchiveObjectReclaimer
 	var logDayManager *lifecycle.DayManager
 	var logMigrationRecoveryDone <-chan struct{}
 	migrationInput := &dayMigrationInputBridge{}
@@ -965,6 +969,38 @@ func runWorker() {
 						slog.Info("日志导出归档已装配（搬不了冷层时导出为独立副本；回收热层仍需删除三闸全开）",
 							"provider", provider.Kind(), "root", strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root))
 					}
+				}
+				// 归档对象自身的回收（FR-501）：把归档目的地里**已过保留期**的副本删掉。
+				//
+				// 为什么它挂在 `archive_copy.enabled` 之下：没有目的地就没有可清的对象，
+				// 此时即便 archive_object_retention.enabled 为真也无从下手。注意**反方向不成立**——
+				// 开了导出不等于授权清除（删除比写入危险得多），清除仍要过同一套三闸。
+				//
+				// 三个出口必须成套：lister 提供候选、authority 提供「已清除」权威态、
+				// store 才是真正删除对象的那一步。任一缺失都让 reclaimer 为空，
+				// 于是启动日志会明确写出「未装配」——而不是一个永远不动的计数器。
+				if retentionPolicy.ArchiveCopy.Enabled && retentionPolicy.ArchiveObjectRetention.Active() {
+					root := strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
+					if root != "" {
+						provider := archive.NewLocalArchive(root)
+						logArchivePurge = newArchiveObjectReclaimer(retentionPolicy, logStack.Catalog, provider, root)
+						if logArchivePurge == nil {
+							slog.Warn("归档对象回收已启用但出口装配失败（将在 /metrics 与下方日志中体现为零行动）",
+								"root", root)
+						} else if ok, reason := logArchivePurge.Ready(); !ok {
+							slog.Warn("归档对象回收出口不完整，本轮不会删除任何对象", "reason", reason)
+						} else if open, gateReason := retentionPolicy.DeleteGatesOpen(); !open {
+							slog.Info("归档对象回收已装配但删除三闸未全开（一个对象都不会删）", "reason", gateReason)
+						} else {
+							slog.Warn("归档对象回收已就绪：三闸全开时将按保留期删除归档目的地里的副本",
+								"root", root, "retention", retentionPolicy.ArchiveObjectRetention.Retention.String())
+						}
+					}
+				} else if retentionPolicy.ArchiveObjectRetention.Enabled {
+					// 开关开了但导出没开 ⇒ 没有目的地可清。这里必须显式说出来：
+					// 静默不装配会让运维以为「配了 enabled 就在跑」，而归档纹丝不动。
+					slog.Warn("归档对象回收已启用，但导出归档未启用（没有归档目的地可供清除），本项不会生效",
+						"hint", "需要同时开启 log_retention.archive_copy.enabled 并给出 root")
 				}
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
 			}
@@ -1448,6 +1484,14 @@ func runWorker() {
 				go logRetentionDriver.Run(ingestCtx)
 				slog.Info("日志冷热分层驱动器已启动", "schedule", logRetentionDriver.DescribeSchedule())
 			}
+			// 归档对象回收的调度：与保留驱动器同一 ctx、同一「首轮立即执行 + 每日固定时刻」口径。
+			// 首轮立即执行的理由也相同——停机期间攒下的「已过保留期的归档」最需要在启动时处理，
+			// 而候选只会是「已归档 + 热层已回收 + 已过期 + 三闸全开」的分区，代价有界。
+			if logArchivePurge != nil {
+				purgeDriver := retention.NewArchivePurgeDriver(logArchivePurge)
+				go purgeDriver.Run(ingestCtx)
+				slog.Info("归档对象回收驱动器已启动", "schedule", purgeDriver.DescribeSchedule())
+			}
 			// 事件段回收（键 log_retention.eventstore_prune.*）：**默认关闭**，需运维显式开启。
 			// 与上面的保留驱动器刻意不同：它**不在启动时立即跑一轮**（回收的是平台自己的暂存段，
 			// 早一天晚一天没有正确性差别，而重启风暴下每次启动都全量扫段是纯 IO 浪费）。
@@ -1639,7 +1683,14 @@ func runWorker() {
 	if logIngest != nil {
 		pruneSource = logIngest
 	}
-	wsMux.HandleFunc("/metrics", retention.MetricsHandler(logRetentionDriver, pruneSource))
+	// 归档对象回收读数：同一个「带类型的 nil」陷阱——logArchivePurge 是具体指针类型，
+	// 未启用时直接作接口实参会得到非 nil 接口值，`purge != nil` 为真，
+	// 随后调用方法解引用 nil 指针（本方法对 nil 安全，但别指望下一个实现也安全）。
+	var purgeSource retention.ArchivePurgeSource
+	if logArchivePurge != nil {
+		purgeSource = logArchivePurge
+	}
+	wsMux.HandleFunc("/metrics", retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource))
 	// 运行期日志等级调整（GET 读 / POST 改）。
 	// 同样挂在 127.0.0.1 回环 mux 上，不新增暴露面；只调等级不改格式、不持久化，
 	// 重启后回到 log.level 配置值（见 retention.LogLevelController 的边界说明）。
