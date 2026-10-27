@@ -1,0 +1,49 @@
+# JianManager 日志轮转（logrotate 片段）
+#
+# 为什么需要这个文件（2026-10-27 真机事故）：
+# 生产 `worker.out` 长到 **35GB**（日志目录总计 40GB）而**从未轮转过**，后果是：
+#   - 现场取证必须先 `tail -c 200000000` 绕开前面的数据，`grep` 整个文件要几十秒；
+#   - 单文件超过某些工具/编辑器的处理上限；
+#   - 磁盘被日志吃掉（`/home` 已用 71%）。
+# 根因不是「忘了配」——而是**安装/部署脚本里压根没有这一项**（已核实
+# `scripts/install-worker.sh` 与 `scripts/deploy-worker.sh` 均无 logrotate 相关行）。
+# 所以轮转必须作为**部署资产**随仓库发布，而不是靠运维个人记得配。
+#
+# ## 为什么必须用 copytruncate
+#
+# Worker/CP 的 stdout 由 systemd 以 `StandardOutput=append:<path>` 接管。
+# 内核持有的是**打开的文件描述符**，进程自己无法重开它（SIGHUP 也不起作用，
+# systemd 的 `append:` 不是 `file:` 那样可 reopen 的语义）。
+# 因此只能「复制一份再截断原文件」。代价：copy 与 truncate 之间可能有极少数行
+# 落在两个文件之间——对日志可接受（日志不是账本，不需要字节级不丢）。
+#
+# ## 参数取舍
+#
+#   - `size 1G` 而非 `daily`：故障期的日志增速远快于平时，按天挡不住；
+#   - `rotate 5`：单目录上限 ≈ 6GB（5 个压缩档 + 当前 1GB 文件）；
+#   - `compress` + `delaycompress`：刚轮转出的那个保持明文，方便立刻 grep；
+#   - `notifempty`：无输出不产生空档；
+#   - `dateext` + 秒级后缀：同一天可多次轮转而不互相覆盖。
+#
+# ## 安装
+#
+# 复制到 `/etc/logrotate.d/jianmanager`（root 可读即可），或用户级：
+# `logrotate -s <state> <this-file>` 由 cron/systemd timer 定期调用。
+# `scripts/install-worker.sh` 会尝试自动安装（需 root；非 root 时打印提示不失败）。
+
+/var/lib/jianmanager/logs/*.log
+/var/lib/jianmanager/logs/*.out
+/home/*/jm/prod/worker/logs/*.log
+/home/*/jm/prod/worker/logs/*.out
+/home/*/jm/prod/cp/logs/*.log
+/home/*/jm/prod/cp/logs/*.out {
+    size 1G
+    rotate 5
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+    dateext
+    dateformat -%Y%m%d-%H%M%S
+}
