@@ -379,9 +379,27 @@ func (p *ProxyService) syncProxyDetailed(proxyID uint) ([]string, error) {
 
 	isVelocity := proxy.ForwardingSecret != ""
 
+	// 代理自身未分配监听端口时**必须拒绝写配置**，不能把 0 写进监听地址。
+	//
+	// 为什么这条保护是必需的：导入进来的代理实例 server_port 常常是 0（代理没有
+	// server.properties，端口探测探不到）。一旦照 0 生成配置，BungeeCord 会写成
+	// `host: "0.0.0.0:0"`、Velocity 写成 `bind = "0.0.0.0:0"`，代理随即绑定到随机端口，
+	// **玩家入口直接消失**且日志里只有一行 `Listening on 0.0.0.0:0`，极难定位。
+	//
+	// 该缺陷真实发生过：bungee-main 的 server_port 长期为 0，一次后端注册触发的
+	// SyncProxy 就把 config.yml 改写成 0，生产入口中断。此处与 backendAddress 里
+	// 对后端端口的同口径保护对齐——宁可让同步失败并显式报错，也不静默写坏入口。
+	if proxy.ServerPort <= 0 {
+		return warnings, fmt.Errorf("代理 %s 未分配监听端口（server_port=%d），拒绝写出会让入口失效的配置", proxy.Name, proxy.ServerPort)
+	}
+
 	// 写代理配置（critical）。online-mode 取持久化选择，避免每次同步把它重置。
 	if isVelocity {
-		if err := p.writeConfig(proxyClient, proxy.UUID, "velocity.toml", buildVelocityToml(proxy.ServerPort, proxyMotd, proxy.ProxyOnlineMode, entries)); err != nil {
+		velocityContent, verr := buildVelocityToml(proxy.ServerPort, proxyMotd, proxy.ProxyOnlineMode, entries)
+		if verr != nil {
+			return warnings, verr
+		}
+		if err := p.writeConfig(proxyClient, proxy.UUID, "velocity.toml", velocityContent); err != nil {
 			return warnings, fmt.Errorf("写 velocity.toml 失败: %w", err)
 		}
 		// 确保 forwarding.secret 文件存在（provision 已写，这里幂等补写）。
