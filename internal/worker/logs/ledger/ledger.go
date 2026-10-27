@@ -722,6 +722,20 @@ type Entry struct {
 	// 才能从条数读出真实的故障规模（见 gap_bounds.go 的缺陷 A 说明）。
 	gapMergedTotal uint64
 	gapFoldedTotal uint64
+
+	// gapFoldWarned / gapTrimWarned 是「已就该源的缺口越界告过一次警」的进程内标记。
+	//
+	// 为什么需要它们（2026-10-27 真机事故）：原先用
+	// `if len(indexes) == DefaultMaxUnresolvedGapsPerSource+1` 表达「首次越界」，但那个
+	// 判据既不完整（跳号跨过 65 就不告警）也拦不住重复（实测 **44,640 条/小时**，
+	// 6 个源同时刷，把日志推到 299 KB/s、单文件 36GB）——而它本想消灭的
+	// 正是「日志量爆炸」这个问题本身。
+	//
+	// 与上面的累计计数同属**进程内观测态**：小写字段、不落库、重启归零。
+	// 重启后再报一次是有意接受的行为：新进程重新告一次「本源的缺口仍然越界」
+	// 是有用的信息，而不是噪声。
+	gapFoldWarned bool
+	gapTrimWarned bool
 }
 
 // Ledger 线程安全采集账本。

@@ -409,12 +409,23 @@ func (l *Ledger) foldUnresolvedGapsLocked(e *Entry) {
 			removed[index] = true
 		}
 		e.gapFoldedTotal += uint64(len(victims) - 1)
-		// 只在首次越界时告警：一次长故障会把折叠重复上千次，每次都打日志等于用日志
-		// 复现它本要消灭的数量级问题；后续规模由 GapObservability 的累计计数观测。
-		if len(indexes) == DefaultMaxUnresolvedGapsPerSource+1 {
+		// 只在每个源**第一次**越界时告警。
+		//
+		// 旧写法是 `if len(indexes) == DefaultMaxUnresolvedGapsPerSource+1`（即恰好 65），
+		// 意图是「首次越界」，但实际是个**脆弱判据**：只要某一批次跨过 65 直接就没了
+		// （例如 64→66），告警就不打；而分多个原因分组时每组都各自可能命中一次。
+		// 更糟的是它并不能阻止重复：现场该条 WARN 实测约 **44,640 条/小时**
+		// （10 秒 124 条，6 个源同时在刷），把日志推到 299 KB/s、单文件 36GB，
+		// 而它本想消灭的正是「日志量爆炸」这个问题本身。
+		//
+		// 现改为在 Entry 上记一个**一次性标记**（跨进程生命周期、随账本持久化），
+		// 语义明确：每源只报一次首次折叠，后续规模由 GapObservability 的累计计数观测。
+		if !e.gapFoldWarned {
+			e.gapFoldWarned = true
 			slog.Warn("单源未解决缺口超过上限，已折叠为覆盖区间（区间只扩大不缩小，语义仍为“可能未落库”）",
 				"logSourceID", e.Key.LogSourceID, "sourceGeneration", e.Key.SourceGeneration,
-				"reason", reason, "limit", DefaultMaxUnresolvedGapsPerSource)
+				"reason", reason, "limit", DefaultMaxUnresolvedGapsPerSource,
+				"unresolved", len(indexes))
 		}
 	}
 	if len(removed) == 0 {
@@ -454,11 +465,13 @@ func (l *Ledger) trimResolvedGapsLocked(e *Entry) {
 		keep = append(keep, e.Gaps[i])
 	}
 	e.Gaps = keep
-	if resolved == DefaultMaxResolvedGapsPerSource+1 {
-		// 与折叠同理：只在首次越界时记录，避免与故障规模同阶的日志量。
+	// 同上：旧的 `== DefaultMaxResolvedGapsPerSource+1` 是脆弱判据（跳号即不告警，
+	// 而命中时可能在多轮里反复命中）。改一次性标记。
+	if !e.gapTrimWarned {
+		e.gapTrimWarned = true
 		slog.Info("已解决缺口超过保留上限，超出部分按最旧优先裁剪（保留最近审计尾部）",
 			"logSourceID", e.Key.LogSourceID, "sourceGeneration", e.Key.SourceGeneration,
-			"retained", DefaultMaxResolvedGapsPerSource)
+			"retained", DefaultMaxResolvedGapsPerSource, "resolved", resolved)
 	}
 }
 
