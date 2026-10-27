@@ -43,6 +43,11 @@ function localizedLogError(
     5: t('logsRuntime.error.notReady'), // LOG_NOT_READY
     6: t('logsRuntime.error.archiveMissing'), // LOG_ARCHIVE_MISSING
     10: t('logsRuntime.error.unsupported'), // LOG_UNSUPPORTED
+    // 11 = LOG_ARCHIVE_PURGED（FR-501 归档对象回收）。**必须**与 6 分开：
+    // 6 的文案是「历史日志尚未取回」，引导用户去点恢复；而 11 的真相是
+    // 「这段日志已按保留期删掉、恢复不了」。复用 6 的文案会让用户反复点恢复、
+    // 反复得到第二条错误——那是平台对自己做的动作撒谎。
+    11: t('logsRuntime.error.archivePurged'), // LOG_ARCHIVE_PURGED
   }
   return known[err.code ?? -1] ?? err.message ?? null
 }

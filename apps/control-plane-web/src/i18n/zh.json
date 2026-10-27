@@ -3493,6 +3493,7 @@
       "truncated": "结果过多已截断",
       "offline": "节点不可达",
       "archiveMissing": "历史日志尚未取回",
+      "archivePurged": "这段日志已按保留期清除，无法恢复",
       "gap": "日志缺失",
       "viewStale": "结果已过期",
       "duplicateUnresolved": "有重复日志待确认",

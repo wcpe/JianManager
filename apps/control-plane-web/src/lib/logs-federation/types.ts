@@ -49,6 +49,14 @@ export const PARTIAL_REASONS = {
   OFFLINE: 'OFFLINE',
   /** 归档层缺失（Archive 开启但副本不可用）。 */
   ARCHIVE_MISSING: 'ARCHIVE_MISSING',
+  /**
+   * 归档副本已按保留期清除（FR-501 归档对象回收）。
+   *
+   * **不能**与 {@link ARCHIVE_MISSING} 合并：MISSING 是「归档还在、只是一时没恢复」，
+   * 界面的处置是「去恢复」；而 PURGED 是「平台按保留期删掉了，恢复不了」，
+   * 任何「去恢复」的引导都是死路。两者混用会让用户反复点恢复、反复收到第二条错误。
+   */
+  ARCHIVE_PURGED: 'ARCHIVE_PURGED',
   /** closed_visible_seq / 投影存在数据缺口。 */
   GAP: 'GAP',
   /** Query View 失效（集合变化 / 权限 / 过期）。 */

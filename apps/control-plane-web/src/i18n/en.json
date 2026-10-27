@@ -5510,7 +5510,8 @@
       "notReady": "Log platform is starting, please retry shortly",
       "unauthorized": "Log platform authentication failed; check node credentials",
       "budget": "Node resource budget too low; log platform degraded",
-      "archiveMissing": "Historical logs have not been retrieved yet"
+      "archiveMissing": "Historical logs have not been retrieved yet",
+      "archivePurged": "These logs were purged per the retention policy and cannot be recovered"
     },
     "asset": {
       "label": "Server asset",

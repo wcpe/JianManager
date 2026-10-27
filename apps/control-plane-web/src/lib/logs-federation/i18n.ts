@@ -90,6 +90,9 @@ const REASON_LEAF = {
   TRUNCATED: 'truncated',
   OFFLINE: 'offline',
   ARCHIVE_MISSING: 'archiveMissing',
+  // 已按保留期清除：与 ARCHIVE_MISSING 是**相反**的处置（一个去恢复、一个恢复不了），
+  // 故单独一条文案而不是复用「归档缺失」。
+  ARCHIVE_PURGED: 'archivePurged',
   GAP: 'gap',
   VIEW_STALE: 'viewStale',
   DUPLICATE_UNRESOLVED: 'duplicateUnresolved',
@@ -140,6 +143,7 @@ export const LOGS_FEDERATION_LOCALES = {
         truncated: '结果截断',
         offline: '节点离线',
         archiveMissing: '归档缺失',
+        archivePurged: '已按保留期清除',
         gap: '数据缺口',
         viewStale: '视图已失效',
         duplicateUnresolved: '重复事件未对账',
@@ -217,6 +221,7 @@ export const LOGS_FEDERATION_LOCALES = {
         truncated: 'Results truncated',
         offline: 'Node offline',
         archiveMissing: 'Archive missing',
+        archivePurged: 'Purged per retention policy',
         gap: 'Data gap',
         viewStale: 'View stale',
         duplicateUnresolved: 'Duplicates unresolved',
