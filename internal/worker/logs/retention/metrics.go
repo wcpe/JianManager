@@ -40,6 +40,24 @@ type EventStorePruneSource interface {
 	EventStorePruneSnapshot() (ran bool, at time.Time, segments, bytes, events int64, failures int, disabled bool)
 }
 
+// ArchivePurgeSource 是归档对象回收读数的**最小口径**，由 ArchiveObjectReclaimer 实现。
+//
+// 为什么用接口而不是直接读 *ArchiveObjectReclaimer：驱动器可能为 nil
+// （归档对象回收默认关闭，或导出归档没开所以没有目的地可供枚举）。
+// 用一个只含一个方法的接口，MetricsHandler 就不必分辨「nil 指针」与
+// 「未装配」——注意 **带类型的 nil 指针对 `src != nil` 是为真的**，
+// 这正是 main.go 里对 pruneSource 显式判 nil 的原因；接口方法自身对 nil 安全
+// （见 ArchivePurgeSnapshot 的第一个 nil 判断）可避免同一坑再踩一次。
+type ArchivePurgeSource interface {
+	// ArchivePurgeSnapshot 返回归档对象回收的读数。
+	//
+	// 刻意**不**返回「是否启用」：本能力的序列集合里没有 `_enabled` 这一条，
+	// 因为「从未运行」已经由 `_last_run_timestamp_seconds == 0` 表达，
+	// 而「启用与否」在启动日志里有一行明确交代（见 apps/worker 的装配日志）。
+	// 多一条永不变化的 gauge 只会让抓取侧多一处需要解释的读数。
+	ArchivePurgeSnapshot() (lastRun time.Time, purged, failed, rolledBack int64)
+}
+
 // MetricsHandler 返回 `/metrics` 的处理器。
 //
 // d 为 nil（保留策略未启用）时**不返回 404、也不返回空 body**：照样输出全部序列、值取 0，
@@ -48,21 +66,22 @@ type EventStorePruneSource interface {
 // 于是「策略没开」和「worker 挂了」在告警里长得一模一样。
 //
 // prune 为 nil 时回收相关序列输出 0 且 ran=0，理由同上：抓取侧不必区分「没装配」与「没跑」。
-func MetricsHandler(d *Driver, prune EventStorePruneSource) http.HandlerFunc {
+// purge 为 nil 时归档对象回收序列同样输出 0（含 `_enabled`），口径一致。
+func MetricsHandler(d *Driver, prune EventStorePruneSource, purge ArchivePurgeSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", promTextContentType)
 		// 输出走 bufio：一次抓取是十几行小写入，逐行写 ResponseWriter 会产生多次小包。
 		bw := bufio.NewWriter(w)
 		// 写错误只可能来自连接已断（客户端放弃本次抓取），此时既无处上报也无从补救；
 		// bufio 会把首个错误粘住，Flush 一并带出，统一丢弃。
-		_ = writeMetrics(bw, d, prune)
+		_ = writeMetrics(bw, d, prune, purge)
 		_ = bw.Flush()
 	}
 }
 
 // writeMetrics 逐行写出全部序列（HELP/TYPE 紧挨着各自的样本，顺序固定，
 // 使 `curl -s /metrics | diff` 这种最土的核对方式可用）。
-func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource) error {
+func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource, purge ArchivePurgeSource) error {
 	var st ArchiveStats
 	enabled := int64(0)
 	if d != nil {
@@ -105,6 +124,25 @@ func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource) error {
 			pruneBytes = by
 			pruneEvents = evs
 			pruneFailures = int64(fails)
+		}
+	}
+
+	// 归档对象回收读数：purge 未装配或未启用时全部保持 0。
+	// 与事件段回收同一口径（0 = 没跑/没开），不引入 -1 之类的第三态：
+	// 抓取侧只需一套判定。
+	var (
+		purgeLastRun    int64
+		purgePurged     int64
+		purgeFailed     int64
+		purgeRolledBack int64
+	)
+	if purge != nil {
+		at, purged, failed, rolled := purge.ArchivePurgeSnapshot()
+		// 计数照实输出（未启用时通常为 0，但热更关掉开关后历史累计值不该突然归零：
+		// 「关掉之后累计仍是 5」与「从没跑过」是两件不同的事）。
+		purgePurged, purgeFailed, purgeRolledBack = purged, failed, rolled
+		if !at.IsZero() {
+			purgeLastRun = at.Unix()
 		}
 	}
 
@@ -195,6 +233,29 @@ func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource) error {
 		{
 			name: "jm_log_eventstore_prune_failures", kind: "gauge", value: pruneFailures,
 			help: "最近一轮回收中报错的源数（水位算不清、校准失败、写清单失败等）",
+		},
+		// ---- 归档对象回收（archive_object_retention）：删的是归档目的地里的副本，不是热层 ----
+		//
+		// 分组理由：上面是「HOT→COLD 搬运」与「平台暂存段回收」，这里是「归档副本自身的生命周期」。
+		// 三条计数分开而不是合成一条：它们回答三个不同问题——
+		// 「真的清掉了几天的归档」（purged）、「有多少天在删的时候出错」（failed）、
+		// 「其中有多少天连权威态都回滚了」（rolled_back）。只看第一个数会把
+		// 「三闸没开所以一条没删」误读成「归档已经清干净了」。
+		{
+			name: "jm_log_retention_archive_purged_total", kind: "counter", value: purgePurged,
+			help: "累计按保留期清除了归档对象的分区数（需删除三闸全开）",
+		},
+		{
+			name: "jm_log_retention_archive_purge_failed_total", kind: "counter", value: purgeFailed,
+			help: "累计归档对象清除失败的分区数（含已回滚与回滚失败两种形态）",
+		},
+		{
+			name: "jm_log_retention_archive_purge_rolled_back_total", kind: "counter", value: purgeRolledBack,
+			help: "累计归档对象删到一半失败、权威态已回退为未清除的分区数",
+		},
+		{
+			name: "jm_log_retention_archive_purge_last_run_timestamp_seconds", kind: "gauge", value: purgeLastRun,
+			help: "最近一轮归档对象清除的时刻（Unix 秒），0 表示从未运行",
 		},
 	}
 	for _, s := range samples {

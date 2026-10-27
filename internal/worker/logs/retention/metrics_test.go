@@ -62,7 +62,7 @@ func scrapeMetrics(t *testing.T, d *Driver) (*httptest.ResponseRecorder, exposit
 func scrapeMetricsWithPrune(t *testing.T, d *Driver, prune EventStorePruneSource) (*httptest.ResponseRecorder, exposition) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	MetricsHandler(d, prune)(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	MetricsHandler(d, prune, nil)(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics 必须 200，得到 %d", rec.Code)
@@ -167,7 +167,7 @@ func TestMetricsHandlerContentType(t *testing.T) {
 	}
 }
 
-// 契约：驱动器为 nil（保留策略未启用）时，八个序列一个都不能少，值全为 0。
+// 契约：驱动器为 nil（保留策略未启用）时，全部序列一个都不能少，值全为 0。
 //
 // 这是本端点最容易被「顺手优化」掉的一条：nil 时直接 404 或返回空 body 会让抓取侧
 // 无从区分「策略没开」与「worker 挂了」。
@@ -195,6 +195,11 @@ func TestMetricsHandlerNilDriverEmitsZeros(t *testing.T) {
 		"jm_log_eventstore_prune_reclaimed_bytes_total",
 		"jm_log_eventstore_prune_reclaimed_events_total",
 		"jm_log_eventstore_prune_failures",
+		// 归档对象回收（归档目的地自身的生命周期）：未启用时同样必须输出 0 而非缺序列。
+		"jm_log_retention_archive_purged_total",
+		"jm_log_retention_archive_purge_failed_total",
+		"jm_log_retention_archive_purge_rolled_back_total",
+		"jm_log_retention_archive_purge_last_run_timestamp_seconds",
 	}
 	if len(ex.value) != len(wantNames) {
 		t.Errorf("应有 %d 个序列，得到 %d（%v）", len(wantNames), len(ex.value), ex.order)
@@ -220,6 +225,9 @@ func TestMetricsHandlerNilDriverEmitsZeros(t *testing.T) {
 		"jm_log_retention_archive_kept_original_total",
 		"jm_log_retention_archive_discarded_total",
 		"jm_log_retention_archive_not_due_total",
+		"jm_log_retention_archive_purged_total",
+		"jm_log_retention_archive_purge_failed_total",
+		"jm_log_retention_archive_purge_rolled_back_total",
 	} {
 		if got := ex.kind[name]; got != "counter" {
 			t.Errorf("%q 的 TYPE 应为 counter，得到 %q", name, got)
@@ -332,7 +340,7 @@ func TestMetricsHandlerReportsLastErrorPresence(t *testing.T) {
 func TestMetricsHandlerConcurrentScrapeDuringStep(t *testing.T) {
 	const rounds = 50
 	d := NewDriver(enabledPolicy(), &fakeLister{parts: metricsFixture()}, metricsNoopMover(), nil)
-	handler := MetricsHandler(d, nil)
+	handler := MetricsHandler(d, nil, nil)
 
 	var wg sync.WaitGroup
 	stepDone := make(chan struct{})
@@ -474,5 +482,163 @@ func TestMetricsHandlerEventStorePruneDisabled(t *testing.T) {
 	// 从未运行 ⇒ 时间戳保持 0（不是负的时间零值）。
 	if got := ex.value["jm_log_eventstore_prune_last_run_timestamp_seconds"]; got != 0 {
 		t.Fatalf("从未运行时时间戳必须为 0，得到 %v", got)
+	}
+}
+
+// ---------- 归档对象回收（archive_object_retention）的读数 ----------
+
+// scrapeMetricsWithPurge 是带归档对象回收读数的抓取变体。
+//
+// 单独一个入口是因为读数必须能注入：否则「未装配」与「装配了但零清除」
+// 两条路径只能验证到一条，而它们对告警的意思完全不同。
+func scrapeMetricsWithPurge(t *testing.T, purge ArchivePurgeSource) exposition {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	MetricsHandler(nil, nil, purge)(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/metrics 必须 200，得到 %d", rec.Code)
+	}
+	_, ex := scrapeMetrics(t, nil)
+	// 这里只解析一次独立的 body（scrapeMetrics(t, nil) 已在上面校验过格式契约）。
+	body := rec.Body.String()
+	parsed := exposition{help: map[string]string{}, kind: map[string]string{}, value: map[string]float64{}}
+	sc := bufio.NewScanner(strings.NewReader(body))
+	for sc.Scan() {
+		line := sc.Text()
+		if strings.HasPrefix(line, "# ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		v, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			continue
+		}
+		parsed.value[fields[0]] = v
+	}
+	_ = ex
+	return parsed
+}
+
+// fakePurgeSource 是最小 ArchivePurgeSource 实现。
+type fakePurgeSource struct {
+	at         time.Time
+	purged     int64
+	failed     int64
+	rolledBack int64
+}
+
+func (f fakePurgeSource) ArchivePurgeSnapshot() (time.Time, int64, int64, int64) {
+	return f.at, f.purged, f.failed, f.rolledBack
+}
+
+// 契约：归档对象回收的四条序列必须如实反映读数（不是写死 0、也不是另算一份）。
+//
+// 两条路径都要钉：① 注入快照（读数口径对）；② **真的跑一轮**（累计值确实流到序列上）。
+// 只做①会让「快照函数读错字段」「Step 不累加」这两类缺陷漏网——它们都表现为
+// 「序列永远是 0」，而 0 恰好是最容易被当成「没有到期数据」的正常值。
+func TestMetricsHandlerReflectsArchiveObjectPurge(t *testing.T) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	src := fakePurgeSource{at: at, purged: 7, failed: 2, rolledBack: 1}
+	ex := scrapeMetricsWithPurge(t, src)
+
+	want := map[string]float64{
+		"jm_log_retention_archive_purged_total":                    7,
+		"jm_log_retention_archive_purge_failed_total":              2,
+		"jm_log_retention_archive_purge_rolled_back_total":         1,
+		"jm_log_retention_archive_purge_last_run_timestamp_seconds": float64(at.Unix()),
+	}
+	for name, w := range want {
+		got, ok := ex.value[name]
+		if !ok {
+			t.Errorf("必须输出 %q", name)
+			continue
+		}
+		if got != w {
+			t.Errorf("%q 应为 %v，得到 %v", name, w, got)
+		}
+	}
+}
+
+// 契约：真跑一轮后，序列必须反映出这一轮的清除/失败/回滚。
+//
+// 这条咬的是「Step 不累加到 Stats」与「快照读错字段」两个缺陷：它们都让读数恒为 0，
+// 而 0 在告警里与「本轮没有到期数据」完全同形——现场根本分不出「功能没生效」
+// 与「确实清干净了」。
+func TestMetricsHandlerReflectsRealArchiveObjectPurgeRound(t *testing.T) {
+	p := threeGatePurgePolicy(purgeRetention)
+	auth := &fakePurgeAuthority{}
+	r := NewArchiveObjectReclaimer(p,
+		&fakePurgeLister{refs: []ArchivedObjectRef{archivedRef(false)}},
+		newFakeObjectStore("raw/files/a.gz"), auth)
+	if _, err := r.Step(context.Background(), purgeNow()); err != nil {
+		t.Fatalf("单轮执行失败：%v", err)
+	}
+	if st := r.Stats(); st.Purged != 1 {
+		t.Fatalf("前置条件：本轮应成功清除 1 个分区，得到 %+v", st)
+	}
+	ex := scrapeMetricsWithPurge(t, r)
+	if got := ex.value["jm_log_retention_archive_purged_total"]; got != 1 {
+		t.Errorf("purged_total 必须反映真实一轮的清除数，得到 %v（恒为 0 意味着读数与执行脱节）", got)
+	}
+	if got := ex.value["jm_log_retention_archive_purge_last_run_timestamp_seconds"]; got != float64(purgeNow().Unix()) {
+		t.Errorf("last_run 必须反映本轮时刻，得到 %v（期望 %d）", got, purgeNow().Unix())
+	}
+
+	// 再来一轮**失败**的：failed/rolled_back 也必须动起来。
+	failing := NewArchiveObjectReclaimer(threeGatePurgePolicy(purgeRetention),
+		&fakePurgeLister{refs: []ArchivedObjectRef{archivedRef(false)}},
+		newFakeObjectStore("raw/files/a.gz"), &fakePurgeAuthority{requestErr: errStub{}})
+	if _, err := failing.Step(context.Background(), purgeNow()); err != nil {
+		t.Fatalf("单轮执行失败：%v", err)
+	}
+	exFail := scrapeMetricsWithPurge(t, failing)
+	if got := exFail.value["jm_log_retention_archive_purge_failed_total"]; got != 1 {
+		t.Errorf("purge_failed_total 必须反映失败，得到 %v", got)
+	}
+}
+
+// errStub 是一个最小 error 实现（避免为一行测试引入额外依赖）。
+type errStub struct{}
+
+func (errStub) Error() string { return "模拟失败" }
+
+// 契约：未装配（purge 为 nil）时四条序列仍必须输出 0——「序列消失」会被当成采集故障。
+func TestMetricsHandlerArchiveObjectPurgeUnwiredEmitsZeros(t *testing.T) {
+	ex := scrapeMetricsWithPurge(t, nil)
+	for _, name := range []string{
+		"jm_log_retention_archive_purged_total",
+		"jm_log_retention_archive_purge_failed_total",
+		"jm_log_retention_archive_purge_rolled_back_total",
+		"jm_log_retention_archive_purge_last_run_timestamp_seconds",
+	} {
+		got, ok := ex.value[name]
+		if !ok {
+			t.Errorf("未装配也必须输出 %q（缺序列会被当成采集故障）", name)
+			continue
+		}
+		if got != 0 {
+			t.Errorf("未装配时 %q 必须为 0，得到 %v", name, got)
+		}
+	}
+}
+
+// 契约：读数的「从未运行」用 0 表达，而不是负的时间零值。
+//
+// time.Time{}.Unix() 是个 19 亿秒的负数：直接输出会让「从未运行」在图上
+// 表现成一个远古的巨大负值，抓取侧无从写判定。
+func TestArchiveObjectReclaimerSnapshotZeroTimeIsZero(t *testing.T) {
+	r := NewArchiveObjectReclaimer(threeGatePurgePolicy(purgeRetention), nil, nil, nil)
+	at, purged, failed, rolledBack := r.ArchivePurgeSnapshot()
+	if !at.IsZero() || purged != 0 || failed != 0 || rolledBack != 0 {
+		t.Fatalf("未运行时快照必须全零，得到 at=%v purged=%d failed=%d rolledBack=%d",
+			at, purged, failed, rolledBack)
+	}
+	// nil 接收者同样安全（驱动器可能为 nil，抓取不该因此 panic）。
+	var nilReclaimer *ArchiveObjectReclaimer
+	if at, _, _, _ := nilReclaimer.ArchivePurgeSnapshot(); !at.IsZero() {
+		t.Fatalf("nil 接收者必须返回零值快照，得到 %v", at)
 	}
 }
