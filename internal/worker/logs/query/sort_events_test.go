@@ -65,9 +65,16 @@ func TestSortEventsKeepsEqualKeysInInputOrder(t *testing.T) {
 
 // 回归（P2-7）：排序复杂度。旧实现是插入排序（O(n²)），而排序责任已交给本函数——
 // 生产上一页合并可达 10^5 行量级，O(n²) 会让查询线程被 CPU 拖死。
-// 逆序输入是插入排序的最坏情形（每次都要走到最前），n=2 万即约 2×10^8 次全键比较；
-// 改用 sort.SliceStable 后同规模在 10ms 量级，两者相差两个数量级，故阈值取 500ms：
-// 改回插入排序必然超时转红（实测 ~4s），而正确实现留有 >20× 余量。
+// 逆序输入是插入排序的最坏情形（每次都要走到最前），n=2 万即约 2×10^8 次全键比较。
+//
+// 阈值与口径（2026-10-27 修正）：
+//   - 实测正确实现（sort.SliceStable + 预解键）在本机 40 核 / load≈110 的宿主上为
+//     **100–157 ms**（5 次单跑），而非本注释原先声称的「10ms 量级」——那个数字是错的，
+//     但它不影响阈值本身的合理性：500 ms 对正确实现有 3–5 倍余量，而插入排序实测约 4 s，
+//     差一个数量级，故 500 ms 仍然只拦得住真正的退化。
+//   - **-race 构建下不查绝对耗时**：竞态检测器实测把该路径放慢约 5 倍（515 ms），
+//     那个读数既证明不了排序是 O(n log n) 也证明不了它退化成 O(n²)。
+//     只豁免耗时断言；下面的**次序断言在两种构建下都跑**。
 func TestSortEventsHandlesLargeReversedInput(t *testing.T) {
 	const n = 20000
 	src := logtypes.SourceIdentity{LogSourceID: "ns/perf", SourceGeneration: "g1", ParserVersion: "p1"}
@@ -82,10 +89,17 @@ func TestSortEventsHandlesLargeReversedInput(t *testing.T) {
 	started := time.Now()
 	SortEvents(items)
 	elapsed := time.Since(started)
-	t.Logf("SortEvents n=%d 逆序输入耗时 %s", n, elapsed)
+	t.Logf("SortEvents n=%d 逆序输入耗时 %s（raceEnabled=%v）", n, elapsed, raceEnabled)
 
 	require.True(t, LessSortKey(SortKeyOf(items[0]), SortKeyOf(items[n-1])),
 		"逆序输入排序后首行必须新于末行（次序断言，避免只测耗时）")
+	if raceEnabled {
+		// -race 下只保留一个「没有退化到插入排序」的量级保护：插入排序实测约 4 s，
+		// 即使竞态检测器放慢 5 倍也只有 ~20 s 量级，取 3 s 已能拦下。
+		require.Less(t, elapsed, 3*time.Second,
+			"-race 下仍不得退化成插入排序（O(n²) 实测约 4 s），实际 %s", elapsed)
+		return
+	}
 	require.Less(t, elapsed, 500*time.Millisecond,
 		"排序必须接近 O(n log n)：插入排序 O(n²) 在最坏入力下耗时秒级，实际 %s", elapsed)
 }
