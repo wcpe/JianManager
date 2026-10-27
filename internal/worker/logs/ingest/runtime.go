@@ -9605,6 +9605,31 @@ func (m *Manager) repairStalledReclaim(p *pipeline.Pipeline, source SourceConfig
 	return m.backfillDeliveryConfirmedCoverage(p, source, generation, positions, contexts...)
 }
 
+// firstConfirmedCoverageStart 回答“已确认投递的覆盖到底从哪个位置开始”。
+// 取值来源：`Entry.RequestDoneRanges`（只承接真实 REQUEST_DONE，见 ledger.Entry 注释；
+// 请求结果前缀与回收水位都不能生成 ACK）。
+//
+// 抽成**纯函数**（而不是直接摸 Ledger）的理由：本判据是本修复的**全部**新增语义，
+// 它必须能被逐条穷举地铉在用例里（早/晚/空/越界/多段），而不是隐藏在需要"造出真实
+// 缝"的重夹具后面。夹具越重，越容易变成“用例长什么样，判据就长什么样”的自证。
+//
+// 语义：返回严格落在 [from, to) 内的**最小覆盖起点**。
+// 若没有这样的范围，返回 false——调用方据此保持原行为（default-deny）。
+func firstConfirmedCoverageStart(ranges []ledger.PositionRange, from, to uint64) (uint64, bool) {
+	best := uint64(0)
+	found := false
+	for _, r := range ranges {
+		if r.From < from || r.From >= to {
+			continue
+		}
+		if !found || r.From < best {
+			best = r.From
+			found = true
+		}
+	}
+	return best, found
+}
+
 // noteReclaimBlocked 记录一次"补段被静默拦下"（#179 第 1 步③）：按类别计数 + **按源首次 Debug**（不刷屏 ✓）。
 // 行为中性：只加计数与一次性日志，不改变任何判据或返回值 ✓。
 func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, source SourceConfig) {
@@ -9717,9 +9742,50 @@ func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source
 	// 被现有不变量测试当场捉住 ✗ —— 覆盖未投递区间会让其 WAL 条目被回收 ⇒ 那些事件**再也投不出去** ✗
 	// ⇒ 红线：**未确认投递的数据一个字节都不许被越过** ✓（见 reclaim_backfill_test.go 的不变量断言）。
 	// 停滞的真修点＝**让投递水位前进**（delivery==reclaim<read 的环 ✗），不是放宽本上界 ✗。
+	//
+	// **2026-10-28 现场修复（delivery==reclaim 的死锁）**：
+	// 上面那句"让投递水位前进"在本形态下**无法成立** —— 投递水位是**派生量**
+	// （`ContiguousDeliveryEnd`：所有字节都有请求结果的连续前缀），而它卡住的原因恰好是
+	// **没有任何恢复分段覆盖 reclaim 位置**。于是形成闭环：
+	//
+	//	无段覆盖 reclaim ⇒ tryReclaim 报 ErrReclaimNoSegment ⇒ 走到这里 ⇒ to<=from ⇒ 什么都不做
+	//	⇒ 无段覆盖 reclaim ⇒ …… （每轮空转，reclaim 永不前进）
+	//
+	// 循环的成因不是"缺数据"，而是**区间恰好在边界上交错一格**：生产 inst:317 实测
+	// reclaim=7674788、首个已确认批次 start=7674897、`request_done_ranges=[7674897,7871859]`。
+	// 那 109 字节 [7674788,7674897) 既没有投递请求、也没有 WAL 行（不在任何批次里），
+	// 所以它永远不可能出现在 delivery 覆盖内；而它又挡在 reclaim 上，让"从 reclaim 起补段"
+	// 补出零长度区间。换言之：**这里要补的不是"从 reclaim 到 delivery"，而是"已确认但尚未
+	// 被任何分段覆盖的前缀"** —— 起点应由该前缀决定，不是无条件取 reclaim。
+	//
+	// 修法（不放宽任何红线）：先算出"已确认覆盖但无分段"的首个起点 `firstUncovered`，
+	// 只补 `[firstUncovered, to)`。red line 不变 —— 补段上界仍严格是 delivery，
+	// 未确认投递的字节一个都不越；只是不再因为 reclaim 落在"无人认领的缝"上就整轮放弃。
 	if to <= from {
-		m.noteReclaimBlocked("no-material", p, source)
-		return nil // 无"已确认但未覆盖"的区间
+		// 在放弃之前先确认：这段"缝"是不是真的没有任何已确认覆盖 material。
+		//
+		// 判据只读账本不自造证据：从 `RequestDoneRanges`（仅承接真实 REQUEST_DONE）里
+		// 取 "起点 >= from 的最小起点"。它回答的正是"已确认覆盖到底从哪开始"——
+		// 若这个起点 > from 且 < to，说明 [from, start) 是一段**永不会被投递覆盖的缝**
+		// （没有落在任何批次里），把它当作补段起点是**不越过任何已确认字节**的。
+		// 反之若找不到这样的起点，就真的没有 material，保持原行为（default-deny）。
+		//
+		// 注意窗口上界必须是 max(Read, Durable) 而不是 to：`to` 在 `to<=from` 时
+		// 恰好等于（或小于）`from`，拿它做上界会永远查不到东西（这是本修复初版的 bug，
+		// 当场被 reclaim_seam_backfill_test.go 的 TestFirstConfirmedCoverageStartPicks... 抑住）。
+		// 真正要回答的问题是"reclaim 之后、已有读取的范围内，已确认覆盖从哪开始"。
+		frontier := max(positions.Read, positions.Durable)
+		entry := p.Ledger().Get(p.Key())
+		var acked []ledger.PositionRange
+		if entry != nil {
+			acked = entry.RequestDoneRanges
+		}
+		uncovered, ok := firstConfirmedCoverageStart(acked, from, frontier)
+		if !ok || uncovered <= from || uncovered >= frontier {
+			m.noteReclaimBlocked("no-material", p, source)
+			return nil // 无"已确认但未覆盖"的区间
+		}
+		from = uncovered
 	}
 	entry := p.Ledger().Get(p.Key())
 	if entry == nil {
