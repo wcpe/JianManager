@@ -156,6 +156,12 @@ type Policy struct {
 	// 默认关闭（零行为变化）：它把数据写到另一个目的地，那是运维必须明确授权的事——
 	// 「归档根目录写在哪、写多少、谁来清理」都不是平台能替运维默认的。
 	ArchiveCopy ArchiveCopyPolicy `mapstructure:"archive_copy"`
+	// ArchiveObjectRetention 是**归档目的地自身**的保留期（桶内生命周期）。
+	//
+	// 默认关闭，且与 ArchiveCopy 分开：导出的开关回答「要不要写副本」，
+	// 本项回答「副本留多久」。合成一个开关会让「想清归档、但不想再导出新的」变成不可能，
+	// 也会让「打开导出」顺带获得删除归档的权限——而删除比写入危险得多。
+	ArchiveObjectRetention ArchiveObjectRetentionPolicy `mapstructure:"archive_object_retention"`
 }
 
 // ArchiveCopyPolicy 是「导出归档」这条次选路径的开关。
@@ -246,6 +252,11 @@ func (p Policy) Normalize() Policy {
 	if out.ColdRetention <= 0 {
 		out.ColdRetention = DefaultColdRetention
 	}
+	// 归档对象保留期**刻意不在这里补任何默认值**（连 Normalize 都不调）：
+	// 默认必须是「无值 = 不启用」。若在这里补一个 730d，那么只要运维打开 enabled，
+	// 就会在两年后无条件开始删归档——而「留多久」是合规/成本口径，必须由运维说出口。
+	// 小时数的归一化在 ArchiveObjectRetentionPolicy.Normalize 里，由驱动器构造时调用
+	// （见 NewArchivePurgeDriver），与「保留期要不要有默认」是两件独立的事。
 	return out
 }
 
@@ -289,6 +300,13 @@ func (p Policy) Validate() error {
 	if p.Trigger.SweepAtHour < SweepAtHourIntervalTicker || p.Trigger.SweepAtHour > 23 {
 		return fmt.Errorf("retention: trigger.sweep_at_hour 必须在 %d..23（%d = 回退间隔 ticker，0 = 本地午夜），得到 %d",
 			SweepAtHourIntervalTicker, SweepAtHourIntervalTicker, p.Trigger.SweepAtHour)
+	}
+	// 归档对象保留期：负数一律拒（与其它保留期同口径）。
+	// 「开了开关却没有保留期」由 config 层拒——那里的措辞要点名具体键
+	// `log_retention.archive_object_retention.retention`，运维才能直接定位。
+	if p.ArchiveObjectRetention.Retention < 0 {
+		return fmt.Errorf("retention: archive_object_retention.retention 不能为负，得到 %s",
+			p.ArchiveObjectRetention.Retention)
 	}
 	for k, v := range p.ByLevel {
 		if LevelKeyOf(k) == "" {
