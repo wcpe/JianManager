@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
@@ -273,13 +274,26 @@ func (m *Manager) adoptUnmanagedRecord(instanceUUID string, rec *daemon.PIDRecor
 		cur.launchSpecPending = strings.TrimSpace(cur.StartCommand) == ""
 		cur.processType = ProcessTypeDaemon
 		cur.State = StateRunning
+		// 启动宽限期的纪元起点（FR-459）：本路径让实例**从非 RUNNING 跳到 RUNNING**，与
+		// startLocked 里的 `inst.StartedAt = time.Now()` 是同一个语义位置，必须同时写。
+		//
+		// 为什么不能省（真机隐患，本 FR 补验时确认）：warmupRemaining 在纪元为零值时返回 0，即
+		// 「做了宽限」变成「完全没有宽限」。而收养实例有两个恰好会踩上去的特征：① ServerPort 为 0
+		// （记录里没有它），响应维度只能落 ProbePort；② ProbePort 来自 PID 记录，未部署 ServerProbe
+		// 时无人监听。于是探针恒失败 + 无宽限 ⇒ 连续 SuspicionThreshold（默认 3）拍后直接判
+		// HealthFaultDead，并在 action=restart 下试图重启一个**刚刚才接管、可能正在正常服务**的服务器
+		// （实际被 launchSpecPending 拦住，见 RestartIfRunning）。写纪元不能修好「探针不可达」本身，
+		// 它修的是「刚接管就给实例记一笔假死」这个误判：宽限期内的结论必须是「不明」而不是「死」。
+		cur.StartedAt = time.Now()
 		if restored {
 			cur.AutoRestart = false
 		}
 	} else {
+		// StartedAt：同 buildAdoptStartedAt 的语义——收养即向 RUNNING 的一次跳变，必须写宽限期纪元。
 		m.instances[instanceUUID] = &Instance{
 			UUID:              instanceUUID,
 			State:             StateRunning,
+			StartedAt:         time.Now(),
 			AutoRestart:       !restored,
 			WorkDir:           rec.WorkDir,
 			ProbePort:         rec.ProbePort,

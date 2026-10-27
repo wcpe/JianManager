@@ -341,8 +341,11 @@ func (m *Manager) registerAdoptedDaemon(instanceUUID string, rec *daemon.PIDReco
 		return false
 	}
 	m.instances[instanceUUID] = &Instance{
-		UUID:              instanceUUID,
-		State:             StateRunning,
+		UUID:  instanceUUID,
+		State: StateRunning,
+		// StartedAt：与自动收养同口径（FR-497③ 补验）——本路径同样是「从无到 RUNNING」的跳变，
+		// 不写则 warmupRemaining 拿不到纪元、直接返回 0，刚接管的实例失去启动宽限期。
+		StartedAt:         time.Now(),
 		AutoRestart:       !restored,
 		WorkDir:           rec.WorkDir,
 		ProbePort:         rec.ProbePort,
