@@ -217,6 +217,14 @@ type Sample struct {
 	// ChunkIndex / Chunks 是本单元在周期内的下标与周期内的单元总数。
 	ChunkIndex int
 	Chunks     int
+	// Noop 标记这是一个「空转周期」样本：规划后确认零差异，**不开事务、不执行任何语句**。
+	//
+	// 为什么必须分开（FR-498 真机实测）：空转样本记的 Duration 是整个 ApplyScoped 的墙钟，
+	// 包含 scopeState + Validate + planState 的全部规划成本，却一行都没写。把它与提交单元
+	// 一起算分位，会让「单次持久化 ≤50ms」这条验收线被不属于它的成本顶穿——
+	// 生产实测 p50=2ms 与 p95=107ms 相差两个量级的割裂就是这个原因（每周期规划均值一百多毫秒，
+	// 而真正落盘只占其中零头）。验收线约束的是**提交单元**，所以分位只在非空转样本上算。
+	Noop bool
 }
 
 // Rows 是本提交单元写入 + 删除的行数（「每事务行数有界」的直接观测量）。
@@ -250,6 +258,13 @@ type Latency struct {
 	WALHighWaterBytes            int64
 	CheckpointTruncate           int64
 	ReadersInFlight              int64
+	// NoopCount / NoopP95 是**空转周期**（零差异、不开事务）的样本数与耗时 P95。
+	//
+	// 它们**不计入** P50/P95/Max——那三个字段只描述提交单元（验收线约束的对象）。
+	// 单列的理由：空转周期的耗时主体是规划（scopeState + Validate + planState），
+	// 是真实成本但不属于「单次持久化 ≤50ms」约束的范围；混在一起会让两个不同的东西互相污染。
+	NoopCount int
+	NoopP95   time.Duration
 }
 
 // Stats 是一次 Apply 的写入统计。RowsWritten/BytesWritten 是「只写变更行」的直接观测量：
@@ -1120,6 +1135,7 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 		s.recordSample(Sample{
 			StartedAt: started, Duration: stats.Duration, CycleID: s.cycle, Chunks: 1,
 			RowsPlanned: stats.RowsPlanned, Planned: stats.Planned,
+			Noop: true,
 		})
 		return stats, nil
 	}
@@ -2194,10 +2210,20 @@ func (s *Store) Latency() (result Latency) {
 		}
 	}
 	durations := make([]time.Duration, 0, len(samples))
+	var noopDurations []time.Duration
 	var max time.Duration
 	cycles := make(map[uint64]struct{}, len(samples))
 	result = Latency{}
 	for _, sample := range samples {
+		// 空转样本（零行、零语句）不计入**提交单元**分位：它的 Duration 是整周期的墙钟，
+		// 主体是规划而非落盘。拿它算 p95 等于让规划成本冒充持久化耗时。
+		// 单列 NoopCount / NoopP95 保留可观测性（真要看「空转周期有多重」时用）。
+		if sample.Noop {
+			result.NoopCount++
+			noopDurations = append(noopDurations, sample.Duration)
+			cycles[sample.CycleID] = struct{}{}
+			continue
+		}
 		durations = append(durations, sample.Duration)
 		if sample.Duration > max {
 			max = sample.Duration
@@ -2207,8 +2233,12 @@ func (s *Store) Latency() (result Latency) {
 		}
 		cycles[sample.CycleID] = struct{}{}
 	}
+	sort.Slice(noopDurations, func(i, j int) bool { return noopDurations[i] < noopDurations[j] })
+	result.NoopP95 = percentile(noopDurations, 0.95)
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	result.Count = len(samples)
+	// Count 是**提交单元**个数（空转周期不计），与 P50/P95/Max 同一分母；各自的口径必须自洽，
+	// 否则「Count=335 但 durations 只有 40 个」会让人以为分位算错了。
+	result.Count = len(durations)
 	result.Cycles = len(cycles)
 	result.P50 = percentile(durations, 0.50)
 	result.P95 = percentile(durations, 0.95)
