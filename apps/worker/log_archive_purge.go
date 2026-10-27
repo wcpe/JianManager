@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,15 +125,24 @@ func (a *catalogArchiveObjectAuthority) RollbackPurge(ctx context.Context, names
 // 而 Catalog 里存的是一段可读前缀（审计要看「去哪」）。两者是同一事实的两种表示，
 // 转换必须严格——前缀不合规时**拒绝**，绝不猜一个键去删。
 func parseArchiveObjectPrefix(prefix string) (archive.PartitionKey, error) {
-	parts := strings.Split(strings.Trim(strings.TrimSpace(prefix), "/"), "/")
+	// 只裁空白、**不裁斜杠**：`PartitionKey.String()` 生成的形态是无前后斜杠的三段，
+	// 而 `/a/b/g1/` 这类写法只可能来自记录被改写。裁掉斜杠去「尽量解析」会让一个
+	// 明显不规范的记录悄悄通过，然后在某个猜出来的位置上删对象。
+	parts := strings.Split(strings.TrimSpace(prefix), "/")
 	if len(parts) != 3 {
 		return archive.PartitionKey{}, fmt.Errorf(
 			"归档对象前缀 %q 不是 namespace/day/g{generation} 形态，拒绝据此推断删除位置", prefix)
 	}
 	// 命名空间本身可能含 '/'（如 ns/game-1），但 Catalog 存的 prefix 由导出侧用
 	// `PartitionKey.String()` 生成，固定三段。故上面按 3 段判定；不满足即拒绝。
-	var gen uint64
-	if _, err := fmt.Sscanf(parts[2], "g%d", &gen); err != nil || gen == 0 {
+	// generation 段必须严格是 `g` + 正整数：`g` / `g0` / `g1x` 一律拒绝。
+	genPart := parts[2]
+	if len(genPart) < 2 || genPart[0] != 'g' {
+		return archive.PartitionKey{}, fmt.Errorf(
+			"归档对象前缀 %q 的 generation 段非法，拒绝据此推断删除位置", prefix)
+	}
+	gen, err := strconv.ParseUint(genPart[1:], 10, 64)
+	if err != nil || gen == 0 {
 		return archive.PartitionKey{}, fmt.Errorf(
 			"归档对象前缀 %q 的 generation 段非法，拒绝据此推断删除位置", prefix)
 	}
@@ -228,11 +238,14 @@ func (s *archiveProviderObjectStore) RemoveArchivePartition(ctx context.Context,
 	// day 目录可能还有别的 generation，root 下还有别的日期——一次 `RemoveAll(root)`
 	// 就等于把整个归档史删了。
 	dir := filepath.Join(s.root, filepath.FromSlash(key.StorageNamespace), key.UTCDay, fmt.Sprintf("g%d", key.Generation))
-	if err := os.Remove(dir); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		// 目录非空（残留子目录）或权限不足：如实返回，由调用方记为告警。
+	// 对象删完后剩下的往往是一串空子目录（`raw/files/`），`os.Remove(dir)` 对非空目录
+	// 会报 ENOTEMPTY——而那不是失败（对象确实已经不在了）。真实环境第一次跑就撞上了这条
+	// （本层 e2e 用例当场转红）：若把它当失败，每个分区都会留下一个空目录骨架，
+	// 「归档占多少盘」的核对里就永远清不干净。
+	//
+	// 先用 RemoveAll 清掉本分区目录下的空骨架——这不越过上文那条红线：
+	// 范围严格限定在 `<root>/<ns>/<day>/g<gen>` 这一棵子树内，root / day 目录都不在范围内。
+	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
 	// 尽力回收空的 day / namespace 目录（Remove 只删空目录，非空会报错 → 忽略）。

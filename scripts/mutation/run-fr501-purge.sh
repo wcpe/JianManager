@@ -220,6 +220,24 @@ mutate M18 internal/worker/logs/catalog/archive_purge.go \
   '' \
   ./internal/worker/logs/catalog -run 'TestArchiveObjectPurgeRefusesWhenRecoveryRequired'
 
+echo "== 变异 19：前缀允许前后斜杠（「尽量解析」⇒ 在猜出来的位置删对象）=="
+mutate M19 apps/worker/log_archive_purge.go \
+  'parts := strings.Split(strings.TrimSpace(prefix), "/")' \
+  'parts := strings.Split(strings.Trim(strings.TrimSpace(prefix), "/"), "/")' \
+  ./apps/worker -run 'TestArchiveProviderObjectStoreRejectsMalformedPrefix'
+
+echo "== 变异 20：空目录清理退回 os.Remove（非空骨架 ⇒ 每轮告警）=="
+mutate M20 apps/worker/log_archive_purge.go \
+  'if err := os.RemoveAll(dir); err != nil {' \
+  'if err := os.Remove(dir); err != nil {' \
+  ./apps/worker -run 'TestE2E_ArchiveObjectPurgeClearsDirectoryAndCatalog|TestArchiveProviderObjectStoreRemovesOnlyItsPartition'
+
+echo "== 变异 21：去掉 provider kind 复核（在不相干的目录里按同名前缀删）=="
+mutate M21 apps/worker/log_archive_purge.go \
+  'if kind != "" && kind != s.provider.Kind() {' \
+  'if false && kind != "" && kind != s.provider.Kind() {' \
+  ./apps/worker -run 'TestArchiveProviderObjectStoreRejectsProviderKindMismatch'
+
 echo
 echo "变异结果：转红 $PASS 个 / 存活 $FAIL 个"
 [ "$FAIL" -eq 0 ]
