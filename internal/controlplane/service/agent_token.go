@@ -25,6 +25,11 @@ const (
 	AgentActionGetInstance          = "agent.get_instance"
 	AgentActionGetInstanceMetrics   = "agent.get_instance_metrics"
 	AgentActionGetInstanceLogs      = "agent.get_instance_logs"
+	// 助手概览类只读（FR-544 补回）：只回聚合值、按调用者权限收敛，不暴露逐台明细。
+	// 它们不属于 Agent Token 运维面（HTTPInContract=false），只给助手经 MCP 目录使用。
+	AgentActionClusterOverview = "agent.cluster_overview"
+	AgentActionListTasksBrief  = "agent.list_tasks_brief"
+	AgentActionListAlertsBrief = "agent.list_alerts_brief"
 	AgentActionInstanceStart        = "agent.instance_start"
 	AgentActionInstanceStop         = "agent.instance_stop"
 	AgentActionInstanceRestart      = "agent.instance_restart"
@@ -404,6 +409,21 @@ func (s *AgentTokenService) Issue(req IssueAgentTokenRequest) (*model.AgentToken
 }
 
 // List 列出全部 agent token 元数据（无明文）。
+// TokenOwnerUserID 查 Token 的签发人（FR-490：审批申请人要落到一个真实的人）。
+//
+// 查不到返回 0 而不是报错：审批仍会落票，只是申请人显示为未知。
+// **不能**因为查不到归属就跳过审批——那是把「数据缺失」变成「安全豁免」。
+func (s *AgentTokenService) TokenOwnerUserID(tokenID uint) uint {
+	if tokenID == 0 {
+		return 0
+	}
+	var tok model.AgentToken
+	if err := s.db.Select("created_by").First(&tok, tokenID).Error; err != nil {
+		return 0
+	}
+	return tok.CreatedBy
+}
+
 func (s *AgentTokenService) List() ([]model.AgentToken, error) {
 	var tokens []model.AgentToken
 	if err := s.db.Order("created_at DESC").Find(&tokens).Error; err != nil {

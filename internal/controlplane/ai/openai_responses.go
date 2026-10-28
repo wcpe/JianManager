@@ -33,6 +33,13 @@ type responsesRequest struct {
 	Tools           []responsesTool  `json:"tools,omitempty"`
 	Stream          bool             `json:"stream"`
 	MaxOutputTokens int              `json:"max_output_tokens,omitempty"`
+	// Reasoning 思考强度（FR-541 §3.2）。Responses 用对象形态，与 Chat 的顶层字符串不同。
+	Reasoning *responsesReasoning `json:"reasoning,omitempty"`
+}
+
+// responsesReasoning Responses API 的思考配置。
+type responsesReasoning struct {
+	Effort string `json:"effort"`
 }
 
 // responsesInput 输入项。
@@ -49,6 +56,11 @@ type responsesInput struct {
 	// 参数必须是字符串而不是对象：Responses 的 function_call.arguments 是
 	// 上游自己流式吐出来的一段文本，回放时原样送回最安全——重新序列化会改变
 	// 键序与空白，可能被对端判为「与我发出时不一致」。
+	//
+	// **不要给 function_call 填 `id`**：`id` 是上游为「输出项」分配的标识（形如
+	// `fc_…`），而配对靠的是 `call_id`。我们没有保存过上游的项 id，把 callId 塞进
+	// `id` 会让上游按一个不存在的项 id 去定位，属于凭空伪造；`id` 在输入项里本就是
+	// 可选字段，省略即由对端自行处理。
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
@@ -100,6 +112,9 @@ func (s *openAIResponsesStreamer) Stream(ctx context.Context, req Request, emit 
 		Input:           buildResponsesInput(req.Messages),
 		Stream:          true,
 		MaxOutputTokens: req.MaxOutputTokens,
+	}
+	if effort, ok := normalizeReasoningEffort(req.ReasoningEffort); ok {
+		body.Reasoning = &responsesReasoning{Effort: effort}
 	}
 	for _, tool := range req.Tools {
 		body.Tools = append(body.Tools, responsesTool{
@@ -253,19 +268,26 @@ func (s *openAIResponsesStreamer) Stream(ctx context.Context, req Request, emit 
 	return emit(Event{Kind: EventEnd, FinishReason: stopReason})
 }
 
-// buildResponsesInput 把内部消息转成 Responses 输入项。
-//
-// 工具结果在 Responses 里是独立的 function_call_output 项，不是 role=tool 的消息。
 // buildResponsesInput 把内部消息历史翻成 Responses 的 input 数组。
 //
-// 关键约束：**assistant 的工具调用必须回放成 `function_call` 项，不能降级成文本**。
-// 曾经这里把调用写成一条 `message`（"[调用工具 X 参数 Y]"），而工具结果仍以
-// `function_call_output` 发出——于是 output 找不到配对的 function_call（call_id 无从匹配），
-// 上游会判请求不合法；即便某些上游宽容，模型看到的也不是「我调用过工具、这是结果」
-// 的结构化历史，多轮工具循环的语义已经丢了。
+// 三类项各有其形，靠 Type 区分：普通文本是 `message`（带 role/content），
+// assistant 的工具调用是 `function_call`（带 call_id/name/arguments），
+// 工具结果是 `function_call_output`（带 call_id/output）。两处**靠 call_id 配对**，
+// 而 function_call 的项 id（`id`）不回填——我们从未保存过上游的项 id，
+// 伪造一个只会让对端按不存在的项去定位。
 //
-// 顺序：函数调用按 ToolCalls 原序输出，且必须整体出现在对应 output 之前。
-// 不排序、不去重——去重会掩盖上层「同一次调用被重复登记」的真实缺陷。
+// 正确行为有两条硬约束：
+//
+//  1. **工具调用必须以 function_call 项回放，不能降级成一条文本 message。**
+//     一旦写成文本，紧随其后的 function_call_output 就没有可配对的 call_id，
+//     上游会判请求不合法；即便某些上游宽容接受，模型读到的也只是「我说过一句话」，
+//     拿不到「我调用过什么、拿到了什么」的结构化历史，多轮工具循环的语义随之丢失。
+//  2. **顺序按输入线性输出，不分组、不排序、不去重。** 历史里 assistant 在前、
+//     tool 结果在后，因此 function_call 天然先于它自己的 output（上游同样要求这个
+//     次序）；去重则会掩盖上层「同一次调用被重复登记」的真实缺陷。
+//
+// 另外：assistant 的文本正文为空时不产出 message 项——空 content 的 message 会被
+// 上游拒收，而「只有工具调用」的轮次本来就应该只由 function_call 项构成。
 func buildResponsesInput(in []Message) []responsesInput {
 	out := make([]responsesInput, 0, len(in))
 	for _, m := range in {
@@ -277,10 +299,11 @@ func buildResponsesInput(in []Message) []responsesInput {
 				Output: m.Content,
 			})
 		case "assistant":
-			// 纯文本先出（保持「先说话、再调用」的原始顺序）。
+			// 有正文才产 message：空正文的 message 会被上游拒绝。
 			if m.Content != "" {
 				out = append(out, responsesInput{Type: "message", Role: "assistant", Content: m.Content})
 			}
+			// 调用跟在正文之后，保持「先说话、再调用」的原始顺序。
 			for _, call := range m.ToolCalls {
 				out = append(out, responsesInput{
 					Type:      "function_call",

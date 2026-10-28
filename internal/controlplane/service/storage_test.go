@@ -5,9 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
@@ -20,8 +18,7 @@ func newStorageTestService(t *testing.T) (*StorageService, *dataroot.Root) {
 	root, err := dataroot.Init(dir)
 	require.NoError(t, err)
 
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := openTestSQLite(t)
 	require.NoError(t, db.AutoMigrate(&model.Asset{}))
 	require.NoError(t, db.Exec("DELETE FROM assets").Error)
 

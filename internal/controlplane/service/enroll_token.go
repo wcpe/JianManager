@@ -128,6 +128,26 @@ func (s *EnrollTokenService) ConsumeForNewNode(plaintext, nodeUUID string) (stri
 	return tok.NodeName, nil
 }
 
+// ValidateOnly 判断 enrollment token 当前是否有效，**不消费**（FR-486）。
+//
+// 为什么需要它：启动进度上报发生在 Register 之前，必须能证明「你被授权启动」，
+// 但不能把一次性 token 用掉——否则紧接着的注册会因 token 已失效被拒。
+// 观测功能把主流程弄坏是最不可接受的失败方式，所以这里严格只读。
+func (s *EnrollTokenService) ValidateOnly(plaintext string) bool {
+	if plaintext == "" {
+		return false
+	}
+	hash := sha256Hex(plaintext)
+	var count int64
+	if err := s.db.Model(&model.NodeEnrollToken{}).
+		Where("token_hash = ? AND used = ? AND revoked = ? AND expires_at > ?",
+			hash, false, false, time.Now()).
+		Count(&count).Error; err != nil {
+		return false
+	}
+	return count == 1
+}
+
 // List 列出全部 enrollment token（仅元数据，无明文），按创建时间倒序。
 func (s *EnrollTokenService) List() ([]model.NodeEnrollToken, error) {
 	var tokens []model.NodeEnrollToken

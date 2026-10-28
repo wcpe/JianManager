@@ -118,6 +118,22 @@ var agentActionCatalog = map[string]AgentActionDescriptor{
 		ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
 		V1Allowed: true, // MCP 专属，不进 HTTP 契约投影
 	},
+	// 助手概览类只读（FR-544 补回）：ResourceType=none，只按能力把关。
+	AgentActionClusterOverview: {
+		Action: AgentActionClusterOverview, V2Capability: AgentCapabilityInstanceRead,
+		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		V1Allowed: true, // 只读聚合，MCP 专属，不进 HTTP 契约投影
+	},
+	AgentActionListTasksBrief: {
+		Action: AgentActionListTasksBrief, V2Capability: AgentCapabilityInstanceRead,
+		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		V1Allowed: true,
+	},
+	AgentActionListAlertsBrief: {
+		Action: AgentActionListAlertsBrief, V2Capability: AgentCapabilityInstanceRead,
+		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		V1Allowed: true,
+	},
 	AgentActionInstanceStart: {
 		Action: AgentActionInstanceStart, V2Capability: AgentCapabilityInstanceLife,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,

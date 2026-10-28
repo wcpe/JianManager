@@ -379,20 +379,19 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 				}
 			}
 
-			// 存储配额：按组内备份总大小预估，超额拒绝创建。
-			// 参见 FR-003 验收：配额检查覆盖 MaxStorageMB。
-			// TODO(FR-003): 接入 Worker 工作目录大小上报后替换为更精确的累计。
+			// 存储配额（FR-003）：口径与运行期强制、配额页**同源同实现**。
+			//
+			// 走 groupUsedStorageMB：组内各实例的真实工作目录占用，逐实例回退备份大小。
+			// 三处（创建检查 / groupDiskFreeMB / GetQuotaUsage）都调这一个函数——
+			// 此前各写一遍 SUM(备份大小)，换口径时只改一处的后果正是
+			// 「创建时判通过、运行期立刻判超限」。
 			if quota.MaxStorageMB > 0 {
-				var storageSum struct {
-					Total float64
+				usedMB, uerr := groupUsedStorageMB(tx, req.GroupID)
+				if uerr != nil {
+					return fmt.Errorf("统计组存储用量失败: %w", uerr)
 				}
-				tx.Model(&model.Backup{}).
-					Select("COALESCE(SUM(file_size_mb), 0) as total").
-					Joins("JOIN group_instances ON group_instances.instance_id = backups.instance_id").
-					Where("group_instances.group_id = ?", req.GroupID).
-					Scan(&storageSum)
-				if int(storageSum.Total) >= quota.MaxStorageMB {
-					return fmt.Errorf("%w: 存储 %d/%d MB", ErrQuotaExceeded, int(storageSum.Total), quota.MaxStorageMB)
+				if int(usedMB) >= quota.MaxStorageMB {
+					return fmt.Errorf("%w: 存储 %d/%d MB", ErrQuotaExceeded, int(usedMB), quota.MaxStorageMB)
 				}
 			}
 		}

@@ -28,12 +28,16 @@ func newOpenAIChatStreamer(client *http.Client, baseURL, apiKey string) *openAIC
 
 // chatStreamRequest Chat Completions 请求体。
 type chatStreamRequest struct {
-	Model         string         `json:"model"`
-	Messages      []chatMessage  `json:"messages"`
-	Tools         []chatTool     `json:"tools,omitempty"`
-	Stream        bool           `json:"stream"`
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Tools    []chatTool    `json:"tools,omitempty"`
+	Stream   bool          `json:"stream"`
+	// MaxTokens 用 `max_tokens` 而不是 `max_completion_tokens`：前者是绝大多数
+	// OpenAI 兼容网关（含自托管）实际接受的字段，后者新但兼容面窄。
 	MaxTokens     int            `json:"max_tokens,omitempty"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	// ReasoningEffort 思考强度（FR-541 §3.2），仅档位合法时下发。
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // streamOptions 请求在流末尾附带用量统计（部分兼容网关不支持该字段，故仅当需要时下发）。
@@ -107,6 +111,9 @@ func (s *openAIChatStreamer) Stream(ctx context.Context, req Request, emit Emit)
 		Stream:        true,
 		MaxTokens:     req.MaxOutputTokens,
 		StreamOptions: &streamOptions{IncludeUsage: true},
+	}
+	if effort, ok := normalizeReasoningEffort(req.ReasoningEffort); ok {
+		body.ReasoningEffort = effort
 	}
 	for _, tool := range req.Tools {
 		body.Tools = append(body.Tools, chatTool{

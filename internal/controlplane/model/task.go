@@ -47,6 +47,10 @@ const (
 	TaskKindClone = "clone"
 	// TaskKindBackupCreate 备份创建（打包工作目录）任务（FR-323，CP 后台 goroutine）。
 	TaskKindBackupCreate = "backup_create"
+	// TaskKindApprovalExecute 审批通过后的高危动作执行（FR-491，CP 后台 goroutine）。
+	// 单列 kind 的理由：任务中心必须能一眼看出「这是审批驱动的执行」，
+	// 而不是混进普通搭建/备份里；且它的失败语义与票据终态绑定（failed 要能对应回票据）。
+	TaskKindApprovalExecute = "approval_execute"
 	// TaskKindBackupRestore 备份恢复（回放备份链）任务（FR-323，CP 后台 goroutine）。
 	TaskKindBackupRestore = "backup_restore"
 	// TaskKindArtifactMigrate 制品存量迁移任务（FR-348，CP 后台 goroutine）：

@@ -121,10 +121,6 @@ type PlayerEventService struct {
 	mu   sync.RWMutex
 	subs []playerSub
 
-	// businessSink 接收带业务域（domain 非空）的 JBIS 事件做汇聚落库（FR-122，见 ADR-027/028）。
-	// 与玩家事件（SSE 扇出）共享同一条上行流但分流处理：可为 nil（独立测试/未启用业务汇聚时）。
-	businessSink func(nodeUUID string, evt *workerpb.PluginEvent)
-
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -132,6 +128,33 @@ type PlayerEventService struct {
 	// 扇出与业务事件重复落库。订阅 goroutine 退出时清除标记，使节点真正重连后仍能重建订阅。
 	streamMu  sync.Mutex
 	streaming map[string]struct{}
+
+	// businessStream 是业务事件（domain 非空）的纯透传出口（FR-522 / FR-536）：本服务作为
+	// StreamPluginEvents 的唯一消费点，把业务帧交给它写环形缓冲并扇出，绝不在本服务内解析业务语义。
+	// nil 时业务事件被静默丢弃（未装配该能力，不影响监控/玩家事件链路）。
+	businessStream *BusinessStreamService
+
+	// probeConnected 是探针（重）连入时的旁路钩子（FR-531 §8.2）。
+	//
+	// 为什么挂在这里：StreamPluginEvents 是全平台唯一消费探针 `connected` 事件的地方，
+	// 而「离线目标上线后自动补推」需要的正是这一瞬间的信号。另起一条订阅会重复消费同一条
+	// 长驻流（FR-456 F4 明确禁止），轮询则更晚发现且要为每台离线实例反复打库。
+	//
+	// 契约：回调必须是**非阻塞**的（本方法在事件流的读循环里调用），且不得 panic。
+	probeConnected func(instanceUUID string)
+}
+
+// SetProbeConnectedHook 注入探针连入回调（FR-531 自动补推入口）。传 nil 关闭。
+//
+// 回调在事件流读循环内被同步调用，因此实现方必须自己起 goroutine——
+// 反序列化/落库这类动作一旦阻塞读循环，会把该节点所有实例的实时事件一起拖住。
+func (s *PlayerEventService) SetProbeConnectedHook(fn func(instanceUUID string)) {
+	s.probeConnected = fn
+}
+
+// SetBusinessStream 注入业务事件纯透传通道（FR-522）。由 CP 装配期调用。
+func (s *PlayerEventService) SetBusinessStream(stream *BusinessStreamService) {
+	s.businessStream = stream
 }
 
 // playerSub 一个 SSE 订阅：channel + 实例 UUID 过滤（空=全部）。
@@ -150,12 +173,6 @@ func NewPlayerEventService(pool *cpgrpc.ClientPool, db *gorm.DB) *PlayerEventSer
 		ctx:    ctx,
 		cancel: cancel,
 	}
-}
-
-// SetBusinessSink 注入业务事件汇聚回调（FR-122）。事件流中 domain 非空的 JBIS 事件经此落库
-// （通用 envelope 去重 + 经济镜像/审计），玩家事件不受影响。传 nil 关闭业务汇聚。
-func (s *PlayerEventService) SetBusinessSink(sink func(nodeUUID string, evt *workerpb.PluginEvent)) {
-	s.businessSink = sink
 }
 
 // Subscribe 订阅玩家事件，filter 为实例 UUID（空=全部）。取消时调用返回的函数。
@@ -256,16 +273,20 @@ func (s *PlayerEventService) streamFromWorker(nodeUUID string, client *cpgrpc.Cl
 				slog.Info("PlayerEventService: Worker 插件事件流断开", "nodeUUID", nodeUUID, "err", err)
 				break
 			}
-			// JBIS 业务事件（domain 非空，FR-122）：分流到业务汇聚（envelope 去重 + 经济镜像/审计），
-			// 不演进在线名册、不走玩家事件 SSE（与玩家/监控事件刻意分治，见 ADR-027/028）。
+			// 带业务域（domain 非空）的事件不在本服务内做业务处理：JM 不做任何业务语义
+			// （FR-521 / ADR-106）。它们只走纯透传通道（FR-522）：写内存环形缓冲 + 扇出给 SSE 订阅者，
+			// 不落库、不聚合、也不演进在线名册。
 			if evt.Domain != "" {
-				if s.businessSink != nil {
-					s.businessSink(nodeUUID, evt)
-				}
+				s.businessStream.Ingest(nodeUUID, evt)
 				continue
 			}
 			// 先演进名册（连接/在线集合），再翻译扇出。
 			s.roster.apply(evt)
+			// 探针（重）连入：通知旁路钩子（FR-531 的离线目标自动补推）。
+			// 钩子必须非阻塞，否则会卡住本节点所有实例的实时事件。
+			if evt.Type == "connected" && s.probeConnected != nil {
+				s.probeConnected(evt.InstanceUuid)
+			}
 			s.broadcast(s.translate(evt))
 		}
 	}

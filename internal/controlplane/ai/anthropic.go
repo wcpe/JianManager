@@ -34,6 +34,12 @@ const anthropicDefaultVersion = "2023-06-01"
 // anthropicDefaultMaxTokens Anthropic 要求 max_tokens 必填，未指定时的默认值。
 const anthropicDefaultMaxTokens = 2048
 
+// anthropicThinkingOutputReserve 启用思考时给「正式回复」预留的输出预算。
+//
+// 上游要求 max_tokens > budget_tokens（思考 token 也占用 max_tokens）。
+// 若只把 max_tokens 抬到等于预算，回复会被思考吃光、直接截断成空文本。
+const anthropicThinkingOutputReserve = 2048
+
 // newAnthropicStreamer 构造适配器。
 func newAnthropicStreamer(client *http.Client, baseURL, apiKey string) *anthropicStreamer {
 	return &anthropicStreamer{
@@ -52,6 +58,37 @@ type anthropicRequest struct {
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	MaxTokens int                `json:"max_tokens"`
 	Stream    bool               `json:"stream"`
+	// Thinking 思考强度（FR-541 §3.2）。仅档位非空时发送。
+	//
+	// 与 temperature **互斥**：同时发送会被上游 400。本适配器不发 temperature，
+	// 所以这里不需要额外互斥处理——但若将来加了 temperature，必须在此判空。
+	Thinking *anthropicThinking `json:"thinking,omitempty"`
+}
+
+// anthropicThinking 启用思考并给出预算。
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// anthropicThinkingBudget 把档位映射成 token 预算。
+//
+// 为什么是「预算」而不是像 OpenAI 那样只给档位：Anthropic 的思考是按 token 计的，
+// 档位必须换算成一个正整数；这些数值取自其文档的常见档（1k/2k/8k/16k）。
+func anthropicThinkingBudget(effort string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "minimal":
+		return 1024, true
+	case "low":
+		return 2048, true
+	case "medium":
+		return 8192, true
+	case "high":
+		return 16384, true
+	default:
+		// 未知档位一律不发送：发一个上游不认识的值会被 400 拒掉整轮。
+		return 0, false
+	}
 }
 
 // anthropicMessage Messages API 消息（content 允许字符串或块数组）。
@@ -119,6 +156,15 @@ func (s *anthropicStreamer) Stream(ctx context.Context, req Request, emit Emit) 
 		Messages:  buildAnthropicMessages(req.Messages),
 		MaxTokens: maxTokens,
 		Stream:    true,
+	}
+	// 思考强度（FR-541 §3.2）：预算必须小于 max_tokens，否则上游直接 400。
+	// 冲突时的取舍：把 max_tokens 抬到「预算 + 输出余量」，而不是把预算压小——
+	// 管理员设了 high 却拿到 minimal 的效果，比多花 token 更难排查。
+	if budget, ok := anthropicThinkingBudget(req.ReasoningEffort); ok {
+		if body.MaxTokens <= budget {
+			body.MaxTokens = budget + anthropicThinkingOutputReserve
+		}
+		body.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: budget}
 	}
 	for _, tool := range req.Tools {
 		body.Tools = append(body.Tools, anthropicTool{
