@@ -89,6 +89,13 @@ func BackfillLegacySegmentIdentities(key ledger.SourceKey, led *ledger.Ledger) i
 		updated := seg
 		updated.IdentityBytes = idBytes
 		updated.IdentitySHA256 = idSHA
+		// 同时补 inode（2026-10-28）：旧账本没有 DeviceID/Inode/InodeKnown 三个字段，
+		// 而 inode 才是“还是不是同一份文件”的正确答案（改名不改 inode）。
+		// 两道槽位复用防护已在上方拦过（ObservedSize 必须已知且与当前匹配），
+		// 所以此刻的 inode 确实属于**当初登记的那份内容**。
+		if dev, ino, inodeOK := fileIdentity(info); inodeOK {
+			updated.DeviceID, updated.Inode, updated.InodeKnown = dev, ino, true
+		}
 		if err := led.RegisterSegment(key, updated); err != nil {
 			continue
 		}

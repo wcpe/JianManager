@@ -659,14 +659,21 @@ func (a *ArchiveImporter) MarkImported(path, objectID string, start, end uint64)
 		kind = ledger.SegmentGzip
 	}
 	var observedSize, observedMod int64
+	var devID, ino uint64
+	var inodeOK bool
 	if info, err := os.Stat(path); err == nil {
 		observedSize, observedMod = info.Size(), info.ModTime().UnixNano()
+		// inode 是「这个路径上的文件还是不是我上次读到那一份」的**正确答案**（2026-10-28）：
+		// 改名不改 inode，所以轮转/压缩后仍能认出同一份内容；
+		// 配合 IdentitySHA256 可防 inode 复用（两者都合才认为同内容）。
+		devID, ino, inodeOK = fileIdentity(info)
 	}
 	return a.led.RegisterSegment(a.key, ledger.Segment{
 		Path: path, Kind: kind, StartPos: start, EndPos: end,
 		PhysicalStart: physicalStart, PhysicalMappingKnown: physicalMappingKnown,
 		ArchiveObjectID: objectID, Imported: true, ParserVersion: a.parser.ParserVersion,
 		IdentityBytes: idBytes, IdentitySHA256: idSHA,
+		DeviceID: devID, Inode: ino, InodeKnown: inodeOK,
 		ObservedSize: observedSize, ObservedModNano: observedMod,
 	})
 }
@@ -707,6 +714,7 @@ func (a *ArchiveImporter) markFailed(path string, kind ledger.SegmentKind, reaso
 	if info, err := os.Stat(path); err == nil {
 		segment.ObservedSize = info.Size()
 		segment.ObservedModNano = info.ModTime().UnixNano()
+		segment.DeviceID, segment.Inode, segment.InodeKnown = fileIdentity(info)
 	}
 	return a.led.RegisterSegment(a.key, segment)
 }

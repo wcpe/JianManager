@@ -74,8 +74,28 @@ type Segment struct {
 	// PhysicalStart 是逻辑 StartPos 对应的文件偏移；存在标志区分真实零偏移与旧状态缺证据。
 	PhysicalStart        uint64 `json:"physical_start,omitempty"`
 	PhysicalMappingKnown bool   `json:"physical_mapping_known,omitempty"`
-	IdentityBytes        int64  `json:"identity_bytes,omitempty"`    // live 文件稳定前缀长度
-	IdentitySHA256       string `json:"identity_sha256,omitempty"`   // 检测同路径替换，不能参与 event_id
+	// DeviceID / Inode 是该分段文件的**物理身份**（与 Filebeat 的 inode_deviceid 同语义）。
+	//
+	// 为什么需要（2026-10-28，对齐业界）：归档文件会**改名**（`latest.log` → `latest.log.1`
+	// → `2026-10-27-1.log.gz`），而改名**不改 inode**。所以"这个路径上的文件还是不是我上次
+	// 读到那一份"这个问题的**正确答案在 inode 上**，不在路径、也不在内容哈希上。
+	//
+	// 在此之前本项目只用内容 SHA256 回答它：因为旧设计把历史归档也当作采集源，需要跨"文件
+	// 已删除"认身份。代价是一整套内容锚机制与 `ARCHIVE_CONTENT_UNKNOWN` 死路（旧账本没有
+	// 映射就永久隔离，生产 89 条卡死）。改用 inode 后：
+	//   - 活文件 / 轮转文件 / 压缩归档 **只要是同一个 inode，就是同一份内容**；
+	//   - inode 复用的防护靠 `IdentitySHA256`（既有的内容哈希照旧保留，作为辅证）；
+	//   - 归档不再需要被"重新认领"，UNKNOWN 状态随之下线。
+	//
+	// 旧账本无此二字段 ⇒ 零值（DeviceID/Inode 均为 0）= 未知，调用方必须保持旧行为（保守跳过），
+	// 不得把"没记过"当成"匹配上了"。
+	DeviceID uint64 `json:"device_id,omitempty"`
+	Inode    uint64 `json:"inode,omitempty"`
+	// InodeKnown 区分"真实 inode 为 0"与"未记录"：零值 inode 合法（某些伪文件系统），
+	// 但未记录必须显式可知，否则判据会把两者混为一谈。
+	InodeKnown    bool   `json:"inode_known,omitempty"`
+	IdentityBytes int64  `json:"identity_bytes,omitempty"`    // live 文件稳定前缀长度
+	IdentitySHA256 string `json:"identity_sha256,omitempty"` // 检测同路径替换，不能参与 event_id
 	ArchiveObjectID      string `json:"archive_object_id,omitempty"` // provenance only
 	Imported             bool   `json:"imported"`
 	ImportError          string `json:"import_error,omitempty"`

@@ -108,15 +108,36 @@ type ReimportDecision struct {
 // （importArchive 的整包跳过分支）必须调用同一个函数，否则两处会漂移成
 // 「发现说待导入、导入说已导入」（白做功）或反过来的「发现说已导入、导入没机会判」（静默丢）。
 //
-// 三条分支（顺序即优先级）：
-//  1. 内容没变（分段记录的前缀身份 == 文件当前前缀身份）⇒ 跳过。这是主流形态，
-//     也是「已投递内容不得重复导入」的守护点。
-//  2. 内容变了 / 分段是旧账本（无身份）⇒ 找内容锚。找不到 ⇒ 未知，必须登记可见隔离。
-//  3. 找到锚 ⇒ 算已覆盖字节数：覆盖满 ⇒ 跳过（它是被移位改名挪过来的已投递内容）；
-//     没覆盖满 ⇒ 导入（剩下的是**从未被任何链路投递过**的字节）。
+// 四条分支（顺序即优先级）：
+//  0. **inode 命中（2026-10-28 新增，与 Filebeat 的 inode_deviceid 同语义）**：
+//     分段记录的 (DeviceID, Inode) 与文件当前相同、且内容前缀也对得上
+//     ⇒ 就是**同一份文件** ⇒ 直接跳过，不需要任何内容锚。
+//
+//     它解掉了旧设计的死路：旧实现只能靠内容锚，而早于 2026-10-21 的旧账本
+//     没记映射 ⇒ 永远找不到锚 ⇒ 一律 ARCHIVE_CONTENT_UNKNOWN ⇒ 永久隔离
+//     （生产实测 89 条卡死、10/19 个源停采）。
+//
+//     为什么 inode 比内容哈希更对：内容哈希回答“内容像不像”，inode 回答
+//     “是不是同一个文件”。位点语境里问的是后者——同名路径换内容（inode 变）
+//     与同一文件改名（inode 不变）必须区分开。
+//
+//     为什么还要内容前缀参与：inode 会被文件系统**复用**（删除后新文件拿到同号），
+//     所以仅在“inode 相同 **且** 内容前缀也相同”时才认定同内容。
+//     （旧账本无 inode ⇒ InodeKnown=false ⇒ 本分支不参与，维持原有保守行为。）
+//  1. 内容没变（分段记录的前缀身份 == 文件当前前缀身份）⇒ 跳过。
+//  2. 内容变了 / 分段是旧账本（无身份）⇒ 找内容锚。找不到 ⇒ 未知。
+//  3. 找到锚 ⇒ 算已覆盖字节数：覆盖满 ⇒ 跳过；没覆盖满 ⇒ 导入。
 func DecideArchiveReimport(entry *ledger.Entry, segment *ledger.Segment) ReimportDecision {
 	if segment == nil {
 		return ReimportDecision{Disposition: ArchiveTail, Import: true, Reason: "archive has not been registered"}
+	}
+	// 前置 `segment.Imported` 不可省（2026-10-28，被 TestRefusedGenerationKeepsImportIdempotent
+	// 当场抑住）：失败态（跨代次拒绝/损坏/不可读）的分段**不是“已导入”**，
+	// inode 相同只说明“还是那个文件”，并不能推出“它已被接受”。
+	// 若无此闸，被拒的归档会从第二轮起被判 ArchiveCovered（Skipped）⇒
+	// 上层不再重试也不计拒绝次数 ⇒ 缺口风暴防护失效。
+	if segment.Imported && inodeMatchesSegment(segment) {
+		return ReimportDecision{Disposition: ArchiveCovered, Reason: "same device+inode and same content prefix; already imported"}
 	}
 	if !segment.Imported {
 		if !segment.PhysicalMappingKnown && (segment.StartPos != 0 || segment.EndPos != 0 || segment.IdentityBytes > 0 || segment.IdentitySHA256 != "" || segment.ArchiveObjectID != "") && (ledger.IsArchiveSegmentKind(segment.Kind) || segment.Kind == ledger.SegmentRotated) {
