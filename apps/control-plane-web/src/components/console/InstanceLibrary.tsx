@@ -3,7 +3,7 @@ import { useInfiniteInstanceSearch, type InstanceInfo } from '@/api/instances'
 import InstanceLibraryView from '@/components/views/instances/InstanceLibrary'
 
 /**
- * 实例库面板的应用接线层（ADR-102 a 范式）。
+ * 实例库面板的应用接线层（ADR-103 a 范式）。
  *
  * 面板本体是受控视图（见 components/views）；本层接服务端搜索分页（`/instances/search`，FR-235 范式）：
  * 视图给出已防抖的搜索词，本层据此取数并把累积结果、分页状态回灌。

@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做三份查询取数、八个写动作、
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做三份查询取数、八个写动作、
 // 四处危险确认的门禁注入与全部 toast 文案。
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -14,7 +14,7 @@ type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
 /**
- * 面板自更新页容器（ADR-102 a 范式）：检查结果 / 全网升级进度 / Worker 二进制缓存三份查询、
+ * 面板自更新页容器（ADR-103 a 范式）：检查结果 / 全网升级进度 / Worker 二进制缓存三份查询、
  * 八个写动作（检查、CP 升级回滚、节点升级回滚、全网升级、预缓存）与全部 toast 文案都在这里决定；
  * 版本对比卡片、节点区、缓存面板与进度面板交共享视图。
  *

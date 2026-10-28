@@ -97,7 +97,7 @@ export interface StatisticsInstanceCounts {
 }
 
 /**
- * 受控边界（ADR-102 a 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast**。
  * - 五个查询的结果与错误态经 props 注入（容器调 `useMetricOverview` / `useNodes` / `useInstanceAggregate` /
  *   `useOnlinePlayers` / `useClientDistObservability`）；分桶、占比与探针可达汇总都是纯展示派生，留本组件；
  * - **归容器**的受控状态：统计窗口 `range`——它是上述查询的查询键，一变就触发重新取数，

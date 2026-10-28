@@ -3,7 +3,7 @@ import type { BatchSelectedInstance } from '@/components/instances/InstanceBatch
 import RollingBatchDialogView, { RollingProgress } from '@/components/views/instances/RollingBatchDialog'
 
 /**
- * 滚动/分批/灰度编排对话框的应用接线层（ADR-102 b 范式）。
+ * 滚动/分批/灰度编排对话框的应用接线层（ADR-103 b 范式）。
  *
  * 对话框本体是受控视图（见 components/views）；本层接三样它不该自己拿的东西：创建动作、会话轮询、
  * 控制动作。进度视图用轮询到的会话数据渲染后以插槽交回视图。

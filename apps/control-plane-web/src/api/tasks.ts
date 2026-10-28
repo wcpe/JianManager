@@ -8,7 +8,7 @@ import api from '@/api/client'
  */
 
 /** 任务状态。pending/running 为进行中，succeeded/failed/canceled 为终态（canceled=被强制停止，FR-227）。 */
-// 类型与纯逻辑（终态判定、kind 文案键、轮询启停）已回迁应用侧（原 ADR-102 迁包已撤销）；
+// 类型与纯逻辑（终态判定、kind 文案键、轮询启停）已回迁应用侧（迁包已撤销，见 ADR-103）；
 // 此处转出，调用点零改动。本模块只保留取数 hook 与请求参数类型。
 import { tasksRefetchInterval } from '@/lib/tasks/task-status'
 import type { TaskState, Task, TaskLog, TaskPage } from '@/lib/tasks/task-status'

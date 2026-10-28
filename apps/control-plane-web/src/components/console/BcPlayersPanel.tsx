@@ -3,7 +3,7 @@ import { useOnlinePlayers } from '@/api/players'
 import { useTopology } from '@/api/topology'
 
 /**
- * 跨服玩家分布接线层（ADR-102）：注入该代理的注册列表与在线探针结果，
+ * 跨服玩家分布接线层（ADR-103）：注入该代理的注册列表与在线探针结果，
  * 消费方（InstanceConsolePage）零改动。
  */
 export default function BcPlayersPanelConnected({ instanceId }: { instanceId: number }) {

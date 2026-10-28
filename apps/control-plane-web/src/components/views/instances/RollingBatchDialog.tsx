@@ -26,7 +26,7 @@ import type { BatchSelectedInstance } from '@/components/views/instances/Instanc
  * 相比一次性扇出的批量操作，本对话框把目标按批大小推进、批间停留、失败即停、可按比例灰度，
  * 并在编排推进期间提供暂停/继续/取消与实时进度。逐台仍复用后端既有 per-instance RPC。
  *
- * 受控视图（ADR-102 b 范式）：不取数、不发请求——创建经 `onCreate` 上报，进度视图由外壳
+ * 受控视图（ADR-103 b 范式）：不取数、不发请求——创建经 `onCreate` 上报，进度视图由外壳
  * 以 `progressSlot` 注入（它要用轮询数据渲染）。策略表单、灰度比例换算、批数计算这些
  * **本组件自己的语义**留在视图内。
  */

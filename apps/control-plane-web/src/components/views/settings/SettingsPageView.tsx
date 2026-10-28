@@ -127,7 +127,7 @@ export interface SettingsOutboundTestArgs {
 }
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 平台配置数据与加载/错误态经 props 注入（容器调 `useSettings()`）；
  * - 保存以 `onSave(changed)` 回调上报，由容器执行 mutation 并决定成功/失败文案：返回是否成功，
  *   视图据返回值决定是否清掉已落库的草稿键（失败时保留草稿便于修正重试）；
@@ -171,7 +171,7 @@ export interface SettingsPageViewProps {
   /**
    * AI 助手配置入口插槽（FR-514）。
    *
-   * 走插槽而非在此处 import 路由：视图不认识 react-router（ADR-102 b 范式），
+   * 走插槽而非在此处 import 路由：视图不认识 react-router（ADR-103 b 范式），
    * 且该入口只有平台管理员可见——角色与路由都由外壳决定。
    */
   assistantEntry?: ReactNode

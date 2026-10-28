@@ -152,7 +152,7 @@ export interface ImportServerFormDraft {
 }
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 候选经 props 注入：`nodeOptions`（容器调 `useNodes` 并拼在线状态文案）、
  *   `jdkOptions`（容器调 `useNodeJDKs(query.nodeId)`）；
  * - 取数输入经 `onQueryChange` 上报（仅节点）：容器据此重取 JDK 列表；

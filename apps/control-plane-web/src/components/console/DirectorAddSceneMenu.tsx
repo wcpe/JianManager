@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只注入 store 动作（受控化）。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只注入 store 动作（受控化）。
 import { DirectorAddSceneMenu as DirectorAddSceneMenuView } from '@/components/views/console/WorkbenchLeafParts'
 import { useDirectorStore } from '@/stores/director'
 import type { WorkspacePreset } from '@/lib/console/workspace-preset'

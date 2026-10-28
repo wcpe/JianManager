@@ -42,7 +42,7 @@ export interface VersionDrawerProps {
 }
 
 /**
- * 受控视图（ADR-102 c 范式）：版本列表、diff 与回滚三个取数全部由外壳注入。
+ * 受控视图（ADR-103 c 范式）：版本列表、diff 与回滚三个取数全部由外壳注入。
  * 视图内只留「选中哪两个版本对比」「要回滚哪个版本」这两处纯 UI 状态。
  */
 export default function VersionDrawer({

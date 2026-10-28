@@ -11,7 +11,7 @@ import type { WorkspaceLinkArgs } from '@/components/views/console/WorkspaceSide
 import { PINNED_TOOLS_KEY } from '@/lib/console/sidebar-tools'
 
 /**
- * 工作区侧栏 · 受控视图测（ADR-102）。
+ * 工作区侧栏 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**（重构件后）：无标题行/无分组小标题、固定入口紧凑段、常用区（置回工具）、
  * 资源面板注入、底部工具图标轨 + 「更多」收纳菜单、折叠态图标轨、注入面被正确使用。

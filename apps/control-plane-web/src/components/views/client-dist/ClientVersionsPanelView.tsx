@@ -58,7 +58,7 @@ export interface ClientVersionsPanelVersionDetail {
 }
 
 /**
- * 版本面板的注入契约（受控视图，ADR-102 a+b 混合范式）。
+ * 版本面板的注入契约（受控视图，ADR-103 a+b 混合范式）。
  *
  * 受控边界（**不取数、不发 mutation、不弹 toast、不读路由**）：
  * - 版本列表与详情数据经 props 注入：`versions` 由容器 `useClientVersions` 取；`detailVersion` 是

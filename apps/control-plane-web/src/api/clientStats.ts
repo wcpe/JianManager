@@ -2,12 +2,12 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /**
- * 客户端分发观测契约（FR-217 / FR-428）已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名，调用点无需改动。
+ * 客户端分发观测契约（FR-217 / FR-428）已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { ClientDistObservabilitySummary, ClientDistObservabilityCompare } from '@/lib/client-dist/client-dist-observability-contracts'
 
 /**
- * 客户端分发统计契约（FR-095）已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名，调用点无需改动。
+ * 客户端分发统计契约（FR-095）已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { StatsDayPoint, StatsVersion, StatsResult, StatsIP, ClientDistStats, ClientDistDistItem, ClientDistSeriesPoint, ClientDistObservability, ClientDistWindow } from '@/lib/client-dist/client-dist-stats-contracts'
 import type { ClientDistStats, ClientDistWindow, ClientDistObservability } from '@/lib/client-dist/client-dist-stats-contracts'

@@ -47,7 +47,7 @@ export function budgetBurnRatio(r: SLOResult | undefined): number | null {
  * `applicable=false`（窗口内无任何可用证据）时整块显示「不适用」，
  * 不渲染「误差预算 100% 已消耗」这类误导性数字（m1）。
  *
- * 受控视图（ADR-102 a 范式）：不取数——SLO 结果与拉取态由外壳注入。
+ * 受控视图（ADR-103 a 范式）：不取数——SLO 结果与拉取态由外壳注入。
  */
 export interface SLOSectionProps {
   /** SLO 结果；未取到为 undefined。 */

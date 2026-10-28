@@ -654,7 +654,7 @@ export function AlertChannelsTabView({
 }
 
 /**
- * 告警页的注入契约（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 告警页的注入契约（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  *
  * 受控边界：
  * - 三块数据（规则 / 通道 / 事件）与未读计数经 props 注入，容器调用

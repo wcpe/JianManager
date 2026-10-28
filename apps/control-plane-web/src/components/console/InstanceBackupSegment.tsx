@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next'
 const ACTIVE_POLL_MS = 3000
 
 /**
- * 实例「备份 · 定时」分区的应用接线层（ADR-102 b 范式）。
+ * 实例「备份 · 定时」分区的应用接线层（ADR-103 b 范式）。
  *
  * 分区本体是受控视图（见 components/views）；本层取两份列表（备份带「进行中轮询」）、存活判定、
  * 五个动作与「去创建定时任务」链接，把提示交给 toast。

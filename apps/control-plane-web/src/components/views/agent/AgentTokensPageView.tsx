@@ -190,7 +190,7 @@ export interface IssuedAgentTokenPlain {
 export type AgentTokensNotice = (kind: 'success' | 'error', message: string) => void
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  *
  * - 列表与三态经 props 注入（容器调 `useAgentTokens`）；失败文案含后端 message，故由容器算好经
  *   `errorText` 注入，视图只决定「加载 / 失败 / 空 / 表格」的判定优先级；

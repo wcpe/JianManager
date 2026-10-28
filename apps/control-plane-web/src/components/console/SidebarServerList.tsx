@@ -16,7 +16,7 @@ function isNotFound(reason: unknown): boolean {
 }
 
 /**
- * 侧栏常驻服务器列的应用接线层（ADR-102 a 范式）。
+ * 侧栏常驻服务器列的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层订阅收藏/最近存储、合并列表内实例的实时状态
  * （含 404 死链对账剔除）、解析节点名，并把打开与切换收藏接上 store 与路由。

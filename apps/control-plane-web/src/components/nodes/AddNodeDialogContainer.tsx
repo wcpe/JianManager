@@ -4,7 +4,7 @@ import { useIssueEnrollToken } from '@/api/nodes'
 import AddNodeDialog from '@/components/views/nodes/AddNodeDialog'
 
 /**
- * 「添加节点」对话框容器（ADR-102 b 范式）。
+ * 「添加节点」对话框容器（ADR-103 b 范式）。
  *
  * 签发动作与它两处提示（签发失败、复制结果）都在这里。视图拿回调返回值决定
  * 「是停在表单态还是切到结果态」——一次性凭据只此一次，必须交回视图。

@@ -10,7 +10,7 @@ import NodeJDKPanel, {
 } from '@/components/views/nodes/NodeJDKPanel'
 
 /**
- * FR-033 / FR-311 节点 JDK 管理 · 受控视图测（ADR-102 b 范式）。
+ * FR-033 / FR-311 节点 JDK 管理 · 受控视图测（ADR-103 b 范式）。
  *
  * 与迁移前的关键差异（**有意的取舍，勿当缺陷「修掉」**）：
  * 1. 列表与探测结果都由 props / 回调返回值提供，故「登记后列表出现新 JDK」改为
@@ -84,7 +84,7 @@ const probeOk: ProbeResultView = {
   javaHome: '/opt/jdks/custom-java-21',
 }
 
-describe('NodeJDKPanel（FR-033 · ADR-102 b 范式）', () => {
+describe('NodeJDKPanel（FR-033 · ADR-103 b 范式）', () => {
   it('展示已登记 JDK，探测通过后上报登记请求并回到列表分段', async () => {
     const user = userEvent.setup()
     const onProbe = vi.fn().mockResolvedValue(probeOk)

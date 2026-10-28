@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只注入配置快照与保存 mutation（受控化）。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只注入配置快照与保存 mutation（受控化）。
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { NodePMConfigSection as NodePMConfigSectionView } from '@/components/views/nodes/NodePMConfigSection'

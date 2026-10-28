@@ -132,7 +132,7 @@ export interface TasksLinkArgs {
 }
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 任务行、命中总数、列表三态、节点候选、展开任务的详情与取消在途 id 全部经 props 注入
  *   （容器调 `useTasks` / `useNodes` / `useTask` / `useCancelTask`）；
  * - 会触发重新取数的状态——筛选五维、增长窗口 `limit`、展开目标 `expandedId`——归容器；

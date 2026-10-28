@@ -41,7 +41,7 @@ function targetFromSearch(searchParams: URLSearchParams): DrillTarget {
 }
 
 /**
- * 统一监控页的应用接线层（ADR-102 a 范式）。
+ * 统一监控页的应用接线层（ADR-103 a 范式）。
  *
  * 页面本体是受控视图（见 components/views）；本层持有下钻目标/范围/粒度/对比选中/进程选择等状态、
  * 接七处取数（节点、实例精确查、进程 TOP、进程详情、处置动作、Bot 运行时、序列），

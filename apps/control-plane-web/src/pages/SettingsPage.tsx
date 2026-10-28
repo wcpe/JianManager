@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做平台配置取数/保存、客户端偏好（主题/语言）落盘与出站测试按钮接线。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做平台配置取数/保存、客户端偏好（主题/语言）落盘与出站测试按钮接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
@@ -20,7 +20,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 系统设置页容器（ADR-102 b 范式）：平台配置取数、保存 mutation、客户端偏好（主题/语言）落盘
+ * 系统设置页容器（ADR-103 b 范式）：平台配置取数、保存 mutation、客户端偏好（主题/语言）落盘
  * 与两处出站连通性测试入口的接线都在这里决定，分类导航、分类面板与未保存拦截交共享视图。
  *
  * 受控状态归容器：当前分类 `category`——它是「面板在看哪一组配置」的筛选语义。

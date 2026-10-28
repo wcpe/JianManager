@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做列表取数、进行中轮询、写动作与 toast 接线。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做列表取数、进行中轮询、写动作与 toast 接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -26,7 +26,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 备份管理页容器（ADR-102 b 范式）：备份列表取数与进行中轮询、实例选择、创建/恢复/删除三个
+ * 备份管理页容器（ADR-103 b 范式）：备份列表取数与进行中轮询、实例选择、创建/恢复/删除三个
  * 写动作与 toast 文案都在这里决定，表格、卡片、视图切换与两次二次确认交共享视图。
  *
  * 受控状态归属：`instanceId` 是备份列表与实例详情查询的键（一变即重新取数），故归本层；

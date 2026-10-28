@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
-// 契约类型随受控视图归包（ADR-102 a 范式）：API 层与包内组件共用同一份定义，
+// 契约类型随受控视图归包（ADR-103 a 范式）：API 层与包内组件共用同一份定义，
 // 避免包内组件为取类型而反向依赖应用的 @/api。
 import type { NodePorts } from '@/lib/nodes/node-ports'
 

@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import EditInstanceConfigDialog from '@/components/views/instances/EditInstanceConfigDialog'
 
 /**
- * FR-233 实例配置编辑器 · 受控视图测（ADR-102 b 范式）。
+ * FR-233 实例配置编辑器 · 受控视图测（ADR-103 b 范式）。
  *
  * 应用侧原本只有 1 个「能打开、Esc 能关」的用例；这里补的是**编辑语义**：
  * 初值回填、JDK「留空=解绑」、保存载荷、成功才关窗、失败保留弹窗并优先显示服务端 message。
@@ -77,7 +77,7 @@ async function pickJdk(user: ReturnType<typeof userEvent.setup>, label: string) 
   await user.click(await screen.findByText(label))
 }
 
-describe('EditInstanceConfigDialog（FR-233 · ADR-102 b 范式）', () => {
+describe('EditInstanceConfigDialog（FR-233 · ADR-103 b 范式）', () => {
   it('回填当前配置：启动命令、自动重启、未绑定 JDK 时显示系统默认', () => {
     renderDialog({ autoRestart: true })
 

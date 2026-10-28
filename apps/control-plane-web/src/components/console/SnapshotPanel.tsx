@@ -4,7 +4,7 @@ import { usePermissionsStore } from '@/stores/permissions'
 import SnapshotPanelView from '@/components/views/instances/SnapshotPanel'
 
 /**
- * 实例整机快照面板的应用接线层（ADR-102 b 范式）。
+ * 实例整机快照面板的应用接线层（ADR-103 b 范式）。
  *
  * 面板本体是受控视图（见 components/views）；本层取四样它不该自己拿的东西：快照列表（四态齐全）、
  * 实例运行态、两个权限位（`instance.write` 与 `instance.delete` 门槛不同）。

@@ -13,7 +13,7 @@ import type { ToolCallView } from '@/components/views/assistant/assistant-tool-s
 import type { AssistantEventFrame } from '@/api/assistant-chat'
 
 /**
- * 工具状态徽标 · 受控视图测（FR-519 §5，ADR-102）。
+ * 工具状态徽标 · 受控视图测（FR-519 §5，ADR-103）。
  *
  * 断言分两层，故意都用**同一份事件序列**驱动：
  *  1. 聚合层：三类事件（tool_call / tool_status / tool_result）按 callId 收敛成一行，

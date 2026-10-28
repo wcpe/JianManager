@@ -14,7 +14,7 @@ import MetricsSegmentView, {
 } from '@/components/views/instances/MetricsSegment'
 
 /**
- * 实例监控段的应用接线层（ADR-102 a 范式）。
+ * 实例监控段的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层取历史序列与实时指标、判定探针卡是否适用、
  * 接探针更新/版本切换，并把两张各需取数的卡（归因 / 容量预测）以插槽交回。

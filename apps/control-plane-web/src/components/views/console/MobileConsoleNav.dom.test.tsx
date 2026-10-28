@@ -10,7 +10,7 @@ import type { WorkspaceDef } from '@/lib/console/workspace-navigation'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 
 /**
- * 手机端底部导航 · 受控视图测（ADR-102）。
+ * 手机端底部导航 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**（FR-507 阶段 6）：底部格子一格一个**工作区**（≤5 个）、
  * 点开后面板展示该工作区下的分组与子项、点击子项收起面板、工作区激活高亮。

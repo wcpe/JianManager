@@ -4,7 +4,7 @@ import { usePermissionsStore } from '@/stores/permissions'
 import BinaryVersionPanelView from '@/components/views/instances/BinaryVersionPanel'
 
 /**
- * 实例「二进制版本」区的应用接线层（ADR-102 b 范式）。
+ * 实例「二进制版本」区的应用接线层（ADR-103 b 范式）。
  *
  * 面板本体是受控视图（见 components/views）；本层取三样它不该自己拿的东西：版本视图、实例运行态
  * （升级/回滚要求已停止）、写权限（来自 permissions store，属应用状态）。

@@ -4,7 +4,7 @@ import InstanceActivityFeed from '@/components/views/console/InstanceActivityFee
 import CrashDiagnostics from './CrashDiagnosticsCard'
 
 /**
- * 动态与告警接线层（ADR-102）：注入提示通道与崩溃现场区块（后者自带快照/趋势取数）。
+ * 动态与告警接线层（ADR-103）：注入提示通道与崩溃现场区块（后者自带快照/趋势取数）。
  * 消费方（InstanceConsolePage）零改动。
  */
 export default function InstanceActivityFeedConnected(

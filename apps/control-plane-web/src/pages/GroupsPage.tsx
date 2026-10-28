@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做组取数、三个写动作、URL 深链解析/写回与成员对话框接线。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做组取数、三个写动作、URL 深链解析/写回与成员对话框接线。
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -8,7 +8,7 @@ import { GroupsPageView } from '@/components/views/users/GroupsPageView'
 import type { GroupPanel } from '@/components/views/users/GroupsPageView'
 
 /**
- * 用户组管理页容器（ADR-102 b 范式）：组列表取数、创建/编辑/删除三个写动作、平台级删除门禁
+ * 用户组管理页容器（ADR-103 b 范式）：组列表取数、创建/编辑/删除三个写动作、平台级删除门禁
  * 与成员对话框的接线都在这里决定，列表、卡片与三个对话框交共享视图。
  *
  * 受控状态归容器：深链选中组与面板（`?group=<id>&panel=edit|members`）——它随路由变化、

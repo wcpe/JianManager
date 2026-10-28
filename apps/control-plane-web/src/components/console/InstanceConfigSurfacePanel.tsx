@@ -3,7 +3,7 @@ import { InstanceConfigSurfacePanel as InstanceConfigSurfacePanelView } from '@/
 import { useConfigSurface, useUpdateConfigSurface } from '@/api/configSurface'
 
 /**
- * 实例「关键配置」面板的应用接线层（ADR-102）。
+ * 实例「关键配置」面板的应用接线层（ADR-103）。
  *
  * 视图本体是受控视图（见 components/views）；本层取清单、把保存接到 mutation，并注入「打开文件」的路由链接，
  * 保留同路径的默认导出与同一套 props，调用点无需改动。

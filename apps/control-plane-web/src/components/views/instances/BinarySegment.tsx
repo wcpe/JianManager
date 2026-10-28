@@ -14,7 +14,7 @@ import { Panel } from '@jianmanager/ui/components/panel'
  * 避免同一实例的 `process` 与 `health` 两个页签重复渲染（minor 5 单一归属）。
  * 文件目录管理（files 能力）与基础 CPU 监控由 `files` 页签保留，不在此重复。
  *
- * 受控视图（ADR-102）：进程指标块自带取数、由外壳注入；启动参数编辑所需的数据与
+ * 受控视图（ADR-103）：进程指标块自带取数、由外壳注入；启动参数编辑所需的数据与
  * 保存动作经 props 透传。
  */
 export interface BinarySegmentProps {

@@ -10,7 +10,7 @@ import { Input } from '@jianmanager/ui/components/input'
 /**
  * 管理员签发一次性成员邀请；链接只在本次响应的对话框内显示。
  *
- * 受控视图（ADR-102 b 范式）：不发请求——创建经 `onCreate` 上报，外壳负责发请求与失效缓存。
+ * 受控视图（ADR-103 b 范式）：不发请求——创建经 `onCreate` 上报，外壳负责发请求与失效缓存。
  * 表单态、错误展示与「已创建则只显示链接」的切换留在视图内。
  */
 export interface CreateInvitationDialogProps {

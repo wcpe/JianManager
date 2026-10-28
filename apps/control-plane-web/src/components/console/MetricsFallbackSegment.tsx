@@ -6,7 +6,7 @@ export { DirectProbeSummary } from '@/components/views/instances/MetricsFallback
 export type { DirectProbeSummaryData } from '@/components/views/instances/MetricsFallbackSegment'
 
 /**
- * 轻量监控视图的应用接线层（ADR-102 a 范式）。
+ * 轻量监控视图的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层取进程指标后注入。
  * 直探摘要暂不传（FR-446/447 编排未落地）——视图会显式呈现「不可用」，而非落回探针伪值。

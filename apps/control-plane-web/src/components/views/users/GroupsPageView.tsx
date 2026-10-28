@@ -64,7 +64,7 @@ export interface GroupsMembersDialogArgs {
 }
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast、不读写路由**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读写路由**。
  * - 组列表经 props 注入（容器调 `useGroups`）；
  * - 三个写动作（创建组、编辑组、删除组）以回调上报，由容器执行 mutation 并决定文案；
  *   创建/编辑失败请抛错，视图内对话框据此回显服务端 message；

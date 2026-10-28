@@ -9,7 +9,7 @@ import type { WorkspacePreset } from '@/lib/console/workspace-preset'
 import { DirectorSceneStrip } from '@/components/views/console/DirectorSceneStrip'
 
 /**
- * 工作区导播台页面（FR-168 / ADR-035 / design §9）· 受控视图（ADR-102）。
+ * 工作区导播台页面（FR-168 / ADR-035 / design §9）· 受控视图（ADR-103）。
  *
  * OBS 式多场景瞬切：缩略图条选场景，点击 / 数字键 / 方向键**瞬切**，可定时轮播。
  * 核心是 ADR-035 的预热并发模型——

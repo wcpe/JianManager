@@ -9,7 +9,7 @@ import { loginMockUserAs } from '@/test/auth'
 import { Role } from '@/lib/shared/danger'
 
 /**
- * FR-468 实例二进制版本区 · 受控视图测（ADR-102 b 范式）。
+ * FR-468 实例二进制版本区 · 受控视图测（ADR-103 b 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。状态类断言锚在 data-testid 上
  * （文案面很宽，绑它们会让测试变脆）；而「确认按钮」必须按文案精确定位——弹窗里同时存在
@@ -91,7 +91,7 @@ beforeEach(() => {
   loginMockUserAs(Role.GroupAdmin)
 })
 
-describe('BinaryVersionPanel（FR-468 · ADR-102 b 范式）', () => {
+describe('BinaryVersionPanel（FR-468 · ADR-103 b 范式）', () => {
   it('渲染当前版本与上一版本', () => {
     renderPanel()
     expect(screen.getByTestId('binary-version-current')).toHaveTextContent('1.1.0')

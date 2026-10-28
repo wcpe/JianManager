@@ -34,7 +34,7 @@ export interface NodeProxyView {
  * 真相源 = CP DB；保存经心跳下发到 Worker，节点运行时重建出站 client（免改 worker.yml/重启）。
  * 含凭据的代理地址后端已脱敏回显；离线节点标注「待下发」（下次心跳生效）。
  *
- * 受控视图（ADR-102 b 范式）：数据经 props 注入，保存以 `onSave` 上报，成功/失败文案由外壳决定。
+ * 受控视图（ADR-103 b 范式）：数据经 props 注入，保存以 `onSave` 上报，成功/失败文案由外壳决定。
  */
 export interface NodeProxyPanelProps {
   /** 代理视图；外壳取数后注入。 */

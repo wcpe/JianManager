@@ -13,7 +13,7 @@ import type { PaletteEntry } from '@/lib/console/command-palette'
 import CommandPaletteView from '@/components/views/instances/CommandPalette'
 
 /**
- * 全局命令面板的应用接线层（ADR-102 a 范式）。
+ * 全局命令面板的应用接线层（ADR-103 a 范式）。
  *
  * 面板本体是受控视图（见 components/views）；本层持有开合（含全局 Ctrl/⌘+K 监听）、四类数据源
  * （实例走服务端搜索、节点、页面来自导航配置、操作静态）、以及「执行结果」的跳转与副作用。

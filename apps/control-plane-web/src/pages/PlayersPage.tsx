@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做四块数据取数、SSE 订阅、写动作、角色门禁注入与 toast。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做四块数据取数、SSE 订阅、写动作、角色门禁注入与 toast。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -11,7 +11,7 @@ import { PLAYER_TABS, PlayersPageView } from '@/components/views/players/Players
 import type { PlayerActionRequest, PlayerTab } from '@/components/views/players/PlayersPageView'
 
 /**
- * 玩家管理页容器（ADR-102 b 范式）：四块数据取数、实时事件 SSE 订阅、全部写动作与解封的角色门禁
+ * 玩家管理页容器（ADR-103 b 范式）：四块数据取数、实时事件 SSE 订阅、全部写动作与解封的角色门禁
  * 在这里决定；四个 Tab 的展示、Tab 选中与各区块内的本地 UI 状态交共享视图。
  *
  * 上提的受控状态（都是「会触发取数/换订阅」的查询语义；原先随 Tab 卸载重置，上提后跨 Tab 切换保留）：

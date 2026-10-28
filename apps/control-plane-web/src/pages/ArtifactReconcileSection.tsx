@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做对账设置/运行/差异的取数与处置动作接线。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做对账设置/运行/差异的取数与处置动作接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'

@@ -7,7 +7,7 @@ import type { MetricRange } from '@jianmanager/ui'
 export { AttributionResultView } from '@/components/views/instances/AttributionCard'
 
 /**
- * 性能归因卡的应用接线层（ADR-102 a 范式）。
+ * 性能归因卡的应用接线层（ADR-103 a 范式）。
  *
  * 卡片本体是受控视图（见 components/views）；本层持有「是否已分析过」并接按需取数。
  * 保留同路径的导出与同一套 props，调用点无需改动。

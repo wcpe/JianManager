@@ -2,12 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /**
- * 发压容量与预检契约已回迁应用侧，双侧共用（ADR-102）；对外保留原导出名，调用点无需改动。
+ * 发压容量与预检契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { BotLoadNodeCapacity, BotLoadAllocation, BotLoadPreflightResult } from '@/lib/bot-load/bot-load-types'
 import type { BotLoadNodeCapacity, BotLoadPreflightResult } from '@/lib/bot-load/bot-load-types'
 
-// 命令/曲线/阈值类型已回迁应用侧（原 ADR-102 迁包已撤销）；此处转出，调用点零改动。
+// 命令/曲线/阈值类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
 import type { BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@/lib/bot-load/bot-load-types'
 export type { BotLoadCommand, BotLoadCommandSchedule, BotLoadProfile, BotLoadThresholds } from '@/lib/bot-load/bot-load-types'
 

@@ -17,7 +17,7 @@ type Reachability = 'reachable' | 'unreachable' | 'timeout' | 'unknown'
  * 当前可达性由探针/直探连接态派生（connected=探针在位；available=本次取回成功；
  * 在位但取不回 = 超时），并在界面诚实标注口径（见 `health.probeHint` 文案）。
  *
- * 受控视图（ADR-102 a 范式）：不取数——实例状态、端口与连接态经 props 注入。
+ * 受控视图（ADR-103 a 范式）：不取数——实例状态、端口与连接态经 props 注入。
  * 「实例尚未加载」与「实例存在但字段为空」是两件事，故用 `status` 是否给出区分：
  * 前者归「未知」，后者照常按未运行/无端口呈现。
  */

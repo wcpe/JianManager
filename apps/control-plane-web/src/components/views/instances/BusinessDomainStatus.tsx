@@ -19,7 +19,7 @@ import { formatRelativeTime } from '@/lib/shared/relative-time'
  * 调用/失败计数、最近调用时间、manifest 指纹——不做业务语义归类，也不解析 manifest 内容。
  * 「查看 manifest」展开的是探针透传的 manifest 原文（本组件只做 `JSON.stringify` 排版）。
  *
- * 受控视图（ADR-102 a 范式）：不取数、不发请求——域状态与 manifest 由外壳注入，
+ * 受控视图（ADR-103 a 范式）：不取数、不发请求——域状态与 manifest 由外壳注入，
  * 「刷新」经 `onRefresh` 上报；抽屉展开态是纯 UI 状态，留在这里。
  *
  * 与 manifest 动作台（`components/views/instances/BusinessSegment.tsx`）的分工：

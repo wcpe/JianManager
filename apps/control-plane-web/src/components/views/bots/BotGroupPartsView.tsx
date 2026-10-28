@@ -43,7 +43,7 @@ const BEHAVIOR_OPTIONS = ['idle', 'guard', 'follow', 'patrol'] as const
 /**
  * 分组操作区（卡片/行复用）：在控制台打开（仅实例维度）+ 单组批量菜单。
  *
- * 受控边界（ADR-102 b 范式）：不取数、不弹 toast。批量下发经 `onRunBatch` 上报（容器接
+ * 受控边界（ADR-103 b 范式）：不取数、不弹 toast。批量下发经 `onRunBatch` 上报（容器接
  * `useBotBatch` 并弹提示），在途态经 `pending` 注入；「在控制台打开」只上报意图，
  * 路由跳转由容器注入（包内不依赖 react-router）。
  */

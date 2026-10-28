@@ -73,7 +73,7 @@ function ForecastRow({ item }: { item: ForecastResult }) {
  * 容量预测卡片（FR-464）：Theil–Sen 稳健线性外推 + 80% 置信区间，按需查询（60s 刷新）。
  * 只在「有增长且显著」时给出耗尽时间；无增长/样本不足/缺上限一律显式标注，不伪造预测。
  *
- * 受控视图（ADR-102 a 范式）：不取数——预测结果与拉取态由外壳注入。
+ * 受控视图（ADR-103 a 范式）：不取数——预测结果与拉取态由外壳注入。
  */
 export interface CapacityForecastCardProps {
   /** 预测结果行。 */

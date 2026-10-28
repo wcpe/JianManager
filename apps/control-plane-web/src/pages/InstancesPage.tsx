@@ -1,4 +1,4 @@
-// 列表行展示层已回迁应用侧（原 ADR-102 迁包已撤销）：平铺表与分组树表共用的行渲染件在包内；
+// 列表行展示层已回迁应用侧（迁包已撤销，见 ADR-103）：平铺表与分组树表共用的行渲染件在包内；
 // 本层保留取数（无限搜索 / 聚合 / 节点 / 群组 / 分组树）、URL 状态、批量选择与各弹窗目标的装配。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
@@ -87,7 +87,7 @@ import { InstanceGroupHeaderContent } from '@/components/views/instances/Virtual
 export { InstanceRowMenu }
 
 /** Radix Select 不允许空字符串 value，用哨兵值表示「全部 / 不过滤」。 */
-/** 代理行内联后端摘要的取数接线层（ADR-102）：视图已入包，此处只做取数与跳转注入。 */
+/** 代理行内联后端摘要的取数接线层（ADR-103）：视图已入包，此处只做取数与跳转注入。 */
 function BackendsInlineContainer({ proxyId }: { proxyId: number }) {
   const { data, isLoading } = useRegistrations(proxyId)
   const navigate = useNavigate()
@@ -900,7 +900,7 @@ export default function InstancesPage() {
   }
 
   /**
-   * 行装配（ADR-102）：行展示件已入包（平铺表与分组树表共用），此处只注入数据与回调。
+   * 行装配（ADR-103）：行展示件已入包（平铺表与分组树表共用），此处只注入数据与回调。
    * 逐行判别留在应用侧：节点名（查节点表）、代理画像（FR-445）、搭建中、运行态漂移（FR-471）、
    * 三个动作的按 id 在途态（别的行在提交不该禁用本行）。
    * proxy 内联展开与批量勾选是跨行共享状态，故仍由本页持有——虚拟窗口滚动会卸载行，

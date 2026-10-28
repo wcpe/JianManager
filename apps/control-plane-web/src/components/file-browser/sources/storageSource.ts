@@ -3,7 +3,7 @@ import api from '@/api/client'
 import type { StorageFileEntry } from '@/api/storage'
 
 /**
- * 平台存储数据源接线层（ADR-102）：把取数注入包内构造器，消费方零改动。
+ * 平台存储数据源接线层（ADR-103）：把取数注入包内构造器，消费方零改动。
  */
 export function storageFileSource(messages?: { noPreview?: string }) {
   return buildStorageFileSource({

@@ -1,6 +1,6 @@
 /**
  * @file InstanceRowMetrics：实例列表行内的「实时指标」与「活动心跳」两个单元格（平铺表与分组树表共用）。
- *       纯展示件（ADR-102 b 范式）：不取数、不发请求——数据由容器（InstancesPage）按**可见窗口**
+ *       纯展示件（ADR-103 b 范式）：不取数、不发请求——数据由容器（InstancesPage）按**可见窗口**
  *       批量取数后逐行注入；缺测一律以 `--` 呈现，不隐藏列也不造数。
  * @input InstanceMetricSnapshot（本文件导出，取数侧 useInstanceWindowMetrics 派生）、
  *        TableCell 原语、fmtBytes（lib/metrics/metrics-format，图表紧凑口径）、翻译上下文

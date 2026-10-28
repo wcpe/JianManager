@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做平台管理员门禁、按窗口取数、刷新与跳转接线。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做平台管理员门禁、按窗口取数、刷新与跳转接线。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -23,7 +23,7 @@ export { WINDOW_PRESETS }
 /**
  * MCP 活动运维页（FR-391 / ADR-096）容器：平台管理员门禁、按窗口取数（端点无会话可观测，
  * 靠轮询兜底实时性）、手动刷新、端点复制提示与页头两个跳转入口都在这里决定，
- * 表格与三态展示交共享视图（ADR-102）。保留同路径默认导出，路由表无需改动。
+ * 表格与三态展示交共享视图（ADR-103）。保留同路径默认导出，路由表无需改动。
  */
 export default function McpActivityPage() {
   const { t } = useTranslation()

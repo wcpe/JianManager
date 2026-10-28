@@ -56,7 +56,7 @@ function renderRowIndexes(range: { start: number; end: number }, draggingRowInde
  * - **拖实例** = 加该实例默认卡组；**拖功能** = 加单卡；**多选批量拖** = 一次拼监看墙。
  * - 多选用复选框（点行切换选中），选中后拖任一选中实例即批量拖。
  *
- * 受控视图（ADR-102 a 范式）：不取数 —— 行数据、分页状态与搜索词都由外壳注入；
+ * 受控视图（ADR-103 a 范式）：不取数 —— 行数据、分页状态与搜索词都由外壳注入；
  * 视图只产出拖拽载荷（`lib/instance-library` 纯逻辑序列化）与已防抖的搜索词。
  * 落位/去重在 store `dropToSuper`。
  */

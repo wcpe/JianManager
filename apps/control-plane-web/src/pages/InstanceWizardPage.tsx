@@ -17,7 +17,7 @@ import { useNodeJDKs } from '@/api/jdks'
 import { useConsoleStore } from '@/stores/console'
 
 /**
- * 创建实例向导接线层（ADR-102）：取数、Docker 检测、创建请求与导航留在这里，
+ * 创建实例向导接线层（ADR-103）：取数、Docker 检测、创建请求与导航留在这里，
  * 视图（包内 `InstanceWizardPage`）只做受控渲染。
  */
 export default function InstanceWizardPage() {

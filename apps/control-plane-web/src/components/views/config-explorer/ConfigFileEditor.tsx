@@ -9,7 +9,7 @@ import EditorShortcutsHelp from '@/components/views/explorer/editor/EditorShortc
 import type { ConfigReadResult, CrossCheckIssue, FieldSchema, ModelSchema, ValidationIssue } from '@/lib/config-explorer/config-contracts'
 
 /**
- * 单文件配置编辑器（FR-071）· 受控视图（ADR-102）。
+ * 单文件配置编辑器（FR-071）· 受控视图（ADR-103）。
  *
  * 在共享资源管理器（FR-070）的「配置」语义下取代默认 CodeEditor 面板：
  * - schema 文件：文本 ↔ 表单双模式（FR-031 保留），表单走字段级补丁（保留注释）；

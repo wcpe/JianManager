@@ -19,7 +19,7 @@ import { cn } from '@jianmanager/ui'
  * 故一律经统一危险操作确认（FR-059 DangerConfirm）后下发，绝不直发请求。
  * 文案全部走 i18n、配色走 `--status-warning` 令牌，明暗双主题自适应。
  *
- * 受控（ADR-102）：接管动作经 `onAdopt` 上报、在途态经 props 注入；
+ * 受控（ADR-103）：接管动作经 `onAdopt` 上报、在途态经 props 注入；
  * 三处漂移信息（pid / cmdline）用结构化子集声明，外壳传 `RuntimeDriftInfo` 会结构兼容。
  */
 

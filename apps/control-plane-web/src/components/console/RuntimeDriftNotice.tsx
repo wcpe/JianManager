@@ -3,7 +3,7 @@ import type { RuntimeDriftInfo } from '@/lib/runtime-assets/runtime-drift'
 import { RuntimeDriftAdoptButton as RuntimeDriftAdoptButtonView, RuntimeDriftBanner as RuntimeDriftBannerView } from '@/components/views/instances/RuntimeDriftNotice'
 
 /**
- * 运行态漂移提示的应用接线层（ADR-102）。
+ * 运行态漂移提示的应用接线层（ADR-103）。
  *
  * 三个导出里 `RuntimeDriftBadge` 本就是纯展示，直接从组件库再导出；
  * 另两个含「接管」写操作，由本层接上 mutation。保留同名同路径的导出，调用点无需改动。

@@ -25,7 +25,7 @@ export interface ProcessMetricsView {
  * - `threads` 仅 ServerProbe（JVM）提供；节点侧对非 JVM 进程恒返回 0（伪值），故无数据时
  *   显「—」而非 0。
  *
- * 受控视图（ADR-102 a 范式）：不取数——指标经 props 注入，面板只做呈现与格式化。
+ * 受控视图（ADR-103 a 范式）：不取数——指标经 props 注入，面板只做呈现与格式化。
  *
  * TODO(FR-450 §2.3.1)：文件句柄（fd）与重启次数尚无数据源——需在 worker 指标通道补采
  * （`GetInstanceMetricsResponse` 增可用标记字段）后再落到本面板；当前不伪造占位值。
