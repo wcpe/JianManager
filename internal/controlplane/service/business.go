@@ -30,11 +30,13 @@ const (
 	manifestAction     = "manifest"
 )
 
-// BusinessService 是 JBIS 业务对接的 CP 编排脊柱（FR-116，见 ADR-026/027）。
+// BusinessService 是 JM 的**纯透传通道**编排（FR-116；FR-521 起见 ADR-106）。
 //
-// 它把前端发起的业务动作（`domain.action` + 结构化 payload）经既有插件桥（ADR-016）下发到
+// 它把前端发起的动作（`domain.action` + 结构化 payload）经既有插件桥（ADR-016）下发到
 // 目标实例的 ServerProbe 业务对接层（BusinessHost），由探针侧 per-plugin Provider 执行并回执。
 // CP **插件无关**：只认 domain/action/payload 信封，不理解具体业务语义；业务结果 JSON 原样透传给前端。
+// ADR-106 起 JM 不做任何业务——不定义动作名、不规定 payload/output 字段、不解析 manifest 内容，
+// 也不再存储任何业务数据（业务数据由下游业务台持有）。
 //
 // 降级即默认（ADR-026）：实例无节点/节点未连/探针未连/域不可用/执行失败，一律降级为
 // available=false + 友好提示，绝不 5xx、绝不拖垮调用方（实例不存在与参数非法除外，返回 error 供路由分流）。
@@ -48,28 +50,28 @@ func NewBusinessService(db *gorm.DB, pool *cpgrpc.ClientPool) *BusinessService {
 	return &BusinessService{db: db, pool: pool}
 }
 
-// WriteContext 业务高危写的操作者上下文与幂等键（FR-121，见 ADR-029）。
+// WriteContext 高危写的操作者上下文与幂等键（FR-121，见 ADR-029）。
 //
-// CP 在写动作（manifest readOnly=false）下发前，把这些字段注入 payload JSON，
-// 经探针桥透传给探针 Provider：
-//   - TaskID 作业务幂等键（探针→mce BusinessOrder(taskId)，FR-120 缺失即拒绝）；对「同一逻辑操作的重试」必须稳定。
-//   - Operator/OperatorID/NodeID/Reason 映射进插件审计流水（mce operator/reason），平台侧与插件侧审计可对账追责。
+// CP 在下发前把这些字段注入 payload JSON，经探针桥透传给探针 Provider
+// （对应键名由 JBIS 约定统一，JM 不解释其业务含义，见 ADR-106）：
+//   - TaskID 作通道幂等键，对「同一逻辑操作的重试」必须稳定。
+//   - Operator/OperatorID/NodeID/Reason 供下游对账追责，平台侧与插件侧审计可串联。
 //
 // 注入策略：仅当 payload 未显式带同名键时写入（不覆盖业务方入参）。
 type WriteContext struct {
 	// TaskID 业务幂等键。空时由 Dispatch 兜底生成 UUID（保证探针不因缺 taskId 拒绝，但失去重试去重保证）。
 	TaskID string
-	// Operator 操作者用户名（透传进 mce 流水 operator，追责到真人）。
+	// Operator 操作者用户名（透传进插件侧流水，供下游追责到真人）。
 	Operator string
 	// OperatorID 操作者用户 ID（平台侧与插件侧审计对账）。
 	OperatorID uint
 	// NodeID 实例所属节点 UUID（「哪个节点」维度）。
 	NodeID string
-	// Reason 操作原因（可选，「为什么」，透传进 mce 流水 reason）。
+	// Reason 操作原因（可选，「为什么」，原样透传给下游）。
 	Reason string
 }
 
-// 业务写注入进 payload 的 JBIS 约定键名（与探针 Provider / 下游 FR-122/125 约定一致，见 ADR-029）。
+// 高危写注入进 payload 的约定键名（JBIS 信封约定，见 ADR-029；JM 只负责原样注入、不解释语义）。
 const (
 	payloadKeyTaskID     = "taskId"
 	payloadKeyOperator   = "operator"
@@ -99,6 +101,31 @@ type BusinessResult struct {
 // 解析 instance→node→gRPC client → SendPluginCommand（携 domain/action/payload_json）；任何不可达环节
 // 一律降级为 available=false + 友好提示（不返回 error）。实例不存在 / 参数非法返回 error 供路由分流。
 func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON string) (*BusinessResult, error) {
+	return s.dispatchWithTimeout(instanceID, domain, action, payloadJSON, businessDispatchTimeout)
+}
+
+// DispatchWithTimeout 与 Dispatch 相同，但使用调用方指定的单次往返超时。
+//
+// 【为什么需要它】businessDispatchTimeout 是给「单条治理命令」定的值（8s，与 Worker 侧
+// 等探针回执的 5s 同量级）。但有些**只读**通道的单次往返天然更慢——典型是全量快照
+// （FR-525 对账，规格 §5 明确要求单实例 60s，因为「快照可能慢」）。
+// 若这些通道复用 Dispatch，它会先被 8s 掐断，调用方配的更大超时形同虚设。
+//
+// 刻意做成独立方法而不是给 Dispatch 加参数：既有调用方（单实例下发、批量命令、
+// manifest 查询）的超时语义不该被顺手改动——超时是安全边界，不是可调风格。
+func (s *BusinessService) DispatchWithTimeout(
+	instanceID uint, domain, action, payloadJSON string, timeout time.Duration,
+) (*BusinessResult, error) {
+	if timeout <= 0 {
+		timeout = businessDispatchTimeout
+	}
+	return s.dispatchWithTimeout(instanceID, domain, action, payloadJSON, timeout)
+}
+
+// dispatchWithTimeout 是 Dispatch 与 DispatchWithTimeout 的共同实现。
+func (s *BusinessService) dispatchWithTimeout(
+	instanceID uint, domain, action, payloadJSON string, timeout time.Duration,
+) (*BusinessResult, error) {
 	domain = strings.TrimSpace(domain)
 	action = strings.TrimSpace(action)
 	if domain == "" || action == "" {
@@ -111,7 +138,7 @@ func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON 
 	if result.Error != "" {
 		return result, nil
 	}
-	return s.sendToProbe(inst, node, result, payloadJSON), nil
+	return s.sendToProbe(inst, node, result, payloadJSON, timeout), nil
 }
 
 // DispatchWrite 下发一条高危业务写动作（FR-121，见 ADR-029）。
@@ -142,7 +169,7 @@ func (s *BusinessService) DispatchWrite(instanceID uint, domain, action, payload
 	if injErr != nil {
 		return nil, ErrInvalidBusinessCommand
 	}
-	return s.sendToProbe(inst, node, result, injected), nil
+	return s.sendToProbe(inst, node, result, injected, businessDispatchTimeout), nil
 }
 
 // resolveTarget 解析实例与节点，构造初始结果。
@@ -169,14 +196,22 @@ func (s *BusinessService) resolveTarget(instanceID uint, domain, action string) 
 }
 
 // sendToProbe 执行 gRPC 下发并映射响应（payload 已是最终形态）。节点未连入降级为 available=false。
-func (s *BusinessService) sendToProbe(inst model.Instance, node model.Node, result *BusinessResult, payloadJSON string) *BusinessResult {
+//
+// timeout 是本次往返的 gRPC 超时：单条命令用 businessDispatchTimeout（8s），
+// 慢的只读通道（FR-525 对账）由调用方传入更大的值。<=0 时回落到默认值。
+func (s *BusinessService) sendToProbe(
+	inst model.Instance, node model.Node, result *BusinessResult, payloadJSON string, timeout time.Duration,
+) *BusinessResult {
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		result.Error = "节点未连接"
 		return result
 	}
+	if timeout <= 0 {
+		timeout = businessDispatchTimeout
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), businessDispatchTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	resp, err := client.Worker.SendPluginCommand(ctx, &workerpb.SendPluginCommandRequest{
