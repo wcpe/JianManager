@@ -149,6 +149,14 @@ CREATE TABLE IF NOT EXISTS source_wal (
   replay       INTEGER NOT NULL DEFAULT 0,
   body         TEXT,
   fp           INTEGER NOT NULL,
+  -- ack_body_digest（2026-10-28）：该条目被 ACK 时那份正文的 SHA-256（32 字节）。
+  -- 为什么需要：WALEntry.acknowledged 是进程内态（json "-"），重启即丢；而补段路径
+  -- CaptureAcknowledgedPrefix 要求它非 nil。若只凭账本的 RequestDoneRanges（位置区间，
+  -- 且永不裁剪）重建，位置空间一旦被复用（重读/槽位复用/回放替换），旧区间会把从未投递的
+  -- 新正文当成已 ACK，再被 reclaimEntryQualifiedLocked 放行，导致数据被剪掉。
+  -- 本列是精确凭据：重启时只有「当前正文重算的摘要 == 本列」才允许重建 ACK。
+  -- 未 ACK 的条目本列 NULL（旧库升级后既有行同样为 NULL，即不重建，default-deny）。
+  ack_body_digest BLOB,
   PRIMARY KEY (key, seq, event_id, record_start, record_end)
 );
 -- FR-498（2026-10-27）：**不**再建 idx_source_wal_key（那是一条 CREATE INDEX ON source_wal(key)）。
@@ -268,6 +276,11 @@ type WALRow struct {
 	// 调用方必须保证「同一 (Key, EventID, RecordStart, RecordEnd) 下 FP 相同 ⇒ Body 相同」。
 	// 引用条目（Body 为 nil）填 0。
 	FP uint64
+	// AckBodyDigest 是该条目**被 ACK 时那份正文**的 SHA-256（nil = 从未 ACK）。
+	//
+	// 语义与 acquire.WALEntry.acknowledged.BodyDigest 严格对应：重启恢复时用它做
+	// 「正文未被改写」的精确判据（见 acquire/wal_restore_ack.go）。
+	AckBodyDigest []byte
 }
 
 // BatchRow 是 delivery_batch 表的一行。Ordinal 是该源内批次的序号（从 0 起）。
@@ -316,7 +329,7 @@ var loadColumns = [tableCount][]string{
 	tblProjection:      {"key", "generation", "events_stored_through", "pending", "updated_at"},
 	tblInstanceBinding: {"uuid", "namespace", "generation", "mode", "work_dir", "rule_key", "relative_path"},
 	tblSourceAux:       {"key", "config", "payload"},
-	tblSourceWAL:       {"key", "seq", "event_id", "record_start", "record_end", "appended", "durable", "replay", "body"},
+	tblSourceWAL:       {"key", "seq", "event_id", "record_start", "record_end", "appended", "durable", "replay", "body", "ack_body_digest"},
 	tblDeliveryBatch:   {"key", "ordinal", "start_pos", "end_pos", "state"},
 }
 
@@ -446,15 +459,17 @@ var specs = [tableCount]tableSpec{
 		fpSelf:    true,
 		// replay 列（ACQ-1）承载「该条目来自恢复期回放/补账」的口径，与 appended/durable 同为
 		// 变更驱动：不随 UPSERT 刷新的话，同一条目由常规路径再次写入时会把已有回放标记抹掉。
-		upsert: `INSERT INTO source_wal (key, seq, event_id, record_start, record_end, appended, durable, replay, body, fp)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		upsert: `INSERT INTO source_wal (key, seq, event_id, record_start, record_end, appended, durable, replay, body, fp, ack_body_digest)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
-				appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp`,
+				appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp,
+				ack_body_digest=excluded.ack_body_digest`,
 		upsertBatch: "INSERT INTO source_wal (%s) VALUES %s",
 		columns: []string{"key", "seq", "event_id", "record_start", "record_end", "appended", "durable",
-			"replay", "body", "fp"},
+			"replay", "body", "fp", "ack_body_digest"},
 		onConflict: `ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
-			appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp`,
+			appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp,
+			ack_body_digest=excluded.ack_body_digest`,
 		deleteStmt: "DELETE FROM source_wal WHERE key = ? AND seq = ? AND event_id = ? AND record_start = ? AND record_end = ?",
 		// 排序键必须与主键 (key, seq, event_id, record_start, record_end) 同序：SQLite 只有在
 		// ORDER BY 命中主键索引前缀时才省掉排序。此前这里从 seq 起排（缺 key），索引前缀对不上，

@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
@@ -303,3 +305,103 @@ const (
 	// 「按老清单重写」正是饥饿的成因；当成「没有缺失」又会谎报完成。
 	confirmInconclusive
 )
+
+// beyondHotRetentionForEvents 报告这批事件是否**全部**落在已超出热层保留期的 UTC 天。
+//
+// 为什么需要（2026-10-29 生产停采最后一环）：补段要求「从 VL 取回已发布证据」，而
+// 超出保留期的天在 VL 里物理上不存在（VL 对超期数据返回 200 但立即丢弃，已实测）。
+// 这类批次补段**永远**不会成功，只会让 reclaim 卡死、WAL 撞上限、整源停采。
+//
+// 判据取「全部」而非「任一」：只要还有一天在窗口内，就应该正常走补段（那天的证据是可取的）。
+// 空批次返回 false（无事可做，不触发放弃）。
+//
+// `hotRetention <= 0`（未配置）⇒ 恒 false：与 `beyondHotRetention` 同一取舍，
+// 没配置就放弃数据比不修更糟。
+func (m *Manager) beyondHotRetentionForEvents(source SourceConfig, events []logtypes.Event) bool {
+	if m == nil || m.hotRetention <= 0 || len(events) == 0 {
+		return false
+	}
+	now := time.Now()
+	for _, event := range events {
+		day, err := eventUTCDay(source, event)
+		if err != nil || day == "" {
+			slog.Info("超保留期判定：事件天判不出，不放弃",
+				"source", source.LogSourceID, "err", err, "eventTime", event.EventTimeUTC)
+			return false // 判不出天就不放弃（保守方向）
+		}
+		if !m.beyondHotRetention(day, now) {
+			slog.Info("超保留期判定：存在窗口内的天，走正常补段",
+				"source", source.LogSourceID, "day", day,
+				"boundary", hotRetentionBoundary(now, m.hotRetention).UTC().Format(time.RFC3339))
+			return false // 有一天在窗口内 ⇒ 走正常补段
+		}
+	}
+	return true
+}
+
+// abandonBeyondHotRetention 把「VL 里物理上不存在」的这段前缀如实登记为永久丢失，
+// 并让回收链跨过它。
+//
+// 与 `AbandonGapsThrough` 的分工：后者处理**已登记的缺口**；这里的形态是
+// 「WAL 有数据、账本说已确认投递、但 VL 里取不到已发布证据」，缺口列表里未必有对应条目
+// （生产实测：这些源的缺口全是零宽的 ARCHIVE_CONTENT_UNKNOWN，不覆盖那 2 万条 WAL）。
+// 所以直接按**位置区间**落凭据，语义与缺口放弃一致（都会被 `walRecordAbandoned` 认到）。
+//
+// 为什么要 operator：`AbandonGapsThrough` 拒绝空操作人（放弃是唯一允许回收链跨过
+// 永远补不上的空洞的动作，无痕放弃等于给静默丢日志开后门）。这里用固定的系统操作人，
+// 明确的语义是「系统按保留期事实自动裁定」，与人工裁定可区分（都进 Abandonments 凭据）。
+func (m *Manager) abandonBeyondHotRetention(p *pipeline.Pipeline, source SourceConfig, from, to uint64) error {
+	if p == nil || p.Ledger() == nil || to <= from {
+		return nil
+	}
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	entry := p.Ledger().Get(p.Key())
+	if entry == nil {
+		return nil
+	}
+	// 用 AbandonGapsThrough 落凭据：它会把**结束位置 <= to** 的未解决缺口一并标记为
+	// PERMANENTLY_LOST（本场景下这些零宽缺口本来也属于永久丢失类），并把凭据写进
+	// entry.Abandonments ⇒ 随后 `walRecordAbandoned` 就能让回收链跨过这段。
+	//
+	// 若该源此刻没有任何未解决缺口，AbandonGapsThrough 返回 (0, nil) 且不写凭据
+	// （它刻意避免「什么都没放弃的空裁定」）——那种情况下我们要自己补一条纯位置凭据。
+	resolved, err := p.Ledger().AbandonGapsThrough(p.Key(), to, ledger.GapAbandonment{
+		ReasonCode: ledger.GapReasonPermanentlyLost,
+		Reason:     "data beyond VictoriaLogs retention period",
+		Detail: "VL accepts but silently drops data older than -retentionPeriod; this prefix " +
+			"can never be proven published, so the reclaim chain must cross it",
+		Operator: "system:retention-window",
+		Through:  to,
+	})
+	if err != nil {
+		return err
+	}
+	// 位置区间本身也必须有凭据：回收链（`walRecordAbandoned`）认的是 Abandonments 里的**区间**，
+	// 而 `AbandonGapsThrough` 只在「有缺口挡在 through 之前」时才会写凭据。
+	//
+	// 生产形态正是反例：这 10 个源的 18 条未解决缺口全是**零宽**的
+	// （`ARCHIVE_CONTENT_UNKNOWN` 的 [x,x)），它们虽然会被标记为已解，
+	// 但零宽区间盖不住那 2 万条 WAL 的真实位置段 ⇒ 回收链仍然跨不过去。
+	//
+	// 所以显式登记一条覆盖 `[from, to)` 的缺口再放弃它——用与人工裁定完全相同的机制，
+	// 使凭据落到 `entry.Abandonments` 里，语义、审计面、幂等性都与既有路径一致。
+	if err := p.Ledger().RecordGap(p.Key(), from, to, ledger.GapReasonPermanentlyLost,
+		"data beyond VictoriaLogs retention period: VL accepts but silently drops data older than "+
+			"-retentionPeriod, so this prefix can never be proven published; reclaim must cross it"); err != nil {
+		return err
+	}
+	if _, err := p.Ledger().AbandonGapsThrough(p.Key(), to, ledger.GapAbandonment{
+		ReasonCode: ledger.GapReasonPermanentlyLost,
+		Reason:     "data beyond VictoriaLogs retention period",
+		Detail: "VL accepts but silently drops data older than -retentionPeriod; " +
+			"reclaim must cross this prefix or the source stalls forever",
+		Operator: "system:retention-window",
+		Through:  to,
+	}); err != nil {
+		return err
+	}
+	slog.Warn("该前缀超出热层保留期、VL 里不可能有已发布证据：已登记为永久丢失，回收链跨过它",
+		"source", source.LogSourceID, "key", key, "from", from, "to", to,
+		"resolvedGaps", resolved, "hotRetention", m.hotRetention)
+	return nil
+}

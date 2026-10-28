@@ -1140,7 +1140,10 @@ func runWorker() {
 			})
 			if rehydrateVLClient != nil {
 				backend.SetPublisher(readyRehydratePublisher{clients: managedClients,
-					publisher: &archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: rehydrateVLClient}})
+					// Retention 与 hot 同源（装配处只为 Cold 单独指定了保留期，Hot/Rehydrate 回退基配置）：
+					// 传进去让 rehydrate 能当场认出「这个分区日已超出目标 VL 保留期、注定写不进去」，
+					// 而不是写一遍 200、verify 查不到、再报一个看似瞬时的失败。
+					publisher: &archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: rehydrateVLClient, Retention: resolveHotRetention(cfg)}})
 			}
 			logStack.SetArchiveBackend(backend)
 			slog.Info("日志归档运行时已装配", "provider", provider.Kind())
@@ -1229,21 +1232,6 @@ func runWorker() {
 		// 解析口径与 supervisor 的唯一默认一致；有限 TTL 不等于独立永久副本。
 		// 解析失败只告警并保持零值（= 不启用过滤，行为与改动前逐字一致）——
 		// 配置笔误不该让采集把正常数据当成"不可见"。
-		hotRetention := func() time.Duration {
-			raw := strings.TrimSpace(cfg.LogVL.RetentionPeriod)
-			if raw == "" {
-				raw = vlsup.DefaultRetentionPeriod
-			}
-			period, err := retention.ParseRuntimeTTL(raw)
-			if err != nil {
-				slog.Warn("热层 retention 解析失败：不启用「热层可发布窗口」过滤（行为与改动前一致）",
-					"retentionPeriod", raw, "error", err)
-				return 0
-			}
-			slog.Info("热层可发布窗口已启用：超出热层保留期的 UTC 天不再重建、也不算对账缺失天",
-				"retentionPeriod", raw, "hotRetention", period)
-			return period
-		}()
 		readLimits, limitsErr := cfg.IngestReadLimits()
 		if limitsErr != nil {
 			slog.Error("日志读取预算非法", "error", limitsErr)
@@ -1324,7 +1312,7 @@ func runWorker() {
 					return &tuning
 				}(),
 				// 热层 retention（上一段已解析）：零值 = 未启用窗口过滤（保持改动前行为）。
-				HotRetention: hotRetention,
+				HotRetention: resolveHotRetention(cfg),
 				// 兜底环每轮容量（键 log_index.resume_batch_per_round；1 = 每轮一个 = 退回应激行为 ✓）。
 				ResumeBatchPerRound: cfg.ResumeBatchTuning(),
 				// 窗口化背压阈值（键 log_index.resume_backpressure_streak；默认 3 ✓，置 1 = 单轮判定 ✓）。
@@ -2318,4 +2306,28 @@ func sampleLogBudget(ctx context.Context, sup *vlsup.Supervisor, budget *vlsup.B
 			}
 		}
 	}
+}
+
+// resolveHotRetention 把 `log_vl.retention_period` 解析成热层保留期时长。
+//
+// 为什么抽成包级函数（2026-10-28）：这个值现在有两处消费者——ingest 侧的「热层可发布窗口」，
+// 以及归档还原（Rehydrate）侧「这个分区日是否注定写不进去」的判定。两处必须用**同一口径**，
+// 否则会出现「ingest 认为超窗口、rehydrate 认为没超」这种自相矛盾。
+//
+// 解析失败返回 0（= 不启用过滤，保持改动前行为）：与 ingest 侧 hot_retention_window.go
+// 同一取舍——没配置就把数据全过滤掉，比不修更糟。
+func resolveHotRetention(cfg *workercfg.Config) time.Duration {
+	raw := strings.TrimSpace(cfg.LogVL.RetentionPeriod)
+	if raw == "" {
+		raw = vlsup.DefaultRetentionPeriod
+	}
+	period, err := retention.ParseRuntimeTTL(raw)
+	if err != nil {
+		slog.Warn("热层 retention 解析失败：不启用「热层可发布窗口」过滤（行为与改动前一致）",
+			"retentionPeriod", raw, "error", err)
+		return 0
+	}
+	slog.Info("热层可发布窗口已启用：超出热层保留期的 UTC 天不再重建、也不算对账缺失天",
+		"retentionPeriod", raw, "hotRetention", period)
+	return period
 }

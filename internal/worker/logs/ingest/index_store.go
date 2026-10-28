@@ -6,6 +6,7 @@ package ingest
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -455,7 +456,7 @@ func (m *Manager) walRowsOfPlan(key string, saved persistedSource, encoded *acqu
 			Key: key, Seq: entry.Seq, EventID: entry.Event.EventID,
 			RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End,
 			Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay, Body: body,
-			FP: walBodyFP(entry.Event),
+			FP: walBodyFP(entry.Event), AckBodyDigest: ackDigestOf(entry),
 		})
 	}, func(ref acquire.WALRef) {
 		rows = append(rows, stateindex.WALRow{
@@ -477,7 +478,7 @@ func (m *Manager) walRowsOf(key string, saved persistedSource) ([]stateindex.WAL
 			Key: key, Seq: entry.Seq, EventID: entry.Event.EventID,
 			RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End,
 			Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay, Body: body,
-			FP: walBodyFP(entry.Event),
+			FP: walBodyFP(entry.Event), AckBodyDigest: ackDigestOf(entry),
 		})
 	}
 	for _, ref := range saved.WALRefs {
@@ -502,6 +503,22 @@ func (m *Manager) walRowsOf(key string, saved persistedSource) ([]stateindex.WAL
 // TestWALBodyFingerprintCoversEveryEventField 正是用单点变异守住这条）。
 //
 // 因此「同一 (身份) 下 FP 相同 ⇒ 正文相同」成立（职责见 stateindex.WALFingerprint 的注释）。
+// ackDigestOf 返回该 WAL 条目「被 ACK 时那份正文」的摘要，未 ACK 时返回 nil。
+//
+// 为什么要落库（2026-10-28）：`WALEntry.acknowledged` 是进程内态（json:"-"），重启即丢；
+// 而账本的 `RequestDoneRanges` 只是位置区间（有 ±1 容差、永不裁剪）。仅凭区间重建 ACK，
+// 在位置空间被复用（重读/槽位复用/回放替换）时会把**新正文**误认成已 ACK ⇒ 回收剪掉数据。
+// 本摘要提供精确凭据：重启时只有「当前正文重算的摘要 == 本列」才允许重建 ACK。
+func ackDigestOf(entry acquire.WALEntry) []byte {
+	digest, ok := entry.AcknowledgedBodyDigest()
+	if !ok {
+		return nil
+	}
+	out := make([]byte, len(digest))
+	copy(out, digest[:])
+	return out
+}
+
 func walBodyFP(ev logtypes.Event) uint64 {
 	hash := fnv.New64a()
 	writeString := func(text string) {
@@ -589,7 +606,19 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 	}
 	walInline := make(map[string][]acquire.WALEntry)
 	walRefs := make(map[string][]acquire.WALRef)
+	// ACK 正文摘要（2026-10-28）：与 WAL/WALRefs 同一次遍历取完，供恢复时做
+	// 「正文未被改写」的精确判据（见 acquire/wal_restore_ack.go）。
+	walDigests := make(map[string][]WALAckDigest)
 	for _, row := range rows.WAL {
+		if len(row.AckBodyDigest) == sha256.Size {
+			var digest [32]byte
+			copy(digest[:], row.AckBodyDigest)
+			walDigests[row.Key] = append(walDigests[row.Key], WALAckDigest{
+				Key: acquire.WalAckKey{Seq: row.Seq, EventID: row.EventID,
+					RecordStart: row.RecordStart, RecordEnd: row.RecordEnd},
+				Digest: digest,
+			})
+		}
 		if row.Body == nil {
 			walRefs[row.Key] = append(walRefs[row.Key], acquire.WALRef{
 				Seq: row.Seq, Appended: row.Appended, Durable: row.Durable,
@@ -669,6 +698,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 			Ledger:               ledgerEntries,
 			WAL:                  walInline[key],
 			WALRefs:              walRefs[key],
+			WALDigests:           walDigests[key],
 			EventsStoredThrough:  projection.EventsStoredThrough,
 			ProjectionGeneration: projection.Generation,
 			EventsStored:         aux.EventsStored,

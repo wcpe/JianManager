@@ -76,6 +76,12 @@ type SourceConfig struct {
 	TimeZone string `json:"time_zone,omitempty" mapstructure:"time_zone"`
 }
 
+// WALAckDigest 是一条 WAL 条目的 ACK 正文摘要（来自 `source_wal.ack_body_digest`）。
+type WALAckDigest struct {
+	Key    acquire.WalAckKey
+	Digest [32]byte
+}
+
 type persistedSource struct {
 	PublicationPending bool               `json:"publication_pending,omitempty"`
 	Ledger             []ledger.Entry     `json:"ledger"`
@@ -83,6 +89,15 @@ type persistedSource struct {
 	// WALRefs 是 WAL 条目的引用形式（B1a）：正文已在事件段存储中的条目只写引用，加载时
 	// 按 EventID 水合。与 WAL **并存**（按条切分），二者互不覆盖、可分别存在。
 	WALRefs []acquire.WALRef `json:"wal_refs,omitempty"`
+	// WALDigests 是「各 WAL 条目被 ACK 时那份正文的摘要」，从 `source_wal.ack_body_digest` 读回。
+	//
+	// 为什么需要（2026-10-28）：`WALEntry.acknowledged` 是进程内态，重启即丢；仅凭账本
+	// `RequestDoneRanges`（位置区间、永不裁剪）重建 ACK，在位置空间被复用时会把新正文误认成
+	// 已 ACK ⇒ 数据被剪。本字段提供精确判据：只有当前正文摘要与它相等才允许重建。
+	//
+	// 不参与 JSON 持久化（`json:"-"`）：它的真源是索引库的独立列，不是这个内存结构；
+	// 若也写进 JSON 会出现两份互不同步的副本。
+	WALDigests []WALAckDigest `json:"-"`
 	// EventsStoredThrough 是事件段存储已覆盖的最大 record_end（B1a 的**按条**判据来源）：
 	// record_end <= 该值的 WAL 条目，其正文已 durable 在段存储中，持久化时只需引用。
 	// 为什么不能按源级 EventsStored 一刀切：事件体是在投递路径（appendEvents）才写入段存储，
@@ -2937,12 +2952,41 @@ func (m *Manager) Register(source SourceConfig) error {
 		//（`ledger.RequestDoneRangesOf`：仅承接真实 REQUEST_DONE，请求结果前缀与回收
 		// 水位都不生成 ACK）。传空则与旧行为逐字等价（全部 nil，default-deny）。
 		// 详见 acquire/wal_restore_ack.go。
-		var ackRanges []ledger.PositionRange
+		ackEvidence := acquire.AckEvidence{}
 		for i := range saved.Ledger {
 			if saved.Ledger[i].Key == (ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration}) {
-				ackRanges = ledger.RequestDoneRangesOf(&saved.Ledger[i])
+				ackEvidence.Ranges = ledger.RequestDoneRangesOf(&saved.Ledger[i])
 				break
 			}
+		}
+		// 正文摘要凭据：来自 `source_wal.ack_body_digest`（persist 时落库）。
+		//
+		// 为什么必须带上它（2026-10-28）：`RequestDoneRanges` 只是位置区间，有 ±1 容差且永不裁剪；
+		// 位置空间被复用（重读/槽位复用/回放替换）时，仅凭区间会把**新正文**误认成已 ACK，
+		// 再被 `reclaimEntryQualifiedLocked` 放行 ⇒ 数据被剪掉。摘要提供精确判据。
+		//
+		// 有摘要证据时才构造非 nil 的 map（这是「精确凭据」路径）。
+		//
+		// 为什么空时要传 nil（而不是空 map）：存量条目从来没有落过摘要——它们的 ACK 是在
+		// 更早的进程里发生的，那时还没有这一列。若传空 map，语义是「提供了证据但查不到」，
+		// 会导致一条都不重建 ⇒ 死锁依旧。
+		//
+		// 退化为「位置区间 + durable」在存量场景下是安全的，依据是回放去重的实现：
+		// `adjudicateReplayDuplicatesLocked`（wal.go）在原位替换正文时**同时把新正文作为
+		// 新条目追加待投递**并清空旧 ACK（`w.entries[idx].acknowledged = nil` + `out = append(out, ev)`）。
+		// 也就是说：正文一旦被改写，必然走重投，绝不出现「新正文借用旧 ACK 被回收」。
+		// 一旦本进程重新 ACK，摘要就会被持久化，此后走的都是精确路径。
+		if len(saved.WALDigests) > 0 {
+			ackEvidence.Digests = make(map[acquire.WalAckKey][32]byte, len(saved.WALDigests))
+			for _, row := range saved.WALDigests {
+				ackEvidence.Digests[row.Key] = row.Digest
+			}
+			slog.Info("WAL 恢复：使用精确 ACK 凭据（位置区间 + 正文摘要）",
+				"logSourceID", source.LogSourceID, "digests", len(saved.WALDigests))
+		} else if len(ackEvidence.Ranges) > 0 {
+			slog.Warn("WAL 恢复：该源无持久化 ACK 正文摘要，改用「位置区间 + durable」判据"+
+				"（存量数据升级路径；重新 ACK 后自动转为精确判据）",
+				"logSourceID", source.LogSourceID, "ranges", len(ackEvidence.Ranges))
 		}
 		if len(saved.WALRefs) > 0 {
 			// 兜底（N-2 两段式的正确性前提）：两段持锁之间状态可能被并发登记/持久化改写——
@@ -2954,7 +2998,7 @@ func (m *Manager) Register(source SourceConfig) error {
 				bodyLookup = m.eventBodyLookup(key)
 			}
 			// 引用形式（B1a）：内联条目直接恢复，引用条目按 EventID 从事件段存储水合。
-			missing := wal.RestoreMixedWithAck(saved.WAL, saved.WALRefs, bodyLookup, ackRanges)
+			missing := wal.RestoreMixedWithAck(saved.WAL, saved.WALRefs, bodyLookup, ackEvidence)
 			if len(missing) > 0 {
 				recoveryDirty = true
 				// 取不到正文的条目不得静默丢：记可见缺口并告警（与 FR-474 §5#1 同口径）。
@@ -2976,7 +3020,7 @@ func (m *Manager) Register(source SourceConfig) error {
 				slog.Warn("WAL 引用恢复：部分条目正文缺失，已记可见缺口",
 					"logSourceID", source.LogSourceID, "missing", len(missing))
 			}
-		} else if err := wal.RestoreWithAck(saved.WAL, ackRanges); err != nil {
+		} else if err := wal.RestoreWithAck(saved.WAL, ackEvidence); err != nil {
 			return err
 		}
 	}
@@ -9707,7 +9751,10 @@ func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, sour
 	}
 	m.blockedLoggedMu.Unlock()
 	if !dup {
-		slog.Debug("补段被拦下（首次可见；后续同源同类不再打点）",
+		// 用 Info 而非 Debug（2026-10-29）：该诊断此前是 Debug 级，而 Worker 的日志级别没接到
+		// `log.level=debug` 上（实测不生效）⇒ 现场「补段为什么不建段」完全不可见，
+		// 使得本次排查反复绕路。按源只打一次（dups 去重），不构成刷屏。
+		slog.Info("补段被拦下（首次可见；后续同源同类不再打点）",
 			"logSourceID", source.LogSourceID, "category", category)
 	}
 }
@@ -9837,6 +9884,12 @@ func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source
 	ownerSource, ownerPresent := m.sources[key]
 	owned := m.pipes[key] == p
 	m.mu.Unlock()
+	// 进入补段主体的诊断（2026-10-29）：现场排查时「补段被拦下」一条都没有，
+	// 无法判断是没进主体还是在主体内静默返回。按源首次打一条，把关键状态一次性摊开。
+	slog.Info("补段开始（已确认覆盖但无段）",
+		"logSourceID", source.LogSourceID, "from", from, "to", to,
+		"deferredDelivery", m.deferredDelivery, "owned", owned, "ownerPresent", ownerPresent,
+		"ranges", len(entry.RequestDoneRanges))
 	if m.deferredDelivery {
 		if !owned || !ownerPresent {
 			return errPublicationStale
@@ -9862,6 +9915,33 @@ func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source
 		to = selectedEnd
 		proof, proofErr := m.capturePublishedPrefixEvidence(ctx, source, events)
 		if proofErr != nil || !ledger.CoveredByPositionRanges(gapRangesOfEvents(proof.events), from, to) {
+			// 永久丢失情形（2026-10-29 用户裁定）：本批数据**全部**落在已超出热层保留期的 UTC 天，
+			// 那些天在 VL 里物理上不存在（VL 对超期数据返回 200 但立即丢弃），因此
+			// `capturePublishedPrefixEvidence` 必然取不到证据 —— 补段在这里**永远**不会成功。
+			//
+			// 不处理它的代价（真机）：reclaim 卡在 0 ⇒ WAL 删不掉 ⇒ 撞 20000 条上限 ⇒ 整个源停采。
+			// 为了一段 VL 里本就不存在的历史数据，牺牲之后全部新日志的采集。
+			//
+			// 处置：如实登记为永久丢失凭据（`PERMANENTLY_LOST`，带操作人与时间，可查可审计），
+			// 然后让回收链跨过这段空洞。**不撒谎**——VL 里确实没有这段数据，账本如实记下这个事实，
+			// 与「静默跳过」的区别是：有结构化凭据、有原因码、有操作人、且不会被后续对账重复补账。
+			if m.beyondHotRetentionForEvents(source, events) {
+				if abErr := m.abandonBeyondHotRetention(p, source, from, to); abErr != nil {
+					return abErr
+				}
+				// 丢弃裁定必须**当场落库**（2026-10-29）：`AbandonGapsThrough` 只改内存账本，
+				// 而本路径下一次触发要等一整轮。不落库的后果有两个：
+				//   ① 重启即丢（现场实测：每重启一次这些源都得从头再来）；
+				//   ② 索引库里的 `abandonments` 恒为 0，而回收链在**重启后**正是从库里读它
+				//      ⇒ 一旦重启，已放弃的区间又变成「无凭据」⇒ 死锁复现。
+				if persistErr := m.persist(); persistErr != nil {
+					// 落库失败不让整轮失败（账本内存态已改，下一轮会再试），但要可见。
+					slog.Warn("丢弃裁定落库失败（账本内存态已改，将重试）",
+						"source", source.LogSourceID, "error", persistErr)
+				}
+				m.noteReclaimBlocked("permanently-lost-beyond-retention", p, source)
+				return nil
+			}
 			m.noteReclaimBlocked("proof-coverage-short", p, source)
 			return nil
 		}

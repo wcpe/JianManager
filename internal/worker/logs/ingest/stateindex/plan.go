@@ -116,9 +116,12 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 			fp:  fp,
 			values: func() ([]any, error) {
 				// replay 列随 appended/durable 一起写入（ACQ-1）：回放归因落库后重启才不失效。
+				// ack_body_digest 同样随行进指纹（见 WALFingerprint：“是否已 ACK、ACK 的是哪份正文”
+				// 是该行的语义，不只影响是否重建）。
 				return []any{row.Key, toInt64(row.Seq), row.EventID, toInt64(row.RecordStart),
 					toInt64(row.RecordEnd), boolToInt(row.Appended), boolToInt(row.Durable),
-					boolToInt(row.Replay), nullableBytes(row.Body), int64(fp)}, nil
+					boolToInt(row.Replay), nullableBytes(row.Body), int64(fp),
+					nullableBytes(row.AckBodyDigest)}, nil
 			},
 		})
 	}
@@ -146,8 +149,12 @@ func WALFingerprint(row WALRow) uint64 {
 	// Replay 也进指纹（ACQ-1）：它是该行语义的一部分（是否来自回放/补账），必须随"只写变更行"
 	// 的镜像差异被正确识别——否则同一条目由常规路径再次写入时，指纹相同 ⇒ 不更新 ⇒ 库里的
 	// 旧 replay 值被留下，与内存条目分裂。
+	//
+	// AckBodyDigest 同理（2026-10-28）：它记录「被 ACK 时那份正文」的摘要。
+	// 若不进指纹，一条已被 ACK 的条目在正文被原位改写后（回放替换）仍会因指纹相同而不重写
+	// ⇒ 库里留着旧摘要 ⇒ 重启后会把**新正文**当成已 ACK ⇒ 数据被剪掉（红线）。
 	return fingerprint(row.Seq, row.EventID, row.RecordStart, row.RecordEnd, row.Appended, row.Durable,
-		row.Replay, row.Body != nil, row.FP)
+		row.Replay, row.Body != nil, row.FP, nullableBytes(row.AckBodyDigest))
 }
 
 func boolToInt(v bool) int64 {

@@ -21,10 +21,16 @@ const PhysicalMappingUnknownReason = "PHYSICAL_MAPPING_UNKNOWN"
 //
 // 分段创建时该前提就已被写入（见 NewFileTailer / anchorAtEOFLocked / ArchiveImporter），
 // 所以只有“代码路径漏写”这一种情况会落到拒绝分支——那时要的是响亮的失败，不是静默串源。
+// 无法证明时的处理：先试**证据驱动自愈**（见 mapping_rebuild_evidence.go）——
+// 仅当能直接证明“当前文件不是当初那份”（内容身份不同）时才重建物理映射；
+// 证据不足一律保持拒绝 + 可见缺口，不猜。
 func (t *FileTailer) checkPhysicalMapping() error {
 	if t.physicalMappingKnown || (t.segmentStart == 0 && t.physicalStart == 0) {
 		// `segmentStart == 0 && physicalStart == 0`：从文件头开始读是该前提的平凡成立形（
 		// 逻辑 0 就对应物理 0），无需额外证据。
+		return nil
+	}
+	if err := t.rebuildMappingOnReplacedFile(); err == nil {
 		return nil
 	}
 	detail := fmt.Sprintf("%s: path=%q logical_start=%d; refusing to assign new identities without a proven physical origin", PhysicalMappingUnknownReason, t.path, t.segmentStart)

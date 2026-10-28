@@ -522,6 +522,13 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	// 2026-10-28 增量迁移：`source_wal.ack_body_digest` 是后加列，承载「该条目被 ACK 时那份
+	// 正文的 SHA-256」。既有库补列后旧行为 NULL ⇒ 恢复时不重建 ACK（default-deny，
+	// 与该列不存在时的行为一致），直到该条目在本进程被重新 ACK 后写入。
+	if err := addColumnIfMissing(ctx, db, "source_wal", "ack_body_digest", "BLOB"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	// FR-502 增量迁移：`instance_binding` 的 rule_key / relative_path 是后加列，同样需要
 	// 为既有库幂等补列。旧库旧行零值 = 空规则名与无覆盖 ⇒ 回退 bukkit 规则，与历史行为
 	// 逐字一致，故本迁移是纯追加、不改动任何既有实例的采集路径。
@@ -2160,6 +2167,15 @@ func asBytes(value any) []byte {
 	}
 }
 
+// bytesAt 是 asBytes 的越界安全版：下标超出时返回 nil。
+// 用于后加的列（旧库升级后旧行本列为 NULL，且某些读路径的列集可能不含它）。
+func bytesAt(values []any, idx int) []byte {
+	if idx < 0 || idx >= len(values) {
+		return nil
+	}
+	return asBytes(values[idx])
+}
+
 // appendRow 把一行结果按表加入 State。
 func appendRow(st *State, spec tableSpec, values []any) error {
 	var err error
@@ -2214,9 +2230,11 @@ func appendRow(st *State, spec tableSpec, values []any) error {
 		st.Aux = append(st.Aux, AuxRow{Key: asText(values[0]), Config: asBytes(values[1]), Payload: asBytes(values[2])})
 	case "source_wal":
 		// 下标（loadColumns 顺序）：0 key / 1 seq / 2 event_id / 3 record_start / 4 record_end /
-		// 5 appended / 6 durable / 7 replay / 8 body。fp 不在 loadColumns（单列指纹，见 tblSourceWAL）。
+		// 5 appended / 6 durable / 7 replay / 8 body / 9 ack_body_digest。
+		// fp 不在 loadColumns（单列指纹，见 tblSourceWAL）。
 		row := WALRow{Key: asText(values[0]), EventID: asText(values[2]), Appended: asBool(values[5]),
-			Durable: asBool(values[6]), Replay: replayFlag(values), Body: asBytes(values[8])}
+			Durable: asBool(values[6]), Replay: replayFlag(values), Body: asBytes(values[8]),
+			AckBodyDigest: bytesAt(values, 9)}
 		if row.Seq, err = asUint64(values[1]); err != nil {
 			return err
 		}

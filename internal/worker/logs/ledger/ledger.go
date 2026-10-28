@@ -381,6 +381,8 @@ func (l *Ledger) AbandonGapsThrough(key SourceKey, position uint64, ab GapAbando
 	}
 	l.trimResolvedGapsLocked(entry)
 	l.mergeAndTrimAbandonmentsLocked(entry)
+	// 修订号已由本方法开头的 `require(key)` 推进（那里是所有写路径的统一推进点），
+	// 故此处**不必**再 touch —— 重复 touch 只会让「无实际动作」的空转也触发落库。
 	return resolved, nil
 }
 

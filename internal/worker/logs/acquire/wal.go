@@ -629,7 +629,7 @@ func (w *WAL) snapshotSplit(covered func(logtypes.Event) bool, identities map[Co
 // 回放标记随 refs 双向往返（ACQ-1）：`WALRef.Replay` 落到重建条目的 `WALEntry.Replay` 上，
 // 否则重启后回放条目会重新计入闸视图（见 WALRef.Replay 的说明 ✓）。
 func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool)) []WALRef {
-	return w.RestoreMixedWithAck(inline, refs, hydrate, nil)
+	return w.RestoreMixedWithAck(inline, refs, hydrate, AckEvidence{})
 }
 
 // RestoreMixedWithAck 是 RestoreMixed 的「带持久化 ACK 证据」形态。
@@ -637,7 +637,7 @@ func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventI
 // acked 为 nil 时与 RestoreMixed 逐字等价（全部 acknowledged=nil）。
 // 传非空时只给「位置落在 REQUEST_DONE 区间内且 durable」的条目重建 acknowledged。
 // 理由同 RestoreWithAck（见 wal_restore_ack.go）。
-func (w *WAL) RestoreMixedWithAck(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool), acked []ledger.PositionRange) []WALRef {
+func (w *WAL) RestoreMixedWithAck(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool), ev AckEvidence) []WALRef {
 	unlock := w.lockMutation(nil, true)
 	defer unlock()
 	entries := append([]WALEntry(nil), inline...)
@@ -663,7 +663,7 @@ func (w *WAL) RestoreMixedWithAck(inline []WALEntry, refs []WALRef, hydrate func
 		entries[i].captureToken = 0
 		entries[i].captureBody = [32]byte{}
 	}
-	restoreAcknowledged(entries, acked)
+	restoreAcknowledged(entries, ev)
 	w.restoreReservationsLocked(entries)
 	w.entries = entries
 	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
@@ -705,6 +705,25 @@ const (
 // （seq/appended/durable + event 的 id/hash/level/stream/record 等字段）。
 // 仅用于积压字节数的近似定界，不参与任何持久化或校验语义。
 const walEntryOverheadBytes = 320
+
+// AcknowledgedBodyDigest 返回该条目被 ACK 时那份正文的摘要（32 字节）。
+//
+// 为什么需要它（2026-10-28）：`acknowledged` 是进程内态，重启即丢；而账本里的
+// `RequestDoneRanges` 只是**位置区间**（且有 ±1 容差、永不裁剪）。仅凭区间重建 ACK 有真风险：
+// 位置空间一旦被复用（重读 / 槽位复用 / 回放替换），旧区间会把从未投递的**新正文**误认为已 ACK，
+// 再被 `reclaimEntryQualifiedLocked` 放行 ⇒ 数据被剪掉。
+//
+// 因此 persist 时把「ACK 时那份正文的 BodyDigest」一并落库（`source_wal.ack_body_digest`）；
+// 重启时只有**当前正文摘要与它逐字节相等**才重建 ACK。这样即使位置区间被复用，
+// 新正文也不会借旧区间的光——证据仍是精确的，不是区间推断。
+//
+// 无 ACK 时返回 false（未投递过，或正文被替换后已作废）。
+func (e WALEntry) AcknowledgedBodyDigest() ([32]byte, bool) {
+	if e.acknowledged == nil {
+		return [32]byte{}, false
+	}
+	return e.acknowledged.BodyDigest, true
+}
 
 // WALEntry WAL 中的一条待投递/已耐久事件记录。
 type WALEntry struct {
@@ -2110,7 +2129,7 @@ func (w *WAL) committedIdentities(copied func()) (map[CommitIdentity]struct{}, e
 // Restore 将持久 WAL 快照恢复到内存。账本水位由 Ledger.Restore 恢复，
 // WAL 只重建待核验事件集合，避免重启后依赖进程内存判断投递结果。
 func (w *WAL) Restore(entries []WALEntry) error {
-	return w.RestoreWithAck(entries, nil)
+	return w.RestoreWithAck(entries, AckEvidence{})
 }
 
 // RestoreWithAck 是 Restore 的「带持久化 ACK 证据」形态。
@@ -2124,7 +2143,7 @@ func (w *WAL) Restore(entries []WALEntry) error {
 // 当 delivery 早已推进、reclaim 却停在 0 时，就会形成「重启→补段失败→reclaim 不动→
 // WAL 撞上限→停采」的死锁。本变体让调用方能把账本里**已经持久化的** REQUEST_DONE
 // 证据交给 WAL，从而把确实存在过的 ACK 认回来。详见 wal_restore_ack.go。
-func (w *WAL) RestoreWithAck(entries []WALEntry, acked []ledger.PositionRange) error {
+func (w *WAL) RestoreWithAck(entries []WALEntry, ev AckEvidence) error {
 	unlock := w.lockMutation(nil, true)
 	defer unlock()
 	for _, entry := range entries {
@@ -2147,7 +2166,7 @@ func (w *WAL) RestoreWithAck(entries []WALEntry, acked []ledger.PositionRange) e
 		restored[i].captureToken = 0
 		restored[i].captureBody = [32]byte{}
 	}
-	restoreAcknowledged(restored, acked)
+	restoreAcknowledged(restored, ev)
 	w.restoreReservationsLocked(restored)
 	w.entries = restored
 	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）

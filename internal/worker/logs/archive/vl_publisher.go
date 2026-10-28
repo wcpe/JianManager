@@ -25,6 +25,41 @@ type VLRehydratePublisher struct {
 	Catalog *catalog.Catalog
 	VL      *vlsup.Client
 	Timeout time.Duration
+	// Retention 是目标 VL 实例的数据保留期（与 `-retentionPeriod` 同源）。
+	//
+	// 为什么需要（2026-10-28）：VL 对**早于 `now - retention`** 的数据点返回 HTTP 200
+	// 但立即丢弃（已实测确认：写 _time=2026-09-20 的记录 → 200，随后查该窗口 → 0 行）。
+	// 归档还原的恰恰就是很久以前的数据。若不先判，就会得到
+	// “写入 200 → verify 查不到 → 超时”的假失败，且白耗一次任务。
+	//
+	// 零值 = 不启用判定（保持改动前行为）：与 ingest 侧 hot_retention_window.go
+	// 同一取舍——没配置就把数据全过滤掉，比不修更糟。
+	Retention time.Duration
+}
+
+// ErrPartitionBeyondRetention 表示「该分区日整体早于目标 VL 的保留期」。
+//
+// 与「写入失败」严格区分：不是 VL 出错，而是**目标实例按设计不可能保存**这份数据。
+// 调用方必须把它当作“本任务不可完成”如实告知，不得当作成功（否则会把从未落库的分区
+// 标成已还原），也不得当作可重试的瞬时失败（重试一万次结果相同）。
+var ErrPartitionBeyondRetention = fmt.Errorf("archive: partition day is beyond target VL retention and cannot be stored by design")
+
+// partitionDayBeyondRetention 报告分区日是否整天早于 `now - retention`。
+//
+// 纯函数（不读时钟）便于单测。判据与 ingest 侧 `hotRetentionDayBeyondWindow` 逐字同构：
+//   - retention <= 0 ⇒ 恒 false（未启用判定）；
+//   - 日字符串不可解析 ⇒ 恒 false（不因脏数据而静默丢弃）；
+//   - 只有**整天**（含日末最后一纳秒）都早于边界才为 true；跨边界那天按可写入处理。
+func partitionDayBeyondRetention(utcDay string, now time.Time, retention time.Duration) bool {
+	if retention <= 0 || utcDay == "" {
+		return false
+	}
+	day, err := time.Parse("2006-01-02", utcDay)
+	if err != nil {
+		return false
+	}
+	dayEnd := day.Add(24*time.Hour - time.Nanosecond)
+	return dayEnd.Before(now.Add(-retention))
 }
 
 func (p *VLRehydratePublisher) ReportFailure(key PartitionKey, reason string) error {
@@ -56,6 +91,12 @@ func (p *VLRehydratePublisher) ReportFailure(key PartitionKey, reason string) er
 func (p *VLRehydratePublisher) Publish(ctx context.Context, key PartitionKey, events []ArchivedEvent, taskID string) error {
 	if p == nil || p.Catalog == nil || p.VL == nil || taskID == "" || len(events) == 0 {
 		return fmt.Errorf("archive: rehydrate publisher is unavailable")
+	}
+	// 保留期前置判定（2026-10-28）：目标 VL 对早于 `now-retention` 的数据点会接收（200）
+	// 但立即丢弃，故这类分区日**注定写不进去**。必须当场如实拒绝，而不是写一遍、
+	// verify 超时、然后再报一个看似瞬时失败的错。
+	if partitionDayBeyondRetention(key.UTCDay, time.Now(), p.Retention) {
+		return fmt.Errorf("%w: utcDay=%s retention=%s", ErrPartitionBeyondRetention, key.UTCDay, p.Retention)
 	}
 	catKey := catalog.PartitionKey{StorageNamespace: key.StorageNamespace, UTCDay: key.UTCDay}
 	rec, exists := p.Catalog.Get(catKey)

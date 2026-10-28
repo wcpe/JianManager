@@ -22,56 +22,99 @@ package acquire
 // WAL 里 20165 条全部 `durable=1`，`request_done_ranges=[{0, 1784453}]`。
 // 即「数据早就投递并确认过了，只是这个进程不知道」。
 //
-// ## 修法：用**持久化证据**重建，而不是放松判据
+// ## 修法：用**精确持久化证据**重建，不靠区间推断
 //
 // 关键区分：`acknowledged` 不是「猜这条投过」，而是「这条的**完整正文**被确认过」。
-// 因此重建必须同时满足两个条件（缺一不可）：
+// 账本里的 `RequestDoneRanges` **只是位置区间**，且有两个性质让它不能单独作为凭据：
+//   - 两端各放宽 1 字节（`ledger.CoveredByPositionRanges`）；
+//   - **永不裁剪**（只有 `DeliveryBatches` 会被 prune，ACK 区间 merge 后永久累积）。
 //
-//  1. 账本里有持久化的 REQUEST_DONE 证据覆盖该条的位置区间
-//     （`ledger.RequestDoneRangesOf`：只承接真实 REQUEST_DONE，
-//     请求结果前缀与回收水位都不生成 ACK——见 ledger.Entry.RequestDoneRanges 注释）；
-//  2. 该条当前正文重算出的 `CommitIdentity.BodyDigest` 与**提交时**的一致。
+// 仅凭区间重建有真实风险：位置空间一旦被复用（重读 / 槽位复用 / 回放替换），
+// 旧区间会把从未投递的**新正文**当成已 ACK，再被 `reclaimEntryQualifiedLocked` 放行
+// ⇒ 数据被剪掉。
 //
-// 第 2 条是红线：`acknowledged` 比较的是 `CommitIdentity`（含完整正文 SHA256，
-// 不只是 event_id）。如果正文被原位改写过（回放替换、inline↔ref 切换等），
-// 重算出的身份就不同——这时**不得**重建，保持 nil，让常规路径重投。
+// 所以本文件采用**双重凭据**，缺一不可：
 //
-// 换句话说：我们不是在「制造 ACK」，而是在「用仍然成立的证据认回一个确实存在过的 ACK」。
+//  1. 位置：该条 `Record` 完整落在某个 REQUEST_DONE 区间内，且条目 `Durable`；
+//  2. 正文：`AckEvidence.Digests` 里该条目的摘要（取自 `source_wal.ack_body_digest`，
+//     即**投递当时**那份正文的 BodyDigest）与当前正文重算出的摘要**逐字节相等**。
+//
+// 第 2 条是真正的防线：位置区间可以复用，正文摘要不能。正文被原位改写过
+// （回放替换、inline↔ref 切换）⇒ 摘要不等 ⇒ 不重建，保持 nil，让常规路径重投。
+//
 // 拿不到证据的条目一个都不放行，default-deny 未动。
 
 import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 )
 
-// restoreAcknowledged 按持久化 ACK 证据为恢复后的 WAL 条目重建 `acknowledged`。
+// WalAckKey 是 WAL 条目的主键标识（与 `source_wal` 的 PRIMARY KEY 同形），
+// 用于把持久化的 ACK 正文摘要精确对应到恢复出来的条目。
 //
-// acked 为 nil（或空）时**全部置 nil**——这是原来的行为，也是「没有证据就什么都不认」的默认。
+// 导出（而不是包内私有）：ingest 侧要从索引库读回摘要并构造 `AckEvidence`。
+type WalAckKey struct {
+	Seq         uint64
+	EventID     string
+	RecordStart uint64
+	RecordEnd   uint64
+}
+
+// ackKeyOf 由条目导出主键。
+func ackKeyOf(entry WALEntry) WalAckKey {
+	return WalAckKey{Seq: entry.Seq, EventID: entry.Event.EventID,
+		RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End}
+}
+
+// AckEvidence 是恢复时可用的持久化 ACK 凭据。
 //
-// 判据（两条都必须成立）：
-//   - 该条 `Event.Record` 完整落在某个 REQUEST_DONE 区间内（`CoveredByPositionRanges`）；
-//   - 该条 `Durable` 为真（未 durable 的条目谈不上「已被确认」）。
+// 零值（Ranges 为空）= 不启用重建，与旧行为逐字一致（default-deny）。
+type AckEvidence struct {
+	// Ranges 是账本里持久化的 REQUEST_DONE 位置区间（`ledger.RequestDoneRangesOf`）。
+	//
+	// 来源：`ledger.Entry.RequestDoneRanges`——只承接真实 REQUEST_DONE，
+	// 请求结果前缀与回收水位都不生成 ACK。
+	Ranges []ledger.PositionRange
+	// Digests 是「投递当时那份正文」的 BodyDigest，键为 `walAckKey`。
+	//
+	// 来源：`source_wal.ack_body_digest`（由 persist 写入）。
+	//
+	// **nil 与空 map 语义不同**（必须分清）：
+	//   - nil：调用方无法提供这个证据（旧库未升级等）
+	//     ⇒ 退化为「只靠位置区间 + durable」；
+	//   - 非 nil（含空 map）：调用方确实提供了，那么查不到摘要的条目就是**从未被 ACK**
+	//     ⇒ 一律不重建（保守方向，防止“凭区间白送一个跟斗”）。
+	Digests map[WalAckKey][32]byte
+}
+
+// restoreAcknowledged 按持久化 ACK 凭据为恢复后的 WAL 条目重建 `acknowledged`。
 //
-// 注意这里**不**比较 BodyDigest：本函数填入的就是由当前正文重算出的身份。
-// 正文是否被改写过这一点，由**调用方**在决定传不传 acked 时已经保证——
-// 调用方拿到的 REQUEST_DONE 区间来自账本，而账本里的 ACK 是投递当时按同一份正文记下的。
-// 若正文后来又变了，`CapturedMembersAcknowledgedLocked` 会在真正引用该 ACK 时
-// 用 `id != *entry.acknowledged` 再核一次（见 wal.go 的 capturedMembersAcknowledgedLocked）。
-func restoreAcknowledged(entries []WALEntry, acked []ledger.PositionRange) {
+// 判定（三条全成立才重建，缺一不可）：
+//  1. 条目 `Durable`；
+//  2. 条目 `Record` 完整落在某个 REQUEST_DONE 区间内；
+//  3. 若调用方提供了正文摘要映射（非 nil），则摘要必须逐字节相等。
+func restoreAcknowledged(entries []WALEntry, ev AckEvidence) {
 	for i := range entries {
 		entries[i].acknowledged = nil
-		if len(acked) == 0 {
+		if len(ev.Ranges) == 0 {
 			continue
 		}
 		entry := &entries[i]
 		if !entry.Durable {
 			continue
 		}
-		if !ledger.CoveredByPositionRanges(acked, entry.Event.Record.Start, entry.Event.Record.End) {
+		if !ledger.CoveredByPositionRanges(ev.Ranges, entry.Event.Record.Start, entry.Event.Record.End) {
 			continue
 		}
 		id, err := CommitIdentityOf(entry.Event)
 		if err != nil {
 			continue
+		}
+		if ev.Digests != nil {
+			want, has := ev.Digests[ackKeyOf(*entry)]
+			if !has || want != id.BodyDigest {
+				// 没有「这份正文被 ACK 过」的持久化证据，或正文已被改写过 ⇒ 不重建。
+				continue
+			}
 		}
 		entries[i].acknowledged = &id
 	}

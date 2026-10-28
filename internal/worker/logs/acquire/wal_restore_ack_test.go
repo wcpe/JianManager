@@ -52,6 +52,73 @@ func ackTestEntries(t *testing.T) []WALEntry {
 	return []WALEntry{mk(1, 0, 10, "a"), mk(2, 10, 20, "b"), mk(3, 20, 30, "c")}
 }
 
+// TestRestoreWithAckDigestMismatchSkips 是「位置区间不可单独作凭据」的回归（2026-10-28）。
+//
+// 背景：账本里的 `RequestDoneRanges` **永不裁剪**，位置空间一旦被复用（重读 / 槽位复用 /
+// 回放替换），旧区间会盖住一条**从未投递的新正文**。若只看区间就重建 ACK，
+// `reclaimEntryQualifiedLocked` 会放行 ⇒ 数据被剪掉（红线）。
+//
+// 本用例构造「区间覆盖 + 摘要不匹配」形态：必须**不**重建。
+func TestRestoreWithAckDigestMismatchSkips(t *testing.T) {
+	entries := ackTestEntries(t)
+
+	// 拿一条不相干的摘要冒充「那个位置当初被 ACK 的正文」。
+	bogus := [32]byte{}
+	bogus[0] = 0xAA
+	digests := map[WalAckKey][32]byte{}
+	for _, e := range entries {
+		digests[ackKeyOf(e)] = bogus
+	}
+
+	restoreAcknowledged(entries, AckEvidence{
+		Ranges:  []ledger.PositionRange{{From: 0, To: 30}},
+		Digests: digests,
+	})
+
+	for i := range entries {
+		require.Nil(t, entries[i].acknowledged,
+			"第 %d 条：正文摘要与 ACK 时不一致 ⇒ 不得重建（否则回收会剪掉未确认数据）", i)
+	}
+}
+
+// TestRestoreWithAckDigestMatchRebuilds 是上一条的正向对照：
+// 摘要逐字节相等时才重建。
+func TestRestoreWithAckDigestMatchRebuilds(t *testing.T) {
+	entries := ackTestEntries(t)
+	digests := map[WalAckKey][32]byte{}
+	for _, e := range entries {
+		id, err := CommitIdentityOf(e.Event)
+		require.NoError(t, err)
+		digests[ackKeyOf(e)] = id.BodyDigest
+	}
+
+	restoreAcknowledged(entries, AckEvidence{
+		Ranges:  []ledger.PositionRange{{From: 0, To: 30}},
+		Digests: digests,
+	})
+
+	for i := range entries {
+		require.NotNil(t, entries[i].acknowledged,
+			"第 %d 条：摘要完全一致 ⇒ 必须重建（否则死锁依旧）", i)
+	}
+}
+
+// TestRestoreWithAckMissingDigestSkips 守住保守方向：
+// 调用方提供了摘要映射（非 nil），但该条目查不到摘要 ⇒ 视为「从未被 ACK」⇒ 不重建。
+func TestRestoreWithAckMissingDigestSkips(t *testing.T) {
+	entries := ackTestEntries(t)
+
+	restoreAcknowledged(entries, AckEvidence{
+		Ranges:  []ledger.PositionRange{{From: 0, To: 30}},
+		Digests: map[WalAckKey][32]byte{}, // 非 nil 但为空
+	})
+
+	for i := range entries {
+		require.Nil(t, entries[i].acknowledged,
+			"第 %d 条：没有持久化摘要证据 ⇒ 不重建（conservative）", i)
+	}
+}
+
 // TestCommitIdentityRoundtripStable 验证「正文经 JSON 往返后重算的身份不变」。
 //
 // 为什么单独测：重建 acknowledged 的方法是用**从磁盘反序列化回来的** event
@@ -84,7 +151,7 @@ func TestRestoreWithAckRebuildsCoveredEntries(t *testing.T) {
 
 	// 账本声明 [0,20) 已确认投递。
 	acked := []ledger.PositionRange{{From: 0, To: 20}}
-	require.NoError(t, w.RestoreWithAck(ackTestEntries(t), acked))
+	require.NoError(t, w.RestoreWithAck(ackTestEntries(t), AckEvidence{Ranges: acked}))
 
 	// 前两条落在 [0,20) 内 ⇒ 能组成连续前缀 [0,20)。
 	events, _, err := w.CaptureAcknowledgedPrefix(0, 30, 10)
@@ -118,7 +185,7 @@ func TestRestoreWithAckSkipsNonDurable(t *testing.T) {
 	entries := ackTestEntries(t)
 	entries[0].Durable = false // 第一条未 durable
 
-	restoreAcknowledged(entries, []ledger.PositionRange{{From: 0, To: 30}})
+	restoreAcknowledged(entries, AckEvidence{Ranges: []ledger.PositionRange{{From: 0, To: 30}}})
 
 	require.Nil(t, entries[0].acknowledged,
 		"未 durable 的条目不得重建 ACK（红线：未确认投递的数据不许被越过）")
@@ -133,7 +200,7 @@ func TestRestoreWithAckSkipsUncoveredRange(t *testing.T) {
 	entries := ackTestEntries(t)
 
 	// [0,5) 只覆盖第一条的一半，而条目是 [0,10)——完整覆盖要求整条落在区间内。
-	restoreAcknowledged(entries, []ledger.PositionRange{{From: 0, To: 5}})
+	restoreAcknowledged(entries, AckEvidence{Ranges: []ledger.PositionRange{{From: 0, To: 5}}})
 
 	require.Nil(t, entries[0].acknowledged,
 		"只有完整落在 REQUEST_DONE 区间内的条目才可重建 ACK")
@@ -142,7 +209,7 @@ func TestRestoreWithAckSkipsUncoveredRange(t *testing.T) {
 
 	// 反向对照：区间完整覆盖前两条时，前两条应当重建。
 	entries2 := ackTestEntries(t)
-	restoreAcknowledged(entries2, []ledger.PositionRange{{From: 0, To: 20}})
+	restoreAcknowledged(entries2, AckEvidence{Ranges: []ledger.PositionRange{{From: 0, To: 20}}})
 	require.NotNil(t, entries2[0].acknowledged)
 	require.NotNil(t, entries2[1].acknowledged)
 	require.Nil(t, entries2[2].acknowledged)
@@ -165,7 +232,7 @@ func TestRestoreMixedWithAckRebuildsCoveredEntries(t *testing.T) {
 	}
 	hydrate := func(eventID string) (logtypes.Event, bool) { ev, ok := bodies[eventID]; return ev, ok }
 
-	missing := w.RestoreMixedWithAck(nil, refs, hydrate, []ledger.PositionRange{{From: 0, To: 20}})
+	missing := w.RestoreMixedWithAck(nil, refs, hydrate, AckEvidence{Ranges: []ledger.PositionRange{{From: 0, To: 20}}})
 	require.Empty(t, missing)
 
 	events, _, err := w.CaptureAcknowledgedPrefix(0, 30, 10)
@@ -177,7 +244,7 @@ func TestRestoreMixedWithAckRebuildsCoveredEntries(t *testing.T) {
 func TestRestoreWithAckEmptyRangesIsNoop(t *testing.T) {
 	led := ledger.New()
 	w := NewWAL(led, ackTestKey())
-	require.NoError(t, w.RestoreWithAck(ackTestEntries(t), []ledger.PositionRange{}))
+	require.NoError(t, w.RestoreWithAck(ackTestEntries(t), AckEvidence{}))
 
 	events, _, err := w.CaptureAcknowledgedPrefix(0, 30, 10)
 	require.NoError(t, err)
