@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -84,6 +85,9 @@ func (h *AssistantHandler) RegisterRoutes(r *gin.RouterGroup) {
 		// 显式探测：管理员的按钮触发，绝不自动调用（模型调用按次计费）。
 		admin.POST("/providers/:id/test", h.TestProvider)
 
+		// 从上游拉取模型列表（FR-538 §2.2）：只读候选，不自动落库。
+		admin.POST("/providers/:id/discover-models", h.DiscoverModels)
+
 		admin.GET("/models", h.ListModels)
 		admin.POST("/models", h.CreateModel)
 		admin.PUT("/models/:id", h.UpdateModel)
@@ -132,7 +136,11 @@ type providerRequest struct {
 	CredentialSecret string `json:"credentialSecret"`
 	// ClearCredential 显式清除已保存密文。
 	ClearCredential bool `json:"clearCredential"`
-	Version         int  `json:"version"`
+	// ProxyMode 出站代理模式（FR-539）：direct / env / custom；空串表示不改动。
+	ProxyMode string `json:"proxyMode"`
+	// ProxySecret 自定义代理地址。含 userinfo 时整串落库且**永不回显**。
+	ProxySecret string `json:"proxyUrl"`
+	Version     int    `json:"version"`
 }
 
 // toProviderParams 转 service 参数。
@@ -150,6 +158,8 @@ func toProviderParams(req providerRequest) service.SaveProviderParams {
 		CredentialEnv:    req.CredentialEnv,
 		CredentialSecret: req.CredentialSecret,
 		ClearCredential:  req.ClearCredential,
+		ProxyMode:        req.ProxyMode,
+		ProxyURL:         req.ProxySecret,
 		Version:          req.Version,
 	}
 }
@@ -398,7 +408,14 @@ type modelTestRequest struct {
 type assistantSettingsRequest struct {
 	DefaultModelID    *uint    `json:"defaultModelId"`
 	AllowPrivateCIDRs []string `json:"allowPrivateCidrs"`
-	Version           int      `json:"version"`
+	// SystemPrompt 自定义系统提示词（FR-541 §3.1）。
+	//
+	// 用 **string 而非 *string**：本接口是整体替换语义（PUT 单例资源），
+	// 省略即「清空」，与 allowPrivateCidrs 的空数组语义一致。
+	SystemPrompt string `json:"systemPrompt"`
+	// BuiltinToolsEnabled 平台自带工具开关（FR-540）。用指针以便「不传=不改」。
+	BuiltinToolsEnabled *bool `json:"builtinToolsEnabled"`
+	Version             int   `json:"version"`
 }
 
 // GetSettings GET /assistant/admin/settings
@@ -422,9 +439,11 @@ func (h *AssistantHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SaveSettings(service.SaveSettingsParams{
-		DefaultModelID:    req.DefaultModelID,
-		AllowPrivateCIDRs: req.AllowPrivateCIDRs,
-		Version:           req.Version,
+		DefaultModelID:      req.DefaultModelID,
+		AllowPrivateCIDRs:   req.AllowPrivateCIDRs,
+		SystemPrompt:        req.SystemPrompt,
+		BuiltinToolsEnabled: req.BuiltinToolsEnabled,
+		Version:             req.Version,
 	}); err != nil {
 		respondAssistantErr(c, err)
 		return
@@ -479,4 +498,23 @@ func parseAssistantID(c *gin.Context) (uint, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// DiscoverModels POST /assistant/admin/providers/:id/discover-models
+//
+// 只回候选清单，不写库：`contextWindow` / `tools` 这类能力声明不能从模型名推断，
+// 必须由管理员确认后走 POST /admin/models 落库。自动导入会把「能力未声明」的
+// 模型塞进默认可选集，之后表现为「聊天报不支持工具」，而问题实际在配置阶段。
+func (h *AssistantHandler) DiscoverModels(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "id 无效"})
+		return
+	}
+	res, derr := h.svc.DiscoverModels(c.Request.Context(), uint(id))
+	if derr != nil {
+		respondAssistantErr(c, derr)
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }

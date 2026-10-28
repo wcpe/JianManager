@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/netip"
@@ -235,5 +236,116 @@ func TestApplyStoredEgressFailsLoudOnCorruptRow(t *testing.T) {
 	}
 	if err := s.ApplyStoredEgress(); err == nil {
 		t.Fatal("脏数据应返回错误")
+	}
+}
+
+// ── 供应商代理（FR-539）──
+//
+// 三条不变量：
+//  1. 默认 direct（**不**回退环境代理）；
+//  2. custom 的地址语法在保存期就挡住；
+//  3. 代理地址与口令**永不回显**，只回 hasAuth 布尔。
+
+func TestProviderProxy_DefaultsToDirect(t *testing.T) {
+	db := newAssistantTestDB(t)
+	svc := NewAssistantService(db, nil)
+	svc.SetEgress(httpclient.NewGuard(httpclient.GuardOptions{})) // 保存期校验需要出站初始化
+	view, err := svc.CreateProvider(SaveProviderParams{
+		Name: "p", Protocol: model.AssistantProtocolOpenAIChat,
+		BaseURL: "https://api.example.com", Enabled: true,
+		CredentialMode: model.AssistantCredentialNone,
+	})
+	if err != nil {
+		t.Fatalf("创建应成功: %v", err)
+	}
+	// 未指定时必须落到 direct——这是「不静默走环境代理」的落点。
+	if view.ProxyMode != model.AssistantProxyDirect {
+		t.Fatalf("默认应为 direct，实际 %q", view.ProxyMode)
+	}
+	if view.ProxyHasAuth {
+		t.Fatal("默认不应有代理凭据")
+	}
+}
+
+func TestProviderProxy_CustomValidation(t *testing.T) {
+	db := newAssistantTestDB(t)
+	svc := NewAssistantService(db, nil)
+	svc.SetEgress(httpclient.NewGuard(httpclient.GuardOptions{}))
+	base := SaveProviderParams{
+		Name: "p", Protocol: model.AssistantProtocolOpenAIChat,
+		BaseURL: "https://api.example.com", Enabled: true,
+		CredentialMode: model.AssistantCredentialNone,
+	}
+
+	// custom 但地址为空 → 拒绝（不能保存一个必然拨号失败的配置）。
+	bad := base
+	bad.ProxyMode = model.AssistantProxyCustom
+	if _, err := svc.CreateProvider(bad); err == nil {
+		t.Fatal("custom 模式缺地址应被拒绝")
+	}
+
+	// 非法 scheme → 拒绝并点名（否则错误会在拨号阶段变成笼统的「连不上」）。
+	bad2 := base
+	bad2.ProxyMode = model.AssistantProxyCustom
+	bad2.ProxyURL = "ftp://proxy:21"
+	if _, err := svc.CreateProvider(bad2); err == nil {
+		t.Fatal("不支持的代理协议应被拒绝")
+	}
+
+	// 合法 socks5 + userinfo：落库且 hasAuth=true，但地址不回显。
+	ok := base
+	ok.ProxyMode = model.AssistantProxyCustom
+	ok.ProxyURL = "socks5://user:pass@proxy:1080"
+	view, err := svc.CreateProvider(ok)
+	if err != nil {
+		t.Fatalf("合法代理应保存成功: %v", err)
+	}
+	if view.ProxyMode != model.AssistantProxyCustom {
+		t.Fatalf("模式应为 custom，实际 %q", view.ProxyMode)
+	}
+	if !view.ProxyHasAuth {
+		t.Fatal("带 userinfo 的代理应标记 hasAuth=true")
+	}
+	// 视图里**不得**出现地址：ProviderView 没有该字段，这里用序列化再确认一次。
+	blob, _ := json.Marshal(view)
+	if strings.Contains(string(blob), "pass") || strings.Contains(string(blob), "proxy:1080") {
+		t.Fatalf("视图泄漏了代理地址或口令: %s", blob)
+	}
+}
+
+func TestProviderProxy_SwitchBackToDirectClearsURL(t *testing.T) {
+	db := newAssistantTestDB(t)
+	svc := NewAssistantService(db, nil)
+	svc.SetEgress(httpclient.NewGuard(httpclient.GuardOptions{}))
+	view, err := svc.CreateProvider(SaveProviderParams{
+		Name: "p", Protocol: model.AssistantProtocolOpenAIChat,
+		BaseURL: "https://api.example.com", Enabled: true,
+		CredentialMode: model.AssistantCredentialNone,
+		ProxyMode:      model.AssistantProxyCustom, ProxyURL: "http://proxy:8080",
+	})
+	if err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+
+	// 切回 direct：必须清空旧地址。
+	// 否则将来误切回 custom 会静默启用一个早已废弃的代理。
+	updated, err := svc.UpdateProvider(view.ID, SaveProviderParams{
+		Name: "p", Protocol: model.AssistantProtocolOpenAIChat,
+		BaseURL: "https://api.example.com", Enabled: true,
+		CredentialMode: model.AssistantCredentialNone,
+		ProxyMode:      model.AssistantProxyDirect, Version: view.Version,
+	})
+	if err != nil {
+		t.Fatalf("更新失败: %v", err)
+	}
+	if updated.ProxyMode != model.AssistantProxyDirect || updated.ProxyHasAuth {
+		t.Fatalf("切回 direct 后应为 direct 且无凭据，实际 %q/%v", updated.ProxyMode, updated.ProxyHasAuth)
+	}
+	var row model.AssistantProvider
+	if err := db.First(&row, view.ID).Error; err != nil {
+		t.Fatalf("查回失败: %v", err)
+	}
+	if row.ProxyURL != "" {
+		t.Fatalf("切回 direct 必须清空代理地址，实际仍为 %q", row.ProxyURL)
 	}
 }

@@ -29,7 +29,11 @@ type AssistantSettingsView struct {
 	DefaultModelID *uint `json:"defaultModelId"`
 	// AllowPrivateCIDRs 已放行的私网网段（规范化后的字符串，如 "10.0.0.0/8"）。
 	AllowPrivateCIDRs []string `json:"allowPrivateCidrs"`
-	Version           int      `json:"version"`
+	// SystemPrompt 自定义系统提示词（FR-541 §3.1）；空表示只用内置基线。
+	SystemPrompt string `json:"systemPrompt"`
+	// BuiltinToolsEnabled 是否向助手暴露平台自带工具（FR-540）；未配置时回显 true。
+	BuiltinToolsEnabled bool `json:"builtinToolsEnabled"`
+	Version             int  `json:"version"`
 	// InsecureAllowed **只读回显**：当前部署是否接受 http:// 明文目标（仅 dev 部署为真）。
 	// 放进视图是为了避免「改了 CIDR 却发现 http 仍不通」这类难以自查的困惑。
 	InsecureAllowed bool `json:"insecureAllowed"`
@@ -44,8 +48,23 @@ type AssistantSettingsView struct {
 type SaveSettingsParams struct {
 	DefaultModelID    *uint
 	AllowPrivateCIDRs []string
+	// SystemPrompt 自定义系统提示词（FR-541 §3.1）。
+	SystemPrompt string
+	// BuiltinToolsEnabled 平台自带工具开关（FR-540）；nil 表示不改动。
+	BuiltinToolsEnabled *bool
 	// Version 为 0 表示跳过并发校验（供初始化与测试使用），非 0 必须与当前值一致。
 	Version int
+}
+
+// builtinToolsEnabled 解析「平台自带工具」开关的生效值（FR-540）。
+//
+// nil 表示从未配置过，此时**默认启用**——这是产品要求的默认行为
+// （装好就能用自带工具）。只有管理员显式关闭才会是 false。
+func builtinToolsEnabled(row model.AssistantSetting) bool {
+	if row.BuiltinToolsEnabled == nil {
+		return true
+	}
+	return *row.BuiltinToolsEnabled
 }
 
 // GetSettings 读取助手全局设置。
@@ -54,7 +73,11 @@ func (s *AssistantService) GetSettings() (*AssistantSettingsView, error) {
 	if err := s.db.First(&row, 1).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// 尚未初始化不算错误：空放行段与无默认模型本身都是合法状态。
-			return &AssistantSettingsView{AllowPrivateCIDRs: []string{}, InsecureAllowed: s.insecureAllowed()}, nil
+			// 未初始化时自带工具按默认**启用**回显（与 BuiltinToolsEnabled 的默认语义一致）。
+			return &AssistantSettingsView{
+				AllowPrivateCIDRs: []string{}, InsecureAllowed: s.insecureAllowed(),
+				BuiltinToolsEnabled: true,
+			}, nil
 		}
 		return nil, fmt.Errorf("查询助手设置失败: %w", err)
 	}
@@ -67,8 +90,12 @@ func (s *AssistantService) GetSettings() (*AssistantSettingsView, error) {
 	return &AssistantSettingsView{
 		DefaultModelID:    row.DefaultModelID,
 		AllowPrivateCIDRs: cidrs,
-		Version:           row.Version,
-		InsecureAllowed:   s.insecureAllowed(),
+		SystemPrompt:      row.SystemPrompt,
+		// 未配置（nil）时回显 true：面板必须显示真实的生效值，
+		// 而不是把「没配置」显示成「已关闭」。
+		BuiltinToolsEnabled: builtinToolsEnabled(row),
+		Version:             row.Version,
+		InsecureAllowed:     s.insecureAllowed(),
 	}, nil
 }
 
@@ -113,13 +140,19 @@ func (s *AssistantService) SaveSettings(p SaveSettingsParams) error {
 		}
 
 		// Where 带 version 做 CAS：两个管理员同时保存时只有一个赢家。
+		updates := map[string]any{
+			"default_model_id":    p.DefaultModelID,
+			"allow_private_cidrs": string(payload),
+			"system_prompt":       strings.TrimSpace(p.SystemPrompt),
+			"version":             row.Version + 1,
+		}
+		// 自带工具开关：nil 表示本次不改（避免「只想改提示词」却意外把它重置）。
+		if p.BuiltinToolsEnabled != nil {
+			updates["builtin_tools_enabled"] = *p.BuiltinToolsEnabled
+		}
 		res := tx.Model(&model.AssistantSetting{}).
 			Where("id = ? AND version = ?", 1, row.Version).
-			Updates(map[string]any{
-				"default_model_id":    p.DefaultModelID,
-				"allow_private_cidrs": string(payload),
-				"version":             row.Version + 1,
-			})
+			Updates(updates)
 		if res.Error != nil {
 			return fmt.Errorf("保存助手设置失败: %w", res.Error)
 		}

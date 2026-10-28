@@ -29,6 +29,11 @@ func newAssistantTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开内存库失败: %v", err)
 	}
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	if err := db.AutoMigrate(&model.AssistantProvider{}, &model.AssistantModel{}, &model.AssistantSetting{}); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}

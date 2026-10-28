@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -23,6 +24,17 @@ var (
 	ErrAssistantConflict = errors.New("名称或标识已存在，或数据已被他人修改")
 	// ErrAssistantInvalid 参数不合规（协议、地址、名称长度等）。
 	ErrAssistantInvalid = errors.New("参数不合规")
+	// ErrAssistantContextTooLarge 页面上下文整体超限（FR-518 §6）：
+	// 与「某项被剔除」区分开——那是裁剪后继续，这是拒收本次请求。
+	ErrAssistantContextTooLarge = errors.New("页面上下文过大")
+	// ErrAssistantForbidden 执行期权限不足（FR-516 §5.1）。
+	// 与「不存在」共用 404 语义会让「谁有这个资源」变成可探测的侧信道，
+	// 故工具执行层面单独区分为 403。
+	ErrAssistantForbidden = errors.New("无权限执行该操作")
+	// FR-516 §7 确认票据错误族。
+	ErrAssistantConfirmExpired  = errors.New("确认已过期")
+	ErrAssistantConfirmConsumed = errors.New("确认已被执行")
+	ErrAssistantConfirmStale    = errors.New("确认已失效")
 	// ErrAssistantEncryptorMissing 未配置加密器却试图保存密文凭据。
 	ErrAssistantEncryptorMissing = errors.New("未配置加密器，无法保存明文凭据")
 	// ErrAssistantInUse 删除被引用的对象。
@@ -88,6 +100,11 @@ type SaveProviderParams struct {
 	CredentialSecret string
 	// ClearCredential 显式清除已保存的密文凭据。
 	ClearCredential bool
+	// ProxyMode 出站代理模式（FR-539）：direct / env / custom。
+	// 空串表示「不改动」（编辑态）或使用默认 direct（创建态）。
+	ProxyMode string
+	// ProxyURL 仅 custom 模式使用。含 userinfo 时整串落库且**永不回显**。
+	ProxyURL string
 	// Version 乐观并发；创建时忽略。
 	Version int
 }
@@ -102,11 +119,15 @@ type ProviderView struct {
 	// CredentialEnv 回显变量名（不是值）——变量名本身不敏感，且管理员需要知道引用了哪个。
 	CredentialEnv string `json:"credentialEnv,omitempty"`
 	// HasCredential 是否已配置可用凭据（stored 有密文 / env 有变量名）。
-	HasCredential bool   `json:"hasCredential"`
-	Enabled       bool   `json:"enabled"`
-	Version       int    `json:"version"`
-	CreatedAt     string `json:"createdAt"`
-	UpdatedAt     string `json:"updatedAt"`
+	HasCredential bool `json:"hasCredential"`
+	// ProxyMode 出站代理模式（FR-539）。
+	ProxyMode string `json:"proxyMode"`
+	// ProxyHasAuth 代理地址是否带 userinfo：只回布尔，**绝不回显地址与口令**。
+	ProxyHasAuth bool   `json:"proxyHasAuth"`
+	Enabled      bool   `json:"enabled"`
+	Version      int    `json:"version"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
 }
 
 // toProviderView 转视图，**刻意不带** CredentialEnc。
@@ -119,6 +140,8 @@ func toProviderView(p model.AssistantProvider) ProviderView {
 		CredentialMode: p.CredentialMode,
 		CredentialEnv:  p.CredentialEnv,
 		HasCredential:  hasCredential(p),
+		ProxyMode:      normalizeProxyMode(p.ProxyMode),
+		ProxyHasAuth:   p.ProxyHasAuth,
 		Enabled:        p.Enabled,
 		Version:        p.Version,
 		CreatedAt:      p.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -168,6 +191,9 @@ func (s *AssistantService) CreateProvider(p SaveProviderParams) (*ProviderView, 
 	if err := s.applyCredential(&row, p); err != nil {
 		return nil, err
 	}
+	if err := applyProviderProxy(&row, p); err != nil {
+		return nil, err
+	}
 	if err := s.db.Create(&row).Error; err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrAssistantConflict
@@ -203,6 +229,9 @@ func (s *AssistantService) UpdateProvider(id uint, p SaveProviderParams) (*Provi
 	if err := s.applyCredential(&row, p); err != nil {
 		return nil, err
 	}
+	if err := applyProviderProxy(&row, p); err != nil {
+		return nil, err
+	}
 	row.Version++
 
 	// 带版本条件更新：并发写时后写者失败而不是覆盖。
@@ -217,6 +246,9 @@ func (s *AssistantService) UpdateProvider(id uint, p SaveProviderParams) (*Provi
 			"credential_enc":    row.CredentialEnc,
 			"credential_set_at": row.CredentialSetAt,
 			"enabled":           row.Enabled,
+			"proxy_mode":        row.ProxyMode,
+			"proxy_url":         row.ProxyURL,
+			"proxy_has_auth":    row.ProxyHasAuth,
 			"version":           row.Version,
 		})
 	if res.Error != nil {
@@ -633,4 +665,79 @@ func (s *AssistantService) AvailableModels() ([]AvailableModel, *uint, error) {
 		}
 	}
 	return out, defaultID, nil
+}
+
+// normalizeProxyMode 归一化代理模式（空值按 direct）。
+//
+// 默认 direct 是刻意的（FR-539）：不回退到 `ProxyFromEnvironment`，
+// 否则「本机为别的用途设了全局代理」会悄悄把模型出站改道，
+// 而管理员在面板上看到的是「直连」。
+func normalizeProxyMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case model.AssistantProxyEnv:
+		return model.AssistantProxyEnv
+	case model.AssistantProxyCustom:
+		return model.AssistantProxyCustom
+	default:
+		return model.AssistantProxyDirect
+	}
+}
+
+// applyProviderProxy 校验并把代理配置写到行上。
+//
+// ## 校验为什么必须在保存期
+//
+// 代理地址是出站请求的前置条件：写错一个 scheme 会让该供应商的所有调用
+// 在「拨号阶段」失败，而错误表现是笼统的「连不上上游」——排查会先怀疑密钥与网络。
+// 在保存期挡住，错误就落在「填错了」这个真实原因上。
+//
+// ## 为什么不校验可达性
+//
+// 保存期只判语法（scheme/host/port）。可达性是运行期事实，
+// 在这里探测会让「保存配置」变成一次网络请求，且代理可能只在特定网络下可达。
+func applyProviderProxy(row *model.AssistantProvider, p SaveProviderParams) error {
+	// 空串语义分两种：
+	//   - 编辑态（row.ID != 0）：不改动，保留库里原值——否则「只想改名字」会顺手把代理清掉；
+	//   - 创建态（row.ID == 0）：落到默认 direct（**不是**空串，否则视图会回一个空模式）。
+	if strings.TrimSpace(p.ProxyMode) == "" {
+		if row.ID != 0 {
+			return nil
+		}
+		row.ProxyMode = model.AssistantProxyDirect
+		row.ProxyURL = ""
+		row.ProxyHasAuth = false
+		return nil
+	}
+	mode := normalizeProxyMode(p.ProxyMode)
+	row.ProxyMode = mode
+
+	if mode != model.AssistantProxyCustom {
+		// 非 custom 模式必须清空地址：否则切回 direct 后旧地址仍在库里，
+		// 将来误切回 custom 会静默启用一个早已废弃的代理。
+		row.ProxyURL = ""
+		row.ProxyHasAuth = false
+		return nil
+	}
+
+	raw := strings.TrimSpace(p.ProxyURL)
+	if raw == "" {
+		// custom 但地址为空：保留原值（编辑态只改别的字段时不该要求重填地址）。
+		if row.ProxyURL != "" {
+			row.ProxyMode = model.AssistantProxyCustom
+			return nil
+		}
+		return fmt.Errorf("%w: 代理模式为 custom 时必须填写代理地址", ErrAssistantInvalid)
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%w: 代理地址不合法（需形如 http://host:port 或 socks5://host:port）", ErrAssistantInvalid)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5":
+	default:
+		return fmt.Errorf("%w: 不支持的代理协议 %q（仅 http / https / socks5）", ErrAssistantInvalid, u.Scheme)
+	}
+	row.ProxyURL = raw
+	row.ProxyHasAuth = u.User != nil
+	return nil
 }
