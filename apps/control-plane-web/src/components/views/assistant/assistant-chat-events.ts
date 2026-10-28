@@ -29,9 +29,13 @@ export function applyEventToMessages(
       return patch({ streaming: false, note: msg })
     }
     case 'run_end': {
-      // 终态：run_end 每 run 恰好一条。note 为空表示正常完成。
+      // 终态：run_end 每 run 恰好一条。
+      //
+      // `run_end` 通常**不带** note（失败原因在它前面那条 `error` 帧里）。因此这里有值时
+      // 才覆盖：无条件写 `note: note || undefined` 会把上一条 `error` 刚写好的失败原因抹掉，
+      // 界面上就只剩一条没有回复、也没有任何提示的提问（真实上游不可达时实测到）。
       const note = (frame.data as { note?: string } | null)?.note ?? ''
-      return patch({ streaming: false, note: note || undefined })
+      return patch(note ? { streaming: false, note } : { streaming: false })
     }
     default:
       // 工具相关与 usage 事件在 FR-516 前不会出现；出现了也不该让文本流断掉，

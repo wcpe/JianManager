@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { startTransition, useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 
 export interface VirtualWindowInput {
   total: number
@@ -136,6 +136,15 @@ interface VirtualRowsOptions {
    * 窗口/总高/占位全部按前缀和计算（控制台自动换行用）。
    */
   sizes?: readonly number[]
+  /**
+   * 可选的**外部容器 ref**。
+   *
+   * 默认由 hook 自建并返回；当调用方还需要对这个滚动容器做别的事
+   * （如「贴底跟随」读取 scrollHeight、或自定义 onScroll 逻辑）时，
+   * 让调用方持有 ref 更直接——否则调用方只能改写 hook 返回的 ref，
+   * 那既违背单向数据流，也会触发 `react-hooks/immutability` 规则。
+   */
+  containerRef?: RefObject<HTMLDivElement | null>
 }
 
 export function useVirtualRows({
@@ -145,9 +154,19 @@ export function useVirtualRows({
   fallbackViewportSize = 640,
   fallbackCrossSize = 1024,
   sizes,
+  containerRef: externalRef,
 }: VirtualRowsOptions) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  /** 待执行的滚动合并回调（见 onScroll）。挂在 ref 上以便卸载时取消，避免卸载后 setState。 */
+  const internalRef = useRef<HTMLDivElement>(null)
+  /**
+   * 容器 ref：外部提供则用之，否则用内部自建的。
+   *
+   * 用 `useMemo` 而不是直接 `externalRef ?? internalRef`：后者是一个**每次渲染都会
+   * 重新求值的表达式**，React Compiler 无法追踪它在闭包里是否稳定，会报
+   * "Existing memoization could not be preserved" 并跳过该组件的自动记忆化。
+   * 两个来源本身都是稳定 ref（`useRef` 的返回对象、或调用方传的 ref），
+   * 所以只需把这个选择动作 memo 一次。
+   */
+  const containerRef = useMemo(() => externalRef ?? internalRef, [externalRef, internalRef])
   const scrollRafRef = useRef<number | null>(null)
   const [metrics, setMetrics] = useState({
     viewportSize: fallbackViewportSize,
@@ -155,6 +174,13 @@ export function useVirtualRows({
     scrollOffset: 0,
   })
 
+  /*
+    containerRef 是稳定 ref（`externalRef ?? internalRef`，两者都是 ref 对象），
+    但 React Compiler 无法穿透 `??` 证明这点，于是跳过本组件的自动记忆化并报
+    "Existing memoization could not be preserved"。下方依赖数组与 memo 均已手写完整，
+    故接受该提示（是优化被跳过的告知，不是正确性问题）。
+  */
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- 见上：稳定 ref，依赖已手写
   const measure = useCallback(() => {
     const el = containerRef.current
     if (!el) return
@@ -183,7 +209,7 @@ export function useVirtualRows({
           : next,
       )
     })
-  }, [fallbackCrossSize, fallbackViewportSize])
+  }, [containerRef, fallbackCrossSize, fallbackViewportSize])
 
   useLayoutEffect(() => {
     measure()
@@ -216,7 +242,7 @@ export function useVirtualRows({
       resizeObserver?.disconnect()
       window.removeEventListener('resize', debouncedMeasure)
     }
-  }, [measure])
+  }, [containerRef, measure])
 
   /**
    * 把当前滚动位置同步进 metrics（同值短路，与 measure 同一标准）。
@@ -225,13 +251,14 @@ export function useVirtualRows({
    * bailout → 即使 scrollTop 没变也要重渲染整个列表（本文件多处列表页组件树都在千级元素量级）。
    * 返回 prev 时 React 直接跳过本次渲染，与 measure 里的处理一致。
    */
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- 同上：稳定 ref + 依赖已手写
   const flushScroll = useCallback(() => {
     scrollRafRef.current = null
     const el = containerRef.current
     if (!el) return
     const next = el.scrollTop
     setMetrics((prev) => (prev.scrollOffset === next ? prev : { ...prev, scrollOffset: next }))
-  }, [])
+  }, [containerRef])
 
   /**
    * 滚动事件处理器。

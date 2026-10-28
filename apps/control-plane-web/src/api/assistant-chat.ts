@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from './client'
 
 /**
@@ -28,7 +28,20 @@ export interface AssistantMessage {
   conversationId: number
   role: 'user' | 'assistant' | 'tool' | string
   content: string
+  /**
+   * 该消息由哪一轮 run 产出。
+   *
+   * 判定「本轮是否已落库」要用它：失败轮（如上游不可达）**不写消息表**，
+   * 只看条数或内容无法区分「已落库」与「历史里恰好有同样文字」。
+   */
+  runId?: number | null
   createdAt: string
+  /** 首次编辑前的原文（FR-543）；未编辑过为 null。 */
+  originalContent?: string | null
+  editedAt?: string | null
+  editCount?: number
+  /** 被回退取代的时刻（FR-543）；非空表示已从会话上下文中移除但未物理删除。 */
+  supersededAt?: string | null
 }
 
 /** 事件帧（与后端 assistantEventFrame 逐字段对应）。events 补读接口回的是**裸数组**。 */
@@ -71,6 +84,63 @@ export interface AssistantRunAccepted {
 
 const CHAT_KEY = ['assistant', 'chat'] as const
 
+/**
+ * 逐调用确认票据（FR-516 §7）。
+ *
+ * 与对话事件分开取数：票据是**用户决策对象**，不是消息流的一部分。
+ * 混进事件流会让「刷新后卡片消失」——而用户恰恰可能在刷新后才回来确认。
+ */
+export interface AssistantConfirmation {
+  id: number
+  toolName: string
+  operation: string
+  /** 冻结参数（票据创建时的原样快照，核对与执行都以它为准）。 */
+  args: unknown
+  targetType: string
+  targetId: string
+  expiresAt: string
+  /** write / destructive。 */
+  risk: string
+}
+
+/** 某 run 的待确认票据（仅所有者）。 */
+export function useRunConfirmations(runId: number | null) {
+  return useQuery({
+    queryKey: [...CHAT_KEY, 'confirmations', runId],
+    queryFn: async () => {
+      const { data } = await api.get<{ items: AssistantConfirmation[] }>(
+        `/assistant/runs/${runId}/confirmations`,
+      )
+      return data.items ?? []
+    },
+    enabled: runId !== null,
+  })
+}
+
+/**
+ * 决定一张票据。
+ *
+ * 只发 `{decision}`：后端明确不接受新参数或新目标（防止「确认即改参」），
+ * 因此前端也不构造其它字段——多传反而会掩盖契约意图。
+ */
+export function useDecideConfirmation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, decision }: { id: number; decision: 'approve' | 'reject' }) => {
+      const { data } = await api.post<{ id: number; status: string }>(
+        `/assistant/confirmations/${id}/decide`,
+        { decision },
+      )
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...CHAT_KEY, 'confirmations'] })
+      // 确认后 run 状态会变（可能恢复执行），历史也可能更新。
+      void qc.invalidateQueries({ queryKey: [...CHAT_KEY] })
+    },
+  })
+}
+
 /** 会话列表（按更新时间倒序，后端已排序）。 */
 export function useAssistantConversations(enabled = true) {
   return useQuery({
@@ -87,16 +157,102 @@ export function useAssistantConversations(enabled = true) {
   })
 }
 
+/**
+ * 会话列表（**无限滚动**，供历史抽屉分页）。
+ *
+ * 与 `useAssistantConversations` 并存而不是替换它：仪表盘/浮窗首屏只要一页，
+ * 用 useQuery 更简单；抽屉需要「加载更多」，才用 infinite。两者共用同一个 queryKey 前缀，
+ * 失效（invalidate）时一起刷新，不会出现「抽屉里删了会话、首屏还留着」。
+ */
+export function useAssistantConversationsInfinite(enabled = true) {
+  return useInfiniteQuery({
+    queryKey: [...CHAT_KEY, 'conversations', 'infinite'],
+    initialPageParam: '' as string,
+    queryFn: async ({ pageParam }) => {
+      const qs = pageParam ? `?cursor=${encodeURIComponent(pageParam)}` : ''
+      const { data } = await api.get<{ items: AssistantConversation[]; nextCursor?: string }>(
+        `/assistant/conversations${qs}`,
+      )
+      return { items: data.items ?? [], nextCursor: data.nextCursor ?? '' }
+    },
+    // 空字符串表示没有下一页（后端用空串/缺失表达结束，这里统一成 ''）。
+    getNextPageParam: (last) => last.nextCursor || undefined,
+    enabled,
+  })
+}
+
 /** 单个会话的消息历史。 */
 export function useAssistantMessages(conversationId: number | null) {
   return useQuery({
     queryKey: [...CHAT_KEY, 'messages', conversationId],
     queryFn: async () => {
-      // 后端形状：{ items }。
-      const { data } = await api.get<{ items: AssistantMessage[] }>(
-        `/assistant/conversations/${conversationId}/messages`,
+      /*
+        **翻页拉全**，而不是只取后端默认的一页。
+
+        后端 `/messages` 默认 `limit=20`（`assistantChatDefaultLimit`），长会话因此
+        只显示最近 20 条、滚到顶部也看不到第 1 条——这是实测确认的可用性缺口
+        （FR-519 §7.4）。游标语义：`before` 是消息 **id**（后端 `WHERE id < ?`），
+        每页内部按 id 升序返回，所以要用 `unshift` 把更早的一页拼到前面。
+
+        `MAX_PAGES` 是硬上限（20 页 × 100 = 2000 条）：正常会话远达不到，
+        但病态会话不该把页面拖死——超限时保留最近 2000 条，至少尾部可用。
+      */
+      if (conversationId === null) return []
+      const PAGE = 100
+      const MAX_PAGES = 20
+      const all: AssistantMessage[] = []
+      let before: number | undefined
+
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const { data } = await api.get<{ items: AssistantMessage[] }>(
+          `/assistant/conversations/${conversationId}/messages`,
+          { params: { limit: PAGE, ...(before !== undefined ? { before } : {}) } },
+        )
+        const items = data.items ?? []
+        // 更早的一页要拼在已有内容之前
+        all.unshift(...items)
+        if (items.length < PAGE) return all
+        const earliest = items[0]?.id
+        if (earliest === undefined) return all
+        before = earliest
+      }
+      return all
+    },
+    enabled: conversationId !== null,
+  })
+}
+
+/** 历史工具回显：某条消息当时调用的工具及其最终状态（FR-519）。 */
+export interface AssistantToolCallRecord {
+  callId: string
+  name: string
+  /** running / pending_confirmation / ok / failed。 */
+  status: string
+  errorCode?: string
+  /** 调用参数原始 JSON（后端已限长）。 */
+  argsJson?: string
+  preview?: string
+  truncated?: boolean
+  seq: number
+}
+
+/**
+ * 会话内按 messageId 分组的工具调用记录。
+ *
+ * 这些数据一直在事件流里，此前只是没有读取面——回看历史看不到任何工具痕迹，
+ * 用户无法判断「当时到底调了没有、失败在哪一步」。
+ * 只回有工具调用的消息；没有的消息不出现在 map 里。
+ */
+export function useAssistantToolCalls(conversationId: number | null) {
+  return useQuery({
+    queryKey: [...CHAT_KEY, 'tool-calls', conversationId],
+    queryFn: async () => {
+      // 后端形状：{ byMessage: { [messageId]: [...] } }。
+      // JSON 的对象键只能是字符串，取用时需按 String(id) 查。
+      const { data } = await api.get<{ byMessage: Record<string, AssistantToolCallRecord[]> }>(
+        `/assistant/conversations/${conversationId}/tool-calls`,
       )
-      return data.items ?? []
+      return data.byMessage ?? {}
     },
     enabled: conversationId !== null,
   })
@@ -300,4 +456,67 @@ function getAccessToken(): string | null {
   } catch {
     return null
   }
+}
+
+// ── 历史检索、编辑与回退（FR-542 / FR-543） ──────────────────────
+
+/**
+ * 带关键词的会话检索（服务端 `q`）。
+ *
+ * **不在前端过滤全量**：会话量级随时间增长，把全部会话拉到浏览器再筛
+ * 既慢又会让「搜索结果不全」变成一个难察觉的假象（只搜到了已加载的那一页）。
+ */
+export function useAssistantConversationSearch(keyword: string, enabled = true) {
+  const q = keyword.trim()
+  return useQuery({
+    queryKey: [...CHAT_KEY, 'conversations', 'search', q],
+    queryFn: async () => {
+      const { data } = await api.get<{ items: AssistantConversation[]; nextCursor?: string }>(
+        '/assistant/conversations',
+        { params: q ? { q } : undefined },
+      )
+      return data.items ?? []
+    },
+    // 空关键词时不查：列表页首屏由 useAssistantConversationsInfinite 承担。
+    enabled: enabled && q !== '',
+  })
+}
+
+/** 编辑一条用户消息（不自动重跑）。 */
+export function useEditAssistantMessage() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { messageId: number; content: string }) => {
+      const { data } = await api.patch<AssistantMessage>(
+        `/assistant/messages/${input.messageId}`,
+        { content: input.content },
+      )
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: CHAT_KEY })
+    },
+  })
+}
+
+/**
+ * 把会话回退到某条消息。
+ *
+ * **只回退会话内容，不撤销已发生的副作用**——回退到「启动实例」之前，
+ * 那个实例仍然是启动着的。调用方必须在确认弹窗里把这句话写给用户看。
+ */
+export function useRollbackAssistantConversation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { conversationId: number; messageId: number }) => {
+      const { data } = await api.post<{ superseded: number }>(
+        `/assistant/conversations/${input.conversationId}/rollback`,
+        { messageId: input.messageId },
+      )
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: CHAT_KEY })
+    },
+  })
 }

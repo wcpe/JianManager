@@ -5,6 +5,8 @@ import { TopLoadingBar } from '@/components/views/common/TopLoadingBar'
 import { useInstanceEvents } from '@/api/events'
 import ConsoleHeader from '@/components/console/ConsoleHeader'
 import { AssistantDock } from '@/components/views/assistant/AssistantDock'
+import { useAssistantChat } from '@/components/views/assistant/useAssistantChat'
+import { AssistantChatProvider } from '@/components/views/assistant/assistant-chat-context'
 import { useConsoleStore } from '@/stores/console'
 import WorkspaceSidebar from '@/components/console/WorkspaceSidebar'
 import CommandPalette from '@/components/console/CommandPalette'
@@ -50,6 +52,15 @@ export default function DashboardPage() {
   // 助手浮窗开关放在 console store（顶栏入口与浮窗分处两棵树，且浮窗需跨路由常驻）。
   const assistantOpen = useConsoleStore((s) => s.assistantDockOpen)
   const setAssistantOpen = useConsoleStore((s) => s.setAssistantDockOpen)
+  /*
+    会话状态的**唯一持有者**（FR-519 §3「外壳级单一 manager」）。
+
+    必须在这里调、且只调一次：`useAssistantChat` 内部全是组件级 useState，
+    每多调一次就多一份独立状态。此前首页与浮窗各自调用，导致
+    「首页正在输出的内容，浮窗里看不到」以及两边可能各发一轮撞 409。
+    首页在路由树、浮窗在 Shell 层，两者非父子，只能经 Context 下发。
+  */
+  const assistantChat = useAssistantChat(true)
 
   return (
     <div
@@ -57,6 +68,10 @@ export default function DashboardPage() {
       style={SIDEBAR_WIDTH_VARS}
       className="jm-console-shell flex h-screen w-screen flex-col overflow-hidden"
     >
+      {/* 整个外壳共享同一份助手会话状态：首页（路由树内）与浮窗（Shell 层）
+          都从这里取，只有一份。拆成两个 Provider 虽然 value 相同也能工作，
+          但会让人误以为存在两份状态，故统一包在最外层。 */}
+      <AssistantChatProvider value={assistantChat}>
       <TopLoadingBar
         routeKey={`${location.key}:${location.pathname}${location.search}`}
         pendingCount={pendingCount}
@@ -76,6 +91,7 @@ export default function DashboardPage() {
       {/* 全局助手浮窗（FR-519）：挂在壳层而非页面里，因此跨路由不卸载、
           会话与 run 不受路由切换影响（关闭浮窗也不停止 run）。 */}
       <AssistantDock open={assistantOpen} onOpenChange={setAssistantOpen} />
+      </AssistantChatProvider>
     </div>
   )
 }
