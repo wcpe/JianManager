@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyEventToMessages } from '@/components/views/assistant/assistant-chat-events'
+import { isToolDispatcher, isToolExploration } from '@/components/views/assistant/assistant-tool-status'
 import type { AssistantEventFrame } from '@/api/assistant-chat'
 
 /**
@@ -46,6 +47,19 @@ describe('applyEventToMessages', () => {
     expect(list[0]!.note).toBe('已达工具轮次上限')
   })
 
+  it('run_end 不带 note 时**不清掉**之前 error 写的失败原因', () => {
+    // 真实上游不可达时的事件序列就是 error → run_end（run_end 的 data 里没有 note）。
+    // 若无条件用 run_end 的 note 覆盖，界面会只剩一条没有回复也没有提示的提问。
+    let list = applyEventToMessages(
+      [],
+      frame({ seq: 1, type: 'error', data: { message: '请求上游失败：connection refused' } }),
+      'run-1',
+    )
+    list = applyEventToMessages(list, frame({ seq: 2, type: 'run_end', data: {} }), 'run-1')
+    expect(list[0]!.streaming).toBe(false)
+    expect(list[0]!.note).toBe('请求上游失败：connection refused')
+  })
+
   it('未知事件类型被忽略且不影响既有内容（FR-516 前向兼容）', () => {
     let list = applyEventToMessages([], frame({ type: 'text_delta', data: { text: 'a' } }), 'run-1')
     const before = JSON.stringify(list)
@@ -72,5 +86,30 @@ describe('applyEventToMessages', () => {
     expect(list).toHaveLength(2)
     expect(list[0]!.content).toBe('A')
     expect(list[1]!.content).toBe('B')
+  })
+})
+
+/**
+ * 渐进式披露的工具分类（FR-544）。
+ *
+ * 断言点：`call_tool` **不算探索**。它是真正执行——若把它也标成「探索」，
+ * 用户会把一次真实的写操作误读成「它只是在查工具」，那是危险的误标。
+ */
+describe('isToolExploration / isToolDispatcher', () => {
+  it('search 与 describe 属于探索', () => {
+    expect(isToolExploration('system_search_tools')).toBe(true)
+    expect(isToolExploration('system_describe_tool')).toBe(true)
+  })
+
+  it('call_tool 不算探索，而是执行入口', () => {
+    expect(isToolExploration('system_call_tool')).toBe(false)
+    expect(isToolDispatcher('system_call_tool')).toBe(true)
+  })
+
+  it('普通业务工具两者都不是', () => {
+    for (const name of ['agent_get_instance', 'instance_start', 'conn_slug_tool']) {
+      expect(isToolExploration(name)).toBe(false)
+      expect(isToolDispatcher(name)).toBe(false)
+    }
   })
 })

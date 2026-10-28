@@ -46,6 +46,10 @@ export interface AssistantProvider {
   credentialEnv?: string
   /** 是否已配置可用凭据。 */
   hasCredential: boolean
+  /** 出站代理模式（FR-539）：direct / env / custom。 */
+  proxyMode: string
+  /** 代理是否带 userinfo（只回布尔，绝不回显地址与口令）。 */
+  proxyHasAuth: boolean
   enabled: boolean
   version: number
   createdAt: string
@@ -64,6 +68,8 @@ export interface AssistantModel {
   tools: boolean
   contextWindow: number | null
   maxOutputTokens: number | null
+  /** 思考强度（FR-541）；空串表示不指定。 */
+  reasoningEffort: string
   enabled: boolean
   providerEnabled: boolean
   version: number
@@ -92,6 +98,10 @@ export interface ProviderPayload {
   /** 空串表示保留原密文（编辑态）或必填（创建态，由后端判定）。 */
   credentialSecret?: string
   clearCredential?: boolean
+  /** 出站代理模式（FR-539）：direct / env / custom；空串表示不改动。 */
+  proxyMode?: string
+  /** 自定义代理地址（含 userinfo 时整串落库且永不回显）。 */
+  proxyUrl?: string
   version?: number
 }
 
@@ -104,6 +114,8 @@ export interface ModelPayload {
   tools: boolean
   contextWindow: number | null
   maxOutputTokens: number | null
+  /** 思考强度（FR-541）；空串表示不指定（由上游默认）。 */
+  reasoningEffort: string
   enabled: boolean
   version?: number
 }
@@ -284,6 +296,10 @@ export interface AssistantAdminSettings {
   defaultModelId: number | null
   /** 已放行的私网段（规范化后的字符串，如 "10.0.0.0/8"）。 */
   allowPrivateCidrs: string[]
+  /** 自定义系统提示词（FR-541）；空串表示只用内置基线。 */
+  systemPrompt: string
+  /** 是否向助手暴露平台自带工具（FR-540）；未配置时后端回显 true。 */
+  builtinToolsEnabled: boolean
   version: number
   /** 当前部署是否接受 http:// 明文目标（dev 环境才为真），只读回显。 */
   insecureAllowed: boolean
@@ -293,6 +309,10 @@ export interface AssistantAdminSettings {
 export interface AssistantAdminSettingsPayload {
   defaultModelId: number | null
   allowPrivateCidrs: string[]
+  /** 自定义系统提示词（整体替换语义：省略即清空）。 */
+  systemPrompt: string
+  /** 自带工具开关；不传表示不改动。 */
+  builtinToolsEnabled?: boolean
   version: number
 }
 
@@ -323,6 +343,280 @@ export function useSaveAssistantSettings() {
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['assistant'] })
+    },
+  })
+}
+
+// ── 外部 MCP 连接（FR-517） ──────────────────────────────────────
+//
+// 全部仅平台管理员；凭据只在**提交时**上行（`authSecret`），下行永远没有它，
+// 只有 `hasCredential` 布尔。
+
+/** 一条 origin 放行规则（精确 origin + CIDR）。 */
+export interface MCPAllowedOrigin {
+  scheme: string
+  host: string
+  port: number
+  cidrs: string[]
+}
+
+/** 外部连接视图（凭据永不出现）。 */
+export interface MCPConnection {
+  id: number
+  slug: string
+  name: string
+  endpoint: string
+  authStyle: string
+  authHeaderName: string
+  authSource: string
+  /** 只表示「有没有凭据」，不含值。 */
+  hasCredential: boolean
+  allowedOrigins: MCPAllowedOrigin[] | null
+  enabled: boolean
+  policyVersion: number
+  lastProbeAt: string | null
+  lastProbeOk: boolean | null
+  /** 上次探测失败 → 目录可能是陈旧的。 */
+  discoveryStale: boolean
+  toolCount: number
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 外部工具视图（`description` 是上游文本，**不可信**）。 */
+export interface MCPTool {
+  id: number
+  connectionId: number
+  remoteName: string
+  namespacedName: string
+  description: string
+  inputSchema: string
+  risk: string
+  enabled: boolean
+  schemaHash: string
+  discoveredAt: string
+}
+
+/** 连接列表。 */
+export function useMCPConnections() {
+  return useQuery({
+    queryKey: ['assistant', 'mcp', 'connections'],
+    queryFn: async () => {
+      const { data } = await api.get<{ items: MCPConnection[] }>('/assistant/admin/connections')
+      return data.items ?? []
+    },
+  })
+}
+
+/** 某连接的工具清单。 */
+export function useMCPTools(connectionId: number | null) {
+  return useQuery({
+    queryKey: ['assistant', 'mcp', 'tools', connectionId],
+    queryFn: async () => {
+      const { data } = await api.get<{ items: MCPTool[] }>(
+        `/assistant/admin/connections/${connectionId}/tools`,
+      )
+      return data.items ?? []
+    },
+    enabled: connectionId !== null,
+  })
+}
+
+/** 创建/更新连接的请求体。 */
+export interface MCPConnectionPayload {
+  slug: string
+  name: string
+  endpoint: string
+  authStyle: string
+  authHeaderName: string
+  authSource: string
+  authEnv: string
+  /** 明文凭据；留空表示保留原值。 */
+  authSecret: string
+  clearCredential: boolean
+  allowedOrigins: MCPAllowedOrigin[]
+  enabled: boolean
+  version?: number
+}
+
+/** 新建连接。 */
+export function useCreateMCPConnection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: MCPConnectionPayload) => {
+      const { data } = await api.post<MCPConnection>('/assistant/admin/connections', payload)
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant', 'mcp'] })
+    },
+  })
+}
+
+/** 更新连接。 */
+export function useUpdateMCPConnection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, payload }: { id: number; payload: MCPConnectionPayload }) => {
+      const { data } = await api.put<MCPConnection>(`/assistant/admin/connections/${id}`, payload)
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant', 'mcp'] })
+    },
+  })
+}
+
+/** 删除连接（连同其工具）。 */
+export function useDeleteMCPConnection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      await api.delete(`/assistant/admin/connections/${id}`)
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant', 'mcp'] })
+    },
+  })
+}
+
+/** 连通性探测（不落库工具）。 */
+export function useProbeMCPConnection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.post<{ ok: boolean; latencyMs: number }>(
+        `/assistant/admin/connections/${id}/probe`,
+        {},
+      )
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant', 'mcp', 'connections'] })
+    },
+  })
+}
+
+/**
+ * 拉取工具清单。
+ *
+ * 超额（>200）时后端回 409 `MCP_TOOLS_LIMIT` 并**整次失败、不落库**——
+ * 前端必须把这个当成明确错误展示，而不是「发现到一半」。
+ */
+export function useDiscoverMCPTools() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.post<{ items: MCPTool[] }>(
+        `/assistant/admin/connections/${id}/discover`,
+        {},
+      )
+      return data.items ?? []
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant', 'mcp'] })
+    },
+  })
+}
+
+/** 启停工具 / 设定风险分类（PATCH 语义：只改给出的字段）。 */
+export function useUpdateMCPTool() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      connectionId,
+      toolId,
+      enabled,
+      risk,
+    }: {
+      connectionId: number
+      toolId: number
+      enabled?: boolean
+      risk?: string
+    }) => {
+      await api.patch(`/assistant/admin/connections/${connectionId}/tools/${toolId}`, {
+        ...(enabled === undefined ? {} : { enabled }),
+        ...(risk === undefined ? {} : { risk }),
+      })
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant', 'mcp'] })
+    },
+  })
+}
+
+// ── 模型自动发现（FR-538） ──────────────────────────────────────
+//
+// 只读候选，不自动入库：`contextWindow` / `tools` 不能从模型名推断，
+// 必须由管理员确认后走 useCreateModel 落库。
+
+export interface DiscoveredModel {
+  modelId: string
+  /** 本地已配置过同 ID：默认不勾选，避免重复导入。 */
+  alreadyConfigured: boolean
+}
+
+export interface DiscoverModelsResult {
+  discovered: DiscoveredModel[]
+  total: number
+  /** 上游条目超过上限时为 true（不是「上游只有这么多」）。 */
+  truncated: boolean
+  skipped?: Record<string, string>
+}
+
+export function useDiscoverModels() {
+  return useMutation({
+    mutationFn: async (providerId: number) => {
+      const { data } = await api.post<DiscoverModelsResult>(
+        `/assistant/admin/providers/${providerId}/discover-models`,
+      )
+      return data
+    },
+  })
+}
+
+// ── 技能（FR-541） ──────────────────────────────────────────────
+
+export interface AssistantSkill {
+  name: string
+  description: string
+  whenToUse?: string
+  version?: string
+  source?: string
+  /** SKILL.md 正文：管理页要能预览「模型会被告知什么」。 */
+  instructions: string
+  path: string
+}
+
+export interface AssistantSkillsResult {
+  skills: AssistantSkill[]
+  /** 装载被跳过的技能与原因。只回「有哪些技能」会让改坏的技能凭空消失而无解释。 */
+  skipped: Record<string, string>
+}
+
+export function useAssistantSkills(enabled = true) {
+  return useQuery({
+    queryKey: ['assistant', 'skills'],
+    queryFn: async () => {
+      const { data } = await api.get<AssistantSkillsResult>('/assistant/admin/skills')
+      return data
+    },
+    enabled,
+  })
+}
+
+export function useReloadAssistantSkills() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<{ loaded: number; skipped: Record<string, string> }>(
+        '/assistant/admin/skills/reload',
+      )
+      return data
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['assistant', 'skills'] })
     },
   })
 }
