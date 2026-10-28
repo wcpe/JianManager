@@ -80,13 +80,9 @@ func newReclaimFixture(t *testing.T) *reclaimFixture {
 		}
 	}))
 	t.Cleanup(hotServer.Close)
-	coldServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	t.Cleanup(coldServer.Close)
 	hot, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: hotServer.URL})
 	require.NoError(t, err)
-	cold, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: coldServer.URL})
-	require.NoError(t, err)
-	physical, err := NewVLPartitionOps(hot, cold, f.hotRoot, t.TempDir(), cat)
+	physical, err := NewVLPartitionOps(hot, f.hotRoot, cat)
 	require.NoError(t, err)
 	f.physical = physical
 

@@ -25,7 +25,10 @@ log_retention:
     copy_verify_budget: 2h
     recovery_budget: 24h
   hot_retention: 90d
-  cold_retention: 730d
+  # 2026-10-29：冷热双层废除后 cold_retention 是「同一个 VL 能查多久」的声明，
+  # 必须 <= log_vl.retention_period（默认 180d），否则启动即拒。
+  # 本用例要钉的是「按天写的保留期必须能被解析」，故取 180d（原为 730d）。
+  cold_retention: 180d
   trigger:
     disk_percent: 85
     min_age: 7d
@@ -42,7 +45,7 @@ log_retention:
 	}
 	cfg, err := Load(path)
 	if err != nil {
-		t.Fatalf("含 90d/730d 的保留配置必须能加载（time.Duration 字段会让整个 Load 失败）：%v", err)
+		t.Fatalf("含 90d/180d 的保留配置必须能加载（time.Duration 字段会让整个 Load 失败）：%v", err)
 	}
 	policy, err := cfg.RetentionPolicy()
 	if err != nil {
@@ -51,8 +54,8 @@ log_retention:
 	if policy.HotRetention != 90*24*time.Hour {
 		t.Errorf("hot_retention 应为 90d，得到 %s", policy.HotRetention)
 	}
-	if policy.ColdRetention != 730*24*time.Hour {
-		t.Errorf("cold_retention 应为 730d，得到 %s", policy.ColdRetention)
+	if policy.ColdRetention != 180*24*time.Hour {
+		t.Errorf("cold_retention 应为 180d，得到 %s", policy.ColdRetention)
 	}
 	if policy.Trigger.DiskPercent != 85 {
 		t.Errorf("trigger.disk_percent 应为 85，得到 %v", policy.Trigger.DiskPercent)
@@ -66,10 +69,11 @@ log_retention:
 	if got := policy.EffectiveTTL("inst:151", "DEBUG"); got != 3*24*time.Hour {
 		t.Errorf("全局 debug 应为 3d，得到 %s", got)
 	}
-	// 冷层不得按级别分档：冷层是「所有级别统一」。
+	// 长期留存不得按级别分档：它是「所有级别统一」。
+	// 2026-10-29：冷热双层废除后它不再对应物理层，而是同一个 VL 的可查范围，取值 180d。
 	n := policy.Normalize()
-	if n.ColdRetention != 730*24*time.Hour {
-		t.Errorf("冷层保留期应统一为 730d，得到 %s", n.ColdRetention)
+	if n.ColdRetention != 180*24*time.Hour {
+		t.Errorf("长期保留期应统一为 180d，得到 %s", n.ColdRetention)
 	}
 }
 

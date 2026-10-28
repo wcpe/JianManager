@@ -20,12 +20,16 @@ func loadLogPolicyFixture(t *testing.T, body string) (*Config, error) {
 func TestLoadRejectsRetentionMismatchAndRawPolicy(t *testing.T) {
 	cases := []struct{ name, body, errorKey string }{
 		{"热层长于实际", "log_retention:\n  enabled: true\n  hot_retention: 180d\n", "retention_period"},
-		{"冷层长于实际", "log_retention:\n  enabled: true\n  cold_retention: 1000d\n", "cold_retention_period"},
+		// 2026-10-29：`log_vl.cold_retention_period` 已删除；`log_retention.cold_retention` 现在
+		// 与 hot_retention 一起取最大值去校 `log_vl.retention_period`，故错误键是 retention_period。
+		{"长期声明长于实际", "log_retention:\n  enabled: true\n  cold_retention: 1000d\n", "retention_period"},
 		// 空串回退到 vlsup.DefaultRetentionPeriod（2026-10-21 起为 120d）。
 		// 该回退值本身**长于**热窗口 90d，故不再被拒 —— 本用例改为显式给一个
 		// 短于热窗口的值，继续锁住「VL retention 短于热窗口必须启动即拒」这一红线。
 		{"热层短于实际", "log_retention:\n  enabled: true\nlog_vl:\n  retention_period: '30d'\n", "retention_period"},
-		{"冷层空白回退热层", "log_retention:\n  enabled: true\nlog_vl:\n  cold_retention_period: '   '\n", "cold_retention_period"},
+		// 2026-10-29：原「冷层空白回退热层」用例随 `cold_retention_period` 一起失效——
+		// 单实例下「空白」回退到唯一的默认保留期（180d），与声明相等，因此**不该**被拒；
+		// 「显式给一个短于声明的值必须拒」已由上面的「热层短于实际」覆盖。
 		{"未知等级", "log_retention:\n  enabled: true\n  by_level:\n    mystery: 7d\n", "未知级别"},
 		{"来源非法", "log_retention:\n  enabled: true\n  sources:\n    - match: 'inst:1|*'\n", "match"},
 		{"热窗口原始负值", "log_retention:\n  enabled: true\n  hot_retention: -1d\n", "hot_retention"},

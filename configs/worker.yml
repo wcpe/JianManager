@@ -58,15 +58,14 @@ log:
 #   username: jm
 #   password: ${JIANMANAGER_VL_PASSWORD}
 #   data_root: /home/jianmanager/var/log/vl
-#   retention_period: 90d        # ⚠ 必须**不短于** log_retention.hot_retention（默认 90d）。
-#                                # VL 的 retention 到期是**直接删**，会绕过「删前归档」：
-#                                # 热层实例 TTL 比 hot_retention 短，VL 会在搬运之前先删掉数据。
+#   retention_period: 90d        # 唯一的保留期（既管可查窗口也管长期留存）。
+#                                # ⚠ VL 的 retention 到期是**直接删**，会绕过「删前归档」；
+#                                # 因此必须**不短于** log_retention 声明的 longer of
+#                                # hot_retention / cold_retention（默认 90d / 730d）。
 #                                # 启用保留策略时 Load 在启动受管进程之前就拒绝（配错即拒绝启动）。
-#                                # 本项不配置时取默认 90d；**显式写成空串**则回退到受管 supervisor
-#                                # 的模板值 30d，同样短于默认 90d 声明 ⇒ 会被拒。
-#   cold_retention_period: 730d  # 同上：不得短于 log_retention.cold_retention（默认 730d）
-#   start_cold: false
-#   start_rehydrate: false
+#                                # 2026-10-29：冷热双层已废除，只剩余一个 VL；`cold_retention_period`
+#                                # / `cold_port` / `rehydrate_port` / `start_cold` / `start_rehydrate`
+#                                # 均已删除，写了也不会生效。
 
 # Optional persistent Worker/Node or offline FILE_PRIMARY sources. Instance
 # sources are registered automatically by CP instance lifecycle RPCs.

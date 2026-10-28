@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
+// knownResourceSample 构造「全部已知且健康」的采样；受管实例只有一个（NamespaceHot）。
 func knownResourceSample() ResourceSample {
-	return ResourceSample{Namespaces: map[Namespace]NamespaceSample{NamespaceHot: {RSSKnown: true, RSSBytes: 10}, NamespaceCold: {RSSKnown: true}, NamespaceRehydrate: {RSSKnown: true}}, WorkerRSSKnown: true, WorkerRSSBytes: 10, DiskKnown: true, DiskUsagePercent: 10, DiskBytesKnown: true, DiskUsedBytes: 10}
+	return ResourceSample{Namespaces: map[Namespace]NamespaceSample{NamespaceHot: {RSSKnown: true, RSSBytes: 10}}, WorkerRSSKnown: true, WorkerRSSBytes: 10, DiskKnown: true, DiskUsagePercent: 10, DiskBytesKnown: true, DiskUsedBytes: 10}
 }
 
 func TestRuntimeBudgetSeparatesDiskRSSAndUnknown(t *testing.T) {
@@ -57,10 +58,10 @@ func TestRuntimeBudgetSeparatesDiskRSSAndUnknown(t *testing.T) {
 		}
 	}
 	s = knownResourceSample()
-	s.Namespaces[NamespaceCold] = NamespaceSample{}
+	s.Namespaces[NamespaceHot] = NamespaceSample{}
 	c.Update(s)
 	if c.Admit(WorkBackground) == nil {
-		t.Fatal("部分namespace未知不能由其他namespace零值掩盖")
+		t.Fatal("受管实例自身采样未知不能由 Worker 聚合采样掩盖")
 	}
 	s = knownResourceSample()
 	s.SampledAt = time.Now().Add(-3 * time.Minute)
@@ -141,8 +142,8 @@ func TestRuntimeReservationAtomicCapacityAndIdempotentRelease(t *testing.T) {
 
 func TestNamespaceBudgetDefaultsAreIndependentAndSampleUnknown(t *testing.T) {
 	a, b := DefaultNamespaceBudgets(), DefaultNamespaceBudgets()
-	a[NamespaceCold] = NamespaceBudget{CacheBytes: 1}
-	if b[NamespaceCold].CacheBytes != DefaultColdCacheBytes {
+	a[NamespaceHot] = NamespaceBudget{CacheBytes: 1}
+	if b[NamespaceHot].CacheBytes != DefaultHotCacheBytes {
 		t.Fatal("默认map不能共享")
 	}
 	s := newTestSupervisor(t, &fakeFactory{}, &RecordingSink{}, false)
@@ -176,20 +177,27 @@ func TestNamespaceBudgetDefaultsAreIndependentAndSampleUnknown(t *testing.T) {
 	}
 }
 
-func TestSupervisorNamespaceBudgetsWireCacheAndSeparateGoTargets(t *testing.T) {
+// TestSupervisorNamespaceBudgetsWireCacheAndGoTarget 锁定 cache 与 Go 软目标确实落到唯一的受管实例上：
+// typed NamespaceBudgets 覆盖兼容 cache 字段，其 GoMemoryLimitBytes 覆盖全局 MemoryLimitBytes。
+func TestSupervisorNamespaceBudgetsWireCacheAndGoTarget(t *testing.T) {
 	bin, sha := writeFakeBinary(t)
-	s, err := New(Options{BinaryPath: bin, AssetSHA256: sha, DataRoot: t.TempDir(), AuthUsername: "jm", AuthPassword: "constructed", MemoryAllowedBytes: map[Namespace]int64{NamespaceHot: 256 << 20}, MemoryLimitBytes: 600 << 20, NamespaceBudgets: map[Namespace]NamespaceBudget{NamespaceHot: {CacheBytes: 64 << 20, GoMemoryLimitBytes: 128 << 20, RSSBytes: 300 << 20}, NamespaceCold: {GoMemoryLimitBytes: -1}}})
+	s, err := New(Options{BinaryPath: bin, AssetSHA256: sha, DataRoot: t.TempDir(), AuthUsername: "jm", AuthPassword: "constructed", MemoryAllowedBytes: map[Namespace]int64{NamespaceHot: 256 << 20}, MemoryLimitBytes: 600 << 20, NamespaceBudgets: map[Namespace]NamespaceBudget{NamespaceHot: {CacheBytes: 64 << 20, GoMemoryLimitBytes: 128 << 20, RSSBytes: 300 << 20}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hot, _ := s.Config(NamespaceHot)
-	cold, _ := s.Config(NamespaceCold)
-	if hot.EffectiveCacheBytes() != 64<<20 || cold.EffectiveCacheBytes() != DefaultColdCacheBytes {
-		t.Fatal("typed覆盖优先，冷层默认必须显式有限")
+	hot, err := s.Config(NamespaceHot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hot.EffectiveCacheBytes() != 64<<20 {
+		t.Fatalf("typed覆盖必须优先于兼容cache字段: %d", hot.EffectiveCacheBytes())
 	}
 	factory := s.factory.(RealFactory)
-	if strings.Join(factory.NamespaceEnv[NamespaceHot], ",") != "GOMEMLIMIT=134217728B" || len(factory.NamespaceEnv[NamespaceCold]) != 0 || strings.Join(factory.NamespaceEnv[NamespaceRehydrate], ",") != "GOMEMLIMIT=629145600B" {
-		t.Fatalf("Go软目标必须按namespace分别生效: %v", factory.NamespaceEnv)
+	if strings.Join(factory.NamespaceEnv[NamespaceHot], ",") != "GOMEMLIMIT=134217728B" {
+		t.Fatalf("Go软目标必须对唯一的受管实例生效: %v", factory.NamespaceEnv)
+	}
+	if len(factory.NamespaceEnv) != len(managedNamespaces()) {
+		t.Fatalf("不得为已废除的层注入env: %v", factory.NamespaceEnv)
 	}
 	if _, err := NewBudgetController(RuntimeBudget{Namespaces: map[Namespace]NamespaceBudget{NamespaceHot: {RSSBytes: -1}}}); err == nil {
 		t.Fatal("RSS负预算非法")

@@ -11,7 +11,6 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/proto/workerpb"
 	"google.golang.org/grpc"
@@ -64,10 +63,13 @@ func TestSixModulePhysicalDayMigrationRejectsScopedNodeManagerBeforeRPC(t *testi
 			}
 			worker := grpcsvc.New(nil, nil)
 			worker.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(_ context.Context, namespace, utcDay, _ string) error {
-				if _, err := lifecycle.ResolveMigrateTarget(cat, namespace, utcDay); err != nil {
-					return err
+				// 2026-10-29：`lifecycle.ResolveMigrateTarget` 已随冷热双层废除而删除，
+				// 本用例要验的是**授权边界**（单探针不能代表整物理日全部成员），与搬不搬无关，
+				// 因此探针逻辑直接内联：未在 Catalog 里找到该日分区就报错。
+				if len(cat.RecordsForDay(utcDay)) == 0 {
+					return fmt.Errorf("log partition %s/%s is not in Catalog", namespace, utcDay)
 				}
-				// 只执行生产 DayManager.Start 的首个真实状态汇聚点，不进行物理文件移动。
+				// 只执行生产侧首个真实状态汇聚点，不进行物理文件移动。
 				_, err := cat.BeginDayMigration(utcDay, catalog.OwnerCold, "cp-day-cold")
 				return err
 			}))

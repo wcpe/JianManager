@@ -8,36 +8,30 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 )
 
-// Tiered chooses exactly the Catalog owner namespace for each range. A missing
-// namespace is a visible range failure; it never falls back to HOT data.
+// Tiered 把每个查询区段路由到它所属的受管 VL 实例。
+//
+// 2026-10-29：冷热双层已废除，只剩一个受管实例 ⇒ 这里不再有「选层」这回事，
+// 所有区段都落到 Main。保留这个类型与 Ready 回调的理由：
+//   - 它是「区段归属 → 物理接收端」的唯一路由点，删掉就要把 Ready 探活逻辑塞进每个调用点；
+//   - 调用方（query 包）只面对一个接口，将来若再引入第二层无需改调用面。
+//
+// **不再做的事**：按 Owner 分支选不同客户端；缺失层报 range 失败；跳层回退。
 type Tiered struct {
-	Hot, Cold, Rehydrate *Client
-	// Ready 每次读取检查对应实例健康，不把 HTTP 健康冒充 Catalog 发布就绪。
+	Main *Client
+	// Ready 每次读取检查实例健康，不把 HTTP 健康冒充 Catalog 发布就绪。
 	Ready func(context.Context, catalog.Owner) error
 }
 
 func (t *Tiered) forRange(ctx context.Context, rng query.AuthoritativeRange) (*Client, error) {
-	if t == nil {
-		return nil, fmt.Errorf("vlrange: tiered client is unavailable")
-	}
-	var selected *Client
-	switch rng.Owner {
-	case catalog.OwnerHot:
-		selected = t.Hot
-	case catalog.OwnerCold:
-		selected = t.Cold
-	case catalog.OwnerArchive:
-		selected = t.Rehydrate
-	}
-	if selected == nil {
-		return nil, fmt.Errorf("vlrange: authoritative namespace %s is not ready", rng.Owner)
+	if t == nil || t.Main == nil {
+		return nil, fmt.Errorf("vlrange: managed VictoriaLogs client is unavailable")
 	}
 	if t.Ready != nil {
 		if err := t.Ready(ctx, rng.Owner); err != nil {
-			return nil, fmt.Errorf("vlrange: authoritative namespace %s unavailable: %w", rng.Owner, err)
+			return nil, fmt.Errorf("vlrange: authoritative owner %s unavailable: %w", rng.Owner, err)
 		}
 	}
-	return selected, nil
+	return t.Main, nil
 }
 
 func (t *Tiered) Search(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.RangeResult, error) {
@@ -48,8 +42,7 @@ func (t *Tiered) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 	return c.Search(ctx, rng, q)
 }
 
-// SearchMerged 合并检索：组内必然同 Owner（调用方按 (Owner, UTCDay) 分组），
-// 故取首个 range 选层后整组交给该层客户端；跨层合并会被下层拒绝。
+// SearchMerged 合并检索：全部区段都在同一个受管实例里，整组直接交给它。
 func (t *Tiered) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery) (query.RangeResult, error) {
 	if len(rngs) == 0 {
 		return query.RangeResult{}, fmt.Errorf("vlrange: empty merged range set")

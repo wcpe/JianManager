@@ -116,16 +116,16 @@ func TestLoad_LogCapacityRejectsInvertedThresholds(t *testing.T) {
 
 func TestLoad_LogVLPorts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "worker.yml")
-	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n  cold_port: 19642\n  rehydrate_port: 19643\n"), 0o600))
+	// 2026-10-29：冷热双层废除，`cold_port` / `rehydrate_port` 已删除 ——
+	// 只剩余一个受管实例，也只剩一个端口可配。写了旧键不会生效。
+	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n"), 0o600))
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, 19641, cfg.LogVL.HotPort)
-	assert.Equal(t, 19642, cfg.LogVL.ColdPort)
-	assert.Equal(t, 19643, cfg.LogVL.RehydratePort)
 
-	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 19641\n  cold_port: 19641\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("log_vl:\n  hot_port: 70000\n"), 0o600))
 	_, err = Load(path)
-	require.ErrorContains(t, err, "ports must be distinct")
+	require.ErrorContains(t, err, "ports must be within 1..65535")
 }
 
 // TestLoad_EnrollTokenFromEnv enrollment token 经 JIANMANAGER_ENROLL_TOKEN 注入、不从 yaml 读取。
@@ -624,9 +624,9 @@ func TestLoad_LogSourceTargetShape(t *testing.T) {
 	t.Run("畸形的 UUID 形态仍被拒", func(t *testing.T) {
 		for _, ns := range []string{
 			"node:not-a-uuid",
-			"node:0091c0d6-6f54-469b-9119",                       // 段数不足
-			"node:0091c0d6-6f54-469b-9119-40c05cacbb6",            // 末段少一位
-			"node:0091c0d6-6f54-469b-9119-40c05cacbb64x",          // 多字符
+			"node:0091c0d6-6f54-469b-9119",               // 段数不足
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb6",   // 末段少一位
+			"node:0091c0d6-6f54-469b-9119-40c05cacbb64x", // 多字符
 		} {
 			path := writeCfg(t, `log_sources:
   - log_source_id: "`+ns+`/file"

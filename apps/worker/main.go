@@ -642,8 +642,6 @@ func runWorker() {
 	// 配置了健康的 localhost VL 时接入真实 RangeClient；否则保留显式 LOG_UNSUPPORTED。
 	var rangeClient query.RangeClient
 	var vlHTTPClient *vlsup.Client
-	var coldVLClient *vlsup.Client
-	var rehydrateVLClient *vlsup.Client
 	var vlSupervisor *vlsup.Supervisor
 	var managedClients *managedLogClients
 	budgetConfig, budgetErr := cfg.LogVL.RuntimeBudget()
@@ -683,15 +681,9 @@ func runWorker() {
 			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
 			// 删除三闸保持默认关闭；原生整日 TTL 仍独立运行，不提供永久副本保证。
 			DeleteEnabled: cfg.LogVL.DeleteEnabled,
-			RetentionByNamespace: map[vlsup.Namespace]string{
-				// 冷层 retention 是「冷留存多久」的唯一执行者（用户口径：730d，所有级别统一）。
-				vlsup.NamespaceCold: cfg.LogVL.ColdRetentionPeriod,
-			},
-			AuthUsername: cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
+			AuthUsername:  cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
 			Ports: map[vlsup.Namespace]int{
-				vlsup.NamespaceHot:       cfg.LogVL.HotPort,
-				vlsup.NamespaceCold:      cfg.LogVL.ColdPort,
-				vlsup.NamespaceRehydrate: cfg.LogVL.RehydratePort,
+				vlsup.NamespaceHot: cfg.LogVL.HotPort,
 			},
 			NamespaceBudgets: budgetConfig.Namespaces,
 			// 新键已归并旧 cache/Go 软限制；RSS 另由唯一控制器执行真实准入。
@@ -708,21 +700,11 @@ func runWorker() {
 				slog.Error("VictoriaLogs 固定客户端装配失败", "error", clientErr)
 			} else {
 				managedClients = clients
-				vlHTTPClient, coldVLClient, rehydrateVLClient = clients.Hot, clients.Cold, clients.Rehydrate
+				vlHTTPClient = clients.Main
 				rangeClient = clients.Ranges
 			}
 			if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceHot); err != nil {
-				slog.Error("VictoriaLogs HOT 启动失败，保留运行期恢复接线", "error", err)
-			}
-			if cfg.LogVL.StartCold {
-				if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceCold); err != nil {
-					slog.Error("VictoriaLogs COLD 启动失败", "error", err)
-				}
-			}
-			if cfg.LogVL.StartRehydrate {
-				if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceRehydrate); err != nil {
-					slog.Error("VictoriaLogs Rehydrate 启动失败", "error", err)
-				}
+				slog.Error("VictoriaLogs 启动失败，保留运行期恢复接线", "error", err)
 			}
 			// 运行期自愈看护：过去只在启动路径做一次孤儿回收，VL 运行期崩溃（OOM、段损坏）后
 			// 账面只会被读状态时改成 FAILED，进程不会自己起来 ⇒ 采集/查询长期降级，直到人工
@@ -822,9 +804,6 @@ func runWorker() {
 	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
 	// 且必须与 /metrics 的读数出口共用同一个实例。
 	var logArchivePurge *retention.ArchiveObjectReclaimer
-	var logDayManager *lifecycle.DayManager
-	var logMigrationRecoveryDone <-chan struct{}
-	migrationInput := &dayMigrationInputBridge{}
 	if store, journalErr := catalog.NewJSONLFileStore(root.Abs("var/log/catalog.journal.jsonl")); journalErr != nil {
 		slog.Error("日志 Catalog journal 打开失败，查询面保持无权威分区", "error", journalErr)
 	} else if journal, journalErr := catalog.NewJournalWithStore(store); journalErr != nil {
@@ -897,27 +876,29 @@ func runWorker() {
 		slog.Warn("存在已归档但热层未回收的分区（数据安全、磁盘未释放；下一轮保留策略会按三闸重试）",
 			"count", len(pending), "partitions", keys, "truncated", len(pending) > len(sample))
 	}
-	if vlHTTPClient != nil && coldVLClient != nil && vlSupervisor != nil {
+	if vlHTTPClient != nil && vlSupervisor != nil {
 		hotCfg, hotErr := vlSupervisor.Config(vlsup.NamespaceHot)
-		coldCfg, coldErr := vlSupervisor.Config(vlsup.NamespaceCold)
-		if hotErr != nil || coldErr != nil {
-			slog.Error("日志 Lifecycle namespace 配置不可用", "hotError", hotErr, "coldError", coldErr)
-		} else if physical, lifecycleErr := lifecycle.NewVLPartitionOps(vlHTTPClient, coldVLClient,
-			hotCfg.StorageDataPath, coldCfg.StorageDataPath, logStack.Catalog); lifecycleErr != nil {
+		if hotErr != nil {
+			slog.Error("日志 Lifecycle namespace 配置不可用", "error", hotErr)
+		} else if physical, lifecycleErr := lifecycle.NewVLPartitionOps(vlHTTPClient,
+			hotCfg.StorageDataPath, logStack.Catalog); lifecycleErr != nil {
 			slog.Error("日志 Lifecycle 物理适配器创建失败", "error", lifecycleErr)
 		} else {
 			physical.ResourceBudget = resourceBudget
-			physical.CanonicalDayInput = migrationInput.input
-			dayManager := lifecycle.NewDayManager(logStack.Catalog, physical.Ops(), physical)
-			logDayManager = dayManager
-			// 保留策略驱动器（G6）：把 catalog 的日分区按「年龄 + 磁盘水位取先到」搬到冷层。
-			// 没有它，HOT 永不自动转 COLD——plan/executor/Mover 都对，但没人周期性把它们串起来。
+			// 2026-10-29：不再构造 DayManager / CanonicalDayInput —— 它们只服务冷层搬迁，
+			// 而搬迁已随冷热分层一起删除（见 lifecycle 包注释）。
+			// 保留策略驱动器（G6）：到期分区要么导出独立副本、要么如实落 blocked 保留原物。
+			//
+			// 2026-10-29：冷热双层已废除 ⇒ **不再装配 mover**（第三个参数传 nil）。
+			// `retention.Policy.PlanArchive` 的动作序会自动落到：
+			//   配了导出 → archive_copy；否则 → blocked（保留原物，不删）。
+			// 这正是单 VL 想要的语义，不需要改 Policy 本身。
 			if retentionPolicy, policyErr := cfg.RetentionPolicy(); policyErr != nil {
-				slog.Error("日志保留策略非法，冷热分层驱动未启用", "error", policyErr)
+				slog.Error("日志保留策略非法，保留驱动未启用", "error", policyErr)
 			} else if retentionPolicy.Enabled {
 				logRetentionDriver = retention.NewDriver(retentionPolicy,
 					newCatalogPartitionLister(logStack.Catalog),
-					readyRetentionMover(newDayManagerMover(dayManager, logStack.Catalog), managedClients, resourceBudget),
+					nil,
 					newDiskPercentReader(logCapacityProvider))
 				// 导出归档（FR-501，硬规则的次选路径）：搬不了冷层时导出为独立副本。
 				//
@@ -1027,42 +1008,14 @@ func runWorker() {
 				}
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
 			}
+			// 2026-10-29：分区下沉（hot→cold）能力已随冷热双层一起删除。
+			// 这里**显式**装一个明确拒绝的出口，而不是不装配：
+			// 不装配时 RPC 返回「log partition migration is not configured」，
+			// 运维会以为是漏配了某项；装配一个说出真实原因的拒绝，才能让人知道
+			// 「这个动作在新架构里不存在了」，而不是去翻配置找开关。
 			logStack.LogRPC.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(ctx context.Context, namespace, day, target string) error {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if target != "cold" {
-					return fmt.Errorf("unsupported lifecycle target %s", target)
-				}
-				if err := resourceBudget.Admit(vlsup.WorkBackground); err != nil {
-					return err
-				}
-				for _, owner := range []catalog.Owner{catalog.OwnerHot, catalog.OwnerCold} {
-					if err := managedClients.ready(ctx, owner); err != nil {
-						return err
-					}
-				}
-				// 探针分流（见 lifecycle.ResolveMigrateTarget）：搬运单位是整天的物理分区，
-				// storageNamespace 只决定「这次调用允许开始吗」。前端节点级面板发的是
-				// `node:<节点ID>`，而 catalog 里该键只在配了 log_sources 节点自身日志源时才存在，
-				// 默认部署只有 `inst:<id>` 分区 ⇒ 精确键必然落空 ⇒ 按钮稳定 409。
-				// 精确键命中时行为不变；只有节点维度目标退化为「本节点该日是否已有分区」。
-				action, err := lifecycle.ResolveMigrateTarget(logStack.Catalog, namespace, day)
-				if err != nil {
-					return err
-				}
-				switch action {
-				case lifecycle.MigrateActionSkip:
-					return nil
-				case lifecycle.MigrateActionResume:
-					return dayManager.Resume(day)
-				default:
-					parsed, err := time.Parse("2006-01-02", day)
-					if err != nil {
-						return err
-					}
-					return dayManager.Start(day, catalog.OwnerCold, parsed.Format("20060102"))
-				}
+				return fmt.Errorf("分区下沉已废弃：单个 VictoriaLogs 实例既是热层也是长期层，"+
+					"没有第二层可搬（storage_namespace=%s utc_day=%s target_tier=%s）", namespace, day, target)
 			}))
 		}
 	}
@@ -1138,12 +1091,15 @@ func runWorker() {
 					return resourceBudget.Reserve(vlsup.ReservationStaging, bytes)
 				},
 			})
-			if rehydrateVLClient != nil {
+			if vlHTTPClient != nil {
 				backend.SetPublisher(readyRehydratePublisher{clients: managedClients,
-					// Retention 与 hot 同源（装配处只为 Cold 单独指定了保留期，Hot/Rehydrate 回退基配置）：
-					// 传进去让 rehydrate 能当场认出「这个分区日已超出目标 VL 保留期、注定写不进去」，
-					// 而不是写一遍 200、verify 查不到、再报一个看似瞬时的失败。
-					publisher: &archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: rehydrateVLClient, Retention: resolveHotRetention(cfg)}})
+					// Retention 与主实例同源：传进去让 rehydrate 能当场认出「这个分区日已超出
+					// 目标 VL 保留期、注定写不进去」，而不是写一遍 200、verify 查不到、再报一个
+					// 看似瞬时的失败。
+					//
+					// 2026-10-29：回灌目标从 Rehydrate 层改为主实例 —— 已没有第二个实例，
+					// 而归档还原的语义是「把归档副本重新变成可查」，落在主实例上正是它该做的。
+					publisher: &archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: vlHTTPClient, Retention: resolveHotRetention(cfg)}})
 			}
 			logStack.SetArchiveBackend(backend)
 			slog.Info("日志归档运行时已装配", "provider", provider.Kind())
@@ -1373,7 +1329,6 @@ func runWorker() {
 			register.SetLogIngestHealth(false, ingestErr.Error())
 		} else {
 			logIngest = manager
-			migrationInput.manager.Store(manager)
 			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
 			// FR-502 §3.4：把 log_sources 配置接线到实例注册路径。
@@ -1451,18 +1406,9 @@ func runWorker() {
 				}
 			}()
 			go manager.Start(ingestCtx)
-			// 自动保留默认关闭不代表可以遗弃既有Frozen日；恢复循环只Resume已持久责任。
-			if recovery := newLogPhysicalDayRecovery(logDayManager, logStack.Catalog, managedClients, resourceBudget); recovery != nil {
-				logMigrationRecoveryDone = runLogPhysicalDayRecovery(logRuntimeCtx, recovery.step, nil)
-				defer func() {
-					cancelLogRuntime()
-					waitCtx, cancelWait := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancelWait()
-					if !awaitLogPhysicalDayRecovery(waitCtx, logMigrationRecoveryDone) {
-						slog.Warn("日志迁移恢复仍有在途操作，持久责任保留；未伪造物理IO已取消")
-					}
-				}()
-			}
+			// 2026-10-29：不再有「未完成的冷层搬迁」需要续跑 —— 迁移链已删，
+			// `PendingPhysicalDays()` 里若有历史残留，不再由本循环推进（它只负责物理搬迁）。
+			// 存量残留用 `logStack.Catalog.PendingArchiveReclaims()` 的告警可见，不影响采集。
 			// 应用本地快照的策略（FR-503）：采集运行时构造完成后立即生效，不等首拍心跳。
 			manager.SetAcqPolicy(acqPolicy)
 			// 定时归档导入扫描（FR-504）：周期由采集策略驱动（面板可配、心跳热更新），
@@ -1960,9 +1906,6 @@ func runWorker() {
 	cancelLogRuntime()
 	if err := logStack.LogRPC.Close(); err != nil {
 		slog.Warn("日志查询视图关闭失败", "error", err)
-	}
-	if !awaitLogPhysicalDayRecovery(shutdownCtx, logMigrationRecoveryDone) {
-		slog.Warn("日志迁移恢复仍有实际在途操作，停止新调度并保留恢复责任")
 	}
 	// 先停看护再停 VL：反过来的话，停止过程中进程退出会被看护判成崩溃并尝试拉起
 	// （epoch 已挡住，但显式取消更直白，也不留残余 goroutine）。

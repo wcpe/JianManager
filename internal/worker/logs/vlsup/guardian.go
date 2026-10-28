@@ -205,12 +205,12 @@ func (s *Supervisor) CheckOnce(ctx context.Context) {
 	s.checkOnce(ctx, s.currentGuardOptions())
 }
 
-// checkOnce 是单轮探活：遍历全部受管 namespace，对判定为「崩溃」的实例尝试重启。
+// checkOnce 是单轮探活：遍历全部受管实例，对判定为「崩溃」的尝试重启。
 //
 // opts 作为参数传入而非读字段，是为了让测试能用假时钟确定性地推进，不受后台循环参数影响。
 func (s *Supervisor) checkOnce(ctx context.Context, opts GuardianOptions) {
 	now := opts.now()
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		s.checkNamespace(ctx, ns, opts, now)
 	}
 }

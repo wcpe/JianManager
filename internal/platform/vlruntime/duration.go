@@ -12,14 +12,25 @@ import (
 )
 
 const (
-	// DefaultRetentionPeriod 比产品热窗口多30天；有限原生TTL不是无限失败保护。
-	DefaultRetentionPeriod = "120d"
-	// DefaultColdRetentionPeriod 是冷层原生有限TTL的唯一默认字面量。
-	DefaultColdRetentionPeriod = "730d"
+	// DefaultRetentionPeriod 是**唯一**受管 VL 实例的默认原生 TTL（180 天）。
+	//
+	// 历史沿革：原为 120d（热层），另有 DefaultColdRetentionPeriod=730d（冷层）。
+	// 2026-10-29 用户裁定废除冷热双层、只保留一个 VL，并选定 180d：
+	// 30d 会让超过一月的历史日志在 VL 里永久不可查；730d 按当前写入速率约 120GB，
+	// 而 /home 只剩 394G。180d 约 30GB，是「可查范围」与「磁盘」的折中。
+	//
+	// 注意：VL 原生 TTL 到期是**直接删**，它绕过平台侧「删前归档」。
+	DefaultRetentionPeriod = "180d"
 	// DefaultHotRetention 是产品热窗口的唯一默认值，和原生TTL分开。
 	DefaultHotRetention = 90 * 24 * time.Hour
-	// DefaultColdRetention 是产品冷窗口的唯一默认值，不按迁入时间重新起算。
-	DefaultColdRetention = 730 * 24 * time.Hour
+	// DefaultColdRetention 是产品冷窗口的唯一默认值。
+	//
+	// 2026-10-29：冷热双层废除后，「冷窗口」不再是一个独立的物理层，而是
+	// **同一个 VL 能查多久**。原值 730d 已无法兼具：VL 只保留 180d，
+	// 继续声明 730d 会让启动校验（retention 必须 ≥ 声明窗口）直接拒绝启动。
+	// 因此对齐到 180d。若运维真需要 730d，应该同时把
+	// `log_vl.retention_period` 调到 ≥ 730d，而不是关掉这道校验。
+	DefaultColdRetention = 180 * 24 * time.Hour
 )
 
 // 批准版将裸数和大写M解释为31天月；组合分量的负号延续到后续正分量。

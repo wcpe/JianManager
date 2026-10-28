@@ -329,7 +329,7 @@ func TestArchiveBudgetRealLocalFileUsesTypedControllerAndPreservesWALDrain(t *te
 	require.NoError(t, err)
 	controller, err := vlsup.NewBudgetController(vlsup.RuntimeBudget{DiskBytes: 256 << 20, RSSBytes: 128 << 20, Reservations: map[vlsup.ReservationKind]int64{vlsup.ReservationStaging: 64 << 20}})
 	require.NoError(t, err)
-	sample := vlsup.ResourceSample{Namespaces: map[vlsup.Namespace]vlsup.NamespaceSample{vlsup.NamespaceHot: {RSSKnown: true}, vlsup.NamespaceCold: {RSSKnown: true}, vlsup.NamespaceRehydrate: {RSSKnown: true}}, WorkerRSSKnown: true, WorkerRSSBytes: 16 << 20, DiskKnown: true, DiskUsagePercent: 1, DiskBytesKnown: true, DiskUsedBytes: 1 << 20, SampledAt: time.Now()}
+	sample := vlsup.ResourceSample{Namespaces: map[vlsup.Namespace]vlsup.NamespaceSample{vlsup.NamespaceHot: {RSSKnown: true}}, WorkerRSSKnown: true, WorkerRSSBytes: 16 << 20, DiskKnown: true, DiskUsagePercent: 1, DiskBytesKnown: true, DiskUsedBytes: 1 << 20, SampledAt: time.Now()}
 	controller.Update(sample)
 	backend := NewQueryBackend(reg, NewRehydrateManager(RehydrateOptions{}))
 	backend.SetPublisher(publisherFunc(func(context.Context, PartitionKey, []ArchivedEvent, string) error { return nil }))

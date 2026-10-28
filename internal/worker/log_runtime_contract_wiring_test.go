@@ -18,8 +18,8 @@ func TestWiringRuntimeRetentionDefaultSingleSource(t *testing.T) {
 	if cfg.LogVL.RetentionPeriod != vlsup.DefaultRetentionPeriod {
 		t.Fatalf("Load native默认=%q，运行时真源=%q", cfg.LogVL.RetentionPeriod, vlsup.DefaultRetentionPeriod)
 	}
-	if cfg.LogRetention.Enabled || cfg.LogVL.StartCold || cfg.LogVL.StartRehydrate || cfg.LogVL.DeleteEnabled {
-		t.Fatal("零配置不得开启分层、冷层、恢复层或删除")
+	if cfg.LogRetention.Enabled || cfg.LogVL.DeleteEnabled {
+		t.Fatal("零配置不得开启保留策略或删除")
 	}
 }
 
@@ -56,7 +56,6 @@ log_vl:
   asset_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   username: fixture-user
   password: fixture-password
-  start_cold: true
 `
 
 func wiringValidLayerYAML() string {
@@ -75,7 +74,6 @@ func TestWiringLayeringHasExplicitFiniteSLA(t *testing.T) {
 		t.Fatalf("完整分层声明应通过: %v", err)
 	}
 	for _, tc := range []struct{ name, from, to, want string }{
-		{"接收端未启", "start_cold: true", "start_cold: false", "start_cold"},
 		// 「未声明」不再拒启（2026-10-27 升级兼容性修正）：缺省取保守默认 1h。
 		// 但「显式写 0」仍必须拒——那是表达了「用不了」的意图，静默改成默认等于把意图掉包。
 		{"复制校验预算显式为零", "copy_verify_budget: 2h", "copy_verify_budget: 0s", "copy_verify_budget"},
@@ -90,7 +88,10 @@ func TestWiringLayeringHasExplicitFiniteSLA(t *testing.T) {
 			}
 		})
 	}
-	insufficient := strings.Replace(wiringValidLayerYAML(), "  start_cold: true", "  start_cold: true\n  retention_period: 92d", 1)
+	// 2026-10-29：冷热双层已废除，`start_cold` 不再是合法键。
+	// 保留这条断言的**意图**（保留期必须计入 UTC 日 + 驱动周期 + 复制校验 + 恢复预算），
+	// 锚点改成 password 行，不再依赖已删除的键。
+	insufficient := strings.Replace(wiringValidLayerYAML(), "  password: fixture-password", "  password: fixture-password\n  retention_period: 92d", 1)
 	if _, err := loadLogPolicyFixture(t, insufficient); err == nil || !strings.Contains(err.Error(), "retention_period") {
 		t.Fatalf("必须计入UTC日+周期+复制校验+恢复预算，得到 %v", err)
 	}
@@ -103,7 +104,7 @@ log_vl:
   hot_cache_bytes: 268435456
   memory_limit_bytes: 402653184
   namespace_budgets:
-    cold:
+    hot:
       cache_bytes: 100663296
       go_memory_limit_bytes: 335544320
       rss_bytes: 469762048
@@ -122,9 +123,11 @@ log_vl:
 	if err != nil {
 		t.Fatal(err)
 	}
-	hot, cold, rehydrate := budget.Namespaces[vlsup.NamespaceHot], budget.Namespaces[vlsup.NamespaceCold], budget.Namespaces[vlsup.NamespaceRehydrate]
-	if hot.CacheBytes != 256<<20 || hot.GoMemoryLimitBytes != 384<<20 || cold.CacheBytes != 96<<20 || cold.GoMemoryLimitBytes != 320<<20 || cold.RSSBytes != 448<<20 || rehydrate.CacheBytes != vlsup.DefaultRehydrateCacheBytes || rehydrate.GoMemoryLimitBytes != 384<<20 {
-		t.Fatalf("兼容归并错误: hot=%+v cold=%+v rehydrate=%+v", hot, cold, rehydrate)
+	// 2026-10-29：只剩一个受管实例。原用例测「新键按层覆盖旧内存键」，
+	// 现在把同样的覆盖关系放在 hot 上验（namespace_budgets.hot 覆盖 hot_cache_bytes 与 memory_limit_bytes）。
+	hot := budget.Namespaces[vlsup.NamespaceHot]
+	if hot.CacheBytes != 96<<20 || hot.GoMemoryLimitBytes != 320<<20 || hot.RSSBytes != 448<<20 {
+		t.Fatalf("兼容归并错误: hot=%+v", hot)
 	}
 	if budget.DiskBytes != 8<<30 || budget.RSSBytes != 1<<30 || budget.Reservations[vlsup.ReservationWAL] != 512<<20 {
 		t.Fatalf("磁盘/RSS/预留接线混淆: %+v", budget)
@@ -138,13 +141,14 @@ log_vl:
 			t.Fatalf("旧负值禁注入语义丢失: %s=%+v", ns, limits)
 		}
 	}
-	t.Setenv("JIANMANAGER_LOG_VL_NAMESPACE_BUDGETS_COLD_CACHE_BYTES", "67108864")
+	// 新键通过环境变量覆盖依然生效（与层数无关，换到唯一的受管实例上验）。
+	t.Setenv("JIANMANAGER_LOG_VL_NAMESPACE_BUDGETS_HOT_CACHE_BYTES", "67108864")
 	cfg, err = loadLogPolicyFixture(t, "{}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	budget, err = cfg.LogVL.RuntimeBudget()
-	if err != nil || budget.Namespaces[vlsup.NamespaceCold].CacheBytes != 64<<20 {
+	if err != nil || budget.Namespaces[vlsup.NamespaceHot].CacheBytes != 64<<20 {
 		t.Fatalf("新键环境覆盖失效: %+v, %v", budget, err)
 	}
 }
@@ -160,7 +164,7 @@ func TestWiringRetentionCapabilityNoticeIsFiniteAndSecretFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, message := range []string{"自动搬运关闭", "有限 TTL", "关闭应用删除不等于永久保留"} {
+	for _, message := range []string{"自动保留关闭", "有限 TTL", "关闭应用删除不等于永久保留"} {
 		if !strings.Contains(output.String(), message) {
 			t.Fatalf("缺少真实能力边界 %q: %s", message, output.String())
 		}

@@ -313,7 +313,7 @@ func TestQueryTextBudgetHTTPShardsShareWholeRequestDeadline(t *testing.T) {
 }
 
 func TestRealVLQueryTextBudget617Generations(t *testing.T) {
-	ctx, _, _, hot, _ := queryApprovedVL(t, false)
+	ctx, _, _, hot := queryApprovedVL(t)
 	client, err := New(hot)
 	require.NoError(t, err)
 	rng, _ := queryLongScope()

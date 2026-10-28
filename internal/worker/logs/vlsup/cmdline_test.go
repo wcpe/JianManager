@@ -42,22 +42,8 @@ func TestBuildArgsHotDefaults(t *testing.T) {
 	}
 }
 
-func TestBuildArgsColdHasExplicitBoundedDefaultCache(t *testing.T) {
-	cfg := baseCfg(NamespaceCold)
-	args, err := BuildArgs(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !containsArg(args, "-memory.allowedBytes="+FormatCacheBytesForFlag(DefaultColdCacheBytes)) {
-		t.Fatal("冷层默认必须显式有限cache，不能回退宿主60%")
-	}
-	if !containsArg(args, "-httpListenAddr=127.0.0.1:19442") {
-		t.Fatalf("cold port mismatch: %v", args)
-	}
-}
-
 func TestBuildArgsExplicitCache(t *testing.T) {
-	cfg := baseCfg(NamespaceRehydrate)
+	cfg := baseCfg(NamespaceHot)
 	cfg.MemoryAllowedBytes = 64 * 1024 * 1024
 	args, err := BuildArgs(cfg)
 	if err != nil {
@@ -93,12 +79,9 @@ func TestBuildArgsValidation(t *testing.T) {
 func TestEffectiveCacheBytes(t *testing.T) {
 	hot := baseCfg(NamespaceHot)
 	if got := hot.EffectiveCacheBytes(); got != DefaultHotCacheBytes {
-		t.Fatalf("hot default cache: got %d want %d", got, DefaultHotCacheBytes)
+		t.Fatalf("default cache: got %d want %d", got, DefaultHotCacheBytes)
 	}
-	cold := baseCfg(NamespaceCold)
-	if got := cold.EffectiveCacheBytes(); got != DefaultColdCacheBytes {
-		t.Fatalf("冷层必须取显式有限默认，got %d", got)
-	}
+	// 2026-10-29：冷热双层已废除，不再有冷层单独的 cache 默认值可断言。
 }
 
 func TestListenAddrLoopbackOnly(t *testing.T) {

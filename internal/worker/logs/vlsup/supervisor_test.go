@@ -141,29 +141,45 @@ func newTestSupervisor(t *testing.T, factory CmdFactory, sink Sink, allowVL bool
 func TestSupervisorReplaceBinaryRestartsOnlyRunningNamespaces(t *testing.T) {
 	factory := &fakeFactory{}
 	s := newTestSupervisor(t, factory, &RecordingSink{}, false)
-	require.NoError(t, s.Start(context.Background(), NamespaceHot))
-	require.NoError(t, s.Start(context.Background(), NamespaceCold))
+	firstBinary := filepath.Join(t.TempDir(), "victoria-logs-first")
+	firstContent := []byte("first approved executable")
+	require.NoError(t, os.WriteFile(firstBinary, firstContent, 0o755))
+	firstSum := sha256.Sum256(firstContent)
+	firstSHA := hex.EncodeToString(firstSum[:])
 	newBinary := filepath.Join(t.TempDir(), "victoria-logs-new")
 	content := []byte("new approved executable")
 	require.NoError(t, os.WriteFile(newBinary, content, 0o755))
 	sum := sha256.Sum256(content)
 	newSHA := hex.EncodeToString(sum[:])
-	require.Error(t, s.ReplaceBinary(context.Background(), newBinary, strings.Repeat("0", 64)))
-	require.Equal(t, 2, factory.startCount())
-	require.NoError(t, s.ReplaceBinary(context.Background(), newBinary, newSHA))
-	require.Equal(t, 4, factory.startCount())
-	require.Equal(t, []string{newBinary, newBinary}, factory.bins[2:])
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold} {
-		status, err := s.Status(ns)
-		require.NoError(t, err)
-		require.Equal(t, StateRunning, status.State)
-		require.Equal(t, newSHA, status.AssetSHA256)
-	}
-	status, err := s.Status(NamespaceRehydrate)
+
+	// 唯一的受管实例未运行：切换资产不得凭空拉起它。
+	require.NoError(t, s.ReplaceBinary(context.Background(), firstBinary, firstSHA))
+	require.Equal(t, 0, factory.startCount())
+	status, err := s.Status(NamespaceHot)
 	require.NoError(t, err)
 	require.Equal(t, StateStopped, status.State)
+
+	require.NoError(t, s.Start(context.Background(), NamespaceHot))
+	require.Equal(t, 1, factory.startCount())
+
+	// 哈希不符必须在切换前失败，且不得扰动运行中的实例。
+	require.Error(t, s.ReplaceBinary(context.Background(), newBinary, strings.Repeat("0", 64)))
+	require.Equal(t, 1, factory.startCount())
+
+	// 合法切换：停止旧进程、以新二进制重启运行中的实例。
 	require.NoError(t, s.ReplaceBinary(context.Background(), newBinary, newSHA))
-	require.Equal(t, 4, factory.startCount())
+	require.Equal(t, 2, factory.startCount())
+	require.Equal(t, []string{newBinary}, factory.bins[1:])
+	for _, ns := range managedNamespaces() {
+		st, statusErr := s.Status(ns)
+		require.NoError(t, statusErr)
+		require.Equal(t, StateRunning, st.State)
+		require.Equal(t, newSHA, st.AssetSHA256)
+	}
+
+	// 重复用同一资产切换是幂等的。
+	require.NoError(t, s.ReplaceBinary(context.Background(), newBinary, newSHA))
+	require.Equal(t, 2, factory.startCount())
 }
 
 func TestSupervisorReplaceBinaryRestoresPreviousAssetWhenStartupFails(t *testing.T) {
@@ -235,23 +251,25 @@ func TestSupervisorStartStopStatus(t *testing.T) {
 	}
 }
 
-func TestSupervisorManagesThreeNamespaces(t *testing.T) {
+// TestSupervisorManagesManagedNamespaces 锁定受管实例集合（现在只有一个）能被启动、状态汇总，
+// 且数据根按 namespace 隔离（StoragePathUnder 的约定仍然成立）。
+func TestSupervisorManagesManagedNamespaces(t *testing.T) {
 	f := &fakeFactory{}
 	s := newTestSupervisor(t, f, &RecordingSink{}, false)
 	ctx := context.Background()
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		if err := s.Start(ctx, ns); err != nil {
 			t.Fatalf("start %s: %v", ns, err)
 		}
 	}
-	if f.startCount() != 3 {
-		t.Fatalf("expected 3 starts, got %d", f.startCount())
+	if f.startCount() != len(managedNamespaces()) {
+		t.Fatalf("expected %d starts, got %d", len(managedNamespaces()), f.startCount())
 	}
 	all := s.StatusAll()
-	if len(all) != 3 {
+	if len(all) != len(managedNamespaces()) {
 		t.Fatalf("status all: %d", len(all))
 	}
-	// 数据根按 namespace 隔离
+	// 数据根按 namespace 隔离（StoragePathUnder 的约定仍然成立）
 	seen := map[string]bool{}
 	for _, st := range all {
 		if seen[st.StorageDataPath] {
@@ -267,7 +285,7 @@ func TestSupervisorStartVerifiesAssetBeforeExec(t *testing.T) {
 	s := newTestSupervisor(t, f, sink, false)
 	// 破坏资产哈希
 	s.assetSHA = strings.Repeat("0", 64)
-	err := s.Start(context.Background(), NamespaceCold)
+	err := s.Start(context.Background(), NamespaceHot)
 	if err == nil {
 		t.Fatal("bad asset hash must fail before exec")
 	}
@@ -277,7 +295,7 @@ func TestSupervisorStartVerifiesAssetBeforeExec(t *testing.T) {
 	if sink.Count() == 0 {
 		t.Fatal("failure must go to independent sink")
 	}
-	st, _ := s.Status(NamespaceCold)
+	st, _ := s.Status(NamespaceHot)
 	if st.State != StateFailed {
 		t.Fatalf("state after verify fail: %s", st.State)
 	}
@@ -300,16 +318,18 @@ func TestSupervisorFactoryErrorUsesSinkAndGuard(t *testing.T) {
 	}
 }
 
+// TestSupervisorIndependentSinkReceivesFailures 锁定启动失败必须落到独立 sink，
+// 且上报里带正确的实例标识（现在只有一个受管实例）。
 func TestSupervisorIndependentSinkReceivesFailures(t *testing.T) {
 	f := &fakeFactory{failNext: errors.New("spawn fail")}
 	rec := &RecordingSink{IntoVL: false}
 	s := newTestSupervisor(t, f, rec, false)
-	_ = s.Start(context.Background(), NamespaceRehydrate)
+	_ = s.Start(context.Background(), NamespaceHot)
 	if rec.Count() != 1 {
 		t.Fatalf("independent sink should receive failure, got %d", rec.Count())
 	}
 	reports := rec.Snapshot()
-	if reports[0].Instance != string(NamespaceRehydrate) {
+	if reports[0].Instance != string(NamespaceHot) {
 		t.Fatalf("instance=%s", reports[0].Instance)
 	}
 }
@@ -386,14 +406,14 @@ func TestSupervisorHealthUnauthorized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Start(context.Background(), NamespaceCold); err != nil {
+	if err := s.Start(context.Background(), NamespaceHot); err != nil {
 		t.Fatal(err)
 	}
-	err = s.Health(context.Background(), NamespaceCold)
+	err = s.Health(context.Background(), NamespaceHot)
 	if err == nil || !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("want unauthorized, got %v", err)
 	}
-	st, _ := s.Status(NamespaceCold)
+	st, _ := s.Status(NamespaceHot)
 	if st.HealthOK {
 		t.Fatal("HealthOK must be false on unauthorized")
 	}
@@ -551,16 +571,16 @@ func TestSetSubBudgetEnforcesReserveRatio(t *testing.T) {
 
 // TestStartReportsFailureWhenProcessExitsImmediately 锁定真机缺陷修复：
 // 进程在 Start 成功后立即退出时（如数据目录缺失致 VL 秒退），不得上报 RUNNING，
-// 否则控制面会给出「启动成功」的误导结论（实测 rehydrate 即为此现象）。
+// 否则控制面会给出「启动成功」的误导结论（历史上受管实例缺目录时即为此现象）。
 func TestStartReportsFailureWhenProcessExitsImmediately(t *testing.T) {
 	f := &fakeFactory{exitNext: true}
 	s := newTestSupervisor(t, f, &RecordingSink{}, false)
 
-	err := s.Start(context.Background(), NamespaceRehydrate)
+	err := s.Start(context.Background(), NamespaceHot)
 	if err == nil {
 		t.Fatal("立即退出的进程必须让 Start 返回错误，不得静默置为 RUNNING")
 	}
-	st, statusErr := s.Status(NamespaceRehydrate)
+	st, statusErr := s.Status(NamespaceHot)
 	if statusErr != nil {
 		t.Fatal(statusErr)
 	}
@@ -580,14 +600,14 @@ func TestStartReportsFailureWhenProcessExitsImmediately(t *testing.T) {
 func TestStartCreatesNamespaceDataDir(t *testing.T) {
 	f := &fakeFactory{}
 	s := newTestSupervisor(t, f, &RecordingSink{}, false)
-	cfg, err := s.Config(NamespaceRehydrate)
+	cfg, err := s.Config(NamespaceHot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.RemoveAll(cfg.StorageDataPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Start(context.Background(), NamespaceRehydrate); err != nil {
+	if err := s.Start(context.Background(), NamespaceHot); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if info, statErr := os.Stat(cfg.StorageDataPath); statErr != nil || !info.IsDir() {
@@ -596,7 +616,7 @@ func TestStartCreatesNamespaceDataDir(t *testing.T) {
 }
 
 // TestStatusReconcilesProcessThatExitsLater 锁定真机缺口：
-// 进程可能在启动观察窗口内尚存活、稍后才退出（实测 rehydrate 缺目录即如此）。
+// 进程可能在启动观察窗口内尚存活、稍后才退出（实测受管实例缺数据目录时即如此）。
 // 此时账面若停留 RUNNING，控制面会长期误导运维，故读取状态时须以进程实况校正为 FAILED。
 func TestStatusReconcilesProcessThatExitsLater(t *testing.T) {
 	f := &fakeFactory{}
@@ -646,12 +666,12 @@ func TestStatusReconcilesProcessThatExitsLater(t *testing.T) {
 
 // TestStopAllReclaimsEveryNamespace 锁定真机事故修复：
 // Worker 退出若不停受管 VL，VL 会成为孤儿继续占用端口，下次启动的新 VL 因端口被占
-// 而立即退出，采集面长期降级。StopAll 必须回收全部运行中的 namespace。
+// 而立即退出，采集面长期降级。StopAll 必须回收全部受管实例（现在只有一个）。
 func TestStopAllReclaimsEveryNamespace(t *testing.T) {
 	f := &fakeFactory{}
 	s := newTestSupervisor(t, f, &RecordingSink{}, false)
 	ctx := context.Background()
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		if err := s.Start(ctx, ns); err != nil {
 			t.Fatalf("start %s: %v", ns, err)
 		}
@@ -659,7 +679,7 @@ func TestStopAllReclaimsEveryNamespace(t *testing.T) {
 
 	s.StopAll(ctx)
 
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		st, err := s.Status(ns)
 		if err != nil {
 			t.Fatal(err)

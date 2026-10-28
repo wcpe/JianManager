@@ -43,7 +43,7 @@ func selectorLegacySearch(ctx context.Context, client *Client, rng query.Authori
 // 原、新谓词都交给批准真引擎；完整候选行集包含交叉代次、各水位两侧和相邻时间点。
 // 沿用隔离根、随机回环端口的现有 helper，不接触生产或提高引擎查询上限。
 func TestRealVLSelectorFactoringSetOrderAndPages(t *testing.T) {
-	ctx, _, _, hot, _ := queryApprovedVL(t, false)
+	ctx, _, _, hot := queryApprovedVL(t)
 	client, err := New(hot)
 	require.NoError(t, err)
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)

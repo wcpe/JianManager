@@ -11,30 +11,29 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/vlruntime"
 )
 
-// Namespace 标识受管 VL 实例类别（FR-476：Worker supervisor 分别管理 HOT/COLD/Rehydrate）。
+// Namespace 标识受管 VL 实例类别。
+//
+// 2026-10-29：冷热双层已废除，**只剩一个 VL 实例**（NamespaceHot）。
+//
+// 为什么保留 Namespace 这个抽象而不把它抹平：Supervisor 的 instances/ports/budgets
+// 都是按 Namespace 索引的 map（天然支持 1..N），删掉类型要改几十处签名，收益与风险不划算。
+// 现在的形态是：抽象仍在，但只有**一个取值**，且没有任何代码按多层分派数据。
+//
+// 为什么仍叫 "hot" 而不改名：① 存量数据目录是 <data_root>/hot/data，改名要现场手工搬 21GB；
+// ② catalog.OwnerHot 是账本里的数据归属值，两者同名免得读者以为它们是两个概念。
 type Namespace string
 
 const (
-	NamespaceHot       Namespace = "hot"
-	NamespaceCold      Namespace = "cold"
-	NamespaceRehydrate Namespace = "rehydrate"
+	// NamespaceHot 是唯一的受管 VL 实例。
+	NamespaceHot Namespace = "hot"
 )
 
 // ValidNamespace 报告 ns 是否为受支持的命名空间。
-func ValidNamespace(ns Namespace) bool {
-	switch ns {
-	case NamespaceHot, NamespaceCold, NamespaceRehydrate:
-		return true
-	default:
-		return false
-	}
-}
+func ValidNamespace(ns Namespace) bool { return ns == NamespaceHot }
 
 // 默认监听端口（与 FR-473 C 组 supervisor-equivalent smoke 一致，可在 Options 覆盖）。
 const (
-	DefaultPortHot       = 19441
-	DefaultPortCold      = 19442
-	DefaultPortRehydrate = 19443
+	DefaultPortHot = 19441
 )
 
 // DefaultHotCacheBytes 是 HOT 实例 -memory.allowedBytes 默认模板（512MiB）。
@@ -58,7 +57,7 @@ type InstanceConfig struct {
 	Port               int
 	StorageDataPath    string
 	RetentionPeriod    string
-	MemoryAllowedBytes int64 // 0：HOT 使用 DefaultHotCacheBytes；其他 namespace 省略该 flag
+	MemoryAllowedBytes int64 // 0：使用 DefaultHotCacheBytes
 	// MemoryAllowedPercent 非 0 且 MemoryAllowedBytes<=0 时改用 VL 官方推荐的
 	// -memory.allowedPercent，让 VL 按宿主机可用内存自适应，避免换机器要改配置。
 	MemoryAllowedPercent int
@@ -76,16 +75,7 @@ type InstanceConfig struct {
 }
 
 // DefaultPort 返回 namespace 的默认监听端口。
-func DefaultPort(ns Namespace) int {
-	switch ns {
-	case NamespaceCold:
-		return DefaultPortCold
-	case NamespaceRehydrate:
-		return DefaultPortRehydrate
-	default:
-		return DefaultPortHot
-	}
-}
+func DefaultPort(ns Namespace) int { return DefaultPortHot }
 
 // ListenAddr 返回强制 localhost 的监听地址。
 func ListenAddr(port int) string {

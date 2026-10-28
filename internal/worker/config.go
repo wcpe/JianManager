@@ -629,12 +629,8 @@ type LogVLConfig struct {
 	Password        string `mapstructure:"password"`
 	DataRoot        string `mapstructure:"data_root"`
 	RetentionPeriod string `mapstructure:"retention_period"`
-	// ColdRetentionPeriod 冷层（COLD namespace）的 VL runtime retention。
-	//
-	// 为什么要独立于 RetentionPeriod：VL 的 retention 到期是**直接删**，绕过平台侧
-	// 「删前归档」。启层时热层原生窗口须覆盖产品热窗口、UTC 日边界和显式搬运/恢复预算，
-	// 冷层则是「冷留存多久」的唯一执行者（用户口径：冷 730 天，所有级别统一）。
-	ColdRetentionPeriod string `mapstructure:"cold_retention_period"`
+	// 2026-10-29：`cold_retention_period` 已删除 —— 冷热双层已废除，只剩余一个 VL，
+	// `retention_period` 就是唯一的保留期（既管热也管长期），不再存在「冷层留存多久」。
 	// DeleteEnabled 打开受管 VL 的 -delete.enable（默认 false）。
 	//
 	// 为什么要这个开关：`projection_generation` 白名单只让旧代次「看不见」，
@@ -652,12 +648,8 @@ type LogVLConfig struct {
 	// NamespaceBudgets 显式按层覆盖预算；零字段沿用旧键和各层有限模板。
 	NamespaceBudgets map[string]LogVLNamespaceBudget `mapstructure:"namespace_budgets"`
 	// Budget 区分全局日志磁盘与数据面 RSS，并限制临时空间预留。
-	Budget         LogVLRuntimeBudget `mapstructure:"budget"`
-	HotPort        int                `mapstructure:"hot_port"`
-	ColdPort       int                `mapstructure:"cold_port"`
-	RehydratePort  int                `mapstructure:"rehydrate_port"`
-	StartCold      bool               `mapstructure:"start_cold"`
-	StartRehydrate bool               `mapstructure:"start_rehydrate"`
+	Budget  LogVLRuntimeBudget `mapstructure:"budget"`
+	HotPort int                `mapstructure:"hot_port"`
 }
 
 // LogVLNamespaceBudget 表达单层 cache、Go 软限制与 RSS 准入阈值。
@@ -1458,30 +1450,26 @@ const (
 
 // validateRuntimeRetention 使用与子进程相同的默认和解析规则，启层必须留出明确迁移余量。
 // 有限原生 TTL 在故障超出声明 SLA 时仍可能淘汰，不能替代独立副本。
+//
+// 2026-10-29：冷热双层已废除 ⇒ 不再校验 `cold_retention_period`（该键已删除），
+// 也不再要求 `start_cold`（没有第二个接收端可启）。剩下的是一个 VL 的保留期校验。
 func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 	hotRaw := strings.TrimSpace(c.LogVL.RetentionPeriod)
 	if hotRaw == "" {
 		hotRaw = vlsup.DefaultRetentionPeriod
 	}
-	coldRaw := strings.TrimSpace(c.LogVL.ColdRetentionPeriod)
-	if coldRaw == "" {
-		coldRaw = hotRaw
+	actual, err := retention.ParseRuntimeTTL(hotRaw)
+	if err != nil {
+		return fmt.Errorf("log_vl.retention_period: %w", err)
 	}
-	for _, check := range []struct {
-		key      string
-		raw      string
-		declared time.Duration
-	}{
-		{"log_vl.retention_period", hotRaw, p.HotWindow()},
-		{"log_vl.cold_retention_period", coldRaw, p.Normalize().ColdRetention},
-	} {
-		actual, err := retention.ParseRuntimeTTL(check.raw)
-		if err != nil {
-			return fmt.Errorf("%s: %w", check.key, err)
-		}
-		if actual < check.declared {
-			return fmt.Errorf("%s 实际生效 %q (%s) 短于 log_retention 声明 %s；VL 原生淘汰不受应用删除开关保护", check.key, check.raw, actual, check.declared)
-		}
+	// 保留期必须覆盖**两段声明**：产品热窗口（到期前可查）与冷留存（长期可查）。
+	// 单实例下同一份 retention 同时承担两者，取两者最大值才不会静默提前淘汰。
+	declared := p.HotWindow()
+	if cold := p.Normalize().ColdRetention; cold > declared {
+		declared = cold
+	}
+	if actual < declared {
+		return fmt.Errorf("log_vl.retention_period 实际生效 %q (%s) 短于 log_retention 声明 %s；VL 原生淘汰不受应用删除开关保护", hotRaw, actual, declared)
 	}
 	if !p.Enabled {
 		return nil
@@ -1498,9 +1486,6 @@ func (c *Config) validateRuntimeRetention(p retention.Policy) error {
 	}
 	if c.LogVL.Username == "" || c.LogVL.Password == "" {
 		return fmt.Errorf("log_vl: 启用分层需要非空本地鉴权凭据")
-	}
-	if !c.LogVL.StartCold {
-		return fmt.Errorf("log_vl.start_cold: 启用分层必须显式启用 COLD 接收端")
 	}
 	for _, field := range []struct {
 		key      string
@@ -1988,19 +1973,22 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.password", "")
 	v.SetDefault("log_vl.data_root", "")
 	v.SetDefault("log_vl.retention_period", vlruntime.DefaultRetentionPeriod)
-	v.SetDefault("log_vl.cold_retention_period", vlruntime.DefaultColdRetentionPeriod)
+	// 2026-10-29：`log_vl.cold_retention_period` 已删除（冷热双层废除）。
+	// `log_retention.cold_retention` 作为**声明**保留：它现在表达「期望的可查范围」，
+	// 与 hot_retention 一起取最大值去校 `log_vl.retention_period`（见 validateRuntimeRetention）。
 	v.SetDefault("log_retention.hot_retention", vlruntime.DefaultHotRetention.String())
-	v.SetDefault("log_retention.cold_retention", vlruntime.DefaultColdRetentionPeriod)
+	v.SetDefault("log_retention.cold_retention", vlruntime.DefaultColdRetention.String())
 	v.SetDefault("log_vl.hot_cache_bytes", vlsup.DefaultHotCacheBytes)
 	// VL 官方推荐按可用内存百分比自适应；显式设为 0 可退回按 hot_cache_bytes 的旧行为。
 	v.SetDefault("log_vl.memory_allowed_percent", 10)
 	v.SetDefault("log_vl.memory_limit_bytes", int64(0))
 	v.SetDefault("log_vl.delete_enabled", false)
-	// 只为零值可覆盖的键登记默认；按层模板由 RuntimeBudget 统一归并，不能盖掉旧键。
-	for _, ns := range []string{"hot", "cold", "rehydrate"} {
-		for _, key := range []string{"cache_bytes", "go_memory_limit_bytes", "rss_bytes"} {
-			v.SetDefault("log_vl.namespace_budgets."+ns+"."+key, int64(0))
-		}
+	// 2026-10-29：只为唯一的受管实例（hot）登记默认。
+	// 旧键 `namespace_budgets.cold.*` / `.rehydrate.*` 不再登记——它们会被
+	// `RuntimeBudget()` 当成未知层而拒绝，这是刻意的：静默忽略一个运维真写下的限额
+	// 比启动失败更危险。
+	for _, key := range []string{"cache_bytes", "go_memory_limit_bytes", "rss_bytes"} {
+		v.SetDefault("log_vl.namespace_budgets.hot."+key, int64(0))
 	}
 	v.SetDefault("log_vl.budget.disk_bytes", int64(0))
 	v.SetDefault("log_vl.budget.rss_bytes", int64(0))
@@ -2242,15 +2230,15 @@ func Load(path string) (*Config, error) {
 			if cfg.LogRetention.Enabled {
 				return nil, err
 			}
-			slog.Warn("保留期配置不一致，但保留策略未启用（不阻断启动）：热层数据到期将由 VictoriaLogs 直接删除",
-				"error", err, "hint", "设置 log_retention.enabled: true 并让 hot_retention 短于 VL retention")
+			slog.Warn("保留期配置不一致，但保留策略未启用（不阻断启动）：数据到期将由 VictoriaLogs 直接删除",
+				"error", err, "hint", "设置 log_retention.enabled: true 以启用到期处理")
 		}
 		if !cfg.LogRetention.Enabled {
-			slog.Warn("日志自动搬运关闭：原生有限 TTL 仍独立淘汰；关闭应用删除不等于永久保留或已有冷层副本",
-				"automaticMigration", false, "nativeRetention", cfg.LogVL.RetentionPeriod,
-				"coldNativeRetention", cfg.LogVL.ColdRetentionPeriod, "applicationDeleteEnabled", cfg.LogVL.DeleteEnabled)
+			slog.Warn("日志自动保留关闭：原生有限 TTL 仍独立淘汰；关闭应用删除不等于永久保留或已有副本",
+				"automaticRetention", false, "nativeRetention", cfg.LogVL.RetentionPeriod,
+				"applicationDeleteEnabled", cfg.LogVL.DeleteEnabled)
 		} else {
-			slog.Info("日志分层仅在声明的有限搬运/恢复预算内留出余量；原生 TTL 不提供无限故障下最后副本保证",
+			slog.Info("日志保留策略已启用：到期分区只能导出独立副本或保留原物",
 				"nativeRetention", cfg.LogVL.RetentionPeriod,
 				"copyVerifyBudget", cfg.LogRetention.Migration.CopyVerifyBudget,
 				"recoveryBudget", cfg.LogRetention.Migration.RecoveryBudget)
@@ -2312,7 +2300,7 @@ func Load(path string) (*Config, error) {
 		cfg.LogCapacity.PauseAtPercent <= cfg.LogCapacity.DegradedAtPercent || cfg.LogCapacity.PauseAtPercent > 100 {
 		return nil, fmt.Errorf("log_capacity thresholds must satisfy 0 < degraded < pause <= 100")
 	}
-	configuredPorts := []int{cfg.LogVL.HotPort, cfg.LogVL.ColdPort, cfg.LogVL.RehydratePort}
+	configuredPorts := []int{cfg.LogVL.HotPort}
 	seenPorts := make(map[int]bool)
 	for _, port := range configuredPorts {
 		if port == 0 {

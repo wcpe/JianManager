@@ -11,7 +11,6 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	workerstorage "github.com/wcpe/JianManager/internal/worker/storage"
 )
@@ -198,78 +197,6 @@ func (a *catalogArchiveAuthority) MarkHotReclaimed(ctx context.Context, namespac
 			"day", key.UTCDay, "error", err)
 	}
 	return nil
-}
-
-// newDayManagerMover 把 lifecycle 状态机接成 Mover。
-//
-// 已有迁移必须先 Resume，不能因 Owner 已切 COLD 跳过租约排空与清理。
-// 手工失败与未知状态不自动覆盖；稳定冷层才允许幂等返回，否则 Start 到 COLD。
-// Resume/Start 均委托既有状态机，继续保留最后副本保护、校验与查询租约门禁。
-func newDayManagerMover(mgr *lifecycle.DayManager, cat *catalog.Catalog) retention.Mover {
-	return retention.MoverFunc(func(ctx context.Context, storageNamespace, day string) (string, error) {
-		if mgr == nil || cat == nil {
-			return "", fmt.Errorf("日志 Lifecycle 管理器未就绪")
-		}
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		parsed, err := parsePartitionDay(day)
-		if err != nil {
-			return "", err
-		}
-		key := catalog.PartitionKey{StorageNamespace: storageNamespace, UTCDay: parsed.Format("2006-01-02")}
-		rec, ok := cat.Get(key)
-		if !ok {
-			return "", fmt.Errorf("日志分区 %s 不在 Catalog 中", key)
-		}
-		canonicalDay := parsed.Format("2006-01-02")
-		pending := false
-		if physical, ok := cat.PhysicalDay(canonicalDay); ok {
-			pending = physical.Frozen
-		}
-		hotResidual := false
-		for _, member := range cat.RecordsForDay(canonicalDay) {
-			hotResidual = hotResidual || member.Owner == catalog.OwnerHot
-			if member.MigrationState != "" && member.MigrationState != catalog.StateCleaned {
-				_, stateErr := catalog.HappyIndex(member.MigrationState)
-				if member.MigrationState == catalog.StateFailedManual || (stateErr != nil && member.MigrationState != catalog.StateFailedRetryable) {
-					return "", fmt.Errorf("日志分区 %s 迁移状态 %s 需要人工处理", member.Key, member.MigrationState)
-				}
-				pending = true
-			}
-		}
-		if pending {
-			if err := mgr.Resume(canonicalDay); err != nil {
-				return "", err
-			}
-			if physical, ok := cat.PhysicalDay(canonicalDay); ok {
-				return physical.TargetDirID, nil
-			}
-			return rec.OwnerDirID, nil
-		}
-		if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned {
-			_, stateErr := catalog.HappyIndex(rec.MigrationState)
-			if rec.MigrationState == catalog.StateFailedManual || (stateErr != nil && rec.MigrationState != catalog.StateFailedRetryable) {
-				return "", fmt.Errorf("日志分区 %s 迁移状态 %s 需要人工处理", key, rec.MigrationState)
-			}
-			if rec.TargetOwner != catalog.OwnerCold || rec.TargetDirID == "" {
-				return "", fmt.Errorf("日志分区 %s 缺少已登记的冷层恢复目标", key)
-			}
-			if err := mgr.Resume(canonicalDay); err != nil {
-				return "", err
-			}
-			return rec.TargetDirID, nil
-		}
-		if rec.Owner == catalog.OwnerCold && !hotResidual {
-			// 只有整日稳定冷层才能幂等成功，不能遗漏另一成员的 HOT 残留。
-			return rec.OwnerDirID, nil
-		}
-		dirID := parsed.Format("20060102")
-		if err := mgr.Start(canonicalDay, catalog.OwnerCold, dirID); err != nil {
-			return "", err
-		}
-		return dirID, nil
-	})
 }
 
 // parsePartitionDay 解析分区日期（兼容 `20060102` 与 `2006-01-02`）。

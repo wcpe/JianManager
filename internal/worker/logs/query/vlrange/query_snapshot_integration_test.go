@@ -17,13 +17,18 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
-func queryApprovedVL(t *testing.T, withCold bool) (context.Context, string, *vlsup.Supervisor, *vlsup.Client, *vlsup.Client) {
+// queryApprovedVL 起一个真实的批准版 VL 实例。
+//
+// 2026-10-29：冷热双层废除后只剩一个实例，故不再有 withCold 开关、也不再返回 cold 客户端。
+// 原「通过物理迁移钉住 view」的集成用例随之删除——迁移链已不存在，
+// 「有在途读取时物理日不得退休」这条不变量改由 Catalog.CanRetirePhysicalDay 的单元回归覆盖
+// （见 internal/worker/logs/query 的同名回归）。
+func queryApprovedVL(t *testing.T) (context.Context, string, *vlsup.Supervisor, *vlsup.Client) {
 	t.Helper()
 	binary := os.Getenv("JM_VL_BIN")
 	if binary == "" {
@@ -33,9 +38,6 @@ func queryApprovedVL(t *testing.T, withCold bool) (context.Context, string, *vls
 	root := t.TempDir()
 	ports := make(map[vlsup.Namespace]int)
 	namespaces := []vlsup.Namespace{vlsup.NamespaceHot}
-	if withCold {
-		namespaces = append(namespaces, vlsup.NamespaceCold)
-	}
 	for _, namespace := range namespaces {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
@@ -44,7 +46,7 @@ func queryApprovedVL(t *testing.T, withCold bool) (context.Context, string, *vls
 	}
 	supervisor, err := vlsup.New(vlsup.Options{BinaryPath: binary, AssetSHA256: vlsup.CurrentApprovedExeSHA256(),
 		DataRoot: root, AuthUsername: "query-fixture", AuthPassword: "isolated-only", RetentionPeriod: "730d",
-		Ports: ports, MemoryAllowedBytes: map[vlsup.Namespace]int64{vlsup.NamespaceHot: 64 << 20, vlsup.NamespaceCold: 64 << 20}})
+		Ports: ports, MemoryAllowedBytes: map[vlsup.Namespace]int64{vlsup.NamespaceHot: 64 << 20}})
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	t.Cleanup(cancel)
@@ -59,13 +61,8 @@ func queryApprovedVL(t *testing.T, withCold bool) (context.Context, string, *vls
 	})
 	hot, err := supervisor.ClientFor(vlsup.NamespaceHot)
 	require.NoError(t, err)
-	var cold *vlsup.Client
-	if withCold {
-		cold, err = supervisor.ClientFor(vlsup.NamespaceCold)
-		require.NoError(t, err)
-	}
 	t.Logf("批准 SHA=%s 仅回环端口=%v 独立根=%s", vlsup.CurrentApprovedExeSHA256(), ports, root)
-	return ctx, root, supervisor, hot, cold
+	return ctx, root, supervisor, hot
 }
 
 func queryPhysicalEvent(source, sourceGeneration string, end uint64, at time.Time, message string) logtypes.Event {
@@ -111,7 +108,7 @@ func queryIdentityDigest(events []logtypes.Event) string {
 }
 
 func TestRealVLQueryFixedViewAppendPaginationKeepsSearchExportSet(t *testing.T) {
-	ctx, _, _, hot, _ := queryApprovedVL(t, false)
+	ctx, _, _, hot := queryApprovedVL(t)
 	client, err := New(hot)
 	require.NoError(t, err)
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
@@ -214,7 +211,7 @@ func (c *queryCountingRange) Tail(ctx context.Context, rng query.AuthoritativeRa
 }
 
 func TestRealVLQueryLegacyJournalZeroAndMissingPrefixThreeRestarts(t *testing.T) {
-	ctx, root, _, hot, _ := queryApprovedVL(t, false)
+	ctx, root, _, hot := queryApprovedVL(t)
 	client, err := New(hot)
 	require.NoError(t, err)
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
@@ -311,85 +308,4 @@ func (c *queryBlockingRange) Stats(ctx context.Context, rng query.AuthoritativeR
 }
 func (c *queryBlockingRange) Tail(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, mode query.TailMode) (query.RangeResult, error) {
 	return c.inner.Tail(ctx, rng, q, mode)
-}
-
-func TestRealVLQueryPlannerLeasePinsHotThroughPhysicalMigration(t *testing.T) {
-	ctx, root, supervisor, hot, cold := queryApprovedVL(t, true)
-	hotClient, err := New(hot)
-	require.NoError(t, err)
-	coldClient, err := New(cold)
-	require.NoError(t, err)
-	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-48 * time.Hour)
-	key := catalog.PartitionKey{StorageNamespace: "leased-migration", UTCDay: day.Format("2006-01-02")}
-	events := []logtypes.Event{queryPhysicalEvent("migration-source", "s1", 10, day.Add(12*time.Hour), "迁移原文一"), queryPhysicalEvent("migration-source", "s1", 20, day.Add(11*time.Hour), "迁移原文二")}
-	queryInsertPhysical(t, ctx, hot, "original", events)
-	cat := catalog.New(nil)
-	record := catalog.NewStableRecord(key, catalog.OwnerHot, 1, "old-hot")
-	record.PublishedProjection = &catalog.PublishedProjection{ManifestVersion: "original", QueryLocationDirID: "old-hot", QueryGeneration: 1,
-		CoverageComplete: true, ClosedVisibleSeq: map[string]uint64{key.String(): 20}, SourceProjections: []catalog.SourceProjection{{
-			SourceGenerationRef: catalog.SourceGenerationRef{LogSourceID: "migration-source", SourceGeneration: "s1"}, ProjectionGenerations: []string{"original"}, ClosedVisibleSeq: 20}}}
-	require.NoError(t, cat.PublishProjection(nil, record))
-	planner := query.NewPlanner(cat, nil)
-	t.Cleanup(func() { require.NoError(t, planner.Close()) })
-	tiered := &Tiered{Hot: hotClient, Cold: coldClient}
-	normal := query.NewService(planner, tiered, "migration-normal")
-	view := normal.OpenView(query.QueryRequest{AuthorizedTargets: []string{key.String()}})
-	require.Nil(t, view.Err)
-	blocking := &queryBlockingRange{inner: tiered, entered: make(chan query.AuthoritativeRange, 1), exit: make(chan struct{})}
-	var releaseOnce sync.Once
-	unblock := func() { releaseOnce.Do(func() { close(blocking.exit) }) }
-	t.Cleanup(unblock)
-	done := make(chan query.SearchResponse, 1)
-	go func() {
-		done <- query.NewService(planner, blocking, "migration-inflight").Search(ctx, query.QueryRequest{View: view.View, AuthorizedTargets: []string{key.String()}})
-	}()
-	select {
-	case started := <-blocking.entered:
-		require.Equal(t, catalog.OwnerHot, started.Owner)
-	case <-time.After(5 * time.Second):
-		t.Fatal("真实 range 未进入读取")
-	}
-	physical, err := lifecycle.NewVLPartitionOps(hot, cold, filepath.Join(root, "hot", "data"), filepath.Join(root, "cold", "data"), cat)
-	require.NoError(t, err)
-	budget, err := vlsup.NewBudgetController(vlsup.RuntimeBudget{DiskBytes: 1 << 30, RSSBytes: 1 << 30,
-		Reservations: map[vlsup.ReservationKind]int64{vlsup.ReservationStaging: 1 << 28}})
-	require.NoError(t, err)
-	budget.Update(supervisor.SampleResources(os.Getpid()))
-	physical.ResourceBudget = budget
-	manager := lifecycle.NewDayManager(cat, physical.Ops(), physical)
-	require.ErrorIs(t, manager.Start(key.UTCDay, catalog.OwnerCold, day.Format("20060102")), catalog.ErrPhysicalDayNotRetirable)
-	oldPlan := planner.Plan(query.PlanRequest{ViewRef: view.View})
-	require.Nil(t, oldPlan.Err)
-	require.Equal(t, catalog.OwnerHot, oldPlan.Ranges[0].Owner)
-	require.Equal(t, "old-hot", oldPlan.Ranges[0].DirID)
-	fresh := normal.Search(ctx, query.QueryRequest{AuthorizedTargets: []string{key.String()}})
-	require.Nil(t, fresh.Err)
-	require.Len(t, fresh.Items, len(events))
-	freshPlan := planner.Plan(query.PlanRequest{ViewRef: fresh.View})
-	require.Equal(t, catalog.OwnerCold, freshPlan.Ranges[0].Owner)
-	oldPage := normal.Search(ctx, query.QueryRequest{View: view.View, AuthorizedTargets: []string{key.String()}})
-	require.Nil(t, oldPage.Err)
-	require.Equal(t, queryIdentityDigest(fresh.Items), queryIdentityDigest(oldPage.Items))
-	require.NoError(t, planner.ReleaseView(view.View.ViewID))
-	require.ErrorIs(t, manager.Resume(key.UTCDay), catalog.ErrPhysicalDayNotRetirable)
-	hotPartition := filepath.Join(root, "hot", "data", "partitions", day.Format("20060102"))
-	require.DirExists(t, hotPartition, "旧 view 失效后真实 goroutine 仍在时不得删除物理 HOT")
-	unblock()
-	select {
-	case response := <-done:
-		require.Equal(t, query.ErrCodeViewStale, response.Err.Code, "读期间已释放的视图不得再公布完整耗尽或新游标")
-		require.False(t, response.Exhausted)
-		require.Empty(t, response.NextCursor)
-		require.Equal(t, queryIdentityDigest(fresh.Items), queryIdentityDigest(response.Items))
-	case <-time.After(10 * time.Second):
-		t.Fatal("迁移后旧权威的真实读取未完成")
-	}
-	require.NoError(t, manager.Resume(key.UTCDay))
-	require.NoDirExists(t, hotPartition)
-	remaining := normal.Search(ctx, query.QueryRequest{View: fresh.View, AuthorizedTargets: []string{key.String()}})
-	require.Nil(t, remaining.Err)
-	require.Equal(t, queryIdentityDigest(fresh.Items), queryIdentityDigest(remaining.Items))
-	stale := normal.Search(ctx, query.QueryRequest{View: view.View, AuthorizedTargets: []string{key.String()}})
-	require.Equal(t, query.ErrCodeViewStale, stale.Err.Code)
-	t.Logf("真实Planner旧HOT/新COLD固定身份哈希=%s；在途pin退出后HOT物理日才退休", queryIdentityDigest(fresh.Items))
 }

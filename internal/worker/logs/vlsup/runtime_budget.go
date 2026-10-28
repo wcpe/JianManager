@@ -10,24 +10,21 @@ import (
 	"time"
 )
 
-const (
-	// DefaultColdCacheBytes 避免冷层回退到宿主内存百分比，不是性能调大。
-	DefaultColdCacheBytes int64 = 128 << 20
-	// DefaultRehydrateCacheBytes 为默认关闭的恢复层保留显式有限cache模板。
-	DefaultRehydrateCacheBytes int64 = 128 << 20
-)
-
 // NamespaceBudget 明确区分内部cache、Go软限制和RSS判据；三者不能互相冒充硬限制。
 type NamespaceBudget struct{ CacheBytes, GoMemoryLimitBytes, RSSBytes int64 }
 
-// DefaultNamespaceBudgets 每次返回独立map，不按宿主可见内存推导冷层cache。
+// DefaultNamespaceBudgets 每次返回独立map。
 func DefaultNamespaceBudgets() map[Namespace]NamespaceBudget {
 	return map[Namespace]NamespaceBudget{
-		NamespaceHot:       {CacheBytes: DefaultHotCacheBytes, GoMemoryLimitBytes: DefaultVLMemoryLimitBytes},
-		NamespaceCold:      {CacheBytes: DefaultColdCacheBytes, GoMemoryLimitBytes: DefaultVLMemoryLimitBytes},
-		NamespaceRehydrate: {CacheBytes: DefaultRehydrateCacheBytes, GoMemoryLimitBytes: DefaultVLMemoryLimitBytes},
+		NamespaceHot: {CacheBytes: DefaultHotCacheBytes, GoMemoryLimitBytes: DefaultVLMemoryLimitBytes},
 	}
 }
+
+// managedNamespaces 枚举受管实例。
+//
+// 2026-10-29：只剩一个。保留这个函数（而不是到处写 []Namespace{NamespaceHot}）是为了让
+// 「将来真要再加一层」与「现在只有一层」共用同一个真源——所有遍历都走它。
+func managedNamespaces() []Namespace { return []Namespace{NamespaceHot} }
 
 // ReservationKind 只允许已知的短生命周期磁盘预留种类。
 type ReservationKind string
@@ -119,14 +116,14 @@ func validReservation(k ReservationKind) bool {
 	return k == ReservationWAL || k == ReservationStaging || k == ReservationExport
 }
 
-// Update 复制采样；锁序仅controller.mu，不跨IO，临界区最多3个namespace。
+// Update 复制采样；锁序仅controller.mu，不跨IO，临界区为常数档。
 func (c *BudgetController) Update(sample ResourceSample) {
 	if c == nil {
 		return
 	}
 	copySample := sample
 	copySample.Namespaces = map[Namespace]NamespaceSample{}
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		if v, ok := sample.Namespaces[ns]; ok {
 			copySample.Namespaces[ns] = v
 		}
@@ -151,7 +148,7 @@ func (c *BudgetController) admissionLocked(work WorkClass) error {
 	unknown := !s.WorkerRSSKnown || s.WorkerRSSBytes < 0 || !s.DiskKnown || math.IsNaN(s.DiskUsagePercent) || math.IsInf(s.DiskUsagePercent, 0) || s.DiskUsagePercent < 0 || s.DiskUsagePercent > 100 || s.SampledAt.IsZero() || time.Since(s.SampledAt) > 2*time.Minute
 	overRSS := false
 	total := s.WorkerRSSBytes
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		n := s.Namespaces[ns]
 		if !n.RSSKnown || n.RSSBytes < 0 {
 			unknown = true
@@ -260,7 +257,7 @@ func (s *Supervisor) SampleResources(workerPID int) ResourceSample {
 	}
 	s.mu.Unlock()
 	out := ResourceSample{Namespaces: map[Namespace]NamespaceSample{}, SampledAt: time.Now()}
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		pid, running := pids[ns]
 		v := NamespaceSample{RSSKnown: !running}
 		if running && pid > 0 {

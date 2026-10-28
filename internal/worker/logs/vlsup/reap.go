@@ -92,7 +92,7 @@ func scanOwnOrphans(dataRoot string, selfPID int) ([]OrphanMatch, error) {
 		if matchesOwnOrphan(cmdline, exe, dataRoot) {
 			// 原始命令行只参与本地归属判据，绝不进入返回值、回调或日志。
 			var ns Namespace
-			for _, candidate := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+			for _, candidate := range managedNamespaces() {
 				if strings.Contains(cmdline, string(os.PathSeparator)+string(candidate)+string(os.PathSeparator)+"data") {
 					ns = candidate
 					break

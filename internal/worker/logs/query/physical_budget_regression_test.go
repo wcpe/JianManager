@@ -239,9 +239,10 @@ func TestQueryRequestTimeoutKeepsExportReservationUntilActualExit(t *testing.T) 
 		t.Fatal("真实读取尚未退出就提前返回并释放保护")
 	default:
 	}
-	var detached atomic.Int32
-	require.ErrorIs(t, queryLeaseDayManager(cat, &detached).Start(key.UTCDay, catalog.OwnerCold, "cold-2"), catalog.ErrPhysicalDayNotRetirable)
-	require.Zero(t, detached.Load())
+	// 真实读取尚未退出 ⇒ 物理日不得可退休（与原来的「Detach 未被调用」等价）。
+	if ok, reason := cat.CanRetirePhysicalDay(key.UTCDay); ok {
+		t.Fatalf("真实读取尚未退出时物理日不得可退休：%s", reason)
+	}
 	close(exit)
 	response := <-done
 	require.NotNil(t, response.Err)

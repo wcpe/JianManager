@@ -78,15 +78,11 @@ func (r *VLSupRuntime) AttachedDirs() []string {
 }
 
 // NamespaceForOwner 将 catalog.Owner 映射到 vlsup namespace。
+//
+// 2026-10-29：冷热双层已废除，只剩余一个受管 VL ⇒ 所有归属都落到同一个实例。
+// 保留这个函数（而不是在调用点直接写 vlsup.NamespaceHot）是为了让「归属 → 物理位置」
+// 这件事仍然只有一个真源：将来若再引入第二层，只需改这里。
 func NamespaceForOwner(owner catalog.Owner) vlsup.Namespace {
-	switch owner {
-	case catalog.OwnerHot:
-		return vlsup.NamespaceHot
-	case catalog.OwnerCold:
-		return vlsup.NamespaceCold
-	case catalog.OwnerArchive:
-		return vlsup.NamespaceRehydrate
-	default:
-		return vlsup.NamespaceCold
-	}
+	_ = owner
+	return vlsup.NamespaceHot
 }

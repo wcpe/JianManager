@@ -50,7 +50,16 @@ func TestClientSearchMapsNDJSONAndEnforcesClosedVisibleSeq(t *testing.T) {
 	require.Contains(t, seenQuery, "fields _time")
 }
 
-func TestTieredArchiveSearchUsesRehydrateClientAndCoveredSourceSelector(t *testing.T) {
+// TestTieredArchiveSearchUsesCoveredSourceSelector 钉住归档归属的检索**用哪些**客户端
+// 与**构造什么样的 selector**。
+//
+// 2026-10-29：冷热双层废除后只剩一个受管实例，`Tiered` 不再按 Owner 选层 ——
+// 但本用例真正的价值不在选层，而在两件事，它们今天仍然成立：
+//  1. 检索只会落到受管实例上，**不会**发到别的地址（hotCalls 必须为 0）；
+//  2. 归档归属的 selector 必须由 `CoveredSourceGenerations` 展开成
+//     `log_source_id:"a" OR log_source_id:"b"` + `projection_generation:...`，
+//     而不是误用 storage_namespace。
+func TestTieredArchiveSearchUsesCoveredSourceSelector(t *testing.T) {
 	hotCalls, deepCalls := 0, 0
 	hot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hotCalls++
@@ -72,11 +81,13 @@ func TestTieredArchiveSearchUsesRehydrateClientAndCoveredSourceSelector(t *testi
 	require.NoError(t, err)
 	deepVL, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: deep.URL})
 	require.NoError(t, err)
-	hotClient, err := New(hotVL)
-	require.NoError(t, err)
+	// hot 客户端只用来断言「没有请求发到它」。
+	if _, err := New(hotVL); err != nil {
+		t.Fatal(err)
+	}
 	deepClient, err := New(deepVL)
 	require.NoError(t, err)
-	tiered := &Tiered{Hot: hotClient, Rehydrate: deepClient}
+	tiered := &Tiered{Main: deepClient}
 	res, err := tiered.Search(context.Background(), query.AuthoritativeRange{
 		Key:   catalog.PartitionKey{StorageNamespace: "shared-namespace", UTCDay: "2026-09-22"},
 		Owner: catalog.OwnerArchive,

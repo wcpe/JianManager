@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -64,16 +63,12 @@ type Options struct {
 	AssetSHA256 string
 	// DataRoot 受管数据根；各 namespace 使用 DataRoot/<ns>/data。
 	DataRoot string
-	// RetentionPeriod VL runtime retention 的**回退值**；空则 DefaultRetentionPeriod。
-	// 未在 RetentionByNamespace 里单独指定的 namespace 用它。
-	RetentionPeriod string
-	// RetentionByNamespace 按 namespace 覆盖 VL runtime retention。
+	// RetentionPeriod VL runtime retention（唯一的保留期）。
 	//
-	// 为什么必须能分开：VL 的 retention 是**实例级**的，且到期是**直接删**——
-	// 它绕过平台侧「删前归档」的硬规则：搬运驱动器还没搬，VL 自己先把热层数据删了。
-	// 因此热层实例的 retention 必须**不短于**保留策略的热层窗口（留出搬运余量），
-	// 冷层实例的 retention 则是「冷留存多久」的唯一执行者。
-	RetentionByNamespace map[Namespace]string
+	// 2026-10-29：`RetentionByNamespace` 已删除 —— 只剩余一个受管实例，不存在「按层各配各的」。
+	// 历史上的必要性（热层 TTL 必须 ≥ 产品热窗口、冷层 TTL 是冷留存唯一执行者）
+	// 随着冷热分层一起消失了：现在只有一份 TTL，它同时承担两段声明。
+	RetentionPeriod string
 	// DeleteEnabled 打开 VL 的 -delete.enable（默认关）。
 	// 只有它为真时才允许孤儿代次 GC / 按级别 TTL 真正删除数据；关闭时行为与改动前一致。
 	DeleteEnabled bool
@@ -130,14 +125,12 @@ type instance struct {
 	lastRestartErr string
 }
 
-// Supervisor 管理 named VL 实例（hot|cold|rehydrate）。
+// Supervisor 管理受管 VL 实例（2026-10-29 起只有一个）。
 type Supervisor struct {
-	binPath   string
-	assetSHA  string
-	dataRoot  string
-	retention string
-	// retentionNS 按 namespace 覆盖 retention（空 = 用 retention）。
-	retentionNS   map[Namespace]string
+	binPath       string
+	assetSHA      string
+	dataRoot      string
+	retention     string
 	authUser      string
 	deleteEnabled bool
 	authPass      string
@@ -251,12 +244,6 @@ func New(opts Options) (*Supervisor, error) {
 	if retention == "" {
 		retention = DefaultRetentionPeriod
 	}
-	retentionByNS := make(map[Namespace]string, len(opts.RetentionByNamespace))
-	for ns, v := range opts.RetentionByNamespace {
-		if strings.TrimSpace(v) != "" {
-			retentionByNS[ns] = v
-		}
-	}
 	tag := opts.AssetTag
 	if tag == "" {
 		tag = AssetTag
@@ -276,7 +263,6 @@ func New(opts Options) (*Supervisor, error) {
 		assetSHA:      opts.AssetSHA256,
 		dataRoot:      opts.DataRoot,
 		retention:     retention,
-		retentionNS:   retentionByNS,
 		authUser:      opts.AuthUsername,
 		deleteEnabled: opts.DeleteEnabled,
 		authPass:      opts.AuthPassword,
@@ -292,7 +278,7 @@ func New(opts Options) (*Supervisor, error) {
 		instances:     map[Namespace]*instance{},
 		budget:        DefaultCacheBudget(),
 	}
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		port := DefaultPort(ns)
 		if p, ok := opts.Ports[ns]; ok && p > 0 {
 			port = p
@@ -317,11 +303,11 @@ func New(opts Options) (*Supervisor, error) {
 	return s, nil
 }
 
-// retentionFor 返回 namespace 生效的 VL runtime retention。
+// retentionFor 返回生效的 VL runtime retention。
+//
+// 2026-10-29：只剩一个实例 ⇒ 恒为全局 retention（`RetentionByNamespace` 已删）。
 func (s *Supervisor) retentionFor(ns Namespace) string {
-	if v, ok := s.retentionNS[ns]; ok && strings.TrimSpace(v) != "" {
-		return v
-	}
+	_ = ns
 	return s.retention
 }
 
@@ -588,11 +574,10 @@ func (s *Supervisor) stop(ctx context.Context, ns Namespace) error {
 
 // StopAll 停止全部受管 namespace，供 Worker 退出时回收受管子进程。
 //
-// 必要性（真机事故）：Worker 退出若不停受管 VL，VL 会成为 PPID=1 的孤儿并继续占用
-// hot/cold/rehydrate 端口；下次启动时新 VL 因端口被占而立即退出，采集面长期降级。
-// 各 namespace 独立停止，单个失败不阻断其余回收。
+// 必要性（真机事故）：Worker 退出若不停受管 VL，VL 会成为 PPID=1 的孤儿并继续占用端口；
+// 下次启动时新 VL 因端口被占而立即退出，采集面长期降级。
 func (s *Supervisor) StopAll(ctx context.Context) {
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		s.mu.Lock()
 		inst, ok := s.instances[ns]
 		running := ok && (inst.state == StateRunning || inst.proc != nil)
@@ -621,7 +606,7 @@ func (s *Supervisor) ReplaceBinary(ctx context.Context, path, sha string) error 
 		return nil
 	}
 	var running []Namespace
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		if s.instances[ns].state == StateRunning {
 			running = append(running, ns)
 		}
@@ -782,7 +767,7 @@ func (s *Supervisor) StatusAll() []InstanceStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]InstanceStatus, 0, len(s.instances))
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		if inst, ok := s.instances[ns]; ok {
 			// 与 Status 一致：以进程实况校正，避免已退出实例仍报 RUNNING。
 			s.reconcileExitedLocked(inst)

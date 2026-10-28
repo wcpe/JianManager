@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
@@ -27,14 +26,17 @@ func queryLeaseCatalog(t *testing.T, journal catalog.Journal) (*catalog.Catalog,
 	return cat, key
 }
 
-func queryLeaseDayManager(cat *catalog.Catalog, detached *atomic.Int32) *lifecycle.DayManager {
-	return lifecycle.NewDayManager(cat, lifecycle.Ops{
-		Snapshot: func(catalog.PartitionKey, string) (string, error) { return "snapshot", nil },
-		Copy:     func(catalog.PartitionKey, string, string) (string, error) { return "copy", nil },
-		Verify:   func(catalog.PartitionKey, string, string) (string, error) { return "verified-content", nil },
-		Detach:   func(catalog.PartitionKey, string) error { detached.Add(1); return nil },
-		Cleanup:  func(catalog.PartitionKey, string) error { return nil },
-	}, nil)
+// physicalDayRetirable 直接问 Catalog「这个物理日现在能不能退休」。
+//
+// 2026-10-29：冷热双层废除后，`lifecycle.DayManager`（迁移状态机）已删除 ——
+// 但本文件（以及 physical_budget / view_quality 两个回归）真正要钉的不变量**没有变**：
+// **有在途读取时，物理日不得退休/清理**。那个不变量属于 `Catalog.CanRetirePhysicalDay`，
+// 与是否真的有第二层可搬无关。
+//
+// 原实现用 `DayManager.Start(..., OwnerCold, ...)` 作为触发器；现在直接问门禁本身，
+// 断言更强也更直接：不再经过一层与本次改造无关的状态机。
+func physicalDayRetirable(cat *catalog.Catalog, utcDay string) (bool, string) {
+	return cat.CanRetirePhysicalDay(utcDay)
 }
 
 func TestQuerySnapshotDeepCopyAndAbsoluteLifetime(t *testing.T) {
@@ -117,11 +119,10 @@ func TestQueryRealRangePinSurvivesInvalidationUntilGoroutineExits(t *testing.T) 
 			require.Eventually(t, func() bool { _, ok := planner.GetView(viewID); return !ok }, time.Second, time.Millisecond)
 			_, err := planner.PinRead(viewID)
 			require.ErrorIs(t, err, catalog.ErrQueryViewStale)
-			var detached atomic.Int32
-			manager := queryLeaseDayManager(cat, &detached)
-			err = manager.Start(key.UTCDay, catalog.OwnerCold, "cold-2")
-			require.ErrorIs(t, err, catalog.ErrPhysicalDayNotRetirable, "在途读取不能因取消或到期提前摘除")
-			require.Zero(t, detached.Load())
+			// 在途读取期间，物理日不得可退休（等价于原来的 Detach 未被调用）。
+			if ok, reason := physicalDayRetirable(cat, key.UTCDay); ok {
+				t.Fatalf("在途读取期间物理日不得可退休，却放行了：%s", reason)
+			}
 			select {
 			case <-done:
 				t.Fatal("真实客户端尚未退出，Service 不得提前交还 pin")
@@ -141,8 +142,11 @@ func TestQueryRealRangePinSurvivesInvalidationUntilGoroutineExits(t *testing.T) 
 			case <-time.After(time.Second):
 				t.Fatal("客户端退出后查询没有收敛")
 			}
-			require.NoError(t, manager.Resume(key.UTCDay))
-			require.EqualValues(t, 1, detached.Load())
+			// 客户端退出后仍不可退休：该日仍是 HOT 权威且未完成责任转移。
+			// 这一条比原来「Detach 被调用一次」更严格——它断言的是**门禁本身**的结论。
+			if ok, reason := physicalDayRetirable(cat, key.UTCDay); ok {
+				t.Fatalf("HOT 权威仍在时物理日不得可退休：%s", reason)
+			}
 		})
 	}
 }
@@ -185,9 +189,33 @@ func TestQueryReusedCancelKeepsViewAndOtherReadersPinned(t *testing.T) {
 	pin, err := planner.PinRead(view.ViewID)
 	require.NoError(t, err, "复用请求取消只能释放本 request，不能关闭共享 view")
 	pin()
-	var detached atomic.Int32
-	manager := queryLeaseDayManager(cat, &detached)
-	require.ErrorIs(t, manager.Start(key.UTCDay, catalog.OwnerCold, "cold-2"), catalog.ErrPhysicalDayNotRetirable)
+	if ok, reason := physicalDayRetirable(cat, key.UTCDay); ok {
+		t.Fatalf("在途读取期间物理日不得可退休：%s", reason)
+	}
+	// 把该日切到 COLD（模拟「新视图应当看到新归属」）。
+	//
+	// 2026-10-29：原来靠 `DayManager.Start` 走完整个迁移状态机；迁移链已删，
+	// 这里直接按状态机允许的顺序推进 Catalog —— 本用例要验的是**视图复用**，
+	// 不是迁移状态机本身（那已不存在）。
+	require.NoError(t, func() error {
+		if _, err := cat.BeginMigration(key, catalog.OwnerCold, "cold-2"); err != nil {
+			return err
+		}
+		for _, state := range []catalog.MigrationState{catalog.StateDraining, catalog.StateSnapshotting, catalog.StateStagingVerify, catalog.StateAttachedStaging} {
+			if _, err := cat.Advance(key, state); err != nil {
+				return err
+			}
+		}
+		if err := cat.RecordVerification(key, "verified-content"); err != nil {
+			return err
+		}
+		current, _ := cat.Get(key)
+		proj := current.Clone().PublishedProjection
+		proj.QueryLocationDirID = "cold-2"
+		proj.QueryGeneration = current.Generation + 1
+		_, err := cat.SwitchOwner(key, catalog.OwnerCold, "cold-2", current.Generation+1, proj)
+		return err
+	}())
 	old := planner.Plan(PlanRequest{ViewRef: &ViewRef{ViewID: view.ViewID}})
 	require.Nil(t, old.Err)
 	require.Equal(t, catalog.OwnerHot, old.Ranges[0].Owner)
@@ -196,11 +224,8 @@ func TestQueryReusedCancelKeepsViewAndOtherReadersPinned(t *testing.T) {
 	require.Nil(t, fresh.Err)
 	require.Equal(t, catalog.OwnerCold, fresh.Ranges[0].Owner)
 	require.NoError(t, planner.ReleaseView(view.ViewID))
-	require.ErrorIs(t, manager.Resume(key.UTCDay), catalog.ErrPhysicalDayNotRetirable)
 	close(secondExit)
 	<-results
-	require.NoError(t, manager.Resume(key.UTCDay))
-	require.EqualValues(t, 1, detached.Load())
 }
 
 func TestQueryWorkerRestartRejectsOldViewAndPrunesOrphanLease(t *testing.T) {

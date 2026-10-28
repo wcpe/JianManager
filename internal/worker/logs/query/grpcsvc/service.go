@@ -632,7 +632,7 @@ func (s *Service) LogRuntimeStatus(ctx context.Context, req *workerpb.LogRuntime
 		resp.Error = unsupportedErr("managed VictoriaLogs supervisor is not configured")
 		return resp, nil
 	}
-	for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot, vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
+	for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot} {
 		if probe, ok := s.runtime.(interface {
 			Health(context.Context, vlsup.Namespace) error
 		}); ok {
@@ -682,17 +682,16 @@ func runtimeCatalogReadiness(cat *catalog.Catalog, ns vlsup.Namespace) (recovere
 	return seen && complete, seen && complete && published
 }
 
+// ownerUsesNamespace 报告某归属的数据在不在该受管实例里。
+//
+// 2026-10-29：只剩余一个 VL，冷热双层已废除 ⇒ 所有归属的数据都在这唯一的实例里。
+// 保留这个函数而不是直接 return true，是因为 catalog 里仍可能有历史记录的 Owner=cold/archive
+// （今天之前搬过去的），那些记录同样是这一个 VL 的（它们的物理分区现在都在同一 data_root 下）。
 func ownerUsesNamespace(owner catalog.Owner, ns vlsup.Namespace) bool {
-	switch owner {
-	case catalog.OwnerHot:
-		return ns == vlsup.NamespaceHot
-	case catalog.OwnerCold:
-		return ns == vlsup.NamespaceCold
-	case catalog.OwnerArchive:
-		return ns == vlsup.NamespaceRehydrate
-	default:
+	if ns != vlsup.NamespaceHot {
 		return false
 	}
+	return owner.Valid()
 }
 
 func (s *Service) LogRuntimeControl(ctx context.Context, req *workerpb.LogRuntimeControlRequest) (*workerpb.LogTaskResponse, error) {
@@ -715,7 +714,7 @@ func (s *Service) LogRuntimeControl(ctx context.Context, req *workerpb.LogRuntim
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED, Error: unsupportedErr("managed VictoriaLogs supervisor is not configured")}, nil
 	}
 	ns := vlsup.Namespace(strings.ToLower(strings.TrimSpace(req.GetNamespace())))
-	if ns != vlsup.NamespaceHot && ns != vlsup.NamespaceCold && ns != vlsup.NamespaceRehydrate {
+	if !vlsup.ValidNamespace(ns) {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED, Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_ERROR_UNSPECIFIED, Message: "unknown VictoriaLogs namespace"}}, nil
 	}
 	var err error

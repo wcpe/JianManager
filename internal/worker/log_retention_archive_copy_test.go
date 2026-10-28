@@ -107,7 +107,7 @@ func TestRetentionArchiveCopyAndVLDeleteGateTakesEffect(t *testing.T) {
 		// 故用替换把键插进既有段内（这也是最贴近运维真实改法的形态）。
 		base := wiringManagedReceiverYAML
 		if tc.deleteOn {
-			base = strings.Replace(base, "  start_cold: true", "  start_cold: true\n  delete_enabled: true", 1)
+			base = strings.Replace(base, "  password: fixture-password", "  password: fixture-password\n  delete_enabled: true", 1)
 		}
 		yaml := base + `
 log_retention:

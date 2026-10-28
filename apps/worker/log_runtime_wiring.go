@@ -15,20 +15,19 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
-	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
-// managedLogClients 在 supervisor 构造成功后即固定全部回环地址，不依赖首次 Start 结果。
+// managedLogClients 在 supervisor 构造成功后即固定回环地址，不依赖首次 Start 结果。
 // 客户端存在不代表分区已恢复；Catalog/projection 的可用性仍由发布和查询层判定。
+//
+// 2026-10-29：冷热双层已废除，只剩一个受管 VL ⇒ 不再有 Hot/Cold/Rehydrate 三个客户端。
 type managedLogClients struct {
 	Supervisor *vlsup.Supervisor
-	Hot        *vlsup.Client
-	Cold       *vlsup.Client
-	Rehydrate  *vlsup.Client
+	Main       *vlsup.Client
 	Ranges     *vlrange.Tiered
 }
 
@@ -36,24 +35,18 @@ func newManagedLogClients(supervisor *vlsup.Supervisor) (*managedLogClients, err
 	if supervisor == nil {
 		return nil, fmt.Errorf("日志 supervisor 未装配")
 	}
-	out := &managedLogClients{Supervisor: supervisor, Ranges: &vlrange.Tiered{}}
-	for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot, vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
-		client, err := supervisor.ClientFor(ns)
-		if err != nil {
-			return nil, err
-		}
-		rangeClient, err := vlrange.New(client)
-		if err != nil {
-			return nil, err
-		}
-		switch ns {
-		case vlsup.NamespaceHot:
-			out.Hot, out.Ranges.Hot = client, rangeClient
-		case vlsup.NamespaceCold:
-			out.Cold, out.Ranges.Cold = client, rangeClient
-		case vlsup.NamespaceRehydrate:
-			out.Rehydrate, out.Ranges.Rehydrate = client, rangeClient
-		}
+	client, err := supervisor.ClientFor(vlsup.NamespaceHot)
+	if err != nil {
+		return nil, err
+	}
+	rangeClient, err := vlrange.New(client)
+	if err != nil {
+		return nil, err
+	}
+	out := &managedLogClients{
+		Supervisor: supervisor,
+		Main:       client,
+		Ranges:     &vlrange.Tiered{Main: rangeClient},
 	}
 	out.Ranges.Ready = out.ready
 	return out, nil
@@ -63,17 +56,10 @@ func (c *managedLogClients) ready(ctx context.Context, owner catalog.Owner) erro
 	if c == nil || c.Supervisor == nil {
 		return fmt.Errorf("日志受管客户端未装配")
 	}
-	var ns vlsup.Namespace
-	switch owner {
-	case catalog.OwnerHot:
-		ns = vlsup.NamespaceHot
-	case catalog.OwnerCold:
-		ns = vlsup.NamespaceCold
-	case catalog.OwnerArchive:
-		ns = vlsup.NamespaceRehydrate
-	default:
+	if !owner.Valid() {
 		return fmt.Errorf("日志读取 owner %s 没有受管接收端", owner)
 	}
+	ns := vlsup.NamespaceHot
 	status, err := c.Supervisor.Status(ns)
 	if err != nil {
 		return err
@@ -90,19 +76,13 @@ func (c *managedLogClients) ready(ctx context.Context, owner catalog.Owner) erro
 }
 
 func (c *managedLogClients) client(owner catalog.Owner) (*vlsup.Client, error) {
-	if c == nil {
+	if c == nil || c.Main == nil {
 		return nil, fmt.Errorf("日志受管客户端未装配")
 	}
-	switch owner {
-	case catalog.OwnerHot:
-		return c.Hot, nil
-	case catalog.OwnerCold:
-		return c.Cold, nil
-	case catalog.OwnerArchive:
-		return c.Rehydrate, nil
-	default:
+	if !owner.Valid() {
 		return nil, fmt.Errorf("日志 owner %s 需要显式恢复路径", owner)
 	}
+	return c.Main, nil
 }
 
 // managedLogWriteRoute 只做物理日路由预检；真正许可由 ingest 持有到写、校验和发布结束。
@@ -226,67 +206,6 @@ func (b *dayMigrationInputBridge) input(record *catalog.Record) ([]logtypes.Even
 	return manager.CanonicalDayMigrationInput(record)
 }
 
-// logPhysicalDayRecovery 只续跑已持久化的未完成日，不创建新迁移或改变保留策略开关。
-// 单协程每轮最多四日，失败日也推进轮转游标，避免一个旧故障饿死其余恢复责任。
-type logPhysicalDayRecovery struct {
-	cat    *catalog.Catalog
-	resume func(string) error
-	ready  func(context.Context) error
-	budget interface{ Admit(vlsup.WorkClass) error }
-	after  string
-}
-
-func newLogPhysicalDayRecovery(manager *lifecycle.DayManager, cat *catalog.Catalog, clients *managedLogClients, budget *vlsup.BudgetController) *logPhysicalDayRecovery {
-	if manager == nil || cat == nil {
-		return nil
-	}
-	return &logPhysicalDayRecovery{cat: cat, resume: manager.Resume, budget: budget,
-		ready: func(ctx context.Context) error {
-			for _, owner := range []catalog.Owner{catalog.OwnerHot, catalog.OwnerCold} {
-				if err := clients.ready(ctx, owner); err != nil {
-					return err
-				}
-			}
-			return nil
-		}}
-}
-
-func (recovery *logPhysicalDayRecovery) step(ctx context.Context) {
-	if recovery == nil || ctx.Err() != nil {
-		return
-	}
-	ordered := recovery.cat.PendingPhysicalDays()
-	if len(ordered) == 0 {
-		return
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	if err := recovery.budget.Admit(vlsup.WorkBackground); err != nil {
-		slog.Warn("日志未完成迁移恢复等待资源预算", "error", err)
-		return
-	}
-	if err := recovery.ready(ctx); err != nil {
-		slog.Warn("日志未完成迁移恢复等待接收端就绪", "error", err)
-		return
-	}
-	start := sort.SearchStrings(ordered, recovery.after)
-	for start < len(ordered) && ordered[start] <= recovery.after {
-		start++
-	}
-	for offset := 0; offset < len(ordered) && offset < 4; offset++ {
-		if ctx.Err() != nil || time.Now().After(deadline) {
-			return
-		}
-		if err := recovery.budget.Admit(vlsup.WorkBackground); err != nil {
-			return
-		}
-		day := ordered[(start+offset)%len(ordered)]
-		recovery.after = day
-		if err := recovery.resume(day); err != nil {
-			slog.Warn("日志物理日迁移恢复未完成，保留原物待重试", "day", day, "error", err)
-		}
-	}
-}
-
 // logReapedVLOrphan 仅输出归属核对所需元数据，绝不接收原始命令行或鉴权配置。
 func logReapedVLOrphan(orphan vlsup.OrphanMatch) {
 	slog.Warn("已回收本节点 vlsup 孤儿（启前）", "pid", orphan.PID, "namespace", orphan.Namespace, "exe", orphan.Exe)
@@ -362,7 +281,7 @@ func sampleLogResources(supervisor *vlsup.Supervisor, roots []string, externalHo
 	if supervisor != nil {
 		sample = supervisor.SampleResources(os.Getpid())
 	} else {
-		for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot, vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
+		for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot} {
 			sample.Namespaces[ns] = vlsup.NamespaceSample{RSSKnown: true}
 		}
 		if externalHot {

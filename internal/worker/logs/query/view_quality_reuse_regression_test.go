@@ -102,10 +102,10 @@ func TestQueryViewReuseKeepsFrozenWorstQualityAcrossAppendAndMigration(t *testin
 			_, err = cat.SwitchOwner(key, catalog.OwnerCold, "cold-2", 2, movedProjection)
 			require.NoError(t, err)
 			check()
-			var detached atomic.Int32
-			manager := queryLeaseDayManager(cat, &detached)
-			require.ErrorIs(t, manager.Resume(key.UTCDay), catalog.ErrPhysicalDayNotRetirable)
-			require.Zero(t, detached.Load())
+			// 日已切到 COLD 但责任未验证 ⇒ 仍不可退休（门禁本身的结论）。
+			if ok, reason := cat.CanRetirePhysicalDay(key.UTCDay); ok {
+				t.Fatalf("未验证责任转移时物理日不得可退休：%s", reason)
+			}
 			check()
 		})
 	}
