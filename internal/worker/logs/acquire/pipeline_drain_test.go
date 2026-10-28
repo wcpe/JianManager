@@ -29,10 +29,12 @@ func TestPausedIngestStillDrainsDurablePending(t *testing.T) {
 		return 204, false, nil
 	})
 
-	// 首批发 2 条：上限 1 → 越界暂停；该批已 durable，正常路径下会走一次投递。
+	// 2026-10-29：积压闸已改为丢弃，不再产生暂停；本用例验的是「暂停期仍要排空存量」，
+	// 暂停从哪来无关紧要 —— 用容量门禁设置（另一种真实成因）。
 	require.NoError(t, pipe.Ingest(buildWALEvents("src-drain", "g1", 0, 2, "line")))
-	require.True(t, led.Get(key).AcquirePaused, "夹具应处于暂停态")
 	require.Equal(t, 1, deliveries, "正常批次的投递仍应发生")
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=2/1)"))
+	require.True(t, led.Get(key).AcquirePaused, "夹具应处于暂停态")
 
 	// 暂停期间的追加被拒 —— 但**存量必须被排空**（本用例守的就是这条）。
 	err := pipe.Ingest(buildWALEvents("src-drain", "g1", 2, 1, "line"))

@@ -28,7 +28,7 @@ func TestBacklogResumeHealsDeliveryErrorGapsByReRead(t *testing.T) {
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "v1"})
 
 	// 现场形态：积压类暂停 + 积压为零 + 一条 DELIVER_ERROR 缺口（落在 unsent 区间 ✓）。
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=1,139,541/5000)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=1,139,541/5000)"))
 	require.NoError(t, led.RecordGap(key, 68_163_086, 68_528_091, ledger.GapReasonDeliverError, "connect: connection refused"))
 	require.Error(t, led.ResumeAcquire(key), "夹具前提：该缺口必须真的挡住 ResumeAcquire ✓")
 
@@ -45,7 +45,7 @@ func TestBacklogResumeHealsDeliveryErrorGapsByReRead(t *testing.T) {
 
 	// 负向对照（红线 ✓）：STDIO_RAW_WRITE_FAILED = "原始字节从未落盘 ⇒ 重投无据"
 	// （= "源文件对应字节已不再可得"的等价形态 ✓）⇒ **必须保持未消解并继续挡住恢复** ✓。
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	require.NoError(t, led.RecordGap(key, 1_000_000, 1_000_100, ledger.GapReasonStdioRawWriteFailed, "raw write failed"))
 	require.False(t, wal.EvaluateResume(), "STDIO_RAW_WRITE_FAILED 必须继续挡住恢复（红线 ✗不许宣称重读即愈合 ✗）")
 	blocking := 0

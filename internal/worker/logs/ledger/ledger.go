@@ -1549,6 +1549,16 @@ func (l *Ledger) ResumeAcquire(key SourceKey) error {
 			}
 			continue
 		}
+		// 容量处置类：**从第一秒起就不阻塞**（2026-10-29）。
+		//
+		// 与上一类的区别只在“要不要等”：永久丢失类是“先告警、等 1h 再放行”，
+		// 而这里没有可等的东西——丢弃是系统的确定性决定，等待不会把字节变回来。
+		// 若也走宽限期，生产形态就是“积压越界→丢弃→暂停 1h→继续丢”，
+		// 与用户「内存满直接丢、不暂停」的裁定直接矛盾。
+		// 缺口仍进账本、仍可见（`UnresolvedGapCountOf` 照计），只是不阻断恢复。
+		if IsGapReasonNonBlocking(gap.Reason) {
+			continue
+		}
 		// 其余原因：默认拒绝（default-deny 未动）。
 		return fmt.Errorf("ledger: unresolved gaps still block acquisition (reason=%s)", gap.Reason)
 	}

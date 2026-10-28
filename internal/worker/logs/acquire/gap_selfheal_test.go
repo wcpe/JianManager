@@ -39,12 +39,19 @@ func TestPausedSourceSelfHealsAfterDeliveryRecovers(t *testing.T) {
 	})
 
 	// 阶段一：投递持续失败。每次失败的批次区间相邻 → 缺口被合并成一条（有界）。
-	// 第 5 批把积压推过上限：本批仍完整入 WAL 并触发暂停，投递失败照常上抛。
+	//
+	// 2026-10-29：积压闸已改为丢弃，不再产生暂停；而本用例要验的是**暂停源的自愈**，
+	// 暂停从哪来并不重要。因此改成“投递持续失败 + 由容量门禁设置暂停”——
+	// 这正是生产里另一种真实成因（磁盘水位），且与积压无关，更不会因丢弃而消失。
 	for i := 0; i < 5; i++ {
 		require.Error(t, pipe.Ingest(buildWALEvents("src-selfheal", "g1", i, 1, "line")))
 	}
+	// 用**积压类存量形态**做前置：本包现在不再产生它，但现场库里仍有（旧二进制写的）。
+	// 而 maybeResumeBacklogLocked 只认这一类暂停 —— 换成容量门禁的暂停，
+	// 它就不会去解除（那是对的，越权反例见 TestEvaluateResumeDoesNotClearForeignPause）。
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	entry := led.Get(key)
-	require.True(t, entry.AcquirePaused, "积压越界必须先暂停该源（既有语义）")
+	require.True(t, entry.AcquirePaused, "前置：应处于积压类暂停")
 	require.Len(t, entry.Gaps, 1, "连续同因失败必须合并为一条覆盖区间")
 	require.Equal(t, uint64(0), entry.Gaps[0].StartPos)
 	require.Equal(t, uint64(499), entry.Gaps[0].EndPos)
@@ -93,8 +100,11 @@ func TestEvaluateResumeDoesNotClearForeignPause(t *testing.T) {
 	wal.SetLimits(4, 0)
 	pipe := NewPipeline(led, key, wal)
 
+	// 2026-10-29：积压闸已改为丢弃，不再产生暂停。本用例验的是「评估不得越权清除
+	// 其它路径的暂停」——这个不变量与暂停来源无关，前置改用积压类的**存量形态**即可。
 	require.NoError(t, pipe.Ingest(buildWALEvents("src-foreign-pause", "g1", 0, 5, "line")))
-	require.True(t, led.Get(key).AcquirePaused, "前置：积压越界暂停")
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
+	require.True(t, led.Get(key).AcquirePaused, "前置：处于积压类暂停")
 
 	// 换成容量门禁造成的暂停：评估不得清除它（滞回 + 归属判定都不满足）。
 	require.NoError(t, led.PauseAcquire(key, "disk usage 95.0% >= 90.0%; pause irreversible writes"))

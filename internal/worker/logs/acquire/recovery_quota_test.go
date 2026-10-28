@@ -31,6 +31,10 @@ func TestRecoveryQuotaWidensGateThenReturnsToRegular(t *testing.T) {
 		events := buildWALEvents("inst:recovery-quota", "g1", n*100, n, "line")
 		require.NoError(t, wal.Append(events...))
 		require.NoError(t, wal.Commit())
+		// 2026-10-29：裁剪点在生产路径上是“本批已取走且落库之后”
+		// （pipeline 的持久化之后 → WAL.TrimBacklog）。这里直接调 Commit，
+		// 必须显式补这一步，否则测的是“没人裁剪”，而不是“闸不生效”。
+		wal.TrimBacklog()
 	}
 
 	// 恢复期：按独立配额（4× ⇒ 16 条）判 ⇒ 8 条（> 常规 4、< 拓宽 16）不得暂停 ✓。
@@ -39,12 +43,15 @@ func TestRecoveryQuotaWidensGateThenReturnsToRegular(t *testing.T) {
 	require.False(t, led.Get(key).AcquirePaused,
 		"恢复期回放/补账不得把源推成暂停（独立配额 4× 之内 ✓）")
 
-	// 回归常规闸：同样 8 条（> 常规 4）⇒ **必须按常规语义暂停** ✓（红线：常规期语义不削弱 ✗）。
+	// 回归常规闸：同样 8 条（> 常规 4）⇒ **必须按常规语义处置** ✓（红线：常规期语义不削弱 ✗）。
+	//
+	// 2026-10-29：处置动作从“暂停”改为“丢弃最旧”（用户裁定不暂停、不背压）。
+	// 红线本身没变：越界的**常规**积压一定会被处理，而不是放任它在拓宽配额下躺着。
 	wal.SetRecoveryWiden(1)
-	appendN(1) // 再追加 1 条触发一次越闸判定（阈值判定发生在追加/提交路径 ✓）
-	require.True(t, led.Get(key).AcquirePaused,
-		"恢复完成回归常规闸后，超出常规闸者必须照常暂停（红线 ✓）")
-	require.True(t, IsBacklogPauseReason(led.Get(key).PauseReason), "原因须是积压类（便于兜底自愈 ✓）")
+	appendN(1) // 再追加 1 条触发一次判定（阈值判定发生在追加/提交路径 ✓）
+	require.False(t, led.Get(key).AcquirePaused, "丢弃语义下不暂停采集")
+	require.LessOrEqual(t, len(wal.Snapshot()), 4,
+		"回归常规闸后，积压必须被裁到常规上限内（红线 ✓）")
 
 	// 有界性红线：拓宽只是**更大的界**，仍然有限 ✓（不得变成"无界"✗）。
 	wal.SetRecoveryWiden(4)

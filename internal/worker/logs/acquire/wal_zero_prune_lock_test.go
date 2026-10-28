@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
 // 复审 P2-1 回归：pruneReclaimed 的 **pos==0** 分支也必须持 w.mu。
@@ -25,11 +26,13 @@ func TestPruneReclaimedZeroPathUsesWALLock(t *testing.T) {
 	key := testKey("src-zero-prune", "g1")
 	led := ledger.New()
 	wal := NewWAL(led, key)
-	// 积压上限 1 → 首批越界即暂停；暂停原因前缀为本包所写，0 水位分支才会真正进入
-	// maybeResumeBacklogLocked → backlogLocked（读 w.entries）。
+	// 2026-10-29：积压闸已改为丢弃，不再产生新的积压暂停。但本用例考的是**锁安全性**
+	// （0 水位分支必须持 w.mu 才能读 w.entries），与暂停从哪来无关 ——
+	// 因此直接构造**存量形态**：暂停原因用旧二进制写的积压串。
 	wal.SetLimits(1, 0)
-	pipe := NewPipeline(led, key, wal)
-	require.NoError(t, pipe.Ingest(buildWALEvents("src-zero-prune", "g1", 0, 2, "line")))
+	_ = NewPipeline(led, key, wal)
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "acquire-v1"})
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=2/1)"))
 	require.True(t, led.Get(key).AcquirePaused, "前置：应处于本包造成的积压暂停")
 
 	restored := make([]WALEntry, 0, 3)
@@ -58,7 +61,11 @@ func TestPruneReclaimedZeroPathUsesWALLock(t *testing.T) {
 	close(stop)
 	wg.Wait()
 
-	// 语义不变：0 水位不剪任何条目，并且仍按滞回判定维持暂停（积压未回落）。
-	require.True(t, led.Get(key).AcquirePaused, "0 水位路径不得凭剪枝恢复采集")
-	require.NotEmpty(t, wal.Snapshot())
+	// 语义：0 水位不剪任何条目（与停机无关）。
+	//
+	// 2026-10-29：原来还断言“仍维持暂停（积压未回落）”—— 那依赖旧滞回语义，已不成立。
+	// 现在 maybeResumeBacklogLocked 对**存量积压暂停**是直接解除（不再看积压高低），
+	// 因为采集已不再因积压而停，留着暂停只会白白停采。
+	// 本用例真正要钉的是**并发安全**（-race 下不得报竞态）与“0 水位不剪条目”，两条都保留。
+	require.NotEmpty(t, wal.Snapshot(), "0 水位路径不剪任何条目")
 }

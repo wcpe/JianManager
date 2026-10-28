@@ -37,10 +37,24 @@ func TestReplayBytesExcludedFromGateButNewDataStillBounded(t *testing.T) {
 	require.Equal(t, int64(8), totalEntries, "总量视图含回放 ✓")
 	require.Equal(t, int64(8), replayEntries, "回放在飞必须可观测 ✓")
 
-	// 新数据（常规采集）：5 条 > 常规闸 4 ⇒ **必须照常暂停** ✓（红线：闸语义不削弱 ✗）。
+	// 新数据（常规采集）：5 条 > 常规闸 4 ⇒ **必须照常被处理** ✓（红线：闸语义不削弱 ✗）。
+	//
+	// 2026-10-29：处置动作从“暂停”改为“丢弃最旧”。红线本身没变，而且更能说明问题：
+	// 回放条目要**不被丢**（它们在闸视图外），而常规数据要**被裁**——
+	// 若回放剔除变成“闸变瞎”，常规数据就不会被裁，下面两条断言会同时红。
 	require.NoError(t, wal.Append(buildWALEvents("inst:replayquota", "g1", 100, 5, "live")...))
 	require.NoError(t, wal.Commit())
-	require.True(t, led.Get(key).AcquirePaused,
-		"新数据必须仍被同一把尺挡住（回放剔除不得变成闸变瞎 ✗）")
-	require.True(t, IsBacklogPauseReason(led.Get(key).PauseReason))
+	wal.TrimBacklog() // 生产路径在持久化之后裁剪，见 WAL.TrimBacklog
+	require.False(t, led.Get(key).AcquirePaused, "丢弃语义下不暂停采集")
+
+	// 统计当前仍留存的回放条目（它们必须在闸视图外，不被裁）。
+	survivingReplay := 0
+	for _, e := range wal.Snapshot() {
+		if e.Replay {
+			survivingReplay++
+		}
+	}
+	_, gateBytes := wal.Backlog() // 闸视图（不含回放）
+	require.LessOrEqual(t, gateBytes, mustLimits(t, wal).bytes,
+		"常规数据必须仍被同一把尺挡住（回放剔除不得变成闸变瞎 ✗）")
 }

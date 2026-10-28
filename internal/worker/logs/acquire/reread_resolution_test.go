@@ -19,7 +19,7 @@ func TestReReadResumeClassificationAllowsOnlyKnownReasons(t *testing.T) {
 			led := ledger.New()
 			wal := NewWAL(led, key)
 			led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
-			require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason))
+			require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason))
 			require.NoError(t, led.RecordGap(key, 0, 0, blockedReason, "没有可重读证据"))
 			require.NoError(t, led.RecordGap(key, 10, 20, ledger.GapReasonDeliverError, "投递失败"))
 			require.NoError(t, led.RecordGap(key, 30, 40, ledger.GapReasonDeliverErrorWorkerSource, "自源投递失败"))
@@ -52,7 +52,7 @@ func TestReReadResumeClassificationHandlesZeroPosition(t *testing.T) {
 			led := ledger.New()
 			wal := NewWAL(led, key)
 			led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
-			require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason))
+			require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason))
 			require.NoError(t, led.RecordGap(key, 0, 0, reason, "零位置"))
 			require.True(t, wal.EvaluateResume(), "已知原因必须保持自愈出口")
 			gap := led.Get(key).Gaps[0]

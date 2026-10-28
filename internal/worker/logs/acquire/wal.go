@@ -675,30 +675,53 @@ func (w *WAL) RestoreMixedWithAck(inline []WALEntry, refs []WALRef, hydrate func
 	// 与 Restore 对称（ACQ-3）：恢复完立刻判一次闸。`saved.WALRefs` 非空时生产走的就是本路径
 	//（见 ingest 的 refs 来源），索引里的持久积压可能已经越界 ⇒ 必须当场暂停，而不是等下一次
 	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
-	w.enforceBacklogLimitLocked()
+	w.enforceBacklogLimitLocked(0)
 	return missing
 }
 
-// WAL 积压上限（B1b，由 2026-09-28 生产事故驱动）。
+// 积压上限（B1b；2026-10-29 改为**丢弃语义**）。
 //
-// 背景：某源投递/校验长时间失败 → reclaim 永不推进 → 未投递条目无界累积；而每条 WALEntry
-// 内联完整事件正文、且随 ingest.state.json 整体持久化，生产实测单源把该文件撑到 1.2 GB，
-// 每次持久化全量重写 → 持续 117 MB/s、Worker CPU 138%、整机 iowait 90%，进而拖慢同机 CP 的
-// SQLite（慢查询 0.4–2.4 s）。故必须为「单源积压」定界，使一个源的洪流不能拖垮整机。
+// ## 历史与本次变更
 //
-// 处置语义刻意选择**暂停而非丢弃**：超上限经账本 PauseAcquire 暂停该源采集（FileTailer 与
-// 本 WAL 都据此停止），回落至低水位后由本包自动恢复——与 ledger「暂停期间不得静默丢数据」
-// 的既有约定一致；暂停期间源文件继续增长，恢复后按游标继续读，不丢数据。
+// 原背景（2026-09-28 生产事故）：某源投递/校验长时间失败 → reclaim 永不推进 →
+// 未投递条目无界累积，单源把状态文件撑到 1.2 GB，持续 117 MB/s、CPU 138%。
+// 当时的处置语义刻意选了**暂停而非丢弃**（“暂停期间不丢数据”）。
+//
+// 2026-10-29 用户裁定改成**内存满即丢、不暂停、不背压**：
+// WAL 将改为纯内存队列，机械盘是拖累；而暂停的实际后果已经付过两次代价
+// （生产 19 个源里 10 个因闸停采 20+ 小时，其中一段对数据的保护价值远小于
+// 新日志全部停摆的代价）。
+//
+// ## 丢弃不“静默”
+//
+// 丢≠偷偷丢：每丢掉一段前缀就登记一条 `WAL_BACKLOG_DROPPED` 缺口凭据
+// （带真实位置区间与原因），可在 `GapObservability` 与查询面看到，
+// 且**不在**任何自动消解白名单里（真丢不回来的字节不应被后续对账抹掉）。
+// 这与 2026-10-28 的「超热层保留期放弃」同一套机制（结构化凭据 + 原因码），
+// 区别是那里由人裁定、这里由容量事实裁定。
 const (
-	// defaultWALMaxEntries / defaultWALMaxBytes 是单源的默认积压上限（0 表示用默认值）。
-	// 取值的取舍：正常源（约 1 事件/秒）可积压约 80 分钟，足以覆盖 VL 短暂不可用；
-	// 而最坏情况下每源对状态的贡献被限定在十几 MB 级，不再出现 GB 级状态文件。
+	// defaultWALMaxEntries / defaultWALMaxBytes 是单源默认积压上限。
+	//
+	// 取值的取舍（2026-10-29 重新定）：WAL 改纯内存后它直接决定进程内存上界。
+	// 2000 条 × 约 1KB 均值 ≈ 2MB/源；60 源约 120MB，对 251GB 机器完全可接受，
+	// 而且远比原来保守（原字节闸是 16MiB/源 ⇒ 62 源可达 1GB）。
 	defaultWALMaxEntries = 2000
 	defaultWALMaxBytes   = 16 << 20 // 16 MiB
 
-	// walBacklogPauseReason 是暂停原因的前缀，用于『只自动恢复本包造成的暂停』判别——
-	// 容量门禁等其它路径设置的暂停不得被本包清除（见 maybeResumeBacklogLocked）。
-	walBacklogPauseReason = "wal backlog limit exceeded"
+	// walBacklogDropReason 是「积压越界丢弃」缺口的原因码。
+	//
+	// 不复用 `APPEND_REJECTED`（那是“该批从未进 WAL，可回读补投”）——
+	// 丢弃的字节**确实进过 WAL、又因容量被扔掉了**，回读也补不回来
+	//（tailer 的读游标已越过它）。两者处置方向相反，必须分开。
+	walBacklogDropReason = "WAL_BACKLOG_DROPPED"
+
+	// legacyWALBacklogPauseReason 是旧二进制写入账本的**暂停原因前缀**。
+	//
+	// 2026-10-29 积压闸改为丢弃后，本包不再产生这个暂停；但存量库里的
+	// `acquire_paused=1` 记录仍然存在，且会阻止 tailer 读。不认它，
+	// 这些源就永远停在暂停上（没人能匹配出原因）。因此本常量是**只读兼容**用的：
+	// 仅用于 `IsBacklogPauseReason` 与 `maybeResumeBacklogLocked` 的识别，绝不用于写入。
+	legacyWALBacklogPauseReason = "wal backlog limit exceeded"
 )
 
 // walEntryOverheadBytes 是每条 WALEntry 除正文外的近似 JSON 开销
@@ -987,81 +1010,174 @@ func (w *WAL) BacklogTotal() (entries int64, bytes int64) {
 	return w.backlogTotalLocked()
 }
 
-// IsBacklogPauseReason 报告某条暂停原因是否由本包的**积压上限**造成（B1b 条目/字节闸）。
+// IsBacklogPauseReason 报告某条暂停原因是否曾经由本包的**积压闸**造成。
 //
-// 为什么要导出（2026-10-03 现场 D4）：积压暂停带**滞回**（积压回落到上限一半以下才自动恢复），
-// 因此任何「越权 ResumeAcquire」都会让条目闸失效——现场实测积压涨到 113.9 万条（名义上限 5000）。
-// 调用方（解缺口、放弃裁定等收尾路径）据此避免清除不属于它的暂停。
+// 2026-10-29：积压闸已改成「丢弃」而不再产生暂停 —— 但本函数**不能删**：
+// 存量数据库里可能还留着 `wal backlog limit exceeded ...` 的暂停记录（旧二进制写下的），
+// 重启后这些源仍然是暂停态，必须有人能把它们认出来并清除。
+// 直接改成恒 false 会让它们永远无法自动解除。
 func IsBacklogPauseReason(reason string) bool {
-	return strings.HasPrefix(reason, walBacklogPauseReason)
+	return strings.HasPrefix(reason, legacyWALBacklogPauseReason)
 }
 
-// enforceBacklogLimitLocked 在追加后检查积压是否越界；越界即暂停该源采集（B1b）。
+// TrimBacklog 在**批次已被取走且落库之后**裁剪积压（越界则丢最旧）。
 //
-// 刻意不在这里丢弃任何条目、也不返回错误：本批事件已入 WAL 且已推进 read_position，
-// 返回错误会让调用方误判为「追加失败」并重试。暂停对**后续**追加生效——Append 的既有
-// 首判据（AcquirePaused）会拒绝并提示必须记 gap，FileTailer 同样据此停止读取。
-// 调用方需持 w.mu。
-func (w *WAL) enforceBacklogLimitLocked() {
-	// #66-③：判据只读 AcquirePaused ⇒ O(1) 轻量读（旧实现的 Get 在每次追加后再克隆一次 ✗）。
-	st, ok := w.led.AcquireState(w.key)
-	if !ok || st.Paused {
+// 为什么需要独立入口（2026-10-29，这轮踩了三次的坑）：
+// 丢弃会从 `entries` 删条目，而调用方的顺序固定是
+//
+//	Append → Commit → captureCommitted（按事件逐个从 entries 找回）→ 持久化 → 投递
+//
+// 在 captureCommitted **之前**丢任何一条，都会得到
+// “batch contains an event without a matching WAL commit”——而那批数据刚读到、完全能投。
+// 所以裁剪只能放在持久化**之后**：那时本批已进索引库，内存副本被削也能从索引恢复。
+//
+// 调用点：pipeline.persistCommittedBatchContext 完成持久化后。
+func (w *WAL) TrimBacklog() {
+	if w == nil {
 		return
 	}
-	entries, bytes := w.backlogLocked()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	// protectFrom 传 0：本批已被取走且已落库，现在没有条目需要特殊保护。
+	// “保护”在这里反而有害——持续只入不出的源会永远停在超限状态。
+	w.enforceBacklogLimitLocked(0)
+}
+
+// enforceBacklogLimitLocked 在提交后检查积压是否越界；越界就**丢弃最旧的条目**（2026-10-29）。
+//
+// ## 为什么从「暂停」改为「丢弃」
+//
+// 用户裁定（2026-10-29）：WAL 改纯内存，内存到上限直接丢弃，不暂停采集、不背压。
+// 暂停的实际代价已经付过：生产 19 个源里 10 个因积压闸停采 20+ 小时，而保住的
+// 只是“已经投不出去”的旧条目——新日志反而全停了。
+//
+// ## 丢弃的具体语义
+//
+//  1. **只丢头部（最旧）**：按 seq 升序排列，从 0 开始砍。丢弃尾部等于丢最新数据，
+//     那才是真正有价值的。
+//  2. **不越界不丢**：只丢到**刚好回到上限以下**为止，不多丢一条。
+//  3. **每丢一段就登记一条 `WAL_BACKLOG_DROPPED` 缺口**：区间是被丢条目的真实位置，
+//     因而可查、可告警、不会被后续对账当成“正常前缀”抹掉。
+//     这是“不背压”的必要前提——不背压就必须有人在数据被丢时能看到它。
+//  4. ****不碰 `Read`/`Durable` 水位**：读游标已越过这些字节（tailer 已经读过了），
+//     回退它会让 tailer 重读已投递内容（真机实测 30 倍重复）。丢的是“待投递副本”，
+//     不是“源文件游标”。
+//  5. **只丢已 APPEND 但未 ACK 的条目**：已 ACK 的不在这条路径上（它们会被
+//     pruneReclaimed 正常回收）；这里扔掉的是“投不出去”的票。
+//  6. **不丢本批刚进来的事件**（除非本批自己就装不下）：调用方传 `protectFrom`
+//     （本批追加前的长度）作为优先保护下限，丢优先发生在它之前的前缀。
+//     否则调用方紧接着的 captureCommitted 会拿到一个假错误
+//     （“batch contains an event without a matching WAL commit”），而那批数据其实刚读到、
+//     完全能投。
+//     **但保护不是无限的**：若清完旧积压仍越界（典型：单批就超上限，或持续只入不出），
+//     那就必须继续往后丢，否则队列会永远停在超限状态——而“队列恒有界”正是不背压的前提。
+//     此时本批可能被部分丢弃，调用方会拿到 captureCommitted 错误，由既有路径记缺口
+//     （这正是真实的“这批装不下”而不是误报）。
+//
+// 调用方需持 w.mu。
+func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
+	if len(w.entries) == 0 {
+		return
+	}
+	if protectFrom < 0 {
+		protectFrom = 0
+	}
+	if protectFrom > len(w.entries) {
+		protectFrom = len(w.entries)
+	}
 	maxEntries, maxBytes := w.limitsLocked()
+	entries, bytes := w.backlogLocked()
 	if entries <= maxEntries && bytes <= maxBytes {
 		return
 	}
-	reason := fmt.Sprintf("%s (entries=%d/%d, approx_bytes=%d/%d); acquisition paused to bound recovery state",
-		walBacklogPauseReason, entries, maxEntries, bytes, maxBytes)
-	if err := w.led.PauseAcquire(w.key, reason); err != nil {
-		slog.Warn("暂停采集失败（积压仍越界，下轮重试）", "logSourceID", w.key.LogSourceID, "error", err)
+
+	// 第一轮：只砍 protectFrom 之前的旧积压。
+	cut := 0
+	for cut < protectFrom && (entries > maxEntries || bytes > maxBytes) {
+		entry := w.entries[cut]
+		entries--
+		bytes -= walEntryBytes(entry)
+		cut++
+	}
+	// 第二轮：旧积压清完仍越界 ⇒ 必须继续往后砍，保证队列恒有界。
+	for cut < len(w.entries) && (entries > maxEntries || bytes > maxBytes) {
+		entry := w.entries[cut]
+		entries--
+		bytes -= walEntryBytes(entry)
+		cut++
+	}
+	if cut == 0 {
 		return
 	}
-	slog.Warn("单源积压超过上限，已暂停该源采集（不丢数据，回落低水位后自动恢复）",
-		"logSourceID", w.key.LogSourceID, "entries", entries, "maxEntries", maxEntries,
-		"approxBytes", bytes, "maxBytes", maxBytes)
+
+	// 先算丢弃区间的真实位置（半开区间，取被丢条目首尾）。
+	var from, to uint64
+	dropped := 0
+	for i := 0; i < cut; i++ {
+		entry := w.entries[i]
+		if i == 0 || entry.Event.Record.Start < from {
+			from = entry.Event.Record.Start
+		}
+		if entry.Event.Record.End > to {
+			to = entry.Event.Record.End
+		}
+		w.noteEntryDroppedLocked(entry)
+		w.entries[i] = WALEntry{} // 清引用：底层数组不得继续持有已丢弃事件的正文
+		dropped++
+	}
+	w.entries = w.entries[cut:]
+
+	// 缺口凭据：区间是真实的字节位置，因此可查、可审计。
+	// 登记失败不回滚丢弃（已经丢了，回滚只会让内存超界）——但必须如实报错。
+	if to > from {
+		detail := fmt.Sprintf("WAL backlog exceeded (entries=%d/%d, approx_bytes=%d/%d); dropped %d oldest entries to stay in memory",
+			dropped+int(entries), maxEntries, bytes+int64(0), maxBytes, dropped)
+		if err := w.led.RecordGap(w.key, from, to, walBacklogDropReason, detail); err != nil {
+			slog.Warn("积压越界丢弃后登记缺口失败（丢弃已生效，但审计面缺凭据）",
+				"logSourceID", w.key.LogSourceID, "dropped", dropped, "from", from, "to", to, "error", err)
+		}
+	}
+	slog.Warn("单源积压超过上限，已丢弃最旧条目（不暂停采集、不背压）",
+		"logSourceID", w.key.LogSourceID, "dropped", dropped, "from", from, "to", to,
+		"remainingEntries", len(w.entries), "maxEntries", maxEntries, "maxBytes", maxBytes)
 }
 
-// maybeResumeBacklogLocked 在回收后按低水位恢复采集。
+// maybeResumeBacklogLocked 在回收后尝试解除**存量**积压暂停。
 //
-// 恢复条件（三选一不满足即不恢复）：① 当前暂停确实由本包造成（原因前缀匹配，
-// 不越权清除容量门禁等其它路径的暂停）；② 积压已回落至上限的一半以下（滞回，避免抖动）；
-// ③ 账本无未解决 gap（ResumeAcquire 自身会拒绝，这里先判以免噪声）。调用方需持 w.mu。
+// 2026-10-29：积压闸已改为丢弃，本包**不再产生**新的积压暂停；
+// 但存量数据库可能仍带着旧二进制写下的暂停记录，所以这里保留一个收敛路径。
+//
+// **为什么仍要保留「按回读分类消解缺口」那一步**（本次一度想删掉，被回归拦住）：
+// 旧暂停的解除不能跳过缺口分类——暂停期间被拒的追加会留下
+// `APPEND_REJECTED` / `DELIVER_ERROR` / `ROTATED_SEGMENT_NOT_READY` 这几类缺口，
+// 它们的语义是「恢复后回读会重新产生并投递这段字节」，因此必须先按分类裁定
+// 把它们消解掉，`ResumeAcquire` 才可能放行。跳过这一步的后果就是
+// “存量暂停永远解不开”——与本次改造的目的正好相反。
+// 调用方需持 w.mu。
 func (w *WAL) maybeResumeBacklogLocked() {
-	// #66-③：热路径判据只读 Paused/PauseReason 两个标量 ⇒ O(1) 轻量读；**需要 gaps 的罕见
-	// 自愈分支**保持惰性 Get（语义不变 ✓）。
 	st, ok := w.led.AcquireState(w.key)
-	if !ok || !st.Paused || !strings.HasPrefix(st.PauseReason, walBacklogPauseReason) {
+	if !ok || !st.Paused || !strings.HasPrefix(st.PauseReason, legacyWALBacklogPauseReason) {
 		return
 	}
 	entries, bytes := w.backlogLocked()
-	maxEntries, maxBytes := w.limitsLocked()
-	if entries > maxEntries/2 || bytes > maxBytes/2 {
-		return
-	}
 	if err := w.led.ResumeAcquire(w.key); err != nil {
-		// **打破环死**（2026-10-04 现场：60 源零积压仍无一动 ✗）：`ResumeAcquire` 对任何未消解
-		// 缺口一律拒绝 ✗，而 `APPEND_REJECTED` 的定义是"该批从未进入 WAL（采集被暂停/容量门禁
-		// 拒了）" ⇒ 它只能靠**回读**愈合 ⇐ 回读在暂停期间被 tailer 拒绝 ✗ ⇒
-		// 「暂停 ⇒ 缺口不清 ⇒ 不许恢复 ⇒ 不回读」自锁 ✓✓。
-		// 这里按**分类裁定**消解这一类（不是操作员放弃 ✗）：恢复后回读会重新产生并投递该批 ✓
-		// （不丢数据；重复按 event_id 幂等 ✓）。其余原因保持拦截 ✓。
-		// #66-③：仅此罕见分支惰性取整条（自愈需要 gaps ✗）——热路径不受影响 ✓。
+		// 旧实现里的「更新换代后仍自锁」形态：`ResumeAcquire` 对任何仍阻塞的缺口一律拒绝，
+		// 而那些缺口恰恰因为暂停期无法回读而无法消解 ⇒ 死锁。
+		// 这里按分类裁定消解可愈合类（不是操作员放弃）：恢复后回读会重新产生并投递该批。
 		if ent := w.led.Get(w.key); ent != nil {
 			if healed := w.resolveReReadHealableGapsLocked(ent); healed > 0 {
 				if err2 := w.led.ResumeAcquire(w.key); err2 == nil {
-					slog.Info("积压已回落：已按「恢复后回读重放」分类消解暂停期缺口并恢复采集",
+					slog.Info("存量积压暂停已解除：已按「恢复后回读重放」分类消解暂停期缺口",
 						"logSourceID", w.key.LogSourceID, "gaps", healed, "entries", entries, "approxBytes", bytes)
 					return
 				}
 			}
 		}
-		slog.Info("积压已回落但暂不能恢复采集", "logSourceID", w.key.LogSourceID, "error", err)
+		slog.Info("存量积压暂停未解除（其余判据仍拒绝恢复）",
+			"logSourceID", w.key.LogSourceID, "error", err)
 		return
 	}
-	slog.Info("积压已回落至低水位，已恢复该源采集",
+	slog.Info("已解除存量积压暂停（积压闸已改为丢弃语义，不再暂停采集）",
 		"logSourceID", w.key.LogSourceID, "entries", entries, "approxBytes", bytes)
 }
 
@@ -1366,8 +1482,11 @@ func (w *WAL) appendLocked(origin walOrigin, reservation *AppendReservation, eve
 	if err := w.led.AdvanceRead(w.key, end); err != nil {
 		return err
 	}
-	// 追加后检查积压上限（B1b）：越界即暂停该源采集，避免单源洪流无界增长拖垮整机。
-	w.enforceBacklogLimitLocked()
+	// 追加后**不**在这里丢：本批紧接着要被 captureCommitted / 投递，
+	// 在此处丢会让调用方拿到“batch contains an event without a matching WAL commit”
+	// 的**假错误**（那批数据刚读到、完全能投）。
+	// 裁剪点放在 Commit 之后（此时本批已 durable，captureCommitted 不再依赖较老的前缀），
+	// 见 Commit 末尾。
 	return nil
 }
 
@@ -1482,6 +1601,16 @@ func (w *WAL) Commit() error {
 	if w.pendingStart == 0 {
 		w.pendingStart = maxEnd
 	}
+	// 积压定界**不在 Commit 里做**（2026-10-29，这轮最深的坑）：
+	//
+	// Commit 返回后，调用方的下一步就是 `captureCommitted`——按事件**逐个**从 entries
+	// 把本批找回来。只要此刻削掉本批的任意一条，那一步就会返回
+	// “batch contains an event without a matching WAL commit”，而那批数据刚读到、完全能投。
+	//
+	// 而“保护本批”与“队列恒有界”本质冲突：若单批本身就超上限，两者不可能同时成立。
+	// 结论：裁剪必须放在**本批被取走且已落库之后**（pipeline 的持久化之后，见 WAL.TrimBacklog）。
+	// 代价：调用方必须配合（直接调 Append+Commit 而不走 pipeline 的路径不会自动裁剪）——
+	// 但那些路径本来就没有“刚采的数据还在飞”的语义，也不该在 Commit 里被动挨刀。
 	return nil
 }
 
@@ -2175,9 +2304,14 @@ func (w *WAL) RestoreWithAck(entries []WALEntry, ev AckEvidence) error {
 			w.lastDurableEnd = entry.Event.Record.End
 		}
 	}
-	// 恢复完立刻判一次闸：索引里的**持久积压**可能已经越界，此时必须当场暂停，而不是等下一次
-	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
-	w.enforceBacklogLimitLocked()
+	// 恢复完立刻裁一次积压（2026-10-29；原为“立刻判闸”）。
+	//
+	// 当场性仍然是关键（D4 现场）：索引里的持久积压可能早已越界，若只在后续 Append 里裁，
+	// 进程一启动就背着超出内存上界的队列。语义从“暂停”改为“丢弃最旧”后，
+	// 这条要求的理由反而更强了——WAL 现在是纯内存队列。
+	//
+	// 这里不保护任何批次：恢复没有“刚采、还没被取走”的数据，最旧前缀就该削。
+	w.enforceBacklogLimitLocked(0)
 	return w.reservationErr
 }
 

@@ -26,7 +26,7 @@ func newPausedSourceForGap(t *testing.T, logSourceID, reason string, start, end 
 	led := ledger.New()
 	wal := NewWAL(led, key)
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	require.NoError(t, led.RecordGap(key, start, end, reason, "现场同型缺口"))
 	// 前提必须显式钉住：这个缺口真的挡住 ResumeAcquire（否则用例什么都证明不了 ✗）。
 	require.Error(t, led.ResumeAcquire(key), "夹具前提：缺口必须真的挡住 ResumeAcquire")
@@ -115,7 +115,7 @@ func TestResumeHealsRotatedGapEvenWhenBodyMissingCoexists(t *testing.T) {
 	led := ledger.New()
 	wal := NewWAL(led, key)
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	require.NoError(t, led.RecordGap(key, 0, 0, ledger.GapReasonRotatedSegmentNotReady, "轮转段未就绪"))
 	require.NoError(t, led.RecordGap(key, 300, 400, ledger.GapReasonWALBodyMissing, "正文缺失"))
 
@@ -153,7 +153,7 @@ func TestResumeHealsRotatedGapWithSiblingDeliverError(t *testing.T) {
 	led := ledger.New()
 	wal := NewWAL(led, key)
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	require.NoError(t, led.RecordGap(key, 0, 0, ledger.GapReasonRotatedSegmentNotReady, "轮转段未就绪"))
 	require.NoError(t, led.RecordGap(key, 5000, 6000, ledger.GapReasonDeliverError, "投递失败"))
 

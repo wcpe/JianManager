@@ -1,6 +1,7 @@
 package acquire
 
 import (
+	"context"
 	"compress/gzip"
 	"os"
 	"path/filepath"
@@ -703,20 +704,22 @@ func TestCapacityGateNeverPausesOnByteReading(t *testing.T) {
 	}
 }
 
-// TestWALBacklogLimitPausesAndClearsOnDrain 钉住：真实积压越界必须暂停，且**该暂停能被清除**。
+// TestWALBacklogLimitDropsOnDrain 钉住：真实积压越界必须**当场丢弃最旧**（2026-10-29 新语义）。
 //
-// 两条都要：① 越界即停（背压生效，读端不得无限快于消费端）；
-// ② 积压回落到上限一半以下必须自动恢复——否则源会永久停在暂停上，正是 P0 的形态。
+// 旧版钉的是“越界即暂停 + 消化后自动恢复”。两条前提都已被推翻：
+// 用户裁定改为「内存满直接丢、不暂停、不背压」。但旧用例里那条**更有价值**的断言
+// 仍然成立，并被本用例保留下来：**越界判定必须当场发生**，不能拖到下一次追加
+// （现场曾出现“内存积压早已越界、闸却滞后”的形态）。
 //
-// 转红方式（实测）：把 SetLimits 的字节上限改成「永不触发」的大值，① 立即红；
-// 把 maybeResumeBacklogLocked 的滞回条件从 `> max/2` 改成恒 false，② 立即红。
-func TestWALBacklogLimitPausesAndClearsOnDrain(t *testing.T) {
+// 转红方式（实测）：把 enforceBacklogLimitLocked 的调用从 appendLocked 里摘掉 —— 本用例立即红。
+func TestWALBacklogLimitDropsOnDrain(t *testing.T) {
 	key := testKey("src-bp", "g1")
 	led := ledger.New()
 	wal := NewWAL(led, key)
 	// 条目上限 2、字节上限给足：由条目维度触发，便于构造。
 	wal.SetLimits(2, 1<<20)
 	pipe := NewPipeline(led, key, wal)
+	pipe.SetCommittedPersist(func(context.Context, []CommitIdentity) error { return nil })
 	pipe.SetCapacityBudget(CapacityBudget{DegradedAtPercent: 80, PauseAtPercent: 90})
 	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
 		return 204, false, nil
@@ -728,37 +731,56 @@ func TestWALBacklogLimitPausesAndClearsOnDrain(t *testing.T) {
 			"t0", "t1", "INFO", "stdout", "line")
 	}
 
-	// ① 越界即暂停：一批塞 3 条。
+	// ① 越界判定**当场**发生：一批塞 3 条，上限 2 ⇒ 立即丢最旧 1 条、剩 2 条。
 	if err := pipe.Ingest([]logtypes.Event{build(0, 4), build(5, 9), build(10, 14)}); err != nil {
 		t.Fatalf("首批本身应当成功（越界在追加后判定）: %v", err)
 	}
 	ent := led.Get(key)
-	if !ent.AcquirePaused {
-		t.Fatalf("积压 3 条越过上限 2 条必须暂停采集: %+v", ent)
+	if ent.AcquirePaused {
+		t.Fatalf("丢弃语义下不得暂停采集: %+v", ent.PauseReason)
 	}
-	if !strings.HasPrefix(ent.PauseReason, walBacklogPauseReason) {
-		t.Fatalf("暂停原因应为本包的积压原因前缀，实测 %q", ent.PauseReason)
+	if n := len(wal.Snapshot()); n != 2 {
+		t.Fatalf("越界必须当场丢到上限内：期望 2 条，得到 %d", n)
 	}
-	// 「暂停期间摄取被拒」由既有的 TestWALBacklogLimitPausesAcquisitionWithoutDroppingEntries 覆盖；
-	// 本用例刻意**不**制造被拒批次：被拒会补一条未解决缺口，而 ResumeAcquire 要求零缺口，
-	// 那会让「② 能否恢复」这条断言变成在考缺口，而不是在考滞回。
+	if got := wal.Snapshot()[0].Event.Record.Start; got != 5 {
+		t.Fatalf("必须丢最旧前缀：剩下的首条应从 5 开始，实测 %d", got)
+	}
 
-	// ② 消化后必须能恢复：投递 + 回收 → 积压回落到上限一半以下。
-	if _, err := pipe.DeliverPending(); err != nil {
-		t.Fatalf("暂停期排空存量失败: %v", err)
+	// ② 丢弃必须留下可查凭据（不是静默丢）。
+	found := false
+	for _, g := range ent.Gaps {
+		if g.Reason == ledger.GapReasonWALBacklogDropped && !g.Resolved {
+			found = true
+		}
 	}
-	// 本夹具不起账本恢复分段，故按已投递前缀直接剪枝模拟「回收推进」；
-	// 剪枝路径内会做一次滞回恢复评估——这正是生产上唯一会经过的恢复检查点。
-	wal.pruneReclaimed(20)
-	entries, bytes := wal.Backlog()
-	if entries > 1 || bytes > (1<<20)/2 {
-		t.Fatalf("夹具前提不成立：积压未回落到低水位 entries=%d bytes=%d", entries, bytes)
+	if !found {
+		t.Fatalf("丢弃必须登记 WAL_BACKLOG_DROPPED 缺口，实测 gaps=%+v", ent.Gaps)
 	}
-	if !wal.EvaluateResume() {
-		t.Fatal("积压回落至低水位后必须能解暂停（否则源永久停在暂停上 = P0 形态）")
+
+	// ③ 恢复（重新登记）时同样要当场判定：索引里的持久积压可能早已越界。
+	//    这是旧用例里最值钱的那条断言，语义换了但要求没变。
+	wal2 := NewWAL(led, key)
+	wal2.SetLimits(1, 1<<20)
+	entries := make([]WALEntry, 0, 3)
+	for i := 0; i < 3; i++ {
+		end := uint64(1000 + i*10)
+		entries = append(entries, WALEntry{
+			Seq: uint64(i + 1),
+			Event: logtypes.BuildEvent(
+				logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "acquire-v1"},
+				logtypes.RecordRange{Start: end - 9, End: end},
+				"t0", "t1", "INFO", "stdout", "restored"),
+			Appended: true, Durable: true,
+		})
+	}
+	if err := wal2.Restore(entries); err != nil {
+		t.Fatalf("恢复失败: %v", err)
+	}
+	if n := len(wal2.Snapshot()); n > 1 {
+		t.Fatalf("恢复后必须当场把积压裁到上限内：期望 ≤1 条，得到 %d", n)
 	}
 	if led.Get(key).AcquirePaused {
-		t.Fatalf("暂停应已被清除: %+v", led.Get(key).PauseReason)
+		t.Fatal("恢复后也不得因积压而暂停")
 	}
 }
 

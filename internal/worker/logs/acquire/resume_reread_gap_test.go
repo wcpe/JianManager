@@ -27,7 +27,7 @@ func TestBacklogResumeBreaksAppendRejectedSelfLock(t *testing.T) {
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, ParserVersion: "v1"})
 
 	// 前置：积压类暂停 + 一条"暂停造成、从未进 WAL"的缺口（现场同型 ✓）+ 积压为零 ✓。
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	require.NoError(t, led.RecordGap(key, 0, 4242, ledger.GapReasonAppendRejected, "append rejected while paused"))
 	require.Equal(t, 1, ledger.UnresolvedGapCountOf(led.Get(key)))
 
@@ -58,7 +58,7 @@ func TestBacklogResumeBreaksAppendRejectedSelfLock(t *testing.T) {
 	// （本该被排除 ✓）⇒ 断言 ② 必须保持未消解 ✓、而 ① 被分类消解 ✓。
 	// **必须先重新暂停**：分类路径挂在 `maybeResumeBacklogLocked` 里，而它开头就判"未暂停则返回" ✗——
 	// 上一轮我的共存构造漏了这一步 ⇒ 分类根本没被走到 ⇒ 未变异即红 ✗（夹具问题，不是实现 ✓）。
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	for _, g := range led.Get(key).Gaps {
 		if !g.Resolved {
 			t.Logf("共存前置：未消解 gap reason=%s [%d,%d]", g.Reason, g.StartPos, g.EndPos)
@@ -95,7 +95,7 @@ func TestBacklogResumeBreaksAppendRejectedSelfLock(t *testing.T) {
 		"**排除表必须挡住 STDIO_RAW_WRITE_FAILED**（原始字节从未落盘 ⇒ 重投无据 ✓）：放开一因即在此变红 ✓")
 
 	// 负向对照（缺口语义红线 ✗）：与读游标无关的缺口（投递失败）**必须继续拦截** ✓。
-	require.NoError(t, led.PauseAcquire(key, walBacklogPauseReason+" (entries=5/4)"))
+	require.NoError(t, led.PauseAcquire(key, legacyWALBacklogPauseReason+" (entries=5/4)"))
 	require.NoError(t, led.RecordGap(key, 5000, 6000, ledger.GapReasonDeliverError, "transport down"))
 	require.False(t, wal.EvaluateResume(), "投递失败类缺口不得被恢复放行（回读治不了它 ✗）")
 	require.True(t, led.Get(key).AcquirePaused)

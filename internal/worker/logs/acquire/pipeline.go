@@ -616,6 +616,9 @@ func (p *Pipeline) persistCommittedBatchContext(ctx context.Context, events []lo
 			p.noteSelfFailure(err.Error())
 			return nil, fmt.Errorf("acquire: persist durable WAL: %w", err)
 		}
+		// 裁剪已在 Commit 末尾做过（见 WAL.Commit）。这里本批已落库且已取走，
+		// 再裁一次把“本批之外”的残余也收干净（幂等，无越界时是空操作）。
+		p.wal.TrimBacklog()
 		return captured, nil
 	}
 	if p.durablePersist != nil {
@@ -623,6 +626,7 @@ func (p *Pipeline) persistCommittedBatchContext(ctx context.Context, events []lo
 			p.noteSelfFailure(err.Error())
 			return nil, fmt.Errorf("acquire: persist durable WAL: %w", err)
 		}
+		p.wal.TrimBacklog()
 	}
 	return captured, nil
 }

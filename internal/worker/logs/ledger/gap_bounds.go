@@ -63,6 +63,21 @@ const (
 	// 回读造不出已经丢掉的正文，只有人工裁定能处置；自动放行等于静默掩盖丢数据。
 	GapReasonWALBodyMissing = "WAL_BODY_MISSING"
 
+	// GapReasonWALBacklogDropped 表示**因容量越界主动丢弃**的 WAL 积压条目（2026-10-29）。
+	//
+	// 语义：这些字节**确实被读过、进过 WAL**，但因为找不出去（投递卡住）而让队列长过上限，
+	// 于是最旧的前缀被丢掉。它们与原文件里那一段的差别是：tailer 的读游标已越过它们，
+	// **回读也补不回来**。
+	//
+	// 与相邻原因码的区别（三者处置方向完全不同，不能合并）：
+	//   - `APPEND_REJECTED`：从未进 WAL，回读可重新产生并投递 ⇒ 可愈合；
+	//   - `WAL_BODY_MISSING`：本该在事件段里却找不到 ⇒ 异常，需人工；
+	//   - 本原因：按设计主动丢弃，可预期、可审计 ⇒ **不需要人工，也绝不自动消解**。
+	//
+	// 为什么不能进可愈合白名单：白名单的语义是“恢复后回读会重新产生这段字节”，
+	// 而这里恰恰相反——回读不会发生（游标已过）⇒ 进了名单就等于把真丢的数据当成已愈合。
+	GapReasonWALBacklogDropped = "WAL_BACKLOG_DROPPED"
+
 	// GapReasonArchiveDiscoveryFailed 表示归档发现失败（列举目录出错）：该源本轮根本没有归档可用，
 	// 是否丢字节无法由回读证明 ⇒ 不在白名单，需人工裁定。
 	GapReasonArchiveDiscoveryFailed = "ARCHIVE_DISCOVERY_FAILED"
@@ -166,6 +181,41 @@ func IsGapReasonPermanentlyLost(reason string) bool {
 // GapReasonsPermanentlyLost 返回本名单的副本（观测与测试用）。
 func GapReasonsPermanentlyLost() []string {
 	return append([]string(nil), gapReasonsPermanentlyLost...)
+}
+
+// gapReasonsNonBlocking 是「立即不阻塞、但仍可见」的原因集合（2026-10-29）。
+//
+// ## 为什么需要第三个名单（而不是塞进上面两个）
+//
+// 上面两个名单都不适合「容量丢弃」：
+//   - `gapReasonsHealableOnReResume`：能救回来 ⇒ 阻塞等回读。丢弃**救不回来**。
+//   - `gapReasonsPermanentlyLost`：救不回来 ⇒ 但带**宽限期**（默认 1h），
+//     宽限内仍阻塞采集。而那 1 小时恰好形成“积压越界→丢弃→暂停 1h→继续丢”的循环，
+//     与用户「不暂停、不背压」的裁定直接矛盾。
+//
+// 本名单的语义是：**已经不存在任何等待能改变的事**，所以从第一秒起就不阻塞；
+// 缺口仍进账本、仍可查、仍能告警（可见性一点不少），只是不把源钉死。
+//
+// 收录标准（极窄）：只收「系统按设计主动做的、确定性的处置」，
+// 不收任何“可能坏、可能丢、也许能救”的。
+var gapReasonsNonBlocking = []string{
+	// WAL 积压越界丢弃：用户裁定的容量策略，丢弃即最终态（读游标已越过）。
+	GapReasonWALBacklogDropped,
+}
+
+// IsGapReasonNonBlocking 报告某原因是否属于「立即不阻塞但仍可见」类。
+func IsGapReasonNonBlocking(reason string) bool {
+	for _, nb := range gapReasonsNonBlocking {
+		if reason == nb {
+			return true
+		}
+	}
+	return false
+}
+
+// GapReasonsNonBlocking 返回本名单的副本（观测与测试用）。
+func GapReasonsNonBlocking() []string {
+	return append([]string(nil), gapReasonsNonBlocking...)
 }
 
 // GapReasonsHealableOnReResume 返回白名单的副本（观测与测试用）。

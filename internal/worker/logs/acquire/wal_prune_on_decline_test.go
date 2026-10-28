@@ -59,12 +59,12 @@ func TestTryReclaim_StillPrunesWhenLedgerDeclinesAdvance(t *testing.T) {
 		"账本拒绝推进时仍须剪掉水位之下的条目：否则积压永不回落、源永久停在 paused")
 }
 
-// TestWALRestoreFiresBacklogGate（D4，2026-10-03 现场）：**恢复**持久积压之后必须当场按条目闸
-// 判定——索引里的持久积压可能早已越界，此时若只在 Append 里判，暂停会滞后到「下一次追加」才发生
-// （现场形态：内存积压早已越界，条目闸却迟迟不生效，实测到 113.9 万条才暂停）。
+// TestWALRestoreFiresBacklogGate（D4，2026-10-03 现场）：**恢复**持久积压之后必须当场按闸判定
+// —— 索引里的持久积压可能早已越界，此时若只在 Append 里判，处理会滞后到「下一次追加」才发生
+// （现场形态：内存积压早已越界，闸却迟迟不生效，实测到 113.9 万条才暂停）。
 //
-// 转红方式（实测）：去掉 WAL.Restore 里的 enforceBacklogLimitLocked 调用——恢复后源不会被暂停，
-// 本用例立刻变红。
+// 2026-10-29：处理动作从“暂停”改为“丢弃最旧”，但**当场性**这条要求一字未变，
+// 且在丢弃语义下更重要：不裁的话进程一启动就背着超出内存上界的积压。
 func TestWALRestoreFiresBacklogGate(t *testing.T) {
 	key := ledger.SourceKey{LogSourceID: "restore-gate", SourceGeneration: "g1"}
 	led := ledger.New()
@@ -87,12 +87,29 @@ func TestWALRestoreFiresBacklogGate(t *testing.T) {
 	if err := wal.Restore(entries); err != nil {
 		t.Fatalf("恢复失败: %v", err)
 	}
-	entry := led.Get(key)
-	if entry == nil || !entry.AcquirePaused {
-		t.Fatalf("恢复越界积压后必须立即暂停该源（条目闸 %d 条，实测积压 %d）", 3, len(entries))
+	// 恢复后必须当场裁到上限内（上限 3，恢复 5 条 ⇒ 丢最旧 2 条）。
+	if n := len(wal.Snapshot()); n != 3 {
+		t.Fatalf("恢复越界积压后必须立即裁剪（条目闸 %d 条，实测积压 %d）", 3, n)
 	}
-	if !IsBacklogPauseReason(entry.PauseReason) {
-		t.Fatalf("暂停原因必须点名条目闸（供运维与调用方辨别，避免被越权清除）: %q", entry.PauseReason)
+	// 必须丢最旧、保留最新。
+	if got := wal.Snapshot()[0].Event.Record.Start; got != 31 {
+		t.Fatalf("必须丢最旧前缀：剩下的首条应从 31 开始，实测 %d", got)
+	}
+	// 不得因此暂停采集。
+	if entry := led.Get(key); entry != nil && entry.AcquirePaused {
+		t.Fatalf("丢弃语义下恢复后不得暂停采集: %q", entry.PauseReason)
+	}
+	// 丢弃必须留凭据。
+	sawDrop := false
+	if entry := led.Get(key); entry != nil {
+		for _, g := range entry.Gaps {
+			if g.Reason == ledger.GapReasonWALBacklogDropped {
+				sawDrop = true
+			}
+		}
+	}
+	if !sawDrop {
+		t.Fatal("恢复期裁剪必须登记 WAL_BACKLOG_DROPPED 凭据")
 	}
 }
 
