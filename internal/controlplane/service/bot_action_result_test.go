@@ -38,6 +38,11 @@ func newBotActionResultHarness(t *testing.T) *botActionResultHarness {
 	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared", t.Name(), botActionResultDBSequence.Add(1))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.BotStressSession{},
 		&model.BotLoadBatch{}, &model.Bot{}, &model.BotLoadActionResult{},

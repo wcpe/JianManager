@@ -558,7 +558,17 @@ func (s *BotService) applyBatchDBChange(req BotBatchRequest, bots []model.Bot) {
 			slog.Warn("批量更新 Bot 行为失败", "error", err)
 		}
 	case BotBatchStop:
-		if err := s.db.Model(&model.Bot{}).Where("id IN ?", ids).Update("status", model.BotStatusStopped).Error; err != nil {
+		// stop 必须对称地写 desired_state=stopped 并 bump generation。
+		//
+		// 此前只写 status，`desired_state` 停留在默认的 stopped —— **碰巧对**，
+		// 但那是"默认值恰好等于期望值"的运气，不是正确实现：一旦 start 把 desired 写成 running
+		// （见 delegateBatchOne），stop 只改 status 就会留下 "desired=running 但实际已停" 的
+		// 漂移状态，reconcile 会按 desired 把它重新拉起来。
+		if err := s.db.Model(&model.Bot{}).Where("id IN ?", ids).Updates(map[string]any{
+			"desired_state":            model.BotDesiredStopped,
+			"desired_state_generation": gorm.Expr("desired_state_generation + 1"),
+			"status":                   model.BotStatusStopped,
+		}).Error; err != nil {
 			slog.Warn("批量更新 Bot 状态失败", "error", err)
 		}
 	case BotBatchDelete:
@@ -632,7 +642,31 @@ func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error
 			return fmt.Errorf("Worker CreateBot 失败: %s", resp.Error)
 		}
 		// 真实状态由读取时 refreshStatus 回填，这里先置 connecting，不再乐观置 connected；委托成功清 lastError。
-		_ = s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{"status": model.BotStatusConnecting, "last_error": ""}).Error
+		//
+		// ## 必须同时写 desired_state（真机 bug，2026-10-28）
+		//
+		// 这段此前只写 status，于是：
+		//   接口返回 {"succeeded":1}（它的依据是"Worker gRPC 回了 Success"），
+		//   而 GET /bots/:id 的 desiredState 仍是列默认值 stopped。
+		//
+		// 后果不只是"显示不一致"——`desired_state` 是 CP 侧所有归真机制的唯一筛选条件：
+		//   · bot_freshness.MarkStale 只收敛 desired_state='running' 的行
+		//   · bot_reclaim 的失效回收只扫 desired_state='running' 且 fleet-owned 的行
+		//   · Worker 重启后的 reconcile 也按 desired 生成"应运行但没在跑"的补偿项
+		// 它恒为 stopped 意味着 V1 Bot 被**排除在所有自愈之外**：崩了没人管，
+		// Worker 重启后启动意图彻底丢失（Worker 内存里的 desired 账本也从未收到过它）。
+		//
+		// generation 必须 bump：它是"意图的第几版"，reconcile 靠它判断先后。
+		// 不 bump 的话，先 stop 再 start 会被当成同一个意图的两个版本，状态推进不确定。
+		if err := s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{
+			"desired_state":            model.BotDesiredRunning,
+			"desired_state_generation": gorm.Expr("desired_state_generation + 1"),
+			"status":                   model.BotStatusConnecting,
+			"last_error":               "",
+		}).Error; err != nil {
+			// 不吞错误：写不进去就意味着意图没落账，调用方必须知道这次 start 是"半成功"。
+			return fmt.Errorf("记录 Bot 启动意图失败: %w", err)
+		}
 	default:
 		return fmt.Errorf("不支持的批量动作: %s", req.Action)
 	}
