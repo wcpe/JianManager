@@ -824,11 +824,30 @@ func (s *Store) load(ctx context.Context) (State, error) {
 		if err != nil {
 			return State{}, fmt.Errorf("stateindex: 读取 %s 失败: %w", spec.name, err)
 		}
+		/*
+			【FR-486 范围③ 优化：复用扫描缓冲区】
+			原实现每行调一次 scanRow，它在堆上新建 `values` + `targets` 两个 slice
+			（100k 行 = 20 万次分配）。而 appendRow 只读值、asText 已是 string 拷贝，
+			并不持有这个 slice——因此可以在整张表内复用一个缓冲区。
+
+			这里直接内联 scanRow 而不再调用它，是为了让 targets 里的指针在
+			全表范围内只建立一次（scanRow 每次重建，等于把分配又搬回来了）。
+		*/
+		colCount := len(loadColumns[index])
+		values := make([]any, colCount)
+		targets := make([]any, colCount)
+		for i := range values {
+			targets[i] = &values[i]
+		}
 		for rows.Next() {
-			values, err := scanRow(rows, len(loadColumns[index]))
-			if err != nil {
+			if err := rows.Scan(targets...); err != nil {
 				_ = rows.Close()
 				return State{}, fmt.Errorf("stateindex: 扫描 %s 失败: %w", spec.name, err)
+			}
+			for i, value := range values {
+				if raw, ok := value.([]byte); ok {
+					values[i] = string(raw)
+				}
 			}
 			if err := appendRow(&st, spec, values); err != nil {
 				_ = rows.Close()

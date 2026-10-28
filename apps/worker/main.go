@@ -367,13 +367,41 @@ func logStartupPhase(phase string, cost time.Duration) {
 //
 // 判据用**索引库 + 事件段**的实际字节数，而不是行数：行数要开库才能数（那本身就要花时间），
 // 而文件大小是 stat 一次即得，恰好在「加载之前」就能判断——这正是「启动前告警」的语义。
+//
+// 【修复：此前只扫了 var/log，漏掉 var/index】上面这句话一直是对的，但实现漏了一半：
+// 只扫 `var/log`（事件段），没扫 `var/index`（状态索引库）——而后者才是慢加载的
+// 主因承担者：`Store.load()` 对每张表做全表 SELECT + ORDER BY，成本随索引行数线性增长
+// （实测 100k 行 = 453ms，见 stateindex/load_scaling_bench_fr486_test.go）。
+// 只扫 log 目录会出现「索引库已涨到 GB 级、告警却一声不响」的假安全。
 func warnIfStateTooLarge(root *dataroot.Root, thresholdMB int) {
 	if thresholdMB <= 0 {
 		return
 	}
-	dir := root.LogDir()
+
+	// 两个目录分别统计，告警时一并给出，便于直接定位是哪一侧涨了。
+	logBytes := dirSizeQuiet(root.LogDir())
+	indexBytes := dirSizeQuiet(root.IndexDir())
+	total := logBytes + indexBytes
+
+	mb := total / (1 << 20)
+	if mb < int64(thresholdMB) {
+		return
+	}
+	slog.Warn("启动期状态数据规模偏大，加载与注册可能变慢",
+		"state_size_mb", mb,
+		"log_mb", logBytes/(1<<20),
+		"index_mb", indexBytes/(1<<20),
+		"threshold_mb", thresholdMB,
+		"log_dir", root.LogDir(),
+		"index_dir", root.IndexDir(),
+		"suggestion", "加载成本主因是索引库行数（load 全表扫描），可降低采集源数/保留窗口；"+
+			"若增长来自 var/log 则检查事件段是否异常膨胀；本项仅告警，不改变启动行为")
+}
+
+// dirSizeQuiet 统计目录下所有普通文件的总字节数；目录不存在或读取失败返回 0（不报错）。
+func dirSizeQuiet(dir string) int64 {
 	var total int64
-	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -382,19 +410,7 @@ func warnIfStateTooLarge(root *dataroot.Root, thresholdMB int) {
 		}
 		return nil
 	})
-	if err != nil {
-		return // 规模判断失败不阻断启动
-	}
-	mb := total / (1 << 20)
-	if mb < int64(thresholdMB) {
-		return
-	}
-	slog.Warn("启动期状态数据规模偏大，加载与注册可能变慢",
-		"state_size_mb", mb,
-		"threshold_mb", thresholdMB,
-		"log_dir", dir,
-		"suggestion", "考虑降低 log_index 保留/裁剪水位，或检查事件段是否异常增长；"+
-			"本项仅告警，不改变启动行为")
+	return total
 }
 
 func runWorker() {
@@ -1038,6 +1054,18 @@ func runWorker() {
 	// 而「本段不存在」与「本段很快」在汇总里必须可区分。否则运维看到汇总里少了
 	// ingest_state_load，会误以为日志漏打，而不是「这台节点没有采集任务」。
 	startupTr.Begin(startup.PhaseIngestStateLoad)
+	/*
+		FR-486 范围④：加载之前先判规模，超阈即告警（此时还没开始扫表，来得及提示）。
+
+		【为何必须无条件执行】此前这行在「配了采集源」的分支内（`if len(cfg.LogSources) > 0 ||
+		vlHTTPClient != nil`），于是「未配源的 Worker」永远不会跑它——而那恰恰是最需要它的场景：
+		索引库是历史积累下来的，它可能已经 GB 级，与该节点当前有没有配源无关。
+		实测过：造一个 5MB 的 var/index/state.db、阈值设 1MB，旧位置一声不响。
+
+		现在移到分支外：只要状态目录超阈就告警，与采集运行时是否启用解耦。
+	*/
+	warnIfStateTooLarge(root, cfg.StartupStateWarnMB())
+
 	if len(cfg.LogSources) == 0 && vlHTTPClient == nil {
 		phaseDone(startup.PhaseIngestStateLoad)
 		slog.Info("日志采集未启用（未配置采集源），跳过采集运行时创建")
@@ -1191,8 +1219,6 @@ func runWorker() {
 		)
 		var manager *ingest.Manager
 		var ingestErr error
-		// FR-486 范围④：加载之前先判规模，超阈即告警（此时还没开始扫表，来得及提示）。
-		warnIfStateTooLarge(root, cfg.StartupStateWarnMB())
 
 		// FR-486 阶段 ingest_state_load：**如实合并**「索引打开 + 状态载入」为一段。
 		//
