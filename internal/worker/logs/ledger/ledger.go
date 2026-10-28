@@ -542,6 +542,71 @@ func CoveredByPositionRanges(ranges []PositionRange, from, to uint64) bool {
 	return false
 }
 
+// ResolveUnknownArchiveGaps 按「原因 + 位置 + 路径」三条**同时**匹配，消解归档隔离缺口。
+//
+// 用途（2026-10-28）：`ARCHIVE_CONTENT_UNKNOWN` 原本是“归属证明不了 ⇒ 隔离”的
+// 诊断缺口，不在白名单里，故 `ResumeAcquire` 会因它永久拒绝恢复。
+// 当上层重新跑过一遍归属判据（inode + 内容前缀）并得出“它并没丢”时，
+// 必须能把当初那条**误判**精确撑销。
+//
+// **三个条件缺一不可**（防误消）：
+//  1. reason 逐字等于 `ARCHIVE_CONTENT_UNKNOWN`；
+//  2. 位置**零宽且**等于该分段的 `EndPos`（诊断缺口登陆时就是零宽的）；
+//  3. detail 包含该归档的规范化路径（`path="..."`）。
+//
+// 第 2 条的零宽要求承担了额外职责（2026-10-28 变异验证的发现）：
+// 缺口一旦被**折叠**（同原因、位置相邻被合并），区间就会变宽（实测 [13,14]）。
+// 折叠条目里混有两份文件的内容，此时不应只凭其中一份的证据就宣布整条解决——
+// 零宽要求恰好把它排除，使折叠条目保持未解决（保守方向 ✓）。
+// ⇒ 本函数**不**消解折叠条目；它们需要人工裁定（属于“多文件混在一起”的场景）。
+//
+// 同源其它原因（`WAL_BODY_MISSING` / `DELIVER_ERROR` 等）一律不动：
+// 它们可能是真丢数据的证据。
+//
+// 返回消解条数；幂等（无匹配则 0）。
+func (l *Ledger) ResolveUnknownArchiveGaps(key SourceKey, position uint64, detailContains string) (int, error) {
+	if detailContains == "" {
+		return 0, fmt.Errorf("ledger: archive gap resolution requires a detail matcher")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, err := l.require(key)
+	if err != nil {
+		return 0, err
+	}
+	resolved := 0
+	for index := range e.Gaps {
+		gap := &e.Gaps[index]
+		if gap.Resolved || gap.Reason != "ARCHIVE_CONTENT_UNKNOWN" {
+			continue
+		}
+		// 位置闸：起点必须等于该分段的 EndPos。
+		//
+		// **不要求零宽**（2026-10-28 生产数据修正）：折叠会把区间拉宽，
+		// 但折叠出来的条目**仍然是同一份文件**的诊断（生产实测：宽区间的 detail
+		// 里 path= 只出现 1 次，末尾写“超上限折叠 N 条同因缺口”）——
+		// 那不是“多文件混在一起”。若强行要求零宽，生产 10 个源会被这 10 条
+		// 折叠条目永久挡住（实测：723 零宽 + 10 宽，宽的那条覆盖了几乎整源历史）。
+		//
+		// 因此改用“**起点**必须匹配”而非“零宽”：折叠始终从最小 StartPos 开始，
+		// 所以本分段的 StartPos 必须就是它。这比零宽宽，但仍能把
+		// “起点不同、仅区间覆盖到本位置”的邻居排除在外。
+		if gap.StartPos != position {
+			continue
+		}
+		if !strings.Contains(gap.Detail, detailContains) {
+			continue
+		}
+		gap.Resolved = true
+		gap.Resolution = "archive ownership re-proven (inode + content identity matched)"
+		resolved++
+	}
+	if resolved > 0 {
+		l.trimResolvedGapsLocked(e)
+	}
+	return resolved, nil
+}
+
 // ResolveGapsCoveredByRanges 只消解**完全落在 ranges 之一内部**、且原因在 allowedReasons 内的未解决缺口。
 //
 // 与 ResolveGapsThroughExcept 的差别（为什么两者都要）：

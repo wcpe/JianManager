@@ -94,6 +94,22 @@ func (a *ArchiveImporter) AssessArchive(path string) (ReimportDecision, error) {
 		}
 	}
 	decision := DecideArchiveReimport(entry, segment)
+	// **恢复归属**（2026-10-28，对齐业界“异常自愈”）：判定不再是 Unknown ⇒
+	// 之前为隔离而写的诊断缺口与 ImportError 必须同时撑销。
+	//
+	// 为什么必须成对：`ResumeAcquire` 对任何未解决 gap 一律拒绝（无论积压是否清零），
+	// 而 `ARCHIVE_CONTENT_UNKNOWN` 不在自动消解白名单（它是真实数据缺失类）。
+	// 只恢复分段状态而不消 gap ⇒ 源永久停采；只消 gap 而不恢复分段 ⇒ 下一轮又登记回来。
+	//
+	// 依据是**重新验过的证据**，不是“我记得没问题”：此处 `decision` 刚由
+	// `DecideArchiveReimport` 按 inode + 内容前缀（或内容锚）重新算过，
+	// 与当初登记 UNKNOWN 时用的是**同一份判据**。
+	if decision.Disposition != ArchiveUnknown && segment != nil {
+		if err := a.clearUnknownQuarantine(path, segment); err != nil {
+			return decision, err
+		}
+		return decision, nil
+	}
 	if decision.Disposition != ArchiveUnknown || segment == nil {
 		return decision, nil
 	}
