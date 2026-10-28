@@ -1,38 +1,27 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Cpu, MemoryStick, Users, Zap, Play, Square, RotateCw, Route, Box } from 'lucide-react'
+import { Cpu, MemoryStick, Users, Zap, Play, Square, RotateCw } from 'lucide-react'
 
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
-import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
-import { instanceStatusGlowClass } from '@/lib/instances/instance-glow'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { cn } from '@jianmanager/ui'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { InstanceIdentityBadges } from '@/components/views/instances/InstanceIdentityBadges'
+import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 
-/** 实例状态 → 图标块语义色调（与状态徽章同色系，运行=主色块）。 */
-function statusTone(status: string): Tone {
-  switch (status) {
-    case 'RUNNING':
-      return 'primary'
-    case 'STARTING':
-    case 'STOPPING':
-      return 'warning'
-    case 'CRASHED':
-      return 'danger'
-    default:
-      return 'neutral'
-  }
-}
+
 
 /** 实例展示数据（本组件所需的最小结构；外壳传 InstanceInfo 会结构兼容）。 */
 export interface InstanceWorktableCardInstanceView {
   id: number
   name: string
   status: string
-  /** 类型标识（如 minecraft_java），卡面直接展示。 */
+  /** 类型标识（如 minecraft_java）：用于推导「插件服 / 代理 / 二进制」类别徽章。 */
   type: string
+  /** 角色（backend / proxy / universal）：身份徽章里与类型并列展示，与表格身份列同源。 */
+  role: string
   /** 游戏端口；0 表示未分配（不显示端口段）。 */
   serverPort: number
   /** 配置的内存上限（探针与容器上限都取不到时的分母回退）。 */
@@ -84,6 +73,15 @@ export interface InstanceWorktableDriftView {
 export const CARD_EXTRA_MAX_HEIGHT = 35
 
 /**
+ * 身份徽章槽位高度（px）：两行徽章。
+ *
+ * 为什么要固定：徽章数量随实例而变（无标签 / 只有类型 / 类型+角色+环境+两个标签），
+ * 自然占位会让下面的节点、资源条、底栏逐卡错位，一排卡片看起来是斜的。
+ * 固定成槽位后各分区对齐，视觉上等价于表格的「每列对齐」。
+ */
+export const CARD_IDENTITY_HEIGHT = 40
+
+/**
  * 实例工作台卡（FR-136，§4.5 运行实体范式）。
  * 内嵌资源（CPU/内存条 + 玩家/TPS）+ 呼吸灯（运行时脉动）+ 启停/重启按钮；点名进控制台工作区。
  * 仅运行态拉实时指标（原先在卡内惰性 enable），停机卡不轮询、资源显「--」。
@@ -120,12 +118,36 @@ export interface InstanceWorktableCardProps {
   menu: ReactNode
   /** 打开实例控制台；外壳注入（默认深链或自定义跳转）。 */
   onOpen?: (id: number) => void
-  /** 启动。 */
+  /**
+   * 右键菜单入口：只上报**光标坐标**，不上报实例。
+   *
+   * 【为什么不传实例】本视图用的是自己的最小结构，而菜单需要完整领域对象；
+   * 让视图往外递领域对象会把 api 层模型反向耦合进受控视图。改为接线层用闭包
+   * 捕获 `inst`——视图只管「在哪儿右键了」，语义更窄也更难用错。
+   */
+  onContextMenu?: (x: number, y: number) => void
   onStart: () => void
   /** 停止。 */
   onStop: () => void
   /** 重启。 */
   onRestart: () => void
+  /** 环境标签值（与表格身份列同源，用于渲染环境徽章）。 */
+  env?: string
+  /** 自由标签（与表格身份列同源）。 */
+  freeTags?: string[]
+  /** 身份徽章的显示开关：与表格列设置对齐（type/role/tags 三个可选列）。 */
+  showType?: boolean
+  showRole?: boolean
+  showTags?: boolean
+  /** 是否被批量选中（用户提出：卡片补齐多选）。 */
+  selected?: boolean
+  /**
+   * 勾选框/卡片被点选。
+   *
+   * `event` 用于读 Shift / Ctrl / Meta 修饰键——连选与点选的语义由外壳统一实现
+   * （见 `applySelectionClick`），本视图只负责把修饰键如实上报，不自己算区间。
+   */
+  onToggleSelect?: (modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => void
 }
 
 export function InstanceWorktableCard({
@@ -141,16 +163,23 @@ export function InstanceWorktableCard({
   roleBadge,
   menu,
   onOpen,
+  onContextMenu,
   onStart,
   onStop,
   onRestart,
+  env,
+  freeTags = [],
+  showType = true,
+  showRole = true,
+  showTags = true,
+  selected = false,
+  onToggleSelect,
 }: InstanceWorktableCardProps) {
   const { t } = useTranslation()
 
   const running = inst.status === 'RUNNING'
   const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
   const level: StatusLevel = instanceStatusLevel(inst.status)
-  const Icon = isProxy ? Route : Box
 
   const statusLabel = t(`instances.${inst.status.toLowerCase()}`, inst.status)
   const cpuPct = running ? (metrics?.cpuPercent ?? 0) : 0
@@ -186,9 +215,66 @@ export function InstanceWorktableCard({
     */
     <Card
       interactive
-      className={cn('group cursor-pointer gap-0 p-4 hover:shadow-lift', instanceStatusGlowClass(inst.status, true))}
-      onClick={() => onOpen?.(inst.id)}
+      data-testid="instance-worktable-card"
+      data-selected={selected ? 'true' : undefined}
+      className={cn(
+        /*
+          【必须固定高度】虚拟化按 `CARD_ROW_HEIGHT` 常量给每行定位，而卡片内容是自适应的：
+          实测同一页里卡片实高在 169~277px 之间浮动（标签多、名称换行、状态原因多行的更高）。
+          卡片若被内容撑高，就会盖住下一行——用户看到的「卡片重叠」就是这个。
+          `h-full` 让卡片填满包裹层给定的行盒高度，`overflow-hidden` 裁掉超出部分：
+          行盒由常量决定、卡片不再反向影响布局，结构上不可能重叠。
+        */
+        'group relative flex h-full shrink-0 cursor-pointer flex-col gap-0 overflow-hidden p-3',
+        // 选中态用描边：卡片没有行高可挂，靠边框表达最省空间也最不易误读。
+        selected && 'ring-2 ring-primary/60 ring-offset-1',
+      )}
+      onClick={(event) => {
+        /*
+          修饰键语义交给外壳（applySelectionClick）：Ctrl/Cmd 切换单项、Shift 连选、
+          无修饰键是「替换为单项」而不是「打开控制台」。
+          为什么无修饰键不打开：卡片一旦支持多选，单击的首要含义就是选它（与表格行一致——
+          表格里单击行也是选中，打开靠名称链接/双击）。保持两种视图手感一致。
+        */
+        if (selected || event.ctrlKey || event.metaKey || event.shiftKey) {
+          onToggleSelect?.({
+            shiftKey: event.shiftKey,
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+          })
+          return
+        }
+        if (onToggleSelect) {
+          // 支持选择时，单击 = 选中（与表格行一致），打开走「⋯」或双击。
+          onToggleSelect({ shiftKey: false, ctrlKey: false, metaKey: false })
+          return
+        }
+        onOpen?.(inst.id)
+      }}
+      onDoubleClick={() => onOpen?.(inst.id)}
+      onContextMenu={
+        onContextMenu
+          ? (event) => {
+              // 阻止浏览器原生菜单，避免与本菜单叠出两套（与列表行同款处理）。
+              event.preventDefault()
+              onContextMenu(event.clientX, event.clientY)
+            }
+          : undefined
+      }
     >
+      {/*
+        勾选框：卡片视图补齐多选（用户提出）。放右上角且 `stopPropagation`——
+        否则点勾选会同时触发卡片的 onClick，变成「勾上又立刻按修饰键逻辑取消」。
+      */}
+      {onToggleSelect && (
+        <div className="absolute right-2 top-2 z-10" onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={selected}
+            onCheckedChange={() => onToggleSelect({ shiftKey: false, ctrlKey: false, metaKey: false })}
+            aria-label={t('instanceBatch.selectOne', { name: inst.name, defaultValue: '选择 {{name}}' })}
+          />
+        </div>
+      )}
       {/* 左上角：大区 · 小区。大区是虚拟分区，不做折叠层级，只以一行小字交代归属；
           两者都空时不占位（不留空行，卡片高度由构造不变）。 */}
       {regionZoneLabel && (
@@ -200,11 +286,9 @@ export function InstanceWorktableCard({
           {regionZoneLabel}
         </div>
       )}
-      {/* 头部：图标块 + 名称 + 状态（运行呼吸灯）+ 菜单 */}
-      <div className="flex items-center gap-3">
-        <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl', toneChipClass(statusTone(inst.status)))}>
-          <Icon className="size-5" />
-        </span>
+      {/* 头部：名称 + 状态徽章 + 菜单。去掉 40px 图标块——
+          卡片每行放 4 张后，图标块占掉近 1/6 宽度却不携带信息（状态已由徽章表达）。 */}
+      <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           {/* 卡片标题即进详情入口：外观是纯标题文字，取 invisible + auto。
               onClick 内部 stopPropagation 阻止冒泡到卡片自身的选中逻辑，原样保留。 */}
@@ -235,43 +319,82 @@ export function InstanceWorktableCard({
               失败原因非空即显、不看 status（FR-312）：Worker 心跳会把 CRASHED 冲回 STOPPED，
               以 CRASHED 为前置条件时原因随之不可见；搭建中的 reason 是进行时状态而非失败（FR-331），
               故只走琥珀行、不落红。运行态漂移（FR-471）只说清事实，接管入口在「⋯」菜单。 */}
-          {(inst.statusReason || drift) && (
-            <div className="mt-0.5 overflow-hidden" style={{ maxHeight: CARD_EXTRA_MAX_HEIGHT }}>
-              {inst.statusReason && (
-                <p
-                  className={cn('line-clamp-2 text-meta', provisioning ? 'text-status-warning' : 'text-status-danger')}
-                  title={inst.statusReason}
-                >
-                  {inst.statusReason}
-                </p>
-              )}
-              {drift && (
-                <p className="mt-0.5 line-clamp-2 text-meta text-status-warning" title={drift.cmdline}>
-                  {t('serverConsole.runtimeDriftDesc', { pid: drift.pid })}
-                </p>
-              )}
-            </div>
-          )}
+          {/*
+            【固定高度槽位，不再条件渲染】
+            原来整块用 `(statusReason || drift) && ...` 包着：无提示时这块**完全不占高**，
+            有提示时占 1~2 行。结果提示区下面的「身份徽章」上下浮动——同一排卡片里，
+            有错误原因的那张（如 creative-1）徽章被顶到下一行，与其它卡对不齐。
+            表格模式天然对齐是因为每列独立；卡片只能靠**固定槽位**换来同款整齐。
+
+            现在无论有没有提示都占 `CARD_EXTRA_MAX_HEIGHT`：
+            有内容时最多两行、超出裁剪；无内容时留空。徽章因此恒在同一水平线。
+          */}
+          <div
+            className="mt-0.5 shrink-0 overflow-hidden"
+            style={{ height: CARD_EXTRA_MAX_HEIGHT }}
+            data-testid="instance-card-extra"
+          >
+            {inst.statusReason && (
+              <p
+                className={cn('line-clamp-2 text-meta', provisioning ? 'text-status-warning' : 'text-status-danger')}
+                title={inst.statusReason}
+              >
+                {inst.statusReason}
+              </p>
+            )}
+            {drift && (
+              <p className="mt-0.5 line-clamp-2 text-meta text-status-warning" title={drift.cmdline}>
+                {t('serverConsole.runtimeDriftDesc', { pid: drift.pid })}
+              </p>
+            )}
+          </div>
         </div>
         {roleBadge}
         {/* 次要操作菜单（⋯）不冒泡到卡片，避免点菜单误开工作区（FIX-9）。 */}
         <span onClick={(e) => e.stopPropagation()}>{menu}</span>
       </div>
 
-      {/* 类型 · 节点:端口 */}
-      <div className="mt-3 truncate text-xs text-muted-foreground" title={`${inst.type} · ${nodeName}`}>
-        {inst.type} · {nodeName}
+      {/*
+        【身份徽章与表格对齐】原来这里显示 `inst.type` 的原始值（minecraft_java 之类），
+        而表格的身份列显示「本地化类型徽章 + 角色 + 环境 + 标签」——同一台实例两处对不上。
+        现在共用 `InstanceIdentityBadges`，文案、配色、标签截断规则完全一致。
+      */}
+      {/*
+        身份徽章同样固定槽位：徽章数量因实例而异（有的无标签、有的带环境+标签），
+        若让它们自然占位，下面的「节点:端口 / 资源条 / 底栏」会随之上下错位。
+        固定两行高度（`CARD_IDENTITY_HEIGHT`）后，一排卡片的所有分区都落在同一水平线，
+        达到与表格「每列对齐」相同的整齐度。
+      */}
+      <div
+        className="mt-2 shrink-0 overflow-hidden"
+        style={{ height: CARD_IDENTITY_HEIGHT }}
+        data-testid="instance-card-identity"
+      >
+        <InstanceIdentityBadges
+          type={inst.type}
+          role={inst.role}
+          env={env}
+          freeTags={freeTags}
+          showType={showType}
+          showRole={showRole}
+          showTags={showTags}
+          layout="wrap"
+        />
+      </div>
+      {/* 节点:端口单独一行（表格里它是独立一列，卡片没有列，靠这行承载） */}
+      <div className="mt-1 truncate text-xs text-muted-foreground" title={`${nodeName}${inst.serverPort > 0 ? `:${inst.serverPort}` : ''}`}>
+        {nodeName}
         {inst.serverPort > 0 && <span className="tabular-nums">:{inst.serverPort}</span>}
       </div>
 
       {/* 内嵌资源条：CPU / 内存（仅运行态有值，否则空轨） */}
-      <div className="mt-3 space-y-1.5">
+      <div className="mt-2 shrink-0 space-y-1">
         <ResourceLine icon={<Cpu className="size-3" />} label={t('nodes.cpu')} pct={cpuPct} active={running} valueLabel={cpuLabel} />
         <ResourceLine icon={<MemoryStick className="size-3" />} label={t('nodes.memory')} pct={memPct} active={running} valueLabel={memLabel} />
       </div>
 
       {/* 玩家 / TPS + 启停按钮 */}
-      <div className="mt-3 flex items-center gap-3 border-t pt-3">
+      <div className="mt-2 flex items-center gap-2 border-t pt-2">
         <span className="inline-flex items-center gap-1 text-sm font-semibold text-primary">
           <Users className="size-3.5" />
           <span className={cn('tabular-nums', running && !playersAvailable && 'text-xs font-normal text-muted-foreground')}>
@@ -294,7 +417,11 @@ export function InstanceWorktableCard({
                 variant="ghost"
                 size="icon-xs"
                 disabled={provisioning || starting}
-                onClick={onStart}
+                onClick={(e) => {
+                  // 阻止冒泡：卡片根 onClick 是「打开实例控制台」，动作按钮不该顺带跳页。
+                  e.stopPropagation()
+                  onStart()
+                }}
                 aria-label={t('instances.start')}
                 title={provisioning ? t('instances.provisioningBlocked') : t('instances.start')}
                 className="text-status-success hover:text-status-success"
@@ -309,7 +436,10 @@ export function InstanceWorktableCard({
                 variant="ghost"
                 size="icon-xs"
                 disabled={restarting}
-                onClick={onRestart}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRestart()
+                }}
                 aria-label={t('instances.restart')}
                 title={t('instances.restart')}
                 className="text-status-info hover:text-status-info"
@@ -320,7 +450,10 @@ export function InstanceWorktableCard({
                 variant="ghost"
                 size="icon-xs"
                 disabled={stopping}
-                onClick={onStop}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onStop()
+                }}
                 aria-label={t('instances.stop')}
                 title={t('instances.stop')}
                 className="text-status-warning hover:text-status-warning"

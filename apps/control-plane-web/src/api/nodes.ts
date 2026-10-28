@@ -251,3 +251,51 @@ export function useUpdateNodeProxy(nodeId: number) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['node-proxy', nodeId] }),
   })
 }
+
+/**
+ * 正在启动的 Worker 进度（FR-486）。
+ *
+ * 与 `useNodes` 分开取数的原因：启动中的 Worker **尚未注册**，在节点的正式列表里
+ * 根本没有记录（首装连 UUID 都还没有）。混进同一个列表会凭空出现「存在但从未上线」
+ * 的节点，所以这里单独一个端点、单独一份数据。
+ *
+ * 轮询 5s：启动进度本身以秒级变化（一次启动通常几十毫秒到数秒），
+ * 过密没有收益；而 Worker 每完成一个阶段就上报一次，5s 足以看到阶段推进。
+ */
+export interface NodeStartupProgressInfo {
+  key: string
+  nodeUuid?: string
+  nodeName: string
+  phase: string
+  phaseElapsedMs: number
+  totalElapsedMs: number
+  phasesDone: number
+  phasesTotal: number
+  updatedAt: string
+  /** 后端算好的陈旧标记：true 表示超时未更新，Worker 可能已崩溃。 */
+  stale: boolean
+}
+
+export function useNodeStartupProgress(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['nodes', 'startup-progress'],
+    queryFn: async () => {
+      const { data } = await api.get<{ items: NodeStartupProgressInfo[] }>('/nodes/startup-progress')
+      return data.items ?? []
+    },
+    refetchInterval: 5_000,
+    enabled: options?.enabled,
+  })
+}
+
+/** 启动阶段的中文名。未收录的阶段原样显示——不静默吞掉，否则新阶段上线后界面会空白。 */
+export const STARTUP_PHASE_LABELS: Record<string, string> = {
+  config: '加载配置',
+  dataroot: '初始化数据根',
+  identity: '读取节点身份',
+  process_recover: '恢复实例',
+  ingest_index_open: '打开采集索引',
+  ingest_state_load: '加载采集状态',
+  register: '注册到主控台',
+  heartbeat: '启动心跳',
+}

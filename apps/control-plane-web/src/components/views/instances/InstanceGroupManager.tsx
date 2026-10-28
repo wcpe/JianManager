@@ -196,8 +196,18 @@ export function InstanceGroupManager({
               {renderRowIndexes(gridRange, draggingRowIndex).map((rowIndex) => (
                 <div
                   key={rowIndex}
-                  className="absolute inset-x-0 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
-                  // 行盒高度 = CARD_ROW_HEIGHT − CARD_ROW_GAP，与列表页卡片行同一口径（gap-4 同源）。
+                  className="absolute inset-x-0 grid grid-cols-1 gap-4 overflow-hidden sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                  // 行盒高度 = CARD_ROW_HEIGHT − CARD_ROW_GAP（行距 8）。
+                  // 注意 `gap-4` 是**列距 16**，与 `CARD_ROW_GAP=8` 并不同源——
+                  // 原文注释称「同源」已不成立（CARD_ROW_GAP 从 16 改成 8 时未同步这里）。
+                  // 列距保持 16 是视觉选择；行距必须等于 CARD_ROW_GAP，否则固定行盒会被撑破。
+                  //
+                  // **列数必须与 `useCardColumns` 的断点严格一致**（1 / sm2 / lg3 / xl4）：
+                  // 切片按 `columns` 张一行，网格少一列就会把多出的卡挤到隐式第二行，
+                  // 而这里行盒是固定高度——溢出会压到下一条虚拟行上。
+                  // 曾漏 `lg:grid-cols-3`：1024~1280 切 3 张、网格只有 2 列；
+                  // ≥1280 切 4 张、网格只有 3 列，桌面主流宽度直接可见。
+                  // `overflow-hidden` 是兜底：即使将来断点再漂移，也不会溢出到相邻行。
                   style={{ top: rowIndex * CARD_ROW_HEIGHT, height: CARD_ROW_HEIGHT - CARD_ROW_GAP }}
                 >
                   {visible.slice(rowIndex * columns, rowIndex * columns + columns).map((inst) => (

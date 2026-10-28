@@ -115,7 +115,39 @@ export function snapshotFromSeries(series: MetricSeries[]): InstanceMetricSnapsh
     playersMax: lastAvg(byKey.get('inst_players_max')?.points ?? []),
     // 心跳三态：缺测 null、值 >0 活跃、=0 停摆（TPS 归零即无活动）。
     heartbeat: tpsPoints.slice(-HEARTBEAT_SLOTS).map((p) => (p.avg == null ? null : p.avg > 0)),
+    /*
+      序列一并带出（缩略图与悬浮图用）：这些点本来就在响应里，丢掉只会逼后续再请求一次。
+      抽稀到最多 SPARK_POINTS 个点——行内缩略图只有约 60px 宽，200 个点画不出更多信息，
+      却要多占内存并在悬浮时重绘整条路径。
+    */
+    series: {
+      tps: thin(tpsPoints),
+      players: thin(byKey.get('inst_players_online')?.points ?? []),
+      cpuPct: thin(byKey.get('inst_cpu_pct')?.points ?? []),
+      memBytes: thin(byKey.get('inst_heap_used')?.points ?? []),
+    },
   }
+}
+
+/** 缩略图/悬浮图的最大点数。 */
+const SPARK_POINTS = 60
+
+/**
+ * 序列抽稀：等间隔取样，保留最后一点。
+ *
+ * 不取平均而是**取样**：平均值会把尖峰抹平，而缩略图的价值恰恰在「刚才是不是抖过」。
+ * 保留末点是因为缩略图右端应当与行内当前值读数一致（否则看起来自相矛盾）。
+ */
+function thin(points: SeriesPoint[]): { ts: string; value: number }[] {
+  const vals = points
+    .filter((p): p is SeriesPoint & { avg: number } => p.avg != null)
+    .map((p) => ({ ts: p.ts, value: p.avg }))
+  if (vals.length <= SPARK_POINTS) return vals
+  const step = vals.length / SPARK_POINTS
+  const out: { ts: string; value: number }[] = []
+  for (let i = 0; i < SPARK_POINTS; i++) out.push(vals[Math.floor(i * step)]!)
+  out[out.length - 1] = vals[vals.length - 1]!
+  return out
 }
 
 /**

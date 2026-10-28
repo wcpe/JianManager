@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { toast } from 'sonner'
 import { useNodes } from '@/api/nodes'
 import { useTasks, useTask, useCancelTask } from '@/api/tasks'
@@ -49,6 +50,22 @@ export default function TasksPage() {
    * 无 `task` 参数时不动展开态（一次无参导航不该收起用户手动展开的行）。
    */
   const deepLinkTask = new URLSearchParams(location.search).get('task')
+
+  // 页面上报（FR-518 §4.2）：任务页只发「正在看哪个任务」，不发任务详情正文
+  // （详情可能含命令与环境信息，由工具按权限取）。
+  const contextTaskId = useMemo(
+    () => new URLSearchParams(location.search).get('task'),
+    [location.search],
+  )
+  usePageContext(
+    useMemo(
+      () => ({
+        pageKey: 'tasks',
+        ...(contextTaskId ? { entities: [{ type: 'task' as const, id: contextTaskId }] } : {}),
+      }),
+      [contextTaskId],
+    ),
+  )
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- URL（外部输入）变化时回灌展开态，属该规则的合法例外
     if (deepLinkTask) setExpandedId(deepLinkTask)

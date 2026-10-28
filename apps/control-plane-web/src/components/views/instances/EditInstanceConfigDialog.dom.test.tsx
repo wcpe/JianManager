@@ -27,6 +27,7 @@ void testI18n.use(initReactI18next).init({
           configSaved: '配置已保存（下次启动生效）',
           configSaveFailed: '保存配置失败',
           jdkSystemDefault: '不指定（使用系统 Java）',
+          startCommandRequired: '启动命令不能为空，否则实例无法启动',
         },
         instanceDetail: { startCommand: '启动命令', autoRestart: '崩溃自动重启' },
       },
@@ -118,6 +119,12 @@ describe('EditInstanceConfigDialog（FR-233 · ADR-102 b 范式）', () => {
     const user = userEvent.setup()
     const { onSave } = renderDialog({ jdkId: 0 })
 
+    /*
+      本轮新增「未修改保护」：无改动时保存按钮禁用（避免发一次与当前值相同的 PUT）。
+      这里先做一次无关改动（切自动重启）以解锁保存，再断言 jdkId 语义。
+    */
+    await user.click(screen.getByRole('switch'))
+
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
@@ -131,6 +138,8 @@ describe('EditInstanceConfigDialog（FR-233 · ADR-102 b 范式）', () => {
       onSave: vi.fn<Props['onSave']>().mockRejectedValue({ response: { data: { message: '节点离线' } } }),
     })
 
+    // 未修改保护：先制造一次改动，否则保存按钮是禁用的（点不动就不会触发请求）。
+    await user.click(screen.getByRole('switch'))
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(notify).toHaveBeenCalledWith('error', '节点离线'))
@@ -141,9 +150,37 @@ describe('EditInstanceConfigDialog（FR-233 · ADR-102 b 范式）', () => {
     const user = userEvent.setup()
     const { notify } = renderDialog({ onSave: vi.fn<Props['onSave']>().mockRejectedValue(new Error('boom')) })
 
+    await user.click(screen.getByRole('switch'))
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(notify).toHaveBeenCalledWith('error', '保存配置失败'))
+  })
+
+  /*
+    本轮改进的回归钉子：
+    ① 未修改时保存禁用（防无意义写请求）；
+    ② 启动命令清空时保存禁用且给出可读提示（防存下空命令把实例搞成起不来）。
+  */
+  it('未做任何修改时保存按钮禁用，不发请求', async () => {
+    const user = userEvent.setup()
+    const { onSave } = renderDialog()
+
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('启动命令清空时禁止保存并提示原因', async () => {
+    const user = userEvent.setup()
+    const { onSave } = renderDialog()
+
+    const cmd = screen.getByPlaceholderText('java -Xmx2G -jar server.jar nogui')
+    await user.clear(cmd)
+
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(screen.getByText('启动命令不能为空，否则实例无法启动')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    expect(onSave).not.toHaveBeenCalled()
   })
 
   it('取消关窗且不上报', async () => {

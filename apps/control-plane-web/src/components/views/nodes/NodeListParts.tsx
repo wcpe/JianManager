@@ -4,7 +4,6 @@ import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Card } from '@jianmanager/ui/components/card'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
-import { Panel } from '@jianmanager/ui/components/panel'
 import { nodeStatusLevel } from '@/lib/nodes/node-list'
 import { Button } from '@jianmanager/ui/components/button'
 import {
@@ -16,38 +15,6 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import type { ArchivedNode, NodeInfo } from '@/lib/nodes/node-types'
-import { formatFileSize } from '@/lib/shared/format-file-size'
-/** 详情「概览」分段：硬件 + 系统 + 网络等次要信息（FR-144）。 */
-export function NodeOverviewSection({ node }: { node: NodeInfo }) {
-  const { t } = useTranslation()
-  const online = node.status === 1
-  const rows: { label: string; value: React.ReactNode }[] = [
-    { label: t('nodes.ip'), value: node.host },
-    { label: t('nodes.system'), value: `${node.os} ${node.arch}` },
-    { label: t('nodes.cpuCores'), value: node.cpuCores > 0 ? node.cpuCores : '--' },
-    {
-      label: t('nodes.network'),
-      value:
-        online && (node.networkBytesSent || node.networkBytesRecv)
-          ? `↑${formatFileSize(node.networkBytesSent)} ↓${formatFileSize(node.networkBytesRecv)}`
-          : '--',
-    },
-    { label: t('nodes.grpcPort'), value: node.grpcPort > 0 ? node.grpcPort : '--' },
-    { label: t('nodes.wsPort'), value: node.wsPort > 0 ? node.wsPort : '--' },
-  ]
-  return (
-    <Panel title={t('nodes.overviewSection')}>
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 lg:grid-cols-3">
-        {rows.map((r) => (
-          <div key={r.label}>
-            <div className="text-[11px] text-muted-foreground">{r.label}</div>
-            <div className="text-xs">{r.value}</div>
-          </div>
-        ))}
-      </div>
-    </Panel>
-  )
-}
 /**
  * 节点身份块操作菜单（FR-144/FR-177）：进入/解除维护、排空、下线收入「⋯」kebab。
  * 排空与下线标危险色；下线在线节点禁用 + tooltip。
@@ -99,11 +66,30 @@ export function NodeActionsMenu({
   )
 }
 /** 左栏列表中的单条资源 mini 水位（离线置灰为空轨）。 */
+/**
+ * 单条资源水位。
+ *
+ * 【离线不画 0% 空轨】原先写的是 `value={online ? pct : 0}`：离线节点渲染成一条空轨，
+ * 既不像「无数据」（看着像真的是 0%），又占着三格宽度，是最没信息量的一种表达。
+ * 现在离线时直接不画条、改成一个明确的「无实时数据」占位短横，
+ * 并保留 label 让用户知道这里本该有什么。
+ */
 function RowUsage({ label, pct, online }: { label: string; pct: number; online: boolean }) {
+  const { t } = useTranslation()
   return (
     <div className="flex items-center gap-1">
       <span className="text-[9px] font-medium text-muted-foreground">{label}</span>
-      <MiniBar value={online ? pct : 0} className="w-10" />
+      {online ? (
+        <MiniBar value={pct} className="w-10" />
+      ) : (
+        <span
+          className="text-[9px] tabular-nums text-muted-foreground/50"
+          title={t('nodes.noLiveData', '离线，无实时数据')}
+          aria-label={t('nodes.noLiveData', '离线，无实时数据')}
+        >
+          --
+        </span>
+      )}
     </div>
   )
 }

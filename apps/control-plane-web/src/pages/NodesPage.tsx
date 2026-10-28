@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Plus, Search, Server } from 'lucide-react'
@@ -135,6 +136,19 @@ export default function NodesPage() {
   const view = readNodesView(searchParams)
   const isArchive = view === 'archive'
 
+  // 页面上报（FR-518 §5.1）：`?node=<id>` 深链即「正在看哪个节点」，可直接派生。
+  // 只发类型化引用，不发节点名/凭证（名称由后端按权限回填）。
+  const contextNodeId = searchParams.get('node')
+  usePageContext(
+    useMemo(
+      () => ({
+        pageKey: 'nodes',
+        ...(view ? { tab: view } : {}),
+        ...(contextNodeId ? { entities: [{ type: 'node' as const, id: contextNodeId }] } : {}),
+      }),
+      [contextNodeId, view],
+    ),
+  )
   const { data: nodes, isLoading, isError: nodesError, refetch: refetchNodes } = useNodes({
     refetchInterval: 30_000,
     enabled: !isArchive,

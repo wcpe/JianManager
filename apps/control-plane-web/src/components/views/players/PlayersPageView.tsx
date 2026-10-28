@@ -50,6 +50,7 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { InstancePicker } from '@/components/views/instances/InstancePicker'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
 import type { BanRecord, OnlinePlayer, OnlinePlayersResult, WhitelistResult } from '@/lib/players/player'
+import { formatEventTime } from '@/lib/format/event-time'
 
 /** 页内四个 Tab：在线玩家 / 实时事件 / 封禁记录 / 白名单。 */
 export type PlayerTab = 'online' | 'live' | 'bans' | 'whitelist'
@@ -643,7 +644,7 @@ export function PlayersLiveTabView({
                         )}
                       </span>
                       <span className="text-xs text-muted-foreground shrink-0">
-                        {new Date(e.timestamp * 1000).toLocaleTimeString()}
+                        {formatEventTime(e.timestamp)}
                       </span>
                     </li>
                   ))}

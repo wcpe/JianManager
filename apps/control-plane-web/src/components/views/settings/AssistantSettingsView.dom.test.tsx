@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import i18n from 'i18next'
 import { initReactI18next, I18nextProvider } from 'react-i18next'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { AssistantSettingsView } from '@/components/views/settings/AssistantSettingsView'
 import type { AssistantModel, AssistantProvider } from '@/api/assistant'
@@ -41,8 +42,19 @@ void testI18n.use(initReactI18next).init({
   interpolation: { escapeValue: false },
 })
 
+// wrapper 必须同时提供 i18n 与 QueryClient：
+// 本视图内嵌 `MCPConnectionsPanel`（FR-517），它用 React Query 取数。
+// 只给 i18n 会让整个文件在渲染阶段抛「No QueryClient set」，11 个用例全红——
+// 而那失败与被测行为无关，属于脚手架缺口。
 function wrapper({ children }: { children: ReactNode }) {
-  return <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  })
+  return (
+    <QueryClientProvider client={queryClient}>
+      <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
+    </QueryClientProvider>
+  )
 }
 
 const provider: AssistantProvider = {
@@ -107,11 +119,7 @@ function renderView(overrides: Partial<Parameters<typeof AssistantSettingsView>[
     onTestModel: props.onTestModel as ReturnType<typeof vi.fn>,
     onSaveEgress: props.onSaveEgress as ReturnType<typeof vi.fn>,
     rerender: (next: Partial<Parameters<typeof AssistantSettingsView>[0]>) =>
-      view.rerender(
-        <I18nextProvider i18n={testI18n}>
-          <AssistantSettingsView {...baseProps(next)} />
-        </I18nextProvider>,
-      ),
+      view.rerender(<AssistantSettingsView {...baseProps(next)} />),
   }
 }
 

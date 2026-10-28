@@ -4,8 +4,7 @@ import BotSegment from './BotSegment'
 import MetricsTabSegment from './MetricsTabSegment'
 import ServerStateSegment from './ServerStateSegment'
 import BusinessSegment from './BusinessSegment'
-import EconomySegment from './EconomySegment'
-import InventorySegment from './InventorySegment'
+import BusinessDomainStatus from './BusinessDomainStatus'
 import InstanceResourceCard from './InstanceResourceCard'
 import PluginManager from '@/components/plugins/PluginManager'
 
@@ -15,7 +14,8 @@ import PluginManager from '@/components/plugins/PluginManager'
  * **不丢任何功能**——画布化后所有原工作区段都作为卡片可用：
  * 终端 {@link TerminalPane} / 资源（{@link InstanceResourceCard}，文件+配置合一，承 FR-130/213）/
  * 插件 {@link PluginManager} / 监控 {@link MetricsTabSegment} / 服务器状态 {@link ServerStateSegment} /
- * JBIS 业务 {@link BusinessSegment} / 经济 {@link EconomySegment} / 背包 {@link InventorySegment} /
+ * JBIS 业务 {@link BusinessSegment}（manifest 驱动的通用业务台，FR-521 后具体业务操作统一由它承载）/
+ * 业务域状态 {@link BusinessDomainStatus}（FR-534，业务卡片内的只读概览）/
  * Bot {@link BotSegment}。
  *
  * 仅当卡片在画布上挂载时本组件才渲染（惰性挂载——承 ADR「未挂载卡不建 WS」），
@@ -72,21 +72,15 @@ export default function WorkspaceCardBody({ instanceId, type, persistTerminal = 
       )
     case 'business':
       // FR-423：业务段分栏（能力清单 / 下发面板）并各自卡内滚；overflow-y-auto 兜窄屏堆叠（同 plugins）。
+      // FR-534：再叠一块「域状态」总览在最上面——上半回答「注册了哪些域、健不健康」（只读），
+      // 下半回答「能对它做什么动作」（manifest 驱动的下发台）。两块回答的是不同问题，
+      // 故并存而非互相取代；域块限高（自身卡内滚），不抢下发台的可用高度。
       return (
         <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+          <div className="shrink-0 px-3 pt-3">
+            <BusinessDomainStatus instanceId={instanceId} className="max-h-72" />
+          </div>
           <BusinessSegment instanceId={instanceId} />
-        </div>
-      )
-    case 'economy':
-      return (
-        <div className="h-full overflow-auto">
-          <EconomySegment instanceId={instanceId} />
-        </div>
-      )
-    case 'inventory':
-      return (
-        <div className="h-full overflow-auto">
-          <InventorySegment instanceId={instanceId} />
         </div>
       )
     case 'bot':

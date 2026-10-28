@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { PageSkeleton } from '@jianmanager/ui/components/layout'
 import { useAuthStore } from '@/stores/auth'
 import { ROUTE_CHUNKS } from '@/lib/shared/route-chunks'
+import { parseHomeModeParam, resolveHomeMode } from '@/lib/shared/home-mode'
 import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
 
 /**
@@ -35,6 +36,11 @@ const InstanceDetailPage = lazy(ROUTE_CHUNKS['/instances/:id'])
 const InstanceFilesPage = lazy(ROUTE_CHUNKS['/instances/:id/files'])
 const InstanceWizardPage = lazy(ROUTE_CHUNKS['/instances/new'])
 const ConfigBaselinesPage = lazy(ROUTE_CHUNKS['/config-baselines'])
+const ConfigFilesPage = lazy(ROUTE_CHUNKS['/config-files'])
+const ConfigFileDetailPage = lazy(ROUTE_CHUNKS['/config-files/:id'])
+const ConfigAdoptPage = lazy(ROUTE_CHUNKS['/config-adopt'])
+const ConfigDeliveriesPage = lazy(ROUTE_CHUNKS['/config-deliveries'])
+const ConfigDeliveryDetailPage = lazy(ROUTE_CHUNKS['/config-deliveries/:id'])
 const NetworksPage = lazy(ROUTE_CHUNKS['/networks'])
 const PlayersPage = lazy(ROUTE_CHUNKS['/players'])
 const UsersPage = lazy(ROUTE_CHUNKS['/users'])
@@ -53,6 +59,7 @@ const RuntimeAssetsPage = lazy(ROUTE_CHUNKS['/runtime-assets'])
 const AlertsPage = lazy(ROUTE_CHUNKS['/alerts'])
 const SettingsPage = lazy(ROUTE_CHUNKS['/settings'])
 const AssistantSettingsPage = lazy(ROUTE_CHUNKS['/settings/ai'])
+const AssistantHistoryPage = lazy(ROUTE_CHUNKS['/assistant/history'])
 const StoragePage = lazy(ROUTE_CHUNKS['/storage'])
 const LogsPage = lazy(ROUTE_CHUNKS['/logs'])
 const StatisticsPage = lazy(ROUTE_CHUNKS['/statistics'])
@@ -63,6 +70,7 @@ const ClientPublishPage = lazy(ROUTE_CHUNKS['/client-channels/:id/publish'])
 const DatabasePage = lazy(ROUTE_CHUNKS['/database'])
 const SystemUpdatePage = lazy(ROUTE_CHUNKS['/system-update'])
 const AgentTokensPage = lazy(ROUTE_CHUNKS['/agent-tokens'])
+const ApprovalsPage = lazy(ROUTE_CHUNKS['/approvals'])
 const McpActivityPage = lazy(ROUTE_CHUNKS['/mcp-activity'])
 const AgentCallLogsPage = lazy(ROUTE_CHUNKS['/agent-call-logs'])
 const LicensesPage = lazy(ROUTE_CHUNKS['/licenses'])
@@ -92,15 +100,21 @@ function RequirePlatformAdmin({ children }: { children: ReactNode }) {
  * 工作区导播台（FR-168）走 `/director`，同为全幅（场景舞台 + 缩略图条，多预设预热瞬切）。
  */
 /**
- * 首页模式选择器（FR-520）。
+ * 首页模式选择器（FR-520 §4.1）。
  *
- * 只读 URL 上的 `home` 参数，**不持任何本地状态**：这样「切到经典 → 刷新」仍停在经典，
- * 且两种模式可以互相直链。缺省（无参数或其它值）为 AI 首页。
+ * 优先级：**显式 `?home=` 参数 > 记忆的模式 > 默认（AI 首页）**。
+ *
+ * - 显式参数只对本次渲染生效，**不写记忆**：用户从文档/告警点一条 `?home=classic` 深链进来，
+ *   不该因此永久改变他下次打开首页的模式。
+ * - 记忆在**render 期同步读取**（`resolveHomeMode` 内部直接读 localStorage），
+ *   不能放进 effect：先按默认渲染再切成记忆值会让首帧闪回，而且两棵树的 chunk 都会被拉下来。
+ * - 两棵树仍由路由层二选一，互不嵌套（查询随分支挂载的前提）。
  */
 function HomeRoute() {
   const location = useLocation()
-  const home = new URLSearchParams(location.search).get('home')
-  return home === 'classic' ? <OverviewPage /> : <AssistantHomePage />
+  const param = parseHomeModeParam(new URLSearchParams(location.search).get('home'))
+  const mode = resolveHomeMode(param)
+  return mode === 'classic' ? <OverviewPage /> : <AssistantHomePage />
 }
 
 export default function Workspace() {
@@ -121,7 +135,15 @@ export default function Workspace() {
    * 两者互不干扰（且都已包含在下面的或运算里）。
    */
   const isInstanceListRoute = /^\/instances\/?$/.test(location.pathname)
-  const isFixedViewportRoute = isInstanceRoute || isInstanceListRoute || isPermissionsRoute
+  /*
+    节点页一并纳入固定视口（用户要求「表格铺满高度、页面禁止滚动」）。
+    此前它走整页滚动：外层 `overflow-auto` + `min-h-full` 不给子级确定高度，
+    表格只能按内容撑高（2 个节点时下方留大片空白，节点多时又要把整页滚起来），
+    而分页后每页行数固定，本来就该「一屏一页、滚动收在表格内」。
+  */
+  const isNodesRoute = /^\/nodes\/?$/.test(location.pathname)
+  const isFixedViewportRoute =
+    isInstanceRoute || isInstanceListRoute || isPermissionsRoute || isNodesRoute
   // 路由过渡容器 key 仅按 pathname——同页仅 query 变化（如发布向导 ?step= 步骤切换、列表筛选、
   // tab 切换）不得 remount 路由子树，否则会清空页内本地状态（如发布向导本地暂存的 drafts）。
   // 页面级切换（pathname 变）仍会换 key 重放进场动画。
@@ -188,6 +210,17 @@ export default function Workspace() {
             <Route path="instances" element={<InstancesPage />} />
             {/* 配置基线（FR-458）：集群级配置模板下发/漂移检测/一键收敛。 */}
             <Route path="config-baselines" element={<ConfigBaselinesPage />} />
+            {/* 分层配置（FR-529）：配置文件列表 → 层版本编辑 + 有效值预览。
+                与上面的配置基线（FR-458）是两套语义：基线是「集群级模板 + 漂移收敛」，
+                这里是「一条配置在多个作用域上的分层版本链 + 合并预览」。 */}
+            <Route path="config-files" element={<ConfigFilesPage />} />
+            <Route path="config-files/:id" element={<ConfigFileDetailPage />} />
+            {/* 配置纳管（FR-533）：把磁盘上已有的配置文件登记为基线版本。
+                注意是「纳管现有文件」而非数据导入——只读磁盘、不改写、已纳管不覆盖。 */}
+            <Route path="config-adopt" element={<ConfigAdoptPage />} />
+            {/* 配置交付编排（FR-531/532）：分批灰度 → 观察窗 → 熔断/回滚 + 生效编排。 */}
+            <Route path="config-deliveries" element={<ConfigDeliveriesPage />} />
+            <Route path="config-deliveries/:id" element={<ConfigDeliveryDetailPage />} />
             <Route path="instances/new" element={<InstanceWizardPage />} />
             <Route path="instances/:id" element={<InstanceDetailPage />} />
             {/* FR-376：文件深链（浏览器新标签）；不并入 instances-console 热缓存 key */}
@@ -223,7 +256,7 @@ export default function Workspace() {
             <Route path="client-dist-security" element={<ClientDistRedirect source="security" />} />
             <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
             <Route path="logs" element={<LogsPage />} />
-            {/* 观测·统计占位页（FR-215）；实质内容由 FR-220 补齐。 */}
+            {/* 观测·统计页（FR-215 建路由，FR-220 已补齐实质内容）。 */}
             <Route path="statistics" element={<StatisticsPage />} />
             {/* FR-430：旧监控路由改重定向到页面 B「客户端分发运维」（观测入口已并入）。 */}
             <Route path="client-dist-monitor" element={<ClientDistRedirect source="monitor" />} />
@@ -244,9 +277,16 @@ export default function Workspace() {
                 </RequirePlatformAdmin>
               }
             />
+            {/* 对话历史（FR-542/543）：检索 + 编辑 + 回退。
+                不包 RequirePlatformAdmin：历史是**每个用户自己的**会话内容，
+                判据是会话归属（后端已按 owner 过滤），不需要管理员权限。 */}
+            <Route path="assistant/history" element={<AssistantHistoryPage />} />
             <Route path="database" element={<RequirePlatformAdmin><DatabasePage /></RequirePlatformAdmin>} />
             <Route path="system-update" element={<RequirePlatformAdmin><SystemUpdatePage /></RequirePlatformAdmin>} />
             <Route path="agent-tokens" element={<RequirePlatformAdmin><AgentTokensPage /></RequirePlatformAdmin>} />
+            {/* 平台审批中心（FR-493）：读写分权由后端 approval.read / approval.decide 把关，
+                路由侧只要求登录；无读权限时后端 403，页面呈现为空并透出错误。 */}
+            <Route path="approvals" element={<ApprovalsPage />} />
             <Route path="mcp-activity" element={<RequirePlatformAdmin><McpActivityPage /></RequirePlatformAdmin>} />
             {/* 端点无状态化（ADR-096）后会话维度视图已无数据源，旧链接重定向到按 Token 聚合的活动视图。 */}
             <Route path="mcp-sessions" element={<Navigate to="/mcp-activity" replace />} />

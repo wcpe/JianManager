@@ -1,6 +1,7 @@
 // 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做三块数据取数、写动作触发、事件筛选持有与两个对话框容器的接线。
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useAlertRules, useAlertEvents, useDeleteAlertRule, useUpdateAlertRule, useAlertChannels, useDeleteAlertChannel, useTestAlertChannel, useAcknowledgeEvent, useMarkAllRead, useUnreadAlertCount } from '@/api/alerts'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { AlertsPageView } from '@/components/views/alerts/AlertsPageView'
 import type { AlertEventFilter, AlertTab } from '@/components/views/alerts/AlertsPageView'
 import { RuleDialog } from './alerts/RuleDialog'
@@ -21,6 +22,10 @@ export default function AlertsPage() {
   const [filter, setFilter] = useState<AlertEventFilter>({})
   // 当前 Tab：事件查询只在事件 Tab 激活时发起，保住原先「未激活的 Tab 内容不挂载」的取数时机。
   const [tab, setTab] = useState<AlertTab>('rules')
+
+  // 页面上报（FR-518 §4.2）：告警页发当前 Tab，**不发通知通道凭证**、不发告警正文。
+  // `tab` 是页面自身的枚举值（rules/events/channels），属于「用户正看着哪一块」。
+  usePageContext(useMemo(() => ({ pageKey: 'alerts', tab }), [tab]))
   const { data: unread } = useUnreadAlertCount()
   const { data: rules, isLoading: rulesLoading } = useAlertRules()
   const { data: channels, isLoading: channelsLoading } = useAlertChannels()

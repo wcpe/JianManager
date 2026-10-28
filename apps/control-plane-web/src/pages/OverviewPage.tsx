@@ -1,18 +1,16 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做五个查询取数、两处受控状态（时间窗 / 归因 Tooltip）
-// 与两处接线（健康墙、链接）。
+// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做取数、两处受控状态（时间窗 / 归因 Tooltip）与两处接线（健康墙、链接）。
+// 「需要处理」三路取数已上移至页眉消息中心，本层不再取异常实例 / 任务 / 告警。
 import { useDeferredValue, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { useNodes } from '@/api/nodes'
-import { useInstanceSearch } from '@/api/instances'
-import { useTasks } from '@/api/tasks'
-import { useAlertEvents } from '@/api/alerts'
-import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, usePlayerTrend, useInstanceRanking, useSLO } from '@/api/metrics'
+import { useMetricOverview, usePlatformObservabilityOverview, useResourceAttribution, usePlayerTrend, useSLO } from '@/api/metrics'
 import { HealthWall } from '@/components/nodes/HealthWall'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import type { MetricRange } from '@jianmanager/ui'
 import { OverviewPageView } from '@/components/views/overview/OverviewPageView'
 import type { AttributionGauge } from '@/components/views/overview/OverviewPageView'
+import { saveHomeMode, homeModeHref } from '@/lib/shared/home-mode'
 
 /**
  * 概览页容器（ADR-102 a 范式）：六个查询、平台观测区权限判定、两处受控状态与三处接线都在这里决定，
@@ -25,6 +23,7 @@ import type { AttributionGauge } from '@/components/views/overview/OverviewPageV
  */
 export default function OverviewPage() {
   const [range, setRange] = useState<MetricRange>('24h')
+  const navigate = useNavigate()
   // 已展开的归因 Tooltip；null=全部收起（此时归因查询不发起）。
   const [activeGauge, setActiveGauge] = useState<AttributionGauge | null>(null)
   const isPlatformAdmin = useAuthStore((state) => state.role === 10)
@@ -40,15 +39,6 @@ export default function OverviewPage() {
    * - 底部密集表保留「可看全部」的能力，但改为滚动按需分页：首屏只取一页，滚到底再取下一页，
    *   不再一次性拉全量（`useInfiniteInstanceSearch` 就是为 1000+ 实例的滚动浏览设计的）
    */
-  const exceptionQuery = useInstanceSearch({
-    status: 'CRASHED',
-    page: 1,
-    pageSize: 5,
-    sort: 'name',
-    order: 'asc',
-  })
-  const tasksQuery = useTasks({ limit: 5 })
-  const alertsQuery = useAlertEvents({ resolved: false, pageSize: 5 })
   const { data: overview } = useMetricOverview(range)
   /*
     【首页不再自带实例列表】原先这里还跑着 `useInfiniteInstanceSearch`（不限量无限滚动）
@@ -78,13 +68,13 @@ export default function OverviewPage() {
     趋势自带 peakValue / dailyAvg / hourlyDist，无需前端二次聚合。
   */
   const playerTrend = usePlayerTrend({ range, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })
-  const playerRanking = useInstanceRanking({ metric: 'inst_players_online', window: '5m', limit: 5 })
   /*
     可用性 SLO（FR-463）：不单独占卡，并入趋势卡头部一行。
     它属于「长期健康」指标而非日常盯盘指标，但顺手看到又有价值（用户选择塞进现有卡片）。
     目标经 target 参数下发；口径与监控页同一接口，避免两处各算一套。
   */
   const slo = useSLO({ scope: 'platform', range })
+  // 玩家 Top 服务器（第二行右侧）：与「服务器」页的实例列表不同，这里只回答「哪几台服在承载玩家」。
 
   return (
     <OverviewPageView
@@ -97,15 +87,6 @@ export default function OverviewPage() {
       attribution={attribution.data}
       attributionLoading={attribution.isLoading}
       attributionError={attribution.isError}
-      exceptionInstances={exceptionQuery.data?.items}
-      exceptionLoading={exceptionQuery.isLoading}
-      exceptionError={exceptionQuery.isError}
-      recentTasks={tasksQuery.data?.items}
-      recentTasksLoading={tasksQuery.isLoading}
-      recentTasksError={tasksQuery.isError}
-      activeAlerts={alertsQuery.data?.items}
-      activeAlertsLoading={alertsQuery.isLoading}
-      activeAlertsError={alertsQuery.isError}
       canSeePlatformObs={canSeePlatformObs}
       platformOverview={platformObservability.data}
       platformOverviewLoading={platformObservability.isLoading}
@@ -115,9 +96,6 @@ export default function OverviewPage() {
       playerTrend={playerTrend.data}
       playerTrendLoading={playerTrend.isLoading}
       playerTrendError={playerTrend.isError}
-      playerRanking={playerRanking.data}
-      playerRankingLoading={playerRanking.isLoading}
-      playerRankingError={playerRanking.isError}
       slo={slo.data}
       // 包内不认识 react-router：下钻链接（异常项 / 任务项 / 归因 Tooltip / 「查看全部」）统一经插槽渲染。
       renderLink={({ href, className, testId, children }) => (
@@ -125,6 +103,15 @@ export default function OverviewPage() {
           {children}
         </Link>
       )}
+      // 切回 AI 对话首页（FR-520 §4.4）：**先写记忆再导航**。
+      // 顺序不能反——先导航会让新页面按旧记忆再判一次模式，出现一次闪回；
+      // 且必须显式去掉 `home` 参数，否则经典的 `?home=classic` 会压过新写入的记忆。
+      onSwitchToAssistant={() => {
+        saveHomeMode('assistant')
+        // 保留现有查询参数（FR-520 §8）：`home` 由 homeModeHref 删掉，
+        // 其余（range 等）原样带走，用户切回经典时筛选条件还在。
+        navigate(homeModeHref(null, window.location.search))
+      }}
     />
   )
 }

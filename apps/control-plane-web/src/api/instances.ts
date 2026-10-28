@@ -142,6 +142,12 @@ export function useInstanceSearch(params: InstanceSearchParams = {}, enabled = t
       return data
     },
     refetchInterval: INSTANCE_FALLBACK_POLL_MS,
+    /*
+      【换排序/翻页时保留上一批数据】此前换排序键会让查询进入 pending、`data` 变 undefined，
+      列表页据此渲染整表骨架——用户看到的是一次全屏闪动，而不是「表格还在、只是内容更新」。
+      保留旧数据后配合 `isFetching` 做局部淡出，才是列表页该有的手感。
+    */
+    placeholderData: keepPreviousData,
   })
 }
 

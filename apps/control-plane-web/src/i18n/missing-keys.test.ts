@@ -301,3 +301,59 @@ describe('静态 key 提取器（extractStaticTKeys）', () => {
     ])
   })
 })
+
+describe('i18n 占位符一致性（真机暴露过的缺陷）', () => {
+  /**
+   * 语言包里**存在**某个键，不代表它的占位符与调用方一致。
+   *
+   * 真实缺陷：`assistant.chipRemove` 的值曾是常量「移除上下文」（不含 `{{label}}`），
+   * 而代码写的是 `t('assistant.chipRemove', '移除「{{label}}」', { label })`。
+   * i18next 会静默忽略多余的插值参数，于是三枚芯片的移除按钮可访问名完全相同，
+   * 屏幕阅读器与 `getByLabelText` 都分不清要移除哪一个。
+   *
+   * 缺键门禁查不出这类问题（键确实存在），所以必须单独断言占位符集合一致：
+   * zh 与 en 的占位符必须**完全相同**，否则切语言会丢值或多出字面量 `{{x}}`。
+   */
+  const placeholderOf = (v: unknown): string[] => {
+    if (typeof v !== 'string') return []
+    return [...v.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort()
+  }
+
+  const flatten = (obj: Record<string, unknown>, prefix = ''): Array<[string, unknown]> => {
+    const out: Array<[string, unknown]> = []
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k
+      if (v && typeof v === 'object' && !Array.isArray(v)) out.push(...flatten(v as Record<string, unknown>, key))
+      else out.push([key, v])
+    }
+    return out
+  }
+
+  it('zh 与 en 同一键的占位符集合必须一致', () => {
+    const zhFlat = new Map(flatten(zh as Record<string, unknown>))
+    const mismatched: string[] = []
+    for (const [key, enVal] of flatten(en as Record<string, unknown>)) {
+      if (!zhFlat.has(key)) continue // 缺键由上面的门禁负责
+      const a = placeholderOf(zhFlat.get(key))
+      const b = placeholderOf(enVal)
+      if (a.join(',') !== b.join(',')) {
+        mismatched.push(`${key}: zh=[${a}] en=[${b}]`)
+      }
+    }
+    expect(mismatched).toEqual([])
+  })
+
+  it('代码里传了插值参数的键，语言包值必须真的含占位符', () => {
+    // 反向：若值不含占位符，i18next 会静默丢弃参数——正是 chipRemove 的故障形态。
+    const zhFlat = new Map(flatten(zh as Record<string, unknown>))
+    const suspects: string[] = []
+    // 只查本次涉及的键（全量扫描需要解析调用点参数，超出本文件职责）。
+    // 只列**确实传了插值参数**的键。`chipAdd` 是纯标签（不传参），
+    // 把它列进来会让门禁报假阳性——门禁本身也要避免「看起来该查就查」。
+    for (const key of ['assistant.chipRemove', 'assistant.chipOpenInstance']) {
+      const v = zhFlat.get(key)
+      if (typeof v === 'string' && !/\{\{\w+\}\}/.test(v)) suspects.push(`${key} = ${JSON.stringify(v)}`)
+    }
+    expect(suspects).toEqual([])
+  })
+})

@@ -14,8 +14,17 @@
  * @since FR-508（组件受控化迁包；原页 FR-061 旗舰总览、FR-060 聚合历史曲线、FR-402 平台全景观测、
  *        FR-432 平台观测区权限对齐、FR-461 集群健康墙、FR-502 阶段 6 布局原语与渲染补丁）
  */
-import { lazy, Suspense, useEffect, useMemo, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  Activity,
+  AlertTriangle,
+  Ban,
+  Layers,
+  MessageSquare,
+  Server,
+  Users,
+} from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -23,18 +32,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@jianmanager/ui/compone
 import { ResourceGauge } from '@jianmanager/ui/components/gauge'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { RangePicker } from '@jianmanager/ui/charts/RangePicker'
 import type { ChartSeries } from '@jianmanager/ui/charts/TimeSeriesChart'
 import type { MetricRange } from '@jianmanager/ui/charts/RangePicker'
-import { levelStatusLevel } from '@/lib/alerts/alert-helpers'
-import type { AlertEventInfo } from '@/lib/alerts/alert-contracts'
-import type { InstanceInfo } from '@/lib/instances/instance-types'
-import type { Task, TaskState } from '@/lib/tasks/task-status'
 import type { PlayerTrendResult } from '@/lib/players/player-trend'
-import type { RankingResult } from '@/lib/instances/ranking'
 import type { SLOResult as SLOResultView } from '@/lib/metrics/slo'
-import { instanceStatusLevel, resourceLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui/lib/threshold'
+import { resourceLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 
 /**
  * 首页趋势图（FR-060）**懒加载**：recharts 不能留在落地页的同步依赖里。
@@ -62,11 +65,12 @@ const TimeSeriesChart = lazy(() => import('@jianmanager/ui/charts/TimeSeriesChar
 const TREND_CHART_HEIGHT = 220
 
 /**
- * 单张聚合卡片的截断条数。
- * 服务端已按 `pageSize`/`limit=5` 取数，这里再切片是**显示口径**兜底（告警端点的 pageSize 语义
- * 不保证条数上限时也稳），与迁包前 `items.slice(0, 5)` 完全同值。
+ * 铺满模式下趋势图的最小高度。
+ *
+ * 首帧容器可能测到 0（父级尚未布局），量不到时就退回一个保底值；
+ * 另外窄屏（<768px）纵向空间紧张，也用它兜住——否则图表会被压成一条线，失去可读性。
  */
-const AGGREGATION_LIMIT = 5
+const MIN_TREND_FILL_HEIGHT = 160
 
 /**
  * 资源结论句的兜底文案（键缺省时用）。
@@ -82,14 +86,6 @@ const VERDICT_FALLBACK: Record<StatusLevel, string> = {
   info: '正常',
   neutral: '--',
 }
-
-/**
- * 「需要处理」合并列表的显示条数。
- *
- * 原先是三张卡各 5 条（合计最多 15 行、分三栏并排）。合并成一张后若仍按 15 行铺，
- * 会比原来更高；取 8 条即可覆盖常见规模，且页高收在原三栏高度以内。
- */
-const ATTENTION_LIMIT = 8
 
 /**
  * 概览底部实例表行高（px）：**声明值 = 真实值**——同一个常量既喂虚拟窗口（`itemSize`），
@@ -118,16 +114,8 @@ function fmtBytes(b: number): string {
   return `${(b / 1024).toFixed(0)}K`
 }
 
-/** 任务状态映射为首页紧凑徽章等级。 */
-function taskStatusLevel(state: TaskState): StatusLevel {
-  if (state === 'running') return 'info'
-  if (state === 'succeeded') return 'success'
-  if (state === 'failed') return 'danger'
-  return 'neutral'
-}
-
 /** 数值 → 定长小数展示；`null` 统一显示 `--`（缺测量与「零」必须可区分）。 */
-function displayNumber(value: number | null, suffix = ''): string {
+function displayNumber(value: number | null | undefined, suffix = ''): string {
   return value == null ? '--' : `${value.toFixed(suffix === '%' ? 1 : 0)}${suffix}`
 }
 
@@ -207,6 +195,10 @@ export interface OverviewObservabilitySnapshot {
     onlineNodeCount: number
     /** 运行中实例数。 */
     runningInstanceCount: number
+    /** 崩溃实例数（KPI 卡用）。 */
+    crashedInstanceCount?: number
+    /** 停止实例数（KPI 卡用）。 */
+    stoppedInstanceCount?: number
   }
   resources: {
     /** 跨节点 CPU 平均占用；样本缺失为 null。 */
@@ -256,6 +248,34 @@ export interface OverviewAttributionSnapshot {
     status: string
     cpuPct: number | null
     memoryUsedBytes: number | null
+    /**
+     * FR-513 主机级观测：全部可为 null（老 Worker 未上报）。
+     *
+     * `null` 与 `0` 语义不同：null = 不知道（渲染 `--`），0 = 读数是 0。
+     * 把「不知道」画成 0 会让运维以为机器空闲。
+     */
+    loadPct?: number | null
+    load5Pct?: number | null
+    load15Pct?: number | null
+    procsRunning?: number | null
+    procsTotal?: number | null
+    cpuBreakdown?: {
+      user: number
+      nice: number
+      system: number
+      idle: number
+      iowait: number
+      irq: number
+      softirq: number
+      steal: number
+    } | null
+    /** 分挂载点磁盘用量（后端已按使用率降序）。 */
+    mounts?: {
+      mountpoint: string
+      totalBytes: number
+      usedBytes: number
+      usedPct: number
+    }[]
   }[]
   topInstances: {
     instanceId: number
@@ -271,6 +291,21 @@ export interface OverviewAttributionSnapshot {
     pid: number
     name: string
     cpuPercent: number
+    rssBytes: number
+  }[]
+  /**
+   * FR-513：**整机** top-N 进程。
+   *
+   * 与 `topProcesses` 是两个不同口径，**不可混为一谈**：
+   * 前者只覆盖受管实例的进程树（我们知道它是谁），后者是整机上按 CPU 排序的前几名
+   *（包含系统进程、别人的进程）。运维判断「这台机器为什么慢」时看后者。
+   */
+  hostTopProcesses?: {
+    nodeId: number
+    nodeName: string
+    pid: number
+    comm: string
+    cpuPct: number
     rssBytes: number
   }[]
 }
@@ -313,6 +348,46 @@ export interface GaugeAttributionTooltipProps {
   isError: boolean
   /** 链接渲染插槽（下钻监控页）。 */
   renderLink?: (args: OverviewLinkArgs) => ReactNode
+}
+
+/**
+ * 把 CPU 构成压成「前 4 项 + 其余归并」（FR-513）。
+ *
+ * 为什么不直接铺八行：悬浮卡是浮层，八行数字会把它撑得比屏幕还高，
+ * 而 nice/irq/softirq/steal 在绝大多数机器上都是零点几——铺出来只是噪声。
+ * 但「其余」必须保留：把所有小项直接丢掉会让人以为构成只包含这几项，
+ * 加起来不到 100% 反而更困惑。
+ *
+ * 排序按占比降序：idle 通常最大，但机器忙时 user 会盖过它——
+ * 让数据自己说话，而不是硬编码一个「idle 永远在前」的顺序。
+ */
+function buildCpuBreakdownRows(b: {
+  user: number
+  nice: number
+  system: number
+  idle: number
+  iowait: number
+  irq: number
+  softirq: number
+  steal: number
+}): { key: string; pct: number }[] {
+  const all = [
+    { key: 'user', pct: b.user },
+    { key: 'system', pct: b.system },
+    { key: 'idle', pct: b.idle },
+    { key: 'iowait', pct: b.iowait },
+    { key: 'nice', pct: b.nice },
+    { key: 'irq', pct: b.irq },
+    { key: 'softirq', pct: b.softirq },
+    { key: 'steal', pct: b.steal },
+  ].sort((x, y) => y.pct - x.pct)
+
+  const head = all.slice(0, 4)
+  const rest = all.slice(4)
+  const restSum = rest.reduce((n, r) => n + r.pct, 0)
+  // 只在「其余」确实有量时才加这一行：全为 0 时加一行 `其余 0.0%` 纯属占位。
+  if (restSum > 0.05) head.push({ key: 'other', pct: restSum })
+  return head
 }
 
 /** 首页仪表的有界受管资源 Tooltip，不展示任意 OS 进程。 */
@@ -424,6 +499,79 @@ export function GaugeAttributionTooltip({
                 </div>
               </div>
 
+              {/* FR-513：负载三档。单值看不出「瞬时尖峰」还是「持续爬升」——
+                  5/15 分钟两档下降而 1 分钟高，说明已经过去；反之说明还在恶化。
+                  仅在有数据时渲染：老 Worker 不报这两档，画两个 `--` 只是噪声。 */}
+              {data.nodes[0] && (data.nodes[0].load5Pct != null || data.nodes[0].load15Pct != null) ? (
+                <div>
+                  <div className="mb-1 border-y py-1 text-[11px] text-muted-foreground">
+                    {t('dashboard.attributionLoadTiers', '负载三档')}
+                  </div>
+                  <div className="flex gap-3 font-mono text-[11px]">
+                    {/* 三档各自带可访问名：`5m` 与 `15m` 的文本互为子串，
+                        仅凭可见文本无法精确区分（用例也因此更难写准）。 */}
+                    <span aria-label={t('dashboard.loadTier1', '1 分钟负载')}>
+                      1m {displayNumber(data.nodes[0].loadPct ?? null, '%')}
+                    </span>
+                    <span aria-label={t('dashboard.loadTier5', '5 分钟负载')}>
+                      5m {displayNumber(data.nodes[0].load5Pct ?? null, '%')}
+                    </span>
+                    <span aria-label={t('dashboard.loadTier15', '15 分钟负载')}>
+                      15m {displayNumber(data.nodes[0].load15Pct ?? null, '%')}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* FR-513：CPU 构成。只看总占用分不清瓶颈类型——iowait 高是 IO 瓶颈、
+                  system 高是内核开销、user 高才是应用自身忙，三者处置动作完全不同。
+                  只展示前 4 项 + 其余归并，避免 8 行数字把浮层撑爆。 */}
+              {data.nodes[0]?.cpuBreakdown ? (
+                <div>
+                  <div className="mb-1 border-y py-1 text-[11px] text-muted-foreground">
+                    {t('dashboard.attributionCpuBreakdown', 'CPU 构成')}
+                  </div>
+                  <div className="space-y-1">
+                    {buildCpuBreakdownRows(data.nodes[0].cpuBreakdown).map((row) => (
+                      <div key={row.key} className="flex justify-between gap-2 font-mono text-[11px]">
+                        <span>{t(`dashboard.cpuPart.${row.key}`, row.key)}</span>
+                        <span>{row.pct.toFixed(1)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* FR-513：分挂载点磁盘。单值 diskUsage 只覆盖根分区——
+                  `/var` 写满而 `/` 宽松时完全无感，而这正是数据盘最常见的故障形态。 */}
+              {data.nodes[0]?.mounts && data.nodes[0].mounts.length > 0 ? (
+                <div>
+                  <div className="mb-1 border-y py-1 text-[11px] text-muted-foreground">
+                    {t('dashboard.attributionMounts', '分挂载点磁盘')}
+                  </div>
+                  <div className="space-y-1">
+                    {data.nodes[0].mounts.slice(0, 5).map((m) => (
+                      <div key={m.mountpoint} className="flex justify-between gap-2 font-mono text-[11px]">
+                        <span className="truncate">{m.mountpoint}</span>
+                        <span style={m.usedPct >= 90 ? { color: 'var(--danger-ink)' } : undefined}>
+                          {m.usedPct.toFixed(1)}%
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* FR-513：进程计数。主机级口径（非实例内），配合上面负载三档判断机器整体压力。 */}
+              {data.nodes[0]?.procsTotal != null ? (
+                <div className="flex justify-between gap-2 text-[11px] text-muted-foreground">
+                  <span>{t('dashboard.attributionProcs', '进程数（运行 / 总）')}</span>
+                  <span className="font-mono">
+                    {displayNumber(data.nodes[0].procsRunning ?? null, '')} / {data.nodes[0].procsTotal}
+                  </span>
+                </div>
+              ) : null}
+
               {/* Top 实例：这份用量主要来自哪几个实例。 */}
               <div>
                 <div className="mb-1 border-y py-1 text-[11px] text-muted-foreground">
@@ -459,6 +607,25 @@ export function GaugeAttributionTooltip({
                   )}
                 </div>
               </div>
+
+              {/* FR-513：**整机** top-N 进程。与上面「Top 受管进程」并列但口径不同——
+                  这个包含系统进程与别人的进程，才是「机器为什么慢」的答案。
+                  标题必须能区分，否则会被读成同一份数据。 */}
+              {data.hostTopProcesses && data.hostTopProcesses.length > 0 ? (
+                <div>
+                  <div className="mb-1 border-y py-1 text-[11px] text-muted-foreground">
+                    {t('dashboard.attributionHostProcesses', '整机 Top 进程')}
+                  </div>
+                  <div className="space-y-1">
+                    {data.hostTopProcesses.slice(0, 5).map((p) => (
+                      <div key={`${p.nodeId}-${p.pid}`} className="flex justify-between gap-2 font-mono text-[11px]">
+                        <span className="truncate">{p.comm || `PID ${p.pid}`}</span>
+                        <span>{displayNumber(p.cpuPct, '%')}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               <p className="text-[11px] text-muted-foreground">{t('dashboard.resourceObservation')}</p>
             </div>
@@ -665,53 +832,6 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
   )
 }
 
-/** 玩家排行卡属性。 */
-export interface OverviewRankingPanelProps {
-  ranking?: RankingResult
-  isLoading: boolean
-  isError: boolean
-  testId: string
-  renderLink?: (args: OverviewLinkArgs) => ReactNode
-}
-
-/**
- * 玩家 Top-N 排行卡（FR-469）：哪几台服在承载玩家。
- *
- * 只列 5 条且不做「查看全部」——完整排行在「统计分析」页，首页只需要「热点在哪」。
- */
-export function OverviewRankingPanel({ ranking, isLoading, isError, testId, renderLink }: OverviewRankingPanelProps) {
-  const { t } = useTranslation()
-  const items = ranking?.items?.slice(0, 5) ?? []
-
-  let body: ReactNode
-  if (isError) body = <p className="px-3 py-8 text-center text-sm text-destructive">{t('dashboard.rankingUnavailable', '排行加载失败')}</p>
-  else if (isLoading) body = <p className="px-3 py-8 text-center text-sm text-muted-foreground">{t('common.loading')}</p>
-  else if (items.length === 0) body = <p className="px-3 py-8 text-center text-sm text-muted-foreground">{t('dashboard.noData')}</p>
-  else {
-    body = (
-      <div className="divide-y">
-        {items.map((item) => (
-          <OverviewLink
-            key={item.instanceId}
-            href={`/instances/${item.instanceId}`}
-            className="flex items-center gap-2 px-3 py-[7px] text-sm hover:bg-muted/40"
-            renderLink={renderLink}
-          >
-            <span className="w-4 shrink-0 text-xs text-muted-foreground tabular-nums">{item.rank}</span>
-            <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{Math.round(item.value)}</span>
-          </OverviewLink>
-        ))}
-      </div>
-    )
-  }
-
-  return (
-    <Panel data-testid={testId} title={t('dashboard.playerRanking', '玩家 Top5')} bodyClassName="p-0">
-      {body}
-    </Panel>
-  )
-}
 
 /** 平台健康卡属性：三张平台卡共用同一份快照与取数态。 */
 export interface PlatformPanelProps {
@@ -730,13 +850,14 @@ export function PlatformBotRuntimePanel({ data, isLoading, isError }: PlatformPa
   const firstUnavailable = bots?.unavailable[0]
   return (
     <OverviewAggregationPanel testId="platform-observability-bots" title={t('dashboard.sharedBotRuntime')} to="/monitoring" isLoading={isLoading} isError={isError} isEmpty={!bots} emptyText={t('dashboard.noData')} errorText={t('dashboard.platformOverviewUnavailable')}>
-      {bots && <div className="space-y-2 p-3 text-sm">
-        <p className="break-words text-muted-foreground">{bots.notice}</p>
-        <div className="grid grid-cols-2 gap-2 text-muted-foreground">
-          <span className="min-w-0 break-words">{t('dashboard.botRss')}: {bots.botWorkerRssBytes == null ? '--' : fmtBytes(bots.botWorkerRssBytes)}</span>
-          <span className="min-w-0 break-words">{t('dashboard.botCpu')}: {displayNumber(bots.botWorkerCpuPct, '%')}</span>
-          <span className="min-w-0 break-words">{t('dashboard.botCount')}: {displayNumber(bots.activeCount)}</span>
-          <span className="min-w-0 break-words">{t('dashboard.botEventLoop')}: {displayNumber(bots.eventLoopP95Ms, 'ms')}</span>
+      {/* 紧凑一行：首页改为固定视口（不滚动）后，这几项指标若不压成单行会把趋势图挤扁。
+          说明文字（`notice`）改为 title 悬停——它是口径解释，读过一次即可，不该长期占两行高度。 */}
+      {bots && <div className="p-2 text-xs" title={bots.notice}>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-muted-foreground sm:grid-cols-4">
+          <span className="min-w-0 truncate">{t('dashboard.botRss')}: {bots.botWorkerRssBytes == null ? '--' : fmtBytes(bots.botWorkerRssBytes)}</span>
+          <span className="min-w-0 truncate">{t('dashboard.botCpu')}: {displayNumber(bots.botWorkerCpuPct, '%')}</span>
+          <span className="min-w-0 truncate">{t('dashboard.botCount')}: {displayNumber(bots.activeCount)}</span>
+          <span className="min-w-0 truncate">{t('dashboard.botEventLoop')}: {displayNumber(bots.eventLoopP95Ms, 'ms')}</span>
         </div>
         {firstUnavailable && <p className="break-words text-amber-600">{t('dashboard.botUnavailable', { reason: firstUnavailable.reason })}</p>}
       </div>}
@@ -778,24 +899,6 @@ export interface OverviewPageViewProps {
   attributionLoading: boolean
   /** 归因取数失败（Tooltip 内局部降级）。 */
   attributionError: boolean
-  /** 异常实例（容器按 `status=CRASHED`、`pageSize=5` 取数）。 */
-  exceptionInstances?: InstanceInfo[]
-  /** 异常实例取数中。 */
-  exceptionLoading: boolean
-  /** 异常实例取数失败。 */
-  exceptionError: boolean
-  /** 近期任务（容器按 `limit=5` 取数）。 */
-  recentTasks?: Task[]
-  /** 近期任务取数中。 */
-  recentTasksLoading: boolean
-  /** 近期任务取数失败。 */
-  recentTasksError: boolean
-  /** 活跃告警（容器按 `pageSize=5` 取数）。 */
-  activeAlerts?: AlertEventInfo[]
-  /** 活跃告警取数中。 */
-  activeAlertsLoading: boolean
-  /** 活跃告警取数失败。 */
-  activeAlertsError: boolean
   /** 平台观测区是否可见（FR-432 权限树对齐：平台管理员或持 monitor.read / node.read）。 */
   canSeePlatformObs: boolean
   /** `/observability/overview` 快照（三张平台卡共用）。 */
@@ -813,15 +916,20 @@ export interface OverviewPageViewProps {
   /** 趋势取数失败（本卡局部降级）。 */
   playerTrendError?: boolean
   /** 玩家排行 Top-N（FR-469）。 */
-  playerRanking?: RankingResult
   /** 排行取数中。 */
-  playerRankingLoading?: boolean
   /** 排行取数失败。 */
-  playerRankingError?: boolean
-  /** 平台可用性 SLO（FR-463）；不单独占卡，并入趋势卡头部一行。 */
+  /** 平台可用性 SLO（FR-463）；不单独占卡，并入玩家表头部一行。 */
   slo?: SLOResultView
   /** 链接渲染插槽（缺省原生 `<a href>`）。 */
   renderLink?: (args: OverviewLinkArgs) => ReactNode
+  /**
+   * 切到 AI 对话首页（FR-520 §4.4 的双向切换之一）。
+   *
+   * 做成回调而不是 `href` 链接：切换要**先写模式记忆再导航**，顺序不能反
+   * （先导航会让新页面按旧记忆再判一次，出现闪回）。写记忆需要容器侧参与，
+   * 视图只负责「用户点了」这件事。缺省不渲染该入口（如被嵌入到别处时不强加）。
+   */
+  onSwitchToAssistant?: () => void
 }
 
 /**
@@ -839,28 +947,13 @@ export function OverviewPageView({
   attribution,
   attributionLoading,
   attributionError,
-  exceptionInstances,
-  exceptionLoading,
-  exceptionError,
-  recentTasks,
-  recentTasksLoading,
-  recentTasksError,
-  activeAlerts,
-  activeAlertsLoading,
-  activeAlertsError,
-  canSeePlatformObs,
   platformOverview,
-  platformOverviewLoading,
-  platformOverviewError,
-  renderHealthWall,
   playerTrend,
   playerTrendLoading = false,
   playerTrendError = false,
-  playerRanking,
-  playerRankingLoading = false,
-  playerRankingError = false,
   slo,
   renderLink,
+  onSwitchToAssistant,
 }: OverviewPageViewProps) {
   const { t } = useTranslation()
 
@@ -877,96 +970,8 @@ export function OverviewPageView({
     return () => window.removeEventListener('keydown', closeOnEscape)
   }, [activeGauge, onActiveGaugeChange])
 
-  // 三张聚合卡各自截断到 5 条（显示口径，见 AGGREGATION_LIMIT 说明）。
-  const exceptionRows = (exceptionInstances ?? []).slice(0, AGGREGATION_LIMIT)
-  const recentTaskRows = (recentTasks ?? []).slice(0, AGGREGATION_LIMIT)
-  const activeAlertRows = (activeAlerts ?? []).slice(0, AGGREGATION_LIMIT)
 
-  /**
-   * 「需要处理」统一列表（本轮结构重排）。
-   *
-   * 【为什么合并】原先并排三栏：异常实例 / 近期任务 / 活跃告警。但三栏地位并不对等——
-   * 「近期任务」里多数是**已完成**的（它回答「最近发生了什么」），而前两者回答的是
-   * 「现在需要我做什么」。三者同权重并排时，真正要动手的项被「已完成」的噪音淹没。
-   *
-   * 合并后按**紧急度**排序，一眼看到最先该处理的那条：
-   * 崩溃实例(0) > 失败任务(1) > 活跃告警(2，按告警级别再分) > 其余任务(3)。
-   * 严重度同分时保持各自原有顺序（稳定排序），避免每 10 秒轮询时行序跳动。
-   *
-   * 条数上限取 `ATTENTION_LIMIT`：合并后若仍各给 5 条会变成 15 行，比原先更高；
-   * 取 8 条既覆盖常见规模，又把页高收在原来的三栏高度以内。
-   */
-  type AttentionRow = {
-    key: string
-    /** 越小越紧急。 */
-    rank: number
-    /** 来源类别：用于「各类保底席位」，避免某一类被整体挤掉。 */
-    kind: 'exception' | 'task' | 'alert'
-    label: string
-    badge: ReactNode
-    href?: string
-    testId: string
-  }
-  /*
-    【为什么不是简单全局截断】直接按紧急度排序再 `slice(0, 8)` 会有个副作用：
-    崩溃实例一多（比如 20 台），8 个位置全被它占满，失败任务与告警**永远露不出来**——
-    而「有失败任务」恰恰是用户更该知道的事。故按类别**保底**各留席位：
-    每类先各取至多 3 条，剩余的席位再按紧急度回填。这样任一类别有内容就一定可见，
-    同时整体仍按紧急度排序，最先看到的还是最该处理的。
-  */
-  const PER_KIND_FLOOR = 3
-  const allAttention: AttentionRow[] = [
-    ...exceptionRows.map((instance) => ({
-      key: `inst:${instance.id}`,
-      // 崩溃实例排最前：它是唯一「已经在损失可用性」的一类。
-      rank: 0,
-      kind: 'exception' as const,
-      label: instance.name,
-      badge: <StatusBadge level={instanceStatusLevel(instance.status)} label={instance.status} />,
-      href: `/instances/${instance.id}`,
-      testId: 'overview-exception-item',
-    })),
-    ...recentTaskRows.map((task) => {
-      const failed = taskStatusLevel(task.state) === 'danger'
-      return {
-        key: `task:${task.taskId}`,
-        // 失败任务与崩溃实例同级紧迫；进行中/已完成的排到告警之后。
-        rank: failed ? 1 : 3,
-        kind: 'task' as const,
-        label: task.title,
-        badge: (
-          <StatusBadge
-            level={task.cancelRequested ? 'warning' : taskStatusLevel(task.state)}
-            label={task.cancelRequested ? t('tasks.state.canceling', '取消中') : t(`tasks.state.${task.state}`)}
-          />
-        ),
-        href: `/tasks?task=${encodeURIComponent(task.taskId)}`,
-        testId: 'overview-task-item',
-      }
-    }),
-    ...activeAlertRows.map((alert) => ({
-      key: `alert:${alert.id}`,
-      // 告警按自身级别细分：严重(1.5) 次于失败任务，警告(2) 再次之。
-      rank: levelStatusLevel(alert.level) === 'danger' ? 1.5 : 2,
-      kind: 'alert' as const,
-      label: alert.message,
-      badge: <StatusBadge level={levelStatusLevel(alert.level)} label={t(`alerts.level_${alert.level}`, alert.level)} />,
-      // 告警行不是链接（迁包前即是纯展示行），故不给 href。
-      testId: 'overview-alert-item',
-    })),
-  ].sort((a, b) => a.rank - b.rank)
-
-  // 各类保底席位 → 剩余席位按紧急度回填 → 最终仍按紧急度排序输出。
-  const floorPicked = new Set<string>()
-  for (const kind of ['exception', 'task', 'alert'] as const) {
-    allAttention.filter((r) => r.kind === kind).slice(0, PER_KIND_FLOOR).forEach((r) => floorPicked.add(r.key))
-  }
-  const attentionRows = allAttention
-    .filter((r) => floorPicked.has(r.key))
-    .slice(0, ATTENTION_LIMIT)
-    .concat(allAttention.filter((r) => !floorPicked.has(r.key)))
-    .slice(0, ATTENTION_LIMIT)
-    .sort((a, b) => a.rank - b.rank)
+  // 「需要处理」的组装逻辑已随该区块一起移到页眉消息中心，首页不再计算。
 
   /**
    * 四条趋势合成一张图（FR-502 阶段 6 补丁）。
@@ -995,11 +1000,36 @@ export function OverviewPageView({
       labelKey: string
       full: number | 'memTotal' | 'seriesMax'
       fmt: (v: number) => string
+      /** 默认在图例中取消勾选（数据仍进图，勾选即显示）。 */
+      hiddenByDefault?: boolean
     }> = [
       { key: 'node_cpu_pct', labelKey: 'dashboard.totalCpu', full: 100, fmt: (v) => `${v.toFixed(0)}%` },
-      { key: 'node_load', labelKey: 'dashboard.totalLoad', full: 1, fmt: (v) => v.toFixed(2) },
-      { key: 'node_mem_used', labelKey: 'dashboard.totalMem', full: 'memTotal', fmt: fmtBytes },
-      { key: 'inst_players_online', labelKey: 'dashboard.onlinePlayers', full: 'seriesMax', fmt: (v) => v.toFixed(0) },
+      /*
+        负载用 `seriesMax`（按本序列峰值归一化），**不能写死 1**：
+        `node_load` 是原始 load1（实测窗口内 0.0–2.4），而仪表上的「总负载」是
+        「占核数百分比」（0–100）。把原始 load1 相对 1 归一化会画出 240% 的刻度
+        （load1=2.4 → 240%），看起来像负载爆表。tooltip 仍显示原始倍数。
+      */
+      { key: 'node_load', labelKey: 'dashboard.totalLoad', full: 'seriesMax', fmt: (v) => v.toFixed(2) },
+      /*
+        内存用 `seriesMax`（按本序列峰值归一化），**不能用 `memTotal`**：
+        仪表上的「120.0G / 320.0G」是「跨节点已用合计 / 单节点内存总量」，
+        两者量纲本来就不匹配。用 memTotal 当满值会让 120G 画出 240% 的刻度
+        （多节点合计超过单机总量），看起来像内存爆了。tooltip 仍按真实字节展示。
+      */
+      { key: 'node_mem_used', labelKey: 'dashboard.totalMem', full: 'seriesMax', fmt: fmtBytes },
+      /*
+        Bot Worker 两条共享进程指标也进同一张图（后端 `/metrics/overview` 已返回它们的序列）。
+        **默认隐藏**：它们与节点资源不同量级（RSS 是百 MB 级、CPU 是十几个百分点），
+        同屏常显会压扁上面三条主线；但要让读者知道「可以看」，所以仍进图例与坐标轴，
+        勾选即显示（recharts 图例内建切换）。
+      */
+      { key: 'bot_worker_rss_bytes', labelKey: 'dashboard.botRss', full: 'seriesMax', fmt: fmtBytes, hiddenByDefault: true },
+      { key: 'bot_worker_cpu_pct', labelKey: 'dashboard.botCpu', full: 'seriesMax', fmt: (v) => `${v.toFixed(1)}%`, hiddenByDefault: true },
+      /*
+        在线玩家**不在**这里：它不是资源占用，量纲与其余三条不同，混在一张归一化趋势图里
+        会导致纵轴出现 >100%（玩家按窗口峰值归一化）。玩家改由上方独立的表格与 Top 排行承载。
+      */
     ]
 
     for (const spec of specs) {
@@ -1020,6 +1050,8 @@ export function OverviewPageView({
       series.push({
         key: spec.key,
         name,
+        // 默认隐藏的序列仍进 series：recharts 用 hide 只影响绘制，数据照常参与纵轴域。
+        hidden: spec.hiddenByDefault,
         points: raw.map((p) => ({ ts: p.ts, value: p.v == null ? null : (p.v / full) * 100 })),
       })
     }
@@ -1029,11 +1061,25 @@ export function OverviewPageView({
   return (
     // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
     // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
-    <PageShell data-page="overview">
+    // variant="fixed"：整页不滚动（用户要求「第一屏铺满、不往下滚」）；
+    // 趋势图用 flex-1 吃满剩余高度，其余区块保持自然高度。
+    <PageShell data-page="overview" variant="fixed" className="gap-2">
       <PageHeader
         title={t('dashboard.title')}
         description={t('dashboard.subtitle')}
-        actions={<RangePicker value={range} onChange={onRangeChange} />}
+        actions={
+          <>
+            {/* 切回 AI 对话首页（FR-520 §4.4）。与 AI 首页上的「经典首页」入口位置对应，
+                双向可达，用户不会「进去出不来」。 */}
+            {onSwitchToAssistant && (
+              <Button variant="outline" size="sm" onClick={onSwitchToAssistant}>
+                <MessageSquare className="mr-1 size-3.5" />
+                {t('assistant.homeSwitchAssistant', 'AI 对话')}
+              </Button>
+            )}
+            <RangePicker value={range} onChange={onRangeChange} />
+          </>
+        }
       />
 
       {/* 顶部：环形仪表盘 + 统计块 */}
@@ -1043,7 +1089,9 @@ export function OverviewPageView({
         颜色承载分级（success/warning/danger），数值仍留在环上。
         内存那句改显「已用 / 总量」绝对值：环上已经是百分比，下面再写一遍同一个数没有信息量。
       */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+      <div className="flex shrink-0 flex-col gap-2 xl:flex-row">
+      {/* 左：三个环形仪表（还原原尺寸 92px）。指标是「占用率」，环形比数字更直观。 */}
+      <div className="grid shrink-0 grid-cols-3 gap-2 xl:w-[27rem]">
         <GaugeAttributionTooltip
           gauge="cpu"
           label={t('dashboard.totalCpu')}
@@ -1103,129 +1151,343 @@ export function OverviewPageView({
         >
           <ResourceGauge label={t('dashboard.totalMem')} value={memPct} unit="%" />
         </GaugeAttributionTooltip>
+      </div>
+
+      {/* 右：六张统计卡（图标 + 数字），3 列 × 2 行。
+          补充的三项来自已取的 `/observability/overview` 快照（首页本就为平台观测区取它），
+          不额外发请求：崩溃与停止是排查时最常看的两项，实例总数用来对照运行数。
+
+          图标语义与配色对应「这一项好不好」，与数字本身的含义一致：
+          在线类用成功绿、需处理用危险红、已停止用中性、总数用主色。 */}
+      <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-3">
         <StatCard
+          icon={<Server className="size-3.5" />}
+          tone="success"
           label={t('dashboard.nodes')}
           value={`${totals?.onlineNodeCount ?? 0}/${totals?.nodeCount ?? nodeTotal ?? 0}`}
           sub={t('dashboard.online')}
         />
-        <StatCard label={t('dashboard.runningInstances')} value={String(totals?.runningInstances ?? 0)} sub={t('dashboard.instances')} />
-        <StatCard label={t('dashboard.onlinePlayers')} value={String(totals?.onlinePlayers ?? 0)} sub={t('nav.players')} />
+        <StatCard
+          icon={<Activity className="size-3.5" />}
+          tone="success"
+          label={t('dashboard.runningInstances')}
+          value={String(totals?.runningInstances ?? 0)}
+          sub={t('dashboard.instances')}
+        />
+        <StatCard
+          icon={<Users className="size-3.5" />}
+          tone="primary"
+          label={t('dashboard.onlinePlayers')}
+          value={String(totals?.onlinePlayers ?? 0)}
+          sub={t('nav.players')}
+        />
+        <StatCard
+          icon={<AlertTriangle className="size-3.5" />}
+          tone="danger"
+          valueTone={platformOverview?.health.crashedInstanceCount ? 'danger' : 'default'}
+          label={t('dashboard.crashedInstances', '崩溃实例')}
+          value={String(platformOverview?.health.crashedInstanceCount ?? 0)}
+          sub={t('dashboard.needAttention', '需处理')}
+        />
+        <StatCard
+          icon={<Ban className="size-3.5" />}
+          tone="neutral"
+          label={t('dashboard.stoppedInstances', '停止实例')}
+          value={String(platformOverview?.health.stoppedInstanceCount ?? 0)}
+          sub={t('dashboard.stopped', '已停止')}
+        />
+        <StatCard
+          icon={<Layers className="size-3.5" />}
+          tone="info"
+          label={t('dashboard.totalInstances', '实例总数')}
+          value={String(
+            (platformOverview?.health.runningInstanceCount ?? totals?.runningInstances ?? 0) +
+              (platformOverview?.health.crashedInstanceCount ?? 0) +
+              (platformOverview?.health.stoppedInstanceCount ?? 0),
+          )}
+          sub={t('dashboard.all', '全部')}
+        />
+      </div>
       </div>
 
-            {/*
-              【玩家趋势 + 玩家 Top5】游戏服首页最该回答的两个问题：「现在多少人在玩、
-              高峰在哪」「哪几台服在承载玩家」。此前这两个数据接口早已存在
-              （/metrics/players/trend、/metrics/instances/ranking），首页却一个都没用。
-
-              两块都做**局部降级**：任一取不到只影响自己那张卡，不牵连同屏其他区块。
-            */}
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        <OverviewTrendPanel
-          trend={playerTrend}
-          isLoading={playerTrendLoading}
-          isError={playerTrendError}
-          testId="overview-player-trend"
-          className="lg:col-span-2"
-          slo={slo}
-        />
-              <OverviewRankingPanel
-                ranking={playerRanking}
-                isLoading={playerRankingLoading}
-                isError={playerRankingError}
-                testId="overview-player-ranking"
-                renderLink={renderLink}
-              />
-            </div>
 
       {/*
-        【三栏 → 一张「需要处理」卡】原先并排 异常实例 / 近期任务 / 活跃告警，
-        三者地位并不对等：近期任务多数是**已完成**的（回答「最近发生了什么」），
-        前两者才回答「现在要我做什么」。同权重并排时，要动手的项被已完成项淹没。
-        合并后按紧急度排序（崩溃实例 > 失败任务 > 严重告警 > 警告 > 其余任务），
-        一眼看到最先该处理的那条；条数与紧迫度口径见 `attentionRows` 与 `ATTENTION_LIMIT`。
+        【第二行：玩家在线】（图表 + 读数，两栏并排）
+
+        结构：左侧玩家曲线（形状 = 昼夜起伏），右侧读数表（数值 = 现在多少、峰值在哪）。
+        曲线与读数并排而不是上下堆叠——上下堆会把这一行撑到 300px 以上，
+        挤掉下方资源趋势的可视高度（整页固定视口、不滚动）。
+
+        玩家 Top 服务器已按用户要求删除：它与「服务器」页的实例列表回答同一件事，
+        首页不再承担「哪台服在跑」的浏览职责。
       */}
-      <OverviewAggregationPanel
-        testId="overview-attention"
-        title={t('dashboard.needsAttention', '需要处理')}
-        to="/instances?status=CRASHED"
-        isLoading={exceptionLoading || recentTasksLoading || activeAlertsLoading}
-        isError={exceptionError && recentTasksError && activeAlertsError}
-        isEmpty={attentionRows.length === 0}
-        emptyText={t('dashboard.nothingToDo', '没有需要处理的项')}
-        errorText={t('dashboard.attentionFailed', '加载失败')}
-        renderLink={renderLink}
-      >
-        <div className="divide-y">
-          {attentionRows.map((row) => {
-            const body = (
-              <>
-                <span className="min-w-0 truncate text-sm font-medium" title={row.label}>
-                  {row.label}
-                </span>
-                {row.badge}
-              </>
-            )
-            // 有 href 的行走链接（实例 / 任务）；告警行是纯展示行，保持 div 不挂链接。
-            return row.href ? (
-              <OverviewLink
-                key={row.key}
-                href={row.href}
-                testId={row.testId}
-                className="flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-muted/40"
-                renderLink={renderLink}
-              >
-                {body}
-              </OverviewLink>
-            ) : (
-              <div
-                key={row.key}
-                data-testid={row.testId}
-                className="flex items-center justify-between gap-3 px-3 py-2.5"
-              >
-                {body}
-              </div>
-            )
-          })}
-        </div>
-      </OverviewAggregationPanel>
+      <PlayerStatsTable
+        testId="overview-player-table"
+        trend={playerTrend}
+        isLoading={playerTrendLoading}
+        isError={playerTrendError}
+        currentPlayers={totals?.onlinePlayers}
+        slo={slo}
+      />
 
       {/*
-        【平台健康 / 异常项 / 首页实例表三块已移除】数据口径修好之后（mock 的 totals 曾写死，
-        导致同一屏上「运行实例」既是 720 又是 242），这三块的重复一眼可见：
-
-        - 平台健康：4 个 StatCard 与页顶的指标卡**逐项相同**（节点 / 运行实例 / 总 CPU / 总内存）。
-          同一组数字在首屏出现两遍，第二遍不提供任何新信息，只是把下面的内容推低约 150px。
-        - 异常项：读 `platformOverview.exceptions`，与读 `/instances/search?status=CRASHED`
-          的「异常实例」表达同一件事，两个数据源还常对不上（一个空、一个有内容）。
-        - 首页实例表：不限量无限滚动铺全部实例，与「服务器」页的完整版本重复；
-          它同时是本页渲染量的大头（改前实测约 783 个元素、单次主线程阻塞约 360ms）。
-
-        移除后信息一项不丢：指标在页顶、异常在「需要处理」、完整实例列表在「服务器」页。
+        【第三行：资源趋势】纵轴只有真资源三条主线（CPU / 负载 / 内存），恒在 0–100%。
+        Bot Worker 的两条共享进程指标**并入图内**（图例可见、默认隐藏、勾选显示），
+        不再单独占底部参数条：同一组数据在两处出现既重复又占高度。
       */}
-      {canSeePlatformObs && <PlatformBotRuntimePanel data={platformOverview} isLoading={platformOverviewLoading} isError={platformOverviewError} />}
-
-      {/* FR-461：逐台集群健康墙（热力矩阵 + 分级 + 排序 + 一键下钻）——本体是应用侧接线层，经插槽注入。 */}
-      {canSeePlatformObs && renderHealthWall?.()}
-
-      {/* 中部：聚合历史曲线（FR-060）——四指标合成一张多序列图。
-          纵轴是「占各自满值的百分比」，tooltip 反算回原始量纲（见 trendChart 的说明）。
-          图表走 lazy + Suspense：recharts 的下载与执行不阻塞本页其余区块，
-          骨架高度与图表高度同源（TREND_CHART_HEIGHT），就位前后不跳动。 */}
-      <Panel title={t('dashboard.trends')}>
-        <Suspense fallback={<Skeleton className="w-full" style={{ height: TREND_CHART_HEIGHT }} />}>
-          <TimeSeriesChart
+      <Panel title={t('dashboard.trends')} className="flex min-h-[200px] flex-1 flex-col" bodyClassName="flex min-h-0 flex-1 flex-col">
+        <Suspense fallback={<Skeleton className="w-full flex-1" />}>
+          {/* 高度由容器实测后传入：TimeSeriesChart 只接受数字 height（内部用固定像素画图），
+              要「铺满剩余空间」就只能量一次容器高度。ResizeObserver 让窗口缩放/侧栏折叠后跟手。 */}
+          <TrendFillChart
             series={trendChart.series}
-            height={TREND_CHART_HEIGHT}
-            yDomain={[0, 100]}
-            valueFormatter={(v, name) => {
-              const scale = name ? trendChart.scales.get(name) : undefined
-              if (!scale) return `${v.toFixed(0)}%`
-              return scale.fmt((v / 100) * scale.full)
-            }}
+            scales={trendChart.scales}
           />
         </Suspense>
       </Panel>
+
+      {/* 集群健康墙已按用户要求移除：单机水位与异常改由页眉「需要处理」承载，
+          逐台热力矩阵不再占用首屏。renderHealthWall 插槽保留但不再调用（应用侧仍可复用）。 */}
     </PageShell>
+  )
+}
+
+
+/**
+ * 铺满容器的资源趋势图。
+ *
+ * 为什么需要它：`TimeSeriesChart` 的 `height` 是数字（内部按固定像素绘制），而首页要求
+ * 「趋势图占满第一屏剩余空间、整页不滚动」。所以在外面量一次可用高度再传进去，
+ * 并用 ResizeObserver 跟随容器变化（窗口缩放、侧栏折叠、窄屏切换都会改变可用高度）。
+ *
+ * 下限保护：容器在首帧可能测到 0（父级还没布局），此时用一个保底高度，
+ * 避免图表以 0 高渲染后不再自增；测量值低于保底时取保底。
+ */
+function TrendFillChart({
+  series,
+  scales,
+}: {
+  series: ChartSeries[]
+  scales: Map<string, { full: number; fmt: (v: number) => string }>
+}) {
+  /*
+    默认隐藏的实现：recharts 的图例点击是**它内部状态**，外部拿不到「当前勾了哪几条」。
+    所以这里自己维护一份「用户已开启的键」集合：初始为空 = 全部默认隐藏项不画；
+    图例点击时由 recharts 内部切换线的显隐，同时我们把该键记进集合，保证重渲染后不回弹。
+  */
+
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [height, setHeight] = useState(TREND_CHART_HEIGHT)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.getBoundingClientRect().height
+      if (h > 0) setHeight(Math.max(MIN_TREND_FILL_HEIGHT, Math.round(h)))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div ref={ref} className="min-h-0 flex-1" data-testid="overview-trend-fill">
+      <TimeSeriesChart
+        series={series}
+        height={height}
+        yDomain={[0, 100]}
+        valueFormatter={(v, name) => {
+          const scale = name ? scales.get(name) : undefined
+          if (!scale) return `${v.toFixed(0)}%`
+          return scale.fmt((v / 100) * scale.full)
+        }}
+      />
+    </div>
+  )
+}
+
+
+/**
+ * 玩家在线表格（FR-469）：从「资源趋势」独立出来的玩家视角。
+ *
+ * 【为什么不与资源放一张图】玩家数不是资源占用，量纲也没有自然上限。
+ * 混进归一化趋势图会让纵轴出现 >100% 的刻度（曾出现 240%），读起来像故障。
+ *
+ * 【为什么是表格】玩家侧要回答的是「现在多少、高峰在哪、分布长什么样」——
+ * 这些是**读数**而不是趋势形状，表格比曲线更直接；曲线留给下方资源趋势。
+ *
+ * 【放了哪些】全部由已有的一次取数算出，不额外发请求：
+ * 当前在线 / 峰值（含发生时刻）/ 日均 / 窗口最低 / 波动幅度 / 高峰与低谷时段 / 可用率。
+ */
+export function PlayerStatsTable({
+  testId,
+  trend,
+  isLoading,
+  isError,
+  currentPlayers,
+  slo,
+  className,
+}: {
+  testId: string
+  trend?: PlayerTrendResult
+  isLoading?: boolean
+  isError?: boolean
+  /** 当前在线（来自 `/metrics/overview` 的 totals；缺失时退回趋势最后一点）。 */
+  currentPlayers?: number
+  slo?: SLOResultView
+  className?: string
+}) {
+  const { t } = useTranslation()
+  const points = trend?.trend ?? []
+  const values = points.map((p) => p.avg).filter((v): v is number => v != null)
+
+  // 当前在线：totals 优先；缺失时取趋势最后一点（比均值为 0 更接近「现在」）。
+  const lastValue = values.length > 0 ? values[values.length - 1] : undefined
+  const now = currentPlayers ?? (lastValue == null ? null : Math.round(lastValue))
+  const peak = trend?.peakValue ?? (values.length > 0 ? Math.max(...values) : null)
+  const lowest = values.length > 0 ? Math.min(...values) : null
+  const avg = trend?.dailyAvg ?? null
+  // 波动幅度：峰谷差相对峰值的比例，用来判断「是不是长尾尖峰」。
+  const swingPct = peak && peak > 0 && lowest != null ? ((peak - lowest) / peak) * 100 : null
+
+  /** 峰值发生时刻：接口给的是 ISO 时间，按用户本地时区显示到分钟。 */
+  const peakAtText = trend?.peakAt
+    ? new Date(trend.peakAt).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : null
+
+  /*
+    时段分布：`hourlyDist` 是 24 小时桶。取最大与最小桶的**下标**即高峰/低谷时段。
+    全 0（无数据）时不显示——那会误导成「0 点最忙」。
+  */
+  const dist = trend?.hourlyDist ?? []
+  const distMax = dist.length > 0 ? Math.max(...dist) : 0
+  const peakHour = distMax > 0 ? dist.indexOf(distMax) : -1
+  const lowHour = distMax > 0 ? dist.indexOf(Math.min(...dist.filter((v) => v >= 0))) : -1
+  const hourLabel = (h: number) => `${String(h).padStart(2, '0')}:00`
+
+  /*
+    两栏：左图表、右读数。
+    图表给「形状」（昼夜起伏、尖峰），读数给「数值」（现在多少、峰值何时）。
+    两者并排而非上下堆叠——上下堆会把这一行撑到 300px+，挤掉下方资源趋势的高度。
+  */
+  const chartBlock = isError ? (
+    <p className="flex h-full items-center justify-center text-xs text-destructive">
+      {t('dashboard.trendUnavailable', '趋势加载失败')}
+    </p>
+  ) : isLoading ? (
+    <p className="flex h-full items-center justify-center text-xs text-muted-foreground">{t('common.loading')}</p>
+  ) : values.length >= 2 ? (
+    (() => {
+      const w = 640
+      const h = 120
+      // 纵轴从 0 起算：用 min..max 会把 65~370 的正常波动撑成满幅锯齿，看起来像故障。
+      const span = Math.max(...values, 1)
+      const line = values
+        .map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / span) * (h - 12) - 6}`)
+        .join(' L ')
+      return (
+        <svg
+          viewBox={`0 0 ${w} ${h}`}
+          preserveAspectRatio="none"
+          className="block h-full w-full"
+          role="img"
+          aria-label={t('dashboard.playerTrend', '玩家在线趋势')}
+        >
+          <path d={`M 0,${h} L ${line} L ${w},${h} Z`} fill="var(--primary)" opacity=".12" />
+          <path d={`M ${line}`} fill="none" stroke="var(--primary)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        </svg>
+      )
+    })()
+  ) : (
+    <p className="flex h-full items-center justify-center text-xs text-muted-foreground">{t('dashboard.noData')}</p>
+  )
+
+  return (
+    <Panel
+      data-testid={testId}
+      className={className}
+      title={t('dashboard.playerSection', '玩家在线')}
+      actions={
+        slo && (
+          <span className="text-[11px] font-normal text-muted-foreground">
+            {t('dashboard.availability', '可用率')}{' '}
+            {/*
+              `applicable=false`（窗口内无可用证据、分母为 0）必须显示「不适用」而不是 0%。
+              显示 0% 会被读成「完全不可用」——那是与本意相反的结论。
+            */}
+            {slo.applicable ? (
+              <span className="text-status-success tabular-nums">{(slo.availability * 100).toFixed(2)}%</span>
+            ) : (
+              <span className="text-muted-foreground">{t('dashboard.sloNotApplicable', '不适用')}</span>
+            )}
+          </span>
+        )
+      }
+      bodyClassName="p-2"
+    >
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        {/* 左：图表 */}
+        <div className="min-h-[110px] min-w-0">{chartBlock}</div>
+
+        {/* 右：读数（两列网格，比表更省高度） */}
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+          {isError ? (
+            <p className="col-span-2 text-xs text-destructive">{t('dashboard.trendUnavailable', '趋势加载失败')}</p>
+          ) : isLoading ? (
+            <p className="col-span-2 text-xs text-muted-foreground">{t('common.loading')}</p>
+          ) : (
+            <>
+              <Stat label={t('dashboard.playersNow', '当前在线')} value={now == null ? '--' : String(now)} strong />
+              <Stat
+                label={t('dashboard.peakPlayers', '峰值在线')}
+                value={peak == null ? '--' : String(Math.round(peak))}
+                hint={peakAtText ? `${t('dashboard.peakAt', '发生时刻')} ${peakAtText}` : undefined}
+              />
+              <Stat label={t('dashboard.avgPlayers', '日均在线')} value={avg == null ? '--' : String(Math.round(avg))} />
+              <Stat label={t('dashboard.lowestPlayers', '窗口最低')} value={lowest == null ? '--' : String(Math.round(lowest))} />
+              <Stat
+                label={t('dashboard.peakHour', '高峰时段')}
+                value={peakHour >= 0 ? hourLabel(peakHour) : '--'}
+                hint={peakHour >= 0 ? `${t('dashboard.peakHourCount', '该时段峰值')} ${Math.round(distMax)}` : undefined}
+              />
+              <Stat label={t('dashboard.lowHour', '低谷时段')} value={lowHour >= 0 ? hourLabel(lowHour) : '--'} />
+              <Stat
+                label={t('dashboard.playerSwing', '波动幅度')}
+                value={swingPct == null ? '--' : `${swingPct.toFixed(0)}%`}
+                hint={t('dashboard.playerSwingHint', '（峰值 − 最低）/ 峰值。偏高说明是短时尖峰而非稳定负载')}
+                className="col-span-2"
+              />
+            </>
+          )}
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
+/** 玩家读数的小单元格：标签在上、数值在下（比表格行更紧凑）。 */
+function Stat({
+  label,
+  value,
+  hint,
+  strong,
+  className,
+}: {
+  label: string
+  value: string
+  hint?: string
+  strong?: boolean
+  className?: string
+}) {
+  return (
+    <div className={className} title={hint}>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className={strong ? 'text-lg font-semibold tabular-nums' : 'text-sm font-medium tabular-nums'}>
+        {value}
+      </div>
+    </div>
   )
 }
 

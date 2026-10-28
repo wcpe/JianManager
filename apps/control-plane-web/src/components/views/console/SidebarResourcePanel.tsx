@@ -16,11 +16,15 @@
  * 分组树（`instance_group_nodes`，ADR-033）语义重复。分组归属一律以后端分组树为准。
  */
  import { useMemo, useState } from 'react'
- import { useTranslation } from 'react-i18next'
+ import { memo } from 'react'
+import { useTranslation } from 'react-i18next'
  import { Check, Pin, Search, SlidersHorizontal } from 'lucide-react'
 
  import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
+// MIME 常量放在共享模块：聊天框也要识别同一种拖拽。两处字面量一旦漂移
+// 会静默失配（表现为「拖了没反应」且无任何日志），故只留一处真源。
+import { SERVER_DRAG_MIME } from '@/lib/assistant/server-drag'
 import { instanceStatusLevel } from '@jianmanager/ui'
  import { Badge } from '@jianmanager/ui/components/badge'
 import {
@@ -119,8 +123,6 @@ const SORT_MODE_KEY = 'jm.sidebar.sortMode'
  * 自定义类型（而非 `text/plain`）：置顶区据此判断「这次拖的是服务器行」，
  * 不会把外部拖进来的文本/文件误当成置顶操作。值只放实例 id。
  */
-const SERVER_DRAG_MIME = 'application/x-jm-instance-id'
-
 function readStoredMode(): GroupMode {
   try {
     const value = localStorage.getItem(GROUP_MODE_KEY)
@@ -673,7 +675,7 @@ function PinnedZone({
 }
 
 /** 服务器行：状态点 + 名称；悬停出置顶按钮与缩略信息卡。 */
-function ServerRow({
+function ServerRowImpl({
   row,
   nodeLabel,
   pinned,
@@ -801,6 +803,29 @@ function ServerRow({
     </div>
   )
 }
+
+/**
+ * 侧边栏行记忆化。
+ *
+ * 【为什么】排序点击走 `navigate()` 改 URL，路由上下文变化会让整棵树（含侧边栏）重渲染；
+ * 此前每次重渲染都重建全部行：实测一次排序里 `ServerRow` 渲染 189 次（27 行 × 7 次），
+ * 叠加每行一个 Radix `HoverCard`（Popper 上下文）后单次交互出现 1~2s 的主线程阻塞。
+ * 比较策略同 `InstanceRowView`：数据参与比较，每帧新建的闭包与 Map 按内容判断。
+ */
+const ServerRow = memo(ServerRowImpl, (a, b) => {
+  if (a.row !== b.row) return false
+  if (a.nodeLabel !== b.nodeLabel) return false
+  if (a.pinned !== b.pinned) return false
+  if (a.indent !== b.indent) return false
+  if (a.draggable !== b.draggable) return false
+  // metrics 是整表共享的 Map，引用每次轮询都会变；行只关心自己那条快照。
+  if (a.metrics !== b.metrics) {
+    // Map 的键是实例 uuid（不是数值 id），行只关心自己那条快照。
+    const uuid = a.row.kind === 'instance' ? a.row.inst.uuid : a.row.snap.uuid
+    if (a.metrics.get(uuid) !== b.metrics.get(uuid)) return false
+  }
+  return true
+})
 
 /**
  * 悬停预览卡：**侧栏行上不再显示的细节全在这里**——实时指标（CPU / 内存 / 玩家 / TPS / 心跳）

@@ -17,10 +17,13 @@ export default function InstanceBatchBar({
   selected,
   onClear,
   onRetainFailed,
+  onInvert,
 }: {
   selected: BatchSelectedInstance[]
   onClear: () => void
   onRetainFailed: (ids: number[]) => void
+  /** 反选当前可见集合。 */
+  onInvert?: () => void
 }) {
   const batch = useInstanceBatch()
 
@@ -28,6 +31,7 @@ export default function InstanceBatchBar({
     <InstanceBatchBarView
       selected={selected}
       onClear={onClear}
+      onInvert={onInvert}
       onRetainFailed={onRetainFailed}
       onRun={(payload) => batch.mutateAsync(payload)}
       notify={(kind, message) => {

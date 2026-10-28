@@ -86,10 +86,13 @@ describe('InstancesPage 分组树表（FR-452）', () => {
     【契约变更·本轮】region 维度不再产出分组头。
     大区是虚拟分区（由 `region:` 标签推导），没有独立实体；做成「大区头 → 小区头 → 成员」
     两级嵌套后，真正的信息被两层组头压到屏幕下方，而组头的计数/健康带又与卡片/行自身重复。
-    现在改为平铺 + 每行「大区 · 小区」列承载归属，故原「两级折叠」断言换成「无组头 + 有归属列」。
+    现在改为平铺 + 每行「区域」列承载归属，故原「两级折叠」断言换成「无组头 + 有归属列」。
     这不是缺陷，是有意取舍：折叠能力保留给真实层级（节点 / 环境 / 组织分组等）。
+
+    【列名与格式·本轮】该列表头由「大区 · 小区」改名为「区域」，行内归属改为
+    `大区/小区`（大区加粗、斜杠分隔），不再是 `r1 · z1` 纯文本。
   */
-  it('region 维度：不做分组层级，改为平铺并在「大区 · 小区」列承载归属', async () => {
+  it('region 维度：不做分组层级，改为平铺并在「区域」列承载归属', async () => {
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=region' })
 
     const table = await screen.findByTestId('instances-table-virtual')
@@ -100,9 +103,13 @@ describe('InstancesPage 分组树表（FR-452）', () => {
     expect(within(table).queryAllByTestId('instances-group-row')).toHaveLength(0)
     expect(within(table).queryAllByTestId('instances-group-toggle')).toHaveLength(0)
 
-    // 大区·小区改由每行首列承载（devmock 的实例带 region:r1 / zone:z1 标签）。
-    expect(within(table).getByText('大区 · 小区')).toBeInTheDocument()
-    expect(within(table).getAllByText(/r1 · z1/).length).toBeGreaterThan(0)
+    // 大区/小区改由每行「区域」列承载（devmock 的实例带 region:r1 / zone:z1 标签）。
+    expect(within(table).getByText('区域')).toBeInTheDocument()
+    // 同一格里是大区 + 「/」+ 小区：取大区文本的父元素核验整格内容。
+    const zoneCells = within(table)
+      .getAllByText('r1', { exact: true })
+      .map((el) => el.parentElement?.textContent)
+    expect(zoneCells).toContain('r1/z1')
   })
 
   it('折叠态可从 URL 恢复（深链 ?collapsed=）', async () => {

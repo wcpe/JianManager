@@ -12,31 +12,17 @@ import {
   INSTANCE_EXPANDED_ROW_HEIGHT,
   INSTANCE_ROW_HEIGHT,
 } from '@/components/views/instances/InstanceRowView'
-import { INSTANCE_GROUP_ROW_HEIGHT } from '@/components/views/instances/VirtualizedInstanceTables'
 import InstancesPage from './InstancesPage'
 
-/**
- * 展开使该实例「项」在虚拟模型里增加的高度 = 追加的后端摘要行高。
- * 主行仍在，故增加量就是追加行的高度本身（不是它的差值）。
- */
-const EXPANDED_ROW_EXTRA = INSTANCE_EXPANDED_ROW_HEIGHT
-
-/**
- * 虚拟表「内容总高」（DOM 侧）：已渲染各行（含窗口上/下占位行）声明高度之和。
- *
- * 该值恒等于虚拟模型的总高，且与当前窗口落在哪一段无关——占位行的高度取自 `sizes` 的前缀和，
- * 数据行的高度就是各自的 `sizes`。因此「展开前后的差值」可以直接断言展开行是否被计入模型：
- * 任何一处漏算都会让差值不再是 `EXPANDED_ROW_EXTRA`。
- *
- * 行高统一从行盒读（占位行的高度写在单元格上，故行盒缺省时回落取首格）。
- */
-function virtualContentHeight(surface: HTMLElement): number {
-  const px = (el: Element | null | undefined) =>
-    Number.parseFloat((el as HTMLElement | null)?.style.height ?? '') || 0
-  return [...surface.querySelectorAll('tbody tr')].reduce(
-    (sum, row) => sum + (px(row) || px(row.querySelector('td'))),
-    0,
-  )
+/** 最小 DataTransfer 桩：jsdom 不实现拖拽数据的读写，这里只满足 setData/getData 调用。 */
+function makeDataTransfer() {
+  const store = new Map<string, string>()
+  return {
+    setData: (k: string, v: string) => void store.set(k, v),
+    getData: (k: string) => store.get(k) ?? '',
+    effectAllowed: '',
+    dropEffect: '',
+  }
 }
 
 /**
@@ -54,7 +40,12 @@ beforeEach(() => {
   )
 })
 
-/** 切到列表视图（默认卡片视图会按 running 拉 /instances/:id/metrics——它域，避免触发）。 */
+/**
+ * 切到列表视图。
+ *
+ * 列表自 FR-452 起已是默认视图，故这里通常只是「确认已在列表」的一次点击（幂等）；
+ * 保留它是因为正文用例仍是从默认入口进入，写法不必随默认值变化。
+ */
 async function switchToListView(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: '列表视图' }))
 }
@@ -84,6 +75,13 @@ function searchQueries(urls: string[]): string[] {
     .map((url) => new URL(url).searchParams.get('q') ?? '')
 }
 
+/*
+  【文件级超时】本文件每个用例都渲染整页 + 1000+ 条种子实例（jsdom 下单次渲染 1.5~8s，
+  见各用例实测耗时），默认 10s 在并行跑多文件或机器有负载时会随机超时——超时来自渲染量，
+  不是断言问题。故整文件放宽到 30s；断言本身不变，单个用例要更严格时再就地覆写。
+*/
+vi.setConfig({ testTimeout: 30_000 })
+
 describe('InstancesPage（mock 假后端）', () => {
   it('渲染种子实例（名称可见）', async () => {
     // FR-452：默认视图改为分组树表 + region 维度，故显式请求平铺以断言「实例名可见」。
@@ -97,13 +95,20 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.getByText('creative-1')).toBeInTheDocument()
   })
 
-  it('1000+ mock 实例下卡片视图只渲染可视窗口', async () => {
+  /*
+    【实现变更·本轮】列表改服务端分页后，卡片视图的行模型只剩**当前页**（每页 50 条），
+    不再按 1000+ 全集建模。原断言「容器 totalCount ≥ 1000」表达的是「千条也只渲染可视窗口」，
+    现改为「容器只承载当前分页、挂载卡片数不超过一页」——守的仍是「不一次铺满千条」这件事。
+  */
+  it('卡片视图只承载当前分页，不一次铺满 1000+ 实例', async () => {
     renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
 
     const surface = await screen.findByTestId('instances-card-virtual')
-    expect(Number(surface.dataset.totalCount)).toBeGreaterThanOrEqual(1000)
+    const rows = Number(surface.dataset.totalCount)
+    expect(rows).toBeGreaterThan(0)
+    expect(rows).toBeLessThanOrEqual(50)
     expect(await screen.findByText('survival-1')).toBeInTheDocument()
-    expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThan(80)
+    expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThanOrEqual(50)
   })
 
   /**
@@ -348,35 +353,35 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(checkbox).toHaveAccessibleName(/已加载 \d+ \/ 共 \d+/)
   })
 
-  it('返回列表时恢复虚拟列表滚动位置', async () => {
-    const route = '/instances?view=list'
-    const first = renderWithProviders(<InstancesPage />, { route })
+  /**
+   * 返回列表时停在上次翻到的那一页。
+   *
+   * 【实现变更·本轮】列表改服务端分页、位置由 URL 的 `page` 承载，不再有滚动位置恢复
+   * （原实现用 `useStoredVirtualScroll` 把 scrollTop 存进 sessionStorage）。
+   * 原两个用例（「恢复滚动位置」「滚动容器归零不清掉待恢复位置」）合并为本用例：
+   * 语义从「恢复到某个像素」变成「恢复到某一页」，且「浏览器离开路由时把滚动容器归零」
+   * 这一事件不得把页码打回首页——这条守的仍是同一个回归：非用户意图的滚动不该改变位置。
+   */
+  it('返回列表时停在上次翻到的分页（位置由 URL 的 page 承载）', async () => {
+    const user = userEvent.setup()
+    const first = renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
     const surface = await screen.findByTestId('instances-table-virtual')
-    surface.scrollTop = 176
-    fireEvent.scroll(surface)
-    first.unmount()
 
-    renderWithProviders(<InstancesPage />, { route })
-    const restored = await screen.findByTestId('instances-table-virtual')
-    await waitFor(() => expect(restored.scrollTop).toBe(176))
-  })
-
-  it('路由切换时浏览器把滚动容器归零也不会清掉待恢复位置', async () => {
-    const route = '/instances?view=list'
-    const first = renderWithProviders(<InstancesPage />, { route })
-    const surface = await screen.findByTestId('instances-table-virtual')
-    surface.scrollTop = 176
-    fireEvent.scroll(surface)
+    // 翻到第 2 页：位置写进 URL。
+    await user.click(screen.getByRole('button', { name: '下一页' }))
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('page')).toBe('2'))
 
     // 真实浏览器在离开列表路由时可能把内层滚动容器先归零并触发 scroll；
-    // 该归零不是用户主动滚回顶部，不能删除已经保存的返回位置。
+    // 该归零不是用户主动翻页，不能把页码重置回首页。
     surface.scrollTop = 0
     fireEvent.scroll(surface)
+    expect(new URLSearchParams(window.location.search).get('page')).toBe('2')
     first.unmount()
 
-    renderWithProviders(<InstancesPage />, { route })
-    const restored = await screen.findByTestId('instances-table-virtual')
-    await waitFor(() => expect(restored.scrollTop).toBe(176))
+    // 重新进入列表（深链同一 page）→ 分页条仍停在第 2 页。
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none&page=2' })
+    await screen.findByTestId('instances-table-virtual')
+    await waitFor(() => expect(screen.getByRole('button', { name: '2' })).toHaveAttribute('aria-current', 'page'))
   })
 
   it('分组列表视图使用单个虚拟表，不为每组重复表头', async () => {
@@ -431,6 +436,14 @@ describe('InstancesPage（mock 假后端）', () => {
 
     await user.click(within(row).getByRole('button', { name: '启动' }))
 
+    /*
+      启动现在要二次确认（本轮新增）：点击行内按钮只弹出确认框，不发请求。
+      断言确认框出现、并在确认后才联动——这也顺带把「误点不会直接启服」钉成回归测试。
+    */
+    const startDialog = await screen.findByRole('dialog')
+    expect(within(startDialog).getByText(/启动实例「lobby-proxy」/)).toBeInTheDocument()
+    await user.click(within(startDialog).getByRole('button', { name: '启动' }))
+
     // 启动后假后端置 RUNNING，列表失效重拉 → 该行主操作切换为「停止」。
     await waitFor(() => {
       const updated = screen.getByText('lobby-proxy').closest('tr') as HTMLElement
@@ -447,50 +460,75 @@ describe('InstancesPage（mock 假后端）', () => {
     const row = (await screen.findByText('survival-1')).closest('tr') as HTMLElement
     await user.click(within(row).getByRole('button', { name: '停止' }))
 
+    // 停止同样要二次确认：确认后才真正下发停止请求。
+    const stopDialog = await screen.findByRole('dialog')
+    expect(within(stopDialog).getByText(/停止实例「survival-1」/)).toBeInTheDocument()
+    await user.click(within(stopDialog).getByRole('button', { name: '停止' }))
+
     await waitFor(() => {
       const updated = screen.getByText('survival-1').closest('tr') as HTMLElement
       expect(within(updated).getByRole('button', { name: '启动' })).toBeInTheDocument()
     })
   })
 
-  it('展示「已加载/共」计数与显式「加载更多」按钮（FR-235 可供性）', async () => {
+  /**
+   * 分页条给出「已加载 / 共」与页码可供性（FR-235）。
+   *
+   * 【实现变更·本轮】列表改服务端分页后不再有「加载更多」按钮：翻页由分页条的
+   * 上一页 / 页码 / 下一页承担，计数文案也并入同一条分页条（原来它单独占一行）。
+   * 断言因此改为「计数含页码上下文 + 首页上一页禁用 + 下一页可用且能翻页」。
+   */
+  it('分页条给出「已加载/共」计数与上一页/下一页（FR-235 可供性）', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<InstancesPage />, { route: '/instances' })
-    await switchToListView(user)
+    renderWithProviders(<InstancesPage />, { route: '/instances?groupBy=none' })
 
-    // 计数文本：已加载首页 < 总数（1000+ seed），故计数与加载更多按钮均出现。
+    // 计数文本：首屏只加载首页，故已加载 < 总数（1000+ seed）。
     const count = await screen.findByTestId('instances-loaded-count')
-    // 计数文案「已加载 N / 共 M」（FR-235 可供性）。
-    expect(count.textContent).toMatch(/已加载 \d+ \/ 共 \d+/)
+    expect(count.textContent).toMatch(/已加载 \d+ \/ 共 \d+ 条，第 1 \/ \d+ 页/)
 
-    const loadMore = screen.getByTestId('instances-load-more')
-    expect(loadMore).toBeInTheDocument()
+    // 首页：上一页禁用（无处可退），下一页可用（还有后续页）。
+    const prev = screen.getByRole('button', { name: '上一页' })
+    const next = screen.getByRole('button', { name: '下一页' })
+    expect(prev).toBeDisabled()
+    expect(next).toBeEnabled()
 
-    // 点击加载更多 → 追加下一页 → 已加载数增加。
-    const loadedBefore = Number(count.textContent?.match(/已加载 (\d+)/)?.[1] ?? '0')
-    await user.click(loadMore)
-    await waitFor(() => {
-      const after = Number(
-        screen.getByTestId('instances-loaded-count').textContent?.match(/已加载 (\d+)/)?.[1] ?? '0',
-      )
-      expect(after).toBeGreaterThan(loadedBefore)
-    })
+    // 点击下一页 → 当前页前进，计数与页码按钮同步。
+    await user.click(next)
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('page')).toBe('2'))
+    await waitFor(() =>
+      expect(screen.getByTestId('instances-loaded-count').textContent).toContain('第 2 / '),
+    )
+    expect(screen.getByRole('button', { name: '2' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('button', { name: '上一页' })).toBeEnabled()
   })
 
-  it('分组视图标注「仅当前已加载页」（FR-235 可供性）', async () => {
+  /**
+   * 分组视图的作用域声明（FR-235 可供性）。
+   *
+   * 【实现变更·本轮】原计数行会追加「（分组仅含当前已加载页）」后缀；分页条合并后
+   * 该后缀被去掉，作用域改由「已加载 N / 共 M 条，第 x / y 页」直接表达——
+   * N < M 即说明分组头的成员计数只覆盖当前页，无需再加一句提示。
+   */
+  it('分组视图的作用域由分页计数直接表达（未加载全量）', async () => {
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=node' })
-    await screen.findByTestId('instances-table-virtual')
+    const table = await screen.findByTestId('instances-table-virtual')
 
     const count = await screen.findByTestId('instances-loaded-count')
-    // 分组下追加「（分组仅含当前已加载页）」标注（FR-235 可供性）。
-    expect(count.textContent).toContain('（分组仅含当前已加载页）')
+    expect(count.textContent).toMatch(/已加载 \d+ \/ 共 \d+ 条，第 \d+ \/ \d+ 页/)
+    const loaded = Number(/已加载 (\d+)/.exec(count.textContent ?? '')?.[1])
+    const total = Number(/共 (\d+)/.exec(count.textContent ?? '')?.[1])
+    // 已加载只是全量的一个分页：用户不会把分组头的计数误读成「全库统计」。
+    expect(loaded).toBeLessThan(total)
+
+    // 分组头照常渲染（node 是真实层级，不随分页改动）。
+    expect(within(table).getAllByTestId('instances-group-row').length).toBeGreaterThan(0)
   })
 
   it('注入 500 → 列表不渲染任何种子实例（错误态非崩溃）', async () => {
     mockInject('get', '/instances/search', { kind: 'status', status: 500 })
-    const user = userEvent.setup()
-    renderWithProviders(<InstancesPage />, { route: '/instances' })
-    await switchToListView(user)
+    // 显式用平铺视图：分组视图（groupBy 非 none）下表格拿到的是 treeRows，空表时不渲染
+    // 空态文案（见交付说明中记录的产品疑点），而本用例要断言的正是「空态文案 + 无种子行」。
+    renderWithProviders(<InstancesPage />, { route: '/instances?groupBy=none' })
 
     // 列表查询失败 → 空态文案出现，且不渲染任何种子实例行。
     expect(await screen.findByText('暂无实例')).toBeInTheDocument()
@@ -498,110 +536,113 @@ describe('InstancesPage（mock 假后端）', () => {
   })
 
   /**
-   * proxy 行的内联后端摘要（展开时追加的那一个 `<tr>`）必须计入虚拟高度模型（平铺表）。
+   * proxy 行的内联后端摘要（展开时追加的那一个 `<tr>`）。
    *
-   * 展开是在同一个虚拟「项」下**追加一个 `<tr>`**：虚拟窗口若只按「1 项 = 实例行高」计算，
-   * 这段高度完全不计入占位，其后所有行的位置与滚动条长度都会漂移。
-   * 断言用「内容总高 = 模型总高」这一与窗口无关的量：模型总高必须恰好多出一个追加行，
-   * 且追加行盒自己也声明为该高度（声明值与模型同源）。
+   * 【实现变更·本轮】列表改服务端分页后不再有虚拟高度模型，故原用例的
+   * 「展开行须计入模型总高」判据已无对象。保留的是它真正要守的产品行为：
+   * ① 点「管理后端」在代理行**下方**追加一行摘要；② 该行高度声明为导出常量
+   * （行盒与 `INSTANCE_EXPANDED_ROW_HEIGHT` 同源，不随后端条数变形）；
+   * ③ 摘要行的 colSpan 跟随当前列数（列设置改列数时仍不错位）；④ 再次点击可收起。
    */
-  it('展开 proxy 后端摘要：展开行计入虚拟高度模型（平铺表）', async () => {
+  it('展开 proxy 后端摘要：行下追加一行摘要，再次点击收起', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
     const surface = await screen.findByTestId('instances-table-virtual')
 
     // 「管理后端」切换按钮只出现在 proxy 行上；点第一个即可（其它 proxy 行的展开态与本断言无关）。
-    await user.click((await screen.findAllByRole('button', { name: '管理后端' }))[0])
+    const toggle = (await screen.findAllByRole('button', { name: '管理后端' }))[0]
+    await user.click(toggle)
+
     const expandedCell = await screen.findByText(/已注册后端|暂无已注册后端/)
     const expandedRow = expandedCell.closest('tr') as HTMLElement
     expect(expandedRow.style.height).toBe(`${INSTANCE_EXPANDED_ROW_HEIGHT}px`)
+    // 摘要行紧跟在代理主行之后（DOM 里确实是两个 <tr>，不是替换）。
+    expect(expandedRow.previousElementSibling?.querySelector('[aria-label="管理后端"]')).not.toBeNull()
+    // 列对齐：摘要格横跨整行（不少于表头实际列数，右侧不留空列）。
+    // 不写死具体数字：列数与列设置同源，未来调整列模型时这条断言不该跟着红。
+    const headCells = surface.querySelectorAll('thead th').length
+    const colSpan = Number(expandedCell.closest('td')?.getAttribute('colspan') ?? '0')
+    expect(colSpan).toBeGreaterThanOrEqual(headCells)
 
-    // 【关键】把窗口滚到展开行之后：此后展开行与追加行都不在 DOM 里（虚拟窗口已卸载它们），
-    // 「内容总高」若仍然涨出追加行的高度，就只可能来自模型的逐行高度——展开行真的被计入了。
-    // （只断言「展开后总高变大」是不够的：追加行本身就在窗口里时，它无论如何都会被算进 DOM。）
-    //
-    // 断言必须 waitFor：滚动位置由 `useVirtualRows` 的 onScroll 经 requestAnimationFrame
-    // 按帧合并后写入 metrics（见 `lib/shared/virtual-list.ts` 的「为什么必须按帧合并」），
-    // 同步断言读到的仍是滚动前的窗口——窗口还没动，展开行当然还在 DOM 里。
-    surface.scrollTop = 6000
-    fireEvent.scroll(surface)
+    // 再次点击 → 收起，摘要行从 DOM 消失。
+    await user.click(toggle)
     await waitFor(() =>
       expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0),
     )
-
-    // 平铺表每一项都是实例行，故模型总高 = N × 实例行高 + 追加行高。
-    const total = Number(surface.dataset.totalCount)
-    expect(virtualContentHeight(surface)).toBe(total * INSTANCE_ROW_HEIGHT + EXPANDED_ROW_EXTRA)
   })
 
   /**
-   * 同一判据在分组树表（组头 / 实例行 / 展开追加行三种高度共存）同样成立。
-   *
-   * 收敛到单个节点：树表的行模型 = 1 个组头行 + 该节点的全部实例行（全部已加载时才可精确推算），
-   * 于是模型总高可写成 `组头 + N × 实例行 + 追加行` 这一确定式。
+   * 分组树表下同一交互不得扰动行序：摘要行只插在成员行之后，组头与成员计数都不变。
    */
-  it('展开 proxy 后端摘要：展开行计入虚拟高度模型（分组树表）', async () => {
+  it('展开 proxy 后端摘要：分组树表的组头与行序不受影响', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=node&nodeId=1' })
     const surface = await screen.findByTestId('instances-table-virtual')
     expect(within(surface).getAllByTestId('instances-group-row').length).toBe(1)
+    const rowsBefore = surface.querySelectorAll('tbody tr').length
 
     await user.click((await screen.findAllByRole('button', { name: '管理后端' }))[0])
     await screen.findByText(/已注册后端|暂无已注册后端/)
 
-    // 同上：滚动位置经 rAF 合并后才进窗口模型，同步断言会读到未滚动的旧窗口。
-    surface.scrollTop = 3000
-    fireEvent.scroll(surface)
-    await waitFor(() =>
-      expect(surface.querySelectorAll(`tbody tr[style*="height: ${INSTANCE_EXPANDED_ROW_HEIGHT}px"]`)).toHaveLength(0),
-    )
-
-    const loaded = Number(/已加载 (\d+)/.exec(screen.getByTestId('instances-loaded-count').textContent ?? '')?.[1])
-    expect(loaded).toBeGreaterThan(0)
-    expect(virtualContentHeight(surface)).toBe(
-      INSTANCE_GROUP_ROW_HEIGHT + loaded * INSTANCE_ROW_HEIGHT + EXPANDED_ROW_EXTRA,
-    )
+    // 只多出一行（摘要行），组头仍在原位、仍只有 1 个。
+    expect(surface.querySelectorAll('tbody tr').length).toBe(rowsBefore + 1)
+    expect(within(surface).getAllByTestId('instances-group-row').length).toBe(1)
+    expect(surface.querySelectorAll('tbody tr')[0]).toHaveAttribute('data-testid', 'instances-group-row')
   })
 
   /**
-   * 列设置（页面重构件）：取消勾选「心跳」→ 表头与行内心跳格同步消失；选择持久化到 jm.instances.columns。
-   * 菜单为 modal（打开期间外部 aria-hidden），操作后先关闭再断言页面主体。
+   * 列设置（页面重构件）：取消勾选「类型 / 角色 / 标签」→ 表头「身份」列与行内身份格同步消失；
+   * 选择持久化到 jm.instances.columns。菜单为 modal（打开期间外部 aria-hidden），操作后先关闭再断言页面主体。
+   *
+   * 【实现变更·本轮】metrics / active / heartbeat 三列已合并为单一的「健康度」列——表头里
+   * 不再有独立的「心跳」「实时指标」，三项开关合并控制同一个健康度列（故本用例顺带断言
+   * 「健康度」只出现一次、且不存在「心跳」「实时指标」表头）。原用例（勾选心跳 → 出现心跳格
+   * → 取消 → 心跳格消失）已无对象，改为断言「身份列（类型/角色/标签）随开关同步消失」——
+   * 守的仍是同一份能力：列设置驱动表头与行内同步变化，并写入 localStorage。
    */
-  it('列设置：隐藏心跳列后表头与行内同步消失，并持久化', async () => {
+  it('列设置：隐藏身份列后表头与行内同步消失，并持久化', async () => {
     // 只清本特性的键：`localStorage.clear()` 会连登录 token 一起清掉（请求全 401、数据不落）。
     localStorage.removeItem('jm.instances.columns')
     localStorage.removeItem('jm.instances.views')
     const user = userEvent.setup()
-    renderWithProviders(<InstancesPage />, { route: '/instances?view=list' })
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
     await screen.findByTestId('instances-table-virtual')
 
-    /*
-      【缺省变更·本轮】心跳列不再默认可见（默认只开类型/角色/标签，避免 5 列全开时
-      表格横向溢出、把「状态/操作」挤出视口）。故用例先经「显示 › 列」把它打开，
-      再验证「取消勾选后表头与行内同步消失」——断言的仍是列设置的联动与持久化。
-    */
-    await user.click(screen.getByRole('button', { name: '显示' }))
-    await user.click(screen.getByRole('menuitemcheckbox', { name: '心跳' }))
-    await user.keyboard('{Escape}')
-
-    // 指标批量取数有 300ms 防抖 + 请求往返：放宽到 5s，避免与默认 1s 等待赛跑。
-    await waitFor(() => expect(screen.getAllByTestId('instance-heartbeat').length).toBeGreaterThan(0), {
-      timeout: 5000,
-    })
-
-    await user.click(screen.getByRole('button', { name: '显示' }))
-    await user.click(screen.getByRole('menuitemcheckbox', { name: '心跳' }))
-    await user.keyboard('{Escape}')
-
-    await waitFor(() => expect(screen.queryAllByTestId('instance-heartbeat')).toHaveLength(0))
+    // 缺省可见类型/角色/标签（`DEFAULT_COLUMNS`）→ 表头有「身份」列；
+    // 健康度列因缺省开启实时指标 / 活跃度而存在，且**只有一列**（三项合并）。
     const thead = document.querySelector('thead') as HTMLElement
+    expect(within(thead).getByText('身份')).toBeInTheDocument()
+    expect(within(thead).getAllByText('健康度')).toHaveLength(1)
     expect(within(thead).queryByText('心跳')).toBeNull()
-    expect(JSON.parse(localStorage.getItem('jm.instances.columns') ?? '[]')).not.toContain('heartbeat')
+    expect(within(thead).queryByText('实时指标')).toBeNull()
+
+    const cellsBefore = (screen.getByText('survival-1').closest('tr') as HTMLElement).querySelectorAll('td').length
+
+    // 逐项取消勾选类型 / 角色 / 标签（三项合并成一个「身份」列，全关才会整列消失）。
+    for (const label of ['类型', '角色', '标签']) {
+      await user.click(screen.getByRole('button', { name: '显示' }))
+      await user.click(screen.getByRole('menuitemcheckbox', { name: label }))
+      await user.keyboard('{Escape}')
+    }
+
+    await waitFor(() => expect(within(document.querySelector('thead') as HTMLElement).queryByText('身份')).toBeNull())
+    // 行内同步少一格（身份格），健康度格不受影响。
+    const cellsAfter = (screen.getByText('survival-1').closest('tr') as HTMLElement).querySelectorAll('td').length
+    expect(cellsAfter).toBe(cellsBefore - 1)
+    expect(within(document.querySelector('thead') as HTMLElement).getAllByText('健康度')).toHaveLength(1)
+
+    // 持久化：只剩缺省的 metrics / active（稳定序比较）。
+    const stored = JSON.parse(localStorage.getItem('jm.instances.columns') ?? '[]') as string[]
+    expect([...stored].sort()).toEqual(['active', 'metrics'])
   })
 
   /**
    * 保存视图（应用侧）：菜单列出已存视图；应用后 URL 恢复快照（分组/视图模式随 URL 同步 effect 落位），
-   * 列集合同步恢复（保存时未含的「实时指标」不得出现）。
+   * 列集合同步恢复（保存时未含的列不得被勾上）。
+   *
+   * 【实现变更·本轮】metrics / active / heartbeat 已合并为单一「健康度」列，表头里没有
+   * 「心跳」「实时指标」可断言了。列集合的恢复改用**列设置菜单的勾选态**核验——
+   * 那才是列集合的真身（表头只是它的投影），且不受列合并影响。
    */
   it('保存视图：应用已存视图恢复 URL 与列集合', async () => {
     localStorage.removeItem('jm.instances.columns')
@@ -621,12 +662,19 @@ describe('InstancesPage（mock 假后端）', () => {
     await waitFor(() => expect(window.location.search).toContain('groupBy=node'))
     expect(window.location.search).toContain('view=card')
 
-    // 切回列表视图核对列集合：心跳在、实时指标不在。
+    // 切回列表视图核对列集合：快照里的心跳被勾上，快照外的实时指标 / 活跃度不得被勾上。
     await user.click(await screen.findByRole('button', { name: '列表视图' }))
     await screen.findByTestId('instances-table-virtual')
+    await user.click(screen.getByRole('button', { name: '显示' }))
+    expect(screen.getByRole('menuitemcheckbox', { name: '心跳' })).toBeChecked()
+    expect(screen.getByRole('menuitemcheckbox', { name: '实时指标' })).not.toBeChecked()
+    expect(screen.getByRole('menuitemcheckbox', { name: '活跃度 (TPS / 在线)' })).not.toBeChecked()
+    await user.keyboard('{Escape}')
+
+    // 表头投影：心跳在集合里 → 合并后的健康度列可见；身份列同样可见。
     const thead = document.querySelector('thead') as HTMLElement
-    expect(within(thead).getByText('心跳')).toBeInTheDocument()
-    expect(within(thead).queryByText('实时指标')).toBeNull()
+    expect(within(thead).getByText('健康度')).toBeInTheDocument()
+    expect(within(thead).getByText('身份')).toBeInTheDocument()
   })
 
   /** 保存视图（保存侧）：命名后落 jm.instances.views，快照含当前 search。 */
@@ -663,5 +711,193 @@ describe('InstancesPage（mock 假后端）', () => {
     const row = surface.querySelector('tbody tr[data-attention="true"]') as HTMLElement
     expect(row.className).toContain('bg-status-danger/5')
     expect(row.style.height).toBe(`${INSTANCE_ROW_HEIGHT}px`)
+  })
+
+  /**
+   * 表头拖拽换位（用户提出的需求）。
+   *
+   * 断言走「表头真实顺序 + localStorage 落盘」两条：
+   * 只看顺序会漏掉「刷新后失效」，只看存储会漏掉「顺序没真的应用到 DOM」。
+   */
+  it('拖拽表头换位：列顺序变化并持久化', async () => {
+    const user = userEvent.setup()
+    localStorage.removeItem('jm.instances.columnOrder')
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+    const surface = await screen.findByTestId('instances-table-virtual')
+
+    const headers = () =>
+      [...surface.querySelectorAll('thead th')].map((th) => th.textContent?.trim() ?? '')
+
+    // 初始顺序：区域在名称左边。
+    const before = headers()
+    expect(before.indexOf('区域')).toBeLessThan(before.indexOf('名称'))
+
+    const regionTh = surface.querySelector('thead th[data-column-key="region"]') as HTMLElement
+    const nameTh = surface.querySelector('thead th[data-column-key="name"]') as HTMLElement
+    expect(regionTh).not.toBeNull()
+    expect(nameTh).not.toBeNull()
+
+    // 把「区域」拖到「名称」上 → 区域插到名称之后（moveColumn 的语义）。
+    fireEvent.dragStart(regionTh, { dataTransfer: makeDataTransfer() })
+    fireEvent.dragOver(nameTh, { dataTransfer: makeDataTransfer() })
+    fireEvent.drop(nameTh, { dataTransfer: makeDataTransfer() })
+
+    await waitFor(() => {
+      const after = headers()
+      expect(after.indexOf('名称')).toBeLessThan(after.indexOf('区域'))
+    })
+
+    /*
+      【必须同时断言行内顺序】只断表头会漏掉最严重的那种错位：表头按新顺序、行仍按旧顺序。
+      真实踩过——行组件的 memo 比较器漏了 columnOrder，表头变了行没变，整表列错位，
+      而当时「表头 + localStorage」两条断言全绿。
+      这里用「名称列显示实例名、区域列显示 r1/z1」把顺序钉死。
+    */
+    const firstRowCells = [...(surface.querySelector('tbody tr') as HTMLElement).querySelectorAll('td')]
+      .map((td) => td.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+    const nameIdx = headers().findIndex((h) => h === '名称')
+    const regionIdx = headers().findIndex((h) => h === '区域')
+    // 表头顺序与行内顺序必须一致：名称表头下是实例名，区域表头下是 r1/z1。
+    expect(firstRowCells[nameIdx]).toMatch(/survival-1|lobby-proxy/)
+    expect(firstRowCells[regionIdx]).toMatch(/r\d+\/z\d+/)
+
+    // 落盘：刷新后仍应保持用户拖过的顺序。
+    const stored = JSON.parse(localStorage.getItem('jm.instances.columnOrder') ?? '[]')
+    expect(stored.indexOf('name')).toBeLessThan(stored.indexOf('region'))
+  })
+
+  it('钉住的列不可拖拽：全选框列与操作列没有 draggable', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+    const surface = await screen.findByTestId('instances-table-virtual')
+    const selectTh = surface.querySelector('thead th[data-column-key]')
+    // 首列是复选框列（钉住，不可拖）；可拖的列才带 draggable 属性。
+    expect(selectTh?.getAttribute('data-column-key')).toBe('select')
+    expect(selectTh?.getAttribute('draggable')).toBeNull()
+  })
+
+  /**
+   * 行右键菜单（用户提出的需求）。
+   *
+   * 守三件事：右键弹出、菜单里给出与「⋯」一致的动作、Esc 关闭后可再次打开。
+   */
+  it('右键实例行弹出操作菜单，Esc 可关闭', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+    await screen.findByTestId('instances-table-virtual')
+
+    const row = (await screen.findByText('survival-1')).closest('tr') as HTMLElement
+    fireEvent.contextMenu(row, { clientX: 120, clientY: 200 })
+
+    const menu = await screen.findByTestId('instance-context-menu')
+    expect(menu).toBeInTheDocument()
+    // 菜单里出现实例名作为标题，且至少给出编辑配置与删除两个动作。
+    expect(within(menu).getByText('survival-1')).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: /编辑配置/ })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: /删除/ })).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByTestId('instance-context-menu')).not.toBeInTheDocument())
+  })
+
+  it('右键菜单是全表单例：不同行右键后仍只有一个菜单在文档里', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+    await screen.findByTestId('instances-table-virtual')
+
+    const rows = screen.getAllByText(/survival-1|lobby-proxy/)
+    fireEvent.contextMenu(rows[0].closest('tr') as HTMLElement, { clientX: 100, clientY: 100 })
+    await screen.findByTestId('instance-context-menu')
+
+    expect(screen.getAllByTestId('instance-context-menu')).toHaveLength(1)
+  })
+
+  /**
+   * 卡片视图的启停二次确认（用户追问「卡片模式呢」时发现的缺口）。
+   *
+   * 此前卡片接线层自己 `useStartInstance().mutate()`，与列表视图各写一条路径：
+   * 列表有了确认、卡片仍是一点就执行——同一台实例在两种视图下安全语义不一致。
+   * 这条用例把「卡片也必须先确认」钉住。
+   */
+  it('卡片视图：点停止先弹二次确认，取消不发动', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
+
+    /*
+      必须把查找限定在**卡片内部**：页面工具栏也有「停止」筛选按钮，
+      全局 findAllByRole('button', { name: /停止/ }) 会先命中它，点出的是筛选而不是动作。
+      （这条用例初版就是这么写错的，表现为「点了没弹窗」。）
+    */
+    const cards = await screen.findAllByTestId('instance-worktable-card')
+    const runningCard = cards.find((card) =>
+      within(card).queryByRole('button', { name: '停止' }) !== null,
+    )
+    expect(runningCard).toBeDefined()
+    await user.click(within(runningCard as HTMLElement).getByRole('button', { name: '停止' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/停止实例「.+」/)).toBeInTheDocument()
+
+    // 取消 → 关窗且不发动
+    await user.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  /**
+   * 卡片视图的右键菜单：与列表视图共用页面级单例。
+   * 此前卡片完全没有右键入口——同一台实例在列表能右键、在卡片不行。
+   */
+  it('卡片视图：右键弹出操作菜单', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
+
+    const cards = await screen.findAllByTestId('instance-worktable-card')
+    fireEvent.contextMenu(cards[0], { clientX: 200, clientY: 200 })
+
+    const menu = await screen.findByTestId('instance-context-menu')
+    expect(menu).toBeInTheDocument()
+    // 仍然是全表单例
+    expect(screen.getAllByTestId('instance-context-menu')).toHaveLength(1)
+  })
+
+  /**
+   * 卡片视图必须有分页条并能真翻页（用户追问「卡片模式」时发现的缺陷）。
+   *
+   * 数据早已改成服务端分页（每页 50 条），但卡片视图走的是虚拟分组渲染路径：
+   * 既没有分页条、`onNeedMore` 也是空实现，滚到底不加载——第 2 页及之后的实例
+   * 在卡片视图里**完全够不着**。这条用例把「卡片视图也能翻页」钉住。
+   */
+  it('卡片视图：有分页条且能翻到下一页', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
+
+    // 分页条存在（此前卡片视图完全没有这个元素）
+    const summary = await screen.findByTestId('instances-loaded-count')
+    expect(summary).toBeInTheDocument()
+    expect(summary.textContent).toMatch(/第\s*1\s*\/\s*\d+\s*页/)
+
+    // 首页「上一页」禁用、「下一页」可用
+    expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled()
+    const next = screen.getByRole('button', { name: '下一页' })
+    expect(next).toBeEnabled()
+
+    // 翻页后 URL 与页码同步（与列表视图同一套语义）
+    await user.click(next)
+    await waitFor(() => {
+      expect(screen.getByTestId('instances-loaded-count').textContent).toMatch(/第\s*2\s*\/\s*\d+\s*页/)
+    })
+  })
+
+  /**
+   * 列设置在卡片视图下不出现：卡片没有「列」这一维度，留着就是无效控件。
+   */
+  it('卡片视图：不显示列设置项', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
+    await screen.findAllByTestId('instance-worktable-card')
+
+    // 打开「显示」菜单
+    const displayMenu = screen.getByRole('button', { name: /显示|筛选与分组/ })
+    await user.click(displayMenu)
+
+    // 列设置标题不应出现（列表视图下才会有）
+    expect(screen.queryByText(/列$/)).not.toBeInTheDocument()
   })
 })

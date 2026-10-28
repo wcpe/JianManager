@@ -127,3 +127,52 @@ describe('node list collapsed persistence', () => {
     expect(loadNodeListCollapsed(s)).toBe(false)
   })
 })
+
+/**
+ * 状态筛选（用户提出「节点多了要能把出问题的机器一把捞出来」）。
+ *
+ * 纯函数，所以能把「维护中」与「在线」的正交关系穷举清楚——
+ * 维护中的节点 status 仍是 1，若按 status 直接判，它会同时出现在「在线」与「维护中」里。
+ */
+describe('filterNodes：状态筛选', () => {
+  const mk = (over: Partial<NodeInfo>): NodeInfo =>
+    ({
+      id: 1,
+      uuid: 'u',
+      name: 'n',
+      host: '10.0.0.1',
+      status: 1,
+      maintenance: false,
+      ...over,
+    }) as NodeInfo
+
+  const online = mk({ id: 1, name: 'alpha' })
+  const offline = mk({ id: 2, name: 'beta', status: 0 })
+  const maint = mk({ id: 3, name: 'gamma', status: 1, maintenance: true })
+  const all = [online, offline, maint]
+
+  it('all：不过滤', () => {
+    expect(filterNodes(all, '', 'all')).toHaveLength(3)
+  })
+
+  it('offline：只留 status=0', () => {
+    expect(filterNodes(all, '', 'offline').map((n) => n.name)).toEqual(['beta'])
+  })
+
+  it('maintenance：只留维护中（即使它 status=1）', () => {
+    expect(filterNodes(all, '', 'maintenance').map((n) => n.name)).toEqual(['gamma'])
+  })
+
+  it('online：排除维护中（维护中语义已变，不该算「在线可用」）', () => {
+    expect(filterNodes(all, '', 'online').map((n) => n.name)).toEqual(['alpha'])
+  })
+
+  it('状态与搜索词是 AND', () => {
+    // 搜 'a'（alpha/gamma 都命中）但在 online 下只该留 alpha
+    expect(filterNodes(all, 'a', 'online').map((n) => n.name)).toEqual(['alpha'])
+  })
+
+  it('状态筛完再搜：无命中返回空', () => {
+    expect(filterNodes(all, 'beta', 'online')).toEqual([])
+  })
+})

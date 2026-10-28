@@ -30,11 +30,16 @@ export interface GenericConfigSegmentProps {
  * 复用应用侧注入的编辑器获得「schema 表单 / 原文文本」双模式与配置版本能力。
  * BC 的 `config.yml`（监听端口 / online_mode / servers）与原生二进制的配置文件走同一条路径。
  *
- * TODO(FR-449 §2.2.4)：BC `config.yml` 的「关键项面板」（监听端口 / online_mode /
- * servers / forced_hosts）目前依赖后端 `schema.BungeeCordYAMLModel` 的 schema 表单；
- * 但该 schema 仅覆盖 listeners[].host/max_players/ip_forward，且键名与 yaml 扁平解析器
- * （`parseFlatYAML` → 点号路径）不一致，故 servers/forced_hosts 等映射项无法结构化。
- * 待补：为 config.yml 提供覆盖关键项且键名与解析器对齐的 schema（或专用关键项表单）。
+ * FR-449 §2.2.4 收口说明：BC `config.yml` 的表单覆盖「确实是标量」的关键项
+ * （listeners.host / max_players / motd / query_port、ip_forward、online_mode、
+ * connection_throttle[_limit]），键名与 `parseFlatYAML` 的点号路径精确对齐。
+ *
+ * `servers` 与 `permissions.*` **有意不提供表单**，只能原文编辑：前者是「子服名 → 属性」的
+ * 映射、子服名由运维自定义无法穷举，后者是 `- 节点` 列表；两者都不是「一个键 → 一个标量」，
+ * 硬塞进表单只会渲染出真实配置里不存在的输入框，保存即覆盖掉整棵子树。子服拓扑请走拓扑页。
+ *
+ * 列表型的 `listeners.*` 仅在该列表**恰好一项**时可安全写入；多项时代码会返回明确错误
+ * 而不是替你猜改哪一个（见后端 `config_patch.go` 的 `yamlDescend`）。
  */
 export function GenericConfigSegment({ files, isLoading = false, renderEditor }: GenericConfigSegmentProps) {
   const { t } = useTranslation()

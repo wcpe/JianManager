@@ -4,14 +4,16 @@ import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 
 /**
- * 插件 / 玩家 / 经济 / 业务 / 探针域 mock handler（FR-206 域簇，照 spec §7 范式）。
+ * 插件 / 玩家 / 业务 / 探针域 mock handler（FR-206 域簇，照 spec §7 范式）。
  *
  * 覆盖端点：
  *   - 插件（@/api/plugins.ts）：列表 / 上传 / 删除 / 启用禁用切换 / 制品批量部署
  *   - 探针更新（@/api/probe.ts）：状态查询 / 推送
  *   - 玩家（@/api/players.ts）：在线列表 / 踢封解封 / 封禁记录 / 单后端白名单查改
- *   - 经济（@/api/economy.ts）：余额镜像 / 排行 / 业务事件流（流水）
  *   - 业务（@/api/business.ts）：能力清单 manifest / 业务命令下发
+ *
+ * FR-521：经济三个平台级只读端点（mirror / leaderboard / events）已随业务读接口退役一并删除，
+ * 此处不再 mock；业务通道仅保留 manifest 与 dispatch 两个透传端点。
  *
  * 字段严格匹配各 api 模块的 interface（payloadJson 等 JSON 字符串字段返回字符串，见全局记忆
  * 「JSON 字符串字段前端解析」）。受 requireAuth 保护——这些端点后端均要求 instance.* 权限。
@@ -85,7 +87,7 @@ interface WhitelistRow {
   players: string[]
 }
 
-/** 经济余额镜像行（匹配 @/api/economy.ts EconomyMirrorRow）。 */
+/** 经济余额镜像行（供业务下发的只读/写动作 mock 联动；平台侧无对应持久表，FR-521）。 */
 interface EconomyMirrorEntity {
   id: number
   nodeUuid: string
@@ -99,20 +101,6 @@ interface EconomyMirrorEntity {
   lastEntryType: string
   occurredAt: number
   updatedAt: string
-}
-
-/** 通用业务事件行（匹配 @/api/economy.ts BusinessEvent）；经济流水从 payloadJson 解析。 */
-interface BusinessEventEntity {
-  id: number
-  domain: string
-  dedupKey: string
-  action: string
-  nodeUuid: string
-  instanceUuid: string
-  operator?: string
-  payloadJson: string
-  occurredAt: number
-  createdAt: string
 }
 
 interface InventorySnapshotEntity {
@@ -198,36 +186,6 @@ const economyMirror = db<EconomyMirrorEntity>('economyMirror', () => [
     lastEntryType: 'DEPOSIT',
     occurredAt: 1_719_000_100_000,
     updatedAt: '2026-06-22T10:05:00Z',
-  },
-])
-
-const businessEvents = db<BusinessEventEntity>('businessEvents', () => [
-  {
-    id: 1,
-    domain: 'economy',
-    dedupKey: 'ledger-1001',
-    action: 'DEPOSIT',
-    nodeUuid: 'node-a',
-    instanceUuid: 'inst-1',
-    operator: 'admin',
-    payloadJson: JSON.stringify({
-      type: 'event',
-      event: 'economy.change',
-      domain: 'economy',
-      dedupKey: 'ledger-1001',
-      data: {
-        playerName: 'Steve',
-        currency: 'coin',
-        zoneId: '0',
-        entryType: 'DEPOSIT',
-        signedAmount: '100.00',
-        balanceAfter: '1000.00',
-        ledgerId: 'ledger-1001',
-        occurredAt: '1719000000000',
-      },
-    }),
-    occurredAt: 1_719_000_000_000,
-    createdAt: '2026-06-22T10:00:00Z',
   },
 ])
 
@@ -733,53 +691,6 @@ export const handlers = [
     return HttpResponse.json({ instanceId: id, available: true, players: next })
   }),
 
-  // ---------- 经济：镜像 / 排行 / 流水 ----------
-
-  // 余额镜像（按 player / currency 过滤，逐 node→zone 行）。平台级路径（无实例前缀，见 @/api/economy.ts）。
-  domainRoute('get', '/business/economy/mirror', (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const url = new URL(info.request.url)
-    const player = url.searchParams.get('player')
-    const currency = url.searchParams.get('currency')
-    return HttpResponse.json({
-      balances: economyMirror.list(
-        (r) => (!player || r.playerName === player) && (!currency || r.currency === currency),
-      ),
-    })
-  }),
-
-  // 某货币余额倒序 Top-N（旁路排行，从镜像派生）。平台级路径（无实例前缀）。
-  domainRoute('get', '/business/economy/leaderboard', (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const url = new URL(info.request.url)
-    const currency = url.searchParams.get('currency') || ''
-    const rows = economyMirror
-      .list((r) => r.currency === currency)
-      .sort((a, b) => Number(b.balance) - Number(a.balance))
-      .map((r, idx) => ({
-        rank: idx + 1,
-        playerName: r.playerName,
-        currency: r.currency,
-        nodeUuid: r.nodeUuid,
-        zoneId: r.zoneId,
-        balance: r.balance,
-      }))
-    return HttpResponse.json({ currency, rows })
-  }),
-
-  // 通用业务事件流（domain=economy 过滤后供前端解析经济流水）。平台级路径（无实例前缀）。
-  domainRoute('get', '/business/events', (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const url = new URL(info.request.url)
-    const domain = url.searchParams.get('domain')
-    return HttpResponse.json({
-      events: businessEvents.list((e) => !domain || e.domain === domain),
-    })
-  }),
-
   // ---------- 业务：manifest / 下发 ----------
 
   // 业务能力清单（JBIS 元查询）。
@@ -874,6 +785,43 @@ export const handlers = [
       available: true,
       output,
       error: '',
+    })
+  }),
+
+  // ---------- 业务域状态（FR-534） ----------
+
+  // 已注册业务域与健康状态：与 defaultManifest 的域集对齐（economy / inventory 两域，均可用）。
+  // **只渲染不解释**：这里回的字段就是 OpenAPI BusinessStatus / DomainStatus 的形态，
+  // 平台侧不解析 manifest 内容，DOM 用例要验降级/过期分支时用 mockInject 注入整份 body 覆盖。
+  domainRoute('get', '/instances/:id/business/status', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const nowSec = Math.floor(Date.now() / 1000)
+    return HttpResponse.json({
+      instanceId: id,
+      instanceName: 'mock-instance',
+      probeConnected: true,
+      fetchedAt: new Date().toISOString(),
+      stale: false,
+      domains: [
+        {
+          domain: 'economy',
+          available: true,
+          manifestDigest: 'a3f2b8c1d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f',
+          lastDispatchAt: nowSec - 120,
+          dispatchCount: 1523,
+          failureCount: 7,
+        },
+        {
+          domain: 'inventory',
+          available: true,
+          manifestDigest: 'b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3',
+          lastDispatchAt: nowSec - 600,
+          dispatchCount: 88,
+          failureCount: 0,
+        },
+      ],
     })
   }),
 ]

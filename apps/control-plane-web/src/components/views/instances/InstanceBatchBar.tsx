@@ -46,6 +46,11 @@ export interface InstanceBatchBarProps {
   selected: BatchSelectedInstance[]
   /** 操作完成后清空选择的回调。 */
   onClear: () => void
+  /**
+   * 反选（用户提出）：在当前可见集合内翻转选中状态。
+   * 省略时不渲染该按钮（例如调用方没有「可见集合」概念的场景）。
+   */
+  onInvert?: () => void
   /** 部分失败后仅保留失败实例的选择，供重试（FR-139）。 */
   onRetainFailed: (ids: number[]) => void
   /** 执行批量操作（外壳负责发请求与失效缓存），返回服务端结果。 */
@@ -66,6 +71,7 @@ export interface InstanceBatchBarProps {
 export default function InstanceBatchBar({
   selected,
   onClear,
+  onInvert,
   onRetainFailed,
   onRun,
   notify,
@@ -159,6 +165,12 @@ export default function InstanceBatchBar({
       <Button variant="ghost" size="sm" onClick={onClear} disabled={count === 0}>
         {t('instanceBatch.clear')}
       </Button>
+      {onInvert && (
+        /* 反选：不依赖「已选了几个」，空选时点它等于全选当前页，是有意义的入口。 */
+        <Button variant="ghost" size="sm" onClick={onInvert}>
+          {t('instanceBatch.invert', '反选')}
+        </Button>
+      )}
 
       <Separator orientation="vertical" className="mx-2 h-5" />
 

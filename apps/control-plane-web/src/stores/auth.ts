@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { decodeJwt } from '@/lib/auth/jwt'
+import { resetDraftScope, setDraftScopeUserId } from '@/lib/assistant/chat-draft'
 import { queryClient } from '@/lib/shared/query-client'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
@@ -62,6 +63,13 @@ interface AuthState {
   role: number | null
   /** 当前用户名（从 access token 解码），用于 UI 展示。 */
   username: string | null
+  /**
+   * 当前用户 ID（从 access token 解码）。
+   *
+   * 用途仅限「按用户隔离本地状态」（如助手草稿、上次会话游标），
+   * 不作为任何权限判据——权限一律由后端 RBAC 决定。
+   */
+  claimsUserId: number | null
   login: (accessToken: string, refreshToken: string) => void
   logout: () => void
   loadFromStorage: () => void
@@ -74,6 +82,9 @@ const hasStorage = typeof localStorage !== 'undefined'
 const storedAccess = hasStorage ? localStorage.getItem('accessToken') : null
 const storedRefresh = hasStorage ? localStorage.getItem('refreshToken') : null
 const storedClaims = decodeJwt(storedAccess)
+// 首帧就把草稿作用域对齐到已登录用户：否则在 login() 被调用前渲染的视图
+// 会以 `anon` 作用域读到别人的草稿（刷新页面时正是这条路径）。
+setDraftScopeUserId(storedClaims?.userId ?? 0)
 
 export const useAuthStore = create<AuthState>((set) => ({
   accessToken: storedAccess,
@@ -81,27 +92,36 @@ export const useAuthStore = create<AuthState>((set) => ({
   isAuthenticated: !!storedAccess,
   role: storedClaims?.role ?? null,
   username: storedClaims?.username ?? null,
+  claimsUserId: storedClaims?.userId ?? null,
 
   login: (accessToken, refreshToken) => {
     queryClient.clear()
     localStorage.setItem('accessToken', accessToken)
     localStorage.setItem('refreshToken', refreshToken)
     const claims = decodeJwt(accessToken)
+    // 草稿作用域跟随登录用户（FR-519「换用户不串号」）：
+    // resetDraftScope 会清掉**上一个用户**的持久化草稿与模块级缓存，
+    // 再把作用域切到新用户。不这么做的话，「新会话」草稿 key 在换用户后会碰撞。
+    resetDraftScope(claims?.userId ?? 0)
     set({
       accessToken,
       refreshToken,
       isAuthenticated: true,
       role: claims?.role ?? null,
       username: claims?.username ?? null,
+      claimsUserId: claims?.userId ?? null,
     })
     schedulePermissionsLoad()
   },
 
   logout: () => {
     queryClient.clear()
+    // 草稿与「上次会话」都按用户隔离，登出即释放（FR-519）：
+    // sessionStorage 不随登出消失，不清的话下一个人能读到上一个人的未发送内容。
+    resetDraftScope(0)
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
-    set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null })
+    set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null, claimsUserId: null })
     // 两处都经 trackDynamicImport 登记（**不是**裸 `void import(...)`）：保持动态 import
     // 语义不变，但让测试能经 flushAuthDynamicImports 等待在途加载收口（见其文档）。
     void trackDynamicImport(loadPermissionsModule()).then((m) => m.usePermissionsStore.getState().reset())
@@ -114,6 +134,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     const accessToken = localStorage.getItem('accessToken')
     const refreshToken = localStorage.getItem('refreshToken')
     const claims = decodeJwt(accessToken)
+    setDraftScopeUserId(claims?.userId ?? 0)
     const authenticated = !!accessToken
     set({
       accessToken,
@@ -121,6 +142,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       isAuthenticated: authenticated,
       role: claims?.role ?? null,
       username: claims?.username ?? null,
+      claimsUserId: claims?.userId ?? null,
     })
     if (authenticated) schedulePermissionsLoad()
   },

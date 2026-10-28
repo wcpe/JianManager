@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
-import { useStartInstance, useStopInstance, useRestartInstance, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
+import { isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import { runtimeDriftOf } from '@/lib/runtime-assets/runtime-drift'
-import { regionOf, zoneOf } from '@/lib/instances/instance-grouping'
+import { envOf, freeTagsOf, regionOf, zoneOf } from '@/lib/instances/instance-grouping'
 import { useInstanceMetrics } from '@/api/metrics'
 import { resolveCapabilities } from '@/lib/instances/capabilities'
 import { InstanceWorktableCard as InstanceWorktableCardView } from '@/components/views/instances/InstanceWorktableCard'
@@ -20,6 +20,15 @@ export function InstanceWorktableCard({
   roleBadge,
   menu,
   onOpen,
+  onStart,
+  onStop,
+  onRestart,
+  onContextMenu,
+  showType,
+  showRole,
+  showTags,
+  selected,
+  onToggleSelect,
 }: {
   inst: InstanceInfo
   /** 所属节点名（由列表统一解析后传入，避免卡内各自查节点表）。 */
@@ -30,12 +39,29 @@ export function InstanceWorktableCard({
   menu: ReactNode
   /** 打开实例控制台；默认跳转实例深链，列表页可传入自定义跳转。 */
   onOpen?: (id: number) => void
+  /**
+   * 启停/重启动作（由页面注入）。
+   *
+   * 【为什么收归页面】此前本层自己 `useStartInstance().mutate()`，与列表视图各写一条路径：
+   * 列表加了二次确认，卡片仍是「一点就执行」——同一台实例在两种视图下的安全语义不一致。
+   * 动作的确认流程属于页面级决策，接线层只做渲染，不该自己发写请求。
+   */
+  onStart?: () => void
+  onStop?: () => void
+  onRestart?: () => void
+  /** 右键菜单入口（与列表视图共用页面级单例菜单）。 */
+  onContextMenu?: (inst: InstanceInfo, x: number, y: number) => void
+  /** 身份徽章开关：与表格列设置对齐。 */
+  showType?: boolean
+  showRole?: boolean
+  showTags?: boolean
+  /** 是否被批量选中（卡片视图补齐多选）。 */
+  selected?: boolean
+  /** 勾选/点选（修饰键语义由页面统一实现）。 */
+  onToggleSelect?: (modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => void
 }) {
   const navigate = useNavigate()
   const openConsole = onOpen ?? ((id: number) => navigate(`/instances/${id}`))
-  const start = useStartInstance()
-  const stop = useStopInstance()
-  const restart = useRestartInstance()
 
   const running = inst.status === 'RUNNING'
   // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮直接禁用，不再只靠琥珀文案劝阻。
@@ -59,16 +85,29 @@ export function InstanceWorktableCard({
       provisioning={provisioning}
       drift={runtimeDriftOf(inst) ?? undefined}
       metrics={metrics}
-      // 在途判定按实例 id 比对：别张卡正在提交时，本卡按钮不该被禁用。
-      starting={start.isPending && start.variables === inst.id}
-      stopping={stop.isPending && stop.variables === inst.id}
-      restarting={restart.isPending && restart.variables === inst.id}
+      // 在途状态由视图内部按「已点击」自管：动作已上移到页面，接线层拿不到 mutation 状态。
+      starting={false}
+      stopping={false}
+      restarting={false}
       roleBadge={roleBadge}
       menu={menu}
       onOpen={openConsole}
-      onStart={() => start.mutate(inst.id)}
-      onStop={() => stop.mutate(inst.id)}
-      onRestart={() => restart.mutate(inst.id)}
+      onStart={onStart ?? (() => {})}
+      onStop={onStop ?? (() => {})}
+      onRestart={onRestart ?? (() => {})}
+      onContextMenu={onContextMenu ? (x, y) => onContextMenu(inst, x, y) : undefined}
+      selected={selected}
+      onToggleSelect={onToggleSelect}
+      /*
+        身份徽章的数据与开关：与表格身份列**完全同源**——
+        env/freeTags 都由同一组取数函数推导，开关也跟随同一份 visibleColumns。
+        这样两个视图对同一台实例的「类型/角色/环境/标签」呈现不会再分叉。
+      */
+      env={envOf(inst) || undefined}
+      freeTags={freeTagsOf(inst)}
+      showType={showType}
+      showRole={showRole}
+      showTags={showTags}
     />
   )
 }
