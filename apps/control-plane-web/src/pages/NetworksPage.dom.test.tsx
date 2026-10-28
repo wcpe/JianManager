@@ -9,7 +9,7 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import NetworksPage from './NetworksPage'
 import { NetworkInstancePickerView } from '@/components/views/networks/NetworksPageView'
-import { NAV_GROUPS } from '@/lib/shared/nav-config'
+import { WORKSPACES } from '@/lib/console/workspace-navigation'
 
 /**
  * NetworksPage 强断言纵切（FR-203 群组服网络域）：验种子渲染 + 创建联动 + 错误注入。
@@ -30,10 +30,12 @@ describe('NetworksPage（mock 假后端）', () => {
   })
 
   it('侧栏群组网络两个入口分别指向分组管理与拓扑页', () => {
-    const group = NAV_GROUPS.find((item) => item.key === 'groupNetwork')
+    // FR-507 阶段 6：侧栏改以四工作区为真源（原六域的 `groupNetwork` 已归入
+    // 「服务器运维 → 群组与工作台」分组）。两个入口的顺序不变。
+    const group = WORKSPACES.flatMap((ws) => ws.groups).find((item) => item.key === 'opsGroupsWorkbench')
     const targets = group?.children?.map((item) => item.to)
 
-    expect(targets).toEqual(['/networks/topology', '/networks'])
+    expect(targets?.slice(0, 2)).toEqual(['/networks/topology', '/networks'])
   })
 
   it('① 渲染出种子群组（名称 + 成员数）', async () => {

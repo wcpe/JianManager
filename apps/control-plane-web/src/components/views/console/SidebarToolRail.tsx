@@ -26,7 +26,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
-import type { NavEntry } from '@/lib/shared/nav-config'
+import type { NavEntry } from '@/lib/shared/navigation-types'
 import { setPinnedTools, usePinnedTools } from '@/lib/console/sidebar-tools'
 import type { SidebarLinkArgs } from '@/components/views/console/sidebar-link'
 

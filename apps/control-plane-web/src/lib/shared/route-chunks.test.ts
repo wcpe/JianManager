@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ROUTE_CHUNKS, ROUTE_KEYS, matchRouteKey } from './route-chunks'
-import { flatNavItems } from '@/lib/shared/nav-config'
+import { flatWorkspaceItems } from '@/lib/console/workspace-navigation'
 
 /**
  * 路由 chunk 表测试（FR-502 阶段 6 补丁）。
@@ -36,14 +36,14 @@ describe('matchRouteKey：具体路径 → 路由表键', () => {
 
 describe('导航覆盖度：每个导航入口都预取得动', () => {
   it('平台管理员的全部导航目标都在路由 chunk 表内', () => {
-    const missing = flatNavItems(null, true)
+    const missing = flatWorkspaceItems(null, true)
       .map((item) => item.to)
       .filter((to) => matchRouteKey(to) === null)
     expect(missing).toEqual([])
   })
 
   it('按角色种子裁剪后的导航目标同样可预取', () => {
-    const missing = flatNavItems(10)
+    const missing = flatWorkspaceItems(10)
       .map((item) => item.to)
       .filter((to) => matchRouteKey(to) === null)
     expect(missing).toEqual([])

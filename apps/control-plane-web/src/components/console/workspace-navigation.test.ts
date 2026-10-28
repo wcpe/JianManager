@@ -3,15 +3,20 @@ import type { LucideIcon } from 'lucide-react'
 
 import { AUTH_ROUTE_PATHS, SUB_ROUTE_PATTERNS, WORKSPACES, WORKSPACE_I18N_KEYS_TO_ADD, flatWorkspaceItems, resolveWorkspacePath, workspaceOfPath, workspacesForPermissions, workspacesForRole } from '@/lib/console/workspace-navigation'
 import type { WorkspaceKey } from '@/lib/console/workspace-navigation'
-import { NAV_GROUPS, flatNavItems } from '@/lib/shared/nav-config'
-import type { NavGroup } from '@/lib/shared/nav-config'
+import type { NavGroup } from '@/lib/shared/navigation-types'
 import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES, ROLE_MEMBER, ROLE_PLATFORM_ADMIN } from '@/lib/shared/roles'
 import zh from '@/i18n/zh.json'
+import navSnapshot from './__fixtures_nav-snapshot.json'
 
 /**
  * FR-502 阶段 5 的工作区导航数据层测试。
- * 核心主张只有一条：**换结构不换权限语义**。因此每个断言都拿旧六域（nav-config.ts）
- * 当参照物比，而不是自证新数据「看起来对」。
+ * 核心主张只有一条：**换结构不换权限语义**。
+ *
+ * 【为何用快照而不是继续引用 nav-config.ts（FR-507 阶段 6）】
+ * 阶段 6 删掉了旧六域真源 `nav-config.ts`，但「新层与旧层逐条等价」这个主张必须继续被验证，
+ * 否则下次有人改 WORKSPACES时，没有任何东西能拦住他悄悄删掉/改权限。
+ * 因此把旧六域当年登记的全部 41 条**冻结成快照** `__fixtures_nav-snapshot.json`：
+ * 它是历史事实，不随代码变动，继续当参照物。快照的生成口径见文件末尾注释。
  */
 
 interface CollectedEntry {
@@ -34,13 +39,12 @@ function collectEntries(groups: NavGroup[]): CollectedEntry[] {
   return out
 }
 
-const OLD_ENTRIES = collectEntries(NAV_GROUPS)
+const OLD_ENTRIES = navSnapshot as unknown as CollectedEntry[]
 const OLD_ENTRY_BY_PATH = new Map(OLD_ENTRIES.map((e) => [e.to, e]))
 /**
  * 旧六域**登记**的全部导航目的地：41 条。
- * 这里直接取登记项而不是 `flatNavItems(null, true)`——后者会走角色种子分支且**忽略 admin 参数**
- * （`null` 命中 `navGroupsForRole(null)`），只返回无 perm 要求的首页，不是「管理员全开」。
- * 管理员口径的等价物是 `flatNavItems(adminNodes, true)`，见下面各测试的交叉核对。
+ * 数据源已从 `NAV_GROUPS` 改为冻结快照（阶段 6 删了旧真源），条数作为不变量继续断言：
+ * 快照少一条就说明它被误改，而快照正是「不得漏掉旧入口」的唯一证据。
  */
 const OLD_ALL_PATHS = OLD_ENTRIES.map((e) => e.to)
 const NAV_PATH_SET = new Set(OLD_ALL_PATHS)
@@ -62,7 +66,57 @@ const SUB_ROUTE_PARENT: Record<string, string> = {
   '/bots/sessions/:id': '/bots',
 }
 
+/**
+ * icon 归一：新层是 lucide 组件引用，快照里存的是 `displayName` 字符串。
+ * 两个方向都要处理（字符串直回，组件取 displayName），对比前归一到同一字符串。
+ */
+function iconName(icon: CollectedEntry['icon']): string | undefined {
+  if (icon === undefined || icon === null) return undefined
+  if (typeof icon === 'string') return icon
+  const c = icon as unknown as { displayName?: string; name?: string }
+  return c.displayName ?? c.name
+}
+
+/**
+ * perm 归一：快照是 JSON，`undefined` 会被序列化成 `null`；而新层里「无 perm」是 `undefined`。
+ * 两者语义相同（无权限要求），对比前必须归一到同一形态，否则会报假阳性。
+ */
+function permOf(entry: CollectedEntry | undefined): string | string[] | undefined {
+  const p = entry?.perm
+  return p === null ? undefined : p
+}
+
 const adminNodes = new Set(ALL_PERMISSION_NODE_IDS)
+
+/**
+ * 旧六域时代的权限裁剪语义（从快照重算，不依赖已删除的 nav-config.ts）。
+ *
+ * 这就是当初 `flatNavItems` 的行为：无 perm 入口恒可见；单节点看是否命中；数组是 any-of。
+ * 管理员短路全开。保留它才能继续证明「换结构不换权限语义」——不会变成拿新层自证新层。
+ */
+function oldFlatPaths(nodesOrRole: Set<string> | number | null, admin = false): string[] {
+  // 角色包装分支（与旧 navGroupsForRole 同语义）：管理员全开，未知/空种子保守清零。
+  if (typeof nodesOrRole === 'number' || nodesOrRole === null) {
+    if (isPlatformAdminRole(nodesOrRole)) return OLD_ALL_PATHS.slice()
+    const seed = DEFAULT_ROLE_NODES[nodesOrRole ?? -1] ?? []
+    return oldFlatPaths(new Set(seed), false)
+  }
+
+  const granted = nodesOrRole
+  const permitted = (perm: CollectedEntry['perm']): boolean => {
+    if (admin) return true
+    if (perm === undefined || perm === null) return true
+    const list = Array.isArray(perm) ? perm : [perm]
+    return list.some((p) => granted.has(p))
+  }
+
+  return OLD_ENTRIES.filter((e) => permitted(e.perm)).map((e) => e.to)
+}
+
+/** 旧 `isPlatformAdmin` 的角色值判定（快照测试不 import 业务函数以免假阳性）。 */
+function isPlatformAdminRole(role: number | null): boolean {
+  return role === ROLE_PLATFORM_ADMIN
+}
 
 /** 把新层全部 labelKey 收集成一个去重集合（工作区名 + 组名 + 页面名）。 */
 function allUsedLabelKeys(): string[] {
@@ -94,7 +148,7 @@ const ZH_KEYS = flattenKeys(zh)
  * 3) 多出来的只能是 CSV 登记过的子路由，且其入口页同样可见（子路由继承 perm，不是放宽）。
  */
 function assertPermissionEquivalence(nodes: Set<string>, admin: boolean, label: string) {
-  const oldPaths = flatNavItems(nodes, admin).map((i) => i.to)
+  const oldPaths = oldFlatPaths(nodes, admin)
   const newPaths = flatWorkspaceItems(nodes, admin).map((i) => i.to)
   const oldSet = new Set(oldPaths)
   const newSet = new Set(newPaths)
@@ -240,19 +294,19 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     }
   })
 
-  it('perm / labelKey / icon 与 NAV_GROUPS 同路径项逐条同值（零发明、零省略）', () => {
+  it('perm / labelKey / icon 与旧六域快照同路径项逐条同值（零发明、零省略）', () => {
     expect(OLD_ALL_PATHS.length, '旧导航目的地应为 41 条').toBe(41)
     expect(OLD_ENTRY_BY_PATH.size).toBe(41)
     // 交叉核对参照物口径：管理员全开 = 登记全集（顺序也一致）
-    expect(flatNavItems(adminNodes, true).map((i) => i.to)).toEqual(OLD_ALL_PATHS)
+    expect(oldFlatPaths(adminNodes, true)).toEqual(OLD_ALL_PATHS)
 
     for (const to of OLD_ALL_PATHS) {
       const oldEntry = OLD_ENTRY_BY_PATH.get(to)
       const newEntry = NEW_ENTRY_BY_PATH.get(to)
       expect(newEntry, `${to} 未在工作区层登记`).toBeDefined()
-      expect(newEntry?.perm, `${to} 的 perm 与 NAV_GROUPS 不一致`).toEqual(oldEntry?.perm)
-      expect(newEntry?.labelKey, `${to} 的 labelKey 与 NAV_GROUPS 不一致`).toBe(oldEntry?.labelKey)
-      expect(newEntry?.icon, `${to} 的 icon 与 NAV_GROUPS 不一致`).toBe(oldEntry?.icon)
+      expect(permOf(newEntry), `${to} 的 perm 与旧六域不一致`).toEqual(permOf(oldEntry))
+      expect(newEntry?.labelKey, `${to} 的 labelKey 与旧六域不一致`).toBe(oldEntry?.labelKey)
+      expect(iconName(newEntry?.icon), `${to} 的 icon 与旧六域不一致`).toBe(iconName(oldEntry?.icon))
     }
 
     // 权限节点词汇表：新层用到的节点必须全部来自旧导航（不得凭空发明）
@@ -285,7 +339,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
 
   it('路由零遗漏：新层包含旧导航全部 41 条，新增恰为 5 条子路由', () => {
     // 管理员全开：旧层 41 条导航目的地，新层 41 + 5 条
-    const oldAdminPaths = flatNavItems(adminNodes, true).map((i) => i.to)
+    const oldAdminPaths = oldFlatPaths(adminNodes, true)
     expect(oldAdminPaths, '旧层管理员口径应为 41 条').toEqual(OLD_ALL_PATHS)
     expect(flatWorkspaceItems(adminNodes, true).map((i) => i.to)).toEqual(NEW_ALL_PATHS)
 
@@ -297,14 +351,14 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     expect(newSet.size).toBe(NEW_ALL_PATHS.length)
 
     // 角色包装下平台管理员同样是「41 + 5」；null 走角色种子（未知角色保守清零），
-    // 与 flatNavItems(null, true) 的老行为一致——null 不等于「管理员全开」。
-    expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(flatNavItems(null, true).map((i) => i.to))
+    // 与旧 `flatNavItems(null, true)` 的老行为一致——null 不等于「管理员全开」。
+    expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(oldFlatPaths(null, true))
     expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(['/'])
     expect(flatWorkspaceItems(ROLE_PLATFORM_ADMIN).map((i) => i.to)).toEqual(NEW_ALL_PATHS)
   })
 
   it('权限裁剪等价：空权限只留无 perm 入口', () => {
-    expect(flatNavItems(new Set(), false).map((i) => i.to)).toEqual(['/'])
+    expect(oldFlatPaths(new Set(), false)).toEqual(['/'])
     expect(flatWorkspaceItems(new Set(), false).map((i) => i.to)).toEqual(['/'])
     expect(flatWorkspaceItems(null, false).map((i) => i.to)).toEqual(['/'])
 
@@ -321,7 +375,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     const nodes = new Set(['instance.read'])
     // 配置三项（config-files / config-adopt / config-deliveries）的 perm 都是
     // any-of `['file.read','instance.read']`，故仅持 instance.read 也应可见。
-    expect(flatNavItems(nodes, false).map((i) => i.to)).toEqual([
+    expect(oldFlatPaths(nodes, false)).toEqual([
       '/',
       '/instances',
       '/config-baselines',
@@ -382,7 +436,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
 
     for (const { nodes, alerts, baselines } of cases) {
       const nodesSet = new Set(nodes)
-      const oldPaths = flatNavItems(nodesSet, false).map((i) => i.to)
+      const oldPaths = oldFlatPaths(nodesSet, false)
       const newPaths = flatWorkspaceItems(nodesSet, false).map((i) => i.to)
 
       for (const [label, paths] of [
@@ -521,7 +575,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     ]
 
     for (const role of roles) {
-      const oldPaths = flatNavItems(role).map((i) => i.to)
+      const oldPaths = oldFlatPaths(role)
       const newPaths = flatWorkspaceItems(role).map((i) => i.to)
       const oldSet = new Set(oldPaths)
       const newSet = new Set(newPaths)
@@ -588,3 +642,19 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     expect(used.filter((k) => ZH_KEYS.has(k)).length).toBeGreaterThanOrEqual(30)
   })
 })
+
+/**
+ * 【快照生成口径】`__fixtures_nav-snapshot.json` 里的 41 条，是在删除 `nav-config.ts`
+ * 之前用下述代码从 `NAV_GROUPS` 原样导出的（每一组、每个 children / sections 叶子均不遗漏）：
+ *
+ * ```ts
+ * for (const g of NAV_GROUPS) {
+ *   if (g.to) push({ to: g.to, labelKey: g.labelKey, icon: g.icon.displayName, perm: g.perm ?? null })
+ *   for (const c of g.children ?? []) push({ ...c })
+ *   for (const s of g.sections ?? []) for (const c of s.children) push({ ...c })
+ * }
+ * ```
+ *
+ * `icon` 存的是组件 `displayName`（快照是 JSON，不能存组件引用），因此下面 icon 对比时
+ * 两边都归一到字符串。快照只能由「删旧真源前的 HEAD」重生成，**不得手改**。
+ */

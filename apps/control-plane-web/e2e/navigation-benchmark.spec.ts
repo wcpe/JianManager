@@ -589,12 +589,19 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
 
     const mobileNav = page.locator('[data-slot="mobile-console-nav"]')
     await expect(mobileNav, '移动端导航可见').toBeVisible()
-    await mobileNav.getByRole('button', { name: '服务器' }).click()
+    // FR-507 阶段 6：底部格子从「六域顶层组」换成「四工作区」（旧实现 slice(0,5)，
+    // 观测/客户端分发/平台设置在手机上永远点不到）。故这里点的是工作区名，面板里列的是它下的分组。
+    await mobileNav.getByRole('button', { name: '服务器运维' }).click()
     const mobilePanel = page.locator('[data-slot="mobile-nav-panel"]')
     await expect(mobilePanel, '移动端导航抽屉展开').toHaveAttribute('data-state', 'open')
     await expect.poll(async () => mobilePanel.evaluate((el) => getComputedStyle(el).animationName), { message: '移动端导航抽屉展开动画' }).toContain('jm-panel-up')
     await expect(mobileNav.getByRole('link', { name: '全部服务器' }), '服务器分组链接可见').toBeVisible()
     await expect(mobileNav.getByRole('link', { name: '节点' }), '节点链接可见').toBeVisible()
+
+    // 四工作区在手机上均可达（这是换格子的直接收益，旧实现后三个域不可达）。
+    for (const name of ['服务器运维', '观测与自动化', '运营与分发', '平台管理']) {
+      await expect(mobileNav.getByRole('button', { name }), `移动端可达工作区：${name}`).toBeVisible()
+    }
 
     await mobileNav.getByRole('button', { name: '收起移动导航' }).click()
     // 收起动画结束后 panel 会卸载（~180ms）；先断言 closed，再允许卸载。
