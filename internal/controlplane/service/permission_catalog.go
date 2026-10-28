@@ -36,6 +36,10 @@ var PermissionCatalog = []PermissionDomain{
 			{ID: "audit.read", Label: "审计读取"},
 			{ID: "rbac.read", Label: "权限配置读取"},
 			{ID: "rbac.manage", Label: "权限配置管理"},
+			// FR-490/493：平台审批中心。读与决定分开——
+			// 「能看待审列表」与「能批准高危操作」是两种权力，合并会让只读审计员也能批准。
+			{ID: "approval.read", Label: "审批查看"},
+			{ID: "approval.decide", Label: "审批批准 / 驳回", Risk: true},
 		},
 	},
 	{

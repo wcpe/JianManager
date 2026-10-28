@@ -50,6 +50,11 @@ type ToolDeps struct {
 	// Snapshot 实例整机快照与一键回滚（FR-466）；nil 时对应工具返回中文「服务不可用」。
 	Snapshot *service.SnapshotService
 	Task     *service.TaskService
+	// FR-490/492 平台审批：nil 时高危操作**一律拒绝**（失败关闭，不是放行）。
+	Approval *service.ApprovalService
+	// AssistantOverview 助手概览类只读（FR-544）：集群概览 / 任务 / 告警的聚合摘要。
+	// 按调用者 RBAC 收敛；nil 时三个概览工具返回「服务不可用」。
+	AssistantOverview *service.AssistantOverviewService
 	// FR-397 内容运维依赖；nil 时对应工具返回中文「服务不可用」。
 	File        *service.FileService
 	FileVersion *service.FileVersionService
@@ -272,8 +277,11 @@ func toolTargetByName(name string, args map[string]any) (targetType, targetID st
 	if !ok || d.ResourceType == service.AgentResourceNone {
 		return "", ""
 	}
-	id, err := toUint(args["id"])
-	if err != nil {
+	// 与拦截层的授权目标用同一套解析（见 approvalTargetID 的说明）：
+	// 只认 `id` 会让「实例不是 id 参数」的工具（如快照回滚）票据目标恒为空，
+	// 批准人因此看不到这次操作落在哪个实例上。
+	id, ok := approvalTargetID(name, args)
+	if !ok {
 		return "", ""
 	}
 	return d.ResourceType, strconv.FormatUint(uint64(id), 10)
@@ -298,6 +306,15 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 	action, ok := toolActionByName(name)
 	if !ok {
 		return toolErr("未知工具: " + name + "（硬拒绝面操作不会注册为 tool）")
+	}
+
+	// FR-492：审批拦截必须在**任何分发之前**。
+	//
+	// 位置关键——`callContentTool` 在下面先行处理文件/配置/插件域，
+	// 若把拦截放在 switch 之后，`file_issue_transfer_ticket`（签票后可写盘的完整绕过路径）
+	// 就已经执行完了，审批形同虚设。
+	if blocked, res := interceptApproval(ctx, deps, p, name, action, args); blocked {
+		return res
 	}
 
 	// FR-397 内容运维域（文件/配置/插件）在独立文件内分发。

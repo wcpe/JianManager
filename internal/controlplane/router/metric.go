@@ -475,6 +475,16 @@ func (h *MetricHandler) ProcessTop(c *gin.Context) {
 		Sort:     c.DefaultQuery("sort", "cpu"),
 		Limit:    parseProcessTopLimit(c.Query("limit")),
 	}
+	// at（RFC3339，可选）：取该时刻之前的最近一拍快照；省略则取最新。
+	// 前端在历史曲线上悬浮时带这个参数，用于回答「那一刻是谁在吃 CPU/内存」。
+	if atStr := c.Query("at"); atStr != "" {
+		at, err := time.Parse(time.RFC3339, atStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_AT", "message": "at 必须为 RFC3339 时间"})
+			return
+		}
+		q.At = at
+	}
 	if q.Sort != "cpu" && q.Sort != "memory" && q.Sort != "io" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_SORT", "message": "sort 必须为 cpu、memory 或 io"})
 		return

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // EventKind 归一化流事件类型。
@@ -102,6 +103,13 @@ type Request struct {
 	Tools []ToolSpec
 	// MaxOutputTokens 输出上限；0 表示不指定（由供应商默认）。
 	MaxOutputTokens int
+	// ReasoningEffort 思考强度（FR-541）：minimal / low / medium / high，空 = 不指定。
+	//
+	// 各协议映射不同：OpenAI Chat 是顶层 `reasoning_effort` 字符串，
+	// Responses 是 `reasoning.effort`，Anthropic 是 `thinking.budget_tokens`（需换算）。
+	// **未知取值一律不发送**：上游不认识的值会 400 掉整轮，
+	// 「不发」比「发错」安全——后者表现为「配了个档位就全挂」。
+	ReasoningEffort string
 }
 
 // Emit 事件回调。返回 error 可中断流（如客户端断开、事件持久化失败）。
@@ -116,6 +124,35 @@ type Streamer interface {
 
 // ErrIncompleteToolCall 工具调用参数在流结束时仍不完整或不是 JSON 对象。
 var ErrIncompleteToolCall = fmt.Errorf("工具调用参数不完整或不是 JSON 对象")
+
+// ReasoningEffort* 思考强度的合法档位（FR-541）。
+const (
+	ReasoningEffortMinimal = "minimal"
+	ReasoningEffortLow     = "low"
+	ReasoningEffortMedium  = "medium"
+	ReasoningEffortHigh    = "high"
+)
+
+// normalizeReasoningEffort 校验并归一化档位。
+//
+// 只接受上面四个值；**其余一律返回 ok=false 表示「不发送」**。
+// 为什么不用「回退到 medium」这种兜底：管理员配错一个值时，
+// 静默按 medium 跑会让他以为配置生效了，而真实效果与预期不同却无从察觉；
+// 不发送至少让上游用它自己的默认值，行为可预期。
+func normalizeReasoningEffort(effort string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case ReasoningEffortMinimal:
+		return ReasoningEffortMinimal, true
+	case ReasoningEffortLow:
+		return ReasoningEffortLow, true
+	case ReasoningEffortMedium:
+		return ReasoningEffortMedium, true
+	case ReasoningEffortHigh:
+		return ReasoningEffortHigh, true
+	default:
+		return "", false
+	}
+}
 
 // collectToolCalls 把累积的工具调用做结束校验，产出可直接交给运行器的完整调用。
 //

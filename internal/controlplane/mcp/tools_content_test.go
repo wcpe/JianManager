@@ -111,10 +111,19 @@ func TestFR397_ToolsForPrincipal_CapabilityMatrix(t *testing.T) {
 // setupContentToolsDeps 建库 + 实例 + V2 Token，返回可授权的 deps 与 principal。
 func setupContentToolsDeps(t *testing.T) (ToolDeps, *service.AgentPrincipal, uint) {
 	t.Helper()
+	// 本组用例测的是工具自身逻辑（精确确认/scope/参数校验），
+	// 而审批是它前面的一道闸——旁路它，才能测到后面的行为。
+	WithApprovalBypassForTest(t)
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.AgentToken{}, &model.Instance{}, &model.Node{}))
+	// FR-492：内容运维里的 file_write_text / file_delete / file_rollback / config_write_text
+	// 等已进入审批名单。本组用例验证的是**工具自身的精确确认语义**（confirmPath 等），
+	// 因此必须装配审批服务，否则只会撞在「未装配（失败关闭）」上而测不到原意图。
+	require.NoError(t, db.AutoMigrate(
+		&model.AgentToken{}, &model.Instance{}, &model.Node{},
+		&model.ApprovalTicket{}, &model.ApprovalReceipt{},
+	))
 	t.Cleanup(func() {
 		if sqlDB, e := db.DB(); e == nil && sqlDB != nil {
 			_ = sqlDB.Close()
@@ -142,7 +151,7 @@ func setupContentToolsDeps(t *testing.T) (ToolDeps, *service.AgentPrincipal, uin
 	require.NoError(t, err)
 	p, err := agentSvc.Authenticate(plain)
 	require.NoError(t, err)
-	return ToolDeps{Agent: agentSvc}, p, inst.ID
+	return ToolDeps{Agent: agentSvc, Approval: service.NewApprovalService(db)}, p, inst.ID
 }
 
 func TestFR397_TextSizeGuard(t *testing.T) {

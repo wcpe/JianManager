@@ -276,6 +276,24 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
 		nodeSample(model.MetricLogIngestHealthy, "bool", ptr(boolToFloat(req.LogIngestHealthy))),
 	)
+	// FR-485：日志采集面自身的容量/质量信号。
+	//
+	// 只在 Worker 明确报告「可观测」时才落点（log_metrics_available）。缺失即**不落点**，
+	// 让曲线留空——而不是落 0。0 在这组指标里的含义是「积压为零、零失败、零慢查询」，
+	// 恰好是最健康的读数；把它当成缺测的默认值，等于让告警在最该响的时候静默。
+	if req.LogMetricsAvailable {
+		samples = append(samples,
+			nodeSample(model.MetricLogStateFileSize, "bytes", ptr(float64(req.LogStateFileSizeBytes))),
+			nodeSample(model.MetricLogStateFileGrowth, "bytes_per_sec", ptr(req.LogStateFileGrowthBytesPerSec)),
+			nodeSample(model.MetricLogPersistWrite, "bytes_per_sec", ptr(req.LogPersistWriteBytesPerSec)),
+			nodeSample(model.MetricLogWALBacklog, "count", ptr(float64(req.LogWalBacklogEntries))),
+			nodeSample(model.MetricLogWALPaused, "seconds", ptr(float64(req.LogWalPausedSeconds))),
+			nodeSample(model.MetricLogDeliveryFailRate, "pct", ptr(req.LogDeliveryFailureRate)),
+			nodeSample(model.MetricLogVerifyBackoff, "count", ptr(float64(req.LogVerifyBackoffCount))),
+			nodeSample(model.MetricLogSlowSQLCount, "count", ptr(float64(req.LogSlowSqlCount))),
+			nodeSample(model.MetricLogSlowSQLMaxMs, "ms", ptr(float64(req.LogSlowSqlMaxMs))),
+		)
+	}
 	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空（FR-062）。
 	if req.LoadAvg1 > 0 {
 		samples = append(samples, nodeSample(model.MetricNodeLoad, "load", ptr(req.LoadAvg1)))
@@ -395,6 +413,14 @@ type ProcessTopQuery struct {
 	NodeUUID     string
 	Sort         string
 	Limit        int
+	/*
+		At 指定「取哪个时刻的进程快照」。零值表示最新（原有行为）。
+
+		为什么需要：前端在历史曲线上悬浮某一时刻时，要能回答「那一刻是谁在吃 CPU/内存」。
+		原实现只取每实例的最新快照，无法回溯。进程快照与原始指标同档保留（48h），
+		因此 48h 内的时间点都能查到对应快照。
+	*/
+	At time.Time
 }
 
 // ProcessTopItem 进程 TOPN 返回项（FR-170）。
@@ -469,6 +495,16 @@ func (s *MetricService) QueryProcessTop(q ProcessTopQuery) ([]ProcessTopItem, er
 	}
 
 	var rows []model.ProcessMetricSnapshot
+	/*
+		At 非零 → 取「≤ At 的最近一拍」而不是全局最新。
+		用 `sampled_at <= At` 后取 MAX：进程快照是离散采样，用户悬浮的时刻很少正好落在样本点上，
+		语义上「那一刻正在跑的是哪一批进程」应取该时刻之前最近的一次采集。
+		若该实例在 At 之前完全没有样本（例如刚接入），则该实例不出现在结果里——这是正确行为，
+		不要用「回退到最新」来兜底，那会把「当时还没跑」误报成「当时在跑」。
+	*/
+	if !q.At.IsZero() {
+		latestQuery = latestQuery.Where("sampled_at <= ?", q.At.UTC())
+	}
 	latestQuery = latestQuery.Select("instance_uuid, MAX(sampled_at) AS sampled_at").Group("instance_uuid")
 	query := s.db.Table("process_metric_snapshots AS p").
 		Select("p.*").
@@ -761,6 +797,14 @@ func (s *MetricService) overviewAt(now, from, to time.Time, resolution string) (
 		{model.MetricScopeNode, model.MetricNodeLoad, "load", false},
 		{model.MetricScopeNode, model.MetricNodeMemUsed, "bytes", true},
 		{model.MetricScopeInstance, model.MetricInstPlayersOnline, "count", true},
+		/*
+			Bot Worker 的两条共享进程指标也进趋势（FR-515 首页重构）：
+			它们由 `bot_runtime_metric_sampler` 持续写入，属于「资源视角」，
+			与上面三条同轴呈现才有可比性。前端默认在图例里隐藏，按需勾选显示。
+			求和而非均值：多节点各有一个 Bot Worker 进程，看的是全平台合计占用。
+		*/
+		{model.MetricScopeNode, model.MetricBotWorkerRSSBytes, "bytes", true},
+		{model.MetricScopeNode, model.MetricBotWorkerCPUPct, "pct", true},
 	}
 	for _, sp := range specs {
 		tr, err := s.aggregateTrend(sp.scope, sp.key, sp.unit, from.UTC(), to.UTC(), res, sp.sum)

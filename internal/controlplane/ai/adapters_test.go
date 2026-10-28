@@ -356,3 +356,34 @@ func TestAllProtocolsRejectIncompleteArgs(t *testing.T) {
 		})
 	}
 }
+
+// TestNormalizeReasoningEffort 只认四个合法档位，其余「不发送」。
+//
+// 为什么不是「非法值回退到 medium」：静默回退会让管理员以为配置生效，
+// 而真实效果与预期不同却无从察觉。不发送至少行为可预期。
+func TestNormalizeReasoningEffort(t *testing.T) {
+	for _, ok := range []string{"minimal", "low", "medium", "high", " HIGH "} {
+		if _, valid := normalizeReasoningEffort(ok); !valid {
+			t.Fatalf("%q 应合法", ok)
+		}
+	}
+	for _, bad := range []string{"", "max", "turbo", "1", "thinking"} {
+		if _, valid := normalizeReasoningEffort(bad); valid {
+			t.Fatalf("%q 不应合法（未知值不得发送给上游）", bad)
+		}
+	}
+}
+
+// TestAnthropicThinkingBudget 档位换算为 token 预算，未知档位不启用。
+func TestAnthropicThinkingBudget(t *testing.T) {
+	want := map[string]int{"minimal": 1024, "low": 2048, "medium": 8192, "high": 16384}
+	for effort, budget := range want {
+		got, ok := anthropicThinkingBudget(effort)
+		if !ok || got != budget {
+			t.Fatalf("%s 预算应为 %d，实际 %d ok=%v", effort, budget, got, ok)
+		}
+	}
+	if _, ok := anthropicThinkingBudget("unknown"); ok {
+		t.Fatal("未知档位不得启用 thinking（会被上游 400）")
+	}
+}

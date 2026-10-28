@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -532,4 +533,86 @@ func generateSecret() (string, error) {
 
 func ptrTime(t time.Time) *time.Time {
 	return &t
+}
+
+// StartupProgressView 是「正在启动的节点」的读模型（FR-486 范围②）。
+//
+// 为什么不复用 model.Node：启动中的 Worker **还没有注册**，CP 里没有它的节点记录
+// （首装时连 UUID 都没有）。若硬塞进 nodes 表，节点列表会凭空出现「存在但从未上线」的节点。
+type StartupProgressView struct {
+	// Key 进度行主键：node_uuid 或 "name:<名字>"。
+	Key string `json:"key"`
+	// NodeUUID 已注册节点的 UUID；首装未注册时为空。
+	NodeUUID string `json:"nodeUuid,omitempty"`
+	// NodeName Worker 自称的节点名。
+	NodeName string `json:"nodeName"`
+	// Phase 当前阶段标识（config / dataroot / ... / heartbeat）。
+	Phase string `json:"phase"`
+	// PhaseElapsedMs 该阶段已耗时。
+	PhaseElapsedMs int64 `json:"phaseElapsedMs"`
+	// TotalElapsedMs 自进程启动起的总耗时。
+	TotalElapsedMs int64 `json:"totalElapsedMs"`
+	// PhasesDone / PhasesTotal 供前端渲染 n/m。
+	PhasesDone  int32 `json:"phasesDone"`
+	PhasesTotal int32 `json:"phasesTotal"`
+	// UpdatedAt 最近上报时刻。
+	UpdatedAt time.Time `json:"updatedAt"`
+	// Stale true 表示超时未更新，Worker 可能已崩溃或被杀。
+	//
+	// 必须由后端算并下发：前端拿 updatedAt 自行比较会依赖客户端时钟，
+	// 而运维机器的时钟偏差恰恰是常见现象——那会让「启动中断」判定随机失真。
+	Stale bool `json:"stale"`
+}
+
+// ListStartupProgress 返回当前所有「正在启动」的节点进度（FR-486）。
+//
+// 过滤规则：只返回**未陈旧**的进度行。陈旧行不展示——它们代表已经死掉的启动过程，
+// 面板上显示「启动中」会误导运维以为还在加载（实际情况往往需要去查进程）。
+// 陈旧行本身不在这里删除：清理交给注册路径与后续巡检，读路径保持只读。
+func (s *NodeService) ListStartupProgress() ([]StartupProgressView, error) {
+	var rows []model.NodeStartupProgress
+	if err := s.db.Order("updated_at DESC").Find(&rows).Error; err != nil {
+		// 老库可能还没建这张表（迁移未跑）——按「没有正在启动的节点」处理，
+		// 不让一个可选可观测性功能把节点列表整体打挂。
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return []StartupProgressView{}, nil
+		}
+		return nil, fmt.Errorf("查询启动进度失败: %w", err)
+	}
+	now := time.Now()
+	out := make([]StartupProgressView, 0, len(rows))
+	for i := range rows {
+		r := rows[i]
+		stale := r.IsStale(now)
+		if stale {
+			// 陈旧行不进入「正在启动」列表；由 CleanupStaleStartupProgress 清理。
+			continue
+		}
+		out = append(out, StartupProgressView{
+			Key:            r.Key,
+			NodeUUID:       r.NodeUUID,
+			NodeName:       r.NodeName,
+			Phase:          r.Phase,
+			PhaseElapsedMs: r.PhaseElapsedMs,
+			TotalElapsedMs: r.TotalElapsedMs,
+			PhasesDone:     r.PhasesDone,
+			PhasesTotal:    r.PhasesTotal,
+			UpdatedAt:      r.UpdatedAt,
+			Stale:          false,
+		})
+	}
+	return out, nil
+}
+
+// CleanupStaleStartupProgress 删除陈旧进度行，返回删除条数。
+//
+// 由定期巡检调用。之所以要清理而不是永久保留：陈旧行是「启动中途死掉」的残留，
+// 永远留着只会让表慢慢变大，且下次同节点启动时会与新进度混在一起。
+func (s *NodeService) CleanupStaleStartupProgress() (int64, error) {
+	cutoff := time.Now().Add(-5 * time.Minute)
+	res := s.db.Where("updated_at < ?", cutoff).Delete(&model.NodeStartupProgress{})
+	if res.Error != nil {
+		return 0, fmt.Errorf("清理陈旧启动进度失败: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }

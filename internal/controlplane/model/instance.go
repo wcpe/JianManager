@@ -250,7 +250,31 @@ type Instance struct {
 	// RuntimeDriftCmdline 上述漂移进程的命令行摘要（落库前已截断至 512 字节，与列宽对齐）。
 	RuntimeDriftCmdline string `gorm:"type:varchar(512)" json:"runtimeDriftCmdline"`
 	// RuntimeDriftAt 最近一次观测到漂移的时刻；漂移消失时置 NULL（json 省略）。
-	RuntimeDriftAt *time.Time     `json:"runtimeDriftAt,omitempty"`
+	RuntimeDriftAt *time.Time `json:"runtimeDriftAt,omitempty"`
+	// WorkDirBytes 是实例工作目录占用的最近一次**可信**读数（字节，FR-003）。
+	//
+	// 来源：Worker 随心跳批量上报（proto HeartbeatRequest.work_dir_usages），CP 落此列。
+	// 与 Worker 侧按需 RPC GetInstanceResourceSnapshot 的 work_dir_bytes 同源同口径
+	//（目录树内常规文件尺寸之和），区别只在投递方式：那个是逐实例 gRPC，本列是批量落库。
+	//
+	// 为什么落库而不是查询时现算：组配额要遍历组内全部实例，现算就是 N 次跨节点 RPC，
+	// 配额页会被拖慢；落库后配额读路径是一次 SQL 聚合，且「创建期检查」与「运行期强制」
+	// 共用同一份数据，不会出现两边口径打架。
+	//
+	// 与 WorkDirBytesAvailable 的关系：两列必须**一起**判断。本列只在 Available=true 时
+	// 被写入，Available=false 时保留旧值不动——把旧值当成本拍真值会高估，清零则会低估。
+	WorkDirBytes int64 `gorm:"default:0" json:"workDirBytes"`
+	// WorkDirBytesAvailable 标记 WorkDirBytes 是否来自一次成功的统计（FR-003）。
+	//
+	// false 的语义是**「不知道占用多少」，不是「占用为 0」**。配额核算对 false 的实例
+	// 必须回退到备份大小估算——按 0 计入会低估用量、让超卖通过创建期检查。
+	// 从未上报过该字段的实例（老 Worker / 新建未跑过心跳）同样是 false。
+	WorkDirBytesAvailable bool `gorm:"default:false" json:"workDirBytesAvailable"`
+	// WorkDirBytesAt 最近一次成功统计的时刻；从未成功过时为 NULL（json 省略）。
+	//
+	// 单独存"何时测的"而不复用 UpdatedAt：UpdatedAt 被任何字段更新（状态同步、漂移观测）
+	// 都会推进，用它判断读数新鲜度会把「上周测的大小」显示成「刚测的」。
+	WorkDirBytesAt *time.Time     `json:"workDirBytesAt,omitempty"`
 	StartedAt      *time.Time     `json:"startedAt"`
 	CrashCount     int            `gorm:"default:0" json:"crashCount"`
 	Tags           string         `gorm:"type:text" json:"tags"` // JSON

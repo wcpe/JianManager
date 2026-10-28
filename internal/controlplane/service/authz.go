@@ -348,7 +348,9 @@ type QuotaUsage struct {
 }
 
 // GetQuotaUsage 查询组配额及当前用量。
-// 用量统计：实例数按 group_instances 计数；Bot 数按组内实例关联的 bots 计数；存储用量暂按实例工作目录预留 0（运行时累计，见 FR-003 验收）。
+// 用量统计：实例数按 group_instances 计数；Bot 数按组内实例关联的 bots 计数；
+// 存储用量取组内各实例的真实工作目录占用（FR-003，逐实例回退备份大小，
+// 与运行期强制共用 groupUsedStorageMB 同一口径）。
 func (s *AuthzService) GetQuotaUsage(groupID uint) (*QuotaUsage, error) {
 	var quota model.GroupQuota
 	if err := s.db.Where("group_id = ?", groupID).First(&quota).Error; err != nil {
@@ -385,20 +387,15 @@ func (s *AuthzService) GetQuotaUsage(groupID uint) (*QuotaUsage, error) {
 	}
 	usage.UsedBots = int(botCount)
 
-	// 存储用量：按组内实例的备份总大小累计（MB）。
-	// Worker 工作目录实时大小暂未上报，备份大小作为存储占用的保守下界。
-	// TODO(FR-003): 接入 Worker 工作目录大小上报后替换为更精确的累计。
-	var storageSum struct {
-		Total float64
-	}
-	if err := s.db.Model(&model.Backup{}).
-		Select("COALESCE(SUM(file_size_mb), 0) as total").
-		Joins("JOIN group_instances ON group_instances.instance_id = backups.instance_id").
-		Where("group_instances.group_id = ?", groupID).
-		Scan(&storageSum).Error; err != nil {
+	// 存储用量（FR-003）：优先取组内各实例的**真实工作目录占用**，逐实例回退到备份大小。
+	//
+	// 口径必须与运行期强制同源，否则「创建/展示时通过、运行期立刻超限」——
+	// 唯一实现见 groupUsedStorageMB（group_storage.go），此处禁止另写一份 SUM。
+	usedMB, err := groupUsedStorageMB(s.db, groupID)
+	if err != nil {
 		return nil, fmt.Errorf("统计组存储用量失败: %w", err)
 	}
-	usage.UsedStorageMB = int(storageSum.Total)
+	usage.UsedStorageMB = int(usedMB)
 
 	return usage, nil
 }

@@ -57,6 +57,26 @@ func (h *NodeHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, nodes)
 }
 
+// StartupProgress GET /nodes/startup-progress — 正在启动的 Worker 进度（FR-486）。
+//
+// 单独成端点而不并入 GET /nodes：启动中的 Worker 尚未注册，在 nodes 表里**没有记录**
+// （首装连 UUID 都还没有）。若硬塞进节点列表，会凭空出现「存在但从未上线」的节点；
+// 分开返回让前端能明确区分「已注册的节点」与「正在启动、还没注册的 Worker」。
+func (h *NodeHandler) StartupProgress(c *gin.Context) {
+	if !requireNodeRead(c) {
+		return
+	}
+	items, err := h.nodeSvc.ListStartupProgress()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "查询启动进度失败",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
 // Get 节点详情（仅平台管理员）。
 func (h *NodeHandler) Get(c *gin.Context) {
 	if !requireNodeRead(c) {
@@ -420,6 +440,8 @@ func (h *NodeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		// 归档列表/详情/清理（FR-393/394）：静态段 archived 须在 /:id 之前。
 		nodes.GET("/archived", h.ListArchived)
 		nodes.GET("/archived/:id", h.GetArchived)
+		// 正在启动的 Worker 进度（FR-486）：静态段 startup-progress 须在 /:id 之前。
+		nodes.GET("/startup-progress", h.StartupProgress)
 		nodes.DELETE("/archived/:id", h.PurgeArchived)
 		nodes.GET("/:id", h.Get)
 		nodes.GET("/:id/metrics", h.Metrics)

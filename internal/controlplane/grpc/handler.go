@@ -55,6 +55,12 @@ type TaskIngester interface {
 // 否则返回非 nil（注册据此拒绝新节点）。
 type EnrollmentValidator interface {
 	ConsumeForNewNode(plaintext, nodeUUID string) (presetNodeName string, err error)
+	// ValidateOnly 只判断 token 当前是否有效，**不消费**（FR-486 启动进度上报用）。
+	//
+	// 为什么必须有一个只读版本：启动进度上报发生在 Register **之前**，
+	// 若那里就把 token 消费掉，紧接着的正式注册会因「token 已失效」被拒——
+	// 观测功能把主流程弄坏，是最不可接受的失败方式。
+	ValidateOnly(plaintext string) bool
 }
 
 // NodeProxyResolver 计算某节点的期望出站代理 + generation，供心跳响应下发（FR-185，见 ADR-043）。
@@ -292,6 +298,10 @@ func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb
 	// FR-455②：注册成功即触发一次幂等重推（去重器吸收与隧道 onOpen 的重复触发）。
 	h.triggerResync(node.UUID)
 
+	// FR-486：把首装期「按名字」记录的启动进度行归并到真实 UUID。
+	// 必须做，否则面板会同时看到「按名字的启动中」与「该 UUID 已在线」两条，比没有进度更误导。
+	RekeyStartupProgress(h.db, node.Name, node.UUID)
+
 	// WS 令牌密钥随重注册下发（FR-275）：存量节点升级/重启即拿到密钥，无需人工同步。
 	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
 }
@@ -337,6 +347,11 @@ func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.R
 		return nil, err
 	}
 	slog.Info("新节点已注册", "name", req.Name, "uuid", node.UUID)
+
+	// FR-486：首装期的进度行按名字占位，注册成功后归并到真实 UUID 并清掉
+	//（节点已可服务，进度不再有意义；不清理会让面板一直显示「启动中」）。
+	RekeyStartupProgress(h.db, node.Name, node.UUID)
+	MarkStartupProgressDone(h.db, node.UUID)
 
 	// FR-455②：首注册成功即触发一次幂等重推（新节点此刻可能尚无实例，重推为空亦无副作用）。
 	h.triggerResync(node.UUID)
@@ -427,12 +442,44 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			"last_heartbeat":     time.Now(),
 			"status":             model.NodeStatusOnline,
 		}
+		// FR-513：主机级标量列。只在**上报了**才写（用指针区分「未上报」与「读数为 0」）。
+		//
+		// 为什么必须区分：老 Worker 不报这些字段，若无条件写零值，
+		// 面板会把「不知道负载」显示成「负载 0」——前者要升级 Worker，后者意味着机器空闲，
+		// 运维动作完全不同。
+		if req.LoadAvg5 != 0 || req.LoadAvg15 != 0 {
+			updates["load_avg5"] = req.LoadAvg5
+			updates["load_avg15"] = req.LoadAvg15
+		}
+		if req.ProcsTotal > 0 {
+			updates["procs_running"] = req.ProcsRunning
+			updates["procs_total"] = req.ProcsTotal
+		}
+		// CPU 构成同理：全为 0 视为未上报（真实读数不可能七个分量全为 0，
+		// 因为 idle 分量必然占大头）。
+		if req.CpuUser != 0 || req.CpuIdle != 0 || req.CpuSystem != 0 {
+			updates["cpu_user"] = req.CpuUser
+			updates["cpu_nice"] = req.CpuNice
+			updates["cpu_system"] = req.CpuSystem
+			updates["cpu_idle"] = req.CpuIdle
+			updates["cpu_irq"] = req.CpuIrq
+			updates["cpu_soft_irq"] = req.CpuSoftirq
+			updates["cpu_steal"] = req.CpuSteal
+		}
 		for key, value := range managedRuntimeUpdates(req.ManagedRuntime) {
 			updates[key] = value
 		}
 
 		if err := h.db.Model(&model.Node{}).Where("uuid = ?", req.NodeUuid).Updates(updates).Error; err != nil {
 			slog.Warn("更新心跳数据失败", "nodeUUID", req.NodeUuid, "error", err)
+		}
+
+		// FR-513：多值维度（分挂载点 / 整机 top-N）落独立快照表。
+		//
+		// 不进 nodes 表：它们是「一台机器 N 条」，宽表表达不了（见 model 注释）。
+		// 失败只告警不阻断心跳——观测数据不该让存活判定失败。
+		if err := h.upsertHostSnapshots(req); err != nil {
+			slog.Warn("写入主机级观测快照失败", "nodeUUID", req.NodeUuid, "error", err)
 		}
 
 		// 同步实例状态并对账（即使 Worker 上报空也要对账：
@@ -442,6 +489,10 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		// 运行态漂移（FR-471）：消费 Worker 上报的「实例工作目录下有外来活进程」，写/清 instances.runtime_drift_*。
 		// 与 FR-326 反向对账（无主运行时）方向不同：此处只针对**已存在实例**记录观测，命中 0 行忽略。
 		h.applyRuntimeDrift(req.Instances)
+
+		// 实例工作目录占用（FR-003）：组配额存储口径的真实来源，落 instances.work_dir_bytes_*。
+		// 同样只记观测、不阻断心跳——配额数据不该让存活判定失败。
+		h.applyWorkDirUsages(req.WorkDirUsages)
 
 		// FR-455②：心跳作为重推的自然兜底触发源（低频；由 ResyncDeduper 按节点节流吸收）。
 		h.triggerResync(req.NodeUuid)

@@ -47,6 +47,28 @@ type Node struct {
 	NetworkBytesRecv int64 `gorm:"default:0" json:"networkBytesRecv"`
 	// LoadAvg1 节点 1 分钟 load average（FR-062，心跳驱动）。
 	LoadAvg1 float64 `gorm:"default:0" json:"loadAvg1"`
+
+	// ---- 主机级观测（FR-513）----
+	//
+	// 全部为**指针**：nil 表示「该 Worker 未上报」（老版本），0 表示「上报了、读数确实是 0」。
+	// 这个区别对运维有意义——「负载 0」和「不知道负载」要做的判断完全不同。
+	// 前端据此把 nil 渲染成 `--`、0 渲染成 `0`（spec §5 验收 2）。
+
+	// LoadAvg5 / LoadAvg15 5/15 分钟 load average（原始值，归一在服务端按核数完成）。
+	LoadAvg5  *float64 `json:"loadAvg5"`
+	LoadAvg15 *float64 `json:"loadAvg15"`
+	// ProcsRunning 活动（runnable）进程/线程数；ProcsTotal 总数。
+	ProcsRunning *int32 `json:"procsRunning"`
+	ProcsTotal   *int32 `json:"procsTotal"`
+	// CPU 时间构成占比（0..1，同一窗口归一，各分量之和 ≈ 1）。
+	// iowait 已由 FR-485 的时序承载，此处不重复建列。
+	CPUUser    *float32 `json:"cpuUser"`
+	CPUNice    *float32 `json:"cpuNice"`
+	CPUSystem  *float32 `json:"cpuSystem"`
+	CPUIdle    *float32 `json:"cpuIdle"`
+	CPUIRQ     *float32 `json:"cpuIrq"`
+	CPUSoftIRQ *float32 `json:"cpuSoftirq"`
+	CPUSteal   *float32 `json:"cpuSteal"`
 	// LogIngestHealthy 日志采集运行时是否健康（FR-485，心跳驱动；false=采集未运行）。
 	LogIngestHealthy bool `gorm:"default:false" json:"logIngestHealthy"`
 	// ManagedRuntimeObservedAt 是 Worker 随已认证 Heartbeat 上报受管运行时快照的实际观测时间。

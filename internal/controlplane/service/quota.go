@@ -125,9 +125,10 @@ func instanceGroupID(db *gorm.DB, instanceID uint) uint {
 
 // groupDiskFreeMB 计算组配额派生给单实例的磁盘可用余量（软限）。
 //
-// 精度说明（spec §5）：组配额的存储口径目前按「备份总大小」估算（instance.go 的
-// TODO(FR-003)）。此处按「组内已登记备份大小」推余量，与 Create 时的口径一致——
-// 换了口径会让「创建时通过、运行期立刻超限」这类自相矛盾的行为出现。
+// 存储用量口径（FR-003）：取 groupUsedStorageMB —— 组内各实例的真实工作目录占用，
+// 逐实例回退到备份大小。**与创建期检查（AuthzService.GetQuotaUsage）同源同实现**：
+// 此前两处各写一遍「SUM 备份大小」，换口径时极易只改一处，导致「创建时通过、
+// 运行期立刻超限」。现在两处都调同一个函数，物理上不可能漂移。
 func groupDiskFreeMB(db *gorm.DB, groupID uint) (int64, error) {
 	var quota model.GroupQuota
 	if err := db.Where("group_id = ?", groupID).First(&quota).Error; err != nil {
@@ -139,15 +140,11 @@ func groupDiskFreeMB(db *gorm.DB, groupID uint) (int64, error) {
 	if quota.MaxStorageMB <= 0 {
 		return 0, nil
 	}
-	var used struct{ Total float64 }
-	if err := db.Model(&model.Backup{}).
-		Select("COALESCE(SUM(file_size_mb), 0) as total").
-		Joins("JOIN group_instances ON group_instances.instance_id = backups.instance_id").
-		Where("group_instances.group_id = ?", groupID).
-		Scan(&used).Error; err != nil {
+	usedMB, err := groupUsedStorageMB(db, groupID)
+	if err != nil {
 		return 0, err
 	}
-	free := int64(quota.MaxStorageMB) - int64(math.Ceil(used.Total))
+	free := int64(quota.MaxStorageMB) - int64(math.Ceil(usedMB))
 	if free <= 0 {
 		// 已超组配额：不再给任何余量（0 表示「不限」会让强制失效，故回 1MB 的最小正数）。
 		return 1, nil

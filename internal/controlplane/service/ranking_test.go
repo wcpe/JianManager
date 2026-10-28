@@ -203,6 +203,11 @@ func TestMetric_InstanceRanking_QueryCountAndIndex(t *testing.T) {
 	}
 	db2, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), cb)
 	require.NoError(t, err)
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db2.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db2.AutoMigrate(&model.MetricSeries{}, &model.MetricSampleRaw{},
 		&model.MetricRollup5m{}, &model.MetricRollup1h{}, &model.Instance{}))
 

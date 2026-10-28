@@ -46,6 +46,12 @@ type Services struct {
 	Player      *service.PlayerService
 	PlayerEvent *service.PlayerEventService
 	ServerState *service.ServerStateService
+	// BusinessStream 业务事件纯透传通道（FR-522）+ SSE 连接治理（FR-536）；
+	// nil 时 /business/stream 端点关闭。
+	BusinessStream *service.BusinessStreamService
+	// BusinessCursor 业务事件位点账本查询（ADR-107）：只读位点，不含 payload；
+	// nil 时 /business/cursor 端点关闭。
+	BusinessCursor *service.BusinessCursorService
 	// CrashSnapshot 实例崩溃快照只读查询（FR-313）；nil 时端点关闭。
 	CrashSnapshot *service.CrashSnapshotService
 	// BinaryVersion 实例二进制/Beacon 版本管理（FR-468）；nil 时相关信息端点关闭。
@@ -53,16 +59,34 @@ type Services struct {
 	// Quota 运行期配额强制（FR-467）；nil 时 /instances/:id/quota 关闭。
 	Quota *service.QuotaEnforcer
 	// Snapshot 实例整机快照与一键回滚（FR-466）；nil 时快照端点关闭。
-	Snapshot      *service.SnapshotService
-	Business      *service.BusinessService
-	BusinessEvent *service.BusinessEventService
-	Config        *service.ConfigService
+	Snapshot *service.SnapshotService
+	// Business 纯透传通道编排（FR-521 / ADR-106）：只下发 domain.verb 信封，不理解任何业务语义。
+	Business *service.BusinessService
+	// BusinessBatch 业务批量命令 + 跨区二次确认 + 流式进度（FR-523 / FR-535 / FR-537）；
+	// nil 时 /business/batch 与 /business/batch/preview 端点关闭。
+	BusinessBatch *service.BusinessBatchService
+	// BusinessReconcile 业务对账协调接口（FR-525）：复用批量引擎的目标解析与并发模型，
+	// 只读透传插件快照；nil 时 /business/reconcile 端点关闭。
+	BusinessReconcile *service.BusinessReconcileService
+	// Bridge 桥能力接入（FR-526）：桥状态 / 主题订阅 / 业务域状态；
+	// nil 时 /instances/:id/bridge/* 与 /instances/:id/business/status 端点关闭。
+	Bridge *service.BridgeService
+	Config *service.ConfigService
 	// ConfigSource 配置源明面化（FR-451）；nil 时 /instances/:id/configs/surface 端点关闭。
 	ConfigSource *service.ConfigSourceService
 	// InstanceRolling 实例滚动/分批/灰度编排（FR-457）；nil 时 /instances/rolling 端点关闭。
 	InstanceRolling *service.InstanceRollingService
 	// ConfigBaseline 配置基线下发/漂移/收敛（FR-458）；nil 时 /config-baselines 端点关闭。
-	ConfigBaseline   *service.ConfigBaselineService
+	ConfigBaseline *service.ConfigBaselineService
+	// ConfigFile 配置分层覆盖（FR-529）：配置文件 + 各作用域版本链 + 有效值预览；
+	// nil 时 /config-files 端点关闭。
+	ConfigFile *service.ConfigFileService
+	// ConfigAdopt 配置纳管（FR-533）：把磁盘现有配置文件读入为 config_file + 实例级 v1；
+	// nil 时 /config-files/adopt 与 /config-files/health 端点关闭。
+	ConfigAdopt *service.ConfigAdoptService
+	// ConfigDelivery 配置分批灰度与生效编排（FR-531/532）；
+	// nil 时 /config-deliveries 端点关闭。
+	ConfigDelivery   *service.ConfigDeliveryService
 	Bot              *service.BotService
 	BotStressSession *service.BotStressSessionService
 	// BotLoadCapacity/Preflight/Execution 是 FR-351 进程级共享单例；nil 时仅保留旧会话入口。
@@ -96,7 +120,11 @@ type Services struct {
 	ArtifactReconcile *service.ArtifactReconcileService
 	Template          *service.TemplateService
 	Audit             *service.AuditService
-	Authz             *service.AuthzService
+	// FR-490/493 平台审批中心；nil 时相关端点不注册（剪裁部署）。
+	Approval *service.ApprovalService
+	// 审批执行器（FR-491）：批准后立即执行。nil 时批准只落状态不执行。
+	ApprovalExec *service.ApprovalExecutor
+	Authz        *service.AuthzService
 	// Permission 可选显式权限服务；nil 时从 Authz.Permissions() 取（FR-432）。
 	Permission *service.PermissionService
 	Event      *service.EventService
@@ -127,6 +155,11 @@ type Services struct {
 	Settings              *service.SettingsService
 	// Assistant AI 助手供应商/模型配置（FR-514，见 ADR-105）；nil 时 /assistant 端点关闭。
 	Assistant *service.AssistantService
+	// AssistantChat 助手对话运行时：会话/消息/run/事件（FR-515 Phase D）；nil 时
+	// /assistant/conversations 与 /assistant/runs 端点关闭（配置面不受影响）。
+	AssistantChat *service.AssistantChatService
+	// AssistantMCP 外部 MCP 连接管理（FR-517）；nil 时整组端点不注册。
+	AssistantMCP *service.AssistantMCPService
 	// OrphanRuntime 实例反向对账无主运行时列表/确认处置（FR-326）；nil 时端点关闭。
 	OrphanRuntime *service.OrphanRuntimeTracker
 	// BotReclaim 失效 Bot 回收列表/确认处置（FR-460）；nil 时端点关闭。
@@ -173,6 +206,9 @@ type Services struct {
 	Notification *service.NotificationService
 	// 统一通知中心（FR-216，见 ADR-048）：聚合站内信 + 告警为一条只读通知流。
 	NotificationFeed *service.NotificationFeedService
+	// Stats 对外只读统计契约（FR-527）：六组 /stats/* 只读端点；
+	// nil 时整组端点不注册（等价「未启用对外统计」）。
+	Stats *service.StatsService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -353,6 +389,48 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		instanceHandler := NewInstanceHandler(svcs.Instance, svcs.Authz)
 		instanceHandler.RegisterRoutes(permRead("instance.read"))
 
+		// 平台审批中心（FR-490/493）。
+		//
+		// 两组端点分开挂：`/approvals/own/*` 由 session 归属决定范围（任何登录用户都能看自己的），
+		// `/approvals` 与决策端点则要求 approval.read / approval.decide 权限节点。
+		// 决策端点即使被越权访问，服务层还有一道「Agent 身份不可决策」——不靠路由守卫兜底。
+		if svcs.Approval != nil {
+			// 把高危 action 接到领域动作（FR-490/492）。
+			//
+			// 必须在注册路由之前接：执行器没有 adapter 时批准会「失败关闭」，
+			// 而那种表现看起来像执行器坏了，实际是装配漏了。返回值是缺 adapter 的
+			// action 名单，只记录不中断——缺哪个由覆盖度测试把关，不在启动期 panic。
+			if svcs.ApprovalExec != nil {
+				// 执行面审计（approval.executed / approval.execute_failed）。
+				svcs.ApprovalExec.SetAudit(svcs.Audit)
+				unwired := service.RegisterApprovalAdapters(svcs.ApprovalExec, service.ApprovalAdapterDeps{
+					Instance:      svcs.Instance,
+					Node:          svcs.Node,
+					File:          svcs.File,
+					FileVersion:   svcs.FileVersion,
+					Config:        svcs.Config,
+					Bot:           svcs.Bot,
+					InstanceGroup: svcs.InstanceGroup,
+					Network:       svcs.Network,
+					Registration:  svcs.Registration,
+					Snapshot:      svcs.Snapshot,
+					BinaryVersion: svcs.BinaryVersion,
+					Provision:     svcs.Provision,
+					Transfer:      svcs.AgentTransfer,
+					Agent:         svcs.AgentToken,
+				})
+				if len(unwired) > 0 {
+					slog.Warn("部分高危 action 尚无 adapter，批准后将失败关闭", "actions", unwired)
+				}
+			}
+			approvalHandler := NewApprovalHandler(svcs.Approval, svcs.ApprovalExec, svcs.Audit)
+			approvalHandler.RegisterRoutes(protected)
+			approvalHandler.RegisterAdminRoutes(
+				permRead("approval.read", "approval.decide"),
+				permRead("approval.decide"),
+			)
+		}
+
 		// 实例批量操作（FR-058）：独立 handler，挂 /instances/batch（与单实例路由共存）。
 		instanceBatchHandler := NewInstanceBatchHandler(svcs.InstanceBatch, svcs.Authz)
 		instanceBatchHandler.RegisterRoutes(permRead("instance.read", "instance.operate", "instance.write"))
@@ -408,6 +486,24 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 				RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
 		}
 
+		// 配置分层覆盖（FR-529）：独立前缀 /config-files，与实例级 /instances/:id/configs 分开。
+		// 纳管（FR-533）的 adopt / adopt/preview / health 是静态段，必须先于 /:id 通配注册，
+		// 否则 gin 会把它们当成「id=adopt」的详情请求。
+		if svcs.ConfigAdopt != nil {
+			NewConfigAdoptHandler(svcs.ConfigAdopt, svcs.Authz, svcs.Audit).
+				RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
+		}
+		if svcs.ConfigFile != nil {
+			NewConfigFileHandler(svcs.ConfigFile, svcs.Authz, svcs.Audit).
+				RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
+		}
+
+		// 配置分批灰度与生效编排（FR-531/532）：独立前缀 /config-deliveries。
+		if svcs.ConfigDelivery != nil {
+			NewConfigDeliveryHandler(svcs.ConfigDelivery, svcs.Authz, svcs.Audit).
+				RegisterRoutes(permRead("file.read", "instance.read", "file.write", "instance.write"))
+		}
+
 		// Bot 分布式容量静态路由必须先于 /bots/:id 注册，且复用进程级 CapacityDirectory。
 		if svcs.BotLoadCapacity != nil {
 			NewBotLoadHandler(svcs.BotLoadCapacity, svcs.Instance, svcs.Authz).RegisterRoutes(permRead("bot.read", "bot.manage"))
@@ -458,16 +554,37 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 
 		// JBIS 业务对接：经探针桥下发业务命令（domain.action+payload）并透传结果（FR-116），instance:operate 且实例可访问。
+		// FR-521 / ADR-106：仅保留纯透传通道；业务事件读接口（events / economy.*）已退役。
 		if svcs.Business != nil {
 			businessHandler := NewBusinessHandler(svcs.Business, svcs.Authz, svcs.Audit)
 			businessHandler.RegisterRoutes(permRead("instance.read", "instance.business.write", "instance.operate"))
 		}
 
-		// JBIS 业务事件汇聚只读视图（FR-122，见 ADR-027/028）：业务事件流 / 经济镜像 / 跨区聚合。
-		// 平台级只读（instance:read），汇聚镜像非业务真源；写入由探针事件流自动汇聚。
-		if svcs.BusinessEvent != nil {
-			businessEventHandler := NewBusinessEventHandler(svcs.BusinessEvent, svcs.Authz)
-			businessEventHandler.RegisterRoutes(permRead("instance.read"))
+		// 业务批量命令（FR-523 / FR-535 / FR-537）：目标解析 + 跨区风险分级 + confirmToken
+		// + 流式进度。预览需 instance:operate（只解析不产生副作用），执行需
+		// instance:business:write（与单实例写动作同级，Handler 内部叠加）。
+		if svcs.BusinessBatch != nil {
+			NewBusinessBatchHandler(svcs.BusinessBatch, svcs.Authz, svcs.Audit).
+				RegisterRoutes(permRead("instance.read", "instance.business.write", "instance.operate"))
+		}
+
+		// 业务对账协调接口（FR-525）：`POST /business/reconcile`。
+		//
+		// 只读通道，故权限与单实例读动作同级（instance:operate），**不要求**
+		// instance:business:write——对账不该逼只读账号去借写权限。
+		// 「拒绝写动作」由服务层查 manifest 兜底（不靠权限节点表达，因为权限节点
+		// 无法区分同一 domain 下的读写动作）。
+		if svcs.BusinessReconcile != nil {
+			NewBusinessReconcileHandler(svcs.BusinessReconcile, svcs.Authz, svcs.Audit).
+				RegisterRoutes(permRead("instance.read", "instance.operate"))
+		}
+
+		// 桥能力接入（FR-526）：桥线路状态 / 事件主题订阅 / 业务域状态。
+		//
+		// 三条都是诊断与通道治理，权限统一 instance.read：订阅改的是「上报多少」，
+		// 不是实例配置也不是业务数据，提到 instance.operate 只会逼运维去借写权限。
+		if svcs.Bridge != nil {
+			NewBridgeHandler(svcs.Bridge, svcs.Authz).RegisterRoutes(permRead("instance.read"))
 		}
 
 		eventHandler := NewEventHandler(svcs.Event)
@@ -627,6 +744,21 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			NewAssistantHandler(svcs.Assistant, svcs.Audit).RegisterRoutes(protected.Group("/assistant"))
 		}
 
+		// AI 助手对话运行时（FR-515 Phase D）：与 FR-514 共用 `/assistant` 前缀，
+		// 但注册的是不同子路径（conversations / runs），故各自 Group 一次即可——
+		// 用两个 Group 而不是把两个 handler 塞进同一个 group 变量，是为了让
+		// 「哪些端点由哪一层把关」在代码里保持可见（本层无额外权限节点，权限是会话归属）。
+		if svcs.AssistantChat != nil {
+			NewAssistantChatHandler(svcs.AssistantChat).RegisterRoutes(protected.Group("/assistant"))
+		}
+		if svcs.AssistantMCP != nil {
+			// 全部仅平台管理员（FR-517 §6）。复用 assistant 已有的管理员门禁，
+			// 而不是 requirePlatformAdmin：后者语义是 node.manage，口径不同。
+			admin := protected.Group("/assistant/admin")
+			admin.Use(requireAssistantAdmin())
+			NewAssistantMCPHandler(svcs.AssistantMCP).RegisterRoutes(admin)
+		}
+
 		if svcs.OrphanRuntime != nil {
 			NewOrphanRuntimeHandler(svcs.OrphanRuntime).RegisterRoutes(permRead("node.manage", "instance.read"))
 		}
@@ -744,7 +876,46 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			}
 			c.Next()
 		})
-		NewAgentOpsHandler(svcs.AgentToken, svcs.Instance, svcs.Node, svcs.Audit, svcs.AgentCallLog).RegisterOpsRoutes(agentGroup)
+		opsHandler := NewAgentOpsHandler(svcs.AgentToken, svcs.Instance, svcs.Node, svcs.Audit, svcs.AgentCallLog)
+		// FR-492 三入口同策略：HTTP/CLI 入口也必须过审批闸，
+		// 否则同一个 Token 换个 transport 就能跳过人工批准。
+		opsHandler.SetApproval(svcs.Approval)
+		opsHandler.RegisterOpsRoutes(agentGroup)
+	}
+
+	// 业务事件流（FR-522 / FR-536）：`GET /api/v1/business/stream`（SSE）。
+	//
+	// 鉴权：对外契约（docs/openapi/external.yaml）的 security 是 AgentToken，业务台用 Agent Token 订阅；
+	// 但运维页面看这条流时手里是浏览器 JWT，故采用「Agent Token 优先、JWT 兜底」的组合——
+	// 两者都失败才 401。单 Token 并发上限按拿到的主体分别计（agent:<tokenId> / user:<id>）。
+	if svcs.BusinessStream != nil {
+		streamGroup := api.Group("")
+		streamGroup.Use(businessStreamAuth(svcs.AgentToken, svcs.Authz, jwtSecret))
+		NewBusinessStreamHandler(svcs.BusinessStream).RegisterRoutes(streamGroup)
+	}
+
+	// 业务事件位点缺口查询（ADR-107）：`GET /api/v1/business/cursor`。
+	//
+	// 鉴权与 SSE 订阅同一套（Agent Token 优先、JWT 兜底）：这是同一条业务通道的位点视角，
+	// 若两者鉴权不一致，会出现「能订阅事件却查不到位点」的分裂，业务台无法完成缺口恢复。
+	if svcs.BusinessCursor != nil {
+		cursorGroup := api.Group("")
+		cursorGroup.Use(businessStreamAuth(svcs.AgentToken, svcs.Authz, jwtSecret))
+		NewBusinessCursorHandler(svcs.BusinessCursor).RegisterRoutes(cursorGroup)
+	}
+
+	// 对外只读统计契约（FR-527）：`/api/v1/stats/*` 六组只读端点。
+	//
+	// 鉴权同业务事件流：契约面向业务台等机器调用方（Agent Token），但统计卡片
+	// 也是运维页面要看的（浏览器 JWT），故两者并列、都失败才 401。
+	// 限流挂在鉴权之后（spec §4.4 的口径是「每 token 每分钟 120 次」，主体需先确定）。
+	//
+	// 注意路由前缀：契约路径是 `/stats/*`，相对于 servers.url 的 `/api/v1`。
+	if svcs.Stats != nil {
+		statsGroup := api.Group("")
+		statsGroup.Use(statsAuth(svcs.AgentToken, jwtSecret, svcs.Authz))
+		statsGroup.Use(statsScreen(svcs.Stats))
+		NewStatsHandler(svcs.Stats, svcs.Authz).RegisterRoutes(statsGroup)
 	}
 
 	// CP 内嵌 MCP 网关（FR-389 / ADR-077）：Streamable HTTP + SSE；仅 Agent Token。

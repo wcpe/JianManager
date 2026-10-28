@@ -158,11 +158,12 @@ func (e *AlertEvaluator) evaluateNodeMetricRule(rule *model.AlertRule, nodes []m
 			continue
 		}
 		value := getNodeMetric(node, rule.Metric)
-		// iowait 不在节点快照中；沿既有别名和 UUID 从时序库取近期百分比样本。
-		if metricKey, ok := resolveMetricKey("node", rule.Metric); ok && metricKey == model.MetricNodeIOWait {
+		// iowait 与日志采集面指标不在节点快照中（FR-485）；沿既有别名和 UUID 从时序库取近期样本。
+		if isSeriesOnlyNodeMetric(rule.Metric) {
 			if e.metrics == nil {
 				continue
 			}
+			metricKey, _ := resolveMetricKey("node", rule.Metric)
 			sample, err := e.metrics.LatestValue(model.MetricScopeNode, node.UUID, "", metricKey, time.Now().UTC().Add(-alertMetricFreshWindow))
 			if err != nil {
 				slog.Warn("告警评估：查询节点指标失败", "rule", rule.Name, "node", node.Name, "error", err)
@@ -508,7 +509,21 @@ func directionLabel(direction string) string {
 }
 
 // getNodeMetric 从节点对象获取指标值。
+//
+// 量纲陷阱（FR-485 取证结论，务必先读完再改本函数）：
+// nodes 表的 cpu_usage / memory_usage / disk_usage 存的是 **0..1 的分数**
+// （Worker 侧 `UsedPercent / 100.0`，见 internal/worker/register/register.go），
+// 而告警规则的阈值在界面与直觉上都是 **百分比**（「磁盘 > 85」= 85%）。
+// 两者直接比较时，「磁盘 85%」要写成阈值 0.85 才会触发——几乎没人会这么写，
+// 于是这类规则**永不触发且不报错**，是比不实现更糟的静默失效。
+//
+// 处理方式：**不改旧键语义**（改了会让现网存量规则的阈值含义整体漂移，
+// 属于破坏性变更），而是另行提供口径无歧义的百分比键（见 nodeSnapshotPercent）。
 func getNodeMetric(node *model.Node, metric string) float64 {
+	// 百分比口径键优先（FR-485：让「磁盘 > 85%」这类绝对阈值可表达）。
+	if v, ok := nodeSnapshotPercent(node, metric); ok {
+		return v
+	}
 	switch metric {
 	case "cpu", "cpu_usage":
 		return float64(node.CPUUsage)
@@ -522,8 +537,69 @@ func getNodeMetric(node *model.Node, metric string) float64 {
 		}
 		return 0
 	default:
+		// FR-485：其余日志采集面指标都在时序库里（心跳写入），不在 nodes 表。
+		// 返回 -1 让调用方的时序取值路径接手；这里不做转换是因为本函数拿不到 DB。
 		return -1
 	}
+}
+
+// logMetricKeys 是「只存在于时序库、不在 nodes 表」的日志采集面指标键集合（FR-485）。
+//
+// 单独成集合而不是塞进 case 分支的理由：evaluateNodeMetricRule 必须先知道
+// 「这个指标不该从快照取」，才能改走时序路径；两层各写一份判断会出现
+// 「快照返回 -1 但没人去时序取值」的静默不告警。故判据只在这里定义一次。
+var logMetricKeys = map[string]struct{}{
+	model.MetricLogStateFileSize:    {},
+	model.MetricLogStateFileGrowth:  {},
+	model.MetricLogPersistWrite:     {},
+	model.MetricLogWALBacklog:       {},
+	model.MetricLogWALPaused:        {},
+	model.MetricLogDeliveryFailRate: {},
+	model.MetricLogVerifyBackoff:    {},
+	model.MetricLogSlowSQLCount:     {},
+	model.MetricLogSlowSQLMaxMs:     {},
+}
+
+// isSeriesOnlyNodeMetric 判断节点指标是否只能从时序库取（不在 nodes 快照里）。
+//
+// iowait 与全部日志采集面指标同属此类：snapshot 里没有它们，只有心跳写入的时序序列。
+func isSeriesOnlyNodeMetric(ruleMetric string) bool {
+	metricKey, ok := resolveMetricKey("node", ruleMetric)
+	if !ok {
+		return false
+	}
+	if metricKey == model.MetricNodeIOWait {
+		return true
+	}
+	_, isLog := logMetricKeys[metricKey]
+	return isLog
+}
+
+// nodeSnapshotPercent 把节点快照的分数读数换算为百分比（0..100）。
+//
+// 为什么单列独立键而不是直接改旧键：旧键（cpu/memory/disk 及 cpu_usage 等）
+// 的阈值已被现网存量规则引用，原地改变量纲等于把所有存量规则的阈值悄悄放大 100 倍
+// （写 90 的人突然要 9000% 才触发），那次变更会比原来的缺陷更难发现。
+// 新增键是**加法**，存量零影响。
+//
+// 为什么也不能复用 cpu_pct：那个名字已被 nodeMetricAliases 占用，指向时序键
+// node_cpu_pct（供 iowait 那条同型的时序取值路径使用）。同名不同源会让规则
+// 在不同代码路径下取到不同口径的值——这类分叉是排障时最难定位的一种。
+//
+// 返回 ok=false 表示该指标不属于百分比键（由 getNodeMetric 继续走旧分支）。
+func nodeSnapshotPercent(node *model.Node, metric string) (float64, bool) {
+	if node == nil {
+		return 0, false
+	}
+	switch metric {
+	case "node_cpu_usage_pct":
+		return float64(node.CPUUsage) * 100, true
+	case "node_memory_usage_pct", "node_mem_usage_pct":
+		return float64(node.MemoryUsage) * 100, true
+	case "node_disk_usage_pct":
+		return float64(node.DiskUsage) * 100, true
+	}
+	return 0, false
 }
 
 // compareOp 比较运算。
