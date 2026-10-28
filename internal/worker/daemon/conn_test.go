@@ -83,7 +83,8 @@ func TestSocketAddr(t *testing.T) {
 
 // TestFrame_StreamEcho 通过 socket 模拟多帧流式输出（stdout 连续帧）。
 func TestFrame_StreamEcho(t *testing.T) {
-	addr := SocketAddr(t.TempDir(), "test-stream-"+t.Name())
+	// 同上：用短名避免 TMPDIR 偏长时越过 sun_path 的 108 字节上限。
+	addr := SocketAddr(t.TempDir(), "stream")
 	ln, err := Listen(addr)
 	require.NoError(t, err)
 	defer ln.Close()

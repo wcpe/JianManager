@@ -30,7 +30,8 @@ import type { InstanceInfo } from '@/lib/instances/instance-types'
 import { RoleBadge } from '@/components/views/instances/InstanceTableParts'
 import { computeVisibleColumns, type InstanceColumnKey } from '@/lib/instances/instance-view-prefs'
 import type { RuntimeDriftInfoView } from '@/components/views/instances/RuntimeDriftNotice'
-import { InstanceHealthCell, healthHoverBridge } from '@/components/views/instances/InstanceRowSpark'
+import { InstanceHealthCell } from '@/components/views/instances/InstanceRowSpark'
+import { healthHoverBridgeRef } from '@/components/views/instances/health-hover-bridge'
 import type { InstanceMetricSnapshot } from '@/components/views/instances/InstanceRowMetrics'
 import { DEFAULT_COLUMNS, type InstanceOptionalColumn } from '@/lib/instances/instance-view-prefs'
 import type { BusinessStatus } from '@/api/businessStatus'
@@ -414,7 +415,7 @@ function InstanceRowViewImpl({
           <InstanceHealthCell
             metrics={metrics}
             running={inst.status === 'RUNNING'}
-            onHover={healthHoverBridge.current}
+            onHover={healthHoverBridgeRef.current}
           />
         </TableCell>
   )

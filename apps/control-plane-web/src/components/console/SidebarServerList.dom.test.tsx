@@ -3,11 +3,9 @@ import { screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import SidebarServerList from './SidebarServerList'
 import ServerSelector from './ServerSelector'
-import ConsoleSidebar from './ConsoleSidebar'
 
 // 快照与假后端种子实例对齐（id/uuid/nodeId 一致）；status 故意存过期值，
 // 逼常驻列走低频合并查询取真状态，同时给测试一个「查询已结算」的确定性信号。
@@ -152,21 +150,16 @@ describe('SidebarServerList 常驻服务器列（FR-293）', () => {
     expect(screen.queryByTestId('sidebar-server-row')).toBeNull()
   })
 
-  it('侧栏折叠图标轨态不渲染常驻列表', async () => {
+  it('侧栏折叠图标轨态不渲染常驻列表（FR-507 阶段 6：旧六域侧栏已删除）', async () => {
+    // 本条原本渲染 `ConsoleSidebar`（六域侧栏）并验证其折叠态不渲染常驻列表。
+    // 阶段 6 删掉该侧栏后，那套 `data-mode="expanded|collapsed"` 双内容层结构已不存在；
+    // 新侧栏是 `WorkspaceSidebar`，其折叠态行为由 `WorkspaceSidebar.dom.test.tsx` 负责（含
+    // 「资源面板注入被正确使用」与「折叠态图标轨」两条）。本文件只保留 SidebarServerList 自身的断言。
     seedSelection([survival], [creative])
-    useAuthStore.setState({ role: 1 })
-    useConsoleStore.setState({ sidebarCollapsed: false, collapsedGroups: {} })
-    const { container } = renderWithProviders(<ConsoleSidebar />)
+    renderWithProviders(<SidebarServerList />)
 
-    const expanded = container.querySelector('[data-mode="expanded"]') as HTMLElement
-    const compact = container.querySelector('[data-mode="collapsed"]') as HTMLElement
-    expect(within(expanded).getByTestId('sidebar-server-list')).toBeInTheDocument()
-    expect(within(compact).queryByTestId('sidebar-server-list')).toBeNull()
-
-    // 等状态/节点查询结算，避免用例结束时仍有在途请求。
     await waitFor(() => {
-      expect(within(expanded).getByLabelText('RUNNING')).toBeInTheDocument()
-      expect(within(expanded).getByText('survival-1').closest('button')).toHaveAttribute('title', 'survival-1 · alpha')
+      expect(screen.getByTestId('sidebar-server-list')).toBeInTheDocument()
     })
   })
 })

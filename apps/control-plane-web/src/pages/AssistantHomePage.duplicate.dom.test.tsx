@@ -7,6 +7,8 @@ import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { usePermissionsStore } from '@/stores/permissions'
+import { useAssistantChat } from '@/components/views/assistant/useAssistantChat'
+import { AssistantChatProvider } from '@/components/views/assistant/assistant-chat-context'
 import AssistantHomePage from './AssistantHomePage'
 
 /**
@@ -41,6 +43,21 @@ function asAdmin() {
 
 const QUESTION = '回归用问题：这条只应出现一次'
 const REPLY = '回归用回复：这条也只应出现一次'
+
+/**
+ * 首页从外壳层的 Context 取会话状态（FR-519 §3：外壳级单一 manager，不得自建）。
+ * 测试里补一层 Provider，**仍调用真实的 useAssistantChat**——
+ * 这样测到的状态装配与生产一致，而不是喂一个手工 mock。
+ * 写法与 `AssistantHomePage.dom.test.tsx` 的 `HomeInProvider` 保持一致。
+ */
+function HomeInProvider() {
+  const chat = useAssistantChat(true)
+  return (
+    <AssistantChatProvider value={chat}>
+      <AssistantHomePage />
+    </AssistantChatProvider>
+  )
+}
 
 describe('AI 首页：一轮问答不重复显示', () => {
   beforeEach(() => {
@@ -77,7 +94,7 @@ describe('AI 首页：一轮问答不重复显示', () => {
       ),
     )
 
-    renderWithProviders(<AssistantHomePage />)
+    renderWithProviders(<HomeInProvider />)
 
     // 历史先到位（这是纯历史渲染，本来就该只有一条）
     await screen.findByText(QUESTION)

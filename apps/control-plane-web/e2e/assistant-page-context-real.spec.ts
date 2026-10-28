@@ -53,16 +53,6 @@ function readSnapshot(runId: number): string | null {
   return out === '' || out === '<NULL>' ? null : out
 }
 
-/** 取该会话最新一条 run 的 id（前端只回 runId，库里最新那条就是本轮）。 */
-function latestRunId(conversationId: number): number {
-  const out = execFileSync(
-    'sqlite3',
-    [`file:${CP_DB}?mode=ro`, `SELECT id FROM assistant_runs WHERE conversation_id=${conversationId} ORDER BY id DESC LIMIT 1;`],
-    { encoding: 'utf8' },
-  ).trim()
-  return Number(out)
-}
-
 test.describe('FR-518 后端快照（真实 CP）', () => {
   test.skip(
     !process.env.FR518_CP_DB && process.env.FR518_REQUIRE_REAL !== '1',

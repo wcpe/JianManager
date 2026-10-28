@@ -132,10 +132,12 @@ describe('DashboardPage 宽屏布局', () => {
     const mobileNav = screen.getByLabelText('移动导航')
     expect(mobileNav).toHaveAttribute('data-slot', 'mobile-console-nav')
 
-    await user.click(within(mobileNav).getByRole('button', { name: '服务器' }))
+    await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
     expect(mobileNav.querySelector('[data-slot="mobile-nav-panel"]')).toHaveAttribute('data-state', 'open')
-    expect(within(mobileNav).getByRole('link', { name: '服务器' })).toBeInTheDocument()
-    expect(within(mobileNav).getByRole('link', { name: '节点' })).toBeInTheDocument()
+    // FR-507 阶段 6：底部格子是「工作区」，面板里列该工作区下的分组。
+    // 面板内容按权限裁剪（本用例未登录特定角色，`instance.read` / `node.read` 不可见），
+    // 因此只断言本用例真正关心的事：面板里出现了可点链接。
+    expect(within(mobileNav).getAllByRole('link').length).toBeGreaterThan(0)
   })
 
   it('移动端导航面板收起时保留关闭动画状态', async () => {
@@ -143,7 +145,7 @@ describe('DashboardPage 宽屏布局', () => {
     renderWithProviders(<DashboardPage />, { route: '/instances' })
 
     const mobileNav = screen.getByLabelText('移动导航')
-    await user.click(within(mobileNav).getByRole('button', { name: '服务器' }))
+    await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
 
     const panel = mobileNav.querySelector('[data-slot="mobile-nav-panel"]') as HTMLElement
     expect(panel).toHaveAttribute('data-state', 'open')
@@ -158,7 +160,8 @@ describe('DashboardPage 宽屏布局', () => {
     renderWithProviders(<DashboardPage />, { route: '/networks/topology' })
 
     const mobileNav = screen.getByLabelText('移动导航')
-    await user.click(within(mobileNav).getByRole('button', { name: '群组网络' }))
+    // FR-507 阶段 6：群组网络已归入「服务器运维」工作区的「群组与工作台」分组。
+    await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
 
     expect(within(mobileNav).getByRole('link', { name: '网络拓扑' })).toHaveAttribute('aria-current', 'page')
     expect(within(mobileNav).getByRole('link', { name: '分组管理' })).not.toHaveAttribute('aria-current')

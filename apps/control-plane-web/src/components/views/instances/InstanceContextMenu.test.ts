@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { buildContextMenuActions } from '@/components/views/instances/InstanceContextMenu'
+import { buildContextMenuActions } from '@/components/views/instances/instanceContextMenuActions'
 import type { InstanceInfo } from '@/api/instances'
 
 /**

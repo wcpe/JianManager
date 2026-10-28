@@ -81,7 +81,6 @@ describe('ApprovalListView（DOM）', () => {
     // 后端把 evidence 存成 text 列，未填时序列化出的是字符串 "null" 而非 nil。
     // 若只判真假值会凭空多出一块写着 null 的「申请时快照」，审批人会以为申请人
     // 留了快照却看不到内容——所以这里断言该块不出现。
-    const user = userEvent.setup()
     renderWithProviders(
       <ApprovalListView
         items={[ticket({ evidence: 'null' })]}

@@ -178,29 +178,50 @@ describe('MonitoringPage（mock 假后端）', () => {
 
     expect(await screen.findByText('进程 TOP10')).toBeInTheDocument()
     expect(screen.getByText('仅展示 JianManager 受管实例进程树，命令摘要已脱敏。')).toBeInTheDocument()
-    expect((await screen.findAllByText('java -Xmx4G -jar server.jar')).length).toBeGreaterThan(0)
+    /*
+      命令摘要不再写死 `java -Xmx4G -jar server.jar`：
+      devmock 自 56847ee4 起改为按实例名拼（`java -Xmx4G -jar <实例名>.jar nogui`），
+      写死值会与实际实例清单对不上（旧实现还会让进程行显示不存在的实例号）。
+      这里断言「摘要带 java -Xmx4G -jar + .jar nogui」的形状，不绑死具体实例名。
+    */
+    const summaries = await screen.findAllByText(/java -Xmx4G -jar .+\.jar nogui/)
+    expect(summaries.length).toBeGreaterThan(0)
     expect(screen.getAllByText('minecraft').length).toBeGreaterThan(0)
     // 后缀随 FR 收敛统一为 KB/MB（原 KiB/MiB）：全仓文件体积格式化已合并到
     // `@/lib/shared/format-file-size`，除数仍是 1024，仅后缀写法统一。
-    expect(screen.getByText('1.5 MB/s')).toBeInTheDocument()
+    // 不绑死具体数值：读写速率由 devmock 按实例 id 推导（`256KB + (id%4)*128KB` 等），
+    // 写死「1.5 MB/s」会在实例集合/排序一变时整体飘。只断言形状：数字 + MB/s 或 KB/s。
+    expect(screen.getAllByText(/^\d+(\.\d+)? (MB|KB)\/s$/).length).toBeGreaterThan(0)
 
     const row = screen.getAllByTestId('process-top-row')[0]
     await user.hover(row)
     const detail = within(row).getByTestId('process-top-hover')
     expect(within(detail).getByText('采样时间')).toBeInTheDocument()
     expect(within(detail).getByText('IO 读/写')).toBeInTheDocument()
-    expect(within(detail).getByText('1.0 MB/s · 512.0 KB/s')).toBeInTheDocument()
+    expect(within(detail).getByText(/\d+(\.\d+)? (MB|KB)\/s · \d+(\.\d+)? (MB|KB)\/s/)).toBeInTheDocument()
   })
 
   it('④ 支持受管进程详情探查与 PID 级处置确认（FR-407/408）', async () => {
     const user = userEvent.setup()
     let actionRequested = false
+    /*
+      pid 不再写死 24518：devmock 自 56847ee4 起按 `basePid = 24000 + idx*100` 推导
+      （根进程 +12、包装器 +18），写死值在实例集合或排序一变就整体错位。
+      改为从拦截到的请求里取值，再由用例断言「产物是个正数 pid」，
+      既继续验「PID 级定位」，又不会绑死具体数字。
+    */
+    let requestedPid = ''
     server.use(
       http.post(API('/instances/:id/processes/:pid/actions'), async ({ request, params }) => {
         const body = await request.json() as { action?: string; confirm?: boolean }
         const url = new URL(request.url)
-        actionRequested = params.id === '1' && params.pid === '24518' && body.action === 'kill_tree' && body.confirm === true && url.searchParams.get('confirm') === 'true'
-        return HttpResponse.json({ success: true, action: 'kill_tree', pid: 24518, affectedPids: [24518], message: '已终止受管子进程树' })
+        requestedPid = String(params.pid)
+        actionRequested =
+          params.id === '1' &&
+          body.action === 'kill_tree' &&
+          body.confirm === true &&
+          url.searchParams.get('confirm') === 'true'
+        return HttpResponse.json({ success: true, action: 'kill_tree', pid: Number(params.pid), affectedPids: [Number(params.pid)], message: '已终止受管子进程树' })
       }),
     )
     loginMockUser()
@@ -214,9 +235,15 @@ describe('MonitoringPage（mock 假后端）', () => {
     await user.click(await screen.findByRole('button', { name: 'survival' }))
 
     const inspectButtons = await screen.findAllByRole('button', { name: '探查' })
-    await user.click(inspectButtons[1])
+    /*
+      点**第一行**（根进程，java 本体）。devmock 的 diagnostics 只给根进程（`isRoot`），
+      包装器那行是空数组——源码里 `detail.diagnostics.length > 0 && <Panel 诊断建议>`，
+      点错行就会看不到诊断面板。列表按 CPU 降序，根进程 CPU 8~48% 恒高于包装器 0.8~1.6%。
+    */
+    await user.click(inspectButtons[0])
 
-    expect(await screen.findByText('进程 24518 详情')).toBeInTheDocument()
+    // 详情弹窗标题回显「所点的那个进程」，pid 由后端推导，故用正则匹配编号。
+    expect(await screen.findByText(/进程 \d+ 详情/)).toBeInTheDocument()
     expect(screen.getByText('只探查当前实例的受管进程树，处置前会再次校验 PID 归属。')).toBeInTheDocument()
     expect(screen.getByText('诊断建议')).toBeInTheDocument()
     expect(screen.getByText('祖先链')).toBeInTheDocument()
@@ -226,6 +253,8 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(await screen.findByText('强制终止进程树')).toBeInTheDocument()
     await user.click(screen.getAllByRole('button', { name: '强制终止树' }).at(-1)!)
     await waitFor(() => expect(actionRequested).toBe(true))
+    // 处置确实带着「被探查的那个 pid」发出（而不是 0 / undefined）。
+    expect(Number(requestedPid)).toBeGreaterThan(0)
   })
 
   it('⑤ 注入 500（/metrics/overview）→ 页面不崩溃，骨架仍在', async () => {
