@@ -7634,6 +7634,31 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 	if err := ctx.Err(); err != nil {
 		return pipeline.DeliveryResult{}, err
 	}
+	// 热层保留期闸（2026-10-28 生产停采事件）：
+	//
+	// VL 对**早于 `now - retention`** 的数据点返回 HTTP 200 但立即丢弃（实测：写
+	// _time=2026-09-20 的记录 → 200，随后查该窗口 → 0 行）。写进去必然查不到，而那会让
+	// 后续投影校验恒失败 ⇒ PublicationPending 永不清 ⇒ 重建不断新建代次 ⇒ delivery /
+	// reclaim 全部卡死 ⇒ WAL 撞上限 ⇒ 采集暂停。
+	//
+	// 为什么必须加在这里：`deliver`（整窗重发）与 `rebuildDaysInner`（重建）两条路径
+	// 各自已有这道闸（见 hot_retention_window.go），但**本函数是第三条路径**（单天写入，
+	// 归档导入的批次走它），而它之前没有。真机证据：生产日志里 543 次
+	// 「整窗重发跳过超出热层保留期」同时，仍有 `archiveEvents:5781,
+	// firstEventTime:2026-09-20T02:47:59Z` 的写入被发给 VL。
+	//
+	// 语义与另两条路径逐字一致：不写、不校、**如实记日志**（不静默丢）。
+	if m.beyondHotRetention(source.UTCDay, time.Now()) {
+		if len(writeEvents) > 0 || len(archiveEvents) > 0 {
+			slog.Warn("写入面所属 UTC 天早于热层保留期，不写入、不校验（VL 会接收但丢弃）",
+				"source", source.LogSourceID, "utcDay", source.UTCDay,
+				"events", len(writeEvents), "archiveEvents", len(archiveEvents),
+				"generation", generation, "hotRetention", m.hotRetention)
+		}
+		// 与 `deliver` 的全空硬闸同一语义：本批注定不可发布 ⇒ 不得宣称成功、
+		// 不得让调用方推进 delivery 水位（否则会为从未进入 VL 的区间建副本证明）。
+		return pipeline.DeliveryResult{}, errProjectionBeyondHotRetention
+	}
 	catKey := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
 	permit, permitErr := m.cat.AcquireWritePermit(catKey)
 	if permitErr != nil {

@@ -1,0 +1,5 @@
+interface:
+  display_name: "SDD Brainstorming"
+  short_description: "Turn broad or unclear work into scoped FRs, acceptance criteria, and workflow routing."
+  brand_color: "#2F6FED"
+  default_prompt: "Use $sdd-brainstorming to break this request into SDD-ready feature records."
