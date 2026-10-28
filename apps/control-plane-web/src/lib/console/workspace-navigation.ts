@@ -63,7 +63,7 @@ import {
 } from 'lucide-react'
 
 import { DEFAULT_ROLE_NODES, isPlatformAdmin } from '@/lib/shared/roles'
-import { type NavGroup } from '@/lib/shared/nav-config'
+import { type NavGroup } from '@/lib/shared/navigation-types'
 
 /** 四个工作区的稳定标识（顶栏切换、当前工作区判定、URL 前缀决策共用）。 */
 export type WorkspaceKey = 'ops' | 'observability' | 'operation' | 'platform'
@@ -73,6 +73,8 @@ export interface WorkspaceDef {
   key: WorkspaceKey
   /** i18n 键，与现有 `labelKey` 风格一致（`nav.*`）。 */
   labelKey: string
+  /** 工作区图标（手机底部导航的格子需要；顶栏靠文字区分，不用图标）。 */
+  icon: LucideIcon
   /** 分组列表；渲染前请一律走 {@link workspacesForPermissions} / {@link workspacesForRole} 裁剪。 */
   groups: NavGroup[]
 }
@@ -100,6 +102,7 @@ export const WORKSPACES: WorkspaceDef[] = [
   {
     key: 'ops',
     labelKey: 'nav.workspaceOps',
+    icon: Server,
     groups: [
       {
         // CSV「资源」：集群总览 / 全部实例 / 节点（侧栏主快捷键区）
@@ -140,6 +143,7 @@ export const WORKSPACES: WorkspaceDef[] = [
   {
     key: 'observability',
     labelKey: 'nav.workspaceObservability',
+    icon: Activity,
     groups: [
       {
         // CSV「观测」
@@ -187,6 +191,7 @@ export const WORKSPACES: WorkspaceDef[] = [
   {
     key: 'operation',
     labelKey: 'nav.workspaceOperation',
+    icon: DownloadCloud,
     groups: [
       {
         // CSV「玩家与压测」：玩家 / Bot 与压测（原属服务器域）
@@ -215,6 +220,7 @@ export const WORKSPACES: WorkspaceDef[] = [
   {
     key: 'platform',
     labelKey: 'nav.workspacePlatform',
+    icon: Settings2,
     groups: [
       {
         // CSV「身份与访问」

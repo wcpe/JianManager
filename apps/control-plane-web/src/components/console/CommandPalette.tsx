@@ -7,7 +7,7 @@ import { useNodes } from '@/api/nodes'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import { useConsoleStore } from '@/stores/console'
-import { flatNavItems } from '@/lib/shared/nav-config'
+import { flatWorkspaceItems } from '@/lib/console/workspace-navigation'
 import { prefetchRoute } from '@/lib/shared/route-prefetch'
 import type { PaletteEntry } from '@/lib/console/command-palette'
 import CommandPaletteView from '@/components/views/instances/CommandPalette'
@@ -61,8 +61,8 @@ export default function CommandPalette() {
   )
 
   const pages = useMemo(() => {
-    if (permLoaded) return flatNavItems(permNodes, permAdmin).map((n) => ({ to: n.to, label: t(n.labelKey) }))
-    return flatNavItems(role).map((n) => ({ to: n.to, label: t(n.labelKey) }))
+    if (permLoaded) return flatWorkspaceItems(permNodes, permAdmin).map((n) => ({ to: n.to, label: t(n.labelKey) }))
+    return flatWorkspaceItems(role).map((n) => ({ to: n.to, label: t(n.labelKey) }))
   }, [role, permNodes, permAdmin, permLoaded, t])
 
   // 全局 Ctrl/⌘+K 切换（始终挂载的监听；事件回调里 setState 合法，非 effect body）。

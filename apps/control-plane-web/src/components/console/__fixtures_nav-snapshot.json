@@ -1,0 +1,266 @@
+[
+  {
+    "to": "/",
+    "labelKey": "nav.platformHome",
+    "icon": "LayoutDashboard",
+    "perm": null
+  },
+  {
+    "to": "/instances",
+    "labelKey": "nav.allInstances",
+    "icon": "Box",
+    "perm": "instance.read"
+  },
+  {
+    "to": "/config-baselines",
+    "labelKey": "nav.configBaselines",
+    "icon": "GitCompareArrows",
+    "perm": [
+      "file.read",
+      "instance.read"
+    ]
+  },
+  {
+    "to": "/nodes",
+    "labelKey": "nav.nodes",
+    "icon": "Server",
+    "perm": "node.read"
+  },
+  {
+    "to": "/players",
+    "labelKey": "nav.players",
+    "icon": "User",
+    "perm": "player.read"
+  },
+  {
+    "to": "/bots",
+    "labelKey": "nav.bots",
+    "icon": "Bot",
+    "perm": "bot.read"
+  },
+  {
+    "to": "/config-files",
+    "labelKey": "nav.configFiles",
+    "icon": "Layers",
+    "perm": [
+      "file.read",
+      "instance.read"
+    ]
+  },
+  {
+    "to": "/config-adopt",
+    "labelKey": "nav.configAdopt",
+    "icon": "FileInput",
+    "perm": [
+      "file.read",
+      "instance.read"
+    ]
+  },
+  {
+    "to": "/config-deliveries",
+    "labelKey": "nav.configDeliveries",
+    "icon": "Workflow",
+    "perm": [
+      "file.read",
+      "instance.read"
+    ]
+  },
+  {
+    "to": "/networks/topology",
+    "labelKey": "nav.networkTopology",
+    "icon": "GitBranch",
+    "perm": "network.read"
+  },
+  {
+    "to": "/networks",
+    "labelKey": "nav.groupManagement",
+    "icon": "Network",
+    "perm": "network.read"
+  },
+  {
+    "to": "/super",
+    "labelKey": "nav.superWorkbench",
+    "icon": "LayoutGrid",
+    "perm": "super.read"
+  },
+  {
+    "to": "/director",
+    "labelKey": "nav.director",
+    "icon": "Clapperboard",
+    "perm": "director.read"
+  },
+  {
+    "to": "/monitor",
+    "labelKey": "nav.monitoring",
+    "icon": "Activity",
+    "perm": "monitor.read"
+  },
+  {
+    "to": "/logs",
+    "labelKey": "nav.logs",
+    "icon": "ScrollText",
+    "perm": "log.read"
+  },
+  {
+    "to": "/statistics",
+    "labelKey": "nav.statistics",
+    "icon": "ChartColumn",
+    "perm": "stats.read"
+  },
+  {
+    "to": "/alerts",
+    "labelKey": "nav.alerts",
+    "icon": "TriangleAlert",
+    "perm": [
+      "alert.read",
+      "alert.manage"
+    ]
+  },
+  {
+    "to": "/notifications",
+    "labelKey": "nav.notifications",
+    "icon": "Bell",
+    "perm": "notification.read"
+  },
+  {
+    "to": "/client-channels",
+    "labelKey": "nav.clientChannels",
+    "icon": "CloudDownload",
+    "perm": "channel.read"
+  },
+  {
+    "to": "/client-dist-ops",
+    "labelKey": "nav.clientDistOps",
+    "icon": "ShieldCheck",
+    "perm": "dist.ops.read"
+  },
+  {
+    "to": "/users",
+    "labelKey": "nav.users",
+    "icon": "User",
+    "perm": "user.read"
+  },
+  {
+    "to": "/groups",
+    "labelKey": "nav.groups",
+    "icon": "UsersRound",
+    "perm": "group.read"
+  },
+  {
+    "to": "/permissions",
+    "labelKey": "nav.permissions",
+    "icon": "Shield",
+    "perm": "rbac.read"
+  },
+  {
+    "to": "/tasks",
+    "labelKey": "nav.tasks",
+    "icon": "ListChecks",
+    "perm": "task.read"
+  },
+  {
+    "to": "/schedules",
+    "labelKey": "nav.schedules",
+    "icon": "FileClock",
+    "perm": "schedule.read"
+  },
+  {
+    "to": "/runtime-assets",
+    "labelKey": "nav.runtimeAssets",
+    "icon": "Layers",
+    "perm": "node.read"
+  },
+  {
+    "to": "/storage",
+    "labelKey": "nav.storage",
+    "icon": "HardDrive",
+    "perm": "node.manage"
+  },
+  {
+    "to": "/artifact-storages",
+    "labelKey": "nav.artifactStorages",
+    "icon": "CloudUpload",
+    "perm": "node.manage"
+  },
+  {
+    "to": "/backup-storages",
+    "labelKey": "nav.backupStorages",
+    "icon": "Archive",
+    "perm": "backup.read"
+  },
+  {
+    "to": "/backups",
+    "labelKey": "nav.backups",
+    "icon": "Archive",
+    "perm": "backup.read"
+  },
+  {
+    "to": "/templates",
+    "labelKey": "nav.templates",
+    "icon": "LayoutTemplate",
+    "perm": "template.read"
+  },
+  {
+    "to": "/approvals",
+    "labelKey": "nav.approvals",
+    "icon": "ShieldCheck",
+    "perm": "approval.read"
+  },
+  {
+    "to": "/audit",
+    "labelKey": "nav.audit",
+    "icon": "FileClock",
+    "perm": "audit.read"
+  },
+  {
+    "to": "/settings",
+    "labelKey": "nav.systemSettings",
+    "icon": "Settings2",
+    "perm": "settings.read"
+  },
+  {
+    "to": "/licenses",
+    "labelKey": "licenses.entry",
+    "icon": "Scale",
+    "perm": "license.read"
+  },
+  {
+    "to": "/agent-tokens",
+    "labelKey": "nav.agentTokens",
+    "icon": "KeyRound",
+    "perm": "agent.token.read"
+  },
+  {
+    "to": "/mcp-activity",
+    "labelKey": "nav.mcpActivity",
+    "icon": "Cable",
+    "perm": "agent.mcp.read"
+  },
+  {
+    "to": "/agent-call-logs",
+    "labelKey": "nav.agentCallLogs",
+    "icon": "ScrollText",
+    "perm": "agent.calllog.read"
+  },
+  {
+    "to": "/artifact-versions",
+    "labelKey": "nav.artifactVersions",
+    "icon": "Archive",
+    "perm": [
+      "system.update",
+      "node.manage"
+    ]
+  },
+  {
+    "to": "/database",
+    "labelKey": "nav.database",
+    "icon": "Database",
+    "perm": "system.db.browse"
+  },
+  {
+    "to": "/system-update",
+    "labelKey": "nav.systemUpdate",
+    "icon": "RefreshCw",
+    "perm": "system.update"
+  }
+]
