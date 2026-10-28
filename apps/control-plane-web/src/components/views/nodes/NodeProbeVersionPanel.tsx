@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { NativeSelect } from '@jianmanager/ui/components/native-select'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Button } from '@jianmanager/ui/components/button'
 
 /**
  * 可选探针版本（本组件所需的最小结构）。
@@ -39,6 +41,8 @@ export interface NodeProbeVersionPanelProps {
   saving?: boolean
   /** 保存选择。返回是否成功（组件不关心后续提示）。 */
   onSave: (versionId: number) => Promise<boolean>
+  /** 取数失败时的重试（外壳注入）。 */
+  onRetry?: () => void
 }
 
 export default function NodeProbeVersionPanel({
@@ -48,20 +52,46 @@ export default function NodeProbeVersionPanel({
   isError,
   saving = false,
   onSave,
+  onRetry,
 }: NodeProbeVersionPanelProps) {
   const { t } = useTranslation()
   // 仅列出已落制品库的版本（assetId > 0），未上传的不可选。
   const versions = (catalog?.versions ?? []).filter((version) => version.assetId > 0)
 
-  if (isLoading) return <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
-  if (isError || !catalog) return <p className="text-sm text-destructive">{t('probe.nodeLoadFailed')}</p>
+  // 骨架而非一行文字：本页是下拉选择，加载时先占位能避免选中后布局跳动。
+  if (isLoading)
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-3.5 w-48" />
+        <Skeleton className="h-9 w-full max-w-md" />
+      </div>
+    )
+  if (isError || !catalog)
+    return (
+      /*
+        只给一行红字时，用户唯一的自救手段是刷新整页（连当前节点与页签一起丢）。
+        这里给重试按钮，把「失败」变成一个可恢复的动作。
+      */
+      <div className="flex flex-col items-start gap-2" data-testid="probe-version-error">
+        <p className="text-sm text-destructive">{t('probe.nodeLoadFailed')}</p>
+        {onRetry && (
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            {t('common.retry')}
+          </Button>
+        )}
+      </div>
+    )
 
   return (
     <div className="space-y-3">
-      <div>
-        <h3 className="text-sm font-semibold">{t('probe.nodeVersionTitle')}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">{t('probe.nodeVersionHint')}</p>
-      </div>
+      {/* 标题由外层 Panel 提供，这里只留说明，避免同一句话出现两遍。 */}
+      <p className="text-xs text-muted-foreground">{t('probe.nodeVersionHint')}</p>
+      {versions.length === 0 && (
+        // 没有已落库的版本时只有「继承」一项可选：说清楚「要先去制品库上传」，否则看着像下拉坏了。
+        <p className="rounded-md border border-dashed px-2.5 py-2 text-[11px] text-muted-foreground">
+          {t('probe.nodeNoVersions')}
+        </p>
+      )}
       {/* 版本候选来自后端探针版本目录（数量随升级累积），不用 Radix Select 全量挂载 → NativeSelect */}
       <NativeSelect
         className="w-full max-w-md"

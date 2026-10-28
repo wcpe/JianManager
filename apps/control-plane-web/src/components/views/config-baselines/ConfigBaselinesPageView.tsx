@@ -29,6 +29,7 @@ import {
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { formatRelativeTime } from '@/lib/shared/relative-time'
 import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { composeScopeKey, isValidScopeKey, scopeKindOf, scopeValueOf, shortHash } from '@/lib/config-explorer/config-baseline'
@@ -54,6 +55,8 @@ export interface ConfigBaselineRow {
   contentHash: string
   /** 变更说明。 */
   message: string
+  /** 最近更新时间（ISO）。旧后端可能不返回，故可选。 */
+  updatedAt?: string
 }
 
 /** 单实例漂移比对结果（本视图渲染所需的最小字段集）。 */
@@ -544,6 +547,25 @@ export function BaselineEditorDialogView({
  * 漂移检测只读，收敛复用后端 `ConfigService.Write` 逐台推送并复核残余漂移。
  * 列表、漂移明细与两个弹窗的受控契约见 `ConfigBaselinesPageViewProps`。
  */
+
+/**
+ * 生效范围的人话化：`group:2` → 「分组 2」、`instance:5` → 「实例 5」、`*`/空 → 「全局」。
+ *
+ * 原始 key 直接摆给用户是看不懂的（尤其 `group:2` 里的数字是内部 id）；
+ * 保留原始值在单元格 title 里，需要精确值时仍可看到。
+ */
+function scopeLabel(scopeKey: string, t: (k: string, o?: Record<string, unknown>) => string): string {
+  if (!scopeKey || scopeKey === '*') return t('baselines.scopeGlobal')
+  const kind = scopeKindOf(scopeKey)
+  const value = scopeValueOf(scopeKey)
+  if (!kind) return scopeKey
+  return kind === 'group'
+    ? t('baselines.scopeGroup', { id: value })
+    : kind === 'instance'
+      ? t('baselines.scopeInstance', { id: value })
+      : scopeKey
+}
+
 export function ConfigBaselinesPageView({
   baselines,
   isLoading = false,
@@ -603,18 +625,24 @@ export function ConfigBaselinesPageView({
                 <TableHead>{t('baselines.colFile')}</TableHead>
                 <TableHead>{t('baselines.colHash')}</TableHead>
                 <TableHead>{t('baselines.colMessage')}</TableHead>
+                <TableHead>{t('baselines.colUpdated')}</TableHead>
                 <TableHead className="text-right">{t('baselines.colActions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {baselines.map((b) => (
                 <TableRow key={b.id} data-testid={`baseline-row-${b.id}`}>
-                  <TableCell className="font-mono text-xs">{b.scopeKey}</TableCell>
+                  <TableCell className="text-xs" title={b.scopeKey}>
+                    {scopeLabel(b.scopeKey, t)}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">{b.filePath}</TableCell>
                   <TableCell className="font-mono text-[11px] text-muted-foreground" title={b.contentHash}>
                     {shortHash(b.contentHash)}
                   </TableCell>
                   <TableCell className="max-w-0 truncate text-xs">{b.message}</TableCell>
+                  <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                    {formatRelativeTime(b.updatedAt ?? null) || t('common.na')}
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="inline-flex gap-1">
                       <Button

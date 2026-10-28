@@ -1,21 +1,18 @@
 import { toast } from 'sonner'
+import { useTranslation } from 'react-i18next'
 import { useApprovedLogAssets, useControlLogRuntime, useInstallLogAsset, useLogRuntime, useMigrateLogPartition, useResolveLogIngestGaps, useUploadLogAsset } from '@/api/logRuntime'
 import NodeLogRuntimePanel, {
   namespaceNames,
   type LogNamespace,
 } from '@/components/views/nodes/NodeLogRuntimePanel'
 
-/** 后端错误消息：优先 `message`，回退 `error` 字段（沿用迁移前的取值顺序）。 */
-function errorMessage(error: unknown): string {
+/**
+ * 后端错误消息：优先 `message`，回退 `error` 字段（沿用迁移前的取值顺序）。
+ * 两者都没有时用调用方给的兜底文案（已本地化），不在这里写死中文。
+ */
+function errorMessage(error: unknown, fallback: string): string {
   const response = (error as { response?: { data?: { message?: string; error?: string } } })?.response
-  return response?.data?.message || response?.data?.error || '操作失败'
-}
-
-/** 分区动作的成功提示文案。 */
-const actionLabel: Record<'start' | 'stop' | 'restart', string> = {
-  start: '已启动',
-  stop: '已停止',
-  restart: '已重启',
+  return response?.data?.message || response?.data?.error || fallback
 }
 
 /**
@@ -36,6 +33,14 @@ export default function NodeLogRuntimeTab({
   arch: string
   online: boolean
 }) {
+  const { t } = useTranslation()
+  /** 分区动作的成功提示文案（随语言切换，故在组件内建表）。 */
+  const actionLabel: Record<'start' | 'stop' | 'restart', string> = {
+    start: t('logsRuntime.action.start'),
+    stop: t('logsRuntime.action.stop'),
+    restart: t('logsRuntime.action.restart'),
+  }
+  const failed = t('logsRuntime.opFailed')
   const runtime = useLogRuntime(nodeId, true)
   const assets = useApprovedLogAssets(true)
   const upload = useUploadLogAsset()
@@ -55,8 +60,8 @@ export default function NodeLogRuntimeTab({
       online={online}
       runtime={runtime.data}
       approvedCached={approved?.cached}
-      runtimeError={runtime.isError ? errorMessage(runtime.error) : undefined}
-      assetsError={assets.isError ? errorMessage(assets.error) : undefined}
+      runtimeError={runtime.isError ? errorMessage(runtime.error, failed) : undefined}
+      assetsError={assets.isError ? errorMessage(assets.error, failed) : undefined}
       busy={busy}
       fetching={runtime.isFetching}
       pending={{
@@ -73,20 +78,20 @@ export default function NodeLogRuntimeTab({
       onUpload={async (file) => {
         try {
           await upload.mutateAsync({ os: os.toLowerCase(), arch: normalizedArch, file })
-          toast.success('审批包已缓存')
+          toast.success(t('logsRuntime.assetCached'))
           return true
         } catch (error) {
-          toast.error(errorMessage(error))
+          toast.error(errorMessage(error, failed))
           return false
         }
       }}
       onInstall={async () => {
         try {
           await install.mutateAsync(undefined)
-          toast.success('受管资产已安装')
+          toast.success(t('logsRuntime.assetInstalled'))
           return true
         } catch (error) {
-          toast.error(errorMessage(error))
+          toast.error(errorMessage(error, failed))
           return false
         }
       }}
@@ -96,7 +101,7 @@ export default function NodeLogRuntimeTab({
           toast.success(`${namespaceNames[namespace]} ${actionLabel[action]}`)
           return true
         } catch (error) {
-          toast.error(errorMessage(error))
+          toast.error(errorMessage(error, failed))
           return false
         }
       }}
@@ -104,20 +109,20 @@ export default function NodeLogRuntimeTab({
         try {
           // 存储命名空间由节点 id 拼装——这是应用侧的知识，故留在外壳。
           await migrate.mutateAsync({ storageNamespace: `node:${nodeId}`, utcDay })
-          toast.success('分区已迁移到 COLD')
+          toast.success(t('logsRuntime.migrateDone'))
           return true
         } catch (error) {
-          toast.error(errorMessage(error))
+          toast.error(errorMessage(error, failed))
           return false
         }
       }}
       onResolveGaps={async () => {
         try {
           await resolveGaps.mutateAsync(undefined)
-          toast.success('已核销 projection 覆盖的缺口')
+          toast.success(t('logsRuntime.gapsResolved'))
           return true
         } catch (error) {
-          toast.error(errorMessage(error))
+          toast.error(errorMessage(error, failed))
           return false
         }
       }}

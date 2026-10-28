@@ -28,6 +28,8 @@ export interface AuditQueryParams {
   userId?: number
   action?: string
   targetType?: string
+  /** 目标对象 id（按对象回溯，如「这个节点被改过什么」）。 */
+  targetId?: string
   /** 起始时间（RFC3339，含时区，如 2026-06-22T10:30:00Z）。 */
   from?: string
   /** 结束时间（RFC3339，含时区）。 */

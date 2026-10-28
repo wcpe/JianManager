@@ -133,12 +133,16 @@ export default function NodeLogRuntimePanel({
   const normalizedArch = arch.toLowerCase() === 'x64' ? 'amd64' : arch.toLowerCase()
 
   return (
-    <section aria-label="VictoriaLogs 运行时" className="border-t pt-4">
+    <section aria-label={t('logsRuntime.title')} className="space-y-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold">VictoriaLogs</h3>
+          {/*
+            标题由外层 Panel 提供；这里的副行只报「目标平台 + 审批包是否已在本节点」。
+            原先还写死了 `v1.52.0`——接口根本没有版本字段，那是凭空的版本号，
+            升级后还会继续显示旧值，属于会误导排障的假信息。
+          */}
           <p className="text-xs text-muted-foreground">
-            v1.52.0 · {os} / {normalizedArch} · {approvedCached ? '审批包已缓存' : '审批包未缓存'}
+            {os} / {normalizedArch} · {approvedCached ? t('logsRuntime.approvalCached') : t('logsRuntime.approvalNotCached')}
           </p>
         </div>
         <div className="flex items-center gap-1">

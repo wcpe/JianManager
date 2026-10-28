@@ -11,7 +11,20 @@
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import { Palette, ScrollText, Cpu, HeartPulse, Archive, Lock, ShieldAlert, Network, Mail, ExternalLink, type LucideIcon } from 'lucide-react'
+import {
+  Archive,
+  Cpu,
+  ExternalLink,
+  HeartPulse,
+  Lock,
+  Mail,
+  Network,
+  Palette,
+  ScrollText,
+  ShieldAlert,
+  ShieldCheck,
+  type LucideIcon,
+} from 'lucide-react'
 import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -153,6 +166,8 @@ export interface SettingsPageViewProps {
   onLanguageChange: (language: 'zh' | 'en') => void
   /** 出站连通性测试入口插槽（网络/运行时分类各一处）；缺省则该分类不渲染测试入口。 */
   renderOutboundTest?: (args: SettingsOutboundTestArgs) => ReactNode
+  /** 取数失败时的重试（外壳注入）。 */
+  onRetry?: () => void
   /**
    * AI 助手配置入口插槽（FR-514）。
    *
@@ -183,6 +198,7 @@ export function SettingsPageView({
   onLanguageChange,
   renderOutboundTest,
   assistantEntry,
+  onRetry,
 }: SettingsPageViewProps) {
   const { t } = useTranslation()
   // 可编辑项的本地草稿：仅存用户改动；展示值回退到后端当前生效值（draft[key] ?? it.value）。
@@ -274,7 +290,7 @@ export function SettingsPageView({
 
         {/* 右侧：当前分类面板。fixed 壳态下外壳不再滚动，故内容区自行溢出滚动
             （安全/系统等分类的表单比一屏高）。 */}
-        <div className="min-w-0 max-w-2xl flex-1 overflow-auto">
+        <div className="min-w-0 max-w-3xl flex-1 overflow-auto">
           {category === 'appearance' ? (
             <AppearanceSettings
               theme={theme}
@@ -293,6 +309,7 @@ export function SettingsPageView({
               saving={saving}
               onSave={onSave}
               renderOutboundTest={renderOutboundTest}
+              {...(onRetry ? { onRetry } : {})}
             />
           )}
         </div>
@@ -397,6 +414,8 @@ interface PlatformCategoryProps {
   onSave: (changed: Record<string, string>) => Promise<boolean>
   /** 连通性测试入口插槽（仅网络/运行时分类使用）。 */
   renderOutboundTest?: (args: SettingsOutboundTestArgs) => ReactNode
+  /** 取数失败时的重试（外壳注入）。 */
+  onRetry?: () => void
 }
 
 /**
@@ -413,6 +432,7 @@ function PlatformCategory({
   saving,
   onSave,
   renderOutboundTest,
+  onRetry,
 }: PlatformCategoryProps) {
   const { t } = useTranslation()
 
@@ -456,7 +476,16 @@ function PlatformCategory({
         </div>
       </div>
       {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading', '加载中…')}</p>}
-      {isError && <p className="text-sm text-destructive">{t('settings.loadFailed', '加载平台配置失败')}</p>}
+      {isError && (
+        <div className="flex items-center gap-2" data-testid="settings-load-error">
+          <p className="text-sm text-destructive">{t('settings.loadFailed', '加载平台配置失败')}</p>
+          {onRetry && (
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              {t('common.retry')}
+            </Button>
+          )}
+        </div>
+      )}
 
       {!isLoading && !isError && isSecurity && (
         <>
@@ -476,9 +505,19 @@ function PlatformCategory({
       {!isLoading && !isError && !isSecurity && (
         <>
           {category === 'network' ? (
-            <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
-              {t('settings.networkNotice')}
-            </p>
+            <div className="space-y-2">
+              <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
+                {t('settings.networkNotice')}
+              </p>
+              {/*
+                这条是「敢不敢改」的关键：运维最怕配错代理把节点弄失联。
+                事实是代理只作用于下载类 HTTP client，Worker↔CP 走 gRPC 不经过它。
+              */}
+              <p className="flex items-start gap-1.5 rounded-md border border-status-success/30 bg-status-success/5 px-3 py-2 text-xs text-muted-foreground">
+                <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-status-success" aria-hidden />
+                {t('settings.proxySafety')}
+              </p>
+            </div>
           ) : category === 'email' ? (
             <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
               {t('settings.emailNotice')}
@@ -501,7 +540,27 @@ function PlatformCategory({
             )}
           </div>
           {editable.length > 0 && (
-            <div className="flex justify-end">
+            /*
+              保存按钮旁给出「有没有改动」：原先按钮只有一个禁用态，
+              用户看不出「是没改所以灰」还是「校验没过所以灰」。
+            */
+            <div className="flex items-center justify-end gap-2">
+              <span
+                className={cn(
+                  'text-[11px]',
+                  hasInvalid
+                    ? 'text-destructive'
+                    : hasChanges
+                      ? 'text-status-warning'
+                      : 'text-muted-foreground',
+                )}
+              >
+                {hasInvalid
+                  ? t('settings.dirtyInvalid')
+                  : hasChanges
+                    ? t('settings.dirtyHint')
+                    : t('settings.cleanHint')}
+              </span>
               <Button size="sm" onClick={save} disabled={!hasChanges || hasInvalid || saving}>
                 {saving ? t('common.saving', '保存中…') : t('common.save', '保存')}
               </Button>

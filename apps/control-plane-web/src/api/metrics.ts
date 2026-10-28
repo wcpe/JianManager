@@ -91,17 +91,40 @@ export function useMetricSeries(params: {
   scope: 'node' | 'instance'
   targetId: string
   range: MetricRange
+  /**
+   * 自定义时间窗（RFC3339）。**同时提供时优先于 `range`**——
+   * 后端 `parseMetricRange` 早就在支持 `from`/`to`，只是前端此前只发预设。
+   * 用户要「自己选时间范围」时传这两个，`range` 仍必填（作为缺省档位与 queryKey 的一部分）。
+   */
+  from?: string
+  to?: string
   /** 指标键过滤（逗号合并下发）；不传返回该目标全部序列。 */
   metrics?: string[]
   /** 聚合粒度档位（FR-221）；auto/留空=按区间自动选档。 */
   resolution?: MetricResolution
   enabled?: boolean
 }) {
-  const { scope, targetId, range, metrics, resolution, enabled = true } = params
+  const { scope, targetId, range, from, to, metrics, resolution, enabled = true } = params
+  const custom = !!from && !!to
   return useQuery({
-    queryKey: ['metricSeries', scope, targetId, range, metrics?.join(',') ?? '', resolution ?? 'auto'],
+    // 自定义窗口进 queryKey：否则切换时间范围会命中同一份缓存、图表不刷新。
+    queryKey: [
+      'metricSeries',
+      scope,
+      targetId,
+      custom ? `${from}~${to}` : range,
+      metrics?.join(',') ?? '',
+      resolution ?? 'auto',
+    ],
     queryFn: async () => {
-      const q = new URLSearchParams({ scope, targetId, range })
+      const q = new URLSearchParams({ scope, targetId })
+      // 有自定义窗口就只发 from/to：两者同时下发时后端以 from/to 优先，这里显式二选一更清晰。
+      if (custom) {
+        q.set('from', from!)
+        q.set('to', to!)
+      } else {
+        q.set('range', range)
+      }
       if (metrics?.length) q.set('metrics', metrics.join(','))
       if (resolution && resolution !== 'auto') q.set('resolution', resolution)
       const { data } = await api.get<MetricSeriesResponse>(`/metrics/series?${q.toString()}`)
@@ -402,7 +425,9 @@ export interface ProcessTopItem {
   rssBytes: number
   readBytesPerSec: number
   writeBytesPerSec: number
+  /** 运行用户——粗粒度的「位置」线索（不同实例常用不同系统用户跑）。 */
   user: string
+  /** 命令行摘要：含 jar 路径 / 工作目录线索，是最接近「位置」的字段。 */
   commandSummary: string
   sampledAt: string
 }
@@ -459,25 +484,40 @@ export interface ManagedProcessActionResult {
 
 export type ManagedProcessAction = 'terminate' | 'kill_tree'
 
+/**
+ * 进程 TOPN（FR-170）。
+ *
+ * `at`（RFC3339，可选）取「该时刻之前最近一拍」的快照——用于在历史曲线上悬浮时
+ * 回答「那一刻是谁在吃 CPU/内存/磁盘」。不传则取最新（原有行为）。
+ *
+ * 【数据边界】只覆盖**受管实例进程**（游戏服本体及其包装器），不是任意系统进程；
+ * 快照与原始指标同档保留 48h，更早的时刻查不到。
+ */
 export function useProcessTop(params: {
   instanceId?: number
   nodeId?: string
   sort?: 'cpu' | 'memory' | 'io'
   limit?: number
   enabled?: boolean
+  /** 指定时刻（RFC3339）；省略=最新。 */
+  at?: string
 }) {
-  const { instanceId, nodeId, sort = 'cpu', limit = 10, enabled = true } = params
+  const { instanceId, nodeId, sort = 'cpu', limit = 10, enabled = true, at } = params
   return useQuery({
-    queryKey: ['processTop', instanceId ?? '', nodeId ?? '', sort, limit],
+    // at 进 queryKey：不同时刻是不同结果，不进 key 会命中同一份缓存。
+    queryKey: ['processTop', instanceId ?? '', nodeId ?? '', sort, limit, at ?? 'latest'],
     queryFn: async () => {
       const q = new URLSearchParams({ sort, limit: String(limit) })
       if (instanceId) q.set('instanceId', String(instanceId))
       if (nodeId) q.set('nodeId', nodeId)
+      if (at) q.set('at', at)
       const { data } = await api.get<ProcessTopItem[]>(`/metrics/processes/top?${q.toString()}`)
       return data
     },
     enabled,
-    refetchInterval: enabled ? 30_000 : false,
+    // 悬浮场景要快：有 at 时不轮询，避免每次悬浮都重新请求。
+    refetchInterval: enabled && !at ? 30_000 : false,
+    ...(at ? { staleTime: 15_000 } : {}),
   })
 }
 
@@ -683,3 +723,7 @@ export function useCapacityForecast(params: {
     refetchInterval: 60_000,
   })
 }
+
+/** 进程 TOPN 单项（FR-170）：PID / 进程名 / CPU / 内存 / 磁盘读写 / 归属用户 / 命令行。 */
+
+
