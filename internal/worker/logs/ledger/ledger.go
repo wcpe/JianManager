@@ -166,10 +166,6 @@ type Gap struct {
 	//
 	// 用途（2026-10-28，C 案）：永久丢失类缺口的“超时降级”需要知道它等了多久。
 	//
-	// **旧数据兼容**：存量缺口没有这个字段（零值）。零值**不能**被当成“刚刚登记”，
-	// 否则一个已经存在数天的缺口会被当成新的、白等一小时。故判据里零值直接**视为已超时**
-	// （见 ledger.PermanentlyLostGapGrace；运维早已看到它们，不存在“来不及告警”的问题）。
-	//
 	// 为什么不用 ResolvedAtUTC：那个字段只对**放弃裁定**写入，语义不同。
 	FirstSeenUnix int64 `json:"first_seen_unix,omitempty"`
 }
@@ -807,8 +803,7 @@ type Entry struct {
 	// 避免"旧指纹贴新位置"的错配）；段 3 由 acquire 在恢复/重启续读前校验——
 	//   一致   ⇒ 从已确认水位续读 ✓；
 	//   不一致 ⇒ 走对账补齐，禁止按旧偏移回读历史内容 ✗；
-	//   缺指纹（零值）⇒ **视作不一致**（旧账本无此字段 ⇒ JSON 零值 ⇒ 宁可走对账不回读 ✓）。
-	// 迁移兼容：旧账本无这两个字段，加载时得到零值即可，不改变任何既有字段语义。
+	//   缺指纹（零值）⇒ **视作不一致**（宁可走对账不回读 ✓）。
 	PositionsFingerprint   string `json:"positions_fingerprint,omitempty"`
 	PositionsFingerprintAt uint64 `json:"positions_fingerprint_at,omitempty"`
 	// ConfirmedFingerprint 保存可核对物理分段的采点，旧平面指纹不能补造这些证据。
@@ -1468,16 +1463,9 @@ func (l *Ledger) PermanentlyLostGapGrace() time.Duration {
 
 // permanentlyLostGapExpiredLocked 报告某个永久丢失类缺口是否已过宽限期。调用方必须持写锁。
 //
-// **零值（FirstSeenUnix == 0）一律视为已超时**：
-//   - 旧账本的存量缺口没有这个字段 → 它们已经存在很久，不该再等一小时；
-//   - 时钟未注入时 nowUnix() 返回 0 → 如果把 0 当成“刚刚登记”，所有源会被永久停采
-//     （这是比“放行过早”严重得多的失效）。
-//
-// 两个理由都指向同一保守方向。
+// 时钟未注入时 `nowUnix()` 返回 0：此时按**已过期**处理。这不是放松，而是失效模式取舍——
+// “放行过早”会让人少看到一次告警，而“把 0 当成刚刚登记”会让所有源永久停采。
 func (l *Ledger) permanentlyLostGapExpiredLocked(gap Gap) bool {
-	if gap.FirstSeenUnix <= 0 {
-		return true
-	}
 	now := l.nowUnix()
 	if now <= 0 {
 		return true // 时钟未注入：不得因此永久停采

@@ -96,17 +96,6 @@ func TestResumeAcquireBlocksPermanentlyLostWithinGrace(t *testing.T) {
 	require.Contains(t, err.Error(), "within grace")
 }
 
-// TestResumeAcquireTreatsLegacyZeroTimestampAsExpired 守住旧数据兼容：
-// 存量缺口没有 FirstSeenUnix（零值）⇒ 视为已超时，不能让它白等一小时。
-func TestResumeAcquireTreatsLegacyZeroTimestampAsExpired(t *testing.T) {
-	led, key := newResumeLedger(t)
-	require.NoError(t, led.RecordGap(key, 100, 200, GapReasonWALBodyMissing, "legacy"))
-	zeroGapTimestamps(t, led, key)
-
-	require.NoError(t, led.ResumeAcquire(key),
-		"零值时间戳（旧账本）必须直接视为已超时 ✓")
-}
-
 // TestPermanentlyLostGraceIsConfigurable 守住“阈值可配”。
 func TestPermanentlyLostGraceIsConfigurable(t *testing.T) {
 	led, key := newResumeLedger(t)
@@ -132,18 +121,6 @@ func forceGapExpired(t *testing.T, led *Ledger, key SourceKey) {
 	t.Helper()
 	led.SetClock(func() int64 { return time.Now().Add(2 * DefaultPermanentlyLostGapGrace).Unix() })
 	t.Cleanup(func() { led.SetClock(func() int64 { return time.Now().Unix() }) })
-}
-
-// zeroGapTimestamps 把缺口的 FirstSeenUnix 清零（模拟旧账本）。
-func zeroGapTimestamps(t *testing.T, led *Ledger, key SourceKey) {
-	t.Helper()
-	led.mu.Lock()
-	e := led.entries[key]
-	require.NotNil(t, e)
-	for i := range e.Gaps {
-		e.Gaps[i].FirstSeenUnix = 0
-	}
-	led.mu.Unlock()
 }
 
 // TestResumeAcquireDefaultDeniesUnknownReason 守住第 3 条的基础：
