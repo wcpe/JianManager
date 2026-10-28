@@ -17,12 +17,14 @@
 | 文件 | 用途 |
 |---|---|
 | [architecture-invariants.md](architecture-invariants.md) | 架构不变量，任何代码变更都不得违反 |
+| [branch-only-records.md](branch-only-records.md) | 主线外（未合入 master）的 FR/ADR 可直接删除，不回填空号；已合入的走 doc-evolution.md 的保留规则 |
 | [comments.md](comments.md) | 注释规范 |
 | [config-files.md](config-files.md) | 配置文件格式和命名规范 |
 | [decision-alignment.md](decision-alignment.md) | 代码必须和 ADR 决策一致 |
 | [doc-sync.md](doc-sync.md) | 代码变更时文档必须同步更新 |
 | [doc-evolution.md](doc-evolution.md) | 文档演进方式（增量/原地/追加） |
 | [git-commit.md](git-commit.md) | Git 提交 / 分支 / 合并规范（单主干 master，禁直推，rebase+ff 优先） |
+| [no-fr-in-code.md](no-fr-in-code.md) | 代码 / 文件名 / 注释禁止出现 FR 编号（存量豁免，门禁只扫 diff 新增行） |
 | [scope-discipline.md](scope-discipline.md) | 范围纪律，不做 spec 之外的事 |
 | [static-analysis.md](static-analysis.md) | 静态分析和 lint 规范 |
 | [testing-and-quality.md](testing-and-quality.md) | 测试和质量要求（含状态 / 迁移类变更必须验「迁移 → 首启 → 停 → 二启 → 三启」+ 脏环境） |
