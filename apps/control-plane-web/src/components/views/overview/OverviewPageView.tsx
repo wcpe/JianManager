@@ -416,7 +416,7 @@ export function GaugeAttributionTooltip({
                 </div>
                 <div className="space-y-1">
                   {data.nodes.slice(0, 3).map((node) => (
-                    <OverviewLink key={node.nodeId} href={`/monitoring?node=${encodeURIComponent(node.nodeUuid)}`} className="flex justify-between gap-2 hover:text-primary" renderLink={renderLink}>
+                    <OverviewLink key={node.nodeId} href={`/monitor?node=${encodeURIComponent(node.nodeUuid)}`} className="flex justify-between gap-2 hover:text-primary" renderLink={renderLink}>
                       <span className="truncate">{node.name} · {t(`dashboard.freshness.${node.status}`, node.status)}</span>
                       <span className="font-mono">{formatValue(node.cpuPct, node.memoryUsedBytes)}</span>
                     </OverviewLink>
@@ -431,7 +431,7 @@ export function GaugeAttributionTooltip({
                 </div>
                 <div className="space-y-1">
                   {data.topInstances.slice(0, 3).map((instance) => (
-                    <OverviewLink key={instance.instanceId} href={`/monitoring?instance=${encodeURIComponent(instance.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary" renderLink={renderLink}>
+                    <OverviewLink key={instance.instanceId} href={`/monitor?instance=${encodeURIComponent(instance.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary" renderLink={renderLink}>
                       <span className="truncate">{instance.instanceName}</span>
                       <span className="font-mono">{formatValue(instance.cpuPct, instance.rssBytes)}</span>
                     </OverviewLink>
@@ -449,7 +449,7 @@ export function GaugeAttributionTooltip({
                 </div>
                 <div className="space-y-1">
                   {data.topProcesses.slice(0, 4).map((process) => (
-                    <OverviewLink key={`${process.instanceId}-${process.pid}`} href={`/monitoring?instance=${encodeURIComponent(process.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary" renderLink={renderLink}>
+                    <OverviewLink key={`${process.instanceId}-${process.pid}`} href={`/monitor?instance=${encodeURIComponent(process.instanceUuid)}`} className="flex justify-between gap-2 hover:text-primary" renderLink={renderLink}>
                       <span className="truncate">{process.instanceName} / {process.name || `PID ${process.pid}`}</span>
                       <span className="font-mono">{formatValue(process.cpuPercent, process.rssBytes)}</span>
                     </OverviewLink>
