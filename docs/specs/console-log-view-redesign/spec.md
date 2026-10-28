@@ -180,3 +180,12 @@ GET /api/v1/logs?...&cursor=<time>_<id>&limit=N
 - 终端仿真（光标移动、清屏、`\r` 原地覆盖一律不支持，见 ADR-086 代价 5）
 - 跨行字符级选区（虚拟列表下不可靠；跨行一律行级）
 - 输出区的可写化（输出区永远只读，输入只经命令栏）
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-412~424（2026-08-26 控制台与实例界面重设计批）
+
+FR-412~424（2026-08-26 控制台与实例界面重设计批）→ 需 spec 的六项：FR-415 / FR-418 / FR-419 `docs/specs/console-log-view-redesign/spec.md`（+ ADR-086 输出/输入分离取代 xterm 直通输入）、FR-420 / FR-421 `docs/specs/console-immersive-workspace/spec.md`（+ ADR-087 可见控制优先工作台，取代未入库的 tmux 前缀键提案）、FR-422 / FR-423 `docs/specs/instance-layout-redesign/spec.md`；免 spec 的六项：FR-412 / FR-413 / FR-414 / FR-416 / FR-417 / FR-424
+

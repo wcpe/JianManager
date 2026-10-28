@@ -114,3 +114,12 @@ TTL：默认 48 小时，后续可配置。
 - Windows/Linux 进程 IO 字段可用性不同。
 - docker 容器内进程映射可能受权限限制。
 - TTL 是否 48 小时需审核。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-170（进程粒度监控采集）
+
+FR-170（进程粒度监控采集）→ `docs/specs/process-metrics/spec.md` + `docs/adr/060-process-granularity-metrics.md`（开发中，首批已落地）；FR-171/172（备份校验和 / 审计分页导出）→ `docs/specs/backup-audit-backend/spec.md`（开发中，首批已落地）；FR-152（备份存储测试连接 + 容量展示）→ `docs/specs/backup-storage-test-capacity/spec.md`（开发中，首批已落地）
+

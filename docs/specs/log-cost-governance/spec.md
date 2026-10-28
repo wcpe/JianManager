@@ -293,3 +293,22 @@ const (
 - 采样：`log_ingest.sampling.enabled: false`（即默认值）⇒ `Process` 恒等返回入参，逐指令等价于改动前。
 - 保留：`log_retention.enabled: false`（默认）⇒ 不计算、不暴露、不删除。
 - 删除路径：`sweep.vl_sweep: false`（默认）**或** `discard: false`（默认），任一即可关闭；两者独立。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-501 日志成本治理（分层/采样/保留）与冷层搬运（feat，增强 FR-473~484 日志底座；spec
+
+**需求补充**：`docs/specs/log-cost-governance/spec.md`，关联 **ADR-098**（保留/分层/归档）与 **ADR-099**（成本治理与不变量 R））：① 采集侧 `sampling`——等级过滤 / 同源同消息高频抑制 / 每源预算 / 风暴自动降级，四类策略**默认全关**；抑制以**汇总事件**承接，**不变量 R**（抑制不得在源位置覆盖上留空洞：`MergePositionRanges(Process(in)) == MergePositionRanges(in)`；R2 缺口仍能自动消解 + R2b 朴素丢弃必不能消解为锚点），不得绕过缺口 default-deny 判据与 `VerifiedRuns`；② 保留侧 `retention`——按级别分级档位（debug 3d / info 7d / warn 30d / error 90d；**热层 90d / 冷层 730d 统一**，设置可配）+ 源级覆盖 + 白名单删除过滤器（级别 + 源标识字符集，绝不从配置读过滤器）+ **删前归档硬规则**（默认动作=搬运 COLD；搬运失败=保留原物+告警、零删除；删除需 `discard`+`sweep.vl_sweep` 双闸 + 受管 VL `-delete.enable`，**默认全关**）；③ 冷层搬运驱动器 `retention.Driver`——周期调度 + 首轮立即执行，触发=年龄 + 磁盘水位**取先到**（磁盘触发 min_age=7d），判据与人工迁移入口 `SetPartitionMigrator` 逐字对齐。**编号对账**：本 FR 号经 2026-10-02 对账确定（CHANGELOG 原误标 FR-499，与「采集登记路径与长临界区解耦」冲突；详见 spec 顶部对账记录）
+
+**交付状态**：🔨 开发中（`sampling`/`retention` 两包 + 驱动器 + 配置面已落地且变异全红转绿；**gz 文件吸存、事件体段/归档对象回收、搬运与删除的指标暴露未做**——分级验证「只存不验」未决策；**2026-10-11 复核补充：生产侧根本未启用**——生产 `worker.yml` 无 `log_retention` 段（`policy.go` 默认 `Enabled: false`），日志中「日志保留策略已装配」「日志冷热分层驱动器已启动」均为 **0 次**，即驱动器从未装配，`sampling`/`retention` 全部策略在生产处于休眠态）
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-501（2026-10-02 日志成本治理：分层/采样/保留 + 冷层搬运）
+
+FR-501（2026-10-02 日志成本治理：分层/采样/保留 + 冷层搬运）→ `docs/specs/log-cost-governance/spec.md`（+ **ADR-098** 保留/分层/归档、**ADR-099** 成本治理与不变量 R）；含**不变量 R**（区间守恒，R2/R2b 锚点）、**删前归档硬规则**（默认搬运 COLD、删除三闸默认全关）、分级档位与冷层窗口；**编号对账**：原 CHANGELOG 误标 FR-499，2026-10-02 改号为 FR-501
+

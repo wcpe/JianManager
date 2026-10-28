@@ -60,3 +60,13 @@ wrapper 进程（`worker daemon` 子命令）启动即 `signal.Ignore(syscall.SI
 - `apps/worker/main.go`（优雅停机上限）
 - `scripts/install-worker.sh` + `internal/controlplane/embed/install-scripts/install-worker.sh` + `install_scripts_test.go`
 - 文档：`docs/ARCHITECTURE.md`（进程生存与重启接管一节）、`docs/PRD.md`（FR-341 登记）
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-341 daemon 实例在 Worker 重启后存活并自动重连（fix，ADR-003 闭环，2026-07-15 验收 FR-325 真机复现
+
+**需求补充**：`systemctl restart` 后 daemon wrapper 与游戏服一起死、命中「清理残留」而非「接管重连」）：定位三叠加杀手并各个击破——K1 wrapper 的 stdout/stderr 断管 SIGPIPE 崩溃（主因，`worker daemon` 子进程启动即 `signal.Ignore(SIGPIPE)`、Unix-only）；K2 systemd cgroup 连坐（worker unit 加 `KillMode=process`，同步内嵌副本+守护测试）；K3 优雅停机 90s 无界挂起（`GracefulStop` 设 5s 上限、超时强制 `Stop()`，确保 `StopAll` 的 daemon 优雅断开及时执行）；不回归 FR-310（删运行中实例仍强杀两棵进程树）→ `docs/specs/daemon-survival/spec.md`
+
+**交付状态**：✅ 已交付@v0.17.0

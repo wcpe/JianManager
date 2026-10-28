@@ -53,3 +53,13 @@
 ## 3.2 崩溃验收
 
 每个状态中断都记录 owner/generation、物理目录、写入路由、查询范围和恢复动作；VL 自动 re-attach 不能绕过 Catalog。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-477 分区 Catalog 与冷热 Lifecycle（feat）
+
+**需求补充**：Partition Catalog（owner/generation/journal）；迁移状态机（冻结路由→排空→snapshot→staging→**QueryPlanner 排除**→原子切 owner→租约排空→detach→清理）；迟到日志按 Catalog 路由；retention 协同；`cold.enabled=false` 单层合法；**detach≠完成**。**验收含 Runbook B**（Catalog 适配层各状态崩溃恢复 + re-attach 后旧 owner 过滤）→ `docs/specs/worker-log-lifecycle/spec.md`
+
+**交付状态**：✅ 已交付@v0.24.0·catalog 状态机单测绿·**Runbook B 真机迁移链已通过**（FROZEN→…→CLEANED，数据物理迁移、HOT 空/COLD 持有）

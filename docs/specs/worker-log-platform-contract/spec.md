@@ -288,3 +288,22 @@ Shared Contracts 冻结完成；以下项目属于冻结后的显式评审/下�
 当前验证进度：冻结前证据已登记 VL v1.52.0 JSON stream 依赖行为 PASS、g1 响应不确定隔离→g2 重建→PublishedProjection 发布及真实 Search/Stats/Facets/Export 逻辑集合一致性 PASS；v1.52.0 双平台资产审批已完成。Worker 级恢复分段/ACK-loss、真实 Catalog 崩溃矩阵、失败态和发布级性能阈值仍属于下游 FR 验收。
 
 FR-473 已达到“契约已冻结”门槛。后续 A/B/C Worker 生产组件实验分别归入 FR-474/476/477；若改变 Shared Contracts，必须重新评审并同步依赖模块、兼容规则和测试。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-473 Worker 日志平台 Shared Contracts 与 ADR（feat，开发前闸门）
+
+**需求补充**：新 ADR（Worker 本地 VictoriaLogs + CP 联邦；与 ADR-005/013/066/081 对账）；**冻结正式版基线**：事件身份与采集账本、投递语义与重复对账、checkpoint/WAL/ACK/回收四水位、Partition Catalog 与唯一查询所有权、IngestRouter、PublishedProjection、canonical projection 与 `closed_visible_seq`、`logs.lifecycle` 配置分层与合法部署组合、**完整 gRPC 消息契约**、权限覆盖全查询/导出面、Worker 日志资源预算与**性能判据方法及初始阈值**、能力协商、Legacy/导出/覆盖语义；`stream_fields` 白名单。**冻结退出=契约+治理+依赖层证据**（ADR-094 accepted、proto/协商终审、VL 资产正式审批、性能判据入契约）；**Worker 级 Runbook A/B/C 不作为冻结前置**，分别归属 FR-474/476/477 验收 → `docs/specs/worker-log-platform-contract/spec.md`
+
+**交付状态**：✅ 已交付@v0.24.0·契约类闸门：交付物即契约层，下游功能归 FR-474~FR-484 各自验收
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-473~484（2026-09-20 Worker 日志平台底座受控规格）
+
+FR-473~484（2026-09-20 Worker 日志平台底座受控规格）→ `docs/specs/worker-log-platform-contract/spec.md`、`worker-log-acquisition/spec.md`、`worker-log-normalizer/spec.md`、`worker-victorialogs-runtime/spec.md`、`worker-log-lifecycle/spec.md`、`worker-log-deep-archive/spec.md`、`worker-log-query-federation/spec.md`、`cp-log-query-coordinator/spec.md`、`log-ingest-cutover/spec.md`、`logs-center-tiered-ui/spec.md`；**Shared Contracts（FR-473）已冻结**；FR-474~484 实现规格状态为 **实现中（地基/接线）**，契约规格保持已冻结
+

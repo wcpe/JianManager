@@ -50,3 +50,13 @@ CP 只分发审批 tag、哈希和许可清单；Worker supervisor 按 namespace
 - HOT cache 预算不等于 RSS 上限；supervisor 必须执行 Worker 级日志总预算和各子预算，超过预算进入降级。
 - 受管 VL 进程注入 `GOMEMLIMIT`（默认 512MiB，`log_vl.memory_limit_bytes` 可覆盖，负值不注入）：`-memory.allowedBytes` 只约束 cache，不约束 Go heap；真机复测该上限把 VL RSS 由 ≈1.1GiB 压到 ≈131MiB（契约 §6.6 RSS ≤ 1GiB 达标）。
 - VL 写失败日志必须走独立、限流且不回写 VL 的 sink，防止错误递归。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-476 VictoriaLogs 资产分发与 Worker 运行时（feat）
+
+**需求补充**：**CP 只内嵌/分发**经校验官方 OSS 资产（linux-amd64 + windows-amd64）；Worker 本地 supervisor 管理 HOT/COLD/Rehydrate（localhost + 本地鉴权）；资产审批=tag/包与解包校验/许可/兼容；安全停机；资源总预算；失败日志防递归；cache≠RSS。**验收含 Runbook C**（wiring/防递归/预算降级/老 Worker Unimplemented）→ `docs/specs/worker-victorialogs-runtime/spec.md`
+
+**交付状态**：✅ 已交付@v0.24.0·v1.52.0 资产审批、supervisor/CP runtime 面、远程三实例、预算采样与 80/90 降级评估、**CP 资产上传→签名下载→Worker 安装真机闭环**、GOMEMLIMIT 内存调优均已通过；**Windows 包校验与解包已补真机证据**（真实包经 GitHub asset API 取得：双层哈希与审批值一致、`InstallApprovedPackage` 真实 zip 解包 PASS、CP `Cache`/`Open` 校验通过并拒绝篡改；见 `worker-victorialogs-runtime/acceptance-windows.md`）——**Windows 运行时行为仍未覆盖**（需 Windows 主机执行 `.exe`）

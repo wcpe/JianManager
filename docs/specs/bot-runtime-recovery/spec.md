@@ -180,3 +180,13 @@ Bot Worker heartbeat 需真实上报：active/connecting、RSS、eventLoopP95、
 - CP 单实例前提下 reconcile 锁为进程内；未来 CP HA 需分布式租约，范围外。
 - 目标服长期不可用时 Bot 会低频重试直到运行截止或人工停止，不永久停止 desired。
 - 不新增第三方依赖。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-365 Bot 长稳重连、进程恢复与状态归真（feat，可靠性增强）
+
+**需求补充**：Bot 被踢/断线后按指数退避+随机抖动自动重连；bot-worker 子进程崩溃后恢复本节点期望 Bot 集合，Worker 重启/短暂离线后由 CP desired-state reconcile；状态带序号与时间，进程死亡后立即收敛而非残留旧 `connected`，恢复后重走当前阶段幂等入口。真机验收覆盖批量踢出、杀 bot-worker、重启 Worker、服务端离线后恢复，且无重连风暴、幽灵在线、无界定时器和持续内存增长（需 spec，依赖 FR-362；可与 FR-364 并行）→ `docs/specs/bot-runtime-recovery/spec.md`
+
+**交付状态**：✅ 已交付@v0.20.0·真机杀 bot-worker/重启 Worker 恢复与归真 OK；残余：error 态不自动回 connected（需 retry-failed）

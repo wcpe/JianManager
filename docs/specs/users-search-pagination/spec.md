@@ -115,3 +115,13 @@ export function useUserSearch(params: { q?: string; limit?: number; offset?: num
 - **AuditPage 仍全量拉 `/users`**：千级用户下审计页同样有界化需求——超出本 FR，交付时记新 FR（📋）。
 - **packages/ui 的 i18n 键宿主**：键实际落在消费 app；ui-museum 等其他消费方若渲染 Combobox 需各自补键，缺键时 i18next 回退键名（可接受的降级）。
 - **权限不变待确认**：`GET /users` 维持平台管理员路由组（`router.go` admin 组 `RequireRole`）；群组管理员场景的候选选择（FR-003 语义）如需放开另行拍板，本 FR 不动权限。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-336 用户目录服务端搜索分页 + 候选下拉虚拟化（feat，增强 FR-003/156，验收分诊
+
+**需求补充**：`/users` 前后端均无搜索/分页，共享 Combobox 无虚拟化，用户量大时成员弹窗全量挂载）：后端 `GET /users` 加 `q/limit/offset` 返 `{items,total}`（兼容旧无参全量）；共享 Combobox 引入窗口渲染；群组成员弹窗默认只显已选+少量候选、键入走服务端搜索 → `docs/specs/users-search-pagination/spec.md`
+
+**交付状态**：✅ 已交付@v0.17.0

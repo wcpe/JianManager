@@ -1,7 +1,7 @@
 # ADR-026: 业务对接采用「适配器 + manifest 能力发现」而非插件实现 SPI
 
 - **日期**: 2026-06-24
-- **状态**: accepted（骨架；实现细节随 FR-118 落地）
+- **状态**: accepted（骨架；实现细节随 FR-118 落地）　**⚠️ 已被 ADR-106 部分取代（FR-521）：业务适配器与 manifest 能力发现机制在探针侧继续有效；JM 侧据此落库/聚合/渲染业务 UI 的实现已移除——JM 不解析 manifest 内容。**
 - **上下文**: JBIS 要让核心链路（CP/Worker/桥/DB/UI）在接入越来越多业务插件时维护成本不爆（O(1) 而非 O(N)）。设计总纲 §1.3/§6 曾倾向"范式 B：JM 定 SDK 标准、业务插件各自实现 JBIS SPI 并经 ServicesManager 注册"。但调研两个真实插件（MultiCurrencyEconomy / AllinInventorySync，见 `.tmp/business-integration-plugin-contracts.md`）后发现：它们各有成熟自有 API，且 SDK 契约在未经真插件验证前就固化风险高（接 2 个真插件才知道标准该长什么样）。
 
 ## 决策

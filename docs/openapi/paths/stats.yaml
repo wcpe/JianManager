@@ -1,0 +1,258 @@
+paths:
+  /stats/overview:
+    get:
+      tags: [stats]
+      summary: 集群总览摘要
+      description: |
+        返回当前时刻的集群规模与资源水位快照。无时间窗参数。
+
+        **只含通道与基础设施维度**——不含任何业务指标（活动参与数、经济流水等）。
+        这是架构边界：业务指标属于业务台，不属于平台。
+      operationId: getStatsOverview
+      responses:
+        '200':
+          description: 集群总览
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/StatsOverview'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+
+  /stats/instances:
+    get:
+      tags: [stats]
+      summary: 实例指标时序
+      description: |
+        查询实例的资源指标时间序列。
+
+        ## 必须走预聚合表
+
+        `resolution=5m` / `1h` 走 `MetricRollup` 表；只有 `resolution=raw`
+        且时间窗 < 1 小时时才查原始表。
+
+        ## 时间窗上限
+
+        30 天。超出返回 `TIME_RANGE_EXCEEDED`，响应体含 `maxRange`。
+      operationId: getInstanceStats
+      parameters:
+        - name: instanceIds
+          in: query
+          description: 实例 ID 列表，逗号分隔。缺省为全部（受 Token scope 限制）。
+          schema:
+            type: string
+          example: '1,2,3'
+        - $ref: '../components/common.yaml#/From'
+        - $ref: '../components/common.yaml#/To'
+        - $ref: '../components/common.yaml#/Resolution'
+        - $ref: '../components/common.yaml#/Page'
+        - $ref: '../components/common.yaml#/PageSize'
+      responses:
+        '200':
+          description: 指标序列
+          headers:
+            X-Total-Count:
+              schema:
+                type: integer
+            X-Page:
+              schema:
+                type: integer
+            X-Page-Size:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/MetricSeriesResponse'
+        '400':
+          description: |
+            `code` 为 `TIME_RANGE_EXCEEDED` 或 `PAGE_SIZE_EXCEEDED`
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '429':
+          $ref: '../components/common.yaml#/RateLimited'
+
+  /stats/nodes:
+    get:
+      tags: [stats]
+      summary: 节点指标时序
+      description: 查询节点（宿主机）的资源指标时间序列。时间窗上限 30 天。
+      operationId: getNodeStats
+      parameters:
+        - name: nodeIds
+          in: query
+          description: 节点 ID 列表，逗号分隔。缺省为全部（受 scope 限制）。
+          schema:
+            type: string
+        - $ref: '../components/common.yaml#/From'
+        - $ref: '../components/common.yaml#/To'
+        - $ref: '../components/common.yaml#/Resolution'
+        - $ref: '../components/common.yaml#/Page'
+        - $ref: '../components/common.yaml#/PageSize'
+      responses:
+        '200':
+          description: 指标序列
+          headers:
+            X-Total-Count:
+              schema:
+                type: integer
+            X-Page:
+              schema:
+                type: integer
+            X-Page-Size:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/MetricSeriesResponse'
+        '400':
+          description: 时间窗或分页超限
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+
+  /stats/logs:
+    get:
+      tags: [stats]
+      summary: 日志检索
+      description: |
+        检索实例或节点日志。
+
+        ## 时间窗上限
+
+        7 天。日志数据量大，过宽的时间窗会拖慢查询。
+
+        ## 脱敏
+
+        日志内容在采集侧已做脱敏，不包含玩家敏感信息。
+        但检索结果仍可能包含业务相关文本——**平台不对其语义负责**。
+      operationId: queryLogs
+      parameters:
+        - name: instanceId
+          in: query
+          description: 按实例过滤
+          schema:
+            type: integer
+        - name: nodeId
+          in: query
+          description: 按节点过滤
+          schema:
+            type: integer
+        - name: level
+          in: query
+          description: 日志级别
+          schema:
+            type: string
+            enum: [ERROR, WARN, INFO, DEBUG]
+        - name: q
+          in: query
+          description: 全文检索关键词
+          schema:
+            type: string
+        - $ref: '../components/common.yaml#/From'
+        - $ref: '../components/common.yaml#/To'
+        - $ref: '../components/common.yaml#/Page'
+        - $ref: '../components/common.yaml#/PageSize'
+      responses:
+        '200':
+          description: 日志条目
+          headers:
+            X-Total-Count:
+              schema:
+                type: integer
+            X-Page:
+              schema:
+                type: integer
+            X-Page-Size:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/LogQueryResponse'
+        '400':
+          description: 时间窗超过 7 天（`TIME_RANGE_EXCEEDED`）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/TimeRangeExceededError'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+
+  /stats/crashes:
+    get:
+      tags: [stats]
+      summary: 崩溃趋势
+      description: |
+        按天与按原因聚合的崩溃统计。数据源独立于单次崩溃快照（不受快照保留策略影响）。
+      operationId: getCrashTrend
+      parameters:
+        - name: instanceId
+          in: query
+          description: 按实例过滤。缺省为全部（受 scope 限制）。
+          schema:
+            type: integer
+        - name: days
+          in: query
+          description: 统计窗口天数
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 30
+      responses:
+        '200':
+          description: 崩溃趋势
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/CrashTrendResponse'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+
+  /stats/changes:
+    get:
+      tags: [stats]
+      summary: 在途变更状态
+      description: |
+        查询配置交付的进行中任务。
+
+        **不返回配置内容**——只返回任务状态、目标数与进度，
+        用于业务台或运维面板展示"当前有什么变更在跑"。
+      operationId: listInFlightChanges
+      parameters:
+        - name: status
+          in: query
+          description: 状态过滤，逗号分隔
+          schema:
+            type: string
+          example: 'rolling,paused,observing'
+        - $ref: '../components/common.yaml#/Page'
+        - $ref: '../components/common.yaml#/PageSize'
+      responses:
+        '200':
+          description: 变更列表
+          headers:
+            X-Total-Count:
+              schema:
+                type: integer
+            X-Page:
+              schema:
+                type: integer
+            X-Page-Size:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/ChangeListResponse'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'

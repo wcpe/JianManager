@@ -43,3 +43,13 @@
 ## 6. 风险
 
 - 真机全链路仍依赖 Worker/实例；本 FR 以 CP 策略可证为主，真机证据可选
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-388 Agent 入口可证安全闸（feat）
+
+**需求补充**：同 Token 同输入行为契约表（**CLI ↔ CP-MCP(Streamable HTTP/SSE) ↔ curl**，原 mcp-bridge 入口退役）+ 真机复验矩阵（≥30 条断言：scope 外/Token 吊销/过期/写白名单外/硬拒绝面[用户写/删实例/DB 浏览/自更新/审计删除]/并发两入口同时写/速率限制）+ CI agent-gate 闸 + 契约入 `docs/API.md`（需 spec，依赖 FR-384/385/**389** 完成后起跑；扩展见 FR-389 批）→ `docs/specs/agent-safety-gate/spec.md`
+
+**交付状态**：✅ 已交付@v0.20.0·AgentGate≥30 + 真机矩阵（**断言集随 FR-489 缩减**：契约表中「会话踢线后 401」一类会话相关断言随协议会话消失；「AgentGate≥30」口径仍成立，断言规模下限由 `TestAgentGate_AssertionCountFloor` 保证）

@@ -1,0 +1,195 @@
+openapi: 3.1.0
+
+info:
+  title: JianManager 对外 API
+  version: 1.0.0
+  description: |
+    # 面向外部系统的稳定契约
+
+    本文件定义 JianManager（简称 JM）的**对外 API**，供业务台、第三方集成等机器调用方使用。
+    与面向浏览器的对内 API 分属两套契约：对内 API 随版本可变，本文件的契约保持向后兼容。
+
+    ## 职责边界（重要）
+
+    JM 在业务链路中**只做通道**，不理解任何业务语义：
+
+    - 不定义动作名（含快照动作）——由业务台与插件约定
+    - 不规定 `payload` / `output` 的字段结构——是不透明载荷
+    - 不解析 `manifest` 内容——原样透传
+    - 对账只做"拉取并透传"，差异由业务台计算
+
+    这条边界是架构决策（ADR-106）的结果，**不是实现限制**。请勿依赖 JM 提供任何业务语义能力。
+
+    ## 认证
+
+    使用 Agent Token（前缀 `jmat_`）：
+
+    ```
+    Authorization: Bearer jmat_xxxxxxxxxxxx
+    ```
+
+    Agent Token 受 scope 收敛与写白名单约束。无权限时返回 `403 FORBIDDEN`。
+
+    ## 同步模型
+
+    | 场景 | 机制 | 说明 |
+    |---|---|---|
+    | 下发命令 | HTTP POST | 同步等待结果 |
+    | 批量下发 | HTTP POST（可选 SSE 响应） | 逐实例结果 |
+    | 拉取快照 | HTTP POST | 同步等待结果 |
+    | 接收事件 | SSE 长连接 | 异步推送，支持断线补读 |
+    | 查询指标 | HTTP GET | 同步，配合轮询 |
+
+    ## 错误处理
+
+    所有错误响应统一结构：
+
+    ```json
+    { "code": "INSTANCE_OFFLINE", "message": "实例未运行", "requestId": "uuid" }
+    ```
+
+    `code` 为机器可读的稳定标识，`message` 仅供人读。**调用方应按 `code` 分支处理，不要匹配 `message` 文本。**
+
+servers:
+  - url: /api/v1
+    description: 当前实例
+
+tags:
+  - name: business
+    description: 业务通道（命令下发、能力发现、对账）
+  - name: stream
+    description: 业务事件流（SSE）
+  - name: stats
+    description: 统计与观测（只读）
+  - name: bridge
+    description: 探针桥状态与订阅
+
+security:
+  - AgentToken: []
+
+paths:
+  # 业务通道
+  /instances/{id}/business:
+    $ref: './paths/business.yaml#/paths/~1instances~1{id}~1business'
+  /instances/{id}/business/manifest:
+    $ref: './paths/business.yaml#/paths/~1instances~1{id}~1business~1manifest'
+  /business/batch/preview:
+    $ref: './paths/business.yaml#/paths/~1business~1batch~1preview'
+  /business/batch:
+    $ref: './paths/business.yaml#/paths/~1business~1batch'
+  /business/reconcile:
+    $ref: './paths/business.yaml#/paths/~1business~1reconcile'
+  /business/cursor:
+    $ref: './paths/business.yaml#/paths/~1business~1cursor'
+
+  # 事件流
+  /business/stream:
+    $ref: './paths/stream.yaml#/paths/~1business~1stream'
+
+  # 统计
+  /stats/overview:
+    $ref: './paths/stats.yaml#/paths/~1stats~1overview'
+  /stats/instances:
+    $ref: './paths/stats.yaml#/paths/~1stats~1instances'
+  /stats/nodes:
+    $ref: './paths/stats.yaml#/paths/~1stats~1nodes'
+  /stats/logs:
+    $ref: './paths/stats.yaml#/paths/~1stats~1logs'
+  /stats/crashes:
+    $ref: './paths/stats.yaml#/paths/~1stats~1crashes'
+  /stats/changes:
+    $ref: './paths/stats.yaml#/paths/~1stats~1changes'
+
+  # 桥状态
+  /instances/{id}/bridge/status:
+    $ref: './paths/bridge.yaml#/paths/~1instances~1{id}~1bridge~1status'
+  /instances/{id}/bridge/subscription:
+    $ref: './paths/bridge.yaml#/paths/~1instances~1{id}~1bridge~1subscription'
+  /instances/{id}/business/status:
+    $ref: './paths/bridge.yaml#/paths/~1instances~1{id}~1business~1status'
+  /instances/business/status/batch:
+    $ref: './paths/bridge.yaml#/paths/~1instances~1business~1status~1batch'
+
+components:
+  securitySchemes:
+    AgentToken:
+      type: http
+      scheme: bearer
+      bearerFormat: jmat
+      description: Agent Token，前缀 `jmat_`。受 scope 收敛约束。
+
+  schemas:
+    Error:
+      $ref: './components/errors.yaml#/ErrorBase'
+    # 业务
+    BusinessDispatchRequest:
+      $ref: './components/schemas.yaml#/BusinessDispatchRequest'
+    BusinessDispatchResponse:
+      $ref: './components/schemas.yaml#/BusinessDispatchResponse'
+    DomainManifest:
+      $ref: './components/schemas.yaml#/DomainManifest'
+    BatchPreviewRequest:
+      $ref: './components/schemas.yaml#/BatchPreviewRequest'
+    BatchPreviewResponse:
+      $ref: './components/schemas.yaml#/BatchPreviewResponse'
+    BatchExecuteRequest:
+      $ref: './components/schemas.yaml#/BatchExecuteRequest'
+    BatchExecuteResponse:
+      $ref: './components/schemas.yaml#/BatchExecuteResponse'
+    BatchTarget:
+      $ref: './components/schemas.yaml#/BatchTarget'
+    RiskAssessment:
+      $ref: './components/schemas.yaml#/RiskAssessment'
+    ReconcileRequest:
+      $ref: './components/schemas.yaml#/ReconcileRequest'
+    ReconcileResponse:
+      $ref: './components/schemas.yaml#/ReconcileResponse'
+    InstanceResult:
+      $ref: './components/schemas.yaml#/InstanceResult'
+    # 事件
+    BusinessEventFrame:
+      $ref: './components/schemas.yaml#/BusinessEventFrame'
+    PingFrame:
+      $ref: './components/schemas.yaml#/PingFrame'
+    ReplayGapFrame:
+      $ref: './components/schemas.yaml#/ReplayGapFrame'
+    # 统计
+    StatsOverview:
+      $ref: './components/schemas.yaml#/StatsOverview'
+    MetricSeriesResponse:
+      $ref: './components/schemas.yaml#/MetricSeriesResponse'
+    LogQueryResponse:
+      $ref: './components/schemas.yaml#/LogQueryResponse'
+    CrashTrendResponse:
+      $ref: './components/schemas.yaml#/CrashTrendResponse'
+    ChangeListResponse:
+      $ref: './components/schemas.yaml#/ChangeListResponse'
+    # 桥
+    BridgeStatus:
+      $ref: './components/schemas.yaml#/BridgeStatus'
+    SubscriptionRequest:
+      $ref: './components/schemas.yaml#/SubscriptionRequest'
+    BusinessStatus:
+      $ref: './components/schemas.yaml#/BusinessStatus'
+
+  responses:
+    Unauthorized:
+      $ref: './components/common.yaml#/Unauthorized'
+    Forbidden:
+      $ref: './components/common.yaml#/Forbidden'
+    NotFound:
+      $ref: './components/common.yaml#/NotFound'
+    RateLimited:
+      $ref: './components/common.yaml#/RateLimited'
+
+  parameters:
+    Page:
+      $ref: './components/common.yaml#/Page'
+    PageSize:
+      $ref: './components/common.yaml#/PageSize'
+    From:
+      $ref: './components/common.yaml#/From'
+    To:
+      $ref: './components/common.yaml#/To'
+    Resolution:
+      $ref: './components/common.yaml#/Resolution'

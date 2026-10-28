@@ -97,10 +97,10 @@ internal/controlplane/
   config/                        # control-plane.yml 与环境变量覆盖
   database/                      # GORM 初始化、迁移与数据根解析
   middleware/                    # JWT、Agent Token、访问上下文、审计、限流、分发防护
-  model/                         # 用户/组/节点/实例、agent_tokens、指标、任务、通知、客户端分发、业务事件等模型
+  model/                         # 用户/组/节点/实例、agent_tokens、指标、任务、通知、客户端分发等模型
   mcp/                           # 内嵌 MCP 网关（FR-389/489）：JSON-RPC、无状态 Streamable HTTP、SSE 传输连接登记、tools 映射
-  router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务域/agent/mcp 等
-  service/                       # 领域服务；含 agent_token 策略引擎、terminal_proxy、business_events、client_*、metric/log/task/notification/selfupdate
+  router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务通道/agent/mcp 等
+  service/                       # 领域服务；含 agent_token 策略引擎、terminal_proxy、business（纯透传通道）、client_*、metric/log/task/notification/selfupdate
   grpc/{pool,handler}.go         # Worker 连接池、注册/心跳/流式事件控制面
   embed/{static,probe,install_scripts,client_updater}.go # 前端、探针、安装脚本与客户端更新器内嵌
 ```
@@ -237,6 +237,37 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 | `router` | HTTP 契约、错误码映射 | 配置面仅 `IsPlatformAdmin`；摘要面对所有登录用户 |
 | `httpclient` | 出站请求构造 | 仅 `https`，拒 userinfo/query/fragment |
 
+**工具面：渐进式披露 + 单一真源（FR-544）**
+
+助手不再维护自己的工具定义，也不再每轮预载全部工具 schema：
+
+```
+常驻上下文（3 个元工具，实测 1350 字节 ≈ 全量 108 工具的 3%）
+  system_search_tools    → 看有哪些工具（名字 + 一句话用途 + 是否需确认）
+  system_describe_tool   → 取某个工具的完整参数 schema
+  system_call_tool       → 真正调用 ──┐
+                                       │
+        ┌──────────────────────────────┘
+        ↓
+  mcp.CallTool（**唯一执行路径**）
+    ├─ 审批拦截（高危 → 平台审批票据）
+    ├─ 能力/scope 判定
+    ├─ 精确确认（confirmXxx）
+    └─ 领域执行 + 调用流水
+```
+
+两条不变量：
+- **工具定义的唯一真源是 `mcp.allToolSpecs`**（111 个）。新增 MCP 工具即刻对助手可用，不需要在两处各改一遍——历史上正是两套定义导致了「助手只有 13 个工具、MCP 有 108 个」的偏差。
+- **助手不拥有第二条执行实现**。`call_tool` 内部转 `mcp.CallTool`，因此审批、能力、scope、精确确认、流水全部与 MCP 入口同一套；助手侧曾有的 `invokeReadTool`/`invokeWriteTool` 已删除。
+
+**双闸**：`call_tool` 在**调用 MCP 之前**判定读写——写类先出助手侧确认票（与 Agent 客户端在 `CallTool` 前拦截完全同构），读类直放。即「助手确认 → MCP 审批 → 执行」，两道闸各有各的风险模型：前者防「人在对话里被说服、顺手点一下」，后者防「无人监管的 Agent 自我批准」。
+
+**身份派生**：助手面对的是人，MCP 的 `Authorize()` 只认 `AgentPrincipal`。`AssistantPrincipalForOwner` 把用户的 RBAC 权限节点白名单映射成 agent 能力、把可见实例/节点映射成 scope，**绝不造全能力替身**（那等于任何能聊天的用户都能经助手执行自己本没有权限的操作）。平台管理员也显式枚举 scope——空 scope 会让实例类工具不可发现，表现为「管理员没有工具」，属配置错觉而非安全收益。
+
+**外部工具命名**：`conn_<slug>_<remote>`，两段各自**可逆转义**（字面下划线→`_5f`、非法字节→`_XX`）。原用点号分隔，违反上游字符集 `^[a-zA-Z0-9_-]{1,64}$`，会让带工具的请求全部 400。不能简单换成下划线：slug 本身允许下划线、remoteName 任意，那样会丢失边界并可能把调用路由到另一个工具。
+
+**页面上下文只带引用**：注入「页面 + 实体类型#id + 标签页」，不含名称/状态/指标——那些会过期，且可能绕开工具的权限回填；让模型用工具现查，拿到的一定是最新且过了权限的数据。
+
 **两个必须记住的陷阱**（都已用测试钉住）：
 
 - `requirePlatformAdmin(c)` **名字误导**——它只校验 `node.manage` 业务权限节点。用它守 AI 配置面，
@@ -302,7 +333,42 @@ Control Plane 负责发现发压节点、生成确定性分片、保存批次与
 
 Control Plane 启动时会为当前已连接 Worker 恢复持久化活动批次所需的 Fleet 订阅，Worker 重连/重注册回调也只恢复该节点的活动订阅。恢复动作先重建 `GetBotFleetSnapshot` → `StreamBotFleetEvents` 归真链路；FR-365 起完整 snapshot reconcile 会按 CP `desired_state` 创建缺失 running、停止 session 内 orphan，并以 10s/90s 新鲜度巡检收敛幽灵 `connected`（`STATUS_STALE`/`RUNTIME_MISSING`）。
 
-## 5. Worker Node 架构
+### 4.3 平台审批链路（FR-490~493）
+
+高危操作在真正执行前必须有一个**人类点过批准**。审批是独立于「能力/scope」的第二层闸：
+能力判定回答「这个 Token 允不允许做」，审批回答「这件事要不要有人点头」。
+
+```
+Agent 调用 ──┬─ MCP CallTool ────┐
+             └─ HTTP/CLI ───────┤  同一张登记表（19 条 action）
+                                 ↓
+                    ApprovalService.InterceptForApproval
+                     ├─ 无需审 → 放行（沿用精确确认语义）
+                     └─ 需审 → 落票（零副作用）+ 冻结载荷哈希与目标快照
+                                 ↓            返回 requestId
+                    人类在审批中心批准（仅 JWT，Agent 永久不可批准）
+                                 ↓
+                    ApprovalExecutor.Execute（RunAsync 承载长操作）
+                     ├─ payload 哈希重校验（防批准后改参）
+                     ├─ 目标漂移校验（防批准后换目标）
+                     └─ 领域 adapter 执行 → 执行回执 + 双审计
+```
+
+**关键约束**：① 先授权、再出票——越权请求不变成票据（否则批准人被安排成提权的最后一步）；
+② 未登记的写操作**失败关闭**，不是放行；③ 出票阶段**零副作用**；
+④ 审批服务未装配时两条入口都失败关闭。
+
+**目标漂移校验的取值**：用 `updated_at` 纳秒作「内容是否变过」的代理（现有表无乐观锁列，
+零迁移成本）；只校验客观可比的量，**刻意不校验**「实例是否在运行」这类随正常运维波动的事实。
+`evidence` 落库是 `text` 列，`map[string]any` 经一次 JSON 往返后数字全变 `float64`，
+而纳秒值远超 float64 精确整数上限 2^53——因此 `version` 以**十进制字符串**承载，否则
+「目标没变」也会被判漂移、每张票执行永久失败。
+
+**入口覆盖现状**：agent 运维面 HTTP/CLI 只暴露 5 个写 action，其余 18 条需审 action
+仅在 MCP 工具面可达，两条入口的实际交集只有 `instance_stop`。
+`own.list/get/withdraw` 三端点只对人类 JWT 会话可用，MCP 工具面无审批查询工具
+（Agent 暂不能自行轮询，见 `docs/specs/approval-center/fr-490-493-approval.md` §8.4）。
+
 
 ```
 ┌─ 通信层 ────────────────────────────────────────────┐
@@ -423,10 +489,11 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
 - **Worker 日志平台 Log RPC（FR-473～484，消息已冻结 / 生产装配已落地）**：`GetLogCapabilities`、`LogCreateView`、`LogSearch`、`LogStats`、`LogFields`、`LogFacets`、`LogTail`（server stream）、`LogRehydrate`、`LogArchiveStatus`、`LogRuntimeStatus`、`LogRuntimeControl`、`LogMigratePartition`、`LogCutoverReadiness`、`LogResolveIngestGaps`、`LogImportArchives`（手动触发归档 `.gz` 导入扫描：源被暂停时自动发现不再跑，此入口复用同一条导入管道与归属闸，强制携带操作人）、`LogClearIdentityConflicts`（人工确认并清空身份冲突记录以消除查询面质量标记，强制携带操作人 + 理由）。受管 VL 未就绪时仍返回 `LOG_UNSUPPORTED`/`LOG_NOT_READY`，不得把空响应视为完整结果；CP 侧 `logcoord.Assemble` 和节点 runtime/archive 管理面使用反向隧道。节点级 runtime/ingest 管理面的 HTTP 端点（`resolve-gaps` / `clear-identity-conflicts`）见 API.md「Worker 日志平台」；`LogImportArchives` 无 CP HTTP 端点，只有 Worker gRPC 入口。
-- 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
+- 生命周期：Register, **ReportStartupProgress**（FR-486）, Heartbeat (双向 stream), FetchBotWorkerArchive
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册必须同时出示）或 `enroll-token`（新节点准入），均不改 proto；Host 和名称不再作为身份凭据（ADR-081）。
   - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；若既无本地持久化值也未收到响应值，Worker 拒绝启动 WS 服务。
-  - `Heartbeat` 必须携带 `node-secret` metadata；CP 在处理首条负载前按 `node_uuid` 校验 secret，并将 UUID 绑定到整条流。无凭据、未知节点、凭据不匹配或流内 UUID 改变一律拒绝且无状态副作用（ADR-081）。认证通过的负载携带节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062）与 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 经 `IngestHeartbeat` 落库为时序样本。
+  - `ReportStartupProgress`（FR-486，**注册前**可用）：Worker 在启动各阶段切换时上报「当前处于哪个阶段 + 已耗时」，让主控台能看见尚未注册的节点。**为什么必须独立于 Register**：加载（尤其大索引 `Store.Load` 的全表扫描）发生在注册**之前**，2026-09-28 事故中这段黑盒长达 8m39s、面板上连节点都不存在。鉴权接受两种身份——首装用 `enroll-token`（CP 侧**只读校验不消费**，因为该 token 还要留给随后的 Register），重启用 `node_uuid`+`node_secret`；两者皆无则拒绝（否则任何进程都能伪造「某节点在启动」）。语义刻意保守：**best-effort**（Worker 侧失败静默丢弃，绝不拖慢启动）、**不构成就绪**（就绪判据仍只看注册与心跳）、不创建正式节点记录（进度落独立的 `node_startup_progresses` 表，注册成功后归并到真实 UUID 并由终态 `heartbeat` 阶段清除）。
+  - `Heartbeat` 必须携带 `node-secret` metadata；CP 在处理首条负载前按 `node_uuid` 校验 secret，并将 UUID 绑定到整条流。无凭据、未知节点、凭据不匹配或流内 UUID 改变一律拒绝且无状态副作用（ADR-081）。认证通过的负载携带节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062；**FR-513 增补主机级字段**：`load_avg5`/`load_avg15`、`procs_running`/`procs_total`、CPU 时间构成七分量 `cpu_user`..`cpu_steal`、整机 top-N `host_top_processes`（仅 pid/comm/cpu_pct/rss_bytes，**不含 cmdline**）、分挂载点 `host_mounts`；标量落 `nodes` 表指针列（nil=未上报、0=读数为零），多值维度落 `host_mount_snapshots`/`host_process_snapshots` 快照表）与 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 经 `IngestHeartbeat` 落库为时序样本。
   - `Heartbeat` 还加性携带 `tasks`（`TaskSnapshot`：task_id/state/progress/error/result/recent_log_lines，FR-183/ADR-040）——Worker 把运行中长任务（如 JDK 安装）的进度随心跳上报，CP 经 `TaskService.IngestSnapshots` upsert `Task` + 幂等追加 `TaskLog`，并在任务**首次进终态**时触发副作用（jdk_install 成功落 `NodeJDK` + 发成功站内信，失败发失败站内信）。日志行编码为 `<绝对序号>\t<正文>`，跨周期重叠窗口按绝对序号去重
   - **实例状态双向对账**：`Heartbeat.instances`（`InstanceState`：uuid/state + 可选 `pid`，FR-326）既服务**正向对账**（CP 以 Worker 为真源：本节点 DB 为 RUNNING/STARTING/STOPPING 但本拍未上报者置 STOPPED，语义不变），也服务**反向对账**（FR-326，见 ADR-079）：Worker 有、CP 无记录（软删视为无）→ `OrphanRuntimeTracker` 记 `orphan_runtimes`（pending→宽限后 confirmed；默认 `auto_dispose=false` 只列表/日志，管理员 `POST /orphan-runtimes/:uuid/dispose` 或开启自动后下发 `DisposeOrphanRuntime`）。老 Worker 不填新字段 / 未注入 Tracker 时反向路径关闭、不崩；**不重建 CP 实例、不改写正向语义**
   - `HeartbeatResponse` 加性携带 `ws_token_secret`（FR-275，见 ADR-061）：WS 令牌密钥每拍随心跳下发，Worker 比对「值变化」才热更新终端/插件桥校验并补写身份文件——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）
@@ -463,7 +530,10 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - `BotFleetEvent.action_event` 由 CP `ScenarioActionEventService` 接入，先经 `ActionResultService` 按执行节点、session、Bot 与 desired generation 强校验并写入 `bot_load_action_results`：V2 `correlationToken` 必须非空且为 UUID，非法 start/finish/barrier 在落账与屏障冻结前拒绝；actionRunId 幂等创建 running，首个终态条件更新胜出，重复/迟到事件不改账本；result JSON 最大 16KiB，超限改存带 `truncated/originalBytes/preview` 的可识别元数据。Worker gRPC 层为 action-event 维护当前进程内、非持久化的有界压缩 journal：按 `actionRunId` identity 只保留最新 running/waiting 或首个 terminal，容量上限 60,000 条；新订阅按接收序号 replay 后再接 live。Worker 进程重启后 Bot desired 集合由 CP reconcile 恢复（FR-365）；action journal 本身仍不落盘。`barrier-arrived` 再进入 `BarrierCoordinator`，兼容外部动作信号由 `ActionSignalRouter` 经 `SignalBotActions` 投递。ADR-075 起，`send_command` 的通用成功只表示 Bot Worker 调用 `bot.chat` 时未同步抛错；调用前路由、IPC、参数处理失败或调用同步抛错仍记动作失败，ServerProbe/TPS/MSPT 不参与通用命令结果。
 - 探针部署：`ArtifactPackage/Source/Version` 叠加在既有 CAS 上（FR-409/411、ADR-083/085）。CP 手动同步 GitHub Releases 或由平台管理员按顺序提交 `version` 后提交本地 JAR；上传接口直接流式写入 CAS，不经 multipart 临时文件或完整内存缓冲，并以文件字节数实施 64 MiB 上限。来源由版本记录关联的 SourceID 判定，避免共享 CAS asset 混淆来源。版本按全局→Worker→实例解析；`DeployServerProbe` 只下发 CP-local 下载 URL、摘要、版本和生成的 config.yml。Worker 拉取到临时文件、校验后原子替换 `plugins/ServerProbe.jar`。不再分发 `libraries_zip`，游戏服首启自行联网解析依赖；实例更新只在下次重启生效。
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
-  - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,node_uuid,zone_id,dedup_key) 去重落 `business_events` 通用信封；经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(node→zone→ledger 幂等审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
+  - **桥能力接入（FR-526）**：新增四条独立 RPC，把 ServerProbe 已具备、JM 此前未消费的 `core.*` 治理能力显式化——`QueryBridgeStatus`（`core.bridge_status`）、`SetBridgeSubscription`（`core.subscribe`）、`QueryBusinessStatus`（`core.business_status`）、`ReloadProbeConfig`（`core.config_reload`）。**不复用 SendPluginCommand** 的原因是超时口径与降级语义互不相同：业务命令把等待上限写死 5s，而配置重载跑在探针独立的 reload 协调池上、默认 **10s**（可经 `timeout_ms` 覆盖，Worker 侧夹到 60s 上限），与业务命令共用一个预算就会让正常重载被判超时；桥状态在探针未连时应回 `connected=false`（CP 据此走 stale 缓存）而不是当成执行失败。三条只读/轻量命令（bridge_status / subscribe / business_status）仍用 5s。CP 侧对应三条对外路由：`GET /instances/:id/bridge/status`、`PUT /instances/:id/bridge/subscription`（整批覆盖、空数组=订阅全部、`domains` 由 Worker 展开成 `<domain>.*`）、`GET /instances/:id/business/status`（**30s 内存缓存、不落库**；探针不可达回退最后已知并置 `stale=true`）。域状态与桥状态都只做信封级**扁平化**，不建模探针快照里的 `pools`/`routes`/manifest 等细节
+  - **分片重组在 Worker 的 WS 读循环内（FR-526 §2.5）**：ServerProbe 的 `FrameChunker` 把超过 `bridge.chunk.max-frame-bytes` 的整帧切成 `type=event`+`event=chunk` 的多片，**经同一条反向 WS 上行**（`groupId`/`seq`/`total`/`ofType`/`requestId` 平铺在帧顶层，`data` 是整帧 UTF-8 字节的 base64 切片，按 4 的整数倍切）。被切片的可能是 `command_result`（需按 requestId 投递给同步等待者）也可能是业务事件，所以这是**传输层**语义：重组必须在任何语义分发之前完成，下游才拿得到完整原帧。实现在 `internal/worker/ws/chunk.go`（`chunkAssembler`），有界性靠三条硬上限——单实例并行重组数 8、单组片数 4096、单组解码后 8 MiB（base64 长度折算累计）；另有 30s 重组超时，不完整的组整组丢弃并记 `INCOMPLETE_CHUNK`，会话结束时清空该实例全部在途组。重组完成后把原帧文本重新走一遍同一分发路径（`allowChunk=false` 防递归）。若把分片冒泡到 CP 再重组，CP 就得为每节点维护重组状态，command_result 的同步往返还要绕一圈——等于把传输层细节泄漏到应用层
+  - **业务事件上行已退役（FR-521；见 ADR-106）**：`StreamPluginEvents` 仍复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义），但 CP 侧**不再解析、不落库、不聚合**——`PlayerEventService` 仅跳过 domain 非空的事件（不演进在线名册、不走玩家 SSE），业务数据由下游业务台自行持有。原先的 `business_events`/`economy_balance_mirrors`/`economy_ledger_entries` 三表与 `BusinessEventService` 已整体删除
+  - **业务事件位点账本（ADR-107，旁路）**：`BusinessStreamService.Ingest` 在「写环形缓冲 + 扇出」之后追加一次**非阻塞**入队，把 `(streamSeq, instanceId, domain, seq, dedupKey, occurredAt)` 交给 `BusinessCursorWriter`；环形缓冲的投递语义、预渲染字节共享、慢消费者断开**全部原样不变**。写入器是有界环（默认 10000，满则丢最旧并计数）、批量落库（默认 500 条或 1 秒先到者触发）、失败只记 WARN + 计数（**不影响事件投递**）、`Close()` 时 flush 剩余。读侧 `GET /business/cursor` 只返回位点，**不返回 payload、不计算缺失区间**——JM 不知道调用方收到了什么，差集必须由调用方做（这是 ADR-107 的核心论证，不要"优化"成 JM 单方算缺口）。裁剪是每小时的后台巡检（默认 7 天），按主键分批删除（GORM 在 SQLite 上会静默忽略 `Delete` 的 `Limit`，实测已踩，故显式「先查 id 再按 id 批删」）
 - **CPU 窗口采样**：一个 Worker-owned `CPUSampler` 维护累计计数基线并发布窗口差分快照，collector/register/Heartbeat/`GetNodeMetrics` 仅读，不能相互推进基线。CPU/iowait 为 0..1，CP iowait 时序转为 pct；预热、无增量、计数或时钟回退、读取失败均无效，现有 RPC 标量只能零降级，不能把该零宣称有效测量。普通 iowait 阈值告警按节点 UUID + 既有时序别名读取近期 pct，缺失/过期跳过，不伪造触发或恢复；不新增 Node 字段或 RPC。
 - 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 请求带 `probe_port`，由 Worker 抓 ServerProbe `/metrics`（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补。FR-400 在同一已认证反向隧道 Heartbeat 追加 `managed_runtime`：只读上报 Go Worker 与已运行共享 Bot Worker 的 RSS/CPU、Bot 聚合运行态、真实 `bot_capacity_max` 和观测时间；容量未就绪、缺失或无效时保持 `null` 并附原因。不得调用会拉起 Bot Worker 的 RPC，也不扫描任意 OS 进程。CP 仅保存 Node 当前快照，首页经管理员 `GET /metrics/resource-attribution` 聚合鲜节点、RUNNING 受管实例树和进程 TopN；CPU 首帧/PID 切换为空值，陈旧超过 90 秒不伪装成实时。FR-401 的 `BotRuntimeMetricSampler` 只读取该已认证快照，每 30 秒写入 ADR-013 node scope 时序；离线/陈旧/不可用字段写 `NULL` 断点，查询经 `/metrics/bot-runtime` 由节点、实例或压测会话解析关联节点并始终标明共享语义，不新增 Worker RPC、端口或数据库直连。FR-402 的 `PlatformObservabilityService` 仅用有界集合查询构造平台管理员首页读模型：鲜活节点资源、节点/实例健康、未解决告警、进行中/失败任务与共享 Bot 观察值；每类列表上限 5，跨节点事件循环 P95 取可用节点最大值。该端点不做逐项查询、绝不触发 Worker RPC，普通成员不请求也不渲染管理员区块。FR-406 把 `/monitor` 收口为平台/节点/实例观测入口，默认选中对比指标并复用 FR-400/401/402 与进程 TopN 数据；FR-407 在实例维度新增受管进程详情读模型，结合 `process_metric_snapshots` 最近窗口输出带样本数、窗口和数值证据的诊断标签；FR-408 的 PID 级处置只开放非根子进程并要求前端 DangerConfirm 与后端 `confirm=true`，审计 detail 不记录完整命令行、环境变量或密钥。
 - 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
@@ -573,6 +643,13 @@ serverprobe_world_{loaded_chunks,entities,tile_entities}{world=}  → 按世界�
 - 子服端载体：ServerProbe fork `platform-bukkit` 的 `BukkitPlayerEventListener`（`@SubscribeEvent` 监听 PlayerJoin/Quit/AsyncChat，本子服视角）。
 - 代理端载体：`platform-bungee` 的 `BungeePlayerEventListener`（监听 PostLogin/ServerSwitch/PlayerDisconnect，给出精确跨服路由 from→to）。
 - 二者经 core `BridgeClient.emitPlayerEvent` 出口上报；插件桥开关关闭（独立使用探针）时不上报。
+
+**桥能力接入（FR-526）**：探针侧的线路治理能力经 `core.*` 治理域命令被 JM 消费。
+- **主题订阅**：`core.subscribe`（`payload={"topics":[...]}`，整批 replace 语义）。未订阅时探针全量上报（兼容现状）；一旦订阅，只上报匹配主题的**业务**事件，非业务事件（connected/heartbeat/bridge_status/`core.*`/`jbis`）永不受过滤。JM 的 `domains` 由 Worker 展开成 `<domain>.*` 并入 topics（探针侧过滤维度只有 `topic`，无独立 domain 维度）；空数组下发空列表 → 探针 clear → 恢复全量。**不能**用裸 `*` 表达"全部"：探针 `TopicMatcher` 只认精确匹配或 `.*` 后缀前缀匹配，裸 `*` 匹配不到任何主题。
+- **桥状态**：`core.bridge_status` 只读内存快照（不做 IO、不调 Provider），回执含 sender 三池/`reconnects`/`lastDisconnect*`/`pools`/`inbound`/`routes`/`topics`/`version`。JM 只取契约要求的几项扁平化，其余刻意不建模。
+- **域状态**：`core.business_status` 同样只读 `ProviderHealthRegistry` 的内存快照（不调 `provider.health()`，避免慢域占住命令槽）。回执 `{"domains":{...},"refresh":{...}}`，JM 不解析 manifest 内容。
+- **配置重载**：`core.config_reload` 跑在探针**独立的 reload 协调池**上（与业务命令池隔离），`payload={"paths":[...]}`，空数组/省略 = 全量。JM 侧超时也独立（默认 10s）。
+- **分片**：超过 `bridge.chunk.max-frame-bytes` 的上行帧被切成 `event=chunk` 的多片，Worker 读循环重组（详见 §RPC 段「桥能力接入」条目）。
 
 > 地基阶段（FR-065）打通通道层（会话/握手/心跳/connected·disconnected 冒泡 + proto 一次铺齐）；实时玩家事件采集（FR-066）已落地（见上）；治理执行与 RCON 退役（FR-067）已落地，在线更新（FR-068）复用本通道、不再改 proto。
 
@@ -884,9 +961,8 @@ AssistantModel ──1:1──▶ AssistantSettings        # FR-514（单行表�
 | client_security_counters (FR-264) | scope + key + bucket(UNIQUE), value, updated_at（安全计数/配额桶辅助） |
 | client_runtime_states (FR-265) | channel_id + machine_id(UNIQUE 组合), player_name, ip, platform, java_version, launcher, core_version, local_version, first_seen_at, last_heartbeat_at, created_at/updated_at（客户端最新启动运行态；启动心跳只 upsert 此表，不写 client_telemetry；machine_id/player_name 不可信，仅统计/联动筛选） |
 | client_dist_snapshots (FR-217/265) | channel_id + bucket_ts(UNIQUE 组合, **频道×小时桶**), manifest_pulls, artifact_pulls, download_bytes, active_machines(桶内 machine_id 去重), version_dist/platform_dist/lag_dist(JSON map), update_total/success/fail_static/rolled_back/error（**观测时序快照**，后台离线把 client_dist_events+client_telemetry 卷积而来，与写时聚合解耦；单档小时桶留 ≥180d；供观测·分发监控页跨频道/平台时序，ADR-049） |
-| business_events (FR-116/122) | domain + node_uuid + zone_id + dedup_key(UNIQUE 组合, 至少一次投递去重), action, instance_uuid, operator(FR-121 回填), payload_json(信封原文), occurred_at, created_at（JBIS 通用业务事件信封表，**插件无关汇聚底座**；探针经反向 WS 桥上报的业务域事件按节点与分区隔离的幂等键 insert-or-ignore 落库，新增域无需改表，**不降采样不丢**，ADR-028） |
-| economy_balance_mirrors (FR-122) | node_uuid + zone_id + player_name + currency(UNIQUE 组合, **node→zone 维度**), currency_id, balance(字符串 BigDecimal), last_seq(单调推进游标), last_ledger_id, last_entry_type, occurred_at, updated_at（经济结构化镜像最新余额；按 ledger 事件 seq 单调推进，跨区/跨节点同名玩家独立不串味/不重复计数；汇聚镜像非真源，ADR-028） |
-| economy_ledger_entries (FR-122) | node_uuid + zone_id + ledger_id(UNIQUE 组合, 去重锚点), instance_uuid, player_name, currency, currency_id, entry_type, signed_amount(字符串), balance_after(字符串), seq, occurred_at, created_at（经济变更/操作审计，结构化专表 append-only；与 business_events 并存供高效查询/对账，业务数据**不降采样不丢**，ADR-028） |
+| ~~business_events / economy_balance_mirrors / economy_ledger_entries~~ | **已退役（FR-521，ADR-106）**：V1 业务镜像三表整体删除（`migrateRetireBusinessTables` 执行 `DROP TABLE IF EXISTS`，不备份）。JM 不再存储任何业务语义数据，业务数据由下游业务台持有；平台只保留纯透传通道（`POST /instances/:id/business` 与 `GET .../business/manifest`） |
+| business_event_cursors (ADR-107) | stream_seq(UNIQUE), instance_id + domain + seq, dedup_key, occurred_at, created_at（**业务事件位点账本**：只存投递元数据，**无 payload**——位点是「信封的运输单据」，payload 是「信封里的信」。让业务台能对 `(instance, domain)` 做差集精确定位缺口，只对受影响的实例/域拉快照，而非全量盲对账。索引用 `idx_bec_scope(instance_id, domain, seq)` 支撑缺口查询；默认保留 7 天（`business_cursor.retention_days`），后台每小时巡检按主键分批删除过期行，**查询不触发删除**） |
 
 ### 数据库切换
 
@@ -1284,6 +1360,8 @@ tmux 前缀键或键盘复制模式**。它与 `/super` 的鼠标画布、`/dire
 - **运行时/JDK** (V2): 在节点详情页 `/nodes/:id` 增「JDK」标签——列出已装 JDK、安装指定版本、登记系统已有 JDK、查看被哪些实例占用
 - **运行时与制品全局页 `/runtime-assets`（FR-082 / FR-301）**：系统域平台维护入口，Control Plane 聚合 `nodes`/`node_jdks`/`node_runtimes`/`instances`/`assets` 现有表，不新增 proto 或 Worker RPC。JDK 区按 `instances.jdk_id` 生成 `direct` 引用、按同节点 `java_major_version` 解析到同大版本最大 id JDK 生成 `major` 引用；制品区只展示 FR-045 既有 `ref_count`、类型分组、冷热/归档/外置状态与 `client-file` metadata 路径，不臆造实例级制品连接。FR-301 起 overview 加性携带**多运行时矩阵**（`node_jdks`(type=jdk，含引用实例) + `node_runtimes`(nodejs/python 预留，引用恒空) 读侧拼装）与每节点/整体上次同步时间（`nodes.runtime_synced_at`，JDK syncFromWorker 成功即刷新）；`POST /api/v1/runtime-assets/refresh` 强制全节点库存同步——单节点失败容忍（逐节点回报 ok/error，DB 旧数据保留显旧），写审计 `runtime_assets.refresh`。端点均限平台管理员。
 - **配置编辑器** (V2): 位于工作区**资源卡**（文件+配置合一，FR-130/FR-166）——复用资源管理器（`ConfigExplorer`，FR-071）呈现工作目录全部配置（递归自动发现）+ schema 表单/原始双模式 + 一致性校验 + 配置版本 diff/回滚 + 收藏书签（非独立页面）
+  - **schema 表单只覆盖标量键**：`parseFlatYAML` 把嵌套 YAML 拍平成点号路径（≥3 层嵌套同样按 `a.b.c` 顺序拼接），schema 里声明的每个键都必须能在解析产物中精确命中，否则表单会渲染出真实配置中不存在的输入框。映射（如 BC 的 `servers`：子服名→属性）与列表（如 `permissions.default`）因键名/条目不可穷举，**不下放到 schema**，只能原文编辑。
+  - **字段补丁拒绝破坏性覆盖**：补丁语义是「把这个标量字段改成这个值」，若路径命中的是映射或序列则直接报错返回，绝不用单值覆盖整棵子树（否则保存一次就会丢掉全部子服定义）。列表型路径（如 `listeners.host`）仅在该列表**恰好一个元素**时才进入该项改写，多项时报错交由原文模式处理。
 
 ### 8.4 核心用户流程
 
