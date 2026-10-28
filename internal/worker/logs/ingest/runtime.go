@@ -2928,6 +2928,22 @@ func (m *Manager) Register(source SourceConfig) error {
 		if err := led.Restore(saved.Ledger); err != nil {
 			return err
 		}
+		// 重启后重启 acknowledged 的持久化 ACK 证据（2026-10-28 生产停采）：
+		// `WALEntry.acknowledged` 是进程内态（json:"-"），重启即丢；而补段路径
+		// `CaptureAcknowledgedPrefix` 要求它非 nil ⇒ “delivery 早满、reclaim 停在 0”的源
+		// 会陷入「重启→补段失败→reclaim 不动→WAL 撞上限→停采」死锁。
+		//
+		// 证据来源只能是账本里**已经持久化的** REQUEST_DONE 区间
+		//（`ledger.RequestDoneRangesOf`：仅承接真实 REQUEST_DONE，请求结果前缀与回收
+		// 水位都不生成 ACK）。传空则与旧行为逐字等价（全部 nil，default-deny）。
+		// 详见 acquire/wal_restore_ack.go。
+		var ackRanges []ledger.PositionRange
+		for i := range saved.Ledger {
+			if saved.Ledger[i].Key == (ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration}) {
+				ackRanges = ledger.RequestDoneRangesOf(&saved.Ledger[i])
+				break
+			}
+		}
 		if len(saved.WALRefs) > 0 {
 			// 兜底（N-2 两段式的正确性前提）：两段持锁之间状态可能被并发登记/持久化改写——
 			// 首段判定「不需要水合」，此刻却已出现引用条目。此时**就地构造**：
@@ -2938,7 +2954,7 @@ func (m *Manager) Register(source SourceConfig) error {
 				bodyLookup = m.eventBodyLookup(key)
 			}
 			// 引用形式（B1a）：内联条目直接恢复，引用条目按 EventID 从事件段存储水合。
-			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, bodyLookup)
+			missing := wal.RestoreMixedWithAck(saved.WAL, saved.WALRefs, bodyLookup, ackRanges)
 			if len(missing) > 0 {
 				recoveryDirty = true
 				// 取不到正文的条目不得静默丢：记可见缺口并告警（与 FR-474 §5#1 同口径）。
@@ -2960,7 +2976,7 @@ func (m *Manager) Register(source SourceConfig) error {
 				slog.Warn("WAL 引用恢复：部分条目正文缺失，已记可见缺口",
 					"logSourceID", source.LogSourceID, "missing", len(missing))
 			}
-		} else if err := wal.Restore(saved.WAL); err != nil {
+		} else if err := wal.RestoreWithAck(saved.WAL, ackRanges); err != nil {
 			return err
 		}
 	}

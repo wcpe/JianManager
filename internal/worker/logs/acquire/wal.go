@@ -629,6 +629,15 @@ func (w *WAL) snapshotSplit(covered func(logtypes.Event) bool, identities map[Co
 // 回放标记随 refs 双向往返（ACQ-1）：`WALRef.Replay` 落到重建条目的 `WALEntry.Replay` 上，
 // 否则重启后回放条目会重新计入闸视图（见 WALRef.Replay 的说明 ✓）。
 func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool)) []WALRef {
+	return w.RestoreMixedWithAck(inline, refs, hydrate, nil)
+}
+
+// RestoreMixedWithAck 是 RestoreMixed 的「带持久化 ACK 证据」形态。
+//
+// acked 为 nil 时与 RestoreMixed 逐字等价（全部 acknowledged=nil）。
+// 传非空时只给「位置落在 REQUEST_DONE 区间内且 durable」的条目重建 acknowledged。
+// 理由同 RestoreWithAck（见 wal_restore_ack.go）。
+func (w *WAL) RestoreMixedWithAck(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool), acked []ledger.PositionRange) []WALRef {
 	unlock := w.lockMutation(nil, true)
 	defer unlock()
 	entries := append([]WALEntry(nil), inline...)
@@ -650,11 +659,11 @@ func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventI
 	w.pendingEpoch++
 	for i := range entries {
 		entries[i].Event = cloneWALEvent(entries[i].Event)
-		entries[i].acknowledged = nil
 		entries[i].appendRevision = w.revision
 		entries[i].captureToken = 0
 		entries[i].captureBody = [32]byte{}
 	}
+	restoreAcknowledged(entries, acked)
 	w.restoreReservationsLocked(entries)
 	w.entries = entries
 	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
@@ -2101,6 +2110,21 @@ func (w *WAL) committedIdentities(copied func()) (map[CommitIdentity]struct{}, e
 // Restore 将持久 WAL 快照恢复到内存。账本水位由 Ledger.Restore 恢复，
 // WAL 只重建待核验事件集合，避免重启后依赖进程内存判断投递结果。
 func (w *WAL) Restore(entries []WALEntry) error {
+	return w.RestoreWithAck(entries, nil)
+}
+
+// RestoreWithAck 是 Restore 的「带持久化 ACK 证据」形态。
+//
+// acked 为 nil 时与 Restore 逐字等价（全部 acknowledged=nil，即 default-deny）。
+// 传入非空时，只给「位置完整落在某个 REQUEST_DONE 区间内且 durable」的条目重建
+// `acknowledged`（由当前正文重算 CommitIdentity），其余仍为 nil。
+//
+// 为什么需要它（2026-10-28 生产停采）：acknowledged 是进程内态（json:"-"），
+// 重启即丢；而补段路径（CaptureAcknowledgedPrefix）要求它非 nil。
+// 当 delivery 早已推进、reclaim 却停在 0 时，就会形成「重启→补段失败→reclaim 不动→
+// WAL 撞上限→停采」的死锁。本变体让调用方能把账本里**已经持久化的** REQUEST_DONE
+// 证据交给 WAL，从而把确实存在过的 ACK 认回来。详见 wal_restore_ack.go。
+func (w *WAL) RestoreWithAck(entries []WALEntry, acked []ledger.PositionRange) error {
 	unlock := w.lockMutation(nil, true)
 	defer unlock()
 	for _, entry := range entries {
@@ -2119,11 +2143,11 @@ func (w *WAL) Restore(entries []WALEntry) error {
 	w.pendingEpoch++
 	for i := range restored {
 		restored[i].Event = cloneWALEvent(restored[i].Event)
-		restored[i].acknowledged = nil
 		restored[i].appendRevision = w.revision
 		restored[i].captureToken = 0
 		restored[i].captureBody = [32]byte{}
 	}
+	restoreAcknowledged(restored, acked)
 	w.restoreReservationsLocked(restored)
 	w.entries = restored
 	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
