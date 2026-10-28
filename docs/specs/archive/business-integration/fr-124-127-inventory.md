@@ -1,5 +1,7 @@
 # 功能规格：JBIS 业务对接 — 背包域（FR-124~127, M3）
 
+> **⛔ 已退役（FR-521 / ADR-106）**：JM 不再做任何业务，本文件为历史归档。背包汇聚落 `business_events` 的部分已随三张业务表删除，背包业务由下游业务台自行持有。
+
 > 状态：✅ 已交付@v0.14.0（代码随 v0.13.0 落地；2026-07-11 CoreLib serverInfo 解锁后真机验通 → bot 入服 AIS 落库 → view/writeBasicAttrs/追踪事件全链路，翻交付于 v0.14.0）　·　关联 PRD：FR-124~127　·　关联 ADR：ADR-026/028 + ServerProbe ADR-0016/0017 + AllinInventorySync ADR-0011/0012/0014
 >
 > 设计总纲见同目录 `design.md`；M1/M2（经济域 FR-115~123）已交付，本 spec 为 M3 背包整域在途详情。
@@ -54,3 +56,14 @@ JBIS「一个 ServerProbe = 本服唯一全能 agent」：核心链路 CP/Worker
   - [x] 玩家背包快照查看 + 物品清单展示（经导出的 ItemDTO）
   - [x] 基础属性写走二次确认 UI；离线写显示待生效；i18n + 暗/亮色
   - [x] **真机**（2026-07-11 验通）：定制页（/super 背包卡）看真玩家背包、基础属性写走二次确认端到端生效且幂等；业务掌控台 object 型入参下发修复后 writeBasicAttrs 嵌套 base/edited 下发 success（8b568d3）。物品发放/回收不在本轮验收范围内
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 迁入（保留原文）。
+
+### FR-521
+
+JBIS 业务域整体退役
+
+✅ 代码完成（2026-10-24）：五个文件整文件删除（`model/business_event.go`、`service/business_events.go` + 测试、`router/business_event.go` + 测试），`migrateRetireBusinessTables` 在 AutoMigrate 收尾执行 `DROP TABLE IF EXISTS` 三表（不带备份）并配回归用例；`router/business.go` / `service/business.go` 保留 `Dispatch`/`Manifest` 两通道端点，且清掉了 `inventory.writeBasicAttrs` 的 payload 解析审计特判（ADR-106 §4 审计不含 payload）。`docs/specs/business-integration/` 已归档到 `docs/specs/archive/`，ADR-025~029 各加取代标注，`docs/API.md` 移除四个读接口。MCP 与 `agentActionCatalog` 经核查本就无 `business.events`/`economy.*` 工具。**前端 `economy/inventory` 业务卡与 `packages/devmock` 的经济 mock 端点仍在**（本仓本轮按约束未动前端，属遗留待清）
+

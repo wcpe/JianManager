@@ -7,6 +7,7 @@
 | 文件 | 用途 |
 |---|---|
 | [gate-prd.md](gate-prd.md) | PRD → SDD 阶段门禁 |
+| [prd-authoring.md](prd-authoring.md) | PRD 书写规范：一行 FR 只写「要做什么」，其余归 spec（含表格硬约束、编号管理、退化自查脚本） |
 | [gate-sdd.md](gate-sdd.md) | SDD → Feature 开发门禁 |
 | [gate-api.md](gate-api.md) | API Spec → 编码门禁 |
 | [gate-merge.md](gate-merge.md) | 合并/发版门禁（含红线：基线 CI 未全绿禁止创建发版 commit 与 tag；长临界区审计清单；部署后复验） |

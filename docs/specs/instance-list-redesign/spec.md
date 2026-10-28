@@ -90,3 +90,22 @@ FR-244 增量目标：
 
 - FR-133 的调整范围需要用户审核。
 - 分组视图与服务端分页存在语义冲突：全量分组需要聚合接口，当前页分组只代表当前页；实现时需在 UI 明示或补后端分组分页。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-244 全局动画系统统一
+
+**需求补充**：修「稀碎卡顿 / 无动画」——统一 hover / 展开 / 弹层 / 路由过渡（今无 framer-motion、散用 CSS transition）（增强 FR-163/176；本轮随 `docs/specs/instance-list-redesign/spec.md` 草拟审核）
+
+**交付状态**：✅ 已交付@v0.13.0·四档验收（motion token/顶部进度条/路由·侧栏·抽屉主链路 + 共享原语 Panel/Dialog/Chips/Toggle 散落 duration 收敛到 motion token + 词汇表注释落定；high-value 收敛过关，CSS motion token 非 framer-motion）
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 索引段迁入（保留原文）。
+
+### FR-079 + FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）
+
+FR-079 + FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：FR-079/233/234/236/237/240/241/243/246/247 已在 0.13.0 开发版交付；FR-235（实例列表页重设计）、FR-244（全局动画系统）仍按 §4 状态继续跟踪。FR-235/133/137/244 本轮消费 FR-247 的服务端分页地基，规格见 `docs/specs/instance-list-redesign/spec.md`（已审核，首批实现落地）。合并关系：FR-238→FR-078，FR-239→FR-236，FR-242→FR-241，FR-245→FR-240。FIX-7 生产 SQL 日志静默 / FIX-8 创建实例节点下拉空 / FIX-9 点击实例卡片无反应为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
+

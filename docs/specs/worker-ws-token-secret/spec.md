@@ -134,3 +134,20 @@ message HeartbeatResponse {
 - Worker 降级兼容：旧二进制读新身份文件忽略 `wsTokenSecret`（encoding/json 读时忽略未知字段），但其后写盘会丢该字段——再升级时经注册/心跳重新下发自愈，无需人工干预。
 - **CP 降级角**：Worker 已持久化下发密钥后，若 CP 降回旧版（签发回 `jwt.secret`），Worker 仍用持久化值校验 → 401（兼容矩阵「旧 CP 回退本地 jwt_secret」仅适用于从未收过下发的 Worker）。属罕见运维路径：FR-276 诊断会点明不一致，删身份文件 `wsTokenSecret` 字段或升回 CP 即恢复，不为此加代码。
 - **验证时既有无关红点（2026-07-10，不由本 FR 引入/修复）**：① `internal/controlplane/router` 的 `TestFR034ProvisionRoutes`/`TestFR035ProvisionProxyRoutes` 因 mock 停留 Paper v2 API 形状而红（服务端已迁 fill v3，0df4f0b 漏迁 router 级 mock，已派独立修复任务）；② `go vet` 对 `bot_stress_session_test.go:147` 的 copylocks 告警（FR-274 已提交代码）；③ golangci-lint 仓库配置为 v1 格式、本机二进制 v2 不兼容（`can't load config`）。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入（保留原文）。
+
+### FR-275 CP↔Worker 专用 WS 令牌密钥自动下发
+
+CP↔Worker 专用 WS 令牌密钥自动下发：CP 预配独立于 jwt.secret 的 WS 令牌密钥（显式配置 > 生产态自动生成持久化 > dev 回退），终端/插件桥令牌改用其签发；经 gRPC RegisterResponse 下发（首注册+重注册），Worker 持久化到 node-identity.json（0600）并用于终端+插件桥校验，旧 CP 空字段回退现状（修 FR-080 enroll 不下发密钥致生产终端 401、探针监控失效的产品缺口；需 spec + ADR-061，修订 ADR-020）→ `docs/specs/worker-ws-token-secret/spec.md`
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-275/276（CP↔Worker 专用 WS 令牌密钥下发 + 终端 401 诊断兜底：终端/插件桥令牌与用户会话密钥分离，经 gRPC 注册响应下发并持久化；修 FR-080 enroll 不下发密钥致生产终端 401、探针监控失效的产品缺口；修订 ADR-020，见 ADR-061）
+
+FR-275/276（CP↔Worker 专用 WS 令牌密钥下发 + 终端 401 诊断兜底：终端/插件桥令牌与用户会话密钥分离，经 gRPC 注册响应下发并持久化；修 FR-080 enroll 不下发密钥致生产终端 401、探针监控失效的产品缺口；修订 ADR-020，见 ADR-061）→ `docs/specs/worker-ws-token-secret/spec.md`（草拟，FR-275 开发中）
+

@@ -1,7 +1,7 @@
 # ADR-027: 业务命令复用插件桥 command/event 帧 + domain.verb 寻址
 
 - **日期**: 2026-06-24
-- **状态**: accepted（骨架；实现细节随 FR-115 落地）
+- **状态**: accepted（骨架；实现细节随 FR-115 落地）　**⚠️ 已被 ADR-106 部分取代（FR-521）：`domain.verb` 寻址与复用插件桥的机制继续有效（这就是 JM 保留的纯透传通道）；JM 侧业务事件落库与聚合实现已移除。**
 - **上下文**: JBIS 业务命令/事件需要一条 CP↔探针的双向通道。ADR-016 的插件桥（反向 WS，通用 JSON 帧：上行 hello/ping/event、下行 welcome/pong/command，`requestId` 往返 `command_result`）已存在并经真机验证。问题：为业务另起通道/协议，还是复用桥？
 
 ## 决策

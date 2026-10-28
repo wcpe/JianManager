@@ -61,3 +61,12 @@ FR-081 自更新已交付（CP/Worker 二进制热替换 + 平滑重启），但
 - [ ] nightly→latest：release.yml 产 `latest` 预发布、自更新 prerelease 渠道读 `/releases/tags/latest`
 - [ ] i18n（中/英）+ 明暗 + 双主题
 - [ ] **真机闸（用户验）**：用户 push 远程跑 CI 出 release → CP 升级 → 回滚 → 节点升级 → 节点回滚 全链路真机过
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）
+
+FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177 `docs/specs/node-page-redesign/spec.md`、FR-178 `docs/specs/node-runtime-panels/spec.md`（W2，已自审）
+

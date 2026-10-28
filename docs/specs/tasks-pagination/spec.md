@@ -113,3 +113,13 @@ return HttpResponse.json({ items: items.slice(offset, offset + limit), total: it
 - **增长窗口轮询成本**：深加载（≤500 行）每 2s 重取整窗——已界定可接受；若未来上限上调需重新评估（届时才考虑真 offset 分页 + 新任务提示的复杂方案）。
 - **同秒并发建任务的排序稳定性**：既有 `created_at DESC, id DESC` 已兜底，无新增风险；仅在此确认分页依赖它。
 - **页眉下拉 active 计数口径**：维持现状（首窗 ≤100/limit 内统计，非全库 running 数）——与改前一致不回归；如需精确全局 active 数，另加计数端点（超范围）。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-337 任务中心列表分页信封（feat，增强 FR-183，验收分诊
+
+**需求补充**：任务接口固定 Limit(100) 返裸数组无 total/offset，前端整批渲染无翻页/总数，规模化既看不到全量也一次全挂）：后端 List 加 Count+offset 返 `{items,total,limit,offset}`（对齐 FR-247 分页约定）；前端「共 N 条」+加载更多/无限滚动（保 FR-329 非终态轮询行为）；devmock 同步契约 → `docs/specs/tasks-pagination/spec.md`
+
+**交付状态**：✅ 已交付@v0.17.0

@@ -1,0 +1,798 @@
+# 共享数据结构
+# 注意：所有涉及业务的 schema 只约束「信封」，不约束业务内容。
+
+# ══════════════════════════════════════════════════════
+# 业务通道
+# ══════════════════════════════════════════════════════
+
+BusinessDispatchRequest:
+  type: object
+  required: [domain, action, requestId]
+  properties:
+    domain:
+      type: string
+      pattern: '^[a-z0-9-]{1,32}$'
+      description: |
+        业务域标识。格式受约束（小写字母/数字/连字符），但**取值不枚举**——
+        由插件注册决定。平台将其视为不透明标签，不解释语义。
+      examples: [activity]
+    action:
+      type: string
+      description: |
+        动作名。**由业务台与插件约定，平台不预设任何取值**（包括快照动作）。
+        调用前应通过 manifest 确认该动作存在。
+      examples: [start]
+    payload:
+      description: |
+        **不透明载荷**。由业务台与插件约定，平台不解析、不校验、不写入审计。
+
+        可以是任意 JSON 值（对象 / 数组 / 标量 / null）。
+        schema 此处不施加任何结构约束——这是刻意的。
+      type: [object, array, string, number, boolean, 'null']
+    requestId:
+      type: string
+      format: uuid
+      description: |
+        幂等键，必填。同一 `requestId` 重复提交返回首次结果，不重复执行。
+        窗口 24 小时。若同 ID 携带不同 payload，返回 `IDEMPOTENCY_KEY_REUSED`。
+
+BusinessDispatchResponse:
+  type: object
+  required: [available, success]
+  properties:
+    available:
+      type: boolean
+      description: 通道是否可用（false 时 success 恒为 false）
+    success:
+      type: boolean
+    output:
+      description: |
+        **插件返回的原始输出**，平台不解析。结构由业务台与插件约定。
+      type: [object, array, string, number, boolean, 'null']
+    error:
+      type: string
+      description: 失败描述（`success=false` 时填充）。机器处理请用外层 `code`。
+    durationMs:
+      type: integer
+      description: 端到端耗时（含探针往返）
+
+DomainManifest:
+  type: object
+  required: [domain]
+  properties:
+    domain:
+      type: string
+    displayName:
+      type: string
+      description: 供展示的名称，由插件声明
+    specDeclared:
+      type: boolean
+      description: |
+        `true` 表示插件实现了强类型 manifest（FR-33）；
+        `false` 表示是旧版插件，平台做了降级适配，`actions` 可能缺少规格信息。
+    apiVersion:
+      type: integer
+      description: manifest 协议版本
+    actions:
+      type: array
+      items:
+        $ref: '#/ActionSpec'
+    attributes:
+      type: object
+      additionalProperties:
+        type: string
+      description: |
+        **扩展位**。插件可放任意键值，平台不解释、原样透传。
+
+ActionSpec:
+  type: object
+  required: [name]
+  properties:
+    name:
+      type: string
+    description:
+      type: string
+    risk:
+      $ref: '#/RiskLevel'
+    idempotent:
+      type: boolean
+      description: 是否支持 `requestId` 幂等去重
+    inputSchema:
+      type: string
+      description: 入参 JSON Schema 文本（可为 null）。业务台可据此渲染表单。
+    outputSchema:
+      type: string
+      description: 出参 JSON Schema 文本（可为 null）
+    errorCodes:
+      type: array
+      items:
+        type: string
+      description: 该动作可能返回的业务错误码
+
+RiskLevel:
+  type: string
+  enum: [READ, WRITE, DESTRUCTIVE]
+  description: |
+    动作的风险等级，由插件在 manifest 中声明。
+    - `READ`：只读，无副作用
+    - `WRITE`：有副作用，可重复执行
+    - `DESTRUCTIVE`：有副作用且不可逆（如删除、清空、结算发放）
+
+    **平台不推断风险**——插件未声明时按 `WRITE` 处理（需确认但非 critical）。
+
+BatchRiskLevel:
+  type: string
+  enum: [low, medium, high, critical]
+  description: |
+    **批量操作影响面**的风险等级（由 JM 按目标规模与跨区范围计算）。
+
+    与 `RiskLevel` 是两个正交维度：`RiskLevel` 描述「单个动作是否可逆」，
+    `BatchRiskLevel` 描述「这次批量会波及多大的范围」。多条件命中取最高级别。
+
+    - `low`：单实例 / 同小区 ≤10 台，无需确认
+    - `medium`：同小区 >10 台、跨小区同大区、或含离线实例；前端提示，可继续
+    - `high`：跨大区 / 跨集群 / 实例数 >50；**强制 confirmToken**
+    - `critical`：动作 `risk=DESTRUCTIVE`；**强制 confirmToken + 必填 reason**
+
+    「大区」按分组树深度判定：第 1 层=集群、第 2 层=大区、第 3 层=小区；
+    祖先链不足时降级取最深可用祖先（两层树部署不会误报跨大区）。
+
+# ── 批量 ─────────────────────────────────────────────
+
+BatchTarget:
+  type: object
+  description: |
+    目标选择。各条件为 **AND** 语义，从粗到细收敛：
+    分组展开 → 与 instanceIds 取交集 → 应用 filters。
+  properties:
+    groupIds:
+      type: array
+      items:
+        type: integer
+      description: 分组 ID 列表（JM 自有分组树，可多选）
+    includeDescendants:
+      type: boolean
+      default: false
+      description: 是否包含子分组的实例
+    instanceIds:
+      type: array
+      items:
+        type: integer
+      description: 指定实例 ID 列表
+    filters:
+      type: object
+      properties:
+        nodeId:
+          type: integer
+        status:
+          type: string
+        role:
+          type: string
+
+BatchPreviewRequest:
+  type: object
+  required: [target]
+  properties:
+    target:
+      $ref: '#/BatchTarget'
+    actionRisk:
+      $ref: '#/RiskLevel'
+
+BatchPreviewResponse:
+  type: object
+  required: [resolved, risk, confirmToken, expiresAt]
+  properties:
+    resolved:
+      type: object
+      required: [instanceCount, online, offline]
+      properties:
+        instanceCount:
+          type: integer
+        online:
+          type: integer
+        offline:
+          type: integer
+        instanceIds:
+          type: array
+          items:
+            type: integer
+          description: |
+            解析后的实例 ID。**超过 500 个时只返回前 100 个**，
+            完整集合请用 `groups` 或分页再次查询。
+        truncated:
+          type: boolean
+          description: "`instanceIds` 是否被截断"
+    groups:
+      type: array
+      description: 命中的分组及其路径，便于调用方判断影响范围
+      items:
+        type: object
+        properties:
+          id:
+            type: integer
+          name:
+            type: string
+          path:
+            type: string
+            description: 完整路径，如 `cluster-main/region1`
+          instanceCount:
+            type: integer
+    risk:
+      $ref: '#/RiskAssessment'
+    confirmToken:
+      type: string
+      description: |
+        不透明令牌，绑定本次解析的实例集哈希。执行时必须在请求体回传。
+        **分组在预览后发生增删会导致 token 失效**（返回 `TARGET_CHANGED`）。
+    expiresAt:
+      type: string
+      format: date-time
+      description: 默认 5 分钟有效
+
+RiskAssessment:
+  type: object
+  required: [level, reasons]
+  properties:
+    level:
+      $ref: '#/BatchRiskLevel'
+    reasons:
+      type: array
+      items:
+        type: string
+      description: 人类可读的风险说明，如「跨 2 个大区」
+      examples:
+        - 跨 2 个大区
+        - 影响 87 个实例
+        - 含 3 个离线实例
+    requiresConfirmation:
+      type: boolean
+      description: 是否需要 `confirmToken`（`high` / `critical` 为 true）
+    requiresReason:
+      type: boolean
+      description: 是否必须填写 `reason`（`critical` 为 true）
+    online:
+      type: integer
+    offline:
+      type: integer
+
+BatchExecuteRequest:
+  type: object
+  required: [domain, action, requestId]
+  properties:
+    confirmToken:
+      type: string
+      description: |
+        预览返回的令牌。**风险为 high/critical 时必填**，
+        否则返回 `CONFIRMATION_REQUIRED`。
+    domain:
+      type: string
+      pattern: '^[a-z0-9-]{1,32}$'
+    action:
+      type: string
+    payload:
+      description: 不透明载荷，同单实例接口
+      type: [object, array, string, number, boolean, 'null']
+    requestId:
+      type: string
+      format: uuid
+    reason:
+      type: string
+      description: |
+        `DESTRUCTIVE` 级动作必填，否则返回 `REASON_REQUIRED`。
+        该原因会透传给插件的审计流水。
+    actionRisk:
+      $ref: '#/RiskLevel'
+    target:
+      $ref: '#/BatchTarget'
+
+BatchExecuteResponse:
+  type: object
+  required: [requestId, total, succeeded, failed, offline, results]
+  properties:
+    requestId:
+      type: string
+      format: uuid
+    total:
+      type: integer
+    succeeded:
+      type: integer
+    failed:
+      type: integer
+    offline:
+      type: integer
+      description: 离线实例数（未下发，独立于 failed 统计）
+    timeout:
+      type: integer
+      description: 下发后超时未回执的实例数
+    skipped:
+      type: integer
+      description: 前置校验失败或调用已取消（未下发）的实例数
+    results:
+      type: array
+      items:
+        $ref: '#/InstanceResult'
+    idempotentReplay:
+      type: boolean
+      description: 本次响应是否为同 `requestId` 的幂等重放（首次结果原样返回）
+
+InstanceResult:
+  type: object
+  required: [instanceId, status]
+  properties:
+    instanceId:
+      type: integer
+    status:
+      type: string
+      enum: [success, failed, offline, timeout, skipped]
+      description: |
+        - `success`：探针回执成功
+        - `failed`：回执失败
+        - `offline`：实例离线或探针未连（**未下发**）
+        - `timeout`：下发后超时未回执
+        - `skipped`：前置校验失败或已被熔断跳过
+    output:
+      description: 插件返回的原始输出（`success` 时）
+      type: [object, array, string, number, boolean, 'null']
+    error:
+      type: string
+    durationMs:
+      type: integer
+
+# ── 对账 ─────────────────────────────────────────────
+
+ReconcileRequest:
+  type: object
+  required: [domain, action, requestId]
+  properties:
+    domain:
+      type: string
+      pattern: '^[a-z0-9-]{1,32}$'
+    action:
+      type: string
+      description: |
+        **由业务台指定，平台不预设任何快照动作名**。
+        这是业务台与插件之间的约定，平台只负责转发。
+      examples: [snapshot]
+    payload:
+      description: 不透明载荷
+      type: [object, array, string, number, boolean, 'null']
+    target:
+      $ref: '#/BatchTarget'
+    requestId:
+      type: string
+      format: uuid
+
+ReconcileResponse:
+  type: object
+  required: [requestId, results]
+  properties:
+    requestId:
+      type: string
+      format: uuid
+    results:
+      type: array
+      items:
+        type: object
+        required: [instanceId, success]
+        properties:
+          instanceId:
+            type: integer
+          success:
+            type: boolean
+          output:
+            description: |
+              **插件返回的原始快照，平台不解析**。
+              业务台自行比对、计算差异、决定写回哪条。
+            type: [object, array, string, number, boolean, 'null']
+          error:
+            type: string
+          durationMs:
+            type: integer
+
+# ══════════════════════════════════════════════════════
+# 事件流
+# ══════════════════════════════════════════════════════
+
+BusinessEventFrame:
+  type: object
+  required: [domain, seq, payload]
+  description: |
+    业务事件帧（SSE `event: business.event`）。
+    SSE 的 `id` 字段等于 `streamSeq`（CP 全局位点），浏览器 `EventSource` 会自动在重连时
+    通过 `Last-Event-ID` 头回传，服务端据此补读。
+
+    **注意区分**：`streamSeq` 是 CP 分配、全局单调；`seq` 是探针分配、per-domain 单调。
+    补读只用前者。
+  properties:
+    node:
+      type: string
+      description: 节点 UUID
+    instance:
+      type: integer
+      description: 实例 ID
+    instanceName:
+      type: string
+    domain:
+      type: string
+    action:
+      type: string
+      description: |
+        域内动作（如 `deposit` / `mail_sent`），由插件在事件 fields 里提供。
+
+        **平台只透传，不校验、不枚举**——它不是 JM 的业务概念。
+        插件未提供时该字段缺省，消费方应自行兜底（如用 `domain + '_event'`）。
+    topic:
+      type: string
+      description: 主题，可用于订阅过滤，如 `activity.spring-2026`
+    dedupKey:
+      type: string
+      description: |
+        去重键，由插件生成。用于「至少一次投递」下的幂等去重。
+        **与 `seq` 互补**：dedupKey 解决重复，seq 解决缺失。
+    streamSeq:
+      type: integer
+      description: |
+        **CP 分配的全局位点**，与 SSE 帧的 `id` 字段相同。
+        用于 `Last-Event-ID` 补读——它是全局单调的，可跨实例定位。
+
+        **不要**用探针的 `seq` 做补读位点：那是 per-domain 的，跨实例不可比。
+    seq:
+      type: integer
+      description: |
+        传输层序号，由**探针**分配，**同一 domain 内单调递增**。
+        用于判断「某实例某域的事件有无缺失」（如收到 1024 后直接到 1026，说明漏了 1025）。
+
+        **跨实例不可比**——实例 A 和实例 B 的 seq=1024 是不同事件。
+        补读请用 `streamSeq`。
+    seqEpoch:
+      type: integer
+      description: |
+        序号纪元。探针重启且序号重置时递增。
+        **epoch 变化意味着需要全量对账**，不能只靠 seq 补读。
+    occurredAt:
+      type: integer
+      description: 事件发生时间（epoch 毫秒）
+    payload:
+      description: |
+        **不透明载荷**，平台原样透传，不解析、不校验。
+      type: [object, array, string, number, boolean, 'null']
+
+BusinessCursor:
+  type: object
+  required: [streamSeq, seq, occurredAt]
+  description: |
+    **一条投递位点**（`GET /business/cursor` 的元素）。
+
+    ## 只有位点，没有 payload
+
+    位点是「信封的运输单据」，payload 是「信封里的信」——平台只记账单据，不持有信件。
+    这里**没有** `payload` 字段，且永远不会加：一旦平台存了业务内容，
+    「按 payload 字段查询」的需求必然紧随其后，而那是平台已明确退役的能力。
+
+    ## 怎么用它做缺口恢复
+
+    调用方拿自己已收的 `seq` 与这里返回的 `seq` 集合做**差集**，就得到漏掉的位点；
+    再对受影响的 `(instanceId, domain)` 调 `POST /business/reconcile` 拉快照修正镜像。
+    平台不替你算差集——它不知道你收到了什么。
+  properties:
+    streamSeq:
+      type: integer
+      description: |
+        CP 分配的全局位点，与 SSE 帧 `id` 同源，跨实例可比。
+    seq:
+      type: integer
+      description: |
+        探针分配的 per-domain 序号，**跨实例不可比**，只在同一 `(instanceId, domain)` 内单调。
+        探针未上报时（例如 `core.*` 治理事件）为 `0`。
+    dedupKey:
+      type: string
+      description: |
+        插件提供的幂等锚点，原样透传。收到重复事件时用它去重。
+    occurredAt:
+      type: integer
+      description: 事件发生时间（epoch 毫秒，探针侧时钟）。
+
+PingFrame:
+  type: object
+  description: "心跳帧（SSE `event: ping`），用于保活与连接活性判断"
+  properties:
+    t:
+      type: integer
+      description: 服务端时间戳（epoch 秒）
+
+ReplayGapFrame:
+  type: object
+  required: [requestedSeq, oldestAvailableSeq, reason]
+  description: |
+    补读缺口帧（SSE `event: replay_gap`）。
+    **收到后必须触发一次全量对账**——仅靠后续事件无法补齐中间缺失的部分。
+  properties:
+    requestedSeq:
+      type: integer
+      description: 客户端请求的位点
+    oldestAvailableSeq:
+      type: integer
+      description: 缓冲窗口内最旧可用的位点
+    reason:
+      type: string
+      enum: [BUFFER_EXPIRED]
+
+# ══════════════════════════════════════════════════════
+# 统计
+# ══════════════════════════════════════════════════════
+
+StatsOverview:
+  type: object
+  description: 集群规模与资源水位快照。**不含任何业务指标。**
+  properties:
+    nodes:
+      type: object
+      properties:
+        total: { type: integer }
+        online: { type: integer }
+        maintenance: { type: integer }
+    instances:
+      type: object
+      properties:
+        total: { type: integer }
+        running: { type: integer }
+        stopped: { type: integer }
+        crashed: { type: integer }
+    resources:
+      type: object
+      properties:
+        cpuCores: { type: integer }
+        cpuUsagePct: { type: number }
+        memoryTotalMb: { type: integer }
+        memoryUsedMb: { type: integer }
+    probes:
+      type: object
+      description: 探针连接情况
+      properties:
+        connected: { type: integer }
+        disconnected: { type: integer }
+
+MetricPoint:
+  type: object
+  required: [t, v]
+  properties:
+    t:
+      type: string
+      format: date-time
+    v:
+      type: number
+
+MetricSeries:
+  type: object
+  required: [metric, points]
+  properties:
+    instanceId:
+      type: integer
+    nodeId:
+      type: integer
+    metric:
+      type: string
+      description: 指标名，如 `cpu_pct` / `tps` / `rss_mb`
+    points:
+      type: array
+      items:
+        $ref: '#/MetricPoint'
+
+MetricSeriesResponse:
+  type: object
+  required: [series]
+  properties:
+    series:
+      type: array
+      items:
+        $ref: '#/MetricSeries'
+    pagination:
+      $ref: '#/Pagination'
+
+Pagination:
+  type: object
+  properties:
+    page: { type: integer }
+    pageSize: { type: integer }
+    total: { type: integer }
+
+LogEntry:
+  type: object
+  properties:
+    timestamp:
+      type: string
+      format: date-time
+    level:
+      type: string
+      enum: [ERROR, WARN, INFO, DEBUG]
+    instanceId:
+      type: integer
+    nodeId:
+      type: integer
+    message:
+      type: string
+    source:
+      type: string
+      description: 日志来源（如 `stdout` / `stderr` / 插件名）
+
+LogQueryResponse:
+  type: object
+  required: [entries]
+  properties:
+    entries:
+      type: array
+      items:
+        $ref: '#/LogEntry'
+    pagination:
+      $ref: '#/Pagination'
+
+CrashTrendResponse:
+  type: object
+  required: [byDay]
+  properties:
+    byDay:
+      type: array
+      items:
+        type: object
+        properties:
+          date:
+            type: string
+            format: date
+          count:
+            type: integer
+    byReason:
+      type: array
+      items:
+        type: object
+        properties:
+          reason:
+            type: string
+            description: 崩溃根因分类，如 `OOM` / `MOD_CONFLICT`
+          count:
+            type: integer
+
+ChangeSummary:
+  type: object
+  description: 配置交付任务摘要。**不含配置内容。**
+  properties:
+    id: { type: integer }
+    title: { type: string }
+    status:
+      type: string
+      enum: [draft, pending_approval, approved, rolling, observing, paused, completed, failed, rolled_back]
+    totalTargets: { type: integer }
+    succeeded: { type: integer }
+    failed: { type: integer }
+    deferred: { type: integer }
+    createdAt:
+      type: string
+      format: date-time
+    startedAt:
+      type: string
+      format: date-time
+
+ChangeListResponse:
+  type: object
+  required: [changes]
+  properties:
+    changes:
+      type: array
+      items:
+        $ref: '#/ChangeSummary'
+    pagination:
+      $ref: '#/Pagination'
+
+# ══════════════════════════════════════════════════════
+# 桥状态
+# ══════════════════════════════════════════════════════
+
+BridgeStatus:
+  type: object
+  description: 探针桥连接状态与线路健康度
+  properties:
+    instanceId:
+      type: integer
+    connected:
+      type: boolean
+      description: 探针是否已连入本机 Worker
+    error:
+      type: string
+      description: |
+        探针不可达时的降级原因（如 `PROBE_UNAVAILABLE`）。
+        有值时其余指标为最后一次已知或零值——**前端必须据此区分
+        「连接正常但计数为 0」与「根本没连上」**。
+    connectedSince:
+      type: string
+      format: date-time
+    reconnectCount:
+      type: integer
+      description: 自探针启动以来的重连次数
+    lastDisconnectReason:
+      type: string
+      description: |
+        最近一次断开的原因码（非人可读文本）。
+        探针另有人可读的 `lastDisconnectDetail`，当前未透出。
+    queueDepth:
+      type: integer
+      description: |
+        待发送帧队列深度。探针按命令/事件/回执三池分别计数，
+        此处为**求和后的总值**（通道层聚合，不涉及业务语义）。
+    droppedFrames:
+      type: integer
+      description: 因背压丢弃的帧数（可靠事件不应丢弃）
+    pendingReloads:
+      type: integer
+      description: 在途配置重载数
+    probeVersion:
+      type: string
+
+SubscriptionRequest:
+  type: object
+  description: |
+    主题订阅。未订阅时探针全量上报（兼容现状）；
+    一旦订阅，只上报匹配主题 + 所有非业务事件（connected/heartbeat 等）。
+  properties:
+    topics:
+      type: array
+      items:
+        type: string
+      description: 主题列表，支持后缀通配
+      examples:
+        - [activity.spring-2026, 'activity.*']
+    domains:
+      type: array
+      items:
+        type: string
+      description: |
+        业务域列表。**探针无 domain 维度，只认 topic**——
+        JM 会把它展开成 `<domain>.*` 并入 `topics` 下发。
+
+        注意：裸 `*` 不等于"全部"（匹配不到任何主题），要订阅全部请传空数组。
+
+BusinessStatus:
+  type: object
+  description: |
+    实例的业务域注册状态。**平台只渲染，不解释业务语义。**
+  properties:
+    instanceId:
+      type: integer
+    instanceName:
+      type: string
+    probeConnected:
+      type: boolean
+    fetchedAt:
+      type: string
+      format: date-time
+    stale:
+      type: boolean
+      description: |
+        `true` 表示探针不可达，返回的是最后一次已知状态。
+        缓存 TTL 为 30 秒。
+    domains:
+      type: array
+      items:
+        $ref: '#/DomainStatus'
+
+DomainStatus:
+  type: object
+  properties:
+    domain:
+      type: string
+    available:
+      type: boolean
+    degradedReason:
+      type: string
+      description: 不可用原因，如 `PLUGIN_DISABLED` / `INIT_FAILED`
+    manifestDigest:
+      type: string
+      description: |
+        manifest 内容指纹。**先用 digest 判断是否变化，再决定是否拉全量**，
+        避免每次查询都传几 KB 的 manifest。
+    lastDispatchAt:
+      type: integer
+      description: 最近一次 dispatch 时间（epoch 秒），0 表示从未
+    dispatchCount:
+      type: integer
+      description: 自探针启动以来的累计调用数（重启归零）
+    failureCount:
+      type: integer

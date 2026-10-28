@@ -1,99 +1,7 @@
 # 采集索引迁移至本地 SQLite（FR-496）
 
-> 状态：已交付@v0.24.0（本轮完整状态映射、真实范围剪枝预算、持久回执及本地迁移/脏状态三开修复与已覆盖回归完成；既有历史保留，不冒新增生产部署复验或断电认证）
-> 本次提交/功能修复验收仅按既有证据覆盖范围收口；性能、长稳及追加故障覆盖延期，统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-496　·　关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
+> 状态：🔨 开发中（实现已落地并在生产运行：迁移/SQLite 索引/`log_index.*` 配置面均已接线；剩余项见 §3 第 7 条与 PRD FR-496 状态列）　·　关联 PRD：FR-496　·　关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
 > 依赖：无（可先行）　·　被依赖：FR-497（增量对账依赖索引可精确记账）
-
-本轮已覆盖完整增量字段往返、真实删除/周期预算、审计持久回执和兼容迁移；旧已完成 v1 裁剪桥接按原来源 SHA/全态凭据校验，keep=0/2 的三开提交进度及负控已过，适配器与 stateindex 完整普通/race 退出 0。结合最终完整 ingest/全 Go 证据收口本次修复，不把局部三开外推为新生产部署或断电通过。下文旧候选“待验/仍在执行”按原时点保留，当前范围以顶部声明及共享验收表为准。
-
-### 2026-10-30 显式评审修订：索引库改纯内存（`:memory:`），不再落盘
-
-**本次修订改变 §2.1 的选型与 §2.3 的崩溃语义，按同一显式评审流程记录；被修改的条款逐条列在下表。**
-它不是一次性能优化：它把「索引落盘」这条前提整个撤掉，因此 §3 里以磁盘索引为对象的验收判据也一并失去对象。
-
-#### 前提怎么消失的
-
-1. **生产机的盘是机械盘**（`/dev/sda7`，`ROTA=1`）：fsync 在这类设备上是寻道 + 旋转惩罚，
-   而索引库原先是「每次 `persist` 事务提交即 fsync」——它就是采集延迟的主要来源。
-2. **库已经很大**：生产 `ingest.index.db` 实测 **344MB + 4MB WAL**（与 §7.1 同一读数）。
-   库越大，checkpoint / VACUUM 这类整库维护在机械盘上越贵，而它们本来就跑在采集热路径旁边。
-
-⇒ 用户裁定（2026-10-30 原话）：「现在不做任何的索引 账本落盘 因为是机械盘 性能不行」。
-
-#### 新规则
-
-- `stateindex.OpenInMemory(path, budget)` 打开 `file::memory:?mode=memory&cache=private`，**零磁盘 IO**。
-  `path` 只作标识（`readersInFlightFor` 的键、调试日志），**不建任何文件**。
-- **SQL 语义、表结构、索引、UPSERT、增量 `ApplyScoped` 全部原样保留**，**不改写成 map**。
-  理由：§2.4 的裁剪归一、§2.5 的外键序与提交切分、§2.7 的镜像逐字段比对都是承重件；
-  重写一遍会把「换介质」放大成「重写账本」，风险与收益完全不成比例。
-- 连接池仍限 1：`:memory:` 库**必须**如此（新连接会拿到一个空库）。
-- 持久化相关 PRAGMA 只在磁盘模式设置。内存模式只保留功能必需的 `foreign_keys=ON` / `cache_size`；
-  `journal_mode=WAL` / `synchronous` / `wal_autocheckpoint` 在内存库上无对象。
-- **checkpoint / truncate / `Vacuum` 在内存模式下全部短路**：`Store.checkpoint`、
-  `checkpointPassiveIfNeeded`、`TryControlledTruncate`、`Vacuum` 直接跳过——这几条任何一条都会试图写盘，
-  且对内存库没有任何意义。
-
-#### 代价（如实写，不粉饰）
-
-- **进程重启后索引全丢**：`source` / `position` / `gap` / `projection` / `instance_binding` /
-  `delivery_batch` 一律为空，**没有任何跨进程恢复路径**。
-  **这不是 bug，是取舍**：用「重启后重新开始」换掉机械盘上的每一次 fsync。
-- 跨重启仍然存活的只有两样：
-  1. **采集游标** `ingest.cursor`（每源一行、整表约 2KB，**不 fsync**；带源登记字段，
-     因此重启后「采哪个文件、读到第几字节」还知道）；
-  2. **VL 里的数据**。
-- 重启不再有「以索引库为准恢复」这一步：三水位没有历史可读，`reclaim` 之前的字节不会因为记账而免于重读
-  ⇒ 至多重读一段并重复投递（与「允许重复」同口径）；但**缺口、暂停态、投递批次审计这些记账面
-  在重启后同样归零**——它们随索引一起消失，不是被裁剪。
-- 「崩溃不丢索引」这条原承诺**不再成立**：进程崩溃与正常重启等价，索引一起消失。
-
-#### 一个真机坑（`f5b882f0` 修的，必须留档）
-
-赋值型 PRAGMA（`PRAGMA foreign_keys=ON`、`PRAGMA cache_size=-65536`）**不返回结果集**，
-必须用 `ExecContext` 执行。原实现复用了面向查询型 PRAGMA 的 `execPragma`
-（内部 `QueryRowContext(...).Scan(&v)`），于是稳定得到 `sql.ErrNoRows`：
-
-```
-stateindex: 设置 PRAGMA foreign_keys=ON 失败: sql: no rows in result set
-```
-
-⇒ `OpenInMemory` **永远失败** ⇒ `ingest` 拒绝启动采集 ⇒ **整条日志采集链路起不来**。
-只跑 `build` + `vet` 发现不了它。查询型 PRAGMA（`journal_mode=WAL`，会回一行 `wal`）才适用 `execPragma`。
-回归：`TestOpenInMemorySucceeds`（含把 `PRAGMA foreign_keys` 读回 1 的断言）与
-`TestOpenInMemoryCreatesNoFile`（内存库不得在磁盘上留下任何文件）。
-
-#### 被修改的条款
-
-| 位置 | 原内容 | 现状态 |
-|---|---|---|
-| §2.1 选型·库文件 | `data/var/log/ingest.index.db`，随 Worker 数据目录迁移 | **改为 `:memory:`**；`path` 仅作标识，不建文件 |
-| §2.1 连接模式 | 单写者 + `journal_mode=WAL` + `synchronous=NORMAL` | 单连接保留；WAL / `synchronous` **不再设置**（内存库没有 journal 可言） |
-| §2.2 表结构 | 表结构是为**磁盘库**取舍的（`WITHOUT ROWID`、去冗余二级索引等都是为了压库文件体积） | 表结构与索引**逐字保留**；其中「为减小库文件而砍索引」的论据已不成立，但**不据此改结构**（改它就是重写账本） |
-| §2.3「提交即持久」 | 「事务提交即持久；WAL 保证崩溃可恢复」 | **作废**：提交只发生在内存内，没有持久化与崩溃恢复 |
-| §2.3「启动以索引库为准」 | 「不存在就建、存在就读」 | **改为**：每次启动都是一个新建的空库，「存在就读」不再发生 |
-| §2.3 回滚 / `ExportIndexJSON` | 以索引库为受控回滚与排障的权威来源 | 进程内仍可导出（排障用）；但**磁盘上不存在可恢复的索引**，受控回滚这条路失去对象 |
-| §3 验收 3（单次持久化 ≤50 ms） | 机械盘上的单提交单元耗时 | 提交不再落盘 ⇒ 该判据在内存模式下**无对象**；§2.5 的切分与预算仍保留（避免单事务过大），但已不是延迟瓶颈 |
-| §3 验收 4（崩溃不丢） | 随机 `kill -9` 后索引无丢失、回退不超过一个批次 | **作废**：崩溃与重启等价，索引整体消失 |
-| §4 风险表「单文件损坏 → `integrity_check` 巡检」 | 磁盘库文件的破损巡检 | 内存库无文件可巡检；`IntegrityCheck` 仍在，但只覆盖本次进程内的内存库 |
-
-#### 代码落点
-
-- 语义：`internal/worker/logs/ingest/stateindex/store.go` 的 `OpenInMemory` 与 `openWithDB(inMemory=true)`；
-  短路点 `checkpoint` / `checkpointPassiveIfNeeded` / `TryControlledTruncate` / `Vacuum`
-- 接线：`internal/worker/logs/ingest/index_store.go`（`Manager.openIndex`）与 `ingest/runtime.go`（`New` 及测试路径的按需打开）
-- 回归：`internal/worker/logs/ingest/stateindex/open_in_memory_test.go`
-- 采集游标（跨重启唯一幸存者）：`internal/worker/logs/ingest/cursor_registry.go`、`cursor_registry_flush.go`
-- 落地提交：`7456d716`（P1 切断全部落盘）＋ `f5b882f0`（PRAGMA 修复 + 采集游标持久化）
-- **已知遗留口径（未改代码，如实登记）**：离线只读入口 `ExportIndexJSON` 与 `log-event-status`
-  仍按磁盘路径 `var/log/ingest.index.db` 打开索引库 ⇒ 内存架构下必然「库不存在」。
-  它不再是回滚/排障的可用面，去留待后续决定。
-
-#### 不变的部分（明确保留）
-
-- §2.4 `delivery_batch` 裁剪、§2.5 提交切分与 `CommitBudget`、§2.6/§2.7 字段往返、§2.8 物化预算——机制全部保留
-- §6 配置键仍在（`log_index.batch_prune.*`、`log_index.persist.*`），但 checkpoint 相关档位在内存模式下短路
-- §7 的 `source_wal` 删除结论不变：WAL 仍是纯内存队列
 
 ## 1. 背景与目标
 
@@ -112,8 +20,8 @@ stateindex: 设置 PRAGMA foreign_keys=ON 失败: sql: no rows in result set
 ### 2.1 选型
 
 - **`modernc.org/sqlite`（纯 Go，无 cgo）**：生产构建 `CGO_ENABLED=0` 可直接编译；不引入系统依赖。
-- ~~库文件：`data/var/log/ingest.index.db`（与现有 `var/log` 同级目录，随 Worker 数据目录迁移）。~~ **2026-10-30 改**：库改为 `:memory:`（见文首修订节），**磁盘上不再有任何库文件**；`path` 仅作标识，不建文件。
-- ~~连接模式：**单写者**（Worker 进程内单连接 + `journal_mode=WAL` + `synchronous=NORMAL`）；读路径仅本进程（无跨进程共享）。~~ **2026-10-30 改**：单连接保留（`:memory:` 必须限 1）；`journal_mode` / `synchronous` **不再设置**（内存库无 journal 可言）。
+- 库文件：`data/var/log/ingest.index.db`（与现有 `var/log` 同级目录，随 Worker 数据目录迁移）。
+- 连接模式：**单写者**（Worker 进程内单连接 + `journal_mode=WAL` + `synchronous=NORMAL`）；读路径仅本进程（无跨进程共享）。
 
 ### 2.2 表结构（首版）
 
@@ -173,12 +81,12 @@ CREATE TABLE instance_binding (
 
 - 每次 `persist` 只写**本批次变更的行**（UPSERT），事务提交即持久；WAL 保证崩溃可恢复。
   一次 `persist` 不再只对应一个事务：变更行按「行数 + 耗时」双上界切成若干**提交单元**（§2.5）。
-- 启动时直接以索引库为准：不存在就建、存在就读。**不存在「旧 JSON → SQLite」迁移路径**
-  （原 `legacy_json_migration_v1` 整套机制已删除：版本未发布，从未有过以 JSON 为索引的生产环境）。
-- 若数据目录里残留历史 `ingest.state.json`，本版本**不读取、不迁移、不改名**——它只是一份
-  无人消费的遗留文件，由运维自行处置。
-- **回滚仅是备份时点的受控恢复，不是无损降级承诺**：停止 Worker，完整保全新 SQLite 的一致状态（含需要的 WAL 状态）、独立恢复审计与物化成本证据后，才可按已核对的旧 JSON 备份时点恢复；须另行确定升级后增量的可回放范围，以及旧版忽略新物理映射/指纹/ACK 等字段的边界。不得让旧二进制直接打开新元数据，也不能以“无需反向导出”推定迁移后最新状态已保全；生产回滚演练仍未验收。
-- `ExportIndexJSON` 只读导出活动 `State/Load` 的 JSON 形状，不含独立 `recovery_audit`/`materialization_attempt`，只能作排障与受控回滚参考，不能当完整备份或无损降级。全表读取共用一个只读事务的 WAL 快照，不能把独立连接并发提交前后的多代状态拼在同一份结果里。
+- 启动迁移：读取旧 `ingest.state.json` → `BeginMigration` 绑定原始 JSON 字节 SHA-256、映射版本和确定性行计划 → 按提交单元/周期预算反复 `ResumeMigration` → `FinalizeMigration` 一致快照逐值验全 → 完整性及来源复核 → 旧文件**改名归档**（保留，不删除）。`Incomplete` 是可续跑进度，不是已经迁移完成。
+- 迁移凭据存在 meta 的 `legacy_json_migration_v1`：来源/映射/整态指纹、总行数、已提交前缀与完成标志；每个前缀进度与对应行在同一事务提交。重启续跑须核对来源及实际已提交行内容，不只相信行数或缓存指纹；未完成迁移拒绝普通索引写入。无凭据的非空库只在全量逐值等价时允许接管，否则拒绝覆盖。
+- 迁移失败、来源变化或校验不一致 → 拒绝启动采集并明确报错（不静默降级），保留两侧供人工处置。最终校验使用只读快照，短写事务复核版本与凭据后才标完成；旧 JSON 在提交期间改变时不归档。
+- 旧文件还含 `source_configs` 与 `instances`（实例绑定，stdout/stderr 采集依赖），**一并迁移**并在校验中逐项比对。
+- **回滚步骤（写成脚本 `scripts/rollback-log-index.sh`）**：停止 Worker → 归档现有 `ingest.index.db` → 把归档的旧 JSON 改回 `ingest.state.json` → 启动 Worker；因两格式共用同一语义层（游标/缺口/投影），回滚不需要反向导出。
+- 保留 JSON 只读导出（`ingest.index.db` → 导出命令）供排障与回滚；全表读取共用一个只读事务的 WAL 快照，不能把独立连接并发提交前后的多代状态拼在同一份结果里。
 - 持久化计划在实际快照临界区分配顺序令牌，提交门内整份拒绝被较新接纳计划超越的旧计划（包括根行、派生行和剪枝）；部分提交/`Incomplete` 同样推进接纳门槛，出门后重新规划。`persistCovered` 只能单调推进；并非要求实时 revision 一直不变，避免持续采集让所有计划饥饿。
 - scoped 映射先区分根行与变化源派生行，未变化源不构建 gap/batch/WAL 再丢弃；恢复新发现正文缺失等实际修订时保留 dirty，由后续持久化覆盖，不能用恢复登记动作将其提前标 clean。
 - 提交门回归以真实首次 `enqueue` 屏障建立等待顺序：普通 FIFO/后到优先先获门与完整提交 coalescing 分开验证；合并短路须按每个请求的准确声明号核对 `persistCovered`，不能用 sleep 猜队列，也不能因未实际获门就跳过优先权断言。回归：`TestPersistGateFairFIFO`、`TestPersistGatePriorityFirst`、`TestPersistGateCoalescedWaitersKeepFIFO`。
@@ -186,9 +94,9 @@ CREATE TABLE instance_binding (
 ### 2.4 索引有界化：历史投递批次（`delivery_batch`）裁剪
 
 **问题（FR-498 实测 @60 源）**：索引里唯一随总量线性增长的表是 `delivery_batch`（≈**5 MB/天 @60 源**），
-且原先**没有任何裁剪路径**——60 源长跑会把索引无界撑大，与 §1 的目标（写入成本随总量解耦）相悖。
-历史稳态夹具中其余活动表约 1–2.5MiB，但不能外推所有表/aux 恒定：本批精确请求诊断随真实空洞或
-结果分区增长，独立 CLEANED 审计历史随累计清理增长；长期故障/hold 也会延长活动窗口，见 §2.6。
+且原先**没有任何裁剪路径**——60 源长跑会把索引无界撑大，与 §1 的目标（写入成本随总量解耦、索引稳态
+不随总量增长）相悖。其余表在稳态下是 1–2.5 MiB 量级：`source_wal` 已按条目 UPSERT/删除，`gap`/
+`position`/`projection`/`source_aux` 与总量无关。
 
 **消费者与判据（列全，不凭感觉）**：`delivery_batch` 行的完整读链只有一条——
 
@@ -208,14 +116,10 @@ rows(delivery_batch) → ingest.indexStateToState → ledger.Entry.DeliveryBatch
 **恒等元**：删掉它既不改变本次计算结果，也不改变后续跨度的处理结果（后续只依赖当前 `pos`，而
 `pos` 未被它改变）。
 
-⇒ **安全水位 = `Positions.Delivery`**：`batch.End <= Delivery` 的条目对读者 A 是恒等元。
-
-> **2026-10-29 修订**：旧口径是 `min(Reclaim, Delivery)`。reclaim 改按投递证据推进后，
-> `Reclaim <= Delivery` 恒成立，且 `Delivery` 的推导 floor 已改为**自身**（`advanceDeliveryEnd`）
-> ⇒ 裁剪水位必须是 `Positions.Delivery`。两边必须用同一 floor：若有人把 Reclaim 当 floor 重算，
-> 就会得出 `delivery == reclaim`，使「已确认投递前缀」凭空后退并挡住下一轮回收。
-> 完整论证见 `internal/worker/logs/ledger/delivery_batch_prune.go` 文件头与
-> `docs/specs/reclaim-by-delivery/spec.md` §2.1。
+⇒ **安全水位 = `Positions.Reclaim`**：`batch.End <= Reclaim` 的条目确定不会再被需要。语义上与 reclaim
+的既有含义一致：reclaim 只能经 `logtypes.CanReclaim` 门禁推进（恢复分段到 `WAL_RESPONSIBILITY_TRANSFERRED`
+及其后、无 hold），即「这些字节的恢复责任已由受管恢复分段/投影承担」——责任既已转移，批次级请求
+结果对这些字节不再承载决定性信息。
 
 判据的单调性（为什么裁过一次之后永远安全）：水位只前进（`TryReclaim` 仅在 `target > Reclaim` 时推进；
 `AdvanceRead` 只把读指针夹到水位之上），而 `end <= W` 在更晚的 `W' >= W` 下依然成立。
@@ -332,43 +236,6 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
 **配置键**：`log_index.persist.*`，登记见 §6；非法值（非正行数/耗时）一律回退默认——配置误写不得
 让切分失效（那会把达标线交还给配置运气）。
 
-### 2.6 2026-10-22 完整状态与真实预算修复（修复中）
-
-本节是批准的修复目标，尚未验收；§2.4/§2.5 的历史成本数据不能证明这些新边界已成立。
-
-- **完整往返**：`Gap.FoldSpans`（折叠前子区间）及其粗化/未知标记、永久裁定区间与审计尾、分段物理起点/绑定指纹、投递批次、恢复责任及物化台账逐字段往返。旧行缺少增量字段时保持原缺证据语义；旧 SQLite/JSON 迁移必须可续跑，不能仅抬映射版本让旧库拒启动，也不能漏字段后仍宣称逐字段一致。
-- **请求结果与恢复责任分离**：`Positions.Delivery` 保持请求结果连续前缀，恢复转移与 reclaim 不能被当成真实 ACK 或逐字段可见性证明。§2.4 的历史裁剪归一化不得掩盖水位/凭据差异；剪枝前后须核对该证据语义，而非只核对行数。
-- **范围删除按实际变化行计费**：不能把删除整源/整范围记作 1 个逻辑操作。写入、离散删除与范围剪枝共用真实事务行数、周期行数和耗时预算；分批上界及中断恢复可观察，未提交部分保持可续跑。单个 SQL 执行耗时与提交单元目标不同，不能把调度检查承诺为操作系统级绝对时延保证。
-- **审计先存后裁**：`CLEANED` 恢复引用的完整审计按有界批次持久归档并返回回执，之后才允许领域层短锁复核候选、hold 与消费者并摘活动引用；失败不裁。“有界”指每批工作，不表示完整历史总空间固定：独立历史随累计清理增长，活动引用随未解除/未归档窗口增长；故障或长期 hold 下不能承诺固定条数。审计归档与物化成本属于 Worker 本地日志元数据，不存全文日志或 CP 业务数据。
-- **持久物化窗口**：按源、UTC 日、稳定内容窗口持久预留并结算，重启不能清空预算；实际写入、未知结果及发布 CAS 失败均计成本。额度耗尽只禁止再造副本，仍允许只读取证、合法复用和正常尾采。
-
-待验收：真实范围删除大批次的最大事务/周期变化行、完整增量字段往返、旧映射桥接与迁移中断续跑、审计失败零裁剪、并发 hold 复核、物化账本重启不重置；旧环境迁移→首启→二启→三启及回滚后再启逐轮比对。SQLite 进程崩溃恢复与真正断电耐久分开，不以 `synchronous=NORMAL` 或 `SIGKILL` 单项推导断电零丢失。
-
-### durable outbox r4 的 actual-plan 资格（本地候选已实现，联合验收中）
-
-本轮不新增表/列，不改 WAL 格式。外发资格只取真实 SQLite 完成的 actual plan 与同一 pipe 的活动 WAL 身份交集，包含 EventID、canonical hash、record range 和完整正文摘要；提交子集/失败、后台交办/Incomplete、generic nil、缓存旧计划或更高水位均不能替代本批回执。资格是内存精确许可，不是原始请求 ACK、VerifiedRuns 或投影发布凭据。
-
-混合历史 X+活 WAL Y 时，Y 的 actual-plan receipt 必须独立成立，不能因 X 不在 WAL 而跳过；X 另以 immutable eventstore/受控 inline 历史固定行界、摘要证明。full actual-set 的原 digest/cut/成员须保留并重建复核，不能用当前 cut 冒原 cut，也不把历史证明伪装成 SQL 回执。原 schema/持久化格式与审计/物化表边界不变；详细 [r4 契约](../worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中) 和新门禁仍在联合验收，旧 v8 回归不作新 hash 证明。
-
-### 2.7 已落地仓储与适配边界（2026-10-22，联合复验中）
-
-- `gap` 增量列包含 `fold_spans/fold_span_merges/fold_spans_unknown/reason_code/resolved_at_utc/resolved_by`，贯穿指纹、UPSERT、读取与旧表补列；`ConfirmedFingerprint/RequestDoneRanges/DeliveryEvidence` 进入 `indexLedgerCore` 双向映射，缺证据不造值。
-- 领域 `CLEANED` 状态的完整历史落独立 `recovery_audit` 表，而不是一个名为 CLEANED 的表：键为 `(source_key,ref_key)`，保存 fingerprint、完整 payload、payload SHA 与 archive_id；同身份不同正文拒绝，持久提交成功才回回执。每条 payload 上限 512KiB，批次受事务/周期行预算约束，分页 `ListRecoveryAudit` 为 1～200 条；不进入活动 State/Load/mirror/aux。
-- `materialization_attempt` 保存源、UTC 日、稳定 window、候选物理 generation、状态、预留/实际字节、创建时间及 verified/published，唯一键为 `(source_key,utc_day,window_key,generation)`。`ReserveMaterialization/UpdateMaterialization/ListMaterializations` 为内部仓储接口；预留即计费不退款，同候选再次预留只返回旧记录、不再授予写许可，published 不能先于 verified。
-- window 不包含物理代次，按排序后的事件身份、canonical hash 与位置摘要标识相同规范内容；窗口累计副本和源/日滚动小时次数/字节分别限制。未知结果保守计 `max(reserved_bytes,written_bytes)`；窗口耗尽没有自动时间重置，小时门给出最早计费加 1h 的 retryAt。调用方只读核验/合法复用不应重新预留。
-- 范围 DELETE 依据真实可删主键按 `min(pruneDeleteBatchRows, MaxRows)` 切批；只同步 `DELETE RETURNING` 实际主键对应的 mirror，删净才推进剪枝水位。所有真实删除进入事务与周期行预算，子集统计不能重复相加。
-- 旧 JSON 映射 v1→v2 桥先严格核对同一原始来源 SHA 与完整 v1 StateSHA；只有旧迁移已完整提交、原来源双水位授权且实际存储逐列匹配时，才承认合法批次裁剪，不拿裁后子集哈希冒充完整凭据。`LegacyStateSHA/LegacyCommitted/LegacyPruneKeeps` 固定完整旧凭据、前缀与每源精确尾窗形态，续迁不得重新推断改变；来源变化、全态哈希伪造、未完成迁移或水位外删改均拒绝。对应原红/绿与负控已过，索引范围末轮 race 仍在执行，不把定向桥绿外推全包。旧映射不豁免新字段一致性；PASSIVE checkpoint 的 busy 次数与剩余 frames/未完成时长/WAL 高水位分开，`busy=0` 不等于全部归并完成。
-
-首轮定向适配回归已执行且退出码 0：`go test -p=1 ./internal/worker/logs/ingest/stateindex ./internal/worker/logs/ingest -run 'TestIndex|TestMigration|TestCompletedMigration|TestWALPrune' -count=1 -timeout=240s`。之后新增的独立审计三开、混合态三开、物化重启与完整 Manager 调度闭环仍待最终复验，不把首轮定向结果外推为全部逐字段迁移通过。
-
-### 2.8 物化类别与必要压缩保留（已批准，实施/复验中）
-
-- 已落地 `MaterializationRequest.Class/MaterializationReservation.Class`，只接受 `rebuild/live_compaction`；旧空值与旧表新列默认 `rebuild`，不能通过任意新类别绕预算。Class 不进候选唯一键，同源/日/window/generation 跨 Class 也不再授予第二次写许可；List 返回全类别且逐记录带 Class，消费方须过滤匹配类别与验证凭据。
-- 安全初始策略：rebuild 每稳定窗口 4 次、每小时 8 次；live_compaction 独立每窗口 4 次、每小时 4 次，必要压缩失败也计费。所有 Class 共享同源/UTC 日滚动小时总字节硬顶，当前内部默认 1GiB，不是各自再获 1GiB。
-- 已落地 `MaterializationLimits.CompactionReserveBytes`，G 生产默认须显式传总小时字节的 1/4。仓储对 rebuild 类别小时计费字节另约束 `<= HourlyBytes-reserve`，并对所有 Class 总计费字节约束 `<= HourlyBytes`；live 可用保留及剩余共享额度，实际计费取 `max(reserved,written)`。仓储旧调用 reserve=0 兼容，自定义值须满足 `0 <= reserve <= HourlyBytes` 并拒绝溢出；生产消费与三开边界测试仍在复验。
-- 这是安全初始策略，不是经性能实验选出的最优默认，也不保证任意大输入或无限失败下压缩必成；额度不足仍可只读取证/安全复用与退避，不永久 abandon 整源或无限追加 micro generation。
-- 正常 active-tail 安全追加、重启后只读取证重新取得资格与必要压缩必须各有正式回归，不能继承未知写资格。该小时 wire 字节保留与磁盘 WAL/staging/Export 的 25% 空间预留属于不同维度，不能混算。
-
 ## 3. 验收标准
 
 1. **回退**：迁移后重放 13 源历史窗口，游标/缺口/投影与迁移前逐字段一致（脚本比对）。
@@ -453,7 +320,7 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
   | 臂 | 变异 | 实测 |
   |---|---|---|
   | arm1 | 把行数预算抬到无穷（= 改回「一次周期一个事务写全部行」） | **红**：`TestApplySplitsCommitsWithinRowBudget`（`单提交单元行数越界：预算 128，实测最大 425`）、`TestSingleCommitLatencyBoundedAtScale`（`第 0 个提交单元有 2757 行，超过默认预算`）、`TestApplyChunkedMatchesUnchunked`（`强切分库的提交单元数应远多于不切分库，实测 3 vs 3`） |
-  | arm2 | 把删除语句的行数压到 1（= 退回逐行 `ExecContext`） | **红**：`TestBatchDeleteRemovesExactlyTheMirroredRows`（`gap 的 N 行删除应合并成 1 条语句，实测 N 条（批量化失效？）`） |
+  | arm2 | 把删除语句的行数压到 1（= 退回逐行 `ExecContext`） | **红**：`TestBatchDeleteRemovesExactlyTheMirroredRows`（`source_wal 的 4 行删除应合并成 1 条语句，实测 4 条（批量化失效？）`） |
   | arm3 | 把删除顺序改回表正序（父表在前） | **红**：`FOREIGN KEY constraint failed`（既有 `TestStoreDeletesRemovedRows` 同步红）⇒ 单元切分依赖的删除序是承重件 |
 
 - 尾部归因探针（非回归，只作证据）：同一写入形态、只切 `wal_autocheckpoint`
@@ -483,105 +350,12 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
 非法值（非正行数/耗时）一律回退默认：配置误写不得让切分失效（那会把「单次 ≤50 ms」的达标线
 交还给配置运气）。默认值的单一真源是 `stateindex.DefaultCommitBudget`。
 
+## 附：PRD 表内原始记录（2026-10-26 迁入）
 
-## 7. 2026-10-29：删除 `source_wal` 表（WAL 改纯内存队列）
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
 
-> 本节记录一次**可靠性模型**的更替，不是一次性能优化。
+### FR-496 采集索引迁移至本地 SQLite（feat，增强 FR-473~484 底座；spec
 
-### 7.1 变更
+**需求补充**：`docs/specs/log-index-sqlite/spec.md`）：现索引为单一 JSON 整本重写——实测 307MB/13 源，60 实例外推 1.5–3GB，单次持久化将达秒级（历史事故：~1.2GB 时 >5s 触发 `vlsup` 超时、采集停摆）。改为纯 Go 嵌入式 SQLite（WAL、单写者、只写变更行）+ 旧文件一次性迁移归档。验收：60 源下单次持久化 ≤50ms；迁移逐字段一致；`kill -9` 不丢索引。**2026-10-01 加固（FR-498 实测发现）**：迁移后索引里唯一随总量线性增长的表变成 `delivery_batch`（≈**5 MB/天 @60 源**）且原先无裁剪路径，长跑会把索引无界撑大——按 `reclaim` 水位裁剪历史批次（判据有证明：`End <= Reclaim` 的条目对 `delivery_position` 的连续前缀计算是**恒等元**，且水位单调；失败只告警不阻断，有自证守卫；配置键 `log_index.batch_prune.*` 见 spec §6）。60 源 × 6000 批/源夹具实测：360 000 行 / 库 25.6 MB → **0 行 / 864 KB**；水位滞后窗口内保留量只与滞后有关、与累计总量无关（spec §2.4/§3.8）
 
-`source_wal` 表被彻底删除。它原先逐条持久化 WAL 的本义（身份 + 正文），
-生产实测占索引库 88%（`body` 174MB + 主键索引 41MB，库共 344MB）。
-
-**保留**的仍是「记账面」：`source` / `position` / `gap` / `projection` /
-`instance_binding` / `source_aux` / `delivery_batch` / `recovery_audit`。
-其中 `position` 三水位（read / durable / reclaim）即本项目的 **registry**。
-
-### 7.2 为什么可以删（业界依据）
-
-这不是取舍，而是主流做法。官方文档原文：
-
-**Filebeat**（[configuring-internal-queue](https://www.elastic.co/guide/en/beats/filebeat/current/configuring-internal-queue.html)）：
-
-> The memory queue keeps all events in memory. … **If the queue is full,
-> no new events can be inserted into the memory queue.**
->
-> The disk queue stores pending events on the disk rather than main memory,
-> which allows Beats to queue a larger number of events than is possible with the memory queue,
-> and **to save events when a Beat or device is restarted**.
-
-⇒ 内存队列**本身就不保证跨重启保存**；那是 disk queue 的能力。
-可靠性由持久化的 offset（registry）+ **at-least-once** 重发承担。
-
-**Fluent Bit**（[buffering-and-storage](https://docs.fluentbit.io/manual/administration/buffering-and-storage)）的 `memrb` 模式：
-
-> when the ring buffer is full, Fluent Bit **automatically drops the oldest chunks** to make room
-> for new data **instead of pausing the input plugin**. … This buffering method
-> **prioritizes continuous data ingestion over data completeness**, making it suitable for
-> high-throughput scenarios where **pausing the input isn't acceptable**.
-
-⇒ 「丢最旧、不暂停」是官方支持的语义，并配套 `memrb_dropped_chunks` /
-`memrb_dropped_bytes` 两个指标。
-
-### 7.3 新的可靠性模型
-
-| 关切 | 旧（队列落盘） | 新（队列纯内存） |
-|---|---|---|
-| 队列内容跨重启 | 逐条恢复 | **丢弃**（对齐 Filebeat memory queue） |
-| 不丢数据的依据 | 队列里还有副本 | **持久化 offset + 重读**（至少一次） |
-| 内存满 | 暂停采集（不丢） | **丢最旧、不暂停**（对齐 Fluent Bit memrb） |
-| 重复投递 | 不应该发生 | **允许**（at-least-once），靠 `event_id` 幂等 + `projection_generation` 换代次吸收 |
-| 丢弃可观测性 | — | `WAL.DropStats()` → `SourceResumeDiagnostic.DroppedEntries/DroppedBytes` |
-
-**重启时的具体动作**（`ingest.rollbackReadToReclaim`）：把 `read` 与 `durable`
-**都**回退到 `reclaim`，让 tailer 从该处重读。只退 `read` 不够——tailer 游标取
-`min(durable, read)`（见 `acquire/tailer.go`），`durable` 留着会把它拉高。
-
-回退下界是 `reclaim` 而不是 0：`reclaim` 之前的字节已取得确认投递证据，重读它们不只是浪费。
-
-> **2026-10-29 修订**：原文此处写「会让 `releaseRecovery` 的 `from >= to` 恒成立、静默不再建恢复段」。
-> `releaseRecovery` 的建段分支已随受管恢复分段一并删除，该具体机制不再存在；
-> 但**回退下界仍是 `reclaim` 而不是 0** 的结论不变。
-
-### 7.4 丢弃的审计面
-
-`WAL_BACKLOG_DROPPED`（缺口）与 `DropStats()`（累计量）**口径不同、互不替代**：
-
-- 缺口：每丢一段登记一条，带**真实位置区间**，会被合并/裁剪，但不是“可能丢”而是“已丢”；
-- 累计量：`droppedEntries` / `droppedBytes`，只增不减。
-
-两者都**不阻塞** `ResumeAcquire`（`gapReasonsNonBlocking`）。这是一个**独立于**
-「可愈合白名单」与「永久丢失名单」的第三个分类：前者语义是“回读会重新产生”（不适用，
-游标已过），后者带 1h 宽限期（会形成“越界→丢→暂停1h→继续丢”的循环，与不暂停矛盾）。
-
-> **这个名单同时是“回收可穿行”的唯一真源（2026-11-05）**：
-> `ledger.capacityDroppedRangesLocked` 只认 `IsGapReasonNonBlocking`，被它收录的原因
-> 会被并入 `contiguousCertifiedEnd` 的 certified 区间，从而让 `reclaim` 跨过那段空洞。
->
-> 收录前必须自问：**这段字节真的进过投递流、且确定再也不会有了吗？**
-> - `DELIVERED_NOT_VISIBLE`（真）：字节进了 WAL、被真实 POST 过、VL 回了 2xx 却没存下，
->   且已逐轮核对过（轮次 + 墙钟双重界）才下的结论 —— 与容量丢弃完全同域，已收录；
-> - `CURSOR_SKIPPED_ON_RESTART`（假）：游标已越过、WAL 已亡，字节**从未进过投递流**，
->   因此仍在 `gapReasonsPermanentlyLost`，不得给回收通行证。
->
-> 可穿行 ≠ 谎报已投递：这些路径只推 `Delivery`/`DROPPED`，**绝不写 `RequestDoneRanges`**。
-
-### 7.5 旧库兼容
-
-既有生产库（含 20 万行 `source_wal`）打开时必须不报错。迁移为幂等
-`DROP TABLE IF EXISTS source_wal`：
-
-- 实现：`stateindex.dropLegacySourceWAL`，在 `OpenWithBudget` 里**建表 DDL 之前**执行
-  （先查 `sqlite_master` 确认存在再 DROP，不存在则空操作）；
-- `DROP TABLE` 会连带删掉旧版本遗留的 `idx_source_wal_key`，因此不再需要单独的 DROP INDEX；
-- 旧条目**不迁移、不读**：它们描述的是内存队列的旧快照，重启后由 `rollbackReadToReclaim`
-  按 `position` 水位重读接替。
-- 回归：`TestOpenDropsLegacySourceWALTable`（造含 `source_wal` 表与500 行的旧库 → `Open` →
-  不报错、表已删、其余表数据一字不少），变异验证：掉 `dropLegacySourceWAL` 调用 ⇒ 变红。
-
-⚠ 注意：`DROP TABLE` **不会**自动缩小 SQLite 文件——263MB 仍会留在库文件里，
-直到后续复用空页或显式 `VACUUM`。**启动路径不自动 VACUUM**（它需要独占锁、临时需求双倍磁盘，
-耗时与库体积成正比——与“启动路径与规模成正比的持久化”是同一类事故面）。
-提供显式入口：`stateindex.Store.Vacuum(ctx)` 与 `stateindex.Store.FreelistBytes(ctx)`
-（前者执行 VACUUM，后者读 `freelist_count × page_size` 作为“值不值得做”的判据）。
-首次删除表时 `Open` 会打一条 INFO 日志带上库路径，提醒可择机做一次离线 `VACUUM`。
+**交付状态**：🔨 开发中（实现与 `log_index.*` 配置接线已落地；**2026-10-11 生产真机实测**：生产采集面 164 源下索引持久化 p50 2 ms / p95 6 ms / max 152 ms，远优于「60 源单次持久化 ≤50 ms」验收线。**取证口径（可复算）**：数据源＝生产 Worker journal 的「持久化耗时」分钟打点行（现含 p50/p95/max 与采样周期数），按窗口聚合即得；本项无 `.tmp/` 路径引用。生产累计重启未复现 2026-10-01 二启卡死。**已归真（2026-10-11）**：spec 顶部状态行已由 `📋 计划` 改为 `🔨 开发中`；**剩余边界**：spec §3 第 7 条「迁移→首启→二启→三启 + 脏环境 + 部署后复验」缺形式化复验产物）

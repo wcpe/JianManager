@@ -1,0 +1,412 @@
+paths:
+  /instances/{id}/business:
+    post:
+      tags: [business]
+      summary: 向单个实例下发业务命令
+      description: |
+        把 `domain.action` 与不透明 `payload` 经通道下发到目标实例的插件，返回插件回执。
+
+        ## 写穿保证
+
+        命令**必须先达插件**，插件成功才算成功。JM 不缓存、不排队、不重试到本地——
+        因为 JM 不持有任何业务数据（ADR-106），这条规则天然成立。
+
+        ## 前置校验顺序
+
+        依次检查，任一失败即返回且**不产生任何副作用**：
+
+        1. 实例存在且调用者有权（`INSTANCE_NOT_FOUND`，404）
+        2. 实例运行中（`INSTANCE_OFFLINE`，409）
+        3. 节点在线（`NODE_OFFLINE`，409）
+        4. 探针已连接（`PROBE_UNAVAILABLE`，409）
+        5. 域已注册（`DOMAIN_UNAVAILABLE`，409）
+        6. 动作在 manifest 中声明（`ACTION_UNSUPPORTED`，422）
+
+        ## 审计
+
+        记录通道事实（actor / target / domain / action / requestId / result / duration），
+        **不记录 payload 与 output 内容**（可能含玩家数据或密钥）。
+      operationId: dispatchBusinessCommand
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 实例 ID
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas.yaml#/BusinessDispatchRequest'
+      responses:
+        '200':
+          description: |
+            命令已处理。注意：HTTP 200 **不代表业务成功**——
+            必须检查响应体的 `success` 字段。
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/BusinessDispatchResponse'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '403':
+          $ref: '../components/common.yaml#/Forbidden'
+        '404':
+          $ref: '../components/common.yaml#/NotFound'
+        '409':
+          description: |
+            通道不可用或幂等冲突。`code` 为以下之一：
+            `INSTANCE_OFFLINE` / `NODE_OFFLINE` / `PROBE_UNAVAILABLE` /
+            `DOMAIN_UNAVAILABLE` / `IDEMPOTENCY_KEY_REUSED`
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
+        '422':
+          $ref: '../components/common.yaml#/ErrorResponse'
+          description: 动作未在 manifest 中声明（`ACTION_UNSUPPORTED`）
+
+  /instances/{id}/business/manifest:
+    get:
+      tags: [business]
+      summary: 查询实例的业务能力清单
+      description: |
+        返回该实例探针上已注册的所有业务域及其动作声明。
+
+        **平台不解析内容**——原样透传插件的声明。调用方应据此：
+        - 判断某 `domain` 是否可用
+        - 判断某 `action` 是否存在及其风险等级
+        - 用 `inputSchema` 渲染表单或做前置校验
+
+        `specDeclared=false` 表示插件是旧版实现，规格信息可能不完整，
+        此时 `risk` 按 `WRITE` 处理（需确认但非 critical）。
+      operationId: getBusinessManifest
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 能力清单
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instanceId:
+                    type: integer
+                  apiVersion:
+                    type: integer
+                  domains:
+                    type: object
+                    additionalProperties:
+                      $ref: '../components/schemas.yaml#/DomainManifest'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '404':
+          $ref: '../components/common.yaml#/NotFound'
+        '409':
+          description: 探针未连接（`PROBE_UNAVAILABLE`）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ProbeUnavailableError'
+
+  /business/batch/preview:
+    post:
+      tags: [business]
+      summary: 解析批量目标并评估风险（两阶段流程第一步）
+      description: |
+        解析目标集合并返回风险等级与确认令牌。**无副作用，可重复调用。**
+
+        ## 为什么需要两阶段
+
+        批量操作可能影响上百个实例且跨越多个大区。直接执行的风险在于：
+        调用方以为操作 87 台，实际因为分组变动变成了 95 台。
+
+        因此本接口返回的 `confirmToken` **绑定了解析后的实例集哈希**。
+        执行时如果目标已变化，token 失效并返回 `TARGET_CHANGED`，强制重新预览。
+
+        这比「用户点过一次确认」的布尔标记更严格——后者无法防止目标漂移。
+
+        ## 风险分级
+
+        | 条件 | 级别 |
+        |---|---|
+        | 单实例 / 同小区 ≤10 台 | `READ`（其实是 low，无需确认） |
+        | 同小区 >10 台 / 跨小区同大区 | `WRITE`（提示） |
+        | **跨大区 / 跨集群** | `DESTRUCTIVE`（强制确认） |
+        | 实例数 > 50 | 强制确认 |
+        | 含离线实例 | 提示 |
+        | 动作自身 risk=DESTRUCTIVE | 强制确认 + 必填 reason |
+
+        多条件命中取**最高**级别。
+      operationId: previewBatchTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas.yaml#/BatchPreviewRequest'
+      responses:
+        '200':
+          description: 解析结果与风险评估
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/BatchPreviewResponse'
+        '400':
+          description: 目标解析后为空（`TARGET_EMPTY`）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/TargetEmptyError'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '429':
+          $ref: '../components/common.yaml#/RateLimited'
+
+  /business/batch:
+    post:
+      tags: [business]
+      summary: 批量下发业务命令
+      description: |
+        对多个实例下发同一 `domain.action`。**部分失败不整体失败**——
+        HTTP 200 时逐实例结果在 `results` 中表达。
+
+        ## 两种响应模式
+
+        - `Accept: application/json`（默认）：等待全部完成后返回完整结果
+        - `Accept: text/event-stream`：流式返回进度（见 FR-537）
+
+        ## 并发与超时
+
+        - 单批并发：默认 20
+        - 单实例超时：默认 30 秒（独立于单实例命令的 5 秒）
+
+        ## 幂等
+
+        同 `requestId` 重复提交返回首次结果，不重复执行。窗口 24 小时。
+
+        ## 断开语义
+
+        客户端断开 **≠ 取消执行**。已下发的实例会继续完成，
+        只是结果不再推送。如需取消请使用独立接口（当前未提供）。
+      operationId: dispatchBatchCommand
+      parameters:
+        - name: Accept
+          in: header
+          description: |
+            设为 `text/event-stream` 时返回流式进度；
+            否则返回完整 JSON 结果。
+          schema:
+            type: string
+            enum: [application/json, text/event-stream]
+            default: application/json
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas.yaml#/BatchExecuteRequest'
+      responses:
+        '200':
+          description: 执行结果（同步模式）或进度流（流式模式）
+          headers:
+            X-Total-Count:
+              description: 目标实例总数
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/BatchExecuteResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  按批推送 `event: progress`，全部结束推送 `event: done`。
+
+                  ```
+                  event: progress
+                  data: {"done":20,"total":100,"succeeded":19,"failed":1,"offline":0}
+
+                  event: done
+                  data: {"total":100,"succeeded":98,"failed":1,"offline":1,"results":[...]}
+                  ```
+        '409':
+          description: |
+            `code` 为以下之一：
+            `CONFIRMATION_REQUIRED`（高风险缺 token）/
+            `TOKEN_EXPIRED` / `TOKEN_MISMATCH` / `TARGET_CHANGED` / `TARGET_EMPTY`
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
+        '400':
+          description: "`DESTRUCTIVE` 动作未填 reason（`REASON_REQUIRED`）"
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ReasonRequiredError'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '403':
+          $ref: '../components/common.yaml#/Forbidden'
+
+  /business/reconcile:
+    post:
+      tags: [business]
+      summary: 拉取插件全量快照（对账用）
+      description: |
+        向目标实例拉取插件当前全量状态，**原样透传**给调用方。
+
+        ## 平台不做差异计算
+
+        对比、找出差异、决定写回哪条——全部是业务台的职责。
+        平台不理解业务语义，无法判断"哪个字段不一致算差异"。
+
+        ## action 由调用方指定
+
+        平台**不预设任何快照动作名**。`action` 是业务台与插件的约定，
+        平台只负责转发。这意味着同一个 `domain` 可以用不同的动作拉不同粒度的快照。
+
+        ## 触发时机（由业务台决定）
+
+        平台不主动触发对账。调用方可以在以下时机调用：
+        - 定时（每天 / 每小时）
+        - 手动
+        - 收到 `replay_gap` 事件后
+        - 探针重新连接后
+      operationId: reconcileBusinessSnapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '../components/schemas.yaml#/ReconcileRequest'
+      responses:
+        '200':
+          description: 逐实例快照
+          content:
+            application/json:
+              schema:
+                $ref: '../components/schemas.yaml#/ReconcileResponse'
+        '400':
+          description: 目标解析后为空
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/TargetEmptyError'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '409':
+          description: 通道不可用
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
+
+  /business/cursor:
+    get:
+      tags: [business]
+      summary: 查询业务事件位点（缺口恢复用）
+      description: |
+        返回某个 `(instanceId, domain)` 区间内**存在过的位点列表**——**只有位点，没有 payload**。
+
+        ## 为什么 JM 不返回「缺失区间」
+
+        JM 不知道调用方收到了哪些事件，无法单方计算缺口。正确做法是调用方拿自己的已收位点
+        与这里返回的位点做**差集**，精确得到漏了哪几条。让 JM 猜缺口只会产生错误的区间。
+
+        ## 位点账本存什么、不存什么
+
+        **只存投递元数据**（`streamSeq` / `seq` / `dedupKey` / `occurredAt`）。
+        `payload` 一律不存——一旦存了业务内容，紧接着的需求就是「按 payload 字段查询」，
+        那正是平台明确退役掉的能力。内容重放的正确归属是探针侧的事件落盘，不是 JM。
+
+        ## 无数据不是错误
+
+        区间内没有位点（该实例这段时间没产生该域事件，或位点已超出保留期）时返回
+        `{"cursors": []}` 与 200。**不会返回 404**——「没有位点」本身就是一条有效答案。
+
+        ## 保留期
+
+        默认 7 天（`business_cursor.retention_days`），由 CP 后台巡检裁剪。
+        查询本身不会触发删除。
+      operationId: queryBusinessCursors
+      parameters:
+        - name: instanceId
+          in: query
+          required: true
+          description: 实例 ID。位点账本按实例分区，缺实例无从定位。
+          schema:
+            type: integer
+            minimum: 1
+          example: 5
+        - name: domain
+          in: query
+          required: true
+          description: |
+            业务域。`seq` 只在同一 domain 内单调，跨域比较无意义，故必填。
+          schema:
+            type: string
+          example: activity
+        - name: fromSeq
+          in: query
+          required: false
+          description: 起始探针位点（**含**边界）。缺省表示不限下界。
+          schema:
+            type: integer
+            minimum: 0
+          example: 100
+        - name: toSeq
+          in: query
+          required: false
+          description: 结束探针位点（**含**边界）。缺省表示不限上界。
+          schema:
+            type: integer
+            minimum: 0
+          example: 200
+        - name: limit
+          in: query
+          required: false
+          description: |
+            返回条数上限。缺省 1000，超过 5000 按 5000 处理（钳制而非报错）。
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 5000
+            default: 1000
+      responses:
+        '200':
+          description: 区间内存在过的位点，按 `seq` 升序
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cursors]
+                properties:
+                  cursors:
+                    type: array
+                    description: 位点列表；无数据时为**空数组**（不是 null、不是 404）。
+                    items:
+                      $ref: '../components/schemas.yaml#/BusinessCursor'
+        '400':
+          description: 参数非法（instanceId/domain 缺失，或 seq/limit 不是非负整数）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
+        '401':
+          $ref: '../components/common.yaml#/Unauthorized'
+        '503':
+          description: 位点账本未启用（`business_cursor.enabled=false` 或剪裁部署）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'

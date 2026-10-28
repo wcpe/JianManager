@@ -119,3 +119,22 @@ JianManager/
 - **CI 双真源窗口**：路径改动与 `release.yml` 更新必须同 commit，避免中间态红。
 - **Windows 兼容**：pnpm 默认 junction link，无管理员权限要求；已在本仓开发机形态内。
 - **回退**：各步独立可编译提交，`git revert` 粒度回退；embed 目标不变故 Go 侧回退面极小。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-283 仓库根 pnpm workspace + 前端提升（ref，需 spec）
+
+**需求补充**：引入根 `pnpm-workspace.yaml`；`web/src`→`apps/control-plane-web`、`web/wiki`→`apps/ui-museum`、`web/packages/ui`→`packages/ui`（vite alias 改真实 workspace 依赖）；抽 `packages/tsconfig` + `packages/eslint-config` 共享配置；go:embed 目标不变，仅 `Makefile` embed-web 拷贝源 `web/dist`→`apps/control-plane-web/dist` 改一行。行为不变（关联 ADR-064，重申 ADR-005）→ `docs/specs/monorepo-unification/spec.md`
+
+**交付状态**：✅ 已交付@v0.16.0
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-283~288（多语言 monorepo 统一布局与命令面 2026-07-12）
+
+FR-283~288（多语言 monorepo 统一布局与命令面 2026-07-12）：`apps/`（所有外壳，含 Go/Node/React）+ `packages/`（第一方 JS 库）+ `internal/`（Go 库留根）+ `third_party/` 布局；前端提升为真 pnpm workspace（`web/`→`apps/control-plane-web`、`web/wiki`→`apps/ui-museum`、`web/packages/ui`→`packages/ui`）+ devmock 抽包 + go-task 命令面 + 前端版本接上 `version.go` 真源（ADR-065）；关联新 ADR-064（重申 ADR-005，不取代）→ 共享 spec `docs/specs/monorepo-unification/spec.md`（已落审，含 FR-284/285/286 免 spec 执行边界与 FR-287/288 设计节）。单分支串行执行中（序 283→(284,285)→286→287→288；实现排在 FR-281 反向流之后——内容改动先落、文件移动后落），计划见 `.tmp/brainstorm-monorepo-unification-2026-07-12.md`
+

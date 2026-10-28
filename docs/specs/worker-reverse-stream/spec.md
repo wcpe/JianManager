@@ -90,3 +90,11 @@ message TerminalWSFrame { int32 msg_type = 1; bytes payload = 2; }  // 不透明
 | CP | gRPC server 注册 TunnelService、`pool.go` 仅隧道取连接、relay WS 端点（router）、节点观测字段 |
 | 前端 | 终端接线切 relay、节点隧道状态徽标 |
 | 文档 | architecture-invariants / ARCHITECTURE / API / OPERATIONS（防火墙指引）/ CHANGELOG |
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR-281「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+**需求补充**：把 CP→Worker 的指令派发从「CP 直连 worker gRPC `node.Host:GRPCPort`」改为经 Worker 主动建立的**常驻双向流**承载——Worker 只出站、零入站端口暴露，家用 NAT / 内网 / 公网混合环境均可接入（现状真机复现：公网 CP 无法回拨家用 NAT 后的 Windows worker 的 9101/9102）。含 proto 新增双向指令流、CP 连接池由「拨号」改为「往流里派发 + 关联请求/回执」、Worker 由 gRPC 服务端改为「守流听指令」、超时/断线重连/背压语义；终端 WS（9102）一并经 CP 中转（或同机制隧道化）才彻底免入站。**架构级大改，需 spec + ADR-066 修订 ADR-002（gRPC 节点通信）**；设计定案：gRPC 反向隧道（grpctunnel，~70 RPC 零信封）+ 双模式（隧道优先/直拨回退）+ 终端一律经 CP 中转（feat）→ `docs/specs/worker-reverse-stream/spec.md`
+
+**交付状态**：✅ 已交付@v0.15.0·真机验收（现网双反向隧道自愈、隧道承载探针/上传/终端中转、NAT 场景真跑）

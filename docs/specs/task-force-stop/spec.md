@@ -46,3 +46,12 @@
 ## 4. 关联
 
 proto `HeartbeatResponse`；worker `taskreg/registry.go`、`grpc/server.go`、`jdk/{install,manager}.go`、`heartbeat`；CP `model/task.go`、`service/task.go`、`grpc/handler.go`、`router/task.go`；web `pages/TasksPage.tsx`、`api/tasks.ts`。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 索引段迁入（保留原文）。
+
+### FR-225~232 + FIX-1~6（0.13.0 开发版归档）
+
+FR-225~232 + FIX-1~6（0.13.0 开发版归档）：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK 登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节已交付；FIX-1/2/3 已把 FR-222/223 节点上线链路归真闭环；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`；FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）
+

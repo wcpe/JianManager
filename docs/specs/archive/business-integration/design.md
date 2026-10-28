@@ -1,5 +1,7 @@
 # JianManager 业务对接平台设计文档
 
+> **⛔ 已退役（FR-521 / ADR-106）**：JM 不再做任何业务，本目录为历史归档，不反映当前实现。业务数据与业务语义由下游业务台持有，平台只保留纯透传通道（`POST /instances/:id/business` 与 `GET .../business/manifest`）。
+
 > **全能探针进化 + 业务对接标准（JM Business Integration Standard, JBIS）**
 >
 > 本文是该方向的**总体设计总纲**。它定义"ServerProbe 从监控探针进化为 JM 全能业务 agent"的完整架构，以及"任何业务插件按 JM 标准实现接入即可被掌控"的开放标准与 SDK。
