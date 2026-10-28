@@ -68,7 +68,12 @@ func TestDaemonSubtreeSurvivesWorkerUnitCgroupKill(t *testing.T) {
 	if !ok {
 		t.Skip("无可用 cgroup 写权限：本用例需在用户可写的 cgroup 内运行（如 systemd-run --user --scope go test …）")
 	}
-	uuid := fmt.Sprintf("shutdown-contract-%d", os.Getpid())
+	// uuid 必须短：它最终会成为 Unix socket 文件名（见 daemon.SocketAddr），
+	// 而 socket 路径受内核 `sun_path[108]` 硬限制（含结尾 \0，实际可用 107 字节）。
+	// t.TempDir() 会在 TMPDIR 下开 `<测试名><随机>/001/`——本测试名已经很长，
+	// 再拼上 "shutdown-contract-<pid>" 就必然越界，报 `bind: invalid argument`，
+	// 看着像 cgroup 逻辑坏了，其实是测试自爆。生产用 36 字节 UUID，从不触发。
+	uuid := fmt.Sprintf("sc-%d", os.Getpid())
 	unitRel := path.Join(labRel, "lab-worker.service") // 伪造的「Worker systemd 单元 cgroup」
 	escapeRel := path.Join(labRel, "jianmanager-daemons", uuid)
 	unitDir := filepath.Join(mountRoot, unitRel)

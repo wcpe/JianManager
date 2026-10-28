@@ -89,3 +89,6 @@ blob-report/
 # 运行时 PID 记录（本机手动起服务落在仓库根的副产物，每次起停都会刷新成未跟踪噪声）。
 # 生产部署的 pid 在安装目录的 run/ 与 logs/ 下（前者由 cp-lifecycle.sh 管理，后者随 /logs/ 忽略），不受本规则影响。
 *.pid
+
+# Vantaloom 会话工具的本地记忆目录（非项目内容）
+.vantaloom/

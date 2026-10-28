@@ -71,7 +71,8 @@ import { BackendsInline, VirtualizedGroupedCardView } from '@/components/views/i
 import { PaginatedInstanceTable } from '@/components/views/instances/PaginatedInstanceTable'
 import { InstancePaginationBar } from '@/components/views/instances/InstancePaginationBar'
 import { InstanceHealthHoverLayer } from '@/components/views/instances/InstanceRowSpark'
-import { InstanceContextMenu, buildContextMenuActions } from '@/components/views/instances/InstanceContextMenu'
+import { InstanceContextMenu } from '@/components/views/instances/InstanceContextMenu'
+import { buildContextMenuActions } from '@/components/views/instances/instanceContextMenuActions'
 import {
   applySelectionClick,
   invertSelection,

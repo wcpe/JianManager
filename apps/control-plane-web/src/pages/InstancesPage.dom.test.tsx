@@ -720,7 +720,6 @@ describe('InstancesPage（mock 假后端）', () => {
    * 只看顺序会漏掉「刷新后失效」，只看存储会漏掉「顺序没真的应用到 DOM」。
    */
   it('拖拽表头换位：列顺序变化并持久化', async () => {
-    const user = userEvent.setup()
     localStorage.removeItem('jm.instances.columnOrder')
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
     const surface = await screen.findByTestId('instances-table-virtual')

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '@jianmanager/ui'
 import { fmtBytes } from '@/lib/metrics/metrics-format'
 import { TimeSeriesChart } from '@jianmanager/ui/charts/TimeSeriesChart'
+import { healthHoverBridgeRef } from './health-hover-bridge'
 
 /**
  * 行内缩略 sparkline + 悬浮大图（实例列表行）。
@@ -215,7 +216,14 @@ export function InstanceHealthHoverLayer() {
   useEffect(() => () => { if (timerRef.current) window.clearTimeout(timerRef.current) }, [])
 
   // 把 handler 暴露给格子：经 context 传递会多一层 re-render，这里用模块级单例回调。
-  healthHoverBridge.current = handleHover
+  //
+  // 【为什么写在 effect 里而不是渲染期】渲染期写模块级可变对象会被
+  // `react-hooks/immutability` 判为「渲染期修改组件外部变量」（副作用应在 effect 中）。
+  // 改成 effect 后语义也更对：handler 指向**已提交**的最近一次渲染的闭包，
+  // 而渲染期赋值会在 React 丢弃该次渲染（并发模式中断）时留下一个指向不存在渲染的 handler。
+  useEffect(() => {
+    healthHoverBridgeRef.current = handleHover
+  }, [handleHover])
 
   if (!hover) return null
 
@@ -270,7 +278,4 @@ export function InstanceHealthHoverLayer() {
   )
 }
 
-/** 模块级桥：格子 → 悬浮层 的事件通道（避免为它套一层 Provider 导致整表重渲染）。 */
-export const healthHoverBridge: { current: (el: HTMLElement | null, metrics?: HealthMetrics, running?: boolean) => void } = {
-  current: () => {},
-}
+

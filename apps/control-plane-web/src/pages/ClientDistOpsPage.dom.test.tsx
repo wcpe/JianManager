@@ -10,6 +10,7 @@ import { server } from '@jianmanager/devmock/server'
 import ProtectionCenterPage from './ProtectionCenterPage'
 import ClientDistRedirect from './ClientDistRedirect'
 import Workspace from '@/components/console/Workspace'
+import DashboardPage from './DashboardPage'
 
 /**
  * 页面 B「客户端分发运维」（`/client-dist-ops`，FR-430 / ADR-088）。
@@ -337,11 +338,17 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
 
   it('非平台管理员直达 /client-dist-ops → 重定向首页（守卫）', async () => {
     loginAs(MEMBER_TOKEN)
-    renderWithProviders(<Workspace />, { route: '/client-dist-ops' })
+    /*
+      为什么渲染 `DashboardPage` 而不是 `Workspace`：
+      守卫把非管理员送回首页，而首页自 FR-520 起是 AI 首页，它经 `useAssistantChatCtx()` 取
+      外壳级会话状态——该 Provider 只挂在 `DashboardPage`（FR-519 §3「外壳级单一 manager」）。
+      `Workspace` 只是路由表，不含 Provider，单独渲染它会在首页抛
+      「useAssistantChatCtx 必须在 AssistantChatProvider 内使用」。
+      渲染 `DashboardPage` 也才对得上生产真实外壳（App.tsx 里就是它包 Workspace）。
+    */
+    renderWithProviders(<DashboardPage />, { route: '/client-dist-ops' })
 
-    // 首页自 FR-520 §9.1 起默认渲染 AI 首页（经典仪表盘需 `?home=classic`），
-    // 因此这里断言的是「AI 助手」标题——守卫的语义（被送回首页）没有变，
-    // 变的只是首页现在长什么样。
+    // 守卫的语义（被送回首页）没变，变的只是首页现在长什么样。
     expect(await screen.findByRole('heading', { name: 'AI 助手' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/')
     expect(screen.queryByRole('heading', { name: '客户端分发运维' })).not.toBeInTheDocument()
@@ -349,7 +356,7 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
 
   it('非平台管理员直达 /client-channels → 重定向首页（守卫）', async () => {
     loginAs(MEMBER_TOKEN)
-    renderWithProviders(<Workspace />, { route: '/client-channels' })
+    renderWithProviders(<DashboardPage />, { route: '/client-channels' })
 
     // 同上：默认首页已是 AI 首页（`?home=classic` 才是经典仪表盘）。
     expect(await screen.findByRole('heading', { name: 'AI 助手' })).toBeInTheDocument()
@@ -358,7 +365,7 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
 
   it('非平台管理员直达旧安全中心路由 → 重定向路由不拦截、最终由目标守卫落到首页', async () => {
     loginAs(MEMBER_TOKEN)
-    renderWithProviders(<Workspace />, { route: '/client-dist-security?tab=ip&channelId=skyblock-s1' })
+    renderWithProviders(<DashboardPage />, { route: '/client-dist-security?tab=ip&channelId=skyblock-s1' })
 
     // 同上：默认首页是 AI 首页。
     expect(await screen.findByRole('heading', { name: 'AI 助手' })).toBeInTheDocument()

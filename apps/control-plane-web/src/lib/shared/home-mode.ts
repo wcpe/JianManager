@@ -37,7 +37,8 @@ export function parseHomeModeParam(home: string | null): HomeMode | null {
  */
 export function loadHomeMode(): HomeMode | null {
   if (typeof localStorage === 'undefined') return null
-  let raw: string | null = null
+  // 不用先赋 null：try 里必然赋值、catch 直接 return，初值永远读不到。
+  let raw: string | null
   try {
     raw = localStorage.getItem(HOME_MODE_KEY)
   } catch {

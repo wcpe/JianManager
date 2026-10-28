@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
-import { Pencil, Play, RotateCw, Square, Tag, Trash2, Wrench } from 'lucide-react'
-
 import { cn } from '@jianmanager/ui/lib/utils'
 import type { InstanceInfo } from '@/api/instances'
+// 类型与纯函数已抽到独立模块（避免本组件文件导出非组件值）。此处再导出，既有 import 路径不变。
+export type { ContextMenuAction } from '@/components/views/instances/instanceContextMenuActions'
 
 /**
  * 实例行右键菜单：**全表共用一个实例**（用户提出的「右键菜单」）。
@@ -22,19 +22,6 @@ import type { InstanceInfo } from '@/api/instances'
  * - 视口边缘翻转：贴近右/下边时向左/上展开，避免菜单被裁；
  * - 危险项（删除）单独分隔并标红，与「⋯」菜单的信息层级保持一致。
  */
-export interface ContextMenuAction {
-  key: string
-  label: string
-  icon?: React.ReactNode
-  onSelect: () => void
-  /** 危险动作：标红并与上方动作以分隔线隔开。 */
-  danger?: boolean
-  /** 禁用（如运行中不可克隆）：仍显示，但不可点。 */
-  disabled?: boolean
-  /** 禁用原因（悬浮提示），与菜单里 title 一致。 */
-  disabledHint?: string
-}
-
 export function InstanceContextMenu({
   inst,
   position,
@@ -155,112 +142,4 @@ export function InstanceContextMenu({
     </div>,
     document.body,
   )
-}
-
-/**
- * 把页面侧的实例状态翻译成菜单项（纯函数，便于单测直接断言顺序与禁用条件）。
- *
- * 顺序按「最常用在上、破坏性在下」排：启停 → 编辑配置 → 标签 → 代理 → 克隆 → 删除。
- * 与「⋯」下拉菜单的可用性判据同源（运行态不可克隆、删除始终可用+提示）。
- */
-export function buildContextMenuActions({
-  inst,
-  t,
-  onStart,
-  onStop,
-  onRestart,
-  onEditConfig,
-  onTags,
-  onLimits,
-  onProxy,
-  onClone,
-  onDelete,
-}: {
-  inst: InstanceInfo
-  t: (key: string, fallback: string, opts?: Record<string, unknown>) => string
-  onStart: () => void
-  onStop: () => void
-  onRestart: () => void
-  onEditConfig: () => void
-  onTags: () => void
-  onLimits: () => void
-  onProxy: () => void
-  onClone: () => void
-  onDelete: () => void
-}): ContextMenuAction[] {
-  // 克隆要求已停止：运行/过渡态禁用并说明原因，而不是把入口藏起来（藏了用户会以为是 bug）。
-  const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
-  const running = inst.status === 'RUNNING'
-  const actions: ContextMenuAction[] = []
-
-  if (stopped) {
-    actions.push({
-      key: 'start',
-      label: t('instances.start', '启动'),
-      icon: <Play />,
-      onSelect: onStart,
-    })
-  } else {
-    actions.push({
-      key: 'stop',
-      label: t('instances.stop', '停止'),
-      icon: <Square />,
-      onSelect: onStop,
-    })
-  }
-  if (running) {
-    actions.push({
-      key: 'restart',
-      label: t('instances.restart', '重启'),
-      icon: <RotateCw />,
-      onSelect: onRestart,
-    })
-  }
-
-  actions.push({
-    key: 'editConfig',
-    label: t('instances.editConfig', '编辑配置'),
-    icon: <Pencil />,
-    onSelect: onEditConfig,
-  })
-  actions.push({
-    key: 'tags',
-    label: t('grouping.editTags', '编辑标签'),
-    icon: <Tag />,
-    onSelect: onTags,
-  })
-  if (inst.processType === 'docker') {
-    actions.push({
-      key: 'limits',
-      label: t('instances.resourceLimit', '资源限额'),
-      icon: <Wrench />,
-      onSelect: onLimits,
-    })
-  }
-  if (inst.role === 'proxy') {
-    actions.push({
-      key: 'proxy',
-      label: t('proxy.manageBackends', '管理后端'),
-      icon: <Wrench />,
-      onSelect: onProxy,
-    })
-  }
-  actions.push({
-    key: 'clone',
-    label: t('clone.action', '克隆'),
-    icon: <Wrench />,
-    onSelect: onClone,
-    disabled: !stopped,
-    disabledHint: stopped ? undefined : t('instances.cloneRunningHint', '运行中的实例不能克隆，请先停止'),
-  })
-
-  actions.push({
-    key: 'delete',
-    label: t('common.delete', '删除'),
-    icon: <Trash2 />,
-    onSelect: onDelete,
-    danger: true,
-  })
-
-  return actions
 }
