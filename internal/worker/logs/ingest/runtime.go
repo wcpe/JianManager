@@ -518,10 +518,8 @@ type Manager struct {
 	sources        map[string]SourceConfig
 	pipes          map[string]*pipeline.Pipeline
 	state          persistedState
-	statePath      string
-	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行，
-	// 启动时自动迁移旧 ingest.state.json（校验失败拒绝启动）。nil 表示尚未打开（
-	// 测试直接构造 Manager 的场景在首次 persist 时按需打开）。
+	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行。
+	// nil 表示尚未打开（测试直接构造 Manager 的场景在首次 persist 时按需打开）。
 	index *stateindex.Store
 	// persistedRev 记录「上次持久化时」各源账本的修订号（见 ledger.Ledger.Revision）。
 	// persist 据此只处理变更源，把每次持久化的成本从 O(全部源的行数) 降到 O(变更源的行数)。
@@ -2488,7 +2486,6 @@ func New(opts Options) (*Manager, error) {
 		materializationLimits: materializationLimitsOf(opts.MaterializationLimits),
 		sources:               make(map[string]SourceConfig), pipes: make(map[string]*pipeline.Pipeline),
 		state:                    persistedState{Sources: make(map[string]persistedSource)},
-		statePath:                filepath.Join(opts.Root, "var", "log", "ingest.state.json"),
 		verificationTimeout:      opts.VerificationTimeout,
 		capacityProvider:         opts.CapacityProvider,
 		sampling:                 opts.Sampling,

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -223,42 +222,6 @@ func TestPR61SilentPendingContinuesAcrossDayBudget(t *testing.T) {
 	m.mu.Lock()
 	require.False(t, m.state.Sources[key].PublicationPending)
 	m.mu.Unlock()
-}
-
-// 小周期迁移必须在首启处理全部 Incomplete，并从有凭据半库续迁后正常二启三启。
-func TestPR61MigrationSmallCyclesAndRestarts(t *testing.T) {
-	root := t.TempDir()
-	fixture := chunkLegacyState(1, 30)
-	writeLegacyState(t, root, fixture)
-	path := filepath.Join(root, "var", "log", "ingest.state.json")
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	m := &Manager{root: root, indexCommit: stateindex.CommitBudget{MaxRows: 3, MinRows: 1, CycleMaxRows: 8}}
-	store, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
-	require.NoError(t, err)
-	desired, err := m.stateToIndexState(fixture)
-	require.NoError(t, err)
-	// 版本一夹具必须使用真实旧映射，不能混入本轮新增的独立确认凭据。
-	desired, err = legacyMappingV1(desired)
-	require.NoError(t, err)
-	migration, err := store.BeginMigration(context.Background(), fmt.Sprintf("%x", sha256.Sum256(data)), 1, desired)
-	require.NoError(t, err)
-	stats, err := store.ResumeMigration(context.Background(), migration)
-	require.NoError(t, err)
-	require.True(t, stats.Incomplete)
-	require.NoError(t, store.Close())
-	for round := 1; round <= 3; round++ {
-		manager, err := New(Options{Root: root, Catalog: catalog.New(nil), IndexCommit: &m.indexCommit})
-		require.NoError(t, err, "第%d次启动必须成功", round)
-		rows, err := manager.index.Load()
-		require.NoError(t, err)
-		require.Len(t, rows.WAL, 30)
-		if round == 1 {
-			require.NoFileExists(t, path)
-			require.FileExists(t, path+".migrated")
-		}
-		require.NoError(t, manager.Stop())
-	}
 }
 
 // 未变化源的历史大小不应扩大 scoped 行映射的分配量；根行内容仍须与全量一致。

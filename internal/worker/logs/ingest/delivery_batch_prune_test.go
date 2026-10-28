@@ -251,44 +251,7 @@ func TestDeliveryBatchPruneKeepsInstanceBindings(t *testing.T) {
 	require.Equal(t, "holder-g1", binding.Generation)
 }
 
-// TestMigrationComparisonToleratesPruneProgress 是 FR-496 迁移校验与裁剪的相容性回归。
-//
-// 真机可达形态：迁移已在库中提交、归档尚未完成（migrateLegacyState 的那条分支），而索引里
-// 的历史批次已按水位裁过、旧 JSON 里仍是完整历史。若按原样逐字段比对，会把一次正常启动
-// 误判为「索引与旧状态不一致」而拒绝启动采集（硬失败）。比对口径归一后必须通过。
-func TestMigrationComparisonToleratesPruneProgress(t *testing.T) {
-	root := t.TempDir()
-	fixture := migrationFixture() // 账本 reclaim=800，批次 [[0,500),[500,800)] 全在水位之下
-	writeLegacyState(t, root, fixture)
-
-	m, err := New(Options{Root: root, Catalog: catalog.New(catalog.NewMemJournal())})
-	require.NoError(t, err)
-	require.NoError(t, crashClose(m))
-
-	// 模拟「库侧已按水位裁掉历史批次」（裁剪写路径删的就是这些行）：直接删行，
-	// 等价于裁剪后的库内容。
-	dbPath := filepath.Join(root, "var", "log", "ingest.index.db")
-	db, err := sql.Open("sqlite", dbPath)
-	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), "DELETE FROM delivery_batch WHERE key = 'node:1/g1'")
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	// 把归档的旧 JSON 放回原路径（模拟归档前中断 / 人工回放归档）。
-	legacyPath := filepath.Join(root, "var", "log", "ingest.state.json")
-	archived, err := os.ReadFile(legacyPath + ".migrated")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(legacyPath, archived, 0o600))
-
-	// 重启：两侧裁剪进度不同（旧 JSON 完整、库已裁）但语义一致 ⇒ 必须正常启动并补归档。
-	restarted, err := New(Options{Root: root, Catalog: catalog.New(catalog.NewMemJournal())})
-	require.NoError(t, err, "裁剪进度差异不得被误判为迁移校验失败")
-	require.NoError(t, crashClose(restarted))
-	_, err = os.Stat(legacyPath)
-	require.ErrorIs(t, err, os.ErrNotExist, "重启后旧 JSON 应被补归档")
-}
-
-// TestComparisonStateNormalizesPruneProgressOnly 是上一条的单元形态，并给出**负向对照**：
+// TestComparisonStateNormalizesPruneProgressOnly 给出**负向对照**：
 // 归一化只吃掉「水位之下的恒等元差异」，水位之上的任何差异必须照样判为不一致。
 func TestComparisonStateNormalizesPruneProgressOnly(t *testing.T) {
 	entryWith := func(batches []ledger.DeliveryBatch) ledger.Entry {

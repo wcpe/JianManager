@@ -79,7 +79,7 @@ func scaleManager(t *testing.T, state *persistedState) *Manager {
 	t.Helper()
 	root := t.TempDir()
 	m := &Manager{
-		root: root, statePath: filepath.Join(root, "var", "log", "ingest.state.json"),
+		root: root,
 		state:   *state,
 		sources: map[string]SourceConfig{}, pipes: map[string]*pipeline.Pipeline{},
 		cat: catalog.New(catalog.NewMemJournal()),

@@ -92,8 +92,8 @@ func (s *Store) ReserveMaterialization(ctx context.Context, request Materializat
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.readOnly || s.migrationPending {
-		return reservation, false, retryAt, errors.New("stateindex: 当前索引不接受物化预留")
+	if s.readOnly {
+		return reservation, false, retryAt, errors.New("stateindex: 只读库不接受物化预留")
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -175,8 +175,8 @@ func (s *Store) UpdateMaterialization(ctx context.Context, id int64, update Mate
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.readOnly || s.migrationPending {
-		return errors.New("stateindex: 当前索引不接受物化回执")
+	if s.readOnly {
+		return errors.New("stateindex: 只读库不接受物化回执")
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {

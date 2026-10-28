@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // 受影响行数必须来自 SQLite，不得用计划数给性能观测或真实事务预算造数。
@@ -16,16 +17,27 @@ func TestIndexSQLRowsAffectedCountersUseActualChanges(t *testing.T) {
 			if _, err := s.Apply(source); err != nil {
 				t.Fatal(err)
 			}
-			migration, err := s.buildMigration(migrationTestSHA, 2, source)
+			var row pendingRow
+			plans, err := planState(source, time.Now().UnixMilli())
 			if err != nil {
 				t.Fatal(err)
 			}
-			var row pendingRow
-			for _, candidate := range migration.rows {
-				if candidate.table == table {
-					row = candidate
+			for _, rows := range plans[table] {
+				for _, candidate := range rows {
+					values, err := candidate.values()
+					if err != nil {
+						t.Fatal(err)
+					}
+					candidate.values = func() ([]any, error) { return values, nil }
+					row = pendingRow{table: table, row: candidate}
 					break
 				}
+				if row.row.key != "" {
+					break
+				}
+			}
+			if row.row.key == "" {
+				t.Fatalf("%s 表未规划出任何行", specs[table].name)
 			}
 			conn, err := s.db.Conn(ctx)
 			if err != nil {

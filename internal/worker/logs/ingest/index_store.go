@@ -2,21 +2,16 @@ package ingest
 
 // 采集索引（FR-496）的 Manager 侧粘合层：
 //   - 内存状态（persistedState）↔ stateindex 行的双向映射；
-//   - 旧 ingest.state.json 的一次性迁移：事务写入 → 读回逐字段校验 → 归档；
-//     校验不一致时拒绝启动采集（不静默降级），保留旧文件供人工处置；
 //   - JSON 只读导出（排障与回滚前的快照）。
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -28,207 +23,21 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
-// indexPath 返回采集索引库路径（与旧 ingest.state.json 同级，随 Worker 数据目录迁移）。
+// indexPath 返回采集索引库路径。
 func (m *Manager) indexPath() string {
 	return filepath.Join(m.root, "var", "log", "ingest.index.db")
 }
 
-// openIndex 打开（必要时创建）采集索引库，并在发现旧 JSON 状态时完成一次性迁移。
+// openIndex 打开（必要时创建）采集索引库。
 //
 // 任何失败都返回带「拒绝启动采集」字样的错误——由 New() 向上传递，调用方（apps/worker）
 // 现网路径会重试后显式 ERROR，绝不静默降级为「不记账继续采集」。
 func (m *Manager) openIndex() error {
 	store, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
 	if err != nil {
-		return fmt.Errorf("ingest: 打开采集索引失败（拒绝启动采集合规）: %w", err)
+		return fmt.Errorf("ingest: 打开采集索引失败（拒绝启动采集）: %w", err)
 	}
 	m.index = store
-	legacy, err := m.readLegacyState()
-	if err != nil {
-		return err
-	}
-	if legacy == nil {
-		// 无旧 JSON（或为空文件）：直接以索引为准启动。
-		return nil
-	}
-	return m.migrateLegacyState(legacy)
-}
-
-// readLegacyState 读取旧 ingest.state.json；不存在或为空文件时返回 nil（视为无旧状态）。
-func (m *Manager) readLegacyState() (*persistedState, error) {
-	data, err := os.ReadFile(m.statePath)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("ingest: 读取旧采集状态失败（拒绝启动采集）: %w", err)
-	}
-	if len(data) == 0 {
-		return nil, nil // 空文件视为无旧状态（与旧 load() 语义一致）
-	}
-	var legacy persistedState
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return nil, fmt.Errorf("ingest: 解析旧采集状态失败（拒绝启动采集，保留 %s 供人工处置）: %w", m.statePath, err)
-	}
-	normalizePersistedState(&legacy)
-	return &legacy, nil
-}
-
-// migrateLegacyState 把旧 JSON 状态一次性迁入索引库（spec §2.3）：
-//   - 空库：事务写入 → 读回逐字段比对 → integrity_check → 旧文件改名归档；
-//   - 非空库 + 旧文件仍在：说明上次迁移在「提交后、归档前」中断，或索引被人工改动——
-//     逐字段一致则补归档继续启动；不一致则拒绝启动，不静默以任何一侧覆盖另一侧。
-func (m *Manager) migrateLegacyState(legacy *persistedState) error {
-	// 只有旧来源入口需要从完整历史提取独立证据；稳态根行映射不能重复扫描未变化历史。
-	withEvidence := *legacy
-	withEvidence.Sources = make(map[string]persistedSource, len(legacy.Sources))
-	for key, saved := range legacy.Sources {
-		saved.Ledger = append([]ledger.Entry(nil), saved.Ledger...)
-		if len(saved.Ledger) > 0 {
-			entry := &saved.Ledger[0]
-			entry.RequestDoneRanges = ledger.RequestDoneRangesOf(entry)
-			entry.DeliveryEvidence = ledger.DeliveryEvidenceOf(entry)
-		}
-		withEvidence.Sources[key] = saved
-	}
-	desired, err := m.stateToIndexState(&withEvidence)
-	if err != nil {
-		return fmt.Errorf("ingest: 旧状态无法映射为索引行（拒绝启动采集）: %w", err)
-	}
-	// 比对会重算派生前缀，因此先保留来源原始双水位；不能把重算值当作旧裁剪授权。
-	pruneThrough := make(map[string]uint64, len(legacy.Sources))
-	for key, saved := range legacy.Sources {
-		if len(saved.Ledger) > 0 {
-			positions := saved.Ledger[0].Positions
-			pruneThrough[key] = min(positions.Reclaim, positions.Delivery)
-		}
-	}
-	// 绑定原始字节而非归一化后的 JSON：来源即使只被人工重新编码也不能静默续用旧凭据。
-	data, err := os.ReadFile(m.statePath)
-	if err != nil {
-		return fmt.Errorf("ingest: 读取迁移来源失败（拒绝启动采集）: %w", err)
-	}
-	var actual persistedState
-	if err := json.Unmarshal(data, &actual); err != nil {
-		return fmt.Errorf("ingest: 迁移来源变更（拒绝启动采集）: %w", err)
-	}
-	normalizePersistedState(&actual)
-	if !reflect.DeepEqual(comparisonState(legacy), comparisonState(&actual)) {
-		return fmt.Errorf("ingest: 旧状态在映射期间改变（拒绝启动采集，保留来源与索引）")
-	}
-	sourceSHA := fmt.Sprintf("%x", sha256.Sum256(data))
-	ctx := m.lifecycleCtx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	completed, err := m.index.CompletedMigration(ctx, sourceSHA, 2)
-	if err != nil {
-		// 已完成或未完成的旧凭据都要经来源与旧前缀验真后升级，不能仅因映射升版拒启。
-		if _, legacyErr := m.index.CompletedMigration(ctx, sourceSHA, 1); legacyErr != nil {
-			return fmt.Errorf("ingest: 迁移来源凭据无效（拒绝启动采集）: %w", err)
-		}
-		completed = false
-	}
-	if completed {
-		// 已验全的来源允许既有明确剪枝进度；无凭据或未完成的半库绝不走此豁免。
-		loaded, err := m.loadStateFromIndex()
-		if err != nil {
-			return fmt.Errorf("ingest: 已完成迁移索引读取失败（拒绝启动采集）: %w", err)
-		}
-		if !reflect.DeepEqual(comparisonState(legacy), comparisonState(loaded)) {
-			return fmt.Errorf("ingest: 已完成迁移索引与来源不一致（拒绝启动采集）")
-		}
-		current, err := os.ReadFile(m.statePath)
-		if err != nil || fmt.Sprintf("%x", sha256.Sum256(current)) != sourceSHA {
-			return fmt.Errorf("ingest: 已完成迁移来源改变（拒绝启动采集）")
-		}
-		return m.archiveLegacyState()
-	}
-	legacyRows, err := legacyMappingV1(desired)
-	if err != nil {
-		return err
-	}
-	migration, err := m.index.BeginMigrationV2WithPrune(ctx, sourceSHA, desired, legacyRows, pruneThrough)
-	if err != nil {
-		return fmt.Errorf("ingest: 采集索引与旧状态文件不一致或迁移凭据无效（拒绝启动采集）: %w", err)
-	}
-	for {
-		stats, err := m.index.ResumeMigration(ctx, migration)
-		if err != nil {
-			return fmt.Errorf("ingest: 迁移写入索引失败（拒绝启动采集，保留可恢复进度）: %w", err)
-		}
-		if !stats.Incomplete {
-			break
-		}
-	}
-	if err := m.index.FinalizeMigration(ctx, migration); err != nil {
-		return fmt.Errorf("ingest: 迁移最终校验失败（拒绝启动采集）: %w", err)
-	}
-	// 所有有界迁移周期验全后，把 WAL 归并回主库，避免带着 GB 级 WAL 进入稳态
-	// （生产演练实测：不归并时 -wal 残留 453.6 MB）。归并失败不改变迁移结果——
-	// 数据仍在 WAL 中且可见，降级为「下次打开时自动归并」，故只告警不失败。
-	if err := m.index.Checkpoint(); err != nil {
-		slog.Warn("采集索引迁移后 WAL 归并未完成（数据仍可见，将延后归并）", "error", err)
-	}
-	if err := m.index.IntegrityCheck(); err != nil {
-		return fmt.Errorf("ingest: 迁移后索引完整性校验失败（拒绝启动采集）: %w", err)
-	}
-	loaded, err := m.loadStateFromIndex()
-	if err != nil {
-		return fmt.Errorf("ingest: 迁移后重新读取索引失败（拒绝启动采集）: %w", err)
-	}
-	if !reflect.DeepEqual(comparisonState(legacy), comparisonState(loaded)) {
-		return fmt.Errorf("ingest: 迁移校验失败：索引内容与旧状态不一致，拒绝启动采集（保留 %s 供人工处置）", m.statePath)
-	}
-	current, err := os.ReadFile(m.statePath)
-	if err != nil || fmt.Sprintf("%x", sha256.Sum256(current)) != sourceSHA {
-		return fmt.Errorf("ingest: 迁移来源在提交期间改变（拒绝启动采集，不归档旧 JSON）: %v", err)
-	}
-	return m.archiveLegacyState()
-}
-
-// legacyMappingV1 精确重建旧映射漏掉的新字段，仅用于验证旧凭据，绝不作为新状态的一致性豁免。
-func legacyMappingV1(current stateindex.State) (stateindex.State, error) {
-	legacy := current
-	legacy.Gaps = append([]stateindex.GapRow(nil), current.Gaps...)
-	for i := range legacy.Gaps {
-		gap := &legacy.Gaps[i]
-		gap.FoldSpans, gap.FoldSpanMerges, gap.FoldSpansUnknown = nil, 0, false
-		gap.ReasonCode, gap.ResolvedAtUTC, gap.ResolvedBy = "", "", ""
-	}
-	legacy.Aux = append([]stateindex.AuxRow(nil), current.Aux...)
-	for i := range legacy.Aux {
-		if len(legacy.Aux[i].Payload) == 0 {
-			continue
-		}
-		var aux indexAux
-		if err := json.Unmarshal(legacy.Aux[i].Payload, &aux); err != nil {
-			return stateindex.State{}, err
-		}
-		if aux.LedgerCore != nil {
-			aux.LedgerCore.ConfirmedFingerprint = nil
-			aux.LedgerCore.RequestDoneRanges = nil
-			aux.LedgerCore.DeliveryEvidence = nil
-		}
-		payload, err := json.Marshal(aux)
-		if err != nil {
-			return stateindex.State{}, err
-		}
-		legacy.Aux[i].Payload = payload
-	}
-	return legacy, nil
-}
-
-// archiveLegacyState 把旧 JSON 改名归档（保留一个版本，不删除）。
-// 归档名带 .migrated 后缀；若已被占用则追加时间戳，绝不覆盖已归档版本。
-func (m *Manager) archiveLegacyState() error {
-	target := m.statePath + ".migrated"
-	if _, err := os.Stat(target); err == nil {
-		target = m.statePath + ".migrated." + time.Now().UTC().Format("20060102T150405Z")
-	}
-	if err := os.Rename(m.statePath, target); err != nil {
-		return fmt.Errorf("ingest: 迁移完成但旧状态归档失败（拒绝启动采集）: %w", err)
-	}
 	return nil
 }
 
@@ -977,14 +786,12 @@ func lessWALRef(a, b acquire.WALRef) bool {
 // Positions.Delivery 按 ledger 的口径重算（ledger.Restore 本就重算它，见
 // ledger.ContiguousDeliveryEnd），并按**同一判据**裁掉水位之下的历史投递批次。
 //
-// 为什么只在比对时重算：索引落库保留原值，便于断言字段确实被搬运；而比对必须忽略派生值噪声
-// ——真机现场是「归档 JSON 里是写回前的旧值、索引里是重算后的值」，二者语义相同，按原值比对
-// 会把一次正常启动误判为校验失败并拒绝采集。
+// 为什么只在比较时重算：索引落库保留原值，便于断言字段确实被搬运；而比较必须忽略派生值噪声
+// ——落库前的值是当时的推导，读回后按规格重算，二者语义相同，按原值比较会把一次正常重启
+// 误判为不一致。
 //
-// 为什么还要在比对里裁剪：裁剪只发生在**写路径**上（ledger 的写方法），而归档 JSON 与索引库的
-// 裁剪进度可以不同——真机可达的形态是「迁移已在库中提交、归档尚未完成」（migrateLegacyState
-// 的那条分支），此时旧 JSON 仍是完整历史、索引里已被裁过。按原样 DeepEqual 会把一次正常启动
-// 误判为「索引与旧状态不一致」而拒绝启动采集。裁剪是恒等元变换（判据与证明见
+// 为什么还要在比较里裁剪：裁剪只发生在**写路径**上（ledger 的写方法），而两侧的基线可能
+// 处于不同裁剪进度（例如一侧是裁剪前的快照）。裁剪是恒等元变换（判据与证明见
 // ledger.PruneDeliveryBatches），归一后两侧仍逐字段可比，真正的搬运错误照样会被抓出来。
 //
 // 口径固定为「严格按水位」（keepRecent=0）：两侧同口径即可，开关只影响落库行数、不影响语义。
@@ -1116,7 +923,7 @@ func (m *Manager) PersistNow() (stateindex.Stats, error) {
 	return stats, nil
 }
 
-// ExportIndexJSON 只读导出索引内容为旧 ingest.state.json 同等结构的 JSON（排障与回滚参考）。
+// ExportIndexJSON 只读导出索引内容为 persistedState 同等结构的 JSON（排障与回滚前快照）。
 // 库不存在或不可读时返回错误；不创建、不修改任何文件。
 func ExportIndexJSON(root string, out io.Writer) error {
 	if root == "" {

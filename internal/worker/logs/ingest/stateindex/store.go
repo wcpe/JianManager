@@ -352,11 +352,9 @@ type Stats struct {
 // Store 是索引库的句柄。单写者单连接（spec §2.1）：所有写入都经 SetMaxOpenConns(1) 的连接，
 // 且每次写入都是一个 IMMEDIATE 事务——崩溃时未提交的事务整体丢弃，已提交的批次整体保留。
 type Store struct {
-	path             string
-	db               *sql.DB
-	readOnly         bool
-	migration        *Migration
-	migrationPending bool
+	path     string
+	db       *sql.DB
+	readOnly bool
 
 	mu sync.Mutex
 	// mirror 记录每张表当前已落库行的指纹，结构为「归属键 → 主键编码 → fp」。
@@ -557,19 +555,6 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("stateindex: 写入 schema 版本失败: %w", err)
 	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	record, exists, err := readMigrationRecord(ctx, conn)
-	_ = conn.Close()
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	// 重启不能绕过持久化的迁移所有权；先恢复凭据再允许普通采集写入。
-	s.migrationPending = exists && !record.Complete
 	if err := s.loadMirror(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1064,9 +1049,6 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	defer s.mu.Unlock()
 	if s.readOnly {
 		return Stats{}, errors.New("stateindex: 只读库不接受写入")
-	}
-	if s.migration != nil || s.migrationPending {
-		return Stats{}, errors.New("stateindex: 迁移未完成，不接受普通写入")
 	}
 	started := time.Now()
 	stats := Stats{Written: map[string]int{}, Deleted: map[string]int{}, Planned: map[string]int{}}

@@ -33,8 +33,8 @@ type RecoveryAuditRow struct {
 func (s *Store) AppendRecoveryAudit(ctx context.Context, records []RecoveryAuditRow) ([]RecoveryAuditRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.readOnly || s.migrationPending {
-		return nil, errors.New("stateindex: 当前索引不接受恢复审计写入")
+	if s.readOnly {
+		return nil, errors.New("stateindex: 只读库不接受恢复审计写入")
 	}
 	if len(records) > s.budget.MaxRows || len(records) > s.budget.CycleMaxRows {
 		return nil, errors.New("stateindex: 恢复审计批次超过提交预算")
@@ -74,7 +74,7 @@ func (s *Store) AppendRecoveryAudit(ctx context.Context, records []RecoveryAudit
 	return out, nil
 }
 
-func lookupRecoveryAudit(ctx context.Context, reader migrationQuery, source, ref string) (RecoveryAuditRow, bool, error) {
+func lookupRecoveryAudit(ctx context.Context, reader rowReader, source, ref string) (RecoveryAuditRow, bool, error) {
 	var row RecoveryAuditRow
 	var checksum string
 	err := reader.QueryRowContext(ctx, "SELECT source_key,ref_key,fingerprint,payload,payload_sha,archive_id FROM recovery_audit WHERE source_key=? AND ref_key=?", source, ref).Scan(&row.SourceKey, &row.RefKey, &row.Fingerprint, &row.Payload, &checksum, &row.ArchiveID)

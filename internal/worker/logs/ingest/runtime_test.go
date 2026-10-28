@@ -291,7 +291,7 @@ func TestManagerPartitionsProjectionByCanonicalEventUTCDay(t *testing.T) {
 	m := &Manager{
 		root: root, vl: client, cat: cat, journal: cat.Journal(), pipes: map[string]*pipeline.Pipeline{},
 		state:     persistedState{Sources: map[string]persistedSource{source.LogSourceID + "/" + source.SourceGeneration: {}}},
-		statePath: filepath.Join(root, "var", "log", "ingest.state.json"), verificationTimeout: time.Second,
+		verificationTimeout: time.Second,
 	}
 	identity := logtypes.SourceIdentity{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1"}
 	events := []logtypes.Event{
