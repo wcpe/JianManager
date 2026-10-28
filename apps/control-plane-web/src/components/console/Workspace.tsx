@@ -7,6 +7,21 @@ import { ROUTE_CHUNKS } from '@/lib/shared/route-chunks'
 import WorkspaceEmpty from '@/components/views/console/WorkspaceEmpty'
 
 /**
+ * 重定向到新路径，但**保留原有查询参数**。
+ *
+ * 为什么不能直接用 `<Navigate to="/monitor" replace />`：`to` 里没有 query，
+ * 重定向会把原 URL 的 `?instance=<uuid>` / `?node=<uuid>` 一起丢掉。
+ * 概览页「Top 实例 / Top 受管进程 / 节点归因」的下钻链接正是靠这些参数定位到具体实体——
+ * 参数一丢，用户点进去看到的是全平台监控，而不是他点的那台（实测确认过）。
+ *
+ * 保留 query 也让外部收藏夹/文档里的旧链接继续有效（本组件的存在意义）。
+ */
+function RedirectKeepQuery({ to }: { to: string }) {
+  const location = useLocation()
+  return <Navigate to={`${to}${location.search}`} replace />
+}
+
+/**
  * 路由表的懒加载声明（FR-502 阶段 6 补丁）：加载器一律从 `@/lib/route-chunks` 取，
  * 不再各写一份 `import('@/pages/X')`——预取器查的就是同一张表，两处同源才能保证
  * 「hover 预取过的 chunk」与「点下去要等的 chunk」是同一个（否则预取会静默失效）。
@@ -212,10 +227,12 @@ export default function Workspace() {
             <Route path="statistics" element={<StatisticsPage />} />
             {/* FR-430：旧监控路由改重定向到页面 B「客户端分发运维」（观测入口已并入）。 */}
             <Route path="client-dist-monitor" element={<ClientDistRedirect source="monitor" />} />
-            {/* 观测域同义旧链接重定向兼容（FR-215）：避免外部/手输旧路径 404。 */}
-            <Route path="monitoring" element={<Navigate to="/monitor" replace />} />
-            <Route path="stats" element={<Navigate to="/statistics" replace />} />
-            <Route path="observability" element={<Navigate to="/monitor" replace />} />
+            {/* 观测域同义旧链接重定向兼容（FR-215）：避免外部/手输旧路径 404。
+                必须用 RedirectKeepQuery 而不是 Navigate：旧深链常带 ?instance=<uuid>，
+                裸 Navigate 会把参数吞掉，用户点进来看到的是全平台而不是他那台。 */}
+            <Route path="monitoring" element={<RedirectKeepQuery to="/monitor" />} />
+            <Route path="stats" element={<RedirectKeepQuery to="/statistics" />} />
+            <Route path="observability" element={<RedirectKeepQuery to="/monitor" />} />
             <Route path="storage" element={<StoragePage />} />
             <Route path="settings" element={<SettingsPage />} />
             {/* AI 助手配置（FR-514）：供应商/模型/默认模型，仅平台管理员。 */}
