@@ -38,6 +38,9 @@ var layoutDirs = []string{
 	filepath.Join("var", "log"),
 	filepath.Join("var", "artifacts"),
 	filepath.Join("var", "index"),
+	// AI 助手技能目录（FR-541）：<root>/var/skills/<name>/SKILL.md。
+	// 放 var 下而不是 etc：它是可被管理页增删的运营内容，不是进程配置。
+	filepath.Join("var", "skills"),
 	"cache",
 }
 
@@ -104,6 +107,12 @@ func (r *Root) LogDir() string { return filepath.Join(r.base, "var", "log") }
 
 // ArtifactsDir 返回制品库根目录 <root>/var/artifacts（见 ADR-011）。
 func (r *Root) ArtifactsDir() string { return filepath.Join(r.base, "var", "artifacts") }
+
+// SkillsDir 返回 AI 助手技能目录 <root>/var/skills（FR-541）。
+//
+// 每个技能是一个子目录，内含 `SKILL.md`（YAML frontmatter + Markdown 正文）。
+// 目录名即技能名；没有 `SKILL.md` 的子目录不算技能（与 Vantaloom 的官方技能目录约定一致）。
+func (r *Root) SkillsDir() string { return filepath.Join(r.base, "var", "skills") }
 
 // IndexDir 返回全文搜索索引根目录 <root>/var/index（每实例一子目录，见 ADR-017）。
 // 这是 Worker 本地派生资产（倒排索引），绝不进 CP 数据库；可随时删除重建。
