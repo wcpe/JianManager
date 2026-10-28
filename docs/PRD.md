@@ -574,7 +574,7 @@
 | FR-483 | 日志平台文档对账（docs）：Shared Contracts/ADR 迁入受控文档；资产清单与许可；恢复手册；数据损失边界；资源预算；合法配置组合；切换与故障处理；ARCHITECTURE/API/CHANGELOG | — | ✅ 已交付@v0.24.0·docs（已对账 ARCHITECTURE/API/CHANGELOG/PRD/规格状态；已补受控文档 `worker-victorialogs-runtime/asset-inventory.md`（资产清单/许可）+ `worker-log-platform-contract/recovery-manual.md`（恢复与故障处置）+ `worker-log-platform-contract/acceptance-record.md`（**持久真机验收记录**，缓解 `.tmp` 证据不入库）） |
 | FR-484 | canonical 事件体落盘 compact（feat） | P1 | ✅ 已交付@v0.24.0 |
 | FR-485 | 日志平台可观测性与告警（feat，增强 FR-474/484） | P1 | 🔨 部分交付@v0.24.0（**仅采集健康指标链路已落**：#49 落地 `log_ingest_healthy` 经 Worker 心跳上报 → CP 落库 → 内置告警触发联动；其余范围——state 文件尺寸与增速、persist 写字节/秒、单源 WAL 积压条数与暂停时长、投递失败率与分类、校验退避次数、慢 SQL 计数，以及**节点层 iowait 采集与比率触发**——**均未实现**） |
-| FR-486 | Worker 启动时长与状态加载可观测性（feat，性能/可观测，增强 FR-474/484） | P1 | 🔨 开发中 |
+| FR-486 | Worker 启动时长与状态加载可观测性（feat，性能/可观测，增强 FR-474/484） | P1 | 🔨 开发中·**范围①②④ 已实现并真机验证，范围③ 部分完成**（①冷启动实测 **76 ms** 总耗时、逐阶段 ≤6ms，当年的「8m39s」由大索引导致、正常规模不复现；②`ReportStartupProgress` RPC + `node_startup_progresses` 表 + `/nodes/startup-progress`，注册前即可见、注册后清理；③`Load()` 规模曲线实测线性（100k 行 453ms），已优化扫描缓冲区复用（**内存 −32% / 分配次数 −21%**），**4× 耗时目标未达成**——本机 load 212 且无法 drop_caches，机械盘随机 IO 特性测不准，不盲改；④`state_warn_mb` 默认 512MB，实测中发现并修掉两处「告警永不触发」缺陷：只扫 `var/log` 漏了 `var/index`、告警被埋在「配了采集源」分支内。详见 `docs/specs/worker-startup-observability/spec.md` §7） |
 | FR-489 | MCP 端点无状态化与 Token 维度运维视图（feat，修订 **FR-388/389/391**、作废 **FR-439**） | P1 | ✅ 已交付@v0.24.0 |
 | FR-490 | 审批票据与状态机内核（feat） | P0 | ✅ 已交付@v0.24.0 |
 | FR-491 | 审批执行器与执行回执（feat，依赖 FR-490） | P0 | ✅ 已交付@v0.24.0 |
@@ -588,18 +588,18 @@
 | FR-499 | 采集登记路径与长临界区解耦 | P1 | 🔨 开发中 |
 | FR-500 | daemon 子树脱离 Worker 单元 cgroup | P0 | 🔨 开发中 |
 | FR-501 | 日志成本治理（分层/采样/保留）与冷层搬运 | P1 | 🔨 开发中 |
-| FR-502 | 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec） | P1 | 🔨 开发中 |
-| FR-503 | 主题配色对比度自动校验（test，免 spec） | P1 | 🔨 开发中 |
-| FR-504 | 内容页布局规范层（feat，免 spec） | P1 | 🔨 开发中 |
-| FR-505 | 导航外壳组件层（feat，免 spec，承 FR-504 边界） | P1 | 🔨 开发中 |
-| FR-506 | 工作区导航数据层（feat，免 spec） | P1 | 🔨 开发中 |
-| FR-507 | 主控台外壳接入与页面迁移（feat，依赖 FR-502~506，免 spec） | P1 | 🔨 开发中 |
+| FR-502 | 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec） | P1 | 🔨 开发中·阶段 1 完成（设计底座单一真源已落：`packages/ui/src/styles/` 的 token/主题/动效入口齐备，主控台与控件博物馆均改为一次 `@import` 取底座；`dark:` 变体经 `@custom-variant` 绑定 `.dark` class。明细见 `docs/specs/unspecced-fr-records/spec.md`） |
+| FR-503 | 主题配色对比度自动校验（test，免 spec） | P1 | 🔨 开发中·阶段 2 完成（对比度门禁已落：`packages/ui/src/lib/color-contrast.ts` + 110 项配对断言，5 套主题 × 明暗全覆盖。明细见免 spec 记录） |
+| FR-504 | 内容页布局规范层（feat，免 spec） | P1 | 🔨 开发中·阶段 3 完成（布局规范层已落：`packages/ui/src/components/layout/` 提供 PageShell 三壳态 / PageHeader / ScopeBar / SummaryStrip / Toolbar / PlatformTabs 与网格原语；实测 views 下 46 个 `*PageView` 中 41 个已改用该层） |
+| FR-505 | 导航外壳组件层（feat，免 spec，承 FR-504 边界） | P1 | 🔨 开发中·阶段 4 完成（导航原语层已落于 `packages/ui/src/components/nav/`；正文所述 `shell/` 路径与 AppShell/ResourceTree 已按「零引用删除」重构，按「已有 FR 只改状态字段」约定未改正文） |
+| FR-506 | 工作区导航数据层（feat，免 spec） | P1 | 🔨 开发中·阶段 5 完成（工作区导航数据层已落于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`；四工作区 × 组 × 页面共 42 条登记 + 3 认证页；权限语义与旧六域逐条等价的 17 项用例全绿） |
+| FR-507 | 主控台外壳接入与页面迁移（feat，依赖 FR-502~506，免 spec） | P1 | 🔨 开发中·阶段 6 完成（**四验收全部达成**：①桌面侧栏/移动导航/命令面板三处消费方统一以 `workspace-navigation.ts` 为真源；②内容页 41/46 已用 FR-504 原语，余 5 为认证页与全幅画布页；③真浏览器实测——日志中心 12004 条仅挂 24 行 DOM（0.2%）、滚动重挂载 326.8/286.6/691.0 ms、long task 0 次；④`nav-config.ts` 与死代码 `ConsoleSidebar` 已删，旧 41 条登记冻结成快照继续做等价性对照，`Workspace.tsx` 路由 47→54 条从未削减。全量前端回归 3284/3284 通过） |
 | FR-508 | 应用业务组件受控化迁入组件库（ref，免 spec，补 FR-502~507 未覆盖的「业务组件所有权」范围，架构决策见 ADR-102） | — | ❌ 已废弃 |
 | FR-509 | 侧栏资源面板收敛为「一个分组方式 + 服务器列表」（feat，增强 FR-165/FR-293，免 spec） | — | ✅ 已交付@v0.24.0 |
 | FR-510 | 删除侧栏本地自定义分组并清掉其类型错误（ref，免 spec，与 FR-509 同批交付） | P1 | ✅ 已交付@v0.24.0 |
 | FR-511 | 侧栏服务器列表精简与虚拟化（feat，增强 FR-165/FR-509，免 spec） | — | ✅ 已交付@v0.24.0 |
 | FR-512 | 侧栏服务器行标注「服务端类别」三分法（feat，增强 FR-511，免 spec） | — | ✅ 已交付@v0.24.0 |
-| FR-513 | 节点主机级观测采集补全（feat，为首页悬浮卡取证深度；详见 `docs/specs/inflight-backlog/spec.md`） | — | 🔨 开发中 |
+| FR-513 | 节点主机级观测采集补全（feat，为首页悬浮卡取证深度；详见 `docs/specs/inflight-backlog/spec.md`） | — | 🔨 开发中·**实现与真机取证均已完成**（Worker `hostobs` 采集 → 心跳 → CP 入库 → 首页悬浮卡四处新版式：负载三档 / CPU 构成含 iowait / 分挂载点磁盘 / 整机 Top 进程+进程数。§6 四个待定项已在实现中定案：不含 guest、进程计数读 `/proc` 走独立 goroutine、挂载点进快照表。**真机截图取证已完成**：`docs/screenshots/fr513-host-obs/` 5 张，实测渲染出负载 42.5/58.7/71.2%、iowait 19.3%（总占用仅 32% 的 IO 瓶颈）、`/var` 95% 而 `/` 14.4%、整机 Top 含 `rsync`/`mysqld` 等非受管进程。取证中一并补齐 `api/metrics.ts` 缺失的 6 个主机级字段契约与 devmock 缺失的 `/metrics/resource-attribution` 端点） |
 | FR-514 | AI 供应商、模型与平台配置 | P0 | ✅ 已交付@v0.24.0 |
 | FR-515 | Go 内置轻量 Agent 与私有会话 | P0 | ✅ 已交付@v0.24.0 |
 | FR-516 | 当前用户受限系统工具与逐调用写入确认（feat，增强 Agent/MCP，需 spec，依赖 FR-515） | P0 | ✅ 已交付@v0.24.0 |
