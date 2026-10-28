@@ -19,6 +19,7 @@
 ### 代码质量
 - [ ] 无编译错误
 - [ ] 无 lint 错误
+- [ ] 新增 / 修改的代码里没有 FR 编号：`sh .claude/scripts/check-no-fr-in-code.sh` 通过（存量豁免见 [no-fr-in-code.md](no-fr-in-code.md)）
 - [ ] 核心逻辑有测试覆盖
 - [ ] 状态 / 迁移类变更已按 [testing-and-quality.md](testing-and-quality.md)「状态 / 迁移类变更」跑通「迁移 → 首启 → 停 → 二启 → 三启」（含脏环境），并附逐轮记录
 - [ ] 长临界区审计：按本文「长临界区审计」清单逐条核对（无共享锁跨越 Poll / 投递 / 持久化，锁获取点标注锁序与最坏持有量，跨进程调用不在持锁区内）
