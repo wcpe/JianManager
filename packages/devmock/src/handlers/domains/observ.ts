@@ -1586,6 +1586,128 @@ export const handlers = [
     return HttpResponse.json(body)
   }),
 
+  /*
+    首页资源球归因（FR-402，含 FR-513 主机级观测）。
+
+    【为何必须补这个端点】它原本在 mock 里完全缺失，于是首页悬浮卡在 mock 模式下
+    永远拉不到数据、只能渲染空态——那会让「主机级新版式」在本地与 e2e 里都无法验收，
+    也容易把「没数据」误判成「版式没做」。
+
+    【主机级字段为何写成真实数据】FR-513 的四处新版式（负载三档 / CPU 构成 /
+    分挂载点磁盘 / 整机 Top 进程）全靠这些字段渲染；给 null 就只能看到 `--`，
+    截图与机器人验收都失去意义。数值取自一个典型跑游戏的宿主机（刻意做高 iowait，
+    因为那正是这类面板存在的理由：IO 瓶颈会被误读成「CPU 不满、机器很闲」）。
+  */
+  domainRoute('get', '/metrics/resource-attribution', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const sort = url.searchParams.get('sort') === 'memory' ? 'memory' : 'cpu'
+    const limit = Math.min(20, Math.max(1, Number(url.searchParams.get('limit') ?? 5) || 5))
+    const now = new Date().toISOString()
+
+    const nodeRows = db<{ id: number; uuid: string; name: string; status: number; cpuUsage: number; memoryUsage: number; memoryMb: number }>('nodes').list()
+
+    const nodes = nodeRows.map((n, idx) => {
+      const cpuPct = Math.round((n.cpuUsage ?? 0.3) * 1000) / 10
+      const memTotal = (n.memoryMb ?? 32768) * 1024 * 1024
+      // 让每台节点的形态不同：idx 偶数演示典型 IO 瓶颈，奇数偏 CPU 密集。
+      const ioHeavy = idx % 2 === 0
+      const cpuBreakdown = ioHeavy
+        ? { user: 18.4, nice: 0.2, system: 9.6, idle: 51.2, iowait: 19.3, irq: 0.4, softirq: 0.7, steal: 0.2 }
+        : { user: 47.8, nice: 0.1, system: 12.5, idle: 37.9, iowait: 1.2, irq: 0.2, softirq: 0.3, steal: 0 }
+
+      return {
+        nodeId: n.id,
+        nodeUuid: n.uuid,
+        name: n.name,
+        status: 'fresh',
+        observedAt: now,
+        cpuPct,
+        // 负载均已按核数归一（与 loadPct 同口径）：ioHeavy 节点 5m/15m 高于 1m，演示「持续爬升」。
+        loadPct: ioHeavy ? 42.5 : 61.3,
+        load5Pct: ioHeavy ? 58.7 : 55.1,
+        load15Pct: ioHeavy ? 71.2 : 48.6,
+        memoryUsedBytes: Math.round(memTotal * (n.memoryUsage ?? 0.5)),
+        memoryTotalBytes: memTotal,
+        workerProcessRssBytes: 184 * 1024 * 1024,
+        workerProcessCpuPct: 3.6,
+        botWorker: {
+          rssBytes: 96 * 1024 * 1024,
+          cpuPct: 1.4,
+          activeCount: 12,
+          connectingCount: 1,
+          eventLoopP95Ms: 18.2,
+          available: true,
+          reason: '',
+        },
+        procsRunning: ioHeavy ? 32 : 58,
+        procsTotal: ioHeavy ? 11023 : 8942,
+        cpuBreakdown,
+        // 分挂载点：ioHeavy 节点模拟「/var 写满而 / 还宽松」——单值 diskUsage 看不到的典型盲区。
+        mounts: ioHeavy
+          ? [
+              { mountpoint: '/var', totalBytes: 107374182400, usedBytes: Math.round(107374182400 * 0.95), usedPct: 95 },
+              { mountpoint: '/', totalBytes: 536870912000, usedBytes: Math.round(536870912000 * 0.144), usedPct: 14.4 },
+              { mountpoint: '/data', totalBytes: 2147483648000, usedBytes: Math.round(2147483648000 * 0.62), usedPct: 62 },
+            ]
+          : [
+              { mountpoint: '/', totalBytes: 536870912000, usedBytes: Math.round(536870912000 * 0.48), usedPct: 48 },
+              { mountpoint: '/data', totalBytes: 2147483648000, usedBytes: Math.round(2147483648000 * 0.71), usedPct: 71 },
+            ],
+      }
+    })
+
+    // 受管实例 TOP（与 /metrics/processes/top 同口径：按 sort 排序后截断）。
+    const instances = db<{ id: number; uuid: string; name: string }>('instances').list().slice(0, limit)
+    const topInstances = instances.map((inst, i) => ({
+      instanceId: inst.id,
+      instanceUuid: inst.uuid,
+      instanceName: inst.name,
+      nodeId: 1,
+      cpuPct: Number((28 - i * 4.5).toFixed(1)),
+      rssBytes: (1.4 - i * 0.15) * 1024 * 1024 * 1024,
+      sampledAt: now,
+    }))
+
+    const topProcesses = instances.map((inst, i) => ({
+      instanceId: inst.id,
+      instanceUuid: inst.uuid,
+      instanceName: inst.name,
+      nodeId: 1,
+      pid: 24012 + i * 100,
+      name: 'java',
+      cpuPercent: Number((22.4 - i * 3.2).toFixed(1)),
+      rssBytes: 1.2 * 1024 * 1024 * 1024,
+      sampledAt: now,
+    }))
+
+    /*
+      整机 Top 进程（与受管 Top 是两个口径）：这里故意包含系统进程与「别人的进程」，
+      因为运维判断「机器为什么慢」时看的正是后两者——只看受管进程树会得出
+      「我们都闲着，为什么机器这么卡」的错误结论。
+      不带 cmdline（隐私边界，与后端 model.HostProcessSnapshot 一致）。
+    */
+    const hostTopProcesses = [
+      { nodeId: 1, nodeName: nodeRows[0]?.name ?? 'alpha', pid: 548193, comm: 'java', cpuPct: 232.4, rssBytes: 3.1 * 1024 * 1024 * 1024 },
+      { nodeId: 1, nodeName: nodeRows[0]?.name ?? 'alpha', pid: 971797, comm: 'worker', cpuPct: 88.6, rssBytes: 640 * 1024 * 1024 },
+      { nodeId: 1, nodeName: nodeRows[0]?.name ?? 'alpha', pid: 1117273, comm: 'rsync', cpuPct: 41.2, rssBytes: 96 * 1024 * 1024 },
+      { nodeId: 1, nodeName: nodeRows[0]?.name ?? 'alpha', pid: 381184, comm: 'mysqld', cpuPct: 18.7, rssBytes: 1.8 * 1024 * 1024 * 1024 },
+      { nodeId: 1, nodeName: nodeRows[0]?.name ?? 'alpha', pid: 224522, comm: 'node', cpuPct: 12.3, rssBytes: 320 * 1024 * 1024 },
+    ]
+      .sort((a, b) => (sort === 'memory' ? b.rssBytes - a.rssBytes : b.cpuPct - a.cpuPct))
+      .slice(0, limit)
+
+    return HttpResponse.json({
+      sampledAt: now,
+      freshness: 'fresh',
+      nodes,
+      topInstances,
+      topProcesses,
+      hostTopProcesses,
+    })
+  }),
+
   domainRoute('get', '/metrics/processes/top', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
