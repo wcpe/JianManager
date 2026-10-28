@@ -1,6 +1,6 @@
 # 功能规格：节点主机级观测采集补全
 
-> 状态：草拟（待审核）　·　关联 PRD：FR-513（P2）　·　分支：feature/web-overhaul
+> 状态：**已实现**（链路与版式均已落地，§6 四个待定项已在实现中定案，见文末「实现现状」）　·　关联 PRD：FR-513（P2）　·　分支：feature/web-overhaul
 >
 > 本 spec 补充并订正 `docs/specs/inflight-backlog/spec.md` §FR-513。**订正点见 §6 待定 1**。
 
@@ -127,3 +127,55 @@
 4. **【需拍板】多值维度的编码方式**：分挂载点与 top-N 是多值，`MetricSampleRaw` 是单值表。方案 A：`metric_key` 内嵌挂载点（`node_mount_used_pct@/var`）；方案 B：不改时序表，只进 `HostMountSnapshot`，时序仅保留「最大使用率」等聚合值。默认 **A**（可查历史趋势），代价是 `metric_key` 基数随挂载点数增长。
 5. **风险**：top-N 进程扫描在进程数极多（数千）的宿主机上单次开销可能达数十毫秒，落在心跳 goroutine 会拖慢心跳。缓解：扫描放独立 goroutine + 结果快照，心跳只读快照（与 `CPUSampler` 同款生产者/消费者形态）。
 6. **风险**：`disk.Partitions(false)` 在容器内可能仍返回 overlay 之外的主机分区，导致跨容器泄漏宿主挂载信息。缓解：`host_observe.mounts` 白名单优先于自动发现；文档注明容器部署需显式配置。
+
+---
+
+## 7. 实现现状（2026-10-28 核对）
+
+§6 的四个【需拍板】项在实现中均已定案，链路已贯通 Worker → CP → API → 前端：
+
+| §6 项 | 最终选择 | 代码位置 |
+|---|---|---|
+| 待定 1（版式是否就位） | **已补版式**。`GaugeAttributionTooltip` 现有四处新版式：负载三档、CPU 构成、分挂载点磁盘、整机 Top 进程 + 进程数；未上报时整体不渲染（不占位） | `apps/control-plane-web/src/components/views/overview/OverviewPageView.tsx` 与 `OverviewHostObs.dom.test.tsx`（7 项断言） |
+| 待定 2（CPU 是否含 guest） | **不含**。`/proc/stat` 有这两列但非虚拟化宿主恒为 0；且 guest 已计入 user/nice，重复累计会失真 | `internal/worker/metrics/cpu_sampler.go`（注释写明取舍） |
+| 待定 3（进程计数取法） | **读 `/proc`，不做全表扫描**；采集放在独立 goroutine，心跳只读快照（§6 风险 5 的缓解措施已落实） | `internal/worker/hostobs/collector.go` 的 `Start` / `collectOnce` / `publish` |
+| 待定 4（多挂载点编码） | **进 `HostMountSnapshot` 快照**（`req.HostMounts`），不写前端推算值 | `internal/worker/register/register.go`、`internal/controlplane/grpc/host_snapshot.go` |
+
+后端采集器：`internal/worker/hostobs/collector.go`（整机 Top-N 进程 `collectProcesses`、挂载点 `collectMounts`、
+伪文件系统过滤、`Options.Mounts` 白名单优先于自动发现——即 §6 风险 6 的缓解）。
+入库与下发：`internal/controlplane/grpc/host_snapshot.go`；
+心跳装配：`Heartbeat.SetHostObserver` + `register.CollectHeartbeatDataWithHost`。
+
+### 7.1 真机截图取证（2026-10-29 完成）
+
+四处版式已在真实 Chromium 中逐块截图存证，归档于 `docs/screenshots/fr513-host-obs/`，
+取证脚本 `apps/control-plane-web/e2e/fr513-host-obs-visual.spec.ts`。
+
+实测渲染出的浮层文本（Playwright 从 DOM 直接提取，非人工誊写）：
+
+```
+负载三档          1m 42.5%   5m 58.7%   15m 71.2%
+CPU 构成          空闲 51.2%  IO 等待 19.3%  用户态 18.4%  内核态 9.6%  其余 1.5%
+分挂载点磁盘      /var 95.0%   / 14.4%   /data 62.0%
+进程数（运行/总） 32 / 11023
+整机 Top 进程     java 232.4%  worker 88.6%  rsync 41.2%  mysqld 18.7%  node 12.3%
+```
+
+四点值得注意，正是本 spec 要解决的四个盲区：
+1. **负载三档递增**（42.5 → 58.7 → 71.2），单值时代看不出这是「持续爬升」。
+2. **iowait 19.3%** 而 CPU 总占用仅 32%——IO 瓶颈，单看总占用会被误读成「机器很闲」。
+3. **`/var` 95% 而 `/` 仅 14.4%**——单值 `diskUsage` 只报根分区，这种「写满的是 /var」完全无感。
+4. **整机 Top 含 `rsync` / `mysqld` / `node`**，与上方「Top 受管进程」（全是 java）是两个口径——
+   只看受管进程树会得出「我们都闲着，为何机器卡」。
+
+取证过程中一并修掉两处真实缺口：
+- `apps/control-plane-web/src/api/metrics.ts` 此前**未声明**这 6 个主机级字段与 `hostTopProcesses`
+  （后端 `ManagedResourceAttribution` 早已下发），属类型双源漂移；已补齐契约。
+- `packages/devmock` 此前**完全没有** `/metrics/resource-attribution` handler，
+  于是 mock 模式下首页悬浮卡永远空态，四处版式在本地与 e2e 中无法验收；已补，
+  且数据刻意构造为「典型 IO 瓶颈宿主机」以覆盖上述四个盲区。
+
+**仍有的边界**：「老 Worker 不报主机级字段时四处不占位」这条验收**不在 e2e 里做**——
+mock 由 MSW Service Worker 拦截请求，Playwright 的 `page.route()` 拦不到。
+该断言由 `OverviewHostObs.dom.test.tsx` 的「未上报时四处新版式都不渲染（不占位）」在 dom 层覆盖，
+比经整条链路的 e2e 更精确。e2e 里保留了 `test.skip` 并在注释写明原因，避免被误认为漏写。

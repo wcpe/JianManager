@@ -356,6 +356,26 @@ export interface ResourceAttributionBotWorker {
   reason: string
 }
 
+/** CPU 时间构成占比（0..100，FR-513）。后端已按百分比下发，前端直接当百分比用。 */
+export interface ResourceAttributionCPUBreakdown {
+  user: number
+  nice: number
+  system: number
+  idle: number
+  iowait: number
+  irq: number
+  softirq: number
+  steal: number
+}
+
+/** 一个挂载点的磁盘用量（FR-513）；后端已按使用率降序。 */
+export interface ResourceAttributionMount {
+  mountpoint: string
+  totalBytes: number
+  usedBytes: number
+  usedPct: number
+}
+
 export interface ResourceAttributionNode {
   nodeId: number
   nodeUuid: string
@@ -369,6 +389,21 @@ export interface ResourceAttributionNode {
   workerProcessRssBytes: number | null
   workerProcessCpuPct: number | null
   botWorker: ResourceAttributionBotWorker
+  /*
+    FR-513 主机级观测（后端 `ManagedResourceAttribution` 同步下发）。
+    全部可选且可 null，且 null 与 0 语义不同：
+    - 缺失 / null = 老 Worker 未上报 → 前端渲染 `--`
+    - 0 = 真实读数就是 0
+    把「不知道」画成 0 会让运维误判机器空闲。
+  */
+  /** 已按核数归一的负载（与 `loadPct` 同口径，便于同图对比）。 */
+  load5Pct?: number | null
+  load15Pct?: number | null
+  /** 活动进程/线程数；总数。 */
+  procsRunning?: number | null
+  procsTotal?: number | null
+  cpuBreakdown?: ResourceAttributionCPUBreakdown | null
+  mounts?: ResourceAttributionMount[]
 }
 
 export interface ResourceAttributionInstance {
@@ -399,6 +434,25 @@ export interface ResourceAttributionResponse {
   nodes: ResourceAttributionNode[]
   topInstances: ResourceAttributionInstance[]
   topProcesses: ResourceAttributionProcess[]
+  /*
+    FR-513 整机 top-N 进程。与 `topProcesses` 是两个口径，**不可混为一谈**：
+    - `topProcesses`：只覆盖受管实例的进程树（我们知道它是谁）
+    - `hostTopProcesses`：整机按 CPU 排序前几名（含系统进程、别人的进程）
+    运维判断「这台机器为什么慢」要看后者。
+
+    隐私边界：无 `cmdline`（与后端 `model.HostProcessSnapshot` 一致），只给进程名。
+  */
+  hostTopProcesses?: ResourceAttributionHostProcess[]
+}
+
+/** 整机 top-N 进程的一项（FR-513）。 */
+export interface ResourceAttributionHostProcess {
+  nodeId: number
+  nodeName: string
+  pid: number
+  comm: string
+  cpuPct: number
+  rssBytes: number
 }
 
 /** 首页受管资源归因；仅在管理员打开仪表 Tooltip 后轮询，隐藏标签页默认暂停。 */
