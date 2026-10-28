@@ -83,6 +83,65 @@ func testOptions(t *testing.T, c workerpb.WorkerServiceClient) Options {
 	}
 }
 
+// TestEnsure_DistLayoutEntry 归档包了一层 dist/ 时也要能找到入口。
+//
+// 真机缺陷：CP 内嵌的归档是**整个 bot-worker 包**（含 dist/、package.json），
+// 但 Ensure 硬写入口 `<Dir>/index.js`，于是每次自愈都报「归档物化后缺少入口脚本」
+// 并回退到相对路径——而那个相对路径让 `CheckDeps` 扫不到 node_modules 祖先链，
+// 最终表现成「bot 依赖未在同一目录完整安装」（依赖其实就在那儿，bot 永远起不来）。
+//
+// 既有测试全部用「根目录直接有 index.js」的归档，恰好绕开了这个分支。
+func TestEnsure_DistLayoutEntry(t *testing.T) {
+	data, sha := buildArchive(t, map[string]string{
+		"dist/index.js":     "console.log('bot')",
+		"dist/ipc/types.js": "export {}",
+		"package.json":      `{"type":"module"}`,
+	})
+	fc := &fakeClient{archive: data, sha: sha, success: true}
+	opts := testOptions(t, fc)
+
+	entry, err := Ensure(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("dist 布局不应报错: %v", err)
+	}
+	want := filepath.Join(opts.Dir, "dist", "index.js")
+	if entry != want {
+		t.Fatalf("入口应指向 dist/index.js，实得 %s", entry)
+	}
+	if _, err := os.Stat(entry); err != nil {
+		t.Fatalf("入口文件不存在: %v", err)
+	}
+}
+
+// TestEnsure_RootLayoutStillWorks 根目录布局不能被 dist 布局的修正弄坏。
+func TestEnsure_RootLayoutStillWorks(t *testing.T) {
+	data, sha := buildArchive(t, map[string]string{
+		"index.js":     "console.log('bot')",
+		"package.json": `{"type":"module"}`,
+	})
+	fc := &fakeClient{archive: data, sha: sha, success: true}
+	opts := testOptions(t, fc)
+
+	entry, err := Ensure(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != filepath.Join(opts.Dir, "index.js") {
+		t.Fatalf("根布局入口应保持 <Dir>/index.js，实得 %s", entry)
+	}
+}
+
+// TestEnsure_MissingEntryBothLayouts 两种布局都没有时要报清楚试过哪些路径。
+func TestEnsure_MissingEntryBothLayouts(t *testing.T) {
+	data, sha := buildArchive(t, map[string]string{"package.json": `{"type":"module"}`})
+	fc := &fakeClient{archive: data, sha: sha, success: true}
+	opts := testOptions(t, fc)
+
+	if _, err := Ensure(context.Background(), opts); err == nil {
+		t.Fatal("两种布局都没入口时应报错")
+	}
+}
+
 // TestEnsure_FreshDownloadExtractsAndLinks 首次自愈：下载、校验、物化、建 node_modules 链接（FR-308）。
 func TestEnsure_FreshDownloadExtractsAndLinks(t *testing.T) {
 	data, sha := buildArchive(t, map[string]string{

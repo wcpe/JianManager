@@ -51,12 +51,41 @@ type localManifest struct {
 }
 
 // Ensure 自愈 bot-worker dist：与 CP 内嵌归档比对指纹，不一致则拉取并原子换新，
-// 每次都补齐 node_modules 链接。返回入口脚本绝对路径（<Dir>/index.js）。
-// CP 不可达或未内嵌时回退本地已有物化副本（有则用、无则报错），不阻断 Worker 启动。
+// 每次都补齐 node_modules 链接。返回入口脚本绝对路径。
+//
+// ## 入口路径为什么不能写死 `<Dir>/index.js`
+//
+// CP 内嵌的归档是**整个 bot-worker 包**（含 `dist/`、`package.json`），
+// 所以解包后入口在 `<Dir>/dist/index.js`；但旧实现硬写 `<Dir>/index.js`，
+// 于是每次自愈都报「归档物化后缺少入口脚本（归档内容异常）」，
+// 然后回退到相对路径 `apps/bot-worker/dist/index.js`。
+//
+// 回退后的相对路径是致命的：`Manager.Start` 会拿它的 dirname 当 distDir 去扫
+// `node_modules` 祖先链，而 Worker 进程的 cwd 是部署目录，向上永远到不了
+// `<dataDir>/opt/bot-worker/node_modules`——于是报「bot 依赖未在同一目录完整安装」，
+// 而依赖其实就在那里。
+//
+// 因此这里按实际布局探测，两种都认。
 func Ensure(ctx context.Context, opts Options) (string, error) {
-	entry := filepath.Join(opts.Dir, "index.js")
+	// 两种可能的入口布局：归档根目录直接有 index.js，或包了一层 dist/。
+	detectEntry := func() (string, bool) {
+		for _, candidate := range []string{
+			filepath.Join(opts.Dir, "index.js"),
+			filepath.Join(opts.Dir, "dist", "index.js"),
+		} {
+			if fileExists(candidate) {
+				return candidate, true
+			}
+		}
+		return "", false
+	}
+
+	entry, entryExists := detectEntry()
+	if !entryExists {
+		entry = filepath.Join(opts.Dir, "index.js") // 占位：后续以 detectEntry 的结果为准
+	}
 	known := readLocalSHA(opts.Dir)
-	if !fileExists(entry) {
+	if !entryExists {
 		known = "" // 清单在但脚本没了：视为本地无，强制重拉
 	}
 
@@ -96,10 +125,13 @@ func Ensure(ctx context.Context, opts Options) (string, error) {
 		// 链接失败不致命：ESM 解析会缺依赖，但 CheckDeps 会在 spawn 前给可操作报错。
 		slog.Warn("bot-worker node_modules 链接创建失败", "error", err)
 	}
-	if !fileExists(entry) {
-		return "", fmt.Errorf("归档物化后缺少入口脚本 %s（归档内容异常）", entry)
+	// 物化/换新后重新探测一次入口（布局可能刚变）
+	finalEntry, ok := detectEntry()
+	if !ok {
+		return "", fmt.Errorf("归档物化后找不到入口脚本（试过 %s 与 %s；归档内容异常）",
+			filepath.Join(opts.Dir, "index.js"), filepath.Join(opts.Dir, "dist", "index.js"))
 	}
-	return entry, nil
+	return finalEntry, nil
 }
 
 // fetchArchive 经既有 CP gRPC 通道拉取归档（注册/心跳同通道，NAT 节点天然可达）。

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -96,11 +98,94 @@ func (s *Server) StreamPluginEvents(req *workerpb.StreamPluginEventsRequest, str
 			if req.InstanceUuid != "" && evt.InstanceUuid != req.InstanceUuid {
 				continue
 			}
-			if err := stream.Send(evt); err != nil {
+			// 出站前清洗字符串字段：一条含非法 UTF-8 的事件**不能**打断整条流。
+			//
+			// ## 为什么必须在这里兜底（这个缺陷从 2026-09-30 一直存在）
+			//
+			// proto3 的 `string` 在序列化时校验 UTF-8，gRPC-go 直接返回
+			// `string field contains invalid UTF-8`。`stream.Send` 一报错就 `return err`，
+			// 于是**整条 StreamPluginEvents 断开**，CP 每 ~10 秒重连一次，
+			// 累计刷了 6 万余条日志；连带 `QueryBusinessStatus` 这类经同一 gRPC 通道的
+			// 查询也一并失败（CP 侧表现为「域状态查询调用失败」）。
+			//
+			// 脏数据的来源是 `RawJson` 等透传字段：探针把插件上报的原始帧原样透传，
+			// 若插件塞进了非 UTF-8 字节（例如按 GBK 编码的玩家聊天/日志文本），
+			// 到这里就是非法序列。**一条脏数据不该让整条观测通道瘫痪**。
+			//
+			// 清洗不丢语义：非法字节替换为 U+FFFD（与「不可显示字符」的语义一致），
+			// 其余字节原样保留。同时记 WARN 指明是哪个字段，便于从源头修。
+			if err := stream.Send(preparePluginEventForSend(evt)); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// preparePluginEventForSend 是**发送路径上**唯一的出站前处理：
+// 就地清洗非法 UTF-8 并返回同一个事件对象。
+//
+// 单独成函数而不是把逻辑写在 `stream.Send` 前面，是为了让测试能锁住
+// 「发送路径真的调了清洗」。只测 `sanitizePluginEvent` 本身是不够的——
+// 把调用点删掉测试照样通过（那正是这次修 bug 时踩到的坑）。
+func preparePluginEventForSend(evt *workerpb.PluginEvent) *workerpb.PluginEvent {
+	sanitizePluginEvent(evt)
+	return evt
+}
+
+// sanitizePluginEvent 就地清除 proto string 字段里的非法 UTF-8（替换为 U+FFFD）。
+//
+// 只对**真的**含非法序列的字段动手：合法字符串原样保留（`utf8.ValidString` 是 O(n)
+// 但全为合法 ASCII 时开销可忽略，且这条路径本来就要序列化一次）。
+//
+// 记 WARN 时只说字段名与长度，不打印原文内容——原文是非法字节，直接打会污染日志；
+// 后缀会带一段**已清洗**的前缀，便于定位是哪个插件塞进来的。
+func sanitizePluginEvent(evt *workerpb.PluginEvent) {
+	if evt == nil {
+		return
+	}
+	fix := func(name string, s string) string {
+		if utf8.ValidString(s) {
+			return s
+		}
+		sanitized := strings.ToValidUTF8(s, "\uFFFD")
+		slog.Warn("插件事件含非法 UTF-8，已在出站前清洗",
+			"field", name,
+			"instanceUuid", evt.InstanceUuid,
+			"type", evt.Type,
+			"rawLen", len(s),
+			// 保留前缀便于定位来源（已清洗，可安全打印）
+			"prefix", truncateForLog(sanitized, 80),
+		)
+		return sanitized
+	}
+	evt.InstanceUuid = fix("instance_uuid", evt.InstanceUuid)
+	evt.Type = fix("type", evt.Type)
+	evt.Platform = fix("platform", evt.Platform)
+	evt.Version = fix("version", evt.Version)
+	evt.PlayerName = fix("player_name", evt.PlayerName)
+	evt.PlayerUuid = fix("player_uuid", evt.PlayerUuid)
+	evt.Message = fix("message", evt.Message)
+	evt.Server = fix("server", evt.Server)
+	evt.FromServer = fix("from_server", evt.FromServer)
+	evt.ToServer = fix("to_server", evt.ToServer)
+	evt.RawJson = fix("raw_json", evt.RawJson)
+	evt.Domain = fix("domain", evt.Domain)
+	evt.DedupKey = fix("dedup_key", evt.DedupKey)
+}
+
+// truncateForLog 截断字符串用于日志（按 rune 边界，避免切断多字节字符）。
+func truncateForLog(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	count := 0
+	for i := range s {
+		if count == maxRunes {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }
 
 // pluginCommandTimeout 是治理同步往返（wait=true）等待探针 command_result 的上限。

@@ -89,10 +89,10 @@ func TestBridge_PlayerEventFieldsBubbled(t *testing.T) {
 	assert.Equal(t, "survival", cross.ToServer)
 }
 
-// TestBridge_BusinessEventDomainDedupBubbled 验证 JBIS 业务事件（FR-115/ADR-027）：
-// 探针 event 帧的 domain/dedupKey 经 Worker 透传冒泡到 ws.PluginEvent（CP 据此分流业务汇聚 + 去重）；
-// 监控/治理事件不带 domain → 这两字段为空（业务/监控分流）。
-func TestBridge_BusinessEventDomainDedupBubbled(t *testing.T) {
+// TestBridge_DomainDedupBubbled 验证通道信封字段透传（ADR-027；FR-521 / ADR-106 后 JM 不再消费语义）：
+// 探针 event 帧的 domain/dedupKey 经 Worker 原样冒泡到 ws.PluginEvent，Worker 只透传不解析；
+// 监控/治理事件不带 domain → 这两字段为空（继续业务/监控分流）。
+func TestBridge_DomainDedupBubbled(t *testing.T) {
 	s := NewPluginBridgeServer(testSecret)
 
 	var mu sync.Mutex
@@ -170,4 +170,61 @@ func TestParseBridgeEventData(t *testing.T) {
 	// 空/非法载荷不 panic，返回零值。
 	assert.Equal(t, bridgeEventData{}, parseBridgeEventData(nil))
 	assert.Equal(t, bridgeEventData{}, parseBridgeEventData(json.RawMessage(`not-json`)))
+}
+
+// TestBridge_EventTimestampIsMilliseconds 锁定事件时间戳单位为毫秒。
+//
+// 背景：曾用 time.Now().Unix()（秒）填充 PluginEvent.Timestamp，而 CP 的
+// business_event_cursor.OccurredAt 与 Loom 摄入侧都按**毫秒**解析，导致
+// 1792957711 被折算成 1970-01-21，经济域日聚合整体落到 1970。
+// 这里用「与当前时间差」而不是绝对值断言，避免测试依赖具体时钟。
+func TestBridge_EventTimestampIsMilliseconds(t *testing.T) {
+	s := NewPluginBridgeServer(testSecret)
+
+	var mu sync.Mutex
+	var events []PluginEvent
+	s.SetEventHandler(func(e PluginEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	})
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	conn := dialBridge(t, srv.URL, "inst-ms")
+	defer conn.Close()
+
+	var welcome bridgeMessage
+	require.NoError(t, conn.ReadJSON(&welcome))
+
+	before := time.Now().UnixMilli()
+	data, _ := json.Marshal(map[string]any{"playerName": "carol"})
+	require.NoError(t, conn.WriteJSON(bridgeMessage{Type: "event", Event: "player_join", Data: data}))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, e := range events {
+			if e.Type == "player_join" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, e := range events {
+		if e.Type != "player_join" {
+			continue
+		}
+		// 秒级时间戳约 1.8e9，毫秒级约 1.8e12；用 1e12 作为分界，容错窗口取 1 分钟。
+		require.Greater(t, e.Timestamp, int64(1_000_000_000_000),
+			"事件时间戳必须是毫秒（秒级会被下游折算成 1970）")
+		require.InDelta(t, before, e.Timestamp, 60_000,
+			"事件时间戳应与当前毫秒时钟接近")
+		return
+	}
+	t.Fatal("未捕获到 player_join 事件")
 }
