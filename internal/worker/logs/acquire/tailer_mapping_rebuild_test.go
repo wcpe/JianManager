@@ -50,6 +50,45 @@ func newMappingRebuildFixture(t *testing.T, content string) (*FileTailer, ledger
 	return tailer, key, path
 }
 
+// TestStaleMappingGapClearedWhenMappingAlreadyKnown 守住 v5 现场遗留的 bug：
+//
+// 形态：`physicalMappingKnown` 已经是 true（v5 重建过），但账本里的
+// `PHYSICAL_MAPPING_UNKNOWN` 缺口没被撑销。
+// 旧代码直接走“已证明”早退分支 ⇒ **永远不会再进重建流程** ⇒ 缺口永久存在
+// ⇒ 源永久停采（真机 inst:321）。
+//
+// 不变量：缺口的存在必须与“当前映射状态”一致。
+func TestStaleMappingGapClearedWhenMappingAlreadyKnown(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "latest.log")
+	require.NoError(t, os.WriteFile(path, []byte("content\n"), 0o600))
+
+	key := testKey("mapping-stale", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	idBytes, idSHA, err := ContentIdentity(path)
+	require.NoError(t, err)
+	require.NoError(t, led.AdvanceRead(key, 1530))
+	require.NoError(t, led.AdvanceDurable(key, 1530))
+	// 关键：映射**已证明**。
+	require.NoError(t, led.RegisterSegment(key, ledger.Segment{
+		Path: path, Kind: ledger.SegmentLive,
+		StartPos: 1530, EndPos: 1530,
+		PhysicalStart: 0, PhysicalMappingKnown: true,
+		IdentityBytes: idBytes, IdentitySHA256: idSHA,
+	}))
+	// 但旧缺口还在（v5 遗留）。
+	detail := fmt.Sprintf("%s: path=%q logical_start=1530; refusing to assign new identities without a proven physical origin",
+		PhysicalMappingUnknownReason, path)
+	require.NoError(t, led.RecordGap(key, 1530, 1530, PhysicalMappingUnknownReason, detail))
+	require.Equal(t, 1, ledger.UnresolvedGapCountOf(led.Get(key)), "前置：确有一条遗留缺口")
+
+	tailer := NewFileTailer(led, key, path, wal, nil)
+	require.NoError(t, tailer.checkPhysicalMapping(), "映射已证明 ⇒ 必须放行")
+	require.Zero(t, ledger.UnresolvedGapCountOf(led.Get(key)),
+		"遗留缺口必须被撑销（否则源永久停采，真机 inst:321）✓")
+}
+
 // TestPhysicalMappingRebuiltWhenContentIdentityDiffers 是本修复的正例：
 // 文件内容身份与账本记录**不同** ⇒ 文件确实换了 ⇒ 必须重建并允许读。
 func TestPhysicalMappingRebuiltWhenContentIdentityDiffers(t *testing.T) {

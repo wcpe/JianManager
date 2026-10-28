@@ -51,6 +51,16 @@ const PhysicalMappingUnknownReason = "PHYSICAL_MAPPING_UNKNOWN"
 // 任一条不成立 ⇒ 保持原行为（拒绝 + 记可见缺口），不猜。
 func (t *FileTailer) checkPhysicalMapping() error {
 	if t.physicalMappingKnown || (t.segmentStart == 0 && t.physicalStart == 0) {
+		// 前置已成立（含“升级前就已重建过”的情形）：遗留缺口必须撑销。
+		//
+		// 为什么不能只依赖重建分支里的消解（2026-10-28 真机）：v5 曾出现过
+		// “重建成功但缺口没清”的源（inst:321）——它的 physicalMappingKnown 已是 true，
+		// 下一轮直接走这个早退分支，**永远不会再进重建流程**
+		// ⇒ 遗留缺口永久留在账本里 ⇒ 源永久停采。
+		//
+		// 不变量：缺口的存在应与“当前映射状态”一致——
+		// 映射已证明时，同路径的 PHYSICAL_MAPPING_UNKNOWN 就应消解。
+		t.clearStaleMappingGaps()
 		return nil
 	}
 	if err := t.rebuildMappingForReplacedFile(); err == nil {
@@ -66,6 +76,23 @@ func (t *FileTailer) checkPhysicalMapping() error {
 	}
 	gapErr := t.led.RecordGap(t.key, t.logicalPos, t.logicalPos, PhysicalMappingUnknownReason, detail)
 	return errors.Join(errors.New(detail), gapErr)
+}
+
+// clearStaleMappingGaps 消解本路径上遗留的 PHYSICAL_MAPPING_UNKNOWN 诊断缺口。
+//
+// 调用时机：仅在映射**已被证明**时（早退分支或重建成功）。
+// 幂等：没有可消解的缺口就什么也不做。
+func (t *FileTailer) clearStaleMappingGaps() {
+	if t.led == nil {
+		return
+	}
+	resolved, err := t.led.ResolveGapsMatching(t.key, PhysicalMappingUnknownReason,
+		fmt.Sprintf("path=%q", t.path), "physical mapping is proven; stale isolation gap cleared")
+	if err != nil || resolved == 0 {
+		return
+	}
+	slog.Info("物理映射已证明，已撑销遗留隔离缺口",
+		"logSourceID", t.key.LogSourceID, "path", t.path, "resolvedGaps", resolved)
 }
 
 // maxPhysicalMappingRebuildBytes 是重建时可接受的活文件大小上限。
