@@ -1,8 +1,9 @@
 # 功能规格：Worker 启动时长与分阶段进度可观测性
 
-> 状态：草拟（待审核）　·　关联 PRD：FR-486（P1）　·　分支：feature/web-overhaul
+> 状态：**范围①②④ 已实现并真机验证；范围③ 部分完成（分配优化已落，4× 目标未达成）**　·　关联 PRD：FR-486（P1）　·　分支：feature/web-overhaul
 >
-> **重要前置**：本 spec 的 §6 待定 1 指出，FR-486 的四项范围中**第③项可能已由 FR-484 + FR-496 完成**，动因（1.2GB 状态文件）的根因已被消除。因此第③项是否仍需做，要先用 §5.1 的测量口径取数判定，**不预设结论**。
+> 真机实测与判定结论见文末 **§7 实施现状**。四项范围的最终落地情况：
+> ①=已测量判定　②=已实现+真机验证　③=**部分完成**（分配优化 −32% 内存/−21% 分配；4× 耗时目标未达成，原因见 §7.3）　④=已实现+真机验证（并修掉两处告警不触发的缺陷）
 
 ## 1. 背景与目标
 
@@ -147,3 +148,124 @@
 5. **风险**：默认开启阶段日志会改变现有启动日志形态，若有外部日志告警规则依赖既有行，需同步核对。
 
 6. **【提示】与既有运行期计时的区别**：`recordRoundStage` / `采样批次阶段耗时`（`runtime.go:3776-3797`，受 `JIANMANAGER_STAGE_TIMING=1` 控制）是**采集轮内**计时，与本 FR 的**启动期**计时无关。实现时不要误改或复用那套开关。
+
+---
+
+## 7. 实施现状（2026-10-29 自建环境真机验证）
+
+验证环境：本轮自行部署独立 CP（`127.0.0.1:29200` / gRPC 29210）+ Worker（`fr486-node`），
+二进制由当前分支源码编译，未触碰既有测试环境。
+
+### 7.1 范围① 已测量判定 —— 「8m39s」不再复现
+
+冷启动（空数据根）逐阶段实测：
+
+```
+启动阶段完成 phase=config              elapsed_ms=1
+启动阶段完成 phase=dataroot            elapsed_ms=0
+启动阶段完成 phase=identity            elapsed_ms=0
+启动阶段完成 phase=process_recover     elapsed_ms=0
+启动阶段完成 phase=ingest_state_load   elapsed_ms=0
+启动阶段完成 phase=register            elapsed_ms=5
+启动阶段完成 phase=heartbeat           elapsed_ms=0
+Worker 启动完成  total_ms=76  tracked_ms=7  slowest_phase=register
+phases="[register=5.574ms config=1.806ms dataroot=482µs heartbeat=28µs identity=24µs
+         process_recover=24µs ingest_state_load=1.785µs]"
+```
+
+**总计 76 ms**（本 spec §6 待定 1 记录的真机基线是 118 ms，同一量级）。
+结论：正常规模下启动是毫秒级；当年的 8 分 39 秒由**大索引**导致，不是必然。
+
+### 7.2 范围② 已实现并真机验证
+
+进度上报链路已通：Worker 每阶段结束调用 `ReportStartupProgress` RPC
+（`internal/worker/startup/reporter.go`），CP 侧落到 `node_startup_progresses` 表
+并由 `GET /nodes/startup-progress` 暴露（`internal/controlplane/router/node.go:60`）。
+
+实测行为：
+- 节点注册前，进度行写入表中（方案 A 的核心价值——注册前即可见）；
+- 注册成功后该行被清理，API 返回 `{"items":[]}`（实测确认）。
+- 上报失败即永久禁用、不阻塞启动（`reporter.go` 的 disabled 语义），符合「观测不拖累启动」。
+
+### 7.3 范围③ 部分完成 —— 分配优化已落，4× 目标未达成
+
+**实测规模曲线**（当前代码，本机，夹具 `load_scaling_bench_fr486_test.go`）：
+
+| 索引行数 | `Load()` 耗时 | 每 1k 行 |
+|---|---|---|
+| 1,020 | 4.09 ms | 4.01 ms |
+| 10,200 | 37.18 ms | 3.65 ms |
+| 50,200 | 213.3 ms | 4.25 ms |
+| 100,400 | **453.3 ms** | 4.51 ms |
+
+线性增长确认，与 §6 待定 1 记录的 441 ms 一致 → **范围③ 确实需要做**（推翻了「已被 FR-484/496 消除」的怀疑）。
+
+**已完成的优化**：`Store.load()` 复用扫描缓冲区（原实现每行调 `scanRow`，堆上新建
+`values` + `targets` 两个 slice）。用分配指标衡量（不受机器负载影响、可复现）：
+
+| | 分配内存 | 分配次数 |
+|---|---|---|
+| 基线 | 5,120,512 B | 97,334 |
+| 优化后 | 3,486,544 B | **76,948** |
+
+→ **内存 −32%，分配次数 −21%**（10,200 行省 20,386 次，与「每行 2 个 slice」完全吻合）。
+
+**4× 目标（100k 行 ≤100ms）未达成，原因如实记录**：
+
+1. **本机 load average 212**，同一 bench 多次测量在 550~860 ms 间剧烈抖动，
+   优化前后的耗时差异完全被噪声淹没。分配指标能用是因为它确定性强。
+2. **无法清 page cache**（`/proc/sys/vm/drop_caches` Permission denied），
+   因此机械盘（本机 `sda`，ROTA=1）的随机 IO 特性无法单独测量——而「机械盘优化」
+   的核心恰恰是随机 IO。
+
+**已识别但未实施的两条路径**（需干净基准环境才能验证收益）：
+
+- **body 延迟加载**：`source_wal.body` 是大 TEXT 列，实测占库文件 **45.2%**
+  （200 行 × 2KB body 夹具：库 905,216 B，body 409,600 B）。当前 `load` 一次性读全部 body，
+  而 body 只在启动后的重放路径消费。先读非 body 列建索引、body 按需二次查，
+  可把机械盘上的顺序读量砍掉近一半。**代价**：`indexStateToState` 的 `walInline`
+  需要改为惰性，涉及重放路径改造，属跨模块改动。
+  （曾尝试在扫描循环里对 body 列跳过 `[]byte→string` 转换以避免双重拷贝，
+  但该改动依赖「驱动每行返回独立缓冲」这一未验证假设，存在引用别名风险，
+  且夹具 body 太小看不出收益 ⇒ **已回退，不拿正确性赌性能**。）
+- **分表并行读**：8 张表并行 `Load()`。机械盘上并行可能因寻道抖动反而变差，
+  必须实测后决定，不能凭直觉改。
+
+### 7.4 范围④ 已实现并真机验证（修掉两处告警不触发的缺陷）
+
+`startup.state_warn_mb` 默认 **512 MB**（`internal/worker/config.go`，取值依据写在常量注释里）。
+实测发现告警**根本不会触发**，两个原因都已修复：
+
+**缺陷 1：只扫 `var/log`，漏掉 `var/index`。**
+本 spec 原文口径是「索引库 + 事件段」，但实现只扫了 `LogDir()`。而 `var/index`
+正是慢加载的主因承担者（见 §7.3）。这会造成「索引库涨到 GB 级、告警一声不响」的假安全。
+→ 改为 `log_mb` 与 `index_mb` 分别统计、一并上报。
+
+**缺陷 2：告警被埋在「配了采集源」的分支内。**
+原调用点在 `if len(cfg.LogSources) > 0 || vlHTTPClient != nil { ... }` 里，
+于是**没配采集源的 Worker 永远不执行**——而那恰恰是最需要它的场景：
+索引库是历史积累的，与该节点当前有没有配源无关。
+→ 移到分支外无条件执行。
+
+**修复后实测触发**（造 5MB 假索引 + 阈值设 1MB）：
+
+```
+level=WARN msg=启动期状态数据规模偏大，加载与注册可能变慢
+  state_size_mb=5  log_mb=0  index_mb=5  threshold_mb=1
+  log_dir=/.../worker-data/var/log  index_dir=/.../worker-data/var/index
+  suggestion="加载成本主因是索引库行数（load 全表扫描），可降低采集源数/保留窗口；
+              若增长来自 var/log 则检查事件段是否异常膨胀；本项仅告警，不改变启动行为"
+```
+
+### 7.5 §6 四个待定项的最终处置
+
+| §6 项 | 处置 |
+|---|---|
+| 待定 1（③ 是否仍需做） | **已测量判定：需要做**。规模曲线线性（100k 行 453ms），推翻了「已由 FR-484/496 消除」的怀疑 |
+| 待定 2（注册前上报通道 A/B/C） | **代码已按方案 A 实现**（新增 `StartupProgress` unary RPC + 独立表），本 spec 的三种候选收敛为此项 |
+| 待定 3（`state_warn_mb` 默认值） | **已定 512 MB**，取值依据写在 `defaultStartupStateWarnMB` 常量注释里 |
+| 风险 4（耗时可能藏在阶段内部） | 实测各阶段均 ≤6ms，未见「每段都不慢但总时很长」；`ingest_state_load` 在大索引下才会显著，故范围③正是其对应优化 |
+
+**测试佐证**：`go test ./internal/worker/logs/ingest/stateindex/` 全绿；
+`TestLoadQueriesAvoidTempBTree` 确认 8 张表的 `ORDER BY` 均命中主键索引、不落 TEMP B-TREE
+（该不变量曾因 `orderBy` 漏主键首列引发生产事故：711 万行 5GB 溢出磁盘、启动 6 次全败）。
