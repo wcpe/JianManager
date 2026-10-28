@@ -66,7 +66,10 @@ type AuditFilter struct {
 	UserID     *uint
 	Action     *string
 	TargetType *string
-	From       *time.Time
+	// TargetID 目标对象 id（字符串，按写入时的原值匹配）。
+	// 用于「某个节点/实例被改过什么」这类按对象回溯；与 TargetType 合用才精确。
+	TargetID *string
+	From     *time.Time
 	To         *time.Time
 	Limit      int
 	Page       int
@@ -98,6 +101,9 @@ func (s *AuditService) auditQuery(filter AuditFilter) *gorm.DB {
 	}
 	if filter.TargetType != nil {
 		q = q.Where("target_type = ?", *filter.TargetType)
+	}
+	if filter.TargetID != nil {
+		q = q.Where("target_id = ?", *filter.TargetID)
 	}
 	if filter.From != nil {
 		q = q.Where("created_at >= ?", *filter.From)

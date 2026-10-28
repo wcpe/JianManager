@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -23,7 +24,14 @@ func TestInspectManagedProcessRejectsPidOutsideInstanceTree(t *testing.T) {
 	require.Equal(t, "PID_NOT_MANAGED", resp.Code)
 }
 
-func TestTerminateManagedProcessRejectsRootPID(t *testing.T) {
+/*
+  根进程允许 PID 级处置（用户要求：卡死时必须能清理）。
+
+  这条用例锁住的是「放开后行为正确」：处置成功，且**实例状态随根进程退出被同步**——
+  原先靠拒绝根进程来保证状态一致性，现在改为由 waitLoop 的退出监听保证，
+  所以这里必须验证状态确实变了，否则放开就退化成「杀了但平台还记着 RUNNING」。
+*/
+func TestTerminateManagedProcessAllowsRootPID(t *testing.T) {
 	srv, mgr, uuid := startFR343RunningInstance(t)
 	rootPID := mgr.GetInstancePID(uuid)
 	require.Greater(t, rootPID, 0)
@@ -34,8 +42,16 @@ func TestTerminateManagedProcessRejectsRootPID(t *testing.T) {
 		Mode:         "kill_tree",
 	})
 	require.NoError(t, err)
-	require.False(t, resp.Success)
-	require.Equal(t, "ROOT_PROCESS_ACTION_DENIED", resp.Code)
+	require.True(t, resp.Success, "根进程应当允许处置：%s", resp.Message)
+
+	// 退出监听把实例同步为 CRASHED/STOPPED，不会停在 RUNNING。
+	require.Eventually(t, func() bool {
+		st, err := mgr.GetState(uuid)
+		if err != nil {
+			return true
+		}
+		return st != process.StateRunning
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestInspectManagedProcessReturnsTreeScopedDetail(t *testing.T) {
