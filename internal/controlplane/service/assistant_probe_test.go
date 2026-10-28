@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -292,6 +294,62 @@ func TestTestModelToolCallParsed(t *testing.T) {
 	}
 	if !res.OK || !res.ToolCallParsed {
 		t.Fatalf("应解析出工具调用，实际 %+v", res)
+	}
+}
+
+// TestTestModelToolRequestActuallyAsksForTool 守住「带工具的测试请求必须真的要求模型调用工具」。
+//
+// 旧实现带工具时仍然发「回复 pong」+「只回答被问的内容」：模型会理所当然地用文本作答，
+// 于是哪怕它完全支持工具调用，结论也是 toolCallParsed=false——把「没被要求调用」
+// 误判成「协议或模型不支持工具」，把管理员引向换模型这个错误方向。
+//
+// 假上游可以在任何提示词下都回 tool_call，所以只有检查**出站请求体**才能发现这个问题。
+func TestTestModelToolRequestActuallyAsksForTool(t *testing.T) {
+	var captured []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		captured = body
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(openAIChatSSE("pong")))
+	}))
+	t.Cleanup(srv.Close)
+
+	s, _ := newProbeTestService(t, testEncryptor(t))
+	p := createProbeProvider(t, s, srv.URL, model.AssistantProtocolOpenAIChat)
+	m := createProbeModel(t, s, p.ID, true)
+
+	if _, err := s.TestModel(context.Background(), m.ID, true); err != nil {
+		t.Fatalf("测试失败: %v", err)
+	}
+
+	var reqBody struct {
+		Tools []struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(captured, &reqBody); err != nil {
+		t.Fatalf("解析出站请求失败: %v（原文 %s）", err, string(captured))
+	}
+	if len(reqBody.Tools) != 1 || reqBody.Tools[0].Function.Name != "assistant_probe_ping" {
+		t.Fatalf("应下发 assistant_probe_ping 工具，实际 %+v", reqBody.Tools)
+	}
+	// 用户消息必须显式点名这个工具，否则模型没有理由调用它。
+	named := false
+	for _, msg := range reqBody.Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "assistant_probe_ping") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("带工具的测试请求必须在用户消息里点名要调用的工具，"+
+			"否则模型只会用文本作答而被误判为不支持工具；实际消息 %+v", reqBody.Messages)
 	}
 }
 

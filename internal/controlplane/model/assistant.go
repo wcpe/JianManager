@@ -12,6 +12,16 @@ const (
 	AssistantProtocolAnthropic = "anthropic"
 )
 
+// AI 供应商出站代理模式（FR-539）。
+const (
+	// AssistantProxyDirect 直连，**不**读取进程环境代理。
+	AssistantProxyDirect = "direct"
+	// AssistantProxyEnv 跟随进程环境（HTTP_PROXY / HTTPS_PROXY / NO_PROXY）。
+	AssistantProxyEnv = "env"
+	// AssistantProxyCustom 使用供应商自定义代理地址。
+	AssistantProxyCustom = "custom"
+)
+
 // AI 供应商凭据模式（FR-514）。
 const (
 	// AssistantCredentialNone 该供应商无需凭据（如本机自托管的无鉴权网关）。
@@ -48,7 +58,18 @@ type AssistantProvider struct {
 	CredentialEnc string `gorm:"size:1024" json:"-"`
 	// CredentialSetAt 仅用于「已配置」标志与展示，不代表凭据当前可用。
 	CredentialSetAt *time.Time `json:"credentialSetAt"`
-	Enabled         bool       `gorm:"not null;default:true" json:"enabled"`
+	// ProxyMode 出站代理模式（FR-539）：direct 直连 / env 跟随进程环境 / custom 自定义。
+	//
+	// **默认 direct** 是刻意的：不回退到 `http.ProxyFromEnvironment`。
+	// 否则「本机为了别的用途设了全局 HTTPS_PROXY」会悄悄把模型出站改道，
+	// 而管理员在面板上看到的是「直连」——出了问题无从判断流量去了哪。
+	ProxyMode string `gorm:"size:16;not null;default:direct" json:"proxyMode"`
+	// ProxyURL 仅 ProxyMode=custom 时有值，形如 http://host:port 或 socks5://host:port。
+	// 允许含 userinfo（代理常需口令），但该字段**永不出现在响应里**（见 router DTO）。
+	ProxyURL string `gorm:"size:512" json:"-"`
+	// ProxyHasAuth 代理地址是否带 userinfo，供前端显示「已配置代理凭据」而不回显。
+	ProxyHasAuth bool `gorm:"not null;default:false" json:"proxyHasAuth"`
+	Enabled      bool `gorm:"not null;default:true" json:"enabled"`
 	// Version 乐观并发：写入须带当前 version，不匹配回 409，避免两个管理员
 	// 同时编辑时后写覆盖前写且无人察觉。
 	Version   int       `gorm:"not null;default:1" json:"version"`
@@ -74,8 +95,11 @@ type AssistantModel struct {
 	Streaming bool `gorm:"not null;default:true" json:"streaming"`
 	Tools     bool `gorm:"not null;default:false" json:"tools"`
 	// ContextWindow / MaxOutputTokens 可空：未知就不填，前端显示「未声明」而不是 0。
-	ContextWindow   *int      `json:"contextWindow"`
-	MaxOutputTokens *int      `json:"maxOutputTokens"`
+	ContextWindow   *int `json:"contextWindow"`
+	MaxOutputTokens *int `json:"maxOutputTokens"`
+	// ReasoningEffort 思考强度（FR-541 §3.2）：minimal / low / medium / high。
+	// 空 = 不指定，由上游默认。**不从模型名推断**——同名模型在不同网关上的支持度不同。
+	ReasoningEffort string    `gorm:"size:16" json:"reasoningEffort"`
 	Enabled         bool      `gorm:"not null;default:true" json:"enabled"`
 	Version         int       `gorm:"not null;default:1" json:"version"`
 	CreatedAt       time.Time `json:"createdAt"`
@@ -105,10 +129,21 @@ type AssistantSetting struct {
 	//
 	// 显式 column：GORM 的默认蛇形转换把 `CIDRs` 拆成 `c_id_rs`
 	// （缩写与复数被逐字母拆开），得到 `allow_private_c_id_rs` 这种没法读的列名。
-	AllowPrivateCIDRs string    `gorm:"column:allow_private_cidrs;type:text" json:"allowPrivateCidrs"`
-	Version           int       `gorm:"not null;default:1" json:"version"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+	AllowPrivateCIDRs string `gorm:"column:allow_private_cidrs;type:text" json:"allowPrivateCidrs"`
+	// SystemPrompt 自定义系统提示词（FR-541 §3.1）。空 = 只用内置基线。
+	//
+	// 组装顺序固定为「内置基线 + 自定义 + 已启用技能」，三层各自可为空。
+	// 自定义内容**不得**被当作可信指令去放开工具权限——它只改「说什么」，
+	// 不改「能做什么」（写操作仍逐个确认）。
+	SystemPrompt string `gorm:"column:system_prompt;type:text" json:"systemPrompt"`
+	// BuiltinToolsEnabled 是否向助手暴露平台自带工具（FR-540 §4.2）。
+	//
+	// 用 *bool 而不是 bool：零值 bool 会把「未配置」读成 false，
+	// 而默认语义是**启用**。指针让「没配置」与「显式关闭」可区分。
+	BuiltinToolsEnabled *bool     `gorm:"column:builtin_tools_enabled" json:"builtinToolsEnabled"`
+	Version             int       `gorm:"not null;default:1" json:"version"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
 }
 
 // TableName 固定表名。

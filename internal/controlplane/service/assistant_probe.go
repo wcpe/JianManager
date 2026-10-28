@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -162,6 +164,16 @@ func (s *AssistantService) runModelTest(ctx context.Context, p *model.AssistantP
 		MaxOutputTokens: assistantProbeMaxOutputTokens,
 	}
 	if withTools {
+		// 带工具的验证必须**换一套指令**：不带工具那套是「回复 pong」+「只回答被问的内容」，
+		// 模型会理所当然地用文本作答，于是一个完全支持工具调用的模型也会得到
+		// toolCallParsed=false ——把「没被要求调用」误判成「协议不支持工具」，
+		// 让管理员去换模型。这里显式要求调用并给出具体参数值：
+		// 既让「模型愿不愿意调用」成为可观测事实，也让参数累积链路有真实内容可校验。
+		req.System = "你是连通性测试助手。本轮提供了工具时，必须直接调用工具，不要用自然语言作答。"
+		req.Messages = []ai.Message{{
+			Role:    "user",
+			Content: "请调用 assistant_probe_ping 工具，nonce 传 \"probe\"。",
+		}}
 		req.Tools = []ai.ToolSpec{{
 			Name:        "assistant_probe_ping",
 			Description: "连通性测试用工具。收到请求时必须调用它。",
@@ -201,7 +213,7 @@ func (s *AssistantService) runModelTest(ctx context.Context, p *model.AssistantP
 	return res
 }
 
-// buildStreamer 按供应商配置构造适配器（含凭据解析与出站准入）。
+// buildStreamer 按供应商配置构造适配器（含凭据解析、出站准入与代理）。
 func (s *AssistantService) buildStreamer(p *model.AssistantProvider) (ai.Streamer, error) {
 	if s.egress == nil {
 		return nil, fmt.Errorf("%w: 出站准入未初始化", ErrAssistantInvalid)
@@ -210,7 +222,53 @@ func (s *AssistantService) buildStreamer(p *model.AssistantProvider) (ai.Streame
 	if err != nil {
 		return nil, err
 	}
-	return ai.NewStreamer(p.Protocol, s.egress.Client(), p.BaseURL, apiKey)
+	client, err := s.egressClientFor(p)
+	if err != nil {
+		return nil, err
+	}
+	return ai.NewStreamer(p.Protocol, client, p.BaseURL, apiKey)
+}
+
+// egressClientFor 按供应商的代理模式产出出站客户端（FR-539）。
+//
+// ## 为什么默认必须是直连
+//
+// `Guard.Client()` 本身不读环境变量代理（受保护出站的准入不能被环境代理绕过）。
+// 若这里「留空就回退 ProxyFromEnvironment」，那么本机为别的用途设的全局 HTTPS_PROXY
+// 会悄悄把模型流量改道——而管理员在面板上看到的是「直连」，出问题时无从判断流量去了哪。
+// 因此三种模式是**显式**的：direct 直连、env 才跟随环境、custom 用填写的地址。
+//
+// ## 代理与准入的关系
+//
+// 代理只决定「连到哪里」，**不放松**准入判定：仍走同一个 Guard（只 https、
+// 拒明文/私网未放行目标），只是把拨号换成经代理拨号。这样「配了代理」不会变成
+// 「可以打任意内网地址」的旁路。
+func (s *AssistantService) egressClientFor(p *model.AssistantProvider) (*http.Client, error) {
+	mode := strings.TrimSpace(p.ProxyMode)
+	switch mode {
+	case "", model.AssistantProxyDirect:
+		return s.egress.Client(), nil
+	case model.AssistantProxyEnv:
+		// env 模式沿用 Guard 的准入，但把 Transport.Proxy 换成标准库的环境解析。
+		return s.egress.ClientWithProxyEnv(), nil
+	case model.AssistantProxyCustom:
+		raw := strings.TrimSpace(p.ProxyURL)
+		if raw == "" {
+			return nil, fmt.Errorf("%w: 代理模式为 custom 但未填写代理地址", ErrAssistantInvalid)
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("%w: 代理地址不合法（需形如 http://host:port 或 socks5://host:port）", ErrAssistantInvalid)
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "http", "https", "socks5":
+		default:
+			return nil, fmt.Errorf("%w: 不支持的代理协议 %q（仅 http / https / socks5）", ErrAssistantInvalid, u.Scheme)
+		}
+		return s.egress.ClientWithProxy(u), nil
+	default:
+		return nil, fmt.Errorf("%w: 未知代理模式 %q", ErrAssistantInvalid, mode)
+	}
 }
 
 // resolveCredential 解析供应商的实际密钥。

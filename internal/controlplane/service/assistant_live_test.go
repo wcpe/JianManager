@@ -21,6 +21,12 @@ import (
 // 而这正是本次要检验的假设本身。三个适配器的报文与 SSE 分帧都是照文档写的，
 // 文档与实现有偏差时，只有真实上游能暴露出来。
 //
+// **验证范围必须说清楚**：本文件能证明的是「同一套生产代码路径（加密→落库→解密→
+// 注入鉴权头→受保护出站→真实 HTTP→真实 SSE 分帧→事件解析）对着一个**真实监听端口**
+// 的上游跑通」。用本地假供应商跑绿，只等于验证了「自托管 OpenAI 兼容端点」，
+// **不等于**任何商业厂商已验证——真实厂商的鉴权差异、限流、字段微调仍未验证，
+// 那需要真实凭据。没有凭据前，这条验收只能标注为「自托管兼容端点已验、真实厂商待验」。
+//
 // 用法（凭据不进仓库、不进 shell 历史）：
 //
 //	read -rs JIANMANAGER_ASSISTANT_LIVE_KEY && export JIANMANAGER_ASSISTANT_LIVE_KEY
@@ -30,17 +36,32 @@ import (
 //	JIANMANAGER_ASSISTANT_LIVE_TOOLS=1 \
 //	go test ./internal/controlplane/service/ -run 'TestAssistantLive' -v -count=1
 //
+// 用本地假供应商（.tmp/fake-sse-provider.mjs，真实 HTTP + 真实 SSE 分帧）自检时：
+//
+//	FAKE_PROBE_TOOL=assistant_probe_ping node .tmp/fake-sse-provider.mjs --port 5399
+//	JIANMANAGER_ASSISTANT_LIVE_PROTOCOL=openai-chat \
+//	JIANMANAGER_ASSISTANT_LIVE_BASE_URL=http://127.0.0.1:5399/v1 \
+//	JIANMANAGER_ASSISTANT_LIVE_MODEL=fake-sse-1 \
+//	JIANMANAGER_ASSISTANT_LIVE_KEY=fake-key \
+//	JIANMANAGER_ASSISTANT_LIVE_TOOLS=1 \
+//	JIANMANAGER_ASSISTANT_LIVE_PRIVATE=1 \
+//	go test ./internal/controlplane/service/ -run 'TestAssistantLive' -v -count=1
+//
 // 需要逐个协议验证就换 PROTOCOL 与 BASE_URL 各跑一次（三个协议的 baseURL 路径前缀
 // 不同：OpenAI 兼容通常带 /v1，Anthropic 通常不带）。
 //
 // 环境变量：
 //
 //	JIANMANAGER_ASSISTANT_LIVE_PROTOCOL  openai-chat | openai-responses | anthropic
-//	JIANMANAGER_ASSISTANT_LIVE_BASE_URL  供应商 base URL（必须是 https）
+//	JIANMANAGER_ASSISTANT_LIVE_BASE_URL  供应商 base URL（默认必须是 https）
 //	JIANMANAGER_ASSISTANT_LIVE_MODEL     上游原始模型标识
 //	JIANMANAGER_ASSISTANT_LIVE_KEY       密钥（走 stored 模式，验证解密路径）
 //	JIANMANAGER_ASSISTANT_LIVE_TOOLS     设为 1 时额外验证工具调用参数解析
 //	JIANMANAGER_ASSISTANT_LIVE_PRIVATE   设为 1 时放行私网目标（自托管网关）
+//
+// 关于 PRIVATE：它只影响本测试**自己构造**的那个 Guard（放行 127.0.0.1/32 与明文 http），
+// 生产环境的出站准入（强制 https、禁私网、禁代理）不受任何影响。测试要连本地端点，
+// 就必须由测试自己显式开口子，而不是把生产校验放宽。
 const (
 	liveEnvProtocol = "JIANMANAGER_ASSISTANT_LIVE_PROTOCOL"
 	liveEnvBaseURL  = "JIANMANAGER_ASSISTANT_LIVE_BASE_URL"
@@ -145,16 +166,26 @@ func TestAssistantLiveProvider(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("真实上游返回失败: 分类=%q 说明=%s", res.ClassifiedError, res.Message)
 	}
-	if strings.TrimSpace(res.TextPreview) == "" {
-		// 上游 ok 但一个字都没有：多数是「流结束了但内容字段名与我们的解析不一致」，
-		// 正是本测试存在的理由。不能算通过。
+	hasText := strings.TrimSpace(res.TextPreview) != ""
+	// 断言按「本轮想验证什么」分开，不能要求二者同时成立：
+	// 一个遵循指令的上游在工具模式下往往**只**回 tool_calls、正文为空，
+	// 硬要它同时给文本，等于要求上游做它不会被要求做的事。
+	//
+	// 不带工具：必须回出文本，否则多半是「流结束了但增量字段名与我们的解析不一致」，
+	// 正是本测试存在的理由。
+	// 带工具：必须解析出参数完整的调用；文本可有可无（空是正常形态）。
+	if !withTools && !hasText {
 		t.Fatalf("上游返回成功但文本为空——很可能分帧或增量字段解析与对端不一致")
 	}
 	if withTools && !res.ToolCallParsed {
-		// 工具调用没解析出来：可能是模型不擅长，也可能是我们的参数累积有偏差。
+		// 工具调用没解析出来：可能是上游没按 schema 调用，也可能是我们的参数累积有偏差。
 		// 后者才是本测试要抓的，故此处判失败并要求人工看 message。
-		t.Fatalf("要求了工具验证但未解析出完整调用（message=%s）；"+
-			"若确认该模型本身不遵循 schema，请换一个支持工具的模型再验", res.Message)
+		t.Fatalf("要求了工具验证但未解析出完整调用（message=%s 文本=%q）；"+
+			"若确认该上游本身不遵循 schema，请换一个支持工具的模型再验", res.Message, res.TextPreview)
+	}
+	if withTools && !hasText && !res.ToolCallParsed {
+		// 既没有文本也没有工具调用 = 上游什么有效内容都没产出，不能算通过。
+		t.Fatalf("上游返回成功但既无文本也无工具调用")
 	}
 	if res.PromptTokens == nil && res.OutputTokens == nil {
 		// 允许上游不报用量，但要在日志里留痕，避免「以为验了用量」。
