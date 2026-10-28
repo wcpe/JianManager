@@ -552,6 +552,51 @@ func CoveredByPositionRanges(ranges []PositionRange, from, to uint64) bool {
 	return false
 }
 
+// ResolveGapsMatching 按「原因 + detail 包含子串」两条同时匹配，消解指定原因的未解决缺口。
+//
+// 用途（2026-10-28）：隔离型诊断缺口（`ARCHIVE_CONTENT_UNKNOWN` /
+// `PHYSICAL_MAPPING_UNKNOWN` 等）在**证据重新成立**时必须能被撑销。
+// 这类缺口不在自动消解白名单（它们是“真丢数据”类，不能因投递成功就放行），
+// 但当禁止它们的**前提消失**时（如物理映射已重建、归档归属已重新证明），
+// 必须有一条精确出口把它们清掉——否则源被永久停采。
+//
+// 与 `ResolveUnknownArchiveGaps` 的关系：那个是归档专用（还比对位置），
+// 本函数是通用版（只比原因 + detail 子串）。两者共用同一保守方向：
+// **只碰完全匹配的那几条**，其它原因/其它路径一律不动。
+//
+// 返回消解条数；幂等。
+func (l *Ledger) ResolveGapsMatching(key SourceKey, reason, detailContains, resolution string) (int, error) {
+	if reason == "" || detailContains == "" {
+		return 0, fmt.Errorf("ledger: gap resolution requires reason and detail matcher")
+	}
+	if resolution == "" {
+		return 0, fmt.Errorf("ledger: gap resolution is required")
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, err := l.require(key)
+	if err != nil {
+		return 0, err
+	}
+	resolved := 0
+	for index := range e.Gaps {
+		gap := &e.Gaps[index]
+		if gap.Resolved || gap.Reason != reason {
+			continue
+		}
+		if !strings.Contains(gap.Detail, detailContains) {
+			continue
+		}
+		gap.Resolved = true
+		gap.Resolution = resolution
+		resolved++
+	}
+	if resolved > 0 {
+		l.trimResolvedGapsLocked(e)
+	}
+	return resolved, nil
+}
+
 // ResolveUnknownArchiveGaps 按「原因 + 位置 + 路径」三条**同时**匹配，消解归档隔离缺口。
 //
 // 用途（2026-10-28）：`ARCHIVE_CONTENT_UNKNOWN` 原本是“归属证明不了 ⇒ 隔离”的

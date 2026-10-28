@@ -106,6 +106,19 @@ func (t *FileTailer) rebuildMappingForReplacedFile() error {
 	// 内容身份不同 ⇒ 文件确实换了 ⇒ 逻辑起点对应新文件第 0 字节。
 	t.physicalStart = 0
 	t.physicalMappingKnown = true
+	// **必须同时消解已登记的旧缺口**（2026-10-28 现场教训）：
+	//
+	// `ResumeAcquire` 看的是账本里的未解决 gap，而不是本对象的内存状态。
+	// 只把 `physicalMappingKnown` 置真、不消缺口 ⇒ 下一轮照样被拒，
+	// 而这一轮又不会再报错（因为 check 已通过）⇒ **静默死锁**。
+	// 这与 `ARCHIVE_CONTENT_UNKNOWN` 的隔离撑销是同一类问题。
+	//
+	// 只消“本路径 + PHYSICAL_MAPPING_UNKNOWN”的那几条，其它原因一律不动。
+	if resolved, resolveErr := t.led.ResolveGapsMatching(t.key, PhysicalMappingUnknownReason,
+		fmt.Sprintf("path=%q", t.path), "physical mapping rebuilt: live file was replaced (content identity differs)"); resolveErr == nil && resolved > 0 {
+		slog.Info("物理映射重建后已撑销旧隔离缺口",
+			"logSourceID", t.key.LogSourceID, "path", t.path, "resolvedGaps", resolved)
+	}
 	// 同时重置内容身份到**当前**文件，否则下一轮会再次判成“换了”。
 	t.identityBytes, t.identitySHA256 = info.Size(), ""
 	if t.identityBytes > contentIdentityBytes {

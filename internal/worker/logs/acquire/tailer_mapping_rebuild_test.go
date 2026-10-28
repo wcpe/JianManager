@@ -14,6 +14,7 @@ package acquire
 // A 不同（文件被换），B 相同（内容就是当初那份）。
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,7 +53,13 @@ func newMappingRebuildFixture(t *testing.T, content string) (*FileTailer, ledger
 // TestPhysicalMappingRebuiltWhenContentIdentityDiffers 是本修复的正例：
 // 文件内容身份与账本记录**不同** ⇒ 文件确实换了 ⇒ 必须重建并允许读。
 func TestPhysicalMappingRebuiltWhenContentIdentityDiffers(t *testing.T) {
-	tailer, key, _ := newMappingRebuildFixture(t, "[14:05:56] [ServerMain/INFO]: Starting minecraft server version 1.20.1\n")
+	tailer, key, path := newMappingRebuildFixture(t, "[14:05:56] [ServerMain/INFO]: Starting minecraft server version 1.20.1\n")
+
+	// 预先登记一条旧缺口（现场形态：隔离已经写进账本）。
+	detail := fmt.Sprintf("%s: path=%q logical_start=1530; refusing to assign new identities without a proven physical origin",
+		PhysicalMappingUnknownReason, path)
+	require.NoError(t, tailer.led.RecordGap(key, 1530, 1530, PhysicalMappingUnknownReason, detail))
+	require.Equal(t, 1, ledger.UnresolvedGapCountOf(tailer.led.Get(key)), "前置：确有一条未解决缺口")
 
 	require.NoError(t, tailer.checkPhysicalMapping(),
 		"内容身份不匹配（文件已换）⇒ 必须重建并放行 ✓")
@@ -60,13 +67,11 @@ func TestPhysicalMappingRebuiltWhenContentIdentityDiffers(t *testing.T) {
 	require.True(t, tailer.physicalMappingKnown, "重建后 physicalMappingKnown 必须为真 ✓")
 	require.Zero(t, tailer.physicalStart, "重建后物理起点为文件头 ✓")
 
-	// 账本的未能解决缺口不应包含 PHYSICAL_MAPPING_UNKNOWN（我们放行了）。
-	entry := tailer.led.Get(key)
-	for _, gap := range entry.Gaps {
-		if gap.Reason == PhysicalMappingUnknownReason {
-			require.True(t, gap.Resolved, "重建后不得留下未解决的 PHYSICAL_MAPPING_UNKNOWN ✓")
-		}
-	}
+	// **关键**：重建后旧缺口必须被撑销。
+	// 只重建不撑销 ⇒ ResumeAcquire 仍被拒，而本轮又不再报错 ⇒ 静默死锁。
+	// （这正是 2026-10-28 首版部署后的真实现场：7 条重建成功但 paused 不变。）
+	require.Zero(t, ledger.UnresolvedGapCountOf(tailer.led.Get(key)),
+		"重建后必须同时撑销旧隔离缺口（否则 ResumeAcquire 仍被拒）✓")
 }
 
 // TestPhysicalMappingNotRebuiltWhenContentIdentityMatches 守住**不可退让的*** :
