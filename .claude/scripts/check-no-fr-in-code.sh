@@ -2,7 +2,7 @@
 # 禁止代码/文件名/注释/测试描述出现 FR 编号（见 .claude/rules/no-fr-in-code.md）。
 #
 # 两种模式：
-#   diff（默认）  ：只扫 diff 的「新增行」，存量不参与。日常提交前用这个。
+#   diff（默认）  ：只算「本次新引入」的 FR 编号。日常提交前用这个。
 #   --stock       ：扫全仓代码现有的 FR 编号。验收 FR-508（全量清理完成）时用，期望 0 命中。
 #
 # 用法：
@@ -16,24 +16,25 @@
 # 退出码：0 = 通过；1 = 命中违规
 set -eu
 
-# 只查代码文件；文档与规则本身允许出现 FR 编号。
-CODE_PATHS='apps internal packages'
 EXTS='go|ts|tsx|js|jsx|mjs|cjs|vue|svelte'
 
-# 命中的正则：FR-<数字>；排除 A-Za-z0-9_- 前缀干扰（如 ADR-FR-1 这种拼接）。
-FR_RE='(^|[^A-Za-z0-9_-])FR-[0-9]+'
+# 抽出文本里的 FR 编号（去重）。排除字母/数字/下划线/连字符前缀，
+# 避免把 XFR-1 这种标识符当成 FR 编号。
+extract_fr() {
+  grep -oE '(^|[^A-Za-z0-9_-])FR-[0-9]+' 2>/dev/null \
+    | grep -oE 'FR-[0-9]+' | sort -u || true
+}
 
 if [ "${1:-}" = "--stock" ]; then
   # ── 存量模式：扫全仓代码现有 FR 编号 ───────────────────────────────
-  # --include 逐扩展名筛；bin 文件与 .git/node_modules 自然被 grep -I 排除。
-  out=$(grep -rInE "$FR_RE" $CODE_PATHS \
+  out=$(grep -rInE '(^|[^A-Za-z0-9_-])FR-[0-9]+' apps internal packages \
     --include='*.go' --include='*.ts' --include='*.tsx' --include='*.js' \
     --include='*.jsx' --include='*.mjs' --include='*.cjs' \
     --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git 2>/dev/null \
     | grep -v 'no-fr-check' || true)
 
   if [ -n "$out" ]; then
-    n=$(printf '%s\n' "$out" | wc -l)
+    n=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
     echo "❌ 代码里仍有 FR 编号共 $n 处（FR-508 验收要求 0）"
     echo "   规则见 .claude/rules/no-fr-in-code.md"
     echo ""
@@ -46,40 +47,74 @@ if [ "${1:-}" = "--stock" ]; then
   exit 0
 fi
 
-# ── diff 模式：只扫新增行 ───────────────────────────────────────
+# ── diff 模式：只算「本次新引入」的 FR 编号 ────────────────────────
+#
+# 不能只看「新增行里有没有 FR 编号」。只改同一行里的一个词（例如把注释里的 ADR
+# 编号换掉），整行就会被 diff 当成「删旧行 + 增新行」，行内本来就有的存量 FR 编号
+# 会凭空变成「新增」。所以要比对集合：某文件新增行里出现、且该文件删除行里没出现过
+# 的 FR 编号，才算本次新引入。
 BASE="${1:-origin/master}"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 
-# 收集 diff 的新增行：格式 "<file>:<line>:<content>"
-violations=$(git diff -U0 "$BASE"...HEAD -- . \
-  | awk -v paths="^(apps|internal|packages)/" -v exts="$EXTS" '
-      # 进入新文件块时记录文件名
+# 1) 把 diff 拆成「新增行」与「删除行」两份清单，各自带文件名。
+git diff -U0 "$BASE"...HEAD -- . \
+  | awk -v out="$TMP" '
       /^\+\+\+ b\// { file = substr($0, 7); next }
-      # 命中 hunk 头，记录当前新文件起始行号
       /^@@ / {
         if (match($0, /\+[0-9]+/)) { line = substr($0, RSTART + 1, RLENGTH - 1) + 0 } else { line = 0 }
         next
       }
-      # 只取新增行
       /^\+/ && !/^\+\+\+/ {
-        content = substr($0, 2)
-        want = (file ~ paths) && (file ~ ("\\.(" exts ")$"))
-        if (want && content !~ /no-fr-check/) {
-          if (match(content, /(^|[^A-Za-z0-9_-])FR-[0-9]+/)) {
-            printf "%s:%d:%s\n", file, line, content
-          }
-        }
+        gsub(/\t/, " ")
+        print file "\t" line "\t" substr($0, 2) >> (out "/added")
         line++
         next
       }
-    ')
+      /^-/ && !/^---/ {
+        gsub(/\t/, " ")
+        print file "\t" substr($0, 2) >> (out "/removed")
+        next
+      }
+    '
 
-if [ -n "$violations" ]; then
+[ -f "$TMP/added" ] || { echo "✅ 未发现新增的 FR 编号"; exit 0; }
+
+# 2) 逐文件处理。
+: > "$TMP/violations"
+cut -f1 "$TMP/added" | sort -u | while IFS= read -r f; do
+  # 只查代码文件（文档与规则目录允许出现 FR 编号）
+  printf '%s' "$f" | grep -qE "\.($EXTS)$" || continue
+  printf '%s' "$f" | grep -qE '^(apps|internal|packages)/' || continue
+
+  # 该文件删除行里的 FR 编号 = 它本来就有的
+  if [ -f "$TMP/removed" ]; then
+    removed=$(awk -F'\t' -v want="$f" '$1 == want { $1=""; print }' "$TMP/removed" | extract_fr)
+  else
+    removed=""
+  fi
+
+  # 该文件新增行：行内出现、且不在 removed 里的 FR 编号 => 新引入
+  awk -F'\t' -v want="$f" '$1 == want { print $2 "\t" $3 }' "$TMP/added" \
+    | while IFS="$(printf '\t')" read -r line content; do
+        case "$content" in *no-fr-check*) continue ;; esac
+        for fr in $(printf '%s' "$content" | extract_fr); do
+          if ! printf '%s\n' "$removed" | grep -qx "$fr"; then
+            printf '%s:%s:%s\n' "$f" "$line" "$content"
+            break
+          fi
+        done
+      done >> "$TMP/violations"
+done
+
+vcount=$(wc -l < "$TMP/violations" | tr -d ' ')
+if [ "$vcount" != "0" ]; then
   echo "❌ 代码中新出现了 FR 编号（规则见 .claude/rules/no-fr-in-code.md）"
   echo "   FR 编号只属于文档；要说明实现缘由请引 ADR 编号。"
   echo ""
-  echo "$violations" | head -40
+  head -40 "$TMP/violations"
   echo ""
-  echo "存量 FR 编号不在本门禁范围（用 --stock 检查存量）；仅需去掉本次新增的。"
+  echo "共 $vcount 处。同一行里本来就有的存量编号不算违规；用 --stock 检查存量。"
   exit 1
 fi
 
