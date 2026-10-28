@@ -40,6 +40,8 @@ func patchConfig(format, content string, updates []fieldUpdate) (string, error) 
 
 // patchYAML 通过 yaml.v3 Node AST 设置点路径标量值，保留注释、键顺序与其它节点。
 // 路径中缺失的父级会按需创建；缺失的叶子键追加到对应映射末尾。
+//
+// 遇到无法安全表达的写入时返回错误而**不是**强行覆盖——见 yamlSetPath 的说明。
 func patchYAML(content string, updates []fieldUpdate) (string, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
@@ -48,7 +50,9 @@ func patchYAML(content string, updates []fieldUpdate) (string, error) {
 	root := yamlRoot(&doc)
 	for _, u := range updates {
 		path := strings.Split(u.Key, ".")
-		yamlSetPath(root, path, u.Value, u.Type)
+		if err := yamlSetPath(root, path, u.Value, u.Type); err != nil {
+			return "", err
+		}
 	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -79,28 +83,49 @@ func yamlRoot(doc *yaml.Node) *yaml.Node {
 }
 
 // yamlSetPath 在映射节点 m 下按 path 设置标量；逐级查找/创建，末级设置值与类型标签。
-func yamlSetPath(m *yaml.Node, path []string, value, typ string) {
+// yamlSetPath 在映射节点 m 上按点路径写入一个标量值。
+//
+// ## 为什么宁可报错也不覆盖容器
+//
+// 本函数服务于「字段级补丁」——调用方表达的是「把这个**字段**改成这个值」，而字段是一个标量。
+// 若路径命中的是一个映射或序列（例如把标量写到 `servers` 上，而真实配置里 `servers` 是
+// 「子服名 → 地址」的映射），把它整个换成标量就等于**删掉整棵子树**：两台后端、它们的
+// address/motd/restricted 全部消失，用户只看到「保存成功」。
+//
+// 这正是此前实测到的破坏形态：`servers: {lobby: …, game1: …}` 打一个 `servers` 标量补丁后
+// 变成 `servers: 'lobby: localhost:25566'`。`permissions.default`（真实是列表）同理会把
+// 列表后面的条目丢掉。这类写入没有任何正当用途，必须在写盘前拦住并报错。
+//
+// ## 列表：只有一个元素时才敢进
+//
+// `listeners.host` 这类键在 YAML 里位于序列项内部（`listeners:` 是列表）。只有一个监听器时
+// 语义无歧义，可以安全地进到那一项里改写 `host`；一旦有多个监听器，「改哪一个」就没有答案，
+// 此时报错让用户改用文本模式，而不是替用户猜一个。
+func yamlSetPath(m *yaml.Node, path []string, value, typ string) error {
 	if m.Kind != yaml.MappingNode || len(path) == 0 {
-		return
+		return fmt.Errorf("配置结构不符合预期：无法在非映射节点上写入 %q", strings.Join(path, "."))
 	}
 	key := path[0]
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			val := m.Content[i+1]
-			if len(path) == 1 {
-				applyScalar(val, value, typ)
-				return
-			}
-			if val.Kind != yaml.MappingNode {
-				// 原值非映射，替换为映射以容纳子键。
-				val.Kind = yaml.MappingNode
-				val.Tag = "!!map"
-				val.Value = ""
-				val.Content = nil
-			}
-			yamlSetPath(val, path[1:], value, typ)
-			return
+		if m.Content[i].Value != key {
+			continue
 		}
+		val := m.Content[i+1]
+		if len(path) == 1 {
+			// 叶子：目标必须是标量。序列/映射一律拒绝覆盖。
+			if val.Kind != yaml.ScalarNode {
+				return fmt.Errorf(
+					"键 %q 在配置中是%s，不是单个值，拒绝用 %q 覆盖（会丢失其下的全部内容）；请在文本模式下修改",
+					key, yamlKindName(val.Kind), value)
+			}
+			applyScalar(val, value, typ)
+			return nil
+		}
+		child, err := yamlDescend(val, key)
+		if err != nil {
+			return err
+		}
+		return yamlSetPath(child, path[1:], value, typ)
 	}
 	// 未找到：追加新键。
 	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}
@@ -108,11 +133,52 @@ func yamlSetPath(m *yaml.Node, path []string, value, typ string) {
 		valNode := &yaml.Node{Kind: yaml.ScalarNode}
 		applyScalar(valNode, value, typ)
 		m.Content = append(m.Content, keyNode, valNode)
-		return
+		return nil
 	}
 	child := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	m.Content = append(m.Content, keyNode, child)
-	yamlSetPath(child, path[1:], value, typ)
+	return yamlSetPath(child, path[1:], value, typ)
+}
+
+// yamlDescend 取出继续向下写入的映射节点。
+//
+// 映射直接进入；序列仅在**恰好一个**元素且该元素是映射时才进入（见 yamlSetPath 的说明）；
+// 标量无法容纳子键，报错而不是把它悄悄变成映射（那会丢掉原值）。
+func yamlDescend(n *yaml.Node, key string) (*yaml.Node, error) {
+	switch n.Kind {
+	case yaml.MappingNode:
+		return n, nil
+	case yaml.SequenceNode:
+		if len(n.Content) != 1 {
+			return nil, fmt.Errorf(
+				"键 %q 在配置中是含 %d 个元素的列表，无法确定要修改哪一项；请在文本模式下修改",
+				key, len(n.Content))
+		}
+		item := n.Content[0]
+		if item.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("键 %q 的列表元素不是映射，无法继续按路径写入", key)
+		}
+		return item, nil
+	default:
+		return nil, fmt.Errorf(
+			"键 %q 在配置中是%s，无法在其下写入子键；请在文本模式下修改", key, yamlKindName(n.Kind))
+	}
+}
+
+// yamlKindName 把节点类型渲染成中文，用于面向运维的错误提示。
+func yamlKindName(k yaml.Kind) string {
+	switch k {
+	case yaml.MappingNode:
+		return "映射（键值表）"
+	case yaml.SequenceNode:
+		return "列表"
+	case yaml.ScalarNode:
+		return "单个值"
+	case yaml.AliasNode:
+		return "别名引用"
+	default:
+		return "复合结构"
+	}
 }
 
 // applyScalar 就地把节点设为标量，按类型设置 yaml 标签；保留节点上的注释。

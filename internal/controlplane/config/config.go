@@ -71,6 +71,24 @@ type Config struct {
 	Binary BinaryConfig `mapstructure:"binary"`
 	// LogExport 联邦日志导出物化预算（FR-480 导出闸的服务端上限）。
 	LogExport LogExportConfig `mapstructure:"log_export"`
+	// BusinessCursor 业务事件位点账本（ADR-107）。零值走默认：保留 7 天。
+	BusinessCursor BusinessCursorConfig `mapstructure:"business_cursor"`
+}
+
+// BusinessCursorConfig 业务事件位点账本的运维参数（ADR-107 §2 / §5）。
+//
+// 为什么放在配置文件而不是 platform_settings：本表是纯运维参数（保留期 / 队列容量），
+// 不面向业务台，也不该出现在平台的运行时设置页；yaml 与环境变量（JIANMANAGER_BUSINESS_CURSOR_*）
+// 已足够，且免去前端设置页新增分区的联动。
+type BusinessCursorConfig struct {
+	// RetentionDays 位点保留天数。默认 7（ADR-107）。<=0 表示按默认处理，不做「永不裁剪」。
+	RetentionDays int `mapstructure:"retention_days"`
+	// QueueSize 异步写入队列容量。默认 10000（ADR-107 §2）。<=0 取默认。
+	QueueSize int `mapstructure:"queue_size"`
+	// BatchSize 单批落库条数。默认 500。<=0 取默认。
+	BatchSize int `mapstructure:"batch_size"`
+	// Enabled 是否启用位点账本写入。默认 true；关闭后投递路径完全不变，只是不记账。
+	Enabled bool `mapstructure:"enabled"`
 }
 
 // 联邦日志导出物化预算的默认值（FR-480 导出闸）。
@@ -384,6 +402,12 @@ func Load(path string) (*Config, error) {
 	// 仅「数据超 10000 行必然导出失败」的部署才需要显式调大。
 	v.SetDefault("log_export.max_rows", DefaultLogExportRows)
 	v.SetDefault("log_export.max_bytes", DefaultLogExportBytes)
+	// 业务事件位点账本（ADR-107）：默认开启、保留 7 天、队列 10000、批量 500。
+	// 与 ADR 给出的默认值一字不差；env 侧对应 JIANMANAGER_BUSINESS_CURSOR_*。
+	v.SetDefault("business_cursor.enabled", true)
+	v.SetDefault("business_cursor.retention_days", 7)
+	v.SetDefault("business_cursor.queue_size", 10_000)
+	v.SetDefault("business_cursor.batch_size", 500)
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
 	if err := v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY"); err != nil {
 		return nil, fmt.Errorf("绑定客户端签名私钥环境变量失败: %w", err)

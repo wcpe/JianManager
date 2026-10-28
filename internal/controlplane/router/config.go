@@ -33,7 +33,6 @@ func (h *ConfigHandler) SetConfigSource(src *service.ConfigSourceService) {
 func (h *ConfigHandler) SetAudit(a *service.AuditService) {
 	h.audit = a
 }
-
 func (h *ConfigHandler) List(c *gin.Context) {
 	if !requireNodes(c, "file.read", "instance.read") {
 		return
