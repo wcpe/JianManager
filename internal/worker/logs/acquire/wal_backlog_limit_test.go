@@ -1,8 +1,8 @@
 package acquire
 
 import (
-	"strings"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -151,4 +151,36 @@ func TestLegacyBacklogPauseReasonRecognized(t *testing.T) {
 	require.False(t, IsBacklogPauseReason(""))
 	require.True(t, strings.HasPrefix(legacyWALBacklogPauseReason, "wal backlog"),
 		"存量库里的字面前缀不得变更，否则旧记录认不出来")
+}
+
+// TestBacklogDropGapDetailReportsRealNumbers 钉住缺口 detail 里的数字**可解释**。
+//
+// 为什么值得单独一条（2026-10-29）：原实现把丢弃后的残余量拼进了分子，写出来是
+// `approx_bytes=<残余>/<上限>` —— 两个数语义不匹配，审计面上读到的内容无法解释。
+// 丢弃凭据是“不背压”的唯一交代，里面的数字错就等于没有交代。
+//
+// 转红方式（实测）：把 detail 的分子改回 `bytes`（裁剪后残余）⇒ 本用例变红。
+func TestBacklogDropGapDetailReportsRealNumbers(t *testing.T) {
+	key := testKey("src-drop-detail", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	// 条目上限 2、字节上限给足；丢 1 条 ⇒ detail 应写 entries=3/2。
+	wal.SetLimits(2, 1<<20)
+	pipe := NewPipeline(led, key, wal)
+	pipe.SetCommittedPersist(func(context.Context, []CommitIdentity) error { return nil })
+
+	require.NoError(t, pipe.Ingest(buildWALEvents("src-drop-detail", "g1", 0, 3, "line")))
+
+	entry := led.Get(key)
+	require.NotNil(t, entry)
+	var detail string
+	for _, g := range entry.Gaps {
+		if g.Reason == ledger.GapReasonWALBacklogDropped {
+			detail = g.Detail
+		}
+	}
+	require.NotEmpty(t, detail, "丢弃必须留下带 detail 的凭据")
+	// 分子必须是**丢弃前**的条数（3），不是裁剪后的 2。
+	require.Contains(t, detail, "entries=3/2",
+		"detail 里的条目数必须是丢弃前的真实读数；实测 detail=%q", detail)
 }

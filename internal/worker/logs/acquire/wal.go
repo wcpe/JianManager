@@ -1090,6 +1090,11 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 	if entries <= maxEntries && bytes <= maxBytes {
 		return
 	}
+	// 记下**丢弃前**的读数：缺口 detail 要写的是「当时用了多少」，
+	// 下面循环会把 entries/bytes 一路减到裁剪后的值，减完再拼串就只能拼出残余量。
+	// （2026-10-29 修正：原实现写成 `bytes + int64(0)`，审计面上读到的分子恒等于残余字节，
+	//  分母明明是上限却与分子语义不匹配——数字根本无法解释。）
+	entriesBefore, bytesBefore := entries, bytes
 
 	// 第一轮：只砍 protectFrom 之前的旧积压。
 	cut := 0
@@ -1131,7 +1136,7 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 	// 登记失败不回滚丢弃（已经丢了，回滚只会让内存超界）——但必须如实报错。
 	if to > from {
 		detail := fmt.Sprintf("WAL backlog exceeded (entries=%d/%d, approx_bytes=%d/%d); dropped %d oldest entries to stay in memory",
-			dropped+int(entries), maxEntries, bytes+int64(0), maxBytes, dropped)
+			entriesBefore, maxEntries, bytesBefore, maxBytes, dropped)
 		if err := w.led.RecordGap(w.key, from, to, walBacklogDropReason, detail); err != nil {
 			slog.Warn("积压越界丢弃后登记缺口失败（丢弃已生效，但审计面缺凭据）",
 				"logSourceID", w.key.LogSourceID, "dropped", dropped, "from", from, "to", to, "error", err)
@@ -1350,16 +1355,17 @@ func (w *WAL) EffectiveLimits() (maxEntries, maxBytes int64) {
 //
 // 返回值口径（与实现严格对齐，勿按名字误读）：它只回答「账本此刻有没有处于暂停」，
 // **不做原因过滤**。具体地：
-//   - 本包造成的积压暂停（原因前缀 walBacklogPauseReason）会由 maybeResumeBacklogLocked
-//     在积压回落至上限一半以下时清除，清掉后本方法返回 true；
+//   - **存量**积压暂停（旧二进制写的，前缀 `legacyWALBacklogPauseReason`）会由
+//     maybeResumeBacklogLocked 在能消解掉阻塞缺口后清除（**2026-10-29 起不再有
+//     “积压回落至上限一半以下”这个条件**）；清掉后本方法返回 true；
 //   - 容量门禁等**其它路径**设置的暂停不会被本方法清除（那是越权），但只要它已被别处解除，
 //     本方法同样会返回 true；反之若仍处于暂停，则返回 false。
 //
 // 因此调用方可以用它判断「恢复是否已发生」，但不得把它当成「本次调用清除了暂停」的证据。
 func (w *WAL) EvaluateResume() bool {
 	// TryReclaim 的失败是常态而非异常（无恢复分段 / 责任未转移时 CanReclaim 本就不放行），
-	// 而它无论成败都会按**当前**水位剪枝并在剪枝后做一次滞回恢复评估；这里忽略返回值，
-	// 只按最终状态回答「是否已恢复」。
+	// 而它无论成败都会按**当前**水位剪枝，并在 `pos == 0` 分支里做一次存量暂停评估；
+	// 这里忽略返回值，只按最终状态回答「是否已恢复」。
 	_, _ = w.TryReclaim()
 	// #66-③：判据只读 AcquirePaused ⇒ 轻量读（旧实现的 Get 会克隆整条 ✗）。
 	st, ok := w.led.AcquireState(w.key)

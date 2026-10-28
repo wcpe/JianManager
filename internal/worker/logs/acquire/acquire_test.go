@@ -1,8 +1,8 @@
 package acquire
 
 import (
-	"context"
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"

@@ -12,8 +12,12 @@ import (
 // 账本拒绝**推进**回收位置时，WAL 仍必须按**当前**水位剪枝（2026-09-30 生产实证）。
 //
 // 缺了它：wal.TryReclaim 一遇错便 return → pruneReclaimed 永不执行 → 连水位**之下的**
-// 条目也永远保留 → 积压只增不减 → 滞回（≤上限一半）永不满足 → 源永久停在 paused
-// （实测某源 7998 条卡死数小时，积压数字一个字节不动）。
+// 条目也永远保留 → 积压只增不减 → 内存占用无界（WAL 现在是纯内存队列，不再有丢最旧以外的兜底），
+// 且每次回收尝试都会白白漏掉一次剪枝机会。
+//
+// 2026-10-29：积压闸改丢弃后，“不剪枝就会滞回恢复失败、源永久停在 paused”这条因果
+// 已不成立（本包不再产生积压暂停，低水位判据也已移除）；但本用例守的是“账本拒绝推进
+// 时仍然剪枝”——不变量本身一字未变，且在新语义下代价更高。
 //
 // 形态刻意与生产一致：回收位置恰好等于分段边界（CoversTo == Reclaim），
 // 于是 `CoversTo > Reclaim` 不成立 → 账本报错，而水位之下的一切其实早已判定安全。
@@ -56,7 +60,7 @@ func TestTryReclaim_StillPrunesWhenLedgerDeclinesAdvance(t *testing.T) {
 	_, err = wal.TryReclaim()
 	require.Error(t, err, "WAL 侧同样应观察到账本拒绝推进")
 	require.Empty(t, wal.Snapshot(),
-		"账本拒绝推进时仍须剪掉水位之下的条目：否则积压永不回落、源永久停在 paused")
+		"账本拒绝推进时仍须剪掉水位之下的条目：否则积压永不回落、纯内存队列会无界增长")
 }
 
 // TestWALRestoreFiresBacklogGate（D4，2026-10-03 现场）：**恢复**持久积压之后必须当场按闸判定
@@ -91,25 +95,45 @@ func TestWALRestoreFiresBacklogGate(t *testing.T) {
 	if n := len(wal.Snapshot()); n != 3 {
 		t.Fatalf("恢复越界积压后必须立即裁剪（条目闸 %d 条，实测积压 %d）", 3, n)
 	}
-	// 必须丢最旧、保留最新。
-	if got := wal.Snapshot()[0].Event.Record.Start; got != 31 {
-		t.Fatalf("必须丢最旧前缀：剩下的首条应从 31 开始，实测 %d", got)
+	// 必须丢最旧、保留最新。恢复的区间是 [1,10) [11,20) [21,30) [31,40) [41,50)，
+	// 上限 3 ⇒ 只丢最旧的 2 条 ⇒ 剩下应从 21 开始（21/31/41）。
+	//
+	// 2026-10-29 改正：这里原先写的是 31（按“丢 3 条”算的），但 5−3=2 不是 3；
+	// 丢弃只捡到“刚好回限内”为止（见 enforceBacklogLimitLocked 第二轮循环）。
+	snap := wal.Snapshot()
+	wantStarts := []uint64{21, 31, 41}
+	for i, want := range wantStarts {
+		if got := snap[i].Event.Record.Start; got != want {
+			t.Fatalf("必须丢最旧前缀：剩下第 %d 条应从 %d 开始，实测 %d", i, want, got)
+		}
 	}
-	// 不得因此暂停采集。
-	if entry := led.Get(key); entry != nil && entry.AcquirePaused {
+	// 丢的必须是**连续最旧前缀**，且区间写进凭据的是真实位置：首条 start=1、末条 end=20。
+	// 同时不得因此暂停采集。
+	entry := led.Get(key)
+	if entry != nil && entry.AcquirePaused {
 		t.Fatalf("丢弃语义下恢复后不得暂停采集: %q", entry.PauseReason)
 	}
-	// 丢弃必须留凭据。
+	// 丢弃必须留凭据，且区间/原因逐字可查（non-blocking 但仍进账本、仍可见）。
 	sawDrop := false
-	if entry := led.Get(key); entry != nil {
+	if entry != nil {
 		for _, g := range entry.Gaps {
-			if g.Reason == ledger.GapReasonWALBacklogDropped {
-				sawDrop = true
+			if g.Reason != ledger.GapReasonWALBacklogDropped {
+				continue
+			}
+			sawDrop = true
+			if g.StartPos != 1 || g.EndPos != 20 {
+				t.Fatalf("丢弃凭据的区间就是被丢条目的真实位置 [1,20)，实测 [%d,%d)", g.StartPos, g.EndPos)
+			}
+			if g.Resolved {
+				t.Fatal("丢弃是终局事实，不得被自动消解")
 			}
 		}
 	}
 	if !sawDrop {
 		t.Fatal("恢复期裁剪必须登记 WAL_BACKLOG_DROPPED 凭据")
+	}
+	if got := led.UnresolvedGapCount(key); got != 1 {
+		t.Fatalf("丢弃缺口应仍可见（不阻塞但计入未解决）: 实测 %d", got)
 	}
 }
 
