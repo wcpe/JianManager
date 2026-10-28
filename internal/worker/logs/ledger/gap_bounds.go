@@ -111,6 +111,63 @@ var gapReasonsHealableOnReResume = []string{
 	GapReasonRotatedSegmentNotReady,
 }
 
+// gapReasonsPermanentlyLost 是「已确认丢失、回读造不出、但不应该阻塞采集」的原因集合。
+//
+// ## 它与「白名单」的区别（两者方向相反，切勿混用）
+//
+//   - `gapReasonsHealableOnReResume`：**能救回来** ⇒ 必须等回读重放，阻塞恢复。
+//   - `gapReasonsPermanentlyLost`（本名单）：**救不回来** ⇒ 阻塞也没用，不阻塞采集；
+//     缺口仍留在账本里作为可见诊断（可查、可告警、可人工裁定）。
+//
+// ## 为什么需要这个分类（2026-10-28，对齐 Filebeat / Fluent Bit）
+//
+// 旧实现里两者被“任何未解决 gap 即拒绝”一锅煮。后果在生产上很严重：
+// 10/19 个源因 80KB 已丢失的历史字节而停采 20+ 小时——
+// **为了等一段永远不会回来的数据，牺牲了之后所有新日志**。
+//
+// 业界两家的官方做法都没这个机制（它们只有 `ignore_older` / `exclude_path`）：
+// 宁可漏一段已知范围的历史，不停止采集新日志。
+//
+// ## 收录标准（严格）
+//
+// 只收录「系统已经**确认**字节不可恢复」的原因。凡是“还可能读到”的一律不收录
+// （那是 `gapReasonsHealableOnReResume` 的职责）。两个名单**不允许重叠**。
+var gapReasonsPermanentlyLost = []string{
+	// WAL 引用在事件段存储中找不到正文：回读造不出已经丢掉的字节。
+	GapReasonWALBodyMissing,
+	// 归档内容未知：旧账本的归档无法证明归属。现已能靠 inode 重新证明，
+	// 证明不了的就是真丢（或文件已删）。
+	"ARCHIVE_CONTENT_UNKNOWN",
+	// 以下归档类原因由 acquire/content_anchor.go 登记，语义均为「字节已不可读/永久损坏」。
+	// 用字面量而非常量：依赖方向是 acquire → ledger，ledger 不能反向依赖。
+	"ARCHIVE_GZIP_CORRUPT",       // gzip 损坏是永久性的
+	"ARCHIVE_DISCOVERY_FAILED",   // 归档发现失败，回读无意义
+	"ARCHIVE_UNREADABLE",         // 权限/哈希取不到
+	"ARCHIVE_OPEN_FAILED",        // 归档打开失败
+	"ARCHIVE_FOREIGN_GENERATION", // 归档属其它代次、被拒绝归账
+	"ARCHIVE_READ_ERROR",         // 读归档出错（损坏/截断）
+	// 文件被重写：游标已重锦到 EOF，被跨过的历史内容不再回读（w18 防护）。
+	"FILE_REWRITTEN",
+}
+
+// IsGapReasonPermanentlyLost 报告某原因是否属于「已确认丢失、不应阻塞采集」类。
+//
+// 注意：返回 true **不**意味着缺口被消解。缺口仍在账本里，
+// `UnresolvedGapCountOf` 仍计入，观测面/告警照旧可见。
+func IsGapReasonPermanentlyLost(reason string) bool {
+	for _, lost := range gapReasonsPermanentlyLost {
+		if reason == lost {
+			return true
+		}
+	}
+	return false
+}
+
+// GapReasonsPermanentlyLost 返回本名单的副本（观测与测试用）。
+func GapReasonsPermanentlyLost() []string {
+	return append([]string(nil), gapReasonsPermanentlyLost...)
+}
+
 // GapReasonsHealableOnReResume 返回白名单的副本（观测与测试用）。
 //
 // 返回副本而不是切片本身：真源一旦被外部 append/改写，就会回到「多处各持一份名单」的形态，
@@ -200,7 +257,10 @@ func (l *Ledger) recordGapLocked(e *Entry, start, end uint64, reason, detail str
 		e.gapMergedTotal++
 		return
 	}
-	e.Gaps = append(e.Gaps, Gap{StartPos: start, EndPos: end, Reason: reason, Detail: detail})
+	e.Gaps = append(e.Gaps, Gap{StartPos: start, EndPos: end, Reason: reason, Detail: detail,
+		// 记录首次登记时间（C 案超时降级需要）。时钟未注入时 l.nowUnix 返回 0，
+		// 此时字段落为 0 ⇒ 判据视为“已超时”（保守方向：不会因为时钟缺失而永久停采）。
+		FirstSeenUnix: l.nowUnix()})
 }
 
 // 合并/折叠写入 Detail 的固定后缀标记。

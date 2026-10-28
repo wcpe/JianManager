@@ -62,11 +62,11 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 		appendRow(tblGap, row.Key, rowData{
 			key: mirrorKey(row.Key, row.ID),
 			fp: fingerprint(row.StartPos, row.EndPos, row.Reason, nullableText(row.Detail), row.Resolved,
-				nullableText(row.Resolution), nullableBytes(row.FoldSpans), row.FoldSpanMerges, row.ReasonCode, row.ResolvedAtUTC, row.ResolvedBy, row.FoldSpansUnknown),
+				nullableText(row.Resolution), nullableBytes(row.FoldSpans), row.FoldSpanMerges, row.ReasonCode, row.ResolvedAtUTC, row.ResolvedBy, row.FoldSpansUnknown, row.FirstSeenUnix),
 			values: func() ([]any, error) {
 				return []any{row.Key, row.ID, toInt64(row.StartPos), toInt64(row.EndPos), row.Reason,
 					nullableText(row.Detail), boolToInt(row.Resolved), nullableText(row.Resolution), nullableBytes(row.FoldSpans),
-					int64(row.FoldSpanMerges), row.ReasonCode, row.ResolvedAtUTC, row.ResolvedBy, boolToInt(row.FoldSpansUnknown)}, nil
+					int64(row.FoldSpanMerges), row.ReasonCode, row.ResolvedAtUTC, row.ResolvedBy, boolToInt(row.FoldSpansUnknown), row.FirstSeenUnix}, nil
 			},
 		})
 	}

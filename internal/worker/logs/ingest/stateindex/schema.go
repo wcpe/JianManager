@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS gap (
   resolved_at_utc TEXT NOT NULL DEFAULT '',
   resolved_by TEXT NOT NULL DEFAULT '',
   fold_spans_unknown INTEGER NOT NULL DEFAULT 0,
+  -- first_seen_unix：缺口首次登记时间（C 案超时降级需要）。
+  -- 老库升级后本列为 0 ⇒ 判据视为“已超时”（保守方向：不会因升级而永久停采）。
+  first_seen_unix INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (key, id)
 ) WITHOUT ROWID;
 -- 兼容已被旧版本建过表的库：老库会残留这个冗余索引，显式删除（幂等，不存在时无操作）。
@@ -211,6 +214,8 @@ type GapRow struct {
 	ReasonCode       string
 	ResolvedAtUTC    string
 	ResolvedBy       string
+	// FirstSeenUnix 是缺口首次登记时间（Unix 秒）。零值 = 旧数据，视为已超时。
+	FirstSeenUnix int64
 }
 
 // ProjectionRow 是 projection 表的一行（投影发布状态）。
@@ -307,7 +312,7 @@ func (c Counts) Empty() bool {
 var loadColumns = [tableCount][]string{
 	tblSource:          {"key", "log_source_id", "source_generation", "storage_namespace", "updated_at"},
 	tblPosition:        {"key", "read_pos", "durable_pos", "reclaim_pos", "acquire_paused", "pause_reason"},
-	tblGap:             {"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution", "fold_spans", "fold_span_merges", "reason_code", "resolved_at_utc", "resolved_by", "fold_spans_unknown"},
+	tblGap:             {"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution", "fold_spans", "fold_span_merges", "reason_code", "resolved_at_utc", "resolved_by", "fold_spans_unknown", "first_seen_unix"},
 	tblProjection:      {"key", "generation", "events_stored_through", "pending", "updated_at"},
 	tblInstanceBinding: {"uuid", "namespace", "generation", "mode", "work_dir", "rule_key", "relative_path"},
 	tblSourceAux:       {"key", "config", "payload"},
@@ -382,19 +387,21 @@ var specs = [tableCount]tableSpec{
 	tblGap: {
 		name:      "gap",
 		keyCols:   []string{"key", "id"},
-		mirrorSQL: "SELECT key, id, start_pos, end_pos, reason, detail, resolved, resolution, fold_spans, fold_span_merges, reason_code, resolved_at_utc, resolved_by, fold_spans_unknown FROM gap",
-		upsert: `INSERT INTO gap (key, id, start_pos, end_pos, reason, detail, resolved, resolution, fold_spans, fold_span_merges, reason_code, resolved_at_utc, resolved_by, fold_spans_unknown)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		mirrorSQL: "SELECT key, id, start_pos, end_pos, reason, detail, resolved, resolution, fold_spans, fold_span_merges, reason_code, resolved_at_utc, resolved_by, fold_spans_unknown, first_seen_unix FROM gap",
+		upsert: `INSERT INTO gap (key, id, start_pos, end_pos, reason, detail, resolved, resolution, fold_spans, fold_span_merges, reason_code, resolved_at_utc, resolved_by, fold_spans_unknown, first_seen_unix)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(key, id) DO UPDATE SET start_pos=excluded.start_pos, end_pos=excluded.end_pos,
 				reason=excluded.reason, detail=excluded.detail, resolved=excluded.resolved,
 				resolution=excluded.resolution, fold_spans=excluded.fold_spans, fold_span_merges=excluded.fold_span_merges,
-				reason_code=excluded.reason_code, resolved_at_utc=excluded.resolved_at_utc, resolved_by=excluded.resolved_by, fold_spans_unknown=excluded.fold_spans_unknown`,
+				reason_code=excluded.reason_code, resolved_at_utc=excluded.resolved_at_utc, resolved_by=excluded.resolved_by, fold_spans_unknown=excluded.fold_spans_unknown,
+				first_seen_unix=excluded.first_seen_unix`,
 		upsertBatch: "INSERT INTO gap (%s) VALUES %s",
-		columns:     []string{"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution", "fold_spans", "fold_span_merges", "reason_code", "resolved_at_utc", "resolved_by", "fold_spans_unknown"},
+		columns:     []string{"key", "id", "start_pos", "end_pos", "reason", "detail", "resolved", "resolution", "fold_spans", "fold_span_merges", "reason_code", "resolved_at_utc", "resolved_by", "fold_spans_unknown", "first_seen_unix"},
 		onConflict: `ON CONFLICT(key, id) DO UPDATE SET start_pos=excluded.start_pos, end_pos=excluded.end_pos,
 			reason=excluded.reason, detail=excluded.detail, resolved=excluded.resolved,
 			resolution=excluded.resolution, fold_spans=excluded.fold_spans, fold_span_merges=excluded.fold_span_merges,
-			reason_code=excluded.reason_code, resolved_at_utc=excluded.resolved_at_utc, resolved_by=excluded.resolved_by, fold_spans_unknown=excluded.fold_spans_unknown`,
+			reason_code=excluded.reason_code, resolved_at_utc=excluded.resolved_at_utc, resolved_by=excluded.resolved_by, fold_spans_unknown=excluded.fold_spans_unknown,
+			first_seen_unix=excluded.first_seen_unix`,
 		deleteStmt: "DELETE FROM gap WHERE key = ? AND id = ?",
 		orderBy:    "key, id",
 	},

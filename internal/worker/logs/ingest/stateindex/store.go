@@ -543,6 +543,8 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 		{"resolved_at_utc", "TEXT NOT NULL DEFAULT ''"},
 		{"resolved_by", "TEXT NOT NULL DEFAULT ''"},
 		{"fold_spans_unknown", "INTEGER NOT NULL DEFAULT 0"},
+		// first_seen_unix：缺口首次登记时间（C 案超时降级需要）。老库为 0 ⇒ 视为已超时。
+		{"first_seen_unix", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := addColumnIfMissing(ctx, db, "gap", column.name, column.definition); err != nil {
 			_ = db.Close()
@@ -2202,6 +2204,7 @@ func appendRow(st *State, spec tableSpec, values []any) error {
 			Resolved: asBool(values[6]), Resolution: asText(values[7]), FoldSpans: asBytes(values[8]),
 			FoldSpanMerges: int(intValue(values[9])), ReasonCode: asText(values[10]),
 			ResolvedAtUTC: asText(values[11]), ResolvedBy: asText(values[12]), FoldSpansUnknown: asBool(values[13])}
+		row.FirstSeenUnix = intValue(values[14])
 		if row.ID, err = asInt64(values[1]); err != nil {
 			return err
 		}

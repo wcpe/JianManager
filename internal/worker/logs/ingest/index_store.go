@@ -615,6 +615,7 @@ func ledgerRowsOfOpt(key string, saved persistedSource, core *indexLedgerCore, s
 			Resolved: gap.Resolved, Resolution: gap.Resolution, FoldSpans: spans,
 			FoldSpanMerges: gap.FoldSpanMerges, FoldSpansUnknown: gap.FoldSpansUnknown, ReasonCode: gap.ReasonCode,
 			ResolvedAtUTC: gap.ResolvedAtUTC, ResolvedBy: gap.ResolvedBy,
+			FirstSeenUnix: gap.FirstSeenUnix,
 		})
 	}
 	batches := make([]stateindex.BatchRow, 0, len(entry.DeliveryBatches))
@@ -760,6 +761,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 			Resolved: row.Resolved, Resolution: row.Resolution, FoldSpans: spans,
 			FoldSpanMerges: row.FoldSpanMerges, FoldSpansUnknown: row.FoldSpansUnknown || (len(spans) == 0 && strings.Contains(row.Detail, "超上限折叠")), ReasonCode: row.ReasonCode,
 			ResolvedAtUTC: row.ResolvedAtUTC, ResolvedBy: row.ResolvedBy,
+			FirstSeenUnix: row.FirstSeenUnix,
 		})
 	}
 	batches := make(map[string][]ledger.DeliveryBatch, len(rows.Batches))

@@ -162,6 +162,16 @@ type Gap struct {
 	// 为什么要显式记账：内存有界是硬约束，但退化不能换取虚假裁定；非零值会置 Unknown，
 	// 拒绝自动将该诊断凸包转成永久丢失凭据，必须补齐独立精确证据后再处置。
 	FoldSpanMerges int `json:"fold_span_merges,omitempty"`
+	// FirstSeenUnix 是该缺口**首次被登记**的时间（Unix 秒）。
+	//
+	// 用途（2026-10-28，C 案）：永久丢失类缺口的“超时降级”需要知道它等了多久。
+	//
+	// **旧数据兼容**：存量缺口没有这个字段（零值）。零值**不能**被当成“刚刚登记”，
+	// 否则一个已经存在数天的缺口会被当成新的、白等一小时。故判据里零值直接**视为已超时**
+	// （见 ledger.PermanentlyLostGapGrace；运维早已看到它们，不存在“来不及告警”的问题）。
+	//
+	// 为什么不用 ResolvedAtUTC：那个字段只对**放弃裁定**写入，语义不同。
+	FirstSeenUnix int64 `json:"first_seen_unix,omitempty"`
 }
 
 func (l *Ledger) UnresolvedGapCount(key SourceKey) int {
@@ -829,6 +839,9 @@ type Ledger struct {
 	entries map[SourceKey]*Entry
 	// nowUnix 可注入时钟，便于测试。
 	nowUnix func() int64
+	// permanentlyLostGrace 是永久丢失类缺口的宽限期（C 案，默认 DefaultPermanentlyLostGapGrace）。
+	// 零值 = 用默认值。
+	permanentlyLostGrace time.Duration
 	// revisions 记录每个源的**修订号**：任何一次改变该源账本内容的操作都让它 +1。
 	//
 	// 为什么需要它：上层（采集索引）必须知道「自上次持久化以来哪些源变了」，才能把持久化
@@ -858,7 +871,7 @@ func New() *Ledger {
 	return &Ledger{
 		entries:    make(map[SourceKey]*Entry),
 		revisions:  make(map[SourceKey]uint64),
-		nowUnix:    func() int64 { return 0 },
+		nowUnix:    func() int64 { return time.Now().Unix() },
 		batchPrune: DefaultDeliveryBatchPruneConfig(),
 	}
 }
@@ -1373,7 +1386,102 @@ func (l *Ledger) PauseAcquire(key SourceKey, reason string) error {
 	return nil
 }
 
+// DefaultPermanentlyLostGapGrace 是永久丢失类缺口的默认宽限期（1 小时）。
+//
+// 取值依据（2026-10-28，C 案）：
+//   - 太短（如 5 分钟）：告警来不及被人看到，近乎“静默放行”；
+//   - 太长（如 24 小时）：源停采一整天，与 Filebeat `ignore_older` 的教训相反。
+//
+// 1 小时足以让告警被巡检/值班发现，又不至于让采集停摆半天。
+const DefaultPermanentlyLostGapGrace = time.Hour
+
+// SetPermanentlyLostGapGrace 设置宽限期（0 或负数 = 用默认值）。运维可调。
+func (l *Ledger) SetPermanentlyLostGapGrace(d time.Duration) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if d <= 0 {
+		d = DefaultPermanentlyLostGapGrace
+	}
+	l.permanentlyLostGrace = d
+}
+
+// PermanentlyLostGapGrace 返回当前宽限期（观测/测试用）。
+func (l *Ledger) PermanentlyLostGapGrace() time.Duration {
+	if l == nil {
+		return DefaultPermanentlyLostGapGrace
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.permanentlyLostGrace <= 0 {
+		return DefaultPermanentlyLostGapGrace
+	}
+	return l.permanentlyLostGrace
+}
+
+// permanentlyLostGapExpiredLocked 报告某个永久丢失类缺口是否已过宽限期。调用方必须持写锁。
+//
+// **零值（FirstSeenUnix == 0）一律视为已超时**：
+//   - 旧账本的存量缺口没有这个字段 → 它们已经存在很久，不该再等一小时；
+//   - 时钟未注入时 nowUnix() 返回 0 → 如果把 0 当成“刚刚登记”，所有源会被永久停采
+//     （这是比“放行过早”严重得多的失效）。
+//
+// 两个理由都指向同一保守方向。
+func (l *Ledger) permanentlyLostGapExpiredLocked(gap Gap) bool {
+	if gap.FirstSeenUnix <= 0 {
+		return true
+	}
+	now := l.nowUnix()
+	if now <= 0 {
+		return true // 时钟未注入：不得因此永久停采
+	}
+	grace := l.permanentlyLostGrace
+	if grace <= 0 {
+		grace = DefaultPermanentlyLostGapGrace
+	}
+	return now-gap.FirstSeenUnix >= int64(grace/time.Second)
+}
+
 // ResumeAcquire 恢复采集。
+//
+// ## 阻塞判据（2026-10-28 重大修正，对齐 Filebeat / Fluent Bit）
+//
+// **旧行为**：任何未解决 gap 一律拒绝恢复。
+//
+// **新行为**：只有**不可自动愈合**且**会导错数据**的缺口才拒绝；
+// 已确认丢失的历史数据（`WAL_BODY_MISSING` / `ARCHIVE_CONTENT_UNKNOWN` /
+// `ARCHIVE_GZIP_CORRUPT` 等）**不再阻塞采集**。
+//
+// ### 为什么改（生产代价已付）
+//
+// 生产 19 个源里 10 个因这个硬闸停采 20+ 小时。缺口的字节确实丢了
+// （`WAL_BODY_MISSING` 经逐字节核实），而旧判据要求“先给个说法才能继续读”
+// ⇒ 为了 80KB 历史数据，牺牲了后续所有新日志的采集。
+//
+// ### 业界怎么做的（官方文档）
+//
+// Filebeat 只靠两个开关处理这类情形：
+//   - `ignore_older`：太老的文件根本不采；
+//   - `clean_removed` / `clean_inactive`：清理已不能读的位点。
+//
+// Fluent Bit 只有 `ignore_older` / `exclude_path`。
+//
+// **两家都没有「证明不了历史数据归属就停止采集整个源」这种机制**——
+// 它们的取舍明确：宁可漏一段已知范围的历史，也不能停止采集新日志
+// （前者是有限损失，后者是损失无限增长）。
+//
+// ### 新判据的实现
+//
+// 仍阻塞的只剩两类（都是“**还可能救回来**”或“**会静默丢新数据**”的）：
+//  1. `GapReasonsHealableOnReResume` 白名单内的（暂停期从未进 WAL 的批）——
+//     它们必须等一次回读重放，否则真的会丢；
+//  2. 其它未能分类的原因——保持默认拒绝（default-deny 未动）。
+//
+// 已确认丢失的历史数据类缺口**不阻塞**，但它们**必须可见**：
+// 本函数返回后可读 `UnresolvedGapCountOf`，观测面（观测量/告警/`UnresolvedGapBlockedSources`）
+// 照旧能看到它们，只是不再把源钉死。
 func (l *Ledger) ResumeAcquire(key SourceKey) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -1382,9 +1490,32 @@ func (l *Ledger) ResumeAcquire(key SourceKey) error {
 		return err
 	}
 	for _, gap := range e.Gaps {
-		if !gap.Resolved {
-			return fmt.Errorf("ledger: unresolved gaps still block acquisition")
+		if gap.Resolved {
+			continue
 		}
+		// 可愈合类：必须等回读重放，不得放行（否则真的会丢数据）。
+		//
+		// 文案保留原前缀 `unresolved gaps`（多个现有用例与运维脚本按它匹配），
+		// 只在后面追加原因与分类。
+		if IsGapReasonHealableOnReResume(gap.Reason) {
+			return fmt.Errorf("ledger: unresolved gaps still block acquisition (re-read-healable, reason=%s)", gap.Reason)
+		}
+		// 已确认丢失的历史数据类：**超时降级**（2026-10-28，C 案）。
+		//
+		// 设计意图：保留“先告警、不静默”的原则，同时不把源永久钉死。
+		//   - 缺口刚登记 ⇒ 阻塞恢复，让人看到告警（与旧契约一致）；
+		//   - 超过宽限期 ⇒ 自动降级为“可见但不阻塞”，并在账本里留下审计痕迹。
+		//
+		// 宽限期见 PermanentlyLostGapGrace。与 Filebeat 的 `ignore_older` 同精神：
+		// 先尝试、太久了就跳过。
+		if IsGapReasonPermanentlyLost(gap.Reason) {
+			if !l.permanentlyLostGapExpiredLocked(gap) {
+				return fmt.Errorf("ledger: unresolved gaps still block acquisition (permanently-lost, within grace, reason=%s)", gap.Reason)
+			}
+			continue
+		}
+		// 其余原因：默认拒绝（default-deny 未动）。
+		return fmt.Errorf("ledger: unresolved gaps still block acquisition (reason=%s)", gap.Reason)
 	}
 	e.AcquirePaused = false
 	e.PauseReason = ""
