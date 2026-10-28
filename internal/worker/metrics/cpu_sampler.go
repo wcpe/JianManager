@@ -13,11 +13,31 @@ import (
 // CPUSnapshot 是同一采样窗口发布的只读 CPU 指标，占比范围为 0..1。
 // 无有效窗口时 Valid=false 且占比为零；现有 RPC 标量仍以零降级，不能表达缺测。
 type CPUSnapshot struct {
-	CPUUsage  float32
-	IOWait    float32
+	CPUUsage float32
+	IOWait   float32
+	// Breakdown 是 CPU 时间构成（FR-513），各分量占比 0..1、按同一窗口总量归一。
+	//
+	// 为什么需要它：只给 CPUUsage + IOWait 无法回答「谁在吃 CPU」——
+	// iowait 高是 IO 瓶颈、system 高是内核态开销、user 高才是应用自身忙，
+	// 三者的处置动作完全不同。此前只能看到聚合值，运维得再登录机器 ps/top。
+	Breakdown CPUBreakdown
 	Valid     bool
 	SampledAt time.Time
 	Error     string
+}
+
+// CPUBreakdown CPU 时间构成占比（0..1，同一窗口增量归一，各分量之和 ≈ 1）。
+//
+// 刻意**不含** guest / guest_nice：/proc/stat 有这两列，但它们在非虚拟化宿主恒为 0，
+// 加上只会让前端多两个永远为空的行（spec §6 待定 2 的取舍，默认不含）。
+type CPUBreakdown struct {
+	User    float32
+	Nice    float32
+	System  float32
+	Idle    float32
+	IRQ     float32
+	SoftIRQ float32
+	Steal   float32
 }
 
 // CPUReader 只允许消费已发布快照，不暴露累计计数和采样基线。
@@ -161,6 +181,17 @@ func (s *CPUSampler) Sample(ctx context.Context) {
 	busy := delta.User + delta.System + delta.Nice + delta.Irq + delta.Softirq + delta.Steal
 	s.publish(CPUSnapshot{
 		CPUUsage: float32(busy / total), IOWait: IOWaitRatio(delta),
+		// 各分量与 busy/total 用**同一个 total** 归一，保证「各分量之和 ≈ 1」成立；
+		// 若各自除以不同分母，前端把构成画成占比条时会出现加起来不到 100% 的怪象。
+		Breakdown: CPUBreakdown{
+			User:    float32(delta.User / total),
+			Nice:    float32(delta.Nice / total),
+			System:  float32(delta.System / total),
+			Idle:    float32(delta.Idle / total),
+			IRQ:     float32(delta.Irq / total),
+			SoftIRQ: float32(delta.Softirq / total),
+			Steal:   float32(delta.Steal / total),
+		},
 		Valid: true, SampledAt: now,
 	})
 }

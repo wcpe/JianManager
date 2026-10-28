@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/worker/hostobs"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
@@ -91,6 +92,55 @@ type Config struct {
 	Recover RecoverConfig `mapstructure:"recover"`
 	// HealthScan 运行期实例健康巡检与自愈（FR-459）：识别假死、受控自愈、崩溃熔断。
 	HealthScan HealthScanConfig `mapstructure:"health_scan"`
+	// Startup 启动期可观测性配置（FR-486）。
+	Startup StartupConfig `mapstructure:"startup"`
+	// HostObserve 主机级观测采集配置（FR-513）。
+	HostObserve HostObserveConfig `mapstructure:"host_observe"`
+}
+
+// HostObserveConfig 主机级观测采集配置（FR-513）。
+//
+// 全部有安全默认：写错/缺省即用默认值，观测配置不该让 Worker 起不来。
+type HostObserveConfig struct {
+	// TopN 整机 top-N 进程数量（默认 5，上限 10）。
+	TopN int `mapstructure:"top_n"`
+	// TopInterval 整机进程扫描间隔（默认 10s，**下限 10s**）。
+	// 下限是硬约束：扫描是 O(全部进程)，而心跳 30s 才消费一次，更密只是白烧 CPU。
+	TopInterval string `mapstructure:"top_interval"`
+	// Mounts 分挂载点白名单；空=自动发现物理分区（跳过 tmpfs/overlay/proc 等伪文件系统）。
+	// 容器部署建议显式配置，避免看到宿主挂载。
+	Mounts []string `mapstructure:"mounts"`
+}
+
+// StartupConfig 启动期可观测性配置（FR-486）。
+//
+// 只有一个旋钮：状态规模告警阈值。阶段计时与阶段日志**不提供开关**——
+// 启动期每次进程生命周期只跑一遍，没有噪声成本，而现场出问题时最需要的是
+// 「上一次启动的日志里本来就有数据」。
+type StartupConfig struct {
+	// StateWarnMB 启动期状态数据（索引库 + 事件段）超过该 MB 数时打 WARN。
+	// 0 = 使用默认值；负数 = 关闭告警。
+	StateWarnMB int `mapstructure:"state_warn_mb"`
+}
+
+// 默认阈值。取值依据：2026-09-28 事故的状态规模是 1.2GB（该规模下注册被拖到 8m39s），
+// 而正常生产规模（PRD 记录 state.json 约 178KiB、索引数百 MB 量级）远低于此。
+// 512MB 落在「明显异常但不至于每天误报」的区间——宁可偶尔多一条 WARN，也不要重演
+// 「1.2GB 拖了 8 分钟而全程无提示」。
+const defaultStartupStateWarnMB = 512
+
+// StartupStateWarnMB 返回状态规模告警阈值（MB）。负数表示关闭。
+func (c *Config) StartupStateWarnMB() int {
+	if c == nil {
+		return defaultStartupStateWarnMB
+	}
+	if c.Startup.StateWarnMB < 0 {
+		return 0 // 关闭
+	}
+	if c.Startup.StateWarnMB == 0 {
+		return defaultStartupStateWarnMB
+	}
+	return c.Startup.StateWarnMB
 }
 
 // HealthScanConfig 运行期实例健康巡检与自愈配置（FR-459）。
@@ -1691,4 +1741,21 @@ func configSearchDirs() []string {
 	}
 	dirs = append(dirs, "configs")
 	return dirs
+}
+
+// HostObserveOptions 把配置收敛为 hostobs 的构造选项（FR-513）。
+//
+// 非法 interval 回退默认而不报错：观测配置写错不该阻断启动，
+// 而 hostobs.New 内部还有 10s 硬下限兜底。
+func (c *Config) HostObserveOptions() hostobs.Options {
+	opts := hostobs.Options{}
+	if c == nil {
+		return opts
+	}
+	opts.TopN = c.HostObserve.TopN
+	opts.Mounts = c.HostObserve.Mounts
+	if d, err := time.ParseDuration(strings.TrimSpace(c.HostObserve.TopInterval)); err == nil && d > 0 {
+		opts.Interval = d
+	}
+	return opts
 }

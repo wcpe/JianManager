@@ -57,7 +57,12 @@ const (
 type PluginEvent struct {
 	InstanceUUID string
 	Type         PluginEventKind
-	Timestamp    int64
+	// Timestamp 事件发生时刻，**epoch 毫秒**。
+	//
+	// 单位必须与下游一致：CP 的 business_event_cursor.OccurredAt 注释即写明「epoch 毫秒，
+	// 探针侧时钟」，Loom 摄入侧也按毫秒折 UTC 日。曾误用 time.Now().Unix()（秒），
+	// 结果 1792957711 被当毫秒解析成 1970-01-21，日聚合整体落到 1970。
+	Timestamp int64
 	Platform     string // bukkit | bungee（来自探针 hello）
 	Version      string // 探针版本（来自探针 hello）
 	// 以下为探针业务事件（FR-066）携带的结构化字段；连接/心跳事件为空。
@@ -68,9 +73,10 @@ type PluginEvent struct {
 	FromServer string // cross_server：来源子服
 	ToServer   string // cross_server：目标子服
 	Raw        string // 透传原始消息载荷（下游按需解析）
-	// 以下为 JBIS 业务事件（FR-115/ADR-027）字段；监控/治理事件为空。
-	Domain   string // 业务域（economy/inventory…；空/core 为非业务）
-	DedupKey string // 业务事件去重键（CP 按 (domain,dedupKey) 幂等落库）
+	// 以下为业务事件信封字段（FR-115/ADR-027）：Worker 只透传不消费，监控/治理事件为空。
+	// FR-521 / ADR-106 起 JM 不做业务，CP 侧不再落库/聚合，这两字段仅为保通道契约而保留。
+	Domain   string // 业务域命名空间（取值由下游约定，JM 不定义也不校验；空/core 为非业务帧）
+	DedupKey string // 业务事件去重键（原样透传，幂等去重由下游业务台负责）
 }
 
 // PluginEventHandler 接收插件桥冒泡的事件，由 Worker 注入以桥接到 gRPC 事件流。
@@ -85,10 +91,10 @@ type bridgeMessage struct {
 	Version  string          `json:"version,omitempty"`
 	Event    string          `json:"event,omitempty"` // type=event 时的事件子类型
 	Data     json.RawMessage `json:"data,omitempty"`  // 透传业务载荷
-	// domain 业务域命名空间（JBIS，FR-115/ADR-027）：空/core=监控/治理既有帧；
-	// economy/inventory… 为业务域（即业务/监控分流标志，单连接无需独立 session scope，见 ADR-025）。
+	// domain 业务域命名空间（ADR-027）：空/core=监控/治理既有帧；其余取值由下游约定，
+	// Worker 只按前缀分流、不解释语义（FR-521 / ADR-106：JM 不理解任何业务语义）。
 	Domain string `json:"domain,omitempty"`
-	// dedupKey 业务事件去重键（JBIS）：业务 event 帧携带，Worker 透传给 CP 按 (domain,dedupKey) 幂等落库。
+	// dedupKey 业务事件去重键：业务 event 帧携带，Worker 原样透传给 CP 与下游，本层不做去重。
 	DedupKey string `json:"dedupKey,omitempty"`
 }
 
@@ -200,6 +206,9 @@ type PluginBridgeServer struct {
 	mu        sync.Mutex
 	sessions  map[string]*PluginSession
 	onEvent   PluginEventHandler
+	// chunks 上行分片帧的重组器（FR-526 §2.5）。跨实例共享一张表，按
+	// (实例, groupId) 隔离；读循环在语义分发之前调用，故下游永远拿到完整原帧。
+	chunks *chunkAssembler
 }
 
 // NewPluginBridgeServer 创建插件桥服务端。
@@ -210,6 +219,7 @@ func NewPluginBridgeServer(jwtSecret string) *PluginBridgeServer {
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 		sessions: make(map[string]*PluginSession),
+		chunks:   newChunkAssembler(),
 	}
 }
 
@@ -319,11 +329,13 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 		if err := session.Conn.Close(); err != nil {
 			slog.Debug("关闭插件桥会话失败", "instanceId", session.InstanceID, "error", err)
 		}
+		// 会话结束即清掉本实例全部在途重组组：半组已无从拼完，留着只占内存。
+		s.dropInstanceChunks(session.InstanceID)
 		if s.removeSession(session) {
 			s.emit(PluginEvent{
 				InstanceUUID: session.InstanceID,
 				Type:         PluginEventDisconnected,
-				Timestamp:    time.Now().Unix(),
+				Timestamp:    time.Now().UnixMilli(),
 				Platform:     session.Platform,
 				Version:      session.Version,
 			})
@@ -335,7 +347,7 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 	s.emit(PluginEvent{
 		InstanceUUID: session.InstanceID,
 		Type:         PluginEventConnected,
-		Timestamp:    time.Now().Unix(),
+		Timestamp:    time.Now().UnixMilli(),
 	})
 	// 回执 welcome，确认会话建立。
 	if err := session.writeJSON(bridgeMessage{Type: "welcome", Instance: session.InstanceID}); err != nil {
@@ -384,53 +396,117 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 			continue // 容忍非法帧，不断连
 		}
 
-		switch msg.Type {
-		case "ping":
-			if err := session.writeJSON(bridgeMessage{Type: "pong"}); err != nil {
-				slog.Debug("发送插件桥心跳响应失败", "instanceId", session.InstanceID, "error", err)
-				return
-			}
-			s.emit(PluginEvent{
-				InstanceUUID: session.InstanceID,
-				Type:         PluginEventHeartbeat,
-				Timestamp:    time.Now().Unix(),
-			})
-		case "hello":
-			// 记录探针自报的平台/版本，供后续事件与连接状态展示携带。
-			session.Platform = msg.Platform
-			session.Version = msg.Version
-			slog.Info("插件桥握手 hello", "instanceId", session.InstanceID, "platform", msg.Platform, "version", msg.Version)
-		case "event":
-			// command_result（FR-067）：路由给同步等待的治理调用方（按 request_id）；
-			// 无人等待（超时后到达/重发）则不阻塞，继续作为事件冒泡供观测。
-			if msg.Event == "command_result" {
-				var cr commandResultData
-				if err := json.Unmarshal(msg.Data, &cr); err != nil {
-					slog.Debug("解析插件桥指令回执失败", "instanceId", session.InstanceID, "error", err)
-				} else {
-					session.deliverResult(CommandResult(cr))
-				}
-			}
-			// 业务事件冒泡（FR-066）：解析 data 里的结构化玩家字段填充事件，原始载荷一并透传（raw）。
-			// Worker 只解析、不消费语义（跨服感知聚合在 CP，治理执行在 FR-067）。
-			d := parseBridgeEventData(msg.Data)
-			s.emit(PluginEvent{
-				InstanceUUID: session.InstanceID,
-				Type:         msg.Event,
-				Timestamp:    time.Now().Unix(),
-				Platform:     session.Platform,
-				Version:      session.Version,
-				PlayerName:   d.PlayerName,
-				PlayerUUID:   d.PlayerUUID,
-				Message:      d.Message,
-				Server:       d.Server,
-				FromServer:   d.FromServer,
-				ToServer:     d.ToServer,
-				Raw:          string(msgBytes),
-				Domain:       msg.Domain,   // JBIS 业务域透传（FR-115）
-				DedupKey:     msg.DedupKey, // JBIS 去重键透传（FR-115）
-			})
+		s.dispatchFrame(session, msg, msgBytes, true)
+	}
+}
+
+// dispatchFrame 分发一帧已解析的上行帧（原始帧，或分片重组出的原帧）。
+//
+// allowChunk=false 表示"这已经是重组结果"，不再尝试分片：重组出的帧若又声明
+// event=chunk 属于对端实现错误，按普通事件冒泡即可，绝不因递归把读循环打穿。
+func (s *PluginBridgeServer) dispatchFrame(session *PluginSession, msg bridgeMessage, msgBytes []byte, allowChunk bool) {
+	switch msg.Type {
+	case "ping":
+		if err := session.writeJSON(bridgeMessage{Type: "pong"}); err != nil {
+			slog.Debug("发送插件桥心跳响应失败", "instanceId", session.InstanceID, "error", err)
+			return
 		}
+		s.emit(PluginEvent{
+			InstanceUUID: session.InstanceID,
+			Type:         PluginEventHeartbeat,
+			Timestamp:    time.Now().UnixMilli(),
+		})
+	case "hello":
+		// 记录探针自报的平台/版本，供后续事件与连接状态展示携带。
+		session.Platform = msg.Platform
+		session.Version = msg.Version
+		slog.Info("插件桥握手 hello", "instanceId", session.InstanceID, "platform", msg.Platform, "version", msg.Version)
+	case "event":
+		// 分片帧（FR-526 §2.5）：先重组再交给下面既有的语义分发，下游完全无感。
+		// 必须排在 command_result 判定之前——被分片的多半正是超大的命令回执。
+		if allowChunk && msg.Event == chunkEventName {
+			s.handleChunkFrame(session, msgBytes)
+			return
+		}
+		// command_result（FR-067）：路由给同步等待的治理调用方（按 request_id）；
+		// 无人等待（超时后到达/重发）则不阻塞，继续作为事件冒泡供观测。
+		if msg.Event == "command_result" {
+			var cr commandResultData
+			if err := json.Unmarshal(msg.Data, &cr); err != nil {
+				slog.Debug("解析插件桥指令回执失败", "instanceId", session.InstanceID, "error", err)
+			} else {
+				session.deliverResult(CommandResult(cr))
+			}
+		}
+		// 业务事件冒泡（FR-066）：解析 data 里的结构化玩家字段填充事件，原始载荷一并透传（raw）。
+		// Worker 只解析、不消费语义（跨服感知聚合在 CP，治理执行在 FR-067）。
+		d := parseBridgeEventData(msg.Data)
+		s.emit(PluginEvent{
+			InstanceUUID: session.InstanceID,
+			Type:         msg.Event,
+			Timestamp:    time.Now().UnixMilli(),
+			Platform:     session.Platform,
+			Version:      session.Version,
+			PlayerName:   d.PlayerName,
+			PlayerUUID:   d.PlayerUUID,
+			Message:      d.Message,
+			Server:       d.Server,
+			FromServer:   d.FromServer,
+			ToServer:     d.ToServer,
+			Raw:          string(msgBytes),
+			Domain:       msg.Domain,   // JBIS 业务域透传（FR-115）
+			DedupKey:     msg.DedupKey, // JBIS 去重键透传（FR-115）
+		})
+	}
+}
+
+// handleChunkFrame 解析一帧上行分片、交给重组器；到齐则把原帧重新分发（FR-526 §2.5）。
+//
+// 任何拒收/丢弃都只记日志与计数，**绝不断连**：一帧坏片不该拖垮整条桥，
+// 与其他帧（非法 JSON 直接 continue）的容错策略一致。
+func (s *PluginBridgeServer) handleChunkFrame(session *PluginSession, msgBytes []byte) {
+	var req chunkRequest
+	if err := json.Unmarshal(msgBytes, &req); err != nil {
+		slog.Debug("解析插件桥分片帧失败", "instanceId", session.InstanceID, "error", err)
+		return
+	}
+	if req.GroupID == "" {
+		slog.Debug("插件桥分片帧缺少 groupId，已丢弃", "instanceId", session.InstanceID)
+		return
+	}
+
+	raw, err := s.chunks.accept(session.InstanceID, req)
+	// 收片后统一触发一次超时清扫（节流 1s，全表 ≤ 8×实例数）。
+	for _, d := range s.chunks.sweep() {
+		logChunkDrop(d)
+	}
+	if err != nil {
+		slog.Warn("插件桥分片被拒收",
+			"instanceId", session.InstanceID,
+			"groupId", req.GroupID,
+			"seq", req.Seq,
+			"total", req.Total,
+			"error", err)
+		return
+	}
+	if raw == nil {
+		return // 组未到齐，等后续片
+	}
+
+	// 重组完成：原帧文本逐字节等于探针切分前的 payload，重新走一遍同一分发路径。
+	var msg bridgeMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		slog.Warn("插件桥重组后的原帧不是合法 JSON，已丢弃",
+			"instanceId", session.InstanceID, "groupId", req.GroupID, "error", err)
+		return
+	}
+	s.dispatchFrame(session, msg, raw, false)
+}
+
+// dropInstanceChunks 会话结束时清掉该实例的全部在途重组组（半组没人能拼完，留着只占内存）。
+func (s *PluginBridgeServer) dropInstanceChunks(instanceID string) {
+	for _, d := range s.chunks.dropInstance(instanceID) {
+		logChunkDrop(d)
 	}
 }
 

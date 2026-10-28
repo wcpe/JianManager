@@ -635,6 +635,17 @@ type Entry struct {
 	AcquirePaused bool   `json:"acquire_paused"`
 	PauseReason   string `json:"pause_reason,omitempty"`
 
+	// pausedAt 是本次暂停的**起始时刻**（进程内状态：不落库、不参与 JSON 序列化与索引映射，
+	// 重启后归零）。
+	//
+	// 为什么需要它（FR-485）：既有状态只有「是否暂停」这个布尔量，回答不了事故里真正
+	// 要紧的问题——「这个源卡了多久」。2026-09-28 事故的形态正是几个源被闸住后无人察觉，
+	// 而「暂停 3 小时」与「暂停 3 秒」在运维上是完全不同的两件事。
+	//
+	// 重启归零的语义是可接受的：重启本身会打一条启动日志，且「刚暂停」不会造成误报，
+	// 只会让读数偏小（安全方向——不会伪造出并不存在的事故时长）。
+	pausedAt time.Time
+
 	// deliveryPrunedThrough 是该源批次最后一次被裁时的水位（进程内状态：不落库、不参与
 	// JSON 序列化与索引映射，重启后归零等于强制再裁一次——裁剪幂等，重复裁无害）。
 	//
@@ -652,6 +663,14 @@ type Entry struct {
 	// 采集都重扫一遍列表——正是 deliveryPrunedThrough 要消除的那个固定税。两者一起判才算
 	// 「这个 (Reclaim, 水位) 组合已经处理过」。同样是进程内状态，语义与重启归零同上。
 	deliveryPrunedWatermark uint64
+
+	// gapPrunedThrough / gapPrunedWatermark 是已解决缺口裁剪的去重键（FR-486 ③ 附带修复），
+	// 与上面那对同构、同为进程内状态（不落库、不参与 JSON 与索引映射，重启归零=强制再裁一次）。
+	//
+	// 为什么需要去重：缺口列表在生产可达十万级，若每轮采集都全扫一遍找可裁项，
+	// 就把「空间优化」变成了固定 CPU 负担。水位没变就不可能有新的可裁项。
+	gapPrunedThrough   uint64
+	gapPrunedWatermark uint64
 
 	// gapMergedTotal / gapFoldedTotal 是缺口定界的进程内计数（观测用，同 deliveryPrunedThrough：
 	// 小写字段不落库、不参与索引映射与 JSON 快照，重启归零）。
@@ -963,6 +982,7 @@ func (l *Ledger) RecordDelivery(key SourceKey, start, end uint64, state logtypes
 	e.DeliveryBatches = append(e.DeliveryBatches, DeliveryBatch{Start: start, End: end, State: state})
 	e.DeliveryState = state
 	l.pruneDeliveryBatchesLocked(e)
+	l.pruneResolvedGapsLocked(e)
 	e.Positions.Delivery = contiguousDeliveryEnd(e.DeliveryBatches, e.Positions.Reclaim)
 	return nil
 }
@@ -1119,9 +1139,30 @@ func (l *Ledger) PauseAcquire(key SourceKey, reason string) error {
 	if err != nil {
 		return err
 	}
+	// 只在「从未暂停 → 暂停」时记起点：已在暂停中又被再次暂停（原因可能被覆盖）
+	// 不得重置计时，否则一个反复被重判的源会永远显示「刚暂停几秒」——
+	// 那恰好会把要做的事故（长期卡死）抹平成正常态。
+	if !e.AcquirePaused {
+		e.pausedAt = time.Now()
+	}
 	e.AcquirePaused = true
 	e.PauseReason = reason
 	return nil
+}
+
+// PausedSince 返回该源本次暂停的起始时刻与是否暂停。
+//
+// 供 FR-485 的「暂停时长」指标使用。ok=false 表示未暂停（或该源不存在）；
+// 起点未知（老状态加载后未再暂停）时同样 ok=false，让消费方报 0 而不是报一个
+// 由 time.Time 零值推出的巨大秒数。
+func (l *Ledger) PausedSince(key SourceKey) (time.Time, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok || e == nil || !e.AcquirePaused || e.pausedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return e.pausedAt, true
 }
 
 // ResumeAcquire 恢复采集。
@@ -1139,6 +1180,9 @@ func (l *Ledger) ResumeAcquire(key SourceKey) error {
 	}
 	e.AcquirePaused = false
 	e.PauseReason = ""
+	// 清除暂停起点（FR-485）：否则下次暂停会沿用旧起点，报出一个跨越两段暂停的
+	// 虚假时长。下次暂停时 PauseAcquire 会重新记起点。
+	e.pausedAt = time.Time{}
 	return nil
 }
 
@@ -1270,6 +1314,7 @@ func (l *Ledger) TryReclaim(key SourceKey) (uint64, error) {
 	}
 	pos, err := l.tryReclaimLocked(e)
 	l.pruneDeliveryBatchesLocked(e)
+	l.pruneResolvedGapsLocked(e)
 	return pos, err
 }
 

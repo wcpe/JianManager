@@ -391,8 +391,7 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 	return states
 }
 
-// Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。
-// jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
+// Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。// jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
 // stopCommand 为优雅停止命令（按角色派生：MC 后端 stop / 代理 end），空时回退默认 stop。
 // probePort 为实例 ServerProbe /metrics 端口（CP 分配），供心跳采集器自采富指标（FR-060）；0=未部署。
 // gracefulStopTimeoutSeconds 为优雅停止超时（秒，CP 从平台设置下发，FR-063）；0=未指定，wrapper 回退默认。

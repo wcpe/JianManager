@@ -14,6 +14,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/directprobe"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/worker/hostobs"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
@@ -159,6 +160,9 @@ type Heartbeat struct {
 	managedRuntimeProvider ManagedRuntimeProvider
 	// cpuReader 由主进程注入唯一 CPU owner；心跳只读已发布窗口。
 	cpuReader metrics.CPUReader
+	// hostObserver 主机级观测采集器（FR-513）。nil 时不上报主机级数据——
+	// 老装配/测试构造无需改动，CP 侧按缺测处理。
+	hostObserver hostobs.Reader
 	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）；
 	// 为 nil 时心跳不应用下发代理（Worker 仅用本地 yaml/env，向后兼容旧 CP）。
 	proxyApplier *proxyApplier
@@ -181,6 +185,14 @@ func New(controlPlaneAddr, nodeUUID, nodeSecret string, interval time.Duration, 
 		stopCh:           make(chan struct{}),
 		instanceProvider: provider,
 	}
+}
+
+// SetHostObserver 在 Start 前注入主机级观测采集器（FR-513）。
+//
+// 与 SetCPUReader 同款：只注入**只读快照**接口，心跳不触发采集——
+// 整机进程扫描是重活，放在心跳里会拖慢心跳本身。
+func (h *Heartbeat) SetHostObserver(observer hostobs.Reader) {
+	h.hostObserver = observer
 }
 
 // SetCPUReader 在 Start 前注入 Worker 唯一 CPU owner 的只读快照接口。
@@ -290,7 +302,7 @@ func (h *Heartbeat) sendHeartbeatWithRetry() {
 // buildHeartbeatRequest 组装本拍心跳负载（含节点指标、每实例直探快照、运行中任务），
 // 返回负载与该拍可移除的终态任务 id。采集只在此处发生一次，由重试循环复用。
 func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []string) {
-	req := register.CollectHeartbeatData(h.nodeUUID, h.cpuReader)
+	req := register.CollectHeartbeatDataWithHost(h.nodeUUID, h.hostObserver, h.cpuReader)
 
 	// 附加实例状态快照 + 每实例直探快照（FR-060 时序留存 + FR-446/447）。
 	if h.instanceProvider != nil {

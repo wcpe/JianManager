@@ -391,16 +391,40 @@ type Manager struct {
 	selfHealStallSkip  atomic.Int64
 	// #179 第 1 步（③ 观测，行为中性）：补段助手的**四处静默 return** 的按源去重计数 + 首次 Debug。
 	// 为什么要它：现场"某源零 `滚动回收` 行、且看不出为什么不动"的根因就是这四处全静默 ✗。
-	blockedSegHold     atomic.Int64 // 段 hold（HasRecoveryHold）
-	blockedConfigHold  atomic.Int64 // 配置层 hold（m.recoveryHold）
-	blockedNoMaterial  atomic.Int64 // to <= from（无"已确认未覆盖"区间）
-	blockedWatermark   atomic.Int64 // 水位复读失败（变则弃）
-	blockedStallWarns  atomic.Int64 // ② 有界判据：N 轮无进展 ⇒ 告警次数（可观测 ✓）
-	blockedLoggedMu    sync.Mutex
-	blockedLogged      map[string]struct{} // 按源去重（首次 Debug 一次，不刷屏 ✓）
-	reclaimStallMu     sync.Mutex
-	reclaimStallRounds map[string]int // ② 按源"回收停滞轮次"（reclaim 未前进的连续轮数 ✓）
-	reclaimStallLast   map[string]uint64
+	blockedSegHold    atomic.Int64 // 段 hold（HasRecoveryHold）
+	blockedConfigHold atomic.Int64 // 配置层 hold（m.recoveryHold）
+	blockedNoMaterial atomic.Int64 // to <= from（无"已确认未覆盖"区间）
+	blockedWatermark  atomic.Int64 // 水位复读失败（变则弃）
+	blockedStallWarns atomic.Int64 // ② 有界判据：N 轮无进展 ⇒ 告警次数（可观测 ✓）
+	blockedLoggedMu   sync.Mutex
+	blockedLogged     map[string]struct{} // 按源去重（首次 Debug 一次，不刷屏 ✓）
+
+	// ---- FR-485 日志平台可观测性 ----
+	//
+	// 这几个计数器只增不减，供心跳按「相邻两拍差分」推导速率，或直接作为累计量上报。
+	// 定位于**事故取证**：2026-09-28 的 117 MB/s 持续重写、退避风暴、慢查询刷屏
+	// 当时全靠人肉从日志里翻，平台自己一无所知。
+	//
+	// persistBytesTotal 是采集索引**累计**写入字节（≈ 逻辑写入量，不含 SQLite 页开销）。
+	// 为什么不上报它而由心跳做差分：速率口径必须与采样节拍一致，累计量才是可靠真源。
+	persistBytesTotal atomic.Int64
+	// verifyBackoffCount 投影校验**进入退避**的累计次数。
+	// 判读：稳态下应缓慢增长（可见延迟约 1s，退避探测点会命中几次）；
+	// 短时间激增才是异常信号（VL 压力或写后可见性恶化）。
+	verifyBackoffCount atomic.Int64
+	// slowSQLCount / slowSQLMaxMs 投影校验查询的慢查询累计次数与最慢单次耗时（纳秒存储）。
+	// 「慢」的判据统一为 verifySlowQueryThreshold（500ms），与既有告警日志同源。
+	slowSQLCount atomic.Int64
+	slowSQLMaxNs atomic.Int64
+	// deliveryBatches / deliveryFailures 投递批次总数与失败数（窗口外累计，由消费方按需差分）。
+	deliveryBatches  atomic.Int64
+	deliveryFailures atomic.Int64
+	// deliveryFailureClassCounts 按失败分类累计（分类 → 次数）。
+	// 用固定小集合（auth/status_4xx/status_5xx/transport/other），避免按错误文本产生无界基数。
+	deliveryFailureClassCounts sync.Map // map[string]*atomic.Int64
+	reclaimStallMu             sync.Mutex
+	reclaimStallRounds         map[string]int // ② 按源"回收停滞轮次"（reclaim 未前进的连续轮数 ✓）
+	reclaimStallLast           map[string]uint64
 	// sweepRollingProbes / nsRolling（#66-⑤ 诊断，只读）：兜底环轮转窗口里**实际发起**的
 	// "只滚动/补段"自愈次数与耗时（前置是 O(1) 的"有欠账"判据 ⇒ 健康源不发起 ⇒ 本读数同时是
 	// **成本定界**的证明 ✓）。
@@ -4527,7 +4551,19 @@ func (m *Manager) identityConflictCount(namespace, sourceKey string) uint64 {
 	return total
 }
 
-func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
+func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (result pipeline.DeliveryResult, err error) {
+	// FR-485：投递成功率/分类统计的唯一收口点。
+	//
+	// 为什么放在这里用**命名返回**：本函数有十余个 return（预览失败、去重后无写入、
+	// 写后校验失败…），逐个埋点既易漏又会把观测逻辑撒进投递主路径。用 defer 在这里
+	// 统一记账，**不改变任何既有返回语义**——即使未来新增 return 也自动被统计到。
+	//
+	// 0 条事件的早退不计入分母：那不是一次投递尝试，计入会把失败率稀释成
+	// 「投递很健康」的假象（空批在稳态下占绝大多数，正是最容易被稀释的一项）。
+	//
+	// 注意：本闭包只读命名返回值，**不 recover panic**——吞掉 panic 会改变故障语义。
+	defer func() { m.noteDeliveryOutcome(events, result, err) }()
+
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
@@ -4581,10 +4617,11 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		seen = make(map[string]eventIdentity, len(inlineEvents))
 		// 段 B（#54 修复）：内联集合的规范化遍历（O(段行数)）**在锁外** —— 锁内只留上面的快照。
 		for _, event := range inlineEvents {
-			event, err := normalizeCanonicalEvent(event)
-			if err != nil {
-				return pipeline.DeliveryResult{}, err
+			normalized, nerr := normalizeCanonicalEvent(event)
+			if nerr != nil {
+				return pipeline.DeliveryResult{}, nerr
 			}
+			event = normalized
 			seen[event.EventID] = eventIdentity{hash: event.CanonicalHash, start: event.Record.Start,
 				end: event.Record.End, size: len(event.Message), msg: event.Message, level: event.Level,
 				stream: event.Stream, idx: -1}
@@ -4700,7 +4737,7 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 		tail.Events = toWrite
 		plan.Tail = &tail
 	}
-	result, err := m.writeProjectionPlan(source, expected, generation, plan)
+	result, err = m.writeProjectionPlan(source, expected, generation, plan)
 	if err != nil {
 		return result, err
 	}
@@ -6620,6 +6657,10 @@ func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Cl
 				"generation", generation, "source", source.LogSourceID,
 				"events", len(events), "rows", queryStats.Rows, "bytes", queryStats.Bytes,
 				"elapsedMs", elapsed.Milliseconds())
+			// FR-485：慢查询计数与最慢值。埋点与告警日志同源同判据（同一阈值、同一处），
+			// 因此「日志里出现慢查询」与「指标在涨」必然一致——不会出现两套口径打架。
+			m.slowSQLCount.Add(1)
+			recordAtomicMax(&m.slowSQLMaxNs, int64(elapsed))
 		}
 		// 父 ctx 已取消（同批其他簇已拿到明确根因）：本簇的"尚未可见"结论已无意义，立即收手。
 		// 注意顺序——先处理本次查询自身的结论，再看取消：判定类错误是本簇的真实结论，
@@ -6659,6 +6700,10 @@ func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Cl
 			return stats, fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
 		case <-time.After(backoff):
 		}
+		// FR-485：这一次等待就是一次「进入退避」——计数在**真正等待之后**累加，
+		// 而不是在计算退避时长时累加。差别在于：能算出退避时长却没等（例如最后一轮
+		// 直接返回）不应被算作一次退避，否则计数会系统性地高于实际重试次数。
+		m.verifyBackoffCount.Add(1)
 		backoff = nextVerifyBackoff(backoff, m.verifyBackoffMax)
 	}
 }
@@ -10558,6 +10603,11 @@ func (m *Manager) commitPersist(ctx context.Context, plan *persistPlan) (bool, e
 		m.mu.Lock()
 		m.lastPersistStats = stats
 		m.mu.Unlock()
+		// FR-485：累计写入字节（供心跳差分出「persist 写字节/秒」）。
+		// 口径是逻辑写入量（行值字节总和），不含 SQLite 页开销与 WAL 副本——
+		// 这正是「事故里 117 MB/s 在重写什么」要回答的量，且与 Stats.BytesWritten 同源，
+		// 不另造一套口径（两套口径会在排障时互相矛盾）。
+		m.persistBytesTotal.Add(stats.BytesWritten)
 	}
 	if err != nil {
 		// 不推进水位：本轮构建的源在下一轮会被重新构建并重试落库，悬挂源不会静默滞留。
@@ -10812,4 +10862,217 @@ func startupRecoveryFailureLevel(err error) (slog.Level, string) {
 		return slog.LevelWarn, "启动恢复：源校验延后（设计内让路，下轮重试）"
 	}
 	return slog.LevelError, "启动恢复：源恢复失败（其余源照常继续）"
+}
+
+// ── FR-485：日志平台可观测性快照与埋点 ─────────────────────────────────────
+//
+// 本段只在**已有的事故判据点**上累加计数，不新增任何判断、不改变任何既有行为。
+// 读数由 internal/worker/logmetrics 周期取出并经心跳上报，CP 落时序后进告警规则。
+
+// LogMetricsSnapshot 是采集面自身运行指标的一次读数（FR-485）。
+//
+// Available=false 表示「本进程没有可观测的采集面」（采集运行时未装配或已关闭）——
+// 消费方据此**整组不上报**，而不是上报一串 0。零值在运维上意味着「一切正常」，
+// 与「不知道」是完全相反的结论。
+type LogMetricsSnapshot struct {
+	Available bool
+	// PersistBytesTotal 采集索引**累计**写入字节（消费方差分推导字节/秒）。
+	//
+	// 为什么不直接给速率：速率必须与采样节拍一致才有意义，而采样节拍由消费方决定。
+	// 这里只提供可靠真源，换算交给唯一的消费方做。
+	PersistBytesTotal int64
+	// WALMaxBacklogEntries 跨全部源的单源**最大**积压条数（非求和，理由见 proto 注释）。
+	WALMaxBacklogEntries int64
+	// WALMaxPausedSeconds 上述「积压最重的那个源」处于暂停状态的持续秒数（0=未暂停）。
+	//
+	// 口径说明：取暂停**开始时刻**（见 ledger 的 PauseAcquire 埋点）到现在；
+	// 未暂停时为 0。它不是「所有源暂停时长之和」——那会让「一个源停了三小时」
+	// 与「十个源各停 18 分钟」不可区分，而前者才是要处置的事故形态。
+	WALMaxPausedSeconds int64
+	// DeliveryBatches / DeliveryFailures 投递批次累计数与失败累计数。
+	DeliveryBatches  int64
+	DeliveryFailures int64
+	// DominantFailureClass 累计次数最多的失败分类（空=从未失败）。
+	DominantFailureClass string
+	// VerifyBackoffCount 投影校验进入退避的累计次数。
+	VerifyBackoffCount int64
+	// SlowSQLCount / SlowSQLMaxMs 慢查询累计次数与最慢单次耗时（毫秒）。
+	SlowSQLCount int64
+	SlowSQLMaxMs int64
+}
+
+// LogMetricsSnapshot 取一份采集面可观测性读数（FR-485）。
+//
+// 实现 logmetrics.Source。刻意**不持锁遍历管道**：本方法会被心跳侧每 30s 调用一次，
+// 而 m.mu 在采集热路径上是高竞争锁——为了一次观测去排那条队，会把观测量本身
+// 变成被观测的负担。因此这里只在锁内做 O(源数) 的切片拷贝。
+func (m *Manager) LogMetricsSnapshot() LogMetricsSnapshot {
+	if m == nil {
+		return LogMetricsSnapshot{}
+	}
+	m.mu.Lock()
+	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
+	for _, p := range m.pipes {
+		if p != nil {
+			pipes = append(pipes, p)
+		}
+	}
+	m.mu.Unlock()
+
+	// 采集面「已装配」的判据是「有管道登记」：即使当前 0 源，也说明运行时在跑。
+	// 真正未装配的形态是 m 为 nil（New 都没成功），上面已返回 Available=false。
+	// 但 0 源时所有读数都是 0 且无意义，故仍以 len(pipes)>0 为可用条件——
+	// 「没有采集任务」与「采集积压为零」是两件事，不该用同一个 0 表达。
+	snap := LogMetricsSnapshot{Available: len(pipes) > 0}
+
+	snap.PersistBytesTotal = m.persistBytesTotal.Load()
+	snap.VerifyBackoffCount = m.verifyBackoffCount.Load()
+	snap.SlowSQLCount = m.slowSQLCount.Load()
+	snap.SlowSQLMaxMs = m.slowSQLMaxNs.Load() / int64(time.Millisecond)
+	snap.DeliveryBatches = m.deliveryBatches.Load()
+	snap.DeliveryFailures = m.deliveryFailures.Load()
+	snap.DominantFailureClass = m.dominantDeliveryFailureClass()
+
+	if !snap.Available {
+		return snap
+	}
+
+	// 单源最大积压与「积压最重源」的暂停时长。
+	//
+	// 为什么以积压挑源而不是以暂停时长挑源：积压是**可处置性**的判据——把积压最重的
+	// 那个源报出来，运维点进去就有事可做。暂停时长作为它的附属读数是「这个源卡了多久」。
+	var maxBacklog int64
+	for _, p := range pipes {
+		wal := p.WAL()
+		if wal == nil {
+			continue
+		}
+		entries, _ := wal.BacklogAndLimits()
+		if entries > maxBacklog {
+			maxBacklog = entries
+		}
+	}
+	snap.WALMaxBacklogEntries = maxBacklog
+	if maxBacklog > 0 {
+		snap.WALMaxPausedSeconds = m.maxPausedSecondsAmong(pipes, maxBacklog)
+	}
+	return snap
+}
+
+// maxPausedSecondsAmong 在「积压 == target 的源」中取最长的已暂停秒数。
+//
+// 只在确实有积压时调用：0 积压的源不可能处于积压类暂停，去查它是白费锁。
+func (m *Manager) maxPausedSecondsAmong(pipes []*pipeline.Pipeline, target int64) int64 {
+	var best int64
+	now := time.Now()
+	for _, p := range pipes {
+		wal := p.WAL()
+		if wal == nil {
+			continue
+		}
+		entries, _ := wal.BacklogAndLimits()
+		if entries != target {
+			continue
+		}
+		led := p.Ledger()
+		if led == nil {
+			continue
+		}
+		entry := led.Get(p.Key())
+		if entry == nil || !entry.AcquirePaused {
+			continue
+		}
+		// 用 PausedSince 而不是 entry 字段：暂停起点是**未导出**的进程内状态，
+		// 只有 Ledger 自己知道它是否可信（起点未知时必须报 0，不能由零值推出巨大秒数）。
+		since, ok := led.PausedSince(p.Key())
+		if !ok {
+			continue
+		}
+		if secs := int64(now.Sub(since).Seconds()); secs > best {
+			best = secs
+		}
+	}
+	return best
+}
+
+// noteDeliveryOutcome 记一次投递尝试的结果（FR-485）。
+//
+// events 为空表示这不是一次真正的投递尝试（例如「去重后无写入」），**不计入分母**：
+// 稳态下这类调用占绝大多数，计入会把失败率稀释成「投递很健康」的假象。
+func (m *Manager) noteDeliveryOutcome(events []logtypes.Event, result pipeline.DeliveryResult, err error) {
+	if m == nil || len(events) == 0 {
+		return
+	}
+	m.deliveryBatches.Add(1)
+	if err == nil {
+		return
+	}
+	m.deliveryFailures.Add(1)
+	class := classifyDeliveryFailure(err)
+	counter, _ := m.deliveryFailureClassCounts.LoadOrStore(class, &atomic.Int64{})
+	if v, ok := counter.(*atomic.Int64); ok {
+		v.Add(1)
+	}
+	_ = result // 保留入参以便将来区分 HTTP 状态类失败，不参与当前分类
+}
+
+// dominantDeliveryFailureClass 返回累计次数最多的失败分类（空=从未失败）。
+//
+// 分类集合是固定小集（见 classifyDeliveryFailure），故这里的遍历有界。
+func (m *Manager) dominantDeliveryFailureClass() string {
+	best, bestCount := "", int64(0)
+	m.deliveryFailureClassCounts.Range(func(key, value any) bool {
+		name, _ := key.(string)
+		counter, ok := value.(*atomic.Int64)
+		if !ok {
+			return true
+		}
+		if count := counter.Load(); count > bestCount || (count == bestCount && name < best) {
+			best, bestCount = name, count
+		}
+		return true
+	})
+	return best
+}
+
+// classifyDeliveryFailure 把投递错误归入固定小集（FR-485 的「失败分类」指标）。
+//
+// 为什么分类而不过滤错误文本：错误文本随时间/版本漂移且基数无界，
+// 而运维真正要分辨的只有两件事——「重试有用吗」与「是不是我们自己的凭据/请求错了」。
+// 这三类判据与 vlsup.IsPermanent 同源，不另造一套。
+func classifyDeliveryFailure(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, vlsup.ErrUnauthorized) {
+		return "auth"
+	}
+	var status *vlsup.StatusError
+	if errors.As(err, &status) {
+		switch {
+		case status.Code >= 400 && status.Code < 500:
+			return "status_4xx"
+		case status.Code >= 500:
+			return "status_5xx"
+		}
+		return "other"
+	}
+	// 非 HTTP 状态的传输类错误（连接拒绝/超时/EOF）：可能瞬时恢复，与 4xx 处置相反。
+	return "transport"
+}
+
+// recordAtomicMax 原子地把 *target 抬到 v（只增不减，CAS 循环）。
+//
+// 用途：记录「最慢单次」这类单调量。直接 Store 会让后到的较小值覆盖最大值的竞态
+// 变成常态（校验查询按源并发，多 goroutine 同时更新是常规情形，不是边角）。
+func recordAtomicMax(target *atomic.Int64, v int64) {
+	for {
+		current := target.Load()
+		if v <= current {
+			return
+		}
+		if target.CompareAndSwap(current, v) {
+			return
+		}
+	}
 }
