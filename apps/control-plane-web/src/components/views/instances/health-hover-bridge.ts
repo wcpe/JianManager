@@ -1,4 +1,4 @@
-import type { HealthMetrics } from './InstanceRowMetrics'
+import type { HealthMetrics } from './InstanceRowSpark'
 
 /**
  * 模块级桥：格子（InstanceRowView）→ 悬浮层（InstanceRowSpark）的事件通道。

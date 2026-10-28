@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { cn } from '@jianmanager/ui/lib/utils'
 import type { InstanceInfo } from '@/api/instances'
+import type { ContextMenuAction } from '@/components/views/instances/instanceContextMenuActions'
 // 类型与纯函数已抽到独立模块（避免本组件文件导出非组件值）。此处再导出，既有 import 路径不变。
 export type { ContextMenuAction } from '@/components/views/instances/instanceContextMenuActions'
 

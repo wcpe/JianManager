@@ -60,10 +60,14 @@ import {
   User,
   UsersRound,
   Workflow,
+  type LucideIcon,
 } from 'lucide-react'
 
 import { DEFAULT_ROLE_NODES, isPlatformAdmin } from '@/lib/shared/roles'
-import { type NavGroup } from '@/lib/shared/navigation-types'
+import type { NavGroup } from '@/lib/shared/navigation-types'
+// 工作区导航是本模块的公共出口：消费方（侧栏 / 手机导航 / 命令面板）只需 import 这一处，
+// 不必再分头去 navigation-types 取类型。
+export type { NavEntry, NavGroup, NavSection } from '@/lib/shared/navigation-types'
 
 /** 四个工作区的稳定标识（顶栏切换、当前工作区判定、URL 前缀决策共用）。 */
 export type WorkspaceKey = 'ops' | 'observability' | 'operation' | 'platform'
