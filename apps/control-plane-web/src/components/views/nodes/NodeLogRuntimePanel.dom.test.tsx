@@ -22,6 +22,9 @@ void testI18n.use(initReactI18next).init({
       translation: {
         logsRuntime: {
           asset: { dispatch: '下发资产', dispatchHelp: '把已缓存的审批包下发到该节点' },
+          // 副行文案（目标平台 + 审批包状态）——组件已改为走 i18n，故这里必须提供。
+          approvalCached: '审批包已缓存',
+          approvalNotCached: '审批包未缓存',
           namespace: { notReady: '未就绪', offline: '离线', migrate: '迁移分区', help: '分区用途说明' },
           gaps: { resolve: '核销已覆盖缺口', help: '核销说明' },
           date: { label: '迁移日期（该日分区）', help: '日期说明' },

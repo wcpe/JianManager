@@ -21,13 +21,19 @@ function renderPage() {
 describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
   it('列出基线', async () => {
     renderPage()
-    expect(await screen.findByText('group:2')).toBeInTheDocument()
+    /*
+      生效范围列已人话化（`group:2` → 「分组 2」），原始 key 移入 title。
+      这里同时断言两者：人话文案可见 + 原始值仍可取回（排查时要精确值）。
+    */
+    const scopeCell = await screen.findByText('分组 2')
+    expect(scopeCell).toBeInTheDocument()
+    expect(scopeCell.getAttribute('title')).toBe('group:2')
     expect(screen.getByText('server.properties')).toBeInTheDocument()
   })
 
   it('漂移检测：scope 内实例与基线不一致即标记漂移', async () => {
     const { user } = renderPage()
-    await screen.findByText('group:2')
+    await screen.findByText('server.properties')
 
     await user.click(screen.getByTestId('baseline-drift-1'))
     await screen.findByText('1/1 台漂移')
@@ -41,7 +47,7 @@ describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
 
   it('新建基线：保存后出现在列表', async () => {
     const { user } = renderPage()
-    await screen.findByText('group:2')
+    await screen.findByText('server.properties')
 
     await user.click(screen.getByTestId('baseline-create'))
     const dialog = await screen.findByRole('dialog')
@@ -73,7 +79,7 @@ describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
       }),
     )
     const { user } = renderPage()
-    await screen.findByText('group:2')
+    await screen.findByText('server.properties')
 
     await user.click(screen.getByTestId('baseline-create'))
     const dialog = await screen.findByRole('dialog')
@@ -120,7 +126,8 @@ describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
       ),
     )
     const { user } = renderPage()
-    await screen.findByText('group:9999')
+    // 生效范围列已人话化，列表就绪锚点改用文件名（原始 scope 仍可从 title 取回）。
+    await screen.findByText('server.properties')
 
     await user.click(screen.getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog')
@@ -141,7 +148,7 @@ describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
       ),
     )
     const { user } = renderPage()
-    await screen.findByText('group:2')
+    await screen.findByText('server.properties')
 
     await user.click(screen.getByTestId('baseline-drift-1'))
     expect(await screen.findByText('1 台读取失败，无法判定')).toBeInTheDocument()
@@ -252,7 +259,7 @@ describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
       http.get(API('/config-baselines/1/drift'), () => HttpResponse.json({ items, drifted: items.length })),
     )
     const { user } = renderPage()
-    await screen.findByText('group:2')
+    await screen.findByText('server.properties')
 
     await user.click(screen.getByTestId('baseline-drift-1'))
     await screen.findByText('200/200 台漂移')

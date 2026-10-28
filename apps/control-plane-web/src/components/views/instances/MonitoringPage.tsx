@@ -232,16 +232,17 @@ function ProcessDetailDialog({
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
-              <Button type="button" variant="outline" disabled={actionPending || target.isRoot} onClick={() => onAction('terminate')}>
+              <Button type="button" variant="outline" disabled={actionPending} onClick={() => onAction('terminate')}>
                 <AlertTriangle className="size-3.5" />
                 {t('monitor.processTerminate', '温和终止')}
               </Button>
-              <Button type="button" variant="destructive" disabled={actionPending || target.isRoot} onClick={() => onAction('kill_tree')}>
+              <Button type="button" variant="destructive" disabled={actionPending} onClick={() => onAction('kill_tree')}>
                 {actionPending && <Loader2 className="size-3.5 animate-spin" />}
                 {t('monitor.processKillTree', '强制终止树')}
               </Button>
             </div>
-            {target.isRoot && <p className="text-xs text-amber-600">{t('monitor.processRootDenied', '根进程不支持 PID 级处置，请使用实例级停止/重启/强制终止。')}</p>}
+            {/* 根进程同样可处置（卡死时需要清理），但要把「等于让实例停下」讲清楚。 */}
+            {target.isRoot && <p className="text-xs text-amber-600">{t('nodes.processRootKillHint')}</p>}
           </div>
         )}
       </DialogContent>

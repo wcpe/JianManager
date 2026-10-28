@@ -349,6 +349,9 @@ function isValidPluginUploadName(dir: ManagedPluginDir, name: string): boolean {
 
 // ======================== Handlers ========================
 
+/** 节点默认探针版本选择（按节点，0=继承全局）。 */
+const nodeProbeVersions = new Map<number, number>()
+
 export const handlers = [
   // ---------- 插件 / 模组 ----------
 
@@ -534,14 +537,19 @@ export const handlers = [
   domainRoute('get', '/nodes/:id/probe-version', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json({ nodeId: Number(info.params.id), versionId: 0 })
+    const id = Number(info.params.id)
+    return HttpResponse.json({ nodeId: id, versionId: nodeProbeVersions.get(id) ?? 0 })
   }),
 
   domainRoute('put', '/nodes/:id/probe-version', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
+    const id = Number(info.params.id)
     const body = (await info.request.json().catch(() => ({}))) as { versionId?: number }
-    return HttpResponse.json({ nodeId: Number(info.params.id), versionId: body.versionId ?? 0 })
+    // 假后端也要把选择**存住**：只回显会让「改成固定版本后回读仍是继承」，
+    // 与缓存上限、代理是同一种保真度缺口（都会让人误判成保存失败）。
+    nodeProbeVersions.set(id, body.versionId ?? 0)
+    return HttpResponse.json({ nodeId: id, versionId: nodeProbeVersions.get(id) ?? 0 })
   }),
 
   domainRoute('get', '/probe-versions', (info) => {

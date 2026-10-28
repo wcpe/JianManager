@@ -2,6 +2,7 @@ import { HttpResponse, delay } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
+import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 
 /**
  * 节点与运行时域 mock handler（FR-200，照 spec §7 范式）。
@@ -117,7 +118,13 @@ interface MockRuntimeInstanceRef {
   javaMajorVersion?: number
 }
 
-const NOW = '2026-06-28T08:00:00Z'
+/*
+  种子时间基准：**动态取当前时间**。
+  原来是硬编码的 '2026-06-28T08:00:00Z'——随着真实时间流逝，节点心跳会变成「120 天前」，
+  于是节点详情页的状态球（心跳活性）恒为 0%、列表的心跳列恒显示 119d，
+  看起来像「所有节点都失联」。假数据应该随真实时间走，否则会持续误导排查方向。
+*/
+const NOW = new Date().toISOString()
 /** 更新源 mock 最新版本。 */
 const FEED_LATEST = '0.10.0'
 
@@ -175,6 +182,39 @@ function strOrUndef(v: FormDataEntryValue | null): string | undefined {
 /** 生成从当前时间起算的接入 token 过期时间，避免 mock seed 随日期推进变成过期样例。 */
 function enrollTokenExpiresAt(ttlMinutes = 60) {
   return new Date(Date.now() + ttlMinutes * 60_000).toISOString()
+}
+
+/** 当前档位下要追加的压力节点数（0 = 只有手工种子节点）。 */
+function nodeSeedCount(): number {
+  return mockDataScaleProfile().nodeSeedCount
+}
+
+/*
+  制品缓存上限（按节点）：假后端也要把写入**存住**。
+  原先 PUT 只回显、GET 恒返回 0，导致「设成 5GB 后刷新又变不限」——看着像保存失败，
+  实际是假数据没落盘。这类保真度缺口会把排查引向错误方向。
+*/
+const artifactCacheCaps = new Map<number, number>()
+
+/*
+  节点代理配置（按节点）：与缓存上限同因——GET 写死 inherit、PATCH 只回显，
+  会让「改成自定义代理后刷新又变回继承」，看着像保存失败。
+*/
+const nodeProxyConfigs = new Map<number, { mode: 'inherit' | 'custom'; url: string; noProxy: string }>()
+
+/** 节点代理视图（GET 与 PATCH 共用，保证写入后回读一致）。 */
+function proxyViewOf(id: number, online: boolean) {
+  const cfg = nodeProxyConfigs.get(id) ?? { mode: 'inherit' as const, url: '', noProxy: '' }
+  const custom = cfg.mode === 'custom'
+  return {
+    mode: cfg.mode,
+    url: cfg.url,
+    noProxy: cfg.noProxy,
+    effectiveUrl: custom ? cfg.url : 'http://proxy.internal:7890',
+    effectiveNoProxy: custom ? cfg.noProxy : 'localhost,127.0.0.1',
+    globalDefaultUrl: 'http://proxy.internal:7890',
+    online,
+  }
 }
 
 const nodes = db<MockNode>('nodes', () => [
@@ -256,6 +296,53 @@ const nodes = db<MockNode>('nodes', () => [
     deletedAt: '2026-07-20T12:00:00Z',
     workerVersion: '0.9.0',
   },
+
+/*
+    【压力验证用种子】按数据量档位追加机器（large 档 34 台，合计 36 台），
+    覆盖多种状态组合，用于验证节点页在 30+ 规模下的分页、异常优先排序与峰值指标。
+    命名 node-01..node-34，与既有 alpha/beta 区分，便于在列表里辨认。
+
+    **必须受档位控制**：此前这 34 台是无条件追加的，于是默认数据集从 2 台可见
+    变成 36 台，打破依赖「只有 alpha/beta」的用例（`ConsoleHeader.statPopovers`
+    就因此变红：36 台超过浮窗上限 8，底部渲染成「还有 N 个，查看全部」而不是
+    「查看全部节点」）。更根本的问题是它绕过了本仓库既有的规模机制——
+    其它四类数据都能调档，唯独节点数不受控，等于另起一套不受控的膨胀。
+  */
+  ...Array.from({ length: nodeSeedCount() }, (_, i) => {
+    const n = i + 1
+    // 每 7 台一台离线、每 11 台一台维护中：让「异常优先」有明确的排序目标。
+    const offline = n % 7 === 0
+    const maintenance = !offline && n % 11 === 0
+    const cpu = offline ? 0 : Math.min(0.98, 0.12 + (n % 10) * 0.085)
+    const mem = offline ? 0 : Math.min(0.95, 0.25 + (n % 8) * 0.07)
+    const disk = offline ? 0 : Math.min(0.9, 0.3 + (n % 6) * 0.1)
+    return {
+      id: 100 + n,
+      uuid: `node-${String(n).padStart(2, '0')}`,
+      name: `node-${String(n).padStart(2, '0')}`,
+      host: `10.0.1.${n}`,
+      grpcPort: 9100,
+      wsPort: 9200,
+      status: offline ? 0 : 1,
+      maintenance,
+      tunnelConnected: !offline && n % 3 === 0,
+      os: 'linux',
+      arch: n % 5 === 0 ? 'arm64' : 'amd64',
+      cpuCores: [4, 8, 16, 32][n % 4]!,
+      memoryMb: [8192, 16384, 32768, 65536][n % 4]!,
+      diskTotalMb: [256000, 512000, 1024000][n % 3]!,
+      cpuUsage: cpu,
+      memoryUsage: mem,
+      diskUsage: disk,
+      networkBytesSent: 1024 * n,
+      networkBytesRecv: 2048 * n,
+      loadAvg1: offline ? 0 : Number((0.4 + (n % 9) * 0.3).toFixed(2)),
+      lastHeartbeat: NOW,
+      createdAt: NOW,
+      workerVersion: '0.9.0',
+      backupVersion: '0.8.0',
+    } as MockNode
+  }),
 ])
 
 const jdks = db<MockJDK>('node-jdks', () => [
@@ -550,6 +637,21 @@ function componentStatusForNode(n: MockNode) {
   }
 }
 
+/**
+ * 按节点 UUID 取数字 id；找不到返回 undefined。
+ *
+ * 导出给其它域用（如 observ 的进程清单要按节点过滤实例）：`db('nodes')` 只能在**一处**
+ * 带 seedFn 注册，其它地方直接 `db('nodes', ...)` 会抢注空集合、让这里的种子失效
+ * （实测：进程清单因此把别节点的实例挂到了本节点上）。
+ */
+export function nodeUuidById(id: number): string | undefined {
+  return nodes.list((n) => n.id === id)[0]?.uuid
+}
+
+export function nodeIdByUuid(uuid: string): number | undefined {
+  return nodes.list((n) => n.uuid === uuid)[0]?.id
+}
+
 export const handlers = [
   /* ===================== 连通性测试（FR-229） ===================== */
   domainRoute('post', '/diagnostics/http-test', async (info) => {
@@ -767,15 +869,7 @@ export const handlers = [
     const id = Number((info.params as { id: string }).id)
     const n = nodes.get(id)
     if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
-    return HttpResponse.json({
-      mode: 'inherit',
-      url: '',
-      noProxy: '',
-      effectiveUrl: 'http://proxy.internal:7890',
-      effectiveNoProxy: 'localhost,127.0.0.1',
-      globalDefaultUrl: 'http://proxy.internal:7890',
-      online: n.status === 1,
-    })
+    return HttpResponse.json(proxyViewOf(id, n.status === 1))
   }),
 
   domainRoute('patch', '/nodes/:id/proxy', async (info) => {
@@ -786,15 +880,12 @@ export const handlers = [
     if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
     const body = (await info.request.json()) as { mode: 'inherit' | 'custom'; url?: string; noProxy?: string }
     const custom = body.mode === 'custom'
-    return HttpResponse.json({
+    nodeProxyConfigs.set(id, {
       mode: body.mode,
       url: custom ? body.url ?? '' : '',
       noProxy: custom ? body.noProxy ?? '' : '',
-      effectiveUrl: custom ? body.url ?? '' : 'http://proxy.internal:7890',
-      effectiveNoProxy: custom ? body.noProxy ?? '' : 'localhost,127.0.0.1',
-      globalDefaultUrl: 'http://proxy.internal:7890',
-      online: n.status === 1,
     })
+    return HttpResponse.json(proxyViewOf(id, n.status === 1))
   }),
 
   /* ===================== node repair（BUG-A / ADR-039） ===================== */
@@ -1196,7 +1287,7 @@ export const handlers = [
         },
       ],
       totalBytes: 48234123,
-      capBytes: 0,
+      capBytes: artifactCacheCaps.get(Number(info.params.id)) ?? 0,
     })
   }),
 
@@ -1216,7 +1307,9 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const { capBytes } = (await info.request.json()) as { capBytes: number }
-    return HttpResponse.json({ items: [], totalBytes: 0, capBytes })
+    const id = Number(info.params.id)
+    artifactCacheCaps.set(id, capBytes)
+    return HttpResponse.json({ items: [], totalBytes: 48234123, capBytes })
   }),
 
   /* ===================== 运行时与制品全局聚合（FR-082） ===================== */

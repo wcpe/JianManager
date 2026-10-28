@@ -19,7 +19,7 @@ function errMessage(err: unknown, fallback: string): string {
  */
 export default function NodeArtifactCacheTab({ nodeId }: { nodeId: number }) {
   const { t } = useTranslation()
-  const { data, isLoading, isError } = useArtifactCache(nodeId, { enabled: true })
+  const { data, isLoading, isError, refetch } = useArtifactCache(nodeId, { enabled: true })
   const evict = useEvictArtifactCache(nodeId)
   const clear = useClearArtifactCache(nodeId)
   const setCap = useSetArtifactCacheCap(nodeId)
@@ -29,6 +29,7 @@ export default function NodeArtifactCacheTab({ nodeId }: { nodeId: number }) {
       data={data}
       isLoading={isLoading}
       isError={isError}
+      onRetry={() => void refetch()}
       capSaving={setCap.isPending}
       clearing={clear.isPending}
       onSaveCap={async (bytes) => {

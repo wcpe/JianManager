@@ -11,6 +11,7 @@ import type {
   Task,
 } from '@jianmanager/devmock/contracts'
 import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
+import { nodeIdByUuid, nodeUuidById } from '@jianmanager/devmock/handlers/domains/node'
 
 /**
  * 可观测与日志域 mock handler（FR-208）：metrics / alerts / notifications / tasks / logs。
@@ -186,6 +187,12 @@ const LOG_SOURCE_POOL = ['instance', 'control_plane', 'worker'] as const
 const NOTIFICATION_LEVEL_POOL: Notification['level'][] = ['info', 'success', 'warning', 'error']
 
 // ── 集合声明 + 种子（import 即播种，resetDb 重播；唯一声明处） ──
+
+/*
+  进程清单要按「该节点的真实实例」生成，故直接读同一份 instances 命名空间。
+  种子由 instance.ts 首次访问时写入，这里用惰性默认值保持两侧同源。
+*/
+const instanceDb = db<{ id: number; uuid: string; nodeId: number; name: string }>('instances', () => [])
 
 const alertRules = db<AlertRule>('alertRules', () => [
   {
@@ -512,7 +519,11 @@ function seedTasks(): Task[] {
     const offset = isRecent ? -(15_000 * seq) : -Math.floor((seq / taskCount) * YEAR_MS)
     const progress = state === 'succeeded' ? 100 : state === 'pending' ? 0 : 10 + (i % 85)
     generated.push({
-      id: i,
+      // 生成段与上面的静态种子共用同一个 id 空间：静态种子已占到 4，而循环从 i=4 起，
+      // 直接写 `id: i` 会让第一条批量任务与静态种子的 id 4 重复（实测 /tasks 返回
+      // [1,2,3,4,4]）。前端按 id 做列表 key，重复会触发 React key 警告并可能错渲染。
+      // 真后端只有一个自增序列，故这里把生成段整体后移，保持全局唯一。
+      id: i + 3,
       taskId: `task-scale-${i}`,
       nodeId: i % 2 === 0 ? 2 : 1,
       kind,
@@ -635,10 +646,18 @@ function makeSeriesPoints(
   stepMs: number,
   base: number,
   amp: number,
+  /*
+    每台实例一个 seed：相位与振幅都随它变化。
+    没有 seed 时所有实例的曲线逐点相同——多条线在图上完全重叠，
+    看起来就像「只画了一条浅线」甚至「空白图」，调试时极易误判成图表坏了。
+  */
+  seed = 0,
 ): { ts: string; avg: number; min: number; max: number }[] {
   const out: { ts: string; avg: number; min: number; max: number }[] = []
+  const phase = seed * 0.9
+  const ampScale = 0.55 + (seed % 5) * 0.12
   for (let i = count - 1; i >= 0; i--) {
-    const v = base + amp * (0.5 + 0.5 * Math.sin(i / 3))
+    const v = base + amp * ampScale * (0.5 + 0.5 * Math.sin(i / 3 + phase))
     out.push({
       ts: iso(-i * stepMs),
       avg: Number(v.toFixed(2)),
@@ -649,24 +668,51 @@ function makeSeriesPoints(
   return out
 }
 
+/**
+ * 自定义窗口（from/to）下的选档，镜像真后端 `selectResolution`：
+ * 跨度 ≤6h 走原始 1m；≤30d 走 5m；更长走 1h。点数封顶 1000，避免假后端生成上万点。
+ *
+ * 【为什么假后端也要认 from/to】节点监控页的时间窗支持自定义起止；
+ * 假后端若只认 range，这个功能在 dev / e2e 下永远看不出效果，成了无法验证的死角。
+ */
+function windowPlan(fromMs: number, toMs: number): { count: number; step: number } {
+  const spanMs = Math.max(60_000, toMs - fromMs)
+  const step = spanMs <= 6 * 3_600_000 ? 60_000 : spanMs <= 30 * 24 * 3_600_000 ? 5 * 60_000 : 3_600_000
+  return { count: Math.max(2, Math.min(3000, Math.round(spanMs / step))), step }
+}
+
+/** 由步长反推档位名，供响应体 `resolution` 使用（真后端按档位回填该字段）。 */
+function resolutionOf(stepMs: number): string {
+  if (stepMs <= 60_000) return 'raw'
+  return stepMs <= 5 * 60_000 ? '5m' : '1h'
+}
+
 /** 把 range 字符串映射为（点数, 步长 ms）。覆盖前端 RangePicker 常见档。 */
+/*
+  步长必须与上报的 `resolution` 严格对应（raw=60s / 5m=300s / 1h=3600s）。
+
+  原先各档用的是 15m、4h、12h、1d 这类「方便凑整」的步长，却又固定上报 `resolution:'raw'`。
+  前端据此积分「区间总消耗」（速率 × 桶宽）时会按 60s 去乘 15m 的点，算出只有真值 1/15 的
+  假数字——假数据自相矛盾比缺数据更坏，排查时会以为积分实现有问题。
+*/
 function rangePlan(range: string): { count: number; step: number } {
   switch (range) {
     case '1h':
       return { count: 60, step: 60_000 }
     case '6h':
-      return { count: 72, step: 5 * 60_000 }
+      return { count: 360, step: 60_000 }
     case '7d':
-      return { count: 168, step: 3600_000 }
+      return { count: 2016, step: 5 * 60_000 }
     case '30d':
-      return { count: 180, step: 4 * 3600_000 }
+      // 真后端此档是 5m；假后端取 1h 只为压点数（档位与步长仍自洽）。
+      return { count: 720, step: 3600_000 }
     case '90d':
-      return { count: 180, step: 12 * 3600_000 }
+      return { count: 2160, step: 3600_000 }
     case '1y':
-      return { count: 365, step: 24 * 3600_000 }
+      return { count: 8760, step: 3600_000 }
     case '24h':
     default:
-      return { count: 96, step: 15 * 60_000 }
+      return { count: 288, step: 5 * 60_000 }
   }
 }
 
@@ -842,7 +888,8 @@ function capacitySamples(range: string): number {
  * 与页面上同指标的曲线量级互相矛盾（M1）。
  */
 function seriesLatestValue(range: string, scope: string, metricKey: string): number | undefined {
-  const all = scope === 'instance' ? instanceSeries(range) : nodeSeries(range)
+  const plan = rangePlan(range)
+  const all = scope === 'instance' ? instanceSeries(plan) : nodeSeries(plan)
   const hit = all.find((s) => s.metricKey === metricKey)
   const last = hit?.points[hit.points.length - 1]
   return last ? last.avg : undefined
@@ -905,8 +952,8 @@ function capacityForecastRow(
 }
 
 /** 节点序列：CPU%/负载/内存/磁盘/网络（metricKey 对齐 lib/monitor-metrics NODE_CHART_DEFS）。 */
-function nodeSeries(range: string) {
-  const { count, step } = rangePlan(range)
+function nodeSeries(plan: { count: number; step: number }) {
+  const { count, step } = plan
   const mk = (key: string, unit: string, base: number, amp: number) => ({
     metricKey: key,
     unit,
@@ -926,13 +973,13 @@ function nodeSeries(range: string) {
 }
 
 /** 实例序列：TPS/MSPT/堆/线程/玩家/CPU + 分世界区块（world 非空）。 */
-function instanceSeries(range: string) {
-  const { count, step } = rangePlan(range)
+function instanceSeries(plan: { count: number; step: number }, seed = 0) {
+  const { count, step } = plan
   const mk = (key: string, unit: string, base: number, amp: number, world = '') => ({
     metricKey: key,
     unit,
     world,
-    points: makeSeriesPoints(count, step, base, amp),
+    points: makeSeriesPoints(count, step, base, amp, seed),
   })
   return [
     mk('inst_tps', '', 19.5, 0.5),
@@ -1224,6 +1271,10 @@ export const handlers = [
         { metricKey: 'node_load', unit: '', points: makeSeriesPoints(count, step, 1.2, 1.2) },
         { metricKey: 'node_mem_used', unit: 'bytes', points: makeSeriesPoints(count, step, 12 * GIB, 4 * GIB) },
         { metricKey: 'inst_players_online', unit: '', points: makeSeriesPoints(count, step, 14, 8) },
+        // Bot Worker 共享进程两条：后端 `bot_runtime_metric_sampler` 会写入，首页趋势默认隐藏、勾选可见。
+        // 量级取「百 MB 级 RSS / 十几个百分点 CPU」，与真机读数同阶，便于验证「隐藏项不压扁主线」。
+        { metricKey: 'bot_worker_rss_bytes', unit: 'bytes', points: makeSeriesPoints(count, step, 96 * MIB, 8 * MIB) },
+        { metricKey: 'bot_worker_cpu_pct', unit: '%', points: makeSeriesPoints(count, step, 12, 6) },
       ],
     })
   }),
@@ -1234,15 +1285,24 @@ export const handlers = [
     const url = new URL(info.request.url)
     const scope = url.searchParams.get('scope') ?? 'node'
     const range = url.searchParams.get('range') ?? '24h'
-    const { step } = rangePlan(range)
-    const all = scope === 'instance' ? instanceSeries(range) : nodeSeries(range)
+    /*
+      自定义窗口优先于 range（与真后端 parseMetricRange 的优先级一致）：
+      节点监控页填了起止时间后，曲线与「本范围消耗」都必须跟着这个窗口走。
+    */
+    const fromMs = Number(url.searchParams.get('from') ? Date.parse(url.searchParams.get('from')!) : Number.NaN)
+    const toMs = Number(url.searchParams.get('to') ? Date.parse(url.searchParams.get('to')!) : Number.NaN)
+    const plan =
+      Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs > fromMs
+        ? windowPlan(fromMs, toMs)
+        : rangePlan(range)
+    const all = scope === 'instance' ? instanceSeries(plan) : nodeSeries(plan)
     const wanted = url.searchParams.get('metrics')
     const series = wanted
       ? all.filter((s) => wanted.split(',').includes(s.metricKey))
       : all
-    const span = (series[0]?.points.length ?? 0) * step
+    const span = (series[0]?.points.length ?? 0) * plan.step
     return HttpResponse.json({
-      resolution: 'raw',
+      resolution: resolutionOf(plan.step),
       from: iso(-span),
       to: iso(0),
       series,
@@ -1285,8 +1345,9 @@ export const handlers = [
     const bucketMs = resolution === '1h' ? 3600_000 : resolution === '5m' ? 5 * 60_000 : 0
     const series: Record<string, ReturnType<typeof instanceSeries>> = {}
     let span = 0
-    for (const id of targetIds) {
-      const all = instanceSeries(range)
+    for (const [index, id] of targetIds.entries()) {
+      // 逐目标不同 seed：同一批里 12 条线各走各的，图上才看得出「谁快谁慢」。
+      const all = instanceSeries(rangePlan(range), index + 1)
       const filtered = wanted?.length ? all.filter((s) => wanted.includes(s.metricKey)) : all
       series[id] = bucketMs > 0
         ? filtered.map((s) => ({ ...s, points: bucketPoints(s.points, bucketMs, step) }))
@@ -1528,37 +1589,80 @@ export const handlers = [
   domainRoute('get', '/metrics/processes/top', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
+    const url = new URL(info.request.url)
     const now = new Date().toISOString()
-    return HttpResponse.json([
-      {
-        instanceId: Number(new URL(info.request.url).searchParams.get('instanceId') ?? 1),
-        instanceUuid: 'inst-1',
-        nodeUuid: 'node-a',
-        pid: 24512,
-        name: 'java',
-        cpuPercent: 42.5,
-        rssBytes: 2.4 * GIB,
-        readBytesPerSec: 1024 * 1024,
-        writeBytesPerSec: 512 * 1024,
-        user: 'minecraft',
-        commandSummary: 'java -Xmx4G -jar server.jar',
-        sampledAt: now,
-      },
-      {
-        instanceId: Number(new URL(info.request.url).searchParams.get('instanceId') ?? 1),
-        instanceUuid: 'inst-1',
-        nodeUuid: 'node-a',
-        pid: 24518,
-        name: 'wrapper',
-        cpuPercent: 3.1,
-        rssBytes: 80 * MIB,
-        readBytesPerSec: 64 * 1024,
-        writeBytesPerSec: 16 * 1024,
-        user: 'minecraft',
-        commandSummary: 'jm-worker-daemon',
-        sampledAt: now,
-      },
-    ])
+    /*
+      返回**该节点真实实例**的进程，而不是写死 instanceId=1。
+      写死时前端按 instanceId 映射实例名会全部落到 `#1`（实测：进程行显示「#1」），
+      看着像归属解析坏了——其实是假数据与实例清单对不上。
+      每台实例给两个进程（游戏服本体 + 包装器），与真实探针的层级一致。
+    */
+    /*
+      前端的 nodeId 是**节点 UUID**（与真后端 `ProcessTopQuery.NodeUUID` 同口径），
+      不是数字 id：这里必须先把 UUID 翻成 id 再过滤实例，否则过滤条件恒假/恒真，
+      进程行就会挂到别的节点的实例上（实测出现过「#11」这种本节点不存在的实例号）。
+    */
+    const nodeUuidParam = url.searchParams.get('nodeId')
+    const onlyInstance = Number(url.searchParams.get('instanceId') ?? Number.NaN)
+    const nodeIdParam = nodeUuidParam ? (nodeIdByUuid(nodeUuidParam) ?? Number.NaN) : Number.NaN
+    /*
+      口径与前端 `useInstanceSearch({nodeId, sort:'name'})` 对齐：按名称排序取前 12 台。
+      若这里改用无序前 12 台，本节点实例一多（假后端 node-alpha 有 600+ 台），
+      进程行就会挂到「实例清单里查不到名字」的实例上，看起来像归属解析坏了。
+    */
+    const rows = instanceDb
+      .list((i) =>
+        Number.isFinite(onlyInstance)
+          ? i.id === onlyInstance
+          : Number.isFinite(nodeIdParam)
+            ? i.nodeId === nodeIdParam
+            : true,
+      )
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 12)
+    const out: Record<string, unknown>[] = []
+    for (const [idx, inst] of rows.entries()) {
+      const basePid = 24000 + idx * 100
+      out.push(
+        {
+          instanceId: inst.id,
+          instanceUuid: inst.uuid,
+          nodeUuid: nodeUuidParam ?? 'node-alpha',
+          pid: basePid + 12,
+          name: 'java',
+          cpuPercent: Number((8 + ((inst.id * 7) % 40)).toFixed(1)),
+          rssBytes: (1.2 + ((inst.id % 5) * 0.4)) * GIB,
+          readBytesPerSec: 256 * 1024 + (inst.id % 4) * 128 * 1024,
+          writeBytesPerSec: 96 * 1024 + (inst.id % 3) * 32 * 1024,
+          user: 'minecraft',
+          commandSummary: `java -Xmx4G -jar ${inst.name}.jar nogui`,
+          sampledAt: now,
+        },
+        {
+          instanceId: inst.id,
+          instanceUuid: inst.uuid,
+          nodeUuid: nodeUuidParam ?? 'node-alpha',
+          pid: basePid + 18,
+          name: 'wrapper',
+          cpuPercent: Number((0.8 + (inst.id % 3) * 0.4).toFixed(1)),
+          rssBytes: 72 * MIB + (inst.id % 4) * 8 * MIB,
+          readBytesPerSec: 48 * 1024,
+          writeBytesPerSec: 12 * 1024,
+          user: 'minecraft',
+          commandSummary: 'jm-worker-daemon',
+          sampledAt: now,
+        },
+      )
+    }
+    // 真后端按 sort 排序后截断；假后端只在内存里排序，保证「按内存」切换看得出效果。
+    const sortKey = url.searchParams.get('sort') ?? 'cpu'
+    const limit = Math.min(Number(url.searchParams.get('limit') ?? 100) || 100, 200)
+    out.sort((a, b) => {
+      const pick = (r: Record<string, unknown>) =>
+        sortKey === 'memory' ? Number(r.rssBytes) : sortKey === 'io' ? Number(r.readBytesPerSec) + Number(r.writeBytesPerSec) : Number(r.cpuPercent)
+      return pick(b) - pick(a)
+    })
+    return HttpResponse.json(out.slice(0, limit))
   }),
 
   domainRoute('get', '/instances/:id/processes/:pid', (info) => {
@@ -1567,71 +1671,77 @@ export const handlers = [
     const instanceId = Number(info.params.id)
     const pid = Number(info.params.pid)
     const now = new Date().toISOString()
+    /*
+      详情要回显「所点的那个进程」，不能写死一组不存在的 PID/名称。
+      写死时列表行是 java、弹窗里却写着 worker-helper，看着像归属校验出错。
+      这里按列表同一套编号约定反推：+12 是游戏服本体（根），+18 是包装器（子进程）。
+    */
+    const rootPid = pid - (pid % 100) + 12
+    const isRoot = pid === rootPid
+    const inst = instanceDb.list((i) => i.id === instanceId)[0]
+    const nodeUuid = inst ? (nodeUuidById(inst.nodeId) ?? 'node-alpha') : 'node-alpha'
+    const baseProc = {
+      pid: rootPid,
+      parentPid: 0,
+      name: 'java',
+      isRoot: true,
+      cpuPercent: 42.5,
+      rssBytes: 1.6 * GIB,
+      readBytesPerSec: 384 * 1024,
+      writeBytesPerSec: 128 * 1024,
+      user: 'minecraft',
+      commandSummary: `java -Xmx4G -jar ${inst?.name ?? 'server'}.jar nogui`,
+      uptimeSeconds: 3689,
+      threadCount: 58,
+      sampledAt: now,
+      unavailableReason: '',
+    }
+    const childProc = {
+      pid: rootPid + 6,
+      parentPid: rootPid,
+      name: 'wrapper',
+      isRoot: false,
+      cpuPercent: 1.2,
+      rssBytes: 72 * MIB,
+      readBytesPerSec: 48 * 1024,
+      writeBytesPerSec: 12 * 1024,
+      user: 'minecraft',
+      commandSummary: 'jm-worker-daemon',
+      uptimeSeconds: 3600,
+      threadCount: 3,
+      sampledAt: now,
+      unavailableReason: '',
+    }
+    const target = isRoot ? baseProc : { ...childProc, pid }
     return HttpResponse.json({
-      instance: { id: instanceId, uuid: 'inst-1-uuid', name: 'survival', nodeId: 1, nodeUuid: 'node-a', nodeName: '北京节点' },
-      rootPid: 24512,
-      target: {
-        pid,
-        parentPid: pid === 24512 ? 0 : 24512,
-        name: pid === 24512 ? 'java' : 'worker-helper',
-        isRoot: pid === 24512,
-        cpuPercent: 42.5,
-        rssBytes: 2.4 * GIB,
-        readBytesPerSec: 1024 * 1024,
-        writeBytesPerSec: 512 * 1024,
-        user: 'minecraft',
-        commandSummary: pid === 24512 ? 'java -Xmx4G -jar server.jar' : 'worker-helper --child',
-        uptimeSeconds: 3661,
-        threadCount: 58,
-        sampledAt: now,
-        unavailableReason: '',
+      instance: {
+        id: instanceId,
+        uuid: inst?.uuid ?? '',
+        name: inst?.name ?? '',
+        nodeId: inst?.nodeId ?? 0,
+        nodeUuid,
+        nodeName: nodeUuid,
       },
-      ancestors: pid === 24512 ? [] : [{
-        pid: 24512,
-        parentPid: 0,
-        name: 'java',
-        isRoot: true,
-        cpuPercent: 42.5,
-        rssBytes: 2.4 * GIB,
-        readBytesPerSec: 1024 * 1024,
-        writeBytesPerSec: 512 * 1024,
-        user: 'minecraft',
-        commandSummary: 'java -Xmx4G -jar server.jar',
-        uptimeSeconds: 3661,
-        threadCount: 58,
-        sampledAt: now,
-        unavailableReason: '',
-      }],
-      children: pid === 24512 ? [{
-        pid: 24518,
-        parentPid: 24512,
-        name: 'wrapper',
-        isRoot: false,
-        cpuPercent: 3.1,
-        rssBytes: 80 * MIB,
-        readBytesPerSec: 64 * 1024,
-        writeBytesPerSec: 16 * 1024,
-        user: 'minecraft',
-        commandSummary: 'jm-worker-daemon',
-        uptimeSeconds: 3600,
-        threadCount: 3,
-        sampledAt: now,
-        unavailableReason: '',
-      }] : [],
-      diagnostics: [{
-        code: 'cpu_sustained_high',
-        severity: 'warning',
-        title: 'CPU 持续高占用',
-        evidence: '最近窗口平均 CPU 42.5%',
-        suggestion: '优先检查插件任务或脚本循环，再考虑处置子进程。',
-      }],
+      rootPid,
+      target,
+      ancestors: isRoot ? [] : [baseProc],
+      children: isRoot ? [childProc] : [],
+      diagnostics: isRoot
+        ? [{
+            code: 'cpu_sustained_high',
+            severity: 'warning',
+            title: 'CPU 持续高占用',
+            evidence: '最近窗口平均 CPU 42.5%',
+            suggestion: '优先检查插件任务或脚本循环，再考虑处置子进程。',
+          }]
+        : [],
       history: {
-        windowSeconds: 1800,
-        sampleCount: 12,
+        windowSeconds: 900,
+        sampleCount: 30,
         latestSampledAt: now,
-        rssDeltaBytes: 256 * MIB,
-        avgCpuPercent: 40.2,
-        avgWriteBytesPerSec: 512 * 1024,
+        rssDeltaBytes: 64 * MIB,
+        avgCpuPercent: isRoot ? 40.2 : 1.0,
+        avgWriteBytesPerSec: isRoot ? 512 * 1024 : 12 * 1024,
       },
     })
   }),
@@ -2082,7 +2192,16 @@ export const handlers = [
     // 先按经过时间推进活跃任务的状态，再过滤：否则 `state=running` 这类筛选会依据
     // 那份静态旧值，与真正返回给前端的状态自相矛盾。
     const now = Date.now()
-    let items = [...artifactMigrationTasks.list(), ...tasks.list()].map((t) => {
+    // 两个集合各自从 1 分配 id，直接并起来会出现重复 id（实测 `/tasks?limit=5`
+    // 返回 [1,2,3,4,4]）：前端按 id 做列表 key，重复会触发
+    // "Encountered two children with the same key" 并可能错渲染。
+    // 真后端只有一个自增序列，故这里把迁移任务整体偏移到一个不会与普通任务相撞的分段。
+    // （取 100000 是因为任务量级远小于它，且不与历史 ID 冲突。）
+    const ARTIFACT_TASK_ID_BASE = 100_000
+    let items = [
+      ...artifactMigrationTasks.list().map((t) => ({ ...t, id: ARTIFACT_TASK_ID_BASE + t.id })),
+      ...tasks.list(),
+    ].map((t) => {
       const state = advanceTaskState(t, now)
       if (state === t.state) return t
       return { ...t, state, progress: state === 'succeeded' ? 100 : t.progress, updatedAt: new Date(now).toISOString() }

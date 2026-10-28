@@ -58,6 +58,16 @@ export interface NodeRepairPanelProps {
   orphansLoading?: boolean
   /** 功能未开启（端点 404）：整块降级为提示文案。 */
   unavailable?: boolean
+  /**
+   * 取数失败（非 404）。必须与「未见异常」区分开：
+   * 请求挂了时 suspects 为空，若走正常分支就会显示绿色「未见异常」——
+   * 把故障说成健康，是这类诊断页最危险的误报方向。
+   */
+  loadError?: boolean
+  /** 取数失败时的重试回调（外壳注入）。 */
+  onRetry?: () => void
+  /** 疑似清单加载态（避免首帧闪现「未见异常」）。 */
+  suspectsLoading?: boolean
   /** 重新 enroll 在途。 */
   reenrolling?: boolean
   /** 清理孤立资源在途。 */
@@ -77,6 +87,9 @@ export default function NodeRepairPanel({
   orphans,
   orphansLoading = false,
   unavailable = false,
+  loadError = false,
+  onRetry,
+  suspectsLoading = false,
   reenrolling = false,
   purging = false,
   onReenroll,
@@ -94,6 +107,31 @@ export default function NodeRepairPanel({
     return (
       <div className="rounded-md border bg-muted/30 px-3 py-6 text-center text-sm text-muted-foreground">
         {t('nodeRepair.unavailable')}
+      </div>
+    )
+  }
+
+  /*
+    失败态与加载态都要排在「未见异常」之前：
+    失败时 suspects 为 undefined、加载中也为 undefined，两者都会落到绿条分支。
+  */
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-start gap-2" data-testid="node-repair-error">
+        <p className="text-sm text-destructive">{t('nodeRepair.loadFailed')}</p>
+        {onRetry && (
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            {t('common.retry')}
+          </Button>
+        )}
+      </div>
+    )
+  }
+  if (suspectsLoading) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-16 w-full" />
       </div>
     )
   }

@@ -18,8 +18,8 @@ function errMessage(err: unknown, fallback: string): string {
  */
 export default function NodeProbeVersionTab({ nodeId }: { nodeId: number }) {
   const { t } = useTranslation()
-  const { data: catalog, isLoading: catalogLoading, isError: catalogError } = useServerProbeCatalog({ enabled: true })
-  const { data: selected, isLoading: selectionLoading, isError: selectionError } = useNodeProbeVersion(nodeId, { enabled: true })
+  const { data: catalog, isLoading: catalogLoading, isError: catalogError, refetch: refetchCatalog } = useServerProbeCatalog({ enabled: true })
+  const { data: selected, isLoading: selectionLoading, isError: selectionError, refetch: refetchSelection } = useNodeProbeVersion(nodeId, { enabled: true })
   const update = useSetNodeProbeVersion(nodeId)
 
   return (
@@ -30,6 +30,10 @@ export default function NodeProbeVersionTab({ nodeId }: { nodeId: number }) {
       // 加载完成后仍无目录/选择，即视为错误态（与迁移前 `!catalog || !selected` 同义）。
       isError={catalogError || selectionError || !catalog || !selected}
       saving={update.isPending}
+      onRetry={() => {
+        void refetchCatalog()
+        void refetchSelection()
+      }}
       onSave={async (versionId) => {
         try {
           await update.mutateAsync(versionId)

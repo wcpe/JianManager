@@ -10,6 +10,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Button } from '@jianmanager/ui/components/button'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import type { NodePorts } from '@/lib/nodes/node-ports'
 
@@ -35,9 +36,13 @@ export interface NodePortsPanelProps {
   data?: NodePorts
   /** 加载态；外壳注入。为真时渲染骨架占位。 */
   isLoading?: boolean
+  /** 取数失败；外壳注入。为真时渲染错误态与重试，而不是伪装成「暂无端口」。 */
+  isError?: boolean
+  /** 错误态的重试回调（外壳注入）。 */
+  onRetry?: () => void
 }
 
-export default function NodePortsPanel({ data, isLoading }: NodePortsPanelProps) {
+export default function NodePortsPanel({ data, isLoading, isError, onRetry }: NodePortsPanelProps) {
   const { t } = useTranslation()
   // 实例名过滤（大量占用时便于定位某端口，大小写不敏感子串匹配）。
   const [filter, setFilter] = useState('')
@@ -77,6 +82,22 @@ export default function NodePortsPanel({ data, isLoading }: NodePortsPanelProps)
 
   const visible = filtered.slice(range.start, range.end)
 
+  /*
+    错误态必须排在空态之前：请求失败时 data 为空、isLoading 已为假，
+    若直接落到空态，界面会写「该节点暂无端口占用」——把故障说成没有数据。
+  */
+  if (isError)
+    return (
+      <div className="flex flex-col items-start gap-2" data-testid="node-ports-error">
+        <p className="text-sm text-destructive">{t('ports.loadFailed')}</p>
+        {onRetry && (
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            {t('common.retry')}
+          </Button>
+        )}
+      </div>
+    )
+
   return (
     <div>
       {data && (
@@ -94,8 +115,8 @@ export default function NodePortsPanel({ data, isLoading }: NodePortsPanelProps)
           type="search"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          aria-label={t('ports.filterPlaceholder', { defaultValue: 'Filter by instance name' })}
-          placeholder={t('ports.filterPlaceholder', { defaultValue: 'Filter by instance name' })}
+          aria-label={t('ports.filterPlaceholder')}
+          placeholder={t('ports.filterPlaceholder')}
           className="h-8 w-full rounded-md border bg-background pl-8 pr-2 text-sm outline-none ring-primary/30 focus:ring-2"
         />
       </div>
@@ -103,7 +124,13 @@ export default function NodePortsPanel({ data, isLoading }: NodePortsPanelProps)
         ref={containerRef}
         onScroll={onScroll}
         data-testid="node-ports-virtual"
-        className="max-h-[26rem] overflow-auto rounded-md border"
+        /*
+          必须保留一个有限高度的滚动容器：虚拟滚动按容器可视高算窗口，
+          高度交给内容（不设 max-h）会让容器高度恰好等于已渲染行高，
+          于是永远量不到「还有更多行」，后半张表根本滚不到。
+          高度改成随视口收缩（短屏不独占整页），长度仍由虚拟窗口控制。
+        */
+        className="max-h-[min(26rem,60vh)] overflow-auto rounded-md border"
       >
         <Table>
           <TableHeader className="bg-muted/50">
@@ -138,7 +165,7 @@ export default function NodePortsPanel({ data, isLoading }: NodePortsPanelProps)
               <TableRow>
                 <TableCell colSpan={4} className="text-center text-muted-foreground">
                   {filter.trim() && occupied.length > 0
-                    ? t('ports.noMatch', { defaultValue: 'No matching ports' })
+                    ? t('ports.noMatch')
                     : t('ports.empty')}
                 </TableCell>
               </TableRow>

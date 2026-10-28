@@ -48,7 +48,8 @@ export interface NodeArtifactCachePanelProps {
   /** 保存上限在途：禁用保存按钮。 */
   capSaving?: boolean
   /** 清空在途：禁用清空按钮。 */
-  clearing?: boolean
+  clearing?: boolean  /** 取数失败时的重试回调（外壳注入）。 */
+  onRetry?: () => void
 }
 
 export default function NodeArtifactCachePanel({
@@ -61,6 +62,7 @@ export default function NodeArtifactCachePanel({
   onCopyResult,
   capSaving = false,
   clearing = false,
+  onRetry,
 }: NodeArtifactCachePanelProps) {
   const { t } = useTranslation()
 
@@ -71,6 +73,8 @@ export default function NodeArtifactCachePanel({
   const [query, setQuery] = useState('')
 
   // 上限输入：未编辑时回显服务端值（GB）；编辑后用本地值（稳定区，不切换隐显）。
+  // 上限 0 表示「不限」：回显成「0」会让人以为配额是零字节，与旁边的「不限」标签自相矛盾。
+  const capUnlimited = !capDirty && (data?.capBytes ?? 0) === 0
   const capValue = capDirty ? capInput : capBytesToGiB(data?.capBytes ?? 0)
 
   const handleSaveCap = async () => {
@@ -93,7 +97,7 @@ export default function NodeArtifactCachePanel({
   return (
     <div className="space-y-3">
       {/* 头部：容量条（占用/上限）+ 上限设置 + 一键清空（常驻稳定区，布局不跳） */}
-      <Card className="gap-0 space-y-2 px-3 py-2.5">
+      <Card className="space-y-2 px-3 py-2.5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="min-w-[200px] flex-1">
             <div className="mb-1.5 flex items-baseline gap-2">
@@ -114,10 +118,11 @@ export default function NodeArtifactCachePanel({
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             {t('artifactCache.capInputLabel')}
             <Input
-              value={capValue}
+              // 不限（0）时留空并用占位说明，避免把「不限」显示成「0 GB」。
+              value={capUnlimited ? '' : capValue}
               onChange={(e) => { setCapInput(e.target.value); setCapDirty(true) }}
               inputMode="decimal"
-              placeholder="0"
+              placeholder={t('artifactCache.capUnlimited')}
               className="h-7 w-20 text-sm"
               aria-label={t('artifactCache.capInputLabel')}
             />
@@ -147,7 +152,18 @@ export default function NodeArtifactCachePanel({
           <Skeleton className="h-14 w-full" />
         </div>
       ) : isError ? (
-        <p className="text-sm text-destructive">{t('artifactCache.loadFailed')}</p>
+        /*
+          错误态必须给重试：只写一行「加载失败」时，用户唯一的自救手段是刷新整页，
+          连带丢掉当前选中的节点与页签。
+        */
+        <div className="flex flex-col items-start gap-2" data-testid="artifact-cache-error">
+          <p className="text-sm text-destructive">{t('artifactCache.loadFailed')}</p>
+          {onRetry && (
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              {t('common.retry')}
+            </Button>
+          )}
+        </div>
       ) : items.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">{t('artifactCache.empty')}</p>
       ) : (

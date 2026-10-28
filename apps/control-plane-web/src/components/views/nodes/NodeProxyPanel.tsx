@@ -1,6 +1,6 @@
 import { useState } from 'react'
+import { AlertTriangle, Link2, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Globe } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Segments, Segment } from '@jianmanager/ui/components/layout'
@@ -98,24 +98,33 @@ function NodeProxyForm({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <Globe className="size-4" />
-        </span>
-        <div>
-          <h3 className="text-sm font-semibold">{t('nodeProxy.title')}</h3>
-          <p className="text-xs text-muted-foreground">{t('nodeProxy.desc')}</p>
-        </div>
-      </div>
+      {/* 标题与说明留在外层 Panel 的标题栏与 desc 里，这里只保留说明文字，避免同名标题渲染两遍。 */}
+      <p className="text-xs text-muted-foreground">{t('nodeProxy.desc')}</p>
 
       {/* 当前生效 + 全局默认（脱敏） */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+        <Link2 className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <span className="text-muted-foreground">
           {t('nodeProxy.effective')}:{' '}
-          <code className="font-mono text-foreground">{effectiveText || t('nodeProxy.effectiveDirect')}</code>
+          <code className="font-mono font-semibold text-foreground">{effectiveText || t('nodeProxy.effectiveDirect')}</code>
         </span>
-        {!view.online && <span className="text-status-warning">{t('nodeProxy.pendingPush')}</span>}
       </div>
+      {/*
+        离线时的「待下发」原先只是一行 11px 小字，和说明挤在一起极易漏看。
+        它是「改了但还没生效」的唯一提示，漏看就会以为配置没保存成功，故独立成警示条。
+      */}
+      {!view.online && (
+        <div className="flex items-start gap-1.5 rounded-md border border-status-warning/40 bg-status-warning/5 px-3 py-2 text-[11px] text-status-warning">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          {t('nodeProxy.pendingPush')}
+        </div>
+      )}
+
+      {/* 安全边界：这条决定运维敢不敢动代理——配错不会把节点弄失联。 */}
+      <p className="flex items-start gap-1.5 rounded-md border border-status-success/30 bg-status-success/5 px-3 py-2 text-[11px] text-muted-foreground">
+        <ShieldCheck className="mt-0.5 size-3.5 shrink-0 text-status-success" aria-hidden />
+        {t('nodes.proxySafety')}
+      </p>
 
       {/* 模式单选：继承全局 / 自定义 */}
       <div className="space-y-1.5">

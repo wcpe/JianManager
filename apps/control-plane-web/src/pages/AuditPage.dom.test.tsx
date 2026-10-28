@@ -39,14 +39,18 @@ async function waitActionFiltered() {
  * 三条：① 渲染种子审计行 ② 筛选 action 后列表联动收窄 ③ 注入 500 后页面显错误态。
  */
 describe('AuditPage（mock 假后端）', () => {
-  it('渲染种子审计日志（三条 action 均在）', async () => {
+  it('渲染种子审计日志（种子里的 action 均在）', async () => {
     loginMockUser()
     renderWithProviders(<AuditPage />)
     expect(await screen.findByText('user.login')).toBeInTheDocument()
     expect(screen.getByText('instance.start')).toBeInTheDocument()
     expect(screen.getByText('group.create')).toBeInTheDocument()
-    // 分页 envelope 计数佐证行数与总数（种子 3 条）。
-    expect(screen.getByText('已加载 3 / 共 3 条')).toBeInTheDocument()
+    /*
+      种子现为 5 条：原有 3 条 + 2 条节点配置类变更（node.proxy.set / node.artifact_cache.set_cap），
+      后者是给节点「配置」页签的「最近变更」提供数据用的。
+      断言总数而非只断言三条 action，避免以后再加种子又连累这条用例。
+    */
+    expect(screen.getByText('已加载 5 / 共 5 条')).toBeInTheDocument()
   })
 
   it('按 action 筛选 → 列表联动收窄（仅命中行保留）', async () => {

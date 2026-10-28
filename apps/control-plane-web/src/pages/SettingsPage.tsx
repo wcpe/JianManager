@@ -35,7 +35,7 @@ export default function SettingsPage() {
   // 明暗偏好：只订阅本页要用的两个字段（主题色变化不牵动本页重渲染）。
   const theme = useThemeStore((s) => s.theme)
   const setTheme = useThemeStore((s) => s.setTheme)
-  const { data, isLoading, isError } = useSettings()
+  const { data, isLoading, isError, refetch } = useSettings()
   const update = useUpdateSettings()
 
   /** 分类筛选：appearance 为客户端偏好，其余为平台配置分类。 */
@@ -50,6 +50,7 @@ export default function SettingsPage() {
       isLoading={isLoading}
       isError={isError}
       saving={update.isPending}
+      onRetry={() => void refetch()}
       onSave={async (changed) => {
         try {
           await update.mutateAsync({ values: changed })

@@ -94,6 +94,38 @@ const groups = db<Group>('groups', () => [
 ])
 
 const audit = db<AuditLog>('audit', () => [
+  /*
+    节点配置类变更：节点详情「配置」页签的「最近变更」靠这几条渲染。
+    时间取相对当前（而不是写死日期），否则跑一段时间后永远显示「x 天前」甚至查不到。
+  */
+  {
+    id: 901,
+    uuid: 'a-901',
+    userId: 1,
+    action: 'node.proxy.set',
+    targetType: 'node',
+    targetId: '1',
+    detail: '{"nodeId":1,"mode":"inherit"}',
+    ip: '10.0.0.9',
+    failed: false,
+    error: '',
+    createdAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    user: { id: 1, username: 'admin' },
+  },
+  {
+    id: 902,
+    uuid: 'a-902',
+    userId: 2,
+    action: 'node.artifact_cache.set_cap',
+    targetType: 'node',
+    targetId: '2',
+    detail: '{"nodeId":2,"capBytes":21474836480}',
+    ip: '10.0.0.9',
+    failed: false,
+    error: '',
+    createdAt: new Date(Date.now() - 5 * 3600_000).toISOString(),
+    user: { id: 2, username: 'operator' },
+  },
   {
     id: 1,
     uuid: 'a-1',
@@ -171,12 +203,15 @@ function filterAuditRows(url: URL): AuditLog[] {
   const userId = url.searchParams.get('userId')
   const action = url.searchParams.get('action')
   const targetType = url.searchParams.get('targetType')
+  // targetId：按对象回溯（真后端同样支持），供「这个节点被改过什么」这类查询。
+  const targetId = url.searchParams.get('targetId')
   const from = url.searchParams.get('from')
   const to = url.searchParams.get('to')
   let rows = audit.list()
   if (userId) rows = rows.filter((r) => String(r.userId) === userId)
   if (action) rows = rows.filter((r) => r.action.includes(action))
   if (targetType) rows = rows.filter((r) => r.targetType === targetType)
+  if (targetId) rows = rows.filter((r) => r.targetId === targetId)
   if (from) rows = rows.filter((r) => r.createdAt >= from)
   if (to) rows = rows.filter((r) => r.createdAt <= to)
   return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))

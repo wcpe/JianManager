@@ -33,6 +33,11 @@ export default function NodeRepairTab({
   const unavailable =
     (suspects.error as { response?: { status?: number } })?.response?.status === 404 ||
     (orphans.error as { response?: { status?: number } })?.response?.status === 404
+  /*
+    404 是「功能未开启」，其它错误是「取数失败」，两者必须分开：
+    原实现只认 404，500 时会落到正常分支，页面显示绿色「未见异常」，把故障说成健康。
+  */
+  const loadError = !unavailable && (suspects.isError || orphans.isError)
 
   return (
     <NodeRepairPanel
@@ -42,6 +47,12 @@ export default function NodeRepairTab({
       orphans={orphans.data}
       orphansLoading={orphans.isLoading}
       unavailable={unavailable}
+      loadError={loadError}
+      suspectsLoading={suspects.isLoading}
+      onRetry={() => {
+        void suspects.refetch()
+        void orphans.refetch()
+      }}
       reenrolling={reenroll.isPending}
       purging={purge.isPending}
       onReenroll={async () => {
