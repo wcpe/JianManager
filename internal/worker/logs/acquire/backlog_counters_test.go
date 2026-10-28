@@ -76,7 +76,7 @@ func TestBacklogCountersIncrementalEquivalence(t *testing.T) {
 	requireBacklogConsistent(t, wal, "前缀 prune 之后")
 
 	// Restore（整体替换）必须重算 ✓。
-	require.NoError(t, wal.Restore([]WALEntry{{Seq: 1, Durable: true, Replay: true, Event: ev("restored")}}))
+	require.NoError(t, wal.seedEntries([]WALEntry{{Seq: 1, Durable: true, Replay: true, Event: ev("restored")}}))
 	requireBacklogConsistent(t, wal, "Restore 之后")
 	require.Equal(t, int64(1), func() int64 { n, _ := wal.ReplayInFlight(); return n }())
 }

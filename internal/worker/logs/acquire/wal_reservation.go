@@ -50,24 +50,7 @@ func reserveWALEntries(entries []WALEntry, reserve func(int64) (func(), error)) 
 	return leases, nil
 }
 
-func (w *WAL) restoreReservationsLocked(entries []WALEntry) {
-	for i := range w.entries {
-		w.entries[i].reservation.close()
-	}
-	for i := range entries {
-		entries[i].reservation = nil
-	}
-	leases, err := reserveWALEntries(entries, w.reserveBytes)
-	w.reservationErr = err
-	if err != nil {
-		return
-	}
-	for i := range entries {
-		entries[i].reservation = leases[i]
-	}
-}
-
-// ReservationError 不允许恢复后未取得预算的候选条目被继续提交或投递。
+// ReservationError 返回最近一次取预算失败的原因，阻止未取得预算的条目被继续提交或投递。
 func (w *WAL) ReservationError() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

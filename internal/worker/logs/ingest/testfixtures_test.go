@@ -104,8 +104,6 @@ func migrationFixture() *persistedState {
 	ev1 := logtypes.BuildEvent(entry.Identity, logtypes.RecordRange{Start: 100, End: 200},
 		"2026-09-30T00:00:00Z", "2026-09-30T00:00:01Z", "INFO", "stdout", "line one")
 	ev1.Fields = map[string]string{"mod": "core"}
-	ev2 := logtypes.BuildEvent(entry.Identity, logtypes.RecordRange{Start: 200, End: 300},
-		"2026-09-30T00:00:01Z", "2026-09-30T00:00:02Z", "ERROR", "stdout", "line two")
 
 	return &persistedState{
 		Sources: map[string]persistedSource{
@@ -113,7 +111,6 @@ func migrationFixture() *persistedState {
 				PublicationPending:   true,
 				Ledger:               []ledger.Entry{entry},
 				WAL:                  []acquire.WALEntry{{Seq: 7, Event: ev1, Appended: true, Durable: true}},
-				WALRefs:              []acquire.WALRef{{Seq: 6, Appended: true, Durable: true, EventID: ev2.EventID, RecordStart: 200, RecordEnd: 300}},
 				EventsStoredThrough:  300,
 				ProjectionGeneration: "projection-1",
 				EventsStored:         true,

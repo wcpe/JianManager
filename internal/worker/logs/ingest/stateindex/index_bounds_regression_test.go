@@ -1,5 +1,16 @@
 package stateindex
 
+// 本文件原是一批围绕 source_wal 谓词范围删除的「预算/崩溃/取消」回归。
+//
+// 2026-10-29：`source_wal` 表整体删除、范围剪枝（WALPrune）整条链下线，因此
+//   - TestIndexPruneCrashHelper / TestIndexPruneCanceledAndKilledUnitsPreserveMirrorAndWAL
+//     / TestIndexPruneRepeatedOwnerUsesConservativeWatermark / TestIndexPruneRespectsActualEightRowBudget
+//     里针对范围删除的断言失去对象。这里把其中仍然成立、且与表无关的两条不变量
+//     （「崩溃/取消后镜像不提前更新」「每条 SQL 语句 / 每个提交单元都受预算约束」）
+//     改用 gap 行（同为按归属增量表）重写成等价用例；
+//   - 归并相关的两条（TestIndexControlledTruncateClearsCheckpointObservations /
+//     TestIndexPassiveTracksUnfinishedFramesSeparately）原样保留。
+
 import (
 	"context"
 	"database/sql"
@@ -12,8 +23,28 @@ import (
 	"testing"
 )
 
-func TestIndexPruneCrashHelper(t *testing.T) {
-	path := os.Getenv("JM_INDEX_PRUNE_CRASH")
+// gapBoundedState 构造「一个源 + count 条 gap 行」的夹具（count 足够大写以触发切分）。
+func gapBoundedState(key string, count int) State {
+	var st State
+	st.Sources = append(st.Sources, SourceRow{Key: key, LogSourceID: "node:bounded", SourceGeneration: "g1", StorageNamespace: "ns:bounded"})
+	st.Positions = append(st.Positions, PositionRow{Key: key, ReadPos: 200, DurablePos: 150, ReclaimPos: 100})
+	st.Projections = append(st.Projections, ProjectionRow{Key: key, Generation: "projection-1"})
+	st.Aux = append(st.Aux, AuxRow{Key: key, Payload: []byte(`{}`)})
+	for i := 0; i < count; i++ {
+		st.Gaps = append(st.Gaps, GapRow{
+			Key: key, ID: int64(i), StartPos: uint64(i * 10), EndPos: uint64(i*10 + 9),
+			Reason: "PAUSED", Detail: fmt.Sprintf("gap-%d", i),
+		})
+	}
+	return st
+}
+
+// TestIndexGapCrashHelper 在子进程里制造一段**有差异**的删除，并在提交前强杀自己。
+//
+// 必须制造差异：`Apply` 对相同内容会走幂等空转（不开事务、不调 commitChunks），
+// 那样 testCrashHook 永远不会被调用。
+func TestIndexGapCrashHelper(t *testing.T) {
+	path := os.Getenv("JM_INDEX_CRASH")
 	if path == "" {
 		return
 	}
@@ -21,11 +52,8 @@ func TestIndexPruneCrashHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := walPruneState("crash-prune/g1", 20000, 1, 3)
-	desired := seed
-	desired.WAL = append([]WALRow(nil), seed.WAL[20000:]...)
 	s.testCrashHook = func() {
-		if err := os.WriteFile(path+".before-commit", []byte("已进入范围删除提交前"), 0600); err != nil {
+		if err := os.WriteFile(path+".before-commit", []byte("已进入提交前"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		process, err := os.FindProcess(os.Getpid())
@@ -36,17 +64,25 @@ func TestIndexPruneCrashHelper(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, _ = s.ApplyScopedCtx(context.Background(), desired, []string{"crash-prune/g1"}, []WALPrune{{Owner: "crash-prune/g1", EndThrough: 200000}})
-	t.Fatal("范围删除崩溃屏障未触发")
+	// 删掉一半 gap 行：必然产生差异 ⇒ 至少一个提交单元 ⇒ hook 在 COMMIT 前触发。
+	_, _ = s.Apply(gapBoundedState("crash/g1", 100))
+	t.Fatal("崩溃屏障未触发")
 }
 
-func TestIndexPruneCanceledAndKilledUnitsPreserveMirrorAndWAL(t *testing.T) {
+// TestIndexCanceledAndKilledUnitsPreserveMirror 钉住两条不变量：
+//
+//	① **强杀**（子进程 SIGKILL）后，镜像不得包含未提交的行（回退幅度 ≤ 一个提交单元）；
+//	② **ctx 取消**时当前单元回滚、镜像不动，且连接可用、后续调用能接着做完（不越界、不假完成）。
+//
+// 转红方式：把镜像更新从"提交成功后"提前到"提交前"（或去掉 runUnit 的 ROLLBACK），
+// ①/② 的镜像行数断言立刻变红。
+func TestIndexCanceledAndKilledUnitsPreserveMirror(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := walPruneState("crash-prune/g1", 20000, 1, 3)
+	seed := gapBoundedState("crash/g1", 20000)
 	for {
 		stats, err := s.Apply(seed)
 		if err != nil {
@@ -59,90 +95,83 @@ func TestIndexPruneCanceledAndKilledUnitsPreserveMirrorAndWAL(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
+
+	// ① 子进程强杀：未提交的单元整体丢弃。
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(binary, "-test.run=^TestIndexPruneCrashHelper$", "-test.timeout=30s")
-	command.Env = append(os.Environ(), "JM_INDEX_PRUNE_CRASH="+path)
+	command := exec.Command(binary, "-test.run=^TestIndexGapCrashHelper$", "-test.timeout=30s")
+	command.Env = append(os.Environ(), "JM_INDEX_CRASH="+path)
 	output, err := command.CombinedOutput()
 	if err == nil || !strings.Contains(err.Error(), "killed") {
 		t.Fatalf("未真实强杀：%s %v", output, err)
 	}
 	if _, err := os.Stat(path + ".before-commit"); err != nil {
-		t.Fatal("没有进入范围删除提交前屏障")
+		t.Fatal("没有进入提交前屏障")
 	}
 	s, err = OpenWithBudget(path, CommitBudget{MaxRows: 8, MinRows: 1, CycleMaxRows: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
-	if got := len(s.mirror["source_wal"]["crash-prune/g1"]); got != len(seed.WAL) {
-		t.Fatalf("强杀后未提交删除残留：%d", got)
+	if got := len(s.mirror["gap"]["crash/g1"]); got != len(seed.Gaps) {
+		t.Fatalf("强杀后未提交删除残留：%d（期望 %d）", got, len(seed.Gaps))
 	}
-	desired := seed
-	desired.WAL = append([]WALRow(nil), seed.WAL[20000:]...)
+
+	// ② 取消：本单元回滚，镜像不动；随后同一目标可以续跑完。
+	desired := gapBoundedState("crash/g1", 100) // 删掉大量 gap 行
 	ctx, cancel := context.WithCancel(context.Background())
 	s.testCrashHook = cancel
-	if _, err := s.ApplyScopedCtx(ctx, desired, []string{"crash-prune/g1"}, []WALPrune{{Owner: "crash-prune/g1", EndThrough: 200000}}); err == nil {
+	if _, err := s.ApplyScopedCtx(ctx, desired, []string{"crash/g1"}); err == nil {
 		t.Fatal("取消仍被当成已提交")
 	}
 	s.testCrashHook = nil
-	if got := len(s.mirror["source_wal"]["crash-prune/g1"]); got != len(seed.WAL) {
+	if got := len(s.mirror["gap"]["crash/g1"]); got != len(seed.Gaps) {
 		t.Fatalf("取消更新了未提交镜像：%d", got)
 	}
-	for round := 0; round < 3; round++ {
-		stats, err := s.ApplyScopedCtx(context.Background(), desired, []string{"crash-prune/g1"}, []WALPrune{{Owner: "crash-prune/g1", EndThrough: 200000}})
+	rounds := 0
+	for {
+		stats, err := s.ApplyScopedCtx(context.Background(), desired, []string{"crash/g1"})
 		if err != nil {
 			t.Fatalf("取消后连接未恢复：%v", err)
 		}
-		if stats.RowsDeleted != 8 || !stats.Incomplete {
-			t.Fatalf("取消/强杀后范围续跑越界或假完成：%+v", stats)
+		rounds++
+		if !stats.Incomplete {
+			break
+		}
+		if stats.RowsDeleted > 8 {
+			t.Fatalf("单个提交单元越过行数预算：%+v", stats)
+		}
+		if rounds > 100000 {
+			t.Fatal("续跑不收敛")
 		}
 	}
-	var nonDurable int
-	if err := s.db.QueryRow("SELECT count(*) FROM source_wal WHERE key=? AND durable=0", "crash-prune/g1").Scan(&nonDurable); err != nil {
-		t.Fatal(err)
-	}
-	if nonDurable != 3 {
-		t.Fatalf("范围剪枝删掉非耐久责任：%d", nonDurable)
-	}
-}
-
-func TestIndexPruneRepeatedOwnerUsesConservativeWatermark(t *testing.T) {
-	s, err := Open(filepath.Join(t.TempDir(), "index.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = s.Close() }()
-	seed := walPruneState("duplicate-prune/g1", 3, 0, 0)
-	if _, err := s.Apply(seed); err != nil {
-		t.Fatal(err)
-	}
-	desired := seed
-	desired.WAL = append([]WALRow(nil), seed.WAL[1:2]...)
-	if _, err := s.ApplyScopedCtx(context.Background(), desired, []string{"duplicate-prune/g1"}, []WALPrune{{Owner: "duplicate-prune/g1", EndThrough: 30}, {Owner: "duplicate-prune/g1", EndThrough: 10}}); err != nil {
-		t.Fatal(err)
+	if rounds < 2 {
+		t.Fatalf("20000 行差异在 8 行/单元下必须分多轮完成，实测 %d 轮", rounds)
 	}
 	loaded, err := s.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.WAL) != 1 || loaded.WAL[0].RecordEnd != 20 {
-		t.Fatalf("重复归属提示绕过最小水位等价性守门：%+v", loaded.WAL)
+	if len(loaded.Gaps) != len(desired.Gaps) {
+		t.Fatalf("续跑后 gap 行数不符：得到 %d，期望 %d", len(loaded.Gaps), len(desired.Gaps))
 	}
 }
 
-func TestIndexPruneRespectsActualEightRowBudget(t *testing.T) {
+// TestIndexDeleteRespectsRowBudget 把「每个提交单元 / 每条 SQL 语句都受行数预算约束」
+// 钉在**普通逐行路径**上（范围剪枝已不存在，这是现在唯一的删除路径）：
+// 8 行/单元时删 20000 行必须分多轮，每轮删除行数 ≤ 8，最终删净且不误删。
+func TestIndexDeleteRespectsRowBudget(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.db")
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
-	const key = "bounded-prune/g1"
+	const key = "bounded/g1"
 	const count = 20000
-	seed := walPruneState(key, count, 1, 0)
+	seed := gapBoundedState(key, count)
 	for {
 		stats, err := s.Apply(seed)
 		if err != nil {
@@ -152,41 +181,33 @@ func TestIndexPruneRespectsActualEightRowBudget(t *testing.T) {
 			break
 		}
 	}
-	desired := seed
-	desired.WAL = append([]WALRow(nil), seed.WAL[len(seed.WAL)-1:]...)
+	desired := gapBoundedState(key, count/2) // 删掉后一半
 	s.budget.MaxRows, s.budget.MinRows, s.budget.CycleMaxRows, s.rowBudget = 8, 1, 8, 8
 	before := len(s.Samples())
-	stats, err := s.ApplyScopedCtx(context.Background(), desired, []string{key}, []WALPrune{{Owner: key, EndThrough: count * 10}})
+	stats, err := s.ApplyScopedCtx(context.Background(), desired, []string{key})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var remaining int
-	if err := s.db.QueryRow("SELECT count(*) FROM source_wal WHERE key=? AND durable=1 AND record_end<=?", key, count*10).Scan(&remaining); err != nil {
-		t.Fatal(err)
-	}
-	actual := count - remaining
-	t.Logf("实际删行=%d，统计=%+v，剩余=%d", actual, stats, remaining)
-	if actual > 8 || actual < 1 || stats.RowsDeleted != actual || stats.RangePruned != actual || stats.MaxChunkRows > 8 || !stats.Incomplete {
-		t.Fatalf("范围剪枝必须按实际变化行受事务和周期预算约束，实际=%d，统计=%+v", actual, stats)
+	t.Logf("实际删行=%d，统计=%+v", stats.RowsDeleted, stats)
+	if stats.RowsDeleted == 0 || stats.RowsDeleted > 8 || stats.MaxChunkRows > 8 || !stats.Incomplete {
+		t.Fatalf("删除必须受事务与周期预算约束，实际=%+v", stats)
 	}
 	for _, sample := range s.Samples()[before:] {
 		if sample.Rows() > 8 {
 			t.Fatalf("单元越界：%+v", sample)
 		}
 	}
-	// 未提交行必须仍在镜像，非耐久行也必须保留。
-	if got := len(s.mirror["source_wal"][key]); got != len(seed.WAL)-actual {
-		t.Fatalf("镜像提前删除：%d", got)
+	// 未提交的行必须仍在镜像里（镜像只在提交成功后更新）。
+	if got := len(s.mirror["gap"][key]); got != count-int(stats.RowsDeleted) {
+		t.Fatalf("镜像提前删除：%d（期望 %d）", got, count-int(stats.RowsDeleted))
 	}
-	if _, err := s.ApplyScopedCtx(context.Background(), desired, []string{key}, []WALPrune{{Owner: key, EndThrough: count * 10}}); err != nil {
+	// 续跑：下一个单元也只能删 ≤8 行，且确实在推进。
+	next, err := s.ApplyScopedCtx(context.Background(), desired, []string{key})
+	if err != nil {
 		t.Fatal(err)
 	}
-	var next int
-	if err := s.db.QueryRow("SELECT count(*) FROM source_wal WHERE key=? AND durable=1 AND record_end<=?", key, count*10).Scan(&next); err != nil {
-		t.Fatal(err)
-	}
-	if next >= remaining || remaining-next > 8 {
-		t.Fatalf("续跑未遵守预算：%d -> %d", remaining, next)
+	if next.RowsDeleted == 0 || next.RowsDeleted > 8 {
+		t.Fatalf("续跑未遵守预算：%+v", next)
 	}
 }
 

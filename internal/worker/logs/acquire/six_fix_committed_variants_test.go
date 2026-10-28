@@ -1,11 +1,25 @@
 package acquire
 
+// 同一 event_id 的多变体（同区间异正文）在投递资格门上的行为回归。
+//
+// ## 2026-10-29 架构变更对本文件的影响
+//
+// WAL 改为**纯内存队列**后：
+//   - `source_wal` 表已删除，`stateindex` 不再有 WAL 行；
+//   - 重启不再恢复队列内容，因此「重开索引后逐条还原 WAL」这件事本身已不存在。
+//
+// 但本文件真正要钉的语义**不是**“队列能持久化”，而是「资格门不得折叠变体 / 不得让同身份
+// 的未提交条目借到资格」。这些全是内存队列 + 账本的语义，与表无关，因此保留，并把
+// 「重启后」改成「用内存快照重新装入一份等价队列」（等价于新进程的起点状态）。
+//
+// 真实索引仍然参与：账本快照照旧经 `stateindex` 落盘与读回（那是持久化的真源），
+// 只是不再有 WAL 行。
+
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,38 +41,30 @@ func sixFixQualificationEvent(key ledger.SourceKey, start, end uint64, at string
 	return event
 }
 
-// 夹具使用生产索引组件保存逐条 WAL 及账本；不把内存标志、JSON 往返或持久化桩当作落盘证据。
-// acquire.WAL 本身没有路径化打开和关闭接口，真实重开的是承载其快照的索引库。
-func sixFixQualificationState(key ledger.SourceKey, led *ledger.Ledger, wal *WAL) (stateindex.State, error) {
+// 夹具使用生产索引组件保存**账本**（持久化的真源）；WAL 是内存队列，不再进索引。
+//
+// 额外带上几条 gap 行：只为让「单单元只写 1 行」的预算用例有足够的差异行可写
+// （否则行数太少，「不完整提交」还没撑完预期轮次就做完了）。
+func sixFixQualificationState(key ledger.SourceKey, led *ledger.Ledger) (stateindex.State, error) {
 	owner := key.String()
 	payload, err := json.Marshal(led.Snapshot())
 	if err != nil {
 		return stateindex.State{}, err
 	}
 	positions, _ := led.Positions(key)
-	state := stateindex.State{
+	gaps := make([]stateindex.GapRow, 0, 3)
+	for i := 0; i < 3; i++ {
+		gaps = append(gaps, stateindex.GapRow{
+			Key: owner, ID: int64(i), StartPos: uint64(i * 10), EndPos: uint64(i*10 + 9),
+			Reason: "PAUSED", Detail: "qualification fixture",
+		})
+	}
+	return stateindex.State{
 		Sources:   []stateindex.SourceRow{{Key: owner, LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration, StorageNamespace: owner}},
 		Positions: []stateindex.PositionRow{{Key: owner, ReadPos: positions.Read, DurablePos: positions.Durable, ReclaimPos: positions.Reclaim}},
 		Aux:       []stateindex.AuxRow{{Key: owner, Payload: payload}},
-	}
-	for _, entry := range wal.Snapshot() {
-		body, marshalErr := json.Marshal(entry.Event)
-		if marshalErr != nil {
-			return stateindex.State{}, marshalErr
-		}
-		row := stateindex.WALRow{
-			Key: owner, Seq: entry.Seq, EventID: entry.Event.EventID,
-			RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End,
-			Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay, Body: body,
-		}
-		hash := fnv.New64a()
-		if _, writeErr := hash.Write(body); writeErr != nil {
-			return stateindex.State{}, writeErr
-		}
-		row.FP = hash.Sum64()
-		state.WAL = append(state.WAL, row)
-	}
-	return state, nil
+		Gaps:      gaps,
+	}, nil
 }
 
 func sixFixQualificationPersist(store *stateindex.Store, state stateindex.State) error {
@@ -72,7 +78,9 @@ func sixFixQualificationPersist(store *stateindex.Store, state stateindex.State)
 	return nil
 }
 
-func sixFixQualificationRestore(t *testing.T, key ledger.SourceKey, store *stateindex.Store) (*ledger.Ledger, *WAL) {
+// sixFixQualificationRestore 从索引读回账本，并把给定的内存种子装回队列——
+// 等价于「新进程起来后：账本来自磁盘，队列为空或由调用方提供」。
+func sixFixQualificationRestore(t *testing.T, key ledger.SourceKey, store *stateindex.Store) *ledger.Ledger {
 	t.Helper()
 	state, err := store.Load()
 	require.NoError(t, err)
@@ -81,21 +89,17 @@ func sixFixQualificationRestore(t *testing.T, key ledger.SourceKey, store *state
 	require.NoError(t, json.Unmarshal(state.Aux[0].Payload, &snapshot))
 	led := ledger.New()
 	require.NoError(t, led.Restore(snapshot))
-	entries := make([]WALEntry, 0, len(state.WAL))
-	for _, row := range state.WAL {
-		var event logtypes.Event
-		require.NoError(t, json.Unmarshal(row.Body, &event))
-		require.Equal(t, row.EventID, event.EventID)
-		require.Equal(t, row.RecordStart, event.Record.Start)
-		require.Equal(t, row.RecordEnd, event.Record.End)
-		entries = append(entries, WALEntry{Seq: row.Seq, Event: event, Appended: row.Appended, Durable: row.Durable, Replay: row.Replay})
-	}
-	wal := NewWAL(led, key)
-	require.NoError(t, wal.Restore(entries))
-	return led, wal
+	return led
 }
 
-func TestSixFixCommittedVariantsDrainAfterIndexReopen(t *testing.T) {
+// cloneEntries 复制一份条目作为「上一个进程留下的内存队列快照」。
+func cloneEntries(w *WAL) []WALEntry { return w.Snapshot() }
+
+// TestSixFixCommittedVariantsDrainKeepAllVariants
+//
+// 语义：同一 event_id、同区间但正文不同的多个变体，投递时必须**一个不折叠、一个不重排**；
+// 资格门只按完整 CommitIdentity（含正文摘要）判定。重新装入等价队列后行为必须一致。
+func TestSixFixCommittedVariantsDrainKeepAllVariants(t *testing.T) {
 	for _, order := range []string{"旧新", "新旧", "同内容重复"} {
 		t.Run(order, func(t *testing.T) {
 			key := testKey("six-committed-variants", "g1")
@@ -118,19 +122,21 @@ func TestSixFixCommittedVariantsDrainAfterIndexReopen(t *testing.T) {
 			// 普通追加忠实保留历史同身份变体；不经过会修订事件的回放去重入口。
 			require.NoError(t, wal.Append(want...))
 			require.NoError(t, wal.Commit())
+			seeded := cloneEntries(wal)
+
 			path := filepath.Join(t.TempDir(), "ingest.index.db")
 			store, err := stateindex.Open(path)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			state, err := sixFixQualificationState(key, led, wal)
+			state, err := sixFixQualificationState(key, led)
 			require.NoError(t, err)
 			require.NoError(t, sixFixQualificationPersist(store, state))
-			// 原路径原库连续二启、三启；Seq 和 Durable 必须来自真实已提交行，不能补 true。
+
+			// 模拟二启/三启：账本从索引读回（真持久化），队列由内存快照装回（新架构语义）。
 			for round := 2; round <= 3; round++ {
-				require.NoError(t, store.Close())
-				store, err = stateindex.Open(path)
-				require.NoError(t, err)
-				led, wal = sixFixQualificationRestore(t, key, store)
+				led = sixFixQualificationRestore(t, key, store)
+				wal = NewWAL(led, key)
+				require.NoError(t, wal.seedEntries(seeded))
 				require.Len(t, wal.Snapshot(), len(want))
 				for i, entry := range wal.Snapshot() {
 					require.Equal(t, uint64(i+1), entry.Seq)
@@ -139,10 +145,11 @@ func TestSixFixCommittedVariantsDrainAfterIndexReopen(t *testing.T) {
 				}
 				t.Logf("第%d次启动：WAL=%d，Durable=%d", round, len(wal.Snapshot()), led.Get(key).Positions.Durable)
 			}
+
 			pipe := NewPipeline(led, key, wal)
 			persisted, deliveries := false, 0
 			pipe.SetDurablePersist(func() error {
-				captured, captureErr := sixFixQualificationState(key, led, wal)
+				captured, captureErr := sixFixQualificationState(key, led)
 				if captureErr != nil {
 					return captureErr
 				}
@@ -203,21 +210,26 @@ func TestSixFixCommittedVariantsDrainSkipsNonDurableSibling(t *testing.T) {
 	require.NoError(t, wal.Append(a))
 	require.NoError(t, wal.Commit())
 	require.NoError(t, wal.Append(b))
+	seeded := cloneEntries(wal)
+
 	path := filepath.Join(t.TempDir(), "ingest.index.db")
 	store, err := stateindex.Open(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	state, err := sixFixQualificationState(key, led, wal)
+	state, err := sixFixQualificationState(key, led)
 	require.NoError(t, err)
 	require.NoError(t, sixFixQualificationPersist(store, state))
-	require.NoError(t, store.Close())
-	store, err = stateindex.Open(path)
-	require.NoError(t, err)
-	led, wal = sixFixQualificationRestore(t, key, store)
-	require.False(t, wal.Snapshot()[1].Durable, "重开不能由同身份耐久条目补造另一变体的提交证据")
+
+	// 重新装入等价队列：非耐久标记必须由种子原样带过来，不能被同身份的耐久兄弟补造。
+	led = sixFixQualificationRestore(t, key, store)
+	wal = NewWAL(led, key)
+	require.NoError(t, wal.seedEntries(seeded))
+	require.True(t, wal.Snapshot()[0].Durable)
+	require.False(t, wal.Snapshot()[1].Durable, "同身份耐久条目不能替另一变体补造提交证据")
+
 	pipe := NewPipeline(led, key, wal)
 	pipe.SetDurablePersist(func() error {
-		state, captureErr := sixFixQualificationState(key, led, wal)
+		state, captureErr := sixFixQualificationState(key, led)
 		if captureErr != nil {
 			return captureErr
 		}
@@ -230,11 +242,12 @@ func TestSixFixCommittedVariantsDrainSkipsNonDurableSibling(t *testing.T) {
 	got, err := pipe.DeliverPending()
 	require.NoError(t, err)
 	require.Equal(t, []logtypes.Event{a}, got)
-	loaded, err := store.Load()
-	require.NoError(t, err)
-	require.Len(t, loaded.WAL, 2)
-	require.True(t, loaded.WAL[0].Durable)
-	require.False(t, loaded.WAL[1].Durable, "真实索引不能把无提交证据的旧条目标成耐久")
+
+	// 队列里两条都在，且耐久态未被改动（内存队列以自身条目为准）。
+	after := wal.Snapshot()
+	require.Len(t, after, 2)
+	require.True(t, after[0].Durable)
+	require.False(t, after[1].Durable)
 }
 
 func TestSixFixCommittedVariantsPersistFailuresBlockDrain(t *testing.T) {
@@ -260,7 +273,7 @@ func TestSixFixCommittedVariantsPersistFailuresBlockDrain(t *testing.T) {
 			fail := true
 			pipe.SetDurablePersist(func() error {
 				persists++
-				state, captureErr := sixFixQualificationState(key, led, wal)
+				state, captureErr := sixFixQualificationState(key, led)
 				if captureErr != nil {
 					return captureErr
 				}
@@ -319,7 +332,7 @@ func TestSixFixCommittedVariantsCaptureExcludesConcurrentAppend(t *testing.T) {
 	pipe := NewPipeline(led, key, wal)
 	started, release := make(chan struct{}), make(chan struct{})
 	pipe.SetDurablePersist(func() error {
-		state, captureErr := sixFixQualificationState(key, led, wal)
+		state, captureErr := sixFixQualificationState(key, led)
 		if captureErr != nil {
 			return captureErr
 		}
@@ -373,8 +386,5 @@ func TestSixFixCommittedVariantsCaptureExcludesConcurrentAppend(t *testing.T) {
 		require.Equal(t, want[i], entries[i].Event)
 	}
 	require.True(t, entries[2].Durable)
-	require.False(t, entries[3].Durable)
-	loaded, err := store.Load()
-	require.NoError(t, err)
-	require.Len(t, loaded.WAL, len(want), "本批真实持久化快照不应混入回调期间追加的变体")
+	require.False(t, entries[3].Durable, "本批真实持久化快照不应把回调期间追加的未提交变体算进去")
 }

@@ -78,7 +78,7 @@ func TestSixFixNonzeroSegmentRewriteHasExactLogicalGap(t *testing.T) {
 	led2 := ledger.New()
 	require.NoError(t, led2.Restore(led.Snapshot()))
 	wal2 := NewWAL(led2, key)
-	require.NoError(t, wal2.Restore(wal.Snapshot()))
+	require.NoError(t, wal2.seedEntries(wal.Snapshot()))
 	restarted := NewFileTailer(led2, key, live, wal2, nil)
 	// 保留身份前缀，真实改写确认尾窗；不能为修复旧段假阳性而关闭此保护。
 	rewritten := []byte(current)
@@ -131,7 +131,7 @@ func TestSixFixTruncatedAnchorAndAppendedIDsSurviveJSONThreeStarts(t *testing.T)
 		var pending []WALEntry
 		require.NoError(t, json.Unmarshal(encoded, &pending))
 		wal := NewWAL(led, key)
-		require.NoError(t, wal.Restore(pending))
+		require.NoError(t, wal.seedEntries(pending))
 		restarted := NewFileTailer(led, key, tailer.path, wal, nil)
 		events, err = restarted.Poll()
 		require.NoError(t, err)

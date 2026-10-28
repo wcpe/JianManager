@@ -773,7 +773,7 @@ func TestWALBacklogLimitDropsOnDrain(t *testing.T) {
 			Appended: true, Durable: true,
 		})
 	}
-	if err := wal2.Restore(entries); err != nil {
+	if err := wal2.seedEntries(entries); err != nil {
 		t.Fatalf("恢复失败: %v", err)
 	}
 	if n := len(wal2.Snapshot()); n > 1 {

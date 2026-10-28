@@ -21,8 +21,6 @@ func TestLoadKeepsOneSnapshotAcrossTables(t *testing.T) {
 	newState.Projections[0].Generation = "new-generation"
 	newState.Instances[0].WorkDir = "/new"
 	newState.Aux[0].Payload = []byte(`{"new":true}`)
-	newState.WAL[0].Body = []byte(`{"new":true}`)
-	newState.WAL[0].FP = fingerprint(newState.WAL[0].Body)
 	newState.Batches[0].State = "NEW"
 	reader.testLoadTableHook = func(table int) {
 		if table != tblSource {

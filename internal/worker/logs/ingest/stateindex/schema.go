@@ -22,10 +22,18 @@ import (
 	"strings"
 )
 
-// tableCount 是索引表的数量（spec 五张规范表 + 三张工程扩展表）。
-const tableCount = 8
+// tableCount 是索引表的数量（spec 五张规范表 + 两张工程扩展表）。
+//
+// 2026-10-29：WAL 改为纯内存队列后 `source_wal` 表已整体删除（8 → 7）。这张表曾是唯一
+// 随单源数据量增长的表（生产实测占索引库 263MB body + 41MB 主键索引 = 88%），而队列内容
+// 不再跨重启恢复，它既没有写者也没有读者。可靠性改由「持久化的 position 水位 + 重启重读」
+// 承担（见 ingest/wal_reboot_replay.go 的 rollbackReadToReclaim）。
+const tableCount = 7
 
 // 表在 specs/计划数组中的下标。写入顺序即此顺序（父表在前，满足外键）。
+//
+// 注意：这些是 iota 枚举常量，所有依赖下标的数组（specs/loadColumns/scopedTables/
+// writeOrderRank）都以它们为键而非写死数字，因此增删中间一项不会让下标错位。
 const (
 	tblSource = iota
 	tblPosition
@@ -33,7 +41,6 @@ const (
 	tblProjection
 	tblInstanceBinding
 	tblSourceAux
-	tblSourceWAL
 	tblDeliveryBatch
 )
 
@@ -118,17 +125,17 @@ CREATE TABLE IF NOT EXISTS instance_binding (
 //
 // 为什么必须有：spec §2.2 的五张表只覆盖 source/position/gap/projection/instance_binding，
 // 而现有 `persistedSource` 与 `ledger.Entry` 还有若干字段必须落盘才能让上层行为逐一等价
-// （账本身份与分段、投递批次、恢复引用、WAL 条目与引用、投影内联事件等）。把这些字段
+// （账本身份与分段、投递批次、恢复引用、投影内联事件等）。把这些字段
 // 塞进五张表的既有列会破坏其语义，故按「随数据量增长的部分独立成表、小体量元数据按源一行」
 // 拆开：
 //   - source_aux      每个源一行：SourceConfig JSON + persistedSource 其余字段的 JSON；
-//   - source_wal      每条 WAL 一行（正文为 NULL 表示「引用条目」），是本索引唯一随
-//     单源数据量增长的字段（1.2GB 事故的根因），必须按条 UPSERT/删除；
 //   - delivery_batch  每个投递批次一行（批次随投递次数增长）。
 //
-// 所有扩展表都带 `fp` 列（source_aux/delivery_batch 的 fp 由本包计算并落库，source_wal 的
-// fp 由调用方给出）：它是「这行是否变更」的判据，镜像与写入两侧都读同一处的 fp，避免两侧
-// 各自计算导致的假阴性/假阳性。
+// 扩展表里 source_aux 带 `fp` 列（由本包计算并落库）：它是「这行是否变更」的判据，镜像与
+// 写入两侧都读同一处的 fp，避免两侧各自计算导致的假阴性/假阳性。
+//
+// 2026-10-29：原第三张扩展表 `source_wal` 已删除——WAL 是纯内存队列后它没有写者也没有读者
+// （详见 tableCount 的注释）。既有库由 Open 里的幂等迁移 DROP TABLE 清理。
 const extensionDDL = `
 CREATE TABLE IF NOT EXISTS source_aux (
   key     TEXT PRIMARY KEY REFERENCES source(key),
@@ -136,42 +143,6 @@ CREATE TABLE IF NOT EXISTS source_aux (
   payload TEXT,
   fp      INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS source_wal (
-  key          TEXT NOT NULL REFERENCES source(key),
-  seq          INTEGER NOT NULL,
-  event_id     TEXT NOT NULL,
-  record_start INTEGER NOT NULL,
-  record_end   INTEGER NOT NULL,
-  appended     INTEGER NOT NULL DEFAULT 0,
-  durable      INTEGER NOT NULL DEFAULT 0,
-  -- replay（ACQ-1）：该条目来自恢复期回放/补账的归因标记。零值 = 非回放，
-  -- 故 ALTER TABLE ADD COLUMN 对既有库天然兼容（旧行全部是常规条目 ✓）。
-  replay       INTEGER NOT NULL DEFAULT 0,
-  body         TEXT,
-  fp           INTEGER NOT NULL,
-  -- ack_body_digest（2026-10-28）：该条目被 ACK 时那份正文的 SHA-256（32 字节）。
-  -- 为什么需要：WALEntry.acknowledged 是进程内态（json "-"），重启即丢；而补段路径
-  -- CaptureAcknowledgedPrefix 要求它非 nil。若只凭账本的 RequestDoneRanges（位置区间，
-  -- 且永不裁剪）重建，位置空间一旦被复用（重读/槽位复用/回放替换），旧区间会把从未投递的
-  -- 新正文当成已 ACK，再被 reclaimEntryQualifiedLocked 放行，导致数据被剪掉。
-  -- 本列是精确凭据：重启时只有「当前正文重算的摘要 == 本列」才允许重建 ACK。
-  -- 未 ACK 的条目本列 NULL（旧库升级后既有行同样为 NULL，即不重建，default-deny）。
-  ack_body_digest BLOB,
-  PRIMARY KEY (key, seq, event_id, record_start, record_end)
-);
--- FR-498（2026-10-27）：**不**再建 idx_source_wal_key（那是一条 CREATE INDEX ON source_wal(key)）。
---
--- 那条索引是主键 (key, seq, event_id, record_start, record_end) 的**严格前缀**：
--- rowid 表上 PRIMARY KEY 会自带 sqlite_autoindex_source_wal_1（按同一列序），
--- 再建一条 (key) 只是把同一前缀再写一遍——**每次 INSERT/UPDATE 都要多维护一棵索引 b-tree**，
--- 而查询面上没有任何收益。实测（本机 sda、104MB 生产规模库）：
---   - 范围剪枝谓词 key=? AND durable=1 AND record_end<=?：删索引后走
---     sqlite_autoindex_source_wal_1 (key=?)，与原来走 idx_source_wal_key 的访问路径一致；
---   - 加载查询 SELECT ... ORDER BY key,seq,event_id,record_start,record_end：
---     仍然 SCAN ... USING INDEX sqlite_autoindex_source_wal_1，无 TEMP B-TREE。
--- 与 gap 表的处置同源（见上方 specDDL 里 gap 的注释：idx_gap_key_resolved 的前缀与主键
--- 前缀完全重复，去掉它不损失任何查询面）；source_wal 当初漏了这一处。
--- 既有库由 Open 的「丢弃冗余索引」幂等迁移负责 DROP（见 dropRedundantIndexes）。
 CREATE TABLE IF NOT EXISTS delivery_batch (
   key       TEXT NOT NULL REFERENCES source(key),
   ordinal   INTEGER NOT NULL,
@@ -256,33 +227,6 @@ type AuxRow struct {
 	Payload []byte
 }
 
-// WALRow 是 source_wal 表的一行。Body 为 nil 表示引用条目（正文已在事件段存储中）。
-type WALRow struct {
-	Key         string
-	Seq         uint64
-	EventID     string
-	RecordStart uint64
-	RecordEnd   uint64
-	Appended    bool
-	Durable     bool
-	// Replay 与 acquire.WALRef.Replay 同义：该条目来自**恢复期回放/补账**（ACQ-1）。
-	// 为什么必须落库：它只在内存条目上时，任何一次重启都会让回放条目退回「常规积压」
-	// ⇒ 闸视图重新把回放字节计入，恢复期「回放不计入闸」的方案①失效，退回
-	// 「复活 → re-append → 再越闸」的自锁形态；诊断判据 BacklogTotalEntries >
-	// BacklogEntries 也翻回 false。旧数据零值 = 非回放（向后兼容 ✓）。
-	Replay bool
-	Body   []byte
-	// FP 是**写入路径专用**的正文判据（不落库为独立列，落库的是合成后的行指纹）：
-	// 调用方必须保证「同一 (Key, EventID, RecordStart, RecordEnd) 下 FP 相同 ⇒ Body 相同」。
-	// 引用条目（Body 为 nil）填 0。
-	FP uint64
-	// AckBodyDigest 是该条目**被 ACK 时那份正文**的 SHA-256（nil = 从未 ACK）。
-	//
-	// 语义与 acquire.WALEntry.acknowledged.BodyDigest 严格对应：重启恢复时用它做
-	// 「正文未被改写」的精确判据（见 acquire/wal_restore_ack.go）。
-	AckBodyDigest []byte
-}
-
 // BatchRow 是 delivery_batch 表的一行。Ordinal 是该源内批次的序号（从 0 起）。
 type BatchRow struct {
 	Key      string
@@ -300,7 +244,6 @@ type State struct {
 	Projections []ProjectionRow
 	Instances   []InstanceRow
 	Aux         []AuxRow
-	WAL         []WALRow
 	Batches     []BatchRow
 }
 
@@ -312,7 +255,6 @@ type Counts struct {
 	Projections int64
 	Instances   int64
 	Aux         int64
-	WAL         int64
 	Batches     int64
 }
 
@@ -329,7 +271,6 @@ var loadColumns = [tableCount][]string{
 	tblProjection:      {"key", "generation", "events_stored_through", "pending", "updated_at"},
 	tblInstanceBinding: {"uuid", "namespace", "generation", "mode", "work_dir", "rule_key", "relative_path"},
 	tblSourceAux:       {"key", "config", "payload"},
-	tblSourceWAL:       {"key", "seq", "event_id", "record_start", "record_end", "appended", "durable", "replay", "body", "ack_body_digest"},
 	tblDeliveryBatch:   {"key", "ordinal", "start_pos", "end_pos", "state"},
 }
 
@@ -451,32 +392,6 @@ var specs = [tableCount]tableSpec{
 			ON CONFLICT(key) DO UPDATE SET config=excluded.config, payload=excluded.payload, fp=excluded.fp`,
 		deleteStmt: "DELETE FROM source_aux WHERE key = ?",
 		orderBy:    "key",
-	},
-	tblSourceWAL: {
-		name:      "source_wal",
-		keyCols:   []string{"key", "seq", "event_id", "record_start", "record_end"},
-		mirrorSQL: "SELECT key, seq, event_id, record_start, record_end, fp FROM source_wal",
-		fpSelf:    true,
-		// replay 列（ACQ-1）承载「该条目来自恢复期回放/补账」的口径，与 appended/durable 同为
-		// 变更驱动：不随 UPSERT 刷新的话，同一条目由常规路径再次写入时会把已有回放标记抹掉。
-		upsert: `INSERT INTO source_wal (key, seq, event_id, record_start, record_end, appended, durable, replay, body, fp, ack_body_digest)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
-				appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp,
-				ack_body_digest=excluded.ack_body_digest`,
-		upsertBatch: "INSERT INTO source_wal (%s) VALUES %s",
-		columns: []string{"key", "seq", "event_id", "record_start", "record_end", "appended", "durable",
-			"replay", "body", "fp", "ack_body_digest"},
-		onConflict: `ON CONFLICT(key, seq, event_id, record_start, record_end) DO UPDATE SET
-			appended=excluded.appended, durable=excluded.durable, replay=excluded.replay, body=excluded.body, fp=excluded.fp,
-			ack_body_digest=excluded.ack_body_digest`,
-		deleteStmt: "DELETE FROM source_wal WHERE key = ? AND seq = ? AND event_id = ? AND record_start = ? AND record_end = ?",
-		// 排序键必须与主键 (key, seq, event_id, record_start, record_end) 同序：SQLite 只有在
-		// ORDER BY 命中主键索引前缀时才省掉排序。此前这里从 seq 起排（缺 key），索引前缀对不上，
-		// 于是每行（含 5GB 级 body）都要进 TEMP B-TREE 物化——生产 711 万行时排序数据溢出到
-		// /var/tmp，空间不足直接报 `database or disk is full`，启动 6 次重试全败后放弃采集。
-		// 对齐主键后实测：711 万行全量读 9.2s，执行计划为 SCAN ... USING INDEX，无临时文件。
-		orderBy: "key, seq, event_id, record_start, record_end",
 	},
 	tblDeliveryBatch: {
 		name:      "delivery_batch",
@@ -712,9 +627,8 @@ func toInt64(v uint64) int64 {
 
 // sortState 对 State 的各切片按稳定顺序归一化（不改变任何语义，只固定行序）。
 //
-// 为什么需要：source_wal 以事件身份为主键（同一 seq 在裁剪后可能被复用，故 seq 不唯一），
-// 加载顺序按 Seq 排序；而恢复路径（acquire.RestoreMixed）本就按 Seq 重排，行序不承载语义。
-// 迁移校验逐字段比对前统一排序，可避免「仅顺序不同」被误判为不一致。
+// 为什么需要：迁移校验与「状态→行→状态」往返测试都逐字段比对，而 SQLite 不保证无序
+// 查询的行序；统一排序可避免「仅顺序不同」被误判为不一致。
 func sortState(st *State) {
 	sort.SliceStable(st.Sources, func(i, j int) bool { return st.Sources[i].Key < st.Sources[j].Key })
 	sort.SliceStable(st.Positions, func(i, j int) bool { return st.Positions[i].Key < st.Positions[j].Key })
@@ -727,28 +641,10 @@ func sortState(st *State) {
 	sort.SliceStable(st.Projections, func(i, j int) bool { return st.Projections[i].Key < st.Projections[j].Key })
 	sort.SliceStable(st.Instances, func(i, j int) bool { return st.Instances[i].UUID < st.Instances[j].UUID })
 	sort.SliceStable(st.Aux, func(i, j int) bool { return st.Aux[i].Key < st.Aux[j].Key })
-	sort.SliceStable(st.WAL, func(i, j int) bool { return lessWAL(st.WAL[i], st.WAL[j]) })
 	sort.SliceStable(st.Batches, func(i, j int) bool {
 		if st.Batches[i].Key != st.Batches[j].Key {
 			return st.Batches[i].Key < st.Batches[j].Key
 		}
 		return st.Batches[i].Ordinal < st.Batches[j].Ordinal
 	})
-}
-
-// lessWAL 是 WAL 行的规范顺序（与 orderBy 一致）。
-func lessWAL(a, b WALRow) bool {
-	if a.Key != b.Key {
-		return a.Key < b.Key
-	}
-	if a.Seq != b.Seq {
-		return a.Seq < b.Seq
-	}
-	if a.EventID != b.EventID {
-		return a.EventID < b.EventID
-	}
-	if a.RecordStart != b.RecordStart {
-		return a.RecordStart < b.RecordStart
-	}
-	return a.RecordEnd < b.RecordEnd
 }

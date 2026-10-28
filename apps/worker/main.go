@@ -2200,11 +2200,11 @@ func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Lat
 		"rowsWrittenDelta", delta.RowsWritten,
 		"rowsDeletedDelta", delta.RowsDeleted,
 		"bytesWrittenDelta", delta.BytesWritten,
-		// #67-C：三段耗时的**累计**读数（只加不减，单位 ns）——把"单元慢"拆成
-		// 规划 / 范围剪枝 / 镜像重建三处，真机排障一眼可辨 ✓（maxRows 与 rowsDeletedDelta
+		// #67-C：两段耗时的**累计**读数（只加不减，单位 ns）——把"单元慢"拆成
+		// 规划 / 镜像重建两处，真机排障一眼可辨 ✓（maxRows 与 rowsDeletedDelta
 		// 本就在本行，正是"行数有界却仍慢"与"慢在删不在写"两个判据 ✓）。
+		// 原第三项 nsPrune（谓词范围剪枝耗时）已随 source_wal 表下线，不再有该段。
 		"nsPlan", latency.NsPlan,
-		"nsPrune", latency.NsPrune,
 		"nsMirrorRebuild", latency.NsMirrorRebuild,
 		// #67-A′：WAL 归并面 —— "-wal 3.59GB 与阈值 4MiB 并存"的两种解释（读者持旧快照 / 归并没被
 		// 排到执行点）由 busy 与 walBytes 一次分辨 ✓；truncate 计受控截断点被走到几次 ✓。

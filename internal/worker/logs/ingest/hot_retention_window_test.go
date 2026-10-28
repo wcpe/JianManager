@@ -956,7 +956,6 @@ func TestDeliverEvidenceFaceTruncatedToWrittenWhenReplaceSpansBeyondWindow(t *te
 	m.mu.Lock()
 	cleared := m.state.Sources[key]
 	cleared.WAL = nil
-	cleared.WALRefs = nil
 	cleared.Events = nil
 	cleared.EventsStored = false
 	cleared.EventsStoredThrough = 0
@@ -1072,7 +1071,6 @@ func TestRebuildWritesNothingWhenConfirmationInconclusive(t *testing.T) {
 	m.eventsStoredEpoch = map[string]uint64{}
 	cleared := m.state.Sources[key]
 	cleared.WAL = nil
-	cleared.WALRefs = nil
 	cleared.Events = nil
 	cleared.EventsStored = false
 	cleared.EventsStoredThrough = 0

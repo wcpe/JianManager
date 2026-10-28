@@ -2,10 +2,8 @@ package acquire
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 
@@ -15,7 +13,7 @@ import (
 )
 
 func TestDurableOutboxWALSnapshotOwnsMutableFields(t *testing.T) {
-	for _, scenario := range []string{"append", "restore", "restore_refs", "replay_replace", "snapshot"} {
+	for _, scenario := range []string{"append", "seed", "replay_replace", "snapshot"} {
 		t.Run(scenario, func(t *testing.T) {
 			key, led := testKey("private-fields", "g1"), ledger.New()
 			wal := NewWAL(led, key)
@@ -29,10 +27,8 @@ func TestDurableOutboxWALSnapshotOwnsMutableFields(t *testing.T) {
 				require.NoError(t, wal.Append(before))
 				require.NoError(t, wal.Commit())
 				require.NoError(t, wal.AppendReplay(event))
-			case "restore":
-				require.NoError(t, wal.Restore([]WALEntry{{Seq: 1, Event: event, Appended: true, Durable: true}}))
-			case "restore_refs":
-				require.Empty(t, wal.RestoreMixed(nil, []WALRef{{Seq: 1, EventID: event.EventID, Appended: true, Durable: true}}, func(string) (logtypes.Event, bool) { return event, true }))
+			case "seed":
+				require.NoError(t, wal.seedEntries([]WALEntry{{Seq: 1, Event: event, Appended: true, Durable: true}}))
 			default:
 				require.NoError(t, wal.Append(event))
 			}
@@ -52,531 +48,101 @@ func TestDurableOutboxWALSnapshotOwnsMutableFields(t *testing.T) {
 	}
 }
 
-func TestDurableOutboxPrivateIdentityEncodingReleasesWALLock(t *testing.T) {
-	for _, mode := range []string{"split", "live"} {
-		t.Run(mode, func(t *testing.T) {
-			key, led := testKey("encode-lock", "g1"), ledger.New()
-			wal := NewWAL(led, key)
-			event := sixFixEvent(key, 0, 10)
-			event.Fields = map[string]string{"快照": "旧正文"}
-			require.NoError(t, wal.Append(event))
-			require.NoError(t, wal.Commit())
-			oldID, err := CommitIdentityOf(event)
-			require.NoError(t, err)
-			entered, release := make(chan struct{}), make(chan struct{})
-			type result struct {
-				ids map[CommitIdentity]struct{}
-				err error
-			}
-			done := make(chan result, 1)
-			go func() {
-				copied := func() { close(entered); <-release }
-				if mode == "live" {
-					ids, err := wal.committedIdentities(copied)
-					done <- result{ids, err}
-					return
-				}
-				snapshot, err := wal.SnapshotSplitCommittedPlan(nil, copied)
-				if err != nil {
-					done <- result{err: err}
-					return
-				}
-				_, _, ids := snapshot.SplitCommitted()
-				done <- result{ids: ids}
-			}()
-			<-entered
-			changed := event
-			changed.Fields = map[string]string{"快照": "同ID同hash未来Fields"}
-			changedID, err := CommitIdentityOf(changed)
-			require.NoError(t, err)
-			require.NotEqual(t, oldID, changedID)
-			mutation := make(chan error, 1)
-			go func() {
-				if err := wal.Append(changed); err != nil {
-					mutation <- err
-					return
-				}
-				mutation <- wal.Commit()
-			}()
-			select {
-			case err := <-mutation:
-				require.NoError(t, err)
-			case <-time.After(200 * time.Millisecond):
-				close(release)
-				<-done
-				<-mutation
-				t.Fatal("完整身份编码阶段仍占活WAL锁，阻断真实Append/Commit")
-			}
-			close(release)
-			got := <-done
-			require.NoError(t, got.err)
-			require.Contains(t, got.ids, oldID)
-			require.NotContains(t, got.ids, changedID, "捕获后的Fields变体不能借旧私有快照或同ID摘要")
-		})
-	}
-}
-
-func TestDurableOutboxEncodedSnapshotKeepsOwnerOrdinalAndOriginalBody(t *testing.T) {
-	for _, scenario := range []string{"append_fields", "replace", "restore", "refs"} {
-		t.Run(scenario, func(t *testing.T) {
-			key, led := testKey("encode-cut", "g1"), ledger.New()
-			wal := NewWAL(led, key)
-			event := sixFixEvent(key, 0, 10)
-			event.Fields = map[string]string{"字段": "捕获前"}
-			body, err := json.Marshal(event)
-			require.NoError(t, err)
-			identity, err := CommitIdentityOf(event)
-			require.NoError(t, err)
-			require.NoError(t, wal.Append(event))
-			require.NoError(t, wal.Commit())
-			entered, release := make(chan struct{}), make(chan struct{})
-			done := make(chan *WALCommitSnapshot, 1)
-			go func() {
-				snapshot, err := wal.SnapshotSplitCommittedPlan(func(logtypes.Event) bool { return scenario == "refs" }, func() { close(entered); <-release })
-				if err != nil {
-					done <- nil
-					return
-				}
-				done <- snapshot
-			}()
-			<-entered
-			changed := event
-			changed.Fields = map[string]string{"字段": "捕获后"}
-			switch scenario {
-			case "replace":
-				changed.EventTimeUTC = "2026-10-22T00:00:00.1Z"
-				changed.CanonicalHash = logtypes.CanonicalContentHash(changed.EventTimeUTC, changed.Level, changed.Stream, changed.Message)
-				require.NoError(t, wal.AppendReplay(changed))
-			case "restore":
-				require.NoError(t, wal.Restore([]WALEntry{{Seq: 1, Event: changed, Durable: true, Appended: true}}))
-			default:
-				require.NoError(t, wal.Append(changed))
-			}
-			require.NoError(t, wal.Commit())
-			close(release)
-			snapshot := <-done
-			require.NotNil(t, snapshot)
-			refs, inline, identities := snapshot.SplitCommitted()
-			require.Len(t, identities, 1)
-			require.Contains(t, identities, identity)
-			if len(inline) > 0 {
-				inline[0].Event.Fields["字段"] = "返回副本不得改写编码输入"
-			}
-			inlines, references := 0, 0
-			require.NoError(t, snapshot.VisitEncoded(wal, func(entry WALEntry, encoded []byte) {
-				inlines++
-				require.Equal(t, uint64(1), entry.Seq)
-				require.Equal(t, "捕获前", entry.Event.Fields["字段"])
-				require.Equal(t, body, encoded, "SQL字节必须来自分流前的同一完整私有正文")
-			}, func(ref WALRef) {
-				references++
-				require.Equal(t, event.EventID, ref.EventID)
-			}))
-			require.Equal(t, len(inline), inlines)
-			require.Equal(t, len(refs), references)
-			if scenario == "refs" {
-				require.Len(t, refs, 1, "引用分流不许丢掉分流前完整正文的身份")
-			}
-			other := NewWAL(ledger.New(), key)
-			require.ErrorIs(t, snapshot.VisitEncoded(other, func(WALEntry, []byte) { t.Fatal("旧owner不得借给新WAL") }, func(WALRef) { t.Fatal("旧owner不得借给新WAL") }), ErrWALWindowChanged)
-		})
-	}
-}
-
-// 谓词只拿到私有副本：留存或改写map都不得反写活WAL，也不得凭别名改身份。
+// 谓词只拿到私有副本：留存或改写 map 都不得反写活 WAL，也不得凭别名改身份。
 func TestDurableOutboxPredicatesCannotMutateLiveFields(t *testing.T) {
-	for _, mode := range []string{"snapshot_window", "snapshot_split"} {
-		t.Run(mode, func(t *testing.T) {
-			key, led := testKey("predicate-alias", "g1"), ledger.New()
-			wal := NewWAL(led, key)
-			event := sixFixEvent(key, 0, 10)
-			event.Fields = map[string]string{"字段": "活WAL原值"}
-			require.NoError(t, wal.Append(event))
-			require.NoError(t, wal.Commit())
-			want, err := CommitIdentityOf(event)
-			require.NoError(t, err)
-			var kept map[string]string
-			mutate := func(ev logtypes.Event) bool {
-				if ev.Fields != nil {
-					kept = ev.Fields
-					ev.Fields["字段"] = "谓词改写"
-				}
-				return true
-			}
-			switch mode {
-			case "snapshot_window":
-				_, _ = wal.SnapshotWindow(0, 10, 8, mutate)
-			case "snapshot_split":
-				wal.SnapshotSplit(mutate)
-			}
-			require.NotNil(t, kept)
-			kept["字段"] = "谓词留存后二次改写"
-			live, err := wal.CommittedIdentities()
-			require.NoError(t, err)
-			require.Contains(t, live, want, "谓词别名不得改写活WAL完整正文")
-			require.Equal(t, "活WAL原值", wal.Snapshot()[0].Event.Fields["字段"])
-		})
-	}
-}
-
-func outboxAssertFreshDigestSnapshot(t *testing.T, snapshot *WALCommitSnapshot, wantSHA int) {
-	t.Helper()
-	require.Equal(t, len(snapshot.entries), snapshot.marshaledEvents, "完整成员数必须等于每轮实际Marshal调用数")
-	expected := map[CommitIdentity]struct{}{}
-	groups := map[walSeqRevision][]walCapturedMember{}
-	for i, entry := range snapshot.entries {
-		body, err := json.Marshal(entry.Event)
-		require.NoError(t, err)
-		identity := CommitIdentity{EventID: entry.Event.EventID, CanonicalHash: entry.Event.CanonicalHash, Record: entry.Event.Record, BodyDigest: sha256.Sum256(body)}
-		if entry.Durable {
-			expected[identity] = struct{}{}
-		}
-		group := walSeqRevision{entry.Seq, entry.appendRevision}
-		groups[group] = append(groups[group], walCapturedMember{identity: identity, durable: entry.Durable})
-		if snapshot.referenced[i] {
-			require.Nil(t, snapshot.bodies[i], "引用仍不长期保留正文，但分流前必须已完整Marshal")
-		} else {
-			require.Equal(t, body, snapshot.bodies[i], "SQL正文只能来自本轮完整私有Event的新Marshal字节")
-		}
-	}
-	require.Equal(t, expected, snapshot.identities, "所有复用身份必须等于新body的完整直接SHA，而非仅ID/hash/长度")
-	require.Equal(t, groups, snapshot.bySeqRevision, "新index必须逐成员保留完整身份和原捕获Durable态")
-	require.Equal(t, wantSHA, snapshot.hashedEvents, "只允许减少合格旧成员的SHA，不得借统计值伪装少算正文")
-}
-
-func TestDurableOutboxDigestReuseEveryEventFieldMatchesFreshSHA(t *testing.T) {
-	mutations := []struct {
-		name  string
-		apply func(*logtypes.Event)
-	}{
-		{"event_id", func(ev *logtypes.Event) { ev.EventID += "新" }},
-		{"source_id", func(ev *logtypes.Event) { ev.Source.LogSourceID += "新" }},
-		{"source_generation", func(ev *logtypes.Event) { ev.Source.SourceGeneration += "新" }},
-		{"parser", func(ev *logtypes.Event) { ev.Source.ParserVersion += "新" }},
-		{"record_start", func(ev *logtypes.Event) { ev.Record.Start++ }},
-		{"record_end", func(ev *logtypes.Event) { ev.Record.End++ }},
-		{"event_time", func(ev *logtypes.Event) { ev.EventTimeUTC += "新" }},
-		{"ingest_time", func(ev *logtypes.Event) { ev.IngestTimeUTC += "新" }},
-		{"level", func(ev *logtypes.Event) { ev.Level += "新" }},
-		{"stream", func(ev *logtypes.Event) { ev.Stream += "新" }},
-		{"message", func(ev *logtypes.Event) { ev.Message += "新" }},
-		{"canonical_hash", func(ev *logtypes.Event) { ev.CanonicalHash += "新" }},
-		{"fields_value", func(ev *logtypes.Event) { ev.Fields["字段"] = "同ID同hash异Fields" }},
-		{"fields_key", func(ev *logtypes.Event) { ev.Fields["新键"] = "新增完整字段" }},
-		{"fields_nil", func(ev *logtypes.Event) { ev.Fields = nil }},
-		{"fields_empty", func(ev *logtypes.Event) { ev.Fields = map[string]string{} }},
-	}
-	for _, mutation := range mutations {
-		t.Run(mutation.name, func(t *testing.T) {
-			key := testKey("digest-each-field", "g1")
-			wal := NewWAL(ledger.New(), key)
-			event := sixFixEvent(key, 0, 10)
-			event.Fields = map[string]string{"字段": "原值"}
-			require.NoError(t, wal.Append(event))
-			require.NoError(t, wal.Commit())
-			prior, err := wal.SnapshotSplitCommittedPlan(nil, nil)
-			require.NoError(t, err)
-			outboxAssertFreshDigestSnapshot(t, prior, 1)
-			changed := cloneWALEvent(event)
-			mutation.apply(&changed)
-			oldBody, err := json.Marshal(event)
-			require.NoError(t, err)
-			newBody, err := json.Marshal(changed)
-			require.NoError(t, err)
-			require.NotEqual(t, oldBody, newBody, "前置：必须真的改变一个完整Event字段")
-			require.NoError(t, wal.Append(changed))
-			require.NoError(t, wal.Commit())
-			snapshot, err := wal.SnapshotSplitCommittedPlan(nil, nil, prior.WALCommitIndex)
-			require.NoError(t, err)
-			outboxAssertFreshDigestSnapshot(t, snapshot, 1)
-			require.Len(t, snapshot.entries, 2)
-		})
-	}
-}
-
-func TestDurableOutboxDigestReuseVersionDurabilityAndOwnerGuards(t *testing.T) {
-	cases := []struct {
-		name string
-		sha  int
-	}{
-		{"unchanged", 0}, {"no_index", 2}, {"foreign_owner", 2}, {"future_index_cut", 2},
-		{"future_member_cut", 2}, {"ambiguous_fields", 2}, {"mixed_durability", 2},
-		{"identical_mixed_durability", 2}, {"captured_non_durable", 2}, {"current_non_durable", 2},
-		{"restore", 2}, {"restore_refs", 2}, {"replay_replace", 2}, {"prune_same_length", 1},
-	}
-	for _, scenario := range cases {
-		t.Run(scenario.name, func(t *testing.T) {
-			key := testKey("digest-guards", "g1")
-			wal := NewWAL(ledger.New(), key)
-			first, second := sixFixEvent(key, 0, 10), sixFixEvent(key, 10, 20)
-			first.Fields, second.Fields = map[string]string{"字段": "原值A"}, map[string]string{"字段": "原值B"}
-			entries := []WALEntry{{Seq: 1, Event: first, Appended: true, Durable: true}, {Seq: 2, Event: second, Appended: true, Durable: true}}
-			switch scenario.name {
-			case "ambiguous_fields", "mixed_durability", "identical_mixed_durability":
-				entries[1].Seq = 1
-				if scenario.name == "ambiguous_fields" || scenario.name == "identical_mixed_durability" {
-					entries[1].Event = cloneWALEvent(first)
-				}
-				if scenario.name == "ambiguous_fields" {
-					entries[1].Event.Fields["字段"] = "同ID同hash异正文"
-				} else {
-					entries[1].Durable = false
-				}
-			case "captured_non_durable", "current_non_durable":
-				entries[0].Durable, entries[1].Durable = false, false
-			}
-			require.NoError(t, wal.Restore(entries))
-			prior, err := wal.SnapshotSplitCommittedPlan(nil, nil)
-			require.NoError(t, err)
-			seed := prior.WALCommitIndex
-			switch scenario.name {
-			case "no_index":
-				seed = nil
-			case "foreign_owner":
-				wal = NewWAL(ledger.New(), key)
-				entries[0].Event.Fields = map[string]string{"字段": "异owner同seq同rev异Fields"}
-				require.NoError(t, wal.Restore(entries))
-			case "future_index_cut":
-				// 故障注入超出本次capture的索引，即使桶键相同也必须拒绝复用。
-				seed.cut = wal.revision + 1
-			case "future_member_cut":
-				entries[0].Event.Fields = map[string]string{"字段": "超旧cut的新体"}
-				require.NoError(t, wal.Restore(entries))
-				// 主动伪造未来桶键，确保不能仅凭命中key省掉版本cut防线。
-				for i, entry := range wal.entries {
-					seed.bySeqRevision[walSeqRevision{entry.Seq, entry.appendRevision}] = seed.bySeqRevision[walSeqRevision{prior.entries[i].Seq, prior.entries[i].appendRevision}]
-				}
-			case "restore":
-				entries[0].Event.Fields = map[string]string{"字段": "恢复后的新值"}
-				require.NoError(t, wal.Restore(entries))
-			case "restore_refs":
-				require.Empty(t, wal.RestoreMixed(nil, []WALRef{{Seq: 1, EventID: first.EventID, Appended: true, Durable: true}, {Seq: 2, EventID: second.EventID, Appended: true, Durable: true}}, func(id string) (logtypes.Event, bool) {
-					if id == first.EventID {
-						first.Fields = map[string]string{"字段": "hydrate后的新值"}
-						return first, true
-					}
-					return second, true
-				}))
-			case "replay_replace":
-				changed := cloneWALEvent(first)
-				changed.EventTimeUTC = "2026-10-22T00:00:00.1Z"
-				changed.CanonicalHash = logtypes.CanonicalContentHash(changed.EventTimeUTC, changed.Level, changed.Stream, changed.Message)
-				require.NoError(t, wal.AppendReplay(changed))
-			case "prune_same_length":
-				wal.pruneReclaimed(10)
-				require.NoError(t, wal.Append(sixFixEvent(key, 20, 30)))
-			}
-			if scenario.name != "current_non_durable" {
-				require.NoError(t, wal.Commit())
-			}
-			snapshot, err := wal.SnapshotSplitCommittedPlan(nil, nil, seed)
-			require.NoError(t, err)
-			outboxAssertFreshDigestSnapshot(t, snapshot, scenario.sha)
-		})
-	}
-}
-
-func TestDurableOutboxDigestReuseKeepsPrivateAliasesAndIndependentIndex(t *testing.T) {
-	key := testKey("digest-private", "g1")
-	wal := NewWAL(ledger.New(), key)
+	key, led := testKey("predicate-alias", "g1"), ledger.New()
+	wal := NewWAL(led, key)
 	event := sixFixEvent(key, 0, 10)
-	event.Fields = map[string]string{"字段": "原值"}
+	event.Fields = map[string]string{"字段": "活WAL原值"}
 	require.NoError(t, wal.Append(event))
 	require.NoError(t, wal.Commit())
-	prior, err := wal.SnapshotSplitCommittedPlan(nil, nil)
+	want, err := CommitIdentityOf(event)
 	require.NoError(t, err)
-	originalGroup := walSeqRevision{prior.entries[0].Seq, prior.entries[0].appendRevision}
-	originalBucket := append([]walCapturedMember(nil), prior.bySeqRevision[originalGroup]...)
-	event.Fields["字段"] = "入参改写"
-	_, returned, _ := prior.SplitCommitted()
-	returned[0].Event.Fields["字段"] = "返回副本改写"
-	var predicate map[string]string
-	snapshot, err := wal.SnapshotSplitCommittedPlan(func(value logtypes.Event) bool {
-		predicate = value.Fields
-		value.Fields["字段"] = "谓词改写"
-		return false
-	}, func() {
-		predicate["字段"] = "谓词留存后改写"
-		changed := wal.Snapshot()
-		changed[0].Event.Fields["字段"] = "捕获后真实Restore替换"
-		require.NoError(t, wal.Restore(changed))
-	}, prior.WALCommitIndex)
+	var kept map[string]string
+	mutate := func(ev logtypes.Event) bool {
+		if ev.Fields != nil {
+			kept = ev.Fields
+			ev.Fields["字段"] = "谓词改写"
+		}
+		return true
+	}
+	_, _ = wal.SnapshotWindow(0, 10, 8, mutate)
+	require.NotNil(t, kept)
+	kept["字段"] = "谓词留存后二次改写"
+	live, err := wal.CommittedIdentities()
 	require.NoError(t, err)
-	outboxAssertFreshDigestSnapshot(t, snapshot, 0)
-	require.Equal(t, "原值", snapshot.entries[0].Event.Fields["字段"], "已捕获私有新body不受任何外部map或捕获后替换污染")
-	snapshot.bySeqRevision[originalGroup] = nil
-	require.Equal(t, originalBucket, prior.bySeqRevision[originalGroup], "新计划不能复用旧map而改变已发布回执索引")
-	require.NotSame(t, prior.WALCommitIndex, snapshot.WALCommitIndex)
+	require.Contains(t, live, want, "谓词别名不得改写活WAL完整正文")
+	require.Equal(t, "活WAL原值", wal.Snapshot()[0].Event.Fields["字段"])
 }
 
-func TestDurableOutboxReceiptIndexMatchesStrictLiveSet(t *testing.T) {
-	for _, scenario := range []struct {
-		name string
-		want int
-	}{
-		{"unchanged", 0}, {"future_append", 1}, {"same_seq_bodies", 2},
-		{"same_id_hash_fields", 2}, {"mixed_durability", 2}, {"identical_mixed_durability", 2},
-		{"all_non_durable", 2}, {"restore_after", 2}, {"restore_refs_after", 2},
-		{"replay_replace", 2}, {"prune_same_length", 1}, {"nil_index", 2},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			key := testKey("receipt-index", "g1")
-			wal := NewWAL(ledger.New(), key)
-			first, second := sixFixEvent(key, 0, 10), sixFixEvent(key, 10, 20)
-			first.Fields, second.Fields = map[string]string{"字段": "原值A"}, map[string]string{"字段": "原值B"}
-			entries := []WALEntry{{Seq: 1, Event: first, Appended: true, Durable: true}, {Seq: 2, Event: second, Appended: true, Durable: true}}
-			switch scenario.name {
-			case "same_seq_bodies", "mixed_durability", "identical_mixed_durability", "same_id_hash_fields":
-				entries[1].Seq = 1
-				if scenario.name == "same_id_hash_fields" {
-					entries[1].Event = first
-					entries[1].Event.Fields = map[string]string{"字段": "同ID同hash不同Fields"}
-				}
-				if scenario.name == "identical_mixed_durability" {
-					entries[1].Event = first
-				}
-				if scenario.name == "mixed_durability" || scenario.name == "identical_mixed_durability" {
-					entries[1].Durable = false
-				}
-			case "all_non_durable":
-				entries[0].Durable, entries[1].Durable = false, false
-			}
-			require.NoError(t, wal.Restore(entries))
-			snapshot, err := wal.SnapshotSplitCommittedPlan(nil, nil)
-			require.NoError(t, err)
-			index := snapshot.WALCommitIndex
-			// 只留下轻量索引；原快照的正文、编码和身份集合全部不可再通过它取得。
-			snapshot.entries, snapshot.bodies, snapshot.identities, snapshot.referenced = nil, nil, nil, nil
-			snapshot.WALCommitIndex = nil
-			switch scenario.name {
-			case "future_append", "prune_same_length":
-				if scenario.name == "prune_same_length" {
-					wal.pruneReclaimed(10)
-				}
-				require.NoError(t, wal.Append(sixFixEvent(key, 20, 30)))
-			case "restore_after":
-				entries[0].Event.Fields = map[string]string{"字段": "Restore未来新体"}
-				require.NoError(t, wal.Restore(entries))
-			case "restore_refs_after":
-				require.Empty(t, wal.RestoreMixed(nil, []WALRef{{Seq: 1, EventID: first.EventID, Appended: true, Durable: true}, {Seq: 2, EventID: second.EventID, Appended: true, Durable: true}}, func(id string) (logtypes.Event, bool) {
-					if id == first.EventID {
-						first.Fields = map[string]string{"字段": "hydrate未来新体"}
-						return first, true
-					}
-					return second, true
-				}))
-			case "replay_replace":
-				changed := first
-				changed.EventTimeUTC = "2026-10-22T00:00:00.1Z"
-				changed.CanonicalHash = logtypes.CanonicalContentHash(changed.EventTimeUTC, changed.Level, changed.Stream, changed.Message)
-				changed.Fields = map[string]string{"字段": "Replay原位新体"}
-				require.NoError(t, wal.AppendReplay(changed))
-			case "nil_index":
-				index = nil
-			}
-			require.NoError(t, wal.Commit())
-			live, recomputed, err := index.LiveCommittedIdentities(wal)
-			require.NoError(t, err)
-			strict, err := wal.CommittedIdentities()
-			require.NoError(t, err)
-			require.Equal(t, strict, live, "轻量索引必须逐完整CommitIdentity等于旧实时全量集合")
-			require.Equal(t, scenario.want, recomputed, "完整JSON编码次数必须来自实际fallback成员，而非墙钟或去重后集合大小")
-		})
-	}
-}
-
-func TestDurableOutboxReceiptIndexRejectsForeignOwnerAndFutureCut(t *testing.T) {
-	for _, scenario := range []string{"foreign_owner", "future_cut"} {
-		t.Run(scenario, func(t *testing.T) {
-			key := testKey("receipt-owner-cut", "g1")
-			wal := NewWAL(ledger.New(), key)
-			event := sixFixEvent(key, 0, 10)
-			event.Fields = map[string]string{"字段": "捕获原值"}
-			require.NoError(t, wal.Append(event))
-			require.NoError(t, wal.Commit())
-			snapshot, err := wal.SnapshotSplitCommittedPlan(nil, nil)
-			require.NoError(t, err)
-			index := snapshot.WALCommitIndex
-			changed := event
-			changed.Fields = map[string]string{"字段": "禁止借旧体的新值"}
-			if scenario == "foreign_owner" {
-				other := NewWAL(ledger.New(), key)
-				require.NoError(t, other.Restore([]WALEntry{{Seq: 1, Event: changed, Appended: true, Durable: true}}))
-				live, _, err := index.LiveCommittedIdentities(other)
-				require.ErrorIs(t, err, ErrWALWindowChanged)
-				require.Nil(t, live, "相同Seq和revision的另一owner不得借旧身份")
-				return
-			}
-			oldGroup := walSeqRevision{wal.entries[0].Seq, wal.entries[0].appendRevision}
-			require.NoError(t, wal.Restore([]WALEntry{{Seq: 1, Event: changed, Appended: true, Durable: true}}))
-			futureGroup := walSeqRevision{wal.entries[0].Seq, wal.entries[0].appendRevision}
-			// 主动放入超cut桶验证防御边界；即使键误含未来成员，也必须完整编码当前正文而非借旧摘要。
-			index.bySeqRevision[futureGroup] = index.bySeqRevision[oldGroup]
-			require.Greater(t, futureGroup.revision, index.cut)
-			live, recomputed, err := index.LiveCommittedIdentities(wal)
-			require.NoError(t, err)
-			strict, err := wal.CommittedIdentities()
-			require.NoError(t, err)
-			require.Equal(t, strict, live, "超cut轻量桶不能授出旧正文身份")
-			require.Equal(t, 1, recomputed)
-		})
-	}
-}
-
-func TestDurableOutboxReceiptIndexHasNoBodyReferencesOrMutableAliases(t *testing.T) {
-	key := testKey("receipt-no-body", "g1")
-	wal := NewWAL(ledger.New(), key)
+// 快照隔离（WAL.Snapshot）与锁外身份编码（committedIdentities）共同保证：
+// 「锁外的完整身份」来自 WAL 自己的私有正文，而不是调用方持有的 map 别名。
+//
+// 2026-10-29 说明：本例原为 `...PrivateIdentityEncodingReleasesWALLock` 与
+// `...EncodedSnapshotKeepsOwnerOrdinalAndOriginalBody` 两条，针对已被删除的
+// WALCommitSnapshot/SplitCommitted/VisitEncoded（它们只为 source_wal 的 SQL 行编码而存在）。
+// 保留下来的不变量是：编码期间不占锁 + 编码用的是私有副本。
+func TestDurableOutboxPrivateIdentityEncodingOwnsBodiesAndReleasesLock(t *testing.T) {
+	key, led := testKey("encode-lock", "g1"), ledger.New()
+	wal := NewWAL(led, key)
 	event := sixFixEvent(key, 0, 10)
-	event.Fields = map[string]string{"字段": "捕获原值"}
+	event.Fields = map[string]string{"快照": "旧正文"}
 	require.NoError(t, wal.Append(event))
 	require.NoError(t, wal.Commit())
-	var predicateFields map[string]string
-	snapshot, err := wal.SnapshotSplitCommittedPlan(func(value logtypes.Event) bool {
-		predicateFields = value.Fields
-		value.Fields["字段"] = "谓词改写"
-		return false
-	}, nil)
+	oldID, err := CommitIdentityOf(event)
 	require.NoError(t, err)
-	index := snapshot.WALCommitIndex
-	_, inline, ids := snapshot.SplitCommitted()
-	event.Fields["字段"], predicateFields["字段"], inline[0].Event.Fields["字段"] = "入参改写", "谓词留存改写", "返回map改写"
-	live, recomputed, err := index.LiveCommittedIdentities(wal)
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	type result struct {
+		ids map[CommitIdentity]struct{}
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ids, err := wal.committedIdentities(func() { close(entered); <-release })
+		done <- result{ids, err}
+	}()
+	<-entered
+	// 编码阶段不持活 WAL 锁：真实 Append/Commit 必须能推进。
+	changed := event
+	changed.Fields = map[string]string{"快照": "同ID同hash未来Fields"}
+	changedID, err := CommitIdentityOf(changed)
 	require.NoError(t, err)
-	require.Zero(t, recomputed)
-	strict, err := wal.CommittedIdentities()
-	require.NoError(t, err)
-	require.Equal(t, ids, live)
-	require.Equal(t, strict, live)
-	var check func(reflect.Type)
-	check = func(typ reflect.Type) {
-		if typ == reflect.TypeOf((*WAL)(nil)) {
+	require.NotEqual(t, oldID, changedID)
+	mutation := make(chan error, 1)
+	go func() {
+		if err := wal.Append(changed); err != nil {
+			mutation <- err
 			return
 		}
-		switch typ.Kind() {
-		case reflect.Pointer, reflect.Interface, reflect.Func:
-			t.Fatalf("轻量成员索引存在正文或闭包可达引用: %s", typ)
-		case reflect.Struct:
-			for i := 0; i < typ.NumField(); i++ {
-				check(typ.Field(i).Type)
-			}
-		case reflect.Map:
-			require.NotEqual(t, reflect.TypeOf(map[string]string{}), typ, "禁止Fields可达")
-			check(typ.Key())
-			check(typ.Elem())
-		case reflect.Slice:
-			require.NotEqual(t, reflect.Uint8, typ.Elem().Kind(), "禁止编码正文切片可达")
-			check(typ.Elem())
-		case reflect.Array:
-			check(typ.Elem())
-		}
+		mutation <- wal.Commit()
+	}()
+	select {
+	case err := <-mutation:
+		require.NoError(t, err)
+	case <-time.After(200 * time.Millisecond):
+		close(release)
+		<-done
+		<-mutation
+		t.Fatal("完整身份编码阶段仍占活WAL锁，阻断真实Append/Commit")
 	}
-	check(reflect.TypeOf(*index))
-	require.Equal(t, 3, reflect.TypeOf(*index).NumField(), "索引只可持owner/cut/轻量成员桶")
-	members := 0
-	for _, bucket := range index.bySeqRevision {
-		members += len(bucket)
-	}
-	t.Logf("light_index_buckets=%d members=%d index_header_bytes=%d group_key_bytes=%d member_scalar_bytes=%d", len(index.bySeqRevision), members, reflect.TypeOf(*index).Size(), reflect.TypeOf(walSeqRevision{}).Size(), reflect.TypeOf(walCapturedMember{}).Size())
+	close(release)
+	got := <-done
+	require.NoError(t, got.err)
+	require.Equal(t, map[CommitIdentity]struct{}{oldID: {}}, got.ids,
+		"编码开始时的快照只含捕获前那一条；捕获后新增的变体不得混入")
+
+	// 快照返回的是私有副本：调用方改写不得反写活 WAL，也不得改变后续身份。
+	live, err := wal.CommittedIdentities()
+	require.NoError(t, err)
+	require.Contains(t, live, changedID, "活WAL内容必须仍是捕获后那份")
+	snapshot := wal.Snapshot()
+	require.Len(t, snapshot, 2)
+	require.Equal(t, "旧正文", snapshot[0].Event.Fields["快照"])
+	require.Equal(t, "同ID同hash未来Fields", snapshot[1].Event.Fields["快照"])
+	snapshot[1].Event.Fields["快照"] = "调用方不得改写活WAL"
+	require.Equal(t, "同ID同hash未来Fields", wal.Snapshot()[1].Event.Fields["快照"],
+		"Snapshot 返回的必须是私有副本，改写它不得反写活队列")
 }
 
 func outboxAcquireFixture(t *testing.T) (*Pipeline, []logtypes.Event) {
@@ -598,7 +164,7 @@ func outboxAcquireFixture(t *testing.T) (*Pipeline, []logtypes.Event) {
 }
 
 func TestDurableOutboxPendingCursorRebasesAfterRestoreAndReplace(t *testing.T) {
-	for _, scenario := range []string{"restore", "restore_refs", "replace"} {
+	for _, scenario := range []string{"reseed", "replace"} {
 		t.Run(scenario, func(t *testing.T) {
 			key, led := testKey("cursor-rebase", "g1"), ledger.New()
 			wal := NewWAL(led, key)
@@ -615,16 +181,8 @@ func TestDurableOutboxPendingCursorRebasesAfterRestoreAndReplace(t *testing.T) {
 			require.Equal(t, 500, cursor)
 			want := events[0]
 			switch scenario {
-			case "restore":
-				require.NoError(t, wal.Restore(wal.Snapshot()))
-			case "restore_refs":
-				refs, inline := wal.SnapshotSplit(func(logtypes.Event) bool { return true })
-				byID := make(map[string]logtypes.Event, len(events))
-				for _, event := range events {
-					byID[event.EventID] = event
-				}
-				missing := wal.RestoreMixed(inline, refs, func(id string) (logtypes.Event, bool) { event, ok := byID[id]; return event, ok })
-				require.Empty(t, missing)
+			case "reseed":
+				require.NoError(t, wal.seedEntries(wal.Snapshot()))
 			case "replace":
 				old := events[0]
 				want = logtypes.BuildEvent(old.Source, old.Record, "2026-10-22T12:00:00.1Z", old.IngestTimeUTC, old.Level, old.Stream, old.Message)
@@ -921,7 +479,7 @@ func TestDurableOutboxACKStampNeverSurvivesRestoreOrOldReclaim(t *testing.T) {
 				require.NoError(t, wal.AppendReplay(event))
 				require.NoError(t, wal.Commit())
 			} else {
-				require.NoError(t, wal.Restore(entries))
+				require.NoError(t, wal.seedEntries(entries))
 			}
 			_, err := wal.TryReclaim()
 			if restore != "old-reclaim" {

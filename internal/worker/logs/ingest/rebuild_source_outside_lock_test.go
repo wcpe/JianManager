@@ -3,13 +3,17 @@ package ingest
 // #55-B 的红/绿：`planPersist` 里「重建 + 提交」的重活必须在 m.mu **之外**，且锁外期间源又变了
 // 时**必须丢弃**本次重建（防"用计划时的旧水位覆盖新水位"的丢失更新）。
 //
-// 现场：planPersist 的 m.mu 内除了逐条 json.Marshal（A-Step2 已外移），还有一次**面向整块**的
-// 耗时 —— 对每个变更源做 rebuildSource：`Ledger().Snapshot()`（逐条 clone）+ `WAL().SnapshotSplit()`
-//（内联正文拷贝）+ 写回 m.state，逐条镜像重建阶段达 260–632ms，整段持锁 ⇒ 投递/登记/停止/解算
-// 一起排队。
+// 现场：planPersist 的 m.mu 内有一次**面向整块**的耗时 —— 对每个变更源做 rebuildSource：
+// `Ledger().Snapshot()`（逐条 clone）+ WAL 快照，逐条镜像重建阶段达 260–632ms，整段持锁 ⇒
+// 投递/登记/停止/解算一起排队。
 //
 // 修法（三段式，父级裁定）：锁内守卫判定 + O(1) 输入快照；锁外构建重建体；
 // 第三段锁内**复验守卫**后写回。
+//
+// 2026-10-29：WAL 不再落盘后，重建体里的「B1a 内联/引用切分」（WALRefs / 正文是否降级为引用）
+// 整块消失——所以原来的切分断言已删除。仍保留、且仍然重要的是上面两条：
+//   - 锁外构建（首条用例的"未持锁"断言 + 负例）；
+//   - 第三段复验后丢弃陈旧重建（第二条用例）。
 //
 // 转红方式（可复现）：把 `buildRebuiltSourceOutsideLock` 的调用挪回锁内（或在其中加
 // `m.mu.Lock()`）⇒ 首条用例的"未持锁"断言立即转红；删掉第三段的复验 ⇒ 第二条用例转红。
@@ -50,29 +54,28 @@ func newRebuildProbeManager(t *testing.T) (*Manager, SourceConfig, string, *pipe
 	return m, src, key, p
 }
 
-// injectRebuildWAL 往该源 WAL 注入 n 条 durable 条目（真实条目形态：带正文），供 B1a 切分断言。
+// injectRebuildWAL 往该源 WAL 注入 n 条 durable 条目（真实条目形态：带正文），
+// 供「重建体必须完整带走队列快照」的断言使用。
 func injectRebuildWAL(t *testing.T, p *pipeline.Pipeline, src SourceConfig, n int) []acquire.WALEntry {
 	t.Helper()
 	identity := logtypes.SourceIdentity{
 		LogSourceID: src.LogSourceID, SourceGeneration: src.SourceGeneration, ParserVersion: "v1",
 	}
-	entries := make([]acquire.WALEntry, 0, n)
+	events := make([]logtypes.Event, 0, n)
 	for i := 0; i < n; i++ {
 		rec := logtypes.RecordRange{Start: uint64(i*10 + 1), End: uint64(i*10 + 10)}
-		entries = append(entries, acquire.WALEntry{
-			Seq: uint64(i + 1), Durable: true,
-			Event: logtypes.BuildEvent(identity, rec, "2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", "wal"),
-		})
+		events = append(events, logtypes.BuildEvent(identity, rec, "2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", "wal"))
 	}
-	require.NoError(t, p.WAL().Restore(entries))
-	return entries
+	seedWAL(t, p.WAL(), events...)
+	return p.WAL().Snapshot()
 }
 
 // TestRebuildSourceBuildRunsOutsideMutex 断言重建体在锁外构建（含负例证明可红），
-// 并守住 B1a 切分契约（段已覆盖 ⇒ 引用；未覆盖 ⇒ 内联，绝不丢正文）。
+// 并守住「队列快照必须完整带进重建体」（少一条就意味着内存状态被截断）。
 func TestRebuildSourceBuildRunsOutsideMutex(t *testing.T) {
 	m, src, key, p := newRebuildProbeManager(t)
 	entries := injectRebuildWAL(t, p, src, 3)
+	require.Len(t, entries, 3, "前置：队列里必须有 3 条条目")
 
 	var held atomic.Bool
 	m.rebuildSourceBuildHook.Store(func() {
@@ -86,28 +89,15 @@ func TestRebuildSourceBuildRunsOutsideMutex(t *testing.T) {
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	m.mu.Unlock()
-	// 与 planPersist 第一段同型的任务：O(1) 输入快照（段尚未覆盖 ⇒ 全内联）。
+	// 与 planPersist 第一段同型的任务：O(1) 输入快照。
 	task := rebuildTask{
 		key: key, pipe: p, rev: p.Ledger().Revision(p.Key()), cover: coverSignatureOf(saved),
 		eventsStored: saved.EventsStored, through: saved.EventsStoredThrough, inline: saved.Events,
 	}
 	rebuilt := m.buildRebuiltSourceOutsideLock(task)
 	require.False(t, held.Load(),
-		"#55-B：重建体（Ledger 快照 + WAL 分片 + 内联拷贝）不得在 m.mu 内构建")
-	require.Empty(t, rebuilt.WALRefs, "段未覆盖（eventsStored=false）时不得把条目降级为引用")
-	require.Len(t, rebuilt.WAL, len(entries), "段未覆盖时必须全部内联保存（绝不丢正文）")
-
-	// 最大末端本身不是正文证据：没有实际段时即使声明水位也必须保留全部正文。
-	task.eventsStored, task.through = true, entries[0].Event.Record.End
-	rebuilt = m.buildRebuiltSourceOutsideLock(task)
-	require.Empty(t, rebuilt.WALRefs)
-	require.Len(t, rebuilt.WAL, len(entries))
-	// 正向前提必须真实落段并fsync，不能只手填maxEnd伪造正文可取证明。
-	require.NoError(t, m.appendEvents(key, []logtypes.Event{entries[0].Event}))
-	rebuilt = m.buildRebuiltSourceOutsideLock(task)
-	require.Len(t, rebuilt.WALRefs, 1, "已被段覆盖的条目必须降级为引用")
-	require.Len(t, rebuilt.WAL, len(entries)-1, "其余条目必须内联保存")
-	require.Empty(t, rebuilt.Events, "事件体已在段存储时不得写回内联切片（否则 state 重新涨回）")
+		"#55-B：重建体（Ledger 快照 + 队列快照）不得在 m.mu 内构建")
+	require.Len(t, rebuilt.WAL, len(entries), "重建体必须完整带走队列快照（不得丢条目）")
 
 	// 负例（红敏感性）：持锁调用 ⇒ 钩子必须观察到"已持锁"（这正是改前 rebuildSource 的形态）。
 	held.Store(false)

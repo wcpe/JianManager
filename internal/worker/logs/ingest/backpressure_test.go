@@ -10,6 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// legacyBacklogPauseReason 是旧二进制写下的积压暂停原因前缀（本包只读兼容，绝不再写入生产）。
+//
+// 回归用例用它造“存量积压暂停”——那正是 `maybeResumeBacklogLocked` 要识别并收敛的对象。
+const legacyBacklogPauseReason = "wal backlog limit exceeded (entries=5/4)"
+
 // TestBackpressureSkipsRevivalWhileBacklogRises（用户指令的红证）：**上一轮积压净涨 ⇒ 本轮不复活**。
 //
 // 现场依据（+463k ✗）：复活让源开始读文件 ⇒ 常规新数据进入 WAL ⇒ 恶化期继续复活更多源就是
@@ -53,7 +58,21 @@ func TestBackpressureWindowDoesNotBlockOnSingleRoundJitter(t *testing.T) {
 	}
 	m.mu.Unlock()
 	require.NotNil(t, fb)
-	require.NoError(t, fb.Ledger().PauseAcquire(fb.Key(), "wal backlog limit exceeded (entries=5/4)"))
+	// 2026-10-29：造暂停的方式换了（背压机制本身一字未动）。
+	//
+	// 旧写法只写一条 `wal backlog limit exceeded` 暂停，新语义下这条暂停会被
+	// `maybeResumeBacklogLocked` 在任何一次 TryReclaim 里当场解除 ⇒ 兜底环扫到时它早已不是
+	// 暂停态 ⇒ 候选数恒为 0，用例变成在测“没有候选”。
+	//
+	// 生产里**真实存在**的“存量积压暂停”形态是：旧二进制写下的积压暂停 + 一个未解决缺口（当时
+	// 被拒的追加留下的 APPEND_REJECTED），后者让 `ResumeAcquire` 拒绝放行 ⇒ 暂停持续存在。
+	// 那正是本用例需要的不变量：“持续暂停态的源在抖动轮之后仍要被扫到”。
+	//
+	// 缺口必须用**未分类原因**：`APPEND_REJECTED` / `DELIVER_ERROR` 属于“恢复后回读重放”类，
+	// `maybeResumeBacklogLocked` 会（正确地）把它们分类消解掉并放行——那样暂停又没了。
+	// 未分类原因走 default-deny，既不消解得掉、也不应当被消解，暂停就真正常驻。
+	require.NoError(t, fb.Ledger().PauseAcquire(fb.Key(), legacyBacklogPauseReason))
+	require.NoError(t, fb.Ledger().RecordGap(fb.Key(), 1, 2, "SOME_UNCLASSIFIED_REASON", "抖动轮夹具：阻塞恢复"))
 	m.sweepBacklogOf = func() int64 {
 		v := seq[i]
 		if i < len(seq)-1 {

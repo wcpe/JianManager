@@ -56,7 +56,7 @@ func pruneFixture(t *testing.T, n, droppable int) (*WAL, []WALEntry, uint64) {
 				"2026-10-05T00:00:00Z", "2026-10-05T00:00:01Z", "INFO", "stdout", fmt.Sprintf("prune-%d", i)),
 		})
 	}
-	require.NoError(t, wal.Restore(entries))
+	require.NoError(t, wal.seedEntries(entries))
 	pos := uint64(droppable*10 + 7) // 覆盖前 droppable 条的末端 ✓
 	return wal, entries, pos
 }
@@ -103,7 +103,7 @@ func TestPruneReclaimedCollectsOutOfOrderEntriesOnSweep(t *testing.T) {
 		mk(2, 10, 20, "droppable-out-of-order"),
 		mk(3, 2_000_000, 2_000_010, "keep-tail"),
 	}
-	require.NoError(t, wal.Restore(entries))
+	require.NoError(t, wal.seedEntries(entries))
 	pos := uint64(100) // 只覆盖第 2 条 ✓
 
 	wal.pruneReclaimed(pos)

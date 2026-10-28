@@ -204,26 +204,6 @@ func (b CommitBudget) hardLimit() time.Duration {
 	return b.Target * 5 / 4
 }
 
-// WALPrune 是「source_wal 按**谓词水位**丢弃整段旧行」的请求（①水位化差异删除）。
-//
-// 语义与判据：删除该归属中 `durable = 1 且 record_end <= EndThrough` 的全部行——与采集侧
-// 内存剪枝 `WAL.pruneReclaimed(pos)` 的判据**逐字同源**（那里也是 `Durable && Record.End <= pos`，
-// 见 internal/worker/logs/acquire/wal.go）。
-//
-// 为什么需要它（2026-10-02 生产事故：启动路径单线程、与规模成正比的持久化）：启动恢复一次把
-// 整段积压判为可回收（`releaseRecovery` → `TryReclaim`），内存里那段被剪掉，索引侧于是要把
-// 「镜像里有、期望里没有」的行逐行删掉——生产 3.4M 行 × 每语句 32 行 = 10.6 万条 DELETE，
-// 单线程在 19.5GB 库上跑 20–30 分钟且零进展。本类型把这段差异表达成**一条**谓词范围删除。
-//
-// 安全性由 ApplyScopedCtx 的等价性守门保证（见 walPrunePlan）：只有「期望集里不存在任何满足
-// 该谓词的行」时才启用范围删除，否则整段退回逐行路径。`durable = 1` 这一条不能省——期望集里
-// 未耐久（durable=0）的行即使 record_end ≤ 水位也必须留在库里（否则重启后 WAL 少条 ⇒ 未投递
-// 正文丢失）。
-type WALPrune struct {
-	Owner      string
-	EndThrough uint64
-}
-
 // pendingRow 是一条待写入/待删除的行：表下标 + 行数据（删除时只用 owner/key，
 // values 不参与；owner 用于提交后定位镜像分组）。
 type pendingRow struct {
@@ -274,11 +254,12 @@ type Latency struct {
 	Max     time.Duration
 	MaxRows int
 	Cycles  int
-	// #67-C（只读）：本进程**累计**的"规划耗时 / 范围剪枝耗时 / 镜像重建耗时"（ns）。
+	// #67-C（只读）：本进程**累计**的"规划耗时 / 镜像重建耗时"（ns）。
 	// 为什么必须单列：单元耗时分位只能告诉你"慢在单元内"，分不出"规划（planState 的指纹+主键编码）"
-	// 与"范围剪枝（无界谓词删除+镜像重建）"——真机 p95 11s / max 40.7s 的定性就靠这三项 ✓。
+	// 与"镜像重建（无界谓词删除后的镜像修复）"——真机 p95 11s / max 40.7s 的定性就靠这三项 ✓。
+	//
+	// 原第三项 NsPrune（范围剪枝）已随 source_wal 表一起删除：范围剪枝只服务那张表。
 	NsPlan          int64
-	NsPrune         int64
 	NsMirrorRebuild int64
 	// #67-A′（只读）：WAL 体量、归并尝试/未拷完/受控截断次数、在飞只读句柄数。
 	WALBytes           int64
@@ -314,7 +295,7 @@ type Stats struct {
 	// 1.5s（生产实测），按归属收敛到变更源后才与总量解耦。规模回归用它守住这条。
 	RowsPlanned int
 	// Planned 按表给出规划行数明细（表名 → 行数）。规模回归据此断言**数据表**（gap/
-	// source_wal/delivery_batch，行数随数据量增长的那三张）的规划量与索引总量解耦；
+	// delivery_batch，行数随数据量增长的那两张；source_wal 已于 2026-10-29 删除）的规划量与索引总量解耦；
 	// 根表（source/position/...）的规划量按设计随源数增长（几百行量级，代价可忽略），
 	// 全量比对它们正是元数据变更无须显式标记即正确的原因。
 	Planned map[string]int
@@ -333,14 +314,6 @@ type Stats struct {
 	Incomplete bool
 	// RemainingRows 是预算耗尽时尚未处理的差异行数（写 + 删）下界，供调用方决定是否继续。
 	RemainingRows int
-	// RangePrunes 是本周期发出的**谓词范围删除语句数**（①水位化路径是否启用，一眼可见）。
-	//
-	// 为什么单独观测「发出了几条」而不是只看行数：稳态下这些语句常常影响 0 行（该段早已删净），
-	// 行数会让「路径有没有生效」完全不可见。生产排障要知道的正是前者。
-	RangePrunes int
-	// RangePruned 是经**谓词范围删除**丢弃的行数（①水位化路径；0 表示本周期没走该路径）。
-	// 它是 RowsDeleted 的子集，不能相加重复计算；所有实际删除都计入事务与周期预算。
-	RangePruned int
 	// Statements 是本周期实际发出的 SQL 语句数（写 + 删）。
 	//
 	// 为什么要观测它：批量化的收益全在「一条语句处理几行」上——退回逐行时这个值会等于行数
@@ -368,17 +341,14 @@ type Store struct {
 
 	samples []Sample
 
-	// walPruneApplied 记录各归属**已应用**的 source_wal 剪枝水位：水位未前进即不再重复发
-	// 范围删除（幂等跳过）。进程重启后表为空 ⇒ 首次提示会重放一条谓词删除（幂等、一条语句）。
-	walPruneApplied map[string]uint64
 	// budget 是提交单元的配置预算（配置面下发，见 CommitBudget）；rowBudget 是自适应后的
 	// 当前行数预算（在 [MinRows, MaxRows] 之间随实测耗时收缩/扩张），cycle 是周期序号。
 	budget    CommitBudget
 	rowBudget int
 	// #67-C（只读观测，均在 ApplyScopedCtxRows 的持锁区内累加 ⇒ 无需原子）：
-	// nsPlan/nsPrune/nsMirrorRebuild 是"规划 / 范围剪枝 / 镜像重建"三段各自的累计墙钟（ns）。
+	// nsPlan/nsMirrorRebuild 是"规划 / 镜像重建"两段各自的累计墙钟（ns）（持锁区内累加 ⇒ 无需原子）。
+	// 原 nsPrune（范围剪枝）已删除：它随 source_wal 表一起下线。
 	nsPlan          int64
-	nsPrune         int64
 	nsMirrorRebuild int64
 	// #67-A′（只读观测，原子 ⇒ 无锁可读）：WAL 归并与"在飞只读句柄"的读数。
 	// 真机 `-wal`=3.59GB 与归并阈值 4MiB 并存 ⇒ 只有两种解释：**读者持旧快照（PASSIVE 拷不完，
@@ -469,8 +439,7 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 	db.SetMaxIdleConns(1)
 	budget = budget.Normalized()
 	s := &Store{path: path, db: db, mirror: newMirror(), budget: budget, rowBudget: budget.MaxRows,
-		readersInFlight: readersInFlightFor(path),
-		walPruneApplied: make(map[string]uint64)}
+		readersInFlight: readersInFlightFor(path)}
 	ctx := context.Background()
 	// journal_mode=WAL + synchronous=NORMAL（spec §2.1）：提交即持久、崩溃可恢复；
 	// busy_timeout 用于同进程内只读连接短暂持锁时等待，而非立即报错。
@@ -498,6 +467,20 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 			return nil, fmt.Errorf("stateindex: 设置 %s 失败: %w", pragma, err)
 		}
 	}
+	// 2026-10-29 遗留迁移：`source_wal` 表已废弃（WAL 已改为纯内存队列，不再落盘），但旧版本
+	// 已经在既有生产库里把它建好了（表里可能有 20 万行旧条目）。先于建表执行：把旧表连同它
+	// 的索引一起删掉（幂等，不存在则空操作），再让本次的 DDL 落地。
+	//
+	// 旧条目**不迁移、不读**：它们描述的是内存队列的一个旧快照，重启后已经由
+	// rollbackReadToReclaim 按 position 水位重读接替。DROP 后页进入 freelist（文件本身不缩小，
+	// 需显式 Vacuum 才回缩），这比一直拖着 300MB 空壳好。
+	if dropped, err := dropLegacySourceWAL(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	} else if dropped {
+		slog.Info("索引库已删除废弃的 source_wal 表（WAL 改纯内存队列后的遗留迁移）", "path", path,
+			"freelistBytesHint", "可择机调用 stateindex.Store.Vacuum 回收磁盘空间")
+	}
 	for _, ddl := range []string{specDDL, extensionDDL, recoveryAuditDDL, materializationDDL} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			_ = db.Close()
@@ -505,27 +488,6 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 		}
 	}
 	if err := addColumnIfMissing(ctx, db, "materialization_attempt", "class", "TEXT NOT NULL DEFAULT 'rebuild'"); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	// FR-498 增量迁移：丢弃 source_wal 上的冗余索引（既有库不会因为 DDL 改了而自动少一条索引，
-	// 必须显式 DROP）。语义与查询面见 schema.go 里 extensionDDL 的注释；这里是纯维护面
-	// 减小（每次写少维护一棵 b-tree），不改任何一行的取值。
-	if err := dropRedundantIndexes(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	// ACQ-1 增量迁移：`source_wal.replay` 是后加列，`CREATE TABLE IF NOT EXISTS` 不会为既有库
-	// 补列 ⇒ 这里按「列是否存在」幂等补齐。旧库旧行零值 = 非回放（与「旧行全是常规采集条目」
-	// 的事实一致 ✓），因此本迁移是纯追加、不改动任何既有语义。
-	if err := addColumnIfMissing(ctx, db, "source_wal", "replay", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	// 2026-10-28 增量迁移：`source_wal.ack_body_digest` 是后加列，承载「该条目被 ACK 时那份
-	// 正文的 SHA-256」。既有库补列后旧行为 NULL ⇒ 恢复时不重建 ACK（default-deny，
-	// 与该列不存在时的行为一致），直到该条目在本进程被重新 ACK 后写入。
-	if err := addColumnIfMissing(ctx, db, "source_wal", "ack_body_digest", "BLOB"); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -790,7 +752,6 @@ func (s *Store) counts(ctx context.Context) (Counts, error) {
 		{"projection", &counts.Projections},
 		{"instance_binding", &counts.Instances},
 		{"source_aux", &counts.Aux},
-		{"source_wal", &counts.WAL},
 		{"delivery_batch", &counts.Batches},
 	}
 	for _, target := range targets {
@@ -832,8 +793,7 @@ func (s *Store) mirrorTable(name string) map[string]map[string]uint64 {
 
 // loadMirror 把各表现有行的指纹读入内存镜像（按归属分组）。
 //
-// 带 fp 列的表（source_aux/source_wal）直接读 fp，因此**不需要读 WAL 正文**——单源万条积压时，
-// 启动不会为正文多做一次编解码。
+// 带 fp 列的表（source_aux）直接读 fp，因此不需要为其余内容列现算指纹。
 func (s *Store) loadMirror(ctx context.Context) error {
 	for index := range specs {
 		spec := specs[index]
@@ -856,7 +816,7 @@ func (s *Store) loadMirror(ctx context.Context) error {
 			key := mirrorKey(values[:len(spec.keyCols)]...)
 			var fp uint64
 			if spec.fpSelf {
-				// 带 fp 列的表（source_aux/source_wal）直接读最后一列。
+				// 带 fp 列的表（source_aux）直接读最后一列。
 				if values[len(values)-1] == nil {
 					_ = rows.Close()
 					return fmt.Errorf("stateindex: %s 指纹列为空", spec.name)
@@ -889,7 +849,7 @@ func (s *Store) loadMirror(ctx context.Context) error {
 // mirrorOwner 从镜像行的列值取出归属键（主键首列的文本值）。
 //
 // 归属就是「这一行属于哪个日志源」（或无归属表的主键首列值）：source/position/projection/
-// source_aux/gap/source_wal/delivery_batch 都以日志源为归属，instance_binding 以实例 UUID 为
+// source_aux/gap/delivery_batch 都以日志源为归属，instance_binding 以实例 UUID 为
 // 归属。归属值本身不承载语义，只要求**写入侧（planState）与载入侧（本函数）同口径**——
 // 两侧不一致会把同一行归到不同组，表现为重启后该行「旧的被删、新的被写」。
 //
@@ -973,7 +933,6 @@ func (s *Store) load(ctx context.Context) (State, error) {
 // 漏一处即静默丢更新；保留全量比较则天然正确，代价可忽略。取舍：正确性优先，收益在此之外。
 var scopedTables = [tableCount]bool{
 	tblGap:           true,
-	tblSourceWAL:     true,
 	tblDeliveryBatch: true,
 }
 
@@ -1027,7 +986,7 @@ func (s *Store) Apply(desired State) (Stats, error) {
 // 才会丢事件，而 position 最后落库恰好排除了它。删除按表倒序（子表在前）不受影响，
 // 单元边界只会落在排序序列中间，故「删父表前先删子表」的顺序全局保持。
 func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
-	return s.ApplyScopedCtx(context.Background(), desired, owners, nil)
+	return s.ApplyScopedCtx(context.Background(), desired, owners)
 }
 
 // ApplyScopedCtx 是 ApplyScoped 的**可取消**形态：ctx 贯穿到每一条语句
@@ -1037,9 +996,8 @@ func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
 // 为什么必须收调用方的 ctx（2026-10-02 事故）：此前这里硬编码 context.Background()，
 // 于是启动恢复这类长流程既不可超时也不可中断——调用方（HTTP/RPC/关停）早已放弃，服务端仍在
 // 为没人要的结果逐行删库。
-// prunes 是**谓词范围删除**提示（可为 nil）：见 WALPrune。
-func (s *Store) ApplyScopedCtx(ctx context.Context, desired State, owners []string, prunes []WALPrune) (Stats, error) {
-	return s.ApplyScopedCtxRows(ctx, desired, owners, prunes, 0)
+func (s *Store) ApplyScopedCtx(ctx context.Context, desired State, owners []string) (Stats, error) {
+	return s.ApplyScopedCtxRows(ctx, desired, owners, 0)
 }
 
 // ApplyScopedCtxRows 是 ApplyScopedCtx 的「本次调用行数上限」覆盖形态（cycleRows>0 时生效）。
@@ -1048,7 +1006,7 @@ func (s *Store) ApplyScopedCtx(ctx context.Context, desired State, owners []stri
 // 的耗时就是其他调用者的等待上界。背景链（恢复/重放/交办的落库）应当用小步长，好让有硬截止的
 // 调用者（实例登记 RPC、Stop）在一个小步之内拿到门；而单次调用自身的总预算仍由 CycleMaxRows
 // 约束（两者是**与**关系）。
-func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []string, prunes []WALPrune, cycleRows int) (Stats, error) {
+func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []string, cycleRows int) (Stats, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1109,7 +1067,6 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	//
 	// ①水位化差异删除的规划：先做**等价性守门**，通过者用一条谓词删除覆盖整段，未通过的归属
 	// 原样走逐行路径（安全方向：宁可慢，不可错删）。
-	prunePlans, pruneRows := s.planWALPrunes(desired, prunes)
 	var writes []pendingRow
 	var deletes []pendingRow
 	for index := range specs {
@@ -1143,14 +1100,8 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 			}
 			// 删除：只在本轮覆盖的归属内比对。未覆盖归属的镜像行必然仍在期望状态里
 			// （否则该归属就属于变更集合），若在此全表扫描会把它们误删。
-			walPrune := prunePlans[index][owner]
 			for key := range mirror {
 				if _, ok := seen[key]; ok {
-					continue
-				}
-				if walPrune != nil && walMirrorKeyAtOrBelow(specs[index], key, walPrune.EndThrough) {
-					// 该行落在谓词范围内：由一条范围删除覆盖，不再逐行发语句
-					// （这正是「与规模成正比的 DELETE 数」变成「每源一条」的地方）。
 					continue
 				}
 				// 归属原样带上：删除后更新镜像时要用它定位分组。
@@ -1158,7 +1109,7 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 			}
 		}
 	}
-	if len(writes) == 0 && len(deletes) == 0 && len(pruneRows) == 0 {
+	if len(writes) == 0 && len(deletes) == 0 {
 		// 幂等空转：不开事务、不写任何字节（空闲轮询不得重写历史）。
 		stats.Duration = time.Since(started)
 		stats.Chunks = 1
@@ -1176,7 +1127,7 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	sort.SliceStable(writes, func(i, j int) bool { return writeOrderRank[writes[i].table] < writeOrderRank[writes[j].table] })
 
 	s.cycle++
-	samples, progress, err := s.commitChunks(ctx, writes, deletes, pruneRows, s.cycle, &stats, nil, nil)
+	samples, progress, err := s.commitChunks(ctx, writes, deletes, s.cycle, &stats, nil, nil)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -1210,146 +1161,6 @@ func (s *Store) ApplyScopedCtxRows(ctx context.Context, desired State, owners []
 	}
 	stats.Duration = time.Since(started)
 	return stats, nil
-}
-
-// walPrunePlan 是一个**已通过等价性守门**的范围剪枝（按表下标 + 归属索引）。
-type walPrunePlan struct {
-	owner      string
-	EndThrough uint64
-}
-
-// planWALPrunes 规划本轮的 source_wal 范围剪枝，返回「表下标 → 归属 → 计划」与待执行清单。
-//
-// 等价性守门（**这是范围删除能安全替换逐行删除的全部依据**）：
-//   - 水位未前进（≤ 该归属已应用水位）⇒ 跳过：重放没有意义（幂等但白花一条语句）；
-//   - 期望集（内存 WAL，权威）里**不存在** `Durable && RecordEnd <= EndThrough` 的行 —— 否则
-//     范围删除会把一条仍然有效的行删掉（重启后 WAL 少条 ⇒ 未投递正文丢失）⇒ 该归属整段退回
-//     逐行路径。这条与采集侧的剪枝判据同源：`pruneReclaimed(pos)` 之后内存里不可能再有满足
-//     `Durable && Record.End <= pos` 的条目，故正常情况下守门必然通过；一旦不通过（例如状态被
-//     外部改动/版本错配），我们退化为慢但正确的那条路。
-func (s *Store) planWALPrunes(desired State, prunes []WALPrune) (map[int]map[string]*walPrunePlan, []walPrunePlan) {
-	if len(prunes) == 0 {
-		return nil, nil
-	}
-	// 期望集里各归属的「最小未耐久末端」：只关心满足谓词的行，故按 (durable, end) 判。
-	pending := make(map[string]bool, len(prunes))
-	for _, prune := range prunes {
-		pending[prune.Owner] = true
-	}
-	blocked := make(map[string]bool)
-	for _, row := range desired.WAL {
-		if !pending[row.Key] {
-			continue
-		}
-		if row.Durable && row.RecordEnd <= pruneWatermark(prunes, row.Key) {
-			blocked[row.Key] = true
-		}
-	}
-	plans := make(map[int]map[string]*walPrunePlan, 1)
-	var rows []walPrunePlan
-	seenOwners := make(map[string]bool, len(prunes))
-	for _, prune := range prunes {
-		if seenOwners[prune.Owner] {
-			continue
-		}
-		seenOwners[prune.Owner] = true
-		// 守门与执行必须使用同一保守水位，重复提示不能让更大水位绕过期望集检查。
-		prune.EndThrough = pruneWatermark(prunes, prune.Owner)
-		if prune.Owner == "" || prune.EndThrough == 0 || blocked[prune.Owner] {
-			continue
-		}
-		if prune.EndThrough <= s.walPruneApplied[prune.Owner] {
-			continue
-		}
-		plan := &walPrunePlan{owner: prune.Owner, EndThrough: prune.EndThrough}
-		if plans[tblSourceWAL] == nil {
-			plans[tblSourceWAL] = make(map[string]*walPrunePlan, len(prunes))
-		}
-		plans[tblSourceWAL][prune.Owner] = plan
-		rows = append(rows, *plan)
-	}
-	return plans, rows
-}
-
-// pruneWatermark 取该归属的提示水位（同一归属只应有一条提示；多条时取最小，保守方向）。
-func pruneWatermark(prunes []WALPrune, owner string) uint64 {
-	best := uint64(0)
-	for _, prune := range prunes {
-		if prune.Owner != owner {
-			continue
-		}
-		if best == 0 || prune.EndThrough < best {
-			best = prune.EndThrough
-		}
-	}
-	return best
-}
-
-// walMirrorKeyAtOrBelow 判断一条 source_wal 镜像键的 record_end 是否 ≤ 水位。
-// 键的列序即 specs 的 keyCols（见 decodeMirrorKey），末尾即 record_end。
-func walMirrorKeyAtOrBelow(spec tableSpec, mirrorKey string, through uint64) bool {
-	values, err := decodeMirrorKey(spec, mirrorKey)
-	if err != nil || len(values) != len(spec.keyCols) {
-		return false // 解不开就按「不覆盖」处理，退回逐行删除（安全方向）
-	}
-	raw, ok := values[len(values)-1].(int64)
-	if !ok {
-		return false
-	}
-	if raw < 0 {
-		return false
-	}
-	return uint64(raw) <= through
-}
-
-// applyWALPrune 执行一条谓词范围删除：**一条语句**删掉该归属 `durable=1 && record_end <= 水位`
-// 的全部行。返回受影响行数。
-//
-// 为什么可以省掉 durable 判断之外的任何条件：谓词与内存剪枝同源，且守门已保证期望集里不存在
-// 满足谓词的行 ⇒ 被删的每一行都不在期望集里。
-func (s *Store) applyWALPrune(ctx context.Context, conn *sql.Conn, plan walPrunePlan, limit int, stats *Stats) ([]string, bool, error) {
-	if limit <= 0 {
-		return nil, false, errors.New("stateindex: 范围剪枝没有剩余行预算")
-	}
-	if limit > pruneDeleteBatchRows {
-		limit = pruneDeleteBatchRows
-	}
-	// 返回本语句实际删掉的主键；提交前仅保留这份有界增量，提交后才更新镜像。
-	const stmt = "DELETE FROM source_wal WHERE rowid IN (" +
-		"SELECT rowid FROM source_wal WHERE key = ? AND durable = 1 AND record_end <= ? LIMIT ?) " +
-		"RETURNING key, seq, event_id, record_start, record_end"
-	rows, err := conn.QueryContext(ctx, stmt, plan.owner, toInt64(plan.EndThrough), limit)
-	if err != nil {
-		return nil, false, fmt.Errorf("stateindex: 范围剪枝 source_wal 失败（归属 %s）: %w", plan.owner, err)
-	}
-	keys := make([]string, 0, limit)
-	for rows.Next() {
-		values, err := scanRow(rows, 5)
-		if err != nil {
-			_ = rows.Close()
-			return nil, false, err
-		}
-		keys = append(keys, mirrorKey(values...))
-	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return nil, false, err
-	}
-	stats.Statements++
-	stats.RangePrunes++
-	stats.RangePruned += len(keys)
-	stats.RowsDeleted += len(keys)
-	stats.Deleted["source_wal"] += len(keys)
-	complete := len(keys) < limit
-	if !complete {
-		var pending bool
-		if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM source_wal WHERE key=? AND durable=1 AND record_end<=?)", plan.owner, toInt64(plan.EndThrough)).Scan(&pending); err != nil {
-			return nil, false, err
-		}
-		complete = !pending
-	}
-	return keys, complete, nil
 }
 
 // SetControlledTruncate 开关"受控 TRUNCATE"（#67-B（c）：**默认关闭** ✓，配置面显式打开才生效）。
@@ -1416,7 +1227,7 @@ func (s *Store) TryControlledTruncate(ctx context.Context) bool {
 //
 // 其余表之间的次序只要求父表在子表之前：source 是全部七张表的父行，故它排在最前。
 var writeOrderRank = func() [tableCount]int {
-	order := []int{tblSource, tblGap, tblProjection, tblInstanceBinding, tblSourceAux, tblSourceWAL, tblDeliveryBatch, tblPosition}
+	order := []int{tblSource, tblGap, tblProjection, tblInstanceBinding, tblSourceAux, tblDeliveryBatch, tblPosition}
 	var rank [tableCount]int
 	for index, table := range order {
 		rank[table] = index
@@ -1435,7 +1246,7 @@ var writeOrderRank = func() [tableCount]int {
 //
 // 返回本周期各单元的采样（**不**登记进采样环）：周期结构与周期口径的规划明细要等全部单元
 // 跑完才知道，由 ApplyScoped 统一补齐后登记。
-func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, prunes []walPrunePlan, cycle uint64, stats *Stats, unitGuard func(*sql.Conn) error, progressInUnit func(*sql.Conn, int, int) error) ([]Sample, commitProgress, error) {
+func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, cycle uint64, stats *Stats, unitGuard func(*sql.Conn) error, progressInUnit func(*sql.Conn, int, int) error) ([]Sample, commitProgress, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, commitProgress{}, fmt.Errorf("stateindex: 获取写连接失败: %w", err)
@@ -1446,20 +1257,16 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 	cycleStarted := time.Now()
 	cycleRows := 0
 	wi, di := 0, 0
-	prunesDone := 0
 	var samples []Sample
-	// 循环条件必须把范围剪枝算进去：当「差异只剩谓词剪枝」（写/删集为空）时，若漏掉它，
-	// 整段剪枝就永远不会被执行——而且是静默的（无错误、无提示）。
-	for wi < len(writes) || di < len(deletes) || len(prunes) > 0 {
+	for wi < len(writes) || di < len(deletes) {
 		// 每周期总预算：它约束的是「一次调用做多少」，与单元预算（约束「一个事务多大」）正交。
 		// 检查点在单元之间，故单次调用实际耗时可上浮「一个单元」（其自身由 hardLimit 兜住）。
 		//
 		// 至少有 completed > 0 才允许因预算停下（见下方 progress 语义）：否则极小预算会把调用
 		// 变成永不动作者（每次进来都立刻返回"未完成"），那是死循环而不是有界。
-		if (cycleRows >= s.budget.CycleMaxRows || time.Since(cycleStarted) >= s.budget.CycleMaxDuration) && (cycleRows > 0 || wi > 0 || di > 0 || prunesDone > 0) {
+		if (cycleRows >= s.budget.CycleMaxRows || time.Since(cycleStarted) >= s.budget.CycleMaxDuration) && (cycleRows > 0 || wi > 0 || di > 0) {
 			return samples, commitProgress{
 				writesDone: wi, deletesDone: di, writesTotal: len(writes), deletesTotal: len(deletes),
-				prunesDone: prunesDone, prunesTotal: prunesDone + len(prunes),
 			}, nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -1482,13 +1289,6 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		// 单元内的行数与字数据单独累计：采样是**单元**口径（打点按样本增量结账），
 		// 周期的合计在提交成功后并入 stats。
 		chunkStats := Stats{Written: map[string]int{}, Deleted: map[string]int{}}
-		// 本单元内已执行的范围剪枝：提交后才刷新镜像与推进水位（镜像始终只在提交成功后更新）。
-		type pruneDelta struct {
-			plan     walPrunePlan
-			keys     []string
-			complete bool
-		}
-		var prunesApplied []pruneDelta
 		// 整个单元（写 + 删 + 提交）都在同一个 IMMEDIATE 事务内：BEGIN 在写入之前，
 		// 否则语句会各自 autocommit——那正是「崩溃不丢」回归要抓的形态。
 		if err := s.runUnit(ctx, conn, func() error {
@@ -1522,25 +1322,6 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 				}
 				rows += end - wi
 				wi = end
-			}
-			// 范围剪枝与普通写删共用剩余事务行预算；未删净的计划留给后续提交或周期。
-			for len(prunes) > 0 && rows < budget {
-				prune := prunes[0]
-				if limit > 0 && rows > 0 && time.Since(chunkStarted) >= limit {
-					break
-				}
-				tPrune := time.Now()
-				keys, complete, err := s.applyWALPrune(ctx, conn, prune, budget-rows, &chunkStats)
-				s.nsPrune += int64(time.Since(tPrune))
-				if err != nil {
-					return err
-				}
-				rows += len(keys)
-				prunesApplied = append(prunesApplied, pruneDelta{plan: prune, keys: keys, complete: complete})
-				if complete {
-					prunes = prunes[1:]
-					prunesDone++
-				}
 			}
 			for di < len(deletes) && rows < budget {
 				if limit > 0 && rows > 0 && time.Since(chunkStarted) >= limit {
@@ -1576,18 +1357,6 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 		for _, pending := range deletes[deletedFrom:di] {
 			s.deleteMirror(specs[pending.table].name, pending.row.owner, pending.row.key)
 		}
-		for _, delta := range prunesApplied {
-			tMirror := time.Now()
-			for _, key := range delta.keys {
-				s.deleteMirror("source_wal", delta.plan.owner, key)
-			}
-			s.nsMirrorRebuild += int64(time.Since(tMirror))
-			if delta.complete {
-				s.walPruneApplied[delta.plan.owner] = delta.plan.EndThrough
-			}
-		}
-		stats.RangePrunes += chunkStats.RangePrunes
-		stats.RangePruned += chunkStats.RangePruned
 		stats.RowsWritten += chunkStats.RowsWritten
 		stats.RowsDeleted += chunkStats.RowsDeleted
 		stats.BytesWritten += chunkStats.BytesWritten
@@ -1617,7 +1386,6 @@ func (s *Store) commitChunks(ctx context.Context, writes, deletes []pendingRow, 
 	}
 	return samples, commitProgress{
 		writesDone: wi, deletesDone: di, writesTotal: len(writes), deletesTotal: len(deletes),
-		prunesDone: prunesDone, prunesTotal: prunesDone,
 	}, nil
 }
 
@@ -1628,12 +1396,10 @@ type commitProgress struct {
 	deletesDone  int
 	writesTotal  int
 	deletesTotal int
-	prunesDone   int
-	prunesTotal  int
 }
 
 func (p commitProgress) remaining() int {
-	return (p.writesTotal - p.writesDone) + (p.deletesTotal - p.deletesDone) + (p.prunesTotal - p.prunesDone)
+	return (p.writesTotal - p.writesDone) + (p.deletesTotal - p.deletesDone)
 }
 
 // runUnit 执行一个提交单元：BEGIN IMMEDIATE → body（写本单元的变更行、删本单元的陈旧行）
@@ -1775,11 +1541,6 @@ func scopeState(st State, owned map[string]struct{}) State {
 	for _, row := range st.Gaps {
 		if keep(row.Key) {
 			out.Gaps = append(out.Gaps, row)
-		}
-	}
-	for _, row := range st.WAL {
-		if keep(row.Key) {
-			out.WAL = append(out.WAL, row)
 		}
 	}
 	for _, row := range st.Batches {
@@ -2032,24 +1793,80 @@ func asBool(value any) bool {
 	}
 }
 
-// replayFlag 读 source_wal.replay 列（下标 7）。
+// dropLegacySourceWAL 幂等地删除已废弃的 `source_wal` 表（既有库兼容迁移），返回是否真的删了。
 //
-// 与 asBool 的区别只在**兼容旧库**：本列由 ACQ-1 新增（`ALTER TABLE ... ADD COLUMN`，
-// DEFAULT 0），迁移前的旧库该列可能不存在、读回来是 NULL（driver 给 nil）——此时按
-// 「非回放」处理，与旧数据零值语义一致（旧行全是常规采集条目 ✓）。
-func replayFlag(values []any) bool {
-	// 守卫下界必须与 appendRow 实际读取的最大下标一致（N-8，2026-10-12 修复）：
-	// appendRow 的 source_wal 分支读 values[8]（body）⇒ 合法行至少要 `replay` 列之后的 body 列。
-	// 此前守卫写 `<= 7`（只要求 8 列），比实际使用窄一列：若某天真出现 8 列的残行，
-	// 本函数不越界而同分支的 `asBytes(values[8])` 会 panic。当前不可达（loadColumns 恒 9 列），
-	// 但守卫与使用点对齐，"越界不可能"这条推理才成立。
-	//
-	// 用 `loadColumns` 的实际长度而非写死常量：列清单是单一真源（schema.go），
-	// 将来增删列时本守卫与使用点会一同对齐，不会各自漂移。
-	if len(values) < len(loadColumns[tblSourceWAL]) {
-		return false
+// 背景（2026-10-29）：WAL 改为**纯内存队列**（对齐 Filebeat `queue.mem` + registry 语义），
+// 队列内容不再跨重启恢复，可靠性改由「持久化的 position 水位 + 重启重读」承担（见
+// ingest/wal_reboot_replay.go 的 rollbackReadToReclaim）。于是这张表既没有读者也没有写者，
+// 只剩磁盘占用：生产实测 263MB body + 41MB 主键索引 = 索引库的 88%。
+//
+// 为什么必须在 Open 里做：`CREATE TABLE IF NOT EXISTS` 只建不删，而旧版本的 DDL 已经把它建
+// 在磁盘上了；不显式 DROP，既有生产库会永远拖着这 300MB 的空壳（表里现存的行也永远没人读）。
+// DROP TABLE 同时会连带删掉它上面的索引（含旧版本遗留的 idx_source_wal_key），
+// 因此不再需要单独的 DROP INDEX 维护项。
+//
+// 成本：DROP TABLE 是一次 schema 变更 + 把表占的页回收进 freelist，不重写其余表；
+// 20 万行级别实测在毫秒量级。它不在任何临界区内（Open 阶段、业务写入之前）。
+func dropLegacySourceWAL(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists bool
+	if err := db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_wal')").Scan(&exists); err != nil {
+		return false, fmt.Errorf("stateindex: 检查遗留 source_wal 表失败: %w", err)
 	}
-	return asBool(values[7])
+	if !exists {
+		return false, nil
+	}
+	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS source_wal"); err != nil {
+		return false, fmt.Errorf("stateindex: 删除遗留 source_wal 表失败: %w", err)
+	}
+	return true, nil
+}
+
+// Vacuum 执行一次 VACUUM，把空闲页归还文件系统（库文件真正变小）。
+//
+// 为什么**不**在 Open（启动路径）上自动跑：VACUUM 会对整个库加写锁并重建全库，
+// 临时需要约 2 倍磁盘空间，且耗时与库体积成正比——放在启动路径上就是一次无上限的停摆
+// （与历史事故“启动路径单线程、与规模成正比的持久化”同型）。
+//
+// 那 DROP TABLE 之后磁盘会不小？准确说是“回收进 freelist，文件不变小”：
+//   - SQLite 删表后把页加入 freelist，后续写入优先复用这些页 ⇒ 不会再因旧数据继续长；
+//   - 但文件不会自动回缩（SQLite 没有自动收缩机制），所以 263MB 会“白占”到下次显式 VACUUM。
+//
+// 因此本条只提供**显式入口**：由运维在停机/低峰时调用一次，或由离线维护命令驱动。
+// 判据不是“总是做”，而是“确实有大块空闲页”（freelist_count × 页大小）。
+func (s *Store) Vacuum(ctx context.Context) error {
+	if s == nil || s.db == nil || s.readOnly {
+		return errors.New("stateindex: 只读句柄不接受 VACUUM")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
+		return fmt.Errorf("stateindex: VACUUM 失败: %w", err)
+	}
+	return nil
+}
+
+// FreelistBytes 返回空闲页占用量（估计值：freelist_count × 页大小），用于判断是否值得 VACUUM。
+func (s *Store) FreelistBytes(ctx context.Context) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var pages, pageSize int64
+	if err := s.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&pages); err != nil {
+		return 0, fmt.Errorf("stateindex: 读取 freelist_count 失败: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return 0, fmt.Errorf("stateindex: 读取 page_size 失败: %w", err)
+	}
+	return pages * pageSize, nil
 }
 
 // addColumnIfMissing 按 PRAGMA table_info 幂等补列：SQLite 的 DDL 没有 ADD COLUMN IF NOT
@@ -2057,37 +1874,6 @@ func replayFlag(values []any) bool {
 //
 // 为什么不用「直接 ALTER 并忽略 duplicate column 错误」：那会把「列已存在」与「真错误」
 // 混为一谈，且错误串随 SQLite 版本漂移。查 table_info 是显式、可读、可测的判据。
-//
-// redundantIndexes 是本包确认与主键自动索引**完全重叠**、可安全丢弃的二级索引。
-//
-// 判据（缺一不可）：
-//   - 它的列是某张表主键的**严格前缀**（或与主键同列），因此 `sqlite_autoindex_*` 已经
-//     按同一列序建了索引，所有以它为前缀的查询都能改走主键索引；
-//   - 查询面上**实测**无退化：删后 `EXPLAIN QUERY PLAN` 对全部生产语句仍走索引、不落
-//     TEMP B-TREE（加载查询与范围剪枝谓词两条都要验）。
-//
-// 为什么值得做：rowid 表上每次 INSERT/UPDATE 要为**每一条**索引各写一棵 b-tree 条目。
-// 与主键前缀重复的那条索引是纯的写放大：行数越多、每次提交要写的页越多，而它换不来
-// 任何查询收益。gap 表当初已经按同样理由去掉了 idx_gap_key_resolved（见 specDDL 注释）；
-// source_wal 的 idx_source_wal_key 是遗漏的那一处。
-var redundantIndexes = []struct{ table, index string }{
-	{"source_wal", "idx_source_wal_key"},
-}
-
-// dropRedundantIndexes 幂等地丢弃 redundantIndexes 里的索引（既有库不会因为 DDL 改了
-// 而自动少一条索引，必须显式 DROP）。索引不存在时 DROP INDEX IF EXISTS 是空操作。
-//
-// 安全性：DROP INDEX 只改维护面，**不改任何一行的取值**，也不影响读一致性——
-// 唯一的代价是「本来能命中它的查询」要换一棵索引，而这正是上面判据要逐条实测的东西。
-func dropRedundantIndexes(ctx context.Context, db *sql.DB) error {
-	for _, target := range redundantIndexes {
-		if _, err := db.ExecContext(ctx, fmt.Sprintf("DROP INDEX IF EXISTS %s", target.index)); err != nil {
-			return fmt.Errorf("stateindex: 丢弃 %s 上的冗余索引 %s 失败: %w", target.table, target.index, err)
-		}
-	}
-	return nil
-}
-
 func addColumnIfMissing(ctx context.Context, db *sql.DB, table, column, def string) error {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
@@ -2228,23 +2014,6 @@ func appendRow(st *State, spec tableSpec, values []any) error {
 		})
 	case "source_aux":
 		st.Aux = append(st.Aux, AuxRow{Key: asText(values[0]), Config: asBytes(values[1]), Payload: asBytes(values[2])})
-	case "source_wal":
-		// 下标（loadColumns 顺序）：0 key / 1 seq / 2 event_id / 3 record_start / 4 record_end /
-		// 5 appended / 6 durable / 7 replay / 8 body / 9 ack_body_digest。
-		// fp 不在 loadColumns（单列指纹，见 tblSourceWAL）。
-		row := WALRow{Key: asText(values[0]), EventID: asText(values[2]), Appended: asBool(values[5]),
-			Durable: asBool(values[6]), Replay: replayFlag(values), Body: asBytes(values[8]),
-			AckBodyDigest: bytesAt(values, 9)}
-		if row.Seq, err = asUint64(values[1]); err != nil {
-			return err
-		}
-		if row.RecordStart, err = asUint64(values[3]); err != nil {
-			return err
-		}
-		if row.RecordEnd, err = asUint64(values[4]); err != nil {
-			return err
-		}
-		st.WAL = append(st.WAL, row)
 	case "delivery_batch":
 		row := BatchRow{Key: asText(values[0]), State: asText(values[4])}
 		if row.Ordinal, err = asInt64(values[1]); err != nil {
@@ -2294,13 +2063,12 @@ func (s *Store) Latency() (result Latency) {
 	// INGEST-3 修复：三个累计字段在持锁区内读——写入侧（ApplyScopedCtxRows）在 s.mu 内累加，
 	// 读写两侧不同锁 ⇒ -race 下构成数据竞争。
 	nsPlan := s.nsPlan
-	nsPrune := s.nsPrune
 	nsMirrorRebuild := s.nsMirrorRebuild
 	s.mu.Unlock()
 	if len(samples) == 0 {
 		// #67-C：无样本也要带上累计读数（否则"一个单元都没采到"时三段耗时全不可见 ✗）。
 		return Latency{
-			NsPlan: nsPlan, NsPrune: nsPrune, NsMirrorRebuild: nsMirrorRebuild,
+			NsPlan: nsPlan, NsMirrorRebuild: nsMirrorRebuild,
 			WALBytes: s.WALBytes(), CheckpointAttempts: s.ckptAttempts.Load(),
 			CheckpointBusy: s.ckptBusy.Load(), CheckpointTruncate: s.ckptTruncate.Load(),
 			ReadersInFlight: s.readersInFlight.Load(),
@@ -2341,7 +2109,6 @@ func (s *Store) Latency() (result Latency) {
 	result.P95 = percentile(durations, 0.95)
 	result.Max = max
 	result.NsPlan = nsPlan
-	result.NsPrune = nsPrune
 	result.NsMirrorRebuild = nsMirrorRebuild
 	result.WALBytes = s.WALBytes()
 	result.CheckpointAttempts = s.ckptAttempts.Load()

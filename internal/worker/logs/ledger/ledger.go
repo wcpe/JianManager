@@ -1164,6 +1164,40 @@ func (l *Ledger) AdvanceRead(key SourceKey, pos uint64) error {
 	return nil
 }
 
+// RollbackDurableToReclaim 把 durable_position **回退**到回收水位（2026-10-29）。
+//
+// ## 为什么需要这个“唯一允许回退”的例外
+//
+// `AdvanceDurable` 是同代次内**单调前进**的，这个不变量本身是对的：运行期 durable
+// 回退就意味着“已耐久”这件事被推翻。
+//
+// 但 WAL 改为**纯内存队列**后，“durable 与 WAL 行是同一个提交单元落库”这个前提没了——
+// 那些字节其实只在内存里，重启就没了。它在库里记录的那个 durable 位置不再对应任何
+// 可恢复的内容。因此**重启恢复期**必须把它退回去，才能让 tailer 重读那一段
+//（tailer 游标取 min(durable, read)，见 acquire/tailer.go）。
+//
+// ## 为什么是单独一个方法而不是放宽 AdvanceDurable
+//
+// 放宽它等于拆掉一条运行期不变量（任何误用都不再报错）。单独入口的语义是：
+// 只有重启恢复路径能回退，且目标只能是 **reclaim**（已被证明安全另存的边界），
+// 不是任意值。调用点唯一：ingest.rollbackReadToReclaim。
+func (l *Ledger) RollbackDurableToReclaim(key SourceKey) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok {
+		return
+	}
+	if e.Positions.Durable <= e.Positions.Reclaim {
+		return
+	}
+	e.Positions.Durable = e.Positions.Reclaim
+	l.touch(key)
+}
+
 // AdvanceDurable 推进 durable_position。同一 generation 内单调前进。
 func (l *Ledger) AdvanceDurable(key SourceKey, pos uint64) error {
 	l.mu.Lock()

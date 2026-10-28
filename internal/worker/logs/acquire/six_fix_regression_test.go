@@ -85,7 +85,7 @@ func TestSixFixPersistFailuresBlockEveryDrainUntilSuccess(t *testing.T) {
 			led2 := ledger.New()
 			require.NoError(t, led2.Restore(led.Snapshot()))
 			wal2 := NewWAL(led2, key)
-			require.NoError(t, wal2.Restore(wal.Snapshot()))
+			require.NoError(t, wal2.seedEntries(wal.Snapshot()))
 			p2 := NewPipeline(led2, key, wal2)
 			p2.SetDurablePersist(func() error {
 				persists++
@@ -165,7 +165,7 @@ func TestSixFixTruncationMappingSurvivesThreeStarts(t *testing.T) {
 		led := ledger.New()
 		require.NoError(t, led.Restore(tailer.led.Snapshot()))
 		wal := NewWAL(led, key)
-		require.NoError(t, wal.Restore(tailer.wal.Snapshot()))
+		require.NoError(t, wal.seedEntries(tailer.wal.Snapshot()))
 		tailer = NewFileTailer(led, key, tailer.path, wal, nil)
 		events, err := tailer.Poll()
 		require.NoError(t, err)
@@ -209,7 +209,7 @@ func TestSixFixOldSegmentFingerprintDoesNotInspectNewFile(t *testing.T) {
 		led2 := ledger.New()
 		require.NoError(t, led2.Restore(led.Snapshot()))
 		wal2 := NewWAL(led2, key)
-		require.NoError(t, wal2.Restore(wal.Snapshot()))
+		require.NoError(t, wal2.seedEntries(wal.Snapshot()))
 		tailer = NewFileTailer(led2, key, live, wal2, nil)
 		fresh := "fresh-after-restart\n"
 		appendBytes(t, live, []byte(fresh))

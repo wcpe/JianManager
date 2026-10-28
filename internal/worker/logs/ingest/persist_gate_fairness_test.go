@@ -13,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -81,18 +80,24 @@ func newGateFixture(t *testing.T, injected int, cycleRows int) (*Manager, string
 	const key = "inst:gate/g1"
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
-	identity := logtypes.SourceIdentity{LogSourceID: "inst:gate", SourceGeneration: "g1", ParserVersion: "v1"}
-	seed := make([]acquire.WALEntry, 0, injected)
+	// 长差异用**投递批次行**制造（2026-10-29 改）：原先靠注入 source_wal 行（2000 行 ×
+	// CycleMaxRows=16 ⇒ 100+ 步）。表删除后 WAL 条目不再产生索引行，那一套造不出长差异了——
+	// 而本文件的四条性质（长链下的有界完成 / FIFO / 优先权 / 老化）**全部依赖“一次落库装不下”**。
+	//
+	// 为什么选投递批次而不是缺口行（两个都试过）：
+	//   - 缺口行会被 ledger 自己的上界机制压掉——同因相邻会自动合并（gapMergeScanWindow），
+	//     超过 DefaultMaxUnresolvedGapsPerSource(64) 还会按原因折叠成 64 条 ⇒ 根本造不出 2000 行；
+	//   - 投递批次只有一条“水位以下才能裁”的约束，reclaim=0 时水位=0 ⇒ 一条都不裁，
+	//     多少条就多少行，且每次 RecordDelivery 都是一次真实账本写入（自动推修订号）。
+	// 而且它走的是同一条「按归属增量 + 切分续跑」落库路径，验证强度不变。
+	// injected=0 是“无长差异”的对照组（TestPersistGateCoalescedWaitersKeepFIFO 用它验证合并），
+	// 那里不需要也没必要造差异 ⇒ 跳过注入。
 	for i := 0; i < injected; i++ {
-		end := uint64(1_000_000 + i*10)
-		seed = append(seed, acquire.WALEntry{
-			Seq: uint64(i + 1),
-			Event: logtypes.BuildEvent(identity, logtypes.RecordRange{Start: end - 9, End: end},
-				"2026-09-22T10:00:00Z", "2026-09-22T10:00:00Z", "INFO", "stdout", fmt.Sprintf("gate %d", i)),
-			Appended: true, Durable: true,
-		})
+		require.NoError(t, pipe.Ledger().RecordDelivery(pipe.Key(),
+			uint64(i*10), uint64((i+1)*10), logtypes.DeliveryReplayRequired))
 	}
-	require.NoError(t, pipe.WAL().Restore(seed))
+	require.Len(t, pipe.Ledger().Get(pipe.Key()).DeliveryBatches, injected,
+		"夹具：必须真的有 %d 条待落库的批次行（被裁剪或折叠就失去判别力）", injected)
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "seed"))
 	require.NoError(t, pipe.Ledger().ResumeAcquire(pipe.Key()))
 	// **确定性收尾**（2026-10-03 实测的偶发红根因）：不 Stop 就交给 t.TempDir 清理 ⇒ 后台

@@ -30,8 +30,12 @@ func TestCapacityResumeLoopHealsPausedSource(t *testing.T) {
 	m.mu.Unlock()
 	require.NotNil(t, pipe, "夹具应已建立源管道")
 
-	// 造出**现场形态**：积压类暂停（积压本身已为零 ⇒ 恢复判定必须绑定"活着的读数"而非 Append ✗）。
-	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "wal backlog limit exceeded (entries=5/4)"))
+	// 造出**现场形态**：存量积压暂停（积压本身已为零 ⇒ 恢复判定必须绑定"活着的读数"而非 Append ✗）。
+	//
+	// 2026-10-29：积压闸已改为丢弃语义，本包不再产生新的积压暂停，但**存量库里仍有**旧二进制
+	// 写下的这种暂停（生产 10 个源就是此形态），`maybeResumeBacklogLocked` 负责它们。
+	// 这里就用那个存量原因造夹具——它才是这条收敛路径的真实输入。
+	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), legacyBacklogPauseReason))
 	require.True(t, pipe.Ledger().Get(pipe.Key()).AcquirePaused)
 
 	var mu sync.Mutex
@@ -40,21 +44,25 @@ func TestCapacityResumeLoopHealsPausedSource(t *testing.T) {
 	// 上限 12s（原 3s）：与后台全仓并发时 3s 偏紧 ⇒ 实测出现过一次负载敏感的偶发红 ✗（非实现缺陷 ✓）。
 	m.resumeInterval = 20 * time.Millisecond
 
+	// **无任何新 Append**，也不推进采集轮：只看向兜底环能不能自己解开它。
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go m.RunCapacityResumeLoop(ctx)
 
 	require.Eventually(t, func() bool {
-		mu.Lock()
-		n := probed
-		mu.Unlock()
-		return n > 0
-	}, 12*time.Second, 10*time.Millisecond, "兜底循环必须扫到积压类暂停的源（不得只在 Append 处重估 ✗）")
-
-	require.Eventually(t, func() bool {
 		got := pipe.Ledger().Get(pipe.Key())
 		return got != nil && !got.AcquirePaused
-	}, 12*time.Second, 10*time.Millisecond, "零积压的源必须被兜底恢复到活 ✓")
+	}, 12*time.Second, 10*time.Millisecond,
+		"无新 Append 的存量积压暂停必须被兜底环自行解除（不得只在 Append 处重估 ✗）")
+	require.Empty(t, pipe.Ledger().Get(pipe.Key()).PauseReason, "解除后不得残留暂停原因")
+	// 观测面：本路径必须真的走过兜底环（probe 是被测环的内部观测点）。
+	// 注意：存量积压暂停是被环内**轮动/回收步**（`reclaimStep0RollingOnly` → `maybeResumeBacklogLocked`）
+	// 解除的，而不是候选分支（它在候选门之前就跑了），所以 probe 这里本应为 0；用“环真的跑过”做观测面。
+	mu.Lock()
+	hits := probed
+	mu.Unlock()
+	require.Zero(t, hits, "存量积压暂停应在候选门之前就被环内的回收步解开")
+	require.Positive(t, m.ResumeSweepStats().SweepTicks, "必须是兜底环真实跑过才解开的，不是其它路径的副作用")
 
 	// 红线：非积压/容量类暂停不得被清除 ✓。
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "disk usage 95.0% >= 90.0%"))
@@ -62,6 +70,6 @@ func TestCapacityResumeLoopHealsPausedSource(t *testing.T) {
 	time.Sleep(120 * time.Millisecond) // 至少 5 个兜底周期
 	require.True(t, pipe.Ledger().Get(pipe.Key()).AcquirePaused, "非本包原因不得被容量兜底清除 ✗")
 	require.Equal(t, "disk usage 95.0% >= 90.0%", pipe.Ledger().Get(pipe.Key()).PauseReason)
-	require.True(t, acquire.IsBacklogPauseReason("wal backlog limit exceeded (entries=5/4)"))
+	require.True(t, acquire.IsBacklogPauseReason(legacyBacklogPauseReason))
 	require.False(t, acquire.IsBacklogPauseReason("disk usage 95.0% >= 90.0%"))
 }

@@ -29,9 +29,12 @@ func newTestStoreWithBudget(t *testing.T, budget CommitBudget) *Store {
 	return store
 }
 
-// chunkFixtureState 构造一份「行数足够触发切分」的期望状态：sources 个源、每源 walPerSource 条
-// WAL 行（行数主体）+ 根表行。与 fixtureState 的区别只在规模，形态一致。
-func chunkFixtureState(sources, walPerSource int) State {
+// chunkFixtureState 构造一份「行数足够触发切分」的期望状态：sources 个源、每源 gapsPerSource 条
+// gap 行（行数主体）+ 根表行。与 fixtureState 的区别只在规模，形态一致。
+//
+// 2026-10-29：原来用每源 walPerSource 条 source_wal 行做行数主体；那张表删掉后改用 gap 行——
+// gap 同样是「随单源数据量增长」的按归属增量表（scopedTables），刚好覆盖同一条路径。
+func chunkFixtureState(sources, gapsPerSource int) State {
 	var st State
 	for i := 0; i < sources; i++ {
 		key := fmt.Sprintf("node:%03d/g1", i)
@@ -49,12 +52,10 @@ func chunkFixtureState(sources, walPerSource int) State {
 			Key: key, Config: []byte(fmt.Sprintf(`{"log_source_id":"node:%03d"}`, i)),
 			Payload: []byte(`{"segments":[]}`),
 		})
-		for seq := 1; seq <= walPerSource; seq++ {
-			body := []byte(fmt.Sprintf(`{"event_id":"ev-%03d-%d","message":"line %d of node %03d"}`, i, seq, seq, i))
-			st.WAL = append(st.WAL, WALRow{
-				Key: key, Seq: uint64(seq), EventID: fmt.Sprintf("ev-%03d-%d", i, seq),
-				RecordStart: uint64(seq * 200), RecordEnd: uint64(seq*200 + 199),
-				Appended: true, Durable: true, Body: body, FP: fingerprint(body),
+		for n := 1; n <= gapsPerSource; n++ {
+			st.Gaps = append(st.Gaps, GapRow{
+				Key: key, ID: int64(n - 1), StartPos: uint64(n * 200), EndPos: uint64(n*200 + 199),
+				Reason: "PAUSED", Detail: fmt.Sprintf("gap %d of node %03d", n, i),
 			})
 		}
 		st.Batches = append(st.Batches, BatchRow{
@@ -106,7 +107,7 @@ func TestApplySplitsCommitsWithinRowBudget(t *testing.T) {
 		t.Fatalf("分位口径的最大单单元行数越界：%d > %d", latency.MaxRows, budget.MaxRows)
 	}
 	// 周期合计必须与全量行数一致：切分不得丢行、不得重复写行。
-	// 夹具行数 = 8×(source+position+projection+aux + 48 WAL + batch) + 1 instance = 425。
+	// 夹具行数 = 8×(source+position+projection+aux + 48 gap + batch) + 1 instance = 425。
 	if stats.RowsWritten != 425 {
 		t.Fatalf("全量写入应落 425 行，实测 %d", stats.RowsWritten)
 	}
@@ -140,7 +141,7 @@ func TestApplyChunkedMatchesUnchunked(t *testing.T) {
 	}
 	assertSameState(t, mustLoad(t, unchunked), mustLoad(t, chunked))
 
-	// 第二轮：增量（改一个源的游标/水位 + 追加两条 WAL + 新增一个缺口）。
+	// 第二轮：增量（改一个源的游标/水位 + 追加两条 gap 行 + 新增一个缺口）。
 	incremental := cloneState(base)
 	for index := range incremental.Positions {
 		if incremental.Positions[index].Key == "node:001/g1" {
@@ -149,16 +150,14 @@ func TestApplyChunkedMatchesUnchunked(t *testing.T) {
 			incremental.Positions[index].ReclaimPos += 4096
 		}
 	}
-	for seq := 13; seq <= 14; seq++ {
-		body := []byte(fmt.Sprintf(`{"event_id":"ev-001-%d","message":"appended %d"}`, seq, seq))
-		incremental.WAL = append(incremental.WAL, WALRow{
-			Key: "node:001/g1", Seq: uint64(seq), EventID: fmt.Sprintf("ev-001-%d", seq),
-			RecordStart: uint64(seq * 200), RecordEnd: uint64(seq*200 + 199),
-			Appended: true, Durable: true, Body: body, FP: fingerprint(body),
+	for n := 100; n <= 101; n++ {
+		incremental.Gaps = append(incremental.Gaps, GapRow{
+			Key: "node:001/g1", ID: int64(n), StartPos: uint64(n * 200), EndPos: uint64(n*200 + 199),
+			Reason: "PAUSED", Detail: fmt.Sprintf("appended %d", n),
 		})
 	}
 	incremental.Gaps = append(incremental.Gaps, GapRow{
-		Key: "node:001/g1", ID: 0, StartPos: 5000, EndPos: 5100, Reason: "PAUSED", Detail: "probe",
+		Key: "node:001/g1", ID: 102, StartPos: 5000, EndPos: 5100, Reason: "PAUSED", Detail: "probe",
 	})
 	if _, err := unchunked.Apply(incremental); err != nil {
 		t.Fatalf("不切分库增量写入失败: %v", err)
@@ -168,7 +167,7 @@ func TestApplyChunkedMatchesUnchunked(t *testing.T) {
 	}
 	assertSameState(t, mustLoad(t, unchunked), mustLoad(t, chunked))
 
-	// 第三轮：删除（裁掉最后一个源的根表行与其子行，并去掉一条 WAL 行）。
+	// 第三轮：删除（裁掉最后一个源的根表行与其子行，并去掉一条 gap 行）。
 	trimmed := cloneState(incremental)
 	trimmed.Sources = trimmed.Sources[:3]
 	trimmed.Positions = trimmed.Positions[:3]
@@ -176,14 +175,14 @@ func TestApplyChunkedMatchesUnchunked(t *testing.T) {
 	trimmed.Aux = trimmed.Aux[:3]
 	trimmed.Batches = trimmed.Batches[:3]
 	trimmed.Gaps = nil
-	var keptWAL []WALRow
-	for _, row := range trimmed.WAL {
-		if row.Key == "node:003/g1" || row.Seq == 13 {
+	var keptGaps []GapRow
+	for _, row := range incremental.Gaps {
+		if row.Key == "node:003/g1" || row.ID == 100 {
 			continue
 		}
-		keptWAL = append(keptWAL, row)
+		keptGaps = append(keptGaps, row)
 	}
-	trimmed.WAL = keptWAL
+	trimmed.Gaps = keptGaps
 	if _, err := unchunked.Apply(trimmed); err != nil {
 		t.Fatalf("不切分库删除轮失败: %v", err)
 	}
@@ -208,7 +207,7 @@ func TestApplyChunkedMatchesUnchunked(t *testing.T) {
 // 行数逐表相等（多值语句把值串位或漏删都会立刻暴露）。
 //
 // 它同时覆盖四种主键形态：单列（source/position/projection/source_aux）、两列（gap/
-// delivery_batch）、五列（source_wal）、非日志源归属（instance_binding 的 uuid）。
+// delivery_batch）、非日志源归属（instance_binding 的 uuid）。
 //
 // 转红说明：把 buildBatchDelete 的多列形态改成 `IN (VALUES ...)` 之外的写法（例如把主键列名
 // 与值错位）时会撞 SQL 错误或删错行；把单列形态错写成多列行值也会直接报语法错误。
@@ -233,7 +232,7 @@ func TestBatchDeleteRemovesExactlyTheMirroredRows(t *testing.T) {
 	// instance_binding 的归属是 uuid，单独取一行。
 	victimInstance := "uuid-1"
 	// 删除顺序：子表在前（外键约束）。
-	order := []int{tblDeliveryBatch, tblSourceWAL, tblSourceAux, tblInstanceBinding, tblProjection, tblGap, tblPosition, tblSource}
+	order := []int{tblDeliveryBatch, tblSourceAux, tblInstanceBinding, tblProjection, tblGap, tblPosition, tblSource}
 	expected := Counts{}
 	conn, err := store.db.Conn(context.Background())
 	if err != nil {
@@ -254,7 +253,7 @@ func TestBatchDeleteRemovesExactlyTheMirroredRows(t *testing.T) {
 			rows = append(rows, pendingRow{table: table, row: rowData{owner: owner, key: key}})
 		}
 		if len(rows) == 0 {
-			t.Fatalf("%s 在夹具里没有被删的行（用例必须覆盖全部八张表）", spec.name)
+			t.Fatalf("%s 在夹具里没有被删的行（用例必须覆盖全部七张表）", spec.name)
 		}
 		sort.Slice(rows, func(i, j int) bool { return rows[i].row.key < rows[j].row.key })
 		chunkStats := Stats{Written: map[string]int{}, Deleted: map[string]int{}}
@@ -282,8 +281,6 @@ func TestBatchDeleteRemovesExactlyTheMirroredRows(t *testing.T) {
 			expected.Instances = int64(chunkStats.RowsDeleted)
 		case tblSourceAux:
 			expected.Aux = int64(chunkStats.RowsDeleted)
-		case tblSourceWAL:
-			expected.WAL = int64(chunkStats.RowsDeleted)
 		case tblDeliveryBatch:
 			expected.Batches = int64(chunkStats.RowsDeleted)
 		}
@@ -303,13 +300,13 @@ func TestBatchDeleteRemovesExactlyTheMirroredRows(t *testing.T) {
 		Sources: before.Sources - after.Sources, Positions: before.Positions - after.Positions,
 		Gaps: before.Gaps - after.Gaps, Projections: before.Projections - after.Projections,
 		Instances: before.Instances - after.Instances, Aux: before.Aux - after.Aux,
-		WAL: before.WAL - after.WAL, Batches: before.Batches - after.Batches,
+		Batches: before.Batches - after.Batches,
 	}
 	if got != expected {
 		t.Fatalf("各表实际减少的行数必须与批量语句声明的行数逐表相等：\n期望 %+v\n实测 %+v", expected, got)
 	}
-	if expected.Sources == 0 || expected.WAL == 0 || expected.Positions == 0 {
-		t.Fatalf("夹具必须覆盖到根表与 WAL 行，实测 %+v", expected)
+	if expected.Sources == 0 || expected.Gaps == 0 || expected.Positions == 0 {
+		t.Fatalf("夹具必须覆盖到根表与按归属增量表（gap），实测 %+v", expected)
 	}
 }
 
@@ -331,7 +328,7 @@ func TestSingleCommitLatencyBoundedAtScale(t *testing.T) {
 	}
 	const rows = 13200
 	desired := chunkFixtureState(44, 300)
-	if total := len(desired.WAL) + len(desired.Sources)*5 + len(desired.Instances); total < rows-500 {
+	if total := len(desired.Gaps) + len(desired.Sources)*5 + len(desired.Instances); total < rows-500 {
 		t.Fatalf("夹具规模不足：实测约 %d 行", total)
 	}
 
@@ -382,7 +379,6 @@ func cloneState(st State) State {
 	out.Projections = append([]ProjectionRow(nil), st.Projections...)
 	out.Instances = append([]InstanceRow(nil), st.Instances...)
 	out.Aux = append([]AuxRow(nil), st.Aux...)
-	out.WAL = append([]WALRow(nil), st.WAL...)
 	out.Batches = append([]BatchRow(nil), st.Batches...)
 	return out
 }

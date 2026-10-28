@@ -108,23 +108,6 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 			},
 		})
 	}
-	for _, row := range st.WAL {
-		row := row
-		fp := WALFingerprint(row)
-		appendRow(tblSourceWAL, row.Key, rowData{
-			key: mirrorKey(row.Key, row.Seq, row.EventID, row.RecordStart, row.RecordEnd),
-			fp:  fp,
-			values: func() ([]any, error) {
-				// replay 列随 appended/durable 一起写入（ACQ-1）：回放归因落库后重启才不失效。
-				// ack_body_digest 同样随行进指纹（见 WALFingerprint：“是否已 ACK、ACK 的是哪份正文”
-				// 是该行的语义，不只影响是否重建）。
-				return []any{row.Key, toInt64(row.Seq), row.EventID, toInt64(row.RecordStart),
-					toInt64(row.RecordEnd), boolToInt(row.Appended), boolToInt(row.Durable),
-					boolToInt(row.Replay), nullableBytes(row.Body), int64(fp),
-					nullableBytes(row.AckBodyDigest)}, nil
-			},
-		})
-	}
 	for _, row := range st.Batches {
 		row := row
 		appendRow(tblDeliveryBatch, row.Key, rowData{
@@ -136,25 +119,6 @@ func planState(st State, nowUnixMilli int64) ([tableCount]map[string][]rowData, 
 		})
 	}
 	return plans, nil
-}
-
-// WALFingerprint 合成 source_wal 行的变更判据。
-//
-// 覆盖范围 = 该行除正文之外的全部列（序号、事件身份、标志、正文是否内联）+ 调用方给出的
-// 正文判据 FP。事件身份（EventID）由 log_source_id / source_generation / parser_version /
-// record 范围派生，因此同一身份下正文是否变化，完全由 FP 决定——调用方必须让 FP 覆盖正文的
-// 每个字段（ingest 侧的 walBodyFingerprint 覆盖 logtypes.Event 的全部 JSON 字段，并有
-// TestWALBodyFingerprintCoversEveryEventField 守着这一点）。
-func WALFingerprint(row WALRow) uint64 {
-	// Replay 也进指纹（ACQ-1）：它是该行语义的一部分（是否来自回放/补账），必须随"只写变更行"
-	// 的镜像差异被正确识别——否则同一条目由常规路径再次写入时，指纹相同 ⇒ 不更新 ⇒ 库里的
-	// 旧 replay 值被留下，与内存条目分裂。
-	//
-	// AckBodyDigest 同理（2026-10-28）：它记录「被 ACK 时那份正文」的摘要。
-	// 若不进指纹，一条已被 ACK 的条目在正文被原位改写后（回放替换）仍会因指纹相同而不重写
-	// ⇒ 库里留着旧摘要 ⇒ 重启后会把**新正文**当成已 ACK ⇒ 数据被剪掉（红线）。
-	return fingerprint(row.Seq, row.EventID, row.RecordStart, row.RecordEnd, row.Appended, row.Durable,
-		row.Replay, row.Body != nil, row.FP, nullableBytes(row.AckBodyDigest))
 }
 
 func boolToInt(v bool) int64 {
@@ -233,23 +197,10 @@ func Validate(st State) error {
 			return err
 		}
 	}
-	for _, row := range st.WAL {
-		if err := requireParent("source_wal", row.Key); err != nil {
-			return err
-		}
-	}
 	for _, row := range st.Batches {
 		if err := requireParent("delivery_batch", row.Key); err != nil {
 			return err
 		}
-	}
-	seenWAL := make(map[string]struct{}, len(st.WAL))
-	for _, row := range st.WAL {
-		key := mirrorKey(row.Key, row.Seq, row.EventID, row.RecordStart, row.RecordEnd)
-		if _, ok := seenWAL[key]; ok {
-			return fmt.Errorf("stateindex: source_wal 主键重复（同一源的 %d 号条目被登记两次）", row.Seq)
-		}
-		seenWAL[key] = struct{}{}
 	}
 	seenGap := make(map[string]struct{}, len(st.Gaps))
 	for _, row := range st.Gaps {

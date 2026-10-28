@@ -12,11 +12,15 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 )
 
-// 用生产映射与真实SQLite替换快照后再恢复采集器，避免只验证结构体相等。
-func indexReloadAcquire(t *testing.T, path string, key ledger.SourceKey, led *ledger.Ledger, wal *acquire.WAL) (*ledger.Ledger, *acquire.WAL) {
+// 用生产映射与真实 SQLite 替换**账本**快照后再恢复采集器，避免只验证结构体相等。
+//
+// 2026-10-29：WAL 改为纯内存队列后不再落盘，也没有从库恢复队列的路径。本 helper 因此只做
+// 账本的真库往返（账本才是持久化的真源）；返回的 WAL 是**空的新队列**——这正是新架构下
+// 重启后的真实形态（队列重启即丢，由 position 水位回退重读接替）。
+func indexReloadAcquire(t *testing.T, path string, key ledger.SourceKey, led *ledger.Ledger) (*ledger.Ledger, *acquire.WAL) {
 	t.Helper()
 	m := &Manager{}
-	rows, err := m.stateToIndexState(&persistedState{Sources: map[string]persistedSource{key.String(): {Ledger: led.Snapshot(), WAL: wal.Snapshot()}}})
+	rows, err := m.stateToIndexState(&persistedState{Sources: map[string]persistedSource{key.String(): {Ledger: led.Snapshot()}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,9 +60,6 @@ func indexReloadAcquire(t *testing.T, path string, key ledger.SourceKey, led *le
 		t.Fatal(err)
 	}
 	restoredWAL := acquire.NewWAL(restored, key)
-	if err := restoredWAL.Restore(saved.Sources[key.String()].WAL); err != nil {
-		t.Fatal(err)
-	}
 	return restored, restoredWAL
 }
 
@@ -85,7 +86,7 @@ func TestIndexOldPhysicalMappingRemainsUnknownAcrossThreePolls(t *testing.T) {
 		t.Fatal(err)
 	}
 	for round := 1; round <= 3; round++ {
-		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led, wal)
+		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led)
 		entry := led.Get(key)
 		if entry.Segments[0].PhysicalMappingKnown {
 			t.Fatalf("第%d次重开替旧数据伪造物理映射", round)
@@ -139,7 +140,7 @@ func TestIndexTruncatedPhysicalMappingActuallyPollsAfterThreeRestarts(t *testing
 		t.Fatalf("截断残留重读：%d %v", len(events), err)
 	}
 	for round := 1; round <= 3; round++ {
-		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led, wal)
+		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led)
 		tailer = acquire.NewFileTailer(led, key, path, wal, nil)
 		if events, err := tailer.Poll(); err != nil || len(events) != 0 {
 			t.Fatalf("第%d次SQLite重启残留前缀被重投：%d %v", round, len(events), err)
@@ -212,7 +213,7 @@ func TestIndexRotatedConfirmedFingerprintActuallyPollsAfterThreeRestarts(t *test
 		t.Fatal(err)
 	}
 	for round := 1; round <= 3; round++ {
-		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led, wal)
+		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led)
 		tailer = acquire.NewFileTailer(led, key, live, wal, nil)
 		f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0600)
 		if err != nil {

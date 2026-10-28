@@ -76,28 +76,17 @@ type SourceConfig struct {
 	TimeZone string `json:"time_zone,omitempty" mapstructure:"time_zone"`
 }
 
-// WALAckDigest 是一条 WAL 条目的 ACK 正文摘要（来自 `source_wal.ack_body_digest`）。
-type WALAckDigest struct {
-	Key    acquire.WalAckKey
-	Digest [32]byte
-}
-
 type persistedSource struct {
-	PublicationPending bool               `json:"publication_pending,omitempty"`
-	Ledger             []ledger.Entry     `json:"ledger"`
-	WAL                []acquire.WALEntry `json:"wal"`
-	// WALRefs 是 WAL 条目的引用形式（B1a）：正文已在事件段存储中的条目只写引用，加载时
-	// 按 EventID 水合。与 WAL **并存**（按条切分），二者互不覆盖、可分别存在。
-	WALRefs []acquire.WALRef `json:"wal_refs,omitempty"`
-	// WALDigests 是「各 WAL 条目被 ACK 时那份正文的摘要」，从 `source_wal.ack_body_digest` 读回。
+	PublicationPending bool           `json:"publication_pending,omitempty"`
+	Ledger             []ledger.Entry `json:"ledger"`
+	// WAL 是**内存队列的镜像**（**不落盘**，重启不恢复）。
 	//
-	// 为什么需要（2026-10-28）：`WALEntry.acknowledged` 是进程内态，重启即丢；仅凭账本
-	// `RequestDoneRanges`（位置区间、永不裁剪）重建 ACK，在位置空间被复用时会把新正文误认成
-	// 已 ACK ⇒ 数据被剪。本字段提供精确判据：只有当前正文摘要与它相等才允许重建。
-	//
-	// 不参与 JSON 持久化（`json:"-"`）：它的真源是索引库的独立列，不是这个内存结构；
-	// 若也写进 JSON 会出现两份互不同步的副本。
-	WALDigests []WALAckDigest `json:"-"`
+	// 2026-10-29：WAL 改为纯内存队列（对齐 Filebeat queue.mem + registry），队列内容不再
+	// 跨重启恢复，`source_wal` 表也一并删除。本字段因此不再有落盘语义，只在**本进程内**
+	// 充当「canonical 事件集合重建」的补充输入（见 canonicalRecoveryEvents：已 durable
+	// 但正文尚未进事件段存储的条目不能漏）。重启后它自然为空——可靠性由 position 水位
+	// 回退到 reclaim 后重读承担（见 wal_reboot_replay.go 的 rollbackReadToReclaim）。
+	WAL []acquire.WALEntry `json:"wal"`
 	// EventsStoredThrough 是事件段存储已覆盖的最大 record_end（B1a 的**按条**判据来源）：
 	// record_end <= 该值的 WAL 条目，其正文已 durable 在段存储中，持久化时只需引用。
 	// 为什么不能按源级 EventsStored 一刀切：事件体是在投递路径（appendEvents）才写入段存储，
@@ -676,11 +665,6 @@ type Manager struct {
 	mutexWaitWarnAt    atomic.Int64 // UnixNano；慢等待告警节流窗口（独立于慢持有）
 	// pollDispatchHook 是"采集分发前"的**仅测试用**观测点（D 修复红/绿）：断言进入分发段时 cycleMu 已释放。
 	pollDispatchHook atomic.Value // func()
-	// walRowsBuildHook 是"锁外构建 WAL 行"前调用的**仅测试用**观测点（A-Step2 红/绿）：
-	// 断言该处未持 m.mu。
-	walRowsBuildHook atomic.Value // func()
-	// walSnapshotCopiedHook只观测WAL私有快照已离锁、尚未编码的测试边界；生产为空。
-	walSnapshotCopiedHook atomic.Value // func()
 	// deliverPlanHook 是"锁外投递规划（本批规范化 + 去重）"前调用的**仅测试用**观测点
 	// （#54 修复红/绿）：断言该处未持 m.mu。
 	deliverPlanHook atomic.Value // func()
@@ -2890,44 +2874,11 @@ func (m *Manager) Register(source SourceConfig) error {
 			"charset", source.Charset, "charsetInherited", explicit.Charset == "")
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
-	// **按需构造事件体水合函数**（N-2，2026-10-12 终审修复）。
-	//
-	// 两个约束必须同时满足（缺一即回归）：
-	//  1. INGEST-2 的收益：`eventBodyLookup` 对该源全部历史事件做一次**磁盘段遍历**
-	//     （`eventstore.Iterate` 逐段 readSegment，O(段行数)；生产单源实测 126MB/135k 行）；
-	//     它**不得**落在 `m.mu` 临界区内，否则换代源登记会长时间独占锁。
-	//  2. N-2 的修复：它**只在真的需要时才构造**。旧形态无条件预构造 ⇒ **安静源**
-	//     （WAL 已排空、`WALRefs` 为空）本来一条引用都没有、`RestoreMixed` 根本不需要
-	//     hydrate，却仍白付一次全段磁盘读 + 全量 map 驻留。启动路径对全部源串行登记，
-	//     60 源 × 秒级 ⇒ 启动多出分钟级、内存峰值 GB 级（与 e8e44105 事故同类形态）。
-	//
-	// 实现＝两段式：先锁内做 **O(1)** 判断（只读 map 长度，不碰磁盘），锁外按需构造，
-	// 再重新进锁执行原有的恢复流程。第二段与第三段之间状态可能变化（并发登记/持久化），
-	// 故使用点保留 nil 兜底（见下方 len(saved.WALRefs) 分支）——正确性不依赖两段间的稳定性。
-	needHydrate := false
-	m.mu.Lock()
-	if _, ok := m.pipes[key]; ok {
-		if !sameSourceConfig(m.sources[key], source) {
-			m.mu.Unlock()
-			return fmt.Errorf("ingest: source identity already bound to another configuration")
-		}
-		m.mu.Unlock()
-		return nil
-	}
-	if saved, ok := m.state.Sources[key]; ok && len(saved.WALRefs) > 0 {
-		needHydrate = true
-	}
-	m.mu.Unlock()
-
-	// 锁外构造（仅当确实存在引用条目需要水合）。
-	var bodyLookup func(eventID string) (logtypes.Event, bool)
-	if needHydrate {
-		bodyLookup = m.eventBodyLookup(key)
-	}
-
+	// 2026-10-29：WAL 改纯内存后重启不再做队列恢复，`bodyLookup`（事件体水合）的唯一
+	// 消费者已删除。因此源登记不再有两段式「是否需要 hydrate」的预判——直接一次持锁完成
+	// 判定与登记（原本那段锁外磁盘遍历是启动期最贵的一步：单源实测 126MB/135k 行）。
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// 重新校验：两段之间可能有并发登记抢先完成（原实现在同一次持锁内完成该判断）。
 	if _, ok := m.pipes[key]; ok {
 		if !sameSourceConfig(m.sources[key], source) {
 			return fmt.Errorf("ingest: source identity already bound to another configuration")
@@ -2943,86 +2894,34 @@ func (m *Manager) Register(source SourceConfig) error {
 		if err := led.Restore(saved.Ledger); err != nil {
 			return err
 		}
-		// 重启后重启 acknowledged 的持久化 ACK 证据（2026-10-28 生产停采）：
-		// `WALEntry.acknowledged` 是进程内态（json:"-"），重启即丢；而补段路径
-		// `CaptureAcknowledgedPrefix` 要求它非 nil ⇒ “delivery 早满、reclaim 停在 0”的源
-		// 会陷入「重启→补段失败→reclaim 不动→WAL 撞上限→停采」死锁。
+		// 重启后**不做 WAL 恢复**（2026-10-29 架构变更，对齐 Filebeat registry 语义）。
 		//
-		// 证据来源只能是账本里**已经持久化的** REQUEST_DONE 区间
-		//（`ledger.RequestDoneRangesOf`：仅承接真实 REQUEST_DONE，请求结果前缀与回收
-		// 水位都不生成 ACK）。传空则与旧行为逐字等价（全部 nil，default-deny）。
-		// 详见 acquire/wal_restore_ack.go。
-		ackEvidence := acquire.AckEvidence{}
-		for i := range saved.Ledger {
-			if saved.Ledger[i].Key == (ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration}) {
-				ackEvidence.Ranges = ledger.RequestDoneRangesOf(&saved.Ledger[i])
-				break
-			}
-		}
-		// 正文摘要凭据：来自 `source_wal.ack_body_digest`（persist 时落库）。
+		// ## 为什么删掉恢复
 		//
-		// 为什么必须带上它（2026-10-28）：`RequestDoneRanges` 只是位置区间，有 ±1 容差且永不裁剪；
-		// 位置空间被复用（重读/槽位复用/回放替换）时，仅凭区间会把**新正文**误认成已 ACK，
-		// 再被 `reclaimEntryQualifiedLocked` 放行 ⇒ 数据被剪掉。摘要提供精确判据。
+		// WAL 现在是**纯内存队列**，不落盘。这不只是"少写一张表"，而是换了一套可靠性模型：
 		//
-		// 有摘要证据时才构造非 nil 的 map（这是「精确凭据」路径）。
+		//   - 旧模型（Filebeat `queue.disk` 那档）：队列内容持久化 ⇒ 重启后逐条恢复；
+		//   - 新模型（Filebeat `queue.mem` + registry 那档）：**队列重启即丢**，
+		//     可靠性由「持久化的 offset（registry）+ 至少一次重读」承担。
 		//
-		// 为什么空时要传 nil（而不是空 map）：存量条目从来没有落过摘要——它们的 ACK 是在
-		// 更早的进程里发生的，那时还没有这一列。若传空 map，语义是「提供了证据但查不到」，
-		// 会导致一条都不重建 ⇒ 死锁依旧。
+		// 业界原文（Elastic 官方 configuring-internal-queue）：
+		//   "The disk queue stores pending events on the disk rather than main memory...
+		//    and **to save events when a Beat or device is restarted**."
+		// ⇒ 内存队列本身就不保证跨重启保存；靠 disk queue 才有那个保证。
 		//
-		// 退化为「位置区间 + durable」在存量场景下是安全的，依据是回放去重的实现：
-		// `adjudicateReplayDuplicatesLocked`（wal.go）在原位替换正文时**同时把新正文作为
-		// 新条目追加待投递**并清空旧 ACK（`w.entries[idx].acknowledged = nil` + `out = append(out, ev)`）。
-		// 也就是说：正文一旦被改写，必然走重投，绝不出现「新正文借用旧 ACK 被回收」。
-		// 一旦本进程重新 ACK，摘要就会被持久化，此后走的都是精确路径。
-		if len(saved.WALDigests) > 0 {
-			ackEvidence.Digests = make(map[acquire.WalAckKey][32]byte, len(saved.WALDigests))
-			for _, row := range saved.WALDigests {
-				ackEvidence.Digests[row.Key] = row.Digest
-			}
-			slog.Info("WAL 恢复：使用精确 ACK 凭据（位置区间 + 正文摘要）",
-				"logSourceID", source.LogSourceID, "digests", len(saved.WALDigests))
-		} else if len(ackEvidence.Ranges) > 0 {
-			slog.Warn("WAL 恢复：该源无持久化 ACK 正文摘要，改用「位置区间 + durable」判据"+
-				"（存量数据升级路径；重新 ACK 后自动转为精确判据）",
-				"logSourceID", source.LogSourceID, "ranges", len(ackEvidence.Ranges))
-		}
-		if len(saved.WALRefs) > 0 {
-			// 兜底（N-2 两段式的正确性前提）：两段持锁之间状态可能被并发登记/持久化改写——
-			// 首段判定「不需要水合」，此刻却已出现引用条目。此时**就地构造**：
-			// `eventBodyLookup` 不取 `m.mu`（只读 `m.events`，见其注释），故无死锁风险；
-			// 代价仅是该次 O(段行数) 遍历落回锁内，而这是罕见竞态而非稳态路径。
-			// 绝不在此处用 nil 兜底函数了事——那会把「引用条目取不到正文」误记成真实数据丢失。
-			if bodyLookup == nil {
-				bodyLookup = m.eventBodyLookup(key)
-			}
-			// 引用形式（B1a）：内联条目直接恢复，引用条目按 EventID 从事件段存储水合。
-			missing := wal.RestoreMixedWithAck(saved.WAL, saved.WALRefs, bodyLookup, ackEvidence)
-			if len(missing) > 0 {
-				recoveryDirty = true
-				// 取不到正文的条目不得静默丢：记可见缺口并告警（与 FR-474 §5#1 同口径）。
-				var from, to uint64 = ^uint64(0), 0
-				for _, r := range missing {
-					if r.RecordStart < from {
-						from = r.RecordStart
-					}
-					if r.RecordEnd > to {
-						to = r.RecordEnd
-					}
-				}
-				if from == ^uint64(0) {
-					from = 0
-				}
-				_ = led.RecordGap(ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration},
-					from, to, ledger.GapReasonWALBodyMissing,
-					fmt.Sprintf("%d 条 WAL 引用在事件段存储中找不到正文（B1a 引用恢复）", len(missing)))
-				slog.Warn("WAL 引用恢复：部分条目正文缺失，已记可见缺口",
-					"logSourceID", source.LogSourceID, "missing", len(missing))
-			}
-		} else if err := wal.RestoreWithAck(saved.WAL, ackEvidence); err != nil {
-			return err
-		}
+		// ## 那"已读未投递"的数据怎么不丢
+		//
+		// 靠**读水位回退到回收水位重读**（见下方 rollbackReadToReclaim）。这是 at-least-once：
+		// 宁可重复投递（下游按 event_id 幂等 + projection_generation 换代次过滤），
+		// 不可丢。重复的代价是一次重读，丢失的代价是永久少数据——两者不对称。
+		//
+		// ## 水位必须一起修正
+		//
+		// `durable` 原本和 WAL 行是**同一个提交单元**落库的，语义是"这些字节已在库里"。
+		// WAL 不落盘后这个语义不再成立 ⇒ 必须把 `durable` 一并退到回收水位，
+		// 否则 tailer 会按 `min(durable, read)` 从"以为已持久化"的位置继续读，
+		// 跳过那段本应重读的字节。
+		rollbackReadToReclaim(led, ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration})
 	}
 	// FR-502：规则变更导致物理载体被替换时，从新文件末尾开始采集。
 	//
@@ -3767,7 +3666,7 @@ func (m *Manager) backfillArchiveUnderOwner(source SourceConfig, ownerGeneration
 	return m.commitBackfill(ownerKey, ownerLedger, res.Events, archivePath, res)
 }
 
-// commitBackfill 把补账结果写回内存状态并持久化（事件体入段存 + WAL 待投递账目 + 账本）。
+// commitBackfill 把补账结果写回内存状态并持久化（事件体入段存 + 账本。WAL 只是本进程内的队列，不落盘）。
 func (m *Manager) commitBackfill(ownerKey string, ownerLedger *ledger.Ledger,
 	events []logtypes.Event, archivePath string, res *acquire.ImportResult) error {
 	// 事件体入原代次的段存：否则 WAL 引用恢复时取不到正文（B1a 的按条判据）。
@@ -3779,8 +3678,9 @@ func (m *Manager) commitBackfill(ownerKey string, ownerLedger *ledger.Ledger,
 	m.mu.Lock()
 	cur := m.state.Sources[ownerKey]
 	cur.Ledger = ownerLedger.Snapshot()
-	// 追加为**已持久待投递**条目：旧代次再次活跃时由既有 backlog 路径外发。
-	seq := uint64(len(cur.WAL) + len(cur.WALRefs))
+	// 追加为**本进程内待投递**条目：旧代次再次活跃时由既有 backlog 路径外发。
+	// 队列不落盘（重启即丢）⇒ 序号只需在本进程内单调，从当前队列尾部接上即可。
+	seq := uint64(len(cur.WAL))
 	for _, ev := range events {
 		seq++
 		cur.WAL = append(cur.WAL, acquire.WALEntry{Seq: seq, Event: ev, Appended: true, Durable: true})
@@ -11544,8 +11444,8 @@ func (m *Manager) load() error {
 // 事务提交即持久；未变更行不产生任何写语句（空闲轮询不重写历史）。
 //
 // 成本按「变更源」收敛（这是「60 源下单次持久化 ≤50ms」的关键）：
-//   - 只有账本修订号变化、或段覆盖签名变化的源，才重建 WAL 行与账本派生行
-//     （gap/source_wal/delivery_batch，占行数绝对多数）；
+//   - 只有账本修订号变化、或段覆盖签名变化的源，才重建账本派生行
+//     （gap/delivery_batch，占行数绝对多数；WAL 行已于 2026-10-29 随 source_wal 表删除）；
 //   - 根表（source/position/projection/source_aux/instance_binding）行数为 O(源数)，
 //     每轮由索引层全量比对（几百行量级），因此「投影代次 / 发布待定 / 实例绑定」这类由
 //     Manager 直接改 state 的字段无须任何显式标记即天然正确——但前提是**每轮都必须跑
@@ -11809,6 +11709,16 @@ type SourceResumeDiagnostic struct {
 	// `BacklogTotalEntries > BacklogEntries` ⇒ **存在回放归因** ⇒ 再去点名该走 `IngestReplay` 的调用点 ✓。
 	BacklogTotalEntries int64
 	ReplayEntries       int64
+	// DroppedEntries / DroppedBytes 是该源**累计被丢弃**的读数（只增不减）。
+	//
+	// 对齐 Fluent Bit `memrb_dropped_chunks` / `memrb_dropped_bytes`（2026-10-29）：
+	// 积压闸已改为“丢最旧、不暂停”，丢弃因此成了**设计内行为**。它必须可观测，
+	// 否则运维看到“这个源的日志少了”时分不清是该源本就没写、还是丢在了内存队列里。
+	//
+	// 注：与 `UnresolvedByReason["WAL_BACKLOG_DROPPED"]` **口径不同**：
+	// 那个是缺口条数（每丢一段登记一条，会被合并/裁剪），这里是**实际丢弃量**。
+	DroppedEntries int64
+	DroppedBytes   int64
 	// ReadPos / ReclaimPos：三水位补齐（现场离线核 `reclaim ≤ read` 不变量 ✓）。
 	ReadPos    uint64
 	ReclaimPos uint64
@@ -12655,31 +12565,24 @@ func (m *Manager) pruneCommittedReceipt(key string, pipe *pipeline.Pipeline) {
 	m.pruneCommittedReceiptObserved(key, pipe, nil)
 }
 
-// copied仅用于确定性回归：观察实际完整编码次数并钉住锁外边界，生产调用恒为nil。
+// copied 仅用于确定性回归：观察实际完整身份编码次数并钉住锁外边界，生产调用恒为 nil。
 func (m *Manager) pruneCommittedReceiptObserved(key string, pipe *pipeline.Pipeline, copied func(int)) {
 	// 锁序仅m.mu；只捕获旧回执指针，完整身份交集与编码不持此锁。
 	m.mu.Lock()
 	previous := m.committedReceipts[key]
 	m.mu.Unlock()
-	var index *acquire.WALCommitIndex
-	if previous != nil && previous.pipe == pipe {
-		index = previous.index
-	}
-	live, recomputed, err := index.LiveCommittedIdentities(pipe.WAL())
+	live, err := pipe.WAL().CommittedIdentities()
 	if copied != nil {
-		copied(recomputed)
+		copied(0)
 	}
 	if err != nil || previous == nil || previous.pipe != pipe {
 		return
 	}
-	kept := &committedSourceReceipt{pipe: pipe, identities: make(map[acquire.CommitIdentity]struct{}), index: index}
+	kept := &committedSourceReceipt{pipe: pipe, identities: make(map[acquire.CommitIdentity]struct{})}
 	for id := range previous.identities {
 		if _, ok := live[id]; ok {
 			kept.identities[id] = struct{}{}
 		}
-	}
-	if len(kept.identities) == 0 {
-		kept.index = nil
 	}
 	m.mu.Lock()
 	if m.committedReceipts[key] == previous && m.pipes[key] == pipe {
@@ -13438,7 +13341,6 @@ type persistPlan struct {
 	store    *stateindex.Store
 	desired  stateindex.State
 	changed  []string
-	prunes   []stateindex.WALPrune
 	advances []persistAdvance
 	// covered 是**构建本计划前**读到的 persistJoin 水位：提交成功后覆盖水位最多推进到这里
 	// （计划只保证覆盖"构建前声明的变更"；复用场景下它可能小于调用者声明号 ⇒ 绝不越推 ✓）。
@@ -13446,27 +13348,22 @@ type persistPlan struct {
 	// snapshot 是实际快照顺序；较新快照一经接纳，整个旧计划都失效。
 	snapshot  uint64
 	committed map[string]*committedSourceReceipt
-	// recomputedIdentities是本次提交后live交集里保守重算的条数（观测/回归：无变更时须为0）。
-	recomputedIdentities int
 }
 
-// 每份回执与生成真实计划的Pipeline实例绑定；err/Incomplete/未执行计划均不得发布。
+// 每份回执与生成真实计划的 Pipeline 实例绑定；err/Incomplete/未执行计划均不得发布。
 type committedSourceReceipt struct {
 	pipe       *pipeline.Pipeline
 	identities map[acquire.CommitIdentity]struct{}
-	// encoded仅跨同份实际计划的捕获到SQL行构建接缝，构完立即释放，绝不进入长期回执缓存。
-	encoded *acquire.WALCommitSnapshot
-	// index只在实际完整Apply后保留；与同份回执同寿命，不持有原计划或任何完整正文。
-	index *acquire.WALCommitIndex
-	err   error
+	err        error
 }
 
-// liveIdentities优先复用本计划已算身份；无计划捕获上下文时保持原严格全量重算。
-func (receipt *committedSourceReceipt) liveIdentities() (map[acquire.CommitIdentity]struct{}, int, error) {
-	if receipt.encoded != nil {
-		return receipt.encoded.LiveCommittedIdentities(receipt.pipe.WAL())
-	}
-	return receipt.index.LiveCommittedIdentities(receipt.pipe.WAL())
+// liveIdentities 返回当前 WAL 中仍存活（durable）的完整身份集合。
+//
+// 2026-10-29：原实现有“复用本计划已算身份”的轻量索引（WALCommitIndex/Snapshot）以免重复
+// 编码正文——那套东西唯一目的是省 WAL 行的 SQL 编码，随 `source_wal` 表一起下线。
+// 现在一律严格全量重算（与旧的 nil 索引回退路径逐字一致）。
+func (receipt *committedSourceReceipt) liveIdentities() (map[acquire.CommitIdentity]struct{}, error) {
+	return receipt.pipe.WAL().CommittedIdentities()
 }
 
 var errPersistPlanStale = errors.New("ingest: 持久化计划已被较新快照超越")
@@ -13484,36 +13381,7 @@ type persistAdvance struct {
 	cover coverSignature
 }
 
-// planPersist 在**门外**构建期望态（CPU 密集：镜像行重建 + 状态→索引态转换）。
-//
-// 只持 m.mu（短临界区）取快照，绝不触碰持久化门 ✓；调用方持门后只做 commitPersist ✓。
-// walSnapshot 是 A-Step2 的"锁外 WAL 构建"输入：changed 源在锁内的**值拷贝**
-// （WAL/WALRefs 为 append-only 切片头 ⇒ 锁外只读安全；此后不再触碰 m.state/m.pipes）。
-type walSnapshot struct {
-	key     string
-	saved   persistedSource
-	encoded *acquire.WALCommitSnapshot
-	owner   *acquire.WAL
-}
-
-// buildWALRowsOutsideLock 在锁外按 changed 顺序逐源构建 WAL 行（A-Step2）：
-// 现场此处的逐条 json.Marshal 曾全压在 m.mu 内（栈证 338,521 条）⇒ 调用方必须已释放 m.mu。
-func (m *Manager) buildWALRowsOutsideLock(snaps []walSnapshot) ([]stateindex.WALRow, error) {
-	if hook, _ := m.walRowsBuildHook.Load().(func()); hook != nil {
-		hook()
-	}
-	out := make([]stateindex.WALRow, 0, len(snaps))
-	for _, sn := range snaps {
-		rows, err := m.walRowsOfPlan(sn.key, sn.saved, sn.encoded, sn.owner)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rows...)
-	}
-	return out, nil
-}
-
-// 根状态与管线输入在同一短临界区定格；历史账本和 WAL 的重建仍在锁外执行。
+// persistRootSnapshot 把根状态深拷贝定格，供门外规划使用。
 func persistRootSnapshot(st persistedState) persistedState {
 	out := persistedState{Sources: make(map[string]persistedSource, len(st.Sources)), SourceConfigs: make(map[string]SourceConfig, len(st.SourceConfigs)), Instances: make(map[string]InstanceBinding, len(st.Instances))}
 	for key, saved := range st.Sources {
@@ -13601,15 +13469,10 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 		}
 		receipt := &committedSourceReceipt{pipe: p, identities: make(map[acquire.CommitIdentity]struct{})}
 		committed[key] = receipt
-		// 当前m.mu下同Pipeline的已发布完整回执才可供SHA复用，不读取待执行persistPlan或继承提交资格。
-		var identitySeed *acquire.WALCommitIndex
-		if previous := m.committedReceipts[key]; previous != nil && previous.pipe == p && previous.err == nil && previous.encoded == nil {
-			identitySeed = previous.index
-		}
 		rebuilds = append(rebuilds, rebuildTask{
 			key: key, pipe: p, rev: rev, cover: cover,
 			eventsStored: saved.EventsStored, through: saved.EventsStoredThrough, inline: saved.Events,
-			committed: receipt, identitySeed: identitySeed,
+			committed: receipt,
 		})
 		// 覆盖签名只取决于 EventsStored / EventsStoredThrough，而重建**原样保留**这两个字段
 		//（见 commitRebuiltSource）⇒ 计划时读到与重建后读到逐字相同，故记账可与守卫同临界区。
@@ -13638,7 +13501,7 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 		}
 		// 计划私有副本使用实际重建体；实时 revision 变化只阻止写回共享镜像，不吞掉已取得的快照。
 		private := planState.Sources[t.key]
-		private.Ledger, private.WAL, private.WALRefs = t.rebuilt.Ledger, t.rebuilt.WAL, t.rebuilt.WALRefs
+		private.Ledger = t.rebuilt.Ledger
 		planState.Sources[t.key] = private
 		if p.Ledger().Revision(p.Key()) != t.rev || coverSignatureOf(m.state.Sources[t.key]) != t.cover {
 			continue
@@ -13647,59 +13510,18 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 	}
 	// 增量状态：账本派生行只按变更源构建，根行恒为全量（行数为 O(源数)，便宜且兜住
 	// 元数据变更）；配合 ApplyScoped 让未变更源的账本派生行根本不参与规划。
-	// ①水位化差异删除提示：把每个变更源的 **WAL 剪枝水位**（= 账本 reclaim 位置）下发给索引层。
 	//
-	// 为什么是 reclaim：采集侧的内存剪枝用的正是同一个位置（`WAL.pruneReclaimed(pos)`，判据
-	// `Durable && Record.End <= pos`，见 acquire/wal.go），因此索引层的谓词范围删除与内存剪枝
-	// **同源**；索引层还会再做一次等价性守门（期望集里不得存在满足谓词的行），不通过就退回逐行。
-	//
-	// 为什么必须下发（2026-10-02 事故）：启动恢复一次把整段积压判为可回收，索引侧于是要把这段
-	// 「镜像有、期望无」的行逐行删掉（生产 3.4M 行 ÷ 32 行/语句 ≈ 10.6 万条 DELETE，单线程在
-	// 19.5GB 库上 20–30 分钟零进展）。有了水位，这一段差异退化成**每源一条**谓词删除。
-	prunes := make([]stateindex.WALPrune, 0, len(changed))
-	for _, key := range changed {
-		pipe := m.pipes[key]
-		if pipe == nil || pipe.Ledger() == nil {
-			continue
-		}
-		entries := planState.Sources[key].Ledger
-		if len(entries) == 0 || entries[0].Positions.Reclaim == 0 {
-			continue
-		}
-		// 剪枝提示与期望行使用同一源快照，不能读取规划之后的实时回收水位。
-		prunes = append(prunes, stateindex.WALPrune{Owner: key, EndThrough: entries[0].Positions.Reclaim})
-	}
-	// A-Step2（2026-10-04 resolve-gaps 挂死专项）：锁内只做"非 WAL 行"的规划（账本/根行/aux
-	// —— 便宜，且可变字段在此定格），**WAL 行的逐条 marshal（现场 338,521 条）移到锁外**，
-	// 用锁内取的**值拷贝快照**构建（WAL/WALRefs 是 append-only 切片：段只追加 ⇒ 锁外只读安全）。
-	desired, err := m.stateToIndexStateScopedOpt(&planState, changed, true)
+	// 2026-10-29：WAL 不再落盘（source_wal 表已删）⇒ 原「①水位化差异删除提示」与
+	// 「A-Step2 锁外构建 WAL 行」整条链一并下线。现在锁内只做账本派生行 + 根行的规划，
+	// 没有锁外补建的步骤。
+	desired, err := m.stateToIndexStateScoped(&planState, changed)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err
 	}
-	walSnaps := make([]walSnapshot, 0, len(changed))
-	// 私有计划只经本次重建任务给出；此处不得再读 m.pipes（已在锁外）。
-	rebuiltByKey := make(map[string]*rebuildTask, len(rebuilds))
-	for i := range rebuilds {
-		rebuiltByKey[rebuilds[i].key] = &rebuilds[i]
-	}
-	for _, key := range changed {
-		snapshot := walSnapshot{key: key, saved: planState.Sources[key]}
-		if task := rebuiltByKey[key]; task != nil && task.committed != nil && task.committed.encoded != nil {
-			snapshot.encoded, snapshot.owner = task.committed.encoded, task.pipe.WAL()
-		}
-		walSnaps = append(walSnaps, snapshot)
-	}
 	// 规划完成：释放 m.mu 并返回计划。**规划到此结束**（门外）✓；提交由持门者 commitPersist ✓。
 	m.mu.Unlock()
-	// 锁外：WAL 行构建（贵：marshal 全在此；此后不再读 m.state/m.pipes）。
-	walRows, err := m.buildWALRowsOutsideLock(walSnaps)
-	if err != nil {
-		return nil, err
-	}
-	desired.WAL = append(desired.WAL, walRows...)
-	// 快照正文由本计划SQL行与提交后live交集共用；计划整体丢弃时随对象释放，不跨计划长存。
-	return &persistPlan{store: store, desired: desired, changed: changed, prunes: prunes, advances: advanced, covered: covered, snapshot: snapshot, committed: committed}, nil
+	return &persistPlan{store: store, desired: desired, changed: changed, advances: advanced, covered: covered, snapshot: snapshot, committed: committed}, nil
 }
 
 // planPersistReuse 是热路径的"规划合并"门面（**只供 persistMode.planReuse**，见其注释）。
@@ -13752,12 +13574,6 @@ func (m *Manager) commitPersist(ctx context.Context, plan *persistPlan) (bool, e
 	}
 	m.persistCommitMu.Lock()
 	defer m.persistCommitMu.Unlock()
-	// 计划对象的捕获正文只服务本次提交；无论成功、失败还是丢弃都在这里释放。
-	defer func() {
-		for _, receipt := range plan.committed {
-			receipt.encoded = nil
-		}
-	}()
 	if plan.snapshot < m.persistAccepted.Load() {
 		return false, errPersistPlanStale
 	}
@@ -13780,9 +13596,9 @@ func (m *Manager) commitPersist(ctx context.Context, plan *persistPlan) (bool, e
 		advances = append(advances, a)
 	}
 	m.mu.Unlock()
-	stats, err := plan.store.ApplyScopedCtx(ctx, plan.desired, plan.changed, plan.prunes)
+	stats, err := plan.store.ApplyScopedCtx(ctx, plan.desired, plan.changed)
 	if err == nil {
-		// 观测面：记录本次读数（含分步未完成标志与范围删除条数），供排障与回归取证。
+		// 观测面：记录本次读数（含分步未完成标志），供排障与回归取证。
 		m.mu.Lock()
 		m.lastPersistStats = stats
 		m.mu.Unlock()
@@ -13801,19 +13617,15 @@ func (m *Manager) commitPersist(ctx context.Context, plan *persistPlan) (bool, e
 		if receipt.err != nil {
 			return false, receipt.err
 		}
-		live, recomputed, liveErr := receipt.liveIdentities()
+		live, liveErr := receipt.liveIdentities()
 		if liveErr != nil {
 			return false, liveErr
 		}
-		plan.recomputedIdentities += recomputed
 		kept := &committedSourceReceipt{pipe: receipt.pipe, identities: make(map[acquire.CommitIdentity]struct{})}
 		for id := range receipt.identities {
 			if _, ok := live[id]; ok {
 				kept.identities[id] = struct{}{}
 			}
-		}
-		if receipt.encoded != nil && len(kept.identities) > 0 {
-			kept.index = receipt.encoded.WALCommitIndex
 		}
 		completed[key] = kept
 	}
@@ -13905,18 +13717,20 @@ type rebuildTask struct {
 
 	rebuilt   persistedSource
 	committed *committedSourceReceipt
-	// 仅本次捕获的只读轻量种子，不随新计划长期保留；新index仍逐成员独立建立。
-	identitySeed *acquire.WALCommitIndex
 }
 
 // buildRebuiltSourceOutsideLock 在**锁外**构建一个源的重建体（#55-B，从原 rebuildSource 拆出）。
 //
-// 现场：这段是 m.mu 内除逐条 marshal 之外最大的整块耗时（Ledger().Snapshot() 逐条 clone +
-// WAL().SnapshotSplit 的内联正文拷贝，逐条镜像重建阶段达 260–632ms）⇒ 整段持锁时，
-// 投递/登记/停止/解算全部一起排队。
+// 现场：这段是 m.mu 内最大的一块耗时（Ledger().Snapshot() 逐条 clone + WAL 快照），
+// 逐条镜像重建阶段达 260–632ms ⇒ 整段持锁时，投递/登记/停止/解算全部一起排队。
 //
-// 锁外安全性：Ledger.Snapshot / WAL.SnapshotSplit 各自持自己的锁（ledger.go:599 `l.mu.RLock`、
-// wal.go:41 `w.mu.Lock`）且产物都是**全新切片**；本函数不触碰 m.state / m.pipes。
+// 锁外安全性：Ledger.Snapshot / WAL.Snapshot / WAL.CommittedIdentities 各自持自己的锁
+// （ledger.go:599 `l.mu.RLock`、wal.go `w.mu.Lock`）且产物都是**全新切片**；本函数不触碰
+// m.state / m.pipes。
+//
+// 2026-10-29：WAL 不再落盘（`source_wal` 表已删），因此这里不再做「内联/引用分流」与「SQL 行
+// 字节编码」——只剩三件仍需要的事：账本快照、WAL 内存镜像（供 canonical 重建补全）、
+// 本计划捕获的已提交身份（供投递前的提交资格验证）。
 func (m *Manager) buildRebuiltSourceOutsideLock(t rebuildTask) persistedSource {
 	if hook, _ := m.rebuildSourceBuildHook.Load().(func()); hook != nil {
 		hook()
@@ -13925,28 +13739,19 @@ func (m *Manager) buildRebuiltSourceOutsideLock(t rebuildTask) persistedSource {
 		Ledger:              t.pipe.Ledger().Snapshot(),
 		EventsStored:        t.eventsStored,
 		EventsStoredThrough: t.through,
+		// WAL 镜像只是"本进程内还排队的正文"的副本，不落盘。
+		WAL: t.pipe.WAL().Snapshot(),
 	}
-	// 最大末端只描述位置，不证明中间事件正文存在；只有近期逐条落段凭据可降为引用。
-	canReference := m.bodyReferencePredicate(t.key)
-	covered := func(ev logtypes.Event) bool { return entry.EventsStored && canReference(ev) }
-	var refs []acquire.WALRef
-	var inline []acquire.WALEntry
-	if t.committed != nil {
-		// 分流前同一次实际WAL完整正文；同owner/cut/ordinal原JSON同时供身份与本计划SQL行使用。
-		hook, _ := m.walSnapshotCopiedHook.Load().(func())
-		t.committed.encoded, t.committed.err = t.pipe.WAL().SnapshotSplitCommittedPlan(covered, hook, t.identitySeed)
-		if t.committed.err == nil {
-			refs, inline, t.committed.identities = t.committed.encoded.SplitCommitted()
-		}
-	} else {
-		refs, inline = t.pipe.WAL().SnapshotSplit(covered)
-	}
-	entry.WALRefs = refs
-	entry.WAL = append(entry.WAL, inline...)
 	// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
 	// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
 	if !entry.EventsStored {
 		entry.Events = append(entry.Events, t.inline...)
+	}
+	if t.committed != nil {
+		// 提交资格：本计划捕获时仍为 durable 的完整身份集合（内存态，不碰磁盘）。
+		identities, err := t.pipe.WAL().CommittedIdentities()
+		t.committed.err = err
+		t.committed.identities = identities
 	}
 	return entry
 }
@@ -13963,7 +13768,6 @@ func (m *Manager) buildRebuiltSourceOutsideLock(t rebuildTask) persistedSource {
 func (m *Manager) commitRebuiltSource(key string, rebuilt persistedSource) {
 	cur := m.state.Sources[key]
 	cur.Ledger = rebuilt.Ledger
-	cur.WALRefs = rebuilt.WALRefs
 	cur.WAL = rebuilt.WAL
 	cur.EventsStored = rebuilt.EventsStored
 	cur.EventsStoredThrough = rebuilt.EventsStoredThrough

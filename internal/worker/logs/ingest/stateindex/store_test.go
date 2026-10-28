@@ -64,15 +64,7 @@ func fixtureState(sources int) State {
 			// payload 里放一段「随源数量增长」的内容，用于验证大规模夹具下的增量写入。
 			Payload: []byte(`{"segments":[` + strings.Repeat(`{"path":"seg"},`, 8) + `{}]}`),
 		})
-		for seq := 1; seq <= 4; seq++ {
-			body := []byte(fmt.Sprintf(`{"event_id":"ev-%03d-%d","message":"m%d"}`, i, seq, seq))
-			st.WAL = append(st.WAL, WALRow{
-				Key: key, Seq: uint64(seq), EventID: fmt.Sprintf("ev-%03d-%d", i, seq),
-				RecordStart: uint64(seq * 10), RecordEnd: uint64(seq*10 + 9),
-				Appended: true, Durable: seq < 4, Body: body,
-				FP: fingerprint(body),
-			})
-		}
+		// 2026-10-29：WAL 不再落盘（source_wal 表已删），夹具只保留仍有表的那几类行。
 		st.Batches = append(st.Batches, BatchRow{
 			Key: key, Ordinal: 0, StartPos: 1, EndPos: 100, State: "REQUEST_DONE",
 		})
@@ -101,10 +93,6 @@ func normalizeForCompare(st State) State {
 		cleaned.Projections = append(cleaned.Projections, row)
 	}
 	cleaned.Positions = st.Positions
-	for _, row := range st.WAL {
-		row.FP = 0
-		cleaned.WAL = append(cleaned.WAL, row)
-	}
 	sortState(&cleaned)
 	return cleaned
 }
@@ -169,7 +157,6 @@ func stateDiff(want, got State) string {
 	compare("projection", len(want.Projections), len(got.Projections))
 	compare("instance_binding", len(want.Instances), len(got.Instances))
 	compare("source_aux", len(want.Aux), len(got.Aux))
-	compare("source_wal", len(want.WAL), len(got.WAL))
 	compare("delivery_batch", len(want.Batches), len(got.Batches))
 	if len(differences) > 0 {
 		return strings.Join(differences, "\n")
@@ -202,11 +189,6 @@ func stateDiff(want, got State) string {
 	for i := range want.Aux {
 		if fmt.Sprintf("%+v", want.Aux[i]) != fmt.Sprintf("%+v", got.Aux[i]) {
 			differences = append(differences, fmt.Sprintf("aux[%d] want=%+v got=%+v", i, want.Aux[i], got.Aux[i]))
-		}
-	}
-	for i := range want.WAL {
-		if fmt.Sprintf("%+v", want.WAL[i]) != fmt.Sprintf("%+v", got.WAL[i]) {
-			differences = append(differences, fmt.Sprintf("wal[%d] want=%+v got=%+v", i, want.WAL[i], got.WAL[i]))
 		}
 	}
 	for i := range want.Batches {
@@ -244,21 +226,19 @@ func TestStoreApplyWritesOnlyChangedRows(t *testing.T) {
 		}
 	}
 
-	// 只推进一个源的游标 + 追加一条 WAL。
+	// 只推进一个源的游标 + 追加一条缺口。
 	changed := desired
 	changed.Positions = append([]PositionRow(nil), desired.Positions...)
 	changed.Positions[7].ReadPos += 4096
-	changed.WAL = append(append([]WALRow(nil), desired.WAL...), WALRow{
-		Key: "node:007/g1", Seq: 5, EventID: "ev-007-5",
-		RecordStart: 50, RecordEnd: 59, Appended: true,
-		Body: []byte(`{"event_id":"ev-007-5","message":"new"}`), FP: 0xabc,
+	changed.Gaps = append(append([]GapRow(nil), desired.Gaps...), GapRow{
+		Key: "node:007/g1", ID: 9, StartPos: 50, EndPos: 59, Reason: "PAUSED", Detail: "new gap",
 	})
 	second, err := store.Apply(changed)
 	if err != nil {
 		t.Fatalf("增量写入失败: %v", err)
 	}
 	if second.RowsWritten > 2 {
-		t.Fatalf("单源变更只应写 1~2 行（游标 + 新 WAL 条目），实测 %d 行 / %d 字节",
+		t.Fatalf("单源变更只应写 1~2 行（游标 + 新缺口），实测 %d 行 / %d 字节",
 			second.RowsWritten, second.BytesWritten)
 	}
 	if second.BytesWritten > 4096 {
@@ -285,7 +265,6 @@ func TestStoreDeletesRemovedRows(t *testing.T) {
 	trimmed.Projections = desired.Projections[:2]
 	trimmed.Aux = desired.Aux[:2]
 	trimmed.Batches = desired.Batches[:2]
-	trimmed.WAL = desired.WAL[:4]
 	trimmed.Gaps = nil
 	stats, err := store.Apply(trimmed)
 	if err != nil {
@@ -390,7 +369,9 @@ const batchRows = 5
 
 // batchState 构造「前 n 批」的期望状态：**逐批累加**——第 n 批的 Apply 必须保留第 1..n-1 批的
 // 行，只追加本批 5 行并推进游标/投影（这与真实持久化的语义一致：索引只增不减）。
-// 第 n 批 WAL 行的 seq 区间为 [n*batchRows, (n+1)*batchRows)。
+//
+// 2026-10-29：行数主体从 source_wal 行改为 gap 行（那张表已删）；gap 仍以 (key, id) 稳定标识
+// 每一行，正好用作批次完整性判据。第 n 批的 gap id 区间为 [n*batchRows, (n+1)*batchRows)。
 func batchState(n int) State {
 	key := "node:crash/g1"
 	st := State{
@@ -402,12 +383,10 @@ func batchState(n int) State {
 	}
 	for batch := 1; batch <= n; batch++ {
 		for i := 0; i < batchRows; i++ {
-			seq := batch*batchRows + i
-			body := []byte(fmt.Sprintf(`{"event_id":"ev-%d","message":"batch %d"}`, seq, batch))
-			st.WAL = append(st.WAL, WALRow{
-				Key: key, Seq: uint64(seq), EventID: fmt.Sprintf("ev-%d", seq),
-				RecordStart: uint64(seq * 10), RecordEnd: uint64(seq*10 + 9),
-				Appended: true, Durable: true, Body: body, FP: fingerprint(body),
+			id := batch*batchRows + i
+			st.Gaps = append(st.Gaps, GapRow{
+				Key: key, ID: int64(id), StartPos: uint64(id * 10), EndPos: uint64(id*10 + 9),
+				Reason: "PAUSED", Detail: fmt.Sprintf("batch %d", batch),
 			})
 		}
 		st.Batches = append(st.Batches, BatchRow{
@@ -459,13 +438,13 @@ func TestStoreCrashDiscardsUncommittedBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("崩溃后读取失败: %v", err)
 	}
-	// 已提交的批次 1 一行不少（seq 区间 [5,10)）。
-	if len(loaded.WAL) != batchRows {
-		t.Fatalf("已提交批次必须完整保留：期望 %d 行，实测 %d 行", batchRows, len(loaded.WAL))
+	// 已提交的批次 1 一行不少（id 区间 [5,10)）。
+	if len(loaded.Gaps) != batchRows {
+		t.Fatalf("已提交批次必须完整保留：期望 %d 行，实测 %d 行", batchRows, len(loaded.Gaps))
 	}
-	for _, row := range loaded.WAL {
-		if row.Seq < uint64(batchRows) || row.Seq >= uint64(2*batchRows) {
-			t.Fatalf("崩溃后应只剩批次 1（seq∈[5,10)），发现 seq=%d", row.Seq)
+	for _, row := range loaded.Gaps {
+		if row.ID < int64(batchRows) || row.ID >= int64(2*batchRows) {
+			t.Fatalf("崩溃后应只剩批次 1（id∈[5,10)），发现 id=%d", row.ID)
 		}
 	}
 	if len(loaded.Positions) != 1 || loaded.Positions[0].ReadPos != uint64(batchRows) {
@@ -479,8 +458,8 @@ func TestStoreCrashDiscardsUncommittedBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("崩溃后再次读取失败: %v", err)
 	}
-	if len(after.WAL) != 2*batchRows {
-		t.Fatalf("恢复后应能续写：期望 %d 行，实测 %d", 2*batchRows, len(after.WAL))
+	if len(after.Gaps) != 2*batchRows {
+		t.Fatalf("恢复后应能续写：期望 %d 行，实测 %d", 2*batchRows, len(after.Gaps))
 	}
 }
 
@@ -526,31 +505,31 @@ func TestStoreSIGKILLLeavesCompletePrefix(t *testing.T) {
 		t.Fatalf("强杀后读取失败: %v", err)
 	}
 	// 已观测到批次 3 的写入，故已提交前缀至少 3 批（≥15 行）。
-	if len(loaded.WAL) < 3*batchRows {
-		t.Fatalf("已观测到批次 3，提交前缀不得少于 3 批，实测 %d 行", len(loaded.WAL))
+	if len(loaded.Gaps) < 3*batchRows {
+		t.Fatalf("已观测到批次 3，提交前缀不得少于 3 批，实测 %d 行", len(loaded.Gaps))
 	}
-	if len(loaded.WAL)%batchRows != 0 {
-		t.Fatalf("强杀后不得出现半截批次：行数 %d 不是 %d 的整数倍", len(loaded.WAL), batchRows)
+	if len(loaded.Gaps)%batchRows != 0 {
+		t.Fatalf("强杀后不得出现半截批次：行数 %d 不是 %d 的整数倍", len(loaded.Gaps), batchRows)
 	}
-	// 行 seq 必须是「完整批次」的并集：恰好 5..count+4（末尾绝不出现半截批次的行）。
-	seqs := make(map[uint64]bool, len(loaded.WAL))
+	// 行 id 必须是「完整批次」的并集：恰好 5..count+4（末尾绝不出现半截批次的行）。
+	seqs := make(map[int64]bool, len(loaded.Gaps))
 	maxSeq := uint64(0)
-	for _, row := range loaded.WAL {
-		seqs[row.Seq] = true
-		if row.Seq > maxSeq {
-			maxSeq = row.Seq
+	for _, row := range loaded.Gaps {
+		seqs[row.ID] = true
+		if id := uint64(row.ID); id > maxSeq {
+			maxSeq = id
 		}
 	}
-	if want := uint64(len(loaded.WAL)) + batchRows; maxSeq+1 != want {
-		t.Fatalf("末尾不允许出现半截批次：maxSeq+1=%d，完整批次应到 %d", maxSeq+1, want)
+	if want := uint64(len(loaded.Gaps)) + batchRows; maxSeq+1 != want {
+		t.Fatalf("末尾不允许出现半截批次：maxId+1=%d，完整批次应到 %d", maxSeq+1, want)
 	}
-	for seq := uint64(batchRows); seq <= maxSeq; seq++ {
-		if !seqs[seq] {
-			t.Fatalf("已提交前缀中间缺失 seq=%d", seq)
+	for id := int64(batchRows); id <= int64(maxSeq); id++ {
+		if !seqs[id] {
+			t.Fatalf("已提交前缀中间缺失 id=%d", id)
 		}
 	}
 	// 游标必须是某个完整批次的边界。
-	batches := len(loaded.WAL) / batchRows
+	batches := len(loaded.Gaps) / batchRows
 	if loaded.Positions[0].ReadPos != uint64(batches*batchRows) {
 		t.Fatalf("游标应与已提交前缀一致：read=%d 期望 %d", loaded.Positions[0].ReadPos, batches*batchRows)
 	}
@@ -589,17 +568,17 @@ func TestStoreConcurrentWriterSerialized(t *testing.T) {
 		t.Fatalf("读取失败: %v", err)
 	}
 	// 并发写者各自提交整批状态（累加模型），最终必须是一整批的完整内容（无半截、无混批）。
-	if len(loaded.WAL) == 0 || len(loaded.WAL)%batchRows != 0 {
-		t.Fatalf("并发写入后必须是一整批的完整内容，实测 %d 行", len(loaded.WAL))
+	if len(loaded.Gaps) == 0 || len(loaded.Gaps)%batchRows != 0 {
+		t.Fatalf("并发写入后必须是一整批的完整内容，实测 %d 行", len(loaded.Gaps))
 	}
-	maxSeq := uint64(0)
-	for _, row := range loaded.WAL {
-		if row.Seq > maxSeq {
-			maxSeq = row.Seq
+	maxSeq := int64(0)
+	for _, row := range loaded.Gaps {
+		if row.ID > maxSeq {
+			maxSeq = row.ID
 		}
 	}
-	if maxSeq != uint64(len(loaded.WAL))+batchRows-1 {
-		t.Fatalf("并发写入后行不完整：maxSeq=%d 行数=%d", maxSeq, len(loaded.WAL))
+	if maxSeq != int64(len(loaded.Gaps))+batchRows-1 {
+		t.Fatalf("并发写入后行不完整：maxId=%d 行数=%d", maxSeq, len(loaded.Gaps))
 	}
 }
 

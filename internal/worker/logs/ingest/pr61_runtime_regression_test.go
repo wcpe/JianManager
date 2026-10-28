@@ -279,7 +279,9 @@ func TestPR61CrossDayProjectionCompactionPreservesHistory(t *testing.T) {
 		for j, event := range all {
 			wal[j] = acquire.WALEntry{Seq: uint64(j + 1), Event: event, Appended: true, Durable: true}
 		}
-		require.NoError(t, p.WAL().Restore(wal))
+		// 2026-10-29：WAL 不落盘后没有"整体替换队列"的生产 API；本夹具需要的是"队列里放着
+		// 截至本批的全部事件"，因此改用仍存在的 Append+Commit（语义等价：全部已耐久）。
+		seedWAL(t, p.WAL(), walEntriesToEvents(wal)...)
 		require.NoError(t, p.Ledger().AdvanceRead(p.Key(), batch[0].Record.End))
 		require.NoError(t, p.Ledger().AdvanceDurable(p.Key(), batch[0].Record.End))
 		// 真实管线在投递前先执行 DurablePersist，canonical 快照读取的是该已落库 WAL 视图。
@@ -436,13 +438,21 @@ func TestPR61AutomaticGapResolveNeverAbandons(t *testing.T) {
 	require.False(t, after.Gaps[len(after.Gaps)-1].Resolved)
 }
 
-// 正文缺失属于真实恢复修订，静默源的持久化必须能看到新增缺口。
+// 恢复期新增的缺口属于真实修订，静默源的持久化必须能看到它（不得被登记末尾的 clean 基线吞掉）。
+//
+// 2026-10-29：原用例用一个「正文不在段里的 WALRef」制造 WAL_BODY_MISSING（引用水合失败）。
+// WAL 不落盘后既没有引用条目也没有水合路径，但**同一条不变量**（新增缺口必须落库）仍然成立，
+// 也仍然重要（这是 2026-10-08 “缺口被静默吞掉”事故的回归面）。因此改为在 Register 之后直接
+// 在账本上记一条同语义的 WAL_BODY_MISSING 缺口。
+//
+// 转红方式：把 persistSnapshotStep 里的“登记 clean 基线”改成在读取缺口之前，
+// 或让 clean 基线覆盖新增缺口 ⇒ 本条变红。
 func TestPR61RecoveredMissingWALBodyRemainsDirty(t *testing.T) {
 	root := t.TempDir()
 	key := "missing/g1"
 	source := SourceConfig{LogSourceID: "missing", SourceGeneration: "g1", Mode: pipeline.ModeFilePrimary, Path: filepath.Join(root, "latest.log"), StorageNamespace: "missing", UTCDay: "2026-10-08"}
 	entry := ledger.Entry{Key: ledger.SourceKey{LogSourceID: "missing", SourceGeneration: "g1"}}
-	saved := persistedSource{Ledger: []ledger.Entry{entry}, WALRefs: []acquire.WALRef{{Seq: 1, EventID: "absent", RecordStart: 10, RecordEnd: 20, Appended: true, Durable: true}}}
+	saved := persistedSource{Ledger: []ledger.Entry{entry}}
 	st := persistedState{Sources: map[string]persistedSource{key: saved}, SourceConfigs: map[string]SourceConfig{key: source}}
 	m := &Manager{root: root, state: st, sources: map[string]SourceConfig{}, pipes: map[string]*pipeline.Pipeline{}, cat: catalog.New(catalog.NewMemJournal())}
 	store, err := stateindex.Open(filepath.Join(root, "index.db"))
@@ -454,6 +464,12 @@ func TestPR61RecoveredMissingWALBodyRemainsDirty(t *testing.T) {
 	_, err = store.Apply(desired)
 	require.NoError(t, err)
 	require.NoError(t, m.Register(source))
+	// 恢复期新增的“正文缺失”缺口。
+	m.mu.Lock()
+	pipe := m.pipes[key]
+	m.mu.Unlock()
+	require.NotNil(t, pipe)
+	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 10, 20, ledger.GapReasonWALBodyMissing, "正文缺失"))
 	_, err = m.persistSnapshotStep(context.Background())
 	require.NoError(t, err)
 	rows, err := store.Load()

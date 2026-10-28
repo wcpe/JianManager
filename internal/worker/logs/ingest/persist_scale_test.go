@@ -22,8 +22,11 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
-// scaleFixtureState 构造「n 个源」的大状态夹具：每个源带 24 条 WAL（对应 spec §1 的
-// 24MB/源 外推口径的形态）+ 分段/轮转/缺口/投递批次。
+// scaleFixtureState 构造「n 个源」的大状态夹具：每个源带 24 条**缺口行**
+// （对应 spec §1 的 24MB/源 外推口径的形态）+ 分段/轮转/投递批次。
+//
+// 2026-10-29：原来用 24 条 WAL 行做“随源增长的体量”。WAL 不落盘后改用缺口行：
+// 它同样是“随单源数据量增长”的按归属增量行，且带 Detail 文本，能同样量出「全量重写 vs 只写变更行」的差别。
 func scaleFixtureState(n int) *persistedState {
 	state := &persistedState{
 		Sources:       make(map[string]persistedSource, n),
@@ -52,17 +55,16 @@ func scaleFixtureState(n int) *persistedState {
 			ErrorCount:   0,
 			IngestSeq:    uint64(i),
 		}
-		wal := make([]acquire.WALEntry, 0, 24)
+		gaps := make([]ledger.Gap, 0, 24)
 		for seq := 1; seq <= 24; seq++ {
-			event := logtypes.BuildEvent(identity, logtypes.RecordRange{
-				Start: uint64(seq * 10), End: uint64(seq*10 + 9),
-			}, "2026-09-30T00:00:00Z", "2026-09-30T00:00:01Z", "INFO", "stdout",
-				fmt.Sprintf("source %03d line %d %s", i, seq, strings.Repeat("x", 60)))
-			wal = append(wal, acquire.WALEntry{Seq: uint64(seq), Event: event, Appended: true, Durable: true})
+			gaps = append(gaps, ledger.Gap{
+				StartPos: uint64(seq * 10), EndPos: uint64(seq*10 + 9), Reason: "PAUSED",
+				Detail: fmt.Sprintf("source %03d line %d %s", i, seq, strings.Repeat("x", 60)),
+			})
 		}
+		entry.Gaps = append(entry.Gaps, gaps...)
 		state.Sources[key] = persistedSource{
-			Ledger: []ledger.Entry{entry}, WAL: wal, WALRefs: []acquire.WALRef{},
-			EventsStoredThrough: uint64(i * 1000), ProjectionGeneration: fmt.Sprintf("projection-%d", i),
+			Ledger: []ledger.Entry{entry}, EventsStoredThrough: uint64(i * 1000), ProjectionGeneration: fmt.Sprintf("projection-%d", i),
 			EventsStored: true, Events: []logtypes.Event{},
 		}
 		state.SourceConfigs[key] = SourceConfig{
@@ -79,7 +81,7 @@ func scaleManager(t *testing.T, state *persistedState) *Manager {
 	t.Helper()
 	root := t.TempDir()
 	m := &Manager{
-		root: root,
+		root:    root,
 		state:   *state,
 		sources: map[string]SourceConfig{}, pipes: map[string]*pipeline.Pipeline{},
 		cat: catalog.New(catalog.NewMemJournal()),
@@ -114,15 +116,13 @@ func TestPersistWritesOnlyChangedRowsAtScale(t *testing.T) {
 		key := "node:000/g1"
 		incremental = int64(time.Hour)
 		for round := 0; round < incrementRounds; round++ {
-			// 只改动一个源（推进游标 + 追加一条 WAL），其余源逐字节不变。
+			// 只改动一个源（推进游标 + 追加一条缺口），其余源逐字节不变。
 			saved := m.state.Sources[key]
 			saved.Ledger = append([]ledger.Entry(nil), saved.Ledger...)
 			saved.Ledger[0].Positions.Read += 4096
-			saved.WAL = append(append([]acquire.WALEntry(nil), saved.WAL...), acquire.WALEntry{
-				Seq: uint64(25 + round),
-				Event: logtypes.BuildEvent(saved.Ledger[0].Identity, logtypes.RecordRange{Start: uint64(250 + round), End: uint64(259 + round)},
-					"2026-09-30T00:00:00Z", "2026-09-30T00:00:01Z", "INFO", "stdout", "brand new line"),
-				Appended: true, Durable: true,
+			saved.Ledger[0].Gaps = append(append([]ledger.Gap(nil), saved.Ledger[0].Gaps...), ledger.Gap{
+				StartPos: uint64(250 + round), EndPos: uint64(259 + round), Reason: "PAUSED",
+				Detail: fmt.Sprintf("brand new gap %d", round),
 			})
 			m.state.Sources[key] = saved
 
@@ -200,17 +200,22 @@ type indexStats struct {
 	BytesWritten int64
 }
 
-// TestWALBodyFingerprintCoversEveryEventField 是「只写变更行」的正确性前提：
-// WAL 行的变更判据必须覆盖正文的**每个** JSON 字段，否则正文变了却不落库（静默丢更新）。
+// TestCommitIdentityCoversEveryEventField 是「完整身份就能当提交凭据」的正确性前提：
+// 身份摘要必须覆盖正文的**每个** JSON 字段，否则正文变了却身份不变（静默错认已投递）。
 //
-// 做法：对基准事件逐个字段做单点变异，断言指纹每次都必须变化——新增/改动事件字段而忘记
-// 纳入指纹时，本用例即红。
-func TestWALBodyFingerprintCoversEveryEventField(t *testing.T) {
+// 2026-10-29：原用例测的是 `walBodyFP`（WAL 行的变更指纹）——它已随 source_wal 表删除。
+// 但同一组字段覆盖要求对 `acquire.CommitIdentityOf` 仍然成立：它是投递捕获、回执交集、
+// 回收资格全链的判据（拿它当“这份正文被确认过”的凭据）。因此把断言搬到这里。
+//
+// 做法：对基准事件逐个字段做单点变异，断言身份必须变化——新增/改动事件字段而忘记
+// 纳入身份时，本用例即红。
+func TestCommitIdentityCoversEveryEventField(t *testing.T) {
 	identity := logtypes.SourceIdentity{LogSourceID: "node:1", SourceGeneration: "g1", ParserVersion: "v1"}
 	base := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 100, End: 200},
 		"2026-09-30T00:00:00Z", "2026-09-30T00:00:01Z", "INFO", "stdout", "hello")
 	base.Fields = map[string]string{"mod": "core"}
-	baseFP := walBodyFP(base)
+	baseID, err := acquire.CommitIdentityOf(base)
+	require.NoError(t, err)
 
 	mutations := map[string]func(ev *logtypes.Event){
 		"event_id":    func(ev *logtypes.Event) { ev.EventID = "changed" },
@@ -236,11 +241,15 @@ func TestWALBodyFingerprintCoversEveryEventField(t *testing.T) {
 			event.Fields[key] = value
 		}
 		mutate(&event)
-		require.NotEqual(t, baseFP, walBodyFP(event),
-			"字段 %q 的变异必须改变指纹，否则该字段的更新不会落库", name)
+		mutated, err := acquire.CommitIdentityOf(event)
+		require.NoError(t, err)
+		require.NotEqual(t, baseID, mutated,
+			"字段 %q 的变异必须改变完整身份，否则该字段的改动不会被识别", name)
 	}
-	// 反向：同一事件的指纹必须稳定（否则会产生无谓写入，退化成整本重写）。
-	require.Equal(t, baseFP, walBodyFP(base), "同一事件的指纹必须稳定")
+	// 反向：同一事件的身份必须稳定（否则每次捕获都“不匹配”）。
+	same, err := acquire.CommitIdentityOf(base)
+	require.NoError(t, err)
+	require.Equal(t, baseID, same, "同一事件的完整身份必须稳定")
 }
 
 // TestPersistKeepsIndexUsableAfterFloodBound 抽样验证：大夹具下反复 persist 后索引仍可读、

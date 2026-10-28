@@ -764,6 +764,11 @@ VL 对照：`%wait` p50/p95/max = **0 / 0 / 0**。
 **但交替实测显示对本负载无可测性能收益**（差异落在噪声内），因此这条**不作为性能修复**，
 只作为维护面清理保留。
 
+> **2026-10-29 追注**：`source_wal` 表本身已彻底删除（WAL 改纯内存队列，见
+> [索引规格 §7](../log-index-sqlite/spec.md)），所以这里的 `idx_source_wal_key`/
+> `dropRedundantIndexes` 都不再存在：旧库由 `Open` 的 `dropLegacySourceWAL` 在
+> 建表 DDL 之前做幂等 `DROP TABLE`，索引随之一起消失。本节读数保留为历史记录。
+
 ##### 仍不宣称达标
 
 门限**原样保留**（p95 ≤ 50ms），未改验收标准，未动 `synchronous=NORMAL`，未碰生产。

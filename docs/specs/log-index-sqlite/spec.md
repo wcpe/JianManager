@@ -360,7 +360,7 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
   | 臂 | 变异 | 实测 |
   |---|---|---|
   | arm1 | 把行数预算抬到无穷（= 改回「一次周期一个事务写全部行」） | **红**：`TestApplySplitsCommitsWithinRowBudget`（`单提交单元行数越界：预算 128，实测最大 425`）、`TestSingleCommitLatencyBoundedAtScale`（`第 0 个提交单元有 2757 行，超过默认预算`）、`TestApplyChunkedMatchesUnchunked`（`强切分库的提交单元数应远多于不切分库，实测 3 vs 3`） |
-  | arm2 | 把删除语句的行数压到 1（= 退回逐行 `ExecContext`） | **红**：`TestBatchDeleteRemovesExactlyTheMirroredRows`（`source_wal 的 4 行删除应合并成 1 条语句，实测 4 条（批量化失效？）`） |
+  | arm2 | 把删除语句的行数压到 1（= 退回逐行 `ExecContext`） | **红**：`TestBatchDeleteRemovesExactlyTheMirroredRows`（`gap 的 N 行删除应合并成 1 条语句，实测 N 条（批量化失效？）`） |
   | arm3 | 把删除顺序改回表正序（父表在前） | **红**：`FOREIGN KEY constraint failed`（既有 `TestStoreDeletesRemovedRows` 同步红）⇒ 单元切分依赖的删除序是承重件 |
 
 - 尾部归因探针（非回归，只作证据）：同一写入形态、只切 `wal_autocheckpoint`
@@ -390,3 +390,91 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
 非法值（非正行数/耗时）一律回退默认：配置误写不得让切分失效（那会把「单次 ≤50 ms」的达标线
 交还给配置运气）。默认值的单一真源是 `stateindex.DefaultCommitBudget`。
 
+
+## 7. 2026-10-29：删除 `source_wal` 表（WAL 改纯内存队列）
+
+> 本节记录一次**可靠性模型**的更替，不是一次性能优化。
+
+### 7.1 变更
+
+`source_wal` 表被彻底删除。它原先逐条持久化 WAL 的本义（身份 + 正文），
+生产实测占索引库 88%（`body` 174MB + 主键索引 41MB，库共 344MB）。
+
+**保留**的仍是「记账面」：`source` / `position` / `gap` / `projection` /
+`instance_binding` / `source_aux` / `delivery_batch` / `recovery_audit`。
+其中 `position` 三水位（read / durable / reclaim）即本项目的 **registry**。
+
+### 7.2 为什么可以删（业界依据）
+
+这不是取舍，而是主流做法。官方文档原文：
+
+**Filebeat**（[configuring-internal-queue](https://www.elastic.co/guide/en/beats/filebeat/current/configuring-internal-queue.html)）：
+
+> The memory queue keeps all events in memory. … **If the queue is full,
+> no new events can be inserted into the memory queue.**
+>
+> The disk queue stores pending events on the disk rather than main memory,
+> which allows Beats to queue a larger number of events than is possible with the memory queue,
+> and **to save events when a Beat or device is restarted**.
+
+⇒ 内存队列**本身就不保证跨重启保存**；那是 disk queue 的能力。
+可靠性由持久化的 offset（registry）+ **at-least-once** 重发承担。
+
+**Fluent Bit**（[buffering-and-storage](https://docs.fluentbit.io/manual/administration/buffering-and-storage)）的 `memrb` 模式：
+
+> when the ring buffer is full, Fluent Bit **automatically drops the oldest chunks** to make room
+> for new data **instead of pausing the input plugin**. … This buffering method
+> **prioritizes continuous data ingestion over data completeness**, making it suitable for
+> high-throughput scenarios where **pausing the input isn't acceptable**.
+
+⇒ 「丢最旧、不暂停」是官方支持的语义，并配套 `memrb_dropped_chunks` /
+`memrb_dropped_bytes` 两个指标。
+
+### 7.3 新的可靠性模型
+
+| 关切 | 旧（队列落盘） | 新（队列纯内存） |
+|---|---|---|
+| 队列内容跨重启 | 逐条恢复 | **丢弃**（对齐 Filebeat memory queue） |
+| 不丢数据的依据 | 队列里还有副本 | **持久化 offset + 重读**（至少一次） |
+| 内存满 | 暂停采集（不丢） | **丢最旧、不暂停**（对齐 Fluent Bit memrb） |
+| 重复投递 | 不应该发生 | **允许**（at-least-once），靠 `event_id` 幂等 + `projection_generation` 换代次吸收 |
+| 丢弃可观测性 | — | `WAL.DropStats()` → `SourceResumeDiagnostic.DroppedEntries/DroppedBytes` |
+
+**重启时的具体动作**（`ingest.rollbackReadToReclaim`）：把 `read` 与 `durable`
+**都**回退到 `reclaim`，让 tailer 从该处重读。只退 `read` 不够——tailer 游标取
+`min(durable, read)`（见 `acquire/tailer.go`），`durable` 留着会把它拉高。
+
+回退下界是 `reclaim` 而不是 0：`reclaim` 之前的字节已被证明安全另存，重读它们不只是浪费，
+还会让 `releaseRecovery` 的 `from >= to` 恒成立、静默不再建恢复段，最终把回收永久卡死
+（2026-09-30 生产实证）。
+
+### 7.4 丢弃的审计面
+
+`WAL_BACKLOG_DROPPED`（缺口）与 `DropStats()`（累计量）**口径不同、互不替代**：
+
+- 缺口：每丢一段登记一条，带**真实位置区间**，会被合并/裁剪，但不是“可能丢”而是“已丢”；
+- 累计量：`droppedEntries` / `droppedBytes`，只增不减。
+
+两者都**不阻塞** `ResumeAcquire`（`gapReasonsNonBlocking`）。这是一个**独立于**
+「可愈合白名单」与「永久丢失名单」的第三个分类：前者语义是“回读会重新产生”（不适用，
+游标已过），后者带 1h 宽限期（会形成“越界→丢→暂停1h→继续丢”的循环，与不暂停矛盾）。
+
+### 7.5 旧库兼容
+
+既有生产库（含 20 万行 `source_wal`）打开时必须不报错。迁移为幂等
+`DROP TABLE IF EXISTS source_wal`：
+
+- 实现：`stateindex.dropLegacySourceWAL`，在 `OpenWithBudget` 里**建表 DDL 之前**执行
+  （先查 `sqlite_master` 确认存在再 DROP，不存在则空操作）；
+- `DROP TABLE` 会连带删掉旧版本遗留的 `idx_source_wal_key`，因此不再需要单独的 DROP INDEX；
+- 旧条目**不迁移、不读**：它们描述的是内存队列的旧快照，重启后由 `rollbackReadToReclaim`
+  按 `position` 水位重读接替。
+- 回归：`TestOpenDropsLegacySourceWALTable`（造含 `source_wal` 表与500 行的旧库 → `Open` →
+  不报错、表已删、其余表数据一字不少），变异验证：掉 `dropLegacySourceWAL` 调用 ⇒ 变红。
+
+⚠ 注意：`DROP TABLE` **不会**自动缩小 SQLite 文件——263MB 仍会留在库文件里，
+直到后续复用空页或显式 `VACUUM`。**启动路径不自动 VACUUM**（它需要独占锁、临时需求双倍磁盘，
+耗时与库体积成正比——与“启动路径与规模成正比的持久化”是同一类事故面）。
+提供显式入口：`stateindex.Store.Vacuum(ctx)` 与 `stateindex.Store.FreelistBytes(ctx)`
+（前者执行 VACUUM，后者读 `freelist_count × page_size` 作为“值不值得做”的判据）。
+首次删除表时 `Open` 会打一条 INFO 日志带上库路径，提醒可择机做一次离线 `VACUUM`。

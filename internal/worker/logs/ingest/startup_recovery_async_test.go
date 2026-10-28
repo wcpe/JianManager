@@ -13,9 +13,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -443,23 +443,23 @@ func TestPersistStepwiseSurvivesTinyCycleBudget(t *testing.T) {
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
 
-	// 注入 200 条待落库的 WAL 行（末端远高于当前读/回收水位 ⇒ 不会被剪枝带走，必须全部落库）。
-	identity := logtypes.SourceIdentity{LogSourceID: "inst:step", SourceGeneration: "g1", ParserVersion: "v1"}
+	// 注入 200 条缺口行（末端远高于当前回收水位 ⇒ 不会被任何剪枝带走，必须全部落库）。
+	//
+	// 2026-10-29：原夹具注入的是 source_wal 行（断言索引里的 WAL 行数）。该表删除后改用
+	// **缺口行**造差异——它同样走「按归属增量 + 切分续跑」这条路径，验证强度不变。
 	const injected = 200
-	seed := make([]acquire.WALEntry, 0, injected)
+	m.mu.Lock()
+	saved := m.state.Sources[key]
 	for i := 0; i < injected; i++ {
-		end := uint64(1_000_000 + i*10)
-		seed = append(seed, acquire.WALEntry{
-			Seq: uint64(i + 1),
-			Event: logtypes.BuildEvent(identity, logtypes.RecordRange{Start: end - 9, End: end},
-				"2026-09-22T10:00:00Z", "2026-09-22T10:00:00Z", "INFO", "stdout", fmt.Sprintf("step %d", i)),
-			Appended: true, Durable: true,
+		saved.Ledger[0].Gaps = append(saved.Ledger[0].Gaps, ledger.Gap{
+			StartPos: uint64(i * 10), EndPos: uint64(i*10 + 9), Reason: "PAUSED",
+			Detail: fmt.Sprintf("stepwise %d", i),
 		})
 	}
-	require.NoError(t, pipe.WAL().Restore(seed))
-	// 制造一次账本修订（真实路径下 WAL 变化总伴随账本变化，落库的「变更源」判据是修订号）。
+	m.state.Sources[key] = saved
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "seed"))
 	require.NoError(t, pipe.Ledger().ResumeAcquire(pipe.Key()))
+	m.mu.Unlock()
 
 	// 周期预算已是 16 行（见上文 Options）：200 行差异不可能一步做完。
 	samplesBefore := len(m.PersistSamples())
@@ -470,28 +470,29 @@ func TestPersistStepwiseSurvivesTinyCycleBudget(t *testing.T) {
 		"16 行/周期的预算下，200 行变更必须分成多个提交单元")
 	require.False(t, m.LastPersistStats().Incomplete, "最后一轮必须把差异做完（否则 persist 不得返回）")
 
-	// ② 全部变更都落库（逐行比对：索引行数 == 管道 WAL 条目数，且一条不少）。
+	// ② 全部变更都落库（逐行比对：索引缺口行数 == 注入行数，且一条不少）。
 	loaded, err := m.index.Load()
 	require.NoError(t, err)
 	indexed := 0
-	for _, row := range loaded.WAL {
+	for _, row := range loaded.Gaps {
 		if row.Key == key {
 			indexed++
 		}
 	}
-	require.Equal(t, injected, indexed, "分步续跑后索引必须与管道 WAL 一致（不得静默丢行）")
-	require.Len(t, pipe.WAL().Snapshot(), injected)
+	require.Equal(t, injected, indexed, "分步续跑后索引必须与账本缺口一致（不得静默丢行）")
 }
 
-// TestPersistRoutesReclaimWatermarkToRangePrune：①水位化的**接线**回归——采集侧回收水位必须真的
-// 作为剪枝提示下发到索引层，且索引层用它把整段差异**一条语句**删掉。
+// TestPersistReclaimWatermarkPrunesQueueAndPositions：回收水位推进时，**内存队列**必须真的被剪掉
+// 那一段，且落库把新的 reclaim 水位持久化下来（重启后 rollbackReadToReclaim 依赖它决定重读起点）。
 //
-// 夹具复刻现场形态：先让索引里存在「已耐久、且落在回收水位之内」的 WAL 行（生产上由积压期产生），
-// 再让回收推进把它们判为可剪（生产上由启动恢复的整窗重发触发）。此后落库必须走谓词范围删除。
+// 2026-10-29：本用例原为 `TestPersistRoutesReclaimWatermarkToRangePrune`（①水位化谓词范围删除的
+// 接线回归）。WAL 不落盘后「索引侧把整段 WAL 差异用一条语句删掉」这件事已不存在（没有 WAL 行），
+// 所以这里改为钉真正还需要的两条：
+//   - 内存剪枝真的发生（队列里回收水位之内的已耐久条目被丢掉）；
+//   - 新水位真的落进了 position 表（这是新可靠性模型的唯一持久凭据）。
 //
-// 转红方式（实测）：把 persistSnapshotStep 里的 prunes 提示改成 nil —— 本用例在
-// 「必须走谓词范围删除 / 12 行必须由范围删除清掉」处变红。
-func TestPersistRoutesReclaimWatermarkToRangePrune(t *testing.T) {
+// 转红方式：让 persist 不推进 position（或让 TryReclaim 不剪队列）⇒ 对应断言直接变红。
+func TestPersistReclaimWatermarkPrunesQueueAndPositions(t *testing.T) {
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
@@ -519,40 +520,20 @@ func TestPersistRoutesReclaimWatermarkToRangePrune(t *testing.T) {
 		return entry != nil && entry.Positions.Reclaim > 0
 	}, 20*time.Second, 20*time.Millisecond, "夹具前提：先把回收水位推起来")
 
-	// 注入 12 条「已耐久且落在回收水位之内」的 WAL 行 —— 它们既应被内存剪枝丢掉，
-	// 也应被索引层用**一条谓词删除**清掉。
+	// 注入 12 条「已耐久且落在回收水位之内」的条目 —— 它们应被内存剪枝丢掉。
 	identity := logtypes.SourceIdentity{LogSourceID: "inst:prune", SourceGeneration: "g1", ParserVersion: "v1"}
-	seed := make([]acquire.WALEntry, 0, 12)
+	events := make([]logtypes.Event, 0, 12)
 	for i := 0; i < 12; i++ {
 		end := uint64(i*10 + 10)
-		seed = append(seed, acquire.WALEntry{
-			Seq: uint64(i + 1),
-			Event: logtypes.BuildEvent(identity, logtypes.RecordRange{Start: end - 9, End: end},
-				"2026-09-22T10:00:00Z", "2026-09-22T10:00:00Z", "INFO", "stdout", fmt.Sprintf("seed %d", i)),
-			Appended: true, Durable: true,
-		})
+		events = append(events, logtypes.BuildEvent(identity, logtypes.RecordRange{Start: end - 9, End: end},
+			"2026-09-22T10:00:00Z", "2026-09-22T10:00:00Z", "INFO", "stdout", fmt.Sprintf("seed %d", i)))
 	}
-	require.NoError(t, pipe.WAL().Restore(seed))
-	// 真实路径下 WAL 变化总伴随账本变化（读/耐久/回收位置推进），而落库的「变更源」判据是
-	// 账本修订号；这里注入的是纯 WAL 行，故显式制造一次账本修订（暂停→恢复，语义上是空操作）。
-	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "seed"))
-	require.NoError(t, pipe.Ledger().ResumeAcquire(pipe.Key()))
-	require.NoError(t, m.persist(), "先把这批 WAL 行落进索引（复刻积压期形态）")
-	loaded, err := m.index.Load()
-	require.NoError(t, err)
-	seeded := 0
-	for _, row := range loaded.WAL {
-		if row.Key == key {
-			seeded++
-		}
-	}
-	require.Equal(t, 12, seeded, "索引里应存在 12 条待剪的 WAL 行")
+	seedWAL(t, pipe.WAL(), events...)
+	before := len(pipe.WAL().Snapshot())
+	require.Equal(t, 12, before, "夹具前提：12 条已耐久条目必须都在队列里")
 
-	// 推进回收即「内存剪枝」发生的那一刻：生产上它的调用点是 releaseRecovery 的尾步
-	// （启动恢复整窗重发之后），稳态则是每轮采集的投递之后——两处都是 TryReclaim。
-	// 推进回收：生产上这一步由 releaseRecovery 走完责任转移链后调 TryReclaim 完成（起点是启动
-	// 恢复的整窗重发）。这里按**同一条链**绑定并释放一个覆盖 [reclaim, 注入末端] 的恢复分段，
-	// 使账本放行（默认拒绝正是保证「回收必须有凭据」的守卫）。
+	// 推进回收：生产上这一步由 releaseRecovery 走完责任转移链后调 TryReclaim 完成。这里按
+	// **同一条链**绑定并释放一个覆盖 [reclaim, 注入末端] 的恢复分段，使账本放行。
 	from := pipe.Ledger().Get(pipe.Key()).Positions.Reclaim
 	const segID = "projection-recovery-test-120"
 	require.NoError(t, pipe.BindRecoverySegment(segID, "projection://test", from, 120))
@@ -562,23 +543,19 @@ func TestPersistRoutesReclaimWatermarkToRangePrune(t *testing.T) {
 	_, err = pipe.TryReclaim()
 	require.NoError(t, err, "凭据齐备后回收必须放行（否则夹具没造出「剪枝」这一步）")
 	surviving := len(pipe.WAL().Snapshot())
-	require.Less(t, surviving, 12, "回收水位之内的已耐久条目必须被内存剪枝丢掉")
+	require.Less(t, surviving, before, "回收水位之内的已耐久条目必须被内存剪枝丢掉")
 
-	// 紧接着的落库必须把这段差异表达成**一条谓词范围删除**，而不是逐行 DELETE。
+	// 落库必须把推进后的水位持久化到 position 表（重启后重读的唯一凭据）。
 	require.NoError(t, m.persist())
-	stats := m.LastPersistStats()
-	require.Positive(t, stats.RangePrunes, "必须走谓词范围删除（①水位化接线生效）")
-	require.Equal(t, 12-surviving, stats.RangePruned, "被剪掉的行必须由范围删除清掉")
-	require.LessOrEqual(t, stats.Statements, 4, "删除必须批量（不得退化成逐行 DELETE）")
-
-	// 等价性：索引里该源的 WAL 行数必须与内存 WAL 完全一致（范围删除不得多删或少删）。
-	loaded, err = m.index.Load()
+	reclaim := pipe.Ledger().Get(pipe.Key()).Positions.Reclaim
+	loaded, err := m.index.Load()
 	require.NoError(t, err)
-	indexed := 0
-	for _, row := range loaded.WAL {
+	persisted := uint64(0)
+	for _, row := range loaded.Positions {
 		if row.Key == key {
-			indexed++
+			persisted = row.ReclaimPos
 		}
 	}
-	require.Equal(t, surviving, indexed, "范围删除后索引必须与内存 WAL 逐行一致")
+	require.Equal(t, reclaim, persisted, "回收水位必须真的落进 position 表（重启重读的起点）")
+	require.Positive(t, reclaim, "夹具前提：回收水位应已推进")
 }

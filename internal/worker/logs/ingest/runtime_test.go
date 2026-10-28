@@ -290,7 +290,7 @@ func TestManagerPartitionsProjectionByCanonicalEventUTCDay(t *testing.T) {
 	source := SourceConfig{LogSourceID: "node:cross-day", SourceGeneration: "g1", StorageNamespace: "node:cross-day", UTCDay: runtimeTestUTCDay()}
 	m := &Manager{
 		root: root, vl: client, cat: cat, journal: cat.Journal(), pipes: map[string]*pipeline.Pipeline{},
-		state:     persistedState{Sources: map[string]persistedSource{source.LogSourceID + "/" + source.SourceGeneration: {}}},
+		state:               persistedState{Sources: map[string]persistedSource{source.LogSourceID + "/" + source.SourceGeneration: {}}},
 		verificationTimeout: time.Second,
 	}
 	identity := logtypes.SourceIdentity{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1"}
@@ -658,28 +658,31 @@ func TestManagerPersistsDurableWALBeforeInsertRequest(t *testing.T) {
 	fixture := &projectionVLFixture{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			// 只读直查索引库：WAL 条目必须已 durable 落库，才允许发 VL 插入请求。
+			// 只读直查索引库：
+			//
+			// 2026-10-29：WAL 不再落盘（source_wal 表已删），“已耐久”的唯一持久凭据是
+			// position 表的 durable_pos——它就代表“这些字节已在库里”。
 			store, err := stateindex.OpenReadOnly(indexPath)
 			if err != nil {
-				t.Errorf("WAL snapshot missing before VL insert: %v", err)
+				t.Errorf("indices missing before VL insert: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 			rows, err := store.Load()
 			_ = store.Close()
 			if err != nil {
-				t.Errorf("WAL snapshot corrupt before VL insert: %v", err)
+				t.Errorf("indices corrupt before VL insert: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			var durable int
-			for _, row := range rows.WAL {
-				if row.Key == "node:1/g1" && row.Durable {
-					durable++
+			var durable uint64
+			for _, row := range rows.Positions {
+				if row.Key == "node:1/g1" && row.DurablePos > 0 {
+					durable = row.DurablePos
 				}
 			}
 			if durable == 0 {
-				t.Error("WAL event must be durable on disk before VL insert")
+				t.Error("事件必须在外发 VL 之前先持久到 position 水位")
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}

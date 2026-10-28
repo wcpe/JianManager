@@ -3,8 +3,6 @@
 package acquire
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,43 +14,13 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-// WALRef 是 WAL 条目的**引用形式**：只保存身份与位置，正文以 canonical 事件段存储
-// （events/，FR-484 的权威副本）为准（B1a）。
+// WAL 条目引用/落盘形态（WALRef、SnapshotSplit、Restore*、WALCommitSnapshot/Index、
+// SnapshotSplitCommitted*、restoreAcknowledged）已于 2026-10-29 删除：
+// WAL 改为**纯内存队列**后不再落盘，也没有恢复路径。可靠性改由「持久化的 position 水位 +
+// 重启重读」承担（见 ingest/wal_reboot_replay.go 的 rollbackReadToReclaim）。
 //
-// 为什么需要：WALEntry 内联 logtypes.Event（含正文），而整份 WAL 会随 ingest.state.json
-// 持久化——单源积压曾因此把状态文件撑到 1.2 GB（2026-09-28 生产事故）。
-//
-// 关键约束（第一次实现曾在此出错并被既有测试抓到）：段存储里**未必**有 WAL 的全部事件——
-// 事件体是在投递路径（writeProjection → appendEvents）才写入段存储，故尚未投递的条目
-// 只能内联保存。判据必须**按条**给出（见 SnapshotSplit 的 covered 谓词），不得按源一刀切。
-type WALRef struct {
-	Seq      uint64 `json:"seq"`
-	Appended bool   `json:"appended"`
-	Durable  bool   `json:"durable"`
-	// Replay 与 WALEntry.Replay 同义：该条目来自**恢复期回放/补账**。
-	//
-	// 为什么必须持久化（ACQ-1）：`Replay` 只落在内存条目上时，重启后回放条目会退回
-	// 「常规积压」并重新把源推过闸（`backlogLocked` 的闸视图 = 总量 − 回放）——
-	// 而这恰好发生在最需要它的时刻（恢复期回放与进程重启是同一场景）。
-	// 旧数据无此字段 ⇒ 零值 false = 非回放，向后兼容 ✓。
-	Replay      bool   `json:"replay,omitempty"`
-	EventID     string `json:"event_id"`
-	RecordStart uint64 `json:"record_start"`
-	RecordEnd   uint64 `json:"record_end"`
-}
-
-// SnapshotSplit 按 covered 谓词把 WAL 快照切分为两部分（B1a）：
-//   - refs：covered(ev) 为 true——该事件体已 durable 在段存储中，持久化只需引用；
-//   - inline：其余条目——正文尚未入库（未投递）或存储不可用，必须内联保存，绝不能丢。
-//
-// covered 传 nil 时全部内联（等价于旧的 Snapshot）。
-func (w *WAL) SnapshotSplit(covered func(logtypes.Event) bool) (refs []WALRef, inline []WALEntry) {
-	refs, inline, err := w.snapshotSplit(covered, nil)
-	if err != nil {
-		panic("acquire: 未启用身份编码的WAL快照不应返回编码错误: " + err.Error())
-	}
-	return refs, inline
-}
+// 队列自身的生命周期仍全部在本文件：Append / Commit / TrimBacklog / SnapshotPending /
+// CaptureDelivery* / TryReclaim* 等（这些不依赖任何落盘面）。
 
 // SnapshotWindow只捕获原投递记录窗，硬限条数；未提交、跨边界或新增变体均不得借旧hint确认。
 func (w *WAL) SnapshotWindow(from, to uint64, limit int, filters ...func(logtypes.Event) bool) ([]WALEntry, error) {
@@ -378,307 +346,6 @@ func (w *WAL) AcquireCapturedWindow(events []logtypes.Event, requirePresent bool
 	return release, nil
 }
 
-// WALCommitSnapshot只属于一份实际持久化计划；owner、原cut和成员序号一起绑定完整私有正文。
-// 不进入WAL格式或跨调用缓存，引用条目的身份同样取自分流前的完整正文。
-type WALCommitSnapshot struct {
-	*WALCommitIndex
-	entries    []WALEntry
-	referenced []bool
-	bodies     [][]byte
-	identities map[CommitIdentity]struct{}
-	// 仅观测实际编码调用次数，不参与资格、分流或提交；用于区分省SHA与错误省Marshal。
-	marshaledEvents int
-	hashedEvents    int
-}
-
-// WALCommitIndex仅保留本计划完整身份的轻量成员索引，不反向引用快照、正文、Fields或编码字节。
-// 它不是提交证明；只能与实际完整Apply后发布的同份回执做精确交集，不能单独授予任何新资格。
-type WALCommitIndex struct {
-	owner *WAL
-	cut   uint64
-	// bySeqRevision 记录捕获时各(seq,本次捕获revision)分组内的全部成员（含当时非Durable者）。
-	// Restore会给多条不同正文同一revision且旧主键允许同Seq ⇒ 分组可能多值或多Durable态，
-	// 任一处不一致都必须由调用方保守重算。
-	bySeqRevision map[walSeqRevision][]walCapturedMember
-}
-
-// walCapturedMember 是捕获时的成员身份与其Durable态；两者共同决定该组能否被复用。
-type walCapturedMember struct {
-	identity CommitIdentity
-	durable  bool
-}
-
-type walSeqRevision struct {
-	seq      uint64
-	revision uint64
-}
-
-// uniqueCapturedIdentity 只有整组成员身份一致**且**全部在捕获时已Durable才算无歧义。
-// 后来才Commit的成员在捕获时未入 identities，若按组复用就会把它误算成同组别的成员。
-func uniqueCapturedIdentity(bucket []walCapturedMember) (CommitIdentity, bool) {
-	if len(bucket) == 0 {
-		return CommitIdentity{}, false
-	}
-	first := bucket[0]
-	for _, other := range bucket[1:] {
-		if other != first {
-			return CommitIdentity{}, false
-		}
-	}
-	if !first.durable {
-		return CommitIdentity{}, false
-	}
-	return first.identity, true
-}
-
-// LiveCommittedIdentities 用本计划已捕获的完整身份复核当前仍存活的Durable条目。
-//
-// 复用条件（缺一不可）：同owner、捕获在该计划的cut、且live条目未被后续写入替换
-// （appendRevision <= cut）、且该(seq,revision)分组在本计划里身份唯一。
-// 其余情形——计划之外、原非Durable后来才Commit、capture后被替换/hydrate/Restore、
-// 分组歧义——一律按当前完整JSON重算，绝不借旧摘要或丢弃成员。
-// 返回重算条数供计算次数回归断言；不写WAL格式、不建跨调用缓存。
-func (snapshot *WALCommitSnapshot) LiveCommittedIdentities(owner *WAL) (map[CommitIdentity]struct{}, int, error) {
-	if snapshot == nil {
-		return nil, 0, ErrWALWindowChanged
-	}
-	return snapshot.WALCommitIndex.LiveCommittedIdentities(owner)
-}
-
-// LiveCommittedIdentities沿用原完整计划的同owner/cut/全组唯一判据；nil索引仍严格逐条重算。
-// 计数只反映实际完整JSON编码条数，不把摘要去重后的集合大小当编码次数。
-func (index *WALCommitIndex) LiveCommittedIdentities(owner *WAL) (map[CommitIdentity]struct{}, int, error) {
-	if owner == nil || (index != nil && index.owner != owner) {
-		return nil, 0, ErrWALWindowChanged
-	}
-	// 锁序仅WAL.mu；持锁只遍历轻量成员并复制需回退的私有Event，完整JSON编码仍在锁外。
-	owner.mu.Lock()
-	out := make(map[CommitIdentity]struct{}, len(owner.entries))
-	var recompute []logtypes.Event
-	for _, entry := range owner.entries {
-		if !entry.Durable {
-			continue
-		}
-		if index != nil && entry.appendRevision <= index.cut {
-			if identity, ok := uniqueCapturedIdentity(index.bySeqRevision[walSeqRevision{entry.Seq, entry.appendRevision}]); ok {
-				out[identity] = struct{}{}
-				continue
-			}
-		}
-		recompute = append(recompute, cloneWALEvent(entry.Event))
-	}
-	owner.mu.Unlock()
-	for _, event := range recompute {
-		identity, err := CommitIdentityOf(event)
-		if err != nil {
-			return nil, len(recompute), err
-		}
-		out[identity] = struct{}{}
-	}
-	return out, len(recompute), nil
-}
-
-// SnapshotSplitCommitted保留既有接口；昂贵编码仅作用于锁内定格、Fields深复制后的私有值。
-func (w *WAL) SnapshotSplitCommitted(covered func(logtypes.Event) bool) ([]WALRef, []WALEntry, map[CommitIdentity]struct{}, error) {
-	snapshot, err := w.SnapshotSplitCommittedPlan(covered, nil)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	refs, inline, identities := snapshot.SplitCommitted()
-	return refs, inline, identities, nil
-}
-
-// SnapshotSplitCommittedPlan在原锁内定格元数据、refs分流和完整正文，锁外只编码该私有快照。
-// copied仅供确定性编码边界测试；生产nil，回调不持WAL锁，不增加读取或更改资格条件。
-// committed只接收已实际完整Apply回执的轻量索引；始终完整Marshal当前私有正文，仅省可证明未变成员的SHA。
-func (w *WAL) SnapshotSplitCommittedPlan(covered func(logtypes.Event) bool, copied func(), committed ...*WALCommitIndex) (*WALCommitSnapshot, error) {
-	w.mu.Lock()
-	snapshot := &WALCommitSnapshot{WALCommitIndex: &WALCommitIndex{owner: w, cut: w.revision}, entries: make([]WALEntry, len(w.entries)), referenced: make([]bool, len(w.entries))}
-	for i, entry := range w.entries {
-		entry.reservation = nil
-		entry.Event = cloneWALEvent(entry.Event)
-		snapshot.entries[i] = entry
-		if covered != nil {
-			// 谓词不取得私有编码输入的可变别名，分流仍与原WAL捕获同一线性化点。
-			snapshot.referenced[i] = covered(cloneWALEvent(entry.Event))
-		}
-	}
-	w.mu.Unlock()
-	if copied != nil {
-		copied()
-	}
-	var previous *WALCommitIndex
-	if len(committed) > 0 && committed[0] != nil && committed[0].owner == w && committed[0].cut <= snapshot.cut {
-		previous = committed[0]
-	}
-	snapshot.bodies = make([][]byte, len(snapshot.entries))
-	snapshot.identities = make(map[CommitIdentity]struct{}, len(snapshot.entries))
-	snapshot.bySeqRevision = make(map[walSeqRevision][]walCapturedMember, len(snapshot.entries))
-	for i, entry := range snapshot.entries {
-		body, err := json.Marshal(entry.Event)
-		snapshot.marshaledEvents++
-		if err != nil {
-			return nil, err
-		}
-		group := walSeqRevision{entry.Seq, entry.appendRevision}
-		var identity CommitIdentity
-		var reused bool
-		if previous != nil && entry.Durable && entry.appendRevision <= previous.cut {
-			identity, reused = uniqueCapturedIdentity(previous.bySeqRevision[group])
-		}
-		if !reused {
-			identity = CommitIdentity{EventID: entry.Event.EventID, CanonicalHash: entry.Event.CanonicalHash, Record: entry.Event.Record, BodyDigest: sha256.Sum256(body)}
-			snapshot.hashedEvents++
-		}
-		if entry.Durable {
-			snapshot.identities[identity] = struct{}{}
-		}
-		// 分组必须覆盖**全部**捕获成员：同Seq同revision下只要存在一条非Durable或正文不同者，
-		// 该组就不再唯一 ⇒ 调用方保守重算，绝不把后来才Commit的成员误当作已捕获的Durable成员。
-		snapshot.bySeqRevision[group] = append(snapshot.bySeqRevision[group], walCapturedMember{identity: identity, durable: entry.Durable})
-		if !snapshot.referenced[i] {
-			snapshot.bodies[i] = body
-		}
-	}
-	return snapshot, nil
-}
-
-// SplitCommitted只导出分离副本；共享状态或调用方改Fields不能反写同计划的编码正文。
-func (snapshot *WALCommitSnapshot) SplitCommitted() ([]WALRef, []WALEntry, map[CommitIdentity]struct{}) {
-	var refs []WALRef
-	var inline []WALEntry
-	for i, entry := range snapshot.entries {
-		if snapshot.referenced[i] {
-			refs = append(refs, walReferenceOf(entry))
-		} else {
-			entry.Event = cloneWALEvent(entry.Event)
-			inline = append(inline, entry)
-		}
-	}
-	identities := make(map[CommitIdentity]struct{}, len(snapshot.identities))
-	for identity := range snapshot.identities {
-		identities[identity] = struct{}{}
-	}
-	return refs, inline, identities
-}
-
-// VisitEncoded只按原owner/cut/ordinal访问本计划原字节，不读取当前WAL或按EventID折叠兄弟。
-func (snapshot *WALCommitSnapshot) VisitEncoded(owner *WAL, inline func(WALEntry, []byte), reference func(WALRef)) error {
-	if snapshot == nil || owner == nil || snapshot.owner != owner {
-		return ErrWALWindowChanged
-	}
-	for _, entry := range snapshot.entries {
-		if entry.appendRevision > snapshot.cut {
-			return ErrWALWindowChanged
-		}
-	}
-	for i, entry := range snapshot.entries {
-		if !snapshot.referenced[i] {
-			entry.Event = cloneWALEvent(entry.Event)
-			inline(entry, snapshot.bodies[i])
-		}
-	}
-	for i, entry := range snapshot.entries {
-		if snapshot.referenced[i] {
-			reference(walReferenceOf(entry))
-		}
-	}
-	return nil
-}
-
-func walReferenceOf(entry WALEntry) WALRef {
-	return WALRef{Seq: entry.Seq, Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay,
-		EventID: entry.Event.EventID, RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End}
-}
-
-func (w *WAL) snapshotSplit(covered func(logtypes.Event) bool, identities map[CommitIdentity]struct{}) (refs []WALRef, inline []WALEntry, err error) {
-	w.mu.Lock()
-	entries := make([]WALEntry, len(w.entries))
-	referenced := make([]bool, len(w.entries))
-	for i, entry := range w.entries {
-		entry.reservation = nil
-		entry.Event = cloneWALEvent(entry.Event)
-		entries[i] = entry
-		if covered != nil {
-			referenced[i] = covered(cloneWALEvent(entry.Event))
-		}
-	}
-	w.mu.Unlock()
-	for i, entry := range entries {
-		if identities != nil && entry.Durable {
-			identity, encodeErr := CommitIdentityOf(entry.Event)
-			if encodeErr != nil {
-				return nil, nil, encodeErr
-			}
-			identities[identity] = struct{}{}
-		}
-		if referenced[i] {
-			refs = append(refs, walReferenceOf(entry))
-		} else {
-			inline = append(inline, entry)
-		}
-	}
-	return refs, inline, nil
-}
-
-// RestoreMixed 恢复内存 WAL：inline 为内联正文条目，refs 为引用条目（正文经 hydrate 取回）。
-//
-// 合并后按 Seq 升序排列，保持投递顺序。取不到正文的引用**不得静默丢弃**：以 missing 原样
-// 返回，由调用方记可见缺口并告警（与 FR-474 §5#1「截断可见」同口径）。
-//
-// 回放标记随 refs 双向往返（ACQ-1）：`WALRef.Replay` 落到重建条目的 `WALEntry.Replay` 上，
-// 否则重启后回放条目会重新计入闸视图（见 WALRef.Replay 的说明 ✓）。
-func (w *WAL) RestoreMixed(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool)) []WALRef {
-	return w.RestoreMixedWithAck(inline, refs, hydrate, AckEvidence{})
-}
-
-// RestoreMixedWithAck 是 RestoreMixed 的「带持久化 ACK 证据」形态。
-//
-// acked 为 nil 时与 RestoreMixed 逐字等价（全部 acknowledged=nil）。
-// 传非空时只给「位置落在 REQUEST_DONE 区间内且 durable」的条目重建 acknowledged。
-// 理由同 RestoreWithAck（见 wal_restore_ack.go）。
-func (w *WAL) RestoreMixedWithAck(inline []WALEntry, refs []WALRef, hydrate func(eventID string) (logtypes.Event, bool), ev AckEvidence) []WALRef {
-	unlock := w.lockMutation(nil, true)
-	defer unlock()
-	entries := append([]WALEntry(nil), inline...)
-	var missing []WALRef
-	for _, r := range refs {
-		ev, ok := hydrate(r.EventID)
-		if !ok {
-			missing = append(missing, r)
-			continue
-		}
-		entries = append(entries, WALEntry{Seq: r.Seq, Event: ev, Appended: r.Appended, Durable: r.Durable, Replay: r.Replay})
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
-	if w.revision == ^uint64(0) {
-		w.reservationErr = fmt.Errorf("acquire: WAL恢复捕获序号已耗尽")
-		return append([]WALRef(nil), refs...)
-	}
-	w.revision++
-	w.pendingEpoch++
-	for i := range entries {
-		entries[i].Event = cloneWALEvent(entries[i].Event)
-		entries[i].appendRevision = w.revision
-		entries[i].captureToken = 0
-		entries[i].captureBody = [32]byte{}
-	}
-	restoreAcknowledged(entries, ev)
-	w.restoreReservationsLocked(entries)
-	w.entries = entries
-	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
-	for _, entry := range entries {
-		if entry.Durable && entry.Event.Record.End > w.lastDurableEnd {
-			w.lastDurableEnd = entry.Event.Record.End
-		}
-	}
-	// 与 Restore 对称（ACQ-3）：恢复完立刻判一次闸。`saved.WALRefs` 非空时生产走的就是本路径
-	//（见 ingest 的 refs 来源），索引里的持久积压可能已经越界 ⇒ 必须当场暂停，而不是等下一次
-	// Append（现场形态：内存积压早已越界、暂停却滞后到下一次追加才发生）。
-	w.enforceBacklogLimitLocked(0)
-	return missing
-}
-
 // 积压上限（B1b；2026-10-29 改为**丢弃语义**）。
 //
 // ## 历史与本次变更
@@ -729,25 +396,6 @@ const (
 // 仅用于积压字节数的近似定界，不参与任何持久化或校验语义。
 const walEntryOverheadBytes = 320
 
-// AcknowledgedBodyDigest 返回该条目被 ACK 时那份正文的摘要（32 字节）。
-//
-// 为什么需要它（2026-10-28）：`acknowledged` 是进程内态，重启即丢；而账本里的
-// `RequestDoneRanges` 只是**位置区间**（且有 ±1 容差、永不裁剪）。仅凭区间重建 ACK 有真风险：
-// 位置空间一旦被复用（重读 / 槽位复用 / 回放替换），旧区间会把从未投递的**新正文**误认为已 ACK，
-// 再被 `reclaimEntryQualifiedLocked` 放行 ⇒ 数据被剪掉。
-//
-// 因此 persist 时把「ACK 时那份正文的 BodyDigest」一并落库（`source_wal.ack_body_digest`）；
-// 重启时只有**当前正文摘要与它逐字节相等**才重建 ACK。这样即使位置区间被复用，
-// 新正文也不会借旧区间的光——证据仍是精确的，不是区间推断。
-//
-// 无 ACK 时返回 false（未投递过，或正文被替换后已作废）。
-func (e WALEntry) AcknowledgedBodyDigest() ([32]byte, bool) {
-	if e.acknowledged == nil {
-		return [32]byte{}, false
-	}
-	return e.acknowledged.BodyDigest, true
-}
-
 // WALEntry WAL 中的一条待投递/已耐久事件记录。
 type WALEntry struct {
 	Seq      uint64         `json:"seq"`
@@ -763,9 +411,9 @@ type WALEntry struct {
 	// 仍被同一把尺挡住 ✓，回放不再自锁 ✓。标记落在条目上（而不是计数器）：属精确归因，
 	// 且随剪枝自动守恒 ✓。
 	Replay bool `json:"replay,omitempty"`
-	// reservation 仅属于本进程；快照恢复必须重新向当前预算取得长期预留。
+	// reservation 仅属于本进程；不再有快照恢复路径，故只在 Append 生命周期内存在。
 	reservation *walByteReservation
-	// 只属于本进程的真实ACK完整身份；恢复必须清空，不能从旧位置水位重造。
+	// 只属于本进程的真实ACK完整身份；不落盘、不跨重启恢复，因此不存在从旧位置水位重造的路径。
 	acknowledged *CommitIdentity `json:"-"`
 	// 与本次完整身份捕获边界比较，区分早已存在的未选兄弟和网络后新增/替换者。
 	appendRevision uint64   `json:"-"`
@@ -827,6 +475,17 @@ type WAL struct {
 	totalBytes    int64 // Σ(len(Message) + walEntryOverheadBytes)：全部条目
 	replayEntries int64 // 其中"回放在飞"条数
 	replayBytes   int64 // 其中"回放在飞"近似字节
+	// droppedEntries / droppedBytes 是**累计丢弃**计数（只增不减，仅供观测）。
+	//
+	// 为什么必须暴露（对齐 Fluent Bit `memrb`，2026-10-29）：Fluent Bit 的 memory
+	// ring buffer 模式在“丢最旧”的同时提供 `memrb_dropped_chunks` /
+	// `memrb_dropped_bytes`，官方文档明写“You can monitor these metrics to understand
+	// how much data is being discarded”。理由是：一旦选了“不背压”，丢弃就是设计内的
+	// 正常行为，**它必须可观测**——否则运维只看到“日志少了”，却分不清是丢了还是源没写。
+	//
+	// 不参与任何判定（累计量只增不减，绝不能拿它做门禁）。
+	droppedEntries int64
+	droppedBytes   int64
 }
 
 // pruneFullSweepEvery 是"完整清扫"的摊销节拍（#66-①）：头偏移窗每次只删**可回收前缀**
@@ -866,6 +525,22 @@ func (w *WAL) Backlog() (int64, int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.backlogLocked()
+}
+
+// DropStats 返回**累计丢弃**读数（条目数, 近似字节）。
+//
+// 对齐 Fluent Bit `memrb_dropped_chunks` / `memrb_dropped_bytes`：选了“不背压”之后，
+// 丢弃是设计内的正常行为，但**必须可观测**——否则运维只能看到“日志少了”，
+// 分不清是该源本就没写、还是丢在了队列里。
+//
+// 只读、只增不减：不得用它做任何门禁（累计量不回落）。
+func (w *WAL) DropStats() (entries int64, bytes int64) {
+	if w == nil {
+		return 0, 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.droppedEntries, w.droppedBytes
 }
 
 // limitsLocked 返回生效的上限（调用方需持 w.mu）。
@@ -1118,6 +793,7 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 	// 先算丢弃区间的真实位置（半开区间，取被丢条目首尾）。
 	var from, to uint64
 	dropped := 0
+	var bytesDropped int64
 	for i := 0; i < cut; i++ {
 		entry := w.entries[i]
 		if i == 0 || entry.Event.Record.Start < from {
@@ -1126,11 +802,16 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 		if entry.Event.Record.End > to {
 			to = entry.Event.Record.End
 		}
+		bytesDropped += walEntryBytes(entry)
 		w.noteEntryDroppedLocked(entry)
 		w.entries[i] = WALEntry{} // 清引用：底层数组不得继续持有已丢弃事件的正文
 		dropped++
 	}
 	w.entries = w.entries[cut:]
+	// 累计丢弃计数（对齐 Fluent Bit memrb_dropped_chunks / memrb_dropped_bytes）：
+	// 丢弃是设计内行为，必须可观测，否则运维只能看到“日志少了”，分不清是丢还是源没写。
+	w.droppedEntries += int64(dropped)
+	w.droppedBytes += bytesDropped
 
 	// 缺口凭据：区间是真实的字节位置，因此可查、可审计。
 	// 登记失败不回滚丢弃（已经丢了，回滚只会让内存超界）——但必须如实报错。
@@ -2233,7 +1914,10 @@ func (w *WAL) snapshotPending(limit, cursor int, acknowledged map[CommitIdentity
 	return out, next, live, nil
 }
 
-// CommittedIdentities仅返回仍保留WAL中的摘要，用来有界裁剪本进程提交回执。
+// CommittedIdentities 返回仍保留在 WAL 中且已 durable 的条目完整身份集合（用来有界裁剪本进程提交回执）。
+//
+// 2026-10-29：原有一个“报告实际完整编码次数”的双返回值变体，只服务于 WAL 行的 SQL 编码
+// 回归；source_wal 表删除后它失去对象，统一为单值。
 func (w *WAL) CommittedIdentities() (map[CommitIdentity]struct{}, error) {
 	return w.committedIdentities(nil)
 }
@@ -2259,66 +1943,6 @@ func (w *WAL) committedIdentities(copied func()) (map[CommitIdentity]struct{}, e
 		out[identity] = struct{}{}
 	}
 	return out, nil
-}
-
-// Restore 将持久 WAL 快照恢复到内存。账本水位由 Ledger.Restore 恢复，
-// WAL 只重建待核验事件集合，避免重启后依赖进程内存判断投递结果。
-func (w *WAL) Restore(entries []WALEntry) error {
-	return w.RestoreWithAck(entries, AckEvidence{})
-}
-
-// RestoreWithAck 是 Restore 的「带持久化 ACK 证据」形态。
-//
-// acked 为 nil 时与 Restore 逐字等价（全部 acknowledged=nil，即 default-deny）。
-// 传入非空时，只给「位置完整落在某个 REQUEST_DONE 区间内且 durable」的条目重建
-// `acknowledged`（由当前正文重算 CommitIdentity），其余仍为 nil。
-//
-// 为什么需要它（2026-10-28 生产停采）：acknowledged 是进程内态（json:"-"），
-// 重启即丢；而补段路径（CaptureAcknowledgedPrefix）要求它非 nil。
-// 当 delivery 早已推进、reclaim 却停在 0 时，就会形成「重启→补段失败→reclaim 不动→
-// WAL 撞上限→停采」的死锁。本变体让调用方能把账本里**已经持久化的** REQUEST_DONE
-// 证据交给 WAL，从而把确实存在过的 ACK 认回来。详见 wal_restore_ack.go。
-func (w *WAL) RestoreWithAck(entries []WALEntry, ev AckEvidence) error {
-	unlock := w.lockMutation(nil, true)
-	defer unlock()
-	for _, entry := range entries {
-		if entry.Event.Source.LogSourceID != "" && entry.Event.Source.LogSourceID != w.key.LogSourceID {
-			return fmt.Errorf("acquire: wal restore source mismatch %q", entry.Event.Source.LogSourceID)
-		}
-		if entry.Event.Source.SourceGeneration != "" && entry.Event.Source.SourceGeneration != w.key.SourceGeneration {
-			return fmt.Errorf("acquire: wal restore generation mismatch %q", entry.Event.Source.SourceGeneration)
-		}
-	}
-	restored := append([]WALEntry(nil), entries...)
-	if w.revision == ^uint64(0) {
-		return fmt.Errorf("acquire: WAL恢复捕获序号已耗尽")
-	}
-	w.revision++
-	w.pendingEpoch++
-	for i := range restored {
-		restored[i].Event = cloneWALEvent(restored[i].Event)
-		restored[i].appendRevision = w.revision
-		restored[i].captureToken = 0
-		restored[i].captureBody = [32]byte{}
-	}
-	restoreAcknowledged(restored, ev)
-	w.restoreReservationsLocked(restored)
-	w.entries = restored
-	w.recountLocked() // #66-②：整体替换 ⇒ 重算一次（O(条数)，一次性 ✓）
-	for _, entry := range entries {
-		if entry.Durable && entry.Event.Record.End > w.lastDurableEnd {
-			w.lastDurableEnd = entry.Event.Record.End
-		}
-	}
-	// 恢复完立刻裁一次积压（2026-10-29；原为“立刻判闸”）。
-	//
-	// 当场性仍然是关键（D4 现场）：索引里的持久积压可能早已越界，若只在后续 Append 里裁，
-	// 进程一启动就背着超出内存上界的队列。语义从“暂停”改为“丢弃最旧”后，
-	// 这条要求的理由反而更强了——WAL 现在是纯内存队列。
-	//
-	// 这里不保护任何批次：恢复没有“刚采、还没被取走”的数据，最旧前缀就该削。
-	w.enforceBacklogLimitLocked(0)
-	return w.reservationErr
 }
 
 func lastRecordEnd(events []logtypes.Event, fallback uint64) uint64 {

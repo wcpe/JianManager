@@ -56,7 +56,7 @@ func TestPruneReclaimedZeroPathUsesWALLock(t *testing.T) {
 		}()
 	}
 	for i := 0; i < 2000; i++ {
-		require.NoError(t, wal.Restore(restored)) // 写 w.entries（切片头）
+		require.NoError(t, wal.seedEntries(restored)) // 写 w.entries（切片头）
 	}
 	close(stop)
 	wg.Wait()

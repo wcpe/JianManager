@@ -27,7 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -147,9 +146,10 @@ func TestDurableOutboxBlockedVerifyAllowsNext1000RealSQLiteCommit(t *testing.T) 
 	defer reader.Close()
 	var durable, rows uint64
 	require.NoError(t, reader.QueryRow("SELECT MAX(durable_pos) FROM position").Scan(&durable))
-	require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
 	require.GreaterOrEqual(t, durable, second[len(second)-1].Record.End, "必须由独立mode=ro SQLite实际COMMIT证明，不接受内存水位")
-	require.Equal(t, uint64(2000), rows)
+	// 2026-10-29：WAL 不再落盘（source_wal 表已删），”已耐久”的持久化凭据只有 position 水位；
+	// 条目数量由内存队列自身提供断言。
+	require.Equal(t, 2000, len(p.WAL().Snapshot()), "队列必须完整保留两批共 2000 条")
 	m.replayMu.Lock()
 	_, ownerStillInflight := m.replayInflight[source.LogSourceID+"/"+source.SourceGeneration]
 	m.replayMu.Unlock()
@@ -206,7 +206,7 @@ func TestDurableOutboxActualCompletedOldPlanRemainsQualified(t *testing.T) {
 	require.NoError(t, err)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	m.walRowsBuildHook.Store(func() { once.Do(func() { close(entered); <-release }) })
+	m.rebuildSourceBuildHook.Store(func() { once.Do(func() { close(entered); <-release }) })
 	done := make(chan error, 1)
 	go func() {
 		done <- m.persistCommittedBeforeDelivery(context.Background(), source.LogSourceID+"/"+source.SourceGeneration, p, []acquire.CommitIdentity{id})
@@ -219,7 +219,7 @@ func TestDurableOutboxActualCompletedOldPlanRemainsQualified(t *testing.T) {
 	require.NoError(t, p.WAL().Commit())
 	close(release)
 	require.NoError(t, <-done, "实际完成计划包含旧正文时，不能因后续Append把整个真实回执作废")
-	m.walRowsBuildHook.Store((func())(nil))
+	m.rebuildSourceBuildHook.Store((func())(nil))
 	require.False(t, m.committedContains(source.LogSourceID+"/"+source.SourceGeneration, p, []acquire.CommitIdentity{id}), "不在保留WAL的旧摘要不能常驻缓存")
 }
 
@@ -675,9 +675,7 @@ func TestDurableOutboxFinalPublicationLeaseSerializesEarlierDebtButNotNewTail(t 
 	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 	require.NoError(t, err)
 	defer reader.Close()
-	var rows int
-	require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
-	require.Equal(t, 2, rows)
+	require.Equal(t, 2, len(p.WAL().Snapshot()))
 	close(release)
 	require.NoError(t, <-done)
 	require.NoError(t, p.WAL().AppendReplay(older))
@@ -754,9 +752,7 @@ func outboxArchiveBusyRestartSeed(t *testing.T, client *vlsup.Client) (*Manager,
 	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 	require.NoError(t, err)
 	defer reader.Close()
-	var rows int
-	require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
-	require.Equal(t, 2000, rows)
+	require.Equal(t, 2000, len(p.WAL().Snapshot()))
 	require.True(t, m.SyncArchiveScan(25*time.Millisecond))
 	defer m.StopArchiveScan()
 	close(release)
@@ -769,107 +765,54 @@ func outboxArchiveBusyRestartSeed(t *testing.T, client *vlsup.Client) (*Manager,
 		}
 		return false
 	}, 3*time.Second, 10*time.Millisecond, "无新输入时必须由生产SyncArchiveScan自动重试而非测试手调导入")
-	require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
-	require.Equal(t, 1502, rows, "原500在真实ACK/证明后正常回收，未确认1500和重导2条均真实耐久")
+	require.Len(t, p.WAL().Snapshot(), 1502, "原500在真实ACK/证明后正常回收，未确认1500和重导2条均真实耐久")
 	m.StopArchiveScan()
 	require.NoError(t, m.Stop())
 	require.Len(t, p.WAL().Snapshot(), 1502)
 	return m, source, p
 }
 
-// SQL只读连接逐身份核对耐久责任；正文的内联/引用表示可合法切换，不能把表示当内容身份。
-func outboxRestartSQLWAL(t *testing.T, path, key string) []acquire.WALRef {
+// 2026-10-29：`source_wal` 表已删除、WAL 不再落盘，因此「重启后的队列内容」不再由库提供。
+// 原 `outboxRestartSQLWAL`（直接查 source_wal）与 `outboxRestartDiskWAL`（source_wal +
+// canonical 段水合正文）两个 helper 随之删除。重启责任改由下面两条断言承担：
+//   - `position` 水位（read/durable/reclaim）必须一字不动地持久化在库里——它是新可靠性模型
+//     的唯一持久凭据（配合 rollbackReadToReclaim 重读）；
+//   - 账本里的恢复引用/审计凭据必须完整（见 outboxRestartRecoveryRefsError）。
+//
+// 队列内容不再参与跨重启断言：它本来就该为空（MemoryQueue 语义）。
+func outboxAssertRestartResponsibility(t *testing.T, m *Manager, p *pipeline.Pipeline, want []acquire.WALEntry, before *ledger.Entry) {
 	t.Helper()
-	reader, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
-	require.NoError(t, err)
-	defer reader.Close()
-	rows, err := reader.Query("SELECT seq,event_id,record_start,record_end,appended,durable,replay FROM source_wal WHERE key=? ORDER BY seq,event_id,record_start,record_end", key)
-	require.NoError(t, err)
-	defer rows.Close()
-	var result []acquire.WALRef
-	for rows.Next() {
-		var row acquire.WALRef
-		require.NoError(t, rows.Scan(&row.Seq, &row.EventID, &row.RecordStart, &row.RecordEnd, &row.Appended, &row.Durable, &row.Replay))
-		result = append(result, row)
-	}
-	require.NoError(t, rows.Err())
-	return result
-}
-
-// 重启的完整正文真源是SQL内联值或只读canonical段，不是已被引用表示替代的暂态事件副本。
-func outboxRestartDiskWAL(t *testing.T, m *Manager, key string) []acquire.WALEntry {
-	t.Helper()
-	store, err := eventstore.OpenReadOnly(filepath.Join(m.root, "var", "log", "events"))
-	require.NoError(t, err)
-	defer store.Close()
-	canonical := make(map[string]logtypes.Event)
-	require.NoError(t, store.Iterate(key, func(event logtypes.Event) error {
-		canonical[event.EventID] = event
-		return nil
-	}))
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
-	require.NoError(t, err)
-	defer reader.Close()
-	rows, err := reader.Query("SELECT seq,event_id,record_start,record_end,appended,durable,replay,body FROM source_wal WHERE key=? ORDER BY seq,event_id,record_start,record_end", key)
-	require.NoError(t, err)
-	defer rows.Close()
-	var result []acquire.WALEntry
-	for rows.Next() {
-		var entry acquire.WALEntry
-		var id string
-		var from, to uint64
-		var body []byte
-		require.NoError(t, rows.Scan(&entry.Seq, &id, &from, &to, &entry.Appended, &entry.Durable, &entry.Replay, &body))
-		if len(body) > 0 {
-			require.NoError(t, json.Unmarshal(body, &entry.Event))
-		} else {
-			var present bool
-			entry.Event, present = canonical[id]
-			require.True(t, present, "SQL引用必须由真实只读canonical段水合，id=%s", id)
-		}
-		require.Equal(t, id, entry.Event.EventID)
-		require.Equal(t, logtypes.RecordRange{Start: from, End: to}, entry.Event.Record)
-		result = append(result, entry)
-	}
-	require.NoError(t, rows.Err())
-	require.Len(t, result, 1502)
-	return result
-}
-
-func outboxAssertRestartResponsibility(t *testing.T, m *Manager, p *pipeline.Pipeline, want []acquire.WALEntry, sqlWant []acquire.WALRef, before *ledger.Entry) {
-	t.Helper()
+	// 队列：重启后允许为空（内存队列重启即丢）。本函数只核对**若仍有条目，其身份必须精确**。
 	actual := p.WAL().Snapshot()
-	require.Len(t, actual, 1502, "二启必须保留完整未确认原物集合，不以Imported或旧ACK借资格")
-	require.Len(t, actual, len(want))
 	type walKey struct {
-		seq, from, to uint64
-		id            string
+		from, to uint64
+		id       string
 	}
 	identityKey := func(entry acquire.WALEntry) walKey {
-		return walKey{entry.Seq, entry.Event.Record.Start, entry.Event.Record.End, entry.Event.EventID}
+		return walKey{entry.Event.Record.Start, entry.Event.Record.End, entry.Event.EventID}
 	}
-	byIdentity := make(map[walKey]acquire.WALEntry, len(actual))
+	wantByKey := make(map[walKey]acquire.WALEntry, len(want))
+	for _, entry := range want {
+		wantByKey[identityKey(entry)] = entry
+	}
 	for _, entry := range actual {
-		byIdentity[identityKey(entry)] = entry
-	}
-	require.Len(t, byIdentity, len(want), "按SQL真实复合主键核对，重启可重排但不能覆盖或重造身份")
-	for _, expected := range want {
-		entry, present := byIdentity[identityKey(expected)]
-		require.True(t, present, "原物复合主键必须仍在，seq=%d id=%s", expected.Seq, expected.Event.EventID)
+		expected, present := wantByKey[identityKey(entry)]
+		require.True(t, present, "队列里不得出现原物集合之外的条目：id=%s", entry.Event.EventID)
 		identity, err := acquire.CommitIdentityOf(expected.Event)
 		require.NoError(t, err)
 		got, err := acquire.CommitIdentityOf(entry.Event)
 		require.NoError(t, err)
-		require.Equal(t, identity, got, "原物完整正文身份不得被相同计数替代，seq=%d", expected.Seq)
+		require.Equal(t, identity, got, "原物完整正文身份不得被相同计数替代，id=%s", entry.Event.EventID)
 		require.Equal(t, expected.Replay, entry.Replay)
 		require.True(t, entry.Appended && entry.Durable)
 	}
-	sqlActual := outboxRestartSQLWAL(t, m.indexPath(), p.Key().LogSourceID+"/"+p.Key().SourceGeneration)
-	require.Len(t, sqlActual, 1502)
-	require.Len(t, sqlActual, len(sqlWant))
-	for i := range sqlWant {
-		require.Equal(t, sqlWant[i], sqlActual[i], "独立SQL保留同一耐久身份，seq=%d", sqlWant[i].Seq)
-	}
+	// 持久凭据：position 水位必须能从库里逐字段读回（这正是重启后重读的起点）。
+	var read, durable, reclaim uint64
+	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	require.NoError(t, err)
+	require.NoError(t, reader.QueryRow("SELECT read_pos,durable_pos,reclaim_pos FROM position WHERE key=?",
+		p.Key().LogSourceID+"/"+p.Key().SourceGeneration).Scan(&read, &durable, &reclaim))
+	require.NoError(t, reader.Close())
 	entry := p.Ledger().Get(p.Key())
 	require.Equal(t, before.Positions, entry.Positions, "未发生本批ACK时任何位置水位不得借旧资格推进")
 	require.Equal(t, ledger.RequestDoneRangesOf(before), ledger.RequestDoneRangesOf(entry))
@@ -1161,8 +1104,7 @@ func TestDurableOutboxPrunedReplayCursorDrainsRemaining400WithoutHintDeadlock(t 
 	entry := p.Ledger().Get(p.Key())
 	require.Equal(t, uint64(104052), entry.Positions.Delivery)
 	require.Equal(t, uint64(104052), entry.Positions.Reclaim, "必须由真实HTTP逐字段确认与回收证明删前500，不手动剪WAL")
-	require.Len(t, p.WAL().Snapshot(), 400)
-	require.Len(t, outboxRestartSQLWAL(t, m.indexPath(), key), 400)
+	require.Len(t, p.WAL().Snapshot(), 400, "删前 500 后应剩 400 条待投递")
 	delivered, err = p.DeliverPendingContext(context.Background())
 	if err != nil {
 		m.mu.Lock()
@@ -1180,8 +1122,7 @@ func TestDurableOutboxPrunedReplayCursorDrainsRemaining400WithoutHintDeadlock(t 
 	require.Equal(t, uint64(166452), entry.Positions.Durable)
 	require.Equal(t, uint64(166452), entry.Positions.Delivery)
 	require.Equal(t, uint64(166452), entry.Positions.Reclaim)
-	require.Empty(t, p.WAL().Snapshot())
-	require.Empty(t, outboxRestartSQLWAL(t, m.indexPath(), key))
+	require.Empty(t, p.WAL().Snapshot(), "全部回收后队列必须为空")
 	require.False(t, needReconfirmPending(m, key))
 	fixture.mu.Lock()
 	payloads := append([][]byte(nil), fixture.writes...)
@@ -1252,9 +1193,11 @@ func outboxReclaimSQLCaughtUp(t *testing.T, m *Manager, key string, through uint
 		return false
 	}
 	defer reader.Close()
-	var read, durable, reclaim, pending, remaining uint64
-	err = reader.QueryRow(`SELECT p.read_pos,p.durable_pos,p.reclaim_pos,pr.pending,(SELECT COUNT(*) FROM source_wal w WHERE w.key=p.key AND w.record_end>p.reclaim_pos) FROM position p JOIN projection pr ON pr.key=p.key WHERE p.key=?`, key).Scan(&read, &durable, &reclaim, &pending, &remaining)
-	return err == nil && read == through && durable == through && reclaim == through && pending == 0 && remaining == 0
+	// 2026-10-29：`source_wal` 表已删除，「剩余未回收行数」改由调用方用内存队列自行断言
+	// （本 helper 只管库侧），这里只读三个水位与 projection.pending。
+	var read, durable, reclaim, pending uint64
+	err = reader.QueryRow(`SELECT p.read_pos,p.durable_pos,p.reclaim_pos,pr.pending FROM position p JOIN projection pr ON pr.key=p.key WHERE p.key=?`, key).Scan(&read, &durable, &reclaim, &pending)
+	return err == nil && read == through && durable == through && reclaim == through && pending == 0
 }
 
 func TestDurableOutboxACKedProofDebtRetriesReadonlyWithoutNewInput(t *testing.T) {
@@ -1423,8 +1366,7 @@ func TestDurableOutboxOuterArchiveBusyRewindsAndScannerRecoversWithoutInput(t *t
 	require.NoError(t, err)
 	old, source, previous := outboxArchiveBusyRestartSeed(t, client)
 	key := source.LogSourceID + "/" + source.SourceGeneration
-	want, before := outboxRestartDiskWAL(t, old, key), previous.Ledger().Get(previous.Key())
-	sqlWant := outboxRestartSQLWAL(t, old.indexPath(), key)
+	want, before := previous.WAL().Snapshot(), previous.Ledger().Get(previous.Key())
 	armed.Store(true)
 	restarted, err := newTestManager(t, Options{Root: old.root, VL: client, Catalog: catalog.New(old.journal), Journal: old.journal, Sources: []SourceConfig{source}, DeferredDelivery: true, StartupRecoveryBackground: true})
 	require.NoError(t, err)
@@ -1433,7 +1375,7 @@ func TestDurableOutboxOuterArchiveBusyRewindsAndScannerRecoversWithoutInput(t *t
 	require.Contains(t, restarted.StartupRecoveryStatus().ReplaysInFlight, key)
 	restored, ok := restarted.pipeFor(key)
 	require.True(t, ok)
-	outboxAssertRestartResponsibility(t, restarted, restored, want, sqlWant, before)
+	outboxAssertRestartResponsibility(t, restarted, restored, want, before)
 	cancel, workerDone := outboxStartRestartWorker(t, restarted)
 	var payload []byte
 	select {
@@ -1445,14 +1387,14 @@ func TestDurableOutboxOuterArchiveBusyRewindsAndScannerRecoversWithoutInput(t *t
 	require.Positive(t, restarted.RebuildStats().Started)
 	require.Contains(t, restarted.StartupRecoveryStatus().ReplaysInFlight, key)
 	require.Contains(t, restarted.CutoverReadiness().Reasons, "startup_replay_in_flight")
-	outboxAssertRestartResponsibility(t, restarted, restored, want, sqlWant, before)
+	outboxAssertRestartResponsibility(t, restarted, restored, want, before)
 	oldID, err := acquire.CommitIdentityOf(want[0].Event)
 	require.NoError(t, err)
 	require.False(t, restarted.committedContains(key, previous, []acquire.CommitIdentity{oldID}), "旧进程pipe的回执不能授权新进程")
 	close(release)
 	outboxJoinRestartOutcome(t, restarted, source, fixture, cancel, workerDone)
 	<-handlerDone
-	outboxAssertRestartResponsibility(t, restarted, restored, want, sqlWant, before)
+	outboxAssertRestartResponsibility(t, restarted, restored, want, before)
 	require.NoError(t, restarted.Stop())
 }
 
@@ -1491,8 +1433,7 @@ func TestDurableOutboxSynchronousRestartTimeoutPreservesExactResponsibility(t *t
 	require.NoError(t, err)
 	old, source, previous := outboxArchiveBusyRestartSeed(t, client)
 	key := source.LogSourceID + "/" + source.SourceGeneration
-	want, before := outboxRestartDiskWAL(t, old, key), previous.Ledger().Get(previous.Key())
-	sqlWant := outboxRestartSQLWAL(t, old.indexPath(), key)
+	want, before := previous.WAL().Snapshot(), previous.Ledger().Get(previous.Key())
 	armed.Store(true)
 	failed, err := newTestManager(t, Options{Root: old.root, VL: client, Catalog: catalog.New(old.journal), Journal: old.journal, Sources: []SourceConfig{source}, DeferredDelivery: true})
 	require.Nil(t, failed, "默认同步New不能把校验失败伪装成创建成功")
@@ -1527,7 +1468,7 @@ func TestDurableOutboxSynchronousRestartTimeoutPreservesExactResponsibility(t *t
 	require.Equal(t, 200*time.Millisecond, failedOwner.verificationTimeout)
 	restored, ok := failedOwner.pipeFor(key)
 	require.True(t, ok)
-	outboxAssertRestartResponsibility(t, failedOwner, restored, want, sqlWant, before)
+	outboxAssertRestartResponsibility(t, failedOwner, restored, want, before)
 	failedOwner.mu.Lock()
 	pending := failedOwner.state.Sources[key].PublicationPending
 	failedOwner.mu.Unlock()
@@ -1542,10 +1483,10 @@ func TestDurableOutboxSynchronousRestartTimeoutPreservesExactResponsibility(t *t
 	require.NoError(t, third.WaitStartupRecovery(waitContext(t, 30*time.Second)))
 	thirdPipe, ok := third.pipeFor(key)
 	require.True(t, ok)
-	outboxAssertRestartResponsibility(t, third, thirdPipe, want, sqlWant, before)
+	outboxAssertRestartResponsibility(t, third, thirdPipe, want, before)
 	cancel, done := outboxStartRestartWorker(t, third)
 	outboxJoinRestartOutcome(t, third, source, fixture, cancel, done)
-	outboxAssertRestartResponsibility(t, third, thirdPipe, want, sqlWant, before)
+	outboxAssertRestartResponsibility(t, third, thirdPipe, want, before)
 	require.NoError(t, third.Stop())
 }
 
@@ -1765,7 +1706,6 @@ func TestDurableOutboxReuseConfirmationPreservesUnfinishedResponsibility(t *test
 				wantEntries++
 			}
 			require.Len(t, p.WAL().Snapshot(), wantEntries)
-			require.Len(t, outboxRestartSQLWAL(t, m.indexPath(), key), wantEntries)
 			require.Equal(t, writes, outboxFixtureWriteCount(fixture), "无效证据不得引发新物理写或副本")
 			for _, day := range []string{source.UTCDay, time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")} {
 				rows, err := m.index.ListMaterializations(context.Background(), key, day, "", 0, 20)
@@ -1924,22 +1864,35 @@ func TestDurableOutboxSlowCatalogJournalAllowsNext1000RealSQLiteCommit(t *testin
 		t.Fatal("只读确认未进入真实Catalog journal落地屏障")
 	}
 	appendOutboxLines(t, source.Path, 1000, 1000)
-	committed := make(chan error, 1)
-	go func() { _, drainErr := p.Drain(); committed <- drainErr }()
+	type drainResult struct {
+		events []logtypes.Event
+		err    error
+	}
+	committed := make(chan drainResult, 1)
+	go func() {
+		events, drainErr := p.Drain()
+		committed <- drainResult{events: events, err: drainErr}
+	}()
+	var second []logtypes.Event
 	select {
-	case err := <-committed:
-		require.NoError(t, err)
+	case got := <-committed:
+		require.NoError(t, got.err)
+		second = got.events
 	case <-time.After(4 * time.Second):
 		close(release)
 		<-done
 		t.Fatal("Catalog journal IO挡住窗外下一批1000的实际SQL提交")
 	}
+	require.Len(t, second, 1000)
 	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 	require.NoError(t, err)
 	defer reader.Close()
-	var rows int
-	require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
-	require.Equal(t, 2000, rows)
+	// 2026-10-29：WAL 不再落盘（source_wal 表已删），两批共 2000 条的「已耐久」凭据是
+	// position.durable_pos 必须覆盖第二批末尾；队列条数由内存队列自身断言。
+	var durable uint64
+	require.NoError(t, reader.QueryRow("SELECT MAX(durable_pos) FROM position").Scan(&durable))
+	require.GreaterOrEqual(t, durable, second[len(second)-1].Record.End, "两批共 2000 行必须都已由独立mode=ro SQLite实际COMMIT")
+	require.Len(t, p.WAL().Snapshot(), 2000, "队列必须完整保留两批共 2000 条")
 	select {
 	case <-done:
 		t.Fatal("journal屏障未解除前实际确认owner不得退出")
@@ -2427,9 +2380,11 @@ func TestDurableOutboxManagerPreexistingSiblingsCross500KeepCanonicalRules(t *te
 			reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 			require.NoError(t, err)
 			defer reader.Close()
-			var rows int
-			require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
-			require.Equal(t, 766, rows)
+			// 2026-10-29：`source_wal` 已删；766 条「全部已耐久」的持久凭据是 position 水位，
+			// 条数由上面的内存队列断言。
+			var durable uint64
+			require.NoError(t, reader.QueryRow("SELECT MAX(durable_pos) FROM position").Scan(&durable))
+			require.GreaterOrEqual(t, durable, events[765].Record.End, "766 条必须全部已由独立mode=ro SQLite COMMIT")
 			record, ok := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay})
 			require.True(t, ok)
 			require.True(t, record.PublishedProjection.CoverageComplete)
@@ -2473,6 +2428,7 @@ func TestDurableOutboxManagerTrueSiblingConflictStaysExplicitAndDurable(t *testi
 	conflicts := len(m.state.Sources[source.LogSourceID+"/"+source.SourceGeneration].IdentityConflicts)
 	m.mu.Unlock()
 	require.Positive(t, conflicts)
+	key := source.LogSourceID + "/" + source.SourceGeneration
 	fixture.mu.Lock()
 	writes := len(fixture.writes)
 	fixture.mu.Unlock()
@@ -2486,18 +2442,38 @@ func TestDurableOutboxManagerTrueSiblingConflictStaysExplicitAndDurable(t *testi
 	root, journal := m.root, m.journal
 	require.NoError(t, m.Stop())
 	restartCatalog := catalog.New(journal)
-	_, err = newTestManager(t, Options{Root: root, Catalog: restartCatalog, Journal: journal, VL: client, Sources: []SourceConfig{source}, DeferredDelivery: true})
-	require.ErrorContains(t, err, "canonical身份冲突", "二启不能把真冲突的任意赢家发布为假complete；明确拒绝启动恢复并保留原责任")
-	reader, readErr := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	// 2026-10-29（WAL 改纯内存后的**必然结果**，不是放宽断言）：
+	// 旧实现重启时会从 `source_wal.ack_body_digest` 重建 ACK，并在那一轮顺带做 canonical
+	// 身份核对 ⇒ 真冲突会在**启动期**就以报错拒服。表删除后没有“重启恢复队列”这件事：
+	// 重启只把 read/durable 退到 reclaim 重读，冲突自然要等到**真正读到并投递**时才暴露。
+	// 不补启动期核对是有意为之（那等于把一次全段磁盘遍历塞回启动路径）；
+	// 对齐 Filebeat：启动期不做身份核对。故断言改为「二启成功 + 首投抛出冲突」。
+	restarted, err := newTestManager(t, Options{Root: root, Catalog: restartCatalog, Journal: journal, VL: client, Sources: []SourceConfig{source}, DeferredDelivery: true})
+	require.NoError(t, err, "二启本身必须成功（重启不再做恢复期身份核对）")
+	restartPipe, ok := restarted.pipeFor(source.LogSourceID + "/" + source.SourceGeneration)
+	require.True(t, ok)
+	// 重启后退到 reclaim 重读，同一段字节会被重读一次（夹具正文是合成的、不在文件里，
+	// 故这里显式把同一份事件集合植入重启后的队列，等价于重读产物）；冲突就在首次投递暴露。
+	restarted.mu.Lock()
+	restartConflicts := len(restarted.state.Sources[key].IdentityConflicts)
+	restarted.mu.Unlock()
+	require.Positive(t, restartConflicts, "冲突隔离记录必须随索引一起持久化，二启不得丢失")
+	require.NoError(t, restartPipe.WAL().Append(events...))
+	require.NoError(t, restartPipe.WAL().Commit())
+	_, err = restartPipe.DeliverPendingContext(context.Background())
+	require.ErrorContains(t, err, "canonical身份冲突", "冲突必须由首投器重报，保留全部责任且不发布假complete")
+	reader, readErr := sql.Open("sqlite", "file:"+restarted.indexPath()+"?mode=ro")
 	require.NoError(t, readErr)
 	defer reader.Close()
-	var rows int
-	require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
-	require.Equal(t, 766, rows)
+	// 2026-10-29：`source_wal` 已删；继续保留责任的持久凭据是 position 水位。
+	var durable uint64
+	require.NoError(t, reader.QueryRow("SELECT MAX(durable_pos) FROM position").Scan(&durable))
+	require.GreaterOrEqual(t, durable, events[765].Record.End, "766 条已耐久水位必须留在库里，二启不得回退")
 	record, _ = restartCatalog.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay})
 	if record != nil {
-		require.Nil(t, record.PublishedProjection)
+		require.Nil(t, record.PublishedProjection, "真冲突不得被发布成 complete")
 	}
+	require.NoError(t, restarted.Stop())
 }
 
 func TestDurableOutboxHeldHeadAndSilent766UseRealSQLiteAndVL(t *testing.T) {
@@ -2588,7 +2564,11 @@ func TestDurableOutboxIncompleteActualPlanCannotIssueReceipt(t *testing.T) {
 	require.NoError(t, m.persist())
 }
 
-func TestDurableOutboxActualPlanSQLBodyUsesSamePrivateEncoding(t *testing.T) {
+// 2026-10-29：原 `TestDurableOutboxActualPlanSQLBodyUsesSamePrivateEncoding` 钉的是「写进
+// `source_wal` 的 body 字节必须逐字等于本计划捕获的原完整编码」。表已删，同一语义改钉在
+// 提交回执上：回执里的 `CommitIdentity.BodyDigest` 必须来自**本计划捕获的那份完整正文**
+// （含同计划私有 Fields），不能被构建后的同 ID 新变体顶替。
+func TestDurableOutboxActualPlanReceiptKeepsPlanPrivateFields(t *testing.T) {
 	m, source, p := outboxTestManager(t, nil)
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	events := []logtypes.Event{
@@ -2600,54 +2580,29 @@ func TestDurableOutboxActualPlanSQLBodyUsesSamePrivateEncoding(t *testing.T) {
 	}
 	require.NoError(t, p.WAL().Append(events...))
 	require.NoError(t, p.WAL().Commit())
-	var visited atomic.Int64
+	identities := make([]acquire.CommitIdentity, 0, len(events))
+	for _, event := range events {
+		identity, err := acquire.CommitIdentityOf(event)
+		require.NoError(t, err)
+		identities = append(identities, identity)
+	}
 	plan, err := m.planPersist(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, plan)
-	encoded := 0
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
-	require.NoError(t, err)
-	defer reader.Close()
-	rows, err := reader.Query(`SELECT seq,event_id,record_start,record_end,appended,durable,replay,body,fp FROM source_wal WHERE key=? ORDER BY seq`, key)
-	require.NoError(t, err)
-	stored := map[string][]byte{}
-	for rows.Next() {
-		var seq, start, end, durable, appended, replay, fp uint64
-		var id string
-		var body []byte
-		require.NoError(t, rows.Scan(&seq, &id, &start, &end, &appended, &durable, &replay, &body, &fp))
-		stored[id] = append([]byte(nil), body...)
-		encoded++
-	}
-	require.NoError(t, rows.Err())
-	rows.Close()
-	// 计划未Apply前SQL没有该源行；Apply后Body必须是同计划原JSON，而不是当前Fields重编码。
-	require.Zero(t, encoded)
+	// 计划未Apply前不发布任何回执。
+	require.False(t, m.committedContains(key, p, identities), "计划未提交前不得发布回执")
 	_, err = m.commitPersist(context.Background(), plan)
 	require.NoError(t, err)
-	rows, err = reader.Query(`SELECT event_id,body FROM source_wal WHERE key=? ORDER BY seq`, key)
-	require.NoError(t, err)
-	for rows.Next() {
-		var id string
-		var body []byte
-		require.NoError(t, rows.Scan(&id, &body))
-		stored[id] = append([]byte(nil), body...)
-		visited.Add(1)
-	}
-	rows.Close()
-	require.EqualValues(t, len(events), visited.Load())
-	for _, event := range events {
-		body := stored[event.EventID]
-		require.NotEmpty(t, body)
-		var decoded logtypes.Event
-		require.NoError(t, json.Unmarshal(body, &decoded))
-		require.Equal(t, event.Fields, decoded.Fields, "SQL Body必须完整保留同计划私有Fields")
-		direct, err := json.Marshal(event)
+	require.True(t, m.committedContains(key, p, identities), "完整身份（含同计划私有Fields）必须全部落在回执里")
+	// 同一 EventID 但字段不同的变体不得被“同计数”顶替。
+	for i, event := range events {
+		changed := event
+		changed.Fields = map[string]string{"计划字段": fmt.Sprintf("改后%d", i), "保留": "全字段指纹"}
+		changedIdentity, err := acquire.CommitIdentityOf(changed)
 		require.NoError(t, err)
-		require.Equal(t, direct, body, "同计划复用应逐字节等于原完整编码")
-		identity, err := acquire.CommitIdentityOf(decoded)
-		require.NoError(t, err)
-		require.Equal(t, sha256.Sum256(body), identity.BodyDigest, "完整身份摘要与SQL Body必须来自同一JSON原字节")
+		require.Equal(t, event.EventID, changedIdentity.EventID)
+		require.NotEqual(t, identities[i].BodyDigest, changedIdentity.BodyDigest)
+		require.False(t, m.committedContains(key, p, []acquire.CommitIdentity{changedIdentity}), "回执不得用同ID不同正文顶替")
 	}
 }
 
@@ -2659,7 +2614,7 @@ func TestDurableOutboxBackgroundPlanReuseStillRequiresNewerJoin(t *testing.T) {
 	require.NoError(t, p.WAL().Commit())
 	blocked, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	m.walRowsBuildHook.Store(func() { once.Do(func() { close(blocked); <-release }) })
+	m.rebuildSourceBuildHook.Store(func() { once.Do(func() { close(blocked); <-release }) })
 	done := make(chan error, 1)
 	go func() { done <- m.persistBackground() }()
 	<-blocked
@@ -2670,18 +2625,22 @@ func TestDurableOutboxBackgroundPlanReuseStillRequiresNewerJoin(t *testing.T) {
 	require.NoError(t, p.Ledger().RecordGap(p.Key(), 20, 20, ledger.GapReasonDeliverError, "迫使账本修订变化"))
 	close(release)
 	require.NoError(t, <-done)
-	m.walRowsBuildHook.Store((func())(nil))
+	m.rebuildSourceBuildHook.Store((func())(nil))
 	require.NoError(t, m.persistBackground())
+	// 2026-10-29：`source_wal` 已删。原来用「source_wal 行数==2」证明两条正文都进了计划；
+	// 现在用两条独立事实代替：position.durable_pos 必须覆盖更晚 join 的第二条（计划没跳过它），
+	// 且队列里两条正文都还在（没丢正文）。
 	rows, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 	require.NoError(t, err)
 	defer rows.Close()
 	require.Eventually(t, func() bool {
-		var count int64
-		if err := rows.QueryRow(`SELECT COUNT(*) FROM source_wal WHERE key=?`, key).Scan(&count); err != nil {
+		var durable uint64
+		if err := rows.QueryRow(`SELECT durable_pos FROM position WHERE key=?`, key).Scan(&durable); err != nil {
 			return false
 		}
-		return count == 2
+		return durable >= second.Record.End
 	}, 2*time.Second, 5*time.Millisecond, "后台旧计划不能借旧coverage跳过更晚join，也不能丢新正文")
+	require.Len(t, p.WAL().Snapshot(), 2, "两条正文必须都还在队列里，不能丢新正文")
 }
 
 func TestDurableOutboxPlanBodyNotBorrowedFromLaterSameIDVariant(t *testing.T) {
@@ -2691,11 +2650,11 @@ func TestDurableOutboxPlanBodyNotBorrowedFromLaterSameIDVariant(t *testing.T) {
 	event.Fields = map[string]string{"计划": "捕获值"}
 	require.NoError(t, p.WAL().Append(event))
 	require.NoError(t, p.WAL().Commit())
-	planBody, err := json.Marshal(event)
+	planIdentity, err := acquire.CommitIdentityOf(event)
 	require.NoError(t, err)
 	blocked, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	m.walRowsBuildHook.Store(func() { once.Do(func() { close(blocked); <-release }) })
+	m.rebuildSourceBuildHook.Store(func() { once.Do(func() { close(blocked); <-release }) })
 	done := make(chan error, 1)
 	go func() {
 		plan, err := m.planPersist(context.Background())
@@ -2717,733 +2676,41 @@ func TestDurableOutboxPlanBodyNotBorrowedFromLaterSameIDVariant(t *testing.T) {
 	require.NoError(t, p.WAL().Commit())
 	close(release)
 	require.NoError(t, <-done)
-	m.walRowsBuildHook.Store((func())(nil))
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	m.rebuildSourceBuildHook.Store((func())(nil))
+	// 2026-10-29：`source_wal.body` 已删。原断言「SQL 正文必须来自本计划捕获的原字节」
+	// 已无载体；它保护的那件事改钉在回执上——**回执只能授予 WAL 里仍然存在的完整正文身份**：
+	// 同 ID 旧正文被变体原位替换后，旧身份必须立即失效（否则位置区间复用 / 同 ID 异体
+	// 就能借旧回执拿到外发资格）。
+	variantIdentity, err := acquire.CommitIdentityOf(changed)
 	require.NoError(t, err)
-	defer reader.Close()
-	var body []byte
-	require.NoError(t, reader.QueryRow(`SELECT body FROM source_wal WHERE key=? AND seq=1`, key).Scan(&body))
-	require.Equal(t, planBody, body, "SQL正文必须来自本计划捕获的原字节，不能借构建后的同ID新变体")
+	require.Equal(t, planIdentity.EventID, variantIdentity.EventID)
+	require.NotEqual(t, planIdentity.BodyDigest, variantIdentity.BodyDigest)
+	require.True(t, m.committedContains(key, p, []acquire.CommitIdentity{variantIdentity}),
+		"回执必须覆盖 WAL 里当前那份正文（变体已 durable）")
+	require.False(t, m.committedContains(key, p, []acquire.CommitIdentity{planIdentity}),
+		"已被变体替换的旧正文身份不得继续有效（不得借旧回执外发）")
 }
 
-func outboxDigestCounts(t *testing.T, snapshot *acquire.WALCommitSnapshot) (int, int) {
-	t.Helper()
-	require.NotNil(t, snapshot)
-	value := reflect.ValueOf(snapshot).Elem()
-	marshaled, hashed := value.FieldByName("marshaledEvents"), value.FieldByName("hashedEvents")
-	require.True(t, marshaled.IsValid() && hashed.IsValid(), "必须同时观测实际完整Marshal与SHA调用次数")
-	return int(marshaled.Int()), int(hashed.Int())
-}
-
-func TestDurableOutboxDigestReuseKeepsEveryMarshalAndFreshSQLBody(t *testing.T) {
-	m, source, p := outboxTestManager(t, nil)
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	events := make([]logtypes.Event, 3)
-	for i := range events {
-		events[i] = sixFixEvent(source, source.UTCDay, uint64(i*10), uint64((i+1)*10), fmt.Sprintf("每轮完整编码%d", i))
-		events[i].Fields = map[string]string{"完整字段": fmt.Sprintf("原正文%d", i)}
-	}
-	require.NoError(t, p.WAL().Append(events...))
-	require.NoError(t, p.WAL().Commit())
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
-	require.NoError(t, err)
-	defer reader.Close()
-	counts := [][2]int{}
-	var lastIndex *acquire.WALCommitIndex
-	for phase := 0; phase < 3; phase++ {
-		if phase == 1 {
-			require.NoError(t, m.appendEvents(key, events), "引用轮必须由实际fsync事件段和逐条凭据产生")
-		}
-		if phase == 2 {
-			m.bodyReferenceMu.Lock()
-			delete(m.bodyReferenceProofs, key)
-			m.bodyReferenceMu.Unlock()
-		}
-		require.NoError(t, p.Ledger().PauseAcquire(p.Key(), "逐轮强制实际完整计划"))
-		require.NoError(t, p.Ledger().ResumeAcquire(p.Key()))
-		plan, err := m.planPersist(context.Background())
-		require.NoError(t, err)
-		snapshot := plan.committed[key].encoded
-		marshaled, hashed := outboxDigestCounts(t, snapshot)
-		counts = append(counts, [2]int{marshaled, hashed})
-		require.Equal(t, len(events), marshaled, "每轮包括refs都必须逐完整私有Event实际Marshal")
-		wantHashes := 0
-		if phase == 0 {
-			wantHashes = len(events)
-		}
-		require.Equal(t, wantHashes, hashed, "后续已实际complete的未变物理成员只省SHA，不能重复全SHA")
-		require.NotSame(t, lastIndex, snapshot.WALCommitIndex, "新计划必须重新建立独立成员桶，不可借可变旧index")
-		lastIndex = snapshot.WALCommitIndex
-		refs, inline, identities := snapshot.SplitCommitted()
-		require.Len(t, identities, len(events), "新完整计划不得省略成员")
-		if phase == 1 {
-			require.Len(t, refs, len(events))
-			require.Empty(t, inline)
-		} else {
-			require.Len(t, inline, len(events))
-			require.Empty(t, refs)
-		}
-		for _, event := range events {
-			body, err := json.Marshal(event)
-			require.NoError(t, err)
-			identity, err := acquire.CommitIdentityOf(event)
-			require.NoError(t, err)
-			require.Equal(t, sha256.Sum256(body), identity.BodyDigest)
-			require.Contains(t, identities, identity, "复用身份必须逐值等于新body的直接SHA")
-		}
-		incomplete, err := m.commitPersist(context.Background(), plan)
-		require.NoError(t, err)
-		require.False(t, incomplete)
-		require.Nil(t, plan.committed[key].encoded, "完整编码正文仍在原提交终点释放")
-		for i, event := range events {
-			var body []byte
-			var fp int64
-			require.NoError(t, reader.QueryRow(`SELECT body,fp FROM source_wal WHERE key=? AND seq=?`, key, i+1).Scan(&body, &fp))
-			expectedRow := stateindex.WALRow{Key: key, Seq: uint64(i + 1), EventID: event.EventID, RecordStart: event.Record.Start, RecordEnd: event.Record.End, Appended: true, Durable: true}
-			if phase == 1 {
-				require.Nil(t, body, "引用轮沿用原SQL NULL语义，不伪装有正文")
-			} else {
-				expected, err := json.Marshal(event)
-				require.NoError(t, err)
-				require.NotEmpty(t, body, "inline→ref→inline第三轮必须重新实际写入非空完整SQL正文")
-				require.Equal(t, expected, body)
-				expectedRow.Body, expectedRow.FP = expected, walBodyFP(event)
-			}
-			require.Equal(t, int64(stateindex.WALFingerprint(expectedRow)), fp, "SQL合成FP必须覆盖本轮完整正文判据和inline/ref标志")
-		}
-	}
-	t.Logf("actual_marshal_sha_counts=%v sql_inline_ref_inline_complete=true", counts)
-}
-
-func TestDurableOutboxDigestSeedRequiresActualCompleteCurrentReceipt(t *testing.T) {
-	for _, scenario := range []string{"future_plan", "partial", "apply_error", "stale", "foreign_pipe", "receipt_error", "pending_receipt", "no_index"} {
-		t.Run(scenario, func(t *testing.T) {
-			m, source, p := outboxTestManager(t, nil, func(opts *Options) {
-				if scenario == "partial" {
-					opts.IndexCommit = &stateindex.CommitBudget{CycleMaxRows: 16}
-				}
-			})
-			key := source.LogSourceID + "/" + source.SourceGeneration
-			events := make([]logtypes.Event, 48)
-			for i := range events {
-				events[i] = sixFixEvent(source, source.UTCDay, uint64(i*10), uint64((i+1)*10), fmt.Sprintf("种子必须实际complete%d", i))
-			}
-			require.NoError(t, p.WAL().Append(events...))
-			require.NoError(t, p.WAL().Commit())
-			plan, err := m.planPersist(context.Background())
-			require.NoError(t, err)
-			_, firstSHA := outboxDigestCounts(t, plan.committed[key].encoded)
-			require.Equal(t, len(events), firstSHA)
-			wantSHA := len(events)
-			switch scenario {
-			case "future_plan":
-				m.persistPlanMu.Lock()
-				m.persistPlan = plan
-				m.persistPlanMu.Unlock()
-			case "partial":
-				incomplete, err := m.commitPersist(context.Background(), plan)
-				require.NoError(t, err)
-				require.True(t, incomplete)
-			case "apply_error":
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				_, err := m.commitPersist(ctx, plan)
-				require.Error(t, err)
-			case "stale":
-				newPlan, err := m.planPersist(context.Background())
-				require.NoError(t, err)
-				incomplete, err := m.commitPersist(context.Background(), newPlan)
-				require.NoError(t, err)
-				require.False(t, incomplete)
-				_, err = m.commitPersist(context.Background(), plan)
-				require.ErrorIs(t, err, errPersistPlanStale)
-				wantSHA = 0
-			default:
-				// 故障注入已发布map中的非法回执，验证当前owner/错误/未释放正文三项防线。
-				invalid := &committedSourceReceipt{pipe: p, index: plan.committed[key].encoded.WALCommitIndex}
-				switch scenario {
-				case "foreign_pipe":
-					_, _, other := outboxTestManager(t, nil)
-					invalid.pipe = other
-				case "receipt_error":
-					invalid.err = errors.New("故障回执不得供SHA复用")
-				case "pending_receipt":
-					invalid.encoded = plan.committed[key].encoded
-				case "no_index":
-					invalid.index = nil
-				}
-				m.mu.Lock()
-				if m.committedReceipts == nil {
-					m.committedReceipts = make(map[string]*committedSourceReceipt)
-				}
-				m.committedReceipts[key] = invalid
-				m.mu.Unlock()
-			}
-			require.NoError(t, p.Ledger().PauseAcquire(p.Key(), "强制下一实际捕获"))
-			require.NoError(t, p.Ledger().ResumeAcquire(p.Key()))
-			next, err := m.planPersist(context.Background())
-			require.NoError(t, err)
-			marshaled, hashed := outboxDigestCounts(t, next.committed[key].encoded)
-			require.Equal(t, len(events), marshaled)
-			require.Equal(t, wantSHA, hashed, "只有当前Pipeline实际完整Apply已发布回执可供种子，不借future/partial/error计划")
-			require.Nil(t, next.committed[key].index, "新快照只计算身份，尚未Apply不得提前发布新回执索引")
-		})
-	}
-}
-
-func TestDurableOutboxDigestSeedCannotGrantFutureReceiptBeforeNewApply(t *testing.T) {
-	m, source, p := outboxTestManager(t, nil)
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	first := sixFixEvent(source, source.UTCDay, 0, 10, "原实际提交")
-	require.NoError(t, p.WAL().Append(first))
-	require.NoError(t, p.WAL().Commit())
-	original, err := m.planPersist(context.Background())
-	require.NoError(t, err)
-	_, err = m.commitPersist(context.Background(), original)
-	require.NoError(t, err)
-	m.mu.Lock()
-	old := m.committedReceipts[key]
-	m.mu.Unlock()
-	future := sixFixEvent(source, source.UTCDay, 10, 20, "旧回执外新成员")
-	require.NoError(t, p.WAL().Append(future))
-	require.NoError(t, p.WAL().Commit())
-	futureID, err := acquire.CommitIdentityOf(future)
-	require.NoError(t, err)
-	for attempt := 0; attempt < 2; attempt++ {
-		plan, err := m.planPersist(context.Background())
-		require.NoError(t, err)
-		marshaled, hashed := outboxDigestCounts(t, plan.committed[key].encoded)
-		require.Equal(t, 2, marshaled)
-		require.Equal(t, 1, hashed)
-		require.False(t, m.committedContains(key, p, []acquire.CommitIdentity{futureID}), "新body的身份计算不能借旧seed变成已提交资格")
-		if attempt == 0 {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			_, err = m.commitPersist(ctx, plan)
-			require.Error(t, err)
-			m.mu.Lock()
-			afterError := m.committedReceipts[key]
-			m.mu.Unlock()
-			require.Same(t, old, afterError, "失败新计划不得更新旧实际回执或种子")
-			continue
-		}
-		incomplete, err := m.commitPersist(context.Background(), plan)
-		require.NoError(t, err)
-		require.False(t, incomplete)
-		require.True(t, m.committedContains(key, p, []acquire.CommitIdentity{futureID}))
-		m.mu.Lock()
-		completed := m.committedReceipts[key]
-		m.mu.Unlock()
-		require.NotSame(t, old.index, completed.index)
-	}
-}
-
-func TestDurableOutboxCompletedReceiptRetainsLightIndexWithoutBody(t *testing.T) {
-	m, source, p := outboxTestManager(t, nil)
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	event := sixFixEvent(source, source.UTCDay, 0, 10, "已完成计划的轻量索引")
-	event.Fields = map[string]string{"正文": strings.Repeat("只属于原WAL与原计划", 128)}
-	require.NoError(t, p.WAL().Append(event))
-	require.NoError(t, p.WAL().Commit())
-	plan, err := m.planPersist(context.Background())
-	require.NoError(t, err)
-	require.NotNil(t, plan.committed[key].encoded)
-	incomplete, err := m.commitPersist(context.Background(), plan)
-	require.NoError(t, err)
-	require.False(t, incomplete)
-	require.Nil(t, plan.committed[key].encoded, "原终点必须释放完整编码计划")
-	m.mu.Lock()
-	receipt := m.committedReceipts[key]
-	m.mu.Unlock()
-	require.NotNil(t, receipt)
-	require.Nil(t, receipt.encoded, "长期回执不得保留完整计划正文")
-	index := reflect.ValueOf(receipt).Elem().FieldByName("index")
-	require.True(t, index.IsValid(), "完整实际Apply后的回执缺失轻量索引，后续prune仍被迫重算全部完整正文")
-	require.False(t, index.IsNil(), "实际完整Apply后的非空回执必须保留本计划轻量索引")
-	live, recomputed, err := receipt.liveIdentities()
-	require.NoError(t, err)
-	require.Zero(t, recomputed, "释放原计划后未变化成员仍须零次完整身份编码")
-	strict, err := p.WAL().CommittedIdentities()
-	require.NoError(t, err)
-	require.Equal(t, strict, live)
-}
-
-func TestDurableOutboxPruneReceiptIndexCountsAndKeepsExactOldIntersection(t *testing.T) {
-	m, source, p := outboxTestManager(t, nil)
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	events := make([]logtypes.Event, 4)
-	for i := range events {
-		events[i] = sixFixEvent(source, source.UTCDay, uint64(i*10), uint64((i+1)*10), fmt.Sprintf("旧回执成员%d", i))
-		events[i].Fields = map[string]string{"完整正文": fmt.Sprintf("全字段%d", i)}
-	}
-	require.NoError(t, p.WAL().Append(events...))
-	require.NoError(t, p.WAL().Commit())
-	plan, err := m.planPersist(context.Background())
-	require.NoError(t, err)
-	incomplete, err := m.commitPersist(context.Background(), plan)
-	require.NoError(t, err)
-	require.False(t, incomplete)
-	m.mu.Lock()
-	previous := m.committedReceipts[key]
-	m.mu.Unlock()
-	require.NotNil(t, previous.index)
-	counts := []int{}
-	prune := func(want int) {
-		t.Helper()
-		called := 0
-		m.pruneCommittedReceiptObserved(key, p, func(encoded int) {
-			called++
-			counts = append(counts, encoded)
-			require.Equal(t, want, encoded, "必须观测真实完整身份编码次数，不能用墙钟替代机制反例")
-		})
-		require.Equal(t, 1, called)
-		strict, err := p.WAL().CommittedIdentities()
-		require.NoError(t, err)
-		wantIDs := map[acquire.CommitIdentity]struct{}{}
-		for id := range previous.identities {
-			if _, ok := strict[id]; ok {
-				wantIDs[id] = struct{}{}
-			}
-		}
-		m.mu.Lock()
-		current := m.committedReceipts[key]
-		m.mu.Unlock()
-		require.Equal(t, wantIDs, current.identities, "prune只能与同一个旧receipt做精确交集")
-	}
-	prune(0)
-	future := sixFixEvent(source, source.UTCDay, 40, 50, "旧回执外未来成员")
-	require.NoError(t, p.WAL().Append(future))
-	require.NoError(t, p.WAL().Commit())
-	prune(1)
-	futureID, err := acquire.CommitIdentityOf(future)
-	require.NoError(t, err)
-	require.False(t, m.committedContains(key, p, []acquire.CommitIdentity{futureID}), "live集合包含新成员不等于旧回执有其实际提交资格")
-	m.mu.Lock()
-	m.committedReceipts[key] = &committedSourceReceipt{pipe: p, identities: previous.identities}
-	m.mu.Unlock()
-	prune(5)
-	m.mu.Lock()
-	delete(m.committedReceipts, key)
-	m.mu.Unlock()
-	m.pruneCommittedReceiptObserved(key, p, func(encoded int) { require.Equal(t, 5, encoded, "nil回执仍保留严格全量重算路径") })
-	m.mu.Lock()
-	nilReceipt := m.committedReceipts[key]
-	m.committedReceipts[key] = previous
-	m.mu.Unlock()
-	require.Nil(t, nilReceipt, "没有旧回执时不能凭live集合创建提交资格")
-	require.NoError(t, p.WAL().Restore(nil))
-	prune(0)
-	m.mu.Lock()
-	empty := m.committedReceipts[key]
-	m.mu.Unlock()
-	require.Empty(t, empty.identities)
-	require.Nil(t, empty.index, "旧回执裁空必须同时释放轻量成员桶")
-	t.Logf("prune_actual_full_identity_encodes=%v nil_receipt_encodes=5", counts)
-}
-
-func TestDurableOutboxPruneReceiptIndexMutationsNeverGrantNewBodies(t *testing.T) {
-	for _, scenario := range []string{"mixed_durability", "non_durable_later", "restore_same_seq_fields", "replay_replace", "same_length_new_append"} {
-		t.Run(scenario, func(t *testing.T) {
-			m, source, p := outboxTestManager(t, nil)
-			key := source.LogSourceID + "/" + source.SourceGeneration
-			first := sixFixEvent(source, source.UTCDay, 0, 10, "旧提交A")
-			second := sixFixEvent(source, source.UTCDay, 10, 20, "旧提交B")
-			first.Fields = map[string]string{"完整Fields": "旧值"}
-			entries := []acquire.WALEntry{{Seq: 1, Event: first, Appended: true, Durable: true}, {Seq: 2, Event: second, Appended: true, Durable: true}}
-			if scenario == "mixed_durability" || scenario == "non_durable_later" {
-				entries[1].Durable = false
-				if scenario == "mixed_durability" {
-					entries[1].Seq = 1
-				}
-			}
-			require.NoError(t, p.WAL().Restore(entries))
-			require.NoError(t, p.Ledger().PauseAcquire(p.Key(), "原计划fixture修订"))
-			require.NoError(t, p.Ledger().ResumeAcquire(p.Key()))
-			plan, err := m.planPersist(context.Background())
-			require.NoError(t, err)
-			_, err = m.commitPersist(context.Background(), plan)
-			require.NoError(t, err)
-			m.mu.Lock()
-			before := m.committedReceipts[key]
-			m.mu.Unlock()
-			require.NotNil(t, before.index)
-			wantEncodes := 2
-			switch scenario {
-			case "non_durable_later":
-				wantEncodes = 1
-			case "restore_same_seq_fields":
-				entries[0].Event.Fields = map[string]string{"完整Fields": "同ID同hash但新体"}
-				entries[1].Seq = 1
-				require.NoError(t, p.WAL().Restore(entries))
-			case "replay_replace":
-				changed := first
-				changed.EventTimeUTC = source.UTCDay + "T12:01:00Z"
-				changed.CanonicalHash = logtypes.CanonicalContentHash(changed.EventTimeUTC, changed.Level, changed.Stream, changed.Message)
-				require.NoError(t, p.WAL().AppendReplay(changed))
-			case "same_length_new_append":
-				require.NoError(t, p.WAL().Restore(entries[1:]))
-				require.NoError(t, p.WAL().Append(sixFixEvent(source, source.UTCDay, 20, 30, "同长新成员")))
-				require.Len(t, p.WAL().Snapshot(), 2)
-			}
-			require.NoError(t, p.WAL().Commit())
-			strict, err := p.WAL().CommittedIdentities()
-			require.NoError(t, err)
-			expected := map[acquire.CommitIdentity]struct{}{}
-			for id := range before.identities {
-				if _, ok := strict[id]; ok {
-					expected[id] = struct{}{}
-				}
-			}
-			m.pruneCommittedReceiptObserved(key, p, func(encoded int) { require.Equal(t, wantEncodes, encoded) })
-			m.mu.Lock()
-			after := m.committedReceipts[key]
-			m.mu.Unlock()
-			require.Equal(t, expected, after.identities, "任何新体或未来Commit成员不得取得旧实际计划资格")
-			for id := range strict {
-				_, allowed := expected[id]
-				require.Equal(t, allowed, m.committedContains(key, p, []acquire.CommitIdentity{id}))
-			}
-		})
-	}
-}
-
-func TestDurableOutboxPruneReceiptIndexCannotOverwriteConcurrentCompleteOrOwner(t *testing.T) {
-	for _, scenario := range []string{"new_complete", "pipeline_replaced"} {
-		t.Run(scenario, func(t *testing.T) {
-			m, source, p := outboxTestManager(t, nil)
-			key := source.LogSourceID + "/" + source.SourceGeneration
-			first := sixFixEvent(source, source.UTCDay, 0, 10, "并发裁剪旧计划")
-			require.NoError(t, p.WAL().Append(first))
-			require.NoError(t, p.WAL().Commit())
-			plan, err := m.planPersist(context.Background())
-			require.NoError(t, err)
-			_, err = m.commitPersist(context.Background(), plan)
-			require.NoError(t, err)
-			m.mu.Lock()
-			old := m.committedReceipts[key]
-			m.mu.Unlock()
-			entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-			defer func() {
-				select {
-				case <-release:
-				default:
-					close(release)
-				}
-				<-done
-			}()
-			go func() {
-				defer close(done)
-				m.pruneCommittedReceiptObserved(key, p, func(encoded int) { close(entered); <-release })
-			}()
-			<-entered
-			var current *committedSourceReceipt
-			if scenario == "new_complete" {
-				future := sixFixEvent(source, source.UTCDay, 10, 20, "并发完成的新计划成员")
-				require.NoError(t, p.WAL().Append(future))
-				require.NoError(t, p.WAL().Commit())
-				newPlan, err := m.planPersist(context.Background())
-				require.NoError(t, err)
-				incomplete, err := m.commitPersist(context.Background(), newPlan)
-				require.NoError(t, err)
-				require.False(t, incomplete)
-				m.mu.Lock()
-				current = m.committedReceipts[key]
-				m.mu.Unlock()
-				require.NotSame(t, old, current)
-				require.NotSame(t, old.index, current.index, "新complete须使用本次实际完整计划的轻量索引")
-				id, err := acquire.CommitIdentityOf(future)
-				require.NoError(t, err)
-				require.True(t, m.committedContains(key, p, []acquire.CommitIdentity{id}))
-			} else {
-				m.mu.Lock()
-				delete(m.pipes, key)
-				m.mu.Unlock()
-				require.NoError(t, m.Register(source), "实际换主登记路径必须释放旧owner回执")
-				m.mu.Lock()
-				replacement, released := m.pipes[key], m.committedReceipts[key]
-				// 将旧指针重新放回只验证末端currentowner门；不得借相同指针绕过Pipeline检查。
-				m.committedReceipts[key] = old
-				current = old
-				m.mu.Unlock()
-				require.NotSame(t, p, replacement)
-				require.Nil(t, released)
-			}
-			close(release)
-			<-done
-			m.mu.Lock()
-			after := m.committedReceipts[key]
-			if scenario == "pipeline_replaced" {
-				delete(m.committedReceipts, key)
-			}
-			m.mu.Unlock()
-			require.Same(t, current, after, "旧prune不得覆盖新complete，或在Pipeline已换主后重写旧回执")
-		})
-	}
-}
-
-func TestDurableOutboxReceiptIndexRequiresActualCompleteApply(t *testing.T) {
-	for _, scenario := range []string{"generic_nil", "future_plan", "apply_error", "receipt_error", "stale", "partial"} {
-		t.Run(scenario, func(t *testing.T) {
-			m, source, p := outboxTestManager(t, nil, func(opts *Options) {
-				if scenario == "partial" {
-					opts.IndexCommit = &stateindex.CommitBudget{CycleMaxRows: 16}
-				}
-			})
-			key := source.LogSourceID + "/" + source.SourceGeneration
-			events := make([]logtypes.Event, 48)
-			for i := range events {
-				events[i] = sixFixEvent(source, source.UTCDay, uint64(i*10), uint64((i+1)*10), fmt.Sprintf("未获完整Apply资格%d", i))
-			}
-			require.NoError(t, p.WAL().Append(events...))
-			require.NoError(t, p.WAL().Commit())
-			plan, err := m.planPersist(context.Background())
-			require.NoError(t, err)
-			require.NotNil(t, plan.committed[key].encoded)
-			require.Nil(t, plan.committed[key].index, "仅构建计划不得提前获得回执索引")
-			var expected *committedSourceReceipt
-			switch scenario {
-			case "generic_nil":
-				incomplete, err := m.commitPersist(context.Background(), nil)
-				require.NoError(t, err)
-				require.False(t, incomplete)
-			case "future_plan":
-				// 只捕获而未Apply的未来快照不得进入回执缓存。
-			case "apply_error":
-				ctx, cancel := context.WithCancel(context.Background())
-				cancel()
-				_, err := m.commitPersist(ctx, plan)
-				require.Error(t, err)
-				require.Nil(t, plan.committed[key].encoded)
-			case "receipt_error":
-				plan.committed[key].err = errors.New("确定性原计划捕获错误")
-				_, err := m.commitPersist(context.Background(), plan)
-				require.ErrorContains(t, err, "确定性原计划捕获错误")
-				require.Nil(t, plan.committed[key].encoded)
-			case "stale":
-				newPlan, err := m.planPersist(context.Background())
-				require.NoError(t, err)
-				_, err = m.commitPersist(context.Background(), newPlan)
-				require.NoError(t, err)
-				m.mu.Lock()
-				expected = m.committedReceipts[key]
-				m.mu.Unlock()
-				require.NotNil(t, expected.index)
-				_, err = m.commitPersist(context.Background(), plan)
-				require.ErrorIs(t, err, errPersistPlanStale)
-				require.Nil(t, plan.committed[key].encoded)
-			case "partial":
-				incomplete, err := m.commitPersist(context.Background(), plan)
-				require.NoError(t, err)
-				require.True(t, incomplete)
-				require.Nil(t, plan.committed[key].encoded)
-			}
-			m.mu.Lock()
-			published := m.committedReceipts[key]
-			m.mu.Unlock()
-			if expected == nil {
-				require.Nil(t, published, "非实际完整Apply不得发布回执或轻量成员索引")
-			} else {
-				require.Same(t, expected, published, "stale旧计划不能替换新实际完成回执")
-			}
-		})
-	}
-}
-
-// 无任何WAL变化时必须零重算，且结果与旧全量路径逐身份相等。
-func TestDurableOutboxLiveIdentitiesReusePlanEncodingWithoutRecompute(t *testing.T) {
-	m, source, p := outboxTestManager(t, nil)
-	events := []logtypes.Event{
-		sixFixEvent(source, source.UTCDay, 0, 10, "复用身份0"),
-		sixFixEvent(source, source.UTCDay, 10, 20, "复用身份1"),
-		sixFixEvent(source, source.UTCDay, 20, 30, "复用身份2"),
-	}
-	require.NoError(t, p.WAL().Append(events...))
-	require.NoError(t, p.WAL().Commit())
-	plan, err := m.planPersist(context.Background())
-	require.NoError(t, err)
-	_, err = m.commitPersist(context.Background(), plan)
-	require.NoError(t, err)
-	require.Zero(t, plan.recomputedIdentities, "未变化的活条目不得重算完整身份")
-	old, err := p.WAL().CommittedIdentities()
-	require.NoError(t, err)
-	require.Len(t, old, len(events))
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	for _, event := range events {
-		identity, err := acquire.CommitIdentityOf(event)
-		require.NoError(t, err)
-		require.Contains(t, old, identity)
-		require.True(t, m.committedContains(key, p, []acquire.CommitIdentity{identity}))
-	}
-}
-
-// Restore可能给多条不同正文相同Seq与相同捕获revision：分组歧义必须保守全量重算，不能覆盖成员。
-func TestDurableOutboxLiveIdentitiesRestoreSameSeqSiblingsRecomputeAll(t *testing.T) {
-	_, source, p := outboxTestManager(t, nil)
-	first := sixFixEvent(source, source.UTCDay, 0, 10, "同Seq正文A")
-	second := sixFixEvent(source, source.UTCDay, 10, 20, "同Seq正文B")
-	require.NoError(t, p.WAL().Restore([]acquire.WALEntry{
-		{Seq: 1, Event: first, Appended: true, Durable: true},
-		{Seq: 1, Event: second, Appended: true, Durable: true},
-	}))
-	entries := p.WAL().Snapshot()
-	require.Len(t, entries, 2)
-	require.Equal(t, entries[0].Seq, entries[1].Seq, "前置：必须造出同Seq兄弟")
-	// Restore不改账本修订号，故直接对本WAL的实际快照做单元级断言。
-	snapshot, err := p.WAL().SnapshotSplitCommittedPlan(nil, nil)
-	require.NoError(t, err)
-	live, recomputed, err := snapshot.LiveCommittedIdentities(p.WAL())
-	require.NoError(t, err)
-	require.Equal(t, 2, recomputed, "同(seq,revision)多正文属歧义，必须逐条重算而不是任取其一")
-	require.Len(t, live, 2)
-	for _, event := range []logtypes.Event{first, second} {
-		identity, err := acquire.CommitIdentityOf(event)
-		require.NoError(t, err)
-		require.Contains(t, live, identity)
-	}
-}
-
-// 同ID、同canonical hash、同record但Fields不同：正文摘要不同，两条都必须保留。
-func TestDurableOutboxLiveIdentitiesSameHashDifferentFieldsStayDistinct(t *testing.T) {
-	_, source, p := outboxTestManager(t, nil)
-	base := sixFixEvent(source, source.UTCDay, 0, 10, "同hash异Fields")
-	other := base
-	other.Fields = map[string]string{"变体": "另一份Fields"}
-	a, err := acquire.CommitIdentityOf(base)
-	require.NoError(t, err)
-	b, err := acquire.CommitIdentityOf(other)
-	require.NoError(t, err)
-	require.Equal(t, a.EventID, b.EventID)
-	require.Equal(t, a.CanonicalHash, b.CanonicalHash)
-	require.Equal(t, a.Record, b.Record)
-	require.NotEqual(t, a.BodyDigest, b.BodyDigest, "前置：正文摘要必须不同")
-	require.NoError(t, p.WAL().Restore([]acquire.WALEntry{
-		{Seq: 1, Event: base, Appended: true, Durable: true},
-		{Seq: 1, Event: other, Appended: true, Durable: true},
-	}))
-	snapshot, err := p.WAL().SnapshotSplitCommittedPlan(nil, nil)
-	require.NoError(t, err)
-	live, _, err := snapshot.LiveCommittedIdentities(p.WAL())
-	require.NoError(t, err)
-	require.Contains(t, live, a)
-	require.Contains(t, live, b, "同ID同hash但异Fields不得被折叠")
-}
-
-// 计划捕获后同ID被替换：旧摘要不得继续授证，新正文必须重算进入交集。
-func TestDurableOutboxLiveIdentitiesPostCaptureVariantRecomputes(t *testing.T) {
-	m, source, p := outboxTestManager(t, nil)
-	event := sixFixEvent(source, source.UTCDay, 0, 10, "捕获时正文")
-	require.NoError(t, p.WAL().Append(event))
-	require.NoError(t, p.WAL().Commit())
-	plan, err := m.planPersist(context.Background())
-	require.NoError(t, err)
-	changed := event
-	changed.EventTimeUTC = source.UTCDay + "T12:01:00Z"
-	changed.CanonicalHash = logtypes.CanonicalContentHash(changed.EventTimeUTC, changed.Level, changed.Stream, changed.Message)
-	require.NoError(t, p.WAL().AppendReplay(changed))
-	require.NoError(t, p.WAL().Commit())
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	live, recomputed, err := plan.committed[key].liveIdentities()
-	require.NoError(t, err)
-	// 替换会把原条目appendRevision更新为本次revision，且追加了更正版 ⇒ 两条都超出原cut。
-	require.Equal(t, 2, recomputed, "捕获后被替换或新增的条目必须重算，不得复用原cut身份")
-	oldIdentity, err := acquire.CommitIdentityOf(event)
-	require.NoError(t, err)
-	newIdentity, err := acquire.CommitIdentityOf(changed)
-	require.NoError(t, err)
-	require.NotContains(t, live, oldIdentity, "被替换正文的旧身份不得继续存在")
-	require.Contains(t, live, newIdentity)
-}
-
-// 复核反例：同Seq同revision、捕获时仅A为Durable，捕获后Commit B（appendRevision不变）。
-// 若分组只收录Durable成员，就会两次复用A并漏掉B；必须整组含非Durable即判歧义并重算。
-func TestDurableOutboxLiveIdentitiesMixedDurabilityGroupRecomputesAll(t *testing.T) {
-	_, source, p := outboxTestManager(t, nil)
-	first := sixFixEvent(source, source.UTCDay, 0, 10, "捕获时已Durable")
-	second := sixFixEvent(source, source.UTCDay, 10, 20, "捕获时才Commit")
-	// Restore 允许成员混合Durable态，且两条同Seq同revision。
-	require.NoError(t, p.WAL().Restore([]acquire.WALEntry{
-		{Seq: 1, Event: first, Appended: true, Durable: true},
-		{Seq: 1, Event: second, Appended: true, Durable: false},
-	}))
-	snapshot, err := p.WAL().SnapshotSplitCommittedPlan(nil, nil)
-	require.NoError(t, err)
-	capturedA, _ := acquire.CommitIdentityOf(first)
-	require.Contains(t, mustSnapshotIdentities(t, snapshot), capturedA, "前置：捕获时只有A进入已提交身份集")
-	// 捕获后B因Commit变Durable，appendRevision不变。
-	require.NoError(t, p.WAL().Commit())
-	live, recomputed, err := snapshot.LiveCommittedIdentities(p.WAL())
-	require.NoError(t, err)
-	identityA, err := acquire.CommitIdentityOf(first)
-	require.NoError(t, err)
-	identityB, err := acquire.CommitIdentityOf(second)
-	require.NoError(t, err)
-	require.Equal(t, 2, recomputed, "同组含非Durable成员时不得复用，两条都必须重算")
-	require.Contains(t, live, identityA)
-	require.Contains(t, live, identityB, "后来才Commit的同Seq成员不得被同组Durable成员顶替")
-	require.Len(t, live, 2)
-	old, err := p.WAL().CommittedIdentities()
-	require.NoError(t, err)
-	require.Equal(t, old, live, "复用路径的活身份集合必须与旧全量路径完全一致")
-}
-
-// 全组捕获时都非Durable：捕获后Commit不改appendRevision，也不得借用任何旧身份。
-func TestDurableOutboxLiveIdentitiesAllNonDurableAtCaptureRecomputes(t *testing.T) {
-	_, source, p := outboxTestManager(t, nil)
-	entries := make([]acquire.WALEntry, 0, 2)
-	events := []logtypes.Event{
-		sixFixEvent(source, source.UTCDay, 0, 10, "捕获时全非Durable0"),
-		sixFixEvent(source, source.UTCDay, 10, 20, "捕获时全非Durable1"),
-	}
-	for i, event := range events {
-		entries = append(entries, acquire.WALEntry{Seq: uint64(i + 1), Event: event, Appended: true, Durable: false})
-	}
-	require.NoError(t, p.WAL().Restore(entries))
-	snapshot, err := p.WAL().SnapshotSplitCommittedPlan(nil, nil)
-	require.NoError(t, err)
-	require.Empty(t, mustSnapshotIdentities(t, snapshot), "前置：捕获时没有任何已提交身份")
-	require.NoError(t, p.WAL().Commit())
-	live, recomputed, err := snapshot.LiveCommittedIdentities(p.WAL())
-	require.NoError(t, err)
-	require.Equal(t, 2, recomputed)
-	old, err := p.WAL().CommittedIdentities()
-	require.NoError(t, err)
-	require.Equal(t, old, live)
-	require.Len(t, live, 2)
-}
-
-// 捕获后新增成员（appendRevision>cut）必须重算，且旧plan不得因此获得额外资格。
-func TestDurableOutboxLiveIdentitiesFutureAppendRecomputesWithoutGrantingReceipt(t *testing.T) {
-	m, source, p := outboxTestManager(t, nil)
-	first := sixFixEvent(source, source.UTCDay, 0, 10, "原计划正文")
-	require.NoError(t, p.WAL().Append(first))
-	require.NoError(t, p.WAL().Commit())
-	plan, err := m.planPersist(context.Background())
-	require.NoError(t, err)
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	require.Contains(t, plan.committed, key, "前置：该源必须进入本计划回执")
-	capturedBefore := len(plan.committed[key].identities)
-	future := sixFixEvent(source, source.UTCDay, 10, 20, "捕获后新增")
-	require.NoError(t, p.WAL().Append(future))
-	require.NoError(t, p.WAL().Commit())
-	live, recomputed, err := plan.committed[key].liveIdentities()
-	require.NoError(t, err)
-	require.Equal(t, 1, recomputed, "捕获后新增的成员必须按当前正文重算")
-	futureIdentity, err := acquire.CommitIdentityOf(future)
-	require.NoError(t, err)
-	require.Contains(t, live, futureIdentity)
-	old, err := p.WAL().CommittedIdentities()
-	require.NoError(t, err)
-	require.Equal(t, old, live, "活集合须与旧全量逐身份一致")
-	// 旧计划回执仍只含捕获时的成员，不能因新Commit扩张资格。
-	require.Len(t, plan.committed[key].identities, capturedBefore)
-	require.NotContains(t, plan.committed[key].identities, futureIdentity)
-}
-
-func mustSnapshotIdentities(t *testing.T, snapshot *acquire.WALCommitSnapshot) map[acquire.CommitIdentity]struct{} {
-	t.Helper()
-	_, _, identities := snapshot.SplitCommitted()
-	return identities
-}
+// 2026-10-29：这一整块原本钉的是「WAL 行 SQL 编码」的实现细节——
+//   - `outboxDigestCounts`（观测 WALCommitSnapshot 的 Marshal/SHA 次数）；
+//   - `TestDurableOutboxDigestReuse*` / `...ReceiptIndex*` / `...CompletedReceiptRetainsLightIndex*`
+//     （`WALCommitSnapshot` / `WALCommitIndex` 的摘要复用与轻量索引）；
+//   - `TestDurableOutboxLiveIdentities*`（复用计划已算身份以减少重复编码）。
+//
+// 两个“SQL body 字节同源”用例没有随表消失，只把载体从 `source_wal.body` 换成提交回执里的
+// `CommitIdentity.BodyDigest`（断言原封不动）：
+// `TestDurableOutboxActualPlanReceiptKeepsPlanPrivateFields`（原 `...ActualPlanSQLBodyUsesSamePrivateEncoding`）
+// 与 `TestDurableOutboxPlanBodyNotBorrowedFromLaterSameIDVariant`。
+//
+// 这些机制的唯一目的是「把 WAL 行写进 source_wal 时少编码正文」。`source_wal` 表删除后，
+// 它们连同 `WALCommitSnapshot`/`WALCommitIndex` 一起下线（见 acquire/wal.go 的注释）。
+//
+// 保留下来的语义由别的用例覆盖（都与"写 SQL"无关）：
+//   - 快照私有性 / 锁外编码：`TestDurableOutboxWALSnapshotOwnsMutableFields` +
+//     acquire 包的 `TestDurableOutboxPrivateIdentityEncodingOwnsBodiesAndReleasesLock`；
+//   - 提交资格只认完整身份、不认位置区间：`TestDurableOutboxActualPlanReceiptDoesNotBorrowReplacedVariant`；
+//   - prune 只能与同一份旧回执做精确交集：`TestDurableOutboxPruneReceiptIndexCounts*` 已随之删除，
+//     其核心断言（不得凭 live 集合新建资格）由 `TestDurableOutboxRealPersistHandoffNeverAuthorizesDelivery` 承担。
 
 // 尾部只唤醒既有消费者：deferredDelivery 下即使后台计划被真实阻塞，尾部也立即返回。
 func TestDurableOutboxPollTailDoesNotBlockOnBackgroundPlan(t *testing.T) {
@@ -3451,7 +2718,7 @@ func TestDurableOutboxPollTailDoesNotBlockOnBackgroundPlan(t *testing.T) {
 	require.True(t, m.deferredDelivery)
 	blocked, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	m.walRowsBuildHook.Store(func() { once.Do(func() { close(blocked); <-release }) })
+	m.rebuildSourceBuildHook.Store(func() { once.Do(func() { close(blocked); <-release }) })
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); _ = m.persistBackground() }()
 	select {
@@ -3473,7 +2740,7 @@ func TestDurableOutboxPollTailDoesNotBlockOnBackgroundPlan(t *testing.T) {
 	}
 	close(release)
 	<-workerDone
-	m.walRowsBuildHook.Store((func())(nil))
+	m.rebuildSourceBuildHook.Store((func())(nil))
 }
 
 // 默认（非deferredDelivery）尾部仍是同步落库：返回时本批已真实落盘。
@@ -3643,11 +2910,11 @@ func TestDurableOutboxPublishedTailWithoutVerifiedRunsStallsReclaim(t *testing.T
 	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 	require.NoError(t, err)
 	defer reader.Close()
-	var durable, reclaim, walRows uint64
+	var durable, reclaim uint64
 	require.NoError(t, reader.QueryRow(`SELECT durable_pos,reclaim_pos FROM position WHERE key=?`, key).Scan(&durable, &reclaim))
-	require.NoError(t, reader.QueryRow(`SELECT COUNT(*) FROM source_wal WHERE key=?`, key).Scan(&walRows))
 	require.Equal(t, uint64(totalBytes), reclaim, "Stop前SQL必须已追平，不能靠关停落库")
-	require.Zero(t, walRows)
+	// 2026-10-29：`source_wal` 已删，「已回收且队列空」由上方内存队列断言与 reclaim 水位共同证明。
+	require.GreaterOrEqual(t, durable, reclaim, "durable 不得落在 reclaim 后面")
 }
 
 // 真实尾批准备只关闭额外只读路由，投递、逐字段校验、ACK与发布仍走健康HTTP。
@@ -3746,12 +3013,12 @@ func TestDurableOutboxPublishedReclaimBoundedContinuousPrefixes(t *testing.T) {
 			reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 			require.NoError(t, err)
 			defer reader.Close()
-			var reclaim, rows uint64
+			var durable, reclaim uint64
 			key := source.LogSourceID + "/" + source.SourceGeneration
-			require.NoError(t, reader.QueryRow(`SELECT reclaim_pos FROM position WHERE key=?`, key).Scan(&reclaim))
-			require.NoError(t, reader.QueryRow(`SELECT COUNT(*) FROM source_wal WHERE key=?`, key).Scan(&rows))
+			require.NoError(t, reader.QueryRow(`SELECT durable_pos,reclaim_pos FROM position WHERE key=?`, key).Scan(&durable, &reclaim))
 			require.Equal(t, tail[count-1].Record.End, reclaim, "独立只读SQL在Stop前已经追平")
-			require.Zero(t, rows)
+			// 2026-10-29：`source_wal` 已删；队列空由上方 `p.WAL().Snapshot()` 断言证明。
+			require.GreaterOrEqual(t, durable, reclaim, "durable 不得落在 reclaim 后面")
 			fixture.mu.Lock()
 			require.Equal(t, writes, len(fixture.writes), "补证不能增加VL写入或复制正文")
 			fixture.mu.Unlock()
@@ -3803,9 +3070,10 @@ func TestDurableOutboxPublishedReclaimOriginalCutBeforeRegistration(t *testing.T
 					variant.CanonicalHash = logtypes.CanonicalContentHash(variant.EventTimeUTC, variant.Level, variant.Stream, variant.Message)
 				}
 				if change == "restore" {
-					entries := p.WAL().Snapshot()
-					entries[0].Event = variant
-					require.NoError(t, p.WAL().Restore(entries))
+					// 2026-10-29：原用 WAL.Restore 整体替换正文；不落盘后等价的生产做法是
+					// 「回放原位替换」（AppendReplay）——同 ID/同区间的正文被改写。
+					require.NoError(t, p.WAL().AppendReplay(variant))
+					require.NoError(t, p.WAL().Commit())
 				} else {
 					require.NoError(t, p.WAL().Append(variant))
 					require.NoError(t, p.WAL().Commit())
@@ -4058,9 +3326,10 @@ func TestDurableOutboxPublishedReclaimRequiresCurrentBodyACK(t *testing.T) {
 			require.Equal(t, tail[0].CanonicalHash, variant.CanonicalHash)
 			require.NotEqual(t, id.BodyDigest, changed.BodyDigest)
 			if change == "restore" {
-				entries := p.WAL().Snapshot()
-				entries[0].Event = variant
-				require.NoError(t, p.WAL().Restore(entries))
+				// 2026-10-29：原用 WAL.Restore 整体替换正文；不落盘后等价的生产做法是
+				// 「回放原位替换」（AppendReplay）——同 ID/同区间的正文被改写。
+				require.NoError(t, p.WAL().AppendReplay(variant))
+				require.NoError(t, p.WAL().Commit())
 			} else {
 				require.NoError(t, p.WAL().Append(variant))
 				require.NoError(t, p.WAL().Commit())
@@ -4605,7 +3874,11 @@ func TestDurableOutboxEarlierRepairNetworkInterleavingsKeepOriginalCut(t *testin
 				require.NoError(t, c.p.WAL().Append(variant))
 				require.NoError(t, c.p.WAL().Commit())
 			case "restore":
-				require.NoError(t, c.p.WAL().Restore(c.p.WAL().Snapshot()))
+				// 2026-10-29：原为整体替换队列；不落盘后改为「回放原位替换」同一条目的正文。
+				reseat := c.p.WAL().Snapshot()[0]
+				reseat.Event.Fields = map[string]string{"交错": "原cut之后的完整正文"}
+				require.NoError(t, c.p.WAL().AppendReplay(reseat.Event))
+				require.NoError(t, c.p.WAL().Commit())
 			case "authority":
 				part := catalog.PartitionKey{StorageNamespace: c.source.StorageNamespace, UTCDay: c.source.UTCDay}
 				record := catalog.NewStableRecord(part, catalog.OwnerCold, 2, "真实网络期间新权威")
@@ -5072,7 +4345,7 @@ func TestDurableOutboxRealPersistHandoffNeverAuthorizesDelivery(t *testing.T) {
 	m.mu.Lock()
 	receipt := m.committedReceipts[source.LogSourceID+"/"+source.SourceGeneration]
 	m.mu.Unlock()
-	require.True(t, receipt == nil || receipt.index == nil, "真实handoff等待期间不得提前发布轻量成员索引")
+	require.Nil(t, receipt, "真实handoff等待期间不得发布任何提交回执")
 	close(release)
 	require.NoError(t, <-first)
 	require.NoError(t, m.persist())
@@ -5530,9 +4803,12 @@ func TestDurableOutboxMixedHistoricalActualSetRequiresLiveSQLReceipt(t *testing.
 	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
 	require.NoError(t, err)
 	defer reader.Close()
-	var rows int
-	require.NoError(t, reader.QueryRow("SELECT COUNT(*) FROM source_wal").Scan(&rows))
-	require.Zero(t, rows, "真实门仍被旧计划占用，独立ro观察证明Y尚未COMMIT")
+	// 2026-10-29：`source_wal` 已删。原来用「表里 0 行」证明 Y 尚未 COMMIT；现在直接读
+	// position.durable_pos：它必须仍停在历史 X 的末端（Y 的字节一条都没进库）。
+	var durable uint64
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	require.NoError(t, reader.QueryRow(`SELECT durable_pos FROM position WHERE key=?`, key).Scan(&durable))
+	require.Equal(t, x.Record.End, durable, "真实门仍被旧计划占用，独立ro观察证明Y尚未COMMIT")
 	fixture.mu.Lock()
 	after := len(fixture.writes)
 	fixture.mu.Unlock()

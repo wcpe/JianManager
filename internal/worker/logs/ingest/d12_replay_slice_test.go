@@ -335,7 +335,8 @@ func TestBacklogGateSurvivesResolve(t *testing.T) {
 	}
 	// 走真实追加路径：Append 逐条追加 → 越界即由条目闸暂停该源。
 	for i := range seed {
-		require.NoError(t, pipe.WAL().Restore(seed[:i+1]))
+		require.NoError(t, pipe.WAL().Append(seed[i].Event))
+		require.NoError(t, pipe.WAL().Commit())
 		if i >= 3 {
 			break
 		}

@@ -6,10 +6,8 @@ package ingest
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -218,19 +216,11 @@ func stringsLastIndexByte(text string, b byte) int {
 
 // stateToIndexState 把内存状态映射为索引期望行（只包含非空键的行；行序无关，Apply 按指纹差异写入）。
 func (m *Manager) stateToIndexState(st *persistedState) (stateindex.State, error) {
-	return m.stateToIndexStateOpt(st, false)
+	return m.stateToIndexStateRows(st, false)
 }
 
-// stateToIndexStateOpt 是 stateToIndexState 的选项版（A-min，2026-10-04 resolve-gaps 挂死专项）：
-// skipWAL=true 跳过 WAL 行构建 —— 供 stateToIndexStateScoped 的"全量根行"通道使用：
-// 那里 full.WAL 必定被 partial.WAL 覆盖，此前却对**全量源逐条 json.Marshal**
-// （现场 pprof 栈证 338,521 条）后整段丢弃 —— 纯浪费且全程压在 m.mu 内。
-func (m *Manager) stateToIndexStateOpt(st *persistedState, skipWAL bool) (stateindex.State, error) {
-	return m.stateToIndexStateRows(st, skipWAL, false)
-}
-
-// 根行通道跳过所有历史派生行，未变化源不分配或遍历 gap、batch、WAL。
-func (m *Manager) stateToIndexStateRows(st *persistedState, skipWAL, skipDerived bool) (stateindex.State, error) {
+// 根行通道跳过所有历史派生行，未变化源不分配或遍历 gap、batch。
+func (m *Manager) stateToIndexStateRows(st *persistedState, skipDerived bool) (stateindex.State, error) {
 	var out stateindex.State
 	keys := make(map[string]struct{}, len(st.Sources)+len(st.SourceConfigs))
 	for key := range st.Sources {
@@ -308,13 +298,6 @@ func (m *Manager) stateToIndexStateRows(st *persistedState, skipWAL, skipDerived
 			}
 			out.Gaps = append(out.Gaps, gaps...)
 			out.Batches = append(out.Batches, batches...)
-			if !skipWAL {
-				inline, err := m.walRowsOf(key, saved)
-				if err != nil {
-					return stateindex.State{}, err
-				}
-				out.WAL = append(out.WAL, inline...)
-			}
 		}
 		auxConfig, err := json.Marshal(&aux)
 		if err != nil {
@@ -349,22 +332,13 @@ func ledgerCoreOf(entry *ledger.Entry) *indexLedgerCore {
 	}
 }
 
-// stateToIndexStateScoped 是 stateToIndexState 的增量形态：账本派生行（gap/source_wal/
-// delivery_batch）只按 changed 里的源构建，根行（source/position/projection/source_aux/
-// instance_binding）恒为全量。
+// stateToIndexStateScoped 是 stateToIndexState 的增量形态：账本派生行（gap/delivery_batch）
+// 只按 changed 里的源构建，根行（source/position/projection/source_aux/instance_binding）恒为全量。
 //
 // 为什么根行恒全量：它们的行数是 O(源数)（几百行级别），全量构建+索引层全量比对每轮只花
 // 毫秒级；而它们承载投影代次/发布待定/实例绑定等由 Manager 直接改 state 的字段，
 // 全量比对让这些字段的变更无需任何显式标记即正确落库。
 func (m *Manager) stateToIndexStateScoped(st *persistedState, changed []string) (stateindex.State, error) {
-	return m.stateToIndexStateScopedOpt(st, changed, false)
-}
-
-// stateToIndexStateScopedOpt 是 Scoped 的选项版（A-Step2，2026-10-04 resolve-gaps 挂死专项）：
-// skipWAL=true 时**连 partial（changed 源）的 WAL 行也不构建** —— 供 planPersist 在 m.mu 内
-// "只定格非 WAL 规划"（账本/根行/aux），WAL 行的逐条 marshal 出锁后用值拷贝快照补建
-// （见 buildWALRowsOutsideLock；现场栈证 338,521 条 marshal 曾全压在 m.mu 内）。
-func (m *Manager) stateToIndexStateScopedOpt(st *persistedState, changed []string, skipWAL bool) (stateindex.State, error) {
 	// 先按 changed 构建账本派生行（该函数只遍历给定源）。
 	scoped := &persistedState{Sources: make(map[string]persistedSource, len(changed))}
 	for _, key := range changed {
@@ -372,19 +346,16 @@ func (m *Manager) stateToIndexStateScopedOpt(st *persistedState, changed []strin
 			scoped.Sources[key] = saved
 		}
 	}
-	partial, err := m.stateToIndexStateOpt(scoped, skipWAL)
+	partial, err := m.stateToIndexState(scoped)
 	if err != nil {
 		return stateindex.State{}, err
 	}
 	// 再补上全部根行：先全量构建再覆盖派生行（source_aux 也是根，直接全量）。
-	// A-min（2026-10-04）：全量通道只为"根行"服务，WAL 行必被 partial 覆盖 ⇒ skipWAL 省掉
-	// 全量源的逐条 marshal（现场栈证 338,521 条，锁内发生且整段丢弃）。
-	full, err := m.stateToIndexStateRows(st, true, true)
+	full, err := m.stateToIndexStateRows(st, true)
 	if err != nil {
 		return stateindex.State{}, err
 	}
 	full.Gaps = partial.Gaps
-	full.WAL = partial.WAL
 	full.Batches = partial.Batches
 	// source/position/projection/source_aux/instances 都在 full 里。
 	return full, nil
@@ -437,132 +408,6 @@ func ledgerRowsOfOpt(key string, saved persistedSource, core *indexLedgerCore, s
 	return position, projection, gaps, batches, nil
 }
 
-// walRowsOf 把该源的 WAL 条目录入 source_wal 行：正文内联条目带 Body，引用条目 Body 为 nil。
-// FP 覆盖正文的每一个 JSON 字段（见 walBodyFP），未变更的条目不会触发正文重编码。
-//
-// **Replay 必须随行落库（ACQ-1，2026-10-12 终审修复）**：它是条目语义的一部分（是否来自
-// 恢复期回放/补账），只落在内存条目上时，重启后回放条目会退回「常规积压」并把源重新推过闸
-// （闸视图 = 总量 − 回放），而这恰好发生在最需要它的时刻（恢复期回放与进程重启是同一场景）。
-// 两侧（内联与引用）都要带，否则引用态条目重启后丢标记。
-// walRowsOfPlan只消费同一WAL owner/cut/ordinal的私有计划；身份摘要与SQL Body使用同一次完整JSON编码。
-// 旧转换入口仍照常编码；没有私有计划时不得猜测或按ID/长度拼接旧正文。
-func (m *Manager) walRowsOfPlan(key string, saved persistedSource, encoded *acquire.WALCommitSnapshot, owner *acquire.WAL) ([]stateindex.WALRow, error) {
-	if encoded == nil {
-		return m.walRowsOf(key, saved)
-	}
-	rows := make([]stateindex.WALRow, 0, len(saved.WAL)+len(saved.WALRefs))
-	err := encoded.VisitEncoded(owner, func(entry acquire.WALEntry, body []byte) {
-		rows = append(rows, stateindex.WALRow{
-			Key: key, Seq: entry.Seq, EventID: entry.Event.EventID,
-			RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End,
-			Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay, Body: body,
-			FP: walBodyFP(entry.Event), AckBodyDigest: ackDigestOf(entry),
-		})
-	}, func(ref acquire.WALRef) {
-		rows = append(rows, stateindex.WALRow{
-			Key: key, Seq: ref.Seq, EventID: ref.EventID, RecordStart: ref.RecordStart, RecordEnd: ref.RecordEnd,
-			Appended: ref.Appended, Durable: ref.Durable, Replay: ref.Replay,
-		})
-	})
-	return rows, err
-}
-
-func (m *Manager) walRowsOf(key string, saved persistedSource) ([]stateindex.WALRow, error) {
-	rows := make([]stateindex.WALRow, 0, len(saved.WAL)+len(saved.WALRefs))
-	for _, entry := range saved.WAL {
-		body, err := json.Marshal(&entry.Event)
-		if err != nil {
-			return nil, fmt.Errorf("ingest: 编码 %s 的 WAL 事件失败: %w", key, err)
-		}
-		rows = append(rows, stateindex.WALRow{
-			Key: key, Seq: entry.Seq, EventID: entry.Event.EventID,
-			RecordStart: entry.Event.Record.Start, RecordEnd: entry.Event.Record.End,
-			Appended: entry.Appended, Durable: entry.Durable, Replay: entry.Replay, Body: body,
-			FP: walBodyFP(entry.Event), AckBodyDigest: ackDigestOf(entry),
-		})
-	}
-	for _, ref := range saved.WALRefs {
-		rows = append(rows, stateindex.WALRow{
-			Key: key, Seq: ref.Seq, EventID: ref.EventID,
-			RecordStart: ref.RecordStart, RecordEnd: ref.RecordEnd,
-			Appended: ref.Appended, Durable: ref.Durable, Replay: ref.Replay, Body: nil,
-			FP: uint64(0), // 引用条目的正文在事件段存储中，身份字段即判据
-		})
-	}
-	return rows, nil
-}
-
-// walBodyFP 计算 WAL 正文的变更判据，覆盖 logtypes.Event 落库 JSON 的**全部**字段：
-//
-//	event_id、source{log_source_id, source_generation, parser_version}、record{start,end}、
-//	event_time_utc、ingest_time_utc、level、stream、message、canonical_content_hash、
-//	fields（按 key 排序后逐项）
-//
-// 每个字段都按**自身取值**参与，不依赖任何派生关系（曾只依赖 event_id 覆盖 source/record，
-// 但若 source 被改动而 event_id 未同步，正文会变而指纹不变 → 静默留下过期正文；
-// TestWALBodyFingerprintCoversEveryEventField 正是用单点变异守住这条）。
-//
-// 因此「同一 (身份) 下 FP 相同 ⇒ 正文相同」成立（职责见 stateindex.WALFingerprint 的注释）。
-// ackDigestOf 返回该 WAL 条目「被 ACK 时那份正文」的摘要，未 ACK 时返回 nil。
-//
-// 为什么要落库（2026-10-28）：`WALEntry.acknowledged` 是进程内态（json:"-"），重启即丢；
-// 而账本的 `RequestDoneRanges` 只是位置区间（有 ±1 容差、永不裁剪）。仅凭区间重建 ACK，
-// 在位置空间被复用（重读/槽位复用/回放替换）时会把**新正文**误认成已 ACK ⇒ 回收剪掉数据。
-// 本摘要提供精确凭据：重启时只有「当前正文重算的摘要 == 本列」才允许重建 ACK。
-func ackDigestOf(entry acquire.WALEntry) []byte {
-	digest, ok := entry.AcknowledgedBodyDigest()
-	if !ok {
-		return nil
-	}
-	out := make([]byte, len(digest))
-	copy(out, digest[:])
-	return out
-}
-
-func walBodyFP(ev logtypes.Event) uint64 {
-	hash := fnv.New64a()
-	writeString := func(text string) {
-		var length [8]byte
-		n := uint64(len(text))
-		for i := 0; i < 8; i++ {
-			length[i] = byte(n >> (8 * i))
-		}
-		_, _ = hash.Write(length[:])
-		_, _ = hash.Write([]byte(text))
-	}
-	writeUint := func(value uint64) {
-		var buf [8]byte
-		for i := 0; i < 8; i++ {
-			buf[i] = byte(value >> (8 * i))
-		}
-		_, _ = hash.Write(buf[:])
-	}
-	writeString("v2") // 指纹版本：口径变化必须整体改变指纹，避免旧值被误判为未变更
-	writeString(ev.EventID)
-	writeString(ev.Source.LogSourceID)
-	writeString(ev.Source.SourceGeneration)
-	writeString(ev.Source.ParserVersion)
-	writeUint(ev.Record.Start)
-	writeUint(ev.Record.End)
-	writeString(ev.EventTimeUTC)
-	writeString(ev.IngestTimeUTC)
-	writeString(ev.Level)
-	writeString(ev.Stream)
-	writeString(ev.Message)
-	writeString(ev.CanonicalHash)
-	keys := make([]string, 0, len(ev.Fields))
-	for key := range ev.Fields {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	writeUint(uint64(len(keys)))
-	for _, key := range keys {
-		writeString(key)
-		writeString(ev.Fields[key])
-	}
-	return hash.Sum64()
-}
-
 // indexStateToState 把索引行还原为内存状态（与 stateToIndexState 互为逆映射）。
 func indexStateToState(rows stateindex.State) (*persistedState, error) {
 	st := &persistedState{
@@ -604,39 +449,6 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 	for _, row := range rows.Aux {
 		auxMap[row.Key] = row
 	}
-	walInline := make(map[string][]acquire.WALEntry)
-	walRefs := make(map[string][]acquire.WALRef)
-	// ACK 正文摘要（2026-10-28）：与 WAL/WALRefs 同一次遍历取完，供恢复时做
-	// 「正文未被改写」的精确判据（见 acquire/wal_restore_ack.go）。
-	walDigests := make(map[string][]WALAckDigest)
-	for _, row := range rows.WAL {
-		if len(row.AckBodyDigest) == sha256.Size {
-			var digest [32]byte
-			copy(digest[:], row.AckBodyDigest)
-			walDigests[row.Key] = append(walDigests[row.Key], WALAckDigest{
-				Key: acquire.WalAckKey{Seq: row.Seq, EventID: row.EventID,
-					RecordStart: row.RecordStart, RecordEnd: row.RecordEnd},
-				Digest: digest,
-			})
-		}
-		if row.Body == nil {
-			walRefs[row.Key] = append(walRefs[row.Key], acquire.WALRef{
-				Seq: row.Seq, Appended: row.Appended, Durable: row.Durable,
-				Replay:  row.Replay, // ACQ-1：回放标记必须读回，否则重启后条目退回常规积压
-				EventID: row.EventID, RecordStart: row.RecordStart, RecordEnd: row.RecordEnd,
-			})
-			continue
-		}
-		var event logtypes.Event
-		if err := json.Unmarshal(row.Body, &event); err != nil {
-			return nil, fmt.Errorf("ingest: 解析 %s 的 WAL 正文失败: %w", row.Key, err)
-		}
-		walInline[row.Key] = append(walInline[row.Key], acquire.WALEntry{
-			Seq: row.Seq, Event: event, Appended: row.Appended, Durable: row.Durable,
-			Replay: row.Replay, // ACQ-1：同上，内联条目同样要恢复回放标记
-		})
-	}
-
 	for _, row := range rows.Sources {
 		key := row.Key
 		if auxRow, ok := auxMap[key]; ok && len(auxRow.Config) > 0 {
@@ -696,9 +508,6 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 		st.Sources[key] = persistedSource{
 			PublicationPending:   aux.PublicationPending,
 			Ledger:               ledgerEntries,
-			WAL:                  walInline[key],
-			WALRefs:              walRefs[key],
-			WALDigests:           walDigests[key],
 			EventsStoredThrough:  projection.EventsStoredThrough,
 			ProjectionGeneration: projection.Generation,
 			EventsStored:         aux.EventsStored,
@@ -723,8 +532,7 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 }
 
 // normalizePersistedState 把状态归一化，使「对比两侧」与「重建结果」在同一形态下可比：
-//   - nil 切片/映射 → 空（读取路径只依赖 len，二者行为等价；DB 表无法区分 nil 与空）；
-//   - WAL / WALRefs 按 (seq, 事件身份) 排序（与 acquire.RestoreMixed 的恢复语义一致）。
+//   - nil 切片/映射 → 空（读取路径只依赖 len，二者行为等价；DB 表无法区分 nil 与空）。
 //
 // 注意：派生字段 Positions.Delivery **不在此处重算**——落库保留原值，只在比对时统一口径
 // （见 comparisonState）。这样「字段是否被搬运」仍可被断言到。
@@ -774,14 +582,10 @@ func normalizePersistedState(st *persistedState) {
 		if saved.WAL == nil {
 			saved.WAL = []acquire.WALEntry{}
 		}
-		if saved.WALRefs == nil {
-			saved.WALRefs = []acquire.WALRef{}
-		}
 		if saved.Events == nil {
 			saved.Events = []logtypes.Event{}
 		}
 		sort.SliceStable(saved.WAL, func(i, j int) bool { return lessWALEntry(saved.WAL[i], saved.WAL[j]) })
-		sort.SliceStable(saved.WALRefs, func(i, j int) bool { return lessWALRef(saved.WALRefs[i], saved.WALRefs[j]) })
 		st.Sources[key] = saved
 	}
 }
@@ -797,19 +601,6 @@ func lessWALEntry(a, b acquire.WALEntry) bool {
 		return a.Event.Record.Start < b.Event.Record.Start
 	}
 	return a.Event.Record.End < b.Event.Record.End
-}
-
-func lessWALRef(a, b acquire.WALRef) bool {
-	if a.Seq != b.Seq {
-		return a.Seq < b.Seq
-	}
-	if a.EventID != b.EventID {
-		return a.EventID < b.EventID
-	}
-	if a.RecordStart != b.RecordStart {
-		return a.RecordStart < b.RecordStart
-	}
-	return a.RecordEnd < b.RecordEnd
 }
 
 // comparisonState 返回「比对口径」下的状态：在 normalizePersistedState 之上，把派生字段

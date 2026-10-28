@@ -184,3 +184,54 @@ func TestBacklogDropGapDetailReportsRealNumbers(t *testing.T) {
 	require.Contains(t, detail, "entries=3/2",
 		"detail 里的条目数必须是丢弃前的真实读数；实测 detail=%q", detail)
 }
+
+// TestDropStatsCountsWhatWasActuallyDiscarded 钉住「累计丢弃」读数（对齐 Fluent Bit memrb）。
+//
+// 为什么需要（2026-10-29）：选了「不背压」之后，丢弃就是**设计内行为**，
+// 因此它必须可观测。Fluent Bit 的 memory ring buffer 模式为此提供
+// `memrb_dropped_chunks` / `memrb_dropped_bytes`，官方文档明写：
+//
+//	"You can monitor these metrics to understand how much data is being discarded."
+//
+// 没有这个读数，运维看到“这个源的日志少了”时分不清是：
+//   - 该源本就没写（采集/路径问题）；
+//   - 还是丢在了内存队列里（投递卡住 + 容量越界）。
+// 两者处置完全不同。
+//
+// 转红方式：把 `w.droppedEntries += int64(dropped)` 那行注释掉 ⇒ 本用例变红。
+func TestDropStatsCountsWhatWasActuallyDiscarded(t *testing.T) {
+	key := testKey("src-dropstats", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+	wal.SetLimits(2, 1<<20)
+	pipe := NewPipeline(led, key, wal)
+	pipe.SetCommittedPersist(func(context.Context, []CommitIdentity) error { return nil })
+
+	// 前置：未越界时一条不得丢。
+	require.NoError(t, pipe.Ingest(buildWALEvents("src-dropstats", "g1", 0, 2, "line")))
+	if n, b := wal.DropStats(); n != 0 || b != 0 {
+		t.Fatalf("未越界时不得计入丢弃：entries=%d bytes=%d", n, b)
+	}
+
+	// 越界：|3 条 / 上限 2 ⇒ 丢 1 条。
+	require.NoError(t, pipe.Ingest(buildWALEvents("src-dropstats", "g1", 2, 1, "line")))
+	n, b := wal.DropStats()
+	if n != 1 {
+		t.Fatalf("越界必须计入 1 条丢弃，实测 entries=%d", n)
+	}
+	if b <= 0 {
+		t.Fatalf("丢弃字节数必须 > 0，实测 bytes=%d", b)
+	}
+
+	// 累计量只增不减：再丢一次只会在原值上叠加。
+	require.NoError(t, pipe.Ingest(buildWALEvents("src-dropstats", "g1", 3, 1, "line")))
+	n2, b2 := wal.DropStats()
+	if n2 <= n || b2 <= b {
+		t.Fatalf("累计丢弃只能递增：before=(%d,%d) after=(%d,%d)", n, b, n2, b2)
+	}
+
+	// 不得因丢弃而暂停。
+	if led.Get(key).AcquirePaused {
+		t.Fatal("丢弃语义下不得暂停采集")
+	}
+}

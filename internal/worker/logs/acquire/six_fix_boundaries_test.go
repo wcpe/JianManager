@@ -268,10 +268,10 @@ func TestSixFixWALReservationsPersistUntilActualPruneAndRestore(t *testing.T) {
 	snapshot := wal.Snapshot()
 	wal.pruneReclaimed(7)
 	require.Zero(t, held)
-	require.NoError(t, wal.Restore(snapshot))
+	require.NoError(t, wal.seedEntries(snapshot))
 	require.Equal(t, one, held, "恢复已有条目也必须重新计占用")
 	denied = true
-	require.Error(t, wal.Restore(snapshot))
+	require.Error(t, wal.seedEntries(snapshot))
 	require.Error(t, wal.Commit())
 	_, err = pipe.DeliverPending()
 	require.Error(t, err)

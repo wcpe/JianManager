@@ -1,21 +1,22 @@
 package stateindex
 
+// 本文件守卫「加载路径不得产生临时 B-TREE 排序」这一不变量，以及加载的行序规范性。
+//
+// 背景（生产事故，现在只作为历史依据保留）：`source_wal` 的 orderBy 曾写成
+// "seq, event_id, record_start, record_end"，漏掉了主键首列 key。SQLite 只有在 ORDER BY
+// 命中主键索引前缀时才省掉排序，从 seq 起排对不上 (key, seq, ...) 前缀，于是**每一行都要
+// 进 TEMP B-TREE 物化**。该表在生产积累到 711 万行、body 合计约 5GB 后，排序数据溢出到
+// /var/tmp；空间不足时 SQLite 直接返回 `database or disk is full (13)`，Worker 启动 6 次
+// 重试全败，采集永久停摆。
+//
+// 2026-10-29：`source_wal` 表本身已删除，但这条不变量**对每一张剩下的表同样成立**（生产上
+// gap 表就是下一个 GB 级候选），所以两条执行计划断言原样保留，只是夹具不再造 WAL 行。
+
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
-
-// 本文件守卫「加载路径不得产生临时 B-TREE 排序」这一不变量。
-//
-// 背景（生产事故）：source_wal 的 orderBy 曾写成 "seq, event_id, record_start, record_end"，
-// 漏掉了主键首列 key。SQLite 只有在 ORDER BY 命中主键索引前缀时才省掉排序，从 seq 起排
-// 对不上 (key, seq, ...) 前缀，于是**每一行都要进 TEMP B-TREE 物化**。该表在生产积累到
-// 711 万行、body 合计约 5GB 后，排序数据溢出到 /var/tmp；空间不足时 SQLite 直接返回
-// `database or disk is full (13)`，Worker 启动 6 次重试全败，采集永久停摆。
-//
-// 为什么用执行计划断言而不是「大表跑一遍测耗时」：耗时断言依赖机器且要在磁盘上造 GB 级
-// 数据；而执行计划里的 `USE TEMP B-TREE FOR ORDER BY` 是这次事故的**直接成因**，也是
-// 独立于数据量的确定性信号——有它就是线性放大到溢出，没有它主键索引直接出序。
 
 // TestLoadQueriesAvoidTempBTree 断言每张表的加载查询都走索引出序、不落临时 B-TREE。
 func TestLoadQueriesAvoidTempBTree(t *testing.T) {
@@ -31,14 +32,7 @@ func TestLoadQueriesAvoidTempBTree(t *testing.T) {
 		Projections: []ProjectionRow{{Key: "inst:1"}},
 		Instances:   []InstanceRow{{UUID: "u1"}},
 		Aux:         []AuxRow{{Key: "inst:1"}},
-		WAL: []WALRow{{
-			Key: "inst:1", Seq: 1, EventID: "e1", RecordStart: 1, RecordEnd: 2,
-			Body: []byte("x"),
-		}},
-		Batches: []BatchRow{{Key: "inst:1", Ordinal: 0}},
-	}
-	for i := range state.WAL {
-		state.WAL[i].FP = WALFingerprint(state.WAL[i])
+		Batches:     []BatchRow{{Key: "inst:1", Ordinal: 0}},
 	}
 	if _, err := store.Apply(state); err != nil {
 		t.Fatalf("写入样例状态失败: %v", err)
@@ -94,26 +88,28 @@ func TestOrderByMatchesPrimaryKey(t *testing.T) {
 	}
 }
 
-// TestLoadRoundTripPreservesWALOrder 断言改排序键后 Load 的内存结果仍按规范顺序（lessWAL）。
+// TestLoadRoundTripPreservesGapOrder 断言 Load 的内存结果仍按规范顺序（sortState）。
 //
-// 对齐主键改变了 SQL 的行序（原先跨源按 seq 全局排序，现在按源分组），load 末尾的
-// sortState 会重新排成 lessWAL 规范序。本用例锁住「跨源乱序写入、加载后仍规范有序」，
-// 防止将来有人以为 SQL 已排好而删掉 sortState。
-func TestLoadRoundTripPreservesWALOrder(t *testing.T) {
+// SQL 按主键出序（源分组），sortState 再把各表切成各自的规范序。本用例锁住「跨源乱序写入、
+// 加载后仍规范有序」，防止将来有人以为 SQL 已排好而删掉 sortState。
+//
+// 2026-10-29：原用例用 WAL 行；source_wal 表删除后改用 gap 行（同为按归属增量表、
+// 同为 (key, id) 复合主键），守的是同一条不变量。
+func TestLoadRoundTripPreservesGapOrder(t *testing.T) {
 	store := newTestStore(t)
 
 	// 刻意让两个源交错，且写入顺序与规范序不同。
 	state := State{
 		Sources: []SourceRow{{Key: "inst:1"}, {Key: "inst:2"}},
-		WAL: []WALRow{
-			{Key: "inst:2", Seq: 5, EventID: "e", RecordStart: 1, RecordEnd: 2, Body: []byte("b2")},
-			{Key: "inst:1", Seq: 9, EventID: "e", RecordStart: 1, RecordEnd: 2, Body: []byte("a9")},
-			{Key: "inst:1", Seq: 3, EventID: "e", RecordStart: 1, RecordEnd: 2, Body: []byte("a3")},
-			{Key: "inst:2", Seq: 1, EventID: "e", RecordStart: 1, RecordEnd: 2, Body: []byte("b1")},
+		Positions: []PositionRow{
+			{Key: "inst:1"}, {Key: "inst:2"},
 		},
-	}
-	for i := range state.WAL {
-		state.WAL[i].FP = WALFingerprint(state.WAL[i])
+		Gaps: []GapRow{
+			{Key: "inst:2", ID: 5, StartPos: 1, EndPos: 2, Reason: "PAUSED"},
+			{Key: "inst:1", ID: 9, StartPos: 1, EndPos: 2, Reason: "PAUSED"},
+			{Key: "inst:1", ID: 3, StartPos: 1, EndPos: 2, Reason: "PAUSED"},
+			{Key: "inst:2", ID: 1, StartPos: 1, EndPos: 2, Reason: "PAUSED"},
+		},
 	}
 	if _, err := store.Apply(state); err != nil {
 		t.Fatalf("写入状态失败: %v", err)
@@ -123,33 +119,26 @@ func TestLoadRoundTripPreservesWALOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("加载失败: %v", err)
 	}
-	if len(loaded.WAL) != len(state.WAL) {
-		t.Fatalf("WAL 行数不符：得到 %d，期望 %d", len(loaded.WAL), len(state.WAL))
+	if len(loaded.Gaps) != len(state.Gaps) {
+		t.Fatalf("gap 行数不符：得到 %d，期望 %d", len(loaded.Gaps), len(state.Gaps))
 	}
-	for i := 1; i < len(loaded.WAL); i++ {
-		if lessWAL(loaded.WAL[i], loaded.WAL[i-1]) {
-			t.Errorf("第 %d 行违反了 lessWAL 规范序：\n  前一行 = %+v\n  当前行 = %+v",
-				i, loaded.WAL[i-1], loaded.WAL[i])
-		}
-	}
-	// 规范序应以 (Key, Seq) 升序：inst:1/3, inst:1/9, inst:2/1, inst:2/5。
+	// 规范序应以 (Key, ID) 升序：inst:1/3, inst:1/9, inst:2/1, inst:2/5。
 	wantOrder := []struct {
 		key string
-		seq uint64
+		id  int64
 	}{{"inst:1", 3}, {"inst:1", 9}, {"inst:2", 1}, {"inst:2", 5}}
 	for i, want := range wantOrder {
-		if loaded.WAL[i].Key != want.key || loaded.WAL[i].Seq != want.seq {
+		if loaded.Gaps[i].Key != want.key || loaded.Gaps[i].ID != want.id {
 			t.Errorf("第 %d 行应为 %s/%d，实际 %s/%d",
-				i, want.key, want.seq, loaded.WAL[i].Key, loaded.WAL[i].Seq)
+				i, want.key, want.id, loaded.Gaps[i].Key, loaded.Gaps[i].ID)
 		}
 	}
 }
 
-// TestLoadOnLargeWALStaysBounded 用较多行验证加载不会退化为二次方或不落盘失败。
+// TestLoadOnLargeTableStaysBounded 用较多行验证加载不会退化为二次方或不落盘失败。
 //
-// 数据量刻意远小于生产（生产 711 万行），只作为「排序键对齐后加载仍正确」的冒烟，
-// 真正的成因由前两条执行计划断言把关。
-func TestLoadOnLargeWALStaysBounded(t *testing.T) {
+// 数据量刻意远小于生产，只作为「排序键对齐后加载仍正确」的冒烟，真正的成因由前两条执行计划断言把关。
+func TestLoadOnLargeTableStaysBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("数据量较大，-short 下跳过")
 	}
@@ -158,24 +147,22 @@ func TestLoadOnLargeWALStaysBounded(t *testing.T) {
 	const perSource = 500
 	state := State{Sources: []SourceRow{{Key: "inst:1"}, {Key: "inst:2"}}}
 	for _, key := range []string{"inst:1", "inst:2"} {
+		state.Positions = append(state.Positions, PositionRow{Key: key})
 		for i := 0; i < perSource; i++ {
-			row := WALRow{
-				Key: key, Seq: uint64(i + 1), EventID: "e",
-				RecordStart: uint64(i), RecordEnd: uint64(i + 1),
-				Body: []byte(strings.Repeat("x", 64)),
-			}
-			row.FP = WALFingerprint(row)
-			state.WAL = append(state.WAL, row)
+			state.Gaps = append(state.Gaps, GapRow{
+				Key: key, ID: int64(i + 1), StartPos: uint64(i), EndPos: uint64(i + 1),
+				Reason: "PAUSED", Detail: fmt.Sprintf("bulk-%d", i),
+			})
 		}
 	}
 	if _, err := store.Apply(state); err != nil {
-		t.Fatalf("写入 %d 行失败: %v", len(state.WAL), err)
+		t.Fatalf("写入 %d 行失败: %v", len(state.Gaps), err)
 	}
 	loaded, err := store.Load()
 	if err != nil {
-		t.Fatalf("加载 %d 行失败: %v", len(state.WAL), err)
+		t.Fatalf("加载 %d 行失败: %v", len(state.Gaps), err)
 	}
-	if len(loaded.WAL) != len(state.WAL) {
-		t.Fatalf("WAL 行数不符：得到 %d，期望 %d", len(loaded.WAL), len(state.WAL))
+	if len(loaded.Gaps) != len(state.Gaps) {
+		t.Fatalf("gap 行数不符：得到 %d，期望 %d", len(loaded.Gaps), len(state.Gaps))
 	}
 }

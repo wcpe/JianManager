@@ -71,6 +71,8 @@ func (m *Manager) ResumeDiagnostics() []SourceResumeDiagnostic {
 		d.BacklogEntries, d.MaxEntries = wal.BacklogAndLimits()
 		d.BacklogTotalEntries, _ = wal.BacklogTotal()
 		d.ReplayEntries, _ = wal.ReplayInFlight()
+		// 累计丢弃量（对齐 Fluent Bit memrb）：丢弃是设计内行为，必须可观测。
+		d.DroppedEntries, d.DroppedBytes = wal.DropStats()
 		out = append(out, d)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LogSourceID < out[j].LogSourceID })

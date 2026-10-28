@@ -12,13 +12,13 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-func sixFixReorderedPersist(t *testing.T, key ledger.SourceKey, led *ledger.Ledger, wal *WAL) func() error {
+func sixFixReorderedPersist(t *testing.T, key ledger.SourceKey, led *ledger.Ledger) func() error {
 	t.Helper()
 	store, err := stateindex.Open(filepath.Join(t.TempDir(), "ingest.index.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return func() error {
-		state, captureErr := sixFixQualificationState(key, led, wal)
+		state, captureErr := sixFixQualificationState(key, led)
 		if captureErr != nil {
 			return captureErr
 		}
@@ -63,18 +63,19 @@ func TestSixFixReorderedResultsSurviveDurableReopen(t *testing.T) {
 				wal := NewWAL(led, key)
 				require.NoError(t, wal.Append(wantEvents...))
 				require.NoError(t, wal.Commit())
+				seeded := cloneEntries(wal)
 				path := filepath.Join(t.TempDir(), "ingest.index.db")
 				store, err := stateindex.Open(path)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, store.Close()) })
-				state, err := sixFixQualificationState(key, led, wal)
+				state, err := sixFixQualificationState(key, led)
 				require.NoError(t, err)
 				require.NoError(t, sixFixQualificationPersist(store, state))
+				// 模拟二启/三启：账本从索引读回（真持久化）；队列由内存快照装回（新架构：队列不落盘）。
 				for round := 2; round <= 3; round++ {
-					require.NoError(t, store.Close())
-					store, err = stateindex.Open(path)
-					require.NoError(t, err)
-					led, wal = sixFixQualificationRestore(t, key, store)
+					led = sixFixQualificationRestore(t, key, store)
+					wal = NewWAL(led, key)
+					require.NoError(t, wal.seedEntries(seeded))
 					for i, entry := range wal.Snapshot() {
 						require.Equal(t, uint64(i+1), entry.Seq)
 						require.Equal(t, wantEvents[i], entry.Event)
@@ -85,7 +86,7 @@ func TestSixFixReorderedResultsSurviveDurableReopen(t *testing.T) {
 				persists, deliveries := 0, 0
 				pipe.SetDurablePersist(func() error {
 					persists++
-					captured, captureErr := sixFixQualificationState(key, led, wal)
+					captured, captureErr := sixFixQualificationState(key, led)
 					if captureErr != nil {
 						return captureErr
 					}
@@ -112,13 +113,13 @@ func TestSixFixReorderedResultsSurviveDurableReopen(t *testing.T) {
 				wantRanges := []ledger.PositionRange{{From: 0, To: 7}, {From: 28, To: 35}, {From: 49, To: 56}}
 				sixFixReorderedEvidence(t, led, key, evidenceState, wantRanges)
 				require.Equal(t, uint64(7), led.Get(key).Positions.Delivery, "不能越过两段从未投递的中间空洞")
-				captured, err := sixFixQualificationState(key, led, wal)
+				captured, err := sixFixQualificationState(key, led)
 				require.NoError(t, err)
 				require.NoError(t, sixFixQualificationPersist(store, captured))
 				require.NoError(t, store.Close())
 				store, err = stateindex.Open(path)
 				require.NoError(t, err)
-				led, _ = sixFixQualificationRestore(t, key, store)
+				led = sixFixQualificationRestore(t, key, store)
 				sixFixReorderedEvidence(t, led, key, evidenceState, wantRanges)
 			})
 		}
@@ -144,7 +145,7 @@ func TestSixFixReorderedResultsDoNotCoverCappedOrNonDurableTail(t *testing.T) {
 			}
 			pipe := NewPipeline(led, key, wal)
 			pipe.SetMaxReplayEventsPerDrain(2)
-			pipe.SetDurablePersist(sixFixReorderedPersist(t, key, led, wal))
+			pipe.SetDurablePersist(sixFixReorderedPersist(t, key, led))
 			pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
 				require.Equal(t, []logtypes.Event{low, tail}, events)
 				return 200, false, nil
@@ -169,7 +170,7 @@ func TestSixFixReorderedResultsMergeOnlyActualContinuousRecords(t *testing.T) {
 			want := []logtypes.Event{build(21, 28), build(0, 7), build(7, 14), build(14, 21)}
 			wal := NewWAL(led, key)
 			pipe := NewPipeline(led, key, wal)
-			pipe.SetDurablePersist(sixFixReorderedPersist(t, key, led, wal))
+			pipe.SetDurablePersist(sixFixReorderedPersist(t, key, led))
 			pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
 				require.Equal(t, want, events)
 				return 200, false, nil
@@ -201,7 +202,7 @@ func TestSixFixReorderedResultsPersistOrDeliverErrorsDoNotPublishEvidence(t *tes
 			require.NoError(t, wal.Append(events...))
 			require.NoError(t, wal.Commit())
 			pipe := NewPipeline(led, key, wal)
-			pipe.SetDurablePersist(sixFixReorderedPersist(t, key, led, wal))
+			pipe.SetDurablePersist(sixFixReorderedPersist(t, key, led))
 			if failure == "提交失败" {
 				pipe.SetDurablePersist(func() error { return errors.New("受控提交失败") })
 			}

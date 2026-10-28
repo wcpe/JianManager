@@ -81,15 +81,18 @@ func TestLoadSamplingThroughRealManagerWALAndDelivery(t *testing.T) {
 						if json.Unmarshal([]byte(line), &row) != nil {
 							continue
 						}
+						// 2026-10-29：WAL 不再落盘（source_wal 表已删），“投递身份已先持久化”的持久凭据
+						// 是 position 表的 durable_pos——它 > 0 即证明本源字节已进入库里。（源级而非逐条：
+						// 队列内容不再逐条落库，逐条持久凭据已不存在。）
 						found := false
-						for _, entry := range state.WAL {
-							if entry.EventID == row.ID && entry.Appended && entry.Durable {
+						for _, position := range state.Positions {
+							if position.DurablePos > 0 {
 								found = true
 								break
 							}
 						}
 						if checkWAL && !found {
-							walErrors = append(walErrors, "投递身份未先持久化WAL: "+row.ID)
+							walErrors = append(walErrors, "投递身份未先持久化水位: "+row.ID)
 						}
 						rows = append(rows, line)
 						if row.Level == "WARN" {

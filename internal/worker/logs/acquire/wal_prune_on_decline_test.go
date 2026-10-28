@@ -88,7 +88,7 @@ func TestWALRestoreFiresBacklogGate(t *testing.T) {
 			Appended: true, Durable: true,
 		})
 	}
-	if err := wal.Restore(entries); err != nil {
+	if err := wal.seedEntries(entries); err != nil {
 		t.Fatalf("恢复失败: %v", err)
 	}
 	// 恢复后必须当场裁到上限内（上限 3，恢复 5 条 ⇒ 丢最旧 2 条）。
