@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { useNodes } from '@/api/nodes'
 import { useInstanceSearch } from '@/api/instances'
 import type { MetricRange, MetricResolution } from '@jianmanager/ui'
@@ -52,6 +53,22 @@ export default function MonitoringPage() {
   const [searchParams] = useSearchParams()
   const { data: nodes } = useNodes()
   const [target, setTarget] = useState<DrillTarget>(() => targetFromSearch(searchParams))
+
+  // 页面上报（FR-518 §4.2）：监控页发「下钻目标 + 时间窗」，不发原始时序点全量。
+  // 目标来自 URL（`?instance=<uuid>` / `?node=<uuid>`），与页面自身解析结果同源。
+  usePageContext(
+    useMemo(
+      () => ({
+        pageKey: 'monitor',
+        ...(target.kind === 'instance'
+          ? { entities: [{ type: 'instance' as const, id: target.uuid }] }
+          : target.kind === 'node'
+            ? { entities: [{ type: 'node' as const, id: target.uuid }] }
+            : {}),
+      }),
+      [target],
+    ),
+  )
   /**
    * 把 URL 里的实例 uuid 解析成数字 id（`useProcessTop` 要 id）。
    *

@@ -190,10 +190,13 @@ export function formatPosition(pos: { x: number; y: number; z: number }) {
   return `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`
 }
 
-export function formatEventTime(timestamp: number) {
-  const value = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000
-  return new Date(value).toLocaleTimeString()
-}
+/**
+ * 事件时间格式化——**已移到 `@/lib/format/event-time` 作为单一真源**。
+ *
+ * 这里保留 re-export 只为不动既有调用点；新增代码请直接从 lib 导入，
+ * 不要在这里再写一份乘除逻辑（跨端秒/毫秒混用正是这样积累起来的）。
+ */
+export { formatEventTime } from '@/lib/format/event-time'
 
 export function formatBotEvent(event: BotRealtimeEvent) {
   const data = event.data

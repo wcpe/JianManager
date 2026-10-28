@@ -12,7 +12,7 @@ export type { BusinessAction, BusinessManifest, BusinessResult, BusinessWriteOpt
 
 /**
  * 取某实例的业务能力清单（JBIS 元查询，GET /business/manifest）。
- * 成功时 output 形如 `{ domains: { economy: { actions: [...] } } }`。
+ * 成功时 output 为探针原样返回的 JSON（CP 不解析其结构，也不假设任何具体业务域）。
  */
 export async function fetchBusinessManifest(
   instanceId: number,

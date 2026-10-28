@@ -1,3 +1,4 @@
+import { cloneElement, memo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpDown, Play, RotateCw, Square, Wrench } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
@@ -25,7 +26,16 @@ import {
 } from '@jianmanager/ui/components/table'
 import { hasCapability, resolveCapabilities } from '@/lib/instances/capabilities'
 import type { InstanceInfo } from '@/lib/instances/instance-types'
-import { INSTANCE_OPTIONAL_COLUMNS, type InstanceOptionalColumn } from '@/lib/instances/instance-view-prefs'
+import {
+  computeVisibleColumns,
+  INSTANCE_OPTIONAL_COLUMNS,
+  PINNED_COLUMNS,
+  type InstanceColumnKey,
+  type InstanceOptionalColumn,
+} from '@/lib/instances/instance-view-prefs'
+
+/** 表头拖拽用的 dataTransfer 类型（自定义 MIME：只接受本页发起的列拖拽，不误收外部拖入的文件/文本）。 */
+const COLUMN_DRAG_MIME = 'application/x-jm-instance-column'
 
 /** 列设置的缺省可见集（全开；缺省不改变既有表头结构）。 */
 const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(INSTANCE_OPTIONAL_COLUMNS)
@@ -69,7 +79,92 @@ export function RoleBadge({ role, compact = false }: { role: string; compact?: b
   return <span className="text-muted-foreground text-xs">{t('networks.role_universal')}</span>
 }
 
-/** 实例表头（平铺与分组视图复用）。含批量全选复选框（FR-058）与节点:端口列（FR-136）。 */
+/**
+ * 可拖拽的表头单元格包装（用户提出「表头拖拽换位」）。
+ *
+ * 【为什么把拖拽能力放在这里而不是每列自己实现】8 个表头若各写一遍 draggable/onDragOver/
+ * onDrop，样式与判据必然漂移。统一包一层后：钉住的列（首/尾）自动不可拖，
+ * 其余列的视觉反馈（拖拽中半透明、目标列左侧高亮插入位）只有一份实现。
+ *
+ * 【为什么用原生 HTML5 DnD 而不是 dnd-kit 之类】需求只是「同层横排的几列换位置」，
+ * 原生 API 的 dataTransfer 足够；引入 DnD 库会为这几个格子加约 30KB 依赖，
+ * 且它的碰撞/排序模型在这里全是多余能力。
+ */
+function DraggableHead({
+  columnKey,
+  draggable,
+  draggingKey,
+  onDragStart,
+  onDragEnd,
+  onDragOverColumn,
+  onDropColumn,
+  children,
+}: {
+  columnKey: InstanceColumnKey
+  draggable: boolean
+  draggingKey: InstanceColumnKey | null
+  onDragStart: (key: InstanceColumnKey) => void
+  onDragEnd: () => void
+  onDragOverColumn: (key: InstanceColumnKey) => void
+  onDropColumn: (key: InstanceColumnKey) => void
+  /**
+   * **已经是 `<TableHead>` 的元素**（由 renderHead 产出）。
+   * 本组件不自己再包一层 th：包了就会出现「一个列两个 th」，表头列数翻倍、
+   * 与 tbody 的列数对不上（实测 14 个 th 对 8 列）。
+   * 这里用 cloneElement 把拖拽属性合并进那唯一一个 th。
+   */
+  children: ReactElement
+}) {
+  const [over, setOver] = useState(false)
+  return cloneElement(children as ReactElement<Record<string, unknown>>, {
+    'data-column-key': columnKey,
+    'data-dragging': draggingKey === columnKey ? 'true' : undefined,
+    'data-drag-over': over && draggingKey !== columnKey ? 'true' : undefined,
+    draggable: draggable || undefined,
+    onDragStart: draggable
+      ? (event: React.DragEvent) => {
+          // 只带 key：列是可重排的语义单元，搬 DOM 片段没有意义。
+          event.dataTransfer.setData(COLUMN_DRAG_MIME, columnKey)
+          event.dataTransfer.effectAllowed = 'move'
+          onDragStart(columnKey)
+        }
+      : undefined,
+    onDragEnd: draggable ? onDragEnd : undefined,
+    onDragOver: draggable
+      ? (event: React.DragEvent) => {
+          // 必须 preventDefault 才会触发 drop。
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+          setOver(true)
+          onDragOverColumn(columnKey)
+        }
+      : undefined,
+    onDragLeave: draggable ? () => setOver(false) : undefined,
+    onDrop: draggable
+      ? (event: React.DragEvent) => {
+          event.preventDefault()
+          setOver(false)
+          onDropColumn(columnKey)
+        }
+      : undefined,
+    className: cn(
+      (children.props as { className?: string }).className,
+      'select-none',
+      draggable && 'cursor-grab active:cursor-grabbing',
+      draggingKey === columnKey && 'opacity-40',
+      // 插入位提示：左侧一条实色竖线（不用背景色，避免与表头 muted 底混淆）
+      over && draggingKey !== columnKey && 'shadow-[inset_2px_0_0_0_var(--primary)]',
+    ),
+  })
+}
+
+/**
+ * 实例表头（平铺与分组视图复用）。含批量全选复选框（FR-058）与节点:端口列（FR-136）。
+ *
+ * 【列顺序由 `columnOrder` 驱动】表头此前是 8 个 `<th>` 硬编码顺序，用户无法调整。
+ * 现在按 `columnOrder` 数组 map 渲染；行与 colgroup 用同一份顺序（见 InstanceRowView /
+ * PaginatedInstanceTable），三处同源才不会错列。
+ */
 export function InstanceTableHeader({
   t,
   allSelected,
@@ -79,6 +174,8 @@ export function InstanceTableHeader({
   onSort,
   selectAllLabel,
   visibleColumns = ALL_OPTIONAL_COLUMNS,
+  columnOrder,
+  onReorderColumn,
 }: {
   t: (k: string, options?: Record<string, unknown>) => string
   allSelected: boolean
@@ -94,48 +191,137 @@ export function InstanceTableHeader({
   selectAllLabel?: string
   /** 可见的可选列（列设置）；缺省全开。固定列（勾选/名称/节点:端口/状态/操作）不受影响。 */
   visibleColumns?: ReadonlySet<InstanceOptionalColumn>
+  /** 列顺序（拖拽换位结果）。缺省为默认顺序。 */
+  columnOrder?: readonly InstanceColumnKey[]
+  /** 列被拖动到目标列时的回调（省略则整表不可拖拽）。 */
+  onReorderColumn?: (from: InstanceColumnKey, to: InstanceColumnKey) => void
 }) {
+  const [dragging, setDragging] = useState<InstanceColumnKey | null>(null)
+  /*
+    源列用 ref 兜底：state 更新是异步的，若用户在 dragStart 后极快地 drop（或测试里连续
+    同步触发 dragStart→dragOver→drop），闭包里的 `dragging` 可能还是旧值（null）。
+    ref 在 dragStart 里同步写入，drop 时必定读得到。
+  */
+  const dragSourceRef = useRef<InstanceColumnKey | null>(null)
+
+  /*
+    列是否渲染 + 顺序：与行、colgroup 共用 computeVisibleColumns（三处同源，杜绝错列）。
+  */
+  const ordered = computeVisibleColumns(columnOrder, visibleColumns)
+  const canDrag = Boolean(onReorderColumn)
+
+  const renderHead = (key: InstanceColumnKey) => {
+    switch (key) {
+      case 'select':
+        return (
+          <TableHead className="w-10" key={key}>
+            <Checkbox
+              checked={allSelected}
+              onCheckedChange={onToggleAll}
+              aria-label={selectAllLabel ?? t('instanceBatch.selectAll')}
+              title={selectAllLabel}
+            />
+          </TableHead>
+        )
+      case 'region':
+        return <TableHead key={key}>{t('instances.regionZoneShort', { defaultValue: '区域' })}</TableHead>
+      case 'name':
+        return (
+          <SortableTableHead
+            key={key}
+            label={t('instances.name')}
+            sortValue="name"
+            currentSort={sortKey}
+            currentOrder={sortOrder}
+            onSort={onSort}
+          />
+        )
+      case 'identity':
+        return <TableHead key={key}>{t('instances.identity', { defaultValue: '类型·标签' })}</TableHead>
+      case 'nodePort':
+        return (
+          <SortableTableHead
+            key={key}
+            label={t('instances.nodePort')}
+            sortValue="nodeId"
+            currentSort={sortKey}
+            currentOrder={sortOrder}
+            onSort={onSort}
+          />
+        )
+      case 'status':
+        return (
+          <SortableTableHead
+            key={key}
+            label={t('instances.status')}
+            sortValue="status"
+            currentSort={sortKey}
+            currentOrder={sortOrder}
+            onSort={onSort}
+          />
+        )
+      case 'health':
+        return (
+          <TableHead key={key} align="right">
+            {t('instances.health.column', { defaultValue: '健康度' })}
+          </TableHead>
+        )
+      /*
+        业务插件列（FR-534）：可选列、**默认关**（见 instance-view-prefs 的说明），
+        因为它会再占约 120px，默认全开会把「状态/操作」挤出视口。
+        数据走批量端点（一次 ≤50 台），不逐行打探针。
+      */
+      case 'business':
+        return <TableHead key={key}>{t('instances.business.column', { defaultValue: '业务插件' })}</TableHead>
+      case 'actions':
+        return <TableHead key={key}>{t('instances.actions')}</TableHead>
+    }
+  }
+
   // 表头是「列的定义」，应当比数据行更轻、比组头更淡：`bg-muted/50` 与组头的 `bg-muted/80`
   // 只差一档，滚动起来两者糊成一片。改为近乎底色 + 上缘一条实线，靠**线**而不是**块**分隔。
   return (
     <TableHeader className="border-t border-border/70 bg-muted/25">
       <TableRow>
-        <TableHead className="w-10">
-          <Checkbox
-            checked={allSelected}
-            onCheckedChange={onToggleAll}
-            aria-label={selectAllLabel ?? t('instanceBatch.selectAll')}
-            title={selectAllLabel}
-          />
-        </TableHead>
-        <TableHead>{t('instances.regionZone')}</TableHead>
-        <SortableTableHead
-          label={t('instances.name')}
-          sortValue="name"
-          currentSort={sortKey}
-          currentOrder={sortOrder}
-          onSort={onSort}
-        />
-        <TableHead>{t('instances.type')}</TableHead>
-        <SortableTableHead
-          label={t('instances.nodePort')}
-          sortValue="nodeId"
-          currentSort={sortKey}
-          currentOrder={sortOrder}
-          onSort={onSort}
-        />        {visibleColumns.has('role') && <TableHead>{t('instances.role')}</TableHead>}
-        {visibleColumns.has('tags') && <TableHead>{t('grouping.tagsColumn')}</TableHead>}
-        <SortableTableHead
-          label={t('instances.status')}
-          sortValue="status"
-          currentSort={sortKey}
-          currentOrder={sortOrder}
-          onSort={onSort}
-        />
-        {/* 行内实时指标与活动心跳（数据由页面按可见窗口批量取数后逐行注入，见 InstanceRowMetrics）。 */}
-        {visibleColumns.has('metrics') && <TableHead>{t('instances.metrics.column')}</TableHead>}
-        {visibleColumns.has('heartbeat') && <TableHead>{t('instances.metrics.heartbeatColumn')}</TableHead>}
-        <TableHead>{t('instances.actions')}</TableHead>
+        {ordered.map((key) =>
+          canDrag && !PINNED_COLUMNS.includes(key) ? (
+            <DraggableHead
+              key={key}
+              columnKey={key}
+              draggable
+              draggingKey={dragging}
+              onDragStart={(k) => {
+                dragSourceRef.current = k
+                setDragging(k)
+              }}
+              onDragEnd={() => {
+                dragSourceRef.current = null
+                setDragging(null)
+              }}
+              onDragOverColumn={() => {
+                // 目标列由 drop 事件自己的 columnKey 提供，这里无需记录。
+              }}
+              onDropColumn={(target) => {
+                // 源列优先取 ref（同步可靠），再退回 state（正常拖拽路径）。
+                const from = dragSourceRef.current ?? dragging
+                if (from && from !== target) onReorderColumn?.(from, target)
+                dragSourceRef.current = null
+                setDragging(null)
+              }}
+            >
+              {renderHead(key)}
+            </DraggableHead>
+          ) : (
+            /*
+              钉住的列（首/尾）不可拖拽，但仍要打上 data-column-key：
+              它是「这一格是哪一列」的唯一锚点，测试与后续列宽/对齐逻辑都靠它定位。
+              漏掉会让钉住列在 DOM 里变成无标识的野节点。
+            */
+            cloneElement(renderHead(key) as ReactElement<Record<string, unknown>>, {
+              'data-column-key': key,
+            })
+          ),
+        )}
       </TableRow>
     </TableHeader>
   )
@@ -147,18 +333,19 @@ export function SortableTableHead({
   currentSort,
   currentOrder,
   onSort,
+  ...rest
 }: {
   label: string
   sortValue: InstanceSortKey
   currentSort: InstanceSortKey
   currentOrder: InstanceSortOrder
   onSort: (key: InstanceSortKey) => void
-}) {
+} & Omit<React.ComponentProps<typeof TableHead>, 'children'>) {
   const { t } = useTranslation()
   const active = currentSort === sortValue
   const orderLabel = currentOrder === 'desc' ? t('grouping.orderDesc') : t('grouping.orderAsc')
   return (
-    <TableHead aria-sort={active ? (currentOrder === 'desc' ? 'descending' : 'ascending') : 'none'}>
+    <TableHead aria-sort={active ? (currentOrder === 'desc' ? 'descending' : 'ascending') : 'none'} {...rest}>
       {/* 表头排序：外观是表头文字而非按钮，故 invisible + auto，
           手写的紧凑内边距与 hover 底色原样保留。
           显式写 text-[11px] font-semibold（= TableHead classic 档的继承值）：Button 基础类
@@ -184,7 +371,7 @@ interface FilterOption {
 }
 
 /** 单个筛选下拉：含「全部」哨兵项 + 给定选项；无选项时禁用。 */
-export function FilterSelect({
+function FilterSelectImpl({
   label,
   value,
   onChange,
@@ -214,6 +401,30 @@ export function FilterSelect({
     </Select>
   )
 }
+
+/**
+ * 筛选项记忆化。
+ *
+ * 【为什么】筛选条的 `options` 与 `onChange` 都是容器每次渲染现造的（`.map()` + 内联箭头），
+ * 直接 `memo` 必然失效。这里按**内容**比较 `options`：只要候选集合没变，就不重建这个 Select。
+ * 每个 Select 展开后是 60 个 `SelectItem` + Popper 上下文，重复重建代价很高——实测一次排序
+ * 会因此产生 60 个 `SelectItem` 的重渲染。
+ */
+export const FilterSelect = memo(FilterSelectImpl, (a, b) => {
+  if (a.label !== b.label) return false
+  if (a.value !== b.value) return false
+  const ao: FilterOption[] = a.options
+  const bo: FilterOption[] = b.options
+  if (ao.length !== bo.length) return false
+  for (let i = 0; i < ao.length; i++) {
+    const x = ao[i]
+    const y = bo[i]
+    if (!x || !y) return false
+    if (x.value !== y.value || x.label !== y.label) return false
+  }
+  // onChange 是容器内联闭包，语义由 value 决定，不参与比较
+  return true
+})
 
 /**
  * 实例行的「⋯」次要操作菜单（FR-138）：标签 / 资源限额 / 代理后端 / 克隆 / 删除收入下拉，

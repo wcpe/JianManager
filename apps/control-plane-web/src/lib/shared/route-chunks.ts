@@ -25,6 +25,8 @@ export const ROUTE_CHUNKS = {
   '/': () => import('@/pages/OverviewPage'),
   // AI 首页（FR-520）：与经典首页互斥挂载，由路由层按 ?home 二选一。
   '/assistant-home': () => import('@/pages/AssistantHomePage'),
+  // 对话历史（FR-542/543）：检索 + 编辑 + 回退。
+  '/assistant/history': () => import('@/pages/AssistantHistoryPage'),
   '/monitor': () => import('@/pages/MonitoringPage'),
   '/nodes': () => import('@/pages/NodesPage'),
   '/instances': () => import('@/pages/InstancesPage'),
@@ -32,6 +34,14 @@ export const ROUTE_CHUNKS = {
   '/instances/:id': () => import('@/pages/InstanceDetailPage'),
   '/instances/:id/files': () => import('@/pages/InstanceFilesPage'),
   '/config-baselines': () => import('@/pages/ConfigBaselinesPage'),
+  // 分层配置（FR-529）：配置文件列表与层版本编辑/有效值预览。
+  '/config-files': () => import('@/pages/ConfigFilesPage'),
+  '/config-files/:id': () => import('@/pages/ConfigFileDetailPage'),
+  // 配置纳管（FR-533）与配置交付编排（FR-531/532）：纳管是「登记磁盘现状」，
+  // 交付是「把某一层版本分批下发并观察」，两者是配置生命周期的不同阶段，各自一页。
+  '/config-adopt': () => import('@/pages/ConfigAdoptPage'),
+  '/config-deliveries': () => import('@/pages/ConfigDeliveriesPage'),
+  '/config-deliveries/:id': () => import('@/pages/ConfigDeliveryDetailPage'),
   '/networks': () => import('@/pages/NetworksPage'),
   // 拓扑与分组管理同属 NetworkPage（同 chunk），但两个入口都要能被预取，故两个键指向同一 import。
   '/networks/topology': () => import('@/pages/NetworksPage'),
@@ -66,6 +76,8 @@ export const ROUTE_CHUNKS = {
   '/database': () => import('@/pages/DatabasePage'),
   '/system-update': () => import('@/pages/SystemUpdatePage'),
   '/agent-tokens': () => import('@/pages/AgentTokensPage'),
+  // 平台审批中心（FR-490 / FR-493）。
+  '/approvals': () => import('@/pages/ApprovalsPage'),
   '/mcp-activity': () => import('@/pages/McpActivityPage'),
   '/agent-call-logs': () => import('@/pages/AgentCallLogsPage'),
   '/licenses': () => import('@/pages/LicensesPage'),

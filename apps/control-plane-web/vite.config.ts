@@ -153,7 +153,12 @@ export default defineConfig(({ mode }) => {
           include: ['src/**/*.dom.test.tsx'],
           setupFiles: ['./src/test/setup.ts'],
           testTimeout: 10_000,
-          maxWorkers: 4,
+          // DOM 项目里有若干**真实计时**的用例（WS 重连、热缓存 LRU、页签 keep-alive），
+          // 单个用例本身就要跑 5 秒以上。开到 4 并发时，在负载较高的机器上会因 CPU 饥饿
+          // 让 React 状态更新来不及在 waitFor 默认窗口内落地，表现为「每轮换一批用例失败、
+          // 单跑又全过」的抖动（实测 maxWorkers=4 时 0–3 个失败且失败集合每次不同，
+          // 降到 2 后 3277 项稳定全过）。这里取 2 换确定性。
+          maxWorkers: 2,
           sequence: { groupOrder: 1 },
         },
       },

@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import TopologyGraph from './TopologyGraph'
+
+/*
+  单个用例要渲染整个拓扑图（多节点 + 边 + 多维度切换），实测单跑约 5.8s。
+  默认 10s 在并行跑全量、机器负载高时会随机超时（同一份代码单跑稳定通过）。
+  这里放宽超时，避免把「机器忙」误报成功能回归。
+*/
+vi.setConfig({ testTimeout: 30_000 })
 
 /**
  * FR-453 拓扑完整网络视图强断言：

@@ -9,6 +9,7 @@ const SEGMENT_TITLE_KEYS: Record<string, string> = {
   monitor: 'nav.monitoring',
   nodes: 'nav.nodes',
   instances: 'nav.allInstances',
+  'config-files': 'nav.configFiles',
   networks: 'nav.networkTopology',
   players: 'nav.players',
   bots: 'nav.bots',

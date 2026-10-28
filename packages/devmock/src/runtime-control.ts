@@ -39,6 +39,21 @@ export interface MockDataScaleProfile {
   taskCount: number
   /** 告警事件 / 通知行数。 */
   feedCount: number
+  /**
+   * 额外的「压力验证」节点行数（0 = 只有手工种子 alpha/beta 等）。
+   *
+   * ## 为什么它必须进档位而不是硬编码
+   *
+   * 此前这 34 台是**无条件追加**的（`node.ts` 里直接 spread），于是默认数据集从
+   * 2 台可见节点变成 36 台。这打破了依赖「只有 alpha/beta」的用例——
+   * `ConsoleHeader.statPopovers.dom.test.tsx` 就因此变红（它断言浮窗底部是
+   * 「查看全部节点」，而 36 台超过浮窗上限 8，渲染成了「还有 N 个，查看全部」）。
+   *
+   * 更要紧的是它绕过了本文件已有的规模机制：其它四类数据都能调档，
+   * 唯独节点数不受控，等于另起一套不受控的规模膨胀——任何断言节点总数、
+   * 摘要数字或依赖截图的用例都会随机失效，且调档也修不回来。
+   */
+  nodeSeedCount: number
 }
 
 /**
@@ -46,9 +61,15 @@ export interface MockDataScaleProfile {
  * 否则那些专门造出来演示特定状态的实例（survival-1 / lobby-proxy 等）会被裁掉。
  */
 export const MOCK_DATA_SCALES: Record<MockDataScale, MockDataScaleProfile> = {
-  small: { instanceCount: 60, logCount: 600, taskCount: 80, feedCount: 60 },
-  medium: { instanceCount: 300, logCount: 3000, taskCount: 400, feedCount: 300 },
-  large: { instanceCount: 1200, logCount: 12000, taskCount: 1500, feedCount: 1200 },
+  // nodeSeedCount 在小/中档为 0（默认档是 large，故默认仍带 34 台压力节点）。
+  //
+  // 想回到「只有手工种子节点」的基线时，把档位调到 small 或 medium 即可：
+  //   localStorage.setItem('jm.devmock.dataScale', 'small')
+  // 需要「只有 alpha/beta」的用例（如 ConsoleHeader 统计浮窗）应显式设档，
+  // 或者在用例里断言「行数 = min(总数, 浮窗上限)」而不是硬编码文案。
+  small: { instanceCount: 60, logCount: 600, taskCount: 80, feedCount: 60, nodeSeedCount: 0 },
+  medium: { instanceCount: 300, logCount: 3000, taskCount: 400, feedCount: 300, nodeSeedCount: 0 },
+  large: { instanceCount: 1200, logCount: 12000, taskCount: 1500, feedCount: 1200, nodeSeedCount: 34 },
 }
 
 /** 档位中文标签（面板按钮文案，与档位标识分开：标识要稳定、文案可能会改）。 */

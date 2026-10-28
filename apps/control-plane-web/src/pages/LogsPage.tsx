@@ -7,9 +7,10 @@
  * 时间线的滚动位置等纯展示状态留在视图内。
  * 保留原路径默认导出，路由表（`ROUTE_CHUNKS['/logs']`）与既有用例无需改动。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { toast } from 'sonner'
 import { exportLogs, useLegacyLogs, useLogs, type LogEntry, type LogQueryParams } from '@/api/logs'
 import {
@@ -127,6 +128,19 @@ export default function LogsPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const isPlatformAdmin = useAuthStore((state) => state.role === ROLE_PLATFORM_ADMIN)
+
+  // 页面上报（FR-518 §5.1 / §4.2）：日志页**只发源标识与时间窗，不发日志正文**。
+  // 正文可能含敏感内容，留给工具按权限取（spec §8 末条）。
+  const contextInstanceId = searchParams.get('instanceId')
+  usePageContext(
+    useMemo(
+      () => ({
+        pageKey: 'logs',
+        ...(contextInstanceId ? { entities: [{ type: 'instance' as const, id: contextInstanceId }] } : {}),
+      }),
+      [contextInstanceId],
+    ),
+  )
 
   const [view, setView] = useState<LogsView>('node_instance')
   const [filter, setFilter] = useState<LogsFilterState>(() => {

@@ -61,10 +61,19 @@ describe('RuntimeAssetsPage FR-301（多运行时矩阵与刷新）', () => {
 
   it('显示「上次同步」并可手动刷新：刷新后 syncedAt 前移为「刚刚」，旧数据仍在（失败容忍）', async () => {
     loginMockUser()
+    // 先把种子里的同步时间改成固定历史值。
+    //
+    // 假后端 `runtime-syncs` 的种子用的是 `NOW = new Date().toISOString()`（模块加载时刻），
+    // 恒为「刚刚」。而本条断言的关键正是「刷新前不是刚刚、刷新后才是刚刚」——直接沿用种子
+    // 的话两个状态没有差别，断言既测不出刷新是否生效，也会因种子恒为刚刚而必然失败。
+    interface MockRuntimeSync { id: number; nodeId: number; syncedAt: string | null }
+    const syncs = db<MockRuntimeSync>('runtime-syncs')
+    for (const rec of syncs.list()) syncs.update(rec.id, { syncedAt: '2026-06-28T08:00:00Z' })
+
     const user = userEvent.setup()
     renderWithProviders(<RuntimeAssetsPage />)
 
-    // 初始 syncedAt = seed 的固定历史时间（非「刚刚」）。
+    // 初始 syncedAt = 上面注入的固定历史时间（非「刚刚」）。
     const syncLabel = await screen.findByText(/上次同步/)
     expect(syncLabel).toBeInTheDocument()
     expect(syncLabel.textContent).not.toContain('刚刚')

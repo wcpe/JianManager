@@ -12,7 +12,7 @@ import { useTasks } from '@/api/tasks'
 import { useNotificationFeed, useFeedUnreadCount } from '@/api/notification-feed'
 import { TopNav } from '@jianmanager/ui/components/nav'
 import { TasksMenu } from '@/components/views/console/TasksMenu'
-import { NotificationBell } from '@/components/views/console/NotificationBell'
+import { NotificationBell, type AttentionEntry } from '@/components/views/console/NotificationBell'
 import { ClusterBadges, STAT_POPOVER_MAX_ROWS } from '@/components/views/console/ClusterBadges'
 import type { ClusterSlot } from '@/components/views/console/ClusterBadges'
 import { AccountMenu } from '@/components/views/console/AccountMenu'
@@ -86,6 +86,7 @@ export default function ConsoleHeader() {
  * 容器（右对齐 / 14px 内边距 / 5px 间距）由 ui 包 `TopNav` 的 actions 槽位提供，本组件只排内容。
  */
 function HeaderTools() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const setAssistantDockOpen = useConsoleStore((s) => s.setAssistantDockOpen)
   // 常驻弹层的数据在这里取（弹层无 enabled 开关，与改前挂载即取一致）；视图侧只渲染与上报意图。
@@ -102,10 +103,12 @@ function HeaderTools() {
     { status: 'RUNNING', pageSize: STAT_POPOVER_MAX_ROWS },
     clusterSlot === 'running',
   )
-  const { data: crashedPage } = useSearchInstances(
-    { status: 'CRASHED', pageSize: STAT_POPOVER_MAX_ROWS },
-    clusterSlot === 'crashed',
-  )
+  /*
+    崩溃实例**常驻取数**（不再只在浮窗打开时取）：它同时供集群徽标的崩溃浮窗与页眉
+    「需要处理」使用。窗口仍是很小的 `STAT_POPOVER_MAX_ROWS`，代价可忽略；
+    若继续绑定 `clusterSlot`，铃铛里的「需要处理」会永远看不到崩溃实例——那正是最该报的一类。
+  */
+  const { data: crashedPage } = useSearchInstances({ status: 'CRASHED', pageSize: STAT_POPOVER_MAX_ROWS })
   const { data: overview } = useMetricOverview('24h')
   const { data: aggregate } = useInstanceAggregate()
 
@@ -113,6 +116,54 @@ function HeaderTools() {
   const nodeNames = new Map((nodes ?? []).map((n) => [n.id, n.name]))
   const runningItems = runningPage?.items ?? []
   const crashedItems = crashedPage?.items ?? []
+  /*
+    「需要处理」条目（原首页区块，按用户要求上移到页眉消息中心）。
+
+    三类来源各自都有明确的「要去修」指向，因此每条都带跳转：
+    - 崩溃实例：最紧迫（已在损失可用性），跳实例详情；
+    - 失败任务：跳任务中心并定位该任务；
+    - 严重/警告告警：只取 feed 里 source=alert 的项（不额外发告警查询），跳告警页。
+
+    排序按 rank（崩溃 0 < 失败任务 1 < 严重告警 1.5 < 警告 2），与首页原先的口径一致，
+    这样「上移」不改变用户对紧急度的判断。
+  */
+  const attentionEntries: AttentionEntry[] = [
+    ...crashedItems.map((i) => ({
+      key: `inst:${i.id}`,
+      rank: 0,
+      kind: 'instance' as const,
+      title: i.name,
+      detail: [nodeNames.get(i.nodeId), i.statusReason ?? i.status].filter(Boolean).join(' · '),
+      statusLabel: i.status,
+      statusLevel: 'danger' as const,
+      href: `/instances/${i.id}`,
+    })),
+    ...(taskPage?.items ?? [])
+      .filter((tk) => tk.state === 'failed')
+      .map((tk) => ({
+        key: `task:${tk.taskId}`,
+        rank: 1,
+        kind: 'task' as const,
+        title: tk.title,
+        detail: tk.error ?? undefined,
+        statusLabel: t('tasks.state.failed', '失败'),
+        statusLevel: 'danger' as const,
+        href: `/tasks?task=${encodeURIComponent(tk.taskId)}`,
+      })),
+    ...(feed?.items ?? [])
+      .filter((f) => f.source === 'alert' && (f.level === 'error' || f.level === 'warning'))
+      .map((f) => ({
+        key: `alert:${f.id}`,
+        rank: f.level === 'error' ? 1.5 : 2,
+        kind: 'alert' as const,
+        title: f.title,
+        detail: f.body,
+        statusLabel: f.level === 'error' ? t('alerts.level_critical', '严重') : t('alerts.level_warn', '警告'),
+        statusLevel: (f.level === 'error' ? 'danger' : 'warning') as 'danger' | 'warning',
+        href: '/alerts',
+      })),
+  ]
+
   const username = useAuthStore((s) => s.username)
   const role = useAuthStore((s) => s.role)
   const logout = useAuthStore((s) => s.logout)
@@ -162,6 +213,10 @@ function HeaderTools() {
         <NotificationBell
           unread={unread}
           items={feed?.items}
+          attention={attentionEntries}
+          onOpenAttention={(entry) => {
+            if (entry.href) navigate(entry.href)
+          }}
           onOpenItem={(item) => {
             // 快捷跳转（FR-226）：任务类站内信→任务中心定位该任务；告警→告警页；其余→通知中心。
             if (item.source === 'message' && item.taskId) navigate(`/tasks?task=${item.taskId}`)

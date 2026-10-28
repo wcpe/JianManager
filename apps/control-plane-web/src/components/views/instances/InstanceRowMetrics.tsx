@@ -32,6 +32,24 @@ export interface InstanceMetricSnapshot {
   playersMax: number | null
   /** 活动心跳：inst_tps 末段采样逐点三态（true=活跃 / false=停摆 / null=缺测）。 */
   heartbeat: (boolean | null)[]
+  /**
+   * 近窗口序列（缩略图与悬浮图共用）。
+   *
+   * 【为什么把序列带进快照】行内要画两张缩略 sparkline（TPS / 在线人数），
+   * 悬浮还要展示 CPU / 内存 / 玩家 / TPS 四张完整曲线。这些数据在
+   * `useInstanceWindowMetrics` 里本来就已经取到（batch 端点返回的就是整条序列），
+   * 只是此前只留了末点、把序列丢掉，于是要画图就得再请求一次。带上后零额外请求。
+   *
+   * 未取到序列时为 `undefined`（不是空数组）——「没有数据」与「数据为空」要能区分，
+   * 前者显示 `--`，后者是真实的零值序列。
+   */
+  series?: {
+    /** 每项带时间戳：正式图表要画时间横轴，只留数值就画不出刻度。 */
+    tps: { ts: string; value: number }[]
+    players: { ts: string; value: number }[]
+    cpuPct: { ts: string; value: number }[]
+    memBytes: { ts: string; value: number }[]
+  }
 }
 
 /**

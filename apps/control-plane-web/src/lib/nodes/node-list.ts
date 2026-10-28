@@ -27,16 +27,47 @@ export function nodeStatusLevel(status: number): StatusLevel {
   return 'danger'
 }
 
+/** 节点状态筛选键（用户提出的「节点多了要能把出问题的机器一把捞出来」）。 */
+export type NodeStatusFilter = 'all' | 'online' | 'offline' | 'maintenance'
+
 /**
- * 按搜索词筛选节点（名称/host 大小写不敏感子串）。
- * 空/空白查询返回原列表（保留全部节点、保持原顺序）。
+ * 按搜索词 + 状态筛选节点。
+ *
+ * 【为什么补状态维度】此前只按名称/host 匹配。运维最高频的动作是「把所有离线节点找出来」——
+ * 30 台时要翻页、100 台时基本找不过来。KPI 卡片上的「离线 1」只能看数字，点不动，
+ * 与服务器页「点 StatCard 即筛」的手感也不一致。
+ *
+ * 语义约定：
+ * - 状态与搜索词是 **AND**（先按状态过一遍，再按词匹配）；
+ * - `maintenance` 是正交标记而非 status 值（维护中的节点 status 仍是 1/0），故单独判断；
+ * - 空/空白搜索词不参与过滤，保持原顺序。
  */
-export function filterNodes(nodes: NodeInfo[], query: string): NodeInfo[] {
+export function filterNodes(
+  nodes: NodeInfo[],
+  query: string,
+  status: NodeStatusFilter = 'all',
+): NodeInfo[] {
   const q = query.trim().toLowerCase()
-  if (q === '') return nodes
-  return nodes.filter(
+  const byStatus = status === 'all' ? nodes : nodes.filter((n) => matchesStatus(n, status))
+  if (q === '') return byStatus
+  return byStatus.filter(
     (n) => n.name.toLowerCase().includes(q) || n.host.toLowerCase().includes(q),
   )
+}
+
+/** 单节点是否命中某个状态筛选。维护中优先于在线/离线（与状态徽章的判据一致）。 */
+export function matchesStatus(node: NodeInfo, status: NodeStatusFilter): boolean {
+  switch (status) {
+    case 'all':
+      return true
+    // 维护中的节点即使在线，也不该出现在「在线」筛选里——它的可用性语义已经变了。
+    case 'maintenance':
+      return node.maintenance
+    case 'online':
+      return node.status === 1 && !node.maintenance
+    case 'offline':
+      return node.status === 0
+  }
 }
 
 /**

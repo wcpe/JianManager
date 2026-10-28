@@ -339,7 +339,10 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
     loginAs(MEMBER_TOKEN)
     renderWithProviders(<Workspace />, { route: '/client-dist-ops' })
 
-    expect(await screen.findByRole('heading', { name: '平台首页' })).toBeInTheDocument()
+    // 首页自 FR-520 §9.1 起默认渲染 AI 首页（经典仪表盘需 `?home=classic`），
+    // 因此这里断言的是「AI 助手」标题——守卫的语义（被送回首页）没有变，
+    // 变的只是首页现在长什么样。
+    expect(await screen.findByRole('heading', { name: 'AI 助手' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/')
     expect(screen.queryByRole('heading', { name: '客户端分发运维' })).not.toBeInTheDocument()
   })
@@ -348,7 +351,8 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
     loginAs(MEMBER_TOKEN)
     renderWithProviders(<Workspace />, { route: '/client-channels' })
 
-    expect(await screen.findByRole('heading', { name: '平台首页' })).toBeInTheDocument()
+    // 同上：默认首页已是 AI 首页（`?home=classic` 才是经典仪表盘）。
+    expect(await screen.findByRole('heading', { name: 'AI 助手' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/')
   })
 
@@ -356,7 +360,8 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
     loginAs(MEMBER_TOKEN)
     renderWithProviders(<Workspace />, { route: '/client-dist-security?tab=ip&channelId=skyblock-s1' })
 
-    expect(await screen.findByRole('heading', { name: '平台首页' })).toBeInTheDocument()
+    // 同上：默认首页是 AI 首页。
+    expect(await screen.findByRole('heading', { name: 'AI 助手' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/')
   })
 })

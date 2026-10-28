@@ -52,10 +52,23 @@ export interface BackendsInlineProps {
  * 必然重叠；而「声明值 = 真实行盒」要求行盒是常量、不是各卡实高的最大值——
  * 卡片行流按本常量定位，行盒若随内容变长就会与下一行打架。
  */
-export const CARD_ROW_HEIGHT = 280
+/*
+  【实测值，不是估算】卡片实高由内容决定，实测区间 169~229px（标签多/名称换行的更高）。
+  这里取 272：卡片内部分区高度（含外边距）实测合计 233，加左右内边距 24 得 257，
+  再加 CARD_ROW_GAP 8 = 265；取 272 留 7px 余量。
+  **不要凭感觉调小这个值**：调小后卡片会被 overflow-hidden 裁掉内容（实测裁掉
+  「节点:端口」那行的下半截），比重叠更难看。需要压缩卡片时，先减分区再改这里。
+
+  【历史教训】此常量曾从 280 被调到 200（对应行盒 192），但卡片内容没跟着压缩，
+  于是 229px 的卡片盖到下一行上，表现为「卡片重叠」。更糟的是上方注释仍写着 280/264，
+  文档与代码已经脱节——所以这里改成**以实测值为基准**并写清来源。
+  即便将来卡片变高，行盒内还有 overflow-hidden 兜底（见 renderCard 的包裹层），
+  不会再次重叠；但那时应同步抬高本常量，而不是让内容被裁掉。
+*/
+export const CARD_ROW_HEIGHT = 272
 
 /** 卡片行的行间与列间留白（px）：行盒 = CARD_ROW_HEIGHT − 本值，故行距与行盒不会各自漂移。 */
-export const CARD_ROW_GAP = 16
+export const CARD_ROW_GAP = 8
 
 /**
  * 卡片行流里的一行：组头行独占一行，卡片行承载至多 `columns` 张卡。
@@ -174,7 +187,14 @@ export function VirtualizedGroupedCardView({
       onScroll={handleScroll}
       data-testid="instances-card-virtual"
       data-total-count={totalCount}
-      className="max-h-[calc(100vh-18rem)] min-h-96 overflow-auto pr-1"
+      /*
+        【高度交给 flex 分配，不再猜一个 calc】原来是 `max-h-[calc(100vh-18rem)]`：
+        那个 18rem 是对「工具栏 + 筛选条 + 页头」高度的硬编码估算，只要上下新增一条
+        （本轮加了分页条）就会算错——表现为卡片在底部被裁掉、却又不出现滚动条。
+        现在容器是父级 flex 列里的 `flex-1` 子项，高度由布局真实算出；
+        `min-h-0` 是 flex 子项可收缩、内部滚动生效的前提（缺了它内容会把容器撑高）。
+      */
+      className="min-h-0 flex-1 overflow-auto pr-1"
     >
       {/* 外层撑起模型总高，各显示行按 `offsets`（逐行高度前缀和）绝对定位 */}
       <div className="relative" style={{ height: totalSize }}>
@@ -214,7 +234,19 @@ export function VirtualizedGroupedCardView({
               className="absolute inset-x-0 grid gap-4"
             >
               {row.items.map((inst) => (
-                <div key={inst.id} data-testid="instances-card-virtual-item">
+                /*
+                  【卡片被钉在行盒高度内】虚拟化按 `CARD_ROW_HEIGHT - CARD_ROW_GAP` 这个常量
+                  给每一行定位，而卡片内容是自适应的：实测卡片实高在 169~229px 之间浮动
+                  （标签多的、名称换行的更高），而行盒只有 192px——超出的卡片直接盖住下一行，
+                  表现为「卡片重叠」。这里给包裹层 `h-full overflow-hidden`：
+                  卡实高不再决定行盒，行盒由常量决定，结构上不可能溢出。
+                  卡片内部对超出内容做裁剪（见 InstanceWorktableCard 的 min-h-0）。
+                */
+                <div
+                  key={inst.id}
+                  data-testid="instances-card-virtual-item"
+                  className="h-full min-h-0 overflow-hidden"
+                >
                   {renderCard({
                     inst,
                     nodeName: nodeName(inst.nodeId),
@@ -241,15 +273,15 @@ export function BackendsInline({ registrations, isLoading = false, onOpenInstanc
   const { t } = useTranslation()
 
   if (isLoading) {
-    return <p className="px-6 py-3 text-sm text-muted-foreground">{t('common.loading')}</p>
+    return <p className="px-3 py-2 text-sm text-muted-foreground">{t('common.loading')}</p>
   }
   const regs = registrations ?? []
   if (regs.length === 0) {
-    return <p className="px-6 py-3 text-sm text-muted-foreground">{t('proxy.noBackends')}</p>
+    return <p className="px-3 py-2 text-sm text-muted-foreground">{t('proxy.noBackends')}</p>
   }
   return (
-    <div className="px-6 py-3">
-      <div className="mb-2 text-xs font-medium text-muted-foreground">
+    <div className="px-3 py-2">
+      <div className="mb-1.5 text-xs font-medium text-muted-foreground">
         {t('proxy.registeredBackends', { count: regs.length })}
       </div>
       <ul className="space-y-1">

@@ -37,7 +37,7 @@ function collectEntries(groups: NavGroup[]): CollectedEntry[] {
 const OLD_ENTRIES = collectEntries(NAV_GROUPS)
 const OLD_ENTRY_BY_PATH = new Map(OLD_ENTRIES.map((e) => [e.to, e]))
 /**
- * 旧六域**登记**的全部导航目的地：37 条。
+ * 旧六域**登记**的全部导航目的地：41 条。
  * 这里直接取登记项而不是 `flatNavItems(null, true)`——后者会走角色种子分支且**忽略 admin 参数**
  * （`null` 命中 `navGroupsForRole(null)`），只返回无 perm 要求的首页，不是「管理员全开」。
  * 管理员口径的等价物是 `flatNavItems(adminNodes, true)`，见下面各测试的交叉核对。
@@ -48,7 +48,7 @@ const NAV_PATH_SET = new Set(OLD_ALL_PATHS)
 const WORKSPACE_GROUP_LIST = WORKSPACES.flatMap((w) => w.groups)
 const NEW_ENTRIES = collectEntries(WORKSPACE_GROUP_LIST)
 const NEW_ENTRY_BY_PATH = new Map(NEW_ENTRIES.map((e) => [e.to, e]))
-/** 新工作区层（管理员全开）的全部 `to`：37 条导航目的地 + 5 条子路由深链。 */
+/** 新工作区层（管理员全开）的全部 `to`：41 条导航目的地 + 5 条子路由深链。 */
 const NEW_ALL_PATHS = flatWorkspaceItems(new Set<string>(), true).map((i) => i.to)
 
 const SUB_ROUTE_SET = new Set<string>(SUB_ROUTE_PATTERNS)
@@ -157,7 +157,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
           {
             key: 'obsAutomation',
             labelKey: 'nav.automationGovernance',
-            pages: ['/tasks', '/schedules', '/backups', '/config-baselines'],
+            pages: ['/tasks', '/schedules', '/backups', '/config-baselines', '/config-files', '/config-adopt', '/config-deliveries'],
           },
           { key: 'obsMessages', labelKey: 'nav.messages', pages: ['/notifications'] },
         ],
@@ -195,14 +195,14 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
           {
             key: 'platformSystemMaintenance',
             labelKey: 'nav.systemMaintenance',
-            pages: ['/audit', '/settings', '/database', '/system-update', '/licenses'],
+            pages: ['/approvals', '/audit', '/settings', '/database', '/system-update', '/licenses'],
           },
         ],
       },
     ])
   })
 
-  it('登记条数对账 CSV：42 条进工作区 + 3 条认证页 = 45；三层结构无 sections', () => {
+  it('登记条数对账 CSV：46 条进工作区 + 3 条认证页 = 49；三层结构无 sections', () => {
     // 三层结构：工作区 → 组 → 页面；组是容器（无自身 to、无二级 sections）
     expect(WORKSPACE_GROUP_LIST.every((g) => g.to === undefined)).toBe(true)
     expect(WORKSPACE_GROUP_LIST.every((g) => g.sections === undefined)).toBe(true)
@@ -213,9 +213,9 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
       WORKSPACES.map((w) => [w.key, w.groups.length, w.groups.reduce((n, g) => n + (g.children?.length ?? 0), 0)]),
     ).toEqual([
       ['ops', 3, 10],
-      ['observability', 3, 9],
+      ['observability', 3, 12],
       ['operation', 2, 6],
-      ['platform', 5, 17],
+      ['platform', 5, 18],
     ])
 
     const allPaths = NEW_ENTRIES.map((e) => e.to)
@@ -223,12 +223,12 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
 
     const navPaths = allPaths.filter((p) => NAV_PATH_SET.has(p))
     const subPaths = allPaths.filter((p) => SUB_ROUTE_SET.has(p))
-    expect(navPaths.length, '37 个导航目的地').toBe(37)
+    expect(navPaths.length, '41 个导航目的地').toBe(41)
     expect(new Set(subPaths), '5 条子路由全部登记').toEqual(SUB_ROUTE_SET)
     expect(navPaths.length + subPaths.length).toBe(allPaths.length)
 
-    // 45 = 37 导航 + 5 子路由 + 3 认证页
-    expect(allPaths.length + AUTH_ROUTE_PATHS.length).toBe(45)
+    // 49 = 41 导航 + 5 子路由 + 3 认证页
+    expect(allPaths.length + AUTH_ROUTE_PATHS.length).toBe(49)
 
     // 组 key 全局唯一（折叠态 / 图标映射按 key 记账）
     const groupKeys = WORKSPACE_GROUP_LIST.map((g) => g.key)
@@ -241,8 +241,8 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
   })
 
   it('perm / labelKey / icon 与 NAV_GROUPS 同路径项逐条同值（零发明、零省略）', () => {
-    expect(OLD_ALL_PATHS.length, '旧导航目的地应为 37 条').toBe(37)
-    expect(OLD_ENTRY_BY_PATH.size).toBe(37)
+    expect(OLD_ALL_PATHS.length, '旧导航目的地应为 41 条').toBe(41)
+    expect(OLD_ENTRY_BY_PATH.size).toBe(41)
     // 交叉核对参照物口径：管理员全开 = 登记全集（顺序也一致）
     expect(flatNavItems(adminNodes, true).map((i) => i.to)).toEqual(OLD_ALL_PATHS)
 
@@ -283,10 +283,10 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     }
   })
 
-  it('路由零遗漏：新层包含旧导航全部 37 条，新增恰为 5 条子路由', () => {
-    // 管理员全开：旧层 37 条导航目的地，新层 37 + 5 条
+  it('路由零遗漏：新层包含旧导航全部 41 条，新增恰为 5 条子路由', () => {
+    // 管理员全开：旧层 41 条导航目的地，新层 41 + 5 条
     const oldAdminPaths = flatNavItems(adminNodes, true).map((i) => i.to)
-    expect(oldAdminPaths, '旧层管理员口径应为 37 条').toEqual(OLD_ALL_PATHS)
+    expect(oldAdminPaths, '旧层管理员口径应为 41 条').toEqual(OLD_ALL_PATHS)
     expect(flatWorkspaceItems(adminNodes, true).map((i) => i.to)).toEqual(NEW_ALL_PATHS)
 
     const newSet = new Set(NEW_ALL_PATHS)
@@ -296,7 +296,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     expect([...new Set(NEW_ALL_PATHS.filter((p) => NAV_PATH_SET.has(p)))].sort()).toEqual([...OLD_ALL_PATHS].sort())
     expect(newSet.size).toBe(NEW_ALL_PATHS.length)
 
-    // 角色包装下平台管理员同样是「37 + 5」；null 走角色种子（未知角色保守清零），
+    // 角色包装下平台管理员同样是「41 + 5」；null 走角色种子（未知角色保守清零），
     // 与 flatNavItems(null, true) 的老行为一致——null 不等于「管理员全开」。
     expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(flatNavItems(null, true).map((i) => i.to))
     expect(flatWorkspaceItems(null, true).map((i) => i.to)).toEqual(['/'])
@@ -319,7 +319,16 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
 
   it('权限裁剪等价：{instance.read} 场景逐条对照', () => {
     const nodes = new Set(['instance.read'])
-    expect(flatNavItems(nodes, false).map((i) => i.to)).toEqual(['/', '/instances', '/config-baselines'])
+    // 配置三项（config-files / config-adopt / config-deliveries）的 perm 都是
+    // any-of `['file.read','instance.read']`，故仅持 instance.read 也应可见。
+    expect(flatNavItems(nodes, false).map((i) => i.to)).toEqual([
+      '/',
+      '/instances',
+      '/config-baselines',
+      '/config-files',
+      '/config-adopt',
+      '/config-deliveries',
+    ])
     expect(flatWorkspaceItems(nodes, false).map((i) => i.to)).toEqual([
       '/',
       '/instances',
@@ -327,6 +336,9 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
       '/instances/:id',
       '/instances/:id/files',
       '/config-baselines',
+      '/config-files',
+      '/config-adopt',
+      '/config-deliveries',
     ])
   })
 
@@ -385,7 +397,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
     }
   })
 
-  it('工作区归属：37 条导航目的地逐条归位（CSV 对照）', () => {
+  it('工作区归属：41 条导航目的地逐条归位（CSV 对照）', () => {
     const table: [path: string, workspace: WorkspaceKey, groupKey: string][] = [
       ['/', 'ops', 'opsResources'],
       ['/instances', 'ops', 'opsResources'],
@@ -402,6 +414,9 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
       ['/schedules', 'observability', 'obsAutomation'],
       ['/backups', 'observability', 'obsAutomation'],
       ['/config-baselines', 'observability', 'obsAutomation'],
+      ['/config-files', 'observability', 'obsAutomation'],
+      ['/config-adopt', 'observability', 'obsAutomation'],
+      ['/config-deliveries', 'observability', 'obsAutomation'],
       ['/notifications', 'observability', 'obsMessages'],
       ['/players', 'operation', 'opPlayersLoad'],
       ['/bots', 'operation', 'opPlayersLoad'],
@@ -419,6 +434,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
       ['/agent-tokens', 'platform', 'platformAgentAccess'],
       ['/mcp-activity', 'platform', 'platformAgentAccess'],
       ['/agent-call-logs', 'platform', 'platformAgentAccess'],
+      ['/approvals', 'platform', 'platformSystemMaintenance'],
       ['/audit', 'platform', 'platformSystemMaintenance'],
       ['/settings', 'platform', 'platformSystemMaintenance'],
       ['/database', 'platform', 'platformSystemMaintenance'],

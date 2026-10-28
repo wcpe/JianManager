@@ -12,6 +12,7 @@ import {
   Database,
   DownloadCloud,
   FileClock,
+  FileInput,
   GitBranch,
   GitCompareArrows,
   HardDrive,
@@ -32,6 +33,7 @@ import {
   Shield,
   User,
   UsersRound,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -87,6 +89,20 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/nodes', labelKey: 'nav.nodes', icon: Server, perm: 'node.read' },
       { to: '/players', labelKey: 'nav.players', icon: User, perm: 'player.read' },
       { to: '/bots', labelKey: 'nav.bots', icon: Bot, perm: 'bot.read' },
+    ],
+  },
+  {
+    key: 'configCenter',
+    labelKey: 'nav.configCenter',
+    icon: Layers,
+    children: [
+      // 分层配置（FR-529）：配置真源从「单实例文件」升级为「可跨实例分层覆盖」。
+      // 与「服务器」域下的配置基线（FR-458，集群级模板下发/漂移）是两件事，故独立成域。
+      { to: '/config-files', labelKey: 'nav.configFiles', icon: Layers, perm: ['file.read', 'instance.read'] },
+      // 配置纳管（FR-533）：把磁盘上已有的配置文件登记为 JM 基线（只读磁盘、不改写、不覆盖）。
+      { to: '/config-adopt', labelKey: 'nav.configAdopt', icon: FileInput, perm: ['file.read', 'instance.read'] },
+      // 配置交付编排（FR-531/532）：分批灰度、观察窗、熔断与回滚。
+      { to: '/config-deliveries', labelKey: 'nav.configDeliveries', icon: Workflow, perm: ['file.read', 'instance.read'] },
     ],
   },
   {
@@ -168,6 +184,8 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         labelKey: 'nav.auditSettings',
         children: [
+          // 平台审批中心（FR-490/493）：与审计同属平台治理，但读权限独立（approval.read）。
+          { to: '/approvals', labelKey: 'nav.approvals', icon: ShieldCheck, perm: 'approval.read' },
           { to: '/audit', labelKey: 'nav.audit', icon: FileClock, perm: 'audit.read' },
           { to: '/settings', labelKey: 'nav.systemSettings', icon: Settings2, perm: 'settings.read' },
           { to: '/licenses', labelKey: 'licenses.entry', icon: Scale, perm: 'license.read' },

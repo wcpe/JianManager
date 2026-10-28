@@ -2,9 +2,10 @@
 // 本层保留取数（无限搜索 / 聚合 / 节点 / 群组 / 分组树）、URL 状态、批量选择与各弹窗目标的装配。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { useTranslation } from 'react-i18next'
 import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Settings2, Bookmark, Trash2, ServerCog, CircleCheck, CircleSlash, TriangleAlert, ChevronDown } from 'lucide-react'
-import { useInfiniteInstanceSearch, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
+import { useSearchInstances, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
 import type { InstanceListParams, InstanceSearchParams } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useNetworks } from '@/api/networks'
@@ -58,14 +59,28 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
-import { Card } from '@jianmanager/ui/components/card'
+import { TableCell, TableRow } from '@jianmanager/ui/components/table'
 import { Input } from '@jianmanager/ui/components/input'
-import { SCROLL_KEY_PREFIX, buildInstanceTreeRows, VirtualizedGroupedInstanceTable, VirtualizedInstanceTable } from '@/components/views/instances/VirtualizedInstanceTables'
+import { SCROLL_KEY_PREFIX, buildInstanceTreeRows } from '@/components/views/instances/VirtualizedInstanceTables'
 import { FilterSelect, InstanceRowMenu, InstanceTableHeader } from '@/components/views/instances/InstanceTableParts'
 import { useInstanceWindowMetrics } from '@/components/views/instances/useInstanceWindowMetrics'
+import { useBusinessStatusBatch, type BusinessStatus } from '@/api/businessStatus'
 import type { InstanceSortKey, InstanceSortOrder } from '@/components/views/instances/InstanceTableParts'
 import { InstanceRowView } from '@/components/views/instances/InstanceRowView'
 import { BackendsInline, VirtualizedGroupedCardView } from '@/components/views/instances/InstanceCardViews'
+import { PaginatedInstanceTable } from '@/components/views/instances/PaginatedInstanceTable'
+import { InstancePaginationBar } from '@/components/views/instances/InstancePaginationBar'
+import { InstanceHealthHoverLayer } from '@/components/views/instances/InstanceRowSpark'
+import { InstanceContextMenu, buildContextMenuActions } from '@/components/views/instances/InstanceContextMenu'
+import {
+  applySelectionClick,
+  invertSelection,
+  moveColumn,
+  readStoredColumnOrder,
+  writeStoredColumnOrder,
+  type InstanceColumnKey,
+} from '@/lib/instances/instance-view-prefs'
+import { InstanceGroupHeaderContent } from '@/components/views/instances/VirtualizedInstanceTables'
 
 // 供针对性测试（rowMenu 门控）沿用既有导入路径。
 export { InstanceRowMenu }
@@ -129,7 +144,9 @@ const COLUMN_LABEL_KEY: Record<InstanceOptionalColumn, string> = {
   role: 'instances.role',
   tags: 'grouping.tagsColumn',
   metrics: 'instances.metrics.column',
+  active: 'instances.metrics.activeColumn',
   heartbeat: 'instances.metrics.heartbeatColumn',
+  business: 'instances.business.column',
 }
 
 /** 默认分组维度：region/zone 两级（FR-452）。 */
@@ -187,7 +204,7 @@ function readSortOrder(searchParams: URLSearchParams): InstanceSortOrder {
 
 function readPageSize(searchParams: URLSearchParams): number {
   const value = Number(searchParams.get('pageSize'))
-  return INSTANCE_PAGE_SIZES.includes(value as (typeof INSTANCE_PAGE_SIZES)[number]) ? value : 200
+  return INSTANCE_PAGE_SIZES.includes(value as (typeof INSTANCE_PAGE_SIZES)[number]) ? value : 50
 }
 
 function readPage(searchParams: URLSearchParams): number {
@@ -267,6 +284,15 @@ export default function InstancesPage() {
   } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; inPlace?: boolean; running?: boolean } | null>(null)
   const [killTarget, setKillTarget] = useState<{ id: number; name: string } | null>(null)
+  /*
+    启停二次确认（用户提出）：启动/停止/重启都会打断正在游戏的玩家，尤其「停止」会把在线玩家直接踢下线，
+    误点代价不可忽略。此前行内图标按钮与「⋯」菜单都是**一发即执行**，没有任何确认。
+    这里统一收敛为「先置入待确认目标，DangerConfirm 确认后才发请求」——
+    与删除/强杀/接管漂移完全同一套纪律（那三处早已如此，只有启停是漏的）。
+  */
+  /** 右键菜单目标与光标坐标：**全表一份**，由行上报（见 InstanceContextMenu 的注释）。 */
+  const [contextMenu, setContextMenu] = useState<{ inst: InstanceInfo; x: number; y: number } | null>(null)
+  const [lifecycleTarget, setLifecycleTarget] = useState<{ id: number; name: string; op: 'start' | 'stop' | 'restart' } | null>(null)
   // 接管运行态漂移（FR-471）：先把目标置入待确认，DangerConfirm 确认后才发请求（与强杀同款纪律）。
   const [adoptTarget, setAdoptTarget] = useState<{ id: number; name: string; pid: number } | null>(null)
   // 批量操作选中的实例 ID 集合（FR-058）。
@@ -295,15 +321,42 @@ export default function InstancesPage() {
     updateUrl({ nodeId: value, page: '1' })
   }
   const [statusFilter, setStatusFilter] = useState<string>(() => readParamOrAll(searchParams, 'status'))
+
   // 分组视图维度。
   const [groupBy, setGroupBy] = useState<GroupDimension>(() => readGroupDimension(searchParams))
   const [sortKey, setSortKey] = useState<InstanceSortKey>(() => readSortKey(searchParams))
   const [sortOrder, setSortOrder] = useState<InstanceSortOrder>(() => readSortOrder(searchParams))
+
+  // 页面上报「对外可说什么」（FR-518 §5.1）：只发结构，不发正文。
+  // 上报值全部来自 URL 派生状态（筛选/分组/排序），不读内部 state 对象、不遍历 DOM。
+  // 敏感键由 serializePageContext 统一丢弃，这里不重复判定。
+  // 空值不塞进 filters：一个 `status=all` 对模型没有信息量，反而占长度。
+  const pageContextFilters = useMemo(() => {
+    const f: Record<string, string> = {}
+    if (statusFilter && statusFilter !== ALL) f.status = statusFilter
+    if (groupBy) f.groupBy = groupBy
+    return f
+  }, [statusFilter, groupBy])
+  usePageContext(
+    useMemo(
+      () => ({
+        pageKey: 'instances',
+        ...(Object.keys(pageContextFilters).length ? { filters: pageContextFilters } : {}),
+      }),
+      [pageContextFilters],
+    ),
+  )
   const [page, setPage] = useState(() => readPage(searchParams))
   const [pageSize, setPageSize] = useState(() => readPageSize(searchParams))
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
   // 列设置（页面重构件）：可见可选列持久化于 jm.instances.columns；缺省全开（旧行为不变）。
   const [visibleColumns, setVisibleColumns] = useState<Set<InstanceOptionalColumn>>(readStoredColumns)
+  /*
+    列顺序（用户提出的表头拖拽换位）。与可见列分开存储：
+    一个管「显示哪些列」、一个管「按什么顺序排」，两者正交——隐藏再显示某列时，
+    它在顺序里的位置仍然保留，用户不用重排一遍。
+  */
+  const [columnOrder, setColumnOrder] = useState<InstanceColumnKey[]>(readStoredColumnOrder)
   // 保存视图：整串 search 快照 + 列集合（jm.instances.views）。恢复=导航回快照，
   // 由 `location.search → 状态` 的同步 effect 落全部字段（过滤/分组/排序/页大小天然保真）。
   const [savedViews, setSavedViews] = useState<SavedInstanceView[]>(readStoredViews)
@@ -360,15 +413,18 @@ export default function InstancesPage() {
     sort: sortKey,
     order: sortOrder,
   }), [debouncedSearchQuery, pageSize, params, sortKey, sortOrder])
+  /*
+    列表改为**服务端分页**（FR-520 之后的服务器页重构）：
+    原先是无限滚动 + 虚拟窗口，一次滞千条；改成标准分页表格后，每页 pageSize 条，
+    页码进 URL（已有 `page` 状态），刷新与深链都能回到同一页。
+  */
   const {
     data: searchData,
     isLoading,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteInstanceSearch(instanceSearchParams, page)
-  const instances = useMemo(() => searchData?.pages.flatMap((p) => p.items) ?? [], [searchData])
-  const totalCount = searchData?.pages[0]?.total ?? instances.length
+    isFetching,
+  } = useSearchInstances({ ...instanceSearchParams, page }, true)
+  const instances = useMemo(() => searchData?.items ?? [], [searchData])
+  const totalCount = searchData?.total ?? instances.length
   const aggregateParams = useMemo(() => {
     const next: InstanceListParams = { ...params }
     delete next.status
@@ -395,11 +451,45 @@ export default function InstancesPage() {
   // 已选集合改 `Set`：行渲染按 `selectedIds.includes(id)` 判定，`includes` 是 O(已选数)——
   // 全选 1200 台后「可见行 × 1200」的线性扫描会成为渲染热点（对照 NetworksPageView 同款处理）。
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  /*
+    Shift 连选要按「用户看到的顺序」取区间，而不是 id 顺序。
+    分组维度下展示顺序来自 treeRows（组头 + 成员），平铺视图来自 instances；
+    两者都只取实例 id、跳过组头行。
+  */
+  const selectionOrderIds = useMemo<number[]>(() => instances.map((i) => i.id), [instances])
+  /**
+   * 单次点击选择（含 Shift 连选 / Ctrl 点选）。
+   *
+   * 语义统一由 `applySelectionClick` 决定（纯函数，单测穷举各修饰键组合），
+   * 列表与卡片两个视图共用——避免「列表能 Shift 连选、卡片不能」这类不一致。
+   * 连选区间按**当前展示顺序**（`selectionOrderIds`）取，而非 id 大小。
+   */
+  const toggleOneWithModifiers = (
+    id: number,
+    modifiers: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } = {},
+  ) => {
+    setSelectedIds((prev) => [...applySelectionClick({
+      orderedIds: selectionOrderIds,
+      selected: new Set(prev),
+      targetId: id,
+      shiftKey: modifiers.shiftKey,
+      ctrlKey: modifiers.ctrlKey,
+      metaKey: modifiers.metaKey,
+    })])
+  }
+  /** 兼容旧调用：无修饰键的单项切换（复选框点选即此类）。 */
   const toggleOne = (id: number) =>
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
   const allIds = useMemo(() => instances?.map((i) => i.id) ?? [], [instances])
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIdSet.has(id))
   const toggleAll = () => setSelectedIds(allSelected ? [] : allIds)
+  /**
+   * 反选（用户提出）：在当前可见集合内翻转。
+   * 只翻转当前页/筛选结果里的项——否则会静默丢掉用户在其他页选好的内容。
+   */
+  const invertAll = () => setSelectedIds((prev) => [...invertSelection(allIds, new Set(prev))])
   const clearSelection = () => setSelectedIds([])
   // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细（FR-139）。
   const selectedInstances = useMemo(
@@ -460,12 +550,6 @@ export default function InstancesPage() {
       crashed: byStatus.CRASHED ?? 0,
     }
   }, [aggregate, scopedAllInstances])
-
-  const loadMoreInstances = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage()
-    }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
 
   /**
    * 表头全选框的可访问名。
@@ -528,7 +612,7 @@ export default function InstancesPage() {
   }
   const setPageSizeParam = (value: string) => {
     const parsed = Number(value)
-    const next = INSTANCE_PAGE_SIZES.includes(parsed as (typeof INSTANCE_PAGE_SIZES)[number]) ? parsed : 200
+    const next = INSTANCE_PAGE_SIZES.includes(parsed as (typeof INSTANCE_PAGE_SIZES)[number]) ? parsed : 50
     setPageSize(next)
     updateUrl({ pageSize: String(next), page: '1' })
   }
@@ -677,9 +761,9 @@ export default function InstancesPage() {
         inst={inst}
         // 生命周期动作同时出现在行内主按钮与「⋯」菜单：列表行内只留当前状态最常用的那一个，
         // 卡片视图没有行内按钮，全靠菜单——两处共用同一批 mutation，不走第二条路径。
-        onStart={() => start.mutate(inst.id)}
-        onStop={() => stop.mutate(inst.id)}
-        onRestart={() => restart.mutate(inst.id)}
+        onStart={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'start' })}
+        onStop={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'stop' })}
+        onRestart={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'restart' })}
         onTags={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
         onEditConfig={() => setEditConfigTarget(inst)}
         onLimits={() => setLimitsTarget({
@@ -720,19 +804,60 @@ export default function InstancesPage() {
    * 走 useInstanceWindowMetrics 批量取行内指标（≤50/次、300ms 防抖、30s 轮询）后逐行注入。
    * 下标语义随视图：平铺表按 `instances`、分组树表按 `treeRows`——两者由各自表格的 range 决定。
    */
-  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number } | null>(null)
-  const handleVisibleRange = useCallback((start: number, end: number) => {
-    setVisibleRange((prev) => (prev && prev.start === start && prev.end === end ? prev : { start, end }))
-  }, [])
-
-  const visibleInstances = useMemo(() => {
-    if (!visibleRange) return []
-    const { start, end } = visibleRange
-    if (groupBy === 'none') return instances.slice(start, end)
-    return treeRows.slice(start, end).flatMap((row) => (row.kind === 'instance' ? [row.instance] : []))
-  }, [groupBy, instances, treeRows, visibleRange])
+  /*
+    行内指标只取**当前页**的实例（原先是虚拟窗口的可见区间）。
+    改成分页后「可见」= 当前页，语义更简单；每页 50 条也远小于原先一屏能滚到的规模，
+    批量取指标的压力反而更小。
+  */
+  const visibleInstances = useMemo(() => instances, [instances])
 
   const windowMetrics = useInstanceWindowMetrics(visibleInstances)
+
+  /*
+    业务域状态（FR-534）：**只在「业务插件」列开启时才取数**。
+
+    理由：这条链路会实打实打到探针（批量端点每次最多 50 台）。
+    列关着还去取，等于让每个打开实例页的用户都白白打一轮探针。
+
+    批量端点上限 50 台，故按当前页切片——分页大小可能被用户调到 100+，
+    超出部分由后续页各自承担，不在这里一次性全发。
+  */
+  const businessColumnOn = visibleColumns.has('business')
+  const businessIds = useMemo(
+    () => (businessColumnOn ? visibleInstances.slice(0, 50).map((i) => i.id) : []),
+    [businessColumnOn, visibleInstances],
+  )
+  const { data: businessRows } = useBusinessStatusBatch(businessIds, businessColumnOn)
+  const businessById = useMemo(() => {
+    const map = new Map<number, BusinessStatus>()
+    for (const row of businessRows ?? []) {
+      if (row.status) map.set(row.instanceId, row.status)
+    }
+    return map
+  }, [businessRows])
+
+  /**
+   * 当前表格实际渲染的列数：分组头行/空态占位的 colSpan 必须与之一致。
+   *
+   * 【为什么不再写死 11】列模型已从 11 列合并为 8 列（三列指标合并成健康度、身份列合并为一格），
+   * 此前仍按 11 减，colSpan 比实际列数大 3——浏览器会截断，视觉无害但语义错。
+   * 这里按「固定 6 列 + 两个可合并组是否可见」现算，与表头/行/colgroup 同一判据。
+   */
+  const hasIdentity = (['type', 'role', 'tags'] as const).some((c) => visibleColumns.has(c))
+  const hasHealth = (['metrics', 'active', 'heartbeat'] as const).some((c) => visibleColumns.has(c))
+  const columnCount = 6 + (hasIdentity ? 1 : 0) + (hasHealth ? 1 : 0)
+
+  /**
+   * 表头拖拽换位：把 from 列移动到 to 列的位置，并持久化。
+   * `moveColumn` 是纯函数（钉住的列不参与），这里只负责落状态与存储。
+   */
+  const reorderColumn = (from: InstanceColumnKey, to: InstanceColumnKey) => {
+    setColumnOrder((prev) => {
+      const next = moveColumn(prev, from, to)
+      writeStoredColumnOrder(next)
+      return next
+    })
+  }
 
   /** 列设置：切换可选列可见性并持久化。 */
   const toggleColumn = (column: InstanceOptionalColumn) => {
@@ -745,8 +870,6 @@ export default function InstancesPage() {
     })
   }
 
-  /** 当前表格总列数（固定 6 列 + 可见可选列）：占位/组头/展开行的 colSpan 必须同步。 */
-  const columnCount = 11 - (INSTANCE_OPTIONAL_COLUMNS.length - visibleColumns.size)
 
   /** 应用保存的视图：导航回快照 search（状态由同步 effect 落位），并恢复列集合。 */
   const applySavedView = (view: SavedInstanceView) => {
@@ -776,16 +899,6 @@ export default function InstancesPage() {
   }
 
   /**
-   * 展开行判据（喂给虚拟高度模型）：与 `renderRow` 的渲染条件完全同源——
-   * proxy 画像 + 该 id 在展开集合中。展开会在该实例项下追加一个 `INSTANCE_EXPANDED_ROW_HEIGHT`
-   * 高的行，模型必须按同一判据计入，否则其后所有行的定位与滚动条长度都会漂移。
-   */
-  const isRowExpanded = useCallback(
-    (inst: InstanceInfo) => isProxyInstance(inst) && expandedProxies.has(inst.id),
-    [expandedProxies],
-  )
-
-  /**
    * 行装配（ADR-102）：行展示件已入包（平铺表与分组树表共用），此处只注入数据与回调。
    * 逐行判别留在应用侧：节点名（查节点表）、代理画像（FR-445）、搭建中、运行态漂移（FR-471）、
    * 三个动作的按 id 在途态（别的行在提交不该禁用本行）。
@@ -802,8 +915,9 @@ export default function InstancesPage() {
       provisioning={isProvisioningInstance(inst)}
       drift={runtimeDriftOf(inst)}
       metrics={windowMetrics.get(inst.uuid)}
+      businessStatus={businessById.get(inst.id)}
       columns={visibleColumns}
-      columnCount={columnCount}
+      columnOrder={columnOrder}
       proxyExpanded={expandedProxies.has(inst.id)}
       onToggleProxy={() => toggleProxy(inst.id)}
       renderBackends={() => <BackendsInlineContainer proxyId={inst.id} />}
@@ -811,22 +925,20 @@ export default function InstancesPage() {
       stopping={stop.isPending && stop.variables === inst.id}
       menu={buildMenu(inst)}
       onOpenInstance={openInstance}
-      onStart={() => start.mutate(inst.id)}
-      onStop={() => stop.mutate(inst.id)}
+      onStart={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'start' })}
+      onStop={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'stop' })}
       onKill={() => setKillTarget({ id: inst.id, name: inst.name })}
+      onContextMenu={(row, x, y) => setContextMenu({ inst: row, x, y })}
     />
   )
 
   return (
     // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
     // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
-    /*
-      variant="fixed"：本页的滚动发生在**表格内部**（虚拟表自带滚动容器 + 表头吸顶），
-      不是整页滚动。`default` 变体给的是 `overflow-auto` 的整页滚动容器，它会让
-      页内那个 `flex-1` 表格永远拿不到「视口剩余高度」（父级没有确定高度可分配），
-      结果退回按内容撑高、又被外层滚动——两层滚动叠加，表格底部被推出视口。
-      fixed 变体是 `overflow-hidden`，高度被钉在视口内，`flex-1` 才有意义。
-    */
+    // variant="fixed"：本页的滚动发生在**表格内部**（表头吸顶 + 容器内滚），不是整页滚动。
+    // `default` 变体会给一个 overflow-auto 的整页滚动容器，页内 `flex-1` 就拿不到
+    // 「视口剩余高度」，退回按内容撑高、又被外层滚动——两层滚动叠加，表格底部被推出视口。
+    // fixed 是 overflow-hidden，高度钉在视口内，`flex-1` 才有意义。
     <PageShell data-page="instances" variant="fixed">
       {/*
         【页头只留小标题 + 右侧按钮】此前标题下还有一行「42 台服务器 · 36 运行中 · 3 异常 ·
@@ -915,7 +1027,13 @@ export default function InstancesPage() {
         其余按语义归入两个菜单——「显示」放呈现相关的（排序/每页/列/分组维度/折叠），
         「视图」只放保存的快照。低频不再占位，但功能一个都没删。
       */}
-      <Card className="sticky top-16 z-20 p-2.5 backdrop-blur-sm">
+      {/*
+        【去掉 Card 外壳，与数据区合并成一层】此前筛选条是独立一张卡片（自带 border/底色/
+        内边距），下面又是另一张表格卡片——两层壳之间还有 12px 间距，首屏被吃掉约 115px。
+        现在筛选条直接作为数据区的头部：保留吸附与毛玻璃，但不再有自己的边框，
+        视觉上与表格同属一块。
+      */}
+      <div className="sticky top-16 z-20 -mx-1 rounded-lg bg-background/85 px-1 py-1.5 backdrop-blur-sm">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-52 flex-1 sm:flex-none">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -1005,18 +1123,24 @@ export default function InstancesPage() {
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>{t('instances.columnsLabel')}</DropdownMenuLabel>
-                {INSTANCE_OPTIONAL_COLUMNS.map((column) => (
-                  <DropdownMenuCheckboxItem
-                    key={column}
-                    checked={visibleColumns.has(column)}
-                    onCheckedChange={() => toggleColumn(column)}
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    {t(COLUMN_LABEL_KEY[column])}
-                  </DropdownMenuCheckboxItem>
-                ))}
+                {/* 列设置只对列表视图有意义：卡片没有「列」这一维度，在卡片视图下显示
+                    这个入口等于给一个点了没反应（或只影响切回列表后的样子）的控件。 */}
+                {view === 'list' && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t('instances.columnsLabel')}</DropdownMenuLabel>
+                    {INSTANCE_OPTIONAL_COLUMNS.map((column) => (
+                      <DropdownMenuCheckboxItem
+                        key={column}
+                        checked={visibleColumns.has(column)}
+                        onCheckedChange={() => toggleColumn(column)}
+                        onSelect={(event) => event.preventDefault()}
+                      >
+                        {t(COLUMN_LABEL_KEY[column])}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </>
+                )}
                 {/* 折叠控制只在有分组头时才有意义（平铺视图无处可折叠）。 */}
                 {groupBy !== 'none' && (
                   <>
@@ -1132,7 +1256,7 @@ export default function InstancesPage() {
             )}
           </div>
         )}
-      </Card>
+      </div>
 
       <ProvisionServerDialog open={showProvision} onClose={() => setShowProvision(false)} />
       <ProvisionProxyDialog open={showProvisionProxy} onClose={() => setShowProvisionProxy(false)} />
@@ -1177,7 +1301,7 @@ export default function InstancesPage() {
       {/* FR-502 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与（吸附的）筛选条先渲染，
           数据区用同壳骨架顶上：上面一条计数行占位、下面一张列表外壳 + 行占位，
           与就绪态「计数行 + 列表」两段结构一致，数据到达原地替换而不整页跳。 */}
-      {isLoading ? (
+      {isLoading && instances.length === 0 ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <Skeleton className="h-4 w-40" />
@@ -1193,63 +1317,82 @@ export default function InstancesPage() {
           `min-h-0` 是 flex 列里子项可收缩的前提，缺了它表格仍会被内容撑高、溢出照旧。
         */
         <div className="flex min-h-0 flex-1 flex-col gap-3">
+          {/*
+            批量栏只在列表视图出现：卡片视图的卡片**没有勾选入口**（卡片组件不接选择相关 props），
+            所以从列表选中若干实例再切到卡片时，会出现一个「选着东西但无法取消」的批量栏，
+            且用户没法在卡片里继续加选——这是无效 UI，也会让人以为卡片也能批量操作。
+          */}
           {selectedIds.length > 0 && (
-            <InstanceBatchBar selected={selectedInstances} onClear={clearSelection} onRetainFailed={setSelectedIds} />
+            <InstanceBatchBar
+              selected={selectedInstances}
+              onClear={clearSelection}
+              onRetainFailed={setSelectedIds}
+              onInvert={invertAll}
+            />
           )}
-          {/* 加载可供性（FR-235）：已加载/总数计数 + 显式「加载更多」兜底（不依赖滚动触发）。
-              分组视图下 total 为服务端总数，各组仅反映「当前已加载页」，组头计数即已加载子集。 */}
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted-foreground">
-            <span data-testid="instances-loaded-count">
-              {t('instances.loadedOfTotal', {
-                defaultValue: 'Loaded {{loaded}} / {{total}}',
-                loaded: instances.length,
-                total: totalCount,
-              })}
-              {groupBy !== 'none' && (
-                <span className="ml-2 text-xs">
-                  {t('instances.groupsLoadedOnly', { defaultValue: '(groups show loaded pages only)' })}
-                </span>
-              )}
-            </span>
-            {instances.length < totalCount && (
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="instances-load-more"
-                disabled={isFetchingNextPage}
-                onClick={loadMoreInstances}
-              >
-                {isFetchingNextPage
-                  ? t('instances.loadingMore', { defaultValue: 'Loading…' })
-                  : t('instances.loadMore', { defaultValue: 'Load more' })}
-              </Button>
-            )}
-          </div>
           {view === 'card' ? (
+            /*
+              卡片视图同样需要分页条：数据是服务端分页（每页 50 条），而卡视图走的是
+              虚拟分组渲染路径，此前既没有分页条、onNeedMore 也是空实现——
+              第 2 页及之后的实例在卡片视图里完全够不着（实测 1200+ 实例只看到 28 张）。
+              这里用 flex 列把分页条固定在底部，卡区吃掉剩余高度。
+            */
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
             <VirtualizedGroupedCardView
               // 卡片视图与表格视图共用同一行模型（buildInstanceTreeRows）：折叠、大区/小区两级、
               // 多级分组树的展开/收起行为由构造一致，不再各写一套分段逻辑。
               rows={treeRows}
-              totalCount={totalCount}
+              // 分页后「总数」= 当前页行数：虚拟滚动的高度模型必须与实际行数一致，
+              // 否则会按 1200 条算出行盒、而只有 50 条内容，表现为大片空白或整片骨架屏。
+              totalCount={treeRows.length}
               loadedCount={instances.length}
-              onNeedMore={loadMoreInstances}
+              onNeedMore={() => {}}
               onToggleCollapse={toggleGroupCollapsed}
               scrollStorageKey={scrollStorageKey}
               nodeName={nodeName}
               buildMenu={buildMenu}
               onOpenInstance={openInstance}
               emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
-              renderCard={(args) => <InstanceWorktableCard {...args} />}
+              renderCard={(args) => (
+                <InstanceWorktableCard
+                  {...args}
+                  /*
+                    卡片视图的启停/右键：与列表视图走完全相同的页面级流程。
+                    此前卡片自己 useStartInstance().mutate()，绕过了二次确认——
+                    同一台实例在列表里会确认、在卡片里一点就停，安全语义不一致。
+                  */
+                  onStart={() => setLifecycleTarget({ id: args.inst.id, name: args.inst.name, op: 'start' })}
+                  onStop={() => setLifecycleTarget({ id: args.inst.id, name: args.inst.name, op: 'stop' })}
+                  onRestart={() => setLifecycleTarget({ id: args.inst.id, name: args.inst.name, op: 'restart' })}
+                  onContextMenu={(card, x, y) => setContextMenu({ inst: card, x, y })}
+                  selected={selectedIdSet.has(args.inst.id)}
+                  onToggleSelect={(modifiers) => toggleOneWithModifiers(args.inst.id, modifiers)}
+                  /* 身份徽章开关跟随列设置：卡片与表格展示同一组信息，用户关掉的列在卡片里也不显示。 */
+                  showType={visibleColumns.has('type')}
+                  showRole={visibleColumns.has('role')}
+                  showTags={visibleColumns.has('tags')}
+                />
+              )}
             />
+            <InstancePaginationBar
+              loaded={instances.length}
+              total={totalCount}
+              page={page}
+              pageSize={pageSize}
+              isFetching={isFetching}
+              onPageChange={(next) => updateUrl({ page: String(next) })}
+            />
+            </div>
           ) : groupBy === 'none' ? (
-            <VirtualizedInstanceTable
+            <PaginatedInstanceTable
               instances={instances}
-              totalCount={totalCount}
-              onNeedMore={loadMoreInstances}
-              isRowExpanded={isRowExpanded}
-              onVisibleRangeChange={handleVisibleRange}
-              columnCount={columnCount}
-              scrollStorageKey={scrollStorageKey}
+              total={totalCount}
+              page={page}
+              pageSize={pageSize}
+              isFetching={isFetching}
+              onPageChange={(next) => updateUrl({ page: String(next) })}
+                      visibleColumns={visibleColumns}
+              columnOrder={columnOrder}
               header={
                 <InstanceTableHeader
                   t={t}
@@ -1260,22 +1403,43 @@ export default function InstancesPage() {
                   onSort={setTableSortParam}
                   selectAllLabel={selectAllLabel}
                   visibleColumns={visibleColumns}
+                  columnOrder={columnOrder}
+                  onReorderColumn={reorderColumn}
                 />
               }
               renderRow={renderRow}
               emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
             />
           ) : (
-            <VirtualizedGroupedInstanceTable
-              rows={treeRows}
-              totalCount={totalCount}
-              loadedCount={instances.length}
-              onNeedMore={loadMoreInstances}
-              onToggleCollapse={toggleGroupCollapsed}
-              isRowExpanded={isRowExpanded}
-              onVisibleRangeChange={handleVisibleRange}
-              columnCount={columnCount}
-              scrollStorageKey={scrollStorageKey}
+            <PaginatedInstanceTable
+              instances={instances}
+              total={totalCount}
+              page={page}
+              pageSize={pageSize}
+              isFetching={isFetching}
+              onPageChange={(next) => updateUrl({ page: String(next) })}
+                      visibleColumns={visibleColumns}
+              treeRows={treeRows}
+              renderGroupRow={(row) => (
+                <TableRow
+                  key={row.key}
+                  data-testid="instances-group-row"
+                  data-group-depth={row.depth}
+                  data-collapsed={row.collapsed ? 'true' : 'false'}
+                  className="border-b bg-muted/40"
+                >
+                  <TableCell colSpan={columnCount} className="px-4 py-1.5">
+                    <InstanceGroupHeaderContent
+                      label={row.label}
+                      depth={row.depth}
+                      count={row.count}
+                      health={row.health}
+                      collapsed={row.collapsed}
+                      onToggle={() => toggleGroupCollapsed(row.collapseKey)}
+                    />
+                  </TableCell>
+                </TableRow>
+              )}
               header={
                 <InstanceTableHeader
                   t={t}
@@ -1294,6 +1458,51 @@ export default function InstancesPage() {
           )}
           {/* 组织分组管理（FR-165）：收敛到 groupTree 维度下的可选面板，保留建组/移入能力。 */}
           {groupBy === 'groupTree' && groupManagerOpen && <InstanceGroupManager />}
+          {/* 健康度悬浮面板：**全表单例**（全表只渲染这一个，与行数无关）。 */}
+          <InstanceHealthHoverLayer />
+          {/*
+            实例行右键菜单：同样**全表单例**。动作集合由 buildContextMenuActions 生成，
+            与「⋯」下拉菜单共用同一批 mutation / 弹窗目标——两处入口不会各写一套判据。
+          */}
+          {contextMenu && (
+            <InstanceContextMenu
+              inst={contextMenu.inst}
+              position={{ x: contextMenu.x, y: contextMenu.y }}
+              actions={buildContextMenuActions({
+                inst: contextMenu.inst,
+                t: (key, fallback, opts) => t(key, { defaultValue: fallback, ...opts }),
+                onStart: () => setLifecycleTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name, op: 'start' }),
+                onStop: () => setLifecycleTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name, op: 'stop' }),
+                onRestart: () => setLifecycleTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name, op: 'restart' }),
+                onEditConfig: () => setEditConfigTarget(contextMenu.inst),
+                onTags: () =>
+                  setTagsTarget({
+                    id: contextMenu.inst.id,
+                    name: contextMenu.inst.name,
+                    tags: parseTags(contextMenu.inst.tags),
+                  }),
+                onLimits: () =>
+                  setLimitsTarget({
+                    id: contextMenu.inst.id,
+                    name: contextMenu.inst.name,
+                    processType: contextMenu.inst.processType,
+                    cpuLimit: contextMenu.inst.cpuLimit ?? 0,
+                    memLimitMb: contextMenu.inst.memLimitMb ?? 0,
+                    diskLimitMb: contextMenu.inst.diskLimitMb ?? 0,
+                  }),
+                onProxy: () => setManageProxy({ id: contextMenu.inst.id, name: contextMenu.inst.name }),
+                onClone: () => setCloneTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name }),
+                onDelete: () =>
+                  setDeleteTarget({
+                    id: contextMenu.inst.id,
+                    name: contextMenu.inst.name,
+                    inPlace: !!contextMenu.inst.workDirInPlace,
+                    running: contextMenu.inst.status !== 'STOPPED' && contextMenu.inst.status !== 'CRASHED',
+                  }),
+              })}
+              onClose={() => setContextMenu(null)}
+            />
+          )}
         </div>
       )}
 
@@ -1336,6 +1545,53 @@ export default function InstancesPage() {
         scope="group"
         onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget.id); setDeleteTarget(null) }}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/*
+        启停二次确认：三个动作各自给一句「会发生什么」的说明。
+        - 停止会把在线玩家直接踢下线，不可撤销地打断一局游戏；
+        - 重启同理但会自己回来；
+        - 启动本身无破坏性，但仍确认一次（与另两个保持同一交互，避免「有的确认有的不确认」）。
+        scope 不传：启停只影响单台实例，与 node.operate 那类平台级权限无关。
+      */}
+      <DangerConfirm
+        open={lifecycleTarget !== null}
+        title={t(
+          lifecycleTarget?.op === 'stop'
+            ? 'danger.stopInstanceTitle'
+            : lifecycleTarget?.op === 'restart'
+              ? 'danger.restartInstanceTitle'
+              : 'danger.startInstanceTitle',
+          { name: lifecycleTarget?.name ?? '' },
+        )}
+        description={t(
+          lifecycleTarget?.op === 'stop'
+            ? 'danger.stopInstanceDesc'
+            : lifecycleTarget?.op === 'restart'
+              ? 'danger.restartInstanceDesc'
+              : 'danger.startInstanceDesc',
+        )}
+        confirmLabel={t(
+          lifecycleTarget?.op === 'stop'
+            ? 'instances.stop'
+            : lifecycleTarget?.op === 'restart'
+              ? 'instances.restart'
+              : 'instances.start',
+        )}
+        pending={
+          (lifecycleTarget?.op === 'start' && start.isPending) ||
+          (lifecycleTarget?.op === 'stop' && stop.isPending) ||
+          (lifecycleTarget?.op === 'restart' && restart.isPending)
+        }
+        onConfirm={() => {
+          if (!lifecycleTarget) return
+          const { id, op } = lifecycleTarget
+          if (op === 'start') start.mutate(id)
+          else if (op === 'stop') stop.mutate(id)
+          else restart.mutate(id)
+          setLifecycleTarget(null)
+        }}
+        onCancel={() => setLifecycleTarget(null)}
       />
 
       <DangerConfirm

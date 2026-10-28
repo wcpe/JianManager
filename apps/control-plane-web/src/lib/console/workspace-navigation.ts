@@ -39,6 +39,7 @@ import {
   Database,
   DownloadCloud,
   FileClock,
+  FileInput,
   GitBranch,
   GitCompareArrows,
   HardDrive,
@@ -58,6 +59,7 @@ import {
   ShieldCheck,
   User,
   UsersRound,
+  Workflow,
 } from 'lucide-react'
 
 import { DEFAULT_ROLE_NODES, isPlatformAdmin } from '@/lib/shared/roles'
@@ -162,6 +164,13 @@ export const WORKSPACES: WorkspaceDef[] = [
           { to: '/schedules', labelKey: 'nav.schedules', icon: FileClock, perm: 'schedule.read' },
           { to: '/backups', labelKey: 'nav.backups', icon: Archive, perm: 'backup.read' },
           { to: '/config-baselines', labelKey: 'nav.configBaselines', icon: GitCompareArrows, perm: ['file.read', 'instance.read'] },
+          // 分层配置（FR-529）：与配置基线同属「配置」语境，但语义是「一条配置跨作用域分层 + 有效值预览」，
+          // 基线那边是「集群级模板 + 漂移收敛」。放在同组，运维找配置时不用跨工作区。
+          { to: '/config-files', labelKey: 'nav.configFiles', icon: Layers, perm: ['file.read', 'instance.read'] },
+          // 配置纳管（FR-533）：把磁盘上已有的配置文件登记为 JM 基线（只读磁盘、不改写、不覆盖）。
+          { to: '/config-adopt', labelKey: 'nav.configAdopt', icon: FileInput, perm: ['file.read', 'instance.read'] },
+          // 配置交付编排（FR-531/532）：分批灰度、观察窗、熔断与回滚。
+          { to: '/config-deliveries', labelKey: 'nav.configDeliveries', icon: Workflow, perm: ['file.read', 'instance.read'] },
         ],
       },
       {
@@ -257,6 +266,9 @@ export const WORKSPACES: WorkspaceDef[] = [
         labelKey: 'nav.systemMaintenance',
         icon: Settings2,
         children: [
+          // 审批中心（FR-490/493）放在审计旁边：两者都是「平台治理」视角，
+          // 审批读权限 approval.read 与审计读权限 audit.read 独立，各自把关。
+          { to: '/approvals', labelKey: 'nav.approvals', icon: ShieldCheck, perm: 'approval.read' },
           { to: '/audit', labelKey: 'nav.audit', icon: FileClock, perm: 'audit.read' },
           { to: '/settings', labelKey: 'nav.systemSettings', icon: Settings2, perm: 'settings.read' },
           { to: '/database', labelKey: 'nav.database', icon: Database, perm: 'system.db.browse' },

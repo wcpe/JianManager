@@ -15,11 +15,14 @@ function pathsFromGroups(groups: NavGroup[]): string[] {
 }
 
 describe('console nav config（FR-431 六域 IA）', () => {
-  it('顶层六域 + 平台首页，URL 不变', () => {
+  it('顶层域 + 平台首页，URL 不变', () => {
     const keys = NAV_GROUPS.map((g) => g.key)
+    // configCenter（分层配置 FR-529）作为独立顶级域插入「服务器」之后：
+    // 它是「一条配置在多个作用域上的分层定义」，与服务器域的配置基线（集群级模板）是两件事。
     expect(keys).toEqual([
       'platformHome',
       'servers',
+      'configCenter',
       'groupNetwork',
       'workbench',
       'observability',

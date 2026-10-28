@@ -51,6 +51,15 @@ export interface ObjectTool {
   /** 当前工具；以 2px 主色下划线标记。 */
   active?: boolean
   onSelect?: () => void
+  /**
+   * 分组分隔符：渲染为一条竖向细线，而不是可点的工具项。
+   *
+   * 【为什么加在 ObjectTool 上而不是新建 groups 属性】nodes 详情页有 9 个工具，
+   * 平铺时「概览/实例/监控」这类高频项与「探针版本/环节点修复」这类低频项混在一起，
+   * 窄屏还会折行。加 groups 会改掉既有调用方的数据结构（实例页也在用这个组件）；
+   * 用「数组里插一个分隔标记」则是纯增量——不传 separator 的调用方行为完全不变。
+   */
+  separator?: true
 }
 
 /**
@@ -84,6 +93,8 @@ export function ObjectPageHeader({
   metrics = [],
   note,
   tools = [],
+  titleAdornment,
+  toolsActions,
   toolsLabel = '对象工具',
   onNavigate,
   className,
@@ -108,6 +119,22 @@ export function ObjectPageHeader({
   note?: React.ReactNode
   /** 工具导航项。 */
   tools?: ObjectTool[]
+  /**
+   * 标题右侧的附加内容（如「切换对象」的下拉选择器）。
+   *
+   * 【为什么需要这个插槽】云控制台的习惯是「名称 + 下拉切换」在同一行，
+   * 而不是让选择器独占一整行（那会吃掉约 44px 纵向空间，在固定视口下很贵）。
+   * 用独立插槽而不是塞进 `title`，是为了避免继承 h1 的 `text-xl font-bold` 样式。
+   */
+  titleAdornment?: React.ReactNode
+  /**
+   * 工具导航（tab 行）右端的附加内容（如「⋯」更多操作）。
+   *
+   * 【为什么放在 tab 行而不是标题行】低频且含破坏性动作的入口不该占据头部主位；
+   * 但也不宜单独占一行（会多出一条只有按钮的空行）。挂在 tab 行右端既不抢注意力，
+   * 又不额外占用纵向空间。
+   */
+  toolsActions?: React.ReactNode
   /** 工具导航的可访问名（「实例工具」/「节点工具」）。 */
   toolsLabel?: string
   /**
@@ -211,6 +238,7 @@ export function ObjectPageHeader({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <h1 className="truncate text-xl font-bold tracking-tight text-foreground">{title}</h1>
+              {titleAdornment && <div className="shrink-0">{titleAdornment}</div>}
               {status && (
                 <span data-slot="object-status" data-tone={status.tone ?? 'default'}>
                   <StatusBadge level={TONE_LEVEL[status.tone ?? 'default']} label={status.label} />
@@ -287,13 +315,23 @@ export function ObjectPageHeader({
         </div>
       )}
 
-      {tools.length > 0 && (
+      {(tools.length > 0 || toolsActions) && (
+        <div data-slot="object-tools-row" className="flex shrink-0 items-center gap-3">
         <nav
           data-slot="object-tools"
           aria-label={toolsLabel}
           className="flex shrink-0 items-center gap-5 overflow-x-auto scrollbar-none"
         >
-          {tools.map((tool) => (
+          {tools.map((tool) =>
+            tool.separator ? (
+              // 组间分隔线：纯装饰，对读屏隐藏（分组语义已由 label 的措辞表达）。
+              <span
+                key={tool.key}
+                aria-hidden="true"
+                data-slot="object-tool-separator"
+                className="mx-1 h-4 w-px shrink-0 self-center bg-border"
+              />
+            ) : (
             <button
               key={tool.key}
               type="button"
@@ -312,6 +350,8 @@ export function ObjectPageHeader({
             </button>
           ))}
         </nav>
+        {toolsActions && <div className="ml-auto shrink-0 pl-2">{toolsActions}</div>}
+        </div>
       )}
     </header>
   )

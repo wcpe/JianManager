@@ -17,6 +17,7 @@ import {
   useTestProvider,
   useUpdateModel,
   useUpdateProvider,
+  useDiscoverModels,
 } from '@/api/assistant'
 import type {
   AssistantAdminSettingsPayload,
@@ -94,6 +95,7 @@ export default function AssistantSettingsPage() {
   const testModel = useTestModel()
   const settingsQuery = useAssistantSettings(admin)
   const saveSettings = useSaveAssistantSettings()
+  const discoverModels = useDiscoverModels()
   // 探测结果按 `provider:<id>` / `model:<id>` 存，供视图就地展示（不只有 toast）。
   const [probeResults, setProbeResults] = useState<
     Record<string, AssistantProbeResult | AssistantModelTestResult>
@@ -145,7 +147,12 @@ export default function AssistantSettingsPage() {
    * 否则未传的字段会被置空。这里集中一处做合并，避免每个调用点各自拼装漏项。
    */
   const saveAssistantSettings = async (
-    patch: Partial<Pick<AssistantAdminSettingsPayload, 'defaultModelId' | 'allowPrivateCidrs'>>,
+    patch: Partial<
+      Pick<
+        AssistantAdminSettingsPayload,
+        'defaultModelId' | 'allowPrivateCidrs' | 'systemPrompt' | 'builtinToolsEnabled'
+      >
+    >,
     successKey: string,
   ): Promise<boolean> => {
     const current = settingsQuery.data
@@ -154,6 +161,9 @@ export default function AssistantSettingsPage() {
         defaultModelId:
           patch.defaultModelId !== undefined ? patch.defaultModelId : (current?.defaultModelId ?? null),
         allowPrivateCidrs: patch.allowPrivateCidrs ?? current?.allowPrivateCidrs ?? [],
+        // 整体替换语义：未 patch 时必须回填当前值，否则会把已保存的提示词清空。
+        systemPrompt: patch.systemPrompt ?? current?.systemPrompt ?? '',
+        builtinToolsEnabled: patch.builtinToolsEnabled,
         version: current?.version ?? 0,
       })
       toast.success(t(successKey, '已保存'))
@@ -217,6 +227,20 @@ export default function AssistantSettingsPage() {
       onSaveEgress={(cidrs: string[]) =>
         saveAssistantSettings({ allowPrivateCidrs: cidrs }, 'assistant.egressSaved')
       }
+      onSaveSystemPrompt={(prompt) =>
+        saveAssistantSettings({ systemPrompt: prompt }, 'assistant.promptSaved')
+      }
+      onToggleBuiltinTools={(enabled) =>
+        saveAssistantSettings({ builtinToolsEnabled: enabled }, 'assistant.builtinToolsSaved')
+      }
+      onDiscoverModels={async (providerId) => {
+        try {
+          return await discoverModels.mutateAsync(providerId)
+        } catch (err) {
+          toast.error(errMessage(err, t('assistant.discoverFailed', '拉取模型失败')))
+          return null
+        }
+      }}
     />
   )
 }

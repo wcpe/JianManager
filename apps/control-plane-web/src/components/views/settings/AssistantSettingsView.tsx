@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Plus, Pencil, Trash2, Star, PlugZap } from 'lucide-react'
+import { Plus, Pencil, Trash2, Star, PlugZap, RefreshCw } from 'lucide-react'
 import {
   Alert,
   AlertDescription,
@@ -12,6 +12,7 @@ import {
   Panel,
   Switch,
   Table,
+  Textarea,
   TableBody,
   TableCell,
   TableHead,
@@ -22,6 +23,9 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager/ui/components/scrollable-dialog'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { MCPConnectionsPanel } from '@/components/views/settings/MCPConnectionsPanel'
+import { AssistantSkillsPanel } from '@/components/views/settings/AssistantSkillsPanel'
+import type { DiscoverModelsResult } from '@/api/assistant'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import {
   ASSISTANT_CREDENTIAL_MODES,
@@ -81,6 +85,12 @@ export interface AssistantSettingsViewProps {
   settingsSaving?: boolean
   /** 保存放行段（后端整体替换，其余字段由容器补齐）；返回是否成功。 */
   onSaveEgress: (cidrs: string[]) => Promise<boolean>
+  /** 保存自定义系统提示词（FR-541）。 */
+  onSaveSystemPrompt?: (prompt: string) => Promise<boolean>
+  /** 切换平台自带工具开关（FR-540）。 */
+  onToggleBuiltinTools?: (enabled: boolean) => Promise<boolean>
+  /** 从上游拉取模型候选（FR-538）。 */
+  onDiscoverModels?: (providerId: number) => Promise<DiscoverModelsResult | null>
 }
 
 /** 供应商表单草稿。 */
@@ -94,6 +104,12 @@ interface ProviderDraft {
   credentialEnv: string
   credentialSecret: string
   clearCredential: boolean
+  /** 出站代理模式（FR-539）。 */
+  proxyMode: 'direct' | 'env' | 'custom'
+  /** 自定义代理地址；编辑态留空表示保留原值。 */
+  proxyUrl: string
+  /** 现有代理是否带口令（只回布尔，地址与口令永不回显）。 */
+  proxyHasAuth: boolean
   version: number
   hasCredential: boolean
 }
@@ -108,6 +124,8 @@ interface ModelDraft {
   tools: boolean
   contextWindow: string
   maxOutputTokens: string
+  /** 思考强度（FR-541）；空串 = 不指定。 */
+  reasoningEffort: string
   enabled: boolean
   version: number
 }
@@ -124,6 +142,9 @@ function emptyProviderDraft(): ProviderDraft {
     credentialEnv: '',
     credentialSecret: '',
     clearCredential: false,
+    proxyMode: 'direct',
+    proxyUrl: '',
+    proxyHasAuth: false,
     version: 0,
     hasCredential: false,
   }
@@ -141,6 +162,9 @@ function providerDraftOf(p: AssistantProvider): ProviderDraft {
     credentialEnv: p.credentialEnv ?? '',
     credentialSecret: '',
     clearCredential: false,
+    proxyMode: 'direct',
+    proxyUrl: '',
+    proxyHasAuth: false,
     version: p.version,
     hasCredential: p.hasCredential,
   }
@@ -157,6 +181,7 @@ function emptyModelDraft(providerId: number): ModelDraft {
     tools: false,
     contextWindow: '',
     maxOutputTokens: '',
+    reasoningEffort: '',
     enabled: true,
     version: 0,
   }
@@ -173,6 +198,7 @@ function modelDraftOf(m: AssistantModel): ModelDraft {
     tools: m.tools,
     contextWindow: m.contextWindow === null ? '' : String(m.contextWindow),
     maxOutputTokens: m.maxOutputTokens === null ? '' : String(m.maxOutputTokens),
+    reasoningEffort: m.reasoningEffort ?? '',
     enabled: m.enabled,
     version: m.version,
   }
@@ -365,6 +391,9 @@ export function AssistantSettingsView({
   settings,
   settingsSaving = false,
   onSaveEgress,
+  onSaveSystemPrompt,
+  onToggleBuiltinTools,
+  onDiscoverModels,
 }: AssistantSettingsViewProps) {
   const { t } = useTranslation()
   const providerList = providers ?? []
@@ -380,6 +409,28 @@ export function AssistantSettingsView({
   const [testingModelId, setTestingModelId] = useState<number | null>(null)
   // 新增放行段的草稿。
   const [egressDraft, setEgressDraft] = useState('')
+  // 系统提示词草稿（FR-541）。**受控草稿**而不是直接受 settings 控制：
+  // 边输边请求会让每次按键都触发一次保存。
+  const [systemPromptDraft, setSystemPromptDraft] = useState(settings?.systemPrompt ?? '')
+  // 内置工具开关草稿。默认 true（与后端「未配置视为启用」一致）——
+  // 若默认 false，面板会显示成「已关闭」而实际是启用的。
+  const [builtinToolsDraft, setBuiltinToolsDraft] = useState(settings?.builtinToolsEnabled ?? true)
+  // 设置是异步取回的：草稿必须跟随「已加载的那一份」重新对齐，
+  // 否则首屏会用空串覆盖用户已保存的提示词（看起来像配置丢了）。
+  // 用「记住上一次同步来源」的渲染期对齐代替 useEffect：
+  // effect 会在提交后再渲染一帧，中间那一帧显示的是旧值。
+  const [syncedSettingsVersion, setSyncedSettingsVersion] = useState<number | null>(null)
+  // 模型发现（FR-538）：候选清单与「正在拉取」。
+  const [discovering, setDiscovering] = useState(false)
+  const [discovered, setDiscovered] = useState<DiscoverModelsResult | null>(null)
+  // 勾选的候选模型 ID（默认排除已配置项，避免重复导入）。
+  const [discoverSelected, setDiscoverSelected] = useState<Record<string, boolean>>({})
+  const [discoverProviderId, setDiscoverProviderId] = useState<number | null>(null)
+  if (settings && settings.version !== syncedSettingsVersion) {
+    setSyncedSettingsVersion(settings.version)
+    setSystemPromptDraft(settings.systemPrompt ?? '')
+    setBuiltinToolsDraft(settings.builtinToolsEnabled ?? true)
+  }
   // 地址的本地校验结果（仅用于就地提示；真源仍在后端）。
   const urlIssue = providerDraft ? validateBaseUrl(providerDraft.baseUrl) : null
   // 摘要条用的派生值：都是已取回数据的本地聚合，不额外发请求。
@@ -403,6 +454,9 @@ export function AssistantSettingsView({
       credentialEnv: providerDraft.credentialEnv,
       credentialSecret: providerDraft.credentialSecret,
       clearCredential: providerDraft.clearCredential,
+      proxyMode: providerDraft.proxyMode,
+      // 编辑态留空 = 保留原地址（后端据此不覆盖）；custom 首次必须填写。
+      proxyUrl: providerDraft.proxyUrl,
       version: providerDraft.version,
     }
     const ok =
@@ -410,6 +464,62 @@ export function AssistantSettingsView({
         ? await onCreateProvider(payload)
         : await onUpdateProvider(providerDraft.id, payload)
     if (ok) setProviderDraft(null)
+  }
+
+  /**
+   * 拉取上游模型候选。
+   *
+   * 默认选中「未配置过」的项：已配置的再导入一次只会撞唯一索引，
+   * 对用户来说是一次没必要的报错。
+   */
+  const runDiscover = async () => {
+    if (!onDiscoverModels) return
+    const providerId = discoverProviderId ?? providerList[0]?.id
+    if (!providerId) return
+    setDiscovering(true)
+    try {
+      const res = await onDiscoverModels(providerId)
+      if (!res) return
+      setDiscovered(res)
+      setDiscoverProviderId(providerId)
+      const initial: Record<string, boolean> = {}
+      for (const d of res.discovered) initial[d.modelId] = !d.alreadyConfigured
+      setDiscoverSelected(initial)
+    } finally {
+      setDiscovering(false)
+    }
+  }
+
+  /**
+   * 导入勾选的候选。
+   *
+   * **逐个创建而不是批量接口**：`contextWindow` / `tools` 这些能力声明不能从模型名猜，
+   * 而批量导入只能写一份「通用默认」，等于把「能力未声明」的模型塞进可选集，
+   * 之后表现为「聊天报不支持工具」，问题却出在配置阶段。
+   * 因此导入只建最小条目（enabled、streaming 开），能力留待管理员逐个确认。
+   */
+  const importDiscovered = async () => {
+    if (!discovered || !discoverProviderId) return
+    const targets = discovered.discovered.filter((d) => discoverSelected[d.modelId])
+    let ok = 0
+    for (const d of targets) {
+      const created = await onCreateModel({
+        providerId: discoverProviderId,
+        modelId: d.modelId,
+        displayName: d.modelId,
+        streaming: true,
+        tools: false,
+        contextWindow: null,
+        maxOutputTokens: null,
+        reasoningEffort: '',
+        enabled: true,
+      })
+      if (created) ok += 1
+    }
+    if (ok > 0) {
+      setDiscovered(null)
+      setDiscoverSelected({})
+    }
   }
 
   /** 提交模型表单。 */
@@ -423,6 +533,7 @@ export function AssistantSettingsView({
       tools: modelDraft.tools,
       contextWindow: intOrNull(modelDraft.contextWindow),
       maxOutputTokens: intOrNull(modelDraft.maxOutputTokens),
+      reasoningEffort: modelDraft.reasoningEffort,
       enabled: modelDraft.enabled,
       version: modelDraft.version,
     }
@@ -627,14 +738,30 @@ export function AssistantSettingsView({
             title={t('assistant.models', '模型')}
             bodyClassName="p-0"
             actions={
-              <Button
-                size="sm"
-                disabled={providerList.length === 0}
-                onClick={() => setModelDraft(emptyModelDraft(providerList[0]?.id ?? 0))}
-              >
-                <Plus className="size-4" />
-                {t('assistant.addModel', '添加模型')}
-              </Button>
+              <div className="flex items-center gap-2">
+                {/* 从上游拉取候选（FR-538）：只读预览，勾选后才逐个落库。
+                    手抄模型 ID 必错，而抄错的表现是「探测通过、聊天 404 model not found」，
+                    排查会被引向凭据与网络。 */}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={providerList.length === 0 || discovering}
+                  onClick={() => void runDiscover()}
+                >
+                  <RefreshCw className="size-4" />
+                  {discovering
+                    ? t('assistant.discovering', '拉取中…')
+                    : t('assistant.discoverModels', '从上游拉取')}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={providerList.length === 0}
+                  onClick={() => setModelDraft(emptyModelDraft(providerList[0]?.id ?? 0))}
+                >
+                  <Plus className="size-4" />
+                  {t('assistant.addModel', '添加模型')}
+                </Button>
+              </div>
             }
           >
             {modelList.length === 0 ? (
@@ -740,6 +867,70 @@ export function AssistantSettingsView({
               </Table>
             )}
           </Panel>
+
+          {/* 系统提示词与平台自带工具（FR-541 / FR-540）。
+              两者放同一面板：它们共同决定「助手知道什么、能碰什么」，
+              分开摆会让人以为只有其中一项在影响行为。 */}
+          <Panel title={t('assistant.promptTitle', '系统提示词与内置工具')}>
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <FieldLabel htmlFor="assistant-system-prompt">
+                  {t('assistant.systemPrompt', '自定义系统提示词')}
+                </FieldLabel>
+                <Textarea
+                  id="assistant-system-prompt"
+                  className="min-h-24"
+                  value={systemPromptDraft}
+                  placeholder={t(
+                    'assistant.systemPromptPlaceholder',
+                    '留空则只用内置基线。内容只影响「怎么回答」，不改变助手能做什么——写操作仍需逐次确认。',
+                  )}
+                  onChange={(e) => setSystemPromptDraft(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={settingsSaving || !onSaveSystemPrompt}
+                    onClick={() => void onSaveSystemPrompt?.(systemPromptDraft)}
+                  >
+                    {t('common.save', '保存')}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    {t('assistant.systemPromptHint', '对新的对话生效；历史消息不会被追溯改写。')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">
+                    {t('assistant.builtinTools', '启用平台自带工具')}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      'assistant.builtinToolsHint',
+                      '关闭后助手将看不到任何平台工具（读也看不到）。写操作本来就是逐次确认的，因此这一项只影响「能不能查/能不能提议」。',
+                    )}
+                  </p>
+                </div>
+                <Switch
+                  aria-label={t('assistant.builtinTools', '启用平台自带工具')}
+                  checked={builtinToolsDraft}
+                  disabled={settingsSaving}
+                  onCheckedChange={(next) => {
+                    setBuiltinToolsDraft(next)
+                    void onToggleBuiltinTools?.(next)
+                  }}
+                />
+              </div>
+            </div>
+          </Panel>
+
+          {/* 技能（FR-541）：目录 + SKILL.md，展示正文与被跳过项。 */}
+          <AssistantSkillsPanel enabled={isPlatformAdmin} />
+
+          {/* 外部 MCP 连接（FR-517）：独立面板，避免把这一大块塞进本文件。 */}
+          <MCPConnectionsPanel />
 
           {/* 出站准入：AI 出站能打到哪些非公网地址。
               这是页面上唯一能「扩大可达范围」的地方，因此风险提示与逐条校验都要显式。 */}
@@ -993,6 +1184,53 @@ export function AssistantSettingsView({
                     ) : null}
                   </div>
                 )}
+                {/* 出站代理（FR-539）。
+                    默认直连是刻意的：不静默走进程环境代理，否则本机为别的用途
+                    设的 HTTPS_PROXY 会把模型出站改道，而面板上看着还是「直连」。 */}
+                <div className="space-y-1 rounded-md border border-border/60 px-3 py-2">
+                  <FieldLabel htmlFor="assistant-provider-proxy-mode">
+                    {t('assistant.proxyMode', '出站代理')}
+                  </FieldLabel>
+                  <NativeSelect
+                    id="assistant-provider-proxy-mode"
+                    value={providerDraft.proxyMode}
+                    onChange={(e) =>
+                      setProviderDraft({
+                        ...providerDraft,
+                        proxyMode: e.target.value as ProviderDraft['proxyMode'],
+                      })
+                    }
+                  >
+                    <option value="direct">{t('assistant.proxyDirect', '直连（不读环境代理）')}</option>
+                    <option value="env">{t('assistant.proxyEnv', '跟随进程环境（HTTP(S)_PROXY）')}</option>
+                    <option value="custom">{t('assistant.proxyCustom', '自定义代理')}</option>
+                  </NativeSelect>
+
+                  {providerDraft.proxyMode === 'custom' && (
+                    <div className="space-y-1 pt-1">
+                      <Input
+                        aria-label={t('assistant.proxyUrl', '代理地址')}
+                        placeholder={t('assistant.proxyUrlPlaceholder', 'http://host:port 或 socks5://host:port')}
+                        value={providerDraft.proxyUrl}
+                        onChange={(e) =>
+                          setProviderDraft({ ...providerDraft, proxyUrl: e.target.value })
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {providerDraft.proxyHasAuth
+                          ? t(
+                              'assistant.proxyHasAuth',
+                              '已保存过带口令的代理地址；地址与口令不会回显，留空表示保持原值。',
+                            )
+                          : t(
+                              'assistant.proxyHint',
+                              '支持 http / https / socks5。地址只在保存时上传，之后不回显。',
+                            )}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 {/* 用设计系统的 Switch 而不是原生 checkbox：
                     原生控件在各浏览器的默认尺寸与焦点环都不受 token 控制，
                     且这里语义本来就是「开关」而非「多项选择之一」。 */}
@@ -1112,6 +1350,32 @@ export function AssistantSettingsView({
                     </div>
                   </div>
                 </div>
+                {/* 思考强度（FR-541）：空选项表示不指定，由上游用自身默认。
+                    不默认选中某一档：那样会让「没配过」和「配了 medium」看起来一样。 */}
+                <div className="space-y-1">
+                  <FieldLabel htmlFor="assistant-model-reasoning-effort">
+                    {t('assistant.reasoningEffort', '思考强度')}
+                  </FieldLabel>
+                  <NativeSelect
+                    id="assistant-model-reasoning-effort"
+                    value={modelDraft.reasoningEffort}
+                    onChange={(e) =>
+                      setModelDraft({ ...modelDraft, reasoningEffort: e.target.value })
+                    }
+                  >
+                    <option value="">{t('assistant.reasoningDefault', '不指定（由上游默认）')}</option>
+                    <option value="minimal">{t('assistant.reasoningMinimal', 'minimal（最快）')}</option>
+                    <option value="low">{t('assistant.reasoningLow', 'low')}</option>
+                    <option value="medium">{t('assistant.reasoningMedium', 'medium')}</option>
+                    <option value="high">{t('assistant.reasoningHigh', 'high（最深）')}</option>
+                  </NativeSelect>
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      'assistant.reasoningHint',
+                      '按协议自动映射：OpenAI 系用 reasoning_effort，Anthropic 用 thinking 预算。未知值不会下发。',
+                    )}
+                  </p>
+                </div>
                 <div className="flex gap-4 text-sm">
                   <label className="flex items-center gap-2">
                     <input
@@ -1177,6 +1441,68 @@ export function AssistantSettingsView({
         }}
         onCancel={() => setPendingDeleteModel(null)}
       />
+
+      {/* 模型发现结果（FR-538）：勾选后逐个导入。
+          显示 truncated 与 skipped 是刻意的：只回「有哪些」会让
+          「上游明明有 30 个，这里只有 29 个」无从解释。 */}
+      <Dialog open={discovered !== null} onOpenChange={(open) => !open && setDiscovered(null)}>
+        <DialogContent className={scrollableDialogContentClass}>
+          <DialogHeader>
+            <DialogTitle>{t('assistant.discoverTitle', '从上游拉取的模型')}</DialogTitle>
+          </DialogHeader>
+          <ScrollableDialogBody>
+            {discovered && discovered.discovered.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {t('assistant.discoverEmpty', '上游没有返回任何模型。请确认该供应商的列表端点可用。')}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {discovered?.discovered.map((d) => (
+                  <label key={d.modelId} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={discoverSelected[d.modelId] ?? false}
+                      onChange={(e) =>
+                        setDiscoverSelected({ ...discoverSelected, [d.modelId]: e.target.checked })
+                      }
+                    />
+                    <span className="font-mono">{d.modelId}</span>
+                    {d.alreadyConfigured && (
+                      <Badge variant="secondary">{t('assistant.discoverConfigured', '已配置')}</Badge>
+                    )}
+                  </label>
+                ))}
+                {discovered?.truncated && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('assistant.discoverTruncated', '上游条目超过上限，仅列出前一部分。')}
+                  </p>
+                )}
+                {discovered?.skipped && Object.keys(discovered.skipped).length > 0 && (
+                  <div className="text-xs text-muted-foreground">
+                    {t('assistant.discoverSkipped', '部分条目被跳过：')}
+                    {Object.entries(discovered.skipped).map(([k, v]) => (
+                      <div key={k} className="font-mono">
+                        {k} — {v}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </ScrollableDialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscovered(null)}>
+              {t('common.cancel', '取消')}
+            </Button>
+            <Button
+              disabled={!discovered || !Object.values(discoverSelected).some(Boolean)}
+              onClick={() => void importDiscovered()}
+            >
+              {t('assistant.discoverImport', '导入选中项')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PageShell>
   )
 }

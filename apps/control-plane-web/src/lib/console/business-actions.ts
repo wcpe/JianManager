@@ -13,9 +13,8 @@ export function isWriteAction(action: BusinessAction): boolean {
 /**
  * 单个入参的智能取值（FR-119）。
  *
- * 泛化业务台对每个 arg 只有一个文本框，但契约里既有**标量**入参（economy 的 player/currency/amount，
- * 探针侧按字符串取用），也有**对象 / 数组**入参（inventory.writeBasicAttrs 的 base/edited，契约为
- * `{dataVersion,basicAttrs:{...}}` 嵌套对象，探针侧 `req.getObject("base")` 需真对象）。
+ * 泛化业务台对每个 arg 只有一个文本框，但契约里既有**标量**入参（探针侧按字符串取用），
+ * 也有**对象 / 数组**入参（契约为嵌套对象，探针侧 `req.getObject(...)` 需真对象）。
  *
  * 策略：文本 trim 后**以 `{` 或 `[` 起头**才尝试 `JSON.parse`——解析成对象/数组则用解析值（还原嵌套结构），
  * 解析失败则原样当字符串下发（不吞错，交由探针按契约报错）。其余一律保持原字符串，

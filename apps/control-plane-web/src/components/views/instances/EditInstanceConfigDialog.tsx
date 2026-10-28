@@ -13,6 +13,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
+import { Input } from '@jianmanager/ui/components/input'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Switch } from '@jianmanager/ui/components/switch'
 
@@ -58,8 +59,25 @@ export default function EditInstanceConfigDialog({
   const [restart, setRestart] = useState(autoRestart)
   const [saving, setSaving] = useState(false)
 
+  /*
+    改进①「未修改保护」：什么都没改时保存按钮禁用。
+    此前无论是否改动都能点保存，会发一次与当前值完全相同的 PUT——既浪费一次写请求，
+    也会在审计里留下一条无意义的变更记录（排查「谁在改配置」时是噪音）。
+    jdk 用字符串态（''=未绑定），比较时对回数字，避免 '0' 与 '' 的假差异。
+  */
+  const jdkNumber = jdk ? Number(jdk) : 0
+  const dirty = cmd !== startCommand || jdkNumber !== jdkId || restart !== autoRestart
+
+  /*
+    改进②「启动命令必填校验」：留空会让实例再也起不来，而此前可以静默保存一个空命令。
+    这里做最小非空校验（不猜命令格式：不同核心/包装器写法差异太大，误判比不判更有害）。
+  */
+  const cmdEmpty = cmd.trim() === ''
+  const canSubmit = dirty && !cmdEmpty && !saving
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (!canSubmit) return
     setSaving(true)
     try {
       await onSave({
@@ -88,12 +106,24 @@ export default function EditInstanceConfigDialog({
           <ScrollableDialogBody className="space-y-4">
             <div>
               <FieldLabel>{t('instanceDetail.startCommand')}</FieldLabel>
-              <input
+              {/*
+                改进③：原来是裸 <input>，与对话框里其它字段（Combobox/Switch）的边框、圆角、
+                聚焦环都不一致；改用共享 Input 组件后视觉统一，也自动继承主题与暗色模式。
+                同时补 aria-invalid + 错误提示，不留「为什么保存按钮点不动」的疑问。
+              */}
+              <Input
                 value={cmd}
                 onChange={(e) => setCmd(e.target.value)}
-                className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-mono text-sm"
+                className="mt-1 w-full font-mono text-sm"
                 placeholder="java -Xmx2G -jar server.jar nogui"
+                aria-invalid={cmdEmpty || undefined}
+                aria-describedby={cmdEmpty ? 'edit-instance-cmd-error' : undefined}
               />
+              {cmdEmpty && (
+                <p id="edit-instance-cmd-error" className="mt-1 text-xs text-status-danger">
+                  {t('instances.startCommandRequired', '启动命令不能为空，否则实例无法启动')}
+                </p>
+              )}
             </div>
             <div>
               <FieldLabel>{t('instances.jdkBinding')}</FieldLabel>
@@ -121,10 +151,7 @@ export default function EditInstanceConfigDialog({
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button
-              type="submit"
-              disabled={saving}
-            >
+            <Button type="submit" disabled={!canSubmit}>
               {saving ? t('common.saving') : t('common.save')}
             </Button>
           </DialogFooter>

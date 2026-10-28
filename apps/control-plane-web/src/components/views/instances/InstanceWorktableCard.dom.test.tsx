@@ -46,6 +46,8 @@ const stoppedInst = {
   name: 'survival-x',
   status: 'STOPPED',
   type: 'minecraft_java',
+  // 身份徽章需要 role 来渲染角色徽标（与表格身份列同源）。
+  role: 'backend',
   serverPort: 0,
 }
 
@@ -73,8 +75,12 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9 · ADR-102 b �
     const user = userEvent.setup()
     const onOpen = vi.fn()
     renderCard({ onOpen })
-    // 「类型 · 节点」文本是卡片主体的非交互区——旧实现点这里无反应。
-    await user.click(screen.getByText(/minecraft_java/))
+    /*
+      点卡片主体（名称所在的非交互区）应打开实例。
+      注意：卡片现在显示的是**本地化类型徽章**（「插件服」），不再是原始 type 值
+      （`minecraft_java`）——那是本轮「身份徽章与表格对齐」的结果，测试也一并跟上。
+    */
+    await user.click(screen.getByText('survival-x'))
     expect(onOpen).toHaveBeenCalledWith(42)
   })
 
