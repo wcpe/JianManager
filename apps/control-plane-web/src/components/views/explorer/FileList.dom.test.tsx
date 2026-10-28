@@ -8,7 +8,7 @@ import { emptySelection } from '@/lib/explorer/explorer-selection'
 import type { FileInfo } from '@/lib/file-browser/file-entry'
 
 /**
- * FR-070 资源管理器文件列表 · 受控视图测（ADR-102）。
+ * FR-070 资源管理器文件列表 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：条目渲染（名称/权限/目录类型）、加载与错误态、空目录占位。
  * 交互（点选、右键、拖拽）由应用侧 `ResourceExplorer.dom.test.tsx` 走假后端覆盖。

@@ -1,6 +1,6 @@
 /**
  * @file useInstanceWindowMetrics：可见窗口实例的实时指标批量取数（消费 FR-340 的
- *       `POST /metrics/series/batch`）。行渲染件不取数（ADR-102 b）：窗口归属虚拟表——
+ *       `POST /metrics/series/batch`）。行渲染件不取数（ADR-103 b）：窗口归属虚拟表——
  *       表把 `range` 上报给页面，页面据此切片实例列表并在此 hook 统一取数，逐行注入快照。
  *
  * 取数边界（性能判据）：

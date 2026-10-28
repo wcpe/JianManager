@@ -7,7 +7,7 @@ import WorkspaceCardView from '@/components/views/instances/WorkspaceCard'
 import WorkspaceCardBody from './WorkspaceCardBody'
 
 /**
- * 统一卡壳的应用接线层（ADR-102）。
+ * 统一卡壳的应用接线层（ADR-103）。
  *
  * 卡壳本体是受控视图（见 components/views）；本层提供三样它不该自己做的事：按卡类型解析标题、
  * 解析实例名（仅在父级未传名字时查，单实例画布零额外请求）、注入卡内容。

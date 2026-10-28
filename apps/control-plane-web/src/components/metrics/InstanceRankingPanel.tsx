@@ -10,7 +10,7 @@ import type { RankingMetric } from '@/lib/instances/ranking'
 export { fmtRankingValue, RANKING_WINDOWS } from '@/components/views/instances/InstanceRankingPanel'
 
 /**
- * 全局排行面板的应用接线层（ADR-102 a 范式）。
+ * 全局排行面板的应用接线层（ADR-103 a 范式）。
  *
  * 面板本体是受控视图（见 components/views）；本层持有指标/窗口/节点筛选三态（取数依赖它们）并接下钻路由。
  * 保留同路径的导出与同一套 props，调用点无需改动。

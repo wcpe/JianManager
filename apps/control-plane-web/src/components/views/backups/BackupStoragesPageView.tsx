@@ -110,7 +110,7 @@ const emptyForm: BackupStorageForm = {
 }
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 列表与加载态经 props 注入（容器调 `useBackupStorages()`）；
  * - 四个写动作以回调上报，由容器执行 mutation 并决定成功/失败文案：提交与草稿测试回传
  *   `Promise`，视图据返回值决定是否复位本地编辑态（失败时保留草稿与窗口便于重试）；

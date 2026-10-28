@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做初始化状态查询与创建请求接线。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做初始化状态查询与创建请求接线。
 import { Navigate } from 'react-router'
 import { useSetupStatus, useSetup } from '@/api/setup'
 import { SetupPageView } from '@/components/views/auth/SetupPageView'

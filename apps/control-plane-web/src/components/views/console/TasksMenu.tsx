@@ -41,7 +41,7 @@ export interface TasksMenuProps {
  * （FR-226 `?task=` 深链），底部「进入任务中心」看全量。面板外点击关闭为 DropdownMenu 缺省行为。
  * 数据/轮询由外壳复用 useTasks（FR-329：活跃 2s 短轮询、空闲停），本视图不取数、下拉不额外发请求。
  *
- * 受控视图（ADR-102 c 范式）：任务窗口与跳转由外壳注入。
+ * 受控视图（ADR-103 c 范式）：任务窗口与跳转由外壳注入。
  */
 export function TasksMenu({ tasks: input, onOpenTask }: TasksMenuProps) {
   const { t } = useTranslation()

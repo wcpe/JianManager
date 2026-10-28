@@ -8,7 +8,7 @@ import { DirectorConsolePage } from '@/components/views/console/DirectorConsoleP
 import { createDirectorState } from '@/lib/director/director'
 
 /**
- * 导播台页面 · 受控视图测（ADR-102）。
+ * 导播台页面 · 受控视图测（ADR-103）。
  *
  * 补的是**注入面契约**：场景/状态机与四个动作来自 props、画布与添加菜单由外壳注入、
  * 数字键与方向键瞬切、轮播开关、空态引导。store 联动由应用侧接线层承担。

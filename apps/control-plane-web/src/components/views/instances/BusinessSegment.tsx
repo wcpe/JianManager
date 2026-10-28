@@ -25,7 +25,7 @@ import { buildBusinessPayload, isWriteAction } from '@/lib/console/business-acti
  *
  * 注：本页签只渲染能力清单 + 下发面板，不含任何具体业务域的特判（FR-521 后 JM 不理解业务语义）。
  *
- * 受控视图（ADR-102 a 范式）：不取数——manifest 探测态与域清单由外壳注入，下发经回调上报。
+ * 受控视图（ADR-103 a 范式）：不取数——manifest 探测态与域清单由外壳注入，下发经回调上报。
  * 表单状态、写动作二次确认、入参还原与结果展示留在视图内。
  */
 export interface BusinessSegmentProps {

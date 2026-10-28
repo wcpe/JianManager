@@ -5,7 +5,7 @@ import api from '@/api/client'
  * CP 插件无关，仅转发信封；具体业务语义由探针侧 per-plugin Provider 解释。
  */
 
-// 业务动作契约已回迁应用侧（受控视图与业务页面共用，ADR-102）；此处原样再导出，调用点无需改动。
+// 业务动作契约已回迁应用侧（受控视图与业务页面共用，ADR-103）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的函数签名使用。
 import type { BusinessManifest, BusinessResult, BusinessWriteOptions } from '@/lib/console/business'
 export type { BusinessAction, BusinessManifest, BusinessResult, BusinessWriteOptions } from '@/lib/console/business'

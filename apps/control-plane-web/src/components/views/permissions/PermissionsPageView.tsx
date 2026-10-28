@@ -147,7 +147,7 @@ interface PendingDiff {
 }
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 目录、角色列表、用户列表与选中用户的有效权限经 props 注入（容器调 `useRbacCatalog` /
  *   `useRbacRoles` / `useUsers` / `useUserPermissions`）；
  * - **归容器的受控状态**：`selection`——它是 `useUserPermissions` 的查询键，一变就触发取数，

@@ -9,7 +9,7 @@ import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
 
 /**
- * 服务端模板页接线层（ADR-102）：取数（模板/节点/分组）、三个写动作与缓存失效留在这里，
+ * 服务端模板页接线层（ADR-103）：取数（模板/节点/分组）、三个写动作与缓存失效留在这里，
  * 视图（包内 `TemplatesPage`）只做受控渲染。
  */
 export default function TemplatesPage() {

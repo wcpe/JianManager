@@ -22,7 +22,7 @@ export interface DirectorSceneStripProps {
  *
  * 三态视觉：active=主色实心 + 闪电（全速）；预热=绿点（WS 保活，瞬切零延迟）；cold=灰点（切换需重连）。
  *
- * 取值/落值由 props 注入（ADR-102）：本视图不触达 store。
+ * 取值/落值由 props 注入（ADR-103）：本视图不触达 store。
  */
 export function DirectorSceneStrip({
   scenes,

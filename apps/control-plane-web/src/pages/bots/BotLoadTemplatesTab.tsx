@@ -12,7 +12,7 @@ import { TEMPLATES_TAB_PAGE_SIZE, TemplatesTabView } from '@/components/views/bo
 
 /**
  * 压测模板列表 tab 的容器：取数、搜索防抖/筛选写 URL、删除 mutation 与三处弹窗装配。
- * 展示层已回迁应用侧（`TemplatesTabView`，ADR-102）。
+ * 展示层已回迁应用侧（`TemplatesTabView`，ADR-103）。
  */
 export default function BotLoadTemplatesTab() {
   const { t } = useTranslation()

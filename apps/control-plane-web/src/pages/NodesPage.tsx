@@ -1287,7 +1287,7 @@ function NodeProcessTab({ node }: { node: NodeInfo }) {
   )
 }
 
-/** 实例对比图的取数接线层（ADR-102）：视图已入包，此处注入服务端搜索与批量指标。 */
+/** 实例对比图的取数接线层（ADR-103）：视图已入包，此处注入服务端搜索与批量指标。 */
 function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
   const navigate = useNavigate()
   const { t } = useTranslation()
@@ -1337,7 +1337,7 @@ function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
 }
 
 /**
- * 节点监控曲线的取数接线层（ADR-102）。
+ * 节点监控曲线的取数接线层（ADR-103）。
  *
  * 时间范围状态在这里：预设档位与自定义窗口互斥（见 `useNodeMetricRange`），
  * 任一变化都会改 queryKey 触发重新取数。

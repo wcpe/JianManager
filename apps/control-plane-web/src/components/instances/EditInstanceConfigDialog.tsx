@@ -5,7 +5,7 @@ import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 import EditInstanceConfigDialogView from '@/components/views/instances/EditInstanceConfigDialog'
 
 /**
- * 实例配置编辑器的应用接线层（ADR-102 b 范式）。
+ * 实例配置编辑器的应用接线层（ADR-103 b 范式）。
  *
  * 对话框本体是受控视图（见 components/views）；本层取该节点已登记的 JDK 供绑定、接保存动作、把提示交给 toast。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。

@@ -22,7 +22,7 @@ import { EmptyState, fmtTime } from '@/components/views/client-dist/security-for
 /**
  * 安全分组：顶部「新建分组」按钮 + 模态表单 + 全宽分组列表（与处置 Tab 同范式）。
  *
- * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast——
+ * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast——
  * 列表数据与加载/错误态经 props 注入（应用侧容器调 `useClientSecurityGroups`），
  * 创建动作经 `onCreate` 上报请求体并由其返回值告知成败；
  * 成功/失败文案与 toast 属应用侧决策，关闭模态的时机由本组件的编辑语义决定

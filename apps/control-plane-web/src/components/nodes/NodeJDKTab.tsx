@@ -15,7 +15,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 节点 JDK 管理面板外壳（ADR-102 b 范式）。
+ * 节点 JDK 管理面板外壳（ADR-103 b 范式）。
  *
  * 五个 mutation、目录查询与全部提示文案都在这里。三处子组件经注入进视图：
  * 存活测试按钮与目录选择器各自取数、运行时库自成一块——视图不必认识它们。

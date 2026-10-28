@@ -17,7 +17,7 @@ export const CRASH_ROOT_CAUSES = [
 export type CrashRootCause = (typeof CRASH_ROOT_CAUSES)[number]
 
 /** 崩溃与资源关联证据（FR-470 §2.3，OOM 证据链）。 */
-// 崩溃诊断契约已回迁应用侧（受控视图与业务页面共用，ADR-102）；此处原样再导出，调用点无需改动。
+// 崩溃诊断契约已回迁应用侧（受控视图与业务页面共用，ADR-103）；此处原样再导出，调用点无需改动。
 // 本地绑定供本文件的查询泛型使用。
 import type { CrashSnapshot, CrashTrend } from '@/lib/instances/crash'
 export type { CrashCauseCount, CrashCorrelation, CrashSignatureCount, CrashSnapshot, CrashTrend, CrashTrendPoint } from '@/lib/instances/crash'

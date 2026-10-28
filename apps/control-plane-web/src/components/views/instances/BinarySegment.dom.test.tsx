@@ -5,12 +5,12 @@ import { renderWithI18n } from '@/test/i18n'
 import BinarySegment, { LaunchParamsPanel } from '@/components/views/instances/BinarySegment'
 
 /**
- * FR-450 §2.3.4 进程能力分段 · 受控视图测（ADR-102 b 范式）。
+ * FR-450 §2.3.4 进程能力分段 · 受控视图测（ADR-103 b 范式）。
  *
  * 断言不依赖具体文案（按钮按角色取），进程指标块由 slot 注入、这里用一个标记元素代替，
  * 以证明「分段只负责把它放在启动参数上方」这一契约，而不引入 ProcessPanel 的取数。
  */
-describe('BinarySegment / LaunchParamsPanel（FR-450 · ADR-102 b 范式）', () => {
+describe('BinarySegment / LaunchParamsPanel（FR-450 · ADR-103 b 范式）', () => {
   const launch = { startCommand: './paper.jar --nogui', loaded: true, saving: false, onSave: vi.fn() }
 
   it('进程指标块经 slot 注入，且位于启动参数区之前', () => {

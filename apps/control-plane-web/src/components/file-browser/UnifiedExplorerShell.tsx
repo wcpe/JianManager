@@ -5,7 +5,7 @@ import { useThemeStore } from '@/stores/theme'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 
 /**
- * 统一文件浏览壳接线层（ADR-102）：注入主题，以及内层标签宿主需要的两项
+ * 统一文件浏览壳接线层（ADR-103）：注入主题，以及内层标签宿主需要的两项
  * （提示通道 + 标签内资源管理器的渲染函数）。消费方（StoragePage 等）零改动。
  */
 export default function UnifiedExplorerShellConnected(

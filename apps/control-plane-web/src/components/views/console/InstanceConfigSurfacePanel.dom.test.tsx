@@ -8,7 +8,7 @@ import { InstanceConfigSurfacePanel } from '@/components/views/console/InstanceC
 import type { ConfigSurfaceItem } from '@/lib/config-explorer/config-surface'
 
 /**
- * 实例「关键配置」面板 · 受控视图测（ADR-102）。
+ * 实例「关键配置」面板 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：加载/空态、分组分节、内联项可编辑、文件引用项只读预览与打开文件链接、
  * 改动计数与保存载荷（含 file→inline 迁移语义）。

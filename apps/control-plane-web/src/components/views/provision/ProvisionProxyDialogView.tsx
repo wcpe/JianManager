@@ -89,7 +89,7 @@ export interface ProvisionProxySubmitResult {
 }
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 四份候选经 props 注入：`nodeOptions` / `groupOptions`（容器映射为选项）、`versions`（容器调
  *   `useCoreVersions`，按 `needsProxyVersion` 折算）、`jdks`（容器调 `useNodeJDKs(nodeId)`；undefined = 尚未取到）；
  *   解析预览经 `resolved` 注入；

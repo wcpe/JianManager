@@ -52,7 +52,7 @@ function flattenSearchGroups(tree: GroupTreeNode[], query: string): VisibleGroup
  * 选中。每节点挂「子树聚合去重」实例数。折叠态由外壳注入（键 `igroup:<id>`，
  * 与侧栏实例树 `tree:` 隔离）。支持把实例从右列表拖入某组（HTML5 原生 DnD）。
  *
- * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast —— 分组列表、折叠态与四个
+ * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast —— 分组列表、折叠态与四个
  * 写动作都由外壳注入。树构建、搜索剪枝、虚拟化、键盘导航、拖放解析留在视图内。
  */
 export interface InstanceGroupTreeProps {

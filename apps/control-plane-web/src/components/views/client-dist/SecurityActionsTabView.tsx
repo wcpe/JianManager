@@ -52,7 +52,7 @@ const KEY_STATE_OPTIONS: KeySecurityState[] = ['normal', 'observe', 'throttled',
 const PROT_MODE_OPTIONS: ChannelProtectionMode[] = ['throttle', 'concurrency', 'queue', 'retry_after']
 
 /**
- * 处置 Tab 的注入契约（受控视图，ADR-102 a+b 双范式）。
+ * 处置 Tab 的注入契约（受控视图，ADR-103 a+b 双范式）。
  *
  * 受控边界：
  * - **归容器（会触发重新取数）**：处置流水数据与加载/错误态，以及三个筛选条件

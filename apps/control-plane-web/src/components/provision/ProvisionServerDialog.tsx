@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做候选取数、核心解析、搭建写请求与提示文案。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做候选取数、核心解析、搭建写请求与提示文案。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
@@ -21,7 +21,7 @@ interface ProvisionServerDialogProps {
 }
 
 /**
- * 一键搭建后端子服向导接线层（ADR-102 b 范式，原 FR-034 一键搭建 / FR-046 核心解析 / FR-316 版本-JDK 预检）。
+ * 一键搭建后端子服向导接线层（ADR-103 b 范式，原 FR-034 一键搭建 / FR-046 核心解析 / FR-316 版本-JDK 预检）。
  *
  * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast）；本层负责：
  * - 候选取数：`useNodes()` 过滤启用态后映射节点选项、`useGroups()` 映射用户组选项、

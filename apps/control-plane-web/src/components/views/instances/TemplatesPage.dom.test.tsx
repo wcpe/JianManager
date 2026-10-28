@@ -8,7 +8,7 @@ import { TemplatesPage } from '@/components/views/instances/TemplatesPage'
 import type { TemplateView } from '@/components/views/instances/TemplatesPage'
 
 /**
- * FR-064/FR-154 模板市场 · 受控视图测（ADR-102 a/b 范式）。
+ * FR-064/FR-154 模板市场 · 受控视图测（ADR-103 a/b 范式）。
  *
  * 应用侧 `TemplatesPage.dom.test.tsx` 走 mock 假后端验「渲染 + 联动」；
  * 这里补的是**受控契约**：删除经 `onDelete` 上报、应用模板的实例载荷形态

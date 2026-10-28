@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import { InstanceWorktableCard } from '@/components/views/instances/InstanceWorktableCard'
 
 /**
- * FR-136 实例工作台卡 · 受控视图测（ADR-102 b 范式）。
+ * FR-136 实例工作台卡 · 受控视图测（ADR-103 b 范式）。
  *
  * 与迁移前的差异（**有意的取舍，勿当缺陷「修掉」**）：
  * 1. 「点卡片跳转深链」改为断言 `onOpen(42)`——路由由外壳注入（列表页可自定义跳转），
@@ -70,7 +70,7 @@ function renderCard(props: Partial<Props> = {}) {
   return { ...handlers, ...result }
 }
 
-describe('InstanceWorktableCard 点击卡片打开实例（FIX-9 · ADR-102 b 范式）', () => {
+describe('InstanceWorktableCard 点击卡片打开实例（FIX-9 · ADR-103 b 范式）', () => {
   it('点击卡片主体（非按钮区）上报打开意图', async () => {
     const user = userEvent.setup()
     const onOpen = vi.fn()

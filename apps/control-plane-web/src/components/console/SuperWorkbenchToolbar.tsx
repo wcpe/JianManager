@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只注入路由链接渲染（受控化）。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只注入路由链接渲染（受控化）。
 import { Link } from 'react-router'
 import { SuperWorkbenchToolbar as SuperWorkbenchToolbarView } from '@/components/views/console/WorkbenchLeafParts'
 import type { WorkspacePreset } from '@/lib/console/workspace-preset'

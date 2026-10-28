@@ -117,7 +117,7 @@ export function AttributionResultView({ result }: { result: AttributionResult })
  * 性能归因卡片（FR-465）：**按需触发**（点击「分析」），不做常驻轮询——
  * 归因是窗口级相关分析，随每拍变动无意义且会放大查询负载。
  *
- * 受控视图（ADR-102 a 范式）：不取数——结果与拉取态由外壳注入，「分析 / 重新分析」
+ * 受控视图（ADR-103 a 范式）：不取数——结果与拉取态由外壳注入，「分析 / 重新分析」
  * 经 `onAnalyze` 上报。结果视图与文案映射留在视图内。
  */
 export interface AttributionCardProps {

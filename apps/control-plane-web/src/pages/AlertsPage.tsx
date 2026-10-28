@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做三块数据取数、写动作触发、事件筛选持有与两个对话框容器的接线。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做三块数据取数、写动作触发、事件筛选持有与两个对话框容器的接线。
 import { useMemo, useState } from 'react'
 import { useAlertRules, useAlertEvents, useDeleteAlertRule, useUpdateAlertRule, useAlertChannels, useDeleteAlertChannel, useTestAlertChannel, useAcknowledgeEvent, useMarkAllRead, useUnreadAlertCount } from '@/api/alerts'
 import { usePageContext } from '@/lib/assistant/page-context'
@@ -8,7 +8,7 @@ import { RuleDialog } from './alerts/RuleDialog'
 import { ChannelDialog } from './alerts/ChannelDialog'
 
 /**
- * 告警页容器（ADR-102 b 范式）：三块数据取数、全部写动作与未读计数在这里决定，
+ * 告警页容器（ADR-103 b 范式）：三块数据取数、全部写动作与未读计数在这里决定，
  * 三个 Tab 的展示、Tab 选中、对话框开合与删除目标交共享视图。
  *
  * 上提的受控状态有两个：`filter`（事件筛选，含页码）——它是 `useAlertEvents` 的查询键；

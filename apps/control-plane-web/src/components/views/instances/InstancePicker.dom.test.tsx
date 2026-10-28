@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import { INSTANCE_PICKER_ALL, InstancePicker } from '@/components/views/instances/InstancePicker'
 
 /**
- * 千级实例选择器 · 受控视图测（ADR-102 a 范式）。
+ * 千级实例选择器 · 受控视图测（ADR-103 a 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。断言聚焦三件本组件自己负责的事：
  * 候选窗口的呈现、截断提示、以及「当前值不在窗口内」时的回显兜底——服务端搜索与防抖属
@@ -47,7 +47,7 @@ function renderPicker(props: Partial<Parameters<typeof InstancePicker>[0]> = {})
   return render(<InstancePicker items={items} value={null} ariaLabel="选择实例" {...props} />, { wrapper: Wrapper })
 }
 
-describe('InstancePicker（ADR-102 a 范式）', () => {
+describe('InstancePicker（ADR-103 a 范式）', () => {
   it('渲染触发器并带显式可访问名', () => {
     renderPicker()
     expect(screen.getByLabelText('选择实例')).toBeInTheDocument()

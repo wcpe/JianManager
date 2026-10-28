@@ -4,7 +4,7 @@ import { fetchBusinessManifest } from '@/api/business'
 import BusinessDomainStatusView from '@/components/views/instances/BusinessDomainStatus'
 
 /**
- * 业务域状态面板的应用接线层（ADR-102 a 范式）。
+ * 业务域状态面板的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层只做两件事：
  * 取域状态（`GET /instances/:id/business/status`，30s TTL，见 {@link useBusinessStatus}），

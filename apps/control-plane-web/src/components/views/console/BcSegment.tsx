@@ -42,7 +42,7 @@ export interface BcSegmentProps {
  * 子服列表以 `/topology` 的该 proxy `registrations` 为**唯一真源**（与拓扑/注册页同源，
  * 避免「详情页说的子服」与「拓扑页画的连线」两份数据漂移）。
  *
- * 受控视图（ADR-102）：注册列表由外壳注入（它已持有 topology 查询），本视图不取数。
+ * 受控视图（ADR-103）：注册列表由外壳注入（它已持有 topology 查询），本视图不取数。
  */
 export default function BcSegment({ registrations: input, renderBackendLink }: BcSegmentProps) {
   const { t } = useTranslation()

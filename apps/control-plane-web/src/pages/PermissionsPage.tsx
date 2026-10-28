@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只做目录/角色/用户取数、选中态与深链、两个保存动作、权限门禁与 toast。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做目录/角色/用户取数、选中态与深链、两个保存动作、权限门禁与 toast。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -35,7 +35,7 @@ function readDeepLinkedSelection(): PermissionSelection {
 }
 
 /**
- * 权限管理页容器（ADR-102 b 范式）：三栏工作区的展示与草稿交共享视图，
+ * 权限管理页容器（ADR-103 b 范式）：三栏工作区的展示与草稿交共享视图，
  * 本层只负责目录/角色/用户取数、选中态（含 `?user=<id>` 深链一次读取）、两个保存动作与 toast。
  *
  * 受控边界：`selection` 留在这里——它是 `useUserPermissions` 的查询键，一变就触发取数，

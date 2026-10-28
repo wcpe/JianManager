@@ -16,7 +16,7 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { ConfigDiff, ConfigVersion } from '@/lib/config-explorer/config-contracts'
 
 /**
- * 受控边界（ADR-102 b 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 版本列表、diff 与回滚请求全部经 props 注入 / 上报（容器调 `useConfigVersions` / `useConfigDiff` / `useRollbackConfig`）；
  * - **上提容器**的状态：对比起止 `diffFrom`/`diffTo`——它们是 diff 查询的键，一变就触发取数，
  *   故由容器唯一持有，本视图只渲染并回传选择（`onDiffSelect`），不持本地镜像；

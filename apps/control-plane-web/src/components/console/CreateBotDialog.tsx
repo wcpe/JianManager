@@ -6,7 +6,7 @@ import { suggestBotServer } from '@/lib/bots/bot-list'
 import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
 /**
- * 「新建 Bot」对话框的应用接线层（ADR-102 b 范式）。
+ * 「新建 Bot」对话框的应用接线层（ADR-103 b 范式）。
  *
  * 对话框本体是受控视图（见 components/views）；本层算两样它不该自己拿的东西：归属实例名、
  * 「节点 host + 实例端口」的建议连接地址（要查实例与节点），以及创建动作。

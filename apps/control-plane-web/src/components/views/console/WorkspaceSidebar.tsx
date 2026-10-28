@@ -61,7 +61,7 @@ function currentPatternOf(pathname: string): string | null {
   return resolveWorkspacePath(pathname)?.pattern ?? null
 }
 
-/** 侧栏资源数据源（ADR-102：应用侧取数后注入；字段为组件所需投影）。 */
+/** 侧栏资源数据源（ADR-103：应用侧取数后注入；字段为组件所需投影）。 */
 export interface WorkspaceSidebarData {
   /** 实例聚合权威总数（`/instances` 计数，与页眉同源）。 */
   instanceTotal?: number
@@ -115,7 +115,7 @@ export interface WorkspaceSidebarProps {
 
 /**
  * 控制台侧栏（FR-502 阶段 6）：`ConsoleSidebar` 的接替者。受控视图——数据与路由一律由
- * props 注入，本文件不触达 api / store / 路由（ADR-102）。
+ * props 注入，本文件不触达 api / store / 路由（ADR-103）。
  *
  * 【折叠动画：宽度过渡只由侧栏自己承担】旧外壳把宽度过渡放在内层 `jm-sidebar-drawer`、
  * 再给内容区加 `clip-path` + `translate3d` 补偿，靠「JS 320ms 定时器 + CSS 320ms 过渡」

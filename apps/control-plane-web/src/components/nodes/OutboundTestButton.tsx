@@ -1,4 +1,4 @@
-// 视图已回迁应用侧（原 ADR-102 迁包已撤销）；本层只注入出站测试 mutation（受控化）。
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只注入出站测试 mutation（受控化）。
 import { OutboundTestButton as OutboundTestButtonView } from '@/components/views/nodes/OutboundTestButton'
 import { useTestHTTP } from '@/api/diagnostics'
 

@@ -4,7 +4,7 @@ import { useUpdateInstance } from '@/api/instances'
 import InstanceTagsDialogView from '@/components/views/instances/InstanceTagsDialog'
 
 /**
- * 实例标签编辑器的应用接线层（ADR-102 b 范式）。
+ * 实例标签编辑器的应用接线层（ADR-103 b 范式）。
  *
  * 编辑器本体是受控视图（见 components/views）；本层只做一件事：把合并好的标签数组持久化并提示。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。

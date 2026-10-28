@@ -27,7 +27,7 @@ const RESOURCE_PANEL_INSTANCE_LIMIT = 100
 const RESOURCE_SEARCH_DEBOUNCE_MS = 300
 
 /**
- * 工作区侧栏的应用接线层（ADR-102）。
+ * 工作区侧栏的应用接线层（ADR-103）。
  *
  * 视图本体是受控视图（见 components/views）；本层注入：折叠态与权限快照（store）、工作区解析与当前路径
  * （路由）、资源面板数据（节点 / 聚合计数 / 实例搜索窗口 / 拓扑成员映射）与资源面板组件本身。

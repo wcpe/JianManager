@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
-// 契约类型随受控视图归包（ADR-102 b 范式）：API 层与包内组件共用同一份定义。
+// 契约类型随受控视图归包（ADR-103 b 范式）：API 层与包内组件共用同一份定义。
 import type { ArtifactCacheView } from '@/lib/artifacts/artifact-cache'
 
 export type { ArtifactCacheItem, ArtifactCacheView } from '@/lib/artifacts/artifact-cache'

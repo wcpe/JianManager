@@ -8,7 +8,7 @@ import { QuotaPanel } from '@/components/views/console/QuotaPanel'
 import type { InstanceQuotaStatus } from '@/lib/instances/quota-status'
 
 /**
- * 配额面板 · 受控视图测（ADR-102）。
+ * 配额面板 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：四态（加载 / 失败 / 无数据 / 有数据）、来源与强制状态、待收紧限额。
  * 取数与重试由应用侧接线层注入，这里只验证回调被正确调用。

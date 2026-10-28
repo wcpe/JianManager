@@ -857,7 +857,7 @@ export function SystemUpdateRolloutPanel({ rollout }: SystemUpdateRolloutPanelPr
 }
 
 /**
- * 受控边界（ADR-102 a 范式）：**不取数、不发请求、不弹 toast**。
+ * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast**。
  * - 三份查询的结果与错误态经 props 注入（容器调 `useSelfUpdateCheck` / `useRollout` / `useWorkerAssets`）；
  *   错误文案由容器从 axios 错误里取后端 message 后注入，故视图只认「有没有错误」。
  * - 八个写动作（检查更新、CP 升级/回滚、节点升级/回滚、全网升级、预缓存、复制回执）一律以回调上报，

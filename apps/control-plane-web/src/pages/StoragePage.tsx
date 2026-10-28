@@ -13,7 +13,7 @@ import { storageFileSource } from '@/components/file-browser/sources/storageSour
 const ROLE_PLATFORM_ADMIN = 10
 
 /**
- * 平台存储页接线层（ADR-102）：概览取数、cache 清理、权限判定、数据源与浏览壳依赖都在这里注入。
+ * 平台存储页接线层（ADR-103）：概览取数、cache 清理、权限判定、数据源与浏览壳依赖都在这里注入。
  */
 export default function StoragePageConnected(
   props: Omit<

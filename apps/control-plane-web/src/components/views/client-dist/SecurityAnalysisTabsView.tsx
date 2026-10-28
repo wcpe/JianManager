@@ -10,7 +10,7 @@ import { formatFileSize } from '@/lib/shared/format-file-size'
  * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（FR-430 / ADR-088）。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
- * 受控视图（ADR-102 a 范式）：不取数、不碰路由查询、不弹 toast——
+ * 受控视图（ADR-103 a 范式）：不取数、不碰路由查询、不弹 toast——
  * 聚合结果与加载/错误态经 props 注入（应用侧容器调 `useClientDistIpAnalysis` /
  * `useClientDistPlayerAnalysis` 并提供容器与回调），本组件只保留展示逻辑：
  * 表格结构、列顺序、格式化与空/加载/错误三态的判定优先级。

@@ -24,7 +24,7 @@ export interface AccountMenuProps {
 /**
  * 账户菜单（FR-162）：显示用户名 / 角色 + 退出登录（接管 FR-132 的退出图标化）。
  *
- * 受控视图（ADR-102 c 范式）：账户态与退出动作由外壳从 auth store 读出后注入。
+ * 受控视图（ADR-103 c 范式）：账户态与退出动作由外壳从 auth store 读出后注入。
  * 角色文案复用包内 `roles` 的 `ROLE_LABEL_KEY`（与用户管理页同源，避免重复维护）。
  */
 export function AccountMenu({ username, role, onLogout }: AccountMenuProps) {

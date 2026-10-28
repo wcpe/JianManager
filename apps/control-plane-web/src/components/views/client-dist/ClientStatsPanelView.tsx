@@ -33,7 +33,7 @@ function platformLabel(os: string): string {
 }
 
 /**
- * 统计看板的注入契约（受控视图，ADR-102 a 范式）。
+ * 统计看板的注入契约（受控视图，ADR-103 a 范式）。
  *
  * 受控边界（**不取数、不读路由**）：
  * - 请求侧统计与更新侧观测经 props 注入（容器按窗口调 `/client-dist/stats` 与

@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
 
 /**
- * 主题切换器 · 受控视图测（ADR-102）。
+ * 主题切换器 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：主题色圆点/角标、明暗三态直选、折叠态收起明暗入口。
  * 取值与落值由应用侧接线层接 store，这里只验证回调被正确调用。

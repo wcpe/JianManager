@@ -5,7 +5,7 @@ import { DatabaseExplorerView } from '@/components/views/database/DatabaseExplor
 import { DatabaseRowsView } from '@/components/views/database/DatabaseRowsView'
 
 /**
- * 数据库资源管理器（FR-084）容器：取数与查询状态留在应用，展示交共享视图（ADR-102）。
+ * 数据库资源管理器（FR-084）容器：取数与查询状态留在应用，展示交共享视图（ADR-103）。
  * 切表/翻页/排序/过滤均走后端，仅请求当前页；页面与后端维持平台管理员权限保护。
  */
 export default function DatabaseExplorer() {

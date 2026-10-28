@@ -41,7 +41,7 @@ const STATUS_VALUES = ['connected', 'connecting', 'disconnected', 'error'] as co
  * 注：spec 该行右栏还写了「压测」，但压测（bot-load）是 `/bots` 独立页的会话/模板能力，
  * 不在本页签内，故右栏只有运行概览。
  *
- * 受控视图（ADR-102 a 范式）：筛选、分页与三份数据都提到外壳——取数依赖它们，视图拿不到；
+ * 受控视图（ADR-103 a 范式）：筛选、分页与三份数据都提到外壳——取数依赖它们，视图拿不到；
  * 创建对话框也由外壳注入（它自带接线层）。分组、勾选、二次确认留在视图内。
  */
 export interface BotSegmentProps {

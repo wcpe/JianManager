@@ -8,7 +8,7 @@ import { InstanceWizardPage } from '@/components/views/instances/InstanceWizardP
 import type { InstanceWizardPageProps } from '@/components/views/instances/InstanceWizardPage'
 
 /**
- * FR-230 创建实例向导 · 受控视图测（ADR-102 a 范式）。
+ * FR-230 创建实例向导 · 受控视图测（ADR-103 a 范式）。
  *
  * 应用侧原本没有向导的行为测试；这里补的是**分步语义与上报契约**：
  * 节点变更上报（驱动外壳取 JDK/Docker）、分步阻断、docker 检测不可用阻断提交、

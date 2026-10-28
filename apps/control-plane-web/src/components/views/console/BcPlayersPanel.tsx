@@ -31,7 +31,7 @@ export interface BcPlayersPanelProps {
  * 单一归属：本面板只挂在 `players` 页签（proxy 形态），`bcTopology`（子服拓扑）页签不再重复渲染，
  * 避免同一面板被两个页签各挂一份。
  *
- * 受控视图（ADR-102）：注册列表与在线探针结果由外壳注入（它已持有这两个查询），本视图不取数。
+ * 受控视图（ADR-103）：注册列表与在线探针结果由外壳注入（它已持有这两个查询），本视图不取数。
  */
 export default function BcPlayersPanel({ registrations: input, online }: BcPlayersPanelProps) {
   const { t } = useTranslation()

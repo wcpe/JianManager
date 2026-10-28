@@ -46,7 +46,7 @@ export interface BackupStorageOption {
  * 少时贴合内容。不写死 `flex-1`——否则 2 条备份也把卡撑满整栏，正是本批要消灭的
  * 「矮内容被拉平成死区」。
  *
- * 受控视图（ADR-102 b 范式）：不取数、不发请求、不弹 toast——两份列表、存活判定、
+ * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast——两份列表、存活判定、
  * 五个动作与「去创建定时任务」链接都由外壳注入；轮询由外壳负责（视图只显示自动刷新提示）。
  */
 export interface InstanceBackupSegmentProps {

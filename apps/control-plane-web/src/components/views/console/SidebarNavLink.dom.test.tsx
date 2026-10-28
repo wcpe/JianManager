@@ -8,7 +8,7 @@ import { SidebarNavLink } from '@/components/views/console/SidebarNavLink'
 import type { NavLinkRenderArgs } from '@/components/views/console/SidebarNavLink'
 
 /**
- * 侧栏导航链接 · 受控视图测（ADR-102）。
+ * 侧栏导航链接 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：图标与文案渲染、`/` 精确匹配、激活态样式、嵌套缩进。
  * 路由渲染由测试自备的 renderLink 提供——这正是包内不依赖 react-router 的验证点：

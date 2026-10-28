@@ -8,7 +8,7 @@ import { StoppedLogsView } from '@/components/views/console/StoppedLogsView'
 import type { LogEntry } from '@/lib/console/console-log-types'
 
 /**
- * 停机日志回放 · 受控视图测（ADR-102）。
+ * 停机日志回放 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：加载/空态、旧→新顺序、级别着色、复制回执经 onNotify、
  * 「完整历史」链接经 renderLink 注入。取数（useLogs）由应用侧接线层承担。

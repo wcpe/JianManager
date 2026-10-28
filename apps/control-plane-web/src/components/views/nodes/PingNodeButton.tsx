@@ -15,7 +15,7 @@ export interface PingResultView {
  * 节点存活测试按钮（FR-229）：经 gRPC 调用 Worker GetVersion 主动探活，
  * 行内展示在线 + 版本 + 往返耗时，或离线 + 原因。供 JDK 一键下载前「先测再下」避免卡死。
  *
- * 受控视图（ADR-102）：不取数、不发请求——探测结果与在途态经 props 注入，
+ * 受控视图（ADR-103）：不取数、不发请求——探测结果与在途态经 props 注入，
  * 点击经 `onPing` 上报。注意区分两种失败：`result.alive === false` 是「探测成功但节点离线」，
  * `isError` 是「探测请求本身失败」，两者文案不同，不可合并。
  */

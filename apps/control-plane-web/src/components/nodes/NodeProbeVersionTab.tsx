@@ -10,7 +10,7 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * 节点默认探针版本页签外壳（ADR-102 b 范式）。
+ * 节点默认探针版本页签外壳（ADR-103 b 范式）。
  *
  * 两个查询（制品目录 + 当前选择）与保存 mutation 都在这里；受控视图只负责渲染
  * 与把用户选中的版本号上报上来。制品目录对象整体注入——受控视图声明的是它用到的

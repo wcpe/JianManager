@@ -17,7 +17,7 @@ export const SIDEBAR_RECENT_LIMIT = 8
  * 行 = 状态点 + 名称（title 含节点名），点击进入该服控制台并计入最近。
  * 折叠图标轨（compact 轨）不挂载本组件，天然不显示。
  *
- * 受控视图（ADR-102 a 范式）：不取数、不发请求——收藏/最近、实时状态与节点名都由外壳注入，
+ * 受控视图（ADR-103 a 范式）：不取数、不发请求——收藏/最近、实时状态与节点名都由外壳注入，
  * 打开与切换收藏经回调上报。两区去重、空态与行渲染留在视图内。
  */
 export interface SidebarServerListProps {

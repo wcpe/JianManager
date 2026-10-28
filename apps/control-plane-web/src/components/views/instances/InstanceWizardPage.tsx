@@ -79,7 +79,7 @@ function envVarsFromPairs(pairs: EnvVarPair[]): Record<string, string> | undefin
  * 复用既有 POST /instances 与字段校验。?node= / ?template= 支持从实例页/模板页预填。
  * 编辑等其它场景仍用模态（本页只接管「创建」）。
  *
- * 受控视图（ADR-102 a 范式）：不取数、不导航——候选与检测态由外壳注入，
+ * 受控视图（ADR-103 a 范式）：不取数、不导航——候选与检测态由外壳注入，
  * 创建经 `onCreate` 上报、取消/完成后由外壳导航。表单态、分步推进与逐步骤校验留在视图内。
  */
 export interface InstanceWizardPageProps {
