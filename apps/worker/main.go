@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -30,10 +31,13 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/crashreport"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 	"github.com/wcpe/JianManager/internal/worker/decompiler"
+	"github.com/wcpe/JianManager/internal/worker/dirusage"
 	wembed "github.com/wcpe/JianManager/internal/worker/embed"
 	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
 	"github.com/wcpe/JianManager/internal/worker/heartbeat"
+	"github.com/wcpe/JianManager/internal/worker/hostobs"
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
+	"github.com/wcpe/JianManager/internal/worker/logmetrics"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -56,6 +60,7 @@ import (
 	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/setup"
+	"github.com/wcpe/JianManager/internal/worker/startup"
 	workerstorage "github.com/wcpe/JianManager/internal/worker/storage"
 	"github.com/wcpe/JianManager/internal/worker/tunnel"
 	"github.com/wcpe/JianManager/internal/worker/ws"
@@ -346,6 +351,52 @@ func parseDataDirArg(args []string) []string {
 	return out
 }
 
+// logStartupPhase 打一条启动阶段耗时日志（FR-486 范围①）。
+//
+// 为什么默认开启而不藏在开关后面：启动期每次进程生命周期只跑一遍，没有噪声成本；
+// 而运行期那套 `JIANMANAGER_STAGE_TIMING=1`（采集轮内计时）是高频路径，才需要开关。
+// 现场出问题时，人最需要的是「上一次启动的日志里本来就有数据」。
+func logStartupPhase(phase string, cost time.Duration) {
+	slog.Info("启动阶段完成", "phase", phase, "elapsed_ms", cost.Milliseconds())
+}
+
+// warnIfStateTooLarge 启动期状态规模超阈告警（FR-486 范围④）。
+//
+// 为什么要这条：旧事故（2026-09-28）里，1.2GB 状态把注册拖到 8m39s，而全程没有任何提示。
+// 那时若有一条「状态偏大，启动会变慢」的 WARN，排查方向会完全不同。
+//
+// 判据用**索引库 + 事件段**的实际字节数，而不是行数：行数要开库才能数（那本身就要花时间），
+// 而文件大小是 stat 一次即得，恰好在「加载之前」就能判断——这正是「启动前告警」的语义。
+func warnIfStateTooLarge(root *dataroot.Root, thresholdMB int) {
+	if thresholdMB <= 0 {
+		return
+	}
+	dir := root.LogDir()
+	var total int64
+	err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, statErr := d.Info(); statErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return // 规模判断失败不阻断启动
+	}
+	mb := total / (1 << 20)
+	if mb < int64(thresholdMB) {
+		return
+	}
+	slog.Warn("启动期状态数据规模偏大，加载与注册可能变慢",
+		"state_size_mb", mb,
+		"threshold_mb", thresholdMB,
+		"log_dir", dir,
+		"suggestion", "考虑降低 log_index 保留/裁剪水位，或检查事件段是否异常增长；"+
+			"本项仅告警，不改变启动行为")
+}
+
 func runWorker() {
 	// Windows 服务默认 cwd=System32，会把 setup 写出的 worker.yml 落到错误位置且重启找不到（FIX-2/3）。
 	// 以服务身份运行时先把工作目录切到 exe 所在的安装目录（与 Linux systemd WorkingDirectory 对齐）。
@@ -355,6 +406,33 @@ func runWorker() {
 	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yml`），缺省自动查找。
 	// 第 1 个参数仅当是「现存的配置文件路径」时才当配置文件；setup 的 --xxx flag 不算（见下自检）。
 	cfgPath := configPathArg()
+
+	// FR-486 启动阶段计时：从这一刻起算「进程启动 → 可服务」。
+	// 放在配置加载之前，使 config 阶段也能被计入；chdir 属于进程初始化噪声，不计入。
+	startupTr := startup.New()
+
+	// FR-486 范围②：启动进度上报器。建在配置之前，但**首次上报要等配置读到 CP 地址**，
+	// 因此先声明、后赋值（见下方 configRead 之后）。nil 表示不启用上报。
+	var startupReporter *startup.Reporter
+	defer func() {
+		if startupReporter != nil {
+			startupReporter.Close()
+		}
+	}()
+
+	// phaseDone 是「记日志 + 上报进度」的统一出口。
+	//
+	// 为什么合成一个函数：两件事必须成对发生——只打日志不上报，面板看不到；
+	// 只上报不打日志，现场排查时日志里没有对应行，两边对不上无法相互印证。
+	// 而且上报是 best-effort（内部吞错），放在这里不会把启动搞坏。
+	phaseDone := func(p startup.Phase) {
+		cost := startupTr.Done(p)
+		logStartupPhase(string(p), cost)
+		snap := startupTr.Snapshot()
+		if startupReporter != nil {
+			startupReporter.Report(p, cost, snap.Elapsed, len(snap.Costs), len(startup.AllPhases()))
+		}
+	}
 
 	// 未配置自检（FR-222，见 ADR-051）：无 worker.yml/.yaml 且无 etc/node-identity.json → 进 setup。
 	// setup 采集入参（TTY 交互 / 无 TTY 参数+env）→ 写 worker.yml + 首注册 + 持久化身份 → 转 run。
@@ -372,6 +450,8 @@ func runWorker() {
 		setupResult = res
 		slog.Info("节点 setup 完成，转入正常运行", "nodeUUID", setupResult.Identity.NodeUUID)
 	}
+
+	startupTr.Begin(startup.PhaseConfig)
 
 	var cfg *workercfg.Config
 	if setupResult != nil {
@@ -450,6 +530,7 @@ func runWorker() {
 		"configPath", configSource,
 		"logIngestTimeZone", cfg.IngestDefaultTimeZone(),
 		"logIngestCharset", cfg.IngestDefaultCharset())
+	phaseDone(startup.PhaseConfig)
 
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
@@ -474,20 +555,43 @@ func runWorker() {
 
 	// 解析并初始化项目自包含数据根（配置 data_dir，缺省 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
 	// 运行态数据全部收口到此根，整体可迁移。参见 ADR-010。
+	startupTr.Begin(startup.PhaseDataRoot)
 	root, err := dataroot.Init(cfg.DataDir)
 	if err != nil {
 		slog.Error("初始化数据根失败", "error", err)
 		os.Exit(1)
 	}
+	phaseDone(startup.PhaseDataRoot)
 
 	// 本地身份提前加载（FR-275，见 ADR-061）：WS 令牌密钥初始值优先取身份文件持久化值
 	// （上次 CP 下发），回退 worker.yml jwt_secret（旧 CP/首装兼容）——须在 WS 服务器构造前
 	// 就绪，消除「注册完成前用旧密钥校验」窗口。注册流程复用本次加载结果，不二次读文件。
 	etcDir := root.EtcDir()
+	startupTr.Begin(startup.PhaseIdentity)
 	localIdentity, idErr := register.LoadIdentity(etcDir)
 	if idErr != nil {
 		slog.Error("读取本地节点身份失败", "error", idErr)
 		os.Exit(1)
+	}
+	phaseDone(startup.PhaseIdentity)
+
+	// FR-486 范围②：启动进度上报器在此创建——此时既有 CP 地址（来自配置），
+	// 也已拿到本地身份（若有）。后续阶段（ingest 加载、注册）的进度才开始上报，
+	// 而这两个阶段正是历史上最慢、最需要被看见的。
+	//
+	// 首装时没有身份，靠 enrollment token 证明；重启时用 uuid+secret。
+	// 两者都没有则 reporter 仍会创建但 CP 会拒绝 → 内部自动禁用，不影响启动。
+	{
+		rc := startup.ReporterConfig{
+			ControlPlaneAddr: cfg.ControlPlane,
+			EnrollToken:      cfg.EnrollToken,
+			NodeName:         nodeName,
+		}
+		if localIdentity != nil {
+			rc.NodeUUID = localIdentity.NodeUUID
+			rc.NodeSecret = localIdentity.NodeSecret
+		}
+		startupReporter = startup.NewReporter(rc)
 	}
 	if setupResult != nil {
 		// setup 刚完成首注册并持久化身份（含 CP 下发的 WS 令牌密钥），直接复用不重读。
@@ -583,6 +687,7 @@ func runWorker() {
 	})
 
 	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
+	startupTr.Begin(startup.PhaseProcessRecover)
 	recovered, recoverErr := manager.RecoverDaemonInstances()
 	if recoverErr != nil {
 		slog.Warn("恢复 daemon 实例失败", "error", recoverErr)
@@ -590,6 +695,7 @@ func runWorker() {
 	if recovered > 0 {
 		slog.Info("已恢复 daemon 实例连接", "count", recovered)
 	}
+	phaseDone(startup.PhaseProcessRecover)
 
 	// 运行期周期孤儿扫描（FR-456）：随 Worker 常驻，持续兜底 wrapper 死/Java 活、direct 孤儿、
 	// docker 残留，按策略处置（默认 warn 只告警，可配 auto 自动清理）。补齐「仅启动时清理」的缺口。
@@ -926,6 +1032,17 @@ func runWorker() {
 	// 未配置 source 时不猜测实例目录；实例生命周期可通过同一 Manager 动态登记。
 	var logIngest *ingest.Manager
 	registeredLogInstanceIDs := manager.ListInstances
+	// FR-486：先按「未配置采集源」登记本阶段，随后若真跑 ingest 会覆盖为真实耗时。
+	//
+	// 为什么要先登记：整个 ingest 块被下面的条件包着，未配置日志源的节点会直接跳过——
+	// 而「本段不存在」与「本段很快」在汇总里必须可区分。否则运维看到汇总里少了
+	// ingest_state_load，会误以为日志漏打，而不是「这台节点没有采集任务」。
+	startupTr.Begin(startup.PhaseIngestStateLoad)
+	if len(cfg.LogSources) == 0 && vlHTTPClient == nil {
+		phaseDone(startup.PhaseIngestStateLoad)
+		slog.Info("日志采集未启用（未配置采集源），跳过采集运行时创建")
+	}
+
 	if len(cfg.LogSources) > 0 || vlHTTPClient != nil {
 		sources := make([]ingest.SourceConfig, 0, len(cfg.LogSources))
 		for _, source := range cfg.LogSources {
@@ -1074,6 +1191,17 @@ func runWorker() {
 		)
 		var manager *ingest.Manager
 		var ingestErr error
+		// FR-486 范围④：加载之前先判规模，超阈即告警（此时还没开始扫表，来得及提示）。
+		warnIfStateTooLarge(root, cfg.StartupStateWarnMB())
+
+		// FR-486 阶段 ingest_state_load：**如实合并**「索引打开 + 状态载入」为一段。
+		//
+		// 为什么不拆成 ingest_index_open / ingest_state_load 两段：openIndex 与 load 都在
+		// ingest.New 内部（闭包这里只调 ingest.New），main 侧拿不到两者的分界。
+		// 拆开需要改 ingest 包的构造流程（增减返回值或加回调），属侵入性改造；
+		// 而本 FR 的首要目标是「先有分段计时」，先合并、按实测热点再决定是否值得拆。
+		// 复查条件：若生产日志显示本段显著偏慢，再回 ingest.New 内部分段（拆子阶段）。
+		// 阶段已在进入本块之前 Begin（见上方「先登记」注释），此处不再重复。
 		for attempt := 1; attempt <= ingestCreateAttempts; attempt++ {
 			manager, ingestErr = newIngest()
 			if ingestErr == nil {
@@ -1085,12 +1213,26 @@ func runWorker() {
 				time.Sleep(time.Duration(attempt) * ingestCreateRetryDelay)
 			}
 		}
+		phaseDone(startup.PhaseIngestStateLoad)
 		if ingestErr != nil {
 			slog.Error("日志采集运行时创建失败：已达重试上限，本次启动不再采集（需告警介入）", "error", ingestErr)
 			register.SetLogIngestHealth(false, ingestErr.Error())
 		} else {
 			logIngest = manager
 			register.SetLogIngestHealth(true, "")
+			// FR-485：日志平台可观测性采集器。与 hostobs 同款——独立 goroutine 周期采样、
+			// 心跳只读快照。放在这里（采集运行时创建成功之后）装配：没有采集面时
+			// 采集器会整组不上报（CP 落 null），而不是报一串 0 假装健康。
+			//
+			// Root 与采集运行时**同源**（root.Base()）：索引与旧 state 文件就落在
+			// <root>/var/log 下，两者若各自推导路径就会在自定义数据目录时对不上，
+			// 表现为「文件 1.2 GB 而平台显示 0」的观测盲区。
+			logMetricsObs := logmetrics.New(
+				logmetrics.Options{Interval: directprobe.HeartbeatInterval, Root: root.Base()},
+				func() (logmetrics.Source, error) { return manager, nil },
+			)
+			logMetricsObs.Start(context.Background())
+			register.SetLogMetricsObserver(logMetricsObs)
 			workerServer.SetInstanceLogCollector(manager)
 			logStack.LogRPC.SetCutoverReadiness(grpcsvc.CutoverReadinessFunc(func() (bool, time.Time, []string) {
 				readiness := manager.PrepareCutoverReadiness()
@@ -1403,6 +1545,7 @@ func runWorker() {
 			regCfg.EnrollToken = cfg.EnrollToken
 		}
 
+		startupTr.Begin(startup.PhaseRegister)
 		res, err := register.RegisterWithRetry(context.Background(), regCfg, 2*time.Second, 60*time.Second)
 		if err != nil {
 			slog.Error("注册到 Control Plane 失败", "error", err)
@@ -1411,6 +1554,12 @@ func runWorker() {
 		regResult = res
 		nodeUUID = regResult.NodeUUID
 		slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
+		// 注册成功后立刻把上报器的凭据切到真实身份：
+		// enrollment token 已在 Register 时被 CP 消费，再拿它上报必然被拒。
+		if startupReporter != nil && regResult != nil {
+			startupReporter.SetIdentity(regResult.NodeUUID, regResult.NodeSecret)
+		}
+		phaseDone(startup.PhaseRegister)
 
 		// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token（FR-080）。
 		// CP 下发的 WS 令牌密钥一并持久化（FR-275，见 ADR-061）。
@@ -1494,6 +1643,34 @@ func runWorker() {
 	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, directprobe.HeartbeatInterval, manager)
 	// 心跳消费同一窗口，不重新读取累计 CPU 计数或推进采样基线。
 	hb.SetCPUReader(cpuSampler)
+	// FR-513：主机级观测（整机 top-N 进程 / 分挂载点磁盘）。
+	//
+	// 独立 goroutine 周期采集，心跳只读快照——整机进程扫描是 O(全部进程) 的重活，
+	// 直接放在心跳路径里会拖慢心跳（而心跳是 CP 判断节点与实例存活的依据）。
+	hostObs := hostobs.New(cfg.HostObserveOptions())
+	hostObs.Start(context.Background())
+	hb.SetHostObserver(hostObs)
+	// FR-003：实例工作目录占用（组配额存储口径的真实来源）。
+	//
+	// 独立 goroutine 周期遍历（默认与心跳同拍 30s），心跳只读快照——目录树遍历是
+	// O(文件数) 的重活，放进心跳路径会把存活判定的依据拖慢。
+	//
+	// 统计范围是**全部已登记实例**（含 STOPPED）：停机实例的目录仍占着盘，配额是磁盘
+	// 用量而不是运行时用量，漏掉它们会让「停几个服」凭空释放配额。
+	dirUsage := dirusage.New(dirusage.FuncSource(func() []dirusage.Target {
+		uuids := manager.ListInstances()
+		targets := make([]dirusage.Target, 0, len(uuids))
+		for _, uuid := range uuids {
+			inst, ok := manager.GetInstance(uuid)
+			if !ok || inst == nil {
+				continue
+			}
+			targets = append(targets, dirusage.Target{UUID: uuid, WorkDir: inst.WorkDir})
+		}
+		return targets
+	}), dirusage.Options{})
+	dirUsage.Start(context.Background())
+	register.SetWorkDirUsageObserver(dirUsage)
 	// 受管运行时快照随反向隧道 Heartbeat 上报；只读取既有 Worker/Bot Worker，不会拉起 Bot 子进程。
 	hb.SetManagedRuntimeProvider(workerServer)
 	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
@@ -1524,8 +1701,24 @@ func runWorker() {
 	hb.SetHealthPolicyApplier(func(p process.HealthPolicy) {
 		healthScanner.SetPolicy(p)
 	})
+	startupTr.Begin(startup.PhaseHeartbeat)
 	hb.Start()
 	defer hb.Stop()
+	phaseDone(startup.PhaseHeartbeat)
+
+	// FR-486：启动完成汇总。
+	//
+	// 这条日志是「进程启动 → 可服务」的**唯一客观终点**，也是后续判断
+	// 「某次启动是否变慢、慢在哪一段」的入口。按耗时降序输出：慢的时候
+	// 第一眼要看到的是「谁最慢」，而不是「谁先跑」。
+	{
+		snap := startupTr.Snapshot()
+		slog.Info("Worker 启动完成",
+			"total_ms", snap.Elapsed.Milliseconds(),
+			"tracked_ms", snap.Tracked.Milliseconds(),
+			"slowest_phase", snap.Slowest.String(),
+			"phases", snap.SortedSummaries())
+	}
 
 	// 常驻反向隧道：把同一 workerServer 实现挂到隧道上，Worker 不监听 CP 直拨 gRPC 端口。
 	tunnelRunner := tunnel.New(cpAddr, nodeUUID, regResult.NodeSecret, func(reg grpc.ServiceRegistrar) {

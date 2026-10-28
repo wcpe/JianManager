@@ -243,6 +243,16 @@ func main() {
 	}
 	// 配置基线下发/漂移/收敛（FR-458）：复用 configSvc.Write。
 	configBaselineSvc := service.NewConfigBaselineService(db, configSvc)
+	// 配置分层覆盖（FR-529）：配置文件 + 各作用域不可变版本链 + 有效值预览（含逐键溯源）。
+	configFileSvc := service.NewConfigFileService(db)
+	// 配置纳管（FR-533）：把磁盘现有配置文件读入为 config_file + 实例级 v1。
+	// 复用 configSvc 的 Discover/Read 作为只读磁盘视图——它只暴露这两个只读方法，
+	// 从类型上保证纳管路径拿不到任何写盘能力。
+	configAdoptSvc := service.NewConfigAdoptService(db, configFileSvc, configSvc)
+	// 配置分批灰度与生效编排（FR-531/532）：交付单状态机 + 逐批放量 + 三种生效方式。
+	// 生效编排复用 Worker 的 ReloadProbeConfig（FR-526 已建好通道，独立 10s 超时）。
+	configActivationSvc := service.NewConfigActivationService(db, pool)
+	configDeliverySvc := service.NewConfigDeliveryService(db, pool, configFileSvc, configActivationSvc, nil)
 	botSvc := service.NewBotService(db, pool)
 	botStressSessionSvc := service.NewBotStressSessionService(db, botSvc)
 	// FR-370 命令压测模板服务。
@@ -281,6 +291,8 @@ func main() {
 	backupSvc.SetStorageService(backupStorageSvc)
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
+	// 审计装配到配置交付（FR-531/532）：熔断与回滚必须留痕（熔断记 actor=system + break_reason）。
+	configDeliverySvc.SetAudit(auditSvc)
 	// Beacon 可选协同（FR-444，见 ADR-090）：未配置 beacon.endpoint 时客户端为 nil、
 	// 服务整体跳过——本平台全部功能不受影响；拉取恒为手动触发，此处不注册任何定时器。
 	// 出站经进程级代理持有者（与其他出站调用同口径，FR-174/185）。
@@ -542,18 +554,81 @@ func main() {
 	crashCorrelationSvc := service.NewCrashCorrelationService(db)
 	crashSnapshotSvc.SetCorrelation(crashCorrelationSvc)
 	// 业务对接编排服务（FR-116，见 ADR-026/027）：经探针桥下发业务命令（domain.action+payload）
-	// 并透传结果，CP 插件无关、降级即默认。JBIS 业务对接平台 M1 脊柱。
+	// 并透传结果，CP 插件无关、降级即默认。FR-521 / ADR-106 起是纯透传通道，不再持有任何业务语义。
 	businessSvc := service.NewBusinessService(db, pool)
-	// 业务事件汇聚服务（FR-116 底座 / FR-122 经济，见 ADR-027/028）：消费同一条插件事件流中
-	// domain 非空的 JBIS 业务事件，按 (domain,dedupKey) 去重落通用 envelope，经济域再维护
-	// node→zone 结构化镜像 + 变更审计（跨区同名玩家不串味/不重复计数）。CP 插件无关。
-	businessEventSvc := service.NewBusinessEventService(db)
+	// 业务批量命令（FR-523 / FR-535 / FR-537）：目标解析 + 跨区风险分级 + confirmToken + 流式进度。
+	// 令牌密钥从主密钥域分离派生（与 Agent 传输票据、压测计划令牌同一套手法），
+	// 明文 JWT 密钥绝不复用为签名密钥。
+	var businessConfirmSigner *service.BusinessConfirmTokenSigner
+	if signer, signerErr := service.NewBusinessConfirmTokenSigner(
+		service.DeriveBusinessConfirmTokenSecret([]byte(cfg.JWT.Secret))); signerErr != nil {
+		slog.Warn("业务批量确认令牌签名器初始化失败，高风险批量预览将不可用", "error", signerErr)
+	} else {
+		businessConfirmSigner = signer
+	}
+	businessBatchSvc := service.NewBusinessBatchService(db, businessSvc, businessConfirmSigner)
+	// 业务对账协调接口（FR-525）：复用批量引擎的目标解析与并发模型，只读透传插件快照。
+	// JM 不做差异计算、不预设动作名、不缓存快照；动作只读校验查 manifest。
+	businessReconcileSvc := service.NewBusinessReconcileService(db, businessSvc)
+	// 桥能力接入（FR-526）：桥状态 / 主题订阅 / 业务域状态，全部经既有插件桥的
+	// `core.*` 治理命令到达探针。域状态带 30s 内存缓存（不落库）。
+	bridgeSvc := service.NewBridgeService(db, pool)
 	// 玩家事件服务（FR-066，见 ADR-016）：订阅各 Worker 的插件事件流（StreamPluginEvents），
 	// 维护实时在线名册并经 SSE 推送给前端（join/quit/chat/cross_server）。
 	playerEventSvc := service.NewPlayerEventService(pool, db)
 	defer playerEventSvc.Stop()
-	// 业务事件分流：同一上行流中 domain 非空的事件交业务汇聚（FR-122），玩家事件不受影响。
-	playerEventSvc.SetBusinessSink(businessEventSvc.Ingest)
+	// 业务事件纯透传通道（FR-522 / FR-536）：与玩家事件服务共用同一条 StreamPluginEvents 消费
+	// （不重复订阅 Worker），domain 非空的事件在这里进内存环形缓冲并经 /business/stream 扇出。
+	// **不落库**：缓冲 30s 或 20 万条双阈值，进程重启即失（真源在插件，镜像在业务台）。
+	businessStreamSvc := service.NewBusinessStreamService(db, nil)
+	playerEventSvc.SetBusinessStream(businessStreamSvc)
+
+	// 业务事件位点账本（ADR-107）：只存投递元数据（streamSeq/seq/dedupKey），**不存 payload**。
+	// 写入完全异步（有界队列，满则丢最旧），扇出热路径只多一次非阻塞入队，投递语义与性能不变。
+	// 关闭后投递路径完全不变，只是缺口不可检测（业务台退化为保守全量对账）。
+	var businessCursorSvc *service.BusinessCursorService
+	var businessCursorWriter *service.BusinessCursorWriter
+	if cfg.BusinessCursor.Enabled {
+		businessCursorWriter = service.NewBusinessCursorWriter(db, service.BusinessCursorWriterOptions{
+			QueueSize: cfg.BusinessCursor.QueueSize,
+			BatchSize: cfg.BusinessCursor.BatchSize,
+		})
+		businessCursorWriter.Start()
+		// 停机时先 flush 剩余位点再退出：位点丢一条就少一条可检测的缺口，
+		// 而队列里通常只有最近 1 秒的数据，代价可忽略。
+		defer businessCursorWriter.Close()
+		businessStreamSvc.SetCursorWriter(businessCursorWriter)
+
+		businessCursorSvc = service.NewBusinessCursorService(db, cfg.BusinessCursor.RetentionDays)
+		businessCursorSvc.Start()
+		defer businessCursorSvc.Stop()
+		slog.Info("业务事件位点账本已启用",
+			"retentionDays", businessCursorSvc.RetentionDays(),
+			"queueSize", businessCursorWriter.Capacity())
+	} else {
+		slog.Info("业务事件位点账本已禁用（business_cursor.enabled=false），缺口不可检测")
+	}
+
+	// 配置交付的离线补推（FR-531 §8.2）：探针（重）连入时把该实例上 deferred 的目标补推一次。
+	// 挂在玩家事件服务的 connected 钩子上——那里是全平台唯一消费探针 connected 事件的地方。
+	// 钩子必须非阻塞，故这里起独立 goroutine：补推涉及合并配置 + 落盘 + 生效，可能耗时数秒，
+	// 绝不能在事件流读循环里同步执行，否则会拖住该节点所有实例的实时事件。
+	playerEventSvc.SetProbeConnectedHook(func(instanceUUID string) {
+		go configDeliverySvc.HandleProbeConnected(instanceUUID)
+		// 探针连入时清掉域状态缓存：否则 bridge/status（实时）已说 connected=true，
+		// 而 business/status 的 30s 缓存还停在离线时的 probeConnected=false + stale=true，
+		// 同一实例两块面板自相矛盾（真机验收发现）。清缓存只是删 map 键，同步做即可。
+		bridgeSvc.InvalidateOnProbeConnected(instanceUUID)
+	})
+	// 生效编排的两个生产依赖（setter 注入：二者构造顺序与配置服务无关）：
+	//   - restart 方式复用 InstanceService.Restart：**必须用 Restart 而不是 Stop+Start**——
+	//     停/起都是异步委托，Stop 返回时实例仍在 STOPPING，紧接着的 Start 会撞上启动预检
+	//     （实例状态非法）而直接失败；Restart 在 Worker 侧一次完成停→起，语义才对得上。
+	//   - 探针连通判定取 FR-066 在线名册（与 probeUpdateSvc 同一口径）。
+	configActivationSvc.SetRestarter(func(inst *model.Instance) error {
+		return instanceSvc.Restart(inst.ID)
+	})
+	configActivationSvc.SetProbeConnectedChecker(playerEventSvc.IsProbeConnected)
 
 	// 探针在线更新服务（FR-068/409）：Worker 从 CP 本地 CAS 拉取已选 jar，
 	// 不再经 gRPC 传输探针字节。复用 pluginBridgeSvc 重新生成探针 config 的 bridge 段（实例级 token）；
@@ -606,6 +681,21 @@ func main() {
 	// JDKService 据此把 JDK 安装改为异步（建任务→Worker 启动即返回 taskId）。
 	notificationSvc := service.NewNotificationService(db)
 	taskSvc := service.NewTaskService(db)
+	// FR-490/493 平台审批中心：票据 + 执行器。
+	// 执行器注入 taskSvc：长操作经 RunAsync 承载，避免出现第二条互不相识的异步链路。
+	approvalSvc := service.NewApprovalService(db)
+	// 执行器：批准后由路由层触发。注入 taskSvc 使长操作经 RunAsync 承载，
+	// 避免出现两条互不相识的异步链路。
+	approvalExec := service.NewApprovalExecutor(db, approvalSvc, taskSvc)
+	// 执行前目标漂移校验（FR-491）：批准的是「那一刻的那件事」，
+	// 从批准到执行之间目标被改过（改名 / 换节点 / 换二进制等都会推进 updated_at），
+	// 就不能把批准人的授权挪用去执行另一件事。此前 SetTargetVerifier 只有定义、
+	// 从未被调用，漂移校验实际不生效——这里把它接上。
+	approvalExec.SetTargetVerifier(service.VerifyTargetDrift(instanceSvc, nodeSvc))
+	// 到期巡检：读取路径有惰性判定，但没人看的过期票会一直留在待审列表里，
+	// 巡检负责把它们收口（两条互补，缺一条就有残留）。
+	approvalSvc.StartExpiryLoop()
+	defer approvalSvc.Stop()
 	taskSvc.SetNotificationService(notificationSvc)
 	jdkSvc.SetTaskService(taskSvc)
 	pmConfigSvc.SetTaskService(taskSvc) // FR-307 全局包异步安装走任务中心
@@ -641,7 +731,7 @@ func main() {
 	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397/398 依赖服务全部就绪。
 	// Handler 不再持有 AgentTokenService（授权由 middleware.AgentAuth 前置完成），
 	// Agent 依赖只经 ToolDeps 供工具解析可信目标。
-	mcpHandler := mcp.NewHandler(mcpConns, mcp.ToolDeps{
+	mcpToolDeps := mcp.ToolDeps{
 		Instance:  instanceSvc,
 		Node:      nodeSvc,
 		Log:       logSvc,
@@ -672,17 +762,35 @@ func main() {
 		// 群组服 Network 软标签与代理注册（FR-032 / FR-335）：群组管理与拓扑图数据。
 		Network:      networkSvc,
 		Registration: registrationSvc,
+		// FR-492 高危操作的审批拦截点。
+		//
+		// 这一行漏了不会编译报错，只会让**所有**高危 MCP 工具在调用时被判「审批服务未装配」
+		// 并无条件失败关闭——表现像审批功能整体不可用，实际只是装配漏了一个字段。
+		// 真机验证「批准后副作用是否发生」时必须先确认这里接上了。
+		Approval: approvalSvc,
 		// FR-398：Bot 舰队与压测编排复用管理面同一批 service 实例，不另建策略副本。
-		Bot:           botSvc,
-		LoadTemplate:  botLoadTemplateSvc,
-		StressSession: botStressSessionSvc,
-		Preflight:     botLoadSvcs.preflight,
-		Execution:     botLoadSvcs.execution,
-		Projection:    botLoadProjectionSvc,
-		Report:        botLoadReportSvc,
-		Capacity:      botLoadSvcs.capacity,
-		Metrics:       botLoadMetricSampler,
-	}, agentCallLogSvc)
+		// 助手概览类只读（FR-544 补回）：按调用者 RBAC 收敛的聚合摘要。
+		AssistantOverview: service.NewAssistantOverviewService(db, authzSvc),
+		Bot:               botSvc,
+		LoadTemplate:      botLoadTemplateSvc,
+		StressSession:     botStressSessionSvc,
+		Preflight:         botLoadSvcs.preflight,
+		Execution:         botLoadSvcs.execution,
+		Projection:        botLoadProjectionSvc,
+		Report:            botLoadReportSvc,
+		Capacity:          botLoadSvcs.capacity,
+		Metrics:           botLoadMetricSampler,
+	}
+	mcpHandler := mcp.NewHandler(mcpConns, mcpToolDeps, agentCallLogSvc)
+	// 助手调用平台工具的执行入口（FR-544）：按用户权限派生身份后走 MCP 的 CallTool。
+	//
+	// 关键点：助手**不另建执行路径**，审批拦截/能力判定/scope 校验/精确确认
+	// 全部复用 MCP 那一套；这里只负责把「人类用户」翻译成合法的调用身份。
+	mcp.SetAssistantExecutorResolver(func() func(ctx context.Context, owner uint, name string, args map[string]any) (string, error) {
+		return func(ctx context.Context, owner uint, name string, args map[string]any) (string, error) {
+			return mcp.CallToolAsOwner(authzSvc, mcpToolDeps, ctx, owner, name, args)
+		}
+	})
 	// 制品存量迁移（FR-348）：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
 	// RecoverOrphans 清扫 CP 重启滞留的非终态迁移任务，保证在途判定即真相。
 	artifactMigrationSvc := service.NewArtifactMigrationService(db, root, artifactStorageSvc, taskSvc)
@@ -693,6 +801,14 @@ func main() {
 	// 统一通知中心（FR-216，见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
 	// 为一条通知流，页眉单铃铛 + 通知中心页消费。不新建表，标记已读下推到各源既有服务。
 	notificationFeedSvc := service.NewNotificationFeedService(db, notificationSvc, alertSvc)
+
+	// 对外只读统计契约（FR-527）：六组 /stats/* 端点，只出通道与基础设施维度。
+	// 探针连接判定复用 PlayerEventService 的在线名册，避免为 overview 的 probes 计数
+	// 另建一份「探针是否在线」的状态（两份状态必然漂移）。
+	statsSvc := service.NewStatsService(db)
+	if playerEventSvc != nil {
+		statsSvc.SetProbeConnected(playerEventSvc.IsProbeConnected)
+	}
 
 	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
 	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
@@ -729,6 +845,55 @@ func main() {
 	if err := assistantSvc.ApplyStoredEgress(); err != nil {
 		slog.Warn("AI 出站放行段装配失败，将按「不放行任何私网」运行", "error", err)
 	}
+	// AI 助手对话运行时（FR-515 Phase D）：会话/消息/run/事件 + SSE 观察流。
+	// 复用同一个 AssistantService：凭据解析与出站准入必须与配置面同源，
+	// 否则「配置页测试通过、实际对话连不上」这类故障无法自查。
+	assistantChatSvc := service.NewAssistantChatService(db, assistantSvc)
+	// 技能装载（FR-541）：扫描数据根 var/skills，把结果缓存在服务上。
+	// 装载失败的技能会记 WARN 日志——否则「我放了技能却没有」无从解释。
+	assistantChatSvc.SetSkillsRoot(root.SkillsDir())
+	// FR-517 外部 MCP 连接管理：出站复用同一套受保护 Guard（含 dev 明文放行），
+	// 凭据复用同一把主密钥；自环检测登记本平台监听地址。
+	assistantMCPSvc := service.NewAssistantMCPService(db, keyEncryptor)
+	assistantMCPSvc.SetAllowInsecure(cfg.Server.DevMode)
+	assistantMCPSvc.SetGuardFactory(func(origins []httpclient.AllowedOrigin) *httpclient.Guard {
+		return httpclient.NewGuard(httpclient.GuardOptions{
+			AllowPrivate:          nil,
+			AllowInsecure:         cfg.Server.DevMode,
+			Timeout:               30 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			Proxy:                 cfg.Proxy,
+			AllowedOrigins:        origins,
+		})
+	})
+	assistantMCPSvc.SetSelfAddrs([]string{
+		fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
+		fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port),
+		fmt.Sprintf("localhost:%d", cfg.Server.Port),
+	})
+	// Start 做启动回收：把上一进程遗留的非终态 run 一律置 interrupted 并补 run_end，
+	// 否则会话的活跃槽会被永久占住（§8）。V1 只支持单 CP 实例，正是这条回收的前提（§8.1）。
+	// FR-517 闭环：把外部 MCP 连接服务接进运行时，外部工具才会进工具目录。
+	// 顺序在 Start 之前：Start 会立即回收遗留 run，那些 run 若带工具调用，
+	// 执行器需要已经能看到外部工具。
+	assistantChatSvc.SetMCPService(assistantMCPSvc)
+	// FR-516 工具覆盖度：把领域服务接进助手执行层。
+	// 必须在装配阶段注入而非服务内构造——InstanceService 的启停要经 spawnDelegate
+	// 下发到 Worker，依赖构造期注入的 ClientPool；就地 new 会拿到 pool=nil 的空壳，
+	// 表现为「助手说已启动、实例实际没动」。
+	assistantChatSvc.SetDomainServices(instanceSvc, nodeSvc)
+	assistantChatSvc.Start()
+	// FR-516 §6.2 崩溃恢复：把上一进程遗留的 in_flight 回执标为 unverified。
+	// 语义是「已可能产生副作用，不得重放、也不得当成功」——必须如实标未知，
+	// 让用户人工核实；静默当失败重试会造成重复写入。
+	if n, err := assistantChatSvc.RecoverInFlightReceipts(); err != nil {
+		slog.Warn("助手运行时：回收 in_flight 回执失败", "error", err)
+	} else if n > 0 {
+		slog.Info("助手运行时：已把遗留的 in_flight 回执标为 unverified", "count", n)
+	}
+	// Stop 取消在途 run 并等待执行体退出，让收尾（run_end + 清 active_run_id）跑完，
+	// 而不是被随后的 SIGKILL 打断在半途。
+	defer assistantChatSvc.Stop()
 	// GitHub API 令牌改从设置面板读生效值（github.token，DB > update.github_token 基线）：
 	// 自更新与 ServerProbe 制品版本库同步共用同一读取器，保存即生效、无需重启（FR-409）。
 	githubTokenReader := func() string { return settingsSvc.EffectiveValue(service.SettingKeyGitHubToken) }
@@ -834,6 +999,8 @@ func main() {
 		Plugin:         pluginSvc,
 		Player:         playerSvc,
 		PlayerEvent:    playerEventSvc,
+		BusinessStream: businessStreamSvc,
+		BusinessCursor: businessCursorSvc,
 		ServerState:    serverStateSvc,
 		CrashSnapshot:  crashSnapshotSvc,
 		BinaryVersion:  binaryVersionSvc,
@@ -841,11 +1008,16 @@ func main() {
 		Quota:                   quotaEnforcerSvc,
 		Snapshot:                snapshotSvc,
 		Business:                businessSvc,
-		BusinessEvent:           businessEventSvc,
+		BusinessBatch:           businessBatchSvc,
+		BusinessReconcile:       businessReconcileSvc,
+		Bridge:                  bridgeSvc,
 		Config:                  configSvc,
 		ConfigSource:            configSourceSvc,
 		InstanceRolling:         instanceRollingSvc,
 		ConfigBaseline:          configBaselineSvc,
+		ConfigFile:              configFileSvc,
+		ConfigAdopt:             configAdoptSvc,
+		ConfigDelivery:          configDeliverySvc,
 		Bot:                     botSvc,
 		BotStressSession:        botStressSessionSvc,
 		BotLoadCapacity:         botLoadSvcs.capacity,
@@ -867,6 +1039,8 @@ func main() {
 		ArtifactReconcile:       artifactReconcileSvc,
 		Template:                templateSvc,
 		Audit:                   auditSvc,
+		Approval:                approvalSvc,
+		ApprovalExec:            approvalExec,
 		Authz:                   authzSvc,
 		Event:                   eventSvc,
 		Asset:                   assetSvc,
@@ -888,6 +1062,8 @@ func main() {
 		PlatformObservability:   platformObservabilitySvc,
 		Settings:                settingsSvc,
 		Assistant:               assistantSvc,
+		AssistantChat:           assistantChatSvc,
+		AssistantMCP:            assistantMCPSvc,
 		OrphanRuntime:           orphanRuntimeSvc,
 		BotReclaim:              botReclaimSvc,
 		ProbeUpdate:             probeUpdateSvc,
@@ -922,6 +1098,7 @@ func main() {
 		Task:             taskSvc,
 		Notification:     notificationSvc,
 		NotificationFeed: notificationFeedSvc,
+		Stats:            statsSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

@@ -18,6 +18,8 @@ package httpclient
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -59,6 +61,58 @@ type GuardOptions struct {
 	// NoProxy 兜底：Proxy.URL 为空但显式配了 no_proxy 时，用它判断哪些目标仍会
 	// 经环境变量代理出站。
 	NoProxy string
+
+	// AllowedOrigins 精确 origin + CIDR 的绑定放行（FR-517 §3 前置任务①）。
+	//
+	// 为什么不能只用 AllowPrivate：`AllowPrivate` 是「整段私网都放行」，
+	// 而外部 MCP 连接要的是「只有这一个 origin（scheme+host+port）可以走，
+	// 且它的 IP 必须落在这几条 CIDR 里」。前者一旦放行 10.0.0.0/8，
+	// 同网段的其它服务（数据库、内部面板）就一并可达了。
+	AllowedOrigins []AllowedOrigin
+
+	// ── 协议预算（FR-517 §3 前置任务②）──
+	//
+	// 都是 0 表示不额外限制（沿用 Timeout 的整体超时）。外部 MCP 是**不可信上游**，
+	// 一个不换行的响应或永不结束的 SSE 流会把连接占死，故这些预算必须可配。
+
+	// ResponseHeaderTimeout 等待响应头的上限。
+	ResponseHeaderTimeout time.Duration
+	// StreamIdleTimeout 流式响应**两帧之间**的空闲上限。
+	// 与整体 Timeout 分开：长连接场景下整体超时要么太短（误杀正常长任务），
+	// 要么太长（坏上游占住连接）。
+	StreamIdleTimeout time.Duration
+	// MaxResponseBytes 单次响应体上限；超出即失败（不截断后当成功）。
+	MaxResponseBytes int64
+	// MaxEventLineBytes 单行事件上限（防「一个不换行的巨大 data 行」吃满内存）。
+	MaxEventLineBytes int
+
+	// ── TLS 基线（FR-517 §5.2）──
+	//
+	// **刻意不提供 InsecureSkipVerify 开关**：受保护出站的目标是「把业务数据与
+	// 供应商凭据送出公网」，关掉证书校验等于把中间人攻击变成默认可用配置。
+	// 需要自签证书的自托管端点应通过 TLSRootCAs 显式注入信任锚，而不是放弃校验。
+
+	// TLSMinVersion 最低 TLS 版本；0 表示用 TLS1.2（不给「降到 TLS1.0」留口子）。
+	// 显式而不是沿用 Go 默认：默认值会随 Go 版本演进，安全基线不该由编译器版本决定。
+	TLSMinVersion uint16
+	// TLSRootCAs 额外的信任锚（自签/私有 CA 场景）。为 nil 时只用系统根证书。
+	TLSRootCAs *x509.CertPool
+}
+
+// AllowedOrigin 一条精确 origin 放行规则（FR-517）。
+//
+// 语义：「scheme://host:port 这个目标可以访问，但它解析出的 IP 必须命中 CIDRs 之一」。
+// 两条同时满足才放行——只绑 origin 不校验 IP 挡不住 DNS rebinding，
+// 只校验 IP 不绑 origin 则等于又退回「整段私网放行」。
+type AllowedOrigin struct {
+	// Scheme 小写 scheme（http / https）。
+	Scheme string
+	// Host 小写主机名或 IP 字面量（不含端口）。
+	Host string
+	// Port 端口（默认按 scheme 取 80/443）。
+	Port int
+	// CIDRs 该 origin 允许解析到的地址段。空表示不允许（宁可拒绝也不默认放行）。
+	CIDRs []netip.Prefix
 }
 
 // 受保护出站默认值。数值与 spec §6 冻结的预算一致。
@@ -116,19 +170,134 @@ func NewGuard(opts GuardOptions) *Guard {
 	}
 }
 
+// tlsMinVersion 把 GuardOptions.TLSMinVersion 归一成实际生效的最低版本。
+//
+// 0 视为 TLS1.2；显式传更低的值（TLS1.0/1.1）会被**抬到 TLS1.2**而不是照办——
+// 那两版已被 RFC 8996 弃用，允许配置它们等于给降级攻击留一个「管理员自己开的」口子。
+func tlsMinVersion(configured uint16) uint16 {
+	if configured < tls.VersionTLS12 {
+		return tls.VersionTLS12
+	}
+	return configured
+}
+
 // Client 返回受保护出站 *http.Client。
 //
 // 该 client 的 Transport 不做通用代理转发：目标域若命中进程代理且该代理模式无法固定
 // 目标 IP，请求会在发起前被拒绝（ErrProxyUnsupported），而不是悄悄直连。
 func (g *Guard) Client() *http.Client {
+	return g.clientWithProxy(nil)
+}
+
+// TLSConnectionState 报告一次请求实际协商出的 TLS 参数（FR-517 §5.2 验证面）。
+//
+// 为什么需要它：`MinVersion` 只约束「协商的下限」，证明「这条链路确实走了
+// TLS1.2+ 且确实协商到 HTTP/2」需要**观察到实际结果**，而不是读配置自证。
+// 返回零值表示该连接未使用 TLS（明文 http 或连接复用自非 TLS 池）。
+//
+// 判据取 `resp.TLS`：它是本次响应对应连接的真实握手结果，不是配置回显。
+func (g *Guard) TLSConnectionState(resp *http.Response) TLSState {
+	if resp == nil || resp.TLS == nil {
+		return TLSState{}
+	}
+	return TLSState{
+		Enabled:     true,
+		Version:     resp.TLS.Version,
+		VersionName: tlsVersionName(resp.TLS.Version),
+		CipherSuite: tls.CipherSuiteName(resp.TLS.CipherSuite),
+		ServerName:  resp.TLS.ServerName,
+		// HTTP/2 在 Go 里由 Transport 的 ALPN 协商决定；响应 Proto 是它的观测面。
+		Proto:              resp.Proto,
+		HTTP2:              resp.ProtoMajor == 2,
+		NegotiatedProtocol: resp.TLS.NegotiatedProtocol,
+	}
+}
+
+// TLSState 一次连接实际协商出的 TLS 参数（FR-517）。
+type TLSState struct {
+	// Enabled 该连接是否使用 TLS。
+	Enabled bool `json:"enabled"`
+	// Version 数值型 TLS 版本（如 0x0303）。
+	Version uint16 `json:"version,omitempty"`
+	// VersionName 可读版本名（TLS 1.2 / TLS 1.3）。
+	VersionName string `json:"versionName,omitempty"`
+	// CipherSuite 协商的密码套件名。
+	CipherSuite string `json:"cipherSuite,omitempty"`
+	// ServerName SNI。
+	ServerName string `json:"serverName,omitempty"`
+	// Proto 响应协议（HTTP/1.1 或 HTTP/2.0）。
+	Proto string `json:"proto,omitempty"`
+	// HTTP2 是否协商到 HTTP/2。
+	HTTP2 bool `json:"http2"`
+	// NegotiatedProtocol ALPN 协商结果（h2 / http/1.1）。
+	NegotiatedProtocol string `json:"negotiatedProtocol,omitempty"`
+}
+
+// tlsVersionName 把数值版本转成可读名（未知返回空串，不猜）。
+func tlsVersionName(v uint16) string {
+	switch v {
+	case tls.VersionTLS10:
+		return "TLS 1.0"
+	case tls.VersionTLS11:
+		return "TLS 1.1"
+	case tls.VersionTLS12:
+		return "TLS 1.2"
+	case tls.VersionTLS13:
+		return "TLS 1.3"
+	default:
+		return ""
+	}
+}
+
+// ClientWithProxyEnv 返回「跟随进程环境代理」的受保护客户端（FR-539 的 `env` 模式）。
+//
+// 与 Client() 的唯一差异是 Transport.Proxy = http.ProxyFromEnvironment。
+// **准入判定完全不变**：仍然只允许 https、仍然拦截未放行的私网目标——
+// 「走代理」不能变成绕过准入的旁路。
+//
+// 注意一个无法回避的限制：经代理出站时，我们无法在本地解析并固定目标 IP，
+// 因此 DialContext 里对目标地址的预校验只能覆盖「代理自身地址」；
+// 目标判定改由「配置阶段校验 + 只允许 https」承担。这也是为什么该模式
+// **默认不是直连**，而必须由管理员显式选择——把风险摆到明面上。
+func (g *Guard) ClientWithProxyEnv() *http.Client {
+	return g.clientWithProxy(http.ProxyFromEnvironment)
+}
+
+// ClientWithProxy 返回经固定代理出站的受保护客户端（FR-539 的 `custom` 模式）。
+//
+// 代理只决定「连到哪里」，不放松准入；代理地址本身同样受 https/私网策略约束
+// （在配置阶段由 ValidateProxyURL 先挡一道）。
+func (g *Guard) ClientWithProxy(proxyURL *url.URL) *http.Client {
+	if proxyURL == nil {
+		return g.Client()
+	}
+	fixed := proxyURL
+	return g.clientWithProxy(func(*http.Request) (*url.URL, error) { return fixed, nil })
+}
+
+// clientWithProxy 是三个入口的唯一实现。
+//
+// proxyFn 为 nil 时显式禁用代理（不读环境变量）——这是刻意的：
+// 受保护出站的目标准入不能被环境变量代理绕过。
+func (g *Guard) clientWithProxy(proxyFn func(*http.Request) (*url.URL, error)) *http.Client {
 	tr := &http.Transport{
-		// 显式不用 ProxyFromEnvironment：受保护出站的目标准入不能被环境变量代理绕过。
-		Proxy:               nil,
+		Proxy:               proxyFn,
 		DialContext:         g.dialContext,
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        32,
 		IdleConnTimeout:     60 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
+		// TLS 基线显式固定（FR-517 §5.2）：不显式给 MinVersion 就等于
+		// 把「最低可接受版本」交给 Go 的默认值，而默认值会随版本演进。
+		// 受保护出站送的是供应商凭据与业务数据，这条基线不该由编译器版本决定。
+		// 注意：这里**不提供** InsecureSkipVerify 入口（见 GuardOptions 说明）。
+		TLSClientConfig: &tls.Config{
+			MinVersion: tlsMinVersion(g.opts.TLSMinVersion),
+			RootCAs:    g.opts.TLSRootCAs,
+		},
+		// FR-517 §5.2：等响应头的独立上限。慢速上游可以让连接一直挂在「等头部」，
+		// 整体 Timeout 很长时这会把连接池耗尽。
+		ResponseHeaderTimeout: g.opts.ResponseHeaderTimeout,
 	}
 	client := &http.Client{Transport: tr, Timeout: g.opts.Timeout}
 	// 默认不跟随重定向：一次 302 就能把已校验的公网目标换成内网地址，
@@ -192,7 +361,7 @@ func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn
 	if g.proxyAppliesTo(host) {
 		return nil, ErrProxyUnsupported
 	}
-	ips, err := g.resolveAllowed(ctx, host)
+	ips, err := g.resolveAllowedForOrigin(ctx, host, port)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +391,98 @@ func (g *Guard) proxyAppliesTo(host string) bool {
 	}
 	// no_proxy 命中则直连，代理不接管。
 	return !g.noProxy(host, "")
+}
+
+// resolveAllowedForOrigin 解析主机并校验，优先按 **origin 绑定**规则判定。
+//
+// 有匹配的 AllowedOrigin 时，只认它自己的 CIDR——即使 AllowPrivate 放行了更宽的网段，
+// 也不会因此让这个 origin 走到规则的地址上。这是「精确 origin + CIDR」与
+// 「整段私网开关」的关键区别（FR-517 §3 前置任务①）。
+func (g *Guard) resolveAllowedForOrigin(ctx context.Context, host, port string) ([]netip.Addr, error) {
+	origin, ok := g.matchAllowedOrigin(host, port)
+	if !ok {
+		return g.resolveAllowed(ctx, host)
+	}
+	var addrs []netip.Addr
+	if ip, perr := netip.ParseAddr(host); perr == nil {
+		addrs = []netip.Addr{ip}
+	} else {
+		resolved, rerr := g.lookup(ctx, host)
+		if rerr != nil {
+			return nil, fmt.Errorf("解析目标主机失败: %w", rerr)
+		}
+		if len(resolved) == 0 {
+			return nil, fmt.Errorf("%w: 目标主机无解析结果", ErrBlockedTarget)
+		}
+		addrs = resolved
+	}
+	for _, ip := range addrs {
+		// 元数据/特殊地址即使在该 origin 的 CIDR 内也永远拒绝：
+		// 那是「拿到主机身份凭据」的代价，不该因为放行规则写宽了就漏出去。
+		for _, p := range metadataPrefixes {
+			if p.Contains(ip) {
+				return nil, fmt.Errorf("%w: 拒绝访问云元数据地址 %s", ErrBlockedTarget, ip)
+			}
+		}
+		if ip.IsUnspecified() || ip.IsMulticast() {
+			return nil, fmt.Errorf("%w: 拒绝访问特殊地址 %s", ErrBlockedTarget, ip)
+		}
+		allowed := false
+		for _, p := range origin.CIDRs {
+			if p.Contains(ip) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			// 任一地址不在该 origin 的 CIDR 内即整体拒绝（不挑一个能用的）：
+			// 否则让域名多解析一条内网记录就绕过了 binding。
+			return nil, fmt.Errorf("%w: %s 不在 origin %s 的放行地址段内", ErrBlockedTarget, ip, host)
+		}
+	}
+	return addrs, nil
+}
+
+// matchAllowedOrigin 找匹配该 host:port 的 origin 规则。
+func (g *Guard) matchAllowedOrigin(host, port string) (AllowedOrigin, bool) {
+	host = strings.ToLower(host)
+	for _, o := range g.opts.AllowedOrigins {
+		if !strings.EqualFold(o.Host, host) {
+			continue
+		}
+		wantPort := o.Port
+		if wantPort == 0 {
+			switch strings.ToLower(o.Scheme) {
+			case "http":
+				wantPort = 80
+			case "https":
+				wantPort = 443
+			}
+		}
+		if wantPort != 0 && wantPort != atoiSafe(port) {
+			continue
+		}
+		return o, true
+	}
+	return AllowedOrigin{}, false
+}
+
+// atoiSafe 宽松解析端口（失败返回 0，交由后续比较判不等）。
+func atoiSafe(s string) int {
+	n := 0
+	if s == "" {
+		return 0
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+		if n > 65535 {
+			return 0
+		}
+	}
+	return n
 }
 
 // resolveAllowed 解析主机并逐地址做准入校验。
