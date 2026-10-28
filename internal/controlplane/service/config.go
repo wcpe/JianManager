@@ -266,6 +266,9 @@ func (s *ConfigService) WriteFields(instanceID uint, filePath string, updates ma
 }
 
 // Write 保存新版本；可选回滚源 versionID。
+//
+// FR-530 起向 Worker 传 expectedHash，由 Worker 落盘后读回比对：
+// 只有磁盘上真的写入了这份内容才算成功，否则返回 WRITE_VERIFY_FAILED。
 func (s *ConfigService) Write(instanceID uint, filePath, content, message string, authorID uint, rollbackOfVersionID *uint) (uint, map[string]any, error) {
 	inst, client, err := s.client(instanceID)
 	if err != nil {
@@ -273,18 +276,28 @@ func (s *ConfigService) Write(instanceID uint, filePath, content, message string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	resp, err := client.Worker.WriteConfig(ctx, &workerpb.WriteConfigRequest{InstanceUuid: inst.UUID, Path: filePath, Content: content})
+	h := sha256.Sum256([]byte(content))
+	expectedHash := hex.EncodeToString(h[:])
+	resp, err := client.Worker.WriteConfig(ctx, &workerpb.WriteConfigRequest{
+		InstanceUuid: inst.UUID,
+		Path:         filePath,
+		Content:      content,
+		ExpectedHash: expectedHash,
+	})
 	if err != nil {
 		return 0, nil, fmt.Errorf("写入配置失败: %w", err)
 	}
 	if !resp.Success {
+		// error_code 带上原因码，便于上层区分「路径非法」与「落盘校验失败」。
+		if resp.ErrorCode != "" {
+			return 0, validationMap(resp.Validation), fmt.Errorf("%s: %s", resp.ErrorCode, resp.Error)
+		}
 		return 0, validationMap(resp.Validation), errors.New(resp.Error)
 	}
-	h := sha256.Sum256([]byte(content))
 	ver := model.InstanceConfigVersion{
 		InstanceID:          instanceID,
 		FilePath:            filePath,
-		ContentHash:         hex.EncodeToString(h[:]),
+		ContentHash:         expectedHash,
 		Content:             content,
 		Message:             message,
 		AuthorID:            authorID,

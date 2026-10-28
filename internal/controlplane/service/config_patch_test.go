@@ -67,6 +67,104 @@ func TestPatchConfig_YAMLCreatesMissingLeaf(t *testing.T) {
 	}
 }
 
+// TestPatchConfig_YAMLRefusesToClobberMapping 验证「把标量写到映射上」会被拒绝而不是覆盖。
+//
+// 实测过的破坏形态：BungeeCord 的 `servers` 是「子服名 → 属性」的映射，早期 schema 把它
+// 当成一个字符串字段渲染；用户一旦在表单里改这个输入框并保存，两台后端连同它们的
+// address/motd/restricted 会被整段替换成 `servers: 'lobby: localhost:25566'`，
+// 而界面上只显示「保存成功」。
+func TestPatchConfig_YAMLRefusesToClobberMapping(t *testing.T) {
+	src := `servers:
+  lobby:
+    address: localhost:25566
+    motd: 'lobby'
+  game1:
+    address: localhost:25567
+    motd: 'game'
+`
+	out, err := patchConfig("yaml", src, []fieldUpdate{
+		{Key: "servers", Value: "lobby: localhost:25566", Type: "string"},
+	})
+	if err == nil {
+		t.Fatalf("把标量写到映射上应报错，实际成功并产出:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "映射") {
+		t.Errorf("错误信息应说明该键是映射，实际: %v", err)
+	}
+}
+
+// TestPatchConfig_YAMLRefusesToClobberSequence 验证「把标量写到列表上」会被拒绝。
+//
+// 实测过的破坏形态：`permissions.default` 在真实配置里是 `- 节点` 列表，被当成逗号分隔
+// 字符串编辑后保存，列表里第一个之后的条目全部丢失。
+func TestPatchConfig_YAMLRefusesToClobberSequence(t *testing.T) {
+	src := `permissions:
+  default:
+  - bungeecord.command.server
+  - bungeecord.command.list
+`
+	out, err := patchConfig("yaml", src, []fieldUpdate{
+		{Key: "permissions.default", Value: "bungeecord.command.server", Type: "string"},
+	})
+	if err == nil {
+		t.Fatalf("把标量写到列表上应报错，实际成功并产出:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "列表") {
+		t.Errorf("错误信息应说明该键是列表，实际: %v", err)
+	}
+}
+
+// TestPatchConfig_YAMLSequenceSingleItemDescends 验证「列表只有一个元素」时能安全进项改写。
+//
+// BungeeCord 的 `listeners.host` 位于列表项内部。绝大多数部署只有一个监听器，
+// 此时语义无歧义，应当正常改写 host 并**保留同项的其它字段**（此前会把整块监听器配置
+// 从列表变成映射，motd/max_players/query_port 全部丢失）。
+func TestPatchConfig_YAMLSequenceSingleItemDescends(t *testing.T) {
+	src := `listeners:
+- host: 0.0.0.0:25577
+  motd: '&1BungeeCord'
+  max_players: 1
+  query_port: -1
+ip_forward: false
+`
+	out, err := patchConfig("yaml", src, []fieldUpdate{
+		{Key: "listeners.host", Value: "0.0.0.0:25578", Type: "string"},
+	})
+	if err != nil {
+		t.Fatalf("单元素列表应可安全写入，实际报错: %v", err)
+	}
+	if !strings.Contains(out, "0.0.0.0:25578") {
+		t.Errorf("host 未更新:\n%s", out)
+	}
+	// 关键：同项的其它字段必须全部保留。
+	for _, keep := range []string{"motd", "max_players", "query_port", "ip_forward"} {
+		if !strings.Contains(out, keep) {
+			t.Errorf("同项字段 %q 被破坏:\n%s", keep, out)
+		}
+	}
+}
+
+// TestPatchConfig_YAMLSequenceMultiItemRefuses 验证「列表有多个元素」时拒绝写入而不是替用户猜。
+//
+// 多个监听器时「改哪一个」没有正确答案，报错让用户改用文本模式，比默默改第一个安全。
+func TestPatchConfig_YAMLSequenceMultiItemRefuses(t *testing.T) {
+	src := `listeners:
+- host: 0.0.0.0:25577
+  motd: 'a'
+- host: 0.0.0.0:25578
+  motd: 'b'
+`
+	out, err := patchConfig("yaml", src, []fieldUpdate{
+		{Key: "listeners.host", Value: "0.0.0.0:25579", Type: "string"},
+	})
+	if err == nil {
+		t.Fatalf("多元素列表应报错而不是猜一个改，实际成功并产出:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "列表") {
+		t.Errorf("错误信息应说明该键是列表，实际: %v", err)
+	}
+}
+
 // TestPatchConfig_TOMLPreservesComments 验证 toml 顶层键行级补丁保留注释，字符串加引号。
 func TestPatchConfig_TOMLPreservesComments(t *testing.T) {
 	src := "# velocity 配置\nbind = \"0.0.0.0:25577\"\n# 转发模式\nplayer-info-forwarding-mode = \"none\"\n"
