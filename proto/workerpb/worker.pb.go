@@ -1053,6 +1053,23 @@ type HeartbeatRequest struct {
 	// 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」进入告警。
 	LogIngestHealthy bool   `protobuf:"varint,15,opt,name=log_ingest_healthy,json=logIngestHealthy,proto3" json:"log_ingest_healthy,omitempty"`
 	LogIngestDetail  string `protobuf:"bytes,16,opt,name=log_ingest_detail,json=logIngestDetail,proto3" json:"log_ingest_detail,omitempty"` // 不健康原因（可空）
+	// 日志存储层（VL）的磁盘占用读数（2026-10-29）。
+	//
+	// 为什么需要：配了 `-retention.maxDiskSpaceUsageBytes` 后，VL 会在超过上限时
+	// **丢弃最旧的按日分区**，默认完全静默。而它一旦把磁盘写满进入只读模式，
+	// 就**连丢弃都做不了**（丢弃也要写元数据）——这是必须提前告警的失效态。
+	//
+	// 只采几个读数，不自建一套指标体系：VL 自身已在 /metrics 暴露全部数据，
+	// 这里只是把关键几项带到 CP 的告警链路上。
+	// 老 Worker 不上报 ⇒ 0，CP 侧按「无读数」处理，不误报。
+	LogVlDiskUsedBytes  int64 `protobuf:"varint,18,opt,name=log_vl_disk_used_bytes,json=logVlDiskUsedBytes,proto3" json:"log_vl_disk_used_bytes,omitempty"`    // -storageDataPath 目录当前占用
+	LogVlDiskLimitBytes int64 `protobuf:"varint,19,opt,name=log_vl_disk_limit_bytes,json=logVlDiskLimitBytes,proto3" json:"log_vl_disk_limit_bytes,omitempty"` // 生效的磁盘上限；0 = 未配置（不限制）
+	// log_vl_partitions 是当前日分区数。用它判断「能不能丢」：
+	// VL 至少保留最近 2 天，分区数 <=2 时即使超限也不会丢。
+	LogVlPartitions int32 `protobuf:"varint,20,opt,name=log_vl_partitions,json=logVlPartitions,proto3" json:"log_vl_partitions,omitempty"`
+	// log_vl_rows_dropped_total 是 vl_rows_dropped_total（因时间超保留期被丢的行数累计值）。
+	// CP 用相邻心跳差推导速率；累计值不直接当曲线。
+	LogVlRowsDroppedTotal uint64 `protobuf:"varint,21,opt,name=log_vl_rows_dropped_total,json=logVlRowsDroppedTotal,proto3" json:"log_vl_rows_dropped_total,omitempty"`
 }
 
 func (x *HeartbeatRequest) Reset() {
@@ -1204,6 +1221,34 @@ func (x *HeartbeatRequest) GetLogIngestDetail() string {
 		return x.LogIngestDetail
 	}
 	return ""
+}
+
+func (x *HeartbeatRequest) GetLogVlDiskUsedBytes() int64 {
+	if x != nil {
+		return x.LogVlDiskUsedBytes
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetLogVlDiskLimitBytes() int64 {
+	if x != nil {
+		return x.LogVlDiskLimitBytes
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetLogVlPartitions() int32 {
+	if x != nil {
+		return x.LogVlPartitions
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetLogVlRowsDroppedTotal() uint64 {
+	if x != nil {
+		return x.LogVlRowsDroppedTotal
+	}
+	return 0
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
@@ -6618,6 +6663,152 @@ func (*GetNodeMetricsRequest) Descriptor() ([]byte, []int) {
 	return file_proto_worker_proto_rawDescGZIP(), []int{79}
 }
 
+// PullSelfLogRequest 拉取 Worker 自身进程日志尾部。
+type PullSelfLogRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// max_lines 期望行数上限；0 = 默认 200，超过硬上限被夹紧。
+	MaxLines int32 `protobuf:"varint,1,opt,name=max_lines,json=maxLines,proto3" json:"max_lines,omitempty"`
+	// max_bytes 期望字节上限；0 = 默认 64KiB，超过硬上限被夹紧。
+	MaxBytes int32 `protobuf:"varint,2,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
+}
+
+func (x *PullSelfLogRequest) Reset() {
+	*x = PullSelfLogRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_worker_proto_msgTypes[80]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PullSelfLogRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PullSelfLogRequest) ProtoMessage() {}
+
+func (x *PullSelfLogRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[80]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PullSelfLogRequest.ProtoReflect.Descriptor instead.
+func (*PullSelfLogRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{80}
+}
+
+func (x *PullSelfLogRequest) GetMaxLines() int32 {
+	if x != nil {
+		return x.MaxLines
+	}
+	return 0
+}
+
+func (x *PullSelfLogRequest) GetMaxBytes() int32 {
+	if x != nil {
+		return x.MaxBytes
+	}
+	return 0
+}
+
+// PullSelfLogResponse 是日志尾部快照。
+//
+// 为什么带 path/file_bytes/truncated 而不是只回文本：诊断是给人排障的，
+// 人需要知道“这是不是全部”以及“下一步该在哪台机器上 grep 什么”。
+type PullSelfLogResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// content 尾部原文（已按行/字节上限裁剪）。
+	Content string `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// truncated 表示因上限被截断（UI 必须显式标注，否则会让人误以为看到全部）。
+	Truncated bool `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	// file_bytes 日志文件总大小，让调用方知道“还有多少没看到”。
+	FileBytes int64 `protobuf:"varint,3,opt,name=file_bytes,json=fileBytes,proto3" json:"file_bytes,omitempty"`
+	// path 实际读取的文件路径（供 UI 展示可复制的 grep 命令）。
+	Path string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
+	// error_msg 读取失败原因（文件不存在/未启用等）；非空时 content 为空。
+	ErrorMsg string `protobuf:"bytes,5,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+}
+
+func (x *PullSelfLogResponse) Reset() {
+	*x = PullSelfLogResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_worker_proto_msgTypes[81]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PullSelfLogResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PullSelfLogResponse) ProtoMessage() {}
+
+func (x *PullSelfLogResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[81]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PullSelfLogResponse.ProtoReflect.Descriptor instead.
+func (*PullSelfLogResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{81}
+}
+
+func (x *PullSelfLogResponse) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *PullSelfLogResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+func (x *PullSelfLogResponse) GetFileBytes() int64 {
+	if x != nil {
+		return x.FileBytes
+	}
+	return 0
+}
+
+func (x *PullSelfLogResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *PullSelfLogResponse) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
 type GetNodeMetricsResponse struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -6636,7 +6827,7 @@ type GetNodeMetricsResponse struct {
 func (x *GetNodeMetricsResponse) Reset() {
 	*x = GetNodeMetricsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[80]
+		mi := &file_proto_worker_proto_msgTypes[82]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6649,7 +6840,7 @@ func (x *GetNodeMetricsResponse) String() string {
 func (*GetNodeMetricsResponse) ProtoMessage() {}
 
 func (x *GetNodeMetricsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[80]
+	mi := &file_proto_worker_proto_msgTypes[82]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6662,7 +6853,7 @@ func (x *GetNodeMetricsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeMetricsResponse.ProtoReflect.Descriptor instead.
 func (*GetNodeMetricsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{80}
+	return file_proto_worker_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *GetNodeMetricsResponse) GetCpuUsage() float32 {
@@ -6739,7 +6930,7 @@ type GetInstanceMetricsRequest struct {
 func (x *GetInstanceMetricsRequest) Reset() {
 	*x = GetInstanceMetricsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[81]
+		mi := &file_proto_worker_proto_msgTypes[83]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6752,7 +6943,7 @@ func (x *GetInstanceMetricsRequest) String() string {
 func (*GetInstanceMetricsRequest) ProtoMessage() {}
 
 func (x *GetInstanceMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[81]
+	mi := &file_proto_worker_proto_msgTypes[83]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6765,7 +6956,7 @@ func (x *GetInstanceMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceMetricsRequest.ProtoReflect.Descriptor instead.
 func (*GetInstanceMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{81}
+	return file_proto_worker_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *GetInstanceMetricsRequest) GetInstanceUuid() string {
@@ -6840,7 +7031,7 @@ type GetInstanceMetricsResponse struct {
 func (x *GetInstanceMetricsResponse) Reset() {
 	*x = GetInstanceMetricsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[82]
+		mi := &file_proto_worker_proto_msgTypes[84]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -6853,7 +7044,7 @@ func (x *GetInstanceMetricsResponse) String() string {
 func (*GetInstanceMetricsResponse) ProtoMessage() {}
 
 func (x *GetInstanceMetricsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[82]
+	mi := &file_proto_worker_proto_msgTypes[84]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6866,7 +7057,7 @@ func (x *GetInstanceMetricsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceMetricsResponse.ProtoReflect.Descriptor instead.
 func (*GetInstanceMetricsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{82}
+	return file_proto_worker_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *GetInstanceMetricsResponse) GetTps() float32 {
@@ -7084,7 +7275,7 @@ type GetInstanceResourceSnapshotRequest struct {
 func (x *GetInstanceResourceSnapshotRequest) Reset() {
 	*x = GetInstanceResourceSnapshotRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[83]
+		mi := &file_proto_worker_proto_msgTypes[85]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7097,7 +7288,7 @@ func (x *GetInstanceResourceSnapshotRequest) String() string {
 func (*GetInstanceResourceSnapshotRequest) ProtoMessage() {}
 
 func (x *GetInstanceResourceSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[83]
+	mi := &file_proto_worker_proto_msgTypes[85]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7110,7 +7301,7 @@ func (x *GetInstanceResourceSnapshotRequest) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use GetInstanceResourceSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*GetInstanceResourceSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{83}
+	return file_proto_worker_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *GetInstanceResourceSnapshotRequest) GetInstanceUuid() string {
@@ -7145,7 +7336,7 @@ type GetInstanceResourceSnapshotResponse struct {
 func (x *GetInstanceResourceSnapshotResponse) Reset() {
 	*x = GetInstanceResourceSnapshotResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[84]
+		mi := &file_proto_worker_proto_msgTypes[86]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7158,7 +7349,7 @@ func (x *GetInstanceResourceSnapshotResponse) String() string {
 func (*GetInstanceResourceSnapshotResponse) ProtoMessage() {}
 
 func (x *GetInstanceResourceSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[84]
+	mi := &file_proto_worker_proto_msgTypes[86]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7171,7 +7362,7 @@ func (x *GetInstanceResourceSnapshotResponse) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use GetInstanceResourceSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*GetInstanceResourceSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{84}
+	return file_proto_worker_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *GetInstanceResourceSnapshotResponse) GetRootPid() int64 {
@@ -7266,7 +7457,7 @@ type WorldMetric struct {
 func (x *WorldMetric) Reset() {
 	*x = WorldMetric{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[85]
+		mi := &file_proto_worker_proto_msgTypes[87]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7279,7 +7470,7 @@ func (x *WorldMetric) String() string {
 func (*WorldMetric) ProtoMessage() {}
 
 func (x *WorldMetric) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[85]
+	mi := &file_proto_worker_proto_msgTypes[87]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7292,7 +7483,7 @@ func (x *WorldMetric) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorldMetric.ProtoReflect.Descriptor instead.
 func (*WorldMetric) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{85}
+	return file_proto_worker_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *WorldMetric) GetName() string {
@@ -7335,7 +7526,7 @@ type GetInstanceEnvRequest struct {
 func (x *GetInstanceEnvRequest) Reset() {
 	*x = GetInstanceEnvRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[86]
+		mi := &file_proto_worker_proto_msgTypes[88]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7348,7 +7539,7 @@ func (x *GetInstanceEnvRequest) String() string {
 func (*GetInstanceEnvRequest) ProtoMessage() {}
 
 func (x *GetInstanceEnvRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[86]
+	mi := &file_proto_worker_proto_msgTypes[88]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7361,7 +7552,7 @@ func (x *GetInstanceEnvRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceEnvRequest.ProtoReflect.Descriptor instead.
 func (*GetInstanceEnvRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{86}
+	return file_proto_worker_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *GetInstanceEnvRequest) GetInstanceUuid() string {
@@ -7385,7 +7576,7 @@ type GetInstanceEnvResponse struct {
 func (x *GetInstanceEnvResponse) Reset() {
 	*x = GetInstanceEnvResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[87]
+		mi := &file_proto_worker_proto_msgTypes[89]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7398,7 +7589,7 @@ func (x *GetInstanceEnvResponse) String() string {
 func (*GetInstanceEnvResponse) ProtoMessage() {}
 
 func (x *GetInstanceEnvResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[87]
+	mi := &file_proto_worker_proto_msgTypes[89]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7411,7 +7602,7 @@ func (x *GetInstanceEnvResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceEnvResponse.ProtoReflect.Descriptor instead.
 func (*GetInstanceEnvResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{87}
+	return file_proto_worker_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *GetInstanceEnvResponse) GetEnv() map[string]string {
@@ -7455,7 +7646,7 @@ type CreateBotRequest struct {
 func (x *CreateBotRequest) Reset() {
 	*x = CreateBotRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[88]
+		mi := &file_proto_worker_proto_msgTypes[90]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7468,7 +7659,7 @@ func (x *CreateBotRequest) String() string {
 func (*CreateBotRequest) ProtoMessage() {}
 
 func (x *CreateBotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[88]
+	mi := &file_proto_worker_proto_msgTypes[90]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7481,7 +7672,7 @@ func (x *CreateBotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBotRequest.ProtoReflect.Descriptor instead.
 func (*CreateBotRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{88}
+	return file_proto_worker_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *CreateBotRequest) GetBotUuid() string {
@@ -7567,7 +7758,7 @@ type CreateBotResponse struct {
 func (x *CreateBotResponse) Reset() {
 	*x = CreateBotResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[89]
+		mi := &file_proto_worker_proto_msgTypes[91]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7580,7 +7771,7 @@ func (x *CreateBotResponse) String() string {
 func (*CreateBotResponse) ProtoMessage() {}
 
 func (x *CreateBotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[89]
+	mi := &file_proto_worker_proto_msgTypes[91]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7593,7 +7784,7 @@ func (x *CreateBotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBotResponse.ProtoReflect.Descriptor instead.
 func (*CreateBotResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{89}
+	return file_proto_worker_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *CreateBotResponse) GetSuccess() bool {
@@ -7628,7 +7819,7 @@ type DeleteBotRequest struct {
 func (x *DeleteBotRequest) Reset() {
 	*x = DeleteBotRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[90]
+		mi := &file_proto_worker_proto_msgTypes[92]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7641,7 +7832,7 @@ func (x *DeleteBotRequest) String() string {
 func (*DeleteBotRequest) ProtoMessage() {}
 
 func (x *DeleteBotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[90]
+	mi := &file_proto_worker_proto_msgTypes[92]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7654,7 +7845,7 @@ func (x *DeleteBotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBotRequest.ProtoReflect.Descriptor instead.
 func (*DeleteBotRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{90}
+	return file_proto_worker_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *DeleteBotRequest) GetBotUuid() string {
@@ -7676,7 +7867,7 @@ type DeleteBotResponse struct {
 func (x *DeleteBotResponse) Reset() {
 	*x = DeleteBotResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[91]
+		mi := &file_proto_worker_proto_msgTypes[93]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7689,7 +7880,7 @@ func (x *DeleteBotResponse) String() string {
 func (*DeleteBotResponse) ProtoMessage() {}
 
 func (x *DeleteBotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[91]
+	mi := &file_proto_worker_proto_msgTypes[93]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7702,7 +7893,7 @@ func (x *DeleteBotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBotResponse.ProtoReflect.Descriptor instead.
 func (*DeleteBotResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{91}
+	return file_proto_worker_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *DeleteBotResponse) GetSuccess() bool {
@@ -7730,7 +7921,7 @@ type ListBotsRequest struct {
 func (x *ListBotsRequest) Reset() {
 	*x = ListBotsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[92]
+		mi := &file_proto_worker_proto_msgTypes[94]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7743,7 +7934,7 @@ func (x *ListBotsRequest) String() string {
 func (*ListBotsRequest) ProtoMessage() {}
 
 func (x *ListBotsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[92]
+	mi := &file_proto_worker_proto_msgTypes[94]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7756,7 +7947,7 @@ func (x *ListBotsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBotsRequest.ProtoReflect.Descriptor instead.
 func (*ListBotsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{92}
+	return file_proto_worker_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *ListBotsRequest) GetInstanceUuid() string {
@@ -7777,7 +7968,7 @@ type ListBotsResponse struct {
 func (x *ListBotsResponse) Reset() {
 	*x = ListBotsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[93]
+		mi := &file_proto_worker_proto_msgTypes[95]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7790,7 +7981,7 @@ func (x *ListBotsResponse) String() string {
 func (*ListBotsResponse) ProtoMessage() {}
 
 func (x *ListBotsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[93]
+	mi := &file_proto_worker_proto_msgTypes[95]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7803,7 +7994,7 @@ func (x *ListBotsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBotsResponse.ProtoReflect.Descriptor instead.
 func (*ListBotsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{93}
+	return file_proto_worker_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *ListBotsResponse) GetBots() []*BotInfo {
@@ -7833,7 +8024,7 @@ type BotInfo struct {
 func (x *BotInfo) Reset() {
 	*x = BotInfo{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[94]
+		mi := &file_proto_worker_proto_msgTypes[96]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7846,7 +8037,7 @@ func (x *BotInfo) String() string {
 func (*BotInfo) ProtoMessage() {}
 
 func (x *BotInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[94]
+	mi := &file_proto_worker_proto_msgTypes[96]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7859,7 +8050,7 @@ func (x *BotInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotInfo.ProtoReflect.Descriptor instead.
 func (*BotInfo) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{94}
+	return file_proto_worker_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *BotInfo) GetBotUuid() string {
@@ -7946,7 +8137,7 @@ type SetBotBehaviorRequest struct {
 func (x *SetBotBehaviorRequest) Reset() {
 	*x = SetBotBehaviorRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[95]
+		mi := &file_proto_worker_proto_msgTypes[97]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -7959,7 +8150,7 @@ func (x *SetBotBehaviorRequest) String() string {
 func (*SetBotBehaviorRequest) ProtoMessage() {}
 
 func (x *SetBotBehaviorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[95]
+	mi := &file_proto_worker_proto_msgTypes[97]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7972,7 +8163,7 @@ func (x *SetBotBehaviorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBotBehaviorRequest.ProtoReflect.Descriptor instead.
 func (*SetBotBehaviorRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{95}
+	return file_proto_worker_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *SetBotBehaviorRequest) GetBotUuid() string {
@@ -8015,7 +8206,7 @@ type SetBotBehaviorResponse struct {
 func (x *SetBotBehaviorResponse) Reset() {
 	*x = SetBotBehaviorResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[96]
+		mi := &file_proto_worker_proto_msgTypes[98]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8028,7 +8219,7 @@ func (x *SetBotBehaviorResponse) String() string {
 func (*SetBotBehaviorResponse) ProtoMessage() {}
 
 func (x *SetBotBehaviorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[96]
+	mi := &file_proto_worker_proto_msgTypes[98]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8041,7 +8232,7 @@ func (x *SetBotBehaviorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBotBehaviorResponse.ProtoReflect.Descriptor instead.
 func (*SetBotBehaviorResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{96}
+	return file_proto_worker_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *SetBotBehaviorResponse) GetSuccess() bool {
@@ -8070,7 +8261,7 @@ type SendBotCommandRequest struct {
 func (x *SendBotCommandRequest) Reset() {
 	*x = SendBotCommandRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[97]
+		mi := &file_proto_worker_proto_msgTypes[99]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8083,7 +8274,7 @@ func (x *SendBotCommandRequest) String() string {
 func (*SendBotCommandRequest) ProtoMessage() {}
 
 func (x *SendBotCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[97]
+	mi := &file_proto_worker_proto_msgTypes[99]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8096,7 +8287,7 @@ func (x *SendBotCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendBotCommandRequest.ProtoReflect.Descriptor instead.
 func (*SendBotCommandRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{97}
+	return file_proto_worker_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *SendBotCommandRequest) GetBotUuid() string {
@@ -8125,7 +8316,7 @@ type SendBotCommandResponse struct {
 func (x *SendBotCommandResponse) Reset() {
 	*x = SendBotCommandResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[98]
+		mi := &file_proto_worker_proto_msgTypes[100]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8138,7 +8329,7 @@ func (x *SendBotCommandResponse) String() string {
 func (*SendBotCommandResponse) ProtoMessage() {}
 
 func (x *SendBotCommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[98]
+	mi := &file_proto_worker_proto_msgTypes[100]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8151,7 +8342,7 @@ func (x *SendBotCommandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendBotCommandResponse.ProtoReflect.Descriptor instead.
 func (*SendBotCommandResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{98}
+	return file_proto_worker_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *SendBotCommandResponse) GetSuccess() bool {
@@ -8181,7 +8372,7 @@ type RunBotScriptRequest struct {
 func (x *RunBotScriptRequest) Reset() {
 	*x = RunBotScriptRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[99]
+		mi := &file_proto_worker_proto_msgTypes[101]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8194,7 +8385,7 @@ func (x *RunBotScriptRequest) String() string {
 func (*RunBotScriptRequest) ProtoMessage() {}
 
 func (x *RunBotScriptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[99]
+	mi := &file_proto_worker_proto_msgTypes[101]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8207,7 +8398,7 @@ func (x *RunBotScriptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunBotScriptRequest.ProtoReflect.Descriptor instead.
 func (*RunBotScriptRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{99}
+	return file_proto_worker_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *RunBotScriptRequest) GetScriptId() string {
@@ -8243,7 +8434,7 @@ type RunBotScriptResponse struct {
 func (x *RunBotScriptResponse) Reset() {
 	*x = RunBotScriptResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[100]
+		mi := &file_proto_worker_proto_msgTypes[102]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8256,7 +8447,7 @@ func (x *RunBotScriptResponse) String() string {
 func (*RunBotScriptResponse) ProtoMessage() {}
 
 func (x *RunBotScriptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[100]
+	mi := &file_proto_worker_proto_msgTypes[102]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8269,7 +8460,7 @@ func (x *RunBotScriptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunBotScriptResponse.ProtoReflect.Descriptor instead.
 func (*RunBotScriptResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{100}
+	return file_proto_worker_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *RunBotScriptResponse) GetSuccess() bool {
@@ -8297,7 +8488,7 @@ type StreamBotEventsRequest struct {
 func (x *StreamBotEventsRequest) Reset() {
 	*x = StreamBotEventsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[101]
+		mi := &file_proto_worker_proto_msgTypes[103]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8310,7 +8501,7 @@ func (x *StreamBotEventsRequest) String() string {
 func (*StreamBotEventsRequest) ProtoMessage() {}
 
 func (x *StreamBotEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[101]
+	mi := &file_proto_worker_proto_msgTypes[103]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8323,7 +8514,7 @@ func (x *StreamBotEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamBotEventsRequest.ProtoReflect.Descriptor instead.
 func (*StreamBotEventsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{101}
+	return file_proto_worker_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *StreamBotEventsRequest) GetBotUuid() string {
@@ -8347,7 +8538,7 @@ type BotEvent struct {
 func (x *BotEvent) Reset() {
 	*x = BotEvent{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[102]
+		mi := &file_proto_worker_proto_msgTypes[104]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8360,7 +8551,7 @@ func (x *BotEvent) String() string {
 func (*BotEvent) ProtoMessage() {}
 
 func (x *BotEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[102]
+	mi := &file_proto_worker_proto_msgTypes[104]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8373,7 +8564,7 @@ func (x *BotEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotEvent.ProtoReflect.Descriptor instead.
 func (*BotEvent) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{102}
+	return file_proto_worker_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *BotEvent) GetBotUuid() string {
@@ -8413,7 +8604,7 @@ type ListJDKsRequest struct {
 func (x *ListJDKsRequest) Reset() {
 	*x = ListJDKsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[103]
+		mi := &file_proto_worker_proto_msgTypes[105]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8426,7 +8617,7 @@ func (x *ListJDKsRequest) String() string {
 func (*ListJDKsRequest) ProtoMessage() {}
 
 func (x *ListJDKsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[103]
+	mi := &file_proto_worker_proto_msgTypes[105]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8439,7 +8630,7 @@ func (x *ListJDKsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJDKsRequest.ProtoReflect.Descriptor instead.
 func (*ListJDKsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{103}
+	return file_proto_worker_proto_rawDescGZIP(), []int{105}
 }
 
 type JDKInfo struct {
@@ -8458,7 +8649,7 @@ type JDKInfo struct {
 func (x *JDKInfo) Reset() {
 	*x = JDKInfo{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[104]
+		mi := &file_proto_worker_proto_msgTypes[106]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8471,7 +8662,7 @@ func (x *JDKInfo) String() string {
 func (*JDKInfo) ProtoMessage() {}
 
 func (x *JDKInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[104]
+	mi := &file_proto_worker_proto_msgTypes[106]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8484,7 +8675,7 @@ func (x *JDKInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JDKInfo.ProtoReflect.Descriptor instead.
 func (*JDKInfo) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{104}
+	return file_proto_worker_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *JDKInfo) GetVendor() string {
@@ -8540,7 +8731,7 @@ type ListJDKsResponse struct {
 func (x *ListJDKsResponse) Reset() {
 	*x = ListJDKsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[105]
+		mi := &file_proto_worker_proto_msgTypes[107]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8553,7 +8744,7 @@ func (x *ListJDKsResponse) String() string {
 func (*ListJDKsResponse) ProtoMessage() {}
 
 func (x *ListJDKsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[105]
+	mi := &file_proto_worker_proto_msgTypes[107]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8566,7 +8757,7 @@ func (x *ListJDKsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJDKsResponse.ProtoReflect.Descriptor instead.
 func (*ListJDKsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{105}
+	return file_proto_worker_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *ListJDKsResponse) GetJdks() []*JDKInfo {
@@ -8599,7 +8790,7 @@ type InstallJDKRequest struct {
 func (x *InstallJDKRequest) Reset() {
 	*x = InstallJDKRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[106]
+		mi := &file_proto_worker_proto_msgTypes[108]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8612,7 +8803,7 @@ func (x *InstallJDKRequest) String() string {
 func (*InstallJDKRequest) ProtoMessage() {}
 
 func (x *InstallJDKRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[106]
+	mi := &file_proto_worker_proto_msgTypes[108]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8625,7 +8816,7 @@ func (x *InstallJDKRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallJDKRequest.ProtoReflect.Descriptor instead.
 func (*InstallJDKRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{106}
+	return file_proto_worker_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *InstallJDKRequest) GetVendor() string {
@@ -8690,7 +8881,7 @@ type JDKCatalogRequest struct {
 func (x *JDKCatalogRequest) Reset() {
 	*x = JDKCatalogRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[107]
+		mi := &file_proto_worker_proto_msgTypes[109]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8703,7 +8894,7 @@ func (x *JDKCatalogRequest) String() string {
 func (*JDKCatalogRequest) ProtoMessage() {}
 
 func (x *JDKCatalogRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[107]
+	mi := &file_proto_worker_proto_msgTypes[109]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8716,7 +8907,7 @@ func (x *JDKCatalogRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JDKCatalogRequest.ProtoReflect.Descriptor instead.
 func (*JDKCatalogRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{107}
+	return file_proto_worker_proto_rawDescGZIP(), []int{109}
 }
 
 func (x *JDKCatalogRequest) GetVendor() string {
@@ -8756,7 +8947,7 @@ type JDKCatalogPackage struct {
 func (x *JDKCatalogPackage) Reset() {
 	*x = JDKCatalogPackage{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[108]
+		mi := &file_proto_worker_proto_msgTypes[110]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8769,7 +8960,7 @@ func (x *JDKCatalogPackage) String() string {
 func (*JDKCatalogPackage) ProtoMessage() {}
 
 func (x *JDKCatalogPackage) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[108]
+	mi := &file_proto_worker_proto_msgTypes[110]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8782,7 +8973,7 @@ func (x *JDKCatalogPackage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JDKCatalogPackage.ProtoReflect.Descriptor instead.
 func (*JDKCatalogPackage) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{108}
+	return file_proto_worker_proto_rawDescGZIP(), []int{110}
 }
 
 func (x *JDKCatalogPackage) GetDistribution() string {
@@ -8832,7 +9023,7 @@ type JDKCatalogResponse struct {
 func (x *JDKCatalogResponse) Reset() {
 	*x = JDKCatalogResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[109]
+		mi := &file_proto_worker_proto_msgTypes[111]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8845,7 +9036,7 @@ func (x *JDKCatalogResponse) String() string {
 func (*JDKCatalogResponse) ProtoMessage() {}
 
 func (x *JDKCatalogResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[109]
+	mi := &file_proto_worker_proto_msgTypes[111]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8858,7 +9049,7 @@ func (x *JDKCatalogResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JDKCatalogResponse.ProtoReflect.Descriptor instead.
 func (*JDKCatalogResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{109}
+	return file_proto_worker_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *JDKCatalogResponse) GetPackages() []*JDKCatalogPackage {
@@ -8890,7 +9081,7 @@ type InstallJDKResponse struct {
 func (x *InstallJDKResponse) Reset() {
 	*x = InstallJDKResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[110]
+		mi := &file_proto_worker_proto_msgTypes[112]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8903,7 +9094,7 @@ func (x *InstallJDKResponse) String() string {
 func (*InstallJDKResponse) ProtoMessage() {}
 
 func (x *InstallJDKResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[110]
+	mi := &file_proto_worker_proto_msgTypes[112]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8916,7 +9107,7 @@ func (x *InstallJDKResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallJDKResponse.ProtoReflect.Descriptor instead.
 func (*InstallJDKResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{110}
+	return file_proto_worker_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *InstallJDKResponse) GetSuccess() bool {
@@ -8958,7 +9149,7 @@ type RemoveJDKRequest struct {
 func (x *RemoveJDKRequest) Reset() {
 	*x = RemoveJDKRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[111]
+		mi := &file_proto_worker_proto_msgTypes[113]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -8971,7 +9162,7 @@ func (x *RemoveJDKRequest) String() string {
 func (*RemoveJDKRequest) ProtoMessage() {}
 
 func (x *RemoveJDKRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[111]
+	mi := &file_proto_worker_proto_msgTypes[113]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8984,7 +9175,7 @@ func (x *RemoveJDKRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveJDKRequest.ProtoReflect.Descriptor instead.
 func (*RemoveJDKRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{111}
+	return file_proto_worker_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *RemoveJDKRequest) GetPath() string {
@@ -9006,7 +9197,7 @@ type RemoveJDKResponse struct {
 func (x *RemoveJDKResponse) Reset() {
 	*x = RemoveJDKResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[112]
+		mi := &file_proto_worker_proto_msgTypes[114]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9019,7 +9210,7 @@ func (x *RemoveJDKResponse) String() string {
 func (*RemoveJDKResponse) ProtoMessage() {}
 
 func (x *RemoveJDKResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[112]
+	mi := &file_proto_worker_proto_msgTypes[114]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9032,7 +9223,7 @@ func (x *RemoveJDKResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveJDKResponse.ProtoReflect.Descriptor instead.
 func (*RemoveJDKResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{112}
+	return file_proto_worker_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *RemoveJDKResponse) GetSuccess() bool {
@@ -9069,7 +9260,7 @@ type DownloadCoreRequest struct {
 func (x *DownloadCoreRequest) Reset() {
 	*x = DownloadCoreRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[113]
+		mi := &file_proto_worker_proto_msgTypes[115]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9082,7 +9273,7 @@ func (x *DownloadCoreRequest) String() string {
 func (*DownloadCoreRequest) ProtoMessage() {}
 
 func (x *DownloadCoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[113]
+	mi := &file_proto_worker_proto_msgTypes[115]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9095,7 +9286,7 @@ func (x *DownloadCoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadCoreRequest.ProtoReflect.Descriptor instead.
 func (*DownloadCoreRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{113}
+	return file_proto_worker_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *DownloadCoreRequest) GetInstanceUuid() string {
@@ -9161,7 +9352,7 @@ type DownloadCoreResponse struct {
 func (x *DownloadCoreResponse) Reset() {
 	*x = DownloadCoreResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[114]
+		mi := &file_proto_worker_proto_msgTypes[116]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9174,7 +9365,7 @@ func (x *DownloadCoreResponse) String() string {
 func (*DownloadCoreResponse) ProtoMessage() {}
 
 func (x *DownloadCoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[114]
+	mi := &file_proto_worker_proto_msgTypes[116]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9187,7 +9378,7 @@ func (x *DownloadCoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadCoreResponse.ProtoReflect.Descriptor instead.
 func (*DownloadCoreResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{114}
+	return file_proto_worker_proto_rawDescGZIP(), []int{116}
 }
 
 func (x *DownloadCoreResponse) GetSuccess() bool {
@@ -9235,7 +9426,7 @@ type InstallForgeServerRequest struct {
 func (x *InstallForgeServerRequest) Reset() {
 	*x = InstallForgeServerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[115]
+		mi := &file_proto_worker_proto_msgTypes[117]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9248,7 +9439,7 @@ func (x *InstallForgeServerRequest) String() string {
 func (*InstallForgeServerRequest) ProtoMessage() {}
 
 func (x *InstallForgeServerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[115]
+	mi := &file_proto_worker_proto_msgTypes[117]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9261,7 +9452,7 @@ func (x *InstallForgeServerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallForgeServerRequest.ProtoReflect.Descriptor instead.
 func (*InstallForgeServerRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{115}
+	return file_proto_worker_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *InstallForgeServerRequest) GetInstanceUuid() string {
@@ -9327,7 +9518,7 @@ type InstallForgeServerResponse struct {
 func (x *InstallForgeServerResponse) Reset() {
 	*x = InstallForgeServerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[116]
+		mi := &file_proto_worker_proto_msgTypes[118]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9340,7 +9531,7 @@ func (x *InstallForgeServerResponse) String() string {
 func (*InstallForgeServerResponse) ProtoMessage() {}
 
 func (x *InstallForgeServerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[116]
+	mi := &file_proto_worker_proto_msgTypes[118]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9353,7 +9544,7 @@ func (x *InstallForgeServerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallForgeServerResponse.ProtoReflect.Descriptor instead.
 func (*InstallForgeServerResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{116}
+	return file_proto_worker_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *InstallForgeServerResponse) GetSuccess() bool {
@@ -9410,7 +9601,7 @@ type FetchBinaryRequest struct {
 func (x *FetchBinaryRequest) Reset() {
 	*x = FetchBinaryRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[117]
+		mi := &file_proto_worker_proto_msgTypes[119]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9423,7 +9614,7 @@ func (x *FetchBinaryRequest) String() string {
 func (*FetchBinaryRequest) ProtoMessage() {}
 
 func (x *FetchBinaryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[117]
+	mi := &file_proto_worker_proto_msgTypes[119]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9436,7 +9627,7 @@ func (x *FetchBinaryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchBinaryRequest.ProtoReflect.Descriptor instead.
 func (*FetchBinaryRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{117}
+	return file_proto_worker_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *FetchBinaryRequest) GetInstanceUuid() string {
@@ -9509,7 +9700,7 @@ type FetchBinaryProgress struct {
 func (x *FetchBinaryProgress) Reset() {
 	*x = FetchBinaryProgress{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[118]
+		mi := &file_proto_worker_proto_msgTypes[120]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9522,7 +9713,7 @@ func (x *FetchBinaryProgress) String() string {
 func (*FetchBinaryProgress) ProtoMessage() {}
 
 func (x *FetchBinaryProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[118]
+	mi := &file_proto_worker_proto_msgTypes[120]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9535,7 +9726,7 @@ func (x *FetchBinaryProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchBinaryProgress.ProtoReflect.Descriptor instead.
 func (*FetchBinaryProgress) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{118}
+	return file_proto_worker_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *FetchBinaryProgress) GetDownloaded() int64 {
@@ -9612,7 +9803,7 @@ type ArtifactCacheItem struct {
 func (x *ArtifactCacheItem) Reset() {
 	*x = ArtifactCacheItem{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[119]
+		mi := &file_proto_worker_proto_msgTypes[121]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9625,7 +9816,7 @@ func (x *ArtifactCacheItem) String() string {
 func (*ArtifactCacheItem) ProtoMessage() {}
 
 func (x *ArtifactCacheItem) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[119]
+	mi := &file_proto_worker_proto_msgTypes[121]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9638,7 +9829,7 @@ func (x *ArtifactCacheItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactCacheItem.ProtoReflect.Descriptor instead.
 func (*ArtifactCacheItem) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{119}
+	return file_proto_worker_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *ArtifactCacheItem) GetSha256() string {
@@ -9699,7 +9890,7 @@ type ListArtifactCacheRequest struct {
 func (x *ListArtifactCacheRequest) Reset() {
 	*x = ListArtifactCacheRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[120]
+		mi := &file_proto_worker_proto_msgTypes[122]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9712,7 +9903,7 @@ func (x *ListArtifactCacheRequest) String() string {
 func (*ListArtifactCacheRequest) ProtoMessage() {}
 
 func (x *ListArtifactCacheRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[120]
+	mi := &file_proto_worker_proto_msgTypes[122]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9725,7 +9916,7 @@ func (x *ListArtifactCacheRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArtifactCacheRequest.ProtoReflect.Descriptor instead.
 func (*ListArtifactCacheRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{120}
+	return file_proto_worker_proto_rawDescGZIP(), []int{122}
 }
 
 type ListArtifactCacheResponse struct {
@@ -9741,7 +9932,7 @@ type ListArtifactCacheResponse struct {
 func (x *ListArtifactCacheResponse) Reset() {
 	*x = ListArtifactCacheResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[121]
+		mi := &file_proto_worker_proto_msgTypes[123]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9754,7 +9945,7 @@ func (x *ListArtifactCacheResponse) String() string {
 func (*ListArtifactCacheResponse) ProtoMessage() {}
 
 func (x *ListArtifactCacheResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[121]
+	mi := &file_proto_worker_proto_msgTypes[123]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9767,7 +9958,7 @@ func (x *ListArtifactCacheResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArtifactCacheResponse.ProtoReflect.Descriptor instead.
 func (*ListArtifactCacheResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{121}
+	return file_proto_worker_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *ListArtifactCacheResponse) GetItems() []*ArtifactCacheItem {
@@ -9802,7 +9993,7 @@ type EvictArtifactCacheRequest struct {
 func (x *EvictArtifactCacheRequest) Reset() {
 	*x = EvictArtifactCacheRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[122]
+		mi := &file_proto_worker_proto_msgTypes[124]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9815,7 +10006,7 @@ func (x *EvictArtifactCacheRequest) String() string {
 func (*EvictArtifactCacheRequest) ProtoMessage() {}
 
 func (x *EvictArtifactCacheRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[122]
+	mi := &file_proto_worker_proto_msgTypes[124]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9828,7 +10019,7 @@ func (x *EvictArtifactCacheRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvictArtifactCacheRequest.ProtoReflect.Descriptor instead.
 func (*EvictArtifactCacheRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{122}
+	return file_proto_worker_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *EvictArtifactCacheRequest) GetSha256() string {
@@ -9850,7 +10041,7 @@ type EvictArtifactCacheResponse struct {
 func (x *EvictArtifactCacheResponse) Reset() {
 	*x = EvictArtifactCacheResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[123]
+		mi := &file_proto_worker_proto_msgTypes[125]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9863,7 +10054,7 @@ func (x *EvictArtifactCacheResponse) String() string {
 func (*EvictArtifactCacheResponse) ProtoMessage() {}
 
 func (x *EvictArtifactCacheResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[123]
+	mi := &file_proto_worker_proto_msgTypes[125]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9876,7 +10067,7 @@ func (x *EvictArtifactCacheResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EvictArtifactCacheResponse.ProtoReflect.Descriptor instead.
 func (*EvictArtifactCacheResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{123}
+	return file_proto_worker_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *EvictArtifactCacheResponse) GetSuccess() bool {
@@ -9902,7 +10093,7 @@ type ClearArtifactCacheRequest struct {
 func (x *ClearArtifactCacheRequest) Reset() {
 	*x = ClearArtifactCacheRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[124]
+		mi := &file_proto_worker_proto_msgTypes[126]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9915,7 +10106,7 @@ func (x *ClearArtifactCacheRequest) String() string {
 func (*ClearArtifactCacheRequest) ProtoMessage() {}
 
 func (x *ClearArtifactCacheRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[124]
+	mi := &file_proto_worker_proto_msgTypes[126]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9928,7 +10119,7 @@ func (x *ClearArtifactCacheRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearArtifactCacheRequest.ProtoReflect.Descriptor instead.
 func (*ClearArtifactCacheRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{124}
+	return file_proto_worker_proto_rawDescGZIP(), []int{126}
 }
 
 type ClearArtifactCacheResponse struct {
@@ -9944,7 +10135,7 @@ type ClearArtifactCacheResponse struct {
 func (x *ClearArtifactCacheResponse) Reset() {
 	*x = ClearArtifactCacheResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[125]
+		mi := &file_proto_worker_proto_msgTypes[127]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -9957,7 +10148,7 @@ func (x *ClearArtifactCacheResponse) String() string {
 func (*ClearArtifactCacheResponse) ProtoMessage() {}
 
 func (x *ClearArtifactCacheResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[125]
+	mi := &file_proto_worker_proto_msgTypes[127]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9970,7 +10161,7 @@ func (x *ClearArtifactCacheResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearArtifactCacheResponse.ProtoReflect.Descriptor instead.
 func (*ClearArtifactCacheResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{125}
+	return file_proto_worker_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *ClearArtifactCacheResponse) GetSuccess() bool {
@@ -10005,7 +10196,7 @@ type SetArtifactCacheCapRequest struct {
 func (x *SetArtifactCacheCapRequest) Reset() {
 	*x = SetArtifactCacheCapRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[126]
+		mi := &file_proto_worker_proto_msgTypes[128]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10018,7 +10209,7 @@ func (x *SetArtifactCacheCapRequest) String() string {
 func (*SetArtifactCacheCapRequest) ProtoMessage() {}
 
 func (x *SetArtifactCacheCapRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[126]
+	mi := &file_proto_worker_proto_msgTypes[128]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10031,7 +10222,7 @@ func (x *SetArtifactCacheCapRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetArtifactCacheCapRequest.ProtoReflect.Descriptor instead.
 func (*SetArtifactCacheCapRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{126}
+	return file_proto_worker_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *SetArtifactCacheCapRequest) GetCapBytes() int64 {
@@ -10055,7 +10246,7 @@ type SetArtifactCacheCapResponse struct {
 func (x *SetArtifactCacheCapResponse) Reset() {
 	*x = SetArtifactCacheCapResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[127]
+		mi := &file_proto_worker_proto_msgTypes[129]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10068,7 +10259,7 @@ func (x *SetArtifactCacheCapResponse) String() string {
 func (*SetArtifactCacheCapResponse) ProtoMessage() {}
 
 func (x *SetArtifactCacheCapResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[127]
+	mi := &file_proto_worker_proto_msgTypes[129]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10081,7 +10272,7 @@ func (x *SetArtifactCacheCapResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetArtifactCacheCapResponse.ProtoReflect.Descriptor instead.
 func (*SetArtifactCacheCapResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{127}
+	return file_proto_worker_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *SetArtifactCacheCapResponse) GetSuccess() bool {
@@ -10124,7 +10315,7 @@ type BrowseDirRequest struct {
 func (x *BrowseDirRequest) Reset() {
 	*x = BrowseDirRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[128]
+		mi := &file_proto_worker_proto_msgTypes[130]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10137,7 +10328,7 @@ func (x *BrowseDirRequest) String() string {
 func (*BrowseDirRequest) ProtoMessage() {}
 
 func (x *BrowseDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[128]
+	mi := &file_proto_worker_proto_msgTypes[130]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10150,7 +10341,7 @@ func (x *BrowseDirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrowseDirRequest.ProtoReflect.Descriptor instead.
 func (*BrowseDirRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{128}
+	return file_proto_worker_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *BrowseDirRequest) GetPath() string {
@@ -10180,7 +10371,7 @@ type BrowseDirEntry struct {
 func (x *BrowseDirEntry) Reset() {
 	*x = BrowseDirEntry{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[129]
+		mi := &file_proto_worker_proto_msgTypes[131]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10193,7 +10384,7 @@ func (x *BrowseDirEntry) String() string {
 func (*BrowseDirEntry) ProtoMessage() {}
 
 func (x *BrowseDirEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[129]
+	mi := &file_proto_worker_proto_msgTypes[131]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10206,7 +10397,7 @@ func (x *BrowseDirEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrowseDirEntry.ProtoReflect.Descriptor instead.
 func (*BrowseDirEntry) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{129}
+	return file_proto_worker_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *BrowseDirEntry) GetName() string {
@@ -10280,7 +10471,7 @@ type BrowseDirResponse struct {
 func (x *BrowseDirResponse) Reset() {
 	*x = BrowseDirResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[130]
+		mi := &file_proto_worker_proto_msgTypes[132]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10293,7 +10484,7 @@ func (x *BrowseDirResponse) String() string {
 func (*BrowseDirResponse) ProtoMessage() {}
 
 func (x *BrowseDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[130]
+	mi := &file_proto_worker_proto_msgTypes[132]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10306,7 +10497,7 @@ func (x *BrowseDirResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BrowseDirResponse.ProtoReflect.Descriptor instead.
 func (*BrowseDirResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{130}
+	return file_proto_worker_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *BrowseDirResponse) GetSuccess() bool {
@@ -10356,7 +10547,7 @@ type ProbeJDKRequest struct {
 func (x *ProbeJDKRequest) Reset() {
 	*x = ProbeJDKRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[131]
+		mi := &file_proto_worker_proto_msgTypes[133]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10369,7 +10560,7 @@ func (x *ProbeJDKRequest) String() string {
 func (*ProbeJDKRequest) ProtoMessage() {}
 
 func (x *ProbeJDKRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[131]
+	mi := &file_proto_worker_proto_msgTypes[133]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10382,7 +10573,7 @@ func (x *ProbeJDKRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeJDKRequest.ProtoReflect.Descriptor instead.
 func (*ProbeJDKRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{131}
+	return file_proto_worker_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *ProbeJDKRequest) GetPath() string {
@@ -10409,7 +10600,7 @@ type ProbeJDKResponse struct {
 func (x *ProbeJDKResponse) Reset() {
 	*x = ProbeJDKResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[132]
+		mi := &file_proto_worker_proto_msgTypes[134]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10422,7 +10613,7 @@ func (x *ProbeJDKResponse) String() string {
 func (*ProbeJDKResponse) ProtoMessage() {}
 
 func (x *ProbeJDKResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[132]
+	mi := &file_proto_worker_proto_msgTypes[134]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10435,7 +10626,7 @@ func (x *ProbeJDKResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeJDKResponse.ProtoReflect.Descriptor instead.
 func (*ProbeJDKResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{132}
+	return file_proto_worker_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *ProbeJDKResponse) GetValid() bool {
@@ -10500,7 +10691,7 @@ type ScanRuntimesRequest struct {
 func (x *ScanRuntimesRequest) Reset() {
 	*x = ScanRuntimesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[133]
+		mi := &file_proto_worker_proto_msgTypes[135]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10513,7 +10704,7 @@ func (x *ScanRuntimesRequest) String() string {
 func (*ScanRuntimesRequest) ProtoMessage() {}
 
 func (x *ScanRuntimesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[133]
+	mi := &file_proto_worker_proto_msgTypes[135]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10526,7 +10717,7 @@ func (x *ScanRuntimesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScanRuntimesRequest.ProtoReflect.Descriptor instead.
 func (*ScanRuntimesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{133}
+	return file_proto_worker_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *ScanRuntimesRequest) GetTypes() []string {
@@ -10554,7 +10745,7 @@ type RuntimeCandidate struct {
 func (x *RuntimeCandidate) Reset() {
 	*x = RuntimeCandidate{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[134]
+		mi := &file_proto_worker_proto_msgTypes[136]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10567,7 +10758,7 @@ func (x *RuntimeCandidate) String() string {
 func (*RuntimeCandidate) ProtoMessage() {}
 
 func (x *RuntimeCandidate) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[134]
+	mi := &file_proto_worker_proto_msgTypes[136]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10580,7 +10771,7 @@ func (x *RuntimeCandidate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeCandidate.ProtoReflect.Descriptor instead.
 func (*RuntimeCandidate) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{134}
+	return file_proto_worker_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *RuntimeCandidate) GetType() string {
@@ -10643,7 +10834,7 @@ type ScanRuntimesResponse struct {
 func (x *ScanRuntimesResponse) Reset() {
 	*x = ScanRuntimesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[135]
+		mi := &file_proto_worker_proto_msgTypes[137]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10656,7 +10847,7 @@ func (x *ScanRuntimesResponse) String() string {
 func (*ScanRuntimesResponse) ProtoMessage() {}
 
 func (x *ScanRuntimesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[135]
+	mi := &file_proto_worker_proto_msgTypes[137]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10669,7 +10860,7 @@ func (x *ScanRuntimesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScanRuntimesResponse.ProtoReflect.Descriptor instead.
 func (*ScanRuntimesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{135}
+	return file_proto_worker_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *ScanRuntimesResponse) GetCandidates() []*RuntimeCandidate {
@@ -10701,7 +10892,7 @@ type InstallRuntimeRequest struct {
 func (x *InstallRuntimeRequest) Reset() {
 	*x = InstallRuntimeRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[136]
+		mi := &file_proto_worker_proto_msgTypes[138]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10714,7 +10905,7 @@ func (x *InstallRuntimeRequest) String() string {
 func (*InstallRuntimeRequest) ProtoMessage() {}
 
 func (x *InstallRuntimeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[136]
+	mi := &file_proto_worker_proto_msgTypes[138]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10727,7 +10918,7 @@ func (x *InstallRuntimeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallRuntimeRequest.ProtoReflect.Descriptor instead.
 func (*InstallRuntimeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{136}
+	return file_proto_worker_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *InstallRuntimeRequest) GetType() string {
@@ -10778,7 +10969,7 @@ type InstallRuntimeResponse struct {
 func (x *InstallRuntimeResponse) Reset() {
 	*x = InstallRuntimeResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[137]
+		mi := &file_proto_worker_proto_msgTypes[139]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10791,7 +10982,7 @@ func (x *InstallRuntimeResponse) String() string {
 func (*InstallRuntimeResponse) ProtoMessage() {}
 
 func (x *InstallRuntimeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[137]
+	mi := &file_proto_worker_proto_msgTypes[139]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10804,7 +10995,7 @@ func (x *InstallRuntimeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallRuntimeResponse.ProtoReflect.Descriptor instead.
 func (*InstallRuntimeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{137}
+	return file_proto_worker_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *InstallRuntimeResponse) GetSuccess() bool {
@@ -10842,7 +11033,7 @@ type RemoveRuntimeRequest struct {
 func (x *RemoveRuntimeRequest) Reset() {
 	*x = RemoveRuntimeRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[138]
+		mi := &file_proto_worker_proto_msgTypes[140]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10855,7 +11046,7 @@ func (x *RemoveRuntimeRequest) String() string {
 func (*RemoveRuntimeRequest) ProtoMessage() {}
 
 func (x *RemoveRuntimeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[138]
+	mi := &file_proto_worker_proto_msgTypes[140]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10868,7 +11059,7 @@ func (x *RemoveRuntimeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveRuntimeRequest.ProtoReflect.Descriptor instead.
 func (*RemoveRuntimeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{138}
+	return file_proto_worker_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *RemoveRuntimeRequest) GetType() string {
@@ -10897,7 +11088,7 @@ type RemoveRuntimeResponse struct {
 func (x *RemoveRuntimeResponse) Reset() {
 	*x = RemoveRuntimeResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[139]
+		mi := &file_proto_worker_proto_msgTypes[141]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10910,7 +11101,7 @@ func (x *RemoveRuntimeResponse) String() string {
 func (*RemoveRuntimeResponse) ProtoMessage() {}
 
 func (x *RemoveRuntimeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[139]
+	mi := &file_proto_worker_proto_msgTypes[141]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10923,7 +11114,7 @@ func (x *RemoveRuntimeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveRuntimeResponse.ProtoReflect.Descriptor instead.
 func (*RemoveRuntimeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{139}
+	return file_proto_worker_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *RemoveRuntimeResponse) GetSuccess() bool {
@@ -10955,7 +11146,7 @@ type PMRegistry struct {
 func (x *PMRegistry) Reset() {
 	*x = PMRegistry{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[140]
+		mi := &file_proto_worker_proto_msgTypes[142]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -10968,7 +11159,7 @@ func (x *PMRegistry) String() string {
 func (*PMRegistry) ProtoMessage() {}
 
 func (x *PMRegistry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[140]
+	mi := &file_proto_worker_proto_msgTypes[142]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10981,7 +11172,7 @@ func (x *PMRegistry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PMRegistry.ProtoReflect.Descriptor instead.
 func (*PMRegistry) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{140}
+	return file_proto_worker_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *PMRegistry) GetName() string {
@@ -11023,7 +11214,7 @@ type GetPMConfigRequest struct {
 func (x *GetPMConfigRequest) Reset() {
 	*x = GetPMConfigRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[141]
+		mi := &file_proto_worker_proto_msgTypes[143]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11036,7 +11227,7 @@ func (x *GetPMConfigRequest) String() string {
 func (*GetPMConfigRequest) ProtoMessage() {}
 
 func (x *GetPMConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[141]
+	mi := &file_proto_worker_proto_msgTypes[143]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11049,7 +11240,7 @@ func (x *GetPMConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPMConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetPMConfigRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{141}
+	return file_proto_worker_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *GetPMConfigRequest) GetPm() string {
@@ -11074,7 +11265,7 @@ type GetPMConfigResponse struct {
 func (x *GetPMConfigResponse) Reset() {
 	*x = GetPMConfigResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[142]
+		mi := &file_proto_worker_proto_msgTypes[144]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11087,7 +11278,7 @@ func (x *GetPMConfigResponse) String() string {
 func (*GetPMConfigResponse) ProtoMessage() {}
 
 func (x *GetPMConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[142]
+	mi := &file_proto_worker_proto_msgTypes[144]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11100,7 +11291,7 @@ func (x *GetPMConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPMConfigResponse.ProtoReflect.Descriptor instead.
 func (*GetPMConfigResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{142}
+	return file_proto_worker_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *GetPMConfigResponse) GetPm() string {
@@ -11150,7 +11341,7 @@ type SetPMConfigRequest struct {
 func (x *SetPMConfigRequest) Reset() {
 	*x = SetPMConfigRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[143]
+		mi := &file_proto_worker_proto_msgTypes[145]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11163,7 +11354,7 @@ func (x *SetPMConfigRequest) String() string {
 func (*SetPMConfigRequest) ProtoMessage() {}
 
 func (x *SetPMConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[143]
+	mi := &file_proto_worker_proto_msgTypes[145]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11176,7 +11367,7 @@ func (x *SetPMConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPMConfigRequest.ProtoReflect.Descriptor instead.
 func (*SetPMConfigRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{143}
+	return file_proto_worker_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *SetPMConfigRequest) GetPm() string {
@@ -11206,7 +11397,7 @@ type SetPMConfigResponse struct {
 func (x *SetPMConfigResponse) Reset() {
 	*x = SetPMConfigResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[144]
+		mi := &file_proto_worker_proto_msgTypes[146]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11219,7 +11410,7 @@ func (x *SetPMConfigResponse) String() string {
 func (*SetPMConfigResponse) ProtoMessage() {}
 
 func (x *SetPMConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[144]
+	mi := &file_proto_worker_proto_msgTypes[146]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11232,7 +11423,7 @@ func (x *SetPMConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetPMConfigResponse.ProtoReflect.Descriptor instead.
 func (*SetPMConfigResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{144}
+	return file_proto_worker_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *SetPMConfigResponse) GetSuccess() bool {
@@ -11271,7 +11462,7 @@ type GlobalPackage struct {
 func (x *GlobalPackage) Reset() {
 	*x = GlobalPackage{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[145]
+		mi := &file_proto_worker_proto_msgTypes[147]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11284,7 +11475,7 @@ func (x *GlobalPackage) String() string {
 func (*GlobalPackage) ProtoMessage() {}
 
 func (x *GlobalPackage) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[145]
+	mi := &file_proto_worker_proto_msgTypes[147]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11297,7 +11488,7 @@ func (x *GlobalPackage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GlobalPackage.ProtoReflect.Descriptor instead.
 func (*GlobalPackage) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{145}
+	return file_proto_worker_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *GlobalPackage) GetName() string {
@@ -11332,7 +11523,7 @@ type ListGlobalPackagesRequest struct {
 func (x *ListGlobalPackagesRequest) Reset() {
 	*x = ListGlobalPackagesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[146]
+		mi := &file_proto_worker_proto_msgTypes[148]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11345,7 +11536,7 @@ func (x *ListGlobalPackagesRequest) String() string {
 func (*ListGlobalPackagesRequest) ProtoMessage() {}
 
 func (x *ListGlobalPackagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[146]
+	mi := &file_proto_worker_proto_msgTypes[148]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11358,7 +11549,7 @@ func (x *ListGlobalPackagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListGlobalPackagesRequest.ProtoReflect.Descriptor instead.
 func (*ListGlobalPackagesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{146}
+	return file_proto_worker_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *ListGlobalPackagesRequest) GetPm() string {
@@ -11381,7 +11572,7 @@ type ListGlobalPackagesResponse struct {
 func (x *ListGlobalPackagesResponse) Reset() {
 	*x = ListGlobalPackagesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[147]
+		mi := &file_proto_worker_proto_msgTypes[149]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11394,7 +11585,7 @@ func (x *ListGlobalPackagesResponse) String() string {
 func (*ListGlobalPackagesResponse) ProtoMessage() {}
 
 func (x *ListGlobalPackagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[147]
+	mi := &file_proto_worker_proto_msgTypes[149]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11407,7 +11598,7 @@ func (x *ListGlobalPackagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListGlobalPackagesResponse.ProtoReflect.Descriptor instead.
 func (*ListGlobalPackagesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{147}
+	return file_proto_worker_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *ListGlobalPackagesResponse) GetSuccess() bool {
@@ -11445,7 +11636,7 @@ type InstallGlobalPackageRequest struct {
 func (x *InstallGlobalPackageRequest) Reset() {
 	*x = InstallGlobalPackageRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[148]
+		mi := &file_proto_worker_proto_msgTypes[150]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11458,7 +11649,7 @@ func (x *InstallGlobalPackageRequest) String() string {
 func (*InstallGlobalPackageRequest) ProtoMessage() {}
 
 func (x *InstallGlobalPackageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[148]
+	mi := &file_proto_worker_proto_msgTypes[150]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11471,7 +11662,7 @@ func (x *InstallGlobalPackageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallGlobalPackageRequest.ProtoReflect.Descriptor instead.
 func (*InstallGlobalPackageRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{148}
+	return file_proto_worker_proto_rawDescGZIP(), []int{150}
 }
 
 func (x *InstallGlobalPackageRequest) GetPm() string {
@@ -11515,7 +11706,7 @@ type InstallGlobalPackageResponse struct {
 func (x *InstallGlobalPackageResponse) Reset() {
 	*x = InstallGlobalPackageResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[149]
+		mi := &file_proto_worker_proto_msgTypes[151]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11528,7 +11719,7 @@ func (x *InstallGlobalPackageResponse) String() string {
 func (*InstallGlobalPackageResponse) ProtoMessage() {}
 
 func (x *InstallGlobalPackageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[149]
+	mi := &file_proto_worker_proto_msgTypes[151]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11541,7 +11732,7 @@ func (x *InstallGlobalPackageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallGlobalPackageResponse.ProtoReflect.Descriptor instead.
 func (*InstallGlobalPackageResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{149}
+	return file_proto_worker_proto_rawDescGZIP(), []int{151}
 }
 
 func (x *InstallGlobalPackageResponse) GetSuccess() bool {
@@ -11577,7 +11768,7 @@ type RemoveGlobalPackageRequest struct {
 func (x *RemoveGlobalPackageRequest) Reset() {
 	*x = RemoveGlobalPackageRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[150]
+		mi := &file_proto_worker_proto_msgTypes[152]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11590,7 +11781,7 @@ func (x *RemoveGlobalPackageRequest) String() string {
 func (*RemoveGlobalPackageRequest) ProtoMessage() {}
 
 func (x *RemoveGlobalPackageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[150]
+	mi := &file_proto_worker_proto_msgTypes[152]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11603,7 +11794,7 @@ func (x *RemoveGlobalPackageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveGlobalPackageRequest.ProtoReflect.Descriptor instead.
 func (*RemoveGlobalPackageRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{150}
+	return file_proto_worker_proto_rawDescGZIP(), []int{152}
 }
 
 func (x *RemoveGlobalPackageRequest) GetPm() string {
@@ -11632,7 +11823,7 @@ type RemoveGlobalPackageResponse struct {
 func (x *RemoveGlobalPackageResponse) Reset() {
 	*x = RemoveGlobalPackageResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[151]
+		mi := &file_proto_worker_proto_msgTypes[153]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11645,7 +11836,7 @@ func (x *RemoveGlobalPackageResponse) String() string {
 func (*RemoveGlobalPackageResponse) ProtoMessage() {}
 
 func (x *RemoveGlobalPackageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[151]
+	mi := &file_proto_worker_proto_msgTypes[153]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11658,7 +11849,7 @@ func (x *RemoveGlobalPackageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveGlobalPackageResponse.ProtoReflect.Descriptor instead.
 func (*RemoveGlobalPackageResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{151}
+	return file_proto_worker_proto_rawDescGZIP(), []int{153}
 }
 
 func (x *RemoveGlobalPackageResponse) GetSuccess() bool {
@@ -11698,7 +11889,7 @@ type DeployServerProbeRequest struct {
 func (x *DeployServerProbeRequest) Reset() {
 	*x = DeployServerProbeRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[152]
+		mi := &file_proto_worker_proto_msgTypes[154]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11711,7 +11902,7 @@ func (x *DeployServerProbeRequest) String() string {
 func (*DeployServerProbeRequest) ProtoMessage() {}
 
 func (x *DeployServerProbeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[152]
+	mi := &file_proto_worker_proto_msgTypes[154]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11724,7 +11915,7 @@ func (x *DeployServerProbeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployServerProbeRequest.ProtoReflect.Descriptor instead.
 func (*DeployServerProbeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{152}
+	return file_proto_worker_proto_rawDescGZIP(), []int{154}
 }
 
 func (x *DeployServerProbeRequest) GetInstanceUuid() string {
@@ -11788,7 +11979,7 @@ type DeployServerProbeResponse struct {
 func (x *DeployServerProbeResponse) Reset() {
 	*x = DeployServerProbeResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[153]
+		mi := &file_proto_worker_proto_msgTypes[155]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11801,7 +11992,7 @@ func (x *DeployServerProbeResponse) String() string {
 func (*DeployServerProbeResponse) ProtoMessage() {}
 
 func (x *DeployServerProbeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[153]
+	mi := &file_proto_worker_proto_msgTypes[155]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11814,7 +12005,7 @@ func (x *DeployServerProbeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployServerProbeResponse.ProtoReflect.Descriptor instead.
 func (*DeployServerProbeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{153}
+	return file_proto_worker_proto_rawDescGZIP(), []int{155}
 }
 
 func (x *DeployServerProbeResponse) GetSuccess() bool {
@@ -11847,7 +12038,7 @@ type CloneWorkDirRequest struct {
 func (x *CloneWorkDirRequest) Reset() {
 	*x = CloneWorkDirRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[154]
+		mi := &file_proto_worker_proto_msgTypes[156]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11860,7 +12051,7 @@ func (x *CloneWorkDirRequest) String() string {
 func (*CloneWorkDirRequest) ProtoMessage() {}
 
 func (x *CloneWorkDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[154]
+	mi := &file_proto_worker_proto_msgTypes[156]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11873,7 +12064,7 @@ func (x *CloneWorkDirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloneWorkDirRequest.ProtoReflect.Descriptor instead.
 func (*CloneWorkDirRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{154}
+	return file_proto_worker_proto_rawDescGZIP(), []int{156}
 }
 
 func (x *CloneWorkDirRequest) GetSrcInstanceUuid() string {
@@ -11919,7 +12110,7 @@ type CloneWorkDirResponse struct {
 func (x *CloneWorkDirResponse) Reset() {
 	*x = CloneWorkDirResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[155]
+		mi := &file_proto_worker_proto_msgTypes[157]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -11932,7 +12123,7 @@ func (x *CloneWorkDirResponse) String() string {
 func (*CloneWorkDirResponse) ProtoMessage() {}
 
 func (x *CloneWorkDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[155]
+	mi := &file_proto_worker_proto_msgTypes[157]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -11945,7 +12136,7 @@ func (x *CloneWorkDirResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloneWorkDirResponse.ProtoReflect.Descriptor instead.
 func (*CloneWorkDirResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{155}
+	return file_proto_worker_proto_rawDescGZIP(), []int{157}
 }
 
 func (x *CloneWorkDirResponse) GetSuccess() bool {
@@ -12000,7 +12191,7 @@ type RemoveInstanceRequest struct {
 func (x *RemoveInstanceRequest) Reset() {
 	*x = RemoveInstanceRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[156]
+		mi := &file_proto_worker_proto_msgTypes[158]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12013,7 +12204,7 @@ func (x *RemoveInstanceRequest) String() string {
 func (*RemoveInstanceRequest) ProtoMessage() {}
 
 func (x *RemoveInstanceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[156]
+	mi := &file_proto_worker_proto_msgTypes[158]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12026,7 +12217,7 @@ func (x *RemoveInstanceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveInstanceRequest.ProtoReflect.Descriptor instead.
 func (*RemoveInstanceRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{156}
+	return file_proto_worker_proto_rawDescGZIP(), []int{158}
 }
 
 func (x *RemoveInstanceRequest) GetInstanceUuid() string {
@@ -12067,7 +12258,7 @@ type RemoveInstanceResponse struct {
 func (x *RemoveInstanceResponse) Reset() {
 	*x = RemoveInstanceResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[157]
+		mi := &file_proto_worker_proto_msgTypes[159]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12080,7 +12271,7 @@ func (x *RemoveInstanceResponse) String() string {
 func (*RemoveInstanceResponse) ProtoMessage() {}
 
 func (x *RemoveInstanceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[157]
+	mi := &file_proto_worker_proto_msgTypes[159]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12093,7 +12284,7 @@ func (x *RemoveInstanceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveInstanceResponse.ProtoReflect.Descriptor instead.
 func (*RemoveInstanceResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{157}
+	return file_proto_worker_proto_rawDescGZIP(), []int{159}
 }
 
 func (x *RemoveInstanceResponse) GetSuccess() bool {
@@ -12133,7 +12324,7 @@ type ListImagesRequest struct {
 func (x *ListImagesRequest) Reset() {
 	*x = ListImagesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[158]
+		mi := &file_proto_worker_proto_msgTypes[160]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12146,7 +12337,7 @@ func (x *ListImagesRequest) String() string {
 func (*ListImagesRequest) ProtoMessage() {}
 
 func (x *ListImagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[158]
+	mi := &file_proto_worker_proto_msgTypes[160]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12159,7 +12350,7 @@ func (x *ListImagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListImagesRequest.ProtoReflect.Descriptor instead.
 func (*ListImagesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{158}
+	return file_proto_worker_proto_rawDescGZIP(), []int{160}
 }
 
 // ImageInfo 描述 Worker 本机一个 Docker 镜像。
@@ -12177,7 +12368,7 @@ type ImageInfo struct {
 func (x *ImageInfo) Reset() {
 	*x = ImageInfo{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[159]
+		mi := &file_proto_worker_proto_msgTypes[161]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12190,7 +12381,7 @@ func (x *ImageInfo) String() string {
 func (*ImageInfo) ProtoMessage() {}
 
 func (x *ImageInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[159]
+	mi := &file_proto_worker_proto_msgTypes[161]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12203,7 +12394,7 @@ func (x *ImageInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImageInfo.ProtoReflect.Descriptor instead.
 func (*ImageInfo) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{159}
+	return file_proto_worker_proto_rawDescGZIP(), []int{161}
 }
 
 func (x *ImageInfo) GetId() string {
@@ -12248,7 +12439,7 @@ type ListImagesResponse struct {
 func (x *ListImagesResponse) Reset() {
 	*x = ListImagesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[160]
+		mi := &file_proto_worker_proto_msgTypes[162]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12261,7 +12452,7 @@ func (x *ListImagesResponse) String() string {
 func (*ListImagesResponse) ProtoMessage() {}
 
 func (x *ListImagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[160]
+	mi := &file_proto_worker_proto_msgTypes[162]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12274,7 +12465,7 @@ func (x *ListImagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListImagesResponse.ProtoReflect.Descriptor instead.
 func (*ListImagesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{160}
+	return file_proto_worker_proto_rawDescGZIP(), []int{162}
 }
 
 func (x *ListImagesResponse) GetImages() []*ImageInfo {
@@ -12309,7 +12500,7 @@ type PullImageRequest struct {
 func (x *PullImageRequest) Reset() {
 	*x = PullImageRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[161]
+		mi := &file_proto_worker_proto_msgTypes[163]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12322,7 +12513,7 @@ func (x *PullImageRequest) String() string {
 func (*PullImageRequest) ProtoMessage() {}
 
 func (x *PullImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[161]
+	mi := &file_proto_worker_proto_msgTypes[163]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12335,7 +12526,7 @@ func (x *PullImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullImageRequest.ProtoReflect.Descriptor instead.
 func (*PullImageRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{161}
+	return file_proto_worker_proto_rawDescGZIP(), []int{163}
 }
 
 func (x *PullImageRequest) GetImage() string {
@@ -12357,7 +12548,7 @@ type PullImageResponse struct {
 func (x *PullImageResponse) Reset() {
 	*x = PullImageResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[162]
+		mi := &file_proto_worker_proto_msgTypes[164]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12370,7 +12561,7 @@ func (x *PullImageResponse) String() string {
 func (*PullImageResponse) ProtoMessage() {}
 
 func (x *PullImageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[162]
+	mi := &file_proto_worker_proto_msgTypes[164]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12383,7 +12574,7 @@ func (x *PullImageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullImageResponse.ProtoReflect.Descriptor instead.
 func (*PullImageResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{162}
+	return file_proto_worker_proto_rawDescGZIP(), []int{164}
 }
 
 func (x *PullImageResponse) GetSuccess() bool {
@@ -12412,7 +12603,7 @@ type RemoveImageRequest struct {
 func (x *RemoveImageRequest) Reset() {
 	*x = RemoveImageRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[163]
+		mi := &file_proto_worker_proto_msgTypes[165]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12425,7 +12616,7 @@ func (x *RemoveImageRequest) String() string {
 func (*RemoveImageRequest) ProtoMessage() {}
 
 func (x *RemoveImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[163]
+	mi := &file_proto_worker_proto_msgTypes[165]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12438,7 +12629,7 @@ func (x *RemoveImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveImageRequest.ProtoReflect.Descriptor instead.
 func (*RemoveImageRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{163}
+	return file_proto_worker_proto_rawDescGZIP(), []int{165}
 }
 
 func (x *RemoveImageRequest) GetImage() string {
@@ -12467,7 +12658,7 @@ type RemoveImageResponse struct {
 func (x *RemoveImageResponse) Reset() {
 	*x = RemoveImageResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[164]
+		mi := &file_proto_worker_proto_msgTypes[166]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12480,7 +12671,7 @@ func (x *RemoveImageResponse) String() string {
 func (*RemoveImageResponse) ProtoMessage() {}
 
 func (x *RemoveImageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[164]
+	mi := &file_proto_worker_proto_msgTypes[166]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12493,7 +12684,7 @@ func (x *RemoveImageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveImageResponse.ProtoReflect.Descriptor instead.
 func (*RemoveImageResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{164}
+	return file_proto_worker_proto_rawDescGZIP(), []int{166}
 }
 
 func (x *RemoveImageResponse) GetSuccess() bool {
@@ -12531,7 +12722,7 @@ type StorageBackendSpec struct {
 func (x *StorageBackendSpec) Reset() {
 	*x = StorageBackendSpec{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[165]
+		mi := &file_proto_worker_proto_msgTypes[167]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12544,7 +12735,7 @@ func (x *StorageBackendSpec) String() string {
 func (*StorageBackendSpec) ProtoMessage() {}
 
 func (x *StorageBackendSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[165]
+	mi := &file_proto_worker_proto_msgTypes[167]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12557,7 +12748,7 @@ func (x *StorageBackendSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageBackendSpec.ProtoReflect.Descriptor instead.
 func (*StorageBackendSpec) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{165}
+	return file_proto_worker_proto_rawDescGZIP(), []int{167}
 }
 
 func (x *StorageBackendSpec) GetType() string {
@@ -12630,7 +12821,7 @@ type BackupManifestEntry struct {
 func (x *BackupManifestEntry) Reset() {
 	*x = BackupManifestEntry{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[166]
+		mi := &file_proto_worker_proto_msgTypes[168]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12643,7 +12834,7 @@ func (x *BackupManifestEntry) String() string {
 func (*BackupManifestEntry) ProtoMessage() {}
 
 func (x *BackupManifestEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[166]
+	mi := &file_proto_worker_proto_msgTypes[168]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12656,7 +12847,7 @@ func (x *BackupManifestEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BackupManifestEntry.ProtoReflect.Descriptor instead.
 func (*BackupManifestEntry) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{166}
+	return file_proto_worker_proto_rawDescGZIP(), []int{168}
 }
 
 func (x *BackupManifestEntry) GetPath() string {
@@ -12695,7 +12886,7 @@ type CreateBackupRequest struct {
 func (x *CreateBackupRequest) Reset() {
 	*x = CreateBackupRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[167]
+		mi := &file_proto_worker_proto_msgTypes[169]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12708,7 +12899,7 @@ func (x *CreateBackupRequest) String() string {
 func (*CreateBackupRequest) ProtoMessage() {}
 
 func (x *CreateBackupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[167]
+	mi := &file_proto_worker_proto_msgTypes[169]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12721,7 +12912,7 @@ func (x *CreateBackupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBackupRequest.ProtoReflect.Descriptor instead.
 func (*CreateBackupRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{167}
+	return file_proto_worker_proto_rawDescGZIP(), []int{169}
 }
 
 func (x *CreateBackupRequest) GetInstanceUuid() string {
@@ -12778,7 +12969,7 @@ type CreateBackupResponse struct {
 func (x *CreateBackupResponse) Reset() {
 	*x = CreateBackupResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[168]
+		mi := &file_proto_worker_proto_msgTypes[170]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12791,7 +12982,7 @@ func (x *CreateBackupResponse) String() string {
 func (*CreateBackupResponse) ProtoMessage() {}
 
 func (x *CreateBackupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[168]
+	mi := &file_proto_worker_proto_msgTypes[170]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12804,7 +12995,7 @@ func (x *CreateBackupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBackupResponse.ProtoReflect.Descriptor instead.
 func (*CreateBackupResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{168}
+	return file_proto_worker_proto_rawDescGZIP(), []int{170}
 }
 
 func (x *CreateBackupResponse) GetSuccess() bool {
@@ -12885,7 +13076,7 @@ type RestoreBackupRequest struct {
 func (x *RestoreBackupRequest) Reset() {
 	*x = RestoreBackupRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[169]
+		mi := &file_proto_worker_proto_msgTypes[171]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12898,7 +13089,7 @@ func (x *RestoreBackupRequest) String() string {
 func (*RestoreBackupRequest) ProtoMessage() {}
 
 func (x *RestoreBackupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[169]
+	mi := &file_proto_worker_proto_msgTypes[171]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12911,7 +13102,7 @@ func (x *RestoreBackupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreBackupRequest.ProtoReflect.Descriptor instead.
 func (*RestoreBackupRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{169}
+	return file_proto_worker_proto_rawDescGZIP(), []int{171}
 }
 
 func (x *RestoreBackupRequest) GetInstanceUuid() string {
@@ -12962,7 +13153,7 @@ type RestoreBackupResponse struct {
 func (x *RestoreBackupResponse) Reset() {
 	*x = RestoreBackupResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[170]
+		mi := &file_proto_worker_proto_msgTypes[172]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -12975,7 +13166,7 @@ func (x *RestoreBackupResponse) String() string {
 func (*RestoreBackupResponse) ProtoMessage() {}
 
 func (x *RestoreBackupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[170]
+	mi := &file_proto_worker_proto_msgTypes[172]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -12988,7 +13179,7 @@ func (x *RestoreBackupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreBackupResponse.ProtoReflect.Descriptor instead.
 func (*RestoreBackupResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{170}
+	return file_proto_worker_proto_rawDescGZIP(), []int{172}
 }
 
 func (x *RestoreBackupResponse) GetSuccess() bool {
@@ -13023,7 +13214,7 @@ type TestStorageBackendRequest struct {
 func (x *TestStorageBackendRequest) Reset() {
 	*x = TestStorageBackendRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[171]
+		mi := &file_proto_worker_proto_msgTypes[173]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13036,7 +13227,7 @@ func (x *TestStorageBackendRequest) String() string {
 func (*TestStorageBackendRequest) ProtoMessage() {}
 
 func (x *TestStorageBackendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[171]
+	mi := &file_proto_worker_proto_msgTypes[173]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13049,7 +13240,7 @@ func (x *TestStorageBackendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestStorageBackendRequest.ProtoReflect.Descriptor instead.
 func (*TestStorageBackendRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{171}
+	return file_proto_worker_proto_rawDescGZIP(), []int{173}
 }
 
 func (x *TestStorageBackendRequest) GetStorage() *StorageBackendSpec {
@@ -13073,7 +13264,7 @@ type TestStorageBackendResponse struct {
 func (x *TestStorageBackendResponse) Reset() {
 	*x = TestStorageBackendResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[172]
+		mi := &file_proto_worker_proto_msgTypes[174]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13086,7 +13277,7 @@ func (x *TestStorageBackendResponse) String() string {
 func (*TestStorageBackendResponse) ProtoMessage() {}
 
 func (x *TestStorageBackendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[172]
+	mi := &file_proto_worker_proto_msgTypes[174]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13099,7 +13290,7 @@ func (x *TestStorageBackendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestStorageBackendResponse.ProtoReflect.Descriptor instead.
 func (*TestStorageBackendResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{172}
+	return file_proto_worker_proto_rawDescGZIP(), []int{174}
 }
 
 func (x *TestStorageBackendResponse) GetSuccess() bool {
@@ -13141,7 +13332,7 @@ type StreamPluginEventsRequest struct {
 func (x *StreamPluginEventsRequest) Reset() {
 	*x = StreamPluginEventsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[173]
+		mi := &file_proto_worker_proto_msgTypes[175]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13154,7 +13345,7 @@ func (x *StreamPluginEventsRequest) String() string {
 func (*StreamPluginEventsRequest) ProtoMessage() {}
 
 func (x *StreamPluginEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[173]
+	mi := &file_proto_worker_proto_msgTypes[175]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13167,7 +13358,7 @@ func (x *StreamPluginEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamPluginEventsRequest.ProtoReflect.Descriptor instead.
 func (*StreamPluginEventsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{173}
+	return file_proto_worker_proto_rawDescGZIP(), []int{175}
 }
 
 func (x *StreamPluginEventsRequest) GetInstanceUuid() string {
@@ -13210,7 +13401,7 @@ type PluginEvent struct {
 func (x *PluginEvent) Reset() {
 	*x = PluginEvent{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[174]
+		mi := &file_proto_worker_proto_msgTypes[176]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13223,7 +13414,7 @@ func (x *PluginEvent) String() string {
 func (*PluginEvent) ProtoMessage() {}
 
 func (x *PluginEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[174]
+	mi := &file_proto_worker_proto_msgTypes[176]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13236,7 +13427,7 @@ func (x *PluginEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginEvent.ProtoReflect.Descriptor instead.
 func (*PluginEvent) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{174}
+	return file_proto_worker_proto_rawDescGZIP(), []int{176}
 }
 
 func (x *PluginEvent) GetInstanceUuid() string {
@@ -13367,7 +13558,7 @@ type PluginCommand struct {
 func (x *PluginCommand) Reset() {
 	*x = PluginCommand{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[175]
+		mi := &file_proto_worker_proto_msgTypes[177]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13380,7 +13571,7 @@ func (x *PluginCommand) String() string {
 func (*PluginCommand) ProtoMessage() {}
 
 func (x *PluginCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[175]
+	mi := &file_proto_worker_proto_msgTypes[177]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13393,7 +13584,7 @@ func (x *PluginCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginCommand.ProtoReflect.Descriptor instead.
 func (*PluginCommand) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{175}
+	return file_proto_worker_proto_rawDescGZIP(), []int{177}
 }
 
 func (x *PluginCommand) GetAction() string {
@@ -13460,7 +13651,7 @@ type SendPluginCommandRequest struct {
 func (x *SendPluginCommandRequest) Reset() {
 	*x = SendPluginCommandRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[176]
+		mi := &file_proto_worker_proto_msgTypes[178]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13473,7 +13664,7 @@ func (x *SendPluginCommandRequest) String() string {
 func (*SendPluginCommandRequest) ProtoMessage() {}
 
 func (x *SendPluginCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[176]
+	mi := &file_proto_worker_proto_msgTypes[178]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13486,7 +13677,7 @@ func (x *SendPluginCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendPluginCommandRequest.ProtoReflect.Descriptor instead.
 func (*SendPluginCommandRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{176}
+	return file_proto_worker_proto_rawDescGZIP(), []int{178}
 }
 
 func (x *SendPluginCommandRequest) GetInstanceUuid() string {
@@ -13525,7 +13716,7 @@ type SendPluginCommandResponse struct {
 func (x *SendPluginCommandResponse) Reset() {
 	*x = SendPluginCommandResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[177]
+		mi := &file_proto_worker_proto_msgTypes[179]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13538,7 +13729,7 @@ func (x *SendPluginCommandResponse) String() string {
 func (*SendPluginCommandResponse) ProtoMessage() {}
 
 func (x *SendPluginCommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[177]
+	mi := &file_proto_worker_proto_msgTypes[179]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13551,7 +13742,7 @@ func (x *SendPluginCommandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendPluginCommandResponse.ProtoReflect.Descriptor instead.
 func (*SendPluginCommandResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{177}
+	return file_proto_worker_proto_rawDescGZIP(), []int{179}
 }
 
 func (x *SendPluginCommandResponse) GetSuccess() bool {
@@ -13593,7 +13784,7 @@ type QueryServerStateRequest struct {
 func (x *QueryServerStateRequest) Reset() {
 	*x = QueryServerStateRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[178]
+		mi := &file_proto_worker_proto_msgTypes[180]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13606,7 +13797,7 @@ func (x *QueryServerStateRequest) String() string {
 func (*QueryServerStateRequest) ProtoMessage() {}
 
 func (x *QueryServerStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[178]
+	mi := &file_proto_worker_proto_msgTypes[180]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13619,7 +13810,7 @@ func (x *QueryServerStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryServerStateRequest.ProtoReflect.Descriptor instead.
 func (*QueryServerStateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{178}
+	return file_proto_worker_proto_rawDescGZIP(), []int{180}
 }
 
 func (x *QueryServerStateRequest) GetInstanceUuid() string {
@@ -13643,7 +13834,7 @@ type QueryServerStateResponse struct {
 func (x *QueryServerStateResponse) Reset() {
 	*x = QueryServerStateResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[179]
+		mi := &file_proto_worker_proto_msgTypes[181]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13656,7 +13847,7 @@ func (x *QueryServerStateResponse) String() string {
 func (*QueryServerStateResponse) ProtoMessage() {}
 
 func (x *QueryServerStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[179]
+	mi := &file_proto_worker_proto_msgTypes[181]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13669,7 +13860,7 @@ func (x *QueryServerStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryServerStateResponse.ProtoReflect.Descriptor instead.
 func (*QueryServerStateResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{179}
+	return file_proto_worker_proto_rawDescGZIP(), []int{181}
 }
 
 func (x *QueryServerStateResponse) GetSuccess() bool {
@@ -13709,7 +13900,7 @@ type GetVersionRequest struct {
 func (x *GetVersionRequest) Reset() {
 	*x = GetVersionRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[180]
+		mi := &file_proto_worker_proto_msgTypes[182]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13722,7 +13913,7 @@ func (x *GetVersionRequest) String() string {
 func (*GetVersionRequest) ProtoMessage() {}
 
 func (x *GetVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[180]
+	mi := &file_proto_worker_proto_msgTypes[182]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13735,7 +13926,7 @@ func (x *GetVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVersionRequest.ProtoReflect.Descriptor instead.
 func (*GetVersionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{180}
+	return file_proto_worker_proto_rawDescGZIP(), []int{182}
 }
 
 type GetVersionResponse struct {
@@ -13752,7 +13943,7 @@ type GetVersionResponse struct {
 func (x *GetVersionResponse) Reset() {
 	*x = GetVersionResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[181]
+		mi := &file_proto_worker_proto_msgTypes[183]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13765,7 +13956,7 @@ func (x *GetVersionResponse) String() string {
 func (*GetVersionResponse) ProtoMessage() {}
 
 func (x *GetVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[181]
+	mi := &file_proto_worker_proto_msgTypes[183]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13778,7 +13969,7 @@ func (x *GetVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVersionResponse.ProtoReflect.Descriptor instead.
 func (*GetVersionResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{181}
+	return file_proto_worker_proto_rawDescGZIP(), []int{183}
 }
 
 func (x *GetVersionResponse) GetVersion() string {
@@ -13819,7 +14010,7 @@ type CheckDockerRequest struct {
 func (x *CheckDockerRequest) Reset() {
 	*x = CheckDockerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[182]
+		mi := &file_proto_worker_proto_msgTypes[184]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13832,7 +14023,7 @@ func (x *CheckDockerRequest) String() string {
 func (*CheckDockerRequest) ProtoMessage() {}
 
 func (x *CheckDockerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[182]
+	mi := &file_proto_worker_proto_msgTypes[184]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13845,7 +14036,7 @@ func (x *CheckDockerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckDockerRequest.ProtoReflect.Descriptor instead.
 func (*CheckDockerRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{182}
+	return file_proto_worker_proto_rawDescGZIP(), []int{184}
 }
 
 type CheckDockerResponse struct {
@@ -13861,7 +14052,7 @@ type CheckDockerResponse struct {
 func (x *CheckDockerResponse) Reset() {
 	*x = CheckDockerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[183]
+		mi := &file_proto_worker_proto_msgTypes[185]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13874,7 +14065,7 @@ func (x *CheckDockerResponse) String() string {
 func (*CheckDockerResponse) ProtoMessage() {}
 
 func (x *CheckDockerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[183]
+	mi := &file_proto_worker_proto_msgTypes[185]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13887,7 +14078,7 @@ func (x *CheckDockerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckDockerResponse.ProtoReflect.Descriptor instead.
 func (*CheckDockerResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{183}
+	return file_proto_worker_proto_rawDescGZIP(), []int{185}
 }
 
 func (x *CheckDockerResponse) GetAvailable() bool {
@@ -13928,7 +14119,7 @@ type UpgradeWorkerRequest struct {
 func (x *UpgradeWorkerRequest) Reset() {
 	*x = UpgradeWorkerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[184]
+		mi := &file_proto_worker_proto_msgTypes[186]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -13941,7 +14132,7 @@ func (x *UpgradeWorkerRequest) String() string {
 func (*UpgradeWorkerRequest) ProtoMessage() {}
 
 func (x *UpgradeWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[184]
+	mi := &file_proto_worker_proto_msgTypes[186]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -13954,7 +14145,7 @@ func (x *UpgradeWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradeWorkerRequest.ProtoReflect.Descriptor instead.
 func (*UpgradeWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{184}
+	return file_proto_worker_proto_rawDescGZIP(), []int{186}
 }
 
 func (x *UpgradeWorkerRequest) GetDownloadUrl() string {
@@ -14005,7 +14196,7 @@ type UpgradeWorkerResponse struct {
 func (x *UpgradeWorkerResponse) Reset() {
 	*x = UpgradeWorkerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[185]
+		mi := &file_proto_worker_proto_msgTypes[187]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14018,7 +14209,7 @@ func (x *UpgradeWorkerResponse) String() string {
 func (*UpgradeWorkerResponse) ProtoMessage() {}
 
 func (x *UpgradeWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[185]
+	mi := &file_proto_worker_proto_msgTypes[187]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14031,7 +14222,7 @@ func (x *UpgradeWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradeWorkerResponse.ProtoReflect.Descriptor instead.
 func (*UpgradeWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{185}
+	return file_proto_worker_proto_rawDescGZIP(), []int{187}
 }
 
 func (x *UpgradeWorkerResponse) GetSuccess() bool {
@@ -14067,7 +14258,7 @@ type ListArchiveEntriesRequest struct {
 func (x *ListArchiveEntriesRequest) Reset() {
 	*x = ListArchiveEntriesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[186]
+		mi := &file_proto_worker_proto_msgTypes[188]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14080,7 +14271,7 @@ func (x *ListArchiveEntriesRequest) String() string {
 func (*ListArchiveEntriesRequest) ProtoMessage() {}
 
 func (x *ListArchiveEntriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[186]
+	mi := &file_proto_worker_proto_msgTypes[188]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14093,7 +14284,7 @@ func (x *ListArchiveEntriesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArchiveEntriesRequest.ProtoReflect.Descriptor instead.
 func (*ListArchiveEntriesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{186}
+	return file_proto_worker_proto_rawDescGZIP(), []int{188}
 }
 
 func (x *ListArchiveEntriesRequest) GetInstanceUuid() string {
@@ -14127,7 +14318,7 @@ type ArchiveEntry struct {
 func (x *ArchiveEntry) Reset() {
 	*x = ArchiveEntry{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[187]
+		mi := &file_proto_worker_proto_msgTypes[189]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14140,7 +14331,7 @@ func (x *ArchiveEntry) String() string {
 func (*ArchiveEntry) ProtoMessage() {}
 
 func (x *ArchiveEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[187]
+	mi := &file_proto_worker_proto_msgTypes[189]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14153,7 +14344,7 @@ func (x *ArchiveEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveEntry.ProtoReflect.Descriptor instead.
 func (*ArchiveEntry) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{187}
+	return file_proto_worker_proto_rawDescGZIP(), []int{189}
 }
 
 func (x *ArchiveEntry) GetName() string {
@@ -14210,7 +14401,7 @@ type ListArchiveEntriesResponse struct {
 func (x *ListArchiveEntriesResponse) Reset() {
 	*x = ListArchiveEntriesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[188]
+		mi := &file_proto_worker_proto_msgTypes[190]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14223,7 +14414,7 @@ func (x *ListArchiveEntriesResponse) String() string {
 func (*ListArchiveEntriesResponse) ProtoMessage() {}
 
 func (x *ListArchiveEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[188]
+	mi := &file_proto_worker_proto_msgTypes[190]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14236,7 +14427,7 @@ func (x *ListArchiveEntriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArchiveEntriesResponse.ProtoReflect.Descriptor instead.
 func (*ListArchiveEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{188}
+	return file_proto_worker_proto_rawDescGZIP(), []int{190}
 }
 
 func (x *ListArchiveEntriesResponse) GetEntries() []*ArchiveEntry {
@@ -14266,7 +14457,7 @@ type ReadArchiveEntryRequest struct {
 func (x *ReadArchiveEntryRequest) Reset() {
 	*x = ReadArchiveEntryRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[189]
+		mi := &file_proto_worker_proto_msgTypes[191]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14279,7 +14470,7 @@ func (x *ReadArchiveEntryRequest) String() string {
 func (*ReadArchiveEntryRequest) ProtoMessage() {}
 
 func (x *ReadArchiveEntryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[189]
+	mi := &file_proto_worker_proto_msgTypes[191]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14292,7 +14483,7 @@ func (x *ReadArchiveEntryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadArchiveEntryRequest.ProtoReflect.Descriptor instead.
 func (*ReadArchiveEntryRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{189}
+	return file_proto_worker_proto_rawDescGZIP(), []int{191}
 }
 
 func (x *ReadArchiveEntryRequest) GetInstanceUuid() string {
@@ -14329,7 +14520,7 @@ type ReadArchiveEntryResponse struct {
 func (x *ReadArchiveEntryResponse) Reset() {
 	*x = ReadArchiveEntryResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[190]
+		mi := &file_proto_worker_proto_msgTypes[192]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14342,7 +14533,7 @@ func (x *ReadArchiveEntryResponse) String() string {
 func (*ReadArchiveEntryResponse) ProtoMessage() {}
 
 func (x *ReadArchiveEntryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[190]
+	mi := &file_proto_worker_proto_msgTypes[192]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14355,7 +14546,7 @@ func (x *ReadArchiveEntryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadArchiveEntryResponse.ProtoReflect.Descriptor instead.
 func (*ReadArchiveEntryResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{190}
+	return file_proto_worker_proto_rawDescGZIP(), []int{192}
 }
 
 func (x *ReadArchiveEntryResponse) GetContent() []byte {
@@ -14392,7 +14583,7 @@ type DecompileClassRequest struct {
 func (x *DecompileClassRequest) Reset() {
 	*x = DecompileClassRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[191]
+		mi := &file_proto_worker_proto_msgTypes[193]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14405,7 +14596,7 @@ func (x *DecompileClassRequest) String() string {
 func (*DecompileClassRequest) ProtoMessage() {}
 
 func (x *DecompileClassRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[191]
+	mi := &file_proto_worker_proto_msgTypes[193]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14418,7 +14609,7 @@ func (x *DecompileClassRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecompileClassRequest.ProtoReflect.Descriptor instead.
 func (*DecompileClassRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{191}
+	return file_proto_worker_proto_rawDescGZIP(), []int{193}
 }
 
 func (x *DecompileClassRequest) GetInstanceUuid() string {
@@ -14457,7 +14648,7 @@ type DecompileClassResponse struct {
 func (x *DecompileClassResponse) Reset() {
 	*x = DecompileClassResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[192]
+		mi := &file_proto_worker_proto_msgTypes[194]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14470,7 +14661,7 @@ func (x *DecompileClassResponse) String() string {
 func (*DecompileClassResponse) ProtoMessage() {}
 
 func (x *DecompileClassResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[192]
+	mi := &file_proto_worker_proto_msgTypes[194]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14483,7 +14674,7 @@ func (x *DecompileClassResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecompileClassResponse.ProtoReflect.Descriptor instead.
 func (*DecompileClassResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{192}
+	return file_proto_worker_proto_rawDescGZIP(), []int{194}
 }
 
 func (x *DecompileClassResponse) GetSuccess() bool {
@@ -14536,7 +14727,7 @@ type TerminalFrame struct {
 func (x *TerminalFrame) Reset() {
 	*x = TerminalFrame{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[193]
+		mi := &file_proto_worker_proto_msgTypes[195]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14549,7 +14740,7 @@ func (x *TerminalFrame) String() string {
 func (*TerminalFrame) ProtoMessage() {}
 
 func (x *TerminalFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[193]
+	mi := &file_proto_worker_proto_msgTypes[195]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14562,7 +14753,7 @@ func (x *TerminalFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalFrame.ProtoReflect.Descriptor instead.
 func (*TerminalFrame) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{193}
+	return file_proto_worker_proto_rawDescGZIP(), []int{195}
 }
 
 func (m *TerminalFrame) GetKind() isTerminalFrame_Kind {
@@ -14616,7 +14807,7 @@ type TerminalOpen struct {
 func (x *TerminalOpen) Reset() {
 	*x = TerminalOpen{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[194]
+		mi := &file_proto_worker_proto_msgTypes[196]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14629,7 +14820,7 @@ func (x *TerminalOpen) String() string {
 func (*TerminalOpen) ProtoMessage() {}
 
 func (x *TerminalOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[194]
+	mi := &file_proto_worker_proto_msgTypes[196]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14642,7 +14833,7 @@ func (x *TerminalOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalOpen.ProtoReflect.Descriptor instead.
 func (*TerminalOpen) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{194}
+	return file_proto_worker_proto_rawDescGZIP(), []int{196}
 }
 
 func (x *TerminalOpen) GetToken() string {
@@ -14665,7 +14856,7 @@ type TerminalWSFrame struct {
 func (x *TerminalWSFrame) Reset() {
 	*x = TerminalWSFrame{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[195]
+		mi := &file_proto_worker_proto_msgTypes[197]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14678,7 +14869,7 @@ func (x *TerminalWSFrame) String() string {
 func (*TerminalWSFrame) ProtoMessage() {}
 
 func (x *TerminalWSFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[195]
+	mi := &file_proto_worker_proto_msgTypes[197]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14691,7 +14882,7 @@ func (x *TerminalWSFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalWSFrame.ProtoReflect.Descriptor instead.
 func (*TerminalWSFrame) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{195}
+	return file_proto_worker_proto_rawDescGZIP(), []int{197}
 }
 
 func (x *TerminalWSFrame) GetMsgType() int32 {
@@ -14720,7 +14911,7 @@ type InspectServerDirRequest struct {
 func (x *InspectServerDirRequest) Reset() {
 	*x = InspectServerDirRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[196]
+		mi := &file_proto_worker_proto_msgTypes[198]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14733,7 +14924,7 @@ func (x *InspectServerDirRequest) String() string {
 func (*InspectServerDirRequest) ProtoMessage() {}
 
 func (x *InspectServerDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[196]
+	mi := &file_proto_worker_proto_msgTypes[198]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14746,7 +14937,7 @@ func (x *InspectServerDirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InspectServerDirRequest.ProtoReflect.Descriptor instead.
 func (*InspectServerDirRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{196}
+	return file_proto_worker_proto_rawDescGZIP(), []int{198}
 }
 
 func (x *InspectServerDirRequest) GetPath() string {
@@ -14770,7 +14961,7 @@ type ImportJarCandidate struct {
 func (x *ImportJarCandidate) Reset() {
 	*x = ImportJarCandidate{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[197]
+		mi := &file_proto_worker_proto_msgTypes[199]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14783,7 +14974,7 @@ func (x *ImportJarCandidate) String() string {
 func (*ImportJarCandidate) ProtoMessage() {}
 
 func (x *ImportJarCandidate) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[197]
+	mi := &file_proto_worker_proto_msgTypes[199]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14796,7 +14987,7 @@ func (x *ImportJarCandidate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportJarCandidate.ProtoReflect.Descriptor instead.
 func (*ImportJarCandidate) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{197}
+	return file_proto_worker_proto_rawDescGZIP(), []int{199}
 }
 
 func (x *ImportJarCandidate) GetPath() string {
@@ -14836,7 +15027,7 @@ type ImportJdkCandidate struct {
 func (x *ImportJdkCandidate) Reset() {
 	*x = ImportJdkCandidate{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[198]
+		mi := &file_proto_worker_proto_msgTypes[200]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14849,7 +15040,7 @@ func (x *ImportJdkCandidate) String() string {
 func (*ImportJdkCandidate) ProtoMessage() {}
 
 func (x *ImportJdkCandidate) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[198]
+	mi := &file_proto_worker_proto_msgTypes[200]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14862,7 +15053,7 @@ func (x *ImportJdkCandidate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportJdkCandidate.ProtoReflect.Descriptor instead.
 func (*ImportJdkCandidate) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{198}
+	return file_proto_worker_proto_rawDescGZIP(), []int{200}
 }
 
 func (x *ImportJdkCandidate) GetPath() string {
@@ -14917,7 +15108,7 @@ type InspectServerDirResponse struct {
 func (x *InspectServerDirResponse) Reset() {
 	*x = InspectServerDirResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[199]
+		mi := &file_proto_worker_proto_msgTypes[201]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -14930,7 +15121,7 @@ func (x *InspectServerDirResponse) String() string {
 func (*InspectServerDirResponse) ProtoMessage() {}
 
 func (x *InspectServerDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[199]
+	mi := &file_proto_worker_proto_msgTypes[201]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -14943,7 +15134,7 @@ func (x *InspectServerDirResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InspectServerDirResponse.ProtoReflect.Descriptor instead.
 func (*InspectServerDirResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{199}
+	return file_proto_worker_proto_rawDescGZIP(), []int{201}
 }
 
 func (x *InspectServerDirResponse) GetSuccess() bool {
@@ -15008,7 +15199,7 @@ type ImportServerDirRequest struct {
 func (x *ImportServerDirRequest) Reset() {
 	*x = ImportServerDirRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[200]
+		mi := &file_proto_worker_proto_msgTypes[202]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15021,7 +15212,7 @@ func (x *ImportServerDirRequest) String() string {
 func (*ImportServerDirRequest) ProtoMessage() {}
 
 func (x *ImportServerDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[200]
+	mi := &file_proto_worker_proto_msgTypes[202]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15034,7 +15225,7 @@ func (x *ImportServerDirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportServerDirRequest.ProtoReflect.Descriptor instead.
 func (*ImportServerDirRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{200}
+	return file_proto_worker_proto_rawDescGZIP(), []int{202}
 }
 
 func (x *ImportServerDirRequest) GetPath() string {
@@ -15072,7 +15263,7 @@ type ImportServerDirResponse struct {
 func (x *ImportServerDirResponse) Reset() {
 	*x = ImportServerDirResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[201]
+		mi := &file_proto_worker_proto_msgTypes[203]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15085,7 +15276,7 @@ func (x *ImportServerDirResponse) String() string {
 func (*ImportServerDirResponse) ProtoMessage() {}
 
 func (x *ImportServerDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[201]
+	mi := &file_proto_worker_proto_msgTypes[203]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15098,7 +15289,7 @@ func (x *ImportServerDirResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportServerDirResponse.ProtoReflect.Descriptor instead.
 func (*ImportServerDirResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{201}
+	return file_proto_worker_proto_rawDescGZIP(), []int{203}
 }
 
 func (x *ImportServerDirResponse) GetSuccess() bool {
@@ -15138,7 +15329,7 @@ type GetBotCapacityRequest struct {
 func (x *GetBotCapacityRequest) Reset() {
 	*x = GetBotCapacityRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[202]
+		mi := &file_proto_worker_proto_msgTypes[204]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15151,7 +15342,7 @@ func (x *GetBotCapacityRequest) String() string {
 func (*GetBotCapacityRequest) ProtoMessage() {}
 
 func (x *GetBotCapacityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[202]
+	mi := &file_proto_worker_proto_msgTypes[204]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15164,7 +15355,7 @@ func (x *GetBotCapacityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBotCapacityRequest.ProtoReflect.Descriptor instead.
 func (*GetBotCapacityRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{202}
+	return file_proto_worker_proto_rawDescGZIP(), []int{204}
 }
 
 type GetBotCapacityResponse struct {
@@ -15195,7 +15386,7 @@ type GetBotCapacityResponse struct {
 func (x *GetBotCapacityResponse) Reset() {
 	*x = GetBotCapacityResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[203]
+		mi := &file_proto_worker_proto_msgTypes[205]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15208,7 +15399,7 @@ func (x *GetBotCapacityResponse) String() string {
 func (*GetBotCapacityResponse) ProtoMessage() {}
 
 func (x *GetBotCapacityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[203]
+	mi := &file_proto_worker_proto_msgTypes[205]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15221,7 +15412,7 @@ func (x *GetBotCapacityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBotCapacityResponse.ProtoReflect.Descriptor instead.
 func (*GetBotCapacityResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{203}
+	return file_proto_worker_proto_rawDescGZIP(), []int{205}
 }
 
 func (x *GetBotCapacityResponse) GetReady() bool {
@@ -15370,7 +15561,7 @@ type BotAssignment struct {
 func (x *BotAssignment) Reset() {
 	*x = BotAssignment{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[204]
+		mi := &file_proto_worker_proto_msgTypes[206]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15383,7 +15574,7 @@ func (x *BotAssignment) String() string {
 func (*BotAssignment) ProtoMessage() {}
 
 func (x *BotAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[204]
+	mi := &file_proto_worker_proto_msgTypes[206]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15396,7 +15587,7 @@ func (x *BotAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotAssignment.ProtoReflect.Descriptor instead.
 func (*BotAssignment) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{204}
+	return file_proto_worker_proto_rawDescGZIP(), []int{206}
 }
 
 func (x *BotAssignment) GetBotUuid() string {
@@ -15532,7 +15723,7 @@ type ApplyBotBatchRequest struct {
 func (x *ApplyBotBatchRequest) Reset() {
 	*x = ApplyBotBatchRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[205]
+		mi := &file_proto_worker_proto_msgTypes[207]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15545,7 +15736,7 @@ func (x *ApplyBotBatchRequest) String() string {
 func (*ApplyBotBatchRequest) ProtoMessage() {}
 
 func (x *ApplyBotBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[205]
+	mi := &file_proto_worker_proto_msgTypes[207]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15558,7 +15749,7 @@ func (x *ApplyBotBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyBotBatchRequest.ProtoReflect.Descriptor instead.
 func (*ApplyBotBatchRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{205}
+	return file_proto_worker_proto_rawDescGZIP(), []int{207}
 }
 
 func (x *ApplyBotBatchRequest) GetBatchId() string {
@@ -15605,7 +15796,7 @@ type ApplyBotBatchItemResult struct {
 func (x *ApplyBotBatchItemResult) Reset() {
 	*x = ApplyBotBatchItemResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[206]
+		mi := &file_proto_worker_proto_msgTypes[208]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15618,7 +15809,7 @@ func (x *ApplyBotBatchItemResult) String() string {
 func (*ApplyBotBatchItemResult) ProtoMessage() {}
 
 func (x *ApplyBotBatchItemResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[206]
+	mi := &file_proto_worker_proto_msgTypes[208]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15631,7 +15822,7 @@ func (x *ApplyBotBatchItemResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyBotBatchItemResult.ProtoReflect.Descriptor instead.
 func (*ApplyBotBatchItemResult) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{206}
+	return file_proto_worker_proto_rawDescGZIP(), []int{208}
 }
 
 func (x *ApplyBotBatchItemResult) GetBotUuid() string {
@@ -15690,7 +15881,7 @@ type ApplyBotBatchResponse struct {
 func (x *ApplyBotBatchResponse) Reset() {
 	*x = ApplyBotBatchResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[207]
+		mi := &file_proto_worker_proto_msgTypes[209]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15703,7 +15894,7 @@ func (x *ApplyBotBatchResponse) String() string {
 func (*ApplyBotBatchResponse) ProtoMessage() {}
 
 func (x *ApplyBotBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[207]
+	mi := &file_proto_worker_proto_msgTypes[209]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15716,7 +15907,7 @@ func (x *ApplyBotBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyBotBatchResponse.ProtoReflect.Descriptor instead.
 func (*ApplyBotBatchResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{207}
+	return file_proto_worker_proto_rawDescGZIP(), []int{209}
 }
 
 func (x *ApplyBotBatchResponse) GetBatchId() string {
@@ -15758,7 +15949,7 @@ type GetBotFleetSnapshotRequest struct {
 func (x *GetBotFleetSnapshotRequest) Reset() {
 	*x = GetBotFleetSnapshotRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[208]
+		mi := &file_proto_worker_proto_msgTypes[210]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15771,7 +15962,7 @@ func (x *GetBotFleetSnapshotRequest) String() string {
 func (*GetBotFleetSnapshotRequest) ProtoMessage() {}
 
 func (x *GetBotFleetSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[208]
+	mi := &file_proto_worker_proto_msgTypes[210]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15784,7 +15975,7 @@ func (x *GetBotFleetSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBotFleetSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*GetBotFleetSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{208}
+	return file_proto_worker_proto_rawDescGZIP(), []int{210}
 }
 
 func (x *GetBotFleetSnapshotRequest) GetSessionUuid() string {
@@ -15807,7 +15998,7 @@ type BotPosition struct {
 func (x *BotPosition) Reset() {
 	*x = BotPosition{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[209]
+		mi := &file_proto_worker_proto_msgTypes[211]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15820,7 +16011,7 @@ func (x *BotPosition) String() string {
 func (*BotPosition) ProtoMessage() {}
 
 func (x *BotPosition) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[209]
+	mi := &file_proto_worker_proto_msgTypes[211]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15833,7 +16024,7 @@ func (x *BotPosition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotPosition.ProtoReflect.Descriptor instead.
 func (*BotPosition) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{209}
+	return file_proto_worker_proto_rawDescGZIP(), []int{211}
 }
 
 func (x *BotPosition) GetX() float64 {
@@ -15883,7 +16074,7 @@ type BotRuntimeSnapshot struct {
 func (x *BotRuntimeSnapshot) Reset() {
 	*x = BotRuntimeSnapshot{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[210]
+		mi := &file_proto_worker_proto_msgTypes[212]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -15896,7 +16087,7 @@ func (x *BotRuntimeSnapshot) String() string {
 func (*BotRuntimeSnapshot) ProtoMessage() {}
 
 func (x *BotRuntimeSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[210]
+	mi := &file_proto_worker_proto_msgTypes[212]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -15909,7 +16100,7 @@ func (x *BotRuntimeSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotRuntimeSnapshot.ProtoReflect.Descriptor instead.
 func (*BotRuntimeSnapshot) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{210}
+	return file_proto_worker_proto_rawDescGZIP(), []int{212}
 }
 
 func (x *BotRuntimeSnapshot) GetBotUuid() string {
@@ -16037,7 +16228,7 @@ type GetBotFleetSnapshotResponse struct {
 func (x *GetBotFleetSnapshotResponse) Reset() {
 	*x = GetBotFleetSnapshotResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[211]
+		mi := &file_proto_worker_proto_msgTypes[213]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16050,7 +16241,7 @@ func (x *GetBotFleetSnapshotResponse) String() string {
 func (*GetBotFleetSnapshotResponse) ProtoMessage() {}
 
 func (x *GetBotFleetSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[211]
+	mi := &file_proto_worker_proto_msgTypes[213]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16063,7 +16254,7 @@ func (x *GetBotFleetSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBotFleetSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*GetBotFleetSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{211}
+	return file_proto_worker_proto_rawDescGZIP(), []int{213}
 }
 
 func (x *GetBotFleetSnapshotResponse) GetBots() []*BotRuntimeSnapshot {
@@ -16098,7 +16289,7 @@ type StreamBotFleetEventsRequest struct {
 func (x *StreamBotFleetEventsRequest) Reset() {
 	*x = StreamBotFleetEventsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[212]
+		mi := &file_proto_worker_proto_msgTypes[214]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16111,7 +16302,7 @@ func (x *StreamBotFleetEventsRequest) String() string {
 func (*StreamBotFleetEventsRequest) ProtoMessage() {}
 
 func (x *StreamBotFleetEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[212]
+	mi := &file_proto_worker_proto_msgTypes[214]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16124,7 +16315,7 @@ func (x *StreamBotFleetEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamBotFleetEventsRequest.ProtoReflect.Descriptor instead.
 func (*StreamBotFleetEventsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{212}
+	return file_proto_worker_proto_rawDescGZIP(), []int{214}
 }
 
 func (x *StreamBotFleetEventsRequest) GetSessionUuid() string {
@@ -16157,7 +16348,7 @@ type BotActionEvent struct {
 func (x *BotActionEvent) Reset() {
 	*x = BotActionEvent{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[213]
+		mi := &file_proto_worker_proto_msgTypes[215]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16170,7 +16361,7 @@ func (x *BotActionEvent) String() string {
 func (*BotActionEvent) ProtoMessage() {}
 
 func (x *BotActionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[213]
+	mi := &file_proto_worker_proto_msgTypes[215]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16183,7 +16374,7 @@ func (x *BotActionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotActionEvent.ProtoReflect.Descriptor instead.
 func (*BotActionEvent) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{213}
+	return file_proto_worker_proto_rawDescGZIP(), []int{215}
 }
 
 func (x *BotActionEvent) GetBotUuid() string {
@@ -16291,7 +16482,7 @@ type BotFleetEvent struct {
 func (x *BotFleetEvent) Reset() {
 	*x = BotFleetEvent{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[214]
+		mi := &file_proto_worker_proto_msgTypes[216]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16304,7 +16495,7 @@ func (x *BotFleetEvent) String() string {
 func (*BotFleetEvent) ProtoMessage() {}
 
 func (x *BotFleetEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[214]
+	mi := &file_proto_worker_proto_msgTypes[216]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16317,7 +16508,7 @@ func (x *BotFleetEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotFleetEvent.ProtoReflect.Descriptor instead.
 func (*BotFleetEvent) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{214}
+	return file_proto_worker_proto_rawDescGZIP(), []int{216}
 }
 
 func (m *BotFleetEvent) GetEvent() isBotFleetEvent_Event {
@@ -16377,7 +16568,7 @@ type BotActionSignal struct {
 func (x *BotActionSignal) Reset() {
 	*x = BotActionSignal{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[215]
+		mi := &file_proto_worker_proto_msgTypes[217]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16390,7 +16581,7 @@ func (x *BotActionSignal) String() string {
 func (*BotActionSignal) ProtoMessage() {}
 
 func (x *BotActionSignal) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[215]
+	mi := &file_proto_worker_proto_msgTypes[217]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16403,7 +16594,7 @@ func (x *BotActionSignal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotActionSignal.ProtoReflect.Descriptor instead.
 func (*BotActionSignal) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{215}
+	return file_proto_worker_proto_rawDescGZIP(), []int{217}
 }
 
 func (x *BotActionSignal) GetSignalId() string {
@@ -16487,7 +16678,7 @@ type SignalBotActionsRequest struct {
 func (x *SignalBotActionsRequest) Reset() {
 	*x = SignalBotActionsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[216]
+		mi := &file_proto_worker_proto_msgTypes[218]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16500,7 +16691,7 @@ func (x *SignalBotActionsRequest) String() string {
 func (*SignalBotActionsRequest) ProtoMessage() {}
 
 func (x *SignalBotActionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[216]
+	mi := &file_proto_worker_proto_msgTypes[218]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16513,7 +16704,7 @@ func (x *SignalBotActionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalBotActionsRequest.ProtoReflect.Descriptor instead.
 func (*SignalBotActionsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{216}
+	return file_proto_worker_proto_rawDescGZIP(), []int{218}
 }
 
 func (x *SignalBotActionsRequest) GetSignals() []*BotActionSignal {
@@ -16538,7 +16729,7 @@ type SignalBotActionItemResult struct {
 func (x *SignalBotActionItemResult) Reset() {
 	*x = SignalBotActionItemResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[217]
+		mi := &file_proto_worker_proto_msgTypes[219]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16551,7 +16742,7 @@ func (x *SignalBotActionItemResult) String() string {
 func (*SignalBotActionItemResult) ProtoMessage() {}
 
 func (x *SignalBotActionItemResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[217]
+	mi := &file_proto_worker_proto_msgTypes[219]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16564,7 +16755,7 @@ func (x *SignalBotActionItemResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalBotActionItemResult.ProtoReflect.Descriptor instead.
 func (*SignalBotActionItemResult) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{217}
+	return file_proto_worker_proto_rawDescGZIP(), []int{219}
 }
 
 func (x *SignalBotActionItemResult) GetSignalId() string {
@@ -16613,7 +16804,7 @@ type SignalBotActionsResponse struct {
 func (x *SignalBotActionsResponse) Reset() {
 	*x = SignalBotActionsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[218]
+		mi := &file_proto_worker_proto_msgTypes[220]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16626,7 +16817,7 @@ func (x *SignalBotActionsResponse) String() string {
 func (*SignalBotActionsResponse) ProtoMessage() {}
 
 func (x *SignalBotActionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[218]
+	mi := &file_proto_worker_proto_msgTypes[220]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16639,7 +16830,7 @@ func (x *SignalBotActionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SignalBotActionsResponse.ProtoReflect.Descriptor instead.
 func (*SignalBotActionsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{218}
+	return file_proto_worker_proto_rawDescGZIP(), []int{220}
 }
 
 func (x *SignalBotActionsResponse) GetResults() []*SignalBotActionItemResult {
@@ -16661,7 +16852,7 @@ type CommandOccurrenceKey struct {
 func (x *CommandOccurrenceKey) Reset() {
 	*x = CommandOccurrenceKey{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[219]
+		mi := &file_proto_worker_proto_msgTypes[221]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16674,7 +16865,7 @@ func (x *CommandOccurrenceKey) String() string {
 func (*CommandOccurrenceKey) ProtoMessage() {}
 
 func (x *CommandOccurrenceKey) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[219]
+	mi := &file_proto_worker_proto_msgTypes[221]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16687,7 +16878,7 @@ func (x *CommandOccurrenceKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandOccurrenceKey.ProtoReflect.Descriptor instead.
 func (*CommandOccurrenceKey) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{219}
+	return file_proto_worker_proto_rawDescGZIP(), []int{221}
 }
 
 func (x *CommandOccurrenceKey) GetCommandId() string {
@@ -16718,7 +16909,7 @@ type CommandOccurrenceRef struct {
 func (x *CommandOccurrenceRef) Reset() {
 	*x = CommandOccurrenceRef{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[220]
+		mi := &file_proto_worker_proto_msgTypes[222]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16731,7 +16922,7 @@ func (x *CommandOccurrenceRef) String() string {
 func (*CommandOccurrenceRef) ProtoMessage() {}
 
 func (x *CommandOccurrenceRef) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[220]
+	mi := &file_proto_worker_proto_msgTypes[222]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16744,7 +16935,7 @@ func (x *CommandOccurrenceRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandOccurrenceRef.ProtoReflect.Descriptor instead.
 func (*CommandOccurrenceRef) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{220}
+	return file_proto_worker_proto_rawDescGZIP(), []int{222}
 }
 
 func (x *CommandOccurrenceRef) GetCommandId() string {
@@ -16792,7 +16983,7 @@ type AppliedCommandOccurrence struct {
 func (x *AppliedCommandOccurrence) Reset() {
 	*x = AppliedCommandOccurrence{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[221]
+		mi := &file_proto_worker_proto_msgTypes[223]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16805,7 +16996,7 @@ func (x *AppliedCommandOccurrence) String() string {
 func (*AppliedCommandOccurrence) ProtoMessage() {}
 
 func (x *AppliedCommandOccurrence) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[221]
+	mi := &file_proto_worker_proto_msgTypes[223]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16818,7 +17009,7 @@ func (x *AppliedCommandOccurrence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppliedCommandOccurrence.ProtoReflect.Descriptor instead.
 func (*AppliedCommandOccurrence) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{221}
+	return file_proto_worker_proto_rawDescGZIP(), []int{223}
 }
 
 func (x *AppliedCommandOccurrence) GetCommandId() string {
@@ -16883,7 +17074,7 @@ type AppliedCommandOccurrencePlan struct {
 func (x *AppliedCommandOccurrencePlan) Reset() {
 	*x = AppliedCommandOccurrencePlan{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[222]
+		mi := &file_proto_worker_proto_msgTypes[224]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16896,7 +17087,7 @@ func (x *AppliedCommandOccurrencePlan) String() string {
 func (*AppliedCommandOccurrencePlan) ProtoMessage() {}
 
 func (x *AppliedCommandOccurrencePlan) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[222]
+	mi := &file_proto_worker_proto_msgTypes[224]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16909,7 +17100,7 @@ func (x *AppliedCommandOccurrencePlan) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppliedCommandOccurrencePlan.ProtoReflect.Descriptor instead.
 func (*AppliedCommandOccurrencePlan) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{222}
+	return file_proto_worker_proto_rawDescGZIP(), []int{224}
 }
 
 func (x *AppliedCommandOccurrencePlan) GetDurationMs() int64 {
@@ -16959,7 +17150,7 @@ type ApplyBotCommandScheduleItem struct {
 func (x *ApplyBotCommandScheduleItem) Reset() {
 	*x = ApplyBotCommandScheduleItem{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[223]
+		mi := &file_proto_worker_proto_msgTypes[225]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -16972,7 +17163,7 @@ func (x *ApplyBotCommandScheduleItem) String() string {
 func (*ApplyBotCommandScheduleItem) ProtoMessage() {}
 
 func (x *ApplyBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[223]
+	mi := &file_proto_worker_proto_msgTypes[225]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -16985,7 +17176,7 @@ func (x *ApplyBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyBotCommandScheduleItem.ProtoReflect.Descriptor instead.
 func (*ApplyBotCommandScheduleItem) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{223}
+	return file_proto_worker_proto_rawDescGZIP(), []int{225}
 }
 
 func (x *ApplyBotCommandScheduleItem) GetRunId() int64 {
@@ -17101,7 +17292,7 @@ type ApplyBotCommandScheduleItemResult struct {
 func (x *ApplyBotCommandScheduleItemResult) Reset() {
 	*x = ApplyBotCommandScheduleItemResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[224]
+		mi := &file_proto_worker_proto_msgTypes[226]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17114,7 +17305,7 @@ func (x *ApplyBotCommandScheduleItemResult) String() string {
 func (*ApplyBotCommandScheduleItemResult) ProtoMessage() {}
 
 func (x *ApplyBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[224]
+	mi := &file_proto_worker_proto_msgTypes[226]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17127,7 +17318,7 @@ func (x *ApplyBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ApplyBotCommandScheduleItemResult.ProtoReflect.Descriptor instead.
 func (*ApplyBotCommandScheduleItemResult) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{224}
+	return file_proto_worker_proto_rawDescGZIP(), []int{226}
 }
 
 func (x *ApplyBotCommandScheduleItemResult) GetBotUuid() string {
@@ -17177,7 +17368,7 @@ type ApplyBotCommandSchedulesRequest struct {
 func (x *ApplyBotCommandSchedulesRequest) Reset() {
 	*x = ApplyBotCommandSchedulesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[225]
+		mi := &file_proto_worker_proto_msgTypes[227]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17190,7 +17381,7 @@ func (x *ApplyBotCommandSchedulesRequest) String() string {
 func (*ApplyBotCommandSchedulesRequest) ProtoMessage() {}
 
 func (x *ApplyBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[225]
+	mi := &file_proto_worker_proto_msgTypes[227]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17203,7 +17394,7 @@ func (x *ApplyBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyBotCommandSchedulesRequest.ProtoReflect.Descriptor instead.
 func (*ApplyBotCommandSchedulesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{225}
+	return file_proto_worker_proto_rawDescGZIP(), []int{227}
 }
 
 func (x *ApplyBotCommandSchedulesRequest) GetRequestId() string {
@@ -17232,7 +17423,7 @@ type ApplyBotCommandSchedulesResponse struct {
 func (x *ApplyBotCommandSchedulesResponse) Reset() {
 	*x = ApplyBotCommandSchedulesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[226]
+		mi := &file_proto_worker_proto_msgTypes[228]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17245,7 +17436,7 @@ func (x *ApplyBotCommandSchedulesResponse) String() string {
 func (*ApplyBotCommandSchedulesResponse) ProtoMessage() {}
 
 func (x *ApplyBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[226]
+	mi := &file_proto_worker_proto_msgTypes[228]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17258,7 +17449,7 @@ func (x *ApplyBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyBotCommandSchedulesResponse.ProtoReflect.Descriptor instead.
 func (*ApplyBotCommandSchedulesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{226}
+	return file_proto_worker_proto_rawDescGZIP(), []int{228}
 }
 
 func (x *ApplyBotCommandSchedulesResponse) GetRequestId() string {
@@ -17292,7 +17483,7 @@ type ReleaseBotCommandScheduleItem struct {
 func (x *ReleaseBotCommandScheduleItem) Reset() {
 	*x = ReleaseBotCommandScheduleItem{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[227]
+		mi := &file_proto_worker_proto_msgTypes[229]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17305,7 +17496,7 @@ func (x *ReleaseBotCommandScheduleItem) String() string {
 func (*ReleaseBotCommandScheduleItem) ProtoMessage() {}
 
 func (x *ReleaseBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[227]
+	mi := &file_proto_worker_proto_msgTypes[229]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17318,7 +17509,7 @@ func (x *ReleaseBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseBotCommandScheduleItem.ProtoReflect.Descriptor instead.
 func (*ReleaseBotCommandScheduleItem) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{227}
+	return file_proto_worker_proto_rawDescGZIP(), []int{229}
 }
 
 func (x *ReleaseBotCommandScheduleItem) GetRunUuid() string {
@@ -17386,7 +17577,7 @@ type ReleaseBotCommandScheduleItemResult struct {
 func (x *ReleaseBotCommandScheduleItemResult) Reset() {
 	*x = ReleaseBotCommandScheduleItemResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[228]
+		mi := &file_proto_worker_proto_msgTypes[230]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17399,7 +17590,7 @@ func (x *ReleaseBotCommandScheduleItemResult) String() string {
 func (*ReleaseBotCommandScheduleItemResult) ProtoMessage() {}
 
 func (x *ReleaseBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[228]
+	mi := &file_proto_worker_proto_msgTypes[230]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17412,7 +17603,7 @@ func (x *ReleaseBotCommandScheduleItemResult) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use ReleaseBotCommandScheduleItemResult.ProtoReflect.Descriptor instead.
 func (*ReleaseBotCommandScheduleItemResult) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{228}
+	return file_proto_worker_proto_rawDescGZIP(), []int{230}
 }
 
 func (x *ReleaseBotCommandScheduleItemResult) GetBotUuid() string {
@@ -17469,7 +17660,7 @@ type ReleaseBotCommandSchedulesRequest struct {
 func (x *ReleaseBotCommandSchedulesRequest) Reset() {
 	*x = ReleaseBotCommandSchedulesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[229]
+		mi := &file_proto_worker_proto_msgTypes[231]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17482,7 +17673,7 @@ func (x *ReleaseBotCommandSchedulesRequest) String() string {
 func (*ReleaseBotCommandSchedulesRequest) ProtoMessage() {}
 
 func (x *ReleaseBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[229]
+	mi := &file_proto_worker_proto_msgTypes[231]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17495,7 +17686,7 @@ func (x *ReleaseBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ReleaseBotCommandSchedulesRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseBotCommandSchedulesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{229}
+	return file_proto_worker_proto_rawDescGZIP(), []int{231}
 }
 
 func (x *ReleaseBotCommandSchedulesRequest) GetRequestId() string {
@@ -17524,7 +17715,7 @@ type ReleaseBotCommandSchedulesResponse struct {
 func (x *ReleaseBotCommandSchedulesResponse) Reset() {
 	*x = ReleaseBotCommandSchedulesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[230]
+		mi := &file_proto_worker_proto_msgTypes[232]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17537,7 +17728,7 @@ func (x *ReleaseBotCommandSchedulesResponse) String() string {
 func (*ReleaseBotCommandSchedulesResponse) ProtoMessage() {}
 
 func (x *ReleaseBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[230]
+	mi := &file_proto_worker_proto_msgTypes[232]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17550,7 +17741,7 @@ func (x *ReleaseBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ReleaseBotCommandSchedulesResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseBotCommandSchedulesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{230}
+	return file_proto_worker_proto_rawDescGZIP(), []int{232}
 }
 
 func (x *ReleaseBotCommandSchedulesResponse) GetRequestId() string {
@@ -17585,7 +17776,7 @@ type CancelBotCommandScheduleItem struct {
 func (x *CancelBotCommandScheduleItem) Reset() {
 	*x = CancelBotCommandScheduleItem{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[231]
+		mi := &file_proto_worker_proto_msgTypes[233]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17598,7 +17789,7 @@ func (x *CancelBotCommandScheduleItem) String() string {
 func (*CancelBotCommandScheduleItem) ProtoMessage() {}
 
 func (x *CancelBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[231]
+	mi := &file_proto_worker_proto_msgTypes[233]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17611,7 +17802,7 @@ func (x *CancelBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelBotCommandScheduleItem.ProtoReflect.Descriptor instead.
 func (*CancelBotCommandScheduleItem) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{231}
+	return file_proto_worker_proto_rawDescGZIP(), []int{233}
 }
 
 func (x *CancelBotCommandScheduleItem) GetRunUuid() string {
@@ -17686,7 +17877,7 @@ type CancelBotCommandScheduleItemResult struct {
 func (x *CancelBotCommandScheduleItemResult) Reset() {
 	*x = CancelBotCommandScheduleItemResult{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[232]
+		mi := &file_proto_worker_proto_msgTypes[234]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17699,7 +17890,7 @@ func (x *CancelBotCommandScheduleItemResult) String() string {
 func (*CancelBotCommandScheduleItemResult) ProtoMessage() {}
 
 func (x *CancelBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[232]
+	mi := &file_proto_worker_proto_msgTypes[234]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17712,7 +17903,7 @@ func (x *CancelBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use CancelBotCommandScheduleItemResult.ProtoReflect.Descriptor instead.
 func (*CancelBotCommandScheduleItemResult) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{232}
+	return file_proto_worker_proto_rawDescGZIP(), []int{234}
 }
 
 func (x *CancelBotCommandScheduleItemResult) GetBotUuid() string {
@@ -17769,7 +17960,7 @@ type CancelBotCommandSchedulesRequest struct {
 func (x *CancelBotCommandSchedulesRequest) Reset() {
 	*x = CancelBotCommandSchedulesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[233]
+		mi := &file_proto_worker_proto_msgTypes[235]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17782,7 +17973,7 @@ func (x *CancelBotCommandSchedulesRequest) String() string {
 func (*CancelBotCommandSchedulesRequest) ProtoMessage() {}
 
 func (x *CancelBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[233]
+	mi := &file_proto_worker_proto_msgTypes[235]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17795,7 +17986,7 @@ func (x *CancelBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelBotCommandSchedulesRequest.ProtoReflect.Descriptor instead.
 func (*CancelBotCommandSchedulesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{233}
+	return file_proto_worker_proto_rawDescGZIP(), []int{235}
 }
 
 func (x *CancelBotCommandSchedulesRequest) GetRequestId() string {
@@ -17824,7 +18015,7 @@ type CancelBotCommandSchedulesResponse struct {
 func (x *CancelBotCommandSchedulesResponse) Reset() {
 	*x = CancelBotCommandSchedulesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[234]
+		mi := &file_proto_worker_proto_msgTypes[236]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17837,7 +18028,7 @@ func (x *CancelBotCommandSchedulesResponse) String() string {
 func (*CancelBotCommandSchedulesResponse) ProtoMessage() {}
 
 func (x *CancelBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[234]
+	mi := &file_proto_worker_proto_msgTypes[236]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17850,7 +18041,7 @@ func (x *CancelBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use CancelBotCommandSchedulesResponse.ProtoReflect.Descriptor instead.
 func (*CancelBotCommandSchedulesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{234}
+	return file_proto_worker_proto_rawDescGZIP(), []int{236}
 }
 
 func (x *CancelBotCommandSchedulesResponse) GetRequestId() string {
@@ -17879,7 +18070,7 @@ type ProbeInstanceEvidenceRequest struct {
 func (x *ProbeInstanceEvidenceRequest) Reset() {
 	*x = ProbeInstanceEvidenceRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[235]
+		mi := &file_proto_worker_proto_msgTypes[237]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17892,7 +18083,7 @@ func (x *ProbeInstanceEvidenceRequest) String() string {
 func (*ProbeInstanceEvidenceRequest) ProtoMessage() {}
 
 func (x *ProbeInstanceEvidenceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[235]
+	mi := &file_proto_worker_proto_msgTypes[237]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17905,7 +18096,7 @@ func (x *ProbeInstanceEvidenceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeInstanceEvidenceRequest.ProtoReflect.Descriptor instead.
 func (*ProbeInstanceEvidenceRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{235}
+	return file_proto_worker_proto_rawDescGZIP(), []int{237}
 }
 
 func (x *ProbeInstanceEvidenceRequest) GetInstanceUuids() []string {
@@ -17933,7 +18124,7 @@ type InstanceEvidence struct {
 func (x *InstanceEvidence) Reset() {
 	*x = InstanceEvidence{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[236]
+		mi := &file_proto_worker_proto_msgTypes[238]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -17946,7 +18137,7 @@ func (x *InstanceEvidence) String() string {
 func (*InstanceEvidence) ProtoMessage() {}
 
 func (x *InstanceEvidence) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[236]
+	mi := &file_proto_worker_proto_msgTypes[238]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -17959,7 +18150,7 @@ func (x *InstanceEvidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceEvidence.ProtoReflect.Descriptor instead.
 func (*InstanceEvidence) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{236}
+	return file_proto_worker_proto_rawDescGZIP(), []int{238}
 }
 
 func (x *InstanceEvidence) GetInstanceUuid() string {
@@ -18022,7 +18213,7 @@ type ProbeInstanceEvidenceResponse struct {
 func (x *ProbeInstanceEvidenceResponse) Reset() {
 	*x = ProbeInstanceEvidenceResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[237]
+		mi := &file_proto_worker_proto_msgTypes[239]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18035,7 +18226,7 @@ func (x *ProbeInstanceEvidenceResponse) String() string {
 func (*ProbeInstanceEvidenceResponse) ProtoMessage() {}
 
 func (x *ProbeInstanceEvidenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[237]
+	mi := &file_proto_worker_proto_msgTypes[239]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18048,7 +18239,7 @@ func (x *ProbeInstanceEvidenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeInstanceEvidenceResponse.ProtoReflect.Descriptor instead.
 func (*ProbeInstanceEvidenceResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{237}
+	return file_proto_worker_proto_rawDescGZIP(), []int{239}
 }
 
 func (x *ProbeInstanceEvidenceResponse) GetEvidence() []*InstanceEvidence {
@@ -18070,7 +18261,7 @@ type LogTimeRange struct {
 func (x *LogTimeRange) Reset() {
 	*x = LogTimeRange{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[238]
+		mi := &file_proto_worker_proto_msgTypes[240]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18083,7 +18274,7 @@ func (x *LogTimeRange) String() string {
 func (*LogTimeRange) ProtoMessage() {}
 
 func (x *LogTimeRange) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[238]
+	mi := &file_proto_worker_proto_msgTypes[240]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18096,7 +18287,7 @@ func (x *LogTimeRange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogTimeRange.ProtoReflect.Descriptor instead.
 func (*LogTimeRange) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{238}
+	return file_proto_worker_proto_rawDescGZIP(), []int{240}
 }
 
 func (x *LogTimeRange) GetFromUtc() string {
@@ -18125,7 +18316,7 @@ type LogAuthorizedTargets struct {
 func (x *LogAuthorizedTargets) Reset() {
 	*x = LogAuthorizedTargets{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[239]
+		mi := &file_proto_worker_proto_msgTypes[241]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18138,7 +18329,7 @@ func (x *LogAuthorizedTargets) String() string {
 func (*LogAuthorizedTargets) ProtoMessage() {}
 
 func (x *LogAuthorizedTargets) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[239]
+	mi := &file_proto_worker_proto_msgTypes[241]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18151,7 +18342,7 @@ func (x *LogAuthorizedTargets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogAuthorizedTargets.ProtoReflect.Descriptor instead.
 func (*LogAuthorizedTargets) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{239}
+	return file_proto_worker_proto_rawDescGZIP(), []int{241}
 }
 
 func (x *LogAuthorizedTargets) GetTargetIds() []string {
@@ -18182,7 +18373,7 @@ type LogQueryBudget struct {
 func (x *LogQueryBudget) Reset() {
 	*x = LogQueryBudget{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[240]
+		mi := &file_proto_worker_proto_msgTypes[242]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18195,7 +18386,7 @@ func (x *LogQueryBudget) String() string {
 func (*LogQueryBudget) ProtoMessage() {}
 
 func (x *LogQueryBudget) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[240]
+	mi := &file_proto_worker_proto_msgTypes[242]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18208,7 +18399,7 @@ func (x *LogQueryBudget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogQueryBudget.ProtoReflect.Descriptor instead.
 func (*LogQueryBudget) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{240}
+	return file_proto_worker_proto_rawDescGZIP(), []int{242}
 }
 
 func (x *LogQueryBudget) GetLimit() uint32 {
@@ -18252,7 +18443,7 @@ type LogQueryViewRef struct {
 func (x *LogQueryViewRef) Reset() {
 	*x = LogQueryViewRef{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[241]
+		mi := &file_proto_worker_proto_msgTypes[243]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18265,7 +18456,7 @@ func (x *LogQueryViewRef) String() string {
 func (*LogQueryViewRef) ProtoMessage() {}
 
 func (x *LogQueryViewRef) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[241]
+	mi := &file_proto_worker_proto_msgTypes[243]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18278,7 +18469,7 @@ func (x *LogQueryViewRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogQueryViewRef.ProtoReflect.Descriptor instead.
 func (*LogQueryViewRef) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{241}
+	return file_proto_worker_proto_rawDescGZIP(), []int{243}
 }
 
 func (x *LogQueryViewRef) GetViewId() string {
@@ -18317,7 +18508,7 @@ type LogCoverageTarget struct {
 func (x *LogCoverageTarget) Reset() {
 	*x = LogCoverageTarget{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[242]
+		mi := &file_proto_worker_proto_msgTypes[244]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18330,7 +18521,7 @@ func (x *LogCoverageTarget) String() string {
 func (*LogCoverageTarget) ProtoMessage() {}
 
 func (x *LogCoverageTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[242]
+	mi := &file_proto_worker_proto_msgTypes[244]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18343,7 +18534,7 @@ func (x *LogCoverageTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogCoverageTarget.ProtoReflect.Descriptor instead.
 func (*LogCoverageTarget) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{242}
+	return file_proto_worker_proto_rawDescGZIP(), []int{244}
 }
 
 func (x *LogCoverageTarget) GetTargetId() string {
@@ -18395,7 +18586,7 @@ type LogCoverage struct {
 func (x *LogCoverage) Reset() {
 	*x = LogCoverage{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[243]
+		mi := &file_proto_worker_proto_msgTypes[245]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18408,7 +18599,7 @@ func (x *LogCoverage) String() string {
 func (*LogCoverage) ProtoMessage() {}
 
 func (x *LogCoverage) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[243]
+	mi := &file_proto_worker_proto_msgTypes[245]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18421,7 +18612,7 @@ func (x *LogCoverage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogCoverage.ProtoReflect.Descriptor instead.
 func (*LogCoverage) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{243}
+	return file_proto_worker_proto_rawDescGZIP(), []int{245}
 }
 
 func (x *LogCoverage) GetComplete() bool {
@@ -18464,7 +18655,7 @@ type LogQuality struct {
 func (x *LogQuality) Reset() {
 	*x = LogQuality{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[244]
+		mi := &file_proto_worker_proto_msgTypes[246]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18477,7 +18668,7 @@ func (x *LogQuality) String() string {
 func (*LogQuality) ProtoMessage() {}
 
 func (x *LogQuality) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[244]
+	mi := &file_proto_worker_proto_msgTypes[246]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18490,7 +18681,7 @@ func (x *LogQuality) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogQuality.ProtoReflect.Descriptor instead.
 func (*LogQuality) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{244}
+	return file_proto_worker_proto_rawDescGZIP(), []int{246}
 }
 
 func (x *LogQuality) GetDuplicateQuality() LogDuplicateQuality {
@@ -18521,7 +18712,7 @@ type LogError struct {
 func (x *LogError) Reset() {
 	*x = LogError{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[245]
+		mi := &file_proto_worker_proto_msgTypes[247]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18534,7 +18725,7 @@ func (x *LogError) String() string {
 func (*LogError) ProtoMessage() {}
 
 func (x *LogError) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[245]
+	mi := &file_proto_worker_proto_msgTypes[247]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18547,7 +18738,7 @@ func (x *LogError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogError.ProtoReflect.Descriptor instead.
 func (*LogError) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{245}
+	return file_proto_worker_proto_rawDescGZIP(), []int{247}
 }
 
 func (x *LogError) GetCode() LogErrorCode {
@@ -18599,7 +18790,7 @@ type LogEvent struct {
 func (x *LogEvent) Reset() {
 	*x = LogEvent{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[246]
+		mi := &file_proto_worker_proto_msgTypes[248]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18612,7 +18803,7 @@ func (x *LogEvent) String() string {
 func (*LogEvent) ProtoMessage() {}
 
 func (x *LogEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[246]
+	mi := &file_proto_worker_proto_msgTypes[248]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18625,7 +18816,7 @@ func (x *LogEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogEvent.ProtoReflect.Descriptor instead.
 func (*LogEvent) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{246}
+	return file_proto_worker_proto_rawDescGZIP(), []int{248}
 }
 
 func (x *LogEvent) GetEventId() string {
@@ -18741,7 +18932,7 @@ type LogQueryRequestBase struct {
 func (x *LogQueryRequestBase) Reset() {
 	*x = LogQueryRequestBase{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[247]
+		mi := &file_proto_worker_proto_msgTypes[249]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18754,7 +18945,7 @@ func (x *LogQueryRequestBase) String() string {
 func (*LogQueryRequestBase) ProtoMessage() {}
 
 func (x *LogQueryRequestBase) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[247]
+	mi := &file_proto_worker_proto_msgTypes[249]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18767,7 +18958,7 @@ func (x *LogQueryRequestBase) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogQueryRequestBase.ProtoReflect.Descriptor instead.
 func (*LogQueryRequestBase) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{247}
+	return file_proto_worker_proto_rawDescGZIP(), []int{249}
 }
 
 func (x *LogQueryRequestBase) GetRequestId() string {
@@ -18852,7 +19043,7 @@ type GetLogCapabilitiesRequest struct {
 func (x *GetLogCapabilitiesRequest) Reset() {
 	*x = GetLogCapabilitiesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[248]
+		mi := &file_proto_worker_proto_msgTypes[250]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18865,7 +19056,7 @@ func (x *GetLogCapabilitiesRequest) String() string {
 func (*GetLogCapabilitiesRequest) ProtoMessage() {}
 
 func (x *GetLogCapabilitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[248]
+	mi := &file_proto_worker_proto_msgTypes[250]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18878,7 +19069,7 @@ func (x *GetLogCapabilitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLogCapabilitiesRequest.ProtoReflect.Descriptor instead.
 func (*GetLogCapabilitiesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{248}
+	return file_proto_worker_proto_rawDescGZIP(), []int{250}
 }
 
 func (x *GetLogCapabilitiesRequest) GetProtocolVersion() string {
@@ -18913,7 +19104,7 @@ type GetLogCapabilitiesResponse struct {
 func (x *GetLogCapabilitiesResponse) Reset() {
 	*x = GetLogCapabilitiesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[249]
+		mi := &file_proto_worker_proto_msgTypes[251]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -18926,7 +19117,7 @@ func (x *GetLogCapabilitiesResponse) String() string {
 func (*GetLogCapabilitiesResponse) ProtoMessage() {}
 
 func (x *GetLogCapabilitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[249]
+	mi := &file_proto_worker_proto_msgTypes[251]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -18939,7 +19130,7 @@ func (x *GetLogCapabilitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLogCapabilitiesResponse.ProtoReflect.Descriptor instead.
 func (*GetLogCapabilitiesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{249}
+	return file_proto_worker_proto_rawDescGZIP(), []int{251}
 }
 
 func (x *GetLogCapabilitiesResponse) GetSupported() bool {
@@ -19009,7 +19200,7 @@ type LogSearchRequest struct {
 func (x *LogSearchRequest) Reset() {
 	*x = LogSearchRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[250]
+		mi := &file_proto_worker_proto_msgTypes[252]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19022,7 +19213,7 @@ func (x *LogSearchRequest) String() string {
 func (*LogSearchRequest) ProtoMessage() {}
 
 func (x *LogSearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[250]
+	mi := &file_proto_worker_proto_msgTypes[252]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19035,7 +19226,7 @@ func (x *LogSearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogSearchRequest.ProtoReflect.Descriptor instead.
 func (*LogSearchRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{250}
+	return file_proto_worker_proto_rawDescGZIP(), []int{252}
 }
 
 func (x *LogSearchRequest) GetQuery() *LogQueryRequestBase {
@@ -19071,7 +19262,7 @@ type LogSearchResponse struct {
 func (x *LogSearchResponse) Reset() {
 	*x = LogSearchResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[251]
+		mi := &file_proto_worker_proto_msgTypes[253]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19084,7 +19275,7 @@ func (x *LogSearchResponse) String() string {
 func (*LogSearchResponse) ProtoMessage() {}
 
 func (x *LogSearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[251]
+	mi := &file_proto_worker_proto_msgTypes[253]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19097,7 +19288,7 @@ func (x *LogSearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogSearchResponse.ProtoReflect.Descriptor instead.
 func (*LogSearchResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{251}
+	return file_proto_worker_proto_rawDescGZIP(), []int{253}
 }
 
 func (x *LogSearchResponse) GetRequestId() string {
@@ -19189,7 +19380,7 @@ type IngestPositionGap struct {
 func (x *IngestPositionGap) Reset() {
 	*x = IngestPositionGap{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[252]
+		mi := &file_proto_worker_proto_msgTypes[254]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19202,7 +19393,7 @@ func (x *IngestPositionGap) String() string {
 func (*IngestPositionGap) ProtoMessage() {}
 
 func (x *IngestPositionGap) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[252]
+	mi := &file_proto_worker_proto_msgTypes[254]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19215,7 +19406,7 @@ func (x *IngestPositionGap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestPositionGap.ProtoReflect.Descriptor instead.
 func (*IngestPositionGap) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{252}
+	return file_proto_worker_proto_rawDescGZIP(), []int{254}
 }
 
 func (x *IngestPositionGap) GetStorageNamespace() string {
@@ -19287,7 +19478,7 @@ type LogStatsRequest struct {
 func (x *LogStatsRequest) Reset() {
 	*x = LogStatsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[253]
+		mi := &file_proto_worker_proto_msgTypes[255]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19300,7 +19491,7 @@ func (x *LogStatsRequest) String() string {
 func (*LogStatsRequest) ProtoMessage() {}
 
 func (x *LogStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[253]
+	mi := &file_proto_worker_proto_msgTypes[255]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19313,7 +19504,7 @@ func (x *LogStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStatsRequest.ProtoReflect.Descriptor instead.
 func (*LogStatsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{253}
+	return file_proto_worker_proto_rawDescGZIP(), []int{255}
 }
 
 func (x *LogStatsRequest) GetQuery() *LogQueryRequestBase {
@@ -19353,7 +19544,7 @@ type LogStatsPoint struct {
 func (x *LogStatsPoint) Reset() {
 	*x = LogStatsPoint{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[254]
+		mi := &file_proto_worker_proto_msgTypes[256]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19366,7 +19557,7 @@ func (x *LogStatsPoint) String() string {
 func (*LogStatsPoint) ProtoMessage() {}
 
 func (x *LogStatsPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[254]
+	mi := &file_proto_worker_proto_msgTypes[256]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19379,7 +19570,7 @@ func (x *LogStatsPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStatsPoint.ProtoReflect.Descriptor instead.
 func (*LogStatsPoint) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{254}
+	return file_proto_worker_proto_rawDescGZIP(), []int{256}
 }
 
 func (x *LogStatsPoint) GetDimensions() map[string]string {
@@ -19440,7 +19631,7 @@ type LogStatsResponse struct {
 func (x *LogStatsResponse) Reset() {
 	*x = LogStatsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[255]
+		mi := &file_proto_worker_proto_msgTypes[257]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19453,7 +19644,7 @@ func (x *LogStatsResponse) String() string {
 func (*LogStatsResponse) ProtoMessage() {}
 
 func (x *LogStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[255]
+	mi := &file_proto_worker_proto_msgTypes[257]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19466,7 +19657,7 @@ func (x *LogStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogStatsResponse.ProtoReflect.Descriptor instead.
 func (*LogStatsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{255}
+	return file_proto_worker_proto_rawDescGZIP(), []int{257}
 }
 
 func (x *LogStatsResponse) GetRequestId() string {
@@ -19522,7 +19713,7 @@ type LogFieldsRequest struct {
 func (x *LogFieldsRequest) Reset() {
 	*x = LogFieldsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[256]
+		mi := &file_proto_worker_proto_msgTypes[258]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19535,7 +19726,7 @@ func (x *LogFieldsRequest) String() string {
 func (*LogFieldsRequest) ProtoMessage() {}
 
 func (x *LogFieldsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[256]
+	mi := &file_proto_worker_proto_msgTypes[258]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19548,7 +19739,7 @@ func (x *LogFieldsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogFieldsRequest.ProtoReflect.Descriptor instead.
 func (*LogFieldsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{256}
+	return file_proto_worker_proto_rawDescGZIP(), []int{258}
 }
 
 func (x *LogFieldsRequest) GetQuery() *LogQueryRequestBase {
@@ -19573,7 +19764,7 @@ type LogFieldsResponse struct {
 func (x *LogFieldsResponse) Reset() {
 	*x = LogFieldsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[257]
+		mi := &file_proto_worker_proto_msgTypes[259]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19586,7 +19777,7 @@ func (x *LogFieldsResponse) String() string {
 func (*LogFieldsResponse) ProtoMessage() {}
 
 func (x *LogFieldsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[257]
+	mi := &file_proto_worker_proto_msgTypes[259]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19599,7 +19790,7 @@ func (x *LogFieldsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogFieldsResponse.ProtoReflect.Descriptor instead.
 func (*LogFieldsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{257}
+	return file_proto_worker_proto_rawDescGZIP(), []int{259}
 }
 
 func (x *LogFieldsResponse) GetRequestId() string {
@@ -19650,7 +19841,7 @@ type LogFacetsRequest struct {
 func (x *LogFacetsRequest) Reset() {
 	*x = LogFacetsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[258]
+		mi := &file_proto_worker_proto_msgTypes[260]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19663,7 +19854,7 @@ func (x *LogFacetsRequest) String() string {
 func (*LogFacetsRequest) ProtoMessage() {}
 
 func (x *LogFacetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[258]
+	mi := &file_proto_worker_proto_msgTypes[260]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19676,7 +19867,7 @@ func (x *LogFacetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogFacetsRequest.ProtoReflect.Descriptor instead.
 func (*LogFacetsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{258}
+	return file_proto_worker_proto_rawDescGZIP(), []int{260}
 }
 
 func (x *LogFacetsRequest) GetQuery() *LogQueryRequestBase {
@@ -19713,7 +19904,7 @@ type LogFacetValue struct {
 func (x *LogFacetValue) Reset() {
 	*x = LogFacetValue{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[259]
+		mi := &file_proto_worker_proto_msgTypes[261]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19726,7 +19917,7 @@ func (x *LogFacetValue) String() string {
 func (*LogFacetValue) ProtoMessage() {}
 
 func (x *LogFacetValue) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[259]
+	mi := &file_proto_worker_proto_msgTypes[261]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19739,7 +19930,7 @@ func (x *LogFacetValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogFacetValue.ProtoReflect.Descriptor instead.
 func (*LogFacetValue) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{259}
+	return file_proto_worker_proto_rawDescGZIP(), []int{261}
 }
 
 func (x *LogFacetValue) GetDimension() string {
@@ -19779,7 +19970,7 @@ type LogFacetsResponse struct {
 func (x *LogFacetsResponse) Reset() {
 	*x = LogFacetsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[260]
+		mi := &file_proto_worker_proto_msgTypes[262]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19792,7 +19983,7 @@ func (x *LogFacetsResponse) String() string {
 func (*LogFacetsResponse) ProtoMessage() {}
 
 func (x *LogFacetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[260]
+	mi := &file_proto_worker_proto_msgTypes[262]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19805,7 +19996,7 @@ func (x *LogFacetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogFacetsResponse.ProtoReflect.Descriptor instead.
 func (*LogFacetsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{260}
+	return file_proto_worker_proto_rawDescGZIP(), []int{262}
 }
 
 func (x *LogFacetsResponse) GetRequestId() string {
@@ -19862,7 +20053,7 @@ type LogTailRequest struct {
 func (x *LogTailRequest) Reset() {
 	*x = LogTailRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[261]
+		mi := &file_proto_worker_proto_msgTypes[263]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19875,7 +20066,7 @@ func (x *LogTailRequest) String() string {
 func (*LogTailRequest) ProtoMessage() {}
 
 func (x *LogTailRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[261]
+	mi := &file_proto_worker_proto_msgTypes[263]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19888,7 +20079,7 @@ func (x *LogTailRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogTailRequest.ProtoReflect.Descriptor instead.
 func (*LogTailRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{261}
+	return file_proto_worker_proto_rawDescGZIP(), []int{263}
 }
 
 func (x *LogTailRequest) GetQuery() *LogQueryRequestBase {
@@ -19917,7 +20108,7 @@ type LogRehydrateRequest struct {
 func (x *LogRehydrateRequest) Reset() {
 	*x = LogRehydrateRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[262]
+		mi := &file_proto_worker_proto_msgTypes[264]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19930,7 +20121,7 @@ func (x *LogRehydrateRequest) String() string {
 func (*LogRehydrateRequest) ProtoMessage() {}
 
 func (x *LogRehydrateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[262]
+	mi := &file_proto_worker_proto_msgTypes[264]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19943,7 +20134,7 @@ func (x *LogRehydrateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogRehydrateRequest.ProtoReflect.Descriptor instead.
 func (*LogRehydrateRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{262}
+	return file_proto_worker_proto_rawDescGZIP(), []int{264}
 }
 
 func (x *LogRehydrateRequest) GetQuery() *LogQueryRequestBase {
@@ -19973,7 +20164,7 @@ type LogTaskResponse struct {
 func (x *LogTaskResponse) Reset() {
 	*x = LogTaskResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[263]
+		mi := &file_proto_worker_proto_msgTypes[265]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -19986,7 +20177,7 @@ func (x *LogTaskResponse) String() string {
 func (*LogTaskResponse) ProtoMessage() {}
 
 func (x *LogTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[263]
+	mi := &file_proto_worker_proto_msgTypes[265]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -19999,7 +20190,7 @@ func (x *LogTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogTaskResponse.ProtoReflect.Descriptor instead.
 func (*LogTaskResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{263}
+	return file_proto_worker_proto_rawDescGZIP(), []int{265}
 }
 
 func (x *LogTaskResponse) GetTaskId() string {
@@ -20035,7 +20226,7 @@ type LogArchiveStatusRequest struct {
 func (x *LogArchiveStatusRequest) Reset() {
 	*x = LogArchiveStatusRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[264]
+		mi := &file_proto_worker_proto_msgTypes[266]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20048,7 +20239,7 @@ func (x *LogArchiveStatusRequest) String() string {
 func (*LogArchiveStatusRequest) ProtoMessage() {}
 
 func (x *LogArchiveStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[264]
+	mi := &file_proto_worker_proto_msgTypes[266]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20061,7 +20252,7 @@ func (x *LogArchiveStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogArchiveStatusRequest.ProtoReflect.Descriptor instead.
 func (*LogArchiveStatusRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{264}
+	return file_proto_worker_proto_rawDescGZIP(), []int{266}
 }
 
 func (x *LogArchiveStatusRequest) GetQuery() *LogQueryRequestBase {
@@ -20093,7 +20284,7 @@ type LogArchiveStatusResponse struct {
 func (x *LogArchiveStatusResponse) Reset() {
 	*x = LogArchiveStatusResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[265]
+		mi := &file_proto_worker_proto_msgTypes[267]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20106,7 +20297,7 @@ func (x *LogArchiveStatusResponse) String() string {
 func (*LogArchiveStatusResponse) ProtoMessage() {}
 
 func (x *LogArchiveStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[265]
+	mi := &file_proto_worker_proto_msgTypes[267]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20119,7 +20310,7 @@ func (x *LogArchiveStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogArchiveStatusResponse.ProtoReflect.Descriptor instead.
 func (*LogArchiveStatusResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{265}
+	return file_proto_worker_proto_rawDescGZIP(), []int{267}
 }
 
 func (x *LogArchiveStatusResponse) GetRequestId() string {
@@ -20169,7 +20360,7 @@ type LogRuntimeStatusRequest struct {
 func (x *LogRuntimeStatusRequest) Reset() {
 	*x = LogRuntimeStatusRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[266]
+		mi := &file_proto_worker_proto_msgTypes[268]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20182,7 +20373,7 @@ func (x *LogRuntimeStatusRequest) String() string {
 func (*LogRuntimeStatusRequest) ProtoMessage() {}
 
 func (x *LogRuntimeStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[266]
+	mi := &file_proto_worker_proto_msgTypes[268]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20195,7 +20386,7 @@ func (x *LogRuntimeStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogRuntimeStatusRequest.ProtoReflect.Descriptor instead.
 func (*LogRuntimeStatusRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{266}
+	return file_proto_worker_proto_rawDescGZIP(), []int{268}
 }
 
 func (x *LogRuntimeStatusRequest) GetRequestId() string {
@@ -20235,7 +20426,7 @@ type LogRuntimeInstance struct {
 func (x *LogRuntimeInstance) Reset() {
 	*x = LogRuntimeInstance{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[267]
+		mi := &file_proto_worker_proto_msgTypes[269]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20248,7 +20439,7 @@ func (x *LogRuntimeInstance) String() string {
 func (*LogRuntimeInstance) ProtoMessage() {}
 
 func (x *LogRuntimeInstance) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[267]
+	mi := &file_proto_worker_proto_msgTypes[269]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20261,7 +20452,7 @@ func (x *LogRuntimeInstance) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogRuntimeInstance.ProtoReflect.Descriptor instead.
 func (*LogRuntimeInstance) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{267}
+	return file_proto_worker_proto_rawDescGZIP(), []int{269}
 }
 
 func (x *LogRuntimeInstance) GetNamespace() string {
@@ -20369,7 +20560,7 @@ type LogRuntimeStatusResponse struct {
 func (x *LogRuntimeStatusResponse) Reset() {
 	*x = LogRuntimeStatusResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[268]
+		mi := &file_proto_worker_proto_msgTypes[270]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20382,7 +20573,7 @@ func (x *LogRuntimeStatusResponse) String() string {
 func (*LogRuntimeStatusResponse) ProtoMessage() {}
 
 func (x *LogRuntimeStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[268]
+	mi := &file_proto_worker_proto_msgTypes[270]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20395,7 +20586,7 @@ func (x *LogRuntimeStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogRuntimeStatusResponse.ProtoReflect.Descriptor instead.
 func (*LogRuntimeStatusResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{268}
+	return file_proto_worker_proto_rawDescGZIP(), []int{270}
 }
 
 func (x *LogRuntimeStatusResponse) GetRequestId() string {
@@ -20445,7 +20636,7 @@ type LogRuntimeControlRequest struct {
 func (x *LogRuntimeControlRequest) Reset() {
 	*x = LogRuntimeControlRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[269]
+		mi := &file_proto_worker_proto_msgTypes[271]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20458,7 +20649,7 @@ func (x *LogRuntimeControlRequest) String() string {
 func (*LogRuntimeControlRequest) ProtoMessage() {}
 
 func (x *LogRuntimeControlRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[269]
+	mi := &file_proto_worker_proto_msgTypes[271]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20471,7 +20662,7 @@ func (x *LogRuntimeControlRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogRuntimeControlRequest.ProtoReflect.Descriptor instead.
 func (*LogRuntimeControlRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{269}
+	return file_proto_worker_proto_rawDescGZIP(), []int{271}
 }
 
 func (x *LogRuntimeControlRequest) GetRequestId() string {
@@ -20529,7 +20720,7 @@ type LogCreateViewRequest struct {
 func (x *LogCreateViewRequest) Reset() {
 	*x = LogCreateViewRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[270]
+		mi := &file_proto_worker_proto_msgTypes[272]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20542,7 +20733,7 @@ func (x *LogCreateViewRequest) String() string {
 func (*LogCreateViewRequest) ProtoMessage() {}
 
 func (x *LogCreateViewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[270]
+	mi := &file_proto_worker_proto_msgTypes[272]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20555,7 +20746,7 @@ func (x *LogCreateViewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogCreateViewRequest.ProtoReflect.Descriptor instead.
 func (*LogCreateViewRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{270}
+	return file_proto_worker_proto_rawDescGZIP(), []int{272}
 }
 
 func (x *LogCreateViewRequest) GetQuery() *LogQueryRequestBase {
@@ -20580,7 +20771,7 @@ type LogCreateViewResponse struct {
 func (x *LogCreateViewResponse) Reset() {
 	*x = LogCreateViewResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[271]
+		mi := &file_proto_worker_proto_msgTypes[273]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20593,7 +20784,7 @@ func (x *LogCreateViewResponse) String() string {
 func (*LogCreateViewResponse) ProtoMessage() {}
 
 func (x *LogCreateViewResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[271]
+	mi := &file_proto_worker_proto_msgTypes[273]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20606,7 +20797,7 @@ func (x *LogCreateViewResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogCreateViewResponse.ProtoReflect.Descriptor instead.
 func (*LogCreateViewResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{271}
+	return file_proto_worker_proto_rawDescGZIP(), []int{273}
 }
 
 func (x *LogCreateViewResponse) GetRequestId() string {
@@ -20660,7 +20851,7 @@ type LogMigratePartitionRequest struct {
 func (x *LogMigratePartitionRequest) Reset() {
 	*x = LogMigratePartitionRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[272]
+		mi := &file_proto_worker_proto_msgTypes[274]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20673,7 +20864,7 @@ func (x *LogMigratePartitionRequest) String() string {
 func (*LogMigratePartitionRequest) ProtoMessage() {}
 
 func (x *LogMigratePartitionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[272]
+	mi := &file_proto_worker_proto_msgTypes[274]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20686,7 +20877,7 @@ func (x *LogMigratePartitionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogMigratePartitionRequest.ProtoReflect.Descriptor instead.
 func (*LogMigratePartitionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{272}
+	return file_proto_worker_proto_rawDescGZIP(), []int{274}
 }
 
 func (x *LogMigratePartitionRequest) GetRequestId() string {
@@ -20736,7 +20927,7 @@ type LogCutoverReadinessRequest struct {
 func (x *LogCutoverReadinessRequest) Reset() {
 	*x = LogCutoverReadinessRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[273]
+		mi := &file_proto_worker_proto_msgTypes[275]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20749,7 +20940,7 @@ func (x *LogCutoverReadinessRequest) String() string {
 func (*LogCutoverReadinessRequest) ProtoMessage() {}
 
 func (x *LogCutoverReadinessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[273]
+	mi := &file_proto_worker_proto_msgTypes[275]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20762,7 +20953,7 @@ func (x *LogCutoverReadinessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogCutoverReadinessRequest.ProtoReflect.Descriptor instead.
 func (*LogCutoverReadinessRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{273}
+	return file_proto_worker_proto_rawDescGZIP(), []int{275}
 }
 
 func (x *LogCutoverReadinessRequest) GetRequestId() string {
@@ -20795,7 +20986,7 @@ type LogCutoverReadinessResponse struct {
 func (x *LogCutoverReadinessResponse) Reset() {
 	*x = LogCutoverReadinessResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[274]
+		mi := &file_proto_worker_proto_msgTypes[276]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20808,7 +20999,7 @@ func (x *LogCutoverReadinessResponse) String() string {
 func (*LogCutoverReadinessResponse) ProtoMessage() {}
 
 func (x *LogCutoverReadinessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[274]
+	mi := &file_proto_worker_proto_msgTypes[276]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20821,7 +21012,7 @@ func (x *LogCutoverReadinessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogCutoverReadinessResponse.ProtoReflect.Descriptor instead.
 func (*LogCutoverReadinessResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{274}
+	return file_proto_worker_proto_rawDescGZIP(), []int{276}
 }
 
 func (x *LogCutoverReadinessResponse) GetRequestId() string {
@@ -20880,7 +21071,7 @@ type LogResolveIngestGapsRequest struct {
 func (x *LogResolveIngestGapsRequest) Reset() {
 	*x = LogResolveIngestGapsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[275]
+		mi := &file_proto_worker_proto_msgTypes[277]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20893,7 +21084,7 @@ func (x *LogResolveIngestGapsRequest) String() string {
 func (*LogResolveIngestGapsRequest) ProtoMessage() {}
 
 func (x *LogResolveIngestGapsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[275]
+	mi := &file_proto_worker_proto_msgTypes[277]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20906,7 +21097,7 @@ func (x *LogResolveIngestGapsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogResolveIngestGapsRequest.ProtoReflect.Descriptor instead.
 func (*LogResolveIngestGapsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{275}
+	return file_proto_worker_proto_rawDescGZIP(), []int{277}
 }
 
 func (x *LogResolveIngestGapsRequest) GetRequestId() string {
@@ -20944,7 +21135,7 @@ type LogImportArchivesRequest struct {
 func (x *LogImportArchivesRequest) Reset() {
 	*x = LogImportArchivesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[276]
+		mi := &file_proto_worker_proto_msgTypes[278]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -20957,7 +21148,7 @@ func (x *LogImportArchivesRequest) String() string {
 func (*LogImportArchivesRequest) ProtoMessage() {}
 
 func (x *LogImportArchivesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[276]
+	mi := &file_proto_worker_proto_msgTypes[278]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -20970,7 +21161,7 @@ func (x *LogImportArchivesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogImportArchivesRequest.ProtoReflect.Descriptor instead.
 func (*LogImportArchivesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{276}
+	return file_proto_worker_proto_rawDescGZIP(), []int{278}
 }
 
 func (x *LogImportArchivesRequest) GetRequestId() string {
@@ -21011,7 +21202,7 @@ type LogClearIdentityConflictsRequest struct {
 func (x *LogClearIdentityConflictsRequest) Reset() {
 	*x = LogClearIdentityConflictsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[277]
+		mi := &file_proto_worker_proto_msgTypes[279]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -21024,7 +21215,7 @@ func (x *LogClearIdentityConflictsRequest) String() string {
 func (*LogClearIdentityConflictsRequest) ProtoMessage() {}
 
 func (x *LogClearIdentityConflictsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[277]
+	mi := &file_proto_worker_proto_msgTypes[279]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21037,7 +21228,7 @@ func (x *LogClearIdentityConflictsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogClearIdentityConflictsRequest.ProtoReflect.Descriptor instead.
 func (*LogClearIdentityConflictsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{277}
+	return file_proto_worker_proto_rawDescGZIP(), []int{279}
 }
 
 func (x *LogClearIdentityConflictsRequest) GetRequestId() string {
@@ -21086,7 +21277,7 @@ type LogClearIdentityConflictsResponse struct {
 func (x *LogClearIdentityConflictsResponse) Reset() {
 	*x = LogClearIdentityConflictsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_proto_worker_proto_msgTypes[278]
+		mi := &file_proto_worker_proto_msgTypes[280]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -21099,7 +21290,7 @@ func (x *LogClearIdentityConflictsResponse) String() string {
 func (*LogClearIdentityConflictsResponse) ProtoMessage() {}
 
 func (x *LogClearIdentityConflictsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[278]
+	mi := &file_proto_worker_proto_msgTypes[280]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -21112,7 +21303,7 @@ func (x *LogClearIdentityConflictsResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use LogClearIdentityConflictsResponse.ProtoReflect.Descriptor instead.
 func (*LogClearIdentityConflictsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{278}
+	return file_proto_worker_proto_rawDescGZIP(), []int{280}
 }
 
 func (x *LogClearIdentityConflictsResponse) GetRequestId() string {
@@ -21231,7 +21422,7 @@ var file_proto_worker_proto_rawDesc = []byte{
 	0x36, 0x12, 0x18, 0x0a, 0x07, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x04, 0x20, 0x01,
 	0x28, 0x09, 0x52, 0x07, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x18, 0x0a, 0x07, 0x61,
 	0x72, 0x63, 0x68, 0x69, 0x76, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x07, 0x61, 0x72,
-	0x63, 0x68, 0x69, 0x76, 0x65, 0x22, 0xfa, 0x05, 0x0a, 0x10, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62,
+	0x63, 0x68, 0x69, 0x76, 0x65, 0x22, 0xca, 0x07, 0x0a, 0x10, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62,
 	0x65, 0x61, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x6e, 0x6f,
 	0x64, 0x65, 0x5f, 0x75, 0x75, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6e,
 	0x6f, 0x64, 0x65, 0x55, 0x75, 0x69, 0x64, 0x12, 0x1b, 0x0a, 0x09, 0x63, 0x70, 0x75, 0x5f, 0x75,
@@ -21279,7 +21470,20 @@ var file_proto_worker_proto_rawDesc = []byte{
 	0x65, 0x61, 0x6c, 0x74, 0x68, 0x79, 0x12, 0x2a, 0x0a, 0x11, 0x6c, 0x6f, 0x67, 0x5f, 0x69, 0x6e,
 	0x67, 0x65, 0x73, 0x74, 0x5f, 0x64, 0x65, 0x74, 0x61, 0x69, 0x6c, 0x18, 0x10, 0x20, 0x01, 0x28,
 	0x09, 0x52, 0x0f, 0x6c, 0x6f, 0x67, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x44, 0x65, 0x74, 0x61,
-	0x69, 0x6c, 0x22, 0xb1, 0x01, 0x0a, 0x0c, 0x54, 0x61, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73,
+	0x69, 0x6c, 0x12, 0x32, 0x0a, 0x16, 0x6c, 0x6f, 0x67, 0x5f, 0x76, 0x6c, 0x5f, 0x64, 0x69, 0x73,
+	0x6b, 0x5f, 0x75, 0x73, 0x65, 0x64, 0x5f, 0x62, 0x79, 0x74, 0x65, 0x73, 0x18, 0x12, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x12, 0x6c, 0x6f, 0x67, 0x56, 0x6c, 0x44, 0x69, 0x73, 0x6b, 0x55, 0x73, 0x65,
+	0x64, 0x42, 0x79, 0x74, 0x65, 0x73, 0x12, 0x34, 0x0a, 0x17, 0x6c, 0x6f, 0x67, 0x5f, 0x76, 0x6c,
+	0x5f, 0x64, 0x69, 0x73, 0x6b, 0x5f, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x5f, 0x62, 0x79, 0x74, 0x65,
+	0x73, 0x18, 0x13, 0x20, 0x01, 0x28, 0x03, 0x52, 0x13, 0x6c, 0x6f, 0x67, 0x56, 0x6c, 0x44, 0x69,
+	0x73, 0x6b, 0x4c, 0x69, 0x6d, 0x69, 0x74, 0x42, 0x79, 0x74, 0x65, 0x73, 0x12, 0x2a, 0x0a, 0x11,
+	0x6c, 0x6f, 0x67, 0x5f, 0x76, 0x6c, 0x5f, 0x70, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e,
+	0x73, 0x18, 0x14, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0f, 0x6c, 0x6f, 0x67, 0x56, 0x6c, 0x50, 0x61,
+	0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12, 0x38, 0x0a, 0x19, 0x6c, 0x6f, 0x67, 0x5f,
+	0x76, 0x6c, 0x5f, 0x72, 0x6f, 0x77, 0x73, 0x5f, 0x64, 0x72, 0x6f, 0x70, 0x70, 0x65, 0x64, 0x5f,
+	0x74, 0x6f, 0x74, 0x61, 0x6c, 0x18, 0x15, 0x20, 0x01, 0x28, 0x04, 0x52, 0x15, 0x6c, 0x6f, 0x67,
+	0x56, 0x6c, 0x52, 0x6f, 0x77, 0x73, 0x44, 0x72, 0x6f, 0x70, 0x70, 0x65, 0x64, 0x54, 0x6f, 0x74,
+	0x61, 0x6c, 0x22, 0xb1, 0x01, 0x0a, 0x0c, 0x54, 0x61, 0x73, 0x6b, 0x53, 0x6e, 0x61, 0x70, 0x73,
 	0x68, 0x6f, 0x74, 0x12, 0x17, 0x0a, 0x07, 0x74, 0x61, 0x73, 0x6b, 0x5f, 0x69, 0x64, 0x18, 0x01,
 	0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x74, 0x61, 0x73, 0x6b, 0x49, 0x64, 0x12, 0x14, 0x0a, 0x05,
 	0x73, 0x74, 0x61, 0x74, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x73, 0x74, 0x61,
@@ -22051,7 +22255,22 @@ var file_proto_worker_proto_rawDesc = []byte{
 	0x6f, 0x5f, 0x63, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52,
 	0x09, 0x74, 0x6f, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x22, 0x17, 0x0a, 0x15, 0x47, 0x65,
 	0x74, 0x4e, 0x6f, 0x64, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x22, 0xa3, 0x02, 0x0a, 0x16, 0x47, 0x65, 0x74, 0x4e, 0x6f, 0x64, 0x65, 0x4d,
+	0x65, 0x73, 0x74, 0x22, 0x4e, 0x0a, 0x12, 0x50, 0x75, 0x6c, 0x6c, 0x53, 0x65, 0x6c, 0x66, 0x4c,
+	0x6f, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x6d, 0x61, 0x78,
+	0x5f, 0x6c, 0x69, 0x6e, 0x65, 0x73, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x52, 0x08, 0x6d, 0x61,
+	0x78, 0x4c, 0x69, 0x6e, 0x65, 0x73, 0x12, 0x1b, 0x0a, 0x09, 0x6d, 0x61, 0x78, 0x5f, 0x62, 0x79,
+	0x74, 0x65, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x05, 0x52, 0x08, 0x6d, 0x61, 0x78, 0x42, 0x79,
+	0x74, 0x65, 0x73, 0x22, 0x9d, 0x01, 0x0a, 0x13, 0x50, 0x75, 0x6c, 0x6c, 0x53, 0x65, 0x6c, 0x66,
+	0x4c, 0x6f, 0x67, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x18, 0x0a, 0x07, 0x63,
+	0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x63, 0x6f,
+	0x6e, 0x74, 0x65, 0x6e, 0x74, 0x12, 0x1c, 0x0a, 0x09, 0x74, 0x72, 0x75, 0x6e, 0x63, 0x61, 0x74,
+	0x65, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x08, 0x52, 0x09, 0x74, 0x72, 0x75, 0x6e, 0x63, 0x61,
+	0x74, 0x65, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x66, 0x69, 0x6c, 0x65, 0x5f, 0x62, 0x79, 0x74, 0x65,
+	0x73, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x09, 0x66, 0x69, 0x6c, 0x65, 0x42, 0x79, 0x74,
+	0x65, 0x73, 0x12, 0x12, 0x0a, 0x04, 0x70, 0x61, 0x74, 0x68, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x04, 0x70, 0x61, 0x74, 0x68, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f,
+	0x6d, 0x73, 0x67, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72,
+	0x4d, 0x73, 0x67, 0x22, 0xa3, 0x02, 0x0a, 0x16, 0x47, 0x65, 0x74, 0x4e, 0x6f, 0x64, 0x65, 0x4d,
 	0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x1b,
 	0x0a, 0x09, 0x63, 0x70, 0x75, 0x5f, 0x75, 0x73, 0x61, 0x67, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28,
 	0x02, 0x52, 0x08, 0x63, 0x70, 0x75, 0x55, 0x73, 0x61, 0x67, 0x65, 0x12, 0x21, 0x0a, 0x0c, 0x6d,
@@ -24137,7 +24356,7 @@ var file_proto_worker_proto_rawDesc = []byte{
 	0x41, 0x49, 0x4c, 0x45, 0x44, 0x10, 0x03, 0x12, 0x16, 0x0a, 0x12, 0x4c, 0x4f, 0x47, 0x5f, 0x54,
 	0x41, 0x53, 0x4b, 0x5f, 0x43, 0x41, 0x4e, 0x43, 0x45, 0x4c, 0x4c, 0x45, 0x44, 0x10, 0x04, 0x12,
 	0x12, 0x0a, 0x0e, 0x4c, 0x4f, 0x47, 0x5f, 0x54, 0x41, 0x53, 0x4b, 0x5f, 0x53, 0x54, 0x41, 0x4c,
-	0x45, 0x10, 0x05, 0x32, 0xfa, 0x48, 0x0a, 0x0d, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x53, 0x65,
+	0x45, 0x10, 0x05, 0x32, 0xc2, 0x49, 0x0a, 0x0d, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x53, 0x65,
 	0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x3d, 0x0a, 0x08, 0x52, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65,
 	0x72, 0x12, 0x17, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x67, 0x69, 0x73,
 	0x74, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x77, 0x6f, 0x72,
@@ -24417,314 +24636,318 @@ var file_proto_worker_proto_rawDesc = []byte{
 	0x47, 0x65, 0x74, 0x4e, 0x6f, 0x64, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52, 0x65,
 	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47,
 	0x65, 0x74, 0x4e, 0x6f, 0x64, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74,
-	0x61, 0x6e, 0x63, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x12, 0x21, 0x2e, 0x77, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65,
-	0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61,
-	0x6e, 0x63, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
-	0x73, 0x65, 0x12, 0x76, 0x0a, 0x1b, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63,
-	0x65, 0x52, 0x65, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f,
-	0x74, 0x12, 0x2a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e,
-	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x53, 0x6e,
-	0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2b, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e,
-	0x63, 0x65, 0x52, 0x65, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
-	0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4f, 0x0a, 0x0e, 0x47, 0x65,
-	0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x45, 0x6e, 0x76, 0x12, 0x1d, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63,
-	0x65, 0x45, 0x6e, 0x76, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65,
-	0x45, 0x6e, 0x76, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3d, 0x0a, 0x08, 0x4c,
-	0x69, 0x73, 0x74, 0x4a, 0x44, 0x4b, 0x73, 0x12, 0x17, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
-	0x2e, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x44, 0x4b, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x1a, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x44,
-	0x4b, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x43, 0x0a, 0x0a, 0x49, 0x6e,
-	0x73, 0x74, 0x61, 0x6c, 0x6c, 0x4a, 0x44, 0x4b, 0x12, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73,
-	0x74, 0x61, 0x6c, 0x6c, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x40, 0x0a, 0x09, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x4a, 0x44, 0x4b, 0x12, 0x18, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x4a, 0x44, 0x4b, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x43, 0x0a, 0x0a, 0x4a, 0x44, 0x4b, 0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x12,
-	0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4a, 0x44, 0x4b, 0x43, 0x61, 0x74, 0x61,
-	0x6c, 0x6f, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x2e, 0x4a, 0x44, 0x4b, 0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x52, 0x65,
-	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3d, 0x0a, 0x08, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x4a,
-	0x44, 0x4b, 0x12, 0x17, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f, 0x62,
-	0x65, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x77, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x49, 0x0a, 0x0c, 0x53, 0x63, 0x61, 0x6e, 0x52, 0x75, 0x6e,
-	0x74, 0x69, 0x6d, 0x65, 0x73, 0x12, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53,
-	0x63, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65,
-	0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x63, 0x61, 0x6e,
-	0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x4f, 0x0a, 0x0e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x52, 0x75, 0x6e, 0x74, 0x69,
-	0x6d, 0x65, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74,
-	0x61, 0x6c, 0x6c, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
-	0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61,
-	0x6c, 0x6c, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x4c, 0x0a, 0x0d, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x52, 0x75, 0x6e, 0x74, 0x69,
-	0x6d, 0x65, 0x12, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f,
-	0x76, 0x65, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x1a, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65,
-	0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x46, 0x0a, 0x0b, 0x47, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x12, 0x1a,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e,
-	0x66, 0x69, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x0b, 0x53, 0x65, 0x74, 0x50, 0x4d,
+	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x0b, 0x50, 0x75, 0x6c, 0x6c, 0x53, 0x65, 0x6c,
+	0x66, 0x4c, 0x6f, 0x67, 0x12, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x75,
+	0x6c, 0x6c, 0x53, 0x65, 0x6c, 0x66, 0x4c, 0x6f, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x75, 0x6c, 0x6c, 0x53, 0x65,
+	0x6c, 0x66, 0x4c, 0x6f, 0x67, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a,
+	0x12, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x4d, 0x65, 0x74, 0x72,
+	0x69, 0x63, 0x73, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74,
+	0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69,
+	0x63, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x76, 0x0a, 0x1b, 0x47, 0x65,
+	0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x6f, 0x75, 0x72, 0x63,
+	0x65, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x2a, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65,
+	0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47,
+	0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x6f, 0x75, 0x72,
+	0x63, 0x65, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x4f, 0x0a, 0x0e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63,
+	0x65, 0x45, 0x6e, 0x76, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65,
+	0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x45, 0x6e, 0x76, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74,
+	0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x45, 0x6e, 0x76, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x3d, 0x0a, 0x08, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x44, 0x4b, 0x73, 0x12,
+	0x17, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x44, 0x4b,
+	0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
+	0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x4a, 0x44, 0x4b, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x43, 0x0a, 0x0a, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x4a, 0x44, 0x4b,
+	0x12, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c,
+	0x6c, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x4a, 0x44, 0x4b, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a, 0x09, 0x52, 0x65, 0x6d, 0x6f, 0x76,
+	0x65, 0x4a, 0x44, 0x4b, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65,
+	0x6d, 0x6f, 0x76, 0x65, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x4a, 0x44,
+	0x4b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x43, 0x0a, 0x0a, 0x4a, 0x44, 0x4b,
+	0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x12, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
+	0x2e, 0x4a, 0x44, 0x4b, 0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4a, 0x44, 0x4b, 0x43,
+	0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3d,
+	0x0a, 0x08, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x4a, 0x44, 0x4b, 0x12, 0x17, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f,
+	0x62, 0x65, 0x4a, 0x44, 0x4b, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x49, 0x0a,
+	0x0c, 0x53, 0x63, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x12, 0x1b, 0x2e,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x63, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69,
+	0x6d, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x53, 0x63, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x73,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4f, 0x0a, 0x0e, 0x49, 0x6e, 0x73, 0x74,
+	0x61, 0x6c, 0x6c, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x52, 0x75, 0x6e, 0x74, 0x69,
+	0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d,
+	0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4c, 0x0a, 0x0d, 0x52, 0x65, 0x6d,
+	0x6f, 0x76, 0x65, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x12, 0x1c, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d,
+	0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
+	0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x0b, 0x47, 0x65, 0x74, 0x50, 0x4d,
 	0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x12, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x53, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65,
-	0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x50,
+	0x47, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x50,
 	0x4d, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x5b, 0x0a, 0x12, 0x4c, 0x69, 0x73, 0x74, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63,
-	0x6b, 0x61, 0x67, 0x65, 0x73, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c,
-	0x69, 0x73, 0x74, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65,
-	0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b,
-	0x61, 0x67, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x61, 0x0a, 0x14,
-	0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63,
-	0x6b, 0x61, 0x67, 0x65, 0x12, 0x23, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e,
-	0x73, 0x74, 0x61, 0x6c, 0x6c, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61,
-	0x67, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c,
-	0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x5e, 0x0a, 0x13, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50,
-	0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x12, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b,
-	0x61, 0x67, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x23, 0x2e, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c,
-	0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x49, 0x0a, 0x0c, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x43, 0x6f, 0x72, 0x65, 0x12,
-	0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61,
-	0x64, 0x43, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x43, 0x6f,
-	0x72, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x49, 0x6e,
-	0x73, 0x74, 0x61, 0x6c, 0x6c, 0x46, 0x6f, 0x72, 0x67, 0x65, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72,
-	0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c,
-	0x6c, 0x46, 0x6f, 0x72, 0x67, 0x65, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73,
-	0x74, 0x61, 0x6c, 0x6c, 0x46, 0x6f, 0x72, 0x67, 0x65, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x48, 0x0a, 0x0b, 0x46, 0x65, 0x74, 0x63, 0x68,
-	0x42, 0x69, 0x6e, 0x61, 0x72, 0x79, 0x12, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x46, 0x65, 0x74, 0x63, 0x68, 0x42, 0x69, 0x6e, 0x61, 0x72, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65,
-	0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x46, 0x65, 0x74, 0x63,
-	0x68, 0x42, 0x69, 0x6e, 0x61, 0x72, 0x79, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x30,
-	0x01, 0x12, 0x58, 0x0a, 0x11, 0x4c, 0x69, 0x73, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63,
-	0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x12, 0x20, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x4c, 0x69, 0x73, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68,
-	0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61,
-	0x63, 0x68, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x45,
-	0x76, 0x69, 0x63, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68,
-	0x65, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x45, 0x76, 0x69, 0x63, 0x74,
-	0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x71,
-	0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x45, 0x76,
-	0x69, 0x63, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65,
-	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x43, 0x6c, 0x65, 0x61,
-	0x72, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x12, 0x21,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x6c, 0x65, 0x61, 0x72, 0x41, 0x72, 0x74,
-	0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
-	0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x6c, 0x65, 0x61, 0x72,
-	0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5e, 0x0a, 0x13, 0x53, 0x65, 0x74, 0x41, 0x72, 0x74, 0x69,
-	0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x43, 0x61, 0x70, 0x12, 0x22, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63,
-	0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x43, 0x61, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x1a, 0x23, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x41, 0x72, 0x74,
-	0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x43, 0x61, 0x70, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a, 0x09, 0x42, 0x72, 0x6f, 0x77, 0x73, 0x65, 0x44,
-	0x69, 0x72, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x42, 0x72, 0x6f, 0x77,
-	0x73, 0x65, 0x44, 0x69, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x42, 0x72, 0x6f, 0x77, 0x73, 0x65, 0x44, 0x69, 0x72, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x58, 0x0a, 0x11, 0x44, 0x65, 0x70, 0x6c, 0x6f,
-	0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x12, 0x20, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x65, 0x72, 0x76,
-	0x65, 0x72, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x21,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x65,
-	0x72, 0x76, 0x65, 0x72, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x12, 0x49, 0x0a, 0x0c, 0x43, 0x6c, 0x6f, 0x6e, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x44, 0x69,
-	0x72, 0x12, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x6c, 0x6f, 0x6e, 0x65,
-	0x57, 0x6f, 0x72, 0x6b, 0x44, 0x69, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x6c, 0x6f, 0x6e, 0x65, 0x57, 0x6f, 0x72,
-	0x6b, 0x44, 0x69, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4f, 0x0a, 0x0e,
-	0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x1d,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6e,
-	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6e, 0x73,
-	0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x61, 0x0a,
-	0x14, 0x44, 0x69, 0x73, 0x70, 0x6f, 0x73, 0x65, 0x4f, 0x72, 0x70, 0x68, 0x61, 0x6e, 0x52, 0x75,
-	0x6e, 0x74, 0x69, 0x6d, 0x65, 0x12, 0x23, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44,
-	0x69, 0x73, 0x70, 0x6f, 0x73, 0x65, 0x4f, 0x72, 0x70, 0x68, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74,
-	0x69, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x2e, 0x44, 0x69, 0x73, 0x70, 0x6f, 0x73, 0x65, 0x4f, 0x72, 0x70, 0x68, 0x61,
-	0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x12, 0x43, 0x0a, 0x0a, 0x4c, 0x69, 0x73, 0x74, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x73, 0x12, 0x19,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x49, 0x6d, 0x61, 0x67,
-	0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x73, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a, 0x09, 0x50, 0x75, 0x6c, 0x6c, 0x49, 0x6d, 0x61,
-	0x67, 0x65, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x75, 0x6c, 0x6c,
-	0x49, 0x6d, 0x61, 0x67, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x75, 0x6c, 0x6c, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x0b, 0x52, 0x65, 0x6d, 0x6f, 0x76,
-	0x65, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x12, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65,
-	0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f,
-	0x76, 0x65, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x49, 0x0a, 0x0c, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x12,
-	0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42,
-	0x61, 0x63, 0x6b, 0x75, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42, 0x61, 0x63, 0x6b,
-	0x75, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4c, 0x0a, 0x0d, 0x52, 0x65,
-	0x73, 0x74, 0x6f, 0x72, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x12, 0x1c, 0x2e, 0x77, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x42, 0x61, 0x63, 0x6b,
-	0x75, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x52, 0x65, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70,
-	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x54, 0x65, 0x73, 0x74,
-	0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x12, 0x21,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x54, 0x65, 0x73, 0x74, 0x53, 0x74, 0x6f, 0x72,
-	0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
-	0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x54, 0x65, 0x73, 0x74, 0x53,
-	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a, 0x09, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42,
-	0x6f, 0x74, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x72, 0x65, 0x61,
-	0x74, 0x65, 0x42, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a, 0x09, 0x44, 0x65, 0x6c, 0x65, 0x74,
-	0x65, 0x42, 0x6f, 0x74, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x65,
-	0x6c, 0x65, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x42, 0x6f,
-	0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x3d, 0x0a, 0x08, 0x4c, 0x69, 0x73,
-	0x74, 0x42, 0x6f, 0x74, 0x73, 0x12, 0x17, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c,
-	0x69, 0x73, 0x74, 0x42, 0x6f, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x42, 0x6f, 0x74, 0x73,
-	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4f, 0x0a, 0x0e, 0x53, 0x65, 0x74, 0x42,
-	0x6f, 0x74, 0x42, 0x65, 0x68, 0x61, 0x76, 0x69, 0x6f, 0x72, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x42, 0x65, 0x68, 0x61, 0x76, 0x69,
-	0x6f, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x42, 0x65, 0x68, 0x61, 0x76, 0x69, 0x6f,
-	0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4f, 0x0a, 0x0e, 0x53, 0x65, 0x6e,
-	0x64, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x12, 0x1d, 0x2e, 0x77, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x6e, 0x64, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d,
-	0x61, 0x6e, 0x64, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x6e, 0x64, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61,
-	0x6e, 0x64, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x49, 0x0a, 0x0c, 0x52, 0x75,
-	0x6e, 0x42, 0x6f, 0x74, 0x53, 0x63, 0x72, 0x69, 0x70, 0x74, 0x12, 0x1b, 0x2e, 0x77, 0x6f, 0x72,
-	0x6b, 0x65, 0x72, 0x2e, 0x52, 0x75, 0x6e, 0x42, 0x6f, 0x74, 0x53, 0x63, 0x72, 0x69, 0x70, 0x74,
-	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
-	0x2e, 0x52, 0x75, 0x6e, 0x42, 0x6f, 0x74, 0x53, 0x63, 0x72, 0x69, 0x70, 0x74, 0x52, 0x65, 0x73,
-	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x45, 0x0a, 0x0f, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x42,
-	0x6f, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73, 0x12, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x42, 0x6f, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74,
-	0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x10, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x2e, 0x42, 0x6f, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x30, 0x01, 0x12, 0x4f, 0x0a, 0x0e,
-	0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x43, 0x61, 0x70, 0x61, 0x63, 0x69, 0x74, 0x79, 0x12, 0x1d,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x43, 0x61,
-	0x70, 0x61, 0x63, 0x69, 0x74, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x43, 0x61, 0x70,
-	0x61, 0x63, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4c, 0x0a,
-	0x0d, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x42, 0x61, 0x74, 0x63, 0x68, 0x12, 0x1c,
-	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74,
-	0x42, 0x61, 0x74, 0x63, 0x68, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x42, 0x61,
-	0x74, 0x63, 0x68, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5e, 0x0a, 0x13, 0x47,
-	0x65, 0x74, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65, 0x65, 0x74, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68,
-	0x6f, 0x74, 0x12, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x42,
-	0x6f, 0x74, 0x46, 0x6c, 0x65, 0x65, 0x74, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x23, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65, 0x65, 0x74, 0x53, 0x6e, 0x61, 0x70, 0x73,
-	0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x54, 0x0a, 0x14, 0x53,
-	0x74, 0x72, 0x65, 0x61, 0x6d, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65, 0x65, 0x74, 0x45, 0x76, 0x65,
-	0x6e, 0x74, 0x73, 0x12, 0x23, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x74, 0x72,
-	0x65, 0x61, 0x6d, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65, 0x65, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74,
-	0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x15, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x2e, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65, 0x65, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x30,
-	0x01, 0x12, 0x55, 0x0a, 0x10, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x42, 0x6f, 0x74, 0x41, 0x63,
-	0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12, 0x1f, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53,
-	0x69, 0x67, 0x6e, 0x61, 0x6c, 0x42, 0x6f, 0x74, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x20, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
-	0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x42, 0x6f, 0x74, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73,
-	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x6d, 0x0a, 0x18, 0x41, 0x70, 0x70, 0x6c,
-	0x79, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64,
-	0x75, 0x6c, 0x65, 0x73, 0x12, 0x27, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x41, 0x70,
-	0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68,
-	0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x28, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x43,
-	0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x73, 0x0a, 0x1a, 0x52, 0x65, 0x6c, 0x65, 0x61,
-	0x73, 0x65, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65,
-	0x64, 0x75, 0x6c, 0x65, 0x73, 0x12, 0x29, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52,
-	0x65, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64,
-	0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
-	0x1a, 0x2a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6c, 0x65, 0x61, 0x73,
-	0x65, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64,
-	0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x70, 0x0a, 0x19,
-	0x43, 0x61, 0x6e, 0x63, 0x65, 0x6c, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64,
-	0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x12, 0x28, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x43, 0x61, 0x6e, 0x63, 0x65, 0x6c, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d,
-	0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75,
-	0x65, 0x73, 0x74, 0x1a, 0x29, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x61, 0x6e,
-	0x63, 0x65, 0x6c, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68,
-	0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4e,
-	0x0a, 0x12, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x45, 0x76,
-	0x65, 0x6e, 0x74, 0x73, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x74,
-	0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73,
-	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x13, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
-	0x2e, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x30, 0x01, 0x12, 0x58,
-	0x0a, 0x11, 0x53, 0x65, 0x6e, 0x64, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x43, 0x6f, 0x6d, 0x6d,
-	0x61, 0x6e, 0x64, 0x12, 0x20, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x6e,
-	0x64, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x52, 0x65,
-	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53,
-	0x65, 0x6e, 0x64, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64,
-	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x55, 0x0a, 0x10, 0x51, 0x75, 0x65, 0x72,
-	0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x53, 0x74, 0x61, 0x74, 0x65, 0x12, 0x1f, 0x2e, 0x77,
-	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x53, 0x65, 0x72, 0x76, 0x65,
-	0x72, 0x53, 0x74, 0x61, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x20, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x53, 0x65, 0x72, 0x76,
-	0x65, 0x72, 0x53, 0x74, 0x61, 0x74, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
-	0x43, 0x0a, 0x0a, 0x47, 0x65, 0x74, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x19, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f,
-	0x6e, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
-	0x72, 0x2e, 0x47, 0x65, 0x74, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x52, 0x65, 0x73, 0x70,
-	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x0b, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x44, 0x6f, 0x63,
-	0x6b, 0x65, 0x72, 0x12, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x68, 0x65,
-	0x63, 0x6b, 0x44, 0x6f, 0x63, 0x6b, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
-	0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x44, 0x6f,
-	0x63, 0x6b, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4c, 0x0a, 0x0d,
-	0x55, 0x70, 0x67, 0x72, 0x61, 0x64, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x12, 0x1c, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x55, 0x70, 0x67, 0x72, 0x61, 0x64, 0x65, 0x57, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x77, 0x6f,
-	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x55, 0x70, 0x67, 0x72, 0x61, 0x64, 0x65, 0x57, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x43, 0x0a, 0x0f, 0x54, 0x65,
-	0x72, 0x6d, 0x69, 0x6e, 0x61, 0x6c, 0x53, 0x65, 0x73, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x15, 0x2e,
-	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x54, 0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61, 0x6c, 0x46,
-	0x72, 0x61, 0x6d, 0x65, 0x1a, 0x15, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x54, 0x65,
-	0x72, 0x6d, 0x69, 0x6e, 0x61, 0x6c, 0x46, 0x72, 0x61, 0x6d, 0x65, 0x28, 0x01, 0x30, 0x01, 0x12,
-	0x55, 0x0a, 0x10, 0x49, 0x6e, 0x73, 0x70, 0x65, 0x63, 0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72,
-	0x44, 0x69, 0x72, 0x12, 0x1f, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73,
-	0x70, 0x65, 0x63, 0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44, 0x69, 0x72, 0x52, 0x65, 0x71,
-	0x75, 0x65, 0x73, 0x74, 0x1a, 0x20, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e,
-	0x73, 0x70, 0x65, 0x63, 0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44, 0x69, 0x72, 0x52, 0x65,
-	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x52, 0x0a, 0x0f, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74,
-	0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44, 0x69, 0x72, 0x12, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44,
-	0x69, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1f, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44,
-	0x69, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x64, 0x0a, 0x15, 0x50, 0x72,
-	0x6f, 0x62, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x45, 0x76, 0x69, 0x64, 0x65,
-	0x6e, 0x63, 0x65, 0x12, 0x24, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f,
-	0x62, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x45, 0x76, 0x69, 0x64, 0x65, 0x6e,
-	0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x25, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
-	0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65,
-	0x45, 0x76, 0x69, 0x64, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
-	0x42, 0x2c, 0x5a, 0x2a, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x77,
-	0x63, 0x70, 0x65, 0x2f, 0x4a, 0x69, 0x61, 0x6e, 0x4d, 0x61, 0x6e, 0x61, 0x67, 0x65, 0x72, 0x2f,
-	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x70, 0x62, 0x62, 0x06,
-	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x46, 0x0a, 0x0b, 0x53, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x12, 0x1a,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e,
+	0x66, 0x69, 0x67, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x50, 0x4d, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x4c, 0x69, 0x73, 0x74, 0x47,
+	0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x73, 0x12, 0x21, 0x2e,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x47, 0x6c, 0x6f, 0x62, 0x61,
+	0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x47, 0x6c,
+	0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x61, 0x0a, 0x14, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x47,
+	0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x12, 0x23, 0x2e, 0x77,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x47, 0x6c, 0x6f,
+	0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x24, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61,
+	0x6c, 0x6c, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5e, 0x0a, 0x13, 0x52, 0x65, 0x6d, 0x6f, 0x76,
+	0x65, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x12, 0x22,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x47, 0x6c,
+	0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x23, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f,
+	0x76, 0x65, 0x47, 0x6c, 0x6f, 0x62, 0x61, 0x6c, 0x50, 0x61, 0x63, 0x6b, 0x61, 0x67, 0x65, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x49, 0x0a, 0x0c, 0x44, 0x6f, 0x77, 0x6e, 0x6c,
+	0x6f, 0x61, 0x64, 0x43, 0x6f, 0x72, 0x65, 0x12, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
+	0x2e, 0x44, 0x6f, 0x77, 0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x43, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x6f,
+	0x77, 0x6e, 0x6c, 0x6f, 0x61, 0x64, 0x43, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x46, 0x6f, 0x72,
+	0x67, 0x65, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
+	0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x46, 0x6f, 0x72, 0x67, 0x65, 0x53, 0x65,
+	0x72, 0x76, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6c, 0x6c, 0x46, 0x6f, 0x72, 0x67,
+	0x65, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x48, 0x0a, 0x0b, 0x46, 0x65, 0x74, 0x63, 0x68, 0x42, 0x69, 0x6e, 0x61, 0x72, 0x79, 0x12, 0x1a,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x46, 0x65, 0x74, 0x63, 0x68, 0x42, 0x69, 0x6e,
+	0x61, 0x72, 0x79, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x46, 0x65, 0x74, 0x63, 0x68, 0x42, 0x69, 0x6e, 0x61, 0x72, 0x79, 0x50,
+	0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x30, 0x01, 0x12, 0x58, 0x0a, 0x11, 0x4c, 0x69, 0x73,
+	0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x12, 0x20,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x41, 0x72, 0x74, 0x69,
+	0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x41, 0x72,
+	0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x5b, 0x0a, 0x12, 0x45, 0x76, 0x69, 0x63, 0x74, 0x41, 0x72, 0x74, 0x69,
+	0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x2e, 0x45, 0x76, 0x69, 0x63, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74,
+	0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x45, 0x76, 0x69, 0x63, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66,
+	0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x5b, 0x0a, 0x12, 0x43, 0x6c, 0x65, 0x61, 0x72, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63,
+	0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x43, 0x6c, 0x65, 0x61, 0x72, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63,
+	0x68, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x2e, 0x43, 0x6c, 0x65, 0x61, 0x72, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74,
+	0x43, 0x61, 0x63, 0x68, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x5e, 0x0a,
+	0x13, 0x53, 0x65, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68,
+	0x65, 0x43, 0x61, 0x70, 0x12, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65,
+	0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63, 0x68, 0x65, 0x43, 0x61,
+	0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x23, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
+	0x72, 0x2e, 0x53, 0x65, 0x74, 0x41, 0x72, 0x74, 0x69, 0x66, 0x61, 0x63, 0x74, 0x43, 0x61, 0x63,
+	0x68, 0x65, 0x43, 0x61, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a,
+	0x09, 0x42, 0x72, 0x6f, 0x77, 0x73, 0x65, 0x44, 0x69, 0x72, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x42, 0x72, 0x6f, 0x77, 0x73, 0x65, 0x44, 0x69, 0x72, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x42, 0x72,
+	0x6f, 0x77, 0x73, 0x65, 0x44, 0x69, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x58, 0x0a, 0x11, 0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x50,
+	0x72, 0x6f, 0x62, 0x65, 0x12, 0x20, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x65,
+	0x70, 0x6c, 0x6f, 0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x44, 0x65, 0x70, 0x6c, 0x6f, 0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x50, 0x72, 0x6f, 0x62,
+	0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x49, 0x0a, 0x0c, 0x43, 0x6c, 0x6f,
+	0x6e, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x44, 0x69, 0x72, 0x12, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x2e, 0x43, 0x6c, 0x6f, 0x6e, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x44, 0x69, 0x72, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x43, 0x6c, 0x6f, 0x6e, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x44, 0x69, 0x72, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4f, 0x0a, 0x0e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6e,
+	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52,
+	0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x73,
+	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x61, 0x0a, 0x14, 0x44, 0x69, 0x73, 0x70, 0x6f, 0x73, 0x65,
+	0x4f, 0x72, 0x70, 0x68, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x12, 0x23, 0x2e,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x69, 0x73, 0x70, 0x6f, 0x73, 0x65, 0x4f, 0x72,
+	0x70, 0x68, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x24, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x69, 0x73, 0x70,
+	0x6f, 0x73, 0x65, 0x4f, 0x72, 0x70, 0x68, 0x61, 0x6e, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x43, 0x0a, 0x0a, 0x4c, 0x69, 0x73, 0x74,
+	0x49, 0x6d, 0x61, 0x67, 0x65, 0x73, 0x12, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x4c, 0x69, 0x73, 0x74, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x49,
+	0x6d, 0x61, 0x67, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a,
+	0x09, 0x50, 0x75, 0x6c, 0x6c, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x50, 0x75, 0x6c, 0x6c, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x75,
+	0x6c, 0x6c, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x46, 0x0a, 0x0b, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x12, 0x1a,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6d,
+	0x61, 0x67, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6d, 0x6f, 0x76, 0x65, 0x49, 0x6d, 0x61, 0x67, 0x65, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x49, 0x0a, 0x0c, 0x43, 0x72, 0x65, 0x61, 0x74,
+	0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x12, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
+	0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x72,
+	0x65, 0x61, 0x74, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x4c, 0x0a, 0x0d, 0x52, 0x65, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x42, 0x61, 0x63,
+	0x6b, 0x75, 0x70, 0x12, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x73,
+	0x74, 0x6f, 0x72, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x73, 0x74, 0x6f,
+	0x72, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x75, 0x70, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x5b, 0x0a, 0x12, 0x54, 0x65, 0x73, 0x74, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42,
+	0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x12, 0x21, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x54, 0x65, 0x73, 0x74, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x65,
+	0x6e, 0x64, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x77, 0x6f, 0x72, 0x6b,
+	0x65, 0x72, 0x2e, 0x54, 0x65, 0x73, 0x74, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42, 0x61,
+	0x63, 0x6b, 0x65, 0x6e, 0x64, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x40, 0x0a,
+	0x09, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x12, 0x18, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x72,
+	0x65, 0x61, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x40, 0x0a, 0x09, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x12, 0x18, 0x2e, 0x77,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x42, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x12, 0x3d, 0x0a, 0x08, 0x4c, 0x69, 0x73, 0x74, 0x42, 0x6f, 0x74, 0x73, 0x12, 0x17, 0x2e,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x4c, 0x69, 0x73, 0x74, 0x42, 0x6f, 0x74, 0x73, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x18, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x4c, 0x69, 0x73, 0x74, 0x42, 0x6f, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x4f, 0x0a, 0x0e, 0x53, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x42, 0x65, 0x68, 0x61, 0x76, 0x69,
+	0x6f, 0x72, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x42,
+	0x6f, 0x74, 0x42, 0x65, 0x68, 0x61, 0x76, 0x69, 0x6f, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x42, 0x6f,
+	0x74, 0x42, 0x65, 0x68, 0x61, 0x76, 0x69, 0x6f, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x12, 0x4f, 0x0a, 0x0e, 0x53, 0x65, 0x6e, 0x64, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d,
+	0x61, 0x6e, 0x64, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x6e,
+	0x64, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x6e, 0x64,
+	0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x49, 0x0a, 0x0c, 0x52, 0x75, 0x6e, 0x42, 0x6f, 0x74, 0x53, 0x63, 0x72, 0x69,
+	0x70, 0x74, 0x12, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x75, 0x6e, 0x42,
+	0x6f, 0x74, 0x53, 0x63, 0x72, 0x69, 0x70, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
+	0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x75, 0x6e, 0x42, 0x6f, 0x74, 0x53,
+	0x63, 0x72, 0x69, 0x70, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x45, 0x0a,
+	0x0f, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x42, 0x6f, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73,
+	0x12, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x42, 0x6f, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x10, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x42, 0x6f, 0x74, 0x45, 0x76, 0x65,
+	0x6e, 0x74, 0x30, 0x01, 0x12, 0x4f, 0x0a, 0x0e, 0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x43, 0x61,
+	0x70, 0x61, 0x63, 0x69, 0x74, 0x79, 0x12, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x43, 0x61, 0x70, 0x61, 0x63, 0x69, 0x74, 0x79, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47,
+	0x65, 0x74, 0x42, 0x6f, 0x74, 0x43, 0x61, 0x70, 0x61, 0x63, 0x69, 0x74, 0x79, 0x52, 0x65, 0x73,
+	0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4c, 0x0a, 0x0d, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f,
+	0x74, 0x42, 0x61, 0x74, 0x63, 0x68, 0x12, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e,
+	0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x42, 0x61, 0x74, 0x63, 0x68, 0x52, 0x65, 0x71,
+	0x75, 0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x41, 0x70,
+	0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x42, 0x61, 0x74, 0x63, 0x68, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x5e, 0x0a, 0x13, 0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65,
+	0x65, 0x74, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x12, 0x22, 0x2e, 0x77, 0x6f, 0x72,
+	0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65, 0x65, 0x74, 0x53,
+	0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x23,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x42, 0x6f, 0x74, 0x46, 0x6c,
+	0x65, 0x65, 0x74, 0x53, 0x6e, 0x61, 0x70, 0x73, 0x68, 0x6f, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x12, 0x54, 0x0a, 0x14, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x42, 0x6f, 0x74,
+	0x46, 0x6c, 0x65, 0x65, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73, 0x12, 0x23, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x42, 0x6f, 0x74, 0x46, 0x6c,
+	0x65, 0x65, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x15, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x42, 0x6f, 0x74, 0x46, 0x6c, 0x65,
+	0x65, 0x74, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x30, 0x01, 0x12, 0x55, 0x0a, 0x10, 0x53, 0x69, 0x67,
+	0x6e, 0x61, 0x6c, 0x42, 0x6f, 0x74, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12, 0x1f, 0x2e,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x42, 0x6f, 0x74,
+	0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x20,
+	0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x6c, 0x42, 0x6f,
+	0x74, 0x41, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x6d, 0x0a, 0x18, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d,
+	0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x12, 0x27, 0x2e, 0x77,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x41, 0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x43, 0x6f,
+	0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x28, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x41,
+	0x70, 0x70, 0x6c, 0x79, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63,
+	0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x73, 0x0a, 0x1a, 0x52, 0x65, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d,
+	0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x12, 0x29, 0x2e,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x52, 0x65, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x42, 0x6f,
+	0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65,
+	0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65,
+	0x72, 0x2e, 0x52, 0x65, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d,
+	0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x70, 0x0a, 0x19, 0x43, 0x61, 0x6e, 0x63, 0x65, 0x6c, 0x42, 0x6f,
+	0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65,
+	0x73, 0x12, 0x28, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x61, 0x6e, 0x63, 0x65,
+	0x6c, 0x42, 0x6f, 0x74, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64,
+	0x75, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x29, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x61, 0x6e, 0x63, 0x65, 0x6c, 0x42, 0x6f, 0x74, 0x43, 0x6f,
+	0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x53, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x52, 0x65,
+	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4e, 0x0a, 0x12, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73, 0x12, 0x21, 0x2e, 0x77,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c, 0x75, 0x67,
+	0x69, 0x6e, 0x45, 0x76, 0x65, 0x6e, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a,
+	0x13, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x45,
+	0x76, 0x65, 0x6e, 0x74, 0x30, 0x01, 0x12, 0x58, 0x0a, 0x11, 0x53, 0x65, 0x6e, 0x64, 0x50, 0x6c,
+	0x75, 0x67, 0x69, 0x6e, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x12, 0x20, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x6e, 0x64, 0x50, 0x6c, 0x75, 0x67, 0x69, 0x6e, 0x43,
+	0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x21, 0x2e,
+	0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x53, 0x65, 0x6e, 0x64, 0x50, 0x6c, 0x75, 0x67, 0x69,
+	0x6e, 0x43, 0x6f, 0x6d, 0x6d, 0x61, 0x6e, 0x64, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65,
+	0x12, 0x55, 0x0a, 0x10, 0x51, 0x75, 0x65, 0x72, 0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x53,
+	0x74, 0x61, 0x74, 0x65, 0x12, 0x1f, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x51, 0x75,
+	0x65, 0x72, 0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x53, 0x74, 0x61, 0x74, 0x65, 0x52, 0x65,
+	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x20, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x51,
+	0x75, 0x65, 0x72, 0x79, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x53, 0x74, 0x61, 0x74, 0x65, 0x52,
+	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x43, 0x0a, 0x0a, 0x47, 0x65, 0x74, 0x56, 0x65,
+	0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x19, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47,
+	0x65, 0x74, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
+	0x1a, 0x1a, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x56, 0x65, 0x72,
+	0x73, 0x69, 0x6f, 0x6e, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x46, 0x0a, 0x0b,
+	0x43, 0x68, 0x65, 0x63, 0x6b, 0x44, 0x6f, 0x63, 0x6b, 0x65, 0x72, 0x12, 0x1a, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x44, 0x6f, 0x63, 0x6b, 0x65, 0x72,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1b, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72,
+	0x2e, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x44, 0x6f, 0x63, 0x6b, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x12, 0x4c, 0x0a, 0x0d, 0x55, 0x70, 0x67, 0x72, 0x61, 0x64, 0x65, 0x57,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x12, 0x1c, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x55,
+	0x70, 0x67, 0x72, 0x61, 0x64, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x1a, 0x1d, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x55, 0x70, 0x67,
+	0x72, 0x61, 0x64, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x43, 0x0a, 0x0f, 0x54, 0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61, 0x6c, 0x53, 0x65,
+	0x73, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x15, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x54,
+	0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61, 0x6c, 0x46, 0x72, 0x61, 0x6d, 0x65, 0x1a, 0x15, 0x2e, 0x77,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x54, 0x65, 0x72, 0x6d, 0x69, 0x6e, 0x61, 0x6c, 0x46, 0x72,
+	0x61, 0x6d, 0x65, 0x28, 0x01, 0x30, 0x01, 0x12, 0x55, 0x0a, 0x10, 0x49, 0x6e, 0x73, 0x70, 0x65,
+	0x63, 0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44, 0x69, 0x72, 0x12, 0x1f, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x70, 0x65, 0x63, 0x74, 0x53, 0x65, 0x72, 0x76,
+	0x65, 0x72, 0x44, 0x69, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x20, 0x2e, 0x77,
+	0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6e, 0x73, 0x70, 0x65, 0x63, 0x74, 0x53, 0x65, 0x72,
+	0x76, 0x65, 0x72, 0x44, 0x69, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x52,
+	0x0a, 0x0f, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44, 0x69,
+	0x72, 0x12, 0x1e, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6d, 0x70, 0x6f, 0x72,
+	0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44, 0x69, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x1f, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x49, 0x6d, 0x70, 0x6f, 0x72,
+	0x74, 0x53, 0x65, 0x72, 0x76, 0x65, 0x72, 0x44, 0x69, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x12, 0x64, 0x0a, 0x15, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61,
+	0x6e, 0x63, 0x65, 0x45, 0x76, 0x69, 0x64, 0x65, 0x6e, 0x63, 0x65, 0x12, 0x24, 0x2e, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e,
+	0x63, 0x65, 0x45, 0x76, 0x69, 0x64, 0x65, 0x6e, 0x63, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
+	0x74, 0x1a, 0x25, 0x2e, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2e, 0x50, 0x72, 0x6f, 0x62, 0x65,
+	0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x45, 0x76, 0x69, 0x64, 0x65, 0x6e, 0x63, 0x65,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x42, 0x2c, 0x5a, 0x2a, 0x67, 0x69, 0x74, 0x68,
+	0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x77, 0x63, 0x70, 0x65, 0x2f, 0x4a, 0x69, 0x61, 0x6e,
+	0x4d, 0x61, 0x6e, 0x61, 0x67, 0x65, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x77, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -24740,7 +24963,7 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_worker_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 282)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 284)
 var file_proto_worker_proto_goTypes = []any{
 	(LogErrorCode)(0),                           // 0: worker.LogErrorCode
 	(LogTailMode)(0),                            // 1: worker.LogTailMode
@@ -24829,208 +25052,210 @@ var file_proto_worker_proto_goTypes = []any{
 	(*DiffConfigRequest)(nil),                   // 84: worker.DiffConfigRequest
 	(*DiffConfigResponse)(nil),                  // 85: worker.DiffConfigResponse
 	(*GetNodeMetricsRequest)(nil),               // 86: worker.GetNodeMetricsRequest
-	(*GetNodeMetricsResponse)(nil),              // 87: worker.GetNodeMetricsResponse
-	(*GetInstanceMetricsRequest)(nil),           // 88: worker.GetInstanceMetricsRequest
-	(*GetInstanceMetricsResponse)(nil),          // 89: worker.GetInstanceMetricsResponse
-	(*GetInstanceResourceSnapshotRequest)(nil),  // 90: worker.GetInstanceResourceSnapshotRequest
-	(*GetInstanceResourceSnapshotResponse)(nil), // 91: worker.GetInstanceResourceSnapshotResponse
-	(*WorldMetric)(nil),                         // 92: worker.WorldMetric
-	(*GetInstanceEnvRequest)(nil),               // 93: worker.GetInstanceEnvRequest
-	(*GetInstanceEnvResponse)(nil),              // 94: worker.GetInstanceEnvResponse
-	(*CreateBotRequest)(nil),                    // 95: worker.CreateBotRequest
-	(*CreateBotResponse)(nil),                   // 96: worker.CreateBotResponse
-	(*DeleteBotRequest)(nil),                    // 97: worker.DeleteBotRequest
-	(*DeleteBotResponse)(nil),                   // 98: worker.DeleteBotResponse
-	(*ListBotsRequest)(nil),                     // 99: worker.ListBotsRequest
-	(*ListBotsResponse)(nil),                    // 100: worker.ListBotsResponse
-	(*BotInfo)(nil),                             // 101: worker.BotInfo
-	(*SetBotBehaviorRequest)(nil),               // 102: worker.SetBotBehaviorRequest
-	(*SetBotBehaviorResponse)(nil),              // 103: worker.SetBotBehaviorResponse
-	(*SendBotCommandRequest)(nil),               // 104: worker.SendBotCommandRequest
-	(*SendBotCommandResponse)(nil),              // 105: worker.SendBotCommandResponse
-	(*RunBotScriptRequest)(nil),                 // 106: worker.RunBotScriptRequest
-	(*RunBotScriptResponse)(nil),                // 107: worker.RunBotScriptResponse
-	(*StreamBotEventsRequest)(nil),              // 108: worker.StreamBotEventsRequest
-	(*BotEvent)(nil),                            // 109: worker.BotEvent
-	(*ListJDKsRequest)(nil),                     // 110: worker.ListJDKsRequest
-	(*JDKInfo)(nil),                             // 111: worker.JDKInfo
-	(*ListJDKsResponse)(nil),                    // 112: worker.ListJDKsResponse
-	(*InstallJDKRequest)(nil),                   // 113: worker.InstallJDKRequest
-	(*JDKCatalogRequest)(nil),                   // 114: worker.JDKCatalogRequest
-	(*JDKCatalogPackage)(nil),                   // 115: worker.JDKCatalogPackage
-	(*JDKCatalogResponse)(nil),                  // 116: worker.JDKCatalogResponse
-	(*InstallJDKResponse)(nil),                  // 117: worker.InstallJDKResponse
-	(*RemoveJDKRequest)(nil),                    // 118: worker.RemoveJDKRequest
-	(*RemoveJDKResponse)(nil),                   // 119: worker.RemoveJDKResponse
-	(*DownloadCoreRequest)(nil),                 // 120: worker.DownloadCoreRequest
-	(*DownloadCoreResponse)(nil),                // 121: worker.DownloadCoreResponse
-	(*InstallForgeServerRequest)(nil),           // 122: worker.InstallForgeServerRequest
-	(*InstallForgeServerResponse)(nil),          // 123: worker.InstallForgeServerResponse
-	(*FetchBinaryRequest)(nil),                  // 124: worker.FetchBinaryRequest
-	(*FetchBinaryProgress)(nil),                 // 125: worker.FetchBinaryProgress
-	(*ArtifactCacheItem)(nil),                   // 126: worker.ArtifactCacheItem
-	(*ListArtifactCacheRequest)(nil),            // 127: worker.ListArtifactCacheRequest
-	(*ListArtifactCacheResponse)(nil),           // 128: worker.ListArtifactCacheResponse
-	(*EvictArtifactCacheRequest)(nil),           // 129: worker.EvictArtifactCacheRequest
-	(*EvictArtifactCacheResponse)(nil),          // 130: worker.EvictArtifactCacheResponse
-	(*ClearArtifactCacheRequest)(nil),           // 131: worker.ClearArtifactCacheRequest
-	(*ClearArtifactCacheResponse)(nil),          // 132: worker.ClearArtifactCacheResponse
-	(*SetArtifactCacheCapRequest)(nil),          // 133: worker.SetArtifactCacheCapRequest
-	(*SetArtifactCacheCapResponse)(nil),         // 134: worker.SetArtifactCacheCapResponse
-	(*BrowseDirRequest)(nil),                    // 135: worker.BrowseDirRequest
-	(*BrowseDirEntry)(nil),                      // 136: worker.BrowseDirEntry
-	(*BrowseDirResponse)(nil),                   // 137: worker.BrowseDirResponse
-	(*ProbeJDKRequest)(nil),                     // 138: worker.ProbeJDKRequest
-	(*ProbeJDKResponse)(nil),                    // 139: worker.ProbeJDKResponse
-	(*ScanRuntimesRequest)(nil),                 // 140: worker.ScanRuntimesRequest
-	(*RuntimeCandidate)(nil),                    // 141: worker.RuntimeCandidate
-	(*ScanRuntimesResponse)(nil),                // 142: worker.ScanRuntimesResponse
-	(*InstallRuntimeRequest)(nil),               // 143: worker.InstallRuntimeRequest
-	(*InstallRuntimeResponse)(nil),              // 144: worker.InstallRuntimeResponse
-	(*RemoveRuntimeRequest)(nil),                // 145: worker.RemoveRuntimeRequest
-	(*RemoveRuntimeResponse)(nil),               // 146: worker.RemoveRuntimeResponse
-	(*PMRegistry)(nil),                          // 147: worker.PMRegistry
-	(*GetPMConfigRequest)(nil),                  // 148: worker.GetPMConfigRequest
-	(*GetPMConfigResponse)(nil),                 // 149: worker.GetPMConfigResponse
-	(*SetPMConfigRequest)(nil),                  // 150: worker.SetPMConfigRequest
-	(*SetPMConfigResponse)(nil),                 // 151: worker.SetPMConfigResponse
-	(*GlobalPackage)(nil),                       // 152: worker.GlobalPackage
-	(*ListGlobalPackagesRequest)(nil),           // 153: worker.ListGlobalPackagesRequest
-	(*ListGlobalPackagesResponse)(nil),          // 154: worker.ListGlobalPackagesResponse
-	(*InstallGlobalPackageRequest)(nil),         // 155: worker.InstallGlobalPackageRequest
-	(*InstallGlobalPackageResponse)(nil),        // 156: worker.InstallGlobalPackageResponse
-	(*RemoveGlobalPackageRequest)(nil),          // 157: worker.RemoveGlobalPackageRequest
-	(*RemoveGlobalPackageResponse)(nil),         // 158: worker.RemoveGlobalPackageResponse
-	(*DeployServerProbeRequest)(nil),            // 159: worker.DeployServerProbeRequest
-	(*DeployServerProbeResponse)(nil),           // 160: worker.DeployServerProbeResponse
-	(*CloneWorkDirRequest)(nil),                 // 161: worker.CloneWorkDirRequest
-	(*CloneWorkDirResponse)(nil),                // 162: worker.CloneWorkDirResponse
-	(*RemoveInstanceRequest)(nil),               // 163: worker.RemoveInstanceRequest
-	(*RemoveInstanceResponse)(nil),              // 164: worker.RemoveInstanceResponse
-	(*ListImagesRequest)(nil),                   // 165: worker.ListImagesRequest
-	(*ImageInfo)(nil),                           // 166: worker.ImageInfo
-	(*ListImagesResponse)(nil),                  // 167: worker.ListImagesResponse
-	(*PullImageRequest)(nil),                    // 168: worker.PullImageRequest
-	(*PullImageResponse)(nil),                   // 169: worker.PullImageResponse
-	(*RemoveImageRequest)(nil),                  // 170: worker.RemoveImageRequest
-	(*RemoveImageResponse)(nil),                 // 171: worker.RemoveImageResponse
-	(*StorageBackendSpec)(nil),                  // 172: worker.StorageBackendSpec
-	(*BackupManifestEntry)(nil),                 // 173: worker.BackupManifestEntry
-	(*CreateBackupRequest)(nil),                 // 174: worker.CreateBackupRequest
-	(*CreateBackupResponse)(nil),                // 175: worker.CreateBackupResponse
-	(*RestoreBackupRequest)(nil),                // 176: worker.RestoreBackupRequest
-	(*RestoreBackupResponse)(nil),               // 177: worker.RestoreBackupResponse
-	(*TestStorageBackendRequest)(nil),           // 178: worker.TestStorageBackendRequest
-	(*TestStorageBackendResponse)(nil),          // 179: worker.TestStorageBackendResponse
-	(*StreamPluginEventsRequest)(nil),           // 180: worker.StreamPluginEventsRequest
-	(*PluginEvent)(nil),                         // 181: worker.PluginEvent
-	(*PluginCommand)(nil),                       // 182: worker.PluginCommand
-	(*SendPluginCommandRequest)(nil),            // 183: worker.SendPluginCommandRequest
-	(*SendPluginCommandResponse)(nil),           // 184: worker.SendPluginCommandResponse
-	(*QueryServerStateRequest)(nil),             // 185: worker.QueryServerStateRequest
-	(*QueryServerStateResponse)(nil),            // 186: worker.QueryServerStateResponse
-	(*GetVersionRequest)(nil),                   // 187: worker.GetVersionRequest
-	(*GetVersionResponse)(nil),                  // 188: worker.GetVersionResponse
-	(*CheckDockerRequest)(nil),                  // 189: worker.CheckDockerRequest
-	(*CheckDockerResponse)(nil),                 // 190: worker.CheckDockerResponse
-	(*UpgradeWorkerRequest)(nil),                // 191: worker.UpgradeWorkerRequest
-	(*UpgradeWorkerResponse)(nil),               // 192: worker.UpgradeWorkerResponse
-	(*ListArchiveEntriesRequest)(nil),           // 193: worker.ListArchiveEntriesRequest
-	(*ArchiveEntry)(nil),                        // 194: worker.ArchiveEntry
-	(*ListArchiveEntriesResponse)(nil),          // 195: worker.ListArchiveEntriesResponse
-	(*ReadArchiveEntryRequest)(nil),             // 196: worker.ReadArchiveEntryRequest
-	(*ReadArchiveEntryResponse)(nil),            // 197: worker.ReadArchiveEntryResponse
-	(*DecompileClassRequest)(nil),               // 198: worker.DecompileClassRequest
-	(*DecompileClassResponse)(nil),              // 199: worker.DecompileClassResponse
-	(*TerminalFrame)(nil),                       // 200: worker.TerminalFrame
-	(*TerminalOpen)(nil),                        // 201: worker.TerminalOpen
-	(*TerminalWSFrame)(nil),                     // 202: worker.TerminalWSFrame
-	(*InspectServerDirRequest)(nil),             // 203: worker.InspectServerDirRequest
-	(*ImportJarCandidate)(nil),                  // 204: worker.ImportJarCandidate
-	(*ImportJdkCandidate)(nil),                  // 205: worker.ImportJdkCandidate
-	(*InspectServerDirResponse)(nil),            // 206: worker.InspectServerDirResponse
-	(*ImportServerDirRequest)(nil),              // 207: worker.ImportServerDirRequest
-	(*ImportServerDirResponse)(nil),             // 208: worker.ImportServerDirResponse
-	(*GetBotCapacityRequest)(nil),               // 209: worker.GetBotCapacityRequest
-	(*GetBotCapacityResponse)(nil),              // 210: worker.GetBotCapacityResponse
-	(*BotAssignment)(nil),                       // 211: worker.BotAssignment
-	(*ApplyBotBatchRequest)(nil),                // 212: worker.ApplyBotBatchRequest
-	(*ApplyBotBatchItemResult)(nil),             // 213: worker.ApplyBotBatchItemResult
-	(*ApplyBotBatchResponse)(nil),               // 214: worker.ApplyBotBatchResponse
-	(*GetBotFleetSnapshotRequest)(nil),          // 215: worker.GetBotFleetSnapshotRequest
-	(*BotPosition)(nil),                         // 216: worker.BotPosition
-	(*BotRuntimeSnapshot)(nil),                  // 217: worker.BotRuntimeSnapshot
-	(*GetBotFleetSnapshotResponse)(nil),         // 218: worker.GetBotFleetSnapshotResponse
-	(*StreamBotFleetEventsRequest)(nil),         // 219: worker.StreamBotFleetEventsRequest
-	(*BotActionEvent)(nil),                      // 220: worker.BotActionEvent
-	(*BotFleetEvent)(nil),                       // 221: worker.BotFleetEvent
-	(*BotActionSignal)(nil),                     // 222: worker.BotActionSignal
-	(*SignalBotActionsRequest)(nil),             // 223: worker.SignalBotActionsRequest
-	(*SignalBotActionItemResult)(nil),           // 224: worker.SignalBotActionItemResult
-	(*SignalBotActionsResponse)(nil),            // 225: worker.SignalBotActionsResponse
-	(*CommandOccurrenceKey)(nil),                // 226: worker.CommandOccurrenceKey
-	(*CommandOccurrenceRef)(nil),                // 227: worker.CommandOccurrenceRef
-	(*AppliedCommandOccurrence)(nil),            // 228: worker.AppliedCommandOccurrence
-	(*AppliedCommandOccurrencePlan)(nil),        // 229: worker.AppliedCommandOccurrencePlan
-	(*ApplyBotCommandScheduleItem)(nil),         // 230: worker.ApplyBotCommandScheduleItem
-	(*ApplyBotCommandScheduleItemResult)(nil),   // 231: worker.ApplyBotCommandScheduleItemResult
-	(*ApplyBotCommandSchedulesRequest)(nil),     // 232: worker.ApplyBotCommandSchedulesRequest
-	(*ApplyBotCommandSchedulesResponse)(nil),    // 233: worker.ApplyBotCommandSchedulesResponse
-	(*ReleaseBotCommandScheduleItem)(nil),       // 234: worker.ReleaseBotCommandScheduleItem
-	(*ReleaseBotCommandScheduleItemResult)(nil), // 235: worker.ReleaseBotCommandScheduleItemResult
-	(*ReleaseBotCommandSchedulesRequest)(nil),   // 236: worker.ReleaseBotCommandSchedulesRequest
-	(*ReleaseBotCommandSchedulesResponse)(nil),  // 237: worker.ReleaseBotCommandSchedulesResponse
-	(*CancelBotCommandScheduleItem)(nil),        // 238: worker.CancelBotCommandScheduleItem
-	(*CancelBotCommandScheduleItemResult)(nil),  // 239: worker.CancelBotCommandScheduleItemResult
-	(*CancelBotCommandSchedulesRequest)(nil),    // 240: worker.CancelBotCommandSchedulesRequest
-	(*CancelBotCommandSchedulesResponse)(nil),   // 241: worker.CancelBotCommandSchedulesResponse
-	(*ProbeInstanceEvidenceRequest)(nil),        // 242: worker.ProbeInstanceEvidenceRequest
-	(*InstanceEvidence)(nil),                    // 243: worker.InstanceEvidence
-	(*ProbeInstanceEvidenceResponse)(nil),       // 244: worker.ProbeInstanceEvidenceResponse
-	(*LogTimeRange)(nil),                        // 245: worker.LogTimeRange
-	(*LogAuthorizedTargets)(nil),                // 246: worker.LogAuthorizedTargets
-	(*LogQueryBudget)(nil),                      // 247: worker.LogQueryBudget
-	(*LogQueryViewRef)(nil),                     // 248: worker.LogQueryViewRef
-	(*LogCoverageTarget)(nil),                   // 249: worker.LogCoverageTarget
-	(*LogCoverage)(nil),                         // 250: worker.LogCoverage
-	(*LogQuality)(nil),                          // 251: worker.LogQuality
-	(*LogError)(nil),                            // 252: worker.LogError
-	(*LogEvent)(nil),                            // 253: worker.LogEvent
-	(*LogQueryRequestBase)(nil),                 // 254: worker.LogQueryRequestBase
-	(*GetLogCapabilitiesRequest)(nil),           // 255: worker.GetLogCapabilitiesRequest
-	(*GetLogCapabilitiesResponse)(nil),          // 256: worker.GetLogCapabilitiesResponse
-	(*LogSearchRequest)(nil),                    // 257: worker.LogSearchRequest
-	(*LogSearchResponse)(nil),                   // 258: worker.LogSearchResponse
-	(*IngestPositionGap)(nil),                   // 259: worker.IngestPositionGap
-	(*LogStatsRequest)(nil),                     // 260: worker.LogStatsRequest
-	(*LogStatsPoint)(nil),                       // 261: worker.LogStatsPoint
-	(*LogStatsResponse)(nil),                    // 262: worker.LogStatsResponse
-	(*LogFieldsRequest)(nil),                    // 263: worker.LogFieldsRequest
-	(*LogFieldsResponse)(nil),                   // 264: worker.LogFieldsResponse
-	(*LogFacetsRequest)(nil),                    // 265: worker.LogFacetsRequest
-	(*LogFacetValue)(nil),                       // 266: worker.LogFacetValue
-	(*LogFacetsResponse)(nil),                   // 267: worker.LogFacetsResponse
-	(*LogTailRequest)(nil),                      // 268: worker.LogTailRequest
-	(*LogRehydrateRequest)(nil),                 // 269: worker.LogRehydrateRequest
-	(*LogTaskResponse)(nil),                     // 270: worker.LogTaskResponse
-	(*LogArchiveStatusRequest)(nil),             // 271: worker.LogArchiveStatusRequest
-	(*LogArchiveStatusResponse)(nil),            // 272: worker.LogArchiveStatusResponse
-	(*LogRuntimeStatusRequest)(nil),             // 273: worker.LogRuntimeStatusRequest
-	(*LogRuntimeInstance)(nil),                  // 274: worker.LogRuntimeInstance
-	(*LogRuntimeStatusResponse)(nil),            // 275: worker.LogRuntimeStatusResponse
-	(*LogRuntimeControlRequest)(nil),            // 276: worker.LogRuntimeControlRequest
-	(*LogCreateViewRequest)(nil),                // 277: worker.LogCreateViewRequest
-	(*LogCreateViewResponse)(nil),               // 278: worker.LogCreateViewResponse
-	(*LogMigratePartitionRequest)(nil),          // 279: worker.LogMigratePartitionRequest
-	(*LogCutoverReadinessRequest)(nil),          // 280: worker.LogCutoverReadinessRequest
-	(*LogCutoverReadinessResponse)(nil),         // 281: worker.LogCutoverReadinessResponse
-	(*LogResolveIngestGapsRequest)(nil),         // 282: worker.LogResolveIngestGapsRequest
-	(*LogImportArchivesRequest)(nil),            // 283: worker.LogImportArchivesRequest
-	(*LogClearIdentityConflictsRequest)(nil),    // 284: worker.LogClearIdentityConflictsRequest
-	(*LogClearIdentityConflictsResponse)(nil),   // 285: worker.LogClearIdentityConflictsResponse
-	nil, // 286: worker.CreateInstanceRequest.EnvVarsEntry
-	nil, // 287: worker.GetInstanceEnvResponse.EnvEntry
-	nil, // 288: worker.LogStatsPoint.DimensionsEntry
+	(*PullSelfLogRequest)(nil),                  // 87: worker.PullSelfLogRequest
+	(*PullSelfLogResponse)(nil),                 // 88: worker.PullSelfLogResponse
+	(*GetNodeMetricsResponse)(nil),              // 89: worker.GetNodeMetricsResponse
+	(*GetInstanceMetricsRequest)(nil),           // 90: worker.GetInstanceMetricsRequest
+	(*GetInstanceMetricsResponse)(nil),          // 91: worker.GetInstanceMetricsResponse
+	(*GetInstanceResourceSnapshotRequest)(nil),  // 92: worker.GetInstanceResourceSnapshotRequest
+	(*GetInstanceResourceSnapshotResponse)(nil), // 93: worker.GetInstanceResourceSnapshotResponse
+	(*WorldMetric)(nil),                         // 94: worker.WorldMetric
+	(*GetInstanceEnvRequest)(nil),               // 95: worker.GetInstanceEnvRequest
+	(*GetInstanceEnvResponse)(nil),              // 96: worker.GetInstanceEnvResponse
+	(*CreateBotRequest)(nil),                    // 97: worker.CreateBotRequest
+	(*CreateBotResponse)(nil),                   // 98: worker.CreateBotResponse
+	(*DeleteBotRequest)(nil),                    // 99: worker.DeleteBotRequest
+	(*DeleteBotResponse)(nil),                   // 100: worker.DeleteBotResponse
+	(*ListBotsRequest)(nil),                     // 101: worker.ListBotsRequest
+	(*ListBotsResponse)(nil),                    // 102: worker.ListBotsResponse
+	(*BotInfo)(nil),                             // 103: worker.BotInfo
+	(*SetBotBehaviorRequest)(nil),               // 104: worker.SetBotBehaviorRequest
+	(*SetBotBehaviorResponse)(nil),              // 105: worker.SetBotBehaviorResponse
+	(*SendBotCommandRequest)(nil),               // 106: worker.SendBotCommandRequest
+	(*SendBotCommandResponse)(nil),              // 107: worker.SendBotCommandResponse
+	(*RunBotScriptRequest)(nil),                 // 108: worker.RunBotScriptRequest
+	(*RunBotScriptResponse)(nil),                // 109: worker.RunBotScriptResponse
+	(*StreamBotEventsRequest)(nil),              // 110: worker.StreamBotEventsRequest
+	(*BotEvent)(nil),                            // 111: worker.BotEvent
+	(*ListJDKsRequest)(nil),                     // 112: worker.ListJDKsRequest
+	(*JDKInfo)(nil),                             // 113: worker.JDKInfo
+	(*ListJDKsResponse)(nil),                    // 114: worker.ListJDKsResponse
+	(*InstallJDKRequest)(nil),                   // 115: worker.InstallJDKRequest
+	(*JDKCatalogRequest)(nil),                   // 116: worker.JDKCatalogRequest
+	(*JDKCatalogPackage)(nil),                   // 117: worker.JDKCatalogPackage
+	(*JDKCatalogResponse)(nil),                  // 118: worker.JDKCatalogResponse
+	(*InstallJDKResponse)(nil),                  // 119: worker.InstallJDKResponse
+	(*RemoveJDKRequest)(nil),                    // 120: worker.RemoveJDKRequest
+	(*RemoveJDKResponse)(nil),                   // 121: worker.RemoveJDKResponse
+	(*DownloadCoreRequest)(nil),                 // 122: worker.DownloadCoreRequest
+	(*DownloadCoreResponse)(nil),                // 123: worker.DownloadCoreResponse
+	(*InstallForgeServerRequest)(nil),           // 124: worker.InstallForgeServerRequest
+	(*InstallForgeServerResponse)(nil),          // 125: worker.InstallForgeServerResponse
+	(*FetchBinaryRequest)(nil),                  // 126: worker.FetchBinaryRequest
+	(*FetchBinaryProgress)(nil),                 // 127: worker.FetchBinaryProgress
+	(*ArtifactCacheItem)(nil),                   // 128: worker.ArtifactCacheItem
+	(*ListArtifactCacheRequest)(nil),            // 129: worker.ListArtifactCacheRequest
+	(*ListArtifactCacheResponse)(nil),           // 130: worker.ListArtifactCacheResponse
+	(*EvictArtifactCacheRequest)(nil),           // 131: worker.EvictArtifactCacheRequest
+	(*EvictArtifactCacheResponse)(nil),          // 132: worker.EvictArtifactCacheResponse
+	(*ClearArtifactCacheRequest)(nil),           // 133: worker.ClearArtifactCacheRequest
+	(*ClearArtifactCacheResponse)(nil),          // 134: worker.ClearArtifactCacheResponse
+	(*SetArtifactCacheCapRequest)(nil),          // 135: worker.SetArtifactCacheCapRequest
+	(*SetArtifactCacheCapResponse)(nil),         // 136: worker.SetArtifactCacheCapResponse
+	(*BrowseDirRequest)(nil),                    // 137: worker.BrowseDirRequest
+	(*BrowseDirEntry)(nil),                      // 138: worker.BrowseDirEntry
+	(*BrowseDirResponse)(nil),                   // 139: worker.BrowseDirResponse
+	(*ProbeJDKRequest)(nil),                     // 140: worker.ProbeJDKRequest
+	(*ProbeJDKResponse)(nil),                    // 141: worker.ProbeJDKResponse
+	(*ScanRuntimesRequest)(nil),                 // 142: worker.ScanRuntimesRequest
+	(*RuntimeCandidate)(nil),                    // 143: worker.RuntimeCandidate
+	(*ScanRuntimesResponse)(nil),                // 144: worker.ScanRuntimesResponse
+	(*InstallRuntimeRequest)(nil),               // 145: worker.InstallRuntimeRequest
+	(*InstallRuntimeResponse)(nil),              // 146: worker.InstallRuntimeResponse
+	(*RemoveRuntimeRequest)(nil),                // 147: worker.RemoveRuntimeRequest
+	(*RemoveRuntimeResponse)(nil),               // 148: worker.RemoveRuntimeResponse
+	(*PMRegistry)(nil),                          // 149: worker.PMRegistry
+	(*GetPMConfigRequest)(nil),                  // 150: worker.GetPMConfigRequest
+	(*GetPMConfigResponse)(nil),                 // 151: worker.GetPMConfigResponse
+	(*SetPMConfigRequest)(nil),                  // 152: worker.SetPMConfigRequest
+	(*SetPMConfigResponse)(nil),                 // 153: worker.SetPMConfigResponse
+	(*GlobalPackage)(nil),                       // 154: worker.GlobalPackage
+	(*ListGlobalPackagesRequest)(nil),           // 155: worker.ListGlobalPackagesRequest
+	(*ListGlobalPackagesResponse)(nil),          // 156: worker.ListGlobalPackagesResponse
+	(*InstallGlobalPackageRequest)(nil),         // 157: worker.InstallGlobalPackageRequest
+	(*InstallGlobalPackageResponse)(nil),        // 158: worker.InstallGlobalPackageResponse
+	(*RemoveGlobalPackageRequest)(nil),          // 159: worker.RemoveGlobalPackageRequest
+	(*RemoveGlobalPackageResponse)(nil),         // 160: worker.RemoveGlobalPackageResponse
+	(*DeployServerProbeRequest)(nil),            // 161: worker.DeployServerProbeRequest
+	(*DeployServerProbeResponse)(nil),           // 162: worker.DeployServerProbeResponse
+	(*CloneWorkDirRequest)(nil),                 // 163: worker.CloneWorkDirRequest
+	(*CloneWorkDirResponse)(nil),                // 164: worker.CloneWorkDirResponse
+	(*RemoveInstanceRequest)(nil),               // 165: worker.RemoveInstanceRequest
+	(*RemoveInstanceResponse)(nil),              // 166: worker.RemoveInstanceResponse
+	(*ListImagesRequest)(nil),                   // 167: worker.ListImagesRequest
+	(*ImageInfo)(nil),                           // 168: worker.ImageInfo
+	(*ListImagesResponse)(nil),                  // 169: worker.ListImagesResponse
+	(*PullImageRequest)(nil),                    // 170: worker.PullImageRequest
+	(*PullImageResponse)(nil),                   // 171: worker.PullImageResponse
+	(*RemoveImageRequest)(nil),                  // 172: worker.RemoveImageRequest
+	(*RemoveImageResponse)(nil),                 // 173: worker.RemoveImageResponse
+	(*StorageBackendSpec)(nil),                  // 174: worker.StorageBackendSpec
+	(*BackupManifestEntry)(nil),                 // 175: worker.BackupManifestEntry
+	(*CreateBackupRequest)(nil),                 // 176: worker.CreateBackupRequest
+	(*CreateBackupResponse)(nil),                // 177: worker.CreateBackupResponse
+	(*RestoreBackupRequest)(nil),                // 178: worker.RestoreBackupRequest
+	(*RestoreBackupResponse)(nil),               // 179: worker.RestoreBackupResponse
+	(*TestStorageBackendRequest)(nil),           // 180: worker.TestStorageBackendRequest
+	(*TestStorageBackendResponse)(nil),          // 181: worker.TestStorageBackendResponse
+	(*StreamPluginEventsRequest)(nil),           // 182: worker.StreamPluginEventsRequest
+	(*PluginEvent)(nil),                         // 183: worker.PluginEvent
+	(*PluginCommand)(nil),                       // 184: worker.PluginCommand
+	(*SendPluginCommandRequest)(nil),            // 185: worker.SendPluginCommandRequest
+	(*SendPluginCommandResponse)(nil),           // 186: worker.SendPluginCommandResponse
+	(*QueryServerStateRequest)(nil),             // 187: worker.QueryServerStateRequest
+	(*QueryServerStateResponse)(nil),            // 188: worker.QueryServerStateResponse
+	(*GetVersionRequest)(nil),                   // 189: worker.GetVersionRequest
+	(*GetVersionResponse)(nil),                  // 190: worker.GetVersionResponse
+	(*CheckDockerRequest)(nil),                  // 191: worker.CheckDockerRequest
+	(*CheckDockerResponse)(nil),                 // 192: worker.CheckDockerResponse
+	(*UpgradeWorkerRequest)(nil),                // 193: worker.UpgradeWorkerRequest
+	(*UpgradeWorkerResponse)(nil),               // 194: worker.UpgradeWorkerResponse
+	(*ListArchiveEntriesRequest)(nil),           // 195: worker.ListArchiveEntriesRequest
+	(*ArchiveEntry)(nil),                        // 196: worker.ArchiveEntry
+	(*ListArchiveEntriesResponse)(nil),          // 197: worker.ListArchiveEntriesResponse
+	(*ReadArchiveEntryRequest)(nil),             // 198: worker.ReadArchiveEntryRequest
+	(*ReadArchiveEntryResponse)(nil),            // 199: worker.ReadArchiveEntryResponse
+	(*DecompileClassRequest)(nil),               // 200: worker.DecompileClassRequest
+	(*DecompileClassResponse)(nil),              // 201: worker.DecompileClassResponse
+	(*TerminalFrame)(nil),                       // 202: worker.TerminalFrame
+	(*TerminalOpen)(nil),                        // 203: worker.TerminalOpen
+	(*TerminalWSFrame)(nil),                     // 204: worker.TerminalWSFrame
+	(*InspectServerDirRequest)(nil),             // 205: worker.InspectServerDirRequest
+	(*ImportJarCandidate)(nil),                  // 206: worker.ImportJarCandidate
+	(*ImportJdkCandidate)(nil),                  // 207: worker.ImportJdkCandidate
+	(*InspectServerDirResponse)(nil),            // 208: worker.InspectServerDirResponse
+	(*ImportServerDirRequest)(nil),              // 209: worker.ImportServerDirRequest
+	(*ImportServerDirResponse)(nil),             // 210: worker.ImportServerDirResponse
+	(*GetBotCapacityRequest)(nil),               // 211: worker.GetBotCapacityRequest
+	(*GetBotCapacityResponse)(nil),              // 212: worker.GetBotCapacityResponse
+	(*BotAssignment)(nil),                       // 213: worker.BotAssignment
+	(*ApplyBotBatchRequest)(nil),                // 214: worker.ApplyBotBatchRequest
+	(*ApplyBotBatchItemResult)(nil),             // 215: worker.ApplyBotBatchItemResult
+	(*ApplyBotBatchResponse)(nil),               // 216: worker.ApplyBotBatchResponse
+	(*GetBotFleetSnapshotRequest)(nil),          // 217: worker.GetBotFleetSnapshotRequest
+	(*BotPosition)(nil),                         // 218: worker.BotPosition
+	(*BotRuntimeSnapshot)(nil),                  // 219: worker.BotRuntimeSnapshot
+	(*GetBotFleetSnapshotResponse)(nil),         // 220: worker.GetBotFleetSnapshotResponse
+	(*StreamBotFleetEventsRequest)(nil),         // 221: worker.StreamBotFleetEventsRequest
+	(*BotActionEvent)(nil),                      // 222: worker.BotActionEvent
+	(*BotFleetEvent)(nil),                       // 223: worker.BotFleetEvent
+	(*BotActionSignal)(nil),                     // 224: worker.BotActionSignal
+	(*SignalBotActionsRequest)(nil),             // 225: worker.SignalBotActionsRequest
+	(*SignalBotActionItemResult)(nil),           // 226: worker.SignalBotActionItemResult
+	(*SignalBotActionsResponse)(nil),            // 227: worker.SignalBotActionsResponse
+	(*CommandOccurrenceKey)(nil),                // 228: worker.CommandOccurrenceKey
+	(*CommandOccurrenceRef)(nil),                // 229: worker.CommandOccurrenceRef
+	(*AppliedCommandOccurrence)(nil),            // 230: worker.AppliedCommandOccurrence
+	(*AppliedCommandOccurrencePlan)(nil),        // 231: worker.AppliedCommandOccurrencePlan
+	(*ApplyBotCommandScheduleItem)(nil),         // 232: worker.ApplyBotCommandScheduleItem
+	(*ApplyBotCommandScheduleItemResult)(nil),   // 233: worker.ApplyBotCommandScheduleItemResult
+	(*ApplyBotCommandSchedulesRequest)(nil),     // 234: worker.ApplyBotCommandSchedulesRequest
+	(*ApplyBotCommandSchedulesResponse)(nil),    // 235: worker.ApplyBotCommandSchedulesResponse
+	(*ReleaseBotCommandScheduleItem)(nil),       // 236: worker.ReleaseBotCommandScheduleItem
+	(*ReleaseBotCommandScheduleItemResult)(nil), // 237: worker.ReleaseBotCommandScheduleItemResult
+	(*ReleaseBotCommandSchedulesRequest)(nil),   // 238: worker.ReleaseBotCommandSchedulesRequest
+	(*ReleaseBotCommandSchedulesResponse)(nil),  // 239: worker.ReleaseBotCommandSchedulesResponse
+	(*CancelBotCommandScheduleItem)(nil),        // 240: worker.CancelBotCommandScheduleItem
+	(*CancelBotCommandScheduleItemResult)(nil),  // 241: worker.CancelBotCommandScheduleItemResult
+	(*CancelBotCommandSchedulesRequest)(nil),    // 242: worker.CancelBotCommandSchedulesRequest
+	(*CancelBotCommandSchedulesResponse)(nil),   // 243: worker.CancelBotCommandSchedulesResponse
+	(*ProbeInstanceEvidenceRequest)(nil),        // 244: worker.ProbeInstanceEvidenceRequest
+	(*InstanceEvidence)(nil),                    // 245: worker.InstanceEvidence
+	(*ProbeInstanceEvidenceResponse)(nil),       // 246: worker.ProbeInstanceEvidenceResponse
+	(*LogTimeRange)(nil),                        // 247: worker.LogTimeRange
+	(*LogAuthorizedTargets)(nil),                // 248: worker.LogAuthorizedTargets
+	(*LogQueryBudget)(nil),                      // 249: worker.LogQueryBudget
+	(*LogQueryViewRef)(nil),                     // 250: worker.LogQueryViewRef
+	(*LogCoverageTarget)(nil),                   // 251: worker.LogCoverageTarget
+	(*LogCoverage)(nil),                         // 252: worker.LogCoverage
+	(*LogQuality)(nil),                          // 253: worker.LogQuality
+	(*LogError)(nil),                            // 254: worker.LogError
+	(*LogEvent)(nil),                            // 255: worker.LogEvent
+	(*LogQueryRequestBase)(nil),                 // 256: worker.LogQueryRequestBase
+	(*GetLogCapabilitiesRequest)(nil),           // 257: worker.GetLogCapabilitiesRequest
+	(*GetLogCapabilitiesResponse)(nil),          // 258: worker.GetLogCapabilitiesResponse
+	(*LogSearchRequest)(nil),                    // 259: worker.LogSearchRequest
+	(*LogSearchResponse)(nil),                   // 260: worker.LogSearchResponse
+	(*IngestPositionGap)(nil),                   // 261: worker.IngestPositionGap
+	(*LogStatsRequest)(nil),                     // 262: worker.LogStatsRequest
+	(*LogStatsPoint)(nil),                       // 263: worker.LogStatsPoint
+	(*LogStatsResponse)(nil),                    // 264: worker.LogStatsResponse
+	(*LogFieldsRequest)(nil),                    // 265: worker.LogFieldsRequest
+	(*LogFieldsResponse)(nil),                   // 266: worker.LogFieldsResponse
+	(*LogFacetsRequest)(nil),                    // 267: worker.LogFacetsRequest
+	(*LogFacetValue)(nil),                       // 268: worker.LogFacetValue
+	(*LogFacetsResponse)(nil),                   // 269: worker.LogFacetsResponse
+	(*LogTailRequest)(nil),                      // 270: worker.LogTailRequest
+	(*LogRehydrateRequest)(nil),                 // 271: worker.LogRehydrateRequest
+	(*LogTaskResponse)(nil),                     // 272: worker.LogTaskResponse
+	(*LogArchiveStatusRequest)(nil),             // 273: worker.LogArchiveStatusRequest
+	(*LogArchiveStatusResponse)(nil),            // 274: worker.LogArchiveStatusResponse
+	(*LogRuntimeStatusRequest)(nil),             // 275: worker.LogRuntimeStatusRequest
+	(*LogRuntimeInstance)(nil),                  // 276: worker.LogRuntimeInstance
+	(*LogRuntimeStatusResponse)(nil),            // 277: worker.LogRuntimeStatusResponse
+	(*LogRuntimeControlRequest)(nil),            // 278: worker.LogRuntimeControlRequest
+	(*LogCreateViewRequest)(nil),                // 279: worker.LogCreateViewRequest
+	(*LogCreateViewResponse)(nil),               // 280: worker.LogCreateViewResponse
+	(*LogMigratePartitionRequest)(nil),          // 281: worker.LogMigratePartitionRequest
+	(*LogCutoverReadinessRequest)(nil),          // 282: worker.LogCutoverReadinessRequest
+	(*LogCutoverReadinessResponse)(nil),         // 283: worker.LogCutoverReadinessResponse
+	(*LogResolveIngestGapsRequest)(nil),         // 284: worker.LogResolveIngestGapsRequest
+	(*LogImportArchivesRequest)(nil),            // 285: worker.LogImportArchivesRequest
+	(*LogClearIdentityConflictsRequest)(nil),    // 286: worker.LogClearIdentityConflictsRequest
+	(*LogClearIdentityConflictsResponse)(nil),   // 287: worker.LogClearIdentityConflictsResponse
+	nil, // 288: worker.CreateInstanceRequest.EnvVarsEntry
+	nil, // 289: worker.GetInstanceEnvResponse.EnvEntry
+	nil, // 290: worker.LogStatsPoint.DimensionsEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	17,  // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
@@ -25038,8 +25263,8 @@ var file_proto_worker_proto_depIdxs = []int32{
 	16,  // 2: worker.HeartbeatRequest.tasks:type_name -> worker.TaskSnapshot
 	21,  // 3: worker.HeartbeatRequest.process_metrics:type_name -> worker.ProcessMetricSample
 	22,  // 4: worker.HeartbeatRequest.managed_runtime:type_name -> worker.ManagedRuntimeSnapshot
-	92,  // 5: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
-	286, // 6: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	94,  // 5: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
+	288, // 6: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	25,  // 7: worker.CreateInstanceRequest.port_mappings:type_name -> worker.PortMapping
 	24,  // 8: worker.ResyncInstancesRequest.instances:type_name -> worker.CreateInstanceRequest
 	33,  // 9: worker.ManagedProcessInspectResponse.target:type_name -> worker.ManagedProcessInfo
@@ -25055,100 +25280,100 @@ var file_proto_worker_proto_depIdxs = []int32{
 	75,  // 19: worker.WriteConfigRequest.fields:type_name -> worker.ConfigField
 	77,  // 20: worker.WriteConfigResponse.validation:type_name -> worker.ConfigValidationResult
 	77,  // 21: worker.ValidateConfigResponse.validation:type_name -> worker.ConfigValidationResult
-	92,  // 22: worker.GetInstanceMetricsResponse.worlds:type_name -> worker.WorldMetric
-	287, // 23: worker.GetInstanceEnvResponse.env:type_name -> worker.GetInstanceEnvResponse.EnvEntry
-	101, // 24: worker.ListBotsResponse.bots:type_name -> worker.BotInfo
-	111, // 25: worker.ListJDKsResponse.jdks:type_name -> worker.JDKInfo
-	115, // 26: worker.JDKCatalogResponse.packages:type_name -> worker.JDKCatalogPackage
-	111, // 27: worker.InstallJDKResponse.jdk:type_name -> worker.JDKInfo
-	126, // 28: worker.ListArtifactCacheResponse.items:type_name -> worker.ArtifactCacheItem
-	136, // 29: worker.BrowseDirResponse.dirs:type_name -> worker.BrowseDirEntry
-	141, // 30: worker.ScanRuntimesResponse.candidates:type_name -> worker.RuntimeCandidate
-	147, // 31: worker.GetPMConfigResponse.registries:type_name -> worker.PMRegistry
-	147, // 32: worker.SetPMConfigRequest.registries:type_name -> worker.PMRegistry
-	152, // 33: worker.ListGlobalPackagesResponse.packages:type_name -> worker.GlobalPackage
-	166, // 34: worker.ListImagesResponse.images:type_name -> worker.ImageInfo
-	173, // 35: worker.CreateBackupRequest.base_manifest:type_name -> worker.BackupManifestEntry
-	172, // 36: worker.CreateBackupRequest.storage:type_name -> worker.StorageBackendSpec
-	173, // 37: worker.CreateBackupResponse.manifest:type_name -> worker.BackupManifestEntry
-	172, // 38: worker.RestoreBackupRequest.storage:type_name -> worker.StorageBackendSpec
-	172, // 39: worker.TestStorageBackendRequest.storage:type_name -> worker.StorageBackendSpec
-	182, // 40: worker.SendPluginCommandRequest.command:type_name -> worker.PluginCommand
-	194, // 41: worker.ListArchiveEntriesResponse.entries:type_name -> worker.ArchiveEntry
-	201, // 42: worker.TerminalFrame.open:type_name -> worker.TerminalOpen
-	202, // 43: worker.TerminalFrame.frame:type_name -> worker.TerminalWSFrame
-	204, // 44: worker.InspectServerDirResponse.jars:type_name -> worker.ImportJarCandidate
-	205, // 45: worker.InspectServerDirResponse.jdks:type_name -> worker.ImportJdkCandidate
-	211, // 46: worker.ApplyBotBatchRequest.assignments:type_name -> worker.BotAssignment
-	213, // 47: worker.ApplyBotBatchResponse.results:type_name -> worker.ApplyBotBatchItemResult
-	216, // 48: worker.BotRuntimeSnapshot.pos:type_name -> worker.BotPosition
-	217, // 49: worker.GetBotFleetSnapshotResponse.bots:type_name -> worker.BotRuntimeSnapshot
-	217, // 50: worker.BotFleetEvent.runtime_snapshot:type_name -> worker.BotRuntimeSnapshot
-	220, // 51: worker.BotFleetEvent.action_event:type_name -> worker.BotActionEvent
-	222, // 52: worker.SignalBotActionsRequest.signals:type_name -> worker.BotActionSignal
-	224, // 53: worker.SignalBotActionsResponse.results:type_name -> worker.SignalBotActionItemResult
-	228, // 54: worker.AppliedCommandOccurrencePlan.occurrences:type_name -> worker.AppliedCommandOccurrence
-	229, // 55: worker.ApplyBotCommandScheduleItem.plan:type_name -> worker.AppliedCommandOccurrencePlan
-	226, // 56: worker.ApplyBotCommandScheduleItem.skip_occurrences:type_name -> worker.CommandOccurrenceKey
-	230, // 57: worker.ApplyBotCommandSchedulesRequest.items:type_name -> worker.ApplyBotCommandScheduleItem
-	231, // 58: worker.ApplyBotCommandSchedulesResponse.results:type_name -> worker.ApplyBotCommandScheduleItemResult
-	234, // 59: worker.ReleaseBotCommandSchedulesRequest.items:type_name -> worker.ReleaseBotCommandScheduleItem
-	235, // 60: worker.ReleaseBotCommandSchedulesResponse.results:type_name -> worker.ReleaseBotCommandScheduleItemResult
-	227, // 61: worker.CancelBotCommandScheduleItem.unresolved_occurrences:type_name -> worker.CommandOccurrenceRef
-	238, // 62: worker.CancelBotCommandSchedulesRequest.items:type_name -> worker.CancelBotCommandScheduleItem
-	239, // 63: worker.CancelBotCommandSchedulesResponse.results:type_name -> worker.CancelBotCommandScheduleItemResult
-	243, // 64: worker.ProbeInstanceEvidenceResponse.evidence:type_name -> worker.InstanceEvidence
+	94,  // 22: worker.GetInstanceMetricsResponse.worlds:type_name -> worker.WorldMetric
+	289, // 23: worker.GetInstanceEnvResponse.env:type_name -> worker.GetInstanceEnvResponse.EnvEntry
+	103, // 24: worker.ListBotsResponse.bots:type_name -> worker.BotInfo
+	113, // 25: worker.ListJDKsResponse.jdks:type_name -> worker.JDKInfo
+	117, // 26: worker.JDKCatalogResponse.packages:type_name -> worker.JDKCatalogPackage
+	113, // 27: worker.InstallJDKResponse.jdk:type_name -> worker.JDKInfo
+	128, // 28: worker.ListArtifactCacheResponse.items:type_name -> worker.ArtifactCacheItem
+	138, // 29: worker.BrowseDirResponse.dirs:type_name -> worker.BrowseDirEntry
+	143, // 30: worker.ScanRuntimesResponse.candidates:type_name -> worker.RuntimeCandidate
+	149, // 31: worker.GetPMConfigResponse.registries:type_name -> worker.PMRegistry
+	149, // 32: worker.SetPMConfigRequest.registries:type_name -> worker.PMRegistry
+	154, // 33: worker.ListGlobalPackagesResponse.packages:type_name -> worker.GlobalPackage
+	168, // 34: worker.ListImagesResponse.images:type_name -> worker.ImageInfo
+	175, // 35: worker.CreateBackupRequest.base_manifest:type_name -> worker.BackupManifestEntry
+	174, // 36: worker.CreateBackupRequest.storage:type_name -> worker.StorageBackendSpec
+	175, // 37: worker.CreateBackupResponse.manifest:type_name -> worker.BackupManifestEntry
+	174, // 38: worker.RestoreBackupRequest.storage:type_name -> worker.StorageBackendSpec
+	174, // 39: worker.TestStorageBackendRequest.storage:type_name -> worker.StorageBackendSpec
+	184, // 40: worker.SendPluginCommandRequest.command:type_name -> worker.PluginCommand
+	196, // 41: worker.ListArchiveEntriesResponse.entries:type_name -> worker.ArchiveEntry
+	203, // 42: worker.TerminalFrame.open:type_name -> worker.TerminalOpen
+	204, // 43: worker.TerminalFrame.frame:type_name -> worker.TerminalWSFrame
+	206, // 44: worker.InspectServerDirResponse.jars:type_name -> worker.ImportJarCandidate
+	207, // 45: worker.InspectServerDirResponse.jdks:type_name -> worker.ImportJdkCandidate
+	213, // 46: worker.ApplyBotBatchRequest.assignments:type_name -> worker.BotAssignment
+	215, // 47: worker.ApplyBotBatchResponse.results:type_name -> worker.ApplyBotBatchItemResult
+	218, // 48: worker.BotRuntimeSnapshot.pos:type_name -> worker.BotPosition
+	219, // 49: worker.GetBotFleetSnapshotResponse.bots:type_name -> worker.BotRuntimeSnapshot
+	219, // 50: worker.BotFleetEvent.runtime_snapshot:type_name -> worker.BotRuntimeSnapshot
+	222, // 51: worker.BotFleetEvent.action_event:type_name -> worker.BotActionEvent
+	224, // 52: worker.SignalBotActionsRequest.signals:type_name -> worker.BotActionSignal
+	226, // 53: worker.SignalBotActionsResponse.results:type_name -> worker.SignalBotActionItemResult
+	230, // 54: worker.AppliedCommandOccurrencePlan.occurrences:type_name -> worker.AppliedCommandOccurrence
+	231, // 55: worker.ApplyBotCommandScheduleItem.plan:type_name -> worker.AppliedCommandOccurrencePlan
+	228, // 56: worker.ApplyBotCommandScheduleItem.skip_occurrences:type_name -> worker.CommandOccurrenceKey
+	232, // 57: worker.ApplyBotCommandSchedulesRequest.items:type_name -> worker.ApplyBotCommandScheduleItem
+	233, // 58: worker.ApplyBotCommandSchedulesResponse.results:type_name -> worker.ApplyBotCommandScheduleItemResult
+	236, // 59: worker.ReleaseBotCommandSchedulesRequest.items:type_name -> worker.ReleaseBotCommandScheduleItem
+	237, // 60: worker.ReleaseBotCommandSchedulesResponse.results:type_name -> worker.ReleaseBotCommandScheduleItemResult
+	229, // 61: worker.CancelBotCommandScheduleItem.unresolved_occurrences:type_name -> worker.CommandOccurrenceRef
+	240, // 62: worker.CancelBotCommandSchedulesRequest.items:type_name -> worker.CancelBotCommandScheduleItem
+	241, // 63: worker.CancelBotCommandSchedulesResponse.results:type_name -> worker.CancelBotCommandScheduleItemResult
+	245, // 64: worker.ProbeInstanceEvidenceResponse.evidence:type_name -> worker.InstanceEvidence
 	2,   // 65: worker.LogCoverageTarget.state:type_name -> worker.LogCoverageState
-	249, // 66: worker.LogCoverage.targets:type_name -> worker.LogCoverageTarget
+	251, // 66: worker.LogCoverage.targets:type_name -> worker.LogCoverageTarget
 	3,   // 67: worker.LogCoverage.enumeration_state:type_name -> worker.LogEnumerationState
 	4,   // 68: worker.LogQuality.duplicate_quality:type_name -> worker.LogDuplicateQuality
 	5,   // 69: worker.LogQuality.stats_quality:type_name -> worker.LogStatsQuality
 	0,   // 70: worker.LogError.code:type_name -> worker.LogErrorCode
-	245, // 71: worker.LogQueryRequestBase.time_range:type_name -> worker.LogTimeRange
-	246, // 72: worker.LogQueryRequestBase.authorized_targets:type_name -> worker.LogAuthorizedTargets
-	247, // 73: worker.LogQueryRequestBase.budget:type_name -> worker.LogQueryBudget
-	248, // 74: worker.LogQueryRequestBase.view:type_name -> worker.LogQueryViewRef
-	252, // 75: worker.GetLogCapabilitiesResponse.unsupported_reasons:type_name -> worker.LogError
-	254, // 76: worker.LogSearchRequest.query:type_name -> worker.LogQueryRequestBase
-	248, // 77: worker.LogSearchResponse.view:type_name -> worker.LogQueryViewRef
-	250, // 78: worker.LogSearchResponse.coverage:type_name -> worker.LogCoverage
-	251, // 79: worker.LogSearchResponse.quality:type_name -> worker.LogQuality
-	253, // 80: worker.LogSearchResponse.items:type_name -> worker.LogEvent
-	252, // 81: worker.LogSearchResponse.error:type_name -> worker.LogError
-	259, // 82: worker.LogSearchResponse.ingest_position_gaps:type_name -> worker.IngestPositionGap
-	254, // 83: worker.LogStatsRequest.query:type_name -> worker.LogQueryRequestBase
-	288, // 84: worker.LogStatsPoint.dimensions:type_name -> worker.LogStatsPoint.DimensionsEntry
-	248, // 85: worker.LogStatsResponse.view:type_name -> worker.LogQueryViewRef
-	250, // 86: worker.LogStatsResponse.coverage:type_name -> worker.LogCoverage
-	251, // 87: worker.LogStatsResponse.quality:type_name -> worker.LogQuality
-	261, // 88: worker.LogStatsResponse.points:type_name -> worker.LogStatsPoint
-	252, // 89: worker.LogStatsResponse.error:type_name -> worker.LogError
-	254, // 90: worker.LogFieldsRequest.query:type_name -> worker.LogQueryRequestBase
-	248, // 91: worker.LogFieldsResponse.view:type_name -> worker.LogQueryViewRef
-	250, // 92: worker.LogFieldsResponse.coverage:type_name -> worker.LogCoverage
-	252, // 93: worker.LogFieldsResponse.error:type_name -> worker.LogError
-	254, // 94: worker.LogFacetsRequest.query:type_name -> worker.LogQueryRequestBase
-	248, // 95: worker.LogFacetsResponse.view:type_name -> worker.LogQueryViewRef
-	250, // 96: worker.LogFacetsResponse.coverage:type_name -> worker.LogCoverage
-	266, // 97: worker.LogFacetsResponse.values:type_name -> worker.LogFacetValue
-	252, // 98: worker.LogFacetsResponse.error:type_name -> worker.LogError
-	254, // 99: worker.LogTailRequest.query:type_name -> worker.LogQueryRequestBase
+	247, // 71: worker.LogQueryRequestBase.time_range:type_name -> worker.LogTimeRange
+	248, // 72: worker.LogQueryRequestBase.authorized_targets:type_name -> worker.LogAuthorizedTargets
+	249, // 73: worker.LogQueryRequestBase.budget:type_name -> worker.LogQueryBudget
+	250, // 74: worker.LogQueryRequestBase.view:type_name -> worker.LogQueryViewRef
+	254, // 75: worker.GetLogCapabilitiesResponse.unsupported_reasons:type_name -> worker.LogError
+	256, // 76: worker.LogSearchRequest.query:type_name -> worker.LogQueryRequestBase
+	250, // 77: worker.LogSearchResponse.view:type_name -> worker.LogQueryViewRef
+	252, // 78: worker.LogSearchResponse.coverage:type_name -> worker.LogCoverage
+	253, // 79: worker.LogSearchResponse.quality:type_name -> worker.LogQuality
+	255, // 80: worker.LogSearchResponse.items:type_name -> worker.LogEvent
+	254, // 81: worker.LogSearchResponse.error:type_name -> worker.LogError
+	261, // 82: worker.LogSearchResponse.ingest_position_gaps:type_name -> worker.IngestPositionGap
+	256, // 83: worker.LogStatsRequest.query:type_name -> worker.LogQueryRequestBase
+	290, // 84: worker.LogStatsPoint.dimensions:type_name -> worker.LogStatsPoint.DimensionsEntry
+	250, // 85: worker.LogStatsResponse.view:type_name -> worker.LogQueryViewRef
+	252, // 86: worker.LogStatsResponse.coverage:type_name -> worker.LogCoverage
+	253, // 87: worker.LogStatsResponse.quality:type_name -> worker.LogQuality
+	263, // 88: worker.LogStatsResponse.points:type_name -> worker.LogStatsPoint
+	254, // 89: worker.LogStatsResponse.error:type_name -> worker.LogError
+	256, // 90: worker.LogFieldsRequest.query:type_name -> worker.LogQueryRequestBase
+	250, // 91: worker.LogFieldsResponse.view:type_name -> worker.LogQueryViewRef
+	252, // 92: worker.LogFieldsResponse.coverage:type_name -> worker.LogCoverage
+	254, // 93: worker.LogFieldsResponse.error:type_name -> worker.LogError
+	256, // 94: worker.LogFacetsRequest.query:type_name -> worker.LogQueryRequestBase
+	250, // 95: worker.LogFacetsResponse.view:type_name -> worker.LogQueryViewRef
+	252, // 96: worker.LogFacetsResponse.coverage:type_name -> worker.LogCoverage
+	268, // 97: worker.LogFacetsResponse.values:type_name -> worker.LogFacetValue
+	254, // 98: worker.LogFacetsResponse.error:type_name -> worker.LogError
+	256, // 99: worker.LogTailRequest.query:type_name -> worker.LogQueryRequestBase
 	1,   // 100: worker.LogTailRequest.mode:type_name -> worker.LogTailMode
-	254, // 101: worker.LogRehydrateRequest.query:type_name -> worker.LogQueryRequestBase
+	256, // 101: worker.LogRehydrateRequest.query:type_name -> worker.LogQueryRequestBase
 	6,   // 102: worker.LogTaskResponse.state:type_name -> worker.LogTaskState
-	252, // 103: worker.LogTaskResponse.error:type_name -> worker.LogError
-	254, // 104: worker.LogArchiveStatusRequest.query:type_name -> worker.LogQueryRequestBase
-	250, // 105: worker.LogArchiveStatusResponse.coverage:type_name -> worker.LogCoverage
-	252, // 106: worker.LogArchiveStatusResponse.error:type_name -> worker.LogError
-	274, // 107: worker.LogRuntimeStatusResponse.instances:type_name -> worker.LogRuntimeInstance
-	252, // 108: worker.LogRuntimeStatusResponse.error:type_name -> worker.LogError
-	254, // 109: worker.LogCreateViewRequest.query:type_name -> worker.LogQueryRequestBase
-	248, // 110: worker.LogCreateViewResponse.view:type_name -> worker.LogQueryViewRef
-	250, // 111: worker.LogCreateViewResponse.coverage:type_name -> worker.LogCoverage
-	251, // 112: worker.LogCreateViewResponse.quality:type_name -> worker.LogQuality
-	252, // 113: worker.LogCreateViewResponse.error:type_name -> worker.LogError
-	252, // 114: worker.LogCutoverReadinessResponse.error:type_name -> worker.LogError
-	252, // 115: worker.LogClearIdentityConflictsResponse.error:type_name -> worker.LogError
+	254, // 103: worker.LogTaskResponse.error:type_name -> worker.LogError
+	256, // 104: worker.LogArchiveStatusRequest.query:type_name -> worker.LogQueryRequestBase
+	252, // 105: worker.LogArchiveStatusResponse.coverage:type_name -> worker.LogCoverage
+	254, // 106: worker.LogArchiveStatusResponse.error:type_name -> worker.LogError
+	276, // 107: worker.LogRuntimeStatusResponse.instances:type_name -> worker.LogRuntimeInstance
+	254, // 108: worker.LogRuntimeStatusResponse.error:type_name -> worker.LogError
+	256, // 109: worker.LogCreateViewRequest.query:type_name -> worker.LogQueryRequestBase
+	250, // 110: worker.LogCreateViewResponse.view:type_name -> worker.LogQueryViewRef
+	252, // 111: worker.LogCreateViewResponse.coverage:type_name -> worker.LogCoverage
+	253, // 112: worker.LogCreateViewResponse.quality:type_name -> worker.LogQuality
+	254, // 113: worker.LogCreateViewResponse.error:type_name -> worker.LogError
+	254, // 114: worker.LogCutoverReadinessResponse.error:type_name -> worker.LogError
+	254, // 115: worker.LogClearIdentityConflictsResponse.error:type_name -> worker.LogError
 	7,   // 116: worker.WorkerService.Register:input_type -> worker.RegisterRequest
 	15,  // 117: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
 	13,  // 118: worker.WorkerService.FetchBotWorkerArchive:input_type -> worker.FetchBotWorkerArchiveRequest
@@ -25168,22 +25393,22 @@ var file_proto_worker_proto_depIdxs = []int32{
 	29,  // 132: worker.WorkerService.GetInstanceStatus:input_type -> worker.InstanceActionRequest
 	39,  // 133: worker.WorkerService.ListInstances:input_type -> worker.ListInstancesRequest
 	42,  // 134: worker.WorkerService.StreamInstanceEvents:input_type -> worker.StreamInstanceEventsRequest
-	255, // 135: worker.WorkerService.GetLogCapabilities:input_type -> worker.GetLogCapabilitiesRequest
-	277, // 136: worker.WorkerService.LogCreateView:input_type -> worker.LogCreateViewRequest
-	257, // 137: worker.WorkerService.LogSearch:input_type -> worker.LogSearchRequest
-	260, // 138: worker.WorkerService.LogStats:input_type -> worker.LogStatsRequest
-	263, // 139: worker.WorkerService.LogFields:input_type -> worker.LogFieldsRequest
-	265, // 140: worker.WorkerService.LogFacets:input_type -> worker.LogFacetsRequest
-	268, // 141: worker.WorkerService.LogTail:input_type -> worker.LogTailRequest
-	269, // 142: worker.WorkerService.LogRehydrate:input_type -> worker.LogRehydrateRequest
-	271, // 143: worker.WorkerService.LogArchiveStatus:input_type -> worker.LogArchiveStatusRequest
-	273, // 144: worker.WorkerService.LogRuntimeStatus:input_type -> worker.LogRuntimeStatusRequest
-	276, // 145: worker.WorkerService.LogRuntimeControl:input_type -> worker.LogRuntimeControlRequest
-	279, // 146: worker.WorkerService.LogMigratePartition:input_type -> worker.LogMigratePartitionRequest
-	280, // 147: worker.WorkerService.LogCutoverReadiness:input_type -> worker.LogCutoverReadinessRequest
-	282, // 148: worker.WorkerService.LogResolveIngestGaps:input_type -> worker.LogResolveIngestGapsRequest
-	283, // 149: worker.WorkerService.LogImportArchives:input_type -> worker.LogImportArchivesRequest
-	284, // 150: worker.WorkerService.LogClearIdentityConflicts:input_type -> worker.LogClearIdentityConflictsRequest
+	257, // 135: worker.WorkerService.GetLogCapabilities:input_type -> worker.GetLogCapabilitiesRequest
+	279, // 136: worker.WorkerService.LogCreateView:input_type -> worker.LogCreateViewRequest
+	259, // 137: worker.WorkerService.LogSearch:input_type -> worker.LogSearchRequest
+	262, // 138: worker.WorkerService.LogStats:input_type -> worker.LogStatsRequest
+	265, // 139: worker.WorkerService.LogFields:input_type -> worker.LogFieldsRequest
+	267, // 140: worker.WorkerService.LogFacets:input_type -> worker.LogFacetsRequest
+	270, // 141: worker.WorkerService.LogTail:input_type -> worker.LogTailRequest
+	271, // 142: worker.WorkerService.LogRehydrate:input_type -> worker.LogRehydrateRequest
+	273, // 143: worker.WorkerService.LogArchiveStatus:input_type -> worker.LogArchiveStatusRequest
+	275, // 144: worker.WorkerService.LogRuntimeStatus:input_type -> worker.LogRuntimeStatusRequest
+	278, // 145: worker.WorkerService.LogRuntimeControl:input_type -> worker.LogRuntimeControlRequest
+	281, // 146: worker.WorkerService.LogMigratePartition:input_type -> worker.LogMigratePartitionRequest
+	282, // 147: worker.WorkerService.LogCutoverReadiness:input_type -> worker.LogCutoverReadinessRequest
+	284, // 148: worker.WorkerService.LogResolveIngestGaps:input_type -> worker.LogResolveIngestGapsRequest
+	285, // 149: worker.WorkerService.LogImportArchives:input_type -> worker.LogImportArchivesRequest
+	286, // 150: worker.WorkerService.LogClearIdentityConflicts:input_type -> worker.LogClearIdentityConflictsRequest
 	44,  // 151: worker.WorkerService.IssueTerminalToken:input_type -> worker.IssueTerminalTokenRequest
 	46,  // 152: worker.WorkerService.ListFiles:input_type -> worker.ListFilesRequest
 	53,  // 153: worker.WorkerService.ReadFile:input_type -> worker.ReadFileRequest
@@ -25197,190 +25422,192 @@ var file_proto_worker_proto_depIdxs = []int32{
 	65,  // 161: worker.WorkerService.DownloadFile:input_type -> worker.DownloadFileRequest
 	67,  // 162: worker.WorkerService.UploadFile:input_type -> worker.UploadFileChunk
 	69,  // 163: worker.WorkerService.SearchFiles:input_type -> worker.SearchFilesRequest
-	193, // 164: worker.WorkerService.ListArchiveEntries:input_type -> worker.ListArchiveEntriesRequest
-	196, // 165: worker.WorkerService.ReadArchiveEntry:input_type -> worker.ReadArchiveEntryRequest
-	198, // 166: worker.WorkerService.DecompileClass:input_type -> worker.DecompileClassRequest
+	195, // 164: worker.WorkerService.ListArchiveEntries:input_type -> worker.ListArchiveEntriesRequest
+	198, // 165: worker.WorkerService.ReadArchiveEntry:input_type -> worker.ReadArchiveEntryRequest
+	200, // 166: worker.WorkerService.DecompileClass:input_type -> worker.DecompileClassRequest
 	72,  // 167: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
 	78,  // 168: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
 	80,  // 169: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
 	82,  // 170: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
 	86,  // 171: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
-	88,  // 172: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
-	90,  // 173: worker.WorkerService.GetInstanceResourceSnapshot:input_type -> worker.GetInstanceResourceSnapshotRequest
-	93,  // 174: worker.WorkerService.GetInstanceEnv:input_type -> worker.GetInstanceEnvRequest
-	110, // 175: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
-	113, // 176: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
-	118, // 177: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
-	114, // 178: worker.WorkerService.JDKCatalog:input_type -> worker.JDKCatalogRequest
-	138, // 179: worker.WorkerService.ProbeJDK:input_type -> worker.ProbeJDKRequest
-	140, // 180: worker.WorkerService.ScanRuntimes:input_type -> worker.ScanRuntimesRequest
-	143, // 181: worker.WorkerService.InstallRuntime:input_type -> worker.InstallRuntimeRequest
-	145, // 182: worker.WorkerService.RemoveRuntime:input_type -> worker.RemoveRuntimeRequest
-	148, // 183: worker.WorkerService.GetPMConfig:input_type -> worker.GetPMConfigRequest
-	150, // 184: worker.WorkerService.SetPMConfig:input_type -> worker.SetPMConfigRequest
-	153, // 185: worker.WorkerService.ListGlobalPackages:input_type -> worker.ListGlobalPackagesRequest
-	155, // 186: worker.WorkerService.InstallGlobalPackage:input_type -> worker.InstallGlobalPackageRequest
-	157, // 187: worker.WorkerService.RemoveGlobalPackage:input_type -> worker.RemoveGlobalPackageRequest
-	120, // 188: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
-	122, // 189: worker.WorkerService.InstallForgeServer:input_type -> worker.InstallForgeServerRequest
-	124, // 190: worker.WorkerService.FetchBinary:input_type -> worker.FetchBinaryRequest
-	127, // 191: worker.WorkerService.ListArtifactCache:input_type -> worker.ListArtifactCacheRequest
-	129, // 192: worker.WorkerService.EvictArtifactCache:input_type -> worker.EvictArtifactCacheRequest
-	131, // 193: worker.WorkerService.ClearArtifactCache:input_type -> worker.ClearArtifactCacheRequest
-	133, // 194: worker.WorkerService.SetArtifactCacheCap:input_type -> worker.SetArtifactCacheCapRequest
-	135, // 195: worker.WorkerService.BrowseDir:input_type -> worker.BrowseDirRequest
-	159, // 196: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
-	161, // 197: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
-	163, // 198: worker.WorkerService.RemoveInstance:input_type -> worker.RemoveInstanceRequest
-	18,  // 199: worker.WorkerService.DisposeOrphanRuntime:input_type -> worker.DisposeOrphanRuntimeRequest
-	165, // 200: worker.WorkerService.ListImages:input_type -> worker.ListImagesRequest
-	168, // 201: worker.WorkerService.PullImage:input_type -> worker.PullImageRequest
-	170, // 202: worker.WorkerService.RemoveImage:input_type -> worker.RemoveImageRequest
-	174, // 203: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
-	176, // 204: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
-	178, // 205: worker.WorkerService.TestStorageBackend:input_type -> worker.TestStorageBackendRequest
-	95,  // 206: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
-	97,  // 207: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
-	99,  // 208: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
-	102, // 209: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
-	104, // 210: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
-	106, // 211: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
-	108, // 212: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
-	209, // 213: worker.WorkerService.GetBotCapacity:input_type -> worker.GetBotCapacityRequest
-	212, // 214: worker.WorkerService.ApplyBotBatch:input_type -> worker.ApplyBotBatchRequest
-	215, // 215: worker.WorkerService.GetBotFleetSnapshot:input_type -> worker.GetBotFleetSnapshotRequest
-	219, // 216: worker.WorkerService.StreamBotFleetEvents:input_type -> worker.StreamBotFleetEventsRequest
-	223, // 217: worker.WorkerService.SignalBotActions:input_type -> worker.SignalBotActionsRequest
-	232, // 218: worker.WorkerService.ApplyBotCommandSchedules:input_type -> worker.ApplyBotCommandSchedulesRequest
-	236, // 219: worker.WorkerService.ReleaseBotCommandSchedules:input_type -> worker.ReleaseBotCommandSchedulesRequest
-	240, // 220: worker.WorkerService.CancelBotCommandSchedules:input_type -> worker.CancelBotCommandSchedulesRequest
-	180, // 221: worker.WorkerService.StreamPluginEvents:input_type -> worker.StreamPluginEventsRequest
-	183, // 222: worker.WorkerService.SendPluginCommand:input_type -> worker.SendPluginCommandRequest
-	185, // 223: worker.WorkerService.QueryServerState:input_type -> worker.QueryServerStateRequest
-	187, // 224: worker.WorkerService.GetVersion:input_type -> worker.GetVersionRequest
-	189, // 225: worker.WorkerService.CheckDocker:input_type -> worker.CheckDockerRequest
-	191, // 226: worker.WorkerService.UpgradeWorker:input_type -> worker.UpgradeWorkerRequest
-	200, // 227: worker.WorkerService.TerminalSession:input_type -> worker.TerminalFrame
-	203, // 228: worker.WorkerService.InspectServerDir:input_type -> worker.InspectServerDirRequest
-	207, // 229: worker.WorkerService.ImportServerDir:input_type -> worker.ImportServerDirRequest
-	242, // 230: worker.WorkerService.ProbeInstanceEvidence:input_type -> worker.ProbeInstanceEvidenceRequest
-	8,   // 231: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	23,  // 232: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	14,  // 233: worker.WorkerService.FetchBotWorkerArchive:output_type -> worker.FetchBotWorkerArchiveResponse
-	10,  // 234: worker.WorkerService.ReportCrashSnapshot:output_type -> worker.ReportCrashSnapshotResponse
-	12,  // 235: worker.WorkerService.ReportOrphanAudit:output_type -> worker.ReportOrphanAuditResponse
-	26,  // 236: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	28,  // 237: worker.WorkerService.ResyncInstances:output_type -> worker.ResyncInstancesResponse
-	30,  // 238: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	30,  // 239: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	30,  // 240: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	30,  // 241: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	34,  // 242: worker.WorkerService.InspectManagedProcess:output_type -> worker.ManagedProcessInspectResponse
-	35,  // 243: worker.WorkerService.TerminateManagedProcess:output_type -> worker.ManagedProcessActionResponse
-	30,  // 244: worker.WorkerService.PreflightStartInstance:output_type -> worker.InstanceActionResponse
-	30,  // 245: worker.WorkerService.AdoptForeignRuntime:output_type -> worker.InstanceActionResponse
-	37,  // 246: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	38,  // 247: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	40,  // 248: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	43,  // 249: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	256, // 250: worker.WorkerService.GetLogCapabilities:output_type -> worker.GetLogCapabilitiesResponse
-	278, // 251: worker.WorkerService.LogCreateView:output_type -> worker.LogCreateViewResponse
-	258, // 252: worker.WorkerService.LogSearch:output_type -> worker.LogSearchResponse
-	262, // 253: worker.WorkerService.LogStats:output_type -> worker.LogStatsResponse
-	264, // 254: worker.WorkerService.LogFields:output_type -> worker.LogFieldsResponse
-	267, // 255: worker.WorkerService.LogFacets:output_type -> worker.LogFacetsResponse
-	253, // 256: worker.WorkerService.LogTail:output_type -> worker.LogEvent
-	270, // 257: worker.WorkerService.LogRehydrate:output_type -> worker.LogTaskResponse
-	272, // 258: worker.WorkerService.LogArchiveStatus:output_type -> worker.LogArchiveStatusResponse
-	275, // 259: worker.WorkerService.LogRuntimeStatus:output_type -> worker.LogRuntimeStatusResponse
-	270, // 260: worker.WorkerService.LogRuntimeControl:output_type -> worker.LogTaskResponse
-	270, // 261: worker.WorkerService.LogMigratePartition:output_type -> worker.LogTaskResponse
-	281, // 262: worker.WorkerService.LogCutoverReadiness:output_type -> worker.LogCutoverReadinessResponse
-	270, // 263: worker.WorkerService.LogResolveIngestGaps:output_type -> worker.LogTaskResponse
-	270, // 264: worker.WorkerService.LogImportArchives:output_type -> worker.LogTaskResponse
-	285, // 265: worker.WorkerService.LogClearIdentityConflicts:output_type -> worker.LogClearIdentityConflictsResponse
-	45,  // 266: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	47,  // 267: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	54,  // 268: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	56,  // 269: worker.WorkerService.HashFile:output_type -> worker.HashFileResponse
-	58,  // 270: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	60,  // 271: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	62,  // 272: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	50,  // 273: worker.WorkerService.CheckPathAccess:output_type -> worker.CheckPathAccessResponse
-	52,  // 274: worker.WorkerService.ChmodPath:output_type -> worker.ChmodPathResponse
-	64,  // 275: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
-	66,  // 276: worker.WorkerService.DownloadFile:output_type -> worker.DownloadFileChunk
-	68,  // 277: worker.WorkerService.UploadFile:output_type -> worker.UploadFileResponse
-	71,  // 278: worker.WorkerService.SearchFiles:output_type -> worker.SearchFilesResponse
-	195, // 279: worker.WorkerService.ListArchiveEntries:output_type -> worker.ListArchiveEntriesResponse
-	197, // 280: worker.WorkerService.ReadArchiveEntry:output_type -> worker.ReadArchiveEntryResponse
-	199, // 281: worker.WorkerService.DecompileClass:output_type -> worker.DecompileClassResponse
-	74,  // 282: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	79,  // 283: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	81,  // 284: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	83,  // 285: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	87,  // 286: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	89,  // 287: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	91,  // 288: worker.WorkerService.GetInstanceResourceSnapshot:output_type -> worker.GetInstanceResourceSnapshotResponse
-	94,  // 289: worker.WorkerService.GetInstanceEnv:output_type -> worker.GetInstanceEnvResponse
-	112, // 290: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
-	117, // 291: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
-	119, // 292: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
-	116, // 293: worker.WorkerService.JDKCatalog:output_type -> worker.JDKCatalogResponse
-	139, // 294: worker.WorkerService.ProbeJDK:output_type -> worker.ProbeJDKResponse
-	142, // 295: worker.WorkerService.ScanRuntimes:output_type -> worker.ScanRuntimesResponse
-	144, // 296: worker.WorkerService.InstallRuntime:output_type -> worker.InstallRuntimeResponse
-	146, // 297: worker.WorkerService.RemoveRuntime:output_type -> worker.RemoveRuntimeResponse
-	149, // 298: worker.WorkerService.GetPMConfig:output_type -> worker.GetPMConfigResponse
-	151, // 299: worker.WorkerService.SetPMConfig:output_type -> worker.SetPMConfigResponse
-	154, // 300: worker.WorkerService.ListGlobalPackages:output_type -> worker.ListGlobalPackagesResponse
-	156, // 301: worker.WorkerService.InstallGlobalPackage:output_type -> worker.InstallGlobalPackageResponse
-	158, // 302: worker.WorkerService.RemoveGlobalPackage:output_type -> worker.RemoveGlobalPackageResponse
-	121, // 303: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
-	123, // 304: worker.WorkerService.InstallForgeServer:output_type -> worker.InstallForgeServerResponse
-	125, // 305: worker.WorkerService.FetchBinary:output_type -> worker.FetchBinaryProgress
-	128, // 306: worker.WorkerService.ListArtifactCache:output_type -> worker.ListArtifactCacheResponse
-	130, // 307: worker.WorkerService.EvictArtifactCache:output_type -> worker.EvictArtifactCacheResponse
-	132, // 308: worker.WorkerService.ClearArtifactCache:output_type -> worker.ClearArtifactCacheResponse
-	134, // 309: worker.WorkerService.SetArtifactCacheCap:output_type -> worker.SetArtifactCacheCapResponse
-	137, // 310: worker.WorkerService.BrowseDir:output_type -> worker.BrowseDirResponse
-	160, // 311: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
-	162, // 312: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
-	164, // 313: worker.WorkerService.RemoveInstance:output_type -> worker.RemoveInstanceResponse
-	19,  // 314: worker.WorkerService.DisposeOrphanRuntime:output_type -> worker.DisposeOrphanRuntimeResponse
-	167, // 315: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
-	169, // 316: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
-	171, // 317: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
-	175, // 318: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
-	177, // 319: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
-	179, // 320: worker.WorkerService.TestStorageBackend:output_type -> worker.TestStorageBackendResponse
-	96,  // 321: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	98,  // 322: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	100, // 323: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	103, // 324: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	105, // 325: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	107, // 326: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	109, // 327: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	210, // 328: worker.WorkerService.GetBotCapacity:output_type -> worker.GetBotCapacityResponse
-	214, // 329: worker.WorkerService.ApplyBotBatch:output_type -> worker.ApplyBotBatchResponse
-	218, // 330: worker.WorkerService.GetBotFleetSnapshot:output_type -> worker.GetBotFleetSnapshotResponse
-	221, // 331: worker.WorkerService.StreamBotFleetEvents:output_type -> worker.BotFleetEvent
-	225, // 332: worker.WorkerService.SignalBotActions:output_type -> worker.SignalBotActionsResponse
-	233, // 333: worker.WorkerService.ApplyBotCommandSchedules:output_type -> worker.ApplyBotCommandSchedulesResponse
-	237, // 334: worker.WorkerService.ReleaseBotCommandSchedules:output_type -> worker.ReleaseBotCommandSchedulesResponse
-	241, // 335: worker.WorkerService.CancelBotCommandSchedules:output_type -> worker.CancelBotCommandSchedulesResponse
-	181, // 336: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
-	184, // 337: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
-	186, // 338: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
-	188, // 339: worker.WorkerService.GetVersion:output_type -> worker.GetVersionResponse
-	190, // 340: worker.WorkerService.CheckDocker:output_type -> worker.CheckDockerResponse
-	192, // 341: worker.WorkerService.UpgradeWorker:output_type -> worker.UpgradeWorkerResponse
-	200, // 342: worker.WorkerService.TerminalSession:output_type -> worker.TerminalFrame
-	206, // 343: worker.WorkerService.InspectServerDir:output_type -> worker.InspectServerDirResponse
-	208, // 344: worker.WorkerService.ImportServerDir:output_type -> worker.ImportServerDirResponse
-	244, // 345: worker.WorkerService.ProbeInstanceEvidence:output_type -> worker.ProbeInstanceEvidenceResponse
-	231, // [231:346] is the sub-list for method output_type
-	116, // [116:231] is the sub-list for method input_type
+	87,  // 172: worker.WorkerService.PullSelfLog:input_type -> worker.PullSelfLogRequest
+	90,  // 173: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
+	92,  // 174: worker.WorkerService.GetInstanceResourceSnapshot:input_type -> worker.GetInstanceResourceSnapshotRequest
+	95,  // 175: worker.WorkerService.GetInstanceEnv:input_type -> worker.GetInstanceEnvRequest
+	112, // 176: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
+	115, // 177: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
+	120, // 178: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
+	116, // 179: worker.WorkerService.JDKCatalog:input_type -> worker.JDKCatalogRequest
+	140, // 180: worker.WorkerService.ProbeJDK:input_type -> worker.ProbeJDKRequest
+	142, // 181: worker.WorkerService.ScanRuntimes:input_type -> worker.ScanRuntimesRequest
+	145, // 182: worker.WorkerService.InstallRuntime:input_type -> worker.InstallRuntimeRequest
+	147, // 183: worker.WorkerService.RemoveRuntime:input_type -> worker.RemoveRuntimeRequest
+	150, // 184: worker.WorkerService.GetPMConfig:input_type -> worker.GetPMConfigRequest
+	152, // 185: worker.WorkerService.SetPMConfig:input_type -> worker.SetPMConfigRequest
+	155, // 186: worker.WorkerService.ListGlobalPackages:input_type -> worker.ListGlobalPackagesRequest
+	157, // 187: worker.WorkerService.InstallGlobalPackage:input_type -> worker.InstallGlobalPackageRequest
+	159, // 188: worker.WorkerService.RemoveGlobalPackage:input_type -> worker.RemoveGlobalPackageRequest
+	122, // 189: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
+	124, // 190: worker.WorkerService.InstallForgeServer:input_type -> worker.InstallForgeServerRequest
+	126, // 191: worker.WorkerService.FetchBinary:input_type -> worker.FetchBinaryRequest
+	129, // 192: worker.WorkerService.ListArtifactCache:input_type -> worker.ListArtifactCacheRequest
+	131, // 193: worker.WorkerService.EvictArtifactCache:input_type -> worker.EvictArtifactCacheRequest
+	133, // 194: worker.WorkerService.ClearArtifactCache:input_type -> worker.ClearArtifactCacheRequest
+	135, // 195: worker.WorkerService.SetArtifactCacheCap:input_type -> worker.SetArtifactCacheCapRequest
+	137, // 196: worker.WorkerService.BrowseDir:input_type -> worker.BrowseDirRequest
+	161, // 197: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
+	163, // 198: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
+	165, // 199: worker.WorkerService.RemoveInstance:input_type -> worker.RemoveInstanceRequest
+	18,  // 200: worker.WorkerService.DisposeOrphanRuntime:input_type -> worker.DisposeOrphanRuntimeRequest
+	167, // 201: worker.WorkerService.ListImages:input_type -> worker.ListImagesRequest
+	170, // 202: worker.WorkerService.PullImage:input_type -> worker.PullImageRequest
+	172, // 203: worker.WorkerService.RemoveImage:input_type -> worker.RemoveImageRequest
+	176, // 204: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
+	178, // 205: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
+	180, // 206: worker.WorkerService.TestStorageBackend:input_type -> worker.TestStorageBackendRequest
+	97,  // 207: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
+	99,  // 208: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
+	101, // 209: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
+	104, // 210: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
+	106, // 211: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
+	108, // 212: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
+	110, // 213: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
+	211, // 214: worker.WorkerService.GetBotCapacity:input_type -> worker.GetBotCapacityRequest
+	214, // 215: worker.WorkerService.ApplyBotBatch:input_type -> worker.ApplyBotBatchRequest
+	217, // 216: worker.WorkerService.GetBotFleetSnapshot:input_type -> worker.GetBotFleetSnapshotRequest
+	221, // 217: worker.WorkerService.StreamBotFleetEvents:input_type -> worker.StreamBotFleetEventsRequest
+	225, // 218: worker.WorkerService.SignalBotActions:input_type -> worker.SignalBotActionsRequest
+	234, // 219: worker.WorkerService.ApplyBotCommandSchedules:input_type -> worker.ApplyBotCommandSchedulesRequest
+	238, // 220: worker.WorkerService.ReleaseBotCommandSchedules:input_type -> worker.ReleaseBotCommandSchedulesRequest
+	242, // 221: worker.WorkerService.CancelBotCommandSchedules:input_type -> worker.CancelBotCommandSchedulesRequest
+	182, // 222: worker.WorkerService.StreamPluginEvents:input_type -> worker.StreamPluginEventsRequest
+	185, // 223: worker.WorkerService.SendPluginCommand:input_type -> worker.SendPluginCommandRequest
+	187, // 224: worker.WorkerService.QueryServerState:input_type -> worker.QueryServerStateRequest
+	189, // 225: worker.WorkerService.GetVersion:input_type -> worker.GetVersionRequest
+	191, // 226: worker.WorkerService.CheckDocker:input_type -> worker.CheckDockerRequest
+	193, // 227: worker.WorkerService.UpgradeWorker:input_type -> worker.UpgradeWorkerRequest
+	202, // 228: worker.WorkerService.TerminalSession:input_type -> worker.TerminalFrame
+	205, // 229: worker.WorkerService.InspectServerDir:input_type -> worker.InspectServerDirRequest
+	209, // 230: worker.WorkerService.ImportServerDir:input_type -> worker.ImportServerDirRequest
+	244, // 231: worker.WorkerService.ProbeInstanceEvidence:input_type -> worker.ProbeInstanceEvidenceRequest
+	8,   // 232: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	23,  // 233: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	14,  // 234: worker.WorkerService.FetchBotWorkerArchive:output_type -> worker.FetchBotWorkerArchiveResponse
+	10,  // 235: worker.WorkerService.ReportCrashSnapshot:output_type -> worker.ReportCrashSnapshotResponse
+	12,  // 236: worker.WorkerService.ReportOrphanAudit:output_type -> worker.ReportOrphanAuditResponse
+	26,  // 237: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	28,  // 238: worker.WorkerService.ResyncInstances:output_type -> worker.ResyncInstancesResponse
+	30,  // 239: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	30,  // 240: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	30,  // 241: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	30,  // 242: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	34,  // 243: worker.WorkerService.InspectManagedProcess:output_type -> worker.ManagedProcessInspectResponse
+	35,  // 244: worker.WorkerService.TerminateManagedProcess:output_type -> worker.ManagedProcessActionResponse
+	30,  // 245: worker.WorkerService.PreflightStartInstance:output_type -> worker.InstanceActionResponse
+	30,  // 246: worker.WorkerService.AdoptForeignRuntime:output_type -> worker.InstanceActionResponse
+	37,  // 247: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	38,  // 248: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	40,  // 249: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	43,  // 250: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	258, // 251: worker.WorkerService.GetLogCapabilities:output_type -> worker.GetLogCapabilitiesResponse
+	280, // 252: worker.WorkerService.LogCreateView:output_type -> worker.LogCreateViewResponse
+	260, // 253: worker.WorkerService.LogSearch:output_type -> worker.LogSearchResponse
+	264, // 254: worker.WorkerService.LogStats:output_type -> worker.LogStatsResponse
+	266, // 255: worker.WorkerService.LogFields:output_type -> worker.LogFieldsResponse
+	269, // 256: worker.WorkerService.LogFacets:output_type -> worker.LogFacetsResponse
+	255, // 257: worker.WorkerService.LogTail:output_type -> worker.LogEvent
+	272, // 258: worker.WorkerService.LogRehydrate:output_type -> worker.LogTaskResponse
+	274, // 259: worker.WorkerService.LogArchiveStatus:output_type -> worker.LogArchiveStatusResponse
+	277, // 260: worker.WorkerService.LogRuntimeStatus:output_type -> worker.LogRuntimeStatusResponse
+	272, // 261: worker.WorkerService.LogRuntimeControl:output_type -> worker.LogTaskResponse
+	272, // 262: worker.WorkerService.LogMigratePartition:output_type -> worker.LogTaskResponse
+	283, // 263: worker.WorkerService.LogCutoverReadiness:output_type -> worker.LogCutoverReadinessResponse
+	272, // 264: worker.WorkerService.LogResolveIngestGaps:output_type -> worker.LogTaskResponse
+	272, // 265: worker.WorkerService.LogImportArchives:output_type -> worker.LogTaskResponse
+	287, // 266: worker.WorkerService.LogClearIdentityConflicts:output_type -> worker.LogClearIdentityConflictsResponse
+	45,  // 267: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	47,  // 268: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	54,  // 269: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	56,  // 270: worker.WorkerService.HashFile:output_type -> worker.HashFileResponse
+	58,  // 271: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	60,  // 272: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	62,  // 273: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	50,  // 274: worker.WorkerService.CheckPathAccess:output_type -> worker.CheckPathAccessResponse
+	52,  // 275: worker.WorkerService.ChmodPath:output_type -> worker.ChmodPathResponse
+	64,  // 276: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
+	66,  // 277: worker.WorkerService.DownloadFile:output_type -> worker.DownloadFileChunk
+	68,  // 278: worker.WorkerService.UploadFile:output_type -> worker.UploadFileResponse
+	71,  // 279: worker.WorkerService.SearchFiles:output_type -> worker.SearchFilesResponse
+	197, // 280: worker.WorkerService.ListArchiveEntries:output_type -> worker.ListArchiveEntriesResponse
+	199, // 281: worker.WorkerService.ReadArchiveEntry:output_type -> worker.ReadArchiveEntryResponse
+	201, // 282: worker.WorkerService.DecompileClass:output_type -> worker.DecompileClassResponse
+	74,  // 283: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	79,  // 284: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	81,  // 285: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	83,  // 286: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	89,  // 287: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	88,  // 288: worker.WorkerService.PullSelfLog:output_type -> worker.PullSelfLogResponse
+	91,  // 289: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	93,  // 290: worker.WorkerService.GetInstanceResourceSnapshot:output_type -> worker.GetInstanceResourceSnapshotResponse
+	96,  // 291: worker.WorkerService.GetInstanceEnv:output_type -> worker.GetInstanceEnvResponse
+	114, // 292: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	119, // 293: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	121, // 294: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	118, // 295: worker.WorkerService.JDKCatalog:output_type -> worker.JDKCatalogResponse
+	141, // 296: worker.WorkerService.ProbeJDK:output_type -> worker.ProbeJDKResponse
+	144, // 297: worker.WorkerService.ScanRuntimes:output_type -> worker.ScanRuntimesResponse
+	146, // 298: worker.WorkerService.InstallRuntime:output_type -> worker.InstallRuntimeResponse
+	148, // 299: worker.WorkerService.RemoveRuntime:output_type -> worker.RemoveRuntimeResponse
+	151, // 300: worker.WorkerService.GetPMConfig:output_type -> worker.GetPMConfigResponse
+	153, // 301: worker.WorkerService.SetPMConfig:output_type -> worker.SetPMConfigResponse
+	156, // 302: worker.WorkerService.ListGlobalPackages:output_type -> worker.ListGlobalPackagesResponse
+	158, // 303: worker.WorkerService.InstallGlobalPackage:output_type -> worker.InstallGlobalPackageResponse
+	160, // 304: worker.WorkerService.RemoveGlobalPackage:output_type -> worker.RemoveGlobalPackageResponse
+	123, // 305: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
+	125, // 306: worker.WorkerService.InstallForgeServer:output_type -> worker.InstallForgeServerResponse
+	127, // 307: worker.WorkerService.FetchBinary:output_type -> worker.FetchBinaryProgress
+	130, // 308: worker.WorkerService.ListArtifactCache:output_type -> worker.ListArtifactCacheResponse
+	132, // 309: worker.WorkerService.EvictArtifactCache:output_type -> worker.EvictArtifactCacheResponse
+	134, // 310: worker.WorkerService.ClearArtifactCache:output_type -> worker.ClearArtifactCacheResponse
+	136, // 311: worker.WorkerService.SetArtifactCacheCap:output_type -> worker.SetArtifactCacheCapResponse
+	139, // 312: worker.WorkerService.BrowseDir:output_type -> worker.BrowseDirResponse
+	162, // 313: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
+	164, // 314: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
+	166, // 315: worker.WorkerService.RemoveInstance:output_type -> worker.RemoveInstanceResponse
+	19,  // 316: worker.WorkerService.DisposeOrphanRuntime:output_type -> worker.DisposeOrphanRuntimeResponse
+	169, // 317: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
+	171, // 318: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
+	173, // 319: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
+	177, // 320: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
+	179, // 321: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
+	181, // 322: worker.WorkerService.TestStorageBackend:output_type -> worker.TestStorageBackendResponse
+	98,  // 323: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	100, // 324: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	102, // 325: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	105, // 326: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	107, // 327: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	109, // 328: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	111, // 329: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	212, // 330: worker.WorkerService.GetBotCapacity:output_type -> worker.GetBotCapacityResponse
+	216, // 331: worker.WorkerService.ApplyBotBatch:output_type -> worker.ApplyBotBatchResponse
+	220, // 332: worker.WorkerService.GetBotFleetSnapshot:output_type -> worker.GetBotFleetSnapshotResponse
+	223, // 333: worker.WorkerService.StreamBotFleetEvents:output_type -> worker.BotFleetEvent
+	227, // 334: worker.WorkerService.SignalBotActions:output_type -> worker.SignalBotActionsResponse
+	235, // 335: worker.WorkerService.ApplyBotCommandSchedules:output_type -> worker.ApplyBotCommandSchedulesResponse
+	239, // 336: worker.WorkerService.ReleaseBotCommandSchedules:output_type -> worker.ReleaseBotCommandSchedulesResponse
+	243, // 337: worker.WorkerService.CancelBotCommandSchedules:output_type -> worker.CancelBotCommandSchedulesResponse
+	183, // 338: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
+	186, // 339: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
+	188, // 340: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
+	190, // 341: worker.WorkerService.GetVersion:output_type -> worker.GetVersionResponse
+	192, // 342: worker.WorkerService.CheckDocker:output_type -> worker.CheckDockerResponse
+	194, // 343: worker.WorkerService.UpgradeWorker:output_type -> worker.UpgradeWorkerResponse
+	202, // 344: worker.WorkerService.TerminalSession:output_type -> worker.TerminalFrame
+	208, // 345: worker.WorkerService.InspectServerDir:output_type -> worker.InspectServerDirResponse
+	210, // 346: worker.WorkerService.ImportServerDir:output_type -> worker.ImportServerDirResponse
+	246, // 347: worker.WorkerService.ProbeInstanceEvidence:output_type -> worker.ProbeInstanceEvidenceResponse
+	232, // [232:348] is the sub-list for method output_type
+	116, // [116:232] is the sub-list for method input_type
 	116, // [116:116] is the sub-list for extension type_name
 	116, // [116:116] is the sub-list for extension extendee
 	0,   // [0:116] is the sub-list for field type_name
@@ -26353,7 +26580,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[80].Exporter = func(v any, i int) any {
-			switch v := v.(*GetNodeMetricsResponse); i {
+			switch v := v.(*PullSelfLogRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26365,7 +26592,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[81].Exporter = func(v any, i int) any {
-			switch v := v.(*GetInstanceMetricsRequest); i {
+			switch v := v.(*PullSelfLogResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26377,7 +26604,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[82].Exporter = func(v any, i int) any {
-			switch v := v.(*GetInstanceMetricsResponse); i {
+			switch v := v.(*GetNodeMetricsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26389,7 +26616,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[83].Exporter = func(v any, i int) any {
-			switch v := v.(*GetInstanceResourceSnapshotRequest); i {
+			switch v := v.(*GetInstanceMetricsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26401,7 +26628,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[84].Exporter = func(v any, i int) any {
-			switch v := v.(*GetInstanceResourceSnapshotResponse); i {
+			switch v := v.(*GetInstanceMetricsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26413,7 +26640,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[85].Exporter = func(v any, i int) any {
-			switch v := v.(*WorldMetric); i {
+			switch v := v.(*GetInstanceResourceSnapshotRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26425,7 +26652,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[86].Exporter = func(v any, i int) any {
-			switch v := v.(*GetInstanceEnvRequest); i {
+			switch v := v.(*GetInstanceResourceSnapshotResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26437,7 +26664,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[87].Exporter = func(v any, i int) any {
-			switch v := v.(*GetInstanceEnvResponse); i {
+			switch v := v.(*WorldMetric); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26449,7 +26676,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[88].Exporter = func(v any, i int) any {
-			switch v := v.(*CreateBotRequest); i {
+			switch v := v.(*GetInstanceEnvRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26461,7 +26688,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[89].Exporter = func(v any, i int) any {
-			switch v := v.(*CreateBotResponse); i {
+			switch v := v.(*GetInstanceEnvResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26473,7 +26700,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[90].Exporter = func(v any, i int) any {
-			switch v := v.(*DeleteBotRequest); i {
+			switch v := v.(*CreateBotRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26485,7 +26712,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[91].Exporter = func(v any, i int) any {
-			switch v := v.(*DeleteBotResponse); i {
+			switch v := v.(*CreateBotResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26497,7 +26724,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[92].Exporter = func(v any, i int) any {
-			switch v := v.(*ListBotsRequest); i {
+			switch v := v.(*DeleteBotRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26509,7 +26736,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[93].Exporter = func(v any, i int) any {
-			switch v := v.(*ListBotsResponse); i {
+			switch v := v.(*DeleteBotResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26521,7 +26748,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[94].Exporter = func(v any, i int) any {
-			switch v := v.(*BotInfo); i {
+			switch v := v.(*ListBotsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26533,7 +26760,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[95].Exporter = func(v any, i int) any {
-			switch v := v.(*SetBotBehaviorRequest); i {
+			switch v := v.(*ListBotsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26545,7 +26772,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[96].Exporter = func(v any, i int) any {
-			switch v := v.(*SetBotBehaviorResponse); i {
+			switch v := v.(*BotInfo); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26557,7 +26784,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[97].Exporter = func(v any, i int) any {
-			switch v := v.(*SendBotCommandRequest); i {
+			switch v := v.(*SetBotBehaviorRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26569,7 +26796,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[98].Exporter = func(v any, i int) any {
-			switch v := v.(*SendBotCommandResponse); i {
+			switch v := v.(*SetBotBehaviorResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26581,7 +26808,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[99].Exporter = func(v any, i int) any {
-			switch v := v.(*RunBotScriptRequest); i {
+			switch v := v.(*SendBotCommandRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26593,7 +26820,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[100].Exporter = func(v any, i int) any {
-			switch v := v.(*RunBotScriptResponse); i {
+			switch v := v.(*SendBotCommandResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26605,7 +26832,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[101].Exporter = func(v any, i int) any {
-			switch v := v.(*StreamBotEventsRequest); i {
+			switch v := v.(*RunBotScriptRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26617,7 +26844,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[102].Exporter = func(v any, i int) any {
-			switch v := v.(*BotEvent); i {
+			switch v := v.(*RunBotScriptResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26629,7 +26856,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[103].Exporter = func(v any, i int) any {
-			switch v := v.(*ListJDKsRequest); i {
+			switch v := v.(*StreamBotEventsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26641,7 +26868,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[104].Exporter = func(v any, i int) any {
-			switch v := v.(*JDKInfo); i {
+			switch v := v.(*BotEvent); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26653,7 +26880,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[105].Exporter = func(v any, i int) any {
-			switch v := v.(*ListJDKsResponse); i {
+			switch v := v.(*ListJDKsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26665,7 +26892,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[106].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallJDKRequest); i {
+			switch v := v.(*JDKInfo); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26677,7 +26904,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[107].Exporter = func(v any, i int) any {
-			switch v := v.(*JDKCatalogRequest); i {
+			switch v := v.(*ListJDKsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26689,7 +26916,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[108].Exporter = func(v any, i int) any {
-			switch v := v.(*JDKCatalogPackage); i {
+			switch v := v.(*InstallJDKRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26701,7 +26928,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[109].Exporter = func(v any, i int) any {
-			switch v := v.(*JDKCatalogResponse); i {
+			switch v := v.(*JDKCatalogRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26713,7 +26940,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[110].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallJDKResponse); i {
+			switch v := v.(*JDKCatalogPackage); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26725,7 +26952,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[111].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveJDKRequest); i {
+			switch v := v.(*JDKCatalogResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26737,7 +26964,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[112].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveJDKResponse); i {
+			switch v := v.(*InstallJDKResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26749,7 +26976,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[113].Exporter = func(v any, i int) any {
-			switch v := v.(*DownloadCoreRequest); i {
+			switch v := v.(*RemoveJDKRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26761,7 +26988,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[114].Exporter = func(v any, i int) any {
-			switch v := v.(*DownloadCoreResponse); i {
+			switch v := v.(*RemoveJDKResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26773,7 +27000,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[115].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallForgeServerRequest); i {
+			switch v := v.(*DownloadCoreRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26785,7 +27012,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[116].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallForgeServerResponse); i {
+			switch v := v.(*DownloadCoreResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26797,7 +27024,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[117].Exporter = func(v any, i int) any {
-			switch v := v.(*FetchBinaryRequest); i {
+			switch v := v.(*InstallForgeServerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26809,7 +27036,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[118].Exporter = func(v any, i int) any {
-			switch v := v.(*FetchBinaryProgress); i {
+			switch v := v.(*InstallForgeServerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26821,7 +27048,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[119].Exporter = func(v any, i int) any {
-			switch v := v.(*ArtifactCacheItem); i {
+			switch v := v.(*FetchBinaryRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26833,7 +27060,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[120].Exporter = func(v any, i int) any {
-			switch v := v.(*ListArtifactCacheRequest); i {
+			switch v := v.(*FetchBinaryProgress); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26845,7 +27072,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[121].Exporter = func(v any, i int) any {
-			switch v := v.(*ListArtifactCacheResponse); i {
+			switch v := v.(*ArtifactCacheItem); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26857,7 +27084,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[122].Exporter = func(v any, i int) any {
-			switch v := v.(*EvictArtifactCacheRequest); i {
+			switch v := v.(*ListArtifactCacheRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26869,7 +27096,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[123].Exporter = func(v any, i int) any {
-			switch v := v.(*EvictArtifactCacheResponse); i {
+			switch v := v.(*ListArtifactCacheResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26881,7 +27108,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[124].Exporter = func(v any, i int) any {
-			switch v := v.(*ClearArtifactCacheRequest); i {
+			switch v := v.(*EvictArtifactCacheRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26893,7 +27120,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[125].Exporter = func(v any, i int) any {
-			switch v := v.(*ClearArtifactCacheResponse); i {
+			switch v := v.(*EvictArtifactCacheResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26905,7 +27132,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[126].Exporter = func(v any, i int) any {
-			switch v := v.(*SetArtifactCacheCapRequest); i {
+			switch v := v.(*ClearArtifactCacheRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26917,7 +27144,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[127].Exporter = func(v any, i int) any {
-			switch v := v.(*SetArtifactCacheCapResponse); i {
+			switch v := v.(*ClearArtifactCacheResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26929,7 +27156,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[128].Exporter = func(v any, i int) any {
-			switch v := v.(*BrowseDirRequest); i {
+			switch v := v.(*SetArtifactCacheCapRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26941,7 +27168,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[129].Exporter = func(v any, i int) any {
-			switch v := v.(*BrowseDirEntry); i {
+			switch v := v.(*SetArtifactCacheCapResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26953,7 +27180,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[130].Exporter = func(v any, i int) any {
-			switch v := v.(*BrowseDirResponse); i {
+			switch v := v.(*BrowseDirRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26965,7 +27192,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[131].Exporter = func(v any, i int) any {
-			switch v := v.(*ProbeJDKRequest); i {
+			switch v := v.(*BrowseDirEntry); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26977,7 +27204,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[132].Exporter = func(v any, i int) any {
-			switch v := v.(*ProbeJDKResponse); i {
+			switch v := v.(*BrowseDirResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -26989,7 +27216,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[133].Exporter = func(v any, i int) any {
-			switch v := v.(*ScanRuntimesRequest); i {
+			switch v := v.(*ProbeJDKRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27001,7 +27228,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[134].Exporter = func(v any, i int) any {
-			switch v := v.(*RuntimeCandidate); i {
+			switch v := v.(*ProbeJDKResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27013,7 +27240,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[135].Exporter = func(v any, i int) any {
-			switch v := v.(*ScanRuntimesResponse); i {
+			switch v := v.(*ScanRuntimesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27025,7 +27252,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[136].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallRuntimeRequest); i {
+			switch v := v.(*RuntimeCandidate); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27037,7 +27264,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[137].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallRuntimeResponse); i {
+			switch v := v.(*ScanRuntimesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27049,7 +27276,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[138].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveRuntimeRequest); i {
+			switch v := v.(*InstallRuntimeRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27061,7 +27288,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[139].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveRuntimeResponse); i {
+			switch v := v.(*InstallRuntimeResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27073,7 +27300,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[140].Exporter = func(v any, i int) any {
-			switch v := v.(*PMRegistry); i {
+			switch v := v.(*RemoveRuntimeRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27085,7 +27312,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[141].Exporter = func(v any, i int) any {
-			switch v := v.(*GetPMConfigRequest); i {
+			switch v := v.(*RemoveRuntimeResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27097,7 +27324,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[142].Exporter = func(v any, i int) any {
-			switch v := v.(*GetPMConfigResponse); i {
+			switch v := v.(*PMRegistry); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27109,7 +27336,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[143].Exporter = func(v any, i int) any {
-			switch v := v.(*SetPMConfigRequest); i {
+			switch v := v.(*GetPMConfigRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27121,7 +27348,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[144].Exporter = func(v any, i int) any {
-			switch v := v.(*SetPMConfigResponse); i {
+			switch v := v.(*GetPMConfigResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27133,7 +27360,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[145].Exporter = func(v any, i int) any {
-			switch v := v.(*GlobalPackage); i {
+			switch v := v.(*SetPMConfigRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27145,7 +27372,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[146].Exporter = func(v any, i int) any {
-			switch v := v.(*ListGlobalPackagesRequest); i {
+			switch v := v.(*SetPMConfigResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27157,7 +27384,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[147].Exporter = func(v any, i int) any {
-			switch v := v.(*ListGlobalPackagesResponse); i {
+			switch v := v.(*GlobalPackage); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27169,7 +27396,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[148].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallGlobalPackageRequest); i {
+			switch v := v.(*ListGlobalPackagesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27181,7 +27408,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[149].Exporter = func(v any, i int) any {
-			switch v := v.(*InstallGlobalPackageResponse); i {
+			switch v := v.(*ListGlobalPackagesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27193,7 +27420,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[150].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveGlobalPackageRequest); i {
+			switch v := v.(*InstallGlobalPackageRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27205,7 +27432,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[151].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveGlobalPackageResponse); i {
+			switch v := v.(*InstallGlobalPackageResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27217,7 +27444,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[152].Exporter = func(v any, i int) any {
-			switch v := v.(*DeployServerProbeRequest); i {
+			switch v := v.(*RemoveGlobalPackageRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27229,7 +27456,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[153].Exporter = func(v any, i int) any {
-			switch v := v.(*DeployServerProbeResponse); i {
+			switch v := v.(*RemoveGlobalPackageResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27241,7 +27468,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[154].Exporter = func(v any, i int) any {
-			switch v := v.(*CloneWorkDirRequest); i {
+			switch v := v.(*DeployServerProbeRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27253,7 +27480,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[155].Exporter = func(v any, i int) any {
-			switch v := v.(*CloneWorkDirResponse); i {
+			switch v := v.(*DeployServerProbeResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27265,7 +27492,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[156].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveInstanceRequest); i {
+			switch v := v.(*CloneWorkDirRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27277,7 +27504,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[157].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveInstanceResponse); i {
+			switch v := v.(*CloneWorkDirResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27289,7 +27516,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[158].Exporter = func(v any, i int) any {
-			switch v := v.(*ListImagesRequest); i {
+			switch v := v.(*RemoveInstanceRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27301,7 +27528,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[159].Exporter = func(v any, i int) any {
-			switch v := v.(*ImageInfo); i {
+			switch v := v.(*RemoveInstanceResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27313,7 +27540,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[160].Exporter = func(v any, i int) any {
-			switch v := v.(*ListImagesResponse); i {
+			switch v := v.(*ListImagesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27325,7 +27552,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[161].Exporter = func(v any, i int) any {
-			switch v := v.(*PullImageRequest); i {
+			switch v := v.(*ImageInfo); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27337,7 +27564,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[162].Exporter = func(v any, i int) any {
-			switch v := v.(*PullImageResponse); i {
+			switch v := v.(*ListImagesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27349,7 +27576,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[163].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveImageRequest); i {
+			switch v := v.(*PullImageRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27361,7 +27588,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[164].Exporter = func(v any, i int) any {
-			switch v := v.(*RemoveImageResponse); i {
+			switch v := v.(*PullImageResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27373,7 +27600,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[165].Exporter = func(v any, i int) any {
-			switch v := v.(*StorageBackendSpec); i {
+			switch v := v.(*RemoveImageRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27385,7 +27612,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[166].Exporter = func(v any, i int) any {
-			switch v := v.(*BackupManifestEntry); i {
+			switch v := v.(*RemoveImageResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27397,7 +27624,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[167].Exporter = func(v any, i int) any {
-			switch v := v.(*CreateBackupRequest); i {
+			switch v := v.(*StorageBackendSpec); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27409,7 +27636,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[168].Exporter = func(v any, i int) any {
-			switch v := v.(*CreateBackupResponse); i {
+			switch v := v.(*BackupManifestEntry); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27421,7 +27648,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[169].Exporter = func(v any, i int) any {
-			switch v := v.(*RestoreBackupRequest); i {
+			switch v := v.(*CreateBackupRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27433,7 +27660,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[170].Exporter = func(v any, i int) any {
-			switch v := v.(*RestoreBackupResponse); i {
+			switch v := v.(*CreateBackupResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27445,7 +27672,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[171].Exporter = func(v any, i int) any {
-			switch v := v.(*TestStorageBackendRequest); i {
+			switch v := v.(*RestoreBackupRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27457,7 +27684,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[172].Exporter = func(v any, i int) any {
-			switch v := v.(*TestStorageBackendResponse); i {
+			switch v := v.(*RestoreBackupResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27469,7 +27696,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[173].Exporter = func(v any, i int) any {
-			switch v := v.(*StreamPluginEventsRequest); i {
+			switch v := v.(*TestStorageBackendRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27481,7 +27708,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[174].Exporter = func(v any, i int) any {
-			switch v := v.(*PluginEvent); i {
+			switch v := v.(*TestStorageBackendResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27493,7 +27720,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[175].Exporter = func(v any, i int) any {
-			switch v := v.(*PluginCommand); i {
+			switch v := v.(*StreamPluginEventsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27505,7 +27732,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[176].Exporter = func(v any, i int) any {
-			switch v := v.(*SendPluginCommandRequest); i {
+			switch v := v.(*PluginEvent); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27517,7 +27744,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[177].Exporter = func(v any, i int) any {
-			switch v := v.(*SendPluginCommandResponse); i {
+			switch v := v.(*PluginCommand); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27529,7 +27756,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[178].Exporter = func(v any, i int) any {
-			switch v := v.(*QueryServerStateRequest); i {
+			switch v := v.(*SendPluginCommandRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27541,7 +27768,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[179].Exporter = func(v any, i int) any {
-			switch v := v.(*QueryServerStateResponse); i {
+			switch v := v.(*SendPluginCommandResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27553,7 +27780,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[180].Exporter = func(v any, i int) any {
-			switch v := v.(*GetVersionRequest); i {
+			switch v := v.(*QueryServerStateRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27565,7 +27792,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[181].Exporter = func(v any, i int) any {
-			switch v := v.(*GetVersionResponse); i {
+			switch v := v.(*QueryServerStateResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27577,7 +27804,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[182].Exporter = func(v any, i int) any {
-			switch v := v.(*CheckDockerRequest); i {
+			switch v := v.(*GetVersionRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27589,7 +27816,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[183].Exporter = func(v any, i int) any {
-			switch v := v.(*CheckDockerResponse); i {
+			switch v := v.(*GetVersionResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27601,7 +27828,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[184].Exporter = func(v any, i int) any {
-			switch v := v.(*UpgradeWorkerRequest); i {
+			switch v := v.(*CheckDockerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27613,7 +27840,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[185].Exporter = func(v any, i int) any {
-			switch v := v.(*UpgradeWorkerResponse); i {
+			switch v := v.(*CheckDockerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27625,7 +27852,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[186].Exporter = func(v any, i int) any {
-			switch v := v.(*ListArchiveEntriesRequest); i {
+			switch v := v.(*UpgradeWorkerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27637,7 +27864,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[187].Exporter = func(v any, i int) any {
-			switch v := v.(*ArchiveEntry); i {
+			switch v := v.(*UpgradeWorkerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27649,7 +27876,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[188].Exporter = func(v any, i int) any {
-			switch v := v.(*ListArchiveEntriesResponse); i {
+			switch v := v.(*ListArchiveEntriesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27661,7 +27888,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[189].Exporter = func(v any, i int) any {
-			switch v := v.(*ReadArchiveEntryRequest); i {
+			switch v := v.(*ArchiveEntry); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27673,7 +27900,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[190].Exporter = func(v any, i int) any {
-			switch v := v.(*ReadArchiveEntryResponse); i {
+			switch v := v.(*ListArchiveEntriesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27685,7 +27912,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[191].Exporter = func(v any, i int) any {
-			switch v := v.(*DecompileClassRequest); i {
+			switch v := v.(*ReadArchiveEntryRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27697,7 +27924,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[192].Exporter = func(v any, i int) any {
-			switch v := v.(*DecompileClassResponse); i {
+			switch v := v.(*ReadArchiveEntryResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27709,7 +27936,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[193].Exporter = func(v any, i int) any {
-			switch v := v.(*TerminalFrame); i {
+			switch v := v.(*DecompileClassRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27721,7 +27948,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[194].Exporter = func(v any, i int) any {
-			switch v := v.(*TerminalOpen); i {
+			switch v := v.(*DecompileClassResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27733,7 +27960,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[195].Exporter = func(v any, i int) any {
-			switch v := v.(*TerminalWSFrame); i {
+			switch v := v.(*TerminalFrame); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27745,7 +27972,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[196].Exporter = func(v any, i int) any {
-			switch v := v.(*InspectServerDirRequest); i {
+			switch v := v.(*TerminalOpen); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27757,7 +27984,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[197].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportJarCandidate); i {
+			switch v := v.(*TerminalWSFrame); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27769,7 +27996,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[198].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportJdkCandidate); i {
+			switch v := v.(*InspectServerDirRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27781,7 +28008,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[199].Exporter = func(v any, i int) any {
-			switch v := v.(*InspectServerDirResponse); i {
+			switch v := v.(*ImportJarCandidate); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27793,7 +28020,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[200].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportServerDirRequest); i {
+			switch v := v.(*ImportJdkCandidate); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27805,7 +28032,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[201].Exporter = func(v any, i int) any {
-			switch v := v.(*ImportServerDirResponse); i {
+			switch v := v.(*InspectServerDirResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27817,7 +28044,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[202].Exporter = func(v any, i int) any {
-			switch v := v.(*GetBotCapacityRequest); i {
+			switch v := v.(*ImportServerDirRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27829,7 +28056,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[203].Exporter = func(v any, i int) any {
-			switch v := v.(*GetBotCapacityResponse); i {
+			switch v := v.(*ImportServerDirResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27841,7 +28068,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[204].Exporter = func(v any, i int) any {
-			switch v := v.(*BotAssignment); i {
+			switch v := v.(*GetBotCapacityRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27853,7 +28080,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[205].Exporter = func(v any, i int) any {
-			switch v := v.(*ApplyBotBatchRequest); i {
+			switch v := v.(*GetBotCapacityResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27865,7 +28092,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[206].Exporter = func(v any, i int) any {
-			switch v := v.(*ApplyBotBatchItemResult); i {
+			switch v := v.(*BotAssignment); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27877,7 +28104,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[207].Exporter = func(v any, i int) any {
-			switch v := v.(*ApplyBotBatchResponse); i {
+			switch v := v.(*ApplyBotBatchRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27889,7 +28116,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[208].Exporter = func(v any, i int) any {
-			switch v := v.(*GetBotFleetSnapshotRequest); i {
+			switch v := v.(*ApplyBotBatchItemResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27901,7 +28128,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[209].Exporter = func(v any, i int) any {
-			switch v := v.(*BotPosition); i {
+			switch v := v.(*ApplyBotBatchResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27913,7 +28140,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[210].Exporter = func(v any, i int) any {
-			switch v := v.(*BotRuntimeSnapshot); i {
+			switch v := v.(*GetBotFleetSnapshotRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27925,7 +28152,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[211].Exporter = func(v any, i int) any {
-			switch v := v.(*GetBotFleetSnapshotResponse); i {
+			switch v := v.(*BotPosition); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27937,7 +28164,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[212].Exporter = func(v any, i int) any {
-			switch v := v.(*StreamBotFleetEventsRequest); i {
+			switch v := v.(*BotRuntimeSnapshot); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27949,7 +28176,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[213].Exporter = func(v any, i int) any {
-			switch v := v.(*BotActionEvent); i {
+			switch v := v.(*GetBotFleetSnapshotResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27961,7 +28188,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[214].Exporter = func(v any, i int) any {
-			switch v := v.(*BotFleetEvent); i {
+			switch v := v.(*StreamBotFleetEventsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27973,7 +28200,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[215].Exporter = func(v any, i int) any {
-			switch v := v.(*BotActionSignal); i {
+			switch v := v.(*BotActionEvent); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27985,7 +28212,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[216].Exporter = func(v any, i int) any {
-			switch v := v.(*SignalBotActionsRequest); i {
+			switch v := v.(*BotFleetEvent); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -27997,7 +28224,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[217].Exporter = func(v any, i int) any {
-			switch v := v.(*SignalBotActionItemResult); i {
+			switch v := v.(*BotActionSignal); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28009,7 +28236,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[218].Exporter = func(v any, i int) any {
-			switch v := v.(*SignalBotActionsResponse); i {
+			switch v := v.(*SignalBotActionsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28021,7 +28248,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[219].Exporter = func(v any, i int) any {
-			switch v := v.(*CommandOccurrenceKey); i {
+			switch v := v.(*SignalBotActionItemResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28033,7 +28260,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[220].Exporter = func(v any, i int) any {
-			switch v := v.(*CommandOccurrenceRef); i {
+			switch v := v.(*SignalBotActionsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28045,7 +28272,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[221].Exporter = func(v any, i int) any {
-			switch v := v.(*AppliedCommandOccurrence); i {
+			switch v := v.(*CommandOccurrenceKey); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28057,7 +28284,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[222].Exporter = func(v any, i int) any {
-			switch v := v.(*AppliedCommandOccurrencePlan); i {
+			switch v := v.(*CommandOccurrenceRef); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28069,7 +28296,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[223].Exporter = func(v any, i int) any {
-			switch v := v.(*ApplyBotCommandScheduleItem); i {
+			switch v := v.(*AppliedCommandOccurrence); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28081,7 +28308,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[224].Exporter = func(v any, i int) any {
-			switch v := v.(*ApplyBotCommandScheduleItemResult); i {
+			switch v := v.(*AppliedCommandOccurrencePlan); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28093,7 +28320,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[225].Exporter = func(v any, i int) any {
-			switch v := v.(*ApplyBotCommandSchedulesRequest); i {
+			switch v := v.(*ApplyBotCommandScheduleItem); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28105,7 +28332,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[226].Exporter = func(v any, i int) any {
-			switch v := v.(*ApplyBotCommandSchedulesResponse); i {
+			switch v := v.(*ApplyBotCommandScheduleItemResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28117,7 +28344,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[227].Exporter = func(v any, i int) any {
-			switch v := v.(*ReleaseBotCommandScheduleItem); i {
+			switch v := v.(*ApplyBotCommandSchedulesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28129,7 +28356,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[228].Exporter = func(v any, i int) any {
-			switch v := v.(*ReleaseBotCommandScheduleItemResult); i {
+			switch v := v.(*ApplyBotCommandSchedulesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28141,7 +28368,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[229].Exporter = func(v any, i int) any {
-			switch v := v.(*ReleaseBotCommandSchedulesRequest); i {
+			switch v := v.(*ReleaseBotCommandScheduleItem); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28153,7 +28380,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[230].Exporter = func(v any, i int) any {
-			switch v := v.(*ReleaseBotCommandSchedulesResponse); i {
+			switch v := v.(*ReleaseBotCommandScheduleItemResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28165,7 +28392,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[231].Exporter = func(v any, i int) any {
-			switch v := v.(*CancelBotCommandScheduleItem); i {
+			switch v := v.(*ReleaseBotCommandSchedulesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28177,7 +28404,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[232].Exporter = func(v any, i int) any {
-			switch v := v.(*CancelBotCommandScheduleItemResult); i {
+			switch v := v.(*ReleaseBotCommandSchedulesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28189,7 +28416,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[233].Exporter = func(v any, i int) any {
-			switch v := v.(*CancelBotCommandSchedulesRequest); i {
+			switch v := v.(*CancelBotCommandScheduleItem); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28201,7 +28428,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[234].Exporter = func(v any, i int) any {
-			switch v := v.(*CancelBotCommandSchedulesResponse); i {
+			switch v := v.(*CancelBotCommandScheduleItemResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28213,7 +28440,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[235].Exporter = func(v any, i int) any {
-			switch v := v.(*ProbeInstanceEvidenceRequest); i {
+			switch v := v.(*CancelBotCommandSchedulesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28225,7 +28452,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[236].Exporter = func(v any, i int) any {
-			switch v := v.(*InstanceEvidence); i {
+			switch v := v.(*CancelBotCommandSchedulesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28237,7 +28464,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[237].Exporter = func(v any, i int) any {
-			switch v := v.(*ProbeInstanceEvidenceResponse); i {
+			switch v := v.(*ProbeInstanceEvidenceRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28249,7 +28476,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[238].Exporter = func(v any, i int) any {
-			switch v := v.(*LogTimeRange); i {
+			switch v := v.(*InstanceEvidence); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28261,7 +28488,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[239].Exporter = func(v any, i int) any {
-			switch v := v.(*LogAuthorizedTargets); i {
+			switch v := v.(*ProbeInstanceEvidenceResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28273,7 +28500,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[240].Exporter = func(v any, i int) any {
-			switch v := v.(*LogQueryBudget); i {
+			switch v := v.(*LogTimeRange); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28285,7 +28512,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[241].Exporter = func(v any, i int) any {
-			switch v := v.(*LogQueryViewRef); i {
+			switch v := v.(*LogAuthorizedTargets); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28297,7 +28524,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[242].Exporter = func(v any, i int) any {
-			switch v := v.(*LogCoverageTarget); i {
+			switch v := v.(*LogQueryBudget); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28309,7 +28536,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[243].Exporter = func(v any, i int) any {
-			switch v := v.(*LogCoverage); i {
+			switch v := v.(*LogQueryViewRef); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28321,7 +28548,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[244].Exporter = func(v any, i int) any {
-			switch v := v.(*LogQuality); i {
+			switch v := v.(*LogCoverageTarget); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28333,7 +28560,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[245].Exporter = func(v any, i int) any {
-			switch v := v.(*LogError); i {
+			switch v := v.(*LogCoverage); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28345,7 +28572,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[246].Exporter = func(v any, i int) any {
-			switch v := v.(*LogEvent); i {
+			switch v := v.(*LogQuality); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28357,7 +28584,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[247].Exporter = func(v any, i int) any {
-			switch v := v.(*LogQueryRequestBase); i {
+			switch v := v.(*LogError); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28369,7 +28596,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[248].Exporter = func(v any, i int) any {
-			switch v := v.(*GetLogCapabilitiesRequest); i {
+			switch v := v.(*LogEvent); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28381,7 +28608,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[249].Exporter = func(v any, i int) any {
-			switch v := v.(*GetLogCapabilitiesResponse); i {
+			switch v := v.(*LogQueryRequestBase); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28393,7 +28620,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[250].Exporter = func(v any, i int) any {
-			switch v := v.(*LogSearchRequest); i {
+			switch v := v.(*GetLogCapabilitiesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28405,7 +28632,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[251].Exporter = func(v any, i int) any {
-			switch v := v.(*LogSearchResponse); i {
+			switch v := v.(*GetLogCapabilitiesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28417,7 +28644,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[252].Exporter = func(v any, i int) any {
-			switch v := v.(*IngestPositionGap); i {
+			switch v := v.(*LogSearchRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28429,7 +28656,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[253].Exporter = func(v any, i int) any {
-			switch v := v.(*LogStatsRequest); i {
+			switch v := v.(*LogSearchResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28441,7 +28668,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[254].Exporter = func(v any, i int) any {
-			switch v := v.(*LogStatsPoint); i {
+			switch v := v.(*IngestPositionGap); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28453,7 +28680,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[255].Exporter = func(v any, i int) any {
-			switch v := v.(*LogStatsResponse); i {
+			switch v := v.(*LogStatsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28465,7 +28692,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[256].Exporter = func(v any, i int) any {
-			switch v := v.(*LogFieldsRequest); i {
+			switch v := v.(*LogStatsPoint); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28477,7 +28704,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[257].Exporter = func(v any, i int) any {
-			switch v := v.(*LogFieldsResponse); i {
+			switch v := v.(*LogStatsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28489,7 +28716,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[258].Exporter = func(v any, i int) any {
-			switch v := v.(*LogFacetsRequest); i {
+			switch v := v.(*LogFieldsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28501,7 +28728,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[259].Exporter = func(v any, i int) any {
-			switch v := v.(*LogFacetValue); i {
+			switch v := v.(*LogFieldsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28513,7 +28740,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[260].Exporter = func(v any, i int) any {
-			switch v := v.(*LogFacetsResponse); i {
+			switch v := v.(*LogFacetsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28525,7 +28752,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[261].Exporter = func(v any, i int) any {
-			switch v := v.(*LogTailRequest); i {
+			switch v := v.(*LogFacetValue); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28537,7 +28764,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[262].Exporter = func(v any, i int) any {
-			switch v := v.(*LogRehydrateRequest); i {
+			switch v := v.(*LogFacetsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28549,7 +28776,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[263].Exporter = func(v any, i int) any {
-			switch v := v.(*LogTaskResponse); i {
+			switch v := v.(*LogTailRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28561,7 +28788,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[264].Exporter = func(v any, i int) any {
-			switch v := v.(*LogArchiveStatusRequest); i {
+			switch v := v.(*LogRehydrateRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28573,7 +28800,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[265].Exporter = func(v any, i int) any {
-			switch v := v.(*LogArchiveStatusResponse); i {
+			switch v := v.(*LogTaskResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28585,7 +28812,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[266].Exporter = func(v any, i int) any {
-			switch v := v.(*LogRuntimeStatusRequest); i {
+			switch v := v.(*LogArchiveStatusRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28597,7 +28824,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[267].Exporter = func(v any, i int) any {
-			switch v := v.(*LogRuntimeInstance); i {
+			switch v := v.(*LogArchiveStatusResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28609,7 +28836,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[268].Exporter = func(v any, i int) any {
-			switch v := v.(*LogRuntimeStatusResponse); i {
+			switch v := v.(*LogRuntimeStatusRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28621,7 +28848,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[269].Exporter = func(v any, i int) any {
-			switch v := v.(*LogRuntimeControlRequest); i {
+			switch v := v.(*LogRuntimeInstance); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28633,7 +28860,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[270].Exporter = func(v any, i int) any {
-			switch v := v.(*LogCreateViewRequest); i {
+			switch v := v.(*LogRuntimeStatusResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28645,7 +28872,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[271].Exporter = func(v any, i int) any {
-			switch v := v.(*LogCreateViewResponse); i {
+			switch v := v.(*LogRuntimeControlRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28657,7 +28884,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[272].Exporter = func(v any, i int) any {
-			switch v := v.(*LogMigratePartitionRequest); i {
+			switch v := v.(*LogCreateViewRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28669,7 +28896,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[273].Exporter = func(v any, i int) any {
-			switch v := v.(*LogCutoverReadinessRequest); i {
+			switch v := v.(*LogCreateViewResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28681,7 +28908,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[274].Exporter = func(v any, i int) any {
-			switch v := v.(*LogCutoverReadinessResponse); i {
+			switch v := v.(*LogMigratePartitionRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28693,7 +28920,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[275].Exporter = func(v any, i int) any {
-			switch v := v.(*LogResolveIngestGapsRequest); i {
+			switch v := v.(*LogCutoverReadinessRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28705,7 +28932,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[276].Exporter = func(v any, i int) any {
-			switch v := v.(*LogImportArchivesRequest); i {
+			switch v := v.(*LogCutoverReadinessResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28717,7 +28944,7 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[277].Exporter = func(v any, i int) any {
-			switch v := v.(*LogClearIdentityConflictsRequest); i {
+			switch v := v.(*LogResolveIngestGapsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -28729,6 +28956,30 @@ func file_proto_worker_proto_init() {
 			}
 		}
 		file_proto_worker_proto_msgTypes[278].Exporter = func(v any, i int) any {
+			switch v := v.(*LogImportArchivesRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_worker_proto_msgTypes[279].Exporter = func(v any, i int) any {
+			switch v := v.(*LogClearIdentityConflictsRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_worker_proto_msgTypes[280].Exporter = func(v any, i int) any {
 			switch v := v.(*LogClearIdentityConflictsResponse); i {
 			case 0:
 				return &v.state
@@ -28743,11 +28994,11 @@ func file_proto_worker_proto_init() {
 	}
 	file_proto_worker_proto_msgTypes[15].OneofWrappers = []any{}
 	file_proto_worker_proto_msgTypes[16].OneofWrappers = []any{}
-	file_proto_worker_proto_msgTypes[193].OneofWrappers = []any{
+	file_proto_worker_proto_msgTypes[195].OneofWrappers = []any{
 		(*TerminalFrame_Open)(nil),
 		(*TerminalFrame_Frame)(nil),
 	}
-	file_proto_worker_proto_msgTypes[214].OneofWrappers = []any{
+	file_proto_worker_proto_msgTypes[216].OneofWrappers = []any{
 		(*BotFleetEvent_RuntimeSnapshot)(nil),
 		(*BotFleetEvent_ActionEvent)(nil),
 	}
@@ -28757,7 +29008,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_proto_worker_proto_rawDesc,
 			NumEnums:      7,
-			NumMessages:   282,
+			NumMessages:   284,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

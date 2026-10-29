@@ -75,6 +75,7 @@ const (
 	WorkerService_WriteConfig_FullMethodName                 = "/worker.WorkerService/WriteConfig"
 	WorkerService_ValidateConfig_FullMethodName              = "/worker.WorkerService/ValidateConfig"
 	WorkerService_GetNodeMetrics_FullMethodName              = "/worker.WorkerService/GetNodeMetrics"
+	WorkerService_PullSelfLog_FullMethodName                 = "/worker.WorkerService/PullSelfLog"
 	WorkerService_GetInstanceMetrics_FullMethodName          = "/worker.WorkerService/GetInstanceMetrics"
 	WorkerService_GetInstanceResourceSnapshot_FullMethodName = "/worker.WorkerService/GetInstanceResourceSnapshot"
 	WorkerService_GetInstanceEnv_FullMethodName              = "/worker.WorkerService/GetInstanceEnv"
@@ -277,6 +278,12 @@ type WorkerServiceClient interface {
 	ValidateConfig(ctx context.Context, in *ValidateConfigRequest, opts ...grpc.CallOption) (*ValidateConfigResponse, error)
 	// GetNodeMetrics 获取节点指标。
 	GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error)
+	// PullSelfLog 按需拉取 Worker 进程自身日志的尾部（诊断用）。
+	//
+	// 设计约束（不可放宽）：不落任何存储、不进 VL、不做检索；只返回尾部有界片段，
+	// 使响应耗时与文件大小无关（事故现场日志可达 35GB）。上限由 Worker 强制夹紧，
+	// 调用方传入值只能收紧不能放宽。
+	PullSelfLog(ctx context.Context, in *PullSelfLogRequest, opts ...grpc.CallOption) (*PullSelfLogResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(ctx context.Context, in *GetInstanceMetricsRequest, opts ...grpc.CallOption) (*GetInstanceMetricsResponse, error)
 	// GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
@@ -1031,6 +1038,16 @@ func (c *workerServiceClient) GetNodeMetrics(ctx context.Context, in *GetNodeMet
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNodeMetricsResponse)
 	err := c.cc.Invoke(ctx, WorkerService_GetNodeMetrics_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) PullSelfLog(ctx context.Context, in *PullSelfLogRequest, opts ...grpc.CallOption) (*PullSelfLogResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PullSelfLogResponse)
+	err := c.cc.Invoke(ctx, WorkerService_PullSelfLog_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1807,6 +1824,12 @@ type WorkerServiceServer interface {
 	ValidateConfig(context.Context, *ValidateConfigRequest) (*ValidateConfigResponse, error)
 	// GetNodeMetrics 获取节点指标。
 	GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error)
+	// PullSelfLog 按需拉取 Worker 进程自身日志的尾部（诊断用）。
+	//
+	// 设计约束（不可放宽）：不落任何存储、不进 VL、不做检索；只返回尾部有界片段，
+	// 使响应耗时与文件大小无关（事故现场日志可达 35GB）。上限由 Worker 强制夹紧，
+	// 调用方传入值只能收紧不能放宽。
+	PullSelfLog(context.Context, *PullSelfLogRequest) (*PullSelfLogResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error)
 	// GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
@@ -2132,6 +2155,9 @@ func (UnimplementedWorkerServiceServer) ValidateConfig(context.Context, *Validat
 }
 func (UnimplementedWorkerServiceServer) GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetNodeMetrics not implemented")
+}
+func (UnimplementedWorkerServiceServer) PullSelfLog(context.Context, *PullSelfLogRequest) (*PullSelfLogResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PullSelfLog not implemented")
 }
 func (UnimplementedWorkerServiceServer) GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetInstanceMetrics not implemented")
@@ -3285,6 +3311,24 @@ func _WorkerService_GetNodeMetrics_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).GetNodeMetrics(ctx, req.(*GetNodeMetricsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_PullSelfLog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PullSelfLogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).PullSelfLog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_PullSelfLog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).PullSelfLog(ctx, req.(*PullSelfLogRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4518,6 +4562,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNodeMetrics",
 			Handler:    _WorkerService_GetNodeMetrics_Handler,
+		},
+		{
+			MethodName: "PullSelfLog",
+			Handler:    _WorkerService_PullSelfLog_Handler,
 		},
 		{
 			MethodName: "GetInstanceMetrics",

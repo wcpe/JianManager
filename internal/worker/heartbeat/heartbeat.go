@@ -146,6 +146,32 @@ type ManagedRuntimeProvider interface {
 	ManagedRuntimeSnapshot() *workerpb.ManagedRuntimeSnapshot
 }
 
+// VLDiskProvider 提供日志存储层（VL）的磁盘占用读数（2026-10-29）。
+//
+// 为什么需要它：配了 `-retention.maxDiskSpaceUsageBytes` 后，VL 超过上限会
+// **丢弃最旧的按日分区**；而它把磁盘写满时会进入**只读模式、连丢弃都做不了**
+// （丢弃也要写元数据）。这两种情况在默认配置下都是全静的——不把这个读数
+// 带到 CP 告警链路上，就只能等到「日志突然没了」再排查。
+//
+// nil 时心跳不带这四个字段（零值），CP 侧按「无读数」处理，不误报。
+type VLDiskProvider interface {
+	// VLDiskSnapshot 返回当前读数；未启用受管 VL 时返回零值。
+	VLDiskSnapshot() VLDiskReading
+}
+
+// VLDiskReading 是 VL 磁盘占用的最小可观测集。
+//
+// 只取四项的原因：它们恰好足以回答「有没有风险」——
+//   - Used/Limit：离上限还有多远（Limit=0 表示没配上限）；
+//   - Partitions：**能不能丢**。VL 至少保留最近 2 天，分区数 ≤2 时即使超限也不会丢；
+//   - RowsDroppedTotal：已经因超保留期/超上限丢了一东西（累计值，CP 差分成速率）。
+type VLDiskReading struct {
+	UsedBytes        int64
+	LimitBytes       int64
+	Partitions       int32
+	RowsDroppedTotal uint64
+}
+
 // Heartbeat 心跳上报器。
 type Heartbeat struct {
 	controlPlaneAddr string
@@ -158,6 +184,8 @@ type Heartbeat struct {
 	taskProvider TaskSnapshotProvider
 	// managedRuntimeProvider 由 Worker 主进程注入；nil 时保持旧 Worker 的 Heartbeat 兼容形状。
 	managedRuntimeProvider ManagedRuntimeProvider
+	// vlDiskProvider 提供 VL 磁盘占用读数（2026-10-29）；nil 时心跳不带这四个字段。
+	vlDiskProvider VLDiskProvider
 	// cpuReader 由主进程注入唯一 CPU owner；心跳只读已发布窗口。
 	cpuReader metrics.CPUReader
 	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）；
@@ -201,6 +229,12 @@ func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
 // SetManagedRuntimeProvider 注入受管运行时快照来源（FR-400）。
 func (h *Heartbeat) SetManagedRuntimeProvider(p ManagedRuntimeProvider) {
 	h.managedRuntimeProvider = p
+}
+
+// SetVLDiskProvider 注入日志存储层磁盘读数来源（2026-10-29）。
+// 不调用则心跳不带这四个字段，CP 按「无读数」处理（老 Worker / 未启用受管 VL）。
+func (h *Heartbeat) SetVLDiskProvider(p VLDiskProvider) {
+	h.vlDiskProvider = p
 }
 
 // SetProxyRebuilder 注入「据心跳下发代理重建出站 client」的回调（FR-185，见 ADR-043）。
@@ -329,6 +363,15 @@ func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []strin
 	}
 	if h.managedRuntimeProvider != nil {
 		req.ManagedRuntime = h.managedRuntimeProvider.ManagedRuntimeSnapshot()
+	}
+	// VL 磁盘占用读数（2026-10-29）：未注入时四个字段保持零值，CP 按「无读数」处理。
+	if h.vlDiskProvider != nil {
+		if r := h.vlDiskProvider.VLDiskSnapshot(); r.UsedBytes > 0 || r.LimitBytes > 0 || r.Partitions > 0 || r.RowsDroppedTotal > 0 {
+			req.LogVlDiskUsedBytes = r.UsedBytes
+			req.LogVlDiskLimitBytes = r.LimitBytes
+			req.LogVlPartitions = r.Partitions
+			req.LogVlRowsDroppedTotal = r.RowsDroppedTotal
+		}
 	}
 
 	// 附加运行中长任务进度快照（FR-183，见 ADR-040）。

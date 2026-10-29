@@ -141,6 +141,12 @@ service WorkerService {
   rpc ValidateConfig(ValidateConfigRequest) returns (ValidateConfigResponse);
   // GetNodeMetrics 获取节点指标。
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
+  // PullSelfLog 按需拉取 Worker 进程自身日志的尾部（诊断用）。
+  //
+  // 设计约束（不可放宽）：不落任何存储、不进 VL、不做检索；只返回尾部有界片段，
+  // 使响应耗时与文件大小无关（事故现场日志可达 35GB）。上限由 Worker 强制夹紧，
+  // 调用方传入值只能收紧不能放宽。
+  rpc PullSelfLog(PullSelfLogRequest) returns (PullSelfLogResponse);
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
   // GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
@@ -438,6 +444,23 @@ message HeartbeatRequest {
   // 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」进入告警。
   bool log_ingest_healthy = 15;
   string log_ingest_detail = 16;  // 不健康原因（可空）
+  // 日志存储层（VL）的磁盘占用读数（2026-10-29）。
+  //
+  // 为什么需要：配了 `-retention.maxDiskSpaceUsageBytes` 后，VL 会在超过上限时
+  // **丢弃最旧的按日分区**，默认完全静默。而它一旦把磁盘写满进入只读模式，
+  // 就**连丢弃都做不了**（丢弃也要写元数据）——这是必须提前告警的失效态。
+  //
+  // 只采几个读数，不自建一套指标体系：VL 自身已在 /metrics 暴露全部数据，
+  // 这里只是把关键几项带到 CP 的告警链路上。
+  // 老 Worker 不上报 ⇒ 0，CP 侧按「无读数」处理，不误报。
+  int64 log_vl_disk_used_bytes = 18;          // -storageDataPath 目录当前占用
+  int64 log_vl_disk_limit_bytes = 19;         // 生效的磁盘上限；0 = 未配置（不限制）
+  // log_vl_partitions 是当前日分区数。用它判断「能不能丢」：
+  // VL 至少保留最近 2 天，分区数 <=2 时即使超限也不会丢。
+  int32 log_vl_partitions = 20;
+  // log_vl_rows_dropped_total 是 vl_rows_dropped_total（因时间超保留期被丢的行数累计值）。
+  // CP 用相邻心跳差推导速率；累计值不直接当曲线。
+  uint64 log_vl_rows_dropped_total = 21;
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
@@ -1122,6 +1145,31 @@ message DiffConfigResponse {
 // === 指标 ===
 
 message GetNodeMetricsRequest {}
+
+// PullSelfLogRequest 拉取 Worker 自身进程日志尾部。
+message PullSelfLogRequest {
+  // max_lines 期望行数上限；0 = 默认 200，超过硬上限被夹紧。
+  int32 max_lines = 1;
+  // max_bytes 期望字节上限；0 = 默认 64KiB，超过硬上限被夹紧。
+  int32 max_bytes = 2;
+}
+
+// PullSelfLogResponse 是日志尾部快照。
+//
+// 为什么带 path/file_bytes/truncated 而不是只回文本：诊断是给人排障的，
+// 人需要知道“这是不是全部”以及“下一步该在哪台机器上 grep 什么”。
+message PullSelfLogResponse {
+  // content 尾部原文（已按行/字节上限裁剪）。
+  string content = 1;
+  // truncated 表示因上限被截断（UI 必须显式标注，否则会让人误以为看到全部）。
+  bool truncated = 2;
+  // file_bytes 日志文件总大小，让调用方知道“还有多少没看到”。
+  int64 file_bytes = 3;
+  // path 实际读取的文件路径（供 UI 展示可复制的 grep 命令）。
+  string path = 4;
+  // error_msg 读取失败原因（文件不存在/未启用等）；非空时 content 为空。
+  string error_msg = 5;
+}
 
 message GetNodeMetricsResponse {
   float cpu_usage = 1;

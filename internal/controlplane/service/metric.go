@@ -80,6 +80,17 @@ type MetricService struct {
 	// lastGC 记录每实例上次心跳的累计 GC counter（FR-465），用于据相邻差推导 GC 速率。
 	gcMu   sync.Mutex
 	lastGC map[string]gcCounters
+
+	// lastVLDrop 记录每节点上次心跳的 VL 超保留期丢弃累计量（2026-10-29），
+	// 用于据相邻差推导丢弃速率（与 lastNet / lastGC 同构）。
+	vlDropMu   sync.Mutex
+	lastVLDrop map[string]vlDropCounter
+}
+
+// vlDropCounter 是 VL 丢弃计数器的上次读数。
+type vlDropCounter struct {
+	dropped uint64
+	ts      time.Time
 }
 
 // netCounters 某节点上次心跳的累计网络字节快照。
@@ -97,7 +108,7 @@ type gcCounters struct {
 
 // NewMetricService 创建时序指标服务。
 func NewMetricService(db *gorm.DB) *MetricService {
-	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}}
+	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}, lastVLDrop: map[string]vlDropCounter{}}
 }
 
 // ResolveInstanceUUID 由数值实例 ID 取 UUID，供进程 TOPN 查询过滤。
@@ -295,6 +306,34 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	}
 	s.lastNet[node] = netCounters{sent: req.NetworkBytesSent, recv: req.NetworkBytesRecv, ts: now}
 	s.netMu.Unlock()
+
+	// ── 日志存储层（VL）磁盘占用（2026-10-29）──
+	//
+	// 老 Worker 不上报这四个字段（全为 0）⇒ 不落任何点，不误报成「磁盘 0 字节」。
+	// UsedBytes>0 作为「有读数」的判据：受管 VL 一定占着磁盘。
+	if req.LogVlDiskUsedBytes > 0 {
+		samples = append(samples, nodeSample(model.MetricLogVLDiskUsed, "bytes", ptr(float64(req.LogVlDiskUsedBytes))))
+		samples = append(samples, nodeSample(model.MetricLogVLPartitions, "count", ptr(float64(req.LogVlPartitions))))
+		// 上限已配时才能算百分比：未配（0）就没有「离上限多远」这个概念。
+		if req.LogVlDiskLimitBytes > 0 {
+			samples = append(samples, nodeSample(model.MetricLogVLDiskLimit, "bytes", ptr(float64(req.LogVlDiskLimitBytes))))
+			pct := float64(req.LogVlDiskUsedBytes) / float64(req.LogVlDiskLimitBytes) * 100
+			samples = append(samples, nodeSample(model.MetricLogVLDiskPct, "pct", ptr(pct)))
+		}
+		// 丢弃速率：累计 counter 据相邻心跳差推导（与 lastNet / lastGC 同构）。
+		// 差为负（VL 重启 counter 归零）→ 跳过该拍，不产生负速率假尖峰；首拍无前值同样跳过。
+		// 读前值与写现值放在**同一段**临界区（与上方 lastNet 同构）。
+		s.vlDropMu.Lock()
+		if prev, ok := s.lastVLDrop[node]; ok {
+			if dt := now.Sub(prev.ts).Seconds(); dt > 0 {
+				if d := req.LogVlRowsDroppedTotal; d >= prev.dropped {
+					samples = append(samples, nodeSample(model.MetricLogVLRowsDropped, "rows_per_sec", ptr(float64(d-prev.dropped)/dt)))
+				}
+			}
+		}
+		s.lastVLDrop[node] = vlDropCounter{dropped: req.LogVlRowsDroppedTotal, ts: now}
+		s.vlDropMu.Unlock()
+	}
 
 	// 每实例 ServerProbe 快照（instance 维度 + 分世界 world 维度）。
 	for _, im := range req.InstanceMetrics {

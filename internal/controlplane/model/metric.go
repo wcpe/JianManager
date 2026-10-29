@@ -41,6 +41,29 @@ const (
 	// MetricLogIngestHealthy 日志采集健康（FR-485）：1=采集运行时在运行，0=未运行/创建失败。
 	MetricLogIngestHealthy = "log_ingest_healthy"
 
+	// ── 日志存储层（VL）磁盘占用（2026-10-29）──
+	//
+	// 为什么要进时序库而不是只做一次性告警：磁盘增长是**趋势问题**，
+	// 单点阈值只能回答「现在超没超」，看不出「还有几天会满」。
+	// 进了时序库就能用现有的容量预测/趋势面板。
+	//
+	// MetricLogVLDiskUsed 是 VL 数据目录当前占用；MetricLogVLDiskLimit 是配置的上限（0=未配）。
+	MetricLogVLDiskUsed  = "log_vl_disk_used"
+	MetricLogVLDiskLimit = "log_vl_disk_limit"
+	// MetricLogVLDiskPct 是已用/上限的百分比（0-100）。上限未配时不落点。
+	// 单拎出它是因为告警规则写百分比比写两个绝对值的比较直观得多。
+	MetricLogVLDiskPct = "log_vl_disk_pct"
+	// MetricLogVLRowsDropped 是因**超保留期**被 VL 丢弃的行数**速率**（rows/sec）。
+	//
+	// 只统计 reason="too_small_timestamp"：另外三个 reason 与保留无关
+	// （debug=VL 自身调试日志、too_many_fields=字段超限、too_big_timestamp=时钟错乱）。
+	MetricLogVLRowsDropped = "log_vl_rows_dropped"
+	// MetricLogVLPartitions 是当前日分区数。
+	//
+	// 存在的意义：VL 至少保留最近 2 天，分区数 <=2 时即使超上限也不会丢。
+	// 告警据此区分「危险」与「必然超限但无事可做」。
+	MetricLogVLPartitions = "log_vl_partitions"
+
 	// FR-401：由 FR-400 已认证 Heartbeat 当前快照沉淀的共享 Bot Worker 运行时指标。
 	// 它们属于节点维度，不代表任一 Bot 或压测会话独占的资源。
 	MetricWorkerProcessRSSBytes = "worker_process_rss_bytes"
