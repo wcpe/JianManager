@@ -554,12 +554,18 @@ func comparisonState(st *persistedState) *persistedState {
 //
 // 它同时保证了「裁空」与「本来为空」在同一形态下可比：PruneDeliveryBatches 在裁空时返回
 // 非 nil 的空切片（与 normalizePersistedState 的归一形态一致）。
+//
+// **水位必须是 Positions.Delivery**（2026-10-29 修正）：生产裁剪用
+// `deliveryBatchWatermark(e) = Positions.Delivery`，而本函数此前传的是 `Positions.Reclaim`。
+// 两者在 `Reclaim < Delivery` 时不同 ⇒ `verifyPruneIdentity` 面对的恒等元集合不一致
+// ⇒ 迁移校验会把「可裁」与「不可裁」混在一张表里比，得出假不一致。
+// 对比口径必须与生产口径**逐字相同**，否则这个函数就成了第二真源。
 func prunedBatchesForComparison(entry *ledger.Entry) []ledger.DeliveryBatch {
-	kept, dropped, err := ledger.PruneDeliveryBatches(entry.DeliveryBatches, entry.Positions.Reclaim, 0)
+	kept, dropped, err := ledger.PruneDeliveryBatches(entry.DeliveryBatches, entry.Positions.Delivery, 0)
 	if err != nil {
 		slog.Warn("迁移校验前的投递批次归一被守卫拦下，按完整历史比对（不影响采集正确性）",
 			"logSourceID", entry.Key.LogSourceID, "generation", entry.Key.SourceGeneration,
-			"reclaim", entry.Positions.Reclaim, "batches", len(entry.DeliveryBatches), "error", err)
+			"delivery", entry.Positions.Delivery, "batches", len(entry.DeliveryBatches), "error", err)
 		return entry.DeliveryBatches
 	}
 	if dropped == 0 {

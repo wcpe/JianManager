@@ -14,11 +14,12 @@ import (
 // # 谁在读投递批次（消费者）
 //
 //	rows(delivery_batch) → ingest.indexStateToState → ledger.Entry.DeliveryBatches
-//	  ├─ contiguousDeliveryEnd(batches, floor=Positions.Reclaim)      ← 读者 A：连续前缀
+//	  ├─ contiguousDeliveryEnd(batches, floor=Positions.Delivery)     ← 读者 A：连续前缀
 //	  └─ ingest.classifyEventStatus(facts with Batches)               ← 读者 B：按批次判态
 //
-// 读者 A 的三个调用点的 floor 都是 reclaim：RecordDelivery、Restore、以及 FR-496 迁移校验的
-// comparisonState（ingest/index_store.go 的 ledger.ContiguousDeliveryEnd）。
+// 读者 A 的三个调用点的 floor 都是 **Delivery 自己**：RecordDelivery（`advanceDeliveryEnd`）、
+// Restore、以及 FR-496 迁移校验的 comparisonState（ingest/index_store.go）。
+// （2026-10-29 之前 floor 是 Reclaim，见下方「判据」节的说明。）
 //
 // 读者 B 按证据将区间判为 ACKED（真实 REQUEST_DONE）、SENT_UNACKED（UNKNOWN）或
 // UNSENT（NOT_SENT、REPLAY_REQUIRED）；请求结果前缀本身从来不是成功回执。
@@ -33,53 +34,39 @@ import (
 // 而「该源最近一次投递是否 UNKNOWN」读的是账本字段 p.DeliveryState()，**不读批次列表**
 // （见 pipeline.DeliveryState / reconcile 的 UNKNOWN 判定）。
 //
-// # 判据：水位 = min(Positions.Reclaim, Positions.Delivery)
+// # 判据：水位 = Positions.Delivery
 //
 // 读者 A 的恒等元性质：contiguousDeliveryEnd 的语义是「所有字节均有请求结果的连续前缀末端」：
 // pos 从 floor 起、只增；一个跨度 s 只有在 s.end > pos 时才推进 pos。因此对 end <= floor 的跨度，
 // 两个分支都是恒假——它是**恒等元**：删掉它既不改变本次计算结果，也不改变后续跨度的处理结果
 // （后续只依赖当前 pos，而 pos 未被它改变）。
 //
-//	⇒ batch.End <= Positions.Reclaim 的条目对读者 A 是恒等元。
+//	⇒ batch.End <= Positions.Delivery 的条目对读者 A 是恒等元。
 //
-// 恒等元性质只证明读者 A 的连续前缀，不能替代读者 B 的成功/未知证据。
-// 读者 B 所需区间已先独立保存，水位仍保守夹一层 Delivery，保持既有裁剪边界：
-//
-//	⇒ 判据取 watermark = Positions.Delivery（与 advanceDeliveryEnd 的 floor 同一口径）。
-//
-// 为什么这个下界让两个读者同时安全（LEDGER-1 的论证）：
-//
-//   - 读者 A：Delivery <= Reclaim 时水位就是 Reclaim，与改动前逐字节相同；Delivery < Reclaim 时
-//     水位取 Delivery（更 conservative 的下界），被裁集合是原恒等元集合的子集 ⇒ 仍是恒等元。
-//   - 读者 B：各请求状态已分别精确归并、跨状态重叠保留，真实成功单独归并，均在批次摘除前保存。
-//     独立证据不随本函数裁剪；UNKNOWN/NOT_SENT 不因水位越过而变成成功，已确认请求也不会失证。
-//     未被水位越过的批次仍全部保留，不把保守范围外的历史提前摘除。
-//
-// 为什么 Reclaim 会越过 Delivery（这不是理论形态）：tryReclaimLocked 的**凭据放行**分支
-// （区间内已有人工裁定的永久丢失空洞时，target 无条件取 ref.CoversTo）与**责任已转移**分支
-// （RecoveryWALResponsibilityXfer 下允许覆盖未确认事件）都会把 Reclaim 推到分段末端 CoversTo，
-// 而 Positions.Delivery 只在 RecordDelivery / Restore 重算，TryReclaim **从不重算它**。
-// 于是暂停或空闲源上 (Delivery, Reclaim] 可以长期存在；继续保守保留这一段批次。
-// 独立证据只说明请求结果，不宣称逐字段可见或已耐久；后两者仍需各自验证证明。
+// 不能再用 Reclaim 当水位（2026-10-29 修正）。旧口径是 `min(Reclaim, Delivery)`，
+// 理由是「Reclaim 可以越过 Delivery（恢复段责任转移 / 凭据放行）」。新语义下这个方向反了：
+// `reclaim = min(REQUEST_DONE 连续覆盖末端, max(read,durable))` ⇒ **Reclaim ≤ Delivery 恒成立**。
+// 若继续用 Reclaim，会白留 (Reclaim, Delivery] 的批次；而真正危险的是**两边 floor 不一致**：
+// 一旦有人（包括迁移校验）用 Reclaim 当 floor 重算 Delivery，就会得出 `delivery == reclaim`，
+// 使「已确认投递前缀」凭空后退，反过来挡住下一轮回收。
+// 裁剪与推导必须用**同一个 floor**。
 //
 // # 单调性（为什么裁过一次之后永远安全）
 //
 // 裁过的条目满足 End <= 当时水位。此后：
 //
 //   - TryReclaim 只在 target > Reclaim 时推进 Reclaim（只上调）；
-//   - RecordDelivery 只 append 批次并按同一口径重算 Delivery（contiguousDeliveryEnd 的返回值
-//     恒 >= floor=Reclaim，故 Delivery 相对 Reclaim 也不下调）；
+//   - RecordDelivery 只 append 批次并按同一口径重算 Delivery（`advanceDeliveryEnd` 取 max，
+//     单调不减）；
 //   - AdvanceRead 只把读指针夹到水位之上；
 //
-// ⇒ min(Reclaim, Delivery) 只前进，「end <= W」在更晚的 W' >= W 下依然成立，被裁条目在任意
+// ⇒ Delivery 只前进，「end <= W」在更晚的 W' >= W 下依然成立，被裁条目在任意
 // 更晚时刻仍是两个读者的恒等元。
 //
 // **唯一的例外是 Restore 的下调归一分支**（LEDGER-4，如实登记）：落库态违反
-// `Reclaim <= Read` 时 Restore 会把 Reclaim **下调**为 Read 并告警，随后按新 floor 重算
-// Delivery。水位下调后此前裁掉的条目不再「以新水位为 floor 的恒等元」，Positions.Delivery
-// 会被重算得比真值**偏低**——这是保守方向（少报已投递，不会把未发送说成已发送），代价是
-// 「静默源出口」的 Delivery >= Read 可能暂不成立、指纹水位取到偏低位置（源多停一会儿 /
-// 多一次对账），无数据丢失。该分支只应在落库态已本身违例时触发，恢复侧另有 WARN 留痕。
+// `Reclaim <= Read` 时 Restore 会把 Reclaim **下调**为 Read 并告警，随后按新 floor
+// （Delivery **自身**）重算 Delivery。Delivery 因而不会被这个分支下调（`advanceDeliveryEnd` 取 max），
+// 但 Reclaim 被调低后 `Reclaim <= Delivery` 依然成立，水位仍是 Delivery —— 裁剪结论不变。
 //
 // # 不做的事（如实登记）
 //
