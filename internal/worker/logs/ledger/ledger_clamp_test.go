@@ -11,8 +11,13 @@ import (
 // 位置不变式（2026-09-30 生产实证）：读位置**不得退到回收水位之下**。
 //
 // 背景：崩溃后 AdvanceRead 允许回退重建（tailer 自游标续读）；但一旦退到 reclaim 之下，
-// releaseRecovery 的 from(=reclaim) >= to 便恒成立、静默不再建段 → 回收永久停滞 →
-// 积压永不回落 → 源反复暂停（实测 read=2.24M < reclaim=13.4M，积压 7998 卡死数小时）。
+// 已被证明安全另存的前缀会被重读，而重读路径又依赖 `read >= reclaim` 的单调性（如
+// releaseRecovery 的 `from(=reclaim) >= to` 判据）—— 旧现场实测 read=2.24M < reclaim=13.4M，
+// 积压 7998 卡死数小时。
+//
+// 2026-10-29 改写：原夹具靠「注册恢复段 + 推进到 WAL_RESPONSIBILITY_TRANSFERRED」让 reclaim 放行，
+// 那套机制已删。现在让 reclaim 前进的是两个真实水位（REQUEST_DONE 认证覆盖 + 读入量），
+// 本用例的关切（下界夹取）不变。
 //
 // 变异验证：删掉 AdvanceRead 里的下界夹取，本测试立即转红。
 func TestAdvanceRead_ClampsToReclaim(t *testing.T) {
@@ -21,15 +26,10 @@ func TestAdvanceRead_ClampsToReclaim(t *testing.T) {
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "clamp", SourceGeneration: "g1"})
 	require.NoError(t, led.AdvanceDurable(key, 100))
 	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg1", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 100,
-	}))
-	require.NoError(t, led.TransitionRecovery(key, "seg1", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "seg1", logtypes.RecoveryWALResponsibilityXfer, "", "receiver-A"))
 
 	pos, err := led.TryReclaim(key)
 	require.NoError(t, err)
-	require.Equal(t, uint64(100), pos, "回收应推进到分段末端")
+	require.Equal(t, uint64(100), pos, "认证覆盖 + 耐久量都在 100 ⇒ 回收推进到 100")
 	require.Equal(t, uint64(100), led.Get(key).Positions.Reclaim)
 
 	// ① 回退到水位之下 → 必须被夹到 reclaim（不得低于）

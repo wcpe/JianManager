@@ -26,7 +26,14 @@ import (
 )
 
 // newReplaySuppressFixture 造一个"水位停滞"的最小夹具：真账本 + 真 WAL + 3 条 durable 存量。
-// 停滞的现场形态：无人登记投递结果、回收不推进（本夹具里没有恢复链 ⇒ TryReclaim 不动）。
+//
+// 停滞的现场形态（2026-10-29 重写）：旧夹具靠「无人登记投递结果」造停滞，而新语义下
+// 投递成功就会当场推进回收并剪掉已确认前缀 ⇒ 队列空了，后面几轮 `DeliverPending` 根本
+// 走不到闸判（直接 return nil）⇒ 测不到抑制。
+//
+// 新夹具改用**真实存在**的停滞形态：投递返回 `AckLost`（响应丢失 / UNKNOWN）。
+// 条目留在队列里（UNKNOWN 不是回收证据），而重复排空**同一段字节**又会得到同一个
+// UNKNOWN 区间 ⇒ `Positions.Delivery` 不再前进 ⇒ 正是本闸要拦的「冗余整窗重投」。
 func newReplaySuppressFixture(t *testing.T) (*Pipeline, ledger.SourceKey, *atomic.Int64, *atomic.Bool) {
 	t.Helper()
 	const id, gen = "src-replay-suppress", "g1"
@@ -41,10 +48,12 @@ func newReplaySuppressFixture(t *testing.T) (*Pipeline, ledger.SourceKey, *atomi
 	pipe.SetDeliver(func(_ []logtypes.Event, replay bool) (int, bool, error) {
 		drains.Add(1)
 		lastReplay.Store(replay)
-		return 200, false, nil
+		return 200, true, nil // AckLost ⇒ UNKNOWN：已发出但结果未知 ⇒ 条目必须留在队列里
 	})
 	// 种子：走正常 Ingest（注册账本 + 一次普通投递）；此后无人再写账本 ⇒ 水位停滞。
 	require.NoError(t, pipe.Ingest(buildWALEvents(id, gen, 0, 3, "seed")))
+	require.Positive(t, func() int64 { n, _ := wal.Backlog(); return n }(),
+		"前置：UNKNOWN 的条目必须留在队列里（否则后面几轮根本走不到闸判）")
 	return pipe, key, &drains, &lastReplay
 }
 

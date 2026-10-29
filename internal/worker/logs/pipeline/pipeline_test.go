@@ -85,17 +85,15 @@ func TestPipeline_PaperMultilineOneEvent(t *testing.T) {
 	require.Equal(t, 1, st.EventCount)
 	require.Less(t, st.EventCount, st.LineCount)
 
-	// WAL durable 先于 delivery；2xx 只写 REQUEST_DONE。
+	// 2xx 写 REQUEST_DONE；投递路径自带一次 TryReclaim（acquire.Pipeline 的投递后回收）
+	// ⇒ 只要认证覆盖到读入量，**本轮 Drain 结束前**回收就已推进到该位置。
 	pos, ok := p.Positions()
 	require.True(t, ok)
 	require.Greater(t, pos.Read, uint64(0))
 	require.Equal(t, logtypes.DeliveryRequestDone, p.DeliveryState())
-
-	// HTTP 2xx 单独不得推进 reclaim；无恢复分段时 CanReclaim=false。
-	require.False(t, p.CanReclaimNow())
-	_, err = p.TryReclaim()
-	require.Error(t, err, "2xx must not reclaim without recovery responsibility transfer")
-	require.Equal(t, uint64(0), mustPos(t, p).Reclaim)
+	require.Equal(t, pos.Read, pos.Reclaim,
+		"投递成功后回收已在同一轮推进到 min(认证覆盖, max(read,durable))")
+	require.False(t, p.CanReclaimNow(), "已追平 ⇒ 没有待回收的前缀")
 }
 
 func mustPos(t *testing.T, p *Pipeline) logtypes.Positions {
@@ -163,8 +161,22 @@ func TestPipeline_RotationNoDoubleCount(t *testing.T) {
 	require.Empty(t, p.Gaps(), "rotation must not create gaps")
 }
 
-// FR-473/474：恢复分段责任转移后 CanReclaim 才放行；hold 仍拒绝。
-func TestPipeline_CanReclaimGateAfterResponsibilityTransfer(t *testing.T) {
+// FR-473/474（2026-10-29 改写）：CanReclaimNow / TryReclaim 只认投递证据与读入量，
+// 不再看恢复分段。
+//
+// 原用例（TestPipeline_CanReclaimGateAfterResponsibilityTransfer）验的是「登记 STAGED 恢复段
+// 不得回收、责任转移到 WAL_RESPONSIBILITY_TRANSFERRED 后才放行、hold 仍拒绝」。
+// 受管恢复分段机制已删（WAL 改纯内存后前提消失），那三条断言的对象不复存在。
+// 但它们背后的**真实关切**仍是硬的：「2xx 之后到底能不能回收、能回收到哪个字节、
+// 回收之后还有没有东西可回收」。所以本用例改写为逐条钉死新口径：
+//
+//	① 投递成功后回收已在同一轮推进到 min(认证覆盖, max(read,durable))（具体位置）；
+//	② 已追平 ⇒ CanReclaimNow 为假，再调 TryReclaim 不推进、不报错（旧哨兵已删）。
+//
+// 转红方式（实测）：把 acquire.Pipeline 投递后的 TryReclaim 删掉 ⇒ ① 的
+// `pos.Read == pos.Reclaim` 立即红（reclaim 会停在 0）；把 tryReclaimLocked 的上界
+// 改回 Positions.Delivery ⇒ TestPipeline_AckLostBlocksReclaim 红。
+func TestPipeline_ReclaimFollowsDeliveryEvidence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "latest.log")
 	require.NoError(t, os.WriteFile(path, []byte(paperMultiline), 0o644))
@@ -175,30 +187,53 @@ func TestPipeline_CanReclaimGateAfterResponsibilityTransfer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, logtypes.DeliveryRequestDone, p.DeliveryState())
 
-	// 无恢复分段：不得回收。
-	require.False(t, p.CanReclaimNow())
-
-	// 登记 STAGED 恢复分段：仍不得回收。
+	// ① 投递路径自带回收 ⇒ 本一轮结束时已推进到具体位置。
 	pos := mustPos(t, p)
-	require.NoError(t, p.BindRecoverySegment("seg-1", "/tmp/seg-1", 0, pos.Durable))
-	require.False(t, p.CanReclaimNow())
-	_, err = p.TryReclaim()
-	require.Error(t, err)
+	require.Greater(t, pos.Read, uint64(0))
+	require.Equal(t, pos.Read, pos.Reclaim, "回收推进到 min(认证覆盖末端, max(read,durable))")
 
-	// 责任转移后允许回收。
-	require.NoError(t, p.TransitionRecovery("seg-1", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, p.TransitionRecovery("seg-1", logtypes.RecoveryWALResponsibilityXfer, "", ""))
-	require.True(t, p.CanReclaimNow())
-	reclaimed, err := p.TryReclaim()
+	// ② 幂等：无事可做时返回当前值且不推进、不报错。
+	require.False(t, p.CanReclaimNow(), "已追平后没有可回收的前缀")
+	again, err := p.TryReclaim()
+	require.NoError(t, err, "新语义下无事可做是 (当前Reclaim, nil)，不再有 ErrReclaimNoSegment")
+	require.Equal(t, pos.Read, again)
+}
+
+// 2xx 带 AckLost ⇒ UNKNOWN ⇒ 认证覆盖为空 ⇒ 不得回收（2026-10-21 数据丢失形状的防线）。
+//
+// 新语义下 UNKNOWN 区间是回收的**停滞点**：TryReclaim 只能推到它之前（此处为 0）。
+// 停滞必须由重投成功解开，而不是靠任何「证据代替物」（旧的恢复段机制已删）。
+//
+// 转红方式（实测）：把 tryReclaimLocked 的上界改回 Positions.Delivery
+// ⇒ 本用例两条断言立即红（UNKNOWN 也会被算作可回收，回收会推进到读入量）。
+func TestPipeline_AckLostBlocksReclaim(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "latest.log")
+	require.NoError(t, os.WriteFile(path, []byte(paperMultiline), 0o644))
+
+	var got []logtypes.Event
+	p, err := New(Options{
+		Mode:             ModeFilePrimary,
+		LogSourceID:      "src-reclaim-acklost",
+		SourceGeneration: "g1",
+		Path:             path,
+		Delivery: FuncHook(func(events []logtypes.Event, replay bool) (DeliveryResult, error) {
+			got = append(got, events...)
+			return DeliveryResult{HTTPStatus: 200, AckLost: true}, nil
+		}),
+		BaseTime: time.Date(2026, 9, 20, 12, 0, 1, 0, time.UTC),
+	})
 	require.NoError(t, err)
-	require.Equal(t, pos.Durable, reclaimed)
-	require.Equal(t, pos.Durable, mustPos(t, p).Reclaim)
+	_, err = p.Drain()
+	require.NoError(t, err)
+	require.Equal(t, logtypes.DeliveryUnknown, p.DeliveryState())
 
-	// hold 时再次拒绝。
-	require.NoError(t, p.BindRecoverySegment("seg-2", "/tmp/seg-2", pos.Durable, pos.Durable+10))
-	require.NoError(t, p.Ledger().SetRecoveryHold(p.Key(), "seg-2", true))
-	_, err = p.TryReclaim()
-	require.Error(t, err)
+	pos := mustPos(t, p)
+	require.Greater(t, pos.Read, uint64(0), "前置：确实读入了字节")
+	require.Equal(t, pos.Read, pos.Delivery, "Delivery 含 UNKNOWN ⇒ 连续前缀照常到读入量")
+	require.Zero(t, pos.Reclaim, "UNKNOWN 区间不得被回收（它是停滞点，不是可回收证据）")
+	entries, _ := p.WAL().Backlog()
+	require.Positive(t, entries, "前置：存量确实还在内存队列里（没被回收剪掉）")
 }
 
 // FR-474：容量暂停必须记缺口，禁止静默丢弃。
@@ -269,7 +304,8 @@ func TestPipeline_AckLostYieldsUnknown(t *testing.T) {
 	_, err = p.Drain()
 	require.NoError(t, err)
 	require.Equal(t, logtypes.DeliveryUnknown, p.DeliveryState())
-	require.False(t, p.CanReclaimNow())
+	// UNKNOWN 区间是回收的停滞点：新语义下这个停滀是**行为上可观察到**的。
+	require.Zero(t, mustPos(t, p).Reclaim, "UNKNOWN 不得被回收")
 }
 
 func writeGzipLines(t *testing.T, path string, lines []string) {

@@ -9,21 +9,26 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-// 账本拒绝**推进**回收位置时，WAL 仍必须按**当前**水位剪枝（2026-09-30 生产实证）。
+// 2026-10-29 语义迁移（**关切方向翻转**）：新语义下「账本拒绝推进」只剩一种形态
+// ——`ErrReclaimPrecondition`（调用方逐条 ACK 复核未通过）。而这条拒绝的含义是
+// 「这段字节没有本次进程的完整正文 ACK」，剪掉它就是丢数据。所以 qualified 路径下
+// 遇到 Precondition 拒绝时**必须不剪枝**（见 TryReclaimThrough 的 `else if err !=
+// ledger.ErrReclaimPrecondition`）。
 //
-// 缺了它：wal.TryReclaim 一遇错便 return → pruneReclaimed 永不执行 → 连水位**之下的**
-// 条目也永远保留 → 积压只增不减 → 内存占用无界（WAL 现在是纯内存队列，不再有丢最旧以外的兜底），
-// 且每次回收尝试都会白白漏掉一次剪枝机会。
+// 旧用例验的是反方向（“账本拒绝推进时仍须按当前水位剪枝”）。那个形态的两个前提
+// 在新语义下都没了：
+//   - 非 qualified 路径下 `led.TryReclaim` 只剩「源未注册」一种错误（不是“拒绝推进”）；
+//   - 真正会拒绝的 Precondition 路径被设计为**不剪枝**（丢数据方向）。
 //
-// 2026-10-29：积压闸改丢弃后，“不剪枝就会滞回恢复失败、源永久停在 paused”这条因果
-// 已不成立（本包不再产生积压暂停，低水位判据也已移除）；但本用例守的是“账本拒绝推进
-// 时仍然剪枝”——不变量本身一字未变，且在新语义下代价更高。
+// 旧关切「不剪枝导致积压无界增长」在新语义下由另一条链承担：认证覆盖推不动时，
+// 积压由**丢弃语义**（enforceBacklogLimitLocked，见 wal_backlog_limit_test.go）定界，
+// 不再依赖「拒绝时也剪一刀」。
 //
-// 形态刻意与生产一致：回收位置恰好等于分段边界（CoversTo == Reclaim），
-// 于是 `CoversTo > Reclaim` 不成立 → 账本报错，而水位之下的一切其实早已判定安全。
+// 所以本用例保留下来但翻转为**数据安全方向**：ACK 复核不通过时，一条都不许剪。
 //
-// 变异验证：把 TryReclaim 的错误分支改回「直接 return」，本测试立即转红。
-func TestTryReclaim_StillPrunesWhenLedgerDeclinesAdvance(t *testing.T) {
+// 转红方式（实测）：把 `else if err != ledger.ErrReclaimPrecondition` 改成 `else`
+// （即 Precondition 拒绝也剪枝）⇒ 本用例立即红。
+func TestTryReclaim_DoesNotPruneWhenACKReviewRejects(t *testing.T) {
 	key := testKey("src-prune", "g1")
 	led := ledger.New()
 	wal := NewWAL(led, key)
@@ -34,33 +39,22 @@ func TestTryReclaim_StillPrunesWhenLedgerDeclinesAdvance(t *testing.T) {
 	require.NoError(t, wal.Commit())
 	require.Len(t, wal.Snapshot(), 1)
 
-	// 铺好账本：段 0..100 走完责任转移并推进回收 → Reclaim=100。
+	// 铺好账本：认证覆盖 + 读入量都在 100 ⇒ 账本本身愿意推进到 100。
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "src-prune", SourceGeneration: "g1"})
+	require.NoError(t, led.AdvanceRead(key, 100))
 	require.NoError(t, led.AdvanceDurable(key, 100))
 	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
-	require.NoError(t, led.RegisterRecovery(key, ledger.RecoveryRef{
-		SegmentID: "seg1", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 100,
-	}))
-	require.NoError(t, led.TransitionRecovery(key, "seg1", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "seg1", logtypes.RecoveryWALResponsibilityXfer, "", "receiver-A"))
-	pos, err := led.TryReclaim(key)
-	require.NoError(t, err)
-	require.Equal(t, uint64(100), pos, "首次回收应推进到分段末端")
 
-	// 第二次：**构造真实的「账本拒绝推进」形态**。
-	//
-	// 2026-10-20 修正：原先用「回收位置恰好等于分段边界（CoversTo == Reclaim）」来制造拒绝，
-	// 但账本后来修了「Reclaim 已追平读水位时返回幂等成功」——该形态现在**不再报错**（那正是
-	// 补段空转的修复）。本用例要守的意图不变（账本拒绝推进时 WAL 仍须剪枝），故改用仍真实
-	// 存在的拒绝形态：读水位前进到 Reclaim 之前、且没有任何恢复分段覆盖它 ⇒ 存在真洞 ⇒ 哨兵。
-	require.NoError(t, led.AdvanceRead(key, 200))
-	_, err = led.TryReclaim(key)
-	require.Error(t, err, "夹具应处于「账本拒绝继续推进」的状态（Reclaim < Read 且无段覆盖）")
-
-	_, err = wal.TryReclaim()
-	require.Error(t, err, "WAL 侧同样应观察到账本拒绝推进")
-	require.Empty(t, wal.Snapshot(),
-		"账本拒绝推进时仍须剪掉水位之下的条目：否则积压永不回落、纯内存队列会无界增长")
+	// 开启完整正文 ACK 闸：此后回收要求逐条条目都有本进程的 acknowledged stamp。
+	// 本条从未经投递确认 ⇒ condition 拒绝 ⇒ ErrReclaimPrecondition。
+	wal.EnableQualifiedReclaim()
+	_, err := wal.TryReclaim()
+	require.ErrorIs(t, err, ledger.ErrReclaimPrecondition,
+		"夹具应处于「调用方逐条 ACK 复核未通过」的状态")
+	require.Equal(t, uint64(0), func() uint64 { p, _ := led.Positions(key); return p.Reclaim }(),
+		"前置：被拒时回收位置不得推进")
+	require.Len(t, wal.Snapshot(), 1,
+		"ACK 复核不通过时一条都不许剪：那段字节没有本次进程的完整正文确认，剪了就是丢数据")
 }
 
 // TestWALRestoreFiresBacklogGate（D4，2026-10-03 现场）：**恢复**持久积压之后必须当场按闸判定

@@ -1,7 +1,6 @@
 package ledger
 
 import (
-	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -218,15 +217,7 @@ func TestLegacyCoarseFoldEvidenceRemainsUnknownAfterThreeRestarts(t *testing.T) 
 	}
 }
 
-func TestRecoveryRefsLongRunRequiresDurableArchiveProtocol(t *testing.T) {
-	t.Run("有仓储归档后活动元数据有界", TestRecoveryArchiveLongRun1000BatchesAndThreeRestartRebinds)
-	t.Run("无仓储完整审计不能直接丢弃", func(t *testing.T) {
-		l := New()
-		key := SourceKey{LogSourceID: "fixture-source", SourceGeneration: "fixture-generation"}
-		l.Ensure(key, logtypes.SourceIdentity{})
-		registerCleanedFixture(t, l, key, "fixture-unarchived", 0, 10)
-		if removed, err := l.ArchiveCleanedRecovery(context.Background(), key, 8); removed != 0 || err == nil || len(l.Get(key).RecoveryRefs) != 1 {
-			t.Fatalf("无独立审计仓储时丢掉完整记录：removed=%d err=%v", removed, err)
-		}
-	})
-}
+// 2026-10-29：原 TestRecoveryRefsLongRunRequiresDurableArchiveProtocol（含两个子用例）随
+// 受管恢复分段机制删除 —— RecoveryRefs / ArchiveCleanedRecovery / RecoveryArchiveStore 均已不存在。
+// 原关切是「恢复段元数据不得随重启无界增长」：那个元数据本身已不存在，故关切失去对象。
+// 现在唯一会随重启/长跑增长的是 DeliveryBatches，它的有界性由 delivery_batch_prune.go 负责。

@@ -68,7 +68,13 @@ func vlOfflineFixture(t *testing.T, category logtypes.Source, failing *bool) (*M
 
 // TestWorkerSourceVLOfflineKeepsEventsInWAL 是缺陷 1 的回归：
 // VL 失联期间，worker 自源的事件**必须留在 WAL**、投递水位**不得推进**、
-// 且**不得**出现"责任已转移"的恢复分段。
+// 且回收水位**不得越过未投递数据**。
+//
+// 2026-10-29：旧断言是「不得出现 CLEANED 的恢复分段」（= 宣称责任已转移）。恢复分段机制
+// 已删，那套“责任转移”的说法不复存在；同一关切在新语义下由**认证覆盖**直接承担：
+// VL 失联 ⇒ 没有 REQUEST_DONE ⇒ `contiguousCertifiedEnd` 为 0 ⇒ reclaim 推不动。
+// 所以这里改为断言 reclaim 恒为 0、且条目一条都不离开内存队列——这比旧的“段状态”断言
+// 更直接（旧断言只能说明“段没到 CLEANED”，新断言说明“字节确实还在队列里”）。
 func TestWorkerSourceVLOfflineKeepsEventsInWAL(t *testing.T) {
 	failing := true
 	_, _, p := vlOfflineFixture(t, logtypes.SourceWorker, &failing)
@@ -94,10 +100,11 @@ func TestWorkerSourceVLOfflineKeepsEventsInWAL(t *testing.T) {
 
 	ent := p.Ledger().Get(p.Key())
 	require.NotNil(t, ent)
-	for _, ref := range ent.RecoveryRefs {
-		require.NotEqual(t, logtypes.RecoveryCleaned, ref.State,
-			"没有确认副本就不得把恢复分段收敛为 CLEANED（= 宣称责任已转移）: %s", ref.Path)
-	}
+	// 没有真实 ACK ⇒ 认证覆盖为空 ⇒ reclaim 必须停在 0（不越过未投递数据）。
+	require.Zero(t, ent.Positions.Reclaim,
+		"VL 失联时回收水位不得因任何原因推进（越过未投递数据 = 数据丢失）")
+	require.Empty(t, ledger.RequestDoneRangesOf(ent),
+		"投递失败绝不能伪造 ACK 证据（那会让回收跨过未落库的字节）")
 	require.GreaterOrEqual(t, ledger.UnresolvedGapCountOf(ent), 1,
 		"投递失败必须留下可见缺口（不得静默）")
 }

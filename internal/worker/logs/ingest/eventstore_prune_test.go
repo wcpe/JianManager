@@ -387,13 +387,11 @@ func TestPruneEventStoreSegmentsEndToEnd(t *testing.T) {
 		p := m.pipes[key]
 		require.NoError(t, p.WAL().Append(makePruneEvents(0, 5)...))
 		require.NoError(t, p.WAL().Commit())
-		// 回收器要求「有恢复分段覆盖待回收位置」且「责任已转移」才放行 reclaim：
-		// 登记一个覆盖 [0, watermark]、状态为 WAL_RESPONSIBILITY_XFER 的分段。
-		// 这只是让账本的前置条件成立，不代表任何真实归档（本用例只验证接线与水位）。
-		require.NoError(t, p.Ledger().RegisterRecovery(p.Key(), ledger.RecoveryRef{
-			SegmentID: "seg-e2e", Path: "seg-e2e.ndjson", State: logtypes.RecoveryWALResponsibilityXfer,
-			CoversFrom: 0, CoversTo: watermark,
-		}))
+		// 2026-10-29：回收只看「REQUEST_DONE 连续覆盖 + max(Read,Durable)」，不再需要恢复段。
+		// 这里把认证覆盖与读入量都推到 watermark，让账本的前置条件成立
+		// （本用例只验证裁剪接线与水位）。
+		require.NoError(t, p.Ledger().AdvanceRead(p.Key(), watermark))
+		require.NoError(t, p.Ledger().RecordDelivery(p.Key(), 0, watermark, logtypes.DeliveryRequestDone))
 		_, reclaimErr := p.WAL().TryReclaimThrough(watermark)
 		require.NoError(t, reclaimErr)
 		positions, ok := p.Positions()
@@ -422,10 +420,9 @@ func TestPruneEventStoreSegmentsEndToEnd(t *testing.T) {
 		p := m.pipes[key]
 		require.NoError(t, p.WAL().Append(makePruneEvents(0, 5)...))
 		require.NoError(t, p.WAL().Commit())
-		require.NoError(t, p.Ledger().RegisterRecovery(p.Key(), ledger.RecoveryRef{
-			SegmentID: "seg-e2e", Path: "seg-e2e.ndjson", State: logtypes.RecoveryWALResponsibilityXfer,
-			CoversFrom: 0, CoversTo: watermark,
-		}))
+		// 2026-10-29：同上——用真实投递证据（而非已删的恢复段）建立回收前置。
+		require.NoError(t, p.Ledger().AdvanceRead(p.Key(), watermark))
+		require.NoError(t, p.Ledger().RecordDelivery(p.Key(), 0, watermark, logtypes.DeliveryRequestDone))
 		_, reclaimErr := p.WAL().TryReclaimThrough(watermark)
 		require.NoError(t, reclaimErr)
 		m.mu.Lock()

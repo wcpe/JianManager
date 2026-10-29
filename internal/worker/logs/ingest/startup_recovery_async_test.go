@@ -15,7 +15,6 @@ import (
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
-	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -443,23 +442,28 @@ func TestPersistStepwiseSurvivesTinyCycleBudget(t *testing.T) {
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
 
-	// 注入 200 条缺口行（末端远高于当前回收水位 ⇒ 不会被任何剪枝带走，必须全部落库）。
+	// 注入大量缺口行造出「一次落库装不下」的差异（末端远高于当前回收水位 ⇒ 不会被任何剪枝带走）。
 	//
 	// 2026-10-29：原夹具注入的是 source_wal 行（断言索引里的 WAL 行数）。该表删除后改用
 	// **缺口行**造差异——它同样走「按归属增量 + 切分续跑」这条路径，验证强度不变。
+	//
+	// 两个必须遵守的夹具前提（实测踩过）：
+	//   - 必须经 `Ledger().RecordGap` 登记，不能直接往 `m.state` 里塞：`persist` 会从
+	//     `pipe.Ledger().Snapshot()` **重建**该源，手塞的行会被重建覆盖掉（实测落库 0 行）；
+	//   - 区间必须**不首尾相接**：相邻缺口会被 `gapMergeScanWindow` 当场合并成一条
+	//     （实测 i*10..i*10+9 全部合并 ⇒ 只剩 1 行）。所以每条留 90 字节间隔。
+	//
+	// 行数上限是账本自己的 `DefaultMaxUnresolvedGapsPerSource`（64）——超过就按原因折叠。
+	// 64 行 / 16 行预算 = 4 个提交单元，仍远多于 2，判别力足够；断言也改为与账本实际行数比对。
 	const injected = 200
-	m.mu.Lock()
-	saved := m.state.Sources[key]
 	for i := 0; i < injected; i++ {
-		saved.Ledger[0].Gaps = append(saved.Ledger[0].Gaps, ledger.Gap{
-			StartPos: uint64(i * 10), EndPos: uint64(i*10 + 9), Reason: "PAUSED",
-			Detail: fmt.Sprintf("stepwise %d", i),
-		})
+		require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(),
+			uint64(i*100), uint64(i*100+9), "PAUSED", fmt.Sprintf("stepwise %d", i)))
 	}
-	m.state.Sources[key] = saved
-	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "seed"))
-	require.NoError(t, pipe.Ledger().ResumeAcquire(pipe.Key()))
-	m.mu.Unlock()
+	// 不再靠 Pause/Resume 推修订号：未解决缺口会让 `ResumeAcquire` 直接拒绝（默认拒绝是刻意的
+	// 安全语义）。`RecordGap` 本身就是真实账本写入，修订号已经推进。
+	ledgerGaps := len(pipe.Ledger().Get(pipe.Key()).Gaps)
+	require.Greater(t, ledgerGaps, 16, "夹具前提：账本缺口行数必须超过单周期预算（否则分不了步）")
 
 	// 周期预算已是 16 行（见上文 Options）：200 行差异不可能一步做完。
 	samplesBefore := len(m.PersistSamples())
@@ -470,7 +474,7 @@ func TestPersistStepwiseSurvivesTinyCycleBudget(t *testing.T) {
 		"16 行/周期的预算下，200 行变更必须分成多个提交单元")
 	require.False(t, m.LastPersistStats().Incomplete, "最后一轮必须把差异做完（否则 persist 不得返回）")
 
-	// ② 全部变更都落库（逐行比对：索引缺口行数 == 注入行数，且一条不少）。
+	// ② 全部变更都落库（逐行比对：索引缺口行数 == 账本缺口行数，且一条不少）。
 	loaded, err := m.index.Load()
 	require.NoError(t, err)
 	indexed := 0
@@ -479,7 +483,7 @@ func TestPersistStepwiseSurvivesTinyCycleBudget(t *testing.T) {
 			indexed++
 		}
 	}
-	require.Equal(t, injected, indexed, "分步续跑后索引必须与账本缺口一致（不得静默丢行）")
+	require.Equal(t, ledgerGaps, indexed, "分步续跑后索引必须与账本缺口一致（不得静默丢行）")
 }
 
 // TestPersistReclaimWatermarkPrunesQueueAndPositions：回收水位推进时，**内存队列**必须真的被剪掉
@@ -532,14 +536,13 @@ func TestPersistReclaimWatermarkPrunesQueueAndPositions(t *testing.T) {
 	before := len(pipe.WAL().Snapshot())
 	require.Equal(t, 12, before, "夹具前提：12 条已耐久条目必须都在队列里")
 
-	// 推进回收：生产上这一步由 releaseRecovery 走完责任转移链后调 TryReclaim 完成。这里按
-	// **同一条链**绑定并释放一个覆盖 [reclaim, 注入末端] 的恢复分段，使账本放行。
-	from := pipe.Ledger().Get(pipe.Key()).Positions.Reclaim
-	const segID = "projection-recovery-test-120"
-	require.NoError(t, pipe.BindRecoverySegment(segID, "projection://test", from, 120))
-	require.NoError(t, pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "test"))
-	require.NoError(t, pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseProjectionBacked, "test"))
+	// 推进回收：生产上这一步由 releaseRecovery 在投递确认后调 TryReclaim 完成。
+	//
+	// 2026-10-29：旧夹具靠「绑定恢复段 + 推进到 RELEASED」让账本放行；那套机制已删。
+	// 新语义下回收只认「REQUEST_DONE 连续覆盖 + max(Read,Durable)」——把读入量与认证覆盖
+	// 都推到注入末端（120）即可，语义与旧夹具等价（都要求「这一段已被确认投递」）。
+	require.NoError(t, pipe.Ledger().AdvanceRead(pipe.Key(), 120))
+	require.NoError(t, pipe.Ledger().RecordDelivery(pipe.Key(), pipe.Ledger().Get(pipe.Key()).Positions.Reclaim, 120, logtypes.DeliveryRequestDone))
 	_, err = pipe.TryReclaim()
 	require.NoError(t, err, "凭据齐备后回收必须放行（否则夹具没造出「剪枝」这一步）")
 	surviving := len(pipe.WAL().Snapshot())

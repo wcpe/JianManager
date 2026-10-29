@@ -1,7 +1,6 @@
 package ledger
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -177,103 +176,96 @@ func TestAbandonMergesAdjacentEvidence(t *testing.T) {
 	require.Equal(t, uint64(300), entry.Abandonments[0].Through, "Through 取最新（更大）值")
 }
 
-// 永久空洞的出口：放弃前回收链必须**持续卡住**，放弃后必须能推进。
+// 永久空洞的出口：放弃前采集恢复必须被挡，放弃后必须放行；而 reclaim 的推进只认认证覆盖。
 //
-// 场景（用户原案）：区间 [0,200] 内位置 100–150 的 WAL 记录物理永久损坏/被删/校验永败。
-// 恢复分段因此永远到不了 WAL_RESPONSIBILITY_TRANSFERRED，`CanReclaim` 永不放行 →
-// reclaim 不动 → WAL 积压永不回落 → 滞回永不满足 → 源永久 PAUSED（"到天荒地老"）。
+// 场景（用户原案）：区间 [0,200] 内位置 100–150 的字节物理永久损坏/被删/校验永败。
 //
-// 两条断言缺一不可：
+// ## 语义迁移（2026-10-29，必须读懂再改）
 //
-//	① 放弃**之前**必须卡住（变体：能推进即红 —— 那说明 default-deny 门禁被放宽了）；
-//	② 放弃**之后**必须能推进（变体：仍卡住即红 —— 那说明出口没接上）。
+// 旧实现里「放弃」同时解两道门：`CanReclaim`（靠凭据放行分支）与 `ResumeAcquire`。
+// 受管恢复分段机制删除后，`tryReclaimLocked` 只认两个真实证据：**REQUEST_DONE 的连续覆盖**
+// 与 **max(Read, Durable)**，不再读 `Abandonments`。所以：
 //
-// 转红方式（实测）：把 tryReclaimLocked 里的凭据放行段去掉，②立即红；
-// 把 `!allowed` 判定改成恒放行，①立即红。
-func TestAbandonedHoleReleasesReclaimGate(t *testing.T) {
+//	① 「卡住」不再由分段状态造成，而由**缺口本身**造成 —— ResumeAcquire 的 default-deny
+//	   仍然拦住未解决缺口（这是缺口机制的核心，未动）；
+//	② 放弃解除的是**恢复采集**这道门（本用例前半）；
+//	③ reclaim 能推进到 min(认证覆盖末端, max(read,durable))，而它**不靠凭据**——
+//	   本夹具里 REQUEST_DONE 已覆盖 [0,200)，所以推进到 200；后半的对照组证明：
+//	   认证覆盖断在哪里，reclaim 就停在哪里，放弃凭据不能把它推过去。
+//
+// 转红方式（实测）：把 ResumeAcquire 的 default-deny 放宽成恒放行 ⇒ ① 立即红；
+// 把 contiguousCertifiedEnd 改成读 Abandonments 当桥 ⇒ ③ 的对照组立即红。
+func TestAbandonedHoleReleasesAcquireGateNotReclaim(t *testing.T) {
 	led := New()
 	key := keyOf("hole-exit", "g1")
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hole-exit", SourceGeneration: "g1"})
 	require.NoError(t, led.AdvanceRead(key, 200))
 	require.NoError(t, led.AdvanceDurable(key, 200))
 	require.NoError(t, led.RecordDelivery(key, 0, 200, logtypes.DeliveryRequestDone))
-	// 恢复分段只到 STAGED：责任未转移 ⇒ CanReclaim 拒绝（这就是"永久卡住"的机器）。
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg-hole", Path: "project://seg-hole", State: logtypes.RecoveryStaged,
-		CoversFrom: 0, CoversTo: 200,
-	}))
 	// 位置 100–150 永久丢失。
 	require.NoError(t, led.RecordGap(key, 100, 150, GapReasonAppendRejected, "WAL 段物理损坏"))
 
-	// ① 放弃前：回收必须持续失败（且不得静默推进）。
-	for i := 0; i < 3; i++ {
-		pos, err := led.TryReclaim(key)
-		require.Error(t, err, "放弃前回收链必须持续被门禁挡住")
-		require.Zero(t, pos, "被挡住时 reclaim 不得推进")
-	}
+	// ① 放弃前：恢复采集必须被挡住（缺口未解决）。
 	require.Error(t, led.ResumeAcquire(key), "存在未解决缺口时不得恢复采集")
+	require.Equal(t, 1, led.UnresolvedGapCount(key), "缺口必须可见（观测面照旧）")
 
 	// ② 人工裁定放弃（带操作人）。
 	resolved, err := led.AbandonGapsThrough(key, 200, GapAbandonment{Operator: "ops@example"})
 	require.NoError(t, err)
 	require.Equal(t, 1, resolved)
-
-	// 放弃后：回收链必须能跨过这个空洞。
-	pos, err := led.TryReclaim(key)
-	require.NoError(t, err, "带凭据的回收链必须能跨过已放弃的空洞")
-	require.Equal(t, uint64(200), pos, "应推进到该恢复分段覆盖的末端")
 	require.NoError(t, led.ResumeAcquire(key), "缺口已裁定放弃，恢复采集应放行")
+
+	// ③ reclaim 推进到 min(认证覆盖, max(read,durable)) = 200。
+	pos, err := led.TryReclaim(key)
+	require.NoError(t, err, "新语义下「无事可做」也是 nil 错误（不再有 ErrReclaimNoSegment）")
+	require.Equal(t, uint64(200), pos)
+	require.Equal(t, uint64(200), led.Get(key).Positions.Reclaim)
 }
 
-// hold 优先于凭据：运维显式钉住的分段不得因"已放弃空洞"而被回收跨过。
+// 对照组：放弃凭据**不是**回收的放行开关 —— reclaim 的上界只由认证覆盖决定，
+// 与 Abandonments 无关（受管恢复分段机制删除后，凭据只剩两个消费者：
+// ResumeAcquire 的缺口判据与 acquire.WAL 的剪枝）。
 //
-// 为什么：hold 表达"这段先别动"，凭据表达"这段数据没了"。两者冲突时以"不许动"为准 ——
-// 凭据是**丢失**的裁定，不是**放行**的授权；把 hold 让位给凭据等于让放弃动作顺带解除钉住，
-// 那是运维没同意的副作用。
+// 这条守的是「凭据是丢失的裁定，不是已投递的证据」。如果哪天有人把「放弃空洞」又接回
+// 回收门禁（拿 Abandonments 当桥跨空洞），被放弃区间之后的健康字节会被当成已认证投递而丢弃。
 //
-// 转红方式（实测）：把凭据放行段的条件 `!ref.HasHold` 去掉，本用例立即红。
-func TestAbandonedHoleDoesNotOverrideHold(t *testing.T) {
+// 与 reclaim_evidence_test.go 的 TestReclaimStopsAtRealHole 分工：那条只证明「无凭据时
+// 停在空洞前」；本用例多了一个**有凭据**的自变量 —— 同样的几何下，凭据不得让结果多走一字节。
+//
+// 转红方式（实测）：把 contiguousCertifiedEnd 的 `break` 换成「跳过该区间继续往后扫」
+// （即拿空洞/凭据当桥），本用例立即红。
+func TestAbandonmentDoesNotBridgeCertifiedCoverage(t *testing.T) {
 	led := New()
-	key := keyOf("hole-hold", "g1")
-	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hole-hold", SourceGeneration: "g1"})
+	key := keyOf("hole-no-bridge", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hole-no-bridge", SourceGeneration: "g1"})
 	require.NoError(t, led.AdvanceRead(key, 200))
 	require.NoError(t, led.AdvanceDurable(key, 200))
-	require.NoError(t, led.RecordDelivery(key, 0, 200, logtypes.DeliveryRequestDone))
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg-hold", Path: "project://seg-hold", State: logtypes.RecoveryWALResponsibilityXfer,
-		ReleaseReason: logtypes.ReleaseProjectionBacked, CoversFrom: 0, CoversTo: 200, HasHold: true,
-	}))
-	require.NoError(t, led.RecordGap(key, 100, 150, GapReasonAppendRejected, "damaged"))
-	_, err := led.AbandonGapsThrough(key, 200, GapAbandonment{Operator: "ops@example"})
+	// 认证覆盖只有 [0,100)；[100,150) 是真正的空洞（≥2 字节，不被分隔符容差盖住）。
+	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
+	require.NoError(t, led.RecordDelivery(key, 150, 200, logtypes.DeliveryRequestDone))
+
+	// 对照组（无凭据）：先测一次基线。
+	base, err := led.TryReclaim(key)
 	require.NoError(t, err)
+	require.Equal(t, uint64(100), base, "前置：无凭据时回收停在真实空洞 [100,150) 之前")
 
-	pos, err := led.TryReclaim(key)
-	require.Error(t, err, "有 hold 时即便存在放弃凭据也必须拒绝回收")
-	require.Zero(t, pos)
-}
-
-// 放弃凭据**不得**成为通用放行：凭据区间与本分段覆盖区间不相交时，门禁照旧拒绝。
-//
-// 这条守的是"凭据放行是定向的、不是全局开关"。
-func TestAbandonmentOutsideSegmentDoesNotReleaseReclaim(t *testing.T) {
-	led := New()
-	key := keyOf("hole-outside", "g1")
-	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "hole-outside", SourceGeneration: "g1"})
-	require.NoError(t, led.AdvanceRead(key, 200))
-	require.NoError(t, led.AdvanceDurable(key, 200))
-	require.NoError(t, led.RecordDelivery(key, 0, 200, logtypes.DeliveryRequestDone))
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg-out", Path: "project://seg-out", State: logtypes.RecoveryStaged,
-		CoversFrom: 0, CoversTo: 200,
-	}))
-	// 空洞在 50000–60000：远在本分段覆盖区间之外。
-	require.NoError(t, led.RecordGap(key, 50000, 60000, GapReasonAppendRejected, "elsewhere"))
-	_, err := led.AbandonGapsThrough(key, 60000, GapAbandonment{Operator: "ops@example"})
+	// 放弃这个空洞，带完整凭据（操作人 + 永久丢失原因码）。
+	require.NoError(t, led.RecordGap(key, 100, 150, GapReasonPermanentlyLost, "物理损坏"))
+	resolved, err := led.AbandonGapsThrough(key, 200, GapAbandonment{Operator: "ops@example"})
 	require.NoError(t, err)
+	require.Equal(t, 1, resolved)
+	_, covered := led.AbandonmentsCovering(key, 120)
+	require.True(t, covered, "前置：凭据必须已覆盖空洞（否则本用例无判别力）")
 
+	// 被测点：凭据不得让 reclaim 多走一字节。
 	pos, err := led.TryReclaim(key)
-	require.Error(t, err, "凭据与分段覆盖区间不相交时不得放行回收")
-	require.Zero(t, pos)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), pos,
+		"放弃凭据不得把 reclaim 推过认证空洞：凭据是丢失的裁定，不是已投递的证据")
+	require.Equal(t, uint64(100), led.Get(key).Positions.Reclaim)
+
+	// 且恢复采集照旧放行（凭据真正的消费者是它，不是回收）。
+	require.NoError(t, led.ResumeAcquire(key))
 }
 
 // 同次裁定的离散空洞不得生成凸包，否则夹间健康位置会被冒充永久丢失。
@@ -297,35 +289,6 @@ func TestAbandonGapsKeepsDisjointEvidence(t *testing.T) {
 	}
 	_, covered := led.AbandonmentsCovering(key, 200)
 	require.False(t, covered, "夹间健康位置不能成为放弃凭据")
-}
-
-// 恢复分段上界不属于该段，恰好从上界开始的凭据只能供下一段使用。
-func TestAbandonmentAtExclusiveSegmentEndDoesNotReleaseReclaim(t *testing.T) {
-	for _, tt := range []struct {
-		name  string
-		start uint64
-	}{{"inside", 199}, {"exclusive", 200}} {
-		t.Run(tt.name, func(t *testing.T) {
-			led := New()
-			key := keyOf("exclusive-end", "g1")
-			led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
-			require.NoError(t, led.AdvanceRead(key, 300))
-			require.NoError(t, led.AdvanceDurable(key, 300))
-			require.NoError(t, led.RecordDelivery(key, 0, 300, logtypes.DeliveryRequestDone))
-			require.NoError(t, led.RegisterRecovery(key, RecoveryRef{SegmentID: "seg", Path: "seg", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 200}))
-			require.NoError(t, led.RecordGap(key, tt.start, tt.start, GapReasonAppendRejected, "边界洞"))
-			_, err := led.AbandonGapsThrough(key, 300, GapAbandonment{Operator: "ops@example"})
-			require.NoError(t, err)
-			pos, err := led.TryReclaim(key)
-			if tt.start == 199 {
-				require.NoError(t, err)
-				require.Equal(t, uint64(200), pos)
-			} else {
-				require.Error(t, err)
-				require.Zero(t, pos)
-			}
-		})
-	}
 }
 
 // 自动路径不得写出 PERMANENTLY_LOST：自动放弃 = 静默丢日志，明令禁止。
@@ -436,16 +399,27 @@ func TestAbandonAfterFoldKeepsPreciseSpansNotHull(t *testing.T) {
 
 // TestTryReclaimNoOpWhenAlreadyReclaimed 锁定「已回收齐平读水位 ≠ 存在覆盖洞」这条判据。
 //
-// 2026-10-20 真机验收修复：Reclaim 追平 **Read**（读入的全部回收完）后，恢复分段已被消费/裁剪，
-// 「无段覆盖」是常态。修前这里返回哨兵 ErrReclaimNoSegment，令 runtime 的
-// repairStalledReclaim 对空区间反复补段 —— 补不出覆盖分段 ⇒ 哨兵每轮重现 ⇒ 无进展自旋
-// （生产 inst:317 实测约 34 次/分、位置三轮不变、空闲 CPU 18.9%，并每轮刷一条 WARN 淹没真实信号）。
+// 2026-10-20 真机验收修复：Reclaim 追平 **Read**（读入的全部回收完）后，旧实现靠恢复分段
+// 盖住这一段；分段被消费/裁剪后「无段覆盖」是常态。修前这里返回哨兵 ErrReclaimNoSegment，
+// 令 runtime 的 repairStalledReclaim 对空区间反复补段 —— 补不出覆盖分段 ⇒ 哨兵每轮重现
+// ⇒ 无进展自旋（生产 inst:317 实测约 34 次/分、位置三轮不变、空闲 CPU 18.9%，
+// 并每轮刷一条 WARN 淹没真实信号）。
 //
-// 判据必须是 **Read** 而非 Delivery：见 reclaim_backfill_test.go 的反例 —— 只确认了前一部分时
-// Reclaim 仍可推进到 Read，只是缺依据，必须继续报哨兵，不得被本优化吞掉。
+// ## 2026-10-29 重写（哨兵本身已删）
 //
-// 转红方式：去掉 tryReclaimLocked 里 `Reclaim >= Read` 的提前返回，本用例第一处
-// require.NoError 立即转红。
+// 新语义下「无事可做」**恒为** `(当前Reclaim, nil)`，不再有可分类的哨兵——于是本用例的关切
+// 从「不能报哨兵」升级为「**幂等且不推进**」，并且多了一条旧版没有的对照：
+//
+//   - 已齐平：重复调用仍返回同一位置且 nil；
+//   - 有未回收前缀时：推进到 min(认证覆盖, max(read,durable))，而不是报错。
+//
+// 后者的实际意义：旧实现靠哨兵告诉调用方「这里推不动」，现在推不动只有两种形态——
+// 认证覆盖没接上（停住，不报错）或读入量没跟上（停住，不报错）。两者都不应被调用方
+// 误读为「需要补段」（补段链已不存在）。
+//
+// 转红方式（实测）：把 tryReclaimLocked 的 `target <= Reclaim` 提前返回删掉（让它
+// 在无事可做时也重算并覆写 Reclaim），重复调用断言仍可能绿，但把 advanceDeliveryEnd 的
+// max 去掉（让 Delivery 可回退）⇒ 本用例的幂等断言立即红。
 func TestTryReclaimNoOpWhenAlreadyReclaimed(t *testing.T) {
 	led := New()
 	key := keyOf("already-reclaimed", "g1")
@@ -453,11 +427,7 @@ func TestTryReclaimNoOpWhenAlreadyReclaimed(t *testing.T) {
 	require.NoError(t, led.AdvanceRead(key, 100))
 	require.NoError(t, led.AdvanceDurable(key, 100))
 	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
-	// 先让 Reclaim 真正追平 Read：注册一个可放行的恢复分段并回收一次。
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg-ok", Path: "project://seg-ok", State: logtypes.RecoveryCleaned,
-		CoversFrom: 0, CoversTo: 100,
-	}))
+	// 先让 Reclaim 真正追平 Read。
 	if _, err := led.TryReclaim(key); err != nil {
 		t.Fatalf("前置：首次回收应放行，实测 %v", err)
 	}
@@ -465,31 +435,24 @@ func TestTryReclaimNoOpWhenAlreadyReclaimed(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, pre.Read, pre.Reclaim, "前置：Reclaim 必须已追平 Read（%d vs %d）", pre.Reclaim, pre.Read)
 
-	// 进入被测形态：此时若分段已被消费/裁剪，「无段覆盖」但**没有待回收前缀**。
-	// 直接以「无任何恢复分段」复现该形态（与生产中裁剪后的账本一致）。
-	entry := led.Get(key)
-	require.NotNil(t, entry)
-	entry.RecoveryRefs = nil
-
-	// 被测点：无分段 + Reclaim == Read ⇒ 必须是幂等成功，而不是哨兵。
+	// 被测点：无待回收前缀 ⇒ 幂等成功，位置不变。
 	pos, err := led.TryReclaim(key)
-	require.NoError(t, err, "Reclaim 已追平 Read 时不得报「无段覆盖」哨兵（那会让调用方对空区间自旋补段）")
+	require.NoError(t, err, "Reclaim 已追平 Read 时不得报错（旧哨兵已删，调用方也不会再补段）")
 	require.Equal(t, pre.Reclaim, pos, "无事可做时回收位置不得变化")
 
-	// 幂等：重复调用仍须成功且不推进（自旋的根因正是这里每轮都失败）。
+	// 幂等：重复调用仍须成功且不推进。
 	for i := 0; i < 3; i++ {
 		pos, err = led.TryReclaim(key)
 		require.NoError(t, err, "第 %d 次重复调用仍须是幂等无操作", i+2)
 		require.Equal(t, pre.Reclaim, pos)
 	}
 
-	// 对照：一旦真的出现未回收前缀（Read 前进而 Reclaim 未动），哨兵必须照旧返回——
-	// 这是 #61/#62 补段机制赖以生效的「有洞」形态，不得被本次修复吞掉。
+	// 对照：出现未回收前缀时，推进到具体位置（而不是报错）。
 	require.NoError(t, led.AdvanceRead(key, 250))
 	require.NoError(t, led.AdvanceDurable(key, 250))
 	require.NoError(t, led.RecordDelivery(key, 100, 250, logtypes.DeliveryRequestDone))
 	pos, err = led.TryReclaim(key)
-	require.Error(t, err, "存在未回收前缀时必须继续返回哨兵")
-	require.True(t, errors.Is(err, ErrReclaimNoSegment), "必须是可分类的哨兵，实测 %v", err)
-	require.Equal(t, pre.Reclaim, pos, "被拒时返回的是当前回收位置，不得推进")
+	require.NoError(t, err, "存在未回收前缀时新语义推进到具体位置，不再返回哨兵")
+	require.Equal(t, uint64(250), pos)
+	require.Equal(t, uint64(250), led.Get(key).Positions.Reclaim)
 }

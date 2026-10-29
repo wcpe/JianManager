@@ -15,14 +15,15 @@ func TestDurableOutboxConditionalReclaimRejectsBeforeAnyAdvanceOrPrune(t *testin
 		from, target := proof.From, proof.Target
 		called = true
 		require.Equal(t, uint64(0), from)
-		require.Equal(t, uint64(1000), target, "必须看到CanReclaim和人工出口已算出的实际目标，不是delivery=500")
+		// 新语义下 Target = min(REQUEST_DONE 连续覆盖末端, max(Read, Durable))。
+		// 夹具里已确认投递 [0,500)，被放弃的 [500,600) 没有 REQUEST_DONE ⇒ 认证覆盖停在 500。
+		require.Equal(t, uint64(500), target, "必须看到由认证覆盖算出的实际目标，不是 read/durable=1000")
 		require.Equal(t, before.Abandonments, proof.Abandonments)
 		proof.Abandonments[0].Operator = "不能污染真实账本"
 		return false
 	})
 	require.True(t, called)
 	require.ErrorIs(t, err, ErrReclaimPrecondition)
-	require.NotErrorIs(t, err, ErrReclaimNoSegment)
 	require.Zero(t, pos)
 	after := led.Get(key)
 	require.Equal(t, before.Positions, after.Positions)
@@ -31,10 +32,10 @@ func TestDurableOutboxConditionalReclaimRejectsBeforeAnyAdvanceOrPrune(t *testin
 	require.Equal(t, before.Abandonments, after.Abandonments)
 	pos, err = led.TryReclaimIf(key, func(proof ReclaimTarget) bool {
 		from, target := proof.From, proof.Target
-		return from == 0 && target == 1000
+		return from == 0 && target == 500
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1000), pos)
+	require.Equal(t, uint64(500), pos)
 }
 
 func TestDurableOutboxArchiveCursorCASPreservesAcceptedPrefixAndOtherObjects(t *testing.T) {
@@ -74,24 +75,25 @@ func TestDurableOutboxArchiveCursorCASPreservesAcceptedPrefixAndOtherObjects(t *
 	}
 }
 
-func TestDurableOutboxConditionalReclaimCannotBypassHoldOrOriginalGate(t *testing.T) {
-	for _, held := range []bool{false, true} {
-		led := New()
-		key := keyOf("outbox-original-gate", "g1")
-		led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
-		require.NoError(t, led.AdvanceRead(key, 10))
-		require.NoError(t, led.AdvanceDurable(key, 10))
-		require.NoError(t, led.RegisterRecovery(key, RecoveryRef{SegmentID: "proof", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 10, HasHold: held}))
-		called := false
-		pos, err := led.TryReclaimIf(key, func(ReclaimTarget) bool { called = true; return true })
-		require.Error(t, err)
-		require.False(t, called, "原门禁拒绝时不能用额外condition放行")
-		require.Zero(t, pos)
-	}
-	led, key := abandonedFixture(t, "outbox-manual-hold")
-	require.NoError(t, led.SetRecoveryHold(key, "seg-1", true))
+func TestDurableOutboxConditionalReclaimCannotBypassGate(t *testing.T) {
+	// ① 认证覆盖为空（只有读入量）⇒ target = 0 <= Reclaim ⇒ 根本不会调 condition。
+	led := New()
+	key := keyOf("outbox-original-gate", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: key.LogSourceID, SourceGeneration: key.SourceGeneration})
+	require.NoError(t, led.AdvanceRead(key, 10))
+	require.NoError(t, led.AdvanceDurable(key, 10))
 	called := false
-	_, err := led.TryReclaimIf(key, func(ReclaimTarget) bool { called = true; return true })
-	require.Error(t, err)
-	require.False(t, called, "hold必须优先人工永久丢失和新回调")
+	pos, err := led.TryReclaimIf(key, func(ReclaimTarget) bool { called = true; return true })
+	require.NoError(t, err, "无事可做时新语义返回 (当前Reclaim, nil)")
+	require.False(t, called, "target <= Reclaim 时不得调用 condition（无事可做就直接返回）")
+	require.Zero(t, pos)
+
+	// ② 有可推进目标时，condition 是真正的闸门：恒 false ⇒ 拒绝且不推进（原子性）。
+	led, key = abandonedFixture(t, "outbox-manual-hold")
+	called = false
+	pos, err = led.TryReclaimIf(key, func(ReclaimTarget) bool { called = true; return false })
+	require.ErrorIs(t, err, ErrReclaimPrecondition)
+	require.True(t, called)
+	require.Zero(t, pos)
+	require.Zero(t, led.Get(key).Positions.Reclaim, "被拒时不得推进")
 }

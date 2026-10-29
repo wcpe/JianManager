@@ -1,6 +1,7 @@
 package acquire
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,19 +29,34 @@ func TestPausedIngestStillDrainsDurablePending(t *testing.T) {
 	pipe := NewPipeline(led, key, wal)
 
 	deliveries := 0
+	failFirst := true
 	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) {
 		deliveries++
+		if failFirst {
+			failFirst = false
+			return 0, false, errors.New("victoria logs unavailable")
+		}
 		return 204, false, nil
 	})
 	// 必须接一条持久化钩子：TrimBacklog 只在“已落库”之后才调（见 persistCommittedBatchContext），
 	// 不接的话本包根本不会裁剪积压——那样测的就不是生产路径，下面“越界只丢不暂停”也无从成立。
 	pipe.SetDurablePersist(func() error { return nil })
 
-	require.NoError(t, pipe.Ingest(buildWALEvents("src-drain", "g1", 0, 2, "line")))
+	// 首轮投递失败 ⇒ 事件留在 WAL（durable 但未确认），这就是“待排空的存量”。
+	// （2026-10-29：若首轮成功，新语义会当场回收并剪掉已确认前缀，存量就不存在了。）
+	err := pipe.Ingest(buildWALEvents("src-drain", "g1", 0, 2, "line"))
+	require.Error(t, err, "首轮投递失败必须如实上报")
 	require.Equal(t, 1, deliveries, "正常批次的投递仍应发生")
 	// 丢弃语义下：2 条进、上限 1 ⇒ 落库后当场丢最旧 1 条，但**不**暂停采集。
+	//
+	// 2026-10-29：判据从「队列里还剩 N 条」改为专用的累计丢弃读数 `DropStats()`——
+	// 新语义下投递成功会当场推进回收并剪掉已确认前缀，队列条数不再只由丢弃决定。
 	require.False(t, led.Get(key).AcquirePaused, "积压越界只丢不暂停（2026-10-29 裁定）")
-	require.Len(t, wal.Snapshot(), 1, "越界后必须裁到上限内（2 条 → 1 条）")
+	dropped, _ := wal.DropStats()
+	require.EqualValues(t, 1, dropped, "越界后必须丢最旧 1 条（2 条进、上限 1）")
+	if backlog, _ := wal.Backlog(); backlog > 1 {
+		t.Fatalf("队列必须恒有界：期望积压 ≤ 1，得到 %d", backlog)
+	}
 
 	// 用容量门禁造成的暂停制造暂停态（tailer 在此期间不读，源自己不会再产生新批次）。
 	//
@@ -57,7 +73,7 @@ func TestPausedIngestStillDrainsDurablePending(t *testing.T) {
 	//
 	// 拒绝来自 WAL.appendLocked 的「已暂停则拒 append」（文案 `acquire: paused (...)`），
 	// 并由 AppendEvents 作为 APPEND_REJECTED 缺口登记——绝不静默丢。
-	err := pipe.Ingest(buildWALEvents("src-drain", "g1", 2, 1, "line"))
+	err = pipe.Ingest(buildWALEvents("src-drain", "g1", 2, 1, "line"))
 	require.Error(t, err, "暂停期间不得再追加")
 	require.Contains(t, err.Error(), "paused")
 	require.Greater(t, deliveries, before,

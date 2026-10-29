@@ -165,13 +165,13 @@ func TestPruneDedupesByWatermark(t *testing.T) {
 	led := New()
 	key := keyOf("dedupe", "g1")
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "dedupe", SourceGeneration: "g1"})
+	require.NoError(t, led.AdvanceRead(key, 900))
+	require.NoError(t, led.AdvanceDurable(key, 900))
 	require.NoError(t, led.RecordDelivery(key, 0, 800, logtypes.DeliveryRequestDone))
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg-1", Path: "/p", State: logtypes.RecoveryWALResponsibilityXfer,
-		CoversFrom: 0, CoversTo: 800,
-	}))
-	_, err := led.TryReclaim(key)
+	// 水位 = Delivery = 800，但 TryReclaim 是首次扫列表的时点。
+	pos, err := led.TryReclaim(key)
 	require.NoError(t, err)
+	require.Equal(t, uint64(800), pos)
 	require.Empty(t, led.Get(key).DeliveryBatches, "水位推进时完成首次裁剪")
 
 	// 回填一条整体在水位之下的批次：同一水位下不再重复扫描，故它会留下（判据不变、语义不变）。
@@ -180,15 +180,9 @@ func TestPruneDedupesByWatermark(t *testing.T) {
 	require.Equal(t, uint64(800), led.Get(key).Positions.Delivery, "回填条目在水位之下，不改变派生值")
 
 	// 水位再次前进：连同回填条目一起清掉，且按同一水位重算的连续前缀不变。
-	//
-	// 注意 Positions.Delivery 是派生值，只有 RecordDelivery / Restore 会重算它（TryReclaim 从不改它，
-	// 与本次改动无关），故这里按同一水位显式重算两侧比较，而不是读那个可能滞后的落库值。
 	beforePrefix := ContiguousDeliveryEnd(led.Get(key).DeliveryBatches, 900)
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg-2", Path: "/p", State: logtypes.RecoveryWALResponsibilityXfer,
-		CoversFrom: 800, CoversTo: 900,
-	}))
-	pos, err := led.TryReclaim(key)
+	require.NoError(t, led.RecordDelivery(key, 800, 900, logtypes.DeliveryRequestDone))
+	pos, err = led.TryReclaim(key)
 	require.NoError(t, err)
 	require.Equal(t, uint64(900), pos)
 	after := led.Get(key).DeliveryBatches
@@ -211,39 +205,55 @@ func TestVerifyPruneIdentityRejectsUnsafePrune(t *testing.T) {
 }
 
 // TestPruneDeliveryBatchesOnLedgerWritePaths 验证账本写路径确实执行裁剪、且不影响派生值。
+//
+// 新语义下水位 = Positions.Delivery，而 RecordDelivery **先裁后推** Delivery（顺序不能反：
+// 先推就会把刚登记的这条自己裁掉，而它正是本轮派生值的输入）。所以写路径上的真实形态是
+// 「本轮裁掉上一轮落在水位之内的条目，刚登记的这条留到下一轮」。
+//
+// 转红方式（实测）：把 RecordDelivery 里的 pruneDeliveryBatchesLocked 调用去掉
+// ⇒ 步骤②「上一条被裁掉」立即红（列表会留下两条）；把 pruneDeliveryBatchesLocked 挪到
+// `Positions.Delivery = advanceDeliveryEnd(e)` 之后 ⇒ 步骤①「首次登记后仍在」立即红。
 func TestPruneDeliveryBatchesOnLedgerWritePaths(t *testing.T) {
 	led := New()
 	key := keyOf("prune", "g1")
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "prune", SourceGeneration: "g1"})
 
-	// 水位为 0（尚无任何字节被裁定安全）⇒ 一条都不裁。
+	// ① 首次登记：裁时水位还是 0 ⇒ 一条不裁；裁完才把 Delivery 推到 400。
 	require.NoError(t, led.RecordDelivery(key, 0, 400, logtypes.DeliveryRequestDone))
-	require.NoError(t, led.RecordDelivery(key, 400, 800, logtypes.DeliveryUnknown))
-	require.Len(t, led.Get(key).DeliveryBatches, 2, "水位 0 时不得裁剪")
-	require.Equal(t, uint64(800), led.Get(key).Positions.Delivery)
-
-	// 推进水位到 800（走完责任转移链，CanReclaim 放行）：旧批次应被裁，派生值不变。
-	require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-		SegmentID: "seg-1", Path: "/data/recovery/seg-1", State: logtypes.RecoveryStaged,
-		CoversFrom: 0, CoversTo: 800,
-	}))
-	require.NoError(t, led.TransitionRecovery(key, "seg-1", logtypes.RecoveryWALResponsibilityXfer, "", "receiver"))
-	pos, err := led.TryReclaim(key)
-	require.NoError(t, err)
-	require.Equal(t, uint64(800), pos)
 	entry := led.Get(key)
-	require.Empty(t, entry.DeliveryBatches, "水位之下的批次应在 TryReclaim 时被裁掉")
+	require.Equal(t, []DeliveryBatch{batchOf(0, 400)}, entry.DeliveryBatches,
+		"水位 0 时不得裁剪（先裁后推，刚登记的这条不能被自己裁掉）")
+	require.Equal(t, uint64(400), entry.Positions.Delivery)
+
+	// ② 再登记一条 UNKNOWN：裁时水位 = 400 ⇒ [0,400) 按恒等元裁掉，新条目留下。
+	require.NoError(t, led.RecordDelivery(key, 400, 800, logtypes.DeliveryUnknown))
+	entry = led.Get(key)
+	require.Equal(t, []DeliveryBatch{{Start: 400, End: 800, State: logtypes.DeliveryUnknown}}, entry.DeliveryBatches)
 	require.Equal(t, uint64(800), entry.Positions.Delivery, "裁剪不得改变 delivery_position")
 	// 最近状态与错误计数另存，不随裁剪丢失。
 	require.Equal(t, logtypes.DeliveryUnknown, entry.DeliveryState)
+	// 且两个区间的精确证据都在（裁剪只动 DeliveryBatches，不动 DeliveryEvidence）。
+	require.Equal(t, []DeliveryBatch{
+		{Start: 0, End: 400, State: logtypes.DeliveryRequestDone},
+		{Start: 400, End: 800, State: logtypes.DeliveryUnknown},
+	}, DeliveryEvidenceOf(entry))
 
-	// 水位之上的一条必须留下（刚越过水位一字节）。
+	// ③ 回收只认 REQUEST_DONE：停在 UNKNOWN 之前；回收路径同样按新水位裁一次。
+	require.NoError(t, led.AdvanceRead(key, 800))
+	require.NoError(t, led.AdvanceDurable(key, 800))
+	pos, err := led.TryReclaim(key)
+	require.NoError(t, err)
+	require.Equal(t, uint64(400), pos, "reclaim 停在 UNKNOWN 之前")
+	require.Empty(t, led.Get(key).DeliveryBatches, "回收时按水位 = Delivery = 800 再裁一次 ⇒ 列表清空")
+
+	// ④ 水位之上的一条必须留下（登记时水位还是 800，末位 801 > 800）。
 	require.NoError(t, led.RecordDelivery(key, 800, 801, logtypes.DeliveryRequestDone))
 	entry = led.Get(key)
-	require.Equal(t, []DeliveryBatch{batchOf(800, 801)}, entry.DeliveryBatches)
+	require.Equal(t, []DeliveryBatch{batchOf(800, 801)}, entry.DeliveryBatches,
+		"末位刚越过水位一字节的条目绝不裁")
 	require.Equal(t, uint64(801), entry.Positions.Delivery)
 
-	// 快照（持久化读路径）同样只看到裁剪后的列表：索引行数因此不随总量增长。
+	// ⑤ 快照（持久化读路径）同样只看到裁剪后的列表：索引行数因此不随总量增长。
 	snapshot := led.Snapshot()
 	require.Len(t, snapshot, 1)
 	require.Len(t, snapshot[0].DeliveryBatches, 1)
@@ -256,11 +266,9 @@ func TestDeliveryBatchPruneConfigEscapeHatchAndFallback(t *testing.T) {
 	newLedger := func() *Ledger {
 		led := New()
 		led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "cfg", SourceGeneration: "g1"})
+		require.NoError(t, led.AdvanceRead(key, 100))
+		require.NoError(t, led.AdvanceDurable(key, 100))
 		require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
-		require.NoError(t, led.RegisterRecovery(key, RecoveryRef{
-			SegmentID: "seg-1", Path: "/p", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 100,
-		}))
-		require.NoError(t, led.TransitionRecovery(key, "seg-1", logtypes.RecoveryWALResponsibilityXfer, "", "receiver"))
 		return led
 	}
 
