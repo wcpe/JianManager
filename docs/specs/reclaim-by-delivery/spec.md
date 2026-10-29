@@ -1,6 +1,9 @@
 # reclaim 简化：改按投递水位推进
 
 > 用户裁定（2026-10-29 05:12）：【两者都删（reclaim 改为按投递水位推进，不再要恢复段/投影证据）】
+>
+> 落地提交：`84d3c5e4`（生产代码）。本文记录**实际落地的语义**，与裁定当时的设想要点一致，
+> 但有两处是实施中修正的（见 §2.1 与 §2.2），都写清了原因。
 
 ## 1. 为什么这裁定是对的（生产数据支撑）
 
@@ -29,87 +32,112 @@ WAL 改纯内存（不落盘、`source_wal` 表已删）后：
 - 没有 WAL 行需要删
 ⇒ **前提消失，机制失去对象**。
 
-## 2. 新语义
+## 2. 新语义（实际落地形态）
 
-```
-reclaim 可推进到 min(delivery, read)
+```go
+// 回收上界：从当前 Reclaim 起、被 REQUEST_DONE 证据连续覆盖到的最远位置
+reclaim = min(contiguousCertifiedEnd(entry), max(Positions.Read, Positions.Durable))
 ```
 
-- 有 `delivery`（请求结果已确认的连续前缀）就可推进
 - 不需要恢复段、不需要投影证据、不需要 `ReleaseReason`
-- 不再有 `ErrReclaimNoSegment`、`ErrReclaimPrecondition`
+- 不再有 `ErrReclaimNoSegment`
+- 「无事可做」（`target <= Reclaim`）返回 `(当前Reclaim, nil)`，不再报错
 
-推导：`delivery` 的语义是「所有字节均有请求结果的连续前缀」（`ledger.ContiguousDeliveryEnd`）。
-它已经是比「恢复段覆盖」更强的证据——恢复段只在旧模型里用来证明「另一份副本已经安全存在」。
-新模型下队列本来就不存副本，那份证据无从谈起也不必要。
+### 2.1 修正一：`Delivery` 自己的 floor 从 Reclaim 改成自身
 
-## 3. 要删的
+原设想是 `reclaim = min(delivery, read)`，而 `delivery` 仍按 `contiguousDeliveryEnd(batches, reclaim)` 推导。
+**这会死锁**，原因不是「自引用」那么简单：
 
-### ledger.go
-| 位置 | 内容 |
-|---|---|
-| `RecoveryRef` 类型 | 整块 |
-| `Entry.RecoveryRefs` | 字段 + `clone()` 里的拷贝 |
-| `RegisterRecovery` / `TransitionRecovery` / `recoveryRank` | 整块 |
-| `HasRecoveryHold` | 整块 |
-| `tryReclaimLocked` 里找 `ref` 的分支 | 只保留「按 delivery/read 推进」 |
-| `abandonmentIntersectingLocked` 凭据放行分支 | 只服务恢复段 |
+- `contiguousDeliveryEnd` 的 floor 只是起点，返回值恒 ≥ floor，本身不会把值往下拉，循环能收敛；
+- 真正致命的是**裁剪**：批次水位 `min(Reclaim, Delivery)` 一旦追平，全部历史批次都成了
+  「水位之下的恒等元」被裁掉 ⇒ `contiguousDeliveryEnd(空列表, reclaim) == reclaim` ⇒ **回收永久停滞**。
+  即「推进依据被裁剪吃掉」——这才是旧架构最终必须靠「恢复段 + 投影证据」兜底的根因。
+
+因此 `Delivery` 改为**自身当 floor 且取 max**（`advanceDeliveryEnd`）：
+
+```go
+Delivery = max(旧值, contiguousDeliveryEnd(batches, Delivery))
+裁剪水位 = Positions.Delivery    // deliveryBatchWatermark，与上同一口径
+```
+
+自引用消失；裁掉的条目都满足 `End <= Delivery`，而 `contiguousDeliveryEnd(裁剪后, Delivery) == Delivery`
+恒等 ⇒ floor 处信息不需重建。
+
+### 2.2 修正二：回收上界不是 `Delivery`，是 REQUEST_DONE 证据（**数据安全红线**）
+
+第一版实现用过 `min(Delivery, max(read,durable))`。**这是数据丢失级缺陷**：
+
+`Positions.Delivery` 的语义是「所有字节均有**请求结果**」，而请求结果**包括 UNKNOWN**——
+`acquire.recordHTTPResultLocked` 把「响应丢失 / 非 2xx」也登记成批次（为了可审计）。
+拿它当回收上界 = 把「发出去了但不知道落没落库」的数据从内存队列里删掉。
+
+旧架构正好靠「恢复段只在 `Delivery >= to` 且 REQUEST_DONE 覆盖时才建」避开了这一层，
+删恢复段时把这层保护一起删了。
+
+修正：回收上界改 `contiguousCertifiedEnd(e)`——按 `MergePositionRanges(RequestDoneRangesOf(e))`
+从 `Reclaim` 起算连续覆盖，**两端各容差 1 字节**（分隔符，与 `CoveredByPositionRanges` 同一口径；
+真正的空洞 ≥2 字节仍阻断）。UNKNOWN 区间因此成为回收的**停滞点**，直到重投成功、
+或队列越界按丢弃语义处理——两个出口都是显式的。
+
+> **教训**：删一层机制时，必须逐个问「这层除了它自己声明的职责，还顺带挡住了什么」。
+> 恢复段声明的职责是「证明副本存在」，但它还顺带挡住了「UNKNOWN 被当成已投递」。
+
+## 3. 已删除的（全部落地）
+
+### ledger
+| 内容 |
+|---|
+| `RecoveryRef` 类型、`Entry.RecoveryRefs` 字段及 `clone()` 里的拷贝 |
+| `RegisterRecovery` / `TransitionRecovery` / `recoveryRank` / `SetRecoveryHold` / `HasRecoveryHold` |
+| `tryReclaimLocked` 的寻段分支与 `CanReclaim` 门禁、凭据放行分支 |
+| `ErrReclaimNoSegment` |
+| `recovery_archive.go`（整文件：`RecoveryArchive*` 全套） |
 
 ### logtypes
-- `RecoverySegmentState` 常量组
-- `ReleaseReason` 常量组 + `ValidReleaseReason`
-- `CanReclaim` 函数
-
-### ingest
-- `BindRecoverySegment` / `TransitionRecovery` / `RecoveryRef` 查询
-- `backfillDeliveryConfirmedCoverage` / `advanceDeliveryConfirmedSegment`
-- `transferPreparedDeliveryPrefix` / `releaseRecovery` / `silentExitNoCopy*`
-- `hot_retention_window.go` 的 `abandonBeyondHotRetention`（为 reclaim 跨空洞而存在）
-- `capturePublishedPrefixEvidence`（只服务补段）
+`RecoverySegmentState` 常量组、`ReleaseReason` 常量组 + `ValidReleaseReason`、`CanReclaim`。
 
 ### stateindex
-- `recovery_audit` 表 + `ArchiveRecovery` 读写
-- `ledger.RecoveryArchive` 接口
+`recovery_audit.go`（整文件）。`Open` 里新增幂等的 `DROP TABLE recovery_audit` 迁移
+（同 `source_wal` 的处理：旧库已经把表建在磁盘上了，不显式删就永远拖着）。
 
-## 4. ⚠ 绝对不能删的
+### ingest
+`backfillDeliveryConfirmedCoverage` / `advanceDeliveryConfirmedSegment` /
+`transferPreparedDeliveryPrefix` / `repairStalledReclaim` / `archiveCleanedRecovery` /
+静默源出口的补段链（只留 `TryReclaim`）/ `recovery_archive_runtime.go`。
 
-### `published_evidence.go` 只能删一半
-调用面分两拨（已核实）：
-- **缺口消解**（`gap_autoresolve.go:97,105,371,377` + `runtime.go:1629,1670`）
-  ⇒ `autoResolveGapsFromPublished` 依赖 ⇒ **必须保留**
-  `capturePublishedEvidence` / `applyPublishedEvidence` / `currentPublishedRuns`
-- **补段（reclaim）**（`runtime.go:6236,6248,6330,9865,9923,9986,10165,10177`）
-  ⇒ 随 reclaim 删
-  `capturePublishedPrefixEvidence` 只服务补段 ⇒ **可删**
+### acquire
+`WAL.BindRecoverySegment` / `WAL.RecoverySegmentID` / `recoverySegID` 字段。
 
-### 其它
-- `delivery_batch` 表（`ledger.Restore` 用它重算 `Positions.Delivery`）
+### pipeline
+`BindRecoverySegment` / `TransitionRecovery` / `RecoveryRef` / `RecoveryCovering` / `SetRecoveryHold`；
+`CanReclaimNow` 改为「是否还有已确认未被回收的前缀」。
+
+## 4. 绝对不能删的（已守住）
+
+- **`published_evidence.go` 一个字未动**：缺口消解（`gap_autoresolve.go` + `runtime.go` 的
+  `autoResolveGapsFromPublished`）依赖 `capturePublishedEvidence` / `applyPublishedEvidence` /
+  `currentPublishedRuns`。只服务补段的 `capturePublishedPrefixEvidence` 已随调用方一起删。
+- `delivery_batch` 表（`Restore` 用它重算 `Positions.Delivery`）
 - `PositionInvariantViolations`（reclaim ≤ read 观测面）
-- `gap` 表与缺口机制（那是“数据有没有丢”的记录，与 reclaim 无关）
-- `WAL.TryReclaim*` 的**剪枝动作**（`pruneReclaimed`）—— 内存队列仍需它回收条目
+- `gap` 表与缺口机制、`Abandonments` 弃投凭据（人工裁定永久丢失仍可让回收跨过空洞）
+- `WAL.TryReclaim*` 的剪枝动作（`pruneReclaimed`）—— 内存队列仍需它回收条目
+- `releaseRecovery` 的 `Delivery >= to` 确认闸（2026-10-21 数据丢失事故的防线）
 
 ## 5. 跟着一起解棠的 17 条测试
 
 ### A 类（7 条，依赖「重启后队列还在」）
-它们的**关切**（重启不丢数据）没变，但实现从「恢复队列」改成「重读」。
-例 `TestDurableOutboxDirtySecondThirdBootRecoverWithoutInput`：
+它们的**关切**（重启不丢数据）没变，但实现从「恢复队列」改成「重读」：
 - 旧：Append → Commit → persist → Stop → 重启 → 断言队列还在
-- 新：应该验「重启后 read/durable 退到 reclaim，重读那段能重新产生并投递」
-⇒ 必须先有 `reclaim > 0` 才验得了，所以只能与 reclaim 一起做。
+- 新：验「重启后 read/durable 退到 reclaim（`RollbackDurableToReclaim`），
+  tailer 从 `min(durable, read)` 重读，那段能重新产生并投递」
 
 ### B 类（10 条，依赖补段/恢复段/投影证据）
-机制删了，用例随之删或改验新语义（`reclaim = min(delivery, read)`）。
+机制删了，用例随之删或改验新语义。
 
-## 6. 执行顺序
-1. 先改 `ledger`（新语义 + 删恢复段）→ `ledger` 包测试绿
-2. 再改 `logtypes` → 跟着编译
-3. 再改 `ingest` 调用面（删补段链）
-4. 再改 `stateindex`（删 `recovery_audit`）
-5. 最后处理 A/B 类 17 条测试
-6. 全包回归 + 真机验证（生产那 10 个源 `reclaim` 应能从 0 推进）
+## 6. 验收标准
 
-## 7. 验收标准（可量化）
-- `reclaim` 能推进到 `min(delivery, read)`，且不需要任何恢复段
+- `reclaim` 能推进到 `min(REQUEST_DONE 连续覆盖末端, max(read,durable))`，且不需要任何恢复段 ✓
 - 生产那 10 个停采源的 `reclaim` 能从 0 推进（部署后读 `ResumeDiagnostics`）
 - 全包 `go test ./internal/worker/logs/...` 绿
-- 启动后不会因为「找不到恢复段」而反复告警
+- 启动后不会因为「找不到恢复段」而反复告警 ✓
+- `go build ./...` / `go vet ./...` 零输出 ✓
