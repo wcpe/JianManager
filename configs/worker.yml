@@ -58,11 +58,15 @@ log:
 #   username: jm
 #   password: ${JIANMANAGER_VL_PASSWORD}
 #   data_root: /home/jianmanager/var/log/vl
-#   retention_period: 90d        # 唯一的保留期（既管可查窗口也管长期留存）。
-#                                # ⚠ VL 的 retention 到期是**直接删**，会绕过「删前归档」；
-#                                # 因此必须**不短于** log_retention 声明的 longer of
-#                                # hot_retention / cold_retention（默认 90d / 730d）。
-#                                # 启用保留策略时 Load 在启动受管进程之前就拒绝（配错即拒绝启动）。
+#   retention_period: 180d       # 唯一的保留期（既管可查窗口也管长期留存）。
+#                                # ⚠ 必须 **不短于** log_retention 声明的 max(hot_retention, cold_retention)；
+#                                # 否则 Load 在启动受管进程之前就 **拒绝启动**（不是告警）。
+#                                # 默认值：retention_period=180d、hot_retention=90d、cold_retention=180d
+#                                # ⇒ max(90d,180d)=180d，与 180d 相等，默认就能启动。
+#                                # ℹ 若只改 `log_vl.retention_period` 而不改 cold_retention，
+#                                # 只要新值 >= 180d（默认 cold）依然合法；改小则必被拒。
+#                                # ℹ 冷热双层已废除（2026-10-29），`cold_retention` 现在只是**声明**，
+#                                # 它是 retention_period 的下界，本身不执行任何淘汰。
 #                                # 2026-10-29：冷热双层已废除，只剩余一个 VL；`cold_retention_period`
 #                                # / `cold_port` / `rehydrate_port` / `start_cold` / `start_rehydrate`
 #                                # 均已删除，写了也不会生效。
@@ -215,8 +219,11 @@ log:
 # 原生有限 TTL 不受平台最后副本/租约闸控制，不能保证无限期搬运失败时仍保留原物。
 # log_retention:
 #   enabled: true
-#   hot_retention: 90d                 # 热层窗口：超期即搬运到冷层（默认 90d）
-#   cold_retention: 730d               # 冷层保留期（所有级别统一；由 COLD 实例的 -retentionPeriod 执行）
+#   hot_retention: 90d                 # 声明：期望可查的热窗口（默认 90d）
+#   cold_retention: 180d               # 声明：期望可查的长期窗口（默认 180d）。
+#                                      # ⚠ 不是“冷层保留期”——**没有 COLD 实例**（2026-10-29 已废除）。
+#                                      # 它现在唯一的作用是抬高 `log_vl.retention_period` 的下界；
+#                                      # 真正执行淘汰的是 VL 自己的 -retentionPeriod。
 #   trigger:
 #     disk_percent: 0                  # >0 时启用磁盘水位提前搬运（与 log_capacity 同口径读数）
 #     min_age: 7d                      # 磁盘触发的最小分区年龄（盘再满也不搬正在写的日分区）

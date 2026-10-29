@@ -166,8 +166,12 @@ type VLDiskProvider interface {
 //   - Partitions：**能不能丢**。VL 至少保留最近 2 天，分区数 ≤2 时即使超限也不会丢；
 //   - RowsDroppedTotal：已经因超保留期/超上限丢了一东西（累计值，CP 差分成速率）。
 type VLDiskReading struct {
-	UsedBytes        int64
-	LimitBytes       int64
+	UsedBytes int64
+	// LimitBytes 是字节口径上限（-retention.maxDiskSpaceUsageBytes）；未配置为 0。
+	LimitBytes int64
+	// LimitPercent 是百分比口径上限（-retention.maxDiskUsagePercent）；未配置为 0。
+	// 两者互斥，配上百分比时 LimitBytes 为 0 —— CP 侧必须两种都能算 pct。
+	LimitPercent     int
 	Partitions       int32
 	RowsDroppedTotal uint64
 }
@@ -369,6 +373,7 @@ func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []strin
 		if r := h.vlDiskProvider.VLDiskSnapshot(); r.UsedBytes > 0 || r.LimitBytes > 0 || r.Partitions > 0 || r.RowsDroppedTotal > 0 {
 			req.LogVlDiskUsedBytes = r.UsedBytes
 			req.LogVlDiskLimitBytes = r.LimitBytes
+			req.LogVlDiskLimitPercent = int32(r.LimitPercent)
 			req.LogVlPartitions = r.Partitions
 			req.LogVlRowsDroppedTotal = r.RowsDroppedTotal
 		}

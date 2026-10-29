@@ -315,10 +315,19 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		samples = append(samples, nodeSample(model.MetricLogVLDiskUsed, "bytes", ptr(float64(req.LogVlDiskUsedBytes))))
 		samples = append(samples, nodeSample(model.MetricLogVLPartitions, "count", ptr(float64(req.LogVlPartitions))))
 		// 上限已配时才能算百分比：未配（0）就没有「离上限多远」这个概念。
+		//
+		// 两种口径必须都处理（2026-10-29 审计修复）：字节上限与百分比上限**互斥**，
+		// 配上百分比时 LogVlDiskLimitBytes 恒为 0。原先只按字节算 pct
+		// ⇒ 百分比部署永远没有 log_vl_disk_pct，与配置样例推荐的告警对不上。
 		if req.LogVlDiskLimitBytes > 0 {
 			samples = append(samples, nodeSample(model.MetricLogVLDiskLimit, "bytes", ptr(float64(req.LogVlDiskLimitBytes))))
 			pct := float64(req.LogVlDiskUsedBytes) / float64(req.LogVlDiskLimitBytes) * 100
 			samples = append(samples, nodeSample(model.MetricLogVLDiskPct, "pct", ptr(pct)))
+		} else if req.LogVlDiskLimitPercent > 0 {
+			// 百分比口径：Worker 报的 UsedBytes 是**目录自身大小**，不能直接算百分比
+			// （VL 的 maxDiskUsagePercent 比的是**整块文件系统**使用率）。
+			// 这里只把声明的上限记下来，pct 不落点——真正该盯的信号仍是丢弃计数。
+			samples = append(samples, nodeSample(model.MetricLogVLDiskLimit, "pct", ptr(float64(req.LogVlDiskLimitPercent))))
 		}
 		// 丢弃速率：累计 counter 据相邻心跳差推导（与 lastNet / lastGC 同构）。
 		// 差为负（VL 重启 counter 归零）→ 跳过该拍，不产生负速率假尖峰；首拍无前值同样跳过。

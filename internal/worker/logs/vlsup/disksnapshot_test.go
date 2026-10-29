@@ -7,6 +7,7 @@ package vlsup
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 真实 VL v1.52.0 的 /metrics 片段（逐字取自实跑输出，路径已脱敏）。
@@ -83,6 +85,82 @@ func TestParsePrometheusMultipleLabels(t *testing.T) {
 	g := parsePrometheus(`vl_rows_dropped_total{path="/data",reason="too_small_timestamp"} 7`)
 	if v := g.withLabel(vlMetricRowsDropped, "reason", vlDropReasonTooSmall); v != 7 {
 		t.Fatalf("多标签行取值失败，得到 %v", v)
+	}
+}
+
+// ⚠ NaN / ±Inf 必须被拒（2026-10-29 审计发现）。
+//
+// `strconv.ParseFloat` 接受 "NaN"/"+Inf"/"-Inf"，而后续 `int32(v)` / `uint64(v)`
+// 对它们的行为是实现相关的（amd64 上常得到 math.MinInt32 或极大值）。
+// 一个 NaN 就能把分区数变成负数、把丢弃计数变成天文数字，直接污染告警。
+func TestParseGaugeValueRejectsNaNAndInf(t *testing.T) {
+	for _, bad := range []string{"NaN", "nan", "+Inf", "-Inf", "Inf", ""} {
+		if _, ok := parseGaugeValue(bad); ok {
+			t.Fatalf("%q 应被拒绝", bad)
+		}
+	}
+	for _, good := range []string{"0", "42", "-1.5", "5.38967658496e+11"} {
+		if _, ok := parseGaugeValue(good); !ok {
+			t.Fatalf("%q 应被接受", good)
+		}
+	}
+}
+
+// NaN 出现在真实 /metrics 形态里也不得进来。
+func TestParsePrometheusSkipsNaNAndInf(t *testing.T) {
+	g := parsePrometheus("vl_partitions NaN\nvl_rows_dropped_total{reason=\"too_small_timestamp\"} +Inf\n")
+	if v := g.scalar(vlMetricPartitions); v != 0 {
+		t.Fatalf("NaN 的分区数应被忽略（得 0），实际 %v", v)
+	}
+	if v := g.withLabel(vlMetricRowsDropped, "reason", vlDropReasonTooSmall); v != 0 {
+		t.Fatalf("+Inf 的丢弃数应被忽略（得 0），实际 %v", v)
+	}
+}
+
+// dirSizeBytes 超条目预算 ⇒ 返回 ok=false（= 无读数），不能返回一个静默低估的数。
+//
+// 为什么这条重要：本函数跑在心跳 goroutine 里，180d 保留下目录可能达数十万文件。
+// 超预算时如果返回一个偏小的值，CP 会长期看到「磁盘很空」的假象。
+func TestDirSizeBytesRespectsEntryBudget(t *testing.T) {
+	dir := t.TempDir()
+	// 造 10 个文件。
+	for i := 0; i < 10; i++ {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.bin", i)), bytes.Repeat([]byte("z"), 10), 0o600); err != nil {
+			t.Fatalf("写夹具失败: %v", err)
+		}
+	}
+	// 预算充足：应得到准确总大小 100 字节。
+	if size, ok := dirSizeBytes(dir, 1000, time.Now().Add(time.Second)); !ok || size != 100 {
+		t.Fatalf("预算充足时应得 100/true，实际 %d/%v", size, ok)
+	}
+	// 预算不足：应返回 ok=false（无读数），而不是一个低估的数。
+	if _, ok := dirSizeBytes(dir, 3, time.Now().Add(time.Second)); ok {
+		t.Fatal("条目超预算时 ok 必须为 false（无读数），否则会长期误报磁盘很空")
+	}
+}
+
+// dirSizeBytes 必须跳过 partitions/*/snapshots（导出快照会让 disk_pct 虚假尖峰）。
+func TestDirSizeBytesSkipsExportSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	part := filepath.Join(dir, "partitions", "20261029")
+	snap := filepath.Join(part, "snapshots", "snap1")
+	if err := os.MkdirAll(snap, 0o755); err != nil {
+		t.Fatalf("建目录失败: %v", err)
+	}
+	// 真实数据 100 字节。
+	if err := os.WriteFile(filepath.Join(part, "data.bin"), bytes.Repeat([]byte("d"), 100), 0o600); err != nil {
+		t.Fatalf("写数据失败: %v", err)
+	}
+	// 快照副本 900 字节：不得计入。
+	if err := os.WriteFile(filepath.Join(snap, "copy.bin"), bytes.Repeat([]byte("s"), 900), 0o600); err != nil {
+		t.Fatalf("写快照失败: %v", err)
+	}
+	size, ok := dirSizeBytes(dir, 1000, time.Now().Add(time.Second))
+	if !ok {
+		t.Fatal("应成功读完")
+	}
+	if size != 100 {
+		t.Fatalf("快照副本不得计入（应得 100），实际 %d", size)
 	}
 }
 

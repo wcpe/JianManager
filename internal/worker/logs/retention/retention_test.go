@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wcpe/JianManager/internal/platform/vlruntime"
 )
 
 var baseTime = time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
@@ -66,8 +68,8 @@ func TestDefaultPolicyMatchesRecommendedTTLs(t *testing.T) {
 	if n.HotRetention != 90*24*time.Hour {
 		t.Errorf("热层窗口默认应为 90d（用户最终口径），得到 %s", n.HotRetention)
 	}
-	if n.ColdRetention != 730*24*time.Hour {
-		t.Errorf("冷层保留期默认应为 730d（用户最终口径），得到 %s", n.ColdRetention)
+	if n.ColdRetention != vlruntime.DefaultColdRetention {
+		t.Errorf("冷层保留期默认应为 vlruntime.DefaultColdRetention（单 VL 改造后 180d），得到 %s", n.ColdRetention)
 	}
 	if n.ByLevel["DEBUG"] == n.ColdRetention {
 		t.Error("冷层不得按级别分档（所有级别统一）——分级只是「在热层停留多久」")

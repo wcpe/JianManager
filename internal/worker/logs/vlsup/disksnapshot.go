@@ -35,6 +35,7 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -65,13 +66,31 @@ const (
 // 单拍已有其它采集预算）。拿不到返回零值 ⇒ CP 按「无读数」处理。
 const vlMetricsTimeout = 2 * time.Second
 
+// 目录扫描的预算（2026-10-29 审计修复，对齐 apps/worker 的 logDiskBytes 口径）。
+//
+// 为什么需要：本扫描在心跳 goroutine 里跑。VL 的日分区目录在 180d 保留下
+// 可达数十万个 part 文件，无预算递归会把心跳拖慢到秒级。
+//
+// 取值：10 万条目 / 100ms。二者任一超了就算“无读数”（不是 0 字节）。
+const (
+	vlDirSizeMaxEntries = 100_000
+	vlDirSizeBudget     = 100 * time.Millisecond
+)
+
 // VLDiskSnapshotResult 是 VLDiskSnapshot 的返回形态。
 //
 // 与 heartbeat.VLDiskReading 字段一致但是独立类型：vlsup 不 import heartbeat
 // （heartbeat 已经 import ingest/metrics，反向依赖会成环）。装配层做一次转换。
 type VLDiskSnapshotResult struct {
-	UsedBytes        int64
-	LimitBytes       int64
+	UsedBytes int64
+	// LimitBytes 是**字节口径**的上限（`-retention.maxDiskSpaceUsageBytes`）；未配置时为 0。
+	LimitBytes int64
+	// LimitPercent 是**百分比口径**的上限（`-retention.maxDiskUsagePercent`）；未配置时为 0。
+	//
+	// 为什么两个都要（2026-10-29 审计修复）：两者**互斥**，配上百分比时 LimitBytes 恒为 0。
+	// 而 CP 侧原先只有 LimitBytes>0 才落 `log_vl_disk_pct` ⇒ **百分比部署永远没有该指标**，
+	// 而配置样例又推荐“监控 disk_pct>=90”。两边必须都用上。
+	LimitPercent     int
 	Partitions       int32
 	RowsDroppedTotal uint64
 }
@@ -101,10 +120,15 @@ func (s *Supervisor) VLDiskSnapshot() VLDiskSnapshotResult {
 	}
 
 	g := parsePrometheus(body)
-	used := dirSizeBytes(inst.cfg.StorageDataPath)
+	used, ok := dirSizeBytes(inst.cfg.StorageDataPath, vlDirSizeMaxEntries, time.Now().Add(vlDirSizeBudget))
+	if !ok {
+		// 目录太大/太慢 ⇒ 无读数，不落任何派生指标（宁可少一个采样点）。
+		return VLDiskSnapshotResult{}
+	}
 	return VLDiskSnapshotResult{
 		UsedBytes:        used,
 		LimitBytes:       inst.cfg.MaxDiskSpaceUsageBytes,
+		LimitPercent:     inst.cfg.MaxDiskUsagePercent,
 		Partitions:       int32(g.scalar(vlMetricPartitions)),
 		RowsDroppedTotal: uint64(g.withLabel(vlMetricRowsDropped, "reason", vlDropReasonTooSmall)),
 	}
@@ -112,18 +136,41 @@ func (s *Supervisor) VLDiskSnapshot() VLDiskSnapshotResult {
 
 // dirSizeBytes 递归统计目录下所有常规文件的大小之和（与 VL 判上限的口径一致）。
 //
-// 单个文件 stat 失败不影响其它文件（少算一点点，宁可低估也不误报）；
-// 目录不存在返回 0。不跟随符号链接（避免环）。
-func dirSizeBytes(root string) int64 {
+// ## 为什么必须有预算（2026-10-29 审计修复）
+//
+// 本函数跑在**心跳同一 goroutine**（buildHeartbeatRequest 内），而 VL 的日分区目录
+// 在 180d 保留下可达数十万个 part 文件。无预算的递归 walk 会把心跳拖慢到秒级，
+// 进而拖垮整个上报链。同仓的 `logDiskBytes`（apps/worker/log_runtime_wiring.go）
+// 早就带了 maxEntries + deadline，这里对齐它的口径。
+//
+// 超预算 ⇒ 返回 (0,false) = **无读数**，调用方据此不落任何派生指标。
+// 宁可少一个采样点，不可卡住心跳。
+//
+// 跳过 `partitions/*/snapshots`：那是导出快照的副本，算进去会让 disk_pct 在导出期间
+// 出现虚假尖峰（导出本身就把一天的数据又拄了一份）。
+func dirSizeBytes(root string, maxEntries int, deadline time.Time) (int64, bool) {
 	if root == "" {
-		return 0
+		return 0, true // 空路径 = 未启用，算 0 字节是准确的
 	}
 	var total int64
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	count := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // 单个条目读不到不影响汇总
 		}
+		count++
+		if count > maxEntries {
+			return filepath.SkipAll
+		}
+		if count%1024 == 0 && time.Now().After(deadline) {
+			return filepath.SkipAll
+		}
 		if d.IsDir() {
+			// 跳过导出快照目录（内容就是当天数据的一份副本）。
+			if d.Name() == "snapshots" && filepath.Base(filepath.Dir(path)) != "" &&
+				filepath.Base(filepath.Dir(filepath.Dir(path))) == "partitions" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if info, statErr := d.Info(); statErr == nil && info.Mode().IsRegular() {
@@ -131,7 +178,10 @@ func dirSizeBytes(root string) int64 {
 		}
 		return nil
 	})
-	return total
+	if err != nil || count > maxEntries || time.Now().After(deadline) {
+		return 0, false // 超预算 ⇒ 无读数（不当 0 字节）
+	}
+	return total, true
 }
 
 // fetchMetrics 抓取本机 VL 的 /metrics（带 Basic Auth）。
@@ -211,8 +261,8 @@ func parsePrometheus(body string) prometheusGauges {
 		valueText := rest
 		if labels, tail, hasLabels := splitLabels(rest); hasLabels {
 			valueText = tail
-			v, err := strconv.ParseFloat(valueText, 64)
-			if err != nil {
+			v, ok := parseGaugeValue(valueText)
+			if !ok {
 				continue
 			}
 			for labelName, labelValue := range labels {
@@ -224,11 +274,30 @@ func parsePrometheus(body string) prometheusGauges {
 			}
 			continue
 		}
-		if v, err := strconv.ParseFloat(valueText, 64); err == nil {
+		if v, ok := parseGaugeValue(valueText); ok {
 			out.scalars[name] = v
 		}
 	}
 	return out
+}
+
+// parseGaugeValue 解析一个 gauge 值，**拒绝 NaN / ±Inf**。
+//
+// 为什么必须拒绝（2026-10-29 审计发现）：`strconv.ParseFloat` 接受 "NaN"/"+Inf"/"-Inf"，
+// 而后续 `int32(v)` / `uint64(v)` 对它们的行为是实现相关的（amd64 上通常得到
+// math.MinInt32 或极大值）。一个 NaN 就能把分区数变成负数、把丢弃计数变成天文数字。
+//
+// 同仓的 `vlruntime.ParseRetention` 也是显式拒绝 NaN/Inf，这里对齐它的口径。
+// 本函数的注释早就写着「宁可少读也不错读一个数」——这里把它真正兑现。
+func parseGaugeValue(text string) (float64, bool) {
+	v, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, false
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 // splitMetricName 切出指标名与其后的剩余文本。

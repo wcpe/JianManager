@@ -2042,10 +2042,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_retention.archive_object_retention.retention", "")
 	v.SetDefault("log_retention.archive_object_retention.sweep_at_hour", 3)
 	v.SetDefault("log_vl.hot_port", 0)
-	v.SetDefault("log_vl.cold_port", 0)
-	v.SetDefault("log_vl.rehydrate_port", 0)
-	v.SetDefault("log_vl.start_cold", false)
-	v.SetDefault("log_vl.start_rehydrate", false)
+	// 2026-10-29：冷热双层废除后这 4 个键已删（结构体字段不存在）。
+	// 此处不再写它们的 SetDefault——那只会造成「键还在」的错觉；viper 对未知键不报错，
+	// 旧 worker.yml 里留着它们也不会出问题。
 	v.SetDefault("log_capacity.max_wal_bytes", DefaultMaxWALBytes)
 	v.SetDefault("log_capacity.recovery_quota_factor", 4)
 	v.SetDefault("log_capacity.recovery_drain_grace", "30m")

@@ -57,7 +57,7 @@ func newCatalogPartitionLister(cat *catalog.Catalog) retention.PartitionLister {
 				StorageNamespace: key.StorageNamespace,
 				// 直接沿用 catalog 的日期写法（解析层两种都认，避免在这里做格式转换）。
 				UTCDay: key.UTCDay,
-				Owner:  string(rec.Owner),
+				Owner:  retentionOwnerForSingleInstance(rec.Owner),
 				// 正常未完成批次也必须续跑；手工和未知状态继续隔离。
 				InFlight: rec.MigrationState != "" &&
 					rec.MigrationState != catalog.StateCleaned && !retryable,
@@ -66,6 +66,29 @@ func newCatalogPartitionLister(cat *catalog.Catalog) retention.PartitionLister {
 		}
 		return out, nil
 	})
+}
+
+// retentionOwnerForSingleInstance 把 catalog owner 归一成**单实例视角**下的 owner（2026-10-29 审计修复）。
+//
+// ## 为什么必须归一
+//
+// `retention/driver.go` 的候选闸会跳过 `Owner == OwnerColdName` 的分区（原文注释：
+// “仅稳定冷层和真正活动/手工迁移跳过”）。那条规则的前提是**真的存在两个物理层** ——
+// 已经在 COLD 的分区不需要再搬。
+//
+// 冷热双层废除后只有一个 VL 实例（`lifecycle/vlops.go` 明确写「单实例下 Hot ≡ Cold」），
+// catalog 里残留的 `OwnerCold` 只是**历史记录**，不再意味着“已在另一物理位置”。
+// 若继续按它跳过：升级前已迁移到 COLD 的日分区将**永远进不了归档路径**，
+// 到期时被 VL 原生 TTL 直接删除且**无任何副本** —— 门禁被旧 owner 值绕过，是真正的丢数据风险。
+//
+// 归一成 `OwnerHot` 后，这些分区会正常走归档计划（没有 mover 时落 ActionBlocked =
+// 保留原物 + 告警，仍不会裸删），符合“宁占盘不丢数据”的既定原则。
+func retentionOwnerForSingleInstance(owner catalog.Owner) string {
+	if owner == catalog.OwnerCold {
+		// 单实例下“冷层”与“热层”是同一个物理目录，不存在“已在另一位置”这回事。
+		return string(catalog.OwnerHot)
+	}
+	return string(owner)
 }
 
 // newCatalogArchiveAuthority 把 catalog 的「已归档」权威态接成 retention 的迁移出口。

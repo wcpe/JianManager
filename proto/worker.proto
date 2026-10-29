@@ -461,6 +461,12 @@ message HeartbeatRequest {
   // log_vl_rows_dropped_total 是 vl_rows_dropped_total（因时间超保留期被丢的行数累计值）。
   // CP 用相邻心跳差推导速率；累计值不直接当曲线。
   uint64 log_vl_rows_dropped_total = 21;
+  // log_vl_disk_limit_percent 是**百分比口径**的磁盘上限（`-retention.maxDiskUsagePercent`）。
+  //
+  // 为什么需要（2026-10-29 审计发现）：它与 `log_vl_disk_limit_bytes` **互斥**（VL 官方限制）。
+  // 配上百分比时字节上限恒为 0，而 CP 原先只按字节上限算 `log_vl_disk_pct`
+  // ⇒ 百分比部署**永远没有 disk_pct 指标**，与配置样例推荐的告警对不上。
+  int32 log_vl_disk_limit_percent = 22;
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
