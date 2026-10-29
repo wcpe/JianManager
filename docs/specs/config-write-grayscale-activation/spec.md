@@ -1,6 +1,6 @@
 # FR-530 / FR-531 / FR-532 配置落盘、灰度与生效
 
-> 状态：草拟 · 优先级：P0 · 依赖：FR-529（分层覆盖）
+> 状态：**已实现（状态行原为「草拟」，实现早已落地，2026-10 对账修正）**：config_delivery.go（DeliverySelector / DeliveryImpact）+ config_activation.go · 优先级：P0 · 依赖：FR-529（分层覆盖）
 > 关联：ServerProbe 配置重载能力（已交付）
 
 ## 1. 背景

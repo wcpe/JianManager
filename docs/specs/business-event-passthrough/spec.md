@@ -1,6 +1,6 @@
 # FR-522 业务事件纯透传与 SSE 事件流
 
-> 状态：草拟 · 优先级：P0 · 依赖：FR-521（退役业务能力）
+> 状态：**已实现（状态行原为「草拟」，实现早已落地，2026-10 对账修正）**：business_cursor.go / business_cursor_writer.go（位点账本）+ /business/stream SSE · 优先级：P0 · 依赖：FR-521（退役业务能力）
 > 关联：FR-536（SSE 连接治理）、FR-525（对账）、ServerProbe FR-36（事件 seq）
 
 ## 1. 背景与目标
