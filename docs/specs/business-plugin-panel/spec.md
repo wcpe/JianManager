@@ -1,6 +1,6 @@
 # FR-534 业务插件面板
 
-> 状态：草拟 · 优先级：P1 · 依赖：FR-526（桥能力接入）
+> 状态：**已实现（状态行原为「草拟」，实现早已落地，2026-10 对账修正）**：components/views/instances/BusinessDomainStatus.tsx · 优先级：P1 · 依赖：FR-526（桥能力接入）
 > 关联：ServerProbe FR-35（域状态上报）
 
 ## 1. 背景

@@ -1,6 +1,6 @@
 # FR-527 对外只读统计契约
 
-> 状态：草拟 · 优先级：P1 · 关联：FR-528（API 规范）
+> 状态：**已实现（状态行原为「草拟」，实现早已落地，2026-10 对账修正）**：internal/controlplane/service/stats.go + docs/openapi/external.yaml · 优先级：P1 · 关联：FR-528（API 规范）
 
 ## 1. 背景
 

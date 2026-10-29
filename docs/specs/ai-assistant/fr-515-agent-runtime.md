@@ -1,6 +1,6 @@
 # 功能规格：Go 内置轻量 Agent 与私有会话（FR-515）
 
-> 状态：草拟 / 待用户审核，**未实现**（本 FR 无任何代码）　·　关联 PRD：FR-515　·　范围：仅 FR-515
+> 状态：**已实现（状态行原写「草拟 / 未实现、本 FR 无任何代码」，与代码不符，2026-10 对账修正）**：会话/消息/run 三表 `internal/controlplane/model/assistant_chat.go`（`AssistantConversation` / `AssistantRun` 等）、run 状态机与 `/api/v1/assistant/runs/:id/{stream,events,cancel}` 端点均已落地　·　关联 PRD：FR-515　·　范围：仅 FR-515
 > 共享契约见 [shared-contracts.md](shared-contracts.md)，本文不复述；只补 FR-515 需要冻结的具体表、状态迁移与接口。
 > 前置：FR-514（模型配置与流式适配）**已实现配置面**，见 [../ai-provider-models/spec.md](../ai-provider-models/spec.md)。
 
