@@ -27,7 +27,7 @@ function App() {
   const loadTheme = useThemeStore((s) => s.loadFromStorage)
   const { t } = useTranslation()
 
-  // 导航意图预取（FR-502 阶段 6 补丁）：挂在应用根上一次性覆盖所有页面里的链接与侧栏。
+  // 导航意图预取（阶段 6 补丁）：挂在应用根上一次性覆盖所有页面里的链接与侧栏。
   // 放在这里而不是各处导航组件：控制台里还有大量不在本次改动范围内的导航文件（如
   // WorkspaceSidebar）与各页面自带的 `<Link>`，代理监听能一并覆盖，且预取本身幂等。
   useLinkIntentPrefetch()

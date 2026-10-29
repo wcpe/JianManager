@@ -10,7 +10,7 @@ import type { ProxyRegistration } from '@/lib/instances/proxy-registration'
 import type { NodeInfo } from '@/lib/nodes/node-types'
 import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
-/**
+/** 
  * 拓扑图 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：加载态、空态、节点/连线渲染、工具条控件、维度切换时的取数通知。
@@ -100,7 +100,7 @@ function renderGraph(props: Partial<Parameters<typeof TopologyGraph>[0]> = {}) {
   return merged
 }
 
-describe('TopologyGraph（FR-145/335 拓扑图受控视图）', () => {
+describe('TopologyGraph（335 拓扑图受控视图）', () => {
   it('加载态显示加载文案，不渲染视口。', () => {
     renderGraph({ isLoading: true })
     expect(screen.getByText('加载中…')).toBeInTheDocument()
@@ -119,7 +119,7 @@ describe('TopologyGraph（FR-145/335 拓扑图受控视图）', () => {
     expect(screen.getByText('backend-2')).toBeInTheDocument()
   })
 
-  it('未注册实例作为孤立节点上拓扑（FR-453）。', () => {
+  it('未注册实例作为孤立节点上拓扑。', () => {
     renderGraph({
       data: data({
         proxies: [],
@@ -161,7 +161,7 @@ describe('TopologyGraph（FR-145/335 拓扑图受控视图）', () => {
     renderGraph({
       groupNodes,
       data: data({
-        // 分组键映射按全量实例投影建立（FR-452），故补上两个实例。
+        // 分组键映射按全量实例投影建立，故补上两个实例。
         instances: [
           { id: 1, name: 'proxy-a', status: 'RUNNING', serverPort: 25565, nodeId: 1, role: 'proxy', type: 'minecraft_java', tags: null },
           { id: 2, name: 'backend-2', status: 'RUNNING', serverPort: 25566, nodeId: 1, role: 'backend', type: 'minecraft_java', tags: null },

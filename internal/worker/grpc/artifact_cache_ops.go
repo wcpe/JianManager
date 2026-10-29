@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限（FR-178）。
+// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
 // 缓存未启用时返回空列表（total/cap 为 0），CP 侧据此提示「未启用」。
 func (s *Server) ListArtifactCache(_ context.Context, _ *workerpb.ListArtifactCacheRequest) (*workerpb.ListArtifactCacheResponse, error) {
 	if s.cache == nil {
@@ -81,8 +81,8 @@ func (s *Server) SetArtifactCacheCap(_ context.Context, req *workerpb.SetArtifac
 	return &workerpb.SetArtifactCacheCapResponse{Success: true, CapBytes: s.cache.Cap(), TotalBytes: total}, nil
 }
 
-// JDKCatalog 经 foojay disco 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
-// 经进程级出站 client（FR-174）。失败时返回 error 字段、packages 为空（CP 透传给前端提示）。
+// JDKCatalog 经 foojay disco 查询某发行版可选的具体 JDK 版本，喂前端版本选择器。
+// 经进程级出站 client。失败时返回 error 字段、packages 为空（CP 透传给前端提示）。
 func (s *Server) JDKCatalog(_ context.Context, req *workerpb.JDKCatalogRequest) (*workerpb.JDKCatalogResponse, error) {
 	pkgs, err := jdk.FoojayCatalog(s.outboundClient(), "", req.Vendor, int(req.MajorVersion), req.Arch)
 	if err != nil {
@@ -101,7 +101,7 @@ func (s *Server) JDKCatalog(_ context.Context, req *workerpb.JDKCatalogRequest) 
 	return &workerpb.JDKCatalogResponse{Packages: out}, nil
 }
 
-// BrowseDir 只读列出节点上某绝对路径下的子目录（FR-178 目录选择器）。
+// BrowseDir 只读列出节点上某绝对路径下的子目录（目录选择器）。
 // 空路径返回可选起点（Windows 盘符 / Unix 根）；只列目录、不列文件；
 // path 经 filepath.Clean 规范化，CP 仅平台管理员可达（守架构不变量：CP 经 gRPC 委托 Worker）。
 func (s *Server) BrowseDir(_ context.Context, req *workerpb.BrowseDirRequest) (*workerpb.BrowseDirResponse, error) {
@@ -122,7 +122,7 @@ func (s *Server) BrowseDir(_ context.Context, req *workerpb.BrowseDirRequest) (*
 	}
 	entries, err := os.ReadDir(clean)
 	if err != nil {
-		// FR-373：不可读目录不得空列表冒充，须中文诊断
+		// 不可读目录不得空列表冒充，须中文诊断
 		return &workerpb.BrowseDirResponse{Success: false, Error: formatPermError("读取目录", err)}, nil
 	}
 	dirs := make([]*workerpb.BrowseDirEntry, 0, len(entries))

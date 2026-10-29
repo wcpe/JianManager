@@ -10,8 +10,8 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
- * ServerProbe 制品版本库（FR-409 线上来源 / FR-411 本地上传）容器：目录查询与
+/** 
+ * ServerProbe 制品版本库（线上来源本地上传）容器：目录查询与
  * 同步、上传、缓存、设全局默认四个 mutation（何时发请求、成功提示什么、失败如何取后端消息）
  * 全部留在此处；列表与上传表单交共享视图，它只上报用户动作并按返回值决定是否复位表单。
  * 保留同路径默认导出，路由表无需改动。

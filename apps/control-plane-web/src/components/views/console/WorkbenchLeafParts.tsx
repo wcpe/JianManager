@@ -23,10 +23,10 @@ export interface RouterLinkArgs {
 
 export type RenderRouterLink = (args: RouterLinkArgs) => ReactNode
 
-// ── 「添加场景」菜单（FR-168）────────────────────────────────────────
+// ── 「添加场景」菜单────────────────────────────────────────
 
 export interface DirectorAddSceneMenuProps {
-  /** 可选的用户预设（跨实例 + 单实例共享一份，FR-167）。 */
+  /** 可选的用户预设（跨实例 + 单实例共享一份）。 */
   userPresets: WorkspacePreset[]
   /** 触发按钮样式：default=轮廓小按钮；primary=空态主操作。 */
   variant?: 'default' | 'primary'
@@ -34,8 +34,8 @@ export interface DirectorAddSceneMenuProps {
   onAddScene: (preset: WorkspacePreset) => void
 }
 
-/**
- * 「添加场景」菜单（FR-168）：从已保存的用户预设（FR-167 超级工作台另存的跨实例布局）导入为导播台场景。
+/** 
+ * 「添加场景」菜单：从已保存的用户预设（超级工作台另存的跨实例布局）导入为导播台场景。
  * 导入即克隆该预设卡片为新场景，追加到缩略图条末尾，并加入状态机（cold，切到才保活）。
  */
 export function DirectorAddSceneMenu({ userPresets, variant = 'default', onAddScene }: DirectorAddSceneMenuProps) {
@@ -64,7 +64,7 @@ export function DirectorAddSceneMenu({ userPresets, variant = 'default', onAddSc
   )
 }
 
-// ── 统一页头/面包屑（FR-134 + FR-162）────────────────────────────────
+// ── 统一页头/面包屑────────────────────────────────
 
 export interface PageBreadcrumbProps {
   /** 当前路径（容器注入 `useLocation().pathname`）。 */
@@ -75,9 +75,9 @@ export interface PageBreadcrumbProps {
   renderLink?: RenderRouterLink
 }
 
-/**
+/** 
  * 统一页头/面包屑：据当前路由渲染「域 › 页面 [› 末级]」轨迹，
- * 套靛蓝圆角范式（弱化父级、加粗末级、可点节点 hover 高亮）。与 FR-131 五域 IA 对齐。
+ * 套靛蓝圆角范式（弱化父级、加粗末级、可点节点 hover 高亮）。与五域 IA 对齐。
  *
  * `leaf` 用于补具体末级名称（如打开实例时的实例名）；此时轨迹中的页面节点变为可点回列表。
  * 未知路由（trail 为空）时回退到通用「控制台」标题。
@@ -141,7 +141,7 @@ export function PageBreadcrumb({ pathname, leaf, renderLink }: PageBreadcrumbPro
   )
 }
 
-// ── 超级工作台工具栏（FR-167）────────────────────────────────────────
+// ── 超级工作台工具栏────────────────────────────────────────
 
 export interface SuperWorkbenchToolbarProps {
   /** 当前应用的预设 id。 */
@@ -159,7 +159,7 @@ export interface SuperWorkbenchToolbarProps {
   renderLink?: RenderRouterLink
 }
 
-/**
+/** 
  * 超级工作台工具栏：标题 + 跨实例预设选择/另存。
  * 与单实例工具栏不同：无单实例生命周期操作（跨实例画布无「当前实例」），
  * 卡片来自实例库拖拽；预设携 instanceId（个人级 localStorage）。
@@ -210,7 +210,7 @@ export function SuperWorkbenchToolbar({
           </Button>
         )}
 
-        {/* 进导播台（FR-168）：把已存的跨实例预设当场景预热瞬切。 */}
+        {/* 进导播台：把已存的跨实例预设当场景预热瞬切。 */}
         <Button asChild size="sm" variant="outline" title={t('director.enter')}>
           {renderLink ? (
             renderLink({ to: '/director', children: directorIcon })

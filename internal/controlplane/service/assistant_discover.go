@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 从上游发现模型（FR-538 §2.2）。
+// 从上游发现模型（§2.2）。
 //
 // ## 为什么需要它
 //

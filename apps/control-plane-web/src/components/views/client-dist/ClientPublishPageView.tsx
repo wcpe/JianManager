@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ClientPublishPageView：客户端分发「发布新版本」向导页（步骤指示 → 选文件 → 逐文件配置 →
  *       清理规则/说明 → 预览发布）的受控视图。上传编排（本地去重 → hash → 秒传预查 → 分块/聚合上传）、
  *       版本发布请求、toast 与路由跳转由应用容器负责；视图只保留本地草稿、文件摄入（zip 解包 /
@@ -16,7 +16,7 @@
  *         UploadProgressBar（+ Props）、ReviewViewToggle（+ Props）、PublishStepIndicator（+ Props）
  * @sync apps/control-plane-web/src/pages/ClientPublishPage.tsx、
  *       apps/control-plane-web/src/pages/ClientPublishPage.dom.test.tsx
- * @since FR-508（页面受控化迁包；原 FR-191 独立路由页、FR-250 本地暂存 + 延迟批量上传、FR-255 清理范围、FR-350 定点上传）
+ * @since（页面受控化迁包；原独立路由页本地暂存 + 延迟批量上传清理范围定点上传）
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -64,8 +64,8 @@ function nextDraftId(): string {
   return `d${draftSeq}`
 }
 
-/**
- * 发布批量上传进度（FR-250/251，FR-346 增效后）：字节级累计 + 阶段 + 秒传计数。
+/** 
+ * 发布批量上传进度（251增效后）：字节级累计 + 阶段 + 秒传计数。
  * **由容器产出**（它持有上传编排）：视图只做展示，不参与计算。
  */
 export interface ClientPublishUploadProgress {
@@ -88,8 +88,8 @@ export interface ClientPublishUploadProgress {
   reusedFiles: number
 }
 
-/**
- * 发布向导草稿文件项（FR-250 本地态）。
+/** 
+ * 发布向导草稿文件项（本地态）。
  * 持浏览器内 `File` 引用 + 本地元数据（path/sync/platform/size）——**尚未上传，无 sha256/md5**；
  * 上传结果在点「发布」时才产生（临时映射，不入草稿态）。
  */
@@ -101,7 +101,7 @@ export interface ClientPublishDraftFile extends ManifestFileLike {
   file: File
 }
 
-/**
+/** 
  * 发布提交载荷（视图 → 容器）：草稿原文 + 清理范围产出 + 备注 + 取消信号。
  * **请求体组装（manifest 条目、去重键、上传结果回填）属上传编排，留容器**。
  */
@@ -110,7 +110,7 @@ export interface ClientPublishSubmitPayload {
   files: ClientPublishDraftFile[]
   /** 最终自动清理目录：clean-all 时为 `["*"]` 哨兵，否则为目录树勾选 + 草稿外自定义目录。 */
   managedDirs: string[]
-  /** 自定义追加排除（FR-255）：空数组视为未设置（不下发）。 */
+  /** 自定义追加排除：空数组视为未设置（不下发）。 */
   cleanExclude?: string[]
   /** 版本备注原文。 */
   note: string
@@ -118,7 +118,7 @@ export interface ClientPublishSubmitPayload {
   signal: AbortSignal
 }
 
-/**
+/** 
  * 发布结果回执：`ok=true` 表示已上传并发布成功（成功/取消/失败 toast 与请求均由容器负责）；
  * `ok=false`（含用户取消）时视图保留全部草稿可重试。
  */
@@ -126,7 +126,7 @@ export interface ClientPublishOutcome {
   ok: boolean
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 步骤：`step` 由容器持有并与 `?step=` 双向同步（支持浏览器前进/后退），视图只上报
  *   `onStepChange`（「上一步 / 下一步」两个入口）；
@@ -156,7 +156,7 @@ export interface ClientPublishPageViewProps {
   updaterInfo?: EmbeddedUpdaterSummaryProps['info']
   /** 预览用解析后主题（容器读主题 store 注入）；缺省 light。 */
   previewTheme?: 'light' | 'dark'
-  /**
+  /** 
    * 发布（容器做上传编排 + 提交版本 + toast）：返回 `ok=false` 时视图保留草稿可重试，
    * 返回 `ok=true` 时视图调用 `onLeave`。
    */
@@ -175,10 +175,10 @@ const PUBLISH_STEP_META: Record<PublishStepId, { key: string; fallback: string }
   review: { key: 'clientVersions.stepReview', fallback: '预览发布' },
 }
 
-/**
- * 客户端分发「发布新版本」向导页受控视图（FR-191，编排重做 FR-250）。
+/** 
+ * 客户端分发「发布新版本」向导页受控视图（编排重做）。
  *
- * FR-191 把发布做成独立路由页（消除模态误关丢草稿）。FR-250 反转上传时机：**选文件/拖拽不再
+ *把发布做成独立路由页（消除模态误关丢草稿）。反转上传时机：**选文件/拖拽不再
  * 即刻上传**，文件以浏览器内 `File` 本地暂存，文件树/路径/sync/platform 编排、删除全在本地零网络；
  * 点「发布」才把草稿交容器**批量分块上传**（带总体进度 + 取消 + 失败保草稿可重试）→ 得各
  * sha256/md5/size → 提交版本。省带宽（未发布/发布前删除的文件从不上传）、支持文件夹拖拽保结构。
@@ -199,13 +199,13 @@ export function ClientPublishPageView({
   const { t } = useTranslation()
 
   const [drafts, setDrafts] = useState<ClientPublishDraftFile[]>([])
-  // FR-255：managedDirs 改为目录树勾选（selectedDirs）+ 高级手动兜底（managedDirsManual）。
+  // managedDirs 改为目录树勾选（selectedDirs）+ 高级手动兜底（managedDirsManual）。
   const [selectedDirs, setSelectedDirs] = useState<string[]>([])
   // 草稿外自定义目录（如 mods、custom-mods），显示在清理目录树中可标记。
   const [extraDirs, setExtraDirs] = useState<string[]>([])
   // 「清空整个 gameDir」开关（clean-all）：开启后 managedDirs 含哨兵 "*"，删清单未列的一切。
   const [cleanAll, setCleanAll] = useState(false)
-  // 自定义追加排除（FR-255）：命中前缀的路径永不删（叠加在玩家区之上）。
+  // 自定义追加排除：命中前缀的路径永不删（叠加在玩家区之上）。
   const [cleanExclude, setCleanExclude] = useState<string[]>([])
   // clean-all 发布二次确认弹窗（开启时点发布先弹 DangerConfirm）。
   const [cleanAllConfirm, setCleanAllConfirm] = useState(false)
@@ -219,10 +219,10 @@ export function ClientPublishPageView({
   // 当前批次上传的取消信号（点发布时创建；容器经载荷 signal 使用，abort 即中止 + 弃单）。
   const uploadAbort = useRef<AbortController | null>(null)
 
-  // 有本地草稿即「有未发布草稿」——离开页需二次确认（FR-191 离开守卫，FR-250 语义不变）。
+  // 有本地草稿即「有未发布草稿」——离开页需二次确认（离开守卫语义不变）。
   const dirty = hasPublishDraft(drafts.length)
 
-  // 离开守卫（FR-191）：本应用用 BrowserRouter（非 data router），useBlocker 不可用，
+  // 离开守卫：本应用用 BrowserRouter（非 data router），useBlocker 不可用，
   // 改用 History API 守卫浏览器后退——有草稿时拦后退、转二次确认；关页/刷新见下方 beforeunload。
   const [navBlocked, setNavBlocked] = useState(false)
   useEffect(() => {
@@ -248,9 +248,9 @@ export function ClientPublishPageView({
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [dirty])
 
-  /**
+  /** 
    * 解包 zip（客户端自解析解包）为本地单元，path 取自 zip 内相对路径（POSIX 归一）。
-   * 文件名按 zip UTF-8 标志位选 UTF-8/GBK 解码（FR-250/BUG-G：中文 Windows zip 常存 GBK）。
+   * 文件名按 zip UTF-8 标志位选 UTF-8/GBK 解码（BUG-G：中文 Windows zip 常存 GBK）。
    * 跳过目录项与 __MACOSX 噪音；不上传——仅产出本地 File，随后入草稿。
    */
   const unzipToUnits = async (data: Uint8Array): Promise<LocalUnit[]> => {
@@ -284,7 +284,7 @@ export function ClientPublishPageView({
     ])
   }, [])
 
-  /**
+  /** 
    * 处理一批 File（来自「添加文件」「上传 ZIP」「选择文件夹」选择器或拖拽散文件）：
    * zip 前端解包为多单元，其余按文件名（或 webkitRelativePath 目录）作单元，**均不上传**、累加进草稿。
    */
@@ -306,8 +306,8 @@ export function ClientPublishPageView({
     [appendUnits],
   )
 
-  /**
-   * FR-350 右键定点上传：把 FileExplorer 交来的「所选文件 + 目标目录」摄入草稿。
+  /** 
+   *右键定点上传：把 FileExplorer 交来的「所选文件 + 目标目录」摄入草稿。
    * zip 解包后逐条拼目录前缀；文件夹选择（webkitdirectory）保留 webkitRelativePath
    * 内部相对结构拼在前缀后；散文件回退文件名。均本地暂存、不上传。
    */
@@ -352,7 +352,7 @@ export function ClientPublishPageView({
     }
   }
 
-  /**
+  /** 
    * 拖拽落区 drop：优先用 `webkitGetAsEntry()` 递归遍历（支持**文件夹**保相对路径），
    * 不支持 entry 的浏览器回退 `dataTransfer.files`（仅散文件）。均不上传、累加进草稿。
    */
@@ -366,7 +366,7 @@ export function ClientPublishPageView({
       for (const item of Array.from(items)) {
         // webkitGetAsEntry 非标准但主流浏览器（Chromium/Firefox/Safari）支持；文件夹拖拽必经此。
         // 原生 entry 是回调式（file(cb)/createReader().readEntries(cb)），须经 adaptEntry
-        // Promise 化后才能喂 collectEntries（FR-250/BUG-F）——否则文件取不到、目录被跳过、拖拽失效。
+        // Promise 化后才能喂 collectEntries（BUG-F）——否则文件取不到、目录被跳过、拖拽失效。
         const native = (item as DataTransferItem & { webkitGetAsEntry?: () => NativeFileSystemEntry | null }).webkitGetAsEntry?.()
         if (native) entries.push(adaptEntry(native))
       }
@@ -430,12 +430,12 @@ export function ClientPublishPageView({
 
   const wizardState = { draftCount: drafts.length, paths: drafts.map((d) => d.path), uploading: publishing }
   const publishable = canPublish(wizardState)
-  // FR-255：最终 managedDirs——clean-all 时为 ["*"] 哨兵；否则为目录树勾选（含草稿外自定义目录）。
+  // 最终 managedDirs——clean-all 时为 ["*"] 哨兵；否则为目录树勾选（含草稿外自定义目录）。
   const effectiveManagedDirs = cleanAll
     ? [CLEAN_ALL_SENTINEL]
     : Array.from(new Set([...selectedDirs, ...extraDirs.filter(d => !cleanExclude.includes(d))]))
   const effectiveCleanExclude = cleanExclude.length > 0 ? cleanExclude : undefined
-  // 预览数据源：从本地草稿 File 读内容（零网络，FR-250）。
+  // 预览数据源：从本地草稿 File 读内容（零网络）。
   const previewSource = useMemo(() => localDraftSource(drafts.map(d => ({ path: d.path, file: d.file }))), [drafts])
 
   /** 尝试取消：有草稿弹二次确认，无草稿直接回工作台。 */
@@ -448,8 +448,8 @@ export function ClientPublishPageView({
   // （drafts 与传入 files 同序，index 即当前 drafts 下标；越界防御返回空串使 patch/remove 空转）。
   const idOf = (index: number) => drafts[index]?.id ?? ''
 
-  /**
-   * 发布：把草稿交容器批量上传（FR-250，FR-346 增效）——容器建去重计划、编排上传、按草稿顺序
+  /** 
+   * 发布：把草稿交容器批量上传（增效）——容器建去重计划、编排上传、按草稿顺序
    * 回填 manifest 并提交版本。此处只负责开取消信号、转发载荷、据结果决定去留。
    */
   const doPublish = async () => {
@@ -471,8 +471,8 @@ export function ClientPublishPageView({
     }
   }
 
-  /**
-   * 触发发布（FR-255）：开启 clean-all 时先弹 DangerConfirm 二次确认，明示删除范围后才能继续；
+  /** 
+   * 触发发布：开启 clean-all 时先弹 DangerConfirm 二次确认，明示删除范围后才能继续；
    * 普通模式直接发布。
    */
   const attemptPublish = () => {
@@ -609,7 +609,7 @@ export function ClientPublishPageView({
 
         {step === 'meta' && (
           <div className="space-y-4">
-            {/* 「清空整个 gameDir」开关（FR-255）：开启后 managedDirs=["*"]，删清单未列的一切。 */}
+            {/* 「清空整个 gameDir」开关：开启后 managedDirs=["*"]，删清单未列的一切。 */}
             <label className="flex items-start gap-2.5 rounded-lg border p-3 text-sm">
               <Checkbox
                 checked={cleanAll}
@@ -737,7 +737,7 @@ export function ClientPublishPageView({
         }}
       />
 
-      {/* FR-255：clean-all 发布二次确认——开启「清空整个 gameDir」时点发布先弹此确认。 */}
+      {/*clean-all 发布二次确认——开启「清空整个 gameDir」时点发布先弹此确认。 */}
       <DangerConfirm
         open={cleanAllConfirm}
         title={t('clientVersions.cleanAllConfirmTitle', '确认清空整个游戏目录？')}
@@ -760,7 +760,7 @@ export interface UploadProgressBarProps {
   onCancel: () => void
 }
 
-/** 批量上传进度条（FR-250/251，FR-346 增效）：hashing/uploading 双阶段 + 秒传计数 + 取消。 */
+/** 批量上传进度条（251增效）：hashing/uploading 双阶段 + 秒传计数 + 取消。 */
 export function UploadProgressBar({ progress, onCancel }: UploadProgressBarProps) {
   const { t } = useTranslation()
   const hashing = progress.phase === 'hashing'
@@ -828,7 +828,7 @@ export interface ReviewViewToggleProps {
   onChange: (v: 'structure' | 'preview') => void
 }
 
-/** 预览步骤的结构 / 内容预览视图切换（分段控件，FR-214）。 */
+/** 预览步骤的结构 / 内容预览视图切换（分段控件）。 */
 export function ReviewViewToggle({ view, onChange }: ReviewViewToggleProps) {
   const { t } = useTranslation()
   return (

@@ -8,11 +8,11 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 端口分配范围（FR-032）。MC 默认 server-port=25565。RCON 已退役（FR-067，见 ADR-016）：
+// 端口分配范围。MC 默认 server-port=25565。RCON 已退役（见 ADR-016）：
 // 不再分配 rcon 端口；治理改走 ServerProbe 探针。共用同一个「已占用」集合，保证同节点上任一 TCP 端口号唯一。
 const (
 	serverPortBase = 25565
-	probePortBase  = 29940 // ServerProbe /metrics 端口起点（FR-010），避开 server 段
+	probePortBase  = 29940 // ServerProbe /metrics 端口起点，避开 server 段
 	portRangeSize  = 2000  // 每个起点向上探测的端口数
 )
 
@@ -41,7 +41,7 @@ type NodePortsResult struct {
 	Occupied []PortUsage `json:"occupied"`
 }
 
-// PortUsage 描述某节点上一个实例占用的端口集合（RCON 已退役，FR-067）。
+// PortUsage 描述某节点上一个实例占用的端口集合（RCON 已退役）。
 type PortUsage struct {
 	InstanceID uint               `json:"instanceId"`
 	Name       string             `json:"name"`
@@ -51,7 +51,7 @@ type PortUsage struct {
 	ProbePort  int                `json:"probePort"`
 }
 
-// NodePortUsage 返回某节点上各实例的端口占用（系统分配端口的可视化，FR-032）。
+// NodePortUsage 返回某节点上各实例的端口占用（系统分配端口的可视化）。
 // 仅列出至少占用一个端口的实例；已软删除的实例不计入。
 func NodePortUsage(db *gorm.DB, nodeID uint) ([]PortUsage, error) {
 	var instances []model.Instance
@@ -78,9 +78,9 @@ func NodePortUsage(db *gorm.DB, nodeID uint) ([]PortUsage, error) {
 // allocPortsForNode 为节点上的新实例分配同节点唯一的 server 端口，
 // query 端口约定与 server-port 一致（MC query 默认走 server-port，UDP 与 TCP 端口空间独立）。
 // 在各自范围内取最低的、未被本节点其它实例占用的端口；已软删除的实例不计入占用。
-// RCON 已退役（FR-067）：不再分配 rcon 端口，但仍把历史实例残留的 rcon 端口计入占用集合避免撞号。
+// RCON 已退役：不再分配 rcon 端口，但仍把历史实例残留的 rcon 端口计入占用集合避免撞号。
 //
-// probeApplicable 为 false 时不分配探针端口（FR-454：ServerProbe 是 Bukkit 插件，代理/通用二进制/
+// probeApplicable 为 false 时不分配探针端口（：ServerProbe 是 Bukkit 插件，代理/通用二进制/
 // Beacon 均无法加载），返回的 ProbePort 为 0；server/query 仍照常分配（binary/beacon 的通用端口约定）。
 func allocPortsForNode(db *gorm.DB, nodeID uint, probeApplicable bool) (AllocatedPorts, error) {
 	used, err := occupiedPortsForNode(db, nodeID)
@@ -104,8 +104,8 @@ func allocPortsForNode(db *gorm.DB, nodeID uint, probeApplicable bool) (Allocate
 	return out, nil
 }
 
-// allocProbePortForNode 只为节点分配一个空闲探针端口（FR-411 补口）。
-// 导入实例（FR-302）与历史实例不经过 allocPortsForNode，probe_port 保持 0——这类实例
+// allocProbePortForNode 只为节点分配一个空闲探针端口（补口）。
+// 导入实例与历史实例不经过 allocPortsForNode，probe_port 保持 0——这类实例
 // 安装探针时写出的 config 是 port: 0（探针绑到 OS 随机端口），Worker 侧又按 ProbePort>0
 // 过滤采集，形成「探针桥已连接但监控永无数据」的静默断链。部署探针前经此函数补口。
 //

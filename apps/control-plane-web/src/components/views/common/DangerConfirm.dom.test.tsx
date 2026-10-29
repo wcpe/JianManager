@@ -7,7 +7,7 @@ import { Role } from '@/lib/shared/danger'
 import DangerConfirm from './DangerConfirm'
 
 
-describe('DangerConfirm（FR-059 危险操作确认）', () => {
+describe('DangerConfirm（危险操作确认）', () => {
   it('要求逐字输入确认文本后才允许执行危险操作', async () => {
     loginMockUserAs(Role.GroupAdmin)
     const user = userEvent.setup()
@@ -69,7 +69,7 @@ describe('DangerConfirm（FR-059 危险操作确认）', () => {
     expect(onConfirm).not.toHaveBeenCalled()
   })
 
-  /**
+  /** 
    * 正向用例：门禁必须真的区分角色，而不是一律拒绝。
    *
    * 光有「越权被拒」会掩盖一种退化——门禁恒判为拒（例如 hook 恒返回 false），
@@ -96,7 +96,7 @@ describe('DangerConfirm（FR-059 危险操作确认）', () => {
     expect(within(dialog).getByRole('button', { name: '执行' })).toBeEnabled()
   })
 
-  /**
+  /** 
    * 未声明 scope 时不做前端门禁（普通二次确认）。
    *
    * 这是既有语义：省略 scope 的操作只要求点一次确认，不参与角色判定。

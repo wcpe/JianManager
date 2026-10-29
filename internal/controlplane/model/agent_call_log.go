@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// AgentCallLog Agent 调用流水（FR-390 / FR-395，见 ADR-076/080）。
+// AgentCallLog Agent 调用流水（见 ADR-076/080）。
 // 覆盖 /api/v1/agent/* Ops 读+写与 MCP tool；与人类 audit 表独立。
 // token_name 为签发时名称快照，吊销后仍可读；error 截断短文，禁 Token 明文。
 type AgentCallLog struct {

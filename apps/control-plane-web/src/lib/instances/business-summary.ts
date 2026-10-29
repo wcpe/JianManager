@@ -1,7 +1,7 @@
 import type { BusinessStatus } from '@/api/businessStatus'
 
-/**
- * 「业务插件」汇总列的展示形态（FR-534）。
+/** 
+ * 「业务插件」汇总列的展示形态。
  *
  * 抽成纯函数而不是写在 JSX 里，是因为**三种状态必须能各自被断言**，
  * 而混在一起最容易出的错就是把「没拿到数据」显示成「没有插件」。
@@ -14,7 +14,7 @@ export type BusinessSummary =
   /** 有域：ok 个可用，total 个总数（degraded = total - ok）。 */
   | { kind: 'domains'; ok: number; total: number; degraded: number; stale: boolean }
 
-/**
+/** 
  * 把域状态折算成展示形态。
  *
  * @param status 该实例的域状态；`undefined` 表示"还没数据"。
@@ -28,7 +28,7 @@ export function summarizeBusiness(status: BusinessStatus | undefined): BusinessS
   return { kind: 'domains', ok, total, degraded: total - ok, stale: Boolean(status.stale) }
 }
 
-/**
+/** 
  * 业务域状态按值相等（供行组件 memo 比较器用）。
  *
  * 渲染这一格只依赖三样：域总数、可用域数、是否 stale。

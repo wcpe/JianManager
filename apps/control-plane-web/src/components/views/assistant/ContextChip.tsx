@@ -7,7 +7,7 @@ import api from '@/api/client'
 import type { InstanceMetricsData } from '@/lib/instances/instance-metrics'
 import type { PageContextEntityRef } from '@/lib/assistant/page-context'
 
-/**
+/** 
  * 芯片摘要用的指标查询（**不轮询**）。
  *
  * 为什么不复用 `useInstanceMetrics`：它带 `refetchInterval: 10s`，那是给实例详情页
@@ -31,8 +31,8 @@ function useChipMetrics(instanceId: number, enabled: boolean) {
   })
 }
 
-/**
- * 一枚上下文芯片（FR-518 §5.2）。
+/** 
+ * 一枚上下文芯片（§5.2）。
  *
  * 实例类芯片额外带**指标摘要**与**跳转入口**，因为「把它拖进来」之后的下一句
  * 几乎总是「它为什么卡 / 它现在什么状态」——让用户再自己跑一趟实例页是多余的。

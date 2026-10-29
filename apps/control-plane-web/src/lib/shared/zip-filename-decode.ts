@@ -1,5 +1,5 @@
-/**
- * 自解析 zip 以正确解码文件名的解包器（FR-250 / BUG-G）。
+/** 
+ * 自解析 zip 以正确解码文件名的解包器（BUG-G）。
  *
  * 中文 Windows 打的 zip 常把文件名存为 GBK/CP936，且**未置** zip 通用位标记 bit 11（UTF-8 标志）。
  * fflate 的高层 `unzip` 对未置 UTF-8 的名字按 latin1 解 → 中文乱码；且它不暴露原始名字节与标志位。
@@ -11,7 +11,7 @@
  */
 import { inflateSync } from 'fflate'
 
-/** 解包出的单个 entry：正确解码的相对名 + 解压后内容（FR-250）。 */
+/** 解包出的单个 entry：正确解码的相对名 + 解压后内容。 */
 export interface ZipEntry {
   /** 文件名（按 UTF-8 标志位选 UTF-8/GBK 解码后的正确名，含目录以 `/` 分隔）。 */
   name: string
@@ -26,7 +26,7 @@ const UTF8_FLAG = 0x0800
 /** 通用位 bit 3：数据描述符（size/crc 在数据之后），此时 local header 里的 size 为 0。 */
 const DATA_DESCRIPTOR_FLAG = 0x0008
 
-/**
+/** 
  * 小端读 16 位。
  * 越界位置的 `d[o]` 为 undefined，位运算本就会把它当 0（`undefined | x` → `x`），
  * 故 `?? 0` 与旧行为逐位等价，只是把这一隐式转换写明以通过下标访问检查。
@@ -54,8 +54,8 @@ function decodeName(nameBytes: Uint8Array, utf8: boolean): string {
   return (utf8 ? utf8Decoder : gbkDecoder).decode(nameBytes)
 }
 
-/**
- * 用 central directory 建「local header 偏移 → (原始名字节, UTF-8 标志)」表（FR-250）。
+/** 
+ * 用 central directory 建「local header 偏移 → (原始名字节, UTF-8 标志)」表。
  *
  * local file header 在设置数据描述符位时其压缩尺寸字段为 0，单靠 local header 无法定位内容长度；
  * central directory 记录了每个 entry 的压缩尺寸与 local header 偏移，据此可稳妥切分。
@@ -123,8 +123,8 @@ function inflateEntry(method: number, compressed: Uint8Array): Uint8Array {
   throw new Error(`unsupported zip compression method ${method}`)
 }
 
-/**
- * 解包 zip 字节为 {@link ZipEntry}[]，文件名按 UTF-8/GBK 正确解码（FR-250 / BUG-G）。
+/** 
+ * 解包 zip 字节为 {@link ZipEntry}[]，文件名按 UTF-8/GBK 正确解码（BUG-G）。
  * 目录项（名以 `/` 结尾）与空名跳过。以 central directory 为准切分内容，稳妥处理数据描述符情形。
  * 遇不支持的压缩方法或损坏结构抛错，交上层提示（与既有 fflate 失败提示一致）。
  */

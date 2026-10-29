@@ -1,5 +1,5 @@
-/**
- * 节点制品缓存的契约类型与纯逻辑工具（FR-178）。
+/** 
+ * 节点制品缓存的契约类型与纯逻辑工具。
  *
  * 归属说明（ADR-103）：类型由两侧共用——应用 API 层 `@/api/nodeRuntime` 的查询 hook
  * 返回 `ArtifactCacheView`，受控视图 `components/views/nodes/NodeArtifactCachePanel`

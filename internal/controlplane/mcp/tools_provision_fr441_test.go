@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// binarySourceArg 的参数解析（FR-441 MCP 暴露）：合法结构逐字段落位，非法结构明确报错
+// binarySourceArg 的参数解析（MCP 暴露）：合法结构逐字段落位，非法结构明确报错
 // 而非静默丢弃（静默丢弃会让 binary 请求以「缺少 kind」失败，用户看不出是参数写错）。
 
 func TestBinarySourceArg_AbsentReturnsNil(t *testing.T) {

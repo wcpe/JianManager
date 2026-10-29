@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// applyHealthPolicy 把 CP 经心跳响应下发的实例健康巡检策略（FR-459）应用到巡检器。
+// applyHealthPolicy 把 CP 经心跳响应下发的实例健康巡检策略应用到巡检器。
 //
 // 下发以 HealthScanEnabled（proto3 optional）为「是否下发」的存在标记：nil=老 CP 未下发 →
 // 不动作，Worker 沿用本地 worker.yml 配置（向后兼容）；非 nil → 采用本响应全部 health_* 字段。

@@ -19,20 +19,20 @@ export interface BcRegistration {
 }
 
 export interface BcSegmentProps {
-  /**
+  /** 
    * 该代理的后端注册列表（外壳从 `/topology` 取数后按 instanceId 过滤后注入）。
    * 未加载时传 undefined。
    */
   registrations?: BcRegistration[]
-  /**
+  /** 
    * 渲染子服链接（外壳注入）。包内不依赖路由库——它从不 import `react-router`，
    * 需要跳转的地方一律由外壳给渲染函数。
    */
   renderBackendLink: (args: { backendId: number; name: string }) => ReactNode
 }
 
-/**
- * BC 代理「子服拓扑」分段（FR-449）——不写死 BC 名，由画像 `bcTopology` 能力驱动。
+/** 
+ * BC 代理「子服拓扑」分段——不写死 BC 名，由画像 `bcTopology` 能力驱动。
  *
  * 单一归属（minor 5）：本分段只承载 **子服列表 + 各自状态**。跨服玩家分布归 `players`
  * 页签（`BcPlayersPanel`），BC 自身运行指标归 `process` 页签（`ProcessPanel`），

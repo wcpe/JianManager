@@ -13,7 +13,7 @@ export interface ArchivedNodeDetailPaneProps {
   /** 面包屑导航（容器注入路由跳转；组件库不依赖 react-router）。 */
   onNavigate: (to: string) => void
 }
-/** 归档只读详情 + 清理按钮（FR-393/394）。 */
+/** 归档只读详情 + 清理按钮（394）。 */
 export function ArchivedNodeDetailPane({
   node,
   onPurge,

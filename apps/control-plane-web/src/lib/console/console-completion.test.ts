@@ -10,10 +10,10 @@ import {
   longestCommonPrefix,
 } from './console-completion'
 
-/**
- * 命令补全（FR-416）：命令名 + 玩家参数两处，候选式、**不盲补第一个**。
+/** 
+ * 命令补全：命令名 + 玩家参数两处，候选式、**不盲补第一个**。
  *
- * FR-415 把这套能力随旧 xterm 输入路径删掉了（ADR-086「已知回退」），此处是补回后的锁。
+ *把这套能力随旧 xterm 输入路径删掉了（ADR-086「已知回退」），此处是补回后的锁。
  */
 
 const PLAYERS = ['Steve', 'Stevie', 'Alex']

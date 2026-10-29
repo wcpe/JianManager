@@ -4,8 +4,8 @@ import api from '@/api/client'
 // 本地绑定仍叫 `Registration`（本文件内使用），对外导出名不变。
 import type { ProxyRegistration as Registration } from '@/lib/instances/proxy-registration'
 
-/**
- * proxy↔backend 注册关系契约（对应后端 model.ServerRegistration + backend 概要，FR-032/035）
+/** 
+ * proxy↔backend 注册关系契约（对应后端 model.ServerRegistration + backend 概要035）
  * 已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名 `Registration`，调用点无需改动。
  */
 export type { ProxyRegistration as Registration } from '@/lib/instances/proxy-registration'
@@ -40,7 +40,7 @@ export function useCreateRegistration(proxyId: number) {
       api.post(`/proxies/${proxyId}/registrations`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['registrations', proxyId] })
-      // 拓扑聚合视图（FR-335）随注册变更失效。
+      // 拓扑聚合视图随注册变更失效。
       qc.invalidateQueries({ queryKey: ['topology'] })
     },
   })

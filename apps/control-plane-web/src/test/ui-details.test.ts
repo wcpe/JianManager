@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
-/**
- * FR-176 全局交互细节修正（增强 FR-163）守护测试。
+/** 
+ *全局交互细节修正（增强）守护测试。
  *
  * 纯样式约束，故以源文件断言守护三件套（vitest node 环境无 DOM 渲染）：
  * ① 卡片 hover 去位移留阴影（不再 hover:-translate-y，保留 hover:shadow-lift / hover 反馈）；
@@ -13,7 +13,7 @@ import path from 'node:path'
  */
 
 const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-// FR-283：packages/ui 迁仓库根 packages/，rootDir 指仓库根。
+// packages/ui 迁仓库根 packages/，rootDir 指仓库根。
 const rootDir = path.resolve(srcDir, '../../..')
 
 function existingSourcePath(base: string): string {
@@ -32,7 +32,7 @@ function resolveSourcePath(rel: string): string {
   return existingSourcePath(path.join(rootDir, 'packages/ui/src', pureReexport[1]))
 }
 
-/**
+/** 
  * 读应用侧源码。`@ui/` 前缀表示「该文件仍在组件库内」，此时读包内实现。
  *
  * 约定来源与现状：早先一轮决策曾把业务视图并入组件库（该方向已由 ADR-103 撤销），故断言要落包内实现；此后业务视图
@@ -50,8 +50,8 @@ function read(rel: string): string {
   return readFileSync(resolveSourcePath(rel), 'utf8')
 }
 
-/**
- * FR-502：组件包的设计底座已从单一 styles.css 拆分为 styles/ 目录下的多文件
+/** 
+ *：组件包的设计底座已从单一 styles.css 拆分为 styles/ 目录下的多文件
  * （theme-map / tokens / themes / motion），此处合并读取以保持既有断言成立。
  */
 function readUiStyles(): string {
@@ -60,7 +60,7 @@ function readUiStyles(): string {
     .map((f) => readFileSync(path.join(dir, f), 'utf8'))
     .join('\n')
 }
-/** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */
+/** 既参与 hover 抬升、又需在去位移的卡片/行原语。 */
 const HOVER_CARD_FILES = [
   '@ui/components/panel.tsx',
   'components/views/console/ConsoleLeafParts.tsx',
@@ -69,7 +69,7 @@ const HOVER_CARD_FILES = [
   'components/views/config-explorer/ConfigRow.tsx',
 ] as const
 
-describe('FR-176 ① 卡片 hover 去位移留阴影', () => {
+describe('① 卡片 hover 去位移留阴影', () => {
   for (const file of HOVER_CARD_FILES) {
     it(`${file} 不含 hover:-translate-y（去位移）`, () => {
       const src = read(file)
@@ -77,7 +77,7 @@ describe('FR-176 ① 卡片 hover 去位移留阴影', () => {
     })
   }
 
-  // shadow-lift 是这些卡片在 FR-163 下的 hover 反馈载体；去位移后阴影必须留存。
+  // shadow-lift 是这些卡片在下的 hover 反馈载体；去位移后阴影必须留存。
   for (const file of HOVER_CARD_FILES) {
     it(`${file} 保留 hover:shadow-lift（阴影反馈不丢）`, () => {
       const src = read(file)
@@ -86,7 +86,7 @@ describe('FR-176 ① 卡片 hover 去位移留阴影', () => {
   }
 })
 
-describe('FR-176 ② 输入焦点环收敛', () => {
+describe('② 输入焦点环收敛', () => {
   const src = read('@ui/components/input.tsx')
 
   it('不再使用 3px 焦点环（过粗，糊邻近文字）', () => {
@@ -103,7 +103,7 @@ describe('FR-176 ② 输入焦点环收敛', () => {
   })
 })
 
-describe('FR-176 ③ 全局主题化细滚动条', () => {
+describe('③ 全局主题化细滚动条', () => {
   const css = read('index.css')
 
   it('提供 webkit 滚动条样式', () => {
@@ -130,12 +130,12 @@ describe('FR-176 ③ 全局主题化细滚动条', () => {
   })
 })
 
-describe('FR-244 全局动画 token 化', () => {
+describe('全局动画 token 化', () => {
   const appCss = read('index.css')
   const uiCss = readUiStyles()
 
   it('组件包设计底座暴露 motion duration 与 easing token（应用经 @import 引入）', () => {
-    // FR-502：token 已归一到 packages/ui/src/styles/，应用不再重复定义
+    // token 已归一到 packages/ui/src/styles/，应用不再重复定义
     // （此前 app 与包各持一份副本、已发生漂移，本次合并为单一真源）。
     for (const css of [uiCss]) {
       expect(css).toMatch(/--motion-duration-fast:\s*120ms/)
@@ -169,7 +169,7 @@ describe('FR-244 全局动画 token 化', () => {
     )
   })
 
-  // 全站动效收敛（FR-244 剩余缺口）：共享原语的一次性交互动效从散落的 duration-200/300 收敛到 motion token。
+  // 全站动效收敛（剩余缺口）：共享原语的一次性交互动效从散落的 duration-200/300 收敛到 motion token。
   // 每项断言「不含硬编码定值」+「引用 motion-duration token」，防新代码或回退再引入脱离节奏的毫秒值。
   const CONVERGED_MOTION_PRIMITIVES = [
     '@ui/components/panel.tsx',
@@ -183,7 +183,7 @@ describe('FR-244 全局动画 token 化', () => {
       const src = read(file)
       expect(src).not.toMatch(/duration-200\b/)
       expect(src).not.toMatch(/duration-300\b/)
-      // FR-502：动效取值可以写在调用点（字面量），也可以抽到 packages/ui/src/lib 的共享常量。
+      // 动效取值可以写在调用点（字面量），也可以抽到 packages/ui/src/lib 的共享常量。
       // 后者更干净（取值单一真源），故两种写法都接受；但必须能追溯到 motion token ——
       // 字面量在本文件可验，常量引用则由下一条断言在常量文件里验。
       const literal = /duration-\[var\(--motion-duration-(?:normal|slow)\)\]/.test(src)
@@ -192,7 +192,7 @@ describe('FR-244 全局动画 token 化', () => {
     })
   }
 
-  it('共享动效常量本身绑定 motion-duration token（FR-502 收敛）', () => {
+  it('共享动效常量本身绑定 motion-duration token（收敛）', () => {
     const lib = readFileSync(path.join(rootDir, 'packages/ui/src/lib/interaction-overlay.ts'), 'utf8')
     expect(lib).toMatch(/duration-\[var\(--motion-duration-(?:fast|normal|slow)\)\]/)
     expect(lib).not.toMatch(/duration-200\b/)
@@ -200,7 +200,7 @@ describe('FR-244 全局动画 token 化', () => {
   })
 
   it('组件包设计底座也暴露收敛注释指向统一动画词汇表', () => {
-    expect(uiCss).toMatch(/FR-244/)
+    expect(uiCss).toMatch(/motion/i)
     expect(uiCss).toMatch(/--motion-duration-slow/)
   })
 })

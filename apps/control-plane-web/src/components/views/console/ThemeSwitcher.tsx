@@ -20,7 +20,7 @@ const COLOR_SWATCHES: Record<ColorTheme, string> = {
   sunset: '#ea8a3a',
 }
 
-/** 明暗三态选项：图标 + 文字，dropdown 直选（非盲循环，承 FR-132）。 */
+/** 明暗三态选项：图标 + 文字，dropdown 直选（非盲循环，承）。 */
 const MODE_OPTIONS: Array<{ value: ThemeMode; icon: LucideIcon; labelKey: string }> = [
   { value: 'light', icon: Sun, labelKey: 'theme.light' },
   { value: 'dark', icon: Moon, labelKey: 'theme.dark' },
@@ -40,8 +40,8 @@ export interface ThemeSwitcherProps {
   onThemeChange: (mode: ThemeMode) => void
 }
 
-/**
- * 全局主题切换器（FR-164）：侧栏底部一处切，全站 CSS 变量实时跟变。
+/** 
+ * 全局主题切换器：侧栏底部一处切，全站 CSS 变量实时跟变。
  * 两枚图标按钮、各配 dropdown：调色板 = 主题色 5 选（点开才展开，圆点不再常驻侧栏）；
  * 明暗 = 三态直选。主题色与明暗正交、各自 localStorage 持久。
  * 折叠态（compact）布局不变——本来就是纯图标，只是与语言切换器一起纵向排列。
@@ -64,7 +64,7 @@ export function ThemeSwitcher({
     // 这正是底部那处高度回折的来源。
     // 折叠态改为「只留主题色按钮，明暗按钮收宽淡出」：横排方向不变，
     // 用 `grid-cols 0fr→1fr` 收宽度（可过渡），整个过程连续无跳变。
-    // 代价是折叠态少一个明暗入口——明暗仍可在 `/settings` 的「外观」分组改（FR-164）。
+    // 代价是折叠态少一个明暗入口——明暗仍可在 `/settings` 的「外观」分组改。
     // `gap` 一并归零并纳入过渡，否则留着的 4px 会把剩下的按钮推偏 2px。
     <div
       className={cn(

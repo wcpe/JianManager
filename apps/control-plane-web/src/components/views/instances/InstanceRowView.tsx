@@ -1,4 +1,4 @@
-/**
+/** 
  * @file InstanceRowView：实例列表的行渲染件（平铺表与分组树表复用）——勾选 + 名称（proxy 内联展开 /
  *       就地导入徽章 / 运行态漂移标记）+ 类型 + 节点:端口 + 角色 + 环境与标签 + 状态 + 行内主操作与「⋯」菜单；
  *       proxy 展开时在行下追加后端摘要行。虚拟窗口逐行调用，故行内不持有任何取数或跨行共享状态。
@@ -10,9 +10,9 @@
  * @output InstanceRowView、InstanceRowViewProps、INSTANCE_ROW_HEIGHT、INSTANCE_EXPANDED_ROW_HEIGHT
  * @sync apps/control-plane-web/src/pages/InstancesPage.tsx（容器保留取数与装配，经 renderRow 逐行调用）、
  *        apps/control-plane-web/src/pages/InstancesPage.dom.test.tsx（与 grouping / runtimeDrift / rowMenu 三个针对性测试）
- * @since FR-508（组件受控化迁包；原页 FR-047 多维筛选、FR-058 批量选择、FR-136 分组与节点:端口、
- *        FR-138 行内主操作与「⋯」次要菜单、FR-302 就地导入徽章、FR-310 运行中删除、FR-331 搭建中禁启、
- *        FR-445 代理能力画像、FR-452 分组树表、FR-471 运行态漂移）
+ * @since（组件受控化迁包；原页多维筛选批量选择分组与节点:端口、
+ *行内主操作与「⋯」次要菜单就地导入徽章运行中删除搭建中禁启、
+ *代理能力画像分组树表运行态漂移）
  */
 import { Fragment, memo, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -43,7 +43,7 @@ const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(DEFAUL
 /** 未知状态的兜底文案键；单列常量是因为登记表是索引签名，取 `.STOPPED` 拿不回确定类型。 */
 const STATUS_LABEL_FALLBACK = 'instances.stopped'
 
-/**
+/** 
  * 服务端类别 → 标签配色。
  *
  * 三档颜色要有区分度但不能抢状态色的注意力：
@@ -65,7 +65,7 @@ const KIND_CHIP_CLASS: Record<InstanceKind, string> = {
   binary: 'bg-muted text-muted-foreground',
 }
 
-/**
+/** 
  * 实例状态 → i18n 文案键（与实例页状态筛选项同源）。
  * 未知状态回退「已停止」文案，与迁移前 `statusConfig[status] || statusConfig.STOPPED` 等价。
  */
@@ -77,7 +77,7 @@ const STATUS_LABEL_KEY: Record<string, string> = {
   CRASHED: 'instances.crashed',
 }
 
-/**
+/** 
  * 实例行高（px）：**声明值 = 真实值，由构造保证**。
  *
  * 数值依据（Chromium 1280 宽实测）：行内最高内容 = 操作列的 `Button size="xs"`（`h-6` = 24）
@@ -96,7 +96,7 @@ const STATUS_LABEL_KEY: Record<string, string> = {
  */
 export const INSTANCE_ROW_HEIGHT = 64
 
-/**
+/** 
  * proxy 行内联后端摘要（展开时**追加**的那个 `<tr>`）高度（px）：同样写进行盒的行内 style。
  *
  * 语义是「追加行」而不是「该项总高」：展开的实例在虚拟模型里占
@@ -110,7 +110,7 @@ export const INSTANCE_ROW_HEIGHT = 64
  */
 export const INSTANCE_EXPANDED_ROW_HEIGHT = 160
 
-/**
+/** 
  * 行渲染件的受控边界（ADR-103 b 范式）：**不取数、不发请求、不碰路由**。
  * - 七类实例派生判断由容器注入：节点名（`nodeName`，容器查节点表）、是否代理（`isProxy`，按能力画像）、
  *   是否搭建中（`provisioning`，`isProvisioningInstance` 属应用侧 API）、运行态漂移（`drift`）、
@@ -141,19 +141,19 @@ export interface InstanceRowViewProps {
   provisioning?: boolean
   /** 运行态漂移；无漂移为 `undefined`（行内据此决定是否出标记）。 */
   drift?: RuntimeDriftInfoView
-  /**
+  /** 
    * 可见窗口批量取数后的行内指标快照（容器注入，本件不取数）。
    * 缺省或全缺测时，指标列与心跳列以 `--` 呈现（不隐藏列）。
    */
   metrics?: InstanceMetricSnapshot
-  /**
-   * 业务域状态（FR-534，容器**批量**取回后按实例注入）。
+  /** 
+   * 业务域状态（容器**批量**取回后按实例注入）。
    *
    * 缺省 `undefined` 表示"这行还没有域状态数据"（列未开启、批量未返回、或该台不在批里），
    * 此时单元格显示 `--` 而不是"未注册"——两者含义完全不同，不能混。
    */
   businessStatus?: BusinessStatus
-  /**
+  /** 
    * 可见的可选列（列设置，容器注入）。固定列（勾选/名称/节点:端口/状态/操作）不参与；
    * 缺省=全开（与旧行为一致，测试与既有使用点零改动）。
    */
@@ -176,13 +176,13 @@ export interface InstanceRowViewProps {
   onStart: () => void
   /** 停止。 */
   onStop: () => void
-  /**
+  /** 
    * 行右键菜单入口（用户提出）。只上报「哪一行、鼠标在哪」，菜单本身由**表格级单例**渲染
    * （见 InstancesPage 的 InstanceContextMenu）——每行挂一棵 Radix ContextMenu 会重演
    * 每行一个 Popover 的老问题（实测单次排序 300 次行渲染 / 880ms）。
    */
   onContextMenu?: (inst: InstanceInfo, x: number, y: number) => void
-  /**
+  /** 
    * 列顺序（表头拖拽换位的结果）。缺省为默认顺序。
    * 与表头、colgroup 共用同一份顺序——三处同源才不会错列。
    */
@@ -191,7 +191,7 @@ export interface InstanceRowViewProps {
   onKill: () => void
 }
 
-/**
+/** 
  * 实例列表单行：平铺虚拟表与分组树表共用同一渲染件。
  * 单元格内容（就地导入徽章、漂移标记、环境/标签徽标、状态徽章、按状态切换的主操作）与迁移前逐项一致。
  */
@@ -232,7 +232,7 @@ function InstanceRowViewImpl({
   // 大区是虚拟分区（由 region: 标签推导），不做折叠层级，只作为一列归属信息呈现。
   const region = regionOf(inst)
   const zone = zoneOf(inst)
-  /**
+  /** 
    * 异常强化（常态弱化）：崩溃或存在运行态漂移的行给出左侧警示条 + 淡红底。
    * 只加背景与伪元素，不动行盒高度——虚拟窗口的 36px 模型不受影响（见 INSTANCE_ROW_HEIGHT）。
    */
@@ -243,7 +243,7 @@ function InstanceRowViewImpl({
         <Checkbox checked={selected} onCheckedChange={onToggleSelect} aria-label={inst.name} />
       </TableCell>
   )
-  /**
+  /** 
    * 
    * 大区 / 小区改为**两级徽章**：原来是一串 `r1 · z1` 纯文本——
    * 两者层级不同却挤在一个文本里，读起来像同一个东西的两个值；
@@ -318,13 +318,13 @@ function InstanceRowViewImpl({
           >
             {inst.name}
           </Button>
-          {/* 就地导入徽章（FR-302）：工作目录在托管区外，删除实例不删原目录。 */}
+          {/* 就地导入徽章：工作目录在托管区外，删除实例不删原目录。 */}
           {inst.workDirInPlace && (
             <Badge variant="outline" className="shrink-0 border-amber-500/50 text-amber-600 dark:text-amber-400">
               {t('importServer.inPlaceBadge')}
             </Badge>
           )}
-          {/* 运行态漂移标记（FR-471）：目录下有未纳管活进程，面板状态可能不准（行内只做标记，
+          {/* 运行态漂移标记：目录下有未纳管活进程，面板状态可能不准（行内只做标记，
               接管入口收在「⋯」菜单，避免每行多插一个破坏密度的按钮）。 */}
           {/*
             运行态漂移标记在**表格行里只显示图标**：完整徽章带「检测到未纳管进程」七字，
@@ -385,7 +385,7 @@ function InstanceRowViewImpl({
           </div>
         </TableCell>
   )
-  /**
+  /** 
    * 
    * 节点 / 端口：上行节点名、下行端口。两者性质不同（在哪 / 怎么连），
    * 拆开各自可读；端口弱化颜色，不与节点名抢注意力。
@@ -419,8 +419,8 @@ function InstanceRowViewImpl({
           />
         </TableCell>
   )
-  /*
-    业务插件单元格（FR-534）：显示该实例探针注册了哪些业务域、有没有降级的。
+  /* 
+    业务插件单元格：显示该实例探针注册了哪些业务域、有没有降级的。
 
     **只渲染不解释**：域数量与健康与否直接来自探针上报，不推断业务含义。
     三种状态必须分清（混起来会让运维误判）：
@@ -533,7 +533,7 @@ function InstanceRowViewImpl({
     actions: cell_actions,
   }
 
-  /*
+  /* 
     本视图实际渲染的列顺序：与表头、colgroup 共用 computeVisibleColumns。
     【踩过坑】这三处曾各自算一遍，结果列顺序改了行没改（整表错位）、
     健康度格没跟随列设置、新增 business 列时 colgroup 漏加——
@@ -555,7 +555,7 @@ function InstanceRowViewImpl({
             : undefined
         }
         data-attention={attention ? 'true' : undefined}
-        /*
+        /* 
           【为什么不用 ::before 画左侧警示条】在 `<tr>` 上用伪元素会破坏表格列布局：
           浏览器把 `::before` 当行内盒参与该行的列分配，导致这一行的首格整体右移、
           列宽与其它行错开（实测崩溃行比普通行右移 34px，内容挤成一团）。
@@ -603,7 +603,7 @@ function InstanceRowViewImpl({
   )
 }
 
-/**
+/** 
  * 行组件的记忆化包装。
  *
  * 【为什么需要】一次排序点击会引发 6~7 次整表重渲染（URL 变化 → 查询状态变化 → 数据到达 →
@@ -629,7 +629,7 @@ export const InstanceRowView = memo(InstanceRowViewImpl, (prev, next) => {
   if (prev.nodeName !== next.nodeName) return false
   // 列集合按内容比较：容器每次都可能传新 Set，引用不同但内容相同不该重渲染。
   if (!sameColumnSet(prev.columns, next.columns)) return false
-  /*
+  /* 
     列顺序必须参与比较。
     【这里踩过坑】表头拖拽换位后，表头变了而行内容没变——整表错位。
     根因就是这个比较器漏了 columnOrder：行组件被 memo 拦下，仍用旧顺序渲染，
@@ -637,7 +637,7 @@ export const InstanceRowView = memo(InstanceRowViewImpl, (prev, next) => {
     漏一个就是一次静默错位。
   */
   if (!sameKeyArray(prev.columnOrder, next.columnOrder)) return false
-  /*
+  /* 
     业务域状态同样必须进比较器：它决定「业务插件」这一格的渲染结果。
     批量轮询每次都会给出新对象，但域清单没变时不该重渲染整行——故按值比较。
   */

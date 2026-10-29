@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// BanScope 封禁范围（FR-054）。
+// BanScope 封禁范围。
 type BanScope string
 
 const (
@@ -19,7 +19,7 @@ const (
 	BanScopeGlobal BanScope = "global"
 )
 
-// BanRecord 玩家封禁记录（FR-054）。
+// BanRecord 玩家封禁记录。
 //
 // RCON 是无状态命令通道，封禁执行后服务端自身的 banned-players 文件才是权威来源；
 // 本表是 JianManager 侧的可查询审计台账：谁、何时、为何、对哪个范围封禁了某玩家，

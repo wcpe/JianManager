@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 单条日志（实例运行日志或平台运行日志，FR-049）。 */
+/** 单条日志（实例运行日志或平台运行日志）。 */
 // 日志条目类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
 import type { LogEntry } from '@/lib/console/console-log-types'
 export type { LogEntry } from '@/lib/console/console-log-types'
@@ -16,8 +16,8 @@ export interface LogPage {
   pageSize: number
 }
 
-/**
- * 游标分页查询参数（FR-419，spec §4.2）。
+/** 
+ * 游标分页查询参数（spec §4.2）。
  *
  * 与页码分页并存：日志中心翻页仍用 {@link LogQueryParams} 的 `page/pageSize`（需要 total、
  * 需要跳页），控制台向上回溯用游标——回溯期间新日志持续涌入表头，OFFSET 的「跳过前 N 行」
@@ -30,7 +30,7 @@ export interface LogCursorParams extends Omit<LogQueryParams, 'page' | 'pageSize
   limit?: number
 }
 
-/** 游标分页响应（FR-419）。刻意无 total——游标模式不做全表 COUNT。 */
+/** 游标分页响应。刻意无 total——游标模式不做全表 COUNT。 */
 export interface LogCursorPage {
   items: LogEntry[]
   /** 下一页（更早）起点；`null` 表示已到最早，没有更早日志。 */
@@ -38,8 +38,8 @@ export interface LogCursorPage {
   limit: number
 }
 
-/**
- * 取一页更早的日志（游标分页，FR-419）。
+/** 
+ * 取一页更早的日志（游标分页）。
  *
  * 不走 useQuery：回溯是「按用户滚动逐页累积」的命令式流程，缓存键会随 cursor 变化而无限增长，
  * 且页与页之间必须严格串行（上一页的 nextCursor 是下一页的入参），交给 react-query 反而更绕。
@@ -51,19 +51,19 @@ export async function fetchLogCursorPage(params: LogCursorParams): Promise<LogCu
 
 /** useLogs 可选项。 */
 export interface UseLogsOptions {
-  /**
-   * 自动重拉间隔（ms）；用于「实时跟随」(tail, FR-150)。
+  /** 
+   * 自动重拉间隔（ms）；用于「实时跟随」(tail)。
    * 传 false 或省略则不轮询，仅在 params 变化时取数。
    */
   refetchInterval?: number | false
   enabled?: boolean
 }
 
-/**
+/** 
  * 分页查询日志。
- * 过滤与分页全部在后端 DB 完成，不全量序列化（FR-049）。
+ * 过滤与分页全部在后端 DB 完成，不全量序列化。
  * keepPreviousData 让翻页/改筛选时旧页保留，避免表格闪烁。
- * 传 refetchInterval 时按间隔自动重拉，实现实时跟随（FR-150）。
+ * 传 refetchInterval 时按间隔自动重拉，实现实时跟随。
  */
 export function useLogs(params: LogQueryParams, options: UseLogsOptions = {}) {
   return useQuery({
@@ -95,7 +95,7 @@ export function useLegacyLogs(params: LogQueryParams, enabled: boolean) {
   })
 }
 
-/**
+/** 
  * 按当前筛选导出日志为 NDJSON 文件并触发浏览器下载（GET /logs/export）。
  * 经 api 客户端发起，自动携带鉴权并复用 401 刷新；分页参数不参与导出。
  */

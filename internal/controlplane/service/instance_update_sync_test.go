@@ -50,7 +50,7 @@ func newInstanceUpdateSyncDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestInstanceUpdate_SyncsLaunchSpecToOnlineWorker 验证 FR-233：保存启动命令、JDK、环境变量、
+// TestInstanceUpdate_SyncsLaunchSpecToOnlineWorker 验证：保存启动命令、JDK、环境变量、
 // autoRestart 后，CP 必须把数据库中的最新完整规格幂等同步给当前在线 Worker。
 func TestInstanceUpdate_SyncsLaunchSpecToOnlineWorker(t *testing.T) {
 	db := newInstanceUpdateSyncDB(t)

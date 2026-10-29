@@ -22,12 +22,12 @@ import {
 } from '@jianmanager/ui/components/select'
 import { ENV_TAG_PREFIX } from '@/lib/instances/instance-tags'
 
-/** 内置环境维度选项（FR-047 复用 Tags 的 env: 约定）。无环境用哨兵值。 */
+/** 内置环境维度选项（复用 Tags 的 env: 约定）。无环境用哨兵值。 */
 const ENV_NONE = '__none__'
 const ENV_VALUES = ['dev', 'test', 'prod']
 
-/**
- * 实例标签编辑器（FR-047）：环境维度（dev/test/prod，单选，写为 `env:` 前缀标签）
+/** 
+ * 实例标签编辑器：环境维度（dev/test/prod，单选，写为 `env:` 前缀标签）
  * + 自由标签（chip 增删）。保存时合并为标签数组，由外壳持久化。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast——初始标签经 props 注入，

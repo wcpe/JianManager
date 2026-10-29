@@ -1,4 +1,4 @@
-/**
+/** 
  * @file GroupsPageView：用户组管理页（组卡片列表 + 创建/编辑/成员/删除对话框）的受控视图，
  *       取数、写动作与 URL 深链解析/写回由应用容器负责。
  * @input views/groups/CreateGroupDialogView（新建组视图）、views/groups/GroupEditDialogView（编辑组视图）、
@@ -6,7 +6,7 @@
  *        Button/Panel/布局层原语、翻译上下文
  * @output GroupsPageView、GroupsPageViewProps、GroupPanel、GroupRow、GroupMemberChip、GroupsMembersDialogArgs
  * @sync apps/control-plane-web/src/pages/GroupsPage.tsx、apps/control-plane-web/src/pages/GroupsPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-156 用户组、FR-128 可寻址面板、FR-336 成员候选服务端搜索）
+ * @since（组件受控化迁包；原页用户组可寻址面板成员候选服务端搜索）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -21,10 +21,10 @@ import { GroupEditDialogView } from '@/components/views/groups/GroupEditDialogVi
 import type { GroupEditValues } from '@/components/views/groups/GroupEditDialogView'
 import { formatSizeMb } from '@/lib/backups/backup'
 
-/** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */
+/** 用户组详情可打开的面板（可寻址）：编辑属性 / 管理成员。 */
 export type GroupPanel = 'edit' | 'members'
 
-/**
+/** 
  * 组卡片上最多铺几个成员药丸，其余以「+N」收口（点它直接进该组成员面板）。
  *
  * 大组（数百成员）全量铺开会把卡片撑成一面墙，一屏只能看一个组；而卡片是「概览」，
@@ -41,7 +41,7 @@ export interface GroupMemberChip {
   user?: { username?: string }
 }
 
-/**
+/** 
  * 用户组行（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/groups` 的 `GroupInfo`：容器直接传 API
@@ -63,7 +63,7 @@ export interface GroupsMembersDialogArgs {
   onClose: () => void
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读写路由**。
  * - 组列表经 props 注入（容器调 `useGroups`）；
  * - 三个写动作（创建组、编辑组、删除组）以回调上报，由容器执行 mutation 并决定文案；
@@ -103,9 +103,9 @@ export interface GroupsPageViewProps {
   renderMembersDialog: (args: GroupsMembersDialogArgs) => ReactNode
 }
 
-/**
- * 用户组管理页（FR-156，兑现 FR-003）：组卡片列出描述、配额与成员，可编辑/管理成员/删除；
- * 编辑与成员面板经 `?group=<id>&panel=edit|members` 深链（FR-128）。
+/** 
+ * 用户组管理页（兑现）：组卡片列出描述、配额与成员，可编辑/管理成员/删除；
+ * 编辑与成员面板经 `?group=<id>&panel=edit|members` 深链。
  */
 export function GroupsPageView({
   groups,

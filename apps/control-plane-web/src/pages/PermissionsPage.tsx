@@ -9,7 +9,7 @@ import { usePermissionsStore } from '@/stores/permissions'
 import { PermissionsPageView } from '@/components/views/permissions/PermissionsPageView'
 import type { PermissionSelection } from '@/components/views/permissions/PermissionsPageView'
 
-/**
+/** 
  * 用户候选窗口大小（服务端搜索的取值上限）。
  *
  * 左栏是 230px 的窄栏、且列表已虚拟化，故一次取一个够用的窗口 + 键入收窄即可；
@@ -17,7 +17,7 @@ import type { PermissionSelection } from '@/components/views/permissions/Permiss
  */
 const PERMISSIONS_USER_LIMIT = 100
 
-/**
+/** 
  * 深链初始选择：只在挂载时读一次 `?user=<id>`（`?role` 不参与，与迁包前一致）。
  * 选择变更不回写 URL，故 URL 只是入口、不是真源。
  */
@@ -34,7 +34,7 @@ function readDeepLinkedSelection(): PermissionSelection {
   return null
 }
 
-/**
+/** 
  * 权限管理页容器（ADR-103 b 范式）：三栏工作区的展示与草稿交共享视图，
  * 本层只负责目录/角色/用户取数、选中态（含 `?user=<id>` 深链一次读取）、两个保存动作与 toast。
  *
@@ -55,8 +55,8 @@ export default function PermissionsPage() {
   const { data: catalog, isLoading: catalogLoading } = useRbacCatalog()
   const { data: roles = [], isLoading: rolesLoading } = useRbacRoles()
 
-  /**
-   * 用户候选走服务端搜索（FR-336）：默认前 N 条 + 键入经 300ms 防抖下发 `q`。
+  /** 
+   * 用户候选走服务端搜索：默认前 N 条 + 键入经 300ms 防抖下发 `q`。
    * 左栏不再拉「全量用户」——那是千级用户下最重的请求，且每个用户一行都要渲染。
    */
   const [userKeyword, setUserKeyword] = useState('')
@@ -70,7 +70,7 @@ export default function PermissionsPage() {
 
   const selectedUserId = selection?.kind === 'user' ? selection.id : null
   const { data: userPerms } = useUserPermissions(selectedUserId, selection?.kind === 'user')
-  /**
+  /** 
    * 选中用户在候选窗口里**确实不存在**。
    *
    * 判定要足以支撑「这个 id 不存在」的结论，故只在「没有搜索词（窗口即全量）且窗口已装下全部用户」

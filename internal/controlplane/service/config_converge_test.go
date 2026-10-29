@@ -182,7 +182,7 @@ func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	require.ErrorIs(t, err, ErrBaselineScopeGroupNotFound)
 }
 
-// TestConfigBaseline_ScopeFiltering 覆盖 FR-458 越权修复：非管理员只能看到/收敛「scope ∩ 可访问集合」。
+// TestConfigBaseline_ScopeFiltering 覆盖越权修复：非管理员只能看到/收敛「scope ∩ 可访问集合」。
 func TestConfigBaseline_ScopeFiltering(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 3)
@@ -260,7 +260,7 @@ func TestConfigBaseline_ScopeHidesInvisible(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
-// TestConfigBaseline_DetectDriftReadErrorNotDrift 读取错误单独分类，不计入漂移（FR-458 nit）。
+// TestConfigBaseline_DetectDriftReadErrorNotDrift 读取错误单独分类，不计入漂移（nit）。
 func TestConfigBaseline_DetectDriftReadErrorNotDrift(t *testing.T) {
 	db := newBaselineTestDB(t)
 	seedPlainInstances(t, db, 1) // 该实例无版本；config 未注入 → Read 报错
@@ -284,7 +284,7 @@ func TestConfigBaseline_DetectDriftReadErrorNotDrift(t *testing.T) {
 	require.Equal(t, 0, res.Targeted)
 }
 
-// TestConfigBaseline_UpsertScopedGuard 覆盖 FR-458 越权修复：非管理员不能创建/覆盖 scope 超出可访问范围的基线。
+// TestConfigBaseline_UpsertScopedGuard 覆盖越权修复：非管理员不能创建/覆盖 scope 超出可访问范围的基线。
 func TestConfigBaseline_UpsertScopedGuard(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 3)

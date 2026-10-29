@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-520 §4.1 / §6 首页模式与千级数据摘要 · 真浏览器验收。
+/** 
+ *§4.1 / §6 首页模式与千级数据摘要 · 真浏览器验收。
  *
  * 为什么这两条必须落到 e2e：
  * - **深链刷新不丢**是「路由层 + 浏览器刷新」的合成事实。jsdom 里既没有真刷新，
@@ -17,7 +17,7 @@ import { login } from './helpers'
 /** 首页模式记忆的存储键（与 src/lib/shared/home-mode.ts 的 HOME_MODE_KEY 同源）。 */
 const HOME_MODE_KEY = 'console.homeMode'
 
-/**
+/** 
  * AI 首页总 DOM 节点数上界。
  *
  * 【这个数字怎么来的】实测值 **716**（`document.querySelectorAll('*').length`，
@@ -34,7 +34,7 @@ const HOME_MODE_KEY = 'console.homeMode'
  */
 const DOM_NODE_UPPER_BOUND = 2000
 
-/**
+/** 
  * 摘要请求落定的超时：devmock large 规模首屏要下懒加载 chunk，给足。
  *
  * 从 30s 提到 45s 的依据（实测，非保守猜测）：两个用例串行跑时，
@@ -48,7 +48,7 @@ const READY_TIMEOUT = 45_000
 /** 单个对照观察窗时长。 */
 const WINDOW_MS = 30_000
 
-/**
+/** 
  * 观察窗长度定为 **30s** 的依据。
  *
  * 本仓真实存在的轮询间隔：任务进度 2s（`ACTIVE_TASKS_REFETCH_MS`）、
@@ -59,10 +59,10 @@ const WINDOW_MS = 30_000
  */
 const POLLING_DELTA_UPPER_BOUND = 2
 
-/**
+/** 
  * 【为什么要做「对照页」测量，而不是直接要求计数为 0】
  *
- * 实测发现 mock 运行时存在一个**与 FR-520 无关的全站噪声源**：SSE 流（`/instances/events`）
+ * 实测发现 mock 运行时存在一个**与无关的全站噪声源**：SSE 流（`/instances/events`）
  * 被服务端每 ~5s 关闭一次，客户端按设计自动重连（`api/events.ts`），重连会用
  * `invalidateQueries({queryKey:['instances']})` 失效缓存并伴随一次权限重载，
  * 于是**同一毫秒内**成片端点一起重取（实测 41036ms 一次、46272ms 一次，
@@ -87,11 +87,11 @@ interface WatchedRequests {
   /** 首页私有摘要端点的发生次数（只计数）。 */
   alertEvents: number
   assistantConversations: number
-  /** 已知的「一定会轮询」对照端点：存在活跃任务时 2s 一拍（FR-329）。 */
+  /** 已知的「一定会轮询」对照端点：存在活跃任务时 2s 一拍。 */
   tasksWithLimit5: number
 }
 
-/**
+/** 
  * 挂 `/api/v1` 请求监听器。
  *
  * 必须在 `goto` **之前**调用：首页摘要在挂载当刻就发请求，晚挂监听会漏掉首批。
@@ -139,7 +139,7 @@ function emptyWatched(): WatchedRequests {
   }
 }
 
-/**
+/** 
  * 记录「全库实例总数」，用于证明数据集确实是千级。
  *
  * 来源是页面**自己**发出的 `GET /instances/aggregate` 响应里的 `total`：
@@ -189,8 +189,8 @@ async function expectHomeMode(page: Page, mode: 'classic' | 'assistant', ctx: st
   }
 }
 
-test.describe('FR-520 首页模式', () => {
-  /**
+test.describe('首页模式', () => {
+  /** 
    * 用例 A：经典深链刷新不丢，且深链不污染记忆。
    *
    * 守的是 spec §4.1 冻结的优先级（显式 `?home=` > 记忆 > 默认 AI），
@@ -202,7 +202,7 @@ test.describe('FR-520 首页模式', () => {
     // 那是「步骤多」而不是「某一步卡住」，故放宽用例超时，而不是砍掉反证步骤。
     test.setTimeout(180_000)
 
-    /*
+    /* 
       ── 为什么先预热一次整页导航 ──
 
       `helpers.login()` 里等 console-shell 的 20s 是**全局共享**的，不宜为了一个文件的
@@ -243,7 +243,7 @@ test.describe('FR-520 首页模式', () => {
     await page.goto('/')
     await expectHomeMode(page, 'assistant', '深链之后访问无参数的 /')
 
-    /*
+    /* 
       反证：避免上面几条 null 断言空转成「记忆机制根本没接线」。
       真的往记忆里写 classic，再访问 / 就必须落经典首页——
       否则「深链不写记忆」与「记忆从不生效」在上面是同一个观测结果。
@@ -270,10 +270,10 @@ test.describe('FR-520 首页模式', () => {
       '非法 ?home= 取值应按「未指定」处理，同样不得写入记忆',
     ).toBeNull()
 
-    await page.screenshot({ path: '../.tmp/acceptance/FR-520/home-mode-deeplink.png', fullPage: false })
+    await page.screenshot({ path: '../.tmp/acceptancehome-mode-deeplink.png', fullPage: false })
   })
 
-  /**
+  /** 
    * 用例 B：1200 实例规模下 AI 首页摘要区**有界且不轮询**（Network + DOM 双重实测）。
    *
    * 守的是 spec §6（摘要取数一律有界、不轮询）与 §5.1（右栏各区块最多 5 条）。
@@ -367,7 +367,7 @@ test.describe('FR-520 首页模式', () => {
       tasksLimit5: seen.tasksWithLimit5 - homeMark.tasksWithLimit5,
     }
 
-    /*
+    /* 
       ── 关于「近期任务」为什么不再轮询 ──
 
       本用例最初把 `/tasks?limit=5` 当**灵敏度对照**：它当时复用 `useTasks`，
@@ -401,7 +401,7 @@ test.describe('FR-520 首页模式', () => {
         `（2s 轮询器会给 ~15 次、10s 给 ~3 次，噪声最多 2 次）`,
     ).toBeLessThanOrEqual(POLLING_DELTA_UPPER_BOUND)
 
-    /*
+    /* 
       ── 观察窗 2（对照页 /nodes，同样 30s）──
       /nodes 没有任何首页摘要查询，但同样挂着顶栏（10s 轮询 /metrics/overview）并承受同一套噪声。
       于是「首页窗 − 对照窗」只剩下首页自己多加的那部分轮询：没有轮询时差值 ≈0，
@@ -432,7 +432,7 @@ test.describe('FR-520 首页模式', () => {
 
     // 观测值留痕：失败时这几行直接说明「当时的规模与计数」，省掉复现成本。
     console.log(
-      `[FR-520] DOM total=${dom.totalNodes} home=${dom.homeNodes} instanceLinks=${dom.instanceLinks} ` +
+      `DOM total=${dom.totalNodes} home=${dom.homeNodes} instanceLinks=${dom.instanceLinks} ` +
         `rows=${dom.instanceRows} datasetTotal=${datasetTotal} | ` +
         `home${WINDOW_MS / 1000}s=${JSON.stringify(homeDelta)} control${WINDOW_MS / 1000}s(overview)=${controlDelta} ` +
         `(controlStart=${controlStart})`,
@@ -441,6 +441,6 @@ test.describe('FR-520 首页模式', () => {
     // 回到首页截图存档（对照页已无意义，截的是被测页面）。
     await page.goto('/')
     await expect(home, 'AI 首页应可再次进入（截图存档用）').toBeVisible({ timeout: READY_TIMEOUT })
-    await page.screenshot({ path: '../.tmp/acceptance/FR-520/assistant-home-large-1200.png', fullPage: false })
+    await page.screenshot({ path: '../.tmp/acceptanceassistant-home-large-1200.png', fullPage: false })
   })
 })

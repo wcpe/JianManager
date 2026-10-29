@@ -52,7 +52,7 @@ type Provider struct {
 	allowDownload bool
 	// httpClient 用于按需下载（可注入，便于测试）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次下载取当前 client，
+	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次下载取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
 	httpProvider func() *http.Client
 	// downloadURL 是 CFR jar 下载地址（默认 Maven Central，可注入便于测试）。
@@ -72,10 +72,10 @@ type Config struct {
 	Embedded EmbeddedJarFunc
 	// AllowDownload 是否允许从 Maven Central 按需下载（默认应开启）。
 	AllowDownload bool
-	// HTTPClient 按需下载 CFR 所用出站 client（经进程级代理，FR-174/ADR-037）。
+	// HTTPClient 按需下载 CFR 所用出站 client（经进程级代理ADR-037）。
 	// 为 nil 时回退一个 60s 超时的默认 client（向后兼容；测试也可经此注入 httptest client）。
 	HTTPClient *http.Client
-	// HTTPClientProvider 运行时出站持有者（FR-185/ADR-043）：非空时每次下载取当前 client，
+	// HTTPClientProvider 运行时出站持有者（ADR-043）：非空时每次下载取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 HTTPClient。
 	HTTPClientProvider func() *http.Client
 }

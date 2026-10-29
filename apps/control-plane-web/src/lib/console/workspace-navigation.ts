@@ -1,5 +1,5 @@
-/**
- * FR-502 阶段 5：工作区导航数据层（四工作区 × 组 × 页面）。
+/** 
+ *阶段 5：工作区导航数据层（四工作区 × 组 × 页面）。
  *
  * 【为什么「新增」而不是「改写」nav-config.ts】
  * 这一步牵动权限裁剪与深链，是整轮重构中最敏感的一步，因此：
@@ -83,7 +83,7 @@ export interface WorkspaceDef {
   groups: NavGroup[]
 }
 
-/**
+/** 
  * CSV 登记的 5 条子路由（深链，非侧栏导航目的地）。
  * 阶段 6 的 CommandPalette / 资源导航可用它把「深链」与「导航目的地」分开处理。
  */
@@ -98,7 +98,7 @@ export const SUB_ROUTE_PATTERNS = [
 /** 独立认证页（CSV 登记）：登录 / 首启引导 / 接受邀请——不属于任何工作区。 */
 export const AUTH_ROUTE_PATHS = ['/login', '/setup', '/invite'] as const
 
-/**
+/** 
  * 四工作区定义（未裁剪的原始数据）。
  * 顺序即顶栏顺序：服务器运维 → 观测与自动化 → 运营与分发 → 平台管理。
  */
@@ -158,7 +158,7 @@ export const WORKSPACES: WorkspaceDef[] = [
           { to: '/monitor', labelKey: 'nav.monitoring', icon: Activity, perm: 'monitor.read' },
           { to: '/logs', labelKey: 'nav.logs', icon: ScrollText, perm: 'log.read' },
           { to: '/statistics', labelKey: 'nav.statistics', icon: BarChart3, perm: 'stats.read' },
-          // 告警（FR-085）：读或管任一权限即可见——只读用户也能查事件/规则，无写权限时页内入口自动收敛。
+          // 告警：读或管任一权限即可见——只读用户也能查事件/规则，无写权限时页内入口自动收敛。
           { to: '/alerts', labelKey: 'nav.alerts', icon: AlertTriangle, perm: ['alert.read', 'alert.manage'] },
         ],
       },
@@ -172,12 +172,12 @@ export const WORKSPACES: WorkspaceDef[] = [
           { to: '/schedules', labelKey: 'nav.schedules', icon: FileClock, perm: 'schedule.read' },
           { to: '/backups', labelKey: 'nav.backups', icon: Archive, perm: 'backup.read' },
           { to: '/config-baselines', labelKey: 'nav.configBaselines', icon: GitCompareArrows, perm: ['file.read', 'instance.read'] },
-          // 分层配置（FR-529）：与配置基线同属「配置」语境，但语义是「一条配置跨作用域分层 + 有效值预览」，
+          // 分层配置：与配置基线同属「配置」语境，但语义是「一条配置跨作用域分层 + 有效值预览」，
           // 基线那边是「集群级模板 + 漂移收敛」。放在同组，运维找配置时不用跨工作区。
           { to: '/config-files', labelKey: 'nav.configFiles', icon: Layers, perm: ['file.read', 'instance.read'] },
-          // 配置纳管（FR-533）：把磁盘上已有的配置文件登记为 JM 基线（只读磁盘、不改写、不覆盖）。
+          // 配置纳管：把磁盘上已有的配置文件登记为 JM 基线（只读磁盘、不改写、不覆盖）。
           { to: '/config-adopt', labelKey: 'nav.configAdopt', icon: FileInput, perm: ['file.read', 'instance.read'] },
-          // 配置交付编排（FR-531/532）：分批灰度、观察窗、熔断与回滚。
+          // 配置交付编排（532）：分批灰度、观察窗、熔断与回滚。
           { to: '/config-deliveries', labelKey: 'nav.configDeliveries', icon: Workflow, perm: ['file.read', 'instance.read'] },
         ],
       },
@@ -276,7 +276,7 @@ export const WORKSPACES: WorkspaceDef[] = [
         labelKey: 'nav.systemMaintenance',
         icon: Settings2,
         children: [
-          // 审批中心（FR-490/493）放在审计旁边：两者都是「平台治理」视角，
+          // 审批中心（493）放在审计旁边：两者都是「平台治理」视角，
           // 审批读权限 approval.read 与审计读权限 audit.read 独立，各自把关。
           { to: '/approvals', labelKey: 'nav.approvals', icon: ShieldCheck, perm: 'approval.read' },
           { to: '/audit', labelKey: 'nav.audit', icon: FileClock, perm: 'audit.read' },
@@ -290,7 +290,7 @@ export const WORKSPACES: WorkspaceDef[] = [
   },
 ]
 
-/**
+/** 
  * 本层新增、尚未进语言包的 i18n 键（阶段 6/7 补进 `src/i18n/{zh,en}.json`）。
  * 测试会同时守住两个方向：新增键必须登记在此，登记在此的键必须真被本层使用。
  */
@@ -315,8 +315,8 @@ export const WORKSPACE_I18N_KEYS_TO_ADD: string[] = [
   'nav.botLoadSession',
 ]
 
-/**
- * 权限判定：与 `nav-config.ts` 的私有 `permOk` 同语义（FR-431/432）。
+/** 
+ * 权限判定：与 `nav-config.ts` 的私有 `permOk` 同语义（432）。
  * `perm` 为数组时是 any-of；管理员全开；无 `perm` 的入口对所有人可见。
  */
 function permOk(perm: string | string[] | undefined, nodes: Set<string>, admin: boolean): boolean {
@@ -326,7 +326,7 @@ function permOk(perm: string | string[] | undefined, nodes: Set<string>, admin: 
   return nodes.has(perm)
 }
 
-/**
+/** 
  * 裁剪一层的分组：与 `nav-config.ts` 的私有 `filterNavGroups` 同语义——
  * 叶子分组按自身 `perm` 判定；容器分组过滤 children/sections，两级都空则整组丢弃。
  */
@@ -351,7 +351,7 @@ function filterGroups(groups: NavGroup[], nodes: Set<string>, admin: boolean): N
   return out
 }
 
-/**
+/** 
  * 按有效权限裁剪后的工作区列表（语义与 `navGroupsForPermissions` 一致）。
  * 额外做一件 nav-config 不需要做的事：把裁剪后没有任何分组的工作区整块丢弃
  * （顶栏不应出现一个点进去空空如也的工作区）。
@@ -370,7 +370,7 @@ export function workspacesForPermissions(nodes: Set<string> | null, admin: boole
   return out
 }
 
-/**
+/** 
  * 角色种子包装（语义与 `navGroupsForRole` 一致）：权限尚未加载时用 DEFAULT_ROLE_NODES 种子的可见性。
  * 平台管理员全路径可见；未知角色 / 无种子 → 仅无 `perm` 入口（避免清空权限后仍显示旧路由）。
  */
@@ -392,7 +392,7 @@ function flattenGroups(groups: NavGroup[]): { to: string; labelKey: string }[] {
   return out
 }
 
-/**
+/** 
  * 扁平化全部工作区入口（供 CommandPalette 索引），返回形状与现有 `flatNavItems` 相同。
  * 传 role（number|null）走角色种子包装；传 Set+admin 走权限裁剪。
  * 注意：结果含 5 条子路由深链（{@link SUB_ROUTE_PATTERNS}），这不是权限放宽——
@@ -447,7 +447,7 @@ function splitSegments(path: string): string[] {
   return path.split('/').filter((s) => s.length > 0)
 }
 
-/**
+/** 
  * 匹配优先级（分数越高越优先；同分取登记顺序先者）：
  *   3 + 段数：静态路径完全相等（`/instances/new` 因此不会被 `/instances/:id` 抢走）；
  *   2 + 段数：动态模式完全相等（段数一致、静态段逐段一致、`:param` 匹配非空段）；
@@ -482,7 +482,7 @@ function matchScore(pattern: string, path: string): number {
   return 0
 }
 
-/**
+/** 
  * 路径 → 工作区 / 分组 / 命中的登记项。用于顶栏高亮、「当前工作区」判定与面包屑兜底；
  * 未命中返回 null。静态路径优先于动态模式（`/instances/new` 归向导，不归 `:id` 控制台）。
  */

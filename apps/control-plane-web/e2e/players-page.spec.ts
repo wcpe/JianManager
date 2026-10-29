@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-146 玩家管理增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *玩家管理增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：在线玩家行勾选 + 批量踢/封 + 子服筛选；实时事件流暂停 + 类型过滤 + 清空。
- * 证据截图落 .tmp/acceptance/FR-146/。
+ * 证据截图落 .tmp/acceptance。
  */
 
-test('FR-146 在线玩家批量踢封+子服筛选 与 实时事件暂停/过滤/清空', async ({ page }) => {
+test('在线玩家批量踢封+子服筛选 与 实时事件暂停/过滤/清空', async ({ page }) => {
   await login(page)
   await page.goto('/players')
 
@@ -20,7 +20,7 @@ test('FR-146 在线玩家批量踢封+子服筛选 与 实时事件暂停/过滤
   // 勾选一行 → 批量按钮启用
   await page.getByRole('checkbox', { name: /选择玩家 Alice/ }).check()
   await expect(page.getByRole('button', { name: '批量踢出' })).toBeEnabled()
-  await page.screenshot({ path: '../.tmp/acceptance/FR-146/single-machine-players-online.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-players-online.png', fullPage: true })
 
   // 实时事件：暂停 + 类型过滤 + 清空
   // 页内 Tab 已补 tab 语义（role=tab）并入 URL，故按 tab 角色定位。

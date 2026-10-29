@@ -1,5 +1,5 @@
-/**
- * logsFederation.* i18n 键与 zh/en 文案（FR-482 foundation）。
+/** 
+ * logsFederation.* i18n 键与 zh/en 文案（foundation）。
  *
  * **当前状态（2026-10-12 订正）**：{@link LOGS_FEDERATION_KEYS} 是 helper 产出的 key 的
  * **唯一真源**，仍在使用；而 {@link LOGS_FEDERATION_LOCALES}（zh/en 文案对象）的

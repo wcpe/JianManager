@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { expect, test } from '@playwright/test'
 
-/**
- * FR-518 后端快照不变 —— **真实 CP 验收**（非 devmock）。
+/** 
+ *后端快照不变 —— **真实 CP 验收**（非 devmock）。
  *
  * ## 为什么不放在 mock 用例里
  *
@@ -38,7 +38,7 @@ const ADMIN_PASS = process.env.FR518_PASS ?? 'fr514live'
 
 test.use({ baseURL: BASE_URL })
 
-/**
+/** 
  * 直接查真实库里的快照（这是本文件的**主张要点**：断言落在持久化层）。
  *
  * 用 sqlite3 CLI 而不是再起一个 Go 进程：只读一行，依赖面最小。
@@ -53,7 +53,7 @@ function readSnapshot(runId: number): string | null {
   return out === '' || out === '<NULL>' ? null : out
 }
 
-test.describe('FR-518 后端快照（真实 CP）', () => {
+test.describe('后端快照（真实 CP）', () => {
   test.skip(
     !process.env.FR518_CP_DB && process.env.FR518_REQUIRE_REAL !== '1',
     '需要真实 CP：设置 FR518_CP_DB 指向隔离库、FR518_BASE_URL 指向非 mock 前端；' +
@@ -88,7 +88,7 @@ test.describe('FR-518 后端快照（真实 CP）', () => {
     const panel = page.getByRole('complementary', { name: 'AI 助手' })
     await expect(panel, '助手浮窗应可见').toBeVisible({ timeout: 20_000 })
 
-    /**
+    /** 
      * 发一轮消息并返回 runId。
      *
      * 两个必要的准备动作，都是**真实后端相比 mock 才暴露的约束**：
@@ -169,7 +169,7 @@ test.describe('FR-518 后端快照（真实 CP）', () => {
 
     // 观测值留痕：失败时直接看到两轮快照长什么样。
     console.log(
-      `[FR-518] run1=${run1} pageKey=${JSON.parse(snap1 as string).pageKey} | ` +
+      `run1=${run1} pageKey=${JSON.parse(snap1 as string).pageKey} | ` +
         `run2=${run2} pageKey=${JSON.parse(snap2 as string).pageKey} | ` +
         `run1 事后仍为：${JSON.parse(snap1After as string).pageKey}`,
     )

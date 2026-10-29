@@ -11,7 +11,7 @@ import { useAssistantChat } from '@/components/views/assistant/useAssistantChat'
 import { AssistantChatProvider } from '@/components/views/assistant/assistant-chat-context'
 import AssistantHomePage from './AssistantHomePage'
 
-/**
+/** 
  * 一轮问答**只能出现一次**（真实供应商链路得到的缺陷回归）。
  *
  * 背景：消息列表是「服务端历史 + 本地流式」直接拼接。`run_end` 时会 refetch 历史，
@@ -44,8 +44,8 @@ function asAdmin() {
 const QUESTION = '回归用问题：这条只应出现一次'
 const REPLY = '回归用回复：这条也只应出现一次'
 
-/**
- * 首页从外壳层的 Context 取会话状态（FR-519 §3：外壳级单一 manager，不得自建）。
+/** 
+ * 首页从外壳层的 Context 取会话状态（§3：外壳级单一 manager，不得自建）。
  * 测试里补一层 Provider，**仍调用真实的 useAssistantChat**——
  * 这样测到的状态装配与生产一致，而不是喂一个手工 mock。
  * 写法与 `AssistantHomePage.dom.test.tsx` 的 `HomeInProvider` 保持一致。

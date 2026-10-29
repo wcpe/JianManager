@@ -180,7 +180,7 @@ describe('serialize / deserialize round-trip', () => {
   })
 })
 
-describe('instanceId 携带（FR-167 跨实例）', () => {
+describe('instanceId 携带（跨实例）', () => {
   it('makeCard 可携带 instanceId', () => {
     const c = makeCard('terminal', { x: 0, y: 0 }, 42)
     expect(c.instanceId).toBe(42)

@@ -1,4 +1,4 @@
-/**
+/** 
  * @file PermissionsPageView：权限管理三栏页（对象选择 / 权限树编辑 / 实时生效预览）的受控视图，
  *       目录与列表取数、选中态深链、两个保存动作与 toast 由应用容器负责。
  * @input lib/permission-explain（节点与域的大白话说明）、lib/roles（用户行的角色 i18n 键）、
@@ -8,7 +8,7 @@
  *         PermissionsCatalogNode、PermissionsCatalogGroup、PermissionsUserPermissions、
  *         SaveUserPermissionsArgs、PermissionsToggleEvent
  * @sync apps/control-plane-web/src/pages/PermissionsPage.tsx、apps/control-plane-web/src/pages/PermissionsPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-432 权限管理三栏页）
+ * @since（组件受控化迁包；原页权限管理三栏页）
  */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -52,7 +52,7 @@ export interface PermissionOverride {
   effect: 'allow' | 'deny'
 }
 
-/**
+/** 
  * 角色模板行（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/rbac` 的 `RbacRole`：容器直接传 API 返回的
@@ -68,7 +68,7 @@ export interface PermissionsRoleRow {
   isSystem: boolean
   /** 模板节点 id 列表。 */
   nodes: string[]
-  /**
+  /** 
    * 角色最近更新时间。它是编辑器重置 key 的一部分：模板被别处改过（updatedAt 变）时，
    * 正在编辑的草稿跟着回到新基线，避免用旧草稿覆盖新模板。
    */
@@ -146,7 +146,7 @@ interface PendingDiff {
   count: number
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 目录、角色列表、用户列表与选中用户的有效权限经 props 注入（容器调 `useRbacCatalog` /
  *   `useRbacRoles` / `useUsers` / `useUserPermissions`）；
@@ -179,7 +179,7 @@ export interface PermissionsPageViewProps {
   userQuery?: string
   /** 用户搜索键入上报（容器 300ms 防抖后下发服务端 `q`）。 */
   onUserQueryChange?: (keyword: string) => void
-  /**
+  /** 
    * 选中的用户在候选窗口里**确实不存在**（容器在「未过滤且窗口已装下全部用户」时才置真）。
    * 置真时中栏按「未选择」呈现——否则深链 `?user=<不存在的 id>` 会落在一棵空权限树上，
    * 配着「点卡片切换开/关」的提示，看不出是这个 id 不存在。
@@ -235,7 +235,7 @@ function applyOverrides(base: string[], overrides: PermissionOverride[]): Set<st
   return set
 }
 
-/**
+/** 
  * 左栏虚拟列表的一行：角色段与用户段共用同一条滚动轴，段内小标题也是行。
  * 用单个平铺数组而不是两个独立列表，是因为两段在同一个滚动容器里——分成两个列表就没法
  * 用一个虚拟窗口描述真实滚动位置（这也是原实现只能全量渲染的原因之一）。
@@ -252,7 +252,7 @@ const CATALOG_USER_PX = 52
 /** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
 const CATALOG_FALLBACK_VIEWPORT_PX = 420
 
-/**
+/** 
  * 左栏：对象选择（角色模板 + 用户）。
  *
  * 【为什么必须虚拟化】用户窗口是「前 N 条 + 键入走服务端搜索」（口径由容器决定）。
@@ -452,7 +452,7 @@ function PermissionsCatalogPanel({
   )
 }
 
-/**
+/** 
  * 中栏：权限树编辑（按域分组的节点卡 + 工具栏）。
  *
  * 只吃「已展平/已分组/已折算成开集」的展示输入与回调：连选范围、Shift 逻辑、草稿读写都在
@@ -711,7 +711,7 @@ function PermissionsMatrixPanel({
   )
 }
 
-/**
+/** 
  * 右栏：实时生效预览 + 绑定角色模板 + 变更摘要 + 覆盖清单 + 快捷键说明。
  *
  * 全是展示：绑定角色下拉只上报新值，改绑时要连带做的「按新模板回填节点草稿」留在页组件
@@ -865,8 +865,8 @@ function PermissionsEffectivePanel({
   )
 }
 
-/**
- * FR-432 权限管理三栏页：对象选择 / 权限树编辑 / 实时生效预览。
+/** 
+ *权限管理三栏页：对象选择 / 权限树编辑 / 实时生效预览。
  * 树整行可点；Shift 连选、Ctrl/⌘ 多选、Ctrl/⌘+A 全选可见、Esc 清范围高亮。
  */
 export function PermissionsPageView({
@@ -1193,7 +1193,7 @@ export function PermissionsPageView({
         ? userTarget?.username ?? t('permissions.users')
         : t('permissions.noSelection')
 
-  /**
+  /** 
    * 草稿基线变了（换了对象，或同一对象的基线变了：模板 updatedAt / 用户有效权限口径）→ 重置草稿。
    *
    * React 官方的「渲染期调整 state」模式：渲染期 setState 是允许的，但**必须提前返回**——

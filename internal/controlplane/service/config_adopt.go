@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置纳管（FR-533，见 docs/specs/config-beacon-migration/spec.md）。
+// 配置纳管（见 docs/specs/config-beacon-migration/spec.md）。
 //
 // 设计要点与「为什么不叫导入」：
 //   - 配置文件的事实真源是**服务器磁盘**，Beacon 的层版本只是副本。所以本能力只做
@@ -224,7 +224,7 @@ type ConfigHealthView struct {
 // adoptHealthNotice 是固定提示文案（不做自动判定时的替代物）。
 const adoptHealthNotice = "若 Beacon 侧配置功能仍开启，请确认不会两边同时修改同一份配置。JM 无法自动检测该状态。"
 
-// ConfigAdoptService 配置纳管服务（FR-533）。
+// ConfigAdoptService 配置纳管服务。
 type ConfigAdoptService struct {
 	db       *gorm.DB
 	files    *ConfigFileService

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 分片重组（FR-526 §2.5）的单测：正常重组、缺帧检出、超时丢弃、上限保护。
+// 分片重组（§2.5）的单测：正常重组、缺帧检出、超时丢弃、上限保护。
 // 这些用例直接驱动 chunkAssembler，不经过 WS（协议层用例见 chunk_frame_test.go）。
 
 // mkChunk 构造一片分片信封。

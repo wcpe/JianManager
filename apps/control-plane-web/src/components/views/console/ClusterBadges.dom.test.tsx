@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import { ClusterBadges, STAT_POPOVER_MAX_ROWS } from '@/components/views/console/ClusterBadges'
 import type { ClusterBadgesProps } from '@/components/views/console/ClusterBadges'
 
-/**
- * FR-294 集群概览徽标 · 受控视图测（ADR-103 c 范式）。
+/** 
+ *集群概览徽标 · 受控视图测（ADR-103 c 范式）。
  *
  * 应用侧 `ConsoleHeader.statPopovers.dom.test.tsx` 走 mock 假后端验联动；
  * 这里补的是**受控契约**：三个计数的呈现、浮窗开合上报（外壳据此开关查询）、
@@ -67,7 +67,7 @@ function renderBadges(over: Partial<ClusterBadgesProps> = {}) {
   return props
 }
 
-describe('ClusterBadges（FR-294 集群概览徽标）', () => {
+describe('ClusterBadges（集群概览徽标）', () => {
   it('三个徽标显示计数，崩溃数大于 0 时着红。', () => {
     renderBadges({ crashed: 2 })
     expect(screen.getByRole('button', { name: '在线节点: 3' })).toBeInTheDocument()

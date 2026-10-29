@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// DockerImageHandler 暴露节点级 Docker 镜像管理（FR-078，见 ADR-019）。
+// DockerImageHandler 暴露节点级 Docker 镜像管理（见 ADR-019）。
 // 所有操作经 service 委托目标节点 Worker；仅平台管理员可访问。
 type DockerImageHandler struct{ svc *service.DockerImageService }
 
@@ -87,7 +87,7 @@ func (h *DockerImageHandler) Remove(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
-// Check POST /nodes/:id/docker/check —— 探测节点 Docker 守护进程可用性（FR-237）。
+// Check POST /nodes/:id/docker/check —— 探测节点 Docker 守护进程可用性。
 // Docker 不可用不作错误：返回 200 + {available:false, error}，供向导选 docker 前先测、禁用提示。
 func (h *DockerImageHandler) Check(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -123,6 +123,6 @@ func (h *DockerImageHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	images.GET("", h.List)
 	images.POST("/pull", h.Pull)
 	images.POST("/remove", h.Remove)
-	// Docker 可用性检测（FR-237）：同 handler，路由在 images 组外（/nodes/:id/docker/check）。
+	// Docker 可用性检测：同 handler，路由在 images 组外（/nodes/:id/docker/check）。
 	rg.POST("/nodes/:id/docker/check", h.Check)
 }

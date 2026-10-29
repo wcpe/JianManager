@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# Playwright（FR-211）
+# Playwright
 /test-results/
 /playwright-report/
 /playwright/.cache/

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCache_GetToEvictsCorruptBlob 命中校验（FR-330）：缓存 blob 内容与 sha256 键不符
+// TestCache_GetToEvictsCorruptBlob 命中校验：缓存 blob 内容与 sha256 键不符
 // （磁盘损坏/被外部篡改）时，GetTo 必须按未命中返回、不落地脏内容，并作废该条目，
 // 让调用方回退远程下载重建缓存。
 func TestCache_GetToEvictsCorruptBlob(t *testing.T) {
@@ -34,7 +34,7 @@ func TestCache_GetToEvictsCorruptBlob(t *testing.T) {
 	assert.False(t, metaExists, "损坏条目的 meta 应一并删除")
 }
 
-// TestCache_LookupCoreKey 组合键反查（FR-330）：无 sha256 的下载源按 core|version|build
+// TestCache_LookupCoreKey 组合键反查：无 sha256 的下载源按 core|version|build
 // 组合键定位缓存条目；未知键/空键返回未命中。
 func TestCache_LookupCoreKey(t *testing.T) {
 	c := New(t.TempDir())

@@ -22,7 +22,7 @@ import {
 import { MOCK_PANEL_COLLAPSED_KEY, MockControlPanel } from './MockControlPanel'
 import { installMockPollingControl, isPollingQueryExcluded } from './mock-polling'
 
-/**
+/** 
  * 「请求日志」开关的落地动作是重启 MSW worker（jsdom 里没有 Service Worker），
  * 所以替身只负责记录调用；开关状态本身仍走真实的运行时配置 API，断言不受替身影响。
  */
@@ -47,8 +47,8 @@ function installPollingWith(labels: string[] = ['instances/search']): void {
   }
 }
 
-/**
- * Mock 调试悬浮面板（FR-502 阶段 6 补丁）。
+/** 
+ * Mock 调试悬浮面板（阶段 6 补丁）。
  * 断言分两层：① 交互与持久化（DOM / localStorage）；② 真的调到了假后端的运行时配置 API ——
  * 用 `getMockLatency()` 与实例集合行数验证，否则「点了按钮改了本地 state」也能骗过测试。
  */
@@ -190,7 +190,7 @@ describe('MockControlPanel', () => {
   })
 })
 
-describe('MockControlPanel · 轮询与请求日志（FR-502 阶段 6 补丁追加）', () => {
+describe('MockControlPanel · 轮询与请求日志（阶段 6 补丁追加）', () => {
   it('默认「跟随原始」（不干预），切换档位写入运行时配置并持久化', async () => {
     const user = userEvent.setup()
     render(<MockControlPanel />)

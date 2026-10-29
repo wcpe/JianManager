@@ -10,15 +10,15 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { useBlockClientDistIP, useClientDistSecurityEvents, useSetClientDistChannelProtection, useSetClientDistKeyState } from '@/api/clientDistSecurity'
 import { useSecurityQuery } from './security-shared'
 
-/**
- * 安全侧「异常请求分析」Tab（FR-430 / ADR-088）。
+/** 
+ * 安全侧「异常请求分析」Tab（ADR-088）。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
  * 展示层已回迁应用侧（`SecurityEventsView` / `SecurityEventRowView`），此处提供取数、
  * 查询读写、三个处置 mutation（含提示）、日志深链与确认弹窗（权限注入）。
  */
 
-/**
+/** 
  * 行内三类处置动作的注入包。
  *
  * 三个 mutation **上提到容器**（而非每行各调一遍 hook）：事件表按 `limit=200` 取数，
@@ -91,7 +91,7 @@ function EventRow({ event, actions }: { event: ClientDistSecurityEvent; actions:
       event={event}
       logsHref={logsHref}
       renderLogsLink={(href, label) => <Link to={href}>{label}</Link>}
-      /**
+      /** 
        * 按需实例化：只在当前行真正点了某个处置按钮时才挂那个 DangerConfirm。
        * 原实现把三个弹窗常驻在每一行（200 行 = 600 个 Dialog 实例），而同一时刻至多一个在打开。
        */

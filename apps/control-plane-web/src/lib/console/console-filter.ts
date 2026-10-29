@@ -1,9 +1,9 @@
 import type { LogLevel, LogLine } from './console-log-line'
 
-/**
- * 控制台输出的级别过滤与复制取材（FR-417）。
+/** 
+ * 控制台输出的级别过滤与复制取材。
  *
- * 建立在 FR-415 行模型的 `level` / `kind` / `stackOf` 字段上（spec §1.1）——
+ * 建立在行模型的 `level` / `kind` / `stackOf` 字段上（spec §1.1）——
  * 这正是弃 xterm 换 DOM 行模型换来的东西：canvas 上没有行对象，「只看 ERROR」
  * 与「只复制错误行」都无从下手。
  */
@@ -27,7 +27,7 @@ const FILTER_THRESHOLD: Record<ConsoleLevelFilter, number> = {
 }
 
 export interface FilterOptions {
-  /**
+  /** 
    * 是否保留上下文行（`command` 命令回显 / `system` 连接与状态提示）。
    *
    * 展示用 true：它们不是日志级别而是上下文（我敲了什么、连接发生了什么），过滤掉会让
@@ -41,8 +41,8 @@ function isStackLine(line: LogLine): boolean {
   return line.kind === 'stack-frame' || line.kind === 'stack-cause'
 }
 
-/**
- * 每行的**有效级别序**（FR-417 过滤的真正判据）。
+/** 
+ * 每行的**有效级别序**（过滤的真正判据）。
  *
  * 直接用 `line.level` 是不够的，因为 Paper 打一条异常时**只有第一行带记录头**：
  *
@@ -86,12 +86,12 @@ function effectiveRanks(lines: readonly LogLine[]): Map<number, number> {
   return ranks
 }
 
-/**
- * 按级别过滤行（FR-417）。
+/** 
+ * 按级别过滤行。
  *
  * **堆栈行不单独参与过滤**：`stack-frame` / `stack-cause` 的可见性一律跟随其 `stackOf`
  * 指向的异常头（spec §3.2「整块作为一个单位保留」）。否则切到 ERROR 时一条 NPE 会只剩
- * 头行、帧全没了——而帧才是排障真正要看的东西。FR-418 的堆栈块折叠直接长在这个语义上。
+ * 头行、帧全没了——而帧才是排障真正要看的东西。的堆栈块折叠直接长在这个语义上。
  *
  * 找不到头的孤儿堆栈行（缓冲溢出把头丢了、或命令回显打断了上下文）退化为按自身级别判定，
  * 宁可多留一行也不静默吞掉异常现场。
@@ -116,10 +116,10 @@ export function filterConsoleLines(
   return out
 }
 
-/** 复制范围（FR-417 复制菜单）。 */
+/** 复制范围（复制菜单）。 */
 export type ConsoleCopyScope = 'selection' | 'viewport' | 'buffer' | 'errors'
 
-/**
+/** 
  * 行数组 → 可复制文本。
  *
  * 一律取 `raw`（spec §1.1）：用户要的是原始日志，不是我们拆列重排过的版本——
@@ -129,7 +129,7 @@ export function consoleLinesToText(lines: readonly LogLine[]): string {
   return lines.map((line) => line.raw).join('\n')
 }
 
-/**
+/** 
  * 「仅错误行」的取材：ERROR 级日志行 + 其完整堆栈块，不含命令回显与系统提示。
  * 见 {@link FilterOptions.keepContext} 的理由说明。
  */

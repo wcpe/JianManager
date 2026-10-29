@@ -1,6 +1,6 @@
 #!/bin/sh
 # JianManager Control Plane 一键下载安装脚本（Linux/macOS，POSIX sh）。
-# 见 FR-355：下载 GitHub Releases 产物 + 可执行权限 + 启动提示；不做 systemd 服务化。
+#  见：下载 GitHub Releases 产物 + 可执行权限 + 启动提示；不做 systemd 服务化。
 #
 # 用法示例：
 #   curl -fsSL https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.sh | sh

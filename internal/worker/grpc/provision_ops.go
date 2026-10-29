@@ -27,13 +27,13 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服 + FR-178/330 节点核心缓存）。
+// DownloadCore 下载服务端核心 jar 到实例工作目录（一键开服330 节点核心缓存）。
 // 实例须已注册（CreateInstance），据其工作目录落地；可选 sha256 校验，不符则删除并报错。
 //
-// 节点核心缓存（FR-178 sha256 键 + FR-330 组合键，仅服务端核心 jar）：
+// 节点核心缓存（sha256 键组合键，仅服务端核心 jar）：
 //  1. 命中 → 从缓存秒拷到工作目录（免网络）。键取 sha256（已知时）或 core|mcVersion|build
 //     组合键（Sponge Maven 等无 sha 源）；命中时全量校验内容，损坏即作废条目回退下载。
-//  2. 未命中 → 同缓存键并发单飞（FR-330）：领队走 downloadFile 下载（边下边算 sha256 校验），
+//  2. 未命中 → 同缓存键并发单飞：领队走 downloadFile 下载（边下边算 sha256 校验），
 //     落地后存入缓存 + 写 meta；其余等待领队完成后从缓存取，同核心并发搭建只下载一次。
 //  3. 无任何缓存键（sha256 为空且组合键成分不全，如 BungeeCord latest）→ 每次下载，
 //     仍按算出的 sha256 存入缓存（面板可见可清理），但因无键不可复用。
@@ -61,7 +61,7 @@ func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreReq
 		return &workerpb.DownloadCoreResponse{Success: true, Size: size, CacheHit: true}, nil
 	}
 
-	// 2) 未命中：同缓存键并发单飞（FR-330）。无键（latest 等不可冻结源）直接下载。
+	// 2) 未命中：同缓存键并发单飞。无键（latest 等不可冻结源）直接下载。
 	flightKey := want
 	if flightKey == "" {
 		flightKey = coreKey
@@ -103,7 +103,7 @@ func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreReq
 	return &workerpb.DownloadCoreResponse{Success: true, Size: size}, nil
 }
 
-// coreCacheKey 组合缓存键（FR-330）：无 sha256 的下载源按 `core|mcVersion|build` 定位缓存。
+// coreCacheKey 组合缓存键：无 sha256 的下载源按 `core|mcVersion|build` 定位缓存。
 // 三元组必须都具体（CP 已把 latest/未指定构建解析为具体构建再下发）；缺任一
 // （如 BungeeCord latest 无构建号）返回空 = 不参与组合键缓存，避免冻结 latest 语义。
 func coreCacheKey(coreType, mcVersion string, build int32) string {
@@ -116,7 +116,7 @@ func coreCacheKey(coreType, mcVersion string, build int32) string {
 }
 
 // fetchCoreFromCache 尝试从节点核心缓存交付到 target：sha256 键优先，组合键兜底反查。
-// GetTo 命中时全量校验内容（FR-330），损坏条目已被作废，返回未命中让调用方回退下载。
+// GetTo 命中时全量校验内容，损坏条目已被作废，返回未命中让调用方回退下载。
 func (s *Server) fetchCoreFromCache(instanceUUID, want, coreKey, target string) (int64, bool) {
 	if s.cache == nil {
 		return 0, false
@@ -143,7 +143,7 @@ func (s *Server) fetchCoreFromCache(instanceUUID, want, coreKey, target string) 
 }
 
 // downloadCoreToTarget 远程下载核心到 target 并（有 sha256 时）校验，成功后存入节点缓存。
-// 开始/结果都留日志（FR-319）：慢源下载被 CP 取消/中断时，此前 worker 全程零痕迹不可追查。
+// 开始/结果都留日志：慢源下载被 CP 取消/中断时，此前 worker 全程零痕迹不可追查。
 func (s *Server) downloadCoreToTarget(ctx context.Context, req *workerpb.DownloadCoreRequest, target, dest, want, coreKey string) (int64, error) {
 	slog.Info("核心下载开始", "instance", req.InstanceUuid, "url", req.DownloadUrl)
 	start := time.Now()
@@ -169,7 +169,7 @@ func (s *Server) downloadCoreToTarget(ctx context.Context, req *workerpb.Downloa
 			Size:      size,
 			CoreKey:   coreKey,
 		}
-		// 有核心元信息时用更可读的名字/版本（面板展示，FR-330）：如 paper-1.21.8 / 1.21.8-263。
+		// 有核心元信息时用更可读的名字/版本（面板展示）：如 paper-1.21.8 / 1.21.8-263。
 		if ct := strings.ToLower(strings.TrimSpace(req.CoreType)); ct != "" && strings.TrimSpace(req.McVersion) != "" {
 			meta.Name = ct + "-" + strings.TrimSpace(req.McVersion)
 			if req.Build > 0 {
@@ -183,7 +183,7 @@ func (s *Server) downloadCoreToTarget(ctx context.Context, req *workerpb.Downloa
 	return size, nil
 }
 
-// coreFlight 一次进行中的核心下载（FR-330 并发单飞）：领队完成（成功 Put 入缓存或失败）后
+// coreFlight 一次进行中的核心下载（并发单飞）：领队完成（成功 Put 入缓存或失败）后
 // close(done)，跟随者据 err 决定从缓存取还是退化自下。
 type coreFlight struct {
 	done chan struct{}
@@ -220,7 +220,7 @@ type forgeInstallerRunner func(ctx context.Context, javaBin, installerPath, work
 var runForgeInstaller forgeInstallerRunner = defaultRunForgeInstaller
 
 // InstallForgeServer 在实例工作目录安装 Forge 服务端，并把 SpongeForge universal jar 部署到 mods/。
-// 该 RPC 只暴露 FR-046 所需固定目录结构，不提供任意相对路径写入能力。
+// 该 RPC 只暴露所需固定目录结构，不提供任意相对路径写入能力。
 func (s *Server) InstallForgeServer(ctx context.Context, req *workerpb.InstallForgeServerRequest) (*workerpb.InstallForgeServerResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -459,7 +459,7 @@ func deployServerProbeLibrariesZip(workDir string, data []byte) error {
 			return fmt.Errorf("依赖缓存解压后过大: %d", total)
 		}
 	}
-	// FR-068 在线更新：运行中实例锁定的 classpath 依赖无法覆盖，已降级跳过（旧版留存，下次重启后再更新生效）。
+	// 在线更新：运行中实例锁定的 classpath 依赖无法覆盖，已降级跳过（旧版留存，下次重启后再更新生效）。
 	// 只要 jar+config 与其余条目写成功即视为成功，不因文件锁使整个更新请求失败。
 	if len(locked) > 0 {
 		slog.Warn("部分探针依赖被运行中实例占用，本次跳过覆盖（旧版留存，下次重启后再更新生效）",
@@ -495,7 +495,7 @@ func probeCacheZipDest(workDirAbs, name string) (string, bool, error) {
 
 // writeProbeLibraryZipEntry 将单个依赖条目落地到 dest，返回（写入/逻辑字节数, 是否因文件被锁跳过, error）。
 //
-// FR-068 运行中在线更新探针：JVM 独占锁定 classpath 依赖 jar，Windows 覆盖会失败（Access denied）。
+// 运行中在线更新探针：JVM 独占锁定 classpath 依赖 jar，Windows 覆盖会失败（Access denied）。
 // 两级绕锁——① 目标已存在且大小+CRC32 与条目一致（依赖版本极少变，绝大多数条目命中）→ 跳过写入、不触碰被锁文件；
 // ② 内容确有变化但目标被锁 → 降级为「跳过并由调用方告警」（旧版留存，下次重启后再更新生效），返回 locked=true，
 // 不使整个更新请求失败——只要 jar+config 与其余条目写成功即视为成功。
@@ -537,7 +537,7 @@ func writeProbeLibraryZipEntry(entry *zip.File, dest string) (int64, bool, error
 }
 
 // probeLibraryEntryUnchanged 判断 dest 已存在且内容与 zip 条目完全一致（大小 + CRC32）。
-// 一致则跳过覆盖——依赖版本极少变，绝大多数条目命中，从而不触碰被运行中 JVM 锁定的 classpath jar（FR-068）。
+// 一致则跳过覆盖——依赖版本极少变，绝大多数条目命中，从而不触碰被运行中 JVM 锁定的 classpath jar。
 func probeLibraryEntryUnchanged(dest string, entry *zip.File) bool {
 	st, err := os.Stat(dest)
 	if err != nil || !st.Mode().IsRegular() {
@@ -594,7 +594,7 @@ func downloadAndVerify(ctx context.Context, client *http.Client, url, sha, destP
 // serverProbeJarName 是 ServerProbe 探针 jar 在实例 plugins 目录下的固定文件名。
 const serverProbeJarName = "ServerProbe.jar"
 
-// DeployServerProbe 将 ServerProbe 探针 jar 与 config.yml 写入实例 plugins 目录（FR-010 建服自动部署）。
+// DeployServerProbe 将 ServerProbe 探针 jar 与 config.yml 写入实例 plugins 目录（建服自动部署）。
 // jar 为空（CP 未捆绑探针）时仅写 config，便于运维后续手动放入 jar 即按分配端口开启 /metrics；实例须已注册。
 func (s *Server) DeployServerProbe(ctx context.Context, req *workerpb.DeployServerProbeRequest) (*workerpb.DeployServerProbeResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
@@ -968,7 +968,7 @@ func writeProbeDependency(resp *http.Response, target string) error {
 }
 
 // downloadFile 流式下载 url 到 destPath，边写边算 sha256，返回字节数与 hex 小写摘要。
-// client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
+// client 经进程级出站代理（ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
 func downloadFile(ctx context.Context, client *http.Client, url, destPath string) (int64, string, error) {
 	if strings.TrimSpace(url) == "" {
 		return 0, "", fmt.Errorf("下载地址为空")
@@ -998,7 +998,7 @@ func downloadFile(ctx context.Context, client *http.Client, url, destPath string
 	}
 
 	// 先写 .part 临时文件、完整校验后原子 rename 换入：目标路径要么没有、要么是完整文件。
-	// 此前直接写目标路径，慢源下载的几分钟窗口内躺着半截 jar——异步搭建（FR-319）期间
+	// 此前直接写目标路径，慢源下载的几分钟窗口内躺着半截 jar——异步搭建期间
 	// 用户点启动即得 `Invalid or corrupt jarfile`（真机复现，2.7MB/43MB 时被 java 吃到）。
 	tmpPath := destPath + ".part"
 	f, err := os.Create(tmpPath)

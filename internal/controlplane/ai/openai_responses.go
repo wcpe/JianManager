@@ -33,7 +33,7 @@ type responsesRequest struct {
 	Tools           []responsesTool  `json:"tools,omitempty"`
 	Stream          bool             `json:"stream"`
 	MaxOutputTokens int              `json:"max_output_tokens,omitempty"`
-	// Reasoning 思考强度（FR-541 §3.2）。Responses 用对象形态，与 Chat 的顶层字符串不同。
+	// Reasoning 思考强度（§3.2）。Responses 用对象形态，与 Chat 的顶层字符串不同。
 	Reasoning *responsesReasoning `json:"reasoning,omitempty"`
 }
 

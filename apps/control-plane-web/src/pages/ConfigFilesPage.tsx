@@ -48,8 +48,8 @@ interface FileDraft {
 
 const EMPTY_DRAFT: FileDraft = { name: '', format: 'yaml', description: '', schemaJson: '' }
 
-/**
- * 分层配置·配置文件列表页（FR-529）。
+/** 
+ * 分层配置·配置文件列表页。
  *
  * 职责：分页 + 关键字搜索列出配置逻辑文件（name / format / 层数 / 更新时间），
  * 提供新建、改元数据、软删与进入详情四个入口。
@@ -253,7 +253,7 @@ export default function ConfigFilesPage() {
                     {file.layerCount > 0 ? (
                       <span className="tabular-nums">{file.layerCount}</span>
                     ) : (
-                      /*
+                      /* 
                         层数为 0 = 这条配置还没有任何作用域版本，等于「建了但没生效」。
                         只显示一个 0 会被当成正常值，运维会以为它已经在用了。
                       */

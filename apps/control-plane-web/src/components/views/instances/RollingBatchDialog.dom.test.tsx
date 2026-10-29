@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import RollingBatchDialog, { RollingProgress } from '@/components/views/instances/RollingBatchDialog'
 import type { RollingOp } from '@/lib/instances/instance-rolling'
 
-/**
- * FR-457 滚动/分批/灰度编排 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *滚动/分批/灰度编排 · 受控视图测（ADR-103 b 范式）。
  *
  * 应用侧已有一份 msw 集成测试（覆盖创建载荷端到端、进度轮询、暂停/继续/取消），
  * 这里补的是**不依赖后端**的视图语义：灰度比例换算、批数计算、控制按钮的状态可见性、
@@ -99,7 +99,7 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
 }
 
-/**
+/** 
  * 操作组件库 Select（Radix 组合控件）：原生 `<select>` 的 `selectOptions` 对它不适用。
  *
  * 先点触发器展开，再按文本点到真正的 `[role="option"]` 上。三处 HTMLElement 桩是 jsdom 缺的
@@ -127,7 +127,7 @@ function renderDialog(props: Partial<Props> = {}) {
   return merged
 }
 
-describe('RollingBatchDialog 策略表单（FR-457 · ADR-103 b 范式）', () => {
+describe('RollingBatchDialog 策略表单（ADR-103 b 范式）', () => {
   it('描述带出选中数量，默认策略为分批 5/间隔 30/失败即停/全量', () => {
     renderDialog()
 

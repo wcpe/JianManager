@@ -7,7 +7,7 @@ const sample: SortableFile[] = [
   { name: 'a.txt', isDir: false, size: 10, modTime: 3, modeString: 'r--r--r--', writable: false },
 ]
 
-describe('file-sort（FR-375）', () => {
+describe('file-sort', () => {
   it('目录优先再按名', () => {
     const out = sortFiles(sample, { key: 'name', asc: true })
     expect(out.map((f) => f.name)).toEqual(['plugins', 'a.txt', 'b.txt'])

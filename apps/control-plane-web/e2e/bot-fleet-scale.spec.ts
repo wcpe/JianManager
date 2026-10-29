@@ -11,8 +11,8 @@ function botGroupCard(page: Page, name: string): Locator {
   return page.locator('div.bg-card').filter({ has: page.getByRole('button', { name, exact: true }) }).first()
 }
 
-/** FR-038 真浏览器纵切：Bot 聚合摘要、分页窥视与批量 API。 */
-test.describe('FR-038 Bot 规模化后端 API（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：Bot 聚合摘要、分页窥视与批量 API。 */
+test.describe('Bot 规模化后端 API（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await login(page)

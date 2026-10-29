@@ -117,7 +117,7 @@ func setupContentToolsDeps(t *testing.T) (ToolDeps, *service.AgentPrincipal, uin
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	// FR-492：内容运维里的 file_write_text / file_delete / file_rollback / config_write_text
+	// 内容运维里的 file_write_text / file_delete / file_rollback / config_write_text
 	// 等已进入审批名单。本组用例验证的是**工具自身的精确确认语义**（confirmPath 等），
 	// 因此必须装配审批服务，否则只会撞在「未装配（失败关闭）」上而测不到原意图。
 	require.NoError(t, db.AutoMigrate(

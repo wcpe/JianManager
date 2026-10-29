@@ -48,7 +48,7 @@ func TestProbeUpdate_Status_NotFound(t *testing.T) {
 }
 
 // TestProbeUpdate_Update_NotEmbeddedOr422 单实例推送在未装配版本库时返回 422。
-// 用适用探针的 MC 后端实例——通用二进制/Beacon/代理会被「不适用」前置拒绝（FR-454），
+// 用适用探针的 MC 后端实例——通用二进制/Beacon/代理会被「不适用」前置拒绝，
 // 不走到版本库检查。
 func TestProbeUpdate_Update_NotEmbeddedOr422(t *testing.T) {
 	db := setupTestDB(t)
@@ -70,7 +70,7 @@ func TestProbeUpdate_Update_NotEmbeddedOr422(t *testing.T) {
 	assert.Equal(t, "PROBE_NOT_EMBEDDED", m["error"])
 }
 
-// TestProbeUpdate_Update_RejectsNonApplicable FR-454：对不适用探针的实例（通用二进制/Beacon/代理）
+// TestProbeUpdate_Update_RejectsNonApplicable：对不适用探针的实例（通用二进制/Beacon/代理）
 // 点「更新探针」，路由层返回明确拒绝（422 BUSINESS_ERROR + 可读原因），不推入无效 Bukkit jar。
 func TestProbeUpdate_Update_RejectsNonApplicable(t *testing.T) {
 	db := setupTestDB(t)
@@ -107,7 +107,7 @@ func TestProbeUpdate_Update_RejectsNonApplicable(t *testing.T) {
 	}
 }
 
-// TestProbeUpdate_Update_Forbidden FR-432：member 有 instance.operate 能力；
+// TestProbeUpdate_Update_Forbidden：member 有 instance.operate 能力；
 // 无组用户对不可见实例走存在性隐藏 404（不再 403）。
 func TestProbeUpdate_Update_Forbidden(t *testing.T) {
 	db := setupTestDB(t)
@@ -129,7 +129,7 @@ func TestProbeUpdate_Batch_Validation(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect FR-454：不适用探针的实例设置探针
+// TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect：不适用探针的实例设置探针
 // 版本必须在任何副作用之前拒绝（422 + 明确原因），且库中 probe_version_id 保持原值——不得先落库。
 func TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect(t *testing.T) {
 	db := setupTestDB(t)
@@ -158,7 +158,7 @@ func TestProbeUpdate_SetVersion_RejectsNonApplicableBeforeSideEffect(t *testing.
 	assert.Zero(t, loaded.ProbeVersionID, "拒绝必须发生在落库之前（副作用前置检查）")
 }
 
-// TestProbeUpdate_Batch_Forbidden FR-432：无组 member 有能力无 scope →
+// TestProbeUpdate_Batch_Forbidden：无组 member 有能力无 scope →
 // 目标全 skipped；若探针制品未装配，业务层回 422 PROBE_NOT_EMBEDDED（非 403）。
 func TestProbeUpdate_Batch_Forbidden(t *testing.T) {
 	db := setupTestDB(t)

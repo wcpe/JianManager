@@ -6,7 +6,7 @@ import { sliceRanges, progressBytes, type ChunkRange } from './chunked-upload'
 // `uploadFileChunked` 的 0 字节文件等网络契约、以及 api 接线断言由 `client-upload-api.test.ts`
 // 覆盖（那里 mock 了 `@/api/client`）。
 
-/** 分块上传切片数学（FR-251）：片数 / 边界 / 末片 / 进度归并纯逻辑。 */
+/** 分块上传切片数学：片数 / 边界 / 末片 / 进度归并纯逻辑。 */
 describe('sliceRanges', () => {
   it('整除：等分且无末片余量', () => {
     const r = sliceRanges(30, 10)

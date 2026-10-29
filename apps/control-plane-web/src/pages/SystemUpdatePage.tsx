@@ -13,7 +13,7 @@ const ROLE_PLATFORM_ADMIN = 10
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
-/**
+/** 
  * 面板自更新页容器（ADR-103 a 范式）：检查结果 / 全网升级进度 / Worker 二进制缓存三份查询、
  * 八个写动作（检查、CP 升级回滚、节点升级回滚、全网升级、预缓存）与全部 toast 文案都在这里决定；
  * 版本对比卡片、节点区、缓存面板与进度面板交共享视图。
@@ -30,7 +30,7 @@ export default function SystemUpdatePage() {
   const role = useAuthStore((s) => s.role)
   const isPlatformAdmin = role === ROLE_PLATFORM_ADMIN
 
-  // check 读服务端缓存（进页即时回显，FR-186）；refresh 走 live 检查并覆盖缓存。
+  // check 读服务端缓存（进页即时回显）；refresh 走 live 检查并覆盖缓存。
   const check = useSelfUpdateCheck()
   const refresh = useRefreshSelfUpdateCheck()
   const upgradeAll = useUpgradeAll()
@@ -56,15 +56,15 @@ export default function SystemUpdatePage() {
   /** 升级/回滚成功后重新取检查结果（CP 升级会重启，故延迟 4s 等重连）。 */
   const refreshCheck = () => refresh.mutate(undefined)
 
-  // 手动「检查更新」= 显式 live 刷新（失败 toast 但保留旧缓存数据，FR-186）。
+  // 手动「检查更新」= 显式 live 刷新（失败 toast 但保留旧缓存数据）。
   const doRefresh = () => {
     refresh.mutate(undefined, {
       onError: (e) => toast.error(errMsg(e, t('systemUpdate.checkFailed', '检查更新失败'))),
     })
   }
 
-  /**
-   * 全网升级（FR-155）：视图把金丝雀草稿原样上报，这里折算请求体——
+  /** 
+   * 全网升级：视图把金丝雀草稿原样上报，这里折算请求体——
    * 空输入=不设该项：canarySize 省略=无金丝雀、batchSize 省略=剩余全部一批（等价原行为）；
    * 未设金丝雀时不传 abortOnCanaryFailure（没有金丝雀可中止）。
    */
@@ -156,7 +156,7 @@ export default function SystemUpdatePage() {
     )
   }
 
-  /**
+  /** 
    * 单节点在途目标（纯展示态，不参与任何门禁）。
    *
    * 原实现每行各持一个 mutation 实例，归容器后收敛为「单实例 + 目标标记」：取消 `isPending` 后

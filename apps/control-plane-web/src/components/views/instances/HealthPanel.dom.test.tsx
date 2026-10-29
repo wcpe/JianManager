@@ -3,8 +3,8 @@ import { screen } from '@testing-library/react'
 import { renderWithI18n } from '@/test/i18n'
 import { HealthPanel } from '@/components/views/instances/HealthPanel'
 
-/**
- * FR-450 §2.3.2 端口 + 健康检查面板 · 受控视图测（ADR-103 a 范式）。
+/** 
+ *§2.3.2 端口 + 健康检查面板 · 受控视图测（ADR-103 a 范式）。
  *
  * 断言锚在 `data-health-state` 属性上而非文案：可达性四态是本组件的**核心逻辑**，
  * 而文案属消费方语言包，两者耦合会让测试在改文案时假失败。
@@ -13,7 +13,7 @@ function reachabilityOf(container: HTMLElement): string | null {
   return container.querySelector('[data-health-state]')?.getAttribute('data-health-state') ?? null
 }
 
-describe('HealthPanel（FR-450 · ADR-103 a 范式）', () => {
+describe('HealthPanel（ADR-103 a 范式）', () => {
   it.each([
     ['实例尚未加载 → 未知', {}, 'unknown'],
     ['未运行 → 不可达', { status: 'STOPPED' }, 'unreachable'],

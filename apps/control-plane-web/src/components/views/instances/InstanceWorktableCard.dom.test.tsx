@@ -6,8 +6,8 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { InstanceWorktableCard } from '@/components/views/instances/InstanceWorktableCard'
 
-/**
- * FR-136 实例工作台卡 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *实例工作台卡 · 受控视图测（ADR-103 b 范式）。
  *
  * 与迁移前的差异（**有意的取舍，勿当缺陷「修掉」**）：
  * 1. 「点卡片跳转深链」改为断言 `onOpen(42)`——路由由外壳注入（列表页可自定义跳转），
@@ -75,7 +75,7 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9 · ADR-103 b �
     const user = userEvent.setup()
     const onOpen = vi.fn()
     renderCard({ onOpen })
-    /*
+    /* 
       点卡片主体（名称所在的非交互区）应打开实例。
       注意：卡片现在显示的是**本地化类型徽章**（「插件服」），不再是原始 type 值
       （`minecraft_java`）——那是本轮「身份徽章与表格对齐」的结果，测试也一并跟上。
@@ -92,13 +92,13 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9 · ADR-103 b �
     expect(onOpen).not.toHaveBeenCalled()
   })
 
-  it('statusReason 非空即显失败原因，不再要求 CRASHED 前置（FR-312）', () => {
+  it('statusReason 非空即显失败原因，不再要求 CRASHED 前置', () => {
     // Worker 心跳会把 CRASHED 冲回 STOPPED——STOPPED + statusReason 也必须可见。
     renderCard({ inst: { ...stoppedInst, statusReason: '实例未绑定 JDK，启动委托失败' } })
     expect(screen.getByText('实例未绑定 JDK，启动委托失败')).toBeInTheDocument()
   })
 
-  it('搭建中硬性禁启（FR-331）：启动按钮禁用 + tooltip 引导看任务中心 + 琥珀提示不落红', () => {
+  it('搭建中硬性禁启：启动按钮禁用 + tooltip 引导看任务中心 + 琥珀提示不落红', () => {
     renderCard({
       inst: { ...stoppedInst, statusReason: '搭建中：正在下载核心（完成前请勿启动）' },
       provisioning: true,
@@ -113,7 +113,7 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9 · ADR-103 b �
     expect(screen.getAllByText('搭建中：正在下载核心（完成前请勿启动）')).toHaveLength(1)
   })
 
-  it('非搭建中的 STOPPED 实例启动按钮可点（FR-331 不误伤）', async () => {
+  it('非搭建中的 STOPPED 实例启动按钮可点（不误伤）', async () => {
     const user = userEvent.setup()
     const { onStart } = renderCard()
     const startBtn = screen.getByRole('button', { name: '启动' })
@@ -128,7 +128,7 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9 · ADR-103 b �
   })
 })
 
-/** 运行态可用性渲染（FR-446/447）：缺测显「不可用」，有值显真实值，不再以 0 冒充「0 人在线」。 */
+/** 运行态可用性渲染（447）：缺测显「不可用」，有值显真实值，不再以 0 冒充「0 人在线」。 */
 describe('InstanceWorktableCard 卡内在线数/TPS 可用性', () => {
   const runningInst = { ...stoppedInst, status: 'RUNNING' }
 

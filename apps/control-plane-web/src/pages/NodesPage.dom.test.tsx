@@ -10,7 +10,7 @@ import { API } from '@jianmanager/devmock/api'
 import { useAuthStore } from '@/stores/auth'
 import NodesPage from './NodesPage'
 
-/*
+/* 
   放宽单例超时：本文件的用例渲染整页节点列表，而 devmock 现在有 36 台种子节点
   （为验证 30+ 规模下的分页/排序而注入）。默认 10s 在机器负载高时会随机超时，
   实测「下线节点」这类要等多次轮询的用例会到 10.2s。
@@ -37,10 +37,10 @@ if (!('ResizeObserver' in globalThis)) {
   } as unknown as typeof ResizeObserver
 }
 
-/**
- * NodesPage 强断言（FR-200 / FR-128）：①渲染 seed 节点 ②进入维护写操作→列表联动出维护标记
+/** 
+ * NodesPage 强断言：①渲染 seed 节点 ②进入维护写操作→列表联动出维护标记
  * ③详情激活 Tab 可寻址（?tab= 读写 + ?node= 深链）④注入 500→错误态。
- * NodesPage 跨域调 GET /instances（FR-201 域），本域 worktree 未注册——用 server.use 本地桩返回空，
+ * NodesPage 跨域调 GET /instances（域），本域 worktree 未注册——用 server.use 本地桩返回空，
  * 满足 onUnhandledRequest:'error' 覆盖闸，且不污染他域 handler 文件。
  */
 function stubInstances() {
@@ -85,7 +85,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(screen.getAllByText('10.0.0.11').length).toBeGreaterThan(0) // alpha host：列表 + 详情
   })
 
-  it('切换归档视图可见 gamma-archived，清理确认文案明示不清理远端文件（FR-393/394）', async () => {
+  it('切换归档视图可见 gamma-archived，清理确认文案明示不清理远端文件（394）', async () => {
     loginPlatformAdmin()
     stubInstances()
     const user = userEvent.setup()
@@ -113,7 +113,7 @@ describe('NodesPage（mock 假后端）', () => {
     // 故显式深链到 alpha（id=1）。
     renderWithProviders(<NodesPage />, { route: '/nodes?node=1' })
 
-    /*
+    /* 
       左栏节点列表已移除（改为顶部下拉选择器），不能再靠等左栏里的 'beta' 判断就绪。
       改为等详情页自身的指标条——它是详情态必然渲染的元素。
     */
@@ -122,19 +122,19 @@ describe('NodesPage（mock 假后端）', () => {
     const actionsBtn = await screen.findByRole('button', { name: '操作' })
     await user.click(actionsBtn)
     await user.click(await screen.findByRole('menuitem', { name: '进入维护' }))
-    /*
+    /* 
       进入维护有二次确认（会中断新实例调度）。菜单项与确认按钮同名「进入维护」，
       所以必须在**弹窗内**点，否则会再次命中菜单项（菜单此时已关闭，会超时）。
     */
     const confirmDialog = await screen.findByRole('dialog')
     await user.click(within(confirmDialog).getByRole('button', { name: '进入维护' }))
 
-    /*
+    /* 
       setNodeMaintenance 成功后失效 ['nodes'] → 重新拉取，handler 现回 maintenance:true。
       断言目标从「左栏行徽标」改为详情页顶部的维护徽章——左栏已移除，
       而顶部徽章是维护态在详情页的常显呈现（选择器里的分组要展开才看得到，不适合当就绪判据）。
     */
-    /*
+    /* 
       维护徽章已并入头部状态球（球的 label 直接显示「维护中」），
       不再有单独的 badge 元素，故断言球内文字。
     */
@@ -163,7 +163,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(await screen.findByText(/不写入 worker\.yml/)).toBeInTheDocument()
   })
 
-  it('URL 带 ?node=2&tab=monitor 时深链选中 beta 并激活监控分段（FR-128）', async () => {
+  it('URL 带 ?node=2&tab=monitor 时深链选中 beta 并激活监控分段', async () => {
     loginMockUser()
     stubInstances()
     stubMetricSeries()
@@ -178,7 +178,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(screen.getByTestId('node-metric-range-bar')).toBeInTheDocument()
   })
 
-  it('切换详情分段时 URL 同步写入 ?tab=，切回概览时省略参数（FR-128）', async () => {
+  it('切换详情分段时 URL 同步写入 ?tab=，切回概览时省略参数', async () => {
     loginMockUser()
     stubInstances()
     stubMetricSeries()
@@ -204,7 +204,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(screen.queryByTestId('node-metric-range-bar')).toBeNull()
   })
 
-  it('离线节点名下有实例：下线被 409 拒并列实例清单，强制下线级联删除（FR-309）', async () => {
+  it('离线节点名下有实例：下线被 409 拒并列实例清单，强制下线级联删除', async () => {
     loginPlatformAdmin()
     stubInstances()
     const user = userEvent.setup()
@@ -240,9 +240,9 @@ describe('NodesPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByText('beta')).not.toBeInTheDocument())
   })
 
-  it('监控分段：实例对比只发 1 条批量指标请求（消 N+1），批量目标 ≤12（FR-340）', async () => {
+  it('监控分段：实例对比只发 1 条批量指标请求（消 N+1），批量目标 ≤12', async () => {
     loginMockUser()
-    /*
+    /* 
       本用例守的是「对比图不为 N 个实例各发一条」这条不变量。
       页签现在有两类批量请求：对比（所选指标）与清单用量（cpu/堆），故按 metrics 分类计数，
       不能再用「总请求数 == 1」——那会把合法的用量查询误判成回归。
@@ -319,7 +319,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(within(document.body).queryByText('beta')).not.toBeInTheDocument()
   })
 
-  /**
+  /** 
    * `/nodes` 取数失败必须与「暂无节点」空态分开。
    *
    * 只判 `isLoading` 时失败会渲染成「暂无节点」，运营看到的是「节点都没了」——
@@ -342,7 +342,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(screen.queryByTestId('nodes-list-error')).not.toBeInTheDocument()
   })
 
-  /**
+  /** 
    * 切到「归档」视图不应再请求实例聚合。
    *
    * 归档列表只显示名称/主机/下线时间，用不到各节点实例数；原先无条件取数，
@@ -368,7 +368,7 @@ describe('NodesPage（mock 假后端）', () => {
     }
   })
 
-  /**
+  /** 
    * 列表视图（本轮新增，节点页优化 A1）。
    *
    * 原来只有卡片网格：2 个节点时页面约 62% 是空白，且卡片只用到了 NodeInfo 二十多个
@@ -439,7 +439,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(localStorage.getItem('jm.nodes.layout')).toBe('list')
   })
 
-  /**
+  /** 
    * 表头拖拽换位（用户要求「表头参考服务器列表可以拖拽」）。
    *
    * 断言走「表头真实顺序 + localStorage 落盘 + 行内顺序」三条：
@@ -519,7 +519,7 @@ describe('NodesPage（mock 假后端）', () => {
     expect(await screen.findByTestId('nodes-cpu-chart')).toBeInTheDocument()
   })
 
-  /**
+  /** 
    * KPI 卡片可点即筛（用户提出「节点多了要能快速定位问题」）。
    *
    * 此前「离线 1」只是个数字，点不动；而找离线节点是运维最高频的动作。
@@ -561,7 +561,7 @@ describe('NodesPage（mock 假后端）', () => {
     })
   })
 
-  /**
+  /** 
    * 「配置」分区（用户要求把配置设置安排好）。
    *
    * 断言重点是「汇总 + 直达」这个设计意图：

@@ -1,5 +1,5 @@
-/**
- * 平台存储 FileBrowser 数据源（FR-378 / FR-083）。
+/** 
+ * 平台存储 FileBrowser 数据源。
  * 仅 list：后端无读内容端点，文件预览返回 error 提示只读列表。
  */
 import type { StorageFileEntry } from './storage-types'
@@ -20,7 +20,7 @@ function toEntry(dir: string, f: StorageFileEntry): FileEntry {
   }
 }
 
-/**
+/** 
  * 构造平台存储数据源（外壳注入取数，包内不依赖应用侧 api）。
  *
  * @param deps.listFiles 列举数据根内某目录直接子项

@@ -39,7 +39,7 @@ func TestNodeRepair_Reenroll_RequiresConfirm(t *testing.T) {
 	require.Equal(t, node.UUID, fromDB.UUID)
 }
 
-// TestNodeRepair_Reenroll_ConfirmedRotatesAndAudits 确认后轮换身份并写审计（ADR-039 §2，FR-015）。
+// TestNodeRepair_Reenroll_ConfirmedRotatesAndAudits 确认后轮换身份并写审计（ADR-039 §2）。
 func TestNodeRepair_Reenroll_ConfirmedRotatesAndAudits(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

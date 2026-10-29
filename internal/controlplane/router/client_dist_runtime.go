@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientDistRuntimeHandler 客户端运行态与分发请求近实时观测端点（FR-265）。
+// ClientDistRuntimeHandler 客户端运行态与分发请求近实时观测端点。
 type ClientDistRuntimeHandler struct {
 	runtime  *service.ClientRuntimeStateService
 	tracking *service.ClientDistTrackingService
@@ -20,7 +20,7 @@ type ClientDistRuntimeHandler struct {
 	security *service.ClientDistSecurityService
 }
 
-// NewClientDistRuntimeHandler 创建 FR-265 观测处理器。
+// NewClientDistRuntimeHandler 创建观测处理器。
 func NewClientDistRuntimeHandler(runtime *service.ClientRuntimeStateService, tracking *service.ClientDistTrackingService, channel *service.ClientChannelService, audit *service.AuditService, security ...*service.ClientDistSecurityService) *ClientDistRuntimeHandler {
 	var sec *service.ClientDistSecurityService
 	if len(security) > 0 {
@@ -51,7 +51,7 @@ type runtimeHeartbeatBody struct {
 	LocalVersion int    `json:"localVersion"`
 }
 
-// Heartbeat 接收 updater-core 启动心跳（FR-265）。
+// Heartbeat 接收 updater-core 启动心跳。
 func (h *ClientDistRuntimeHandler) Heartbeat(c *gin.Context) {
 	channelID := c.Param("id")
 	if h.channel == nil || h.runtime == nil {
@@ -85,7 +85,7 @@ func (h *ClientDistRuntimeHandler) playerNameFromRequest(c *gin.Context, channel
 	return h.security.ResolveProfilePlayerName(channelID, machineID, c.GetHeader(installIDHeader))
 }
 
-// Clients 查询客户端运行态聚合（FR-265）。
+// Clients 查询客户端运行态聚合。
 func (h *ClientDistRuntimeHandler) Clients(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -99,7 +99,7 @@ func (h *ClientDistRuntimeHandler) Clients(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// Realtime 查询分发请求近实时聚合（FR-265）。
+// Realtime 查询分发请求近实时聚合。
 func (h *ClientDistRuntimeHandler) Realtime(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -112,7 +112,7 @@ func (h *ClientDistRuntimeHandler) Realtime(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// ErrorSummary 查询错误码 TopN 与失败样例（FR-357）。
+// ErrorSummary 查询错误码 TopN 与失败样例。
 func (h *ClientDistRuntimeHandler) ErrorSummary(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -134,7 +134,7 @@ func (h *ClientDistRuntimeHandler) ErrorSummary(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// SearchEvents 分页检索分发事件（FR-265）。
+// SearchEvents 分页检索分发事件。
 func (h *ClientDistRuntimeHandler) SearchEvents(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -152,7 +152,7 @@ func (h *ClientDistRuntimeHandler) SearchEvents(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// EventDetail 查询单条分发事件脱敏详情（FR-265）。
+// EventDetail 查询单条分发事件脱敏详情。
 func (h *ClientDistRuntimeHandler) EventDetail(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return

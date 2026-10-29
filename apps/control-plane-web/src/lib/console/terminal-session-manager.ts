@@ -1,10 +1,10 @@
 import { ConsoleLineBuffer } from '@/lib/console/console-line-buffer'
 import type { LogLine, LogStream } from '@/lib/console/console-log-line'
 
-/**
- * 跨服控制台热集容量**基线**（FR-296 起存在，FR-414 由写死的 3 提到 6 并改为可配）。
+/** 
+ * 跨服控制台热集容量**基线**（起存在由写死的 3 提到 6 并改为可配）。
  *
- * 3 是「一次只看一个服」年代的数字。分屏（FR-421）与多 window（FR-420）会让多个终端
+ * 3 是「一次只看一个服」年代的数字。分屏与多 window会让多个终端
  * 同时可见，3 个坑位下打开第 4 个可见终端就会把另一个**正在被用户看着的**终端淘汰掉，
  * 眼前的日志凭空消失。故基线提到 6，并由 {@link resolveHotSetCapacity} 按实际可见数动态提升。
  *
@@ -13,8 +13,8 @@ import type { LogLine, LogStream } from '@/lib/console/console-log-line'
  */
 export const HOT_SET_SIZE = 6
 
-/**
- * 热集容量硬上限（FR-414）：动态提升不得无限突破。
+/** 
+ * 热集容量硬上限：动态提升不得无限突破。
  *
  * 每个成员是一条常驻 WS + 一份 5000 行缓冲，容量无上限地跟着可见数走等于把
  * 「保活」变成内存泄漏。12 = 基线两倍，够覆盖可视化四 pane 工作台与常规跨服切换，
@@ -22,7 +22,7 @@ export const HOT_SET_SIZE = 6
  */
 export const HOT_SET_SIZE_MAX = 12
 
-/** 容量基线覆盖的持久化键（FR-414「可配」：按机器内存自行调，跨刷新保留）。 */
+/** 容量基线覆盖的持久化键（「可配」：按机器内存自行调，跨刷新保留）。 */
 const HOT_SET_BASELINE_KEY = 'console.hotSetSize'
 
 /** 把任意输入收口到 [1, HOT_SET_SIZE_MAX]：容量为 0 意味着连当前活跃实例都保不住。 */
@@ -50,7 +50,7 @@ export function getHotSetBaseline(): number {
   return hotSetBaselineOverride ?? HOT_SET_SIZE
 }
 
-/** 设置容量基线覆盖（FR-414）；传 null 复位到默认。越界值按 [1, {@link HOT_SET_SIZE_MAX}] 收口。 */
+/** 设置容量基线覆盖；传 null 复位到默认。越界值按 [1, {@link HOT_SET_SIZE_MAX}] 收口。 */
 export function setHotSetBaseline(value: number | null): void {
   hotSetBaselineOverride = value == null ? null : clampCapacity(value)
   try {
@@ -61,8 +61,8 @@ export function setHotSetBaseline(value: number | null): void {
   }
 }
 
-/**
- * 生效容量 = max(基线, 实际可见终端数)，再按 {@link HOT_SET_SIZE_MAX} 收口（FR-414）。
+/** 
+ * 生效容量 = max(基线, 实际可见终端数)，再按 {@link HOT_SET_SIZE_MAX} 收口。
  *
  * 「取大」而非「照用基线」是因为**淘汰一个正在被看着的终端是纯粹的 bug**：分屏下 8 个
  * pane 同时可见时容量必须至少 8，否则每挂载一个就杀掉另一个。但取大也不能一路顶穿——
@@ -72,8 +72,8 @@ export function resolveHotSetCapacity(visibleCount: number, baseline = getHotSet
   return clampCapacity(Math.max(clampCapacity(baseline), visibleCount))
 }
 
-/**
- * 后台闲置断连阈值（FR-296；FR-414 由 10 分钟收到 5 分钟）。
+/** 
+ * 后台闲置断连阈值（由 10 分钟收到 5 分钟）。
  *
  * 收紧是容量翻倍的对价：基线 3 时最多 2 个成员在后台闲置，基线 6 时是 5 个；阈值不动
  * 则「后台闲置连接分钟数」随容量线性膨胀（2×10 → 5×10）。折半后 5×5=25 与原先
@@ -96,14 +96,14 @@ const PENDING_MAX = 4000
 /** 无会话时的稳定空快照：getSnapshot 必须返回同一引用，否则订阅方重渲染死循环。 */
 const EMPTY_LINES: readonly LogLine[] = Object.freeze([])
 
-/**
+/** 
  * 会话状态机（ADR-067）：
  * connecting →（open）connected →（闲置超时）idle-disconnected →（回切）connecting；
  * closed = 断开且未在闲置降级（服务端关闭 / 重试耗尽），acquire/reconnect 可再拉起。
  */
 export type TerminalSessionState = 'connecting' | 'connected' | 'idle-disconnected' | 'closed'
 
-/** 一次性终端连接凭据（FR-140：每次连接前现取，token 首连即被 CP 消费失效）。 */
+/** 一次性终端连接凭据（：每次连接前现取，token 首连即被 CP 消费失效）。 */
 export interface TerminalCreds {
   wsUrl: string
   token: string
@@ -125,7 +125,7 @@ interface TerminalSession {
   retryTimer: ReturnType<typeof setTimeout> | null
   stableTimer: ReturnType<typeof setTimeout> | null
   idleTimer: ReturnType<typeof setTimeout> | null
-  /** 实例控制台整体是否不可见（FR-296 热集 hidden 成员）。 */
+  /** 实例控制台整体是否不可见（热集 hidden 成员）。 */
   hidden: boolean
   lastVisibleAt: number
   /** 暂停向缓冲落行（导播台节流，ADR-035）：输出进 pending，恢复时一次性 flush。 */
@@ -138,29 +138,29 @@ interface TerminalSession {
   generation: number
 }
 
-/**
- * 终端连接管理器（FR-295，ADR-067；FR-415 起缓冲由 xterm 换成行缓冲，ADR-086）：
+/** 
+ * 终端连接管理器（ADR-067起缓冲由 xterm 换成行缓冲，ADR-086）：
  * 模块级单例按 instanceId 持有终端会话（行缓冲 + WS + 状态机 + 闲置计时）。
  *
  * 组件订阅制——渲染壳 mount 时 acquire 并 subscribeLines，unmount（含 `<Activity>` 隐藏）
- * 只退订，不断 WS、不丢缓冲；行缓冲天然跨挂载保留。dispose 仅在 LRU 淘汰（FR-296）/
+ * 只退订，不断 WS、不丢缓冲；行缓冲天然跨挂载保留。dispose 仅在 LRU 淘汰/
  * 独立表面释放 / 登出时调用。
  */
 export class TerminalSessionManager {
   private sessions = new Map<number, TerminalSession>()
-  /**
-   * 被控制台热集 pin 住的实例（FR-296）：独立表面 release 时不释放。
+  /** 
+   * 被控制台热集 pin 住的实例：独立表面 release 时不释放。
    * 管理器级集合而非会话字段——宿主可在会话尚未创建（终端页签未打开）时先 pin。
    */
   private pinnedIds = new Set<number>()
-  /**
+  /** 
    * 行变更订阅登记，**按 instanceId 挂在管理器上而非会话上**：
    * 渲染壳可能先订阅、后 acquire（`useSyncExternalStore` 的 subscribe 早于 effect），
    * 会话也可能中途被 LRU 淘汰而组件仍挂载。挂管理器才不会漏通知。
    */
   private lineListeners = new Map<number, Set<() => void>>()
 
-  /**
+  /** 
    * 获取（或创建）实例终端会话。首次创建即现取 token 连 WS；
    * 已有会话仅更新 fetchCreds（token 拉取闭包可能随组件重建而更新），
    * 若会话处于 idle-disconnected/closed 则自动拉起重连。
@@ -199,7 +199,7 @@ export class TerminalSessionManager {
     void this.connect(session)
   }
 
-  /**
+  /** 
    * 组件卸载（含 Activity 隐藏）时的解绑：只做渲染层脱钩，不断 WS、不丢缓冲。
    * 保留为语义锚点——ADR-067 的「卸载只 detach 渲染层」在新架构下即「退订 + 不动会话」。
    */
@@ -213,7 +213,7 @@ export class TerminalSessionManager {
     this.dispose(instanceId)
   }
 
-  /** 热集成员标记（FR-296 缓存宿主调用）：pin 期间独立表面的 release 不释放会话；可先于会话创建。 */
+  /** 热集成员标记（缓存宿主调用）：pin 期间独立表面的 release 不释放会话；可先于会话创建。 */
   pin(instanceId: number): void {
     this.pinnedIds.add(instanceId)
   }
@@ -282,8 +282,8 @@ export class TerminalSessionManager {
     return true
   }
 
-  /**
-   * 提交一行命令（FR-415，spec §2.2）：本地回显进缓冲 + **整行**写 stdin。
+  /** 
+   * 提交一行命令（spec §2.2）：本地回显进缓冲 + **整行**写 stdin。
    *
    * `data` 不补行尾：Worker 侧三种启动策略写 stdin 时各自补 `\n`
    * （`direct` 用 `Fprintln`、`daemon`/`docker` 拼 `command + "\n"`），
@@ -326,8 +326,8 @@ export class TerminalSessionManager {
     return this.sessions.get(instanceId)?.buffer.droppedCount ?? 0
   }
 
-  /**
-   * 当前历史回溯接缝（FR-419）。
+  /** 
+   * 当前历史回溯接缝。
    *
    * 环形缓冲未溢出时等同会话起点；溢出后改为最早保留行的接收时刻，令数据库回溯补上
    * 会话内被挤掉的日志，不在 `startedAt` 处留下空洞。
@@ -362,11 +362,11 @@ export class TerminalSessionManager {
     return this.sessions.get(instanceId)?.state
   }
 
-  /**
-   * 当前标记为可见的会话数（FR-414）：热集容量动态提升的输入。
+  /** 
+   * 当前标记为可见的会话数：热集容量动态提升的输入。
    *
    * 取自既有的 {@link markVisible} / {@link markHidden} 信号而非新造一套登记——
-   * 那两个方法本就是「这个终端此刻在不在用户眼前」的权威来源，分屏（FR-421）只需
+   * 那两个方法本就是「这个终端此刻在不在用户眼前」的权威来源，分屏只需
    * 对多个实例调 markVisible，容量便自动跟上。
    */
   getVisibleCount(): number {
@@ -471,8 +471,8 @@ export class TerminalSessionManager {
     }
   }
 
-  /**
-   * 建立连接：每次都现取一次性凭据（FR-140——token 首连即被消费，复用必 401），
+  /** 
+   * 建立连接：每次都现取一次性凭据（——token 首连即被消费，复用必 401），
    * 失败按 1s/2s/3s 退避重试至 MAX_RETRIES（连接存活满 STABLE_AFTER_MS 才清零计数，
    * 防 open→立即 close 反复清零绕过上限的死循环刷断连，FIX-B）。
    */
@@ -544,7 +544,7 @@ export class TerminalSessionManager {
     }
   }
 
-  /** 消息处理：语义从原实现原样迁入（含 FR-276 诊断渲染），只把落点从 xterm 换成行缓冲。 */
+  /** 消息处理：语义从原实现原样迁入（含诊断渲染），只把落点从 xterm 换成行缓冲。 */
   private handleMessage(session: TerminalSession, event: MessageEvent): void {
     try {
       const msg = JSON.parse(String(event.data)) as {
@@ -558,7 +558,7 @@ export class TerminalSessionManager {
         this.writeStream(session, text, msg.type === 'stderr' ? 'stderr' : 'stdout')
         for (const listener of session.outputListeners) listener(text)
       } else if (msg.type === 'state') {
-        // 错误态渲染后端诊断（FR-276，见 ADR-061）：WORKER_TOKEN_REJECTED 定向提示，
+        // 错误态渲染后端诊断（见 ADR-061）：WORKER_TOKEN_REJECTED 定向提示，
         // 一般错误带出 data 原因，不丢诊断信息。
         let line: string
         if (msg.state === 'error' && msg.code === 'WORKER_TOKEN_REJECTED') {

@@ -6,8 +6,8 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import ClientIntegrationGuide from './ClientIntegrationGuide'
 import ClientDistFlowGuide from '@/components/views/client-dist/ClientDistFlowGuide'
 
-/**
- * ClientIntegrationGuide 强断言（FR-259）：jm-updater.json 示例只含 API 根 endpoint
+/** 
+ * ClientIntegrationGuide 强断言：jm-updater.json 示例只含 API 根 endpoint
  * + 不再含 coreEndpoint/signPublicKey + 下载按钮存在且可点。
  */
 describe('ClientIntegrationGuide（mock 假后端）', () => {

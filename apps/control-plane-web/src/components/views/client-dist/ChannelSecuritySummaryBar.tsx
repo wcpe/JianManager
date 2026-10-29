@@ -18,14 +18,14 @@ export interface ChannelSecuritySummaryBarProps {
   /** 链接渲染插槽：应用侧注入路由 Link；缺省用原生 `<a>`。 */
   renderLink?: (args: { href: string; children: ReactNode }) => ReactNode
 }
-/** 风险等级 → Badge 变体（FR-358）。 */
+/** 风险等级 → Badge 变体。 */
 export function riskBadgeVariant(level?: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   if (level === 'critical' || level === 'high') return 'destructive'
   if (level === 'warn') return 'default'
   return 'secondary'
 }
 
-/** 频道工作台安全摘要条（FR-358）：近窗风险与封禁/受限计数，链到安全中心。 */
+/** 频道工作台安全摘要条：近窗风险与封禁/受限计数，链到安全中心。 */
 export function ChannelSecuritySummaryBar({
   summary,
   isError = false,

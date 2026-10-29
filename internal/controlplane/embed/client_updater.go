@@ -2,7 +2,7 @@ package embed
 
 import "embed"
 
-// clientUpdaterFS 内嵌客户端 OTA 更新器两件套 jar（FR-107 运营方接入引导）。
+// clientUpdaterFS 内嵌客户端 OTA 更新器两件套 jar（运营方接入引导）。
 // jar 为 client-updater Gradle 构建产物，经 `make embed-client-updater` 注入到 embed/client-updater/；
 // 目录内的 .gitignore 保证未注入 jar 时该目录依然存在、go:embed 不致编译失败。
 //
@@ -15,7 +15,7 @@ var clientUpdaterFS embed.FS
 const ClientUpdaterEmbeddedVersion = "0.1.0"
 
 // ClientUpdaterEmbeddedCoreVersion 是内嵌 updater-core 的**整数版本号**，作 manifest `agent.core.version`
-// 的来源（FR-193，见 ADR-045 改写）。客户端 FR-091 的自更新只把**更高** `agent.core.version` 暂存为
+// 的来源（见 ADR-045 改写）。客户端的自更新只把**更高** `agent.core.version` 暂存为
 // pending（int 比较），故此值须为单调整数、随 CP/更新器版本演进只升不降。`ClientUpdaterEmbeddedVersion`
 // 是给运营看的展示串（语义版本），本常量是给客户端用的单调整数轴——升级内嵌 updater-core 时一并 +1。
 // 默认 1；可经构建期 `-ldflags "-X ...embed.ClientUpdaterEmbeddedCoreVersion=N"` 覆盖（须为整数字面量）。

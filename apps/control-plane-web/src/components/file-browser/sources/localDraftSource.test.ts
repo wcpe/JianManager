@@ -13,7 +13,7 @@ function bytesFile(name: string, bytes: Uint8Array): File {
   return new File([bytes], name)
 }
 
-describe('localDraftSource 映射（FR-250）', () => {
+describe('localDraftSource 映射', () => {
   it('flat=true 且 list 一次返回全部条目（path/name/size，均为文件、取本地 File.size）', async () => {
     const files: LocalDraftFile[] = [
       { path: 'mods/foo.jar', file: textFile('foo.jar', 'x'.repeat(1024)) },

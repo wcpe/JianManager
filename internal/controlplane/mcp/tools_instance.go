@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-396 实例生命周期扩展：搜索/环境/崩溃快照/命令/批量/强杀/删除。
+// 实例生命周期扩展：搜索/环境/崩溃快照/命令/批量/强杀/删除。
 func init() {
 	registerToolSpecs(
 		toolSpec{
@@ -233,7 +233,7 @@ func execInstanceListCrashSnapshots(_ context.Context, deps ToolDeps, p *service
 	return toolOK(list)
 }
 
-// execInstanceCrashTrend 读取实例崩溃趋势（FR-470）：按天/根因趋势 + 同类聚合。
+// execInstanceCrashTrend 读取实例崩溃趋势：按天/根因趋势 + 同类聚合。
 func execInstanceCrashTrend(_ context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult {
 	id, e := requireID(args)
 	if e != nil {

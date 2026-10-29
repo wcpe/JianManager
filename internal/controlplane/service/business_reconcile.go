@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 业务对账协调接口（FR-525）。
+// 业务对账协调接口。
 //
 // 核心原则（规格 §2）：
 //
@@ -30,7 +30,7 @@ import (
 //   - **不预设动作名**：`action` 由业务台指定，代码里不存在 `if action == "snapshot"` 这类分支。
 //   - **不解析 output**：output 以 json.RawMessage 原样搬运，JM 不 unmarshal、不校验结构、不做差异。
 //   - **不缓存、不落库**：快照内容仅在请求生命周期内存在于响应体；幂等重放除外（见下）。
-//   - **不算风险**：对账是只读动作，不适用 FR-535 的风险分级，也不需要 confirmToken。
+// **不算风险**：对账是只读动作，不适用的风险分级，也不需要 confirmToken。
 //
 // 唯一保留的写侧约束是「拒绝 WRITE/DESTRUCTIVE 动作」：对账通道是只读入口，
 // 若允许它跑写动作，就等于绕开了批量命令的权限节点与二次确认。
@@ -73,7 +73,7 @@ var (
 // 与 BusinessBatchRequest 刻意分开：对账没有 confirmToken / reason / actionRisk，
 // 少一层「字段在语义上不适用」的解读成本。
 type BusinessReconcileRequest struct {
-	// Target 目标选择（复用 FR-523 的目标解析）。
+	// Target 目标选择（复用的目标解析）。
 	Target BusinessTarget
 	// Domain / Action 业务信封。Action 由调用方指定，JM 不预设。
 	Domain string
@@ -289,7 +289,7 @@ func (s *BusinessReconcileService) Reconcile(
 		return &replay, nil
 	}
 
-	// ③ 目标解析（复用 FR-523 的解析器与范围收敛）。
+	// ③ 目标解析（复用的解析器与范围收敛）。
 	resolved, err := s.prepareTarget(req.Target, scope)
 	if err != nil {
 		// 前置失败不构成一次成功的幂等记录，必须撤销占位，否则调用方修正参数后
@@ -330,7 +330,7 @@ func (s *BusinessReconcileService) prepareTarget(target BusinessTarget, scope Bu
 //
 // 【为什么要调 manifest】对账是只读入口。若允许它跑写动作，就等于给了调用方一条
 // 绕过批量命令权限节点（instance:business:write）与二次确认的旁路——同一个写动作
-// 换条通道就能执行，整个 FR-524/535 的写侧硬化就失效了。
+// 换条通道就能执行，整个535 的写侧硬化就失效了。
 //
 // 【为什么只查一台实例】manifest 是插件侧的声明，同一业务的多个实例通常跑同一插件；
 // 逐台拉 100 份 manifest 只为确认一个动作名，成本（100 次跨网络往返）远超收益。

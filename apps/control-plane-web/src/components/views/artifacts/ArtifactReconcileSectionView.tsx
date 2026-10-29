@@ -1,9 +1,9 @@
-/**
+/** 
  * @file ArtifactReconcileSectionView：制品 S3 一致性对账区块的受控视图，设置查询、运行列表、差异分页与两个处置动作由应用容器负责。
  * @input Panel/Button/Input/Dialog/Table/scrollable-dialog 原语、lib/runtime-assets-view（字节格式化）、views/DangerConfirm、翻译上下文
  * @output ArtifactReconcileSectionView、ArtifactReconcileSectionViewProps、ArtifactReportState、ArtifactDiffQueryState、各视图契约类型
  * @sync apps/control-plane-web/src/pages/ArtifactReconcileSection.tsx、apps/control-plane-web/src/pages/RuntimeAssetsPage.tsx
- * @since FR-508（组件受控化迁包；原 FR-349 制品索引可视化与 S3 一致性对账）
+ * @since（组件受控化迁包；原制品索引可视化与 S3 一致性对账）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -65,7 +65,7 @@ export interface ArtifactReconcileSettingsView {
   nextRunAt?: string
 }
 
-/**
+/** 
  * 一侧差异的分页查询状态。
  *
  * 页码/页大小会触发重新取数（且是 API 查询参数），故归容器持有——视图只渲染并上报翻页意图。
@@ -84,7 +84,7 @@ export interface ArtifactReportState {
   orphan: ArtifactDiffQueryState
 }
 
-/**
+/** 
  * 受控边界：设置、运行列表、差异分页数据与全部在途标志经 props 注入；设置保存、手动触发、
  * 差异处置以回调上报，由外壳执行 mutation 并决定提示文案——包内不取数、不发请求、不弹 toast。
  * 弹窗开合、设置草稿与「待确认为哪一侧」是纯 UI 状态，留视图内；会触发重新取数的页码
@@ -149,8 +149,8 @@ function Pager({ page, total, pageSize, onChange }: { page: number; total: numbe
   )
 }
 
-/**
- * 制品索引与 S3 对象一致性对账（FR-349）：手动触发 + 定期设置 + 差异报告（缺失标记失效 / 孤儿二次确认清理）。
+/** 
+ * 制品索引与 S3 对象一致性对账：手动触发 + 定期设置 + 差异报告（缺失标记失效 / 孤儿二次确认清理）。
  * 仅当存在 S3 制品渠道时可用（无渠道时给出说明）。
  */
 export function ArtifactReconcileSectionView({
@@ -265,7 +265,7 @@ export function ArtifactReconcileSectionView({
   )
 }
 
-/**
+/** 
  * 差异报告弹窗：缺失（可标记失效）/ 孤儿（可二次确认清理）两段，各带独立分页。
  * 数据、页码与在途标志全部由容器注入；本组件只保留「当前待确认为哪一侧」这一 UI 状态。
  */

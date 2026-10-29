@@ -12,7 +12,7 @@ import (
 // uploadChunkSize 是 UploadFile 流式分片大小（CP 侧切分参照值），与 downloadChunkSize 对称。
 const uploadChunkSize = 64 * 1024
 
-// UploadFile 单文件分块流式上传（FR-304，与 DownloadFile 对称）。
+// UploadFile 单文件分块流式上传（与 DownloadFile 对称）。
 // WriteFile unary 受直拨 64MiB 单消息上限约束、反向隧道下又无上限整块缓冲，大文件上传走本流式 RPC。
 // 零帧即关流按约定返回业务级失败且不触盘——CP 借此探测老 Worker（老版本返回 Unimplemented）。
 func (s *Server) UploadFile(stream workerpb.WorkerService_UploadFileServer) error {

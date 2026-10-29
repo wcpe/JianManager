@@ -19,7 +19,7 @@ import (
 
 // jdkMirrorBase 返回指定 vendor 的下载基址：CP 下发的 override 优先（来自平台设置
 // jdk.mirror.<vendor>，使运行时配置真生效），其次环境变量，最后回退官方默认。
-// 实现 FR-033「下载源可配，默认 Adoptium」与 FR-063 平台设置真生效。
+// 实现「下载源可配，默认 Adoptium」与平台设置真生效。
 func jdkMirrorBase(vendor, override string) string {
 	if v := strings.TrimSpace(override); v != "" {
 		return v
@@ -46,7 +46,7 @@ func envOr(key, def string) string {
 // buildDownloadURL 根据 vendor/major/arch/平台返回归档下载 URL。
 // 下载基址优先用 mirrorBase（CP 从平台设置下发），其次 JIANMANAGER_JDK_<VENDOR>_BASE，
 // 最后回退官方源（Temurin 默认 Adoptium）；未支持的 vendor 返回明确错误，提示用 POST /jdks 手动登记。
-// client 用于 Zulu 这类需先查元数据 API 的来源（经进程级出站代理，FR-174/ADR-037）；
+// client 用于 Zulu 这类需先查元数据 API 的来源（经进程级出站代理ADR-037）；
 // client 为 nil 时回退 http.DefaultClient。
 func buildDownloadURL(client *http.Client, vendor string, major int, arch, mirrorBase string) (string, error) {
 	switch strings.ToLower(vendor) {
@@ -88,7 +88,7 @@ func correttoURL(base string, major int, arch string) string {
 }
 
 // zuluURL queries the Azul metadata API for the latest Zulu JDK download URL.
-// client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退 http.DefaultClient。
+// client 经进程级出站代理（ADR-037）；为 nil 时回退 http.DefaultClient。
 func zuluURL(client *http.Client, base string, major int, arch string) (string, error) {
 	osName := "linux"
 	ext := "tar.gz"
@@ -124,15 +124,15 @@ func zuluURL(client *http.Client, base string, major int, arch string) (string, 
 }
 
 // downloadAndExtractWithProgress 下载归档到临时文件并解压到 destDir，期间经 report 回调
-// 上报下载百分比与阶段日志（FR-183，见 ADR-040；report 可为 nil）。
+// 上报下载百分比与阶段日志（见 ADR-040；report 可为 nil）。
 // 有 Content-Length 时按字节计算 0~100 的真实百分比；无则停在 0、靠阶段日志补充。
 func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, url, destDir string, report jdkProgress) error {
 	return downloadAndExtractStallParams(ctx, client, url, destDir, report, downloadStallTimeout, stallCheckInterval)
 }
 
-// DownloadAndExtract 下载归档到临时文件并按后缀解压到 destDir（导出薄封装，FR-299）。
+// DownloadAndExtract 下载归档到临时文件并按后缀解压到 destDir（导出薄封装）。
 // 供非 JDK 运行时安装器（internal/worker/runtime）复用与 JDK 完全一致的下载语义：
-// 停滞看门狗判卡死（FR-290）、网络类失败追加可操作引导（FR-279）、zip/tar.gz 防路径逃逸。
+// 停滞看门狗判卡死、网络类失败追加可操作引导、zip/tar.gz 防路径逃逸。
 // report 可为 nil；stall/interval <= 0 时用包默认看门狗阈值（测试可注入小值）。
 func DownloadAndExtract(ctx context.Context, client *http.Client, url, destDir string, report Progress, stall, interval time.Duration) error {
 	if stall <= 0 {
@@ -144,7 +144,7 @@ func DownloadAndExtract(ctx context.Context, client *http.Client, url, destDir s
 	return downloadAndExtractStallParams(ctx, client, url, destDir, jdkProgress(report), stall, interval)
 }
 
-// downloadAndExtractStallParams 同上，但停滞看门狗阈值参数化（便于测试以小值注入，FR-290）。
+// downloadAndExtractStallParams 同上，但停滞看门狗阈值参数化（便于测试以小值注入）。
 func downloadAndExtractStallParams(ctx context.Context, client *http.Client, url, destDir string, report jdkProgress, stall, interval time.Duration) error {
 	if client == nil {
 		client = &http.Client{} // 无总超时；卡死由 stall 看门狗判定（FIX-4）
@@ -155,8 +155,8 @@ func downloadAndExtractStallParams(ctx context.Context, client *http.Client, url
 
 	// 用可取消 context + stall 看门狗替代「总超时」：慢但在进展的大归档不被拖死，
 	// 仅连续无字节进展（卡死/源不可达）时中断（FIX-4，原 15min 总超时会把进展中的大下载也掐断）。
-	// 子 context 继承外部取消（FR-227 强制停止）与 stall 看门狗本地取消（FIX-4），任一触发即中断请求。
-	parent := ctx // 保留外部 ctx：区分「看门狗停滞掐断」与「用户强停」两种取消（FR-290）
+	// 子 context 继承外部取消（强制停止）与 stall 看门狗本地取消（FIX-4），任一触发即中断请求。
+	parent := ctx // 保留外部 ctx：区分「看门狗停滞掐断」与「用户强停」两种取消
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -166,14 +166,14 @@ func downloadAndExtractStallParams(ctx context.Context, client *http.Client, url
 	pw := &progressWriter{report: report} // total 待响应头到达后填
 	watchdogDone := make(chan struct{})
 	// 看门狗掐断前先置停滞标记：失败时据此产出「下载停滞」专属错误并归网络类，
-	// 而非裸 "context canceled"（真机复现：经代理下载流中途被掐，卡 48% 且错误无引导，FR-290）。
+	// 而非裸 "context canceled"（真机复现：经代理下载流中途被掐，卡 48% 且错误无引导）。
 	var stalled atomic.Bool
 	go watchStall(func() { stalled.Store(true); cancel() }, pw, stall, interval, watchdogDone)
 	defer close(watchdogDone)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		// 网络类失败（TLS 超时 / DNS / 连接被拒 / 卡死取消）追加可操作引导（FR-279）。
+		// 网络类失败（TLS 超时 / DNS / 连接被拒 / 卡死取消）追加可操作引导。
 		return annotateDownloadError(fmt.Errorf("下载失败: %w", err))
 	}
 	defer resp.Body.Close()
@@ -207,12 +207,12 @@ func downloadAndExtractStallParams(ctx context.Context, client *http.Client, url
 	pw.total = resp.ContentLength // 响应头已到，io.Copy 前填总长（看门狗只读 written 原子，无并发冲突）
 	if _, err := io.Copy(tmp, io.TeeReader(resp.Body, pw)); err != nil {
 		tmp.Close()
-		// 三分叉（FR-290）：停滞掐断 → 专属说明+网络类引导；用户强停 → 原样不误标；
+		// 三分叉：停滞掐断 → 专属说明+网络类引导；用户强停 → 原样不误标；
 		// 其余传输中断（连接被重置等） → 归网络类引导。
 		switch {
 		case stalled.Load():
 			// 停滞由看门狗确定判定，不依赖 isNetworkError 探测（底层是 context canceled），
-			// 直接确定性追加 FR-279 引导。
+			// 直接确定性追加引导。
 			return fmt.Errorf("下载停滞已中断：连续 %v 无字节进展，疑似下载流被掐断/代理断流: %w%s", stall, err, networkHint)
 		case parent.Err() != nil:
 			return fmt.Errorf("写入临时文件失败: %w", err)
@@ -229,7 +229,7 @@ func downloadAndExtractStallParams(ctx context.Context, client *http.Client, url
 // jdkProgress 下载进度回调（percent 0~100，line 可选阶段日志）。
 type jdkProgress func(percent int, line string)
 
-// progressWriter 包一层 io.Writer 统计已下载字节并按节流上报百分比（FR-183）。
+// progressWriter 包一层 io.Writer 统计已下载字节并按节流上报百分比。
 // written 用原子计数，供下载 stall 看门狗并发读取（FIX-4）。
 type progressWriter struct {
 	total      int64 // Content-Length，<=0 表示未知
@@ -396,7 +396,7 @@ func untarGz(archivePath, destDir string) error {
 			out.Close()
 		case tar.TypeSymlink:
 			// Node 官方 tar.gz 的 bin/npm、bin/corepack 是相对符号链接，必须保留
-			// （FR-299 缺陷：此前静默丢弃致 corepack/npm 不可用）。仅允许**相对**且
+			// （缺陷：此前静默丢弃致 corepack/npm 不可用）。仅允许**相对**且
 			// 解析后不逃出解压根的链接目标（防 symlink 逃逸）。
 			if filepath.IsAbs(hdr.Linkname) {
 				return fmt.Errorf("归档含绝对符号链接目标: %s -> %s", hdr.Name, hdr.Linkname)

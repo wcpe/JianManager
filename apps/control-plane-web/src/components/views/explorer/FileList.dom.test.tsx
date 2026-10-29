@@ -7,8 +7,8 @@ import FileList from '@/components/views/explorer/FileList'
 import { emptySelection } from '@/lib/explorer/explorer-selection'
 import type { FileInfo } from '@/lib/file-browser/file-entry'
 
-/**
- * FR-070 资源管理器文件列表 · 受控视图测（ADR-103）。
+/** 
+ *资源管理器文件列表 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：条目渲染（名称/权限/目录类型）、加载与错误态、空目录占位。
  * 交互（点选、右键、拖拽）由应用侧 `ResourceExplorer.dom.test.tsx` 走假后端覆盖。
@@ -56,7 +56,7 @@ function renderList(props: Partial<Parameters<typeof FileList>[0]> = {}) {
   return merged
 }
 
-describe('FileList（FR-070 资源管理器文件列表）', () => {
+describe('FileList（资源管理器文件列表）', () => {
   it('渲染条目的名称与权限串，目录行标出目录类型。', () => {
     renderList({ files: [entry({ name: 'a.txt' }), entry({ name: 'sub', isDir: true })] })
     expect(screen.getByText('a.txt')).toBeInTheDocument()

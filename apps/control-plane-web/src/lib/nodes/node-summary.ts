@@ -1,7 +1,7 @@
 import type { NodeInfo } from './node-types'
 
-/**
- * 节点集群汇总（FR-144）。
+/** 
+ * 节点集群汇总。
  * 抽成无 React 依赖的纯函数以便单测，供节点页顶部 sticky 概览（在线/离线/维护计数 + 集群 CPU/内存/磁盘聚合水位）。
  */
 
@@ -18,7 +18,7 @@ export interface NodeClusterSummary {
   diskPct: number | null
 }
 
-/**
+/** 
  * 汇总节点集群状态与资源水位。
  * 状态：status===1 在线、===0 离线、===2 启动中（既非在线也非离线，仅计入 total）。
  * 资源水位：仅对在线节点取占用率均值，离线节点 DB 陈旧值不计入（避免误导为在线满载）。

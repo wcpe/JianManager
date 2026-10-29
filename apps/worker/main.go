@@ -58,12 +58,12 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// crashSignal 归一化崩溃上报的信号名（FR-467）。
+// crashSignal 归一化崩溃上报的信号名。
 //
 // docker 模式被 cgroup OOM killer 终止时，容器退出码恒为 137 而宿主侧没有信号——
 // 此处补 "killed"（SIGKILL/137 口径），使 CP 侧崩溃归类能识别为 OOM，而不是退化成 unknown。
 // 其余情况沿用进程/容器给出的信号名（daemon/direct 走 WaitStatus.Signal().String()）。
-// logStartupPhase 打一条启动阶段耗时日志（FR-486 范围①）。
+// logStartupPhase 打一条启动阶段耗时日志（范围①）。
 //
 // 为什么默认开启而不藏在开关后面：启动期每次进程生命周期只跑一遍，没有噪声成本；
 // 而运行期那套 `JIANMANAGER_STAGE_TIMING=1`（采集轮内计时）是高频路径，才需要开关。
@@ -162,7 +162,7 @@ func flagValue(args []string, name string) (string, error) {
 // runDaemonWrapper 以 wrapper 子进程模式运行。
 // 配置通过环境变量 JM_DAEMON_WRAPPER_CONFIG 传递（JSON）。
 func runDaemonWrapper() {
-	// wrapper 必须在 Worker 重启后存活（ADR-003、FR-341）：Worker 死后其建立的 stdout/stderr
+	// wrapper 必须在 Worker 重启后存活（ADR-003）：Worker 死后其建立的 stdout/stderr
 	// 管道读端关闭，wrapper 下一次日志写会触发 SIGPIPE 而被默认终止。忽略之，改为 EPIPE 丢弃。
 	daemon.IgnoreBrokenPipe()
 
@@ -177,7 +177,7 @@ func runDaemonWrapper() {
 	}
 }
 
-// configPathArg 返回命令行第 1 个位置参数当且仅当它是「现存的配置文件路径」（FR-222，见 ADR-051）。
+// configPathArg 返回命令行第 1 个位置参数当且仅当它是「现存的配置文件路径」（见 ADR-051）。
 //
 // 历史用法 `worker /path/worker.yml` 显式传配置文件仍支持；但 setup 的 `--xxx` flag 与不存在的
 // 路径不当配置文件（否则会误判已配置而跳过 setup）。返回空串表示「未显式给配置文件」。
@@ -205,7 +205,7 @@ func setupArgs() []string {
 	return args
 }
 
-// isConfigured 报告 Worker 是否已配置（FR-222，见 ADR-051）。
+// isConfigured 报告 Worker 是否已配置（见 ADR-051）。
 //
 // 已配置 ⇔ 有 worker.yml/.yaml 配置文件 或 有 <data-dir>/etc/node-identity.json 身份文件。
 // 二者任一存在即视为已配置（有 yml=写过配置；有身份=注册过）→ 跳过 setup。两者皆缺=全新机器=进 setup。
@@ -246,19 +246,19 @@ func parseDataDirArg(args []string) []string {
 }
 
 func runWorker() {
-	// FR-486：启动分段计时。放在最前面，第一个 Mark 才有意义。
+	// 启动分段计时。放在最前面，第一个 Mark 才有意义。
 	startup := newStartupTimer()
 
 	// Windows 服务默认 cwd=System32，会把 setup 写出的 worker.yml 落到错误位置且重启找不到（FIX-2/3）。
 	// 以服务身份运行时先把工作目录切到 exe 所在的安装目录（与 Linux systemd WorkingDirectory 对齐）。
 	chdirToExeDirIfService()
 
-	// 加载配置：worker.yml + JIANMANAGER_ 环境变量覆盖（FR-080，见 ADR-020）。
+	// 加载配置：worker.yml + JIANMANAGER_ 环境变量覆盖（见 ADR-020）。
 	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yml`），缺省自动查找。
 	// 第 1 个参数仅当是「现存的配置文件路径」时才当配置文件；setup 的 --xxx flag 不算（见下自检）。
 	cfgPath := configPathArg()
 
-	// 未配置自检（FR-222，见 ADR-051）：无 worker.yml/.yaml 且无 etc/node-identity.json → 进 setup。
+	// 未配置自检（，见 ADR-051）：无 worker.yml/.yaml 且无 etc/node-identity.json → 进 setup。
 	// setup 采集入参（TTY 交互 / 无 TTY 参数+env）→ 写 worker.yml + 首注册 + 持久化身份 → 转 run。
 	// 已配置（有 yml / 有身份 / 显式传配置文件路径）→ 跳过 setup，走现有 run（现状零变化）。
 	var setupResult *setup.Result
@@ -357,9 +357,9 @@ func runWorker() {
 		"logIngestCharset", cfg.IngestDefaultCharset())
 	startup.Mark("config")
 
-	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
+	// 出站 HTTP 客户端持有者（见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
-	// 持有者可运行时重建：CP 经心跳下发节点期望代理后即时生效（custom→节点值 / inherit→全局默认，FR-185）。
+	// 持有者可运行时重建：CP 经心跳下发节点期望代理后即时生效（custom→节点值 / inherit→全局默认）。
 	// 启动按 worker.yml/env 基线构造；CP 下发为空时回退此基线。
 	outboundProvider, err := httpclient.NewProvider(cfg.Proxy)
 	if err != nil {
@@ -375,7 +375,7 @@ func runWorker() {
 	host := cfg.Host // 留空自动检测本机 IP
 	wsTokenSecret := ""
 
-	// 节点 UUID 在首次注册后由 CP 签发并落本地身份文件复用（FR-080）；启动时先占位。
+	// 节点 UUID 在首次注册后由 CP 签发并落本地身份文件复用；启动时先占位。
 	nodeUUID := "local-dev"
 
 	// 解析并初始化项目自包含数据根（配置 data_dir，缺省 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
@@ -386,7 +386,7 @@ func runWorker() {
 		os.Exit(1)
 	}
 
-	// 本地身份提前加载（FR-275，见 ADR-061）：WS 令牌密钥初始值优先取身份文件持久化值
+	// 本地身份提前加载（见 ADR-061）：WS 令牌密钥初始值优先取身份文件持久化值
 	// （上次 CP 下发），回退 worker.yml jwt_secret（旧 CP/首装兼容）——须在 WS 服务器构造前
 	// 就绪，消除「注册完成前用旧密钥校验」窗口。注册流程复用本次加载结果，不二次读文件。
 	etcDir := root.EtcDir()
@@ -441,10 +441,10 @@ func runWorker() {
 	// 进程管理器（要拿实例的 WorkDir），两类 Manager 类型名相近但不能互换——
 	// 留着同名只用一次容易在下一个人改代码时静默传错。
 	procManager := manager
-	// 接管重试窗口（FR-455①）：Worker 重启后对存活 wrapper 的 reconnect 重试序列（默认 ≈127s），
+	// 接管重试窗口（①）：Worker 重启后对存活 wrapper 的 reconnect 重试序列（默认 ≈127s），
 	// 覆盖分钟级瞬时故障；必须在下方 RecoverDaemonInstances 之前装配，否则该轮接管仍用默认序列。
 	manager.SetRecoverRetryBackoff(cfg.Recover.RetryBackoffSequence())
-	// 启动内存闸（FR-317）：可用内存塞不下待启实例即拒绝启动，防节点 OOM 失联。
+	// 启动内存闸：可用内存塞不下待启实例即拒绝启动，防节点 OOM 失联。
 	manager.SetMemGuard(process.MemGuardConfig{
 		ReserveMB: cfg.MemoryGuard.ReserveMB,
 		Disabled:  cfg.MemoryGuard.Disabled,
@@ -464,23 +464,23 @@ func runWorker() {
 	var jdkMgr *jdks.Manager
 	if os.Getenv("JIANMANAGER_DISABLE_JDK") != "1" {
 		jdkMgr = jdks.NewManager(root.JDKsDir(), systemJDKDirs)
-		// JDK 下载经进程级出站持有者（FR-174/FR-185）：CP 下发代理改动运行时即时生效。
+		// JDK 下载经进程级出站持有者：CP 下发代理改动运行时即时生效。
 		jdkMgr.SetHTTPClientProvider(outboundProvider.Client)
 		slog.Info("JDK manager enabled", "rootDir", root.JDKsDir())
 	} else {
 		slog.Info("JDK manager disabled by JIANMANAGER_DISABLE_JDK=1")
 	}
-	// 孤儿处置审计回调（FR-455/456）：误杀拦截/孤儿处置既落 Worker 结构化日志（不静默），
+	// 孤儿处置审计回调（456）：误杀拦截/孤儿处置既落 Worker 结构化日志（不静默），
 	// 又经 Worker→CP 出站信道上报落 CP 审计库（spec §2.2）。
 	//
-	// 装配顺序（FR-456 N2）：必须在 RecoverDaemonInstances **之前**。接管兜底的处置/误杀拦截动作
+	// 装配顺序（N2）：必须在 RecoverDaemonInstances **之前**。接管兜底的处置/误杀拦截动作
 	// 就发生在启动恢复期，若回调晚装配，这些真孤儿处置只落 slog、进不了 CP 审计库（reviewer 无从查证）。
 	cpAddr := cfg.ControlPlane
 	if cpAddr == "" {
 		cpAddr = "localhost:9100"
 	}
 	orphanAuditReporter := orphanaudit.New(cpAddr)
-	// 进程退出前释放复用的上报连接与派发 goroutine（FR-456 N4）。
+	// 进程退出前释放复用的上报连接与派发 goroutine（N4）。
 	defer orphanAuditReporter.Close()
 	// 身份注入同样提前：本地身份文件已在启动早期加载（重注册路径），此处先注入，使**启动期**恢复
 	// 的处置也能凭既有身份上报。首装尚无身份时上报安全丢弃；注册成功后于下方再注入一次覆盖运行期。
@@ -508,19 +508,19 @@ func runWorker() {
 		slog.Info("已恢复 daemon 实例连接", "count", recovered)
 	}
 
-	// 运行期周期孤儿扫描（FR-456）：随 Worker 常驻，持续兜底 wrapper 死/Java 活、direct 孤儿、
+	// 运行期周期孤儿扫描：随 Worker 常驻，持续兜底 wrapper 死/Java 活、direct 孤儿、
 	// docker 残留，按策略处置（默认 warn 只告警，可配 auto 自动清理）。补齐「仅启动时清理」的缺口。
 	if !cfg.OrphanScan.Disabled {
 		policy := process.NormalizeOrphanDisposePolicy(cfg.OrphanScan.DisposePolicy)
 		orphanScanner := process.NewOrphanScanner(manager, cfg.OrphanScan.ScanInterval(), policy)
-		// FR-497：未纳管活进程的自动收养开关（默认开；此处接线使 orphan_scan.auto_adopt 生效）。
+		// 未纳管活进程的自动收养开关（默认开；此处接线使 orphan_scan.auto_adopt 生效）。
 		orphanScanner.SetAutoAdopt(cfg.OrphanScan.AutoAdoptEnabled())
 		scannerCtx, cancelScanner := context.WithCancel(context.Background())
 		defer cancelScanner()
 		orphanScanner.Start(scannerCtx)
 	}
 
-	// 运行期实例健康巡检与自愈（FR-459）：存活 ∧ 响应双维识别假死，受控自愈（warn/restart）
+	// 运行期实例健康巡检与自愈：存活 ∧ 响应双维识别假死，受控自愈（warn/restart）
 	// 与崩溃熔断（窗口内重启超限即停自动重启）。本地配置 worker.health_scan.*；运行期阈值/动作
 	// 可经心跳响应下发覆盖（见下方 heartbeat.SetHealthPolicyApplier）。
 	healthScanner := process.NewHealthScanner(manager, !cfg.HealthScan.Disabled, cfg.HealthScan.ScanInterval(), cfg.HealthScan.HealthPolicy())
@@ -716,7 +716,7 @@ func runWorker() {
 	// 保留策略驱动器（G6）。声明在这里（而非 lifecycle 块内）是因为它要在采集运行时
 	// 启动之后才有意义：搬运的是已经落库的分区，采集还没起来时搬没有意义。
 	var logRetentionDriver *retention.Driver
-	// 归档对象自身的回收（FR-501 的最后一块）：把「归档目的地里的副本」按保留期清掉。
+	// 归档对象自身的回收（的最后一块）：把「归档目的地里的副本」按保留期清掉。
 	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
 	// 且必须与 /metrics 的读数出口共用同一个实例。
 	var logArchivePurge *retention.ArchiveObjectReclaimer
@@ -761,7 +761,7 @@ func runWorker() {
 		}
 	}()
 	logStack.LogRPC.SetRuntimeCatalog(logStack.Catalog)
-	// FR-477：先完成 Catalog/journal 逻辑恢复，再开放 Log RPC；物理目录残留
+	// 先完成 Catalog/journal 逻辑恢复，再开放 Log RPC；物理目录残留
 	// 不能替代 owner/generation 权威。不可查询范围保持 recovery-required，
 	// 不阻塞 Worker 其它实例服务。
 	for key, recovery := range logStack.Catalog.StartingRecover() {
@@ -798,7 +798,7 @@ func runWorker() {
 				"truncated", len(needsManual) > len(sample))
 		}
 	}
-	// 已归档但热层尚未回收的分区（FR-501 回收闭环的可观测面）。
+	// 已归档但热层尚未回收的分区（回收闭环的可观测面）。
 	//
 	// 为什么会存在这种状态：权威态先改 ARCHIVED、再删热层。若进程恰在两步之间退出，
 	// 就会留下一份「数据安全、盘没省下来」的残留副本。这是**安全方向**的不一致
@@ -841,7 +841,7 @@ func runWorker() {
 					newCatalogPartitionLister(logStack.Catalog),
 					nil,
 					newDiskPercentReader(logCapacityProvider))
-				// 导出归档（FR-501，硬规则的次选路径）：搬不了冷层时导出为独立副本。
+				// 导出归档（，硬规则的次选路径）：搬不了冷层时导出为独立副本。
 				//
 				// 默认关闭（`log_retention.archive_copy.enabled=false`）。这里**不做**任何
 				// 默认兜底目录：没有目的地就不装出口，计划阶段于是不会产出 archive_copy，
@@ -877,7 +877,7 @@ func runWorker() {
 									CoverageComplete: sum.CoverageComplete,
 								}, nil
 							}))
-						// 「已归档」权威态迁移出口 + 热层回收出口（FR-501 回收热层闭环）。
+						// 「已归档」权威态迁移出口 + 热层回收出口（回收热层闭环）。
 						//
 						// 三个出口必须成套装配才有回收：导出证明「副本可信」、authority 证明
 						// 「Catalog 已承认正本在归档」、remover 才允许真的删。缺 authority 时
@@ -899,7 +899,7 @@ func runWorker() {
 							"provider", provider.Kind(), "root", strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root))
 					}
 				}
-				// 归档对象自身的回收（FR-501）：把归档目的地里**已过保留期**的副本删掉。
+				// 归档对象自身的回收：把归档目的地里**已过保留期**的副本删掉。
 				//
 				// 装配条件是「本项生效 **且** 有归档根」，**不**要求 archive_copy.enabled：
 				// 「停止写新归档，但仍要清理旧归档」是一个真实且合理的运维动作
@@ -976,7 +976,7 @@ func runWorker() {
 		}
 	}
 	workerServer.SetLogQueryService(logStack.LogRPC)
-	// FR-478：归档 Registry/Rehydrate 进入同一 Worker 查询面。凭据只来自
+	// 归档 Registry/Rehydrate 进入同一 Worker 查询面。凭据只来自
 	// 环境覆盖的配置对象，不写入日志或诊断响应。
 	var archiveRegistry *archive.Registry
 	if cfg.LogArchive.Enabled {
@@ -1007,7 +1007,7 @@ func runWorker() {
 		}
 		if provider != nil {
 			registry := archive.NewRegistry(provider)
-			// 归档 manifest 记录受管 VL 的真实构建标识（FR-476 资产审批），而非占位。
+			// 归档 manifest 记录受管 VL 的真实构建标识（资产审批），而非占位。
 			if vlsup.AssetBuildID != "" {
 				registry.SetEngineVersion("victorialogs/" + vlsup.AssetBuildID)
 			}
@@ -1047,7 +1047,7 @@ func runWorker() {
 	}
 	// 新采集器（tailer/logtail）。旧链路已删除，不存在「两者互斥」的问题。
 	var logTailRunner *logtail.Runner
-	// FR-503/504 的采集策略（含定时归档导入扫描周期）已随旧链路删除：
+	// /504 的采集策略（含定时归档导入扫描周期）已随旧链路删除：
 	// 新采集器不读这些策略——路径来自 CP 下发的实例登记，gzip 由 `log_tailer.include_gzip` 决定。
 	// 新采集器（tailer/logtail，阶段二并行接入）：开关打开时走它，**不构造** ingest.Manager。
 	//
@@ -1167,15 +1167,15 @@ func runWorker() {
 	if rangeClient == nil {
 		slog.Info("Worker 日志查询面已装配", "buildId", version.Version, "rangeClient", "unimplemented-stub")
 	}
-	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
+	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者：
 	// CP 下发代理改动运行时即时生效。
 	workerServer.SetHTTPClientProvider(outboundProvider.Client)
-	// 非 JDK 运行时安装管理器（FR-299，首批 Node.js）：托管根 <dataRoot>/opt/runtimes，
+	// 非 JDK 运行时安装管理器（首批 Node.js）：托管根 <dataRoot>/opt/runtimes，
 	// 下载经进程级出站持有者（代理改动运行时即时生效，同 JDK）。
 	runtimeMgr := wruntime.NewManager(root.RuntimesDir())
 	runtimeMgr.SetHTTPClientProvider(outboundProvider.Client)
 	workerServer.SetRuntimeManager(runtimeMgr)
-	// 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径发现 jdk/nodejs 候选；
+	// 运行时扫描器（节点运行时库）：ScanRuntimes 按常见安装路径发现 jdk/nodejs 候选；
 	// JDK 托管根与运行时托管根传入，其下候选标 already_registered。
 	var runtimeManagedRoots []string
 	if jdkMgr != nil {
@@ -1183,7 +1183,7 @@ func runWorker() {
 	}
 	runtimeManagedRoots = append(runtimeManagedRoots, runtimeMgr.RootDir())
 	runtimeScanner := runtimescan.New(runtimeManagedRoots)
-	// FR-299×FR-300 胶合：托管安装根不在默认 node 路径表内，动态追加两种布局
+	// ×胶合：托管安装根不在默认 node 路径表内，动态追加两种布局
 	// （linux tar.gz 解出 bin/node；windows zip 顶层 node.exe），使一键安装的托管 Node
 	// 能被扫描发现并被 Bot spawn 解析器选中。
 	runtimeScanner.AddNodeGlobs(
@@ -1193,11 +1193,11 @@ func runWorker() {
 		filepath.Join(runtimeMgr.RootDir(), "nodejs-*", "*", "node.exe"),
 	)
 	workerServer.SetRuntimeScanner(runtimeScanner)
-	// 包管理器（FR-306）：托管 .npmrc 与 corepack 激活落 opt/runtimes（与 nodejs-* 平级）。
+	// 包管理器：托管 .npmrc 与 corepack 激活落 opt/runtimes（与 nodejs-* 平级）。
 	workerServer.SetPkgManager(pkgmgr.NewManager(runtimeMgr.RootDir()))
-	// 全文搜索追加忽略规则（worker.yml search.ignore，叠加内置默认集，FR-074）。
+	// 全文搜索追加忽略规则（worker.yml search.ignore，叠加内置默认集）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
-	// 节点制品缓存（FR-178）：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
+	// 节点制品缓存：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
 	// 容量上限来自 worker.yml artifact_cache.max_bytes（0=不限），可经 CP 端点运行时下发覆盖。
 	artifactCache := artifactcache.New(root.ArtifactCacheDir())
 	artifactCache.SetCap(cfg.ArtifactCache.MaxBytes)
@@ -1205,7 +1205,7 @@ func runWorker() {
 	slog.Info("节点制品缓存已启用", "dir", root.ArtifactCacheDir(), "maxBytes", cfg.ArtifactCache.MaxBytes)
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
-	// 入口脚本解析顺序（FR-308 见 ADR-072；FR-286 迁移见 ADR-064）：
+	// 入口脚本解析顺序（见 ADR-072迁移见 ADR-064）：
 	// JIANMANAGER_BOT_WORKER_PATH 显式覆盖 > 数据根自愈物化副本（注册后拉取，见下方
 	// botdist.Ensure）> apps/bot-worker/dist/index.js（仓库内直跑新布局）> 旧相对路径
 	// bot-worker/dist/index.js（存量部署把 bot-worker 平铺在安装目录，不因升级断 Bot 能力）。
@@ -1225,7 +1225,7 @@ func runWorker() {
 	// 同级 node_modules 链接承载，且每次 spawn 前按新旧根完整性刷新后再预检。
 	globalNM := botdist.GlobalNodeModulesCandidates(runtimeMgr.RootDir())
 	managedBotWorkerDir := root.BotWorkerDir()
-	// FR-300/308：扫描只提供候选路径，NodeResolver 会逐个真实探测并强制 >=22.13.0。
+	// 308：扫描只提供候选路径，NodeResolver 会逐个真实探测并强制 >=22.13.0。
 	//
 	// 分片（shards）：单 Node 进程承载 bot 有硬上限——实测 272 bot 时主线程 99.9% CPU、
 	// RSS 9.2GB，事件循环排不上 10s 心跳，stdout 停更致控制面判定容量快照过期。
@@ -1260,26 +1260,26 @@ func runWorker() {
 	}
 	workerServer.SetBotManager(botMgr)
 
-	// 反编译器（FR-075，见 ADR-018）：解析 CFR jar（配置路径>内嵌>数据根缓存>按需下载 sha256 pin），
+	// 反编译器（见 ADR-018）：解析 CFR jar（配置路径>内嵌>数据根缓存>按需下载 sha256 pin），
 	// 缓存落数据根 cache/tools；反编译经实例/系统 JDK 受控调起 CFR，只读+超时+体积上限+失败降级。
 	decompProvider := decompiler.NewProvider(decompiler.Config{
 		ConfigPath:    cfg.Decompiler.CFRPath,
 		CacheDir:      filepath.Join(root.CacheDir(), "tools"),
 		Embedded:      wembed.CFRJar,
 		AllowDownload: cfg.Decompiler.AllowDownload,
-		// CFR 按需下载经进程级出站持有者（FR-174/FR-185）：CP 下发代理改动运行时即时生效。
+		// CFR 按需下载经进程级出站持有者：CP 下发代理改动运行时即时生效。
 		HTTPClientProvider: outboundProvider.Client,
 	})
 	workerServer.SetDecompiler(decompProvider)
 
-	// 终端会话隧道桥（FR-281 M2，见 ADR-066）：TerminalSession 回环拨本机 WS 终端服务，
+	// 终端会话隧道桥（M2，见 ADR-066）：TerminalSession 回环拨本机 WS 终端服务，
 	// 令牌校验/会话层单一真源仍是 ws.TerminalServer。
 	workerServer.SetTerminalWSAddr(fmt.Sprintf("ws://127.0.0.1:%d/ws/terminal", wsPort))
 
 	// WS 服务在节点完成注册并取得非空专用密钥后才监听，避免以空密钥暴露入口。
 	terminalServer := ws.NewTerminalServer(wsTokenSecret)
 
-	// 桥接进程输出：一份给 WebSocket 终端（交互），一份给 StreamInstanceEvents 事件流（CP 采集落库，FR-049）。
+	// 桥接进程输出：一份给 WebSocket 终端（交互），一份给 StreamInstanceEvents 事件流（CP 采集落库）。
 	// 两条路径相互独立，从同一份进程输出分流，互不阻塞。
 	manager.SetOutputHandler(func(instanceID string, stream string, data []byte) {
 		text := string(data)
@@ -1296,7 +1296,7 @@ func runWorker() {
 		}
 	})
 
-	// FR-471 缺陷修复：实例每次开始新一轮运行即重置其终端环形缓冲，使崩溃快照（FR-313）截取的
+	// 缺陷修复：实例每次开始新一轮运行即重置其终端环形缓冲，使崩溃快照截取的
 	// 尾部输出只含本次运行——否则上一轮的崩溃文本会残留并被分类器按优先级取走，把本次崩溃误判成
 	// 上一轮的原因（真机实测：注入端口占用却因残留 OutOfMemoryError 行被判 oom）。
 	manager.SetInstanceStartHandler(func(instanceID string) {
@@ -1310,7 +1310,7 @@ func runWorker() {
 		}
 	})
 
-	// 插件桥服务端（ServerProbe 反向 WS，FR-065，见 ADR-016）：与终端 WS 并列、同一监听端口。
+	// 插件桥服务端（ServerProbe 反向 WS见 ADR-016）：与终端 WS 并列、同一监听端口。
 	// 探针主动连入 /ws/plugin-bridge，事件经 gRPC StreamPluginEvents 冒泡到 CP；token 校验使用 CP 下发的专用 WS 密钥。
 	pluginBridge := ws.NewPluginBridgeServer(wsTokenSecret)
 	workerServer.SetPluginBridge(pluginBridge)
@@ -1348,7 +1348,7 @@ func runWorker() {
 	if logArchivePurge != nil {
 		purgeSource = logArchivePurge
 	}
-	// 索引库 SQL 慢查询读数（FR-485）随旧链路删除：数据源是 ingest.Manager 的索引库，
+	// 索引库 SQL 慢查询读数随旧链路删除：数据源是 ingest.Manager 的索引库，
 	// 新架构没有索引库。此处显式传 nil，让 /metrics 输出「全零序列」而不是缺序列。
 	var indexSQLSource retention.IndexSQLSource
 	// 投递批次与索引 SQL 指标随旧链路删除（数据源是 ingest.Manager）。
@@ -1359,7 +1359,7 @@ func runWorker() {
 	// 重启后回到 log.level 配置值（见 retention.LogLevelController 的边界说明）。
 	// 这里正是 logLevelVar 注释里预留的接线点：此前它是 runWorker 的局部量、无任何可达入口。
 	wsMux.HandleFunc("/debug/log-level", retention.NewLogLevelController(logLevelVar).Handler())
-	// FR-511 的 HTTP 日志推送端点（/insert/jsonline）已随旧链路删除。
+	// 的 HTTP 日志推送端点（/insert/jsonline）已随旧链路删除。
 	//
 	// 它依赖 `PUSH_ONLY` 源与 `Pipeline.Ingest` 的 WAL 攒批/背压语义——新采集器的模型里
 	// 没有「推送源」这个概念（只有「扫描文件」）。**这是功能下线点**：原本靠 HTTP 推日志
@@ -1368,9 +1368,9 @@ func runWorker() {
 	wsAddr := localWSAddr(wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}
 
-	// 注册到 Control Plane（FR-080，见 ADR-020）。
+	// 注册到 Control Plane（见 ADR-020）。
 	// Control Plane 未启动时 Worker 不退出，按指数退避重试直到注册成功。
-	// 崩溃快照上报（FR-313）：进程非正常退出时，把策略捕获的退出码/信号/时长 +
+	// 崩溃快照上报：进程非正常退出时，把策略捕获的退出码/信号/时长 +
 	// 终端环形缓冲的尾部输出（最后 200 行 / 64KB）组装为快照，异步经 gRPC 上报 CP
 	// 持久化。上报失败（网络 / 老 CP Unimplemented）记日志丢弃，不阻塞状态机。
 	crashReporter := crashreport.New(cpAddr)
@@ -1379,7 +1379,7 @@ func runWorker() {
 			InstanceUUID: instanceID,
 			OccurredAt:   info.OccurredAt,
 			ExitCode:     info.ExitCode,
-			// FR-467：docker 容器被 cgroup OOM killer 杀掉时，宿主侧拿不到信号，
+			// docker 容器被 cgroup OOM killer 杀掉时，宿主侧拿不到信号，
 			// 用 "killed" 语义补齐（对齐 SIGKILL/137 口径），使 CP 的根因归类能判 oom；
 			// 非 OOM 情况沿用进程/容器给出的信号名。
 			Signal:     crashSignal(info),
@@ -1393,7 +1393,7 @@ func runWorker() {
 	var identityForPersist *register.Identity
 
 	if setupResult != nil {
-		// 本次启动由 setup 完成首注册并已持久化身份（FR-222，见 ADR-051）：
+		// 本次启动由 setup 完成首注册并已持久化身份（见 ADR-051）：
 		// 直接复用其换得的身份转 run，不再二次注册、不重复消费一次性 token。
 		regResult = &register.Result{
 			NodeUUID:      setupResult.Identity.NodeUUID,
@@ -1443,8 +1443,8 @@ func runWorker() {
 		nodeUUID = regResult.NodeUUID
 		slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
 
-		// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token（FR-080）。
-		// CP 下发的 WS 令牌密钥一并持久化（FR-275，见 ADR-061）。
+		// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token。
+		// CP 下发的 WS 令牌密钥一并持久化（见 ADR-061）。
 		if identity == nil {
 			fresh := &register.Identity{
 				NodeUUID:      regResult.NodeUUID,
@@ -1464,7 +1464,7 @@ func runWorker() {
 			identityForPersist = fresh
 		} else {
 			if regResult.WSTokenSecret != "" && regResult.WSTokenSecret != identity.WSTokenSecret {
-				// 重注册带来新 WS 令牌密钥（存量节点升级 / CP 轮换后的主路径，FR-275）：补写身份文件。
+				// 重注册带来新 WS 令牌密钥（存量节点升级 / CP 轮换后的主路径）：补写身份文件。
 				identity.WSTokenSecret = regResult.WSTokenSecret
 				if err := register.SaveIdentity(etcDir, identity); err != nil {
 					slog.Warn("持久化 WS 令牌密钥失败（内存已生效，重启后经注册自愈）", "error", err)
@@ -1474,12 +1474,12 @@ func runWorker() {
 		}
 	}
 
-	// 节点身份就绪后崩溃快照上报可用（FR-313）：两条注册路径（setup 首注册 / 常规注册）在此汇合。
+	// 节点身份就绪后崩溃快照上报可用：两条注册路径（setup 首注册 / 常规注册）在此汇合。
 	crashReporter.SetIdentity(nodeUUID, regResult.NodeSecret)
-	// 孤儿处置审计上报（FR-455/456）同样就绪：此后运行期扫描/接管兜底的处置动作可落 CP 审计库。
+	// 孤儿处置审计上报（456）同样就绪：此后运行期扫描/接管兜底的处置动作可落 CP 审计库。
 	orphanAuditReporter.SetIdentity(nodeUUID, regResult.NodeSecret)
 
-	// bot-worker dist 自愈下发（FR-308，见 ADR-072）：注册成功即持身份从 CP 拉取内嵌归档，
+	// bot-worker dist 自愈下发（见 ADR-072）：注册成功即持身份从 CP 拉取内嵌归档，
 	// 物化到数据根后切换 bot 入口路径。显式 JIANMANAGER_BOT_WORKER_PATH 时尊重覆盖不自愈；
 	// CP 未内嵌/拉取失败回退本地已有（物化副本或旧相对路径），只告警不阻断启动。
 	if !botWorkerPathPinned {
@@ -1500,7 +1500,7 @@ func runWorker() {
 		}
 	}
 
-	// CP 下发的 WS 令牌密钥热应用（FR-275，见 ADR-061）：注册响应非空即应用到终端/插件桥。
+	// CP 下发的 WS 令牌密钥热应用（见 ADR-061）：注册响应非空即应用到终端/插件桥。
 	// 旧 CP 未下发密钥时仅可使用此前由 CP 持久化的密钥，绝不回退 worker.yml 的 jwt_secret。
 	currentWSSecret := wsTokenSecret
 	if regResult.WSTokenSecret != "" {
@@ -1515,7 +1515,7 @@ func runWorker() {
 	go func() {
 		slog.Info("WebSocket 服务器就绪", "addr", wsAddr)
 		startup.Mark("wsReady")
-		// FR-486：所有关键阶段都已就绪，这时输出分段耗时最有意义。
+		// 所有关键阶段都已就绪，这时输出分段耗时最有意义。
 		startup.Report()
 		if err := wsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			// WS 监听失败是**致命**的：本节点已无法被 CP 接入终端与插件桥；
@@ -1553,9 +1553,9 @@ func runWorker() {
 	if vlSupervisor != nil {
 		hb.SetVLDiskProvider(vlDiskProviderAdapter{sup: vlSupervisor})
 	}
-	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
+	// 运行中长任务进度随心跳上报（，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
 	hb.SetTaskProvider(workerServer)
-	// CP 经心跳响应下发节点期望出站代理（FR-185，见 ADR-043）：generation 变化时重建出站持有者，
+	// CP 经心跳响应下发节点期望出站代理（见 ADR-043）：generation 变化时重建出站持有者，
 	// 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效；下发为空回退本地 worker.yml/env。
 	hb.SetProxyRebuilder(func(c httpclient.Config) error {
 		if err := outboundProvider.Rebuild(c); err != nil {
@@ -1565,7 +1565,7 @@ func runWorker() {
 		slog.Info("出站代理已据 CP 下发运行时更新", "proxy", httpclient.Sanitize(c.URL), "noProxy", c.NoProxy)
 		return nil
 	})
-	// CP 经心跳下发 WS 令牌密钥（FR-275，见 ADR-061）：值变化即热更新终端/插件桥校验并补写
+	// CP 经心跳下发 WS 令牌密钥（见 ADR-061）：值变化即热更新终端/插件桥校验并补写
 	// 身份文件——CP 轮换密钥后 Worker 不重启自愈。心跳单 goroutine 应用，无并发写身份文件。
 	hb.SetWSSecretApplier(currentWSSecret, func(secret string) error {
 		terminalServer.SetJWTSecret(secret)
@@ -1576,14 +1576,14 @@ func runWorker() {
 		identityForPersist.WSTokenSecret = secret
 		return register.SaveIdentity(etcDir, identityForPersist)
 	})
-	// CP 经心跳响应下发实例健康巡检策略（FR-459）：阈值/动作/探针类型/熔断阈值写入巡检器生效值，
+	// CP 经心跳响应下发实例健康巡检策略：阈值/动作/探针类型/熔断阈值写入巡检器生效值，
 	// 无需重启即生效；本地开关（worker.health_scan_disabled）为硬关，CP 无法远程开启。
 	hb.SetHealthPolicyApplier(func(p process.HealthPolicy) {
 		healthScanner.SetPolicy(p)
 	})
-	// 日志采集配置（FR-503）：先加载本地持久化快照——CP 不可达时也能沿用上次生效值
+	// 日志采集配置：先加载本地持久化快照——CP 不可达时也能沿用上次生效值
 	// （离线保持），并作为首拍去重的基准。文件缺失/损坏不阻断启动：采集配置问题
-	// FR-503/504 的面板热更新链路已随旧链路删除：它的消费方是 ingest.Manager 的
+	// /504 的面板热更新链路已随旧链路删除：它的消费方是 ingest.Manager 的
 	// 采集策略与定时扫描，而新采集器不读这些策略（路径来自 CP 下发的实例登记）。
 	// **这是功能下线点**：面板上「采集策略 / 归档导入扫描周期」改了不会再产生效果。
 	hb.Start()
@@ -1685,7 +1685,7 @@ const maxNeedsManualPartitionsLogged = 20
 // 一次 persist，真机 60 源实测约 2.5 次/s（环覆盖 ≈205 s），环在启动几分钟后就会写满。写满后
 // 「环和」是滑动窗口和，相邻两次读数相减得到的是「本窗口新增 − 同期被挤出的旧样本」——稳态下
 // 两者近似相等，差值趋近 0，会把整整一分钟的写入量抹掉；环未满时「环和」又等于自启动累计值，
-// 直接当成窗口量上报，就是把「开服至今的写入」当成「一分钟的写入」（FR-498 实测：删除因此被读成
+// 直接当成窗口量上报，就是把「开服至今的写入」当成「一分钟的写入」（实测：删除因此被读成
 // 写入的 9 倍，而同口径真值约为删除 ≈ 0.5 × 写入）。两种形态都不是窗口增量。
 //
 // 所以这里按「样本身份」做差：窗口基准是一个时间游标，即上一次读数时环内最新样本的 StartedAt，
@@ -1694,7 +1694,7 @@ const maxNeedsManualPartitionsLogged = 20
 //
 // 前提：单个窗口内新增的样本数少于环容量（4096，见 stateindex.sampleRing）。否则最早的那几次
 // 新增样本已被挤出环外，读数只能是下界。生产上采集循环节拍 250 ms、采样节拍 1 分钟，单窗口最多
-// 约 240 次持久化周期；切分（FR-498 P0）后一次周期会产生多个**提交单元**采样，60 源 × 60 行/s
+// 约 240 次持久化周期；切分（P0）后一次周期会产生多个**提交单元**采样，60 源 × 60 行/s
 // 实测约 2 单元/周期 ⇒ 单窗口约 400 个样本，仍远小于 4096（环容量正是为此从 512 提到 4096）。
 
 // logIndexPersistDelta 是一个窗口内的写入增量，与同一条日志里的 P50/P95/Max 同窗口。

@@ -14,12 +14,12 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 探针在线更新（FR-068/409，见 ADR-016）：把 CP 已缓存版本的下载引用经已有 gRPC
+// 探针在线更新（409，见 ADR-016）：把 CP 已缓存版本的下载引用经已有 gRPC
 // DeployServerProbe 推到实例 plugins 目录。jar 是 JVM 已加载的 class 来源，热替换不生效，
 // 故语义为「已就位，下次重启生效」；可选 restart=true 推送后重启使其立即生效。
 
 const (
-	// maxProbeUpdateTargets 单次批量更新目标数上限，与实例批量（FR-058）对齐。
+	// maxProbeUpdateTargets 单次批量更新目标数上限，与实例批量对齐。
 	maxProbeUpdateTargets = 5000
 	// probeUpdateConcurrency 批量更新的有界并发度。
 	probeUpdateConcurrency = 16
@@ -32,20 +32,20 @@ const (
 // ErrProbeNotEmbedded 保留旧错误名以兼容调用方；现在表示 CP 没有可下发的制品版本库。
 var ErrProbeNotEmbedded = errors.New("控制平面没有已缓存并选中的 ServerProbe 制品版本，无法推送更新")
 
-// ProbeConnChecker 查询某实例的探针是否经插件桥反向 WS 连入（FR-065/066）。
+// ProbeConnChecker 查询某实例的探针是否经插件桥反向 WS 连入（066）。
 // 生产环境由 PlayerEventService.IsProbeConnected 注入；为 nil 时一律视为未连入（仅影响展示）。
 type ProbeConnChecker func(instanceUUID string) bool
 
-// ProbeUpdateService 探针在线更新服务（FR-068）。
+// ProbeUpdateService 探针在线更新服务。
 // 复用 InstanceService 的 gRPC 客户端池与 DB，批量更新走同步路径以精确计数（镜像 InstanceBatchService）。
 type ProbeUpdateService struct {
 	db        *gorm.DB
 	pool      *cpgrpc.ClientPool
 	bridge    *PluginBridgeService
 	artifacts *ArtifactVersionService
-	// connCheck 注入探针连接状态查询（FR-065/066 插件桥会话），nil 表示一律未连入。
+	// connCheck 注入探针连接状态查询（066 插件桥会话），nil 表示一律未连入。
 	connCheck ProbeConnChecker
-	// instanceSvc 供部署前补分配缺失的探针端口（FR-411 补口）；nil 时缺端口实例拒绝部署并给出明确原因。
+	// instanceSvc 供部署前补分配缺失的探针端口（补口）；nil 时缺端口实例拒绝部署并给出明确原因。
 	instanceSvc *InstanceService
 
 	// lastPushed 记录每实例「上次经本服务推送探针」的时间（CP 进程内内存态，重启清空）。
@@ -70,12 +70,12 @@ func NewProbeUpdateService(db *gorm.DB, pool *cpgrpc.ClientPool, bridge *PluginB
 	}
 }
 
-// SetConnChecker 注入探针连接状态查询（FR-066 在线名册）。在 main 装配阶段调用，避免服务间循环依赖。
+// SetConnChecker 注入探针连接状态查询（在线名册）。在 main 装配阶段调用，避免服务间循环依赖。
 func (s *ProbeUpdateService) SetConnChecker(c ProbeConnChecker) {
 	s.connCheck = c
 }
 
-// SetInstanceService 注入实例服务（FR-411 补口）：部署前为导入/历史实例补分配缺失的探针端口。
+// SetInstanceService 注入实例服务（补口）：部署前为导入/历史实例补分配缺失的探针端口。
 // 在 main 装配阶段调用；不注入时缺端口实例在部署阶段得到明确错误而非写出 port: 0 的坏配置。
 func (s *ProbeUpdateService) SetInstanceService(svc *InstanceService) {
 	s.instanceSvc = svc
@@ -132,7 +132,7 @@ type ProbeUpdateBatchError struct {
 	Error      string `json:"error"`
 }
 
-// ProbeUpdateBatchExclusion 批量目标中「命中但不适用探针」的实例及可读原因（FR-454）。
+// ProbeUpdateBatchExclusion 批量目标中「命中但不适用探针」的实例及可读原因。
 //
 // 与 Skipped 语义严格区分：
 //   - Skipped：请求 ID 未命中（不存在或越权被剔除），保持存在性隐藏不泄露；
@@ -201,7 +201,7 @@ func (s *ProbeUpdateService) UpdateWithBaseURL(instanceID uint, baseURL string) 
 	if err := s.db.Preload("Node").First(&inst, instanceID).Error; err != nil {
 		return nil, err
 	}
-	// 不适用探针的实例不推送（FR-454）：ServerProbe 是 Bukkit 插件，仅 Minecraft Java 服务端
+	// 不适用探针的实例不推送：ServerProbe 是 Bukkit 插件，仅 Minecraft Java 服务端
 	// 可加载——代理端（BungeeCord/Waterfall/Velocity）无法加载；通用二进制（type=generic）与
 	// Beacon（role=beacon）不是 MC Java 进程。推了也白推（此前仅排除 proxy，对 beacon/binary
 	// 会推入无效 Bukkit jar）。置于版本解析之前：不适用与是否已选探针版本无关。
@@ -231,7 +231,7 @@ func (s *ProbeUpdateService) UpdateWithBaseURL(instanceID uint, baseURL string) 
 	return nil, ErrProbeNotEmbedded
 }
 
-// Batch 批量推送：解析目标 → 资源隔离收敛 → 有界并发同步推送 → 计数（镜像 FR-058）。
+// Batch 批量推送：解析目标 → 资源隔离收敛 → 有界并发同步推送 → 计数（镜像）。
 // 未选已缓存版本时整体拒绝（ErrProbeNotEmbedded）。restart 由调用方在成功项上各自异步重启。
 // 返回结果中 Succeeded 列表通过 onDeployed 回调暴露给调用方（用于 restart）。
 func (s *ProbeUpdateService) Batch(req ProbeUpdateBatchRequest, scopeIDs []uint, scope bool, onDeployed func(inst *model.Instance)) (*ProbeUpdateBatchResult, error) {
@@ -314,7 +314,7 @@ func (s *ProbeUpdateService) deployTarget(inst *model.Instance, baseURL string) 
 // resolveTargets 解析批量目标实例（预加载节点），按可访问实例集合收敛。
 // 返回 (目标实例列表, skipped, excluded, err)：
 //   - IDs 模式：先取回请求 IDs 中可见的实例，再显式分流——适用探针者进目标，不适用者进 excluded
-//     并带可读原因（FR-454：不再静默计入 skipped）；未命中（不存在/越权）才计 skipped。
+//     并带可读原因（：不再静默计入 skipped）；未命中（不存在/越权）才计 skipped。
 //   - Filter 模式：批量选择器，不适用实例在 SQL 侧直接排除且不逐条列名单（可能是数千条，
 //     逐条回传无意义也无界）；被排除原因可由单实例 Update 或 IDs 模式获得。
 func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeIDs []uint, scope bool) ([]model.Instance, int, []ProbeUpdateBatchExclusion, error) {
@@ -354,7 +354,7 @@ func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeID
 	return instances, 0, nil, nil
 }
 
-// applyProbeApplicableScope 追加「探针适用实例」筛选（FR-454）：排除代理/Beacon 角色与非 MC Java 类型。
+// applyProbeApplicableScope 追加「探针适用实例」筛选：排除代理/Beacon 角色与非 MC Java 类型。
 // 与 model.IsProbeApplicable 严格同口径（SQL 侧镜像：t == minecraft_java 且 role 非 proxy/beacon）：
 //   - role 允许 NULL（历史/异常行）→ 视为适用（NULL 既不等于 proxy 也不等于 beacon），
 //     修正此前 `role NOT IN (…)` 在 role IS NULL 时 SQL 三值逻辑恒为 NULL、把实例误排除的问题；
@@ -365,7 +365,7 @@ func applyProbeApplicableScope(q *gorm.DB) *gorm.DB {
 		[]string{string(model.InstanceRoleProxy), string(model.InstanceRoleBeacon)})
 }
 
-// probeInapplicableReason 返回实例不适用探针的可读原因；适用时返回空串（FR-454）。
+// probeInapplicableReason 返回实例不适用探针的可读原因；适用时返回空串。
 // 判定与 model.IsProbeApplicable 一致（只看 role 即可兜底历史误记为 minecraft_java 的 beacon）。
 func probeInapplicableReason(inst *model.Instance) string {
 	if model.IsProbeApplicable(inst.Type, inst.Role) {
@@ -381,7 +381,7 @@ func probeInapplicableReason(inst *model.Instance) string {
 	}
 }
 
-// ApplicabilityReason 返回某实例不适用探针的可读原因；适用返回空串（FR-454）。
+// ApplicabilityReason 返回某实例不适用探针的可读原因；适用返回空串。
 // 实例不存在返回 gorm.ErrRecordNotFound。供路由在产生任何副作用（落库/下发）之前先行拒绝——
 // 例如 probe-version 设置：SetInstanceProbeVersion 会写库，必须先判定再落库，否则拒绝时库已被脏写。
 func (s *ProbeUpdateService) ApplicabilityReason(instanceID uint) (string, error) {
@@ -393,7 +393,7 @@ func (s *ProbeUpdateService) ApplicabilityReason(instanceID uint) (string, error
 }
 
 // deployVersionTo 下发已缓存制品的 CP 本地 URL；不传 jar 字节或运行库压缩包。
-// 部署前确保实例已分配探针端口（FR-411 补口）：导入/历史实例 probe_port=0 时自动补口并
+// 部署前确保实例已分配探针端口（补口）：导入/历史实例 probe_port=0 时自动补口并
 // 幂等重注册 Worker，避免写出 `port: 0` 的探针配置（探针绑到 OS 随机端口，监控永无数据）。
 func (s *ProbeUpdateService) deployVersionTo(inst *model.Instance, version *model.ArtifactVersion, baseURL string) error {
 	if inst.ProbePort <= 0 {
@@ -456,7 +456,7 @@ func (s *ProbeUpdateService) workerForDeployment(inst *model.Instance) (*cpgrpc.
 	return client, nil
 }
 
-// bridgeBlock 为实例签发插件桥 token 并生成探针 config.yml 的 bridge 段（FR-065，与建服一致）。
+// bridgeBlock 为实例签发插件桥 token 并生成探针 config.yml 的 bridge 段（与建服一致）。
 // bridge 服务未注入或签发失败时返回空串（探针不连反向 WS，/metrics 不受影响）。
 func (s *ProbeUpdateService) bridgeBlock(instanceUUID string, wsPort int) string {
 	if s.bridge == nil {

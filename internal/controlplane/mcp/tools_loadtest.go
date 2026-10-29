@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-398：压测模板 CRUD 与运行编排工具。
+// 压测模板 CRUD 与运行编排工具。
 
 const (
 	// agentTemplateOwnerID / agentTemplateIsAdmin：Agent 以平台级视角操作模板。

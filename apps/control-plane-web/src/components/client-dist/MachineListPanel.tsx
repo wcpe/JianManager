@@ -5,8 +5,8 @@ import type { ClientMachineSummary, MachineSortField } from '@/lib/client-dist/c
 import ClientDistExportButton from '@/components/client-dist/ClientDistExportButton'
 import { useClientDistMachines, useClientMachineEvents } from '@/api/clientDistMachines'
 
-/**
- * 机器级更新清单与钻取（FR-426）：「用户」= 机器（machineId）。
+/** 
+ * 机器级更新清单与钻取：「用户」= 机器（machineId）。
  * 窗口内每台机器的更新次数 / 最近更新 / 版本滞后；点行看该机器更新事件时间线。
  * 明细保留窗 14 天：exact=false 时 UI 明示「近似」（ADR-049）。
  *

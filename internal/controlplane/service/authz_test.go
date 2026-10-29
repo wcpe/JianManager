@@ -78,7 +78,7 @@ func TestUserAccess_HasPermission(t *testing.T) {
 			want:   false,
 		},
 		{
-			name:   "组成员可持有业务高危写（FR-121，资源由 CanAccessInstance 收敛）",
+			name:   "组成员可持有业务高危写（资源由 CanAccessInstance 收敛）",
 			access: &UserAccess{MemberGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
 			node:   PermInstanceBusinessWrite,
 			want:   true,

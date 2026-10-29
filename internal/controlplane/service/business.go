@@ -30,7 +30,7 @@ const (
 	manifestAction     = "manifest"
 )
 
-// BusinessService 是 JM 的**纯透传通道**编排（FR-116；FR-521 起见 ADR-106）。
+// BusinessService 是 JM 的**纯透传通道**编排（起见 ADR-106）。
 //
 // 它把前端发起的动作（`domain.action` + 结构化 payload）经既有插件桥（ADR-016）下发到
 // 目标实例的 ServerProbe 业务对接层（BusinessHost），由探针侧 per-plugin Provider 执行并回执。
@@ -50,7 +50,7 @@ func NewBusinessService(db *gorm.DB, pool *cpgrpc.ClientPool) *BusinessService {
 	return &BusinessService{db: db, pool: pool}
 }
 
-// WriteContext 高危写的操作者上下文与幂等键（FR-121，见 ADR-029）。
+// WriteContext 高危写的操作者上下文与幂等键（见 ADR-029）。
 //
 // CP 在下发前把这些字段注入 payload JSON，经探针桥透传给探针 Provider
 // （对应键名由 JBIS 约定统一，JM 不解释其业务含义，见 ADR-106）：
@@ -96,7 +96,7 @@ type BusinessResult struct {
 // Dispatch 向某实例下发一条业务命令并取回结果（同步往返，wait=true）。
 //
 // 用于只读动作与元查询（manifest）：payload 原样下发，不注入操作者/幂等上下文。
-// 高危写动作走 DispatchWrite（FR-121）。
+// 高危写动作走 DispatchWrite。
 //
 // 解析 instance→node→gRPC client → SendPluginCommand（携 domain/action/payload_json）；任何不可达环节
 // 一律降级为 available=false + 友好提示（不返回 error）。实例不存在 / 参数非法返回 error 供路由分流。
@@ -108,7 +108,7 @@ func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON 
 //
 // 【为什么需要它】businessDispatchTimeout 是给「单条治理命令」定的值（8s，与 Worker 侧
 // 等探针回执的 5s 同量级）。但有些**只读**通道的单次往返天然更慢——典型是全量快照
-// （FR-525 对账，规格 §5 明确要求单实例 60s，因为「快照可能慢」）。
+// （对账，规格 §5 明确要求单实例 60s，因为「快照可能慢」）。
 // 若这些通道复用 Dispatch，它会先被 8s 掐断，调用方配的更大超时形同虚设。
 //
 // 刻意做成独立方法而不是给 Dispatch 加参数：既有调用方（单实例下发、批量命令、
@@ -141,7 +141,7 @@ func (s *BusinessService) dispatchWithTimeout(
 	return s.sendToProbe(inst, node, result, payloadJSON, timeout), nil
 }
 
-// DispatchWrite 下发一条高危业务写动作（FR-121，见 ADR-029）。
+// DispatchWrite 下发一条高危业务写动作（见 ADR-029）。
 //
 // 与 Dispatch 同样解析 instance→node→client，但在下发前把操作者身份与幂等键注入 payload：
 //   - 注入 taskId（幂等键，缺失则兜底 UUID）、operator/operatorId/nodeId/reason（操作者审计贯通）；
@@ -198,7 +198,7 @@ func (s *BusinessService) resolveTarget(instanceID uint, domain, action string) 
 // sendToProbe 执行 gRPC 下发并映射响应（payload 已是最终形态）。节点未连入降级为 available=false。
 //
 // timeout 是本次往返的 gRPC 超时：单条命令用 businessDispatchTimeout（8s），
-// 慢的只读通道（FR-525 对账）由调用方传入更大的值。<=0 时回落到默认值。
+// 慢的只读通道（对账）由调用方传入更大的值。<=0 时回落到默认值。
 func (s *BusinessService) sendToProbe(
 	inst model.Instance, node model.Node, result *BusinessResult, payloadJSON string, timeout time.Duration,
 ) *BusinessResult {
@@ -232,7 +232,7 @@ func (s *BusinessService) sendToProbe(
 	return result
 }
 
-// injectWriteContext 把操作者身份与幂等键注入业务 payload JSON（FR-121）。
+// injectWriteContext 把操作者身份与幂等键注入业务 payload JSON。
 //
 // 规则：
 //   - payload 为空 → 以 {} 起步；非法 JSON（非对象）→ 返回 error（写不可在坏信封上裸跑）。

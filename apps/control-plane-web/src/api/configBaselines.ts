@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 
-/**
- * 配置基线（模板）下发、漂移检测、一键收敛（FR-458）。
+/** 
+ * 配置基线（模板）下发、漂移检测、一键收敛。
  *
  * 基线键为 `(scopeKey, filePath)`，`scopeKey` 限定「哪些实例应共享该基线」
  * （`group:<id>` 含子树 / `network:<id>` / `tag:<tag>` / `instance:<id>` / `all`）。

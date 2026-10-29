@@ -25,7 +25,7 @@ export interface InstanceSnapshotView {
   notRollableReason?: string
 }
 
-/**
+/** 
  * 是否可回滚：状态已完结且没有显式不可回滚原因。
  *
  * 原先取自 `@/api/snapshots` 的同名函数；判定只有两行且是纯展示逻辑，故随视图归包
@@ -36,8 +36,8 @@ function isRollable(snap: Pick<InstanceSnapshotView, 'state' | 'notRollableReaso
   return stateOk && !snap.notRollableReason
 }
 
-/**
- * 实例整机快照面板（FR-466）：一次快照 = 一个时间点语义的整机可回滚点。
+/** 
+ * 实例整机快照面板：一次快照 = 一个时间点语义的整机可回滚点。
  *
  * 与「备份」分区的边界：备份是**归档**（可全量/增量、可存远端、面向长期留存），
  * 快照是**时间点**（一律全量、自包含、面向「一键回到某时刻」）。此处只列快照并提供
@@ -59,7 +59,7 @@ export interface SnapshotPanelProps {
   snapshots?: InstanceSnapshotView[]
   /** 首次加载态。 */
   isLoading?: boolean
-  /**
+  /** 
    * 读取失败态。**绝不能用 `= []` 默认值吞掉错误**——那会把「读失败」渲染成「暂无快照」，
    * 让运维以为数据没丢（与事实相反）。
    */

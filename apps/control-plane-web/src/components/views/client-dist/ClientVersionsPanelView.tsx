@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ClientVersionsPanelView：客户端分发「版本」Tab 面板（版本历史列表 + 版本详情 + 回滚二次确认）的受控视图。
  *       版本列表/详情取数、回滚 mutation 与 toast、发布页跳转、以及两个应用侧接线层（内嵌更新器摘要、
  *       制品内容 FileBrowser）均由应用容器注入。
@@ -9,7 +9,7 @@
  *         ClientVersionsPanelVersionDetail
  * @sync apps/control-plane-web/src/components/ClientVersionsPanel.tsx、
  *       apps/control-plane-web/src/components/ClientVersionsPanel.dom.test.tsx
- * @since FR-508（面板受控化迁包；原 FR-088 版本管理面板、FR-191 发布独立页、FR-214 制品预览）
+ * @since（面板受控化迁包；原版本管理面板发布独立页制品预览）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -57,7 +57,7 @@ export interface ClientVersionsPanelVersionDetail {
   files: ManifestFileLike[]
 }
 
-/**
+/** 
  * 版本面板的注入契约（受控视图，ADR-103 a+b 混合范式）。
  *
  * 受控边界（**不取数、不发 mutation、不弹 toast、不读路由**）：
@@ -94,12 +94,12 @@ export interface ClientVersionsPanelViewProps {
   previewSlot?: ReactNode
 }
 
-/**
- * 客户端分发版本管理面板（FR-088，见 ADR-022）。
- * 历史列表 + 版本详情查看 + 运营回滚（二次确认 FR-059）。
+/** 
+ * 客户端分发版本管理面板（见 ADR-022）。
+ * 历史列表 + 版本详情查看 + 运营回滚（二次确认）。
  * 历史仅管理面可见（玩家只认 latest）；发布/回滚由后端 RBAC 限平台管理员。
  *
- * 发布走独立页面（FR-191 纠正：原模态向导点遮罩会丢草稿）：「发布新版本」按钮经
+ * 发布走独立页面（纠正：原模态向导点遮罩会丢草稿）：「发布新版本」按钮经
  * `onPublishNewVersion` 由容器导航到 `/client-channels/:id/publish`，不再在此开模态。
  */
 export function ClientVersionsPanelView({
@@ -226,10 +226,10 @@ interface VersionDetailDialogProps {
   onClose: () => void
 }
 
-/**
+/** 
  * 版本详情弹窗：展示某历史版本的托管目录与文件清单（只读，一次性展示属 ui-modals 例外）。
  *
- * 两种视图（FR-214）：
+ * 两种视图：
  *  - 结构：{@link ClientFileTree} 文件树 + sync/platform 徽标 + 大小（编排语义，原有能力不减）。
  *  - 预览：应用侧注入的共享 FileBrowser 浏览文件树并预览内容（文本/配置/JSON 高亮，二进制/超大降级 +
  *    下载），经管理面 JWT 制品内容端点取文本（与玩家拉取密钥端点隔离，见 ADR-022/023）。
@@ -282,7 +282,7 @@ function VersionDetailDialog({ version, detail, isLoading, previewSlot, onClose 
   )
 }
 
-/** 结构 / 预览视图切换（分段控件，FR-214）。 */
+/** 结构 / 预览视图切换（分段控件）。 */
 function ViewToggle({ view, onChange }: { view: 'structure' | 'preview'; onChange: (v: 'structure' | 'preview') => void }) {
   const { t } = useTranslation()
   return (

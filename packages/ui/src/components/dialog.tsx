@@ -1,11 +1,11 @@
 "use client"
-/**
+/** 
  * @file Dialog：模态对话框基座。表单类弹窗须配合 scrollable-dialog 壳使用
  *       （约束见 .claude/rules/ui-modals.md），本文件本身不实现滚动区。
  * @input  lib/utils 的 cn、lib/focus-ring、Button、radix-ui 的 Dialog；关闭文案取 i18n 键 common.close
  * @output Dialog 及其子组件（Trigger / Content / Header / Title / Footer 等）
  * @sync   改动结构或关闭语义时同步 dialog.test.tsx；模态约束同步 .claude/rules/ui-modals.md
- * @since  FR-502
+ * @since
  */
 import * as React from "react"
 import { XIcon } from "lucide-react"
@@ -16,8 +16,8 @@ import { cn } from "../lib/utils"
 import { focusRing } from "../lib/focus-ring"
 import { Button } from "./button"
 
-/**
- * 关闭文案的 i18n 键与兜底值（FR-502 阶段 6）。
+/** 
+ * 关闭文案的 i18n 键与兜底值（阶段 6）。
  *
  * 组件库不自己初始化 i18next——初始化意味着替宿主决定语言与资源。这里只在宿主已初始化
  * 时按键取值，取不到就回落英文，因此「未接 i18n 的应用/组件库单测」的行为与硬编码英文完全一致。
@@ -45,8 +45,8 @@ function DialogTrigger({
   return <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />
 }
 
-/**
- * 门户（FR-502 阶段 6 修复死钩子）。
+/** 
+ * 门户（阶段 6 修复死钩子）。
  *
  * Radix 的 `DialogPortal` 只读 `container` / `forceMount` / `children`，其余 props 直接丢弃，
  * 所以以前挂在它身上的 `data-slot="dialog-portal"` 从未落进 DOM（阶段 0 记录的缺陷）。
@@ -88,7 +88,7 @@ function DialogOverlay({
   )
 }
 
-/**
+/** 
  * 表单型 Dialog：点遮罩/外部不关闭（避免下拉展开时误关整个弹窗）。
  * 仅 取消 / 右上角 X / ESC 关闭。下拉打开期间的 pointer-events 修复见 index.css。
  */
@@ -124,7 +124,7 @@ function DialogContent({
           e.preventDefault()
         }}
         className={cn(
-          // FR-244 收敛：进/出场时长绑 motion token（normal≈180ms），机制仍走 tw-animate 的 data-[state] 淡入缩放，
+          // 收敛：进/出场时长绑 motion token（normal≈180ms），机制仍走 tw-animate 的 data-[state] 淡入缩放，
           // 只把散落的硬编码时长换成 token 取值，避免脱离全局动画节奏。
           "fixed top-[50%] left-[50%] z-[200] grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-[var(--motion-duration-normal)] outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
           className

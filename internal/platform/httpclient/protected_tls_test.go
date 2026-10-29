@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// TLS 基线与协商观测（FR-517 §5.2）。
+// TLS 基线与协商观测（§5.2）。
 //
 // 这些用例的价值在于**验证实际协商结果**，而不是读回配置：
 // `MinVersion` 只是「下限声明」，证明链路真的走了 TLS1.2+ 必须看握手的真实产物。
@@ -62,7 +62,7 @@ func TestTLSMinVersion_UpgradesDeprecated(t *testing.T) {
 
 // TestTLSConnectionState_ReportsNegotiated TLS 协商结果必须可观测。
 //
-// 这是 FR-517 「跨公网 TLS 校验」的验证面：证明这条链路确实走了 TLS1.2+，
+// 这是「跨公网 TLS 校验」的验证面：证明这条链路确实走了 TLS1.2+，
 // 而不是靠读配置自证。
 func TestTLSConnectionState_ReportsNegotiated(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

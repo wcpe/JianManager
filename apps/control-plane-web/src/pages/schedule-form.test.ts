@@ -78,7 +78,7 @@ describe('toUpdateBody', () => {
     expect(Object.keys(body).sort()).toEqual(['action', 'cronExpr', 'enabled'])
   })
 
-  it('command 动作携带 payload，使编辑可改命令（FR-153）', () => {
+  it('command 动作携带 payload，使编辑可改命令', () => {
     const form: ScheduleFormState = {
       instanceId: '3',
       name: '原名',

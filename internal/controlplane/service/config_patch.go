@@ -19,7 +19,7 @@ type fieldUpdate struct {
 }
 
 // patchConfig 把表单字段修改补丁回原始配置文本，保留注释、键顺序与无关行。
-// 这是 FR-031「表单与原始文本双模式切换，保存后注释不丢失」的核心：表单保存走字段级补丁，
+// 这是「表单与原始文本双模式切换，保存后注释不丢失」的核心：表单保存走字段级补丁，
 // 而非整文件重新序列化（后者会丢注释）。properties 行级补丁、yaml AST 补丁、toml 顶层行级补丁。
 func patchConfig(format, content string, updates []fieldUpdate) (string, error) {
 	switch format {

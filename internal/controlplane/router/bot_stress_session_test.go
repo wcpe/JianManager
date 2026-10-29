@@ -69,7 +69,7 @@ func TestBotStressSession_Flow(t *testing.T) {
 	assert.NotContains(t, byStatus, string(model.BotStatusStopped))
 }
 
-// TestBotStressSession_ReportAndStream FR-370：终态报告 HTTP + 最小 SSE 首帧。
+// TestBotStressSession_ReportAndStream：终态报告 HTTP + 最小 SSE 首帧。
 func TestBotStressSession_ReportAndStream(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -149,7 +149,7 @@ func TestBotStressSession_ReportAndStream(t *testing.T) {
 	_ = done
 }
 
-// TestBotStressSession_Metrics FR-370：5s 样本可读。
+// TestBotStressSession_Metrics：5s 样本可读。
 func TestBotStressSession_Metrics(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -183,7 +183,7 @@ func TestBotStressSession_Metrics(t *testing.T) {
 	assert.Equal(t, float64(1), counts["connected"])
 }
 
-// TestBotStressSession_FailuresAndEvents FR-370：失败/事件投影端点。
+// TestBotStressSession_FailuresAndEvents：失败/事件投影端点。
 func TestBotStressSession_FailuresAndEvents(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -230,7 +230,7 @@ func TestBotStressSession_FailuresAndEvents(t *testing.T) {
 	assert.Equal(t, "run-state", eb["items"].([]interface{})[0].(map[string]interface{})["type"])
 }
 
-// TestBotStressSession_Bots FR-370：bots 列表投影。
+// TestBotStressSession_Bots：bots 列表投影。
 func TestBotStressSession_Bots(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -257,7 +257,7 @@ func TestBotStressSession_Bots(t *testing.T) {
 	assert.Equal(t, "connected", items[0].(map[string]interface{})["status"])
 }
 
-// TestBotStressSession_StreamHistoryAndEvents FR-370：SSE 推送 history 帧（run_events 投影）。
+// TestBotStressSession_StreamHistoryAndEvents：SSE 推送 history 帧（run_events 投影）。
 func TestBotStressSession_StreamHistoryAndEvents(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

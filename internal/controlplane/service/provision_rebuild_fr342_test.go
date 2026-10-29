@@ -11,7 +11,7 @@ import (
 )
 
 // TestProvisionFailure_EntersDamagedWithSpec 搭建下载失败 → 实例进 DAMAGED、原因写「搭建未完成」、
-// 搭建参数存 ProvisionSpec 供重建（FR-342）。
+// 搭建参数存 ProvisionSpec 供重建。
 func TestProvisionFailure_EntersDamagedWithSpec(t *testing.T) {
 	svc, taskSvc, node, done := newFR319Harness(t, &failingDownloadWorker{})
 	defer done()
@@ -29,7 +29,7 @@ func TestProvisionFailure_EntersDamagedWithSpec(t *testing.T) {
 	assert.NotEmpty(t, got.ProvisionSpec, "搭建参数应存 ProvisionSpec 供重建复用")
 }
 
-// TestRebuildInstance_Guards 重建守卫：非损毁 / 损毁但无参数 分别拒绝（FR-342）。
+// TestRebuildInstance_Guards 重建守卫：非损毁 / 损毁但无参数 分别拒绝。
 func TestRebuildInstance_Guards(t *testing.T) {
 	svc, _, node, done := newFR319Harness(t, &fakeProvisionWorker{})
 	defer done()
@@ -47,7 +47,7 @@ func TestRebuildInstance_Guards(t *testing.T) {
 	assert.Contains(t, err.Error(), "无可复用的搭建参数", "损毁但无参数不可重建")
 }
 
-// TestRebuildInstance_Succeeds 损毁实例换好 worker 后重建 → 复用参数重跑搭建成功 → STOPPED（FR-342）。
+// TestRebuildInstance_Succeeds 损毁实例换好 worker 后重建 → 复用参数重跑搭建成功 → STOPPED。
 func TestRebuildInstance_Succeeds(t *testing.T) {
 	svc, taskSvc, node, done := newFR319Harness(t, &failingDownloadWorker{})
 	defer done()
@@ -74,7 +74,7 @@ func TestRebuildInstance_Succeeds(t *testing.T) {
 	assert.Empty(t, rebuilt.StatusReason, "重建成功应清空失败原因")
 }
 
-// TestStart_RejectsDamaged 损毁实例不可直接启动（FR-342）：Start 返回 *PreflightError，状态保持 DAMAGED。
+// TestStart_RejectsDamaged 损毁实例不可直接启动：Start 返回 *PreflightError，状态保持 DAMAGED。
 func TestStart_RejectsDamaged(t *testing.T) {
 	svc, _, _, inst := newPreflightFixture(t)
 	require.NoError(t, svc.db.Model(inst).Update("status", model.InstanceStatusDamaged).Error)

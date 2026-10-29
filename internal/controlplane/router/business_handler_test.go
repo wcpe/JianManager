@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TestBusinessDispatch_Write_Forbidden 无可访问组的成员对写动作被拒（缺 instance:business:write，FR-121）。
+// TestBusinessDispatch_Write_Forbidden 无可访问组的成员对写动作被拒（缺 instance:business:write）。
 func TestBusinessDispatch_Write_Forbidden(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -32,7 +32,7 @@ func TestBusinessDispatch_Write_Forbidden(t *testing.T) {
 	assert.Equal(t, int64(0), countAudit(t, db, "business.write"))
 }
 
-// TestBusinessDispatch_Write_AdminDegradeAndAudit 平台管理员写动作：节点未连降级（200+available=false）+ 记 business.write 审计（FR-121）。
+// TestBusinessDispatch_Write_AdminDegradeAndAudit 平台管理员写动作：节点未连降级（200+available=false）+ 记 business.write 审计。
 func TestBusinessDispatch_Write_AdminDegradeAndAudit(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -68,7 +68,7 @@ func TestBusinessDispatch_Write_AdminDegradeAndAudit(t *testing.T) {
 	assert.Equal(t, "活动补偿", detail["reason"])
 }
 
-// TestBusinessDispatch_Read_NoBusinessWriteAudit 读动作（write=false）走 instance:operate，不记 business.write 审计（FR-121）。
+// TestBusinessDispatch_Read_NoBusinessWriteAudit 读动作（write=false）走 instance:operate，不记 business.write 审计。
 func TestBusinessDispatch_Read_NoBusinessWriteAudit(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

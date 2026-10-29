@@ -17,22 +17,22 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Beacon 推送侧实现（FR-443，见 ADR-090 §6）。
+// Beacon 推送侧实现（见 ADR-090 §6）。
 //
 // 触发时机刻意**只覆盖拓扑变更**：实例创建 / 删除 / 改名 / 改归属（role、tags）。
 // 实例启停与重启**绝不推送**——高频操作（批量重启 60 台 = 120 次推送），且 Beacon 的在线
 // 状态本就由 agent 心跳自维护，推送只会造成重复真源。
 //
-// 传输层刻意复用 FR-444 的 BeaconClient（同一 endpoint / token / 出站代理持有者），
+// 传输层刻意复用的 BeaconClient（同一 endpoint / token / 出站代理持有者），
 // 本文件只在它之上加一个写端点，不另起一套 HTTP 配置。
 
 const (
-	// BeaconAPIPathAgentRegister 是 Beacon 的 v1 agent 注册端点（FR-222 内部信任通道）。
+	// BeaconAPIPathAgentRegister 是 Beacon 的 v1 agent 注册端点（内部信任通道）。
 	// JianManager 作为受信内部调用方走此通道推送拓扑变更：命中共享 token 的请求在 Beacon 侧
 	// 被标记为受信调用方，开启 allow-machine-register 时注册直落 active 并绑定 serverId。
 	BeaconAPIPathAgentRegister = "/beacon/v1/agent/register"
 
-	// 推送审计动作（FR-443 §3.3）。与 FR-444 的 instance.beacon_pull_* 分列，便于按方向排查。
+	// 推送审计动作（§3.3）。与的 instance.beacon_pull_* 分列，便于按方向排查。
 	AuditActionBeaconPushOK   = "instance.beacon_push_ok"
 	AuditActionBeaconPushFail = "instance.beacon_push_fail"
 
@@ -48,14 +48,14 @@ const (
 	beaconPushEventOwnership = "ownership"
 )
 
-// BeaconPushClientConfig 是 Beacon 推送客户端配置（FR-443）。
+// BeaconPushClientConfig 是 Beacon 推送客户端配置。
 //
 // **可选协同，绝非依赖**：Endpoint 为空即整体跳过（连 goroutine 都不起）；PushEnabled=false
 // 时同样不发起任何请求。未部署 Beacon 时实例创建/删除/改名全部照常成功、无任何报错。
 type BeaconPushClientConfig struct {
 	// Endpoint Beacon 基址；留空表示未配置协同。
 	Endpoint string
-	// Token 共享 token，以 `X-Beacon-Token` 发送（FR-222 §3.1）。
+	// Token 共享 token，以 `X-Beacon-Token` 发送（§3.1）。
 	Token string
 	// PushEnabled 是否启用推送；false 时 PushServer 返回 ErrBeaconPushDisabled。
 	PushEnabled bool
@@ -88,10 +88,10 @@ type BeaconServerPush struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-// BeaconPushClient 是 Beacon 推送客户端（FR-443）：在 FR-444 的 BeaconClient 传输层上
+// BeaconPushClient 是 Beacon 推送客户端：在的 BeaconClient 传输层上
 // 加一个写端点。endpoint / token / 出站代理持有者全部复用既有客户端，不重复配置。
 type BeaconPushClient struct {
-	// base 复用拉取侧客户端的 endpoint 归一化、token 与运行时出站持有者（FR-185/ADR-043）。
+	// base 复用拉取侧客户端的 endpoint 归一化、token 与运行时出站持有者（ADR-043）。
 	base        *BeaconClient
 	namespace   string
 	pushEnabled bool
@@ -110,7 +110,7 @@ func NewBeaconPushClient(cfg BeaconPushClientConfig) *BeaconPushClient {
 	}
 }
 
-// SetHTTPClientProvider 注入「取当前出站 *http.Client」的提供者（FR-185 Provider.Client）。
+// SetHTTPClientProvider 注入「取当前出站 *http.Client」的提供者（Provider.Client）。
 // 与拉取客户端同源：main 用同一 provider 装配两者，平台设置里改出站代理对推送即时生效。
 func (c *BeaconPushClient) SetHTTPClientProvider(fn func() *http.Client) {
 	if c == nil {
@@ -132,7 +132,7 @@ func (c *BeaconPushClient) Namespace() string {
 	return c.namespace
 }
 
-// PushServer 经机器注册通道推送一台 server 的拓扑（FR-443 §3.2）。
+// PushServer 经机器注册通道推送一台 server 的拓扑（§3.2）。
 //
 // 语义严格对齐「不重试、不回滚、不阻塞」（决策 3A）：本方法只做一次请求并把结果如实返回，
 // 不含任何重试或补偿。返回 nil 表示**已成功投递**，不表示「已在 Beacon 生效」——Beacon 侧
@@ -163,7 +163,7 @@ func (c *BeaconPushClient) PushServer(ctx context.Context, payload BeaconServerP
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	// 共享 token 走 X-Beacon-Token（FR-222 §3.1）：Beacon 中间件据此把请求标记为受信内部调用方，
+	// 共享 token 走 X-Beacon-Token（§3.1）：Beacon 中间件据此把请求标记为受信内部调用方，
 	// 这是机器注册分支的唯一依据（不取自请求体，调用方无法伪造）。
 	if token := strings.TrimSpace(c.base.cfg.Token); token != "" {
 		req.Header.Set("X-Beacon-Token", token)
@@ -186,7 +186,7 @@ func (c *BeaconPushClient) PushServer(ctx context.Context, payload BeaconServerP
 	return nil
 }
 
-// BeaconPushService 实现 FR-443「向 Beacon 推送拓扑变更」。
+// BeaconPushService 实现「向 Beacon 推送拓扑变更」。
 //
 // 三条硬约束：
 //  1. **可选协同，绝非依赖**：未配置 endpoint（或未开 push-enabled）时 PushInstance 立即返回，
@@ -260,7 +260,7 @@ func (s *BeaconPushService) Shutdown() {
 	}
 }
 
-// PushInstance 异步推送一次实例拓扑变更（FR-443 §3.1/§3.3）。
+// PushInstance 异步推送一次实例拓扑变更（§3.1/§3.3）。
 //
 // 调用点只应是**拓扑变更**：实例创建 / 删除 / 改名 / 改归属（role、tags）。
 // 实例启停与重启**不得**调用本方法（刻意决策：高频且与 agent 心跳形成重复真源）。
@@ -344,7 +344,7 @@ func (s *BeaconPushService) instanceAddress(inst *model.Instance) string {
 }
 
 // recordPush 写推送审计（成功 ok / 失败 fail + 错误详情）。
-// 审计失败不阻断（与 FR-444 拉取同口径）。
+// 审计失败不阻断（与拉取同口径）。
 func (s *BeaconPushService) recordPush(userID uint, ip, event string, payload BeaconServerPush, pushErr error) {
 	if s.audit == nil {
 		return

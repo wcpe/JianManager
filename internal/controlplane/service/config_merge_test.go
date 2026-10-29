@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置分层合并单测（FR-529 §5 / §11 验收）。
+// 配置分层合并单测（§5 / §11 验收）。
 //
 // 合并是纯函数，这里只断言输入输出，不涉及 DB / gRPC。
 

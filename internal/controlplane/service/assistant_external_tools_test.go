@@ -10,8 +10,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
- * FR-517 闭环：外部工具并入目录与执行器（spec §7 / §9.1）。
+/* *
+ *闭环：外部工具并入目录与执行器（spec §7 / §9.1）。
  *
  * 这几条是最容易「看起来对、实际把权限借出去」的地方：
  *  - 普通用户**必须看不到**外部工具（且判据不是「有没有凭据」）；
@@ -206,7 +206,7 @@ func TestExternalToolVisibility_DB(t *testing.T) {
 	}
 }
 
-// TestExternalToolName_RoundTrip 外部工具名必须可逆且符合上游字符集（FR-544）。
+// TestExternalToolName_RoundTrip 外部工具名必须可逆且符合上游字符集。
 //
 // ## 为什么需要这一组
 //
@@ -601,7 +601,7 @@ func TestSchemaChange_InvalidatesUnconsumedTickets(t *testing.T) {
 	}
 }
 
-// 外部工具名的**生成**必须落在上游允许的字符集内（FR-517 / FR-544）。
+// 外部工具名的**生成**必须落在上游允许的字符集内。
 //
 // 这是本轮修掉的真实缺陷的回归护栏：原先 `assistant_mcp.go` 手拼
 // `"conn." + slug + "." + name`，点号违反 OpenAI 的

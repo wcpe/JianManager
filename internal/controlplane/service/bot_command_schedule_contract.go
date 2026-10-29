@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// 命令编排相关常量与错误码，遵循 FR-369 规格（ADR-075 bot.chat 成功边界）。
+// 命令编排相关常量与错误码，遵循规格（ADR-075 bot.chat 成功边界）。
 const (
 	commandScheduleMinCommands     = 1
 	commandScheduleMaxCommands     = 100
@@ -43,7 +43,7 @@ const (
 // errCommandArgumentInvalid 用于在 Finalize 中报告非法 skip 引用。
 var errCommandArgumentInvalid = errors.New(CommandErrorArgumentInvalid)
 
-// FR-369 错误码；与 ActionResult allowlist 合并。
+// 错误码；与 ActionResult allowlist 合并。
 const (
 	CommandErrorRouteFailed        = "COMMAND_ROUTE_FAILED"
 	CommandErrorIPCFailed          = "COMMAND_IPC_FAILED"

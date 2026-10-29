@@ -20,7 +20,7 @@ var (
 	ErrJDKNotFound = errors.New("JDK 不存在")
 	ErrJDKInUse    = errors.New("JDK 正被实例占用")
 	ErrNodeOffline = errors.New("节点未连接")
-	// ErrInvalidJDKArch 安装请求 arch 不被支持（FR-289），路由映射 422。
+	// ErrInvalidJDKArch 安装请求 arch 不被支持，路由映射 422。
 	ErrInvalidJDKArch = errors.New("不支持的 arch")
 )
 
@@ -28,9 +28,9 @@ type JDKService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
 	// settings 提供平台设置生效值（jdk.mirror.<vendor>），使运行时配置的镜像源真生效；
-	// 为 nil 时安装走 Worker 本地 env/默认源（FR-063）。
+	// 为 nil 时安装走 Worker 本地 env/默认源。
 	settings SettingsReader
-	// tasks 是全局任务中心服务（FR-183，见 ADR-040）；非 nil 时 Install 走异步任务路径
+	// tasks 是全局任务中心服务（见 ADR-040）；非 nil 时 Install 走异步任务路径
 	// （建 Task→Worker 启动即返回 taskId→返回 taskId，不再阻塞 20min）。为 nil 时回退同步路径。
 	tasks *TaskService
 }
@@ -39,13 +39,13 @@ func NewJDKService(db *gorm.DB, pool *cpgrpc.ClientPool) *JDKService {
 	return &JDKService{db: db, pool: pool}
 }
 
-// SetTaskService 注入任务中心服务，启用 JDK 安装异步化（FR-183，见 ADR-040）。
+// SetTaskService 注入任务中心服务，启用 JDK 安装异步化（见 ADR-040）。
 // 在 main 装配阶段调用；不调用则 Install 回退同步阻塞路径（向后兼容）。
 func (s *JDKService) SetTaskService(t *TaskService) {
 	s.tasks = t
 }
 
-// SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
+// SetSettingsReader 注入平台设置读取器。在 main 装配阶段调用，避免构造期循环依赖。
 func (s *JDKService) SetSettingsReader(r SettingsReader) {
 	s.settings = r
 }
@@ -89,12 +89,12 @@ type InstallJDKRequest struct {
 	Vendor       string `json:"vendor" binding:"required"`
 	MajorVersion int    `json:"majorVersion" binding:"required"`
 	Arch         string `json:"arch" binding:"required"`
-	// Version 具体 JDK 版本（FR-178，可选，如 "21.0.4"）。非空时 Worker 经 foojay 按具体版本解析；
+	// Version 具体 JDK 版本（可选，如 "21.0.4"）。非空时 Worker 经 foojay 按具体版本解析；
 	// 为空取该大版本最新 GA。
 	Version string `json:"version"`
 }
 
-// normalizeJDKArch 把安装请求的 arch 别名归一为下载源（adoptium/foojay 等）认的写法（FR-289）：
+// normalizeJDKArch 把安装请求的 arch 别名归一为下载源（adoptium/foojay 等）认的写法：
 // Go/容器系常用 amd64/arm64，下载源只认 x64/aarch64——直透会产出误导性的「下载返回 HTTP 404」
 // （真机复现）。未知 arch 返回 ErrInvalidJDKArch 由路由映射 422，不再透传出 404。
 func normalizeJDKArch(arch string) (string, error) {
@@ -137,7 +137,7 @@ func (s *JDKService) Create(nodeID uint, req CreateJDKRequest) (*model.NodeJDK, 
 	return jdk, nil
 }
 
-// InstallAsync 异步发起 JDK 安装（FR-183，见 ADR-040）：建 Task → 令 Worker 启动即返回 taskId →
+// InstallAsync 异步发起 JDK 安装（见 ADR-040）：建 Task → 令 Worker 启动即返回 taskId →
 // 把 Task 置为 running → 返回 Task（HTTP 202 语义，不再阻塞最长 20min）。
 // 落 model.NodeJDK 与完成站内信由心跳终态副作用完成（见 TaskService.IngestSnapshots）。
 // createdBy 为发起用户 ID（任务归属 + 完成站内信收件人）。
@@ -146,7 +146,7 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 	if s.tasks == nil {
 		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
 	}
-	// arch 别名归一化（FR-289）：先于建任务/下发，未知 arch 在此拒绝。
+	// arch 别名归一化：先于建任务/下发，未知 arch 在此拒绝。
 	arch, err := normalizeJDKArch(req.Arch)
 	if err != nil {
 		return nil, err
@@ -199,7 +199,7 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 	return task, nil
 }
 
-// ProbeResult JDK 探测结果（FR-228），对齐 workerpb.ProbeJDKResponse。
+// ProbeResult JDK 探测结果，对齐 workerpb.ProbeJDKResponse。
 type ProbeResult struct {
 	Valid        bool   `json:"valid"`
 	Vendor       string `json:"vendor"`
@@ -210,7 +210,7 @@ type ProbeResult struct {
 	Error        string `json:"error,omitempty"`
 }
 
-// Probe 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 信息（FR-228），供登记前自动填厂商/版本/架构。
+// Probe 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 信息，供登记前自动填厂商/版本/架构。
 // 节点不存在 ErrNodeNotFound、离线 ErrNodeOffline；探测本身失败（非 JDK）作为 Valid=false + Error 返回（非 error）。
 func (s *JDKService) Probe(nodeID uint, path string) (*ProbeResult, error) {
 	node, err := s.nodeByID(nodeID)
@@ -239,7 +239,7 @@ func (s *JDKService) Probe(nodeID uint, path string) (*ProbeResult, error) {
 }
 
 // Install 同步发起 JDK 安装（阻塞至完成，最长 20min）。保留供未启用任务中心时回退与既有测试。
-// 生产路径已改用 InstallAsync（FR-183，见 ADR-040）。
+// 生产路径已改用 InstallAsync（见 ADR-040）。
 func (s *JDKService) Install(nodeID uint, req InstallJDKRequest) (*model.NodeJDK, error) {
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
@@ -298,7 +298,7 @@ func (s *JDKService) Delete(nodeID, jdkID uint) ([]model.Instance, error) {
 		return used, ErrJDKInUse
 	}
 
-	// 仅「内部下载（托管）」的 JDK 才删除 Worker 上的文件；外部登记的只删记录、绝不动用户磁盘文件（FR-228 细化：
+	// 仅「内部下载（托管）」的 JDK 才删除 Worker 上的文件；外部登记的只删记录、绝不动用户磁盘文件（细化：
 	// 外部 JDK 由用户自管，平台无权删其文件；托管 JDK 在平台 data 目录下，删记录时一并清理文件）。
 	if jdk.Managed && s.pool != nil {
 		if node, err := s.nodeByID(nodeID); err == nil {
@@ -376,7 +376,7 @@ func (s *JDKService) ResolveForInstance(nodeID, jdkID uint, javaMajor int) (*mod
 	return &jdk, nil
 }
 
-// SyncFromWorker 强制从 Worker 同步该节点的 JDK 库存（FR-301 手动刷新入口）。
+// SyncFromWorker 强制从 Worker 同步该节点的 JDK 库存（手动刷新入口）。
 // 与 List 内的隐式同步同一实现：失败由调用方容忍（DB 旧数据仍可用、前端显旧数据）。
 func (s *JDKService) SyncFromWorker(nodeID uint) error {
 	return s.syncFromWorker(nodeID)
@@ -429,7 +429,7 @@ func (s *JDKService) syncFromWorker(nodeID uint) error {
 			}
 		}
 	}
-	// 记录本节点库存同步成功时间（FR-301）：运行时资产页「上次同步」与刷新语义的锚点。
+	// 记录本节点库存同步成功时间：运行时资产页「上次同步」与刷新语义的锚点。
 	if err := s.db.Model(&model.Node{}).Where("id = ?", nodeID).
 		Update("runtime_synced_at", time.Now()).Error; err != nil {
 		slog.Warn("记录运行时同步时间失败", "nodeId", nodeID, "error", err)

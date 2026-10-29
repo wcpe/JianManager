@@ -1,5 +1,5 @@
-/**
- * 控制台自动换行的行数估算（FR-415 可用性增强「自动换行」）。
+/** 
+ * 控制台自动换行的行数估算（可用性增强「自动换行」）。
  *
  * 为什么是估算：行高必须**渲染前**知道，虚拟化才排得出占位。估算用字符分类宽度
  * （等宽 ASCII=1×、CJK/全角=2×、零宽=0）做纯数学，渲染后由 ConsoleOutputView 的
@@ -47,7 +47,7 @@ export interface WrapWidthSpec {
   charWidthPx: number
   /** 宽字符宽度（px），通常 ≈ 2 × charWidthPx，但按实测注入。 */
   wideWidthPx: number
-  /**
+  /** 
    * 安全余量（px）：canvas measureText 与 CSS 布局的亚像素差、字距边缘差，
    * 宁可多估一行（空一条）也不许少估一行（文本被裁掉）。
    */
@@ -94,7 +94,7 @@ const LEVEL_CELL_PX = 52
 const GAP_PX = 8
 const PAD_PX = 16
 
-/**
+/** 
  * 估算一行日志在自动换行模式下占几行（≥1）。
  *
  * 前缀列（时间/级别/来源/command 标记）都是 shrink-0 不换行，只有正文在

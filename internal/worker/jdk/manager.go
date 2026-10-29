@@ -42,10 +42,10 @@ type Manager struct {
 	rootDir    string // 托管根目录（默认 <serversDir>/jdks）
 	managed    map[string]Info
 	systemDirs []string // 可选系统 JDK 探测路径
-	// httpClient JDK 归档/元数据下载所用出站 client（经进程级代理，FR-174/ADR-037）。
+	// httpClient JDK 归档/元数据下载所用出站 client（经进程级代理ADR-037）。
 	// 为 nil 时 download 路径回退一个 15min 超时的默认 client（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次下载取当前 client，
+	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次下载取当前 client，
 	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
 	httpProvider func() *http.Client
 }
@@ -61,7 +61,7 @@ func NewManager(rootDir string, systemDirs []string) *Manager {
 	}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：JDK 下载经此 client。
+// SetHTTPClient 注入出站 client（经进程级代理ADR-037）：JDK 下载经此 client。
 // 由 main 装配；不调用则下载路径回退裸默认 client（向后兼容）。
 // 下载不设「总超时」上限，卡死由 stall 看门狗判定（FIX-4）；注入 client 若设了 Timeout 会被克隆去掉。
 func (m *Manager) SetHTTPClient(c *http.Client) {
@@ -70,7 +70,7 @@ func (m *Manager) SetHTTPClient(c *http.Client) {
 	m.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次下载取当前 client，
 // 使 CP 经心跳下发的代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (m *Manager) SetHTTPClientProvider(p func() *http.Client) {
 	m.mu.Lock()
@@ -163,7 +163,7 @@ func (m *Manager) List() ([]Info, error) {
 	return out, nil
 }
 
-// Progress 报告安装进度的回调（FR-183，见 ADR-040）。
+// Progress 报告安装进度的回调（见 ADR-040）。
 // percent 为 0~100 的下载百分比（无 Content-Length 时可能停在某值，由 line 补充阶段说明）；
 // line 为可选的人类可读日志行（空表示仅更新百分比）。回调内不得长时间阻塞。
 type Progress func(percent int, line string)
@@ -174,8 +174,8 @@ func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase
 }
 
 // InstallWithProgress 下载并安装指定 JDK 到 installDir（默认 <rootDir>/<vendor>-<major>），
-// 期间经 progress 回调上报下载百分比与阶段日志（FR-183 任务中心，见 ADR-040；progress 可为 nil）。
-// vendor/major/arch 必填；version 可选（非空时经 foojay 按具体版本解析，FR-178）；
+// 期间经 progress 回调上报下载百分比与阶段日志（任务中心，见 ADR-040；progress 可为 nil）。
+// vendor/major/arch 必填；version 可选（非空时经 foojay 按具体版本解析）；
 // mirrorBase 非空时作下载基址（CP 从平台设置下发，使镜像源真生效），为空回退本地 env/默认源。
 // 下载完成后自动 detect。
 func (m *Manager) InstallWithProgress(ctx context.Context, vendor string, major int, version, arch, installDir, mirrorBase string, progress Progress) (Info, error) {
@@ -203,7 +203,7 @@ func (m *Manager) InstallWithProgress(ctx context.Context, vendor string, major 
 
 	if _, err := os.Stat(installDir); err == nil {
 		// 有 bin/java 完成标记 = 完好已装目录，仍拒绝覆盖（语义不变）；
-		// 无标记 = 上次安装失败/取消遗留的残骸，自动清除重装，不再堵死重试（FR-291，
+		// 无标记 = 上次安装失败/取消遗留的残骸，自动清除重装，不再堵死重试（
 		// 真机复现：卡死任务遗留半截目录致同版本重装永远撞「目标目录已存在」）。
 		if dirLooksLikeJDK(installDir) {
 			return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
@@ -266,14 +266,14 @@ func (m *Manager) Remove(path string) error {
 		return err
 	}
 	rel, err := filepath.Rel(rootAbs, abs)
-	// rel="." 即托管根本身：整根删除会清空全部托管 JDK，一并拒绝（FR-292）。
+	// rel="." 即托管根本身：整根删除会清空全部托管 JDK，一并拒绝。
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("只能删除托管目录 (%s) 下的 JDK", m.rootDir)
 	}
 	if !strings.HasPrefix(abs, rootAbs) {
 		return fmt.Errorf("只能删除托管目录 (%s) 下的 JDK", m.rootDir)
 	}
-	// 归一到托管根下的顶层子目录整体删除（FR-292）：登记路径可能是解压后嵌套的
+	// 归一到托管根下的顶层子目录整体删除：登记路径可能是解压后嵌套的
 	// 内层（…/temurin-11/jdk-11.0.31+11），只删内层会留父壳空目录在托管根下占位。
 	top := rel
 	if i := strings.IndexRune(rel, filepath.Separator); i >= 0 {
@@ -319,10 +319,10 @@ func detectAt(dir string) (Info, bool) {
 }
 
 // Detect 探测给定目录是否为 JDK（detectAt 的导出薄封装）。
-// 供运行时扫描器复用同一探测语义（FR-298，见 internal/worker/runtimescan）。
+// 供运行时扫描器复用同一探测语义（见 internal/worker/runtimescan）。
 func Detect(dir string) (Info, bool) { return detectAt(dir) }
 
-// normalizeJDKHome 把 path 归一为 JDK home（FR-228）：若指向 bin/java[.exe] 则取上两级（去掉 bin/java），否则原样。
+// normalizeJDKHome 把 path 归一为 JDK home：若指向 bin/java[.exe] 则取上两级（去掉 bin/java），否则原样。
 func normalizeJDKHome(path string) string {
 	clean := filepath.Clean(strings.TrimSpace(path))
 	switch strings.ToLower(filepath.Base(clean)) {
@@ -332,7 +332,7 @@ func normalizeJDKHome(path string) string {
 	return clean
 }
 
-// Probe 探测某路径的 JDK 信息（FR-228）：path 可为 JDK home 或 java 可执行文件，归一后 detectAt。
+// Probe 探测某路径的 JDK 信息：path 可为 JDK home 或 java 可执行文件，归一后 detectAt。
 // 找不到 bin/java 或取不到版本时返回 error，供登记前自动填厂商/版本/架构（不再手填）。
 func (m *Manager) Probe(path string) (Info, error) {
 	if strings.TrimSpace(path) == "" {
@@ -440,7 +440,7 @@ func findFirstSubdir(dir string) string {
 	return ""
 }
 
-// hasJavaBin 报告 dir 下是否有 bin/java[.exe]（安装完成标记，FR-291）。
+// hasJavaBin 报告 dir 下是否有 bin/java[.exe]（安装完成标记）。
 func hasJavaBin(dir string) bool {
 	for _, name := range []string{"java", "java.exe"} {
 		if st, err := os.Stat(filepath.Join(dir, "bin", name)); err == nil && !st.IsDir() {
@@ -452,7 +452,7 @@ func hasJavaBin(dir string) bool {
 
 // dirLooksLikeJDK 报告 dir 是否像一个完好的已装 JDK：bin/java 在目录本身或
 // 一级子目录下（归档外层多包一层的布局，与 detectAt 的探测路径一致）。
-// 用于区分「完好已装（拒绝覆盖）」与「失败残骸（自动清除重装）」（FR-291）；
+// 用于区分「完好已装（拒绝覆盖）」与「失败残骸（自动清除重装）」；
 // 只查文件存在、不执行 java，避免安装入口引入进程执行开销。
 func dirLooksLikeJDK(dir string) bool {
 	if hasJavaBin(dir) {

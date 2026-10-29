@@ -27,7 +27,7 @@ function dropData(file: File) {
   return { files: [file], types: ['Files'] }
 }
 
-describe('FileExplorer 文件选择与删除（FR-261）', () => {
+describe('FileExplorer 文件选择与删除', () => {
   it('Ctrl 点击切换多选文件', () => {
     renderWithProviders(<FileExplorer files={manifestFiles('a.jar', 'b.jar', 'c.jar')} />)
 
@@ -82,7 +82,7 @@ describe('FileExplorer 文件选择与删除（FR-261）', () => {
   })
 })
 
-describe('FileExplorer 同路径冲突决策（FR-261）', () => {
+describe('FileExplorer 同路径冲突决策', () => {
   it.each([
     { label: '全部忽略', testId: 'fe-conflict-skip-all', expectedPath: null, removesExisting: false },
     { label: '全部覆盖', testId: 'fe-conflict-replace-all', expectedPath: 'mods/a.jar', removesExisting: true },

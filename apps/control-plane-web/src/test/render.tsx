@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TooltipProvider } from '@jianmanager/ui/components/tooltip'
 import '@/i18n'
 
-/**
- * 渲染组件并套上与 main.tsx 一致的 Provider（Router / TanStack Query / Tooltip / i18n）（FR-196）。
+/** 
+ * 渲染组件并套上与 main.tsx 一致的 Provider（Router / TanStack Query / Tooltip / i18n）。
  * route 设初始路径；queries/mutations 关重试，让错误即时可断言。
  *
  * 【TooltipProvider 必须在这里】组件库的 Tooltip 缺 Provider 会直接抛

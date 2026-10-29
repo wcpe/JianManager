@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// bridgeFakeWorker 是桥能力用例的伪 Worker：只实现 FR-526 的四个 RPC，
+// bridgeFakeWorker 是桥能力用例的伪 Worker：只实现的四个 RPC，
 // 其余方法由内嵌接口保持 nil（被调用即 panic，能暴露越界调用）。
 type bridgeFakeWorker struct {
 	workerpb.WorkerServiceClient

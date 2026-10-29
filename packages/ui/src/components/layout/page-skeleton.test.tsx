@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest'
 
 import { DataPanelSkeleton, ListSkeleton, PageSkeleton } from './PageSkeleton'
 
-/**
- * 页面骨架测试（FR-502 阶段 6 补丁）。
+/** 
+ * 页面骨架测试（阶段 6 补丁）。
  *
  * 骨架的职责是「在数据/chunk 到达前占住真实内容的形状」，所以这里的断言分两类：
  * ① 结构钩子（`data-slot` / `data-variant`）——页面与 E2E 靠它判断「骨架已就位」；

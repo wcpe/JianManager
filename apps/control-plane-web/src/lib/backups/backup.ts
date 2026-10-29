@@ -1,5 +1,5 @@
-/**
- * 备份页纯逻辑助手（FR-151）。汇总统计、增量链父子关系、删除依赖计数、进行中轮询判定——
+/** 
+ * 备份页纯逻辑助手。汇总统计、增量链父子关系、删除依赖计数、进行中轮询判定——
  * 抽为纯函数便于 vitest 覆盖，UI 组件只做渲染。
  *
  * 备份状态码与后端 model.BackupStatus 对齐：0 待处理 / 1 进行中 / 2 完成 / 3 失败。
@@ -59,25 +59,25 @@ export function backupStatusLevel(status: number): StatusLevel {
   }
 }
 
-/** 状态是否为「进行中/待处理」——存在此类备份时需轮询刷新进度（FR-151）。 */
+/** 状态是否为「进行中/待处理」——存在此类备份时需轮询刷新进度。 */
 export function isActiveStatus(status: number): boolean {
   return status === BACKUP_PENDING || status === BACKUP_IN_PROGRESS
 }
 
-/** 列表中存在进行中/待处理备份时返回 true，用于驱动条件轮询（FR-151）。 */
+/** 列表中存在进行中/待处理备份时返回 true，用于驱动条件轮询。 */
 export function hasActiveBackup(backups: readonly BackupLike[]): boolean {
   return backups.some((b) => isActiveStatus(b.status))
 }
 
-/** 备份汇总统计（FR-151）：总占用 MB、份数、最近一次成功完成时间（ISO，无则 undefined）。 */
+/** 备份汇总统计：总占用 MB、份数、最近一次成功完成时间（ISO，无则 undefined）。 */
 export interface BackupSummary {
   totalSizeMb: number
   count: number
   lastSuccessAt?: string
 }
 
-/**
- * 计算备份汇总（FR-151）：份数=全部记录，总占用=各 fileSizeMb 之和（仅累加有限值），
+/** 
+ * 计算备份汇总：份数=全部记录，总占用=各 fileSizeMb 之和（仅累加有限值），
  * 最近成功=已完成备份里 createdAt 最大者。
  */
 export function summarizeBackups(backups: readonly BackupLike[]): BackupSummary {
@@ -92,8 +92,8 @@ export function summarizeBackups(backups: readonly BackupLike[]): BackupSummary 
   return { totalSizeMb, count: backups.length, lastSuccessAt }
 }
 
-/**
- * 统计直接以某备份为父的增量备份数（FR-151）——删除父备份前据此警告「N 个增量依赖」。
+/** 
+ * 统计直接以某备份为父的增量备份数——删除父备份前据此警告「N 个增量依赖」。
  * 仅计直接子级（链上更深的孙级会随父删触发级联，由后端 deleteHasChildren 拦截）。
  */
 export function countDependents(backups: readonly BackupLike[], parentId: number): number {
@@ -122,19 +122,19 @@ export interface BackupInfo {
   fileSizeMb: number
   /** 触发来源：0=手动, 1=定时 */
   type: number
-  /** 备份模式：0=全量, 1=增量（FR-056） */
+  /** 备份模式：0=全量, 1=增量 */
   mode: number
   /** 状态：0=待处理, 1=进行中, 2=已完成, 3=失败 */
   status: number
-  /** 增量备份的父备份 ID，串成备份链；全量为空（FR-056） */
+  /** 增量备份的父备份 ID，串成备份链；全量为空 */
   parentId?: number
-  /** 远程存储后端 ID；空表示本地（FR-057） */
+  /** 远程存储后端 ID；空表示本地 */
   storageId?: number
-  /** 远程对象键；本地备份为空（FR-057） */
+  /** 远程对象键；本地备份为空 */
   storageKey?: string
-  /** 归档 SHA-256，用于恢复前完整性校验（FR-171） */
+  /** 归档 SHA-256，用于恢复前完整性校验 */
   checksum?: string
-  /** 校验算法，当前固定 sha256（FR-171） */
+  /** 校验算法，当前固定 sha256 */
   checksumAlgo?: string
   createdAt: string
 }

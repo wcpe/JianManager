@@ -24,9 +24,9 @@ type SelectorRow =
   | { kind: 'group'; key: string; label: string; count: number }
   | { kind: 'instance'; key: string; instance: SelectorInstance }
 
-/**
- * 导航外壳服务器选择器（FR-240）：服务端搜索 + 聚合计数 + 虚拟渲染 + 最近/收藏。
- * 最近/收藏经外壳的共享 store 读写（FR-293），与侧栏常驻列实时互通。
+/** 
+ * 导航外壳服务器选择器：服务端搜索 + 聚合计数 + 虚拟渲染 + 最近/收藏。
+ * 最近/收藏经外壳的共享 store 读写，与侧栏常驻列实时互通。
  *
  * 受控视图（ADR-103 a 范式）：开合与搜索词也提到外壳——取数依赖它们（未打开时不查），
  * 视图拿不到；最近/收藏、节点名映射与悬停预取器同样由外壳注入。
@@ -94,7 +94,7 @@ export default function ServerSelector({
 
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // 键盘可达性（FR-502）：弹层此前只有 `role="dialog" aria-modal="true"` 两个声明，
+  // 键盘可达性：弹层此前只有 `role="dialog" aria-modal="true"` 两个声明，
   // 却没有配套的键盘与焦点管理——Esc 关不掉（只能点遮罩或关闭按钮），Tab 能一路跑到
   // 遮罩背后的侧栏与页眉，且屏读器仍读得到背景内容（ARIA 承诺了模态却没兑现）。
   // 这里接上共享焦点陷阱：Esc 交给 onOpenChange，Tab 在弹层内首尾环绕，关闭时还原焦点。
@@ -139,7 +139,7 @@ export default function ServerSelector({
         <span className="min-w-0 flex-1 truncate">{t('serverSelector.open')}</span>
       </Card>
 
-      {/* Portal 到 body：侧栏祖先带 transform/contain（FR-131 折叠动画）会给 fixed 建立包含块，
+      {/* Portal 到 body：侧栏祖先带 transform/contain（折叠动画）会给 fixed 建立包含块，
           内联渲染会把全屏模态压到侧栏宽度内。渲染到 body 逃出该包含块，覆盖整个视口居中。 */}
       {open && createPortal(
         <div className="fixed inset-0 z-[58] flex items-start justify-center bg-black/45 p-4 pt-[10vh]" role="presentation" onClick={() => onOpenChange(false)}>

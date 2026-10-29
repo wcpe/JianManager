@@ -29,7 +29,7 @@ var (
 	ErrNoLatestVersion = errors.New("频道尚未发布版本")
 	// ErrInvalidVersionFiles 发布的文件清单非法（缺字段/非法 sync/platform/路径逃逸/制品缺失）。
 	ErrInvalidVersionFiles = errors.New("版本文件清单非法")
-	// ErrVersionNotFound 指定版本在频道内不存在（历史详情/回滚源，FR-088）。
+	// ErrVersionNotFound 指定版本在频道内不存在（历史详情/回滚源）。
 	ErrVersionNotFound = errors.New("版本不存在")
 	// ErrNoCoreVersion 无任何已归档的 updater-core 版本（coreEndpoint 无可返回）。
 	ErrNoCoreVersion = errors.New("无已归档的 updater-core 版本")
@@ -37,11 +37,11 @@ var (
 	ErrCoreVersionNotFound = errors.New("updater-core 版本不存在")
 )
 
-// EmbeddedCore 描述 CP 内嵌的默认 updater-core（FR-193，见 ADR-045 改写）。
+// EmbeddedCore 描述 CP 内嵌的默认 updater-core（见 ADR-045 改写）。
 // 由装配处（main.go）从 embed.UpdaterCoreJar() 计算一次后注入：sha256/size + 单调整数版本。
-// 内嵌 core 随 CP 走、运营不管理；CP 自更新（FR-081）后内嵌 jar 即新版、本结构随之刷新。
+// 内嵌 core 随 CP 走、运营不管理；CP 自更新后内嵌 jar 即新版、本结构随之刷新。
 type EmbeddedCore struct {
-	// Version updater-core 整数版本号 = manifest agent.core.version（对客户端单调只升不降，FR-091）。
+	// Version updater-core 整数版本号 = manifest agent.core.version（对客户端单调只升不降）。
 	Version int
 	// SHA256 内嵌 core jar 自身 sha256 = manifest agent.core.platforms[os].artifact.sha256 = 制品下载寻址 key。
 	SHA256 string
@@ -51,7 +51,7 @@ type EmbeddedCore struct {
 	Codec string
 }
 
-// NewEmbeddedCoreFromJar 由内嵌 updater-core jar 字节 + 版本字符串构造 EmbeddedCore（FR-193，见 ADR-045 改写）。
+// NewEmbeddedCoreFromJar 由内嵌 updater-core jar 字节 + 版本字符串构造 EmbeddedCore（见 ADR-045 改写）。
 //   - jar 为 nil/空（未经 make embed-client-updater 注入）：返回 nil（调用方据此省略 agent.core，优雅降级）；
 //   - versionStr 非整数：回退版本号 1（保证 agent.core.version 为合法单调整数，不因配置失误产出坏 manifest）。
 //
@@ -73,23 +73,23 @@ func NewEmbeddedCoreFromJar(jar []byte, versionStr string) *EmbeddedCore {
 	}
 }
 
-// ClientVersionService 客户端分发版本发布与 manifest 组装（FR-087 / FR-256 简化后）。
+// ClientVersionService 客户端分发版本发布与 manifest 组装（简化后）。
 //
 // 职责：
-//   - PublishFile：把客户端文件制品入 FR-045 制品库（type=client-file，内容寻址 + 去重）；
+// PublishFile：把客户端文件制品入制品库（type=client-file，内容寻址 + 去重）；
 //   - PublishVersion：以一组文件 + managedDirs + 自更新段组成版本，version 单调递增、切 latest 指针；
-//   - BuildManifest：组装频道 latest 的 manifest（FR-256 起不再签名）；
+// BuildManifest：组装频道 latest 的 manifest（起不再签名）；
 //   - OpenArtifact：按 sha256 取制品（供 Range 分发）。
 //
-// 复用 ClientChannelService.VerifyKey（FR-086）做端点鉴权（在 router 层）。
+// 复用 ClientChannelService.VerifyKey做端点鉴权（在 router 层）。
 type ClientVersionService struct {
 	db      *gorm.DB
 	assets  *AssetService
 	channel *ClientChannelService
-	// embeddedCore CP 内嵌的默认 updater-core（FR-193，见 ADR-045 改写）。非 nil 时 BuildManifest
-	// 用它自动产出 agent.core（取代运营手填/pin）；nil（无内嵌 jar）时省略 agent.core（不破 FR-087/088）。
+	// embeddedCore CP 内嵌的默认 updater-core（见 ADR-045 改写）。非 nil 时 BuildManifest
+	// 用它自动产出 agent.core（取代运营手填/pin）；nil（无内嵌 jar）时省略 agent.core（不破088）。
 	embeddedCore *EmbeddedCore
-	// storageChannels 制品存储渠道服务（FR-347，见 ADR-073）：注入后 s3 制品的读取
+	// storageChannels 制品存储渠道服务（见 ADR-073）：注入后 s3 制品的读取
 	// （预览/代理下载/补丁物化）与 302 预签名经渠道 BlobStore；不注入 = 纯 local（既有测试零改动）。
 	storageChannels *ArtifactStorageChannelService
 	// patchBudget 发布时构建增量 patch 的总时长预算；<=0 用 patchBuildDefaultBudget。测试可注入。
@@ -104,20 +104,20 @@ func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientC
 // SetPatchBudget 覆盖发布 patch 构建总预算（测试/调优用；<=0 回落默认）。
 func (s *ClientVersionService) SetPatchBudget(d time.Duration) { s.patchBudget = d }
 
-// SetEmbeddedCore 注入 CP 内嵌的默认 updater-core 信息（FR-193，见 ADR-045 改写）。
+// SetEmbeddedCore 注入 CP 内嵌的默认 updater-core 信息（见 ADR-045 改写）。
 // 注入后 BuildManifest 的 agent.core 由内嵌 core 自动驱动（version + 三平台同制品）；不注入则省略 agent.core。
 // 经 setter 注入以保持构造签名稳定（既有装配/测试零改动）。
 func (s *ClientVersionService) SetEmbeddedCore(ec *EmbeddedCore) {
 	s.embeddedCore = ec
 }
 
-// SetStorageChannels 注入制品存储渠道服务（FR-347，见 ADR-073）：s3 制品的读路径与预签名
+// SetStorageChannels 注入制品存储渠道服务（见 ADR-073）：s3 制品的读路径与预签名
 // 经渠道 BlobStore 路由。由 main 装配；不调用则所有制品按 local 语义读取（历史行为）。
 func (s *ClientVersionService) SetStorageChannels(ch *ArtifactStorageChannelService) {
 	s.storageChannels = ch
 }
 
-// PresignArtifactURL 为 s3 制品现算预签名下载 URL（302 分发，FR-347，见 ADR-073 决策 1）。
+// PresignArtifactURL 为 s3 制品现算预签名下载 URL（302 分发见 ADR-073 决策 1）。
 // TTL 取制品所属渠道配置。渠道服务未注入/渠道缺失/凭证解密失败均报错（调用方回 503）。
 func (s *ClientVersionService) PresignArtifactURL(asset *model.Asset) (string, error) {
 	if s.storageChannels == nil {
@@ -126,7 +126,7 @@ func (s *ClientVersionService) PresignArtifactURL(asset *model.Asset) (string, e
 	return s.storageChannels.PresignForAsset(asset)
 }
 
-// OpenArtifactContent 按记录自述路由打开制品内容流（FR-347）：local → os.Open CAS 文件
+// OpenArtifactContent 按记录自述路由打开制品内容流：local → os.Open CAS 文件
 // （缺失 ErrAssetNotFound，与历史降级口径一致）；s3 → 渠道 BlobStore.Open 拉取对象。
 // 供管理面代理下载/文本预览/补丁物化复用；玩家消费端点的 s3 分发走 302 预签名不经此。
 func (s *ClientVersionService) OpenArtifactContent(asset *model.Asset, absPath string) (io.ReadCloser, error) {
@@ -164,7 +164,7 @@ type PublishFileParams struct {
 type ClientFileResult struct {
 	// SHA256 制品自身 sha256 = 下载寻址 key = manifest files[].artifact.sha256。
 	SHA256 string `json:"sha256"`
-	// MD5 制品自身 md5（入库即算）。codec=none 时即解压后原始内容 md5，供发布向导填 file.md5（FR-088）。
+	// MD5 制品自身 md5（入库即算）。codec=none 时即解压后原始内容 md5，供发布向导填 file.md5。
 	MD5 string `json:"md5"`
 	// Size 制品字节数。
 	Size int64 `json:"size"`
@@ -199,9 +199,9 @@ func (s *ClientVersionService) PublishFile(r io.Reader, p PublishFileParams) (*C
 type PublishVersionParams struct {
 	// Files 文件清单（必）。每项的 Artifact.SHA256 须已存在于 client-file 制品库。
 	Files []ManifestFile
-	// ManagedDirs 托管目录（可空，但建议提供；空则无减量）。FR-255：可含 "*" 表 clean-all。
+	// ManagedDirs 托管目录（可空，但建议提供；空则无减量）。：可含 "*" 表 clean-all。
 	ManagedDirs []string
-	// CleanExclude 运营自定义排除（FR-255）：命中前缀的路径永不删。空则省略。
+	// CleanExclude 运营自定义排除：命中前缀的路径永不删。空则省略。
 	CleanExclude []string
 	// Agent 楔子 + updater-core 自更新段（可空）。
 	Agent *ManifestAgent
@@ -218,7 +218,7 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 	if err := validateManifestFiles(p.Files); err != nil {
 		return nil, err
 	}
-	// FR-255：校验 cleanExclude 路径合法性。
+	// 校验 cleanExclude 路径合法性。
 	if err := validateCleanExclude(p.CleanExclude); err != nil {
 		return nil, err
 	}
@@ -570,7 +570,7 @@ func (s *ClientVersionService) manifestFileContentPath(f ManifestFile) (string, 
 			return "", nil, false, nil
 		}
 		// 本地 codec=none 快路径：直用 CAS 物理路径（原样保留）；
-		// s3 制品本地无文件，落到下方物化管道（BlobStore.Open → 临时文件，FR-347）。
+		// s3 制品本地无文件，落到下方物化管道（BlobStore.Open → 临时文件）。
 		if asset.StorageBackend != model.AssetBackendS3 {
 			return absPath, func() {}, true, nil
 		}
@@ -579,7 +579,7 @@ func (s *ClientVersionService) manifestFileContentPath(f ManifestFile) (string, 
 }
 
 func (s *ClientVersionService) materializeManifestFileContent(asset *model.Asset, absPath string, f ManifestFile) (string, func(), bool, error) {
-	// 源按记录后端路由（FR-347）：local os.Open；s3 渠道 BlobStore.Open。
+	// 源按记录后端路由：local os.Open；s3 渠道 BlobStore.Open。
 	// 打开失败按「制品不可用于 patch」降级（返回 ok=false 不报错），与历史口径一致。
 	src, err := s.OpenArtifactContent(asset, absPath)
 	if err != nil {
@@ -646,7 +646,7 @@ func (s *ClientVersionService) patchTempDir() string {
 	return os.TempDir()
 }
 
-// BuildManifest 组装频道 latest 的 manifest（contract §2）。FR-256 起不再签名。
+// BuildManifest 组装频道 latest 的 manifest（contract §2）。起不再签名。
 // 频道不存在返回 ErrChannelNotFound；无 latest（CurrentVersion=0 或缺记录）返回 ErrNoLatestVersion。
 func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest, error) {
 	ch, err := s.getChannel(channelID)
@@ -670,19 +670,19 @@ func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest,
 	if err != nil {
 		return nil, err
 	}
-	// agent.core 由 CP 内嵌默认 updater-core 自动驱动（FR-193，见 ADR-045 改写）：覆盖快照中的手填透传值。
-	// 无内嵌 jar（embeddedCore 未注入）时省略 agent.core，沿用快照（兼容 FR-087/088）。
+	// agent.core 由 CP 内嵌默认 updater-core 自动驱动（见 ADR-045 改写）：覆盖快照中的手填透传值。
+	// 无内嵌 jar（embeddedCore 未注入）时省略 agent.core，沿用快照（兼容088）。
 	s.applyEmbeddedCore(manifest)
 	return manifest, nil
 }
 
 // embeddedCorePlatforms manifest agent.core.platforms 须填的平台键集合（contract §2、ADR-021）。
 // ADR-021「一份 jar 三平台通用」——内嵌一份 core jar，fan-out 填这三键（同制品）。
-// 客户端 Platform.tag() 取 windows/macos/linux 之一；other 平台无键、不自更新（沿用 FR-091）。
+// 客户端 Platform.tag() 取 windows/macos/linux 之一；other 平台无键、不自更新（沿用）。
 var embeddedCorePlatforms = []string{"windows", "macos", "linux"}
 
-// applyEmbeddedCore 用 CP 内嵌的默认 updater-core 自动产出 manifest 的 agent.core（FR-193，见 ADR-045 改写）。
-// embeddedCore 未注入（无内嵌 jar）时不动 agent.core——省略而非置空（保留快照、不破 FR-087/088）。
+// applyEmbeddedCore 用 CP 内嵌的默认 updater-core 自动产出 manifest 的 agent.core（见 ADR-045 改写）。
+// embeddedCore 未注入（无内嵌 jar）时不动 agent.core——省略而非置空（保留快照、不破088）。
 // agent.wedge 不受影响（楔子冻结、信息性，随快照透传）。一份内嵌 jar fan-out 填三平台键（ADR-021）。
 func (s *ClientVersionService) applyEmbeddedCore(manifest *SignedManifest) {
 	if s.embeddedCore == nil {
@@ -711,7 +711,7 @@ func (s *ClientVersionService) LatestVersion(channelID string) (int, error) {
 	return ch.CurrentVersion, nil
 }
 
-// VersionSummary 版本历史列表项（FR-088，仅管理面；不向玩家暴露）。
+// VersionSummary 版本历史列表项（仅管理面；不向玩家暴露）。
 type VersionSummary struct {
 	// Version 单调递增版本号。
 	Version int `json:"version"`
@@ -727,7 +727,7 @@ type VersionSummary struct {
 	IsLatest bool `json:"isLatest"`
 }
 
-// VersionDetail 版本详情（FR-088）：元数据 + 解析后文件清单/托管目录/自更新段。
+// VersionDetail 版本详情：元数据 + 解析后文件清单/托管目录/自更新段。
 type VersionDetail struct {
 	Version      int            `json:"version"`
 	Note         string         `json:"note"`
@@ -877,7 +877,7 @@ func decodeVersionSnapshot(ver *model.ClientVersion) ([]ManifestFile, []string, 
 			return nil, nil, nil, nil, fmt.Errorf("解析托管目录失败: %w", err)
 		}
 	}
-	// FR-255：cleanExclude（老版本无此列，空串=未声明）。
+	// cleanExclude（老版本无此列，空串=未声明）。
 	cleanExclude := []string{}
 	if ver.CleanExcludeJSON != "" {
 		if err := json.Unmarshal([]byte(ver.CleanExcludeJSON), &cleanExclude); err != nil {
@@ -895,7 +895,7 @@ func decodeVersionSnapshot(ver *model.ClientVersion) ([]ManifestFile, []string, 
 }
 
 // artifactDownloadableTypes 可经 /client-artifacts/:sha256 公网端点分发的制品类型集合。
-// FR-259 起 core jar 归档为 client-updater-core 类型，也经此端点下发（楔子自动拉 core）。
+// 起 core jar 归档为 client-updater-core 类型，也经此端点下发（楔子自动拉 core）。
 var artifactDownloadableTypes = []model.AssetType{
 	model.AssetTypeClientFile,
 	model.AssetTypeClientUpdaterCore,
@@ -903,7 +903,7 @@ var artifactDownloadableTypes = []model.AssetType{
 
 // OpenArtifact 按制品 sha256 打开可分发制品（client-file 或 client-updater-core），供端点 Range 分发。
 // 返回资产元数据与其物理文件绝对路径；不存在返回 ErrAssetNotFound。
-// FR-259 起扩展支持 client-updater-core 类型（楔子经 coreEndpoint 拉取 core jar）。
+// 起扩展支持 client-updater-core 类型（楔子经 coreEndpoint 拉取 core jar）。
 func (s *ClientVersionService) OpenArtifact(sha256 string) (*model.Asset, string, error) {
 	var asset model.Asset
 	err := s.db.Where("type IN ? AND sha256 = ?", artifactDownloadableTypes, sha256).First(&asset).Error
@@ -916,11 +916,11 @@ func (s *ClientVersionService) OpenArtifact(sha256 string) (*model.Asset, string
 	return &asset, s.assets.AbsPath(&asset), nil
 }
 
-// ArtifactTextPreviewMaxBytes 文本预览的制品上限：超过此字节数只回降级标记、不读全量（FR-214）。
+// ArtifactTextPreviewMaxBytes 文本预览的制品上限：超过此字节数只回降级标记、不读全量。
 // 与前端 clientDistSource 的 PREVIEW_MAX_BYTES（1 MiB）对齐，避免大制品撑爆内存/响应。
 const ArtifactTextPreviewMaxBytes = 1 << 20 // 1 MiB
 
-// ArtifactTextPreview 客户端分发制品的文本预览结果（FR-214，管理面 JWT 读取）。
+// ArtifactTextPreview 客户端分发制品的文本预览结果（管理面 JWT 读取）。
 // 降级由 Kind 显式表达，调用方/前端据此渲染，不再自行猜测。
 type ArtifactTextPreview struct {
 	// Kind 预览类别：text（可文本预览）| binary（含 NUL/压缩，仅下载）| too-large（超上限，仅下载）。
@@ -933,7 +933,7 @@ type ArtifactTextPreview struct {
 	Codec string `json:"codec"`
 }
 
-// ReadArtifactText 读取 client-file 制品内容用于**管理面**文本预览（FR-214）。
+// ReadArtifactText 读取 client-file 制品内容用于**管理面**文本预览。
 //
 // 为什么需要本方法：玩家消费端点 GET /client-artifacts/:sha256 走拉取密钥（X-Client-Key）鉴权，
 // 与运营浏览器 JWT 入口物理隔离（ADR-022/023）——管理台浏览器无拉取密钥、不能复用该端点取内容预览。
@@ -951,7 +951,7 @@ func (s *ClientVersionService) ReadArtifactText(sha256 string) (*ArtifactTextPre
 	if err != nil {
 		return nil, err
 	}
-	// 失效制品（FR-349）：外置对象已缺失，预览给明确错误（410）而非拉对象撞 404。
+	// 失效制品：外置对象已缺失，预览给明确错误（410）而非拉对象撞 404。
 	if asset.StorageState == model.AssetStorageLost {
 		return nil, ErrArtifactLost
 	}
@@ -969,7 +969,7 @@ func (s *ClientVersionService) ReadArtifactText(sha256 string) (*ArtifactTextPre
 		return out, nil
 	}
 
-	// 读取按记录后端路由（FR-347）：local 保持 os.Open 降级口径，s3 经渠道 BlobStore 限量读。
+	// 读取按记录后端路由：local 保持 os.Open 降级口径，s3 经渠道 BlobStore 限量读。
 	rc, oerr := s.OpenArtifactContent(asset, absPath)
 	if oerr != nil {
 		return nil, oerr
@@ -1089,7 +1089,7 @@ func validateManifestPatch(f ManifestFile) error {
 	return nil
 }
 
-// validateCleanExclude 校验运营自定义排除路径合法性（FR-255）：
+// validateCleanExclude 校验运营自定义排除路径合法性：
 // 非"*"（非哨兵）、POSIX 风格、不绝对、无 .. 段、不含反斜杠/驱动器。
 func validateCleanExclude(excludes []string) error {
 	for _, ex := range excludes {
@@ -1139,7 +1139,7 @@ func splitSlash(p string) []string {
 	return segs
 }
 
-// ---- updater-core 版本归档 + 频道选定（FR-259，见 updater-arch-simplification spec §D）----
+// updater-core 版本归档 + 频道选定（见 updater-arch-simplification spec §D）----
 //
 // core jar 不再随 CP 内嵌单一版本"覆盖"分发，而是每次构建入库归档（type=client-updater-core，
 // 内容寻址去重——不同版本 sha256 不同即天然多版本不覆盖）。频道选定版本（SelectedCoreSHA256）
@@ -1190,7 +1190,7 @@ type updaterCoreBuildMetadata struct {
 	BuildTime   string `json:"buildTime,omitempty"`
 }
 
-// ArchiveCoreJar 把 updater-core jar 入库归档为 client-updater-core 类型（FR-259）。
+// ArchiveCoreJar 把 updater-core jar 入库归档为 client-updater-core 类型。
 // 内容寻址去重：同 sha256 复用、不同 sha256 各自归档（不覆盖旧版）。version 写入 Asset.Version。
 func (s *ClientVersionService) ArchiveCoreJar(r io.Reader, version string) (*model.Asset, error) {
 	data, err := io.ReadAll(r)
@@ -1384,7 +1384,7 @@ func (s *ClientVersionService) normalizeCoreArchiveVersion(version string) (int,
 	return maxVersion + 1, nil
 }
 
-// GetCoreEndpointInfo 查频道选定版本的 core jar 信息（FR-259 coreEndpoint 端点数据源）。
+// GetCoreEndpointInfo 查频道选定版本的 core jar 信息（coreEndpoint 端点数据源）。
 // SelectedCoreSHA256 非空 → 查该归档制品，并返回频道级分发版本；空 → 回退最新归档版本（按 id DESC）。
 // 频道不存在返回 ErrChannelNotFound；无任何归档返回 ErrNoCoreVersion。
 func (s *ClientVersionService) GetCoreEndpointInfo(channelID string) (*CoreEndpointInfo, error) {
@@ -1520,7 +1520,7 @@ func (s *ClientVersionService) ListCoreVersions(channelID ...string) ([]CoreVers
 	return out, nil
 }
 
-// SelectCoreVersion 切换频道选定的 core 版本（FR-259 回滚操作）。
+// SelectCoreVersion 切换频道选定的 core 版本（回滚操作）。
 // 校验 sha256 存在于 client-updater-core 归档后更新选定 SHA，并维护频道级递增分发版本。
 // 频道不存在返回 ErrChannelNotFound；sha256 不存在返回 ErrCoreVersionNotFound。
 func (s *ClientVersionService) SelectCoreVersion(channelID, sha256 string) error {

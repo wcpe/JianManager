@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 助手调用 MCP 工具的身份派生（FR-544）。
+// 助手调用 MCP 工具的身份派生。
 //
 // ## 安全前提：绝不造「超级身份」
 //

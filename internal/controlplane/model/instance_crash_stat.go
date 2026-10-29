@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// InstanceCrashStat 崩溃趋势汇总（FR-470）：按 (实例, 天, 根因, 指纹) 计数。
+// InstanceCrashStat 崩溃趋势汇总：按 (实例, 天, 根因, 指纹) 计数。
 //
 // 关键决策：趋势数据**不复用** InstanceCrashSnapshot——后者每实例滚动保留 K=5 条
 // （见 grpc/crash_snapshot.go 的 pruneCrashSnapshots），连崩超过 5 次后更早的记录被裁剪，

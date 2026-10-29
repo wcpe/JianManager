@@ -120,7 +120,7 @@ func (f *fakeTunnelChannel) Context() context.Context { return f.ctx }
 func (f *fakeTunnelChannel) Done() <-chan struct{}    { return nil }
 func (f *fakeTunnelChannel) Err() error               { return nil }
 
-// TestTunnelRegistry_OnOpenNotifiesWithFirstConnectDedup FR-455② + FR-456 F4：
+// TestTunnelRegistry_OnOpenNotifiesWithFirstConnectDedup②F4：
 // 语义分两条——每次隧道建立都触发 onConnected（幂等重推，不因瞬时 active=2 漏推）；
 // 而长驻订阅类副作用走 onFirstConnected，仅在节点「从无到有」（active 0→1）时触发一次，
 // 避免瞬时 active=2 时重复建立长驻订阅流（stdout/stderr 双写、事件重复扇出）。

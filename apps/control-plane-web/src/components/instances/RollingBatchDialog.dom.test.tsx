@@ -22,7 +22,7 @@ function renderDialog() {
   return { user, onClose }
 }
 
-describe('RollingBatchDialog（FR-457 滚动/分批/灰度编排）', () => {
+describe('RollingBatchDialog（滚动/分批/灰度编排）', () => {
   it('按默认策略创建编排并展示进度', async () => {
     const { user } = renderDialog()
 
@@ -71,7 +71,7 @@ describe('RollingBatchDialog（FR-457 滚动/分批/灰度编排）', () => {
     )
   })
 
-  it('进度视图可暂停/继续/取消（FR-457）', async () => {
+  it('进度视图可暂停/继续/取消', async () => {
     let state = 'running'
     const op = () => ({
       id: 9, action: 'restart', state, targets: [101, 102], requested: 2, cursor: 0,

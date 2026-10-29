@@ -83,7 +83,7 @@ func TestReporter_NoIdentityDropped(t *testing.T) {
 	assert.Less(t, time.Since(start), time.Second, "无身份应立即丢弃，不等待网络")
 }
 
-// TestReporter_ReportQueueDelivers FR-456 N4：Report 经有界队列 + 单派发 goroutine 送达假 CP。
+// TestReporter_ReportQueueDeliversN4：Report 经有界队列 + 单派发 goroutine 送达假 CP。
 func TestReporter_ReportQueueDelivers(t *testing.T) {
 	stub := &stubCP{got: make(chan *workerpb.ReportOrphanAuditRequest, 4)}
 	addr := startStubCP(t, stub)
@@ -103,7 +103,7 @@ func TestReporter_ReportQueueDelivers(t *testing.T) {
 	}
 }
 
-// TestReporter_ReportNeverBlocks FR-456 N4：队列满时 Report 立即丢弃、绝不阻塞处置路径
+// TestReporter_ReportNeverBlocksN4：队列满时 Report 立即丢弃、绝不阻塞处置路径
 // （防止单轮上千 findings 拖住扫描/处置线程）。
 func TestReporter_ReportNeverBlocks(t *testing.T) {
 	r := New("127.0.0.1:1") // 不可达：派发侧会失败但不影响 Report 入队语义

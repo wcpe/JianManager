@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 助手全局设置：出站准入放行段（FR-514 §4.3 / §6.2 缺口 8）。
+// 助手全局设置：出站准入放行段（§4.3 / §6.2 缺口 8）。
 //
 // 这组用例守三件事：
 //  1. 非法 CIDR 必须**拒绝并指出是哪一项**，不能静默丢弃；
@@ -239,7 +239,7 @@ func TestApplyStoredEgressFailsLoudOnCorruptRow(t *testing.T) {
 	}
 }
 
-// ── 供应商代理（FR-539）──
+// ── 供应商代理──
 //
 // 三条不变量：
 //  1. 默认 direct（**不**回退环境代理）；

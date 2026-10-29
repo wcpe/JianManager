@@ -20,7 +20,7 @@ import { formatFileSize } from '@/lib/shared/format-file-size'
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */
 const PLATFORM_ALL = '__all__'
 
-// ── FR-254：文件树拖拽编排 ──────────────────────────────────────────────
+// ──：文件树拖拽编排 ──────────────────────────────────────────────
 
 /** 拖拽载荷：文件节点或目录节点。 */
 type DragPayload =
@@ -37,12 +37,12 @@ interface DragContextValue {
 
 const DragContext = createContext<DragContextValue | null>(null)
 
-/**
- * 客户端分发文件树（FR-191，FR-254 拖拽编排）。
+/** 
+ * 客户端分发文件树（拖拽编排）。
  * 把扁平 `ManifestFile[]` 按 `path` 目录层级渲染为 Minecraft 风格的文件树预览。
  * - `readonly`（审阅/版本详情）：纯展示，文件行显示 名称 + sync/platform 徽标 + 大小，目录可折叠。
  * - 编排态（配置步）：文件行可改目标路径 / sync / platform / 删除；内容锁定（内容寻址不可改字节）。
- *   FR-254：编排态支持**拖拽移动**文件/目录节点到其他目录，批量改目标路径。
+ *：编排态支持**拖拽移动**文件/目录节点到其他目录，批量改目标路径。
  * 编排回调按文件在源数组中的 `index` 定位，父组件据此 patch/remove 原数组项。
  */
 export interface ClientFileTreeProps {
@@ -72,7 +72,7 @@ export function ClientFileTree({
   const { t } = useTranslation()
   const tree = useMemo(() => buildFileTree(files), [files])
 
-  // FR-254：拖拽编排态（仅编排态启用）。
+  // 拖拽编排态（仅编排态启用）。
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null)
   const [dragOverPath, setDragOverPath] = useState<string | null>(null)
   const drag: DragContextValue = {

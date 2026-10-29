@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestAudit_RecordsFailureWithError 失败操作也记审计并带响应错误内容（FR-321）。
+// TestAudit_RecordsFailureWithError 失败操作也记审计并带响应错误内容。
 func TestAudit_RecordsFailureWithError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var gotSuccess bool
@@ -35,7 +35,7 @@ func TestAudit_RecordsFailureWithError(t *testing.T) {
 	}
 }
 
-// TestAudit_SuccessKeepsTrue 成功操作 success=true、error 为空（FR-321 兼容旧语义）。
+// TestAudit_SuccessKeepsTrue 成功操作 success=true、error 为空（兼容旧语义）。
 func TestAudit_SuccessKeepsTrue(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var gotSuccess bool
@@ -54,7 +54,7 @@ func TestAudit_SuccessKeepsTrue(t *testing.T) {
 	}
 }
 
-// TestErrorLog_CapturesRespBody respCaptureWriter 截获响应体且不破坏下游输出（FR-320）。
+// TestErrorLog_CapturesRespBody respCaptureWriter 截获响应体且不破坏下游输出。
 func TestErrorLog_CapturesRespBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

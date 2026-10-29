@@ -2,8 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import { tasksRefetchInterval, type Task } from '@/api/tasks'
 
-/**
- * 制品存储渠道（FR-347，见 ADR-073）：客户端分发制品（client-file）的落点路由配置。
+/** 
+ * 制品存储渠道（见 ADR-073）：客户端分发制品（client-file）的落点路由配置。
  * 凭证面板直填、后端可逆加密落库；响应永不含明文/密文，以 hasAccessKey/hasSecretKey 标示。
  */
 export interface ArtifactStorageChannel {
@@ -118,7 +118,7 @@ export function useTestArtifactStorageDraft() {
   })
 }
 
-// ───────────────────────── 存量迁移（FR-348）─────────────────────────
+// ───────────────────────── 存量迁移─────────────────────────
 
 /** 迁移登记与实时计数（GET /artifact-storages/migration 的 migration 段）。 */
 export interface ArtifactMigrationInfo {
@@ -150,8 +150,8 @@ export interface ArtifactMigrationFailure {
   createdAt: string
 }
 
-/**
- * 最近一次迁移状态（FR-348）：在途任务非终态时 2s 短轮询刷新进度（复用任务中心启停规则），
+/** 
+ * 最近一次迁移状态：在途任务非终态时 2s 短轮询刷新进度（复用任务中心启停规则），
  * 终态即停。staleTime 置 0 防「新鲜缓存不启轮询」卡旧快照（同 useTasks 口径）。
  */
 export function useArtifactMigrationStatus() {

@@ -51,12 +51,12 @@ func TestParseServerProbeMetrics_RealSample(t *testing.T) {
 	assert.Equal(t, int64(2), snap.Worlds["world"].TileEntities)
 	assert.Equal(t, int64(12), snap.Worlds["world_nether"].LoadedChunks)
 
-	// GC（FR-465）：真机样本只有 serverprobe_gc_count_total{gc="G1 Young Generation"}=16。
+	// GC：真机样本只有 serverprobe_gc_count_total{gc="G1 Young Generation"}=16。
 	assert.Equal(t, int64(16), snap.GCCountTotal)
 	assert.InDelta(t, 0, snap.GCTimeMillis, 0.0001)
 }
 
-// TestParseServerProbeMetrics_GC 覆盖 GC 跨收集器累加与耗时秒→毫秒（FR-465）。
+// TestParseServerProbeMetrics_GC 覆盖 GC 跨收集器累加与耗时秒→毫秒。
 func TestParseServerProbeMetrics_GC(t *testing.T) {
 	snap := parseServerProbeMetrics(realProbeMetrics + `# TYPE serverprobe_gc_count_total counter
 serverprobe_gc_count_total{gc="G1 Old Generation"} 3

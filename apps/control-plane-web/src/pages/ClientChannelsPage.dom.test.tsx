@@ -20,8 +20,8 @@ beforeAll(() => {
   }
 })
 
-/**
- * ClientChannelsPage 强断言（FR-210）：渲染 seed 频道 → 新建频道联动出现 → 注入 500 显错误态。
+/** 
+ * ClientChannelsPage 强断言：渲染 seed 频道 → 新建频道联动出现 → 注入 500 显错误态。
  * 渲染前 loginMockUser() 让 requireAuth 放行。
  */
 describe('ClientChannelsPage（mock 假后端）', () => {

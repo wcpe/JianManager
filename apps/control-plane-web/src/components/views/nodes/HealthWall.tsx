@@ -131,8 +131,8 @@ export interface HealthWallProps {
   renderLink?: (args: HealthWallCellLinkArgs) => ReactNode
 }
 
-/**
- * 集群健康墙（FR-461）：逐节点热力矩阵 + 分级 + 排序 + 一键下钻。
+/** 
+ * 集群健康墙：逐节点热力矩阵 + 分级 + 排序 + 一键下钻。
  * 只读 CP 快照一次查询给全（零 Worker RPC）；行内排序由服务端 ?sort 完成。
  * 大集群下默认分批渲染（避免一次挂载数百 DOM 节点），可「显示更多」逐批展开。
  */

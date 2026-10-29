@@ -13,11 +13,11 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌 bot-worker dist（FR-308，见 ADR-070）。
+// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌 bot-worker dist（见 ADR-070）。
 //
 // 走 Worker 既有的 CP gRPC 连接（注册/心跳同通道，NAT 节点天然可达），凭 node_uuid+node_secret
 // 鉴权（与重注册同源校验）；known_sha256 与内嵌指纹一致时回空归档省流。归档 ~几百 KB，
-// 远低于 64MiB 单消息上限（FR-305），单 unary 足够、不需流式。
+// 远低于 64MiB 单消息上限，单 unary 足够、不需流式。
 func (h *ControlPlaneHandler) FetchBotWorkerArchive(ctx context.Context, req *workerpb.FetchBotWorkerArchiveRequest) (*workerpb.FetchBotWorkerArchiveResponse, error) {
 	if req.NodeUuid == "" || req.NodeSecret == "" {
 		return nil, status.Errorf(codes.Unauthenticated, "缺少节点身份（node_uuid/node_secret）")

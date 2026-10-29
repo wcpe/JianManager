@@ -19,7 +19,7 @@ describe('resolveColorTheme', () => {
     expect(resolveColorTheme('sunset')).toBe('sunset')
   })
 
-  it('缺省/未知/空 回退到 indigo（承 FR-163 默认；旧用户 teal 等存储值继续有效）', () => {
+  it('缺省/未知/空 回退到 indigo（承默认；旧用户 teal 等存储值继续有效）', () => {
     expect(resolveColorTheme(null)).toBe('indigo')
     expect(resolveColorTheme(undefined)).toBe('indigo')
     expect(resolveColorTheme('')).toBe('indigo')

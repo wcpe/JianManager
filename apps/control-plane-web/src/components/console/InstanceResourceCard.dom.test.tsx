@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import InstanceResourceCard from './InstanceResourceCard'
 
-// 替身须履行真组件的契约：ConfigExplorer 会把 toolbarLeading 透传进资源管理器工具栏（FR-422），
+// 替身须履行真组件的契约：ConfigExplorer 会把 toolbarLeading 透传进资源管理器工具栏，
 // 替身若丢掉这个插槽，分段控件就整个消失，测的就不是真实结构了。
 vi.mock('@/components/config-explorer/ConfigExplorer', () => ({
   default: ({ instanceId, toolbarLeading }: { instanceId: number; toolbarLeading?: ReactNode }) => (
@@ -32,9 +32,9 @@ vi.mock('@/components/file-browser/sources/instanceSource', () => ({
   instanceFileSource: () => ({ id: 'instance-files' }),
 }))
 
-describe('InstanceResourceCard 文件版本生产入口（FR-204）', () => {
-  /**
-   * FR-422：分段控件从「自成一条横栏的 Radix Tabs」改为寄居在各视图内层管理器横栏里的
+describe('InstanceResourceCard 文件版本生产入口', () => {
+  /** 
+   *：分段控件从「自成一条横栏的 Radix Tabs」改为寄居在各视图内层管理器横栏里的
    * `aria-pressed` 按钮组（tablist 嵌 tabpanel 是无效 ARIA 结构，故不再用 tab 角色）。
    * 断言强度不变：仍逐段确认「哪一段处于选中态」与「切过去挂载了哪个组件」。
    */
@@ -58,7 +58,7 @@ describe('InstanceResourceCard 文件版本生产入口（FR-204）', () => {
     expect(screen.getByTestId('file-browser')).toHaveTextContent('只读浏览')
   })
 
-  it('FR-422：分段控件寄居在内层管理器横栏，不再自占一条横栏', async () => {
+  it('分段控件寄居在内层管理器横栏，不再自占一条横栏', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstanceResourceCard instanceId={42} />)
 

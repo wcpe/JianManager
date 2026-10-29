@@ -23,7 +23,7 @@ func newBeaconBackfillDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestBackfillBeaconInstanceType_ByRoleOnly FR-454 验收③：只按 role 归正 (beacon→generic)，
+// TestBackfillBeaconInstanceType_ByRoleOnly验收③：只按 role 归正 (beacon→generic)，
 // 重复执行幂等；role 非 beacon 的实例（含 name 含 beacon 者）type 不被改动。
 func TestBackfillBeaconInstanceType_ByRoleOnly(t *testing.T) {
 	db := newBeaconBackfillDB(t)
@@ -66,7 +66,7 @@ func TestBackfillBeaconInstanceType_ByRoleOnly(t *testing.T) {
 	require.Equal(t, model.InstanceTypeGeneric, gotGeneric.Type)
 }
 
-// TestBackfillBeaconInstanceType_ZeroesInapplicableProbePort FR-454（第二轮复审 N3）：
+// TestBackfillBeaconInstanceType_ZeroesInapplicableProbePort（第二轮复审 N3）：
 // 归正 type 时顺带把非适用实例的历史脏 probe_port 归零；适用实例（MC 后端、role IS NULL）不受影响。
 func TestBackfillBeaconInstanceType_ZeroesInapplicableProbePort(t *testing.T) {
 	db := newBeaconBackfillDB(t)
@@ -107,7 +107,7 @@ func TestBackfillBeaconInstanceType_ZeroesInapplicableProbePort(t *testing.T) {
 	require.Equal(t, 29004, load(nullRole.ID).ProbePort, "role IS NULL 视为适用，端口不得被动")
 }
 
-// TestListBeaconNamedNonBeaconInstances_NullRoleAndBestEffort FR-454（第二轮复审 N2/N4）：
+// TestListBeaconNamedNonBeaconInstances_NullRoleAndBestEffort（第二轮复审 N2/N4）：
 //   - N2：`role <> 'beacon'` 对 role IS NULL 行三值逻辑恒 NULL 会漏列，须显式补 `role IS NULL`；
 //   - N4：本函数是纯诊断（best-effort），查询失败只返回 nil、绝不冒泡（否则会拖垮 CP 启动路径）。
 func TestListBeaconNamedNonBeaconInstances_NullRoleAndBestEffort(t *testing.T) {
@@ -140,7 +140,7 @@ func TestListBeaconNamedNonBeaconInstances_NullRoleAndBestEffort(t *testing.T) {
 	require.NotPanics(t, func() { require.Nil(t, listBeaconNamedNonBeaconInstances(db)) })
 }
 
-// TestAutoMigrate_NormalizesLegacyBeaconType FR-454：AutoMigrate（CP 启动路径）在迁移收尾
+// TestAutoMigrate_NormalizesLegacyBeaconType：AutoMigrate（CP 启动路径）在迁移收尾
 // 即完成归正，无需人工干预；再次 AutoMigrate 幂等。
 func TestAutoMigrate_NormalizesLegacyBeaconType(t *testing.T) {
 	dsn := filepath.Join(t.TempDir(), "legacy-beacon.db")

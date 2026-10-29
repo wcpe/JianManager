@@ -12,8 +12,8 @@ import ClientDistRedirect from './ClientDistRedirect'
 import Workspace from '@/components/console/Workspace'
 import DashboardPage from './DashboardPage'
 
-/**
- * 页面 B「客户端分发运维」（`/client-dist-ops`，FR-430 / ADR-088）。
+/** 
+ * 页面 B「客户端分发运维」（`/client-dist-ops`ADR-088）。
  *
  * 用例迁自旧 `ClientDistMonitoringPage.dom.test.tsx`（8 例）+ 旧 `ProtectionCenterPage` 安全侧行为：
  * - 7 Tab 同页；`data-page="client-dist-ops"`；
@@ -72,7 +72,7 @@ describe('ClientDistOpsPage 外壳（7 Tab / data-page / 守卫）', () => {
     expect(await screen.findByText('拉取趋势')).toBeInTheDocument()
     expect(await screen.findByText('版本滞后分布')).toBeInTheDocument()
     expect(await screen.findByText('安全排行')).toBeInTheDocument()
-    expect(screen.queryByText('FR-430')).not.toBeInTheDocument()
+    expect(screen.queryByText('')).not.toBeInTheDocument()
   })
 
   it('旧别名 tab（ip）直达页面 B 落到「画像 / IP 剖析」分档', async () => {
@@ -178,7 +178,7 @@ describe('ClientDistOpsPage 区块（迁自旧监控页用例）', () => {
     expect(screen.queryByText('m-bbbb')).not.toBeInTheDocument()
   })
 
-  /**
+  /** 
    * 下钻「以本次为准」回归锁（P0 正确性）：连续点两个不同维度的下钻，后一次必须丢弃前一次
    * 留下的过滤条件。原实现把联动上下文**累积**在 state 里、且对 URL 四键传 `undefined`
    * （`updateClientDistQuery` 对 undefined 的语义是「保留旧值」），于是「先点 A 维度、再点 B 维度」
@@ -338,10 +338,10 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
 
   it('非平台管理员直达 /client-dist-ops → 重定向首页（守卫）', async () => {
     loginAs(MEMBER_TOKEN)
-    /*
+    /* 
       为什么渲染 `DashboardPage` 而不是 `Workspace`：
-      守卫把非管理员送回首页，而首页自 FR-520 起是 AI 首页，它经 `useAssistantChatCtx()` 取
-      外壳级会话状态——该 Provider 只挂在 `DashboardPage`（FR-519 §3「外壳级单一 manager」）。
+      守卫把非管理员送回首页，而首页自起是 AI 首页，它经 `useAssistantChatCtx()` 取
+      外壳级会话状态——该 Provider 只挂在 `DashboardPage`（§3「外壳级单一 manager」）。
       `Workspace` 只是路由表，不含 Provider，单独渲染它会在首页抛
       「useAssistantChatCtx 必须在 AssistantChatProvider 内使用」。
       渲染 `DashboardPage` 也才对得上生产真实外壳（App.tsx 里就是它包 Workspace）。
@@ -373,8 +373,8 @@ describe('页面 B 路由重定向与守卫（Workspace）', () => {
   })
 })
 
-/**
- * QA 独立补充（FR-430 证伪式复核）：旧路由重定向穷举 + 分档渲染补齐。
+/** 
+ * QA 独立补充（证伪式复核）：旧路由重定向穷举 + 分档渲染补齐。
  * 隔离渲染两条重定向路由 + 目标桩，逐条核对 §2 映射表与冻结 query 透传（不依赖整页守卫）。
  */
 function RedirectProbe() {
@@ -460,7 +460,7 @@ describe('页面 B 补充：分档 seg 渲染补齐（QA 独立补充）', () =>
   })
 })
 
-/**
+/** 
  * QA 独立补充（P0-2 证伪式复核）：查询按 Tab 懒加载——用 MSW 请求生命周期事件**实测**，
  * 而非读代码推断。断言：非 monitor Tab 不发 `/client-dist/realtime`；非 overview/clients Tab
  * 不发 `/client-dist/clients`（运行态）；`/client-dist/stats` 亦按 Tab 懒加载（仅 overview/statistics 发）。
@@ -530,7 +530,7 @@ describe('页面 B 补充：查询按 Tab 懒加载（P0-2）', () => {
     }
   })
 
-  /**
+  /** 
    * B（statsQuery 收敛）回归锁：`/client-dist/stats` 仅在 overview / statistics 发。
    * 逐 Tab 实测——正例轮询命中；反例在「本页确已发出其它请求」后限定短窗口观察，
    * 确认其从未发出（stats 为挂载期查询，本页任何请求入账即代表启用查询均已发出）。
@@ -568,7 +568,7 @@ describe('页面 B 补充：查询按 Tab 懒加载（P0-2）', () => {
   )
 })
 
-/**
+/** 
  * QA 独立补充：P0-3 主 Tab 列表可访问名称；P0-4 非管理员分支去重标题 + adminOnly 运维口径。
  */
 describe('页面 B 补充：a11y 名称与去重标题（P0-3/P0-4）', () => {

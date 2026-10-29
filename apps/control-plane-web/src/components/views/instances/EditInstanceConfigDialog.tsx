@@ -20,8 +20,8 @@ import { Switch } from '@jianmanager/ui/components/switch'
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type EditInstanceConfigNotice = (kind: 'success' | 'error', message: string) => void
 
-/**
- * 实例配置编辑器（FR-233）：随时改启动命令 / 绑定 JDK / 自动重启，经 PUT /instances/:id 持久化、对下次启动生效。
+/** 
+ * 实例配置编辑器：随时改启动命令 / 绑定 JDK / 自动重启，经 PUT /instances/:id 持久化、对下次启动生效。
  * 重绑 JDK 是「实例未绑定 JDK / Java 版本不符崩溃」的解药——给已建实例补绑合适大版本的 JDK。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast —— 可绑 JDK 选项由外壳按节点取好注入，
@@ -59,7 +59,7 @@ export default function EditInstanceConfigDialog({
   const [restart, setRestart] = useState(autoRestart)
   const [saving, setSaving] = useState(false)
 
-  /*
+  /* 
     改进①「未修改保护」：什么都没改时保存按钮禁用。
     此前无论是否改动都能点保存，会发一次与当前值完全相同的 PUT——既浪费一次写请求，
     也会在审计里留下一条无意义的变更记录（排查「谁在改配置」时是噪音）。
@@ -68,7 +68,7 @@ export default function EditInstanceConfigDialog({
   const jdkNumber = jdk ? Number(jdk) : 0
   const dirty = cmd !== startCommand || jdkNumber !== jdkId || restart !== autoRestart
 
-  /*
+  /* 
     改进②「启动命令必填校验」：留空会让实例再也起不来，而此前可以静默保存一个空命令。
     这里做最小非空校验（不猜命令格式：不同核心/包装器写法差异太大，误判比不判更有害）。
   */

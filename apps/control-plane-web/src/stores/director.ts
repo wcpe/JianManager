@@ -4,11 +4,11 @@ import type { PlacedCard, WorkspacePreset } from '@/lib/console/workspace-preset
 import { activateScene as machineActivate, addScene as machineAdd, clampLimit, createDirectorState, nextSceneId as machineNext, removeScene as machineRemove, setLimit as machineSetLimit } from '@/lib/director/director'
 import type { DirectorState } from '@/lib/director/director'
 
-/**
- * 工作区导播台状态（FR-168 / ADR-035）。
+/** 
+ * 工作区导播台状态（ADR-035）。
  *
  * 导播台在多个**场景**间瞬切（OBS 式）。一个场景 = 一份命名的画布快照（卡片携 instanceId，
- * 复用 FR-167 跨实例预设结构），用户从既有用户预设导入为场景。导播台维护：
+ * 复用跨实例预设结构），用户从既有用户预设导入为场景。导播台维护：
  * - 场景定义（`scenes`，持久 localStorage）。
  * - 预热并发状态机（`machine`，纯逻辑见 `lib/director`）：激活唯一 + 受上限的预热集合 + LRU 驱逐。
  * - 轮播配置（开关 + 间隔）。

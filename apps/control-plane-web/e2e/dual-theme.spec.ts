@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-164 全局双主题（Jian 绿 / 青绿）+ 明暗模式 · 单机（Playwright + mock 模式）验收。
+/** 
+ *全局双主题（Jian 绿 / 青绿）+ 明暗模式 · 单机（Playwright + mock 模式）验收。
  * 覆盖：CSS 变量驱动、一处切换全站、持久（localStorage）。
- * 证据落 .tmp/acceptance/FR-164/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-164 双色主题 + 明暗模式切换 + 持久', async ({ page }) => {
+test('双色主题 + 明暗模式切换 + 持久', async ({ page }) => {
   await login(page)
 
   const primaryBefore = await page.evaluate(() =>
@@ -32,5 +32,5 @@ test('FR-164 双色主题 + 明暗模式切换 + 持久', async ({ page }) => {
   await expect(page.locator('html')).toHaveClass(/dark/)
   await expect.poll(() => page.evaluate(() => localStorage.getItem('theme'))).toBe('dark')
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-164/single-machine-dark-teal.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-dark-teal.png', fullPage: true })
 })

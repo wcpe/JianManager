@@ -1,5 +1,5 @@
-/**
- * 可编辑下拉框 Combobox（FR-072）：已知集下拉 + 允许自定义输入。
+/** 
+ * 可编辑下拉框 Combobox：已知集下拉 + 允许自定义输入。
  *
  * 用于「系统可获取项」（节点 / JDK / 核心类型 / MC 版本 / 群组 / 代理 / 模板 / 厂商 / 架构…）：
  * 既能从下拉选已知项，也能直接键入自定义值。基于 Radix Popover + 受控输入，
@@ -42,14 +42,14 @@ interface ComboboxProps {
   id?: string
   /** 触发器的可访问名。同一处出现多个 Combobox（例如下钻选择器的节点级与实例级）时用于区分。 */
   ariaLabel?: string
-  /**
-   * 受控查询回调（FR-336）：内部搜索框输入变化与展开重置时回传当前查询串，
+  /** 
+   * 受控查询回调：内部搜索框输入变化与展开重置时回传当前查询串，
    * 供服务端搜索场景（如群组成员候选）驱动远端 q；不传则行为完全不变。
    */
   onQueryChange?: (q: string) => void
 }
 
-/**
+/** 
  * 可编辑下拉框。点击展开下拉，输入即时过滤；允许自定义时列表底部提供「使用 "xxx"」入口，
  * 回车确认当前输入。空值时触发器显示 placeholder。
  */
@@ -72,7 +72,7 @@ export function Combobox({
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   const filtered = filterOptions(options, query)
-  // 有界渲染（FR-336）：超上限只挂前 100 个 DOM 节点，剩余以提示行引导继续输入。
+  // 有界渲染：超上限只挂前 100 个 DOM 节点，剩余以提示行引导继续输入。
   const { visible, hiddenCount } = visibleOptions(filtered)
   const offerCustom = allowCustom && shouldOfferCustom(filtered, query) && shouldOfferCustom(options, query)
   const known = isKnownValue(options, value)
@@ -113,7 +113,7 @@ export function Combobox({
   }
 
   return (
-    // FR-328：modal=true，Popover 自持滚动锁分片（body[data-scroll-locked] +1），
+    // modal=true，Popover 自持滚动锁分片（body[data-scroll-locked] +1），
     // 放行 portal 到 body 的下拉滚轮；Dialog 侧已 preventDefault outside 点击，不会误关弹窗。
     <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange} modal>
       <PopoverPrimitive.Trigger asChild>

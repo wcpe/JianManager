@@ -6,7 +6,7 @@ interface Row {
   name: string
 }
 
-describe('createCollection（FR-197 内存假后端集合）', () => {
+describe('createCollection（内存假后端集合）', () => {
   it('insert 自增 id，可 list/get', () => {
     const c = createCollection<Row>(() => [])
     const a = c.insert({ name: 'a' })

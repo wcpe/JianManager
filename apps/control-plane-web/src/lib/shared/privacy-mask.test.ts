@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { maskInstallId, maskMachineId, maskPlayerName } from './privacy-mask'
 
-describe('privacy-mask（FR-360）', () => {
+describe('privacy-mask', () => {
   it('maskPlayerName 短名不改、长名尾截断', () => {
     expect(maskPlayerName('Alex')).toBe('Alex')
     expect(maskPlayerName('VeryLongPlayerNameHere', 10)).toBe('VeryLongP…')

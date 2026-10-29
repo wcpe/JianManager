@@ -20,8 +20,8 @@ import { isRollingActive } from '@/lib/instances/instance-rolling'
 import type { RollingControlAction, RollingCreatePayload, RollingOp } from '@/lib/instances/instance-rolling'
 import type { BatchSelectedInstance } from '@/components/views/instances/InstanceBatchBar'
 
-/**
- * 集群级滚动/分批/灰度编排（FR-457）。
+/** 
+ * 集群级滚动/分批/灰度编排。
  *
  * 相比一次性扇出的批量操作，本对话框把目标按批大小推进、批间停留、失败即停、可按比例灰度，
  * 并在编排推进期间提供暂停/继续/取消与实时进度。逐台仍复用后端既有 per-instance RPC。

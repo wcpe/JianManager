@@ -16,7 +16,7 @@ import { buildKeyMap } from '@/lib/instances/instance-grouping'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
 import i18n, { changeLanguage } from '@/i18n'
 
-/**
+/** 
  * 资源面板的实例窗口上限。
  * 侧栏是**有界窗口**（服务端 `q` 搜索 + 截断提示），不是千级全量列举；
  * 千级浏览在 `/instances` 页（虚拟化 + 无限分页）里做。
@@ -26,7 +26,7 @@ const RESOURCE_PANEL_INSTANCE_LIMIT = 100
 /** 资源搜索防抖（键入落定后才下发服务端 q）。 */
 const RESOURCE_SEARCH_DEBOUNCE_MS = 300
 
-/**
+/** 
  * 工作区侧栏的应用接线层（ADR-103）。
  *
  * 视图本体是受控视图（见 components/views）；本层注入：折叠态与权限快照（store）、工作区解析与当前路径
@@ -45,7 +45,7 @@ export default function WorkspaceSidebar() {
   const permLoaded = usePermissionsStore((s) => s.loaded)
   const canReadInstances = !permLoaded || permAdmin || permNodes.has('instance.read')
 
-  // 底部偏好块的主题切换（FR-164）：与 ThemeSwitcher 接线层同一数据源。
+  // 底部偏好块的主题切换：与 ThemeSwitcher 接线层同一数据源。
   const colorTheme = useThemeStore((s) => s.colorTheme)
   const setColorTheme = useThemeStore((s) => s.setColorTheme)
   const themeMode = useThemeStore((s) => s.theme)
@@ -59,7 +59,7 @@ export default function WorkspaceSidebar() {
   const { data: nodes } = useNodes()
   const { data: topology } = useTopology()
 
-  /**
+  /** 
    * 侧栏实例窗口：**服务端搜索**（有界前 N 台 + 截断提示），不做本地全量列举。
    *
    * 分组维度不再走 `groupId` 参数：侧栏的「分组方式」是在**已加载窗口内**按维度分段展示
@@ -90,7 +90,7 @@ export default function WorkspaceSidebar() {
 
   const openFromPanel = useCallback(
     (inst: StorableInstance) => {
-      // FR-293：从侧栏进入同样计入「最近打开」（与选择器/直接路由同一入口）。
+      // 从侧栏进入同样计入「最近打开」（与选择器/直接路由同一入口）。
       recordRecentServer(inst)
       navigate(`/instances/${inst.id}`)
     },

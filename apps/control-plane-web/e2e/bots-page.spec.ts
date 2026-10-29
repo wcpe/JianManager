@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-147 Bot 规模化管理增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *Bot 规模化管理增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：舰队健康条多段（在线/连接中/异常/已停止）、分组维度（实例/节点/状态/行为）、
- * 每组批量操作下拉、创建 Bot。证据截图落 .tmp/acceptance/FR-147/。
+ * 每组批量操作下拉、创建 Bot。证据截图落 .tmp/acceptance。
  */
 
-test('FR-147 舰队健康多段 + 分组维度 + 批量操作', async ({ page }) => {
+test('舰队健康多段 + 分组维度 + 批量操作', async ({ page }) => {
   await login(page)
   await page.goto('/bots')
 
@@ -25,5 +25,5 @@ test('FR-147 舰队健康多段 + 分组维度 + 批量操作', async ({ page })
   await expect(page.getByRole('button', { name: '行为', exact: true })).toBeVisible()
   await expect(page.getByRole('combobox').filter({ hasText: '批量' }).first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-147/single-machine-bots.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-bots.png', fullPage: true })
 })

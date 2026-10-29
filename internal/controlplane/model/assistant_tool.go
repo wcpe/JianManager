@@ -2,20 +2,20 @@ package model
 
 import "time"
 
-// 助手工具调用的确认票据与执行回执（FR-516 §6）。
+// 助手工具调用的确认票据与执行回执（§6）。
 //
 // 两张表分开而不是合成一张：票据表达「用户是否批准了一次写入」，回执表达
 // 「这次调用实际发生了什么」。只读调用**不出票**（也就没有票据可关联），
 // 但它同样需要回执来串联审计——所以回执的 confirmation_id 必须可空。
 
-// 票据来源枚举（FR-516 §6.1：受限枚举，不是自由文本）。
+// 票据来源枚举（§6.1：受限枚举，不是自由文本）。
 const (
 	AssistantConfirmSourceChat = "chat"
-	// AssistantConfirmSourceJmat 预留给 FR-396 统一骨架，本 FR 不写入。
+	// AssistantConfirmSourceJmat 预留给统一骨架，本 FR 不写入。
 	AssistantConfirmSourceJmat = "jmat"
 )
 
-// 票据状态（FR-516 §6.1）。
+// 票据状态（§6.1）。
 const (
 	AssistantConfirmStatusPending     = "pending"
 	AssistantConfirmStatusApproved    = "approved"
@@ -25,15 +25,15 @@ const (
 	AssistantConfirmStatusInvalidated = "invalidated"
 )
 
-// 执行策略枚举（FR-516 §6.1）。
+// 执行策略枚举（§6.1）。
 const (
 	// AssistantPolicySelfConfirm 本 FR 唯一写入值：用户在聊天里自行确认。
 	AssistantPolicySelfConfirm = "self_confirm"
-	// AssistantPolicyPlatformGate 预留（FR-490～493 平台审批中心）。
+	// AssistantPolicyPlatformGate 预留（～493 平台审批中心）。
 	AssistantPolicyPlatformGate = "platform_gate"
 )
 
-// 回执结果枚举（FR-516 §6.2）。
+// 回执结果枚举（§6.2）。
 const (
 	AssistantReceiptInFlight = "in_flight"
 	AssistantReceiptOK       = "ok"
@@ -45,7 +45,7 @@ const (
 	AssistantReceiptUnverified = "unverified"
 )
 
-// AssistantConfirmation 一次写入调用的确认票据（FR-516 §6.1）。
+// AssistantConfirmation 一次写入调用的确认票据（§6.1）。
 //
 // 绑定字段（任一变化即失效，见 §6.3）：owner + conversation + run + call +
 // schema 指纹 + 策略版本 + 参数哈希 + 目标指纹 + 有效期。
@@ -93,7 +93,7 @@ type AssistantConfirmation struct {
 // TableName 表名。
 func (AssistantConfirmation) TableName() string { return "assistant_confirmations" }
 
-// AssistantReceipt 一次工具调用的执行回执（FR-516 §6.2）。
+// AssistantReceipt 一次工具调用的执行回执（§6.2）。
 //
 // 只读调用也写回执（confirmation_id 为 null）——否则审计里串不起只读调用。
 type AssistantReceipt struct {

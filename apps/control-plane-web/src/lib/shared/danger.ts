@@ -1,7 +1,7 @@
 import { useAuthStore } from '@/stores/auth'
 
-/**
- * 危险操作的「权限范围」分级（FR-059 角色门禁）。
+/** 
+ * 危险操作的「权限范围」分级（角色门禁）。
  *
  * 前端门禁仅用于在 UI 上提前禁用/提示越权操作，最终拒绝由 Control Plane
  * 的 RBAC 中间件强制（architecture-invariants）。这里按最低角色等级判定，
@@ -30,7 +30,7 @@ const SCOPE_MIN_ROLE: Record<DangerScope, number> = {
   platform: Role.PlatformAdmin,
 }
 
-/**
+/** 
  * 纯函数：给定角色等级与操作范围，判定是否允许执行危险操作。
  * 抽出便于单测；UI 侧由外壳用 auth store 的角色值包装成 hook。
  */
@@ -46,7 +46,7 @@ export interface DangerPermission {
   role: number | null
 }
 
-/**
+/** 
  * 判定当前登录用户能否执行指定范围的危险操作（hook 留应用侧——它要读 auth store）。
  *
  * @param scope 危险操作范围；省略时按组范围判定（最宽松）。

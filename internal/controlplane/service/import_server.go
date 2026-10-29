@@ -20,14 +20,14 @@ import (
 // 路由映射 422（不存在路径等按 spec 归 4xx）。
 var ErrImportRejected = errors.New("导入被拒绝")
 
-// ImportServerService 导入现有服务器（FR-302，见 ADR-069）：
+// ImportServerService 导入现有服务器（见 ADR-069）：
 // 探测（代理 Worker InspectServerDir）→ 就地接管 / 搬迁托管区 → 登记实例
 // （结构化启动同 provision 路径）+ 探到的内嵌 JDK 登记进 node_jdks（managed=false）。
 type ImportServerService struct {
 	db       *gorm.DB
 	pool     *cpgrpc.ClientPool
 	instance *InstanceService
-	// tasks 任务中心（FR-323）：migrate 搬迁经任务异步；nil 时回退同步（旧行为/测试）。
+	// tasks 任务中心：migrate 搬迁经任务异步；nil 时回退同步（旧行为/测试）。
 	tasks *TaskService
 }
 
@@ -36,7 +36,7 @@ func NewImportServerService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *Inst
 	return &ImportServerService{db: db, pool: pool, instance: instance}
 }
 
-// SetTaskService 注入任务中心（FR-323，main 接线）：非 nil 后 migrate 搬迁走后台任务。
+// SetTaskService 注入任务中心（main 接线）：非 nil 后 migrate 搬迁走后台任务。
 func (s *ImportServerService) SetTaskService(t *TaskService) { s.tasks = t }
 
 // ImportInspectRequest 探测请求（POST /instances/import/inspect）。
@@ -155,7 +155,7 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 		return inst, "", nil
 	}
 
-	// ── 搬迁（migrate）：先按目标托管区相对路径建实例，再异步搬迁（FR-323）——大目录跨盘拷贝
+	// ── 搬迁（migrate）：先按目标托管区相对路径建实例，再异步搬迁——大目录跨盘拷贝
 	// 可数十分钟，同步会阻塞 HTTP 请求。有任务中心即秒回 {instance, taskId}，搬迁在 CP 后台推进；
 	// 无任务中心（测试）回退同步搬迁（旧行为）。
 	rel := allocWorkDirRel(req.Name) // var/servers/<slug>-<shortid>
@@ -212,7 +212,7 @@ func (s *ImportServerService) createImportedInstance(req ImportServerRequest, sp
 	})
 }
 
-// migrateOnWorker 委托 Worker 搬迁原目录到托管区 slug（stage 非 nil 上报阶段，FR-323）。
+// migrateOnWorker 委托 Worker 搬迁原目录到托管区 slug（stage 非 nil 上报阶段）。
 func (s *ImportServerService) migrateOnWorker(ctx context.Context, client *cpgrpc.Client, path, slug string, stage func(int, string)) error {
 	if stage != nil {
 		stage(20, "搬迁目录到托管区…")

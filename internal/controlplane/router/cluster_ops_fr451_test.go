@@ -13,7 +13,7 @@ import (
 )
 
 // makeMCInstanceInGroup 插入一个 MC 语义实例（minecraft_java/backend）并分配到组，返回 ID。
-// FR-451 画像门控：仅 MC 语义实例才有 startup.*/props.* 受管项。
+// 画像门控：仅 MC 语义实例才有 startup.*/props.* 受管项。
 func makeMCInstanceInGroup(t *testing.T, db *gorm.DB, nodeID, groupID uint, name string, status model.InstanceStatus) uint {
 	t.Helper()
 	inst := &model.Instance{
@@ -30,7 +30,7 @@ func makeMCInstanceInGroup(t *testing.T, db *gorm.DB, nodeID, groupID uint, name
 	return inst.ID
 }
 
-// TestConfigSurface_ReadAndUpdate 覆盖 FR-451：受管项清单读 + 内联写入启动命令并持久化。
+// TestConfigSurface_ReadAndUpdate 覆盖：受管项清单读 + 内联写入启动命令并持久化。
 func TestConfigSurface_ReadAndUpdate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTestDB(t)
@@ -60,7 +60,7 @@ func TestConfigSurface_ReadAndUpdate(t *testing.T) {
 	require.Equal(t, v, got.StartCommand, "内联写入应持久化到实例启动命令")
 }
 
-// TestConfigSurface_NonMCSemanticEmpty 覆盖 FR-451 验收 #8：generic 实例不呈现 MC 专有配置项。
+// TestConfigSurface_NonMCSemanticEmpty 覆盖验收 #8：generic 实例不呈现 MC 专有配置项。
 func TestConfigSurface_NonMCSemanticEmpty(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTestDB(t)
@@ -83,7 +83,7 @@ func TestConfigSurface_NonMCSemanticEmpty(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "generic 实例写入 MC 受管项应被拒")
 }
 
-// TestConfigSurface_StartupFileRejected 覆盖 FR-451：startup.* 不支持文件引用来源。
+// TestConfigSurface_StartupFileRejected 覆盖：startup.* 不支持文件引用来源。
 func TestConfigSurface_StartupFileRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTestDB(t)
@@ -99,7 +99,7 @@ func TestConfigSurface_StartupFileRejected(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
 }
 
-// TestInstanceRolling_CreateAndGet 覆盖 FR-457：滚动编排端点可达 + 会话可查。
+// TestInstanceRolling_CreateAndGet 覆盖：滚动编排端点可达 + 会话可查。
 func TestInstanceRolling_CreateAndGet(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTestDB(t)
@@ -133,7 +133,7 @@ func TestInstanceRolling_CreateAndGet(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
-// TestConfigBaseline_Endpoints 覆盖 FR-458：基线创建 / 列出 / 漂移检测端点可达。
+// TestConfigBaseline_Endpoints 覆盖：基线创建 / 列出 / 漂移检测端点可达。
 func TestConfigBaseline_Endpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTestDB(t)
@@ -159,7 +159,7 @@ func TestConfigBaseline_Endpoints(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
 
-// TestInstanceRolling_ScopeIsolation 覆盖 FR-457 越权修复（IDOR）：非管理员不能读取/控制
+// TestInstanceRolling_ScopeIsolation 覆盖越权修复（IDOR）：非管理员不能读取/控制
 // 目标不在其可访问集合内的编排会话（以 404 隐藏存在性），平台管理员放行。
 func TestInstanceRolling_ScopeIsolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -234,7 +234,7 @@ func makeInstanceInGroups(t *testing.T, db *gorm.DB, nodeID, userGroupID, orgGro
 	return id
 }
 
-// TestConfigBaseline_ScopeIsolation 覆盖 FR-458 越权修复：非管理员 list/get/drift/converge 受 scope 过滤。
+// TestConfigBaseline_ScopeIsolation 覆盖越权修复：非管理员 list/get/drift/converge 受 scope 过滤。
 //
 // 关键：`group:<id>` 的 id 是组织树分组（ADR-033 InstanceGroupNode），不是用户组（ADR-004 GroupInstance）。
 // 旧版本用「用户组 id」当 scope，实际解析为组织树中不存在的节点（空集），使隔离断言以空集空转通过。
@@ -384,7 +384,7 @@ func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
 }
 
-// TestConfigBaseline_CreateDeleteScopeGuard 覆盖 FR-458 越权修复：非管理员不能创建/覆盖 scope 超出
+// TestConfigBaseline_CreateDeleteScopeGuard 覆盖越权修复：非管理员不能创建/覆盖 scope 超出
 // 可访问范围的基线（如 scopeKey:"all"），也不能删除 scope 外基线（以 404 隐藏存在性）。
 func TestConfigBaseline_CreateDeleteScopeGuard(t *testing.T) {
 	gin.SetMode(gin.TestMode)

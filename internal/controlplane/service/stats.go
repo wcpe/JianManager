@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-527 对外只读统计契约的服务层实现。
+// 对外只读统计契约的服务层实现。
 //
 // 边界（最重要，见 docs/specs/external-stats-contract/spec.md §2）：
 // **只出通道与基础设施维度，不出任何业务指标**。
@@ -428,7 +428,7 @@ func NormalizeStatsCrashDays(days int) (int, *StatsError) {
 
 // ── 服务 ──────────────────────────────────────────────────────────────
 
-// StatsService 对外只读统计契约（FR-527）。
+// StatsService 对外只读统计契约。
 type StatsService struct {
 	db *gorm.DB
 	// probeConnected 探针连接判定。nil 时一律视为未连入（仅影响 overview 的 probes 计数）。
@@ -1061,7 +1061,7 @@ func parseStatsLogLevel(raw string) (model.LogLevel, bool) {
 
 // QueryCrashTrend 返回崩溃趋势（按天 + 按根因）。
 //
-// 数据源是独立汇总表 instance_crash_stats（FR-470），**不受单次崩溃快照的 K=5 滚动裁剪影响**。
+// 数据源是独立汇总表 instance_crash_stats，**不受单次崩溃快照的 K=5 滚动裁剪影响**。
 func (s *StatsService) QueryCrashTrend(q StatsCrashQuery, scope StatsScope) (StatsCrashTrendResponse, error) {
 	out := StatsCrashTrendResponse{ByDay: []StatsCrashDay{}, ByReason: []StatsCrashReason{}}
 	if !scope.allowsAnyInstance() {
@@ -1120,10 +1120,10 @@ func (s *StatsService) QueryCrashTrend(q StatsCrashQuery, scope StatsScope) (Sta
 // statsChangeStatusToSession 把契约状态名映射到滚动编排会话状态集合。
 //
 // 【数据源说明】契约（schemas.yaml#/ChangeSummary）描述的是「配置交付变更单」，
-// 对应 FR-531 的 ConfigDeliveryOrder 状态机。该模型**已交付**（v0.24.0，见
+// 对应的 ConfigDeliveryOrder 状态机。该模型**已交付**（v0.24.0，见
 // model/config_delivery.go 与 service/config_delivery.go 的完整状态机）。
 //
-// 但本函数的 adapter 仍以 FR-457 的 InstanceRollingOp（滚动/分批/灰度编排会话）
+// 但本函数的 adapter 仍以的 InstanceRollingOp（滚动/分批/灰度编排会话）
 // 为数据源，即仪表盘「变更」列表当前展示的是**滚动编排会话**而非配置交付单。
 // 保持现状的原因：切换数据源会改变该列表的语义与用户可见内容（哪些变更算「最近变更」），
 // 属产品口径决策，不宜在未确认的情况下顺手改。
@@ -1247,7 +1247,7 @@ func statsChangeSummaryOf(op model.InstanceRollingOp) StatsChangeSummary {
 		TotalTargets: op.Requested,
 		Succeeded:    op.Succeeded,
 		Failed:       op.Failed,
-		// Deferred 是 FR-531 的「离线/暂不可达，不计入失败率」概念；
+		// Deferred 是的「离线/暂不可达，不计入失败率」概念；
 		// 滚动编排没有该分类，恒为 0（不编造数据）。
 		Deferred:  0,
 		CreatedAt: created,

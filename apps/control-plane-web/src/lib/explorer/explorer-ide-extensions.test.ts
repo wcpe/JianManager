@@ -19,7 +19,7 @@ describe('ideKeymap', () => {
   it('never binds the save shortcut (Mod-s) so Ctrl+S stays the history-save key', () => {
     for (const k of keys) {
       expect(k).toBeDefined()
-      // 不得包含独立的 Mod-s（保存键由 FR-070 CodeEditor 拦截）。
+      // 不得包含独立的 Mod-s（保存键由CodeEditor 拦截）。
       expect(k).not.toBe('Mod-s')
       expect(k).not.toBe('Ctrl-s')
       expect(k).not.toBe('Cmd-s')

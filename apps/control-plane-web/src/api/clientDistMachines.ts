@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 机器级更新清单与钻取（FR-426 mock 契约，真栈按 spec `client-dist-machine-drilldown` 落地）。
+/** 
+ * 机器级更新清单与钻取（mock 契约，真栈按 spec `client-dist-machine-drilldown` 落地）。
  * 「用户」= 机器（machineId 去重，ADR-023 不可信仅近似）；明细 14 天窗内精确、超窗小时桶近似。
  */
 
-/**
- * 机器清单契约（FR-426）已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+/** 
+ * 机器清单契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { ClientMachineSummary, ClientMachineEvent, ClientMachineListResponse, ClientMachineEventsResponse, MachineSortField } from '@/lib/client-dist/client-dist-machines-contracts'
 import type { ClientMachineListResponse, ClientMachineEventsResponse, MachineSortField } from '@/lib/client-dist/client-dist-machines-contracts'

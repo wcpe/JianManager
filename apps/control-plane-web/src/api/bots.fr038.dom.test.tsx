@@ -6,7 +6,7 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { useBots, useBotBatch, useBotSummary } from './bots'
 
-/** FR-038：前端 hook/DOM 绑定规模化 Bot API（分页列表、聚合摘要、批量操作）。 */
+/** 前端 hook/DOM 绑定规模化 Bot API（分页列表、聚合摘要、批量操作）。 */
 function BotScaleHarness() {
   const [lastResult, setLastResult] = useState('未执行')
   const summary = useBotSummary({ groupBy: 'instance' })
@@ -45,7 +45,7 @@ function BotScaleHarness() {
   )
 }
 
-describe('FR-038 Bot 规模化 API 前端绑定', () => {
+describe('Bot 规模化 API 前端绑定', () => {
   it('读取聚合摘要和分页列表，并通过批量接口更新当前筛选范围', async () => {
     loginMockUser()
     renderWithProviders(<BotScaleHarness />)

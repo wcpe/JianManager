@@ -1,9 +1,9 @@
-/**
+/** 
  * @file GroupMembersDialogView：用户组成员管理的受控视图，取数/防抖/增删请求由应用容器负责。
  * @input Combobox/Button/Dialog/滚动壳原语、翻译上下文
  * @output GroupMembersDialogView、GroupMembersDialogViewProps、GroupMemberView、GroupMemberCandidate
  * @sync apps/control-plane-web/src/components/GroupMembersDialog.tsx、apps/control-plane-web/src/pages/GroupsPage.tsx
- * @since FR-508（组件受控化迁包；原 FR-156，候选服务端搜索为 FR-336）
+ * @since（组件受控化迁包；原候选服务端搜索为）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -35,7 +35,7 @@ export interface GroupMemberCandidate {
   username: string
 }
 
-/**
+/** 
  * 受控边界：成员列表与候选窗口经 props 注入，键入经 `onQueryChange` 上报（防抖与请求是容器策略），
  * 加入/移除经 `onAdd`/`onRemove` 上报，关闭经 `onClose` 上报。
  */
@@ -62,9 +62,9 @@ export interface GroupMembersDialogViewProps {
   onClose: () => void
 }
 
-/**
- * 管理用户组成员：列出现有成员可移除 + 选择用户加入（FR-156，兑现 FR-003）。
- * 候选走服务端搜索（FR-336）：候选窗口由容器按同一上限注入，Combobox 键入经容器 debounce 300ms 下发 q；
+/** 
+ * 管理用户组成员：列出现有成员可移除 + 选择用户加入（兑现）。
+ * 候选走服务端搜索：候选窗口由容器按同一上限注入，Combobox 键入经容器 debounce 300ms 下发 q；
  * 已选成员列表来自调用方注入的实时组数据，与候选加载解耦、恒显。
  */
 export function GroupMembersDialogView({

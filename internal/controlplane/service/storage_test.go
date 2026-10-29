@@ -81,7 +81,7 @@ func TestStorage_Overview(t *testing.T) {
 	require.Equal(t, 2, ov.TotalFiles)
 }
 
-// Overview 的归档分布按 storage_state 聚合（FR-045 归档可见）。
+// Overview 的归档分布按 storage_state 聚合（归档可见）。
 func TestStorage_Overview_ArchiveSummary(t *testing.T) {
 	svc, _ := newStorageTestService(t)
 	require.NoError(t, svc.db.Create(&model.Asset{Type: model.AssetTypeCore, SHA256: "a", Size: 100, StorageState: model.AssetStorageHot}).Error)

@@ -24,7 +24,7 @@ const backupsSubdir = "var/backups"
 
 const backupChecksumAlgo = "sha256"
 
-// backupRuntimeExcludes 备份时排除的运行态/可再生文件，与 FR-036 一键复制的排除一致。
+// backupRuntimeExcludes 备份时排除的运行态/可再生文件，与一键复制的排除一致。
 // 关键：运行中的服务端对 world/session.lock 持有独占锁，Windows 上读它会报
 // 「另一进程锁定了文件」导致整次备份失败；logs/cache/usercache 等为可再生运行态，无需入备份。
 var backupRuntimeExcludes = []string{"session.lock", "logs", "cache", "usercache.json", "*.pid", "libraries/.cache"}
@@ -77,7 +77,7 @@ func (s *Server) CreateBackup(ctx context.Context, req *workerpb.CreateBackupReq
 		ChecksumAlgo:   backupChecksumAlgo,
 	}
 
-	// 远程存储：打包完成后上传归档（FR-057）。本地备份（storage 空或 local）不上传。
+	// 远程存储：打包完成后上传归档。本地备份（storage 空或 local）不上传。
 	if spec := req.Storage; spec != nil && spec.Type != "" && spec.Type != storage.TypeLocal {
 		backend, berr := storage.New(specToConfig(spec))
 		if berr != nil {

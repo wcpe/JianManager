@@ -18,11 +18,11 @@ import (
 // 须大于 Worker 侧等探针回执的 5s（pluginCommandTimeout），留网络与排队余量（与 pluginExecTimeout 同量级）。
 const serverStateQueryTimeout = 8 * time.Second
 
-// ServerStateService 按需查询某实例的全量 Bukkit 内部状态（FR-076，见 ADR-016）。
+// ServerStateService 按需查询某实例的全量 Bukkit 内部状态（见 ADR-016）。
 //
-// 经各实例的 ServerProbe 探针反向 WS 桥取回（复用 FR-065 的 QueryServerState 通道）：
+// 经各实例的 ServerProbe 探针反向 WS 桥取回（复用的 QueryServerState 通道）：
 // CP 把 instance 解析为 node，经 Worker 的 gRPC QueryServerState 同步取回探针采集的全状态 JSON。
-// 轻指标（TPS/堆/在线 历史时序）仍走 /metrics（FR-060/061）；本服务仅服务前端「开 tab/手动刷新」的全量快照。
+// 轻指标（TPS/堆/在线 历史时序）仍走 /metrics（061）；本服务仅服务前端「开 tab/手动刷新」的全量快照。
 //
 // state_json 是探针手拼的 JSON 字符串，CP **不解析**（json.RawMessage 透传给前端按结构渲染），
 // 探针状态字段演进无需改 CP。探针未连入/采集超时一律优雅降级（connected/available=false），不向上抛错。

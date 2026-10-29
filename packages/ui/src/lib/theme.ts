@@ -1,5 +1,5 @@
-/**
- * 主题纯逻辑（FR-164 全局双主题 + 明暗）。
+/** 
+ * 主题纯逻辑（全局双主题 + 明暗）。
  *
  * 主题色（colorTheme: indigo|teal|ocean|violet|sunset）与明暗（mode: light|dark|system）**正交**，
  * 各自 localStorage 持久。主题色从 2 种扩到 5 种后，每套主题在 index.css 拥有「品牌 + 结构」完整
@@ -21,7 +21,7 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 /** 解析后的明暗（system 落到具体 light/dark）。 */
 export type ResolvedMode = 'light' | 'dark'
 
-/** 明暗持久键（沿用 FR-026/FR-132 既有 'theme'，避免迁移既有用户偏好）。 */
+/** 明暗持久键（沿用既有 'theme'，避免迁移既有用户偏好）。 */
 export const MODE_KEY = 'theme'
 
 /** 主题色持久键。 */
@@ -39,7 +39,7 @@ export function resolveMode(value: string | null | undefined): ThemeMode {
   return value === 'light' || value === 'dark' || value === 'system' ? value : 'system'
 }
 
-/**
+/** 
  * 主题色 → `<html data-theme>` 属性值决策：
  * indigo=null（移除属性，回落 :root 根品牌变量）；其余 → 自身字符串（命中对应 [data-theme] 覆盖组）。
  */
@@ -89,7 +89,7 @@ export function applyColorTheme(theme: ColorTheme): void {
   else root.setAttribute('data-theme', attr)
 }
 
-/**
+/** 
  * 从 localStorage 读取主题色 + 明暗并立即套到 `<html>`。
  * 由 app 入口（早于 React 挂载）调用以消除首屏闪烁，并保证登录/初始化页也套主题。
  */

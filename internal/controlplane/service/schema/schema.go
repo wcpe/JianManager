@@ -1,4 +1,4 @@
-// Package schema 提供 FR-031 配置文件 schema 元数据 + 跨文件一致性校验。
+// Package schema 提供配置文件 schema 元数据 + 跨文件一致性校验。
 package schema
 
 import (
@@ -215,7 +215,7 @@ func VelocityTomlModel() ModelSchema {
 	}
 }
 
-// BungeeCordYAMLModel BungeeCord config.yml 的关键项（FR-449 §2.2.4）。
+// BungeeCordYAMLModel BungeeCord config.yml 的关键项（§2.2.4）。
 //
 // ## 键名必须与 `parseFlatYAML` 的产物一致
 //

@@ -12,7 +12,7 @@ import { FAVORITES_KEY } from '@/lib/console/server-selection'
 import { PINNED_TOOLS_KEY } from '@/lib/console/sidebar-tools'
 import WorkspaceSidebar from './WorkspaceSidebar'
 
-/**
+/** 
  * 数据源整模块 mock（重构件后）：侧栏的实例窗口 / 计数 / 节点与拓扑成员都来自这些 hook，
  * 用固定小数据集断言结构，不依赖假后端的规模与排序（那些由各页自己的 dom 用例守）。
  */
@@ -52,7 +52,7 @@ vi.mock('@/api/topology', () => ({
   }),
 }))
 vi.mock('@/api/instanceGroups', () => ({
-  // FR-509：侧栏「分组」段读后端组织分组树。这里给一棵三层小树，断言层级能渲染出来。
+  // 侧栏「分组」段读后端组织分组树。这里给一棵三层小树，断言层级能渲染出来。
   useInstanceGroups: () => ({
     data: [
       { id: 100, uuid: 'g-root', name: '晨星集群', parentId: null, sort: 0, instanceCount: 3, memberInstanceIds: [] },
@@ -88,7 +88,7 @@ function loginAsGroupAdmin() {
   })
 }
 
-/**
+/** 
  * 新工作区侧栏（重构件后）。
  *
  * 只锁**结构与行为契约**（段顺序、工具收纳、资源面板数据联动、置顶、折叠态、权限收敛），不测视觉。
@@ -314,9 +314,9 @@ describe('WorkspaceSidebar 工作区侧栏（重构件）', () => {
     const bottom = container.querySelector('[data-slot="side-nav-bottom"]') as HTMLElement
     const preferences = bottom.querySelector('[data-slot="console-sidebar-preferences"]') as HTMLElement
     expect(preferences).toBeInTheDocument()
-    // FR-164：主题色与明暗切换当前只在侧栏底部（/settings 的「外观」明说不重复主题色）。
+    // 主题色与明暗切换当前只在侧栏底部（/settings 的「外观」明说不重复主题色）。
     expect(within(preferences).getByRole('button', { name: '切换主题' })).toBeInTheDocument()
-    // FR-132：版本号 + 开源许可入口。
+    // 版本号 + 开源许可入口。
     expect(within(preferences).getByText(/^v\d/)).toBeInTheDocument()
     expect(within(preferences).getByRole('link', { name: '开源协议' })).toHaveAttribute('href', '/licenses')
   })

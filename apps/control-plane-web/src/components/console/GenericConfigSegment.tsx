@@ -3,8 +3,8 @@ import { GenericConfigSegment as GenericConfigSegmentView } from '@/components/v
 import { useConfigDiscover } from '@/api/configs'
 import ConfigFileEditor from '@/components/config-explorer/ConfigFileEditor'
 
-/**
- * 结构化配置编辑分段的取数接线层（FR-451 衔接，FR-449/450 复用）。
+/** 
+ * 结构化配置编辑分段的取数接线层（衔接450 复用）。
  *
  * 左栏「发现 → 选中」已入包；右侧编辑器留应用侧（`ConfigFileEditor` 含 schema 表单 /
  * 原文双模式与配置版本能力），经 renderEditor 注入。

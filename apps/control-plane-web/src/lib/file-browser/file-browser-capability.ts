@@ -1,5 +1,5 @@
-/**
- * 文件浏览场景 Capability（FR-378）。
+/** 
+ * 文件浏览场景 Capability。
  * 描述各入口能做什么，由 UnifiedExplorerShell / 调用方消费；不删业务能力、不硬套。
  */
 
@@ -22,7 +22,7 @@ export interface ExplorerCapability {
   canWrite: boolean
   /** 是否允许上传。 */
   canUpload: boolean
-  /** 是否允许 chmod（FR-373）；仅实例写路径有意义。 */
+  /** 是否允许 chmod；仅实例写路径有意义。 */
   canChmod: boolean
   /** 是否展示下载。 */
   canDownload: boolean
@@ -67,7 +67,7 @@ export function storageBrowseCapability(): ExplorerCapability {
   }
 }
 
-/** 客户端分发只读预览（FR-214）。 */
+/** 客户端分发只读预览。 */
 export function clientDistBrowseCapability(actions?: FileBrowserAction[]): ExplorerCapability {
   return {
     id: 'client-dist-browse',

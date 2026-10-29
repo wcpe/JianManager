@@ -7,7 +7,7 @@ import { useInstanceMetrics } from '@/api/metrics'
 import { resolveCapabilities } from '@/lib/instances/capabilities'
 import { InstanceWorktableCard as InstanceWorktableCardView } from '@/components/views/instances/InstanceWorktableCard'
 
-/**
+/** 
  * 实例工作台卡的应用接线层（ADR-103 b 范式）。
  *
  * 卡本体是受控视图（见 components/views）；本层承担四件它不该自己做的事：路由跳转（列表页可自定义、
@@ -39,7 +39,7 @@ export function InstanceWorktableCard({
   menu: ReactNode
   /** 打开实例控制台；默认跳转实例深链，列表页可传入自定义跳转。 */
   onOpen?: (id: number) => void
-  /**
+  /** 
    * 启停/重启动作（由页面注入）。
    *
    * 【为什么收归页面】此前本层自己 `useStartInstance().mutate()`，与列表视图各写一条路径：
@@ -64,11 +64,11 @@ export function InstanceWorktableCard({
   const openConsole = onOpen ?? ((id: number) => navigate(`/instances/${id}`))
 
   const running = inst.status === 'RUNNING'
-  // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮直接禁用，不再只靠琥珀文案劝阻。
+  // 搭建中硬性禁启：provision 未终态期间启动按钮直接禁用，不再只靠琥珀文案劝阻。
   const provisioning = isProvisioningInstance(inst)
   // 仅运行态拉实时指标；停机/过渡态不轮询（省请求，避免离线 422）。
   const { data: metrics } = useInstanceMetrics(inst.id, running)
-  // 代理图标由画像 `bcTopology` 能力判定（FR-445），取代写死的 `inst.role === 'proxy'`。
+  // 代理图标由画像 `bcTopology` 能力判定，取代写死的 `inst.role === 'proxy'`。
   const isProxy = resolveCapabilities(inst).capabilities.includes('bcTopology')
 
   return (
@@ -98,7 +98,7 @@ export function InstanceWorktableCard({
       onContextMenu={onContextMenu ? (x, y) => onContextMenu(inst, x, y) : undefined}
       selected={selected}
       onToggleSelect={onToggleSelect}
-      /*
+      /* 
         身份徽章的数据与开关：与表格身份列**完全同源**——
         env/freeTags 都由同一组取数函数推导，开关也跟随同一份 visibleColumns。
         这样两个视图对同一台实例的「类型/角色/环境/标签」呈现不会再分叉。

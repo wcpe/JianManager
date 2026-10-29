@@ -186,7 +186,7 @@ func TestSelfUpdateUpgradeNode_UsesCachedWorkerAssetURL(t *testing.T) {
 	require.True(t, fake.got.AllowInsecure, "CP-local http 下载应沿用 allow_insecure")
 }
 
-// ─── FR-278/ADR-062：内嵌 Worker 资产物化 ───
+// ───ADR-062：内嵌 Worker 资产物化 ───
 
 // embedStubFor 给 service 注入内嵌清单与字节桩（shaOverride 非空时清单指纹按其声明，用于错位注入）。
 func embedStubFor(svc *SelfUpdateService, manifestVersion, goos, goarch, body string, shaOverride string) {

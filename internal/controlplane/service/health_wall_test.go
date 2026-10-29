@@ -283,7 +283,7 @@ func TestHealthWall_NoWorkerRPCAndBoundedQueries(t *testing.T) {
 	assert.LessOrEqual(t, grown, int32(3), "健康墙查询应为常数级有界（无 Worker RPC）")
 }
 
-// FR-461/FR-459 验收 7：假死实例状态仍是 RUNNING（进程在、只是不响应），只按 status 分级
+// 验收 7：假死实例状态仍是 RUNNING（进程在、只是不响应），只按 status 分级
 // 会让它在健康墙上完全不可见；健康墙须把「RUNNING 但 status_reason 非空**且来源为心跳巡检**」
 // 计为降级——CP 写入的失败原因（来源非 worker）虽也是 RUNNING+非空原因，却不是假死，不得计入。
 func TestHealthWall_DegradedCountsHangingInstances(t *testing.T) {

@@ -6,8 +6,8 @@ import type { ClientDistIpAnalysis, ClientDistPlayerAnalysis } from '@/lib/clien
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime } from '@/components/views/client-dist/security-format'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
-/**
- * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（FR-430 / ADR-088）。
+/** 
+ * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（ADR-088）。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
  * 受控视图（ADR-103 a 范式）：不取数、不碰路由查询、不弹 toast——
@@ -128,7 +128,7 @@ export function PlayerAnalysisTabView({ rows, isLoading, isError, truncated }: P
   )
 }
 
-/**
+/** 
  * 「已截断」提示行。
  *
  * 这两个聚合表按固定 `limit: 200` 取数且没有翻页器——命中超过上限时列表是被截断的，

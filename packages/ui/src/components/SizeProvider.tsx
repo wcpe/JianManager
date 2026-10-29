@@ -1,7 +1,7 @@
 import * as React from 'react'
 
-/**
- * 尺寸上下文（FR-502 阶段 6）：把「界面紧凑度」沿组件树级联下去。
+/** 
+ * 尺寸上下文（阶段 6）：把「界面紧凑度」沿组件树级联下去。
  *
  * 背景：运维台需要在同一套页面上支持两种密度——监控墙/大屏偏宽松，实例与日志列表
  * 偏紧凑（一屏多放几行）。此前这只能靠调用点逐个传 `size`，于是同一页里
@@ -20,14 +20,14 @@ import * as React from 'react'
 /** 界面紧凑度：`compact` 用于列表/日志等密集场景，`default` 为常规排版。 */
 export type Density = 'compact' | 'default'
 
-/**
+/** 
  * 尺寸上下文。取值为 `null` 表示「上层没有任何 Provider」——
  * 与「Provider 显式给了 default」区分开，后者表示调用方明确要求常规密度。
  */
 export const SizeContext = React.createContext<Density | null>(null)
 SizeContext.displayName = 'SizeContext'
 
-/**
+/** 
  * 密度 Provider：包住一棵子树即可切换其中所有组件的紧凑度。
  *
  * 刻意不渲染任何 DOM（纯上下文）——密度是行为提示而非布局盒，
@@ -45,7 +45,7 @@ export function SizeProvider({
   return <SizeContext.Provider value={density}>{children}</SizeContext.Provider>
 }
 
-/**
+/** 
  * 读取当前密度。
  *
  * @param explicit 组件自身的显式密度入参；传了就压过上下文（调用点永远说了算）

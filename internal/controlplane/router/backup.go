@@ -50,9 +50,9 @@ func (h *BackupHandler) List(c *gin.Context) {
 
 type createBackupRequest struct {
 	Name string `json:"name" binding:"required"`
-	// Incremental 为 true 时创建增量备份（FR-056），挂到该实例最近一次已完成备份后形成链。
+	// Incremental 为 true 时创建增量备份，挂到该实例最近一次已完成备份后形成链。
 	Incremental bool `json:"incremental"`
-	// StorageID 指定远程存储后端；缺省存于节点本地（FR-057）。
+	// StorageID 指定远程存储后端；缺省存于节点本地。
 	StorageID *uint `json:"storageId"`
 }
 

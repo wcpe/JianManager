@@ -23,12 +23,12 @@ import (
 )
 
 var (
-	// ErrArtifactMigrationInFlight 已有迁移任务在途（一次仅允许一个，FR-348）。
+	// ErrArtifactMigrationInFlight 已有迁移任务在途（一次仅允许一个）。
 	ErrArtifactMigrationInFlight = errors.New("已有制品迁移任务在途，同一时间仅允许一个迁移任务")
 	// ErrArtifactMigrationTargetUnavailable 目标渠道真连探测失败，发起被拒（快失败守卫）。
 	ErrArtifactMigrationTargetUnavailable = errors.New("目标渠道连通性探测失败")
 	// ErrArtifactStorageMigrationInFlight 迁移在途禁止删除任何存储渠道（源集合由逐条记录
-	// 自述、随迁移动态收敛，静态判定「此渠道无关」不可靠，故粗粒度全禁，FR-348）。
+	// 自述、随迁移动态收敛，静态判定「此渠道无关」不可靠，故粗粒度全禁）。
 	ErrArtifactStorageMigrationInFlight = errors.New("存量迁移任务在途，禁止删除存储渠道")
 )
 
@@ -40,12 +40,12 @@ const (
 	artifactMigrationFailureListCap = 500
 )
 
-// ArtifactMigrationService 制品存量迁移服务（FR-348，底座见 ADR-073）。
+// ArtifactMigrationService 制品存量迁移服务（底座见 ADR-073）。
 //
 // 把全部 client-file 存量逐条搬到目标渠道：源读取（sha256 复核）→ 写入目标 →
 // **先改 Asset 记录 → 再删源**。位置由记录自述（ADR-073），迁一条改一条，随时中断
 // 不破读取；重新发起同目标迁移 = 幂等续跑（已在目标的跳过）。执行体为 CP 后台
-// goroutine（沿 FR-323 形态，NodeID=0），进度/强停接入全局任务中心。
+// goroutine（沿形态，NodeID=0），进度/强停接入全局任务中心。
 type ArtifactMigrationService struct {
 	db       *gorm.DB
 	root     *dataroot.Root
@@ -172,7 +172,7 @@ func (s *ArtifactMigrationService) run(taskID string, target *model.ArtifactStor
 			s.markTaskFailed(taskID, "迁移执行超时中断；重新发起同目标迁移即续跑（已完成的制品自动跳过）")
 			return
 		}
-		// 强停（FR-227 复用）：NodeID=0 的取消由任务中心直接置 canceled，此处逐条检查退出。
+		// 强停（复用）：NodeID=0 的取消由任务中心直接置 canceled，此处逐条检查退出。
 		if s.taskHalted(taskID) {
 			slog.Info("制品迁移已被停止，循环退出", "taskId", taskID)
 			return
@@ -209,7 +209,7 @@ func (s *ArtifactMigrationService) markTaskFailed(taskID, reason string) {
 	}
 }
 
-// migrateOne 单条搬运，顺序不可变（FR-348）：源读取（sha256 复核）→ 写目标 →
+// migrateOne 单条搬运，顺序不可变：源读取（sha256 复核）→ 写目标 →
 // **先改记录 → 再删源**。返回 err = 该条失败（不删源、记录不动、读取不受影响）。
 func (s *ArtifactMigrationService) migrateOne(ctx context.Context, a *model.Asset, target *model.ArtifactStorageChannel, targetStore blobstore.Store) error {
 	src, err := s.channels.StoreForAsset(a)
@@ -260,7 +260,7 @@ func (s *ArtifactMigrationService) migrateOne(ctx context.Context, a *model.Asse
 	}
 
 	// 先改记录（乐观守卫：仅记录仍指向读取时的源位置才生效）。目标副本不回收——
-	// 内容寻址残留无害归 FR-349 对账；主动回收在「双渠道误配同一物理桶」下反有删源风险。
+	// 内容寻址残留无害归对账；主动回收在「双渠道误配同一物理桶」下反有删源风险。
 	newBackend, newChannelID, newState := model.AssetBackendLocal, uint(0), model.AssetStorageHot
 	if target.Type == model.ArtifactStorageS3 {
 		newBackend, newChannelID, newState = model.AssetBackendS3, target.ID, model.AssetStorageExternal
@@ -281,7 +281,7 @@ func (s *ArtifactMigrationService) migrateOne(ctx context.Context, a *model.Asse
 
 	// 再删源。防呆：源/目标指向同一物理位置（两 s3 渠道误配同 endpoint/bucket/prefix）时
 	// 跳过——CAS 键相同即同一对象，删源=删刚写的目标副本。删源失败不判该条失败：
-	// 记录已指向新位置读取正确，残留归 FR-349 对账（与既有删除尽力语义一致）。
+	// 记录已指向新位置读取正确，残留归对账（与既有删除尽力语义一致）。
 	if skip, why := s.sourceSharesTargetLocation(a, target); skip {
 		slog.Warn("迁移跳过删源（源与目标同物理位置）", "asset", a.ID, "reason", why)
 	} else if derr := src.Delete(ctx, a.RelPath); derr != nil {
@@ -323,7 +323,7 @@ func (s *ArtifactMigrationService) updateRegistry(taskID string, fields map[stri
 	}
 }
 
-// recordFailure 落一条失败明细（sha256+原因，FR-348 可查可重试的失败面）。
+// recordFailure 落一条失败明细（sha256+原因可查可重试的失败面）。
 func (s *ArtifactMigrationService) recordFailure(taskID string, a *model.Asset, cause error) {
 	f := &model.ArtifactMigrationFailure{
 		TaskID: taskID, AssetID: a.ID, SHA256: a.SHA256,

@@ -10,10 +10,10 @@ import { hasActiveBackup } from '@/lib/backups/backup'
 import type { BackupInfo } from '@/lib/backups/backup'
 import { BackupsPageView } from '@/components/views/backups/BackupsPageView'
 
-/** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成（FR-151）。 */
+/** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成。 */
 const ACTIVE_POLL_MS = 3000
 
-/**
+/** 
  * 稳定的空数组常量：`backups ?? []` 会让「数据未到」时的每次渲染都产生新数组引用，
  * 视图侧按 `[backups]` 记忆化的派生量（汇总、id→备份映射、虚拟行高模型）因此全部失效。
  */
@@ -25,7 +25,7 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
+/** 
  * 备份管理页容器（ADR-103 b 范式）：备份列表取数与进行中轮询、实例选择、创建/恢复/删除三个
  * 写动作与 toast 文案都在这里决定，表格、卡片、视图切换与两次二次确认交共享视图。
  *
@@ -41,7 +41,7 @@ export default function BackupsPage() {
   // 当前选中实例详情（恢复守卫需其状态；深链/搜索翻页后仍可解析名称与状态）。
   const { data: selectedInst } = useInstance(instanceId ?? 0)
 
-  // 先无轮询取一次以判定是否有进行中备份，再据此决定轮询间隔（FR-151）。
+  // 先无轮询取一次以判定是否有进行中备份，再据此决定轮询间隔。
   const probe = useBackups(instanceId ?? undefined)
   const active = hasActiveBackup(probe.data ?? [])
   const { data: backups, isLoading, isError } = useBackups(instanceId ?? undefined, {

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-459 复审项 3（FR-312 回归）：巡检上报的**泛化**崩溃原因不得覆盖 CP 已写入的具体原因。
+// 复审项 3（回归）：巡检上报的**泛化**崩溃原因不得覆盖 CP 已写入的具体原因。
 func TestSyncInstanceStates_DoesNotClobberSpecificCrashReason(t *testing.T) {
 	h, db, node := newStateSyncFixture(t)
 
@@ -32,11 +32,11 @@ func TestSyncInstanceStates_DoesNotClobberSpecificCrashReason(t *testing.T) {
 	var got model.Instance
 	require.NoError(t, db.Where("uuid = ?", "i-specific").First(&got).Error)
 	require.Equal(t, "实例未绑定 JDK：请先在实例配置中选择 JDK", got.StatusReason,
-		"CP 已写入的具体崩溃原因不得被巡检泛化原因覆盖（FR-312 回归）")
+		"CP 已写入的具体崩溃原因不得被巡检泛化原因覆盖（回归）")
 	require.Equal(t, model.InstanceStatusCrashed, got.Status)
 }
 
-// FR-459 终验 Major 回归（第二轮修复引入）：RUNNING 且带**非空**巡检原因（假死）的实例真崩溃后，
+// 终验 Major 回归（第二轮修复引入）：RUNNING 且带**非空**巡检原因（假死）的实例真崩溃后，
 // status 必须变 CRASHED——不得因 status_reason 非空而让「库中原因为空」条件连带冻结整条 UPDATE。
 func TestSyncInstanceStates_CrashedUpdatesStatusDespiteStaleReason(t *testing.T) {
 	h, db, node := newStateSyncFixture(t)
@@ -143,7 +143,7 @@ func TestSyncInstanceStates_ClearsReasonWhenHealthy(t *testing.T) {
 	require.Empty(t, got.StatusReasonSource, "清空后来源标记应复位，避免残留 worker 标记误伤后续 CP 写入的原因")
 }
 
-// FR-312 回归（本轮修复）：心跳不得抹平 CP 写入的生命周期失败原因。
+// 回归（本轮修复）：心跳不得抹平 CP 写入的生命周期失败原因。
 // 场景：CP 异步委托失败写入具体原因（来源标记为空）后，下一拍 Worker 上报 RUNNING+healthy 且不带原因，
 // 旧行为无条件把 status_reason 置空，刚写下的原因下一拍就被抹掉——用户只看得到「运行中」而无任何原因。
 func TestSyncInstanceStates_HealthyHeartbeatKeepsCPFailureReason(t *testing.T) {
@@ -162,7 +162,7 @@ func TestSyncInstanceStates_HealthyHeartbeatKeepsCPFailureReason(t *testing.T) {
 
 	var got model.Instance
 	require.NoError(t, db.Where("uuid = ?", "i-cp-reason").First(&got).Error)
-	require.Equal(t, cpReason, got.StatusReason, "CP 写入的具体失败原因必须留存，不得被心跳抹平（FR-312）")
+	require.Equal(t, cpReason, got.StatusReason, "CP 写入的具体失败原因必须留存，不得被心跳抹平")
 	require.Equal(t, model.InstanceStatusRunning, got.Status, "status 仍按心跳推进（原因留存不得连带冻结状态）")
 	require.Empty(t, got.StatusReasonSource, "来源标记不得被心跳改写为 worker（否则下一拍会被当成心跳自有原因清掉）")
 }

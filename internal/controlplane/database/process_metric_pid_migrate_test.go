@@ -9,7 +9,7 @@ import (
 )
 
 // TestMigrateProcessMetricPIDColumn_LegacyPID 保留 GORM 曾生成的 p_id 数据并迁移为 pid。
-// 真机验收 FR-407 抓到：ProcessMetricSnapshot.PID 无显式列名时 GORM 蛇形化为 p_id，
+// 真机验收抓到：ProcessMetricSnapshot.PID 无显式列名时 GORM 蛇形化为 p_id，
 // 与 managedProcessHistory 的 WHERE pid 查询不一致导致 no such column: pid。
 func TestMigrateProcessMetricPIDColumn_LegacyPID(t *testing.T) {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"

@@ -4,8 +4,8 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import type { ClientDistObservabilitySummary, ClientDistObservabilityCompare } from '@/lib/client-dist/client-dist-observability-contracts'
 
-/**
- * 分发概览洞察卡（FR-428）：KPI 同环比 + 异常标记 + 口径解释。
+/** 
+ * 分发概览洞察卡：KPI 同环比 + 异常标记 + 口径解释。
  * 「用户」= 机器（machineId 去重，ADR-023 不可信仅近似）；同环比基数来自后端 compare（前一等长窗口）。
  */
 
@@ -52,7 +52,7 @@ interface InsightCardsProps {
 export function InsightCards({ summary, compare }: InsightCardsProps) {
   const { t } = useTranslation()
 
-  // 异常标记（FR-428 口径，规则在 insight-cards spec 固化）：
+  // 异常标记（口径，规则在 insight-cards spec 固化）：
   // 1) 成功率 < 90% → 偏低警示；2) 前窗有更新而本窗为 0 → 无更新活动；3) 本窗更新 ≥ 前窗 3 倍 → 激增。
   const lowSuccess = summary.successRate < 0.9 && summary.updateTotal > 0
   const noUpdates = summary.updateTotal === 0 && (compare?.updateTotal ?? 0) > 0

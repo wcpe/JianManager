@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import { InstanceWizardPage } from '@/components/views/instances/InstanceWizardPage'
 import type { InstanceWizardPageProps } from '@/components/views/instances/InstanceWizardPage'
 
-/**
- * FR-230 创建实例向导 · 受控视图测（ADR-103 a 范式）。
+/** 
+ *创建实例向导 · 受控视图测（ADR-103 a 范式）。
  *
  * 应用侧原本没有向导的行为测试；这里补的是**分步语义与上报契约**：
  * 节点变更上报（驱动外壳取 JDK/Docker）、分步阻断、docker 检测不可用阻断提交、
@@ -87,7 +87,7 @@ function renderWizard(over: Partial<InstanceWizardPageProps> = {}) {
   return { props, view }
 }
 
-describe('InstanceWizardPage（FR-230 创建实例向导）', () => {
+describe('InstanceWizardPage（创建实例向导）', () => {
   it('基本步缺名称/节点时「下一步」禁用，补齐后可进入启动步', async () => {
     const user = userEvent.setup()
     const { props } = renderWizard()
@@ -174,7 +174,7 @@ describe('InstanceWizardPage（FR-230 创建实例向导）', () => {
     expect(onCancel).not.toHaveBeenCalled()
   })
 
-  /**
+  /** 
    * `Field` → `FieldLabel` 必须真正与输入框关联（`htmlFor`/`id`）。
    *
    * `FieldLabel` 渲染的是 `<label>`，但没有 `htmlFor` 时它不与任何控件关联——本页原状即如此
@@ -214,7 +214,7 @@ describe('InstanceWizardPage（FR-230 创建实例向导）', () => {
     expect(after[0]).not.toHaveAttribute('aria-current')
   })
 
-  /**
+  /** 
    * docker 环境变量行是可编辑行，key 必须稳定。
    *
    * 用下标当 key 时，删掉中间一行会让其后每行的 DOM 身份前移一格：正在编辑的输入框

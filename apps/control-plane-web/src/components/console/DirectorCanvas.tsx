@@ -10,8 +10,8 @@ interface DirectorCanvasProps {
   active: boolean
 }
 
-/**
- * 导播台单场景画布的接线层（FR-168 / ADR-035）。
+/** 
+ * 导播台单场景画布的接线层（ADR-035）。
  *
  * 画布布局与保活/节流策略已入包；卡壳 `WorkspaceCard`（含实例取数与 WS 保活）留应用侧，
  * 经 renderCard 注入。导播台不在卡级全屏/关卡（场景级切换），故传 no-op 满足卡壳接口。

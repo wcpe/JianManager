@@ -13,7 +13,7 @@ import (
 //
 // ServerProbe（第三方监控探针，作 git 子模块引入）以 Prometheus exposition 文本在
 // `/metrics` 暴露 TPS/MSPT/JVM/线程/世界等指标；Worker 周期抓取本机端点并解析为本快照，
-// 取代此前基于 RCON `list`/`tps` 文本解析的粗指标（FR-022）。
+// 取代此前基于 RCON `list`/`tps` 文本解析的粗指标。
 type ProbeSnapshot struct {
 	TPS           float64              // serverprobe_tps{window="1m"}
 	MSPTAvgMillis float64              // serverprobe_mspt_seconds{quantile="avg"} 转毫秒
@@ -25,7 +25,7 @@ type ProbeSnapshot struct {
 	UptimeSeconds float64              // serverprobe_uptime_seconds
 	Worlds        map[string]WorldStat // 按世界名聚合的世界负载
 
-	// GC（FR-465）：cumulative counter，跨收集器（gc 标签）求和。不直接当曲线用，CP 侧据相邻差推导速率。
+	// GC：cumulative counter，跨收集器（gc 标签）求和。不直接当曲线用，CP 侧据相邻差推导速率。
 	GCCountTotal int64   // Σ serverprobe_gc_count_total{gc=...}
 	GCTimeMillis float64 // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000（秒→毫秒）
 }
@@ -57,7 +57,7 @@ func ScrapeServerProbe(host string, port int, token string) (*ProbeSnapshot, err
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	// HTTP 客户端超时取共享契约值（internal/platform/directprobe）：它同时被心跳采集预算
-	// 计入「单实例同源串行最坏」，两处必须是同一个数（FR-446 复审 NEW-ISSUE A）。
+	// 计入「单实例同源串行最坏」，两处必须是同一个数（复审 NEW-ISSUE A）。
 	client := &http.Client{Timeout: probeScrapeTimeoutCap}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -119,16 +119,16 @@ func parseServerProbeMetrics(text string) *ProbeSnapshot {
 		case "serverprobe_uptime_seconds":
 			snap.UptimeSeconds = s.value
 		case "serverprobe_gc_count_total":
-			// GC 事件计数（counter），按 gc 收集器标签累加求和（FR-465）。
+			// GC 事件计数（counter），按 gc 收集器标签累加求和。
 			snap.GCCountTotal += int64(s.value)
 		case "serverprobe_gc_time_seconds_total":
-			// GC 耗时（counter，秒），按 gc 收集器标签累加并转毫秒（FR-465）。
+			// GC 耗时（counter，秒），按 gc 收集器标签累加并转毫秒。
 			if gcTimeVariant == "" || gcTimeVariant == s.name {
 				snap.GCTimeMillis += s.value * 1000
 				gcTimeVariant = s.name
 			}
 		case "serverprobe_gc_time_millis_total", "serverprobe_gc_time_ms_total":
-			// 探针以毫秒暴露耗时的变体命名，直接累加（FR-465）。
+			// 探针以毫秒暴露耗时的变体命名，直接累加。
 			// S2：耗时命名有多个变体，同一份 exposition 只会暴露其中一种。
 			// 记录首个命中的变体，同变体的多收集器行继续累加，异变体行一律忽略——
 			// 避免「未来多命名并存」时把同一份耗时重复累加、成倍放大 GC 占用。

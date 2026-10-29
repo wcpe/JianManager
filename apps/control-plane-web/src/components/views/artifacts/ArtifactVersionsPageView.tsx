@@ -1,9 +1,9 @@
-/**
+/** 
  * @file ArtifactVersionsPageView：ServerProbe 制品版本库页的受控视图，目录取数与同步/上传/缓存/设默认四个写动作由应用容器负责。
  * @input Panel/Input/Button 原语、PageShell/PageHeader 布局原语、翻译上下文
  * @output ArtifactVersionsPageView、ArtifactVersionsPageViewProps、ArtifactCatalogView、ArtifactSourceView、ArtifactVersionView
  * @sync apps/control-plane-web/src/pages/ArtifactVersionsPage.tsx、apps/control-plane-web/src/pages/ArtifactVersionsPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-409 制品版本库 + FR-411 本地上传来源）
+ * @since（组件受控化迁包；原页制品版本库本地上传来源）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -13,7 +13,7 @@ import { Input } from '@jianmanager/ui/components/input'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 
-/**
+/** 
  * 制品来源（本视图只消费展示所需字段）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 API 层的 `ArtifactSource`：外壳直接传完整对象
@@ -46,7 +46,7 @@ export interface ArtifactCatalogView {
   versions: ArtifactVersionView[]
 }
 
-/**
+/** 
  * 受控边界：目录数据与加载/错误态经 props 注入；四个写动作以回调上报，由外壳执行 mutation
  * 并决定成功/失败文案——包内不取数、不发请求、不弹 toast。
  * 本地上传的表单草稿与文件选择是纯 UI 状态，留在视图内；因「成功才清空表单」，

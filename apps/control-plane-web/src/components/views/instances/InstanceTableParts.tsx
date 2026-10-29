@@ -40,7 +40,7 @@ const COLUMN_DRAG_MIME = 'application/x-jm-instance-column'
 /** 列设置的缺省可见集（全开；缺省不改变既有表头结构）。 */
 const ALL_OPTIONAL_COLUMNS: ReadonlySet<InstanceOptionalColumn> = new Set(INSTANCE_OPTIONAL_COLUMNS)
 
-/**
+/** 
  * 实例列表排序键（与 /instances/search 的 `sort` 参数对齐）。
  */
 export type InstanceSortKey = 'name' | 'status' | 'createdAt' | 'nodeId'
@@ -50,7 +50,7 @@ export type InstanceSortOrder = 'asc' | 'desc'
 
 /** Radix Select 不接受空字符串 value：用哨兵值表示「全部 / 不过滤」。 */
 const ALL = '__all__'
-/** 角色统一语义色徽标（FR-136）：proxy 主色 / backend 次色 / beacon 提示色 / universal 中性。 */
+/** 角色统一语义色徽标：proxy 主色 / backend 次色 / beacon 提示色 / universal 中性。 */
 export function RoleBadge({ role, compact = false }: { role: string; compact?: boolean }) {
   const { t } = useTranslation()
   if (role === 'proxy') {
@@ -79,7 +79,7 @@ export function RoleBadge({ role, compact = false }: { role: string; compact?: b
   return <span className="text-muted-foreground text-xs">{t('networks.role_universal')}</span>
 }
 
-/**
+/** 
  * 可拖拽的表头单元格包装（用户提出「表头拖拽换位」）。
  *
  * 【为什么把拖拽能力放在这里而不是每列自己实现】8 个表头若各写一遍 draggable/onDragOver/
@@ -107,7 +107,7 @@ function DraggableHead({
   onDragEnd: () => void
   onDragOverColumn: (key: InstanceColumnKey) => void
   onDropColumn: (key: InstanceColumnKey) => void
-  /**
+  /** 
    * **已经是 `<TableHead>` 的元素**（由 renderHead 产出）。
    * 本组件不自己再包一层 th：包了就会出现「一个列两个 th」，表头列数翻倍、
    * 与 tbody 的列数对不上（实测 14 个 th 对 8 列）。
@@ -158,8 +158,8 @@ function DraggableHead({
   })
 }
 
-/**
- * 实例表头（平铺与分组视图复用）。含批量全选复选框（FR-058）与节点:端口列（FR-136）。
+/** 
+ * 实例表头（平铺与分组视图复用）。含批量全选复选框与节点:端口列。
  *
  * 【列顺序由 `columnOrder` 驱动】表头此前是 8 个 `<th>` 硬编码顺序，用户无法调整。
  * 现在按 `columnOrder` 数组 map 渲染；行与 colgroup 用同一份顺序（见 InstanceRowView /
@@ -183,7 +183,7 @@ export function InstanceTableHeader({
   sortKey: InstanceSortKey
   sortOrder: InstanceSortOrder
   onSort: (key: InstanceSortKey) => void
-  /**
+  /** 
    * 全选框的可访问名（含作用域说明）。列表是分页加载的，「全选」只覆盖**已加载页**，
    * 与页面上「已加载 N / 共 M」同源；由外壳按已加载/总数拼好传入，避免读屏用户
    * 把「全选」理解成「全库全选」而误用批量删除。缺省回落通用文案。
@@ -197,14 +197,14 @@ export function InstanceTableHeader({
   onReorderColumn?: (from: InstanceColumnKey, to: InstanceColumnKey) => void
 }) {
   const [dragging, setDragging] = useState<InstanceColumnKey | null>(null)
-  /*
+  /* 
     源列用 ref 兜底：state 更新是异步的，若用户在 dragStart 后极快地 drop（或测试里连续
     同步触发 dragStart→dragOver→drop），闭包里的 `dragging` 可能还是旧值（null）。
     ref 在 dragStart 里同步写入，drop 时必定读得到。
   */
   const dragSourceRef = useRef<InstanceColumnKey | null>(null)
 
-  /*
+  /* 
     列是否渲染 + 顺序：与行、colgroup 共用 computeVisibleColumns（三处同源，杜绝错列）。
   */
   const ordered = computeVisibleColumns(columnOrder, visibleColumns)
@@ -266,8 +266,8 @@ export function InstanceTableHeader({
             {t('instances.health.column', { defaultValue: '健康度' })}
           </TableHead>
         )
-      /*
-        业务插件列（FR-534）：可选列、**默认关**（见 instance-view-prefs 的说明），
+      /* 
+        业务插件列：可选列、**默认关**（见 instance-view-prefs 的说明），
         因为它会再占约 120px，默认全开会把「状态/操作」挤出视口。
         数据走批量端点（一次 ≤50 台），不逐行打探针。
       */
@@ -312,7 +312,7 @@ export function InstanceTableHeader({
               {renderHead(key)}
             </DraggableHead>
           ) : (
-            /*
+            /* 
               钉住的列（首/尾）不可拖拽，但仍要打上 data-column-key：
               它是「这一格是哪一列」的唯一锚点，测试与后续列宽/对齐逻辑都靠它定位。
               漏掉会让钉住列在 DOM 里变成无标识的野节点。
@@ -402,7 +402,7 @@ function FilterSelectImpl({
   )
 }
 
-/**
+/** 
  * 筛选项记忆化。
  *
  * 【为什么】筛选条的 `options` 与 `onChange` 都是容器每次渲染现造的（`.map()` + 内联箭头），
@@ -426,10 +426,10 @@ export const FilterSelect = memo(FilterSelectImpl, (a, b) => {
   return true
 })
 
-/**
- * 实例行的「⋯」次要操作菜单（FR-138）：标签 / 资源限额 / 代理后端 / 克隆 / 删除收入下拉，
+/** 
+ * 实例行的「⋯」次要操作菜单：标签 / 资源限额 / 代理后端 / 克隆 / 删除收入下拉，
  * 行内只保留启停/重启主操作。运行态下克隆改禁用 + tooltip（非消失）；删除标红且运行态
- * 仍可用（FR-310：后端编排先停止再删除），tooltip 提示该行为。
+ * 仍可用（：后端编排先停止再删除），tooltip 提示该行为。
  *
  * 导出供按键/能力画像门控的针对性测试直接挂载（避免整页渲染）。
  */
@@ -458,13 +458,13 @@ export function InstanceRowMenu({
   onLimits: () => void
   onProxy: () => void
   onClone: () => void
-  /** 接管运行态漂移（FR-471）：仅在实例存在漂移时由调用方传入。 */
+  /** 接管运行态漂移：仅在实例存在漂移时由调用方传入。 */
   onAdoptRuntime?: () => void
   onDelete: () => void
 }) {
   const { t } = useTranslation()
   // 克隆要求实例已停止（运行/过渡态禁用并提示原因，而非隐藏）；
-  // 删除运行态可用（FR-310 先停再删），仅以 tooltip 提示行为。
+  // 删除运行态可用（先停再删），仅以 tooltip 提示行为。
   const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
 
   return (
@@ -504,7 +504,7 @@ export function InstanceRowMenu({
         {resolveCapabilities(inst).capabilities.includes('bcTopology') && (
           <DropdownMenuItem onSelect={onProxy}>{t('proxy.manageBackends')}</DropdownMenuItem>
         )}
-        {/* 接管运行态漂移（FR-471）：工作目录下有未纳管活进程时出现；点击只开确认框，
+        {/* 接管运行态漂移：工作目录下有未纳管活进程时出现；点击只开确认框，
             真正下发由页面级 DangerConfirm 完成（与强杀同款：菜单不直接发写请求）。 */}
         {onAdoptRuntime && (
           <DropdownMenuItem onSelect={onAdoptRuntime} data-testid="instance-menu-adopt-runtime">

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// StorageHandler 平台存储资源管理器（FR-083）路由。
+// StorageHandler 平台存储资源管理器路由。
 //
 // 对 CP 侧数据根（ADR-010 FHS 布局）只读浏览 + 占用统计 + 制品归档可见 + cache 受控清理。
 // 数据根是平台级资源（仅 CP 读写，见架构不变量），故所有端点限平台管理员。

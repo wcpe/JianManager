@@ -11,7 +11,7 @@ function dir(path: string): FileEntry {
   return { path, name: path.split('/').pop() ?? path, isDir: true }
 }
 
-describe('buildTree（共享文件浏览器扁平→层级，FR-213）', () => {
+describe('buildTree（共享文件浏览器扁平→层级）', () => {
   it('空列表得到空根', () => {
     const root = buildTree([])
     expect(root.path).toBe('')

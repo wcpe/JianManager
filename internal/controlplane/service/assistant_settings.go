@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 助手全局设置（FR-514）：默认模型 + 出站准入放行段。
+// 助手全局设置：默认模型 + 出站准入放行段。
 //
 // 两者同属 `assistant_settings` 单行，因此也共用**一个** GET/PUT 端点，形态与
 // `/api/v1/settings` 同构（单例资源整体读写）。
@@ -29,9 +29,9 @@ type AssistantSettingsView struct {
 	DefaultModelID *uint `json:"defaultModelId"`
 	// AllowPrivateCIDRs 已放行的私网网段（规范化后的字符串，如 "10.0.0.0/8"）。
 	AllowPrivateCIDRs []string `json:"allowPrivateCidrs"`
-	// SystemPrompt 自定义系统提示词（FR-541 §3.1）；空表示只用内置基线。
+	// SystemPrompt 自定义系统提示词（§3.1）；空表示只用内置基线。
 	SystemPrompt string `json:"systemPrompt"`
-	// BuiltinToolsEnabled 是否向助手暴露平台自带工具（FR-540）；未配置时回显 true。
+	// BuiltinToolsEnabled 是否向助手暴露平台自带工具；未配置时回显 true。
 	BuiltinToolsEnabled bool `json:"builtinToolsEnabled"`
 	Version             int  `json:"version"`
 	// InsecureAllowed **只读回显**：当前部署是否接受 http:// 明文目标（仅 dev 部署为真）。
@@ -48,15 +48,15 @@ type AssistantSettingsView struct {
 type SaveSettingsParams struct {
 	DefaultModelID    *uint
 	AllowPrivateCIDRs []string
-	// SystemPrompt 自定义系统提示词（FR-541 §3.1）。
+	// SystemPrompt 自定义系统提示词（§3.1）。
 	SystemPrompt string
-	// BuiltinToolsEnabled 平台自带工具开关（FR-540）；nil 表示不改动。
+	// BuiltinToolsEnabled 平台自带工具开关；nil 表示不改动。
 	BuiltinToolsEnabled *bool
 	// Version 为 0 表示跳过并发校验（供初始化与测试使用），非 0 必须与当前值一致。
 	Version int
 }
 
-// builtinToolsEnabled 解析「平台自带工具」开关的生效值（FR-540）。
+// builtinToolsEnabled 解析「平台自带工具」开关的生效值。
 //
 // nil 表示从未配置过，此时**默认启用**——这是产品要求的默认行为
 // （装好就能用自带工具）。只有管理员显式关闭才会是 false。

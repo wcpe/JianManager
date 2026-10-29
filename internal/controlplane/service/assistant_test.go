@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// AI 配置服务测试（FR-514）。
+// AI 配置服务测试。
 //
 // 重点不在 CRUD 本身，而在几条「错了会静默出事」的语义：
 //   - 凭据三态（保留 / 替换 / 清除）与重复保存不丢密钥；
@@ -473,7 +473,7 @@ func TestAssistantAvailableModelsExcludesSensitiveFields(t *testing.T) {
 	}
 }
 
-// 可用模型摘要必须带**供应商名称**（FR-519 §5.1 要在界面明示「数据发给谁」），
+// 可用模型摘要必须带**供应商名称**（§5.1 要在界面明示「数据发给谁」），
 // 但绝不能带端点与凭据。
 //
 // 这条边界值得单独钉住：它是「用户知情权」与「不暴露配置面」的交界线，

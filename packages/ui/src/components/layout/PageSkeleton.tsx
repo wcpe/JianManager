@@ -4,8 +4,8 @@ import { cn } from '../../lib/utils'
 import { Skeleton } from '../skeleton'
 import { PageShell } from './PageShell'
 
-/**
- * 页面骨架（FR-502 阶段 6 补丁）：路由级 Suspense fallback 与页内数据区的统一占位。
+/** 
+ * 页面骨架（阶段 6 补丁）：路由级 Suspense fallback 与页内数据区的统一占位。
  *
  * 【为什么放在布局层而不是应用侧】
  * 骨架的全部价值是「在真实内容到达之前，先给出与它将占据的空间一致的结构」，所以它必须复用
@@ -112,7 +112,7 @@ export function PageSkeleton({
   )
 }
 
-/**
+/** 
  * 数据区骨架：与「`Panel` + 吸附列头 + N 行」同构的占位。
  *
  * 抽成独立导出是因为它有两种用法，且两种都必须与真实容器同壳：
@@ -148,7 +148,7 @@ export function DataPanelSkeleton({
   )
 }
 
-/**
+/** 
  * 表体占位行：每行 `px-3 py-2` + `h-4` 文本块 + 1px 分隔线 = 33px，
  * 与审计/任务页虚拟列表的行高基准（`ROW_BASE_PX`）取同一个数量级，滚动高度也因而接近。
  */

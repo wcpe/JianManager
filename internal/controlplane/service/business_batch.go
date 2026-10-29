@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 业务批量命令执行引擎（FR-523 执行语义 + FR-537 流式进度）。
+// 业务批量命令执行引擎（执行语义流式进度）。
 //
 // 设计要点：
 //   - **复用 InstanceBatchService 的分片有界并发模型**（信号量 + WaitGroup），但业务命令
@@ -33,7 +33,7 @@ const (
 	BusinessBatchInstanceTimeout = 30 * time.Second
 	// BusinessBatchIdempotencyWindow 幂等窗口（§6.3：24 小时）。
 	BusinessBatchIdempotencyWindow = 24 * time.Hour
-	// BusinessBatchProgressBatch 每完成多少个实例推送一次 progress 帧（FR-537 §3）。
+	// BusinessBatchProgressBatch 每完成多少个实例推送一次 progress 帧（§3）。
 	BusinessBatchProgressBatch = 20
 	// businessBatchMaxTargets 单次批量目标数上限，防止单请求打爆 CP。
 	businessBatchMaxTargets = 5000
@@ -105,7 +105,7 @@ type BusinessBatchResponse struct {
 	IdempotentReplay bool `json:"idempotentReplay,omitempty"`
 }
 
-// BusinessBatchProgress 流式进度帧（FR-537 §3）。
+// BusinessBatchProgress 流式进度帧（§3）。
 type BusinessBatchProgress struct {
 	Done      int `json:"done"`
 	Total     int `json:"total"`
@@ -264,7 +264,7 @@ func (s *BusinessBatchService) Execute(ctx context.Context, req BusinessBatchReq
 	return s.ExecuteWithProgress(ctx, req, scope, nil)
 }
 
-// ExecuteWithProgress 执行批量命令，可选在每批完成时回调进度（FR-537）。
+// ExecuteWithProgress 执行批量命令，可选在每批完成时回调进度。
 //
 // 回调在**执行协程内同步调用**，因此实现必须是非阻塞的（流式处理器用有界 channel 投递）；
 // 回调返回值被忽略，避免让「客户端写失败」反向影响执行（§5：断开 ≠ 取消）。
@@ -559,7 +559,7 @@ func (s *BusinessBatchService) runOne(ctx context.Context, inst model.Instance, 
 		err error
 	}
 	// READ 动作走纯透传 Dispatch（不注入写上下文）；其余按写动作处理。
-	// 理由与单实例路径一致（FR-121）：给只读动作注入 operator/taskId 会污染插件侧流水，
+	// 理由与单实例路径一致：给只读动作注入 operator/taskId 会污染插件侧流水，
 	// 且写上下文是「高危写」的审计约定，不该套在只读动作上。
 	// 判据取**生效风险**而不是 `req.ActionRisk`：后者是客户端字段，
 	// 用它决定「走 Dispatch 还是 DispatchWrite」等于让调用方自己选要不要注入写上下文
@@ -684,7 +684,7 @@ func (req BusinessBatchRequest) payloadString() string {
 	return string(req.Payload)
 }
 
-// businessBatchRequestDigest 计算「这组请求参数」的指纹，用于幂等冲突检测（FR-524）。
+// businessBatchRequestDigest 计算「这组请求参数」的指纹，用于幂等冲突检测。
 //
 // 覆盖目标集合 + 业务信封 + payload + reason：任一变化都说明「同一个 requestId 被用在了
 // 不同的事情上」，必须拒绝而不是静默返回旧结果——那样调用方会以为新请求已生效。

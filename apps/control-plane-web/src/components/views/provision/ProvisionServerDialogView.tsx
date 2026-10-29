@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ProvisionServerDialogView：一键搭建后端子服向导（节点 / 核心 / 版本 / JDK / 分组 + 版本-JDK 兼容预检）的受控视图，
  *       候选取数与搭建写请求由应用容器负责。
  * @input form-validation（validateRequired/validatePositiveInt/validateFields/hasErrors）、use-field-gate（错误展示时机门控）、
@@ -9,7 +9,7 @@
  *        apps/control-plane-web/src/components/ProvisionServerDialog.dom.test.tsx、
  *        apps/control-plane-web/src/components/ProvisionServerDialog.fr316.dom.test.tsx、
  *        apps/control-plane-web/src/components/ProvisionServerDialog.fr328.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-034 一键搭建、FR-046 核心解析、FR-072 系统可获取项、FR-316 版本-JDK 预检、FR-328 下拉可滚动）
+ * @since（组件受控化迁包；原一键搭建核心解析系统可获取项版本-JDK 预检下拉可滚动）
  */
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -31,7 +31,7 @@ import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/shared/form-validation'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
 
-/** 可选 JDK 记录（`NodeJDK` 结构兼容）：视图按大版本做 FR-316 预检、按厂商/版本拼展示名。 */
+/** 可选 JDK 记录（`NodeJDK` 结构兼容）：视图按大版本做预检、按厂商/版本拼展示名。 */
 export interface ProvisionJdkOption {
   id: number
   vendor: string
@@ -43,11 +43,11 @@ export interface ProvisionJdkOption {
 export interface ProvisionResolvedCore {
   filename: string
   build: number
-  /** 该 MC 版本所需最低 Java 大版本（FR-316）；缺省=未知/不设需求，不据此拦截。 */
+  /** 该 MC 版本所需最低 Java 大版本；缺省=未知/不设需求，不据此拦截。 */
   javaMajorRequired?: number
 }
 
-/**
+/** 
  * 取数输入（查询键）：**上提容器**——JDK 列表随 `nodeId` 变、版本列表随 `coreType` 变、
  * 解析预览随 `coreType`/`mcVersion`/`build` 变，一变就要重新取数。
  * 视图仍持有表单草稿，在这些字段变更或表单重置时上报快照，容器只保存查询键本身。
@@ -72,7 +72,7 @@ export const PROVISION_SERVER_QUERY_INIT: ProvisionServerQueryInput = {
   build: '',
 }
 
-/**
+/** 
  * 表单草稿（**原文**，非请求体）：数值/数组字段保持用户输入的字符串，
  * 由容器组装请求体（Number 化、空值省略、jvmArgs 拆分）——「草稿 → 请求体」属请求语义，留在应用侧。
  */
@@ -109,7 +109,7 @@ export interface ProvisionServerLinkArgs {
   children: ReactNode
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 四份候选经 props 注入：`nodeOptions` / `groupOptions`（容器映射为选项）、`versions`（容器调
  *   `useCoreVersions`）、`jdks`（容器调 `useNodeJDKs(nodeId)`）；解析预览经 `resolved` 注入；
@@ -151,9 +151,9 @@ export interface ProvisionServerDialogViewProps {
   renderLink?: (args: ProvisionServerLinkArgs) => ReactNode
 }
 
-/**
- * 一键搭建后端子服向导（FR-034）：用户只需选核心/版本/资源，端口与工作目录由系统分配，
- * 核心由后端解析并写入基础配置（FR-046）。含 FR-316 版本-JDK 兼容预检。
+/** 
+ * 一键搭建后端子服向导：用户只需选核心/版本/资源，端口与工作目录由系统分配，
+ * 核心由后端解析并写入基础配置。含版本-JDK 兼容预检。
  */
 export default function ProvisionServerDialogView({
   open,
@@ -201,10 +201,10 @@ export default function ProvisionServerDialogView({
     },
   )
 
-  // FR-316 版本-JDK 兼容预检：解析响应携带该 MC 版本所需最低 Java 大版本（CP 单一真值），
-  // 对所选/默认 JDK 表单级阻断，与 FR-314 启动预检互补（搭建时拦 vs 启动时拦）。
+  // 版本-JDK 兼容预检：解析响应携带该 MC 版本所需最低 Java 大版本（CP 单一真值），
+  // 对所选/默认 JDK 表单级阻断，与启动预检互补（搭建时拦 vs 启动时拦）。
   // 阻断：节点无任何 JDK；或所选 JDK 大版本低于需求（真机事故：MC 26.1 + 最高 Temurin 21 必崩）。
-  // 仅警示不阻断：节点有 JDK 但选了「不指定」——系统 Java 版本未知，宁漏勿误伤，交 FR-314 兜底。
+  // 仅警示不阻断：节点有 JDK 但选了「不指定」——系统 Java 版本未知，宁漏勿误伤，交兜底。
   const requiredJava = resolved?.javaMajorRequired ?? 0
   const selectedJdk = (jdks ?? []).find((j) => String(j.id) === jdkId)
   let jdkBlockText: string | null = null

@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// StatsHandler 对外只读统计契约路由（FR-527）。
+// StatsHandler 对外只读统计契约路由。
 //
 // 契约真源：docs/openapi/paths/stats.yaml；规格：docs/specs/external-stats-contract/spec.md。
 //

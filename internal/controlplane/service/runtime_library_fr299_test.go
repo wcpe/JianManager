@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// normalizeNodeArch（FR-299）：别名归一为 nodejs dist 命名（x64/arm64，区别于 adoptium aarch64）。
+// normalizeNodeArch：别名归一为 nodejs dist 命名（x64/arm64，区别于 adoptium aarch64）。
 func TestNormalizeNodeArch(t *testing.T) {
 	tests := []struct {
 		in      string
@@ -151,7 +151,7 @@ func TestRuntimeLibrary_InstallAsync_Rejections(t *testing.T) {
 	require.Zero(t, taskCount, "被拒请求不应建悬挂任务")
 }
 
-// runtime_install 成功终态：落一条 NodeRuntime（managed=true）+ 发成功站内信（FR-299）。
+// runtime_install 成功终态：落一条 NodeRuntime（managed=true）+ 发成功站内信。
 func TestTaskService_Ingest_RuntimeSuccess_PersistsRuntime(t *testing.T) {
 	db := newFR299DB(t)
 	svc := NewTaskService(db)

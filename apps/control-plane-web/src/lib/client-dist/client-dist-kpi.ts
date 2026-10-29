@@ -1,5 +1,5 @@
-/**
- * 客户端分发 KPI 口径字典（FR-356）。
+/** 
+ * 客户端分发 KPI 口径字典。
  *
  * 权威语义见 `docs/specs/client-dist-kpi-semantics/spec.md`：
  * - 更新侧率（success/fail-static/rollback）只信 observability.summary（遥测 result）
@@ -132,8 +132,8 @@ export function activeClientsHintKey(exactness: ActiveExactness, source: Resolve
   return null
 }
 
-/**
- * 空态三类（FR-357）：
+/** 
+ * 空态三类：
  * - no_traffic：窗口内无请求且无更新/遥测
  * - no_telemetry：有请求流量但更新侧全空（未开遥测或未上报）
  * - out_of_window：有活跃但仅近似去重（明细窗外）

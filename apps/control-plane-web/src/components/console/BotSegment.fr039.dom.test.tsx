@@ -23,7 +23,7 @@ beforeAll(() => {
   }
 })
 
-describe('FR-039 控制台实例内 Bot 管理段', () => {
+describe('控制台实例内 Bot 管理段', () => {
   it('统一服务器控制台可切到 Bot 分区并渲染实例内 Bot 段', async () => {
     loginMockUser()
     renderWithProviders(<InstanceConsolePage instanceId={1} />)

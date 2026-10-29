@@ -38,7 +38,7 @@ export function applyEventToMessages(
       return patch(note ? { streaming: false, note } : { streaming: false })
     }
     default:
-      // 工具相关与 usage 事件在 FR-516 前不会出现；出现了也不该让文本流断掉，
+      // 工具相关与 usage 事件在前不会出现；出现了也不该让文本流断掉，
       // 故这里显式忽略而不是抛错（前向兼容）。
       return prev
   }

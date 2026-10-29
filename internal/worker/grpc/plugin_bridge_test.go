@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 插件桥全状态查询的 Worker gRPC 侧测试（FR-076，见 ADR-016）。
+// 插件桥全状态查询的 Worker gRPC 侧测试（见 ADR-016）。
 // 复刻 ws 包的桥连入测试形态：起一个真实 /ws/plugin-bridge 服务端 + 模拟探针 WS 连接，
 // 验证 QueryServerState 的下发-回执往返与各降级分支。
 
@@ -139,7 +139,7 @@ func TestQueryServerState_Timeout(t *testing.T) {
 	}
 }
 
-// TestPluginCommandFrame_BusinessDomainPayload 验证 JBIS 业务命令帧（FR-115/ADR-027）：
+// TestPluginCommandFrame_BusinessDomainPayload 验证 JBIS 业务命令帧（ADR-027）：
 // domain/payloadJson 仅在非空时进帧（业务/监控分流）；治理命令帧保持原样不含这两字段。
 func TestPluginCommandFrame_BusinessDomainPayload(t *testing.T) {
 	// 业务命令：domain + payloadJson 进帧，供探针 BusinessHost 按 domain 路由。
@@ -154,7 +154,7 @@ func TestPluginCommandFrame_BusinessDomainPayload(t *testing.T) {
 	assert.Equal(t, "balance", biz["action"])
 	assert.Equal(t, "req-1", biz["requestId"])
 
-	// 治理命令：无 domain/payloadJson 字段（帧与既有 FR-067 完全一致，业务/监控分流）。
+	// 治理命令：无 domain/payloadJson 字段（帧与既有完全一致，业务/监控分流）。
 	gov := pluginCommandFrame(&workerpb.PluginCommand{Action: "kick", Target: "bob", RequestId: "req-2"})
 	_, hasDomain := gov["domain"]
 	_, hasPayload := gov["payloadJson"]

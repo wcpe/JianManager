@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 实例整机快照与一键回滚（FR-466）。
+// 实例整机快照与一键回滚。
 //
 // 现状痛点：平台已有四套各自独立的「回滚」（备份链 / 文件版本 / 配置版本 / 自更新二进制），
 // 但没有「整机时间点」概念，运维要人工组合「停服 → 找备份 → 恢复 → 判断是否重建二进制」。
@@ -58,10 +58,10 @@ func snapshotStateLabel(s model.SnapshotState) string {
 	return string(s)
 }
 
-// SnapshotService 实例整机快照服务（FR-466）。
+// SnapshotService 实例整机快照服务。
 type SnapshotService struct {
 	db *gorm.DB
-	// backups 归档/回放实现（复用 FR-013/056/057 的备份体系，不重建一套）。
+	// backups 归档/回放实现（复用056/057 的备份体系，不重建一套）。
 	backups *BackupService
 	// instances 停服编排（回滚前必须停服；复用既有优雅停止路径）。
 	instances *InstanceService
@@ -146,7 +146,7 @@ type SnapshotCreateOptions struct {
 	Stage func(int, string)
 }
 
-// Create 创建实例整机快照（FR-466 §2.2）。
+// Create 创建实例整机快照（§2.2）。
 //
 // 同步段：校验实例存在 → 登记 InstanceSnapshot → 登记/启动任务；
 // 后台段：登记全量 Backup → 打包工作目录 → 回填 RootBackupID → 采集二进制指纹。
@@ -367,9 +367,9 @@ func (s *SnapshotService) sweepState(state model.SnapshotState, orphanReason, qu
 	return marked
 }
 
-// binaryFingerprint 从启动命令首 token 解析启动二进制名与摘要（FR-466 §2.2 步骤 3，含 FR-468 协同）。
+// binaryFingerprint 从启动命令首 token 解析启动二进制名与摘要（§2.2 步骤 3，含协同）。
 //
-// 摘要来源：FR-468 的版本绑定（若已登记）优先——那是经制品库校验过的权威摘要；
+// 摘要来源：的版本绑定（若已登记）优先——那是经制品库校验过的权威摘要；
 // 无绑定（url/node_file 来源或非 binary 实例）时只给文件名，摘要留空（不猜测）。
 func (s *SnapshotService) binaryFingerprint(inst *model.Instance) (string, string) {
 	cmd := strings.TrimSpace(inst.StartCommand)
@@ -479,16 +479,16 @@ type RollbackResult struct {
 	FinalStatus string `json:"finalStatus"`
 }
 
-// Rollback 一键回滚到指定快照（FR-466 §2.3 核心闭环）。
+// Rollback 一键回滚到指定快照（§2.3 核心闭环）。
 //
 // 顺序**强制**为：
 //  1. 校验目标快照可回滚 + 底链存在（B-1：底链缺失显式降级，不带病入队）+ 实例存在；
 //  2. 控制面互斥：同实例在途 snapshot_*/binary_upgrade 任务则拒绝（M-4）；
 //  3. 【强制】创建 pre_rollback 快照（失败即中止，不留无退路的操作）；
-//  4. 运行态处置：RUNNING/STARTING/STOPPING → 先优雅停止（非拒绝；与 FR-013 Restore 不同，
+//  4. 运行态处置：RUNNING/STARTING/STOPPING → 先优雅停止（非拒绝；与Restore 不同，
 //     此处由快照负责停服编排）；
 //  5. 回放目标快照的 RootBackupID（委托 BackupService.ExecuteRestore，复用 RestoreBackup RPC）；
-//  6. 二进制不一致 → 提示「数据已回滚，二进制未动」（二进制回滚走 FR-468，不自动执行）；
+//  6. 二进制不一致 → 提示「数据已回滚，二进制未动」（二进制回滚走不自动执行）；
 //  7. 恢复实例状态：恒回 STOPPED（不自动拉起）；终态站内信 + 审计 instance.snapshot_rollback。
 //
 // 并发与审计（M-4/M-6）：任务执行体内部再取一次实例互斥锁，且**回放前重验实例状态**——
@@ -621,7 +621,7 @@ func (s *SnapshotService) Rollback(ctx context.Context, snapshotID, operatorID u
 
 // stopForRollback 运行态处置：需要时先优雅停服；已停止则原样返回。
 //
-// 与 FR-013 `BackupService.Restore` 的「运行态直接拒绝」不同：快照回滚由本服务承担停服编排，
+// 与`BackupService.Restore` 的「运行态直接拒绝」不同：快照回滚由本服务承担停服编排，
 // 因为「一键回滚」的用户预期就是「不用自己先停服再回来点」。
 func (s *SnapshotService) stopForRollback(ctx context.Context, inst *model.Instance) (bool, error) {
 	switch inst.Status {

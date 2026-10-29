@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 平台审批中心（FR-490 / FR-493）。
+/** 
+ * 平台审批中心。
  *
  * 状态机是 7 态而不是「批准/驳回」两态：pending 可被决策，决策后进入
  * executing → succeeded / failed，另有 withdrawn / rejected / expired 三条终止路径。
@@ -41,7 +41,7 @@ export interface ApprovalTicketInfo {
   updatedAt: string
 }
 
-/**
+/** 
  * 待审/已决策列表。
  *
  * 默认只拉 pending —— 审批台的日常用法是「清空待办」，把全部历史混进来会淹没待办。
@@ -73,7 +73,7 @@ export function useApproval(id: number | null) {
   })
 }
 
-/**
+/** 
  * 批准。
  *
  * 批准是**触发真实副作用**的动作（停实例、删文件…），所以不做乐观更新：
@@ -107,7 +107,7 @@ export function useRejectApproval() {
   })
 }
 
-/**
+/** 
  * 状态 → Badge 变体（对应 `@jianmanager/ui` 的 chip-* 语义变体）。
  *
  * 整个 7 态里只有 succeeded 是阳性；pending/executing 是「进行中」，用 idle 而非 ok ——

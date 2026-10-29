@@ -26,7 +26,7 @@ func stallServer(t *testing.T, block chan struct{}) *httptest.Server {
 }
 
 // TestDownload_StallCancelClassifiedAsNetwork 停滞看门狗掐断的下载 → 错误须含
-// 停滞说明并归网络类（追加 FR-279 引导），而非裸 "context canceled"（FR-290）。
+// 停滞说明并归网络类（追加引导），而非裸 "context canceled"。
 func TestDownload_StallCancelClassifiedAsNetwork(t *testing.T) {
 	block := make(chan struct{})
 	srv := stallServer(t, block)
@@ -42,12 +42,12 @@ func TestDownload_StallCancelClassifiedAsNetwork(t *testing.T) {
 		t.Fatalf("停滞掐断的错误应含「下载停滞」说明，实际: %v", err)
 	}
 	if !strings.Contains(err.Error(), "疑似网络受限") {
-		t.Fatalf("停滞掐断应归网络类（追加 FR-279 引导），实际: %v", err)
+		t.Fatalf("停滞掐断应归网络类（追加引导），实际: %v", err)
 	}
 }
 
-// TestDownload_UserCancelNotMisclassified 用户主动取消（FR-227 强停，外部 ctx cancel）
-// → 不得误标为网络受限、不得说成下载停滞（FR-290）。
+// TestDownload_UserCancelNotMisclassified 用户主动取消（强停，外部 ctx cancel）
+// → 不得误标为网络受限、不得说成下载停滞。
 func TestDownload_UserCancelNotMisclassified(t *testing.T) {
 	block := make(chan struct{})
 	srv := stallServer(t, block)

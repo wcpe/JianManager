@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBridge_PlayerEventFieldsBubbled 验证 FR-066：探针 event 帧中的结构化玩家字段
+// TestBridge_PlayerEventFieldsBubbled 验证：探针 event 帧中的结构化玩家字段
 // （playerName/playerUuid/message/server/fromServer/toServer）经 Worker 解析后冒泡到
 // ws.PluginEvent，供 gRPC 侧填充 workerpb.PluginEvent。Worker 仅解析、不消费语义。
 func TestBridge_PlayerEventFieldsBubbled(t *testing.T) {
@@ -89,7 +89,7 @@ func TestBridge_PlayerEventFieldsBubbled(t *testing.T) {
 	assert.Equal(t, "survival", cross.ToServer)
 }
 
-// TestBridge_DomainDedupBubbled 验证通道信封字段透传（ADR-027；FR-521 / ADR-106 后 JM 不再消费语义）：
+// TestBridge_DomainDedupBubbled 验证通道信封字段透传（ADR-027ADR-106 后 JM 不再消费语义）：
 // 探针 event 帧的 domain/dedupKey 经 Worker 原样冒泡到 ws.PluginEvent，Worker 只透传不解析；
 // 监控/治理事件不带 domain → 这两字段为空（继续业务/监控分流）。
 func TestBridge_DomainDedupBubbled(t *testing.T) {

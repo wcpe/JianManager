@@ -288,7 +288,7 @@ func TestS3Store_List_FakeServer(t *testing.T) {
 	require.Contains(t, keys, "var/artifacts/client-file/bb/two.zip")
 }
 
-// TestS3Store_ListPage_Continuation ListPage 经 continuation-token 跨页全量遍历（FR-349）：
+// TestS3Store_ListPage_Continuation ListPage 经 continuation-token 跨页全量遍历：
 // pageSize 小于对象数时多页拼出完整清单、无重复无遗漏，末页 nextToken 为空。
 func TestS3Store_ListPage_Continuation(t *testing.T) {
 	fake, srv := newFakeS3(t, "jm-artifacts")

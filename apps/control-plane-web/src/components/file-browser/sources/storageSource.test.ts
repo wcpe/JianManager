@@ -9,7 +9,7 @@ vi.mock('@/api/client', () => ({
 
 import api from '@/api/client'
 
-describe('storageFileSource（FR-378）', () => {
+describe('storageFileSource', () => {
   beforeEach(() => {
     vi.mocked(api.get).mockReset()
   })

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 )
 
-// Provider 是「可运行时重建的出站 *http.Client 持有者」（FR-185，见 ADR-043）。
+// Provider 是「可运行时重建的出站 *http.Client 持有者」（见 ADR-043）。
 //
 // 出站代理升级为运行时可热生效后，CP/Worker 不再只在启动时 httpclient.New 一次，
 // 而是持有一个 Provider：各下载点每次取当前 client（Client()），保存/下发新代理后
@@ -47,7 +47,7 @@ func (p *Provider) Rebuild(cfg Config) error {
 	return nil
 }
 
-// ProxyGeneration 返回代理配置的稳定哈希「代标识」（FR-185，见 ADR-043）。
+// ProxyGeneration 返回代理配置的稳定哈希「代标识」（见 ADR-043）。
 //
 // 用于心跳下发时的 generation 比较：CP 据期望代理算 generation 随心跳下发，
 // Worker 仅当与本地已应用代不同时才重建 client（避免每拍重建）。

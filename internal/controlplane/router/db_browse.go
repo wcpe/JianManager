@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// DBBrowseHandler 数据库资源管理器（FR-084）只读浏览路由。
+// DBBrowseHandler 数据库资源管理器只读浏览路由。
 // 平台级独有数据源（架构不变量：数据库仅 Control Plane 读写），仅平台管理员可访问；
 // 只读——仅元数据列举与分页行查询，无任何写端点。敏感列脱敏在服务层完成。
 type DBBrowseHandler struct {

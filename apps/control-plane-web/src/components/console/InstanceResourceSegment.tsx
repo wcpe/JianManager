@@ -6,7 +6,7 @@ import InstanceConfigSurfacePanel from './InstanceConfigSurfacePanel'
 import InstanceEnvSegment from './InstanceEnvSegment'
 import WorkspaceCardBody from './WorkspaceCardBody'
 
-/** 文件配置页签内的分段（FR-413；FR-451 增「关键配置」段）。类型定义已回迁应用侧（与控制台页签解析同源）。 */
+/** 文件配置页签内的分段（增「关键配置」段）。类型定义已回迁应用侧（与控制台页签解析同源）。 */
 export type { ResourceSegment } from '@/lib/instances/instance-console-tabs'
 
 interface InstanceResourceSegmentProps {
@@ -15,7 +15,7 @@ interface InstanceResourceSegmentProps {
   onSegmentChange: (segment: ResourceSegment) => void
 }
 
-/**
+/** 
  * 文件配置页签接线层（ADR-103 b 范式）：分段外壳（分段控件 + 三段 `<Activity>` 保活）见 components/views，
  * 这里是三段内容的取数接线层注入点——「关键配置」面板、文件管理器、环境变量编辑器本体
  * 都是自取数的视图接线层，故由本层注入而不是在包内取。

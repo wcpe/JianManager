@@ -15,24 +15,24 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 业务事件纯透传通道（FR-522，见 ADR-106）与 SSE 连接治理（FR-536）。
+// 业务事件纯透传通道（见 ADR-106）与 SSE 连接治理。
 //
 // 职责边界（**铁律**）：JM 只做通道。
 //   - 不解析 payload：`data` 段以 json.RawMessage 原样透传，不 unmarshal 业务内容；
 //   - 不落库：环形缓冲全在内存，进程重启即失；
 //   - 不聚合、不按业务语义分类：指标只统计通道维度（条数/丢弃/缺口）。
 //
-// 与 FR-521（退役业务能力）**完全解耦**：本服务不引用 BusinessEventService / BusinessEvent 模型
+// 与（退役业务能力）**完全解耦**：本服务不引用 BusinessEventService / BusinessEvent 模型
 // 等任何已删除或待删除的旧业务持久化设施，只消费 workerpb.PluginEvent 的 domain/topic 信封字段。
 
 const (
-	// BusinessSubscriberQueueSize 每个 SSE 订阅者的有界发送队列容量（FR-536 §3.1）。
+	// BusinessSubscriberQueueSize 每个 SSE 订阅者的有界发送队列容量（§3.1）。
 	BusinessSubscriberQueueSize = 1024
-	// BusinessStreamDefaultHeartbeat 心跳间隔（FR-522 §3.4 / FR-536 §5：15–30s，默认 20s）。
+	// BusinessStreamDefaultHeartbeat 心跳间隔（§3.4§5：15–30s，默认 20s）。
 	BusinessStreamDefaultHeartbeat = 20 * time.Second
-	// BusinessStreamMaxPerToken 单 Token 并发 SSE 连接上限（FR-536 §4）。
+	// BusinessStreamMaxPerToken 单 Token 并发 SSE 连接上限（§4）。
 	BusinessStreamMaxPerToken = 5
-	// BusinessStreamMaxGlobal 全局并发 SSE 连接上限（FR-536 §4）。
+	// BusinessStreamMaxGlobal 全局并发 SSE 连接上限（§4）。
 	BusinessStreamMaxGlobal = 200
 )
 
@@ -45,7 +45,7 @@ const (
 	SSEErrorSlowConsumer = "SLOW_CONSUMER"
 )
 
-// BusinessStreamFilter 是订阅侧的过滤条件（FR-522 §3.1）。
+// BusinessStreamFilter 是订阅侧的过滤条件（§3.1）。
 //
 // 两者同时存在时取交集（域匹配且主题匹配才下发）；空集合表示不过滤。
 type BusinessStreamFilter struct {
@@ -82,7 +82,7 @@ func (f BusinessStreamFilter) WithAllowedInstances(allowed []uint) BusinessStrea
 }
 
 // ParseBusinessStreamFilter 解析逗号分隔的 domains / topics 查询参数。
-// 空白项忽略；空串表示不过滤。topics 支持尾部单级通配（FR-522 §9 待定项 2：只支持单级后缀）。
+// 空白项忽略；空串表示不过滤。topics 支持尾部单级通配（§9 待定项 2：只支持单级后缀）。
 func ParseBusinessStreamFilter(domains, topics string) BusinessStreamFilter {
 	f := BusinessStreamFilter{}
 	for _, raw := range strings.Split(domains, ",") {
@@ -158,9 +158,9 @@ func matchTopicPattern(pattern, topic string) bool {
 	return pattern == topic
 }
 
-// BusinessStreamMetrics 是 SSE 通道维度的内存计数快照（FR-522 §6 / FR-536 §7）。
+// BusinessStreamMetrics 是 SSE 通道维度的内存计数快照（§6§7）。
 //
-// 全部为**通道**指标，不按业务语义分类（FR-527 边界）；不逐条写库，读取方按需取快照。
+// 全部为**通道**指标，不按业务语义分类（边界）；不逐条写库，读取方按需取快照。
 type BusinessStreamMetrics struct {
 	// Connections 当前 SSE 连接数。
 	Connections int
@@ -187,7 +187,7 @@ type BusinessStreamMetrics struct {
 	BufferNewestSeq int64
 }
 
-// BusinessSubscriber 是一个 SSE 订阅者：独立有界队列 + 停止信号（FR-536 §3.1）。
+// BusinessSubscriber 是一个 SSE 订阅者：独立有界队列 + 停止信号（§3.1）。
 //
 // 队列满时不阻塞、不丢最旧，而是标记为慢消费者并关闭 stop：由 SSE 写协程在收尾时补发
 // `event: error`（SLOW_CONSUMER）后断开。断开是安全语义——重连带 Last-Event-ID 即可补齐窗口内事件。
@@ -215,7 +215,7 @@ func (s *BusinessSubscriber) halt() {
 	s.stopON.Do(func() { close(s.stop) })
 }
 
-// BusinessStreamService 承载业务事件环形缓冲与 SSE 扇出（FR-522 + FR-536）。
+// BusinessStreamService 承载业务事件环形缓冲与 SSE 扇出。
 type BusinessStreamService struct {
 	buffer    *BusinessStreamBuffer
 	heartbeat time.Duration
@@ -310,7 +310,7 @@ func (s *BusinessStreamService) Buffer() *BusinessStreamBuffer {
 	return s.buffer
 }
 
-// Ingest 接收一条探针业务事件：写入环形缓冲并扇出给订阅者（FR-522 §2 的 ①②③）。
+// Ingest 接收一条探针业务事件：写入环形缓冲并扇出给订阅者（§2 的 ①②③）。
 //
 // 触发条件：`domain` 非空即业务事件（monitoring/governance 事件不进入本通道）。
 // **转发路径不做同步 IO**：不写库、不写盘、不阻塞调用方（gRPC 事件流读循环）；
@@ -432,7 +432,7 @@ func (s *BusinessStreamService) recordCursor(frame *BusinessFrame, streamSeq, pr
 	})
 }
 
-// publish 把一帧非阻塞地扇出给匹配的订阅者（FR-536 §3.1）。
+// publish 把一帧非阻塞地扇出给匹配的订阅者（§3.1）。
 //
 // 队列满 → 该订阅者被判为慢消费者：标记 slow、关闭 stop 让 SSE 写协程收尾（先发 error 帧再断开），
 // 并从订阅表移除以免继续投递。**绝不阻塞**主链路与其他订阅者——这是本函数唯一的硬约束。
@@ -479,7 +479,7 @@ func (s *BusinessStreamService) publish(frame *BusinessFrame) {
 	}
 }
 
-// Subscribe 注册一个 SSE 订阅者（FR-536 §3.1 / §4）。
+// Subscribe 注册一个 SSE 订阅者（§3.1 / §4）。
 //
 // tokenKey 为空表示不参与单 Token 限流（仅受全局上限约束）。超出上限返回
 // ErrBusinessStreamTooManyConnections，调用方据此回 429 + Retry-After。

@@ -11,8 +11,8 @@ import api from '@/api/client'
 import type { AlertChannelInfo, AlertRuleInfo } from '@/api/alerts'
 import { RuleDialog } from './RuleDialog'
 
-/**
- * RuleDialog 强断言（FR-208 告警规则对话框）：直接渲染组件并传 props。
+/** 
+ * RuleDialog 强断言（告警规则对话框）：直接渲染组件并传 props。
  * 共享 Dialog 语义由 role=dialog 锁定，再取字段。覆盖：字段渲染 + 编辑回填、
  * 创建/更新提交成功（POST/PUT 命中、onClose 回调被调）、500 注入显错误态不崩。
  * 渲染前 loginMockUser() 让 requireAuth 保护的 /alerts/* 端点放行。
@@ -32,7 +32,7 @@ const seedChannels: AlertChannelInfo[] = [
   },
 ]
 
-/**
+/** 
  * 已存在的指标规则（编辑回填靶子）。id 取 1 命中 observ.ts 种子集合，
  * 使 PUT /alerts/rules/1 能更新到行（否则 mock update 找不到行返 404）。
  */
@@ -67,7 +67,7 @@ function panelByTitle(title: string): HTMLElement {
   return heading.closest('[role="dialog"]') as HTMLElement
 }
 
-/**
+/** 
  * 打开组件库 Select（Radix 组合控件）并选中指定选项——原生 <select> 的 selectOptions 不适用。
  * 选项按文本定位而非 getByRole('option')：role 查询要为整棵 DOM 逐个算可访问名，本对话框有
  * 6 个 Select、单次查询开销可达秒级；定位后仍断言它挂在真正的 Radix 选项（role=option）上。
@@ -84,7 +84,7 @@ async function pickSelectOption(trigger: HTMLElement, optionName: string) {
   fireEvent.click(option as HTMLElement)
 }
 
-/**
+/** 
  * 选实例：该维度已由 Radix Select 改为 InstancePicker（Popover 基座 + 普通 button 选项），
  * 选项不再是 role=option，故不能复用 pickSelectOption。
  */
@@ -243,7 +243,7 @@ describe('RuleDialog（mock 假后端）', () => {
     }
   })
 
-  it('④ 指标规则可切换目标维度，并以实例维度提交（FR-464 实例级容量告警前置）', async () => {
+  it('④ 指标规则可切换目标维度，并以实例维度提交（实例级容量告警前置）', async () => {
     // 真机缺陷：metric 触发原先被硬编码为「必须 node 目标」，导致实例级 metric 规则
     // 建不出来 → CapacityTrendAlerter 按 target_type="instance" 查规则恒为空 →
     // 实例维度容量趋势告警静默失效。本用例锁定「可切到实例维度并成功提交」。

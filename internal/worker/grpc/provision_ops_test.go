@@ -20,7 +20,7 @@ import (
 )
 
 // TestDownloadCore_LocalStub 离线验证「一键建服」核心下载机制：
-// 给定下载 URL 与 sha256，Worker 流式下载到实例工作目录并校验摘要（FR-034）。
+// 给定下载 URL 与 sha256，Worker 流式下载到实例工作目录并校验摘要。
 // 与 service/core_live_test.go（PaperMC 解析联网）互补，覆盖下载+校验的另一半。
 func TestDownloadCore_LocalStub(t *testing.T) {
 	tmp := t.TempDir()
@@ -97,7 +97,7 @@ func TestDownloadCore_LocalStub(t *testing.T) {
 }
 
 // TestDownloadCore_TruncatedDownloadLeavesNoPartialFile 复现「核心下载中途截断仍留损坏 jar」的
-// robustness bug（FR-034）：下载源限速 / 超时 / 连接中断导致 io.Copy 中途失败时，
+// robustness bug：下载源限速 / 超时 / 连接中断导致 io.Copy 中途失败时，
 // DownloadCore 必须报失败且**不得**在工作目录留下半成品 jar（否则用户会拿到 1.3MB 的坏核心）。
 func TestDownloadCore_TruncatedDownloadLeavesNoPartialFile(t *testing.T) {
 	tmp := t.TempDir()
@@ -135,7 +135,7 @@ func TestDownloadCore_TruncatedDownloadLeavesNoPartialFile(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "截断下载不得在工作目录留下损坏 jar")
 }
 
-// TestDownloadCore_TargetAbsentUntilComplete 下载期间目标路径不存在半成品（FR-319 原子落位）：
+// TestDownloadCore_TargetAbsentUntilComplete 下载期间目标路径不存在半成品（原子落位）：
 // 慢源下载的几分钟窗口内，异步搭建的实例可能被点启动——server.jar 必须要么不存在、要么完整，
 // 绝不能是写了一半的 corrupt jar（真机复现：用户点启动得 Invalid or corrupt jarfile）。
 func TestDownloadCore_TargetAbsentUntilComplete(t *testing.T) {
@@ -191,7 +191,7 @@ func TestDownloadCore_TargetAbsentUntilComplete(t *testing.T) {
 	assert.True(t, os.IsNotExist(partErr), "落位后 .part 应被 rename 消费掉")
 }
 
-// TestDownloadCore_CacheHitSkipsNetwork 验证节点制品缓存（FR-178）：
+// TestDownloadCore_CacheHitSkipsNetwork 验证节点制品缓存：
 // 同一 sha256 第一次下载落地后存入缓存；删掉工作目录文件、关掉下载源后再建实例，
 // 应从缓存秒拷命中、完全不走网络（命中痛点：删实例再建免重下大 jar）。
 func TestInstallForgeServer_InstallsForgeAndSpongeForge(t *testing.T) {

@@ -2,8 +2,8 @@ import * as React from 'react'
 
 import { cn } from '../../lib/utils'
 
-/**
- * 布局网格族（FR-502 阶段 3）：把原型的几套栅格固化为组件，消除各页面手写 grid 类名。
+/** 
+ * 布局网格族（阶段 3）：把原型的几套栅格固化为组件，消除各页面手写 grid 类名。
  *
  * 每个网格都带窄屏降级（原型在 900px 与 640px 两档断点收窄列数），
  * 因此页面不再需要自己写断点类——这是「内容页布局规范统一」的一部分。
@@ -35,7 +35,7 @@ export function ThreeCol({ className, children, ...props }: React.ComponentProps
   )
 }
 
-/**
+/** 
  * 指标网格：4 列等宽，格与格之间用 1px 底色缝（而非 border）分隔，
  * 因此网格整体只有外框一条边，视觉上更紧凑（原型 `.metric-grid`）。
  */
@@ -81,7 +81,7 @@ export function CardsGrid({ className, children, ...props }: React.ComponentProp
   )
 }
 
-/**
+/** 
  * 设置页布局：左侧分组导航（170px 固定）+ 右侧内容（自适应）。
  * 窄屏降为单列（分组导航转为横向滚动），因此左侧栏自身需支持横向溢出。
  */

@@ -51,24 +51,24 @@ interface ToolbarProps {
   searchActive: boolean
   viewMode?: FileViewMode
   onViewModeChange?: (mode: FileViewMode) => void
-  /**
-   * FR-422：横栏左端插槽。宿主（如资源卡的「管理/文件/浏览」分段）把自己的切换控件塞进本行，
+  /** 
+   *：横栏左端插槽。宿主（如资源卡的「管理/文件/浏览」分段）把自己的切换控件塞进本行，
    * 而不是在工具栏之上再叠一条只放几个 pill 的横栏。
    */
   leading?: ReactNode
-  /**
-   * FR-422：当前目录条目数。`undefined` = 未知（加载中/出错），此时不渲染汇总——
+  /** 
+   *：当前目录条目数。`undefined` = 未知（加载中/出错），此时不渲染汇总——
    * 汇总是给人做判断的事实，宁缺勿造。
    */
   itemCount?: number
-  /** FR-422：当前目录内文件字节总计（不含子目录递归）。0 或 undefined 不渲染。 */
+  /** 当前目录内文件字节总计（不含子目录递归）。0 或 undefined 不渲染。 */
   totalSize?: number
 }
 
-/**
- * 资源管理器工具栏（FR-070 + FR-375 + FR-422）：**单条**横栏。
+/** 
+ * 资源管理器工具栏：**单条**横栏。
  *
- * FR-422 之前这里是三条横栏（导航+地址栏+视图 / 面包屑 / 八个平铺按钮，实测 93px），叠上宿主的
+ *之前这里是三条横栏（导航+地址栏+视图 / 面包屑 / 八个平铺按钮，实测 93px），叠上宿主的
  * 分段栏（36px + 21px 间距）共四条 149px。1920×1030 实测：合并后横栏 37px，文件列表可视区
  * 613px→725px，同屏完整可见文件行 17→21。压成一条的三个手段：
  *
@@ -140,10 +140,10 @@ export default function Toolbar({
       data-testid="explorer-toolbar"
       className="flex shrink-0 flex-wrap items-center gap-1 border-b bg-muted/30 px-2 py-1"
     >
-      {/* 分段等宿主控件（FR-422）。 */}
+      {/* 分段等宿主控件。 */}
       {leading}
 
-      {/* 后退 / 前进（FR-375） */}
+      {/* 后退 / 前进 */}
       <Button
         type="button"
         size="sm"
@@ -344,7 +344,7 @@ export default function Toolbar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* 视图切换留在最右端（FR-375 三视图）。
+      {/* 视图切换留在最右端（三视图）。
           这里用 `Segments`/`Segment`：三段与「当前视图」严格互斥，正是分段语义。
           只是段内只有图标、没有文案——可访问名靠 `aria-label` + `title` 补足，
           `Segment` 的 `role="tab"`/`aria-selected` 也精确表达了「选了哪一档」，

@@ -3,8 +3,8 @@ import { toast } from 'sonner'
 import api from '@/api/client'
 import { apiErrorMessage } from '@/lib/shared/api-error'
 
-/**
- * 配置分批灰度与交付编排（FR-531）与生效编排（FR-532）。
+/** 
+ * 配置分批灰度与交付编排与生效编排。
  *
  * 契约见 `docs/API.md`、`docs/specs/config-write-grayscale-activation/spec.md`
  * 与后端 `internal/controlplane/service/config_delivery.go`。
@@ -60,7 +60,7 @@ export type DeliveryPauseKind = 'manual' | 'circuit_break'
 /** 继续模式：重试失败目标 / 跳过失败目标。 */
 export type DeliveryResumeMode = 'retry_failed' | 'skip_failed'
 
-/** 层作用域级别（与 FR-529 的 ConfigScopeLevel 对应）。 */
+/** 层作用域级别（与的 ConfigScopeLevel 对应）。 */
 export type ConfigScopeLevel = 'group' | 'instance'
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ export interface DeliveryTargetView {
   backupPath?: string
   previousVersionId?: number | null
   newVersionId?: number | null
-  /** 落盘是否成功。**落盘成功 ≠ 生效成功**（FR-532 §16）。 */
+  /** 落盘是否成功。**落盘成功 ≠ 生效成功**（§16）。 */
   diskWritten: boolean
   /** 生效是否得到确切确认。`bestEffort=true` 时恒为 false。 */
   activateConfirmed: boolean
@@ -373,7 +373,7 @@ export function useConfigDeliveryObserve(id: number | null, enabled = true) {
 // 写动作
 // ---------------------------------------------------------------------------
 
-/**
+/** 
  * 状态推进类动作的公共失效范围。
  *
  * 状态机一条动作会同时改写单、目标与计数，三者都由同一 queryKey 前缀派生；
@@ -409,7 +409,7 @@ const ACTION_FALLBACK: Record<DeliveryActionName, string> = {
   rollback: '回滚失败',
 }
 
-/**
+/** 
  * 动作 mutation 的公共工厂。
  *
  * 刻意**不做乐观更新**：这些动作的真实效果由后端异步推进（`start` 返回 202 后
@@ -534,7 +534,7 @@ export function useCancelConfigDelivery() {
   })
 }
 
-/**
+/** 
  * 回滚（POST /config-deliveries/:id/rollback）。
  *
  * `instanceIds` 为空 = **整批回滚**（逐台还原快照 + 配置层版本回退 + 重新生效）；
@@ -651,7 +651,7 @@ export function isCircuitBreakPaused(order: Pick<ConfigDeliveryOrder, 'status' |
   return order.status === 'paused' && order.pauseKind === 'circuit_break'
 }
 
-/**
+/** 
  * 目标是否「已生效且得到确认」。
  *
  * 只在 `activated` **且** `activateConfirmed` 时成立。`bestEffort` 目标虽然也记
@@ -679,7 +679,7 @@ export interface DeliveryActions {
   remove: boolean
 }
 
-/**
+/** 
  * 由当前状态推导可用动作。
  *
  * 判据全部取自后端状态机表（`model.deliveryOrderTransitions`）与各方法的前置校验，
@@ -732,7 +732,7 @@ export const DELIVERY_FLOW: DeliveryStatus[] = [
   'completed',
 ]
 
-/**
+/** 
  * 当前状态在流程条上的位置；侧路状态（paused / failed / rolling_back / rolled_back / cancelled）
  * 返回 -1，由界面单独高亮并说明「已离开主流程」。
  */
@@ -740,7 +740,7 @@ export function flowIndexOf(status: DeliveryStatus): number {
   return DELIVERY_FLOW.indexOf(status)
 }
 
-/**
+/** 
  * 失败率与 deferred 的展示口径。
  *
  * 分母 = planned − deferred（§9.1：**分母排除 deferred**），因此这里直接用后端算好的

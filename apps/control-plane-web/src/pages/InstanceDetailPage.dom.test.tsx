@@ -7,8 +7,8 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import InstanceDetailPage from './InstanceDetailPage'
 
-/**
- * 实例详情深链路由强断言（FR-269）。
+/** 
+ * 实例详情深链路由强断言。
  * `/instances/:id` 直接渲染固定分区的服务器统一控制台，不再把路由参数写入 openInstance store。
  */
 function renderDetail(route: string) {
@@ -28,7 +28,7 @@ describe('InstanceDetailPage（mock 深链）', () => {
   it('路由 /instances/1 → 直接渲染种子实例控制台', async () => {
     renderDetail('/instances/1')
 
-    // 顶栏标题只留实例名（FR-412 瘦身，「服务器控制台 /」前缀已删）。
+    // 顶栏标题只留实例名（瘦身，「服务器控制台 /」前缀已删）。
     expect(await screen.findByRole('heading', { name: 'survival-1' })).toBeInTheDocument()
     expect(screen.getByText('运行', { selector: '[data-slot="status-badge"]' })).toBeInTheDocument()
   })

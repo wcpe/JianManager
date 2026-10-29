@@ -4,13 +4,13 @@ import api from '@/api/client'
 /** V1 兼容写白名单（仅用于旧 Token 展示，不再作为新建默认值）。 */
 export const DEFAULT_WRITE_ALLOWLIST = ['instance.life', 'node.maintenance'] as const
 
-/** V1 写白名单项：仅用于旧 Token 的兼容展示映射（FR-395）。 */
+/** V1 写白名单项：仅用于旧 Token 的兼容展示映射。 */
 export const WRITE_ALLOWLIST_OPTIONS = [
   { value: 'instance.life', labelKey: 'agentTokens.write.instanceLife' },
   { value: 'node.maintenance', labelKey: 'agentTokens.write.nodeMaintenance' },
 ] as const
 
-/** V2 能力分组选项（与后端 service.AgentCapability* 对齐，FR-395 / ADR-080）。 */
+/** V2 能力分组选项（与后端 service.AgentCapability* 对齐ADR-080）。 */
 export const CAPABILITY_OPTIONS = [
   { value: 'node.read', labelKey: 'agentTokens.capability.nodeRead' },
   { value: 'node.operate', labelKey: 'agentTokens.capability.nodeOperate' },
@@ -31,7 +31,7 @@ export const CAPABILITY_OPTIONS = [
 /** 新建 V2 Token 的默认能力：仅只读，服务端不隐式补能力。 */
 export const DEFAULT_CAPABILITIES = ['node.read', 'instance.read', 'observability.read'] as const
 
-/**
+/** 
  * 列表项：后端 model.AgentToken 序列化后，scope/白名单字段为 JSON 文本字符串
  *（如 `"[1,2]"` / `"[]"`），前端统一经 parse* 规范化为数组后再展示。
  */
@@ -47,11 +47,11 @@ export interface AgentTokenRaw {
   lastUsedAt?: string | null
   createdAt: string
   createdBy: number
-  /** 近 24h 调用次数（FR-390）。 */
+  /** 近 24h 调用次数。 */
   callCount24h?: number
-  /** 策略版本；缺失或非 2 一律按 V1 展示（FR-395）。 */
+  /** 策略版本；缺失或非 2 一律按 V1 展示。 */
   policyVersion?: number | null
-  /** V2 能力数组；V1 为空（FR-395）。 */
+  /** V2 能力数组；V1 为空。 */
   capabilities?: string | string[] | null
 }
 
@@ -121,7 +121,7 @@ export function parseStringList(value: string | string[] | null | undefined): st
   }
 }
 
-/** 规范化列表项（V1/V2 兼容，FR-395）。 */
+/** 规范化列表项（V1/V2 兼容）。 */
 export function normalizeAgentToken(raw: AgentTokenRaw): AgentTokenInfo {
   const n = Number(raw.callCount24h)
   const pv = raw.policyVersion === 2 ? 2 : 1
@@ -144,7 +144,7 @@ export function normalizeAgentToken(raw: AgentTokenRaw): AgentTokenInfo {
   }
 }
 
-/**
+/** 
  * 计算 Token 展示状态：
  * - revoked：已吊销
  * - expired：已过期（未吊销但 expiresAt <= now）
@@ -160,7 +160,7 @@ export function agentTokenStatus(
   return 'active'
 }
 
-/** 列出全部 Agent Token 元数据（仅平台管理员，FR-387 / FR-384）。 */
+/** 列出全部 Agent Token 元数据（仅平台管理员）。 */
 export function useAgentTokens(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['agentTokens'],

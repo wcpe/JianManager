@@ -9,9 +9,9 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// DisposeOrphanRuntime 处置无主运行时（FR-326）：CP 反向对账确认后下发。
+// DisposeOrphanRuntime 处置无主运行时：CP 反向对账确认后下发。
 //
-// 语义对齐 FR-310/325 运行态清理，但**不删工作目录**、不触碰 CP 业务记录：
+// 语义对齐325 运行态清理，但**不删工作目录**、不触碰 CP 业务记录：
 //  1. 若注册表中有该实例且进程在跑 → Kill 进程树；
 //  2. 移除 Worker 注册表条目；
 //  3. ReapDaemonForDelete：强杀遗留 wrapper/Java 进程树并清 PID/sock。
@@ -40,7 +40,7 @@ func (s *Server) DisposeOrphanRuntime(ctx context.Context, req *workerpb.Dispose
 		}
 	}
 
-	// 未在注册表或 Kill 后仍可能遗留 daemon PID/sock（FR-310 同根）。
+	// 未在注册表或 Kill 后仍可能遗留 daemon PID/sock（同根）。
 	s.manager.ReapDaemonForDelete(uuid)
 
 	slog.Info("处置无主运行时：本地运行态已清理", "instanceId", uuid)

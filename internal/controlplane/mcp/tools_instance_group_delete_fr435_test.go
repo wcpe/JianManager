@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-435 回归：instance_group_delete 的确认目标既非实例也非节点——descriptor 复用 instance 资源类型
+// 回归：instance_group_delete 的确认目标既非实例也非节点——descriptor 复用 instance 资源类型
 // 只为按节点/实例 scope 判定可发现性，其 id 指向分组自身。
 //
 // 修复前：callRegisteredTool 对带 ConfirmField 的工具先调 authorizeDestructiveTarget，后者按

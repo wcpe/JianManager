@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// FR-486 范围②：启动进度上报器。
+// 范围②：启动进度上报器。
 //
 // 这些用例只验「不拖累启动」这条硬约束——上报是对外网络调用，必须保证
 // 任何失败路径都不会把异常抛回启动主链路。真正的端到端上报由 CP 侧用例与真机验收覆盖。
@@ -30,7 +30,7 @@ func TestReport_NilReceiverIsSafe(t *testing.T) {
 
 // TestReport_UnreachablePSDoesNotBlock 关键约束：CP 不可达时上报必须**快速返回**。
 //
-// 这条守的是 FR-486 最容易搞坏的地方——为了观测启动，反而把启动拖慢。
+// 这条守的是最容易搞坏的地方——为了观测启动，反而把启动拖慢。
 // 断言上界取 reportTimeout + 宽裕量：若实现里用了 grpc 默认超时或无限重试，
 // 这里会超时失败，直接把问题挡在合并前。
 func TestReport_UnreachablePSDoesNotBlock(t *testing.T) {

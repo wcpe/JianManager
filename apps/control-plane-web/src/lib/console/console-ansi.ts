@@ -1,15 +1,15 @@
-/**
- * 控制台 ANSI 解析（FR-415，spec §1.3，ADR-086 代价 1）。
+/** 
+ * 控制台 ANSI 解析（spec §1.3，ADR-086 代价 1）。
  *
  * **只解析 SGR（`ESC[…m`）**：MC/Paper 实际只用 16 色前景/背景 + 粗体，不需要完整终端仿真。
  * 其余转义序列（光标移动、清屏、OSC 设标题、DCS…）一律**整段吞掉不渲染**——
  * 这是 ADR-086 明确接受的代价 5：宁可少显示，也绝不把转义字节当正文吐成乱码。
  *
  * 之所以自己解析而不复用 xterm：输出区改成 DOM 虚拟列表后没有终端仿真器可依赖，
- * 而按级别过滤 / 堆栈折叠 / 行级复制（FR-417/418）都要求行内是可拆的 span。
+ * 而按级别过滤 / 堆栈折叠 / 行级复制（418）都要求行内是可拆的 span。
  */
 
-/**
+/** 
  * xterm.js 的默认 16 色调色板（Tango）。
  *
  * 抄这一份而不是另挑配色，是为了满足 ADR-086 的验证项「ANSI 着色与旧 xterm 渲染肉眼一致」：
@@ -40,7 +40,7 @@ interface EscapeToken {
   sgr?: string
 }
 
-/**
+/** 
  * 判断是否为「应当吞掉」的 C0 控制字符。
  *
  * 保留 `\t`：Java 堆栈帧以 `\tat …` 起头，吞掉制表符会让 spec §1.2 的堆栈帧识别失效。
@@ -51,7 +51,7 @@ function isSwallowedControl(code: number): boolean {
   return code < 0x20 || code === 0x7f
 }
 
-/**
+/** 
  * 从 `index`（必须指向 ESC）起读一个转义序列。
  *
  * 序列被 chunk 边界截断（无终止字节）时返回剩余全长——整段吞掉而非把残字节当正文，
@@ -149,7 +149,7 @@ function applySgr(style: AnsiStyle, params: string): AnsiStyle {
   return next
 }
 
-/**
+/** 
  * 把含 ANSI 的文本拆成同样式片段。
  *
  * 无 ANSI（MC 日志的绝大多数行）走快路径，避免逐字符扫描。
@@ -226,7 +226,7 @@ export interface AnsiPlainText {
   map: number[]
 }
 
-/**
+/** 
  * 计算纯文本及其到原串的下标映射。
  *
  * 行解析器需要「在纯文本上匹配前缀，却在原串上切正文」——直接在含 ANSI 的原串上写正则，
@@ -252,7 +252,7 @@ export function ansiPlainText(raw: string): AnsiPlainText {
   return { plain: chars.join(''), map }
 }
 
-/**
+/** 
  * 按纯文本下标切掉原串前缀，并把前缀里出现过的 SGR 序列**前置保留**。
  *
  * 保留是必要的：若前缀里 `ESC[0;32m` 开了绿色而正文靠它着色，直接砍掉前缀会让正文失色，

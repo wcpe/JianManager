@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 
-/**
- * 实例配置源明面化（FR-451 / ADR-092）。
+/** 
+ * 实例配置源明面化（ADR-092）。
  *
  * 每个受管配置项（启动参数 `startup.*` + `server.properties` 关键项 `props.*`）显式声明来源：
  * - `inline`：平台持有该值，可编辑、可版本化（写回真源）。
@@ -13,13 +13,13 @@ import api from '@/api/client'
  * （`GET/PUT /instances/:id/configs/surface`）。
  */
 
-/**
+/** 
  * 配置源契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { ConfigSourceKind, ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'
 import type { ConfigSurfaceItem, ConfigSurfaceUpdateItem } from '@/lib/config-explorer/config-surface'
 
-/** 查询实例受管配置项清单（FR-451）。 */
+/** 查询实例受管配置项清单。 */
 export function useConfigSurface(instanceId: number, enabled = true) {
   return useQuery({
     queryKey: ['config-surface', instanceId],
@@ -31,7 +31,7 @@ export function useConfigSurface(instanceId: number, enabled = true) {
   })
 }
 
-/** 按项更新配置源（FR-451）：二态互斥、内联写回真源、文件引用仅登记 + 生效值预览。 */
+/** 按项更新配置源：二态互斥、内联写回真源、文件引用仅登记 + 生效值预览。 */
 export function useUpdateConfigSurface(instanceId: number) {
   const qc = useQueryClient()
   return useMutation({

@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// proxyApplier 据心跳响应携带的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）。
+// proxyApplier 据心跳响应携带的期望代理运行时重建 Worker 出站 client（见 ADR-043）。
 //
 // CP 每拍下发该节点期望代理（custom→节点值 / inherit→全局默认）+ generation（配置哈希）。
 // applier 仅当 generation 与上次已应用代不同时才调 rebuild（避免每拍重建 client）。

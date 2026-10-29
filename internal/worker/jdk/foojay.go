@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// foojayDefaultBase 是 foojay disco API 默认基址（FR-178）。
+// foojayDefaultBase 是 foojay disco API 默认基址。
 // 经环境变量 JIANMANAGER_JDK_FOOJAY_BASE 覆盖（CP 侧由出站代理 client 统一发起）。
 const foojayDefaultBase = "https://api.foojay.io"
 
@@ -100,7 +100,7 @@ type foojayPackagesResponse struct {
 	Result []foojayPackage `json:"result"`
 }
 
-// CatalogPackage 是喂前端版本选择器的一条可选 JDK（FR-178）。
+// CatalogPackage 是喂前端版本选择器的一条可选 JDK。
 type CatalogPackage struct {
 	Distribution string `json:"distribution"`
 	MajorVersion int    `json:"majorVersion"`
@@ -136,14 +136,14 @@ func foojayQuery(base, distribution string, major int, version, arch, archiveTyp
 	return strings.TrimRight(base, "/") + "/disco/v3.0/packages?" + q.Encode()
 }
 
-// foojayFetch 发起 foojay disco /packages 查询并解析响应。client 经进程级出站代理（FR-174）。
+// foojayFetch 发起 foojay disco /packages 查询并解析响应。client 经进程级出站代理。
 func foojayFetch(client *http.Client, queryURL string) ([]foojayPackage, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	resp, err := client.Get(queryURL)
 	if err != nil {
-		// 解析下载源阶段的网络类失败同样追加可操作引导（FR-279）。
+		// 解析下载源阶段的网络类失败同样追加可操作引导。
 		return nil, annotateDownloadError(fmt.Errorf("foojay 查询失败: %w", err))
 	}
 	defer resp.Body.Close()
@@ -172,7 +172,7 @@ func foojayResolveDownloadURL(client *http.Client, base, distribution string, ma
 	return "", fmt.Errorf("foojay 无 %s %d 的可下载构建（arch=%s os=%s）", distribution, major, foojayArch(arch), foojayOS())
 }
 
-// FoojayCatalog 返回某发行版在某大版本下可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
+// FoojayCatalog 返回某发行版在某大版本下可选的具体 JDK 版本，喂前端版本选择器。
 // major<=0 时返回该发行版的可用大版本概览（每大版本最新一条）。client 经出站代理。
 func FoojayCatalog(client *http.Client, base, distribution string, major int, arch string) ([]CatalogPackage, error) {
 	if base == "" {
@@ -202,7 +202,7 @@ func FoojayCatalog(client *http.Client, base, distribution string, major int, ar
 	return out, nil
 }
 
-// buildDownloadURLV 在 buildDownloadURL 基础上支持「具体版本」与「扩厂商经 foojay」（FR-178）。
+// buildDownloadURLV 在 buildDownloadURL 基础上支持「具体版本」与「扩厂商经 foojay」。
 //   - 指定了 version（非空）→ 一律经 foojay 按具体版本解析（直链源不支持任意具体版本）。
 //   - 未指定 version 的 Temurin/Corretto/Zulu → 沿用原直链回退（buildDownloadURL）。
 //   - 未指定 version 的其它扩厂商（Liberica/Microsoft/Semeru/GraalVM…）→ 经 foojay 取该大版本最新。

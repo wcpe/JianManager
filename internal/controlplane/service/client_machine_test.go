@@ -26,7 +26,7 @@ func newClientMachineDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestClientMachine_RecordUpsert 机器码登记 upsert（FR-092）：首登 hit=1、再登 hit=2 不增行、不同机器码独立、空入参不登记。
+// TestClientMachine_RecordUpsert 机器码登记 upsert：首登 hit=1、再登 hit=2 不增行、不同机器码独立、空入参不登记。
 func TestClientMachine_RecordUpsert(t *testing.T) {
 	db := newClientMachineDB(t)
 	svc := NewClientMachineService(db)

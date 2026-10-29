@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BusinessReconcileHandler 业务对账协调路由（FR-525）。
+// BusinessReconcileHandler 业务对账协调路由。
 //
 // 契约见 docs/openapi/paths/business.yaml：
 //

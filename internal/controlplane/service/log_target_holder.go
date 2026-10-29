@@ -32,7 +32,7 @@ func (s *LogTargetHolderService) ListForInstance(instanceID uint) ([]model.LogTa
 //
 // 为什么需要批量（2026-10-09 生产实证）：平台级联邦查询会遍历全部实例，逐实例调用
 // ListForInstance 时每次查询要发 N 条 SQL（生产约 25 实例 ⇒ 约 25 条 holder 查询），
-// 而 CP 的 SQLite 连接池被刻意收敛为单连接（FR-318）⇒ 这些查询全部串行排队，与其它
+// 而 CP 的 SQLite 连接池被刻意收敛为单连接⇒ 这些查询全部串行排队，与其它
 // 请求互相阻塞（生产 SLOW SQL 记录到同一形态的 holder 查询 p90 达 2.7s、max 约 10s）。
 // 批量后 N 条降为 1 条。
 //

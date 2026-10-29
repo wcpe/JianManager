@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientStatsHandler 分发统计后台只读端点（FR-095，见 ADR-023）。限平台管理员。
+// ClientStatsHandler 分发统计后台只读端点（见 ADR-023）。限平台管理员。
 type ClientStatsHandler struct {
 	svc *service.ClientDistStatsService
 }

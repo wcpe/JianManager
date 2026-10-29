@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 
 import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 
-/**
- * 命令栏（FR-415，spec §2.2/§2.3；ADR-086）· 受控视图测（ADR-103）。
+/** 
+ * 命令栏（spec §2.2/§2.3；ADR-086）· 受控视图测（ADR-103）。
  *
  * 这些用例锁的是「弃 xterm 输入换原生 input」买到的东西：整行提交、readline 惯用键、
  * 输入法组合期不被打断。旧实现在 xterm `onData` 里手搓这些，全都是坏的。
@@ -191,7 +191,7 @@ describe('ConsoleCommandBar readline 惯用键（ADR-086 点名的失效键）',
   })
 })
 
-describe('ConsoleCommandBar 命令历史（内存内；持久化/^R 属 FR-416）', () => {
+describe('ConsoleCommandBar 命令历史（内存内；持久化/^R 属）', () => {
   it('↑ 回溯到最近一条，再 ↑ 到更早，↓ 回到草稿', () => {
     const { input } = setup({ history: ['first', 'second'] })
     fireEvent.change(input, { target: { value: 'draft' } })

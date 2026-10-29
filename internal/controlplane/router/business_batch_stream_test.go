@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// mkBatchRouterGroup 通过平台管理员 API 建实例组织分组（FR-165 分组树），返回分组 ID。
+// mkBatchRouterGroup 通过平台管理员 API 建实例组织分组（分组树），返回分组 ID。
 func mkBatchRouterGroup(t *testing.T, r *gin.Engine, admin string, name string, parentID *uint) uint {
 	t.Helper()
 	body := map[string]any{"name": name}
@@ -28,7 +28,7 @@ func mkBatchRouterGroup(t *testing.T, r *gin.Engine, admin string, name string, 
 	return uint(parseJSON(t, w)["id"].(float64))
 }
 
-// addInstancesToOrgGroup 把实例加入组织分组（FR-165）。
+// addInstancesToOrgGroup 把实例加入组织分组。
 func addInstancesToOrgGroup(t *testing.T, r *gin.Engine, admin string, groupID uint, instanceIDs ...uint) {
 	t.Helper()
 	w := makeRequest(r, "POST", "/api/v1/instance-groups/"+itoa(groupID)+"/members",

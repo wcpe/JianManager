@@ -1,4 +1,4 @@
-/**
+/** 
  * @file NetworksPageView：群组（Network 软标签）管理页的受控视图（列表 / 拓扑双视图 + 新建弹窗 + 详情成员管理），
  *       取数、写动作、toast 与路由由应用容器负责。
  * @input lib/topology（memberHealth / memberHealthFromStatus / MemberStatusCounts / MemberHealth）、
@@ -12,7 +12,7 @@
  * @sync apps/control-plane-web/src/pages/NetworksPage.tsx（容器 + 拓扑 / 实例候选两个插槽的实现）、
  *        apps/control-plane-web/src/components/console/TopologyGraph.tsx（拓扑接线层，经 renderTopology 注入）、
  *        apps/control-plane-web/src/pages/NetworksPage.dom.test.tsx、NetworksPage.fr032.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-032 群组关系模型、FR-145 可寻址双栏拓扑、FR-335 概要健康分布）
+ * @since（组件受控化迁包；原页群组关系模型可寻址双栏拓扑概要健康分布）
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -44,7 +44,7 @@ import { useVirtualRows } from '@/lib/shared/virtual-list'
 /** 页面双视图：'list' 列表（成员健康分布）/ 'topology' 拓扑（proxy↔backend 注册关系）。 */
 export type NetworkView = 'list' | 'topology'
 
-/**
+/** 
  * 列表项的最小字段集。
  *
  * 刻意只声明本视图用到的字段，而非照搬应用侧 `@/api/networks` 的 `NetworkSummary`：
@@ -56,7 +56,7 @@ export interface NetworkSummaryView {
   name: string
   description?: string
   memberCount: number
-  /** 成员健康计数桶（FR-335）：列表行免详情请求直接渲染健康分布。 */
+  /** 成员健康计数桶：列表行免详情请求直接渲染健康分布。 */
   memberStatus: MemberStatusCounts
 }
 
@@ -92,7 +92,7 @@ export interface NetworkNodeRef {
   name: string
 }
 
-/**
+/** 
  * 实例候选选择器插槽参数：本视图只声明「候选区需要什么、勾选怎么回传」，
  * 「何时发请求、防抖多久、一次取多少条」是外壳策略。
  *
@@ -113,7 +113,7 @@ export interface NetworksInstancePickerArgs {
   adding: boolean
 }
 
-/** 实例运行状态 → i18n 文案键（复用实例页既有键，FR-160 统一 StatusBadge）。 */
+/** 实例运行状态 → i18n 文案键（复用实例页既有键统一 StatusBadge）。 */
 const STATUS_LABEL: Record<string, string> = {
   RUNNING: 'instances.running',
   STOPPED: 'instances.stopped',
@@ -122,14 +122,14 @@ const STATUS_LABEL: Record<string, string> = {
   CRASHED: 'instances.crashed',
 }
 
-/**
+/** 
  * 成员候选行的固定行高（px）。行盒用 `h-9` 钉死，行内 `text-sm`（20px）与 Checkbox（16px）
  * 都不超过它，未加任何行间距（间距已折进行高，理由见候选列表处的注释）。
  * 虚拟化按 `index × 该值` 定位，必须与真实渲染高度严格一致，否则滚动会累积漂移。
  */
 const CAND_ROW_HEIGHT = 36
 
-/**
+/** 
  * 详情左栏成员行的固定行高（px）。行盒用 `h-9` 钉死：`py-2`(16) + 状态徽章(20) = 36，
  * 与去掉 `space-y-1` 前的实际行盒同高；虚拟化按 `index × 该值` 定位，必须与真实行盒严格一致。
  */
@@ -162,7 +162,7 @@ function ViewTab({
   )
 }
 
-/** 群组列表：卡片化行 + 成员健康分布（FR-335：直接读概要内联的 memberStatus 计数，零详情请求）。 */
+/** 群组列表：卡片化行 + 成员健康分布（：直接读概要内联的 memberStatus 计数，零详情请求）。 */
 function NetworkListView({
   networks,
   onView,
@@ -296,7 +296,7 @@ interface CreateNetworkModalViewProps {
   onSubmit: (input: { name: string; description?: string }) => Promise<boolean>
 }
 
-/** 新建群组弹窗（名称必填 + 描述可选，FR-032）。 */
+/** 新建群组弹窗（名称必填 + 描述可选）。 */
 function CreateNetworkModalView({ creating = false, onClose, onSubmit }: CreateNetworkModalViewProps) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
@@ -359,7 +359,7 @@ function CreateNetworkModalView({ creating = false, onClose, onSubmit }: CreateN
   )
 }
 
-/**
+/** 
  * 实例候选选择器（多选）：虚拟化勾选列表 + 服务端搜索。
  *
  * 【为什么不是 `InstancePicker`】后者是单选 Combobox，而本页要「勾选多个 → 加入所选 N」的批量语义，
@@ -424,7 +424,7 @@ export function NetworkInstancePickerView({
   // 已选态改 Set：候选行按 selected.includes(id) 判断，1200 行 × O(已选数) 会随勾选累积成热点。
   const selectedSet = useMemo(() => new Set(selected), [selected])
 
-  /**
+  /** 
    * 候选列表虚拟化。实例数是千级（大档 1200），此前候选面板把整表铺进 DOM。
    *
    * 【为什么去掉原先的 space-y-1】它给相邻行加 4px 间距，而这 4px 不计入行高：
@@ -524,7 +524,7 @@ export interface NetworkDetailPanelViewProps {
   detail?: NetworkDetailView
   /** 详情取数中：正文渲染加载占位（此前是「空标题 + 暂无成员」的假空态）。 */
   detailLoading?: boolean
-  /**
+  /** 
    * 详情不可用：id 非法（`?network=abc`）或后端查无此群组（深链指向已删除的群组）。
    * 此时渲染明确提示，而不是一个既没标题也没内容的空弹窗。
    */
@@ -547,8 +547,8 @@ export interface NetworkDetailPanelViewProps {
   renderInstancePicker: (args: NetworksInstancePickerArgs) => ReactNode
 }
 
-/**
- * 群组详情：可寻址双栏（左成员 / 右候选），消除原嵌套滚动模态（FR-145）。
+/** 
+ * 群组详情：可寻址双栏（左成员 / 右候选），消除原嵌套滚动模态。
  * 成员用 StatusBadge；候选含节点·状态·端口并可筛。
  *
  * 受控边界：`selected`（待加入的勾选集合）与 `removeTarget`（二次确认目标）是本组件内的纯 UI 状态；
@@ -575,7 +575,7 @@ export function NetworkDetailPanelView({
   const members = useMemo(() => detail?.members ?? [], [detail])
   const memberIds = useMemo(() => members.map((m) => m.instanceId), [members])
 
-  /**
+  /** 
    * 成员列表虚拟化：成员数级与右栏候选同级（都是实例数），大档 1200 时整列进 DOM 同样是主开销。
    *
    * 【为什么去掉原先的 space-y-1】它给相邻行加 4px 间距，而这 4px 不计入行高：第 N 行的真实偏移
@@ -738,7 +738,7 @@ export function NetworkDetailPanelView({
   )
 }
 
-/**
+/** 
  * 群组页的注入契约（ADR-103 a+b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  *
  * 受控边界：
@@ -794,7 +794,7 @@ export interface NetworksPageViewProps {
   onRemoveMember: (instanceId: number) => Promise<void>
   /** 群组成员批量启停上报。 */
   onBatchAction: (action: 'start' | 'stop') => void
-  /**
+  /** 
    * 拓扑图插槽。拓扑本体与它的接线层（取数）都在应用侧，包内不得引用它；
    * 本视图只提供 `Panel` 外壳、副标题与图例。
    */
@@ -803,8 +803,8 @@ export interface NetworksPageViewProps {
   renderInstancePicker: (args: NetworksInstancePickerArgs) => ReactNode
 }
 
-/**
- * 群组（Network 软标签）管理页（FR-032 / FR-145 / ADR-007）：
+/** 
+ * 群组（Network 软标签）管理页（ADR-007）：
  * 列表（成员健康分布）/ 拓扑（proxy↔backend 注册关系）两视图，详情可深链（?network=&view=）改为可寻址双栏。
  */
 export function NetworksPageView({

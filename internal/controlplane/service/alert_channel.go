@@ -17,7 +17,7 @@ var ErrAlertChannelNotFound = errors.New("通知通道不存在")
 // ErrAlertChannelInUse 通道被告警规则引用，禁止删除。
 var ErrAlertChannelInUse = errors.New("通道被告警规则引用，无法删除")
 
-// AlertChannelService 通知通道服务（FR-085）。负责通道 CRUD、配置校验与测试发送。
+// AlertChannelService 通知通道服务。负责通道 CRUD、配置校验与测试发送。
 type AlertChannelService struct {
 	db       *gorm.DB
 	notifier *ChannelNotifier

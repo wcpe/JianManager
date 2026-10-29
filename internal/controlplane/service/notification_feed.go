@@ -46,7 +46,7 @@ type FeedFilter struct {
 	PageSize int    // 每页条数，<=0 取默认 50
 }
 
-// NotificationFeedService 统一通知流聚合服务（FR-216，见 ADR-048）。
+// NotificationFeedService 统一通知流聚合服务（见 ADR-048）。
 // 只读聚合：查询时把 notifications（按用户）+ alert_events（全局）合并为一条通知流；
 // 不新建物理表、不双写。标记已读下推到各源既有语义（NotificationService / AlertService）。
 type NotificationFeedService struct {

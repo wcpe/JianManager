@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// BotLoadCommandCheckpointService 负责 FR-369 命令编排 checkpoint 物化与查询。
+// BotLoadCommandCheckpointService 负责命令编排 checkpoint 物化与查询。
 type BotLoadCommandCheckpointService struct {
 	db *gorm.DB
 }

@@ -10,7 +10,7 @@ import type { AuditFilterState } from '@/lib/audit/audit-filters'
 /** 用户候选窗口大小：靠键入服务端 `q` 缩小，与 InstancePicker / 群组成员候选同款。 */
 const AUDIT_USER_LIMIT = 50
 
-/**
+/** 
  * 审计日志页容器（ADR-103 a 范式）：分页取数、筛选态、候选用户与导出都在这里决定，
  * 筛选条、时间线行与展开详情交共享视图。
  *
@@ -21,14 +21,14 @@ const AUDIT_USER_LIMIT = 50
  * 保留同路径默认导出，路由表（`ROUTE_CHUNKS['/audit']`）与既有用例无需改动。
  */
 export default function AuditPage() {
-  /**
+  /** 
    * 文本类筛选取 300ms 防抖：输入框必须即时回显（`filter` 原样喂给视图），
    * 但请求键只用停止键入后的值——否则每敲一个字都重取一页审计日志（还带无限分页的叠加页）。
    * 时间与用户下拉是离散选择，不需要防抖。
    */
   const [userKeyword, setUserKeyword] = useState('')
   const userQ = useDebounced(userKeyword, 300).trim()
-  // 用户候选走服务端搜索（FR-336）：默认前 N 条 + 键入 `q`，不再拉全量用户。
+  // 用户候选走服务端搜索：默认前 N 条 + 键入 `q`，不再拉全量用户。
   const { data: userPage } = useUserSearch({
     ...(userQ ? { q: userQ } : {}),
     limit: AUDIT_USER_LIMIT,
@@ -46,7 +46,7 @@ export default function AuditPage() {
   const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useAuditLogs(params)
   const logs = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data])
 
-  /**
+  /** 
    * 导出当前筛选命中的日志（NDJSON 白名单导出）。
    * Blob 下载是浏览器副作用，故留在容器：视图只上报点击，按钮禁用态仍按「已加载行为 0」判定。
    */

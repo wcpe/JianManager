@@ -63,7 +63,7 @@ type pluginWorkerOps interface {
 	ListFiles(ctx context.Context, in *workerpb.ListFilesRequest, opts ...grpc.CallOption) (*workerpb.ListFilesResponse, error)
 	ReadFile(ctx context.Context, in *workerpb.ReadFileRequest, opts ...grpc.CallOption) (*workerpb.ReadFileResponse, error)
 	WriteFile(ctx context.Context, in *workerpb.WriteFileRequest, opts ...grpc.CallOption) (*workerpb.WriteFileResponse, error)
-	// UploadFile 流式上传（FR-304）：部署经 uploadToWorker 统一入口，大 jar 不受 unary 单消息上限约束；
+	// UploadFile 流式上传：部署经 uploadToWorker 统一入口，大 jar 不受 unary 单消息上限约束；
 	// 老 Worker 返回 Unimplemented 时自动回退 WriteFile（≤64MB）。
 	UploadFile(ctx context.Context, opts ...grpc.CallOption) (workerpb.WorkerService_UploadFileClient, error)
 	DeleteFile(ctx context.Context, in *workerpb.DeleteFileRequest, opts ...grpc.CallOption) (*workerpb.DeleteFileResponse, error)
@@ -140,7 +140,7 @@ func WithPluginOverwrite(overwrite bool) PluginUploadOption {
 	}
 }
 
-// PluginService 插件/模组单服管理（FR-052）。
+// PluginService 插件/模组单服管理。
 // 复用 file gRPC（ListFiles/WriteFile/RenameFile/DeleteFile）完成实际文件操作，
 // 上传时先入制品库（AssetService，type=plugin，sha256 去重）再部署到实例 plugins/。
 // 不直接读写实例工作目录（归 Worker 所有，遵守架构不变量）。
@@ -230,7 +230,7 @@ func (s *PluginService) Upload(instanceID uint, dir, filename string, content []
 		}
 	}
 
-	// jar 先入制品库：内容寻址去重，便于 FR-053 批量部署与追溯。
+	// jar 先入制品库：内容寻址去重，便于批量部署与追溯。
 	var asset *model.Asset
 	if s.asset != nil && pluginDirExt[dir] == ".jar" {
 		a, ierr := s.asset.Ingest(io.NopCloser(strings.NewReader(string(content))), IngestParams{
@@ -244,7 +244,7 @@ func (s *PluginService) Upload(instanceID uint, dir, filename string, content []
 		asset = a
 	}
 
-	// FR-304：部署走流式统一入口（老 Worker 自动回退 WriteFile）。
+	// 部署走流式统一入口（老 Worker 自动回退 WriteFile）。
 	// 超时从 30s 放宽为 5 分钟：流式后传输时长与 jar 体积相关。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -505,7 +505,7 @@ func (s *PluginService) deployAssetToInstance(inst *model.Instance, asset plugin
 			return fmt.Errorf("文件已存在: %s/%s", dir, asset.filename)
 		}
 	}
-	// FR-304：批量扇出同走流式统一入口（老 Worker 自动回退 WriteFile），超时随之放宽为 5 分钟。
+	// 批量扇出同走流式统一入口（老 Worker 自动回退 WriteFile），超时随之放宽为 5 分钟。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	if err := uploadToWorker(ctx, worker, inst.UUID, dir+"/"+asset.filename, bytes.NewReader(asset.content)); err != nil {

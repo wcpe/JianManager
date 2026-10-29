@@ -10,12 +10,12 @@ import { useAuthStore } from '@/stores/auth'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 import PlayersPage from './PlayersPage'
 
-/**
- * PlayersPage 强断言（FR-206 玩家域）：渲染 seed 在线玩家 / 封禁记录联动 / 注入 500 降级不崩。
+/** 
+ * PlayersPage 强断言（玩家域）：渲染 seed 在线玩家 / 封禁记录联动 / 注入 500 降级不崩。
  * 默认「在线玩家」tab 仅打 GET /players；封禁 tab 打 GET /bans（均属本域，不触发跨域 /instances）。
  */
 
-/**
+/** 
  * 登录为平台管理员（role=10）：解封走 DangerConfirm scope=group 的前端角色门禁，
  * 需 store.role≥1 才放行确认按钮，故构造带 role 的 fakeJWT 并灌入 auth store + sessions。
  */
@@ -145,7 +145,7 @@ describe('PlayersPage（mock 假后端）', () => {
     })
   })
 
-  /**
+  /** 
    * 千级实例的判据：实例数是千级（大档 1200），筛选器**不得**用全量列举——
    * 实时事件与白名单两处原先都是「容器拉全量 `/instances` → map 成 Radix SelectItem」，
    * 现改走服务端搜索：默认前 N 条 + 键入经 300ms 防抖下发 `q`，截断时提示继续输入。
@@ -265,7 +265,7 @@ describe('PlayersPage（mock 假后端）', () => {
     }
   })
 
-  /**
+  /** 
    * 页内 Tab 的语义与 URL 同步（本次补）：
    * 原实现是裸 `<button>`（无 role/aria-selected，选中态只靠边框颜色），且 Tab 不入 URL——
    * 刷新、分享链接、浏览器后退都回不到同一个 Tab。

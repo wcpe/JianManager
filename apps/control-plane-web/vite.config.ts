@@ -5,7 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 import { readFileSync } from 'node:fs'
 
-// FR-288（见 ADR-064/065）：版本唯一真源 = internal/version/version.go。
+// （见 ADR-064/065）：版本唯一真源 = internal/version/version.go。
 // 构建期（dev 与 build 同路径）解析注入 __APP_VERSION__，package.json 不再承载
 // 版本语义（冻结 0.0.0）——bump 真源一处，前端展示 / Go /version / 产物路径三者一致。
 const versionGo = readFileSync(path.resolve(__dirname, '../../internal/version/version.go'), 'utf8')
@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_')
   const apiTarget = process.env.VITE_API_TARGET ?? env.VITE_API_TARGET
   return {
-  // 注入前端版本号，运维控制台侧栏底部展示（FR-037；来源见上 FR-288）
+  // 注入前端版本号，运维控制台侧栏底部展示（来源见上）
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
@@ -67,7 +67,7 @@ export default defineConfig(({ mode }) => {
     },
   },
   plugins: [react(), tailwindcss()],
-  // @jianmanager/ui 经 pnpm workspace 真依赖解析（源码 exports，Vite 直接转译），不再 alias（FR-283）。
+  // @jianmanager/ui 经 pnpm workspace 真依赖解析（源码 exports，Vite 直接转译），不再 alias。
   resolve: {
     alias: [{ find: '@', replacement: path.resolve(__dirname, './src') }],
   },
@@ -108,10 +108,10 @@ export default defineConfig(({ mode }) => {
       },
     },
   },
-  // vitest 双 project（FR-196 / ADR-047 决策 4）：node 跑纯逻辑单测（保留现状），
+  // vitest 双 project（ADR-047 决策 4）：node 跑纯逻辑单测（保留现状），
   // dom 跑 jsdom + testing-library 的组件 / 页面强断言（*.dom.test.tsx）。互不污染。
   test: {
-    /**
+    /** 
      * 覆盖率（补齐规则与工具的脱节）。
      *
      * `.claude/rules/testing-and-quality.md` 要求「新增代码覆盖率 ≥60%」，

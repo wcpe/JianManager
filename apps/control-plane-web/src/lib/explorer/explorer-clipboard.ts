@@ -1,7 +1,7 @@
 import { baseName, joinPath, isWithin } from '@/lib/shared/paths'
 
-/**
- * 资源管理器剪贴板模型（FR-070）。
+/** 
+ * 资源管理器剪贴板模型。
  *
  * 范围决策（见 specs/file-explorer/impl.md）：
  * - 剪切（cut）→ 粘贴 = 移动，经后端 rename（跨目录），文件与目录均支持；
@@ -48,7 +48,7 @@ export type SkipReason =
   | 'into-self' // 把目录移动/复制进自身或子目录
   | 'name-conflict' // 目标已存在同名
 
-/**
+/** 
  * 基于剪贴板内容、目标目录与目标目录现有名字集合，生成粘贴计划。
  * @param clip 剪贴板
  * @param targetDir 目标目录（相对路径，空串=根）

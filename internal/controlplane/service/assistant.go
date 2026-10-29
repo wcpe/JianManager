@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// AI 助手配置层的业务错误（FR-514）。router 层把它们映射成 HTTP 状态码。
+// AI 助手配置层的业务错误。router 层把它们映射成 HTTP 状态码。
 var (
 	// ErrAssistantNotFound 供应商/模型不存在。
 	ErrAssistantNotFound = errors.New("对象不存在")
@@ -24,14 +24,14 @@ var (
 	ErrAssistantConflict = errors.New("名称或标识已存在，或数据已被他人修改")
 	// ErrAssistantInvalid 参数不合规（协议、地址、名称长度等）。
 	ErrAssistantInvalid = errors.New("参数不合规")
-	// ErrAssistantContextTooLarge 页面上下文整体超限（FR-518 §6）：
+	// ErrAssistantContextTooLarge 页面上下文整体超限（§6）：
 	// 与「某项被剔除」区分开——那是裁剪后继续，这是拒收本次请求。
 	ErrAssistantContextTooLarge = errors.New("页面上下文过大")
-	// ErrAssistantForbidden 执行期权限不足（FR-516 §5.1）。
+	// ErrAssistantForbidden 执行期权限不足（§5.1）。
 	// 与「不存在」共用 404 语义会让「谁有这个资源」变成可探测的侧信道，
 	// 故工具执行层面单独区分为 403。
 	ErrAssistantForbidden = errors.New("无权限执行该操作")
-	// FR-516 §7 确认票据错误族。
+	// §7 确认票据错误族。
 	ErrAssistantConfirmExpired  = errors.New("确认已过期")
 	ErrAssistantConfirmConsumed = errors.New("确认已被执行")
 	ErrAssistantConfirmStale    = errors.New("确认已失效")
@@ -41,13 +41,13 @@ var (
 	ErrAssistantInUse = errors.New("对象正被引用，无法删除")
 )
 
-// assistantCredentialEnvPattern 允许的环境变量名（FR-514 spec §4）。
+// assistantCredentialEnvPattern 允许的环境变量名（spec §4）。
 //
 // 收窄到专用前缀只查进程环境：既有 QQ 那套 resolveEnvRef 还含"读文件回落"，
 // 直接复用会让「一个环境变量名」实际变成「可读取数据根下任意文件」的入口。
 var assistantCredentialEnvPattern = regexp.MustCompile(`^JIANMANAGER_ASSISTANT_[A-Z0-9_]{1,64}$`)
 
-// AssistantService AI 供应商/模型配置服务（FR-514，见 ADR-105）。
+// AssistantService AI 供应商/模型配置服务（见 ADR-105）。
 type AssistantService struct {
 	db  *gorm.DB
 	enc *KeyEncryptor
@@ -77,7 +77,7 @@ func NewAssistantService(db *gorm.DB, enc *KeyEncryptor) *AssistantService {
 // SetEgress 注入受保护出站工厂。未注入时配置校验与探测都会明确报错。
 func (s *AssistantService) SetEgress(g *httpclient.Guard) { s.egress = g }
 
-// SetEgressFactory 注入「按放行段重建出站工厂」的能力（FR-514 私网放行）。
+// SetEgressFactory 注入「按放行段重建出站工厂」的能力（私网放行）。
 //
 // 装配层传入的工厂应当固化其余参数（超时、代理、AllowInsecure），只让放行段变化。
 func (s *AssistantService) SetEgressFactory(f func(allowPrivate []netip.Prefix) *httpclient.Guard) {
@@ -100,7 +100,7 @@ type SaveProviderParams struct {
 	CredentialSecret string
 	// ClearCredential 显式清除已保存的密文凭据。
 	ClearCredential bool
-	// ProxyMode 出站代理模式（FR-539）：direct / env / custom。
+	// ProxyMode 出站代理模式：direct / env / custom。
 	// 空串表示「不改动」（编辑态）或使用默认 direct（创建态）。
 	ProxyMode string
 	// ProxyURL 仅 custom 模式使用。含 userinfo 时整串落库且**永不回显**。
@@ -120,7 +120,7 @@ type ProviderView struct {
 	CredentialEnv string `json:"credentialEnv,omitempty"`
 	// HasCredential 是否已配置可用凭据（stored 有密文 / env 有变量名）。
 	HasCredential bool `json:"hasCredential"`
-	// ProxyMode 出站代理模式（FR-539）。
+	// ProxyMode 出站代理模式。
 	ProxyMode string `json:"proxyMode"`
 	// ProxyHasAuth 代理地址是否带 userinfo：只回布尔，**绝不回显地址与口令**。
 	ProxyHasAuth bool   `json:"proxyHasAuth"`
@@ -608,7 +608,7 @@ func (s *AssistantService) EnsureSetting() error {
 // AvailableModel 普通用户可见的模型摘要（**不含端点与凭据字段**）。
 //
 // 关于 ProviderName：早先这里刻意不带供应商名（理由是「普通用户不需要知道有几个供应商」），
-// 但 FR-519 §5.1 要求界面上明示「相关数据将发送给 <供应商>」——这是**用户知情权**，
+// 但§5.1 要求界面上明示「相关数据将发送给 <供应商>」——这是**用户知情权**，
 // 不是暴露组织信息：用户要知道自己的提问发给谁。因此补上名称，
 // 仍然**不含** baseUrl / 凭据引用 / 密文（那些才是真正的敏感面）。
 type AvailableModel struct {
@@ -669,7 +669,7 @@ func (s *AssistantService) AvailableModels() ([]AvailableModel, *uint, error) {
 
 // normalizeProxyMode 归一化代理模式（空值按 direct）。
 //
-// 默认 direct 是刻意的（FR-539）：不回退到 `ProxyFromEnvironment`，
+// 默认 direct 是刻意的：不回退到 `ProxyFromEnvironment`，
 // 否则「本机为别的用途设了全局代理」会悄悄把模型出站改道，
 // 而管理员在面板上看到的是「直连」。
 func normalizeProxyMode(mode string) string {

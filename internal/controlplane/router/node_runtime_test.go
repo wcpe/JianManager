@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNodeRuntime_ArtifactCache_RequiresAdmin 非平台管理员访问制品缓存端点回 403（FR-178）。
+// TestNodeRuntime_ArtifactCache_RequiresAdmin 非平台管理员访问制品缓存端点回 403。
 func TestNodeRuntime_ArtifactCache_RequiresAdmin(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -19,7 +19,7 @@ func TestNodeRuntime_ArtifactCache_RequiresAdmin(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 }
 
-// TestNodeRuntime_ArtifactCache_OfflineNode 管理员访问离线节点的缓存端点回 503 NODE_OFFLINE（FR-178）。
+// TestNodeRuntime_ArtifactCache_OfflineNode 管理员访问离线节点的缓存端点回 503 NODE_OFFLINE。
 func TestNodeRuntime_ArtifactCache_OfflineNode(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -30,7 +30,7 @@ func TestNodeRuntime_ArtifactCache_OfflineNode(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 }
 
-// TestNodeRuntime_Browse_OfflineNode 目录浏览对离线节点回 503（FR-178）。
+// TestNodeRuntime_Browse_OfflineNode 目录浏览对离线节点回 503。
 func TestNodeRuntime_Browse_OfflineNode(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -41,7 +41,7 @@ func TestNodeRuntime_Browse_OfflineNode(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 }
 
-// TestNodeRuntime_Catalog_MissingVendor 缺 vendor 回 400（FR-178）。
+// TestNodeRuntime_Catalog_MissingVendor 缺 vendor 回 400。
 func TestNodeRuntime_Catalog_MissingVendor(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -52,7 +52,7 @@ func TestNodeRuntime_Catalog_MissingVendor(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 }
 
-// TestNodeRuntime_SetCap_RejectsNegative 设负上限回 400（FR-178）。
+// TestNodeRuntime_SetCap_RejectsNegative 设负上限回 400。
 func TestNodeRuntime_SetCap_RejectsNegative(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

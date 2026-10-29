@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 站内信 API（FR-183，见 ADR-040）。
+/** 
+ * 站内信 API（见 ADR-040）。
  * 投递给当前用户的消息（任务完成/失败等）；只读/操作自己的站内信。
  */
 
@@ -23,8 +23,8 @@ export interface Notification {
   createdAt: string
 }
 
-/**
- * 当前用户的站内信列表（FR-183）。
+/** 
+ * 当前用户的站内信列表。
  * onlyUnread=true 仅未读。轮询 15s 拉取（站内信非高频，间隔放宽）。
  */
 export function useNotifications(onlyUnread = false, limit = 50) {

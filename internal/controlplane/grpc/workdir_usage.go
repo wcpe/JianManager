@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// applyWorkDirUsages 把心跳携带的实例工作目录占用写入 instances 表（FR-003）。
+// applyWorkDirUsages 把心跳携带的实例工作目录占用写入 instances 表。
 //
 // ## 为什么落库而不是查询时现算
 //

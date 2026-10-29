@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// NotificationFeedHandler 统一通知中心路由处理器（FR-216，见 ADR-048）。
+// NotificationFeedHandler 统一通知中心路由处理器（见 ADR-048）。
 // 把站内信（定向消息）+ 告警（系统警报）合并为一条只读通知流：列表（带来源/筛选/分页）、
 // 未读计数、标记已读。站内信按当前用户归属、告警面向全体（与既有 /alerts 可见性一致）。
 type NotificationFeedHandler struct {

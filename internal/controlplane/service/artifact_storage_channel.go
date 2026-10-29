@@ -50,15 +50,15 @@ const (
 	artifactStorageProbeTimeout = 8 * time.Second
 )
 
-// ArtifactStorageChannelService 制品存储渠道服务（FR-347，见 ADR-073，修订 ADR-011 存储节）。
+// ArtifactStorageChannelService 制品存储渠道服务（见 ADR-073，修订 ADR-011 存储节）。
 //
 // 渠道是 client-file 制品写路径的落点路由配置：全表恰一条活跃（事务保证），切活跃仅影响
 // 新上传；存量 Asset 按自身 StorageBackend + StorageChannelID 自述读取。凭证面板直填、
-// 复用 FR-192 KeyEncryptor（AES-256-GCM）可逆加密落库，与备份域 ${ENV_VAR} 形态分道。
+// 复用KeyEncryptor（AES-256-GCM）可逆加密落库，与备份域 ${ENV_VAR} 形态分道。
 type ArtifactStorageChannelService struct {
 	db   *gorm.DB
 	root *dataroot.Root
-	// enc 凭证可逆加密器（复用 FR-192 基建）；nil=未配置，s3 渠道创建/编辑被拒（快失败）。
+	// enc 凭证可逆加密器（复用基建）；nil=未配置，s3 渠道创建/编辑被拒（快失败）。
 	enc *KeyEncryptor
 }
 
@@ -191,7 +191,7 @@ func (s *ArtifactStorageChannelService) Create(p SaveArtifactStorageParams) (*mo
 }
 
 // Update 编辑渠道。Builtin 拒；type 不可改；accessKey/secretKey 空=保留原密文、非空=重加密覆盖；
-// 成功后清 LastTest*（配置已变，旧测试结论失效，沿 FR-338 备份域先例）。
+// 成功后清 LastTest*（配置已变，旧测试结论失效，沿备份域先例）。
 func (s *ArtifactStorageChannelService) Update(id uint, p SaveArtifactStorageParams) (*model.ArtifactStorageChannel, error) {
 	cur, err := s.GetByID(id)
 	if err != nil {
@@ -260,7 +260,7 @@ func (s *ArtifactStorageChannelService) Delete(id uint) error {
 	if ch.Active {
 		return ErrArtifactStorageActiveDelete
 	}
-	// 迁移在途禁删任何渠道（FR-348）：源集合由逐条记录自述、随迁移动态收敛，
+	// 迁移在途禁删任何渠道：源集合由逐条记录自述、随迁移动态收敛，
 	// 静态判定「此渠道无关」不可靠，粗粒度全禁；迁移终态（或强停）后恢复可删。
 	if inflight, ierr := artifactMigrationInFlight(s.db); ierr != nil {
 		return ierr

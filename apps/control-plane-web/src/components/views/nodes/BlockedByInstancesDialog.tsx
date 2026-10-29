@@ -28,7 +28,7 @@ export interface BlockedByInstancesDialogProps {
   title: string
   /** 描述（同样由调用方插值后传入）。 */
   description: string
-  /**
+  /** 
    * 强制入口：label 为按钮文案、hint 为提示语；null 表示本场景不提供强制入口
    * （节点下线仅在离线时可强制，归档清理则始终可强制）。
    */
@@ -37,8 +37,8 @@ export interface BlockedByInstancesDialogProps {
   onForce: () => void
 }
 
-/**
- * 节点下线 / 归档清理被实例守卫拒绝时的清单模态（FR-309 / FR-394）。
+/** 
+ * 节点下线 / 归档清理被实例守卫拒绝时的清单模态。
  *
  * 两个场景的差异只有文案与「是否提供强制入口」，故合并为一个受控视图：
  * 实例列表渲染、状态徽标与二次确认结构完全一致。

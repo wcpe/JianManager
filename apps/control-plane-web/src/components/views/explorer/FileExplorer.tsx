@@ -60,7 +60,7 @@ const PLATFORM_ALL = '__all__'
 
 // ── 拖拽移动载荷 ──────────────────────────────────────────────────────
 
-/** 拖拽移动载荷：文件节点或目录节点（FR-254 拖拽编排，FR-261 复用）。 */
+/** 拖拽移动载荷：文件节点或目录节点（拖拽编排复用）。 */
 type DragPayload =
   | { kind: 'file'; index: number; path: string }
   | { kind: 'dir'; dirPath: string; subtree: { index: number; path: string }[] }
@@ -117,8 +117,8 @@ const ExplorerContext = createContext<ExplorerContextValue | null>(null)
 
 // ── 主组件 ────────────────────────────────────────────────────────────
 
-/**
- * 发布页文件资源管理器（FR-261）。
+/** 
+ * 发布页文件资源管理器。
  *
  * 替换 ClientFileTree 的专业文件树：工具栏（新建文件夹/删除/展开全部/折叠全部）+
  * 右键菜单（重命名/删除/新建文件夹）+ 多选（Ctrl/Shift）+ Delete 删除 + 双击重命名 +
@@ -139,8 +139,8 @@ export interface FileExplorerProps {
   resolveDrop?: (files: File[], targetDir: string) => Promise<LocalUnit[]>
   /** 冲突解决后 / 无冲突时，把单元累加进草稿。 */
   onAddFiles?: (units: LocalUnit[]) => void
-  /**
-   * 右键目录「上传文件/文件夹到此」（FR-350）：组件只负责弹系统选择器，
+  /** 
+   * 右键目录「上传文件/文件夹到此」：组件只负责弹系统选择器，
    * 把所选文件与目标目录路径交给页面层摄入（业务摄入不在组件内）。
    * 省略时这两个菜单项不显示（不影响其他使用方）。
    */
@@ -188,9 +188,9 @@ export default function FileExplorer({
   const [dropActive, setDropActive] = useState(false)
   // 上传中禁用。
   const [resolving, setResolving] = useState(false)
-  // 「新建多级目录」模态基准目录（null=关闭；''=根目录，FR-350）。
+  // 「新建多级目录」模态基准目录（null=关闭；''=根目录）。
   const [multiDirBase, setMultiDirBase] = useState<string | null>(null)
-  // 定点上传 hidden input（FR-350）：files=散文件多选、folder=webkitdirectory 目录选择。
+  // 定点上传 hidden input：files=散文件多选、folder=webkitdirectory 目录选择。
   const uploadFilesInputRef = useRef<HTMLInputElement>(null)
   const uploadFolderInputRef = useRef<HTMLInputElement>(null)
   // 定点上传目标目录（点菜单项时记录，选择器回调时读取）。
@@ -296,7 +296,7 @@ export default function FileExplorer({
         onPathChange?.(target.index, renamePathSegment(target.path, name))
       } else {
         // 重命名目录：改子文件 path + 改 emptyDirs。
-        // FR-350：目录名支持 `/` 分隔多级——输入 a/b/c 时在原位置一次展开整条层级
+        // 目录名支持 `/` 分隔多级——输入 a/b/c 时在原位置一次展开整条层级
         // （新建文件夹占位随即改名即得多级目录）；`..` 越界与空名拒绝，`.` 段与空段折叠。
         const segs = normalizeManifestPath(newName)
           .split('/')
@@ -351,8 +351,8 @@ export default function FileExplorer({
     [readonly, tree, t],
   )
 
-  /**
-   * 批量创建多级目录（FR-350 模态确认）：相对路径拼 baseDir 前缀后入 emptyDirs。
+  /** 
+   * 批量创建多级目录（模态确认）：相对路径拼 baseDir 前缀后入 emptyDirs。
    * 已存在的层级由 buildFileTreeWithDirs 静默复用（先查后建），不报错不重复；
    * 展开整条祖先链保证新层级可见。
    */
@@ -373,7 +373,7 @@ export default function FileExplorer({
     [readonly],
   )
 
-  // ── 定点上传（FR-350 右键目录「上传文件/文件夹到此」） ────────────────
+  // ── 定点上传（右键目录「上传文件/文件夹到此」） ────────────────
 
   /** 打开定点上传系统选择器：记录目标目录，触发对应 hidden input。 */
   const openUploadPicker = useCallback((dirPath: string, kind: 'files' | 'folder') => {
@@ -723,7 +723,7 @@ export default function FileExplorer({
         />
       )}
 
-      {/* 定点上传 hidden input（FR-350）：菜单项触发 click，选中后经 onUploadToDir 交页面层摄入 */}
+      {/* 定点上传 hidden input：菜单项触发 click，选中后经 onUploadToDir 交页面层摄入 */}
       {!readonly && onUploadToDir && (
         <>
           <input
@@ -748,7 +748,7 @@ export default function FileExplorer({
         </>
       )}
 
-      {/* 新建多级目录模态（FR-350） */}
+      {/* 新建多级目录模态 */}
       {multiDirBase !== null && (
         <MultiDirDialog
           baseDir={multiDirBase}
@@ -888,9 +888,9 @@ function ContextMenu({
   onDelete: () => void
   onNewFolder: () => void
   onNewMultiDir: () => void
-  /** 「上传文件到此」（FR-350）：仅目录目标且页面提供 onUploadToDir 时给出。 */
+  /** 「上传文件到此」：仅目录目标且页面提供 onUploadToDir 时给出。 */
   onUploadFiles?: () => void
-  /** 「上传文件夹到此」（FR-350）：仅目录目标且页面提供 onUploadToDir 时给出。 */
+  /** 「上传文件夹到此」：仅目录目标且页面提供 onUploadToDir 时给出。 */
   onUploadFolder?: () => void
   t: TFunction
 }) {
@@ -978,9 +978,9 @@ function ContextMenu({
   )
 }
 
-// ── 新建多级目录模态（FR-350） ────────────────────────────────────────
+// ── 新建多级目录模态 ────────────────────────────────────────
 
-/**
+/** 
  * 「新建多级目录」模态：多行 textarea 每行一条路径（单行可 `a/b/c` 整条层级），
  * 实时预览将创建的层级链，确认后批量建。遵守模态纪律（ui-modals）：
  * scrollableDialogContentClass + ScrollableDialogBody，头/脚固定、正文超高内部滚动。

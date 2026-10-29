@@ -24,7 +24,7 @@ export const RANKING_WINDOWS = ['5m', '1h', '24h', '7d'] as const
 /** 排行窗口。 */
 export type RankingWindow = (typeof RANKING_WINDOWS)[number]
 
-/**
+/** 
  * 代表值格式化：按指标量纲选口径（不把字节当计数渲染）。
  *
  * 带单位的三种走 i18n 格式键（`ranking.unitMs/unitTps/unitPct`），使**单位可本地化**
@@ -58,8 +58,8 @@ function fmtSampledAt(value: string): string {
   return Number.isNaN(d.getTime()) ? '--' : d.toLocaleString()
 }
 
-/**
- * 全局排行表（FR-469）：跨节点全量实例按指标窗口代表值排序，带名次与代表值。
+/** 
+ * 全局排行表：跨节点全量实例按指标窗口代表值排序，带名次与代表值。
  * 权限：非管理员只见可访问实例（后端 scoped 标识），UI 显式提示受限视图。
  * 点击行下钻到实例详情。窗口内无数据的实例不入榜（后端 skippedNoData 计数提示）。
  *
@@ -67,7 +67,7 @@ function fmtSampledAt(value: string): string {
  * （取数依赖它们），下钻经回调上报。代表值格式化与名次样式留在视图内。
  */
 export interface InstanceRankingPanelProps {
-  /**
+  /** 
    * 节点列表（uuid → 名称映射），用于「节点」列与节点筛选下拉。
    * 缺省时「节点」列回退显示 `nodeUuid` 前 8 位，筛选下拉只剩「全部」。
    */

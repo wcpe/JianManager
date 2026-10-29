@@ -106,7 +106,7 @@ func TestEvaluator_NodeMetricSnapshotUnchanged(t *testing.T) {
 	}
 }
 
-// FR-485：iowait 与 cpu 同为百分比型指标（unit=pct），必须「自身即饱和度」。
+// iowait 与 cpu 同为百分比型指标（unit=pct），必须「自身即饱和度」。
 //
 // 变异验证：把 MetricNodeIOWait 从 saturationPercent 的 case 白名单里去掉，
 // 本测试立即转红（返回 (0,false)）。这正是切片 4b 修掉的静默失效缺口——

@@ -12,13 +12,13 @@ import TopologyGraph from '@/components/console/TopologyGraph'
 import { NetworkInstancePickerView, NetworksPageView } from '@/components/views/networks/NetworksPageView'
 import type { NetworksInstancePickerArgs, NetworkView } from '@/components/views/networks/NetworksPageView'
 
-/**
- * 成员候选的默认窗口。靠键入下发服务端 q 缩小，与 GroupMembersDialog（FR-336）同款；
+/** 
+ * 成员候选的默认窗口。靠键入下发服务端 q 缩小，与 GroupMembersDialog同款；
  * 「一次取多少条」属应用侧策略，故留在容器而非组件库。
  */
 const CANDIDATE_LIMIT = 50
 
-/**
+/** 
  * 详情面板右栏（实例候选）的插槽实现。
  *
  * 独立成本文件内的局部组件：插槽实现要用 hooks，而它只在详情面板挂载时被渲染，
@@ -59,12 +59,12 @@ function createErrorOf(err: unknown): { code?: string; message?: string } {
   return { code: data?.error, message: data?.message }
 }
 
-/**
+/** 
  * 群组（Network 软标签）管理页容器（ADR-103 a+b 范式）：列表/详情取数、五个写动作与 toast 文案
  * 都在这里决定，页面骨架、列表、拓扑外壳、新建弹窗与详情双栏交共享视图。
  *
  * 两处受控状态归容器：`view`（切换会换掉数据源）与 `detailId`（`useNetwork` 的查询键）——
- * 二者本就由路由/查询参数派生（FR-145 可寻址：详情可深链 `?network=`，视图可走 `/networks/topology`），
+ * 二者本就由路由/查询参数派生（可寻址：详情可深链 `?network=`，视图可走 `/networks/topology`），
  * 故容器的 `onViewChange` / `onOpenDetail` / `onCloseDetail` 做的正是原页面的导航。
  * 两个插槽把应用侧策略留在本层：拓扑接线层 `TopologyGraph`（自行取数）与候选的服务端搜索。
  * 保留原路径与原默认导出，路由表（route-chunks 的 `/networks` 与 `/networks/topology` 精确匹配）无需改动。
@@ -77,7 +77,7 @@ export default function NetworksPage() {
 
   const { data: networks, isLoading, isError } = useNetworks()
 
-  // 详情与视图存入 URL，支持深链 / 刷新还原（FR-145 可寻址；完整可寻址归 FR-128）。
+  // 详情与视图存入 URL，支持深链 / 刷新还原（可寻址；完整可寻址归）。
   //
   // 【为什么必须 finite 校验】`Number('abc')` 是 NaN，而 `NaN !== null` 为真：不做校验时
   // `?network=abc` 会照样挂载详情面板，而 `useNetwork(NaN)` 因 `enabled: !!id` 压根不发请求，

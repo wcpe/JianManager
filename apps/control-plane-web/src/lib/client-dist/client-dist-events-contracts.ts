@@ -1,4 +1,4 @@
-/**
+/** 
  * 客户端分发事件契约（ADR-103）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
@@ -19,9 +19,9 @@ export interface ClientDistEvent {
   bytes: number
   /** HTTP 状态码（200/206/304/401/404/503…）。 */
   status: number
-  /** 语义错误码（FR-249）：成功为空；失败如 INVALID_CLIENT_KEY/NO_LATEST_VERSION/ARTIFACT_NOT_FOUND/SIGN_KEY_NOT_CONFIGURED。 */
+  /** 语义错误码：成功为空；失败如 INVALID_CLIENT_KEY/NO_LATEST_VERSION/ARTIFACT_NOT_FOUND/SIGN_KEY_NOT_CONFIGURED。 */
   errCode: string
-  /** 可读错误原因（FR-265）。 */
+  /** 可读错误原因。 */
   errReason?: string
   /** 请求方法与脱敏路径（不含 query）。 */
   method?: string
@@ -32,7 +32,7 @@ export interface ClientDistEvent {
   createdAt: string
 }
 
-/** 分发事件检索过滤（FR-249）：空/undefined 字段不约束。 */
+/** 分发事件检索过滤：空/undefined 字段不约束。 */
 export interface ClientDistEventFilter {
   channelId?: string
   machineId?: string

@@ -1,9 +1,9 @@
-/**
- * 机器级更新清单与钻取契约（FR-426，ADR-103）。
+/** 
+ * 机器级更新清单与钻取契约（ADR-103）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
-/** 机器更新聚合项（machineId/ip/installId 展示层已脱敏——对齐 FR-265 先例，由后端返回脱敏值）。 */
+/** 机器更新聚合项（machineId/ip/installId 展示层已脱敏——对齐先例，由后端返回脱敏值）。 */
 export interface ClientMachineSummary {
   machineId: string
   channelId: string
@@ -16,8 +16,8 @@ export interface ClientMachineSummary {
   /** latest - current；0=已最新。 */
   versionLag: number
   downloadBytes: number
-  /**
-   * 玩家名（FR-426 增补）：遥测 player_name / 启动参数 --username / 运行态画像解析，
+  /** 
+   * 玩家名（增补）：遥测 player_name / 启动参数 --username / 运行态画像解析，
    * 未知为空串（老版本客户端未上报）。仅供人读，不参与统计口径。
    */
   playerName: string

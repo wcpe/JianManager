@@ -1,12 +1,12 @@
-/**
+/** 
  * @file TasksPageView：全局任务中心页的受控视图，列表取数、筛选查询参数、增长窗口、详情懒查与取消任务由应用容器负责。
  * @input lib/task-status（终态判定 / kind 文案键 / Task 类型）、lib/virtual-list（变高虚拟窗口）、lib/download-failure、
  *        Badge/Panel/Button/Input/Select 原语、layout（PageShell/PageHeader/ListSkeleton）、views/DangerConfirm、翻译上下文
  * @output TasksPageView、TasksPageViewProps、TasksFilterState、TasksDetailState、TaskNodeOption、TasksLinkArgs、
  *         TASKS_WINDOW_STEP、TASKS_WINDOW_MAX
  * @sync apps/control-plane-web/src/pages/TasksPage.tsx、apps/control-plane-web/src/pages/TasksPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-183 任务中心 + FR-208 详情懒查 + FR-227 强制停止与筛选 +
- *        FR-279 网络失败引导 + FR-329 短轮询 + FR-337 增长窗口 + FR-502 阶段 6 视口裁剪）
+ * @since（组件受控化迁包；原页任务中心详情懒查强制停止与筛选 +
+ *网络失败引导短轮询增长窗口阶段 6 视口裁剪）
  */
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -46,8 +46,8 @@ const STATE_META: Record<TaskState, { variant: 'default' | 'secondary' | 'destru
 
 const STATE_OPTIONS: TaskState[] = ['pending', 'running', 'succeeded', 'failed', 'canceled']
 
-/**
- * 任务列表增长窗口（FR-337）：初始/步长 100，封顶 500（到顶引导用筛选缩小范围）。
+/** 
+ * 任务列表增长窗口：初始/步长 100，封顶 500（到顶引导用筛选缩小范围）。
  *
  * 上限与步长由容器（请求 `limit`）与视图（「加载更多」按钮 / 到顶说明）共用，故在此导出而非各写一份——
  * 两处若各存一份，改上限时会静默错位（按钮仍可点，请求却已被服务端钳制）。
@@ -55,14 +55,14 @@ const STATE_OPTIONS: TaskState[] = ['pending', 'running', 'succeeded', 'failed',
 export const TASKS_WINDOW_STEP = 100
 export const TASKS_WINDOW_MAX = 500
 
-/**
+/** 
  * `cancelingIds` 的缺省值：模块级常量而非内联 `[]`。
  * 内联会在每次渲染新建数组，让缺省的列表行 props 引用每帧变化，白白击穿子件记忆化。
  */
 const NO_CANCELING_IDS: string[] = []
 
-/**
- * 行高估算（px，FR-502 阶段 6 视口裁剪用）：`px-3 py-2.5`(20) + 最高单元格 + `border-b`(1)，
+/** 
+ * 行高估算（px阶段 6 视口裁剪用）：`px-3 py-2.5`(20) + 最高单元格 + `border-b`(1)，
  * 实测（Chromium 1440×900，root 16px）：有详情的行 56.7；最高单元格在「状态徽章 22」与
  * 「标题 20 / 标题+详情 35.7」之间切换 —— 单行 20+22+1=43，两行 20+35.7+1≈57。
  *
@@ -74,7 +74,7 @@ const TASK_ROW_BASE_PX = 43
 const TASK_ROW_EXTRA_LINE_PX = 14
 /** 展开行（错误正文 + 日志）的估算高度：仅用于首帧与无布局环境，浏览器实测后以实测为准。 */
 const TASK_ROW_EXPANDED_PX = 260
-/**
+/** 
  * 详情里最多渲染的日志行数（取**最后** N 行：排障要看的是最近的输出）。
  *
  * 后端单任务日志可达上万行，全量塞进一个 `<pre>` 会让浏览器一次性排版上万行文本
@@ -89,7 +89,7 @@ const FALLBACK_VIEWPORT_PX = 640
 // 改为跟随父级 currentColor 的不透明度变化，链接颜色完全由 Alert 的 status-warning 决定。
 const DETAIL_LINK_CLASS = 'font-medium underline underline-offset-2 hover:opacity-80'
 
-/**
+/** 
  * 任务中心筛选条件（受控）。
  *
  * 五个维度全部进入列表查询键（`kind/state/nodeId/keyword/since`），任一项变化都触发重新取数，
@@ -131,7 +131,7 @@ export interface TasksLinkArgs {
   children: ReactNode
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 任务行、命中总数、列表三态、节点候选、展开任务的详情与取消在途 id 全部经 props 注入
  *   （容器调 `useTasks` / `useNodes` / `useTask` / `useCancelTask`）；
@@ -147,7 +147,7 @@ export interface TasksPageViewProps {
   tasks?: Task[]
   /** 命中总数（分页信封口径，含尚未加载的行）；`undefined` = 信封尚未到达（渲染数据区骨架）。 */
   total?: number
-  /** 增长窗口已请求的行数上限（FR-337）：判定「加载更多 / 已到顶」。 */
+  /** 增长窗口已请求的行数上限：判定「加载更多 / 已到顶」。 */
   limit?: number
   /** 列表首屏取数中；仅当信封尚未到达时渲染骨架（改筛选时保留旧行不闪屏）。 */
   isLoading?: boolean
@@ -173,18 +173,18 @@ export interface TasksPageViewProps {
   onLoadMore: () => void
   /** 展开/折叠某任务行（容器切换 `expandedId` 并按需取详情）。 */
   onToggleExpand: (taskId: string) => void
-  /**
+  /** 
    * 强制停止任务（二次确认已在本视图内完成）；返回是否成功。
    * 本视图确认即收起弹窗，不再消费返回值——在途与结果反馈由容器经 `cancelingIds` 与 toast 呈现。
    */
   onCancelTask: (taskId: string) => Promise<boolean>
 }
 
-/**
- * 全局任务中心页（FR-183 + FR-227 + FR-337）。
+/** 
+ * 全局任务中心页。
  * 列长任务（如 JDK 安装）：进度条 + 状态徽标 + 展开看滚动日志。
- * 进行中任务可「强制停止」（FR-227：经心跳真中断 Worker 操作）；列表按 kind/state/node/关键词/时间筛选。
- * 分页信封（FR-337）：顶部「共 N 条 · 已加载 M」，「加载更多」扩大 limit 的增长窗口（offset 恒 0）。
+ * 进行中任务可「强制停止」（：经心跳真中断 Worker 操作）；列表按 kind/state/node/关键词/时间筛选。
+ * 分页信封：顶部「共 N 条 · 已加载 M」，「加载更多」扩大 limit 的增长窗口（offset 恒 0）。
  * 存在进行中任务时由容器短轮询刷新；全部终态时停止。非平台管理员只见自己发起的任务（后端收敛）。
  */
 export function TasksPageView({
@@ -208,7 +208,7 @@ export function TasksPageView({
   const { t } = useTranslation()
   const { state, kind, nodeId, keyword, time } = filters
 
-  // 视口裁剪（FR-502 阶段 6）：增长窗口最大 500 行，一次性铺进 DOM 是本页的主开销。
+  // 视口裁剪（阶段 6）：增长窗口最大 500 行，一次性铺进 DOM 是本页的主开销。
   // 展开行的错误正文 + 日志长短不定（估算误差会让其后所有行偏移错位），故实测后回填。
   const expandedRef = useRef<HTMLDivElement>(null)
   const [expandedSize, setExpandedSize] = useState<{ id: string; px: number } | null>(null)
@@ -219,7 +219,7 @@ export function TasksPageView({
     if (expandedId !== null && px > 0 && px !== expandedPx) setExpandedSize({ id: expandedId, px })
   }, [expandedId, expandedPx, tasks])
 
-  /**
+  /** 
    * 折叠行的实测高度（taskId → px）。
    *
    * 折叠行原先只有常量估算，而估算的偏差**按行数累积**（500 行 × 0.5px = 250px），
@@ -231,7 +231,7 @@ export function TasksPageView({
   /** 上次量测时的容器宽度：宽度一变（标题折行数变），旧实测值整体失效。 */
   const measuredWidthRef = useRef<number>(-1)
 
-  /**
+  /** 
    * 逐行高度：展开行与已量测过的折叠行用实测值，其余用估算 →
    * 偏移前缀和随浏览贴近真实布局。
    */
@@ -242,7 +242,7 @@ export function TasksPageView({
         return measuredRows.get(task.taskId) ?? TASK_ROW_BASE_PX + (task.detail ? TASK_ROW_EXTRA_LINE_PX : 0)
       }),
     [expandedId, expandedPx, measuredRows, tasks],
-  )
+)
 
   const { containerRef, onScroll, range, crossSize } = useVirtualRows({
     total: tasks.length,
@@ -283,7 +283,7 @@ export function TasksPageView({
     <PageShell data-page="tasks">
       <PageHeader title={t('tasks.title')} description={t('tasks.subtitle')} />
 
-      {/* 筛选条（FR-227） */}
+      {/* 筛选条 */}
       <ScopeBar
         note={
           total !== undefined && !isError
@@ -312,7 +312,7 @@ export function TasksPageView({
         )}
       </ScopeBar>
 
-      {/* FR-502 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与筛选条先渲染，
+      {/*阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与筛选条先渲染，
           数据区用同壳骨架（同一张 Panel + 同一条吸附列头 + 行占位）顶上，数据到达原地替换。 */}
       {isLoading && total === undefined ? (
         <Panel bodyClassName="p-0">
@@ -364,7 +364,7 @@ export function TasksPageView({
             </div>
           </Panel>
 
-          {/* 加载更多（FR-337）：扩大 limit 的增长窗口；到顶（500）且仍有剩余时引导筛选收窄。 */}
+          {/* 加载更多：扩大 limit 的增长窗口；到顶（500）且仍有剩余时引导筛选收窄。 */}
           {(canLoadMore || windowCapped) && (
             <div className="flex items-center justify-center pb-1">
               {windowCapped ? (
@@ -382,8 +382,8 @@ export function TasksPageView({
   )
 }
 
-/**
- * 列表列头（FR-502 阶段 6 补丁抽出）：静态列名，不依赖数据，加载态与就绪态共用同一份，
+/** 
+ * 列表列头（阶段 6 补丁抽出）：静态列名，不依赖数据，加载态与就绪态共用同一份，
  * 因而骨架期间列名/列宽就已就位，数据到达只是「行长出来」。
  */
 function TasksColumnHeader() {
@@ -455,7 +455,7 @@ function TaskRow({
   const { t } = useTranslation()
   // 在线 running 已请求取消 → 显「取消中」；否则按状态。
   const canceling = task.state === 'running' && task.cancelRequested
-  /**
+  /** 
    * 状态元数据查表并兜底：`TaskState` 是前端枚举，后端一旦先上一档新状态（如 queued），
    * 查表得到 undefined，原先直接 `STATE_META[task.state].variant` 会在渲染期抛错把整页打崩。
    * 兜底直接显示后端给的原始状态串——它比「未知」更有助于定位，也不必为此新增文案键。
@@ -519,7 +519,7 @@ function TaskRow({
   )
 }
 
-/** 强制停止按钮（FR-227）：二次确认后上报容器取消，经心跳真中断 Worker 操作。 */
+/** 强制停止按钮：二次确认后上报容器取消，经心跳真中断 Worker 操作。 */
 function CancelTaskButton({ task, canceling, onCancelTask }: {
   task: Task
   /** 该行取消在途：只禁用并转圈本行。 */
@@ -567,7 +567,7 @@ function CancelTaskButton({ task, canceling, onCancelTask }: {
   )
 }
 
-/**
+/** 
  * 进度条：失败时用 destructive 色，终态成功满格。
  *
  * 可访问性：原先只有两个 div 的宽度差，读屏完全读不到进度。补 `role="progressbar"` +
@@ -605,8 +605,8 @@ function ProgressBar({
   )
 }
 
-/**
- * 任务详情：错误原因（含 FR-279 网络失败引导）+ 滚动日志；日志与加载态由容器注入。
+/** 
+ * 任务详情：错误原因（含网络失败引导）+ 滚动日志；日志与加载态由容器注入。
  */
 function TaskDetail({ error, detail, renderLink }: {
   error: string

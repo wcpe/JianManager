@@ -116,7 +116,7 @@ func TestOrchestrateQueryOnly(t *testing.T) {
 }
 
 // TestOrchestrateQueryMissingNumplayersKeepsPlayersUnavailable Query 可用但缺 numplayers →
-// 在线人数保持「不可用」，绝不落成 0（FR-447 不伪造 0）。
+// 在线人数保持「不可用」，绝不落成 0（不伪造 0）。
 func TestOrchestrateQueryMissingNumplayersKeepsPlayersUnavailable(t *testing.T) {
 	q := testQuery()
 	q.PlayersOnlineAvailable = false

@@ -1,4 +1,4 @@
-// FR-275（见 ADR-061）：WS 令牌密钥经注册响应（首注册/重注册）与心跳响应下发的覆盖。
+// （见 ADR-061）：WS 令牌密钥经注册响应（首注册/重注册）与心跳响应下发的覆盖。
 package grpc_test
 
 import (
@@ -69,7 +69,7 @@ func TestRegister_NoWSTokenSecret_WhenUnset(t *testing.T) {
 	require.Empty(t, resp.WsTokenSecret)
 }
 
-// TestHeartbeat_DeliversWSTokenSecret 心跳响应每拍携带 WS 令牌密钥（镜像 FR-185 代理下发）：
+// TestHeartbeat_DeliversWSTokenSecret 心跳响应每拍携带 WS 令牌密钥（镜像代理下发）：
 // CP 轮换密钥后 Worker 不重启即自愈的通道。
 func TestHeartbeat_DeliversWSTokenSecret(t *testing.T) {
 	h, db := newHeartbeatHandler(t)

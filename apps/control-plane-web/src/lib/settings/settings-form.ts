@@ -1,5 +1,5 @@
-/**
- * 设置表单纯函数助手（FR-158）。
+/** 
+ * 设置表单纯函数助手。
  * 草稿 vs 当前值的脏数据比对——抽为纯函数便于 vitest 覆盖，供切分类未保存拦截与保存按钮态使用。
  */
 
@@ -20,7 +20,7 @@ export type SettingCategory =
   | 'email'
   | 'security'
 
-/**
+/** 
  * MC 直探（SLP/Query）超时上界，毫秒。
  *
  * 与后端共享契约 `internal/platform/directprobe.MaxTimeout` 同值，且**不得独立改动**：
@@ -30,12 +30,12 @@ export type SettingCategory =
  */
 export const MAX_DIRECT_PROBE_TIMEOUT_MS = 10_000
 
-/**
+/** 
  * 把平台配置键映射到分类：**可编辑项**落 logging / runtime / policy / network / backup / email，
  * **只读项**落 security（该分区的渲染分支只画只读项，见 `SettingsPageView`）。
  *
  * 兜底落 security 意味着「新增一族可编辑键却忘了在此登记」会被静默吞掉——界面上既不显示也不可改。
- * 这条曾经真的发生过：FR-299 之后的 health / quota / snapshot / crash / instance_reverse_reconcile /
+ * 这条曾经真的发生过：之后的 health / quota / snapshot / crash / instance_reverse_reconcile /
  * bot_reclaim / runtime.mirror 七族共 23 个键全部落进兜底，直到组件受控化迁包时才被发现。
  * 现在由 `settings-form.test.ts` 的守卫用例盯着：它解析后端 `settings.go` 的可编辑键清单，
  * 断言每个键都能归入非 security 分类。**后端加了可编辑键而这里没同步，测试会红。**
@@ -60,7 +60,7 @@ export function keyCategory(key: string): SettingCategory {
   return 'security'
 }
 
-/**
+/** 
  * 计算草稿相对当前值的有效改动集（仅含真正不同的键）。
  * 草稿里等于当前值、未定义、或不在可编辑项集合内的键一律剔除。
  */
@@ -81,7 +81,7 @@ export function hasUnsavedChanges(items: DraftDiffItem[], draft: Record<string, 
   return Object.keys(diffSettings(items, draft)).length > 0
 }
 
-/**
+/** 
  * 把 Go duration 文本折算为毫秒，仅用于上界校验；无任何可识别片段时返回 undefined。
  * 与 validateSettingDraft 的 duration 正则同源（先后顺序保证 ms/m/s 不被前缀吞掉）。
  */
@@ -112,7 +112,7 @@ export function durationToMillis(value: string): number | undefined {
   return matched ? total : undefined
 }
 
-/**
+/** 
  * 按键校验草稿值，返回 i18n key 或 undefined（合法）。
  * 规则与后端 service/settings.go validateSettingValue 一致（前端先拦、后端 422 兜底），
  * 两侧规则如有变更须同步，避免前后端漂移。

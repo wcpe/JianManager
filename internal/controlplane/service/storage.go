@@ -23,13 +23,13 @@ var (
 	ErrStorageNotDir = errors.New("目标不是目录")
 )
 
-// StorageService 是「平台存储资源管理器」（FR-083）的只读浏览 + 受控清理服务。
+// StorageService 是「平台存储资源管理器」的只读浏览 + 受控清理服务。
 //
 // 它对 CP 侧数据根（ADR-010 的 FHS 布局）提供：
 //   - 各 FHS 子目录的占用统计（大小 / 文件数）+ 用途标注；
 //   - 数据根内任意目录的只读列举（路径越界守卫，绝不逃出根）；
-//   - 制品库归档可见：跨 assets 表（FR-045 storage_state）给出冷热分布；
-//   - cache/ 受控清理（仅限缓存目录，二次确认由前端 DangerConfirm 强制，FR-059）。
+// 制品库归档可见：跨 assets 表（storage_state）给出冷热分布；
+// cache/ 受控清理（仅限缓存目录，二次确认由前端 DangerConfirm 强制）。
 //
 // 与既有边界一致：CP 只读写数据库与本机数据根文件，不经此操作游戏服进程或 Worker 侧
 // 数据根（var/servers、opt/jdks 落在各 Worker 本机，按节点经既有 Worker ListFiles gRPC 浏览）。
@@ -59,7 +59,7 @@ type DirUsage struct {
 	Clearable bool `json:"clearable"`
 }
 
-// ArchiveSummary 制品库归档可见（FR-045 storage_state 冷热分布）。
+// ArchiveSummary 制品库归档可见（storage_state 冷热分布）。
 type ArchiveSummary struct {
 	HotCount      int   `json:"hotCount"`
 	ArchivedCount int   `json:"archivedCount"`
@@ -144,7 +144,7 @@ func (s *StorageService) Overview() (*StorageOverview, error) {
 	return ov, nil
 }
 
-// archiveSummary 从 assets 表聚合制品库冷热分布（FR-045 storage_state）。
+// archiveSummary 从 assets 表聚合制品库冷热分布（storage_state）。
 func (s *StorageService) archiveSummary() (ArchiveSummary, error) {
 	var sum ArchiveSummary
 	if s.db == nil {

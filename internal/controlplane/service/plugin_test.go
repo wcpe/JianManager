@@ -318,7 +318,7 @@ func (f *streamingFakeWorkerOps) UploadFile(_ context.Context, _ ...grpc.CallOpt
 	return s, nil
 }
 
-// TestPluginService_Upload_StreamsToNewWorker 新 Worker：部署经 UploadFile 流式（FR-304），
+// TestPluginService_Upload_StreamsToNewWorker 新 Worker：部署经 UploadFile 流式，
 // 不再落 WriteFile unary；首帧携带部署目标路径。
 func TestPluginService_Upload_StreamsToNewWorker(t *testing.T) {
 	db := newPluginTestDB(t)

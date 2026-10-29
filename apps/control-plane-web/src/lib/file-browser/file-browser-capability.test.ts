@@ -8,7 +8,7 @@ import {
   browserPropsFromCapability,
 } from './file-browser-capability'
 
-describe('ExplorerCapability（FR-378）', () => {
+describe('ExplorerCapability', () => {
   it('instance-files 全开写', () => {
     const c = instanceFilesCapability()
     expect(c.mode).toBe('instance-files')

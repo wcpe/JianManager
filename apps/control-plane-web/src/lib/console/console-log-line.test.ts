@@ -14,11 +14,11 @@ function parseOne(raw: string, stream: LogStream = 'stdout'): LogLine {
   return parseAll([raw], stream)[0]
 }
 
-/**
- * 日志行解析（FR-415，spec §1.2）。
+/** 
+ * 日志行解析（spec §1.2）。
  *
  * 判据是**保守**：认得的格式要拆干净，认不出的一律降级为纯文本且字段留空——
- * 猜错的时间戳/级别会直接把 FR-417 的过滤与 FR-419 的定位带偏。
+ * 猜错的时间戳/级别会直接把的过滤与的定位带偏。
  */
 describe('LogLineParser 前缀解析', () => {
   it('MC 原生 / Paper 格式：拆出时间与级别，线程名不入模型但留在 raw', () => {
@@ -76,7 +76,7 @@ describe('LogLineParser 前缀解析', () => {
     expect(first.ts).toBe('06:30:10')
     // 续行没有 [HH:MM:SS] 前缀，继承头行的时刻，而不是被打上「行到达时刻」造成时间穿越。
     expect(second.ts).toBe('06:30:10')
-    // tsParsed 只在本行自身命中时间前缀时置位（FR-417 级别过滤据此区分记录头与续行，
+    // tsParsed 只在本行自身命中时间前缀时置位（级别过滤据此区分记录头与续行，
     // 评审 P0-2：只看 ts 有无会把继承到时间的续行误当成新记录，滤丢整块堆栈）。
     expect(first.tsParsed).toBe(true)
     expect(second.tsParsed).toBeUndefined()
@@ -143,7 +143,7 @@ describe('LogLineParser 级别兜底（spec §1.2：与后端 log_ingest 同一�
   })
 })
 
-describe('LogLineParser 堆栈（为 FR-418 铺路）', () => {
+describe('LogLineParser 堆栈（为铺路）', () => {
   it('异常头 + 帧 + Caused by：帧与 cause 全部 stackOf 指向头行 seq', () => {
     const lines = parseAll([
       '[09:12:13] [Server thread/ERROR]: java.lang.NullPointerException: boom',

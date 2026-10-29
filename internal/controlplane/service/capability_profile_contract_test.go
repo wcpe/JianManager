@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-445 / ADR-091：能力画像有三份登记（后端注册表、前端兜底表、devmock 真源），
+// ADR-091：能力画像有三份登记（后端注册表、前端兜底表、devmock 真源），
 // 三者必须逐画像一致。此前只有「前端 ↔ devmock」有机器看守，「后端 ↔ 前端」缺看守，
 // 后端悄悄改了能力集合而前端兜底表没跟，不会有测试失败。
 //

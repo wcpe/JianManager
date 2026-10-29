@@ -63,13 +63,13 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 	assert.Equal(t, "var/servers/lobby-ab12", spec.WorkDir)
 	assert.Equal(t, "/opt/jdks/temurin-21", spec.JdkPath, "应解析绑定 JDK 安装路径")
 	assert.Equal(t, "end", spec.StopCommand, "代理角色派生优雅停止命令 end")
-	assert.Equal(t, int32(0), spec.ProbePort, "代理不适用探针，下发的 probe_port 归零（FR-454）")
+	assert.Equal(t, int32(0), spec.ProbePort, "代理不适用探针，下发的 probe_port 归零")
 	assert.Equal(t, "bar", spec.EnvVars["FOO"], "EnvVars JSON 应解出")
 	assert.Equal(t, "itzg/minecraft-server:latest", spec.Image)
 	assert.Equal(t, 1.5, spec.CpuLimit)
 	assert.Equal(t, int64(2048), spec.MemLimitMb)
 	assert.Equal(t, int64(10240), spec.DiskLimitMb)
-	// 日志采集绑定（FR-474）：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
+	// 日志采集绑定：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
 	assert.Equal(t, fmt.Sprintf("inst:%d", inst.ID), spec.LogTargetId)
 	assert.Equal(t, "FILE_PRIMARY", spec.LogAcquireMode)
 	assert.Equal(t, fmt.Sprintf("instance:%s@worker:%s", inst.UUID, node.UUID), spec.LogSourceGeneration)

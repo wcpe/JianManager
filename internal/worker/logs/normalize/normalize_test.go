@@ -25,7 +25,7 @@ func testOpts(stream string) Options {
 	}
 }
 
-// FR-475：NPE 堆栈 + Caused by 归并为 ONE event；下一时间戳行才开新事件。
+// NPE 堆栈 + Caused by 归并为 ONE event；下一时间戳行才开新事件。
 func TestNPEStackMergesIntoOneEvent(t *testing.T) {
 	lines := []string{
 		`[12:00:00] [Server thread/ERROR]: Encountered an unexpected exception`,
@@ -75,7 +75,7 @@ func TestNPEStackMergesIntoOneEvent(t *testing.T) {
 	require.Less(t, res.Stats.EventCount, res.Stats.LineCount, "事件数不得与原文行数混用")
 }
 
-// FR-475：Go slog level=INFO（stderr）不得按流兜底成 ERROR。
+// Go slog level=INFO（stderr）不得按流兜底成 ERROR。
 func TestSlogINFOOnStderr(t *testing.T) {
 	line := `time=2026-09-20T12:24:28.732+08:00 level=INFO msg=访问 方法=GET 路径=/beacon/v2/agent/registration 状态=200`
 	opts := testOpts("stderr")
@@ -95,7 +95,7 @@ func TestSlogINFOOnStderr(t *testing.T) {
 	require.Equal(t, 1, res.Stats.LineCount)
 }
 
-// FR-475：半条事件 FlushPartial 可显式吐出（PARTIAL）或丢弃。
+// 半条事件 FlushPartial 可显式吐出（PARTIAL）或丢弃。
 func TestPartialFlushEmitOrDiscard(t *testing.T) {
 	lines := []string{
 		`[12:00:00] [Server thread/ERROR]: boom`,
@@ -188,7 +188,7 @@ func TestFlushUnclosedMarksOnlyTruncatedMultiline(t *testing.T) {
 	require.Equal(t, StatusPartial, ParseStatus(ev3.Fields[FieldParseStatus]))
 }
 
-// FR-475：超过 multiline 上限 → TRUNCATED，不静默拼接下一事件。
+// 超过 multiline 上限 → TRUNCATED，不静默拼接下一事件。
 func TestLimitExceededTruncated(t *testing.T) {
 	lines := []string{
 		`[12:00:00] [Server thread/ERROR]: boom`,
@@ -228,7 +228,7 @@ func TestLimitExceededTruncated(t *testing.T) {
 	require.Equal(t, res.Stats.EventCount, 3)
 }
 
-// FR-475：级别别名 WARNING→WARN；解析失败不发明 level。
+// 级别别名 WARNING→WARN；解析失败不发明 level。
 func TestLevelAliasesAndNeverInvent(t *testing.T) {
 	require.Equal(t, "WARN", CanonicalLevel("WARNING"))
 	require.Equal(t, "WARN", CanonicalLevel("warning"))

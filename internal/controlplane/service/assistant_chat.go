@@ -1,12 +1,12 @@
 package service
 
-// FR-515 Phase C：对话运行时服务。
+// Phase C：对话运行时服务。
 //
 // 职责边界（与本包既有 assistant*.go 的关系）：
-//   - assistant.go / assistant_probe.go 管「模型从哪来」（FR-514 配置面与协议适配），本文件
+// assistant.go / assistant_probe.go 管「模型从哪来」（配置面与协议适配），本文件
 //     **复用**它们的 resolveCredential/buildStreamer，不重写任何协议层；
 //   - 本文件管「一轮对话怎么跑完并持久化」：会话/消息/run/事件、状态机、预算、取消、重启回收；
-//   - 工具的实际执行与确认属 FR-516，本文件只留 ToolExecutor 缝，**不注册任何业务工具**。
+// 工具的实际执行与确认属本文件只留 ToolExecutor 缝，**不注册任何业务工具**。
 //
 // 四条不变量在这里落地，改动前请先读对应 spec 段：
 //  1. 单会话单活跃 run 由数据库**部分唯一索引**保证（§5.2），不是进程内锁；
@@ -46,7 +46,7 @@ const (
 	// assistantChatDefaultMaxOutputTokens 模型未声明输出上限时的默认值（MAX_OUTPUT_TOKENS）。
 	assistantChatDefaultMaxOutputTokens = 2048
 	// assistantChatRunWallClock run 总运行预算（RUN_WALL_CLOCK）。等待人工确认的时间按 §7
-	// 单独计时，但本 FR 不实现确认环节（FR-516），故此处无需扣除。
+	// 单独计时，但本 FR 不实现确认环节，故此处无需扣除。
 	assistantChatRunWallClock = 300 * time.Second
 	// assistantChatModelRequestTimeout 单次模型请求超时（MODEL_REQUEST_TIMEOUT）。
 	assistantChatModelRequestTimeout = 120 * time.Second
@@ -86,7 +86,7 @@ const (
 // assistantChatSystemPrompt 助手的基础系统提示。
 //
 // 刻意不谈任何具体工具：工具知识写进系统提示会让「模型以为能用某工具、实际没注册」
-// 变成一串必然失败的调用；工具描述的唯一来源是 ToolExecutor.Available（FR-516）。
+// 变成一串必然失败的调用；工具描述的唯一来源是 ToolExecutor.Available。
 const assistantChatSystemPrompt = "你是 JianManager 平台内置的运维助手。回答使用简体中文，简洁、可执行；" +
 	"不确定的信息要明确说明不确定，不要编造平台功能、数据或操作结果。"
 
@@ -153,14 +153,14 @@ func (e *AssistantConversationBusyError) Unwrap() error { return ErrAssistantCon
 
 // ── 工具执行缝 ──────────────────────────────────────────────────────────
 
-// ToolExecutor 由 FR-516 实现；本 FR **不提供任何业务工具**。
+// ToolExecutor 由实现；本 FR **不提供任何业务工具**。
 //
 // 之所以现在就把缝留出来：运行循环的形状（何时暴露工具、何时回灌结果、何时判定预算耗尽）
-// 是 FR-515 的产出，若等工具实现到位再改循环，等于让 FR-516 重写一次编排。
+// 是的产出，若等工具实现到位再改循环，等于让重写一次编排。
 type ToolExecutor interface {
 	// Available 返回本轮可用工具描述；返回空切片表示无工具。
 	Available(ctx context.Context, owner uint) []ai.ToolSpec
-	// Execute 执行一次工具调用。FR-516 负责权限重验、确认与副作用。
+	// Execute 执行一次工具调用。负责权限重验、确认与副作用。
 	Execute(ctx context.Context, owner uint, call ai.ToolCall) (result string, err error)
 }
 
@@ -188,7 +188,7 @@ type assistantModelSnapshot struct {
 	// MaxOutputTokens / ContextWindow 能力声明；未知为 nil（不补 0）。
 	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`
 	ContextWindow   *int `json:"contextWindow,omitempty"`
-	// ReasoningEffort 思考强度（FR-541 §3.2）；空 = 不指定。
+	// ReasoningEffort 思考强度（§3.2）；空 = 不指定。
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 }
 
@@ -204,7 +204,7 @@ func (s assistantModelSnapshot) maxOutputTokens() int {
 type SubmitRunBody struct {
 	// Text 本轮用户消息正文（必填）。
 	Text string
-	// ContextSnapshot 页面上下文快照（FR-518 写入）。本 FR 只原样落库，不解析、不外发。
+	// ContextSnapshot 页面上下文快照（写入）。本 FR 只原样落库，不解析、不外发。
 	ContextSnapshot *string
 }
 
@@ -255,13 +255,13 @@ type runModelPreparer func(conv *model.AssistantConversation) (assistantModelSna
 
 // ── 服务 ────────────────────────────────────────────────────────────────
 
-// AssistantChatService 对话运行时服务（FR-515 Phase C）。
+// AssistantChatService 对话运行时服务（Phase C）。
 //
 // 所有会话读写都按 owner_user_id 收敛：会话是**私有**的，组管理员也不是他人会话的所有者
 // （§3 冻结项），因此越权一律返回 ErrAssistantChatNotFound（不区分不存在与无权）。
 type AssistantChatService struct {
 	db *gorm.DB
-	// assistant 复用 FR-514 的凭据解析与协议适配构造。允许为 nil（测试/未装配）：
+	// assistant 复用的凭据解析与协议适配构造。允许为 nil（测试/未装配）：
 	// 此时默认的模型准备函数会明确报 MODEL_UNAVAILABLE，而不是静默用假实现跑起来。
 	assistant *AssistantService
 	limits    assistantChatLimits
@@ -269,24 +269,24 @@ type AssistantChatService struct {
 	toolsMu sync.RWMutex
 	tools   ToolExecutor
 
-	// mcp 外部 MCP 连接服务（FR-517 闭环的最后一跳）。
+	// mcp 外部 MCP 连接服务（闭环的最后一跳）。
 	// nil 表示未装配：此时工具目录只含 system.*，不暴露任何外部工具。
 	mcp *AssistantMCPService
 
-	// instances/nodes 领域服务（FR-516 工具覆盖度）。
+	// instances/nodes 领域服务（工具覆盖度）。
 	// 由装配阶段经 SetDomainServices 注入：写操作需要 ClientPool 才能真的下发，
 	// 就地构造会拿到 pool=nil 的空壳。nil 表示只读剪裁部署。
 	domainMu  sync.RWMutex
 	instances *InstanceService
 	nodes     *NodeService
 
-	// authz 用于**执行期/提交期重验**（FR-516 §5.1、FR-518 §6）。
+	// authz 用于**执行期/提交期重验**（§5.1§6）。
 	// 惰性构造：它无状态、只包 db 与权限服务，构造开销可忽略；这样不必改所有
 	// NewAssistantChatService 调用点（大量测试直接用两参构造）。
 	authzOnce sync.Once
 	authzSvc  *AuthzService
 
-	// audit 用于把助手执行的写操作落进平台审计（FR-516 §9）。
+	// audit 用于把助手执行的写操作落进平台审计（§9）。
 	// 惰性构造理由同 authz：无状态、只包 db，不必改构造签名。
 	auditOnce sync.Once
 	auditSvc  *AuditService
@@ -309,7 +309,7 @@ type AssistantChatService struct {
 	// V1 单 CP 实例（§8.1），故不做跨进程扇出。
 	hub *assistantEventHub
 
-	// ── 技能（FR-541）──
+	// ── 技能──
 	//
 	// 技能是「目录 + SKILL.md」的纯文本指令，随仓库发布、可在数据根里增删。
 	// 装载结果缓存在此：run 构建系统提示词是热路径，不能每轮去读盘。
@@ -369,7 +369,7 @@ func (s *AssistantChatService) audit() *AuditService {
 	return s.auditSvc
 }
 
-// SetDomainServices 注入领域服务（FR-516 工具覆盖度的装配点）。
+// SetDomainServices 注入领域服务（工具覆盖度的装配点）。
 //
 // 为什么必须**由装配阶段注入**而不是像 authz() 那样就地 new 一个：
 //
@@ -397,7 +397,7 @@ func (s *AssistantChatService) domainServices() (*InstanceService, *NodeService)
 	return s.instances, s.nodes
 }
 
-// SetMCPService 注入外部 MCP 连接服务（FR-517）。
+// SetMCPService 注入外部 MCP 连接服务。
 //
 // 未注入时外部工具不进目录——剪裁部署（只跑内置工具）是合法配置，
 // 因此这里不做强制校验。
@@ -408,7 +408,7 @@ func (s *AssistantChatService) SetMCPService(m *AssistantMCPService) {
 	s.mcp = m
 }
 
-// SetToolExecutor 注入工具执行器（FR-516 的实现点）。
+// SetToolExecutor 注入工具执行器（的实现点）。
 //
 // 未注入时 Available 视为空、请求里不注册任何工具，循环里也**不会**产生工具调用：
 // 若让模型凭空看到工具却没人能执行，只会得到一串必然失败的调用。
@@ -544,7 +544,7 @@ func (s *AssistantChatService) ListConversations(owner uint, cursor string, limi
 	return s.ListConversationsFiltered(owner, AssistantConversationFilter{}, cursor, limit)
 }
 
-// AssistantConversationFilter 会话列表筛选（FR-542 §5.1）。
+// AssistantConversationFilter 会话列表筛选（§5.1）。
 type AssistantConversationFilter struct {
 	// Keyword 关键词：命中标题**或任一消息正文**。
 	//
@@ -791,7 +791,7 @@ func (s *AssistantChatService) SubmitRun(ctx context.Context, owner, conversatio
 	if err != nil {
 		return nil, fmt.Errorf("序列化模型快照失败: %w", err)
 	}
-	// FR-518 §6：上下文先做**结构与长度**校验（超 4 KiB 直接拒收），
+	// §6：上下文先做**结构与长度**校验（超 4 KiB 直接拒收），
 	// 再按调用者权限重验实体（不存在/无权只剔除该实体）。
 	//
 	// 顺序不能反：先重验会为了「可能被拒收的请求」白跑一堆查询；
@@ -855,7 +855,7 @@ func (s *AssistantChatService) SubmitRun(ctx context.Context, owner, conversatio
 				return err
 			}
 		}
-		// 上下文裁剪告警（FR-518 §6）：**与 run 同事务**落成事件。
+		// 上下文裁剪告警（§6）：**与 run 同事务**落成事件。
 		// 放在这里而不是执行器启动后，是为了让「提交成功」与「告警可见」保持一致——
 		// 否则 run 若立刻被取消，用户永远看不到「上下文有项被剔除」。
 		seq := 1
@@ -1029,11 +1029,11 @@ type runExecutor struct {
 	// endNote 收尾时要写进 run_end 的人类可读说明（如预算耗尽）；空表示无需说明。
 	endNote string
 
-	// pendingConfirmation 非空表示本轮因等待用户确认而结束（FR-516 §5.1）。
+	// pendingConfirmation 非空表示本轮因等待用户确认而结束（§5.1）。
 	// 收尾时据此把 run 置于 waiting_confirmation，而不是当成终态。
 	pendingConfirmation *assistantConfirmationView
 
-	// delegatedExec 本 run 专属的委托执行器（FR-516）。
+	// delegatedExec 本 run 专属的委托执行器。
 	//
 	// **必须每 run 一份**：它绑定 runID/owner/sink。若挂在 service 上做「临时注入」，
 	// 两个 run 并发时会互相覆盖（后启动的那个把前一个的执行器换掉），
@@ -1043,7 +1043,7 @@ type runExecutor struct {
 	// toolExec 本次实际使用的执行器：装配级注入（测试/自定义）优先，
 	// 否则用本 run 的委托执行器。
 	//
-	// 为什么装配级优先：`SetToolExecutor` 是既有 seam（FR-515 就有的注入点），
+	// 为什么装配级优先：`SetToolExecutor` 是既有 seam（就有的注入点），
 	// 测试与将来的自定义执行器都靠它；若被无条件覆盖，那批用例会静默变成
 	// 「没有工具」而失败（实测：BudgetExhausted 因工具轮不发生而变成 completed）。
 	toolExec ToolExecutor
@@ -1087,7 +1087,7 @@ func (s *AssistantChatService) executeRun(ctx context.Context, owner uint, run *
 		limits:   runLimits,
 		sink:     sink,
 
-		// 每 run 一份委托执行器（FR-516）：绑定 runID/owner/sink，负责出票与回执。
+		// 每 run 一份委托执行器：绑定 runID/owner/sink，负责出票与回执。
 		delegatedExec: &assistantDelegatedExecutor{
 			svc:            s,
 			runID:          run.ID,
@@ -1260,10 +1260,10 @@ func (ex *runExecutor) streamOnce(parent context.Context) (assistantStreamResult
 
 	req := ai.Request{
 		Model: ex.snap.UpstreamModelID,
-		// 系统提示词 = 基础提示 + 已启用技能（FR-541）。
+		// 系统提示词 = 基础提示 + 已启用技能。
 		// 技能只影响「怎么做事」的指令文本，不放宽任何工具权限——
-		// 写操作仍然逐个走确认（FR-516）。
-		// 系统提示词 = 基线 + 自定义 + 技能 + **页面引用标记**（FR-544）。
+		// 写操作仍然逐个走确认。
+		// 系统提示词 = 基线 + 自定义 + 技能 + **页面引用标记**。
 		//
 		// 页面上下文只带「当前在哪、看的是哪个实体 id」——不带名称、状态、指标。
 		// 原因：那些内容会过期（用户页面停留久了状态早变），也可能绕开工具的
@@ -1272,7 +1272,7 @@ func (ex *runExecutor) streamOnce(parent context.Context) (assistantStreamResult
 		Messages:        ex.messages,
 		Tools:           ex.tools,
 		MaxOutputTokens: ex.snap.maxOutputTokens(),
-		// 思考强度取自本轮冻结的模型快照（FR-541 §3.2）。
+		// 思考强度取自本轮冻结的模型快照（§3.2）。
 		ReasoningEffort: ex.snap.ReasoningEffort,
 	}
 	streamErr = ex.streamer.Stream(ctx, req, emit)
@@ -1390,7 +1390,7 @@ func (ex *runExecutor) executeToolCalls(ctx context.Context, calls []ai.ToolCall
 
 		result, execErr := exec.Execute(ctx, ex.owner, call)
 
-		// 写操作已出票、等待用户确认（FR-516 §5.1）：本轮到此为止，不执行、不回灌。
+		// 写操作已出票、等待用户确认（§5.1）：本轮到此为止，不执行、不回灌。
 		//
 		// 为什么让 run 停在这里而不是「跳过该工具继续跑」：
 		// 模型是在「工具已经执行完」的假设下继续推理的，跳过会让它在错误前提上
@@ -1878,7 +1878,7 @@ func (s *AssistantChatService) finishRun(run *model.AssistantRun, sink *assistan
 		"termination_reason": reason,
 		"version":            run.Version + 1,
 	}
-	// waiting_confirmation **不是终态**（FR-516 §5.1）：run 之后还要被恢复执行或终结。
+	// waiting_confirmation **不是终态**（§5.1）：run 之后还要被恢复执行或终结。
 	// 写 ended_at 会让它看起来已经结束，重启回收与幂等判定都会因此误判。
 	if status != model.AssistantRunStatusWaitingConfirmation {
 		updates["ended_at"] = time.Now()
@@ -2015,8 +2015,8 @@ func isTerminalRunStatus(status string) bool {
 // 与「轻量运行时」的定位冲突（§8.1 末段）。
 //
 // 作用面只有 run 与会话的活跃指针：
-//   - 处于 waiting_confirmation 的确认失效、已派发的写调用标 unverified，属 FR-516 的
-//     票据/回执，本 FR **不碰**（§8 第 2、3 条由 FR-516 落地）；
+// 处于 waiting_confirmation 的确认失效、已派发的写调用标 unverified，属的
+//     票据/回执，本 FR **不碰**（§8 第 2、3 条由落地）；
 //   - 消息侧无需修补：助手消息是在一轮模型流**结束后**一次性写入的，中断不会留下半条
 //     消息；因此这里不做任何消息改写（改写只会把已确定的内容变成假的「未知」）。
 //
@@ -2061,7 +2061,7 @@ func (s *AssistantChatService) ReapOnStartup() (int, error) {
 
 // ── 模型解析 ────────────────────────────────────────────────────────────
 
-// prepareRunModel 生产实现：读配置表得到冻结快照，并复用 FR-514 的协议层构造适配器。
+// prepareRunModel 生产实现：读配置表得到冻结快照，并复用的协议层构造适配器。
 func (s *AssistantChatService) prepareRunModel(conv *model.AssistantConversation) (assistantModelSnapshot, ai.Streamer, error) {
 	mdl, provider, err := s.resolveModel(conv)
 	if err != nil {

@@ -1,5 +1,5 @@
-/**
- * 实例实时指标的契约（FR-446 / FR-447）。
+/** 
+ * 实例实时指标的契约。
  *
  * 归包理由：监控段的直探卡、健康条与来源标注都要读它，应用侧 API 层改从包 import，
  * 避免两处各写一份。
@@ -25,7 +25,7 @@ export interface InstanceMetricsData {
   uptimeSeconds: number
   worlds: WorldMetric[] | null
   probeAvailable: boolean
-  // === MC 直探（SLP / Query，FR-446 / FR-447）补充字段与显式可用性位 ===
+  // === MC 直探（SLP / Query）补充字段与显式可用性位 ===
   // 采集优先级链 `探针 → SLP → Query → 不可用`：`*Available=false` 即「不可用」，
   // 前端据此渲染「不可用」而非 `0` / `-1` / `--` 伪值（消除「0 人在线」回归）。
   playersAvailable: boolean
@@ -33,10 +33,10 @@ export interface InstanceMetricsData {
   motdAvailable: boolean
   version: string
   versionAvailable: boolean
-  /**
+  /** 
    * 服务端图标（`data:image/png;base64,...`，可达 ~50KB）。**预留字段**：后端 SLP → Worker →
    * `MetricsData.favicon` 已端到端回传，前端当前仅声明未渲染；若要展示应在实例详情页 MOTD
-   * 卡片按需渲染，避免把大 base64 注入卡片列表（FR-446 审计项 7）。
+   * 卡片按需渲染，避免把大 base64 注入卡片列表（审计项 7）。
    */
   favicon: string
   maxPlayers: number

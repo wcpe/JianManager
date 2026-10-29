@@ -21,7 +21,7 @@ type PickerRequest =
   | { kind: 'split'; paneId: string; direction: PaneSplitDirection }
   | { kind: 'replace'; paneId: string }
 
-/**
+/** 
  * 默认的 pane 数据查表器：恒空。
  * 外壳未注入时（如包内独立渲染、测试）仍**始终被调用**，保证 hook 调用顺序稳定。
  */
@@ -70,7 +70,7 @@ export interface ConsoleImmersiveModeProps {
   isSearchingInstances?: boolean
   /** 选择器状态通知：`open=false` 即关闭（应用侧据此挂起查询）。 */
   onSearchInstances?: (params: { open: boolean; query: string }) => void
-  /**
+  /** 
    * 按实例取详情与指标（应用侧注入的 **hook 化** 查表器）。
    *
    * 为什么是 hook 而不是数据：pane 是运行期动态增删的，外壳无法预知要为哪些实例取数；
@@ -89,7 +89,7 @@ const LAYOUT_STORAGE_KEY = 'console.immersive.layout'
 /** 裸 ESC 双击退出的判定窗口（毫秒）。 */
 const ESC_EXIT_WINDOW_MS = 1600
 
-/**
+/** 
  * 按视口宽度分级 pane 上限（可用性增强）：
  * <768px 单 pane（再加只会得到读不了的 90px 小格）、<1280px 至多 2、宽屏 4。
  */
@@ -128,7 +128,7 @@ function pickSplitDirection(): PaneSplitDirection {
   return 'horizontal'
 }
 
-/**
+/** 
  * 沉浸控制台工作台（ADR-087）。
  *
  * 它不是 tmux 仿真：F11/Esc 只负责进出，全局不抢 Ctrl+B 或复制键。多实例和分屏通过
@@ -572,7 +572,7 @@ function ImmersiveHeader({
 
       <span className="flex min-w-0 items-center gap-3 overflow-x-auto">
         {/* TPS 仅探针可得；在线数由探针 → SLP → Query 任一来源提供。缺测显「不可用」，
-            不以 0 冒充「0 人在线」（FR-446/447）。 */}
+            不以 0 冒充「0 人在线」（447）。 */}
         {probeAvailable ? (
           <MetricSegment label="TPS" value={metrics?.tps.toFixed(1) ?? '—'} />
         ) : (
@@ -740,7 +740,7 @@ function PaneAction({ label, onClick, children }: { label: string; onClick: () =
   )
 }
 
-/**
+/** 
  * 分屏拖拽条（可用性增强）：分割占比不再永远 50/50。
  *
  * Pointer Events 一套代码覆盖鼠标/触屏/触控笔；拖拽期间 setPointerCapture，

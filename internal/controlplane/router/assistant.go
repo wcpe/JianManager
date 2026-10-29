@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// AssistantHandler AI 助手配置路由处理器（FR-514，见 ADR-105）。
+// AssistantHandler AI 助手配置路由处理器（见 ADR-105）。
 //
 // 分两层：普通用户只读可用模型摘要；管理子域做供应商/模型 CRUD。
 // 管理面授权用显式 IsPlatformAdmin——既有 requireNodes helper 的实际语义是
@@ -49,7 +49,7 @@ func (h *AssistantHandler) auditModel(c *gin.Context, action, targetID string, d
 		marshalAuditDetail(detail), c.ClientIP(), true, "")
 }
 
-// requireAssistantAdmin AI 管理面的平台管理员门禁（FR-514，见 ADR-105）。
+// requireAssistantAdmin AI 管理面的平台管理员门禁（见 ADR-105）。
 //
 // **不复用 node.go 的 requirePlatformAdmin**：那个函数的名字与实际语义不符——
 // 它要求的是 `node.manage` 权限节点，任何被授予该节点的自定义角色都能通过，
@@ -85,7 +85,7 @@ func (h *AssistantHandler) RegisterRoutes(r *gin.RouterGroup) {
 		// 显式探测：管理员的按钮触发，绝不自动调用（模型调用按次计费）。
 		admin.POST("/providers/:id/test", h.TestProvider)
 
-		// 从上游拉取模型列表（FR-538 §2.2）：只读候选，不自动落库。
+		// 从上游拉取模型列表（§2.2）：只读候选，不自动落库。
 		admin.POST("/providers/:id/discover-models", h.DiscoverModels)
 
 		admin.GET("/models", h.ListModels)
@@ -136,7 +136,7 @@ type providerRequest struct {
 	CredentialSecret string `json:"credentialSecret"`
 	// ClearCredential 显式清除已保存密文。
 	ClearCredential bool `json:"clearCredential"`
-	// ProxyMode 出站代理模式（FR-539）：direct / env / custom；空串表示不改动。
+	// ProxyMode 出站代理模式：direct / env / custom；空串表示不改动。
 	ProxyMode string `json:"proxyMode"`
 	// ProxySecret 自定义代理地址。含 userinfo 时整串落库且**永不回显**。
 	ProxySecret string `json:"proxyUrl"`
@@ -408,12 +408,12 @@ type modelTestRequest struct {
 type assistantSettingsRequest struct {
 	DefaultModelID    *uint    `json:"defaultModelId"`
 	AllowPrivateCIDRs []string `json:"allowPrivateCidrs"`
-	// SystemPrompt 自定义系统提示词（FR-541 §3.1）。
+	// SystemPrompt 自定义系统提示词（§3.1）。
 	//
 	// 用 **string 而非 *string**：本接口是整体替换语义（PUT 单例资源），
 	// 省略即「清空」，与 allowPrivateCidrs 的空数组语义一致。
 	SystemPrompt string `json:"systemPrompt"`
-	// BuiltinToolsEnabled 平台自带工具开关（FR-540）。用指针以便「不传=不改」。
+	// BuiltinToolsEnabled 平台自带工具开关。用指针以便「不传=不改」。
 	BuiltinToolsEnabled *bool `json:"builtinToolsEnabled"`
 	Version             int   `json:"version"`
 }

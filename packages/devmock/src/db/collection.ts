@@ -1,5 +1,5 @@
-/**
- * 内存假后端的实体集合抽象（FR-197 / ADR-047 决策 2）。
+/** 
+ * 内存假后端的实体集合抽象（ADR-047 决策 2）。
  * 单集合内存 CRUD + 可重播种子；跨实体联动由 handler 读写多个 collection 实现。
  */
 
@@ -24,7 +24,7 @@ export interface Collection<T extends Entity> {
   remove(id: T['id']): void
 }
 
-/**
+/** 
  * 用种子函数建一个集合。seed/reset 都把数据恢复为 seedFn() 的深拷贝，
  * 保证用例间互不污染（reset 后改动不回写种子）。
  */

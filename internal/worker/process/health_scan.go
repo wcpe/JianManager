@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 )
 
-// FR-459 实例健康巡检与自愈（Worker 侧）。
+// 实例健康巡检与自愈（Worker 侧）。
 //
 // 动机：既有韧性只在**进程退出之后**被动重启（direct/docker waitLoop、wrapper javaWait），
 // 对「进程仍在、却已不可服务」（GC 长停 / 死锁 / World 加载卡死 / 探针降级）的假死完全无感——
@@ -26,7 +26,7 @@ import (
 //
 // 边界（spec §1/§5）：
 //   - **不新增杀进程路径**：假死自愈只走既有优雅重启（Manager.Restart 的受锁变体）；
-//   - 存活维度**零新代码**，直接复用 ProbeInstanceEvidence（与 FR-455/456 同源）；
+// 存活维度**零新代码**，直接复用 ProbeInstanceEvidence（与456 同源）；
 //   - 不做跨节点迁移；「进程不在」交由既有崩溃处理（本巡检不重复处置）。
 
 // 健康故障标识（经心跳上报 CP，写入 instances.status_reason / 健康位）。
@@ -66,7 +66,7 @@ const (
 // 巡检默认值。
 //
 // 导出的 Default* 是**唯一真源**：worker 配置层（internal/worker/config.go）经 process 包引用，
-// 避免「本地默认」与「进程归一默认」两处字面量漂移（FR-459 复审项 12）。
+// 避免「本地默认」与「进程归一默认」两处字面量漂移（复审项 12）。
 const (
 	// DefaultHealthScanInterval 默认巡检周期（spec §2.1）。
 	DefaultHealthScanInterval = 30 * time.Second
@@ -77,15 +77,15 @@ const (
 	// DefaultCircuitBreakerWindow 默认崩溃熔断滚动窗口（spec §2.2）。
 	DefaultCircuitBreakerWindow = 10 * time.Minute
 	// DefaultStartupWarmup 默认启动宽限期：Start 返回 RUNNING 后的这段时间内不做假死判定，
-	// 避免慢启动 MC（World 加载/模组初始化常达 90s+）被连续探针失败误判并反复重启（FR-459 复审项 2）。
+	// 避免慢启动 MC（World 加载/模组初始化常达 90s+）被连续探针失败误判并反复重启（复审项 2）。
 	DefaultStartupWarmup = 5 * time.Minute
-	// DefaultSelfHealMaxRestarts 假死自愈在一熔断窗口内的重启次数上限（避免假死路径重启风暴，FR-459 复审项 7）。
+	// DefaultSelfHealMaxRestarts 假死自愈在一熔断窗口内的重启次数上限（避免假死路径重启风暴复审项 7）。
 	DefaultSelfHealMaxRestarts = 3
 	// healthScanProbeHost 巡检探针主机：实例与 Worker 同机，直探 loopback。
 	healthScanProbeHost = "localhost"
 )
 
-// HealthPolicy 是 FR-459 巡检策略的 Worker 侧生效值。
+// HealthPolicy 是巡检策略的 Worker 侧生效值。
 // 本地基线来自 worker.yml（HealthScanConfig）；CP 经心跳响应下发后覆盖
 // （enabled 以外的字段在 CP 下发存在时以 CP 为准）。
 type HealthPolicy struct {
@@ -109,7 +109,7 @@ type HealthPolicy struct {
 	SelfHealMaxRestarts int
 }
 
-// DefaultHealthPolicy 返回 FR-459 的内置默认策略。
+// DefaultHealthPolicy 返回的内置默认策略。
 func DefaultHealthPolicy() HealthPolicy {
 	return HealthPolicy{
 		Enabled:                 true,
@@ -188,13 +188,13 @@ type healthRecord struct {
 	updatedAt time.Time
 }
 
-// restartWindow 单实例的滚动时间窗（熔断崩溃计数 / 假死自愈计数，FR-459 T4 + 复审项 7）。
+// restartWindow 单实例的滚动时间窗（熔断崩溃计数 / 假死自愈计数T4 + 复审项 7）。
 // 语义对齐 wrapper.javaWait 的 fastCrashes：窗口内次数超阈值即停止自动重启（熔断）或停止自愈重启。
 type restartWindow struct {
 	times []time.Time
 }
 
-// healthState FR-459 的进程管理器侧健康记账：逐实例健康故障 + 滚动窗口 + 熔断态 + 自愈计数。
+// healthState的进程管理器侧健康记账：逐实例健康故障 + 滚动窗口 + 熔断态 + 自愈计数。
 //
 // 独立于 Manager.mu 自有锁：巡检（读进程态、跑探针）耗时，不得把整个 Manager 锁住。
 type healthState struct {
@@ -203,9 +203,9 @@ type healthState struct {
 	windows map[string]*restartWindow // 崩溃事件滚动窗口（熔断计数）
 	// broken 是熔断态**独立真源**（非空=已熔断）。与 Instance.AutoRestart 解耦：
 	// 后者是 CP 下发的「是否允许自动重启」配置，不得兼作「人工是否已确认解除熔断」的语义
-	// （否则任意配置编辑都会静默清熔断，FR-459 复审项 6）。
+	// （否则任意配置编辑都会静默清熔断复审项 6）。
 	broken map[string]string
-	// selfHeal 假死自愈重启的滚动窗口（次数上限/退避，避免重启风暴，FR-459 复审项 7）。
+	// selfHeal 假死自愈重启的滚动窗口（次数上限/退避，避免重启风暴复审项 7）。
 	selfHeal map[string]*restartWindow
 	// now 可注入时钟（测试用），nil=time.Now。
 	now func() time.Time
@@ -222,7 +222,7 @@ func newHealthState() *healthState {
 
 // dropHealthAccounting 回收某实例的全部健康记账（健康故障 / 崩溃窗口 / 熔断态 / 自愈计数）。
 // 实例被移除（removeLocked）或重新登记（Create）时调用：此前只增不减，删除实例后残留记账
-// 会污染同 UUID 重建实例的熔断判定（FR-459 复审项 10）。同时清理熔断态持久化文件（Low #3），
+// 会污染同 UUID 重建实例的熔断判定（复审项 10）。同时清理熔断态持久化文件（Low #3），
 // 避免重建实例误恢复旧熔断态。
 func (m *Manager) dropHealthAccounting(uuid string) {
 	if uuid == "" {
@@ -280,7 +280,7 @@ func (m *Manager) healthFault(uuid string) (string, string) {
 func (m *Manager) clearHealthFault(uuid string) { m.setHealthFault(uuid, HealthFaultNone, "") }
 
 // clearAllHealthFaults 清空全部实例的健康故障记录（records）。用于巡检开关关闭时的一次性清理
-// （FR-459 终验 Low #6）；不动 windows/broken/selfHeal——熔断态与崩溃窗口的处置只经既有入口。
+// （终验 Low #6）；不动 windows/broken/selfHeal——熔断态与崩溃窗口的处置只经既有入口。
 func (m *Manager) clearAllHealthFaults() {
 	h := m.healthState()
 	h.mu.Lock()
@@ -400,7 +400,7 @@ func (m *Manager) circuitStatePath(uuid string) string {
 	return filepath.Join(m.pidDir, uuid+circuitStateSuffix)
 }
 
-// persistCircuit 把熔断原因落盘（pidDir 旁小状态文件），供 Worker 重启后恢复熔断态（FR-459 终验 Low #3）。
+// persistCircuit 把熔断原因落盘（pidDir 旁小状态文件），供 Worker 重启后恢复熔断态（终验 Low #3）。
 //
 // 动机：Worker 重启会清空内存中的熔断账，而 daemon wrapper 的 autoRestartOff 是**粘性存活于
 // wrapper 进程内**的（Worker 重启 wrapper 不死）。不持久化会让 Worker「忘掉」熔断（以为可自动重启）
@@ -468,7 +468,7 @@ func (m *Manager) breakCircuit(uuid, reason string, forceCrash bool) bool {
 	}
 	h.broken[uuid] = reason
 	h.mu.Unlock()
-	// FR-459 终验 Low #3：熔断态落盘，供 Worker 重启后恢复（避免 Worker 忘掉熔断而 wrapper 仍在拒绝重启）。
+	// 终验 Low #3：熔断态落盘，供 Worker 重启后恢复（避免 Worker 忘掉熔断而 wrapper 仍在拒绝重启）。
 	m.persistCircuit(uuid, reason)
 
 	var oldState InstanceState
@@ -487,7 +487,7 @@ func (m *Manager) breakCircuit(uuid, reason string, forceCrash bool) bool {
 		m.emitStateChange(uuid, oldState, StateCrashed)
 	}
 	// daemon 生效路径：wrapper 内部按启动期 env 快照自动重启，Worker 无法直接触及——
-	// 必须经控制帧显式禁用（否则熔断对 daemon 完全不成立，FR-459 blocker）。
+	// 必须经控制帧显式禁用（否则熔断对 daemon 完全不成立blocker）。
 	m.disarmAutoRestart(uuid, reason)
 	return true
 }
@@ -505,7 +505,7 @@ func (m *Manager) disarmAutoRestart(uuid, reason string) {
 	m.sendDisarmReconciled(uuid, reason, false)
 }
 
-// redisarmAutoRestart 在熔断**持续期间**的每一拍幂等补发一次禁用帧（FR-459 终验 Low #4）。
+// redisarmAutoRestart 在熔断**持续期间**的每一拍幂等补发一次禁用帧（终验 Low #4）。
 // 首帧可能因「熔断瞬间控制连接恰好断开且即时拨号失败」而丢失，仅一次性下发会哑火——wrapper
 // 会继续自动重启注定崩溃的 Java。逐拍重发以幂等语义兜底；失败降级 Debug，避免 wrapper 已收摊
 // （熔断时确无 Java 在跑的常见场景）时每拍刷告警。
@@ -514,7 +514,7 @@ func (m *Manager) redisarmAutoRestart(uuid, reason string) {
 }
 
 // sendDisarmReconciled 下发「禁用自动重启」帧，并在**下发之后复核熔断态**：若此刻熔断已被清除，
-// 立即补发一次对称的「恢复自动重启」帧自愈（FR-459 终验 Low，L2 竞态）。
+// 立即补发一次对称的「恢复自动重启」帧自愈（终验 Low，L2 竞态）。
 //
 // 竞态：disable 与 enable 两次下发都在锁外，可能交错——巡检读到 broken==true 决定补发 disable，
 // 恰在此时人工 StartInstance 的 ReleaseCircuitBreaker 已清 broken（锁内）并下发 enable，随后本次
@@ -558,7 +558,7 @@ func (m *Manager) sendAutoRestartControl(uuid, reason string, quiet bool) {
 	}
 }
 
-// autoRestartRearmer 是 autoRestartDisarmer 的对称恢复能力（FR-459 终验 Major）：
+// autoRestartRearmer 是 autoRestartDisarmer 的对称恢复能力（终验 Major）：
 // 人工解除熔断时，向仍在托管的 daemon wrapper 复位其粘性 autoRestartOff。
 // 与禁用同用可选接口表达：direct/docker 的自动重启由 Manager 侧守卫直接放行，无需策略配合。
 type autoRestartRearmer interface {
@@ -592,7 +592,7 @@ func (m *Manager) rearmAutoRestart(uuid string) {
 //
 // 判据是 healthState.broken 这一**独立真源**，不再借用 Instance.AutoRestart：
 // 后者是 CP 下发的配置，任意配置编辑（SetLaunchConfig）都会重写它，若兼作「人工已确认解除」
-// 的语义，会让熔断被静默清除（FR-459 复审项 6）。解除只经显式入口（ReleaseCircuitBreaker）。
+// 的语义，会让熔断被静默清除（复审项 6）。解除只经显式入口（ReleaseCircuitBreaker）。
 func (m *Manager) isCircuitBroken(uuid string) (string, bool) {
 	h := m.healthState()
 	h.mu.Lock()
@@ -608,7 +608,7 @@ func (m *Manager) isCircuitBroken(uuid string) (string, bool) {
 // 调用点：Worker 收到 CP 的人工启动指令（gRPC StartInstance）——「熔断期间人工启动不受阻」
 // 且「移除熔断锁后恢复自动重启」（spec §4 验收 5）由同一次人工动作完成。
 //
-// FR-459 终验 Low（L2 竞态）：即便本次调用未观测到熔断记账（had==false，多为「熔断刚被并发的
+// 终验 Low（L2 竞态）：即便本次调用未观测到熔断记账（had==false，多为「熔断刚被并发的
 // 巡检/另一次解除清掉」），也幂等补发一次 enable。否则那条「scan 已读到 broken 并补发 disable、
 // 而解除方此处的 enable 先到、disable 后到」的交错留下的 wrapper 粘性禁用态将**再无恢复路径**
 // （后续人工 Start 因 !had 提前返回，永不下发 enable）。真正的收敛由 sendDisarmReconciled 的
@@ -639,7 +639,7 @@ func (m *Manager) ReleaseCircuitBreaker(uuid string) (reason string, released bo
 		}
 		return "", false
 	}
-	// FR-459 终验 Low #3：清除熔断态持久化文件（否则 Worker 重启后会误恢复已解除的熔断）。
+	// 终验 Low #3：清除熔断态持久化文件（否则 Worker 重启后会误恢复已解除的熔断）。
 	m.clearPersistedCircuit(uuid)
 
 	m.mu.Lock()
@@ -648,7 +648,7 @@ func (m *Manager) ReleaseCircuitBreaker(uuid string) (reason string, released bo
 	}
 	m.mu.Unlock()
 	m.clearHealthFault(uuid)
-	// FR-459 终验 Major：向仍在托管的 daemon wrapper 复位粘性「禁用自动重启」。
+	// 终验 Major：向仍在托管的 daemon wrapper 复位粘性「禁用自动重启」。
 	// 熔断在 Java 仍运行时触发只发禁用帧、保 RUNNING，此处若不复位，Java 下次崩溃仍被 wrapper
 	// 拒绝重启，而记账/CP 却认为已解除（解除仅在实例停/重建后才生效的隐性降级）。
 	m.rearmAutoRestart(uuid)
@@ -664,7 +664,7 @@ func (m *Manager) autoRestartAllowed(uuid string) bool {
 	return !broken
 }
 
-// auditHealth 记录一条 FR-459 健康/自愈审计：复用 FR-455/456 的孤儿审计通道
+// auditHealth 记录一条健康/自愈审计：复用456 的孤儿审计通道
 // （Worker→CP 同址出站 gRPC），detail 标注 operator=auto（spec §2.2 动作分级）。
 func (m *Manager) auditHealth(action, targetID, reason string, success bool, errMsg string) {
 	detail := fmt.Sprintf(`{"operator":"auto","kind":"health","reason":%q}`, reason)
@@ -678,7 +678,7 @@ func (m *Manager) auditHealthManual(action, targetID, reason string) {
 	m.auditOrphan(action, targetID, detail, true, "")
 }
 
-// HealthScanner FR-459 运行期周期巡检器（仿 OrphanScanner：New... + Start(ctx) + ScanOnce）。
+// HealthScanner运行期周期巡检器（仿 OrphanScanner：New... + Start(ctx) + ScanOnce）。
 type HealthScanner struct {
 	mgr *Manager
 	// localEnabled 是本地配置开关（worker.health_scan_enabled）；关闭=硬关，CP 无法远程开启。
@@ -694,7 +694,7 @@ type HealthScanner struct {
 	suspicionMu sync.Mutex
 	suspicion   map[string]int
 
-	// 开关瞬变检测（FR-459 终验 Low #6）：上一拍「生效开关」状态。生效开关由
+	// 开关瞬变检测（终验 Low #6）：上一拍「生效开关」状态。生效开关由
 	// localEnabled ∧ CP 下发 Enabled 决定；由开→关时清一次健康记账，避免 CP 残留陈旧原因。
 	policyToggleMu sync.Mutex
 	lastActive     bool
@@ -739,7 +739,7 @@ func (s *HealthScanner) SetPolicy(policy HealthPolicy) {
 	s.noteToggle()
 }
 
-// noteToggle 检测「生效开关」由开→关的瞬变，并在该时刻清一次健康记账（FR-459 终验 Low #6）。
+// noteToggle 检测「生效开关」由开→关的瞬变，并在该时刻清一次健康记账（终验 Low #6）。
 //
 // 关闭后不再有巡检上报去纠正 CP，若不清理，最后一轮写入的「假死」原因会永久残留在面板与健康墙。
 // 清空 records 后，后续心跳上报的 Health/StatusReason 为空，CP 据此把 status_reason 清掉。
@@ -755,7 +755,7 @@ func (s *HealthScanner) noteToggle() {
 }
 
 // clearHealthRecords 清空全部健康故障记账（records）与假死嫌疑计数。
-// 仅用于巡检开关由开→关的瞬变（FR-459 终验 Low #6）；熔断态（broken）不在此清理——解除只经人工入口。
+// 仅用于巡检开关由开→关的瞬变（终验 Low #6）；熔断态（broken）不在此清理——解除只经人工入口。
 func (s *HealthScanner) clearHealthRecords() {
 	if s == nil || s.mgr == nil {
 		return
@@ -814,7 +814,7 @@ func (s *HealthScanner) ScanOnce() []HealthReport {
 		return nil
 	}
 	pol := s.effectivePolicy()
-	// FR-459 终验 Low #6：开关由开→关的瞬变清一次健康记账（幂等；SetPolicy 亦会触发，双保险）。
+	// 终验 Low #6：开关由开→关的瞬变清一次健康记账（幂等；SetPolicy 亦会触发，双保险）。
 	s.noteToggle()
 	if !pol.Enabled {
 		return nil
@@ -832,7 +832,7 @@ func (s *HealthScanner) ScanOnce() []HealthReport {
 
 // scanOne 巡检单个实例并返回结论。
 //
-// 顺序（FR-459 复审 blocker/major 修复后的口径）：
+// 顺序（复审 blocker/major 修复后的口径）：
 //  1. **熔断评估先于一切**：崩溃窗口对**所有在册实例**评估（含 RUNNING）——daemon 下 Java 崩溃时
 //     wrapper 存活、只上抛退出事件，Worker 记账恒 RUNNING，若把熔断判定挂在「非 RUNNING」分支上，
 //     判定永不执行（原实现 blocker）。
@@ -865,7 +865,7 @@ func (s *HealthScanner) scanOne(uuid string, pol HealthPolicy, now time.Time) He
 		return s.classifyNonRunning(uuid, state)
 	}
 
-	// 2) 存活维度：复用 FR-455/456 同源证据。
+	// 2) 存活维度：复用456 同源证据。
 	ev := s.liveness(uuid)
 	if !ev.Running {
 		s.clearSuspicion(uuid)
@@ -884,7 +884,7 @@ func (s *HealthScanner) scanOne(uuid string, pol HealthPolicy, now time.Time) He
 
 	if s.probeReadiness(kind, port) {
 		wasSuspect := s.clearSuspicion(uuid)
-		// 响应恢复：清零假死自愈计数，使下一次故障重新获得完整重启配额（FR-459 复审项 7）。
+		// 响应恢复：清零假死自愈计数，使下一次故障重新获得完整重启配额（复审项 7）。
 		mgr.resetSelfHealRestarts(uuid)
 		mgr.setHealthFault(uuid, HealthFaultHealthy, "")
 		if wasSuspect {
@@ -895,7 +895,7 @@ func (s *HealthScanner) scanOne(uuid string, pol HealthPolicy, now time.Time) He
 
 	// 3) 启动宽限期：Start 返回 RUNNING（或 daemon 下 Java 刚重启）后的 warmup 内不判假死。
 	// MC 慢启动（World 加载/模组初始化）常远超单拍巡检周期，不加宽限会被判「存活但不响应」
-	// 并在 action=restart 下反复重启一个正在正常启动的实例（FR-459 复审项 2）。
+	// 并在 action=restart 下反复重启一个正在正常启动的实例（复审项 2）。
 	if warmupRemaining := s.warmupRemaining(pol, startedAt, mgr.lastProcessCrash(uuid), now); warmupRemaining > 0 {
 		s.clearSuspicion(uuid)
 		// 不动既有健康故障（宽限期结论不明：既非确认假死、也非确认健康，不应清 CP 已写的原因）。
@@ -946,7 +946,7 @@ func (s *HealthScanner) evaluateCircuitBreaker(uuid string, pol HealthPolicy, no
 	mgr := s.mgr
 	if reason, broken := mgr.isCircuitBroken(uuid); broken {
 		mgr.setHealthFault(uuid, HealthFaultCircuitBroken, reason)
-		// FR-459 终验 Low #4：熔断持续期间每拍幂等补发一次禁用帧，兜底首帧丢失（连接瞬断/即时拨号失败）
+		// 终验 Low #4：熔断持续期间每拍幂等补发一次禁用帧，兜底首帧丢失（连接瞬断/即时拨号失败）
 		// 导致「熔断只生效于记账、wrapper 仍在自动重启」的哑火。
 		mgr.redisarmAutoRestart(uuid, reason)
 		return HealthReport{UUID: uuid, Fault: HealthFaultCircuitBroken, Reason: reason}, true
@@ -1016,7 +1016,7 @@ func (s *HealthScanner) actOnDead(uuid string, pol HealthPolicy, reason string, 
 		return
 	}
 
-	// 重启风暴护栏（FR-459 复审项 7）：崩溃路径有熔断兜底，假死路径此前没有任何次数上限，
+	// 重启风暴护栏（复审项 7）：崩溃路径有熔断兜底，假死路径此前没有任何次数上限，
 	// 一个持续假死的实例会被每轮巡检重启一次（永不停止）。超过窗口内配额即降级为仅告警。
 	if n := s.mgr.selfHealRestartCount(uuid, now, pol.CircuitBreakerWindow); n >= pol.SelfHealMaxRestarts {
 		rep.Reason = fmt.Sprintf("%s；自愈重启已达上限（%s 内 %d 次），暂不再自动重启，等待人工介入",
@@ -1052,7 +1052,7 @@ func (s *HealthScanner) restartInstance(uuid string) error {
 	return s.mgr.RestartIfRunning(uuid)
 }
 
-// liveness 返回某实例的存活证据：默认复用 ProbeInstanceEvidence（与 FR-455/456 同源）。
+// liveness 返回某实例的存活证据：默认复用 ProbeInstanceEvidence（与456 同源）。
 func (s *HealthScanner) liveness(uuid string) InstanceEvidence {
 	if s.probeLiveness != nil {
 		return s.probeLiveness(uuid)

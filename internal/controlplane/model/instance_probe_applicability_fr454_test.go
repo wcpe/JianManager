@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestIsProbeApplicable FR-454：ServerProbe 是 Bukkit 插件，仅 Minecraft Java 服务端可加载。
+// TestIsProbeApplicable：ServerProbe 是 Bukkit 插件，仅 Minecraft Java 服务端可加载。
 // 代理（role=proxy）、Beacon（role=beacon）与通用二进制（type=generic）均不适用；
 // 判定同时看 type 与 role，使历史误记 type=minecraft_java 的 beacon 仍被正确排除。
 func TestIsProbeApplicable(t *testing.T) {
@@ -30,7 +30,7 @@ func TestIsProbeApplicable(t *testing.T) {
 	}
 }
 
-// TestNormalizeInstanceType FR-454：role→type 归一只有一条必要约束（role=beacon ⇒ generic），
+// TestNormalizeInstanceType：role→type 归一只有一条必要约束（role=beacon ⇒ generic），
 // 创建与更新两条路径共用；其余 role 不得反向强推 minecraft_java（generic 对它们均合法）。
 func TestNormalizeInstanceType(t *testing.T) {
 	tests := []struct {

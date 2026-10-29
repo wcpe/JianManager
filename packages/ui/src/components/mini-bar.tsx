@@ -1,7 +1,7 @@
 import { cn } from '../lib/utils'
 import { resourceLevel, statusColorVar, type StatusLevel } from '../lib/threshold'
 
-/** 迷你资源条（FR-061）：value/max → 阈值变色细条，用于密集表格内嵌资源占用。 */
+/** 迷你资源条：value/max → 阈值变色细条，用于密集表格内嵌资源占用。 */
 export function MiniBar({
   value,
   max = 100,

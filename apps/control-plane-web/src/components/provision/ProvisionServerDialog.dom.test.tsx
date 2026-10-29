@@ -12,8 +12,8 @@ import { server } from '@jianmanager/devmock/server'
 import { useInstances } from '@/api/instances'
 import ProvisionServerDialog from './ProvisionServerDialog'
 
-/**
- * ProvisionServerDialog 强断言（FR-202/FR-046 供给/部署流程，POST /instances/provision/server）。
+/** 
+ * ProvisionServerDialog 强断言（供给/部署流程，POST /instances/provision/server）。
  * 部署对话框依赖跨域 nodes（GET /nodes）+ groups（GET /groups）+ cores（GET /cores）seed handler，
  * 均已在主 mock 树（node.ts / identity.ts / provision.ts）。统一断言：
  * ① 打开对话框 → 渲染可选节点（Combobox 列出在线节点）+ 版本列表（GET /cores）；
@@ -39,7 +39,7 @@ beforeAll(() => {
   }
 })
 
-/**
+/** 
  * 部署流程测试壳：渲染对话框 + 一个由 useInstances() 驱动的实例名列表 + Toaster。
  * 部署成功后 useProvisionServer 失效 ['instances']，列表重取应出现新实例（集合联动），
  * 且对话框 onClose 后卸载——两者共同构成「部署成功」的强信号。

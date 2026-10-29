@@ -17,7 +17,7 @@ export interface OutboundTestButtonProps {
   /** 固定测试目标（`editable` 为假时使用）。 */
   defaultUrl: string
   label: string
-  /** 为真时额外渲染 URL 输入框，可测任意地址（FR-280）。 */
+  /** 为真时额外渲染 URL 输入框，可测任意地址。 */
   editable?: boolean
   /** 发起测试（容器注入 mutation）。 */
   onTest: (url: string) => void
@@ -29,11 +29,11 @@ export interface OutboundTestButtonProps {
   isError?: boolean
 }
 
-/**
- * 出站连通性测试按钮（FR-229，可自定义目标 FR-280）：经 CP 出站客户端（含已配置代理）GET 目标 URL，
+/** 
+ * 出站连通性测试按钮（可自定义目标）：经 CP 出站客户端（含已配置代理）GET 目标 URL，
  * 行内展示可达 + 状态码 + 往返耗时，或失败原因。供代理设置 / JDK 下载源测试复用。
  *
- * `editable` 为真时（FR-280）额外渲染 URL 输入框，运维可测任意地址（默认 `defaultUrl`，代理测试默认
+ * `editable` 为真时额外渲染 URL 输入框，运维可测任意地址（默认 `defaultUrl`，代理测试默认
  * `https://www.google.com`——不再写死 GitHub）；为假时保持固定 `defaultUrl` 的一键测试。
  */
 export function OutboundTestButton({

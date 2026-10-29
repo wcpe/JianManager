@@ -3,8 +3,8 @@ import { cva, type VariantProps } from 'class-variance-authority'
 
 import { cn } from '../lib/utils'
 
-/**
- * 加载指示器（FR-502 阶段 6）。
+/** 
+ * 加载指示器（阶段 6）。
  *
  * 此前加载反馈散落在各处：刷新按钮转自己的图标、提交按钮只把文字换成"保存中…"、
  * 面板用骨架屏。同一个"正在等后端"的状态有四种表达，用户每次都要重新认。
@@ -40,7 +40,7 @@ function Spinner({
   ...props
 }: Omit<React.ComponentProps<'svg'>, 'children'> &
   VariantProps<typeof spinnerVariants> & {
-    /**
+    /** 
      * 可访问名。不给即视为纯装饰（对辅助技术隐藏）——
      * 加载状态通常已由容器的 `aria-busy`/文案表达，指示器再报一次只是噪音。
      */

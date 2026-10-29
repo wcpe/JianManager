@@ -22,7 +22,7 @@ export function fmtAvailability(r: SLOResult | undefined): string {
   return `${(r.availability * 100).toFixed(2)}%`
 }
 
-/**
+/** 
  * 可用率进度条配色（可用率「越高越好」，与 `resourceLevel` 的「占用率越高越差」语义相反）。
  *
  * **必须显式传 level**：不传时 `MiniBar` 会调 `resourceLevel(pct)`，而该函数 `pct > 80 → 'danger'`
@@ -40,8 +40,8 @@ export function budgetBurnRatio(r: SLOResult | undefined): number | null {
   return r.budgetBurnedSec / r.budgetAllowedSec
 }
 
-/**
- * 可用性区块（FR-463）：窗口内可用率 / 故障次数 / MTTR / MTBF / 误差预算。
+/** 
+ * 可用性区块：窗口内可用率 / 故障次数 / MTTR / MTBF / 误差预算。
  * 口径：以「有可用证据的探针拍」为在线，缺拍计不可用（保守默认）；超 48h 窗口按降采样桶近似并标注。
  * MTTR/MTBF 为 null 时显式渲染「无故障」，不显示 0 也不显示 Infinity。
  * `applicable=false`（窗口内无任何可用证据）时整块显示「不适用」，

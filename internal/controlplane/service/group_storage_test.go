@@ -157,7 +157,7 @@ func TestGroupUsedStorageMB_SubMBCeilRounded(t *testing.T) {
 	require.Equal(t, float64(1), got, "0.25 MB 必须向上取整为 1 MB（向下取整是系统性低估）")
 }
 
-// TestQuotaStorageConsistency_BothPathsAgree 创建期口径与运行期口径必须一致（FR-003 关键约束）。
+// TestQuotaStorageConsistency_BothPathsAgree 创建期口径与运行期口径必须一致（关键约束）。
 //
 // 两处换口径时只改一处的后果正是「创建时按备份估算判通过、运行期按真实占用判超限」——
 // 实例刚建好就被强制停服。本测试把两条路径的用量断言在同一组数据上，任何单边漂移都会失败。

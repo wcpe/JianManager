@@ -8,7 +8,7 @@ import {
   canNavForward,
 } from './nav-history'
 
-describe('nav-history（FR-375）', () => {
+describe('nav-history', () => {
   it('push / back / forward 闭环', () => {
     let s = emptyNavHistory('')
     s = navPush(s, 'plugins')

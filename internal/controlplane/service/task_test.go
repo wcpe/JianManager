@@ -194,7 +194,7 @@ func TestTaskService_List_OwnershipScoping(t *testing.T) {
 	require.EqualValues(t, 2, total)
 }
 
-// 强制停止（FR-227）：节点离线 → 直接置 canceled（无 Worker 操作可中断）。
+// 强制停止：节点离线 → 直接置 canceled（无 Worker 操作可中断）。
 func TestTaskService_Cancel_OfflineNode_Direct(t *testing.T) {
 	db := newTaskTestDB(t)
 	svc := newTaskSvc(t, db)
@@ -209,7 +209,7 @@ func TestTaskService_Cancel_OfflineNode_Direct(t *testing.T) {
 	require.Equal(t, model.TaskStateCanceled, got.State)
 }
 
-// 强制停止（FR-227）：节点在线 + running → 置 CancelRequested、状态留 running，被 PendingCancelTaskIDsByNodeUUID 选出。
+// 强制停止：节点在线 + running → 置 CancelRequested、状态留 running，被 PendingCancelTaskIDsByNodeUUID 选出。
 func TestTaskService_Cancel_OnlineRunning_RequestsViaHeartbeat(t *testing.T) {
 	db := newTaskTestDB(t)
 	svc := newTaskSvc(t, db)
@@ -226,7 +226,7 @@ func TestTaskService_Cancel_OnlineRunning_RequestsViaHeartbeat(t *testing.T) {
 	require.Equal(t, []string{"ton"}, svc.PendingCancelTaskIDsByNodeUUID("uon"))
 }
 
-// 强制停止（FR-227）：已终态 → ErrTaskAlreadyTerminal；越权 → ErrTaskNotFound。
+// 强制停止：已终态 → ErrTaskAlreadyTerminal；越权 → ErrTaskNotFound。
 func TestTaskService_Cancel_TerminalAndCrossUser(t *testing.T) {
 	db := newTaskTestDB(t)
 	svc := newTaskSvc(t, db)
@@ -241,7 +241,7 @@ func TestTaskService_Cancel_TerminalAndCrossUser(t *testing.T) {
 	require.ErrorIs(t, svc.Cancel(&UserAccess{UserID: 999, IsPlatformAdmin: false}, "tc"), ErrTaskNotFound)
 }
 
-// List 筛选（FR-227）：按 state / keyword 过滤；total 与筛选同口径（FR-337）。
+// List 筛选：按 state / keyword 过滤；total 与筛选同口径。
 func TestTaskService_List_Filters(t *testing.T) {
 	db := newTaskTestDB(t)
 	svc := newTaskSvc(t, db)
@@ -265,7 +265,7 @@ func TestTaskService_List_Filters(t *testing.T) {
 	require.Equal(t, "f1", byKw[0].TaskID)
 }
 
-// EffectiveWindow（FR-337）：limit 缺省 100、钳制 [1,500]；offset 负值归 0。
+// EffectiveWindow：limit 缺省 100、钳制 [1,500]；offset 负值归 0。
 func TestTaskListFilter_EffectiveWindow(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -291,7 +291,7 @@ func TestTaskListFilter_EffectiveWindow(t *testing.T) {
 	}
 }
 
-// List 分页窗口（FR-337）：offset 翻页窗口正确、越界 offset 返回空 items 且 total 不变、
+// List 分页窗口：offset 翻页窗口正确、越界 offset 返回空 items 且 total 不变、
 // total 不受窗口影响（Count 与 Find 同筛选不同窗）。
 func TestTaskService_List_PaginationWindow(t *testing.T) {
 	db := newTaskTestDB(t)

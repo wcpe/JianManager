@@ -23,7 +23,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-441：coreType=binary 经既有 /instances/provision/server 端点分流。
+// coreType=binary 经既有 /instances/provision/server 端点分流。
 //
 // 关键回归保护：mcVersion 从 `binding:"required"` 下移为条件校验后，
 // MC 路径缺参**必须仍是 400 INVALID_REQUEST**（既有前端/脚本依赖该行为），
@@ -63,7 +63,7 @@ func (s *routeBinaryStream) Recv() (*workerpb.FetchBinaryProgress, error) {
 	return &workerpb.FetchBinaryProgress{Done: true, Success: true, Size: 1 << 20}, nil
 }
 
-// setupFR441Router 在本文件的测试里自建路由：与 FR-034 用例共用大部分装配，
+// setupFR441Router 在本文件的测试里自建路由：与用例共用大部分装配，
 // 差别只在**注入任务中心**——binary 是强制异步的，未接线任务中心时会被明确拒绝
 // （见 TestFR441BinaryRequiresTaskService），故端到端用例必须先接线。
 func setupFR441Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
@@ -100,7 +100,7 @@ func setupFR441Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.E
 func TestFR441BinaryRequiresTaskService(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
-	// 这里刻意用 FR-034 的装配（未接任务中心）。
+	// 这里刻意用的装配（未接任务中心）。
 	r := setupFR034Router(t, db, pool, service.NewCoreService())
 	adminToken := getAdminToken(t, r)
 	node := createTestNode(t, db)

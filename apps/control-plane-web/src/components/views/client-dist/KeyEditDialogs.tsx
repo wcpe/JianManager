@@ -20,7 +20,7 @@ import type { ClientKeyWithSecret, ClientPullKey } from '@/lib/client-dist/clien
 const toDatetimeLocal = (value: string | null) =>
   value ? new Date(value).toISOString().slice(0, 16) : ''
 
-/** 创建密钥请求体（FR-187）。 */
+/** 创建密钥请求体。 */
 export interface CreateKeyBody {
   channelId: string
   name: string
@@ -42,7 +42,7 @@ export interface CreateKeyDialogProps {
   onNotify?: (level: 'success' | 'error', message: string) => void
 }
 
-/** 更新密钥请求体（FR-192）。 */
+/** 更新密钥请求体。 */
 export interface UpdateKeyBody {
   channelId: string
   keyId: number
@@ -67,7 +67,7 @@ export interface EditKeyDialogProps {
 
 /** 编辑表单入参：target 必非空（由外层壳保证）。 */
 type EditKeyFormProps = Omit<EditKeyDialogProps, 'target'> & { target: ClientPullKey }
-/** 创建拉取密钥模态（FR-187，取代原内联常驻表单；内容自适应壳）。 */
+/** 创建拉取密钥模态（取代原内联常驻表单；内容自适应壳）。 */
 export function CreateKeyDialog({
   channelId,
   open,
@@ -80,7 +80,7 @@ export function CreateKeyDialog({
   const { t } = useTranslation()
   const [keyName, setKeyName] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
-  // 自定义密钥值（可空=自动生成）。FR-192：管理员可自控这把永久 key。
+  // 自定义密钥值（可空=自动生成）。：管理员可自控这把永久 key。
   const [customValue, setCustomValue] = useState('')
 
   const canSubmit = keyName.trim() !== '' && !submitting
@@ -178,8 +178,8 @@ export function CreateKeyDialog({
   )
 }
 
-/**
- * 编辑拉取密钥模态（FR-192）：改名 + 可选改值。
+/** 
+ * 编辑拉取密钥模态：改名 + 可选改值。
  * 改值会重算鉴权哈希、使持旧值的已分发客户端失效——表单内强警告。改值后回显新明文供复制。
  * 外层壳：target 存在时以 key=target.id 挂载内部表单，使其状态随目标重新初始化（避免 effect 改状态）。
  */

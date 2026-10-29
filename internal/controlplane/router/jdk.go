@@ -50,7 +50,7 @@ func (h *JDKHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, jdk)
 }
 
-// Install 异步发起 JDK 安装（FR-183，见 ADR-040）：建任务、令 Worker 启动即返回，
+// Install 异步发起 JDK 安装（见 ADR-040）：建任务、令 Worker 启动即返回，
 // 立即回 202 + {taskId}（不再阻塞最长 20min）。进度/完成经任务中心与站内信查看。
 func (h *JDKHandler) Install(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -73,7 +73,7 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	task, err := h.svc.InstallAsync(nodeID, req, createdBy)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidJDKArch) {
-			// FR-289：未知 arch 明确 422 拒绝，不再直透下载源产出误导性 404。
+			// 未知 arch 明确 422 拒绝，不再直透下载源产出误导性 404。
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_ARCH", "message": err.Error()})
 			return
 		}
@@ -91,7 +91,7 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }
 
-// Probe 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 信息（FR-228），供登记自动填。
+// Probe 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 信息，供登记自动填。
 func (h *JDKHandler) Probe(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return

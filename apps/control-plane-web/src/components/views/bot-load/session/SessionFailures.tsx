@@ -27,7 +27,7 @@ export interface SessionFailuresProps {
   /** 当前页数据（容器经 useBotLoadFailures 取数）。 */
   data?: { items: BotLoadFailure[]; total: number }
   isLoading?: boolean
-  /**
+  /** 
    * 取数失败：必须显式报错。压测判定正是靠失败明细下结论，把它渲染成「无失败记录」
    * 是最危险的假信号——「没有失败」与「失败列表没取到」会被读成同一件事。
    */
@@ -41,8 +41,8 @@ export interface SessionFailuresProps {
   retryResult?: string | null
 }
 
-/**
- * 会话失败明细（FR-371）：顶部五类计数卡可按类别下钻，支持勾选 Bot 重试或按当前过滤
+/** 
+ * 会话失败明细：顶部五类计数卡可按类别下钻，支持勾选 Bot 重试或按当前过滤
  * 全集重试；每行可展开失败追踪抽屉。勾选与抽屉开合是纯 UI 状态。
  */
 export function SessionFailures({

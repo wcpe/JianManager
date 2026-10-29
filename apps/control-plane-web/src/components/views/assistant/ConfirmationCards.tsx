@@ -9,8 +9,8 @@ import {
   type AssistantConfirmation,
 } from '@/api/assistant-chat'
 
-/**
- * 逐调用写入确认卡（FR-516 §7，FR-519 §5.5）。
+/** 
+ * 逐调用写入确认卡（§7§5.5）。
  *
  * 三条必须守住的行为：
  *  1. **只发 approve / reject**：后端明确不接受新参数或新目标，前端也不构造其它字段
@@ -34,7 +34,7 @@ export function ConfirmationCards({ runId, onDecided }: ConfirmationCardsProps) 
   const { data: items = [] } = useRunConfirmations(runId)
   const decide = useDecideConfirmation()
 
-  /**
+  /** 
    * 「现在」不能直接读 `Date.now()`：渲染期调用非纯函数会让同一份 props
    * 每次渲染算出不同结果（React 19 的 react-hooks/purity 会直接报错），
    * 也让「过期」在重渲染之间闪变。

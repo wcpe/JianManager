@@ -13,16 +13,16 @@ import (
 	"strings"
 )
 
-// 拉取密钥可逆加密（FR-192，见 ADR-044）。
+// 拉取密钥可逆加密（见 ADR-044）。
 //
 // 拉取密钥半公开（随整包分发必泄露、非信任根，ADR-022 决策①），其鉴权仍只用 KeyHash 比对，
 // 行为不变；另存一份 AES-256-GCM 可逆加密副本（KeyEnc）供平台管理员事后查看明文 + 复制，
 // 与其「半公开、非信任根」的真实信任级一致（防投毒全靠 manifest 签名，本能力不触碰签名信任根）。
 //
-// 对称密钥来源三轨（FR-263，优先级 env 注入 > 生产自动生成 > dev 回退）：
+// 对称密钥来源三轨（优先级 env 注入 > 生产自动生成 > dev 回退）：
 //   - env 注入（JIANMANAGER_CLIENT_KEY_ENC_SECRET，32 字节 base64）：优先，注入态不生成/不持久化；
 //   - 生产未注入：自动生成 32 字节随机密钥并持久化到 <dataRoot>/etc/client-key-enc.key（0600，原子
-//     rename），跨重启用同一密钥——零配置即可用、密钥始终可查看（同构 FR-248 签名密钥先例）；
+//     rename），跨重启用同一密钥——零配置即可用、密钥始终可查看（同构签名密钥先例）；
 //   - dev_mode 未注入：回退内置 dev 密钥（源码公开，仅零配置开发用）。
 //
 // 自动生成/读取失败时返回错误给装配层记录真实原因，装配层再优雅降级（不崩，密钥不可查看但其余功能正常，与 ADR-038 降级哲学一致）；
@@ -31,7 +31,7 @@ import (
 // keyEncSecretLen 对称加密密钥字节数（AES-256 → 32 字节）。
 const keyEncSecretLen = 32
 
-// 拉取密钥加密器来源标识（ResolveKeyEncryptor 返回的 source 值，FR-263）。
+// 拉取密钥加密器来源标识（ResolveKeyEncryptor 返回的 source 值）。
 const (
 	// KeyEncSourceEnv env 注入（JIANMANAGER_CLIENT_KEY_ENC_SECRET 非空）。
 	KeyEncSourceEnv = "env"
@@ -57,13 +57,13 @@ var (
 	chmodKeyFile = func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) }
 )
 
-// KeyEncryptor 拉取密钥的 AES-256-GCM 可逆加密器（FR-192，见 ADR-044）。
+// KeyEncryptor 拉取密钥的 AES-256-GCM 可逆加密器（见 ADR-044）。
 // nil 值表示「未配置加密」：Encrypt 返回空串（调用方据此不写 KeyEnc），Decrypt 返回 ErrKeyEncNotConfigured。
 type KeyEncryptor struct {
 	gcm cipher.AEAD
 }
 
-// ResolveKeyEncryptor 按三轨裁决拉取密钥加密器来源（FR-192/FR-263，见 ADR-044，优雅降级）。
+// ResolveKeyEncryptor 按三轨裁决拉取密钥加密器来源（见 ADR-044，优雅降级）。
 //
 //   - env 注入（secretB64 非空）：解析为 32 字节 AES 密钥构造加密器；非法即 ErrInvalidKeyEncSecret
 //     （配错快失败，让运维即时修正）。source=KeyEncSourceEnv，不生成/不持久化。
@@ -98,7 +98,7 @@ func ResolveKeyEncryptor(secretB64 string, devMode bool, keyFilePath string) (en
 	return e, KeyEncSourceGenerated, nil
 }
 
-// loadOrGenerateKeyEncryptor 读取或生成并持久化拉取密钥加密密钥（FR-263）。
+// loadOrGenerateKeyEncryptor 读取或生成并持久化拉取密钥加密密钥。
 // keyFilePath 存在 → 读取并解析（跨重启用同一密钥）；不存在 → 生成 32 字节随机密钥 → base64 →
 // 原子写文件（0600）→ 构造加密器。返回错误由调用方据降级语义处理。
 func loadOrGenerateKeyEncryptor(keyFilePath string) (*KeyEncryptor, error) {

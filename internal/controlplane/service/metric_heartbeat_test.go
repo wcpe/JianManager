@@ -119,8 +119,8 @@ func TestMetric_IngestHeartbeat_ProbeUnavailableWritesNull(t *testing.T) {
 }
 
 // TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull 直探来源可用但**在线人数缺测**时
-// 落 NULL 断点而非伪造 0（FR-447；Query 有响应但缺 numplayers 的场景）。
-// 注意：兼容回退刻意**不含 Query**（FR-446 复审 N1）——Query 可响应而缺 numplayers，回退会重新
+// 落 NULL 断点而非伪造 0（Query 有响应但缺 numplayers 的场景）。
+// 注意：兼容回退刻意**不含 Query**（复审 N1）——Query 可响应而缺 numplayers，回退会重新
 // 引入「伪造 0」；故 Query-only 且未置 players_online_available 时仍写 NULL。
 func TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull(t *testing.T) {
 	svc := newMetricSvc(t)
@@ -177,7 +177,7 @@ func TestMetric_IngestHeartbeat_PlayersAvailableFromDirectProbe(t *testing.T) {
 	require.Nil(t, tps.Points[0].Avg)
 }
 
-// TestMetric_IngestHeartbeat_PlayersMaxLandsSeries 人数上限可用时落 inst_players_max（FR-511）。
+// TestMetric_IngestHeartbeat_PlayersMaxLandsSeries 人数上限可用时落 inst_players_max。
 // 侧栏「当前/最大人数」依赖这条序列——批量指标接口只能读到存好的时序，心跳不落就永远没有。
 func TestMetric_IngestHeartbeat_PlayersMaxLandsSeries(t *testing.T) {
 	svc := newMetricSvc(t)
@@ -241,7 +241,7 @@ func TestMetric_IngestHeartbeat_PlayersMaxUnavailableWritesNull(t *testing.T) {
 }
 
 // TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample 中间版本 Worker（有直探、置 SlpAvailable
-// 与真实 PlayersOnline，但缺 players_online_available）仍落真实值而非 NULL（FR-446 复审 N1）：
+// 与真实 PlayersOnline，但缺 players_online_available）仍落真实值而非 NULL（复审 N1）：
 // SLP 命中的实例在线人数被误判为缺测会污染全网总在线合计与 bot 容量采样。
 func TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample(t *testing.T) {
 	svc := newMetricSvc(t)

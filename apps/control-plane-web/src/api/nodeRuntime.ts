@@ -5,7 +5,7 @@ import type { ArtifactCacheView } from '@/lib/artifacts/artifact-cache'
 
 export type { ArtifactCacheItem, ArtifactCacheView } from '@/lib/artifacts/artifact-cache'
 
-/** 一条可选 JDK 构建（foojay 版本选择器，FR-178）。 */
+/** 一条可选 JDK 构建（foojay 版本选择器）。 */
 export interface JDKCatalogPackage {
   distribution: string
   majorVersion: number
@@ -14,7 +14,7 @@ export interface JDKCatalogPackage {
   latest: boolean
 }
 
-/** 目录浏览中的一个子目录项（FR-178 目录选择器；FR-373 权限元数据加性）。 */
+/** 目录浏览中的一个子目录项（目录选择器权限元数据加性）。 */
 export interface BrowseDirEntry {
   name: string
   path: string
@@ -26,7 +26,7 @@ export interface BrowseDirEntry {
   group?: string
 }
 
-/** 节点绝对路径权限探测结果（FR-373，与实例 PathAccess 同形）。 */
+/** 节点绝对路径权限探测结果（与实例 PathAccess 同形）。 */
 export interface NodePathAccess {
   exists: boolean
   isDir: boolean
@@ -39,13 +39,13 @@ export interface NodePathAccess {
   reason?: string
 }
 
-/** 探测节点绝对路径可读/可写（平台管理员，FR-373）。 */
+/** 探测节点绝对路径可读/可写（平台管理员）。 */
 export async function checkNodePathAccess(nodeId: number, path: string): Promise<NodePathAccess> {
   const { data } = await api.post<NodePathAccess>(`/nodes/${nodeId}/fs/check-access`, { path })
   return data
 }
 
-/** 节点绝对路径单 path 非递归 chmod（平台管理员，FR-373）。 */
+/** 节点绝对路径单 path 非递归 chmod（平台管理员）。 */
 export async function chmodNodePath(
   nodeId: number,
   path: string,
@@ -58,7 +58,7 @@ export async function chmodNodePath(
   return { modeOctal: data.modeOctal }
 }
 
-/** 目录浏览结果（FR-178）。 */
+/** 目录浏览结果。 */
 export interface BrowseDirView {
   /** 当前浏览的规范化绝对路径（空=起点列表，如盘符/根）。 */
   path: string
@@ -79,7 +79,7 @@ export function useArtifactCache(nodeId: number, options?: { enabled?: boolean }
   })
 }
 
-/** 逐项清除某 sha256 的缓存（FR-178）。 */
+/** 逐项清除某 sha256 的缓存。 */
 export function useEvictArtifactCache(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
@@ -88,7 +88,7 @@ export function useEvictArtifactCache(nodeId: number) {
   })
 }
 
-/** 清空节点全部制品缓存（FR-178）。 */
+/** 清空节点全部制品缓存。 */
 export function useClearArtifactCache(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
@@ -97,7 +97,7 @@ export function useClearArtifactCache(nodeId: number) {
   })
 }
 
-/** 设置缓存容量上限（字节，0=不限；超限按 LRU 淘汰，FR-178）。 */
+/** 设置缓存容量上限（字节，0=不限；超限按 LRU 淘汰）。 */
 export function useSetArtifactCacheCap(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
@@ -107,8 +107,8 @@ export function useSetArtifactCacheCap(nodeId: number) {
   })
 }
 
-/**
- * 查询某发行版可选的具体 JDK 版本（经 CP 代理 foojay，FR-178）。
+/** 
+ * 查询某发行版可选的具体 JDK 版本（经 CP 代理 foojay）。
  * 仅在 vendor 非空且面板打开时启用；失败（foojay 不可达）由调用方降级为「手填版本」。
  */
 export function useJDKCatalog(nodeId: number, vendor: string, major: number, options?: { enabled?: boolean }) {
@@ -126,8 +126,8 @@ export function useJDKCatalog(nodeId: number, vendor: string, major: number, opt
   })
 }
 
-/**
- * 浏览节点某绝对路径下的子目录（经 CP 委托 Worker，FR-178 目录选择器）。
+/** 
+ * 浏览节点某绝对路径下的子目录（经 CP 委托 Worker目录选择器）。
  * path 为空时返回起点列表（盘符/根）。仅在面板打开时启用。
  */
 export function useBrowseDir(nodeId: number, path: string, options?: { enabled?: boolean }) {

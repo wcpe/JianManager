@@ -1,5 +1,5 @@
 /**
- * dark 变体绑定到应用内主题 class（FR-502 阶段 1 修复）。
+ * dark 变体绑定到应用内主题 class（阶段 1 修复）。
  *
  * 此前全仓没有任何 @custom-variant 声明，Tailwind v4 的 `dark:` 因此默认解析为
  * `@media (prefers-color-scheme: dark)`——即全站 88 处 `dark:` 工具类跟随的是
@@ -13,7 +13,7 @@
 @custom-variant dark (&:is(.dark *));
 
 /**
- * hover 变体脱离 `@media (hover: hover)` 包裹（FR-502 阶段 6 补丁）。
+ * hover 变体脱离 `@media (hover: hover)` 包裹（阶段 6 补丁）。
  *
  * Tailwind v4 把 `hover:` 默认编译成 `&:hover { @media (hover: hover) { … } }`，
  * 于是整站 hover 反馈都挂在一条环境查询上。该查询在**混合输入设备**上会判否：
@@ -30,7 +30,7 @@
 @custom-variant hover (&:hover);
 
 /**
- * token → Tailwind utility 映射（FR-502 阶段 1 自 packages/ui 提供）。
+ * token → Tailwind utility 映射（阶段 1 自 packages/ui 提供）。
  *
  * 迁入缘由：此前这份映射定义在 apps/control-plane-web/src/index.css 本地，
  * 而 packages/ui/src/components/* 是全站样式的主要产出方——结果组件库不自包含，
@@ -75,7 +75,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
-  /* 状态色系（FR-061）：资源/TPS/实例状态按阈值着色，独立于主色 */
+  /* 状态色系：资源/TPS/实例状态按阈值着色，独立于主色 */
   --color-status-success: var(--status-success);
   --color-status-success-foreground: var(--status-success-foreground);
   --color-status-warning: var(--status-warning);
@@ -101,7 +101,7 @@
   --color-info-line: var(--info-line);
   --color-brand-forest: var(--brand-forest);
   --color-brand-cobalt: var(--brand-cobalt);
-  /* 多序列历史曲线配色（FR-060 TimeSeriesChart） */
+  /* 多序列历史曲线配色（TimeSeriesChart） */
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -140,7 +140,7 @@
     于是同一页里 5px 与 10px 并存——实测某页 28 个带边框容器中 21 个 5px、
     5 个 10px、1 个 6px、1 个 0px，「圆角不统一」是肉眼可见的事实。
 
-    **但小元素不能跟着放大到 5px**。一个 18px 高的徽标、1px 高的进度条若用 5px 半径，
+    ** 但小元素不能跟着放大到 5px**。一个 18px 高的徽标、1px 高的进度条若用 5px 半径，
     会接近胶囊形甚至失真——半径是绝对长度，而视觉重量取决于它与元素尺寸的比例。
     这正是 GitHub Primer 把 radius 分成 `small / medium / large` 三档的原因：
     容器用大档、控件用中档、微元素用小档，比例才平衡。
@@ -169,8 +169,8 @@
   --radius-tiny: 3px;
   --radius-mini: 4px;
 
-  /* 设计底座（FR-163）：柔和弱阴影 + 主色晕染抬升 + 统一动效 token + 呼吸灯。
-     品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
+  /* 设计底座：柔和弱阴影 + 主色晕染抬升 + 统一动效 token + 呼吸灯。
+ 品牌相关取值（--brand-shadow）经变量路由第二主题仅覆盖变量即可换肤。 */
   /*
     【阴影重调：更薄、更贴地】原 soft 是两层叠加（各 5% 不透明度、1px 与 3px 偏移），
     在 5px 小圆角下显得「糊了一圈灰边」，卡片之间挨在一起时分不清是阴影还是描边。
@@ -188,7 +188,7 @@
   /* 抬升阶梯向上补齐。语义：flat(无) < soft(卡片) < lift(悬停抬升) < overlay(浮层) < modal(模态)。 */
   --shadow-overlay: 0 8px 24px -8px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
   --shadow-modal: 0 16px 40px -12px rgb(var(--shadow-color) / 0.20), 0 4px 12px -6px rgb(var(--shadow-color) / 0.10);
-  /* ── 全局动效收敛（FR-244）：唯一的动画词汇表，任何交互动效都从这里取值，禁止再散落硬编码毫秒 ──
+  /* ── 全局动效收敛：唯一的动画词汇表，任何交互动效都从这里取值，禁止再散落硬编码毫秒 ──
        时长 token：--motion-duration-fast(120)｜normal(180)｜slow(320)｜route(360)｜progress-*(进度条专用)。
        缓动 token：--motion-easing-standard（iOS 收敛缓动，别名 --ease-ios，Tailwind 用 ease-ios）｜--motion-easing-emphasized。
        语义类（定义在 motion.css）：

@@ -1,7 +1,7 @@
 import type { ConfigLayerHead, ConfigScopeLevel, TracedEntry } from '@/api/configFiles'
 
-/**
- * 分层配置的纯逻辑（FR-529）：层分组、实例层优先级判定、溯源表行构造。
+/** 
+ * 分层配置的纯逻辑：层分组、实例层优先级判定、溯源表行构造。
  *
  * 抽成纯函数而非塞在页面里，是因为两条 UI 约束（预览为规范化结果、实例层优先级最高）
  * 的**显示条件**必须可单独断言——它们是真机验收提的要求，写错条件就会误导运维
@@ -28,7 +28,7 @@ export function groupLayersByScope(layers: ConfigLayerHead[] | undefined): Group
   return { groups: [...groups].sort(byRef), instances: [...instances].sort(byRef) }
 }
 
-/**
+/** 
  * 该实例是否已有实例层版本。
  * 实例层存在即意味着作用域链最右端被它占据，分组层的值在这台实例上不可能生效。
  */
@@ -37,7 +37,7 @@ export function hasInstanceLayer(layers: ConfigLayerHead[] | undefined, instance
   return (layers ?? []).some((l) => l.scopeLevel === 'instance' && l.scopeRefId === instanceId)
 }
 
-/**
+/** 
  * 是否要显示「实例层优先级最高」提示。
  *
  * 判据（与需求文字逐条对应）：
@@ -62,7 +62,7 @@ export function shouldWarnInstancePrecedence(
 export interface TracedRow {
   /** 键路径（yaml/json 为点分路径，properties 为平铺键）。 */
   key: string
-  /**
+  /** 
    * 值的展示文本（对象/数组会被 JSON 化；被脱敏的键后端已给 `***`）。
    * 被删除的键不在这里拼中文，由视图按 `deleted` 渲染对应译文。
    */
@@ -91,7 +91,7 @@ export function formatTracedValue(value: unknown): string {
   }
 }
 
-/**
+/** 
  * 把 `traced`（键 → 值 + 来源）转成稳定排序的行数组。
  *
  * 排序：先按「来源层级别」把实例层排前面（运维最关心实例层压住了什么），

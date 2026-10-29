@@ -10,8 +10,8 @@ import { API } from '@jianmanager/devmock/api'
 import { useAuthStore } from '@/stores/auth'
 import PluginManager from './PluginManager'
 
-/**
- * PluginManager 强断言（FR-206 插件域）：渲染 seed 插件 / 启用禁用切换联动 / 注入 500 显错误态。
+/** 
+ * PluginManager 强断言（插件域）：渲染 seed 插件 / 启用禁用切换联动 / 注入 500 显错误态。
  * seed 插件挂在 instanceId=1（见 mocks/handlers/domains/plugin.ts）。
  */
 describe('PluginManager（mock 假后端）', () => {

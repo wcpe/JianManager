@@ -25,10 +25,10 @@ var (
 	// ErrPullKeyNotFound 拉取密钥不存在（或不属于该频道）。
 	ErrPullKeyNotFound = errors.New("拉取密钥不存在")
 	// ErrPullKeyNotRevealable 拉取密钥不可查看（无 KeyEnc：存量老哈希密钥，或创建时未配加密密钥）。
-	// 供 reveal 端点映射 404 业务码 KEY_NOT_REVEALABLE（FR-192，见 ADR-044）。
+	// 供 reveal 端点映射 404 业务码 KEY_NOT_REVEALABLE（见 ADR-044）。
 	ErrPullKeyNotRevealable = errors.New("拉取密钥不可查看")
 	// ErrPullKeyInvalid 拉取密钥鉴权失败（不存在/吊销/过期/频道不匹配）。
-	// 供 FR-087 面向玩家端点映射 401/403；不区分具体原因以免泄露密钥状态。
+	// 供面向玩家端点映射 401/403；不区分具体原因以免泄露密钥状态。
 	ErrPullKeyInvalid = errors.New("拉取密钥无效")
 )
 
@@ -38,12 +38,12 @@ const pullKeyPlaintextPrefix = "jmck_"
 // pullKeyPrefixLen 落库 KeyPrefix 截取的明文前缀长度（含 `jmck_`），仅供列表识别、不足以重建密钥。
 const pullKeyPrefixLen = 9
 
-// ClientChannelService 客户端分发频道与拉取密钥管理（FR-086，见 ADR-022）。
-// 密钥鉴权（VerifyKey）只用 SHA-256 哈希比对；另存 AES-256-GCM 可逆加密副本供管理员查看明文（FR-192）。
-// 鉴权（VerifyKey）供 FR-087 面向玩家的 manifest/制品端点消费。
+// ClientChannelService 客户端分发频道与拉取密钥管理（见 ADR-022）。
+// 密钥鉴权（VerifyKey）只用 SHA-256 哈希比对；另存 AES-256-GCM 可逆加密副本供管理员查看明文。
+// 鉴权（VerifyKey）供面向玩家的 manifest/制品端点消费。
 type ClientChannelService struct {
 	db *gorm.DB
-	// encryptor 拉取密钥可逆加密器（FR-192，见 ADR-044）。nil=未配置加密：建/轮换不写 KeyEnc、
+	// encryptor 拉取密钥可逆加密器（见 ADR-044）。nil=未配置加密：建/轮换不写 KeyEnc、
 	// 查看返 ErrPullKeyNotRevealable（生产未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时优雅降级）。
 	encryptor *KeyEncryptor
 }
@@ -54,7 +54,7 @@ func NewClientChannelService(db *gorm.DB) *ClientChannelService {
 	return &ClientChannelService{db: db}
 }
 
-// SetKeyEncryptor 注入拉取密钥可逆加密器（FR-192，见 ADR-044）。
+// SetKeyEncryptor 注入拉取密钥可逆加密器（见 ADR-044）。
 // 传 nil 即「未配置加密」降级语义。装配处按生产/开发态用 ResolveKeyEncryptor 解析后注入。
 func (s *ClientChannelService) SetKeyEncryptor(enc *KeyEncryptor) {
 	s.encryptor = enc
@@ -170,7 +170,7 @@ func (s *ClientChannelService) ListKeys(channelID string) ([]model.ClientPullKey
 	return s.listKeys(channelID)
 }
 
-// CreateKey 创建拉取密钥（FR-192：密钥发出后永久使用，可填自定义明文值）。
+// CreateKey 创建拉取密钥（：密钥发出后永久使用，可填自定义明文值）。
 //   - customValue 非空：用作密钥明文（管理员自控这把永久 key）；
 //   - customValue 为空：生成随机明文（带 jmck_ 前缀）。
 //
@@ -188,7 +188,7 @@ func (s *ClientChannelService) CreateKey(channelID, name, customValue string, ex
 	if err != nil {
 		return nil, "", err
 	}
-	// 可逆加密副本（FR-192）：配了加密器才写，未配（nil）则 enc 为空串、密钥仍正常可用、只是不可查看。
+	// 可逆加密副本：配了加密器才写，未配（nil）则 enc 为空串、密钥仍正常可用、只是不可查看。
 	enc, err := s.encryptor.Encrypt(plaintext)
 	if err != nil {
 		return nil, "", fmt.Errorf("加密拉取密钥失败: %w", err)
@@ -208,7 +208,7 @@ func (s *ClientChannelService) CreateKey(channelID, name, customValue string, ex
 	return key, plaintext, nil
 }
 
-// UpdateKeyParams 编辑拉取密钥参数（FR-192）。名称必改；Value 非空时改密钥明文值。
+// UpdateKeyParams 编辑拉取密钥参数。名称必改；Value 非空时改密钥明文值。
 type UpdateKeyParams struct {
 	// Name 新名称（必填，非空）。
 	Name string
@@ -220,7 +220,7 @@ type UpdateKeyParams struct {
 	ExpiresAt *time.Time
 }
 
-// UpdateKey 编辑拉取密钥（FR-192：管理员手动设/改这把永久 key 的值与名称）。
+// UpdateKey 编辑拉取密钥（：管理员手动设/改这把永久 key 的值与名称）。
 //   - 仅改名（Value 为空）：更新 Name；
 //   - 改值（Value 非空）：用新明文重算 KeyHash（鉴权随之切换到新值）+ 重写 KeyEnc（可查看）+ 更新 KeyPrefix。
 //
@@ -270,7 +270,7 @@ func (s *ClientChannelService) UpdateKey(channelID string, keyID uint, p UpdateK
 	return key, plaintext, nil
 }
 
-// RevealKey 返回拉取密钥明文（FR-192，见 ADR-044）：解密 KeyEnc 还原明文，供平台管理员查看 + 复制。
+// RevealKey 返回拉取密钥明文（见 ADR-044）：解密 KeyEnc 还原明文，供平台管理员查看 + 复制。
 // 无 KeyEnc（存量老哈希密钥 / 创建时未配加密密钥）→ ErrPullKeyNotRevealable（哈希单向，救不回）。
 // 鉴权不变（仍用 KeyHash 比对）；本方法只读、不刷新 last_used_at（查看非鉴权命中）。
 func (s *ClientChannelService) RevealKey(channelID string, keyID uint) (string, error) {
@@ -303,7 +303,7 @@ func (s *ClientChannelService) RevokeKey(channelID string, keyID uint) error {
 }
 
 // VerifyKey 校验请求头明文密钥：对明文做 SHA-256 → 按哈希查找 → 校验频道匹配、未吊销、未过期。
-// 命中则刷新 last_used_at（弱一致，失败不阻断）。供 FR-087 面向玩家端点消费。
+// 命中则刷新 last_used_at（弱一致，失败不阻断）。供面向玩家端点消费。
 // 未命中/吊销/过期/频道不匹配统一返回 ErrPullKeyInvalid（不泄露具体原因）。
 func (s *ClientChannelService) VerifyKey(channelID, plaintext string) (*model.ClientPullKey, error) {
 	plaintext = strings.TrimSpace(plaintext)
@@ -334,7 +334,7 @@ func (s *ClientChannelService) VerifyKey(channelID, plaintext string) (*model.Cl
 }
 
 // VerifyAnyKey 校验请求头明文密钥但不绑定具体频道：对明文做 SHA-256 → 按哈希查找 →
-// 校验未吊销、未过期。供 FR-087 的制品端点（GET /client-artifacts/{sha256}，路径无频道段）消费。
+// 校验未吊销、未过期。供的制品端点（GET /client-artifacts/{sha256}，路径无频道段）消费。
 // 制品内容寻址、跨频道共享，任一有效密钥即可授权路由；内容可信靠 manifest 签名而非密钥（ADR-022 §2）。
 // 命中刷新 last_used_at（弱一致）。未命中/吊销/过期统一返回 ErrPullKeyInvalid（不泄露具体原因）。
 func (s *ClientChannelService) VerifyAnyKey(plaintext string) (*model.ClientPullKey, error) {
@@ -395,7 +395,7 @@ func (s *ClientChannelService) findKey(channelID string, keyID uint) (*model.Cli
 }
 
 // listKeys 内部列密钥（不校验频道存在），按创建时间倒序。
-// 派生 Revealable（= KeyEnc 非空，FR-192）供前端判定可否查看；KeyEnc/KeyHash 本身不序列化。
+// 派生 Revealable（= KeyEnc 非空）供前端判定可否查看；KeyEnc/KeyHash 本身不序列化。
 func (s *ClientChannelService) listKeys(channelID string) ([]model.ClientPullKey, error) {
 	var keys []model.ClientPullKey
 	if err := s.db.Where("channel_id = ?", channelID).Order("created_at DESC").Find(&keys).Error; err != nil {
@@ -407,7 +407,7 @@ func (s *ClientChannelService) listKeys(channelID string) ([]model.ClientPullKey
 	return keys, nil
 }
 
-// derivePullKey 据可选自定义值派生拉取密钥（FR-192）：
+// derivePullKey 据可选自定义值派生拉取密钥：
 //   - customValue 非空：直接用作明文（管理员自定义这把永久 key）；
 //   - customValue 为空：32 字节随机 → base64url 明文（带 jmck_ 前缀）。
 //

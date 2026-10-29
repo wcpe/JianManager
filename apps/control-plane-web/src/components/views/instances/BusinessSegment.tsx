@@ -11,19 +11,19 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { BusinessAction, BusinessResult } from '@/lib/console/business'
 import { buildBusinessPayload, isWriteAction } from '@/lib/console/business-actions'
 
-/**
- * 业务掌控台（JBIS，FR-119，见 ADR-026/027）。
+/** 
+ * 业务掌控台（JBIS见 ADR-026/027）。
  *
  * manifest 驱动：取探针汇总的业务能力清单动态渲染域 / 动作（不硬编码具体插件），按动作 args 渲染表单，
  * 经 `POST /business` 下发 `domain.action` + payload，透传展示结果。探针未连 / 无业务 Provider 优雅降级。
- * 视觉为靛蓝圆角范式（FR-163）：统一 {@link Panel} 原语、语义图标块、写动作走语义危险色。
+ * 视觉为靛蓝圆角范式：统一 {@link Panel} 原语、语义图标块、写动作走语义危险色。
  *
- * 布局为分栏（FR-423）：左右 50:50 —— 本页签两侧都是工作区，不同于本批其他页签的
+ * 布局为分栏：左右 50:50 —— 本页签两侧都是工作区，不同于本批其他页签的
  * 62:38「列表 + 详情」。原先是 `minmax(13rem,17rem)_1fr`：清单被钉死在 272px 只能排成
  * 一条细长单列（域多时纵向拖很远），而下发面板拿着 1600px 去放几个 8 行高的输入框。
  * 均分后清单按域横向铺开（`sm:grid-cols-2`），返回 JSON 也拿到够用的宽度。
  *
- * 注：本页签只渲染能力清单 + 下发面板，不含任何具体业务域的特判（FR-521 后 JM 不理解业务语义）。
+ * 注：本页签只渲染能力清单 + 下发面板，不含任何具体业务域的特判（后 JM 不理解业务语义）。
  *
  * 受控视图（ADR-103 a 范式）：不取数——manifest 探测态与域清单由外壳注入，下发经回调上报。
  * 表单状态、写动作二次确认、入参还原与结果展示留在视图内。
@@ -68,7 +68,7 @@ export default function BusinessSegment({
   const [result, setResult] = useState<BusinessResult | null>(null)
   const [dispatching, setDispatching] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
-  // 写动作二次确认弹窗（FR-121）；非 null 时展示，确认后才真正下发。
+  // 写动作二次确认弹窗；非 null 时展示，确认后才真正下发。
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   const domainEntries = Object.entries(domains)
@@ -81,7 +81,7 @@ export default function BusinessSegment({
     setDispatchError('')
   }, [])
 
-  // 真正执行下发：写动作注入幂等键（稳定 operationId）+ 操作原因（FR-121）。
+  // 真正执行下发：写动作注入幂等键（稳定 operationId）+ 操作原因。
   const doDispatch = useCallback(async () => {
     if (!selected) return
     setDispatching(true)
@@ -91,7 +91,7 @@ export default function BusinessSegment({
       const res = await onDispatch({
         domain: selected.domain,
         action: selected.action.action,
-        // 对象/数组入参还原为真嵌套结构后下发（FR-119），避免探针 getObject 拿不到对象；标量保持字符串。
+        // 对象/数组入参还原为真嵌套结构后下发，避免探针 getObject 拿不到对象；标量保持字符串。
         payload: buildBusinessPayload(args),
         write,
         operationId: crypto.randomUUID(),
@@ -106,7 +106,7 @@ export default function BusinessSegment({
     }
   }, [selected, args, reason, onDispatch, t])
 
-  // 「下发」入口：写动作先弹二次确认，读动作直接下发（FR-121）。
+  // 「下发」入口：写动作先弹二次确认，读动作直接下发。
   const run = useCallback(() => {
     if (!selected) return
     if (isWriteAction(selected.action)) {
@@ -240,7 +240,7 @@ export default function BusinessSegment({
                       />
                     </label>
                   ))}
-                  {/* 写动作可选「原因」，透传进插件流水 + JM 审计（FR-121）。 */}
+                  {/* 写动作可选「原因」，透传进插件流水 + JM 审计。 */}
                   {isWriteAction(selected.action) && (
                     <label className="flex flex-col gap-0.5 text-xs">
                       <span className="text-muted-foreground">{t('business.reason')}</span>
@@ -289,7 +289,7 @@ export default function BusinessSegment({
         </div>
       )}
 
-      {/* 写动作二次确认（FR-121）：高危业务写须确认后下发，避免误操作刷钱/吞物品。 */}
+      {/* 写动作二次确认：高危业务写须确认后下发，避免误操作刷钱/吞物品。 */}
       <DangerConfirm
         open={confirmOpen}
         title={t('business.confirmWriteTitle')}

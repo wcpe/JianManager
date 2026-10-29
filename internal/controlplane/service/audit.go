@@ -32,7 +32,7 @@ func (s *AuditService) RecordSafe(userID uint, action, targetType, targetID, det
 	}
 }
 
-// RecordResult 记录带结果的审计日志（FR-321）：失败操作也留痕并带错误内容，
+// RecordResult 记录带结果的审计日志：失败操作也留痕并带错误内容，
 // 回答「这个操作为什么报错」（此前失败操作审计无错误内容）。
 func (s *AuditService) RecordResult(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string) error {
 	if len(errMsg) > 512 {
@@ -61,7 +61,7 @@ func (s *AuditService) RecordResultSafe(userID uint, action, targetType, targetI
 	}
 }
 
-// AuditCorrelation 助手调用的串联维度（FR-516 §9）。
+// AuditCorrelation 助手调用的串联维度（§9）。
 //
 // 三个字段都可空：非助手产生的审计行没有会话/运行概念。
 // 但一旦非空，审计就能「按 runId 查出这一轮助手到底改了什么」——
@@ -116,7 +116,7 @@ type AuditFilter struct {
 	Limit      int
 	Page       int
 	PageSize   int
-	// 助手调用串联过滤（FR-516 §9）：任一非空即按该维度收敛。
+	// 助手调用串联过滤（§9）：任一非空即按该维度收敛。
 	// 有了这三项，运维才能回答「某一轮助手到底执行了哪些写操作」。
 	ConversationID *uint
 	RunID          *uint
@@ -158,7 +158,7 @@ func (s *AuditService) auditQuery(filter AuditFilter) *gorm.DB {
 	if filter.To != nil {
 		q = q.Where("created_at <= ?", *filter.To)
 	}
-	// 助手串联（FR-516 §9）：按列而非 Detail JSON，才能走索引。
+	// 助手串联（§9）：按列而非 Detail JSON，才能走索引。
 	if filter.ConversationID != nil {
 		q = q.Where("conversation_id = ?", *filter.ConversationID)
 	}

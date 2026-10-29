@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 文件/目录信息（与后端 service.FileInfo 对应，FR-008；FR-373 权限元数据加性）。 */
+/** 文件/目录信息（与后端 service.FileInfo 对应权限元数据加性）。 */
 // 条目类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
 import type { FileInfo } from '@/lib/file-browser/file-entry'
 export type { FileInfo } from '@/lib/file-browser/file-entry'
 
-/** 写前/浏览前权限探测结果（FR-373）。 */
+/** 写前/浏览前权限探测结果。 */
 export interface PathAccess {
   exists: boolean
   isDir: boolean
@@ -19,14 +19,14 @@ export interface PathAccess {
   reason?: string
 }
 
-/** 探测实例内路径可读/可写（FR-373）。 */
+/** 探测实例内路径可读/可写。 */
 export async function checkFileAccess(instanceId: number, path: string): Promise<PathAccess> {
   const { data } = await api.post<PathAccess>(`/instances/${instanceId}/files/check-access`, { path })
   return data
 }
 
-/**
- * 单 path 非递归 chmod（FR-373）。
+/** 
+ * 单 path 非递归 chmod。
  * mode 省略时由 Worker 保证属主可读写（目录含 x）。
  */
 export async function chmodFile(
@@ -41,7 +41,7 @@ export async function chmodFile(
   return { modeOctal: data.modeOctal }
 }
 
-/** 列出某目录内容（FR-008）。空 path 为工作目录根。 */
+/** 列出某目录内容。空 path 为工作目录根。 */
 export function useFileList(instanceId: number, path: string) {
   return useQuery({
     queryKey: ['files', instanceId, path],
@@ -63,7 +63,7 @@ export async function fetchFileList(instanceId: number, path: string): Promise<F
   return data
 }
 
-/** 读取文件文本内容（FR-008）。 */
+/** 读取文件文本内容。 */
 export async function readFileContent(instanceId: number, path: string): Promise<string> {
   const { data } = await api.get(`/instances/${instanceId}/files/read`, {
     params: { path },
@@ -72,7 +72,7 @@ export async function readFileContent(instanceId: number, path: string): Promise
   return data as string
 }
 
-/** 写入文件内容（FR-008；后端改前自动快照 FR-051）。 */
+/** 写入文件内容（后端改前自动快照）。 */
 export async function writeFileContent(
   instanceId: number,
   path: string,
@@ -81,12 +81,12 @@ export async function writeFileContent(
   await api.post(`/instances/${instanceId}/files/write`, { path, content })
 }
 
-/** 删除文件/目录（递归，FR-008）。 */
+/** 删除文件/目录（递归）。 */
 export async function deleteFile(instanceId: number, path: string): Promise<void> {
   await api.delete(`/instances/${instanceId}/files`, { data: { path } })
 }
 
-/** 重命名/移动文件或目录（FR-008/020；跨目录即移动）。 */
+/** 重命名/移动文件或目录（020；跨目录即移动）。 */
 export async function renameFile(
   instanceId: number,
   oldPath: string,
@@ -95,9 +95,9 @@ export async function renameFile(
   await api.post(`/instances/${instanceId}/files/rename`, { oldPath, newPath })
 }
 
-/**
- * 上传单个文件（multipart，FR-008；覆盖前自动快照 FR-051）。
- * FR-304：目标路径经 query 参数传递——CP 流式读 multipart（不整块缓冲），
+/** 
+ * 上传单个文件（multipart覆盖前自动快照）。
+ *：目标路径经 query 参数传递——CP 流式读 multipart（不整块缓冲），
  * 读到 file 部分时必须已知目标路径，form 字段顺序不可依赖。
  */
 export async function uploadFile(
@@ -111,7 +111,7 @@ export async function uploadFile(
   await api.post(`/instances/${instanceId}/files/upload`, form, {
     params: { path: destPath },
     headers: { 'Content-Type': 'multipart/form-data' },
-    // 上传进度百分比（FR-324）：total 可得时报 0~100，否则回落 -1（不确定态由调用方决定展示）。
+    // 上传进度百分比：total 可得时报 0~100，否则回落 -1（不确定态由调用方决定展示）。
     onUploadProgress: onProgress
       ? (e) => onProgress(e.total ? Math.round((e.loaded / e.total) * 100) : -1)
       : undefined,
@@ -128,7 +128,7 @@ function triggerDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url)
 }
 
-/** 下载单个文件（流式，FR-008）。 */
+/** 下载单个文件（流式）。 */
 export async function downloadFile(instanceId: number, path: string): Promise<void> {
   const { data } = await api.get(`/instances/${instanceId}/files/download`, {
     params: { path },
@@ -138,10 +138,10 @@ export async function downloadFile(instanceId: number, path: string): Promise<vo
   triggerDownload(data as Blob, name)
 }
 
-/** 搜索模式（FR-074）。content=全文，filename=文件名快速打开。 */
+/** 搜索模式。content=全文，filename=文件名快速打开。 */
 export type SearchMode = 'content' | 'filename'
 
-/** 一条搜索命中（与后端 service.SearchHit 对应，FR-074）。 */
+/** 一条搜索命中（与后端 service.SearchHit 对应）。 */
 export interface SearchHit {
   /** 相对工作目录、以 / 分隔的路径。 */
   path: string
@@ -151,12 +151,12 @@ export interface SearchHit {
   snippet: string
 }
 
-/** 搜索结果（FR-074）。 */
+/** 搜索结果。 */
 export interface SearchResult {
   hits: SearchHit[]
   /** 命中达到上限被截断。 */
   truncated: boolean
-  /** 索引首建未就绪（FR-113，ADR-024）：hits 为空，应稍后用同一查询重试。 */
+  /** 索引首建未就绪（ADR-024）：hits 为空，应稍后用同一查询重试。 */
   indexing: boolean
 }
 
@@ -167,8 +167,8 @@ export interface SearchScope {
   extensions?: string[]
 }
 
-/**
- * 跨文件全文搜索 / 文件名快速打开（FR-074，POST /files/search）。
+/** 
+ * 跨文件全文搜索 / 文件名快速打开（POST /files/search）。
  * 转发到 Worker 本地倒排索引查询，返回命中文件+行+片段。
  */
 export async function searchFiles(
@@ -188,7 +188,7 @@ export async function searchFiles(
   return data
 }
 
-/** 批量下载：选中的文件/目录即时打包 zip 下载（FR-070，POST /files/archive）。 */
+/** 批量下载：选中的文件/目录即时打包 zip 下载（POST /files/archive）。 */
 export async function downloadArchive(
   instanceId: number,
   paths: string[],

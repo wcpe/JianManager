@@ -44,8 +44,8 @@ import type {
   ProviderPayload,
 } from '@/api/assistant'
 
-/**
- * AI 助手配置视图（FR-514）。
+/** 
+ * AI 助手配置视图。
  *
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * 数据与加载/错误态经 props 注入；写操作以回调上报，由容器执行 mutation 与文案。
@@ -73,7 +73,7 @@ export interface AssistantSettingsViewProps {
   onTestProvider: (id: number) => Promise<void>
   /** 用指定模型跑一次最小补全；withTools 时额外验证工具参数完整性。 */
   onTestModel: (id: number, withTools: boolean) => Promise<void>
-  /**
+  /** 
    * 最近一次探测结果（key = `provider:<id>` / `model:<id>`）。
    *
    * 结果放行内而不是只弹 toast：分类建议是**要照着做**的内容
@@ -85,11 +85,11 @@ export interface AssistantSettingsViewProps {
   settingsSaving?: boolean
   /** 保存放行段（后端整体替换，其余字段由容器补齐）；返回是否成功。 */
   onSaveEgress: (cidrs: string[]) => Promise<boolean>
-  /** 保存自定义系统提示词（FR-541）。 */
+  /** 保存自定义系统提示词。 */
   onSaveSystemPrompt?: (prompt: string) => Promise<boolean>
-  /** 切换平台自带工具开关（FR-540）。 */
+  /** 切换平台自带工具开关。 */
   onToggleBuiltinTools?: (enabled: boolean) => Promise<boolean>
-  /** 从上游拉取模型候选（FR-538）。 */
+  /** 从上游拉取模型候选。 */
   onDiscoverModels?: (providerId: number) => Promise<DiscoverModelsResult | null>
 }
 
@@ -104,7 +104,7 @@ interface ProviderDraft {
   credentialEnv: string
   credentialSecret: string
   clearCredential: boolean
-  /** 出站代理模式（FR-539）。 */
+  /** 出站代理模式。 */
   proxyMode: 'direct' | 'env' | 'custom'
   /** 自定义代理地址；编辑态留空表示保留原值。 */
   proxyUrl: string
@@ -124,7 +124,7 @@ interface ModelDraft {
   tools: boolean
   contextWindow: string
   maxOutputTokens: string
-  /** 思考强度（FR-541）；空串 = 不指定。 */
+  /** 思考强度；空串 = 不指定。 */
   reasoningEffort: string
   enabled: boolean
   version: number
@@ -212,7 +212,7 @@ function intOrNull(raw: string): number | null {
   return Number.isFinite(n) && Number.isInteger(n) ? n : null
 }
 
-/**
+/** 
  * 地址的**本地**校验（不发请求）。
  *
  * 为什么要在输入时校验：后端只在保存时回 422，用户得先填完、点保存、看报错、
@@ -259,7 +259,7 @@ function validateBaseUrl(raw: string): { key: string; fallback: string; blocking
   return null
 }
 
-/**
+/** 
  * 粗检是否为 CIDR（形如 `1.2.3.4/24` 或 IPv6）。
  *
  * 只用于「添加按钮是否可点」与就地提示，**不是**权威校验：
@@ -271,7 +271,7 @@ function looksLikeCIDR(raw: string): boolean {
   return /^[0-9a-fA-F.:]+\/\d{1,3}$/.test(value)
 }
 
-/**
+/** 
  * 探测结论块（行内展示）。
  *
  * 刻意做成「就地、可停留、可选中的」一块内容而不是 toast：
@@ -335,7 +335,7 @@ function ProbeResultBlock({
   )
 }
 
-/**
+/** 
  * 分类码 → 处置建议。
  *
  * 与容器侧的 toast 文案共用同一套 key：两处必须说同一件事，
@@ -409,7 +409,7 @@ export function AssistantSettingsView({
   const [testingModelId, setTestingModelId] = useState<number | null>(null)
   // 新增放行段的草稿。
   const [egressDraft, setEgressDraft] = useState('')
-  // 系统提示词草稿（FR-541）。**受控草稿**而不是直接受 settings 控制：
+  // 系统提示词草稿。**受控草稿**而不是直接受 settings 控制：
   // 边输边请求会让每次按键都触发一次保存。
   const [systemPromptDraft, setSystemPromptDraft] = useState(settings?.systemPrompt ?? '')
   // 内置工具开关草稿。默认 true（与后端「未配置视为启用」一致）——
@@ -420,7 +420,7 @@ export function AssistantSettingsView({
   // 用「记住上一次同步来源」的渲染期对齐代替 useEffect：
   // effect 会在提交后再渲染一帧，中间那一帧显示的是旧值。
   const [syncedSettingsVersion, setSyncedSettingsVersion] = useState<number | null>(null)
-  // 模型发现（FR-538）：候选清单与「正在拉取」。
+  // 模型发现：候选清单与「正在拉取」。
   const [discovering, setDiscovering] = useState(false)
   const [discovered, setDiscovered] = useState<DiscoverModelsResult | null>(null)
   // 勾选的候选模型 ID（默认排除已配置项，避免重复导入）。
@@ -466,7 +466,7 @@ export function AssistantSettingsView({
     if (ok) setProviderDraft(null)
   }
 
-  /**
+  /** 
    * 拉取上游模型候选。
    *
    * 默认选中「未配置过」的项：已配置的再导入一次只会撞唯一索引，
@@ -490,7 +490,7 @@ export function AssistantSettingsView({
     }
   }
 
-  /**
+  /** 
    * 导入勾选的候选。
    *
    * **逐个创建而不是批量接口**：`contextWindow` / `tools` 这些能力声明不能从模型名猜，
@@ -739,7 +739,7 @@ export function AssistantSettingsView({
             bodyClassName="p-0"
             actions={
               <div className="flex items-center gap-2">
-                {/* 从上游拉取候选（FR-538）：只读预览，勾选后才逐个落库。
+                {/* 从上游拉取候选：只读预览，勾选后才逐个落库。
                     手抄模型 ID 必错，而抄错的表现是「探测通过、聊天 404 model not found」，
                     排查会被引向凭据与网络。 */}
                 <Button
@@ -868,7 +868,7 @@ export function AssistantSettingsView({
             )}
           </Panel>
 
-          {/* 系统提示词与平台自带工具（FR-541 / FR-540）。
+          {/* 系统提示词与平台自带工具。
               两者放同一面板：它们共同决定「助手知道什么、能碰什么」，
               分开摆会让人以为只有其中一项在影响行为。 */}
           <Panel title={t('assistant.promptTitle', '系统提示词与内置工具')}>
@@ -926,10 +926,10 @@ export function AssistantSettingsView({
             </div>
           </Panel>
 
-          {/* 技能（FR-541）：目录 + SKILL.md，展示正文与被跳过项。 */}
+          {/* 技能：目录 + SKILL.md，展示正文与被跳过项。 */}
           <AssistantSkillsPanel enabled={isPlatformAdmin} />
 
-          {/* 外部 MCP 连接（FR-517）：独立面板，避免把这一大块塞进本文件。 */}
+          {/* 外部 MCP 连接：独立面板，避免把这一大块塞进本文件。 */}
           <MCPConnectionsPanel />
 
           {/* 出站准入：AI 出站能打到哪些非公网地址。
@@ -1184,7 +1184,7 @@ export function AssistantSettingsView({
                     ) : null}
                   </div>
                 )}
-                {/* 出站代理（FR-539）。
+                {/* 出站代理。
                     默认直连是刻意的：不静默走进程环境代理，否则本机为别的用途
                     设的 HTTPS_PROXY 会把模型出站改道，而面板上看着还是「直连」。 */}
                 <div className="space-y-1 rounded-md border border-border/60 px-3 py-2">
@@ -1350,7 +1350,7 @@ export function AssistantSettingsView({
                     </div>
                   </div>
                 </div>
-                {/* 思考强度（FR-541）：空选项表示不指定，由上游用自身默认。
+                {/* 思考强度：空选项表示不指定，由上游用自身默认。
                     不默认选中某一档：那样会让「没配过」和「配了 medium」看起来一样。 */}
                 <div className="space-y-1">
                   <FieldLabel htmlFor="assistant-model-reasoning-effort">
@@ -1442,7 +1442,7 @@ export function AssistantSettingsView({
         onCancel={() => setPendingDeleteModel(null)}
       />
 
-      {/* 模型发现结果（FR-538）：勾选后逐个导入。
+      {/* 模型发现结果：勾选后逐个导入。
           显示 truncated 与 skipped 是刻意的：只回「有哪些」会让
           「上游明明有 30 个，这里只有 29 个」无从解释。 */}
       <Dialog open={discovered !== null} onOpenChange={(open) => !open && setDiscovered(null)}>

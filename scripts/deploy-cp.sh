@@ -1,5 +1,5 @@
 #!/bin/sh
-# JianManager Control Plane（面板）SSH 推送式部署脚本（FR-277，见 ADR-063）。在操作机执行。
+#  JianManager Control Plane（面板）SSH 推送式部署脚本（见 ADR-063）。在操作机执行。
 #
 # 首次部署 = scp 本地 dist 二进制 → 建目录 → 生成最小 control-plane.yml（端口 + sqlite +
 #            dev_mode:false）→ 写 systemd unit → 启动 → HTTP 探活。
@@ -224,7 +224,7 @@ new_release=\$VERSIONED_RELEASE_NAME
 
 if [ ! -f '$INSTALL_DIR/control-plane.yml' ]; then
 cat > '$INSTALL_DIR/control-plane.yml' <<'YML_EOF'
-# 由 deploy-cp.sh 生成的最小配置（FR-410）。其余配置项均取程序默认值。
+#  由 deploy-cp.sh 生成的最小配置。其余配置项均取程序默认值。
 server:
   host: 0.0.0.0
   port: $JM_CP_HTTP_PORT
@@ -353,7 +353,7 @@ mv -f '$RTMP/$BIN_NAME' '$INSTALL_DIR/$BIN_NAME'
 chmod +x '$INSTALL_DIR/$BIN_NAME'
 if [ ! -f '$INSTALL_DIR/control-plane.yml' ]; then
 cat > '$INSTALL_DIR/control-plane.yml' <<'YML_EOF'
-# 由 deploy-cp.sh 生成的最小配置（FR-277）。其余配置项均取程序默认值，
+#  由 deploy-cp.sh 生成的最小配置。其余配置项均取程序默认值，
 # 完整样例见仓库 configs/control-plane.yml。JWT/WS 密钥无需配置：生产态自动生成持久化。
 server:
   host: 0.0.0.0

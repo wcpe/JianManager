@@ -9,9 +9,9 @@ import { db } from '@jianmanager/devmock/db'
 import type { MockInstance } from '@jianmanager/devmock/handlers/domains/instance'
 import ConsoleHeader from './ConsoleHeader'
 
-/**
- * FR-294 页眉集群统计浮窗：三徽标（在线节点 / 运行服务器 / 崩溃服务器）点击弹缩略浮窗
- * （复用 FR-216 铃铛 DropdownMenu 范式），行点击 / 底部「查看全部」导航，
+/** 
+ *页眉集群统计浮窗：三徽标（在线节点 / 运行服务器 / 崩溃服务器）点击弹缩略浮窗
+ * （复用铃铛 DropdownMenu 范式），行点击 / 底部「查看全部」导航，
  * 数据仅浮窗打开时拉取（query enabled 绑定 open 态），行数上限 8 超出提示剩余数，崩溃空态友好文案。
  */
 
@@ -35,7 +35,7 @@ function removeCrashedInstances() {
   instances.list((i) => i.status === 'CRASHED').forEach((i) => instances.remove(i.id))
 }
 
-/**
+/** 
  * 把假后端节点裁到只剩 [keep] 个（用于覆盖浮窗底部 `viewAllNodes` 分支）。
  *
  * 为什么要裁：`StatPopoverFooter` 的文案取决于 remaining = 总数 - 浮窗上限(8)。
@@ -50,7 +50,7 @@ function keepOnlyNodes(keep: number) {
   })
 }
 
-describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
+describe('ConsoleHeader 集群统计浮窗', () => {
   it('在线节点浮窗：行=节点名+运行实例数，底部查看全部→/nodes，行点击定位节点', async () => {
     // 本用例断言的是**底部 `viewAllNodes` 分支**（「查看全部节点」），
     // 而该分支只在 `remaining == 0`（总数 ≤ 浮窗上限 8）时渲染；
@@ -83,7 +83,7 @@ describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
     expect(window.location.pathname).toBe('/nodes')
     expect(window.location.search).toBe('')
 
-    // 重新打开，行点击 → /nodes?node=<id> 定位该节点（FR-128 深链）。
+    // 重新打开，行点击 → /nodes?node=<id> 定位该节点（深链）。
     await user.click(screen.getByRole('button', { name: /在线节点/ }))
     const reopened = await screen.findByRole('menu')
     await user.click(within(reopened).getByRole('menuitem', { name: /alpha/ }))
@@ -171,7 +171,7 @@ describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
       await screen.findByRole('button', { name: /运行服务器/ })
       await waitFor(() => expect(requests.urls.some((u) => u.startsWith('/api/v1/instances/aggregate'))).toBe(true))
 
-      /*
+      /* 
         【契约变更·本轮】崩溃实例（`status=CRASHED`）改为**常驻取数**：
         它同时供集群徽标的崩溃浮窗与页眉「需要处理」使用，若仍绑定浮窗开合，
         铃铛里永远看不到崩溃实例——而那是首屏最该报的一类。窗口仍是很小的 8 条。
@@ -196,7 +196,7 @@ describe('ConsoleHeader 集群统计浮窗（FR-294）', () => {
       requests.stop()
     }
   })
-  /**
+  /** 
    * 底部 `viewAllNodes` 分支（节点数 ≤ 浮窗上限时 remaining = 0）。
    *
    * 与上一个用例互补：那边 37 个节点走 `moreCount`（「还有 N 个，查看全部」），

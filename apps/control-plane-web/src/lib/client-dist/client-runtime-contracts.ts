@@ -1,5 +1,5 @@
-/**
- * 客户端运行态契约（FR-265，ADR-103）。
+/** 
+ * 客户端运行态契约（ADR-103）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
@@ -52,7 +52,7 @@ export interface RuntimeUpdateSeriesPoint {
   error: number
 }
 
-/** 客户端运行态聚合响应（FR-265）。 */
+/** 客户端运行态聚合响应。 */
 export interface ClientRuntimeOverview {
   channelId: string
   from: string

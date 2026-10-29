@@ -25,20 +25,20 @@ const ROOT_CAUSE_TONE: Record<string, string> = {
   unknown: 'bg-muted text-muted-foreground',
 }
 
-/**
- * 崩溃诊断（FR-313，增强 FR-470）：实例最近的崩溃快照（后端滚动保留 5 条），
+/** 
+ * 崩溃诊断（增强）：实例最近的崩溃快照（后端滚动保留 5 条），
  * 每条含发生时间/退出码/信号/运行时长的同时，**直接给出根因归类 + 置信度 + 命中证据**——
  * 原先运维看到的是 200 行日志，得自己从中找 OutOfMemoryError；机器能做的归类不该让人做。
  *
- * FR-470 另加**趋势迷你图与同类聚合**：快照每实例只留 5 条（连崩会抹掉历史），
+ *另加**趋势迷你图与同类聚合**：快照每实例只留 5 条（连崩会抹掉历史），
  * 趋势来自独立汇总表，回答「最近一周崩了几次、同一种原因崩了多少次」。
  * 关联资源证据（崩前 RSS / 堆峰值）为 OOM 这类根因提供证据链。
  *
- * FR-423 起不再自带卡壳，而是作为一段嵌进概览的「动态与告警」流——
+ *起不再自带卡壳，而是作为一段嵌进概览的「动态与告警」流——
  * 原先它单独占一张卡，无崩溃时仍撑 88px 说一句「暂无」，纯属浪费；
  * 现在无快照就是流末尾一行灰字。
  *
- * FR-417 给崩溃尾部输出补复制按钮：那段 `<pre>` 装的正是 Java 异常堆栈，
+ *给崩溃尾部输出补复制按钮：那段 `<pre>` 装的正是 Java 异常堆栈，
  * 而堆栈靠鼠标拖选是最难受的复制场景。
  *
  * 受控视图（ADR-103 a 范式）：不取数、不弹 toast——快照与趋势由外壳注入
@@ -80,7 +80,7 @@ export default function CrashDiagnostics({ snapshots, trend, notify }: CrashDiag
           {/*
             快照列表是**同构的并列展开项**（每条一次崩溃，可同时展开多条做横向对比）——
             这正是 Accordion type="multiple" 的形态（单开会逼着用户「展开一条先收起上一条」，
-            而 FR-470 的场景恰恰是连崩时对比不同根因）。
+            而的场景恰恰是连崩时对比不同根因）。
             换原语的实质收益：每个触发器的 aria-expanded / aria-controls / region 关联由 Radix 维护，
             展开态也不再是本组件自己维护的 Set（此前 expand 状态与 DOM 靠条件渲染手工同步）；
             方向键在上/下条之间移动焦点、Enter/空格开合也一并获得。
@@ -102,8 +102,8 @@ export default function CrashDiagnostics({ snapshots, trend, notify }: CrashDiag
   )
 }
 
-/**
- * 趋势面板（FR-470）：近 30 天按天计数迷你图 + Top 根因 + 同类聚合。
+/** 
+ * 趋势面板：近 30 天按天计数迷你图 + Top 根因 + 同类聚合。
  * 数据源是独立汇总表，连崩超过 5 次（快照被滚动裁剪）时这里仍显示完整次数。
  *
  * **时区口径（W-12）**：`points[].day` 是后端 `bucket_day`，语义是 **UTC 日**
@@ -200,10 +200,10 @@ function CrashSnapshotItem({
   const { t } = useTranslation()
   const evidence = snapshot.evidenceLines ?? []
 
-  /**
-   * 复制崩溃现场（FR-417 + FR-470）：带上时间/退出码/信号/根因的抬头再接尾部输出。
+  /** 
+   * 复制崩溃现场：带上时间/退出码/信号/根因的抬头再接尾部输出。
    * 只复制 `tailOutput` 会丢掉「哪次崩溃、怎么死的」，贴给别人看时对方要反问一轮；
-   * FR-470 起抬头补上机器判定的根因，接手的人一眼知道该查什么。
+   *起抬头补上机器判定的根因，接手的人一眼知道该查什么。
    */
   const copySnapshot = async () => {
     const header = [
@@ -288,8 +288,8 @@ function CrashSnapshotItem({
   )
 }
 
-/**
- * 资源关联证据（FR-470 §2.3）：崩前 RSS / 内存上限 / 堆峰值。
+/** 
+ * 资源关联证据（§2.3）：崩前 RSS / 内存上限 / 堆峰值。
  * nearOom 为真时高亮——这是 OOM 崩溃最直接的证据链（「不是猜的，崩前 RSS 已经顶到上限」）。
  */
 function CrashCorrelationBlock({ correlation }: { correlation: NonNullable<CrashSnapshot['correlation']> }) {

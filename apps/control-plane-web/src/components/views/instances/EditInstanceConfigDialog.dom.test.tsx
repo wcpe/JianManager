@@ -6,8 +6,8 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import EditInstanceConfigDialog from '@/components/views/instances/EditInstanceConfigDialog'
 
-/**
- * FR-233 实例配置编辑器 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *实例配置编辑器 · 受控视图测（ADR-103 b 范式）。
  *
  * 应用侧原本只有 1 个「能打开、Esc 能关」的用例；这里补的是**编辑语义**：
  * 初值回填、JDK「留空=解绑」、保存载荷、成功才关窗、失败保留弹窗并优先显示服务端 message。
@@ -77,7 +77,7 @@ async function pickJdk(user: ReturnType<typeof userEvent.setup>, label: string) 
   await user.click(await screen.findByText(label))
 }
 
-describe('EditInstanceConfigDialog（FR-233 · ADR-103 b 范式）', () => {
+describe('EditInstanceConfigDialog（ADR-103 b 范式）', () => {
   it('回填当前配置：启动命令、自动重启、未绑定 JDK 时显示系统默认', () => {
     renderDialog({ autoRestart: true })
 
@@ -119,7 +119,7 @@ describe('EditInstanceConfigDialog（FR-233 · ADR-103 b 范式）', () => {
     const user = userEvent.setup()
     const { onSave } = renderDialog({ jdkId: 0 })
 
-    /*
+    /* 
       本轮新增「未修改保护」：无改动时保存按钮禁用（避免发一次与当前值相同的 PUT）。
       这里先做一次无关改动（切自动重启）以解锁保存，再断言 jdkId 语义。
     */
@@ -156,7 +156,7 @@ describe('EditInstanceConfigDialog（FR-233 · ADR-103 b 范式）', () => {
     await waitFor(() => expect(notify).toHaveBeenCalledWith('error', '保存配置失败'))
   })
 
-  /*
+  /* 
     本轮改进的回归钉子：
     ① 未修改时保存禁用（防无意义写请求）；
     ② 启动命令清空时保存禁用且给出可读提示（防存下空命令把实例搞成起不来）。

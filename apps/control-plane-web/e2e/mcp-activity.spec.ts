@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * MCP 活动页（FR-391 / ADR-096）真浏览器 smoke。
+/** 
+ * MCP 活动页（ADR-096）真浏览器 smoke。
  * 覆盖此前为零的两件事：① mock 模式下该端点有 handler、页面能正常渲染出数据行；
  * ② 窗口档位切到第二档时请求能被后端接受（HTTP 200）。
  *

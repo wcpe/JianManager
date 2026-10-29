@@ -20,7 +20,7 @@ var (
 	ErrEnrollTokenInvalid = errors.New("enrollment token 无效")
 )
 
-// enrollTokenPlaintextPrefix enrollment token 明文前缀，便于识别凭据来源（同构 FR-086 拉取密钥惯例）。
+// enrollTokenPlaintextPrefix enrollment token 明文前缀，便于识别凭据来源（同构拉取密钥惯例）。
 const enrollTokenPlaintextPrefix = "jmet_"
 
 // enrollTokenPrefixLen 落库 TokenPrefix 截取的明文前缀长度（含 jmet_），仅供列表识别、不足以重建 token。
@@ -32,7 +32,7 @@ const defaultEnrollTTLMinutes = 30
 // maxEnrollTTLMinutes enrollment token 有效期上限（分钟，1 天）。
 const maxEnrollTTLMinutes = 1440
 
-// EnrollTokenService 节点 enrollment token 管理（FR-080，见 ADR-020）。
+// EnrollTokenService 节点 enrollment token 管理（见 ADR-020）。
 //
 // token 落库只存 SHA-256 哈希，明文仅签发时一次性返回、不可二次读取。
 // 校验消费（ConsumeForNewNode）由 gRPC Register 在「新节点首次落库」时调用，
@@ -128,7 +128,7 @@ func (s *EnrollTokenService) ConsumeForNewNode(plaintext, nodeUUID string) (stri
 	return tok.NodeName, nil
 }
 
-// ValidateOnly 判断 enrollment token 当前是否有效，**不消费**（FR-486）。
+// ValidateOnly 判断 enrollment token 当前是否有效，**不消费**。
 //
 // 为什么需要它：启动进度上报发生在 Register 之前，必须能证明「你被授权启动」，
 // 但不能把一次性 token 用掉——否则紧接着的注册会因 token 已失效被拒。

@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// ArtifactStorageChannelType 制品存储渠道类型（FR-347，见 ADR-073）。
+// ArtifactStorageChannelType 制品存储渠道类型（见 ADR-073）。
 type ArtifactStorageChannelType string
 
 const (
@@ -14,10 +14,10 @@ const (
 	ArtifactStorageS3 ArtifactStorageChannelType = "s3"
 )
 
-// ArtifactStorageChannel 制品存储渠道（FR-347，见 ADR-073，修订 ADR-011 存储节）。
+// ArtifactStorageChannel 制品存储渠道（见 ADR-073，修订 ADR-011 存储节）。
 //
 // 与备份域 BackupStorage 独立（消费方不同：备份配置下发 Worker 执行，本渠道由 CP 自身
-// 上传/签名消费）。凭证面板直填、AES-256-GCM 可逆加密落库（复用 FR-192 KeyEncryptor
+// 上传/签名消费）。凭证面板直填、AES-256-GCM 可逆加密落库（复用KeyEncryptor
 // 基建），与备份域的 ${ENV_VAR} 引用形态分道（理由见 ADR-073 决策 4）。
 //
 // 活跃语义：全表恰一条 Active（service 事务保证），仅作用于**新上传**的 client-file

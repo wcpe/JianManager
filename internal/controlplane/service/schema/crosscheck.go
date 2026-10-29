@@ -23,7 +23,7 @@ func (p ParsedConfig) fieldLookup(key string) string {
 	return ""
 }
 
-// SetValue 覆盖或追加一个字段值（FR-451 §2.4）：内联受管端口并入校验输入时使用。
+// SetValue 覆盖或追加一个字段值（§2.4）：内联受管端口并入校验输入时使用。
 func (p *ParsedConfig) SetValue(key, value string) {
 	for _, f := range p.Fields {
 		if f.Key == key {
@@ -45,7 +45,7 @@ func (p ParsedConfig) IsTruthy(key string) bool {
 
 // CheckPortConflicts 跨实例文件检查 server-port / query.port 唯一性。
 // 输入通常为同一节点上若干实例的同一文件；返回 warning 列表。
-// RCON 已退役（FR-067，见 ADR-016）：不再校验 rcon.port。
+// RCON 已退役（见 ADR-016）：不再校验 rcon.port。
 func CheckPortConflicts(cfgs []ParsedConfig) []*workerpb.ValidationIssue {
 	issues := []*workerpb.ValidationIssue{}
 	ports := map[string]string{} // port -> first path:key

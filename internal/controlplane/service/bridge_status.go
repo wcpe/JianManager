@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 桥能力接入的 CP 侧编排（FR-526）。
+// 桥能力接入的 CP 侧编排。
 //
 // ## 三条能力的共同形态
 //
@@ -45,7 +45,7 @@ const (
 	// businessStatusTimeout 域状态查询的 CP→Worker 超时。
 	businessStatusTimeout = 8 * time.Second
 
-	// BusinessStatusCacheTTL 业务域状态的内存缓存 TTL（spec FR-526 §2.4 / OpenAPI：30 秒）。
+	// BusinessStatusCacheTTL 业务域状态的内存缓存 TTL（spec§2.4 / OpenAPI：30 秒）。
 	//
 	// 缓存的理由不是省一次 RPC，而是让面板在探针抖动时**还有东西可渲染**：
 	// 过期后仍保留最后已知值，只在返回时打 stale=true（见 OpenAPI 的 `stale` 语义）。
@@ -172,7 +172,7 @@ type bridgeBusinessStatusCache struct {
 	cachedConnected bool
 }
 
-// BridgeService 桥能力接入的 CP 侧编排（FR-526）。
+// BridgeService 桥能力接入的 CP 侧编排。
 //
 // 与 BusinessService / ServerStateService 同构（db + pool 两依赖），
 // 额外持有一份内存缓存给域状态用——**不落库**：域状态是探针运行期快照，
@@ -222,7 +222,7 @@ func (s *BridgeService) resolveInstanceNode(instanceID uint) (model.Instance, mo
 	return inst, node, nil
 }
 
-// QueryBridgeStatus 查询某实例的探针桥线路健康度（FR-526 §2.3）。
+// QueryBridgeStatus 查询某实例的探针桥线路健康度（§2.3）。
 //
 // 降级矩阵：
 //   - 实例不存在 → ErrInstanceNotFound（路由回 404）；
@@ -298,7 +298,7 @@ func applyBridgeStatusResponse(result *BridgeStatusResult, resp *workerpb.QueryB
 	}
 }
 
-// SetSubscription 设置某实例的事件主题订阅（FR-526 §2.1）。
+// SetSubscription 设置某实例的事件主题订阅（§2.1）。
 //
 // ## 语义
 //
@@ -347,7 +347,7 @@ func (s *BridgeService) SetSubscription(instanceID uint, topics, domains []strin
 	return applied, nil
 }
 
-// QueryBusinessStatus 查询某实例已注册的业务域（FR-526 §2.4）。
+// QueryBusinessStatus 查询某实例已注册的业务域（§2.4）。
 //
 // ## 缓存策略（TTL 30 秒）
 //
@@ -601,7 +601,7 @@ func sortDomainStatus(list []DomainStatusResult) {
 	sort.Slice(list, func(i, j int) bool { return list[i].Domain < list[j].Domain })
 }
 
-// BusinessStatusBatchMaxIDs 批量域状态查询的单次上限（spec FR-534 §5.2：50）。
+// BusinessStatusBatchMaxIDs 批量域状态查询的单次上限（spec§5.2：50）。
 //
 // 上限的存在理由是**保护探针**：每条查询都会实打实打到该实例的探针（未命中缓存时），
 // 一次几百条会把节点上的插件桥打满。

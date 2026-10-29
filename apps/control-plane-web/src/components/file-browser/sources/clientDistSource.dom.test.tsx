@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import '@/i18n'
 
-// 管理面内容/下载端点 mock（FR-214）：验证共享 FileBrowser 经 clientDistSource 真正接入预览。
+// 管理面内容/下载端点 mock：验证共享 FileBrowser 经 clientDistSource 真正接入预览。
 const { fetchMock, downloadMock } = vi.hoisted(() => ({ fetchMock: vi.fn(), downloadMock: vi.fn() }))
 vi.mock('@/api/clientVersions', () => ({
   fetchClientArtifactContent: fetchMock,
@@ -27,7 +27,7 @@ const FILES = [
   { path: 'mods/foo.jar', size: 1024, artifactSha: 'sha-foo' },
 ]
 
-describe('客户端分发预览经共享 FileBrowser 接入（FR-214）', () => {
+describe('客户端分发预览经共享 FileBrowser 接入', () => {
   beforeEach(() => {
     fetchMock.mockReset()
     downloadMock.mockReset()

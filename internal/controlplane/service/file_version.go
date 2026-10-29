@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FileVersionConfig 控制通用文件版本（FR-051）的保留与快照策略。
+// FileVersionConfig 控制通用文件版本的保留与快照策略。
 type FileVersionConfig struct {
 	// MaxPerFile 单文件保留的版本上限；超出时删除最旧的版本。<=0 表示不限制。
 	MaxPerFile int
@@ -29,9 +29,9 @@ func DefaultFileVersionConfig() FileVersionConfig {
 	return FileVersionConfig{MaxPerFile: 20, MaxSizeBytes: 5 * 1024 * 1024}
 }
 
-// FileVersionService 通用文件版本服务（FR-051，Control Plane 侧）。
+// FileVersionService 通用文件版本服务（Control Plane 侧）。
 //
-// 设计上复用 FR-031 配置版本的「改前快照 + 列表 + diff + 回滚」机制，
+// 设计上复用配置版本的「改前快照 + 列表 + diff + 回滚」机制，
 // 但作用于实例工作目录下的任意文件；文件本体归 Worker，版本事实源在 CP DB。
 // 写入前先经 gRPC 读旧内容落库为快照，再由 FileService 执行真正写入。
 type FileVersionService struct {
@@ -67,7 +67,7 @@ type FileVersionDiff struct {
 	Binary        bool   `json:"binary"`
 }
 
-// SnapshotBeforeWrite 在写入/上传覆盖文件前，对「已存在」的目标文件做改前快照（FR-051 验收 1）。
+// SnapshotBeforeWrite 在写入/上传覆盖文件前，对「已存在」的目标文件做改前快照（验收 1）。
 //
 // 经 gRPC 读旧内容：读不到（文件不存在/新建）则跳过，不视为错误；
 // 读到则将旧内容落库为一个版本。超过 MaxSizeBytes 的文件跳过快照。
@@ -91,7 +91,7 @@ func (s *FileVersionService) SnapshotBeforeWrite(instanceID uint, filePath strin
 	return err
 }
 
-// Rollback 回滚到指定版本：先对当前文件做改前快照，再经 gRPC 把旧内容写回（FR-051 验收 3）。
+// Rollback 回滚到指定版本：先对当前文件做改前快照，再经 gRPC 把旧内容写回（验收 3）。
 // 返回写回后新生成的版本 ID。
 func (s *FileVersionService) Rollback(instanceID uint, filePath string, versionID uint, authorID uint) (uint, error) {
 	var ver model.FileVersion
@@ -110,7 +110,7 @@ func (s *FileVersionService) Rollback(instanceID uint, filePath string, versionI
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 回滚前先快照当前内容，使回滚本身也可被再次回滚（与 FR-031 行为一致）。
+	// 回滚前先快照当前内容，使回滚本身也可被再次回滚（与行为一致）。
 	if cur, rerr := client.Worker.ReadFile(ctx, &workerpb.ReadFileRequest{InstanceUuid: inst.UUID, Path: filePath}); rerr == nil {
 		if _, serr := s.saveVersion(instanceID, filePath, cur.Content, authorID, nil); serr != nil {
 			return 0, serr
@@ -218,7 +218,7 @@ func (s *FileVersionService) saveVersion(instanceID uint, filePath string, conte
 	return ver.ID, nil
 }
 
-// prune 按 MaxPerFile 删除单文件超出上限的最旧版本（FR-051 验收 4）。
+// prune 按 MaxPerFile 删除单文件超出上限的最旧版本（验收 4）。
 func (s *FileVersionService) prune(instanceID uint, filePath string) error {
 	if s.cfg.MaxPerFile <= 0 {
 		return nil

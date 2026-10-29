@@ -36,10 +36,10 @@ type WrapperConfig struct {
 	AutoRestart  bool              `json:"auto_restart"`
 	PIDDir       string            `json:"pid_dir"`
 	StartTimeout time.Duration     `json:"start_timeout"` // Java 启动到首字节输出的等待（0=不限）
-	// ProbePort 透传到 PID 记录，使 Worker 重启恢复后心跳继续自采该实例 ServerProbe 指标（FR-060）。
+	// ProbePort 透传到 PID 记录，使 Worker 重启恢复后心跳继续自采该实例 ServerProbe 指标。
 	ProbePort int `json:"probe_port,omitempty"`
 	// GracefulStopTimeoutSeconds 优雅停止后等待进程自行退出的上限（秒，CP 从平台设置
-	// graceful_stop.timeout 取生效值后于启动时下发，FR-063）。>0 时 wrapper 用它做超时强杀兜底；
+	// graceful_stop.timeout 取生效值后于启动时下发）。>0 时 wrapper 用它做超时强杀兜底；
 	// 0=未指定，回退环境变量/默认。值在启动时定型，故对设置变更后「新启动」的实例生效。
 	GracefulStopTimeoutSeconds int `json:"graceful_stop_timeout_seconds,omitempty"`
 }
@@ -58,11 +58,11 @@ const (
 	CtrlStop = "stop"
 	CtrlKill = "kill"
 	CtrlPing = "ping"
-	// CtrlDisableRestart 由 Worker 在 FR-459 崩溃熔断时下发：令 wrapper 永久停止自动重启
+	// CtrlDisableRestart 由 Worker 在崩溃熔断时下发：令 wrapper 永久停止自动重启
 	// （粘性，不复位），使熔断对「Worker 无法直接触及的 wrapper 内重启」也生效。
 	// 版本互不炸：老 wrapper 收到未知控制命令只记日志忽略，不影响既有链路。
 	CtrlDisableRestart = "disable_restart"
-	// CtrlEnableRestart 是 CtrlDisableRestart 的对称复位帧（FR-459 终验 Major）：
+	// CtrlEnableRestart 是 CtrlDisableRestart 的对称复位帧（终验 Major）：
 	// 人工解除熔断（ReleaseCircuitBreaker）时下发，清掉 autoRestartOff，使 wrapper 恢复自动重启。
 	// 否则「熔断解除」对仍在托管运行中 Java 的 wrapper 只是一句空话——Java 下次崩溃仍被 wrapper 拒绝重启。
 	// 同样版本互不炸：老 wrapper 收到未知命令只记日志忽略。
@@ -99,7 +99,7 @@ type Wrapper struct {
 	crashCount    int
 	fastCrashes   int       // 连续「快速崩溃」（启动后很快退出）计数
 	javaStartedAt time.Time // 本次 Java 启动时刻，用于判断是否快速崩溃
-	// autoRestartOff 是 FR-459 崩溃熔断下发的「永久停止自动重启」粘性开关：
+	// autoRestartOff 是崩溃熔断下发的「永久停止自动重启」粘性开关：
 	// 一旦置位，javaWait 不再重启 Java（收到帧时若确无 Java 在跑则 wrapper 立即收摊退出）。
 	// 与 cfg.AutoRestart 分开记账，避免与启动期配置快照相互覆盖。
 	autoRestartOff bool
@@ -300,13 +300,13 @@ func (w *Wrapper) acceptLoop(ln net.Listener) {
 }
 
 // errAutoRestartSuppressed 表示 startJava 在临界区内发现「wrapper 已关闭 / 自动重启已被熔断禁用」，
-// 因而未拉起 Java（FR-459 终验 Low #5）。调用方据此静默收摊，不按启动失败告警。
+// 因而未拉起 Java（终验 Low #5）。调用方据此静默收摊，不按启动失败告警。
 var errAutoRestartSuppressed = errors.New("wrapper 已关闭或自动重启已被禁用")
 
 // startJava 启动 Java 进程并写入 java pid。
 func (w *Wrapper) startJava() error {
 	w.mu.Lock()
-	// FR-459 终验 Low #5：在**同一临界区**内复核 closed/autoRestartOff 后再标记 javaStarting，
+	// 终验 Low #5：在**同一临界区**内复核 closed/autoRestartOff 后再标记 javaStarting，
 	// 消除 javaWait 复核点（判 autoRestartOff）与 startJava 取锁之间的窄 TOCTOU：
 	// 否则该窗口内到达的 CtrlDisableRestart 会看到 javaCmd==nil && !javaStarting（判「空闲」而
 	// 立即收摊退出），紧接着 startJava 却把 Java 拉起 → wrapper 已退出、Java 无人托管的孤儿。
@@ -398,7 +398,7 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 		return
 	}
 
-	// 非正常退出：把退出码/信号/时长经控制通道上抛 Worker，供其组装崩溃快照（FR-313）。
+	// 非正常退出：把退出码/信号/时长经控制通道上抛 Worker，供其组装崩溃快照。
 	// Worker 未连接（重启窗口等）时丢弃——快照是诊断增强，不阻塞崩溃处理主线。
 	w.emitExitEvent(cmd.ProcessState, time.Since(startedAt))
 
@@ -448,7 +448,7 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 	if w.isClosed() {
 		return
 	}
-	// FR-459：退避等待期间可能收到「禁用自动重启」控制帧（崩溃熔断）——必须在真正拉起前复核，
+	// 退避等待期间可能收到「禁用自动重启」控制帧（崩溃熔断）——必须在真正拉起前复核，
 	// 否则熔断只阻止「下一次」重启、本次仍会拉起一个注定要崩的 Java。
 	if w.isAutoRestartOff() {
 		slog.Warn("自动重启已被禁用（实例崩溃熔断），wrapper 收摊退出", "instanceId", w.cfg.InstanceUUID)
@@ -466,7 +466,7 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 	}
 }
 
-// disableAutoRestart 处理 FR-459 崩溃熔断下发的禁用自动重启指令。
+// disableAutoRestart 处理崩溃熔断下发的禁用自动重启指令。
 //
 // 语义：置位后 wrapper 不再自动重启 Java。若此刻确实没有 Java 在跑也没有启动在飞
 // （崩溃退避窗口），立即收摊退出，使实例稳定停在 CRASHED 而不空占进程；否则保持托管
@@ -479,13 +479,13 @@ func (w *Wrapper) disableAutoRestart() {
 	w.autoRestartOff = true
 	idle := w.javaCmd == nil && !w.javaStarting
 	w.mu.Unlock()
-	slog.Warn("wrapper 收到禁用自动重启（FR-459 崩溃熔断）", "instanceId", w.cfg.InstanceUUID, "idle", idle)
+	slog.Warn("wrapper 收到禁用自动重启（崩溃熔断）", "instanceId", w.cfg.InstanceUUID, "idle", idle)
 	if idle {
 		w.signalClose()
 	}
 }
 
-// enableAutoRestart 处理 FR-459 熔断人工解除时下发的对称复位帧：清掉粘性 autoRestartOff，
+// enableAutoRestart 处理熔断人工解除时下发的对称复位帧：清掉粘性 autoRestartOff，
 // 使 wrapper 恢复「Java 退出按 cfg.AutoRestart 自动重启」的行为（Java 仍在跑时不打断服务，
 // 待其下次退出后按策略重启）。幂等。
 func (w *Wrapper) enableAutoRestart() {
@@ -494,7 +494,7 @@ func (w *Wrapper) enableAutoRestart() {
 	w.autoRestartOff = false
 	w.mu.Unlock()
 	if was {
-		slog.Info("wrapper 收到恢复自动重启（FR-459 熔断人工解除）", "instanceId", w.cfg.InstanceUUID)
+		slog.Info("wrapper 收到恢复自动重启（熔断人工解除）", "instanceId", w.cfg.InstanceUUID)
 	}
 }
 
@@ -513,7 +513,7 @@ func (w *Wrapper) isAutoRestartOff() bool {
 }
 
 // emitExitEvent 把被托管进程的非正常退出现场（退出码/信号/时长）作为事件帧发给已连接的
-// Worker（FR-313）。无连接或编码/写失败仅记日志丢弃：崩溃快照是尽力而为的诊断信息。
+// Worker。无连接或编码/写失败仅记日志丢弃：崩溃快照是尽力而为的诊断信息。
 func (w *Wrapper) emitExitEvent(ps *os.ProcessState, uptime time.Duration) {
 	exitCode, sig := ExitInfo(ps)
 	fr, err := EncodeExitEventFrame(ExitEvent{
@@ -762,7 +762,7 @@ func (o *wrapperOutput) Write(p []byte) (int, error) {
 
 // buildJavaCmd 构造 Java 进程命令。跨平台：Windows 用 cmd.exe /c，其他用 sh -c。
 func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
-	writeEnvFile(cfg) // FR-344：物化自定义启动 env 到 <workDir>/.env（供查看；实际注入仍走 composeEnv）
+	writeEnvFile(cfg) // 物化自定义启动 env 到 <workDir>/.env（供查看；实际注入仍走 composeEnv）
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd.exe", "/c", cfg.StartCommand)
@@ -775,7 +775,7 @@ func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
 	return cmd
 }
 
-// writeEnvFile 把实例自定义启动环境变量物化为 <workDir>/.env（FR-344，KEY=VALUE 行 + 生成头注释）。
+// writeEnvFile 把实例自定义启动环境变量物化为 <workDir>/.env（KEY=VALUE 行 + 生成头注释）。
 // 供用户在文件管理器/终端查看；源真值仍是 instance.EnvVars（控制台「环境变量」页签编辑），
 // 本文件启动时按当前配置重写（单向生成物）。best-effort：写失败只记日志、不阻塞启动。
 func writeEnvFile(cfg WrapperConfig) {
@@ -783,7 +783,7 @@ func writeEnvFile(cfg WrapperConfig) {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("# 由 JianManager 生成（FR-344）：实例自定义启动环境变量。\n")
+	b.WriteString("# 由 JianManager 生成：实例自定义启动环境变量。\n")
 	b.WriteString("# 编辑请用控制台「环境变量」页签；本文件启动时按配置重写。\n")
 	keys := make([]string, 0, len(cfg.EnvVars))
 	for k := range cfg.EnvVars {
@@ -897,7 +897,7 @@ func (w *Wrapper) resolveGracefulStopTimeout() time.Duration {
 }
 
 // resolveGracefulStopTimeout 按优先级解析优雅停止超时：
-//  1. 启动时下发的 config 值（CP 从平台设置 graceful_stop.timeout 取生效值，FR-063）；
+//  1. 启动时下发的 config 值（CP 从平台设置 graceful_stop.timeout 取生效值）；
 //  2. 环境变量（供测试/集成缩短）；
 //  3. 默认值。
 //

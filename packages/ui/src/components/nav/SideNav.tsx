@@ -2,8 +2,8 @@ import * as React from 'react'
 
 import { cn } from '../../lib/utils'
 
-/**
- * 资源侧栏（FR-502 阶段 4）：把「资源导航」从路由入口里拆出来的固定侧栏。
+/** 
+ * 资源侧栏（阶段 4）：把「资源导航」从路由入口里拆出来的固定侧栏。
  *
  * 原型的分工是本组件存在的理由：侧栏只做两件事——**定位资源**（节点/群组/收藏，
  * 由调用方在 `SideNavResource` 槽位里自行渲染）与**放少数几个高频入口**（集群总览、全部实例、节点）。
@@ -35,7 +35,7 @@ export function SideNav({
       <aside
         data-slot="side-nav"
         data-collapsed={collapsed || undefined}
-        /*
+        /* 
           【侧栏表面走 sidebar token 组，不用 card】原先这里是 `bg-card`——
           语义上是「卡片色」，只是碰巧也是白色。改用 `bg-sidebar` +
           `border-sidebar-border` 后，侧栏的底色与分隔线归 sidebar token 管，
@@ -56,7 +56,7 @@ export function SideNav({
   )
 }
 
-/**
+/** 
  * 侧栏首段：工作区名 + 右侧 pill 徽章（原型 `.sidebar-head` / `.workspace-label`）。
  * 折叠态整段隐藏——54px 装不下文字，留着头也会被压成一团。
  *
@@ -129,7 +129,7 @@ export function SideNavHead({
   )
 }
 
-/**
+/** 
  * 固定入口段（原型 `.main-shortcuts`）：集群总览 / 全部实例 / 节点。
  * 不参与滚动，因此这一段的 `nav-row` 数量应保持个位数。
  */
@@ -160,7 +160,7 @@ export function SideNavShortcuts({
   )
 }
 
-/**
+/** 
  * 资源区（原型 `.resource-scroll` 所在段）：侧栏唯一可伸缩的一段。
  *
  * 这里只做「撑满剩余高度 + overflow-hidden」，真正的滚动容器在槽位内容内部：
@@ -195,7 +195,7 @@ export function SideNavResource({
   )
 }
 
-/**
+/** 
  * 底部常驻入口段（原型 `.sidebar-bottom`）：群组与拓扑、多服工作台等。
  * 内层导航行比标准行矮一档（33px / 11px 字），避免底部区抢走资源区高度。
  */
@@ -227,7 +227,7 @@ export function SideNavBottom({
   )
 }
 
-/**
+/** 
  * 侧栏导航行（原型 `.nav-row`）：唯一一种行样式，固定入口与底部入口共用。
  *
  * 【为什么渲染 `<div>` 而不是 `<button>`】导航行的真实语义是**链接**，但本组件库不依赖路由、

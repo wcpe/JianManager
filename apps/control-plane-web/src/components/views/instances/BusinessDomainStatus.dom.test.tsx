@@ -6,8 +6,8 @@ import type { BusinessStatus } from '@/api/businessStatus'
 import type { BusinessManifest } from '@/lib/console/business'
 import BusinessDomainStatus from './BusinessDomainStatus'
 
-/**
- * FR-534 业务插件域状态面板 · 受控视图测（ADR-103 a 范式）。
+/** 
+ *业务插件域状态面板 · 受控视图测（ADR-103 a 范式）。
  *
  * 用例覆盖 spec §8 的功能验收：有域（正常/降级/原因/计数）、无域空态、
  * stale=true 提示、manifest 展开与免责声明。

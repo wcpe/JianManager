@@ -11,8 +11,8 @@ import { API } from '@jianmanager/devmock/api'
 import ResourceExplorer, { type ConfigCapabilities } from './ResourceExplorer'
 import { resetClipboardBusForTests } from '@/lib/explorer/explorer-clipboard-bus'
 
-/**
- * 资源管理器（文件管理器主视图）强断言（FR-204 文件归档域）。
+/** 
+ * 资源管理器（文件管理器主视图）强断言（文件归档域）。
  * 验 mock 假后端 files 集合渲染 + 目录下钻导航联动 + 错误注入。
  * 文件 API 受 requireAuth 保护，故渲染前 loginMockUser() 注入会话 token。
  * 用 instanceId=1（files 种子所在实例）。
@@ -112,7 +112,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
 
     await user.dblClick(await screen.findByText('large.log'))
     expect(await screen.findByText(/文件过大/)).toBeInTheDocument()
-    // 预览区保留「下载」入口（FR-422 后工具栏的下载仅在有选中时明文出现，此处无选中）。
+    // 预览区保留「下载」入口（后工具栏的下载仅在有选中时明文出现，此处无选中）。
     expect(screen.getAllByRole('button', { name: '下载' }).length).toBeGreaterThanOrEqual(1)
 
     await user.dblClick(await screen.findByText('icon.png'))
@@ -146,7 +146,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
       await user.dblClick(plugins)
     }
     expect(await screen.findByText('config.yml')).toBeInTheDocument()
-    // FR-422：粘贴收进工具栏「更多操作」下拉（低频动作），故先开下拉再点条目。
+    // 粘贴收进工具栏「更多操作」下拉（低频动作），故先开下拉再点条目。
     await user.click(screen.getByRole('button', { name: '更多操作' }))
     const pasteItem = await screen.findByRole('menuitem', { name: /粘贴/ })
     expect(pasteItem).not.toHaveAttribute('aria-disabled', 'true')
@@ -193,7 +193,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(screen.queryByText('server.properties')).not.toBeInTheDocument()
   })
 
-  it('FR-375：地址栏 / 后退前进 / 三视图 / 权限列', async () => {
+  it('地址栏 / 后退前进 / 三视图 / 权限列', async () => {
     loginMockUser()
     const user = userEvent.setup()
     server.use(
@@ -255,8 +255,8 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(await screen.findByText('locked.txt')).toBeInTheDocument()
     expect(screen.getByTitle('不可写')).toBeInTheDocument()
 
-    // 地址栏跳转。FR-422：默认位展示面包屑，点「编辑路径」才换出可输入的地址栏
-    //（同一条横栏内互换，不再面包屑与输入框各占一行）。
+    // 地址栏跳转。：默认位展示面包屑，点「编辑路径」才换出可输入的地址栏
+    // （同一条横栏内互换，不再面包屑与输入框各占一行）。
     expect(screen.queryByLabelText('地址栏')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '编辑路径' }))
     const addr = screen.getByLabelText('地址栏')
@@ -285,7 +285,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(screen.getByRole('tab', { name: '详细信息' })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('FR-422：分段/导航/面包屑/工具/视图同处一条横栏，面包屑只一份', async () => {
+  it('分段/导航/面包屑/工具/视图同处一条横栏，面包屑只一份', async () => {
     loginMockUser()
     renderWithProviders(
       <ResourceExplorer instanceId={1} toolbarLeading={<button type="button">分段占位</button>} />,
@@ -312,7 +312,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(within(bar).getByRole('button', { name: '编辑路径' })).toHaveTextContent(/^3 项 · \d+ B$/)
   })
 
-  it('FR-422：收进「更多操作」的动作仍可达、可键盘打开、可触发', async () => {
+  it('收进「更多操作」的动作仍可达、可键盘打开、可触发', async () => {
     loginMockUser()
     const user = userEvent.setup()
     renderWithProviders(<ResourceExplorer instanceId={1} />)
@@ -327,7 +327,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
     const menu = await screen.findByRole('menu')
 
     // 收进下拉 ≠ 删掉：五个低频动作全在，且 disabled 语义与原平铺按钮逐一对应
-    //（无选中 → 下载/删除/清空选择 不可用；剪贴板空 → 粘贴不可用）。
+    // （无选中 → 下载/删除/清空选择 不可用；剪贴板空 → 粘贴不可用）。
     expect(within(menu).getByRole('menuitem', { name: /下载/ })).toHaveAttribute('aria-disabled', 'true')
     expect(within(menu).getByRole('menuitem', { name: /删除/ })).toHaveAttribute('aria-disabled', 'true')
     expect(within(menu).getByRole('menuitem', { name: /粘贴/ })).toHaveAttribute('aria-disabled', 'true')
@@ -355,7 +355,7 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(within(bar).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
   })
 
-  it('FR-422：目录汇总不造数——加载失败时不显示项数与大小', async () => {
+  it('目录汇总不造数——加载失败时不显示项数与大小', async () => {
     loginMockUser()
     mockInject('get', '/instances/:id/files', { kind: 'status', status: 500 })
     renderWithProviders(<ResourceExplorer instanceId={1} />)

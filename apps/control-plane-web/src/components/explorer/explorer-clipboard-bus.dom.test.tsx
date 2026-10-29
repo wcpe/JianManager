@@ -7,8 +7,8 @@ import { loginMockUser } from '@/test/auth'
 import ResourceExplorer from './ResourceExplorer'
 import { resetClipboardBusForTests } from '@/lib/explorer/explorer-clipboard-bus'
 
-/**
- * FR-377：同页双 ResourceExplorer 剪贴板互通（主区↔浮动等价）。
+/** 
+ *：同页双 ResourceExplorer 剪贴板互通（主区↔浮动等价）。
  */
 function DualExplorers() {
   const [ready] = useState(true)
@@ -25,7 +25,7 @@ function DualExplorers() {
   )
 }
 
-describe('跨 Explorer 剪贴板总线（FR-377）', () => {
+describe('跨 Explorer 剪贴板总线', () => {
   beforeEach(() => {
     resetClipboardBusForTests()
     loginMockUser()
@@ -44,7 +44,7 @@ describe('跨 Explorer 剪贴板总线（FR-377）', () => {
     await user.pointer({ keys: '[MouseRight]', target: serverRow })
     await user.click(await screen.findByRole('menuitem', { name: /复制/ }))
 
-    // B 的粘贴应可用（总线镜像）。FR-422 后粘贴收在 B 自己工具栏的「更多操作」下拉里，
+    // B 的粘贴应可用（总线镜像）。后粘贴收在 B 自己工具栏的「更多操作」下拉里，
     // 故经该下拉断言可用性——下拉内容走 portal，用 role=menu 定位（同时只会开一个）。
     const paneB = screen.getByTestId('pane-b')
     await user.click(within(paneB).getByRole('button', { name: '更多操作' }))

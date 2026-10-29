@@ -3,8 +3,8 @@ import { render, screen } from '@testing-library/react'
 
 import { TopLoadingBar } from '@/components/views/common/TopLoadingBar'
 
-/**
- * TopLoadingBar（FR-243 加载进度条）· 业务视图包。
+/** 
+ * TopLoadingBar（加载进度条）· 业务视图包。
  *
  * 【为什么直接 render 而不套 renderWithProviders】本组件已受控：它不再自行读取
  * 路由与请求状态，因此**不需要** Router 与 QueryClient 这两层 Provider。
@@ -15,7 +15,7 @@ function renderBar(props: { routeKey?: string; pendingCount?: number } = {}) {
   return render(<TopLoadingBar routeKey={props.routeKey ?? '/instances'} pendingCount={props.pendingCount ?? 0} />)
 }
 
-describe('TopLoadingBar（FR-243 加载进度条）', () => {
+describe('TopLoadingBar（加载进度条）', () => {
   it('渲染顶部加载进度条', () => {
     renderBar()
     expect(screen.getByTestId('top-loading-bar')).toBeInTheDocument()

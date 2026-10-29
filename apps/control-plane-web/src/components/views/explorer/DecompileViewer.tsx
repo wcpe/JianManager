@@ -4,8 +4,8 @@ import { Loader2, X } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import CodeEditor from '@/components/views/explorer/CodeEditor'
 
-/**
- * 单文件反编译视图（FR-075）：对工作目录内某 .class/.jar 调 Worker CFR 反编译，
+/** 
+ * 单文件反编译视图：对工作目录内某 .class/.jar 调 Worker CFR 反编译，
  * 结果只读展示（Java 高亮）。失败/降级显示降级提示，超时/截断有态。
  */
 interface DecompileViewerProps {
@@ -74,7 +74,7 @@ export default function DecompileViewer({ instanceId, path, name, onClose, decom
   }, [instanceId, path, t, decompile])
 
   return (
-    // flex-1 占满右栏：ResourceExplorer 打开反编译时已收起文件列表（FR-111）。
+    // flex-1 占满右栏：ResourceExplorer 打开反编译时已收起文件列表。
     <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex items-center justify-between border-b bg-muted/30 px-2 py-1 text-sm">
         <span className="truncate font-medium">

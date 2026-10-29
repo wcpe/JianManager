@@ -1,7 +1,7 @@
 #!/bin/sh
-# JianManager Worker 节点 SSH 推送式部署脚本（FR-410）。在操作机执行。
+#  JianManager Worker 节点 SSH 推送式部署脚本。在操作机执行。
 #
-# system 档保持 FR-277 的直装/.bak 更新行为；user 档改用永久版本目录：
+#  system 档保持的直装/.bak 更新行为；user 档改用永久版本目录：
 # versions/<版本>--<UTC 时间>--<摘要>/，current 原子指向已验证版本。
 # Worker 的配置、数据和身份始终保留在安装目录稳定路径，不随版本切换。
 #

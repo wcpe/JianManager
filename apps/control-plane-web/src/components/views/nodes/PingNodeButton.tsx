@@ -11,8 +11,8 @@ export interface PingResultView {
   error?: string
 }
 
-/**
- * 节点存活测试按钮（FR-229）：经 gRPC 调用 Worker GetVersion 主动探活，
+/** 
+ * 节点存活测试按钮：经 gRPC 调用 Worker GetVersion 主动探活，
  * 行内展示在线 + 版本 + 往返耗时，或离线 + 原因。供 JDK 一键下载前「先测再下」避免卡死。
  *
  * 受控视图（ADR-103）：不取数、不发请求——探测结果与在途态经 props 注入，

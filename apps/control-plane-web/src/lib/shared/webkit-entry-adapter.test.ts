@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { adaptEntry, type NativeFileSystemEntry } from './webkit-entry-adapter'
 import { collectEntries } from '@/lib/client-dist/client-publish-wizard'
 
-/**
- * BUG-F（FR-250 真机缺陷）复现 + 回归：拖拽走浏览器**原生**回调式 `FileSystemEntry`，
+/** 
+ * BUG-F（真机缺陷）复现 + 回归：拖拽走浏览器**原生**回调式 `FileSystemEntry`，
  * 而 collectEntries 期望 Promise 化的 FileSystemEntryLike。这里以原生形态（回调式
  * `file(cb)` / `createReader().readEntries(cb)`）构造 entry，经 adaptEntry 适配后喂
  * collectEntries，断言散文件拿到 File、目录递归全收（含跨批 >100 项）。
@@ -24,7 +24,7 @@ function nativeFile(fullPath: string, size = 10): NativeFileSystemEntry {
   }
 }
 
-/**
+/** 
  * 造原生目录 entry：`createReader()` 返回的 reader 以**分批**回调式 `readEntries(cb)` 吐子项，
  * 一次一批、读空为止（模拟原生一次只返回 ~100 项的行为）。
  */

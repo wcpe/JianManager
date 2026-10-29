@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// AI 助手技能（Skill）装载（FR-541）。
+// AI 助手技能（Skill）装载。
 //
 // ## 为什么是「目录 + SKILL.md」而不是数据库表
 //
@@ -225,7 +225,7 @@ func (s *AssistantChatService) SkillsSnapshot() ([]Skill, map[string]string) {
 
 // systemPromptWithSkills 在基础系统提示词后依次拼入「自定义系统提示词」与「已启用技能」。
 //
-// 组装顺序固定为：内置基线 → 自定义 → 技能（FR-541 §3.1）。
+// 组装顺序固定为：内置基线 → 自定义 → 技能（§3.1）。
 // 三层各自可为空；全空时只剩基线。
 //
 // 空启用列表 = 全部启用（见 skillEnabled 的注释）。没有任何技能时**不追加空标题**——
@@ -257,7 +257,7 @@ func (s *AssistantChatService) systemPromptWithSkills(base string) string {
 	return prompt + "\n\n" + block
 }
 
-// builtinToolsEnabled 读「平台自带工具」开关的生效值（FR-540）。
+// builtinToolsEnabled 读「平台自带工具」开关的生效值。
 //
 // 读失败按**启用**处理：DB 抖一下不该让助手突然失去全部工具
 // （那会让正在排障的会话变成「什么都不能用」，而原因与故障无关）。

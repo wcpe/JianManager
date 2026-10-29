@@ -57,7 +57,7 @@ type BindPhase =
   /** completed 但三要素不全（半截响应），无法自动填表。 */
   | 'incomplete'
 
-/**
+/** 
  * 二维码过期后自动重新申请的次数上限。
  *
  * 平台对绑定/分享类接口有频率限制（实测约 9 次即被限流），无上限地重申请会把额度打光、
@@ -65,8 +65,8 @@ type BindPhase =
  */
 export const MAX_QQ_BIND_AUTO_REFRESH = 3
 
-/**
- * QQ 扫码绑定弹窗（FR-494 接入体验改造）：把「手工抄 appId / appSecret / openid 三个值」
+/** 
+ * QQ 扫码绑定弹窗（接入体验改造）：把「手工抄 appId / appSecret / openid 三个值」
  * 变成扫一次码。
  *
  * 交互要点：

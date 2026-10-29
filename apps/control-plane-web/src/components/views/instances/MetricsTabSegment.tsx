@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
-/**
- * `metrics` Tab 分流器（FR-448 §2.1）：同一 Tab 内按探针有无呈现**两套样式**——
+/** 
+ * `metrics` Tab 分流器（§2.1）：同一 Tab 内按探针有无呈现**两套样式**——
  * - 有探针 → ServerProbe 全量指标（TPS/MSPT/世界/区块）；
  * - 无探针 → 轻量进程/直探视图（ProcessPanel + 直探摘要）。
  *

@@ -79,7 +79,7 @@ func requireExhausted(t *testing.T, err error) {
 	}
 }
 
-// TestWrapRegistrar_UnaryRequestOverCapRejected 请求超限 → 拒收且不进 handler（FR-305）。
+// TestWrapRegistrar_UnaryRequestOverCapRejected 请求超限 → 拒收且不进 handler。
 func TestWrapRegistrar_UnaryRequestOverCapRejected(t *testing.T) {
 	c := startGuarded(t, &guardedWorker{}, CallOptions()...)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -90,7 +90,7 @@ func TestWrapRegistrar_UnaryRequestOverCapRejected(t *testing.T) {
 	requireExhausted(t, err)
 }
 
-// TestWrapRegistrar_UnaryResponseOverCapRejected 响应超限 → 发送前拦截拒收（FR-305）。
+// TestWrapRegistrar_UnaryResponseOverCapRejected 响应超限 → 发送前拦截拒收。
 func TestWrapRegistrar_UnaryResponseOverCapRejected(t *testing.T) {
 	c := startGuarded(t, &guardedWorker{readSize: MaxMessageBytes + 1<<20},
 		grpc.MaxCallRecvMsgSize(int(^uint32(0)>>1))) // 客户端放开 recv，直击服务端守卫
@@ -100,7 +100,7 @@ func TestWrapRegistrar_UnaryResponseOverCapRejected(t *testing.T) {
 	requireExhausted(t, err)
 }
 
-// TestWrapRegistrar_UnderCapPasses ≤上限照常放行（8MiB 请求 + 8MiB 响应，FR-305）。
+// TestWrapRegistrar_UnderCapPasses ≤上限照常放行（8MiB 请求 + 8MiB 响应）。
 func TestWrapRegistrar_UnderCapPasses(t *testing.T) {
 	c := startGuarded(t, &guardedWorker{readSize: 8 << 20}, CallOptions()...)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -117,7 +117,7 @@ func TestWrapRegistrar_UnderCapPasses(t *testing.T) {
 	}
 }
 
-// TestWrapRegistrar_StreamNotWrapped 流式小帧照常放行（FR-304 生产帧型 64KiB×4）——
+// TestWrapRegistrar_StreamNotWrapped 流式小帧照常放行（生产帧型 64KiB×4）——
 // WrapRegistrar 只守 unary、不包裹 stream（避免干扰 grpctunnel 分块流控，真机 DeployServerProbe
 // DeadlineExceeded 的根因）；流的尺寸由直拨 ServerOptions / 隧道 16KiB 分块天然兜底。
 func TestWrapRegistrar_StreamNotWrapped(t *testing.T) {
@@ -140,7 +140,7 @@ func TestWrapRegistrar_StreamNotWrapped(t *testing.T) {
 }
 
 // TestCallOptions_RecvCapExplicit CP 客户端显式 recv 上限修 4MiB 默认暗礁：
-// 8MiB 响应默认失败、带 CallOptions 成功（FR-305 验收项 2 的机制证明）。
+// 8MiB 响应默认失败、带 CallOptions 成功（验收项 2 的机制证明）。
 func TestCallOptions_RecvCapExplicit(t *testing.T) {
 	// 默认客户端（无 CallOptions）：8MiB 响应撞 4MiB 默认。
 	cDefault := startGuarded(t, &guardedWorker{readSize: 8 << 20})

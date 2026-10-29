@@ -1,5 +1,5 @@
-/**
- * 客户端分发频道「就绪度」步骤推导（FR-187）。
+/** 
+ * 客户端分发频道「就绪度」步骤推导。
  *
  * 频道工作台顶部常驻就绪度步骤器的纯逻辑：把频道当前状态（密钥数、当前版本）
  * 推导成「创建频道 → 拉取密钥 → 发布版本 → 接入启动器」四步的完成情况，
@@ -31,7 +31,7 @@ export interface ReadinessInput {
 /** 步骤固定顺序（创建 → 密钥 → 版本 → 接入）。 */
 export const READINESS_ORDER: ReadinessStepId[] = ['channel', 'keys', 'version', 'integrate']
 
-/**
+/** 
  * 由频道状态推导四步就绪度。
  *
  * 完成判定：

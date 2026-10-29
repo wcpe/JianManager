@@ -5,12 +5,12 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * FR-448/FR-449 回归：审计发现的两处「能力画像门控」缺陷。
+/** 
+ *回归：审计发现的两处「能力画像门控」缺陷。
  *
  * 1. 概览的 ServerProbe 未连入横幅必须与 MC 世界语义联动（`mcSemantics`）：proxy/generic/beacon
  *    本不该有 ServerProbe，横幅只会误导（同文件顶栏 showProbeChip 早已按 mcSemantics 门控）。
- * 2. proxy 的「玩家」页签必须呈现跨服分布（FR-445 §2.3 按角色语义），
+ * 2. proxy 的「玩家」页签必须呈现跨服分布（§2.3 按角色语义），
  *    而不是复用 backend 的单实例实名名单视图。
  *
  * devmock 种子：1=backend(RUNNING)、2=proxy(STOPPED，探针未连)、3=backend(CRASHED，探针未连)。
@@ -23,7 +23,7 @@ function overviewOf(instanceId: number) {
   })
 }
 
-describe('概览探针横幅按 mcSemantics 门控（FR-448）', () => {
+describe('概览探针横幅按 mcSemantics 门控', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -41,7 +41,7 @@ describe('概览探针横幅按 mcSemantics 门控（FR-448）', () => {
   })
 })
 
-describe('proxy 玩家页签走跨服分布（FR-445 §2.3 / FR-449）', () => {
+describe('proxy 玩家页签走跨服分布（§2.3）', () => {
   beforeEach(() => {
     loginMockUser()
   })

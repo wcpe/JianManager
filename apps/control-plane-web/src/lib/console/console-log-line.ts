@@ -1,11 +1,11 @@
 import { ansiPlainText, ansiSliceFromPlain } from './console-ansi'
 
-/**
- * 控制台日志行模型与解析器（FR-415，spec §1.1/§1.2）。
+/** 
+ * 控制台日志行模型与解析器（spec §1.1/§1.2）。
  *
  * 输出区改成 DOM 虚拟列表后（ADR-086），行不再是「一串字节」而是结构化记录：
- * 时间 / 级别 / 来源拆成独立列，正文单列。级别过滤（FR-417）、堆栈折叠与锚点选区（FR-418）、
- * 历史回溯（FR-419）全部建立在这个模型上，所以三条 FR 共用本解析器。
+ * 时间 / 级别 / 来源拆成独立列，正文单列。级别过滤、堆栈折叠与锚点选区、
+ * 历史回溯全部建立在这个模型上，所以三条 FR 共用本解析器。
  *
  * 解析**保守优先**：每一步的模式不匹配即什么都不填，降级为纯文本行（`kind:'log'`，字段留空）。
  * 宁可少解析出一个字段，也不猜——猜错的时间戳/级别会直接把过滤与定位带偏。
@@ -23,10 +23,10 @@ export interface LogLine {
   seq: number
   /** 行首解析出的时间（形如 `09:12:13`）；无前缀的续行继承上一行的 ts（`lastTs`），全程无源则 undefined。 */
   ts?: string
-  /**
+  /** 
    * `ts` 是否来自**本行自身**的时间前缀解析（即该行自带完整记录头）。
    * 经 `lastTs` 继承到时间的续行**不置位**：它们仍是上一条记录的续行，
-   * 级别过滤（FR-417）据此区分「记录头」与「续行」——若只看 `ts` 有无，
+   * 级别过滤据此区分「记录头」与「续行」——若只看 `ts` 有无，
    * 续行会被误当成新记录、按自身兜底级别参与过滤，把整块堆栈滤丢。
    */
   tsParsed?: boolean
@@ -42,7 +42,7 @@ export interface LogLine {
   stackOf?: number
 }
 
-/**
+/** 
  * 级别 token 的归一化表。
  *
  * 只收录明确等价的别名（Log4j 的 `WARNING`、JUL 的 `SEVERE`、Log4j 的 `FATAL`）；
@@ -59,7 +59,7 @@ const LEVEL_ALIASES: Record<string, LogLevel> = {
   TRACE: 'TRACE',
 }
 
-/**
+/** 
  * 匹配组 → 日志级别。
  *
  * 下面两个前缀正则的级别组都是**必参与匹配**的（`(INFO|WARNING|…)` 非可选），组下标在运行时
@@ -72,7 +72,7 @@ function toLevel(token: string | undefined): LogLevel | undefined {
 
 const LEVEL_TOKEN = '(INFO|WARNING|WARN|ERROR|SEVERE|FATAL|DEBUG|TRACE)'
 
-/**
+/** 
  * 结构化日志的 `level=` 键（Go slog / logrus 等）。
  * 只认独立 key=value token，值必须落在 LEVEL_ALIASES 白名单；
  * `状态=` / `level_token=` 等不会误命中。
@@ -91,7 +91,7 @@ const PREFIX_TIME_LEVEL = new RegExp(`^\\[(\\d{2}:\\d{2}:\\d{2}) ${LEVEL_TOKEN}\
 /** 正文开头的来源标签。禁空白与嵌套括号，故 `[Server thread/INFO]` 这类带空格的不会被误当来源。 */
 const PREFIX_SOURCE = /^\[([^[\]\s]{1,32})\][ ]?/
 
-/**
+/** 
  * 只由数字与冒号组成的 token：`[12:34:56] 无级别` 这类行不得把时间误认成来源。
  *
  * 不写成严格的 `\d{2}:\d{2}:\d{2}`——`[9:2:3]` 这种非补零时间同样是时间不是来源，
@@ -108,7 +108,7 @@ const STACK_MORE = /^\s+\.\.\.\s+\d+\s+more\s*$/
 /** 异常链：`Caused by: java.lang.XxxException: …`。 */
 const STACK_CAUSE = /^Caused by:\s+\S/
 
-/**
+/** 
  * 异常头：`(<module>/)?<fqcn>(Exception|Error|Throwable)` 后跟 `:` 或行尾。
  * 锚定行首而非全行搜索——「正文里提到 Exception 这个词」不该被认成异常头。
  */
@@ -120,7 +120,7 @@ interface ParserState {
   headSeq?: number
   /** 上一条非堆栈行的 seq——实现 spec §1.2 规则 5 的「其后紧跟 stack-frame 者即为异常头」。 */
   prevSeq?: number
-  /**
+  /** 
    * 最近一次解析出的时间前缀：Paper 多行日志（如 spark 告警的续行）没有
    * `[HH:MM:SS]` 前缀，继承它才能让同一组输出共享同一时刻，而不是各自猜时间。
    */
@@ -191,7 +191,7 @@ function classify(bodyPlain: string): Extract<LogKind, 'log' | 'stack-frame' | '
   return 'log'
 }
 
-/**
+/** 
  * 日志行解析器。
  *
  * 有状态：`stackOf` 需要记住当前堆栈块的异常头，`preview` 因此必须提供**不改状态**的版本
@@ -212,7 +212,7 @@ export class LogLineParser {
     return this.compute(raw, options, this.state).line
   }
 
-  /**
+  /** 
    * 合成一条本地行（命令回显 / 系统提示）。
    *
    * 同时**打断堆栈上下文**：命令回显插在异常头与其帧之间时，后续帧不应再挂到那个头上。
@@ -243,10 +243,10 @@ export class LogLineParser {
     // 否则同一行在控制台与日志中心会显示不同级别。
     const level = prefix.level ?? (stream === 'stderr' ? 'ERROR' : 'INFO')
 
-    // 时间列一致性（FR-415）：ts 保持「解析不出就留空」的 spec 语义——**绝不猜**
+    // 时间列一致性：ts 保持「解析不出就留空」的 spec 语义——**绝不猜**
     // （到达时刻会让 Paper 无前缀续行在时间流里「穿越」，正是要修的错位）；
     // 无前缀续行继承上一行的 ts（lastTs），使同一组多行输出共享同一时刻。
-    // tsParsed 只在本行自身命中时间前缀时置位（继承不算），供 FR-417 区分记录头与续行。
+    // tsParsed 只在本行自身命中时间前缀时置位（继承不算），供区分记录头与续行。
     const ts = prefix.ts ?? state.lastTs
 
     const line: LogLine = {

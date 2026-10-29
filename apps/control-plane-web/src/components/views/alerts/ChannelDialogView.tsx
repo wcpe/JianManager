@@ -61,8 +61,8 @@ function parseConfig(raw: string | undefined): ChannelConfig {
   }
 }
 
-/**
- * 通知通道创建/编辑对话框（FR-085 / FR-494）。
+/** 
+ * 通知通道创建/编辑对话框。
  *
  * 凭证字段强制 ${ENV} 引用并前端预校验；QQ 通道另带「扫码绑定」——扫一次码即自动
  * 填入 AppID / AppSecret 引用名 / 目标 user_openid，手工填写路径始终保留作为兜底
@@ -106,7 +106,7 @@ export function ChannelDialogView({
   const passwordError =
     channelIsEmail(type) && (cfg.password ?? '').trim() !== '' && !isEnvRef(cfg.password ?? '') ? t('alerts.envRefRequired') : ''
 
-  // QQ 通道（FR-494）：appId/targetId 明文必填；appSecret 强制 ${ENV} 引用（扫码填的是引用名）。
+  // QQ 通道：appId/targetId 明文必填；appSecret 强制 ${ENV} 引用（扫码填的是引用名）。
   const appIdMissing = channelIsQQ(type) && (cfg.appId ?? '').trim() === '' ? t('validation.required') : ''
   const appSecretMissing =
     channelIsQQ(type) && (cfg.appSecret ?? '').trim() === '' ? t('validation.required') : ''
@@ -116,7 +116,7 @@ export function ChannelDialogView({
       : ''
   const openidMissing = channelIsQQ(type) && (cfg.targetId ?? '').trim() === '' ? t('validation.required') : ''
   // targetType 已固定为单聊（不再暴露控件，提交时一律写 c2c）。群主动消息被 QQ 平台拒绝
-  // （40034105，见 FR-494 spec §6），故存量 group 通道只作提示：保存后自动纠正为单聊。
+  // （40034105，见spec §6），故存量 group 通道只作提示：保存后自动纠正为单聊。
   // 不作为错误拦截——该字段没有可编辑控件，拦截等于把用户锁死在这条通道上。
   const legacyGroupTarget = channelIsQQ(type) && !!cfg.targetType && !isQQTargetType(cfg.targetType)
 

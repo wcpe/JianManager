@@ -163,7 +163,7 @@ func TestRevokeKey_InvalidatesVerification(t *testing.T) {
 }
 
 func TestCreateKey_CustomValueUsedAsPlaintext(t *testing.T) {
-	// FR-192：管理员可填自定义密钥明文值（密钥发出后永久使用、自控这把 key）。
+	// 管理员可填自定义密钥明文值（密钥发出后永久使用、自控这把 key）。
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestCreateKey_CustomValueUsedAsPlaintext(t *testing.T) {
 }
 
 func TestUpdateKey_ChangesValueAndName(t *testing.T) {
-	// FR-192：编辑密钥值——重算 KeyHash（鉴权切到新值）+ 改名；旧值随之失效。
+	// 编辑密钥值——重算 KeyHash（鉴权切到新值）+ 改名；旧值随之失效。
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)

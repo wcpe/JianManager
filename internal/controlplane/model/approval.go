@@ -7,9 +7,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// 平台级审批票据与执行回执（FR-490 / FR-491）。
+// 平台级审批票据与执行回执。
 //
-// 与 `assistant_confirmations`（FR-516 聊天侧确认）是**两套**，刻意不合并：
+// 与 `assistant_confirmations`（聊天侧确认）是**两套**，刻意不合并：
 //   - 批准人语义不同：聊天确认由「会话所有者本人」确认；审批由「具备审批权限的人类」批准，
 //     不要求是申请人（含双人复核语义）；
 //   - 有效期不同：聊天 10 分钟，审批 24 小时（跨越班次）；
@@ -18,7 +18,7 @@ import (
 // 合并会让「谁能批」变成一处需要分支判断的地方，而权限漏洞最常出现在那里。
 // 但状态机**形状**一致（都含 CAS 消费），差异只允许在语义层。
 
-// 票据状态（FR-490 §2 冻结，实施时不得增删）。
+// 票据状态（§2 冻结，实施时不得增删）。
 const (
 	// ApprovalStatusPending 待审批：唯一可被决策（批准/驳回/撤回）的状态。
 	ApprovalStatusPending = "pending"
@@ -59,13 +59,13 @@ const (
 	ApprovalApplicantAgent = "agent"
 )
 
-// 执行回执结果（与 FR-516 回执同构，便于审计口径统一）。
+// 执行回执结果（与回执同构，便于审计口径统一）。
 const (
 	ApprovalReceiptInFlight = "in_flight"
 	ApprovalReceiptOK       = "ok"
 	ApprovalReceiptFailed   = "failed"
 	// ApprovalReceiptUnverified 可能已产生副作用但未确认（超时/连接中断）。
-	// **不得当成功，也不得自动重试**——与 FR-516 的 unverified 同一语义。
+	// **不得当成功，也不得自动重试**——与的 unverified 同一语义。
 	ApprovalReceiptUnverified = "unverified"
 )
 
@@ -127,7 +127,7 @@ func (a *ApprovalTicket) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// ApprovalReceipt 一张票据的执行回执（FR-491 §4.4）。
+// ApprovalReceipt 一张票据的执行回执（§4.4）。
 type ApprovalReceipt struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	TicketID     uint       `gorm:"not null;index" json:"ticketId"`

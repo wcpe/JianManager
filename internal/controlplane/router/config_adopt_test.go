@@ -18,7 +18,7 @@ import (
 // errAdoptTestMissing 模拟「文件不存在」的假 Worker 错误。
 var errAdoptTestMissing = errors.New("读取配置失败: no such file or directory")
 
-// 配置纳管路由端到端测试（FR-533）。
+// 配置纳管路由端到端测试。
 //
 // 这里走 HTTP 层，验证三件在本层才成立的事：
 //  1. 路由可达 —— adopt / adopt/preview / health 是静态段，不能被 /config-files/:id 通配吃掉；

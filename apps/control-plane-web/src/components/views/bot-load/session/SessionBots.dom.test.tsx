@@ -3,8 +3,8 @@ import { render } from '@testing-library/react'
 import '@/i18n'
 import { SessionBots } from './SessionBots'
 
-/**
- * 会话 Bot 明细表的错误态回归锁（FR-371）。
+/** 
+ * 会话 Bot 明细表的错误态回归锁。
  *
  * 取数失败原先没有任何错误态（容器有 `isError` 但没传），失败会被渲染成「无 Bot」——
  * 即把一次故障读成「这一批没有起 Bot」，是压测排查里最危险的假信号。

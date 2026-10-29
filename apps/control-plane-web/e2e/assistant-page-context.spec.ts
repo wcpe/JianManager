@@ -1,8 +1,8 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-518 §5.2：上下文芯片「移除即不再外发」与「发送时冻结」两条验收。
+/** 
+ *§5.2：上下文芯片「移除即不再外发」与「发送时冻结」两条验收。
  *
  * 【为什么这两条必须抓包，而不是看 UI】
  * 芯片被移除后从 DOM 消失，只证明**渲染层**把它去掉了；真正要守的是「它没有出现在
@@ -19,7 +19,7 @@ import { login } from './helpers'
  * 本文件能验的是「前端发出的请求体」——那正是芯片与序列化逻辑的全部产出。
  */
 
-/**
+/** 
  * 目标实例取 devmock 的**具名种子覆盖行**（`packages/devmock` 的 INSTANCE_SEED_OVERRIDES）。
  *
  * 不要用 `server-0001` 这类"按序号推出来"的名字：生成名是 `server-<id padStart 4>`，
@@ -42,7 +42,7 @@ interface CapturedRun {
   snapshot: Record<string, unknown> | null
 }
 
-/**
+/** 
  * 收集发往 `/assistant/conversations/:id/runs` 的 POST 请求体。
  *
  * 必须在 `page.goto` 之前调用：请求监听要赶在第一次发送前挂上，否则第一轮就漏掉了。
@@ -125,7 +125,7 @@ function labelPaths(value: unknown, path = '$'): string[] {
   return []
 }
 
-/**
+/** 
  * 发一轮消息并等这一轮真正收尾。
  *
  * 收尾判据取两件事的组合，都不能只看「文本出现」：
@@ -160,7 +160,7 @@ async function openAssistantDock(page: Page): Promise<Locator> {
   return panel
 }
 
-/**
+/** 
  * 通过「添加实体」把目标实例挂成本轮上下文。
  *
  * 走服务端搜索（千级实例不全量列举），因此必须真的键入关键字并选中返回项——
@@ -197,7 +197,7 @@ async function addInstanceEntity(panel: Locator, page: Page): Promise<void> {
 
 test.describe.configure({ timeout: 120_000 })
 
-test.describe('FR-518 页面上下文芯片的外发行为', () => {
+test.describe('页面上下文芯片的外发行为', () => {
   test('移除芯片后，该实体不再出现在发出的 contextSnapshot 里', async ({ page }) => {
     const runs = captureRunRequests(page)
 

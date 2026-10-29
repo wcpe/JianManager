@@ -1,5 +1,5 @@
-/**
- * 监控页 hover 浮窗（FR-169）的纯逻辑：给定一个目标时间戳（recharts 激活点回传），
+/** 
+ * 监控页 hover 浮窗的纯逻辑：给定一个目标时间戳（recharts 激活点回传），
  * 在按时间戳升序的样本行里定位最近的一行，并取出该时刻各序列值。无 React 依赖，便于 vitest 单测。
  */
 
@@ -19,7 +19,7 @@ export interface HoverSnapshot {
   entries: HoverEntry[]
 }
 
-/**
+/** 
  * 在升序行集合里二分定位时间戳最接近 targetTs 的行下标。
  * 空数组返回 -1。targetTs 落在两点之间时取时间差更小的一侧（并列取左）。
  */
@@ -52,7 +52,7 @@ export function nearestRowIndex(rows: { ts: string }[], targetTs: string): numbe
   return dLo <= dHi ? lo : hi
 }
 
-/**
+/** 
  * 取某时刻各序列值快照：在 rows 里定位最近 targetTs 的行，按 series 顺序读出每条序列的值。
  * 无数据返回 null。某序列在该行缺测或不存在时其 value 为 null。
  */

@@ -1,8 +1,8 @@
 import { botStatusKind } from '@/lib/bots/bot-list'
 import { cn } from '@jianmanager/ui'
 
-/**
- * Bot 状态点（FR-039）：在线绿 / 连接中琥珀(脉冲) / 异常红 / 离线空心灰。
+/** 
+ * Bot 状态点：在线绿 / 连接中琥珀(脉冲) / 异常红 / 离线空心灰。
  * 语义分桶见 `botStatusKind`。
  */
 export interface BotStatusDotProps {

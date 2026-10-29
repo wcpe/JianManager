@@ -1,8 +1,8 @@
 import type { TFunction } from 'i18next'
 import { Badge } from '@jianmanager/ui/components/badge'
 
-/**
- * 机器更新清单/时间线共用的格式化与徽标（FR-426）。
+/** 
+ * 机器更新清单/时间线共用的格式化与徽标。
  * 从应用侧 `MachineListPanel` 原样提取，供面板与时间线两个展示组件复用。
  */
 

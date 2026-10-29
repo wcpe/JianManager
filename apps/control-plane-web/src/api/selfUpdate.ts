@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 面板自更新 API（FR-081，见 ADR-020）。
+/** 
+ * 面板自更新 API（见 ADR-020）。
  * 仅平台管理员可用（后端挂在 admin 组、RBAC 强制）。检查更新对比 CP 自身 + 各节点版本；
  * 升级为 CP 自更新 / 单节点 / 全网逐节点编排（rollout）。
  */
@@ -21,7 +21,7 @@ export interface ComponentStatus {
   updateAvailable: boolean
   /** feed 中存在匹配该组件平台（component+os+arch）的制品。 */
   artifactAvailable: boolean
-  /** 升级前备份的版本（FR-182）：非空时可一键「回滚 v{backupVersion}」，空表示无备份。 */
+  /** 升级前备份的版本：非空时可一键「回滚 v{backupVersion}」，空表示无备份。 */
   backupVersion?: string
 }
 
@@ -31,17 +31,17 @@ export interface CheckResult {
   configured: boolean
   latestVersion: string
   notes: string
-  /** 更新源标识（FR-175）：github:owner/repo@channel | feed | 空（未配置）。 */
+  /** 更新源标识：github:owner/repo@channel | feed | 空（未配置）。 */
   source?: string
   controlPlane: ComponentStatus
   nodes: ComponentStatus[]
-  /** 本结果是否来自服务端缓存（FR-186）：GET /check 命中缓存为 true、空缓存为 false。 */
+  /** 本结果是否来自服务端缓存：GET /check 命中缓存为 true、空缓存为 false。 */
   cached?: boolean
-  /** 「上次成功检查」时刻（FR-186，ISO 字符串）；无缓存/未检查为 undefined，前端据此展示相对时间。 */
+  /** 「上次成功检查」时刻（ISO 字符串）；无缓存/未检查为 undefined，前端据此展示相对时间。 */
   checkedAt?: string
 }
 
-/** Worker 二进制 CP 代理缓存条目（FR-190）。 */
+/** Worker 二进制 CP 代理缓存条目。 */
 export interface WorkerAssetCacheEntry {
   version: string
   os: string
@@ -79,13 +79,13 @@ export interface Rollout {
   failed: number
   pending: number
   nodes: RolloutNodeState[]
-  /** 编排阶段（FR-155）：canary | rolling | completed | aborted。 */
+  /** 编排阶段：canary | rolling | completed | aborted。 */
   phase?: string
-  /** 本次金丝雀节点数（FR-155）。 */
+  /** 本次金丝雀节点数。 */
   canarySize?: number
-  /** 本次剩余分批大小（FR-155，<=0=剩余全部一批）。 */
+  /** 本次剩余分批大小（<=0=剩余全部一批）。 */
   batchSize?: number
-  /** 当前批次（FR-155，1-based，金丝雀=第 1 批）。 */
+  /** 当前批次（1-based，金丝雀=第 1 批）。 */
   currentBatch?: number
 }
 
@@ -104,14 +104,14 @@ export interface NodeUpgradeAck {
   toVersion: string
 }
 
-/** CP 回滚接受响应（202，FR-182）。 */
+/** CP 回滚接受响应（202）。 */
 export interface ControlPlaneRollbackAck {
   status: string
   fromVersion: string
   toVersion: string
 }
 
-/** 单节点回滚接受响应（202，FR-182）。 */
+/** 单节点回滚接受响应（202）。 */
 export interface NodeRollbackAck {
   status: string
   nodeId: number
@@ -119,8 +119,8 @@ export interface NodeRollbackAck {
   toVersion: string
 }
 
-/**
- * 读取服务端缓存的「上次成功检查结果」（FR-186，增强 FR-081）。
+/** 
+ * 读取服务端缓存的「上次成功检查结果」（增强）。
  * GET /self-update/check 现返回缓存、**不触发 live 网络调用**（毫秒级），故进页即可即时回显——
  * 默认 enabled、自动拉取。live 刷新交由 {@link useRefreshSelfUpdateCheck}（进页后台静默触发 + 手动按钮）。
  * 缓存空时返回 `cached:false`，由页面据此后台触发一次刷新。
@@ -138,8 +138,8 @@ export function useSelfUpdateCheck() {
   })
 }
 
-/**
- * 显式触发一次 live 检查更新（POST /self-update/check/refresh，FR-186）。
+/** 
+ * 显式触发一次 live 检查更新（POST /self-update/check/refresh）。
  * 经更新源在线拉取最新版本 + 逐节点 RPC 取版本，成功后服务端覆盖缓存；本端把返回写回 check 查询缓存，
  * 页面随即更新。失败时服务端**不清缓存**、本端亦保留旧 check 数据（调用方 toast 提示但不清屏）。
  * 「检查更新」按钮与进页后台静默刷新均调此。
@@ -171,8 +171,8 @@ export function useRollout() {
   })
 }
 
-/**
- * 查看 CP 本地 Worker 二进制缓存状态（FR-190）。
+/** 
+ * 查看 CP 本地 Worker 二进制缓存状态。
  *
  * `options.enabled` 供调用方门控取数时机：缓存面板原挂在节点区内、而节点区只在「检查结果到手」
  * 后才渲染，未挂载即不发请求；视图受控化后 hook 归容器，改由该开关保住同一时机
@@ -191,7 +191,7 @@ export function useWorkerAssets(options?: { enabled?: boolean }) {
   })
 }
 
-/** 手动预缓存指定节点平台的 Worker 二进制（FR-190）。 */
+/** 手动预缓存指定节点平台的 Worker 二进制。 */
 export function useCacheWorkerAsset() {
   const qc = useQueryClient()
   return useMutation({
@@ -227,9 +227,9 @@ export function useUpgradeNode() {
   })
 }
 
-/**
+/** 
  * 发起全网逐节点升级编排（nodeIds 省略=全部在线节点）。
- * FR-155：可选金丝雀分批——canarySize 先行升级的金丝雀数、batchSize 剩余分批大小、
+ *：可选金丝雀分批——canarySize 先行升级的金丝雀数、batchSize 剩余分批大小、
  * abortOnCanaryFailure 金丝雀失败即中止；均省略时等价原「串行全部」行为。
  */
 export function useUpgradeAll() {
@@ -261,7 +261,7 @@ export function useUpgradeAll() {
   })
 }
 
-/** 回滚 CP 自身到升级前备份（校验备份→换回→平滑重启，FR-182）。 */
+/** 回滚 CP 自身到升级前备份（校验备份→换回→平滑重启）。 */
 export function useRollbackControlPlane() {
   return useMutation({
     mutationFn: () =>
@@ -269,7 +269,7 @@ export function useRollbackControlPlane() {
   })
 }
 
-/** 回滚单个 Worker 节点到其升级前备份（经 CP gRPC，Worker 走本地备份，FR-182）。 */
+/** 回滚单个 Worker 节点到其升级前备份（经 CP gRPC，Worker 走本地备份）。 */
 export function useRollbackNode() {
   const qc = useQueryClient()
   return useMutation({

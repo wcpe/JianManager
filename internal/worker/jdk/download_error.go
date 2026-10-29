@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// networkHint 是网络类下载失败追加的可操作引导（FR-279）。
+// networkHint 是网络类下载失败追加的可操作引导。
 // JDK 官方源（GitHub/foojay 等）在受限网络下 TLS 握手超时是常态，裸错误让运维无从下手；
-// 明示两条既有出路：节点出站代理（面板「设置 → 网络」下发，ADR-043）与 JDK 下载镜像源（「运行时资产」页，FR-178 mirrorBase）。
+// 明示两条既有出路：节点出站代理（面板「设置 → 网络」下发，ADR-043）与 JDK 下载镜像源（「运行时资产」页mirrorBase）。
 const networkHint = "（疑似网络受限：JDK 下载经节点出站代理执行、未配置则直连，可在面板「设置 → 网络」配置出站代理，或在「运行时资产」页更换 JDK 下载源/镜像后重试）"
 
 // isNetworkError 判定 err 是否为「到不了下载源」的网络类错误（超时 / 连接被拒 / DNS / TLS 握手等）。
-// 用于对 JDK 下载失败追加可操作引导（FR-279），与「归档损坏 / 磁盘满」等本地类错误区分。
+// 用于对 JDK 下载失败追加可操作引导，与「归档损坏 / 磁盘满」等本地类错误区分。
 func isNetworkError(err error) bool {
 	if err == nil {
 		return false
@@ -55,7 +55,7 @@ func isNetworkError(err error) bool {
 	return false
 }
 
-// annotateDownloadError 对网络类下载失败追加可操作引导（FR-279）；非网络类原样返回。
+// annotateDownloadError 对网络类下载失败追加可操作引导；非网络类原样返回。
 // 保留底层错误（含 Go stdlib 英文标记，如 "TLS handshake timeout"），前端据其识别网络类失败加设置入口。
 func annotateDownloadError(err error) error {
 	if err == nil || !isNetworkError(err) {

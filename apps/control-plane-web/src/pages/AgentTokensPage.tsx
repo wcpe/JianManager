@@ -24,15 +24,15 @@ type ErrResp = { response?: { data?: { message?: string }; status?: number } }
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
-/**
+/** 
  * 视图内的纯函数（`parseIdInput` / `mergeIds` / `formatScopeSummary`）随视图迁入包内，此处原样再导出：
  * `AgentTokensPage.dom.test.tsx` 直接从本模块按名导入并逐项校验，经本文件再导出后，该守卫继续
  * 盯住视图真正使用的那份实现，而不是应用侧的一份副本（同 `McpActivityPage` 的 `WINDOW_PRESETS` 先例）。
  */
 export { parseIdInput, mergeIds, formatScopeSummary } from '@/components/views/agent/AgentTokensPageView'
 
-/**
- * Agent Token 管理页容器（FR-387，消费 FR-384 API，ADR-103 b 范式）：平台管理员门禁、列表取数、
+/** 
+ * Agent Token 管理页容器（消费API，ADR-103 b 范式）：平台管理员门禁、列表取数、
  * 签发/吊销两个写动作、候选数据与映射表注入、页头跳转入口都在这里决定，
  * 表格、签发对话框与一次性明文展示交共享视图。
  *
@@ -54,7 +54,7 @@ export default function AgentTokensPage() {
   // 签发对话框的开合状态归视图持有；这里只接收「已打开」的单向通知，用于把节点与实例候选查询
   // 都收敛到同一取数时机（节点沿用原页 `useNodes({ enabled: open })`；实例候选见下）。
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
-  /**
+  /** 
    * 实例候选：改为服务端搜索（默认前 CANDIDATE_LIMIT 条 + 键入 300ms 防抖下发 `q`）。
    *
    * 原页是 `useInstances()` 无门控地随页面取数、并在弹窗里把整份列表（千级：大档 1200）铺成勾选项，

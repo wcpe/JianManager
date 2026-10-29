@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import zh from './zh.json'
 import en from './en.json'
 
-/**
- * audit.actions 中英映射完整性（FR-303）。
+/** 
+ * audit.actions 中英映射完整性。
  * 两语言的键集合必须完全一致，防止后续 FR 只加一侧翻译造成中英漂移；
  * 值必须是非空字符串（审计页直接展示，空串会渲染成空白标签）。
  */
@@ -14,7 +14,7 @@ function getActions(resource: unknown): Record<string, unknown> {
   return audit?.actions ?? {}
 }
 
-describe('audit.actions 中英映射完整性（FR-303）', () => {
+describe('audit.actions 中英映射完整性', () => {
   const zhActions = getActions(zh)
   const enActions = getActions(en)
 

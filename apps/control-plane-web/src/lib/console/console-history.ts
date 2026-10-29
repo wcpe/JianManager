@@ -5,8 +5,8 @@ import { fetchLogCursorPage } from '@/api/logs'
 import { createLogLineParser, type LogLine, type LogStream } from './console-log-line'
 import type { LogEntry } from './console-log-types'
 
-/**
- * 控制台历史日志回溯（FR-419，spec §4.3）。
+/** 
+ * 控制台历史日志回溯（spec §4.3）。
  *
  * 数据源分层（spec §4.1）：内存环形缓冲覆盖最新输出，数据库活日志覆盖更早，归档 NDJSON
  * 本批不做。未溢出时接缝是会话开始；溢出后接缝推进到最早保留行的浏览器接收时刻，故被挤掉
@@ -19,7 +19,7 @@ import type { LogEntry } from './console-log-types'
 /** 单页行数。比页码分页默认的 50 大：回溯是「一屏一屏往上翻」，页太小会把滚动切碎成一串请求。 */
 export const HISTORY_PAGE_SIZE = 200
 
-/**
+/** 
  * 一次「跳到时间点」最多连续回溯多少页。
  *
  * 跳转实现为「一直往更早翻直到覆盖目标时刻」，以保证已加载历史始终是**连续无洞**的一段
@@ -28,7 +28,7 @@ export const HISTORY_PAGE_SIZE = 200
  */
 export const HISTORY_JUMP_MAX_PAGES = 30
 
-/**
+/** 
  * 启动完成标记（spec §4.3「跳到本次启动」）。
  *
  * 只认 MC/Paper 服务端启动完成那一行的稳定特征 `Done (12.345s)!`；
@@ -36,7 +36,7 @@ export const HISTORY_JUMP_MAX_PAGES = 30
  */
 const STARTUP_DONE = /\bDone\s*\([^)]*\)!/
 
-/**
+/** 
  * 去库里定位启动行时用的 LIKE 关键字。
  *
  * DB 侧只有 `message LIKE %kw%`（无正则），故用标记的稳定前缀粗筛，
@@ -44,7 +44,7 @@ const STARTUP_DONE = /\bDone\s*\([^)]*\)!/
  */
 export const STARTUP_KEYWORD = 'Done ('
 
-/**
+/** 
  * 历史行的 seq 一律为**负数**：`-1` 是最新的历史行，越早越负。
  *
  * 环形缓冲的 seq 从 0 起单调递增，负号使两段天然不冲突且排序即时间序
@@ -55,7 +55,7 @@ export function historySeqAt(index: number, total: number): number {
   return index - total
 }
 
-/**
+/** 
  * DB 行 → 渲染行。
  *
  * 走与实时输出**同一个解析器**（spec §1.2）：同一条日志无论来自 WS 还是数据库，拆出的
@@ -76,7 +76,7 @@ export function historyRowsToLines(rows: readonly LogEntry[]): LogLine[] {
   )
 }
 
-/**
+/** 
  * 合并数据库历史与内存缓冲。
  *
  * 缓冲溢出后，回溯接缝取浏览器收到的最早保留行，而 DB 的写入时间可能早几个毫秒；
@@ -111,7 +111,7 @@ export type HistoryJumpOutcome = 'reached' | 'exhausted' | 'capped' | 'failed'
 
 export interface UseConsoleHistoryOptions {
   instanceId: number
-  /**
+  /** 
    * 内存缓冲历史接缝 ISO；会话尚未建立时可为 undefined，首次请求前兜底为「现在」。
    *
    * **冻结语义**：本 hook 只在实例切换时跟随该 prop 更新内部接缝，同一实例内
@@ -136,12 +136,12 @@ export interface ConsoleHistoryState {
   loadEarlier: () => void
   /** 一直回溯到覆盖目标时刻（或到最早 / 撞页数上限 / 失败）。 */
   loadUntil: (targetIso: string) => Promise<HistoryJumpOutcome>
-  /**
+  /** 
    * 去库里问「最近一次启动完成行在什么时候」（spec §4.3：缓冲内找不到则按时间条件查库）。
    * 返回 null 表示库里也没有。
    */
   findStartupTime: () => Promise<string | null>
-  /**
+  /** 
    * 已加载历史里**第一条不早于**目标时刻的行的 seq；目标晚于全部历史则返回 null
    * （落点在内存缓冲里，由调用方决定怎么定位）。
    *
@@ -159,7 +159,7 @@ interface FetchPageResult {
   ok: boolean
 }
 
-/**
+/** 
  * 已加载历史 + 它所属的实例与回溯接缝（同上）。
  *
  * `key` 与状态绑在一起，使「实例或接缝变了 → 已加载的行作废」可以**派生**出来，

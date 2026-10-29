@@ -35,7 +35,7 @@ function installSessionStoragePolyfill() {
   Object.defineProperty(globalThis, 'sessionStorage', { value: store, configurable: true })
 }
 
-describe('explorer-clipboard-bus（FR-377）', () => {
+describe('explorer-clipboard-bus', () => {
   beforeEach(() => {
     installSessionStoragePolyfill()
     resetClipboardBusForTests()

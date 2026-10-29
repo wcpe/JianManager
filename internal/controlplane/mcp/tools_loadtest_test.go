@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-398：压测编排工具的契约测试——容量不足不物化、双向 scope 处置、报告护栏、重试幂等键透传。
+// 压测编排工具的契约测试——容量不足不物化、双向 scope 处置、报告护栏、重试幂等键透传。
 
 // fixedCapacityProvider 返回固定容量快照，便于构造「容量不足」与「节点可见性」场景。
 type fixedCapacityProvider struct {

@@ -18,11 +18,11 @@ export interface StoppedLogsViewProps {
   renderLink?: (args: { to: string; className?: string; children: ReactNode }) => ReactNode
 }
 
-/**
- * 停机/未运行实例的历史日志回放（FR-345）：从 DB 拉该实例最近日志只读展示，替代空白「实例未运行」占位。
+/** 
+ * 停机/未运行实例的历史日志回放：从 DB 拉该实例最近日志只读展示，替代空白「实例未运行」占位。
  * 令关服过程/崩溃现场在停机态仍可见（DB 持久，重连/切页签/刷新不丢），并链到完整历史（搜索/时间筛选/导出）。
  *
- * FR-417 补复制按钮：这里正是「服务器起不来，把关服/崩溃日志发给别人看」的现场，
+ *补复制按钮：这里正是「服务器起不来，把关服/崩溃日志发给别人看」的现场，
  * 而原先只能鼠标拖选——300 行日志靠拖选是最难受的场景之一。
  *
  * 取数与路由由 props 注入（ADR-103）：本视图不触达 api / 路由。
@@ -56,7 +56,7 @@ export function StoppedLogsView({
   }
 
   return (
-    // h-full：FR-415 起本视图与命令栏同处一个 flex 列中，不撑满就会在自己下方留一大片空白。
+    // h-full：起本视图与命令栏同处一个 flex 列中，不撑满就会在自己下方留一大片空白。
     <div className="flex h-full min-h-[400px] flex-col rounded-lg bg-[#1a1b26]">
       <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5 text-xs">
         <span className="truncate text-gray-300">{t('instanceDetail.stoppedShowingHistory', { status })}</span>

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// TestInitialize_FallsBackAcrossVersions 服务端拒绝新版本时必须降级重试（FR-517）。
+// TestInitialize_FallsBackAcrossVersions 服务端拒绝新版本时必须降级重试。
 //
 // 不同上游实现的版本差异很大：只声明一版时，老服务端会直接拒绝握手，
 // 而表现是「探测显示协议错误」——真实原因只是版本不匹配。

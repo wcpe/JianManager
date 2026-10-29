@@ -9,8 +9,8 @@ interface NodePMConfigSectionProps {
   active?: boolean
 }
 
-/**
- * 节点包管理器与 registry 配置子区的取数接线层（FR-306）。
+/** 
+ * 节点包管理器与 registry 配置子区的取数接线层。
  * 保存成功/失败的回执在此给出（视图不依赖 toast 实现）。
  */
 export default function NodePMConfigSection({ nodeId, active = true }: NodePMConfigSectionProps) {

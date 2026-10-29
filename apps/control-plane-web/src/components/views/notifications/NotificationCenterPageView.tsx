@@ -1,11 +1,11 @@
-/**
+/** 
  * @file NotificationCenterPageView：统一通知中心页的受控视图，通知流取数、标记已读与三处跳转由应用容器负责。
  * @input lib/threshold（StatusLevel）、lib/utils（cn）、布局层 PageShell/PageHeader、
  *         Panel/Button/StatusBadge 原语、翻译上下文
  * @output NotificationCenterPageView、NotificationCenterPageViewProps、NotificationFeedItem、
  *         NotificationFeedPage、NotificationFeedQuery、NotificationFeedSource、NotificationFeedLevel
  * @sync apps/control-plane-web/src/pages/NotificationCenterPage.tsx、apps/control-plane-web/src/pages/NotificationCenterPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-216 统一通知模型、FR-226 通知-任务联动）
+ * @since（组件受控化迁包；原页统一通知模型通知-任务联动）
  */
 import { useTranslation } from 'react-i18next'
 import { Bell } from 'lucide-react'
@@ -23,7 +23,7 @@ export type NotificationFeedSource = 'message' | 'alert'
 /** 统一通知级别（站内信四档，告警三档已就近映射到此）。 */
 export type NotificationFeedLevel = 'info' | 'success' | 'warning' | 'error'
 
-/**
+/** 
  * 单条统一通知（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/notification-feed` 的 `FeedItem`：
@@ -51,7 +51,7 @@ export interface NotificationFeedPage {
   total: number
 }
 
-/**
+/** 
  * 通知流查询参数（与应用侧 `FeedQuery` 同形）。
  * 任一字段变化都会触发重新取数，故整份状态由容器持有，视图只回传补丁。
  */
@@ -68,7 +68,7 @@ export interface NotificationFeedQuery {
   pageSize?: number
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不碰路由、不弹 toast**。
  * - 通知流数据经 props 注入（容器调 `useNotificationFeed()`），**含其加载/错误态**——
  *   取数失败若与「没有消息」共用一个分支，用户会把故障读成「我没收到通知」；
@@ -95,7 +95,7 @@ export interface NotificationCenterPageViewProps {
   onMarkAllRead: () => void
   /** 标记单条已读。 */
   onMarkRead: (item: NotificationFeedItem) => void
-  /** 任务类站内信「查看任务」：跳任务中心并定位该任务（FR-226）。 */
+  /** 任务类站内信「查看任务」：跳任务中心并定位该任务。 */
   onOpenTask: (taskId: string) => void
   /** 告警条目「查看告警详情」：跳告警页（确认/认领等深处置仍在告警页）。 */
   onOpenAlertDetail: () => void
@@ -115,8 +115,8 @@ function feedLevelStatus(level: NotificationFeedLevel): StatusLevel {
   }
 }
 
-/**
- * 通知中心页（FR-216，见 ADR-048）。
+/** 
+ * 通知中心页（见 ADR-048）。
  * 统一消费站内信（定向消息）+ 告警事件（系统警报）合并的通知流：
  * 按类型[消息/告警]筛选、仅未读、关键字查询、分页、行内/全部标记已读。
  * 告警条目附「查看告警详情」入口跳 /alerts（确认/认领等深处置仍在告警页）。
@@ -313,7 +313,7 @@ function NotificationRow({
             {t('notificationCenter.markRead')}
           </Button>
         )}
-        {/* 任务类站内信（含 taskId）→ 一键跳任务中心并定位该任务（FR-226 联动）。 */}
+        {/* 任务类站内信（含 taskId）→ 一键跳任务中心并定位该任务（联动）。 */}
         {item.source === 'message' && taskId && (
           <Button type="button" variant="link" size="xs" className="h-auto p-0" onClick={() => onOpenTask(taskId)}>
             {t('notificationCenter.viewTask')}

@@ -14,7 +14,7 @@ export interface SessionsTabViewCounts {
   byStatus: Record<string, number>
 }
 
-/**
+/** 
  * 列表行所需的最小会话结构。
  * 与应用侧 `BotStressSession` 结构兼容，包内不反向依赖应用契约（ADR-103）。
  */
@@ -27,7 +27,7 @@ export interface SessionsTabViewItem {
   counts: SessionsTabViewCounts
 }
 
-/**
+/** 
  * 压测会话列表 tab 的注入契约（受控视图，ADR-103 b 范式）。
  *
  * 取数、翻页/URL 同步、路由跳转、启停 mutation 与 toast 全在容器；
@@ -58,9 +58,9 @@ export interface SessionsTabViewProps {
   stopPending?: boolean
 }
 
-/**
- * 压测会话列表 tab：搜索草稿 + 列表 + 状态分布 + 分页（FR-371）。
- * 详情页路由 `/bots/sessions/:id` 由 FR-372 承接；此处只暴露 `onOpenSession` 回调。
+/** 
+ * 压测会话列表 tab：搜索草稿 + 列表 + 状态分布 + 分页。
+ * 详情页路由 `/bots/sessions/:id` 由承接；此处只暴露 `onOpenSession` 回调。
  */
 export function SessionsTabView({
   data,

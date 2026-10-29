@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// failingDownloadWorker 下载核心必失败的 worker 替身（FR-319 失败路径）。
+// failingDownloadWorker 下载核心必失败的 worker 替身（失败路径）。
 type failingDownloadWorker struct {
 	fakeProvisionWorker
 }
@@ -66,7 +66,7 @@ func waitTaskTerminal(t *testing.T, taskSvc *TaskService, taskID string) model.T
 	return model.Task{}
 }
 
-// TestProvisionServerAsync_SucceedsViaTask 异步搭建：立即返回实例+任务，后台完成任务终态 succeeded（FR-319）。
+// TestProvisionServerAsync_SucceedsViaTask 异步搭建：立即返回实例+任务，后台完成任务终态 succeeded。
 func TestProvisionServerAsync_SucceedsViaTask(t *testing.T) {
 	svc, taskSvc, node, done := newFR319Harness(t, &fakeProvisionWorker{})
 	defer done()
@@ -84,7 +84,7 @@ func TestProvisionServerAsync_SucceedsViaTask(t *testing.T) {
 }
 
 // TestProvisionServerAsync_FailureVisible 下载失败：任务 failed 带错误链 + 实例 statusReason
-// 标注「搭建未完成」——空壳实例为什么不可用一目了然（FR-319 核心验收）。
+// 标注「搭建未完成」——空壳实例为什么不可用一目了然（核心验收）。
 func TestProvisionServerAsync_FailureVisible(t *testing.T) {
 	svc, taskSvc, node, done := newFR319Harness(t, &failingDownloadWorker{})
 	defer done()
@@ -103,7 +103,7 @@ func TestProvisionServerAsync_FailureVisible(t *testing.T) {
 	require.True(t, strings.HasPrefix(got.StatusReason, "搭建未完成："), "statusReason 应标注空壳原因，实际 %q", got.StatusReason)
 }
 
-// TestStart_BlockedWhileProvisionInFlight 核心还在下载（provision 任务未终态）时启动被拒（FR-319）。
+// TestStart_BlockedWhileProvisionInFlight 核心还在下载（provision 任务未终态）时启动被拒。
 // 真机复现：异步化后实例秒回 STOPPED 可点启动，点了得 Invalid or corrupt jarfile。
 func TestStart_BlockedWhileProvisionInFlight(t *testing.T) {
 	db := newInstanceTestDB(t)

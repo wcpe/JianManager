@@ -10,10 +10,10 @@ import type { RollingControlAction, RollingOp } from '@/lib/instances/instance-r
 export type { RollingControlAction, RollingError, RollingOp, RollingState } from '@/lib/instances/instance-rolling'
 export { isRollingActive } from '@/lib/instances/instance-rolling'
 
-/**
- * 实例滚动/分批/灰度编排（FR-457）。
+/** 
+ * 实例滚动/分批/灰度编排。
  *
- * 相比一次性扇出的 `POST /instances/batch`（FR-058），编排会话支持批大小、批间隔、
+ * 相比一次性扇出的 `POST /instances/batch`，编排会话支持批大小、批间隔、
  * 失败即停、按比例灰度，并把进度持久化（游标/计数/状态）——暂停/继续/取消在 CP 重启后仍可恢复。
  * 契约见 `docs/API.md`（`/instances/rolling`）。
  */

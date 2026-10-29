@@ -36,7 +36,7 @@ func newFR330Server(t *testing.T, instanceUUID, workDirName string) (*Server, st
 	return srv, workDir
 }
 
-// TestDownloadCore_CompositeKeyHitSkipsNetwork 组合键缓存（FR-330）：sha256 为空的下载源
+// TestDownloadCore_CompositeKeyHitSkipsNetwork 组合键缓存：sha256 为空的下载源
 // （Sponge Maven 等）按 core|version|build 组合键缓存。首次下载入缓存；删工作目录文件、
 // 关掉下载源后再次请求同组合键，应命中缓存秒拷、完全不走网络，且响应带 cache_hit。
 func TestDownloadCore_CompositeKeyHitSkipsNetwork(t *testing.T) {
@@ -106,7 +106,7 @@ func TestDownloadCore_IndeterminateKeyNotReusable(t *testing.T) {
 	assert.Equal(t, int32(2), hits.Load(), "不可冻结的 latest 必须每次重新下载")
 }
 
-// TestDownloadCore_CorruptCacheEntryRedownloads 命中校验回退（FR-330）：缓存 blob 损坏时
+// TestDownloadCore_CorruptCacheEntryRedownloads 命中校验回退：缓存 blob 损坏时
 // 不得把脏内容交付给实例——作废条目、回退远程下载，并用新下载内容重建缓存。
 func TestDownloadCore_CorruptCacheEntryRedownloads(t *testing.T) {
 	const uuid = "79797979-7979-7979-7979-797979797979"
@@ -157,7 +157,7 @@ func TestDownloadCore_CorruptCacheEntryRedownloads(t *testing.T) {
 	assert.True(t, resp3.CacheHit, "重下后缓存应已重建")
 }
 
-// TestDownloadCore_ConcurrentSameCoreSingleflight 并发单飞（FR-330）：多个实例并发搭建同一
+// TestDownloadCore_ConcurrentSameCoreSingleflight 并发单飞：多个实例并发搭建同一
 // 核心（同缓存键）时只允许一次远程下载，其余等待领队完成后从缓存取，互不踩踏。
 func TestDownloadCore_ConcurrentSameCoreSingleflight(t *testing.T) {
 	tmp := t.TempDir()

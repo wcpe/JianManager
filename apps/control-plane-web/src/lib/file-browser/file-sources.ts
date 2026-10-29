@@ -1,5 +1,5 @@
-/**
- * 文件浏览器数据源工厂（FR-213 / FR-214 / FR-250）。
+/** 
+ * 文件浏览器数据源工厂。
  *
  * 把「实例工作目录 / 本地发布草稿 / 客户端分发制品」三种形态适配成与后端解耦的
  * {@link FileBrowserSource}，供共享 `FileBrowser` 复用其浏览 / 预览 / 降级 / 高亮能力。
@@ -25,7 +25,7 @@ function baseName(path: string): string {
   return segs.at(-1) ?? path
 }
 
-// ── 实例工作目录（FR-213）：懒加载分层 ────────────────────────────────
+// ── 实例工作目录：懒加载分层 ────────────────────────────────
 
 /** 实例文件端点最小接口（应用侧注入 `@/api/files` 实现）。 */
 export interface InstanceFileApi {
@@ -37,7 +37,7 @@ export interface InstanceFileApi {
   downloadFile: (instanceId: number, path: string) => void
 }
 
-/**
+/** 
  * 构建实例工作目录数据源（只读浏览 / 预览 / 下载）。
  * 懒加载分层：点目录展开时拉该层。
  */
@@ -67,7 +67,7 @@ export function createInstanceFileSource(instanceId: number, api: InstanceFileAp
   }
 }
 
-// ── 本地发布草稿（FR-250）：零网络 ───────────────────────────────────
+// ── 本地发布草稿：零网络 ───────────────────────────────────
 
 /** 本地草稿数据源的最小输入：目标相对路径 + 浏览器内 File（尚未上传）。 */
 export interface LocalDraftFile {
@@ -87,7 +87,7 @@ function triggerLocalDownload(file: File, filename: string): void {
   URL.revokeObjectURL(url)
 }
 
-/**
+/** 
  * 构建本地发布草稿的文件浏览器数据源（扁平全量）。
  *
  * 预览从浏览器内 `File` 直接读（此时文件尚未上传、无 sha256）；二进制 / 超大判定
@@ -119,7 +119,7 @@ export function localDraftSource(files: LocalDraftFile[]): FileBrowserSource {
   }
 }
 
-// ── 客户端分发（FR-214）：扁平全量 + 管理面端点 ───────────────────────
+// ── 客户端分发：扁平全量 + 管理面端点 ───────────────────────
 
 /** 客户端分发数据源的最小文件输入（版本详情 / 发布草稿各自映射到此）。 */
 export interface ClientDistFile {
@@ -156,7 +156,7 @@ export interface ClientDistSourceMessages {
   artifactPreviewFailed?: string
 }
 
-/**
+/** 
  * 构建客户端分发文件浏览器数据源（扁平全量）。
  *
  * 缺制品 sha（如 `sync=ignore` 的占位文件无 artifact）→ readContent 返回错误占位、download 不触发。

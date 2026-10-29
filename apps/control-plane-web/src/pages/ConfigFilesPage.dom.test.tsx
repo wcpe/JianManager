@@ -12,8 +12,8 @@ import ConfigFilesPage from './ConfigFilesPage'
 // toast 用 spy 替身：真实 Toaster 不在本页渲染树里，直接断言调用参数更稳。
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
 
-/**
- * 分层配置·配置文件列表页（FR-529）的 DOM 测试。
+/** 
+ * 分层配置·配置文件列表页的 DOM 测试。
  *
  * 这些端点（`/config-files`）的假后端 handler 由本文件就地注册（`server.use`），
  * 而不是加进 `@jianmanager/devmock` 的域簇：交付/纳管两套页面正在同一份域簇里开发，
@@ -49,7 +49,7 @@ function renderPage() {
   return { user }
 }
 
-describe('ConfigFilesPage（FR-529 配置文件列表）', () => {
+describe('ConfigFilesPage（配置文件列表）', () => {
   it('渲染列表：名称、格式、层数、更新时间', async () => {
     useDefaultHandlers()
     renderPage()
@@ -176,7 +176,7 @@ describe('ConfigFilesPage（FR-529 配置文件列表）', () => {
   })
 })
 
-/**
+/** 
  * 清空元数据字段必须真的把字段发给后端。
  *
  * 回归背景：后端用三态语义「字段缺席=不改、显式空串=清空」，页面若按真值条件展开

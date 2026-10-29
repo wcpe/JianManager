@@ -1,7 +1,7 @@
 import type { DbColumn, DbRowsResult } from './db-contracts'
 
-/**
- * 数据库行浏览的纯逻辑（FR-084 / BUG-009）。
+/** 
+ * 数据库行浏览的纯逻辑（BUG-009）。
  *
  * 后端 Go 把空结果的 nil 切片序列化为 JSON `null`（而非 `[]`），
  * 因此 `DbRowsResult.rows` / `columns` 在「空表 / 过滤无命中 / 加载首帧」时可能是 `null`。
@@ -21,7 +21,7 @@ export function normalizeRows(
   return data?.rows ?? []
 }
 
-/**
+/** 
  * 是否渲染「空行」占位：尚无数据、或当前页归一后行数为 0 时为 true。
  * 关键：不得对 `data.rows` 裸读 `.length`——`rows` 可能为 `null`（见上）。
  */
@@ -32,7 +32,7 @@ export function shouldShowEmptyRow(data: DbRowsResult | undefined): boolean {
 /** 主键类列的候选列名（GORM 表几乎都是 `id`）。 */
 const ID_COLUMNS = ['id', 'ID'] as const
 
-/**
+/** 
  * 为当前页每行算出稳定 key（与行内容一一对应，而不是数组下标）。
  *
  * 为什么不能继续用下标：排序（点列头）、翻页、过滤都会让「同一位置」换成另一条记录，

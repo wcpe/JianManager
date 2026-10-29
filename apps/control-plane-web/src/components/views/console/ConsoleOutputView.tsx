@@ -29,16 +29,16 @@ import { estimateRowLines } from '@/lib/console/console-wrap'
 import type { WrapWidthSpec } from '@/lib/console/console-wrap'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 
-/**
- * 控制台输出区（FR-415，spec §2.1；ADR-086）：**只读** DOM 虚拟列表。
+/** 
+ * 控制台输出区（spec §2.1；ADR-086）：**只读** DOM 虚拟列表。
  *
  * 弃 xterm 的直接动因是 canvas 上没有行节点——按级别过滤、行级悬停复制、
- * 异常堆栈折叠、行级高亮（FR-417/418）在 canvas 上一条都做不到。代价是滚动性能、
+ * 异常堆栈折叠、行级高亮（418）在 canvas 上一条都做不到。代价是滚动性能、
  * 宽字符、跨行选区要自己保证（ADR-086 代价 2/3）。
  *
  * 只渲染可视窗口 + 上下各 12 行 overscan；行高固定以简化定位（`seq → 下标 → offsetTop`）。
  *
- * FR-418 在此之上加两件事（spec §3）：
+ *在此之上加两件事（spec §3）：
  * - **锚点选区**：跨行选区只记 `seq` 区间、文本从行缓冲取，规避「拖出视口即断」
  *   （屏幕外的行根本没有 DOM 节点，见 ADR-086 代价 2）；同一行内不接管，交给原生字符级选区
  * - **堆栈块折叠**：异常头 + 其全部帧折叠成一行摘要，避免一个 NPE 把有用日志挤出整屏
@@ -63,9 +63,9 @@ function consoleRowHeight(fontSize: number): number {
   return Math.round(fontSize * ROW_HEIGHT_RATIO)
 }
 
-/** 输出区的命令式取值口（FR-417「复制当前可见屏」需要知道屏上到底是哪几行）。 */
+/** 输出区的命令式取值口（「复制当前可见屏」需要知道屏上到底是哪几行）。 */
 export interface ConsoleOutputHandle {
-  /**
+  /** 
    * 当前**真正在视口内**的行（不含 overscan）。
    *
    * 从滚动位置反算而非读 DOM：DOM 里躺着 overscan 的 24 行，照搬会把用户看不见的行
@@ -76,21 +76,21 @@ export interface ConsoleOutputHandle {
 
 export interface ConsoleOutputViewProps {
   lines: readonly LogLine[]
-  /** 因环形缓冲溢出被丢弃的行数；>0 时顶部挂「更早日志需回溯」锚点（FR-419 据此加载）。 */
+  /** 因环形缓冲溢出被丢弃的行数；>0 时顶部挂「更早日志需回溯」锚点（据此加载）。 */
   droppedCount: number
   fontSize: number
   /** 搜索命中（全量）；为空即不高亮。 */
   matches?: readonly ConsoleSearchMatch[]
   /** 当前命中项，用于区分「当前」与「其余」高亮，并驱动滚动定位。 */
   currentMatch?: ConsoleSearchMatch
-  /**
-   * 级别过滤是否生效（FR-417）：空态文案据此区分「本来就没输出」与
+  /** 
+   * 级别过滤是否生效：空态文案据此区分「本来就没输出」与
    * 「被过滤器滤空了」——后者说成「暂无输出」会让用户以为服务端没在说话。
    */
   filterActive?: boolean
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void
-  /**
-   * 锚点选区文本变更回调（FR-418）。
+  /** 
+   * 锚点选区文本变更回调。
    *
    * 锚点模式会关掉原生选区，`window.getSelection()` 因此为空——外层的「复制选区」
    * 必须改从这里拿文本，否则锚点选完再走右键菜单只会复制到空串。
@@ -98,18 +98,18 @@ export interface ConsoleOutputViewProps {
   onSelectionChange?: (text: string) => void
   /** 「选区存为 .log」的文件名前缀（外层给实例标识）。 */
   logNamePrefix?: string
-  /**
-   * 滚到顶时请求更早一页（FR-419，spec §4.3）。
+  /** 
+   * 滚到顶时请求更早一页（spec §4.3）。
    *
    * 不传即完全不出现回溯横幅与顶部触发——`/super`、`/director` 等只看实时输出的宿主
    * 不该被拉进历史回溯的语义里。去重与「已到最早」的判定在调用方（回溯控制器）做，
    * 本组件只负责「什么时候该问一声」。
    */
   onLoadEarlier?: () => void
-  /** 回溯状态（FR-419），驱动顶部横幅；与 onLoadEarlier 一起给。 */
+  /** 回溯状态，驱动顶部横幅；与 onLoadEarlier 一起给。 */
   history?: ConsoleHistoryBanner
-  /**
-   * 定位目标（FR-419「跳到本次启动」/「跳到时间…」）。
+  /** 
+   * 定位目标（「跳到本次启动」/「跳到时间…」）。
    * 带 token 而非只给 seq：连续两次跳到同一行时 seq 不变，靠 token 变化重新触发定位。
    */
   jumpTarget?: { seq: number; token: number }
@@ -117,7 +117,7 @@ export interface ConsoleOutputViewProps {
   historyActions?: ReactNode
   /** 沉浸工作台使用中性深色输出表面，避免沿用普通控制台的靛蓝底。 */
   immersive?: boolean
-  /**
+  /** 
    * 自动换行（可用性增强）：长行在容器宽度内折行，不再横向滚动。
    *
    * 实现是**变高虚拟化**：行高 = 估算行数 × rowHeight，估算用字符分类宽度纯数学
@@ -125,7 +125,7 @@ export interface ConsoleOutputViewProps {
    * 估算只影响未渲染行的滚动条数学。关（默认）时走原等高路径，行为零变化。
    */
   wrap?: boolean
-  /**
+  /** 
    * 提示通道：视图算好文案交外壳展示（本包不弹 toast）。
    * 目前用于「复制结果」回执——成功与失败都必须有回执（HTTP 非安全上下文下连
    * execCommand 兜底也可能失败，FIX-1/FIX-2）。
@@ -134,14 +134,14 @@ export interface ConsoleOutputViewProps {
   ref?: Ref<ConsoleOutputHandle>
 }
 
-/** 回溯横幅所需状态（FR-419，spec §4.3：标明回溯到哪儿了 + 数据来自哪层）。 */
+/** 回溯横幅所需状态（spec §4.3：标明回溯到哪儿了 + 数据来自哪层）。 */
 export interface ConsoleHistoryBanner {
   loading: boolean
   /** 已到数据库最早一条：横幅必须明示「已是最早」，不得静默停住。 */
   exhausted: boolean
   /** 已从数据库回溯的行数。 */
   rowCount: number
-  /**
+  /** 
    * 内存环形缓冲里的行数。
    *
    * 由外层直接给而不是拿 `lines.length` 减：`lines` 是**级别过滤后**的行，
@@ -153,8 +153,8 @@ export interface ConsoleHistoryBanner {
   error?: string | null
 }
 
-/**
- * 距顶多少像素就预取更早一页（FR-419）。
+/** 
+ * 距顶多少像素就预取更早一页。
  *
  * 不用「严格等于 0」：滚动到顶再等请求返回会让用户干等一屏空白，
  * 提前一屏左右开始取，视觉上就是「一直有内容」。
@@ -213,7 +213,7 @@ function styledSpan(key: string, segment: AnsiSegment, children: ReactNode): Rea
   )
 }
 
-/**
+/** 
  * 正文渲染：ANSI 片段 × 搜索命中。
  *
  * 两套区间（着色片段、命中区间）互不对齐，故取**并集切点**逐段渲染，
@@ -289,7 +289,7 @@ function ConsoleRow({
   wrap?: boolean
   matches: readonly ConsoleSearchMatch[]
   currentMatch: ConsoleSearchMatch | undefined
-  /** 本行是某个堆栈块的异常头时给出该块（FR-418，spec §3.2）。 */
+  /** 本行是某个堆栈块的异常头时给出该块（spec §3.2）。 */
   block?: StackBlock
   collapsed?: boolean
   selected?: boolean
@@ -415,7 +415,7 @@ export function ConsoleOutputView({
   const rowHeight = consoleRowHeight(fontSize)
   const rowsRef = useRef<HTMLDivElement>(null)
 
-  // ---- 堆栈块折叠（FR-418，spec §3.2）----
+  // ---- 堆栈块折叠（spec §3.2）----
   const [expandedBlocks, setExpandedBlocks] = useState<ReadonlySet<number>>(() => new Set())
   /** 「只看这段」：把选区区间当临时过滤器（spec §3.1）。 */
   const [rangeFilter, setRangeFilter] = useState<SeqRange | null>(null)
@@ -559,7 +559,7 @@ export function ConsoleOutputView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerRef, currentSeq, heightAt, offsetAt, rowHeight])
 
-  // ---- 历史回溯的滚动锚定（FR-419，spec §4.3）----
+  // ---- 历史回溯的滚动锚定（spec §4.3）----
   //
   // 虚拟列表 prepend 的经典坑：顶部插进 K 行后，同一个 scrollTop 指向的内容整体下移 K 行，
   // 视口会「跳」到用户刚看的位置之上，读日志的人瞬间失去上下文。
@@ -585,7 +585,7 @@ export function ConsoleOutputView({
     el.dispatchEvent(new Event('scroll'))
   }, [containerRef, offsetAt, rows])
 
-  // ---- 定位到指定行（FR-419「跳到本次启动」/「跳到时间…」）----
+  // ---- 定位到指定行（「跳到本次启动」/「跳到时间…」）----
   const jumpSeq = jumpTarget?.seq
   const jumpToken = jumpTarget?.token
   useLayoutEffect(() => {
@@ -609,7 +609,7 @@ export function ConsoleOutputView({
     onScroll()
     const el = containerRef.current
     if (!el) return
-    // 接近顶部即预取更早一页（FR-419）。是否真发请求由回溯控制器判定（在途/已到最早时空转），
+    // 接近顶部即预取更早一页。是否真发请求由回溯控制器判定（在途/已到最早时空转），
     // 故这里可以放心每次滚动都问一声。
     if (onLoadEarlier && el.scrollTop <= EARLIER_TRIGGER_PX) onLoadEarlier()
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_EPSILON
@@ -626,9 +626,9 @@ export function ConsoleOutputView({
 
   const visible = rows.slice(range.start, range.end)
 
-  // FR-417：把「屏上是哪几行」暴露给复制菜单。从滚动位置反算而非读 DOM——
+  // 把「屏上是哪几行」暴露给复制菜单。从滚动位置反算而非读 DOM——
   // DOM 里还躺着上下各 12 行 overscan，照搬会把用户看不见的行也复制走。
-  // 取材用 rows 而非 lines：折叠块（FR-418）的帧不在屏上，「复制可见屏」不该把它们算进去。
+  // 取材用 rows 而非 lines：折叠块的帧不在屏上，「复制可见屏」不该把它们算进去。
   useImperativeHandle(
     ref,
     () => ({
@@ -682,10 +682,10 @@ export function ConsoleOutputView({
     setHeightOverrides((prev) => (prev.size > 0 ? new Map() : prev))
   }, [crossW, rowHeight, wrap])
 
-  // ---- 锚点选区（FR-418，spec §3.1）----
+  // ---- 锚点选区（spec §3.1）----
   const selection = useSeqSelection()
   const selectionRange = selection.range
-  /**
+  /** 
    * 进行中的拖拽。
    *
    * `started=false` 表示「按下了但还没跨行」——此时**不进入锚点模式**，
@@ -697,7 +697,7 @@ export function ConsoleOutputView({
   /** 仅在锚点拖拽进行中置位：据此关掉原生选区（拖完立刻恢复，否则行内字符选取就废了）。 */
   const [anchorDragging, setAnchorDragging] = useState(false)
 
-  /**
+  /** 
    * 屏幕纵坐标 → 行 seq。
    *
    * 用容器几何换算而不是 `event.target.closest()`：自动滚动时指针是静止的、行在动，
@@ -770,7 +770,7 @@ export function ConsoleOutputView({
     [autoScroll, containerRef, selection, seqAtClientY],
   )
 
-  /**
+  /** 
    * 拖拽期间的 move/up 挂在 window 上：松手常发生在容器外（甚至窗口外），
    * 只听容器事件会留下一个「永远没结束」的拖拽和一个还在跑的自动滚动定时器。
    * 用 latest-ref 转发，避免 rows 每变一次就重绑一遍监听。
@@ -965,7 +965,7 @@ export function ConsoleOutputView({
             {t('instanceDetail.consoleEarlierDropped', { count: droppedCount })}
           </div>
         )}
-        {/* 「只看这段」横幅（FR-418）：临时过滤器必须显式可退出，否则用户会以为日志断流了。 */}
+        {/* 「只看这段」横幅：临时过滤器必须显式可退出，否则用户会以为日志断流了。 */}
         {rangeFilter && (
           <div
             data-testid="console-range-filter"
@@ -1012,7 +1012,7 @@ export function ConsoleOutputView({
         )}
       </div>
 
-      {/* 选区工具条（FR-418，spec §3.1）：操作对象是 seq 区间，不是 DOM 选区。 */}
+      {/* 选区工具条（spec §3.1）：操作对象是 seq 区间，不是 DOM 选区。 */}
       {selectionRange && (
         <div
           data-testid="console-selection-toolbar"

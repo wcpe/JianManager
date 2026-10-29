@@ -1,5 +1,5 @@
-/**
- * 运行态漂移（FR-471）：判定与字段归一。
+/** 
+ * 运行态漂移：判定与字段归一。
  *
  * 语义：`runtimeDriftPid > 0` 表示该实例**工作目录下存在未被平台纳管的活进程**——
  * 典型场景是运维用 tmux/脚本手工启服，平台 DB 记为 STOPPED 而磁盘实际在跑。
@@ -21,7 +21,7 @@ export interface RuntimeDriftInfo {
   cmdline?: string
 }
 
-/**
+/** 
  * 是否存在运行态漂移：唯一判据是 `runtimeDriftPid > 0`。
  * 后端对无漂移实例写 0，故 0 与缺省同义——用真值判断会把合法 PID 之外的 0 误当「有漂移」，
  * 判定收敛在此函数，禁止在组件里散写 `instance.runtimeDriftPid` 的真值判断。

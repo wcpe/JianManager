@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// 外部 MCP 连接管理端点（FR-517 §6）。
+// 外部 MCP 连接管理端点（§6）。
 //
 // **全部仅平台管理员**：外部连接是平台级配置，且 V1 里所有连接的工具都只对管理员
 // 可见/可用（§9.1：无法证明上游按调用者区分身份时，任何共享连接都会把上游权限

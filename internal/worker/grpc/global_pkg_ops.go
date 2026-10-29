@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 全局包可视化管理（FR-307）：List 同步、Install 经任务中心异步（进度日志逐行上报）、
+// 全局包可视化管理：List 同步、Install 经任务中心异步（进度日志逐行上报）、
 // Remove 同步。全部操作经 pkgmgr.Manager 落托管全局目录 + 托管 .npmrc + 托管 Node PATH。
 
 // ListGlobalPackages 列出托管全局目录已装包（含 outdated 可更新标记，best-effort）。
@@ -30,7 +30,7 @@ func (s *Server) ListGlobalPackages(ctx context.Context, req *workerpb.ListGloba
 	return &workerpb.ListGlobalPackagesResponse{Success: true, Packages: out}, nil
 }
 
-// InstallGlobalPackage 安装/升级全局包（task_id 必填走任务中心异步，FR-307）。
+// InstallGlobalPackage 安装/升级全局包（task_id 必填走任务中心异步）。
 func (s *Server) InstallGlobalPackage(ctx context.Context, req *workerpb.InstallGlobalPackageRequest) (*workerpb.InstallGlobalPackageResponse, error) {
 	if s.pkgMgr == nil {
 		return &workerpb.InstallGlobalPackageResponse{Success: false, Error: "包管理器未启用"}, nil
@@ -66,7 +66,7 @@ func orLatest(v string) string {
 	return v
 }
 
-// RemoveGlobalPackage 卸载全局包（同步，FR-307）。
+// RemoveGlobalPackage 卸载全局包（同步）。
 func (s *Server) RemoveGlobalPackage(ctx context.Context, req *workerpb.RemoveGlobalPackageRequest) (*workerpb.RemoveGlobalPackageResponse, error) {
 	if s.pkgMgr == nil {
 		return &workerpb.RemoveGlobalPackageResponse{Success: false, Error: "包管理器未启用"}, nil

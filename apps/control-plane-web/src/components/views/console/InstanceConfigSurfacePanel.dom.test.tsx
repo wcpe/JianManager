@@ -7,7 +7,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { InstanceConfigSurfacePanel } from '@/components/views/console/InstanceConfigSurfacePanel'
 import type { ConfigSurfaceItem } from '@/lib/config-explorer/config-surface'
 
-/**
+/** 
  * 实例「关键配置」面板 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：加载/空态、分组分节、内联项可编辑、文件引用项只读预览与打开文件链接、
@@ -80,7 +80,7 @@ function renderPanel(props: Partial<ComponentProps<typeof InstanceConfigSurfaceP
   return { merged, onSave, renderLink }
 }
 
-describe('InstanceConfigSurfacePanel（FR-451 关键配置面板受控视图）', () => {
+describe('InstanceConfigSurfacePanel（关键配置面板受控视图）', () => {
   it('加载态显示加载文案。', () => {
     renderPanel({ isLoading: true, items: undefined })
     expect(screen.getByText('加载中…')).toBeInTheDocument()

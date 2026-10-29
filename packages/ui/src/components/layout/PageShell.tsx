@@ -2,8 +2,8 @@ import * as React from 'react'
 
 import { cn } from '../../lib/utils'
 
-/**
- * 页面壳（FR-502 阶段 3）：统一所有内容页的留白、纵向节奏与滚动模型。
+/** 
+ * 页面壳（阶段 3）：统一所有内容页的留白、纵向节奏与滚动模型。
  *
  * 依据《资源优先工作区》原型实测的三种壳态：
  *   default — 整页滚动（原型 `.page`）
@@ -27,7 +27,7 @@ export function PageShell({
       data-slot="page-shell"
       data-variant={variant}
       className={cn(
-        /*
+        /* 
           【为什么是「近左上加轻内边距 + 随视口伸缩」】此前写死 `px-[25px] py-[22px]`：
           在 1280 宽下边距占比尚可，但在 1920 上显得内容被挤在中间一块窄条里，
           而在 1024 上又偏紧。改成 clamp 后，小屏收到 16px（内容优先）、大屏最多 28px

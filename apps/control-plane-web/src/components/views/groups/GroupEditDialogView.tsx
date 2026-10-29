@@ -1,9 +1,9 @@
-/**
+/** 
  * @file GroupEditDialogView：编辑用户组（名称/描述 + 配额）的受控视图，提交经回调上报。
  * @input form-validation、FieldLabel/FieldError、Dialog/Button/滚动壳原语、翻译上下文
  * @output GroupEditDialogView、GroupEditDialogViewProps、GroupEditTarget、GroupEditValues
  * @sync apps/control-plane-web/src/pages/GroupsPage.tsx
- * @since FR-508（组件受控化迁包；原 FR-156，兑现 FR-003）
+ * @since（组件受控化迁包；原兑现）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -38,7 +38,7 @@ export interface GroupEditValues {
   quota: { maxInstances: number; maxBots: number; maxStorageMb: number }
 }
 
-/**
+/** 
  * 受控边界：初始值经 `group` 注入，提交经 `onSubmit` 上报，关闭经 `onClose` 上报。
  * 表单态、必填校验与内联错误留在视图内；请求、toast 与缓存失效由容器负责。
  */
@@ -53,7 +53,7 @@ export interface GroupEditDialogViewProps {
   submitting?: boolean
 }
 
-/** 编辑用户组：名称/描述 + 配额（实例/Bot/存储上限）（FR-156，兑现 FR-003）。 */
+/** 编辑用户组：名称/描述 + 配额（实例/Bot/存储上限）（兑现）。 */
 export function GroupEditDialogView({
   group,
   onClose,

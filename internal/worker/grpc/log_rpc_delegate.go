@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// SetLogQueryService 注入 FR-479 Log RPC 服务层（T11 装配）。
+// SetLogQueryService 注入Log RPC 服务层（T11 装配）。
 // nil 时 Log* 走 UnimplementedWorkerServiceServer 默认实现。
 func (s *Server) SetLogQueryService(q *grpcsvc.Service) {
 	if s == nil {
@@ -24,7 +24,7 @@ func (s *Server) logRPC() *grpcsvc.Service {
 	return q
 }
 
-// GetLogCapabilities FR-479 能力协商。
+// GetLogCapabilities能力协商。
 func (s *Server) GetLogCapabilities(ctx context.Context, req *workerpb.GetLogCapabilitiesRequest) (*workerpb.GetLogCapabilitiesResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.GetLogCapabilities(ctx, req)
@@ -32,7 +32,7 @@ func (s *Server) GetLogCapabilities(ctx context.Context, req *workerpb.GetLogCap
 	return s.UnimplementedWorkerServiceServer.GetLogCapabilities(ctx, req)
 }
 
-// LogCreateView FR-479 Worker-local Query View 创建。
+// LogCreateViewWorker-local Query View 创建。
 func (s *Server) LogCreateView(ctx context.Context, req *workerpb.LogCreateViewRequest) (*workerpb.LogCreateViewResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogCreateView(ctx, req)
@@ -40,7 +40,7 @@ func (s *Server) LogCreateView(ctx context.Context, req *workerpb.LogCreateViewR
 	return s.UnimplementedWorkerServiceServer.LogCreateView(ctx, req)
 }
 
-// LogSearch FR-479 检索。
+// LogSearch检索。
 func (s *Server) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest) (*workerpb.LogSearchResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogSearch(ctx, req)
@@ -48,7 +48,7 @@ func (s *Server) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest) 
 	return s.UnimplementedWorkerServiceServer.LogSearch(ctx, req)
 }
 
-// LogStats FR-479 聚合。
+// LogStats聚合。
 func (s *Server) LogStats(ctx context.Context, req *workerpb.LogStatsRequest) (*workerpb.LogStatsResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogStats(ctx, req)
@@ -56,7 +56,7 @@ func (s *Server) LogStats(ctx context.Context, req *workerpb.LogStatsRequest) (*
 	return s.UnimplementedWorkerServiceServer.LogStats(ctx, req)
 }
 
-// LogFields FR-479 字段列表。
+// LogFields字段列表。
 func (s *Server) LogFields(ctx context.Context, req *workerpb.LogFieldsRequest) (*workerpb.LogFieldsResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogFields(ctx, req)
@@ -64,7 +64,7 @@ func (s *Server) LogFields(ctx context.Context, req *workerpb.LogFieldsRequest) 
 	return s.UnimplementedWorkerServiceServer.LogFields(ctx, req)
 }
 
-// LogFacets FR-479 Facets。
+// LogFacetsFacets。
 func (s *Server) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest) (*workerpb.LogFacetsResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogFacets(ctx, req)
@@ -72,7 +72,7 @@ func (s *Server) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest) 
 	return s.UnimplementedWorkerServiceServer.LogFacets(ctx, req)
 }
 
-// LogStreams FR-479 stream 枚举（窗内有哪些流、各多少条）。
+// LogStreams stream 枚举（窗内有哪些流、各多少条）。
 //
 // 必须在此显式 delegate：Server 嵌入的是 UnimplementedWorkerServiceServer，
 // 缺了这些方法时调用会**恒返回 Unimplemented**，而 CP 会把它当成
@@ -84,7 +84,7 @@ func (s *Server) LogStreams(ctx context.Context, req *workerpb.LogStreamsRequest
 	return s.UnimplementedWorkerServiceServer.LogStreams(ctx, req)
 }
 
-// LogStreamFieldNames FR-479 stream 标签维度名。
+// LogStreamFieldNames stream 标签维度名。
 func (s *Server) LogStreamFieldNames(ctx context.Context, req *workerpb.LogStreamFieldNamesRequest) (*workerpb.LogStreamFieldNamesResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogStreamFieldNames(ctx, req)
@@ -92,7 +92,7 @@ func (s *Server) LogStreamFieldNames(ctx context.Context, req *workerpb.LogStrea
 	return s.UnimplementedWorkerServiceServer.LogStreamFieldNames(ctx, req)
 }
 
-// LogStreamFieldValues FR-479 stream 标签维度取值分布。
+// LogStreamFieldValues stream 标签维度取值分布。
 func (s *Server) LogStreamFieldValues(ctx context.Context, req *workerpb.LogStreamFieldValuesRequest) (*workerpb.LogStreamFieldValuesResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogStreamFieldValues(ctx, req)
@@ -100,7 +100,7 @@ func (s *Server) LogStreamFieldValues(ctx context.Context, req *workerpb.LogStre
 	return s.UnimplementedWorkerServiceServer.LogStreamFieldValues(ctx, req)
 }
 
-// LogTail FR-479 流式 Tail。
+// LogTail 流式 Tail。
 func (s *Server) LogTail(req *workerpb.LogTailRequest, stream workerpb.WorkerService_LogTailServer) error {
 	if q := s.logRPC(); q != nil {
 		return q.LogTail(req, stream)
@@ -108,7 +108,7 @@ func (s *Server) LogTail(req *workerpb.LogTailRequest, stream workerpb.WorkerSer
 	return s.UnimplementedWorkerServiceServer.LogTail(req, stream)
 }
 
-// LogRehydrate FR-478 恢复任务入口（未实现时 LOG_UNSUPPORTED）。
+// LogRehydrate恢复任务入口（未实现时 LOG_UNSUPPORTED）。
 func (s *Server) LogRehydrate(ctx context.Context, req *workerpb.LogRehydrateRequest) (*workerpb.LogTaskResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogRehydrate(ctx, req)
@@ -116,7 +116,7 @@ func (s *Server) LogRehydrate(ctx context.Context, req *workerpb.LogRehydrateReq
 	return s.UnimplementedWorkerServiceServer.LogRehydrate(ctx, req)
 }
 
-// LogArchiveStatus FR-478 归档状态。
+// LogArchiveStatus归档状态。
 func (s *Server) LogArchiveStatus(ctx context.Context, req *workerpb.LogArchiveStatusRequest) (*workerpb.LogArchiveStatusResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogArchiveStatus(ctx, req)
@@ -124,7 +124,7 @@ func (s *Server) LogArchiveStatus(ctx context.Context, req *workerpb.LogArchiveS
 	return s.UnimplementedWorkerServiceServer.LogArchiveStatus(ctx, req)
 }
 
-// LogRuntimeStatus FR-476 受管 VictoriaLogs namespace 状态。
+// LogRuntimeStatus受管 VictoriaLogs namespace 状态。
 func (s *Server) LogRuntimeStatus(ctx context.Context, req *workerpb.LogRuntimeStatusRequest) (*workerpb.LogRuntimeStatusResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogRuntimeStatus(ctx, req)
@@ -132,7 +132,7 @@ func (s *Server) LogRuntimeStatus(ctx context.Context, req *workerpb.LogRuntimeS
 	return s.UnimplementedWorkerServiceServer.LogRuntimeStatus(ctx, req)
 }
 
-// LogRuntimeControl FR-476 经 CP 隧道控制受管 namespace。
+// LogRuntimeControl经 CP 隧道控制受管 namespace。
 func (s *Server) LogRuntimeControl(ctx context.Context, req *workerpb.LogRuntimeControlRequest) (*workerpb.LogTaskResponse, error) {
 	if q := s.logRPC(); q != nil {
 		return q.LogRuntimeControl(ctx, req)

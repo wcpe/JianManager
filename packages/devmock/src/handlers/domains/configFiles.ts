@@ -3,12 +3,12 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
 
-/**
+/** 
  * 顶层「配置文件」域 mock handler（/config-files、/config-files/health、/config-files/adopt）。
  *
  * ## 与 `domains/config.ts` 的分工
  *
- * 那个文件覆盖的是**实例级**配置引擎（`/instances/:id/configs/*`，FR-031/FR-071）与
+ * 那个文件覆盖的是**实例级**配置引擎（`/instances/:id/configs/*`）与
  * `/config-baselines`；本文件覆盖的是后来新增的**中央定义 + 按作用域分层**模型
  * （`web/src/api/configFiles.ts` 与 `configAdopt.ts`）。两者是不同资源，互不重叠。
  *

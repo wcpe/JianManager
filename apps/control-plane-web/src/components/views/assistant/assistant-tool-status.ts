@@ -1,7 +1,7 @@
 import type { AssistantEventFrame } from '@/api/assistant-chat'
 
-/**
- * 工具调用状态的聚合（FR-519 §5「工具状态徽标」）。
+/** 
+ * 工具调用状态的聚合（§5「工具状态徽标」）。
  *
  * 后端把一次工具调用拆成三类事件、用 `callId` 串起来（见 service/assistant_chat.go）：
  *  - `tool_call`   { callId, name, argsJson }                      —— 调用被派发
@@ -33,7 +33,7 @@ export interface ToolCallView {
   truncated?: boolean
 }
 
-/**
+/** 
  * 预览在界面上最多显示多少字符。
  *
  * 后端已按 2048 rune 截断过一次（`assistantChatToolPreviewRunes`），但那个量级是给
@@ -41,7 +41,7 @@ export interface ToolCallView {
  */
 export const TOOL_PREVIEW_MAX_CHARS = 240
 
-/**
+/** 
  * 按字符（而非 UTF-16 码元）截断预览。
  *
  * 用 `Array.from` 而不是 `slice`：`slice` 会从中间劈开代理对（emoji、部分生僻字），
@@ -83,7 +83,7 @@ interface ToolEventData {
   truncated?: boolean
 }
 
-/**
+/** 
  * 事件 → 工具调用列表（纯函数，保持首次出现顺序）。
  *
  * 非工具事件返回**原数组引用**：hook 里直接 `setState(prev => apply(...))`，
@@ -138,8 +138,8 @@ export function applyEventToToolCalls(prev: ToolCallView[], frame: AssistantEven
   }
 }
 
-/**
- * 元工具名（后端渐进式披露三件套，FR-544）。
+/** 
+ * 元工具名（后端渐进式披露三件套）。
  *
  * 为什么这层要在前端识别：`search_tools` / `describe_tool` 本身**不产生业务副作用**，
  * 它们只是「查有哪些工具」「读某个工具的参数定义」。若和真正执行工具的操作混在一起

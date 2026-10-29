@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TestCreateInstance_ReregisterRefreshesProbePort FR-411 补口回归：
+// TestCreateInstance_ReregisterRefreshesProbePort补口回归：
 // 导入/历史实例起初 probe_port=0，CP 部署探针前补分配端口后经幂等 CreateInstance 重注册。
 // 「已存在」分支必须刷新 Worker 内存表的 ProbePort，否则心跳采集器仍按旧值 0 过滤，
 // 形成「探针桥已连接但监控永无数据」的静默断链（修复后下一拍心跳即采集，无需重启）。
@@ -50,7 +50,7 @@ func TestCreateInstance_ReregisterRefreshesProbePort(t *testing.T) {
 	assert.Equal(t, 29941, snap.ProbePort, "重注册必须刷新内存表探针端口，心跳下一拍即可采集")
 }
 
-// TestResyncInstances_OverwritesProbePortForExisting FR-454：ResyncInstances 命中已存在实例时
+// TestResyncInstances_OverwritesProbePortForExisting：ResyncInstances 命中已存在实例时
 // 仍以 CP 为准刷新 probe_port。Worker 重启经 RecoverDaemonInstances 从 PID 文件恢复的 RUNNING
 // 实例带历史脏 probe_port（早期误配），而 CP 侧已按适用性收敛为 0——不覆盖就会继续每拍空抓 /metrics。
 func TestResyncInstances_OverwritesProbePortForExisting(t *testing.T) {

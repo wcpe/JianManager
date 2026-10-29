@@ -9,7 +9,7 @@ import (
 
 // defaultDirectProbeTimeout / maxDirectProbeTimeout 是直探（SLP/Query）超时的默认与上界。
 //
-// **不再各自写字面量**（FR-446 复审 NEW-ISSUE A）：本包、CP 写路径校验、CP 读/下发钳制统一引用
+// **不再各自写字面量**（复审 NEW-ISSUE A）：本包、CP 写路径校验、CP 读/下发钳制统一引用
 // internal/platform/directprobe，避免「CP 收下 30s、Worker 按另一上界钳制」这类静默漂移。
 // 上界由心跳节拍护栏反推（`directprobe.MaxTimeout` 的文档给出了完整推导）。
 const (
@@ -20,7 +20,7 @@ const (
 	probeScrapeTimeoutCap = directprobe.ProbeScrapeTimeoutCap
 )
 
-// SourceMask 记录某拍实例遥测命中的来源位（供前端标注数据来源 / FR-447）。
+// SourceMask 记录某拍实例遥测命中的来源位（供前端标注数据来源）。
 type SourceMask uint8
 
 const (
@@ -43,7 +43,7 @@ type CollectConfig struct {
 
 // InstanceTelemetry 是一拍实例遥测：各指标带可用性语义与来源，三档皆无 → 对应可用位为 false（显式「不可用」）。
 //
-// 优先级链 `探针 → SLP → Query → 不可用`（FR-447）：同指标多源以探针为准；探针缺该指标时按 SLP → Query 回落；
+// 优先级链 `探针 → SLP → Query → 不可用`：同指标多源以探针为准；探针缺该指标时按 SLP → Query 回落；
 // 玩家名单例外——Query 优先（唯一实名来源），Query 无则回退 SLP sample 并标 PlayerNamesPartial。
 // 不可用是明确的「缺测」语义，不再以 -1/-- 之类的伪值占位。
 type InstanceTelemetry struct {
@@ -59,7 +59,7 @@ type InstanceTelemetry struct {
 	CPULoad       float64
 	UptimeSeconds float64
 	Worlds        map[string]WorldStat
-	// GC（FR-465）：cumulative counter（跨收集器求和），仅探针提供。
+	// GC：cumulative counter（跨收集器求和），仅探针提供。
 	GCCountTotal int64
 	GCTimeMillis float64
 
@@ -89,13 +89,13 @@ type InstanceTelemetry struct {
 	Sources        SourceMask
 
 	// 各来源的失败原因（仅对应来源不可用且**本拍尝试过**时非空）：
-	// 供心跳的「来源皆不可用」告警把错误类别并入文案（FR-446 审计项 4），不参与编排决策。
+	// 供心跳的「来源皆不可用」告警把错误类别并入文案（审计项 4），不参与编排决策。
 	ProbeErr error
 	SLPErr   error
 	QueryErr error
 }
 
-// Orchestrate 按「探针 → SLP → Query → 不可用」优先级链合并三个来源（FR-447）。
+// Orchestrate 按「探针 → SLP → Query → 不可用」优先级链合并三个来源。
 // 纯函数、无 IO，三个入参可为 nil（对应来源不可用），便于穷举三态组合测试。
 func Orchestrate(probe *ProbeSnapshot, slp *SLPSnapshot, query *QuerySnapshot) *InstanceTelemetry {
 	t := &InstanceTelemetry{}
@@ -160,7 +160,7 @@ func Orchestrate(probe *ProbeSnapshot, slp *SLPSnapshot, query *QuerySnapshot) *
 			t.PlayerNamesAvailable = true
 			t.PlayerNamesPartial = false
 		}
-		// 在线人数：仅在 numplayers 真的存在且可解析时才认（FR-447 不伪造 0）。
+		// 在线人数：仅在 numplayers 真的存在且可解析时才认（不伪造 0）。
 		if !t.PlayersOnlineAvailable && query.PlayersOnlineAvailable {
 			t.PlayersOnline = query.PlayersOnline
 			t.PlayersOnlineAvailable = true
@@ -190,7 +190,7 @@ func Orchestrate(probe *ProbeSnapshot, slp *SLPSnapshot, query *QuerySnapshot) *
 	return t
 }
 
-// CollectInstanceTelemetry 执行一次实例采集（FR-447 编排链）：
+// CollectInstanceTelemetry 执行一次实例采集（编排链）：
 // 先抓探针；再按需直探 SLP / Query 补基础信息；最后统一编排。
 //
 // 三者皆无 → 返回的遥测所有可用位为 false（显式「不可用」，不留 -1/-- 占位）。

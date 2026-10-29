@@ -99,7 +99,7 @@ func TestSelfUpdate_UpgradeAll_Unconfigured(t *testing.T) {
 	}
 }
 
-// TestSelfUpdate_Check_EmptyCacheNotCached 无缓存时 GET /check 返回 200 + cached=false（FR-186）。
+// TestSelfUpdate_Check_EmptyCacheNotCached 无缓存时 GET /check 返回 200 + cached=false。
 func TestSelfUpdate_Check_EmptyCacheNotCached(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -115,7 +115,7 @@ func TestSelfUpdate_Check_EmptyCacheNotCached(t *testing.T) {
 	}
 }
 
-// TestSelfUpdate_RefreshCheck_MemberForbidden 普通成员无权 refresh（仅平台管理员，FR-186）。
+// TestSelfUpdate_RefreshCheck_MemberForbidden 普通成员无权 refresh（仅平台管理员）。
 func TestSelfUpdate_RefreshCheck_MemberForbidden(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -128,7 +128,7 @@ func TestSelfUpdate_RefreshCheck_MemberForbidden(t *testing.T) {
 	}
 }
 
-// TestSelfUpdate_RefreshCheck_Unconfigured 未配源时 refresh 返回 200 + configured=false（FR-186）。
+// TestSelfUpdate_RefreshCheck_Unconfigured 未配源时 refresh 返回 200 + configured=false。
 // 与 GET /check 一致：未配源是「可渲染的正常态」（页面显示未配置提示），不作错误处理；
 // 真正的网络/限流失败才透出 502/429（见服务层 TestRefreshCheck_FailureKeepsCache）。
 func TestSelfUpdate_RefreshCheck_Unconfigured(t *testing.T) {
@@ -150,7 +150,7 @@ func TestSelfUpdate_RefreshCheck_Unconfigured(t *testing.T) {
 }
 
 // TestSelfUpdate_UpgradeNode_FailureAudited 升级失败同样落审计（failed=true + 脱敏错误）。
-// E2E 验收发现：此前 respondUpgradeError 只回 HTTP 不写审计，升级失败历史无法追溯（FR-321 语义）。
+// E2E 验收发现：此前 respondUpgradeError 只回 HTTP 不写审计，升级失败历史无法追溯（语义）。
 func TestSelfUpdate_UpgradeNode_FailureAudited(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

@@ -57,7 +57,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, nodes)
 }
 
-// StartupProgress GET /nodes/startup-progress — 正在启动的 Worker 进度（FR-486）。
+// StartupProgress GET /nodes/startup-progress — 正在启动的 Worker 进度。
 //
 // 单独成端点而不并入 GET /nodes：启动中的 Worker 尚未注册，在 nodes 表里**没有记录**
 // （首装连 UUID 都还没有）。若硬塞进节点列表，会凭空出现「存在但从未上线」的节点；
@@ -105,7 +105,7 @@ type maintenanceRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
-// Maintenance 置/解节点维护模式（cordon，仅平台管理员）。参见 FR-048。
+// Maintenance 置/解节点维护模式（cordon，仅平台管理员）。参见。
 // Maintenance 维护模式（写）。
 func (h *NodeHandler) Maintenance(c *gin.Context) {
 	if !requireNodeManage(c) {
@@ -135,7 +135,7 @@ func (h *NodeHandler) Maintenance(c *gin.Context) {
 	c.JSON(http.StatusOK, node)
 }
 
-// Drain 排空节点：停止其上运行实例（仅平台管理员，危险操作）。参见 FR-048。
+// Drain 排空节点：停止其上运行实例（仅平台管理员，危险操作）。参见。
 // Drain 排空节点（写）。
 func (h *NodeHandler) Drain(c *gin.Context) {
 	if !requireNodeManage(c) {
@@ -159,8 +159,8 @@ func (h *NodeHandler) Drain(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// Delete 主动下线节点：解除注册并保留记录（仅平台管理员，危险操作）。参见 FR-048。
-// FR-309 实例守卫：名下有实例回 409 并携实例清单；离线节点可 `?force=true` 显式级联
+// Delete 主动下线节点：解除注册并保留记录（仅平台管理员，危险操作）。参见。
+// 实例守卫：名下有实例回 409 并携实例清单；离线节点可 `?force=true` 显式级联
 // 删除实例平台记录（不清理远端文件）；在线节点无论 force 一律拒绝。
 // Delete 删除节点（写）。
 func (h *NodeHandler) Delete(c *gin.Context) {
@@ -199,7 +199,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已下线", "instancesPurged": result.InstancesPurged})
 }
 
-// ListArchived 已下线（软删）节点列表（FR-393，仅平台管理员）。
+// ListArchived 已下线（软删）节点列表（仅平台管理员）。
 func (h *NodeHandler) ListArchived(c *gin.Context) {
 	if !requireNodeRead(c) {
 		return
@@ -212,7 +212,7 @@ func (h *NodeHandler) ListArchived(c *gin.Context) {
 	c.JSON(http.StatusOK, nodes)
 }
 
-// GetArchived 单个归档节点详情（FR-393，仅平台管理员）。
+// GetArchived 单个归档节点详情（仅平台管理员）。
 func (h *NodeHandler) GetArchived(c *gin.Context) {
 	if !requireNodeRead(c) {
 		return
@@ -233,7 +233,7 @@ func (h *NodeHandler) GetArchived(c *gin.Context) {
 	c.JSON(http.StatusOK, node)
 }
 
-// PurgeArchived 彻底清理归档节点（FR-394，硬删库记录，不清理远端文件）。
+// PurgeArchived 彻底清理归档节点（硬删库记录，不清理远端文件）。
 // PurgeArchived 清理归档节点（写）。
 func (h *NodeHandler) PurgeArchived(c *gin.Context) {
 	if !requireNodeManage(c) {
@@ -311,7 +311,7 @@ type repairConfirmRequest struct {
 	Confirm bool `json:"confirm"`
 }
 
-// recordRepairAudit 记录坏节点修复审计（FR-015/FR-059）；audit 未注入时静默跳过。
+// recordRepairAudit 记录坏节点修复审计；audit 未注入时静默跳过。
 func (h *NodeHandler) recordRepairAudit(c *gin.Context, action, targetID string, detail map[string]any) {
 	if h.audit == nil {
 		return
@@ -437,10 +437,10 @@ func (h *NodeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		// 坏节点修复（见 ADR-039 §2）：诊断只读 + 破坏性修复（二次确认 + 审计）。
 		// 静态段 repair 须在 /:id 之前注册，避免被 :id 通配吞掉。
 		nodes.GET("/repair/suspects", h.Suspects)
-		// 归档列表/详情/清理（FR-393/394）：静态段 archived 须在 /:id 之前。
+		// 归档列表/详情/清理（394）：静态段 archived 须在 /:id 之前。
 		nodes.GET("/archived", h.ListArchived)
 		nodes.GET("/archived/:id", h.GetArchived)
-		// 正在启动的 Worker 进度（FR-486）：静态段 startup-progress 须在 /:id 之前。
+		// 正在启动的 Worker 进度：静态段 startup-progress 须在 /:id 之前。
 		nodes.GET("/startup-progress", h.StartupProgress)
 		nodes.DELETE("/archived/:id", h.PurgeArchived)
 		nodes.GET("/:id", h.Get)

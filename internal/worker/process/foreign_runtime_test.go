@@ -32,7 +32,7 @@ func listenerPort(t *testing.T, ln net.Listener) int {
 // portText 端口号文本（供断言失败原因含端口号）。
 func portText(port int) string { return strconv.Itoa(port) }
 
-// TestOrphanScan_ForeignRuntimeDriftOutsideServersDir FR-471 正例：实例已注册（记账 STOPPED）、
+// TestOrphanScan_ForeignRuntimeDriftOutsideServersDir正例：实例已注册（记账 STOPPED）、
 // 其工作目录**在 serversDir 之外**（真机农场目录 /home/<user>/server），目录下仍有活进程
 // （cwd 落在该目录）→ 必须被第 4 相识别为漂移，写观测缓存并落审计，且**不杀进程**。
 func TestOrphanScan_ForeignRuntimeDriftOutsideServersDir(t *testing.T) {
@@ -76,7 +76,7 @@ func TestOrphanScan_ForeignRuntimeDriftOutsideServersDir(t *testing.T) {
 	assert.Contains(t, states[0].ForeignCmdline, "server.jar")
 }
 
-// TestOrphanScan_ForeignRuntimeNoFalsePositive FR-471 反例①：目录下无活进程时不误报，
+// TestOrphanScan_ForeignRuntimeNoFalsePositive反例①：目录下无活进程时不误报，
 // 且缓存为空；反例②：`go test` 自身进程等无关进程（cwd 不在实例目录）不得命中。
 func TestOrphanScan_ForeignRuntimeNoFalsePositive(t *testing.T) {
 	serversDir := t.TempDir()
@@ -104,7 +104,7 @@ func TestOrphanScan_ForeignRuntimeNoFalsePositive(t *testing.T) {
 	assert.Empty(t, states[0].ForeignCmdline)
 }
 
-// TestOrphanScan_ForeignRuntimeClearedWhenResolved FR-471：漂移消解后（进程退出）下一轮扫描
+// TestOrphanScan_ForeignRuntimeClearedWhenResolved：漂移消解后（进程退出）下一轮扫描
 // 必须把观测缓存清空，使心跳上报的漂移归零——否则面板会永远标红一个已不存在的进程。
 func TestOrphanScan_ForeignRuntimeClearedWhenResolved(t *testing.T) {
 	serversDir := t.TempDir()
@@ -127,7 +127,7 @@ func TestOrphanScan_ForeignRuntimeClearedWhenResolved(t *testing.T) {
 	assert.Zero(t, m.GetAllInstanceStates()[0].ForeignPID, "漂移消解后缓存须清零")
 }
 
-// TestOrphanScan_ForeignRuntimeSkipsManagedRunning FR-471：实例记账为 RUNNING 时，
+// TestOrphanScan_ForeignRuntimeSkipsManagedRunning：实例记账为 RUNNING 时，
 // 其目录下的进程属受管运行态，不得判为漂移（否则接管动作会去杀一个正常运行的自己）。
 func TestOrphanScan_ForeignRuntimeSkipsManagedRunning(t *testing.T) {
 	serversDir := t.TempDir()
@@ -155,7 +155,7 @@ func TestOrphanScan_ForeignRuntimeSkipsManagedRunning(t *testing.T) {
 	assert.Zero(t, m.GetAllInstanceStates()[0].ForeignPID)
 }
 
-// TestOrphanScan_ForeignRuntimeReusesProcessSnapshot FR-471：第 2/4 相复用同一轮进程枚举快照，
+// TestOrphanScan_ForeignRuntimeReusesProcessSnapshot：第 2/4 相复用同一轮进程枚举快照，
 // 每轮只枚举一次（避免每拍两次全机枚举的成本）。
 func TestOrphanScan_ForeignRuntimeReusesProcessSnapshot(t *testing.T) {
 	s, _, _ := newTestScanner(t, t.TempDir(), OrphanPolicyWarn)
@@ -168,7 +168,7 @@ func TestOrphanScan_ForeignRuntimeReusesProcessSnapshot(t *testing.T) {
 	assert.Equal(t, 1, calls, "单轮扫描只应枚举一次本机进程")
 }
 
-// TestOrphanScan_ForeignRuntimeNoDuplicateAudit FR-471：同一漂移连续两轮只落一条审计
+// TestOrphanScan_ForeignRuntimeNoDuplicateAudit：同一漂移连续两轮只落一条审计
 // （扫描每 60s 一轮，否则会持续刷审计）。
 func TestOrphanScan_ForeignRuntimeNoDuplicateAudit(t *testing.T) {
 	s, m, audits := newTestScanner(t, t.TempDir(), OrphanPolicyWarn)
@@ -191,7 +191,7 @@ func TestOrphanScan_ForeignRuntimeNoDuplicateAudit(t *testing.T) {
 	assert.Len(t, *audits, 2)
 }
 
-// TestScanForeign_TakesSmallestPID FR-471：同一目录多个外来进程时取最小 PID 作为稳定代表。
+// TestScanForeign_TakesSmallestPID：同一目录多个外来进程时取最小 PID 作为稳定代表。
 func TestScanForeign_TakesSmallestPID(t *testing.T) {
 	s, m, _ := newTestScanner(t, t.TempDir(), OrphanPolicyWarn)
 	workDir := t.TempDir()
@@ -208,7 +208,7 @@ func TestScanForeign_TakesSmallestPID(t *testing.T) {
 	assert.Equal(t, []int{7010}, findings[0].PIDs)
 }
 
-// TestManager_AdoptForeignRuntime_WithDrift FR-471 接管主路径：有漂移 → 先 SIGTERM 进程树等待退出，
+// TestManager_AdoptForeignRuntime_WithDrift接管主路径：有漂移 → 先 SIGTERM 进程树等待退出，
 // 再以受管方式 Start；返回被停止的 PID，实例转为 RUNNING，漂移缓存清空。
 func TestManager_AdoptForeignRuntime_WithDrift(t *testing.T) {
 	m := NewManager(t.TempDir())
@@ -246,7 +246,7 @@ func TestManager_AdoptForeignRuntime_WithDrift(t *testing.T) {
 	require.NoError(t, m.Kill(uuid))
 }
 
-// TestManager_AdoptForeignRuntime_NoDriftStartsIdempotently FR-471：无漂移时直接走正常启动
+// TestManager_AdoptForeignRuntime_NoDriftStartsIdempotently：无漂移时直接走正常启动
 // （返回 0），不发送任何信号。
 func TestManager_AdoptForeignRuntime_NoDriftStartsIdempotently(t *testing.T) {
 	m := NewManager(t.TempDir())
@@ -277,7 +277,7 @@ func TestManager_AdoptForeignRuntime_Unregistered(t *testing.T) {
 	assert.Contains(t, err.Error(), "不存在")
 }
 
-// TestManager_AdoptForeignRuntime_TerminateTimeoutEscalates FR-471：SIGTERM 后进程不退出 →
+// TestManager_AdoptForeignRuntime_TerminateTimeoutEscalates：SIGTERM 后进程不退出 →
 // 超时升级强杀；仍未退净则报错且**不启动**（避免双开）。
 func TestManager_AdoptForeignRuntime_TerminateTimeoutEscalates(t *testing.T) {
 	m := NewManager(t.TempDir())
@@ -304,7 +304,7 @@ func TestManager_AdoptForeignRuntime_TerminateTimeoutEscalates(t *testing.T) {
 	assert.NotEqual(t, StateRunning, state, "外来进程未退净时不得启动（避免双开）")
 }
 
-// TestManager_AdoptForeignRuntime_OwnershipBlocked FR-455① 纪律：漂移观测与人工点击之间若该 PID
+// TestManager_AdoptForeignRuntime_OwnershipBlocked① 纪律：漂移观测与人工点击之间若该 PID
 // 已被 OS 回收给无关进程（归属复核不通过），必须拒绝处置——不发信号、不启动、落审计。
 func TestManager_AdoptForeignRuntime_OwnershipBlocked(t *testing.T) {
 	m := NewManager(t.TempDir())
@@ -333,7 +333,7 @@ func TestManager_AdoptForeignRuntime_OwnershipBlocked(t *testing.T) {
 	assert.Contains(t, audits, "orphan.foreign_runtime_adopt_blocked")
 }
 
-// TestPreflight_WorkDirBusy FR-471 预检正反各一例：工作目录下有活进程 → 失败并带 PID 与指引；
+// TestPreflight_WorkDirBusy预检正反各一例：工作目录下有活进程 → 失败并带 PID 与指引；
 // 目录下无活进程 → 通过。
 func TestPreflight_WorkDirBusy(t *testing.T) {
 	orig := preflightListProcesses
@@ -360,7 +360,7 @@ func TestPreflight_WorkDirBusy(t *testing.T) {
 	assert.NoError(t, checkWorkDirBusy(workDir, 0))
 }
 
-// TestPreflight_WorkDirBusy_ExcludesOwnProcessTree FR-471 回归修复：work_dir_busy 必须排除
+// TestPreflight_WorkDirBusy_ExcludesOwnProcessTree回归修复：work_dir_busy 必须排除
 // **本实例自己的进程树**（根 + 后代），否则重启会被自己挡下。
 //
 // 缺陷现场（真机）：重启运行中的 r3-z1-g2 时被判「工作目录下已有活进程」，占用的正是它自己的 java——
@@ -396,7 +396,7 @@ func TestPreflight_WorkDirBusy_ExcludesOwnProcessTree(t *testing.T) {
 	assert.NotContains(t, err.Error(), "5002", "自身进程不应出现在占用提示里")
 }
 
-// TestPreflight_PortFree FR-471 预检正反各一例：真占一个端口 → 失败并带端口号；空闲端口 → 通过；
+// TestPreflight_PortFree预检正反各一例：真占一个端口 → 失败并带端口号；空闲端口 → 通过；
 // port<=0（未配置）不检查。
 func TestPreflight_PortFree(t *testing.T) {
 	// 真占一个端口：拿到内核分配的端口号后，该端口应被判为占用。
@@ -433,7 +433,7 @@ func TestPreflight_PortFree_NoFalsePositiveOnRepeatedProbe(t *testing.T) {
 	}
 }
 
-// TestManager_PreflightStart_IncludesFR471Checks FR-471：PreflightStart 在既有三项后返回
+// TestManager_PreflightStart_IncludesFR471Checks：PreflightStart 在既有三项后返回
 // work_dir_busy 与 port_free 两项（docker 仍整体放行）。
 func TestManager_PreflightStart_IncludesFR471Checks(t *testing.T) {
 	origList, origPort := preflightListProcesses, preflightPortFree
@@ -480,7 +480,7 @@ func TestManager_PreflightStart_IncludesFR471Checks(t *testing.T) {
 	assert.Contains(t, failed["port_free"], "25599")
 }
 
-// TestManager_PreflightStart_SkipsOccupancyWhenRunning FR-471 回归修复：实例处于**运行类状态**时，
+// TestManager_PreflightStart_SkipsOccupancyWhenRunning回归修复：实例处于**运行类状态**时，
 // 现场占用两项（work_dir_busy / port_free）必须跳过。
 //
 // 缺陷现场（真机）：重启 RUNNING 实例被自己的 java 挡下——先被 work_dir_busy 拒（进程占着工作目录），
@@ -518,7 +518,7 @@ func TestManager_PreflightStart_SkipsOccupancyWhenRunning(t *testing.T) {
 	assert.Equal(t, []string{"java_runtime", "work_dir", "launch_target"}, names,
 		"运行类状态应跳过现场占用两项（否则重启被自己挡下）")
 
-	// STOPPED 态：两项恢复 → 外部占用照拦（这才是 FR-471 要防的双开）。
+	// STOPPED 态：两项恢复 → 外部占用照拦（这才是要防的双开）。
 	m.mu.Lock()
 	m.instances[uuid].State = StateStopped
 	m.mu.Unlock()

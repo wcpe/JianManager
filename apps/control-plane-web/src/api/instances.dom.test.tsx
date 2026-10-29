@@ -31,7 +31,7 @@ describe('实例规模化查询 hook', () => {
     loginMockUser()
   })
 
-  it('useSearchInstances / useInstanceAggregate 按 FR-247 端点传递查询参数', async () => {
+  it('useSearchInstances / useInstanceAggregate 按端点传递查询参数', async () => {
     const seen: Record<string, string>[] = []
     server.use(
       http.get(API('/instances/search'), ({ request }) => {

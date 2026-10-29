@@ -6,8 +6,8 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import { AssistantChatPanel } from '@/components/views/assistant/AssistantChatPanel'
 import type { ChatMessage } from '@/components/views/assistant/assistant-chat-types'
 
-/**
- * 流式更新**不外溢**（FR-519 §7「连续 100 次 text_delta 期间，对话区外组件零重渲染」）。
+/** 
+ * 流式更新**不外溢**（§7「连续 100 次 text_delta 期间，对话区外组件零重渲染」）。
  *
  * 这条守的是常开页的性能底线：AI 浮窗在多个页面常驻，若每次 `text_delta` 都把
  * 页面上其它组件带着重渲染一遍，用户在等待回复时会感到整页卡顿——
@@ -86,7 +86,7 @@ describe('流式渲染 · 对话区外组件零重渲染', () => {
       }
     })
 
-    /*
+    /* 
       判据是「**不随 token 数增长**」，不是严格 0。
       实测：100 次 setState 在 `act` 内被 React 批处理成 1 次提交，
       父组件那一次提交会让 Profiler 记录 1 次（子组件经 memo bailout，并未真正重复渲染）。

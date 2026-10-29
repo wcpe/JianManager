@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-491 验收：执行前目标漂移校验。
+// 验收：执行前目标漂移校验。
 //
 // ## 为什么这组用例必需
 //

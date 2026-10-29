@@ -9,8 +9,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
- * FR-516 工具覆盖度的守门用例。
+/* *
+ *工具覆盖度的守门用例。
  *
  * 这组断言守的是**「登记了就要能执行」**：此前目录里登记了契约内 action，
  * 但执行层只有 3 个受限只读实现，其余一律在运行期报「尚未接入」。
@@ -36,7 +36,7 @@ func TestResolveToolTarget_NoTargetTypesAccepted(t *testing.T) {
 	}
 }
 
-// TestAssistantTools_RegisteredToolsImplemented 已删除（FR-544）。
+// TestAssistantTools_RegisteredToolsImplemented 已删除。
 //
 // 它断言「本地注册表里每个工具在 invokeReadTool/invokeWriteTool 里都有实现分支」。
 // 现在助手不再自己执行业务工具：`call_tool` 直接把调用转给 MCP 的 CallTool，
@@ -167,7 +167,7 @@ func contains(s, sub string) bool {
 // 占位：确保 ai 包被引用（工具调用类型在断言里用到）。
 var _ = ai.ToolCall{}
 
-// injectTestMCPCatalog 注入一份最小的「MCP 目录」供 service 层测试用（FR-544）。
+// injectTestMCPCatalog 注入一份最小的「MCP 目录」供 service 层测试用。
 //
 // 为什么不直接构造 13 个工具的本地注册表：那份注册表已经删除，
 // 工具定义的单一真源是 MCP 目录。service 测试若还要断言目录属性，

@@ -16,11 +16,11 @@ const ResponsiveGrid = WidthProvider(GridLayout)
 /** 稳定空卡片数组引用（canvas 未就绪时复用，避免 hooks 依赖每帧变化）。 */
 const EMPTY_CARDS: PlacedCard[] = []
 
-/**
- * 跨实例超级工作台页面（FR-167 / 复用 ADR-034 可组合卡片工作区）。
+/** 
+ * 跨实例超级工作台页面（复用 ADR-034 可组合卡片工作区）。
  *
  * 左 = 可收起「实例库」拖拽源；右 = 跨实例画布（卡片携 instanceId，可并存多实例卡，如监看墙）。
- * 复用 FR-166 的卡壳 {@link WorkspaceCard}、网格、惰性挂载（未在画布的卡不建 WS）、预设机制；
+ * 复用的卡壳 {@link WorkspaceCard}、网格、惰性挂载（未在画布的卡不建 WS）、预设机制；
  * 作用域为 store 的 `superCanvas`（与单实例 `canvasByInstance` 并存、清晰区分）。
  *
  * 添加卡片靠实例库拖拽：拖实例=默认卡组、拖功能=单卡、多选批量拖=监看墙；放置区高亮 + 松手落位。
@@ -77,7 +77,7 @@ export interface SuperWorkbenchPageProps {
     onToggleFullscreen: () => void
     onClose: () => void
   }) => ReactNode
-  /**
+  /** 
    * 渲染「专注终端」沉浸台（应用侧接线层组件，自带实例名册/指标/回溯等取数）。
    * 只在 focusInstanceId 非空时调用。
    */

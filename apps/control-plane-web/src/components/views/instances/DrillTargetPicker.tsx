@@ -16,8 +16,8 @@ export interface DrillNode {
   name: string
 }
 
-/**
- * 下钻目标（FR-221）：平台 → 节点 → 实例 → 世界 逐级钻取。
+/** 
+ * 下钻目标：平台 → 节点 → 实例 → 世界 逐级钻取。
  * - platform：平台聚合视图。
  * - node：单节点视图（uuid=节点 uuid）。
  * - instance：单实例视图（uuid=实例 uuid，nodeUuid 记录来源节点用于返回上一级）；
@@ -49,8 +49,8 @@ function Crumb({ label, onClick, active }: { label: string; onClick?: () => void
   )
 }
 
-/**
- * 下钻式目标选择器（FR-221）：面包屑展示当前层级路径 + 当前层提供下钻到下一级的下拉。
+/** 
+ * 下钻式目标选择器：面包屑展示当前层级路径 + 当前层提供下钻到下一级的下拉。
  * 替代原扁平 select，使「节点→实例→世界」逐级钻取可达，同时保留任意层一键回跳。
  */
 export function DrillTargetPicker({
@@ -67,7 +67,7 @@ export function DrillTargetPicker({
   nodes: DrillNode[]
   /** 当前实例的世界名列表（来自其分世界序列）；instance 层下钻到世界用。 */
   worlds: string[]
-  /**
+  /** 
    * node 层的实例候选（外壳按当前节点向服务端搜索后注入）。
    * 服务端已按 nodeId 过滤、按名排序并截断，视图不再本地过滤全量数组。
    */
@@ -79,7 +79,7 @@ export function DrillTargetPicker({
 }) {
   const { t } = useTranslation()
 
-  /**
+  /** 
    * 实例名的本地缓存。
    *
    * 实例级下钻已改由 InstancePicker 走服务端搜索，不再由父级喂全量实例数组，因此面包屑里的

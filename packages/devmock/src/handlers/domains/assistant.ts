@@ -2,8 +2,8 @@ import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 
-/**
- * AI 助手配置域 mock（FR-514，见 ADR-105）。
+/** 
+ * AI 助手配置域 mock（见 ADR-105）。
  *
  * 复刻真后端的关键语义，而不是「对什么都答应」，否则 mock 模式下看不见缺陷：
  * - 管理面要求平台管理员（非管理员 403），与 `router/assistant.go` 的
@@ -45,7 +45,7 @@ const now = () => new Date().toISOString()
 /** SSE 输出用（与 bots.ts 同做法）。 */
 const encoder = new TextEncoder()
 
-// ── 对话运行时的内存态（FR-519/520 界面验证用） ──
+// ── 对话运行时的内存态（520 界面验证用） ──
 interface MockConversation {
   id: number
   title: string
@@ -478,7 +478,7 @@ export const handlers = [
     })
   }),
 
-  // ── 对话运行时（FR-519/520 消费；后端契约见 router/assistant_chat.go） ──
+  // ── 对话运行时（520 消费；后端契约见 router/assistant_chat.go） ──
   //
   // 复刻三条关键语义，避免 mock 下验证不到真实行为：
   //  - 越权一律 404（后端有意不用 403，前端不得据此提示「无权限」）；
@@ -560,7 +560,7 @@ export const handlers = [
     return HttpResponse.json({ items: messages.get(id) ?? [] })
   }),
 
-  /**
+  /** 
    * 提交一轮：回 202 + runId，并把这一轮的脚本事件挂到 runEvents。
    *
    * 回复内容是**固定的脚本**而不是模型输出——mock 的职责是让界面链路（提交 → 流 →
@@ -651,7 +651,7 @@ export const handlers = [
     return HttpResponse.json(all.filter((e) => e.seq > after))
   }),
 
-  /**
+  /** 
    * 事件流（SSE）：每帧是一个**自带 type 的 JSON**，前端只看 data。
    *
    * 刻意按 ~120ms 逐帧推送而不是一次 flush：界面的增量渲染逻辑（以及骨架屏到正文的

@@ -55,8 +55,8 @@ const ScopeContext = createContext<ScopeContextValue | null>(null)
 
 // ── 主组件 ────────────────────────────────────────────────────────────
 
-/**
- * 清理目录树形右键菜单可视化编辑器（FR-262，替换 ManagedDirsEditor）。
+/** 
+ * 清理目录树形右键菜单可视化编辑器（替换 ManagedDirsEditor）。
  *
  * 复用 FileExplorer 同款文件树（从草稿 files 派生目录树），改为右键菜单 + 多选 + 颜色标记
  * 的交互模式。目录节点左侧色条标记四态：红=清理、绿=排除、橙=混合（子目录有不同标记）、
@@ -521,10 +521,10 @@ function collectVisibleDirs(dir: TreeDir, collapsedPaths: Set<string>): string[]
   return out
 }
 
-// ── 自定义排除标签输入（FR-255，从 ManagedDirsEditor 迁移） ──────────────
+// ── 自定义排除标签输入（从 ManagedDirsEditor 迁移） ──────────────
 
-/**
- * 自定义追加排除标签输入（FR-255）。
+/** 
+ * 自定义追加排除标签输入。
  *
  * 运营可填「额外永不清理」的目录/路径（如玩家自装 mod 目录），产出 `cleanExclude: string[]`。
  * 回车添加，每个标签可删除。输入合法性：非空、相对路径不逃逸、去重。

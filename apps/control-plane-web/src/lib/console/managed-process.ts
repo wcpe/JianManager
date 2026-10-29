@@ -1,5 +1,5 @@
-/**
- * 受管进程探查的契约（FR-169 进程剖析）。
+/** 
+ * 受管进程探查的契约（进程剖析）。
  *
  * 归包理由：监控页的进程 TOP 面板与详情弹窗都要读它，应用侧 API 层改从包 import，
  * 避免两处各写一份。实现（useProcessTop / useManagedProcessDetail 等）仍留应用侧。

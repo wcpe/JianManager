@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// PluginHandler 插件/模组单服管理路由处理器（FR-052）。
+// PluginHandler 插件/模组单服管理路由处理器。
 type PluginHandler struct {
 	pluginSvc *service.PluginService
 	authz     *service.AuthzService

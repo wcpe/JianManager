@@ -99,7 +99,7 @@ func TestRegistry_UnknownTaskIgnored(t *testing.T) {
 	require.Empty(t, r.Snapshot())
 }
 
-// 强制停止（FR-227）：Cancel 调 cancel 并置 canceled 终态；已 canceled 不被 Succeed/Fail 覆盖（终态守卫）。
+// 强制停止：Cancel 调 cancel 并置 canceled 终态；已 canceled 不被 Succeed/Fail 覆盖（终态守卫）。
 func TestRegistry_Cancel(t *testing.T) {
 	r := New()
 	canceled := false

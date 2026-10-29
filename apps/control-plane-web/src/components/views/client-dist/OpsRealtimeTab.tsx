@@ -10,8 +10,8 @@ import type { ClientDistErrorSummary, ClientDistRealtime } from '@/lib/client-di
 import { LinkableDistPanel, TrendCard, ErrorPanel, distBuckets, fmtTime, kindLabel } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
-/**
- * 页面 B · 实时监控 Tab（FR-430，迁自旧监控页 `MonitorTab`）。
+/** 
+ * 页面 B · 实时监控 Tab（迁自旧监控页 `MonitorTab`）。
  * 展示近 1h 分发请求聚合 + 近 24h 请求速率趋势 + 来源 IP / 错误码 TopN + 失败样例 + 最近错误。
  * 安全侧「异常请求」为同 Tab 的 `seg=events` 分档，由页面外壳渲染。
  */

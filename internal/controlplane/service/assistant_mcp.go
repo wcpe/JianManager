@@ -22,7 +22,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 外部 MCP 连接治理（FR-517 §4 / §6 / §7）。
+// 外部 MCP 连接治理（§4 / §6 / §7）。
 //
 // 本 FR 的重点不是「能连上」，而是**边界**：
 //   - 端点准入走受保护出站（默认禁私网/回环/元数据，管理员可精确 origin+CIDR 放行）；
@@ -57,7 +57,7 @@ var (
 // AssistantMCPService 外部连接管理。
 type AssistantMCPService struct {
 	db *gorm.DB
-	// enc 凭据加密器（复用 FR-514 的同一把主密钥）。
+	// enc 凭据加密器（复用的同一把主密钥）。
 	enc *KeyEncryptor
 	// guardFactory 按放行段构造受保护出站。为 nil 时用默认（仅 https 公网）。
 	guardFactory func(origins []httpclient.AllowedOrigin) *httpclient.Guard
@@ -141,7 +141,7 @@ type MCPConnectionView struct {
 	AuthStyle      string `json:"authStyle"`
 	AuthHeaderName string `json:"authHeaderName"`
 	AuthSource     string `json:"authSource"`
-	// HasCredential 只回「有没有」，不回值（与 FR-514 同口径）。
+	// HasCredential 只回「有没有」，不回值（与同口径）。
 	HasCredential  bool                    `json:"hasCredential"`
 	AllowedOrigins []MCPAllowedOriginInput `json:"allowedOrigins"`
 	Enabled        bool                    `json:"enabled"`
@@ -413,7 +413,7 @@ func (s *AssistantMCPService) viewOfConnection(row *model.AssistantMCPConnection
 	}
 }
 
-// applyMCPCredential 应用凭据三态（与 FR-514 同口径）。
+// applyMCPCredential 应用凭据三态（与同口径）。
 func (s *AssistantMCPService) applyMCPCredential(row *model.AssistantMCPConnection, in MCPConnectionInput) error {
 	if in.ClearCredential || row.AuthSource == model.MCPAuthSourceNone {
 		row.AuthEnc = ""

@@ -1,5 +1,5 @@
-/**
- * 群组服 proxy↔backend 拓扑（FR-145）。
+/** 
+ * 群组服 proxy↔backend 拓扑。
  *
  * 把「代理 + 其已注册后端」聚合为一张二部图（M:N）：节点 = 实例（proxy/backend），
  * 连线 = 注册关系。一个 backend 可被多个 proxy 注册，故跨 proxy 去重为单节点、
@@ -17,8 +17,8 @@ import {
 } from '@/lib/instances/instance-grouping'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 
-/**
- * 拓扑构图所需的实例最小投影（FR-453 全量实例上拓扑）：
+/** 
+ * 拓扑构图所需的实例最小投影（全量实例上拓扑）：
  * 注册关系提供的 proxy/backend 概要 + `GET /topology` 的 `instances` 全量投影都可满足。
  */
 export type TopoInstanceInput = Pick<
@@ -66,8 +66,8 @@ export interface Topology {
   edges: TopoEdge[]
 }
 
-/**
- * 注册连线的着色等级（FR-145）：
+/** 
+ * 注册连线的着色等级：
  * 禁用的注册不参与转发，恒为中性；启用时复用实例状态等级（运行=绿/崩溃=红/启停=黄）。
  */
 export function edgeLevel(enabled: boolean, backendStatus: string): StatusLevel {
@@ -75,13 +75,13 @@ export function edgeLevel(enabled: boolean, backendStatus: string): StatusLevel 
   return instanceStatusLevel(backendStatus)
 }
 
-/**
+/** 
  * 由「代理 + 其注册」聚合为拓扑图模型。
  * - proxy 节点直接来自入参（保序）。
  * - backend 节点跨 proxy 按 id 去重，registrationCount 累加被注册次数。
  * - 每条 registration 产出一条 edge（M:N），共享后端 → 多 edge 单节点。
  * - 容错缺失的 backend 概要（仅有 backendId 时名称回退 `#<id>`、状态未知）。
- * - `allInstances`（FR-453）：未出现在任何注册关系里的实例（beacon/独立服务/已建未挂 BC 的后端）
+ * - `allInstances`：未出现在任何注册关系里的实例（beacon/独立服务/已建未挂 BC 的后端）
  *   作为**孤立节点**（registrationCount=0）保留，使拓扑成为完整网络视图；缺省不保留任何孤立节点，
  *   保持既有调用方（仅传注册）行为不变。
  */
@@ -128,7 +128,7 @@ export function buildTopology(input: ProxyRegistrations[], allInstances: TopoIns
     }
   }
 
-  // 孤立节点补齐（FR-453）：未注册实例也上拓扑，避免「拓扑只画已注册」的信息缺口。
+  // 孤立节点补齐：未注册实例也上拓扑，避免「拓扑只画已注册」的信息缺口。
   // 去重按**实例 id**（`seenIds`）：前一循环已从注册关系建出的 proxy/backend 节点保持原 kind，
   // 全量投影里的同一实例直接跳过（不重复上节点、不覆盖注册侧的角色）。
   const seenIds = new Set<number>(nodes.map((n) => n.id))
@@ -183,7 +183,7 @@ export interface LaidTopology {
   height: number
 }
 
-/**
+/** 
  * 二部布局：proxy 居左列、backend 居右列，各列内按出现序等距纵向排开。
  * 高度按较多一侧的行数推算（至少一行，空图退化为单行高度）。连线从 proxy 右边缘
  * 连到 backend 左边缘。纯函数，便于 vitest 校验列分离与坐标解析。
@@ -233,7 +233,7 @@ export function layoutTopology(topo: Topology, opts: LayoutOptions): LaidTopolog
   return { nodes: laidNodes, edges, width, height }
 }
 
-/** 成员实例按运行状态的计数桶（五态零补齐，对应后端 NetworkSummary.memberStatus，FR-335）。 */
+/** 成员实例按运行状态的计数桶（五态零补齐，对应后端 NetworkSummary.memberStatus）。 */
 export interface MemberStatusCounts {
   running: number
   stopped: number
@@ -242,7 +242,7 @@ export interface MemberStatusCounts {
   stopping: number
 }
 
-/** 群组成员健康分布（FR-145 列表行）：按运行/崩溃/过渡/停止分桶。 */
+/** 群组成员健康分布（列表行）：按运行/崩溃/过渡/停止分桶。 */
 export interface MemberHealth {
   total: number
   running: number
@@ -253,8 +253,8 @@ export interface MemberHealth {
   stopped: number
 }
 
-/**
- * 由后端概要的五态计数桶直接得健康分布（FR-335），供列表页免详情请求渲染。
+/** 
+ * 由后端概要的五态计数桶直接得健康分布，供列表页免详情请求渲染。
  * 口径与 memberHealth 一致：starting+stopping → transitioning 桶；total = 五桶之和。
  */
 export function memberHealthFromStatus(counts: MemberStatusCounts): MemberHealth {
@@ -271,7 +271,7 @@ export function memberHealthFromStatus(counts: MemberStatusCounts): MemberHealth
   }
 }
 
-/**
+/** 
  * 统计成员状态分布，供列表行健康分布条与摘要。
  * 等级复用 instanceStatusLevel：success=运行 / danger=崩溃 / warning=过渡 / 其余=停止桶。
  * 入参只取 `status`，故不绑定 network 成员实体，任何带状态的成员列表都可直接传入。
@@ -297,7 +297,7 @@ export function memberHealth(members: { status: string }[]): MemberHealth {
   return h
 }
 
-// ─────────────────────────── 分组分层（FR-335） ───────────────────────────
+// ─────────────────────────── 分组分层 ───────────────────────────
 
 /** 拓扑分组入参：一个 network 的成员归属（软标签非独占，ADR-007）。 */
 export interface TopoGroupBrief {
@@ -329,16 +329,16 @@ export interface GroupedTopology {
 /** 未分组兜底带的固定 id 标记（null）。 */
 const UNGROUPED_BAND_ID = null
 
-/**
- * 按 network 成员归属把拓扑节点归带（FR-335）：
+/** 
+ * 按 network 成员归属把拓扑节点归带：
  * - 每个 network 一带（保持 groups 传入序）；节点落**首个**包含它的 group（软标签可多归属）。
  * - 不属任何 network 的节点归「未分组」兜底带（带 id=null）。
  * - multiHomed 记录归属 >1 个 group 的节点 id（渲染层加角标 +n）。
  * - 连线原样携带（渲染层按端点节点所在带跨带连接）。
  * 纯函数，便于 vitest 校验归带与多归属判定。
  *
- * @deprecated FR-452 起渲染层统一走 `groupTopologyByDimension`（按所选维度分带，含 groupTree 多级层级）；
- * 本函数为 FR-335 单一 network 分带的历史实现，生产代码已无引用，仅保留供既有 vitest 回归。
+ * @deprecated起渲染层统一走 `groupTopologyByDimension`（按所选维度分带，含 groupTree 多级层级）；
+ * 本函数为单一 network 分带的历史实现，生产代码已无引用，仅保留供既有 vitest 回归。
  * 新代码请勿使用；若确认无回归价值可一并删除（连同 `topology.test.ts` 对应用例）。
  */
 export function groupTopology(topo: Topology, groups: TopoGroupBrief[]): GroupedTopology {
@@ -387,7 +387,7 @@ export function groupTopology(topo: Topology, groups: TopoGroupBrief[]): Grouped
   return { bands, edges: topo.edges, multiHomed }
 }
 
-// ─────────────────── 按分组维度分带（FR-452/453） ───────────────────
+// ─────────────────── 按分组维度分带（453） ───────────────────
 
 /** 按维度分带用的内部规格：带键 + 展示名 + 可选外层值 + 可选树序 + 成员实例 id。 */
 interface DimBandSpec {
@@ -399,8 +399,8 @@ interface DimBandSpec {
   ids: Set<number>
 }
 
-/**
- * 分带排序（FR-452/453）：
+/** 
+ * 分带排序（453）：
  * - groupTree：两侧都有 `ord` 时按分组树前序（与列表树表同序）。
  * - 完全未分组带（无外层、无名称）恒排末尾。
  * - 其余按外层值字典序，再按展示名字典序；同外层下空名（如 region 维的「未分小区」）排末尾。
@@ -422,8 +422,8 @@ function sortDimBandSpecs(specs: DimBandSpec[]): DimBandSpec[] {
   })
 }
 
-/**
- * 由维度 + 全量实例推导分带规格（FR-452/453）。
+/** 
+ * 由维度 + 全量实例推导分带规格（453）。
  * - none：单带（空名）含全部实例。
  * - region：**两级**——按 `region:` 外层、`zone:` 内层；每 (region,zone) 一带、`parent` 记大区，
  *   无 zone 者与 zone 带同外层（渲染为「大区 / 未分小区」，与列表 `zoneNone` 同序同文案）；
@@ -488,8 +488,8 @@ function dimensionBandSpecs(
   return sortDimBandSpecs([...byKey.values()])
 }
 
-/**
- * 按所选分组维度把拓扑节点归带（FR-452/453）：层级随维度变化，默认 `region`（region→zone 两级）。
+/** 
+ * 按所选分组维度把拓扑节点归带（453）：层级随维度变化，默认 `region`（region→zone 两级）。
  * 口径与 `groupTopology` 一致：软标签多归属**落首个**所属带（multiHomed 记角标），
  * 无归属节点落「未分组」带（排末尾）；仅保留有节点的带（空带不占位）。
  * groupTree 维度另接 `labels`（组键→组名/祖先路径/树序），键为组 id，故同名不同组不合并。
@@ -571,8 +571,8 @@ export interface LaidGroupedTopology extends LaidTopology {
   multiHomed: Set<number>
 }
 
-/**
- * 分组分层布局（FR-335）：每带一个横向分层带（带内 proxy 左列 / backend 右列），带间留隔。
+/** 
+ * 分组分层布局：每带一个横向分层带（带内 proxy 左列 / backend 右列），带间留隔。
  * 画布总高 = Σ(带标题条 + 带内容高) + 带间隔，避免单列纵向线性膨胀。
  * 连线端点解析到各自节点（可能跨带）。纯函数，便于 vitest 校验带分层与坐标。
  */

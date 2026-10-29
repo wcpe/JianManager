@@ -4,8 +4,8 @@ import { renderWithProviders } from '@/test/render'
 import { ClientFileTree } from '@/components/views/client-dist/ClientFileTree'
 import type { ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
 
-/**
- * ClientFileTree 拖拽编排 DOM 测试（FR-254）。
+/** 
+ * ClientFileTree 拖拽编排 DOM 测试。
  * 验证：拖拽文件节点到目录 → onPathChange 改路径；拖拽目录节点 → 批量改子树路径；
  * 拖到根 → 剥离目录前缀；拖到自身 → no-op。
  */
@@ -41,7 +41,7 @@ function dirRowByPath(path: string): HTMLElement {
   return row
 }
 
-describe('ClientFileTree 拖拽编排（FR-254）', () => {
+describe('ClientFileTree 拖拽编排', () => {
   it('拖拽文件到目录 → onPathChange 改为目录+文件名', () => {
     const onPathChange = vi.fn()
     renderWithProviders(

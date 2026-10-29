@@ -37,7 +37,7 @@ func NewFileService(db *gorm.DB, pool *grpc.ClientPool) *FileService {
 	return &FileService{db: db, pool: pool}
 }
 
-// FileInfo 文件信息（FR-373：含权限元数据，加性字段）。
+// FileInfo 文件信息（：含权限元数据，加性字段）。
 type FileInfo struct {
 	Name       string `json:"name"`
 	IsDir      bool   `json:"isDir"`
@@ -51,7 +51,7 @@ type FileInfo struct {
 	Group      string `json:"group,omitempty"`
 }
 
-// PathAccess 写前/浏览前权限探测结果（FR-373）。
+// PathAccess 写前/浏览前权限探测结果。
 type PathAccess struct {
 	Exists     bool   `json:"exists"`
 	IsDir      bool   `json:"isDir"`
@@ -109,7 +109,7 @@ func (s *FileService) ListFiles(instanceID uint, path string) ([]FileInfo, error
 	return files, nil
 }
 
-// CheckPathAccess 探测实例内路径可读/可写（FR-373）。
+// CheckPathAccess 探测实例内路径可读/可写。
 func (s *FileService) CheckPathAccess(instanceID uint, path string) (*PathAccess, error) {
 	if err := validatePath(path); err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (s *FileService) CheckPathAccess(instanceID uint, path string) (*PathAccess
 	}, nil
 }
 
-// ChmodPath 实例内单 path 非递归 chmod（FR-373）。mode 空=保证属主可读写。
+// ChmodPath 实例内单 path 非递归 chmod。mode 空=保证属主可读写。
 func (s *FileService) ChmodPath(instanceID uint, path, mode string) (string, error) {
 	if err := validatePath(path); err != nil {
 		return "", err
@@ -240,14 +240,14 @@ func (s *FileService) WriteFile(instanceID uint, path string, content []byte) er
 	return nil
 }
 
-// uploadChunkSize 上传流式分片大小，与 Worker DownloadFile 分片对称（FR-304）。
+// uploadChunkSize 上传流式分片大小，与 Worker DownloadFile 分片对称。
 const uploadChunkSize = 64 * 1024
 
 // legacyUploadMaxBytes 老 Worker（无 UploadFile）回退 WriteFile unary 的内容上限：
 // Worker 服务端 64MiB 单消息上限扣除 protobuf 编组余量，超限直接引导升级而非盲发注定被拒的请求。
 const legacyUploadMaxBytes = 64*1024*1024 - 64*1024
 
-// UploadFile 单文件流式上传（FR-304）：经 Worker UploadFile client-stream 分片转发，
+// UploadFile 单文件流式上传：经 Worker UploadFile client-stream 分片转发，
 // 任意大小不受单消息上限约束、CP 侧内存占用 O(chunk)。老 Worker 回退 WriteFile unary（≤64MB）。
 // 流式需贯穿整个 HTTP 请求，故由调用方传入请求级 ctx（不设固定超时——这正是本 FR 要移除的 10s 硬超时）。
 func (s *FileService) UploadFile(ctx context.Context, instanceID uint, filePath string, r io.Reader) error {
@@ -461,7 +461,7 @@ func (s *FileService) RenameFile(instanceID uint, oldPath, newPath string) error
 	return nil
 }
 
-// DownloadArchive 把选中的若干文件/目录即时打包为 zip 流式返回（FR-070 批量下载）。
+// DownloadArchive 把选中的若干文件/目录即时打包为 zip 流式返回（批量下载）。
 // 返回 Worker gRPC 服务端流，由调用方逐帧 Recv 并写到 HTTP 响应；Worker 边打包边发，CP 不缓冲整包。
 // 注意：流式打包需贯穿整个 HTTP 响应，故由调用方传入请求级 ctx（不在此设固定超时）。
 func (s *FileService) DownloadArchive(ctx context.Context, instanceID uint, paths []string) (workerpb.WorkerService_DownloadArchiveClient, error) {
@@ -522,18 +522,18 @@ func (s *FileService) DownloadFile(ctx context.Context, instanceID uint, path st
 	return stream, nil
 }
 
-// SearchHit 一条搜索命中（与 Worker SearchHit 对应，FR-074）。
+// SearchHit 一条搜索命中（与 Worker SearchHit 对应）。
 type SearchHit struct {
 	Path    string `json:"path"`
 	Line    int    `json:"line"`
 	Snippet string `json:"snippet"`
 }
 
-// SearchResult 一次搜索的结果（FR-074）。
+// SearchResult 一次搜索的结果。
 type SearchResult struct {
 	Hits      []SearchHit `json:"hits"`
 	Truncated bool        `json:"truncated"`
-	// Indexing 为 true 表示 Worker 索引首建未就绪（FR-113，ADR-024）：本次 Hits 为空，调用方应稍后用同一查询重试。
+	// Indexing 为 true 表示 Worker 索引首建未就绪（ADR-024）：本次 Hits 为空，调用方应稍后用同一查询重试。
 	Indexing bool `json:"indexing"`
 }
 
@@ -543,7 +543,7 @@ type SearchScope struct {
 	Extensions []string `json:"extensions"`
 }
 
-// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（见 ADR-017）。
 // CP 仅经 gRPC 把查询转发到目标节点 Worker（索引是 Worker 本地资产，CP 不持有）。
 // mode 为 content（默认全文）或 filename（文件名快速打开）；maxResults<=0 时由 Worker 取默认。
 func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResults int, scope SearchScope) (*SearchResult, error) {
@@ -644,7 +644,7 @@ func filterSearchHits(hits []SearchHit, maxResults int, scope SearchScope, trunc
 	return filtered, truncated
 }
 
-// ArchiveEntry 归档（jar/zip）内的单个条目（FR-075）。
+// ArchiveEntry 归档（jar/zip）内的单个条目。
 type ArchiveEntry struct {
 	Name           string `json:"name"`
 	IsDir          bool   `json:"isDir"`
@@ -654,13 +654,13 @@ type ArchiveEntry struct {
 	CRC32          uint32 `json:"crc32"`
 }
 
-// ArchiveEntries 是列举归档条目的结果（FR-075）。
+// ArchiveEntries 是列举归档条目的结果。
 type ArchiveEntries struct {
 	Entries   []ArchiveEntry `json:"entries"`
 	Truncated bool           `json:"truncated"`
 }
 
-// ListArchiveEntries 列出归档（jar/zip）内全部条目（FR-075，委托 Worker archive/zip）。
+// ListArchiveEntries 列出归档（jar/zip）内全部条目（委托 Worker archive/zip）。
 func (s *FileService) ListArchiveEntries(instanceID uint, path string) (*ArchiveEntries, error) {
 	if err := validatePath(path); err != nil {
 		return nil, err
@@ -697,14 +697,14 @@ func (s *FileService) ListArchiveEntries(instanceID uint, path string) (*Archive
 	return out, nil
 }
 
-// ArchiveEntryContent 是读取归档内某条目内容的结果（FR-075）。
+// ArchiveEntryContent 是读取归档内某条目内容的结果。
 type ArchiveEntryContent struct {
 	Content   []byte
 	Truncated bool
 	Binary    bool
 }
 
-// ReadArchiveEntry 读取归档内某条目内容（FR-075，委托 Worker）。
+// ReadArchiveEntry 读取归档内某条目内容（委托 Worker）。
 func (s *FileService) ReadArchiveEntry(instanceID uint, path, entry string) (*ArchiveEntryContent, error) {
 	if err := validatePath(path); err != nil {
 		return nil, err
@@ -734,7 +734,7 @@ func (s *FileService) ReadArchiveEntry(instanceID uint, path, entry string) (*Ar
 	return &ArchiveEntryContent{Content: resp.Content, Truncated: resp.Truncated, Binary: resp.Binary}, nil
 }
 
-// DecompileResult 是反编译结果（FR-075）。
+// DecompileResult 是反编译结果。
 type DecompileResult struct {
 	Success    bool   `json:"success"`
 	Error      string `json:"error,omitempty"`
@@ -743,7 +743,7 @@ type DecompileResult struct {
 	Decompiler string `json:"decompiler,omitempty"`
 }
 
-// DecompileClass 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，委托 Worker CFR）。
+// DecompileClass 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（委托 Worker CFR）。
 // 反编译可能耗时（跑 CFR 子进程），故超时给得比普通文件操作宽（含 Worker 侧 30s 反编译 + 余量）。
 func (s *FileService) DecompileClass(instanceID uint, path, entry string) (*DecompileResult, error) {
 	if err := validatePath(path); err != nil {
@@ -777,7 +777,7 @@ func (s *FileService) DecompileClass(instanceID uint, path, entry string) (*Deco
 	}, nil
 }
 
-// ValidateInstancePath 对外暴露实例内相对路径校验（FR-397：MCP 与票据端点复用同一口径）。
+// ValidateInstancePath 对外暴露实例内相对路径校验（：MCP 与票据端点复用同一口径）。
 func ValidateInstancePath(path string) error {
 	return validatePath(path)
 }

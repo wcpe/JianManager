@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// 实例分组（FR-165 / ADR-033）的 MCP 工具：只读树/成员查询 + 建组/改组/删组/加成员/移成员。
+// 实例分组（ADR-033）的 MCP 工具：只读树/成员查询 + 建组/改组/删组/加成员/移成员。
 // 分组仅承载运维归类，不承载权限或配额；写操作须 instance.write。
 func init() {
 	registerToolSpecs(

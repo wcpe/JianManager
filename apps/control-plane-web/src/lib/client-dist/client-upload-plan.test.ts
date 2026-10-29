@@ -14,7 +14,7 @@ import {
   sha256HexOfBlob,
 } from './client-upload-plan'
 
-/** FR-346 上传增效纯逻辑：分路 / 装箱 / 并发池 / 单调进度 / 浏览器 hash。 */
+/** 上传增效纯逻辑：分路 / 装箱 / 并发池 / 单调进度 / 浏览器 hash。 */
 
 describe('分路（shouldHash / uploadRouteFor）', () => {
   it('≤8MiB 走聚合、>8MiB 走分块（边界含 8MiB 本身）', () => {

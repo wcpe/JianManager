@@ -8,10 +8,10 @@ import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleView'
 import type { ConsoleHistoryState } from '@/lib/console/console-history'
 
-/**
- * 命令栏智能输入（FR-416）：历史持久化 / `^R` 模糊搜索 / 候选式 Tab 补全 / 多行粘贴保护。
+/** 
+ * 命令栏智能输入：历史持久化 / `^R` 模糊搜索 / 候选式 Tab 补全 / 多行粘贴保护。
  *
- * FR-415 把 Tab 补全随旧 xterm 输入路径删掉了（ADR-086「已知回退」），这些用例是补回后的锁。
+ *把 Tab 补全随旧 xterm 输入路径删掉了（ADR-086「已知回退」），这些用例是补回后的锁。
  */
 
 const LABEL = '控制台命令输入'
@@ -33,7 +33,7 @@ function pasteText(input: HTMLInputElement, text: string) {
 const candidateList = () => screen.queryByRole('listbox', { name: '命令补全候选' })
 const historyList = () => screen.queryByRole('listbox', { name: '历史命令匹配结果' })
 
-/**
+/** 
  * 回溯控制器 stub：本文件只借视图当「按实例持久化历史」的宿主，不触达 DB 分页取数
  * （受控视图 ADR-103：控制器由应用侧接线层注入）。
  */
@@ -51,7 +51,7 @@ function historyBacktrack(): ConsoleHistoryState {
   }
 }
 
-describe('FR-416 Tab 补全：候选式，不盲补第一个', () => {
+describe('Tab 补全：候选式，不盲补第一个', () => {
   it('多候选：只推进到公共前缀并列出候选，输入不等于任何单个候选', async () => {
     const user = userEvent.setup()
     const { input } = setup({ players: PLAYERS })
@@ -190,7 +190,7 @@ describe('FR-416 Tab 补全：候选式，不盲补第一个', () => {
   })
 })
 
-describe('FR-416 ^R 历史模糊搜索', () => {
+describe('^R 历史模糊搜索', () => {
   const history = ['say hello', 'gamemode creative Steve', 'list', 'op Steve']
 
   it('Ctrl+R 打开搜索浮层并阻止浏览器刷新', () => {
@@ -267,7 +267,7 @@ describe('FR-416 ^R 历史模糊搜索', () => {
   })
 })
 
-describe('FR-416 多行粘贴保护', () => {
+describe('多行粘贴保护', () => {
   const TWO_LINES = 'say first\nsay second'
 
   it('粘贴 ≥2 行弹确认，不一股脑连发', () => {
@@ -343,7 +343,7 @@ describe('FR-416 多行粘贴保护', () => {
   })
 })
 
-describe('FR-416 历史按实例持久化（刷新后仍在）', () => {
+describe('历史按实例持久化（刷新后仍在）', () => {
   const INSTANCE = 4242
 
   beforeEach(() => {

@@ -17,7 +17,7 @@ import (
 
 const instanceResourceSnapshotTimeout = 3 * time.Second
 
-// instanceWorkDirSizeTimeout 工作目录大小统计的独立预算（FR-467）。
+// instanceWorkDirSizeTimeout 工作目录大小统计的独立预算。
 // 数十 GB 目录遍历可达数秒，故不与 3s 的进程快照预算共用——磁盘统计慢不该拖垮进程指标。
 //
 // N-5 修正：本预算必须在**独立 ctx** 上派生才真正可达。原先 instanceWorkDirBytes 收的是
@@ -27,7 +27,7 @@ const instanceResourceSnapshotTimeout = 3 * time.Second
 // 磁盘配额静默不生效。现在磁盘统计从入站 RPC ctx 派生，只受调用方 deadline 约束。
 const instanceWorkDirSizeTimeout = 10 * time.Second
 
-// GetInstanceResourceSnapshot 返回受管根进程及完整子进程树的资源快照（FR-399）。
+// GetInstanceResourceSnapshot 返回受管根进程及完整子进程树的资源快照。
 // 每个资源指标单独标记可用性，避免以零值掩盖进程退出或系统权限限制。
 func (s *Server) GetInstanceResourceSnapshot(ctx context.Context, req *workerpb.GetInstanceResourceSnapshotRequest) (*workerpb.GetInstanceResourceSnapshotResponse, error) {
 	state, err := s.manager.GetState(req.InstanceUuid)
@@ -95,7 +95,7 @@ func snapshotInstanceProcessTree(ctx context.Context, rootPID int32, workDirByte
 	return response
 }
 
-// instanceWorkDirBytes 统计实例工作目录占用（FR-467 运行期配额强制的磁盘维度）。
+// instanceWorkDirBytes 统计实例工作目录占用（运行期配额强制的磁盘维度）。
 //
 // 与进程指标分开采集：磁盘占用看目录树大小而非进程 RSS。统计失败（实例不存在/目录不可读）
 // 时返回 available=false，让 CP 侧明确「磁盘维度不可用」而不是把 0 当成「没占空间」

@@ -2,11 +2,11 @@ package model
 
 import "time"
 
-// BusinessEventCursor 业务事件位点账本（ADR-107，属 FR-522 的旁路能力）。
+// BusinessEventCursor 业务事件位点账本（ADR-107，属的旁路能力）。
 //
 // **只存投递元数据，绝不存 payload**——这是与 ADR-106 的分界线：
 // 位点是「信封的运输单据」，payload 是「信封里的信」。一旦本表长出 payload 列，
-// 紧接着的需求必然是按 payload 查询与聚合，那正是 FR-521 花力气退役掉的能力。
+// 紧接着的需求必然是按 payload 查询与聚合，那正是花力气退役掉的能力。
 // 故本文件**不得**新增任何 payload / output / 业务字段；内容重放的正确归属是
 // ServerProbe 的 EventSpillStore，不是控制面。
 //

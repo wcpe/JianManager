@@ -4,7 +4,7 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ClientVersionsPanel from './ClientVersionsPanel'
 
-describe('ClientVersionsPanel（FR-352）', () => {
+describe('ClientVersionsPanel', () => {
   it('标题区展示内嵌更新器旁路摘要', async () => {
     loginMockUser()
     renderWithProviders(<ClientVersionsPanel channelId="skyblock-s1" />)

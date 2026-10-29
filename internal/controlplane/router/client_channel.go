@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientChannelHandler 客户端分发频道与拉取密钥路由（FR-086，见 ADR-022）。
+// ClientChannelHandler 客户端分发频道与拉取密钥路由（见 ADR-022）。
 // 平台级共享资源，限平台管理员。创建/吊销/轮换写审计，审计 detail 绝不含密钥明文。
 type ClientChannelHandler struct {
 	svc   *service.ClientChannelService
@@ -40,15 +40,15 @@ type updateChannelRequest struct {
 	Description string `json:"description"`
 }
 
-// createKeyRequest 创建拉取密钥请求体。value 可空（留空自动生成；FR-192 支持自定义值）。
+// createKeyRequest 创建拉取密钥请求体。value 可空（留空自动生成支持自定义值）。
 type createKeyRequest struct {
 	Name      string `json:"name" binding:"required"`
 	ExpiresAt string `json:"expiresAt"`
-	// Value 自定义密钥明文值（可空=自动生成）。供管理员自控这把永久 key（FR-192）。
+	// Value 自定义密钥明文值（可空=自动生成）。供管理员自控这把永久 key。
 	Value string `json:"value"`
 }
 
-// updateKeyRequest 编辑拉取密钥请求体（FR-192）。name 必填；value 可空（留空只改名）。
+// updateKeyRequest 编辑拉取密钥请求体。name 必填；value 可空（留空只改名）。
 type updateKeyRequest struct {
 	Name string `json:"name" binding:"required"`
 	// Value 新密钥明文值（可空=不改值，只改名）。非空则改值（重算 KeyHash + 重写 KeyEnc）。
@@ -194,7 +194,7 @@ func (h *ClientChannelHandler) CreateKey(c *gin.Context) {
 	c.JSON(http.StatusCreated, keyWithPlaintext(key, plaintext))
 }
 
-// UpdateKey PUT /client-channels/:id/keys/:kid — 编辑密钥（值/名称；FR-192，见 ADR-044）。
+// UpdateKey PUT /client-channels/:id/keys/:kid — 编辑密钥（值/名称见 ADR-044）。
 // 仅平台管理员 + 审计。改值时重算 KeyHash（鉴权切到新值）+ 重写 KeyEnc（可查看），新明文随响应回显。
 func (h *ClientChannelHandler) UpdateKey(c *gin.Context) {
 	if !requireClientChannelWrite(c) {
@@ -257,7 +257,7 @@ func (h *ClientChannelHandler) UpdateKey(c *gin.Context) {
 	c.JSON(http.StatusOK, keyWithPlaintext(key, plaintext))
 }
 
-// RevealKey GET /client-channels/:id/keys/:kid/reveal — 查看密钥明文（FR-192，见 ADR-044）。
+// RevealKey GET /client-channels/:id/keys/:kid/reveal — 查看密钥明文（见 ADR-044）。
 // 仅平台管理员 + 审计 client_key.reveal（detail 绝不含明文）。无 KeyEnc → 404 KEY_NOT_REVEALABLE。
 func (h *ClientChannelHandler) RevealKey(c *gin.Context) {
 	if !requireClientChannel(c) {

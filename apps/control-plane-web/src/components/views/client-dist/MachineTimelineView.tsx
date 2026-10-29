@@ -3,8 +3,8 @@ import { Download } from 'lucide-react'
 import type { ClientMachineEvent } from '@/lib/client-dist/client-dist-machines-contracts'
 import { fmtBytes, fmtTime, resultBadge } from '@/components/views/client-dist/machine-format'
 
-/**
- * 机器更新事件时间线（FR-426）。
+/** 
+ * 机器更新事件时间线。
  * 取数（`useClientMachineEvents`）由应用侧容器负责，此处只做三态渲染。
  */
 export function MachineTimelineView({ items, isLoading }: { items: ClientMachineEvent[]; isLoading: boolean }) {

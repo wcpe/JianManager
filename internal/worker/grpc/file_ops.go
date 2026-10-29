@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// ListFiles 列出实例工作目录下的文件（FR-373：附权限元数据）。
+// ListFiles 列出实例工作目录下的文件（：附权限元数据）。
 func (s *Server) ListFiles(ctx context.Context, req *workerpb.ListFilesRequest) (*workerpb.ListFilesResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -83,7 +83,7 @@ func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*
 // 即「正常调用方的上限就是它能接受的最大值」，再大的一律按超限处理而不去读盘。
 const hashFileHardMaxBytes = 512 * 1024 * 1024
 
-// HashFile 计算实例工作目录内某文件的 SHA-256（FR-468 §2.5 版本漂移检测）。
+// HashFile 计算实例工作目录内某文件的 SHA-256（§2.5 版本漂移检测）。
 //
 // 独立于 ReadFile 的原因：ReadFile 有 10MiB 截断，对二进制做摘要会得到「前 10MiB 的
 // 摘要」这种看似成功实则错误的结论；且为校验把整个文件搬回 CP 纯属浪费带宽。

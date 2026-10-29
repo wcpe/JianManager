@@ -9,8 +9,8 @@ import { API } from '@jianmanager/devmock/api'
 import { server } from '@jianmanager/devmock/server'
 import NotificationCenterPage from './NotificationCenterPage'
 
-/**
- * NotificationCenterPage 强断言（FR-216）：统一通知流消费 mock 假后端聚合
+/** 
+ * NotificationCenterPage 强断言：统一通知流消费 mock 假后端聚合
  * （3 站内信 + 2 告警事件）；验合并渲染、按类型筛选[消息/告警]、仅未读、全部已读。
  */
 describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
@@ -101,7 +101,7 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
     expect(within(alertRow).getByText('查看告警详情')).toBeInTheDocument()
   })
 
-  it('任务类站内信附「查看任务」入口（FR-226 通知-任务联动）', async () => {
+  it('任务类站内信附「查看任务」入口（通知-任务联动）', async () => {
     loginMockUser()
     renderWithProviders(<NotificationCenterPage />)
     // 「JDK 安装完成」站内信带 taskId（task-jdk-1）→ 行内出现「查看任务」一键跳任务中心。

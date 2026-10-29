@@ -1,7 +1,7 @@
 import type { BotListParams, BotSummary, BotSummaryGroup } from './bot'
 
-/**
- * 全局 Bot 总览页（FR-040）的纯逻辑：状态分类、健康条分段、分组→筛选映射、分布计数。
+/** 
+ * 全局 Bot 总览页的纯逻辑：状态分类、健康条分段、分组→筛选映射、分布计数。
  * 抽成无 React 依赖的模块以便单测（参照 console/instance-tree.ts 约定）。
  */
 
@@ -9,7 +9,7 @@ import type { BotListParams, BotSummary, BotSummaryGroup } from './bot'
 export const BOT_STATUSES = ['pending', 'connecting', 'connected', 'disconnected', 'error', 'stopped'] as const
 export type BotStatusKind = (typeof BOT_STATUSES)[number]
 
-/**
+/** 
  * 概览卡片计数与派生函数与 bot-list 同源（此前两份实现逐字重复，此处收口为转发，
  * 对外仍以原导出名提供）。
  */
@@ -23,7 +23,7 @@ export interface HealthSegment {
   ratio: number
 }
 
-/**
+/** 
  * 把一个分组的 total/online 拆成健康条分段。
  *
  * 后端摘要分组只暴露 `online`(=connected) 与 `total` 两个量（见 BotSummaryGroup），
@@ -61,7 +61,7 @@ export function toListParams(filter: OverviewFilter): BotListParams {
   return params
 }
 
-/**
+/** 
  * 把「某个分组」解析为批量操作 / 展开分页所需的精确筛选维度。
  * 分组键叠加在当前工具栏筛选之上：instance/node 键是数字 id，status/behavior 键是字符串。
  * 分组维度对应的筛选字段会被该组键覆盖（如按实例分组时 instanceId 取组键）。

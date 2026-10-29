@@ -1,6 +1,6 @@
 //go:build ignore
 
-// 生成 CP 内嵌 Worker 资产清单（FR-278/ADR-062）：扫描嵌入目录内 worker-<os>-<arch>[.exe]
+//  生成 CP 内嵌 Worker 资产清单（ADR-062）：扫描嵌入目录内 worker-<os>-<arch>[.exe]
 // 二进制，计算 sha256/size，写出 manifest.json。由 `make embed-worker` 在交叉编译后调用。
 //
 // 用法: go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version 0.14.0

@@ -21,8 +21,8 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
- * 对话历史页（FR-542 / FR-543）。
+/** 
+ * 对话历史页。
  *
  * ## 为什么检索走服务端
  *
@@ -53,7 +53,7 @@ export default function AssistantHistoryPage() {
 
   const searchQuery = useAssistantConversationSearch(committed)
   const messagesQuery = useAssistantMessages(openedId)
-  // 历史工具回显（FR-519）：按 messageId 分组的工具调用记录。
+  // 历史工具回显：按 messageId 分组的工具调用记录。
   const toolCallsQuery = useAssistantToolCalls(openedId)
   // 键是字符串化的 messageId：JSON 对象键只能是字符串，这里统一转换一次，
   // 避免在渲染循环里反复 String() 并因此漏掉某处。
@@ -256,7 +256,7 @@ export default function AssistantHistoryPage() {
                     ) : (
                       <p className="mt-1 whitespace-pre-wrap break-words text-sm">{m.content}</p>
                     )}
-                    {/* 历史工具回显（FR-519）：把当时调用了哪些工具、各自什么状态补回来。
+                    {/* 历史工具回显：把当时调用了哪些工具、各自什么状态补回来。
                         此前这些数据只落在事件流里、没有任何读取面，回看历史是「纯文本」的，
                         用户无法判断助手当时到底调没调工具、卡在哪一步、失败的是什么码。
                         role=tool 的消息本身不发回气泡——它的 content 是给模型看的观察结果，

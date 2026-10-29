@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- 纯函数 parseIdInput/mergeIds/formatScopeSummary 与渲染它们的组件同文件导出，供应用侧 DOM 测同源引用 */
-/**
+/** 
  * @file AgentTokensPageView：Agent Token 管理页的受控视图，列表取数、签发/吊销 mutation、候选数据取数与 toast 由应用容器负责。
  * @input Panel/Button/Input/Label/Badge/Checkbox/StatusBadge/Table/Dialog 原语、layout 页壳（PageShell/PageHeader）、
  *        lib/virtual-list（useVirtualRows：候选项千级时只渲染窗口内的行）、
@@ -10,7 +10,7 @@
  *         parseIdInput、mergeIds、formatScopeSummary
  * @sync apps/control-plane-web/src/pages/AgentTokensPage.tsx（容器，再导出三个纯函数）、
  *        apps/control-plane-web/src/pages/AgentTokensPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-387 Agent Token 管理，消费 FR-384 API）
+ * @since（组件受控化迁包；原页Agent Token 管理，消费API）
  */
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -85,7 +85,7 @@ export function formatScopeSummary(
   return parts.length ? parts.join(' · ') : labels.none
 }
 
-/**
+/** 
  * Token 展示状态（active / expired / revoked）。
  *
  * 状态**判定**不在这里：它沿用应用侧 `agentTokenStatus`（已被 `agentTokens.test.ts` 覆盖），
@@ -93,7 +93,7 @@ export function formatScopeSummary(
  */
 export type AgentTokenStatus = 'active' | 'expired' | 'revoked'
 
-/**
+/** 
  * Token 行（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/agentTokens` 的 `AgentTokenInfo`：
@@ -129,7 +129,7 @@ export interface AgentTokenRow {
   callCount24h?: number
 }
 
-/**
+/** 
  * 候选项（值 → i18n 标签键）。
  *
  * 能力清单与 V1 写白名单是**与后端枚举对齐的映射表**（应用侧 `CAPABILITY_OPTIONS` /
@@ -173,7 +173,7 @@ export interface AgentTokenIssuePayload {
   ttlDays: number
 }
 
-/**
+/** 
  * 签发成功结果：`plaintext` 是**唯一一次**明文。
  *
  * 容器只在 `POST /agent/tokens` 的响应里取到它并随本次回调返回；视图把它写进一次性展示对话框，
@@ -189,7 +189,7 @@ export interface IssuedAgentTokenPlain {
 /** 提示通道：视图算好文案交容器展示（本包不弹 toast）。 */
 export type AgentTokensNotice = (kind: 'success' | 'error', message: string) => void
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  *
  * - 列表与三态经 props 注入（容器调 `useAgentTokens`）；失败文案含后端 message，故由容器算好经
@@ -221,7 +221,7 @@ export interface AgentTokensPageViewProps {
   defaultCapabilities: readonly string[]
   /** V1 写白名单展示映射（容器注入应用侧 `WRITE_ALLOWLIST_OPTIONS`）。 */
   writeAllowlistOptions: readonly AgentTokenOption[]
-  /**
+  /** 
    * 实例候选窗口（容器按服务端搜索注入：默认前 N 条 + 键入下发 `q`，可为空）。
    *
    * 千级实例（大档 1200）不得一次拉全量再在弹窗里铺开；候选窗口与总数由容器向服务端要，
@@ -234,19 +234,19 @@ export interface AgentTokensPageViewProps {
   onInstanceQueryChange?: (keyword: string) => void
   /** 节点候选（容器注入，可为空；容器只在签发对话框打开时取）。 */
   nodeOptions?: AgentTokenNodeOption[]
-  /**
+  /** 
    * 签发对话框开合上报（**单向通知，不接管开合状态**，`open` 始终由本视图持有）。
    *
    * 唯一用途是取数时机：原页的节点候选查询写作 `useNodes({ enabled: open })`，只在对话框打开时才请求；
    * 容器据此把 `enabled` 收敛到同一时机，迁移后不因页面加载而多打一次节点列表请求。
    */
   onCreateDialogOpenChange?: (open: boolean) => void
-  /**
+  /** 
    * 签发 Token；失败返回 `null`（失败提示已由容器弹出），视图据此保持对话框打开以便修改后重试。
    * 成功返回一次性明文，视图随即关闭表单对话框并打开明文展示对话框。
    */
   onIssue: (payload: AgentTokenIssuePayload) => Promise<IssuedAgentTokenPlain | null>
-  /**
+  /** 
    * 吊销已确认的 Token（二次确认已在本视图内完成）。
    * 返回是否成功：成功才关闭确认框；失败（提示已由容器弹出）保留确认框。
    */
@@ -255,14 +255,14 @@ export interface AgentTokensPageViewProps {
   mcpUrl: string
   /** 复制结果上报：成功/失败提示文案由容器决定。 */
   onCopyResult?: (ok: boolean) => void
-  /**
+  /** 
    * 页头右端的路由跳转入口（容器注入 react-router `Link` 包裹的按钮；
    * 包内不依赖 react-router）。可省略——组件博物馆等无路由场景即不渲染跳转。
    */
   headerLinks?: ReactNode
 }
 
-/** 复制按钮：写剪贴板（兼容 HTTP 非安全上下文），结果上报给外壳决定提示（FR-189 先例）。 */
+/** 复制按钮：写剪贴板（兼容 HTTP 非安全上下文），结果上报给外壳决定提示（先例）。 */
 function CopyButton({
   text,
   label,
@@ -331,8 +331,8 @@ function statusLevel(status: AgentTokenStatus): 'success' | 'warning' | 'danger'
   return 'danger'
 }
 
-/**
- * Agent Token 管理页展示层（FR-387）。
+/** 
+ * Agent Token 管理页展示层。
  * 列表 / 新建 / 吊销三段；创建成功一次性展示明文 + 复制 env/命令片段。
  * 入口仅管理员可见（侧栏）+ 本页角色兜底 + 后端 RBAC，三重把关——本视图只呈现通过门禁后的内容，
  * 角色门禁由容器在挂载本视图前完成（非管理员不会渲染到这里），吊销确认的门禁由 `DangerConfirm` 自行判定。
@@ -359,7 +359,7 @@ export function AgentTokensPageView({
 }: AgentTokensPageViewProps) {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
-  /**
+  /** 
    * 开合的唯一入口：改本地状态 + 单向通知容器（容器据它收敛节点/实例候选查询的 `enabled`）。
    *
    * 【为什么不用 effect 追 props】容器传下来的 `onCreateDialogOpenChange` 是内联箭头，每次渲染
@@ -542,7 +542,7 @@ export function AgentTokensPageView({
 /** 候选行高（px）。虚拟化按它等距定位，故行内只留内边距、不加外边距（同 NetworkInstancePickerView 的取舍）。 */
 const INSTANCE_CAND_ROW_HEIGHT = 36
 
-/**
+/** 
  * 实例候选选择器（多选）：服务端搜索 + 虚拟化勾选列表 + 截断提示 + 已选回显。
  *
  * 【为什么不是单选 `InstancePicker`】本表单要「勾选多个实例 → 与手输 ID 合并后签发」的批量语义，
@@ -666,7 +666,7 @@ export function AgentTokenInstanceCandidateView({
   )
 }
 
-/**
+/** 
  * 新建 Token 对话框（视图内部件）：表单草稿与开合都由宿主视图持有。
  *
  * 校验失败经 `notify` 上报（提示文案与渠道与原页一致），提交经 `onSubmit` 上报——
@@ -766,7 +766,7 @@ function CreateAgentTokenDialog({
     }
   }
 
-  /**
+  /** 
    * 实例候选已改为服务端搜索（候选窗口 ≤ CANDIDATE_LIMIT 条），故原先「弹窗关闭时把千级列表置空」
    * 的 memo 门控不再必要：`.map()` 现在发生在子组件 AgentTokenInstanceCandidateView 内部，
    * 而 Radix 的 DialogContent 关闭时连 children 都不渲染，元素创建成本随之消失。
@@ -891,7 +891,7 @@ function CreateAgentTokenDialog({
   )
 }
 
-/**
+/** 
  * 创建成功后一次性展示明文 + 复制 env / jm-agent 示例。
  *
  * 明文只来自 `plaintext` 这一个入参（签发响应），关闭即由宿主清空 state——

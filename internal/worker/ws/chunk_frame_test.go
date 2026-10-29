@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 分片帧的协议层用例（FR-526 §2.5）：验证 Worker 的 WS 读循环真的把
+// 分片帧的协议层用例（§2.5）：验证 Worker 的 WS 读循环真的把
 // `type=event`+`event=chunk` 的上行分片重组回原帧，并让它走原有的语义分发路径
 // （command_result 投递给同步等待方 / 业务事件扇出）——即"下游完全无感"。
 

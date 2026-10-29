@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ClientDistGuardChecker 客户端分发端点 IP 防护检查（FR-096，由 service.ClientIPGuardService 实现）。
+// ClientDistGuardChecker 客户端分发端点 IP 防护检查（由 service.ClientIPGuardService 实现）。
 // 以接口注入避免 middleware → service 依赖。
 type ClientDistGuardChecker interface {
 	// Allowed 报告 IP 是否放行（黑白名单）。
@@ -18,7 +18,7 @@ type ClientDistGuardChecker interface {
 	MarkConcurrency()
 }
 
-// ClientDistGuard 面向玩家分发端点的 L7 防护中间件（FR-096，见 ADR-023）：
+// ClientDistGuard 面向玩家分发端点的 L7 防护中间件（见 ADR-023）：
 // ① IP 黑白名单（命中拒 → 403）② per-IP 令牌桶限流（超频 → 429）③ 全局并发信号量（满 → 429）。
 // 限流以 **IP 为主键**（机器码不可信，ADR-023）；命中拦截累加计数器（可观测、不写库）。
 // L3/L4 容量型 DDoS 不在此（靠 CDN/云清洗）。

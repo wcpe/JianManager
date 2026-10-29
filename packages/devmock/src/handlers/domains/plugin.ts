@@ -3,8 +3,8 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 
-/**
- * 插件 / 玩家 / 业务 / 探针域 mock handler（FR-206 域簇，照 spec §7 范式）。
+/** 
+ * 插件 / 玩家 / 业务 / 探针域 mock handler（域簇，照 spec §7 范式）。
  *
  * 覆盖端点：
  *   - 插件（@/api/plugins.ts）：列表 / 上传 / 删除 / 启用禁用切换 / 制品批量部署
@@ -12,7 +12,7 @@ import { requireAuth } from '@jianmanager/devmock/auth-middleware'
  *   - 玩家（@/api/players.ts）：在线列表 / 踢封解封 / 封禁记录 / 单后端白名单查改
  *   - 业务（@/api/business.ts）：能力清单 manifest / 业务命令下发
  *
- * FR-521：经济三个平台级只读端点（mirror / leaderboard / events）已随业务读接口退役一并删除，
+ *：经济三个平台级只读端点（mirror / leaderboard / events）已随业务读接口退役一并删除，
  * 此处不再 mock；业务通道仅保留 manifest 与 dispatch 两个透传端点。
  *
  * 字段严格匹配各 api 模块的 interface（payloadJson 等 JSON 字符串字段返回字符串，见全局记忆
@@ -87,7 +87,7 @@ interface WhitelistRow {
   players: string[]
 }
 
-/** 经济余额镜像行（供业务下发的只读/写动作 mock 联动；平台侧无对应持久表，FR-521）。 */
+/** 经济余额镜像行（供业务下发的只读/写动作 mock 联动；平台侧无对应持久表）。 */
 interface EconomyMirrorEntity {
   id: number
   nodeUuid: string
@@ -788,7 +788,7 @@ export const handlers = [
     })
   }),
 
-  // ---------- 业务域状态（FR-534） ----------
+  // ---------- 业务域状态 ----------
 
   // 已注册业务域与健康状态：与 defaultManifest 的域集对齐（economy / inventory 两域，均可用）。
   // **只渲染不解释**：这里回的字段就是 OpenAPI BusinessStatus / DomainStatus 的形态，

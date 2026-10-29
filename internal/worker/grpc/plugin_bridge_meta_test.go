@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 桥能力接入（FR-526）的 Worker gRPC 侧用例。
+// 桥能力接入的 Worker gRPC 侧用例。
 //
 // 复刻 plugin_bridge_test.go 的形态：起真实 /ws/plugin-bridge 服务端 + 模拟探针 WS 连接，
 // 验证四条 RPC 的下发形态、回执映射与降级分支。
@@ -365,7 +365,7 @@ func TestQueryBridgeStatus_ActionNaming(t *testing.T) {
 	assert.Equal(t, "core", probeCoreDomain)
 }
 
-// TestReloadProbeConfig_PathsForwarded paths 原样下发（FR-532 需要定向重载）。
+// TestReloadProbeConfig_PathsForwarded paths 原样下发（需要定向重载）。
 func TestReloadProbeConfig_PathsForwarded(t *testing.T) {
 	s, conn := newMetaBridge(t, "inst-1")
 	var payload map[string]any

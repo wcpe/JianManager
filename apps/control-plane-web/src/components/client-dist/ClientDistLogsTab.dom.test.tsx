@@ -5,9 +5,9 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ClientDistLogsTab from './ClientDistLogsTab'
 
-/**
- * ClientDistLogsTab（FR-430 / ADR-088 去重合并）：单一入口按 `type` 双视图。
- * - `type=request`（缺省）：加厚请求表 + 脱敏详情（FR-357/FR-265）。
+/** 
+ * ClientDistLogsTab（ADR-088 去重合并）：单一入口按 `type` 双视图。
+ * - `type=request`（缺省）：加厚请求表 + 脱敏详情。
  * - `type=all`/其余 5 类：安全聚合多类型表（hello/risk/action/request/runtime/telemetry）。
  */
 beforeAll(() => {
@@ -35,7 +35,7 @@ describe('ClientDistLogsTab', () => {
 
     expect(await screen.findByText('分发请求日志')).toBeInTheDocument()
     expect(await screen.findByRole('columnheader', { name: '错误码' })).toBeInTheDocument()
-    // 加厚列（FR-357）
+    // 加厚列
     expect(screen.getByRole('columnheader', { name: '玩家名' })).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: 'Core 版本' })).toBeInTheDocument()
     expect(screen.getByText('INVALID_CLIENT_KEY')).toBeInTheDocument()

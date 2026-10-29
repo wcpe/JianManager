@@ -52,8 +52,8 @@ export interface RuntimeCandidateView {
   alreadyRegistered?: boolean
 }
 
-/**
- * 节点「运行时」分区（FR-298 节点运行时库）：
+/** 
+ * 节点「运行时」分区（节点运行时库）：
  * - 统一 Runtime 列表（node_jdks + node_runtimes 读侧拼装，类型徽章区分）；
  * - 「扫描发现」按钮开模态（scrollable-dialog 壳）列候选勾选入库，已在库项禁勾；
  * - 删除走 DangerConfirm（type=jdk 委托现链路托管连文件；其它只删记录）。
@@ -109,7 +109,7 @@ export default function NodeRuntimeSection({
   const installMajorNum = Number.parseInt(installMajor, 10)
   const installMajorValid = Number.isInteger(installMajorNum) && installMajorNum > 0
 
-  // 一键安装 Node.js（FR-299）：202 受理即提示跳任务中心，终态由心跳落库后列表自然出现。
+  // 一键安装 Node.js：202 受理即提示跳任务中心，终态由心跳落库后列表自然出现。
   const submitInstall = async () => {
     if (!installMajorValid) return
     setInstalling(true)
@@ -119,7 +119,7 @@ export default function NodeRuntimeSection({
   }
 
   // 列表只承载非 JDK 类型（v0.15.0 验收 e2e 抓出的双列重复修复）：JDK 已由上方 JDK 面板
-  // 富列表（FR-195 行卡片/筛选/复制/删除守卫）唯一呈现，此处再列 type=jdk 即整页重复；
+  // 富列表（行卡片/筛选/复制/删除守卫）唯一呈现，此处再列 type=jdk 即整页重复；
   // 统一视图保留在 API 层（GET /nodes/:id/runtimes 仍含 jdk），扫描/登记链路不变。
   const rows = (runtimes ?? []).filter((rt) => rt.type !== 'jdk')
   const selectedCount = useMemo(() => Object.values(checked).filter(Boolean).length, [checked])
@@ -242,7 +242,7 @@ export default function NodeRuntimeSection({
         </div>
       )}
 
-      {/* 安装 Node.js 模态（FR-299）：LTS 主版本快选 + 自定义输入，202 受理后进度跳任务中心 */}
+      {/* 安装 Node.js 模态：LTS 主版本快选 + 自定义输入，202 受理后进度跳任务中心 */}
       <Dialog open={installOpen} onOpenChange={setInstallOpen}>
         <DialogContent className={scrollableDialogContentClass}>
           <DialogHeader>
@@ -356,7 +356,7 @@ export default function NodeRuntimeSection({
         </DialogContent>
       </Dialog>
 
-      {/* 删除确认：托管的连文件（jdk 委托现链路 / nodejs 经 RemoveRuntime，FR-299），外部登记只删记录 */}
+      {/* 删除确认：托管的连文件（jdk 委托现链路 / nodejs 经 RemoveRuntime），外部登记只删记录 */}
       <DangerConfirm
         open={pendingDel !== null}
         title={pendingDel?.managed

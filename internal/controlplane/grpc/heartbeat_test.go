@@ -77,7 +77,7 @@ func seedHeartbeatNode(t *testing.T, db *gorm.DB, statusValue model.NodeStatus, 
 	return node
 }
 
-// TestHeartbeat_ValidSecretUpdatesNode 覆盖 FR-029：正确 node-secret 的心跳会把节点置在线并更新资源指标。
+// TestHeartbeat_ValidSecretUpdatesNode 覆盖：正确 node-secret 的心跳会把节点置在线并更新资源指标。
 func TestHeartbeat_ValidSecretUpdatesNode(t *testing.T) {
 	h, db := newHeartbeatHandler(t)
 	oldHeartbeat := time.Now().Add(-2 * time.Minute)
@@ -140,7 +140,7 @@ func TestHeartbeat_ValidSecretUpdatesNode(t *testing.T) {
 	require.Equal(t, observedAt.UnixMilli(), fromDB.ManagedRuntimeObservedAt.UnixMilli())
 }
 
-// TestHeartbeat_KeepsDamagedOnStoppedReport 覆盖 FR-342 真机回归：DAMAGED（搭建失败损毁）是
+// TestHeartbeat_KeepsDamagedOnStoppedReport 覆盖真机回归：DAMAGED（搭建失败损毁）是
 // CP 侧生命周期态，Worker 不感知、对已注册但未运行的实例上报 STOPPED。心跳同步不得把
 // DAMAGED 降级为 STOPPED（否则损毁徽章与启动守卫在下一个心跳即失效）；上报运行类状态
 // （进程确实活着）时才允许覆盖。
@@ -175,7 +175,7 @@ func TestHeartbeat_KeepsDamagedOnStoppedReport(t *testing.T) {
 	require.Equal(t, model.InstanceStatusRunning, fromDB.Status, "运行类上报应照常同步")
 }
 
-// TestHeartbeat_WrongSecretRejected 覆盖 FR-029：错误 node-secret 的心跳必须拒绝，且不得更新节点状态。
+// TestHeartbeat_WrongSecretRejected 覆盖：错误 node-secret 的心跳必须拒绝，且不得更新节点状态。
 func TestHeartbeat_WrongSecretRejected(t *testing.T) {
 	h, db := newHeartbeatHandler(t)
 	oldHeartbeat := time.Now().Add(-2 * time.Minute)
@@ -245,7 +245,7 @@ func TestHeartbeat_BindsStreamToFirstAuthenticatedUUID(t *testing.T) {
 	require.InDelta(t, 0, float64(fromDB.CPUUsage), 0.001)
 }
 
-// TestOfflineDetector_MarksStaleNodeOffline 覆盖 FR-029：超过 90 秒无心跳的在线节点会被标记离线。
+// TestOfflineDetector_MarksStaleNodeOffline 覆盖：超过 90 秒无心跳的在线节点会被标记离线。
 func TestOfflineDetector_MarksStaleNodeOffline(t *testing.T) {
 	_, db := newHeartbeatHandler(t)
 	stale := time.Now().Add(-2 * time.Minute)
@@ -269,7 +269,7 @@ func TestOfflineDetector_MarksStaleNodeOffline(t *testing.T) {
 	require.Equal(t, model.NodeStatusOnline, freshFromDB.Status)
 }
 
-// orphanObserveSpy 记录反向对账入口调用（FR-326），不落库。
+// orphanObserveSpy 记录反向对账入口调用，不落库。
 type orphanObserveSpy struct {
 	nodes []string
 	sizes []int

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-485：日志采集面指标走时序取值路径，能按阈值触发并恢复。
+// 日志采集面指标走时序取值路径，能按阈值触发并恢复。
 //
 // 覆盖的语义要点：
 //  1. 别名（可读短名）与标准 key 都能命中——运维手写规则不该要求背长名；
@@ -74,7 +74,7 @@ func TestEvaluator_LogMetricsFromSeries(t *testing.T) {
 	}
 }
 
-// FR-485：未注入时序源时，只存在于时序库的日志指标必须跳过而非误判。
+// 未注入时序源时，只存在于时序库的日志指标必须跳过而非误判。
 //
 // 变异验证：若把 isSeriesOnlyNodeMetric 的日志分支去掉，getNodeMetric 会返回 -1，
 // 调用方的 `value < 0 → continue` 恰好也能跳过——但那是**碰巧**正确：
@@ -99,7 +99,7 @@ func TestEvaluator_LogMetricsSkipWithoutSeriesSource(t *testing.T) {
 	require.Zero(t, count, "未注入时序源时日志指标应跳过")
 }
 
-// FR-485：isSeriesOnlyNodeMetric 的判据必须与 getNodeMetric 的口径一致。
+// isSeriesOnlyNodeMetric 的判据必须与 getNodeMetric 的口径一致。
 //
 // 这两处一旦分叉，症状是「规则存在、指标有数据、但告警永不触发」——最难查的一类静默失效。
 func TestIsSeriesOnlyNodeMetric_CoversLogKeys(t *testing.T) {
@@ -124,7 +124,7 @@ func TestIsSeriesOnlyNodeMetric_CoversLogKeys(t *testing.T) {
 	}
 }
 
-// FR-485：日志采集面指标的别名必须全部解析到真实时序键。
+// 日志采集面指标的别名必须全部解析到真实时序键。
 //
 // 别名表缺一项的后果是规则保存成功、评估时 resolveMetricKey 失败 ⇒ 静默不告警。
 func TestNodeMetricAliases_LogKeysResolve(t *testing.T) {
@@ -152,7 +152,7 @@ func TestNodeMetricAliases_LogKeysResolve(t *testing.T) {
 	}
 }
 
-// FR-485：饱和度型「投递失败率」必须自身即百分比，否则规则永不触发。
+// 饱和度型「投递失败率」必须自身即百分比，否则规则永不触发。
 //
 // 变异验证：把 MetricLogDeliveryFailRate 从 saturationPercent 白名单移除 ⇒ 返回 (0,false)。
 func TestSaturationPercent_DeliveryFailureRateIsSelfPercent(t *testing.T) {
@@ -162,7 +162,7 @@ func TestSaturationPercent_DeliveryFailureRateIsSelfPercent(t *testing.T) {
 	require.InDelta(t, 42.5, pct, 1e-9)
 }
 
-// FR-485：磁盘/内存/CPU 的百分比口径键必须把快照分数（0..1）换算成百分比（0..100）。
+// 磁盘/内存/CPU 的百分比口径键必须把快照分数（0..1）换算成百分比（0..100）。
 //
 // 这是本次取证发现的真实缺陷：nodes 表存的是 `UsedPercent/100`（0..1），而规则阈值
 // 在界面与直觉上都是百分比。「磁盘 > 85」若拿 0..1 的 0.91 去比，永远不触发且不报错。
@@ -194,7 +194,7 @@ func TestGetNodeMetric_PercentKeysScaleFractions(t *testing.T) {
 	require.InDelta(t, 0.755, getNodeMetric(node, "cpu"), 1e-6)
 }
 
-// FR-485：百分比键的规则在真实求值链路里按百分比触发（端到端，不只单测换算函数）。
+// 百分比键的规则在真实求值链路里按百分比触发（端到端，不只单测换算函数）。
 func TestEvaluator_NodeDiskPercentThresholdFires(t *testing.T) {
 	db := newAlertTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Node{}))
@@ -224,7 +224,7 @@ func TestEvaluator_NodeDiskPercentThresholdFires(t *testing.T) {
 	require.True(t, event.Resolved)
 }
 
-// FR-485：采集健康仍走快照（不属时序型），确认新判据没有把它误伤成「跳过」。
+// 采集健康仍走快照（不属时序型），确认新判据没有把它误伤成「跳过」。
 func TestEvaluator_LogIngestHealthyStillUsesSnapshot(t *testing.T) {
 	db := newAlertTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Node{}))

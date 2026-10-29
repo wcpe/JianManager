@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ImportServerWizardView：导入现有服务器向导（选目录 → 探测结果 → 导入方式 → 实例配置）的受控视图，
  *       候选节点/JDK、目录探测、写权限预检、权限修复与导入写请求均由应用容器负责。
  * @input import-server-path（joinAbsPath 拼接绝对路径 / isPermissionErrorMessage 识别权限文案）、
@@ -10,7 +10,7 @@
  *         makeImportServerQueryInit
  * @sync apps/control-plane-web/src/components/ImportServerWizard.tsx、
  *        apps/control-plane-web/src/components/ImportServerWizard.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-302 导入现有服务器向导、FR-374 权限失败诊断与就地写预检）
+ * @since（组件受控化迁包；原导入现有服务器向导权限失败诊断与就地写预检）
  */
 import { useId, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -36,7 +36,7 @@ import { formatFileSize } from '@/lib/shared/format-file-size'
 /** 向导步骤：目录 → 探测结果 → 导入方式 → 实例配置。 */
 type Step = 'dir' | 'inspect' | 'mode' | 'config'
 
-/** 导入方式（FR-302）：就地接管 / 搬进托管区。 */
+/** 导入方式：就地接管 / 搬进托管区。 */
 export type ImportServerMode = 'in_place' | 'migrate'
 
 /** 一个核心 jar 候选（`ImportJarCandidate` 结构兼容；视图只做单选与展示）。 */
@@ -93,7 +93,7 @@ export interface ImportNodeTarget {
   path: string
 }
 
-/**
+/** 
  * 目录探测的结果：成功携带探测数据，失败携带文案（**探测请求失败由容器提示 toast**，
  * 此处只把文案交回视图做内联诊断区展示，视图不弹提示）。
  */
@@ -104,13 +104,13 @@ export type ImportInspectOutcome =
 /** 权限修复结果：成功=容器已提示可重新探测；失败携带文案供视图内联展示。 */
 export type ImportFixOutcome = { ok: true } | { ok: false; message: string }
 
-/**
+/** 
  * 导入提交结果：成功携带新实例 id——视图据此关窗并回调 `onImported`；
  * 失败（`ok: false`）时容器已提示，视图保留草稿与窗口便于重试。
  */
 export type ImportServerSubmitResult = { ok: true; instanceId: number } | { ok: false }
 
-/**
+/** 
  * 取数输入（查询键）：**上提容器**——选中节点一变就要重新取该节点的 JDK 列表，是查询语义。
  * 视图仍持有节点草稿，在选中变更与复位时上报快照，容器只保存查询键本身。
  */
@@ -119,7 +119,7 @@ export interface ImportServerQueryInput {
   nodeId: string
 }
 
-/**
+/** 
  * 取数输入初值（= 表单初值 / 复位值）：预选节点时以其为初值。
  * 容器初始化查询键时复用同一函数，避免视图与容器两处默认值漂移。
  */
@@ -128,7 +128,7 @@ export function makeImportServerQueryInit(initialNodeId?: number): ImportServerQ
   return { nodeId: initialNodeId ? String(initialNodeId) : '' }
 }
 
-/**
+/** 
  * 表单草稿（**原文**，非请求体）：数值/数组字段保持用户输入的字符串与原始列表，
  * 由容器组装请求体（Number 化、空值省略）——「草稿 → 请求体」属请求语义，留在应用侧。
  */
@@ -151,13 +151,13 @@ export interface ImportServerFormDraft {
   memoryMb: string
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 候选经 props 注入：`nodeOptions`（容器调 `useNodes` 并拼在线状态文案）、
  *   `jdkOptions`（容器调 `useNodeJDKs(query.nodeId)`）；
  * - 取数输入经 `onQueryChange` 上报（仅节点）：容器据此重取 JDK 列表；
  * - 目录探测经 `onInspect` 上报：返回结果或失败文案——失败 toast 由容器发，视图只做内联诊断区；
- * - 写权限预检（FR-374）经 `onCheckAccess` 上报：地址拼装（根目录 + server.properties）与
+ * - 写权限预检经 `onCheckAccess` 上报：地址拼装（根目录 + server.properties）与
  *   阻断/提示判定留本视图（它是 UI 状态：预检在途、未通过、提示文案）；探测失败由视图 catch 收口；
  * - 修复权限经 `onFixPermission` 上报：成功/失败提示由容器发，视图据返回值决定是否收起确认框并重新探测；
  * - 目录选择器经 `renderDirectoryPicker` 插槽注入（实现自带取数，属应用侧）；
@@ -222,9 +222,9 @@ function errorMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
- * 导入现有服务器向导（FR-302 + FR-374）：选目录/手输绝对路径 → 探测 → 模式 → 配置 → 提交。
- * FR-374：权限失败诊断与尝试修复、就地写预检阻断。
+/** 
+ * 导入现有服务器向导：选目录/手输绝对路径 → 探测 → 模式 → 配置 → 提交。
+ *：权限失败诊断与尝试修复、就地写预检阻断。
  */
 export default function ImportServerWizardView({
   open,
@@ -258,9 +258,9 @@ export default function ImportServerWizardView({
   const [name, setName] = useState('')
   const [memoryMb, setMemoryMb] = useState('2048')
   const [jdkId, setJdkId] = useState('')
-  /** FR-374：最近一次权限/预检失败文案（内联展示）。 */
+  /** 最近一次权限/预检失败文案（内联展示）。 */
   const [permError, setPermError] = useState('')
-  /** FR-374：就地写预检是否未通过。 */
+  /** 就地写预检是否未通过。 */
   const [writePrecheckFailed, setWritePrecheckFailed] = useState(false)
   const [precheckHint, setPrecheckHint] = useState('')
   const [chmodOpen, setChmodOpen] = useState(false)
@@ -295,7 +295,7 @@ export default function ImportServerWizardView({
     reset()
   }
 
-  /** FR-374：就地模式写预检（根目录 + server.properties）。不阻断探测流程，只标记未通过。 */
+  /** 就地模式写预检（根目录 + server.properties）。不阻断探测流程，只标记未通过。 */
   const runWritePrecheck = async (target: ImportNodeTarget, res: ImportInspectResult) => {
     setPrecheckBusy(true)
     setWritePrecheckFailed(false)
@@ -330,7 +330,7 @@ export default function ImportServerWizardView({
     }
   }
 
-  /**
+  /** 
    * 目录探测：先落路径并清掉上一轮诊断态，再上报容器（探测请求与失败 toast 由容器负责）；
    * 成功后展示探测结果并触发就地写预检。
    */
@@ -366,7 +366,7 @@ export default function ImportServerWizardView({
     await runWritePrecheck(nodeTarget, res)
   }
 
-  /** FR-374：请求容器对当前路径做单路径 chmod，成功后重新探测。 */
+  /** 请求容器对当前路径做单路径 chmod，成功后重新探测。 */
   const tryFixPerm = async () => {
     const target = pathDraft.trim()
     if (!nodeId || !target) return

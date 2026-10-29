@@ -6,8 +6,8 @@ import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import TopologyGraph from './TopologyGraph'
 
-/**
- * TopologyGraph 规模化纵切（FR-335）：断言单条聚合请求（消 per-proxy N+1）+ 视口交互控件存在。
+/** 
+ * TopologyGraph 规模化纵切：断言单条聚合请求（消 per-proxy N+1）+ 视口交互控件存在。
  * 消费 devmock 的 GET /topology 聚合响应（registrations 种子里 proxy 10/20 + M:N 后端）。
  */
 function collectTopologyRequests() {
@@ -26,7 +26,7 @@ beforeEach(() => {
   loginMockUser()
 })
 
-describe('TopologyGraph（FR-335 拓扑规模化）', () => {
+describe('TopologyGraph（拓扑规模化）', () => {
   it('拓扑仅发一条 GET /topology，无 per-proxy 注册请求', async () => {
     const requests = collectTopologyRequests()
     try {

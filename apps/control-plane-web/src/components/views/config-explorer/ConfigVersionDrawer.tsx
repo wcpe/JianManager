@@ -1,11 +1,11 @@
-/**
+/** 
  * @file ConfigVersionDrawer：配置版本抽屉（版本列表 / diff / 回滚二次确认）的受控视图，三个取数与回滚请求由应用容器负责。
- * @input lib/config-contracts（ConfigVersion/ConfigDiff）、views/UnifiedDiff（FR-141 diff 着色）、
+ * @input lib/config-contracts（ConfigVersion/ConfigDiff）、views/UnifiedDiff（diff 着色）、
  *        views/DangerConfirm（回滚二次确认）、Sheet 原语、翻译上下文
  * @output ConfigVersionDrawer、ConfigVersionDrawerProps
  * @sync apps/control-plane-web/src/components/config-explorer/ConfigVersionDrawer.tsx、
  *        apps/control-plane-web/src/components/config-explorer/ConfigVersionDrawer.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-071 配置浏览器历史、复用 FR-031 配置版本端点）
+ * @since（组件受控化迁包；原配置浏览器历史、复用配置版本端点）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -15,7 +15,7 @@ import { UnifiedDiff } from '@/components/views/common/UnifiedDiff'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import type { ConfigDiff, ConfigVersion } from '@/lib/config-explorer/config-contracts'
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 版本列表、diff 与回滚请求全部经 props 注入 / 上报（容器调 `useConfigVersions` / `useConfigDiff` / `useRollbackConfig`）；
  * - **上提容器**的状态：对比起止 `diffFrom`/`diffTo`——它们是 diff 查询的键，一变就触发取数，
@@ -59,9 +59,9 @@ export interface ConfigVersionDrawerProps {
   rollbackPending: boolean
 }
 
-/**
- * 配置版本抽屉（FR-071 历史）：版本列表 / 起止对比 / 一键回滚。
- * 复用 FR-031 配置版本端点（`instance_config_versions`，与 FR-070 文件版本表区分）。
+/** 
+ * 配置版本抽屉（历史）：版本列表 / 起止对比 / 一键回滚。
+ * 复用配置版本端点（`instance_config_versions`，与文件版本表区分）。
  */
 export default function ConfigVersionDrawer({
   filePath,

@@ -20,7 +20,7 @@ import { ConsoleBrandSegment, ConsoleRefreshButton, ConsoleSearchBox } from '@/c
 import { AssistantDockTrigger } from '@/components/views/assistant/AssistantDock'
 import { useWorkspaceNavigation } from './use-workspace-navigation'
 
-/**
+/** 
  * 行级在线人数取数：把实例 metrics 查询适配成 `ClusterBadges` 需要的形状。
  * 模块级定义（不是每次渲染新建的内联函数），作为 hook 引用注入给包内视图按行顶层调用。
  */
@@ -30,12 +30,12 @@ function useInstancePlayers(instanceId: number, enabled: boolean) {
 }
 
 
-/**
- * 全局顶栏（FR-502 阶段 6 补丁：**全局唯一一条**；承接 ADR-071 / FR-162 / FR-179、通知合并 FR-216）。
+/** 
+ * 全局顶栏（阶段 6 补丁：**全局唯一一条**；承接 ADR-071通知合并）。
  *
  * 【为什么删掉面包屑】原型《资源优先工作区》第 1 节：「全局顶栏只做两件事」——切四个工作区、
  * 承载全局查找/任务/通知/账户，并明确「这里没有页面大标题」。此前顶栏左端还挂着
- * `PageBreadcrumb`（FR-134），于是同一页的页名在顶栏（面包屑末级）与内容页（`PageHeader` 大标题）
+ * `PageBreadcrumb`，于是同一页的页名在顶栏（面包屑末级）与内容页（`PageHeader` 大标题）
  * 各出现一次，顶栏实际只做了一件事（导航）却占了两行。补丁把面包屑整段移除：
  * **页名只由内容页承担**（`packages/ui` 的 `PageHeader`，阶段 3 起的标准做法），
  * 顶栏回归「工作区切换 + 全局工具」两件事。
@@ -49,8 +49,8 @@ function useInstancePlayers(instanceId: number, enabled: boolean) {
  * 「侧栏 + 内容」的 `app-body`。工作区按钮复用 ui 包 `TopNav`（`.space-nav` 下划线强调样式
  * 的唯一真源），本文件不复制它的 class。
  *
- * 槽位顺序：品牌区 → 工作区切换 → 靠右操作区（搜索 / 集群概览 / 任务 / 统一通知铃铛 FR-216 /
- * 账户菜单）。原节点作用域下拉（FR-268）已下线（ADR-071）：其作用域仅少数页面消费、
+ * 槽位顺序：品牌区 → 工作区切换 → 靠右操作区（搜索 / 集群概览 / 任务 / 统一通知铃铛
+ * 账户菜单）。原节点作用域下拉已下线（ADR-071）：其作用域仅少数页面消费、
  * 全部服务器页自带节点筛选。槽位顺序 / 响应式可见性逻辑仍下沉纯函数 `header-layout.ts`。
  */
 export default function ConsoleHeader() {
@@ -81,7 +81,7 @@ export default function ConsoleHeader() {
   )
 }
 
-/**
+/** 
  * 顶栏靠右操作区（原型 `.global-tools`）：搜索入口 + 刷新 + 集群徽标 + 任务 + 通知 + 账户。
  * 容器（右对齐 / 14px 内边距 / 5px 间距）由 ui 包 `TopNav` 的 actions 槽位提供，本组件只排内容。
  */
@@ -95,7 +95,7 @@ function HeaderTools() {
   const { data: feed } = useNotificationFeed({ pageSize: 8 })
 
   // 集群三个浮窗：视图内各自持有 open 态并上报，这里只记「当前开着哪个」，
-  // 把对应查询的 enabled 绑到它——数据仍只在浮窗打开时拉取（FR-294 原语义）。
+  // 把对应查询的 enabled 绑到它——数据仍只在浮窗打开时拉取（原语义）。
   const [clusterSlot, setClusterSlot] = useState<ClusterSlot | null>(null)
   const { data: nodes } = useNodes()
   const { data: runningAgg } = useInstanceAggregate({ status: 'RUNNING' }, clusterSlot === 'nodes')
@@ -103,7 +103,7 @@ function HeaderTools() {
     { status: 'RUNNING', pageSize: STAT_POPOVER_MAX_ROWS },
     clusterSlot === 'running',
   )
-  /*
+  /* 
     崩溃实例**常驻取数**（不再只在浮窗打开时取）：它同时供集群徽标的崩溃浮窗与页眉
     「需要处理」使用。窗口仍是很小的 `STAT_POPOVER_MAX_ROWS`，代价可忽略；
     若继续绑定 `clusterSlot`，铃铛里的「需要处理」会永远看不到崩溃实例——那正是最该报的一类。
@@ -116,7 +116,7 @@ function HeaderTools() {
   const nodeNames = new Map((nodes ?? []).map((n) => [n.id, n.name]))
   const runningItems = runningPage?.items ?? []
   const crashedItems = crashedPage?.items ?? []
-  /*
+  /* 
     「需要处理」条目（原首页区块，按用户要求上移到页眉消息中心）。
 
     三类来源各自都有明确的「要去修」指向，因此每条都带跳转：
@@ -172,7 +172,7 @@ function HeaderTools() {
     <>
       <SearchBox />
       <div className="flex items-center gap-0.5 sm:gap-1">
-        {/* 助手入口（FR-519 §5.4「点击顶栏入口打开/聚焦浮窗」）：
+        {/* 助手入口（§5.4「点击顶栏入口打开/聚焦浮窗」）：
             只切 store 里的开关，浮窗本体挂在壳层，故此处不持有开合状态。 */}
         <AssistantDockTrigger onOpen={() => setAssistantDockOpen(true)} />
         <RefreshButton />
@@ -218,7 +218,7 @@ function HeaderTools() {
             if (entry.href) navigate(entry.href)
           }}
           onOpenItem={(item) => {
-            // 快捷跳转（FR-226）：任务类站内信→任务中心定位该任务；告警→告警页；其余→通知中心。
+            // 快捷跳转：任务类站内信→任务中心定位该任务；告警→告警页；其余→通知中心。
             if (item.source === 'message' && item.taskId) navigate(`/tasks?task=${item.taskId}`)
             else if (item.source === 'alert') navigate('/alerts')
             else navigate('/notifications')
@@ -231,7 +231,7 @@ function HeaderTools() {
   )
 }
 
-/**
+/** 
  * 顶栏品牌区（方案 C，ADR-071）：只读折叠状态（决定是否渲染品牌文字）。
  *
  * 折叠开关**不在顶栏**：唯一入口是侧栏底部的常驻按钮（`sidebar-collapse-toggle`）。
@@ -244,13 +244,13 @@ function BrandSegment() {
   return <ConsoleBrandSegment collapsed={collapsed} onNavigateHome={() => navigate('/')} />
 }
 
-/** 靠右常驻搜索入口（FR-179 / FR-241）：开面板动作注入包内展示件，此处只读 console store。 */
+/** 靠右常驻搜索入口：开面板动作注入包内展示件，此处只读 console store。 */
 function SearchBox() {
   const openPalette = useConsoleStore((s) => s.setCommandPaletteOpen)
   return <ConsoleSearchBox onOpenPalette={() => openPalette(true)} />
 }
 
-/** 全局刷新（FR-232）：重取动作注入包内展示件，此处只提供 queryClient。 */
+/** 全局刷新：重取动作注入包内展示件，此处只提供 queryClient。 */
 function RefreshButton() {
   const queryClient = useQueryClient()
   return <ConsoleRefreshButton onRefresh={() => queryClient.invalidateQueries()} />

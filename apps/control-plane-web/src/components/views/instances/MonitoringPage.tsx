@@ -18,7 +18,7 @@ import type { DrillTarget } from '@/components/views/instances/DrillTargetPicker
 import type { ManagedProcessAction, ManagedProcessDetail, ManagedProcessInfo, ProcessTopItem } from '@/lib/console/managed-process'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
-/**
+/** 
  * 本页字节展示统一走共享实现。
  * 0/负值/非有限数沿用本页原有的 `--` 占位（进程 RSS 与读写速率为 0 时「无数据」比「0 B」更贴切）。
  */
@@ -301,8 +301,8 @@ export interface MonitoringPageProps {
   drillSlot: ReactNode
 }
 
-/**
- * 统一监控页（FR-169 + FR-221 时序剖析增强）。在既有 FR-060/061 时序底座上加四个剖析维度：
+/** 
+ * 统一监控页（时序剖析增强）。在既有061 时序底座上加四个剖析维度：
  * 1. 关键指标概览——一屏看当前值 + sparkline 趋势缩略；
  * 2. 自定义聚合粒度 + 时间范围——页级 RangePicker + ResolutionPicker（auto/30s/5m/1h，ADR-013 三档）；
  * 3. 多指标对比/叠加——勾选多条指标在同一图叠加对比；
@@ -352,7 +352,7 @@ export default function MonitoringPage(props: MonitoringPageProps) {
     target.kind === 'platform' ? { kind: 'platform' } : { kind: target.kind, uuid: target.uuid }
   const tKey = `${target.kind}:${target.kind === 'platform' ? '' : target.uuid}`
 
-  /**
+  /** 
    * 处置确认：成功或失败都必须收起确认框。
    *
    * 原实现是 `void onProcessAction(...).then(() => onPendingActionChange(null))`——**没有 catch**。
@@ -414,13 +414,13 @@ export default function MonitoringPage(props: MonitoringPageProps) {
         </p>
       )}
 
-      {/* 全局排行（FR-469）：跨节点全量实例排序 + 名次 + 下钻；非管理员只见可访问实例。 */}
+      {/* 全局排行：跨节点全量实例排序 + 名次 + 下钻；非管理员只见可访问实例。 */}
       {rankingSlot}
 
-      {/* 容量预测（FR-464）：仅在有明确目标时渲染（实例详情/节点详情语义下才有意义）。 */}
+      {/* 容量预测：仅在有明确目标时渲染（实例详情/节点详情语义下才有意义）。 */}
       {forecastSlot}
 
-      {/* 可用性（FR-463）：平台级汇总；下钻到实例/节点时改为该目标口径。 */}
+      {/* 可用性：平台级汇总；下钻到实例/节点时改为该目标口径。 */}
       {sloSlot}
 
       <ProcessDetailDialog

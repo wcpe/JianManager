@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestTail_Boundaries 尾部截取边界（FR-313 spec §5）：不足 N 行取全部、超出只留最后 N 行、
+// TestTail_Boundaries 尾部截取边界（spec §5）：不足 N 行取全部、超出只留最后 N 行、
 // 结尾换行不计行、字节上限先裁、空输入与零上限的退化行为。
 func TestTail_Boundaries(t *testing.T) {
 	tests := []struct {

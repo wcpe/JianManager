@@ -9,10 +9,10 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TestP3Fix_InstanceMetricRuleIsCreatable 复现「FR-464 实例级容量趋势告警不可达」。
+// TestP3Fix_InstanceMetricRuleIsCreatable 复现「实例级容量趋势告警不可达」。
 //
 // 缺陷现场（真机验收 2026-09-23 发现）：
-//   - `evaluateInstanceMetricRule` 早已支持实例级 metric 规则（FR-462 补齐），
+// `evaluateInstanceMetricRule` 早已支持实例级 metric 规则（补齐），
 //     `CapacityTrendAlerter.Notify` 也按 `target_type="instance"` 查规则；
 //   - 但 `expectedTargetTypeForTrigger` 仍把 `metric` 硬编码为必须 `node` 目标，
 //     且前端 `targetTypeForTrigger` 同规则 → **实例级 metric 规则根本建不出来**。
@@ -35,7 +35,7 @@ func TestP3Fix_InstanceMetricRuleIsCreatable(t *testing.T) {
 		Operator:    "gt",
 		Threshold:   0,
 	})
-	require.NoError(t, err, "实例级 metric 规则必须可创建（否则 FR-464 实例维度容量告警不可达）")
+	require.NoError(t, err, "实例级 metric 规则必须可创建（否则实例维度容量告警不可达）")
 	require.NotNil(t, rule)
 	assert.Equal(t, "instance", rule.TargetType)
 	assert.Equal(t, "metric", rule.TriggerType)

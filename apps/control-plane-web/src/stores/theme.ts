@@ -1,13 +1,13 @@
 import { create } from 'zustand'
 import { COLOR_THEME_KEY, MODE_KEY, applyColorTheme, applyMode, getSystemMode, resolveColorTheme, resolveMode, resolveSystemMode, type ColorTheme, type ResolvedMode, type ThemeMode } from '@jianmanager/ui/lib/theme'
 
-/**
- * 全局主题 store（FR-026 明暗 + FR-164 主题色）。
+/** 
+ * 全局主题 store（明暗主题色）。
  *
  * 明暗（mode）与主题色（colorTheme）正交、各自 localStorage 持久；纯逻辑下沉 `lib/theme.ts`。
  * DOM 套用由 `lib/theme.initThemeFromStorage` 在 app 入口（早于 React 挂载）先跑以消除首屏闪烁、
  * 并让登录/初始化页也套主题；本 store 的 `loadFromStorage` 仅做状态回填 + 注册系统主题监听，
- * 不再是「唯一初始化点」（修 FR-163 自查发现的「明暗初始化仅在 console shell 跑」）。
+ * 不再是「唯一初始化点」（修自查发现的「明暗初始化仅在 console shell 跑」）。
  */
 interface ThemeState {
   /** 明暗偏好三态 */

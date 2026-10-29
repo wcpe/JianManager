@@ -21,9 +21,9 @@ var errBatchMultipartInvalid = errors.New("聚合上传请求体非法")
 // batchMetaMaxBytes meta part 的 JSON 读取上限（200 项声明远小于此；防恶意超大 meta 撑内存）。
 const batchMetaMaxBytes = 1 << 20 // 1 MiB
 
-// ClientUploadEfficiencyHandler 客户端分发上传增效端点（FR-346，增强 FR-250/251）。
+// ClientUploadEfficiencyHandler 客户端分发上传增效端点（增强251）。
 //
-// 鉴权与 FR-251 分块上传同组：JWT 平台管理员（requirePlatformAdmin），挂 admin 组，
+// 鉴权与分块上传同组：JWT 平台管理员（requirePlatformAdmin），挂 admin 组，
 // 与玩家拉取密钥端点物理隔离（ADR-022/023）。独立 handler 不碰 client_version.go / client_chunk_upload.go。
 //
 // 协议（spec docs/specs/client-upload-efficiency/spec.md §3）：
@@ -55,7 +55,7 @@ func (h *ClientUploadEfficiencyHandler) Precheck(c *gin.Context) {
 		return
 	}
 	channelID := c.Param("id")
-	// 频道须存在（与 FR-251 一致：上传动作绑定频道、便于 404 语义）。
+	// 频道须存在（与一致：上传动作绑定频道、便于 404 语义）。
 	if _, err := h.channel.GetChannel(channelID); err != nil {
 		h.respondErr(c, err)
 		return
@@ -201,7 +201,7 @@ func (h *ClientUploadEfficiencyHandler) recordAudit(c *gin.Context, action strin
 }
 
 // RegisterRoutes 注册上传增效端点（运营操作，须挂 JWT 平台管理员组）。
-// 与 FR-251 分块上传同一 admin 组、同 /client-channels 前缀。
+// 与分块上传同一 admin 组、同 /client-channels 前缀。
 func (h *ClientUploadEfficiencyHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	ch := rg.Group("/client-channels")
 	{

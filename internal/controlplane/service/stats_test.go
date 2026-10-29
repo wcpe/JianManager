@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-527 对外只读统计契约服务层测试。
+// 对外只读统计契约服务层测试。
 //
 // 重点守三件事：
 //  1. 5m/1h 档**绝不**打原始表（spec §5），用真实 SQL 日志断言；

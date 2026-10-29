@@ -31,7 +31,7 @@ const LIBRARY_ROW_HEIGHT = 34
 /** 搜索输入防抖（毫秒）：停止输入后才下发服务端 q。 */
 const SEARCH_DEBOUNCE_MS = 250
 
-/**
+/** 
  * 拖拽钉行：正在拖的那一行必须始终留在 DOM 里。
  *
  * 原生 HTML5 拖拽期间若把源元素卸载，浏览器会直接取消拖拽且**不触发 `dragend`**。
@@ -45,10 +45,10 @@ function renderRowIndexes(range: { start: number; end: number }, draggingRowInde
   return indexes
 }
 
-/**
- * 超级工作台「实例库」面板（FR-167 / design §9）：左侧可收起，HTML5 原生 DnD 拖拽源。
+/** 
+ * 超级工作台「实例库」面板（design §9）：左侧可收起，HTML5 原生 DnD 拖拽源。
  *
- * - 搜索走服务端（`/instances/search` 的 `q`，输入防抖），滚动到底按页补齐（FR-235 范式），
+ * - 搜索走服务端（`/instances/search` 的 `q`，输入防抖），滚动到底按页补齐（范式），
  *   避免 1000+ 实例时全量拉取 + 全量挂 DOM。
  * - 列表用 `lib/virtual-list` 虚拟化：把「实例行」与其展开的「功能子项」拍平成定高行流，
  *   只渲染可视窗口内的行（DnD 逐行独立、多选凭已选 id 集合，不依赖全量 DOM 挂载）。
@@ -156,7 +156,7 @@ export default function InstanceLibrary({
     fallbackViewportSize: 480,
   })
 
-  // 滚动接近底部时按页补齐（FR-235 范式）。
+  // 滚动接近底部时按页补齐（范式）。
   useEffect(() => {
     if (range.end + 12 >= rows.length && hasMore && !loadingMore) {
       onLoadMore()
@@ -285,7 +285,7 @@ function setDragData(e: React.DragEvent, payload: DragPayload): void {
   e.dataTransfer.effectAllowed = 'copy'
 }
 
-/**
+/** 
  * 实例行：可展开看功能；行本身是拖拽源（拖实例=默认卡组，若已多选则批量拖）。
  * 虚拟化定位：绝对定位到 `top`，定高 {@link LIBRARY_ROW_HEIGHT}。
  */
@@ -370,7 +370,7 @@ function InstanceLibraryRow({
   )
 }
 
-/**
+/** 
  * 单功能拖拽源：拖到画布 = 加该实例该类型单卡。
  * 虚拟化定位：绝对定位到 `top`，定高 {@link LIBRARY_ROW_HEIGHT}。
  */

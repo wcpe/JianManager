@@ -1,5 +1,5 @@
-/**
- * 导航原语层（原 `shell/`，FR-502 阶段 4）：页面之间共用的顶栏与侧栏构件。
+/** 
+ * 导航原语层（原 `shell/`阶段 4）：页面之间共用的顶栏与侧栏构件。
  *
  * 本目录只放**能在不同页面里重复摆放的导航原语**——顶栏 `TopNav`、资源侧栏
  * `SideNav` 及其分段（`SideNavHead` / `SideNavShortcuts` / `SideNavResource` /

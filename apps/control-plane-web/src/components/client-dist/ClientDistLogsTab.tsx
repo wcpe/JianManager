@@ -9,11 +9,11 @@ import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from 
 import { OPS_ALL } from '@/components/views/client-dist/OpsShared'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
-/**
- * 页面 B · 全量日志 Tab（FR-430 / ADR-088 去重合并的**唯一入口**）。
+/** 
+ * 页面 B · 全量日志 Tab（ADR-088 去重合并的**唯一入口**）。
  *
  * 按 `type` 双视图：
- * - `type=request`（缺省）：加厚请求表 + 脱敏详情（`useClientDistEventSearch` + `useClientDistEventDetail`，保留 FR-357/FR-265）。
+ * - `type=request`（缺省）：加厚请求表 + 脱敏详情（`useClientDistEventSearch` + `useClientDistEventDetail`，保留）。
  * - `type=all` 或其余 5 类：安全聚合多类型表（`useClientDistSecurityLogs`，服务端聚合 hello/risk/action/request/runtime/telemetry）。
  *
  * 展示层已回迁应用侧（`ClientDistRequestLogsView` / `ClientDistAggregateLogsView`），此处只保留应用侧职责：

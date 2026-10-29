@@ -1,8 +1,8 @@
-// Package ai 是 AI 助手的模型接入层（FR-514，见 ADR-105）。
+// Package ai 是 AI 助手的模型接入层（见 ADR-105）。
 //
 // 只做一件事：把不同供应商的流式响应归一化成一组内部事件，让上层（运行循环、配置测试）
 // 不必关心具体协议。本包**不执行业务工具**——工具调用的参数只解析、校验完整性并上报，
-// 由运行循环决定是否/如何执行（FR-516）。
+// 由运行循环决定是否/如何执行。
 package ai
 
 import (
@@ -103,7 +103,7 @@ type Request struct {
 	Tools []ToolSpec
 	// MaxOutputTokens 输出上限；0 表示不指定（由供应商默认）。
 	MaxOutputTokens int
-	// ReasoningEffort 思考强度（FR-541）：minimal / low / medium / high，空 = 不指定。
+	// ReasoningEffort 思考强度：minimal / low / medium / high，空 = 不指定。
 	//
 	// 各协议映射不同：OpenAI Chat 是顶层 `reasoning_effort` 字符串，
 	// Responses 是 `reasoning.effort`，Anthropic 是 `thinking.budget_tokens`（需换算）。
@@ -125,7 +125,7 @@ type Streamer interface {
 // ErrIncompleteToolCall 工具调用参数在流结束时仍不完整或不是 JSON 对象。
 var ErrIncompleteToolCall = fmt.Errorf("工具调用参数不完整或不是 JSON 对象")
 
-// ReasoningEffort* 思考强度的合法档位（FR-541）。
+// ReasoningEffort* 思考强度的合法档位。
 const (
 	ReasoningEffortMinimal = "minimal"
 	ReasoningEffortLow     = "low"

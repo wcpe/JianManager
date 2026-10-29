@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 助手概览类只读（FR-544 补回）。
+// 助手概览类只读（补回）。
 //
 // ## 为什么单独成服务
 //

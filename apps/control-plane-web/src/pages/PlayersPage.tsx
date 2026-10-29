@@ -10,7 +10,7 @@ import { CANDIDATE_LIMIT } from '@/components/views/instances/InstancePicker'
 import { PLAYER_TABS, PlayersPageView } from '@/components/views/players/PlayersPageView'
 import type { PlayerActionRequest, PlayerTab } from '@/components/views/players/PlayersPageView'
 
-/**
+/** 
  * 玩家管理页容器（ADR-103 b 范式）：四块数据取数、实时事件 SSE 订阅、全部写动作与解封的角色门禁
  * 在这里决定；四个 Tab 的展示、Tab 选中与各区块内的本地 UI 状态交共享视图。
  *
@@ -27,7 +27,7 @@ import type { PlayerActionRequest, PlayerTab } from '@/components/views/players/
  * 保留原路径与原默认导出，路由表（route-chunks 的 `/players`）与调用点无需改动。
  */
 
-/**
+/** 
  * 千级实例选择器的取数策略（视图不取数，策略留在本层）。
  *
  * 一次调用同时供出两件东西，都基于服务端搜索：
@@ -68,12 +68,12 @@ export default function PlayersPage() {
   // 同时入 URL（`?tab=`，缺省 online 不写键）——刷新/分享/后退都能回到同一个 Tab，与 LogsPage/Bots 一致。
   const [tab, setTab] = useTabParam<PlayerTab>('tab', 'online', PLAYER_TABS)
 
-  // ── 在线玩家（FR-054 / FR-067） ──
+  // ── 在线玩家 ──
   const { data: online, isLoading: onlineLoading } = useOnlinePlayers({ enabled: tab === 'online' })
   const kick = useKickPlayer()
   const ban = useBanPlayer()
 
-  /**
+  /** 
    * 踢出/封禁：逐玩家一次请求，累计 succeeded/failed 后统一提示（与原页一致——单个失败不中断后续）。
    * 目标名字集合由视图组装（含同名去重：封禁按玩家名全局执行），本层只负责执行与结果文案。
    *
@@ -103,7 +103,7 @@ export default function PlayersPage() {
     else toast.success(message, { id: toastId })
   }
 
-  // ── 实时事件（FR-066）：SSE 订阅留在本层；非实时事件 Tab 传 null，断开且不重连 ──
+  // ── 实时事件：SSE 订阅留在本层；非实时事件 Tab 传 null，断开且不重连 ──
   // 子服与代理实例都可选（Bukkit 探针报本服 join/quit/chat，BC 探针报跨服路由），故不按角色收窄。
   const liveFeed = useInstancePickerFeed(tab === 'live')
   const [livePick, setLivePick] = useState<InstanceInfo | null>(null)
@@ -129,7 +129,7 @@ export default function PlayersPage() {
     }
   }
 
-  // ── 白名单（FR-054 / FR-067）：后端子服候选与查询/增删都按 Tab 门控；候选按 role=backend 服务端搜索 ──
+  // ── 白名单：后端子服候选与查询/增删都按 Tab 门控；候选按 role=backend 服务端搜索 ──
   const whitelistFeed = useInstancePickerFeed(tab === 'whitelist', 'backend')
   const [whitelistPick, setWhitelistPick] = useState<InstanceInfo | null>(null)
   const whitelistEffective = whitelistPick ?? whitelistFeed.defaultInstance ?? null

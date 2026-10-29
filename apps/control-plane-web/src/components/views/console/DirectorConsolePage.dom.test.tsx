@@ -7,7 +7,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { DirectorConsolePage } from '@/components/views/console/DirectorConsolePage'
 import { createDirectorState } from '@/lib/director/director'
 
-/**
+/** 
  * 导播台页面 · 受控视图测（ADR-103）。
  *
  * 补的是**注入面契约**：场景/状态机与四个动作来自 props、画布与添加菜单由外壳注入、
@@ -74,7 +74,7 @@ function renderPage(props: Partial<ComponentProps<typeof DirectorConsolePage>> =
   return { ...merged, onActivate, onAdvance, onCarouselChange, renderCanvas, renderAddSceneMenu }
 }
 
-describe('DirectorConsolePage（FR-168 导播台受控视图）', () => {
+describe('DirectorConsolePage（导播台受控视图）', () => {
   it('标题与工具栏渲染，添加场景菜单由外壳注入。', () => {
     const { renderAddSceneMenu } = renderPage()
     expect(screen.getByText('导播台')).toBeInTheDocument()
@@ -122,7 +122,7 @@ describe('DirectorConsolePage（FR-168 导播台受控视图）', () => {
     expect(onActivate).toHaveBeenCalled()
   })
 
-  /*
+  /* 
    * 「输入框内按键不触发瞬切」未在此断言：该行为由组件的 `e.target.tagName` 判断实现
    * （源码已审读确认），但在 jsdom 下 fireEvent 的 target 语义在同文件多次 render 叠加时
    * 不稳定（同一 window 监听器被多个实例挂载），测出来的失败与实现无关。

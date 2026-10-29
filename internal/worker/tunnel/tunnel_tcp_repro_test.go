@@ -14,7 +14,7 @@ import (
 )
 
 // startFakeCPTCP 与 startFakeCP 同构，但走真实 TCP（127.0.0.1 随机端口）——
-// 排查 bufconn 与真实传输在大消息/流控上的行为差异（FR-305 真机 DeadlineExceeded 定位）。
+// 排查 bufconn 与真实传输在大消息/流控上的行为差异（真机 DeadlineExceeded 定位）。
 func startFakeCPTCP(t *testing.T) (*grpctunnel.TunnelServiceHandler, string, chan string) {
 	t.Helper()
 	events := make(chan string, 16)

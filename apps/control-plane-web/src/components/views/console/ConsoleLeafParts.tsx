@@ -19,9 +19,9 @@ import type { BotSummaryGroup } from '@/lib/bots/bot'
 import type { InstanceBotBadge as InstanceBotBadgeData } from '@/lib/bots/bot-list'
 import type { GroupByDim } from '@/lib/bots/bots-overview'
 
-// ── 实例树行内的 Bot 聚合徽标（FR-039）────────────────────────────────
+// ── 实例树行内的 Bot 聚合徽标────────────────────────────────
 
-/**
+/** 
  * 实例树行内的 Bot 聚合徽标：展示「在线/总数」，不展开为逐个 Bot。
  * 数据来自 `GET /bots/summary?groupBy=instance` 的单次聚合（由 InstanceTree 统一拉取）。
  * 无 Bot（total=0）时不渲染，避免空徽标干扰。
@@ -49,7 +49,7 @@ export function InstanceBotChip({ badge }: { badge: InstanceBotBadgeData | undef
   )
 }
 
-// ── Bot 分组工作台卡（FR-147）────────────────────────────────────────
+// ── Bot 分组工作台卡────────────────────────────────────────
 
 /** 分组维度 → 图标 + 图标块色调。 */
 function dimVisual(dim: GroupByDim): { icon: typeof Bot; tone: Tone } {
@@ -78,8 +78,8 @@ export interface BotWorktableCardProps {
   children?: ReactNode
 }
 
-/**
- * Bot 分组工作台卡（FR-147，§4.5 运行实体范式）。
+/** 
+ * Bot 分组工作台卡（§4.5 运行实体范式）。
  * 每个分组一张卡：图标块 + 标签 + 多段健康条 + 总数 + 勾选（批量）+ 展开窥视 + 操作区。
  * 健康条对 status 维度卡（单一状态）天然单色；其余维度用分组 online/total 两段。
  */
@@ -140,7 +140,7 @@ export function BotWorktableCard({
   )
 }
 
-// ── 节点切换下拉（FR-069 瘦身）────────────────────────────────────────
+// ── 节点切换下拉（瘦身）────────────────────────────────────────
 
 /** 哨兵值：表示「全部节点」（shadcn Select 仅接受字符串 value）。 */
 const ALL = 'all'
@@ -159,7 +159,7 @@ export interface NodeSwitcherProps {
   onChange: (id: number | null) => void
 }
 
-/**
+/** 
  * 实例树上方的节点切换下拉：「全部节点」+ 各节点。
  * 紧凑控件——矮行高 + 小字号 + 前置节点图标，避免占用过多侧栏垂直空间。
  */

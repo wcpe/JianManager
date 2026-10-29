@@ -26,11 +26,11 @@ interface FileTreeProps {
   /** 点击目录回调。 */
   onSelectDir: (dir: string) => void
   /** 把某路径拖放到某目录回调（树内移动）。 */
-  /** FR-377：第二参 dataTransfer 供跨窗解析条目。 */
+  /** 第二参 dataTransfer 供跨窗解析条目。 */
   onDropMove: (targetDir: string, dt?: DataTransfer) => void
   /** 外部刷新信号变化时，重置树（增删改后）。 */
   refreshKey: number
-  /**
+  /** 
    * 拉取某目录下的条目（外壳注入，包内不依赖应用侧 api）。
    * 懒加载：仅在该目录首次展开时调用。
    */
@@ -39,7 +39,7 @@ interface FileTreeProps {
 
 const FILE_TREE_ROW_HEIGHT = 28
 
-/** 懒加载目录树（FR-070 资源管理器左栏）。点目录展开拉取子目录；支持作为拖拽移动的放置目标。 */
+/** 懒加载目录树（资源管理器左栏）。点目录展开拉取子目录；支持作为拖拽移动的放置目标。 */
 export default function FileTree({
   instanceId,
   currentDir,

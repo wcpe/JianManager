@@ -1,7 +1,7 @@
 package service
 
-/**
- * FR-490 审批票据内核的守门用例。
+/* *
+ *审批票据内核的守门用例。
  *
  * 这组断言守的是**几条「看起来对但会静默破防」的规则**：
  *  1. Agent 身份永久不可批准——判据必须是身份，不是权限节点；
@@ -197,7 +197,7 @@ func TestApproval_ExpiredCannotBeApproved(t *testing.T) {
 //
 // 断言必须包含「状态只变一次」，不能只看返回码：
 // 两道闸（前置 status 检查 + CAS）里只放宽一道时返回码可能不变，
-// 但副作用次数会暴露问题（与 FR-516 重复 approve 的教训一致）。
+// 但副作用次数会暴露问题（与重复 approve 的教训一致）。
 func TestApproval_ConcurrentApproveOnlyOneWins(t *testing.T) {
 	db := newApprovalTestDB(t)
 	svc := NewApprovalService(db)

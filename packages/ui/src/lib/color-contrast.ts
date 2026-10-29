@@ -1,5 +1,5 @@
-/**
- * 主题配色对比度工具（FR-502 阶段 2）。
+/** 
+ * 主题配色对比度工具（阶段 2）。
  *
  * ── 为什么需要它 ──
  * 全站有 5 套主题 × 明暗 = 10 组配色，全部定义在 styles/tokens.css 与 styles/themes.css。
@@ -38,7 +38,7 @@ export interface Oklch {
   h: number
 }
 
-/**
+/** 
  * 可参与对比度计算的颜色输入：CSS 颜色文本，或已解析好的 RGB。
  * 文本形式支持项目实际用到的四种写法（见 parseColor）。
  */
@@ -57,7 +57,7 @@ const OKLCH_FN = 'oklch'
 const RGB_FN = 'rgb'
 const COLOR_MIX_FN = 'color-mix'
 
-/**
+/** 
  * 判断文本是否「整串就是一个指定函数调用」，是则返回括号内的内容。
  *
  * 【为什么不用正则】阶段 2 起分量可能是 `calc(0.011 * 2.2)`，括号内因此含 `)`，
@@ -88,7 +88,7 @@ function wholeFunctionBody(text: string, fnName: string): string | null {
 /** 裸分量三元组 `20 184 166`——`--brand-shadow` / `--shadow-color` 的真实写法。 */
 const BARE_TRIPLET_PATTERN = /^(\d{1,3})\s+(\d{1,3})\s+(\d{1,3})$/
 
-/**
+/** 
  * 按顶层空白/逗号切分分量，不切进括号内。
  *
  * 【为什么不能直接 split(/[\s,]+/)】阶段 2 起分量可能是 `calc(0.011 * 2.2)`，
@@ -112,7 +112,7 @@ function splitTopLevel(input: string): string[] {
   return parts
 }
 
-/**
+/** 
  * 极小算术求值器：只认数字与 `+ - * / ( )`。
  *
  * 【为什么要它】阶段 2 起 token 用 `calc(var(--seed-chroma) * 2.2)` 这类算式从种子派生
@@ -183,7 +183,7 @@ function evalArithmetic(expr: string): number {
   return result
 }
 
-/**
+/** 
  * 解析单个分量为数字。
  * @param token 分量文本，如 `0.704`、`70.4%`、`183deg`、`calc(0.011 * 2.2)`
  * @param percentScale 百分比换算基准（rgb 分量按 255 折算，oklch 的 L 按 1 折算）
@@ -227,7 +227,7 @@ function makeRgb(r: number, g: number, b: number): Rgb {
   return { r: quantizeChannel(r), g: quantizeChannel(g), b: quantizeChannel(b) }
 }
 
-/**
+/** 
  * 按**顶层逗号**切分（跳过括号内的逗号）。
  *
  * 不能复用 splitTopLevel：它连空格一起切，而 `in srgb` 与 `#36d58a 82%` 里的空格是语义
@@ -265,7 +265,7 @@ function splitMixOperand(input: string): { color: string; pct: number | null } |
   return { color: color.trim(), pct }
 }
 
-/**
+/** 
  * 解析 `color-mix(in srgb, A P%, B)`。
  *
  * 【为什么必须支持】暗色 token 的 weak/ink/line 全部用 color-mix 从状态色与卡片色混出
@@ -299,7 +299,7 @@ function parseColorMix(text: string): Rgb | null {
   )
 }
 
-/**
+/** 
  * 解析 oklch() 文本为 OKLCH 分量。
  * L 支持小数（0.704）与百分数（70.4%）；alpha 被忽略（见 parseColor 注释）。
  */
@@ -329,7 +329,7 @@ export function parseOklch(value: string): Oklch | null {
   return { l, c, h }
 }
 
-/**
+/** 
  * 解析 CSS 颜色文本为 RGB；无法识别时返回 null。
  *
  * 支持的写法（均为项目 styles/ 里真实出现的形态）：
@@ -427,7 +427,7 @@ function encodeGamma(channel: number): number {
   return channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055
 }
 
-/**
+/** 
  * OKLCH → sRGB（标准链路：OKLCH → OKLab → linear sRGB → gamma 编码）。
  * 矩阵系数取自 Björn Ottosson 的 OKLab 原始推导，输出按 8bit 量化并夹到 sRGB 色域。
  */
@@ -467,7 +467,7 @@ export function relativeLuminance(color: ColorInput): number {
   return 0.2126 * linearizeChannel(r) + 0.7152 * linearizeChannel(g) + 0.0722 * linearizeChannel(b)
 }
 
-/**
+/** 
  * WCAG 2.x 对比度，返回 1–21 之间的无量纲比值。
  * 公式：(L亮 + 0.05) / (L暗 + 0.05)，与前景/背景书写顺序无关。
  */

@@ -283,7 +283,7 @@ func (s *BotService) refreshStatus(bot *model.Bot) {
 	}
 }
 
-// SendCommand 向 Bot 下发聊天/控制命令（同步委托 Worker，复用 SendBotCommand RPC，FR-009）。
+// SendCommand 向 Bot 下发聊天/控制命令（同步委托 Worker，复用 SendBotCommand RPC）。
 // 链路：CP → Worker(SendBotCommand) → bot-worker(send-command IPC) → Mineflayer chat。
 func (s *BotService) SendCommand(id uint, command string) error {
 	var bot model.Bot
@@ -312,7 +312,7 @@ func (s *BotService) SendCommand(id uint, command string) error {
 	return nil
 }
 
-// StreamEvents 订阅单个 Bot 在所属 Worker 上的实时事件流（FR-041）。
+// StreamEvents 订阅单个 Bot 在所属 Worker 上的实时事件流。
 func (s *BotService) StreamEvents(ctx context.Context, id uint) (*model.Bot, workerpb.WorkerService_StreamBotEventsClient, error) {
 	var bot model.Bot
 	if err := s.db.First(&bot, id).Error; err != nil {

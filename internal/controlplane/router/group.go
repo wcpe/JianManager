@@ -251,7 +251,7 @@ type updateQuotaRequest struct {
 	MaxInstances *int `json:"maxInstances"`
 	MaxBots      *int `json:"maxBots"`
 	MaxStorageMB *int `json:"maxStorageMb"`
-	// EnforceMode 组级运行期配额强制档位（FR-467）：alert | throttle | stop。
+	// EnforceMode 组级运行期配额强制档位：alert | throttle | stop。
 	// 留空（或不传）= 继承平台默认 quota.enforce_mode。
 	EnforceMode *string `json:"enforceMode"`
 }

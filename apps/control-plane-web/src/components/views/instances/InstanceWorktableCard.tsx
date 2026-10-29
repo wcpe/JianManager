@@ -28,7 +28,7 @@ export interface InstanceWorktableCardInstanceView {
   memLimitMb?: number
   /** 状态原因（失败原因或搭建中提示，二者共用该字段）。 */
   statusReason?: string
-  /**
+  /** 
    * 大区 / 小区（由外壳从实例标签 `region:` / `zone:` 解析后注入）。
    *
    * 【为什么放在卡片而不是分组头】大区是虚拟分区、没有独立实体，做成折叠层级后
@@ -59,7 +59,7 @@ export interface InstanceWorktableDriftView {
   cmdline?: string
 }
 
-/**
+/** 
  * 卡片内「附加提示区」（失败原因 / 搭建中 / 运行态漂移）的最大高度（px）= 35。
  *
  * 两段提示各按一行（16.5）加段间距（2）计满；再多（如失败原因本身折了两行）就从这里裁掉——
@@ -72,7 +72,7 @@ export interface InstanceWorktableDriftView {
  */
 export const CARD_EXTRA_MAX_HEIGHT = 35
 
-/**
+/** 
  * 身份徽章槽位高度（px）：两行徽章。
  *
  * 为什么要固定：徽章数量随实例而变（无标签 / 只有类型 / 类型+角色+环境+两个标签），
@@ -81,8 +81,8 @@ export const CARD_EXTRA_MAX_HEIGHT = 35
  */
 export const CARD_IDENTITY_HEIGHT = 40
 
-/**
- * 实例工作台卡（FR-136，§4.5 运行实体范式）。
+/** 
+ * 实例工作台卡（§4.5 运行实体范式）。
  * 内嵌资源（CPU/内存条 + 玩家/TPS）+ 呼吸灯（运行时脉动）+ 启停/重启按钮；点名进控制台工作区。
  * 仅运行态拉实时指标（原先在卡内惰性 enable），停机卡不轮询、资源显「--」。
  *
@@ -118,7 +118,7 @@ export interface InstanceWorktableCardProps {
   menu: ReactNode
   /** 打开实例控制台；外壳注入（默认深链或自定义跳转）。 */
   onOpen?: (id: number) => void
-  /**
+  /** 
    * 右键菜单入口：只上报**光标坐标**，不上报实例。
    *
    * 【为什么不传实例】本视图用的是自己的最小结构，而菜单需要完整领域对象；
@@ -141,7 +141,7 @@ export interface InstanceWorktableCardProps {
   showTags?: boolean
   /** 是否被批量选中（用户提出：卡片补齐多选）。 */
   selected?: boolean
-  /**
+  /** 
    * 勾选框/卡片被点选。
    *
    * `event` 用于读 Shift / Ctrl / Meta 修饰键——连选与点选的语义由外壳统一实现
@@ -191,7 +191,7 @@ export function InstanceWorktableCard({
   // 标签用绝对值（docker/无探针实例 heapMaxMb 为 0 时，百分比恒 0 看不出占用，故统一显绝对内存）。
   const cpuLabel = running ? `${cpuPct.toFixed(cpuPct > 0 && cpuPct < 10 ? 1 : 0)}%` : '--'
   const memLabel = running && memMb > 0 ? fmtMem(memMb) : '--'
-  // FR-446/447 可用性位：运行态缺测显示「不可用」，不再把 0 当「0 人在线」/0.0 TPS。
+  // 447 可用性位：运行态缺测显示「不可用」，不再把 0 当「0 人在线」/0.0 TPS。
   // 停机态保留「--」（是明确的「不适用」，非缺测）。在线数任一来源（探针/SLP/Query）有值即显值。
   const unavailable = t('metrics.unavailable')
   const playersAvailable = running && (metrics?.playersAvailable ?? false)
@@ -205,20 +205,20 @@ export function InstanceWorktableCard({
   const regionZoneLabel = region && zone ? `${region} · ${zone}` : region || zone
 
   return (
-    /*
+    /* 
       整块可点击（进入工作区）→ 保留原 onClick 语义与 interactive 的 hover 抬升；
       业务特性全部留在 className/children 里：
       - 状态光晕 `instanceStatusGlowClass`（伪元素画外圈，依赖容器自身圆角继承）；
       - `hover:shadow-lift` 悬停反馈；
       - 卡内各段自带 `mt-3` 节奏，故 gap-0 保持原纵向间距。
-      注：`@/test/ui-details` 的 FR-176 守护测试断言本文件保留 hover:shadow-lift，勿删。
+      注：`@/test/ui-details` 的守护测试断言本文件保留 hover:shadow-lift，勿删。
     */
     <Card
       interactive
       data-testid="instance-worktable-card"
       data-selected={selected ? 'true' : undefined}
       className={cn(
-        /*
+        /* 
           【必须固定高度】虚拟化按 `CARD_ROW_HEIGHT` 常量给每行定位，而卡片内容是自适应的：
           实测同一页里卡片实高在 169~277px 之间浮动（标签多、名称换行、状态原因多行的更高）。
           卡片若被内容撑高，就会盖住下一行——用户看到的「卡片重叠」就是这个。
@@ -230,7 +230,7 @@ export function InstanceWorktableCard({
         selected && 'ring-2 ring-primary/60 ring-offset-1',
       )}
       onClick={(event) => {
-        /*
+        /* 
           修饰键语义交给外壳（applySelectionClick）：Ctrl/Cmd 切换单项、Shift 连选、
           无修饰键是「替换为单项」而不是「打开控制台」。
           为什么无修饰键不打开：卡片一旦支持多选，单击的首要含义就是选它（与表格行一致——
@@ -316,9 +316,9 @@ export function InstanceWorktableCard({
           {/* 附加提示区（失败原因 / 搭建中 / 运行态漂移）——整区高度硬封在 CARD_EXTRA_MAX_HEIGHT
               以内：两段 `line-clamp-2` 同时出现时，不封顶的卡片实高会顶穿行盒、与下一行重叠
               （行高口径见 InstanceCardViews 的 CARD_ROW_HEIGHT 说明）。
-              失败原因非空即显、不看 status（FR-312）：Worker 心跳会把 CRASHED 冲回 STOPPED，
-              以 CRASHED 为前置条件时原因随之不可见；搭建中的 reason 是进行时状态而非失败（FR-331），
-              故只走琥珀行、不落红。运行态漂移（FR-471）只说清事实，接管入口在「⋯」菜单。 */}
+              失败原因非空即显、不看 status：Worker 心跳会把 CRASHED 冲回 STOPPED，
+              以 CRASHED 为前置条件时原因随之不可见；搭建中的 reason 是进行时状态而非失败，
+              故只走琥珀行、不落红。运行态漂移只说清事实，接管入口在「⋯」菜单。 */}
           {/*
             【固定高度槽位，不再条件渲染】
             原来整块用 `(statusReason || drift) && ...` 包着：无提示时这块**完全不占高**，
@@ -411,7 +411,7 @@ export function InstanceWorktableCard({
         )}
         <div className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           {stopped && (
-            // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载（FR-331）。
+            // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载。
             <span title={provisioning ? t('instances.provisioningBlocked') : undefined}>
               <Button
                 variant="ghost"

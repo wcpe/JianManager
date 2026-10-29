@@ -61,13 +61,13 @@ export interface CreateBotStressSessionRequest {
 }
 
 
-/** Bot 列表筛选条件（分页 + 多维过滤，FR-038）。 */
+/** Bot 列表筛选条件（分页 + 多维过滤）。 */
 
 /** 分页列表响应。 */
 
 /** 摘要分组计数。 */
 
-/** Bot 计数聚合（FR-038），不含逐条 Bot。 */
+/** Bot 计数聚合，不含逐条 Bot。 */
 
 /** 批量操作筛选条件（与列表筛选维度一致）。 */
 
@@ -79,7 +79,7 @@ export interface CreateBotStressSessionRequest {
  * 列表与聚合必须短轮询：此前仅挂载取一次，真机表现为「bot 已进服、面板永远显示连接中」。 */
 const BOT_REFETCH_MS = 5000
 
-/** 获取 Bot 分页列表，支持多维筛选（FR-038）。 */
+/** 获取 Bot 分页列表，支持多维筛选。 */
 export function useBots(params?: BotListParams) {
   return useQuery({
     queryKey: ['bots', params],
@@ -91,8 +91,8 @@ export function useBots(params?: BotListParams) {
   })
 }
 
-/**
- * 获取 Bot 计数聚合，可按 instance/node/status/behavior 分组（FR-038）。
+/** 
+ * 获取 Bot 计数聚合，可按 instance/node/status/behavior 分组。
  *
  * `options.enabled` 供调用方门控：分组总览同时挂着 5 路 summary，每路都是 5s 轮询
  * （稳定 ≈1 req/s），而其中只有当前分组维度那一路是当场要用的。未启用的维度不必轮询。
@@ -155,7 +155,7 @@ export function useSetBotBehavior() {
   })
 }
 
-/** 批量执行 set-behavior/start/stop/delete（FR-038）。 */
+/** 批量执行 set-behavior/start/stop/delete。 */
 export function useBotBatch() {
   const qc = useQueryClient()
   return useMutation({
@@ -242,7 +242,7 @@ export function useSendBotCommand() {
   })
 }
 
-/** 订阅单个 Bot 的实时事件流（FR-041）。 */
+/** 订阅单个 Bot 的实时事件流。 */
 export function useBotEvents(botId: number | null): BotRealtimeState {
   const [state, setState] = useState<BotRealtimeState>({ connected: false, events: [] })
   const mounted = useRef(true)

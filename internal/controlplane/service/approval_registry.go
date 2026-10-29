@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// 高危操作审批登记表（FR-492）。
+// 高危操作审批登记表。
 //
 // ## 为什么是**代码常量**而不是 DB 配置
 //
@@ -102,7 +102,7 @@ type ApprovalRequirement struct {
 // ## 为什么默认不是「所有写操作都需审」
 //
 // 平台的 MCP 工具面有一百多个写操作，其中绝大多数已有**参数名精确确认**
-// （`confirmBotName` 这类，FR-396 语义）或本身就是低风险可逆操作。
+// （`confirmBotName` 这类语义）或本身就是低风险可逆操作。
 // 若一律要求审批，结果是「什么都要批」——批准人只会闭眼点同意，
 // 审批就从把关退化成橡皮图章。这是比不做审批更危险的形态。
 //
@@ -150,7 +150,7 @@ func ApprovalDecisionFor(action string) string {
 //
 // ## 为什么需要它
 //
-// FR-492 要求 CLI / MCP / curl **三入口同策略**。MCP 侧的工具名本来就是登记表键
+// 要求 CLI / MCP / curl **三入口同策略**。MCP 侧的工具名本来就是登记表键
 // （`instance_stop`），而 HTTP/CLI 走的是 agent action 目录（`agent.instance_stop`），
 // 两套命名若不做映射，同一件事在一条入口需审、在另一条直接执行——
 // 一个持有 Agent Token 的调用方只要换用 curl 就能绕过审批。

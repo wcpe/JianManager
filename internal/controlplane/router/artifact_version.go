@@ -254,7 +254,7 @@ func (h *ArtifactVersionHandler) Download(c *gin.Context) {
 	http.ServeContent(c.Writer, c.Request, filename, info.ModTime(), file)
 }
 
-// DownloadBinaryAsset GET /binary-assets/:id/download — 短 token 保护的二进制制品分发端点（FR-441）。
+// DownloadBinaryAsset GET /binary-assets/:id/download — 短 token 保护的二进制制品分发端点。
 //
 // 与 Download（probe jar）同族：同注册方式（匿名路径 + 短 token 保护）、同 token 形态
 // （ArtifactVersionService 的 HMAC 签名），仅 scope 不同（assetId vs versionId）。
@@ -389,6 +389,6 @@ func (h *ArtifactVersionHandler) RegisterSelectionRoutes(rg *gin.RouterGroup) {
 // RegisterDownloadRoutes 注册 CP 本地 jar 下载端点。
 func (h *ArtifactVersionHandler) RegisterDownloadRoutes(r gin.IRouter) {
 	r.GET("/probe-artifacts/:id/download", h.Download)
-	// 二进制制品分发（FR-441 kind=asset）：与 probe 端点同族（短 token 保护）。
+	// 二进制制品分发（kind=asset）：与 probe 端点同族（短 token 保护）。
 	r.GET("/binary-assets/:id/download", h.DownloadBinaryAsset)
 }

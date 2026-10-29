@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 用户委托执行器（FR-516 §5）。
+// 用户委托执行器（§5）。
 //
 // 核心矛盾（ADR-105）：既有 MCP 工具面是给「持有显式 scope 的自动化凭证」用的，
 // 人类 JWT 不是 MCP 凭据。直接把 JWT 塞进去会让「模型说什么就做什么」变成提权面。
@@ -74,7 +74,7 @@ type assistantDelegatedExecutor struct {
 	sink *assistantEventSink
 }
 
-// Available 返回本轮要下发给模型的工具（渐进式披露，FR-544）。
+// Available 返回本轮要下发给模型的工具（渐进式披露）。
 //
 // ## 为什么只下发三个元工具
 //
@@ -99,7 +99,7 @@ func (e *assistantDelegatedExecutor) Available(_ context.Context, owner uint) []
 		// 装不出权限就给空目录：宁可模型「没有工具可用」，也不能凭猜测放行。
 		return nil
 	}
-	// 平台自带工具开关（FR-540 §4.3）：关闭时不提供任何元工具。
+	// 平台自带工具开关（§4.3）：关闭时不提供任何元工具。
 	// 元工具是自带工具的唯一入口，关掉它等于关掉全部平台工具。
 	if !e.svc.builtinToolsEnabled() {
 		return nil
@@ -140,14 +140,14 @@ func (e *assistantConfirmationPendingError) Error() string {
 
 // execute 统一入口：解析参数 → 查登记 → 风险分类 → 重验 → 执行/出票。
 func (e *assistantDelegatedExecutor) execute(ctx context.Context, owner uint, call ai.ToolCall) assistantToolOutcome {
-	// 渐进式披露的三件套（FR-544）先于其它判定：它们不是业务工具，
+	// 渐进式披露的三件套先于其它判定：它们不是业务工具，
 	// 没有目标资源可校验，自身的权限边界由内部逻辑保证。
 	if outcome, handled := e.executeMetaTool(ctx, owner, call); handled {
 		return outcome
 	}
 
 	// 外部 MCP 工具（conn.<slug>.<remote>）走独立分派：它的风险分类来自工具行、
-	// 目标由上游解释，与内置 action 的判定路径不同（FR-517 闭环）。
+	// 目标由上游解释，与内置 action 的判定路径不同（闭环）。
 	if isAssistantExternalTool(call.ToolName) {
 		argsExt, errExt := normalizeToolArgs(call.Args)
 		if errExt != nil {
@@ -160,7 +160,7 @@ func (e *assistantDelegatedExecutor) execute(ctx context.Context, owner uint, ca
 		return e.executeExternalTool(ctx, accessExt, call, argsExt)
 	}
 
-	// 业务工具**不再有本地执行分支**（FR-544）：它们经 call_tool 转给 MCP 的
+	// 业务工具**不再有本地执行分支**：它们经 call_tool 转给 MCP 的
 	// CallTool 执行，审批/权限/scope/精确确认由 MCP 保证。走到这里说明调用方
 	// 直接点了业务工具名，而它已不在常驻目录里——如实拒绝并指路，不要静默执行。
 	return assistantToolOutcome{Err: fmt.Errorf(
@@ -550,11 +550,11 @@ func (s *AssistantChatService) approveAndRun(
 	// 这里曾经写成 `isAssistantExternalTool(tool.Name)`，于是任何外部写工具一批准就
 	// 空指针 panic（500 空体）：票据已被 CAS 消费、回执卡在 in_flight、run 永久停在
 	// waiting_confirmation，用户既拿不到结果也无法重来（再批只会得到 409 已消费）。
-	// 换言之 FR-517 的写侧闭环 100% 不可用。
+	// 换言之的写侧闭环 100% 不可用。
 	if isAssistantExternalTool(ticket.ToolName) {
 		execErr = s.executeApprovedExternalTool(execCtx, access, ticket, frozen)
 	} else {
-		// 内置/平台工具：**转给 MCP 执行**（FR-544 单一执行路径）。
+		// 内置/平台工具：**转给 MCP 执行**（单一执行路径）。
 		//
 		// 走到这里说明用户已在助手侧确认过、参数哈希与目标指纹都核对过。
 		// 但执行仍交给 MCP 的 CallTool —— 平台的写操作只应有一条实现路径，
@@ -609,7 +609,7 @@ func (s *AssistantChatService) approveAndRun(
 	return &updated, nil
 }
 
-// auditToolExecution 把一次**已批准并执行过**的写操作写进平台审计（FR-516 §9）。
+// auditToolExecution 把一次**已批准并执行过**的写操作写进平台审计（§9）。
 //
 // 为什么写在这里而不是 router 层：执行发生在确认端点内部，runId/callId 只有这一层有；
 // router 拿到的是「某张票据被批准」，拼不出「哪一轮助手的哪个工具调用」。
@@ -728,7 +728,7 @@ func (s *AssistantChatService) RecoverInFlightReceipts() (int64, error) {
 	return res.RowsAffected, res.Error
 }
 
-// executeMetaTool 执行渐进式披露的三件套（FR-544）。
+// executeMetaTool 执行渐进式披露的三件套。
 //
 // handled=false 表示「不是元工具」，交回原分发路径。
 //
@@ -836,7 +836,7 @@ func (e *assistantDelegatedExecutor) metaDescribeTool(rawArgs string) string {
 //
 // ## 读操作不拦
 //
-// 只读自动执行是既有不变量（FR-516 §4）。若读也要确认，用户会被确认卡淹没，
+// 只读自动执行是既有不变量（§4）。若读也要确认，用户会被确认卡淹没，
 // 最终闭眼点同意——那比不做确认更危险。
 func (e *assistantDelegatedExecutor) metaCallTool(ctx context.Context, owner uint, call ai.ToolCall) assistantToolOutcome {
 	// 注意：执行入口的可用性**必须在写判定的出票之后**再检查。

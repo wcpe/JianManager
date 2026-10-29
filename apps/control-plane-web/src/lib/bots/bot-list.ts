@@ -6,9 +6,9 @@ export interface InstanceBotBadge {
   online: number
 }
 
-/**
+/** 
  * 把 `GET /bots/summary?groupBy=instance` 的分组结果索引为「实例 id → 在线/总数」。
- * 分组 key 为实例 id 字符串，便于实例树逐行 O(1) 取徽标（FR-039，单次摘要覆盖可见集）。
+ * 分组 key 为实例 id 字符串，便于实例树逐行 O(1) 取徽标（单次摘要覆盖可见集）。
  */
 export function indexBotBadgesByInstance(
   groups: BotSummaryGroup[] | undefined,
@@ -22,8 +22,8 @@ export function indexBotBadgesByInstance(
   return map
 }
 
-/**
- * Bot 状态的语义分桶（FR-039）。
+/** 
+ * Bot 状态的语义分桶。
  * 后端 status 取值为 connected/connecting/disconnected/error；
  * 概览卡片与状态点按以下四类语义聚合，未知值归入 offline 兜底。
  */
@@ -52,8 +52,8 @@ export interface BotStatusCounts {
   error: number
 }
 
-/**
- * 从聚合摘要派生概览卡片计数（FR-039）。
+/** 
+ * 从聚合摘要派生概览卡片计数。
  * 优先用 `byStatus`（后端聚合，覆盖全量而非当前页），避免按分页数据低估；
  * 摘要缺失时返回全零。在线数取自摘要的 connected。
  */
@@ -80,7 +80,7 @@ export interface BotGroup {
 
 const STATUS_KIND_ORDER: BotStatusKind[] = ['online', 'connecting', 'error', 'offline']
 
-/**
+/** 
  * 把「当前页」的 Bot 列表按维度分组，仅对已加载的页内数据分组（不拉全量）。
  * 按状态分组时键为语义分桶并按 online→connecting→error→offline 固定排序；
  * 按行为分组时键为 behavior 原值并按名称排序，保证渲染顺序稳定。
@@ -116,7 +116,7 @@ export function parseBotConfig(config: string): BotConfig {
   }
 }
 
-/**
+/** 
  * 新建 Bot 时的连接地址预填：默认连到「所在节点 host + 该实例实际 server-port」，可改。
  * 这样 Bot 默认就指向它所属的实例，避免用户手填端口出错导致连不进服务器。
  * serverPort 缺省（未分配）时回退 MC 默认 25565；节点 host 缺省回退回环。

@@ -35,8 +35,8 @@ export interface BackendCandidate {
   serverPort?: number
 }
 
-/**
- * 代理后端注册管理（FR-035）：把已有 backend 注册进代理，编辑 alias/priority/forced-host，并可 resync。
+/** 
+ * 代理后端注册管理：把已有 backend 注册进代理，编辑 alias/priority/forced-host，并可 resync。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast —— 注册项与候选后端由外壳注入，
  * 三个动作经回调上报。错误码到文案的映射（ALIAS_CONFLICT / ALREADY_REGISTERED）与

@@ -1,6 +1,6 @@
 // Package config 提供 Worker Node 的配置加载（worker.yml + 环境变量覆盖）。
 //
-// 配置真正落盘到 worker.yml 而非堆砌 JIANMANAGER_* 环境变量（FR-080，见 ADR-020）；
+// 配置真正落盘到 worker.yml 而非堆砌 JIANMANAGER_* 环境变量（见 ADR-020）；
 // 所有项有合理默认，零配置即可启动开发环境。环境变量以 JIANMANAGER_ 前缀按路径覆盖
 // （如 Control Plane gRPC 地址 → JIANMANAGER_CONTROL_PLANE_GRPC），与 Control Plane 配置惯例一致。
 package config
@@ -54,7 +54,7 @@ type Config struct {
 	Host string `mapstructure:"host"`
 	// JWTSecret 历史兼容字段；WS 令牌密钥只接受 CP 注册/心跳下发值。
 	JWTSecret string `mapstructure:"jwt_secret"`
-	// EnrollToken 一次性 enrollment token 明文（FR-080，见 ADR-020）。
+	// EnrollToken 一次性 enrollment token 明文（见 ADR-020）。
 	// 仅经环境变量/命令行传入、绝不写入 worker.yml（一次性凭据不留盘）；
 	// 首次注册（无本地身份文件）时携带，注册成功后即作废。
 	EnrollToken string `mapstructure:"enroll_token"`
@@ -73,7 +73,7 @@ type Config struct {
 	// VL 里行还在，没人知道去查它。详见 catalog.BatchedStore 的注释。
 	LogCatalog LogCatalogConfig  `mapstructure:"log_catalog"`
 	LogSources []LogSourceConfig `mapstructure:"log_sources"`
-	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
+	// LogReconcile 启动增量对账：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
 	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
 	// LogIngest 采集归一化的节点级默认（缺陷 C 时区配置面）：源未显式配置时生效。
 	LogIngest LogIngestConfig `mapstructure:"log_ingest"`
@@ -86,32 +86,32 @@ type Config struct {
 	// LogRetention 保留策略（按级别/来源设保留期）与执行器。
 	LogRetention LogRetentionConfig `mapstructure:"log_retention"`
 	Decompiler   DecompilerConfig   `mapstructure:"decompiler"`
-	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
+	// Search 全文搜索索引配置（见 ADR-017）。
 	Search SearchConfig `mapstructure:"search"`
-	// ArtifactCache 节点本地制品缓存配置（FR-178）：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
+	// ArtifactCache 节点本地制品缓存配置：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
 	ArtifactCache ArtifactCacheConfig `mapstructure:"artifact_cache"`
-	// Proxy 本节点出站代理配置（FR-174，见 ADR-037）：所有出站下载（自更新/JDK/CFR）
+	// Proxy 本节点出站代理配置（见 ADR-037）：所有出站下载（自更新/JDK/CFR）
 	// 经此代理。url 留空=直连（沿用环境变量代理）。各 Worker 在不同机器各配各的。
 	Proxy     httpclient.Config `mapstructure:"proxy"`
 	Heartbeat time.Duration     `mapstructure:"-"`
-	// MemoryGuard 启动内存闸（FR-317）：可用内存不足以再塞下待启实例时拒绝启动，
+	// MemoryGuard 启动内存闸：可用内存不足以再塞下待启实例时拒绝启动，
 	// 防止把节点内存跑满至失去响应。零值即启用 + 默认保留水位 max(512MB, 总内存 10%)。
 	MemoryGuard MemoryGuardConfig `mapstructure:"memory_guard"`
-	// BotWorker bot-worker 子进程容量与资源参数（FR-398 压测编排）。
+	// BotWorker bot-worker 子进程容量与资源参数（压测编排）。
 	BotWorker BotWorkerConfig `mapstructure:"bot_worker"`
-	// OrphanScan 运行期周期孤儿扫描（FR-456）：把孤儿清理从「仅启动时」升级为「运行期持续兜底」。
+	// OrphanScan 运行期周期孤儿扫描：把孤儿清理从「仅启动时」升级为「运行期持续兜底」。
 	OrphanScan OrphanScanConfig `mapstructure:"orphan_scan"`
-	// Recover 接管恢复参数（FR-455①）：Worker 重启后对存活 wrapper 的 reconnect 重试窗口。
+	// Recover 接管恢复参数（①）：Worker 重启后对存活 wrapper 的 reconnect 重试窗口。
 	Recover RecoverConfig `mapstructure:"recover"`
-	// HealthScan 运行期实例健康巡检与自愈（FR-459）：识别假死、受控自愈、崩溃熔断。
+	// HealthScan 运行期实例健康巡检与自愈：识别假死、受控自愈、崩溃熔断。
 	HealthScan HealthScanConfig `mapstructure:"health_scan"`
-	// Startup 启动期可观测性配置（FR-486）。
+	// Startup 启动期可观测性配置。
 	Startup StartupConfig `mapstructure:"startup"`
-	// HostObserve 主机级观测采集配置（FR-513）。
+	// HostObserve 主机级观测采集配置。
 	HostObserve HostObserveConfig `mapstructure:"host_observe"`
 }
 
-// HostObserveConfig 主机级观测采集配置（FR-513）。
+// HostObserveConfig 主机级观测采集配置。
 //
 // 全部有安全默认：写错/缺省即用默认值，观测配置不该让 Worker 起不来。
 type HostObserveConfig struct {
@@ -125,7 +125,7 @@ type HostObserveConfig struct {
 	Mounts []string `mapstructure:"mounts"`
 }
 
-// StartupConfig 启动期可观测性配置（FR-486）。
+// StartupConfig 启动期可观测性配置。
 //
 // 只有一个旋钮：状态规模告警阈值。阶段计时与阶段日志**不提供开关**——
 // 启动期每次进程生命周期只跑一遍，没有噪声成本，而现场出问题时最需要的是
@@ -156,7 +156,7 @@ func (c *Config) StartupStateWarnMB() int {
 	return c.Startup.StateWarnMB
 }
 
-// HealthScanConfig 运行期实例健康巡检与自愈配置（FR-459）。
+// HealthScanConfig 运行期实例健康巡检与自愈配置。
 //
 // 本地基线（worker.yml）提供逃生口与默认口径；运行期策略（阈值/动作/探针类型）可经 CP
 // 心跳响应下发覆盖（见 internal/worker/heartbeat 的 health policy 应用）。
@@ -221,7 +221,7 @@ func (c HealthScanConfig) StartupWarmupDuration() time.Duration {
 
 // 默认值单一真源说明：巡检周期/熔断窗口/启动宽限的默认口径一律取自 process 包导出的
 // Default* 常量（见 internal/worker/process/health_scan.go），本地不再重复定义字面量，
-// 避免「本地默认」与「进程归一默认」两处漂移（FR-459 复审项 12）。
+// 避免「本地默认」与「进程归一默认」两处漂移（复审项 12）。
 
 // HealthPolicy 把本地配置组装为进程包可用的巡检策略（阈值/窗口未配时交给进程侧归一取默认）。
 func (c HealthScanConfig) HealthPolicy() process.HealthPolicy {
@@ -238,7 +238,7 @@ func (c HealthScanConfig) HealthPolicy() process.HealthPolicy {
 	}
 }
 
-// OrphanScanConfig 运行期周期孤儿扫描配置（FR-456）。
+// OrphanScanConfig 运行期周期孤儿扫描配置。
 type OrphanScanConfig struct {
 	// Disabled 显式关闭周期扫描（默认 false=启用）。应急逃生口。
 	Disabled bool `mapstructure:"disabled"`
@@ -246,7 +246,7 @@ type OrphanScanConfig struct {
 	Interval string `mapstructure:"interval"`
 	// DisposePolicy 处置策略：warn（默认，只告警 + 落审计）/ auto（自动清理）。
 	DisposePolicy string `mapstructure:"dispose_policy"`
-	// AutoAdopt 未纳管活进程全自动收养（FR-497③，默认 true=启用）。
+	// AutoAdopt 未纳管活进程全自动收养（③，默认 true=启用）。
 	//
 	// 扫描发现「PID 目录中 wrapper 与 Java 均活、但本 Worker 未纳管」的实例时，经归属复核
 	// （verifyProcessOwnership）通过即自动重连并登记为 RUNNING——**不重启也不杀进程**；复核不通过
@@ -268,7 +268,7 @@ func (c OrphanScanConfig) ScanInterval() time.Duration {
 	return d
 }
 
-// AutoAdoptEnabled 返回未纳管活进程自动收养开关（FR-497③）。
+// AutoAdoptEnabled 返回未纳管活进程自动收养开关（③）。
 //
 // 与 RetryBackoffSequence 同口径：本类型的零值（测试/手工构造）按默认口径解释——config.Load 经
 // viper SetDefault 写入 process.DefaultOrphanAutoAdopt，故只有显式配置 false 才会关闭。
@@ -365,7 +365,7 @@ func (c LogCatalogConfig) JournalSyncIntervalValue() (time.Duration, bool) {
 	return d, true
 }
 
-// RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
+// RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（①）。
 type RecoverConfig struct {
 	// RetryBackoff 接管 reconnect 有界重试的间隔序列（逗号分隔的 duration 字符串，
 	// 默认 "1s,2s,4s,8s,16s,32s,64s"≈127s）。交接窗口的 socket 未就绪/资源紧张常是瞬时的，
@@ -446,7 +446,7 @@ func (c BotWorkerConfig) ApplyEnvForShard(perShardMax int) []string {
 	return c.ApplyEnv()
 }
 
-// MemoryGuardConfig 启动内存闸配置（FR-317）。
+// MemoryGuardConfig 启动内存闸配置。
 type MemoryGuardConfig struct {
 	// ReserveMB 保留水位（MB）；0 = 默认策略 max(512MB, 总内存 10%)。
 	ReserveMB int64 `mapstructure:"reserve_mb"`
@@ -454,7 +454,7 @@ type MemoryGuardConfig struct {
 	Disabled bool `mapstructure:"disabled"`
 }
 
-// SearchConfig 全文搜索索引配置（FR-074，见 ADR-017）。
+// SearchConfig 全文搜索索引配置（见 ADR-017）。
 type SearchConfig struct {
 	// Ignore 追加到内置默认忽略集的 glob 规则（相对实例工作目录，/ 分隔）。
 	// 形如 logs/（目录前缀）、*.bak（basename glob）、vendor（路径段）。默认集已覆盖常见
@@ -462,14 +462,14 @@ type SearchConfig struct {
 	Ignore []string `mapstructure:"ignore"`
 }
 
-// ArtifactCacheConfig 节点本地制品缓存配置（FR-178）。
+// ArtifactCacheConfig 节点本地制品缓存配置。
 type ArtifactCacheConfig struct {
 	// MaxBytes 缓存容量上限（字节，0=不限）。存入新项后若超限按 lastUsedAt 升序 LRU 淘汰。
 	// 可经 CP 端点 PUT /nodes/:id/artifact-cache/cap 运行时下发覆盖。
 	MaxBytes int64 `mapstructure:"max_bytes"`
 }
 
-// DecompilerConfig 反编译能力配置（FR-075，见 ADR-018）。
+// DecompilerConfig 反编译能力配置（见 ADR-018）。
 type DecompilerConfig struct {
 	// CFRPath 显式 CFR 反编译器 jar 路径（最高优先级，可空）。
 	// 运维离线放置时直接指定；空则回退内嵌/数据根缓存/按需下载。
@@ -849,7 +849,7 @@ func validateLogSources(sources []LogSourceConfig) error {
 		}
 		// 采集模式白名单校验（与 pipeline.AcquireMode 的合法值逐字一致：worker.yml 直接写
 		// 字面量 FILE_PRIMARY / STDIO_PRIMARY / PUSH_ONLY，由 main.go 透传为 pipeline.AcquireMode）。
-		// 空串沿用 FILE_PRIMARY（pipeline 默认值）。PUSH_ONLY 为纯接收源（FR-511 的 HTTP 端点）：
+		// 空串沿用 FILE_PRIMARY（pipeline 默认值）。PUSH_ONLY 为纯接收源（的 HTTP 端点）：
 		// 不读取任何物理文件，因此允许 path 为空——它走自己的 ledger+WAL，事件经 Ingest 注入。
 		mode := strings.TrimSpace(s.Mode)
 		if mode != "" && mode != "FILE_PRIMARY" && mode != "STDIO_PRIMARY" && mode != "PUSH_ONLY" {
@@ -1221,17 +1221,17 @@ type LogRetentionArchiveCopyConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	// Provider 归档目的地类型：local（默认）| s3 | minio。
 	//
-	// 为什么这里要允许 s3/minio（FR-501 收尾）：导出归档的价值在「另存一份」——
+	// 为什么这里要允许 s3/minio（收尾）：导出归档的价值在「另存一份」——
 	// 若目的地只能是与热层同机同盘的本地目录，那么单盘故障/整机报废时副本跟着没，
 	// 「删前归档」这条硬规则就只剩「省空间」而丢掉了「保一份」。
 	// Provider 抽象（`archive.Provider`）与真实 SigV4 实现（`archive.RemoteS3Provider`，
-	// 底层 `internal/worker/storage/s3.go`）早由 FR-478 交付并在真机 RustFS 上验过，
+	// 底层 `internal/worker/storage/s3.go`）早由 交付并在真机 RustFS 上验过，
 	// 本项只是把同一个接口接到导出侧——不新造协议、不新造凭证模型。
 	Provider string `mapstructure:"provider"`
 	// Root 归档目的地根目录（`provider=local` 时必填；`archive.LocalArchive` 的 Root）。
 	//
 	// 布局由 archive 包固定：`<root>/<storage_namespace>/<utc_day>/g<generation>/…`，
-	// manifest 落在分区根下的 `manifest.json`（与 FR-478 的 `logs/archive` 契约一致）。
+	// manifest 落在分区根下的 `manifest.json`（与 的 `logs/archive` 契约一致）。
 	Root string `mapstructure:"root"`
 	// —— 以下仅在 provider=s3|minio 时生效，语义与 `log_archive.*` 完全一致（同一份
 	// `storage.Config`，同一个 SigV4 客户端）——
@@ -1774,9 +1774,9 @@ type LogArchiveInstanceGzAdoptConfig struct {
 	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
 
-// Load 从配置文件和环境变量加载 Worker 配置（FR-080，见 ADR-020）。
+// Load 从配置文件和环境变量加载 Worker 配置（见 ADR-020）。
 //
-// path 为空时在工作目录与 configs/ 下查找 worker.yml（均可选），找不到回退 worker.yaml（FR-224 兼容）。
+// path 为空时在工作目录与 configs/ 下查找 worker.yml（均可选），找不到回退 worker.yaml（兼容）。
 // 所有项有合理默认，零配置即可启动；JIANMANAGER_ 前缀环境变量按路径覆盖配置文件值。
 // enrollment token 经 JIANMANAGER_ENROLL_TOKEN 注入、不从 yaml 读取（一次性凭据不留盘）。
 func Load(path string) (*Config, error) {
@@ -1861,7 +1861,7 @@ func Load(path string) (*Config, error) {
 	// 2026-10-29：冷热双层废除后这 4 个键已删（结构体字段不存在）。
 	// 此处不再写它们的 SetDefault——那只会造成「键还在」的错觉；viper 对未知键不报错，
 	// 旧 worker.yml 里留着它们也不会出问题。
-	// 2026-11-06：FR-510 磁盘缓冲（log_spool.*）已整体删除。
+	// 2026-11-06：磁盘缓冲（log_spool.*）已整体删除。
 	// 它只有写端、没有读端（Peek/PeekEvents/Ack 在 spool 包外零调用），
 	// 写进去的事件永远不会被重投——那不是缓冲，是「换个地方丢」。
 	// 生产配置里曾开着 enabled=true，导致每次启动白报一条 ERROR。
@@ -1874,7 +1874,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
 	v.SetDefault("log_capacity.pause_at_percent", 90.0)
 	v.SetDefault("log_sources", []LogSourceConfig{})
-	// 采集索引（FR-496，`log_index.*`）整组已随旧链路删除：新架构没有 SQLite 采集索引，
+	// 采集索引（，`log_index.*`）整组已随旧链路删除：新架构没有 SQLite 采集索引，
 	// 也没有「投递批次裁剪 / 持久化提交单元」这些概念（逐批直写 VL）。
 	// 旧 worker.yml 里留着这些键不会报错（viper 忽略未知键）。
 	v.SetDefault("log_archive.enabled", false)
@@ -1919,24 +1919,24 @@ func Load(path string) (*Config, error) {
 	// 历史 gz 导入：默认**关**（主动补数据才开，避免升级后突然读几千个文件）。
 	v.SetDefault("log_tailer.include_gzip", false)
 	v.SetDefault("search.ignore", []string{})
-	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
+	// 节点制品缓存：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
-	// 反编译（FR-075）：默认无显式 CFR 路径、允许按需下载（首次反编译时拉 CFR 落数据根缓存）。
+	// 反编译：默认无显式 CFR 路径、允许按需下载（首次反编译时拉 CFR 落数据根缓存）。
 	v.SetDefault("decompiler.cfr_path", "")
 	v.SetDefault("decompiler.allow_download", true)
-	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
+	// 出站代理（见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")
-	// 运行期周期孤儿扫描（FR-456）：默认启用、周期 60s、只告警（可配 auto 自动清理）。
+	// 运行期周期孤儿扫描：默认启用、周期 60s、只告警（可配 auto 自动清理）。
 	v.SetDefault("orphan_scan.disabled", false)
 	v.SetDefault("orphan_scan.interval", "60s")
 	v.SetDefault("orphan_scan.dispose_policy", "warn")
-	// 未纳管活进程自动收养（FR-497③）：默认启用（只重连、不杀不重启），显式 false 关闭收养。
+	// 未纳管活进程自动收养（③）：默认启用（只重连、不杀不重启），显式 false 关闭收养。
 	v.SetDefault("orphan_scan.auto_adopt", process.DefaultOrphanAutoAdopt)
-	// 接管恢复（FR-455①）：接管存活 wrapper 的 reconnect 重试窗口默认 1s→...→64s（≈127s），
+	// 接管恢复（①）：接管存活 wrapper 的 reconnect 重试窗口默认 1s→...→64s（≈127s），
 	// 覆盖分钟级瞬时故障（socket 未就绪/资源紧张），避免「拨不通即处置」的误杀。
 	v.SetDefault("recover.retry_backoff", "1s,2s,4s,8s,16s,32s,64s")
-	// 运行期实例健康巡检与自愈（FR-459）：默认启用、周期 30s、只告警（可配 restart 自愈）。
+	// 运行期实例健康巡检与自愈：默认启用、周期 30s、只告警（可配 restart 自愈）。
 	v.SetDefault("health_scan.disabled", false)
 	v.SetDefault("health_scan.interval", "30s")
 	v.SetDefault("health_scan.probe_kind", "")
@@ -1948,7 +1948,7 @@ func Load(path string) (*Config, error) {
 	if path != "" {
 		v.SetConfigFile(path)
 	} else {
-		// .yml 优先、找不到回退 .yaml（FR-224）。viper 默认搜索按 SupportedExts 顺序（yaml 先于 yml），
+		// .yml 优先、找不到回退 .yaml。viper 默认搜索按 SupportedExts 顺序（yaml 先于 yml），
 		// 无法据此让 .yml 优先；故显式按 [.yml, .yaml] 在搜索目录探测，命中即 SetConfigFile。
 		// 两者同为 YAML 格式，SetConfigType 固定 yaml 保证解析正确。
 		v.SetConfigName("worker")
@@ -1970,7 +1970,7 @@ func Load(path string) (*Config, error) {
 	if err := v.BindEnv("name", "JIANMANAGER_NODE_NAME"); err != nil {
 		return nil, fmt.Errorf("绑定节点名称环境变量失败: %w", err)
 	}
-	// 正式键 CONTROL_PLANE_GRPC；别名 CONTROL_PLANE 兼容旧 compose/文档误写（FR-354）。
+	// 正式键 CONTROL_PLANE_GRPC；别名 CONTROL_PLANE 兼容旧 compose/文档误写。
 	if err := v.BindEnv("control_plane", "JIANMANAGER_CONTROL_PLANE_GRPC", "JIANMANAGER_CONTROL_PLANE"); err != nil {
 		return nil, fmt.Errorf("绑定 Control Plane 环境变量失败: %w", err)
 	}
@@ -2125,10 +2125,10 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// FindConfigFile 在给定目录中按 .yml 优先、.yaml 兼容回退的顺序查找 <name>.<ext> 配置文件（FR-224）。
+// FindConfigFile 在给定目录中按 .yml 优先、.yaml 兼容回退的顺序查找 <name>.<ext> 配置文件。
 // 返回首个存在的文件路径；都不存在时返回空串（交回 viper 的名字搜索 + 默认值，零配置仍可启动）。
 //
-// 导出以供 worker 入口的「未配置自检」复用（FR-222，见 ADR-051）：自检需判断工作目录是否已有
+// 导出以供 worker 入口的「未配置自检」复用（见 ADR-051）：自检需判断工作目录是否已有
 // worker.yml/.yaml 配置文件。
 func FindConfigFile(name string, dirs ...string) string {
 	for _, dir := range dirs {
@@ -2143,7 +2143,7 @@ func FindConfigFile(name string, dirs ...string) string {
 }
 
 // WorkerConfigExists 报告工作目录、可执行文件所在目录或 configs/ 下是否存在 worker 配置文件
-// （.yml 优先、.yaml 回退）。供 worker 入口未配置自检使用（FR-222，见 ADR-051）。
+// （.yml 优先、.yaml 回退）。供 worker 入口未配置自检使用（见 ADR-051）。
 // 纳入「exe 旁」搜索（FIX-3）：Windows 服务/从别处启动时 cwd 可能非安装目录，配置随二进制仍可被发现。
 func WorkerConfigExists() bool {
 	return FindConfigFile("worker", configSearchDirs()...) != ""
@@ -2169,7 +2169,7 @@ func configSearchDirs() []string {
 	return dirs
 }
 
-// HostObserveOptions 把配置收敛为 hostobs 的构造选项（FR-513）。
+// HostObserveOptions 把配置收敛为 hostobs 的构造选项。
 //
 // 非法 interval 回退默认而不报错：观测配置写错不该阻断启动，
 // 而 hostobs.New 内部还有 10s 硬下限兜底。

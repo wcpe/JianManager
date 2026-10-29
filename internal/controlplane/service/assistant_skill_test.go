@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// 技能装载（FR-541）。所有用例都围绕一条主线：
+// 技能装载。所有用例都围绕一条主线：
 // 单个坏技能不得连累整个目录，但坏在哪里必须可解释（不是静默丢弃）。
 
 func TestParseSkillMarkdown_Valid(t *testing.T) {

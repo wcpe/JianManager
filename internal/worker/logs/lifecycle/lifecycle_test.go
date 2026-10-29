@@ -76,8 +76,8 @@ func (r *recordingOps) errIf(op string) error {
 	return nil
 }
 
-// FR-477 happy path：状态走完、owner 切换、staging 期间不可查询、迟到事件路由 COLD。
-// FR-477：staging attach 成功也不得进入 QueryPlanner（显式夹具）。
+// happy path：状态走完、owner 切换、staging 期间不可查询、迟到事件路由 COLD。
+// staging attach 成功也不得进入 QueryPlanner（显式夹具）。
 func mustRec(t *testing.T, m *Manager) *catalog.Record {
 	t.Helper()
 	rec, ok := m.GetPartition("ns/game-1", "2026-09-20")
@@ -85,7 +85,7 @@ func mustRec(t *testing.T, m *Manager) *catalog.Record {
 	return rec
 }
 
-// FR-477 Runbook B：每个迁移状态崩溃后 Recover 必须给出期望的 owner/query 侧。
+// Runbook B：每个迁移状态崩溃后 Recover 必须给出期望的 owner/query 侧。
 // advanceCrash 把稳定记录推到目标状态，模拟“进程在该状态崩溃”。
 func advanceCrash(cat *catalog.Catalog, t *testing.T, target catalog.MigrationState) {
 	t.Helper()

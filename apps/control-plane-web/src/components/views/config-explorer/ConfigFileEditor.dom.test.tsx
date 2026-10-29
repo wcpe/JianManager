@@ -5,7 +5,7 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ComponentProps, ReactNode } from 'react'
 import { ConfigFileEditor } from '@/components/views/config-explorer/ConfigFileEditor'
 
-/**
+/** 
  * 配置编辑器 · 受控视图测（ADR-103）。
  *
  * 补的是**注入面契约**：读取态（加载/失败/有数据）、文本模式的编辑器由外壳注入、
@@ -68,7 +68,7 @@ function renderEditor(props: Partial<ComponentProps<typeof ConfigFileEditor>> = 
   return { ...merged, onDirtyChange, onWrite, renderCodeEditor }
 }
 
-describe('ConfigFileEditor（FR-071 单文件配置编辑器受控视图）', () => {
+describe('ConfigFileEditor（单文件配置编辑器受控视图）', () => {
   it('读取中显示加载文案，不渲染编辑器。', () => {
     renderEditor({ readData: undefined, isReadLoading: true })
     expect(screen.getByText('加载中…')).toBeInTheDocument()

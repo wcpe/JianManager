@@ -4,8 +4,8 @@ const requestedE2EPort = process.env.PLAYWRIGHT_PORT ?? '5173'
 const e2ePort = /^\d{2,5}$/.test(requestedE2EPort) ? requestedE2EPort : '5173'
 const e2eBaseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${e2ePort}`
 
-/**
- * Playwright E2E（FR-211）：跑 mock 模式整站（VITE_MOCK，无需真后端），验关键跨页流。
+/** 
+ * Playwright E2E：跑 mock 模式整站（VITE_MOCK，无需真后端），验关键跨页流。
  * 与 vitest 组件测互补——E2E 抓登录/导航/实例生命周期等真浏览器端到端，逐页细节归 jsdom。
  */
 export default defineConfig({

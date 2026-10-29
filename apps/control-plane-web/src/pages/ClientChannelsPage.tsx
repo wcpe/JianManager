@@ -30,12 +30,12 @@ const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?
 /** 工作台分段标识，与就绪度步骤 CTA 联动跳转。 */
 type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
 
-/**
- * 客户端分发管理页（FR-086/187，见 ADR-022）。
- * 运营域入口（FR-187 由「系统·平台与维护」迁入，路由 /client-channels 不变）。
+/** 
+ * 客户端分发管理页（187，见 ADR-022）。
+ * 运营域入口（由「系统·平台与维护」迁入，路由 /client-channels 不变）。
  * 频道（每服一个）+ 拉取密钥（落库只存哈希、明文一次性返回）；首次使用以空状态引导卡 +
  * 工作台就绪度步骤器降低门槛。仅平台管理员可用（后端 RBAC 强制）。
- * i18n（FR-016）+ 暗/亮色（FR-026，全程用主题 token）。
+ * i18n+ 暗/亮色（全程用主题 token）。
  */
 export default function ClientChannelsPage() {
   const { t } = useTranslation()
@@ -124,7 +124,7 @@ export default function ClientChannelsPage() {
 
 
 
-/**
+/** 
  * 频道工作台：顶部就绪度步骤器（状态由 keyCount/currentVersion 推导）+
  * 密钥 / 版本 / 统计 / 接入指引 分段。取代原 ChannelDetail，全程模态化。
  * 频道名由顶栏面包屑末级承载（ConsoleHeader leaf）；返回仍给页内显式按钮，避免只靠面包屑。

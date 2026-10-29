@@ -1,5 +1,5 @@
-/**
- * 可编辑下拉框（Combobox）的纯逻辑（FR-072）。
+/** 
+ * 可编辑下拉框（Combobox）的纯逻辑。
  *
  * Combobox = 已知集下拉 + 允许自定义输入。这里只放与 DOM 无关的过滤/匹配逻辑，
  * 便于单测；渲染交互在 components/ui/combobox.tsx。
@@ -16,7 +16,7 @@ export function optionLabel(opt: ComboboxOption): string {
   return opt.label ?? opt.value
 }
 
-/**
+/** 
  * 按输入串过滤选项：大小写不敏感，匹配 value 或 label 的子串。
  * 输入为空时返回全部选项（展示完整已知集）。
  */
@@ -35,7 +35,7 @@ export function isKnownValue(options: ComboboxOption[], value: string): boolean 
   return options.some((o) => o.value === value)
 }
 
-/**
+/** 
  * 是否应展示「添加自定义项」：输入非空、且与任何已知 value 都不完全相等。
  * 允许自定义输入的 Combobox 据此在列表底部给出「使用 "xxx"」入口。
  */
@@ -50,14 +50,14 @@ export function toOptions(values: readonly string[]): ComboboxOption[] {
   return values.map((v) => ({ value: v }))
 }
 
-/**
- * Combobox 单次渲染的选项上限（FR-336）。
+/** 
+ * Combobox 单次渲染的选项上限。
  * 千级候选一次挂上千 DOM 节点会卡顿；拍板 slice 截断 + 提示行，不为 packages/ui 引虚拟化依赖。
  */
 export const COMBOBOX_RENDER_LIMIT = 100
 
-/**
- * 过滤结果截前 limit 项渲染，返回隐藏数供「还有 N 项」提示行（FR-336）。
+/** 
+ * 过滤结果截前 limit 项渲染，返回隐藏数供「还有 N 项」提示行。
  * 未超限时原样返回（hiddenCount=0，不渲染提示）。
  */
 export function visibleOptions(

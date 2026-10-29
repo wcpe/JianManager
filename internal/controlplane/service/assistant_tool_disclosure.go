@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 渐进式工具披露（FR-544）。
+// 渐进式工具披露。
 //
 // ## 为什么不再把工具全量塞进上下文
 //

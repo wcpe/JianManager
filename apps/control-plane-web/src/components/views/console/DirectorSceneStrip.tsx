@@ -16,8 +16,8 @@ export interface DirectorSceneStripProps {
   onLimitChange: (limit: number) => void
 }
 
-/**
- * 导播台缩略图条（FR-168）：一排场景，点击瞬切；显三态（active/预热/cold）+ 序号（快捷键提示）。
+/** 
+ * 导播台缩略图条：一排场景，点击瞬切；显三态（active/预热/cold）+ 序号（快捷键提示）。
  * 右侧并发上限控制：调小即时 LRU 驱逐溢出保活连接（ADR-035）。
  *
  * 三态视觉：active=主色实心 + 闪电（全速）；预热=绿点（WS 保活，瞬切零延迟）；cold=灰点（切换需重连）。

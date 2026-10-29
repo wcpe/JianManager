@@ -48,7 +48,7 @@ describe('SearchPanel', () => {
   })
 })
 
-describe('SearchPanel 索引中态（FR-113）', () => {
+describe('SearchPanel 索引中态', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     mockedSearchFiles.mockReset()

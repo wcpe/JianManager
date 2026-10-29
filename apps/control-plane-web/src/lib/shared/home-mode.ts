@@ -1,5 +1,5 @@
-/**
- * 首页模式偏好（FR-520 §4.1/§4.2）：记住上次选择的首页模式，存前端并允许重置。
+/** 
+ * 首页模式偏好（§4.1/§4.2）：记住上次选择的首页模式，存前端并允许重置。
  *
  * 【为什么不放 zustand store】
  * 模式决定**渲染哪一整棵树**（AI 首页 / 经典仪表盘），必须在首次渲染前同步得出。
@@ -14,10 +14,10 @@ const HOME_MODE_KEY = 'console.homeMode'
 /** 首页模式。 */
 export type HomeMode = 'assistant' | 'classic'
 
-/** 默认模式：AI 首页（FR-520 验收「直接进入首页默认 AI 模式」）。 */
+/** 默认模式：AI 首页（验收「直接进入首页默认 AI 模式」）。 */
 export const DEFAULT_HOME_MODE: HomeMode = 'assistant'
 
-/**
+/** 
  * 从 URL 的 `home` 参数解析显式模式。
  *
  * 只有 `classic` / `assistant` 两个值有意义；其它取值（如 `?home=foo`）按**未指定**处理，
@@ -29,7 +29,7 @@ export function parseHomeModeParam(home: string | null): HomeMode | null {
   return null
 }
 
-/**
+/** 
  * 读取记忆的首页模式。
  *
  * 非法值 / 无 localStorage / 读取抛错（隐私模式）一律回落 `null`（= 未记忆），
@@ -48,7 +48,7 @@ export function loadHomeMode(): HomeMode | null {
   return null
 }
 
-/**
+/** 
  * 写入记忆。**仅在用户主动切换时调用**。
  *
  * 深链（`?home=classic` / `?home=assistant`）**不写记忆**：从文档或告警里点进来一次，
@@ -77,7 +77,7 @@ export function resetHomeMode(): void {
   }
 }
 
-/**
+/** 
  * 解析本轮应渲染的模式。**优先级：显式 URL 参数 > 记忆 > 默认**（spec §4.1 冻结）。
  *
  * 这是 render 期直接调用的纯函数，因此冷启动不会闪回。
@@ -86,9 +86,9 @@ export function resolveHomeMode(param: HomeMode | null): HomeMode {
   return param ?? loadHomeMode() ?? DEFAULT_HOME_MODE
 }
 
-/**
+/** 
  * 构造「切换首页模式」的目标 URL：**保留除 `home` 之外的现有查询参数**
- * （FR-520 §8「切换保留其它合法查询参数」）。
+ * （§8「切换保留其它合法查询参数」）。
  *
  * 为什么不能写死 `'/'` 或 `'/?home=classic'`：用户可能正带着筛选条件（如经典首页的
  * `range=7d`）在用，切一下首页模式就把条件清空，等于迫使他回来重设——尤其是在

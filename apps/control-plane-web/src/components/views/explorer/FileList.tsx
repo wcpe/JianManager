@@ -38,10 +38,10 @@ interface FileListProps {
   selection: SelectionState
   onRowClick: (name: string, mods: ClickModifiers) => void
   onOpen: (file: FileInfo) => void
-  /** FR-377：携带 dataTransfer 以便写入跨窗 MIME。 */
+  /** 携带 dataTransfer 以便写入跨窗 MIME。 */
   onDragStartItem: (name: string, dt: DataTransfer) => void
   onDropUpload: (files: FileList) => void
-  /** FR-377：资源条目拖放到当前目录（非系统文件）。 */
+  /** 资源条目拖放到当前目录（非系统文件）。 */
   onDropEntries?: (dt: DataTransfer) => void
   onRename: (name: string) => void
   onDelete: (name: string) => void
@@ -50,10 +50,10 @@ interface FileListProps {
   onCopy: () => void
   onOpenArchive: (file: FileInfo) => void
   onDecompile: (file: FileInfo) => void
-  /** FR-375 排序状态；省略则仅按名称目录优先展示。 */
+  /** 排序状态；省略则仅按名称目录优先展示。 */
   sort?: FileSortState
   onSortChange?: (sort: FileSortState) => void
-  /** FR-375 视图模式。 */
+  /** 视图模式。 */
   viewMode?: FileViewMode
 }
 
@@ -72,7 +72,7 @@ function typeOf(f: FileInfo): string {
   return i >= 0 ? f.name.slice(i + 1).toLowerCase() : ''
 }
 
-/** 资源管理器右侧目录内容列表（FR-070 + FR-375 排序/权限列/视图）。 */
+/** 资源管理器右侧目录内容列表（排序/权限列/视图）。 */
 export default function FileList({
   files,
   loading,
@@ -160,7 +160,7 @@ export default function FileList({
           onDropUpload(e.dataTransfer.files)
           return
         }
-        // FR-377：资源条目放入当前列表目录
+        // 资源条目放入当前列表目录
         if (onDropEntries) {
           e.preventDefault()
           onDropEntries(e.dataTransfer)
@@ -206,7 +206,7 @@ export default function FileList({
         </ul>
       ) : (
         <div>
-          {/* FR-375 列头（详情视图） */}
+          {/*列头（详情视图） */}
           {viewMode === 'details' && onSortChange && (
             <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-muted/40 px-3 py-1">
               <span className="w-4 shrink-0" />

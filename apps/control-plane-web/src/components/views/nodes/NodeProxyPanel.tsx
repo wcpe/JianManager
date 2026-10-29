@@ -6,7 +6,7 @@ import { Input } from '@jianmanager/ui/components/input'
 import { Segments, Segment } from '@jianmanager/ui/components/layout'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 
-/**
+/** 
  * 节点出站代理视图（本组件所需的最小结构）。
  *
  * 外壳直接传 `@/api/nodes` 的 `NodeProxyView` 会结构兼容，故无需把该 API 类型迁进包。
@@ -28,8 +28,8 @@ export interface NodeProxyView {
   online: boolean
 }
 
-/**
- * 节点出站代理面板（FR-185，见 ADR-043）：单选「继承全局 / 自定义」，自定义展开 URL + no_proxy。
+/** 
+ * 节点出站代理面板（见 ADR-043）：单选「继承全局 / 自定义」，自定义展开 URL + no_proxy。
  *
  * 真相源 = CP DB；保存经心跳下发到 Worker，节点运行时重建出站 client（免改 worker.yml/重启）。
  * 含凭据的代理地址后端已脱敏回显；离线节点标注「待下发」（下次心跳生效）。

@@ -1,5 +1,5 @@
-/**
- * 资源管理器路径工具（FR-070）。
+/** 
+ * 资源管理器路径工具。
  * 工作目录相对路径统一用正斜杠、无前导斜杠（与后端 validatePath 约定一致）。
  * 纯函数，便于 vitest（node 环境）单测。
  */
@@ -30,7 +30,7 @@ export function extName(name: string): string {
   return base.slice(dot + 1).toLowerCase()
 }
 
-/**
+/** 
  * 把路径切成面包屑段：每段含累积路径与显示名。
  * 例：'plugins/Essentials' → [{name:'plugins',path:'plugins'},{name:'Essentials',path:'plugins/Essentials'}]
  * 空路径返回空数组（根）。
@@ -47,7 +47,7 @@ export function breadcrumbs(path: string): { name: string; path: string }[] {
   return out
 }
 
-/**
+/** 
  * 判断 child 是否在 dir 之内（或等于 dir）。用于防止把目录移动/粘贴到自身或其子目录。
  * dir 为空（根）时视为包含一切。
  */

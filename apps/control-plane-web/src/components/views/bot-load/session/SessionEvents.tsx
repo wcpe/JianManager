@@ -28,7 +28,7 @@ const EVENT_TYPES = [  'run-state',
   'report-ready',
 ] as const
 
-/**
+/** 
  * 「全部类型」的哨兵值：Radix Select 的 item 不接受空字符串（空串被它用来表示未选中），
  * 而本视图对外契约是 `''` 代表全部（父组件与请求参数都按空串判），故在控件的边界上做一次映射。
  */
@@ -56,8 +56,8 @@ export interface SessionEventsProps {
   liveHead: BotLoadRunEvent[]
 }
 
-/**
- * 会话事件表（FR-371）：服务端分页 + 类型过滤，首屏把实时流头部事件按 eventId 合并去重后
+/** 
+ * 会话事件表：服务端分页 + 类型过滤，首屏把实时流头部事件按 eventId 合并去重后
  * 按时间倒序展示；翻页后视图由 snapshotEventId 冻结，避免新事件插入导致页漂移。
  */
 export function SessionEvents({

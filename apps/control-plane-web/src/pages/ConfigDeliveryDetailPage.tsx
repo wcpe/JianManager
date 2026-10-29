@@ -51,8 +51,8 @@ import {
 } from '@/api/configDeliveries'
 import type { StatusLevel } from '@jianmanager/ui'
 
-/**
- * 配置交付单详情页（FR-531 灰度状态机 + FR-532 生效编排）。
+/** 
+ * 配置交付单详情页（灰度状态机生效编排）。
  *
  * 【三处绝对不能含糊的语义】
  *
@@ -79,14 +79,14 @@ interface TargetVerdict {
   text: string
   /** 徽章等级。 */
   level: StatusLevel
-  /**
+  /** 
    * 是否需要额外一行解释。BEST_EFFORT / 落盘成功但生效失败 / 熔断跳过 都必须解释，
    * 否则用户只能看到「已生效」或「失败」而不知所以。
    */
   note?: string
 }
 
-/**
+/** 
  * 由目标行推导界面文案。
  *
  * 优先级刻意如此：先看 `bestEffort`（它会让 `activated` 变得不可信），再看
@@ -223,7 +223,7 @@ function CircuitBreakNotice({ order }: { order: ConfigDeliveryOrder }) {
   )
 }
 
-/**
+/** 
  * 回滚对话框。
  *
  * 【整批 vs 子集是两个不同的操作，不是同一个操作的两个参数】

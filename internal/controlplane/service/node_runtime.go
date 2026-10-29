@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// NodeRuntimeService 提供节点级运行时管理（FR-178）：制品缓存管理、JDK 版本目录（foojay）、
+// NodeRuntimeService 提供节点级运行时管理：制品缓存管理、JDK 版本目录（foojay）、
 // 目录浏览。三者都经 gRPC 委托给 Worker（守架构不变量：CP 不直接读节点 FS），
 // 仅平台管理员可达（路由层 + 审计在 handler 强制）。
 type NodeRuntimeService struct {
@@ -53,7 +53,7 @@ type JDKCatalogPackage struct {
 	Latest       bool   `json:"latest"`
 }
 
-// BrowseDirEntry 一个子目录项（FR-373：含权限元数据）。
+// BrowseDirEntry 一个子目录项（：含权限元数据）。
 type BrowseDirEntry struct {
 	Name       string `json:"name"`
 	Path       string `json:"path"`
@@ -251,7 +251,7 @@ func (s *NodeRuntimeService) BrowseDir(nodeID uint, path string) (*BrowseDirView
 	return view, nil
 }
 
-// CheckNodePathAccess 节点绝对路径权限探测（FR-373，导入/BrowseDir 场景）。
+// CheckNodePathAccess 节点绝对路径权限探测（导入/BrowseDir 场景）。
 func (s *NodeRuntimeService) CheckNodePathAccess(nodeID uint, path string) (*PathAccess, error) {
 	client, err := s.nodeClient(nodeID)
 	if err != nil {
@@ -279,7 +279,7 @@ func (s *NodeRuntimeService) CheckNodePathAccess(nodeID uint, path string) (*Pat
 	}, nil
 }
 
-// ChmodNodePath 节点绝对路径单 path 非递归 chmod（FR-373）。
+// ChmodNodePath 节点绝对路径单 path 非递归 chmod。
 func (s *NodeRuntimeService) ChmodNodePath(nodeID uint, path, mode string) (string, error) {
 	client, err := s.nodeClient(nodeID)
 	if err != nil {

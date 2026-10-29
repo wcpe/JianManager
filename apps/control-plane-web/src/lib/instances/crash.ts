@@ -1,11 +1,11 @@
-/**
- * 崩溃诊断的核心契约（FR-313 / FR-470）。
+/** 
+ * 崩溃诊断的核心契约。
  *
  * 归包理由：崩溃诊断视图要按快照与趋势渲染根因/证据/关联资源，应用侧 API 层改从包 import，
  * 避免两处各写一份。
  */
 
-/** 崩溃与资源关联证据（FR-470）。 */
+/** 崩溃与资源关联证据。 */
 export interface CrashCorrelation {
   /** 崩前 RSS 是否逼近实例内存上限。 */
   nearOom: boolean
@@ -15,12 +15,12 @@ export interface CrashCorrelation {
   memLimitMb: number
   /** 崩溃窗口内 JVM 堆已用峰值（字节）。 */
   heapUsedMax: number
-  /** GC 关联提示（FR-465 落地前为「待依赖」）。 */
+  /** GC 关联提示（落地前为「待依赖」）。 */
   gcNote: string
   note?: string
 }
 
-/** 实例崩溃快照（FR-313，增强 FR-470）：进程非正常退出的现场留存，后端每实例滚动保留最近 5 条。 */
+/** 实例崩溃快照（增强）：进程非正常退出的现场留存，后端每实例滚动保留最近 5 条。 */
 export interface CrashSnapshot {
   id: number
   instanceId: number
@@ -34,7 +34,7 @@ export interface CrashSnapshot {
   durationMs: number
   /** 崩溃前终端尾部输出（≤200 行 / 64KB，Worker 侧截取）。 */
   tailOutput: string
-  /** 根因归类（FR-470）；旧快照（FR-470 之前入库）为空。 */
+  /** 根因归类；旧快照（之前入库）为空。 */
   rootCause?: string
   /** 归一化同类指纹，用于同类聚合。 */
   signature?: string
@@ -66,8 +66,8 @@ export interface CrashSignatureCount {
   count: number
 }
 
-/**
- * 实例崩溃趋势（FR-470）：来自独立汇总表，**不受 K=5 快照裁剪影响**
+/** 
+ * 实例崩溃趋势：来自独立汇总表，**不受 K=5 快照裁剪影响**
  * ——连崩超过 5 次后列表只剩 5 条，但趋势计数完整。
  */
 export interface CrashTrend {

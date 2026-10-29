@@ -9,8 +9,8 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { useInstances } from '@/api/instances'
 import ProvisionProxyDialog from './ProvisionProxyDialog'
 
-/**
- * ProvisionProxyDialog 强断言（FR-202 供给/部署流程，POST /instances/provision/proxy）。
+/** 
+ * ProvisionProxyDialog 强断言（供给/部署流程，POST /instances/provision/proxy）。
  * 搭建代理对话框依赖跨域 nodes（GET /nodes）+ groups（GET /groups）+ cores（GET /cores）seed handler。
  * 三条统一断言：① 打开 → 渲染可选节点 + 代理版本列表；② 填表提交 → 代理实例落 instances 集合联动 +
  * forwarding secret 持久展示；③ 注入端点 500 → 不崩溃、对话框不误关、集合不新增。

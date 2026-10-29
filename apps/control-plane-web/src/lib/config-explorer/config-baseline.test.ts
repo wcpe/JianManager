@@ -7,7 +7,7 @@ import {
   shortHash,
 } from './config-baseline'
 
-describe('config-baseline scope 纯函数（FR-458）', () => {
+describe('config-baseline scope 纯函数', () => {
   it('composeScopeKey：all 无取值，其余拼 kind:value', () => {
     expect(composeScopeKey('all', 'ignored')).toBe('all')
     expect(composeScopeKey('group', ' 2 ')).toBe('group:2')

@@ -185,7 +185,7 @@ func containsFR031Issue(issues []map[string]any, needle string) bool {
 	return false
 }
 
-// TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts 覆盖 FR-451 §2.4 补漏：
+// TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts 覆盖§2.4 补漏：
 // 同节点兄弟实例「无配置版本、端口仅以 inline 登记」时，也应并入跨实例端口校验触发冲突。
 func TestFR031ConfigService_CrossCheckNoVersionSiblingInlinePorts(t *testing.T) {
 	db := newConfigTestDB(t)

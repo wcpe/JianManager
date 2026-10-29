@@ -29,12 +29,12 @@ export type BotNotice = (kind: 'success' | 'error', message: string) => void
 const BEHAVIOR_VALUES = ['idle', 'guard', 'follow', 'patrol'] as const
 const STATUS_VALUES = ['connected', 'connecting', 'disconnected', 'error'] as const
 
-/**
- * 控制台工作区的 Bot 段（FR-039）：聚合优先（概览卡片 + 筛选/分组 + 分页 + 批量），
+/** 
+ * 控制台工作区的 Bot 段：聚合优先（概览卡片 + 筛选/分组 + 分页 + 批量），
  * 永不一次性铺开全部 Bot。概览计数来自 `GET /bots/summary`（全量聚合），
  * 列表分页拉 `GET /bots`，分组仅作用于当前页数据。
  *
- * 布局为分栏（FR-423，spec §3.1 Bot 62:38）：左 62% 是 Bot 表（工具栏 + 批量条 + 分组列表 + 分页），
+ * 布局为分栏（spec §3.1 Bot 62:38）：左 62% 是 Bot 表（工具栏 + 批量条 + 分组列表 + 分页），
  * 右 38% 是运行概览（四档聚合计数）。原先四张概览卡横铺整宽压在列表上方，
  * 每张卡里一个数字撑着 68px、四张一起吃掉一整条横带，把真正要看的列表往下推。
  *
@@ -420,7 +420,7 @@ function BotRow({
   const [pending, setPending] = useState(false)
   const config = parseBotConfig(bot.config)
 
-  // 停止/重连复用批量端点的单条形式（FR-038 批量动作 stop/start）；「重连」语义即重新上线（start）
+  // 停止/重连复用批量端点的单条形式（批量动作 stop/start）；「重连」语义即重新上线（start）
   const runAction = async (action: 'stop' | 'start') => {
     setPending(true)
     try {
@@ -499,7 +499,7 @@ function BotRow({
   )
 }
 
-/**
+/** 
  * 批量条：对「当前筛选集」（按 filter，覆盖所有分页）或「选中集」（按 ids）执行批量操作。
  * 有勾选时优先作用于选中集，否则作用于当前筛选集，并提示影响范围。
  */

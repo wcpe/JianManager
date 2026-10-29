@@ -5,11 +5,11 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import type { SearchHit, SearchMode, SearchResult, SearchScope } from '@/lib/file-browser/file-entry'
 
-/** 「索引中」自动重试间隔（毫秒，FR-113）。 */
+/** 「索引中」自动重试间隔（毫秒）。 */
 const INDEXING_RETRY_MS = 1000
 
-/**
- * 跨文件搜索面板（FR-074，见 ADR-017）。
+/** 
+ * 跨文件搜索面板（见 ADR-017）。
  *
  * 关键字 → 经 Worker 本地倒排索引查询 → 命中列表（文件/行/片段）；点击命中跳编辑器定位到行。
  * 支持两种模式：content（全文）与 filename（文件名快速打开）。输入防抖后触发查询。
@@ -72,7 +72,7 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose, search }: 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
-  // 索引首建未就绪（FR-113，ADR-024）：显示「索引中」并自动重试同一查询，直到出结果。
+  // 索引首建未就绪（ADR-024）：显示「索引中」并自动重试同一查询，直到出结果。
   const [indexing, setIndexing] = useState(false)
   // 自增请求序号：仅最后一次请求的结果被采纳，避免防抖竞态导致旧结果覆盖新结果。
   const reqSeq = useRef(0)

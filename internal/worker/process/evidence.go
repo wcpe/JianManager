@@ -8,13 +8,13 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-455③ 状态真源收敛：CP 在「心跳清单缺失」时向 Worker 拉取进程侧证据，
+// ③ 状态真源收敛：CP 在「心跳清单缺失」时向 Worker 拉取进程侧证据，
 // 由「是否真的还在跑」二次确认，避免「面板 STOPPED 而进程在跑」的通道抖动误判。
 
 // evidenceSocketProbeTimeout 单次 daemon socket 探活超时。
 const evidenceSocketProbeTimeout = 500 * time.Millisecond
 
-// InstanceEvidence 单个实例的进程侧证据（FR-455③）。
+// InstanceEvidence 单个实例的进程侧证据（③）。
 type InstanceEvidence struct {
 	UUID string
 	// Running 是主判据：进程/容器侧证据是否显示该实例仍在运行。
@@ -31,7 +31,7 @@ type InstanceEvidence struct {
 	Detail string
 }
 
-// ProbeInstanceEvidence 返回一批实例的进程侧证据（FR-455③）。
+// ProbeInstanceEvidence 返回一批实例的进程侧证据（③）。
 // 对每个实例：优先用内存表策略的实时 PID；内存表无该实例（Worker 曾硬崩）时回退 PID 文件 / 容器名探测。
 func (m *Manager) ProbeInstanceEvidence(uuids []string) []InstanceEvidence {
 	out := make([]InstanceEvidence, 0, len(uuids))
@@ -185,7 +185,7 @@ func evidenceDetail(ev InstanceEvidence) string {
 
 // probeSocketReachable 对 daemon socket 做有界探活（拨通即视为可达）。空地址恒 false。
 //
-// FR-456（F9）：改用带超时的 Dial（daemon.DialTimeout）——此前无超时 Dial 放在 goroutine 里，
+// （F9）：改用带超时的 Dial（daemon.DialTimeout）——此前无超时 Dial 放在 goroutine 里，
 // 超时返回后该 goroutine 仍在阻塞拨号（Unix socket accept 队列打满等），造成 goroutine 泄漏。
 // 现由 DialTimeout 保证拨号在 timeout 内返回，无需额外 goroutine。
 func probeSocketReachable(addr string, timeout time.Duration) bool {

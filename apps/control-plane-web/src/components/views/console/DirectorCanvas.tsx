@@ -26,10 +26,10 @@ export interface DirectorCanvasProps {
   renderCard: (args: DirectorCardRenderArgs) => ReactNode
 }
 
-/**
- * 导播台单场景画布（FR-168 / ADR-035）。
+/** 
+ * 导播台单场景画布（ADR-035）。
  *
- * 渲染一个场景的卡片网格（复用 FR-166 卡壳）。与可编辑画布不同：
+ * 渲染一个场景的卡片网格（复用卡壳）。与可编辑画布不同：
  * - **只读布局**：导播台聚焦瞬切/轮播，场景布局在超级工作台预先编排好，这里不拖拽/不缩放/不关卡。
  * - **保活 + 节流**：本组件**始终挂载**（故卡内 WS 保活）；非激活场景由 `active=false` 触发节流——
  *   ① 通过 {@link DirectorRenderProvider} 让终端暂停 xterm 重绘（WS 继续收数据缓冲）；

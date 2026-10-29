@@ -1,5 +1,5 @@
-/**
- * 服务器状态（探针全量快照）的核心契约（FR-076 / FR-077）。
+/** 
+ * 服务器状态（探针全量快照）的核心契约。
  *
  * 归包理由：服务器状态视图要按分区渲染 Bukkit 内部状态，应用侧 API 层改从包 import，
  * 避免两处各写一份。
@@ -58,7 +58,7 @@ export interface JvmSection {
   error?: string
 }
 
-/** classloader 分区（FR-076 重点）：类加载计数 + 各插件类加载器层级链。 */
+/** classloader 分区（重点）：类加载计数 + 各插件类加载器层级链。 */
 export interface ClassloaderSection {
   counts?: {
     loadedClassCount: number
@@ -94,7 +94,7 @@ export interface ProbeServerState {
   listeners?: ListenersSection
 }
 
-/** GET /instances/:id/server-state 响应（FR-076，CP 原样透传探针 state）。 */
+/** GET /instances/:id/server-state 响应（CP 原样透传探针 state）。 */
 export interface ServerStateResponse {
   instanceId: number
   /** 探针当前是否连入本机 Worker（false 时 state 为 null，前端提示部署/连接探针）。 */

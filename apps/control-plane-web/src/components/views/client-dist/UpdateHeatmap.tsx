@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { Panel } from '@jianmanager/ui/components/panel'
 import type { ObservabilitySeriesPoint } from '@/lib/client-dist/client-dist-observability-contracts'
 
-/**
- * 更新活动热力图（FR-427，GitHub 贡献图风格）：
+/** 
+ * 更新活动热力图（GitHub 贡献图风格）：
  * 列=周、行=星期（一/三/五标注），每格=一天，颜色深浅=当天更新次数。
  * 纯前端消费既有小时桶 series（updateTotal，本地时区聚合到天）；空窗口显示友好空态。
  */

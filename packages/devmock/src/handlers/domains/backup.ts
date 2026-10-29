@@ -6,8 +6,8 @@ import type { BackupInfo, CreateBackupBody } from '@jianmanager/devmock/contract
 import type { BackupStorage, CreateBackupStorageBody } from '@jianmanager/devmock/contracts'
 import type { ScheduleInfo, ScheduleLogInfo, CreateScheduleBody, UpdateScheduleBody } from '@jianmanager/devmock/contracts'
 
-/**
- * 备份与计划域 mock handler（FR-207）。
+/** 
+ * 备份与计划域 mock handler。
  * 覆盖 web/src/api/{backups,backupStorages,schedules}.ts 的全部 endpoint；
  * 字段严格匹配各自 interface（含后端 model 对齐的数值枚举），照 spec §7 范式办理。
  */
@@ -151,7 +151,7 @@ const scheduleLogs = db<ScheduleLogInfo>('scheduleLogs', () => [
 ])
 
 export const handlers = [
-  // ---- 备份（FR-013/056/057）----
+  // ---- 备份（056/057）----
   domainRoute('get', '/instances/:id/backups', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -212,7 +212,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // ---- 备份存储后端（FR-057，平台管理员）----
+  // ---- 备份存储后端（平台管理员）----
   domainRoute('get', '/backup-storages', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -242,7 +242,7 @@ export const handlers = [
     return HttpResponse.json(created, { status: 201 })
   }),
 
-  // PUT 全量替换式编辑（FR-338）：404 / 改 type 422 / 名称冲突（排除自身）422，
+  // PUT 全量替换式编辑：404 / 改 type 422 / 名称冲突（排除自身）422，
   // 成功后重置 lastTest*（配置已变，旧连通性结论失效），契约对齐真后端。
   domainRoute('put', '/backup-storages/:id', async (info) => {
     const denied = requireAuth(info)
@@ -312,7 +312,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // ---- 定时任务（FR-012/153）----
+  // ---- 定时任务（153）----
   domainRoute('get', '/schedules', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied

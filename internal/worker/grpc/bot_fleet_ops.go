@@ -350,7 +350,7 @@ type botFleetManager interface {
 	StopBotBatch(context.Context, string, []string, int64, string) (*bot.BotWorkerEvent, error)
 	SignalActions(context.Context, string, []bot.ActionSignal) (*bot.BotWorkerEvent, error)
 	RequestFleetSnapshot(context.Context, string) (*bot.BotWorkerEvent, error)
-	// FR-369 通用命令编排 IPC（partial：同步回执；occurrence 终态仍走 action-event 通路）。
+	// 通用命令编排 IPC（partial：同步回执；occurrence 终态仍走 action-event 通路）。
 	ApplyCommandSchedule(ctx context.Context, ipcRequestID string, cmd bot.CommandScheduleCommand, deadline time.Duration) (*bot.BotWorkerEvent, error)
 	ReleaseCommandSchedule(ctx context.Context, ipcRequestID string, cmd bot.CommandScheduleReleaseCommand, deadline time.Duration) (*bot.BotWorkerEvent, error)
 	CancelCommandSchedule(ctx context.Context, ipcRequestID string, cmd bot.CommandScheduleCancelCommand, deadline time.Duration) (*bot.BotWorkerEvent, error)

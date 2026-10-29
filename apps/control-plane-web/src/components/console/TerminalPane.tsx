@@ -10,7 +10,7 @@ import { useConsoleHistory } from '@/lib/console/console-history'
 import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import StoppedLogsView from './StoppedLogsView'
 
-/**
+/** 
  * 对外 props（沿用原导出名）：接线层自己注入的字段从调用点口径里排除，
  * 调用点（WorkspaceCard / 控制台页面 / 沉浸 pane）只传原来那套 props，零改动。
  */
@@ -30,12 +30,12 @@ export type TerminalPaneProps = Omit<
   | 'renderStoppedLogs'
 >
 
-/**
+/** 
  * 终端面板的应用接线层（ADR-103）。
  *
  * 视图本体是受控视图（见 components/views）；本层注入：实例状态与名称、终端凭据的取数回调（每次连接前现取，
- * 一次性 token 复用会 401，见 FR-140）、启动动作与其 pending、`terminal.access` 权限、
- * 在线玩家名册（FR-416 补全的权威来源）、提示通道（复制/跳转回执接 toast）与历史回溯控制器
+ * 一次性 token 复用会 401，见）、启动动作与其 pending、`terminal.access` 权限、
+ * 在线玩家名册（补全的权威来源）、提示通道（复制/跳转回执接 toast）与历史回溯控制器
  * （内部走 DB 分页取数）。其余 props 原样透传。
  */
 export default function TerminalPane({ instanceId, ...rest }: TerminalPaneProps) {
@@ -56,7 +56,7 @@ export default function TerminalPane({ instanceId, ...rest }: TerminalPaneProps)
   }, [refetch])
   const startInstance = useStartInstance()
   const canAccessTerminal = usePermissionsStore((s) => s.hasPerm('terminal.access'))
-  // 在线名册：`/players` 是跨实例聚合，按本实例过滤属取数层职责（FR-416）。
+  // 在线名册：`/players` 是跨实例聚合，按本实例过滤属取数层职责。
   // 控制台输出解析出的 join/quit/list 名册在视图内做并集兜底，两路都不可得时补全退化但不报错。
   const { data: onlineData } = useOnlinePlayers()
   const onlinePlayers = useMemo(

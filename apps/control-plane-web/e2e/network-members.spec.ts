@@ -7,8 +7,8 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
-/** FR-032 真浏览器纵切：Network 软标签、proxy↔backend 拓扑、节点端口占用。 */
-test.describe('FR-032 群组服关系模型（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：Network 软标签、proxy↔backend 拓扑、节点端口占用。 */
+test.describe('群组服关系模型（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await login(page)

@@ -13,8 +13,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
- * FR-517 §8 里能在服务层验证的边界。
+/* *
+ *§8 里能在服务层验证的边界。
  *
  * 重点守四条：
  *  - 回环/元数据地址默认被拒，显式放行后才可保存；
@@ -87,7 +87,7 @@ func TestValidateEndpoint_SelfLoopDetected(t *testing.T) {
 }
 
 func TestValidateEndpoint_QueryRejected(t *testing.T) {
-	// 端点不得带 query（与 FR-514 的 baseUrl 同口径）。
+	// 端点不得带 query（与的 baseUrl 同口径）。
 	s := newMCPTestService(t)
 	_, err := s.validateEndpoint("https://mcp.example.com/mcp?key=1", nil)
 	if err == nil {

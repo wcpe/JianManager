@@ -4,8 +4,8 @@ import '@/i18n'
 import { SessionFailures } from './SessionFailures'
 import type { BotLoadFailure } from '@/lib/bot-load/bot-load-types'
 
-/**
- * 会话失败明细的错误态回归锁（FR-371）。
+/** 
+ * 会话失败明细的错误态回归锁。
  *
  * 压测判定正是靠失败明细下结论，故「取数失败」必须与「确实没有失败」区分开：
  * 原先容器有 `isError` 却没传下来，任何取数故障都会被渲染成「无失败记录」。

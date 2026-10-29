@@ -4,7 +4,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// fileToolSpecs 文件域工具（FR-397）：复用 FileService / FileVersionService，不复制策略。
+// fileToolSpecs 文件域工具：复用 FileService / FileVersionService，不复制策略。
 var fileToolSpecs = []toolSpec{
 	{
 		Def: ToolDef{
@@ -233,7 +233,7 @@ func callFileWriteText(deps ToolDeps, p *service.AgentPrincipal, action string, 
 	if deps.File == nil {
 		return toolErr("文件服务不可用")
 	}
-	// FR-051 语义：覆盖已存在文件前落改前快照（文件不存在自动跳过）。
+	// 语义：覆盖已存在文件前落改前快照（文件不存在自动跳过）。
 	if deps.FileVersion != nil {
 		if serr := deps.FileVersion.SnapshotBeforeWrite(id, path, 0); serr != nil {
 			return toolErr(serr.Error())

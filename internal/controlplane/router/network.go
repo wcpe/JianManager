@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// NetworkHandler 群组（Network 软标签）路由（FR-032 / ADR-007）。注册在平台管理员组下。
+// NetworkHandler 群组（Network 软标签）路由（ADR-007）。注册在平台管理员组下。
 type NetworkHandler struct {
 	svc *service.NetworkService
 }

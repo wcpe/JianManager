@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 真实供应商端到端验证（FR-514 验收 T9）。
+// 真实供应商端到端验证（验收 T9）。
 //
 // **默认跳过**。要跑它必须显式注入一组真实凭据，因为这组的价值恰恰在于
 // 「对端确实这样答」——用 mock 或 httptest 验证不到任何东西（那些已被单测覆盖）。
@@ -98,7 +98,7 @@ func liveConfig(t *testing.T) (protocol, baseURL, modelID, key string, withTools
 	}
 	if len(missing) > 0 {
 		t.Skipf("跳过真实供应商验证：未设置 %s。"+
-			"这是**未验证**而非通过——FR-514 的 T9 验收仍待执行。", strings.Join(missing, " / "))
+			"这是**未验证**而非通过——的 T9 验收仍待执行。", strings.Join(missing, " / "))
 	}
 	if !ai.ProtocolSupported(protocol) {
 		// 协议写错是真错误，不是 skip：让它红，否则打错字会被当成「已验过」。
@@ -130,7 +130,7 @@ func newLiveAssistantService(t *testing.T, enc *KeyEncryptor, allowPrivate bool)
 
 // TestAssistantLiveProvider 用真实上游跑通一次最小补全（含可选的工具解析）。
 //
-// 这是 FR-514 验收 T9 的可执行形态。断言刻意很窄：只要上游回了一段文本就算通，
+// 这是验收 T9 的可执行形态。断言刻意很窄：只要上游回了一段文本就算通，
 // 因为这条测的是「协议对得上」，不是模型质量。
 func TestAssistantLiveProvider(t *testing.T) {
 	protocol, baseURL, modelID, key, withTools := liveConfig(t)

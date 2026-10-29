@@ -5,7 +5,7 @@ import api from '@/api/client'
 import type { StorageOverview, StorageFileEntry } from '@/lib/file-browser/storage-types'
 export type { DirUsage, ArchiveSummary, StorageOverview, StorageFileEntry } from '@/lib/file-browser/storage-types'
 
-/** 拉取平台存储概览（FR-083）。仅平台管理员可见。 */
+/** 拉取平台存储概览。仅平台管理员可见。 */
 export function useStorageOverview() {
   return useQuery({
     queryKey: ['storage', 'overview'],
@@ -16,7 +16,7 @@ export function useStorageOverview() {
   })
 }
 
-/** 列举数据根内某目录直接子项（FR-083）。空 path 为数据根。 */
+/** 列举数据根内某目录直接子项。空 path 为数据根。 */
 export function useStorageFiles(path: string) {
   return useQuery({
     queryKey: ['storage', 'files', path],
@@ -27,7 +27,7 @@ export function useStorageFiles(path: string) {
   })
 }
 
-/** 清空 cache/ 内容（受控清理，FR-083）。返回删除条目数。 */
+/** 清空 cache/ 内容（受控清理）。返回删除条目数。 */
 export async function clearStorageCache(): Promise<number> {
   const { data } = await api.post<{ removed: number }>('/storage/cache/clear')
   return data.removed

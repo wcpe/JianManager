@@ -17,14 +17,14 @@ import { isSafeExternalLink, confirmOpenMessage } from '@/lib/system-update/rele
 
 /** ReleaseNotes 的 props。 */
 interface ReleaseNotesProps {
-  /** 更新说明原文（GitHub release body 的 markdown，FR-186）。 */
+  /** 更新说明原文（GitHub release body 的 markdown）。 */
   markdown: string
 }
 
-/**
- * 更新说明 Markdown 渲染（FR-186，替换原 `<pre>` 纯文本）。
+/** 
+ * 更新说明 Markdown 渲染（替换原 `<pre>` 纯文本）。
  * 用 react-markdown + remark-gfm 渲染标题/列表/代码块/链接/表格；不渲染裸 HTML（react-markdown
- * 默认即禁用，防 XSS，见 spec §不做）。长内容 `max-h` + 主题化滚动条（FR-176），暗亮主题随 token。
+ * 默认即禁用，防 XSS，见 spec §不做）。长内容 `max-h` + 主题化滚动条，暗亮主题随 token。
  * 链接不在应用内直跳，经「宿主确认」后在新标签打开（{@link isSafeExternalLink}）。
  */
 export function ReleaseNotes({ markdown }: ReleaseNotesProps) {
@@ -72,7 +72,7 @@ function handleExternalClick(href: string, e: React.MouseEvent, confirmOpen: (hr
   confirmOpen(href)
 }
 
-/**
+/** 
  * 自定义渲染器：全部用主题 token 着色，与暗/亮 + 双主题随 CSS 变量切换；
  * 链接走宿主确认；代码块/行内代码、标题、列表、表格、引用均显式样式（markdown-body 无外部 CSS）。
  */

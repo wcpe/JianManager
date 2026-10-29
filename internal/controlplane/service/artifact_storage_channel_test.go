@@ -30,7 +30,7 @@ func newArtifactStorageTestDB(t *testing.T) *gorm.DB {
 	if sqlDB, derr := db.DB(); derr == nil {
 		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
-	// Task 表随 FR-348 渠道删除守卫（迁移在途禁删）纳入：Delete 会查非终态迁移任务。
+	// Task 表随渠道删除守卫（迁移在途禁删）纳入：Delete 会查非终态迁移任务。
 	require.NoError(t, db.AutoMigrate(&model.ArtifactStorageChannel{}, &model.Asset{}, &model.Task{}))
 	return db
 }

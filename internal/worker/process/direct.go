@@ -28,7 +28,7 @@ type directStrategy struct {
 	// crashCount 记录连续崩溃次数，用于指数退避。成功重启后不清零，
 	// 持续崩溃退避逐步加长；正常停止时由 Manager 重置实例账面 CrashCount。
 	crashCount int
-	// startedAt 本次进程启动时刻，供崩溃快照计算运行时长（FR-313）。
+	// startedAt 本次进程启动时刻，供崩溃快照计算运行时长。
 	startedAt time.Time
 	wg        sync.WaitGroup
 	closed    bool
@@ -120,7 +120,7 @@ func (d *directStrategy) waitLoop() {
 	// 后续手动 /start 与下方自动重启的 Start() 守卫都会因状态不是 STOPPED/CRASHED 而拒绝）。
 	d.mgr.markStrategyState(d.spec.UUID, StateCrashed)
 
-	// 非正常退出：捕获退出码/信号/时长扇出崩溃现场，供组装快照上报 CP（FR-313）。
+	// 非正常退出：捕获退出码/信号/时长扇出崩溃现场，供组装快照上报 CP。
 	exitCode, sig := daemon.ExitInfo(cmd.ProcessState)
 	d.mgr.emitCrash(d.spec.UUID, CrashInfo{
 		ExitCode:   exitCode,
@@ -132,7 +132,7 @@ func (d *directStrategy) waitLoop() {
 	slog.Warn("direct 实例崩溃", "instanceId", d.spec.UUID, "err", err, "crashCount", crashCount)
 
 	// 指数退避自动重启交给 Manager.Start（它会在 CRASHED 状态下允许重启）。
-	// FR-459：熔断期间（窗口内崩溃重启超限）不再自动重启——镜像 wrapper.javaWait 的 fastCrashes 守卫。
+	// 熔断期间（窗口内崩溃重启超限）不再自动重启——镜像 wrapper.javaWait 的 fastCrashes 守卫。
 	if d.spec.AutoRestart && d.mgr.autoRestartAllowed(d.spec.UUID) {
 		delay := backoffDelay(crashCount)
 		slog.Info("将在延迟后自动重启", "instanceId", d.spec.UUID, "delay", delay, "crashCount", crashCount)
@@ -171,7 +171,7 @@ func (d *directStrategy) Kill() error {
 	d.mu.Lock()
 	cmd := d.cmd
 	// 先落 StateStopping（对齐 docker 策略）：waitLoop 以 Stopping/Stopped 判定「正常停止」，
-	// 否则强杀会被记成崩溃——既污染 FR-459 崩溃熔断窗口，又误发崩溃快照（FR-459 复审项 8）。
+	// 否则强杀会被记成崩溃——既污染崩溃熔断窗口，又误发崩溃快照（复审项 8）。
 	d.state = StateStopping
 	d.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {

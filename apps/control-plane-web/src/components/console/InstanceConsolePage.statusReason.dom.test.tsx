@@ -8,12 +8,12 @@ import { db } from '@jianmanager/devmock/db'
 import type { MockInstance } from '@jianmanager/devmock/handlers/domains/instance'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * FR-312：实例启动失败原因可见性——控制台页失败原因横幅。
+/** 
+ *：实例启动失败原因可见性——控制台页失败原因横幅。
  * 展示条件只看 statusReason 非空、不看 status（Worker 心跳会把 CRASHED 冲回 STOPPED），
  * 再次启动后 CP transition 清空 reason，横幅随查询刷新消失（纯数据驱动、无本地残留态）。
  */
-describe('InstanceConsolePage 失败原因横幅（FR-312）', () => {
+describe('InstanceConsolePage 失败原因横幅', () => {
   beforeEach(() => {
     loginMockUser()
   })

@@ -3,8 +3,8 @@ import { login } from './helpers'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/**
- * 客户端分发运营闭环 · mock 真浏览器冒烟（FR-430 两页化后）。
+/** 
+ * 客户端分发运营闭环 · mock 真浏览器冒烟（两页化后）。
  * 旧 `/client-dist-monitor`、`/client-dist-security` 重定向到 `/client-dist-ops`；
  * 深链与「打开安全中心」均指向运维页 query，不再有独立 security/monitor data-page。
  * 证据截图：.tmp/acceptance/client-dist-ops-loop/

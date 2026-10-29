@@ -14,7 +14,7 @@ const (
 	TaskStateSucceeded TaskState = "succeeded"
 	// TaskStateFailed 任务失败（终态）。
 	TaskStateFailed TaskState = "failed"
-	// TaskStateCanceled 任务被强制停止（终态，FR-227）。Worker 操作真被中断后由心跳上报。
+	// TaskStateCanceled 任务被强制停止（终态）。Worker 操作真被中断后由心跳上报。
 	TaskStateCanceled TaskState = "canceled"
 )
 
@@ -25,46 +25,46 @@ func (s TaskState) IsTerminal() bool {
 
 // 任务种类常量（kind）。新增长任务类型时在此登记。
 const (
-	// TaskKindJDKInstall JDK 一键下载安装任务（FR-183 首批载体，见 ADR-040）。
+	// TaskKindJDKInstall JDK 一键下载安装任务（首批载体，见 ADR-040）。
 	TaskKindJDKInstall = "jdk_install"
-	// TaskKindPkgInstall 全局包安装/升级任务（FR-307）。
+	// TaskKindPkgInstall 全局包安装/升级任务。
 	TaskKindPkgInstall = "pkg_install"
-	// TaskKindRuntimeInstall 非 JDK 运行时一键下载安装任务（FR-299，首批 Node.js）。
+	// TaskKindRuntimeInstall 非 JDK 运行时一键下载安装任务（首批 Node.js）。
 	// 复用 jdk_install 的异步任务模式；终态副作用落 model.NodeRuntime。
 	TaskKindRuntimeInstall = "runtime_install"
-	// TaskKindProvision 一键搭建后端子服任务（FR-319）：与其它 kind 不同，执行体在 CP 后台
+	// TaskKindProvision 一键搭建后端子服任务：与其它 kind 不同，执行体在 CP 后台
 	// goroutine（下载在 worker、编排在 CP），进度/终态由 CP 直写而非 worker 心跳快照。
 	TaskKindProvision = "provision"
-	// TaskKindBinaryProvision 通用二进制搭建任务（FR-441，CP 后台 goroutine）。
+	// TaskKindBinaryProvision 通用二进制搭建任务（CP 后台 goroutine）。
 	// 与 TaskKindProvision 同属「CP 编排 + Worker 取制品」两段式，但制品来源为请求直供的
 	// 三类（制品库 asset / 远程 URL / 节点本地文件），不涉及 MC 核心的版本→构建→URL 解析。
 	// 单列 kind 的理由：二进制体积大（30MB 级）、下载可达分钟级，任务中心与启动闸需按
 	// 二进制语义单独筛选与提示（前端按 kind 展示「搭建中」文案）。
 	TaskKindBinaryProvision = "binary_provision"
-	// TaskKindImport 导入现有服务器（migrate 搬迁）任务（FR-323，CP 后台 goroutine）。
+	// TaskKindImport 导入现有服务器（migrate 搬迁）任务（CP 后台 goroutine）。
 	TaskKindImport = "import"
-	// TaskKindClone 克隆实例（拷贝工作目录）任务（FR-323，CP 后台 goroutine）。
+	// TaskKindClone 克隆实例（拷贝工作目录）任务（CP 后台 goroutine）。
 	TaskKindClone = "clone"
-	// TaskKindBackupCreate 备份创建（打包工作目录）任务（FR-323，CP 后台 goroutine）。
+	// TaskKindBackupCreate 备份创建（打包工作目录）任务（CP 后台 goroutine）。
 	TaskKindBackupCreate = "backup_create"
-	// TaskKindApprovalExecute 审批通过后的高危动作执行（FR-491，CP 后台 goroutine）。
+	// TaskKindApprovalExecute 审批通过后的高危动作执行（CP 后台 goroutine）。
 	// 单列 kind 的理由：任务中心必须能一眼看出「这是审批驱动的执行」，
 	// 而不是混进普通搭建/备份里；且它的失败语义与票据终态绑定（failed 要能对应回票据）。
 	TaskKindApprovalExecute = "approval_execute"
-	// TaskKindBackupRestore 备份恢复（回放备份链）任务（FR-323，CP 后台 goroutine）。
+	// TaskKindBackupRestore 备份恢复（回放备份链）任务（CP 后台 goroutine）。
 	TaskKindBackupRestore = "backup_restore"
-	// TaskKindArtifactMigrate 制品存量迁移任务（FR-348，CP 后台 goroutine）：
+	// TaskKindArtifactMigrate 制品存量迁移任务（CP 后台 goroutine）：
 	// 逐制品搬运到目标存储渠道（先改记录再删源），全程一次仅允许一个在途。
 	TaskKindArtifactMigrate = "artifact_migrate"
-	// TaskKindBinaryUpgrade 二进制/Beacon 版本变更任务（FR-468，CP 后台 goroutine）：
+	// TaskKindBinaryUpgrade 二进制/Beacon 版本变更任务（CP 后台 goroutine）：
 	// 升级与一级回滚共用。阶段：解析目标版本 → 取目标版本 → 校验 → 落盘 →
 	// 更新启动命令 → 换版本绑定 → 完成。单列 kind 的理由同 binary_provision：
 	// 二进制体积大、耗时可分钟级，且与「搭建」语义不同（改的是既有实例的版本）。
 	TaskKindBinaryUpgrade = "binary_upgrade"
-	// TaskKindSnapshotCreate 实例整机快照创建任务（FR-466，CP 后台 goroutine）：
+	// TaskKindSnapshotCreate 实例整机快照创建任务（CP 后台 goroutine）：
 	// 全量备份工作目录 + 采集二进制指纹。阶段：登记 → 打包工作目录 → 采集指纹 → 完成。
 	TaskKindSnapshotCreate = "snapshot_create"
-	// TaskKindSnapshotRollback 实例整机快照一键回滚任务（FR-466，CP 后台 goroutine）。
+	// TaskKindSnapshotRollback 实例整机快照一键回滚任务（CP 后台 goroutine）。
 	// 阶段：停服 → 建回滚前快照 → 回放数据 → 校验 → 完成。
 	// 单列 kind：回滚是可造成数据覆盖的高风险长操作，任务中心须能一眼分辨。
 	TaskKindSnapshotRollback = "snapshot_rollback"
@@ -77,7 +77,7 @@ type Task struct {
 	TaskID string `gorm:"type:varchar(64);uniqueIndex;not null" json:"taskId"`
 	NodeID uint   `gorm:"index" json:"nodeId"`
 	Kind   string `gorm:"type:varchar(64);not null;index" json:"kind"`
-	// InstanceID 关联实例（provision/import/clone 等实例级长操作任务用，FR-319/FR-323）；0=无关联。
+	// InstanceID 关联实例（provision/import/clone 等实例级长操作任务用）；0=无关联。
 	// 启动闸据此拦截「工作目录尚未就绪就点启动」的实例（在途任务未终态即拒启）。
 	InstanceID uint `gorm:"index" json:"instanceId"`
 	// State 见 TaskState；以字符串存储便于跨进程一致。
@@ -87,7 +87,7 @@ type Task struct {
 	Detail   string    `gorm:"type:varchar(1024)" json:"detail"` // 发起参数摘要
 	Error    string    `gorm:"type:text" json:"error"`           // 失败原因（仅 failed）
 	Result   string    `gorm:"type:text" json:"result"`          // 成功结果 JSON（如安装出的 JDK 信息）
-	// CancelRequested 标记用户已请求强制停止（FR-227）：CP 据此每拍经心跳向节点下发 cancel_task_ids，
+	// CancelRequested 标记用户已请求强制停止：CP 据此每拍经心跳向节点下发 cancel_task_ids，
 	// 直到 Worker 确认中断并上报 canceled 终态。pending 未起 / 节点离线时直接置 canceled、不设此标记。
 	CancelRequested bool `gorm:"not null;default:false" json:"cancelRequested"`
 	// CreatedBy 发起用户 ID，用于归属隔离与完成站内信收件人（0=系统）。

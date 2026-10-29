@@ -1,5 +1,5 @@
-/**
- * @file 侧栏资源面板的纯分组逻辑（FR-509/510）。
+/** 
+ * @file 侧栏资源面板的纯分组逻辑（510）。
  *
  * 从 `SidebarResourcePanel.tsx` 抽出：该文件只应导出组件（`react-refresh/only-export-components`），
  * 而 `buildSections` 是需要被测试直接调用的纯函数，留在组件文件里会让 Fast Refresh 失效。
@@ -16,7 +16,7 @@ import type { StorableInstance, StoredInstance } from '@/lib/console/server-sele
 /** 行模型：已加载实例（全量信息）或收藏快照（未加载时的兜底）。 */
 export type PanelRow = { kind: 'instance'; inst: InstanceInfo } | { kind: 'snapshot'; snap: StoredInstance }
 
-/**
+/** 
  * 分组维度（下拉项，持久化到 `jm.sidebar.groupMode`）。
  *
  * 【为什么没有 `pinned` / `name` / `created` 了】这三项本质是**排序**不是分组：
@@ -31,7 +31,7 @@ export const GROUP_MODES: GroupMode[] = ['node', 'groupTree', 'network', 'tag']
 /** 默认分组方式：按节点（运维看机器归属最常用）。 */
 export const DEFAULT_GROUP_MODE: GroupMode = 'node'
 
-/**
+/** 
  * 排序维度（与分组正交，持久化到 `jm.sidebar.sortMode`）。
  *
  * 与分组分开之后，「按节点分组 + 按名称排序」这类组合才表达得出来——此前它们挤在同一个
@@ -89,7 +89,7 @@ function byName(a: PanelRow, b: PanelRow): number {
   return rowName(a).localeCompare(rowName(b))
 }
 
-/**
+/** 
  * 按分组方式切段（纯函数，便于针对性测试）：
  * - pinned：收藏顺序的单段（未加载的收藏回落快照行）；
  * - node / network / tag：按对应键分组，未命中归「未分组」（置尾）。
@@ -148,8 +148,8 @@ export type GroupTreeLine =
   | { kind: 'group'; key: string; node: InstanceGroupNode; depth: number; count: number }
   | { kind: 'instance'; key: string; node: InstanceGroupNode; row: PanelRow }
 
-/**
- * 「按分组」维度：把窗口实例按后端分组树组织成**文件树**（FR-509 修订）。
+/** 
+ * 「按分组」维度：把窗口实例按后端分组树组织成**文件树**（修订）。
  *
  * 【为什么是树而不是段】分组是树形归类（集群 → 大区 → 服组），平铺成同级段会把层级压平、
  * 读起来像一堆并列标签。这里输出带 `depth` 的行序列，由视图渲染缩进与展开箭头。
@@ -211,7 +211,7 @@ export function buildGroupTreeLines(args: {
   return out
 }
 
-/**
+/** 
  * 侧栏列表的**虚拟化行高**（px）。必须是真实渲染高度的**严格倍数**：
  * - 服务器行 32（两行：名称 14px + 备注 12px + 上下内边距）；
  * - 组头 26（单行小字）。
@@ -224,7 +224,7 @@ export function buildGroupTreeLines(args: {
 export const SERVER_ROW_HEIGHT = 32
 export const GROUP_HEAD_HEIGHT = 26
 
-/**
+/** 
  * 把「分段（sections）」或「文件树（tree）」两种渲染形态铺平成**一条可虚拟化的行序列**。
  *
  * 两种形态此前各写一遍 `map`，虚拟化后如果继续分叉就会有两套窗口计算——合并成扁平行模型后，

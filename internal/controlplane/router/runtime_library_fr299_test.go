@@ -52,7 +52,7 @@ func TestFR299RuntimeInstallEndpoint(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
 
-	// 在 FR-298 基础装配上补任务中心注入：直接重建带 tasks 的 Services 太重，
+	// 在基础装配上补任务中心注入：直接重建带 tasks 的 Services 太重，
 	// 这里复用 setup 后通过服务字段注入（路由持有同一 svc 实例）。
 	gin.SetMode(gin.TestMode)
 	jdkSvc := service.NewJDKService(db, pool)
@@ -91,7 +91,7 @@ func TestFR299RuntimeInstallEndpoint(t *testing.T) {
 	require.Equal(t, model.TaskKindRuntimeInstall, task.Kind)
 	require.Equal(t, model.TaskStateRunning, task.State)
 
-	// 未知 arch 422（FR-289 语义齐平）。
+	// 未知 arch 422（语义齐平）。
 	badArch := makeRequest(r, http.MethodPost, fmt.Sprintf("/api/v1/nodes/%d/runtimes/install", node.ID), map[string]any{
 		"type": "nodejs", "major": 22, "arch": "mips64",
 	}, adminToken)
@@ -116,7 +116,7 @@ func TestFR299RuntimeInstallEndpoint(t *testing.T) {
 	require.GreaterOrEqual(t, audits, int64(1))
 }
 
-// 删除托管 nodejs 经统一端点：Worker RemoveRuntime 被调、记录删除（FR-299 语义对齐 JDK）。
+// 删除托管 nodejs 经统一端点：Worker RemoveRuntime 被调、记录删除（语义对齐 JDK）。
 func TestFR299DeleteManagedRuntimeRemovesFiles(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()
@@ -138,7 +138,7 @@ func TestFR299DeleteManagedRuntimeRemovesFiles(t *testing.T) {
 	require.Zero(t, n)
 }
 
-// newFR299Services 组装含运行时库 + 任务中心的最小 Services（复用 FR-298 测试基座字段）。
+// newFR299Services 组装含运行时库 + 任务中心的最小 Services（复用测试基座字段）。
 func newFR299Services(db *gorm.DB, pool *cpgrpc.ClientPool, jdkSvc *service.JDKService, runtimeLibSvc *service.RuntimeLibraryService, taskSvc *service.TaskService) *Services {
 	groupSvc := service.NewGroupService(db)
 	authzSvc := service.NewAuthzService(db)

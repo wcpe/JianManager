@@ -17,8 +17,8 @@ interface SuperWorkbenchToolbarProps {
   focusTerminalsDisabledReason?: string
 }
 
-/**
- * 超级工作台工具栏的接线层（FR-167）。
+/** 
+ * 超级工作台工具栏的接线层。
  * 视图不依赖路由库，故「进导播台」的链接经 renderLink 注入 react-router 的 Link。
  */
 export default function SuperWorkbenchToolbar(props: SuperWorkbenchToolbarProps) {

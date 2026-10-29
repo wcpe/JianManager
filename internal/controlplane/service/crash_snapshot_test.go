@@ -221,7 +221,7 @@ func TestReclassifyAll_BackfillsAndIsIdempotent(t *testing.T) {
 	svc := NewCrashSnapshotService(db)
 	occurred := time.Now().UTC().Add(-2 * time.Hour)
 
-	// 模拟 FR-470 之前入库的快照：分类列为空、无统计行。
+	// 模拟之前入库的快照：分类列为空、无统计行。
 	snap := &model.InstanceCrashSnapshot{
 		InstanceID: inst.ID, OccurredAt: occurred, ExitCode: 1,
 		TailOutput: "java.lang.OutOfMemoryError: Java heap space",
@@ -354,7 +354,7 @@ func TestCrashSnapshotService_CorrelationGate(t *testing.T) {
 	assert.True(t, svc.CorrelationEnabled())
 }
 
-// TestPruneCrashStats_RetentionWindow 统计保留窗口按天裁剪（crash.stat_retention_days，FR-470 §5）。
+// TestPruneCrashStats_RetentionWindow 统计保留窗口按天裁剪（crash.stat_retention_days§5）。
 func TestPruneCrashStats_RetentionWindow(t *testing.T) {
 	db := newCrashTestDB(t)
 	inst := seedCrashInstance(t, db, "smp")

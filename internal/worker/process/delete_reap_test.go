@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-310 删除路径 reap 单测：删除运行中 daemon 实例前，应按 PID 记录强杀 wrapper 与 Java 两棵进程树
+// 删除路径 reap 单测：删除运行中 daemon 实例前，应按 PID 记录强杀 wrapper 与 Java 两棵进程树
 // （Unix 上 Java 自成进程组，只杀 wrapper 够不到它），死透后清理遗留的 PID 文件 / socket；杀不死则保留
 // PID 文件待接管扫描再兜底；无 PID 文件（非 daemon / 已自清理）为空操作。杀树 / 存活探测 / 等待经桩替身。
 func TestReapDaemonForDelete(t *testing.T) {

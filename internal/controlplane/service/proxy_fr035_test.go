@@ -170,7 +170,7 @@ func TestProvisionProxyAsync_DetachesFromRequestContext(t *testing.T) {
 	require.Empty(t, stored.StatusReason, "供给成功后应清空数据库中的搭建原因")
 }
 
-// FR-342 阶段二：代理搭建失败 → 损毁态（不再删实例/不再调 RemoveInstance），保留 ProvisionSpec 供重建。
+// 阶段二：代理搭建失败 → 损毁态（不再删实例/不再调 RemoveInstance），保留 ProvisionSpec 供重建。
 func TestProvisionProxyAsync_FailureMarksDamaged(t *testing.T) {
 	worker := &failingFR035ProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
 	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
@@ -199,7 +199,7 @@ func TestProvisionProxyAsync_FailureMarksDamaged(t *testing.T) {
 	}
 }
 
-// FR-342 阶段二：代理重建守卫——非损毁 / 损毁但无参数 分别拒绝。
+// 阶段二：代理重建守卫——非损毁 / 损毁但无参数 分别拒绝。
 func TestRebuildProxy_Guards(t *testing.T) {
 	proxySvc, _, node, done := newAsyncFR035ProxyService(t, &fakeFR035ProxyWorker{})
 	defer done()
@@ -217,7 +217,7 @@ func TestRebuildProxy_Guards(t *testing.T) {
 	require.Contains(t, err.Error(), "无可复用的搭建参数", "损毁但无参数不可重建")
 }
 
-// FR-342 阶段二：损毁代理换好 worker 后重建 → 复用参数 + forwarding_secret 重跑成功 → STOPPED。
+// 阶段二：损毁代理换好 worker 后重建 → 复用参数 + forwarding_secret 重跑成功 → STOPPED。
 func TestRebuildProxy_Succeeds(t *testing.T) {
 	worker := &failingFR035ProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
 	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)

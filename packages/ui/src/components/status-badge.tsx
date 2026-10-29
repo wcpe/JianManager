@@ -1,7 +1,7 @@
 import { cn } from '../lib/utils'
 import type { StatusLevel } from '../lib/threshold'
 
-/**
+/** 
  * 状态等级 → 徽章底/字配色（高密度面板用）。
  *
  * 【为什么不用 `bg-status-X/15 text-status-X`】纯状态色压在自身的 15% 淡底上，实测
@@ -27,7 +27,7 @@ const DOT_CLASS: Record<StatusLevel, string> = {
   neutral: 'bg-muted-foreground',
 }
 
-/** 状态徽章（FR-061）：状态等级 → 色点 + 文案，用于实例/节点状态列。 */
+/** 状态徽章：状态等级 → 色点 + 文案，用于实例/节点状态列。 */
 export function StatusBadge({
   level,
   label,
@@ -39,7 +39,7 @@ export function StatusBadge({
   label: string
   /** 是否显示前导色点，默认显示。 */
   dot?: boolean
-  /** 过渡态（启动中/停止中）色点脉冲动画，提示「进行中」（FR-138）。 */
+  /** 过渡态（启动中/停止中）色点脉冲动画，提示「进行中」。 */
   pulse?: boolean
   className?: string
 }) {

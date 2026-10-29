@@ -23,8 +23,8 @@ import { validateRequired, validateHost, validatePort, validateFields, hasErrors
 /** 创建结果：成功；或「创建成功但委托 Worker 失败」（需留在弹窗内显示可操作原因）。 */
 export type CreateBotOutcome = { ok: true } | { ok: false; error: string }
 
-/**
- * 控制台 Bot 段「新建 Bot」对话框（FR-039）。
+/** 
+ * 控制台 Bot 段「新建 Bot」对话框。
  * 实例 id 由当前工作区实例预填（不可改），连接地址用「所在节点 host + 默认端口」预填且可改。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求——归属实例名与建议连接地址由外壳算好注入
@@ -60,7 +60,7 @@ export interface CreateBotDialogProps {
     auth: string
     behavior: string
   }) => Promise<CreateBotOutcome>
-  /**
+  /** 
    * 实例选择器插槽：提供时替代只读实例名（全局 Bot 管理页需先选实例）。
    * 千级实例须走服务端搜索，故由外壳注入。
    */

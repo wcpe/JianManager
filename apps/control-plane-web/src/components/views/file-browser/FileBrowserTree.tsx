@@ -26,8 +26,8 @@ interface FileBrowserTreeProps {
   refreshKey?: number
 }
 
-/**
- * 共享文件浏览器的目录树（FR-213）。
+/** 
+ * 共享文件浏览器的目录树。
  *
  * 两种数据源形态统一渲染为可折叠树：
  * - 懒加载分层（`source.flat` 省略）：点目录展开时按需 `source.list(dir)` 拉该层。

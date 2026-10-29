@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-183 全局任务中心 + 完成站内信 · 单机（Playwright + mock 模式）验收。
+/** 
+ *全局任务中心 + 完成站内信 · 单机（Playwright + mock 模式）验收。
  * 覆盖：任务中心列表（kind/node/state/progress）+ 状态/节点筛选 + 强制停止（运行态）。
  * （job 模型 + Worker→CP 进度上报 + 完成/失败站内信由 Go task_test.go 覆盖）
- * 证据落 .tmp/acceptance/FR-183/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-183 任务中心 列表+筛选+进度+强制停止', async ({ page }) => {
+test('任务中心 列表+筛选+进度+强制停止', async ({ page }) => {
   await login(page)
   await page.goto('/tasks')
 
@@ -22,5 +22,5 @@ test('FR-183 任务中心 列表+筛选+进度+强制停止', async ({ page }) =
   // 运行态任务可强制停止
   await expect(page.getByRole('button', { name: '强制停止' }).first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-183/single-machine-tasks.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-tasks.png', fullPage: true })
 })

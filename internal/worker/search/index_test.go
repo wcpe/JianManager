@@ -247,7 +247,7 @@ func TestLargeFileNameOnly(t *testing.T) {
 	}
 }
 
-// TestBackgroundBuildReadiness 验证首建后台化（FR-113，ADR-024）：新建索引未就绪，
+// TestBackgroundBuildReadiness 验证首建后台化（ADR-024）：新建索引未就绪，
 // EnsureBuilding 后台构建、WaitReady 在预算内就绪，随后可正常查询。
 func TestBackgroundBuildReadiness(t *testing.T) {
 	work := t.TempDir()
@@ -274,7 +274,7 @@ func TestBackgroundBuildReadiness(t *testing.T) {
 	}
 }
 
-// TestWaitReadyWhileBuilding 验证构建在途时未就绪（FR-113，ADR-024）：用钩子把构建卡住，
+// TestWaitReadyWhileBuilding 验证构建在途时未就绪（ADR-024）：用钩子把构建卡住，
 // WaitReady 有界等待超时返回 false（RPC 据此返回 indexing=true）；放行后就绪。
 func TestWaitReadyWhileBuilding(t *testing.T) {
 	work := t.TempDir()

@@ -21,14 +21,14 @@ export interface InstanceResourceCardProps {
   renderBrowse: (header: ReactNode) => ReactNode
 }
 
-/**
- * 实例「资源卡片」（FR-130 文件+配置合一；FR-213 共享浏览器；FR-378 统一壳）。
+/** 
+ * 实例「资源卡片」（文件+配置合一共享浏览器统一壳）。
  *
  * - 「管理」= ConfigExplorer（全功能配置，能力不减）
  * - 「文件」= UnifiedExplorerShell + instance-files Capability → ExplorerTabHost
  * - 「浏览」= UnifiedExplorerShell + instance-browse → FileBrowser + 下载
  *
- * FR-422：分段切换**不再自成一条横栏**。它下沉为各视图内层管理器已有横栏的左端插槽——
+ *：分段切换**不再自成一条横栏**。它下沉为各视图内层管理器已有横栏的左端插槽——
  * 管理视图进资源管理器工具栏、文件视图进多标签的标签条；只有浏览视图（FileBrowser 是
  * 树｜预览两栏、没有横栏可蹭）仍需一条自己的头栏。原先「分段栏 + 工具栏三条」共四条横栏，
  * 管理视图现在压到一条。

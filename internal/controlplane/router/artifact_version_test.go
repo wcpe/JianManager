@@ -248,7 +248,7 @@ func TestArtifactVersionDownload_RequiresShortToken(t *testing.T) {
 
 }
 
-// TestBinaryAssetDownload_RequiresShortToken 二进制分发端点（FR-441 kind=asset）：
+// TestBinaryAssetDownload_RequiresShortToken 二进制分发端点（kind=asset）：
 // 同 probe 端点族（短 token 保护），无 token/错 token 一律 403；正确 token 逐字节返回资产内容。
 func TestBinaryAssetDownload_RequiresShortToken(t *testing.T) {
 	db := setupTestDB(t)

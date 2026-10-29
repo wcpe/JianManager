@@ -1,13 +1,13 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 分层配置（FR-529）对内 API：配置文件元数据 + 各作用域的不可变层版本链 + 有效值预览。
+/** 
+ * 分层配置对内 API：配置文件元数据 + 各作用域的不可变层版本链 + 有效值预览。
  *
  * 契约来源：
  * - 后端路由 `internal/controlplane/router/config_file.go`（12 个端点）；
  * - 服务层视图 `internal/controlplane/service/config_layer.go` / `config_merge.go`；
- * - 文档 `docs/API.md`「分层配置与纳管（FR-529~533）」与 `docs/specs/config-layered-override/spec.md`。
+ * - 文档 `docs/API.md`「分层配置与纳管（~533）」与 `docs/specs/config-layered-override/spec.md`。
  *
  * 与既有 `/instances/:id/configs/*`（直接读写某台实例的某个文件）刻意分开：
  * 这里管的是「一条配置在多个作用域上的分层定义」。
@@ -22,7 +22,7 @@ export type ConfigScopeLevel = 'group' | 'instance'
 /** 可选的配置格式（与后端 `model.ValidConfigFileFormat` 对齐）。 */
 export const CONFIG_FILE_FORMATS: readonly ConfigFileFormat[] = ['yaml', 'json', 'properties']
 
-/**
+/** 
  * 配置文件视图（`service.ConfigFileView`）：`model.ConfigFile` 全字段 + `layerCount`。
  *
  * `sensitivePaths` 后端是 JSON 数组**文本**（覆盖保存时才编码），故用 {@link parseSensitivePaths}
@@ -133,7 +133,7 @@ export interface EffectiveResult {
   instanceId: number
   configFileId: number
   format: string
-  /**
+  /** 
    * 合并后的完整文本。
    *
    * ⚠️ 这是**规范化结果**：键按字典序重排、注释全部丢失、缩进为解析器输出格式。
@@ -183,7 +183,7 @@ export interface ConfigFilesErrorBody {
   issues?: SchemaIssue[]
 }
 
-/**
+/** 
  * 规范化后端 `sensitivePaths` 文本为路径数组。
  * 不是合法 JSON 数组时返回空数组（展示层不因脏数据整块报错）。
  */
@@ -198,7 +198,7 @@ export function parseSensitivePaths(value: string | undefined | null): string[] 
   }
 }
 
-/**
+/** 
  * 从错误对象里取出后端错误信封。
  * 后端所有失败都走 `respondErr` 的 `{error, message}`，故这里只做形状收敛。
  */

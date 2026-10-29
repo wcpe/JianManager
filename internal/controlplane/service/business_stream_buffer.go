@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 业务事件流环形缓冲（FR-522 §4，见 ADR-106）。
+// 业务事件流环形缓冲（§4，见 ADR-106）。
 //
 // 设计要点（与规格逐条对应）：
 //   - **双阈值**：时间窗（默认 30s）或容量（默认 20 万条），先到者生效；
@@ -17,7 +17,7 @@ import (
 //   - 容量溢出丢最旧并递增 droppedCount；时间窗老化属于窗口的正常行为，不计入 dropped
 //     （它由 replay_gap 的可观测计数体现）。
 const (
-	// BusinessStreamBufferCapacity 环形缓冲默认容量上限（FR-522 §4.1 推导：约 100MB）。
+	// BusinessStreamBufferCapacity 环形缓冲默认容量上限（§4.1 推导：约 100MB）。
 	BusinessStreamBufferCapacity = 200_000
 	// BusinessStreamBufferWindow 环形缓冲默认时间窗（覆盖浏览器/网络抖动的常见断线重连）。
 	BusinessStreamBufferWindow = 30 * time.Second
@@ -25,7 +25,7 @@ const (
 
 // BusinessFrame 是一条待下发的业务事件帧（SSE `event: business.event` 的 data 段）。
 //
-// `payload` 是**不透明载荷**：JM 只做 JSON 透传，不解析、不校验业务内容（FR-522 §5）。
+// `payload` 是**不透明载荷**：JM 只做 JSON 透传，不解析、不校验业务内容（§5）。
 // 未导出成员是缓冲内部状态，不参与序列化。
 type BusinessFrame struct {
 	Node         string          `json:"node,omitempty"`
@@ -89,7 +89,7 @@ func quoteJSONString(s string) string {
 	return string(raw)
 }
 
-// BusinessStreamBuffer 是业务事件的内存环形缓冲（FR-522 §4.2）。
+// BusinessStreamBuffer 是业务事件的内存环形缓冲（§4.2）。
 //
 // 并发模型：Append 持写锁，读取方法持读锁。锁内只做切片搬运与指针赋值，
 // 唯一的分配是「每条事件一次的帧渲染」——这是必要的，且比每订阅者各渲染一次便宜一个数量级。
@@ -102,7 +102,7 @@ type BusinessStreamBuffer struct {
 	capacity int
 	window   time.Duration
 	// oldestSeq/newestSeq 是已写入的位点边界；空缓冲时 oldestSeq 为 0。
-	// 进程重启后两者从 0 重新开始（非持久，FR-522 §4.4）。
+	// 进程重启后两者从 0 重新开始（非持久§4.4）。
 	oldestSeq int64
 	newestSeq int64
 	// dropped 统计因容量打满而丢弃的最旧条数（时间窗老化不计）。
@@ -135,7 +135,7 @@ func NewBusinessStreamBuffer(capacity int, window time.Duration) *BusinessStream
 //   - frame.Seq <= newestSeq（重复/回退）→ 仍分配 newestSeq+1，保证缓冲内 seq 严格递增。
 //
 // **为什么位点由缓冲分配**：SSE 的补读依赖 `id` 全局单调可比，而探针侧业务序号仅在
-// 同一 domain 内单调（FR-522 §9 风险表），无法作为跨实例的补读位点。故传输层位点在此统一给出，
+// 同一 domain 内单调（§9 风险表），无法作为跨实例的补读位点。故传输层位点在此统一给出，
 // 同时它就是 SSE 的 `id` 与帧内 `seq`——满足「id 必须等于 seq」。
 //
 // 写入前先按时间窗老化，再在容量打满时丢最旧（dropped++）。整段持写锁，保证读者看到一致的窗口。
@@ -150,7 +150,7 @@ func (r *BusinessStreamBuffer) Append(f *BusinessFrame) int64 {
 
 	// ① 时间窗老化：窗口外的旧事件已不可补读。
 	r.pruneLocked(now)
-	// ② 容量打满：丢最旧并计数（FR-522 §4.3：不逐个通知订阅者，等其补读时收 replay_gap）。
+	// ② 容量打满：丢最旧并计数（§4.3：不逐个通知订阅者，等其补读时收 replay_gap）。
 	for r.size >= r.capacity {
 		r.popLocked()
 		r.dropped++
@@ -217,7 +217,7 @@ func (r *BusinessStreamBuffer) windowStartLocked(now time.Time) (start int, coun
 // Since 返回位点 seq 之后的所有事件帧，并给出是否发生补读缺口。
 //
 // 第二个返回值为 true 表示 `seq+1` 早于窗口内最旧位点，即 seq 与窗口之间存在**必然补不到**的
-// 区间；调用方必须先发 `event: replay_gap` 再从窗口起点补发（FR-522 §3.3）。
+// 区间；调用方必须先发 `event: replay_gap` 再从窗口起点补发（§3.3）。
 // seq <= 0（未带 Last-Event-ID）由调用方自行短路，本方法按「从窗口起点开始」处理。
 func (r *BusinessStreamBuffer) Since(seq int64) ([]*BusinessFrame, bool) {
 	frames, gap, _ := r.SinceWithBoundary(seq)

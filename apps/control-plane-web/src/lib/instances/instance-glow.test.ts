@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import { instanceStatusGlowClass } from './instance-glow'
 
-describe('instanceStatusGlowClass (FR-315 状态光晕映射)', () => {
+describe('instanceStatusGlowClass (状态光晕映射)', () => {
   it('RUNNING → 绿柔光 running', () => {
     const c = instanceStatusGlowClass('RUNNING')
     expect(c).toContain('jm-status-glow-running')

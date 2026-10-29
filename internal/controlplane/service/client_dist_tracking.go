@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientDistTrackingService 客户端分发拉取/下载追踪（FR-093，见 ADR-023）。
+// ClientDistTrackingService 客户端分发拉取/下载追踪（见 ADR-023）。
 //
 // 数据量治理：明细 `client_dist_event` 短保留 + 后台滚动清理；写时增量 upsert 聚合 `client_dist_daily` 长保留。
 // 写入弱一致 best-effort——失败仅返回错误供调用方忽略，**绝不阻断玩家拉取**。
@@ -46,12 +46,12 @@ type ClientDistEventInput struct {
 	ArtifactSHA string
 	Bytes       int64
 	Status      int
-	// ErrCode 语义错误码（FR-249）；成功事件留空。
+	// ErrCode 语义错误码；成功事件留空。
 	ErrCode string
-	// ErrReason 可读错误原因（FR-265）。
+	// ErrReason 可读错误原因。
 	ErrReason  string
 	DurationMs int64
-	// FR-265 日志详情字段：保存排障所需的请求/响应详情；凭证类内容不落库。
+	// 日志详情字段：保存排障所需的请求/响应详情；凭证类内容不落库。
 	Method          string
 	Path            string
 	RequestBody     string
@@ -60,7 +60,7 @@ type ClientDistEventInput struct {
 	ResponseHeaders map[string]string
 }
 
-// ClientDistEventDetail 单条分发请求详情（FR-265）。
+// ClientDistEventDetail 单条分发请求详情。
 type ClientDistEventDetail struct {
 	model.ClientDistEvent
 	PlayerName      string            `json:"playerName"`
@@ -71,7 +71,7 @@ type ClientDistEventDetail struct {
 	ResponseHeaders map[string]string `json:"responseHeaders"`
 }
 
-// ClientDistEventSearchFilter 分页检索条件（FR-265）。
+// ClientDistEventSearchFilter 分页检索条件。
 type ClientDistEventSearchFilter struct {
 	ClientDistEventFilter
 	ArtifactSHA    string
@@ -83,14 +83,14 @@ type ClientDistEventSearchFilter struct {
 	PageSize       int
 }
 
-// ClientDistEventView 分发事件与运行态诊断字段（FR-357，运行态字段为尽力关联）。
+// ClientDistEventView 分发事件与运行态诊断字段（运行态字段为尽力关联）。
 type ClientDistEventView struct {
 	model.ClientDistEvent
 	PlayerName  string `json:"playerName"`
 	CoreVersion string `json:"coreVersion"`
 }
 
-// ClientDistEventPage 分页检索响应（FR-265/357）。
+// ClientDistEventPage 分页检索响应（357）。
 type ClientDistEventPage struct {
 	Items    []ClientDistEventView `json:"items"`
 	Page     int                   `json:"page"`
@@ -98,7 +98,7 @@ type ClientDistEventPage struct {
 	Total    int64                 `json:"total"`
 }
 
-// ClientDistErrorSummaryQuery 错误摘要查询条件（FR-357）。
+// ClientDistErrorSummaryQuery 错误摘要查询条件。
 type ClientDistErrorSummaryQuery struct {
 	ChannelID   string
 	From        time.Time
@@ -140,7 +140,7 @@ type ClientDistErrorSummary struct {
 	Samples   []ClientDistFailureSample `json:"samples"`
 }
 
-// ClientDistRealtimeQuery 近实时查询参数（FR-265）。
+// ClientDistRealtimeQuery 近实时查询参数。
 type ClientDistRealtimeQuery struct {
 	ChannelID string
 	Now       time.Time
@@ -232,7 +232,7 @@ func (s *ClientDistTrackingService) Cleanup() (int64, error) {
 	return res.RowsAffected, res.Error
 }
 
-// Start 启动后台滚动清理循环（FR-093 数据量治理，仿 FR-060）。
+// Start 启动后台滚动清理循环（数据量治理，仿）。
 func (s *ClientDistTrackingService) Start() {
 	go func() {
 		t := time.NewTicker(s.cleanupEvery)
@@ -253,15 +253,15 @@ func (s *ClientDistTrackingService) Start() {
 // Stop 停止后台清理循环。
 func (s *ClientDistTrackingService) Stop() { close(s.stop) }
 
-// ClientDistEventFilter 明细检索过滤条件（FR-093 检索；FR-249 增 Outcome/ErrCode）。空字段不约束。
+// ClientDistEventFilter 明细检索过滤条件（检索增 Outcome/ErrCode）。空字段不约束。
 type ClientDistEventFilter struct {
 	ChannelID string
 	MachineID string
 	IP        string
 	Kind      string
-	// Outcome 成功/失败维度（FR-249）："success"（0<status<400，含 200/206/304）| "failure"（status>=400）| ""（不约束）。
+	// Outcome 成功/失败维度："success"（0<status<400，含 200/206/304）| "failure"（status>=400）| ""（不约束）。
 	Outcome string
-	// ErrCode 语义错误码精确筛（FR-249）。
+	// ErrCode 语义错误码精确筛。
 	ErrCode string
 	Version *int
 	Since   *time.Time
@@ -283,7 +283,7 @@ func (s *ClientDistTrackingService) QueryEvents(f ClientDistEventFilter) ([]mode
 	return events, nil
 }
 
-// SearchEvents 分页检索明细，支持运行态维度筛选（FR-265）。
+// SearchEvents 分页检索明细，支持运行态维度筛选。
 func (s *ClientDistTrackingService) SearchEvents(f ClientDistEventSearchFilter) (*ClientDistEventPage, error) {
 	page, size := normalizePage(f.Page, f.PageSize)
 	q := s.applyEventFilter(s.db.Model(&model.ClientDistEvent{}), f.ClientDistEventFilter)
@@ -306,7 +306,7 @@ func (s *ClientDistTrackingService) SearchEvents(f ClientDistEventSearchFilter) 
 	return &ClientDistEventPage{Items: items, Page: page, PageSize: size, Total: total}, nil
 }
 
-// ErrorSummary 聚合错误码 TopN 与最近失败样例（FR-357）。
+// ErrorSummary 聚合错误码 TopN 与最近失败样例。
 func (s *ClientDistTrackingService) ErrorSummary(q ClientDistErrorSummaryQuery) (*ClientDistErrorSummary, error) {
 	topN, sampleLimit := normalizeErrorSummaryLimits(q.TopN, q.SampleLimit)
 	base := s.errorEventQuery(q)
@@ -325,7 +325,7 @@ func (s *ClientDistTrackingService) ErrorSummary(q ClientDistErrorSummaryQuery) 
 	return &ClientDistErrorSummary{From: q.From, To: q.To, TopErrors: counts, Samples: failureSamples(events)}, nil
 }
 
-// GetEventDetail 返回单条明细与脱敏 header（FR-265）。
+// GetEventDetail 返回单条明细与脱敏 header。
 func (s *ClientDistTrackingService) GetEventDetail(id uint) (*ClientDistEventDetail, error) {
 	var ev model.ClientDistEvent
 	if err := s.db.First(&ev, id).Error; err != nil {
@@ -346,7 +346,7 @@ func (s *ClientDistTrackingService) GetEventDetail(id uint) (*ClientDistEventDet
 	}, nil
 }
 
-// Realtime 返回近实时分发请求健康度（FR-265）。
+// Realtime 返回近实时分发请求健康度。
 func (s *ClientDistTrackingService) Realtime(q ClientDistRealtimeQuery) (*ClientDistRealtime, error) {
 	now := q.Now
 	if now.IsZero() {

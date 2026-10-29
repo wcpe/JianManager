@@ -8,14 +8,14 @@ import { Kbd } from '@jianmanager/ui/components/kbd'
 import { RefreshButton } from '@jianmanager/ui/components/refresh-button'
 import { searchBoxClass } from '@/lib/shared/header-layout'
 
-/**
- * 全局顶栏的三个展示部件（FR-502 阶段 6 补丁 / FR-179 / FR-232）。
+/** 
+ * 全局顶栏的三个展示部件（阶段 6 补丁）。
  * 从应用侧 `ConsoleHeader` 拆出：store 与 react-query 依赖经 props 注入，此处只做渲染。
  */
 
-/**
+/** 
  * 顶栏品牌区（方案 C，见 ADR-071）：Logo + 折叠开关，整体作为折叠触发器复用 `toggleSidebar`
- * （展开态点击=收起、折叠态=展开，接管原侧栏 logo 的 FR-181 行为）。
+ * （展开态点击=收起、折叠态=展开，接管原侧栏 logo 的行为）。
  *
  * 本组件只排两个按钮，**列宽/内边距/右缘描边由 ui 包 `TopNav` 的品牌槽位与外壳 CSS 提供**：
  * 宽度经 CSS 绑定 `--sidebar-expanded-width`/`--sidebar-collapsed-width` 随侧栏同步收放
@@ -46,7 +46,7 @@ export function ConsoleBrandSegment({
         onClick={onNavigateHome}
         aria-label={t('nav.home')}
         title={t('nav.home')}
-        /*
+        /* 
           【为什么是 `w-fit` + 不做 `flex-1`/`justify-center`】这决定了收缩时图标会不会横移。
 
           旧实现：展开态 `flex-1`（吃掉整条品牌列宽）、折叠态 `justify-center`，标题用
@@ -89,10 +89,10 @@ export function ConsoleBrandSegment({
   )
 }
 
-/**
- * 靠右常驻搜索入口（FR-179 重排 + FR-241）：点击或 Ctrl/⌘+K 打开全局命令面板（`CommandPalette`），
+/** 
+ * 靠右常驻搜索入口（重排）：点击或 Ctrl/⌘+K 打开全局命令面板（`CommandPalette`），
  * 检索实例/节点/页面/操作并跳转。本身不再是输入框，仅作开面板的按钮（Ctrl+K 由面板全局监听）。
- * 由 FR-162 的居中铺满改为靠右固定上限宽度（`header-layout.searchBoxClass`），紧贴右侧操作图标；
+ * 由的居中铺满改为靠右固定上限宽度（`header-layout.searchBoxClass`），紧贴右侧操作图标；
  * 窄屏（<md）隐藏不挤垮工作区。
  */
 export function ConsoleSearchBox({ onOpenPalette }: { onOpenPalette: () => void }) {
@@ -127,8 +127,8 @@ export function ConsoleSearchBox({ onOpenPalette }: { onOpenPalette: () => void 
   )
 }
 
-/**
- * 全局刷新（FR-232）：重拉当前页所有活跃查询（invalidateQueries），转动图标给反馈。
+/** 
+ * 全局刷新：重拉当前页所有活跃查询（invalidateQueries），转动图标给反馈。
  * 解决「页面无刷新入口」——不整页 reload，仅失效并重取数据。
  * 重取动作由应用侧注入（`queryClient.invalidateQueries()`），转动态与反馈延时留在本组件。
  */

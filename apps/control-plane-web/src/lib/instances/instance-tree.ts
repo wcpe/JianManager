@@ -10,7 +10,7 @@ export interface NodeGroup {
   instances: InstanceInfo[]
 }
 
-/**
+/** 
  * 按节点把实例分组，分组顺序与 `nodes` 一致。
  * 不属于任何已知节点的实例（孤儿）汇总到末尾一个 nodeId<0 的分组，
  * 避免「全部节点」视图下丢失实例。空分组（节点无实例）仍保留，便于显示节点占位。
@@ -41,8 +41,8 @@ export function groupInstancesByNode(
   return groups
 }
 
-/**
- * 侧栏实例树某一分组分支的折叠记忆键（FR-069）。
+/** 
+ * 侧栏实例树某一分组分支的折叠记忆键。
  * 命名空间前缀 `tree:` 与 `<dim>` 隔离，避免与多级侧栏导航组 key（如 `instances`/`monitor`）
  * 在 console store 的 `collapsedGroups` 中相撞；空 groupKey（未分组/孤儿）用 `__none__` 占位。
  * 同一 dim 下同一 groupKey 必稳定，切换 dim 时键自然不同，互不污染折叠态。
@@ -60,8 +60,8 @@ export interface TreeBranch {
   instances: InstanceInfo[]
 }
 
-/**
- * 把已分好的「分组键→成员」列表统一包装为带折叠键的树分支（FR-069）。
+/** 
+ * 把已分好的「分组键→成员」列表统一包装为带折叠键的树分支。
  * 不改变入参顺序（分组排序由上游 groupInstances/groupInstancesByNode 决定），
  * 仅为每个分组补出稳定的 branchKey，供组件做「折叠优先」渲染与折叠记忆。
  */
@@ -76,11 +76,11 @@ export function toTreeBranches(
   }))
 }
 
-/**
+/** 
  * 实例状态点的视觉分类。
  * RUNNING=绿，STARTING/STOPPING=琥珀，CRASHED/DAMAGED=红，其余（STOPPED 等）=空心灰。
  */
-/**
+/** 
  * 状态点类型与归并函数已回迁应用侧（受控视图 `InstanceStatusDot` 与树共用，ADR-103）。
  * 此处原样再导出，调用点无需改动。
  */

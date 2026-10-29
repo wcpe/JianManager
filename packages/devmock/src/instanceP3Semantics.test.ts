@@ -4,8 +4,8 @@ import { db, resetDb } from './db'
 import { clearInjections } from './inject'
 import type { MockInstance } from './handlers/domains/instance'
 
-/**
- * FR-466 / FR-468 / FR-470 mock 语义对齐测试（W-07 / W-08 / W-15 / W-16 / W-17）。
+/** 
+ *mock 语义对齐测试（W-07 / W-08 / W-15 / W-16 / W-17）。
  *
  * 这些断言锁定「mock 与真后端语义一致」，而不是「mock 能返回 200」：
  * 趋势与列表必须是**两个数据源**、K=5 必须真的裁剪、快照 ID 必须随 resetDb 重置、
@@ -25,7 +25,7 @@ afterAll(() => server.close())
 /** 全部 P3 端点都过 requireAuth（9 个新端点无一例外），故统一带 token 请求。 */
 let authHeaders: Record<string, string> = {}
 
-/**
+/** 
  * 每个用例前重新登录取 token —— **不能放 beforeAll**：`afterEach` 的 `resetDb()` 会连
  * `sessions` 集合一起重播，前一例的会话随之失效，第二个用例起就会全部 401。
  */

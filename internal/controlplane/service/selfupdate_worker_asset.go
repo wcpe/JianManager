@@ -20,7 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/version"
 )
 
-// WorkerAssetSourceEmbedded 是内嵌物化缓存条目的 sourceUrl 取值（FR-278/ADR-062），
+// WorkerAssetSourceEmbedded 是内嵌物化缓存条目的 sourceUrl 取值（ADR-062），
 // 系统更新页缓存列表据此区分来源（内嵌物化 / 远程拉取 / 手动放置）。
 const WorkerAssetSourceEmbedded = "embedded://cp-binary"
 
@@ -42,7 +42,7 @@ const (
 	workerAssetTokenTTL = 10 * time.Minute
 )
 
-// WorkerAssetCacheEntry 描述 CP 本地 Worker 二进制缓存条目（FR-190）。
+// WorkerAssetCacheEntry 描述 CP 本地 Worker 二进制缓存条目。
 type WorkerAssetCacheEntry struct {
 	Version   string    `json:"version"`
 	OS        string    `json:"os"`
@@ -83,7 +83,7 @@ func (s *SelfUpdateService) EnsureWorkerAsset(ctx context.Context, goos, goarch 
 			return entry, nil
 		}
 	}
-	// ② 内嵌物化：CP 自带与自身版本一致的 Worker（FR-278）。
+	// ② 内嵌物化：CP 自带与自身版本一致的 Worker。
 	if entry, err := s.materializeEmbeddedWorkerAsset(goos, goarch); err != nil {
 		return nil, err
 	} else if entry != nil {
@@ -143,7 +143,7 @@ func (s *SelfUpdateService) materializeEmbeddedWorkerAsset(goos, goarch string) 
 	return nil, nil
 }
 
-// SetEmbeddedWorkerSource 注入内嵌 Worker 资产源（FR-278/ADR-062 依赖注入点，与 SetHTTPClient 同族）。
+// SetEmbeddedWorkerSource 注入内嵌 Worker 资产源（ADR-062 依赖注入点，与 SetHTTPClient 同族）。
 // 由 main 装配 cpembed 真实现；**未注入时视为无内嵌**（直接走缓存/远程链路）——go:embed 内容随
 // 构建环境（是否跑过 make embed-worker）而变，service 层不隐式读取，测试行为与构建环境解耦。
 func (s *SelfUpdateService) SetEmbeddedWorkerSource(

@@ -1,7 +1,7 @@
 import type { BusinessAction } from './business'
 
-/**
- * 业务动作的纯函数判定（FR-121，见 ADR-029）。抽成独立模块便于单测，
+/** 
+ * 业务动作的纯函数判定（见 ADR-029）。抽成独立模块便于单测，
  * 且不污染 BusinessSegment 组件文件的 fast-refresh（react-refresh/only-export-components）。
  */
 
@@ -10,8 +10,8 @@ export function isWriteAction(action: BusinessAction): boolean {
   return action.readOnly !== true
 }
 
-/**
- * 单个入参的智能取值（FR-119）。
+/** 
+ * 单个入参的智能取值。
  *
  * 泛化业务台对每个 arg 只有一个文本框，但契约里既有**标量**入参（探针侧按字符串取用），
  * 也有**对象 / 数组**入参（契约为嵌套对象，探针侧 `req.getObject(...)` 需真对象）。
@@ -33,8 +33,8 @@ export function coerceBusinessArg(raw: string): unknown {
   return raw
 }
 
-/**
- * 把泛化业务台的文本入参构造成下发 payload 的 JSON 字符串（FR-119）。
+/** 
+ * 把泛化业务台的文本入参构造成下发 payload 的 JSON 字符串。
  * 逐个入参走 {@link coerceBusinessArg}：对象/数组入参还原为真嵌套结构，标量保持字符串。
  */
 export function buildBusinessPayload(args: Record<string, string>): string {

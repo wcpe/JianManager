@@ -22,7 +22,7 @@ async function downloadFromMenu(page: Page, label: string, name: string) {
 }
 
 /**
- * FR-150 日志中心增强 · 单机（Playwright + mock 模式）验收。
+ * 日志中心增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：实时跟随、时间范围、级别过滤、搜索、导出（范围/格式）、分页。
  * （级别配色/时间预设/导出范围/虚拟窗口逻辑由 logs-filters.test.ts 单测覆盖）
  * 本批证据仅落项目根 .tmp/vl-six-fix-31cf5b3d/panel-*。
@@ -39,7 +39,7 @@ async function downloadFromMenu(page: Page, label: string, name: string) {
 
 /** 默认时间窗跨度：15 分钟（与 LogsPage 的 `useState<TimeRangePreset>('15m')` 对齐）。 */
 const DEFAULT_WINDOW_MS = 15 * 60 * 1000
-/**
+/** 
  * 上界与挂钟的容差（NEW-4，2026-10-12 收紧）。
  *
  * 语义是「仅覆盖挂载/网络往返」——实际实现里上界锚点就是 `Date.now()`，偏差应在毫秒级。
@@ -66,7 +66,7 @@ function lastParams(seen: string[], path: string): URLSearchParams | null {
   return last ? new URL(last).searchParams : null
 }
 
-test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页', async ({ page }) => {
+test('日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页', async ({ page }) => {
   const seen = watchAPIRequests(page)
   await login(page)
   await page.goto('/logs')

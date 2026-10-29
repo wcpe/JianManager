@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 客户端运行态契约（FR-265）已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+/** 
+ * 客户端运行态契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { ClientRuntimeState, ClientRuntimeSummary, RuntimeVersionCount, RuntimeStringCount, RuntimeLagCount, RuntimeUpdateSeriesPoint, ClientRuntimeOverview } from '@/lib/client-dist/client-runtime-contracts'
 import type { ClientRuntimeOverview } from '@/lib/client-dist/client-runtime-contracts'

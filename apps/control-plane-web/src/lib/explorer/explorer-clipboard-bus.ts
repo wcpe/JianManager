@@ -1,5 +1,5 @@
-/**
- * 资源管理器跨窗剪贴板 / 拖放总线（FR-377，ADR-078）。
+/** 
+ * 资源管理器跨窗剪贴板 / 拖放总线（ADR-078）。
  * 实例级共享；同页 EventTarget 订阅 + BroadcastChannel 跨标签；sessionStorage 冷启动镜像。
  */
 
@@ -220,7 +220,7 @@ export function getBusClipboard(instanceId: number): BusClipboard | null {
   return null
 }
 
-/** 转为 FR-070 Clipboard 形状（无元数据）。 */
+/** 转为Clipboard 形状（无元数据）。 */
 export function toClipboard(bus: BusClipboard | null): Clipboard | null {
   if (!bus || bus.entries.length === 0) return null
   return { mode: bus.mode, entries: bus.entries }

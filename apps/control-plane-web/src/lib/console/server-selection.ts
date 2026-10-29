@@ -1,5 +1,5 @@
-/**
- * 服务器选择器的共享类型与「最近 / 收藏」store（FR-240 / FR-293）。
+/** 
+ * 服务器选择器的共享类型与「最近 / 收藏」store。
  *
  * 双侧共用：选择器视图与侧栏常驻列都读「最近/收藏」的条目结构，并共用同一份
  * localStorage 外部 store（`useSyncExternalStore` 订阅，跨组件子树互通）。
@@ -7,13 +7,13 @@
  */
 import { useSyncExternalStore } from 'react'
 
-/** 「最近打开」localStorage 键（沿用 FR-240 服务器选择器原键，FR-293 互通前提）。 */
+/** 「最近打开」localStorage 键（沿用服务器选择器原键互通前提）。 */
 export const RECENT_KEY = 'server-selector.recent'
-/** 「收藏」localStorage 键（沿用 FR-240 服务器选择器原键）。 */
+/** 「收藏」localStorage 键（沿用服务器选择器原键）。 */
 export const FAVORITES_KEY = 'server-selector.favorites'
-/** 最近打开 LRU 容量（FR-293：≤8 条）。 */
+/** 最近打开 LRU 容量（：≤8 条）。 */
 export const RECENT_LIMIT = 8
-/** 收藏容量上限（沿用 FR-240 选择器原值）。 */
+/** 收藏容量上限（沿用选择器原值）。 */
 export const FAVORITES_LIMIT = 32
 
 /** 「最近打开 / 收藏」里存的一条实例（轻量快照，不随实例变更实时更新）。 */
@@ -44,7 +44,7 @@ export interface HoverPrefetcher {
   cancel: () => void
 }
 
-/*
+/* 
  * 收藏/最近的共享外部 store。
  * localStorage 写入不会触发 React 重渲，而选择器弹窗与侧栏常驻列分属两棵组件子树，
  * 故用模块级订阅 + useSyncExternalStore 做轻量互通：任一处写入即广播给所有订阅组件。
@@ -132,7 +132,7 @@ export function recordRecentServer(instance: StorableInstance): void {
   writeStored(RECENT_KEY, upsertStored(getRecentServers(), toStored(instance), RECENT_LIMIT))
 }
 
-/**
+/** 
  * 从「最近打开」与「收藏」双列剔除指定实例（BUG 修复：实例删除后残留死链）。
  * 删除实例时联动调用（useDeleteInstance），侧栏 per-id 状态查询确认 404 时也调用对账。
  * 幂等：两列都不含该 id 时是空操作（writeStored 内容未变不落盘不广播，订阅方不空转）。

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// Reporter 把启动阶段进度上报给 CP（FR-486 范围②，方案 A）。
+// Reporter 把启动阶段进度上报给 CP（范围②，方案 A）。
 //
 // ## 设计约束（每条都是为了「观测不拖累启动」）
 //
@@ -135,7 +135,7 @@ func (r *Reporter) ensureClient() (workerpb.WorkerServiceClient, error) {
 	return r.client, nil
 }
 
-// SetIdentity 在注册成功后切换到真实节点身份（FR-486）。
+// SetIdentity 在注册成功后切换到真实节点身份。
 //
 // 为什么必须切：enrollment token 是一次性凭据，Register 成功时已被 CP 消费。
 // 之后若仍拿它上报，CP 的只读校验必然失败（token 已 used），表现为

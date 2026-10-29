@@ -1,8 +1,8 @@
 import { createContext, useContext } from 'react'
 import type { useAssistantChat } from '@/components/views/assistant/useAssistantChat'
 
-/**
- * 助手会话状态的**外壳级单例**（FR-519 §3「外壳级单一 manager」/ FR-520 §8）。
+/** 
+ * 助手会话状态的**外壳级单例**（§3「外壳级单一 manager」§8）。
  *
  * ## 为什么必须在外壳层只调一次
  *

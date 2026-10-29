@@ -29,7 +29,7 @@ function dirRow(path: string): HTMLElement {
   return row
 }
 
-describe('FileExplorer 多级目录一次建（FR-350）', () => {
+describe('FileExplorer 多级目录一次建', () => {
   it('就地重命名输入 a/b/c 拆层级逐级建目录', async () => {
     renderWithProviders(<FileExplorer files={manifestFiles('readme.txt')} />)
 
@@ -137,7 +137,7 @@ describe('FileExplorer 多级目录一次建（FR-350）', () => {
   })
 })
 
-describe('FileExplorer 右键定点上传（FR-350）', () => {
+describe('FileExplorer 右键定点上传', () => {
   it('提供 onUploadToDir 时目录右键菜单出现上传两项', async () => {
     renderWithProviders(
       <FileExplorer files={manifestFiles('mods/a.jar')} onUploadToDir={vi.fn()} />,

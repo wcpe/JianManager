@@ -12,11 +12,11 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// MetricQuotaSource 是 QuotaEnforcer 的运行期用量来源（FR-467 §2.1）。
+// MetricQuotaSource 是 QuotaEnforcer 的运行期用量来源（§2.1）。
 //
-// CPU / RSS 消费既有心跳采集（FR-170 ProcessMetricSnapshot：Worker 随心跳上报的
+// CPU / RSS 消费既有心跳采集（ProcessMetricSnapshot：Worker 随心跳上报的
 // 进程树 TOPN 样本），不新开采集通道；磁盘走按需的 GetInstanceResourceSnapshot
-// （FR-399 通道，FR-467 起响应新增 WorkDirBytes）。
+// （通道起响应新增 WorkDirBytes）。
 type MetricQuotaSource struct {
 	db      *gorm.DB
 	metrics *MetricService
@@ -91,7 +91,7 @@ func (s *MetricQuotaSource) LatestProcessSample(instanceUUID string, since time.
 	return &quotaSample{CPUPercent: agg.CPU, RSSBytes: int64(agg.RSS)}, nil
 }
 
-// InstanceResourceUsage 取实例**全进程树**的 RSS / CPU 与工作目录占用（FR-467 M-2 修复）。
+// InstanceResourceUsage 取实例**全进程树**的 RSS / CPU 与工作目录占用（M-2 修复）。
 //
 // 为什么不复用心跳里的 LatestProcessSample 作为内存判据：心跳的进程样本被裁为
 // 「每实例最多 10 个进程、按 CPU 排序」（worker/heartbeat/process_metrics.go）。
@@ -100,7 +100,7 @@ func (s *MetricQuotaSource) LatestProcessSample(instanceUUID string, since time.
 //     10 条截断会把主进程（RSS 最大者）挤出样本，SUM 出来的 RSS 远低于真实占用；
 //   - 误停：反过来在 CPU 全落在主进程时又恰好准确，行为在两种形态间摇摆。
 //
-// GetInstanceResourceSnapshot（FR-399 通道）在 Worker 侧遍历**完整**进程树后求和，
+// GetInstanceResourceSnapshot（通道）在 Worker 侧遍历**完整**进程树后求和，
 // 不受 TOPN 截断影响，是本维度唯一可靠的来源。
 //
 // 一次 RPC 同时取回 RSS/CPU/磁盘（s-5）：原先每实例要发两次按需 RPC（进程 + 磁盘），
@@ -159,7 +159,7 @@ func (s *MetricQuotaSource) InstanceResourceUsage(ctx context.Context, instanceI
 	return sample, resp.RssAvailable || resp.CpuAvailable || resp.WorkDirAvailable, nil
 }
 
-// InstanceWorkDirBytes 只取实例工作目录占用（FR-467 磁盘维度）。
+// InstanceWorkDirBytes 只取实例工作目录占用（磁盘维度）。
 //
 // 与 InstanceResourceUsage 并存的原因：配额视图（Status）只需要磁盘一项，
 // 不必为它多读一次进程树；巡检主路径则用合并版 InstanceResourceUsage 省一次 RPC。

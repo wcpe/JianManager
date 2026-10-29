@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import { TasksMenu } from '@/components/views/console/TasksMenu'
 import type { Task } from '@/lib/tasks/task-status'
 
-/**
- * FR-327 页眉任务下拉 · 受控视图测（ADR-103 c 范式）。
+/** 
+ *页眉任务下拉 · 受控视图测（ADR-103 c 范式）。
  *
  * 应用侧 `ConsoleHeader.tasksMenu.dom.test.tsx` 走 mock 假后端验联动；
  * 这里补的是**入口形态与上报契约**：活跃任务时的计数/平均进度、空闲态、
@@ -63,7 +63,7 @@ function renderMenu(props: Partial<Parameters<typeof TasksMenu>[0]> = {}) {
   return merged
 }
 
-describe('TasksMenu（FR-327 页眉任务下拉）', () => {
+describe('TasksMenu（页眉任务下拉）', () => {
   it('有活跃任务时入口显示数量与平均进度；点条目带 taskId 深链上报。', async () => {
     const user = userEvent.setup()
     const props = renderMenu({

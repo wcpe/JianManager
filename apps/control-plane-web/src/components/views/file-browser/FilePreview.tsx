@@ -18,10 +18,10 @@ interface FilePreviewProps {
   theme: 'light' | 'dark'
 }
 
-/**
- * 共享文件浏览器的只读内容预览（FR-213）。
+/** 
+ * 共享文件浏览器的只读内容预览。
  *
- * 复用 FR-070 `CodeEditor`（只读 + 按文件名多格式高亮：yaml/json/properties/toml/...）渲染文本；
+ * 复用`CodeEditor`（只读 + 按文件名多格式高亮：yaml/json/properties/toml/...）渲染文本；
  * 二进制 / 超大 / 错误三类**降级为占位**（不渲染编辑器），且降级态保留下载入口——
  * 「不可预览必可下载」。降级由 {@link PreviewContent.kind} 显式驱动，本组件不自行判定。
  */

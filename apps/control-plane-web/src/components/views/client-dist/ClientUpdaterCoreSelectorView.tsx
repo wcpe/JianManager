@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ClientUpdaterCoreSelectorView：频道工作台「Core 版本」Tab 的 updater-core 版本选择器受控视图，
  *       版本列表由容器取数注入，切换/上传写请求与 toast 由容器负责。
  * @input views/DangerConfirm（切换二次确认；角色门禁由其自行读登录态判定）、Badge/Button/Table/Dialog 原语、
@@ -7,7 +7,7 @@
  *         ClientUpdaterCoreUploadPayload、ClientUpdaterCoreUploadOutcome）
  * @sync apps/control-plane-web/src/components/ClientUpdaterCoreSelector.tsx（容器）、
  *       apps/control-plane-web/src/components/ClientUpdaterCoreSelector.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-259 updater-core 归档版本切换与 hotfix 上传）
+ * @since（组件受控化迁包；原updater-core 归档版本切换与 hotfix 上传）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
-/**
+/** 
  * updater-core 归档版本摘要（容器经 `useUpdaterCoreVersions` 取数注入）。
  * 刻意只声明本视图读到的字段（`coreVersion`/`buildTime` 等展示层不用），与应用侧 API 类型同形结构互通。
  */
@@ -54,7 +54,7 @@ export interface ClientUpdaterCoreUploadPayload {
   select: boolean
 }
 
-/**
+/** 
  * 上传结果回执：`ok=true` 表示已上传成功（请求与成功/失败 toast 均在容器），视图据此清空表单并关窗；
  * `ok=false`（含异常，容器已提示）时视图保留表单与弹窗，可原样重试。
  */
@@ -62,7 +62,7 @@ export interface ClientUpdaterCoreUploadOutcome {
   ok: boolean
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 版本列表与加载态：`versions` / `loading` 由容器取数注入（`versions` 缺省/空数组渲染空态）；
  * - 切换：行内「选定」只把目标 sha256 记进本视图的确认弹窗（弹窗开合属 UI 状态），确认后经 `onSelect`
@@ -86,8 +86,8 @@ export interface ClientUpdaterCoreSelectorViewProps {
   onUpload: (payload: ClientUpdaterCoreUploadPayload) => Promise<ClientUpdaterCoreUploadOutcome>
 }
 
-/**
- * updater-core 版本选择器（FR-259）。频道工作台「Core 版本」tab：
+/** 
+ * updater-core 版本选择器。频道工作台「Core 版本」tab：
  * 列出所有归档 core 版本，当前选定版本高亮，一键切换实现回滚。
  * 切换后提示"客户端下次启动生效"。
  */
@@ -239,7 +239,7 @@ export function ClientUpdaterCoreSelectorView({
   )
 }
 
-/**
+/** 
  * 上传 updater-core 弹窗：开合与表单草稿（file / version / select）留本视图，
  * 上传请求与 toast 由容器承担——回执 `ok=true` 才清空表单并关窗，失败（容器已提示）保留表单可原样重试。
  */

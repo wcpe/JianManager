@@ -106,7 +106,7 @@ func (s *Server) prepareDecompileTarget(absPath, relPath, entry string) (target,
 			return "", "", nil, fmt.Errorf("仅支持反编译 .class 条目: %s", entry)
 		}
 		// 单条目反编译：不按宿主 jar 大小判限（server.jar 等核心 jar 常达数十 MB，远超上限，
-		// 但其中单个 class 通常仅几十 KB）。改由 extractClassFromJar 按该 class 条目解压后大小判限（FR-075）。
+		// 但其中单个 class 通常仅几十 KB）。改由 extractClassFromJar 按该 class 条目解压后大小判限。
 		tmp, terr := extractClassFromJar(absPath, entry)
 		if terr != nil {
 			return "", "", nil, terr
@@ -119,7 +119,7 @@ func (s *Server) prepareDecompileTarget(absPath, relPath, entry string) (target,
 }
 
 // extractClassFromJar 从 jar 中抽出某 .class 条目到临时 .class 文件，返回临时文件路径。
-// 限流按该 class 条目解压后大小判定（而非宿主 jar 大小，FR-075）：条目超上限即拒绝，
+// 限流按该 class 条目解压后大小判定（而非宿主 jar 大小）：条目超上限即拒绝，
 // 不静默截断——截断出的残缺 class 无法反编译，只会得到含糊错误。
 func extractClassFromJar(jarPath, entry string) (string, error) {
 	zr, err := zip.OpenReader(jarPath)

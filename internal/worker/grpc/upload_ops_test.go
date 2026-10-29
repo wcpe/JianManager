@@ -218,7 +218,7 @@ func TestUploadFile_ZeroFrameProbe(t *testing.T) {
 }
 
 // TestUploadFile_65MB_DirectDial 回归主证：65MB 上传经直拨（含 64MiB 单消息上限的生产
-// ServerOptions）成功——WriteFile unary 在同场景被 ResourceExhausted 拒收（FR-304 复现）。
+// ServerOptions）成功——WriteFile unary 在同场景被 ResourceExhausted 拒收（复现）。
 func TestUploadFile_65MB_DirectDial(t *testing.T) {
 	client, uuid, workDir := startUploadTestServer(t)
 
@@ -236,7 +236,7 @@ func TestUploadFile_65MB_DirectDial(t *testing.T) {
 	requireNoUploadTemp(t, workDir)
 }
 
-// TestUploadFile_65MB_ReverseTunnel 回归主证：同 65MB 经反向隧道（FR-281 生产构型）成功，
+// TestUploadFile_65MB_ReverseTunnel 回归主证：同 65MB 经反向隧道（生产构型）成功，
 // 且与直拨行为一致（此前 WriteFile 在隧道下无上限整块缓冲，双模式行为不一致）。
 func TestUploadFile_65MB_ReverseTunnel(t *testing.T) {
 	handler := grpctunnel.NewTunnelServiceHandler(grpctunnel.TunnelServiceHandlerOptions{})

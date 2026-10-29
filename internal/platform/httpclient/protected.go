@@ -1,4 +1,4 @@
-// Package httpclient 的受保护出站子模块（FR-514，见 ADR-105）。
+// Package httpclient 的受保护出站子模块（见 ADR-105）。
 //
 // 为什么需要单独一套而不复用 New/NewProvider：那些工厂解决的是「代理怎么配」，
 // 默认信任目标地址（下载 JDK、拉 GitHub Releases 都是可信来源）。而模型供应商与
@@ -30,7 +30,7 @@ import (
 	"time"
 )
 
-// ErrProxyUnsupported 出站目标需要经代理但该模式无法固定目标 IP（FR-514）。
+// ErrProxyUnsupported 出站目标需要经代理但该模式无法固定目标 IP。
 //
 // 这是有意的取舍而非缺陷：无法保证拨号目标等于已校验 IP 时，宁可让管理员为
 // 该域名补 NO_PROXY / 改直连，也不静默绕过代理或绕过准入校验。
@@ -39,7 +39,7 @@ var ErrProxyUnsupported = errors.New("受保护出站不支持经代理访问（
 // ErrBlockedTarget 目标地址落在禁止范围（私网 / 回环 / 链路本地 / 云元数据 / 非 HTTP-S）。
 var ErrBlockedTarget = errors.New("目标地址被出站准入拒绝")
 
-// GuardOptions 受保护出站的准入策略（FR-514）。
+// GuardOptions 受保护出站的准入策略。
 //
 // 默认值刻意从严：不填 AllowPrivate 就一个内网地址都访问不了。管理员要接自托管的
 // 内网模型网关或 MCP 服务时，需显式给出 CIDR——放行粒度是网络段而不是「允许内网」
@@ -62,7 +62,7 @@ type GuardOptions struct {
 	// 经环境变量代理出站。
 	NoProxy string
 
-	// AllowedOrigins 精确 origin + CIDR 的绑定放行（FR-517 §3 前置任务①）。
+	// AllowedOrigins 精确 origin + CIDR 的绑定放行（§3 前置任务①）。
 	//
 	// 为什么不能只用 AllowPrivate：`AllowPrivate` 是「整段私网都放行」，
 	// 而外部 MCP 连接要的是「只有这一个 origin（scheme+host+port）可以走，
@@ -70,7 +70,7 @@ type GuardOptions struct {
 	// 同网段的其它服务（数据库、内部面板）就一并可达了。
 	AllowedOrigins []AllowedOrigin
 
-	// ── 协议预算（FR-517 §3 前置任务②）──
+	// ── 协议预算（§3 前置任务②）──
 	//
 	// 都是 0 表示不额外限制（沿用 Timeout 的整体超时）。外部 MCP 是**不可信上游**，
 	// 一个不换行的响应或永不结束的 SSE 流会把连接占死，故这些预算必须可配。
@@ -86,7 +86,7 @@ type GuardOptions struct {
 	// MaxEventLineBytes 单行事件上限（防「一个不换行的巨大 data 行」吃满内存）。
 	MaxEventLineBytes int
 
-	// ── TLS 基线（FR-517 §5.2）──
+	// ── TLS 基线（§5.2）──
 	//
 	// **刻意不提供 InsecureSkipVerify 开关**：受保护出站的目标是「把业务数据与
 	// 供应商凭据送出公网」，关掉证书校验等于把中间人攻击变成默认可用配置。
@@ -99,7 +99,7 @@ type GuardOptions struct {
 	TLSRootCAs *x509.CertPool
 }
 
-// AllowedOrigin 一条精确 origin 放行规则（FR-517）。
+// AllowedOrigin 一条精确 origin 放行规则。
 //
 // 语义：「scheme://host:port 这个目标可以访问，但它解析出的 IP 必须命中 CIDRs 之一」。
 // 两条同时满足才放行——只绑 origin 不校验 IP 挡不住 DNS rebinding，
@@ -189,7 +189,7 @@ func (g *Guard) Client() *http.Client {
 	return g.clientWithProxy(nil)
 }
 
-// TLSConnectionState 报告一次请求实际协商出的 TLS 参数（FR-517 §5.2 验证面）。
+// TLSConnectionState 报告一次请求实际协商出的 TLS 参数（§5.2 验证面）。
 //
 // 为什么需要它：`MinVersion` 只约束「协商的下限」，证明「这条链路确实走了
 // TLS1.2+ 且确实协商到 HTTP/2」需要**观察到实际结果**，而不是读配置自证。
@@ -213,7 +213,7 @@ func (g *Guard) TLSConnectionState(resp *http.Response) TLSState {
 	}
 }
 
-// TLSState 一次连接实际协商出的 TLS 参数（FR-517）。
+// TLSState 一次连接实际协商出的 TLS 参数。
 type TLSState struct {
 	// Enabled 该连接是否使用 TLS。
 	Enabled bool `json:"enabled"`
@@ -249,7 +249,7 @@ func tlsVersionName(v uint16) string {
 	}
 }
 
-// ClientWithProxyEnv 返回「跟随进程环境代理」的受保护客户端（FR-539 的 `env` 模式）。
+// ClientWithProxyEnv 返回「跟随进程环境代理」的受保护客户端（的 `env` 模式）。
 //
 // 与 Client() 的唯一差异是 Transport.Proxy = http.ProxyFromEnvironment。
 // **准入判定完全不变**：仍然只允许 https、仍然拦截未放行的私网目标——
@@ -263,7 +263,7 @@ func (g *Guard) ClientWithProxyEnv() *http.Client {
 	return g.clientWithProxy(http.ProxyFromEnvironment)
 }
 
-// ClientWithProxy 返回经固定代理出站的受保护客户端（FR-539 的 `custom` 模式）。
+// ClientWithProxy 返回经固定代理出站的受保护客户端（的 `custom` 模式）。
 //
 // 代理只决定「连到哪里」，不放松准入；代理地址本身同样受 https/私网策略约束
 // （在配置阶段由 ValidateProxyURL 先挡一道）。
@@ -287,7 +287,7 @@ func (g *Guard) clientWithProxy(proxyFn func(*http.Request) (*url.URL, error)) *
 		MaxIdleConns:        32,
 		IdleConnTimeout:     60 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
-		// TLS 基线显式固定（FR-517 §5.2）：不显式给 MinVersion 就等于
+		// TLS 基线显式固定（§5.2）：不显式给 MinVersion 就等于
 		// 把「最低可接受版本」交给 Go 的默认值，而默认值会随版本演进。
 		// 受保护出站送的是供应商凭据与业务数据，这条基线不该由编译器版本决定。
 		// 注意：这里**不提供** InsecureSkipVerify 入口（见 GuardOptions 说明）。
@@ -295,7 +295,7 @@ func (g *Guard) clientWithProxy(proxyFn func(*http.Request) (*url.URL, error)) *
 			MinVersion: tlsMinVersion(g.opts.TLSMinVersion),
 			RootCAs:    g.opts.TLSRootCAs,
 		},
-		// FR-517 §5.2：等响应头的独立上限。慢速上游可以让连接一直挂在「等头部」，
+		// §5.2：等响应头的独立上限。慢速上游可以让连接一直挂在「等头部」，
 		// 整体 Timeout 很长时这会把连接池耗尽。
 		ResponseHeaderTimeout: g.opts.ResponseHeaderTimeout,
 	}
@@ -322,7 +322,7 @@ func (g *Guard) clientWithProxy(proxyFn func(*http.Request) (*url.URL, error)) *
 	return client
 }
 
-// ValidateBaseURL 在配置阶段先挡一道非法 URL（FR-514 spec §4）。
+// ValidateBaseURL 在配置阶段先挡一道非法 URL（spec §4）。
 //
 // 这里只做**静态**校验（协议、userinfo、query、fragment）；域名解析与 IP 准入在
 // 实际拨号时做——配置时能解析不代表运行时可解析（DNS 会变），反之亦然。
@@ -397,7 +397,7 @@ func (g *Guard) proxyAppliesTo(host string) bool {
 //
 // 有匹配的 AllowedOrigin 时，只认它自己的 CIDR——即使 AllowPrivate 放行了更宽的网段，
 // 也不会因此让这个 origin 走到规则的地址上。这是「精确 origin + CIDR」与
-// 「整段私网开关」的关键区别（FR-517 §3 前置任务①）。
+// 「整段私网开关」的关键区别（§3 前置任务①）。
 func (g *Guard) resolveAllowedForOrigin(ctx context.Context, host, port string) ([]netip.Addr, error) {
 	origin, ok := g.matchAllowedOrigin(host, port)
 	if !ok {

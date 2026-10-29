@@ -1,19 +1,19 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-211 E2E：实例生命周期跨页流（mock 模式整站）。
- * 登录 → SPA 导航进实例页 → 看到 FR-201 种子实例 → 真 UI 启/停一个实例、断言状态联动；
- * 另含 FR-028 创建实例走通向导页后列表出现。
+/** 
+ *E2E：实例生命周期跨页流（mock 模式整站）。
+ * 登录 → SPA 导航进实例页 → 看到种子实例 → 真 UI 启/停一个实例、断言状态联动；
+ * 另含创建实例走通向导页后列表出现。
  *
  * mock 状态机是直达的（POST …/start→RUNNING、…/stop→STOPPED，无 STARTING/STOPPING 过渡，
  * 见 src/mocks/handlers/domains/instance.ts），点击后 ['instances'] query 失效重取即翻牌，
  * 无需等过渡轮询。用 SPA 点侧栏链接进页（保留会话内存库联动），不 page.goto 以免重置内存库。
  */
 
-/**
+/** 
  * 工作台卡：每张卡是含实例名按钮的卡片容器（带 bg-card）。
- * FR-452 起 `/instances` 默认走分组树表，故 gotoInstances 会显式切到卡片视图再断言。
+ *起 `/instances` 默认走分组树表，故 gotoInstances 会显式切到卡片视图再断言。
  */
 function instanceCard(page: Page, name: string): Locator {
   return page.locator('div.bg-card').filter({
@@ -26,7 +26,7 @@ function cardStatus(card: Locator): Locator {
   return card.locator('[data-slot="status-badge"]')
 }
 
-/**
+/** 
  * 登录后经侧栏「全部服务器」入口 SPA 进入实例管理页（保留会话内状态联动）。
  *
  * 导航重构后的两处变化：
@@ -36,7 +36,7 @@ function cardStatus(card: Locator): Locator {
  *   （`getByRole('button', { name: '服务器' })` 在顶栏会解析到 5 个元素——工作区切换、
  *   搜索、刷新等都含该词——属 strict mode 冲突，不能再用。）
  *
- * FR-452 起默认视图是分组树表（view=list），本 spec 断言工作台卡，故进页后显式切到卡片视图。
+ *起默认视图是分组树表（view=list），本 spec 断言工作台卡，故进页后显式切到卡片视图。
  */
 async function gotoInstances(page: Page): Promise<void> {
   await page.getByRole('link', { name: /^全部服务器/ }).click()
@@ -49,12 +49,12 @@ async function gotoInstances(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: '卡片视图' })).toHaveAttribute('aria-pressed', 'true')
 }
 
-test.describe('实例生命周期（mock 模式，FR-211）', () => {
+test.describe('实例生命周期（mock 模式）', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
   })
 
-  test('进实例页 → 看到 FR-201 种子实例', async ({ page }) => {
+  test('进实例页 → 看到种子实例', async ({ page }) => {
     await gotoInstances(page)
     // 卡片视图是**单一虚拟窗口**：只挂载首屏（改前按分组分段，每组各挂一个窗口，
     // 于是「每组第一屏」都在 DOM 里）。分组后 CRASHED 的 creative-1 属 region r2，

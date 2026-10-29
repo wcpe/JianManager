@@ -5,8 +5,8 @@ import { Button } from '@jianmanager/ui'
 import { InstancePicker } from '@/components/instances/InstancePicker'
 import type { PageContextEntityRef } from '@/lib/assistant/page-context'
 
-/**
- * 「添加实体」入口（FR-518 §5.3）。
+/** 
+ * 「添加实体」入口（§5.3）。
  *
  * 芯片本身的渲染在 `AssistantChatPanel` 里（与输入框同一行）；这里只负责
  * **手动搜索并追加一个实例实体**。拆开而不是把芯片也搬过来，是为了避免同一份

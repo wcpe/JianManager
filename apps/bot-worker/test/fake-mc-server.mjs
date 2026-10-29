@@ -1,4 +1,4 @@
-// Deterministic fake Minecraft server for JianManager FR-043 end-to-end tests.
+//  Deterministic fake Minecraft server for JianManagerend-to-end tests.
 //
 // Java 8 is the only JDK on the e2e host, so a real Paper 1.21 server can't run.
 // This speaks just enough of the protocol (offline, a simple-login version) for a

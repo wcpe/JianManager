@@ -27,10 +27,10 @@ const (
 	obsEventDetailRetention = 14 * 24 * time.Hour
 )
 
-// ClientDistObservabilityService 客户端分发观测数据底座（FR-217，见 ADR-049）。
+// ClientDistObservabilityService 客户端分发观测数据底座（见 ADR-049）。
 //
-// 离线把 client_dist_event（FR-093）+ client_telemetry（FR-094）卷积为按「频道×小时桶」的时序快照
-// client_dist_snapshot，供观测·分发监控页（FR-218）与频道统计 Tab 扩维（FR-219）消费。聚合落 CP
+// 离线把 client_dist_event+ client_telemetry卷积为按「频道×小时桶」的时序快照
+// client_dist_snapshot，供观测·分发监控页与频道统计 Tab 扩维消费。聚合落 CP
 // （架构不变量：Worker 不直连 DB），复用 scheduler 式后台 goroutine。幂等：按 (channel,bucket) upsert 覆盖。
 type ClientDistObservabilityService struct {
 	db   *gorm.DB

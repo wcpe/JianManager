@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// AgentToken Agent 专用令牌（FR-384 / FR-395，见 ADR-076/080）。
+// AgentToken Agent 专用令牌（见 ADR-076/080）。
 // 落库只存 SHA-256 哈希；明文仅签发时一次性返回，不可二次读取。
 // 与人类 JWT 分离：scope（实例/节点白名单）+ V1 write_allowlist / V2 capabilities 约束 agent 能力面。
 type AgentToken struct {

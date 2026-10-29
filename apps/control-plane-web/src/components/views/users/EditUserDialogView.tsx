@@ -1,9 +1,9 @@
-/**
+/** 
  * @file EditUserDialogView：编辑用户（角色 + 可选重置密码）的受控视图，更新请求由应用容器负责。
  * @input form-validation、Combobox/Button/Dialog/滚动壳原语、FieldLabel/FieldError、翻译上下文
  * @output EditUserDialogView、EditUserDialogViewProps、EditUserTarget、EditUserValues
  * @sync apps/control-plane-web/src/pages/UsersPage.tsx
- * @since FR-508（组件受控化迁包；原 FR-156，兑现 FR-003）
+ * @since（组件受控化迁包；原兑现）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -38,7 +38,7 @@ export interface EditUserValues {
   password?: string
 }
 
-/**
+/** 
  * 受控边界：初始值经 `user` 注入，更新经 `onSubmit` 上报（失败请抛错，视图取服务端 message 提示），
  * 待提交态由 `submitting` 注入；关闭经 `onClose` 上报。
  */
@@ -53,7 +53,7 @@ export interface EditUserDialogViewProps {
   submitting?: boolean
 }
 
-/** 编辑用户：调整角色 + 可选重置登录密码（FR-156，兑现 FR-003）。 */
+/** 编辑用户：调整角色 + 可选重置登录密码（兑现）。 */
 export function EditUserDialogView({
   user,
   onClose,

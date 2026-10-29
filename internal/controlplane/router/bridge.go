@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BridgeHandler 桥能力接入路由处理器（FR-526）。
+// BridgeHandler 桥能力接入路由处理器。
 //
 // 三条端点，全部是**只读诊断或通道治理**，不碰业务语义（ADR-106）：
 //   - GET  /instances/:id/bridge/status        桥线路健康度（重连/队列/丢弃/在途重载）

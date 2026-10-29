@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// NodeStartupProgress 是 Worker 启动阶段的**临时**进度记录（FR-486 范围②）。
+// NodeStartupProgress 是 Worker 启动阶段的**临时**进度记录（范围②）。
 //
 // ## 为什么单独一张表，而不是给 Node 加列
 //

@@ -29,7 +29,7 @@ func readProcessEnviron(pid int) (string, error) {
 	return string(b), nil
 }
 
-// DefaultVerifyProcessOwnership 以进程侧证据判定 pid 是否确属 instanceUUID 对应的受管进程（FR-455①）。
+// DefaultVerifyProcessOwnership 以进程侧证据判定 pid 是否确属 instanceUUID 对应的受管进程（①）。
 //
 // 处置前置存活复核的核心：任何强杀（killTree）之前都必须先确认这个 PID「确属目标实例」，
 // 否则若 PID 已被 OS 复用给无关进程（机器负载高时真实存在），就会误杀无关进程。
@@ -40,7 +40,7 @@ func readProcessEnviron(pid int) (string, error) {
 //   - cmdline 含实例 UUID（部分部署把 UUID 写进启动参数）；
 //   - cmdline 含实例工作目录绝对路径，或进程 cwd 等于工作目录（Java 常以工作目录为 cwd）；
 //   - expectWrapper 时，进程命令行形如 jianmanager worker 的 `... daemon`，**且**该进程环境
-//     （/proc/<pid>/environ）确携带本实例 UUID（FR-456 F11）。
+//     （/proc/<pid>/environ）确携带本实例 UUID（F11）。
 //
 // F11：wrapper 由 `exec.Command(exe, "daemon")` 启动，实例 UUID 只在 env
 // （daemon.EnvWrapperConfig → JM_DAEMON_WRAPPER_CONFIG JSON）而不在 argv——argv 对**任何**实例
@@ -82,7 +82,7 @@ func DefaultVerifyProcessOwnership(pid int, instanceUUID, workDir string, expect
 	return false
 }
 
-// DefaultVerifyAdoptOwnership 是「自动收养」路径专用的归属复核（FR-497③）。
+// DefaultVerifyAdoptOwnership 是「自动收养」路径专用的归属复核（③）。
 //
 // 为什么不能直接复用 DefaultVerifyProcessOwnership（缺陷修复 2026-11-03）：
 // 那个函数服务于**强杀前**的复核，采「多特征任一命中」的宽口径——那里放过一个真孤儿只是多等一轮，
@@ -155,7 +155,7 @@ func DefaultVerifyAdoptOwnership(pid int, instanceUUID, workDir string, expectWr
 	return false, "uuid_evidence_missing"
 }
 
-// processEnvMatchesInstance 校验 pid 的进程环境是否携带该实例 UUID（FR-456 F11）。
+// processEnvMatchesInstance 校验 pid 的进程环境是否携带该实例 UUID（F11）。
 //
 // wrapper 把实例 UUID 放在 env（JM_DAEMON_WRAPPER_CONFIG JSON 内），argv 不含。读
 // /proc/<pid>/environ 做精确归属确认；instanceUUID 为空（无从比对）或环境读不到一律返回 false

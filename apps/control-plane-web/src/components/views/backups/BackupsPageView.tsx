@@ -1,10 +1,10 @@
-/**
+/** 
  * @file BackupsPageView：备份管理页的受控视图，备份列表取数/轮询、写动作与 toast 由应用容器负责。
  * @input lib/backup（状态归并/依赖计数/大小格式化）、views/config-explorer/ConfigRow（卡片/汇总/切换）、
  *        views/DangerConfirm（恢复与删除二次确认）、Panel/Table/StatusBadge/Button 等原语、翻译上下文
  * @output BackupsPageView、BackupsPageViewProps、BackupsInstancePickerArgs、BackupStorageChoice
  * @sync apps/control-plane-web/src/pages/BackupsPage.tsx、apps/control-plane-web/src/pages/BackupsPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-056 全量/增量备份 + FR-057 远程存储 + FR-151 进度轮询/汇总/链路依赖）
+ * @since（组件受控化迁包；原页全量/增量备份远程存储进度轮询/汇总/链路依赖）
  */
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,7 +29,7 @@ import { BACKUP_COMPLETED, BACKUP_MODE_INCREMENTAL, backupStatusKey, backupStatu
 import type { BackupInfo } from '@/lib/backups/backup'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 
-/**
+/** 
  * 列表视图行高（px，两档）。行盒由行内 style 钉死（「声明值即真实值」）：
  * - 普通行 = 操作按钮 `h-6`(24) + 单元格 `py-1.5`(12) + 行边框 1 ≈ 37 → 取 40 留余量；
  * - 增量行在模式单元格里多一行「基于 #id」（`text-xs` 16 + `gap-1` 4）→ 再加 16 取 56。
@@ -40,7 +40,7 @@ const BACKUP_CHILD_ROW_PX = 56
 /** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
 const FALLBACK_VIEWPORT_PX = 640
 
-/**
+/** 
  * 可选备份存储位置（本视图渲染下拉与解析存储名所需的最小字段集）。
  *
  * 刻意只声明用到的 id/name：容器直接传 `useBackupStorages()` 返回的完整对象也结构兼容，
@@ -52,7 +52,7 @@ export interface BackupStorageChoice {
   name: string
 }
 
-/**
+/** 
  * 实例选择器插槽参数。
  *
  * 选择器本体在包内（`views/instances/InstancePicker`），但「何时发请求、防抖多久、候选窗口多大」
@@ -65,7 +65,7 @@ export interface BackupsInstancePickerArgs {
   onChange: (id: number | null) => void
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 备份列表与加载态、可用存储位置经 props 注入（容器调 `useBackups` / `useBackupStorages`）；
  * - **归容器**的受控状态：`instanceId` 是备份列表与实例详情查询的键（一变即重新取数），
@@ -102,7 +102,7 @@ export interface BackupsPageViewProps {
   restoring?: boolean
   /** 创建备份（`incremental` 区分全量/增量，`storageId` 缺省表示本地）；成败提示归容器。 */
   onCreate: (payload: { incremental: boolean; storageId?: number }) => void
-  /**
+  /** 
    * 恢复已确认的备份。返回的 Promise 用于在请求结束后关窗（与原页一致：成败均关窗），
    * 故容器必须吞掉错误并自行 toast，不得让 Promise 以拒绝收场。
    */
@@ -111,7 +111,7 @@ export interface BackupsPageViewProps {
   onDelete: (backupId: number) => void
 }
 
-/** 备份管理页：全量/增量（FR-056）+ 远程存储（FR-057）+ 进度轮询/汇总/链路依赖（FR-151）。 */
+/** 备份管理页：全量/增量+ 远程存储+ 进度轮询/汇总/链路依赖。 */
 export function BackupsPageView({
   instanceId = null,
   onInstanceChange,
@@ -142,7 +142,7 @@ export function BackupsPageView({
   const restoreDisabledTitle = instanceLive
     ? t('backups.restoreNeedStopped', '实例运行中，请先停止实例再恢复')
     : undefined
-  /**
+  /** 
    * 恢复被禁用的原因提示 id。
    *
    * 禁用按钮**不可聚焦**，故 title 里的原因键盘/读屏用户根本读不到；这里同时给：
@@ -155,7 +155,7 @@ export function BackupsPageView({
   const summary = useMemo(() => summarizeBackups(list), [list])
   const backupById = useMemo(() => new Map(list.map((b) => [b.id, b])), [list])
 
-  /**
+  /** 
    * 父备份 → 直接依赖它的增量子备份数。
    *
    * 【为什么建映射】原先在渲染期逐行调 `countDependents(list, b.id)`（O(n) 扫描），
@@ -172,7 +172,7 @@ export function BackupsPageView({
   }, [list])
   const dependentsOf = (id: number) => dependentCount.get(id) ?? 0
 
-  /**
+  /** 
    * 列表视图虚拟化：备份会随时间累积到千级，而列表视图此前整表进 DOM（连滚动容器都没有）。
    * 行高两档与行盒同源（见常量注释），窗口外的高度由占位行撑开。
    */
@@ -213,7 +213,7 @@ export function BackupsPageView({
     onDelete(id)
   }
 
-  // 删除前算直接依赖此备份的增量数，用于二次确认警告（FR-151）。
+  // 删除前算直接依赖此备份的增量数，用于二次确认警告。
   const dependents = deleteTarget ? dependentsOf(deleteTarget.id) : 0
 
   const modeBadge = (b: BackupInfo) =>
@@ -231,7 +231,7 @@ export function BackupsPageView({
     />
   )
 
-  // 增量行的副信息：存储位置 + 父备份关系（链路可视，FR-151）。
+  // 增量行的副信息：存储位置 + 父备份关系（链路可视）。
   const rowSubtitle = (b: BackupInfo) => {
     const parts = [storageName(b.storageId)]
     if (isIncrementalChild(b)) parts.push(`${t('backups.basedOn', '基于')} ${parentName(b)}`)
@@ -278,7 +278,7 @@ export function BackupsPageView({
 
       {hasInstance && (
         <>
-          {/* 汇总条（FR-151）：总占用 / 份数 / 最近成功；进行中时显轮询提示。 */}
+          {/* 汇总条：总占用 / 份数 / 最近成功；进行中时显轮询提示。 */}
           <div className="flex flex-wrap items-center gap-3">
             <ConfigSummaryChips
               chips={[

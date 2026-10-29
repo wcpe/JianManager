@@ -1,8 +1,8 @@
 import { useClientDistIpAnalysis, useClientDistPlayerAnalysis } from '@/api/clientDistSecurity'
 import { IpAnalysisTabView, PlayerAnalysisTabView } from '@/components/views/client-dist/SecurityAnalysisTabsView'
 
-/**
- * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（FR-430 / ADR-088）。
+/** 
+ * 安全侧「IP 剖析 / 玩家名剖析」两个只读聚合 Tab（ADR-088）。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
  * 展示层已回迁应用侧（`IpAnalysisTabView` / `PlayerAnalysisTabView`），此处只保留取数：

@@ -1,5 +1,5 @@
-/**
- * 焦点环常量（FR-502 阶段 6）：键盘焦点环的唯一出处。
+/** 
+ * 焦点环常量（阶段 6）：键盘焦点环的唯一出处。
  *
  * 背景：Button / Input / Dialog 等交互面各自手写同一串 `focus-visible:*`，改一次要翻遍全库；
  * 更糟的是它们并不同步——有的写 3px + 50% 主色（糊到邻近文字），有的写 2px。此模块把
@@ -7,14 +7,14 @@
  *
  * 与 Astryx `focusOutline` 的对应关系：Astryx 把环放在 `--focus-outline-*` 变量里，
  * 由主题统一改外观；本库的环取语义色 token（ring / destructive），
- * **宽度与不透明度按 FR-176 收敛为细环**——这是既定的可访问性决策，不是随手取值：
+ * **宽度与不透明度按收敛为细环**——这是既定的可访问性决策，不是随手取值：
  * 3px/50% 的环在密集表格与表单里会晕染到相邻文字，故统一为 2px/40%。
  *
  * 约束：本模块只导出类名常量，不导出组件；调用点用 `cn(...)` 与自身类名合并即可。
  */
 
-/**
- * 标准细焦点环（FR-176 收敛值）：2px 主色环 + 40% 底 + 主色边线。
+/** 
+ * 标准细焦点环（收敛值）：2px 主色环 + 40% 底 + 主色边线。
  *
  * 边线与环同时保留是有意的：只描边在浅底上对比不足，只画环在深底上不够醒目，
  * 两者叠加才能同时满足明暗主题（对比度校验见 lib/color-contrast.ts）。
@@ -22,7 +22,7 @@
 export const focusRing =
   'focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40'
 
-/**
+/** 
  * 内嵌焦点环变体：环画在元素边界内侧。
  *
  * 用于「外环会被父层裁掉」的场合——父级 `overflow-hidden`（表格容器、圆角卡片、
@@ -30,7 +30,7 @@ export const focusRing =
  */
 export const focusRingInset = `${focusRing} focus-visible:ring-inset`
 
-/**
+/** 
  * 危险/错误色调焦点环：焦点环取 destructive 色而非主色。
  *
  * 用于销毁性按钮（删除、回滚）：这类控件的边线本来就是红的，若焦点环仍是主色绿，
@@ -40,7 +40,7 @@ export const focusRingInset = `${focusRing} focus-visible:ring-inset`
 export const focusRingDanger =
   'focus-visible:border-destructive focus-visible:ring-2 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40'
 
-/**
+/** 
  * `aria-invalid` 状态描红：无效控件的边线 + 环底取 destructive。
  *
  * 单独成常量是因为它作用的属性不是 `:focus-visible` 而是 `[aria-invalid]`，
@@ -53,7 +53,7 @@ export const invalidFieldState =
 /** 焦点环色调：主色（常规）或危险色（销毁性/无效控件）。 */
 export type FocusRingTone = 'ring' | 'destructive'
 
-/**
+/** 
  * 按色调与内外位置取焦点环类名。
  *
  * 供 `cva` 变体表使用：变体众多时逐个拼字面量容易漏，交给一个函数取。

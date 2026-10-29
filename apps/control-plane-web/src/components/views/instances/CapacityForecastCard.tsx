@@ -27,7 +27,7 @@ function fmtCI(low: number | null, high: number | null): string | null {
   return `${low.toFixed(2)} ~ ${high.toFixed(2)}`
 }
 
-/**
+/** 
  * 容量预测一行。`confidence=insufficient` 时**不渲染任何预测数字**，只显示后端给的原因
  * （「无增长趋势」/「样本不足」/「缺少容量上限」）——避免把「不知道」伪装成「不会耗尽」。
  */
@@ -69,8 +69,8 @@ function ForecastRow({ item }: { item: ForecastResult }) {
   )
 }
 
-/**
- * 容量预测卡片（FR-464）：Theil–Sen 稳健线性外推 + 80% 置信区间，按需查询（60s 刷新）。
+/** 
+ * 容量预测卡片：Theil–Sen 稳健线性外推 + 80% 置信区间，按需查询（60s 刷新）。
  * 只在「有增长且显著」时给出耗尽时间；无增长/样本不足/缺上限一律显式标注，不伪造预测。
  *
  * 受控视图（ADR-103 a 范式）：不取数——预测结果与拉取态由外壳注入。

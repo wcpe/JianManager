@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// NewStreamer 按协议构造流式适配器（FR-514）。
+// NewStreamer 按协议构造流式适配器。
 //
 // client 必须由受保护出站工厂提供（internal/platform/httpclient.Guard），
 // 这里不再自行构造 http.Client——准入与重定向策略只应有一处实现。

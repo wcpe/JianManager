@@ -1,4 +1,4 @@
-// 共享 ESLint flat config（FR-283，见 ADR-064）：React + TypeScript 基线。
+//  共享 ESLint flat config（见 ADR-064）：React + TypeScript 基线。
 // 只承载与仓库无关的通用基线；app 语义规则（如 @/ 路径的 no-restricted-imports
 // 弃用清单）留在各 app 的 eslint.config.js 叠加，避免共享层耦合 app 内部路径。
 import js from '@eslint/js'

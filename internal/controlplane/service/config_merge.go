@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置分层合并（FR-529 §5）。
+// 配置分层合并（§5）。
 //
 // 纯函数实现，不碰 DB 与 gRPC：作用域链由调用方解析后传入，这里只负责
 // 「按 format 合并 + 确定性序列化 + 逐键溯源」。这样合并逻辑可被表驱动单测穷举，

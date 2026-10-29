@@ -8,11 +8,11 @@ import { ALL_PERMISSION_NODE_IDS, DEFAULT_ROLE_NODES, ROLE_MEMBER, ROLE_PLATFORM
 import zh from '@/i18n/zh.json'
 import navSnapshot from './__fixtures_nav-snapshot.json'
 
-/**
- * FR-502 阶段 5 的工作区导航数据层测试。
+/** 
+ *阶段 5 的工作区导航数据层测试。
  * 核心主张只有一条：**换结构不换权限语义**。
  *
- * 【为何用快照而不是继续引用 nav-config.ts（FR-507 阶段 6）】
+ * 【为何用快照而不是继续引用 nav-config.ts（阶段 6）】
  * 阶段 6 删掉了旧六域真源 `nav-config.ts`，但「新层与旧层逐条等价」这个主张必须继续被验证，
  * 否则下次有人改 WORKSPACES时，没有任何东西能拦住他悄悄删掉/改权限。
  * 因此把旧六域当年登记的全部 41 条**冻结成快照** `__fixtures_nav-snapshot.json`：
@@ -41,7 +41,7 @@ function collectEntries(groups: NavGroup[]): CollectedEntry[] {
 
 const OLD_ENTRIES = navSnapshot as unknown as CollectedEntry[]
 const OLD_ENTRY_BY_PATH = new Map(OLD_ENTRIES.map((e) => [e.to, e]))
-/**
+/** 
  * 旧六域**登记**的全部导航目的地：41 条。
  * 数据源已从 `NAV_GROUPS` 改为冻结快照（阶段 6 删了旧真源），条数作为不变量继续断言：
  * 快照少一条就说明它被误改，而快照正是「不得漏掉旧入口」的唯一证据。
@@ -66,7 +66,7 @@ const SUB_ROUTE_PARENT: Record<string, string> = {
   '/bots/sessions/:id': '/bots',
 }
 
-/**
+/** 
  * icon 归一：新层是 lucide 组件引用，快照里存的是 `displayName` 字符串。
  * 两个方向都要处理（字符串直回，组件取 displayName），对比前归一到同一字符串。
  */
@@ -77,7 +77,7 @@ function iconName(icon: CollectedEntry['icon']): string | undefined {
   return c.displayName ?? c.name
 }
 
-/**
+/** 
  * perm 归一：快照是 JSON，`undefined` 会被序列化成 `null`；而新层里「无 perm」是 `undefined`。
  * 两者语义相同（无权限要求），对比前必须归一到同一形态，否则会报假阳性。
  */
@@ -88,7 +88,7 @@ function permOf(entry: CollectedEntry | undefined): string | string[] | undefine
 
 const adminNodes = new Set(ALL_PERMISSION_NODE_IDS)
 
-/**
+/** 
  * 旧六域时代的权限裁剪语义（从快照重算，不依赖已删除的 nav-config.ts）。
  *
  * 这就是当初 `flatNavItems` 的行为：无 perm 入口恒可见；单节点看是否命中；数组是 any-of。
@@ -141,7 +141,7 @@ function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
 
 const ZH_KEYS = flattenKeys(zh)
 
-/**
+/** 
  * 等价性主断言（权限口径）：
  * 1) 旧可见的每条导航目的地，新层必须同样可见（零遗漏）；
  * 2) 新层里属于旧全集的条目集合，必须与旧结果**完全相等**（零越权：不能多给一条）；
@@ -168,7 +168,7 @@ function assertPermissionEquivalence(nodes: Set<string>, admin: boolean, label: 
   }
 }
 
-describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5）', () => {
+describe('workspace-navigation：四工作区 × 组 × 页面（阶段 5）', () => {
   it('工作区顺序、分组 key 与逐条页面归位对齐 CSV', () => {
     expect(WORKSPACES.map((w) => w.key)).toEqual(['ops', 'observability', 'operation', 'platform'])
     expect(WORKSPACES.map((w) => w.labelKey)).toEqual([
@@ -643,7 +643,7 @@ describe('workspace-navigation：四工作区 × 组 × 页面（FR-502 阶段 5
   })
 })
 
-/**
+/** 
  * 【快照生成口径】`__fixtures_nav-snapshot.json` 里的 41 条，是在删除 `nav-config.ts`
  * 之前用下述代码从 `NAV_GROUPS` 原样导出的（每一组、每个 children / sections 叶子均不遗漏）：
  *

@@ -5,8 +5,8 @@ import '@/i18n'
 import FileBrowser from './FileBrowser'
 import type { FileBrowserSource, FileEntry, PreviewContent } from '@/lib/file-browser/file-browser-types'
 
-/**
- * FileBrowser 组件强断言（FR-213）。
+/** 
+ * FileBrowser 组件强断言。
  *
  * 关键：本测试**不接任何后端 / MSW**——只注入一个内存 {@link FileBrowserSource} 假数据源，
  * 借此同时证明「组件与具体后端解耦」（契约即 props）。覆盖：扁平树渲染、点文件→文本预览、
@@ -50,7 +50,7 @@ const CONTENT: Record<string, PreviewContent> = {
   'huge.log': { kind: 'too-large', size: 5_000_000 },
 }
 
-describe('FileBrowser 渲染与预览（注入假数据源，FR-213）', () => {
+describe('FileBrowser 渲染与预览（注入假数据源）', () => {
   it('扁平数据源渲染目录树（目录与文件名都出现）', async () => {
     render(<FileBrowser source={fakeFlatSource(SAMPLE, CONTENT)} />)
     await waitFor(() => expect(screen.getByText('server.properties')).toBeInTheDocument())
@@ -128,7 +128,7 @@ function fakeLazySource(byDir: Record<string, FileEntry[]>): FileBrowserSource {
   }
 }
 
-describe('FileBrowser 懒加载分层（FR-213）', () => {
+describe('FileBrowser 懒加载分层', () => {
   it('根层渲染 + 展开目录拉子层', async () => {
     const user = userEvent.setup()
     const src = fakeLazySource({

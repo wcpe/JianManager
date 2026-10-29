@@ -7,8 +7,8 @@ import { ScrollableDialogBody, scrollableDialogContentClass } from '@jianmanager
 import { useAssistantSkills, useReloadAssistantSkills, type AssistantSkill } from '@/api/assistant'
 import { useState } from 'react'
 
-/**
- * 技能管理面板（FR-541）。
+/** 
+ * 技能管理面板。
  *
  * 技能是「目录 + SKILL.md」的纯文本指令，随仓库发布、也支持在数据根里手工增删。
  * 因此这里做两件必要的事：

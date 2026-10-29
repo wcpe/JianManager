@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// managedResourceFreshWindow 与节点离线检测同为 90 秒，仅约束 FR-400 的受管资源归因。
+// managedResourceFreshWindow 与节点离线检测同为 90 秒，仅约束的受管资源归因。
 const managedResourceFreshWindow = 90 * time.Second
 
 // ResourceFreshness 是受管资源当前值的可用性状态。
@@ -35,13 +35,13 @@ type ResourceAttributionResult struct {
 	Nodes        []ResourceAttributionNode     `json:"nodes"`
 	TopInstances []ResourceAttributionInstance `json:"topInstances"`
 	TopProcesses []ResourceAttributionProcess  `json:"topProcesses"`
-	// HostTopProcesses 是**整机** top-N 进程（FR-513），与 TopProcesses 口径不同：
+	// HostTopProcesses 是**整机** top-N 进程，与 TopProcesses 口径不同：
 	// 前者是整机上按 CPU 排序的前几名（含系统进程、别人的进程），
 	// 后者只覆盖受管实例的进程树。运维判断「机器为什么慢」要看前者。
 	HostTopProcesses []ResourceAttributionHostProcess `json:"hostTopProcesses"`
 }
 
-// ResourceAttributionHostProcess 整机 top-N 进程的一项（FR-513）。
+// ResourceAttributionHostProcess 整机 top-N 进程的一项。
 //
 // 隐私边界：无 cmdline（见 model.HostProcessSnapshot 注释）。
 type ResourceAttributionHostProcess struct {
@@ -68,7 +68,7 @@ type ResourceAttributionNode struct {
 	WorkerProcessCPUPct   *float64                     `json:"workerProcessCpuPct"`
 	BotWorker             ResourceAttributionBotWorker `json:"botWorker"`
 
-	// ---- 主机级观测（FR-513）----
+	// 主机级观测----
 	//
 	// 全部用指针：null 表示该 Worker 未上报（老版本），0 表示读数为 0。
 	// 前端据此渲染 `--` 或具体值（spec §5 验收 2）——把「不知道」画成 0 会误导判断。
@@ -85,10 +85,10 @@ type ResourceAttributionNode struct {
 	Mounts []ResourceAttributionMount `json:"mounts"`
 }
 
-// ResourceAttributionCPUBreakdown CPU 时间构成（FR-513）。
+// ResourceAttributionCPUBreakdown CPU 时间构成。
 //
 // 单位是百分比（0..100）而非 0..1：前端要直接展示，让每个消费方各自 ×100
-// 是重复劳动且容易漏乘。iowait 复用既有字段语义（FR-485 已有时序）。
+// 是重复劳动且容易漏乘。iowait 复用既有字段语义（已有时序）。
 type ResourceAttributionCPUBreakdown struct {
 	User    float64 `json:"user"`
 	Nice    float64 `json:"nice"`
@@ -100,7 +100,7 @@ type ResourceAttributionCPUBreakdown struct {
 	Steal   float64 `json:"steal"`
 }
 
-// ResourceAttributionMount 一个挂载点的磁盘用量（FR-513）。
+// ResourceAttributionMount 一个挂载点的磁盘用量。
 type ResourceAttributionMount struct {
 	Mountpoint string  `json:"mountpoint"`
 	TotalBytes int64   `json:"totalBytes"`
@@ -174,7 +174,7 @@ func (s *MetricService) ResourceAttributionAt(now time.Time, query ResourceAttri
 		return ResourceAttributionResult{}, fmt.Errorf("查询节点资源失败: %w", err)
 	}
 	result := ResourceAttributionResult{Nodes: make([]ResourceAttributionNode, 0, min(limit, len(nodes)))}
-	// FR-513：批量取所有节点的挂载点，避免每节点一次查询（N+1）。
+	// 批量取所有节点的挂载点，避免每节点一次查询（N+1）。
 	// 只取鲜度窗口内的行——过期挂载点展示出来只会误导「这个盘现在还剩多少」。
 	mountsByNode, err := s.freshHostMounts(now.Add(-managedResourceFreshWindow))
 	if err != nil {
@@ -208,7 +208,7 @@ func (s *MetricService) ResourceAttributionAt(now time.Time, query ResourceAttri
 	result.TopInstances = aggregateAttributionInstances(rows, query.Sort, limit)
 	result.TopProcesses = topAttributionProcesses(rows, query.Sort, limit)
 
-	// FR-513：整机 top-N 进程（按 CPU 降序取前 limit）。
+	// 整机 top-N 进程（按 CPU 降序取前 limit）。
 	// 只取鲜度窗口内的行——过期进程快照没有参考价值，展示出来会误导。
 	hostProcs, err := s.freshHostProcesses(now.Add(-managedResourceFreshWindow), limit)
 	if err != nil {
@@ -270,7 +270,7 @@ func attributionNode(node model.Node, status ResourceFreshness) ResourceAttribut
 		Available:                 node.BotAvailable, Reason: node.BotUnavailableReason,
 	}
 
-	// FR-513 主机级观测：直接把 nodes 表里的指针透传。
+	// 主机级观测：直接把 nodes 表里的指针透传。
 	//
 	// 不做任何「为零则置 nil」的兜底——那会把「上报了、读数确实是 0」误判成
 	// 「没上报」，而这两者对运维的含义完全不同（见 model.Node 的注释）。
@@ -292,7 +292,7 @@ func attributionNode(node model.Node, status ResourceFreshness) ResourceAttribut
 	// CPU 构成：七个分量**同时**存在才算完整（它们是同一次窗口计算的产物）。
 	// 只填一半会让前端把缺失分量画成 0，得到一条假的构成条。
 	if node.CPUUser != nil && node.CPUIdle != nil && node.CPUSystem != nil {
-		// iowait 取自时序口径（FR-485 未在 nodes 表建列）；此处留 0，
+		// iowait 取自时序口径（未在 nodes 表建列）；此处留 0，
 		// 由前端按需从既有 iowait 数据源补，避免两处各存一份可能不一致的值。
 		item.CPUBreakdown = &ResourceAttributionCPUBreakdown{
 			User:    float64(*node.CPUUser) * 100,
@@ -390,7 +390,7 @@ func topAttributionProcesses(rows []attributionProcessRow, sortBy string, limit 
 	return items
 }
 
-// freshHostMounts 批量取鲜度窗口内的分挂载点磁盘用量，按节点分组（FR-513）。
+// freshHostMounts 批量取鲜度窗口内的分挂载点磁盘用量，按节点分组。
 //
 // 单次查询后分组，而不是每节点查一次：节点数增长时 N+1 会变成主要开销。
 // 结果按使用率**降序**——悬浮卡只展示前几条，最该被看到的（最满的盘）必须排前面。
@@ -418,7 +418,7 @@ func (s *MetricService) freshHostMounts(cutoff time.Time) (map[string][]Resource
 	return out, nil
 }
 
-// freshHostProcesses 取整机 top-N 进程（FR-513），按 CPU 降序。
+// freshHostProcesses 取整机 top-N 进程，按 CPU 降序。
 //
 // 需要节点名：靠一次 JOIN 取回，而不是给每个进程再查一次节点（N+1）。
 // 节点名缺失时留空，前端会退化成显示 PID——比整条不显示更有用。

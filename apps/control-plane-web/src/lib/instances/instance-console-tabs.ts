@@ -17,8 +17,8 @@ import {
 import type { CardType } from '@/lib/console/workspace-card'
 import type { Capability } from './capabilities'
 
-/**
- * 服务器控制台（FR-269）的页签注册表与深链解析。
+/** 
+ * 服务器控制台的页签注册表与深链解析。
  * 从应用侧 `InstanceConsolePage` 拆出的纯逻辑：常量表 + 三个纯函数，无 React 与取数依赖。
  */
 
@@ -37,9 +37,9 @@ export const TAB_CARD_TYPE: Partial<Record<TabKey, CardType>> = {
   bot: 'bot',
 }
 
-// Tab 全量登记表（FR-445/448）：这是「有哪些 Tab、顺序如何、图标标签是什么」的唯一登记处；
+// Tab 全量登记表（448）：这是「有哪些 Tab、顺序如何、图标标签是什么」的唯一登记处；
 // **实际渲染的可见集合由能力画像 `capabilities` 过滤**（见 useInstanceCapabilities），不再硬编码角色分支。
-// Tab 重组（FR-413）：原「环境变量」并入「文件配置」的一个分段；分隔线按职能分组（运行/配置/观测/运营）。
+// Tab 重组：原「环境变量」并入「文件配置」的一个分段；分隔线按职能分组（运行/配置/观测/运营）。
 export const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'plugins', 'metrics', 'players', 'business', 'bot', 'backup', 'bcTopology', 'process', 'health', 'config']
 
 /** 在该 key 之前插入分组分隔线。 */
@@ -77,8 +77,8 @@ export const TAB_ICON: Record<TabKey, LucideIcon> = {
   config: FileCog,
 }
 
-/**
- * 能力 → Tab 映射（FR-445）：画像 `capabilities` 中的每项**若对应一个 Tab**则落成 Tab。
+/** 
+ * 能力 → Tab 映射：画像 `capabilities` 中的每项**若对应一个 Tab**则落成 Tab。
  * 注意 `files` 能力对应 `resource` Tab（页签名「文件配置」），二者命名不同是历史包袱。
  * 动作级能力（如 `clone`：可克隆，用于行菜单显隐）刻意**不登记**，故为 Partial，
  * 会被 `visibleTabsFor` 过滤掉，不产生幽灵页签。
@@ -108,14 +108,14 @@ export function visibleTabsFor(capabilities: Capability[]): TabKey[] {
 /** 解析深链 `?tab=` 为活跃页签（未知值回退 overview）。 */
 export function readActiveTab(searchParams: URLSearchParams): TabKey {
   const tab = searchParams.get('tab')
-  // 旧深链兼容（FR-413）：`?tab=env` 曾是独立页签，现落到「文件配置」的环境变量分段。
+  // 旧深链兼容：`?tab=env` 曾是独立页签，现落到「文件配置」的环境变量分段。
   if (tab === 'env') return 'resource'
   return TAB_KEYS.includes(tab as TabKey) ? (tab as TabKey) : 'overview'
 }
 
 /** 解析资源页分段（含旧深链兼容）。 */
 export function readResourceSegment(searchParams: URLSearchParams): ResourceSegment {
-  // 旧深链兼容（FR-413）：`?tab=env` 落到「环境变量」分段；`?seg=config` 落到「关键配置」分段（FR-451）。
+  // 旧深链兼容：`?tab=env` 落到「环境变量」分段；`?seg=config` 落到「关键配置」分段。
   if (searchParams.get('tab') === 'env') return 'env'
   const seg = searchParams.get('seg')
   return seg === 'env' || seg === 'config' ? seg : 'files'

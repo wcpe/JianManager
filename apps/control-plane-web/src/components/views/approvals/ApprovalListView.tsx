@@ -6,8 +6,8 @@ import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { approvalStatusVariant, type ApprovalTicketInfo } from '@/api/approvals'
 
-/**
- * 审批中心列表视图（FR-493）。
+/** 
+ * 审批中心列表视图。
  *
  * 决策动作**只对 pending 渲染**：状态机里只有 pending 可被批准/驳回，
  * 给已完成的行留一个必然被后端拒绝的按钮，等于让审批人白点一次。
@@ -181,7 +181,7 @@ function FragmentRow({
   )
 }
 
-/**
+/** 
  * 后端把 evidence 存成 text 列，未填时序列化出的是字符串 `"null"` / `"{}"` 而不是 Go 的 nil。
  * 若只判真假值，`"null"` 是真值，界面就会凭空多出一块写着 `null` 的「申请时快照」——
  * 审批人会以为申请人留了快照却看不到内容。所以这里按**解析后的内容**判断有没有东西可看。

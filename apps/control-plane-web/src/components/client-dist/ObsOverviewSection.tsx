@@ -3,8 +3,8 @@ import { ObsOverviewView } from '@/components/views/client-dist/ObsOverviewView'
 import MachineListPanel from './MachineListPanel'
 import type { ObsWindow } from '@/lib/metrics/obs-window'
 
-/**
- * 分发观测总览区块（FR-426/427/428 mock 集成）：
+/** 
+ * 分发观测总览区块（427/428 mock 集成）：
  * 洞察卡（同环比+口径）→ 拉取/字节趋势 → 更新热力图 → 机器更新排行/钻取。
  * 频道工作台统计 Tab 与分发监控页客户端 Tab 共用；channelId 省略=跨频道总。
  *

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BeaconHandler 是 FR-444「从 Beacon 拉取拓扑」的手动触发端点。
+// BeaconHandler 是「从 Beacon 拉取拓扑」的手动触发端点。
 //
 // 设计要点（ADR-090）：
 //   - **不自动建树**：拉取只由此端点手动触发，避免与人工已建的分组冲突。

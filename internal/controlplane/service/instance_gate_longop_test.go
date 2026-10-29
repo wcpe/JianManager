@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-323 启动闸缺口修复：导入（kind=import，migrate 搬迁）/克隆（kind=clone，目录拷贝）
+// 启动闸缺口修复：导入（kind=import，migrate 搬迁）/克隆（kind=clone，目录拷贝）
 // 任务化后与 provision 一样带 instance_id 关联、在途 statusReason 标「导入中/克隆中」，
 // 但启动闸只滤 kind=provision——搬迁/拷贝在途的实例仍可从单实例与批量入口启动到
 // 半截工作目录。本组测试钉死：import/clone 未终态 → 单启与批量 start/restart 均被拒
@@ -59,7 +59,7 @@ func TestStart_BlockedWhileImportOrCloneInFlight(t *testing.T) {
 	}
 }
 
-// TestRestart_BlockedWhileLongOperationInFlight 验证 FR-331 中心化闸：所有复用
+// TestRestart_BlockedWhileLongOperationInFlight 验证中心化闸：所有复用
 // InstanceService.Restart 的单实例、网络、定时与探针重启入口都必须在状态转换前被拦截。
 func TestRestart_BlockedWhileLongOperationInFlight(t *testing.T) {
 	db, instID := newLongOpGateDB(t, model.TaskKindProvision)

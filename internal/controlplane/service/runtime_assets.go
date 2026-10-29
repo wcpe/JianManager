@@ -10,27 +10,27 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// RuntimeAssetsService 是「运行时与制品全局页」（FR-082）的只读聚合服务。
+// RuntimeAssetsService 是「运行时与制品全局页」的只读聚合服务。
 //
 // 它不引入新的存储或 proto，只跨现有表（nodes / node_jdks / instances / assets）聚合出
 // 「按实例区分的引用关系」与可视化所需的占用/去重/冷热统计：
 //   - JDK 引用关系可由 instances.jdk_id（直接绑定）与 instances.java_major_version（大版本绑定）
-//     真实推导——这是 FR-033 既有的绑定语义；
-//   - 制品（assets）当前不持久化「实例↔制品」连接（FR-045 消费侧引用计数为占位，见 ADR-011），
+//     真实推导——这是既有的绑定语义；
+// 制品（assets）当前不持久化「实例↔制品」连接（消费侧引用计数为占位，见 ADR-011），
 //     故制品区按类型聚合占用/去重/冷热 + 暴露既有 ref_count，引用明细以诚实的「按类型」粒度给出，
 //     不臆造不存在的实例连接。
 //
-// 删除受引用项的拒绝与占用方提示复用 FR-033（JDKService.Delete）/ FR-045（AssetService.Delete），
+// 删除受引用项的拒绝与占用方提示复用（JDKService.Delete）（AssetService.Delete），
 // 本服务只负责「展示」引用关系，不重复实现删除逻辑。
 type RuntimeAssetsService struct {
 	db *gorm.DB
-	// sync 单节点库存强制同步器（FR-301 手动刷新）。main 装配阶段经 SetJDKSync 注入
+	// sync 单节点库存强制同步器（手动刷新）。main 装配阶段经 SetJDKSync 注入
 	// JDKService；未注入时 Refresh 报错（Overview 只读聚合不受影响）。
 	sync RuntimeSyncer
 }
 
-// RuntimeSyncer 单节点运行时库存强制同步（FR-301）。生产实现为 JDKService.SyncFromWorker
-// （node_runtimes 无 Worker 侧清单可同步：外部登记真相源即 CP 库，托管 Node 随 FR-299 再议）；
+// RuntimeSyncer 单节点运行时库存强制同步。生产实现为 JDKService.SyncFromWorker
+// （node_runtimes 无 Worker 侧清单可同步：外部登记真相源即 CP 库，托管 Node 随再议）；
 // 接口化便于单测注入失败场景。
 type RuntimeSyncer interface {
 	SyncFromWorker(nodeID uint) error
@@ -41,7 +41,7 @@ func NewRuntimeAssetsService(db *gorm.DB) *RuntimeAssetsService {
 	return &RuntimeAssetsService{db: db}
 }
 
-// SetJDKSync 注入库存同步器（FR-301 手动刷新）。main 装配阶段调用。
+// SetJDKSync 注入库存同步器（手动刷新）。main 装配阶段调用。
 func (s *RuntimeAssetsService) SetJDKSync(sync RuntimeSyncer) {
 	s.sync = sync
 }
@@ -56,26 +56,26 @@ type RuntimeAssetsOverview struct {
 	Assets []AssetTypeGroup `json:"assets"`
 	// AssetSummary 制品区汇总（资产总数 / 总占用 / 去重省下 / 被引用数）。
 	AssetSummary AssetSummary `json:"assetSummary"`
-	// Runtimes 跨节点多运行时矩阵（FR-301 加性扩展）：node_jdks(type=jdk，含引用实例)
+	// Runtimes 跨节点多运行时矩阵（加性扩展）：node_jdks(type=jdk，含引用实例)
 	// 与 node_runtimes（nodejs / python 预留）读侧拼装；不改 JDKs 等老字段。
 	Runtimes []RuntimeMatrixItem `json:"runtimes"`
-	// RuntimeSyncs 每节点上次库存同步状态（FR-301）：SyncedAt=nil 表示从未同步。
+	// RuntimeSyncs 每节点上次库存同步状态：SyncedAt=nil 表示从未同步。
 	RuntimeSyncs []RuntimeNodeSync `json:"runtimeSyncs"`
-	// SyncedAt 整体上次同步时间 = 各节点 runtime_synced_at 的最大值（FR-301）；nil=全部未同步。
+	// SyncedAt 整体上次同步时间 = 各节点 runtime_synced_at 的最大值；nil=全部未同步。
 	SyncedAt *time.Time `json:"syncedAt"`
-	// ArtifactChannels 制品存储渠道引用（FR-349 加性扩展）：前端把资产行的
+	// ArtifactChannels 制品存储渠道引用（加性扩展）：前端把资产行的
 	// storageChannelId 映射为渠道名（「存储位置」列），不回凭证任何信息。
 	ArtifactChannels []ArtifactChannelRef `json:"artifactChannels"`
 }
 
-// ArtifactChannelRef 制品存储渠道的最小引用（id/名称/类型），供列表映射展示（FR-349）。
+// ArtifactChannelRef 制品存储渠道的最小引用（id/名称/类型），供列表映射展示。
 type ArtifactChannelRef struct {
 	ID   uint   `json:"id"`
 	Name string `json:"name"`
 	Type string `json:"type"`
 }
 
-// RuntimeMatrixItem 跨节点多运行时矩阵的一项（FR-301）：一个节点上的一个运行时。
+// RuntimeMatrixItem 跨节点多运行时矩阵的一项：一个节点上的一个运行时。
 // type=jdk 行来自 node_jdks（Name=厂商，Instances 语义同 JDKMatrixItem）；
 // 其它类型来自 node_runtimes——当前无「实例↔非 JDK 运行时」的引用消费者，
 // Instances 恒空 / RefCount 恒 0（诚实留空，不臆造连接）。
@@ -95,7 +95,7 @@ type RuntimeMatrixItem struct {
 	RefCount     int              `json:"refCount"`
 }
 
-// RuntimeNodeSync 一个节点的库存同步状态（FR-301）。
+// RuntimeNodeSync 一个节点的库存同步状态。
 type RuntimeNodeSync struct {
 	NodeID   uint       `json:"nodeId"`
 	NodeName string     `json:"nodeName"`
@@ -154,7 +154,7 @@ type AssetTypeGroup struct {
 	HotCount      int `json:"hotCount"`
 	ArchivedCount int `json:"archivedCount"`
 	ExternalCount int `json:"externalCount"`
-	// LostCount 失效资产数（FR-349：索引在、外置对象缺失）。
+	// LostCount 失效资产数（：索引在、外置对象缺失）。
 	LostCount int `json:"lostCount"`
 }
 
@@ -166,7 +166,7 @@ type AssetSummary struct {
 	HotCount        int   `json:"hotCount"`
 	ArchivedCount   int   `json:"archivedCount"`
 	ExternalCount   int   `json:"externalCount"`
-	// LostCount 失效资产数（FR-349）。
+	// LostCount 失效资产数。
 	LostCount int `json:"lostCount"`
 }
 
@@ -190,12 +190,12 @@ func (s *RuntimeAssetsService) Overview() (*RuntimeAssetsOverview, error) {
 	if err := s.db.Order("id desc").Find(&assets).Error; err != nil {
 		return nil, fmt.Errorf("查询资产失败: %w", err)
 	}
-	// 非 JDK 运行时（FR-301）：与 node_runtimes 的统一视图排序一致（type 升序 → major 降序）。
+	// 非 JDK 运行时：与 node_runtimes 的统一视图排序一致（type 升序 → major 降序）。
 	var runtimes []model.NodeRuntime
 	if err := s.db.Order("type asc, major desc, id desc").Find(&runtimes).Error; err != nil {
 		return nil, fmt.Errorf("查询运行时失败: %w", err)
 	}
-	// 制品存储渠道最小引用（FR-349）：仅 id/name/type，供「存储位置」列映射，不带凭证信息。
+	// 制品存储渠道最小引用：仅 id/name/type，供「存储位置」列映射，不带凭证信息。
 	var channels []model.ArtifactStorageChannel
 	if err := s.db.Select("id", "name", "type").Order("id asc").Find(&channels).Error; err != nil {
 		return nil, fmt.Errorf("查询制品存储渠道失败: %w", err)
@@ -221,7 +221,7 @@ func (s *RuntimeAssetsService) Overview() (*RuntimeAssetsOverview, error) {
 	}, nil
 }
 
-// buildRuntimeMatrix 拼装跨节点多运行时矩阵（纯函数，FR-301）：
+// buildRuntimeMatrix 拼装跨节点多运行时矩阵（纯函数）：
 // jdk 行直接由既有 JDK 矩阵映射（保留引用实例），其后追加 node_runtimes 行（引用恒空）。
 func buildRuntimeMatrix(nodes []model.Node, jdkItems []JDKMatrixItem, runtimes []model.NodeRuntime) []RuntimeMatrixItem {
 	nodeByID := make(map[uint]model.Node, len(nodes))
@@ -286,7 +286,7 @@ func buildRuntimeSyncs(nodes []model.Node) ([]RuntimeNodeSync, *time.Time) {
 	return syncs, latest
 }
 
-// RuntimeRefreshResult 单节点强制同步结果（FR-301）。失败时 SyncedAt 保留旧时间戳
+// RuntimeRefreshResult 单节点强制同步结果。失败时 SyncedAt 保留旧时间戳
 // （nil = 从未同步过），供前端「显旧数据 + 提示」。
 type RuntimeRefreshResult struct {
 	NodeID   uint       `json:"nodeId"`
@@ -296,13 +296,13 @@ type RuntimeRefreshResult struct {
 	SyncedAt *time.Time `json:"syncedAt"`
 }
 
-// RuntimeRefreshOutcome POST /runtime-assets/refresh 载荷（FR-301）。
+// RuntimeRefreshOutcome POST /runtime-assets/refresh 载荷。
 type RuntimeRefreshOutcome struct {
 	Results  []RuntimeRefreshResult `json:"results"`
 	SyncedAt *time.Time             `json:"syncedAt"`
 }
 
-// Refresh 强制全节点库存同步（FR-301 手动刷新）：逐节点 syncFromWorker，
+// Refresh 强制全节点库存同步（手动刷新）：逐节点 syncFromWorker，
 // 单节点失败不阻断整体（失败容忍：结果逐节点回报 ok/error，DB 旧数据保留供显示）。
 func (s *RuntimeAssetsService) Refresh() (*RuntimeRefreshOutcome, error) {
 	if s.sync == nil {
@@ -337,7 +337,7 @@ func (s *RuntimeAssetsService) Refresh() (*RuntimeRefreshOutcome, error) {
 
 // buildJDKMatrix 由节点 / JDK / 实例推导跨节点 JDK 矩阵 + 每项的引用实例清单（纯函数）。
 //
-// 引用解析规则（与 FR-033 绑定语义一致）：
+// 引用解析规则（与绑定语义一致）：
 //   - 直接绑定：instance.jdk_id == jdk.id 且同节点 → binding=direct；
 //   - 大版本绑定：instance.jdk_id==0 且 instance.java_major_version==jdk.major_version 且同节点，
 //     解析到「同节点同大版本中 id 最大」的那一个 JDK（与 JDKService.ResolveForInstance 的 `id desc` 选择一致），
@@ -469,7 +469,7 @@ func groupAssetsByType(assets []model.Asset) ([]AssetTypeGroup, AssetSummary) {
 			g.ExternalCount++
 			summary.ExternalCount++
 		case model.AssetStorageLost:
-			// 失效（FR-349）：单列统计，不混入 hot/external 三态。
+			// 失效：单列统计，不混入 hot/external 三态。
 			g.LostCount++
 			summary.LostCount++
 		default:

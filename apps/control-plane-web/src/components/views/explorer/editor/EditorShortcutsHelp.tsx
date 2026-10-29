@@ -9,8 +9,8 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { editorShortcutRows } from '@/lib/shared/shortcuts'
 
-/**
- * 编辑器迷你 IDE 快捷键速查（FR-073）。
+/** 
+ * 编辑器迷你 IDE 快捷键速查。
  *
  * 作为「快捷键全集」的可发现入口：在编辑器头部以下拉速查表呈现搜索/替换、撤销/重做、
  * 行操作、批量注释等键位。键位文案与 ide-extensions.ts 的实际绑定一致；说明文案走 i18n。

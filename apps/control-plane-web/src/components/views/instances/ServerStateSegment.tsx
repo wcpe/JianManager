@@ -27,7 +27,7 @@ function fmtDuration(ms: number | undefined): string {
   return `${s}s`
 }
 
-/** 紧凑键值行（FR-061 风格）：标签 + 值，缺省值降级为破折号。 */
+/** 紧凑键值行（风格）：标签 + 值，缺省值降级为破折号。 */
 function KV({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3 border-b border-border/40 py-1 last:border-0">
@@ -53,8 +53,8 @@ function SectionError({ msg }: { msg?: string }) {
   return <div className="p-2 text-xs text-amber-600 dark:text-amber-400">{msg || t('serverState.sectionError')}</div>
 }
 
-/**
- * 有界列表的密集表（FR-061 风格 + FR-077 大数据折叠不卡）。
+/** 
+ * 有界列表的密集表（风格大数据折叠不卡）。
  *
  * 探针侧 bounded() 已把超大集合裁剪为 items + total + truncated；前端再对 items 做 UI 折叠：
  * 超 [COLLAPSE_THRESHOLD] 行默认仅渲染前 N 行，点「展开全部」纯前端切片展开（不发二次请求）。
@@ -221,8 +221,8 @@ function JvmPanel({ data }: { data: JvmSection | undefined }) {
   )
 }
 
-/**
- * classloader 专区（FR-076 重点）：类加载计数 + 各插件类加载器层级链。
+/** 
+ * classloader 专区（重点）：类加载计数 + 各插件类加载器层级链。
  *
  * 计数来自 ClassLoadingMXBean；每插件展示其加载器类名 + parent 链（自顶向下到 bootstrap）。
  */
@@ -252,7 +252,7 @@ function ClassloaderPanel({ data }: { data: ClassloaderSection | undefined }) {
             },
             {
               // 父链每段渲染为不换行的 chip，段间以 → 分隔并在 chip 边界换行——
-              // 避免类名被按字符断词（如 ClassLoa der），列超宽时单元格横向滚动（FR-109）。
+              // 避免类名被按字符断词（如 ClassLoa der），列超宽时单元格横向滚动。
               header: t('serverState.classloader.chain'),
               cell: (p) => (
                 <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
@@ -345,11 +345,11 @@ function StateSections({ state }: { state: ProbeServerState }) {
   )
 }
 
-/**
- * 「服务器状态」段（FR-077）：按需展示探针采集的全量 Bukkit 内部状态。
+/** 
+ * 「服务器状态」段：按需展示探针采集的全量 Bukkit 内部状态。
  *
  * 开 tab 即首拉一次（外壳的 `useServerState` enabled），之后**仅手动「刷新」**（按需，不持续轮询）。
- * 状态分区以 FR-061 风格密集表呈现（server/worlds/jvm/classloader 专区/scheduler/listeners）；
+ * 状态分区以风格密集表呈现（server/worlds/jvm/classloader 专区/scheduler/listeners）；
  * 探针未连入 / 本次采集超时一律清晰降级提示；插件/世界/加载器等大数据折叠展开纯前端切片不卡。
  *
  * 受控视图（ADR-103 a 范式）：不取数——状态响应与拉取态由外壳注入，自动刷新间隔与手动刷新
@@ -371,7 +371,7 @@ export interface ServerStateSegmentProps {
   onRefresh: () => void
 }
 
-/** 自动刷新间隔选项（FR-109）：默认关（非侵入，全量快照较重）；可选 5s/15s 打开期间自动重拉。 */
+/** 自动刷新间隔选项：默认关（非侵入，全量快照较重）；可选 5s/15s 打开期间自动重拉。 */
 const AUTO_REFRESH_OPTIONS: { key: string; ms: number | false }[] = [
   { key: 'off', ms: false },
   { key: '5s', ms: 5000 },

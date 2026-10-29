@@ -18,11 +18,11 @@ function fmtTime(sec: number): string {
   return new Date(sec * 1000).toLocaleString()
 }
 
-/**
- * 节点制品缓存面板（FR-178）：列缓存项（名/版本/大小/最近用）+ 总占用 + 容量上限设置 + 清/逐项清。
+/** 
+ * 节点制品缓存面板：列缓存项（名/版本/大小/最近用）+ 总占用 + 容量上限设置 + 清/逐项清。
  *
  * 真·节点级（性能优化）：Worker 按 sha256 缓存下载过的核心 jar，建实例命中即秒拷免重下。
- * 全局制品库管理仍归控制面板（FR-082），此面板只看/清这份本地缓存。
+ * 全局制品库管理仍归控制面板，此面板只看/清这份本地缓存。
  *
  * 受控视图（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**——
  * - 数据与加载/错误态经 props 注入（外壳调 `@/api/nodeRuntime` 的查询 hook）；
@@ -143,7 +143,7 @@ export default function NodeArtifactCachePanel({
         </div>
       </Card>
 
-      {/* 列表：搜索 + 行卡片（FR-195） */}
+      {/* 列表：搜索 + 行卡片 */}
       {isLoading ? (
         /* 骨架占位：按行卡片（size-9 图标 + 双行文本 ≈ h-14）轮廓，替代裸文字。 */
         <div className="space-y-2">
@@ -152,7 +152,7 @@ export default function NodeArtifactCachePanel({
           <Skeleton className="h-14 w-full" />
         </div>
       ) : isError ? (
-        /*
+        /* 
           错误态必须给重试：只写一行「加载失败」时，用户唯一的自救手段是刷新整页，
           连带丢掉当前选中的节点与页签。
         */
@@ -192,7 +192,7 @@ export default function NodeArtifactCachePanel({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-medium">{it.name || '—'}</span>
-                    {/* 类型徽章（FR-330）：核心缓存条目一眼可辨（当前仅 core 一类，按类型渐进扩展）。 */}
+                    {/* 类型徽章：核心缓存条目一眼可辨（当前仅 core 一类，按类型渐进扩展）。 */}
                     {it.type === 'core' && (
                       <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium text-primary">
                         {t('artifactCache.typeCore')}

@@ -21,8 +21,8 @@ function nextEnvRowId(): string {
   return `env-row-${envRowSeq}`
 }
 
-/**
- * 环境变量页签（FR-344）：上区编辑自定义启动环境变量（保存写入 instance.EnvVars，启动时 Worker 物化为 .env
+/** 
+ * 环境变量页签：上区编辑自定义启动环境变量（保存写入 instance.EnvVars，启动时 Worker 物化为 .env
  * 并注入进程）；下区展示运行中 JVM 进程的实际完整环境（含继承 PATH/JAVA_HOME，只读）。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast——三份数据经 props 注入，

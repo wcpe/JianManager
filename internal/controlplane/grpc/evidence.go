@@ -12,7 +12,7 @@ import (
 )
 
 // evidenceReconcileGraceBeats 是「DB 运行态但心跳清单缺失、进程侧证据又不可得」时的宽限拍数：
-// 连续 N 拍才落 STOPPED，避免证据拉取瞬时失败/通道抖动导致误判（FR-455③）。
+// 连续 N 拍才落 STOPPED，避免证据拉取瞬时失败/通道抖动导致误判（③）。
 const evidenceReconcileGraceBeats = 3
 
 // evidenceProbeTimeout 单次证据拉取超时。
@@ -25,7 +25,7 @@ var (
 	errEvidenceUnsupported = errors.New("Worker 不支持 ProbeInstanceEvidence（需升级）")
 )
 
-// EvidenceProbeClient 抽象 CP→Worker 的进程侧证据拉取（FR-455③），便于单测注入假客户端。
+// EvidenceProbeClient 抽象 CP→Worker 的进程侧证据拉取（③），便于单测注入假客户端。
 type EvidenceProbeClient interface {
 	// ProbeInstanceEvidence 返回一批实例的进程侧证据：uuid→是否仍在运行。
 	// 缺项表示 Worker 未给出该实例证据（视为未知）。返回 err 时整批视为不可得。
@@ -69,7 +69,7 @@ func (c *poolEvidenceClient) ProbeInstanceEvidence(ctx context.Context, nodeUUID
 	return out, nil
 }
 
-// SetEvidenceProbe 注入进程侧证据拉取客户端（FR-455③）。不注入则 syncInstanceStates 退化为
+// SetEvidenceProbe 注入进程侧证据拉取客户端（③）。不注入则 syncInstanceStates 退化为
 // 旧行为（清单缺失即落 STOPPED），保持向后兼容与现有测试语义。
 func (h *ControlPlaneHandler) SetEvidenceProbe(c EvidenceProbeClient) {
 	h.evidence = c

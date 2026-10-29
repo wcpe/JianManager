@@ -6,7 +6,7 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { ThemeSwitcher } from '@/components/views/console/ThemeSwitcher'
 
-/**
+/** 
  * 主题切换器 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：主题色圆点/角标、明暗三态直选、折叠态收起明暗入口。
@@ -50,7 +50,7 @@ function renderSwitcher(props: Partial<Parameters<typeof ThemeSwitcher>[0]> = {}
   return merged
 }
 
-describe('ThemeSwitcher（FR-164 全局主题切换器）', () => {
+describe('ThemeSwitcher（全局主题切换器）', () => {
   it('主题色按钮标题反映当前主题色，并提供明暗按钮。', () => {
     renderSwitcher({ colorTheme: 'ocean', theme: 'dark' })
     expect(screen.getByRole('button', { name: '主题色' })).toHaveAttribute('title', '深海')

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 二进制/Beacon 版本管理（FR-468，见 ADR-090 补记）。
+// 二进制/Beacon 版本管理（见 ADR-090 补记）。
 //
 // 版本真源是制品库 Asset（内容寻址），本文件维护「实例 ↔ 版本」绑定，并承载
 // 受控升级 / 一级回滚。核心语义修订：**重建不再重新解析来源**（旧行为会让运行中的
@@ -21,7 +21,7 @@ import (
 
 // 二进制版本管理错误。
 var (
-	// ErrBinaryVersionNotBound 实例未登记二进制绑定（非 binary/beacon 实例，或搭建早于 FR-468）。
+	// ErrBinaryVersionNotBound 实例未登记二进制绑定（非 binary/beacon 实例，或搭建早于）。
 	ErrBinaryVersionNotBound = errors.New("实例未登记二进制版本绑定")
 	// ErrNoPreviousBinaryVersion 没有可回滚的上一版本（从未升级过）。
 	ErrNoPreviousBinaryVersion = errors.New("没有可回滚的上一版本")
@@ -32,7 +32,7 @@ var (
 // instanceBinaryBinding 读取实例的二进制绑定；不存在返回 (nil, nil)。
 //
 // 查询失败（如迁移未覆盖本表的极端情况）同样返回 (nil, nil) 并降级：版本管理是增强层，
-// 它的缺失不该阻断搭建/重建这些基础能力（回落到 FR-441/442 的既有行为）。
+// 它的缺失不该阻断搭建/重建这些基础能力（回落到442 的既有行为）。
 func (p *ProvisionService) instanceBinaryBinding(instanceID uint) (*model.InstanceBinaryBinding, error) {
 	var binding model.InstanceBinaryBinding
 	err := p.db.Where("instance_id = ?", instanceID).First(&binding).Error
@@ -64,7 +64,7 @@ func (p *ProvisionService) upsertInstanceBinaryBinding(binding *model.InstanceBi
 		Select("*").Omit("id", "instance_id").Updates(binding).Error
 }
 
-// recordBinaryBindingOnProvision 搭建时登记绑定（FR-468 §2.2）。
+// recordBinaryBindingOnProvision 搭建时登记绑定（§2.2）。
 //
 // asset 来源绑定 asset.ID；url / node_file 无制品库记录 → CurrentAssetID=0，
 // 仅记落盘名与（请求给出的）摘要，展示为「未知来源」。
@@ -123,7 +123,7 @@ func beaconAssetFilenameOrDefault(asset *model.Asset, fallback string) string {
 	return fallback
 }
 
-// binaryPlanFromBinding 由绑定还原取件计划（FR-468 §2.2 重建冻结版本）。
+// binaryPlanFromBinding 由绑定还原取件计划（§2.2 重建冻结版本）。
 //
 // 返回 (nil, nil) 表示无绑定（调用方回落旧行为）；返回 error 表示绑定存在但目标
 // 制品已不可交付（失效/被删），此时**不应**静默改用其它版本，而是明确失败。
@@ -189,7 +189,7 @@ func replaceBinaryTokenInStartCommand(startCommand, oldFilename, newFilename str
 	return strings.ReplaceAll(cmd, old, next), true
 }
 
-// explicitBinarySourceProvided 报告请求是否显式指定了制品来源（FR-468 §2.2 逃生口）。
+// explicitBinarySourceProvided 报告请求是否显式指定了制品来源（§2.2 逃生口）。
 //
 // 显式指定时以请求为准——运维「我有意换这个来源」是明确意图，不该被绑定冻结。
 func explicitBinarySourceProvided(req ProvisionServerRequest) bool {

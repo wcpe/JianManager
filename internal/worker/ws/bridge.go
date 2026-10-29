@@ -36,12 +36,12 @@ var (
 
 	// ErrBridgeNotConnected 指定实例当前无活动探针会话（治理同步往返时立即返回，不阻塞）。
 	ErrBridgeNotConnected = errors.New("探针未连接")
-	// ErrBridgeCommandTimeout 探针未在期限内回 command_result（FR-067 治理同步往返超时）。
+	// ErrBridgeCommandTimeout 探针未在期限内回 command_result（治理同步往返超时）。
 	ErrBridgeCommandTimeout = errors.New("探针指令执行超时")
 )
 
 // PluginEventKind 是插件桥冒泡事件的类型，与 proto PluginEvent.type 对应。
-// 地基（FR-065）真实产生 connected/disconnected/heartbeat；其余子类型留 FR-066/067。
+// 地基真实产生 connected/disconnected/heartbeat；其余子类型留067。
 type PluginEventKind = string
 
 const (
@@ -52,8 +52,8 @@ const (
 
 // PluginEvent 是插件桥向上（gRPC StreamPluginEvents）冒泡的一条事件。
 // 平台无关：Worker 侧负责会话/握手/心跳与连接状态冒泡，并把探针 event 帧里的结构化
-// 玩家字段解析出来（FR-066：join/quit/chat/cross_server），供 gRPC 侧填充 workerpb.PluginEvent。
-// Worker 只解析、不消费语义（治理执行在 FR-067，跨服感知聚合在 CP）。
+// 玩家字段解析出来（：join/quit/chat/cross_server），供 gRPC 侧填充 workerpb.PluginEvent。
+// Worker 只解析、不消费语义（治理执行在跨服感知聚合在 CP）。
 type PluginEvent struct {
 	InstanceUUID string
 	Type         PluginEventKind
@@ -65,7 +65,7 @@ type PluginEvent struct {
 	Timestamp int64
 	Platform     string // bukkit | bungee（来自探针 hello）
 	Version      string // 探针版本（来自探针 hello）
-	// 以下为探针业务事件（FR-066）携带的结构化字段；连接/心跳事件为空。
+	// 以下为探针业务事件携带的结构化字段；连接/心跳事件为空。
 	PlayerName string // 玩家事件：玩家名
 	PlayerUUID string // 玩家事件：玩家 UUID
 	Message    string // chat 内容 / 事件描述
@@ -73,8 +73,8 @@ type PluginEvent struct {
 	FromServer string // cross_server：来源子服
 	ToServer   string // cross_server：目标子服
 	Raw        string // 透传原始消息载荷（下游按需解析）
-	// 以下为业务事件信封字段（FR-115/ADR-027）：Worker 只透传不消费，监控/治理事件为空。
-	// FR-521 / ADR-106 起 JM 不做业务，CP 侧不再落库/聚合，这两字段仅为保通道契约而保留。
+	// 以下为业务事件信封字段（ADR-027）：Worker 只透传不消费，监控/治理事件为空。
+	// ADR-106 起 JM 不做业务，CP 侧不再落库/聚合，这两字段仅为保通道契约而保留。
 	Domain   string // 业务域命名空间（取值由下游约定，JM 不定义也不校验；空/core 为非业务帧）
 	DedupKey string // 业务事件去重键（原样透传，幂等去重由下游业务台负责）
 }
@@ -92,13 +92,13 @@ type bridgeMessage struct {
 	Event    string          `json:"event,omitempty"` // type=event 时的事件子类型
 	Data     json.RawMessage `json:"data,omitempty"`  // 透传业务载荷
 	// domain 业务域命名空间（ADR-027）：空/core=监控/治理既有帧；其余取值由下游约定，
-	// Worker 只按前缀分流、不解释语义（FR-521 / ADR-106：JM 不理解任何业务语义）。
+	// Worker 只按前缀分流、不解释语义（ADR-106：JM 不理解任何业务语义）。
 	Domain string `json:"domain,omitempty"`
 	// dedupKey 业务事件去重键：业务 event 帧携带，Worker 原样透传给 CP 与下游，本层不做去重。
 	DedupKey string `json:"dedupKey,omitempty"`
 }
 
-// bridgeEventData 是探针 event 帧 data 字段里的结构化玩家载荷（FR-066）。
+// bridgeEventData 是探针 event 帧 data 字段里的结构化玩家载荷。
 // 字段命名与探针侧（ServerProbe BridgeClient.eventJson）约定一致；缺字段为零值。
 type bridgeEventData struct {
 	PlayerName string `json:"playerName"`
@@ -122,7 +122,7 @@ func parseBridgeEventData(data json.RawMessage) bridgeEventData {
 	return d
 }
 
-// CommandResult 是探针执行一条治理/查询指令后的回执（FR-067，见 ADR-016）。
+// CommandResult 是探针执行一条治理/查询指令后的回执（见 ADR-016）。
 // 由探针经 command_result 事件帧带回，Worker 据 request_id 路由给同步等待的调用方。
 type CommandResult struct {
 	RequestID string
@@ -147,7 +147,7 @@ type PluginSession struct {
 	Conn       *websocket.Conn
 	writeMu    sync.Mutex // 串行化写，避免 ping/pong 与下发指令并发写同一连接
 
-	// pending 是本会话上「已下发、待 command_result」的同步等待者，键为 request_id（FR-067）。
+	// pending 是本会话上「已下发、待 command_result」的同步等待者，键为 request_id。
 	// 读循环收到匹配的 command_result 时投递到对应 channel；调用方超时/会话断开则清理。
 	pendingMu sync.Mutex
 	pending   map[string]chan CommandResult
@@ -194,19 +194,19 @@ func (s *PluginSession) deliverResult(r CommandResult) bool {
 	return true
 }
 
-// PluginBridgeServer 是 ServerProbe 探针反向 WS 连入的服务端（端点 /ws/plugin-bridge，FR-065）。
+// PluginBridgeServer 是 ServerProbe 探针反向 WS 连入的服务端（端点 /ws/plugin-bridge）。
 // 维护「实例 UUID → 探针会话」表：同一实例同时仅一活动会话，新连顶替旧连（见 ADR-016）。
 // token 校验复用 JIANMANAGER_JWT_SECRET，要求 scope=plugin-bridge 且 instanceId 与 query 一致。
 type PluginBridgeServer struct {
 	// jwtSecret 插件桥 token 校验密钥，secretMu 保护：CP 经注册/心跳下发新值时
-	// 由 SetJWTSecret 热更新（FR-275，见 ADR-061），与握手校验读并发安全。
+	// 由 SetJWTSecret 热更新（见 ADR-061），与握手校验读并发安全。
 	jwtSecret string
 	secretMu  sync.RWMutex
 	upgrader  websocket.Upgrader
 	mu        sync.Mutex
 	sessions  map[string]*PluginSession
 	onEvent   PluginEventHandler
-	// chunks 上行分片帧的重组器（FR-526 §2.5）。跨实例共享一张表，按
+	// chunks 上行分片帧的重组器（§2.5）。跨实例共享一张表，按
 	// (实例, groupId) 隔离；读循环在语义分发之前调用，故下游永远拿到完整原帧。
 	chunks *chunkAssembler
 }
@@ -226,7 +226,7 @@ func NewPluginBridgeServer(jwtSecret string) *PluginBridgeServer {
 // SetEventHandler 注入事件回调，把 connected/disconnected/业务事件桥接到 gRPC StreamPluginEvents。
 func (s *PluginBridgeServer) SetEventHandler(h PluginEventHandler) { s.onEvent = h }
 
-// SetJWTSecret 热更新 token 校验密钥（FR-275，见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
+// SetJWTSecret 热更新 token 校验密钥（见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
 // 仅影响后续握手；已建立的探针会话不受影响（握手只校验一次）。
 func (s *PluginBridgeServer) SetJWTSecret(secret string) {
 	s.secretMu.Lock()
@@ -362,7 +362,7 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 	}
 	// 探针按心跳节奏发 WS ping 控制帧（OPCODE_PING）。gorilla 默认 ping handler 仅回 pong、
 	// 【不刷新读 deadline】，且控制帧不会让 ReadMessage 返回——故无玩家活动的空闲长连会在
-	// bridgePongWait 到点被误判断线（实测每 ~90s 断一次重连，扰动 FR-066 实时事件流）。
+	// bridgePongWait 到点被误判断线（实测每 ~90s 断一次重连，扰动实时事件流）。
 	// 接管 ping handler：收到探针 ping 即刷新读 deadline 并回 pong，使空闲桥连接长期稳定。
 	session.Conn.SetPingHandler(func(appData string) error {
 		if err := session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait)); err != nil {
@@ -422,13 +422,13 @@ func (s *PluginBridgeServer) dispatchFrame(session *PluginSession, msg bridgeMes
 		session.Version = msg.Version
 		slog.Info("插件桥握手 hello", "instanceId", session.InstanceID, "platform", msg.Platform, "version", msg.Version)
 	case "event":
-		// 分片帧（FR-526 §2.5）：先重组再交给下面既有的语义分发，下游完全无感。
+		// 分片帧（§2.5）：先重组再交给下面既有的语义分发，下游完全无感。
 		// 必须排在 command_result 判定之前——被分片的多半正是超大的命令回执。
 		if allowChunk && msg.Event == chunkEventName {
 			s.handleChunkFrame(session, msgBytes)
 			return
 		}
-		// command_result（FR-067）：路由给同步等待的治理调用方（按 request_id）；
+		// command_result：路由给同步等待的治理调用方（按 request_id）；
 		// 无人等待（超时后到达/重发）则不阻塞，继续作为事件冒泡供观测。
 		if msg.Event == "command_result" {
 			var cr commandResultData
@@ -438,8 +438,8 @@ func (s *PluginBridgeServer) dispatchFrame(session *PluginSession, msg bridgeMes
 				session.deliverResult(CommandResult(cr))
 			}
 		}
-		// 业务事件冒泡（FR-066）：解析 data 里的结构化玩家字段填充事件，原始载荷一并透传（raw）。
-		// Worker 只解析、不消费语义（跨服感知聚合在 CP，治理执行在 FR-067）。
+		// 业务事件冒泡：解析 data 里的结构化玩家字段填充事件，原始载荷一并透传（raw）。
+		// Worker 只解析、不消费语义（跨服感知聚合在 CP，治理执行在）。
 		d := parseBridgeEventData(msg.Data)
 		s.emit(PluginEvent{
 			InstanceUUID: session.InstanceID,
@@ -454,13 +454,13 @@ func (s *PluginBridgeServer) dispatchFrame(session *PluginSession, msg bridgeMes
 			FromServer:   d.FromServer,
 			ToServer:     d.ToServer,
 			Raw:          string(msgBytes),
-			Domain:       msg.Domain,   // JBIS 业务域透传（FR-115）
-			DedupKey:     msg.DedupKey, // JBIS 去重键透传（FR-115）
+			Domain:       msg.Domain,   // JBIS 业务域透传
+			DedupKey:     msg.DedupKey, // JBIS 去重键透传
 		})
 	}
 }
 
-// handleChunkFrame 解析一帧上行分片、交给重组器；到齐则把原帧重新分发（FR-526 §2.5）。
+// handleChunkFrame 解析一帧上行分片、交给重组器；到齐则把原帧重新分发（§2.5）。
 //
 // 任何拒收/丢弃都只记日志与计数，**绝不断连**：一帧坏片不该拖垮整条桥，
 // 与其他帧（非法 JSON 直接 continue）的容错策略一致。
@@ -532,7 +532,7 @@ func (s *PluginBridgeServer) SendCommand(instanceID string, payload interface{})
 	return true, nil
 }
 
-// SendCommandAndWait 向实例的活动探针会话下发指令并同步等待 command_result（FR-067 治理）。
+// SendCommandAndWait 向实例的活动探针会话下发指令并同步等待 command_result（治理）。
 //
 // 以 request_id 关联回执：注册等待 channel → 写出 command 帧 → 等 command_result 或超时。
 // 替代 RCON 的同步请求/响应语义（踢/封/解封/白名单/在线列表）。实例无活动会话立即返回

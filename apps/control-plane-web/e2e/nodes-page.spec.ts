@@ -1,18 +1,18 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-144 节点页直观化 · 单机（Playwright + mock 模式）验收。
+/** 
+ *节点页直观化 · 单机（Playwright + mock 模式）验收。
  *
- * FR-177 先重做主从双栏；FR-502 阶段 6 又照原型 `nodesPage()` 拆成**列表态与详情态**：
+ *先重做主从双栏阶段 6 又照原型 `nodesPage()` 拆成**列表态与详情态**：
  *   /nodes            → 列表态：集群概览（状态计数）+ 本地搜索 + 添加节点 + 节点卡片墙
  *   /nodes?node=<id>  → 详情态：对象头 + 分段工具
  *
  * 故本文件按这两种形态分别断言——旧的单用例在 /nodes 同时断言列表与详情，已不成立。
- * 证据截图落 .tmp/acceptance/FR-144/。
+ * 证据截图落 .tmp/acceptance。
  */
 
-test('FR-144 节点列表态：集群概览 + 本地搜索 + 添加节点 + 卡片墙', async ({ page }) => {
+test('节点列表态：集群概览 + 本地搜索 + 添加节点 + 卡片墙', async ({ page }) => {
   await login(page)
   await page.goto('/nodes')
 
@@ -32,10 +32,10 @@ test('FR-144 节点列表态：集群概览 + 本地搜索 + 添加节点 + 卡�
   await expect(page.getByRole('button', { name: /^alpha / }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: /^beta / }).first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-144/single-machine-nodes-list.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-nodes-list.png', fullPage: true })
 })
 
-test('FR-144 节点详情态：操作 kebab + 分段工具', async ({ page }) => {
+test('节点详情态：操作 kebab + 分段工具', async ({ page }) => {
   await login(page)
   await page.goto('/nodes?node=1')
 
@@ -46,8 +46,8 @@ test('FR-144 节点详情态：操作 kebab + 分段工具', async ({ page }) =>
 
   await expect(page.getByRole('button', { name: '操作' }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: '概览', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '运行时', exact: true })).toBeVisible() // FR-311：JDK 分段更名运行时
+  await expect(page.getByRole('button', { name: '运行时', exact: true })).toBeVisible() // JDK 分段更名运行时
   await expect(page.getByRole('button', { name: '制品缓存', exact: true })).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-144/single-machine-node-detail.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-node-detail.png', fullPage: true })
 })

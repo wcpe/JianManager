@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 统一通知中心 API（FR-216，见 ADR-048）。
+/** 
+ * 统一通知中心 API（见 ADR-048）。
  * 把站内信（定向消息）+ 告警事件（系统警报）合并为一条只读通知流：列表（带来源/筛选/分页）、
  * 未读计数、标记已读。站内信按当前用户归属、告警面向全体（与既有 /alerts 可见性一致）。
  */
@@ -55,8 +55,8 @@ export interface FeedPage {
   total: number
 }
 
-/**
- * 统一通知流分页列表（FR-216）。
+/** 
+ * 统一通知流分页列表。
  * 页眉下拉用小 pageSize 拉最近若干条；通知中心页用全量筛选 + 分页。
  */
 export function useNotificationFeed(params?: FeedQuery) {

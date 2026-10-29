@@ -1,6 +1,6 @@
 import { resourceLevel, statusColorVar, type StatusLevel } from '../lib/threshold'
 
-/** 环形资源仪表盘（FR-061）：按阈值变色，用于节点/总览的 CPU/内存/磁盘占用。 */
+/** 环形资源仪表盘：按阈值变色，用于节点/总览的 CPU/内存/磁盘占用。 */
 export function ResourceGauge({
   label,
   value,

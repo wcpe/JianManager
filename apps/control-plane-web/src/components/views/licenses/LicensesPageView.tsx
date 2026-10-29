@@ -1,10 +1,10 @@
-/**
+/** 
  * @file LicensesPageView：开源许可与依赖清单页的受控视图，清单取数与「返回」跳转由应用容器负责。
  * @input lib/licenses（依赖唯一键/包名过滤/分区计数）、布局层 PageShell/PageHeader、
  *         Panel/Input/Badge/Button/StatCard/表格原语、翻译上下文
  * @output LicensesPageView、LicensesPageViewProps、LicenseDepEntry
  * @sync apps/control-plane-web/src/pages/LicensesPage.tsx、apps/control-plane-web/src/pages/LicensesPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-135 开源许可清单、FR-210 静态清单强断言）
+ * @since（组件受控化迁包；原页开源许可清单静态清单强断言）
  */
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -26,13 +26,13 @@ import {
 import { depKey, filterByName, partitionDeps } from '@/lib/licenses/licenses'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 
-/**
+/** 
  * 依赖表主行的固定行高（px）。行盒由行内 style 钉死（「声明值即真实值」）：
  * 内容自然高 = 徽章/文本 20 + 单元格 `py-1.5`(12) + 行边框 1 ≈ 33 → 取 36 留余量。
  * 虚拟化按同一常量定位，故滚动映射与真实行盒严格一致、不随行数累积漂移。
  */
 const LICENSE_ROW_PX = 36
-/**
+/** 
  * 展开行（许可证全文）的高度估算：仅用于首帧与无布局环境；浏览器实测后以实测值纠正
  * （同 `AuditPageView` 对不定高详情行的做法）。
  */
@@ -42,7 +42,7 @@ const LICENSE_TEXT_CELL_OVERHEAD_PX = 13
 /** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
 const FALLBACK_VIEWPORT_PX = 640
 
-/**
+/** 
  * 单条依赖的许可信息（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/licenses` 的 `LicenseDependency`：
@@ -64,7 +64,7 @@ export interface LicenseDepEntry {
   licenseText: string
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不碰路由**。
  * - 依赖清单与加载/错误态经 props 注入（容器调 `useLicenses()` 读静态资源 `/licenses.json`）；
  * - 页头「返回」以回调上报，由容器接 `navigate(-1)`；
@@ -83,7 +83,7 @@ export interface LicensesPageViewProps {
   onBack: () => void
 }
 
-/** 开源许可与依赖清单页（FR-135）：搜索 + 运行时/开发分区计数（StatCard）+ 表格 + 行内展开许可证全文。 */
+/** 开源许可与依赖清单页：搜索 + 运行时/开发分区计数（StatCard）+ 表格 + 行内展开许可证全文。 */
 export function LicensesPageView({
   dependencies,
   generatedAt,
@@ -211,7 +211,7 @@ export function LicensesPageView({
   )
 }
 
-/**
+/** 
  * 展开的许可证全文行：内容长短不定，故渲染后把实测高度回填给虚拟模型
  * （jsdom 无布局时 offsetHeight 恒 0，保留估算，窗口在测试里完全确定）。
  */
@@ -268,7 +268,7 @@ function DependencyTable({
 }) {
   const { t } = useTranslation()
 
-  /**
+  /** 
    * 展开行的实测高度（按依赖键存）。同一时刻可展开多行，故不是单个值。
    * 只有高度真的变了才写回，避免 useLayoutEffect 每次都触发一轮渲染。
    */
@@ -277,7 +277,7 @@ function DependencyTable({
     setTextHeights((prev) => (prev[id] === px ? prev : { ...prev, [id]: px }))
   }, [])
 
-  /**
+  /** 
    * 依赖表虚拟化：构建期清单实测 931 条（运行时 456 + 开发 475），此前两张表一次性进 DOM
    * （约 4650 个单元格）。行盒高度与逐行模型同源（见常量注释），窗口外的行用占位撑开。
    */

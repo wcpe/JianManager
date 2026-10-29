@@ -1,7 +1,7 @@
 package mcp
 
-/**
- * 审批登记表与**真实工具目录**的一致性（FR-492 的防漂移门禁）。
+/* *
+ * 审批登记表与**真实工具目录**的一致性（的防漂移门禁）。
  *
  * 这是「漏登记」唯一的保障点。因为运行期不拦截全部写操作（那会让审批变成橡皮图章），
  * 所以必须在这里用编译期可见的方式兜住：新增一个看起来危险的写工具却忘了进审批名单，
@@ -27,7 +27,7 @@ import (
 func TestRegistryCoversAllDangerousTools(t *testing.T) {
 	// 显式例外：既有「参数名精确确认」已足够，或操作本身可逆且不影响数据。
 	exemptFromApproval := map[string]string{
-		// Bot / 压测模板 / 制品删除：已有 confirmXxxName 精确确认（FR-396 语义）。
+		// Bot / 压测模板 / 制品删除：已有 confirmXxxName 精确确认（语义）。
 		"bot_delete":               "已有 confirmBotName 精确确认",
 		"loadtest_template_delete": "已有 confirmTemplateName 精确确认",
 		"instance_group_delete":    "已有 confirmGroupName 精确确认",
@@ -76,7 +76,7 @@ func TestRegistryCoversAllDangerousTools(t *testing.T) {
 //
 // 与上一条互补：那条防「新增危险工具漏登记」，这条防「PRD 明确要求的被删掉」。
 func TestApprovalRegistryCoversAllPrdNamedTools(t *testing.T) {
-	// PRD FR-492 逐字点名的必须覆盖项。
+	// PRD逐字点名的必须覆盖项。
 	prdNamed := []string{
 		"file_issue_transfer_ticket",
 		"instance_send_command",
@@ -115,7 +115,7 @@ func TestApprovalRegistryEntriesExistInCatalog(t *testing.T) {
 
 // TestApprovalIntercept_StopProducesTicketAndStartDoesNot 端到端：stop 出票、start 不出票。
 //
-// 这是 FR-492 的行为门禁——不只看判定函数，而是走真实 CallTool 路径。
+// 这是的行为门禁——不只看判定函数，而是走真实 CallTool 路径。
 func TestApprovalIntercept_StopProducesTicketAndStartDoesNot(t *testing.T) {
 	deps := newApprovalTestDeps(t)
 	p := &service.AgentPrincipal{

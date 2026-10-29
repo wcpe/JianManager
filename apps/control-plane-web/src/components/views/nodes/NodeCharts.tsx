@@ -11,14 +11,14 @@ import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 import { useProcessTop, type ProcessTopItem } from '@/api/metrics'
 
-/** 单个对比指标的规格（FR-060 #2）。 */
+/** 单个对比指标的规格（#2）。 */
 export interface CompareMetric {
   key: string
   labelKey: string
   fmt: (v: number) => string
 }
 
-/** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。
+/** 各实例对比图可切的指标（#2：节点上各实例 TPS/MSPT/堆/线程对比）。
  * 声明为非空元组：首项恒存在，`NodeInstanceCompare` 的默认指标无需额外判空。 */
 export const COMPARE_METRICS: [CompareMetric, ...CompareMetric[]] = [
   { key: 'inst_tps', labelKey: 'metrics.tps', fmt: (v) => v.toFixed(1) },
@@ -27,7 +27,7 @@ export const COMPARE_METRICS: [CompareMetric, ...CompareMetric[]] = [
   { key: 'inst_threads', labelKey: 'metrics.threads', fmt: (v) => v.toFixed(0) },
 ]
 
-/** 对比图可读性上限：一图最多 12 条线（超出仅取名称升序前 12，FR-340）。50 是后端硬上限。 */
+/** 对比图可读性上限：一图最多 12 条线（超出仅取名称升序前 12）。50 是后端硬上限。 */
 export const COMPARE_TARGET_CAP = 12
 
 export interface NodeInstanceCompareProps {
@@ -49,21 +49,21 @@ export interface NodeMonitorChartsProps {
   range: NodeMetricRangeState
   /** 节点序列数据（容器经 useMetricSeries 取数）。 */
   series: { metricKey: string; points: { ts: string; avg: number | null }[] }[]
-  /**
-   * 节点 UUID：用于悬浮时按「这一刻」查该节点的进程 TOPN（FR-170）。
+  /** 
+   * 节点 UUID：用于悬浮时按「这一刻」查该节点的进程 TOPN。
    * 省略则不做归属查询，图表行为与改造前一致。
    */
   nodeUuid?: string
-  /**
+  /** 
    * 序列档位（后端 `resolution`）：raw / 5m / 1h。
    * 仅用于「区间总消耗」的桶宽兜底——点数太少时无法从序列推出桶宽。
    */
   resolution?: string
 }
 
-/**
- * 节点上各实例同一指标对比：每实例一条线，可切 TPS/MSPT/堆/线程（FR-060 #2）。
- * FR-340：实例清单走服务端按节点分页（`/instances/search`）取前 12（名称升序），
+/** 
+ * 节点上各实例同一指标对比：每实例一条线，可切 TPS/MSPT/堆/线程（#2）。
+ *：实例清单走服务端按节点分页（`/instances/search`）取前 12（名称升序），
  * 指标一次批量查询（`/metrics/series/batch`）拆分为各线，消 N+1 请求风暴。
  */
 export function NodeInstanceCompare({
@@ -120,7 +120,7 @@ export function NodeInstanceCompare({
   )
 }
 
-/** 详情「监控」分段：节点历史曲线组（CPU/内存/磁盘/网络/负载，FR-061/FR-060）。 */
+/** 详情「监控」分段：节点历史曲线组（CPU/内存/磁盘/网络/负载）。 */
 /** 进程归属的排序维度，与后端 `sort` 参数一致（后端只支持这三档）。 */
 type ProcSort = 'cpu' | 'memory' | 'io'
 
@@ -131,7 +131,7 @@ function procValue(p: ProcessTopItem, sort: ProcSort): string {
   return `${formatFileSize(p.readBytesPerSec)}/s · ${formatFileSize(p.writeBytesPerSec)}/s`
 }
 
-/**
+/** 
  * 进程 TOPN 列表：PID + 应用名 + 该项占用，第二行给「位置」线索（运行用户 + 命令行摘要）。
  *
  * 【位置为何这样取】进程快照没有文件系统路径字段，`commandSummary` 里的 jar / 工作目录
@@ -159,8 +159,8 @@ function ProcessTopList({ items, sort }: { items: ProcessTopItem[]; sort: ProcSo
   )
 }
 
-/**
- * 带进程归属的曲线：鼠标悬浮时按该时刻查节点进程 TOPN 并渲染进浮层（FR-170）。
+/** 
+ * 带进程归属的曲线：鼠标悬浮时按该时刻查节点进程 TOPN 并渲染进浮层。
  *
  * 【为什么单独成组件】`useState` + `useProcessTop` 必须跟着「这一条曲线」走；
  * 若写在 `NodeMonitorCharts` 里，等于按图表数量硬编码多个 hook，加图就得改代码。
@@ -240,7 +240,7 @@ function medianStepSec(points: { ts: string }[]): number {
   return diffs[Math.floor(diffs.length / 2)] ?? 0
 }
 
-/**
+/** 
  * 定出「一个点代表多长时间」，也就是积分用的桶宽。
  *
  * 【为什么分档位走不同路子】5m / 1h 桶宽是后端写死的（300s / 3600s），直接用名义值最准；
@@ -257,7 +257,7 @@ export function resolveBucketSec(
   return medianStepSec(points) || nominal || nominalRawSec
 }
 
-/**
+/** 
  * 把速率序列（bytes/s）积成区间总消耗（字节）：网络面板用它回答「这段时间用了多少流量」。
  *
  * 【口径】5m / 1h 降采样存的是桶内 `AVG(rate)`，所以「每个点 × 桶宽」正是该桶的字节数；
@@ -303,13 +303,13 @@ export interface NodeMetricRangeState {
   onCustomTo: (v: string) => void
 }
 
-/**
+/** 
  * 监控页签的时间范围：预设档位 + 自定义起止窗口。
  *
  * 【为什么预设与自定义互斥】两套条件同时生效时，用户无法判断眼前这条曲线按哪个算。
  * 选预设即清空自定义窗口，是这里唯一的取舍点。
  */
-/**
+/** 
  * 自定义窗口是否可用：两个输入都合法、且结束严格晚于开始。
  *
  * 抽成纯函数是为了能脱离 DOM 测——「开始晚于结束」「只填了一头」「乱填」这三种
@@ -347,7 +347,7 @@ export function useNodeMetricRange(defaultRange: MetricRange = '24h'): Omit<Node
   }
 }
 
-/**
+/** 
  * 时间范围控件：预设档位 + 两个 datetime-local + 非法提示 + 保留期说明。
  *
  * 原先是概览页签四张图上方那条，随「曲线统一收进监控」一起搬过来——

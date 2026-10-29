@@ -20,8 +20,8 @@ function toField(v: number): string {
   return v && v > 0 ? String(v) : ''
 }
 
-/**
- * 实例资源限额编辑器（FR-079）：docker 模式实例的 CPU 核数 / 内存 / 磁盘上限，
+/** 
+ * 实例资源限额编辑器：docker 模式实例的 CPU 核数 / 内存 / 磁盘上限，
  * 留空/0/负值=不限制。变更由外壳持久化，对下一次启动生效。
  * 非 docker 模式不提供编辑，仅提示需切换到 docker 模式。
  *
@@ -32,7 +32,7 @@ function toField(v: number): string {
 export interface EditInstanceLimitsDialogProps {
   /** 实例展示名（标题用）。 */
   instanceName: string
-  /** 实例启动方式；仅 docker 模式资源限额生效（FR-079，ADR-019）。 */
+  /** 实例启动方式；仅 docker 模式资源限额生效（ADR-019）。 */
   processType: string
   /** 当前 CPU 核数上限（0=不限制）。 */
   cpuLimit: number
@@ -74,7 +74,7 @@ export default function EditInstanceLimitsDialog({
     e.preventDefault()
     if (hasError) return
     void onSave({
-      // 留空回落 0；0/负值均表示不限制（FR-079）。
+      // 留空回落 0；0/负值均表示不限制。
       cpuLimit: cpu.trim() ? Number(cpu) : 0,
       memLimitMb: mem.trim() ? Number(mem) : 0,
       diskLimitMb: disk.trim() ? Number(disk) : 0,

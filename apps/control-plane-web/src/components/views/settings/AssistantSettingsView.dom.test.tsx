@@ -8,8 +8,8 @@ import type { ReactNode } from 'react'
 import { AssistantSettingsView } from '@/components/views/settings/AssistantSettingsView'
 import type { AssistantModel, AssistantProvider } from '@/api/assistant'
 
-/**
- * AI 配置页 · 探测按钮（FR-514 spec §8）。
+/** 
+ * AI 配置页 · 探测按钮（spec §8）。
  *
  * 断言聚焦本组件自己负责的两件事：
  *  1) 「测试连接 / 测试模型」可按可访问名命中并触发回调；
@@ -43,7 +43,7 @@ void testI18n.use(initReactI18next).init({
 })
 
 // wrapper 必须同时提供 i18n 与 QueryClient：
-// 本视图内嵌 `MCPConnectionsPanel`（FR-517），它用 React Query 取数。
+// 本视图内嵌 `MCPConnectionsPanel`，它用 React Query 取数。
 // 只给 i18n 会让整个文件在渲染阶段抛「No QueryClient set」，11 个用例全红——
 // 而那失败与被测行为无关，属于脚手架缺口。
 function wrapper({ children }: { children: ReactNode }) {

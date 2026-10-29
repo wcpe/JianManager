@@ -9,8 +9,8 @@ import { API } from '@jianmanager/devmock/api'
 import { useConsoleStore } from '@/stores/console'
 import InstancesPage from './InstancesPage'
 
-/**
- * FR-452 实例列表树表强断言：分组维度切换即时重排 / 分组头折叠（入 URL）/
+/** 
+ *实例列表树表强断言：分组维度切换即时重排 / 分组头折叠（入 URL）/
  * 成员计数 + 聚合健康色带 / 未分组恒落末尾。
  * 只桩 /nodes（列表页顶部取数）；/networks、/topology、/instance-groups 走真实 devmock handler。
  */
@@ -35,7 +35,7 @@ function polyfillRadixPointer() {
   HTMLElement.prototype.scrollIntoView ??= () => {}
 }
 
-/**
+/** 
  * 打开工具栏「显示」菜单并点某一项（本轮把排序 / 分组维度 / 每页 / 列 / 折叠
  * 从一级控件收进了这个菜单）。
  *
@@ -50,7 +50,7 @@ async function pickFromDisplayMenu(user: ReturnType<typeof userEvent.setup>, ite
   await user.click(await screen.findByRole('menuitem', { name: itemLabel }))
 }
 
-/**
+/** 
  * 打开「显示」菜单并选中某个分组维度（原先是工具栏上的独立 combobox）。
  * 分组维度是单选组（radio group），故按 menuitemradio 查询。
  */
@@ -69,7 +69,7 @@ function groupLabels(): string[] {
     .map((row) => (row.textContent ?? '').trim())
 }
 
-describe('InstancesPage 分组树表（FR-452）', () => {
+describe('InstancesPage 分组树表', () => {
   it('分组头行带折叠按钮、成员计数与聚合健康色带', async () => {
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=groupTree' })
 
@@ -82,7 +82,7 @@ describe('InstancesPage 分组树表（FR-452）', () => {
     expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
   })
 
-  /*
+  /* 
     【契约变更·本轮】region 维度不再产出分组头。
     大区是虚拟分区（由 `region:` 标签推导），没有独立实体；做成「大区头 → 小区头 → 成员」
     两级嵌套后，真正的信息被两层组头压到屏幕下方，而组头的计数/健康带又与卡片/行自身重复。
@@ -165,7 +165,7 @@ describe('InstancesPage 分组树表（FR-452）', () => {
 
     await waitFor(() => expect(groupLabels().length).toBeGreaterThan(0))
     // 深链折叠真的生效：creative / survival 两个群组头均为已折叠态，且其成员行不再渲染
-    //（若折叠键写错则两者保持展开、成员行仍在 DOM，以下断言会失败——这才真正验证「全部折叠后仅剩分组头」）。
+    // （若折叠键写错则两者保持展开、成员行仍在 DOM，以下断言会失败——这才真正验证「全部折叠后仅剩分组头」）。
     const rows = within(table).getAllByTestId('instances-group-row')
     const collapsedLabels = rows
       .filter((r) => r.getAttribute('data-collapsed') === 'true')
@@ -186,7 +186,7 @@ describe('InstancesPage 分组树表（FR-452）', () => {
     await screen.findByTestId('instances-table-virtual')
     await waitFor(() => expect(groupLabels().length).toBeGreaterThan(0))
 
-    /*
+    /* 
       【交互变更·本轮】「全部折叠 / 全部展开」从工具栏一级按钮收进「显示」菜单
       （它们只在有分组头时才有意义，属低频设置）。测试改为走菜单路径，
       断言的业务行为不变：折叠后仅剩组头、展开后成员行回来。

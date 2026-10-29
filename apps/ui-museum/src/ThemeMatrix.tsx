@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
 import { meetsContrast, parseColor, wcagContrast } from '@jianmanager/ui/lib/color-contrast'
 
-/**
- * 主题矩阵验证台（FR-502 阶段 7）。
+/** 
+ * 主题矩阵验证台（阶段 7）。
  *
  * ── 为什么需要它 ──
  * 阶段 2 把主题改成种子声明式后，「新增一套主题只写 5 个种子」这条承诺能否兑现，

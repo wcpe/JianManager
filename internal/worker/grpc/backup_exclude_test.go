@@ -10,7 +10,7 @@ import (
 
 // TestWriteBackupArchive_ExcludesRuntimeFiles 回归测试：备份打包必须排除运行态/锁定文件
 // （session.lock、logs/、cache/、usercache.json、*.pid）。此前未排除，导致对运行中的实例
-// 打包时因 world/session.lock 被独占锁而整次失败（真机复验 FR-056 发现）。
+// 打包时因 world/session.lock 被独占锁而整次失败（真机复验发现）。
 func TestWriteBackupArchive_ExcludesRuntimeFiles(t *testing.T) {
 	work := t.TempDir()
 	mk := func(rel, content string) {

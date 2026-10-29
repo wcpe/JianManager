@@ -1,4 +1,4 @@
-/*
+/* 
  * 用 node:fs 直接读源文件。`@ts-expect-error` 是必需的：packages/ui 的 tsconfig `types` 只声明
  * vite/client（不含 node），而本文件由 vitest 的 node project 执行、确实能加载 node 内置模块。
  * 不为此给组件包补 node 类型依赖，也不用 Vite 的 `?raw`——后者会被 vitest 的 CSS 兜底
@@ -11,8 +11,8 @@ import { describe, expect, it } from 'vitest'
 
 import { meetsContrast, parseColor, parseOklch, toHex, wcagContrast } from './color-contrast'
 
-/**
- * 5 套主题 × 明暗 = 10 组配色的 WCAG 对比度自动校验（FR-502 阶段 2）。
+/** 
+ * 5 套主题 × 明暗 = 10 组配色的 WCAG 对比度自动校验（阶段 2）。
  *
  * ── 为什么 ──
  * themes.css 里至今保留着人工验算痕迹（「近白对 oklch(0.704) 青绿仅 2.39:1，不达 4.5:1；
@@ -37,7 +37,7 @@ function readStyleSource(fileName: 'tokens.css' | 'themes.css'): string {
 /** 一个作用域内的声明（只保留自定义属性）。 */
 type DeclarationMap = Map<string, string>
 
-/**
+/** 
  * 一张样式表按选择器归类后的结果。
  * light/dark 是 `:root` / `.dark` 基线；themes 是带 data-theme 的主题块（键为主题名）。
  */
@@ -69,7 +69,7 @@ function classifySelector(selector: string): { kind: 'light' | 'dark' | 'themeLi
 /** 块级 at-rule（@media/@layer/@supports）会改变层叠语义，简易解析器不展开——宁可报错也不静默算错。 */
 const BLOCK_AT_RULE_PATTERN = /@[a-z-]+[^{;]*\{/i
 
-/**
+/** 
  * 极简 CSS 解析：只处理 `选择器 { --var: value; }` 这一形态。
  * 支持范围刻意收窄到本仓库 token 文件的实际写法；遇到超出范围的写法会抛错而不是猜。
  */
@@ -187,7 +187,7 @@ function topLevelCommaIndex(input: string): number {
   return -1
 }
 
-/**
+/** 
  * 从文本里取出第一处 `var(...)`，按括号配平确定它的范围，并拆出名字与缺省值。
  *
  * 【为什么不用正则】缺省值可能含多层嵌套，例如
@@ -225,7 +225,7 @@ function findVarCall(
   return { start, end, name, fallback }
 }
 
-/**
+/** 
  * 把变量表里的 `var()` 引用展开成字面量。
  *
  * 【为什么必须有这一步】阶段 2 起 token 改成「种子优先、缺省回落基线」的写法：
@@ -260,7 +260,7 @@ function expandVars(vars: DeclarationMap, where: string): DeclarationMap {
   return expanded
 }
 
-/**
+/** 
  * 还原某套主题在某明暗下的最终变量表。
  *
  * 层级顺序严格按 index.css 的 import 顺序（theme-map → tokens → themes）与选择器特异性推导：
@@ -506,7 +506,7 @@ const BRAND_TOKENS = [
   '--chart-1',
 ]
 
-/**
+/** 
  * 每套主题需要声明的种子（阶段 2 起）。
  *
  * tokens.css 从这 5 个值派生出上面 STRUCTURAL_TOKENS + BRAND_TOKENS 共 19 个最终 token，
@@ -582,7 +582,7 @@ describe('主题 token 覆盖（防新增主题漏定义）', () => {
 
 // ───────────────────────── 对比度矩阵：5 主题 × 2 明暗 × 11 配对 ─────────────────────────
 
-/**
+/** 
  * 用例名用 %s 打印预先拼好的标题，于是失败信息里能一眼定位到
  * 「哪套主题 · 哪个明暗 · 哪一对变量」，不必再翻详情或猜测试数据。
  */

@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ProbeUpdateHandler 探针在线更新路由处理器（FR-068/409，见 ADR-083）。
+// ProbeUpdateHandler 探针在线更新路由处理器（409，见 ADR-083）。
 // 复用已有 gRPC DeployServerProbe 下发 CP-local jar 引用，下次重启生效；可选「推送并重启」立即生效。
 type ProbeUpdateHandler struct {
 	updateSvc   *service.ProbeUpdateService
@@ -118,7 +118,7 @@ type probeUpdateBatchRequest struct {
 }
 
 // Batch POST /instances/probe/update — 批量推送已选探针版本（按 ids/filter）。
-// 权限 instance:operate；资源隔离（越权/不存在计入 skipped，镜像 FR-058）；审计 probe.update.batch。
+// 权限 instance:operate；资源隔离（越权/不存在计入 skipped，镜像）；审计 probe.update.batch。
 func (h *ProbeUpdateHandler) Batch(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermInstanceOperate) {
@@ -222,7 +222,7 @@ func (h *ProbeUpdateHandler) SetVersion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	// FR-454：适用性判定必须置于任何副作用之前，且先于制品库可用性检查——「该实例不适用探针」是
+	// 适用性判定必须置于任何副作用之前，且先于制品库可用性检查——「该实例不适用探针」是
 	// 与制品库是否配置无关的固有事实。此前 SetInstanceProbeVersion 先落库、再到 UpdateWithBaseURL
 	// 阶段才 422，拒绝时库中已被写入不适用实例的探针版本（脏写）。
 	if reason, err := h.updateSvc.ApplicabilityReason(id); err != nil {

@@ -1,5 +1,5 @@
-/**
- * FR-372 压测运行详情页：`/bots/sessions/:id?tab=overview|bots|metrics|failures|events|config`
+/** 
+ *压测运行详情页：`/bots/sessions/:id?tab=overview|bots|metrics|failures|events|config`
  */
 import { useCallback } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'

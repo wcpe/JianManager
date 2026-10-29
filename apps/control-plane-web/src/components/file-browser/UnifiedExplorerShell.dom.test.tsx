@@ -18,7 +18,7 @@ const stubSource: FileBrowserSource = {
   readContent: async () => ({ kind: 'text', content: 'x' }),
 }
 
-describe('UnifiedExplorerShell（FR-378）', () => {
+describe('UnifiedExplorerShell', () => {
   it('instance-files 渲染 TabHost', () => {
     renderWithProviders(
       <UnifiedExplorerShell capability={instanceFilesCapability()} instanceId={7} />,

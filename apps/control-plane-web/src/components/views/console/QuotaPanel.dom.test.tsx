@@ -7,7 +7,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { QuotaPanel } from '@/components/views/console/QuotaPanel'
 import type { InstanceQuotaStatus } from '@/lib/instances/quota-status'
 
-/**
+/** 
  * 配额面板 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：四态（加载 / 失败 / 无数据 / 有数据）、来源与强制状态、待收紧限额。
@@ -81,7 +81,7 @@ function renderPanel(props: Partial<ComponentProps<typeof QuotaPanel>> = {}) {
   return { merged, onRetry }
 }
 
-describe('QuotaPanel（FR-467 实例配额区受控视图）', () => {
+describe('QuotaPanel（实例配额区受控视图）', () => {
   it('加载态显示加载文案。', () => {
     renderPanel({ isLoading: true, quota: undefined })
     expect(screen.getByText('加载中…')).toBeInTheDocument()

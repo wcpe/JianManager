@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 历史消息编辑与回退（FR-543）。
+// 历史消息编辑与回退。
 //
 // ## 语义边界（用户已决策）
 //
@@ -25,7 +25,7 @@ var ErrAssistantMessageNotEditable = errors.New("该消息不可编辑")
 // ErrAssistantRollbackBlocked 会话有进行中的运行，不能回退。
 var ErrAssistantRollbackBlocked = errors.New("会话有进行中的运行，请先停止或等待完成")
 
-// EditUserMessage 编辑一条用户消息（FR-543 §6.2）。
+// EditUserMessage 编辑一条用户消息（§6.2）。
 //
 // 只允许改**自己会话里的 user 消息**：assistant 回复是历史事实，
 // tool 消息是执行结果，两者改了都等于伪造记录。
@@ -80,7 +80,7 @@ func (s *AssistantChatService) EditUserMessage(owner, messageID uint, content st
 	return &msg, nil
 }
 
-// RollbackToMessage 把会话回退到某条消息（FR-543 §6.3）。
+// RollbackToMessage 把会话回退到某条消息（§6.3）。
 //
 // 该消息**之后**的消息全部标记 superseded_at（软删）；该消息本身保留。
 //

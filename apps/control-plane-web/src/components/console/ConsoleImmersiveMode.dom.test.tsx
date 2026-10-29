@@ -47,7 +47,7 @@ function renderImmersive(onExit = vi.fn()) {
   return onExit
 }
 
-describe('FR-420/421 可视沉浸工作台', () => {
+describe('421 可视沉浸工作台', () => {
   beforeEach(() => {
     // 布局持久化会跨测试残留快照，统一清掉保证每个用例从单 pane 起步。
     sessionStorage.clear()

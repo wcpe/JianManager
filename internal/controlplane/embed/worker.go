@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 )
 
-// workerFS 内嵌与 CP 同构建的 Worker 二进制（FR-278，见 ADR-062 修订 ADR-059）。
+// workerFS 内嵌与 CP 同构建的 Worker 二进制（见 ADR-062 修订 ADR-059）。
 // 二进制与 manifest 经 `make embed-worker` 注入到 embed/worker/；目录内 .gitignore
 // 保证未注入时目录依然存在、go:embed 不致编译失败，运行时优雅降级「未内嵌」。
 //

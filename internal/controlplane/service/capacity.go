@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// capacityMinSamples 容量外推所需的最小样本数（FR-464）。
+// capacityMinSamples 容量外推所需的最小样本数。
 const capacityMinSamples = 100
 
 // capacityMaxSlopePoints Theil–Sen 斜率计算的点数上限（超出则等距抽稀，避免 O(n²) 爆炸）。
@@ -51,7 +51,7 @@ type TrendPoint struct {
 	V float64
 }
 
-// LinearForecast Theil–Sen 稳健线性拟合结果（FR-464）。
+// LinearForecast Theil–Sen 稳健线性拟合结果。
 type LinearForecast struct {
 	SlopePerSec float64 // 每秒增量 β
 	Intercept   float64
@@ -60,7 +60,7 @@ type LinearForecast struct {
 	Samples     int
 }
 
-// ForecastQuery 容量预测查询参数（FR-464）。
+// ForecastQuery 容量预测查询参数。
 type ForecastQuery struct {
 	Scope      model.MetricScope
 	NodeUUID   string
@@ -69,7 +69,7 @@ type ForecastQuery struct {
 	From, To   time.Time
 }
 
-// ForecastResult 单指标容量外推结果（FR-464）。Exhaust* 为 null 表示无增长/样本不足，不伪造预测。
+// ForecastResult 单指标容量外推结果。Exhaust* 为 null 表示无增长/样本不足，不伪造预测。
 type ForecastResult struct {
 	TargetID        string     `json:"targetId"`
 	MetricKey       string     `json:"metricKey"`
@@ -84,7 +84,7 @@ type ForecastResult struct {
 	Note            string     `json:"note,omitempty"`
 }
 
-// ForecastLinear 对点集做 Theil–Sen 稳健斜率 + 最小二乘残差/斜率标准误（FR-464 纯函数内核）。
+// ForecastLinear 对点集做 Theil–Sen 稳健斜率 + 最小二乘残差/斜率标准误（纯函数内核）。
 // 返回派生耗尽时间与置信区间所需的统计量。
 func ForecastLinear(points []TrendPoint) LinearForecast {
 	lf := LinearForecast{Samples: len(points)}
@@ -156,7 +156,7 @@ func downsampleTrend(points []TrendPoint, max int) []TrendPoint {
 	return out
 }
 
-// ForecastCapacity 对关键资源做线性外推的耗尽预测与 80% 置信区间（FR-464）。
+// ForecastCapacity 对关键资源做线性外推的耗尽预测与 80% 置信区间。
 //
 // 依赖 alert_baseline.go「统计工具」分区的 median（升序排序副本，空返回 0）：
 // Theil–Sen 的两点斜率中位数与稳健截距都建立在「中位数对离群不敏感」之上，
@@ -430,7 +430,7 @@ const CapacityTrendThresholdDays = 7.0
 // 用户显式配置了 `DedupWindowSec` 时以它为准（尊重既有去抖语义）。
 const capacityReNotifyInterval = 6 * time.Hour
 
-// CapacityTrendAlerter 在容量预测命中「预计 N 天内耗尽」时经告警体系发趋势告警（FR-464）。
+// CapacityTrendAlerter 在容量预测命中「预计 N 天内耗尽」时经告警体系发趋势告警。
 //
 // 复用既有 metric 规则（TriggerType=metric）作为投递规则与去抖窗口，不新增触发类型；
 // DedupKey = metric:<ruleID>:<targetID>:capacity:<metricKey>。

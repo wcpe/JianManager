@@ -22,12 +22,12 @@ function collectAdoptRequests() {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/**
- * FR-471：实例列表的运行态漂移标记与接管入口。
+/** 
+ *：实例列表的运行态漂移标记与接管入口。
  * 种子 creative-plot（id=21）STOPPED + runtimeDriftPid>0；用 `q=creative-plot`
  * 收敛到单行，避免 1000+ 虚拟列表的其他行干扰断言。
  */
-describe('InstancesPage 运行态漂移（FR-471）', () => {
+describe('InstancesPage 运行态漂移', () => {
   beforeEach(() => {
     loginMockUser()
     useConsoleStore.setState({ selectedNodeId: null })
@@ -47,7 +47,7 @@ describe('InstancesPage 运行态漂移（FR-471）', () => {
 
     const row = (await screen.findByText('creative-plot')).closest('tr') as HTMLElement
     const badge = within(row).getByTestId('runtime-drift-badge')
-    /*
+    /* 
       【呈现变更·本轮】表格行里只渲染图标（带七字文案的完整徽章会把名称列撑宽、
       把该行抬高约 20px，破坏表格行高一致），文案改由 title 承载。
       故断言从「元素文本含『运行态漂移』」改为「悬停提示含该文案」——可读性并未减少。

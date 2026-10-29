@@ -36,13 +36,13 @@ function seedNodejsRuntime() {
   })
 }
 
-/**
- * RuntimeAssetsPage FR-301 强断言：①矩阵渲染多类型（jdk + nodejs 类型徽章分列）
+/** 
+ * RuntimeAssetsPage强断言：①矩阵渲染多类型（jdk + nodejs 类型徽章分列）
  * ②「上次同步」显示 + 刷新按钮触发强制同步（syncedAt 前移为「刚刚」）
  * ③部分节点同步失败容忍——旧数据（JDK 卡片/矩阵）仍在，不清空不转错误态。
  * 独立于既有 RuntimeAssetsPage.dom.test.tsx（不动其用例）。
  */
-describe('RuntimeAssetsPage FR-301（多运行时矩阵与刷新）', () => {
+describe('RuntimeAssetsPage（多运行时矩阵与刷新）', () => {
   it('矩阵渲染多类型：jdk 与 nodejs 各成列、类型徽章区分，nodejs 引用恒 0', async () => {
     loginMockUser()
     seedNodejsRuntime()

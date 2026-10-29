@@ -1,7 +1,7 @@
 import type { InstanceGroupNode } from './instance-group'
 
-/**
- * 返回某分组从根到自身的路径（面包屑）（FR-165，design §4.4）。
+/** 
+ * 返回某分组从根到自身的路径（面包屑）（design §4.4）。
  * 顺序为 [根, …, 目标]；id 未知返回空数组。
  * 对脏数据健壮：visited 去重防环；父指向不存在节点时以当前节点为路径根。
  * 纯函数，便于表驱动单测。

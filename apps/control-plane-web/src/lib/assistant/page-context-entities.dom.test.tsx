@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { useContextChips } from '@/lib/assistant/page-context'
 
-/**
- * 芯片 → 实体引用的传递（FR-518 §5.2 与 FR-519 芯片联动的接缝）。
+/** 
+ * 芯片 → 实体引用的传递（§5.2 与芯片联动的接缝）。
  *
  * 为什么单独守这一处：面板层的测试用显式 props 传入 `entity`，
  * 因此**测不到** `useContextChips` 是否真的把实体带出来。

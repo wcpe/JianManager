@@ -10,11 +10,11 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置分层覆盖路由端到端测试（FR-529 §7）。
+// 配置分层覆盖路由端到端测试（§7）。
 //
 // 这里走 HTTP 层，验证：路由可达、门禁生效、错误码映射正确、有效值预览返回 traced。
 
-// TestConfigFiles_CRUDAndLayers 覆盖 FR-529 §7.1 / §7.2 的完整链路。
+// TestConfigFiles_CRUDAndLayers 覆盖§7.1 / §7.2 的完整链路。
 func TestConfigFiles_CRUDAndLayers(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTestDB(t)

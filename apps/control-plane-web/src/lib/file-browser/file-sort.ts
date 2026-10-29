@@ -1,5 +1,5 @@
-/**
- * 文件列表排序（FR-375）：目录优先 + 列头键升/降序。
+/** 
+ * 文件列表排序：目录优先 + 列头键升/降序。
  */
 
 export type FileSortKey = 'name' | 'modTime' | 'size' | 'type' | 'perm'

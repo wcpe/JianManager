@@ -1,5 +1,5 @@
-/**
- * 复制文本到剪贴板，兼容 HTTP 非安全上下文（FR-188）。
+/** 
+ * 复制文本到剪贴板，兼容 HTTP 非安全上下文。
  *
  * `navigator.clipboard` 仅在安全上下文（HTTPS / localhost）可用；本面板常部署在
  * `http://<LAN-IP>:8080` 明文 HTTP，此时 `navigator.clipboard` 为 undefined，
@@ -43,7 +43,7 @@ export type ClipboardReadResult =
   | { ok: true; text: string }
   | { ok: false; reason: 'unavailable' | 'denied' }
 
-/**
+/** 
  * 读取剪贴板文本，兼容 HTTP 非安全上下文——读不到时给出**可识别的失败原因**。
  *
  * 与 {@link copyToClipboard} 对称，但**读方向没有 execCommand 回退**：

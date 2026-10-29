@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ErrRepairNotConfirmed 破坏性修复操作未二次确认（confirm=false）。参见 ADR-039 §2、FR-059。
+// ErrRepairNotConfirmed 破坏性修复操作未二次确认（confirm=false）。参见 ADR-039 §2。
 var ErrRepairNotConfirmed = errors.New("破坏性操作需二次确认（confirm=true）")
 
 // dedupNameSuffixRe 匹配迁移去重时给重名活跃节点追加的 "-dup-<id>" 后缀（见 database.dedupeActiveNodeNames）。
@@ -26,7 +26,7 @@ var dedupNameSuffixRe = regexp.MustCompile(`-dup-\d+$`)
 //   - 重新 enroll：为被挤占的机器轮换全新 UUID/secret，切断与被冒用旧身份的关联。
 //   - 孤儿清理：清理/失效该节点上孤立的 JDK 与实例引用。
 //
-// 重新 enroll 与孤儿清理均为破坏性操作，要求 confirm=true（二次确认），审计由调用方记录（FR-059/FR-015）。
+// 重新 enroll 与孤儿清理均为破坏性操作，要求 confirm=true（二次确认），审计由调用方记录。
 type NodeRepairService struct {
 	db *gorm.DB
 }

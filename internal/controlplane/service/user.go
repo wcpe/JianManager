@@ -91,7 +91,7 @@ func isUniqueConstraint(err error) bool {
 	return errors.Is(err, gorm.ErrDuplicatedKey) || strings.Contains(strings.ToLower(err.Error()), "unique")
 }
 
-// UserListFilter 用户列表筛选（FR-336）。零值不限制。
+// UserListFilter 用户列表筛选。零值不限制。
 type UserListFilter struct {
 	// Q 用户名模糊匹配（子串，LIKE %q%，%/_ 由服务端转义）。
 	Q string
@@ -107,7 +107,7 @@ func escapeLike(s string) string {
 	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
 }
 
-// List 返回用户列表与命中总数（FR-336）。total 与 Q 条件同源（Count 同 WHERE）；
+// List 返回用户列表与命中总数。total 与 Q 条件同源（Count 同 WHERE）；
 // 排序统一 username ASC, id ASC——分页窗口稳定必需，分页/全量两形态一致。
 func (s *UserService) List(f UserListFilter) ([]model.User, int64, error) {
 	query := s.db.Model(&model.User{})

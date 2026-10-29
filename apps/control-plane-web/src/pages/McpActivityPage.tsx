@@ -12,7 +12,7 @@ import type { McpWindowPreset } from '@/components/views/agent/McpActivityPageVi
 
 const ROLE_PLATFORM_ADMIN = 10
 
-/**
+/** 
  * 窗口档位常量定义在包内（档位按钮的实际渲染处），此处原样再导出：
  * McpActivityPage.dom.test.tsx 用 `import { WINDOW_PRESETS } from './McpActivityPage'` 逐项枚举，
  * 校验「Go duration 形态 + 1h~168h 区间」这一后端可解析性契约（完整说明见包内常量的注释）。
@@ -20,8 +20,8 @@ const ROLE_PLATFORM_ADMIN = 10
  */
 export { WINDOW_PRESETS }
 
-/**
- * MCP 活动运维页（FR-391 / ADR-096）容器：平台管理员门禁、按窗口取数（端点无会话可观测，
+/** 
+ * MCP 活动运维页（ADR-096）容器：平台管理员门禁、按窗口取数（端点无会话可观测，
  * 靠轮询兜底实时性）、手动刷新、端点复制提示与页头两个跳转入口都在这里决定，
  * 表格与三态展示交共享视图（ADR-103）。保留同路径默认导出，路由表无需改动。
  */

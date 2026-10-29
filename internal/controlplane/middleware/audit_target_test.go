@@ -10,7 +10,7 @@ import (
 
 // TestAuditMiddleware_TargetIDFromActualPath 复现审计目标 ID 取到路由模式占位符 `:id` 的缺陷：
 // determineTarget 须从**真实请求路径**取实例 ID，而非 c.FullPath() 的 `/instances/:id` 模式，
-// 否则审计「目标」列全渲染成 instance#:id，运维无法定位具体实例（FR-015 真机验收发现）。
+// 否则审计「目标」列全渲染成 instance#:id，运维无法定位具体实例（真机验收发现）。
 func TestAuditMiddleware_TargetIDFromActualPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

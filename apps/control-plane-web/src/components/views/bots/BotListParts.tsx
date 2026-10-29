@@ -62,7 +62,7 @@ export function SummaryCards({
           />
         ))}
       </div>
-      {/* 舰队健康条（FR-147）：按全局 byStatus 多段着色 connected/connecting/error/stopped */}
+      {/* 舰队健康条：按全局 byStatus 多段着色 connected/connecting/error/stopped */}
       {fleetTotal > 0 && (
         <Card className="gap-2 px-3 py-3">
           <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
@@ -190,7 +190,7 @@ export function formatPosition(pos: { x: number; y: number; z: number }) {
   return `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`
 }
 
-/**
+/** 
  * 事件时间格式化——**已移到 `@/lib/format/event-time` 作为单一真源**。
  *
  * 这里保留 re-export 只为不动既有调用点；新增代码请直接从 lib 导入，

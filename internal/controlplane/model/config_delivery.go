@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// 配置分批交付（FR-531）与生效编排（FR-532）的持久化模型。
+// 配置分批交付与生效编排的持久化模型。
 //
 // 为什么拆两张表而不是把目标塞进 order 的一列 JSON：
 //   - order 是「一次变更」的状态机，行数少、状态与暂停原因被频繁改写；
@@ -10,7 +10,7 @@ import "time"
 //     (order, batch, status) 过滤分页。塞进 JSON 后「这台为什么失败」「跳过的是哪几台」
 //     就只能全量反序列化再在内存里筛，而这正是运维在出事时最常问的两个问题。
 
-// ConfigDeliveryStatus 交付单级状态（FR-531 §7）。
+// ConfigDeliveryStatus 交付单级状态（§7）。
 type ConfigDeliveryStatus string
 
 const (
@@ -99,7 +99,7 @@ func ValidConfigDeliveryStatus(s ConfigDeliveryStatus) bool {
 	return ok
 }
 
-// ConfigDeliveryTargetStatus 目标级状态（FR-531 §7.1）。
+// ConfigDeliveryTargetStatus 目标级状态（§7.1）。
 type ConfigDeliveryTargetStatus string
 
 const (
@@ -160,7 +160,7 @@ func ValidConfigDeliveryBatchMode(m ConfigDeliveryBatchMode) bool {
 	return m == DeliveryBatchPercent || m == DeliveryBatchCount
 }
 
-// ConfigActivationMethod 生效方式（FR-532 §13）。
+// ConfigActivationMethod 生效方式（§13）。
 type ConfigActivationMethod string
 
 const (
@@ -191,10 +191,10 @@ const (
 	DeliveryPauseCircuitBreak ConfigDeliveryPauseKind = "circuit_break"
 )
 
-// ConfigDeliveryOrder 配置交付单（FR-531 §6）。
+// ConfigDeliveryOrder 配置交付单（§6）。
 type ConfigDeliveryOrder struct {
 	ID uint `gorm:"primaryKey" json:"id"`
-	// ConfigFileID 关联的配置逻辑文件（FR-529 ConfigFile）。
+	// ConfigFileID 关联的配置逻辑文件（ConfigFile）。
 	ConfigFileID uint `gorm:"index;not null" json:"configFileId"`
 	// FilePath 落盘目标路径（相对实例工作目录）。为空时取 ConfigFile.Name。
 	FilePath string `gorm:"type:varchar(512);not null" json:"filePath"`
@@ -266,7 +266,7 @@ type ConfigDeliveryOrder struct {
 // TableName 指定表名（与 spec §6 的命名一致）。
 func (ConfigDeliveryOrder) TableName() string { return "config_delivery_order" }
 
-// ConfigDeliveryTarget 交付目标：一次变更在一台实例上的完整经历（FR-531 §6）。
+// ConfigDeliveryTarget 交付目标：一次变更在一台实例上的完整经历（§6）。
 type ConfigDeliveryTarget struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// OrderID 所属交付单；唯一约束 (order_id, instance_id) 防止同一单把同一台算两次。
@@ -292,7 +292,7 @@ type ConfigDeliveryTarget struct {
 	// NewVersionID 本次写入产生的实例配置版本。
 	NewVersionID *uint `json:"newVersionId,omitempty"`
 
-	// DiskWritten 落盘是否成功。与 Status 分开记：**落盘成功 ≠ 生效成功**（FR-532 §16）。
+	// DiskWritten 落盘是否成功。与 Status 分开记：**落盘成功 ≠ 生效成功**（§16）。
 	DiskWritten bool `json:"diskWritten"`
 	// ActivateConfirmed 生效是否得到确切确认。best_effort 时为 false——
 	// 这正是「已请求重载」不能写成「已生效」的机器可读依据。

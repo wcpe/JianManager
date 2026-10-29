@@ -14,7 +14,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 import type { NodePorts } from '@/lib/nodes/node-ports'
 
-/**
+/** 
  * 端口表行高（px）：**声明值 = 真实值**——同一常量既喂虚拟窗口（`itemSize`），
  * 也写成行盒的行内 style，不由类名反推（先例：`views/logs/LogsPageView` 的 `ROW_HEIGHT`）。
  *
@@ -24,8 +24,8 @@ import type { NodePorts } from '@/lib/nodes/node-ports'
  */
 const PORT_ROW_HEIGHT = 36
 
-/**
- * 节点端口占用面板（FR-032）：展示系统已分配的 server/query 端口与分配范围。
+/** 
+ * 节点端口占用面板：展示系统已分配的 server/query 端口与分配范围。
  *
  * 受控视图（ADR-103 a 范式）：**不取数**——端口数据与加载态由外壳经 props 注入
  * （外壳调 `@/api/ports` 的 `useNodePorts`）。过滤词、虚拟滚动窗口等 UI 状态留在本组件内，
@@ -78,11 +78,11 @@ export default function NodePortsPanel({ data, isLoading, isError, onRetry }: No
         <Skeleton className="h-10 w-full" />
         <Skeleton className="h-10 w-full" />
       </div>
-    )
+)
 
   const visible = filtered.slice(range.start, range.end)
 
-  /*
+  /* 
     错误态必须排在空态之前：请求失败时 data 为空、isLoading 已为假，
     若直接落到空态，界面会写「该节点暂无端口占用」——把故障说成没有数据。
   */
@@ -94,9 +94,9 @@ export default function NodePortsPanel({ data, isLoading, isError, onRetry }: No
           <Button variant="outline" size="sm" onClick={onRetry}>
             {t('common.retry')}
           </Button>
-        )}
+)}
       </div>
-    )
+)
 
   return (
     <div>
@@ -107,8 +107,8 @@ export default function NodePortsPanel({ data, isLoading, isError, onRetry }: No
             size: data.ranges.rangeSize,
           })}
         </p>
-      )}
-      {/* 实例名过滤（FR-032 增强）：大量端口占用时快速定位。 */}
+)}
+      {/* 实例名过滤（增强）：大量端口占用时快速定位。 */}
       <div className="relative mb-2 max-w-xs">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <input
@@ -124,7 +124,7 @@ export default function NodePortsPanel({ data, isLoading, isError, onRetry }: No
         ref={containerRef}
         onScroll={onScroll}
         data-testid="node-ports-virtual"
-        /*
+        /* 
           必须保留一个有限高度的滚动容器：虚拟滚动按容器可视高算窗口，
           高度交给内容（不设 max-h）会让容器高度恰好等于已渲染行高，
           于是永远量不到「还有更多行」，后半张表根本滚不到。

@@ -7,7 +7,7 @@ import type { AlertEventFilter, AlertTab } from '@/components/views/alerts/Alert
 import { RuleDialog } from './alerts/RuleDialog'
 import { ChannelDialog } from './alerts/ChannelDialog'
 
-/**
+/** 
  * 告警页容器（ADR-103 b 范式）：三块数据取数、全部写动作与未读计数在这里决定，
  * 三个 Tab 的展示、Tab 选中、对话框开合与删除目标交共享视图。
  *
@@ -23,7 +23,7 @@ export default function AlertsPage() {
   // 当前 Tab：事件查询只在事件 Tab 激活时发起，保住原先「未激活的 Tab 内容不挂载」的取数时机。
   const [tab, setTab] = useState<AlertTab>('rules')
 
-  // 页面上报（FR-518 §4.2）：告警页发当前 Tab，**不发通知通道凭证**、不发告警正文。
+  // 页面上报（§4.2）：告警页发当前 Tab，**不发通知通道凭证**、不发告警正文。
   // `tab` 是页面自身的枚举值（rules/events/channels），属于「用户正看着哪一块」。
   usePageContext(useMemo(() => ({ pageKey: 'alerts', tab }), [tab]))
   const { data: unread } = useUnreadAlertCount()

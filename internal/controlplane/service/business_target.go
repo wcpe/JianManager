@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 业务批量目标解析（FR-535 §2）。
+// 业务批量目标解析（§2）。
 //
 // 解析顺序（各条件 AND 语义，从粗到细收敛）：
 //  1. groupIds + includeDescendants → 递归展开分组子树为实例集合
@@ -27,7 +27,7 @@ import (
 const (
 	// businessGroupTreeMaxDepth 分组树递归深度上限（防脏数据成环导致无限递归）。
 	businessGroupTreeMaxDepth = 64
-	// businessTargetPreviewMaxIDs 预览响应中 instanceIds 的完整返回上限（FR-535 §3.1）。
+	// businessTargetPreviewMaxIDs 预览响应中 instanceIds 的完整返回上限（§3.1）。
 	businessTargetPreviewMaxIDs = 500
 	// businessTargetPreviewHeadIDs 超过上限时只返回前 N 个 ID。
 	businessTargetPreviewHeadIDs = 100
@@ -113,7 +113,7 @@ func (r *BusinessResolvedTarget) OnlineOffline() (online, offline int) {
 	return online, offline
 }
 
-// Hash 计算实例集合的稳定指纹（用于 confirmToken 绑定，FR-535 §4.1）。
+// Hash 计算实例集合的稳定指纹（用于 confirmToken 绑定§4.1）。
 //
 // 输入已是排序去重的 ID 列表，直接以逗号拼接后取 SHA-256，得到固定长度十六进制串。
 // 之所以不用 JSON：目标集合的唯一语义就是「哪些 ID」，任何序列化细节（空格/括号）

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-513：主机级观测的 API 契约。
+// 主机级观测的 API 契约。
 //
 // 核心验收点（spec §5 验收 2）：**null 与 0 必须可分**。
 // 老 Worker 不报这些字段时是 null，前端渲染 `--`；上报了、读数确实是 0 时是 0。

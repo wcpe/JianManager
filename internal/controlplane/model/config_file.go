@@ -27,7 +27,7 @@ func ValidConfigFileFormat(f ConfigFileFormat) bool {
 	return false
 }
 
-// ConfigScopeLevel 层作用域级别（FR-529 §4.3）。
+// ConfigScopeLevel 层作用域级别（§4.3）。
 //
 // 只有两级：group（分组树任意节点）与 instance（实例）。
 // Beacon 的 namespace/bc_cluster/region/zone/server 五层在 JM 里由分组树的自引用邻接表
@@ -51,7 +51,7 @@ func ValidConfigScopeLevel(l ConfigScopeLevel) bool {
 	return false
 }
 
-// ConfigFile 配置逻辑文件（FR-529 §4.1）。name 全局唯一（软删后仍占用，避免与历史版本混淆）。
+// ConfigFile 配置逻辑文件（§4.1）。name 全局唯一（软删后仍占用，避免与历史版本混淆）。
 //
 // 与 InstanceConfigVersion 的关系：后者是「某实例某文件的实际落盘快照」，承载回滚链与
 // 漂移比对；本表的层版本链承载「配置的定义」。二者并存——见 config_layer.go 的说明。
@@ -72,7 +72,7 @@ type ConfigFile struct {
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// ConfigLayerVersion 层版本（FR-529 §4.2）——每个 (文件 × 作用域) 一条独立的不可变追加链。
+// ConfigLayerVersion 层版本（§4.2）——每个 (文件 × 作用域) 一条独立的不可变追加链。
 //
 // 回退 = 追加新版本（based_on_version_id 指向被复制的源版本），历史行永不修改，
 // 因此任意时刻都能重放出「某层当时长什么样」。

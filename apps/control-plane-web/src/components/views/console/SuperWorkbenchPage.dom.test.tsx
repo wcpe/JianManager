@@ -6,7 +6,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { SuperWorkbenchPage } from '@/components/views/console/SuperWorkbenchPage'
 import type { PlacedCard } from '@/lib/console/workspace-preset'
 
-/**
+/** 
  * 超级工作台页面 · 受控视图测（ADR-103）。
  *
  * 补的是**注入面契约**：画布状态与全部动作来自 props、四个子块由外壳注入、
@@ -77,7 +77,7 @@ function renderPage(props: Partial<ComponentProps<typeof SuperWorkbenchPage>> = 
   return { ...merged, onEnsureCanvas, onLayoutChange, onDropCard, renderCard, renderLibrary, renderToolbar }
 }
 
-describe('SuperWorkbenchPage（FR-167 超级工作台受控视图）', () => {
+describe('SuperWorkbenchPage（超级工作台受控视图）', () => {
   it('挂载即请求初始化画布，并渲染注入的实例库与工具栏。', () => {
     const { onEnsureCanvas, renderLibrary, renderToolbar } = renderPage()
     expect(onEnsureCanvas).toHaveBeenCalled()

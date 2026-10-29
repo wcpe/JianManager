@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-// GlobalPackage 托管全局目录下的一个已装包（FR-307）。
+// GlobalPackage 托管全局目录下的一个已装包。
 type GlobalPackage struct {
 	Name    string
 	Version string
@@ -61,7 +61,7 @@ func realRun(ctx context.Context, name string, args, env []string, onLine func(s
 	return out.Bytes(), cmd.Wait()
 }
 
-// GlobalDir 返回节点级受控包项目根（FR-307，见 ADR-072）。
+// GlobalDir 返回节点级受控包项目根（见 ADR-072）。
 func (m *Manager) GlobalDir() string { return filepath.Join(m.runtimesRoot, "global") }
 
 var managedNPMOverrides = map[string]map[string]string{
@@ -271,7 +271,7 @@ func (m *Manager) projectArgs(pm string) []string {
 	return []string{"--dir", m.GlobalDir()}
 }
 
-// ListGlobal 列出节点受控项目已装包，并 best-effort 标注可更新版本（FR-307）。
+// ListGlobal 列出节点受控项目已装包，并 best-effort 标注可更新版本。
 func (m *Manager) ListGlobal(ctx context.Context, pm string) ([]GlobalPackage, error) {
 	m.globalMu.Lock()
 	defer m.globalMu.Unlock()
@@ -340,7 +340,7 @@ func (m *Manager) InstallGlobal(ctx context.Context, pm, name, version string, o
 	return nil
 }
 
-// RemoveGlobal 卸载一个全局包（FR-307）。
+// RemoveGlobal 卸载一个全局包。
 func (m *Manager) RemoveGlobal(ctx context.Context, pm, name string) error {
 	if !pkgNameRe.MatchString(name) {
 		return fmt.Errorf("非法包名: %q", name)

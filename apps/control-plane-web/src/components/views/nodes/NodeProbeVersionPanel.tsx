@@ -3,7 +3,7 @@ import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { Button } from '@jianmanager/ui/components/button'
 
-/**
+/** 
  * 可选探针版本（本组件所需的最小结构）。
  *
  * 刻意只声明用到的三个字段，而非照搬 API 层的 `ArtifactVersion`：外壳直接传完整的
@@ -22,8 +22,8 @@ export interface ProbeCatalogView {
   package: { defaultVersionId: number }
 }
 
-/**
- * 节点默认探针版本（FR-411）：Worker 默认版本仅用于之后新建的实例，不会自动改动已有实例。
+/** 
+ * 节点默认探针版本：Worker 默认版本仅用于之后新建的实例，不会自动改动已有实例。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast——目录与当前选择经 props 注入，
  * 保存经 `onSave` 上报由外壳执行。
@@ -68,7 +68,7 @@ export default function NodeProbeVersionPanel({
     )
   if (isError || !catalog)
     return (
-      /*
+      /* 
         只给一行红字时，用户唯一的自救手段是刷新整页（连当前节点与页签一起丢）。
         这里给重试按钮，把「失败」变成一个可恢复的动作。
       */

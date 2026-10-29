@@ -1,4 +1,4 @@
-/**
+/** 
  * @file AlertsPageView：告警页（规则 / 事件 / 渠道三个 Tab 的宿主）的受控视图，取数、写动作与 toast 由应用容器负责。
  * @input lib/alert-contracts（AlertRuleInfo / AlertEventInfo / AlertChannelInfo）、lib/alert-helpers（级别色、静默窗口、
  *        渠道 id 解析、规则汇总）、views/config-explorer/ConfigRow（卡片行/开关/视图切换/汇总筛选条）、
@@ -8,7 +8,7 @@
  *         AlertChannelsTabView、AlertChannelsTabViewProps
  * @sync apps/control-plane-web/src/pages/AlertsPage.tsx（容器）、apps/control-plane-web/src/pages/AlertsPage.dom.test.tsx、
  *        apps/control-plane-web/src/pages/alerts/RuleDialog.tsx 与 ChannelDialog.tsx（对话框容器经插槽注入）
- * @since FR-508（组件受控化迁包；原页 FR-011 告警规则 + FR-085 通道/事件 + FR-149 事件筛选 + FR-208 mock 域簇）
+ * @since（组件受控化迁包；原页告警规则通道/事件事件筛选mock 域簇）
  */
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -50,7 +50,7 @@ const ALERT_TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_ke
 /** Radix Select 不接受空字符串选项值，用哨兵值表达筛选栏的「全部」。 */
 const FILTER_ALL = 'all'
 
-/**
+/** 
  * 事件筛选（页码从 1 起）。
  *
  * 刻意只声明本视图读写到的字段，而非照搬应用侧 `@/api/alerts` 的 `EventQuery`：
@@ -63,11 +63,11 @@ export interface AlertEventFilter {
   acknowledged?: boolean
   level?: string
   triggerType?: string
-  /** 模糊匹配 message（FR-149）。 */
+  /** 模糊匹配 message。 */
   keyword?: string
-  /** fired_at 下界（RFC3339，FR-149）。 */
+  /** fired_at 下界（RFC3339）。 */
   from?: string
-  /** fired_at 上界（RFC3339，FR-149）。 */
+  /** fired_at 上界（RFC3339）。 */
   to?: string
   page?: number
   pageSize?: number
@@ -95,7 +95,7 @@ function ruleConditionText(r: AlertRuleInfo): string {
 
 // ── 规则页 ──
 
-/**
+/** 
  * 规则对话框插槽参数：本视图只决定「何时打开、编辑哪条、关闭回调」，
  * 取数（节点/实例候选）、创建更新 mutation 与表单渲染由外壳的实现承担。
  */
@@ -107,7 +107,7 @@ export interface AlertRuleDialogArgs {
   onClose: () => void
 }
 
-/**
+/** 
  * 规则 Tab 的注入契约：规则列表由容器取数注入，启停/删除以回调上报，对话框实现经插槽注入。
  * 汇总筛选与卡片/列表视图切换只裁剪已到手的行、不触发取数，故留本组件。
  */
@@ -128,7 +128,7 @@ export interface AlertRulesTabViewProps {
   renderRuleDialog: (args: AlertRuleDialogArgs) => ReactNode
 }
 
-/** 规则 Tab：汇总筛选条 + 卡片/列表双视图 + 行内启停/编辑/删除（FR-011）。 */
+/** 规则 Tab：汇总筛选条 + 卡片/列表双视图 + 行内启停/编辑/删除。 */
 export function AlertRulesTabView({
   rules,
   isLoading = false,
@@ -319,7 +319,7 @@ export function AlertRulesTabView({
 
 // ── 事件页 ──
 
-/**
+/** 
  * 事件 Tab 的注入契约：事件行与总数由容器按 `filter` 取数注入；
  * `filter`（含页码）是 `useAlertEvents` 的查询键，一变即重新取数，故归容器持有，
  * 本组件只负责把用户操作合成为「下一份筛选」（改筛选条件即回第 1 页）。
@@ -341,7 +341,7 @@ export interface AlertEventsTabViewProps {
   onMarkAllRead: () => void
 }
 
-/** 事件 Tab：多维筛选栏 + 事件表格 + 分页（FR-085 / FR-149）。 */
+/** 事件 Tab：多维筛选栏 + 事件表格 + 分页。 */
 export function AlertEventsTabView({
   items,
   total = 0,
@@ -357,7 +357,7 @@ export function AlertEventsTabView({
   const page = filter.page ?? 1
   const pageSize = filter.pageSize ?? 50
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  // 改筛选条件即回第 1 页；翻页用单独上报。datetime-local（本地时区）转 RFC3339 给后端（FR-149）。
+  // 改筛选条件即回第 1 页；翻页用单独上报。datetime-local（本地时区）转 RFC3339 给后端。
   const patchFilter = (patch: Partial<AlertEventFilter>) => onFilterChange({ ...filter, ...patch, page: 1 })
   const toIso = (v: string) => (v ? new Date(v).toISOString() : undefined)
 
@@ -532,7 +532,7 @@ export function AlertEventsTabView({
 
 // ── 通道页 ──
 
-/**
+/** 
  * 通道对话框插槽参数：本视图只决定开合与编辑目标，
  * 创建更新 mutation、QQ 扫码绑定弹窗与提示由外壳的实现承担。
  */
@@ -542,7 +542,7 @@ export interface AlertChannelDialogArgs {
   onClose: () => void
 }
 
-/**
+/** 
  * 通道 Tab 的注入契约：通道列表由容器取数注入，测试发送/删除以回调上报，对话框实现经插槽注入。
  */
 export interface AlertChannelsTabViewProps {
@@ -560,7 +560,7 @@ export interface AlertChannelsTabViewProps {
   renderChannelDialog: (args: AlertChannelDialogArgs) => ReactNode
 }
 
-/** 通道 Tab：通道卡片列表 + 测试发送/编辑/删除（FR-085 / FR-494）。 */
+/** 通道 Tab：通道卡片列表 + 测试发送/编辑/删除。 */
 export function AlertChannelsTabView({
   channels,
   isLoading = false,
@@ -653,7 +653,7 @@ export function AlertChannelsTabView({
   )
 }
 
-/**
+/** 
  * 告警页的注入契约（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  *
  * 受控边界：
@@ -670,7 +670,7 @@ export function AlertChannelsTabView({
  *   但「何时打开、编辑哪条」是页面语义，留在本组件。
  */
 export interface AlertsPageViewProps {
-  /**
+  /** 
    * 当前 Tab（受控）。
    *
    * 归容器而非留包内：事件列表只在事件 Tab 激活时才取数（原先挂在 Tab 内容里，Radix 未激活即不挂载），
@@ -719,8 +719,8 @@ export interface AlertsPageViewProps {
   renderChannelDialog: (args: AlertChannelDialogArgs) => ReactNode
 }
 
-/**
- * 告警页（FR-011 规则 / FR-085 通道与事件 / FR-149 事件筛选）。
+/** 
+ * 告警页（规则通道与事件事件筛选）。
  * 三个 Tab 的宿主：规则（卡片/列表 + 启停）、事件（多维筛选 + 确认）、通道（测试发送 + 扫码绑定）。
  */
 export function AlertsPageView({

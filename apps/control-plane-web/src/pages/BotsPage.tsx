@@ -31,7 +31,7 @@ import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
 import { InstancePicker } from '@/components/instances/InstancePicker'
 import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
-/**
+/** 
  * Bot 详情弹窗的取数接线层（ADR-103）：视图已入包，此处注入元数据、实时流与命令下发。
  */
 function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpenChange: (open: boolean) => void }) {
@@ -53,7 +53,7 @@ function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpen
   )
 }
 
-/**
+/** 
  * 分组窥视的取数接线层（ADR-103）：展示件已入包，此处只做参数展开、页码状态与成员取数。
  *
  * 页码会触发重新取数，故由本层持有（与列表页码同规则）；窥视随分组展开态挂载/卸载——
@@ -75,10 +75,10 @@ function BotGroupPeekContainer({ params, onOpenBot }: { params: BotListParams; o
   )
 }
 
-/**
- * 全局 Bot 管理页（FR-040 / ADR-009 + FR-371）。
+/** 
+ * 全局 Bot 管理页（ADR-009）。
  * URL 可寻址 tab：fleet / sessions / templates；旧链接默认 fleet。
- * 舰队 tab 保持聚合优先、永不全量铺开；会话与模板由 FR-371 承接，详情页由 FR-372。
+ * 舰队 tab 保持聚合优先、永不全量铺开；会话与模板由承接，详情页由。
  */
 export default function BotsPage() {
   const { t } = useTranslation()
@@ -124,8 +124,8 @@ export default function BotsPage() {
   )
 }
 
-/**
- * 舰队 tab：聚合优先、永不全量铺开（FR-040 行为保持）。
+/** 
+ * 舰队 tab：聚合优先、永不全量铺开（行为保持）。
  * 页顶概览 + 分组总览；展开才分页窥视；批量经 useBotBatch 委托。
  */
 function BotFleetTab() {
@@ -139,7 +139,7 @@ function BotFleetTab() {
   const [status, setStatus] = useState<string>('')
   const [groupBy, setGroupBy] = useState<GroupByDim>('instance')
   const [detailBotId, setDetailBotId] = useState<number | null>(null)
-  // 工作台卡 ⇄ 列表视图（FR-147，§4.5）；运行实体默认卡片。
+  // 工作台卡 ⇄ 列表视图（§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>('card')
   // 节点筛选数据源（原在 Toolbar 内取数，视图入包后上提到容器）。
   const { data: nodes } = useNodes()
@@ -180,12 +180,12 @@ function BotFleetTab() {
   const counts = statusCounts(globalSummary.data)
   const dist = distribution(instanceSummary.data, nodeSummary.data)
   const groups = activeSummary.data?.groups ?? []
-  // 全局各状态精确计数，供舰队健康条多段着色（FR-147）。
+  // 全局各状态精确计数，供舰队健康条多段着色。
   const byStatus = globalSummary.data?.byStatus
   const fleetTotal = globalSummary.data?.total ?? 0
 
-  /**
-   * 单组批量下发（FR-147）：目标 = 该组筛选，结果经 toast 回执（mutation 与提示都留在应用侧）。
+  /** 
+   * 单组批量下发：目标 = 该组筛选，结果经 toast 回执（mutation 与提示都留在应用侧）。
    * 与原页一致：成功回执带成功/失败计数，失败只报动作失败。
    */
   const runGroupBatch = (group: BotSummaryGroup, action: BotBatchAction, behavior?: string) =>

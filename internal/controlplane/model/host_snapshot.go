@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// HostMountSnapshot 是某节点某挂载点的最新磁盘用量（FR-513）。
+// HostMountSnapshot 是某节点某挂载点的最新磁盘用量。
 //
 // ## 为什么单独成表而不是给 nodes 加列
 //
@@ -32,7 +32,7 @@ type HostMountSnapshot struct {
 // TableName 固定表名。
 func (HostMountSnapshot) TableName() string { return "host_mount_snapshots" }
 
-// HostProcessSnapshot 是某节点整机 top-N 进程的最新快照（FR-513）。
+// HostProcessSnapshot 是某节点整机 top-N 进程的最新快照。
 //
 // 与 HostMountSnapshot 同理：多值维度、只保留最新一批。
 //

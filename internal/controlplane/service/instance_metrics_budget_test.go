@@ -10,7 +10,7 @@ import (
 )
 
 // TestMetricsFetchTimeout_CoversWorstCaseSerialProbeChain 实时指标链路预算须覆盖 Worker 侧
-// 串行 `探针(≤5s)→SLP(t)→Query(t)` 的最坏时延，否则详情页被 gRPC DROP（FR-446 复审 N2）。
+// 串行 `探针(≤5s)→SLP(t)→Query(t)` 的最坏时延，否则详情页被 gRPC DROP（复审 N2）。
 func TestMetricsFetchTimeout_CoversWorstCaseSerialProbeChain(t *testing.T) {
 	svc := &InstanceService{}
 	inst := &model.Instance{ProbePort: 8123, ServerPort: 25565, QueryPort: 25566}
@@ -26,7 +26,7 @@ func TestMetricsFetchTimeout_CoversWorstCaseSerialProbeChain(t *testing.T) {
 		svc.metricsFetchTimeout(&model.Instance{ServerPort: 25565}))
 	assert.Equal(t, realtimeMetricsBudgetMargin, svc.metricsFetchTimeout(&model.Instance{}))
 
-	// 生效超时取自平台设置；读侧同样钳制到共享上界（FR-446 复审 N3 / NEW-ISSUE A）。
+	// 生效超时取自平台设置；读侧同样钳制到共享上界（复审 N3 / NEW-ISSUE A）。
 	svc.SetSettingsReader(stubSettings{
 		SettingKeyDirectProbeSLPTimeout:   "5s",
 		SettingKeyDirectProbeQueryTimeout: "45s", // 超上界 → 钳制为 maxDirectProbeTimeout

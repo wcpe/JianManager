@@ -1,5 +1,5 @@
-/**
- * 资源管理器多选模型（FR-070）。
+/** 
+ * 资源管理器多选模型。
  * 纯函数 + 不可变更新，便于 vitest（node 环境）单测。
  *
  * 选中态由「选中集合 + 锚点」构成：
@@ -29,7 +29,7 @@ export interface ClickModifiers {
   ctrlOrMeta?: boolean
 }
 
-/**
+/** 
  * 处理一次点击，返回新的选中态。
  * @param state 当前选中态
  * @param key 被点击项的 key
@@ -85,7 +85,7 @@ export function isSelected(state: SelectionState, key: string): boolean {
   return state.selected.has(key)
 }
 
-/**
+/** 
  * 从选中集合中剔除已不存在的 key（列表刷新后调用，避免悬挂选择）。
  * 锚点若失效则置 null。
  */

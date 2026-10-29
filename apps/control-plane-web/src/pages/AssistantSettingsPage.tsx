@@ -34,7 +34,7 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
+/** 
  * 分类码 → 处置建议。
  *
  * 为什么在前端做这层映射：分类码本身是给人看的缩写（upstream_auth），
@@ -69,8 +69,8 @@ function probeHint(code: string | undefined, t: (key: string, fallback: string) 
   }
 }
 
-/**
- * AI 助手配置页容器（FR-514，见 ADR-105）。
+/** 
+ * AI 助手配置页容器（见 ADR-105）。
  *
  * 取数、mutation 与 toast 都在这里；视图不 import 任何 API 模块。
  * 管理面的真实门禁在服务端（IsPlatformAdmin），此处的角色判定只用来决定
@@ -122,7 +122,7 @@ export default function AssistantSettingsPage() {
     }
   }
 
-  /**
+  /** 
    * 探测类操作的提示（供应商测试 / 模型测试共用）。
    *
    * 失败不是「保存失败」那种错误提示：`ok:false` 是**结论**，要带上分类码对应的
@@ -140,7 +140,7 @@ export default function AssistantSettingsPage() {
     toast.error(hint || result.message || t('assistant.testFailed', '{{label}}测试失败', { label }))
   }
 
-  /**
+  /** 
    * 保存助手全局设置（**整体替换**）。
    *
    * 因为后端是单例资源整体 PUT，任何一处改动都必须带上其余字段的当前值——

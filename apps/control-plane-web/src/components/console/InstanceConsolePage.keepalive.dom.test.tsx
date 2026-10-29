@@ -34,12 +34,12 @@ async function findSocket() {
   return wsSockets.at(-1)!
 }
 
-/**
- * FR-295 页签 keep-alive：访问过的页签切走不卸载（Activity 隐藏），
+/** 
+ *页签 keep-alive：访问过的页签切走不卸载（Activity 隐藏），
  * 终端 WS 不断、缓冲与本地状态保留，隐藏页签轮询暂停。
  * seed：实例 1 = survival-1 RUNNING（mocks/handlers/domains/instance.ts）。
  */
-describe('InstanceConsolePage 页签 keep-alive（FR-295）', () => {
+describe('InstanceConsolePage 页签 keep-alive', () => {
   beforeEach(() => {
     loginMockUser()
     resetTerminalHarness()
@@ -55,7 +55,7 @@ describe('InstanceConsolePage 页签 keep-alive（FR-295）', () => {
     const user = userEvent.setup()
     renderWithProviders(<InstanceConsolePage instanceId={1} />, { route: '/instances/1?tab=terminal' })
 
-    // 终端首连：一条 WS + 一个常驻会话（FR-415 起输出区是 DOM 虚拟列表，非 xterm）。
+    // 终端首连：一条 WS + 一个常驻会话（起输出区是 DOM 虚拟列表，非 xterm）。
     const socket = await findSocket()
     await screen.findByTestId('console-output')
     await waitFor(() => expect(terminalSessionManager.hasSession(1)).toBe(true))
@@ -74,7 +74,7 @@ describe('InstanceConsolePage 页签 keep-alive（FR-295）', () => {
     expect(socket.closedByClient).toBe(false)
     // 原「xterm 未重建」的断言已退场：xterm 渲染壳全站下线，不再有可断言的 xterm 实例。
     // 保活语义改由这条更强的证据承担——往返期间没有新行，缓冲快照引用必须**完全相同**
-    //（引用变了就说明缓冲对象被换过）。
+    // （引用变了就说明缓冲对象被换过）。
     expect(terminalSessionManager.getLines(1)).toBe(bufferBefore)
     expect(screen.getByText('keepalive-buffer-line')).toBeInTheDocument()
 
@@ -117,7 +117,7 @@ describe('InstanceConsolePage 页签 keep-alive（FR-295）', () => {
     })
 
     // 切到概览：监控页签 Activity 隐藏 → effects 卸载 → 其查询订阅暂停（轮询停止）。
-    // 概览自身也用 metricSeries 画真实 TPS 火花线（FR-343 去 mock-api），概览可见时其查询活跃；
+    // 概览自身也用 metricSeries 画真实 TPS 火花线（去 mock-api），概览可见时其查询活跃；
     // 它与监控页签的宽查询 queryKey 不同（概览带 metrics=['inst_tps']），故此处只校验监控页签查询归零。
     await user.click(screen.getByRole('tab', { name: '概览' }))
     await waitFor(() => {

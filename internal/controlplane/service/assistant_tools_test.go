@@ -12,8 +12,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
- * FR-516 工具层的关键语义。
+/* *
+ *工具层的关键语义。
  *
  * 这些断言守的是 spec 里几条**最容易被实现成「看起来对」的规则**：
  *  - 写必确认：即使目录里 RequiresConfirm=false 也强制确认；
@@ -25,7 +25,7 @@ import (
 func TestAssistantToolRegistry_WriteAlwaysRequiresConfirm(t *testing.T) {
 	// spec §4.1 第 5 条：write/destructive **强制** RequiresConfirm=true，
 	// 即使目录里标记为 false 也不放行。这条是「写必确认」不变量。
-	// 目录来源已改为 MCP（FR-544）：断言的是「MCP 目录派生出的元数据」，
+	// 目录来源已改为 MCP：断言的是「MCP 目录派生出的元数据」，
 	// 因此这条现在覆盖 108 个工具，而不只是原来手写的 13 个。
 	injectTestMCPCatalog(t)
 	for _, tool := range testRegistryTools() {
@@ -43,7 +43,7 @@ func TestAssistantToolRegistry_WriteAlwaysRequiresConfirm(t *testing.T) {
 
 func TestAssistantToolRegistry_ForbiddenActionsExcluded(t *testing.T) {
 	// spec §3「明确不做」的禁区由 **MCP 目录**保证（永久禁区永不进入 allToolSpecs）。
-	// FR-544 后助手侧的常驻目录只剩三个元工具，因此这里改为断言：
+	// 后助手侧的常驻目录只剩三个元工具，因此这里改为断言：
 	// 元工具名本身不得长得像任何禁区动作（防止有人把元工具做成万能通道）。
 	names := assistantToolsDir()
 	forbiddenSubstrings := []string{
@@ -60,7 +60,7 @@ func TestAssistantToolRegistry_ForbiddenActionsExcluded(t *testing.T) {
 }
 
 func TestAssistantToolRegistry_OnlyMetaToolsResident(t *testing.T) {
-	// FR-544：常驻目录只允许三个元工具。业务工具改由 search/describe 按需取。
+	// 常驻目录只允许三个元工具。业务工具改由 search/describe 按需取。
 	//
 	// 这条守的是「渐进式披露不被悄悄退化」：一旦有人把业务工具加回常驻，
 	// 固定开销会立刻回到全量量级，而这在功能上完全看不出来（工具照样能用）。
@@ -229,7 +229,7 @@ func TestAssistantToolNames_SatisfyUpstreamCharset(t *testing.T) {
 	}
 }
 
-// assistantToolsDir 返回「模型可见的工具名列表」（FR-544 起即三个元工具）。
+// assistantToolsDir 返回「模型可见的工具名列表」（起即三个元工具）。
 //
 // 原实现依赖被删除的本地注册表；现在直接读常驻 spec，语义不变：
 // 断言对象是「本轮下发给模型的工具集合」。

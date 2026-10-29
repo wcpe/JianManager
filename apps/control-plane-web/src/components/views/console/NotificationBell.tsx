@@ -11,7 +11,7 @@ import {
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 
-/**
+/** 
  * 统一通知条目（站内信 / 告警混合；字段取渲染与快捷跳转所需）。
  * 结构化子集，不牵动应用侧 `FeedItem` 契约。
  */
@@ -25,12 +25,12 @@ export interface NotificationFeedEntry {
   body?: string
   createdAt: string
   read: boolean
-  /** 任务类站内信携带，用于跳任务中心定位该任务（FR-226）。 */
+  /** 任务类站内信携带，用于跳任务中心定位该任务。 */
   taskId?: string
 }
 
-/**
- * 「需要处理」条目（FR-520 首页收缩后上移到页眉）。
+/** 
+ * 「需要处理」条目（首页收缩后上移到页眉）。
  *
  * 与 `NotificationFeedEntry` 分开：那些是「已发生的通知」，这些是**此刻就要动手**的事，
  * 两者语义不同、处置方式也不同（前者读，后者跳转去修）。同列会让「要动手的」被已读通知淹没。
@@ -61,7 +61,7 @@ export interface NotificationBellProps {
   attention?: AttentionEntry[]
   /** 「需要处理」取数中。 */
   attentionLoading?: boolean
-  /** 打开单条：任务类站内信→任务中心定位；告警→告警页；其余→通知中心（FR-226 快捷跳转）。 */
+  /** 打开单条：任务类站内信→任务中心定位；告警→告警页；其余→通知中心（快捷跳转）。 */
   onOpenItem: (item: NotificationFeedEntry) => void
   /** 打开「需要处理」某条（跳去修）。 */
   onOpenAttention?: (entry: AttentionEntry) => void
@@ -89,8 +89,8 @@ function feedLevelDotClass(level: string): string {
   return 'bg-status-info'
 }
 
-/**
- * 统一通知铃铛（FR-216，见 ADR-048）：合并原「站内信收件箱」+「告警铃铛」为单一入口。
+/** 
+ * 统一通知铃铛（见 ADR-048）：合并原「站内信收件箱」+「告警铃铛」为单一入口。
  * 未读计数（统一：本人站内信 + 全局告警，30s 轮询）+ 下拉只读最近通知（消息/告警混合，各带来源标识与级别色点）；
  * 点「查看全部」进通知中心页。处置（确认/认领）仍在告警页，本下拉只读预览。
  *
@@ -108,7 +108,7 @@ export function NotificationBell({
   const { t } = useTranslation()
   const recent = items ?? []
 
-  /*
+  /* 
     「需要处理」按紧急度排序后只展示前若干条：它是下拉面板，不是工作台。
     超出部分通过「查看全部」去对应页面处理，避免把下拉撑成一个页面。
   */
@@ -205,7 +205,7 @@ export function NotificationBell({
   )
 }
 
-/**
+/** 
  * 「需要处理」单行：图标 + 标题 + 补充说明 + 状态徽标，整行可点（跳去修）。
  *
  * 与通知预览的区别：这里的 `detail` **不截断成一行**而是两行截断

@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- 受控视图与 Tab 取值表同文件导出（仅影响 Fast Refresh） */
-/**
+/** 
  * @file PlayersPageView：玩家管理页（在线玩家 / 实时事件 / 封禁记录 / 白名单四个 Tab）的受控视图，
  *       取数、SSE 订阅、写动作与 toast 由应用容器负责。
  * @input lib/player（OnlinePlayersResult / OnlinePlayer / BanRecord / WhitelistResult）、
@@ -13,7 +13,7 @@
  *         PlayersLiveTabView、PlayersLiveTabViewProps、PlayersBansTabView、PlayersBansTabViewProps、
  *         PlayersWhitelistTabView、PlayersWhitelistTabViewProps
  * @sync apps/control-plane-web/src/pages/PlayersPage.tsx（容器）、apps/control-plane-web/src/pages/PlayersPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-054 玩家治理 + FR-066 实时玩家事件 + FR-067 探针降级）
+ * @since（组件受控化迁包；原页玩家治理实时玩家事件探针降级）
  */
 import { Fragment, useId, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -55,7 +55,7 @@ import { formatEventTime } from '@/lib/format/event-time'
 /** 页内四个 Tab：在线玩家 / 实时事件 / 封禁记录 / 白名单。 */
 export type PlayerTab = 'online' | 'live' | 'bans' | 'whitelist'
 
-/**
+/** 
  * 页内 Tab 顺序（手写下划线式导航，与既有可达名一致）。
  * 导出供容器做 URL `tab` 参数的合法值集合（`useTabParam('tab', 'online', PLAYER_TABS)`）——
  * 顺序与合法值只有一份真源，避免容器再抄一遍导致两边漂移。
@@ -68,8 +68,8 @@ export type PlayerActionKind = 'kick' | 'ban'
 /** 事件流筛选取值：'all' 或某种事件类型。 */
 type PlayerEventFilter = 'all' | PlayerEventType
 
-/**
- * 探针经反向 WS 实时上报的玩家事件类型（FR-066）。
+/** 
+ * 探针经反向 WS 实时上报的玩家事件类型。
  *
  * 与应用侧 `@/api/players` 的 `PlayerEventType` 同形；此处按本视图渲染所需的最小字段集声明，
  * 不把 API 层类型搬进包（同 `ScheduleLogRow` / `AlertEventFilter` 的取舍）：容器直接传
@@ -90,7 +90,7 @@ const PLAYER_EVENT_FILTERS: PlayerEventFilter[] = ['all', 'player_join', 'player
 /** Radix Select 不接受空字符串选项值，用哨兵值表达「全部子服」。 */
 const ALL_SERVERS = 'all'
 
-/**
+/** 
  * 一条实时玩家事件（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/players` 的 `PlayerEvent`：
@@ -120,7 +120,7 @@ export interface RosterEntry {
   server: string
 }
 
-/**
+/** 
  * 在线玩家名册的唯一键：同一玩家可能同时出现在多个子服，故按「实例 + 名字」区分。
  */
 function playerKey(player: OnlinePlayer) {
@@ -129,7 +129,7 @@ function playerKey(player: OnlinePlayer) {
 
 // ── 在线玩家 ──
 
-/**
+/** 
  * 踢出/封禁的上报载荷（单个与批量共用一条上报路径）。
  *
  * `names` 由本组件组装：单个取确认目标，批量取勾选集合按玩家名去重
@@ -144,7 +144,7 @@ export interface PlayerActionRequest {
   reason?: string
 }
 
-/**
+/** 
  * 在线玩家 Tab 的注入契约：聚合名册（含各后端探针可用性）由容器按 Tab 门控取数后注入；
  * 子服筛选、勾选集合、确认弹窗与原因草稿都只影响本 Tab 的展示，留本组件。
  */
@@ -155,15 +155,15 @@ export interface PlayersOnlineTabViewProps {
   isLoading?: boolean
   /** 踢/封在途：禁用行内与批量的危险按钮（防止在途重复提交）。 */
   actionPending?: boolean
-  /**
+  /** 
    * 踢出/封禁上报：循环提交（逐玩家一次请求）、成功/失败计数与结果 toast 都在容器完成，
    * 本组件只负责收集目标集合与原因，随后收起弹窗并清空批量勾选。
    */
   onPlayerAction: (request: PlayerActionRequest) => Promise<void>
 }
 
-/**
- * 在线玩家 Tab（FR-054 / FR-067）：按子服分组的名册（BC 跨服感知）、批量勾选、踢出/封禁（原因二次确认）、
+/** 
+ * 在线玩家 Tab：按子服分组的名册（BC 跨服感知）、批量勾选、踢出/封禁（原因二次确认）、
  * 探针不可达时的降级提示。
  */
 export function PlayersOnlineTabView({
@@ -435,7 +435,7 @@ export function PlayersOnlineTabView({
 
 // ── 实时事件 ──
 
-/**
+/** 
  * 实例选择器的注入契约：本视图**不取数**——候选窗口、总数、当前值展示名由容器按服务端搜索结果注入，
  * 键入关键字经 `onQueryChange` 上报（防抖与请求都由容器负责：那是「何时发请求」的策略）。
  *
@@ -459,7 +459,7 @@ export interface PlayersInstancePickerInjection {
   onQueryChange: (keyword: string) => void
 }
 
-/**
+/** 
  * 实时事件 Tab 的注入契约：SSE 订阅（探针连接状态、实时名册、事件流）**留在容器**——
  * 它是长驻订阅副作用，不属展示层；本组件只呈现订阅结果。
  *
@@ -481,8 +481,8 @@ export interface PlayersLiveTabViewProps {
   events: PlayerEventRow[]
 }
 
-/**
- * 实时事件 Tab（FR-066）：选一个实例，经 SSE 展示该实例（探针）的在线名册与玩家事件流。
+/** 
+ * 实时事件 Tab：选一个实例，经 SSE 展示该实例（探针）的在线名册与玩家事件流。
  * 探针未连入时降级提示。子服与代理实例都可选（Bukkit 探针报本服 join/quit/chat，BC 探针报跨服路由）。
  */
 export function PlayersLiveTabView({
@@ -507,7 +507,7 @@ export function PlayersLiveTabView({
     [pausedEvents, events, clearedBefore, eventFilter],
   )
   const paused = pausedEvents !== null
-  /**
+  /** 
    * 事件行 = 事件 + 稳定的 React key。
    *
    * 原先用 `${timestamp}-${idx}`，而事件流是「新事件插到队首 + 可暂停/清空/过滤」的列表：
@@ -678,7 +678,7 @@ function EventBadge({ type }: { type: PlayerEventType }) {
 
 // ── 封禁记录 ──
 
-/**
+/** 
  * 封禁记录 Tab 的注入契约：封禁列表由容器按 `activeOnly`（查询参数）取数后注入；
  * `activeOnly` 是查询键的一部分，一变即重新取数，故归容器持有；
  * 待解封目标（`pending`）只作用于一处的弹窗开合，留本组件。
@@ -696,7 +696,7 @@ export interface PlayersBansTabViewProps {
   onUnban: (name: string) => Promise<boolean>
 }
 
-/** 封禁记录 Tab（FR-054）：记录表 + 作用域列 + 行内解封（二次确认，scope=group 角色门禁）。 */
+/** 封禁记录 Tab：记录表 + 作用域列 + 行内解封（二次确认，scope=group 角色门禁）。 */
 export function PlayersBansTabView({
   bans,
   isLoading = false,
@@ -794,7 +794,7 @@ export function PlayersBansTabView({
 
 // ── 白名单 ──
 
-/**
+/** 
  * 白名单 Tab 的注入契约：白名单查询结果（含探针可用性）由容器按 `instanceId` 取数后注入；
  * `instanceId` 是查询键（也是增删 mutation 的作用域），故归容器持有；
  * 添加输入草稿随本 Tab 卸载而清空，留本组件。
@@ -822,7 +822,7 @@ export interface PlayersWhitelistTabViewProps {
   onRemove: (player: string) => Promise<void>
 }
 
-/** 白名单 Tab（FR-054 / FR-067）：单后端白名单的查看、添加与移除，含探针不可达与查询失败的降级。 */
+/** 白名单 Tab：单后端白名单的查看、添加与移除，含探针不可达与查询失败的降级。 */
 export function PlayersWhitelistTabView({
   picker,
   instanceId,
@@ -933,7 +933,7 @@ export function PlayersWhitelistTabView({
   )
 }
 
-/**
+/** 
  * 玩家管理页的注入契约（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不建订阅**。
  *
  * 受控边界：
@@ -1013,9 +1013,9 @@ export interface PlayersPageViewProps {
   onWhitelistRemove: (player: string) => Promise<void>
 }
 
-/**
- * 玩家管理页（FR-054 玩家治理 + FR-066 实时事件）：经各后端探针聚合在线玩家、踢/封/解封、
- * 白名单与封禁记录（FR-067 退役 RCON）。四个 Tab 的宿主。
+/** 
+ * 玩家管理页（玩家治理实时事件）：经各后端探针聚合在线玩家、踢/封/解封、
+ * 白名单与封禁记录（退役 RCON）。四个 Tab 的宿主。
  */
 export function PlayersPageView({
   tab,

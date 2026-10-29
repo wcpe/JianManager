@@ -7,7 +7,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import type { AttributionFactor, AttributionResult } from '@/lib/instances/attribution'
 
-/**
+/** 
  * 因子指标键 → i18n 显示名键。
  *
  * 覆盖后端 `attributionCandidates`（attribution.go:192-200）的**全部 7 类候选**：
@@ -33,7 +33,7 @@ function factorLabel(f: AttributionFactor, t: TFunction): string {
   return f.label || f.metricKey
 }
 
-/**
+/** 
  * 结论句（`tldr`）本地化。
  *
  * 后端 `attributionTLDR`（attribution.go:310）返回 `"劣化主因：%s（权重 %.2f）"` 的**中文字面量**，
@@ -64,8 +64,8 @@ function noteText(note: string | undefined, t: TFunction): string {
   return note === '相关性非因果' ? t('attribution.noteCorrelation') : note
 }
 
-/**
- * 归因结果视图（FR-465）：一句话结论 + 因子权重条。insufficient 时只显示原因，不给排序。
+/** 
+ * 归因结果视图：一句话结论 + 因子权重条。insufficient 时只显示原因，不给排序。
  */
 export function AttributionResultView({ result }: { result: AttributionResult }) {
   const { t } = useTranslation()
@@ -113,8 +113,8 @@ export function AttributionResultView({ result }: { result: AttributionResult })
   )
 }
 
-/**
- * 性能归因卡片（FR-465）：**按需触发**（点击「分析」），不做常驻轮询——
+/** 
+ * 性能归因卡片：**按需触发**（点击「分析」），不做常驻轮询——
  * 归因是窗口级相关分析，随每拍变动无意义且会放大查询负载。
  *
  * 受控视图（ADR-103 a 范式）：不取数——结果与拉取态由外壳注入，「分析 / 重新分析」

@@ -1,5 +1,5 @@
-/**
- * Bot 域的核心契约（FR-038 / FR-039）。
+/** 
+ * Bot 域的核心契约。
  *
  * 归包理由：Bot 段视图与 Bot 列表纯逻辑都要读它，应用侧 API 层改从包 import，
  * 避免两处各写一份。实现（useBots / useBotBatch 等 hook）仍留应用侧。
@@ -17,7 +17,7 @@ export interface BotInfo {
   id: number
   uuid: string
   instanceId: number
-  /**
+  /** 
    * 实例展示名（后端已回填）。有了它，Bot 列表不必为了显示名字而拉全量实例列表。
    * 实例被删时缺省，前端回退显示 #id。
    */
@@ -42,7 +42,7 @@ export interface CreateBotRequest {
   behavior: string
 }
 
-/** Bot 列表筛选条件（分页 + 多维过滤，FR-038）。 */
+/** Bot 列表筛选条件（分页 + 多维过滤）。 */
 export interface BotListParams {
   page?: number
   pageSize?: number
@@ -70,7 +70,7 @@ export interface BotSummaryGroup {
   online: number
 }
 
-/** Bot 计数聚合（FR-038），不含逐条 Bot。 */
+/** Bot 计数聚合，不含逐条 Bot。 */
 export interface BotSummary {
   total: number
   byStatus: Record<string, number>

@@ -7,7 +7,7 @@ import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 
-/**
+/** 
  * 疑似坏节点条目（本组件所需的最小结构）。
  *
  * 只声明用到的 `node.{id,name}` 与 `reasons`，故外壳直接传 `@/api/nodeRepair` 的
@@ -30,8 +30,8 @@ export interface ReenrollResultView {
   newSecret: string
 }
 
-/**
- * 坏节点修复面板（BUG-A / ADR-039 §2，FR-177 右栏分段）。
+/** 
+ * 坏节点修复面板（BUG-A / ADR-039 §2右栏分段）。
  *
  * 历史上注册按 name 锚定身份，另一台机器同名注册会覆写旧节点身份，致按 node_id 挂的
  * JDK/实例错误路由。此面板提供：① 疑似坏节点诊断（只读，标出当前节点是否疑似）；
@@ -58,7 +58,7 @@ export interface NodeRepairPanelProps {
   orphansLoading?: boolean
   /** 功能未开启（端点 404）：整块降级为提示文案。 */
   unavailable?: boolean
-  /**
+  /** 
    * 取数失败（非 404）。必须与「未见异常」区分开：
    * 请求挂了时 suspects 为空，若走正常分支就会显示绿色「未见异常」——
    * 把故障说成健康，是这类诊断页最危险的误报方向。
@@ -111,7 +111,7 @@ export default function NodeRepairPanel({
     )
   }
 
-  /*
+  /* 
     失败态与加载态都要排在「未见异常」之前：
     失败时 suspects 为 undefined、加载中也为 undefined，两者都会落到绿条分支。
   */

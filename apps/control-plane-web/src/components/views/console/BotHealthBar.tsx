@@ -3,7 +3,7 @@ import { healthBreakdown } from '@/lib/bots/bot-health'
 import type { HealthKind } from '@/lib/bots/bot-health'
 import { cn } from '@jianmanager/ui'
 
-/** 健康段类型 → 配色（绿/琥珀/红/灰），用 FR-163 状态 token。 */
+/** 健康段类型 → 配色（绿/琥珀/红/灰），用状态 token。 */
 const SEG_COLOR: Record<HealthKind, string> = {
   connected: 'bg-status-success',
   connecting: 'bg-status-warning',
@@ -11,8 +11,8 @@ const SEG_COLOR: Record<HealthKind, string> = {
   stopped: 'bg-muted-foreground/40',
 }
 
-/**
- * Bot 健康条多段着色（FR-147，兑现 FR-040「细分 connecting/error」）。
+/** 
+ * Bot 健康条多段着色（兑现「细分 connecting/error」）。
  * 传 byStatus（各状态计数）则多段（connected/connecting/error/stopped）；
  * 不传 byStatus 时退化为「在线 vs 其余」两段（分组摘要只有 online/total 的场景）。
  */

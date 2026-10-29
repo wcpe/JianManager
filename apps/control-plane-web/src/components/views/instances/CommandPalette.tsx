@@ -18,10 +18,10 @@ const KIND_ICON = {
   command: Terminal,
 } as const
 
-/**
- * 全局命令面板（FR-241，导航外壳 v2 Part A）：Ctrl/⌘+K 或点页眉搜索框打开，
+/** 
+ * 全局命令面板（导航外壳 v2 Part A）：Ctrl/⌘+K 或点页眉搜索框打开，
  * 单输入框检索实例/节点/页面/操作并跳转或执行。键盘 ↑↓ 选择、Enter 执行、Esc 关。
- * 实例结果消费 FR-247 服务端搜索；纯节点/页面/操作匹配逻辑下沉 `lib/command-palette`。
+ * 实例结果消费服务端搜索；纯节点/页面/操作匹配逻辑下沉 `lib/command-palette`。
  *
  * 受控视图（ADR-103 a 范式）：不取数、不挂全局监听——开合、四类数据源与「执行结果」
  * 都由外壳注入（全局 Ctrl+K 监听也在外壳）。输入态、键盘导航、滚动定位与预取时机留在视图内。
@@ -78,7 +78,7 @@ export default function CommandPalette({
   // selected 在渲染期 clamp，避免结果变化后越界（不在 effect 里 setState）。
   const activeIndex = entries.length === 0 ? -1 : Math.min(selected, entries.length - 1)
 
-  // FR-502 阶段 6 补丁：键盘用户不会 hover，但面板里「当前选中项」是等价的导航意图
+  // 阶段 6 补丁：键盘用户不会 hover，但面板里「当前选中项」是等价的导航意图
   // （Enter 即跳转），故选中项是页面时同样预取目标 chunk。仅面板打开时生效；
   // prefetchRoute 幂等，连续输入不会重复请求同一个路由。
   useEffect(() => {
@@ -165,7 +165,7 @@ export default function CommandPalette({
             entries.map((entry, i) => {
               const Icon = KIND_ICON[entry.kind]
               const active = i === activeIndex
-              // 页面类条目在悬停/聚焦时预取其 chunk（FR-502 阶段 6 补丁）：点下去时模块已在缓存。
+              // 页面类条目在悬停/聚焦时预取其 chunk（阶段 6 补丁）：点下去时模块已在缓存。
               const target = entryRouteTarget(entry)
               const intentProps = target && onPrefetchRoute
                 ? { onMouseEnter: () => onPrefetchRoute(target), onFocus: () => onPrefetchRoute(target) }
@@ -220,8 +220,8 @@ function statusColor(status?: string): string {
   return level === 'neutral' ? 'info' : level
 }
 
-/**
- * 条目对应的路由目标（FR-502 阶段 6 补丁）：只有页面类条目才是路由，
+/** 
+ * 条目对应的路由目标（阶段 6 补丁）：只有页面类条目才是路由，
  * 实例/节点/操作类的 key 是 id 或动作名，预取没有意义（它们各自的预取在别处）。
  */
 function entryRouteTarget(entry: PaletteEntry | undefined): string | null {

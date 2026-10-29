@@ -1,8 +1,8 @@
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-519「跨路由不丢会话」与「换用户不串号」两条验收（mock 模式真浏览器）。
+/** 
+ *「跨路由不丢会话」与「换用户不串号」两条验收（mock 模式真浏览器）。
  *
  * ── 为什么这两条必须用 e2e，而不是组件测 ──
  *
@@ -35,7 +35,7 @@ import { login } from './helpers'
 /** devmock 的回复固定以这句话开头（`收到你的问题：「<原文前 60 字>」`）。 */
 const MOCK_REPLY_MARK = '收到你的问题：「'
 
-/**
+/** 
  * 等 mock 后端（MSW Service Worker）真正接管请求。
  *
  * 【为什么需要】`main.tsx` 刻意**先渲染、后异步启 MSW**（否则整站要等 worker 起来才白屏），
@@ -64,7 +64,7 @@ async function waitForMockBackend(page: Page): Promise<void> {
   throw new Error(`mock 后端在 30s 内未接管请求（最近一次：${last}），登录无从验证`)
 }
 
-/**
+/** 
  * 清掉本地登录态，让 `/login` 真的渲染出表单。
  *
  * 【为什么需要】`LoginPage` 对**已登录**用户会 `<Navigate to={returnTo} replace />`
@@ -90,7 +90,7 @@ async function clearAuth(page: Page): Promise<void> {
   ).toBeVisible({ timeout: 30_000 })
 }
 
-/**
+/** 
  * 从「干净浏览器」状态登录指定账号。
  *
  * 仅用于用例的**准备阶段**（把测量起点归位）。会用整页加载与清 token，
@@ -138,7 +138,7 @@ async function openAssistantDock(page: Page): Promise<Locator> {
   return panel
 }
 
-/**
+/** 
  * 点浮窗头部的「新会话」，把当前会话切到 `null`。
  *
  * 这个动作是**串号缺陷的必然碰撞点**：草稿 key 的会话段此时是字面量 `new`。不带 owner 的
@@ -155,7 +155,7 @@ async function startNewConversation(page: Page): Promise<Locator> {
   return panel
 }
 
-/**
+/** 
  * 「本次测量因整页重载而作废」——**不是**产品失败。
  *
  * Vite dev 在重新预构建依赖、或 worker/HMR 重连时会整页 reload。那是一次真实的重载：
@@ -174,7 +174,7 @@ function assertNoReload(loads: string[], when: string): void {
   }
 }
 
-/**
+/** 
  * 执行一次测量；仅当「整页重载」破坏了前提时重做。
  *
  * @param attempt    测量主体；内部应在关键节点调用 `assertNoReload` 以便尽早退出
@@ -214,7 +214,7 @@ async function measureWithRetry(
   }
 }
 
-/**
+/** 
  * 采集发往 `/assistant/conversations/:id/runs` 的 POST。
  *
  * 必须在 `login` 之前挂上监听：要守的那次「额外重提」发生在导航之后，晚挂就会漏掉。
@@ -236,7 +236,7 @@ function captureRunSubmissions(page: Page): string[] {
   return urls
 }
 
-/**
+/** 
  * 采集主文档的整页加载事件（= 与 SPA 路由切换相对立的「整页重载」）。
  *
  * 两条用例都靠它自证前提成立：
@@ -256,7 +256,7 @@ function captureDocumentLoads(page: Page): string[] {
   return paths
 }
 
-/**
+/** 
  * 等外壳「稳定」：连续 700ms 没有被整页重载替换掉。
  *
  * 【为什么需要这个】Vite dev 在**首次**访问某路由的分包时，若该分包引入了尚未预构建的依赖，
@@ -282,7 +282,7 @@ async function waitForStableShell(page: Page): Promise<void> {
   throw new Error('控制台外壳始终在被整页重载替换，无法开始测量（dev server 状态异常？）')
 }
 
-/**
+/** 
  * 走一遍 `/instances` → `/logs` → `/`，**全部用点链接/切工作区的 SPA 导航**。
  *
  * 特别不能用 `page.goto`：那是整页加载，会把浮窗卸载、把 JS 上下文重建，
@@ -327,7 +327,7 @@ async function logout(page: Page): Promise<void> {
   ).toBeVisible({ timeout: 30_000 })
 }
 
-/**
+/** 
  * 在登录页**就地**登录，不做整页导航。
  *
  * 与 `helpers.login()` 的唯一区别正是本文件要守的那一点：`login()` 会先 `page.goto('/login')`，
@@ -344,7 +344,7 @@ async function loginInPlace(page: Page, username: string, password: string): Pro
   ).toBeVisible({ timeout: 30_000 })
 }
 
-/**
+/** 
  * 当前登录用户的 id（从 access token 的 payload 读，不验签——只用于判定存储键归属）。
  *
  * 不写死「admin 是 1、operator 是 2」：那是 devmock 的种子细节，写死会让用例在种子调整后
@@ -387,7 +387,7 @@ function draftOwnerOf(key: string): string {
 
 test.describe.configure({ timeout: 240_000 })
 
-test.describe('FR-519 助手会话隔离', () => {
+test.describe('助手会话隔离', () => {
   test('跨路由不丢会话：浮窗、消息、草稿都在，且不重新提交 run', async ({ page }) => {
     const runSubmissions = captureRunSubmissions(page)
     const documentLoads = captureDocumentLoads(page)

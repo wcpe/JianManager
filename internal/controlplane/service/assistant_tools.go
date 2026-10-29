@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/ai"
 )
 
-// 助手工具登记表（FR-516 §4）。
+// 助手工具登记表（§4）。
 //
 // 三条不可动摇的规则（spec §3 冻结项）：
 //  1. **工具目录复用 `agentActionCatalog`，只收窄不扩张**——单一真源，
@@ -18,7 +18,7 @@ import (
 
 // assistantToolSourceSystem 内置工具来源前缀（`system_<action>`）。
 //
-// 用命名空间而不是裸 action 名，是为了不与未来外部 MCP 连接的工具名冲突（FR-517）。
+// 用命名空间而不是裸 action 名，是为了不与未来外部 MCP 连接的工具名冲突。
 const assistantToolSourceSystem = "system"
 
 // assistantToolNameSeparator 工具名分隔符，**只能用下划线**。
@@ -50,15 +50,15 @@ func assistantToolName(action string) string {
 
 // assistantToolSchemaVersion 内置工具的 schema 指纹版本。
 //
-// 票据里存的是**字符串指纹**而不是整数版本：外部 MCP 工具只有 `schema_hash`（FR-517 §4.2），
+// 票据里存的是**字符串指纹**而不是整数版本：外部 MCP 工具只有 `schema_hash`（§4.2），
 // 统一成「字符串不等即失效」后，两类工具走同一套失效判定，不必假设存在单调递增版本号。
 const assistantToolSchemaVersion = "system.v1"
 
 // assistantToolPolicyVersion 执行策略版本。策略变化（如新增禁止项）时递增，
-// 使旧确认票据失效（FR-516 §6.3）。
+// 使旧确认票据失效（§6.3）。
 const assistantToolPolicyVersion = 1
 
-// AssistantToolAction 一个可交给模型的工具的**执行元数据**（FR-544）。
+// AssistantToolAction 一个可交给模型的工具的**执行元数据**。
 //
 // 导出是为了让 mcp 包能从单一真源（allToolSpecs）构造它并注入回来；
 // 助手侧不再自己定义任何工具。
@@ -107,7 +107,7 @@ var assistantToolForbiddenActions = map[string]struct{}{
 	"system_update":   {},
 }
 
-// assistantToolExtraActions 已删除（FR-544）：三个受限只读（cluster_overview /
+// assistantToolExtraActions 已删除：三个受限只读（cluster_overview /
 // list_tasks / list_alerts）原本在助手侧独立定义，但它们的实现与真源都在 MCP 目录之外，
 // 与「工具单一真源 = MCP」冲突。现在它们是正式的 MCP 工具（mcp/tools_overview.go），
 // 实现留在 service/assistant_overview.go，助手经 search/call 使用。

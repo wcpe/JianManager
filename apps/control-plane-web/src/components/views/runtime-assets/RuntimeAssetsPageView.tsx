@@ -1,4 +1,4 @@
-/**
+/** 
  * @file RuntimeAssetsPageView：运行时与制品全局页（JDK 跨节点矩阵 + 制品库）的受控视图——聚合载荷、
  *       刷新/删除/导入/批量部署四类写动作与 toast 文案全由应用容器注入，实例候选与制品对账区块经插槽注入。
  * @input lib/shared/format-file-size（formatFileSize）、lib/runtime-assets-view（buildRuntimeGrid / filterAssetGroups / shortSha /
@@ -13,8 +13,8 @@
  *         RuntimeAssetsInstancePickerArgs、RuntimeAssetsInstanceCandidateView
  * @sync apps/control-plane-web/src/pages/RuntimeAssetsPage.tsx、apps/control-plane-web/src/pages/RuntimeAssetsPage.dom.test.tsx、
  *       apps/control-plane-web/src/pages/RuntimeAssetsPage.fr301.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-082 运行时与制品全局页、FR-301 多运行时矩阵与手动刷新、
- *        FR-155 制品导入上传进度、FR-033/FR-045 引用保护与删除占用方提示）
+ * @since（组件受控化迁包；原页运行时与制品全局页多运行时矩阵与手动刷新、
+ *制品导入上传进度引用保护与删除占用方提示）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -71,7 +71,7 @@ const ASSET_TYPES: Array<AssetType | 'all'> = [
   'client-file',
 ]
 
-/** 可导入的制品类型（不含 client-file：客户端文件走分发页专属发布流程，FR-088/251）。 */
+/** 可导入的制品类型（不含 client-file：客户端文件走分发页专属发布流程251）。 */
 const IMPORTABLE_ASSET_TYPES: AssetType[] = ['core', 'plugin', 'image', 'video', 'archive', 'blob']
 
 /** 已上传字节 / 总字节 → 百分比（0~100，钳制）。 */
@@ -80,7 +80,7 @@ function importPercent(loaded: number, total: number): number {
   return Math.max(0, Math.min(100, Math.round((loaded / total) * 100)))
 }
 
-/**
+/** 
  * 制品 metadata（JSON 串）里客户端文件用的展示字段。
  * 解析失败按空对象处理：metadata 是历史遗留的自由文本，坏值不应拖垮整行渲染。
  */
@@ -121,14 +121,14 @@ export interface RuntimeAssetsOverviewView {
     externalCount: number
     lostCount: number
   }
-  /** 多运行时矩阵项（FR-301）：jdk + nodejs 等多类型。 */
+  /** 多运行时矩阵项：jdk + nodejs 等多类型。 */
   runtimes: RuntimeMatrixEntry[]
   artifactChannels: RuntimeAssetsChannelRefView[]
   /** 整体上次库存同步时间（ISO）；null=从未同步。 */
   syncedAt: string | null
 }
 
-/**
+/** 
  * 导入制品请求：上传编排在容器（multipart 入库 + overview 失效），视图只回传草稿与两个进度钩子。
  *
  * 进度经 `onProgress` 回流、请求落定（成功或失败）经 `onSettled` 回调——与 `PluginManager` 的
@@ -147,7 +147,7 @@ export interface RuntimeAssetImportArgs {
   onSettled: () => void
 }
 
-/**
+/** 
  * 删除制品的上报参数：`refCount` 一并上报，供容器在 409 响应缺 `count` 时按行上的引用数兜底
  * （迁包前该提示正是 `err.response.data?.count ?? asset.refCount`）。
  */
@@ -178,7 +178,7 @@ export interface RuntimeAssetsInstanceCandidateView {
   nodeId: number
 }
 
-/**
+/** 
  * 实例候选插槽参数：本视图只声明「候选区需要什么、勾选怎么回传」，
  * 「何时发请求、一次取多少条」是容器策略（千级实例必须走服务端搜索，不得一次拉全量）。
  *
@@ -209,14 +209,14 @@ export interface RuntimeAssetsInstancePickerViewProps {
   onQueryChange: (keyword: string) => void
 }
 
-/**
+/** 
  * 候选行固定行高（px）。行盒用行内 style 钉死（「声明值即真实值」）：
  * `p-2`(16) + 两行文本（名称 20 + 状态行 16）= 52 → 取 56 留余量。
  * 虚拟化按 `index × 该值` 定位，必须与真实行盒严格一致，否则滚动会累积漂移。
  */
 const CANDIDATE_ROW_PX = 56
 
-/**
+/** 
  * 实例候选选择器：搜索框 + 勾选列表（含加载/空候选占位）。
  *
  * 输入框的显示值留本组件（纯展示草稿），关键字经 `onQueryChange` 上报给容器；
@@ -234,7 +234,7 @@ export function RuntimeAssetsInstancePickerView({
   const [keyword, setKeyword] = useState('')
   const instances = items ?? []
 
-  /**
+  /** 
    * 候选列表虚拟化：候选窗口本身可达 200 条（容器 CANDIDATE_LIMIT），
    * 此前整列进 DOM 只靠 `max-h-72` 滚动遮挡。
    *
@@ -308,8 +308,8 @@ export function RuntimeAssetsInstancePickerView({
   )
 }
 
-/**
- * 运行时与制品全局页（FR-082）受控视图：JDK 区（矩阵 + 卡片 + 删除）+ 制品区（统计 + 筛选 + 表格 +
+/** 
+ * 运行时与制品全局页受控视图：JDK 区（矩阵 + 卡片 + 删除）+ 制品区（统计 + 筛选 + 表格 +
  * 导入弹窗 + 批量部署弹窗）+ 对账区块插槽。
  *
  * 受控边界：聚合载荷与全部写动作由容器注入；视图内只留纯 UI 状态——筛选草稿（本地过滤，不触发取数）、
@@ -347,13 +347,13 @@ export interface RuntimeAssetsPageViewProps {
   deployResult: PluginBatchDeployResultView | null
   /** 实例候选插槽（千级实例须服务端搜索，取数与关键字状态由容器实现自带）。 */
   renderInstancePicker: (args: RuntimeAssetsInstancePickerArgs) => ReactNode
-  /** 制品存储对账区块插槽（FR-349）：取数与处置动作在应用侧接线层，故经插槽注入。 */
+  /** 制品存储对账区块插槽：取数与处置动作在应用侧接线层，故经插槽注入。 */
   renderReconcileSection: (args: { channels: RuntimeAssetsChannelRefView[] }) => ReactNode
 }
 
-/**
+/** 
  * 运行时与制品全局页：两区——JDK 跨节点矩阵 + 引用实例；制品按类型占用/去重/冷热。
- * 删除受引用项由后端拒绝并指出占用方（FR-033/045 引用保护），视图只负责把原因呈现为提示。
+ * 删除受引用项由后端拒绝并指出占用方（045 引用保护），视图只负责把原因呈现为提示。
  */
 export function RuntimeAssetsPageView({
   overview,
@@ -443,11 +443,11 @@ function JDKSection({
 }: {
   jdks: JDKMatrixItem[]
   summary: { nodeCount: number; jdkCount: number; referencedJdk: number; instanceRefs: number }
-  /** 多运行时矩阵项（FR-301）：jdk + nodejs 等多类型。 */
+  /** 多运行时矩阵项：jdk + nodejs 等多类型。 */
   runtimes: RuntimeMatrixEntry[]
   /** 整体上次库存同步时间（ISO）；null=从未同步。 */
   syncedAt: string | null
-  /** 手动刷新（FR-301）：强制全节点 syncFromWorker。失败容忍由容器提示，本视图不转错误态。 */
+  /** 手动刷新：强制全节点 syncFromWorker。失败容忍由容器提示，本视图不转错误态。 */
   onRefresh: () => void
   refreshing: boolean
   onDeleteJdk: (target: RuntimeAssetsJDKRef) => void
@@ -490,7 +490,7 @@ function JDKSection({
           <EmptyState icon={<Coffee />} title={t('runtimeAssets.jdkEmpty')} />
         </Panel>
       ) : (
-        /* 可视化：节点×运行时引用矩阵（FR-301 多类型）——列=类型徽章+版本，格内数字=引用实例数（非 JDK 恒 0）。 */
+        /* 可视化：节点×运行时引用矩阵（多类型）——列=类型徽章+版本，格内数字=引用实例数（非 JDK 恒 0）。 */
         <Panel title={t('runtimeAssets.runtimeMatrixTitle')} bodyClassName="p-0">
           <Table className="text-xs">
             <TableHeader className="bg-muted/50">
@@ -847,8 +847,8 @@ function AssetSection({
   )
 }
 
-/**
- * 导入制品弹窗（FR-155：补齐制品导入下载进度）。
+/** 
+ * 导入制品弹窗（：补齐制品导入下载进度）。
  * 选类型 + 选本地文件后由容器走 multipart 入库（POST /assets），上传期间显示实时进度条，
  * 进度由容器回调驱动（与插件上传同一机制）。成功后容器失效 overview，新制品即刻出现。
  * 遵循模态纪律（ui-modals）：内容自适应壳 + 内部滚动，头/脚固定。

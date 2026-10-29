@@ -13,7 +13,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
 import { slotVisibility, visibilityClass } from '@/lib/shared/header-layout'
 
-/** 集群统计浮窗行数上限（FR-294）：超出在底部提示「还有 N 个，查看全部」。 */
+/** 集群统计浮窗行数上限：超出在底部提示「还有 N 个，查看全部」。 */
 export const STAT_POPOVER_MAX_ROWS = 8
 
 /** 浮窗槽位（外壳据此维护各自的 open 态，进而开关对应查询）。 */
@@ -54,7 +54,7 @@ export interface ClusterBadgesProps {
   crashedRows?: ClusterInstanceRow[]
   /** 各浮窗的「还有 N 个」剩余数。 */
   remaining: Record<ClusterSlot, number>
-  /**
+  /** 
    * 每行的在线人数取数（外壳注入的 hook；包内按行顶层调用，符合 hooks 规则）。
    * 返回 undefined 表示无数据（不显示人数）。
    *
@@ -66,7 +66,7 @@ export interface ClusterBadgesProps {
   useInstancePlayers: (instanceId: number, enabled: boolean) => { available: boolean; online: number } | undefined
   /** 浮窗开合（外壳据此开关对应查询）。 */
   onSlotToggle: (slot: ClusterSlot, open: boolean) => void
-  /** 跳节点详情（FR-128 深链 `/nodes?node=<id>`）。 */
+  /** 跳节点详情（深链 `/nodes?node=<id>`）。 */
   onOpenNode: (nodeId: number) => void
   /** 跳实例控制台。 */
   onOpenInstance: (instanceId: number) => void
@@ -74,9 +74,9 @@ export interface ClusterBadgesProps {
   onViewAll: (slot: ClusterSlot) => void
 }
 
-/**
- * 集群概览徽标组（FR-162；FR-294 点击改弹缩略浮窗）：在线节点 / 运行实例 / 崩溃数。
- * 徽标计数数据源不变（总览页同款聚合 + FR-247 聚合，避免页眉为计数拉全量实例）；
+/** 
+ * 集群概览徽标组（点击改弹缩略浮窗）：在线节点 / 运行实例 / 崩溃数。
+ * 徽标计数数据源不变（总览页同款聚合聚合，避免页眉为计数拉全量实例）；
  * 原「点击跳筛选页」保留为浮窗底部「查看全部」。窄屏隐藏逻辑（header-layout）不变。
  *
  * 受控视图（ADR-103 c 范式）：三个计数、三个浮窗的行数据与全部跳转由外壳注入；
@@ -143,8 +143,8 @@ export function ClusterBadges({
   )
 }
 
-/**
- * 集群概览徽标 + 缩略浮窗外壳（FR-294，复用 FR-216 铃铛的 DropdownMenu 范式、同款视觉）：
+/** 
+ * 集群概览徽标 + 缩略浮窗外壳（复用铃铛的 DropdownMenu 范式、同款视觉）：
  * 徽标点击由「直接跳筛选页」改为弹缩略浮窗；受控 open 态经 render prop 传给内容，
  * 让浮窗数据查询 enabled 绑定 open——数据仅浮窗打开时拉取。danger 时计数着红。
  */
@@ -200,7 +200,7 @@ function ClusterStatPopover({
   )
 }
 
-/** 浮窗底部「查看全部」项（FR-294）：行数超上限时改为提示剩余数。 */
+/** 浮窗底部「查看全部」项：行数超上限时改为提示剩余数。 */
 function StatPopoverFooter({ remaining, label, onClick }: { remaining: number; label: string; onClick: () => void }) {
   const { t } = useTranslation()
   return (
@@ -213,10 +213,10 @@ function StatPopoverFooter({ remaining, label, onClick }: { remaining: number; l
   )
 }
 
-/**
- * 在线节点浮窗内容（FR-294）：行 = 节点名 + 在线状态点 + 该节点运行实例数。
- * 节点列表与每节点运行数由外壳取数（复用页眉已缓存的 ['nodes'] 与 FR-247 聚合，不额外发请求）；
- * 行点击 → /nodes?node=<id> 定位该节点（FR-128 深链）。
+/** 
+ * 在线节点浮窗内容：行 = 节点名 + 在线状态点 + 该节点运行实例数。
+ * 节点列表与每节点运行数由外壳取数（复用页眉已缓存的 ['nodes'] 与聚合，不额外发请求）；
+ * 行点击 → /nodes?node=<id> 定位该节点（深链）。
  */
 function NodeStatRows({
   rows,
@@ -254,9 +254,9 @@ function NodeStatRows({
   )
 }
 
-/**
- * 运行中服务器浮窗内容（FR-294）：行 = 实例名 + 节点名 + 在线人数（有数据时）。
- * 行数据由外壳复用 FR-247 分页搜索（status=RUNNING，pageSize=行数上限）提供；
+/** 
+ * 运行中服务器浮窗内容：行 = 实例名 + 节点名 + 在线人数（有数据时）。
+ * 行数据由外壳复用分页搜索（status=RUNNING，pageSize=行数上限）提供；
  * 行点击 → /instances/:id 该服控制台，底部「查看全部」→ /instances?status=RUNNING。
  */
 function RunningInstanceRows({
@@ -297,8 +297,8 @@ function RunningInstanceRows({
   )
 }
 
-/**
- * 运行中服务器浮窗单行（FR-294）：在线人数复用既有实例 metrics 查询（FR-060），
+/** 
+ * 运行中服务器浮窗单行：在线人数复用既有实例 metrics 查询，
  * enabled 绑定浮窗 open 态（行仅在浮窗打开时挂载），无数据时不显示人数。
  */
 function RunningInstanceRow({
@@ -330,9 +330,9 @@ function RunningInstanceRow({
   )
 }
 
-/**
- * 崩溃服务器浮窗内容（FR-294）：行 = 实例名 + 节点名 + 崩溃原因（statusReason，有则显）；
- * 空态显示友好文案。行数据由外壳复用 FR-247 分页搜索（status=CRASHED）提供；
+/** 
+ * 崩溃服务器浮窗内容：行 = 实例名 + 节点名 + 崩溃原因（statusReason，有则显）；
+ * 空态显示友好文案。行数据由外壳复用分页搜索（status=CRASHED）提供；
  * 行点击 → /instances/:id，底部「查看全部」→ /instances?status=CRASHED。
  */
 function CrashedInstanceRows({

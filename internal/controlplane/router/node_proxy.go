@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// NodeProxyHandler 节点级出站代理路由（FR-185，见 ADR-043）。
+// NodeProxyHandler 节点级出站代理路由（见 ADR-043）。
 // 仅平台管理员可达；设置写审计。生效经心跳下发到 Worker（运行时重建出站 client）。
 type NodeProxyHandler struct {
 	svc   *service.NodeProxyService
@@ -99,7 +99,7 @@ func (h *NodeProxyHandler) recordAudit(c *gin.Context, action, targetID string, 
 	h.audit.RecordSafe(userID, action, "node", targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
-// RegisterRoutes 注册节点代理路由（FR-185）。
+// RegisterRoutes 注册节点代理路由。
 func (h *NodeProxyHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/nodes/:id/proxy", h.Get)
 	rg.PATCH("/nodes/:id/proxy", h.Update)

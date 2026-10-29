@@ -37,11 +37,11 @@ function injectMetrics(probeAvailable: boolean) {
   })
 }
 
-/**
- * FR-448 §2.1：`metrics` Tab 同一页签内按探针有无呈现两套样式——
+/** 
+ *§2.1：`metrics` Tab 同一页签内按探针有无呈现两套样式——
  * 有探针 → ServerProbe 全量视图；无探针 → 轻量进程/直探视图。实例 1 为 backend 画像。
  */
-describe('MetricsTabSegment（FR-448 探针有无两套样式）', () => {
+describe('MetricsTabSegment（探针有无两套样式）', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -75,7 +75,7 @@ describe('MetricsTabSegment（FR-448 探针有无两套样式）', () => {
   })
 })
 
-describe('DirectProbeSummary 直探可用态（FR-446 接入后）', () => {
+describe('DirectProbeSummary 直探可用态（接入后）', () => {
   it('有直探数据时呈现 MOTD/在线/版本/延迟，不落占位', () => {
     renderWithProviders(
       <DirectProbeSummary

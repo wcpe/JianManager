@@ -81,7 +81,7 @@ func TestCreate_DefaultsS3Region(t *testing.T) {
 	require.Equal(t, "us-east-1", st.Region)
 }
 
-// TestCreate_NameConflict 名称与既有后端冲突时回业务错误（FR-338 收口，替代裸撞唯一索引的 500）。
+// TestCreate_NameConflict 名称与既有后端冲突时回业务错误（收口，替代裸撞唯一索引的 500）。
 func TestCreate_NameConflict(t *testing.T) {
 	svc := NewBackupStorageService(newStorageTestDB(t))
 	_, err := svc.Create(&model.BackupStorage{Name: "dup", Type: model.BackupStorageWebDAV, Endpoint: "https://dav.local"})
@@ -90,7 +90,7 @@ func TestCreate_NameConflict(t *testing.T) {
 	require.ErrorIs(t, err, ErrStorageNameConflict)
 }
 
-// TestUpdate_OK 编辑改名/改凭证引用/改 endpoint 落库生效，且 lastTest* 清空（FR-338）。
+// TestUpdate_OK 编辑改名/改凭证引用/改 endpoint 落库生效，且 lastTest* 清空。
 func TestUpdate_OK(t *testing.T) {
 	db := newStorageTestDB(t)
 	svc := NewBackupStorageService(db)
@@ -131,7 +131,7 @@ func TestUpdate_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrStorageNotFound)
 }
 
-// TestUpdate_TypeImmutable 改 type 被拒（改型=删重建，FR-338 拍板）。
+// TestUpdate_TypeImmutable 改 type 被拒（改型=删重建拍板）。
 func TestUpdate_TypeImmutable(t *testing.T) {
 	svc := NewBackupStorageService(newStorageTestDB(t))
 	st, err := svc.Create(&model.BackupStorage{Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b"})
@@ -232,7 +232,7 @@ func TestResolveSpec_MissingEnv(t *testing.T) {
 	require.ErrorIs(t, err, ErrCredentialEnvMissing)
 }
 
-// TestResolveEnvRef_回落密钥文件与向后兼容（FR-495）：
+// TestResolveEnvRef_回落密钥文件与向后兼容：
 // 环境变量未命中时回落 etc/<VAR_NAME>.key（QQ 扫码绑定的落盘密钥）；
 // 文件不存在时行为必须与纯环境变量版本完全一致（仍报 ErrCredentialEnvMissing）。
 func TestResolveEnvRef_回落密钥文件与向后兼容(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 注册关系相关错误（FR-032）。
+// 注册关系相关错误。
 var (
 	ErrProxyNotFound        = errors.New("代理实例不存在")
 	ErrBackendNotFound      = errors.New("后端实例不存在")
@@ -26,12 +26,12 @@ var (
 var aliasRe = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
 // RegistrationSyncer 在注册关系变更后把它落到代理的实际配置（写 servers{}/priorities/forced-host
-// 与 Velocity secret 下发）。FR-032 只维护关系数据，syncer 为 nil；FR-035 注入真正实现。
+// 与 Velocity secret 下发）。只维护关系数据，syncer 为 nil注入真正实现。
 type RegistrationSyncer interface {
 	SyncProxy(proxyID uint) error
 }
 
-// RegistrationService 管理 proxy↔backend 的 M:N 注册关系（FR-032 / ADR-007）。
+// RegistrationService 管理 proxy↔backend 的 M:N 注册关系（ADR-007）。
 type RegistrationService struct {
 	db     *gorm.DB
 	syncer RegistrationSyncer
@@ -42,7 +42,7 @@ func NewRegistrationService(db *gorm.DB) *RegistrationService {
 	return &RegistrationService{db: db}
 }
 
-// SetSyncer 注入注册同步器（FR-035 写代理配置）。在 FR-032 下保持 nil。
+// SetSyncer 注入注册同步器（写代理配置）。在下保持 nil。
 func (s *RegistrationService) SetSyncer(syncer RegistrationSyncer) {
 	s.syncer = syncer
 }
@@ -82,7 +82,7 @@ type UpdateRegistrationRequest struct {
 	Enabled    *bool   `json:"enabled"`
 }
 
-// ProxyTopology 单个代理及其注册关系（拓扑聚合单元，FR-335）。
+// ProxyTopology 单个代理及其注册关系（拓扑聚合单元）。
 // 字段与 model.Instance 概要（proxy 侧）+ registrations（与 GET /proxies/:id/registrations 同构）对齐。
 type ProxyTopology struct {
 	ID            uint                 `json:"id"`
@@ -93,7 +93,7 @@ type ProxyTopology struct {
 	Registrations []RegistrationView   `json:"registrations"`
 }
 
-// Topology 一次组装全量群组拓扑（FR-335）：所有 role=proxy 实例 + 各自注册（含后端概要）。
+// Topology 一次组装全量群组拓扑：所有 role=proxy 实例 + 各自注册（含后端概要）。
 // service 层固定次数 IN 查询，无 per-proxy/per-registration 循环单查：
 //  1. 一次取全部 proxy 概要；
 //  2. 一次按 proxy_id IN 取全量注册（排序与 List 一致 priority asc, id asc）；
@@ -193,7 +193,7 @@ func (s *RegistrationService) List(proxyID uint) ([]RegistrationView, error) {
 }
 
 // Create 把后端注册进代理。alias 缺省时取后端名 slug；priority 缺省追加到末尾。
-// 落库后若已注入 syncer（FR-035），同步写代理配置；同步失败返回 view + 包装错误（关系已持久化）。
+// 落库后若已注入 syncer，同步写代理配置；同步失败返回 view + 包装错误（关系已持久化）。
 func (s *RegistrationService) Create(proxyID uint, req CreateRegistrationRequest) (*RegistrationView, error) {
 	if _, err := s.requireProxy(proxyID); err != nil {
 		return nil, err
@@ -310,7 +310,7 @@ func (s *RegistrationService) Delete(proxyID, rid uint) error {
 	return nil
 }
 
-// ListByBackend 返回某后端注册进的所有代理 ID（供 Velocity secret 一致性校验/下发复用，FR-035）。
+// ListByBackend 返回某后端注册进的所有代理 ID（供 Velocity secret 一致性校验/下发复用）。
 func (s *RegistrationService) ListByBackend(backendID uint) ([]model.ServerRegistration, error) {
 	var regs []model.ServerRegistration
 	if err := s.db.Where("backend_id = ?", backendID).Find(&regs).Error; err != nil {

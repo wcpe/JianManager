@@ -12,7 +12,7 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
+/** 
  * 文件存储配置页容器（ADR-103 b 范式）：渠道列表与存量迁移状态取数、创建/更新/删除/测试/
  * 设活跃/发起迁移/强制停止各写动作与 toast 文案都在这里决定，表格、四个对话框与删除二次确认
  * 交共享视图。
@@ -31,7 +31,7 @@ export default function ArtifactStoragesPage() {
   const testSaved = useTestArtifactStorage()
   const testDraft = useTestArtifactStorageDraft()
 
-  // 存量迁移（FR-348）：最近迁移状态轮询 + 发起 + 强停 + 失败明细。
+  // 存量迁移：最近迁移状态轮询 + 发起 + 强停 + 失败明细。
   const migrationStatus = useArtifactMigrationStatus()
   const startMigration = useStartArtifactMigration()
   const cancelTask = useCancelTask()

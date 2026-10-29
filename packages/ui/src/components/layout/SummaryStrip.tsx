@@ -2,8 +2,8 @@ import * as React from 'react'
 
 import { cn } from '../../lib/utils'
 
-/**
- * 摘要统计条（FR-502 阶段 3）：页面顶部的等宽数字概览。
+/** 
+ * 摘要统计条（阶段 3）：页面顶部的等宽数字概览。
  *
  * 原型为 5 列等宽网格，窄屏降为 3 列（分两行）。做成 `<div>` 而非 `<table>`，
  * 因为它是阅读性概览而非可排序数据；每个格子可点击（传入 `onClick` 即变为按钮语义）。
@@ -24,7 +24,7 @@ export function SummaryStrip({ className, children, ...props }: React.ComponentP
   )
 }
 
-/**
+/** 
  * 摘要格：一个标签 + 一个数值。
  * `tone` 只影响数值颜色（状态语义），不改变底色，保持整条视觉统一。
  */

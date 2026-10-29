@@ -21,10 +21,10 @@ export interface BcPlayersPanelProps {
   online?: BcOnlineSnapshot
 }
 
-/**
- * 跨服玩家分布 + 本代理已注册子服的在线总数（FR-449 §2.2 块 2）。
+/** 
+ * 跨服玩家分布 + 本代理已注册子服的在线总数（§2.2 块 2）。
  *
- * 由 `players` 能力在 **proxy 语义**下呈现（FR-445 §2.3：backend 的 `players` = 单服实名名单，
+ * 由 `players` 能力在 **proxy 语义**下呈现（§2.3：backend 的 `players` = 单服实名名单，
  * proxy 的 `players` = 谁在哪个子服）。以该 proxy 的 `registrations` 为唯一真源聚合各后端在线玩家；
  * 探针不可达的子服显「未知」而非 0，且不计入总数。
  *

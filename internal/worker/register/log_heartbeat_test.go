@@ -6,9 +6,9 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logmetrics"
 )
 
-// FR-485：日志采集面读数必须真的进入心跳负载。
+// 日志采集面读数必须真的进入心跳负载。
 //
-// 与 FR-513 的主机级测试同源理由：心跳负载是内存结构，真机上只能看到落库结果，
+// 与的主机级测试同源理由：心跳负载是内存结构，真机上只能看到落库结果，
 // 而落库为空时无法区分「没人采到」与「采到了没写」。这里把「采集→负载」一环单独钉死。
 type fakeLogMetrics struct {
 	snap logmetrics.Snapshot

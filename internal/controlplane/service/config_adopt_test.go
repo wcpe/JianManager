@@ -721,7 +721,7 @@ func TestFR533Adopt_BatchNoMatch(t *testing.T) {
 //
 // 注意实例层基线在作用域链里优先级最高（config_layer.go resolveScopeChain 注释：
 // 「实例层恒在最后（优先级最高）」），所以分组层无法覆盖实例层已有的键——
-// 这是 FR-529 的既有语义，纳管不改变它。本用例按这个真实语义断言。
+// 这是的既有语义，纳管不改变它。本用例按这个真实语义断言。
 func TestFR533Adopt_ThenLayerOverrideAndMerge(t *testing.T) {
 	db := newAdoptTestDB(t)
 	db = withLayerScopeMigration(t, db)
@@ -760,7 +760,7 @@ func TestFR533Adopt_ThenLayerOverrideAndMerge(t *testing.T) {
 	require.NoError(t, err)
 	// 实例层优先级最高：已有的 motd 不被分组层覆盖。
 	assert.Equal(t, "disk-original", eff.Traced["motd"].Value,
-		"实例层基线优先级高于分组层（FR-529 既有语义）")
+		"实例层基线优先级高于分组层（既有语义）")
 	assert.Equal(t, string(model.ConfigScopeInstance), eff.Traced["motd"].Source.Level)
 	// 基线没有的键由分组层补上，说明合并确实生效。
 	assert.Equal(t, "yes", eff.Traced["only-in-group"].Value)

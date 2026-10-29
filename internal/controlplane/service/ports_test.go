@@ -67,7 +67,7 @@ func TestAllocPortsForNode(t *testing.T) {
 	require.Equal(t, 25566, p4.ServerPort) // p2 的端口被回收
 }
 
-// TestAllocPortsForNode_ProbeInapplicable FR-454：探针不适用（代理/通用二进制/Beacon）时不分配
+// TestAllocPortsForNode_ProbeInapplicable：探针不适用（代理/通用二进制/Beacon）时不分配
 // 探针端口（ProbePort 恒 0），但仍分配 server/query；不占用的探针端口可被后续 MC 实例取用。
 func TestAllocPortsForNode_ProbeInapplicable(t *testing.T) {
 	db := newPortsTestDB(t)

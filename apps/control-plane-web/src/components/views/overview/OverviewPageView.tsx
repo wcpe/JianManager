@@ -1,4 +1,4 @@
-/**
+/** 
  * @file OverviewPageView：概览页（`/`）的受控视图——六个查询的结果与错误态、平台观测区可见性、
  *       健康墙 / 链接 / 按需续取三处接线全由应用容器注入。
  * @input lib/instance-types（InstanceInfo）、lib/task-status（Task、TaskState）、lib/alert-contracts（AlertEventInfo）、
@@ -11,8 +11,8 @@
  *         AttributionGauge、OverviewLinkArgs、
  *         OverviewMetricTotals、OverviewMetricTrend、OverviewMetricSnapshot、OverviewObservabilitySnapshot、OverviewAttributionSnapshot
  * @sync apps/control-plane-web/src/pages/OverviewPage.tsx、apps/control-plane-web/src/pages/OverviewPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-061 旗舰总览、FR-060 聚合历史曲线、FR-402 平台全景观测、
- *        FR-432 平台观测区权限对齐、FR-461 集群健康墙、FR-502 阶段 6 布局原语与渲染补丁）
+ * @since（组件受控化迁包；原页旗舰总览聚合历史曲线平台全景观测、
+ *平台观测区权限对齐集群健康墙阶段 6 布局原语与渲染补丁）
  */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -39,8 +39,8 @@ import type { PlayerTrendResult } from '@/lib/players/player-trend'
 import type { SLOResult as SLOResultView } from '@/lib/metrics/slo'
 import { resourceLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui/lib/threshold'
 
-/**
- * 首页趋势图（FR-060）**懒加载**：recharts 不能留在落地页的同步依赖里。
+/** 
+ * 首页趋势图**懒加载**：recharts 不能留在落地页的同步依赖里。
  *
  * 【为什么必须懒】`TimeSeriesChart` 静态 import recharts（含 d3 一族，构建产物中约 359 kB /
  * gzip 约 106 kB）。它此前是从 `@jianmanager/ui` barrel 同步引入的，于是本页所在的
@@ -58,13 +58,13 @@ import { resourceLevel, statusColorVar, type StatusLevel } from '@jianmanager/ui
  */
 const TimeSeriesChart = lazy(() => import('@jianmanager/ui/charts/TimeSeriesChart').then((m) => ({ default: m.TimeSeriesChart })))
 
-/**
+/** 
  * 趋势图高度（px）：**声明值 = 真实值**——同一个常量既传给 `TimeSeriesChart` 的 `height`，
  * 也用作懒加载骨架的高度，图表就位前后占位完全一致，不产生布局跳动。
  */
 const TREND_CHART_HEIGHT = 220
 
-/**
+/** 
  * 铺满模式下趋势图的最小高度。
  *
  * 首帧容器可能测到 0（父级尚未布局），量不到时就退回一个保底值；
@@ -72,7 +72,7 @@ const TREND_CHART_HEIGHT = 220
  */
 const MIN_TREND_FILL_HEIGHT = 160
 
-/**
+/** 
  * 资源结论句的兜底文案（键缺省时用）。
  *
  * 用 `resourceLevel` 的三档作为键名，好处是文案与环的颜色走**同一个判据**——
@@ -87,7 +87,7 @@ const VERDICT_FALLBACK: Record<StatusLevel, string> = {
   neutral: '--',
 }
 
-/**
+/** 
  * 概览底部实例表行高（px）：**声明值 = 真实值**——同一个常量既喂虚拟窗口（`itemSize`），
  * 24h 范围服务端返回 **96 点/条**，而首页图表高 180px、宽约 400px——96 点远超实际可分辨的
  * 像素密度，纯属渲染负担。recharts 是 SVG 实现、**每个点都生成 DOM**：实测 4 个图表 × 96 点
@@ -129,7 +129,7 @@ function formatObservedAt(value: string | null, unknown: string): string {
 /** 首页仪表可归属的资源维度（也是归因查询的排序口径）。 */
 export type AttributionGauge = 'cpu' | 'load' | 'memory'
 
-/**
+/** 
  * 链接渲染插槽参数。
  * 视图只说「跳到哪、长什么样、带什么测试钩子」，由容器决定用 `react-router` 的 `Link`
  * 还是别的导航原语；插槽缺省时渲染原生 `<a href>`（组件博物馆与脱离路由的场景仍可用）。
@@ -144,7 +144,7 @@ export interface OverviewLinkArgs {
   children: ReactNode
 }
 
-/**
+/** 
  * `/metrics/overview` 的 `totals` 中本页用到的字段（结构性最小集）。
  * 刻意不照搬应用侧 `@/api/metrics` 的类型：容器直接传该响应的 `totals` 也结构兼容，
  * 而包内无需认识整份观测响应（同 `StatisticsOverviewTotals` 的取舍）。
@@ -158,7 +158,7 @@ export interface OverviewMetricTotals {
   runningInstances: number
   /** 跨节点 CPU 平均占用（%）。 */
   cpuPct: number
-  /** 在线节点负载利用率均值（load1/核数×100，FR-062）。 */
+  /** 在线节点负载利用率均值（load1/核数×100）。 */
   loadAvg: number
   /** 已用内存（字节）。 */
   memUsedBytes: number
@@ -179,12 +179,12 @@ export interface OverviewMetricTrend {
 export interface OverviewMetricSnapshot {
   /** 跨节点当前总量（环形仪表与三个 KPI 读数）。 */
   totals: OverviewMetricTotals
-  /** 聚合历史曲线（FR-060）。 */
+  /** 聚合历史曲线。 */
   trends: OverviewMetricTrend[]
 }
 
-/**
- * `/observability/overview` 中本页用到的字段（结构性最小集，FR-402）。
+/** 
+ * `/observability/overview` 中本页用到的字段（结构性最小集）。
  * 三张平台卡共用同一份快照，故只列它们真正读到的分支。
  */
 export interface OverviewObservabilitySnapshot {
@@ -232,8 +232,8 @@ export interface OverviewObservabilitySnapshot {
   exceptions: { kind: string; nodeId?: number; instanceId?: number; title: string; href: string }[]
 }
 
-/**
- * `/metrics/resource-attribution` 中本页用到的字段（结构性最小集，FR-402）。
+/** 
+ * `/metrics/resource-attribution` 中本页用到的字段（结构性最小集）。
  * 归因 Tooltip 只展示有界的受管资源，故后端已按 `limit=5` 截断，视图再取前 3/4 条。
  */
 export interface OverviewAttributionSnapshot {
@@ -248,8 +248,8 @@ export interface OverviewAttributionSnapshot {
     status: string
     cpuPct: number | null
     memoryUsedBytes: number | null
-    /**
-     * FR-513 主机级观测：全部可为 null（老 Worker 未上报）。
+    /** 
+     *主机级观测：全部可为 null（老 Worker 未上报）。
      *
      * `null` 与 `0` 语义不同：null = 不知道（渲染 `--`），0 = 读数是 0。
      * 把「不知道」画成 0 会让运维以为机器空闲。
@@ -293,8 +293,8 @@ export interface OverviewAttributionSnapshot {
     cpuPercent: number
     rssBytes: number
   }[]
-  /**
-   * FR-513：**整机** top-N 进程。
+  /** 
+   *：**整机** top-N 进程。
    *
    * 与 `topProcesses` 是两个不同口径，**不可混为一谈**：
    * 前者只覆盖受管实例的进程树（我们知道它是谁），后者是整机上按 CPU 排序的前几名
@@ -328,7 +328,7 @@ export interface GaugeAttributionTooltipProps {
   label: string
   /** 仪表本体（环形图）。 */
   children: ReactNode
-  /**
+  /** 
    * 环下方的结论句（照宝塔首页的做法）。
    *
    * 环上只有百分比，是「精确读数」；而运维在首页第一眼要的是**判断**——
@@ -350,8 +350,8 @@ export interface GaugeAttributionTooltipProps {
   renderLink?: (args: OverviewLinkArgs) => ReactNode
 }
 
-/**
- * 把 CPU 构成压成「前 4 项 + 其余归并」（FR-513）。
+/** 
+ * 把 CPU 构成压成「前 4 项 + 其余归并」。
  *
  * 为什么不直接铺八行：悬浮卡是浮层，八行数字会把它撑得比屏幕还高，
  * 而 nice/irq/softirq/steal 在绝大多数机器上都是零点几——铺出来只是噪声。
@@ -436,7 +436,7 @@ export function GaugeAttributionTooltip({
             variant="invisible"
             size="auto"
             aria-label={t('dashboard.resourceAttributionLabel', { label })}
-            /*
+            /* 
               【悬停反馈：不动背景色，改提亮环 + 轻微抬起】
               用户要求保留 hover 反馈，但原先的 `hover:bg-accent/40` 是整块卡变浅底——
               三个球并排时鼠标扫过会轮流闪一下，反而干扰读数。
@@ -460,7 +460,7 @@ export function GaugeAttributionTooltip({
           {isLoading && <p className="text-muted-foreground">{t('dashboard.resourceAttributionLoading')}</p>}
           {isError && <p className="text-muted-foreground">{t('dashboard.resourceAttributionUnavailable')}</p>}
           {data && (
-            /*
+            /* 
               【照宝塔的分层】宝塔的悬浮卡是「结论徽标 → 分段小标题 → 明细行 → 展开入口」，
               每段都有明确标题，扫读成本低于原来的一整片无标题列表。
               这里保留同一套层次，但内容只用**后端已采得到**的东西：
@@ -499,7 +499,7 @@ export function GaugeAttributionTooltip({
                 </div>
               </div>
 
-              {/* FR-513：负载三档。单值看不出「瞬时尖峰」还是「持续爬升」——
+              {/*负载三档。单值看不出「瞬时尖峰」还是「持续爬升」——
                   5/15 分钟两档下降而 1 分钟高，说明已经过去；反之说明还在恶化。
                   仅在有数据时渲染：老 Worker 不报这两档，画两个 `--` 只是噪声。 */}
               {data.nodes[0] && (data.nodes[0].load5Pct != null || data.nodes[0].load15Pct != null) ? (
@@ -523,7 +523,7 @@ export function GaugeAttributionTooltip({
                 </div>
               ) : null}
 
-              {/* FR-513：CPU 构成。只看总占用分不清瓶颈类型——iowait 高是 IO 瓶颈、
+              {/*CPU 构成。只看总占用分不清瓶颈类型——iowait 高是 IO 瓶颈、
                   system 高是内核开销、user 高才是应用自身忙，三者处置动作完全不同。
                   只展示前 4 项 + 其余归并，避免 8 行数字把浮层撑爆。 */}
               {data.nodes[0]?.cpuBreakdown ? (
@@ -542,7 +542,7 @@ export function GaugeAttributionTooltip({
                 </div>
               ) : null}
 
-              {/* FR-513：分挂载点磁盘。单值 diskUsage 只覆盖根分区——
+              {/*分挂载点磁盘。单值 diskUsage 只覆盖根分区——
                   `/var` 写满而 `/` 宽松时完全无感，而这正是数据盘最常见的故障形态。 */}
               {data.nodes[0]?.mounts && data.nodes[0].mounts.length > 0 ? (
                 <div>
@@ -562,7 +562,7 @@ export function GaugeAttributionTooltip({
                 </div>
               ) : null}
 
-              {/* FR-513：进程计数。主机级口径（非实例内），配合上面负载三档判断机器整体压力。 */}
+              {/*进程计数。主机级口径（非实例内），配合上面负载三档判断机器整体压力。 */}
               {data.nodes[0]?.procsTotal != null ? (
                 <div className="flex justify-between gap-2 text-[11px] text-muted-foreground">
                   <span>{t('dashboard.attributionProcs', '进程数（运行 / 总）')}</span>
@@ -608,7 +608,7 @@ export function GaugeAttributionTooltip({
                 </div>
               </div>
 
-              {/* FR-513：**整机** top-N 进程。与上面「Top 受管进程」并列但口径不同——
+              {/***整机** top-N 进程。与上面「Top 受管进程」并列但口径不同——
                   这个包含系统进程与别人的进程，才是「机器为什么慢」的答案。
                   标题必须能区分，否则会被读成同一份数据。 */}
               {data.hostTopProcesses && data.hostTopProcesses.length > 0 ? (
@@ -700,15 +700,15 @@ export interface OverviewTrendPanelProps {
   isError: boolean
   testId: string
   className?: string
-  /**
-   * 可用性 SLO 快照（FR-463）。不单独占卡——挂在趋势卡头部一行带过，
+  /** 
+   * 可用性 SLO 快照。不单独占卡——挂在趋势卡头部一行带过，
    * 细节（MTTR / MTBF / 误差预算）留给监控页。
    */
   slo?: SLOResultView
 }
 
-/**
- * 玩家在线趋势卡（FR-469）：全网合计曲线 + 峰值/日均，头部附带可用率。
+/** 
+ * 玩家在线趋势卡：全网合计曲线 + 峰值/日均，头部附带可用率。
  *
  * 曲线用轻量内联 SVG 而不是 recharts：本页对渲染成本很敏感（趋势图已有实测
  * 246ms/4 张的教训，见文件头关于懒加载的说明），而这张图只需一条折线、
@@ -718,7 +718,7 @@ export interface OverviewTrendPanelProps {
 export function OverviewTrendPanel({ trend, isLoading, isError, testId, className, slo }: OverviewTrendPanelProps) {
   const { t } = useTranslation()
   const points = (trend?.trend ?? []).map((p) => p.avg).filter((v) => typeof v === 'number')
-  /*
+  /* 
     曲线与「峰值」标签必须用**同一份数据**算峰值。
 
     踩过的坑：`trend.peakValue` 是后端按自己的口径给的（可能是按小时桶的峰值），
@@ -729,7 +729,7 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
     故纵轴范围由序列自身求得，`peakValue` 只用于标签显示。
   */
   const seriesMax = points.length ? Math.max(...points) : 0
-  /*
+  /* 
     「峰值」标签取 max(后端 peakValue, 序列最大值)，而不是信任单一来源。
 
     实测两者会不一致：devmock 的 peakValue 是写死的常量 212.2，而 trend[] 序列
@@ -746,7 +746,7 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
   else if (points.length >= 2) {
     const w = 640
     const h = 84
-    /*
+    /* 
       纵轴从 0 起算，而不是从序列最小值起算。
 
       踩过的坑：一开始用 `min..max` 当纵轴范围，等于把「最低点」也拉到画布底部——
@@ -759,7 +759,7 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
       .map((v, i) => `${(i / (points.length - 1)) * w},${h - (v / span) * (h - 12) - 6}`)
       .join(' L ')
     chart = (
-      /*
+      /* 
         【为什么用 100% 宽 + 固定 viewBox + preserveAspectRatio=none】
         这是「撑满容器宽度的折线」的标准写法：viewBox 定坐标系（640×84），
         实际宽度交给 CSS，纵横比不锁定（none）以免曲线被等比缩放后中间留白。
@@ -769,7 +769,7 @@ export function OverviewTrendPanel({ trend, isLoading, isError, testId, classNam
       <svg
         viewBox={`0 0 ${w} ${h}`}
         preserveAspectRatio="none"
-        /*
+        /* 
           `h-full` + 父级 flex-1：本行由「玩家 Top5」的内容高度撑起（它是三栏里最高的），
           若图表固定 84px，趋势卡下半部会留下约 75px 空白（真机截图可见），
           看着像内容没加载完。让图表吃掉剩余高度，两张卡就等高且都填满。
@@ -866,7 +866,7 @@ export function PlatformBotRuntimePanel({ data, isLoading, isError }: PlatformPa
 }
 
 
-/**
+/** 
  * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast**。
  * - 六个查询的结果与错误态经 props 注入（容器调 `useMetricOverview` / `useNodes` / `useInstanceSearch` /
  *   `useInfiniteInstanceSearch` / `useTasks` / `useAlertEvents` / `usePlatformObservabilityOverview` /
@@ -877,7 +877,7 @@ export function PlatformBotRuntimePanel({ data, isLoading, isError }: PlatformPa
  * - **留本组件**的纯 UI 状态：实例表的虚拟窗口、Tooltip 的键盘交互（Esc 关闭经 `onActiveGaugeChange` 上报）；
  * - **千级实体**：底部实例表与异常卡片都保持既有服务端分页语义——异常卡片由容器按
  *   `status=CRASHED&pageSize=5` 取数，实例表由容器按需续取（视图只上报「滚到近底」，不拉全量）；
- * - 集群健康墙（FR-461）本体是应用侧接线层（自持取数 + 排序状态），故以 `renderHealthWall` 插槽注入，
+ * - 集群健康墙本体是应用侧接线层（自持取数 + 排序状态），故以 `renderHealthWall` 插槽注入，
  *   包内不 import 它；插槽缺省或无权时不渲染该区块。
  */
 export interface OverviewPageViewProps {
@@ -899,7 +899,7 @@ export interface OverviewPageViewProps {
   attributionLoading: boolean
   /** 归因取数失败（Tooltip 内局部降级）。 */
   attributionError: boolean
-  /** 平台观测区是否可见（FR-432 权限树对齐：平台管理员或持 monitor.read / node.read）。 */
+  /** 平台观测区是否可见（权限树对齐：平台管理员或持 monitor.read / node.read）。 */
   canSeePlatformObs: boolean
   /** `/observability/overview` 快照（三张平台卡共用）。 */
   platformOverview?: OverviewObservabilitySnapshot
@@ -907,23 +907,23 @@ export interface OverviewPageViewProps {
   platformOverviewLoading: boolean
   /** 平台观测取数失败。 */
   platformOverviewError: boolean
-  /** 集群健康墙插槽（FR-461）：取数与排序在应用侧接线层，插槽缺省或无权时不渲染。 */
+  /** 集群健康墙插槽：取数与排序在应用侧接线层，插槽缺省或无权时不渲染。 */
   renderHealthWall?: () => ReactNode
-  /** 玩家在线趋势（FR-469）；缺省即空态。 */
+  /** 玩家在线趋势；缺省即空态。 */
   playerTrend?: PlayerTrendResult
   /** 趋势取数中。 */
   playerTrendLoading?: boolean
   /** 趋势取数失败（本卡局部降级）。 */
   playerTrendError?: boolean
-  /** 玩家排行 Top-N（FR-469）。 */
+  /** 玩家排行 Top-N。 */
   /** 排行取数中。 */
   /** 排行取数失败。 */
-  /** 平台可用性 SLO（FR-463）；不单独占卡，并入玩家表头部一行。 */
+  /** 平台可用性 SLO；不单独占卡，并入玩家表头部一行。 */
   slo?: SLOResultView
   /** 链接渲染插槽（缺省原生 `<a href>`）。 */
   renderLink?: (args: OverviewLinkArgs) => ReactNode
-  /**
-   * 切到 AI 对话首页（FR-520 §4.4 的双向切换之一）。
+  /** 
+   * 切到 AI 对话首页（§4.4 的双向切换之一）。
    *
    * 做成回调而不是 `href` 链接：切换要**先写模式记忆再导航**，顺序不能反
    * （先导航会让新页面按旧记忆再判一次，出现闪回）。写记忆需要容器侧参与，
@@ -932,8 +932,8 @@ export interface OverviewPageViewProps {
   onSwitchToAssistant?: () => void
 }
 
-/**
- * 概览页（FR-061 旗舰）：环形仪表盘 + 聚合历史曲线（FR-060） + 密集实例表，一屏概览。
+/** 
+ * 概览页（旗舰）：环形仪表盘 + 聚合历史曲线 + 密集实例表，一屏概览。
  * 页面外壳与页头走布局层原语（PageShell / PageHeader），`data-page="overview"` 由 PageShell 透传，
  * e2e 的就绪信号依赖它。
  */
@@ -973,8 +973,8 @@ export function OverviewPageView({
 
   // 「需要处理」的组装逻辑已随该区块一起移到页眉消息中心，首页不再计算。
 
-  /**
-   * 四条趋势合成一张图（FR-502 阶段 6 补丁）。
+  /** 
+   * 四条趋势合成一张图（阶段 6 补丁）。
    *
    * 【为什么合并】React Profiler 埋点实测：首页整页渲染 283.9ms 中，
    * 4 个 `TimeSeriesChart` 占 **246ms（86.6%）**，而其余所有区块合计仅 24.7ms
@@ -1004,21 +1004,21 @@ export function OverviewPageView({
       hiddenByDefault?: boolean
     }> = [
       { key: 'node_cpu_pct', labelKey: 'dashboard.totalCpu', full: 100, fmt: (v) => `${v.toFixed(0)}%` },
-      /*
+      /* 
         负载用 `seriesMax`（按本序列峰值归一化），**不能写死 1**：
         `node_load` 是原始 load1（实测窗口内 0.0–2.4），而仪表上的「总负载」是
         「占核数百分比」（0–100）。把原始 load1 相对 1 归一化会画出 240% 的刻度
         （load1=2.4 → 240%），看起来像负载爆表。tooltip 仍显示原始倍数。
       */
       { key: 'node_load', labelKey: 'dashboard.totalLoad', full: 'seriesMax', fmt: (v) => v.toFixed(2) },
-      /*
+      /* 
         内存用 `seriesMax`（按本序列峰值归一化），**不能用 `memTotal`**：
         仪表上的「120.0G / 320.0G」是「跨节点已用合计 / 单节点内存总量」，
         两者量纲本来就不匹配。用 memTotal 当满值会让 120G 画出 240% 的刻度
         （多节点合计超过单机总量），看起来像内存爆了。tooltip 仍按真实字节展示。
       */
       { key: 'node_mem_used', labelKey: 'dashboard.totalMem', full: 'seriesMax', fmt: fmtBytes },
-      /*
+      /* 
         Bot Worker 两条共享进程指标也进同一张图（后端 `/metrics/overview` 已返回它们的序列）。
         **默认隐藏**：它们与节点资源不同量级（RSS 是百 MB 级、CPU 是十几个百分点），
         同屏常显会压扁上面三条主线；但要让读者知道「可以看」，所以仍进图例与坐标轴，
@@ -1069,7 +1069,7 @@ export function OverviewPageView({
         description={t('dashboard.subtitle')}
         actions={
           <>
-            {/* 切回 AI 对话首页（FR-520 §4.4）。与 AI 首页上的「经典首页」入口位置对应，
+            {/* 切回 AI 对话首页（§4.4）。与 AI 首页上的「经典首页」入口位置对应，
                 双向可达，用户不会「进去出不来」。 */}
             {onSwitchToAssistant && (
               <Button variant="outline" size="sm" onClick={onSwitchToAssistant}>
@@ -1127,7 +1127,7 @@ export function OverviewPageView({
           }
         >
           {/* 负载是「占总核数比例」：以倍数（load÷核）呈现而非百分比，环按 1.0=满核封顶，
-              不再出现 >100% 的破环（FR-108）。grading 仍按占比走 resourceLevel（>0.8×→红）。 */}
+              不再出现 >100% 的破环。grading 仍按占比走 resourceLevel（>0.8×→红）。 */}
           <ResourceGauge label={t('dashboard.totalLoad')} value={(totals?.loadAvg ?? 0) / 100} max={1} unit="×" decimals={2} />
         </GaugeAttributionTooltip>
         <GaugeAttributionTooltip
@@ -1253,7 +1253,7 @@ export function OverviewPageView({
 }
 
 
-/**
+/** 
  * 铺满容器的资源趋势图。
  *
  * 为什么需要它：`TimeSeriesChart` 的 `height` 是数字（内部按固定像素绘制），而首页要求
@@ -1270,7 +1270,7 @@ function TrendFillChart({
   series: ChartSeries[]
   scales: Map<string, { full: number; fmt: (v: number) => string }>
 }) {
-  /*
+  /* 
     默认隐藏的实现：recharts 的图例点击是**它内部状态**，外部拿不到「当前勾了哪几条」。
     所以这里自己维护一份「用户已开启的键」集合：初始为空 = 全部默认隐藏项不画；
     图例点击时由 recharts 内部切换线的显隐，同时我们把该键记进集合，保证重渲染后不回弹。
@@ -1309,8 +1309,8 @@ function TrendFillChart({
 }
 
 
-/**
- * 玩家在线表格（FR-469）：从「资源趋势」独立出来的玩家视角。
+/** 
+ * 玩家在线表格：从「资源趋势」独立出来的玩家视角。
  *
  * 【为什么不与资源放一张图】玩家数不是资源占用，量纲也没有自然上限。
  * 混进归一化趋势图会让纵轴出现 >100% 的刻度（曾出现 240%），读起来像故障。
@@ -1357,7 +1357,7 @@ export function PlayerStatsTable({
     ? new Date(trend.peakAt).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : null
 
-  /*
+  /* 
     时段分布：`hourlyDist` 是 24 小时桶。取最大与最小桶的**下标**即高峰/低谷时段。
     全 0（无数据）时不显示——那会误导成「0 点最忙」。
   */
@@ -1367,7 +1367,7 @@ export function PlayerStatsTable({
   const lowHour = distMax > 0 ? dist.indexOf(Math.min(...dist.filter((v) => v >= 0))) : -1
   const hourLabel = (h: number) => `${String(h).padStart(2, '0')}:00`
 
-  /*
+  /* 
     两栏：左图表、右读数。
     图表给「形状」（昼夜起伏、尖峰），读数给「数值」（现在多少、峰值何时）。
     两者并排而非上下堆叠——上下堆会把这一行撑到 300px+，挤掉下方资源趋势的高度。

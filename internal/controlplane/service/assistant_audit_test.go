@@ -1,7 +1,7 @@
 package service
 
-/**
- * FR-516 §9「审计中能按 conversationId / runId / callId 串起一次完整调用」的验收用例。
+/* *
+ *§9「审计中能按 conversationId / runId / callId 串起一次完整调用」的验收用例。
  *
  * 这组用例守的是**可查性**，而不只是「有没有写审计行」：
  * 三者必须是独立列 + 可过滤，否则「串起来」只能靠 LIKE 全表扫描，

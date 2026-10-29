@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-527 对外只读统计契约 HTTP 测试。
+// 对外只读统计契约 HTTP 测试。
 //
 // 覆盖 spec §6 的验收项：六组接口可调、双鉴权（Agent Token / JWT）、
 // 分页与时间窗超限的明确拒绝、响应头、空数组而非 null。

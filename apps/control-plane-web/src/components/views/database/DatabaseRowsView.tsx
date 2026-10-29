@@ -1,9 +1,9 @@
-/**
+/** 
  * @file DatabaseRowsView：数据库只读行浏览的受控视图，取数与查询变更由应用容器负责。
  * @input lib/db-contracts、lib/db-rows-view、lib/utils、表格与表单原语、翻译上下文
  * @output DatabaseRowsView、DatabaseRowsViewProps、DatabaseRowsState
  * @sync apps/control-plane-web/src/components/database/DatabaseExplorer.tsx、apps/control-plane-web/src/pages/DatabasePage.dom.test.tsx、apps/control-plane-web/src/components/database/rows-view.test.ts
- * @since FR-508
+ * @since
  */
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -64,7 +64,7 @@ const NO_FILTER_COLUMN = '__none__'
 /** 每页行数选项。 */
 const PAGE_SIZES = [25, 50, 100, 200] as const
 
-/**
+/** 
  * 把单元格值渲染为可读文本：null/undefined → 空占位；对象 → JSON；其余 → String。
  * 敏感列由调用方在外层替换为打码占位，不在此处理。
  */
@@ -74,7 +74,7 @@ function renderCell(v: unknown): string {
   return String(v)
 }
 
-/**
+/** 
  * 单表行浏览：顶部过滤条（选列 + 关键字）+ 点击列头排序 + 底部分页器。
  * 切表时由应用容器按活动表重建，重置查询状态及本地过滤草稿。
  */
@@ -255,7 +255,7 @@ export function DatabaseRowsView({
   )
 }
 
-/**
+/** 
  * 列头：列名 + 排序指示（点击切换），敏感列以 monospace 弱化标注。
  *
  * 可排序列用**真正的 `<button>`**：原实现是 `<TableHead aria-disabled onClick>`——

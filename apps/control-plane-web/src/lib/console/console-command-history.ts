@@ -1,17 +1,17 @@
-/**
- * 控制台命令历史（FR-416）：按实例持久化 + `^R` 模糊搜索。
+/** 
+ * 控制台命令历史：按实例持久化 + `^R` 模糊搜索。
  *
  * **为什么按实例分桶**：历史的价值在「上次我在这个服上是怎么弄的」。把 20 个服的历史
  * 混成一条全局列表后，↑ 翻上来的多半是别的服的命令，还可能把「只该在测试服跑的命令」
  * 送进生产服。故存储键带 instanceId，互不污染。
  *
- * **为什么落 localStorage**：FR-415 的历史只活在组件 state 里，刷新即失忆——而排障恰恰
+ * **为什么落 localStorage**：的历史只活在组件 state 里，刷新即失忆——而排障恰恰
  * 常伴随刷新页面。历史属本机操作习惯而非需要跨设备同步的业务数据，故不入库、不上后端。
  *
  * 读写全部包 try/catch：隐私模式下 localStorage 存取会抛，历史丢了不该把控制台带崩。
  */
 
-/** 每实例历史上限（FR-416）。超限丢最旧。 */
+/** 每实例历史上限。超限丢最旧。 */
 export const COMMAND_HISTORY_LIMIT = 500
 
 const KEY_PREFIX = 'console.cmdHistory.'
@@ -20,7 +20,7 @@ function storageKey(instanceId: number): string {
   return `${KEY_PREFIX}${instanceId}`
 }
 
-/**
+/** 
  * 追加一条到历史（纯函数，旧→新）。
  *
  * 相邻重复不入：连按三次 `list` 不该占掉三个坑位，否则 ↑ 要按三次才退到上一条**不同**的命令。
@@ -78,7 +78,7 @@ export interface CommandHistoryMatch {
   positions: number[]
 }
 
-/**
+/** 
  * 子序列匹配（fzf 式）：查询的每个字符按顺序出现在候选中即命中，无需连续。
  * 大小写不敏感——`^R` 是找回记忆的工具，不该因为记错大小写就找不到。
  */
@@ -95,8 +95,8 @@ function subsequenceMatch(value: string, needle: string): number[] | null {
   return positions
 }
 
-/**
- * `^R` 模糊搜索历史（FR-416）。
+/** 
+ * `^R` 模糊搜索历史。
  *
  * 结果**新→旧**排序：readline 的 `^R` 语义是「往回找最近一次」，最近用过的最可能是想找的。
  * 同一条命令的多次出现按值去重（只留最新那次）——`^R` 列表里同一行重复五遍纯属噪音。

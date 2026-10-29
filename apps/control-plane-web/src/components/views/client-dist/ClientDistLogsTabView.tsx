@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components -- 受控视图与日志类型取值/标签助手同文件导出（仅影响 Fast Refresh） */
-/**
+/** 
  * @file ClientDistLogsTabView：页面 B · 全量日志 Tab 的受控视图
  *       （类型选择器 + 加厚请求表 + 安全聚合表 + 请求脱敏详情弹窗）。
  *       两路取数（请求事件检索 / 安全聚合日志）、详情取数、路由查询串读写（含 `type` 视图切换的
@@ -14,7 +14,7 @@
  *         ClientDistLogsLinkRenderer、ClientDistRequestLogsView（+ Props）、ClientDistAggregateLogsView（+ Props）
  * @sync apps/control-plane-web/src/components/client-dist/ClientDistLogsTab.tsx、
  *       apps/control-plane-web/src/components/client-dist/ClientDistLogsTab.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-430 / ADR-088 去重合并的唯一入口，含 FR-357 加厚请求表、FR-265 脱敏详情）
+ * @since（组件受控化迁包；原ADR-088 去重合并的唯一入口，含加厚请求表脱敏详情）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -76,7 +76,7 @@ export function clientDistLogTypeLabel(value: ClientDistSecurityLogType | 'all',
   }
 }
 
-/**
+/** 
  * 深链渲染器：视图给出目标与样式类名，容器提供 router 语义（保持 SPA 导航）。
  * 缺省时视图退化为原生 `<a href>`，便于无路由环境（组件博物馆）独立渲染。
  */
@@ -97,7 +97,7 @@ function LogTypeSelect({ value, onChange }: { value: ClientDistLogTypeValue; onC
   )
 }
 
-/**
+/** 
  * 加厚请求日志视图的注入契约（受控视图，ADR-103 a 范式）。
  *
  * 受控边界：请求事件行与加载/错误态、详情数据经 props 注入（容器调
@@ -259,7 +259,7 @@ export function ClientDistRequestLogsView({
   )
 }
 
-/**
+/** 
  * 安全聚合多类型视图的注入契约（受控视图，ADR-103 a 范式）。
  *
  * 受控边界：聚合日志行与加载/错误态经 props 注入（容器调 `useClientDistSecurityLogs`）；
@@ -388,7 +388,7 @@ function HintLink({
   return <a className={className} href={to}>{children}</a>
 }
 
-/** 请求日志表（加厚列，FR-357）。 */
+/** 请求日志表（加厚列）。 */
 function EventTable({ events, onDetail }: { events: ClientDistEvent[]; onDetail: (id: number) => void }) {
   const { t } = useTranslation()
   return (
@@ -435,7 +435,7 @@ function EventTable({ events, onDetail }: { events: ClientDistEvent[]; onDetail:
   )
 }
 
-/** 单条请求脱敏详情弹窗（FR-265）；数据与加载/错误态由容器按视图上报的 id 注入。 */
+/** 单条请求脱敏详情弹窗；数据与加载/错误态由容器按视图上报的 id 注入。 */
 function EventDetailDialog({
   open,
   onOpenChange,

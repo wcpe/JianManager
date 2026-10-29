@@ -20,11 +20,11 @@ function seedSelection(favorites: Stored[], recent: Stored[]) {
   localStorage.setItem('server-selector.recent', JSON.stringify(recent))
 }
 
-/**
- * 侧栏常驻服务器列（FR-293）：收藏置顶 + 最近打开（LRU ≤8），与服务器选择器
+/** 
+ * 侧栏常驻服务器列：收藏置顶 + 最近打开（LRU ≤8），与服务器选择器
  * 弹窗共用 localStorage 存储并实时互通；点击行进入该服控制台。
  */
-describe('SidebarServerList 常驻服务器列（FR-293）', () => {
+describe('SidebarServerList 常驻服务器列', () => {
   beforeEach(() => {
     loginMockUser()
     useConsoleStore.setState({ selectedNodeId: null })
@@ -150,7 +150,7 @@ describe('SidebarServerList 常驻服务器列（FR-293）', () => {
     expect(screen.queryByTestId('sidebar-server-row')).toBeNull()
   })
 
-  it('侧栏折叠图标轨态不渲染常驻列表（FR-507 阶段 6：旧六域侧栏已删除）', async () => {
+  it('侧栏折叠图标轨态不渲染常驻列表（阶段 6：旧六域侧栏已删除）', async () => {
     // 本条原本渲染 `ConsoleSidebar`（六域侧栏）并验证其折叠态不渲染常驻列表。
     // 阶段 6 删掉该侧栏后，那套 `data-mode="expanded|collapsed"` 双内容层结构已不存在；
     // 新侧栏是 `WorkspaceSidebar`，其折叠态行为由 `WorkspaceSidebar.dom.test.tsx` 负责（含

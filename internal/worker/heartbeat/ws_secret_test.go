@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TestWSSecretApplier_AppliesOnChange 值变化才应用；同值/空值去重（FR-275，见 ADR-061）。
+// TestWSSecretApplier_AppliesOnChange 值变化才应用；同值/空值去重（见 ADR-061）。
 func TestWSSecretApplier_AppliesOnChange(t *testing.T) {
 	var applied []string
 	a := newWSSecretApplier("boot-secret", func(s string) error {

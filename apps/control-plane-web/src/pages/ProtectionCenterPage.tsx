@@ -61,8 +61,8 @@ function SegSwitcher({
   )
 }
 
-/**
- * 页面 B「客户端分发运维」外壳（FR-430 / ADR-088）。
+/** 
+ * 页面 B「客户端分发运维」外壳（ADR-088）。
  * 7 Tab（总览/统计/实时监控/全量日志/机器·客户端/画像/处置）；旧安全页 8 Tab 收敛进其中 4 个（`seg` 分档）。
  * `data-page="client-dist-ops"`；查询级 `enabled: isPlatformAdmin` 纵深防御（路由守卫见 Workspace）。
  *
@@ -87,7 +87,7 @@ export default function ProtectionCenterPage() {
     setSearchParams(updateClientDistQuery(searchParams, { seg: value === fallback ? null : value }), { replace: true })
   }
 
-  // FR-425：时间窗 = URL from/to（自定义）优先，否则本地预设档。
+  // 时间窗 = URL from/to（自定义）优先，否则本地预设档。
   const [range, setRange] = useState<MetricRange>('7d')
   const customWindow: ObsWindow | null = query.from && query.to ? { from: query.from, to: query.to } : null
   const obsWindow: ObsWindow = customWindow ?? { range: toApiRange(range) }
@@ -115,7 +115,7 @@ export default function ProtectionCenterPage() {
     errCode: query.errCode,
     ip: query.ip,
   }
-  /**
+  /** 
    * 下钻到全量日志（点分布桶 / 点机器「看日志」）。
    *
    * 语义是「**以本次为准**」而不是「在本页历史上下钻里的累加」——连续点两个不同维度

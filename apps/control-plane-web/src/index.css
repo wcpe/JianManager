@@ -1,9 +1,9 @@
 @import "tailwindcss";
-/* FR-502 阶段 1：token 映射 / 变量基线 / 主题覆盖 / 动效关键帧已全部归位到
+/*阶段 1：token 映射 / 变量基线 / 主题覆盖 / 动效关键帧已全部归位到
    packages/ui/src/styles/，此处一次引入即得完整设计底座——组件库自此自包含，
    不再要求消费方自备 token（此前 packages/ui/styles.css 与本地定义已发生漂移）。 */
 @import "@jianmanager/ui/styles/index.css";
-/* FR-283：@jianmanager/ui 经 workspace symlink 解析后，Tailwind v4 自动内容检测
+/*@jianmanager/ui 经 workspace symlink 解析后，Tailwind v4 自动内容检测
    不扫 node_modules——显式声明 ui 包源码为扫描源，否则 ui 独有的 utility class
   （如 Sheet 的滑入 transform 组合）不会生成。 */
 @source "../../../packages/ui/src";
@@ -21,7 +21,7 @@
   }
 }
 
-/* 全局主题化细滚动条（FR-176）：细轨 + 圆角拇指，配色取中性主题变量（--muted-foreground/--border），
+/* 全局主题化细滚动条：细轨 + 圆角拇指，配色取中性主题变量（--muted-foreground/--border），
    随明暗与双主题（Jian 绿/青绿）自动适配；不硬编码颜色。下方 .scrollbar-none 书写在后，
    对显式 opt-out 的容器（如侧栏导航区）以 none / width:0 覆盖本规则。 */
 * {
@@ -48,7 +48,7 @@
   background: transparent;
 }
 
-/* 隐藏滚动条但保留滚动能力（FR-131 侧栏导航区）。 */
+/* 隐藏滚动条但保留滚动能力（侧栏导航区）。 */
 .scrollbar-none {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -66,7 +66,7 @@ body {
   /* 相对视口而非元素盒子定位/缩放（见下方 .jm-workspace-bg 的说明）。 */
   background-attachment: fixed;
   color: var(--foreground);
-  /* 高密度档位（FR-061）：正文 13px，组件以紧凑间距套用 */
+  /* 高密度档位：正文 13px，组件以紧凑间距套用 */
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
   margin: 0;
@@ -155,7 +155,7 @@ body {
   /* 去掉 `transform: translateZ(0)` 与 `will-change: width`：width 不是可合成属性，
      浏览器无法为它预先建层，写 will-change 只会让侧栏常驻一个合成层却不产生任何加速；
      而宽度过渡本身必然触发布局，图层提升对布局阶段没有帮助。 */
-  /* FR-502 阶段 6 补丁：宽度过渡只由侧栏自己承担（原型 `.sidebar` 只改自身宽度）。
+  /*阶段 6 补丁：宽度过渡只由侧栏自己承担（原型 `.sidebar` 只改自身宽度）。
      此前这里 `transition: none`、宽度瞬跳，真正过渡的是内层抽屉，再靠内容区
      `clip-path` + `translate3d` 补偿把位移「补回来」——那要求 JS 定时器与 CSS 过渡
      两个时钟严格同步，落位瞬间必然抖一下。现在只有一个时钟：本元素宽度过渡，
@@ -189,7 +189,7 @@ body {
   z-index: 20;
 }
 
-/* FR-502 阶段 6 补丁 2：模式切换**只做透明度交叉淡化**，位移与缩放全部移除。
+/*阶段 6 补丁 2：模式切换**只做透明度交叉淡化**，位移与缩放全部移除。
    原先两份内容在淡入/淡出时各自带 `translateX(±0.45~0.7rem) scale(0.97~0.985)`
    （缩放锚点 `transform-origin: left center`），于是点 logo 的一瞬间，
    侧栏内容是「一边整体缩小一边平移」地换掉的。两条都是坏表现：
@@ -239,7 +239,7 @@ body {
    `data-state` 在点击瞬间就翻转，写死宽度会让侧栏表面立刻跳成 54px，而外层还在 320ms 里慢慢收，
    中途出现「54px 表面 + 空白区」的撕裂。宽度只由外层过渡、抽屉恒为 100% 才是一个时钟。 */
 
-/* FR-502 阶段 6 补丁：内容区不再做任何位移补偿（原 `clip-path` + `translate3d` 两段式动画已删）。
+/*阶段 6 补丁：内容区不再做任何位移补偿（原 `clip-path` + `translate3d` 两段式动画已删）。
    它只是「侧栏 + 内容」这一 flex 行里的兄弟节点，侧栏宽度过渡期间由浏览器逐帧回流，
    平滑接管腾出的空间；整页位移 / 二次抖动因此从机制上不可能发生。 */
 .jm-console-content {
@@ -362,7 +362,7 @@ body {
 }
 
 /* 方案 C 品牌顶栏：品牌列宽度随侧栏同步收放，右缘描边与侧栏右缘连成一条竖线（ADR-071）。
-   FR-502 阶段 6 补丁后品牌列由 ui 包 `TopNav` 的品牌槽位渲染（顶栏是唯一一条、内含 `.space-nav`），
+阶段 6 补丁后品牌列由 ui 包 `TopNav` 的品牌槽位渲染（顶栏是唯一一条、内含 `.space-nav`），
    而 TopNav 的品牌槽位按原型写死 246px（原型折叠只改 `.sidebar`，`.brand` 不动）。这里在外壳侧
    把它接回侧栏宽度变量：折叠时与侧栏同宽同轴，交界处才不会出现一条错位的竖线（ADR-071 的原意）。
    选择器走 `data-slot`（ui 包的样式钩子约定），不改 `packages/ui` 一行代码。 */
@@ -409,7 +409,7 @@ body {
 
 /* 顶栏内容在窄视口放不下时按优先级让位，而不是把工具区挤出屏幕（实测：不处理会在
    768~1023px 把铃铛/账户推出视口外，被外壳的 overflow-hidden 裁掉）：
-   ① 集群徽标（FR-294，纯信息密度型）在 <xl 收起——它最不关键，且有页面级等价入口；
+ ① 集群徽标（纯信息密度型）在 <xl 收起——它最不关键，且有页面级等价入口；
    ② 工作区切换（346px）在 <lg 整段收起：品牌列（246px）+ 工作区切换 + 工具区需要 ≥1067px，
       原型在窄屏同样把平铺 `.space-nav` 换成下拉，由移动导航承担；
    ③ 最后才压缩搜索入口（它自带 truncate，压缩后仍可点开命令面板）。
@@ -613,7 +613,7 @@ body {
   }
 }
 
-/* FR-315 实例状态外圈光晕：按状态柔和渐变光晕，取色经 status 语义 token（双主题自适配）。
+/*实例状态外圈光晕：按状态柔和渐变光晕，取色经 status 语义 token（双主题自适配）。
    容器用标准强度、卡片用 --soft 弱化；过渡态琥珀呼吸。克制柔光，遵守 UI 风格偏好不过度。
    【为什么画在 ::after 上】光晕与卡片的 `hover:shadow-lift` 争的是**同一个 box-shadow 属性**，
    是零和竞争而非叠加：原先这组规则写在 @layer 之外，无层声明恒胜，于是运行中／启动中／

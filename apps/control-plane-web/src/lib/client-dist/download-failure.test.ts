@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { isNetworkDownloadFailure } from './download-failure'
 
-describe('isNetworkDownloadFailure（FR-279）', () => {
+describe('isNetworkDownloadFailure', () => {
   it('命中 Go stdlib 网络类标记', () => {
     expect(isNetworkDownloadFailure('下载失败: Get "https://github.com/...": net/http: TLS handshake timeout')).toBe(true)
     expect(isNetworkDownloadFailure('dial tcp 1.2.3.4:443: connect: connection refused')).toBe(true)

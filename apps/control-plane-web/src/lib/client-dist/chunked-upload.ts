@@ -1,12 +1,12 @@
-/**
- * 分块上传的**纯逻辑**与类型契约（FR-251，增强 FR-088）：切片数学、进度归并、取消错误。
+/** 
+ * 分块上传的**纯逻辑**与类型契约（增强）：切片数学、进度归并、取消错误。
  *
  * 不 import `@/api/*`——网络侧（init → 顺序 PUT 分片 → complete → 失败弃单）在
  * `client-upload-api.ts`，api 实现只在那边注入。拆开的收益是切片数学与进度归并
  * 能被单测直接覆盖，不必先 mock 掉 axios。
  */
 
-/** 内容寻址元数据（与后端 service.ClientFileResult 对应，FR-251）。 */
+/** 内容寻址元数据（与后端 service.ClientFileResult 对应）。 */
 export interface ChunkUploadResult {
   sha256: string
   md5: string
@@ -30,19 +30,19 @@ export interface UploadFileChunkedOptions {
   onProgress?: (uploadedBytes: number, totalBytes: number) => void
   /** 取消信号：abort 后停止上传并向服务端 DELETE 弃单。 */
   signal?: AbortSignal
-  /**
+  /** 
    * 期望分片大小（字节）。省略则由服务端敲定（默认 8 MiB，越界自动夹取）。
    * 传入仅为建议，实际以 init 返回的 chunkSize 为准。
    */
   chunkSize?: number
-  /**
-   * 已知的文件原始内容 sha256（FR-346：预查阶段已算出时透传）。
+  /** 
+   * 已知的文件原始内容 sha256（：预查阶段已算出时透传）。
    * complete 请求携带之，服务端 Ingest 强校验——传输损坏在入库前即被拒。
    */
   expectedSha256?: string
 }
 
-/**
+/** 
  * 计算分片的字节区间表：ceil(totalSize/chunkSize) 片，末片为余量。
  * 纯函数（无副作用），便于单测切片数学（片数/边界/末片/空文件）。
  *
@@ -63,7 +63,7 @@ export function sliceRanges(totalSize: number, chunkSize: number): ChunkRange[] 
   return ranges
 }
 
-/**
+/** 
  * 归并进度：已完成 completedChunks 片（每片 chunkSize，末片除外）后的已上传字节数，
  * 上限不超过 totalSize（防末片按整片计超过总数）。纯函数，便于单测。
  */

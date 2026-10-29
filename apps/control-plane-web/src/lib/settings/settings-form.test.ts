@@ -1,4 +1,4 @@
-/*
+/* 
  * 用 node:fs 直接读仓库内后端源码来钉跨层契约。`@ts-expect-error` 是必需的：packages/ui 的
  * tsconfig `types` 只声明 vite/client（不含 node），而本文件由 vitest 的 node project 执行、
  * 确实能加载 node 内置模块。与 `color-contrast.test.ts` 同一处置，不为此给组件包补 node 类型依赖。
@@ -67,7 +67,7 @@ describe('validateSettingDraft（与后端 validateSettingValue 规则一致）'
     ['graceful_stop.timeout', '30', false],
     ['graceful_stop.timeout', '0s', false],
     ['graceful_stop.timeout', '-5s', false],
-    // direct_probe.*（FR-446 MC 直探超时）：同 Go duration 规则，另限上界（= directprobe.MaxTimeout，10s）
+    // direct_probe.*（MC 直探超时）：同 Go duration 规则，另限上界（= directprobe.MaxTimeout，10s）
     ['direct_probe.slp_timeout', '3s', true],
     ['direct_probe.slp_timeout', '1500ms', true],
     ['direct_probe.slp_timeout', '10s', true],

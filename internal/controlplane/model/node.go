@@ -39,16 +39,16 @@ type Node struct {
 	DiskUsage   float32    `gorm:"default:0" json:"diskUsage"`
 	// Maintenance 维护模式（cordon）标记。为 true 时禁止新实例调度/分配到本节点，
 	// 与 Status（在线/离线，由心跳驱动）正交：节点可同时「在线 + 维护中」。
-	// 参见 FR-048。
+	// 参见。
 	Maintenance      bool  `gorm:"default:false" json:"maintenance"`
 	MemoryUsedMB     int64 `gorm:"default:0" json:"memoryUsedMb"`
 	DiskUsedMB       int64 `gorm:"default:0" json:"diskUsedMb"`
 	NetworkBytesSent int64 `gorm:"default:0" json:"networkBytesSent"`
 	NetworkBytesRecv int64 `gorm:"default:0" json:"networkBytesRecv"`
-	// LoadAvg1 节点 1 分钟 load average（FR-062，心跳驱动）。
+	// LoadAvg1 节点 1 分钟 load average（心跳驱动）。
 	LoadAvg1 float64 `gorm:"default:0" json:"loadAvg1"`
 
-	// ---- 主机级观测（FR-513）----
+	// 主机级观测----
 	//
 	// 全部为**指针**：nil 表示「该 Worker 未上报」（老版本），0 表示「上报了、读数确实是 0」。
 	// 这个区别对运维有意义——「负载 0」和「不知道负载」要做的判断完全不同。
@@ -61,7 +61,7 @@ type Node struct {
 	ProcsRunning *int32 `json:"procsRunning"`
 	ProcsTotal   *int32 `json:"procsTotal"`
 	// CPU 时间构成占比（0..1，同一窗口归一，各分量之和 ≈ 1）。
-	// iowait 已由 FR-485 的时序承载，此处不重复建列。
+	// iowait 已由的时序承载，此处不重复建列。
 	CPUUser    *float32 `json:"cpuUser"`
 	CPUNice    *float32 `json:"cpuNice"`
 	CPUSystem  *float32 `json:"cpuSystem"`
@@ -69,7 +69,7 @@ type Node struct {
 	CPUIRQ     *float32 `json:"cpuIrq"`
 	CPUSoftIRQ *float32 `json:"cpuSoftirq"`
 	CPUSteal   *float32 `json:"cpuSteal"`
-	// LogIngestHealthy 日志采集运行时是否健康（FR-485，心跳驱动；false=采集未运行）。
+	// LogIngestHealthy 日志采集运行时是否健康（心跳驱动；false=采集未运行）。
 	LogIngestHealthy bool `gorm:"default:false" json:"logIngestHealthy"`
 	// ManagedRuntimeObservedAt 是 Worker 随已认证 Heartbeat 上报受管运行时快照的实际观测时间。
 	// 运行时不可用或旧 Worker 未上报时，相关字段必须清空，避免陈旧值被当成当前资源。
@@ -85,7 +85,7 @@ type Node struct {
 	BotCapacityUnavailableReason string     `gorm:"type:varchar(256)" json:"botCapacityUnavailableReason"`
 	BotAvailable                 bool       `gorm:"default:false" json:"botAvailable"`
 	BotUnavailableReason         string     `gorm:"type:varchar(256)" json:"botUnavailableReason"`
-	// ProxyMode 节点出站代理模式（FR-185，见 ADR-043）：
+	// ProxyMode 节点出站代理模式（见 ADR-043）：
 	//   inherit（默认）= 用平台全局默认代理（settings DB > control-plane.yml > env）；
 	//   custom         = 用本节点自定义 ProxyURL/ProxyNoProxy。
 	// CP 据此算每节点期望代理经心跳响应下发，Worker 运行时重建出站 client（免登机器改 worker.yml）。
@@ -95,17 +95,17 @@ type Node struct {
 	// ProxyNoProxy 节点自定义免代理列表（逗号分隔，仅 ProxyMode=custom 有效）。
 	ProxyNoProxy  string     `gorm:"type:varchar(1024)" json:"proxyNoProxy"`
 	LastHeartbeat *time.Time `json:"lastHeartbeat"`
-	// RuntimeSyncedAt 上次运行时库存从 Worker 同步成功的时间（FR-301）。
+	// RuntimeSyncedAt 上次运行时库存从 Worker 同步成功的时间。
 	// JDKService.syncFromWorker 成功即刷新（含 JDK 面板隐式同步与运行时资产页手动刷新）；
 	// nil = 从未同步。运行时资产页据此显示「上次同步 <相对时间>」并识别陈旧节点。
 	RuntimeSyncedAt *time.Time `json:"runtimeSyncedAt"`
-	// ProbeVersionID 是该 Worker 后续新实例的 ServerProbe 默认版本；0 表示继承全局默认（FR-409）。
+	// ProbeVersionID 是该 Worker 后续新实例的 ServerProbe 默认版本；0 表示继承全局默认。
 	ProbeVersionID uint           `gorm:"default:0;index" json:"probeVersionId"`
 	CreatedAt      time.Time      `json:"createdAt"`
 	UpdatedAt      time.Time      `json:"updatedAt"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 
-	// TunnelConnected 该节点当前是否有活跃反向隧道（FR-281，见 ADR-066）。
+	// TunnelConnected 该节点当前是否有活跃反向隧道（见 ADR-066）。
 	// 运行态字段不落库（gorm:"-"），由 NodeService 在响应时据 TunnelRegistry 填充：
 	// true=指令经隧道下发（NAT/内网节点可用），false=直拨回退（老 worker/隧道重建窗口）。
 	TunnelConnected bool `gorm:"-" json:"tunnelConnected"`

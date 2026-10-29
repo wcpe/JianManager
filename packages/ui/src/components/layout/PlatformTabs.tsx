@@ -2,8 +2,8 @@ import * as React from 'react'
 
 import { cn } from '../../lib/utils'
 
-/**
- * 页签条（FR-502 阶段 3）：「同一容器内的一组内容视图就地切换」。
+/** 
+ * 页签条（阶段 3）：「同一容器内的一组内容视图就地切换」。
  *
  * 与顶栏四工作区切换的区别：顶栏切的是**工作区**（导航层级，页面真的跳走了），
  * 本组件切的是**同一页内的若干视图**（内容层级，地址可能变也可能不变）。
@@ -35,7 +35,7 @@ export function PlatformTabs({
   onKeyDown,
   ...props
 }: React.ComponentProps<'nav'>) {
-  /**
+  /** 
    * 方向键 / Home / End 处理：只在容器上挂一次，靠事件委托定位当前页签。
    *
    * 为什么用委托而不是给每个 `PlatformTab` 挂监听：页签数量可变（实例控制台按画像
@@ -100,7 +100,7 @@ export function PlatformTabs({
   )
 }
 
-/**
+/** 
  * 页签项。`active` 时以 2px 主色下划线标记（原型 `.platform-tabs button.active`）。
  *
  * 【未选中态为什么加极淡 hover 底】原先 hover 只改文字色（muted-foreground → foreground），

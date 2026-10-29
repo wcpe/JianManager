@@ -5,12 +5,12 @@ import { toast } from 'sonner'
 import { ClientIntegrationGuideView } from '@/components/views/client-dist/ClientIntegrationGuideView'
 import { useUpdaterJarsInfo, downloadUpdaterJar, useRevealClientKey, type ClientPullKey } from '@/api/clientChannels'
 
-/**
- * 客户端更新器接入指引（FR-107 / FR-259）的接线层（ADR-103）。面向运营方：在频道详情一页拿齐——下载楔子、
+/** 
+ * 客户端更新器接入指引的接线层（ADR-103）。面向运营方：在频道详情一页拿齐——下载楔子、
  * 该频道专属 jm-updater.json、启动器 JVM 参数、行为说明，照做即可接入并下发玩家。
  *
- * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
- * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见 FR-258）。
+ *起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
+ * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见）。
  *
  * 展示层已回迁应用侧（`ClientIntegrationGuideView`），此处只保留应用侧职责：
  * - 取数：内嵌更新器 jar 信息（`useUpdaterJarsInfo`）注入视图；
@@ -27,7 +27,7 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
   const [selectedKeyId, setSelectedKeyId] = useState('')
   const [revealedKeyPlaintext, setRevealedKeyPlaintext] = useState('')
 
-  /**
+  /** 
    * 选择密钥并揭示明文：先落选中值与清空上一次明文（下拉立即响应），再请后端 reveal。
    * 不可查看明文的密钥不发请求、直接提示；失败只提示不改选中值，明文保持为空（视图侧因此仍禁用配置下载）。
    */

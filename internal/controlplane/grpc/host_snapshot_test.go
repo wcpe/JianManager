@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-513：心跳落库的列名正确性。
+// 心跳落库的列名正确性。
 //
 // ## 为什么需要这组用例
 //
@@ -179,7 +179,7 @@ func TestUpsertHostSnapshots_EmptyRequestIsNoop(t *testing.T) {
 	}
 }
 
-// TestNodeHostColumnsMatchModel 节点表里 FR-513 的列必须都能被 GORM 识别。
+// TestNodeHostColumnsMatchModel 节点表里的列必须都能被 GORM 识别。
 //
 // 这条守的正是本轮真机踩到的坑：往 updates map 里写了一个不存在的列名
 // （cpu_softirq vs 实际 cpu_soft_irq），GORM 直接报 SQL 错误，

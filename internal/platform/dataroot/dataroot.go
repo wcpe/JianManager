@@ -38,7 +38,7 @@ var layoutDirs = []string{
 	filepath.Join("var", "log"),
 	filepath.Join("var", "artifacts"),
 	filepath.Join("var", "index"),
-	// AI 助手技能目录（FR-541）：<root>/var/skills/<name>/SKILL.md。
+	// AI 助手技能目录：<root>/var/skills/<name>/SKILL.md。
 	// 放 var 下而不是 etc：它是可被管理页增删的运营内容，不是进程配置。
 	filepath.Join("var", "skills"),
 	"cache",
@@ -92,11 +92,11 @@ func (r *Root) Base() string { return r.base }
 // JDKsDir 返回托管 JDK 根目录 <root>/opt/jdks。
 func (r *Root) JDKsDir() string { return filepath.Join(r.base, "opt", "jdks") }
 
-// RuntimesDir 返回托管非 JDK 运行时根目录 <root>/opt/runtimes（首批 Node.js，FR-299）。
+// RuntimesDir 返回托管非 JDK 运行时根目录 <root>/opt/runtimes（首批 Node.js）。
 // 与 opt/jdks 平级：JDK 沿用既有目录不迁移，其它运行时按 <type>-<major> 子目录托管。
 func (r *Root) RuntimesDir() string { return filepath.Join(r.base, "opt", "runtimes") }
 
-// BotWorkerDir 返回 bot-worker dist 自愈物化目录 <root>/opt/bot-worker（FR-308，见 ADR-070）。
+// BotWorkerDir 返回 bot-worker dist 自愈物化目录 <root>/opt/bot-worker（见 ADR-070）。
 func (r *Root) BotWorkerDir() string { return filepath.Join(r.base, "opt", "bot-worker") }
 
 // ServersDir 返回服务器工作目录根 <root>/var/servers。
@@ -108,7 +108,7 @@ func (r *Root) LogDir() string { return filepath.Join(r.base, "var", "log") }
 // ArtifactsDir 返回制品库根目录 <root>/var/artifacts（见 ADR-011）。
 func (r *Root) ArtifactsDir() string { return filepath.Join(r.base, "var", "artifacts") }
 
-// SkillsDir 返回 AI 助手技能目录 <root>/var/skills（FR-541）。
+// SkillsDir 返回 AI 助手技能目录 <root>/var/skills。
 //
 // 每个技能是一个子目录，内含 `SKILL.md`（YAML frontmatter + Markdown 正文）。
 // 目录名即技能名；没有 `SKILL.md` 的子目录不算技能（与 Vantaloom 的官方技能目录约定一致）。
@@ -121,7 +121,7 @@ func (r *Root) IndexDir() string { return filepath.Join(r.base, "var", "index") 
 // CacheDir 返回临时缓存目录 <root>/cache（下载中转/解压）。
 func (r *Root) CacheDir() string { return filepath.Join(r.base, "cache") }
 
-// ArtifactCacheDir 返回节点本地内容寻址制品缓存根 <root>/var/artifact-cache（FR-178）。
+// ArtifactCacheDir 返回节点本地内容寻址制品缓存根 <root>/var/artifact-cache。
 // 区别于 cache/（临时下载中转）与 var/artifacts（CP 全局制品库）：这是 Worker 持久
 // 按 sha256 缓存下载过的核心 jar，建实例命中即秒拷免重下；可随时整体删除重建。
 func (r *Root) ArtifactCacheDir() string { return filepath.Join(r.base, "var", "artifact-cache") }

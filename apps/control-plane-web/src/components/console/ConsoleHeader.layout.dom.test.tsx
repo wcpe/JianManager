@@ -23,8 +23,8 @@ vi.mock('@/api/notification-feed', () => ({
   useNotificationFeed: () => ({ data: { items: [] } }),
 }))
 
-/**
- * 顶栏布局契约（方案 C / ADR-071；FR-502 阶段 6 补丁）。
+/** 
+ * 顶栏布局契约（方案 C / ADR-071阶段 6 补丁）。
  *
  * 补丁改变了顶栏的两件事，本文件锁住它们：
  * 1. **唯一一条通栏**——工作区切换并回顶栏（原型 `.topbar` 内含 `.space-nav`），
@@ -47,7 +47,7 @@ describe('ConsoleHeader 布局', () => {
     expect(header).toHaveClass('h-[44px]')
     // 方案 C：品牌 Logo 移入顶栏品牌区。
     expect(screen.getByText('JianManager')).toBeInTheDocument()
-    // FR-502 阶段 6 补丁：工作区切换不再另起一行，顶栏内就有 `.space-nav`。
+    // 阶段 6 补丁：工作区切换不再另起一行，顶栏内就有 `.space-nav`。
     expect(container.querySelector('[data-slot="console-workspace-bar"]')).toBeNull()
     const workspaces = within(header).getByRole('navigation', { name: '工作区' })
     expect(within(workspaces).getAllByRole('button').map((b) => b.textContent)).toEqual([
@@ -59,7 +59,7 @@ describe('ConsoleHeader 布局', () => {
     // 操作区仍在顶栏内（搜索入口 + 账户菜单）。
     expect(within(header).getByRole('button', { name: /搜索/ })).toBeInTheDocument()
     expect(within(header).getByRole('button', { name: '账户' })).toBeInTheDocument()
-    // FR-268 节点作用域下拉已下线。
+    // 节点作用域下拉已下线。
     expect(screen.queryByRole('button', { name: '节点作用域' })).not.toBeInTheDocument()
     // 主题 / 配色切换仍只在侧栏底部，不在顶栏。
     expect(screen.queryByRole('button', { name: '切换主题' })).not.toBeInTheDocument()
@@ -71,7 +71,7 @@ describe('ConsoleHeader 布局', () => {
     const { container } = renderWithProviders(<ConsoleHeader />, { route: '/instances/1' })
 
     const header = container.querySelector('header') as HTMLElement
-    // FR-134 的顶栏面包屑整段移除：同页页名不再在顶栏与内容页各出现一次。
+    // 的顶栏面包屑整段移除：同页页名不再在顶栏与内容页各出现一次。
     expect(container.querySelector('[aria-label="breadcrumb"]')).toBeNull()
     expect(header.querySelector('[aria-label="breadcrumb"]')).toBeNull()
     // 顶栏里没有任何页面级大标题（品牌字标是无序列表之外的 h2，不属于页名）。

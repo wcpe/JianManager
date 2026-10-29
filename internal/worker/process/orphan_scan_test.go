@@ -93,7 +93,7 @@ func TestOrphanScan_DirectOrphan(t *testing.T) {
 		}, nil
 	}
 	var killed []int
-	// FR-456 F1：direct 孤儿处置前新增归属复核；夹具 PID 非真实进程，注入复核桩恒通过。
+	// F1：direct 孤儿处置前新增归属复核；夹具 PID 非真实进程，注入复核桩恒通过。
 	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
 	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
 
@@ -108,7 +108,7 @@ func TestOrphanScan_DirectOrphan(t *testing.T) {
 	assert.Equal(t, "orphan.scan_disposed", (*audits)[0].action)
 }
 
-// TestOrphanScan_DirectOrphan_OwnershipBlocked FR-456 F1：auto 档归属复核不通过 → 只告警不杀。
+// TestOrphanScan_DirectOrphan_OwnershipBlockedF1：auto 档归属复核不通过 → 只告警不杀。
 func TestOrphanScan_DirectOrphan_OwnershipBlocked(t *testing.T) {
 	serversDir := t.TempDir()
 	orphanDir := filepath.Join(serversDir, "survival-abc123")
@@ -133,7 +133,7 @@ func TestOrphanScan_DirectOrphan_OwnershipBlocked(t *testing.T) {
 	assert.False(t, (*audits)[0].success, "被拦截的处置审计 success 应为 false")
 }
 
-// TestOrphanScan_DirectOrphan_StoppingInstanceSkipped FR-456 F2：优雅停止期（STOPPING）实例
+// TestOrphanScan_DirectOrphan_StoppingInstanceSkippedF2：优雅停止期（STOPPING）实例
 // 的 Java 不得被判为 direct 孤儿（否则 auto 档强杀会绕过优雅关服）。
 func TestOrphanScan_DirectOrphan_StoppingInstanceSkipped(t *testing.T) {
 	serversDir := t.TempDir()
@@ -160,7 +160,7 @@ func TestOrphanScan_DirectOrphan_StoppingInstanceSkipped(t *testing.T) {
 	assert.Empty(t, *audits)
 }
 
-// TestOrphanScan_DirectOrphan_StoppedInstanceDirStillScanned FR-456 N1 回归负例：
+// TestOrphanScan_DirectOrphan_StoppedInstanceDirStillScannedN1 回归负例：
 // STOPPED 实例的工作目录**不**受保护——Worker 硬崩重启后 CP 会把 direct 实例按 STOPPED + WorkDir
 // 重登记，此时目录下残留的 Java（真实孤儿，占 Paper session.lock）仍必须被识别为 direct 孤儿，
 // 否则兜底扫描对这个目标场景完全失效。
@@ -185,8 +185,8 @@ func TestOrphanScan_DirectOrphan_StoppedInstanceDirStillScanned(t *testing.T) {
 	m.recoverKillTree = func(pid int) error { killed = append(killed, pid); return nil }
 
 	findings := s.ScanOnce()
-	// FR-471：该目录同时属「已注册 STOPPED 实例目录下存在活进程」，第 4 相会另落一条
-	// foreign_runtime 观测 finding（只观测不杀）。此处只校验既有 FR-456 direct 判决未回归。
+	// 该目录同时属「已注册 STOPPED 实例目录下存在活进程」，第 4 相会另落一条
+	// foreign_runtime 观测 finding（只观测不杀）。此处只校验既有direct 判决未回归。
 	var direct *OrphanFinding
 	for i := range findings {
 		if findings[i].Kind == OrphanKindDirect {
@@ -197,7 +197,7 @@ func TestOrphanScan_DirectOrphan_StoppedInstanceDirStillScanned(t *testing.T) {
 	assert.Equal(t, managedDir, direct.WorkDir)
 	assert.Equal(t, []int{9101}, killed)
 	require.NotEmpty(t, *audits)
-	// direct 相先于 FR-471 相执行，故处置审计仍是第一条。
+	// direct 相先于相执行，故处置审计仍是第一条。
 	assert.Equal(t, "orphan.scan_disposed", (*audits)[0].action)
 }
 
@@ -245,7 +245,7 @@ func TestOrphanScan_DockerLeftover(t *testing.T) {
 	assert.Equal(t, "orphan.scan_detected", (*audits)[0].action)
 }
 
-// TestOrphanScan_DockerLeftoverAuto FR-456 F1/F13：auto 档只删「已退出 + 内存表无该实例 + 平台容器」；
+// TestOrphanScan_DockerLeftoverAutoF1/F13：auto 档只删「已退出 + 内存表无该实例 + 平台容器」；
 // running 容器与内存表在册实例的容器保守不删。
 func TestOrphanScan_DockerLeftoverAuto(t *testing.T) {
 	s, m, audits := newTestScanner(t, t.TempDir(), OrphanPolicyAuto)
@@ -284,7 +284,7 @@ func TestOrphanScan_DockerLeftoverAuto(t *testing.T) {
 	assert.Equal(t, 2, blocked, "running 与在册实例的容器各落一条保守审计")
 }
 
-// TestOrphanScan_DockerLeftoverOwnership FR-456 N5：docker 归属复核不再是恒真的伪复核。
+// TestOrphanScan_DockerLeftoverOwnershipN5：docker 归属复核不再是恒真的伪复核。
 //   - 带受管标签且标签实例与容器名一致 → 强归属（managed_label），可删；
 //   - 带受管标签但标签实例与容器名矛盾 → 归属不通过（label_mismatch），只告警不删；
 //   - 无标签（本 FR 之前的存量容器）→ 退化为容器名格式校验（name_format_only），仍可删但证据如实入审计。
@@ -317,7 +317,7 @@ func TestOrphanScan_DockerLeftoverOwnership(t *testing.T) {
 	assert.Contains(t, joined, "label_mismatch", "标签矛盾档位应入审计")
 }
 
-// TestVerifyContainerOwnership 归属复核判据的直测（FR-456 N5）。
+// TestVerifyContainerOwnership 归属复核判据的直测（N5）。
 func TestVerifyContainerOwnership(t *testing.T) {
 	// 名字格式不符：无论标签如何都拒绝。
 	ev, ok := verifyContainerOwnership("some-other-container", true, "x")

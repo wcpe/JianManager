@@ -21,8 +21,8 @@ interface ProvisionProxyDialogProps {
   onClose: () => void
 }
 
-/**
- * 搭建代理向导接线层（ADR-103 b 范式，原 FR-035 搭建代理 / FR-072 系统可获取项）。
+/** 
+ * 搭建代理向导接线层（ADR-103 b 范式，原搭建代理系统可获取项）。
  *
  * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast）；本层负责：
  * - 候选取数：`useNodes()` 过滤启用态后映射节点选项、`useGroups()` 映射用户组选项、
@@ -51,7 +51,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
   const provision = useProvisionProxy()
 
-  // 系统可获取项 → 下拉选项（FR-072）。代理类型/版本允许自定义。
+  // 系统可获取项 → 下拉选项。代理类型/版本允许自定义。
   const nodeOptions: ComboboxOption[] = (nodes ?? [])
     .filter((n) => n.status === 1)
     .map((n) => ({ value: String(n.id), label: n.name }))

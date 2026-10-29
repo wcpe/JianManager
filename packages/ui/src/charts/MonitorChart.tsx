@@ -8,8 +8,8 @@ import { hoverSnapshotAt, type SampleRow } from '../lib/chart-hover'
 
 const CHART_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
 
-/**
- * 容器宽度变化的防抖时长（FR-502 阶段 6 补丁）。
+/** 
+ * 容器宽度变化的防抖时长（阶段 6 补丁）。
  *
  * 侧栏开合、面板折叠、窗口拖拽都会让容器宽度**逐帧**变化，ResizeObserver 因此每帧回调。
  * 而 recharts 重绘极贵——实测展开一次侧栏，图表侧产生 240 次 `<g>` 子节点替换 +
@@ -38,8 +38,8 @@ function makeTickFormatter(spanMs: number): (ts: string) => string {
   }
 }
 
-/**
- * 监控图（FR-169）：在折线基础上加 **底部 brush 拖拽轴**（拖选时间窗，recharts Brush 原生缩放主图）
+/** 
+ * 监控图：在折线基础上加 **底部 brush 拖拽轴**（拖选时间窗，recharts Brush 原生缩放主图）
  * 与 **hover 浮窗**（该时刻各序列值）。每图独立时间窗为本地视图状态，不回写父级 range。
  *
  * 设计参见 design §4.2。纯逻辑（选区→窗、x→最近点）下沉 lib/brush.ts、lib/chart-hover.ts，
@@ -64,7 +64,7 @@ export function MonitorChart({
   showBrush?: boolean
   /** Y 轴宽度（px）。格式化后仍偏长的场景（如多指标对比的紧凑缩写）可放宽避免截断。 */
   yAxisWidth?: number
-  /**
+  /** 
    * 图表的替代文本（可访问名）。省略时由序列名推导——见 {@link chartAccessibleName}。
    * 调用方若有更贴切的描述（图卡标题等），传进来即可覆盖推导值。
    */

@@ -10,8 +10,8 @@ import { useStartInstance, useStopInstance, useRestartInstance, useKillInstance,
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 import InstanceWizardPage from '@/pages/InstanceWizardPage'
 
-/**
- * FR-030 前端通知系统与 UX 标准化回归：
+/** 
+ *前端通知系统与 UX 标准化回归：
  * 1. App 挂全局 sonner Toaster，业务任意处 toast 可显示；
  * 2. 实例启动/停止/重启/终止/删除操作给 toast 反馈；
  * 3. 文件写操作给 toast 反馈；
@@ -65,13 +65,13 @@ function CreateInstanceToastHarness() {
   )
 }
 
-describe('FR-030 前端通知系统与 UX 标准化', () => {
+describe('前端通知系统与 UX 标准化', () => {
   it('App 挂载全局 Toaster 后可显示业务 toast', async () => {
     renderWithProviders(<App />, { route: '/login' })
 
-    toast.success('FR-030 全局通知可见')
+    toast.success('全局通知可见')
 
-    expect(await screen.findByText('FR-030 全局通知可见')).toBeInTheDocument()
+    expect(await screen.findByText('全局通知可见')).toBeInTheDocument()
   })
 
   it('实例启动/停止/重启/终止/删除操作显示 Toast 反馈', async () => {

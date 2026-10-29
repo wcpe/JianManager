@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-486 范围②：启动进度上报的 handler 行为。
+// 范围②：启动进度上报的 handler 行为。
 //
 // 为什么不靠真机 curl 验：这条 RPC 的调用方是 Worker 内部、且发生在注册前，
 // 用外部脚本复现「注册前那一刻」既脆弱又难断言（前几轮真机验证里就出现了

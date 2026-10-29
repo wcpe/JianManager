@@ -12,8 +12,8 @@ import type { BusinessStatus, DomainStatus } from '@/api/businessStatus'
 import type { BusinessManifest } from '@/lib/console/business'
 import { formatRelativeTime } from '@/lib/shared/relative-time'
 
-/**
- * 业务插件域状态面板（FR-534，见 docs/specs/business-plugin-panel/spec.md §4.2）。
+/** 
+ * 业务插件域状态面板（见 docs/specs/business-plugin-panel/spec.md §4.2）。
  *
  * **只渲染不解释**（spec §2 的核心原则）：把探针上报的域清单原样铺开——域名、可用与否、
  * 调用/失败计数、最近调用时间、manifest 指纹——不做业务语义归类，也不解析 manifest 内容。
@@ -29,7 +29,7 @@ import { formatRelativeTime } from '@/lib/shared/relative-time'
 export interface BusinessDomainStatusProps {
   /** 后端返回的域状态（未加载完时为 undefined）。 */
   status?: BusinessStatus
-  /**
+  /** 
    * 实例的业务能力清单（探针透传的 manifest）。
    * 只用于「查看 manifest」抽屉展示原文——本组件不从中推断任何业务含义。
    */
@@ -46,7 +46,7 @@ export interface BusinessDomainStatusProps {
   className?: string
 }
 
-/**
+/** 
  * manifest 指纹的展示形态：spec §4.2 写的是 `a3f2b8c1…` 这种「前八位 + 省略号」。
  * 指纹是探针给的内容摘要，长度不保证恰好 64，故只截断不假设长度；过短的整段显示。
  */
@@ -54,7 +54,7 @@ function digestPreview(digest: string): string {
   return digest.length > 8 ? `${digest.slice(0, 8)}…` : digest
 }
 
-/**
+/** 
  * 「查看 manifest」抽屉（spec §4.2）：展开显示该域的 manifest 原文 + 免责声明。
  *
  * 原文取自注入的 manifest（同一份数据也是动作台的能力来源），**不做任何字段解释**；

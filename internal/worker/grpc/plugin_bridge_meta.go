@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 桥能力接入（FR-526）：把 ServerProbe 已具备、JM 尚未消费的 `core.*` 治理能力
+// 桥能力接入：把 ServerProbe 已具备、JM 尚未消费的 `core.*` 治理能力
 // （桥状态 / 主题订阅 / 业务域状态 / 配置重载）在 Worker gRPC 面显式化。
 //
 // ## 为什么不复用 SendPluginCommand
@@ -21,7 +21,7 @@ import (
 // 这几条命令的**超时口径互不相同**，而 SendPluginCommand 把 5s 写死在
 // `pluginCommandTimeout`：
 //   - 桥状态 / 域状态 / 订阅是内存快照或纯内存改写，秒级足够；
-//   - 配置重载跑在探针独立的 reload 协调池上，默认 **10s**（FR-526 §2.2），
+// 配置重载跑在探针独立的 reload 协调池上，默认 **10s**（§2.2），
 //     且绝不能与业务命令争用同一个超时预算——5s 会把正常的重载判成超时。
 //
 // 另外它们的**降级形态也不同**：业务命令失败要 available=false + 原因，而桥状态
@@ -45,7 +45,7 @@ const (
 	// 5s 与业务命令同量级；独立成常量是为了让"重载为什么是 10s"这条差异有对照物。
 	probeMetaTimeout = 5 * time.Second
 
-	// ProbeConfigReloadTimeout 是配置重载等回执的默认上限（FR-526 §2.2：独立配置，默认 10s）。
+	// ProbeConfigReloadTimeout 是配置重载等回执的默认上限（§2.2：独立配置，默认 10s）。
 	//
 	// 与业务命令的 5s **刻意不等**：探针侧重载会逐个通知已注册监听器（可能含插件热重载），
 	// 5s 会把正常重载判成超时；而共用一个超时预算就等于让重载拖慢业务命令。
@@ -88,7 +88,7 @@ func (s *Server) probeRoundTrip(instanceUUID, action, payloadJSON string, timeou
 	return res, true, nil
 }
 
-// QueryBridgeStatus 取探针桥线路健康度（`core.bridge_status`，FR-526 §2.3）。
+// QueryBridgeStatus 取探针桥线路健康度（`core.bridge_status`§2.3）。
 //
 // 探针不在 → connected=false + 空 status_json，**不算错误**：CP 据此走"无缓存可降级"
 // 分支，而不是把它记成一次失败（探针不在是常态，不是事故）。
@@ -115,7 +115,7 @@ func (s *Server) QueryBridgeStatus(_ context.Context, req *workerpb.QueryBridgeS
 	}, nil
 }
 
-// SetBridgeSubscription 设置事件主题订阅（`core.subscribe`，FR-526 §2.1）。
+// SetBridgeSubscription 设置事件主题订阅（`core.subscribe`§2.1）。
 //
 // ## 语义（务必与 OpenAPI 对齐）
 //
@@ -150,7 +150,7 @@ func (s *Server) SetBridgeSubscription(_ context.Context, req *workerpb.SetBridg
 	}, nil
 }
 
-// QueryBusinessStatus 取探针已注册业务域与健康状态（`core.business_status`，FR-526 §2.4）。
+// QueryBusinessStatus 取探针已注册业务域与健康状态（`core.business_status`§2.4）。
 //
 // status_json 原样透传：CP **不解析** manifest / 健康语义（ADR-106：JM 只渲染不解释）。
 func (s *Server) QueryBusinessStatus(_ context.Context, req *workerpb.QueryBusinessStatusRequest) (*workerpb.QueryBusinessStatusResponse, error) {
@@ -178,17 +178,17 @@ func (s *Server) QueryBusinessStatus(_ context.Context, req *workerpb.QueryBusin
 	}, nil
 }
 
-// ReloadProbeConfig 下发配置重载（`core.config_reload`，FR-526 §2.2）。
+// ReloadProbeConfig 下发配置重载（`core.config_reload`§2.2）。
 //
 // ## 独立超时
 //
 // 默认 [ProbeConfigReloadTimeout]（10s），**不复用**业务命令的 5s；调用方可经
-// `timeout_ms` 覆盖（FR-532 编排可能需要按目标调整）。Worker 侧再夹一层上限，
+// `timeout_ms` 覆盖（编排可能需要按目标调整）。Worker 侧再夹一层上限，
 // 避免调用方传个离谱值把 gRPC 连接拖住。
 //
 // ## 只提供通道
 //
-// FR-532（生效编排）尚未实现：本 RPC 只保证"能下发并拿回探针的结构化回执"，
+// （生效编排）尚未实现：本 RPC 只保证"能下发并拿回探针的结构化回执"，
 // 不维护生效状态机、不做重试、不落库。回执 JSON 原样透传（reloaded/bestEffort/failed）。
 func (s *Server) ReloadProbeConfig(_ context.Context, req *workerpb.ReloadProbeConfigRequest) (*workerpb.ReloadProbeConfigResponse, error) {
 	timeout := reloadTimeout(req.TimeoutMs)

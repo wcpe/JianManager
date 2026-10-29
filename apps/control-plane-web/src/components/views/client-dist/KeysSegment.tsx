@@ -78,7 +78,7 @@ export function KeysSegment({
   const [secret, setSecret] = useState<ClientKeyWithSecret | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<ClientPullKey | null>(null)
   const [editTarget, setEditTarget] = useState<ClientPullKey | null>(null)
-  // 查看明文弹窗（FR-192）：保存当前查看到的密钥名 + 明文。
+  // 查看明文弹窗：保存当前查看到的密钥名 + 明文。
   const [revealed, setRevealed] = useState<{ name: string; key: string } | null>(null)
 
   const doReveal = async (key: ClientPullKey) => {

@@ -32,7 +32,7 @@ function mkTask(over: Record<string, unknown> = {}) {
   }
 }
 
-/**
+/** 
  * 滚到底部。jsdom 不做布局（scrollHeight 恒 0、没有真滚动条），但 scrollTop 是普通可读写属性
  * （`Element.prototype.scrollTop` 由 jsdom 实现为取值/赋值，不参与布局），故直接设到远超内容高度的
  * 偏移再派发 scroll —— 等价于浏览器里把列表拖到底：视口裁剪随之取末段行。
@@ -42,9 +42,9 @@ function scrollToBottom(el: HTMLElement) {
   fireEvent.scroll(el)
 }
 
-/**
- * TasksPage 强断言（FR-208）：验种子任务渲染、展开看任务日志（详情联动）、错误注入显错误态；
- * 分页信封（FR-337）：共 N 条/已加载数、「加载更多」增长窗口、筛选变化复位窗口。
+/** 
+ * TasksPage 强断言：验种子任务渲染、展开看任务日志（详情联动）、错误注入显错误态；
+ * 分页信封：共 N 条/已加载数、「加载更多」增长窗口、筛选变化复位窗口。
  */
 describe('TasksPage（mock 假后端）', () => {
   it('① 渲染出种子任务行', async () => {
@@ -72,7 +72,7 @@ describe('TasksPage（mock 假后端）', () => {
     expect(await screen.findByText(/sha256 不匹配/)).toBeInTheDocument()
   })
 
-  it('② 网络类下载失败展开 → 显示代理/镜像可操作入口（FR-279）', async () => {
+  it('② 网络类下载失败展开 → 显示代理/镜像可操作入口', async () => {
     loginMockUser()
     renderWithProviders(<TasksPage />)
     const row = await screen.findByRole('button', { name: /受限网络下装 JDK 21（网络失败）/ })
@@ -84,7 +84,7 @@ describe('TasksPage（mock 假后端）', () => {
     expect(mirrorLink).toHaveAttribute('href', '/runtime-assets')
   })
 
-  it('② 非网络类失败不显示网络引导入口（FR-279 不误报）', async () => {
+  it('② 非网络类失败不显示网络引导入口（不误报）', async () => {
     loginMockUser()
     renderWithProviders(<TasksPage />)
     const row = await screen.findByRole('button', { name: /安装便携运行时/ })
@@ -107,7 +107,7 @@ describe('TasksPage（mock 假后端）', () => {
     expect(await screen.findByText('暂无任务')).toBeInTheDocument()
   })
 
-  it('④ 分页信封（FR-337）：共 N 条/已加载数、加载更多扩窗且保持筛选、筛选变化复位窗口', async () => {
+  it('④ 分页信封：共 N 条/已加载数、加载更多扩窗且保持筛选、筛选变化复位窗口', async () => {
     loginMockUser()
     // 直接从假后端集合算期望值，不硬编码种子规模（数百任务种子，见 observ.ts MOCK_TASK_COUNT）。
     const allTasks = db<{ title: string }>('tasks').list()
@@ -132,7 +132,7 @@ describe('TasksPage（mock 假后端）', () => {
     await userEvent.click(screen.getByRole('button', { name: '加载更多' }))
     expect(await screen.findByText(`共 ${filteredTotal} 条 · 已加载 200`)).toBeInTheDocument()
 
-    // 视口裁剪（FR-502 阶段 6）：已加载 200 行，但视口外的行不进 DOM——渲染量只与视口有关。
+    // 视口裁剪（阶段 6）：已加载 200 行，但视口外的行不进 DOM——渲染量只与视口有关。
     const scroller = screen.getByTestId('tasks-virtual')
     expect(screen.queryByText(batchTasks[199].title)).not.toBeInTheDocument()
     // 滚到底 → 末窗数据可浏览（证明「加载更多」扩出来的窗口确实可达，而非只改了个计数）。

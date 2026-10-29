@@ -24,7 +24,7 @@ beforeEach(() => {
   )
 })
 
-describe('NetworksPage（FR-032 群组服关系模型）', () => {
+describe('NetworksPage（群组服关系模型）', () => {
   it('管理 Network 软标签成员并执行批量操作，证明成员非独占且可按标签运维', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NetworksPage />, { route: '/networks' })

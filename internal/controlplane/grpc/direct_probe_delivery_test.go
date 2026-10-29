@@ -1,4 +1,4 @@
-// FR-446（spec §2.6 超时可配）：MC 直探（SLP / Query）超时经心跳响应下发的覆盖。
+// （spec §2.6 超时可配）：MC 直探（SLP / Query）超时经心跳响应下发的覆盖。
 package grpc_test
 
 import (

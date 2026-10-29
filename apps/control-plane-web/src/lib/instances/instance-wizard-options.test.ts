@@ -40,7 +40,7 @@ describe('buildNodeOptions（FIX-8 创建实例节点下拉）', () => {
   })
 })
 
-describe('initialWizardNodeId（FR-268 节点作用域联动）', () => {
+describe('initialWizardNodeId（节点作用域联动）', () => {
   it('URL node 参数优先于页眉节点作用域', () => {
     expect(initialWizardNodeId('1', 2)).toBe('1')
   })

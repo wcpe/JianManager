@@ -6,8 +6,8 @@ import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 import { Button } from '@jianmanager/ui/components/button'
 import { PageShell } from '@jianmanager/ui/components/layout'
 
-/**
- * 实例文件深链页（FR-376）：`/instances/:id/files?path=&file=&mode=`。
+/** 
+ * 实例文件深链页：`/instances/:id/files?path=&file=&mode=`。
  * 独立于控制台页签，便于浏览器新标签并排；不并入 ADR-067 热缓存 key。
  */
 export default function InstanceFilesPage() {
