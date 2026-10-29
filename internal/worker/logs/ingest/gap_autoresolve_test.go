@@ -128,12 +128,18 @@ func TestDeliveryFailureGapsAutoResolveAfterDeliveryRecovers(t *testing.T) {
 	}
 }
 
-// TestPausedSourceSelfHealsEndToEnd 覆盖现场主路径：投递失败 + 积压越界 → 源暂停 →
-// 投递恢复 → 存量外发 → 缺口自动消解 → 采集自动恢复（全程无人介入）。
+// TestPausedSourceSelfHealsEndToEnd 覆盖现场主路径：投递失败 + 源被暂停 → 投递恢复 →
+// 存量外发 → 缺口自动消解 → 采集自动恢复（全程无人介入）。
 //
 // 现场（2026-10-01/02）：10 个源 paused=1、各带 5 万级未解决缺口、13+ 小时零新数据；
 // 人工解算 13 个源后才恢复。暂停期间 FileTailer 不读新数据，若没有本用例覆盖的自愈链，
 // 「投递 → 回收 → 恢复评估」在暂停源上没有任何触发点。
+//
+// 暂停成因（2026-10-29 起）：积压闸已改为「丢弃最旧」，本包**不再产生**积压暂停；
+// 而本用例要守的是“已暂停的源靠投递恢复自愈”这条链，暂停从哪来无关紧要——
+// 这里用旧二进制留下的**存量积压暂停**形态（legacyBacklogPauseReason），
+// 它正是 maybeResumeBacklogLocked 唯一认的那一类，因而是本自愈链当前的真实入口。
+// 容量/disk 类暂停不行：maybeResumePausedSources 的候选门只认 IsBacklogPauseReason。
 func TestPausedSourceSelfHealsEndToEnd(t *testing.T) {
 	client, fixture := newFlakyVL(t)
 	root := t.TempDir()
@@ -155,24 +161,60 @@ func TestPausedSourceSelfHealsEndToEnd(t *testing.T) {
 	pipe := m.pipes[source.LogSourceID+"/"+source.SourceGeneration]
 	require.NotNil(t, pipe)
 
-	// 阶段一：投递失败 + 积压越界 → 暂停。
+	// 阶段一：投递失败 + 造出**存量积压暂停**（旧二进制写下的形态，生产库里仍在）。
+	// 2026-10-29 起积压越界只丢最旧、不暂停（enforceBacklogLimitLocked），所以暂停必须显式造；
+	// 手段是 maybeResumeBacklogLocked 唯一认的那一类原因，否则自愈链的入口就不存在。
 	fixture.failWrites.Store(true)
 	pipe.WAL().SetLimits(1, 0)
 	m.pollOnce()
 	require.Equal(t, 1, pipe.Ledger().UnresolvedGapCount(pipe.Key()))
+	// 上限 1 下再进一批即越界 ⇒ 必须被裁（不是暂停）。
 	appendLogLine(t, logPath, "[12:00:03] [Server thread/INFO]: third\n")
 	m.pollOnce()
+	if dropped, _ := pipe.WAL().DropStats(); dropped <= 0 {
+		t.Fatalf("越界必须丢最旧（不背压），实测丢弃 %d 条", dropped)
+	}
+	require.False(t, pipe.Ledger().Get(pipe.Key()).AcquirePaused,
+		"越界不得暂停采集（2026-10-29 丢弃语义的红线）")
+	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), legacyBacklogPauseReason))
 	entry := pipe.Ledger().Get(pipe.Key())
-	require.True(t, entry.AcquirePaused, "积压越界后该源必须暂停（既有语义）")
-	require.Equal(t, 1, ledger.UnresolvedGapCountOf(entry), "相邻失败必须合并")
+	require.True(t, entry.AcquirePaused, "前置：源必须处于存量积压暂停（自愈链的入口）")
+	// 相邻投递失败必须合并为一条（有界的前提）。丢弃类缺口另计一条（它不属于可愈合类，
+	// 也不会被任何自动消解路径抹掉）——所以这里按**原因**数，不数总数。
+	require.Equal(t, 1, unresolvedGapsOfReason(entry, ledger.GapReasonDeliverError),
+		"相邻投递失败必须合并为一条覆盖区间")
 
 	// 阶段二：VL 恢复后，一次采集轮应当自愈（暂停期间 tailer 不读，只有自愈入口能推动）。
 	fixture.failWrites.Store(false)
 	m.pollOnce()
 	entry = pipe.Ledger().Get(pipe.Key())
-	require.Zero(t, ledger.UnresolvedGapCountOf(entry), "缺口必须自动消解")
-	require.False(t, entry.AcquirePaused, "缺口清零 + 积压回落后采集必须自动恢复")
+	require.Zero(t, unresolvedGapsOfReason(entry, ledger.GapReasonDeliverError),
+		"投递恢复后可愈合的缺口必须自动消解")
+	// 红线：丢弃类缺口**不得**被这次自愈销抹——那些字节真丢不回来，抹了就变成静默丢数据。
+	// 但它已列为“不阻塞恢复”（ledger.gapReasonsNonBlocking）⇒ 不得因此把源钉在暂停上。
+	require.Positive(t, unresolvedGapsOfReason(entry, ledger.GapReasonWALBacklogDropped),
+		"丢弃类缺口必须仍然可见（不得被自动消解抹掉）")
+	// 强度不降：剩下的**全部**未解决缺口必须就是那些丢弃类缺口（不得还留着别的原因）。
+	require.Equal(t, unresolvedGapsOfReason(entry, ledger.GapReasonWALBacklogDropped),
+		ledger.UnresolvedGapCountOf(entry),
+		"除丢弃类外不得残留任何未解决缺口（否则“缺口必须自动消解”就没测到）")
+	require.False(t, entry.AcquirePaused, "缺口不再阻塞 + 积压已裁后采集必须自动恢复")
 	require.Empty(t, entry.PauseReason)
+}
+
+// unresolvedGapsOfReason 统计一份条目副本里指定原因的**未解决**缺口数。
+//
+// 为何不直接用 UnresolvedGapCountOf（总数）：2026-10-29 起丢弃会多出一条永久可见的
+// WAL_BACKLOG_DROPPED 缺口，它与“相邻同因失败必须合并”这条不变量无关，混在一起数就分不清
+// 是合并失效还是多了另一个原因。
+func unresolvedGapsOfReason(entry *ledger.Entry, reason string) int {
+	count := 0
+	for _, g := range entry.Gaps {
+		if !g.Resolved && g.Reason == reason {
+			count++
+		}
+	}
+	return count
 }
 
 // TestAppendRejectedGapInsideDeliveryHullIsNeverAutoResolved 是复审 P1-1 的核心转红闸门：

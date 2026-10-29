@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
@@ -17,11 +16,18 @@ import (
 // TestRecoveryQuotaE2E（方案② 的两条端到端红证，2026-10-04 用户定调）：
 //
 //	① **恢复期回放/补账不得把源推成暂停**（独立配额 4× 之内 ✓）；
-//	② **宽限过期后回归常规闸**，超常规闸者照常暂停（红线：常规期语义不削弱 ✗）。
+//	② **宽限过期后回归常规闸**，超常规闸者照常被处置（红线：常规期语义不削弱 ✗）。
+//
+// 2026-10-29 语义变更后（用户裁定：越界丢最旧、不暂停、不背压），“常规期语义”从
+// 「照常暂停」变成**「照常裁到常规闸内」**。红线本身一字未变：**常规期的闸不得被削弱**。
+// 新语义下它表现为两件事，合起来才等价于“常规闸真的在”：
+//   - 宽限过期后生效上限必须回到 1×（拓宽已关闭）；
+//   - 同一批数据在常规期**必须被裁**——队列不得停在拓宽后的大小上（“回归不生效”
+//     恰恰就是这个形态：上限仍按 4× 算，8 条一条不丢）。
 //
 // 转红方式（实测两条，各自独立红 ✓）：
-//   - 变异①：去掉恢复期拓宽（syncRecoveryQuota 不设 factor）⇒ 恢复期越闸源被暂停 ⇒ ①红；
-//   - 变异②：回归不生效（宽限过期仍按 factor 判）⇒ ②红。
+//   - 变异①：去掉恢复期拓宽（syncRecoveryQuota 不设 factor）⇒ 恢复期就按常规闸裁 ⇒ ①红；
+//   - 变异②：回归不生效（宽限过期仍按 factor 判）⇒ 队列停在 8 条不裁 ⇒ ②红。
 func TestRecoveryQuotaE2E(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
@@ -55,19 +61,31 @@ func TestRecoveryQuotaE2E(t *testing.T) {
 	m.syncRecoveryQuota()
 	require.NoError(t, pipe.WAL().Append(mkEvents(8)...))
 	require.NoError(t, pipe.WAL().Commit())
+	// 裁在**持久化之后**（见 WAL.TrimBacklog / pipeline.persistCommittedBatchContext）：
+	// 不走这条路径的用例测的是“没人裁剪”。
+	pipe.WAL().TrimBacklog()
 	require.False(t, pipe.Ledger().Get(pipe.Key()).AcquirePaused,
 		"① 恢复期回放/补账不得把源推成暂停（独立配额 4× 之内 ✓）")
+	require.Len(t, pipe.WAL().Snapshot(), 8,
+		"① 恢复期独立配额（4× = 16）之内一条都不得丢（回放是设计行为）")
+	if n, _ := pipe.WAL().DropStats(); n != 0 {
+		t.Fatalf("① 恢复期内（拓宽窗口）不得产生任何丢弃，实测 %d 条", n)
+	}
 
-	// 恢复结束 + 宽限过期 ⇒ 回归常规闸 ✓：同样 8 条（> 常规 4）必须照常暂停 ✓（红线）。
+	// 恢复结束 + 宽限过期 ⇒ 回归常规闸 ✓：同样 8 条（> 常规 4）必须照常被裁到 4 条 ✓（红线）。
 	m.recoveryProbe = func() bool { return false }
 	m.recoveryDrainGrace = 1 // 1ns ⇒ 立即过期
 	m.syncRecoveryQuota()
-	require.NoError(t, pipe.WAL().Append(mkEvents(1)...)) // 追加 1 条触发越闸判定
-	entry := pipe.Ledger().Get(pipe.Key())
-	require.True(t, entry.AcquirePaused,
-		"② 宽限过期回归常规闸后，超出常规闸者必须照常暂停（红线：常规期语义不削弱 ✗）")
-	require.True(t, acquire.IsBacklogPauseReason(entry.PauseReason), "原因须是积压类 ✓")
 	factor, _, recovering := m.RecoveryQuotaStats()
 	require.False(t, recovering)
 	require.Equal(t, 1.0, factor, "回归后生效系数必须是 1（常规闸 ✓）")
+
+	pipe.WAL().TrimBacklog() // 常规期裁剪：上限已回到 4 ⇒ 8 条必须被裁
+	entry := pipe.Ledger().Get(pipe.Key())
+	require.False(t, entry.AcquirePaused, "丢弃语义下裁剪不得暂停采集")
+	require.LessOrEqual(t, len(pipe.WAL().Snapshot()), 4,
+		"② 宽限过期回归常规闸后，超出常规闸者必须被裁到 4 条内（红线：常规期语义不削弱 ✗）")
+	if n, _ := pipe.WAL().DropStats(); n < 4 {
+		t.Fatalf("② 常规期必须真截（8 条 ⇒ 至少丢 4 条），实测只丢 %d 条", n)
+	}
 }

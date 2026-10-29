@@ -8,7 +8,8 @@ package ingest
 // 修法：摄取路径只**登记待办 + 非阻塞唤醒**（O(1)），排空由既有兜底环在路径外执行。
 //
 // 本用例是**确定性**的（不依赖负载/时序运气）：
-//  1. WALLimits{MaxEntries:1} ⇒ 首批追加后该源即处于暂停态（与 acquire 的 drain 用例同夹具手法）；
+//  1. 先跑一轮采集（WALLimits{MaxEntries:1} ⇒ 越界丢最旧、**不**暂停），再显式把源置成
+//     **存量积压暂停**（2026-10-29 起本包不再产生积压暂停，见 acquire.WAL.enforceBacklogLimitLocked）；
 //  2. 暂停后尾随读被拒（tailer 暂停门），但 `Flush()` 强制冲刷**未闭合事件**仍会走到 emit→ingest
 //     ⇒ Append 被拒 ⇒ 命中本修复的分支；
 //  3. 投递钩子把 **replay** 投递阻塞住（模拟整窗很慢）⇒
@@ -41,11 +42,14 @@ const ingestNotBlockedWithin = time.Second
 
 // TestAppendRejectedSchedulesReplayOutsideIngestPath 守 #56 的核心不变量：
 // ① 追加被拒后 ingest 调用**不被整窗 replay 拖住**（消除在途阻塞）；
-// ② replay **仍会被及时投递**（滞回修复意图保留：存量必须外发，不能因为改调度而丢）。
+// ② replay **仍会被及时投递**（存量必须外发，不能因为改调度而丢）。
+//
+// 注：2026-10-29 起积压越界不再暂停采集（改丢最旧），所以本用例的暂停态现在是**显式造的**
+// （存量积压暂停形态）——#56 守的“追加被拒后不得在摄取路径上同步整窗 replay”与暂停来源无关。
 func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
-	// 三行 Paper 风格日志：前两行会被 Poll 读成**两个**完整事件（条目数 2 > 上限 1 ⇒ 暂停），
+	// 三行 Paper 风格日志：前两行会被 Poll 读成**两个**完整事件（条目数 2 > 上限 1 ⇒ 越界丢弃），
 	// 最后一行在夹具里永远"未闭合"（见 runtime_test.go 的说明）⇒ 可被 Flush 强制冲刷，
 	// 从而在**暂停之后**再产出一批（这正是"Append 被拒"分支的确定性入口）。
 	require.NoError(t, os.WriteFile(path, []byte(pollTestLines(0, 3)), 0o600))
@@ -58,7 +62,8 @@ func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 	}
 	m, err := newTestManager(t, Options{
 		Root: root, Catalog: catalog.New(nil), Sources: []SourceConfig{src},
-		// 条目上限 1 ⇒ 首批追加即越界 ⇒ 该源进入暂停态（其后的追加一律被拒）。
+		// 条目上限 1 ⇒ 首批追加即越界。2026-10-29 起越界不再暂停（改为丢最旧、不背压），
+		// 暂停态由下面显式造（见第 1 步），上限只用来复现"该源确实曾经顶闸"的现场形态。
 		WALLimits: &acquire.WALLimits{MaxEntries: 1},
 	})
 	require.NoError(t, err)
@@ -107,11 +112,28 @@ func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 		return pipeline.DeliveryResult{HTTPStatus: 200}, nil
 	}))
 
-	// 第 1 步：正常读一批 ⇒ 追加成功但越界 ⇒ 进入暂停态（夹具前置）。
+	// 第 1 步：正常读一批 ⇒ 追加成功（越界部分被丢弃，源**不**暂停）。
 	_, err = p.Poll()
 	require.NoError(t, err)
+	require.False(t, p.Ledger().Get(p.Key()).AcquirePaused,
+		"越界不再暂停采集（2026-10-29 丢弃语义的红线）")
+
+	// 夹具前置：该源必须处于**暂停态**——本用例考的是 #56（追加被拒后的排空调度），
+	// 而"追加被拒"只在源暂停时发生。
+	//
+	// 2026-10-29 起积压越界改为丢最旧（见 acquire.WAL.enforceBacklogLimitLocked），
+	// 已造不出积压暂停，故改用**存量积压暂停**形态（旧二进制写进账本的那一类，生产库里仍在，
+	// 也正是 `maybeResumeBacklogLocked` 唯一认的那一类）+ 一条**未分类原因**的缺口：
+	// 未分类原因走 ResumeAcquire 的 default-deny，按分类消解的可愈合名单也收不到它，
+	// 暂停因此**稳定存在**。
+	//
+	// 不能改用 `APPEND_REJECTED` / `DELIVER_ERROR`：它们属于"恢复后回读重放"类，
+	// `maybeResumeBacklogLocked` 会（正确地）把它们消解掉并放行 ⇒ 暂停当场消失 ✗。
+	require.NoError(t, p.Ledger().PauseAcquire(p.Key(), legacyBacklogPauseReason))
+	require.NoError(t, p.Ledger().RecordGap(p.Key(), 1, 2, "SOME_UNCLASSIFIED_REASON",
+		"#56 夹具：让暂停态持续存在（未分类原因 default-deny，不会被自动消解）"))
 	require.True(t, p.Ledger().Get(p.Key()).AcquirePaused,
-		"前置：WALLimits{MaxEntries:1} 下首批追加后该源必须处于暂停态")
+		"前置：追加被拒分支只在该源处于暂停态时出现 ⇒ 必须先把它置成暂停")
 
 	// 第 2 步：强制冲刷未闭合事件 ⇒ emit→ingest 走到 Append 被拒分支（本修复的现场点）。
 	// 此后按"排空"建模（阶段位置真 ⇒ 慢批 ✓）。
@@ -144,11 +166,11 @@ func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 	require.Less(t, blocked, ingestNotBlockedWithin,
 		"#56：Append 被拒后的 ingest 调用必须立即返回（整窗 replay 只能在路径外执行）；实测被拖住 %s", blocked)
 
-	// ② 但 replay 仍必须被**及时**送达（滞回修复意图保留：存量必须外发）。
+	// ② 但 replay 仍必须被**及时**送达（存量必须外发）。
 	select {
 	case <-replayEntered:
 	case <-time.After(10 * time.Second):
-		t.Fatal("#56：追加被拒后必须在数秒内调度一次 replay 投递（否则滞回自愈链断裂）")
+		t.Fatal("#56：追加被拒后必须在数秒内调度一次 replay 投递（否则自愈链断裂）")
 	}
 	require.GreaterOrEqual(t, m.ScheduledReplayCount(), int64(1),
 		"观测面：追加被拒必须登记过一次待办排空")

@@ -16,6 +16,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
@@ -294,16 +295,24 @@ func TestReplayWaitsForVLReady(t *testing.T) {
 	require.Greater(t, fixture.insertAttempts(), before, "VL 就绪后必须继续重发")
 }
 
-// TestBacklogGateSurvivesResolve：D4 回归——条目闸必须在**配置值处**生效，且**不得被解算路径
-// 越权清除**（现场实测积压涨到 113.9 万条，名义上限 5000）。
+// gateTestManager 是 TestBacklogGateSurvivesResolve 的单源夹具：真投影 VL + 指定条目上限。
 //
-// 转红方式（实测）：把 resumeAcquireRespectingGates 换回无条件 `pipe.Ledger().ResumeAcquire(...)`
-// —— 解算收尾会把积压暂停清掉，本用例在「解算后仍必须暂停」处变红。
-func TestBacklogGateSurvivesResolve(t *testing.T) {
+// 为什么抽出来：该用例的两个阶段各需一个**干净**的 Manager（阶段一靠投递恒失败制造
+// 持续越界，阶段二靠投递成功让 durable 与已发布投影对齐），而两者的源/上限/账本形态
+// 必须一致，否则两个方向的前提会逐渐漂移。
+type gateTestManager struct {
+	m     *Manager
+	path  string
+	pipes map[string]*pipeline.Pipeline
+}
+
+func newGateTestManager(t *testing.T, maxEntries int64) gateTestManager {
+	t.Helper()
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: seed\n[12:00:02] [Server thread/INFO]: seed2\n"), 0o600))
+	// 4 行（多于上限 3）⇒ 单轮采集即越界，越界事实不依赖后续增量。
+	require.NoError(t, os.WriteFile(logPath, []byte(pollTestLines(0, 4)), 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
 	m, err := newTestManager(t, Options{
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
@@ -311,46 +320,91 @@ func TestBacklogGateSurvivesResolve(t *testing.T) {
 			LogSourceID: "inst:gate", SourceGeneration: "g1", Path: logPath,
 			Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:gate", UTCDay: runtimeTestUTCDay(),
 		}},
-		// 条目闸配到 3：追加超过 3 条即应暂停（现场是「配置值不生效」）。
-		WALLimits: &acquire.WALLimits{MaxEntries: 3},
+		// 条目闸配到配置值：追加超过它就应在越界时被裁（现场是「配置值不生效」）。
+		WALLimits: &acquire.WALLimits{MaxEntries: maxEntries},
 	})
 	require.NoError(t, err)
-	const key = "inst:gate/g1"
-	pipe := m.pipes[key]
-	require.NotNil(t, pipe)
-	// 先跑一轮采集：建立「完整已发布投影」——解算路径的准入判据（否则解算会以
-	// 「no complete published projection」提前返回，测不到「收尾是否越权恢复」这一点）。
-	m.pollOnce()
+	return gateTestManager{m: m, path: logPath, pipes: m.pipes}
+}
 
-	identity := logtypes.SourceIdentity{LogSourceID: "inst:gate", SourceGeneration: "g1", ParserVersion: "v1"}
-	seed := make([]acquire.WALEntry, 0, 6)
-	for i := 0; i < 6; i++ {
-		end := uint64(1_000_000 + i*10)
-		seed = append(seed, acquire.WALEntry{
-			Seq: uint64(i + 1),
-			Event: logtypes.BuildEvent(identity, logtypes.RecordRange{Start: end - 9, End: end},
-				"2026-09-22T10:00:00Z", "2026-09-22T10:00:00Z", "INFO", "stdout", fmt.Sprintf("gate %d", i)),
-			Appended: true, Durable: true,
-		})
-	}
-	// 走真实追加路径：Append 逐条追加 → 越界即由条目闸暂停该源。
-	for i := range seed {
-		require.NoError(t, pipe.WAL().Append(seed[i].Event))
-		require.NoError(t, pipe.WAL().Commit())
-		if i >= 3 {
-			break
+// TestBacklogGateSurvivesResolve：D4 回归——条目闸必须在**配置值处**生效，且**不得被解算路径
+// 越权清除**。
+//
+// 历史：现场实测积压涨到 113.9 万条（名义上限 5000），成因是“解一次缺口/做一次运维解阻
+// 就把条目闸解除一次”（resumeAcquireRespectingGates 前的无条件 ResumeAcquire）。
+//
+// 2026-10-29 语义变更后（用户裁定：越界丢最旧、不暂停、不背压），“闸在配置值处生效”
+// 的形态从「越界必须暂停」变成**「越界必须裁」**；而“解算不得越权”这一条实测仍有存活部分：
+// **存量积压暂停**（旧二进制写下的那一类，生产库里仍在）不得被解算收尾清除。
+//
+// 两个阶段各打一个方向（缺一不可）：
+//   - 阶段一：越界 ⇒ 队列被裁到上限内 + 有 WAL_BACKLOG_DROPPED 凭据 + DropStats 增长；
+//   - 阶段二：解算收尾不得清除存量积压暂停（原断言逐字保留）。
+//
+// 转红方式（实测）：①把 WALLimits 的接线去掉（或让 limitsLocked 忽略 maxEntries）
+// ⇒ 阶段一队列涨到默认值处变红；②把 resumeAcquireRespectingGates 换回无条件
+// ResumeAcquire ⇒ 阶段二变红。
+func TestBacklogGateSurvivesResolve(t *testing.T) {
+	// ---- 阶段一：条目闸在**配置值**处生效（新语义：越界就裁）----
+	//
+	// 投递恒失败（确定性桩）⇒ WAL 不会因投递推进而回落 ⇒ 越界事实稳定可观测。
+	dropping := newGateTestManager(t, 3)
+	dropPipe := dropping.pipes["inst:gate/g1"]
+	require.NotNil(t, dropPipe)
+	dropPipe.SetDelivery(pipeline.FuncHook(func([]logtypes.Event, bool) (pipeline.DeliveryResult, error) {
+		return pipeline.DeliveryResult{}, fmt.Errorf("stub: VL 不可用（本阶段只考条目闸）")
+	}))
+	// 首批 4 行 ⇒ 追加即越界（上限 3）。
+	dropping.m.pollOnce()
+	// 再灌 10 行：积压只入不出 ⇒ 每轮越界都要被裁。
+	appendPollTestLines(t, dropping.path, pollTestLines(20, 10))
+	dropping.m.pollOnce()
+
+	entry := dropPipe.Ledger().Get(dropPipe.Key())
+	require.NotNil(t, entry)
+	// 新语义的红线：越界**不暂停采集**（只丢最旧）。
+	require.False(t, entry.AcquirePaused, "越界不得暂停采集（2026-10-29 丢弃语义）")
+	require.Empty(t, entry.PauseReason, "新语义下不得再产生积压暂停原因")
+	// 闸在配置值处生效：队列必须始终卡在上限内（现场积压涨到 113.9 万条就是闸不生效）。
+	require.LessOrEqual(t, len(dropPipe.WAL().Snapshot()), 3,
+		"条目闸必须在配置值（3）处生效：越界必须裁到上限内（现场积压涨到 113.9 万条的成因）")
+	// 裁剪必须留凭据（不是静默丢），且丢弃量可观测。
+	droppedGaps := 0
+	for _, g := range entry.Gaps {
+		if g.Reason == ledger.GapReasonWALBacklogDropped {
+			droppedGaps++
+			require.False(t, g.Resolved, "丢弃类缺口不得被自动消解（真丢不回来的字节）")
 		}
 	}
-	entry := pipe.Ledger().Get(pipe.Key())
-	require.NotNil(t, entry)
-	require.True(t, entry.AcquirePaused, "积压越过配置的条目上限（3）必须暂停该源采集")
-	require.Contains(t, entry.PauseReason, "wal backlog limit exceeded",
-		"暂停原因必须点名条目闸（否则运维无从判断是闸门还是别的路径）")
+	require.Positive(t, droppedGaps, "裁剪必须登记 WAL_BACKLOG_DROPPED 凭据（不静默）")
+	if n, b := dropPipe.WAL().DropStats(); n <= 0 || b <= 0 {
+		t.Fatalf("越界必须累计丢弃读数（对齐 Fluent Bit memrb），实测 entries=%d bytes=%d", n, b)
+	}
+
+	// ---- 阶段二：解算收尾不得越权清除**存量积压暂停** ----
+	//
+	// 这一阶段用**投递成功**的夹具：解算路径的准入要求「已发布投影覆盖 durable」
+	//（见 resolveOneSourceGaps 的 closed/Reclaim 判据），而积压能否裁掉与它无关。
+	settled := newGateTestManager(t, 3)
+	setPipe := settled.pipes["inst:gate/g1"]
+	require.NotNil(t, setPipe)
+	settled.m.pollOnce() // 真实采集 + 投递：durable 与投影对齐
+	require.False(t, setPipe.Ledger().Get(setPipe.Key()).AcquirePaused, "前置：丢弃语义下不得暂停")
+
+	// 存量积压暂停（旧二进制写下的形态）+ 一条**未分类原因**缺口：
+	// 后者走 ResumeAcquire 的 default-deny，且不在分类消解名单里 ⇒ 暂停**稳定存在**。
+	// 若用 APPEND_REJECTED / DELIVER_ERROR，maybeResumeBacklogLocked 会正确地把它消解掉
+	// 并放行 ⇒ 暂停当场消失，测不到“解算是否越权”。
+	require.NoError(t, setPipe.Ledger().PauseAcquire(setPipe.Key(), legacyBacklogPauseReason))
+	require.NoError(t, setPipe.Ledger().RecordGap(setPipe.Key(), 1, 2, "SOME_UNCLASSIFIED_REASON",
+		"阶段二夹具：让暂停态持续存在（未分类原因 default-deny）"))
+	require.True(t, setPipe.Ledger().Get(setPipe.Key()).AcquirePaused)
 
 	// 解算路径收尾**不得**清除该暂停：解算只负责缺口/投影，无权解除容量闸（否则闸形同虚设）。
-	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
-	entry = pipe.Ledger().Get(pipe.Key())
+	require.NoError(t, settled.m.ResolveCoveredGaps(context.Background()))
+	entry = setPipe.Ledger().Get(setPipe.Key())
 	require.True(t, entry.AcquirePaused,
-		"解算收尾不得越权清除积压闸的暂停（现场积压涨到 113.9 万条的直接成因）")
-	require.Contains(t, entry.PauseReason, "wal backlog limit exceeded")
+		"解算收尾不得越权清除存量积压暂停（现场积压涨到 113.9 万条的直接成因）")
+	require.Equal(t, legacyBacklogPauseReason, entry.PauseReason, "解算不得改写暂停原因")
+	require.LessOrEqual(t, len(setPipe.WAL().Snapshot()), 3, "解算不得把队列变回超限")
 }
