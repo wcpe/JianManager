@@ -212,8 +212,10 @@ func benchmarkLoad(b *testing.B, shape benchShape) {
 //
 // 跑法（必须设置 TMPDIR，/tmp 分区曾满）：
 //
-//	TMPDIR=/home/wxys233/tt go test ./internal/worker/logs/ingest/stateindex/ \
+//	TMPDIR=$HOME/tmpwork go test ./internal/worker/logs/ingest/stateindex/ \
 //	    -run '^$' -bench BenchmarkLoad100k -benchtime 3x
+//
+// 用 $HOME 而不是写死绝对路径：本文件入了仓库，写死会泄漏用户名。
 func BenchmarkLoad100k(b *testing.B) {
 	cases := []benchShape{
 		// 主体是批次行：投递批次随投递次数增长，是稳态运行下最常见的形态。
