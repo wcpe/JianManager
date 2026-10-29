@@ -79,7 +79,17 @@ log:
 #   # 两者与 retention_period **同时生效**（谁先到谁触发），不是替代关系：
 #   # 日志量稳定时满保留期才淘汰；暴涨时先撞磁盘上限、旧分区提前丢。
 #   # VL 的行为是**丢最旧的按日分区**，不是按字节精确切。
-#   max_disk_space_bytes: 21474836480   # 20 GiB；0/不写 = 不限制
+#   #
+#   # ⚠ 两条官方限制（2026-10-29 实读文档），它们决定了「上限 != 沙盘」：
+#   #   1. VL **至少保留最近 2 天**：最近 2 天数据超过上限时，占用**必然**超过阈值；
+#   #   2. 占用检查是**周期性**的，两次检查之间可以涨穿；而磁盘写满时 VL 会进入
+#   #      **只读模式、反而无法执行丢弃**（丢弃也要写元数据）。
+#   # ⇒ 上限必须**远低于**可用空间（建议 <= 可用量的 40%），并配 disk_full 告警。
+#   #
+#   # 配套告警（代码已打通读数，规则需在 CP 面板/API 建）：
+#   #   log_vl_disk_pct      >= 90 持续 300s ⇒ critical（离上限多近）
+#   #   log_vl_rows_dropped  >  0  持续 60s  ⇒ warn（已经因保留期在丢日志）
+#   max_disk_space_bytes: 107374182400  # 100 GiB；0/不写 = 不限制
 #   # max_disk_usage_percent: 85
 
 # Optional persistent Worker/Node or offline FILE_PRIMARY sources. Instance
