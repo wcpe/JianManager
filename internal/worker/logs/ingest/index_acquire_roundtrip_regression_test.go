@@ -63,47 +63,6 @@ func indexReloadAcquire(t *testing.T, path string, key ledger.SourceKey, led *le
 	return restored, restoredWAL
 }
 
-func TestIndexOldPhysicalMappingRemainsUnknownAcrossThreePolls(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "latest.log")
-	if err := os.WriteFile(path, []byte("surviving-durable-prefix\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	key := ledger.SourceKey{LogSourceID: "sqlite-unknown-physical", SourceGeneration: "g1"}
-	led := ledger.New()
-	wal := acquire.NewWAL(led, key)
-	idBytes, idSHA, err := acquire.ContentIdentity(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := led.AdvanceRead(key, 1530); err != nil {
-		t.Fatal(err)
-	}
-	if err := led.AdvanceDurable(key, 1530); err != nil {
-		t.Fatal(err)
-	}
-	if err := led.RegisterSegment(key, ledger.Segment{Path: path, Kind: ledger.SegmentLive, StartPos: 1530, EndPos: 1530, IdentityBytes: idBytes, IdentitySHA256: idSHA}); err != nil {
-		t.Fatal(err)
-	}
-	for round := 1; round <= 3; round++ {
-		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led)
-		entry := led.Get(key)
-		if entry.Segments[0].PhysicalMappingKnown {
-			t.Fatalf("第%d次重开替旧数据伪造物理映射", round)
-		}
-		if _, ok := acquire.ResolveContentAnchor(entry, path, int64(len("surviving-durable-prefix\n")), 1530); ok {
-			t.Fatalf("第%d次重开把未知映射当内容锚", round)
-		}
-		tailer := acquire.NewFileTailer(led, key, path, wal, nil)
-		if events, err := tailer.Poll(); err == nil || len(events) != 0 {
-			t.Fatalf("第%d次重开未背压或重造事件ID：%+v %v", round, events, err)
-		}
-		if entry := led.Get(key); entry.Segments[0].PhysicalMappingKnown || len(entry.Gaps) != 1 {
-			t.Fatalf("未知物理映射没有保持稳定可见：%+v", entry)
-		}
-	}
-}
-
 func TestIndexTruncatedPhysicalMappingActuallyPollsAfterThreeRestarts(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")

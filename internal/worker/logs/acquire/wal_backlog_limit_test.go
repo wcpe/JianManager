@@ -196,6 +196,7 @@ func TestBacklogDropGapDetailReportsRealNumbers(t *testing.T) {
 // 没有这个读数，运维看到“这个源的日志少了”时分不清是：
 //   - 该源本就没写（采集/路径问题）；
 //   - 还是丢在了内存队列里（投递卡住 + 容量越界）。
+//
 // 两者处置完全不同。
 //
 // 转红方式：把 `w.droppedEntries += int64(dropped)` 那行注释掉 ⇒ 本用例变红。

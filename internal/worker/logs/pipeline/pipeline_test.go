@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
-	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 )
@@ -101,64 +100,6 @@ func mustPos(t *testing.T, p *Pipeline) logtypes.Positions {
 	pos, ok := p.Positions()
 	require.True(t, ok)
 	return pos
-}
-
-// FR-474：轮转压缩后同一逻辑源不重复计数；ArchiveImporter 跳过已关联整包。
-func TestPipeline_RotationNoDoubleCount(t *testing.T) {
-	dir := t.TempDir()
-	latest := filepath.Join(dir, "latest.log")
-	rotated := filepath.Join(dir, "latest.log.1")
-	gzPath := filepath.Join(dir, "latest.log.1.gz")
-
-	lines := []string{
-		`[12:00:00] [Server thread/INFO]: Starting minecraft server`,
-		`[12:00:01] [Server thread/INFO]: Preparing spawn`,
-		`[12:00:02] [Server thread/INFO]: Done (2.0s)`,
-	}
-	require.NoError(t, os.WriteFile(latest, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
-
-	var got []logtypes.Event
-	p := newFilePipeline(t, latest, "src-rot", "g1", okDelivery(&got))
-	p.SetRotateTarget(rotated)
-
-	events, err := p.Drain()
-	require.NoError(t, err)
-	require.Len(t, events, 3, "three INFO lines → three events")
-	require.Len(t, got, 3)
-	logicalAfterLive := p.FileTailer().LogicalPos()
-	require.Greater(t, logicalAfterLive, uint64(0))
-
-	// 轮转：内容进 rotated/gz，latest 截断。
-	require.NoError(t, os.WriteFile(rotated, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
-	writeGzipLines(t, gzPath, lines)
-	require.NoError(t, os.WriteFile(latest, []byte(""), 0o644))
-	p.SetRotateTarget(gzPath)
-
-	_, err = p.Poll()
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, p.FileTailer().RotationCount(), 1)
-
-	// 已覆盖夹具必须保留当前压缩内容的身份；只有路径和旧链接时应视为未知，而不是伪造零缺口。
-	key := p.Key()
-	identityBytes, identitySHA, identityErr := acquire.ContentIdentity(gzPath)
-	require.NoError(t, identityErr)
-	info, statErr := os.Stat(gzPath)
-	require.NoError(t, statErr)
-	require.NoError(t, p.Ledger().RegisterSegment(key, ledger.Segment{
-		Path: gzPath, Kind: ledger.SegmentGzip, EndPos: logicalAfterLive, Imported: true,
-		IdentityBytes: identityBytes, IdentitySHA256: identitySHA, ObservedSize: info.Size(),
-	}))
-	require.NoError(t, p.Ledger().LinkRotation(key, latest, gzPath, logicalAfterLive))
-
-	impRes, err := p.ImportArchive(gzPath)
-	require.NoError(t, err)
-	require.True(t, impRes.Skipped, "rotation-linked archive must skip whole reimport")
-	require.Equal(t, 0, impRes.ImportedCount)
-
-	// 总事件仍为 3：live 已计入 + archive 跳过，不双计。
-	require.Equal(t, 3, p.EventsEmitted(), "normalize events from live file")
-	require.Equal(t, 3, p.DeliveredCount(), "rotation-linked archive must not double-count deliveries")
-	require.Empty(t, p.Gaps(), "rotation must not create gaps")
 }
 
 // FR-473/474（2026-10-29 改写）：CanReclaimNow / TryReclaim 只认投递证据与读入量，

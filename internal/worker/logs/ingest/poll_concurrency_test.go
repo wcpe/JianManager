@@ -138,9 +138,9 @@ func (d *delayedVerifyVL) beginVerify(source string) {
 	}
 	if d.sources == nil {
 		// 惰性初始化：串行基线相位不调用 armWitness，集合尚未建立（向 nil map 写入会 panic）。
-	d.sources = make(map[string]int, 16)
-	d.active = make(map[string]int, 16)
-	d.peakSources = nil
+		d.sources = make(map[string]int, 16)
+		d.active = make(map[string]int, 16)
+		d.peakSources = nil
 	}
 	if d.active == nil {
 		d.active = make(map[string]int, 16)

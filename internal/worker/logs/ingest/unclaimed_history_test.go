@@ -72,15 +72,12 @@ func RequestDoneRangesOfForTest(p *pipeline.Pipeline) []ledger.PositionRange {
 	return ledger.RequestDoneRangesOf(entry)
 }
 
-
-
 // TestDropUnclaimedHistoryAdvancesDeliveryWithoutFakingRequestDone 是主正例。
 //
 // 转红方式：把 `RecordDelivery(..., DeliveryDropped)` 那行删掉
 // ⇒ 断言 ② 红（delivery 不推进，死锁依旧）。
 func TestDropUnclaimedHistoryAdvancesDeliveryWithoutFakingRequestDone(t *testing.T) {
 	mgr, source, pipe := unclaimedHistoryFixture(t)
-
 
 	// 前置：账本完全没有认领证据（与 inst:318 同构）。
 	before := pipe.Ledger().Get(pipe.Key())

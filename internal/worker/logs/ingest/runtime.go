@@ -26,6 +26,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"runtime/debug"
+
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
@@ -39,7 +41,6 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"google.golang.org/grpc/metadata"
-	"runtime/debug"
 )
 
 // SourceConfig describes one persistent Worker log source.
@@ -2990,14 +2991,7 @@ func (m *Manager) Register(source SourceConfig) error {
 	// Pipeline换主即释放旧owner的回执与轻量索引，不能等下一次持久化才回收。
 	delete(m.committedReceipts, key)
 	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图（候选 1）
-	// 归档归属闸（2026-10-02）：把「跨代次归属注册表」接到本源的导入器上。
-	// 缺了它，归档导入只能假设"属于当前代次"——那是静默重复的入口。
-	p.SetArchiveOwnerRegistry(m.archiveOwnerLookup())
-	// 命中其它代次时的**补账**通道：记回原代次的待投递账目（不投递 VL，见 backfillArchiveUnderOwner）。
-	// 补账不可行时导入器会退回"拒绝 + 记缺口"，绝不静默归当前代次。
-	p.SetArchiveBackfill(func(ownerGeneration, archivePath, objectID string) error {
-		return m.backfillArchiveUnderOwner(source, ownerGeneration, archivePath, objectID)
-	})
+	// 归档导入已删除（2026-10-30）：归属闸与补账通道一并下线。
 	if m.state.SourceConfigs == nil {
 		m.state.SourceConfigs = make(map[string]SourceConfig)
 	}
@@ -3428,98 +3422,21 @@ const archiveScanCycleMuWait = 5 * time.Second
 //
 // 返回 (扫描到的待导入归档数, 实际导入的归档数)。
 func (m *Manager) ImportArchivesNow(storageNamespace, operator string) (int, int, error) {
-	if m.resourceBudget != nil {
-		if err := m.resourceBudget.Admit(vlsup.WorkBackground); err != nil {
-			return 0, 0, err
-		}
-	}
-	if m == nil {
-		return 0, 0, fmt.Errorf("ingest: manager unavailable")
-	}
-	if strings.TrimSpace(operator) == "" {
-		return 0, 0, fmt.Errorf("ingest: 手动导入归档必须携带操作人（认证主体为空时拒绝执行）")
-	}
-	// 有界获取 cycleMu（2026-10-10 修复，同 resolveGapsCycleMuWait 的取舍）。
+	// ── 归档导入已整体删除（2026-10-30 用户裁定）────────────────────────────
 	//
-	// 现场：`log_ingest.archive_scan_interval: 30s` 已启用，但 20 分钟内「手动导入归档扫描完成」
-	// 与「定时归档导入扫描失败」**日志各 0 条** —— 扫描既没干活也没报错，这是"无限等锁"的
-	// 典型形态（已排除"无归档可扫"：164 个 FILE_PRIMARY 源里 151 个含 814 个 gz，而 catalog
-	// 中 gzip 段记录为 0，即 pending 非空、本应有日志）。
+	// 用户原话：「把读取gz归档日志通通给我删了，只需要读取日志然后往vl塞，
+	// 有就有没有就没有了」。
 	//
-	// 为什么有界是安全的：本方法只做「发现 + 交给既有导入管道」，超时即**未做任何变更**
-	// （targets 未读、账本未触碰、无事件落库）⇒ 定时扫描下一轮 30s 后再来、手动调用由运维重试。
-	// 反之"无限等"会把定时任务变成不可见挂死：既无成功日志也无失败日志，运维只能靠 pprof 猜。
+	// 本方法保留签名（grpcsvc.IngestArchiveImporter 接口成员、前端有按钮），
+	// 但已无可导入之物：返回 (0, 0, nil) 表示"没有归档可扫"，与过去
+	// "目录里确实没有待导入归档" 的返回完全一致，调用方与前端无需改动。
 	//
-	// 为什么用 context.Background() 而不是给本方法加 ctx：本方法是连接层接口
-	// （grpcsvc.IngestArchiveImporter，由 ingest.Manager 满足）的成员，调用方有两类——
-	// 定时扫描 goroutine（无请求 ctx 可传）与 gRPC 手动入口。加 ctx 会同时改变接口与全部
-	// 调用点（含 grpcsvc 的接口定义与测试桩），把一次锁修复的变更面扩大到跨包协议；
-	// 而本方法需要的语义只是"别挂死"，预算已由 acquireCycleMuBounded 承担。
-	w := m.observeCycleMu("importArchives")
-	if !m.acquireCycleMuBounded(context.Background(), archiveScanCycleMuWait) {
-		return 0, 0, fmt.Errorf("ingest: 采集轮忙（cycleMu 等待超 %s 预算），归档扫描未执行任何变更，请稍后重试", archiveScanCycleMuWait)
-	}
-	w.locked()
-	defer func() {
-		m.cycleMu.Unlock()
-		w.done()
-	}()
-	m.mu.Lock()
-	type target struct {
-		source SourceConfig
-		pipe   *pipeline.Pipeline
-	}
-	targets := make([]target, 0, len(m.pipes))
-	for key, p := range m.pipes {
-		src, ok := m.sources[key]
-		if !ok {
-			continue
-		}
-		if ns := strings.TrimSpace(storageNamespace); ns != "" && src.StorageNamespace != ns {
-			continue
-		}
-		if src.Mode != pipeline.ModeFilePrimary || src.Path == "" {
-			continue // 无文件源就没有归档可扫
-		}
-		targets = append(targets, target{source: src, pipe: p})
-	}
-	m.mu.Unlock()
-
-	scanned, imported := 0, 0
-	var firstErr error
-	for _, tg := range targets {
-		archives, err := discoverSourceArchives(tg.source)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
-		pending := pendingArchives(tg.pipe, archives)
-		scanned += len(pending)
-		if len(pending) == 0 {
-			continue
-		}
-		events, _, err := m.importArchivesWithBudget(tg.pipe, pending)
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
-		// 只有真正产出事件的归档才算"导入"（被归属闸拒绝的不计，它们只记缺口）。
-		if len(events) > 0 {
-			imported += len(pending)
-		}
-		slog.Info("手动导入归档扫描完成",
-			"source", tg.source.LogSourceID, "generation", tg.source.SourceGeneration,
-			"operator", operator, "pending", len(pending), "events", len(events),
-			// deferred 是「因 WAL 余量耗尽而推迟本轮导入」的累计次数（缺陷二观测面）。
-			// 它非零说明导入**在正常让路**（归档会由下一轮续推）；若它持续增长而 events 恒 0，
-			// 则问题在回收停滞而不是导入本身——现场排障靠这一对读数分辨，不必再猜。
-			"deferred", tg.pipe.ArchiveImportDeferred())
-	}
-	if err := m.persist(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	return scanned, imported, firstErr
+	// 为什么保留而不删接口：删接口要同时改 proto、grpcsvc、前端三处，
+	// 而这里的行为差异对用户是"这个按钮点了没反应"，与"确实没有归档"无法区分——
+	// 保留更小的变更面，且不会让老客户端报错。
+	_ = storageNamespace
+	_ = operator
+	return 0, 0, nil
 }
 
 // archiveScanOperator 是定时扫描的系统身份（定时动作同样必须留痕，只是主体是调度器）。
@@ -3555,118 +3472,11 @@ func (m *Manager) RunArchiveScan(interval time.Duration) (stop func()) {
 	return func() { once.Do(func() { close(done) }) }
 }
 
-// backfillArchiveUnderOwner 把一份归档记回**它自己的代次**账上（账本侧补账，不投递 VL）。
+// ── 归档补账通道已删除（2026-10-30 用户裁定）──────────────────────────
 //
-// 为什么只做账本侧、不调 deliver（这是与"补账通道"最关键的边界，源自一次硬点论证）：
-// 投递路径的 ReclaimProof 钩子（releaseRecovery）按代次查 m.pipes 并要求存在活跃管道，
-// 而"非活跃代次不得假装活跃"是既定约束 ⇒ 用旧代次走 deliver 必然失败；三条绕开它的出路
-// （注册 headless 管道 / 跳过 ReclaimProof / 另造责任转移机制）分别违反既定约束或
-// 动到不变量 R 与 VerifiedRuns 的底座，故一条都不走。
-//
-// 补账写成**旧代次的"待投递"账目**：
-//   - 事件体入旧代次的段存（appendEvents）；
-//   - 事件按 Durable 追加进旧代次的持久化 WAL（这就是它的 backlog）；
-//   - 旧代次账本的位置推进到覆盖这批事件，并登记该归档为已导入；
-//   - 整条记录回索引（持久化）。
-//
-// ⇒ 旧代次将来**再次活跃**时，其既有的 backlog 投递路径会自然把它们发出去（不丢）；
-//
-//	以新代次 event_id 重复入 VL 的路径被封死（不重）；当前代次名下永无归属（不归）。
-//
-// 返回错误即"补账不可行"，调用方必须退回"拒绝 + 记缺口"（不得静默改走当前代次）。
-func (m *Manager) backfillArchiveUnderOwner(source SourceConfig, ownerGeneration, archivePath, objectID string) error {
-	if m.resourceBudget != nil {
-		if err := m.resourceBudget.Admit(vlsup.WorkBackground); err != nil {
-			return err
-		}
-	}
-	if m == nil {
-		return fmt.Errorf("ingest: manager unavailable")
-	}
-	if strings.TrimSpace(ownerGeneration) == "" {
-		return fmt.Errorf("ingest: 原代次为空，无法补账")
-	}
-	ownerKey := source.LogSourceID + "/" + ownerGeneration
-	m.mu.Lock()
-	saved, ok := m.state.Sources[ownerKey]
-	m.mu.Unlock()
-	if !ok || len(saved.Ledger) == 0 {
-		// 寻址失败：该代次在原 Worker 的索引里没有账 —— 不可补，交给人工。
-		return fmt.Errorf("ingest: 原代次 %q 的账本不可寻址", ownerGeneration)
-	}
-
-	// 用**原代次**构造导入器与账本：位置从原代次的既有水位继续（这才是"记回它自己的账"）。
-	ownerSourceKey := ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: ownerGeneration}
-	ownerLedger := ledger.New()
-	if err := ownerLedger.Restore(saved.Ledger); err != nil {
-		return fmt.Errorf("ingest: 恢复原代次账本失败: %w", err)
-	}
-	// 刻意**不注入** lookupOwner/backfill：内层导入不再走归属闸（原代次就是它的家）。
-	imp := acquire.NewArchiveImporter(ownerLedger, ownerSourceKey)
-	res, err := imp.ImportGzip(archivePath)
-	if err != nil {
-		return fmt.Errorf("ingest: 原代次导入失败: %w", err)
-	}
-	if res == nil || len(res.Events) == 0 {
-		// 没有事件可补：可能是已导入或空归档。登记已导入以免每轮重扫，不算失败。
-		if res != nil {
-			_ = imp.MarkImported(archivePath, res.ArchiveObjectID, res.ResumedFrom, res.ResumedFrom)
-		}
-		return m.commitBackfill(ownerKey, ownerLedger, nil, archivePath, res)
-	}
-
-	end := res.Events[len(res.Events)-1].Record.End
-	if err := ownerLedger.AdvanceRead(ownerSourceKey, end); err != nil {
-		return err
-	}
-	if err := ownerLedger.AdvanceDurable(ownerSourceKey, end); err != nil {
-		return err
-	}
-	if err := imp.MarkImported(archivePath, res.ArchiveObjectID,
-		res.Events[0].Record.Start, end); err != nil {
-		return err
-	}
-	return m.commitBackfill(ownerKey, ownerLedger, res.Events, archivePath, res)
-}
-
-// commitBackfill 把补账结果写回内存状态并持久化（事件体入段存 + 账本。WAL 只是本进程内的队列，不落盘）。
-func (m *Manager) commitBackfill(ownerKey string, ownerLedger *ledger.Ledger,
-	events []logtypes.Event, archivePath string, res *acquire.ImportResult) error {
-	// 事件体入原代次的段存：否则 WAL 引用恢复时取不到正文（B1a 的按条判据）。
-	if len(events) > 0 {
-		if err := m.appendEvents(ownerKey, events); err != nil {
-			return fmt.Errorf("ingest: 补账事件入段存失败: %w", err)
-		}
-	}
-	m.mu.Lock()
-	cur := m.state.Sources[ownerKey]
-	cur.Ledger = ownerLedger.Snapshot()
-	// 追加为**本进程内待投递**条目：旧代次再次活跃时由既有 backlog 路径外发。
-	// 队列不落盘（重启即丢）⇒ 序号只需在本进程内单调，从当前队列尾部接上即可。
-	seq := uint64(len(cur.WAL))
-	for _, ev := range events {
-		seq++
-		cur.WAL = append(cur.WAL, acquire.WALEntry{Seq: seq, Event: ev, Appended: true, Durable: true})
-	}
-	if len(events) > 0 {
-		cur.EventsStored = true
-		if through := events[len(events)-1].Record.End; through > cur.EventsStoredThrough {
-			cur.EventsStoredThrough = through
-		}
-	}
-	m.state.Sources[ownerKey] = cur
-	m.mu.Unlock()
-
-	if err := m.persist(); err != nil {
-		return fmt.Errorf("ingest: 补账持久化失败: %w", err)
-	}
-	slog.Info("归档补账完成（记入原代次的待投递账目）",
-		"ownerKey", ownerKey, "archive", archivePath, "events", len(events))
-	if res != nil {
-		_ = res
-	}
-	return nil
-}
+// backfillArchiveUnderOwner / commitBackfill 原本服务于「归档命中了其它代次就记回它自己的账」。
+// 归档整体不再读取，这条通道失去全部对象，一并删除。
+// ─────────────────────────────────────────────────────────────────
 
 // AbandonedSourceRange 是一段被人工裁定为永久丢失的源位置区间（查询面数据）。
 type AbandonedSourceRange struct {
@@ -3811,34 +3621,18 @@ func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logty
 		events, err := p.Poll()
 		return events, false, err
 	}
-	archives, err := discoverSourceArchives(source)
-	if err != nil {
-		_ = p.Ledger().RecordGap(p.Key(), 0, 0, ledger.GapReasonArchiveDiscoveryFailed, err.Error())
-		return nil, false, err
-	}
-	pending := pendingArchives(p, archives)
-	if len(pending) > 0 {
-		p.SetRotateTarget(pending[len(pending)-1])
-	}
-
-	// A fresh binding imports historical closed segments before assigning
-	// positions to the current latest.log.
+	// ── 归档采集已删除（2026-10-30 用户裁定）────────────────────────────
+	//
+	// 这里原先有三块：discoverSourceArchives 发现候选 / pendingArchives 过滤已导入 /
+	// importArchivesWithBudget 导入。全部删除：用户要求「只读日志然后往 VL 塞，
+	// 有就有没有就算了」——轮转后的 .gz 不再回读。
+	//
+	// 连带影响：
+	//   · 不再有「新绑定先补历史段」的逻辑（那段也在归档链上）；
+	//   · 轮转后不再等“轮转段可读”（那只服务于回读），直接继续读新文件。
+	// ────────────────────────────────────────────────────────────
 	var all []logtypes.Event
 	metadataChanged := false
-	if p.CurrentSegmentUnread() && len(pending) > 0 {
-		imported, changed, importErr := m.importArchivesWithBudget(p, pending)
-		all = append(all, imported...)
-		metadataChanged = metadataChanged || changed
-		if importErr != nil {
-			return all, metadataChanged, importErr
-		}
-		if pos, ok := p.Positions(); ok {
-			if err := p.RebaseCurrentSegment(pos.Durable); err != nil {
-				return all, metadataChanged, err
-			}
-		}
-		pending = pendingArchives(p, archives)
-	}
 
 	rotated, err := p.PrepareRotation()
 	if err != nil {
@@ -3853,21 +3647,6 @@ func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logty
 		}
 		if confirmErr := p.ConfirmRotationCoverage(); confirmErr != nil {
 			return all, metadataChanged, confirmErr
-		}
-		if len(pending) == 0 {
-			_ = p.Ledger().RecordGap(p.Key(), 0, 0, ledger.GapReasonRotatedSegmentNotReady, "replacement latest.log detected before its rotated segment became readable")
-			return all, metadataChanged, fmt.Errorf("ingest: rotated segment is not available yet")
-		}
-		imported, changed, importErr := m.importArchivesWithBudget(p, pending)
-		all = append(all, imported...)
-		metadataChanged = metadataChanged || changed
-		if importErr != nil {
-			return all, metadataChanged, importErr
-		}
-		if pos, ok := p.Positions(); ok {
-			if err := p.RebaseCurrentSegment(pos.Durable); err != nil {
-				return all, metadataChanged, err
-			}
 		}
 	}
 
@@ -4049,61 +3828,21 @@ func isDecimalDigits(s string) bool {
 	return true
 }
 
-func pendingArchives(p *pipeline.Pipeline, paths []string) []string {
-	entry := p.Ledger().Get(p.Key())
-	imported := make(map[string]bool)
-	if entry != nil {
-		for i := range entry.Segments {
-			segment := entry.Segments[i]
-			// 归档类形态（gzip 与纯文本轮转）统一判定：新增形态若不参与，「已导入」会被反复重发现。
-			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.Imported {
-				// 判据**不能只有路径**：轮转槽位会被复用（java.util.logging `%g` 的
-				// `.0→.1`、`.1→.2` 移位改名），同一路径上的内容会换掉。Worker 停机跨过轮转时，
-				// 换进槽位的内容从未被任何链路读过/投递过，按路径判「已导入」就是静默丢日志。
-				//
-				// 判定的真源在 acquire（内容身份 + 内容锚，见 acquire/content_anchor.go）：
-				// 这里必须调同一个函数，否则「发现」与「导入」两处的口径会漂移成
-				// 「发现说已导入 ⇒ 导入器没机会看到它 ⇒ 仍有丢失」。
-				decision, assessErr := p.AssessArchive(segment.Path)
-				if assessErr != nil || decision.Disposition != acquire.ArchiveTail {
-					// Unknown由Pipeline登记稳定缺口，既不当作Covered也不盲目导入。
-					imported[filepath.Clean(segment.Path)] = true
-				}
-				continue
-			}
-			if ledger.IsArchiveSegmentKind(segment.Kind) && segment.ImportError != "" {
-				if info, err := os.Stat(segment.Path); err == nil && info.Size() == segment.ObservedSize &&
-					info.ModTime().UnixNano() == segment.ObservedModNano {
-					imported[filepath.Clean(segment.Path)] = true
-				}
-			}
-		}
-	}
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if !imported[filepath.Clean(path)] {
-			out = append(out, path)
-		}
-	}
-	return out
-}
-
-func importArchives(p *pipeline.Pipeline, paths []string) ([]logtypes.Event, bool, error) {
-	var out []logtypes.Event
-	changed := false
-	for _, path := range paths {
-		p.RefreshDegrade(time.Now())
-		result, err := p.ImportArchive(path)
-		if result != nil {
-			changed = true
-			out = append(out, result.Events...)
-		}
-		if err != nil {
-			return out, changed, err
-		}
-	}
-	return out, changed, nil
-}
+// ── 归档（gz 轮转文件）采集已按用户裁定整体删除（2026-10-30）──────────────────
+//
+// 用户原话：「把读取gz归档日志通通给我删了，只需要读取日志然后往vl塞，
+// 有就有没有就没有了」
+//
+// 删除的东西：discoverSourceArchives / pendingArchives / importArchives /
+// importArchivesWithBudget / Pipeline.ImportArchive / Pipeline.AssessArchive /
+// acquire.ArchiveImporter 整套（约 2650 行主体 + 配套测试）。
+//
+// 留下的只有：tailer 读**当前活文件**（latest.log / proxy.log.0）→ 归一化 → 投 VL。
+// 轮转后的历史文件不再回读：那属于“有就有、没有就算了”的用户明确取舍。
+//
+// 为什么这一刀必须整块切：归档导入与实时采集共用同一套位置账本与内容锚判定，
+// 只要留一半，就会出现“发现说已导入、导入器却不看”的漂移，比直接不读更糟。
+// ──────────────────────────────────────────────────────────────────
 
 // deliveryTiming 记录一次投递内各阶段的耗时（**纯观测**，不改任何逻辑）。
 //

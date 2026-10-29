@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
@@ -30,9 +29,8 @@ func (t *FileTailer) checkPhysicalMapping() error {
 		// 逻辑 0 就对应物理 0），无需额外证据。
 		return nil
 	}
-	if err := t.rebuildMappingOnReplacedFile(); err == nil {
-		return nil
-	}
+	// 物理映射无法自愈（归档重建机制已删除）：只要不是平凡成立形，一律按不可证明处理。
+	// 用户的架构裁定是「读到就投，读不到就算了」，不做恒久追溯。
 	detail := fmt.Sprintf("%s: path=%q logical_start=%d; refusing to assign new identities without a proven physical origin", PhysicalMappingUnknownReason, t.path, t.segmentStart)
 	if entry := t.led.Get(t.key); entry != nil {
 		for _, gap := range entry.Gaps {
@@ -65,7 +63,7 @@ func (t *FileTailer) FlushPhysicalEOF() ([]logtypes.Event, error) {
 }
 
 func (t *FileTailer) closeRotatedPhysicalLine() error {
-	if !t.pendingPhysicalLine || t.rotateTo == "" || DetectArchiveFormat(t.rotateTo) != ledger.SegmentRotatedText {
+	if !t.pendingPhysicalLine || t.rotateTo == "" {
 		return nil
 	}
 	events, err := t.flushPhysicalLineAt(t.rotateTo)

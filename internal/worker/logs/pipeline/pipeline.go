@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,7 +91,6 @@ type Pipeline struct {
 	wal                 *acquire.WAL
 	inner               *acquire.Pipeline
 	tailer              *acquire.FileTailer
-	imp                 *acquire.ArchiveImporter
 	bound               *NormalizeBoundary
 	hook                DeliveryHook
 	reclaimProof        func(events []logtypes.Event) error
@@ -256,7 +254,6 @@ func New(opts Options) (*Pipeline, error) {
 		budget := *opts.Capacity
 		p.capacityProvider = func() (acquire.CapacityBudget, error) { return budget, nil }
 	}
-	p.imp = acquire.NewArchiveImporter(led, key)
 
 	if opts.Delivery != nil || opts.ContextDelivery != nil {
 		inner.SetDeliverContext(p.deliverContext)
@@ -313,9 +310,6 @@ func New(opts Options) (*Pipeline, error) {
 func (p *Pipeline) SetReadLimits(limits acquire.ReadLimits) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := p.imp.SetReadLimits(limits); err != nil {
-		return err
-	}
 	if p.tailer != nil {
 		return p.tailer.SetReadLimits(limits)
 	}
@@ -324,9 +318,8 @@ func (p *Pipeline) SetReadLimits(limits acquire.ReadLimits) error {
 
 // CloseArchiveReaders 释放归档在途句柄；不改变账本或原物责任。
 func (p *Pipeline) CloseArchiveReaders() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.imp.Close()
+	// 归档导入已删除（2026-10-30）：不再有在途归档句柄。
+	return nil
 }
 
 // Mode 返回当前采集模式。
@@ -813,18 +806,12 @@ func (p *Pipeline) ResolveUnknownThroughProjection(events []logtypes.Event) erro
 // 由上层（ingest Manager）在登记每个源时注入；未注入时导入器只认轮转关联这一条归属凭据，
 // 而**不会**回退成"假设当前代次"。
 func (p *Pipeline) SetArchiveOwnerRegistry(fn func(logSourceID, cleanPath, objectID string) (string, bool)) {
-	if p == nil || p.imp == nil {
-		return
-	}
-	p.imp.SetOwnerRegistry(fn)
+	// 归档导入已删除：owner registry 不再需要转发。
 }
 
 // SetArchiveBackfill 注入「按原代次补账」通道（命中其它代次且其账本可寻址时使用）。
 func (p *Pipeline) SetArchiveBackfill(fn func(ownerGeneration, archivePath, objectID string) error) {
-	if p == nil || p.imp == nil {
-		return
-	}
-	p.imp.SetBackfill(fn)
+	// 归档导入已删除：backfill 不再需要转发。
 }
 
 // ArchiveImportBatchMin / ArchiveImportBatchSlack 决定归档导入的**单批事件数上界**。
@@ -847,309 +834,16 @@ func (p *Pipeline) SetArchiveBackfill(fn func(ownerGeneration, archivePath, obje
 // **不放宽上限**：本常量只决定「一次喂多少」，闸门阈值与语义一字不动（wal.go 的上限存在
 // 的理由是防单源积压撑爆状态文件，曾有 1.2GB 状态文件事故）。
 // **不绕过 WAL**：每批都先落 WAL 再投递，WAL 的「先持久化再投递」耐久性保证逐批成立。
-const (
-	// archiveImportBatchMax 是单批上限：即使配置把 WAL 上限抬得很高，也不允许单批回到
-	// 「一次几十万条」的形态——那正是 5s 客户端超时与 VL 单请求体量失控的来源
-	// （见 insertBatchMaxEvents 的同型教训）。
-	archiveImportBatchMax = 5000
-)
-
-// archiveImportBudget 返回**本轮**归档导入可放行的事件数上界，以及「本轮是否可以推进」。
+// ── 归档（gz / 纯文本轮转）导入已整体删除（2026-10-30 用户裁定）────────────────
 //
-// 取两重界（先到者生效）：
-//  1. **上限的一半**（`maxEntries/2`）：给 reclaim 留推进余量。闸门判据是
-//     `backlog > maxEntries`，而单批追加量 ≤ 上限的一半 ⇒ 空积压的源追加完也不会越闸。
-//  2. **当前余量**（`maxEntries - 当前积压`）：源已经带了积压时，按剩下的空间切批。
-//     没有这一条，「稳态带积压的源」仍会被一次 1/2 上限的追加顶过闸（例如积压 15000、
-//     上限 20000、追加 10000 ⇒ 25000 > 20000 ⇒ 暂停）。生产现场的源普遍带积压，
-//     故这一条不是理论顾虑，而是让修复对**真实形态**成立的必要条件。
+// 用户原话：「把读取gz归档日志通通给我删了，只需要读取日志然后往vl塞，
+// 有就有没有就没有了」。
 //
-// 返回 ok=false 表示**余量已耗尽**（当前积压已顶到上限）。此时调用方必须**放弃本轮推进**，
-// 而不是强行取一个最小批次：
-//   - 强推必然越闸 ⇒ 触发 `单源积压超过上限，已暂停该源采集` ⇒ 那次暂停又会拒绝后续
-//     追加 ⇒ 正是本缺陷要消灭的「源停死」形态；
-//   - 放弃本轮**不丢数据**：归档没被读完就仍是「未导入」，采集轮 250ms 后必再发现它，
-//     而积压会在这段时间里被回收推进（`Ingest` 每次追加前都会 `TryReclaim`）。
-//
-// 读的是 WAL 自己的**生效**上限（含恢复期拓宽与默认值归一，见 acquire.WAL.EffectiveLimits），
-// 而不是再写一个常数：上限被配置抬高/降低时批次自动同步
-// ——「代码默认 2000 条、生产生效 20000 条」这种脱节正是本缺陷的现场形态之一。
-func (p *Pipeline) archiveImportBudget() (int, bool) {
-	if p.wal == nil {
-		// 没有 WAL 可读（测试替身/异常构造）：退回「一次读完整包」的既有行为。
-		return 0, true
-	}
-	maxEntries, _ := p.wal.EffectiveLimits()
-	if maxEntries <= 0 {
-		return 0, true
-	}
-	size := int(maxEntries / 2)
-	if size > archiveImportBatchMax {
-		size = archiveImportBatchMax
-	}
-	// 顺序固定：先取上限，再**被余量夹住**。余量夹取必须最后做——若先套下限再夹，
-	// 下限本身就可能大于余量（`min > headroom`）⇒ 放行量越闸，正是本缺陷的形态。
-	backlog, _ := p.wal.Backlog()
-	headroom := int(maxEntries - backlog)
-	if headroom <= 0 {
-		return 0, false
-	}
-	if headroom < size {
-		size = headroom
-	}
-	return size, true
-}
-
-// archiveImportBatchSize 返回单批事件数上界（不含「余量已耗尽」这一信息）。
-// 仅供诊断与回归断言使用；生产路径必须用 archiveImportBudget —— 否则会把
-// 「余量耗尽」误读成「可以推一个最小批次」，那正是越闸暂停的入口。
-func (p *Pipeline) archiveImportBatchSize() int {
-	size, ok := p.archiveImportBudget()
-	if !ok {
-		return 0
-	}
-	return size
-}
-
-// AssessArchive 与实际导入共用三态裁定，并把未知槽位写入稳定可见的隔离状态。
-// 发现层不能仅检查 Import=false 后隐藏未知内容。
-func (p *Pipeline) AssessArchive(path string) (acquire.ReimportDecision, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.imp.AssessArchive(path)
-}
-
-// ImportArchive 导入一个归档（gzip 压缩归档或纯文本轮转归档）；已关联轮转时跳过整包，禁止双计。
-//
-// 形态由**文件头**判定后分流（见下方 import 调用处的说明），两种形态共用本方法的其余全部
-// 语义（准入预算、采样、归一、落库与「已导入」标记）。
-//
-// **分批入账 + 跨轮续传**（缺陷二修复，2026-10-10）。
-//
-// 现场：`inst:220/file` 的 544,278 行 gz 解析出 **128,856** 个事件（单源上限 20000 的 6.4 倍），
-// 原实现把它作为**一个**批次交给 WAL ⇒ 一次追加即越闸 ⇒ `单源积压超过上限，已暂停该源采集`；
-// 越闸后 `WAL.Append` 的首判据（已暂停）拒绝**后续**追加 ⇒ 源在暂停上停死、
-// `delivery_pos` 恒 None、VL 侧 0 行，且 5 分钟内零自愈（暂停源 101→102）。
-//
-// 为什么必须「跨轮」而不只是「循环切批」（实测教训，本修复的第二版）：
-// 第一版在一个调用内循环切批，**仍然转红** —— 因为回收（`TryReclaim`）只在
-// 「责任已转移」时放行，而一批刚投完的条目往往还不可回收，于是积压**逐批累加**：
-// 300 条上限下第 2 批就把 entries 顶到 512 并触发暂停。切批只降低**单次追加量**，
-// 并不降低**累积量**。真正有界的是「每轮只推到本轮余量允许的位置，然后让路」。
-//
-// 于是本次的语义是：
-//   - 单次调用最多推进到「当前余量允许」的边界（余量 = 生效上限 − 当前积压）；
-//   - 位置随后**落回账本分段**（EndPos），归档仍标记为**未导入** ⇒ 采集轮下一轮继续；
-//   - 只有真正读到归档 EOF 才 `MarkImported`（见 acquire.ArchiveImporter 的说明）；
-//   - 采集轮 250ms 一跳，故「跨轮」不是延迟问题，而是让回收有机会在两轮之间推进。
-//
-// 不丢数据的论证（逐条）：
-//   - 已推进的每一批都走完整链路（WAL 追加 → Commit(durable) → 投递 → 结果落账）；
-//   - 未推进的部分既没被读进 WAL、也没被标成已导入 ⇒ 必然会被下一轮重新发现；
-//   - 续读位置来自账本分段（可持久化），故进程重启后仍从断点续读，不重复读已消费前缀；
-//   - 因此「丢」不可能发生（每段要么已落库、要么仍在待导入集合里），
-//     而「重」由既有 event_id + 位置账本幂等收敛（本修复不新增判据）。
-func (p *Pipeline) ImportArchive(path string) (imported *acquire.ImportResult, errOut error) {
-	// 与 Poll / Flush 共用同一把 per-pipeline 锁（SAMPLING-1）：本方法会走
-	// `sampleEvents`（`Sampler.Process` → `s.sigs`）与 `ingest`（WAL/投递/回收证明），
-	// 而归档导入入口（手动 + 定时扫描）与在飞采集 worker 是两条独立 goroutine。
-	p.mu.Lock()
-	defer p.finishArchiveAcquisition(path, &imported, &errOut)
-	var acceptedThrough uint64
-	hadPrefix := false
-	if entry := p.led.Get(p.key); entry != nil {
-		for _, segment := range entry.Segments {
-			if segment.Path == path {
-				acceptedThrough = segment.EndPos
-				hadPrefix = true
-				break
-			}
-		}
-	}
-	// 先给回收一次机会，再评估本轮余量。
-	//
-	// 为什么这一步不能省（现场「不自愈」形态的机制本体）：`acquire.Pipeline.Ingest` 在每次
-	// 追加**之前**才 TryReclaim；而「余量耗尽」时我们**不会**调用 Ingest ⇒ 若不在这里补一次
-	// 回收，源一旦顶到上限就再也没有任何东西推动回收 ⇒ 余量永远回不来 ⇒ 归档导入永久推迟。
-	// 这与现场观察到的「暂停源 101→102、5 分钟零自愈」是同一种死结，必须在这里断开。
-	//
-	// 语义与既有采集循环一致（那里每轮也先 TryReclaim 再追加）；失败不致命：
-	// 无恢复分段/责任未转移时 TryReclaim 本就不放行（会原样返回错误），此时按当前余量判定。
-	if p.wal != nil {
-		if _, err := p.wal.TryReclaim(); err != nil {
-			// 回收被门禁拒绝是常态而非异常（见 WAL.TryReclaim 的说明）：它仍会按账本当前水位
-			// 剪枝，故不能因这个错误而中止导入。
-			_ = err
-		}
-	}
-	// 本轮可放行的事件上限（0 = 不限，即退回既有「一次读完整包」）。
-	budget, ok := p.archiveImportBudget()
-	if !ok {
-		// 余量已耗尽（回收也确实推不动）：**本轮不推进**。这不是失败、更不是丢数据
-		// ——归档仍未被标记为已导入，采集轮 250ms 后必再发现它，并在那时再试一次回收。
-		// 强行取最小批次反而会越闸并触发「暂停」⇒ 源停死（正是本次要消灭的形态）。
-		p.archiveImportDeferred.Add(1)
-		return &acquire.ImportResult{Skipped: true,
-			Reason: "wal headroom exhausted; archive import deferred to next round"}, nil
-	}
-	var current acquire.ImportResult
-	{
-		// 单轮只读一批：读满即停并回 Partial，位置落回账本 ⇒ 下一轮从断点继续。
-		//
-		// 形态分流（纯文本轮转归档导入）：按**文件头**判定形态，而不是按扩展名——
-		// BungeeCord 的轮转产物 `proxy.log.N` 没有扩展名，名字判不出形态。判定本身不产生
-		// 新的失败语义：判不出（打不开/文件太短）时交回 gzip 路径，由它按既有原因码如实登记
-		// （见 acquire.DetectArchiveFormat 的判据与兜底）。
-		var res *acquire.ImportResult
-		var err error
-		switch acquire.DetectArchiveFormat(path) {
-		case ledger.SegmentRotatedText:
-			res, err = p.imp.ImportTextBounded(path, budget)
-		default:
-			// gzip 是既有的唯一形态，也是判定失败时的安全默认：异常取值不得让归档
-			// 悄悄不被处理（那会表现为「归档在目录里、却永远不进 VL」）。
-			res, err = p.imp.ImportGzipBounded(path, budget)
-		}
-		if err != nil || res == nil {
-			return res, err
-		}
-		current = *res
-	}
-	if current.Skipped || len(current.Events) == 0 {
-		out := current
-		return &out, nil
-	}
-
-	normalizeOpts := p.normalizeOpts
-	// 无日期时刻的锚点必须**跨重导稳定**（2026-10-20 真机验收根因）。
-	//
-	// 三条优先级，逐条都有存在理由：
-	//  1. 文件名带日期（`2026-10-15-1.log.gz`）——最权威，沿用既有 archiveUTCDay 口径 ✓；
-	//  2. 段上已固化的 BaseDay —— 文件名不带日期的形态（如 BungeeCord 的 `proxy.log.0`）：
-	//     首次导入时固化，此后每次重导复用，保证同一段永远得同一哈希 ✓；
-	//  3. 文件 mtime 的 UTC 日 —— 首次导入且文件名无日期时的初始锚点，取到后立即固化。
-	//
-	// 修前只有第 1 条，其余形态直接落到 normalize 的 now 兜底 ⇒ 同一段每次重导补出不同
-	// 日期 ⇒ 同 event_id 多哈希（EventID 只含区间、不含内容）⇒ 不可裁定 ⇒ 每次启动重新
-	// 累计 IdentityConflicts ⇒ ConflictCount>0 ⇒ 查询降级 + 前端禁用导出。
-	if day, dayErr := archiveUTCDay(path); dayErr == nil {
-		normalizeOpts.BaseTime = day.Add(12 * time.Hour)
-	} else if day, dayOK := p.archiveBaseDay(path); dayOK {
-		normalizeOpts.BaseTime = day.Add(12 * time.Hour)
-	}
-	boundary := NewNormalizeBoundary(normalizeOpts)
-	for _, raw := range current.Events {
-		boundary.Feed([]byte(raw.Message), raw.Record.Start, raw.Record.End)
-	}
-	boundary.FlushComplete()
-	events := boundary.DrainEvents()
-	for i := range events {
-		if events[i].Fields == nil {
-			events[i].Fields = make(map[string]string)
-		}
-		events[i].Fields["archive_object_id"] = current.ArchiveObjectID
-	}
-
-	result := current
-	result.Events = events
-	// ImportedCount 保持**采样前**的条数：它回答的是「这次从归档里导入了多少」，
-	// 而 Events 才是「实际落库的那批」。两者口径不同不能混用，否则现场无法判断归档是否完整。
-	result.ImportedCount = len(events)
-
-	var cursor ledger.Segment
-	cursorFound := false
-	if entry := p.led.Get(p.key); entry != nil {
-		for _, segment := range entry.Segments {
-			if segment.Path == path {
-				cursor = segment
-				cursorFound = true
-				break
-			}
-		}
-	}
-	// 在消耗Burst/Budget/summary及签名淘汰状态之前原子预留追加窗；发布lease不能在检查后抢入。
-	// 锁序仍为采集p.mu→WAL短元数据锁，reservation只跨采样/Append，不跨Commit、journal或网络。
-	reservation, ingestErr := p.wal.ReserveAppend(events)
-	if ingestErr == nil {
-		defer reservation.Release()
-		sampled := p.sampleEvents(events)
-		result.Events = sampled
-		if len(sampled) > 0 {
-			ingestErr = p.ingest(sampled, reservation)
-		}
-		reservation.Release()
-	}
-	if errors.Is(ingestErr, acquire.ErrWALWindowBusy) {
-		if !cursorFound || len(current.Events) == 0 {
-			return &result, errors.Join(ingestErr, errors.New("pipeline: 缺少精确归档回退凭据，保持可见未接收责任"))
-		}
-		if !hadPrefix {
-			acceptedThrough = cursor.StartPos
-		}
-		from := current.Events[0].Record.Start
-		gapErr := p.led.RecordGap(p.key, from, current.Events[len(current.Events)-1].Record.End, ledger.GapReasonAppendRejected, ingestErr.Error())
-		rollbackErr := p.imp.RewindUnaccepted(cursor, from, acceptedThrough)
-		result.Events = nil
-		result.ImportedCount = 0
-		result.Partial = true
-		return &result, errors.Join(ingestErr, gapErr, rollbackErr)
-	}
-	if ingestErr != nil {
-		// 本批未落库：如实上报（不伪装成成功），且**不置 Imported** ⇒ 下一轮重来。
-		return &result, ingestErr
-	}
-
-	// Imported由锁外真实耐久完成后的复核点登记，不能只信内存Durable。
-	return &result, nil
-}
-
-func (p *Pipeline) finishArchiveAcquisition(path string, imported **acquire.ImportResult, outErr *error) {
-	var expected ledger.Segment
-	found := false
-	if entry := p.led.Get(p.key); entry != nil {
-		for _, segment := range entry.Segments {
-			if segment.Path == path {
-				expected, found = segment, true
-				break
-			}
-		}
-	}
-	p.finishAcquisition(outErr)
-	result := *imported
-	if *outErr != nil || result == nil || result.Skipped || result.Partial || len(result.Events) == 0 || !found {
-		return
-	}
-	// 锁序仅p.mu→ledger叶子；复核归档对象与读取游标，禁止旧EOF给后来替换/续读的归档授证。
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	entry := p.led.Get(p.key)
-	if entry == nil {
-		return
-	}
-	for _, current := range entry.Segments {
-		if current.Path != path {
-			continue
-		}
-		if current.ArchiveObjectID != expected.ArchiveObjectID || current.StartPos != expected.StartPos || current.EndPos != expected.EndPos || current.IdentitySHA256 != expected.IdentitySHA256 || current.IdentityBytes != expected.IdentityBytes || current.ObservedSize != expected.ObservedSize || current.ObservedModNano != expected.ObservedModNano {
-			*outErr = fmt.Errorf("pipeline: archive changed while durable commit was in flight")
-			return
-		}
-		*outErr = p.imp.MarkImported(path, result.ArchiveObjectID, result.Events[0].Record.Start, result.Events[len(result.Events)-1].Record.End)
-		return
-	}
-}
-
-func archiveUTCDay(path string) (time.Time, error) {
-	name := filepath.Base(path)
-	if len(name) < len("2006-01-02") {
-		return time.Time{}, fmt.Errorf("pipeline: archive filename has no UTC day")
-	}
-	day := name[:len("2006-01-02")]
-	if strings.Count(day, "-") != 2 {
-		return time.Time{}, fmt.Errorf("pipeline: archive filename has no UTC day")
-	}
-	return time.ParseInLocation("2006-01-02", day, time.UTC)
-}
+// 删除内容：archiveImportBudget / archiveImportBatchSize / AssessArchive /
+// ImportArchive / finishArchiveAcquisition / archiveBaseDay 及配套 const。
+// 归档导入原本为「回读轮转历史」服务，它与实时采集共用同一套位置账本与内容锚判定，
+// 留着任何一半都会造成“发现说已导入、导入器却不看”的漂移。整块切掉。
+// ─────────────────────────────────────────────────────────────────
 
 // archiveBaseDay 给「文件名不带日期」的归档形态提供**跨重导稳定**的无日期时刻锚点日。
 //

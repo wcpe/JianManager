@@ -14,7 +14,8 @@ import (
 //
 // 证据口径说明：夹具的投递桩设在 pipeline 层（p.SetDelivery），而直投步走 Manager 面
 // （m.deliver）⇒ 桩不在其调用路径上 ✓；因此「零丢失」以**账本层双证**为准：
-//  ① delivery 越过缝；② delivery_batch 出现覆盖缝区间的批次记录（该批的字节区间 ⊇ 缝）。
+//
+//	① delivery 越过缝；② delivery_batch 出现覆盖缝区间的批次记录（该批的字节区间 ⊇ 缝）。
 //
 // 场景即现场 179 的等价形态：待重读类缝钉住 delivery ⇒ reclaim 无法前进（依赖环 ✗）。
 func TestDirectDeliveryClosesResolvedReReadGap(t *testing.T) {

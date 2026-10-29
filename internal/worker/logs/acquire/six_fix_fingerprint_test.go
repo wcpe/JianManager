@@ -142,25 +142,3 @@ func TestSixFixTruncatedAnchorAndAppendedIDsSurviveJSONThreeStarts(t *testing.T)
 		tailer = restarted
 	}
 }
-
-func TestSixFixArchiveTailUsesReanchoredPhysicalMapping(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "proxy.log.1")
-	body := "surviving-prefix\nnew-tail\n"
-	require.NoError(t, os.WriteFile(path, []byte(body), 0600))
-	key, led := testKey("six-reanchor-archive", "g1"), ledger.New()
-	imp := NewArchiveImporter(led, key)
-	idBytes, idSHA, err := ContentIdentity(path)
-	require.NoError(t, err)
-	const base = uint64(1530)
-	physicalStart := uint64(len("surviving-prefix\n"))
-	require.NoError(t, led.AdvanceRead(key, base))
-	require.NoError(t, led.AdvanceDurable(key, base))
-	require.NoError(t, led.RegisterSegment(key, ledger.Segment{Path: path, Kind: ledger.SegmentRotated, StartPos: base, EndPos: base, PhysicalStart: physicalStart, PhysicalMappingKnown: true, IdentityBytes: idBytes, IdentitySHA256: idSHA}))
-	result, err := imp.ImportText(path)
-	require.NoError(t, err)
-	require.Len(t, result.Events, 1)
-	require.Equal(t, "new-tail", result.Events[0].Message)
-	require.Equal(t, base, result.Events[0].Record.Start)
-	require.Equal(t, base+uint64(len("new-tail\n")), result.Events[0].Record.End)
-	require.NoError(t, imp.Close())
-}

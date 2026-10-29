@@ -12,7 +12,7 @@ import (
 // TestCanonicalRecoveryEventsAdjudicatesTailPartialDuplicate 验收 #179 身份冲突件（下游处置）：
 // 同源、**同记录区间**、异哈希、一方严格更长（轮转尾部残行 vs 重读完整行，现场 947 B vs 1034 B）
 // ⇒ 取较长者（完整行）✓；其余形态（异区间/等长）自 2026-10-08 起改为**保留先到者、跳过冲突行**
-//（确定性冲突曾致整批投递/恢复永久失败、水位钉死，判据不再以失败收场）。
+// （确定性冲突曾致整批投递/恢复永久失败、水位钉死，判据不再以失败收场）。
 func TestCanonicalRecoveryEventsAdjudicatesTailPartialDuplicate(t *testing.T) {
 	identity := logtypes.SourceIdentity{LogSourceID: "inst:179", SourceGeneration: "g1", ParserVersion: "v1"}
 	rec := logtypes.RecordRange{Start: 328911045, End: 328911216}

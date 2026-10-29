@@ -9,14 +9,15 @@ import (
 
 	"encoding/json"
 	"fmt"
-	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
-	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"

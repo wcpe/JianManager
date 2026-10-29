@@ -252,7 +252,7 @@ type ArchivePurgeOutcome struct {
 	Objects int
 	// Err 非空表示失败或回滚的原因。
 	Err error
-	At    time.Time
+	At  time.Time
 }
 
 // ArchivePurgeStats 是归档对象清除的累计读数。

@@ -112,15 +112,3 @@ func TestInodeMatchesSegmentRequiresRecordedInode(t *testing.T) {
 	seg.InodeKnown = true
 	require.True(t, inodeMatchesSegment(seg), "标记打开时必然匹配 ✓")
 }
-
-// TestDecideArchiveReimportSkipsOnInodeMatch 确认接线：inode 命中时
-// DecideArchiveReimport 直接判 ArchiveCovered（不再依赖内容锚）。
-func TestDecideArchiveReimportSkipsOnInodeMatch(t *testing.T) {
-	dir := t.TempDir()
-	_, seg := writeWithInode(t, dir, "same.log.gz", "same-content\n")
-
-	decision := DecideArchiveReimport(nil, seg)
-	require.Equal(t, ArchiveCovered, decision.Disposition,
-		"inode 命中 ⇒ 直接判已覆盖，不需要内容锚（旧账本也能走通）✓")
-	require.False(t, decision.Import, "不得重导 ✓")
-}

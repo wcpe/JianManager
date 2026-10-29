@@ -545,9 +545,9 @@ func TestMetricsHandlerReflectsArchiveObjectPurge(t *testing.T) {
 	ex := scrapeMetricsWithPurge(t, src)
 
 	want := map[string]float64{
-		"jm_log_retention_archive_purged_total":                    7,
-		"jm_log_retention_archive_purge_failed_total":              2,
-		"jm_log_retention_archive_purge_rolled_back_total":         1,
+		"jm_log_retention_archive_purged_total":                     7,
+		"jm_log_retention_archive_purge_failed_total":               2,
+		"jm_log_retention_archive_purge_rolled_back_total":          1,
 		"jm_log_retention_archive_purge_last_run_timestamp_seconds": float64(at.Unix()),
 	}
 	for name, w := range want {

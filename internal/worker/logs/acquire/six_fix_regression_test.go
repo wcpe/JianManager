@@ -124,32 +124,6 @@ func TestSixFixFsyncFailureDoesNotQualifyAtHigherDurable(t *testing.T) {
 	require.Equal(t, uint64(1000), led.Get(key).Positions.Durable)
 }
 
-func TestSixFixUnknownReusedSlotIsStableAndVisible(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "proxy.log.1")
-	old := "old-content-before-shutdown\n"
-	require.NoError(t, os.WriteFile(path, []byte(old), 0600))
-	key, led := testKey("six-unknown-slot", "g1"), ledger.New()
-	imp := NewArchiveImporter(led, key)
-	first, err := imp.ImportText(path)
-	require.NoError(t, err)
-	require.NoError(t, imp.MarkImported(path, first.ArchiveObjectID, 0, uint64(len(old))))
-	unknown := []byte("unseen-content-written-while-worker-was-stopped\n")
-	require.NoError(t, os.WriteFile(path, unknown, 0600))
-	for n := 0; n < 3; n++ {
-		res, err := imp.ImportText(path)
-		require.NoError(t, err)
-		require.Empty(t, res.Events, "无锚不得盲目整包分配新身份")
-		require.Equal(t, 1, led.UnresolvedGapCount(key), "未知内容必须稳定登记可见缺口")
-		got, err := os.ReadFile(path)
-		require.NoError(t, err)
-		require.Equal(t, unknown, got)
-		led2 := ledger.New()
-		require.NoError(t, led2.Restore(led.Snapshot()))
-		led, imp = led2, NewArchiveImporter(led2, key)
-	}
-}
-
 func TestSixFixTruncationMappingSurvivesThreeStarts(t *testing.T) {
 	key := testKey("six-trunc-restart", "g1")
 	tailer, lines := truncateFixture(t, key, true)
