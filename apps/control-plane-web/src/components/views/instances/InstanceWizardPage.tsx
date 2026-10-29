@@ -42,7 +42,7 @@ type StepKey = 'basic' | 'launch' | 'advanced' | 'review'
 const inputClass =
   'w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive'
 
-/**
+/** 
  * docker 环境变量键值对行。
  *
  * `id` 只服务于渲染 key（增删行时保住其余行的 DOM 身份），不参与提交载荷——
@@ -73,8 +73,8 @@ function envVarsFromPairs(pairs: EnvVarPair[]): Record<string, string> | undefin
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-/**
- * 创建实例向导页（FR-230，取代 FR-189 的创建模态）：
+/** 
+ * 创建实例向导页（取代的创建模态）：
  * 单独路由 `/instances/new`，分步引导（基本→启动→[高级]→确认）+ 每步大白话提示，
  * 复用既有 POST /instances 与字段校验。?node= / ?template= 支持从实例页/模板页预填。
  * 编辑等其它场景仍用模态（本页只接管「创建」）。
@@ -103,7 +103,7 @@ export interface InstanceWizardPageProps {
   onNodeChange: (nodeId: string) => void
   /** 启动方式变化（外壳据此开关 Docker 检测）。 */
   onProcessTypeChange?: (processType: string) => void
-  /** Docker 可用性检测态（FR-237）。 */
+  /** Docker 可用性检测态。 */
   dockerCheck: WizardDockerCheck
   /** 创建实例；失败请抛错，视图取服务端 message 提示。 */
   onCreate: (payload: Record<string, unknown>) => Promise<void>
@@ -144,7 +144,7 @@ export function InstanceWizardPage({
   const [groupId, setGroupId] = useState('')
   const [templateId, setTemplateId] = useState(initialTemplateId)
   const [jdkId, setJdkId] = useState('')
-  // docker 环境变量键值对（FR-236）：一键 Minecraft 预设注入 EULA=TRUE；可手动增删。
+  // docker 环境变量键值对：一键 Minecraft 预设注入 EULA=TRUE；可手动增删。
   const [envPairs, setEnvPairs] = useState<EnvVarPair[]>([])
   const [pending, setPending] = useState(false)
   const gate = useFieldGate()
@@ -210,7 +210,7 @@ export function InstanceWizardPage({
     }
   }
 
-  // 一键 Minecraft docker 傻瓜建服（FR-236）：itzg 镜像 + EULA=TRUE + 空命令（交镜像 entrypoint 自管启动）。
+  // 一键 Minecraft docker 傻瓜建服：itzg 镜像 + EULA=TRUE + 空命令（交镜像 entrypoint 自管启动）。
   const applyMinecraftDockerPreset = () => {
     setType('minecraft_java')
     setImage('itzg/minecraft-server:latest')
@@ -357,7 +357,7 @@ export function InstanceWizardPage({
 
         {step === 'advanced' && (
           <div className="space-y-3">
-            {/* Docker 可用性检测（FR-237）：探目标节点 Docker，不可用提示并阻止提交 */}
+            {/* Docker 可用性检测：探目标节点 Docker，不可用提示并阻止提交 */}
             {dockerCheck.fetching && (
               <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('instances.dockerChecking')}</p>
             )}
@@ -372,7 +372,7 @@ export function InstanceWizardPage({
                 {dockerCheck.error ? `：${dockerCheck.error}` : ''}
               </p>
             )}
-            {/* 一键 Minecraft 傻瓜建服（FR-236）：itzg 镜像 + EULA=TRUE + 空命令 */}
+            {/* 一键 Minecraft 傻瓜建服：itzg 镜像 + EULA=TRUE + 空命令 */}
             <div className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium">{t('instances.dockerMcPresetTitle')}</p>
@@ -443,7 +443,7 @@ export function InstanceWizardPage({
   )
 }
 
-/**
+/** 
  * 字段壳：标签 + 必填星 + 子控件 + 错误。
  *
  * **可访问名**：`FieldLabel` 渲染的是 `<label>`，但没有 `htmlFor` 时它不与任何控件关联——
@@ -485,7 +485,7 @@ function ReviewRow({ label, value, mono }: { label: string; value: string; mono?
   )
 }
 
-/** docker 环境变量键值对编辑器（FR-236）：itzg 需 EULA=TRUE 等；增删行、空键提交时忽略。 */
+/** docker 环境变量键值对编辑器：itzg 需 EULA=TRUE 等；增删行、空键提交时忽略。 */
 function EnvVarsEditor({
   pairs,
   onChange,

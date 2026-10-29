@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-/** FR-502：设计 token 已归一到 packages/ui/src/styles/，故暗色 token 断言改读组件包。 */
+/** 设计 token 已归一到 packages/ui/src/styles/，故暗色 token 断言改读组件包。 */
 const repoRoot = resolve(root, '../../..')
 
 function source(path: string): string {
@@ -42,7 +42,7 @@ describe('暗色模式设计表面', () => {
   it('Shell 与统一控制台不再写死浅色专用 Tailwind 类', () => {
     const files = [
       'components/console/ConsoleHeader.tsx',
-      // 桌面侧栏（FR-502 阶段 6 起由 DashboardPage 挂载）。
+      // 桌面侧栏（阶段 6 起由 DashboardPage 挂载）。
       // 旧侧栏 `ConsoleSidebar` 已在阶段 6 末尾随 nav-config.ts 一并删除，不再列入。
       'components/views/console/WorkspaceSidebar.tsx',
       'components/console/InstanceConsolePage.tsx',

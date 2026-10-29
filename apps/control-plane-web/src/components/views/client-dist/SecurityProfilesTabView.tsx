@@ -1,4 +1,4 @@
-/**
+/** 
  * @file SecurityProfilesTabView：安全侧「客户端画像」Tab（列表 + 详情弹窗）的受控视图。
  *       列表与详情取数、路由查询串读写、脱敏策略由应用容器负责。
  * @input lib/client-dist-security-contracts（ClientDistSecurityProfile/ClientDistSecurityProfileDetail）、
@@ -7,7 +7,7 @@
  *        views/UntrustedFieldBadge、Badge/Button/Dialog/Input/Panel/Table 原语、翻译上下文
  * @output SecurityProfilesTabView、SecurityProfilesTabViewProps、ProfileMaskers
  * @sync apps/control-plane-web/src/components/client-dist/SecurityProfilesTab.tsx
- * @since FR-508（组件受控化迁包；原 FR-430 / ADR-088 客户端画像 Tab，含 FR-360 面板脱敏）
+ * @since（组件受控化迁包；原ADR-088 客户端画像 Tab，含面板脱敏）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -22,8 +22,8 @@ import type { ClientDistSecurityProfile, ClientDistSecurityProfileDetail } from 
 import type { ClientDistQuery, ClientDistQueryKey } from '@/lib/client-dist/client-dist-query'
 import { EmptyState, SECURITY_EMPTY as EMPTY, fmtTime, levelVariant } from '@/components/views/client-dist/security-format'
 
-/**
- * 脱敏函数注入（FR-360）：隐私策略归应用侧，包内不持有明文展示策略。
+/** 
+ * 脱敏函数注入：隐私策略归应用侧，包内不持有明文展示策略。
  * 视图只负责把容器给的函数作用到展示字段上，不自行决定打码规则。
  */
 export interface ProfileMaskers {
@@ -35,7 +35,7 @@ export interface ProfileMaskers {
   installId: (value: string | null | undefined) => string
 }
 
-/**
+/** 
  * 客户端画像 Tab 的注入契约（受控视图，ADR-103 a 范式）。
  *
  * 受控边界：列表与详情数据、加载/错误态经 props 注入（应用容器调

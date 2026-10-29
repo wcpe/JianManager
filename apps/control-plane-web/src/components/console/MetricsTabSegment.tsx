@@ -6,7 +6,7 @@ import MetricsTabSegmentView from '@/components/views/instances/MetricsTabSegmen
 import MetricsSegment from './MetricsSegment'
 import MetricsFallbackSegment from './MetricsFallbackSegment'
 
-/**
+/** 
  * `metrics` Tab 分流器的应用接线层（ADR-103）。
  *
  * 分流判定留在应用侧：它要读能力画像与探针可用性（`resolveMetricsTabStyle` 也是应用侧知识）。
@@ -17,7 +17,7 @@ export default function MetricsTabSegment({ instanceId }: { instanceId: number }
   const profile = useInstanceCapabilities(instance)
   const { data: metrics } = useInstanceMetrics(instanceId, true)
   const style = resolveMetricsTabStyle(profile, {
-    // FR-447 接入点：采集降级编排落地后，此处补 `sourceAvailable` 更细可用性位。
+    // 接入点：采集降级编排落地后，此处补 `sourceAvailable` 更细可用性位。
     probeAvailable: metrics?.probeAvailable,
   })
 

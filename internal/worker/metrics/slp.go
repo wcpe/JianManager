@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// SLPSnapshot 是 Minecraft Server List Ping（SLP）状态响应的解析结果（FR-446）。
+// SLPSnapshot 是 Minecraft Server List Ping（SLP）状态响应的解析结果。
 //
 // SLP 是 MC 协议内建能力：任何在跑的 Java 版服务端（含 BungeeCord/Velocity 代理）
 // 无需任何配置即支持，是「保底可见」的关键来源。它取 MOTD / 版本 / 在线人数 /
@@ -40,7 +40,7 @@ const (
 	maxSLPResponseBytes = 1 << 20 // 1MiB
 )
 
-// PingSLP 面向 server-port 做一次 SLP 状态探测并解析结果（FR-446）。
+// PingSLP 面向 server-port 做一次 SLP 状态探测并解析结果。
 // 超时/连接拒绝/协议不符 → 返回 error，调用方据此降级（不 panic、不阻塞其它来源）。
 func PingSLP(host string, port int, timeout time.Duration) (*SLPSnapshot, error) {
 	if port <= 0 {

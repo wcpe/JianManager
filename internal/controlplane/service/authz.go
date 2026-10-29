@@ -38,7 +38,7 @@ const (
 	PermInstanceCreate  PermissionNode = "instance:create"
 	// PermInstanceBusinessWrite 业务高危写（改余额/改背包等 manifest readOnly=false 动作）。
 	// 与 instance:operate 同级（组管理员/组成员均可持有，具体实例由 CanAccessInstance 收敛）；
-	// 与只读/低危业务动作分离，挡越权高危写（FR-121，见 ADR-029）。
+	// 与只读/低危业务动作分离，挡越权高危写（见 ADR-029）。
 	PermInstanceBusinessWrite PermissionNode = "instance:business:write"
 
 	// 文件管理（按实例所属组隔离）
@@ -55,7 +55,7 @@ const (
 
 // UserAccess 当前用户的授权上下文，由 LoadUserAccess 构建。
 // 平台管理员的 IsPlatformAdmin 为 true，权限检查全部放行；
-// 其余用户 Nodes 为权限树有效集合（FR-432 / ADR-089）。
+// 其余用户 Nodes 为权限树有效集合（ADR-089）。
 type UserAccess struct {
 	UserID           uint
 	Role             model.UserRole
@@ -70,7 +70,7 @@ type UserAccess struct {
 
 // AuthzService 授权服务，负责加载用户授权上下文并执行权限判断。
 // 参见 ADR-004: 用户组替代多租户（基于用户组而非 tenant_id 做隔离）。
-// 权限树节点见 ADR-089（FR-432）。
+// 权限树节点见 ADR-089。
 type AuthzService struct {
 	db   *gorm.DB
 	perm *PermissionService
@@ -171,7 +171,7 @@ func (a *UserAccess) HasPermission(node PermissionNode) bool {
 	}
 }
 
-// HasNode 权限树节点检查（FR-432）。
+// HasNode 权限树节点检查。
 func (a *UserAccess) HasNode(node string) bool {
 	if a == nil {
 		return false
@@ -287,7 +287,7 @@ func (s *AuthzService) CanAccessBot(access *UserAccess, botID uint) (bool, error
 // AccessibleInstanceIDs 返回用户可访问（可读）的实例 ID 集合，用于将跨组隔离下沉为 SQL 谓词。
 // 平台管理员返回 (nil, false)，表示不收敛（调用方不应附加实例 IN 过滤）；
 // 非管理员返回 (ids, true)，ids 为其可访问组下的实例 ID（可能为空切片，表示无任何可见实例）。
-// 万级 Bot 下不可用逐条 CanAccessInstance 循环，故以集合谓词替代（参见 FR-038）。
+// 万级 Bot 下不可用逐条 CanAccessInstance 循环，故以集合谓词替代（参见）。
 func (s *AuthzService) AccessibleInstanceIDs(access *UserAccess) ([]uint, bool, error) {
 	if access.IsPlatformAdmin {
 		return nil, false, nil
@@ -342,14 +342,14 @@ type QuotaUsage struct {
 	UsedInstances int  `json:"usedInstances"`
 	UsedBots      int  `json:"usedBots"`
 	UsedStorageMB int  `json:"usedStorageMb"`
-	// EnforceMode 组级运行期配额强制档位（FR-467）：alert | throttle | stop；
+	// EnforceMode 组级运行期配额强制档位：alert | throttle | stop；
 	// 空串表示继承平台默认 quota.enforce_mode。
 	EnforceMode string `json:"enforceMode"`
 }
 
 // GetQuotaUsage 查询组配额及当前用量。
 // 用量统计：实例数按 group_instances 计数；Bot 数按组内实例关联的 bots 计数；
-// 存储用量取组内各实例的真实工作目录占用（FR-003，逐实例回退备份大小，
+// 存储用量取组内各实例的真实工作目录占用（逐实例回退备份大小，
 // 与运行期强制共用 groupUsedStorageMB 同一口径）。
 func (s *AuthzService) GetQuotaUsage(groupID uint) (*QuotaUsage, error) {
 	var quota model.GroupQuota
@@ -387,7 +387,7 @@ func (s *AuthzService) GetQuotaUsage(groupID uint) (*QuotaUsage, error) {
 	}
 	usage.UsedBots = int(botCount)
 
-	// 存储用量（FR-003）：优先取组内各实例的**真实工作目录占用**，逐实例回退到备份大小。
+	// 存储用量：优先取组内各实例的**真实工作目录占用**，逐实例回退到备份大小。
 	//
 	// 口径必须与运行期强制同源，否则「创建/展示时通过、运行期立刻超限」——
 	// 唯一实现见 groupUsedStorageMB（group_storage.go），此处禁止另写一份 SUM。

@@ -6,8 +6,8 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import WorkspaceCard from '@/components/views/instances/WorkspaceCard'
 
-/**
- * FR-166 统一卡壳 · 受控视图测（ADR-103）。
+/** 
+ *统一卡壳 · 受控视图测（ADR-103）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。文案取自 zh.json 原值。
  */
@@ -50,7 +50,7 @@ function renderCard(props: Partial<Props> = {}) {
   return { ...handlers, ...result }
 }
 
-describe('WorkspaceCard（FR-166 · ADR-103）', () => {
+describe('WorkspaceCard（ADR-103）', () => {
   it('渲染注入的标题与实例名，卡内容经 slot 注入', () => {
     const { container } = renderCard({ bodySlot: <div data-testid="body-slot" /> })
 

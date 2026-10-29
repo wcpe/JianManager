@@ -226,7 +226,7 @@ func TestBackupExecuteRestore_PassesStorageKeysAndChecksums(t *testing.T) {
 	require.Equal(t, []string{"aaa", "bbb"}, fake.restoreReq.ChecksumSha256)
 }
 
-// TestRestore_InstanceStateGuard 恢复前校验实例运行态（FR-013 真机验收缺陷回归）：
+// TestRestore_InstanceStateGuard 恢复前校验实例运行态（真机验收缺陷回归）：
 // 进程可能存活的状态（STARTING/RUNNING/STOPPING）一律拒绝——运行中的 MC 服世界数据持在内存，
 // 覆盖工作目录会被下次自动存档覆盖回去（恢复静默失效）且有损坏风险；
 // STOPPED/CRASHED（进程已退出）放行，崩溃后恢复备份是主要使用场景。
@@ -324,7 +324,7 @@ func TestDelete_RejectedWhenReferenced(t *testing.T) {
 	require.NoError(t, svc.Delete(leaf.ID))
 }
 
-// TestPruneExpired_RemovesOldKeepsRecent 保留 N 天：超 N 天的旧备份被裁剪、未超期的保留（FR-063）。
+// TestPruneExpired_RemovesOldKeepsRecent 保留 N 天：超 N 天的旧备份被裁剪、未超期的保留。
 func TestPruneExpired_RemovesOldKeepsRecent(t *testing.T) {
 	db := newBackupTestDB(t)
 	svc := NewBackupService(db, nil)

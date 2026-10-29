@@ -1,4 +1,4 @@
-/**
+/** 
  * @file InstanceConsolePageView：服务器统一控制台页的受控视图——页头（状态/标题/元信息/操作/可收起指标条）、
  *       页签栏（WAI-ARIA tabs + 键盘循环 + 溢出渐隐）与概览面板（KPI / TPS 火花线 / 日志预览 / 动态与告警）
  *       接收容器注入的数据与回调；页签内容经 `renderTabPanel` 插槽按页签注入（各页签本体是应用侧取数接线层）。
@@ -12,9 +12,9 @@
  *         InstanceConsoleLinkArgs
  * @sync apps/control-plane-web/src/components/console/InstanceConsolePage.tsx、
  *        apps/control-plane-web/src/components/console/InstanceConsolePage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-269 统一控制台、FR-293 最近打开、FR-295/ADR-067 页签 keep-alive、
- *        FR-312 失败原因横幅、FR-331 搭建中禁启、FR-342 损毁重建、FR-343 TPS 真时序、FR-412 瘦身顶栏、
- *        FR-413/445/448 页签重组与能力门控、FR-417 失败原因复制、FR-422/423 视口自适应与分栏、FR-471 运行态漂移）
+ * @since（组件受控化迁包；原页统一控制台最近打开ADR-067 页签 keep-alive、
+ *失败原因横幅搭建中禁启损毁重建TPS 真时序瘦身顶栏、
+ *445/448 页签重组与能力门控失败原因复制423 视口自适应与分栏运行态漂移）
  */
 import { Activity, Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -76,11 +76,11 @@ export interface InstanceConsoleLinkArgs {
   children: ReactNode
 }
 
-/**
+/** 
  * 在线人数四元组：探针 server-state 与实例指标直探（SLP/Query）合并后的口径。
  *
  * 顶栏指标条与概览 KPI 共用同一份合并结果（故在容器算好注入，不在两处各算一次）；
- * 两个可用性位是 FR-446/447 的诚实标记：缺测时显「不可用」，不得以 0 冒充。
+ * 两个可用性位是447 的诚实标记：缺测时显「不可用」，不得以 0 冒充。
  */
 export interface InstanceConsolePlayersSummary {
   /** 在线人数（探针优先，其次直探；缺测给 0，由 `onlineAvailable` 标注）。 */
@@ -107,7 +107,7 @@ export interface InstanceConsoleInstanceActions {
   kill: () => void
 }
 
-/**
+/** 
  * 控制台页受控视图的 props（注入契约）。
  *
  * 命名约定：会触发取数的状态（`activeTab` / `mountedTabs`）一律归容器；
@@ -122,7 +122,7 @@ export interface InstanceConsolePageViewProps {
   metrics?: InstanceMetricsData
   /** 在线人数四元组（页头指标条与概览 KPI 共用同一合并口径）。 */
   players: InstanceConsolePlayersSummary
-  /** 是否具备 MC 世界语义（FR-448）：只影响页内字段取舍与探针提示，不作页签级门控。 */
+  /** 是否具备 MC 世界语义：只影响页内字段取舍与探针提示，不作页签级门控。 */
   mcSemantics: boolean
   /** 能力画像推导出的可见页签（有序，既是渲染集合也是方向键循环顺序）。 */
   visibleTabs: TabKey[]
@@ -132,11 +132,11 @@ export interface InstanceConsolePageViewProps {
   onActiveTabChange: (tab: TabKey) => void
   /** 已访问（保活）页签集合：容器在渲染期并入，本视图据此渲染 `<Activity>` 外壳。 */
   mountedTabs: TabKey[]
-  /** 搭建中（FR-331）：禁用启动入口并给琥珀状态横幅。 */
+  /** 搭建中：禁用启动入口并给琥珀状态横幅。 */
   provisioning: boolean
-  /** 重建在途（FR-342）：禁用重建按钮且不落红色失败横幅。 */
+  /** 重建在途：禁用重建按钮且不落红色失败横幅。 */
   rebuilding: boolean
-  /** 实例写权限（FR-432）：false 时全部写操作禁用并给 tooltip。 */
+  /** 实例写权限：false 时全部写操作禁用并给 tooltip。 */
   canOperate: boolean
   /** 页头写操作回调集合。 */
   actions: InstanceConsoleInstanceActions
@@ -144,16 +144,16 @@ export interface InstanceConsolePageViewProps {
   onNotify?: (kind: 'success' | 'error', message: string) => void
   /** 渲染路由链接（构造 `/tasks`、查看全部日志等入口）；缺省退化为原生 `<a href>`。 */
   renderLink?: (args: InstanceConsoleLinkArgs) => ReactNode
-  /** 运行态漂移横幅（FR-471）：自带接管 mutation 的接线组件，由容器注入。 */
+  /** 运行态漂移横幅：自带接管 mutation 的接线组件，由容器注入。 */
   runtimeDriftBanner?: ReactNode
-  /** 强杀二次确认弹窗（FR-059）：含角色门禁与 kill mutation，由容器注入；本视图只负责挂载位置。 */
+  /** 强杀二次确认弹窗：含角色门禁与 kill mutation，由容器注入；本视图只负责挂载位置。 */
   killConfirmDialog?: ReactNode
   /** 渲染页签内容：容器按页签注入对应接线层组件（各页签本体自取数）。 */
   renderTabPanel: (tab: TabKey) => ReactNode
 }
 
-/**
- * 服务器统一控制台页的受控视图（FR-269）。
+/** 
+ * 服务器统一控制台页的受控视图。
  *
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不触达路由**。
  * - `activeTab` / `mountedTabs` 归容器：前者与 `?tab=` 深链同源且决定子组件取数，后者是 keep-alive 生命周期宿主；
@@ -182,7 +182,7 @@ export function InstanceConsolePageView({
 }: InstanceConsolePageViewProps) {
   const { t } = useTranslation()
 
-  // 指标条折叠偏好（FR-412）：跨实例与刷新保留，收起后顶栏再省一行给内容区。
+  // 指标条折叠偏好：跨实例与刷新保留，收起后顶栏再省一行给内容区。
   const [metricsBarOpen, setMetricsBarOpen] = useState(readMetricsBarPref)
   useEffect(() => {
     try { localStorage.setItem(METRICS_BAR_KEY, metricsBarOpen ? '1' : '0') } catch { /* 隐私模式忽略 */ }
@@ -234,10 +234,10 @@ export function InstanceConsolePageView({
   const canStart = instance.status === 'STOPPED' || instance.status === 'CRASHED'
   const canControl = instance.status === 'RUNNING' || instance.status === 'STARTING' || instance.status === 'STOPPING'
   const isDamaged = instance.status === 'DAMAGED'
-  // 失败原因横幅（FR-312）：只看 statusReason 非空、不看 status——Worker 心跳会把 CRASHED
+  // 失败原因横幅：只看 statusReason 非空、不看 status——Worker 心跳会把 CRASHED
   // 冲回 STOPPED，若以状态为前置条件横幅会随之消失；再次启动时 CP transition 清空 reason，
   // 横幅纯受查询数据驱动消失，不留本地状态。
-  // 搭建中的 statusReason 是进行时状态而非失败（FR-331）：不落红色失败横幅，走下方琥珀状态横幅。
+  // 搭建中的 statusReason 是进行时状态而非失败：不落红色失败横幅，走下方琥珀状态横幅。
   const startFailReason = provisioning || rebuilding ? undefined : instance.statusReason?.trim()
   // <md 主操作（可用性增强）：按状态给唯一带文字的主按钮，其余收进「更多」菜单。
   const primaryAction = canStart
@@ -256,7 +256,7 @@ export function InstanceConsolePageView({
     renderLink ? renderLink(args) : <a href={args.to} className={args.className}>{args.children}</a>
 
   return (
-    // 视口自适应骨架（FR-422）：根与内层都是 flex 列，横幅/顶栏/Tab 栏 flex-none、
+    // 视口自适应骨架：根与内层都是 flex 列，横幅/顶栏/Tab 栏 flex-none、
     // Tab 内容区 flex-1 min-h-0——滚动收口到页内卡片，顶栏常驻可见、底部不留白。
     //
     // 阶段 6 页面迁移：外壳改用布局层 PageShell 的 tool 变体（gap-0 p-0）。
@@ -276,7 +276,7 @@ export function InstanceConsolePageView({
               {/* 原因全文可读：不 truncate / line-clamp，长错误换行展示。 */}
               <p className="mt-0.5 whitespace-pre-wrap break-words">{startFailReason}</p>
             </div>
-            {/* FR-417：失败原因常是一段带路径/堆栈的长文本，要贴去搜索或问人——
+            {/*失败原因常是一段带路径/堆栈的长文本，要贴去搜索或问人——
                 原先只能拖选。复制走 copyToClipboard（含 HTTP 非安全上下文兜底），回执经 onNotify 上报。 */}
             <Button
               type="button"
@@ -296,7 +296,7 @@ export function InstanceConsolePageView({
             </Button>
           </div>
         )}
-        {/* 搭建中状态横幅（FR-331）：琥珀而非红（是进行时不是失败），随 provision 任务终态清 reason 自动消失。 */}
+        {/* 搭建中状态横幅：琥珀而非红（是进行时不是失败），随 provision 任务终态清 reason 自动消失。 */}
         {provisioning && (
           <div
             role="status"
@@ -314,11 +314,11 @@ export function InstanceConsolePageView({
             </div>
           </div>
         )}
-        {/* 运行态漂移告警（FR-471）：工作目录下存在未纳管的活进程——面板可能显示已停止而磁盘在跑，
+        {/* 运行态漂移告警：工作目录下存在未纳管的活进程——面板可能显示已停止而磁盘在跑，
             直接「启动」会双开（后端预检拦，但用户要先看到才有机会接管）。漂移字段由心跳写入，
             接管成功后后端清零 → 本条随查询刷新自动消失，不留本地状态。 */}
         {runtimeDriftBanner}
-        {/* 瘦身顶栏（FR-412）：标题只留实例名（原「服务器控制台 /」前缀与无信息副标题已删），
+        {/* 瘦身顶栏：标题只留实例名（原「服务器控制台 /」前缀与无信息副标题已删），
             节点/端口/运行时长压成一行内联元信息，指标从 7 格 MetaCell 网格改为可收起的 pill 条。 */}
         {/* 顶栏卡片：Card 渲染为 div。原 <header> 位于 <main> 之内（DashboardPage 的
             `[data-slot="console-main"]`），按 HTML-AAM 映射为 generic 而非 banner landmark，
@@ -347,7 +347,7 @@ export function InstanceConsolePageView({
             {!isNarrow && (
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
               {canStart && (
-                // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载（FR-331）。
+                // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载。
                 <span title={!canOperate ? t('permissions.operateDenied') : provisioning ? t('instances.provisioningBlocked') : undefined}>
                   <Button size="sm" disabled={provisioning || !canOperate} data-testid="instance-operate-start" onClick={actions.start}>
                     <Play className="size-3.5" />
@@ -356,7 +356,7 @@ export function InstanceConsolePageView({
                 </span>
               )}
               {isDamaged && (
-                // 损毁实例（FR-342）：显「重建」复用参数重跑搭建；重建在途禁用（tooltip 提示）。
+                // 损毁实例：显「重建」复用参数重跑搭建；重建在途禁用（tooltip 提示）。
                 <span title={!canOperate ? t('permissions.operateDenied') : rebuilding ? t('serverConsole.rebuilding') : undefined}>
                   <Button size="sm" disabled={rebuilding || !canOperate} data-testid="instance-operate-rebuild" onClick={actions.rebuild}>
                     <Hammer className="size-3.5" />
@@ -420,7 +420,7 @@ export function InstanceConsolePageView({
 
           {metricsBarOpen && (
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-              {/* 方案 B 分段状态条（FR-412/446/447/448）：TPS/MSPT 是世界语义专属字段（mcSemantics），
+              {/* 方案 B 分段状态条（446/447/448）：TPS/MSPT 是世界语义专属字段（mcSemantics），
                   仅在 MC 实例出现；探针可用显真实值，否则显「不可用」；在线数由探针 → SLP → Query
                   任一来源提供，三源皆无亦显「不可用」——不再以 0 冒充「0 人在线」；
                   来源由右侧来源芯片标注（探针/SLP/Query）。 */}
@@ -545,13 +545,13 @@ export function InstanceConsolePageView({
           })}
         </Card>
 
-        {/* 页签 keep-alive（FR-295）：访问过的页签全部保持挂载，非活跃者 Activity 隐藏——
+        {/* 页签 keep-alive：访问过的页签全部保持挂载，非活跃者 Activity 隐藏——
             DOM/本地状态（终端缓冲、文件树展开态、未保存草稿）保留，轮询自动暂停。
             保活集合由容器持有（它会改变子组件取数）；本视图只渲染外壳，内容经 renderTabPanel 注入。
-            FR-448：仅渲染画像可见 Tab（实例加载后画像可能收窄，须过滤掉残留的旧 mounted 项）。 */}
+：仅渲染画像可见 Tab（实例加载后画像可能收窄，须过滤掉残留的旧 mounted 项）。 */}
         {mountedTabs.filter((tab) => visibleTabs.includes(tab)).map((tab) => (
           <Activity key={tab} mode={tab === activeTab ? 'visible' : 'hidden'}>
-            {/* 每个页签自身是 flex 列容器（FR-422）：吃满内容区剩余高度。
+            {/* 每个页签自身是 flex 列容器：吃满内容区剩余高度。
                 卡片型页签（终端/文件/监控…）内部自己滚，故此层 hidden；
                 纵向堆叠型页签（概览/环境变量/玩家/备份）在此层滚。 */}
             <div
@@ -569,7 +569,7 @@ export function InstanceConsolePageView({
         ))}
       </div>
 
-      {/* 强杀二次确认（FR-059）：与实例列表页同款 DangerConfirm，组管理员及以上可确认。 */}
+      {/* 强杀二次确认：与实例列表页同款 DangerConfirm，组管理员及以上可确认。 */}
       {killConfirmDialog}
     </PageShell>
   )
@@ -581,7 +581,7 @@ function readMetricsBarPref(): boolean {
   try { return localStorage.getItem(METRICS_BAR_KEY) !== '0' } catch { return true }
 }
 
-/**
+/** 
  * 窄视口检测（顶栏按钮收敛用）。
  *
  * 用 JS 状态而不是 `md:hidden` CSS：隐藏式双渲染会让两组按钮同时进可访问树，
@@ -631,7 +631,7 @@ export interface InstanceConsoleOverviewPanelProps {
   watchItems: string[]
   /** 探针连接态（探针横幅与动态流行共用）。 */
   probeConnected: boolean
-  /** 是否具备 MC 世界语义（FR-448）：只决定本面板内字段取舍，不作页签级门控。 */
+  /** 是否具备 MC 世界语义：只决定本面板内字段取舍，不作页签级门控。 */
   mcSemantics: boolean
   /** TPS 时序点位（容器取数后注入；空数组=暂无序列，不画假图）。 */
   tpsPoints: number[]
@@ -641,8 +641,8 @@ export interface InstanceConsoleOverviewPanelProps {
   renderLink?: (args: InstanceConsoleLinkArgs) => ReactNode
 }
 
-/**
- * 概览页签面板（FR-269 / FR-423 / FR-343 / FR-446·447·448）。
+/** 
+ * 概览页签面板（447·448）。
  *
  * 纯展示 + 派生计算：KPI 卡、TPS 火花线（由 `tpsPoints` 折条与统计，aria 摘要读得到 min/max/avg）、
  * 日志预览表与右栏「动态与告警」流。所有数据、时序点位与日志都由容器注入——本面板不取数。
@@ -670,7 +670,7 @@ export function InstanceConsoleOverviewPanel({
   const diskPct = Math.round(nodeDiskUsage ?? 0)
   const alertCount = watchItems.length
   const hasProbe = metrics?.probeAvailable ?? false
-  // FR-343 去 mock-api：实例 TPS 真实时序火花线（取末段点位），无数据/无探针显空态而非假图。
+  // 去 mock-api：实例 TPS 真实时序火花线（取末段点位），无数据/无探针显空态而非假图。
   // 点位由容器按实例 uuid 取数注入（隐藏页签停轮询的既有语义不变）。
   const tpsBars = tpsPoints.slice(-24).map((v) => Math.max(2, Math.min(100, (v / 20) * 100)))
   // 火花线的 aria 摘要（可访问性）：屏幕阅读器拿得到 min/max/avg，而不是一片空 span。
@@ -683,14 +683,14 @@ export function InstanceConsoleOverviewPanel({
     : null
 
   return (
-    // 分栏重排（FR-423）：KPI 一行在上，下方左 62%（图表 + 日志）/ 右 38%（动态与告警）。
+    // 分栏重排：KPI 一行在上，下方左 62%（图表 + 日志）/ 右 38%（动态与告警）。
     // 全部 flex 撑满内容区，不再整块纵向堆叠后在底部留白。
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="grid flex-none gap-2 [grid-template-columns:repeat(auto-fit,minmax(122px,1fr))]">
         <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={Math.min(100, cpuPct)} />
         <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={hasHeapMax ? `${memoryPct}%` : `${formatNumber(metrics?.memoryMb, 0)} MB`} sub={hasHeapMax ? `${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB` : 'RSS'} progress={memoryPct} />
-        {/* TPS 是世界语义专属字段（FR-448）：仅具备 MC 世界语义的实例展示，proxy/generic 不显示伪 TPS；
-            探针不可用时显「不可用」而非 0（FR-446/447 诚实标记）。 */}
+        {/* TPS 是世界语义专属字段：仅具备 MC 世界语义的实例展示，proxy/generic 不显示伪 TPS；
+            探针不可用时显「不可用」而非 0（447 诚实标记）。 */}
         {mcSemantics && (
           <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('metrics.unavailable')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
         )}
@@ -699,7 +699,7 @@ export function InstanceConsoleOverviewPanel({
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
       </div>
 
-      {/* 探针缺失横幅是世界语义专属（FR-448）：非 MC 实例（proxy/generic/beacon）本不该有
+      {/* 探针缺失横幅是世界语义专属：非 MC 实例（proxy/generic/beacon）本不该有
           ServerProbe，横幅只会误导；与顶栏 showProbeChip 的 mcSemantics 门控保持一致。
 
           语义覆盖为 note（Alert 默认 role="alert"）：本页已有明确的角色分工——
@@ -745,7 +745,7 @@ export function InstanceConsoleOverviewPanel({
           <Card className="min-h-0 flex-1 py-0">
             <div className="flex flex-none items-center justify-between gap-2 border-b px-3 py-2">
               <h2 className="text-sm font-semibold">{t('serverConsole.logsPreview')}</h2>
-              {/* 预览只有 8 行：给一条到日志中心的出口（FR-403 页面接受 ?instanceId=），行与全量接起来。 */}
+              {/* 预览只有 8 行：给一条到日志中心的出口（页面接受 ?instanceId=），行与全量接起来。 */}
               {renderLink
                 ? renderLink({
                     to: `/logs?instanceId=${instanceId}`,
@@ -786,7 +786,7 @@ export function InstanceConsoleOverviewPanel({
           </Card>
         </div>
 
-        {/* 右栏 38%：三卡合流（FR-423）——最近事件 + 关注事项 + 崩溃诊断同一条时间线。 */}
+        {/* 右栏 38%：三卡合流——最近事件 + 关注事项 + 崩溃诊断同一条时间线。 */}
         <Card className="min-h-0 flex-1 py-0">
           <div className="flex flex-none items-center justify-between gap-2 border-b px-3 py-2">
             <h2 className="text-sm font-semibold">{t('serverConsole.activityFeed')}</h2>

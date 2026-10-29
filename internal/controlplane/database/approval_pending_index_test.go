@@ -13,8 +13,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
- * FR-490 审批票据幂等索引的迁移验收。
+/* *
+ *审批票据幂等索引的迁移验收。
  *
  * 两个必须验证的点，缺一个这条迁移就是空壳：
  *  1. **索引真的能拦住**同条件的第二张 pending（谓词写错、建成非唯一索引都会让「幂等」失守，

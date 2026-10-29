@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-486 范围②：「正在启动的节点」读模型。
+// 范围②：「正在启动的节点」读模型。
 //
 // 关键取舍都在这几条用例里固定下来：
 //   - 陈旧行**不进列表**（否则面板会把死掉的启动显示成仍在加载）；

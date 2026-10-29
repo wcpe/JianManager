@@ -1,5 +1,5 @@
-/**
- * 告警域契约（FR-085 / FR-494，ADR-103）。
+/** 
+ * 告警域契约（ADR-103）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
@@ -14,19 +14,19 @@ export interface ChannelConfig {
   password?: string
   from?: string
   to?: string
-  /** QQ 机器人 AppID（FR-494，明文）。 */
+  /** QQ 机器人 AppID（明文）。 */
   appId?: string
-  /** QQ 机器人密钥（FR-494，须 ${ENV_VAR} 引用）。 */
+  /** QQ 机器人密钥（须 ${ENV_VAR} 引用）。 */
   appSecret?: string
-  /** QQ 投递目标类型：仅 c2c=单聊（FR-494；group 已被平台拒绝，前端不再暴露）。 */
+  /** QQ 投递目标类型：仅 c2c=单聊（group 已被平台拒绝，前端不再暴露）。 */
   targetType?: string
-  /** QQ 目标 user_openid（单聊）（FR-494，明文）；扫码绑定时自动填入。 */
+  /** QQ 目标 user_openid（单聊）（明文）；扫码绑定时自动填入。 */
   targetId?: string
-  /** QQ 开放平台 API 根地址（FR-494，可选，留空取后端默认值）。 */
+  /** QQ 开放平台 API 根地址（可选，留空取后端默认值）。 */
   baseUrl?: string
 }
 
-/** 通知通道（FR-085）。 */
+/** 通知通道。 */
 export interface AlertChannelInfo {
   id: number
   uuid: string
@@ -46,7 +46,7 @@ export interface QQBindFill {
   userOpenid: string
 }
 
-/** 通道创建/更新请求体（FR-085；不含 id，编辑时由调用方补）。 */
+/** 通道创建/更新请求体（不含 id，编辑时由调用方补）。 */
 export interface ChannelSubmitBody {
   name: string
   type: string
@@ -54,7 +54,7 @@ export interface ChannelSubmitBody {
   config: ChannelConfig
 }
 
-/** 告警规则（FR-011 + FR-085）。 */
+/** 告警规则。 */
 export interface AlertRuleInfo {
   id: number
   uuid: string
@@ -80,12 +80,12 @@ export interface AlertRuleInfo {
   createdAt: string
 }
 
-/** 告警事件（FR-011 + FR-085）。 */
+/** 告警事件。 */
 export interface AlertEventInfo {
   id: number
   ruleId: number
   targetId: number
-  /**
+  /** 
    * 实例展示名（后端按规则维度回填）：仅当规则的 targetType 为 instance 时存在。
    * 有了它，列表就不必为了显示名字而拉全量实例列表。实例被删时缺省，前端回退显示 #id。
    */

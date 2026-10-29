@@ -8,9 +8,9 @@ import type { ClientRuntimeOverview } from '@/api/clientRuntimeStates'
 import { buildClientDistHref } from '@/lib/client-dist/client-dist-query'
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 
-/**
+/** 
  * 页面 B · 总览 Tab（全面融合：分发健康 + 运行态 + 请求侧 + 安全态势）。
- * KPI 口径严格遵循 FR-356：更新侧率只信 observability，请求侧率只信 stats。
+ * KPI 口径严格遵循：更新侧率只信 observability，请求侧率只信 stats。
  *
  * 展示层已回迁应用侧（`OpsOverviewTabView`），此处只保留取数与路由语义：
  * 更新侧观测（`useClientDistObservability`，随页头频道/时间窗）与安全态势快照

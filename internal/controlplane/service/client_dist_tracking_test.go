@@ -105,7 +105,7 @@ func TestClientDistTracking_QueryEventsFilters(t *testing.T) {
 	require.Len(t, byKind, 2)
 }
 
-// TestClientDistTracking_RecordPersistsErrCode 失败事件写入语义错误码（FR-249）。
+// TestClientDistTracking_RecordPersistsErrCode 失败事件写入语义错误码。
 func TestClientDistTracking_RecordPersistsErrCode(t *testing.T) {
 	db := newTrackingDB(t)
 	svc := NewClientDistTrackingService(db)
@@ -118,7 +118,7 @@ func TestClientDistTracking_RecordPersistsErrCode(t *testing.T) {
 	require.Equal(t, "NO_LATEST_VERSION", ev.ErrCode, "失败事件应保留错误码")
 }
 
-// TestClientDistTracking_QueryOutcomeAndErrCode 按 outcome（成功/失败）+ errCode 精确筛（FR-249）。
+// TestClientDistTracking_QueryOutcomeAndErrCode 按 outcome（成功/失败）+ errCode 精确筛。
 // 失败⟺status>=400；成功⟺status>0 且 <400（含 304/200/206）。
 func TestClientDistTracking_QueryOutcomeAndErrCode(t *testing.T) {
 	db := newTrackingDB(t)

@@ -111,7 +111,7 @@ type InstanceUrlState = Partial<{
   sort: InstanceSortKey
   order: InstanceSortOrder
   pageSize: string
-  /** 折叠的分组键（FR-452），逗号分隔、逐键 encodeURIComponent。 */
+  /** 折叠的分组键，逗号分隔、逐键 encodeURIComponent。 */
   collapsed: string
   networkId: string
   env: string
@@ -122,7 +122,7 @@ type InstanceUrlState = Partial<{
 const INSTANCE_SORT_KEYS: InstanceSortKey[] = ['name', 'status', 'createdAt', 'nodeId']
 const INSTANCE_PAGE_SIZES = [50, 100, 200] as const
 
-/**
+/** 
  * 实例搜索防抖（毫秒）：停止输入后才把 `q` 下发 `/instances/search`。
  *
  * 搜索词直接进 queryKey，不防抖就是「每个键击一次服务端搜索」——1000+ 实例下这既是
@@ -131,8 +131,8 @@ const INSTANCE_PAGE_SIZES = [50, 100, 200] as const
  */
 const SEARCH_DEBOUNCE_MS = 300
 
-/**
- * 视图模式：FR-452 起 `list`（分组树表）为 `/instances` 默认——64 台跨区可一屏折叠管理。
+/** 
+ * 视图模式：起 `list`（分组树表）为 `/instances` 默认——64 台跨区可一屏折叠管理。
  * 卡片视图保留为紧凑模式（`?view=card`）。
  */
 function readViewMode(searchParams: URLSearchParams): ViewMode {
@@ -150,7 +150,7 @@ const COLUMN_LABEL_KEY: Record<InstanceOptionalColumn, string> = {
   business: 'instances.business.column',
 }
 
-/** 默认分组维度：region/zone 两级（FR-452）。 */
+/** 默认分组维度：region/zone 两级。 */
 const DEFAULT_GROUP_DIMENSION: GroupDimension = 'region'
 
 function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
@@ -159,7 +159,7 @@ function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
   return DEFAULT_GROUP_DIMENSION
 }
 
-/**
+/** 
  * 无折叠项时复用的常量空集合（**共享只读实例，任何调用方都不得就地修改**；
  * 本页所有变更折叠态的路径都先 `new Set(...)` 再改副本）。
  *
@@ -170,7 +170,7 @@ function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
  */
 const EMPTY_COLLAPSED: Set<string> = new Set()
 
-/** 读取折叠分组键集合（FR-452）：URL `?collapsed=` 逗号分隔、逐键 decode。 */
+/** 读取折叠分组键集合：URL `?collapsed=` 逗号分隔、逐键 decode。 */
 function readCollapsed(searchParams: URLSearchParams): Set<string> {
   const raw = searchParams.get('collapsed')
   if (!raw) return EMPTY_COLLAPSED
@@ -239,7 +239,7 @@ function writeInstanceUrlState(searchParams: URLSearchParams, updates: InstanceU
   if (updates.nodeId !== undefined) writeParam(searchParams, 'nodeId', updates.nodeId)
 }
 
-/**
+/** 
  * proxy 行判定（能力画像 `bcTopology`）。
  *
  * 抽成模块级函数是为了让**行渲染与虚拟高度模型共用同一判据**：展开行会在同一虚拟「项」下
@@ -257,7 +257,7 @@ export default function InstancesPage() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const hadUrlNodeRef = useRef(searchParams.has('nodeId'))
-  /**
+  /** 
    * 写回 URL 状态。`replace: true` 用 `history.replaceState` 原地改写当前条目，
    * 不往历史栈追加——高频来源（如搜索框逐键）必须走这条路，否则每敲一个字符
    * 就多一条历史记录，用户输 10 个字符后要按 11 次「返回」才离开本页。
@@ -274,7 +274,7 @@ export default function InstancesPage() {
   const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
   const [editConfigTarget, setEditConfigTarget] = useState<InstanceInfo | null>(null)
   const [tagsTarget, setTagsTarget] = useState<{ id: number; name: string; tags: string[] } | null>(null)
-  // 资源限额编辑目标（FR-079）：携带启动方式与当前限额回填。
+  // 资源限额编辑目标：携带启动方式与当前限额回填。
   const [limitsTarget, setLimitsTarget] = useState<{
     id: number
     name: string
@@ -285,7 +285,7 @@ export default function InstancesPage() {
   } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; inPlace?: boolean; running?: boolean } | null>(null)
   const [killTarget, setKillTarget] = useState<{ id: number; name: string } | null>(null)
-  /*
+  /* 
     启停二次确认（用户提出）：启动/停止/重启都会打断正在游戏的玩家，尤其「停止」会把在线玩家直接踢下线，
     误点代价不可忽略。此前行内图标按钮与「⋯」菜单都是**一发即执行**，没有任何确认。
     这里统一收敛为「先置入待确认目标，DangerConfirm 确认后才发请求」——
@@ -294,20 +294,20 @@ export default function InstancesPage() {
   /** 右键菜单目标与光标坐标：**全表一份**，由行上报（见 InstanceContextMenu 的注释）。 */
   const [contextMenu, setContextMenu] = useState<{ inst: InstanceInfo; x: number; y: number } | null>(null)
   const [lifecycleTarget, setLifecycleTarget] = useState<{ id: number; name: string; op: 'start' | 'stop' | 'restart' } | null>(null)
-  // 接管运行态漂移（FR-471）：先把目标置入待确认，DangerConfirm 确认后才发请求（与强杀同款纪律）。
+  // 接管运行态漂移：先把目标置入待确认，DangerConfirm 确认后才发请求（与强杀同款纪律）。
   const [adoptTarget, setAdoptTarget] = useState<{ id: number; name: string; pid: number } | null>(null)
-  // 批量操作选中的实例 ID 集合（FR-058）。
+  // 批量操作选中的实例 ID 集合。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
-  // 工作台卡 ⇄ 列表视图（FR-136，§4.5）；运行实体默认卡片。
+  // 工作台卡 ⇄ 列表视图（§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>(() => readViewMode(searchParams))
-  // 分组树表：折叠态入 URL（FR-452，`?collapsed=`），切换维度即时重排（客户端聚合）。
+  // 分组树表：折叠态入 URL（`?collapsed=`），切换维度即时重排（客户端聚合）。
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => readCollapsed(searchParams))
-  // 「管理分组」面板开关（FR-165 的组织分组能力在 groupTree 维度内可达，不再单开 orgView 视图）。
+  // 「管理分组」面板开关（的组织分组能力在 groupTree 维度内可达，不再单开 orgView 视图）。
   const [groupManagerOpen, setGroupManagerOpen] = useState(false)
-  // proxy 行 inline 展开已注册 backend 的代理 id 集合（FR-136）。
+  // proxy 行 inline 展开已注册 backend 的代理 id 集合。
   const [expandedProxies, setExpandedProxies] = useState<Set<number>>(new Set())
 
-  // 多维筛选状态（FR-047 / FR-268）：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
+  // 多维筛选状态：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '')
   // 防抖后的搜索词才是「查询真源」：输入框保持即时回显，服务端搜索等落定。
   const debouncedSearchQuery = useDebounced(searchQuery, SEARCH_DEBOUNCE_MS)
@@ -328,7 +328,7 @@ export default function InstancesPage() {
   const [sortKey, setSortKey] = useState<InstanceSortKey>(() => readSortKey(searchParams))
   const [sortOrder, setSortOrder] = useState<InstanceSortOrder>(() => readSortOrder(searchParams))
 
-  // 页面上报「对外可说什么」（FR-518 §5.1）：只发结构，不发正文。
+  // 页面上报「对外可说什么」（§5.1）：只发结构，不发正文。
   // 上报值全部来自 URL 派生状态（筛选/分组/排序），不读内部 state 对象、不遍历 DOM。
   // 敏感键由 serializePageContext 统一丢弃，这里不重复判定。
   // 空值不塞进 filters：一个 `status=all` 对模型没有信息量，反而占长度。
@@ -352,7 +352,7 @@ export default function InstancesPage() {
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
   // 列设置（页面重构件）：可见可选列持久化于 jm.instances.columns；缺省全开（旧行为不变）。
   const [visibleColumns, setVisibleColumns] = useState<Set<InstanceOptionalColumn>>(readStoredColumns)
-  /*
+  /* 
     列顺序（用户提出的表头拖拽换位）。与可见列分开存储：
     一个管「显示哪些列」、一个管「按什么顺序排」，两者正交——隐藏再显示某列时，
     它在顺序里的位置仍然保留，用户不用重排一遍。
@@ -414,8 +414,8 @@ export default function InstancesPage() {
     sort: sortKey,
     order: sortOrder,
   }), [debouncedSearchQuery, pageSize, params, sortKey, sortOrder])
-  /*
-    列表改为**服务端分页**（FR-520 之后的服务器页重构）：
+  /* 
+    列表改为**服务端分页**（之后的服务器页重构）：
     原先是无限滚动 + 虚拟窗口，一次滞千条；改成标准分页表格后，每页 pageSize 条，
     页码进 URL（已有 `page` 状态），刷新与深链都能回到同一页。
   */
@@ -434,7 +434,7 @@ export default function InstancesPage() {
   const { data: aggregate } = useInstanceAggregate(aggregateParams)
   const { data: nodes } = useNodes()
   const { data: networks } = useNetworks()
-  // FR-452 `network` / `groupTree` 维度取数：均为一次请求、无 N+1；按维度分别按需预取——
+  // `network` / `groupTree` 维度取数：均为一次请求、无 N+1；按维度分别按需预取——
   // network 维度只需 `/topology`（群组成员映射），groupTree 维度只需 `/instance-groups`（分组树）；
   // 其余维度两者皆不请求（避免「任一为真即同时预取」造成多余请求）。
   const { data: topology } = useTopology({ enabled: groupBy === 'network' })
@@ -447,18 +447,18 @@ export default function InstancesPage() {
   const adopt = useAdoptInstanceRuntime()
   const del = useDeleteInstance()
 
-  // 批量选择（FR-058）：select-all 作用于当前筛选后的可见集合。
+  // 批量选择：select-all 作用于当前筛选后的可见集合。
   //
   // 已选集合改 `Set`：行渲染按 `selectedIds.includes(id)` 判定，`includes` 是 O(已选数)——
   // 全选 1200 台后「可见行 × 1200」的线性扫描会成为渲染热点（对照 NetworksPageView 同款处理）。
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
-  /*
+  /* 
     Shift 连选要按「用户看到的顺序」取区间，而不是 id 顺序。
     分组维度下展示顺序来自 treeRows（组头 + 成员），平铺视图来自 instances；
     两者都只取实例 id、跳过组头行。
   */
   const selectionOrderIds = useMemo<number[]>(() => instances.map((i) => i.id), [instances])
-  /**
+  /** 
    * 单次点击选择（含 Shift 连选 / Ctrl 点选）。
    *
    * 语义统一由 `applySelectionClick` 决定（纯函数，单测穷举各修饰键组合），
@@ -486,13 +486,13 @@ export default function InstancesPage() {
   const allIds = useMemo(() => instances?.map((i) => i.id) ?? [], [instances])
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIdSet.has(id))
   const toggleAll = () => setSelectedIds(allSelected ? [] : allIds)
-  /**
+  /** 
    * 反选（用户提出）：在当前可见集合内翻转。
    * 只翻转当前页/筛选结果里的项——否则会静默丢掉用户在其他页选好的内容。
    */
   const invertAll = () => setSelectedIds((prev) => [...invertSelection(allIds, new Set(prev))])
   const clearSelection = () => setSelectedIds([])
-  // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细（FR-139）。
+  // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细。
   const selectedInstances = useMemo(
     () =>
       instances
@@ -520,7 +520,7 @@ export default function InstancesPage() {
     [nodeNameById, t],
   )
 
-  // 「实例→分组键」映射（FR-452）：仅 network 维度需要外部映射（键=群组名）；
+  // 「实例→分组键」映射：仅 network 维度需要外部映射（键=群组名）；
   // groupTree 维度走独立的层级聚合（键=组 id + 按 parentId 重建的层级，见下）。
   // 维度数据源不可用（预取未启用/未加载）时返回空映射 → 该维度整体落「未分组」，绝不借错数据源。
   const networkKeyMap = useMemo(() => {
@@ -534,7 +534,7 @@ export default function InstancesPage() {
     [groupBy, groupTree],
   )
 
-  // 分组聚合（FR-452）：groupTree 走多级层级聚合（父组头 → 子组头 → 成员）；其余维度单级/两级。
+  // 分组聚合：groupTree 走多级层级聚合（父组头 → 子组头 → 成员）；其余维度单级/两级。
   const groups = useMemo(() => {
     if (groupBy === 'groupTree') return groupInstancesByGroupTree(instances, groupTree ?? [])
     return groupInstances(instances, groupBy, networkKeyMap)
@@ -552,7 +552,7 @@ export default function InstancesPage() {
     }
   }, [aggregate, scopedAllInstances])
 
-  /**
+  /** 
    * 表头全选框的可访问名。
    *
    * 列表分页加载，「全选」实际只覆盖**已加载页**（`allIds = instances.map(...)`），
@@ -565,7 +565,7 @@ export default function InstancesPage() {
     total: totalCount,
   })}`
 
-  /**
+  /** 
    * 搜索框：输入即时回显，但服务端 `q` 走防抖（见 `SEARCH_DEBOUNCE_MS`）。
    * URL 同步改为 replace——逐键 push 会把历史栈塞满（输 10 个字符要按 11 次返回）。
    */
@@ -617,7 +617,7 @@ export default function InstancesPage() {
     setPageSize(next)
     updateUrl({ pageSize: String(next), page: '1' })
   }
-  /** 切换某分组折叠态并写回 URL（FR-452，`?collapsed=`）。 */
+  /** 切换某分组折叠态并写回 URL（`?collapsed=`）。 */
   const toggleGroupCollapsed = (key: string) => {
     // 纯计算放在 updater 之外：setState updater 须为纯函数（URL 写入是副作用，不能在里面）。
     const next = new Set(collapsedGroups)
@@ -634,7 +634,7 @@ export default function InstancesPage() {
 
   const hasActiveFilter =
     searchQuery.trim() !== '' || networkId !== ALL || env !== ALL || tag !== ALL || nodeId !== ALL || statusFilter !== ALL
-  /**
+  /** 
    * 生效中的筛选条件数：给「筛选」按钮的徽标用。
    * 只数面板里的五个维度，不含搜索词——搜索框自己就可见，重复计入会让人误以为
    * 还有一个没找到的筛选条件。
@@ -657,7 +657,7 @@ export default function InstancesPage() {
     setStatusFilterParam(next)
   }
 
-  /*
+  /* 
     KPI 卡：把 summaryChips 同一批数据换成「图标 + 大数字」形态。
     刻意**不加**「总在线玩家」这张卡——它的口径是跨全部实例求和，
     与「按状态筛选」不是同一维度，点它筛什么说不清；先不引入这个歧义。
@@ -709,8 +709,8 @@ export default function InstancesPage() {
     CRASHED: { text: t('instances.crashed'), variant: 'destructive' },
   }
 
-  /**
-   * 按分组维度给出分组标题（FR-452 各维度统一落此处）；空 key 显示该维度的「未分…」文案。
+  /** 
+   * 按分组维度给出分组标题（各维度统一落此处）；空 key 显示该维度的「未分…」文案。
    * 多级维度由 `level` 区分层级（region：外层大区 / 内层小区；groupTree：按 `groupTreeLabels` 的组名）。
    */
   const groupLabel = (key: string, level: number = 0): string => {
@@ -741,7 +741,7 @@ export default function InstancesPage() {
     }
   }
 
-  // 树表行模型（FR-452）：分组头 + 成员行统一行模型，供单个虚拟表渲染。
+  // 树表行模型：分组头 + 成员行统一行模型，供单个虚拟表渲染。
   const treeRows = useMemo(
     () => buildInstanceTreeRows(groups, groupBy, groupLabel, collapsedGroups),
     // groupLabel 依赖 nodes/t/groupBy/groupTreeLabels，随其变化重算；折叠态变化即时反映。
@@ -755,7 +755,7 @@ export default function InstancesPage() {
   )
 
   const buildMenu = (inst: InstanceInfo) => {
-    // 运行态漂移（FR-471）：无漂移为 undefined，据此决定是否给出「接管」菜单项。
+    // 运行态漂移：无漂移为 undefined，据此决定是否给出「接管」菜单项。
     const drift = runtimeDriftOf(inst)
     return (
       <InstanceRowMenu
@@ -777,7 +777,7 @@ export default function InstancesPage() {
         })}
         onProxy={() => setManageProxy({ id: inst.id, name: inst.name })}
         onClone={() => setCloneTarget({ id: inst.id, name: inst.name })}
-        // 接管运行态漂移（FR-471）：仅当目录下确有未纳管活进程时给出入口。
+        // 接管运行态漂移：仅当目录下确有未纳管活进程时给出入口。
         onAdoptRuntime={
           drift ? () => setAdoptTarget({ id: inst.id, name: inst.name, pid: drift.pid }) : undefined
         }
@@ -785,7 +785,7 @@ export default function InstancesPage() {
           id: inst.id,
           name: inst.name,
           inPlace: !!inst.workDirInPlace,
-          // FR-310：非停止态删除由后端编排「先停止（超时强杀）再删除」，确认框据此提示。
+          // 非停止态删除由后端编排「先停止（超时强杀）再删除」，确认框据此提示。
           running: inst.status !== 'STOPPED' && inst.status !== 'CRASHED',
         })}
       />
@@ -800,12 +800,12 @@ export default function InstancesPage() {
       return next
     })
 
-  /**
+  /** 
    * 可见窗口上报（虚拟表 → 页面）：表格把 `range` 变化回报，页面据此切片实例列表，
    * 走 useInstanceWindowMetrics 批量取行内指标（≤50/次、300ms 防抖、30s 轮询）后逐行注入。
    * 下标语义随视图：平铺表按 `instances`、分组树表按 `treeRows`——两者由各自表格的 range 决定。
    */
-  /*
+  /* 
     行内指标只取**当前页**的实例（原先是虚拟窗口的可见区间）。
     改成分页后「可见」= 当前页，语义更简单；每页 50 条也远小于原先一屏能滚到的规模，
     批量取指标的压力反而更小。
@@ -814,8 +814,8 @@ export default function InstancesPage() {
 
   const windowMetrics = useInstanceWindowMetrics(visibleInstances)
 
-  /*
-    业务域状态（FR-534）：**只在「业务插件」列开启时才取数**。
+  /* 
+    业务域状态：**只在「业务插件」列开启时才取数**。
 
     理由：这条链路会实打实打到探针（批量端点每次最多 50 台）。
     列关着还去取，等于让每个打开实例页的用户都白白打一轮探针。
@@ -837,7 +837,7 @@ export default function InstancesPage() {
     return map
   }, [businessRows])
 
-  /**
+  /** 
    * 当前表格实际渲染的列数：分组头行/空态占位的 colSpan 必须与之一致。
    *
    * 【为什么不再写死 11】列模型已从 11 列合并为 8 列（三列指标合并成健康度、身份列合并为一格），
@@ -848,7 +848,7 @@ export default function InstancesPage() {
   const hasHealth = (['metrics', 'active', 'heartbeat'] as const).some((c) => visibleColumns.has(c))
   const columnCount = 6 + (hasIdentity ? 1 : 0) + (hasHealth ? 1 : 0)
 
-  /**
+  /** 
    * 表头拖拽换位：把 from 列移动到 to 列的位置，并持久化。
    * `moveColumn` 是纯函数（钉住的列不参与），这里只负责落状态与存储。
    */
@@ -899,9 +899,9 @@ export default function InstancesPage() {
     writeStoredViews(next)
   }
 
-  /**
+  /** 
    * 行装配（ADR-103）：行展示件已入包（平铺表与分组树表共用），此处只注入数据与回调。
-   * 逐行判别留在应用侧：节点名（查节点表）、代理画像（FR-445）、搭建中、运行态漂移（FR-471）、
+   * 逐行判别留在应用侧：节点名（查节点表）、代理画像、搭建中、运行态漂移、
    * 三个动作的按 id 在途态（别的行在提交不该禁用本行）。
    * proxy 内联展开与批量勾选是跨行共享状态，故仍由本页持有——虚拟窗口滚动会卸载行，
    * 行内自持会丢失展开态；勾选还与表头全选、批量栏同源。
@@ -951,7 +951,7 @@ export default function InstancesPage() {
         title={t('instances.title')}
         description={t('instances.subtitle')}
         actions={
-          /*
+          /* 
             【四种新建入口收成一个分裂按钮】
             「一键搭建 / 搭建代理 / 导入现有服务器 / 创建实例」四个并列按钮占满整个页头右侧，
             每个都是同样权重，用户无法一眼分出主次——而它们其实是同一件事（弄一个实例出来）
@@ -1009,7 +1009,7 @@ export default function InstancesPage() {
         ))}
       </div>
 
-      {/* 多维筛选 + 分组视图（FR-047/137）：sticky + 可折叠，避免长筛选条在移动端翻屏。 */}
+      {/* 多维筛选 + 分组视图（137）：sticky + 可折叠，避免长筛选条在移动端翻屏。 */}
       {/*
         工具栏收成一张明确的卡片：此前它只是 `jm-toolbar-surface`（半透明白底），
         与页面底色差不到 1% 明度，视觉上是「飘着的一排控件」而不是「一块工具区」。
@@ -1299,7 +1299,7 @@ export default function InstancesPage() {
         />
       )}
 
-      {/* FR-502 阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与（吸附的）筛选条先渲染，
+      {/*阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与（吸附的）筛选条先渲染，
           数据区用同壳骨架顶上：上面一条计数行占位、下面一张列表外壳 + 行占位，
           与就绪态「计数行 + 列表」两段结构一致，数据到达原地替换而不整页跳。 */}
       {isLoading && instances.length === 0 ? (
@@ -1311,7 +1311,7 @@ export default function InstancesPage() {
           <DataPanelSkeleton rows={12} />
         </div>
       ) : (
-        /*
+        /* 
           数据区用 flex 列：让内部的虚拟表靠 `flex-1` 吃掉剩余高度（表格容器已改成 flex-1）。
           此前这里是 `div.space-y-3`——纯块级、不分配高度，表格只能用
           `max-h-[calc(100vh-20rem)]` 猜一个定值，页面一变高就算错、把列表顶出视口。
@@ -1332,7 +1332,7 @@ export default function InstancesPage() {
             />
           )}
           {view === 'card' ? (
-            /*
+            /* 
               卡片视图同样需要分页条：数据是服务端分页（每页 50 条），而卡视图走的是
               虚拟分组渲染路径，此前既没有分页条、onNeedMore 也是空实现——
               第 2 页及之后的实例在卡片视图里完全够不着（实测 1200+ 实例只看到 28 张）。
@@ -1357,7 +1357,7 @@ export default function InstancesPage() {
               renderCard={(args) => (
                 <InstanceWorktableCard
                   {...args}
-                  /*
+                  /* 
                     卡片视图的启停/右键：与列表视图走完全相同的页面级流程。
                     此前卡片自己 useStartInstance().mutate()，绕过了二次确认——
                     同一台实例在列表里会确认、在卡片里一点就停，安全语义不一致。
@@ -1457,7 +1457,7 @@ export default function InstancesPage() {
               emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
             />
           )}
-          {/* 组织分组管理（FR-165）：收敛到 groupTree 维度下的可选面板，保留建组/移入能力。 */}
+          {/* 组织分组管理：收敛到 groupTree 维度下的可选面板，保留建组/移入能力。 */}
           {groupBy === 'groupTree' && groupManagerOpen && <InstanceGroupManager />}
           {/* 健康度悬浮面板：**全表单例**（全表只渲染这一个，与行数无关）。 */}
           <InstanceHealthHoverLayer />
@@ -1537,7 +1537,7 @@ export default function InstancesPage() {
         open={deleteTarget !== null}
         title={t('danger.deleteInstanceTitle', { name: deleteTarget?.name ?? '' })}
         description={[
-          // FR-310：运行中删除先停止再删除，确认时明示进程处置方式。
+          // 运行中删除先停止再删除，确认时明示进程处置方式。
           deleteTarget?.running ? t('danger.deleteInstanceStopFirst') : null,
           deleteTarget?.inPlace ? t('importServer.deleteInPlaceDesc') : t('danger.deleteInstanceDesc'),
         ].filter(Boolean).join(' ')}
@@ -1605,7 +1605,7 @@ export default function InstancesPage() {
         onCancel={() => setKillTarget(null)}
       />
 
-      {/* 接管运行态二次确认（FR-471）：会给该服造成一次真实重启，故与强杀同款二次确认。 */}
+      {/* 接管运行态二次确认：会给该服造成一次真实重启，故与强杀同款二次确认。 */}
       <DangerConfirm
         open={adoptTarget !== null}
         title={t('serverConsole.runtimeDriftAdoptTitle', { name: adoptTarget?.name ?? '' })}

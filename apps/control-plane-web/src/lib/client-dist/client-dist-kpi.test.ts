@@ -9,7 +9,7 @@ import {
   resolveUpdateRates,
 } from './client-dist-kpi'
 
-describe('client-dist-kpi（FR-356）', () => {
+describe('client-dist-kpi', () => {
   it('formatKpiRate：分母为 0 的率与非法值', () => {
     expect(formatKpiRate(0)).toBe('0.0%')
     expect(formatKpiRate(0.917)).toBe('91.7%')

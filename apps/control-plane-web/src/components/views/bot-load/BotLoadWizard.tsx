@@ -48,8 +48,8 @@ export interface BotLoadWizardProps {
   onFinished?: (target: { kind: 'session'; runId: number } | { kind: 'list' }) => void
 }
 
-/**
- * 五步压测创建向导（FR-371）：目标 → 连接 → 命令编排 → 负载曲线 → 阈值预检。
+/** 
+ * 五步压测创建向导：目标 → 连接 → 命令编排 → 负载曲线 → 阈值预检。
  *
  * 草稿状态机（reducer）与全部校验留在包内；四个服务端交互（建运行 / 预检 / 启动 / 仅保存）
  * 由容器注入——失败时容器抛出携带服务端 message 的 Error，此处 catch 后就地展示，

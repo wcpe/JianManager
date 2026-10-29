@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import EditInstanceLimitsDialogView from '@/components/views/instances/EditInstanceLimitsDialog'
 
-/**
+/** 
  * 实例资源限额编辑器的应用接线层（ADR-103 b 范式）。
  *
  * 编辑器本体是受控视图（见 components/views）；本层只做持久化与提示。
@@ -20,7 +20,7 @@ export default function EditInstanceLimitsDialog({
 }: {
   instanceId: number
   instanceName: string
-  /** 实例启动方式；仅 docker 模式资源限额生效（FR-079，ADR-019）。 */
+  /** 实例启动方式；仅 docker 模式资源限额生效（ADR-019）。 */
   processType: string
   /** 当前 CPU 核数上限（0=不限制）。 */
   cpuLimit: number

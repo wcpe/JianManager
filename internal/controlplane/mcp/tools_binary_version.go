@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-468 二进制/Beacon 版本管理：读当前版本 + 受控升级 + 一级回滚。
+// 二进制/Beacon 版本管理：读当前版本 + 受控升级 + 一级回滚。
 func init() {
 	registerToolSpecs(
 		toolSpec{

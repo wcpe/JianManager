@@ -13,7 +13,7 @@ import MetricsSegmentView, {
   type ResourceLimitData,
 } from '@/components/views/instances/MetricsSegment'
 
-/**
+/** 
  * 实例监控段的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层取历史序列与实时指标、判定探针卡是否适用、
@@ -27,7 +27,7 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
   const running = inst?.status === 'RUNNING'
   const { data: directMetrics } = useInstanceMetrics(instanceId, running)
 
-  // 能力画像（FR-445，ADR-091）：探针卡只在画像声明「metrics 能力以 probe 为来源」时渲染。
+  // 能力画像（ADR-091）：探针卡只在画像声明「metrics 能力以 probe 为来源」时渲染。
   // ServerProbe 是 Bukkit 插件，代理/二进制/beacon 等非 MC 实例无法加载——改由画像 `sources`
   // 判定，取代原先写死的 `if (inst?.role === 'proxy') return null`（避免「更新探针必失败」的陷阱按钮）。
   const profile = useInstanceCapabilities(inst)

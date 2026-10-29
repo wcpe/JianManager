@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientTelemetryHandler 客户端遥测上报端点（FR-094 / FR-360，见 ADR-023、contract §4.3）。
+// ClientTelemetryHandler 客户端遥测上报端点（见 ADR-023、contract §4.3）。
 // 面向玩家公网：拉取密钥（X-Client-Key）鉴权 + X-Machine-Id；202 Accepted、best-effort 落库不阻塞。
 type ClientTelemetryHandler struct {
 	svc      *service.ClientTelemetryService
@@ -26,7 +26,7 @@ func NewClientTelemetryHandler(svc *service.ClientTelemetryService, channel *ser
 	return &ClientTelemetryHandler{svc: svc, channel: channel, security: sec}
 }
 
-// telemetryBody 遥测上报体（contract §4.3 + FR-360 字段；未知字段忽略；缺字段不 4xx）。
+// telemetryBody 遥测上报体（contract §4.3字段；未知字段忽略；缺字段不 4xx）。
 type telemetryBody struct {
 	Channel     string `json:"channel"`
 	Result      string `json:"result"`
@@ -64,7 +64,7 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 	}
 	if h.svc != nil {
 		machineID := c.GetHeader(machineIDHeader)
-		// FR-426 前置修复：installId 此前从未采集（updater 一直发 X-Install-Id 头但端点忽略）。
+		// 前置修复：installId 此前从未采集（updater 一直发 X-Install-Id 头但端点忽略）。
 		installID := c.GetHeader(installIDHeader)
 		playerName := h.playerNameFromRequest(c, body.Channel, machineID, installID)
 		h.svc.RecordSafe(service.ClientTelemetryInput{

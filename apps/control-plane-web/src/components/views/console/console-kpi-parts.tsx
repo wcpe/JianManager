@@ -3,8 +3,8 @@ import type { LucideIcon } from 'lucide-react'
 import { cn } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
 
-/**
- * 服务器控制台总览的 KPI 卡与派生纯函数（FR-269）。
+/** 
+ * 服务器控制台总览的 KPI 卡与派生纯函数。
  * 从应用侧 `InstanceConsolePage` 拆出：KpiCard 为纯展示，其余为无副作用纯函数。
  */
 
@@ -59,7 +59,7 @@ export function buildWatchItems({
   status?: string
   metrics?: { tps: number; msptMillis: number; cpuPercent: number; probeAvailable: boolean }
   probeConnected?: boolean
-  /** 是否 MC 世界语义（FR-448）：TPS/MSPT 与探针相关告警只对世界语义实例成立。 */
+  /** 是否 MC 世界语义：TPS/MSPT 与探针相关告警只对世界语义实例成立。 */
   mcSemantics: boolean
   t: Translate
 }) {
@@ -67,7 +67,7 @@ export function buildWatchItems({
   // 走 i18n（修硬编码中文）：这些文案会出现在英文界面的「动态与告警」时间线里。
   if (status === 'CRASHED') items.push(t('serverConsole.watch.crashed'))
   if (status === 'STARTING' || status === 'STOPPING') items.push(t('serverConsole.watch.transition'))
-  // TPS/MSPT 与探针在线是世界语义专属（FR-448）：proxy/二进制/beacon 不该出现这些 MC 告警。
+  // TPS/MSPT 与探针在线是世界语义专属：proxy/二进制/beacon 不该出现这些 MC 告警。
   if (mcSemantics && metrics?.probeAvailable && metrics.tps < 18) items.push(t('serverConsole.watch.tpsLow'))
   if (mcSemantics && metrics?.probeAvailable && metrics.msptMillis > 50) items.push(t('serverConsole.watch.msptHigh'))
   if (metrics?.cpuPercent != null && metrics.cpuPercent > 85) items.push(t('serverConsole.watch.cpuHigh'))

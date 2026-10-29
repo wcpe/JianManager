@@ -9,8 +9,8 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ConfigFileDetailPage from './ConfigFileDetailPage'
 
-/**
- * 分层配置·详情页（FR-529）的 DOM 测试。
+/** 
+ * 分层配置·详情页的 DOM 测试。
  *
  * 重点覆盖两条真机验收提的 UI 约束（spec §7.4 / §7.5）：
  * 1. 预览必须明示「规范化结果、别复制回磁盘」——且是**常驻**提示，不是有数据才出现；
@@ -102,7 +102,7 @@ function renderPage() {
   return { user }
 }
 
-/**
+/** 
  * 在预览面板里选中实例「survival-1」。
  *
  * 先等预览面板出现（它只在文件取数成功后挂载），否则点击会落在骨架屏上。
@@ -117,7 +117,7 @@ async function pickPreviewInstance(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: 'survival-1' }))
 }
 
-describe('ConfigFileDetailPage（FR-529 层版本与有效值预览）', () => {
+describe('ConfigFileDetailPage（层版本与有效值预览）', () => {
   it('左栏按作用域分组列出层，各自显示 head 版本号', async () => {
     useHandlers([layer('group', 2, '生存', 3), layer('instance', 1, 'survival-1', 1)])
     renderPage()

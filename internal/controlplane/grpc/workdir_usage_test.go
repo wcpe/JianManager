@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// newWorkDirUsageFixture 隔离内存库 + 一条实例（FR-003 心跳落库）。
+// newWorkDirUsageFixture 隔离内存库 + 一条实例（心跳落库）。
 func newWorkDirUsageFixture(t *testing.T) (*ControlPlaneHandler, *gorm.DB) {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"

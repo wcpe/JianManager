@@ -22,7 +22,7 @@ import (
 // 只有中间件知道它是谁；handler 不该再引一次 authz 去重算。
 const ctxBusinessStreamScope = "businessStreamScope"
 
-// BusinessStreamHandler 业务事件 SSE 订阅端点（FR-522 / FR-536）。
+// BusinessStreamHandler 业务事件 SSE 订阅端点。
 //
 // 契约见 docs/openapi/paths/stream.yaml：`GET /business/stream`，以 SSE 推送探针上报的业务事件。
 // 帧格式（id 必须等于 seq）：
@@ -157,7 +157,7 @@ func (h *BusinessStreamHandler) Stream(c *gin.Context) {
 	// 反过来则会出现「补读之后、订阅之前」的真空区，事件必然丢失。
 	sub, err := h.stream.Subscribe(tokenKey, filter)
 	if err != nil {
-		// FR-536 §4：单 Token/全局并发超限 → 429 + Retry-After。
+		// §4：单 Token/全局并发超限 → 429 + Retry-After。
 		c.Header("Retry-After", "5")
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"code":    "TOO_MANY_CONNECTIONS",
@@ -198,7 +198,7 @@ func (h *BusinessStreamHandler) Stream(c *gin.Context) {
 	}
 
 	// ── 补读 ─────────────────────────────────────────────────────────────
-	// 位点来源：Last-Event-ID 头优先，其次 since 查询参数（FR-522 §3.1）。
+	// 位点来源：Last-Event-ID 头优先，其次 since 查询参数（§3.1）。
 	replayUpTo := h.replay(c, write, filter)
 	if replayUpTo < 0 {
 		return // 补读过程中写失败，直接收尾
@@ -250,7 +250,7 @@ func (h *BusinessStreamHandler) Stream(c *gin.Context) {
 	}
 }
 
-// finish 是连接收尾：慢消费者先尽力补一帧 `event: error`（FR-536 §3.3），再返回（由 defer 断开）。
+// finish 是连接收尾：慢消费者先尽力补一帧 `event: error`（§3.3），再返回（由 defer 断开）。
 //
 // 这里给终止帧留了一段**较宽的发送窗口**（10s），原因是客观事实：订阅者被判慢消费时，
 // 其 socket 发送缓冲几乎必然是满的，终止帧要等对端把内核缓冲读走一部分才写得出去。
@@ -274,7 +274,7 @@ func (h *BusinessStreamHandler) finish(c *gin.Context, rc *http.ResponseControll
 
 // replay 发送补读帧，返回「已覆盖到的最新位点」。返回 -1 表示写失败需立即收尾。
 //
-// 语义（FR-522 §3.3）：
+// 语义（§3.3）：
 //   - 未带位点：只推实时流，不补历史（返回 0）；
 //   - 位点在窗口内：从该位点之后补发，然后接续实时流；
 //   - 位点早于窗口起点：先发 `event: replay_gap`，再从窗口起点补发；
@@ -339,7 +339,7 @@ func parseBusinessStreamSince(c *gin.Context) (int64, bool) {
 	return v, true
 }
 
-// businessStreamTokenKey 构造「单 Token 并发连接」的计数键（FR-536 §4）。
+// businessStreamTokenKey 构造「单 Token 并发连接」的计数键（§4）。
 //
 // Agent Token 用 token ID（同一 Token 的多实例部署共享配额）；人类 JWT 用 user ID。
 // 两者前缀不同，避免 ID 空间重叠导致互相占用配额。

@@ -1,6 +1,6 @@
 package service
 
-// FR-515 Phase D：运行事件与 run 的**只读**访问器。
+// Phase D：运行事件与 run 的**只读**访问器。
 //
 // 为什么单独开一个文件而不写进 assistant_chat.go：那份文件是 Phase C 的运行时本体，
 // 已经不变量密集（见其文件头注释）。Phase D 是传输层，只需要「按 seq 读事件」「按归属读 run」

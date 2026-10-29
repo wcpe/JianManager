@@ -9,9 +9,9 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import MonitoringPage from './MonitoringPage'
 
-/**
- * MonitoringPage 强断言（FR-208 + FR-221）：验监控骨架挂载（平台 4 图标题）、下钻面包屑/选择器
- * 联动出 seed 节点、关键指标概览 + 多指标对比 + 粒度选择器（FR-221 剖析维度）渲染、错误注入不崩溃。
+/** 
+ * MonitoringPage 强断言：验监控骨架挂载（平台 4 图标题）、下钻面包屑/选择器
+ * 联动出 seed 节点、关键指标概览 + 多指标对比 + 粒度选择器（剖析维度）渲染、错误注入不崩溃。
  *
  * 说明：图表（recharts）依赖 ResizeObserver 实测宽度，jsdom 无布局/无 ResizeObserver，
  * 故曲线像素不可断言——本测试在 jsdom 补 ResizeObserver 桩使组件不崩，断言 Panel 标题与选择器
@@ -118,7 +118,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     expect(await screen.findByRole('heading', { name: '监控' })).toBeInTheDocument()
     // 平台主图网格标题「负载/内存」唯一（概览/对比用「1 分钟/内存已用」别名，不冲突），证明骨架挂载。
-    // CPU/在线玩家 因 FR-221 概览/对比也用同名，故仅断言「至少出现一次」。
+    // CPU/在线玩家 因概览/对比也用同名，故仅断言「至少出现一次」。
     expect(await screen.findByText('负载')).toBeInTheDocument()
     expect(screen.getAllByText('内存').length).toBeGreaterThan(0)
     expect(screen.getAllByText('CPU').length).toBeGreaterThan(0)
@@ -133,7 +133,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByText('加载中...')).not.toBeInTheDocument())
   })
 
-  it('② 下钻选择器联动出 seed 节点，且能下钻到节点视图（FR-221）', async () => {
+  it('② 下钻选择器联动出 seed 节点，且能下钻到节点视图', async () => {
     const user = userEvent.setup()
     loginMockUser()
     renderWithProviders(<MonitoringPage />)
@@ -150,7 +150,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(screen.getByText('Bot Worker 资源为共享进程观察值，不代表任一 Bot 或会话的独占资源。')).toBeInTheDocument()
   })
 
-  it('③ FR-221 剖析维度渲染：关键指标概览 + 多指标对比 + 粒度选择器', async () => {
+  it('③剖析维度渲染：关键指标概览 + 多指标对比 + 粒度选择器', async () => {
     loginMockUser()
     renderWithProviders(<MonitoringPage />)
     // 关键指标概览 / 多指标对比 两个 Panel 标题。
@@ -164,7 +164,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(screen.queryByText('勾选上方指标以叠加对比')).not.toBeInTheDocument()
   })
 
-  it('③ 下钻到实例后展示进程 TOP10（FR-170）', async () => {
+  it('③ 下钻到实例后展示进程 TOP10', async () => {
     const user = userEvent.setup()
     loginMockUser()
     renderWithProviders(<MonitoringPage />)
@@ -178,7 +178,7 @@ describe('MonitoringPage（mock 假后端）', () => {
 
     expect(await screen.findByText('进程 TOP10')).toBeInTheDocument()
     expect(screen.getByText('仅展示 JianManager 受管实例进程树，命令摘要已脱敏。')).toBeInTheDocument()
-    /*
+    /* 
       命令摘要不再写死 `java -Xmx4G -jar server.jar`：
       devmock 自 56847ee4 起改为按实例名拼（`java -Xmx4G -jar <实例名>.jar nogui`），
       写死值会与实际实例清单对不上（旧实现还会让进程行显示不存在的实例号）。
@@ -201,10 +201,10 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(within(detail).getByText(/\d+(\.\d+)? (MB|KB)\/s · \d+(\.\d+)? (MB|KB)\/s/)).toBeInTheDocument()
   })
 
-  it('④ 支持受管进程详情探查与 PID 级处置确认（FR-407/408）', async () => {
+  it('④ 支持受管进程详情探查与 PID 级处置确认（408）', async () => {
     const user = userEvent.setup()
     let actionRequested = false
-    /*
+    /* 
       pid 不再写死 24518：devmock 自 56847ee4 起按 `basePid = 24000 + idx*100` 推导
       （根进程 +12、包装器 +18），写死值在实例集合或排序一变就整体错位。
       改为从拦截到的请求里取值，再由用例断言「产物是个正数 pid」，
@@ -235,7 +235,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     await user.click(await screen.findByRole('button', { name: 'survival' }))
 
     const inspectButtons = await screen.findAllByRole('button', { name: '探查' })
-    /*
+    /* 
       点**第一行**（根进程，java 本体）。devmock 的 diagnostics 只给根进程（`isRoot`），
       包装器那行是空数组——源码里 `detail.diagnostics.length > 0 && <Panel 诊断建议>`，
       点错行就会看不到诊断面板。列表按 CPU 降序，根进程 CPU 8~48% 恒高于包装器 0.8~1.6%。

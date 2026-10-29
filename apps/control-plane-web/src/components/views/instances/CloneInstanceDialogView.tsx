@@ -1,11 +1,11 @@
-/**
+/** 
  * @file CloneInstanceDialogView：一键复制子服向导（克隆选项 + 预检结果）的受控视图，代理候选与两次写请求由应用容器负责。
  * @input form-validation（validateRequired 必填校验）、Button/Checkbox/Dialog/scrollable-dialog 原语、
  *        FieldLabel/FieldError、cn、翻译上下文
  * @output CloneInstanceDialogView、CloneInstanceDialogViewProps、CloneFormDraft、ClonePreview、CloneProxyOption
  * @sync apps/control-plane-web/src/components/CloneInstanceDialog.tsx、
  *        apps/control-plane-web/src/components/CloneInstanceDialog.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-036 一键复制、FR-231 高级复制筛选、FR-202 供给/部署流程）
+ * @since（组件受控化迁包；原一键复制高级复制筛选供给/部署流程）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,7 +29,7 @@ export interface CloneProxyOption {
   name: string
 }
 
-/**
+/** 
  * 表单草稿（**原文**，非请求体）：`include`/`exclude` 保持用户输入的逗号/换行串，
  * 由容器解析为 glob 数组并按 `mode` 决定是否下发——「草稿 → 请求体」属请求语义，留在应用侧。
  */
@@ -42,7 +42,7 @@ export interface CloneFormDraft {
   levelName: string
   /** 要登记进的代理 id 列表（空数组表示不登记）。 */
   registerToProxyIds: number[]
-  /** 复制模式（FR-231）：quick=核心+插件+根配置；advanced=按 include/exclude 筛选。 */
+  /** 复制模式：quick=核心+插件+根配置；advanced=按 include/exclude 筛选。 */
   mode: 'quick' | 'advanced'
   /** 高级模式包含项原文（逗号/换行分隔的顶层项）。 */
   include: string
@@ -60,7 +60,7 @@ export interface ClonePreview {
   warnings?: string[]
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 代理候选经 `proxies` 注入（容器调 `useInstances({ role: 'proxy' })`）；
  * - 预检与提交分别经 `onPreview` / `onSubmit` 上报：`onPreview` 回传结果（失败返回 null，容器已提示），
@@ -85,8 +85,8 @@ export interface CloneInstanceDialogViewProps {
   onSubmit: (draft: CloneFormDraft) => Promise<boolean>
 }
 
-/**
- * 一键复制子服向导（FR-036）：复制为独立新实例，系统分配新目录/端口，排除运行态文件，
+/** 
+ * 一键复制子服向导：复制为独立新实例，系统分配新目录/端口，排除运行态文件，
  * 修正端口/motd 并可选注册进代理。支持预检（dryRun）。
  */
 export default function CloneInstanceDialogView({
@@ -104,7 +104,7 @@ export default function CloneInstanceDialogView({
   const [levelName, setLevelName] = useState('')
   const [proxyIds, setProxyIds] = useState<number[]>([])
   const [preview, setPreview] = useState<ClonePreview | null>(null)
-  // 复制模式（FR-231）：quick=核心+插件+根配置；advanced=按 include/exclude 筛选。
+  // 复制模式：quick=核心+插件+根配置；advanced=按 include/exclude 筛选。
   const [mode, setMode] = useState<'quick' | 'advanced'>('quick')
   const [include, setInclude] = useState('')
   const [exclude, setExclude] = useState('')
@@ -168,14 +168,14 @@ export default function CloneInstanceDialogView({
                         onCheckedChange={(v) => setProxyIds((prev) => (v === true ? [...prev, p.id] : prev.filter((x) => x !== p.id)))} />
                       {p.name}
                     </label>
-                  ))}
+))}
                 </div>
-              ) : (
+) : (
                 <p className="mt-1 text-xs text-muted-foreground">{t('clone.noProxies')}</p>
-              )}
+)}
             </div>
 
-            {/* 复制范围：快速 / 高级（FR-231） */}
+            {/* 复制范围：快速 / 高级 */}
             <div>
               <FieldLabel>{t('clone.mode', '复制范围')}</FieldLabel>
               <div className="mt-1 flex gap-1 rounded-md border bg-muted/30 p-1 text-sm">

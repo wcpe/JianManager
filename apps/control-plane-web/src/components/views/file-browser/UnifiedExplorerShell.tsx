@@ -7,9 +7,9 @@ import type { ExplorerCapability } from '@/lib/file-browser/file-browser-capabil
 import ExplorerTabHost from '@/components/views/explorer/ExplorerTabHost'
 
 export interface UnifiedExplorerShellProps {
-  /** 场景能力描述（FR-378）。 */
+  /** 场景能力描述。 */
   capability: ExplorerCapability
-  /**
+  /** 
    * browser 模式必填：数据源。
    * instance-files 模式忽略，改用 instanceId。
    */
@@ -23,15 +23,15 @@ export interface UnifiedExplorerShellProps {
   children?: ReactNode
   /** 壳顶栏（可选）。 */
   header?: ReactNode
-  /**
-   * FR-422：塞进内层管理器已有横栏左端的控件（instance-files 模式 → ExplorerTabHost 标签条）。
+  /** 
+   *：塞进内层管理器已有横栏左端的控件（instance-files 模式 → ExplorerTabHost 标签条）。
    * 与 `header` 的区别：`header` 自成一条横栏，`leading` 蹭已有横栏、不增加高度。
    * browser / custom 模式没有可蹭的横栏，此时被忽略——宿主该用 `header`。
    */
   leading?: ReactNode
   className?: string
   refreshKey?: number
-  /**
+  /** 
    * 透传给内层 ExplorerTabHost 的两项注入（instance-files 模式用；
    * 标签内的资源管理器需要一整套取数，只有外壳接线层持有）。
    * browser / custom 模式忽略。
@@ -44,8 +44,8 @@ export interface UnifiedExplorerShellProps {
   theme: 'light' | 'dark'
 }
 
-/**
- * 统一文件浏览壳（FR-378）：按 {@link ExplorerCapability} 选择
+/** 
+ * 统一文件浏览壳：按 {@link ExplorerCapability} 选择
  * FileBrowser / ExplorerTabHost / 自定义 children。
  * **不删除**业务专用树（分发编排 FileExplorer 等仍走 custom）。
  */

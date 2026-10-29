@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ClientIntegrationGuideView：客户端更新器接入指引（频道工作台「接入指引」Tab 内嵌面板）的受控视图，
  *       内嵌 jar 信息与拉取密钥明文由应用容器取数注入，下载请求与 toast 由容器负责。
  * @input lib/client-channel-types（ClientPullKey）、lib/clipboard（copyToClipboard：安全上下文含 execCommand 兜底）、
@@ -6,7 +6,7 @@
  * @output ClientIntegrationGuideView（+ ClientIntegrationGuideViewProps、ClientUpdaterJarsInfo）
  * @sync apps/control-plane-web/src/components/ClientIntegrationGuide.tsx（容器）、
  *       apps/control-plane-web/src/components/ClientIntegrationGuide.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-107 接入指引、FR-259 楔子与更新核心拆分、FR-258 wedge 自动拉 core）
+ * @since（组件受控化迁包；原接入指引楔子与更新核心拆分wedge 自动拉 core）
  */
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,7 +29,7 @@ export interface ClientUpdaterJarsInfo {
   core: { available: boolean; size: number }
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 内嵌 jar 信息：`jars` 由容器取数注入（缺省不渲染摘要行）；wedge.jar 下载经 `onDownloadWedge` 交容器；
  * - **拉取密钥明文（敏感边界，逐字保持原揭示时机与范围）**：`selectedKeyId` 与 `revealedKeyPlaintext` 均由容器持有——
@@ -61,12 +61,12 @@ export interface ClientIntegrationGuideViewProps {
   onNotify?: (level: 'success' | 'error', message: string) => void
 }
 
-/**
- * 客户端更新器接入指引（FR-107 / FR-259）。面向运营方：在频道详情一页拿齐——下载楔子、
+/** 
+ * 客户端更新器接入指引。面向运营方：在频道详情一页拿齐——下载楔子、
  * 该频道专属 jm-updater.json、启动器 JVM 参数、行为说明，照做即可接入并下发玩家。
  *
- * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
- * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见 FR-258）。
+ *起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
+ * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见）。
  */
 export function ClientIntegrationGuideView({
   channelId,

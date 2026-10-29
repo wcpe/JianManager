@@ -1,5 +1,5 @@
-/**
- * 原生 `webkitGetAsEntry()` entry → {@link FileSystemEntryLike} 适配器（FR-250 / BUG-F）。
+/** 
+ * 原生 `webkitGetAsEntry()` entry → {@link FileSystemEntryLike} 适配器（BUG-F）。
  *
  * 浏览器拖拽经 `DataTransferItem.webkitGetAsEntry()` 得到的是**回调式**原生 entry：
  * 文件 `entry.file(successCb, errorCb)`、目录 `entry.createReader().readEntries(cb, errCb)`，
@@ -10,8 +10,8 @@
  */
 import type { FileSystemEntryLike } from '@/lib/client-dist/client-publish-wizard'
 
-/**
- * 浏览器原生 `FileSystemEntry`（回调式）的最小结构（FR-250）。
+/** 
+ * 浏览器原生 `FileSystemEntry`（回调式）的最小结构。
  * DOM lib 的 FileSystemFileEntry/FileSystemDirectoryEntry 未在所有 tsconfig 下齐备，
  * 且其 `file`/`readEntries` 为回调式难在单测构造，故显式声明所需回调形态。
  */
@@ -26,7 +26,7 @@ export interface NativeFileSystemEntry {
   createReader?: () => NativeDirectoryReader
 }
 
-/** 原生目录 reader：`readEntries(cb)` 一次返回一批，读空数组表示读完（FR-250）。 */
+/** 原生目录 reader：`readEntries(cb)` 一次返回一批，读空数组表示读完。 */
 export interface NativeDirectoryReader {
   readEntries: (
     onSuccess: (entries: NativeFileSystemEntry[]) => void,
@@ -34,8 +34,8 @@ export interface NativeDirectoryReader {
   ) => void
 }
 
-/**
- * 反复调用 `reader.readEntries` 直到返回空数组，聚合目录**全部**直接子项（FR-250）。
+/** 
+ * 反复调用 `reader.readEntries` 直到返回空数组，聚合目录**全部**直接子项。
  * 原生 `readEntries` 一次只返回一批（Chromium 约 100 项），必须循环读到空，
  * 否则大目录会漏掉第一批之后的项。每批子项递归 {@link adaptEntry} 适配为 Promise 形态。
  *
@@ -60,8 +60,8 @@ function readAllEntries(reader: NativeDirectoryReader): Promise<FileSystemEntryL
   })
 }
 
-/**
- * 把一个原生回调式 entry 适配为 Promise 化的 {@link FileSystemEntryLike}（FR-250 / BUG-F）。
+/** 
+ * 把一个原生回调式 entry 适配为 Promise 化的 {@link FileSystemEntryLike}（BUG-F）。
  * 文件 entry → `file()` 返回 Promise<File>（Promise 化原生 `file(cb, errCb)`）；
  * 目录 entry → `readEntries()` 返回 Promise（内部 {@link readAllEntries} 循环读全 + 递归适配）。
  * 非文件非目录的 entry（罕见）两个方法皆缺省，交由 collectEntries 自然跳过。

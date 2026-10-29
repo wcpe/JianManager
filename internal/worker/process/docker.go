@@ -46,7 +46,7 @@ type dockerStrategy struct {
 	state  InstanceState
 	// crashCount 记录连续崩溃次数，用于指数退避（语义同 direct 策略）。
 	crashCount int
-	// startedAt 本次容器启动时刻，供崩溃快照计算运行时长（FR-313）。
+	// startedAt 本次容器启动时刻，供崩溃快照计算运行时长。
 	startedAt time.Time
 	wg        sync.WaitGroup
 	closed    bool
@@ -66,7 +66,7 @@ func newDockerStrategy(mgr *Manager, spec CommandSpec) *dockerStrategy {
 // containerNamePrefix 是 docker 策略容器名前缀（见 dockerStrategy.containerName）。
 const containerNamePrefix = "jianmanager-"
 
-// 平台受管容器标签（FR-456 N5）：dockerStrategy 创建容器时打标，运行期扫描的 docker 残留
+// 平台受管容器标签（N5）：dockerStrategy 创建容器时打标，运行期扫描的 docker 残留
 // 「归属复核」据它把「确为本平台创建」与「仅名字形如本平台」两档区分开（见 verifyContainerOwnership）。
 const (
 	// containerManagedLabelKey 标识容器由本平台创建。
@@ -92,7 +92,7 @@ func dockerClientFromEnv() (client.APIClient, error) {
 	return cli, nil
 }
 
-// CheckDockerAvailable 探测本机 Docker 守护进程可用性（FR-237）：连客户端 + ServerVersion。
+// CheckDockerAvailable 探测本机 Docker 守护进程可用性：连客户端 + ServerVersion。
 // 返回 Engine 版本；守护进程未装 / 未起 / 不可达时返回 error。供创建向导选 docker 模式前先测。
 func CheckDockerAvailable(ctx context.Context) (string, error) {
 	cli, err := dockerClientFromEnv()
@@ -155,12 +155,12 @@ func (d *dockerStrategy) Start(ctx context.Context) error {
 		Env:          dockerEnv(d.spec.EnvVars),
 		WorkingDir:   containerWorkDir,
 		ExposedPorts: exposed,
-		// 平台受管标签（FR-456 N5）：为运行期孤儿扫描的归属复核提供强证据（容器名可能被他人伪造同名）。
+		// 平台受管标签（N5）：为运行期孤儿扫描的归属复核提供强证据（容器名可能被他人伪造同名）。
 		Labels: map[string]string{
 			containerManagedLabelKey:  containerManagedLabelValue,
 			containerInstanceLabelKey: d.spec.UUID,
 		},
-		// tty=false + 三路 attach：stdout/stderr 多路复用，便于分流到日志采集（FR-049）。
+		// tty=false + 三路 attach：stdout/stderr 多路复用，便于分流到日志采集。
 		Tty:          false,
 		OpenStdin:    true,
 		AttachStdin:  true,
@@ -176,7 +176,7 @@ func (d *dockerStrategy) Start(ctx context.Context) error {
 	hostCfg := &containertypes.HostConfig{
 		PortBindings: bindings,
 	}
-	// 资源限额注入 cgroup（FR-079，见 ADR-019）：CPU 核数→NanoCPUs、内存 MiB→字节。
+	// 资源限额注入 cgroup（见 ADR-019）：CPU 核数→NanoCPUs、内存 MiB→字节。
 	// 0 值表示不限制，保持 Docker 默认（不写 Resources 字段）。磁盘限额 v1 不注入
 	// （bind-mount 工作目录的配额依赖存储驱动，HostConfig 无法简单施加）。
 	applyResourceLimits(hostCfg, d.spec.CPULimit, d.spec.MemLimitMB)
@@ -250,7 +250,7 @@ func (d *dockerStrategy) waitLoop() {
 	}
 
 	statusCh, errCh := cli.ContainerWait(context.Background(), containerID, containertypes.WaitConditionNotRunning)
-	// 容器退出码取自 ContainerWait（docker 记容器退出码，FR-313）；Wait 出错无法获知时取 -1。
+	// 容器退出码取自 ContainerWait（docker 记容器退出码）；Wait 出错无法获知时取 -1。
 	var exitCode int64 = -1
 	select {
 	case st := <-statusCh:
@@ -280,8 +280,8 @@ func (d *dockerStrategy) waitLoop() {
 	// 同步崩溃状态到 Manager 记账并扇出（与 direct 策略一致，使 Start 守卫允许重启）。
 	d.mgr.markStrategyState(d.spec.UUID, StateCrashed)
 
-	// 非正常退出：容器退出码 + 时长扇出崩溃现场（容器无宿主信号语义，signal 留空，FR-313）。
-	// FR-467：容器被 cgroup OOM killer 杀掉时（State.OOMKilled=true）在退出码口径之外**单独标注**，
+	// 非正常退出：容器退出码 + 时长扇出崩溃现场（容器无宿主信号语义，signal 留空）。
+	// 容器被 cgroup OOM killer 杀掉时（State.OOMKilled=true）在退出码口径之外**单独标注**，
 	// 因为容器退出码是 137 而宿主侧看不到信号——CP 侧配额巡检需要据此把这次崩溃归因为「配额超限」，
 	// 而不是当成普通崩溃（这是 docker 模式唯一能拿到 OOM 事实的地方）。
 	oomKilled := d.containerOOMKilled(cli, containerID)
@@ -294,7 +294,7 @@ func (d *dockerStrategy) waitLoop() {
 	slog.Warn("docker 实例崩溃", "instanceId", d.spec.UUID, "exitCode", exitCode,
 		"oomKilled", oomKilled, "crashCount", crashCount)
 
-	// FR-459：熔断期间不再自动重启（窗口内崩溃重启超限即熔断）。
+	// 熔断期间不再自动重启（窗口内崩溃重启超限即熔断）。
 	if d.spec.AutoRestart && d.mgr.autoRestartAllowed(d.spec.UUID) {
 		delay := backoffDelay(crashCount)
 		slog.Info("将在延迟后自动重启", "instanceId", d.spec.UUID, "delay", delay, "crashCount", crashCount)
@@ -415,7 +415,7 @@ func (d *dockerStrategy) GetPID() int {
 	return info.State.Pid
 }
 
-// containerOOMKilled 读取容器是否被 cgroup OOM killer 终止（FR-467 归因）。
+// containerOOMKilled 读取容器是否被 cgroup OOM killer 终止（归因）。
 //
 // ContainerInspect 而非 Wait 结果：Docker 的 Wait 只给退出码（OOM 被杀恒为 137），
 // 与普通 SIGKILL/`exit 137` 无法区分；State.OOMKilled 才是权威标记。
@@ -433,7 +433,7 @@ func (d *dockerStrategy) containerOOMKilled(cli client.APIClient, containerID st
 
 // Stats 经 Docker Engine API 采集容器 CPU%/内存（cgroup 口径），返回内存占用、内存上限（字节）。
 // 用途：Docker Desktop/WSL2 等场景下容器主进程不是宿主可见进程，GetPID→OS 进程内存采不到，
-// 改用守护进程的 cgroup 统计兜底实例资源指标（修 #6「docker 资源看不到」，补 FR-079 可观测）。
+// 改用守护进程的 cgroup 统计兜底实例资源指标（修 #6「docker 资源看不到」，补可观测）。
 // 用 stream=false（非 one-shot）让守护进程预热 precpu 基线，单次返回即可算出 CPU 增量。
 func (d *dockerStrategy) Stats(ctx context.Context) (cpuPercent float64, memBytes int64, memLimitBytes int64, ok bool) {
 	d.mu.Lock()
@@ -485,7 +485,7 @@ func dockerMemUsage(m containertypes.MemoryStats) uint64 {
 	return m.Usage
 }
 
-// dockerContainerRunning 探测指定名字的容器当前是否在跑（FR-455③ 进程侧证据 / FR-456 残留扫描）。
+// dockerContainerRunning 探测指定名字的容器当前是否在跑（③ 进程侧证据残留扫描）。
 // 守护进程不可达 / 查询失败返回 error，由调用方按「证据不可得」降级。
 func dockerContainerRunning(ctx context.Context, name string) (bool, error) {
 	cli, err := dockerClientFromEnv()
@@ -547,7 +547,7 @@ const nanoCPUsPerCPU = 1_000_000_000
 // bytesPerMiB 是 1 MiB 的字节数（内存限额以 MiB 下发、以字节注入）。
 const bytesPerMiB = 1024 * 1024
 
-// applyResourceLimits 把 CPU 核数与内存 MiB 上限注入 HostConfig 的 cgroup 限额字段（FR-079）。
+// applyResourceLimits 把 CPU 核数与内存 MiB 上限注入 HostConfig 的 cgroup 限额字段。
 // cpuLimit/memLimitMB 为 0 时不设对应字段（保持 Docker 默认=不限制）。负值按未设处理。
 func applyResourceLimits(hostCfg *containertypes.HostConfig, cpuLimit float64, memLimitMB int64) {
 	if cpuLimit > 0 {
@@ -559,7 +559,7 @@ func applyResourceLimits(hostCfg *containertypes.HostConfig, cpuLimit float64, m
 }
 
 // portConfig 把端口映射转为 Docker 的 ExposedPorts 与 PortBindings。
-// 每条映射把容器内端口发布到宿主端口（宿主端口来自 FR-032 端口池）。
+// 每条映射把容器内端口发布到宿主端口（宿主端口来自端口池）。
 // 协议默认 tcp；MC query 等 UDP 端口由调用方在映射中显式标注。
 func portConfig(mappings []PortMapping) (nat.PortSet, nat.PortMap) {
 	exposed := nat.PortSet{}

@@ -32,13 +32,13 @@ var (
 )
 
 // BackupService 备份服务。
-// FR-013 全量备份基础上支持 FR-056 增量备份（备份链）与 FR-057 远程存储。
+// 全量备份基础上支持增量备份（备份链）与远程存储。
 type BackupService struct {
 	db   *gorm.DB
 	pool *grpc.ClientPool
-	// storages 提供远程存储后端解析（FR-057）；nil 表示仅本地备份。
+	// storages 提供远程存储后端解析；nil 表示仅本地备份。
 	storages *BackupStorageService
-	// settings 提供保留天数生效值（backup.retention_days），驱动定期裁剪（FR-063）；
+	// settings 提供保留天数生效值（backup.retention_days），驱动定期裁剪；
 	// 为 nil 时裁剪循环不启动（无消费者，行为同改造前）。
 	settings SettingsReader
 
@@ -46,10 +46,10 @@ type BackupService struct {
 	running bool
 	stopCh  chan struct{}
 
-	// onBackupFailed 备份失败回调（FR-085 告警触发源）；nil 表示未接入告警。
+	// onBackupFailed 备份失败回调（告警触发源）；nil 表示未接入告警。
 	onBackupFailed func(backup *model.Backup, msg string)
 
-	// tasks 任务中心（FR-323）：备份创建/恢复经任务异步且可见进度；nil 时回退旧 goroutine（测试）。
+	// tasks 任务中心：备份创建/恢复经任务异步且可见进度；nil 时回退旧 goroutine（测试）。
 	tasks *TaskService
 }
 
@@ -58,7 +58,7 @@ func NewBackupService(db *gorm.DB, pool *grpc.ClientPool) *BackupService {
 	return &BackupService{db: db, pool: pool}
 }
 
-// SetTaskService 注入任务中心（FR-323，main 接线）：非 nil 后备份创建/恢复走后台任务 + 进度。
+// SetTaskService 注入任务中心（main 接线）：非 nil 后备份创建/恢复走后台任务 + 进度。
 func (s *BackupService) SetTaskService(t *TaskService) { s.tasks = t }
 
 // backupNodeID 解析备份所属实例的节点 id（任务归属展示用；失败回 0 不阻断）。
@@ -70,17 +70,17 @@ func (s *BackupService) backupNodeID(instanceID uint) uint {
 	return inst.NodeID
 }
 
-// SetStorageService 注入远程存储服务（FR-057）。在 main 装配阶段调用，避免构造期循环依赖。
+// SetStorageService 注入远程存储服务。在 main 装配阶段调用，避免构造期循环依赖。
 func (s *BackupService) SetStorageService(ss *BackupStorageService) {
 	s.storages = ss
 }
 
-// SetSettingsReader 注入平台设置读取器，启用按保留天数定期裁剪（FR-063）。
+// SetSettingsReader 注入平台设置读取器，启用按保留天数定期裁剪。
 func (s *BackupService) SetSettingsReader(r SettingsReader) {
 	s.settings = r
 }
 
-// SetBackupFailedHook 注入备份失败回调，供告警体系订阅备份失败触发（FR-085）。
+// SetBackupFailedHook 注入备份失败回调，供告警体系订阅备份失败触发。
 func (s *BackupService) SetBackupFailedHook(fn func(backup *model.Backup, msg string)) {
 	s.onBackupFailed = fn
 }
@@ -89,7 +89,7 @@ func (s *BackupService) SetBackupFailedHook(fn func(backup *model.Backup, msg st
 type CreateOptions struct {
 	// Incremental 为 true 时创建增量备份，自动挂到该实例最近一次已完成备份之后形成链。
 	Incremental bool
-	// StorageID 指定远程存储后端；nil 表示本地（FR-057，存储解析在该 FR 接入）。
+	// StorageID 指定远程存储后端；nil 表示本地（存储解析在该 FR 接入）。
 	StorageID *uint
 }
 
@@ -131,7 +131,7 @@ func (s *BackupService) CreateWithOptions(instanceID uint, name string, opts Cre
 	// 经 GORM Model(...).Update 会写回模型字段（autoUpdateTime 等），二者并发读写
 	// 同一结构体构成数据竞态（go test -race 可稳定复现）。复制后两者内存隔离。
 	async := *backup
-	// 纳入任务中心（FR-323）：进度/终态在任务中心可见，Backup record 状态仍由 executeBackup 自更
+	// 纳入任务中心：进度/终态在任务中心可见，Backup record 状态仍由 executeBackup 自更
 	// （备份列表页不回归）。无任务中心（测试）回退旧后台 goroutine。
 	if s.tasks == nil {
 		go func() {
@@ -165,7 +165,7 @@ func (s *BackupService) latestCompleted(instanceID uint) (*model.Backup, error) 
 }
 
 // executeBackup 执行备份：经 gRPC 委托 Worker 打包工作目录（增量传基准清单），
-// 完成后回写归档路径/大小/清单，远程目标再记录对象键。stage 非 nil 上报阶段（FR-323 任务中心）；
+// 完成后回写归档路径/大小/清单，远程目标再记录对象键。stage 非 nil 上报阶段（任务中心）；
 // 返回 error 供 RunAsync MarkFailed（Backup record 状态仍在此内自更，备份列表页不回归）。
 func (s *BackupService) executeBackup(backup *model.Backup, stage func(int, string)) error {
 	report := func(p int, text string) {
@@ -200,7 +200,7 @@ func (s *BackupService) executeBackup(backup *model.Backup, stage func(int, stri
 		req.BaseManifest = baseManifest
 	}
 
-	// 远程存储后端解析（FR-057 接入）。
+	// 远程存储后端解析（接入）。
 	if spec, serr := s.storageSpec(backup.StorageID); serr != nil {
 		return s.failBackup(backup, "解析存储后端失败", serr)
 	} else {
@@ -289,7 +289,7 @@ func (s *BackupService) Restore(backupID uint) error {
 		return err
 	}
 
-	// 纳入任务中心（FR-323）：恢复进度/终态可见。无任务中心（测试）回退旧后台 goroutine。
+	// 纳入任务中心：恢复进度/终态可见。无任务中心（测试）回退旧后台 goroutine。
 	if s.tasks == nil {
 		go func() {
 			if err := s.executeRestore(&backup, chain, nil); err != nil {
@@ -336,7 +336,7 @@ func (s *BackupService) resolveChain(target *model.Backup) ([]model.Backup, erro
 }
 
 // executeRestore 执行链式恢复：委托 Worker 按链顺序回放归档到工作目录。
-// stage 非 nil 上报阶段（FR-323 任务中心）；返回 error 供 RunAsync MarkFailed。
+// stage 非 nil 上报阶段（任务中心）；返回 error 供 RunAsync MarkFailed。
 func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backup, stage func(int, string)) error {
 	report := func(p int, text string) {
 		if stage != nil {
@@ -399,7 +399,7 @@ func backupChainRestoreArgs(chain []model.Backup) ([]string, []string, []string)
 	return relPaths, storageKeys, checksums
 }
 
-// RegisterFull 登记一条**全量**备份记录（Pending），不启动任何后台执行（FR-466）。
+// RegisterFull 登记一条**全量**备份记录（Pending），不启动任何后台执行。
 //
 // 用途：快照服务需要「先登记 Backup、再由自己的任务驱动执行」——因为快照的任务阶段
 // 文案（停服 → 建回滚前快照 → 回放数据 → 校验）与备份任务不同，复用 CreateWithOptions
@@ -422,13 +422,13 @@ func (s *BackupService) RegisterFull(instanceID uint, name string) (*model.Backu
 	return backup, nil
 }
 
-// ExecuteBackup 同步执行一条已登记的全量备份（FR-466 快照创建调用）。
+// ExecuteBackup 同步执行一条已登记的全量备份（快照创建调用）。
 // stage 为 nil 时不上报阶段。返回 error 表示归档失败（Backup 记录状态已在内部置 failed）。
 func (s *BackupService) ExecuteBackup(backup *model.Backup, stage func(int, string)) error {
 	return s.executeBackup(backup, stage)
 }
 
-// ExecuteRestore 同步回放一条已完成的备份及其链（FR-466 快照回滚调用）。
+// ExecuteRestore 同步回放一条已完成的备份及其链（快照回滚调用）。
 //
 // 运行态守卫**刻意不做**：快照回滚的语义是「由快照服务负责停服编排」，停服在调用方
 // 完成后再调本函数；若此处再拦一次，会出现「已停服却因状态收敛滞后被拒」的假失败。
@@ -497,7 +497,7 @@ func (s *BackupService) chainManifest(parentID *uint) ([]*workerpb.BackupManifes
 }
 
 // storageSpec 把存储后端 ID 解析为下发 Worker 的传输参数（凭证从 ${ENV_VAR} 解析）。
-// storageID 为 nil 或未注入 storages 时返回 nil，表示本地备份（FR-057）。
+// storageID 为 nil 或未注入 storages 时返回 nil，表示本地备份。
 func (s *BackupService) storageSpec(storageID *uint) (*workerpb.StorageBackendSpec, error) {
 	if storageID == nil || s.storages == nil {
 		return nil, nil
@@ -518,8 +518,8 @@ func (s *BackupService) resolveInstanceNode(instanceID uint) (*model.Instance, *
 	return &instance, &node, nil
 }
 
-// failBackup 标记备份失败并记录日志，触发备份失败告警钩子（FR-085）。
-// failBackup 回写失败状态 + 告警 + 失败钩子，并返回组合错误（FR-323：供 RunAsync MarkFailed）。
+// failBackup 标记备份失败并记录日志，触发备份失败告警钩子。
+// failBackup 回写失败状态 + 告警 + 失败钩子，并返回组合错误（：供 RunAsync MarkFailed）。
 func (s *BackupService) failBackup(backup *model.Backup, msg string, err error) error {
 	s.db.Model(backup).Update("status", model.BackupStatusFailed)
 	slog.Error("备份失败："+msg, "backupId", backup.UUID, "error", err)
@@ -529,7 +529,7 @@ func (s *BackupService) failBackup(backup *model.Backup, msg string, err error) 
 	return fmt.Errorf("%s: %w", msg, err)
 }
 
-// Start 启动按保留天数定期裁剪旧备份的后台巡检（FR-063：backup.retention_days 真生效）。
+// Start 启动按保留天数定期裁剪旧备份的后台巡检（：backup.retention_days 真生效）。
 // 未注入设置读取器则不启动（无消费者）。幂等：重复调用只启动一次。
 func (s *BackupService) Start() {
 	if s.settings == nil {
@@ -579,7 +579,7 @@ func (s *BackupService) runRetentionLoop(stop <-chan struct{}) {
 // 逐个走 Delete（含删文件 + 拒删被增量子链引用者，保链完整）；单条失败仅记录不中断。
 // 返回成功删除的条数，便于测试断言。
 //
-// **快照底链豁免**（FR-466 §2.2）：origin=snapshot 的备份不参与本策略裁剪。
+// **快照底链豁免**（§2.2）：origin=snapshot 的备份不参与本策略裁剪。
 // 快照是全量自包含的时间点，其生命周期只能由 snapshot.retention_days 决定；
 // 若让 backup.retention_days（默认 14）先裁掉它，快照会变成指向软删行的死链，
 // 而列表仍显示「可回滚」，直到用户点下去才发现失败。

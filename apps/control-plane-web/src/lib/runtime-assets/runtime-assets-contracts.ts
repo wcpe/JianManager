@@ -1,10 +1,10 @@
-/**
- * 运行时与制品契约（FR-082 / FR-301，ADR-103）。
+/** 
+ * 运行时与制品契约（ADR-103）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 import type { AssetInfo, AssetType } from '@/lib/artifacts/asset-contracts'
 
-/** 引用某 JDK 的实例（引用关系下钻 / 删除占用方提示，FR-082）。 */
+/** 引用某 JDK 的实例（引用关系下钻 / 删除占用方提示）。 */
 export interface JDKRefInstance {
   id: number
   uuid: string
@@ -43,8 +43,8 @@ export interface AssetTypeGroup {
   lostCount: number
 }
 
-/**
- * 跨节点多运行时矩阵项（FR-301 加性扩展）：type 区分 jdk / nodejs / python（预留）。
+/** 
+ * 跨节点多运行时矩阵项（加性扩展）：type 区分 jdk / nodejs / python（预留）。
  * type=jdk 行 name=厂商且携带引用实例；其它类型当前无引用消费者，instances 恒空。
  */
 export interface RuntimeMatrixEntry {

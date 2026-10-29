@@ -38,8 +38,8 @@ export interface NodePMConfigSectionProps {
 
 const PMS = ['npm', 'pnpm', 'yarn'] as const
 
-/**
- * 节点包管理器与 registry 配置子区（FR-306）。选 npm/pnpm/yarn（corepack 激活 pnpm/yarn）+
+/** 
+ * 节点包管理器与 registry 配置子区。选 npm/pnpm/yarn（corepack 激活 pnpm/yarn）+
  * 多 registry（默认源 + @scope 域源 + 可选凭据，凭据脱敏）。落节点托管 .npmrc。
  */
 export function NodePMConfigSection({

@@ -154,9 +154,9 @@ if only_gin:
         print(f'    {gn[p]}')
 
 # 注意：开发期间允许不一致（实现尚未完成），此处只告警不失败。
-# 待 FR-528 完成后改为 set -e 失败退出。
+#  待完成后改为 set -e 失败退出。
 if only_openapi or only_gin:
-    print('\n  WARN 路由不一致（FR-528 完成前允许，完成后须清零）')
+    print('\n  WARN 路由不一致（迁移完成前允许，完成后须清零）')
 else:
     print('  ok   路由完全一致')
 PY

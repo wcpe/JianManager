@@ -140,7 +140,7 @@ func TestCreate_GenericKeepsUserWorkDir(t *testing.T) {
 	}
 }
 
-// generic 实例：调用方未传 WorkDir 时系统同样分配（FR-234，创建向导隐藏工作目录、统一自动生成）。
+// generic 实例：调用方未传 WorkDir 时系统同样分配（创建向导隐藏工作目录、统一自动生成）。
 func TestCreate_GenericEmptyWorkDirAllocated(t *testing.T) {
 	db := newInstanceTestDB(t)
 	svc := NewInstanceService(db, nil, nil)
@@ -159,7 +159,7 @@ func TestCreate_GenericEmptyWorkDirAllocated(t *testing.T) {
 	}
 }
 
-// docker 实例允许空启动命令（交镜像 entrypoint 自管启动，FR-078）；非 docker 仍必填。
+// docker 实例允许空启动命令（交镜像 entrypoint 自管启动）；非 docker 仍必填。
 func TestCreate_DockerAllowsEmptyStartCommand(t *testing.T) {
 	db := newInstanceTestDB(t)
 	svc := NewInstanceService(db, nil, nil)

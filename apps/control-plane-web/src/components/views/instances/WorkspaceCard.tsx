@@ -5,8 +5,8 @@ import { cn } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
 import { Button } from '@jianmanager/ui/components/button'
 
-/**
- * 统一卡壳（FR-166）：grip 拖拽手柄 + 实例·功能标签 + 全屏 + 关闭，内嵌卡内容。
+/** 
+ * 统一卡壳：grip 拖拽手柄 + 实例·功能标签 + 全屏 + 关闭，内嵌卡内容。
  *
  * grip 是 react-grid-layout 的拖拽手柄（`.workspace-card-grip`，配 `draggableHandle`），
  * 这样卡片内部（终端/编辑器/表格）的交互不被拖拽吞掉——只有按住卡头 grip 才移动卡片。
@@ -23,7 +23,7 @@ export interface WorkspaceCardProps {
   cardId: string
   /** 卡头标题：功能名（外壳按卡类型解析后注入）。 */
   title: string
-  /**
+  /** 
    * 卡头副标题：实例展示名。
    * 单实例画布由父级统一传入（避免每卡各拉一次）；超级工作台每卡可属不同实例，
    * 由外壳按各自 instanceId 解析后注入。
@@ -35,9 +35,9 @@ export interface WorkspaceCardProps {
   onToggleFullscreen: () => void
   /** 关闭本卡。 */
   onClose: () => void
-  /**
-   * 只读卡壳（FR-168 导播台）：隐藏 grip 拖拽手柄 + 全屏 + 关闭按钮，卡头仅显标题。
-   * 导播台场景为预编排只读视图，瞬切/轮播在场景级，不在卡级编辑。默认 false（FR-166/167 不变）。
+  /** 
+   * 只读卡壳（导播台）：隐藏 grip 拖拽手柄 + 全屏 + 关闭按钮，卡头仅显标题。
+   * 导播台场景为预编排只读视图，瞬切/轮播在场景级，不在卡级编辑。默认 false（167 不变）。
    */
   readOnly?: boolean
   /** 卡内容（外壳注入，自带取数）。 */
@@ -57,7 +57,7 @@ function WorkspaceCardImpl({
   const { t } = useTranslation()
 
   return (
-    /*
+    /* 
       卡壳只把「圆角/描边/底色/阴影」交给 Card；卡头 / 卡体 两段的自有布局原样保留：
       卡头自带分隔线与 px-2 py-1.5、卡体 `min-h-0 flex-1 overflow-hidden` 承载终端/编辑器，
       故把 Card 默认的 py-4 / gap-4 归零，避免撑高卡头与卡体、破坏网格行高与全屏铺满。

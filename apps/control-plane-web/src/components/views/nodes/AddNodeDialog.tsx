@@ -15,7 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/compon
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 
-/**
+/** 
  * 一次性 enrollment token 的签发结果（本组件所需的最小结构）。
  *
  * 外壳直接传 `@/api/nodes` 的 `IssuedEnrollToken` 会结构兼容，故无需把该 API 类型迁进包。
@@ -34,7 +34,7 @@ export interface IssuedEnrollTokenView {
   expiresAt: string | number | Date
 }
 
-/** 复制按钮：写剪贴板（兼容 HTTP 非安全上下文），结果上报给外壳决定提示（FR-189）。 */
+/** 复制按钮：写剪贴板（兼容 HTTP 非安全上下文），结果上报给外壳决定提示。 */
 function CopyButton({ text, label, onResult }: { text: string; label: string; onResult?: (ok: boolean) => void }) {
   const copy = async () => {
     const ok = await copyToClipboard(text)
@@ -75,8 +75,8 @@ function ManualStep({ label, command, onCopyResult }: { label: string; command: 
   )
 }
 
-/**
- * 手动安装步骤段：把一键命令拆成「下载脚本 → 执行（带参数）」分步兜底（FR-080）。
+/** 
+ * 手动安装步骤段：把一键命令拆成「下载脚本 → 执行（带参数）」分步兜底。
  * 适用 `curl … | sh` 管道被策略拦截、或运维想先审脚本再执行的场景。
  */
 function ManualInstallSection({ issued, onCopyResult }: { issued: IssuedEnrollTokenView; onCopyResult?: (ok: boolean) => void }) {
@@ -137,8 +137,8 @@ function AutoInstallTab({ issued, onCopyResult }: { issued: IssuedEnrollTokenVie
   )
 }
 
-/**
- * 手动连接 Tab：面向「Worker 二进制已自行部署」的场景（FR-189）。
+/** 
+ * 手动连接 Tab：面向「Worker 二进制已自行部署」的场景。
  * 展示 CP 地址 + 一次性 token + 启动命令，复用同一签发结果，不走安装脚本。
  */
 function ManualConnectTab({ issued, onCopyResult }: { issued: IssuedEnrollTokenView; onCopyResult?: (ok: boolean) => void }) {
@@ -169,8 +169,8 @@ function ManualConnectTab({ issued, onCopyResult }: { issued: IssuedEnrollTokenV
   )
 }
 
-/**
- * 「添加节点」向导对话框：签发一次性 enrollment token，提供「自动安装 / 手动连接」两条上线路径（FR-080 / FR-189）。
+/** 
+ * 「添加节点」向导对话框：签发一次性 enrollment token，提供「自动安装 / 手动连接」两条上线路径。
  *
  * 受控视图（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 签发经 `onIssue` 上报，且**回传签发结果**——一次性凭据要交回视图才能展示（关掉就再也看不到）；

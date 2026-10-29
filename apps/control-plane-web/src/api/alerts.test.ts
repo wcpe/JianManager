@@ -5,8 +5,8 @@ import {
   type QQDiscoveredGroupList,
 } from './alerts'
 
-/**
- * QQ 已发现群列表归一化（FR-495）单测。
+/** 
+ * QQ 已发现群列表归一化单测。
  *
  * 存在的理由：真实后端 QQGroups 返回分页信封 `{items,total}`
  * （internal/controlplane/router/alert.go；docs/API.md 同），而 devmock 的

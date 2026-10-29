@@ -1,5 +1,5 @@
-/**
- * 聊天草稿的按会话保存（FR-519 §5.1「草稿按会话保存，切会话恢复」）。
+/** 
+ * 聊天草稿的按会话保存（§5.1「草稿按会话保存，切会话恢复」）。
  *
  * 为什么用 sessionStorage 而不是 localStorage：
  *  - 草稿可能含未发出的敏感内容（实例名、粘贴的日志片段）。localStorage 会留到用户
@@ -14,10 +14,10 @@
 const DRAFT_PREFIX = 'jm-assistant-draft:'
 const MAX_DRAFT_CHARS = 8192
 
-/**
+/** 
  * 当前草稿归属的用户 id（0 表示未登录/未知）。
  *
- * ## 为什么草稿 key 必须带 userId（FR-519「换用户不串号」）
+ * ## 为什么草稿 key 必须带 userId（「换用户不串号」）
  *
  * 此前 key 只有 `conversationId`（新会话是字面量 `new`）。于是：
  * 用户 A 在「新会话」里打了半句没发 → 登出 → 用户 B 登录 → B 打开新会话，
@@ -73,7 +73,7 @@ export function clearDraft(conversationId: number | null): void {
 
 // ── 进程内共享（同一会话可能有多个视图同时存在） ──────────────────────
 
-/**
+/** 
  * sessionStorage 只解决「关掉再回来」。它不解决**同一标签页内两个视图并存**：
  * 首页的对话面板与顶栏浮窗各自调用一次 `useAssistantChat`，如果草稿只放在各自
  * 的 `useState` 里，用户在首页写了半句再打开浮窗，浮窗是空的——同一会话两份草稿。
@@ -123,8 +123,8 @@ export function clearDraftShared(conversationId: number | null): void {
   notifyDraft()
 }
 
-/**
- * 切换/清空用户作用域（FR-519「换用户不串号」）。
+/** 
+ * 切换/清空用户作用域（「换用户不串号」）。
  *
  * 做两件事，缺一不可：
  *  1. 把**模块级缓存与订阅清空**——缓存按 conversationId 索引，登出后如果不清，

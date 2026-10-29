@@ -45,7 +45,7 @@ func sampleSignedManifest() *SignedManifest {
 }
 
 // TestSignedManifest_JSONStructureMatchesContract 断言序列化 JSON 含 contract §2 全部字段与结构，
-// 可被客户端 Manifest.parse 解析（字段名/嵌套/类型对齐）。FR-256 起 manifest 不再含 sig 段。
+// 可被客户端 Manifest.parse 解析（字段名/嵌套/类型对齐）。起 manifest 不再含 sig 段。
 func TestSignedManifest_JSONStructureMatchesContract(t *testing.T) {
 	m := sampleSignedManifest()
 
@@ -80,7 +80,7 @@ func TestSignedManifest_JSONStructureMatchesContract(t *testing.T) {
 	require.Equal(t, "patch56", patchArt["sha256"])
 	require.Equal(t, "zstd-patch", patchArt["codec"])
 
-	// FR-256 起 manifest 不再含 sig 段。
+	// 起 manifest 不再含 sig 段。
 	require.NotContains(t, obj, "sig", "manifest 不应再含签名段")
 
 	// 自更新段。
@@ -91,7 +91,7 @@ func TestSignedManifest_JSONStructureMatchesContract(t *testing.T) {
 	require.Contains(t, platforms, "windows")
 }
 
-// TestSignedManifest_CleanExcludeOmit 锁定 FR-255 方案 A 的 omitempty 语义：
+// TestSignedManifest_CleanExcludeOmit 锁定方案 A 的 omitempty 语义：
 // cleanExclude 为空时 JSON 不含该字段（老 manifest 字节不变，向后兼容）。
 func TestSignedManifest_CleanExcludeOmit(t *testing.T) {
 	m := sampleSignedManifest()
@@ -101,7 +101,7 @@ func TestSignedManifest_CleanExcludeOmit(t *testing.T) {
 		"cleanExclude 为空时 JSON 不得包含该字段（omitempty 向后兼容）")
 }
 
-// TestSignedManifest_WithCleanExclude 锁定 FR-255 cleanExclude 非空时的 JSON 输出。
+// TestSignedManifest_WithCleanExclude 锁定cleanExclude 非空时的 JSON 输出。
 func TestSignedManifest_WithCleanExclude(t *testing.T) {
 	m := sampleSignedManifest()
 	m.ManagedDirs = []string{"*"}

@@ -2,8 +2,8 @@ import { useEffect, useMemo } from 'react'
 
 import { ROUTE_LOADERS, matchRouteKey } from './route-chunks'
 
-/**
- * 路由 chunk 预取（FR-502 阶段 6 补丁）。
+/** 
+ * 路由 chunk 预取（阶段 6 补丁）。
  *
  * 切页等待的大头是目标页 chunk 的下载，而 `React.lazy` 只在首次渲染时才发起 import——
  * 用户点下去才开始下载。本模块把「导航意图」（hover / focus / 鼠标进入侧栏）翻译成一次
@@ -32,7 +32,7 @@ export function normalizeTarget(to: string): string {
   return raw.length > 1 && raw.endsWith('/') ? raw.slice(0, -1) : raw
 }
 
-/**
+/** 
  * 创建一个幂等预取器（纯逻辑，供单测与多入口复用；预取动作经 `loaders` 注入，不耦合路由表）。
  * 应用侧用模块级单例 {@link prefetchRoute}，因此所有入口共享同一份「已预取」状态。
  */
@@ -70,7 +70,7 @@ export const prefetchRoute = appPrefetcher.prefetch
 /** 已预取的路由键（观测/测试用）。 */
 export const prefetchedRoutes = appPrefetcher.prefetched
 
-/**
+/** 
  * 把「悬停 / 获得焦点」变成预取意图，返回可展开到导航元素上的 handlers。
  * 用 `useMemo` 固定引用：`NavLink` 之类的行组件不会因为 handler 变化而重渲染。
  */
@@ -87,7 +87,7 @@ export function useRouteIntentPrefetch(to: string): {
   )
 }
 
-/**
+/** 
  * 页面内链接的通用预取：在 document 上代理 `pointerover` / `focusin`，
  * 命中最近的 `<a href="/…">` 就预取。
  *
@@ -116,7 +116,7 @@ export function useLinkIntentPrefetch(): void {
   }, [])
 }
 
-/**
+/** 
  * 侧栏常驻快捷入口（服务器运维工作区的固定三条，见 `WorkspaceSidebar` 的 `SideNavShortcuts` 段）。
  *
  * 【为什么需要这条兜底】

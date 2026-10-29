@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ConfigAdoptHandler 配置纳管路由处理器（FR-533）。
+// ConfigAdoptHandler 配置纳管路由处理器。
 //
 // 前缀刻意与 /config-files 的既有 CRUD 同组（同一资源域），
 // 但 adopt / adopt/preview / health 是**静态段**，必须注册在 /:id 之前，

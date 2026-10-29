@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 客户端分发观测契约（FR-217 / FR-428）已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+/** 
+ * 客户端分发观测契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { ClientDistObservabilitySummary, ClientDistObservabilityCompare } from '@/lib/client-dist/client-dist-observability-contracts'
 
-/**
- * 客户端分发统计契约（FR-095）已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+/** 
+ * 客户端分发统计契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { StatsDayPoint, StatsVersion, StatsResult, StatsIP, ClientDistStats, ClientDistDistItem, ClientDistSeriesPoint, ClientDistObservability, ClientDistWindow } from '@/lib/client-dist/client-dist-stats-contracts'
 import type { ClientDistStats, ClientDistWindow, ClientDistObservability } from '@/lib/client-dist/client-dist-stats-contracts'
@@ -27,7 +27,7 @@ export function useClientStats(channelId: string | null | undefined, days: numbe
   })
 }
 
-// === 客户端分发观测（FR-217，消费方含 FR-220 平台统计页） ===
+// === 客户端分发观测（消费方含平台统计页） ===
 
 /** 版本/平台/滞后分布项（区间内跨桶合并）。 */
 

@@ -19,7 +19,7 @@ func randSecretB64(t *testing.T) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
-// keyEncFilePath 在临时数据根下拼出 etc/client-key-enc.key 路径（FR-263）。
+// keyEncFilePath 在临时数据根下拼出 etc/client-key-enc.key 路径。
 func keyEncFilePath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "etc", keyEncFileName)
@@ -97,7 +97,7 @@ func TestResolveKeyEncryptor_DevFallbackWhenUnset(t *testing.T) {
 }
 
 func TestResolveKeyEncryptor_AutogenPersistsAndUsable(t *testing.T) {
-	// 生产态未注入 → 自动生成并持久化，加密器可用（FR-263）。
+	// 生产态未注入 → 自动生成并持久化，加密器可用。
 	path := keyEncFilePath(t)
 	enc, src, err := ResolveKeyEncryptor("", false, path)
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestResolveKeyEncryptor_AutogenPersistsAndUsable(t *testing.T) {
 	require.NotNil(t, enc)
 
 	// 文件已落盘，内容为可解析的 base64 密钥。
-	// 注：0600 权限在 Windows 语义有限（Chmod 基本 no-op，见 FR-248 spec §6），不跨平台硬断言权限值。
+	// 注：0600 权限在 Windows 语义有限（Chmod 基本 no-op，见spec §6），不跨平台硬断言权限值。
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
@@ -119,7 +119,7 @@ func TestResolveKeyEncryptor_AutogenPersistsAndUsable(t *testing.T) {
 }
 
 func TestResolveKeyEncryptor_AutogenReuseAcrossRestart(t *testing.T) {
-	// 同一 keyFilePath 两次解析 → 同一密钥（跨重启稳定，FR-263）。
+	// 同一 keyFilePath 两次解析 → 同一密钥（跨重启稳定）。
 	path := keyEncFilePath(t)
 	enc1, src1, err := ResolveKeyEncryptor("", false, path)
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ func TestResolveKeyEncryptor_CorruptPersistedFileNeverOverwrites(t *testing.T) {
 }
 
 func TestResolveKeyEncryptor_EnvOverridesAutogen(t *testing.T) {
-	// env 注入非空时优先于自动生成，且不生成/不写文件（FR-263）。
+	// env 注入非空时优先于自动生成，且不生成/不写文件。
 	path := keyEncFilePath(t)
 	envSecret := randSecretB64(t)
 	enc, src, err := ResolveKeyEncryptor(envSecret, false, path)

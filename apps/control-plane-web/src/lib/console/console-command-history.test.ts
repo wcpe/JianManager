@@ -10,12 +10,12 @@ import {
   searchCommandHistory,
 } from './console-command-history'
 
-/** 命令历史（FR-416）：按实例持久化 + 相邻去重 + 上限 + `^R` 模糊搜索。 */
+/** 命令历史：按实例持久化 + 相邻去重 + 上限 + `^R` 模糊搜索。 */
 
 const INSTANCE = 7
 const OTHER = 8
 
-/**
+/** 
  * 本文件在 `node` project 下跑（vite.config 的双 project 划分），没有 jsdom 的 localStorage，
  * 故打一个**忠实实现 Storage 契约**的内存桩——模块只用到 get/set/remove。
  * 「刷新后历史仍在」的端到端证明另有 jsdom 组件用例（ConsoleCommandBar.dom.test.tsx），
@@ -74,7 +74,7 @@ describe('appendCommandHistory（纯函数）', () => {
   })
 })
 
-describe('持久化（FR-416：刷新后历史仍在）', () => {
+describe('持久化（：刷新后历史仍在）', () => {
   it('push 后重新 load 拿到同一份历史——这就是「刷新后仍在」的存储层证明', () => {
     pushCommandHistory(INSTANCE, 'say hello')
     pushCommandHistory(INSTANCE, 'list')

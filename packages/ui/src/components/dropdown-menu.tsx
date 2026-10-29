@@ -1,5 +1,5 @@
 "use client"
-/**
+/** 
  * @file DropdownMenu：下拉菜单（radix-ui 原语包装；2026-10 上游同步：取长补短合并替换）。
  *       同步自上游 main（radix 轨道）并保留本项目定制：
  * - 采纳上游增量：完整零件集（Portal/Group/CheckboxItem/RadioGroup/RadioItem/Shortcut/Sub*）、
@@ -10,7 +10,7 @@
  * @output DropdownMenu 及全部子组件（Trigger/Content/Group/Label/Item/CheckboxItem/
  *         RadioGroup/RadioItem/Separator/Shortcut/Sub/SubTrigger/SubContent/Portal）
  * @sync   行为/样式变更时同步 dropdown-menu.test.tsx；使用点：InstancesPage 行菜单、工具栏筛选等
- * @since   FR-502；上游同步（2026-10）
+ * @since上游同步（2026-10）
  */
 import * as React from "react"
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react"

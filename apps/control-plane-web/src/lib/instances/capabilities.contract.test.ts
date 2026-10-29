@@ -8,8 +8,8 @@ import {
   UNIVERSAL_CAPABILITIES as DEVMOCK_FALLBACK,
 } from '@jianmanager/devmock/capability-profile'
 
-/**
- * FR-445 / ADR-091：能力画像有三份登记（后端 `service/capability_profile.go`、前端
+/** 
+ *ADR-091：能力画像有三份登记（后端 `service/capability_profile.go`、前端
  * `lib/capabilities.ts`、devmock `capability-profile.ts`）。本契约测试逐画像枚举比对
  * devmock ↔ 前端，防止任一真源漂移导致「假后端」与前端对同一 (type, role) 给出不同 Tab 集。
  *
@@ -30,7 +30,7 @@ function normProfile(p: {
   return { mcSemantics: p.mcSemantics, capabilities: [...p.capabilities], sources }
 }
 
-describe('能力画像三真源一致性（devmock ↔ 前端，FR-445）', () => {
+describe('能力画像三真源一致性（devmock ↔ 前端）', () => {
   it('画像键集合完全一致', () => {
     expect(Object.keys(DEVMOCK_PROFILES).sort()).toEqual(Object.keys(CAPABILITY_REGISTRY).sort())
   })
@@ -71,7 +71,7 @@ function normContract(p: ContractProfile): ReturnType<typeof normProfile> {
   return normProfile(p)
 }
 
-describe('能力画像共享契约样本（后端 ↔ 前端，FR-445）', () => {
+describe('能力画像共享契约样本（后端 ↔ 前端）', () => {
   const repoRoot = path.resolve(__dirname, '../../../../../')
   const fixture = JSON.parse(
     readFileSync(path.join(repoRoot, 'contracts/capability-profiles.json'), 'utf8'),

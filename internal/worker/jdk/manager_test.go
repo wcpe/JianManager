@@ -109,7 +109,7 @@ func TestBuildDownloadURL(t *testing.T) {
 	}
 }
 
-// TestBuildDownloadURL_MirrorConfigurable 验证下载源可经环境变量覆盖（FR-033「下载源可配」）。
+// TestBuildDownloadURL_MirrorConfigurable 验证下载源可经环境变量覆盖（「下载源可配」）。
 func TestBuildDownloadURL_MirrorConfigurable(t *testing.T) {
 	t.Setenv("JIANMANAGER_JDK_TEMURIN_BASE", "https://mirror.example.com/adoptium")
 	u, err := buildDownloadURL(nil, "Temurin", 17, "x64", "")
@@ -125,7 +125,7 @@ func TestBuildDownloadURL_MirrorConfigurable(t *testing.T) {
 }
 
 // TestBuildDownloadURL_MirrorBaseOverridesEnv 验证 CP 下发的 mirrorBase（来自平台设置 jdk.mirror.*）
-// 优先于环境变量与默认源（FR-063 平台设置真生效）。
+// 优先于环境变量与默认源（平台设置真生效）。
 func TestBuildDownloadURL_MirrorBaseOverridesEnv(t *testing.T) {
 	t.Setenv("JIANMANAGER_JDK_TEMURIN_BASE", "https://env.example.com/adoptium")
 	u, err := buildDownloadURL(nil, "Temurin", 17, "x64", "https://setting.example.com/adoptium")

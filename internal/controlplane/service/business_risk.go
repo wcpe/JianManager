@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 业务批量风险分级（FR-535 §5）。
+// 业务批量风险分级（§5）。
 //
 // 分级只回答一件事：**这次批量影响面有多大、是否需要用户再做一次确认**。
 // 动作自身的风险（READ / WRITE / DESTRUCTIVE）由插件的 manifest 声明、经业务台透传进来；

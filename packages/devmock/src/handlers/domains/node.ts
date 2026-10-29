@@ -4,15 +4,15 @@ import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-mid
 import { db } from '@jianmanager/devmock/db'
 import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 
-/**
- * 节点与运行时域 mock handler（FR-200，照 spec §7 范式）。
+/** 
+ * 节点与运行时域 mock handler（照 spec §7 范式）。
  * 覆盖 api 模块：nodes / nodeRuntime / nodeRepair / jdks / runtimeAssets / selfUpdate 的每个 endpoint。
  * 字段严格匹配各 `web/src/api/*.ts` 的 interface；写操作改 db 联动（如装 JDK→列表出现、删 JDK→overview 减少、
  * 升级节点→check 当前版本变更）。受保护端点首行 requireAuth。集合 nodes/node-jdks/enroll-tokens/assets
  * 各在本模块顶层带 seedFn 唯一声明。
  */
 
-/** 假后端节点（字段同 web/src/api/nodes.ts NodeInfo；deletedAt 仅归档行有值，FR-393）。 */
+/** 假后端节点（字段同 web/src/api/nodes.ts NodeInfo；deletedAt 仅归档行有值）。 */
 interface MockNode {
   id: number
   uuid: string
@@ -22,7 +22,7 @@ interface MockNode {
   wsPort: number
   status: number
   maintenance: boolean
-  /** 反向隧道已连（FR-281，见 ADR-066）：在线节点 true=隧道下发，false=直拨回退。 */
+  /** 反向隧道已连（见 ADR-066）：在线节点 true=隧道下发，false=直拨回退。 */
   tunnelConnected: boolean
   os: string
   arch: string
@@ -37,11 +37,11 @@ interface MockNode {
   loadAvg1: number
   lastHeartbeat: string | null
   createdAt: string
-  /** 软删下线时间（FR-393）；有值=归档行，主列表不可见。 */
+  /** 软删下线时间；有值=归档行，主列表不可见。 */
   deletedAt?: string | null
   /** Worker 二进制当前版本（自更新对比用，非 NodeInfo 字段、不外泄到 /nodes）。 */
   workerVersion: string
-  /** 升级前备份版本（FR-182），空=无备份。 */
+  /** 升级前备份版本，空=无备份。 */
   backupVersion?: string
 }
 
@@ -118,7 +118,7 @@ interface MockRuntimeInstanceRef {
   javaMajorVersion?: number
 }
 
-/*
+/* 
   种子时间基准：**动态取当前时间**。
   原来是硬编码的 '2026-06-28T08:00:00Z'——随着真实时间流逝，节点心跳会变成「120 天前」，
   于是节点详情页的状态球（心跳活性）恒为 0%、列表的心跳列恒显示 119d，
@@ -128,7 +128,7 @@ const NOW = new Date().toISOString()
 /** 更新源 mock 最新版本。 */
 const FEED_LATEST = '0.10.0'
 
-/** 从 multipart 请求提取制品导入所需字段（FR-155）。 */
+/** 从 multipart 请求提取制品导入所需字段。 */
 interface MultipartAssetFields {
   type?: string
   name?: string
@@ -138,8 +138,8 @@ interface MultipartAssetFields {
   size?: number
 }
 
-/**
- * 稳健读取 multipart/form-data 字段（FR-155 导入制品）。
+/** 
+ * 稳健读取 multipart/form-data 字段（导入制品）。
  * 优先走标准 request.formData()；在测试环境下 axios 编码的真实 File 会触发 undici multipart
  * 解析器断言失败（jsdom/undici 已知不兼容），此时回退按原始文本正则提取各段，保证 mock 仍可用。
  */
@@ -189,14 +189,14 @@ function nodeSeedCount(): number {
   return mockDataScaleProfile().nodeSeedCount
 }
 
-/*
+/* 
   制品缓存上限（按节点）：假后端也要把写入**存住**。
   原先 PUT 只回显、GET 恒返回 0，导致「设成 5GB 后刷新又变不限」——看着像保存失败，
   实际是假数据没落盘。这类保真度缺口会把排查引向错误方向。
 */
 const artifactCacheCaps = new Map<number, number>()
 
-/*
+/* 
   节点代理配置（按节点）：与缓存上限同因——GET 写死 inherit、PATCH 只回显，
   会让「改成自定义代理后刷新又变回继承」，看着像保存失败。
 */
@@ -269,7 +269,7 @@ const nodes = db<MockNode>('nodes', () => [
     createdAt: NOW,
     workerVersion: '0.10.0',
   },
-  // 已下线归档样例（FR-393）：主列表不可见，归档分段可见。
+  // 已下线归档样例：主列表不可见，归档分段可见。
   {
     id: 3,
     uuid: 'node-gamma',
@@ -297,7 +297,7 @@ const nodes = db<MockNode>('nodes', () => [
     workerVersion: '0.9.0',
   },
 
-/*
+/* 
     【压力验证用种子】按数据量档位追加机器（large 档 34 台，合计 36 台），
     覆盖多种状态组合，用于验证节点页在 30+ 规模下的分页、异常优先排序与峰值指标。
     命名 node-01..node-34，与既有 alpha/beta 区分，便于在列表里辨认。
@@ -370,7 +370,7 @@ const jdks = db<MockJDK>('node-jdks', () => [
   },
 ])
 
-/** 假后端非 JDK 运行时（FR-298，字段同 web/src/api/runtimes.ts NodeRuntimeItem 去 type=jdk）。 */
+/** 假后端非 JDK 运行时（字段同 web/src/api/runtimes.ts NodeRuntimeItem 去 type=jdk）。 */
 interface MockNodeRuntime {
   id: number
   nodeId: number
@@ -386,7 +386,7 @@ interface MockNodeRuntime {
 
 const nodeRuntimes = db<MockNodeRuntime>('node-runtimes', () => [])
 
-/** 全局包内存清单（FR-307）：装/卸联动；mineflayer 种子标可更新（升级入口可见）。 */
+/** 全局包内存清单：装/卸联动；mineflayer 种子标可更新（升级入口可见）。 */
 interface MockGlobalPackage {
   id: number
   name: string
@@ -399,7 +399,7 @@ const globalPkgs = db<MockGlobalPackage>('node-global-packages', () => [
   { id: 2, name: 'typescript', version: '5.6.0' },
 ])
 
-/** 每节点上次库存同步时间（FR-301）；syncedAt=null 表示从未同步。刷新端点只前移在线节点。 */
+/** 每节点上次库存同步时间；syncedAt=null 表示从未同步。刷新端点只前移在线节点。 */
 interface MockRuntimeSync {
   id: number
   nodeId: number
@@ -535,7 +535,7 @@ const workerAssets = db<MockWorkerAsset>('worker-assets', () => [
   },
 ])
 
-/** 是否已软删归档（FR-393）。 */
+/** 是否已软删归档。 */
 function isArchived(n: MockNode): boolean {
   return !!n.deletedAt
 }
@@ -549,7 +549,7 @@ function toNodeInfo(n: MockNode) {
   return info
 }
 
-/** 归档节点视图（FR-393）：公开字段 + deletedAt。 */
+/** 归档节点视图：公开字段 + deletedAt。 */
 function toArchivedNode(n: MockNode) {
   const { workerVersion: _w, backupVersion: _b, ...info } = n
   void _w
@@ -583,10 +583,10 @@ function cacheWorkerAsset(os: string, arch: string) {
   return workerAssets.update(id, patch) ?? workerAssets.insert({ id, ...patch })
 }
 
-/** CP（Control Plane）自身 mock 版本状态，升级/回滚后变更，check 即反映（FR-081）。 */
+/** CP（Control Plane）自身 mock 版本状态，升级/回滚后变更，check 即反映。 */
 const cp = { currentVersion: '0.9.0', backupVersion: '0.8.0' as string | undefined }
 
-/** 全网升级编排进度快照（FR-081 + FR-155 金丝雀分批），upgrade-all 触发后填充。 */
+/** 全网升级编排进度快照（金丝雀分批），upgrade-all 触发后填充。 */
 interface MockRollout {
   rolloutId: string
   targetVersion: string
@@ -637,7 +637,7 @@ function componentStatusForNode(n: MockNode) {
   }
 }
 
-/**
+/** 
  * 按节点 UUID 取数字 id；找不到返回 undefined。
  *
  * 导出给其它域用（如 observ 的进程清单要按节点过滤实例）：`db('nodes')` 只能在**一处**
@@ -653,7 +653,7 @@ export function nodeIdByUuid(uuid: string): number | undefined {
 }
 
 export const handlers = [
-  /* ===================== 连通性测试（FR-229） ===================== */
+  /* ===================== 连通性测试 ===================== */
   domainRoute('post', '/diagnostics/http-test', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -688,7 +688,7 @@ export const handlers = [
       : HttpResponse.json({ error: 'NODE_OFFLINE', message: '节点未连接' }, { status: 503 })
   }),
 
-  /* ===================== nodes（FR-048 / FR-080 / FR-185 / FR-393 / FR-394） ===================== */
+  /* ===================== nodes ===================== */
   // 归档路由必须先于 /nodes/:id，避免 "archived" 被解析为 id。
   domainRoute('get', '/nodes/archived', (info) => {
     const denied = requireAuth(info)
@@ -745,7 +745,7 @@ export const handlers = [
   domainRoute('get', '/nodes', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    // 主列表仅活跃（未软删）节点，对齐 GORM 默认（FR-393）。
+    // 主列表仅活跃（未软删）节点，对齐 GORM 默认。
     return HttpResponse.json(nodes.list().filter((n) => !isArchived(n)).map(toNodeInfo))
   }),
 
@@ -794,8 +794,8 @@ export const handlers = [
     if (!n || isArchived(n)) {
       return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
     }
-    // FR-309 实例守卫（对齐真后端）：在线一律拒；名下有实例且未 force → 409 携清单；
-    // 离线 + force=true → 级联删除实例记录；节点软删进归档（FR-393）。
+    // 实例守卫（对齐真后端）：在线一律拒；名下有实例且未 force → 409 携清单；
+    // 离线 + force=true → 级联删除实例记录；节点软删进归档。
     if (n.status === 1) {
       return HttpResponse.json({ error: 'BUSINESS_ERROR', message: '不能删除在线节点' }, { status: 422 })
     }
@@ -862,7 +862,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  /* ===================== node proxy（FR-185） ===================== */
+  /* ===================== node proxy ===================== */
   domainRoute('get', '/nodes/:id/proxy', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -921,7 +921,7 @@ export const handlers = [
     return HttpResponse.json({ nodeId: id, jdkDeleted: 0, instancesPurged: 0 })
   }),
 
-  /* ===================== JDK 托管（FR-033 / FR-072 / FR-178 / FR-183） ===================== */
+  /* ===================== JDK 托管 ===================== */
   domainRoute('get', '/nodes/:id/jdks', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -965,7 +965,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // 一键装 JDK（FR-183 异步化）：受理即装入列表（mock 同步落库以便列表联动），回执 taskId（HTTP 202）。
+  // 一键装 JDK（异步化）：受理即装入列表（mock 同步落库以便列表联动），回执 taskId（HTTP 202）。
   domainRoute('post', '/nodes/:id/jdks/install', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -984,7 +984,7 @@ export const handlers = [
     return HttpResponse.json({ taskId: `task-jdk-${Date.now()}` }, { status: 202 })
   }),
 
-  // JDK 探测（FR-228）：mock 据路径返厂商/版本/架构；含 "invalid" 或不含 jdk/java 关键字 → valid=false 演示错误态。
+  // JDK 探测：mock 据路径返厂商/版本/架构；含 "invalid" 或不含 jdk/java 关键字 → valid=false 演示错误态。
   domainRoute('post', '/nodes/:id/jdks/probe', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1039,7 +1039,7 @@ export const handlers = [
     })
   }),
 
-  // FR-373 节点路径权限探测 / chmod（平台管理员）
+  // 节点路径权限探测 / chmod（平台管理员）
   domainRoute('post', '/nodes/:id/fs/check-access', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1074,7 +1074,7 @@ export const handlers = [
     return HttpResponse.json({ message: '已修改权限', modeOctal })
   }),
 
-  /* ===================== 节点运行时库（FR-298） ===================== */
+  /* ===================== 节点运行时库 ===================== */
   // 统一 Runtime 视图：node-jdks(type=jdk) + node-runtimes 读侧拼装。
   domainRoute('get', '/nodes/:id/runtimes', (info) => {
     const denied = requireAuth(info)
@@ -1161,7 +1161,7 @@ export const handlers = [
     return HttpResponse.json(created, { status: 201 })
   }),
 
-  // 一键安装 Node.js（FR-299）：202+taskId 受理；mock 同步落一条托管运行时行，模拟任务终态落库。
+  // 一键安装 Node.js：202+taskId 受理；mock 同步落一条托管运行时行，模拟任务终态落库。
   domainRoute('post', '/nodes/:id/runtimes/install', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1209,7 +1209,7 @@ export const handlers = [
     return HttpResponse.json({ message: '已删除' })
   }),
 
-  /* ===================== 节点包管理器配置（FR-306） ===================== */
+  /* ===================== 节点包管理器配置 ===================== */
   domainRoute('get', '/nodes/:id/pm-config', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1239,7 +1239,7 @@ export const handlers = [
     })
   }),
 
-  /* ===================== 节点全局包管理（FR-307） ===================== */
+  /* ===================== 节点全局包管理 ===================== */
   // 有状态内存清单：装/卸联动列表；mineflayer 种子标可更新（升级入口可见）。
   domainRoute('get', '/nodes/:id/packages', (info) => {
     const denied = requireAuth(info)
@@ -1270,7 +1270,7 @@ export const handlers = [
     return HttpResponse.json({ message: '已卸载' })
   }),
 
-  /* ===================== 节点制品缓存（FR-178） ===================== */
+  /* ===================== 节点制品缓存 ===================== */
   domainRoute('get', '/nodes/:id/artifact-cache', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1312,7 +1312,7 @@ export const handlers = [
     return HttpResponse.json({ items: [], totalBytes: 48234123, capBytes })
   }),
 
-  /* ===================== 运行时与制品全局聚合（FR-082） ===================== */
+  /* ===================== 运行时与制品全局聚合 ===================== */
   domainRoute('get', '/runtime-assets/overview', (info) => {
     const denied = requirePlatformAdmin(info)
     if (denied) return denied
@@ -1369,7 +1369,7 @@ export const handlers = [
         }
       })
       .filter((g) => g.count > 0)
-    // FR-301 加性扩展：多运行时矩阵（jdk 行沿 jdkMatrix 映射 + node-runtimes 行引用恒空）。
+    // 加性扩展：多运行时矩阵（jdk 行沿 jdkMatrix 映射 + node-runtimes 行引用恒空）。
     const runtimeMatrix = [
       ...jdkMatrix.map((j) => ({
         id: j.id,
@@ -1440,7 +1440,7 @@ export const handlers = [
     })
   }),
 
-  // 强制全节点库存同步（FR-301）：在线节点 syncedAt 前移，离线节点 ok=false 保留旧值（失败容忍显旧）。
+  // 强制全节点库存同步：在线节点 syncedAt 前移，离线节点 ok=false 保留旧值（失败容忍显旧）。
   domainRoute('post', '/runtime-assets/refresh', (info) => {
     const denied = requirePlatformAdmin(info)
     if (denied) return denied
@@ -1458,7 +1458,7 @@ export const handlers = [
     return HttpResponse.json({ results, syncedAt: okTimes.length > 0 ? now : null })
   }),
 
-  // 导入制品（FR-155：制品导入下载进度）——镜像后端 multipart 入库（POST /assets）。
+  // 导入制品（：制品导入下载进度）——镜像后端 multipart 入库（POST /assets）。
   // 读上传文件 → 按类型插入一条制品，令 overview 联动出现（进度由前端 axios onUploadProgress 驱动）。
   domainRoute('post', '/assets', async (info) => {
     const denied = requirePlatformAdmin(info)
@@ -1510,7 +1510,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  /* ===================== 面板自更新（FR-081 / FR-182 / FR-186） ===================== */
+  /* ===================== 面板自更新 ===================== */
   domainRoute('get', '/self-update/check', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1598,7 +1598,7 @@ export const handlers = [
     const targets = nodes
       .list((n) => n.status === 1)
       .filter((n) => !body.nodeIds || body.nodeIds.includes(n.id))
-    // FR-155：金丝雀=第 1 批；剩余按 batchSize 分批（<=0=剩余一批）。mock 恒成功，故末态 phase=completed。
+    // 金丝雀=第 1 批；剩余按 batchSize 分批（<=0=剩余一批）。mock 恒成功，故末态 phase=completed。
     const canarySize = Math.min(Math.max(0, body.canarySize ?? 0), targets.length)
     const batchSize = body.batchSize && body.batchSize > 0 ? body.batchSize : Math.max(1, targets.length - canarySize)
     const remaining = targets.length - canarySize
@@ -1634,7 +1634,7 @@ export const handlers = [
   }),
 ]
 
-/** 构建 check / refresh 响应（FR-081 / FR-186）。cached 区分缓存读取与 live 刷新。 */
+/** 构建 check / refresh 响应。cached 区分缓存读取与 live 刷新。 */
 function buildCheckResult(cached: boolean) {
   return {
     configured: true,

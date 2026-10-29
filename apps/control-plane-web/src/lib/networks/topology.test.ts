@@ -35,7 +35,7 @@ function proxy(id: number, name: string, status = 'RUNNING'): InstanceInfo {
   }
 }
 
-/** FR-453 全量实例投影（拓扑孤立节点来源）的最小构造器。 */
+/** 全量实例投影（拓扑孤立节点来源）的最小构造器。 */
 function inst(
   id: number,
   name: string,
@@ -180,7 +180,7 @@ describe('buildTopology', () => {
     expect(g.edges).toHaveLength(1)
   })
 
-  it('FR-453：未注册实例作为孤立节点保留（不出连线）', () => {
+  it('未注册实例作为孤立节点保留（不出连线）', () => {
     const g = buildTopology(
       [{ proxy: proxy(1, 'p'), registrations: [reg(10, 1, 100)] }],
       [

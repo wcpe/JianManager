@@ -11,15 +11,15 @@ import { clientDistSource, manifestFilesToDistFiles } from '@/components/file-br
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
-/**
- * 客户端分发版本管理面板（FR-088，见 ADR-022）的接线层（ADR-103）。
+/** 
+ * 客户端分发版本管理面板（见 ADR-022）的接线层（ADR-103）。
  *
  * 展示层已回迁应用侧（`ClientVersionsPanelView`），此处只保留应用侧职责：
  * - 取数：版本列表（`useClientVersions`）与选中版本详情（`useClientVersion(channelId, detailVersion)`；
  *   选中版本由本层持有，因为它是详情查询的入参）；
  * - 写操作：回滚 mutation（`useRollbackClientVersion`）与成功/失败 toast；
- * - 门禁：回滚限平台管理员（FR-059），由 `DangerConfirm` 自行读角色判定；
- * - 路由：发布走独立页面（FR-191），「发布新版本」导航到 `/client-channels/:id/publish`；
+ * - 门禁：回滚限平台管理员，由 `DangerConfirm` 自行读角色判定；
+ * - 路由：发布走独立页面，「发布新版本」导航到 `/client-channels/:id/publish`；
  * - 应用侧接线层注入：内嵌更新器摘要（自行取数）与制品内容 `FileBrowser`（注入主题 + 管理面制品端点），
  *   二者经槽传入视图，包内不 import 应用侧模块。
  */

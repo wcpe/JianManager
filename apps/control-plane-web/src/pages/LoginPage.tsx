@@ -7,8 +7,8 @@ import { useSetupStatus } from '@/api/setup'
 import { useAuthStore } from '@/stores/auth'
 import { LoginPageView } from '@/components/views/auth/LoginPageView'
 
-/**
- * 登录页（FR-157）容器：表单草稿与内联错误交共享视图，这里保留 returnTo 解析、
+/** 
+ * 登录页容器：表单草稿与内联错误交共享视图，这里保留 returnTo 解析、
  * 「已登录 / 待初始化」重定向与登录 mutation（token 落地与成功跳转由 `useLogin` 挂）。
  * 保留同路径默认导出，路由表无需改动。
  */

@@ -19,8 +19,8 @@ import { CANDIDATE_LIMIT } from '@/components/views/instances/InstancePicker'
 import { useDebounced } from '@/lib/hooks/use-debounced'
 import type { StatusLevel } from '@jianmanager/ui'
 
-/**
- * 配置纳管页（FR-533）。
+/** 
+ * 配置纳管页。
  *
  * 【语义核心：这是「纳管现有文件」，不是数据导入】
  * 磁盘上的配置文件就是唯一真源。本页做的事是「把磁盘现状登记成 JM 的基线版本」：
@@ -50,7 +50,7 @@ interface Candidate {
 /** 可被纳管的格式（后端 `config_file` 只支持 yaml / json / properties）。 */
 const ADOPTABLE_FORMATS = new Set(['yaml', 'yml', 'json', 'properties'])
 
-/**
+/** 
  * 是否可纳管。
  *
  * `Discover` 会返回 `.toml` / `.txt` / `.conf` 供展示，但 `config_file` 只支持
@@ -143,7 +143,7 @@ export default function ConfigAdoptPage() {
   /** 参与批量的分组 id（含子分组开关见下）。 */
   const [groupIds, setGroupIds] = useState<number[]>([])
   const [includeDescendants, setIncludeDescendants] = useState(true)
-  /**
+  /** 
    * 批量模式的路径通配。后端**强制**要求它非空（不允许「纳管目录下全部文件」），
    * 默认给出最常见的一档，避免用户面对空输入框不知所措。
    */
@@ -194,7 +194,7 @@ export default function ConfigAdoptPage() {
     [pathPatterns],
   )
 
-  /**
+  /** 
    * 纳管请求体（两种形态共用入口）。
    *
    * 用判别式联合而不是「同时带上 files 与 target」：后端按 `target` 是否存在决定走批量还是

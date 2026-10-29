@@ -1,4 +1,4 @@
-/**
+/** 
  * 汇总只需实例的标识与状态字段（结构化子集，避免牵动应用侧更宽的 `InstanceInfo` 契约）。
  */
 export interface SummaryInstanceInput {
@@ -6,8 +6,8 @@ export interface SummaryInstanceInput {
   status: string
 }
 
-/**
- * 实例列表汇总计数（FR-136）。
+/** 
+ * 实例列表汇总计数。
  * 抽成无 React 依赖的纯函数以便单测，供顶部汇总头「运行 N / 停止 N / 崩溃 M / 总数」着色与点击筛选。
  */
 
@@ -19,7 +19,7 @@ export interface InstanceStatusCounts {
   crashed: number
 }
 
-/**
+/** 
  * 按状态把实例聚合为汇总计数。
  * - running：RUNNING + STARTING + STOPPING（过渡态归活动桶，避免汇总头漏算正在拉起/收尾的实例）。
  * - stopped：STOPPED。
@@ -50,7 +50,7 @@ export function summarizeInstances(instances: SummaryInstanceInput[]): InstanceS
 /** 汇总头可点的筛选维度键，映射到列表 status 筛选值。 */
 export type SummaryFilterKey = 'all' | 'running' | 'stopped' | 'crashed'
 
-/**
+/** 
  * 汇总头某一项点击后对应的列表状态筛选值。
  * running 桶含多个状态，后端 status 单值过滤无法表达「运行或过渡」，故以 RUNNING 为代表过滤；
  * stopped/crashed 一一对应；all 返回 undefined（清空筛选）。

@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 配置生效编排（FR-532）。
+// 配置生效编排。
 //
 // 三种方式（spec §13）：hot_reload / restart / push_only。本文件的唯一难点不是「怎么下发」，
 // 而是 **怎么诚实地说明结果**：
@@ -32,7 +32,7 @@ import (
 // 而不是一个枚举：状态机需要的是「能不能算成功」与「能不能对外声称已生效」两个独立答案，
 // 压进一个枚举后 UI 就只能在两者之间二选一，必然有一边是假的。
 
-// 生效原因码（与 FR-528 错误码表同风格，大写蛇形）。
+// 生效原因码（与错误码表同风格，大写蛇形）。
 const (
 	// ActivateCodeReloaded 插件明确回报已重载。
 	ActivateCodeReloaded = "RELOADED"
@@ -120,7 +120,7 @@ type ReloadReply struct {
 	TimedOut bool
 }
 
-// ConfigActivationService 配置生效编排（FR-532）。
+// ConfigActivationService 配置生效编排。
 type ConfigActivationService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
@@ -460,7 +460,7 @@ func (s *ConfigActivationService) sendReload(inst *model.Instance, paths []strin
 	return s.sendReloadViaWorker(inst, paths, timeout)
 }
 
-// sendReloadViaWorker 经 Worker 的 ReloadProbeConfig 下发（FR-526 已建好通道）。
+// sendReloadViaWorker 经 Worker 的 ReloadProbeConfig 下发（已建好通道）。
 //
 // CP→Worker 的 gRPC 超时比探针回执预算多留 5s：让**探针侧**的超时先触发，
 // 这样我们能拿到「探针超时」这个明确结论，而不是 CP 侧先断连后只剩一句 context deadline。

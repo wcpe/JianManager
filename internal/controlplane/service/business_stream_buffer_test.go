@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// 本文件覆盖 FR-522 §4 环形缓冲的核心性质：写入、溢出丢最旧、since 补读、gap 判定、时间窗老化。
+// 本文件覆盖§4 环形缓冲的核心性质：写入、溢出丢最旧、since 补读、gap 判定、时间窗老化。
 // 全部为纯内存用例（不依赖 DB / 网络），便于在高频回归中反复跑。
 
 // mkFrame 造一条最简业务帧（payload 为 JSON 对象）。
@@ -36,7 +36,7 @@ func TestBusinessStreamBuffer_AppendAssignsMonotonicSeq(t *testing.T) {
 	if buf.NewestSeq() != 3 || buf.OldestSeq() != 1 || buf.Size() != 3 {
 		t.Fatalf("边界不符: newest=%d oldest=%d size=%d", buf.NewestSeq(), buf.OldestSeq(), buf.Size())
 	}
-	// SSE 帧的 id 必须等于 seq（FR-522 §8 验收 6）。
+	// SSE 帧的 id 必须等于 seq（§8 验收 6）。
 	frames, gap := buf.Since(0)
 	if gap {
 		t.Fatal("未溢出时不应有 gap")

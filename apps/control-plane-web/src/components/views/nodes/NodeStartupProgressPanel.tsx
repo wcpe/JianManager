@@ -2,8 +2,8 @@ import { useTranslation } from 'react-i18next'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { STARTUP_PHASE_LABELS, type NodeStartupProgressInfo } from '@/api/nodes'
 
-/**
- * 「正在启动的 Worker」提示条（FR-486 范围②）。
+/** 
+ * 「正在启动的 Worker」提示条（范围②）。
  *
  * ## 为什么它必须独立于节点列表
  *

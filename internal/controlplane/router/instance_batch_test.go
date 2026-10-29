@@ -234,7 +234,7 @@ func TestInstanceBatch_ByFilter_ScopeConverged(t *testing.T) {
 	assert.Equal(t, float64(1), m["requested"])
 }
 
-// TestInstanceBatch_Forbidden FR-432：member 模板含 instance.operate 能力，资源隔离由组决定。
+// TestInstanceBatch_Forbidden：member 模板含 instance.operate 能力，资源隔离由组决定。
 // 无组用户不拒 403，而是 scope 为空 → 目标实例 skipped（存在性隐藏），不执行操作。
 func TestInstanceBatch_Forbidden(t *testing.T) {
 	db := setupTestDB(t)

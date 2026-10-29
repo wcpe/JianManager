@@ -1,9 +1,9 @@
-/**
+/** 
  * @file DatabaseExplorerView：数据库资源管理器的受控外壳，隔离应用取数与表选择策略。
  * @input lib/db-contracts、lib/utils、翻译上下文、图标与应用注入的表清单和行视图
  * @output DatabaseExplorerView、DatabaseExplorerViewProps
  * @sync apps/control-plane-web/src/components/database/DatabaseExplorer.tsx、apps/control-plane-web/src/pages/DatabasePage.dom.test.tsx
- * @since FR-508
+ * @since
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'

@@ -76,26 +76,26 @@ import { DETAIL_TABS, NodeDetailPane } from '@/components/views/nodes/NodeDetail
 import type { DetailTab } from '@/components/views/nodes/NodeDetailPane'
 
 
-/** 待二次确认的危险节点操作（FR-048）。 */
+/** 待二次确认的危险节点操作。 */
 type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
 
-/** 节点下线被实例守卫 409 拒绝的上下文（FR-309）：节点 + 名下实例清单。 */
+/** 节点下线被实例守卫 409 拒绝的上下文：节点 + 名下实例清单。 */
 type DeleteConflict = { node: NodeInfo; instances: NodeDeleteBlockedInstance[] }
 
-/** 归档清理被实例守卫 409 拒绝的上下文（FR-394）。 */
+/** 归档清理被实例守卫 409 拒绝的上下文。 */
 type PurgeConflict = { node: ArchivedNode; instances: NodeDeleteBlockedInstance[] }
 
-/** 页面级视图：活跃 | 归档（FR-393，URL `?view=` 可寻址，默认 active）。 */
+/** 页面级视图：活跃 | 归档（URL `?view=` 可寻址，默认 active）。 */
 type NodesView = 'active' | 'archive'
 
 function readNodesView(searchParams: URLSearchParams): NodesView {
   return searchParams.get('view') === 'archive' ? 'archive' : 'active'
 }
 
-/**
+/** 
  * 列表 / 卡片两种呈现方式（用户可切换，选择持久化）。
  *
- * 【为什么参数叫 layout 而不是 view】`?view=` 已被「活跃 / 归档」占用（FR-393）。
+ * 【为什么参数叫 layout 而不是 view】`?view=` 已被「活跃 / 归档」占用。
  * 两个语义挤在一个参数里，将来加第三种（如「按机房」）就会互相覆盖。
  */
 type NodesLayout = 'list' | 'card'
@@ -117,7 +117,7 @@ function readNodesLayout(searchParams: URLSearchParams): NodesLayout {
 
 
 
-/** 从 URL `?tab=` 解析激活分段（FR-128 可寻址；非法值回退默认 overview）。 */
+/** 从 URL `?tab=` 解析激活分段（可寻址；非法值回退默认 overview）。 */
 function readDetailTab(searchParams: URLSearchParams): DetailTab {
   const tab = searchParams.get('tab')
   if (tab === 'jdk') return 'runtime' // 旧链接兼容：tab=jdk → 运行时
@@ -129,14 +129,14 @@ function readDetailTab(searchParams: URLSearchParams): DetailTab {
 
 export default function NodesPage() {
   const { t } = useTranslation()
-  // 选中节点与激活分段均入 URL（FR-128 可寻址）：`?node=<id>` 深链（命令面板 FR-241 跳转携带）、
-  // `?tab=<DetailTab>` 激活分段（默认 overview 省略）；`?view=active|archive` 页面视图（FR-393）。
+  // 选中节点与激活分段均入 URL（可寻址）：`?node=<id>` 深链（命令面板跳转携带）、
+  // `?tab=<DetailTab>` 激活分段（默认 overview 省略）；`?view=active|archive` 页面视图。
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const view = readNodesView(searchParams)
   const isArchive = view === 'archive'
 
-  // 页面上报（FR-518 §5.1）：`?node=<id>` 深链即「正在看哪个节点」，可直接派生。
+  // 页面上报（§5.1）：`?node=<id>` 深链即「正在看哪个节点」，可直接派生。
   // 只发类型化引用，不发节点名/凭证（名称由后端按权限回填）。
   const contextNodeId = searchParams.get('node')
   usePageContext(
@@ -156,10 +156,10 @@ export default function NodesPage() {
   const { data: archivedNodes, isLoading: archivedLoading, isError: archivedError, refetch: refetchArchived } = useArchivedNodes({
     enabled: isArchive,
   })
-  // FR-486：正在启动的 Worker 进度。单独取数——它们尚未注册，不在 nodes 列表里。
+  // 正在启动的 Worker 进度。单独取数——它们尚未注册，不在 nodes 列表里。
   // 归档视图不取（归档页与「谁正在启动」无关，多一个轮询没意义）。
   const { data: startupProgress, isLoading: startupLoading } = useNodeStartupProgress({ enabled: !isArchive })
-  // 各节点实例数走服务端聚合（FR-247/FR-270）：byNode 每节点计数已在服务端算好，
+  // 各节点实例数走服务端聚合：byNode 每节点计数已在服务端算好，
   // 本页不再全量拉取实例再前端归并。
   //
   // 归档视图用不到实例数（归档列表只显示名称/主机/下线时间），故按视图门控取数：
@@ -173,10 +173,10 @@ export default function NodesPage() {
   const tab = readDetailTab(searchParams)
   const [query, setQuery] = useState('')
   const [pending, setPending] = useState<PendingAction | null>(null)
-  // FR-309：下线被实例守卫 409 拒绝 → 清单模态；离线节点走强制下线需再过一道输入名称确认。
+  // 下线被实例守卫 409 拒绝 → 清单模态；离线节点走强制下线需再过一道输入名称确认。
   const [conflict, setConflict] = useState<DeleteConflict | null>(null)
   const [forcePending, setForcePending] = useState<DeleteConflict | null>(null)
-  // FR-394：归档清理确认 / 实例守卫 / force 确认。
+  // 归档清理确认 / 实例守卫 / force 确认。
   const [purgeTarget, setPurgeTarget] = useState<ArchivedNode | null>(null)
   const [purgeConflict, setPurgeConflict] = useState<PurgeConflict | null>(null)
   const [forcePurgePending, setForcePurgePending] = useState<PurgeConflict | null>(null)
@@ -200,7 +200,7 @@ export default function NodesPage() {
   const del = useDeleteNode()
   const purge = usePurgeArchivedNode()
 
-  // 集群汇总（FR-144）：在线/离线/维护计数 + 在线节点资源水位均值。
+  // 集群汇总：在线/离线/维护计数 + 在线节点资源水位均值。
   const summary = useMemo(() => summarizeNodes(nodes ?? []), [nodes])
   // 各节点实例数（服务端聚合 byNode，列表/详情共用）。
   const instanceCountByNode = useMemo(() => {
@@ -211,7 +211,7 @@ export default function NodesPage() {
 
   const layout = readNodesLayout(searchParams)
 
-  /**
+  /** 
    * 列顺序（表头拖拽换位，用户要求「表头参考服务器列表可以拖拽」）。
    * 与实例页同一套实现（lib/shared/column-order），但列定义独立（jm.nodes.columnOrder）。
    */
@@ -224,11 +224,11 @@ export default function NodesPage() {
     })
   }
 
-  /**
+  /** 
    * 分页（用户要求「底部分页」）。走 URL，与服务器页同款语义：可分享、刷新保持。
    * 节点数量通常很少，但「分页」保证了节点规模上来后不会一次性铺满整页。
    */
-  /**
+  /** 
    * 状态筛选（用户提出）。走 URL 与其他筛选保持一致：可分享、刷新保持。
    * 与搜索词是 AND 关系（见 filterNodes）。
    */
@@ -242,7 +242,7 @@ export default function NodesPage() {
     setSearchParams(params, { replace: true })
   }
 
-  /**
+  /** 
    * 动态分页：页大小 = 表格当前「一屏能放几行」，翻页即换屏。
    * 固定行数在两种情况下都不对：节点少时容器铺满但只放两行；小屏时一页放不下要滚。
    */
@@ -262,7 +262,7 @@ export default function NodesPage() {
     setSearchParams(params, { replace: true })
   }
 
-  /**
+  /** 
    * 排序状态（用户可点表头切换）。
    *
    * 走 URL（`?sort=&order=`）而不是组件 state：与服务器页一致，链接可分享、刷新不丢。
@@ -293,7 +293,7 @@ export default function NodesPage() {
   }
 
   const filtered = useMemo(() => filterNodes(nodes ?? [], query, statusFilter), [nodes, query, statusFilter])
-  /**
+  /** 
    * 排序后的节点列表（列表视图用）。
    *
    * 排序键与方向都来自 URL；未指定时保持接口返回顺序（后端已按在线/名称排过），
@@ -302,7 +302,7 @@ export default function NodesPage() {
   const sortedNodes = useMemo(() => {
     if (!sortKey) return filtered
     const dir = sortOrder === 'desc' ? -1 : 1
-    /*
+    /* 
       「异常优先」的权重：数值越小越靠前（升序即「问题最多的先出现」）。
       离线（最需要处理）→ 维护中 → CPU 高 → 其余。
       用 cpuUsage 作为第三层，是为了让「都正常的机器里最吃紧的」也排在前面。
@@ -353,7 +353,7 @@ export default function NodesPage() {
     if (!q) return list
     return list.filter((n) => n.name.toLowerCase().includes(q) || n.host.toLowerCase().includes(q))
   }, [archivedNodes, query])
-  // 有效选中（FR-232 进入默认选第一个 + FR-177 幽灵选中回退）：基于搜索后的 filtered 派生——
+  // 有效选中（进入默认选第一个幽灵选中回退）：基于搜索后的 filtered 派生——
   // 未显式选中/选中项不在筛选结果内 → 回退筛选结果第一个；搜索无匹配 → null（右栏落空态，不留旧详情）。
   // 派生而非用 effect 同步 state（避免 set-state-in-effect 级联；selectedId 仍保留用户最后点选）。
   const effectiveSelectedId = useMemo(() => {
@@ -417,7 +417,7 @@ export default function NodesPage() {
       del.mutate({ id: node.id }, {
         onSuccess: () => toast.success(t('nodes.deleted')),
         onError: (e: Error & { response?: { status?: number; data?: { error?: string; message?: string; instances?: NodeDeleteBlockedInstance[] } } }) => {
-          // FR-309：名下有实例被守卫拒绝 → 弹实例清单模态（离线节点内含强制下线入口）。
+          // 名下有实例被守卫拒绝 → 弹实例清单模态（离线节点内含强制下线入口）。
           if (e?.response?.status === 409 && e.response.data?.error === 'NODE_HAS_INSTANCES') {
             setConflict({ node, instances: e.response.data.instances ?? [] })
             return
@@ -428,7 +428,7 @@ export default function NodesPage() {
     }
   }
 
-  // FR-309 强制下线（仅离线节点）：级联删除名下实例的平台记录，明示不清理远端文件。
+  // 强制下线（仅离线节点）：级联删除名下实例的平台记录，明示不清理远端文件。
   const confirmForceDelete = () => {
     if (!forcePending) return
     const { node } = forcePending
@@ -440,7 +440,7 @@ export default function NodesPage() {
     })
   }
 
-  // FR-394：归档清理（无 force）；409 → 实例清单 → force DangerConfirm。
+  // 归档清理（无 force）；409 → 实例清单 → force DangerConfirm。
   const confirmPurge = () => {
     if (!purgeTarget) return
     const node = purgeTarget
@@ -481,7 +481,7 @@ export default function NodesPage() {
   ]
   const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
 
-  /**
+  /** 
    * KPI 大卡片（用户要求「和服务器列表一样，顶部 KPI 大卡片」）。
    *
    * 与服务器页同一套 `StatCard` + auto-fit 网格：数字优先于文字——
@@ -550,8 +550,8 @@ export default function NodesPage() {
     },
   ]
   const listLoading = isArchive ? archivedLoading : isLoading
-  /**
-   * 列表取数失败（FR-201 同款纪律）：不判 `isError` 时失败会渲染成「暂无节点」空态，
+  /** 
+   * 列表取数失败（同款纪律）：不判 `isError` 时失败会渲染成「暂无节点」空态，
    * 运营看到的是「节点都没了」而不是「这次没拉到」，据此误判集群已空。
    * 错误态与空态必须分开，且给出重试入口（查询自带 30s 轮询，但显式重试更快）。
    */
@@ -588,7 +588,7 @@ export default function NodesPage() {
         <div
           role="group"
           aria-label={t('nodes.summaryLabel', '节点概览')}
-          /*
+          /* 
             7 张卡一行排下：可用宽度约 1040px（1280 视口减侧栏与内边距），
             (1040 - 6×gap 10) / 7 ≈ 139px。取 minmax(120px,1fr) 留余量——
             原先写 130px 时第 7 张被挤到第二行，白吃掉整行高度。
@@ -664,7 +664,7 @@ export default function NodesPage() {
             />
           </div>
         </ScopeBar>
-        {/* FR-486：正在启动的 Worker。放在列表之上，因为它解释「为什么列表里还没有这台机器」——
+        {/*正在启动的 Worker。放在列表之上，因为它解释「为什么列表里还没有这台机器」——
             旧事故中 8m39s 的启动期里主控台完全看不到该节点，运维无从判断是没装好还是正在加载。 */}
         {!isArchive && (
           <NodeStartupProgressPanel items={startupProgress ?? []} loading={startupLoading} />
@@ -723,7 +723,7 @@ export default function NodesPage() {
         与云控制台「先选目标、再看详情」的动线一致。
       */}
 
-      {/* 右栏：活跃详情 / 归档只读详情（FR-393） */}
+      {/* 右栏：活跃详情 / 归档只读详情 */}
       {/* 阶段 6 第二步：详情态改用 PageShell 的 tool 变体。
           它原是裸 <section>——那时左栏列表与它同处一个 flex-row；两态分离后右栏独占整页，
           滚动收口到它自身（tool 变体是 gap-0 p-0，不叠加默认留白）。 */}
@@ -839,7 +839,7 @@ export default function NodesPage() {
         onConfirm={confirmPending}
         onCancel={() => setPending(null)}
       />
-      {/* FR-309：下线被实例守卫拒绝的清单模态 + 离线节点强制下线确认（输入名称）。 */}
+      {/*下线被实例守卫拒绝的清单模态 + 离线节点强制下线确认（输入名称）。 */}
       <BlockedByInstancesDialog
         conflict={conflict}
         title={t('nodes.deleteBlockedTitle')}
@@ -877,7 +877,7 @@ export default function NodesPage() {
         onConfirm={confirmMaintenance}
         onCancel={() => setMaintenanceTarget(null)}
       />
-      {/* FR-394：归档清理确认 + 实例守卫 + force 确认（文案明示不清理远端文件）。 */}
+      {/*归档清理确认 + 实例守卫 + force 确认（文案明示不清理远端文件）。 */}
       <DangerConfirm
         open={purgeTarget !== null}
         title={t('nodes.purgeConfirmTitle')}
@@ -922,7 +922,7 @@ export default function NodesPage() {
 
 /** 右栏详情主体：身份块 + 资源仪表 + 分段 Tabs（切段稳定工具条，布局不重组）。 */
 
-/**
+/** 
  * 节点列表取数失败态。
  *
  * 与「暂无节点」空态严格区分：`/nodes` 失败时若仍渲染空态，运营看到的是
@@ -954,7 +954,7 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
+/** 
  * 「配置」页签：把四个可配置项的**当前生效值**取回来注入视图。
  *
  * 【为什么要单独取】这些值分散在四个专用端点（代理 / 制品缓存 / 包管理器 / 探针版本），
@@ -963,7 +963,7 @@ function errMessage(err: unknown, fallback: string): string {
  */
 function NodeConfigContainer({ node, onTab }: { node: NodeInfo; onTab: (tab: DetailTab) => void }) {
   const { t } = useTranslation()
-  /*
+  /* 
     这四项都是 **CP 侧记录**，节点离线也照样能读——
     离线时正是最需要看「它当前配置是什么、有哪些改动还没下发」的时候。
     （先前用 `enabled: online` 把它们一起关掉，离线节点整页退化成「见「XX」分区」。）
@@ -974,7 +974,7 @@ function NodeConfigContainer({ node, onTab }: { node: NodeInfo; onTab: (tab: Det
   const { data: probeSelection } = useNodeProbeVersion(node.id)
   const { data: probeCatalog } = useServerProbeCatalog()
 
-  /*
+  /* 
     最近一次配置类变更：审计日志按 node 目标查一条即可覆盖整页四行。
     只看这几类动作（改代理/缓存上限/包管理器/探针版本），避免把「进入维护」也算进「配置变更」。
   */
@@ -1077,7 +1077,7 @@ function NodeConfigContainer({ node, onTab }: { node: NodeInfo; onTab: (tab: Det
   )
 }
 
-/**
+/** 
  * 概览页签的取数接线层：节点规格清单 + 本节点实例汇总。
  *
  * 【为什么概览要取实例】清单只有规格与水位，1440×900 下剩余约 300px 是空白；
@@ -1110,7 +1110,7 @@ function useNodeInstanceListData(nodeId: number) {
     ...(statusFilter ? { status: statusFilter } : {}),
   })
 
-  /*
+  /* 
     行序按「该先看谁」排：漂移 → 崩溃 → 启动中/停止中 → 运行 → 停止，同档按名称。
     服务端按名称排序时，崩溃实例会散落在几十行中间，等于没看出来。
   */
@@ -1175,7 +1175,7 @@ function useNodeInstanceListData(nodeId: number) {
   }
 }
 
-/**
+/** 
  * 「进程」页签：受管实例的进程清单 + 进程级处置 + 端口占用。
  *
  * 【为什么以进程为主语】实例级清单只回答「哪台挂了」；真正要处置的是「哪个 PID 在吃 CPU」。
@@ -1200,7 +1200,7 @@ function NodeProcessTab({ node }: { node: NodeInfo }) {
     limit: 100,
     enabled: online,
   })
-  /*
+  /* 
     实例映射要尽量全：进程行按 instanceId 找名称/状态，取不满就会显示成 `#11` 这种
     本节点真实存在、但没进本页实例搜索窗口的 id。后端 pageSize 上限是 200，取满它。
   */
@@ -1303,7 +1303,7 @@ function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
   })
   const nodeInstances = search?.items ?? []
   const targetIds = nodeInstances.map((i) => i.uuid)
-  // 单条批量查询替代逐实例 useQueries × N（FR-340）。
+  // 单条批量查询替代逐实例 useQueries × N。
   const { data: batch } = useMetricSeriesBatch({ scope: 'instance', targetIds, range: '24h', metrics: [metric] })
   const series: ChartSeries[] = nodeInstances.map((inst) => {
     const s = batch?.series[inst.uuid]?.find((x) => x.metricKey === metric && x.world === '')
@@ -1336,7 +1336,7 @@ function NodeInstanceCompareContainer({ node }: { node: NodeInfo }) {
   )
 }
 
-/**
+/** 
  * 节点监控曲线的取数接线层（ADR-103）。
  *
  * 时间范围状态在这里：预设档位与自定义窗口互斥（见 `useNodeMetricRange`），

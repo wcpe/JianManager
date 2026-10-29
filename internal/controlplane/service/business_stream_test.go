@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 本文件覆盖 FR-522 订阅过滤 + FR-536 连接治理（有界队列 / 慢消费者断开 / 单 Token 上限）。
+// 本文件覆盖订阅过滤连接治理（有界队列 / 慢消费者断开 / 单 Token 上限）。
 
 // mkEvent 造一条探针业务事件（RawJson 为探针上报的原始帧，含 topic 与 data）。
 func mkEvent(instanceUUID, domain, topic, dedupKey string) *workerpb.PluginEvent {
@@ -151,7 +151,7 @@ func TestBusinessStreamService_IngestEnvelopeAndPayload(t *testing.T) {
 	}
 }
 
-// TestBusinessStreamService_SlowConsumerDisconnected 慢消费者被断开，其他订阅者不受影响（FR-536 §3 / §8 验收 1）。
+// TestBusinessStreamService_SlowConsumerDisconnected 慢消费者被断开，其他订阅者不受影响（§3 / §8 验收 1）。
 func TestBusinessStreamService_SlowConsumerDisconnected(t *testing.T) {
 	svc := NewBusinessStreamService(nil, NewBusinessStreamBuffer(10_000, time.Minute))
 	// 故意不消费的订阅者。
@@ -198,7 +198,7 @@ func TestBusinessStreamService_SlowConsumerDisconnected(t *testing.T) {
 	}
 }
 
-// TestBusinessStreamService_SubscribeRespectsTokenLimit 单 Token 并发上限（FR-536 §4 / §8 验收 4）。
+// TestBusinessStreamService_SubscribeRespectsTokenLimit 单 Token 并发上限（§4 / §8 验收 4）。
 func TestBusinessStreamService_SubscribeRespectsTokenLimit(t *testing.T) {
 	svc := NewBusinessStreamService(nil, NewBusinessStreamBuffer(10, time.Minute))
 	for i := 0; i < BusinessStreamMaxPerToken; i++ {

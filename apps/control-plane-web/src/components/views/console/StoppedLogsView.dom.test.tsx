@@ -7,7 +7,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { StoppedLogsView } from '@/components/views/console/StoppedLogsView'
 import type { LogEntry } from '@/lib/console/console-log-types'
 
-/**
+/** 
  * 停机日志回放 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：加载/空态、旧→新顺序、级别着色、复制回执经 onNotify、
@@ -64,7 +64,7 @@ function renderView(props: Partial<ComponentProps<typeof StoppedLogsView>> = {})
   return { ...merged, onNotify, renderLink }
 }
 
-describe('StoppedLogsView（FR-345 停机日志回放受控视图）', () => {
+describe('StoppedLogsView（停机日志回放受控视图）', () => {
   it('标题写明当前状态，正文按旧→新展示（后端倒序已反转）。', () => {
     renderView({
       entries: [

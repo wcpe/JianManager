@@ -58,7 +58,7 @@ type anthropicRequest struct {
 	Tools     []anthropicTool    `json:"tools,omitempty"`
 	MaxTokens int                `json:"max_tokens"`
 	Stream    bool               `json:"stream"`
-	// Thinking 思考强度（FR-541 §3.2）。仅档位非空时发送。
+	// Thinking 思考强度（§3.2）。仅档位非空时发送。
 	//
 	// 与 temperature **互斥**：同时发送会被上游 400。本适配器不发 temperature，
 	// 所以这里不需要额外互斥处理——但若将来加了 temperature，必须在此判空。
@@ -157,7 +157,7 @@ func (s *anthropicStreamer) Stream(ctx context.Context, req Request, emit Emit) 
 		MaxTokens: maxTokens,
 		Stream:    true,
 	}
-	// 思考强度（FR-541 §3.2）：预算必须小于 max_tokens，否则上游直接 400。
+	// 思考强度（§3.2）：预算必须小于 max_tokens，否则上游直接 400。
 	// 冲突时的取舍：把 max_tokens 抬到「预算 + 输出余量」，而不是把预算压小——
 	// 管理员设了 high 却拿到 minimal 的效果，比多花 token 更难排查。
 	if budget, ok := anthropicThinkingBudget(req.ReasoningEffort); ok {

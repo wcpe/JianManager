@@ -6,8 +6,8 @@ import {
   READINESS_ORDER,
 } from './client-readiness'
 
-/**
- * 客户端分发频道就绪度推导（FR-187）。
+/** 
+ * 客户端分发频道就绪度推导。
  * 工作台顶部步骤器据此渲染：完成步骤折叠 ✓、第一个未完成步骤高亮引导。
  */
 describe('deriveReadiness', () => {

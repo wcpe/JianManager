@@ -1,12 +1,12 @@
 /**
- * 设计 token（FR-502 阶段 1 自 apps/control-plane-web/src/index.css 迁入；阶段 2 改为「种子 + 派生」）。
+ * 设计 token（阶段 1 自 apps/control-plane-web/src/index.css 迁入；阶段 2 改为「种子 + 派生」）。
  *
  * ── 怎么加一套新主题 ──
  * 在 themes.css 里声明 **4 个种子** 即可，结构色会自动派生：
- *   --seed-brand      品牌主色（主操作 / 焦点环 / 图表 1）
- *   --seed-on-brand   品牌上的前景色（按钮文字）
- *   --seed-hue        结构色相（背景 / 边框 / 正文都带它）
- *   --seed-chroma     结构 chroma 基准（越低越中性，越高越"有色"）
+ *  --seed-brand      品牌主色（主操作 / 焦点环 / 图表 1）
+ *  --seed-on-brand   品牌上的前景色（按钮文字）
+ *  --seed-hue        结构色相（背景 / 边框 / 正文都带它）
+ *  --seed-chroma     结构 chroma 基准（越低越中性，越高越"有色"）
  * 其余结构色（background / foreground / card / secondary / muted / border / input）
  * 由下面从种子算出，不必再抄一遍。
  *

@@ -8,25 +8,25 @@ import {
   invalidFieldState,
 } from './focus-ring'
 
-/**
- * 焦点环常量测试（FR-502 阶段 6）。
+/** 
+ * 焦点环常量测试（阶段 6）。
  *
  * 这些断言守的不是「某个组件画了什么」，而是**焦点环词汇表本身的性质**：
- * ① FR-176 的收敛决定（细环，不得回退成 3px/50% 的粗环）；
+ * ①的收敛决定（细环，不得回退成 3px/50% 的粗环）；
  * ② 环必须同时有边线与环底（明暗主题都看得见）；
  * ③ 全部取语义 token，不出现硬编码颜色（否则换主题时环不跟着变）。
  *
  * 组件的视觉细节会随批次调整，这三条属于跨组件的可访问性底线，调整时必须显式改这里。
  */
 
-/** 受 FR-176 禁止的粗焦点环写法（出现在常量里即为回退）。 */
+/** 受禁止的粗焦点环写法（出现在常量里即为回退）。 */
 const FORBIDDEN_COARSE_RING = ['focus-visible:ring-[3px]', 'focus-visible:ring-ring/50']
 
 /** 允许出现在类名里的颜色取值方式：语义 token 或 Tailwind 调色板别名，禁止硬编码色值。 */
 const HARDCODED_COLOR = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\(/
 
 describe('焦点环常量', () => {
-  it('标准环是 2px + 40% 的细环（FR-176 收敛值）', () => {
+  it('标准环是 2px + 40% 的细环（收敛值）', () => {
     expect(focusRing).toContain('focus-visible:ring-2')
     expect(focusRing).toContain('focus-visible:ring-ring/40')
   })

@@ -1,4 +1,4 @@
-// 审批中心（FR-493）：列表取数、状态筛选与决策动作接线都在本层决定，行渲染与详情展开交共享视图。
+// 审批中心：列表取数、状态筛选与决策动作接线都在本层决定，行渲染与详情展开交共享视图。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -16,7 +16,7 @@ type ErrResp = { response?: { data?: { message?: string }; status?: number } }
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
-/**
+/** 
  * 审批中心页容器。
  *
  * 决策采用**二次确认**而不是直接提交：批准会真实触发副作用（停实例、删文件…），

@@ -2,8 +2,8 @@ import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 
-/**
- * MCP 活动域 mock（FR-391 / ADR-096 决策 6）：`GET /agent/mcp/activity`。
+/** 
+ * MCP 活动域 mock（ADR-096 决策 6）：`GET /agent/mcp/activity`。
  *
  * 本 handler 的**重点不是「能返回 200」，而是复刻真后端的 window 校验语义**
  * （`internal/controlplane/mcp/handler.go` 的 `ListActivity` + `minActivityWindow`/`maxActivityWindow`）。
@@ -49,7 +49,7 @@ const UNIT_NS: Record<string, number> = {
   h: 3600e9,
 }
 
-/**
+/** 
  * 按 Go `time.ParseDuration` 的文法解析时长，返回秒数；不合法返回 null。
  * 文法：可选正负号 + 一段或多段「十进制数 + 单位」，单位限 ns/us/µs/μs/ms/s/m/h。
  * 关键差异：Go duration **没有「天」**，`7d` 命中未知单位 `d` → 非法；

@@ -1,5 +1,5 @@
-/**
- * 实例状态 → 外圈状态光晕 class（FR-315）。
+/** 
+ * 实例状态 → 外圈状态光晕 class。
  * RUNNING 绿柔光 / STARTING·STOPPING 琥珀呼吸 / CRASHED 红警示 / 其余（STOPPED 等）无光晕。
  * 取色经 status 语义 token（--color-status-*），双主题自适配；soft=true 为卡片弱化版。
  * 自包含纯函数，便于单测状态→光晕映射。

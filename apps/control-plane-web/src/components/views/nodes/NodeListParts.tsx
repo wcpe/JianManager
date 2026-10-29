@@ -15,8 +15,8 @@ import {
 } from '@jianmanager/ui/components/dropdown-menu'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import type { ArchivedNode, NodeInfo } from '@/lib/nodes/node-types'
-/**
- * 节点身份块操作菜单（FR-144/FR-177）：进入/解除维护、排空、下线收入「⋯」kebab。
+/** 
+ * 节点身份块操作菜单：进入/解除维护、排空、下线收入「⋯」kebab。
  * 排空与下线标危险色；下线在线节点禁用 + tooltip。
  */
 export function NodeActionsMenu({
@@ -66,7 +66,7 @@ export function NodeActionsMenu({
   )
 }
 /** 左栏列表中的单条资源 mini 水位（离线置灰为空轨）。 */
-/**
+/** 
  * 单条资源水位。
  *
  * 【离线不画 0% 空轨】原先写的是 `value={online ? pct : 0}`：离线节点渲染成一条空轨，
@@ -94,7 +94,7 @@ function RowUsage({ label, pct, online }: { label: string; pct: number; online: 
   )
 }
 
-/**
+/** 
  * 节点卡片（阶段 6 重做，原型 `.node-card`）：列表态的主展示单元。
  *
  * 与 `NodeListRow` 分工不同——那是双栏形态下给「已选中节点」当导航用的紧凑行；
@@ -164,7 +164,7 @@ export function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; inst
   )
 }
 
-/** 左栏节点列表行（FR-177）：状态点呼吸灯 + 名 + host + mini 水位（CPU/内存）+ 实例数；选中高亮、离线置灰。 */
+/** 左栏节点列表行：状态点呼吸灯 + 名 + host + mini 水位（CPU/内存）+ 实例数；选中高亮、离线置灰。 */
 export function NodeListRow({
   node,
   instanceCount,
@@ -262,7 +262,7 @@ export function NodeRailIcon({
     </Button>
   )
 }
-/** 归档列表行：名称 / host / 下线时间（FR-393）。 */
+/** 归档列表行：名称 / host / 下线时间。 */
 export function ArchivedNodeListRow({
   node,
   selected,

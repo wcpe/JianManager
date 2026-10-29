@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// newUploadEfficiencySvc 建上传增效服务（FR-346）：内存 SQLite + 临时数据根 + 复用 PublishFile 落 CAS。
+// newUploadEfficiencySvc 建上传增效服务：内存 SQLite + 临时数据根 + 复用 PublishFile 落 CAS。
 // 返回增效服务、版本服务（供比对真上传结果）、DB（供直改 last_used_at 等验证）。
 func newUploadEfficiencySvc(t *testing.T) (*ClientUploadEfficiencyService, *ClientVersionService, *gorm.DB) {
 	t.Helper()

@@ -6,8 +6,8 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import AlertsPage from './AlertsPage'
 
-/**
- * AlertsPage 强断言（FR-208 可观测日志域）：验种子规则/事件/通道渲染、写操作联动、错误注入。
+/** 
+ * AlertsPage 强断言（可观测日志域）：验种子规则/事件/通道渲染、写操作联动、错误注入。
  * 渲染前 loginMockUser() 让 requireAuth 保护的 alerts 端点放行。
  * RuleDialog/ChannelDialog 统一走共享 Dialog，必须有 role=dialog 并支持 Esc 关闭。
  * 事件筛选栏统一走 @jianmanager/ui 的 Select（Radix 组合控件），原生 select 直选不适用。

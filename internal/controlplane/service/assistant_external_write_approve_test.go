@@ -1,7 +1,7 @@
 package service
 
-/**
- * 外部 MCP 工具**批准路径**的回归用例（FR-517 §闭环）。
+/* *
+ * 外部 MCP 工具**批准路径**的回归用例（§闭环）。
  *
  * 这组用例存在的唯一理由是一个真实缺陷：
  * `approveAndRun` 曾用 `isAssistantExternalTool(tool.Name)` 分派，而
@@ -99,7 +99,7 @@ func TestApproveAndRun_ExternalToolNameNeverDereferencesNilTool(t *testing.T) {
 // 反向守卫：把分派改成用票据工具名后，内置工具必须仍走 invokeWriteTool 分支。
 // 若有人误改成「一律外部」或「一律内置」，这条会红。
 func TestApproveAndRun_InternalToolStillDispatches(t *testing.T) {
-	// FR-544：工具元数据来自 MCP 目录（经注入），测试必须同样注入才有数据。
+	// 工具元数据来自 MCP 目录（经注入），测试必须同样注入才有数据。
 	injectTestMCPCatalog(t)
 	internalName := assistantToolName(AgentActionInstanceStart)
 	require.NotNil(t, findAssistantTool(internalName),

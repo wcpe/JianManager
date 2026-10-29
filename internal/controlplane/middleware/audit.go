@@ -13,7 +13,7 @@ import (
 // AuditConfig 审计中间件配置。
 type AuditConfig struct {
 	// RecordFunc 记录审计日志的回调函数。
-	// success/errMsg：操作结果（FR-321）——失败操作也留痕并带错误内容（响应 error body 截断）。
+	// success/errMsg：操作结果——失败操作也留痕并带错误内容（响应 error body 截断）。
 	RecordFunc func(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string)
 }
 
@@ -21,7 +21,7 @@ type AuditConfig struct {
 // detail 记「过大未捕获」。发布清单等合法 JSON 一般 < 8 MiB，正常捕获不受影响。
 const auditBodyCaptureMaxBytes = 8 << 20 // 8 MiB
 
-// Audit 审计日志中间件，自动记录关键操作（成功与失败都记，FR-321）。
+// Audit 审计日志中间件，自动记录关键操作（成功与失败都记）。
 func Audit(cfg AuditConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 只记录写操作
@@ -48,7 +48,7 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 				c.Request.Body = io.NopCloser(bytes.NewReader(body))
 			}
 
-			// 捕获响应体前段：失败时其 error/message 即审计错误内容（FR-321）。
+			// 捕获响应体前段：失败时其 error/message 即审计错误内容。
 			w := &respCaptureWriter{ResponseWriter: c.Writer, cap: 512}
 			c.Writer = w
 
@@ -94,7 +94,7 @@ var sensitiveAuditKeyFragments = []string{"password", "passwd", "secret", "token
 // sanitizeAuditDetail 把请求体转成可落库的审计 detail：JSON 体递归掩蔽凭据类字段
 // （键名含 password/passwd/secret/token，大小写不敏感）为 "***"；非 JSON / 无敏感键原样返回。
 // 审计要回答「谁对什么做了什么」，凭据明文不属该范畴——落库即长期泄漏
-// （FR-015 审计页可见、FR-155 可全量导出），如 PUT /users/:id 重置密码的请求体。
+// （审计页可见可全量导出），如 PUT /users/:id 重置密码的请求体。
 func sanitizeAuditDetail(body []byte) string {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
@@ -188,16 +188,16 @@ func determineActionWithBody(method, path string, body []byte) string {
 	case method == "DELETE" && strings.Contains(path, "/plugins"):
 		return "plugin.delete"
 	case method == "POST" && strings.HasSuffix(path, "/instances/batch"):
-		// 批量操作（FR-058）：危险操作（批量 kill/stop）留痕，请求体含动作与目标。
+		// 批量操作：危险操作（批量 kill/stop）留痕，请求体含动作与目标。
 		return "instance.batch"
 	case method == "POST" && strings.HasSuffix(path, "/instances/probe/update"):
-		// 批量探针在线更新（FR-068）：留痕，请求体含 ids/filter 与 restart。
+		// 批量探针在线更新：留痕，请求体含 ids/filter 与 restart。
 		return "probe.update.batch"
 	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/probe/update"):
-		// 单实例探针在线更新（FR-068）：留痕，含目标实例与 restart。
+		// 单实例探针在线更新：留痕，含目标实例与 restart。
 		return "probe.update"
 	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/business"):
-		// JBIS 业务命令下发（FR-116/FR-121）：中间件兜底留痕（覆盖读+写），
+		// JBIS 业务命令下发：中间件兜底留痕（覆盖读+写），
 		// 写动作另由 BusinessHandler 记结构化 business.write（含 taskId/reason）。请求体含 domain/action/payload。
 		return "business.dispatch"
 	case method == "POST" && strings.Contains(path, "/instances"):

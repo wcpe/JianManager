@@ -18,8 +18,8 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
- * 用户管理页容器（ADR-103 b 范式）：用户/邀请取数、五个写动作、写入口门禁（FR-432 user.manage）
+/** 
+ * 用户管理页容器（ADR-103 b 范式）：用户/邀请取数、五个写动作、写入口门禁（user.manage）
  * 与平台级删除门禁、toast 文案都在这里决定，列表、邀请面板与三个对话框交共享视图。
  *
  * `canManageUsers` 决定写入口是否可见；删除用户的角色门禁（scope 固定 platform，不降级）
@@ -57,7 +57,7 @@ export default function UsersPage() {
   })
 
   const isPlatformAdmin = useAuthStore((s) => isAdminRole(s.role))
-  // FR-432：用户写操作与 API 对齐（user.manage），不再仅看 role===10
+  // 用户写操作与 API 对齐（user.manage），不再仅看 role===10
   const hasPerm = usePermissionsStore((s) => s.hasPerm)
   const canManageUsers = isPlatformAdmin || hasPerm('user.manage')
 

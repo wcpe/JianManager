@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// 审批拦截（FR-492）的 MCP 侧接线。
+// 审批拦截的 MCP 侧接线。
 //
 // 放在 mcp 包而不是 service 包，是因为它需要 `p *service.AgentPrincipal` 与
 // 工具名→action 的映射，而这两样只有 mcp 包有；判定逻辑本身在

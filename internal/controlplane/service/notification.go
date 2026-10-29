@@ -13,7 +13,7 @@ import (
 // ErrNotificationNotFound 站内信不存在（或不属于当前用户）。
 var ErrNotificationNotFound = errors.New("站内信不存在")
 
-// NotificationService 站内信服务（FR-183，见 ADR-040）。
+// NotificationService 站内信服务（见 ADR-040）。
 // 投递给用户的消息（任务完成/失败等），支持列表、未读计数、标记已读。
 type NotificationService struct {
 	db *gorm.DB

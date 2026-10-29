@@ -1,5 +1,5 @@
-/**
- * 实例能力画像（FR-445 / ADR-091）——devmock 侧真源。
+/** 
+ * 实例能力画像（ADR-091）——devmock 侧真源。
  *
  * 画像有三份登记（后端 `internal/controlplane/service/capability_profile.go` 注册表、
  * 前端 `apps/control-plane-web/src/lib/capabilities.ts` 兜底表、devmock 本模块）。三份必须
@@ -11,7 +11,7 @@
  * 本模块不再使用已不存在的 `minecraft_proxy` 伪类型（前端亦不再为其做归一）。
  */
 
-/** 能力数据来源偏好（按序降级，FR-447 编排语义）。 */
+/** 能力数据来源偏好（按序降级编排语义）。 */
 export type DataSource = 'probe' | 'direct' | 'node' | 'none'
 
 /** 实例能力画像（与后端 `model.InstanceCapabilityProfile` / 前端同构）。 */
@@ -27,7 +27,7 @@ export interface MockCapabilityProfile {
 /** 未知 (type, role) 的安全回退：overview/terminal/files + backup，任何进程都成立。 */
 export const UNIVERSAL_CAPABILITIES: readonly string[] = ['overview', 'terminal', 'files', 'backup']
 
-/**
+/** 
  * 画像表（键 `${type}:${role}`），与后端 `capabilityRegistry` 一一对应（含 sources）。
  * proxy 画像保留 process/health/config（BC 自身运行指标/端口健康/config.yml 各有独立 Tab，
  * 详见 minor 5 的「子面板单一归属」——由组件层负责不重复渲染，画像不裁剪）。
@@ -56,7 +56,7 @@ export const CAPABILITY_PROFILES: Record<string, Omit<MockCapabilityProfile, 'ty
   },
 }
 
-/**
+/** 
  * 按 (type, role) 取画像；未知组合回退安全子集（不白屏）。
  * 返回对象的 type/role 如实回填请求值。
  */

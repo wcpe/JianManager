@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ClientStatsPanelView：客户端分发统计看板（KPI 卡 + 趋势 + 分布 + 热力图 + 机器排行）的受控视图。
  *       两个端点的取数、窗口 → 查询参数映射（天数 / range 枚举）、URL 深链解析与机器排行容器，
  *       均由应用容器负责。
@@ -9,8 +9,8 @@
  * @output ClientStatsPanelView、ClientStatsPanelViewProps
  * @sync apps/control-plane-web/src/components/ClientStatsPanel.tsx、
  *       apps/control-plane-web/src/components/ClientStatsPanel.dom.test.tsx
- * @since FR-508（面板受控化迁包；原 FR-095 统计看板、FR-217/219 观测维度、FR-356 KPI 口径、
- *        FR-425 统一时间窗、FR-426/427/428 机器排行 / 热力图 / 洞察卡）
+ * @since（面板受控化迁包；原统计看板219 观测维度KPI 口径、
+ *统一时间窗427/428 机器排行 / 热力图 / 洞察卡）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -32,7 +32,7 @@ function platformLabel(os: string): string {
   return map[os] ?? os
 }
 
-/**
+/** 
  * 统计看板的注入契约（受控视图，ADR-103 a 范式）。
  *
  * 受控边界（**不取数、不读路由**）：
@@ -42,7 +42,7 @@ function platformLabel(os: string): string {
  *   视图只经 `onWindowChange` 上报选择（含自定义起止）；URL 深链的解析（与写回，若有）留在容器；
  * - 机器更新排行是**应用侧取数容器**（`MachineListPanel`，按频道 + 观测窗口自行取数），经
  *   `machineRankingSlot` 插槽注入，包内不 import 应用侧模块；
- * - KPI 口径计算与空态判定留视图（纯展示口径，见 FR-356：更新侧率只信 observability，
+ * - KPI 口径计算与空态判定留视图（纯展示口径，见：更新侧率只信 observability，
  *   请求侧率只信 stats），它们只消费注入的数据。
  */
 export interface ClientStatsPanelViewProps {
@@ -62,10 +62,10 @@ export interface ClientStatsPanelViewProps {
   machineRankingSlot?: ReactNode
 }
 
-/**
- * 客户端分发统计看板（FR-095 + FR-217/FR-219 + FR-356，见 ADR-023/ADR-049）。
+/** 
+ * 客户端分发统计看板（见 ADR-023/ADR-049）。
  * KPI 口径统一走 `lib/client-dist-kpi`：更新率只信 observability；活跃回退 stats 时不谎报精确去重。
- * i18n（FR-016）+ 暗/亮色（FR-026，图表用主题 token）。
+ * i18n+ 暗/亮色（图表用主题 token）。
  */
 export function ClientStatsPanelView({
   stats,
@@ -94,7 +94,7 @@ export function ClientStatsPanelView({
   ]
   const maxIpReq = Math.max(1, ...(stats?.topIps ?? []).map((r) => r.count))
 
-  // FR-356：共享 KPI 解析，禁止 stats.successRate（HTTP）冒充更新成功率。
+  // 共享 KPI 解析，禁止 stats.successRate（HTTP）冒充更新成功率。
   const active = resolveActiveClients(observability?.summary, stats)
   const updateRates = resolveUpdateRates(observability?.summary)
   const activeHintKey = activeClientsHintKey(active.exactness, active.source)
@@ -119,7 +119,7 @@ export function ClientStatsPanelView({
         <ObsTimeRangePicker value={window} onChange={onWindowChange} />
       </div>
 
-      {/* FR-428 洞察卡：同环比 + 异常标记 + 口径解释。 */}
+      {/*洞察卡：同环比 + 异常标记 + 口径解释。 */}
       {observability ? <InsightCards summary={observability.summary} compare={observability.compare} /> : null}
 
       {emptyKey ? (
@@ -132,7 +132,7 @@ export function ClientStatsPanelView({
         </p>
       ) : null}
 
-      {/* 数字卡：FR-357 展示更新绝对数；率仍完全复用 FR-356 口径。 */}
+      {/* 数字卡：展示更新绝对数；率仍完全复用口径。 */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <StatCard label={t('clientStats.updateTotal', '更新总次数')} value={observability ? String(observability.summary.updateTotal) : '—'} />
         <StatCard label={t('clientStats.updateSuccess', '更新成功')} value={observability ? String(observability.summary.updateSuccess) : '—'} />
@@ -153,7 +153,7 @@ export function ClientStatsPanelView({
         <StatCard label={t(KPI_I18N.updateRollbackRate, '回退率')} value={formatKpiRate(updateRates.rollbackRate)} />
       </div>
 
-      {/* 下载请求趋势（FR-095；标签语义=请求次数，非更新成功） */}
+      {/* 下载请求趋势（标签语义=请求次数，非更新成功） */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t(KPI_I18N.downloadTrend, '下载请求趋势')}</h3>
         <div className="border rounded-lg p-3">
@@ -172,7 +172,7 @@ export function ClientStatsPanelView({
         </div>
       </section>
 
-      {/* 版本分布（FR-217 占比，按拉取量降序） */}
+      {/* 版本分布（占比，按拉取量降序） */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t('clientStats.versionDist', '版本分布')}</h3>
         <DistBars
@@ -185,7 +185,7 @@ export function ClientStatsPanelView({
         />
       </section>
 
-      {/* 版本滞后分布（FR-217：current - toVersion，0=已最新） */}
+      {/* 版本滞后分布（：current - toVersion，0=已最新） */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t('clientStats.lagDist', '版本滞后分布')}</h3>
         <DistBars
@@ -202,7 +202,7 @@ export function ClientStatsPanelView({
         />
       </section>
 
-      {/* 平台分布（FR-217：来源遥测 os 占比） */}
+      {/* 平台分布（：来源遥测 os 占比） */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t('clientStats.platformDist', '平台分布')}</h3>
         <DistBars
@@ -212,7 +212,7 @@ export function ClientStatsPanelView({
         />
       </section>
 
-      {/* 来源 IP Top 10（FR-095） */}
+      {/* 来源 IP Top 10 */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t('clientStats.topIps', '来源 IP（Top 10）')}</h3>
         <div className="space-y-2 rounded-lg border p-3">
@@ -239,7 +239,7 @@ export function ClientStatsPanelView({
         </p>
       )}
 
-      {/* FR-427 更新活动热力图 + FR-426 机器更新排行（observability 窗口内）。 */}
+      {/*更新活动热力图机器更新排行（observability 窗口内）。 */}
       <UpdateHeatmap series={observability?.series ?? []} />
       {machineRankingSlot}
     </div>
@@ -264,7 +264,7 @@ interface DistItem {
   count: number
 }
 
-/**
+/** 
  * 占比分布条列表（版本 / 滞后 / 平台共用）。
  * 条宽按相对最大值，右侧同时显示占总数百分比与绝对计数。
  */

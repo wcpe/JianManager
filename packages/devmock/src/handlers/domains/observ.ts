@@ -13,8 +13,8 @@ import type {
 import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 import { nodeIdByUuid, nodeUuidById } from '@jianmanager/devmock/handlers/domains/node'
 
-/**
- * 可观测与日志域 mock handler（FR-208）：metrics / alerts / notifications / tasks / logs。
+/** 
+ * 可观测与日志域 mock handler：metrics / alerts / notifications / tasks / logs。
  * 照 spec §7 范式：domainRoute 注册本域每个 endpoint，受保护端点首行 requireAuth，
  * db('<集合>', seedFn) 声明并播种集合（字段贴合 web/src/api/{metrics,alerts,notifications,tasks,logs}.ts）。
  *
@@ -84,7 +84,7 @@ interface AlertChannel {
   createdAt: string
 }
 
-/** QQ 已发现群（FR-495：对齐 web/src/api/alerts.ts QQDiscoveredGroup，camelCase JSON）。 */
+/** QQ 已发现群（：对齐 web/src/api/alerts.ts QQDiscoveredGroup，camelCase JSON）。 */
 interface QQDiscoveredGroup {
   id: number
   groupOpenid: string
@@ -94,7 +94,7 @@ interface QQDiscoveredGroup {
   sourceAppId: string
 }
 
-/** QQ 扫码绑定任务（FR-494）：内存态，polls 记录被轮询次数以模拟「先 pending 后 completed」。 */
+/** QQ 扫码绑定任务：内存态，polls 记录被轮询次数以模拟「先 pending 后 completed」。 */
 interface QQBindTask {
   id: number
   polls: number
@@ -137,8 +137,8 @@ const NOW = Date.now()
 const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString()
 const YEAR_MS = 365 * 86_400_000
 
-/**
- * 任务从创建到完成的模拟时长（FR-502 阶段 6 补丁）。
+/** 
+ * 任务从创建到完成的模拟时长（阶段 6 补丁）。
  *
  * 【为什么必须让任务状态随时间推进】任务表的状态原先是一份**静态**随机值：种子里的
  * `running` 与批量生成里的 pending/running 都永不改变。而前端
@@ -166,7 +166,7 @@ function advanceTaskState(task: Task, now: number): Task['state'] {
 }
 
 const TASK_KIND_POOL = ['jdk_install', 'instance_backup', 'runtime_install', 'client_publish', 'node_repair'] as const
-/**
+/** 
  * 历史批量任务的状态池：**只含终态**。
  *
  * 【为什么不放 pending/running】真后端里一年前的任务必然已收敛，读作 running 是假象。
@@ -188,7 +188,7 @@ const NOTIFICATION_LEVEL_POOL: Notification['level'][] = ['info', 'success', 'wa
 
 // ── 集合声明 + 种子（import 即播种，resetDb 重播；唯一声明处） ──
 
-/*
+/* 
   进程清单要按「该节点的真实实例」生成，故直接读同一份 instances 命名空间。
   种子由 instance.ts 首次访问时写入，这里用惰性默认值保持两侧同源。
 */
@@ -268,7 +268,7 @@ const alertChannels = db<AlertChannel>('alertChannels', () => [
   },
 ])
 
-/** QQ 已发现群集合（FR-495：两条假群，支撑表单下拉与接入视图 DOM 回归）。 */
+/** QQ 已发现群集合（：两条假群，支撑表单下拉与接入视图 DOM 回归）。 */
 const qqDiscoveredGroups = db<QQDiscoveredGroup>('qqDiscoveredGroups', () => [
   {
     id: 1,
@@ -345,7 +345,7 @@ function seedAlertEvents(): AlertEvent[] {
     },
   ]
 
-  // 生成规模在**播种时**读运行时档位（FR-502 阶段 6 补丁）：模块级常量会被 import 时捕获，
+  // 生成规模在**播种时**读运行时档位（阶段 6 补丁）：模块级常量会被 import 时捕获，
   // 调试面板改档位后重播种也无效。循环外取一次，别在循环条件里每次都读。
   const { feedCount, instanceCount } = mockDataScaleProfile()
   const generated: AlertEvent[] = []
@@ -407,7 +407,7 @@ function seedNotifications(): Notification[] {
     },
   ]
 
-  // 同上：规模取运行时档位（FR-502 阶段 6 补丁）
+  // 同上：规模取运行时档位（阶段 6 补丁）
   const { feedCount, instanceCount } = mockDataScaleProfile()
   const generated: Notification[] = []
   for (let i = 4; i <= feedCount + 3; i++) {
@@ -480,7 +480,7 @@ function seedTasks(): Task[] {
       updatedAt: iso(-7_100_000),
     },
     {
-      // 网络类 JDK 下载失败（FR-279）：错误含 Go stdlib 稳定标记 + Worker 追加的中文引导，
+      // 网络类 JDK 下载失败：错误含 Go stdlib 稳定标记 + Worker 追加的中文引导，
       // 供 TasksPage 渲染「去配代理 / 换镜像」入口的 DOM 断言。
       id: 4,
       taskId: 'task-jdk-neterr',
@@ -500,7 +500,7 @@ function seedTasks(): Task[] {
     },
   ]
 
-  // 同上：任务规模取运行时档位（FR-502 阶段 6 补丁）
+  // 同上：任务规模取运行时档位（阶段 6 补丁）
   const { taskCount, instanceCount } = mockDataScaleProfile()
   const generated: Task[] = []
   for (let i = 4; i <= taskCount + 3; i++) {
@@ -613,7 +613,7 @@ function seedLogs(): LogRow[] {
     },
   ]
 
-  // 同上：日志规模取运行时档位（FR-502 阶段 6 补丁）
+  // 同上：日志规模取运行时档位（阶段 6 补丁）
   const { logCount, instanceCount } = mockDataScaleProfile()
   const generated: LogRow[] = []
   for (let i = 5; i <= logCount + 4; i++) {
@@ -646,7 +646,7 @@ function makeSeriesPoints(
   stepMs: number,
   base: number,
   amp: number,
-  /*
+  /* 
     每台实例一个 seed：相位与振幅都随它变化。
     没有 seed 时所有实例的曲线逐点相同——多条线在图上完全重叠，
     看起来就像「只画了一条浅线」甚至「空白图」，调试时极易误判成图表坏了。
@@ -668,7 +668,7 @@ function makeSeriesPoints(
   return out
 }
 
-/**
+/** 
  * 自定义窗口（from/to）下的选档，镜像真后端 `selectResolution`：
  * 跨度 ≤6h 走原始 1m；≤30d 走 5m；更长走 1h。点数封顶 1000，避免假后端生成上万点。
  *
@@ -688,7 +688,7 @@ function resolutionOf(stepMs: number): string {
 }
 
 /** 把 range 字符串映射为（点数, 步长 ms）。覆盖前端 RangePicker 常见档。 */
-/*
+/* 
   步长必须与上报的 `resolution` 严格对应（raw=60s / 5m=300s / 1h=3600s）。
 
   原先各档用的是 15m、4h、12h、1d 这类「方便凑整」的步长，却又固定上报 `resolution:'raw'`。
@@ -716,7 +716,7 @@ function rangePlan(range: string): { count: number; step: number } {
   }
 }
 
-/**
+/** 
  * 把 raw 点按 `bucketMs` 合并成预聚合桶（同桶求均值，与后端 rollup 的 `avg` 列同义）。
  *
  * `stepMs` 是原始采样间隔：真实后端读的是 rollup 表，而 mock 没有那张表，
@@ -779,8 +779,8 @@ function tzHourOffset(tz: string): number {
   return 0
 }
 
-/**
- * 排行种子行（FR-469）：假后端从实例集合取前若干台，按指标的「差」方向造值。
+/** 
+ * 排行种子行：假后端从实例集合取前若干台，按指标的「差」方向造值。
  *
  * `nodeUuid` 必须是**真实 seed 的节点 UUID**：真后端 `RankingItem.nodeUuid` 取
  * `metric_series.node_uuid`，前端 `InstanceRankingPanel` 用
@@ -832,7 +832,7 @@ function rankingSeed(
   })
 }
 
-/**
+/** 
  * 容量上限指标键（与 Go 侧 `saturationMaxKey`（alert_baseline.go:338）逐条对齐）。
  * 真后端 `forecastLimit` 优先取该上限序列，缺序列时才回退节点注册快照。
  */
@@ -842,7 +842,7 @@ const CAPACITY_LIMIT_KEY: Record<string, string> = {
   inst_heap_used: 'inst_heap_max',
 }
 
-/**
+/** 
  * 演示用外推天数（天）。**只有在此表内的「已用」指标**才是「有增长可外推」，
  * 其余键按真后端 `β ≤ 0` 分支返回「无增长趋势，不预测」——刻意保留 node_mem_used 不在表内，
  * 让「不预测」负例在 mock 模式下可复现（真后端同窗口下该指标同样算不出正增长）。
@@ -866,7 +866,7 @@ const CAPACITY_NOTE_NO_TREND = '无增长趋势，不预测'
 /** 真后端 capacityMinSamples（capacity.go:16）：少于该点数一律「样本不足，不预测」。 */
 const CAPACITY_MIN_SAMPLES = 100
 
-/**
+/** 
  * 窗口内的样本点数，按真后端 `selectResolution` 的档位口径推算
  * （≤48h → raw 30s；≤30d → 5m；更长 → 1h；见 capacity.go:150 的 `selectResolution(span, "auto")`）。
  *
@@ -880,7 +880,7 @@ function capacitySamples(range: string): number {
   return Math.floor(spanSec / intervalSec)
 }
 
-/**
+/** 
  * 取 mock 自身时序的最新值（序列不存在返回 undefined）。
  *
  * 关键：容量卡与同页曲线图**共用同一份派生时序**，故 `nowValue`/`limitValue` 必须从这里取，
@@ -895,8 +895,8 @@ function seriesLatestValue(range: string, scope: string, metricKey: string): num
   return last ? last.avg : undefined
 }
 
-/**
- * 单指标容量预测行（FR-464）。分档顺序刻意复刻真后端 `ForecastCapacity`：
+/** 
+ * 单指标容量预测行。分档顺序刻意复刻真后端 `ForecastCapacity`：
  * ① 无序列 / 点数 < capacityMinSamples → 「样本不足，不预测」；
  * ② 无配对上限（`CAPACITY_LIMIT_KEY` 无该键或上限序列缺失）→ 「缺少容量上限…」；
  * ③ 无可外推趋势（不在 `CAPACITY_GROWTH_DAYS`）→ 「无增长趋势，不预测」；
@@ -988,7 +988,7 @@ function instanceSeries(plan: { count: number; step: number }, seed = 0) {
     mk('inst_heap_max', 'bytes', 4 * GIB, 0),
     mk('inst_threads', '', 80, 20),
     mk('inst_players_online', '', 12, 8),
-    // 在线人数上限（FR-511）：假数据固定 50，供「当前/最大」显示。
+    // 在线人数上限：假数据固定 50，供「当前/最大」显示。
     mk('inst_players_max', '', 50, 0),
     mk('inst_cpu_pct', '%', 42, 25),
     mk('world_loaded_chunks', '', 600, 200, 'world'),
@@ -1033,7 +1033,7 @@ function alertLevelToUnified(level: string): FeedItemMock['level'] {
   return 'info'
 }
 
-/** 把 notifications + alertEvents 合并为统一通知流（FR-216，见 ADR-048）。 */
+/** 把 notifications + alertEvents 合并为统一通知流（见 ADR-048）。 */
 function mergedFeed(): FeedItemMock[] {
   const messages: FeedItemMock[] = notifications.list().map((n) => ({
     source: 'message',
@@ -1060,8 +1060,8 @@ function mergedFeed(): FeedItemMock[] {
   return [...messages, ...alerts]
 }
 
-/**
- * SLO 是否拿到「可用证据」（FR-463）。真后端平台维按「存在 `inst_uptime` 序列 && 实例仍存在」
+/** 
+ * SLO 是否拿到「可用证据」。真后端平台维按「存在 `inst_uptime` 序列 && 实例仍存在」
  * 判定（slo.go:213-217），实例维按该实例的 `inst_uptime` 拍、节点维按 `node_cpu_pct` 拍
  * （slo.go:72）。对应到 mock：证据序列等价于「目标在跑」——
  * - platform：至少一台实例 RUNNING（无 RUNNING 实例 ⇒ 无任何 uptime 拍）；
@@ -1131,9 +1131,9 @@ interface HealthWallNodeInfo {
 }
 
 export const handlers = [
-  // ===== 平台全景观测（FR-402 / FR-461） =====
+  // ===== 平台全景观测 =====
   //
-  // 说明（FR-461 补齐）：`/observability/overview` 与 `/observability/health-wall` 是平台首页
+  // 说明（补齐）：`/observability/overview` 与 `/observability/health-wall` 是平台首页
   // 与总览页的读模型，此前 devmock 缺这两条 handler——前端请求 MSW 不拦截即透传 vite proxy，
   // 真后端不存在时报 ECONNREFUSED，E2E（navigation-benchmark / metrics-probe）随之失败。
   // 此处按真实响应结构（api/metrics.ts 的 PlatformObservabilityOverviewResponse / HealthWallResponse）
@@ -1181,7 +1181,7 @@ export const handlers = [
     })
   }),
 
-  // FR-461 健康墙：逐节点只读快照 + 分级。排序键与真后端一致（level/cpu/mem/disk/instances）。
+  // 健康墙：逐节点只读快照 + 分级。排序键与真后端一致（level/cpu/mem/disk/instances）。
   domainRoute('get', '/observability/health-wall', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1231,14 +1231,14 @@ export const handlers = [
     return HttpResponse.json({ nodes: sorted })
   }),
 
-  // ===== metrics（FR-060/061） =====
+  // ===== metrics（061） =====
   domainRoute('get', '/metrics/overview', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
     const range = url.searchParams.get('range') ?? '24h'
     const { count, step } = rangePlan(range)
-    /*
+    /* 
       totals 必须与 `/observability/overview` 的 health 同源。
 
       此前这里是写死的 `nodeCount: 2 / onlineNodeCount: 2 / runningInstances: 720`，
@@ -1285,7 +1285,7 @@ export const handlers = [
     const url = new URL(info.request.url)
     const scope = url.searchParams.get('scope') ?? 'node'
     const range = url.searchParams.get('range') ?? '24h'
-    /*
+    /* 
       自定义窗口优先于 range（与真后端 parseMetricRange 的优先级一致）：
       节点监控页填了起止时间后，曲线与「本范围消耗」都必须跟着这个窗口走。
     */
@@ -1309,7 +1309,7 @@ export const handlers = [
     })
   }),
 
-  // 批量多实例序列（FR-340）：镜像真后端契约——targetIds 去重后 1~50，按 targetId 生成同构序列，
+  // 批量多实例序列：镜像真后端契约——targetIds 去重后 1~50，按 targetId 生成同构序列，
   // 支持 metrics 过滤；假后端无访问模型，解析到的目标全放行，skipped 恒空（真机才有 forbidden/not_found）。
   domainRoute('post', '/metrics/series/batch', async (info) => {
     const denied = requireAuth(info)
@@ -1335,7 +1335,7 @@ export const handlers = [
     const wanted = body.metrics
     const resolution = body.resolution ?? 'auto'
     const { step } = rangePlan(range)
-    /*
+    /* 
       【必须真的按 resolution 分档】后端 `queryPoints` 三档分别读 raw / rollup5m / rollup1h，
       桶数 = 区间 ÷ 粒度。此前 devmock 只按 range 出点、完全忽略 resolution，
       于是「1h + 5m」和「1h + raw」返回一样多的点——前端据此判断减小载荷的改动**在 mock 下
@@ -1379,9 +1379,9 @@ export const handlers = [
     })
   }),
 
-  // ===== FR-463/464/465/469：SLO 可用性 / 容量预测 / 性能归因 / 跨实例排行与玩家趋势 =====
+  // =====464/465/469：SLO 可用性 / 容量预测 / 性能归因 / 跨实例排行与玩家趋势 =====
 
-  // 性能归因（FR-465）：假后端给一个「GC 暂停占用为主因」的结论，让归因卡有内容可渲染。
+  // 性能归因：假后端给一个「GC 暂停占用为主因」的结论，让归因卡有内容可渲染。
   domainRoute('get', '/metrics/performance/attribution', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1408,7 +1408,7 @@ export const handlers = [
     return HttpResponse.json(body)
   }),
 
-  // 跨实例全局排行（FR-469）：镜像真后端契约（items 排序 + rank + skippedNoData）。
+  // 跨实例全局排行：镜像真后端契约（items 排序 + rank + skippedNoData）。
   domainRoute('get', '/metrics/instances/ranking', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1443,7 +1443,7 @@ export const handlers = [
     return HttpResponse.json(body)
   }),
 
-  // 玩家在线趋势与时段分析（FR-469）：24 时段分布按 tz 参数整体平移，便于验证时区口径。
+  // 玩家在线趋势与时段分析：24 时段分布按 tz 参数整体平移，便于验证时区口径。
   domainRoute('get', '/metrics/players/trend', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1451,7 +1451,7 @@ export const handlers = [
     const range = url.searchParams.get('range') ?? '7d'
     const tz = url.searchParams.get('tz') ?? 'UTC'
     const { count, step } = rangePlan(range)
-    /*
+    /* 
       玩家在线曲线单独生成，**不复用 makeSeriesPoints**。
 
       后者用 `sin(i / 3)` 造周期：每 19 个点就一个完整正弦周期，96 点会画出 5 个
@@ -1482,7 +1482,7 @@ export const handlers = [
       // 双峰：晚间 20 点与午后 14 点高峰。
       return Number((120 + 90 * Math.exp(-((local - 20) ** 2) / 8) + 45 * Math.exp(-((local - 14) ** 2) / 12)).toFixed(1))
     })
-    /*
+    /* 
       peakValue 必须与 `trend` 同源。
 
       此前它取的是 **hourlyDist（24 时段分布）的峰值**，而曲线画的是 `trend` 序列——
@@ -1504,7 +1504,7 @@ export const handlers = [
     return HttpResponse.json(body)
   }),
 
-  // 可用性 / SLO（FR-463）：平台与实例维度同构；MTTR/MTBF 用 null 演示「无故障」语义。
+  // 可用性 / SLO：平台与实例维度同构；MTTR/MTBF 用 null 演示「无故障」语义。
   domainRoute('get', '/metrics/slo', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1567,7 +1567,7 @@ export const handlers = [
     return HttpResponse.json(body)
   }),
 
-  // 容量预测（FR-464）：磁盘/堆给「有增长」结果，节点内存给「无增长不预测」负例。
+  // 容量预测：磁盘/堆给「有增长」结果，节点内存给「无增长不预测」负例。
   domainRoute('get', '/metrics/capacity/forecast', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1586,14 +1586,14 @@ export const handlers = [
     return HttpResponse.json(body)
   }),
 
-  /*
-    首页资源球归因（FR-402，含 FR-513 主机级观测）。
+  /* 
+    首页资源球归因（含主机级观测）。
 
     【为何必须补这个端点】它原本在 mock 里完全缺失，于是首页悬浮卡在 mock 模式下
     永远拉不到数据、只能渲染空态——那会让「主机级新版式」在本地与 e2e 里都无法验收，
     也容易把「没数据」误判成「版式没做」。
 
-    【主机级字段为何写成真实数据】FR-513 的四处新版式（负载三档 / CPU 构成 /
+    【主机级字段为何写成真实数据】的四处新版式（负载三档 / CPU 构成 /
     分挂载点磁盘 / 整机 Top 进程）全靠这些字段渲染；给 null 就只能看到 `--`，
     截图与机器人验收都失去意义。数值取自一个典型跑游戏的宿主机（刻意做高 iowait，
     因为那正是这类面板存在的理由：IO 瓶颈会被误读成「CPU 不满、机器很闲」）。
@@ -1682,7 +1682,7 @@ export const handlers = [
       sampledAt: now,
     }))
 
-    /*
+    /* 
       整机 Top 进程（与受管 Top 是两个口径）：这里故意包含系统进程与「别人的进程」，
       因为运维判断「机器为什么慢」时看的正是后两者——只看受管进程树会得出
       「我们都闲着，为什么机器这么卡」的错误结论。
@@ -1713,13 +1713,13 @@ export const handlers = [
     if (denied) return denied
     const url = new URL(info.request.url)
     const now = new Date().toISOString()
-    /*
+    /* 
       返回**该节点真实实例**的进程，而不是写死 instanceId=1。
       写死时前端按 instanceId 映射实例名会全部落到 `#1`（实测：进程行显示「#1」），
       看着像归属解析坏了——其实是假数据与实例清单对不上。
       每台实例给两个进程（游戏服本体 + 包装器），与真实探针的层级一致。
     */
-    /*
+    /* 
       前端的 nodeId 是**节点 UUID**（与真后端 `ProcessTopQuery.NodeUUID` 同口径），
       不是数字 id：这里必须先把 UUID 翻成 id 再过滤实例，否则过滤条件恒假/恒真，
       进程行就会挂到别的节点的实例上（实测出现过「#11」这种本节点不存在的实例号）。
@@ -1727,7 +1727,7 @@ export const handlers = [
     const nodeUuidParam = url.searchParams.get('nodeId')
     const onlyInstance = Number(url.searchParams.get('instanceId') ?? Number.NaN)
     const nodeIdParam = nodeUuidParam ? (nodeIdByUuid(nodeUuidParam) ?? Number.NaN) : Number.NaN
-    /*
+    /* 
       口径与前端 `useInstanceSearch({nodeId, sort:'name'})` 对齐：按名称排序取前 12 台。
       若这里改用无序前 12 台，本节点实例一多（假后端 node-alpha 有 600+ 台），
       进程行就会挂到「实例清单里查不到名字」的实例上，看起来像归属解析坏了。
@@ -1793,7 +1793,7 @@ export const handlers = [
     const instanceId = Number(info.params.id)
     const pid = Number(info.params.pid)
     const now = new Date().toISOString()
-    /*
+    /* 
       详情要回显「所点的那个进程」，不能写死一组不存在的 PID/名称。
       写死时列表行是 java、弹窗里却写着 worker-helper，看着像归属校验出错。
       这里按列表同一套编号约定反推：+12 是游戏服本体（根），+18 是包装器（子进程）。
@@ -1916,7 +1916,7 @@ export const handlers = [
         { name: 'world_nether', loadedChunks: 210, entities: 90, tileEntities: 40 },
       ],
       probeAvailable: true,
-      // MC 直探可用性位与来源位（FR-446/447）：三源皆命中的满配种子，
+      // MC 直探可用性位与来源位（447）：三源皆命中的满配种子，
       // 供前端渲染「不可用」语义与数据来源标注（1=探针 2=SLP 4=Query）。
       playersAvailable: true,
       motd: 'A Mock Server',
@@ -1939,7 +1939,7 @@ export const handlers = [
     })
   }),
 
-  // 实例环境（FR-344）：configured=自定义启动 env、runtime=运行时进程实际环境。
+  // 实例环境：configured=自定义启动 env、runtime=运行时进程实际环境。
   domainRoute('get', '/instances/:id/env', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1957,7 +1957,7 @@ export const handlers = [
     })
   }),
 
-  // ===== alerts 规则（FR-011/085） =====
+  // ===== alerts 规则（085） =====
   domainRoute('get', '/alerts/rules', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -2013,7 +2013,7 @@ export const handlers = [
     return HttpResponse.json({ ok: true })
   }),
 
-  // ===== alerts 事件（FR-149/FR-085） =====
+  // ===== alerts 事件 =====
   domainRoute('get', '/alerts/events', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -2087,7 +2087,7 @@ export const handlers = [
     return HttpResponse.json({ ok: true })
   }),
 
-  // ===== alerts 通道（FR-085） =====
+  // ===== alerts 通道 =====
   domainRoute('get', '/alerts/channels', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -2142,7 +2142,7 @@ export const handlers = [
     return HttpResponse.json({ ok: true, message: '测试通知已发送' })
   }),
 
-  // ===== QQ 扫码接入与已发现群（FR-495） =====
+  // ===== QQ 扫码接入与已发现群 =====
   // 响应均不含 appSecret；三端点与通道 CRUD 一致挂 protected 分组（requireAuth 首行）。
   // 响应形状必须是分页信封 {items,total}（照后端 QQGroups / docs/API.md）：返回纯数组会让
   // 前端的双兼容归一化只走到数组分支，信封分支失去覆盖（真实后端契约回归测不出来）。
@@ -2161,7 +2161,7 @@ export const handlers = [
     })
   }),
 
-  // ===== QQ 扫码绑定任务（FR-494 接入体验改造） =====
+  // ===== QQ 扫码绑定任务（接入体验改造） =====
   // 契约（internal/controlplane/router/alert.go）：
   //   POST /alerts/qq/bind-task         → {taskId, qrUrl}
   //   GET  /alerts/qq/bind-task/:taskId → {status}；仅 completed 追加 {appId, userOpenid, secretEnv}
@@ -2212,7 +2212,7 @@ export const handlers = [
     })
   }),
 
-  // ===== notifications 站内信（FR-183） =====
+  // ===== notifications 站内信 =====
   domainRoute('get', '/notifications', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -2244,7 +2244,7 @@ export const handlers = [
     return HttpResponse.json({ ok: true })
   }),
 
-  // ===== 统一通知中心 feed（FR-216，见 ADR-048）：聚合 notifications + alertEvents =====
+  // ===== 统一通知中心 feed（见 ADR-048）：聚合 notifications + alertEvents =====
   domainRoute('get', '/notifications/feed', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -2296,12 +2296,12 @@ export const handlers = [
     return HttpResponse.json({ message: '已标记已读' })
   }),
 
-  // ===== tasks 任务中心（FR-183；FR-337 分页信封 {items,total,limit,offset}） =====
+  // ===== tasks 任务中心（分页信封 {items,total,limit,offset}） =====
   domainRoute('get', '/tasks', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
-    // 窗口钳制与真后端一致（FR-337）：limit 缺省 100、钳制 [1,500]；offset 缺省 0、负值/非法归 0。
+    // 窗口钳制与真后端一致：limit 缺省 100、钳制 [1,500]；offset 缺省 0、负值/非法归 0。
     const rawLimit = Number(url.searchParams.get('limit') ?? '100')
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 500) : 100
     const rawOffset = Number(url.searchParams.get('offset') ?? '0')
@@ -2346,7 +2346,7 @@ export const handlers = [
     return HttpResponse.json({ task, logs: taskLogs.list((l) => l.taskId === taskId) })
   }),
 
-  // 强制停止（FR-227）：mock 直接置 canceled（演示强停结果）；终态 409。
+  // 强制停止：mock 直接置 canceled（演示强停结果）；终态 409。
   domainRoute('post', '/tasks/:taskId/cancel', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -2362,7 +2362,7 @@ export const handlers = [
     return HttpResponse.json({ message: '已请求停止' })
   }),
 
-  // ===== logs 日志中心（FR-049/050/150） =====
+  // ===== logs 日志中心（050/150） =====
   domainRoute('get', '/logs', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -2407,7 +2407,7 @@ export const handlers = [
   }),
 ]
 
-/**
+/** 
  * 域种子声明（spec §7 要求导出）：集合已在模块顶层带 seedFn 唯一声明并播种，
  * 本函数留空即可（import 触发播种，resetDb 重播），保留以符合范式契约。
  */

@@ -8,8 +8,8 @@ import {
 } from './console-filter'
 import type { LogLine } from './console-log-line'
 
-/**
- * 级别过滤与复制取材（FR-417）。
+/** 
+ * 级别过滤与复制取材。
  *
  * 一律走真实行缓冲造数据（而非手捏 LogLine 字面量）：过滤依赖解析器产出的
  * `level` / `kind` / `stackOf`，手捏对象会让测试和生产解析规则悄悄分叉。
@@ -63,7 +63,7 @@ describe('filterConsoleLines 级别档位', () => {
   })
 })
 
-describe('filterConsoleLines 堆栈块整块保留（spec §3.2，为 FR-418 折叠留接缝）', () => {
+describe('filterConsoleLines 堆栈块整块保留（spec §3.2，为折叠留接缝）', () => {
   // 典型 Paper 现场：ERROR 抬头 → 异常头 → 帧 → Caused by → 帧 → ... N more
   const lines = build([
     [

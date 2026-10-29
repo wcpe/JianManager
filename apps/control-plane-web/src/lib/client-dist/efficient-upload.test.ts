@@ -9,8 +9,8 @@ import type {
 import type { ChunkUploadResult } from './chunked-upload'
 import { AGGREGATE_MAX_FILE_BYTES, HASH_MAX_FILE_BYTES } from './client-upload-plan'
 
-/**
- * FR-346 上传编排器（`efficient-upload.ts` 纯逻辑）：预查命中跳过上传 / miss 小文件聚合 /
+/** 
+ *上传编排器（`efficient-upload.ts` 纯逻辑）：预查命中跳过上传 / miss 小文件聚合 /
  * 大文件分块 / 超大免预查 / 预查失败降级 / fail-fast / 进度单调。
  *
  * 三个取数依赖经 `EfficientUploadDeps` 直接注入替身，**不 mock `@/api/*`**——被测的就是

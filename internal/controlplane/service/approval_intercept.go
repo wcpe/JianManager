@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// 高危操作的审批拦截（FR-492）。
+// 高危操作的审批拦截。
 //
 // 唯一入口：`InterceptForApproval`。MCP 的 CallTool 在分发前调用它，
 // 返回 `Blocked=true` 时**必须直接返回**，不得继续执行——这是「零副作用」的落点。

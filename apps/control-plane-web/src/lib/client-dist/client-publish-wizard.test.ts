@@ -39,7 +39,7 @@ import {
   type FileSystemEntryLike,
 } from './client-publish-wizard'
 
-/** 发布版本向导分步逻辑（FR-187）。 */
+/** 发布版本向导分步逻辑。 */
 describe('isDraftPathValid', () => {
   it('合法相对路径通过', () => {
     expect(isDraftPathValid('mods/a.jar')).toBe(true)
@@ -115,7 +115,7 @@ describe('nextStep / prevStep', () => {
   })
 })
 
-/** FR-191：zip 路径归一 / 文件树 / 草稿 dirty 判定。 */
+/** zip 路径归一 / 文件树 / 草稿 dirty 判定。 */
 describe('normalizeManifestPath', () => {
   it('反斜杠转正斜杠（Windows zip entry）', () => {
     expect(normalizeManifestPath('mods\\fabric\\a.jar')).toBe('mods/fabric/a.jar')
@@ -250,7 +250,7 @@ describe('buildFileTree', () => {
   })
 })
 
-/** FR-250：目录 entry 递归收集。 */
+/** 目录 entry 递归收集。 */
 /** 构造一个文件 entry（webkitGetAsEntry 形态）。 */
 function fileEntry(fullPath: string, size = 10): FileSystemEntryLike {
   const name = fullPath.split('/').pop() ?? fullPath
@@ -363,7 +363,7 @@ describe('batchProgressBytes', () => {
   })
 })
 
-/** FR-254：文件树拖拽编排。 */
+/** 文件树拖拽编排。 */
 describe('moveFileToDir', () => {
   it('移到目录下：拼为目标目录 + 文件名', () => {
     expect(moveFileToDir('mods/a.jar', 'config')).toBe('config/a.jar')
@@ -428,7 +428,7 @@ describe('isSelfOrDescendant', () => {
   })
 })
 
-/** FR-255：从草稿文件派生目录路径（managedDirs 目录树勾选用）。 */
+/** 从草稿文件派生目录路径（managedDirs 目录树勾选用）。 */
 describe('collectAllDirPaths', () => {
   it('空列表 → 空数组', () => {
     expect(collectAllDirPaths([])).toEqual([])
@@ -462,7 +462,7 @@ describe('collectAllDirPaths', () => {
   })
 })
 
-/** FR-255：clean-all 哨兵判定。 */
+/** clean-all 哨兵判定。 */
 describe('isCleanAll', () => {
   it('含 "*" 哨兵 → true', () => {
     expect(isCleanAll(['*'])).toBe(true)
@@ -477,7 +477,7 @@ describe('isCleanAll', () => {
   })
 })
 
-/** FR-261：文件资源管理器纯函数。 */
+/** 文件资源管理器纯函数。 */
 describe('buildFileTreeWithDirs', () => {
   it('空目录插入树中显示为空目录节点', () => {
     const root = buildFileTreeWithDirs(
@@ -574,7 +574,7 @@ describe('detectConflicts', () => {
   })
 })
 
-/** FR-262：清理目录三态标记纯函数。 */
+/** 清理目录三态标记纯函数。 */
 describe('buildCleanMap', () => {
   it('managedDirs → clean、cleanExclude → exclude', () => {
     const m = buildCleanMap(['mods', 'config'], ['saves'])
@@ -713,7 +713,7 @@ describe('exportMarkings', () => {
   })
 })
 
-/** FR-350：多级目录创建输入解析。 */
+/** 多级目录创建输入解析。 */
 describe('parseDirPathsInput', () => {
   it('单行多级路径解析为一条目录', () => {
     expect(parseDirPathsInput('a/b/c/d')).toEqual({ dirs: ['a/b/c/d'], invalid: [] })
@@ -757,7 +757,7 @@ describe('parseDirPathsInput', () => {
   })
 })
 
-/** FR-350：目录路径展开为全部层级链（预览 / 展开折叠用）。 */
+/** 目录路径展开为全部层级链（预览 / 展开折叠用）。 */
 describe('expandDirChains', () => {
   it('单条多级路径展开整条链', () => {
     expect(expandDirChains(['a/b/c'])).toEqual(['a', 'a/b', 'a/b/c'])
@@ -776,7 +776,7 @@ describe('expandDirChains', () => {
   })
 })
 
-/** FR-350：目录前缀拼接（右键定点上传 / 模态基准目录）。 */
+/** 目录前缀拼接（右键定点上传 / 模态基准目录）。 */
 describe('joinDirPath', () => {
   it('空前缀返回子路径本身', () => {
     expect(joinDirPath('', 'mods/a.jar')).toBe('mods/a.jar')

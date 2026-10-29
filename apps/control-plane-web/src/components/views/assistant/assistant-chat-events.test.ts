@@ -3,13 +3,13 @@ import { applyEventToMessages } from '@/components/views/assistant/assistant-cha
 import { isToolDispatcher, isToolExploration } from '@/components/views/assistant/assistant-tool-status'
 import type { AssistantEventFrame } from '@/api/assistant-chat'
 
-/**
- * 事件 → 消息聚合（FR-519）。
+/** 
+ * 事件 → 消息聚合。
  *
  * 这是聊天里最容易出「看起来能用但偶尔丢字」的地方，所以单独测：
  *  - 增量文本必须**按到达顺序拼接**，不能被后来的帧覆盖；
  *  - run_end 必须**收束流式态**并带上终态说明（note 为空 = 正常完成）；
- *  - 未知事件类型（FR-516 的工具事件）必须**忽略而不报错**——否则 FR-516 上线当天
+ *  - 未知事件类型（的工具事件）必须**忽略而不报错**——否则上线当天
  *    聊天会整条流断在第一帧工具事件上。
  */
 function frame(partial: Partial<AssistantEventFrame> & Pick<AssistantEventFrame, 'type'>): AssistantEventFrame {
@@ -60,7 +60,7 @@ describe('applyEventToMessages', () => {
     expect(list[0]!.note).toBe('请求上游失败：connection refused')
   })
 
-  it('未知事件类型被忽略且不影响既有内容（FR-516 前向兼容）', () => {
+  it('未知事件类型被忽略且不影响既有内容（前向兼容）', () => {
     let list = applyEventToMessages([], frame({ type: 'text_delta', data: { text: 'a' } }), 'run-1')
     const before = JSON.stringify(list)
     for (const t of ['tool_call', 'tool_status', 'tool_result', 'usage', 'context_warning']) {
@@ -89,8 +89,8 @@ describe('applyEventToMessages', () => {
   })
 })
 
-/**
- * 渐进式披露的工具分类（FR-544）。
+/** 
+ * 渐进式披露的工具分类。
  *
  * 断言点：`call_tool` **不算探索**。它是真正执行——若把它也标成「探索」，
  * 用户会把一次真实的写操作误读成「它只是在查工具」，那是危险的误标。

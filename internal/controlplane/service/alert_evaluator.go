@@ -34,12 +34,12 @@ type alertMetricSource interface {
 	LatestValue(scope model.MetricScope, nodeUUID, instanceID, metricKey string, since time.Time) (*float64, error)
 }
 
-// AlertEvaluator 周期性评估「轮询型」告警规则（指标阈值 + 节点离线），触发事件经 AlertDispatcher 分发（FR-011 + FR-085）。
+// AlertEvaluator 周期性评估「轮询型」告警规则（指标阈值 + 节点离线），触发事件经 AlertDispatcher 分发。
 // 事件驱动型触发（实例崩溃 / 日志关键字 / 玩家事件 / 备份失败）由 AlertEventTriggers 监听，不在此循环。
 type AlertEvaluator struct {
 	db         *gorm.DB
 	dispatcher *AlertDispatcher
-	// metrics 时序数据源（FR-462）。可为 nil：此时基线/饱和度/实例级 metric 规则不评估。
+	// metrics 时序数据源。可为 nil：此时基线/饱和度/实例级 metric 规则不评估。
 	metrics alertMetricSource
 	stopCh  chan struct{}
 	running bool
@@ -58,7 +58,7 @@ func NewAlertEvaluator(db *gorm.DB, dispatcher *AlertDispatcher) *AlertEvaluator
 	}
 }
 
-// SetMetrics 注入时序数据源（FR-462）。须在 Start 前调用；未注入时基线/饱和度规则跳过。
+// SetMetrics 注入时序数据源。须在 Start 前调用；未注入时基线/饱和度规则跳过。
 func (e *AlertEvaluator) SetMetrics(m alertMetricSource) {
 	e.metrics = m
 }
@@ -134,7 +134,7 @@ func (e *AlertEvaluator) evaluate() {
 			case "node":
 				e.evaluateNodeMetricRule(rule, onlineNodes)
 			case "instance":
-				// FR-462：补齐实例级 metric 规则静默不评估的缺口。
+				// 补齐实例级 metric 规则静默不评估的缺口。
 				e.evaluateInstanceMetricRule(rule)
 			}
 		case model.AlertTriggerNodeOffline:
@@ -144,13 +144,13 @@ func (e *AlertEvaluator) evaluate() {
 		case model.AlertTriggerSaturation:
 			e.evaluateSaturationRule(rule)
 		case model.AlertTriggerQuotaExceeded:
-			// FR-467：配额超限由 QuotaEnforcer 巡检循环触发（它持有实时用量与配额基准），
+			// 配额超限由 QuotaEnforcer 巡检循环触发（它持有实时用量与配额基准），
 			// 不在此评估器内重复判定——两条链路各判一次会产生重复事件。
 		}
 	}
 }
 
-// evaluateNodeMetricRule 评估单条节点级指标阈值规则（FR-011），命中经 dispatcher 处理。
+// evaluateNodeMetricRule 评估单条节点级指标阈值规则，命中经 dispatcher 处理。
 func (e *AlertEvaluator) evaluateNodeMetricRule(rule *model.AlertRule, nodes []model.Node) {
 	for i := range nodes {
 		node := &nodes[i]
@@ -158,7 +158,7 @@ func (e *AlertEvaluator) evaluateNodeMetricRule(rule *model.AlertRule, nodes []m
 			continue
 		}
 		value := getNodeMetric(node, rule.Metric)
-		// iowait 与日志采集面指标不在节点快照中（FR-485）；沿既有别名和 UUID 从时序库取近期样本。
+		// iowait 与日志采集面指标不在节点快照中；沿既有别名和 UUID 从时序库取近期样本。
 		if isSeriesOnlyNodeMetric(rule.Metric) {
 			if e.metrics == nil {
 				continue
@@ -193,7 +193,7 @@ func (e *AlertEvaluator) evaluateNodeMetricRule(rule *model.AlertRule, nodes []m
 	}
 }
 
-// evaluateNodeOfflineRule 评估节点离线规则（FR-085）。
+// evaluateNodeOfflineRule 评估节点离线规则。
 // 节点心跳超时被离线检测器标记 offline 后触发；恢复在线后发恢复通知。
 func (e *AlertEvaluator) evaluateNodeOfflineRule(rule *model.AlertRule) {
 	var nodes []model.Node
@@ -231,7 +231,7 @@ func (e *AlertEvaluator) evaluateNodeOfflineRule(rule *model.AlertRule) {
 	}
 }
 
-// evaluateInstanceMetricRule 评估实例级指标阈值规则（FR-462）。当前值取自时序库最新样本，
+// evaluateInstanceMetricRule 评估实例级指标阈值规则。当前值取自时序库最新样本，
 // 而非节点快照——这是既往前只评估 node 目标导致实例级规则静默的缺口修补。
 func (e *AlertEvaluator) evaluateInstanceMetricRule(rule *model.AlertRule) {
 	if e.metrics == nil {
@@ -269,7 +269,7 @@ func (e *AlertEvaluator) evaluateInstanceMetricRule(rule *model.AlertRule) {
 	}
 }
 
-// evaluateBaselineRule 评估动态基线规则（FR-462）：EWMA / 同环比 / 突升突降，从时序库现算。
+// evaluateBaselineRule 评估动态基线规则：EWMA / 同环比 / 突升突降，从时序库现算。
 func (e *AlertEvaluator) evaluateBaselineRule(rule *model.AlertRule) {
 	if e.metrics == nil {
 		return
@@ -325,7 +325,7 @@ func (e *AlertEvaluator) evaluateBaselineTarget(rule *model.AlertRule, scope, me
 	}
 }
 
-// evaluateSaturationRule 评估饱和度规则（FR-462）：used/max 逼近上限持续触发（disk/mem/heap）。
+// evaluateSaturationRule 评估饱和度规则：used/max 逼近上限持续触发（disk/mem/heap）。
 func (e *AlertEvaluator) evaluateSaturationRule(rule *model.AlertRule) {
 	if e.metrics == nil {
 		return
@@ -510,7 +510,7 @@ func directionLabel(direction string) string {
 
 // getNodeMetric 从节点对象获取指标值。
 //
-// 量纲陷阱（FR-485 取证结论，务必先读完再改本函数）：
+// 量纲陷阱（取证结论，务必先读完再改本函数）：
 // nodes 表的 cpu_usage / memory_usage / disk_usage 存的是 **0..1 的分数**
 // （Worker 侧 `UsedPercent / 100.0`，见 internal/worker/register/register.go），
 // 而告警规则的阈值在界面与直觉上都是 **百分比**（「磁盘 > 85」= 85%）。
@@ -520,7 +520,7 @@ func directionLabel(direction string) string {
 // 处理方式：**不改旧键语义**（改了会让现网存量规则的阈值含义整体漂移，
 // 属于破坏性变更），而是另行提供口径无歧义的百分比键（见 nodeSnapshotPercent）。
 func getNodeMetric(node *model.Node, metric string) float64 {
-	// 百分比口径键优先（FR-485：让「磁盘 > 85%」这类绝对阈值可表达）。
+	// 百分比口径键优先（：让「磁盘 > 85%」这类绝对阈值可表达）。
 	if v, ok := nodeSnapshotPercent(node, metric); ok {
 		return v
 	}
@@ -531,19 +531,19 @@ func getNodeMetric(node *model.Node, metric string) float64 {
 		return float64(node.MemoryUsage)
 	case "disk", "disk_usage":
 		return float64(node.DiskUsage)
-	case "log_ingest_healthy": // FR-485：采集健康（1=健康，0=停摆）
+	case "log_ingest_healthy": // 采集健康（1=健康，0=停摆）
 		if node.LogIngestHealthy {
 			return 1
 		}
 		return 0
 	default:
-		// FR-485：其余日志采集面指标都在时序库里（心跳写入），不在 nodes 表。
+		// 其余日志采集面指标都在时序库里（心跳写入），不在 nodes 表。
 		// 返回 -1 让调用方的时序取值路径接手；这里不做转换是因为本函数拿不到 DB。
 		return -1
 	}
 }
 
-// logMetricKeys 是「只存在于时序库、不在 nodes 表」的日志采集面指标键集合（FR-485）。
+// logMetricKeys 是「只存在于时序库、不在 nodes 表」的日志采集面指标键集合。
 //
 // 单独成集合而不是塞进 case 分支的理由：evaluateNodeMetricRule 必须先知道
 // 「这个指标不该从快照取」，才能改走时序路径；两层各写一份判断会出现

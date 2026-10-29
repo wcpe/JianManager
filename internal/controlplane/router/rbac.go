@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// RBACHandler 权限树管理（FR-432）。
+// RBACHandler 权限树管理。
 type RBACHandler struct {
 	perm  *service.PermissionService
 	users *service.UserService

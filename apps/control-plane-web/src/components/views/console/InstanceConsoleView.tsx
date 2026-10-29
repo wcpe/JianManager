@@ -42,8 +42,8 @@ import { ConsoleCommandBar } from '@/components/views/console/ConsoleCommandBar'
 import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 import type { ConsoleOutputHandle } from '@/components/views/console/ConsoleOutputView'
 
-/**
- * 实例控制台（FR-415，ADR-086）：输出区（只读 DOM 虚拟列表）+ 命令栏（原生 input）。
+/** 
+ * 实例控制台（ADR-086）：输出区（只读 DOM 虚拟列表）+ 命令栏（原生 input）。
  *
  * 取代原 `components/Terminal.tsx` 的 xterm 渲染壳。输入路径整体废弃——
  * 不再监听 `onData`、不再手工回显/退格/↑↓ 历史（那套在 stdin 管道上假装 pty 的仿造品）。
@@ -51,15 +51,15 @@ import type { ConsoleOutputHandle } from '@/components/views/console/ConsoleOutp
  * 会话保活语义不变（ADR-067）：WS 与行缓冲常驻 {@link terminalSessionManager}，
  * 本组件 mount 时 acquire + 订阅，卸载（含 `<Activity>` 隐藏）只退订，不断连、不丢缓冲。
  *
- * 本壳另承载两条依赖 FR-415 行模型的能力：
- * - **FR-416**：命令历史按实例持久化、在线玩家名（两路真实来源取并集）下传命令栏做补全
- * - **FR-417**：级别过滤（先过滤后搜索，使命中计数与屏上高亮一致）、复制范围菜单
- * - **FR-419**：历史回溯——DB 游标分页取更早日志 prepend 到缓冲之前，滚动锚定、
+ * 本壳另承载两条依赖行模型的能力：
+ * - ****：命令历史按实例持久化、在线玩家名（两路真实来源取并集）下传命令栏做补全
+ * - ****：级别过滤（先过滤后搜索，使命中计数与屏上高亮一致）、复制范围菜单
+ * - ****：历史回溯——DB 游标分页取更早日志 prepend 到缓冲之前，滚动锚定、
  *   回溯横幅、「跳到本次启动 / 时间点」定位（数据源分层见 console-history.ts）
  */
 
-/**
- * 「跳到时间点 / 本次启动」未能到达时的原因文案（FR-419）。
+/** 
+ * 「跳到时间点 / 本次启动」未能到达时的原因文案。
  *
  * 三种失败必须区分开：已回溯到库里最早、撞上单次回溯页数上限、请求失败。
  * 都塞一句「跳转失败」用户不知道该改时间、该再点一次、还是该看网络。
@@ -70,7 +70,7 @@ const JUMP_FAILURE_KEY: Record<Exclude<HistoryJumpOutcome, 'reached'>, string> =
   failed: 'instanceDetail.consoleJumpFailed',
 }
 
-/** 级别过滤档位与其 i18n 标签（FR-417）。 */
+/** 级别过滤档位与其 i18n 标签。 */
 const LEVEL_FILTERS: readonly { value: ConsoleLevelFilter; labelKey: string }[] = [
   { value: 'all', labelKey: 'instanceDetail.consoleFilterAll' },
   { value: 'warn', labelKey: 'instanceDetail.consoleFilterWarn' },
@@ -86,9 +86,9 @@ function readWrapPref(): boolean {
 
 export interface InstanceConsoleViewProps {
   instanceId: number
-  /**
+  /** 
    * 拉取一次性终端连接凭据（wsUrl + token）。**每次连接前现取**：
-   * 一次性 token 首连即被 CP 消费失效，重连必须重取新 token，否则复用会 401（FR-140）。
+   * 一次性 token 首连即被 CP 消费失效，重连必须重取新 token，否则复用会 401。
    */
   fetchToken?: FetchTerminalCreds
   /** 实例非运行：命令栏禁用，但**保持连接**以看关服/崩溃输出。 */
@@ -99,8 +99,8 @@ export interface InstanceConsoleViewProps {
   /** 外层工具栏控制的搜索框开关。 */
   searchOpen?: boolean
   onSearchOpenChange?: (open: boolean) => void
-  /**
-   * 会话保活（FR-295，ADR-067）：true=卸载（含 Activity 隐藏）只退订，
+  /** 
+   * 会话保活（ADR-067）：true=卸载（含 Activity 隐藏）只退订，
    * 连接与缓冲由连接管理器常驻；false（默认）=独立表面语义，卸载即释放会话
    * （未被控制台热集 pin 时）。
    */
@@ -111,13 +111,13 @@ export interface InstanceConsoleViewProps {
   disabledAction?: ReactNode
   /** 沉浸工作台的深色表面变体。 */
   immersive?: boolean
-  /**
-   * 在线玩家名册（FR-416 补全候选的来源之一，应用侧 `useOnlinePlayers` 的结果）。
+  /** 
+   * 在线玩家名册（补全候选的来源之一，应用侧 `useOnlinePlayers` 的结果）。
    * 与控制台输出解析出的 join/quit/list 名册取并集；缺省即只用后者兜底。
    */
   onlinePlayers?: readonly string[]
-  /**
-   * 历史回溯控制器（FR-419，应用侧 `useConsoleHistory` 的返回值）：
+  /** 
+   * 历史回溯控制器（应用侧 `useConsoleHistory` 的返回值）：
    * 含已加载历史行与 loadEarlier/loadUntil/findStartupTime/seqAtTime 等方法。
    */
   historyBacktrack: ConsoleHistoryState
@@ -155,11 +155,11 @@ export function InstanceConsoleView({
   const lines = useSyncExternalStore(subscribe, getSnapshot)
   const droppedCount = terminalSessionManager.getDroppedCount(instanceId)
 
-  // 导播台节流（FR-168 / ADR-035）：非激活场景的 WS 保活但**暂停落行**，
-  // 输出由管理器累积，切回激活时一次性 flush。无 Provider 时恒激活（FR-166/167 不变）。
+  // 导播台节流（ADR-035）：非激活场景的 WS 保活但**暂停落行**，
+  // 输出由管理器累积，切回激活时一次性 flush。无 Provider 时恒激活（167 不变）。
   const { active: directorActive } = useDirectorRender()
 
-  // 命令历史按实例持久化（FR-416）：初值从 localStorage 取，故刷新/重挂载后仍在。
+  // 命令历史按实例持久化：初值从 localStorage 取，故刷新/重挂载后仍在。
   // 用 useState 惰性初值而非 effect 回填——effect 回填会先渲染一帧空历史，↑ 在那一帧按下即无效。
   const [history, setHistory] = useState<string[]>(() => loadCommandHistory(instanceId))
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -170,15 +170,15 @@ export function InstanceConsoleView({
     try { localStorage.setItem(WRAP_PREF_KEY, wrapText ? '1' : '0') } catch { /* 隐私模式忽略 */ }
   }, [wrapText])
   const outputRef = useRef<ConsoleOutputHandle>(null)
-  /**
-   * 锚点选区（FR-418）的当前文本。
+  /** 
+   * 锚点选区的当前文本。
    *
    * 存 ref 而非 state：右键菜单点下去那一刻读一次就够，选区一动就重渲染整个控制台
    * 纯属浪费——输出区自己已经把高亮画好了。
    */
   const anchorSelectionRef = useRef('')
 
-  // ---- 会话订阅（FR-295，ADR-067）----
+  // ---- 会话订阅（ADR-067）----
   useEffect(() => {
     if (isLoading || !fetchToken) return
     terminalSessionManager.acquire(instanceId, fetchToken)
@@ -194,8 +194,8 @@ export function InstanceConsoleView({
     terminalSessionManager.setPaused(instanceId, !directorActive)
   }, [directorActive, instanceId])
 
-  // ---- 在线玩家（FR-416 Tab 补全的候选来源，两路取并集）----
-  // ①/players 聚合接口：权威名册，但依赖探针在位（FR-067）。取数在应用侧接线层，此处经 props 注入；
+  // ---- 在线玩家（Tab 补全的候选来源，两路取并集）----
+  // ①/players 聚合接口：权威名册，但依赖探针在位。取数在应用侧接线层，此处经 props 注入；
   //   页签隐藏时（Activity）effects 卸载，轮询自动停。
   // ②控制台输出里的 join/quit/list 行：零依赖兜底，探针没装时补全仍可用。
   // ②控制台输出里的 join/quit/list 行：零依赖兜底，探针没装时补全仍可用。
@@ -225,17 +225,17 @@ export function InstanceConsoleView({
     (line: string) => {
       // 回显与下发都在管理器内完成：回显必须落在常驻缓冲里，才能跨卸载留存。
       terminalSessionManager.sendCommand(instanceId, line)
-      // 持久化写盘与内存态同源（相邻去重 + 500 条上限都在模块内，FR-416）。
+      // 持久化写盘与内存态同源（相邻去重 + 500 条上限都在模块内）。
       setHistory(pushCommandHistory(instanceId, line))
     },
     [instanceId],
   )
 
-  // ---- 历史回溯（FR-419，spec §4）----
+  // ---- 历史回溯（spec §4）----
   // 接缝取自行缓冲的最早保留时刻：未溢出时等于会话创建时刻；溢出后推进到首行，
   // 让 DB 补齐会话内被挤掉的那段日志（mergeHistoryAndLive 在边界去重）。
   //
-  // 级别过滤刻意只在前端应用：FR-417 的档位语义是「≥ 阈值」且**堆栈块整块保留**，而数据库
+  // 级别过滤刻意只在前端应用：的档位语义是「≥ 阈值」且**堆栈块整块保留**，而数据库
   // 的 `level` 是精确等值，传 `level=error` 会把同一异常的 stdout 堆栈帧（通常落 INFO）
   // 过滤掉，结果只剩没有调用栈的异常头。历史页先完整取回，再由 filterConsoleLines 保留块语义。
   // 取数（useConsoleHistory，含 DB 分页）在应用侧接线层，此处经 props 注入。
@@ -243,12 +243,12 @@ export function InstanceConsoleView({
   /** 历史（DB，seq 为负）在前、实时缓冲在后，拼成一条连续的时间轴。 */
   const allLines = useMemo(() => mergeHistoryAndLive(historyBacktrack.lines, lines), [historyBacktrack.lines, lines])
 
-  // ---- 级别过滤（FR-417）----
+  // ---- 级别过滤----
   // 过滤在搜索**之前**做：搜索命中计数必须与屏上可见的高亮一一对应，否则「第 3/7 项」
   // 里会有几项落在被滤掉的行上，↑↓ 跳过去看不到任何黄底。
   const visibleLines = useMemo(() => filterConsoleLines(allLines, levelFilter), [allLines, levelFilter])
 
-  // ---- 定位：跳到本次启动 / 跳到时间点（FR-419，spec §4.3）----
+  // ---- 定位：跳到本次启动 / 跳到时间点（spec §4.3）----
   const [jumpTarget, setJumpTarget] = useState<{ seq: number; token: number } | undefined>(undefined)
   const [jumping, setJumping] = useState(false)
   const [timeJumpOpen, setTimeJumpOpen] = useState(false)
@@ -276,7 +276,7 @@ export function InstanceConsoleView({
     [historyBacktrack, lines, locateSeq],
   )
 
-  /**
+  /** 
    * 「跳到本次启动」：先在屏上找（缓冲 + 已加载历史，瞬时无请求），
    * 找不到再去库里问启动行的时间、一路回溯到那儿再定位（spec §4.3）。
    */
@@ -385,15 +385,15 @@ export function InstanceConsoleView({
     })
   }, [menu])
 
-  /**
+  /** 
    * 全量文本一律取 `raw`：用户要的是原始日志，不是我们拆列重排过的（spec §1.1）。
    * 取 allLines 而非仅内存缓冲：用户刚往上回溯出来的历史也在屏上，「复制全部」漏掉它
-   * 只会让人以为复制失败了（FR-419 引入历史层后的必然口径）。
+   * 只会让人以为复制失败了（引入历史层后的必然口径）。
    */
   const allText = () => consoleLinesToText(allLines)
 
-  /**
-   * 复制并给回执（FR-417 硬约束）：成功/失败都 toast，不 void 掉返回值。
+  /** 
+   * 复制并给回执（硬约束）：成功/失败都 toast，不 void 掉返回值。
    * 面板常跑在 `http://<LAN-IP>:50100` 非安全上下文，copyToClipboard 内含 execCommand 兜底，
    * 但兜底也可能失败——静默失败会让用户以为复制成功、去粘贴才发现是空的。
    */
@@ -408,18 +408,18 @@ export function InstanceConsoleView({
   }
 
   const copySelection = () => {
-    // 两种选区并存（FR-418）：跨行走锚点选区（区间文本由输出区从行缓冲取，屏幕外的行
+    // 两种选区并存：跨行走锚点选区（区间文本由输出区从行缓冲取，屏幕外的行
     // 没有 DOM 节点故拿不到，见 ADR-086 代价 2），同一行内仍是原生字符级选区。
     // 锚点选区一旦成立就会关掉原生选区，故它优先；为空时再退回读原生选区。
     void notifyCopy(anchorSelectionRef.current || (window.getSelection()?.toString() ?? ''))
   }
 
-  /** 复制当前可见屏（FR-417）：行取自输出区的滚动位置反算，不含 overscan。 */
+  /** 复制当前可见屏：行取自输出区的滚动位置反算，不含 overscan。 */
   const copyViewport = () => {
     void notifyCopy(consoleLinesToText(outputRef.current?.getVisibleLines() ?? []))
   }
 
-  /** 仅复制错误行（FR-417）：ERROR 级 + 其完整堆栈块，不含命令回显/系统提示。 */
+  /** 仅复制错误行：ERROR 级 + 其完整堆栈块，不含命令回显/系统提示。 */
   const copyErrors = () => {
     void notifyCopy(consoleLinesToText(consoleErrorLines(allLines)))
   }
@@ -540,8 +540,8 @@ export function InstanceConsoleView({
         )}
 
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* 观察工具条（FR-417）：级别过滤 + 复制范围。压到 py-0.5 / 11px——
-              FR-412/422 刚把纵向空间省出来，新增一行必须细到几乎不占地方。 */}
+          {/* 观察工具条：级别过滤 + 复制范围。压到 py-0.5 / 11px——
+422 刚把纵向空间省出来，新增一行必须细到几乎不占地方。 */}
           <div className="flex flex-none items-center gap-1 border-b border-white/10 bg-[#16161e] px-2 py-0.5 text-[11px] text-gray-400">
             <span className="shrink-0">{t('instanceDetail.consoleFilterLabel')}</span>
             {/* 分段控件容器：三段过滤收进一个凹槽，选中段浮起——替代原先散装文字钮。 */}
@@ -753,7 +753,7 @@ export function InstanceConsoleView({
               >
                 {t('instanceDetail.terminalCopySelection')}
               </button>
-              {/* 复制范围（FR-417）：排障时要贴的往往不是「全部」——可见屏对应「我正看着的这段」，
+              {/* 复制范围：排障时要贴的往往不是「全部」——可见屏对应「我正看着的这段」，
                   仅错误行对应「把异常发给别人」，两者都比 5000 行全量更常用。 */}
               <button
                 type="button"
@@ -817,7 +817,7 @@ export function InstanceConsoleView({
           document.body,
         )}
 
-      {/* 「跳到时间…」（FR-419）：表单交互一律模态承载（.claude/rules/ui-modals.md），
+      {/* 「跳到时间…」：表单交互一律模态承载（.claude/rules/ui-modals.md），
           不在页面里就地展开一段输入框把日志区顶开。单字段短表单，无需滚动壳。 */}
       <Dialog open={timeJumpOpen} onOpenChange={setTimeJumpOpen}>
         <DialogContent className="sm:max-w-sm">

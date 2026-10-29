@@ -146,7 +146,7 @@ func TestInstanceGroup_MembersMNAndDedupCount(t *testing.T) {
 	require.Equal(t, 2, counts[root.ID])
 	require.Equal(t, 2, counts[leaf.ID])
 
-	// FR-452：树视图同时透出「直接挂载」成员 id（非子树），供列表页 groupTree 维度一次取数。
+	// 树视图同时透出「直接挂载」成员 id（非子树），供列表页 groupTree 维度一次取数。
 	require.ElementsMatch(t, []uint{i1.ID}, direct[root.ID])
 	require.ElementsMatch(t, []uint{i1.ID, i2.ID}, direct[leaf.ID])
 

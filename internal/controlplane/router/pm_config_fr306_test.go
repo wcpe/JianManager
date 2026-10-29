@@ -56,7 +56,7 @@ func setupPMRouter(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engi
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-// TestFR306PMConfigSetGet 保存 PM 偏好+registry → 下发 Worker → 落库 → 回读脱敏（FR-306）。
+// TestFR306PMConfigSetGet 保存 PM 偏好+registry → 下发 Worker → 落库 → 回读脱敏。
 func TestFR306PMConfigSetGet(t *testing.T) {
 	db := setupTestDB(t)
 	pool := cpgrpc.NewClientPool()

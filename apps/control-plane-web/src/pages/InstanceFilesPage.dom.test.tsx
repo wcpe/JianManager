@@ -6,11 +6,11 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import InstanceFilesPage from './InstanceFilesPage'
 
-/**
- * FR-376 深链页：`/instances/:id/files?path=` 渲染资源管理器。
+/** 
+ *深链页：`/instances/:id/files?path=` 渲染资源管理器。
  * 需包一层 Routes 才能让 useParams 取到 id。
  */
-describe('InstanceFilesPage（FR-376）', () => {
+describe('InstanceFilesPage', () => {
   it('带 path 查询渲染资源管理器与返回链', async () => {
     loginMockUser()
     renderWithProviders(
@@ -28,7 +28,7 @@ describe('InstanceFilesPage（FR-376）', () => {
     expect(await screen.findByTestId('resource-explorer')).toBeInTheDocument()
   })
 
-  /**
+  /** 
    * 实例不存在（404 / 已删除）时不能照常渲染整页。
    *
    * 原实现只把标题回退成 `#id` 就继续渲染：用户看到的是一个「看起来正常」的文件浏览器，

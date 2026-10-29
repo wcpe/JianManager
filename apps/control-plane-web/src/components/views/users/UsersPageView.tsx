@@ -1,4 +1,4 @@
-/**
+/** 
  * @file UsersPageView：用户管理页（用户列表 + 邀请面板 + 新建/编辑/删除对话框）的受控视图，
  *       取数、五个写动作与 toast 由应用容器负责。
  * @input views/CreateUserDialog（新建用户视图）、views/CreateInvitationDialog（签发邀请视图）、
@@ -7,7 +7,7 @@
  *        Button/Panel/StatusBadge/Table/布局层原语、翻译上下文
  * @output UsersPageView、UsersPageViewProps、UserRow、UserInvitationRow、CreateUserPayload、UsersPermissionsLinkArgs
  * @sync apps/control-plane-web/src/pages/UsersPage.tsx、apps/control-plane-web/src/pages/UsersPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-199 身份访问域，写入口可见性为 FR-432 user.manage）
+ * @since（组件受控化迁包；原页身份访问域，写入口可见性为user.manage）
  */
 import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -38,7 +38,7 @@ import { ConfigRow, ConfigSwitch, ConfigViewToggle } from '@/components/views/co
 import type { ConfigView } from '@/components/views/config-explorer/ConfigRow'
 import { isPlatformAdmin } from '@/lib/shared/roles'
 
-/**
+/** 
  * 用户行（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/users` 的 `UserInfo`：容器直接传 API
@@ -83,7 +83,7 @@ export interface UsersPermissionsLinkArgs {
   children: ReactNode
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 用户列表与邀请列表经 props 注入（容器调 `useUsers` / `useUserInvitations`）；
  * - 五个写动作（新建用户、签发邀请、更新用户、删除用户、撤销邀请）以回调上报，由容器
@@ -91,7 +91,7 @@ export interface UsersPermissionsLinkArgs {
  *   据此回显服务端 message；
  * - **留本组件**的纯 UI 状态：三个对话框的开合与编辑目标、待删除确认目标、卡片/列表视图切换；
  * - **归容器**的受控状态：无——本页无过滤/分页等触发取数的状态（列表口径由容器查询决定）；
- * - **鉴权状态由容器注入**：`canManageUsers` 决定写入口是否可见（FR-432：平台管理员或
+ * - **鉴权状态由容器注入**：`canManageUsers` 决定写入口是否可见（：平台管理员或
  *   持有 `user.manage`）；危险确认的角色门禁由 `DangerConfirm` 自行读登录态；
  * - 跳转 `/permissions?user=<id>` 走 `renderPermissionsLink` 插槽（缺省渲染原生 `<a href>`），
  *   包内不依赖 react-router。
@@ -127,8 +127,8 @@ export interface UsersPageViewProps {
   renderPermissionsLink?: (args: UsersPermissionsLinkArgs) => ReactNode
 }
 
-/**
- * 用户管理页（FR-199 身份访问域）：用户列表支持卡片/列表两种视图，行内可启停、编辑、删除，
+/** 
+ * 用户管理页（身份访问域）：用户列表支持卡片/列表两种视图，行内可启停、编辑、删除，
  * 并可跳转该用户的权限页；平台管理员另有邀请签发与撤销面板。
  */
 export function UsersPageView({

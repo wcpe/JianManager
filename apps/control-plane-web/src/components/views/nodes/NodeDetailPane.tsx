@@ -10,7 +10,7 @@ import { ObjectPageHeader } from '@jianmanager/ui/components/nav'
 import { NodeActionsMenu } from '@/components/views/nodes/NodeListParts'
 import type { NodeInfo } from '@/lib/nodes/node-types'
 
-/** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
+/** 右栏分段（§3.3）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
 export type DetailTab =
   | 'overview'
   /** 进程：受管实例的进程清单（含端口占用），原「实例」与「端口」两页签合并。 */
@@ -26,7 +26,7 @@ export type DetailTab =
 
 export const DETAIL_TABS: DetailTab[] = ['overview', 'process', 'monitor', 'config', 'runtime', 'cache', 'proxy', 'probe', 'repair']
 
-/**
+/** 
  * tab 分组（用户要求「tab 栏分组」）。
  *
  * 9 个 tab 平铺一行，窄屏会折行，且「概览 / 实例 / 监控」这些高频项与
@@ -54,12 +54,12 @@ export interface NodeDetailPaneProps {
   onDelete: () => void
   /** 面包屑导航（容器注入路由跳转；组件库不依赖 react-router）。 */
   onNavigate: (to: string) => void
-  /**
+  /** 
    * 分段内容插槽：各分段的取数接线层与面板（含 7 个 tab 容器）留在应用侧，
    * 由调用方按当前 tab 渲染。
    */
   renderTab: (tab: DetailTab, node: NodeInfo) => ReactNode
-  /**
+  /** 
    * 节点切换器插槽（下拉选择器）。原先是左侧的节点列表——与列表页功能重叠，
    * 改为云厂商式的顶部选择器：切换目标用下拉，内容区拿回全宽。
    */
@@ -80,12 +80,12 @@ export function NodeDetailPane({
   const { t } = useTranslation()
   const online = node.status === 1
   /** 当前页签所属的顶层分组（决定顶部哪个 tab 高亮、左侧显示哪组子项）。 */
-  /**
+  /** 
    * 心跳新鲜度 → 0~100 的活性分（喂给状态球）。
    * 90s 内视为完全新鲜，之后随超时线性衰减到 0：这样「在线但 20 分钟没上报」
    * 会显示一个明显变矮的环，比只写「在线」更能暴露假活。
    */
-  /*
+  /* 
     心跳龄需要一个「会走的现在」。渲染期直接调 `Date.now()` 有两个毛病：
     违反 React 纯度规则（同一次渲染可能给出不同值、不可缓存），而且值不会自己前进——
     页面停在同一屏时环会一直显示挂载那一刻的年龄。改用 15s 一跳的 state。
@@ -121,7 +121,7 @@ export function NodeDetailPane({
     return `${Math.round(h / 24)}d`
   })()
 
-  /*
+  /* 
     【维护态优先】改成球之后，徽章被移除，状态全部由球的 label 承载——
     这里必须把 maintenance 纳入判断，否则「在线且维护中」会显示成「在线」，
     「维护中」这个信息在详情页彻底消失（移除徽章时踩到的真实回归）。
@@ -135,7 +135,7 @@ export function NodeDetailPane({
         : t('nodes.offline')
 
   return (
-    /*
+    /* 
       根容器用 flex 列 + `h-full`：让内容区（两栏）吃掉剩余高度。
       原来 `space-y-3` 只是块级堆叠，子级拿不到可分配高度，
       于是「左栏 331px + 右栏 457px」都只按自身内容高，下方留出 363px 空白——
@@ -145,18 +145,18 @@ export function NodeDetailPane({
       {/* 阶段 6 第二步：身份块与分段 Tabs 合并为对象头（原型 `object-head` 的六段：
           面包屑 → 名/状态/元信息/操作 → 指标条 → 工具导航）。
           两个取舍：① 4 个环形仪表**不进 metrics**——原型 `object-stats` 是文字格，但
-          FR-311 v2 明确「资源仪表内联右置」，那个设计比原型新且是有意的，故留在内容区；
+v2 明确「资源仪表内联右置」，那个设计比原型新且是有意的，故留在内容区；
           ② 隧道/维护徽标同理，对象头只有单个 status，它们在仪表行一并呈现。 */}
       <ObjectPageHeader
         icon={<Server className="size-5" />}
         title={node.name}
         /* 选择器并入标题行（节点名右侧）：云控制台惯例，省掉独立一行。 */
         titleAdornment={nodeSelector}
-        /*
+        /* 
           不再传 status 徽章：状态改由右上角的球承载（用户要求「运行状态换成首页那种球」）。
           同时保留徽章会与球的标签重复表达同一件事。
         */
-        /*
+        /* 
           meta 区放**节点选择器**（云控制台式）：切换节点不必退回列表，
           同时把原左栏的 288px 还给内容区。
           去掉了原来的 IP / 系统两项目——它们与列表页的 address / system 列重复，
@@ -165,14 +165,14 @@ export function NodeDetailPane({
         meta={[
           { label: t('nodes.instancesUnit'), value: instanceCount },
         ]}
-        /*
+        /* 
           actions 插槽放**状态球**（用户要求「放在顶部、节点介绍右侧」）：
           对象头的右侧是这一行里最靠右的位置，球在这里与名称同一视线高度，
           「这台是什么 + 现在怎么样」一眼读完。
           「⋯」更多操作移到了下面的指标行（用户要求「三个点放到下面来」）——
           它是低频动作入口，不该占据头部最显眼的位置。
         */
-        /*
+        /* 
           【所有球都在头部】用户要求「把这些球都移到头部」——CPU/内存/磁盘/负载/状态
           五个球与节点名同一行，从「这台是什么」到「现在什么水位」一次读完，
           下面不再有「指标条」那一层，省出的纵向空间给图表。
@@ -226,13 +226,13 @@ export function NodeDetailPane({
             </div>
           </div>
         }
-        /*
+        /* 
           顶部 tab = **第一层**：3 个分组（日常巡检 / 运行与资产 / 诊断与修复）。
           组内的具体页签放到左侧栏（第二层），这样顶部只占 3 个位置、窄屏不折行，
           同时保留了「先选大类、再看细项」的两步心智。
           点击某组时进入该组的第一个页签——避免出现「组已选中但没有可见内容」。
         */
-        /*
+        /* 
           【单层 tab】用户选了云控制台式布局：9 个分区平铺一行，组间用竖线分隔。
           原来「顶部 3 组 + 左侧子项」的两层结构在固定视口下要吃掉 145px 纵向空间，
           而它带来的信息增量只是「分两批看」——平铺 + 分隔线同样能表达分组，且零额外高度。
@@ -275,7 +275,7 @@ export function NodeDetailPane({
   )
 }
 
-/**
+/** 
  * 带 tooltip 的环形仪表（与首页同一套 `ResourceGauge`，只是补了悬浮说明）。
  *
  * 【为什么不用首页那个 GaugeAttributionTooltip】那个组件绑定的是「CPU 构成归因快照」

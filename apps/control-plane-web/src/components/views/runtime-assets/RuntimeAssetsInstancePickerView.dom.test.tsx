@@ -3,8 +3,8 @@ import { screen } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
 import { RuntimeAssetsInstancePickerView } from './RuntimeAssetsPageView'
 
-/**
- * 批量部署右栏的实例候选选择器（FR-082）：候选窗口上限 200（容器 CANDIDATE_LIMIT），
+/** 
+ * 批量部署右栏的实例候选选择器：候选窗口上限 200（容器 CANDIDATE_LIMIT），
  * 故必须按滚动窗口裁剪 + 在服务端截断时给出提示（此前整列进 DOM、无任何截断提示）。
  */
 describe('RuntimeAssetsInstancePickerView（批量部署候选）', () => {

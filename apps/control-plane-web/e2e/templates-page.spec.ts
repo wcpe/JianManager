@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-154 模板应用到实例 + 变量填充预览 · 单机（Playwright + mock 模式）验收。
+/** 
+ *模板应用到实例 + 变量填充预览 · 单机（Playwright + mock 模式）验收。
  * 覆盖：模板卡片版本/更新时间；「一键部署」→ 部署对话框 预填 + 占位变量填充 + startCommand 复制/展开。
- * 证据落 .tmp/acceptance/FR-154/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-154 模板一键部署 + 变量填充预览 + startCommand 复制', async ({ page }) => {
+test('模板一键部署 + 变量填充预览 + startCommand 复制', async ({ page }) => {
   await login(page)
   await page.goto('/templates')
 
@@ -25,5 +25,5 @@ test('FR-154 模板一键部署 + 变量填充预览 + startCommand 复制', asy
   await expect(dialog.getByText('java -Xmx{{ram}}G -jar paper.jar nogui')).toBeVisible()
   await expect(dialog.getByRole('button', { name: '复制启动命令' })).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-154/single-machine-template-deploy.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-template-deploy.png', fullPage: true })
 })

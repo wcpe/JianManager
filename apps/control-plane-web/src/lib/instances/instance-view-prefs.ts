@@ -1,4 +1,4 @@
-/**
+/** 
  * 实例页的「列设置 / 保存视图」本地偏好（页面重构件）。
  *
  * 键统一走 `jm.instances.*`：
@@ -11,7 +11,7 @@ export const INSTANCE_OPTIONAL_COLUMNS = ['type', 'role', 'tags', 'metrics', 'ac
 
 export type InstanceOptionalColumn = (typeof INSTANCE_OPTIONAL_COLUMNS)[number]
 
-/**
+/** 
  * 缺省可见的可选列：**不全开**。
  *
  * 五列全开时实测表格总宽 1604px（Chromium 1280 宽，容器仅 974px），横向溢出 630px，
@@ -23,8 +23,8 @@ export type InstanceOptionalColumn = (typeof INSTANCE_OPTIONAL_COLUMNS)[number]
  */
 export const DEFAULT_COLUMNS: readonly InstanceOptionalColumn[] = ['type', 'role', 'tags', 'metrics', 'active']
 
-/**
- * 「业务插件」列（FR-534）**默认关**，与上面同理：它又是一列（约 120px），
+/** 
+ * 「业务插件」列**默认关**，与上面同理：它又是一列（约 120px），
  * 默认全开会让本已紧张的横向空间再挤掉「状态/操作」。
  *
  * 需要看「这台服装了哪些业务插件、哪些挂了」时在「显示 › 列」里勾选；
@@ -94,7 +94,7 @@ export function writeStoredViews(views: SavedInstanceView[]): void {
   }
 }
 
-/**
+/** 
  * 列顺序（表头拖拽换位）。
  *
  * 【为什么用「稳定 key 数组」而不是存 DOM 位置】列是语义单元，不是位置：把「状态」拖到最前
@@ -126,7 +126,7 @@ export const DEFAULT_COLUMN_ORDER: readonly InstanceColumnKey[] = INSTANCE_COLUM
 
 const ORDER_KEY = 'jm.instances.columnOrder'
 
-/**
+/** 
  * 读取列顺序；存储缺失/非法/含未知 key 时回落默认。
  *
  * 补全规则：存储里**只保留已知 key**，再把缺失的已知 key 按默认顺序追加。
@@ -161,7 +161,7 @@ export function writeStoredColumnOrder(order: readonly InstanceColumnKey[]): voi
   }
 }
 
-/**
+/** 
  * 把 `from` 位置的列移动到 `to` 位置，返回新数组。
  *
  * 纯函数，便于单测；`to` 按「插入到该下标之前」解释，越界自动收敛到两端。
@@ -179,7 +179,7 @@ export function moveColumn(
   const toIndex = order.indexOf(to)
   if (fromIndex < 0 || toIndex < 0) return [...order]
 
-  /*
+  /* 
     【语义：移动到目标列的位置，方向决定插入点在目标的前面还是后面】
     初版写成「先摘掉 from，再插到 to 之前」，看似通用，实际对**向前拖**（from 在 to 左侧）
     完全无效：摘掉 from 后 to 的下标左移一位，插回 to 之前就等于插回原位，
@@ -197,7 +197,7 @@ export function moveColumn(
   return next
 }
 
-/**
+/** 
  * 计算「本视图实际渲染的列顺序」——**表头 / 行 / colgroup 三处必须共用此函数**。
  *
  * 【为什么必须有这么一个函数】这三处此前各写了一遍 `present` 判断与兜底补全逻辑，
@@ -235,7 +235,7 @@ export function computeVisibleColumns(
   return ordered
 }
 
-/**
+/** 
  * 多选交互（用户提出：Shift 连选 / Ctrl 点选 / 反选）。
  *
  * 【为什么抽成纯函数】这三种交互的边界情况很多（无锚点、锚点不在当前页、跨页拖选、
@@ -306,7 +306,7 @@ export function applySelectionClick({
   return new Set([targetId])
 }
 
-/**
+/** 
  * 反选：在当前可见集合内翻转选中状态。
  *
  * 只翻转 `orderedIds` 里的项——不在当前页/当前筛选结果里的已选项保持原样，

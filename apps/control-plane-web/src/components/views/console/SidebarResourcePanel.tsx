@@ -1,4 +1,4 @@
-/**
+/** 
  * @file SidebarResourcePanel：侧栏「资源」面板（重构件）——一行工具条 + 服务器列表。
  *
  * 结构（自上而下）：
@@ -7,12 +7,12 @@
  *    悬停预览卡（HoverCard）展示缩略信息（状态/节点:端口/类型/角色/标签/创建时间）。
  *
  * 取数边界（性能判据）：列表是**有界窗口**（接线层 pageSize 上限 + 服务端 `q` 搜索），
- * 不是千级全量列举；截断时给出明确提示（护栏要求）。收藏/最近沿用既有 store（FR-293/240）。
+ * 不是千级全量列举；截断时给出明确提示（护栏要求）。收藏/最近沿用既有 store（240）。
  *
  * 受控边界（ADR-103）：数据（instances/nodes/query）由接线层注入；本地交互状态（分组方式/筛选）
  * 自持；偏好写入经 `lib/console/*`（localStorage 外部 store，无请求、无路由）。
  *
- * 【FR-509/510】本地自定义分组（原 `custom` 模式，存 localStorage）已删除：换机即失且与后端
+ * 【510】本地自定义分组（原 `custom` 模式，存 localStorage）已删除：换机即失且与后端
  * 分组树（`instance_group_nodes`，ADR-033）语义重复。分组归属一律以后端分组树为准。
  */
  import { useMemo, useState } from 'react'
@@ -117,7 +117,7 @@ const GROUP_MODE_KEY = 'jm.sidebar.groupMode'
 /** 排序偏好键：与分组正交，单独持久化。 */
 const SORT_MODE_KEY = 'jm.sidebar.sortMode'
 
-/**
+/** 
  * 拖拽负载的 MIME 类型。
  *
  * 自定义类型（而非 `text/plain`）：置顶区据此判断「这次拖的是服务器行」，
@@ -172,7 +172,7 @@ export interface SidebarResourcePanelProps {
   onOpen: (inst: StorableInstance) => void
 }
 
-/**
+/** 
  * 侧栏资源面板：**搜索 + 筛选 + 一个分组方式下拉 + 服务器列表**，另加常驻置顶段。
  *
  * 【为什么只剩这些】此前尝试过「固定三段（置顶 / 分组树 / 标签）」，结论是标签是次要维度，
@@ -241,7 +241,7 @@ export function SidebarResourcePanel({
     [instances, statusFilter],
   )
 
-  /**
+  /** 
    * 置顶区：收藏顺序排在最上方，**独立于分组**（用户要求：不再是「置顶分组方式」）。
    * 未加载进窗口的收藏回落快照行（名称/状态仍可展示，拖拽仍可用）。
    */
@@ -287,7 +287,7 @@ export function SidebarResourcePanel({
     [mode, rows, groupTree],
   )
 
-  /**
+  /** 
    * 扁平行模型（虚拟化的输入）：组头/组内实例/分段行统一成一条序列。
    * 两种渲染形态共用同一份窗口计算——否则分组方式切换会各走一条渲染路径，容易出现两套漂移。
    */
@@ -296,7 +296,7 @@ export function SidebarResourcePanel({
     [mode, sections, treeLines],
   )
 
-  /**
+  /** 
    * 每行高度（变高模式）：组头 26、服务器行 44。
    *
    * 【为什么不在行上留 margin】`space-y-*` / `mt-*` 不计入 `sizes`，千行时会累积到数千像素，
@@ -322,7 +322,7 @@ export function SidebarResourcePanel({
   const totalRows = lines.reduce((sum, line) => (line.kind === 'server' ? sum + 1 : sum), 0)
   const truncated = totalCount !== undefined && loadedCount < totalCount
 
-  /**
+  /** 
    * 指标取数边界改到**真实可见行**（本轮性能修复的核心之一）。
    *
    * 【修的是什么】此前接线层把整个窗口（最多 100 台）交给 `useInstanceWindowMetrics`，
@@ -367,7 +367,7 @@ export function SidebarResourcePanel({
                 'flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-1.5 text-[11px] font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
                 // 【焦点环改由 Button 承担】此前这里手写 `focus-visible:outline-none` + focusRing
                 // 来压掉 Chrome 默认的黑框；换成库里的 Button 后，它自带 outline-none 与
-                // 同源（FR-176，2px 主色 + 40% 底）的焦点环，手写那两段已多余。
+                // 同源（2px 主色 + 40% 底）的焦点环，手写那两段已多余。
                 (statusFilter.size > 0 || mode !== DEFAULT_GROUP_MODE || sort !== DEFAULT_SORT_MODE) && 'border-primary/50 text-primary',
               )}
             >
@@ -403,7 +403,7 @@ export function SidebarResourcePanel({
               <DropdownMenuItem
                 key={key}
                 onSelect={() => {
-                  /*
+                  /* 
                     【选完即关】此前刻意 `preventDefault()` 保持菜单打开，理由是「筛选是就地多选、
                     便于连续勾选」。实测判断：侧栏这个菜单同时装着「分组方式」与「筛选」两组，
                     保持打开反而让用户不确定这次点击生效了没有——用户反馈的「选择框不消失」即指此。
@@ -499,7 +499,7 @@ export function SidebarResourcePanel({
   )
 }
 
-/**
+/** 
  * 行尾：在线人数「当前/最大」。
  *
  * 三种情形分别处理，都不写占位符（这一列极窄，`--` 比空白更干扰扫读）：
@@ -515,7 +515,7 @@ function rowPlayerText(snapshot: InstanceMetricSnapshot | undefined): string {
   return formatPlayersRatio(snapshot.players, snapshot.playersMax)
 }
 
-/**
+/** 
  * 文件树的一层组头：缩进 + 竖线引导 + 名称 + 子树计数。
  *
  * 只做视觉层级，不做折叠——侧栏空间有限，折叠状态又要额外记忆，反而增加认知负担；
@@ -547,7 +547,7 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
   )
 }
 
-/**
+/** 
  * 置顶区（用户要求：不再是一种「分组方式」，而是列表上方独立的一块）。
  *
  * 交互：
@@ -583,7 +583,7 @@ function PinnedZone({
   onDropActiveChange: (active: boolean) => void
 }) {
   const { t } = useTranslation()
-  /*
+  /* 
     【为什么拖拽在途时也要渲染】没有收藏时本区整块不存在，于是没有任何元素能接收 `dragover`
     ——用户第一次想把服务器拖上来时**根本拖不进去**（实测：行已可拖，落点却不存在）。
     拖动进行中（`draggingId !== null`）先占位成虚线落点，拖完若仍未收藏就自动消失。
@@ -708,7 +708,7 @@ function ServerRowImpl({
     <div
       data-slot="sidebar-resource-row"
       data-testid="sidebar-resource-row"
-      /*
+      /* 
         `draggable` 落在外层行盒而不是按钮上：按钮内部已 `onClick` 打开实例，
         再让按钮自身可拖会在「按下即拖」时吞掉点击。行盒可拖、按钮照常可点。
       */
@@ -749,7 +749,7 @@ function ServerRowImpl({
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[12px] font-[570] leading-[14px] text-foreground/90">{name}</span>
               {/*
-                第二行 = 类别徽标 +（有备注时）` · 备注`（FR-511）。
+                第二行 = 类别徽标 +（有备注时）` · 备注`。
                 为什么放这里：`statusReason` 只有崩溃/异常时才有值——**正常运行的服务器第二行本来是空的**，
                 那块空间一直白占。把类别常驻在此，信息量最大且**完全不挤名称宽度**
                 （方案对比实测：名称仍 171px，与不标记时持平）。
@@ -771,7 +771,7 @@ function ServerRowImpl({
               </span>
             </span>
             {/*
-              行尾：在线人数「当前/最大」（FR-511，TPS 已删）。
+              行尾：在线人数「当前/最大」（TPS 已删）。
               上限来自新增的 `inst_players_max` 时序（心跳携带 maxPlayers 由 CP 落库），
               与当前人数同批取回，不需要逐台拉详情（那会退化成 N+1）。
               上限缺测时只显示当前人数——不能用 0 兜底，那会被读成「上限 0」。
@@ -804,7 +804,7 @@ function ServerRowImpl({
   )
 }
 
-/**
+/** 
  * 侧边栏行记忆化。
  *
  * 【为什么】排序点击走 `navigate()` 改 URL，路由上下文变化会让整棵树（含侧边栏）重渲染；
@@ -827,7 +827,7 @@ const ServerRow = memo(ServerRowImpl, (a, b) => {
   return true
 })
 
-/**
+/** 
  * 悬停预览卡：**侧栏行上不再显示的细节全在这里**——实时指标（CPU / 内存 / 玩家 / TPS / 心跳）
  * + 归属信息（节点:端口 / 类型·角色 / 标签 / 创建时间）+ 进入提示。
  *

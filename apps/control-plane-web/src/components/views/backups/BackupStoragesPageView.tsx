@@ -1,10 +1,10 @@
-/**
+/** 
  * @file BackupStoragesPageView：备份远程存储后端页的受控视图，列表取数、四个写动作与 toast 由应用容器负责。
  * @input lib/form-validation（字段校验）、lib/use-field-gate（错误展示时机门控）、Table/Dialog/Combobox
  *        等原语、views/DangerConfirm（删除二次确认）、翻译上下文
  * @output BackupStoragesPageView、BackupStoragesPageViewProps、BackupStorageRow、BackupStorageForm、BackupStorageTestOutcome
  * @sync apps/control-plane-web/src/pages/BackupStoragesPage.tsx、apps/control-plane-web/src/pages/BackupStoragesPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-057 存储后端管理 + FR-338 编辑 + FR-072 表单校验）
+ * @since（组件受控化迁包；原页存储后端管理编辑表单校验）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -47,7 +47,7 @@ import { formatFileSize } from '@/lib/shared/format-file-size'
 const TYPES = ['s3', 'sftp', 'webdav'] as const
 const TYPE_OPTIONS: ComboboxOption[] = TYPES.map((tp) => ({ value: tp, label: tp.toUpperCase() }))
 
-/**
+/** 
  * 备份存储后端行（本视图渲染与表单回填所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/backupStorages` 的 `BackupStorage`：
@@ -81,7 +81,7 @@ export interface BackupStorageRow {
   usedBytes: number
 }
 
-/**
+/** 
  * 表单草稿（创建与编辑同形）。字段全部必填以贴合运行时取值——
  * 编辑时由行值整体回填，创建时由 `emptyForm` 铺满，故永不出现 undefined 受控/非受控切换。
  */
@@ -109,7 +109,7 @@ const emptyForm: BackupStorageForm = {
   accessKeyEnv: '', secretKeyEnv: '', useSsl: true,
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 列表与加载态经 props 注入（容器调 `useBackupStorages()`）；
  * - 四个写动作以回调上报，由容器执行 mutation 并决定成功/失败文案：提交与草稿测试回传
@@ -141,8 +141,8 @@ export interface BackupStoragesPageViewProps {
   onDelete: (id: number) => void
 }
 
-/**
- * 备份远程存储后端管理页（FR-057，编辑=FR-338）。
+/** 
+ * 备份远程存储后端管理页（编辑=）。
  * 凭证以 ${ENV_VAR} 形式引用环境变量，不收明文（config-files.md）；仅平台管理员可访问。
  * 弹窗 create/edit 双模式：编辑受控回显现值（凭证即 ${VAR} 引用，非明文），type 不可改。
  * 表格外观为方案 A「精工卡片」（opt-in appearance="refined"）。
@@ -163,7 +163,7 @@ export function BackupStoragesPageView({
   const [form, setForm] = useState<BackupStorageForm>(emptyForm)
   const [draftTestResult, setDraftTestResult] = useState<BackupStorageTestOutcome | null>(null)
   const [showForm, setShowForm] = useState(false)
-  /** 编辑目标；null = 创建模式（FR-338）。 */
+  /** 编辑目标；null = 创建模式。 */
   const [editing, setEditing] = useState<BackupStorageRow | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const gate = useFieldGate()
@@ -174,7 +174,7 @@ export function BackupStoragesPageView({
     setForm((f) => ({ ...f, [k]: v }))
   }
 
-  // 凭证须为 ${ENV_VAR} 形式（config-files.md），名称必填（FR-072）。
+  // 凭证须为 ${ENV_VAR} 形式（config-files.md），名称必填。
   const errors = validateFields(
     { name: form.name, accessKeyEnv: form.accessKeyEnv ?? '', secretKeyEnv: form.secretKeyEnv ?? '' },
     {
@@ -189,7 +189,7 @@ export function BackupStoragesPageView({
       : form.type === 'sftp' ? t('backupStorages.endpointHintSftp', 'SFTP 主机')
         : t('backupStorages.endpointHintWebdav', 'WebDAV 基地址')
 
-  /** 编辑入口：行值受控填入表单（凭证字段即 ${VAR} 引用，原样回显无泄露，FR-338）。 */
+  /** 编辑入口：行值受控填入表单（凭证字段即 ${VAR} 引用，原样回显无泄露）。 */
   const openEdit = (s: BackupStorageRow) => {
     setForm({
       name: s.name, type: s.type, endpoint: s.endpoint, bucket: s.bucket, region: s.region,
@@ -372,7 +372,7 @@ export function BackupStoragesPageView({
               </div>
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel htmlFor="backup-storage-type">{t('backupStorages.type', '类型')}</FieldLabel>
-                {/* 编辑时 type 不可改（改型=删重建，后端 422 双保险，FR-338）。 */}
+                {/* 编辑时 type 不可改（改型=删重建，后端 422 双保险）。 */}
                 <Combobox id="backup-storage-type" ariaLabel={t('backupStorages.type', '类型')} options={TYPE_OPTIONS} value={form.type} onChange={(v) => set('type', v)} allowCustom={false} disabled={!!editing} />
               </div>
               <label className="flex flex-col gap-1 text-sm md:col-span-2">

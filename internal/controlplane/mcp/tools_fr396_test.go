@@ -29,14 +29,14 @@ func fr396TestDB(t *testing.T) *gorm.DB {
 		&model.Node{}, &model.Instance{}, &model.AgentToken{}, &model.AgentCallLog{},
 		&model.GroupInstance{}, &model.ServerRegistration{}, &model.NetworkMember{},
 		&model.Task{}, &model.TaskLog{},
-		// FR-492：本组用例里的 instance_delete / node_purge_archived / instance_send_command
+		// 本组用例里的 instance_delete / node_purge_archived / instance_send_command
 		// 已进审批名单，必须装配审批服务才能测到工具自身的确认与 scope 语义。
 		&model.ApprovalTicket{}, &model.ApprovalReceipt{},
 	))
 	return db
 }
 
-// fr396Deps 构造 ToolDeps 并**始终装配审批服务**（FR-492 之后高危工具必须能出票）。
+// fr396Deps 构造 ToolDeps 并**始终装配审批服务**（之后高危工具必须能出票）。
 //
 // 用 helper 而不是逐处 `ToolDeps{...}` 的原因：这批用例断言的是工具自身的确认/scope 语义，
 // 漏装配会让它们全部撞在「未装配（失败关闭）」上——那种失败与被测行为无关，
@@ -216,7 +216,7 @@ func TestFR396_ToolsRegistered(t *testing.T) {
 	}
 }
 
-// ---- FR-396 执行器级测试：直接调 tool handler，验证真实调用链 ----
+// 执行器级测试：直接调 tool handler，验证真实调用链 ----
 
 func TestFR396_SearchFiltersAndPaginates(t *testing.T) {
 	db := fr396TestDB(t)

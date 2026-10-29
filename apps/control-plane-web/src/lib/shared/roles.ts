@@ -1,5 +1,5 @@
-/**
- * 角色枚举与权限种子（FR-432）。与后端 model.Role* / systemRoleNodes 对齐。
+/** 
+ * 角色枚举与权限种子。与后端 model.Role* / systemRoleNodes 对齐。
  * 新代码禁止硬编码 `role === 10`，一律走这里的 ROLE_* / isPlatformAdmin / hasPerm。
  */
 
@@ -132,7 +132,7 @@ const MEMBER_NODES = [
   'group.read',
 ]
 
-/**
+/** 
  * 旧数值角色 → 预置模板默认节点（auth/me 未返回 nodes 时的前端回退）。
  * platform_admin 不在此表：isPlatformAdmin 短路全开。
  */

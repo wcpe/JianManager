@@ -32,7 +32,7 @@ const ARCH_OPTIONS: ComboboxOption[] = [
   { value: 'aarch64' },
 ]
 
-/** 探测结果只读行（FR-228）：标签 + 值。 */
+/** 探测结果只读行：标签 + 值。 */
 function ProbeRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-4 px-3 py-1.5">
@@ -76,10 +76,10 @@ export interface JDKCatalogItemView {
 /** 面板内子视图：已登记列表 / 一键下载 / 登记已有（分段切换，容器固定不重排）。 */
 type JDKTab = 'list' | 'install' | 'register'
 
-/**
- * 节点 JDK 管理面板（FR-178 重做）：
+/** 
+ * 节点 JDK 管理面板（重做）：
  * - 表格横向不溢出（overflow-x-auto）、路径可复制、删除走 DangerConfirm；
- * - 一键下载支持多厂商 + foojay 具体版本选择器，下发接任务中心（FR-183）；
+ * - 一键下载支持多厂商 + foojay 具体版本选择器，下发接任务中心；
  * - 登记已有用目录选择器选路径（非手敲）。
  * 三个动作以分段切换（容器稳定，符合抽屉 UX 约束：不切换隐显内联表单致布局重组）。
  *
@@ -106,7 +106,7 @@ export interface NodeJDKPanelProps {
   catalogUnavailable?: boolean
   /** foojay 目录选项。 */
   catalogVersions?: JDKCatalogItemView[]
-  /**
+  /** 
    * 上报 foojay 目录的查询键（厂商 + 大版本 + 是否处于「一键下载」分段）。
    * 这两个值是视图内的表单草稿，却同时是目录查询的键，故变化时上报、由外壳执行查询。
    */
@@ -138,7 +138,7 @@ export interface NodeJDKPanelProps {
   }) => Promise<boolean>
   /** 探测路径。成功回传结果；失败回 null（视图保留输入以便重试）。 */
   onProbe: (path: string) => Promise<ProbeResultView | null>
-  /** 保存编辑（FR-311）。返回是否成功。 */
+  /** 保存编辑。返回是否成功。 */
   onUpdate: (
     jdkId: number,
     body: { vendor: string; majorVersion: number; version: string; arch: string; path: string },
@@ -181,18 +181,18 @@ export default function NodeJDKPanel({
   const [version, setVersion] = useState('') // 具体版本（空=该大版本最新）
   const [arch, setArch] = useState('x64')
 
-  // 登记表单状态（FR-228：选目录 + 后端探测自动填，不再手填厂商/版本/架构）。
+  // 登记表单状态（：选目录 + 后端探测自动填，不再手填厂商/版本/架构）。
   const [regManaged, setRegManaged] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [probed, setProbed] = useState<ProbeResultView | null>(null)
-  const [pathInput, setPathInput] = useState('') // 登记路径：可手输或经选目录填入（FR-228 细化）
+  const [pathInput, setPathInput] = useState('') // 登记路径：可手输或经选目录填入（细化）
 
   const [pendingDel, setPendingDel] = useState<NodeJDKView | null>(null)
   const [view, setView] = useState<ViewMode>('list')
   const [query, setQuery] = useState('')
   const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all')
 
-  // 编辑登记信息（FR-311）：行内铅笔 → 模态改厂商/大版本/具体版本/arch/路径，走既有 PUT。
+  // 编辑登记信息：行内铅笔 → 模态改厂商/大版本/具体版本/arch/路径，走既有 PUT。
   const [editing, setEditing] = useState<NodeJDKView | null>(null)
   const [editForm, setEditForm] = useState({ vendor: '', majorVersion: '', version: '', arch: '', path: '' })
   const openEdit = (j: NodeJDKView) => {
@@ -220,7 +220,7 @@ export default function NodeJDKPanel({
     onCatalogQuery?.(vendor, majorNum, tab === 'install')
   }, [vendor, majorNum, tab, onCatalogQuery])
 
-  // 已登记列表的来源筛选 + 文本搜索（FR-195：行卡片 / 网格视图的轻量过滤）。
+  // 已登记列表的来源筛选 + 文本搜索（：行卡片 / 网格视图的轻量过滤）。
   const allJdks = jdks ?? []
   const managedCount = allJdks.filter((j) => j.managed).length
   const filteredJdks = allJdks.filter((j) => {
@@ -231,7 +231,7 @@ export default function NodeJDKPanel({
     return true
   })
 
-  // 来源徽章：托管=主色「包」图标+文字，外部=中性「文件夹」图标+文字（FR-195 锁定样式）。
+  // 来源徽章：托管=主色「包」图标+文字，外部=中性「文件夹」图标+文字（锁定样式）。
   const sourceBadge = (managed: boolean) =>
     managed ? (
       <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-medium text-primary">
@@ -246,7 +246,7 @@ export default function NodeJDKPanel({
     )
 
   const submitInstall = async () => {
-    // FR-183：异步任务，回执 taskId；进度/完成在「任务中心」与站内信查看。
+    // 异步任务，回执 taskId；进度/完成在「任务中心」与站内信查看。
     const ok = await onInstall({ vendor, majorVersion: majorNum, arch, version: version.trim() || undefined })
     if (ok) setTab('list')
   }
@@ -270,7 +270,7 @@ export default function NodeJDKPanel({
     }
   }
 
-  // 探测路径（FR-228）：后端 java -version 自动得出厂商/版本/架构，结果存 probed。手输或选目录都走这里。
+  // 探测路径：后端 java -version 自动得出厂商/版本/架构，结果存 probed。手输或选目录都走这里。
   const runProbe = async (path: string) => {
     if (!path) return
     const res = await onProbe(path)
@@ -278,7 +278,7 @@ export default function NodeJDKPanel({
     setProbed(res)
   }
 
-  // 选目录后填入路径并自动探测（FR-228）。
+  // 选目录后填入路径并自动探测。
   const onPickPath = (path: string) => {
     setPickerOpen(false)
     setPathInput(path)
@@ -565,7 +565,7 @@ export default function NodeJDKPanel({
               <p className="mt-0.5 text-xs text-primary/70">{t('artifactCache.jdkInstallHint')}</p>
             </div>
           </div>
-          {/* 下载前先测节点存活（FR-229）：避免对离线/卡顿节点发起会卡死的下载 */}
+          {/* 下载前先测节点存活：避免对离线/卡顿节点发起会卡死的下载 */}
           <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
             {pingSlot}
             <Button onClick={() => void submitInstall()} disabled={installing || majorNum <= 0}>
@@ -578,13 +578,13 @@ export default function NodeJDKPanel({
 
       {tab === 'register' && (
         <form onSubmit={submitRegister} className="space-y-3 rounded-md border p-3 text-sm">
-          {/* 托管标记置顶：让用户先决定（FR-228） */}
+          {/* 托管标记置顶：让用户先决定 */}
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={regManaged} onCheckedChange={(v) => setRegManaged(v === true)} aria-label={t('nodes.jdkMarkManaged')} />
             {t('nodes.jdkMarkManaged')}
           </label>
 
-          {/* 路径：可手输 + 浏览（模态）+ 检测；后端探测自动填厂商/版本/架构（FR-228 细化：允许手动输入） */}
+          {/* 路径：可手输 + 浏览（模态）+ 检测；后端探测自动填厂商/版本/架构（细化：允许手动输入） */}
           <div className="space-y-1">
             <span className="font-medium">{t('nodes.jdkPath')}<span className="ml-0.5 text-destructive">*</span></span>
             <div className="flex flex-wrap items-center gap-2">
@@ -634,7 +634,7 @@ export default function NodeJDKPanel({
             </Button>
           </div>
 
-          {/* 目录选择器：模态承载（FR-228，不内联动布局），实现由外壳注入（自带取数） */}
+          {/* 目录选择器：模态承载（不内联动布局），实现由外壳注入（自带取数） */}
           <Dialog open={pickerOpen} onOpenChange={setPickerOpen}>
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
@@ -664,7 +664,7 @@ export default function NodeJDKPanel({
         onCancel={() => setPendingDel(null)}
       />
 
-      {/* 编辑登记信息（FR-311）：改厂商/版本/arch/路径，走既有 PUT /nodes/:id/jdks/:jid。 */}
+      {/* 编辑登记信息：改厂商/版本/arch/路径，走既有 PUT /nodes/:id/jdks/:jid。 */}
       <Dialog open={editing !== null} onOpenChange={(next) => { if (!next) setEditing(null) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -707,7 +707,7 @@ export default function NodeJDKPanel({
         </DialogContent>
       </Dialog>
 
-      {/* 运行时分区（FR-298 节点运行时库）：由外壳注入，自成一块、自行取数。 */}
+      {/* 运行时分区（节点运行时库）：由外壳注入，自成一块、自行取数。 */}
       {runtimeSlot}
     </div>
   )

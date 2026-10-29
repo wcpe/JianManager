@@ -12,7 +12,7 @@ import { prefetchRoute } from '@/lib/shared/route-prefetch'
 import type { PaletteEntry } from '@/lib/console/command-palette'
 import CommandPaletteView from '@/components/views/instances/CommandPalette'
 
-/**
+/** 
  * 全局命令面板的应用接线层（ADR-103 a 范式）。
  *
  * 面板本体是受控视图（见 components/views）；本层持有开合（含全局 Ctrl/⌘+K 监听）、四类数据源
@@ -47,7 +47,7 @@ export default function CommandPalette() {
     [trimmedQuery, selectedNodeId],
   )
 
-  // 实例结果走 FR-247 服务端分页搜索；节点/页面/操作仍本地轻量匹配。
+  // 实例结果走服务端分页搜索；节点/页面/操作仍本地轻量匹配。
   const { data: instanceSearch, isFetching: searchingInstances } = useInstanceSearch(instanceSearchParams, open)
   const { data: nodes } = useNodes()
 

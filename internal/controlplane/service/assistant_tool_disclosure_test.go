@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 渐进式工具披露（FR-544）。
+// 渐进式工具披露。
 //
 // 这组用例守三件事：
 //  1. 常驻上下文**不随工具总数增长**（这是本 FR 的全部意义）；

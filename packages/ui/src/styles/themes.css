@@ -1,32 +1,32 @@
 /**
- * 主题色（FR-502 阶段 2：改为种子声明式）。
+ * 主题色（阶段 2：改为种子声明式）。
  *
  * ── 加一套新主题要写什么 ──
  * 只写 5 个种子，亮暗各一组：
- *   --seed-brand       品牌主色（主操作 / 焦点环 / 图表 1）
- *   --seed-on-brand    品牌上的前景色（按钮文字；按品牌明度挑墨或白）
- *   --seed-brand-rgb   同色的裸三元组，供阴影晕色用
- *                      （CSS 无法从颜色变量里取出分量，只能一并声明）
- *   --seed-hue         结构色相
- *   --seed-chroma      结构 chroma 基准（≈ 描边色的 chroma）
+ *  --seed-brand       品牌主色（主操作 / 焦点环 / 图表 1）
+ *  --seed-on-brand    品牌上的前景色（按钮文字；按品牌明度挑墨或白）
+ *  --seed-brand-rgb   同色的裸三元组，供阴影晕色用
+ *                     （CSS 无法从颜色变量里取出分量，只能一并声明）
+ *  --seed-hue         结构色相
+ *  --seed-chroma      结构 chroma 基准（≈ 描边色的 chroma）
  * 其余结构色（background / card / border / secondary / muted / foreground 等）
  * 由 tokens.css 从种子派生，不必再抄一遍。
  *
  * 例（第六套主题 rose）：
- *   [data-theme="rose"] {
- *     --seed-brand: oklch(0.62 0.19 12);
- *     --seed-on-brand: #ffffff;
- *     --seed-brand-rgb: 225 29 72;
- *     --seed-hue: 12;
- *     --seed-chroma: 0.018;
- *   }
- *   [data-theme="rose"].dark {
- *     --seed-brand: oklch(0.72 0.16 12);
- *     --seed-on-brand: #2a0808;
- *     --seed-brand-rgb: 251 113 133;
- *     --seed-hue: 12;
- *     --seed-chroma: 0.032;
- *   }
+ *  [data-theme="rose"] {
+ *    --seed-brand: oklch(0.62 0.19 12);
+ *    --seed-on-brand: #ffffff;
+ *    --seed-brand-rgb: 225 29 72;
+ *    --seed-hue: 12;
+ *    --seed-chroma: 0.018;
+ *  }
+ *  [data-theme="rose"].dark {
+ *    --seed-brand: oklch(0.72 0.16 12);
+ *    --seed-on-brand: #2a0808;
+ *    --seed-brand-rgb: 251 113 133;
+ *    --seed-hue: 12;
+ *    --seed-chroma: 0.032;
+ *  }
  *
  * ── 明暗正交 ──
  * 亮色 [data-theme="x"]（特异性等于单类，书写在 :root/.dark 之后而胜出）；

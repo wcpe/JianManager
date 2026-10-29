@@ -1,6 +1,6 @@
 //go:build ignore
 
-// 打包 bot-worker dist 为 CP 内嵌归档（FR-308/ADR-070）：把 apps/bot-worker/dist 打成
+//  打包 bot-worker dist 为 CP 内嵌归档（ADR-070）：把 apps/bot-worker/dist 打成
 // 确定性 tar.gz（路径排序、固定 mtime/属主），写出 bot-worker.tar.gz + manifest.json
 // （version/sha256/size）。由 `make embed-botworker` 调用；纯 Go 实现不依赖外部 tar。
 //

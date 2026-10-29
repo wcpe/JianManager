@@ -7,10 +7,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// FR-396：新 action 一律 V1Allowed=false，V2 按能力发现。
+// 新 action 一律 V1Allowed=false，V2 按能力发现。
 func TestFR396_ActionCatalog_V1NeverSeesNewActions(t *testing.T) {
 	for _, d := range fr396DomainActions {
-		assert.False(t, d.V1Allowed, "FR-396 action 不得对 V1 开放: "+d.Action)
+		assert.False(t, d.V1Allowed, "action 不得对 V1 开放: "+d.Action)
 		got, ok := DescribeAgentAction(d.Action)
 		require.True(t, ok, "action 必须登记: "+d.Action)
 		assert.Equal(t, d.Action, got.Action)

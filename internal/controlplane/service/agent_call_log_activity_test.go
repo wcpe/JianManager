@@ -14,8 +14,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Token 维度活动聚合（ADR-096 决策 6 / FR-489）：
-// 数据源是 agent_call_logs（FR-390），按 token_id 在窗口内聚合。
+// Token 维度活动聚合（ADR-096 决策 6）：
+// 数据源是 agent_call_logs，按 token_id 在窗口内聚合。
 
 // setupActivityDB 建库并迁移活动聚合涉及的两张表（流水 + Token 名/前缀来源）。
 func setupActivityDB(t *testing.T) *gorm.DB {
@@ -217,7 +217,7 @@ func TestAgentCallLog_RecordTruncatesActionOnRuneBoundary(t *testing.T) {
 // TestActivityByToken_SameTimestampTakesLargerID 同一 Token、同一 created_at 的两行取 id 更大者。
 //
 // 自联接按 MAX(created_at) 命中的是**所有**同刻行，靠 ORDER BY created_at DESC, id DESC 让最新那行
-// 先出现；「已写入」判定必须与此一致（FR-489 review 修复 2）。
+// 先出现；「已写入」判定必须与此一致（review 修复 2）。
 func TestActivityByToken_SameTimestampTakesLargerID(t *testing.T) {
 	db := setupActivityDB(t)
 	svc := NewAgentCallLogService(db)

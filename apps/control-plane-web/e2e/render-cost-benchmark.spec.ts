@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-507 验收③：列表页大数据量渲染开销的前后对比实测。
+/** 
+ *验收③：列表页大数据量渲染开销的前后对比实测。
  *
  * 【为什么要单独一个 spec】
  * `navigation-benchmark.spec.ts` 只记录「切页耗时」并作为 annotation 输出，不产出
@@ -42,7 +42,7 @@ async function readProbe(page: Page, surface: string, rowSelector: string): Prom
   return { domRows, scrollHeight, clientHeight, totalCount }
 }
 
-/**
+/** 
  * 反复滚到底、回顶部，共 `rounds` 轮，返回每轮的耗时。
  * 每轮内多次跳转是为了强制虚拟窗口重算 + 行组件重新挂载（这正是「随条数恶化」的受力点）。
  */
@@ -94,12 +94,12 @@ async function collectLongTasks(page: Page, action: () => Promise<void>): Promis
   })
 }
 
-test.describe('FR-507 验收③：列表虚拟化前后对比实测', () => {
+test.describe('验收③：列表虚拟化前后对比实测', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
   })
 
-  /*
+  /* 
     审计页的 mock 只有 ~15 条真实数据（见 packages/devmock/src/handlers/domains/identity.ts 的
     `audit` 集合），无法在 mock 下复现 250 条量级；dom 用例里那个 250 是测试自己注入的。
     因此审计页在这里降级为「小数据量对照组」：只验证虚拟化机制在它身上同样生效、

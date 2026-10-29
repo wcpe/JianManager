@@ -5,8 +5,8 @@ import { Save, Terminal } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 
-/**
- * 进程能力分段（FR-450）——不写死产品名，由画像 `process` 能力驱动
+/** 
+ * 进程能力分段——不写死产品名，由画像 `process` 能力驱动
  * （新增原生二进制产品只需在注册表加一条描述符）。
  *
  * 承载：进程运行指标（由外壳经 `processSlot` 注入）+ 启动参数编辑（{@link LaunchParamsPanel}）。
@@ -33,8 +33,8 @@ export default function BinarySegment({ processSlot, launch }: BinarySegmentProp
   )
 }
 
-/**
- * 启动参数编辑（FR-450 §2.3.4）：`startCommand` 明面可编辑（依赖 FR-451 配置源 API；
+/** 
+ * 启动参数编辑（§2.3.4）：`startCommand` 明面可编辑（依赖配置源 API；
  * 此前仅在列表页的 EditInstanceConfigDialog 里存在，这里在详情页直接呈现）。
  * 变更对下次启动生效，故给显式提示，不做乐观生效假设。
  *

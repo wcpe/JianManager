@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ArtifactMigrationHandler 制品存量迁移路由处理器（FR-348，底座见 ADR-073）。
+// ArtifactMigrationHandler 制品存量迁移路由处理器（底座见 ADR-073）。
 // 全组限平台管理员（挂 admin 组，与渠道路由同处）；任务本体经全局任务中心可见可停。
 type ArtifactMigrationHandler struct {
 	svc *service.ArtifactMigrationService

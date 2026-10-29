@@ -56,7 +56,7 @@ func newBinaryVersionHarness(t *testing.T, worker *binaryWorkerStub) (*Provision
 	return svc, bv, taskSvc, node, assets
 }
 
-// provisionAssetInstance 用 kind=asset 搭一个 binary 实例（FR-468 绑定写入路径）。
+// provisionAssetInstance 用 kind=asset 搭一个 binary 实例（绑定写入路径）。
 func provisionAssetInstance(t *testing.T, svc *ProvisionService, taskSvc *TaskService, node *model.Node, asset *model.Asset, startCommand string) *model.Instance {
 	t.Helper()
 	inst, taskID, err := svc.ProvisionServerAsync(context.Background(), ProvisionServerRequest{
@@ -105,7 +105,7 @@ func TestBinaryBinding_URLSourceHasNoAsset(t *testing.T) {
 }
 
 // TestRebuildBinaryInstance_FreezesBoundVersion 重建**不漂移**：制品库出现更高版本后重建仍取绑定版本
-// （FR-468 验收项 ②，对照 ADR-090 旧行为）。
+// （验收项 ②，对照 ADR-090 旧行为）。
 func TestRebuildBinaryInstance_FreezesBoundVersion(t *testing.T) {
 	worker := &binaryWorkerStub{}
 	svc, _, taskSvc, node, assets := newBinaryVersionHarness(t, worker)

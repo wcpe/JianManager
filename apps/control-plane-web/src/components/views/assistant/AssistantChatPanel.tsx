@@ -35,7 +35,7 @@ import type { PageContextEntityRef } from '@/lib/assistant/page-context'
 import { isServerDrag, readServerDragId } from '@/lib/assistant/server-drag'
 import { isSafeExternalLink, confirmOpenMessage } from '@/lib/system-update/release-notes-link'
 
-/**
+/** 
  * 单条消息气泡的**估算高度**（px），仅用于尚未测量过的消息。
  *
  * 为什么需要估算：变高虚拟化要在首次渲染前就知道总高，才能算出滚动窗口与占位。
@@ -44,15 +44,15 @@ import { isSafeExternalLink, confirmOpenMessage } from '@/lib/system-update/rele
  */
 const ESTIMATED_BUBBLE_HEIGHT = 80
 
-/**
- * 聊天消息流与输入器（FR-519 §5）。
+/** 
+ * 聊天消息流与输入器（§5）。
  *
  * 这个组件刻意**不取数、不发请求**（ADR-103 b 范式）：会话、run、事件流都由容器
  * 经 props 注入。原因不只是分层口味——聊天状态机（流式追加、取消、断线补读）
  * 是很容易出竞态的地方，把它和取数混在一个组件里，测试就只能靠假后端才敢碰。
  */
 
-/**
+/** 
  * Markdown 渲染器（聊天用）。
  *
  * 与 ReleaseNotes 的配置**有意不同**：那里 `img` 会直接加载远程图片，而那里的
@@ -178,7 +178,7 @@ export interface AssistantChatPanelProps {
   modelName?: string | null
   /** 错误/空态提示（模型未配置、连接中断等）。 */
   hint?: string | null
-  /**
+  /** 
    * 本轮失败原因（如上游不可达）。
    *
    * 单独传而不是塞进消息流：失败轮没有 assistant 消息可挂，而乐观项会被清理。
@@ -187,7 +187,7 @@ export interface AssistantChatPanelProps {
   runError?: string | null
   onSend: (text: string) => Promise<void> | void
   onStop: () => void
-  /**
+  /** 
    * 当前会话的草稿（受控）。传 undefined 表示不启用草稿持久化。
    *
    * 草稿由容器持有而不是面板内部 state：面板会随浮窗开关卸载/挂载，
@@ -195,8 +195,8 @@ export interface AssistantChatPanelProps {
    */
   draft?: string
   onDraftChange?: (text: string) => void
-  /**
-   * 页面上下文芯片（FR-518 §5.2）。消费端已就绪，注册端属 FR-518 自身实现。
+  /** 
+   * 页面上下文芯片（§5.2）。消费端已就绪，注册端属自身实现。
    *
    * 每项可移除，移除即不再外发该项（shared-contracts §6 第 5 条）——
    * 所以这里只渲染调用方给的数组，不缓存、不补全。
@@ -205,7 +205,7 @@ export interface AssistantChatPanelProps {
     key: string
     label: string
     onRemove: () => void
-    /**
+    /** 
      * 该芯片对应的实体（可选）。
      *
      * 只有实例类芯片会给：它让芯片能就地展开指标摘要、并提供跳转到实例详情的入口。
@@ -214,8 +214,8 @@ export interface AssistantChatPanelProps {
      */
     entity?: PageContextEntityRef
   }>
-  /**
-   * 已附加的实体（FR-518 §5.3）：用于「添加实体」的去重与上限判定。
+  /** 
+   * 已附加的实体（§5.3）：用于「添加实体」的去重与上限判定。
    *
    * 与 `contextChips` 分开传而不是从芯片反解：芯片是展示用标签（已本地化、可能被
    * 移除过），实体是外发内容。把展示态反解成数据态是典型的「看起来能用、
@@ -228,15 +228,15 @@ export interface AssistantChatPanelProps {
   confirmationRunId?: number | null
   /** 用户决策后的回调（容器据此继续观察或刷新）。 */
   onConfirmationDecided?: (id: number, decision: 'approve' | 'reject') => void
-  /**
-   * 本轮的工具调用状态（FR-519 §5）。
+  /** 
+   * 本轮的工具调用状态（§5）。
    *
    * 由容器从 `useAssistantChat` 取出后原样传入——面板仍然只渲染、不聚合：
    * 聚合依赖 run 的事件流，而事件流属于容器（面板拿不到、也不该去订阅）。
    * 可选，缺省即不渲染：没有工具调用的普通问答不该多出一块空壳。
    */
   toolCalls?: ToolCallView[]
-  /**
+  /** 
    * 芯片指标是否取数（缺省 true）。
    *
    * 由容器按浮窗可见性传入：面板在浮窗收起时**仍挂载**，若无条件取数，
@@ -280,7 +280,7 @@ export function AssistantChatPanel({
   /** 用户是否停在底部：滚上去看历史时不要被强制拽回底部。 */
   const stickToBottom = useRef(true)
 
-  // 服务器拖入（侧边栏 → 聊天框，FR-518/519 联动）。
+  // 服务器拖入（侧边栏 → 聊天框519 联动）。
   //
   // 用**计数**而不是布尔：dragenter/dragleave 会在子元素之间反复触发，
   // 布尔值会在指针掠过内部节点时闪烁，表现为高亮一闪一闪。
@@ -294,7 +294,7 @@ export function AssistantChatPanel({
   }, [])
   const onDragOver = useCallback((e: React.DragEvent) => {
     // dragover 必须 preventDefault，否则 drop 事件根本不会触发
-    //（`types` 在 dragover 阶段可读，`getData` 不可读，故判据只能用 types）。
+    // （`types` 在 dragover 阶段可读，`getData` 不可读，故判据只能用 types）。
     if (!isServerDrag(e.dataTransfer?.types)) return
     e.preventDefault()
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
@@ -334,7 +334,7 @@ export function AssistantChatPanel({
     await onSend(text)
   }, [draft, running, onSend])
 
-  // ── 长会话虚拟化（FR-519 §7）──────────────────────────────────────────
+  // ── 长会话虚拟化（§7）──────────────────────────────────────────
   //
   // 实测过的缺口：500 条会话只渲染最近 20 条（后端默认 limit=20），滚到顶部看不到第 1 条。
   // 数据侧已改为翻页拉全（useAssistantMessages）；渲染侧用变高虚拟窗口，只挂载可视区内的气泡。
@@ -359,7 +359,7 @@ export function AssistantChatPanel({
     containerRef: scrollRef,
   })
 
-  /*
+  /* 
     渲染后测量真实高度。
 
     两处必须小心，否则会踩出级联渲染或死循环：
@@ -492,7 +492,7 @@ export function AssistantChatPanel({
         </Alert>
       ) : null}
 
-      {/* 上下文芯片（FR-518 §5.2）：放在输入框上方一行；每项可单独移除。
+      {/* 上下文芯片（§5.2）：放在输入框上方一行；每项可单独移除。
           「添加实体」也在这条带子里——它属于同一件事（本轮要带什么上下文）。 */}
       {onAddContextEntity ? (
         <div className="flex flex-wrap items-center gap-1.5 px-1 pb-1">

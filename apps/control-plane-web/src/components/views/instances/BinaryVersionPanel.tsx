@@ -15,7 +15,7 @@ export interface BinaryVersionCandidateView {
   filename: string
 }
 
-/**
+/** 
  * 二进制版本视图（本组件所需的最小结构）。
  *
  * 必填性照搬 `@/api/binaryVersion` 的 `BinaryVersionView`：这些字段后端恒给（空值用空串），
@@ -23,7 +23,7 @@ export interface BinaryVersionCandidateView {
  * 只省略本组件确实不用的字段（instanceId / diskSha256）。
  */
 export interface BinaryVersionView {
-  /** 是否登记了版本绑定（非 binary/beacon 实例或搭建早于 FR-468 时为 false）。 */
+  /** 是否登记了版本绑定（非 binary/beacon 实例或搭建早于时为 false）。 */
   bound: boolean
   /** 当前生效制品 ID；0=无制品库版本（url/node_file 来源）。 */
   currentAssetId: number
@@ -38,7 +38,7 @@ export interface BinaryVersionView {
   /** 版本漂移（人工换过文件 / 摘要不一致 / 绑定记录与制品库不符）。 */
   driftDetected: boolean
   driftReason?: string
-  /**
+  /** 
    * 本次查询是否真的做了磁盘内容比对。
    * 与 driftDetected 分开表达：未校验 ≠ 没有漂移，前端不得把「未校验」渲染成「已核对」。
    */
@@ -56,8 +56,8 @@ type PendingChange =
   | { kind: 'upgrade'; assetId: number; label: string }
   | { kind: 'rollback'; label: string }
 
-/**
- * 实例「二进制版本」区（FR-468）：当前版本 + 受控升级 + 一级回滚。
+/** 
+ * 实例「二进制版本」区：当前版本 + 受控升级 + 一级回滚。
  *
  * 为什么需要它：搭建时版本是**隐式**解析的（Beacon 预设取制品库最新），运维既不知道
  * 「现在跑的是哪一版」，也没有升级入口——改版本只能靠自己记住旧文件名、手动换文件。

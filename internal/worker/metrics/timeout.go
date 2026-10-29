@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/directprobe"
 )
 
-// 直探超时的 Worker 侧生效值（FR-446，spec §2.6「超时可配」）。
+// 直探超时的 Worker 侧生效值（spec §2.6「超时可配」）。
 //
 // CP 经心跳响应下发 direct_probe.slp_timeout / direct_probe.query_timeout（毫秒），Worker 收到后
 // 经 SetDirectProbeTimeouts 写入本进程的生效值；心跳时序链路与 GetInstanceMetrics 实时链路都读
@@ -25,7 +25,7 @@ var (
 	directProbeQueryTimeo time.Duration
 )
 
-// SetDirectProbeTimeouts 更新 SLP / Query 直探超时的生效值（FR-446）。
+// SetDirectProbeTimeouts 更新 SLP / Query 直探超时的生效值。
 // 非正值按「未配置」处理（清空覆盖，回退默认），使非法下发不会把超时归零成立即失败。
 func SetDirectProbeTimeouts(slp, query time.Duration) {
 	directProbeTimeoutsMu.Lock()
@@ -42,16 +42,16 @@ func DirectProbeTimeouts() (slp, query time.Duration) {
 }
 
 // normalizeProbeTimeout 把超时归一到「(0, maxDirectProbeTimeout]」区间：非正值回退内置默认，
-// 超上界则钳制到上界（FR-446 复审 N3）。这样非法/异常的下发值既不会把超时归零成立即失败，
+// 超上界则钳制到上界（复审 N3）。这样非法/异常的下发值既不会把超时归零成立即失败，
 // 也不会突破心跳采集护栏拖垮采集链。
 //
-// 实现委托给共享契约包（FR-446 复审 NEW-ISSUE A）：CP 写校验、CP 读/下发钳制与本处归一
+// 实现委托给共享契约包（复审 NEW-ISSUE A）：CP 写校验、CP 读/下发钳制与本处归一
 // **同源**，不再各写一份字面量上界，避免「CP 收下而 Worker 按另一上界静默钳制」的漂移。
 func normalizeProbeTimeout(d time.Duration) time.Duration {
 	return directprobe.NormalizeTimeout(d)
 }
 
-// 直探失败类别（FR-446 审计项 4）：仅用于告警/日志文案，不参与控制流。
+// 直探失败类别（审计项 4）：仅用于告警/日志文案，不参与控制流。
 const (
 	// ProbeErrTimeout 对端无响应 / 读超时（端口被防火墙丢弃、服务未监听但主机可达）。
 	ProbeErrTimeout = "timeout"

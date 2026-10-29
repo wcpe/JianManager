@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ConfigFileHandler 配置分层覆盖路由处理器（FR-529）。
+// ConfigFileHandler 配置分层覆盖路由处理器。
 //
 // 路径前缀刻意与既有 `/instances/:id/configs` 分开：那里是「某实例某文件」的实例级语义，
 // 这里是「一条配置在多个作用域上的分层定义」，两者混在同一前缀下会让「这个 path 是相对谁」

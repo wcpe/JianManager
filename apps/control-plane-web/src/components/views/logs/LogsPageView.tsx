@@ -1,4 +1,4 @@
-/**
+/** 
  * @file LogsPageView：日志中心（多来源 / 联邦查询 / 强筛选 / 时间线）的受控视图，取数、联邦降级编排、
  *       导出下载、路由深链与在线/跟随轮询策略由应用容器负责。
  * @input lib/logs-filters（LOG_VIEWS / TIME_RANGE_PRESETS / logLevelStatus / computeVirtualWindow）、
@@ -10,7 +10,7 @@
  * @sync apps/control-plane-web/src/pages/LogsPage.tsx、apps/control-plane-web/src/pages/LogsPage.dom.test.tsx、
  *        apps/control-plane-web/src/pages/LogsPage.federation.dom.test.tsx、
  *        apps/control-plane-web/src/pages/LogsPage.degradeReason.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-049 查看 / FR-050 检索 / FR-150 增强 + FR-482 覆盖/失败态接线）
+ * @since（组件受控化迁包；原页查看检索增强覆盖/失败态接线）
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -78,7 +78,7 @@ export interface LogsLevelFacet {
   count: number
 }
 
-/**
+/** 
  * 洞察栏数据（容器注入）。
  *
  * 只在**联邦活跃**时提供：`undefined` 表示当前列表不是联邦数据源，洞察栏仅保留占位高度。
@@ -92,7 +92,7 @@ export interface LogsInsights {
   levelFacets?: LogsLevelFacet[]
 }
 
-/**
+/** 
  * 联邦覆盖 / 失败态投影（容器从 `LogsFederationResult` 折算注入）。
  *
  * 只声明本视图渲染用到的字段，且全部复用包内 foundation 的类型：应用侧把整个
@@ -113,7 +113,7 @@ export interface LogsFederationViewState {
   exportAffordance: ExportDownloadAffordance
 }
 
-/**
+/** 
  * 实例筛选器插槽参数。
  *
  * 选择器本体在包内（`views/instances/InstancePicker`），但候选来自服务端搜索——
@@ -128,7 +128,7 @@ export interface LogsInstancePickerArgs {
   disabled: boolean
 }
 
-/**
+/** 
  * 筛选态（受控）。
  *
  * 全部维度都会进入查询键并触发重新取数，故 state 由容器持有、逐字段注入：
@@ -149,7 +149,7 @@ export interface LogsFilterState {
   range: TimeRangePreset
 }
 
-/**
+/** 
  * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast、不读路由**。
  * - 行数据、总数与三态（首屏加载 / 失败 / 就绪）经 props 注入：容器按 legacy / 联邦 / 经典三路择一注入 `items`；
  * - **归容器**的受控状态：筛选态 `filter` 与主视图 `view`（两者都是查询键）、页码 `page`、实时跟随 `follow`
@@ -169,7 +169,7 @@ export interface LogsPageViewProps {
   hasData?: boolean
   /** 取数失败；优先于列表渲染。 */
   isError?: boolean
-  /** FR-482：false 时禁止把空列表呈成「暂无日志」成功空态（失败/partial 不得当空成功）。 */
+  /** false 时禁止把空列表呈成「暂无日志」成功空态（失败/partial 不得当空成功）。 */
   emptySuccessAllowed?: boolean
   /** 当前页（视图在跟随态下自行折为第 1 页）。 */
   page?: number
@@ -223,13 +223,13 @@ export interface LogsPageViewProps {
   renderInstancePicker: (args: LogsInstancePickerArgs) => ReactNode
 }
 
-/**
- * 日志中心（FR-049 查看 / FR-050 检索 / FR-150 增强 + FR-482 覆盖/失败态接线）。
+/** 
+ * 日志中心（查看检索增强覆盖/失败态接线）。
  * 套「流水检索」范式：强筛选（级别 pill + 来源/节点/实例/时间范围 + 关键字）→ 时间线行（虚拟滚动）；
  * 「实时跟随」开关锁定首页并按间隔轮询（tail）；导出可选范围（当前页/全部匹配/时间段）。
  * 级别用 StatusBadge 着色，token 驱动，与告警页语义统一。
  *
- * FR-482 接线（最小改动）：
+ *接线（最小改动）：
  * - 可选联邦 API（`/logs/federation`）由容器探测；404 → 降级 legacy 视图 + 横幅；
  * - 覆盖/失败态一律经 `classifyLogViewState` + `toCoverageBannerProps`，失败/partial 禁止空成功；
  * - `sourceTag=legacy` 打 Legacy 徽标；ErrFederatedNotReady 显示联邦未就绪说明；
@@ -537,7 +537,7 @@ export function LogsPageView({
         </div>
       )}
 
-      {/* FR-482 覆盖/失败态横幅：partial/offline/failed 不得当空成功。 */}
+      {/*覆盖/失败态横幅：partial/offline/failed 不得当空成功。 */}
       {federation && (
         <CoverageBanner
           federation={federation}
@@ -615,8 +615,8 @@ export function LogsPageView({
   )
 }
 
-/**
- * 覆盖/失败态横幅（FR-482）：消费 foundation 的 classify → toCoverageBannerProps。
+/** 
+ * 覆盖/失败态横幅：消费 foundation 的 classify → toCoverageBannerProps。
  * visible=false 时不渲染；tone 驱动 token 配色；导出被阻断时展示原因。
  */
 function CoverageBanner({
@@ -762,7 +762,7 @@ function CoverageBanner({
 /** 慢查询提示出现的等待阈值（秒）：3 秒内的加载属正常往返，不必打扰用户。 */
 const SLOW_QUERY_HINT_SECONDS = 3
 
-/**
+/** 
  * 慢查询提示：长耗时查询不能只留一个转圈——让用户知道「还在跑、等了多久」，
  * 并提示缩小时间范围（无界范围是最慢路径）。纯前端计时，不改任何查询语义。
  *
@@ -832,7 +832,7 @@ function LevelPill({
   )
 }
 
-/**
+/** 
  * 日志时间线（虚拟滚动）：固定行高，仅渲染视口附近的窗口，千行级日志不一次性入 DOM。
  * 跟随态下每次数据更新自动滚到顶部（最新在前）。
  */
@@ -847,7 +847,7 @@ function LogTimeline({
   items: LogEntry[]
   total: number
   follow: boolean
-  /**
+  /** 
    * 筛选身份键（view/来源/在线过滤/实例/节点/级别/关键字/范围；**不含 page** ✗——翻页需保留滚动位置）。
    * 变化即重置滚动：切实例后新列表更短时，旧 scrollTop 会落在空白区，visible 为空 ⇒
    * 表现为「点什么都不动/刷不出来」✗✓。
@@ -857,7 +857,7 @@ function LogTimeline({
   filterKey: string
   /** 查询尚未完成：此时不判空态，避免把「未就绪」误报为空结果。 */
   loading?: boolean
-  /** FR-482：false 时禁止把空列表呈成「无日志」成功空态。 */
+  /** false 时禁止把空列表呈成「无日志」成功空态。 */
   emptySuccessAllowed?: boolean
 }) {
   const { t } = useTranslation()
@@ -980,7 +980,7 @@ function LogFooter({
       </div>
     )
   }
-  /**
+  /** 
    * 翻页边界的判定基准。
    *
    * 联邦 tail-first 模式的「下一页」能否点由服务端游标决定（`canNext`），不能只比页码；

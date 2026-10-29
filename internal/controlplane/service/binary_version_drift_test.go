@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// hashFileStub 在 binaryWorkerStub 之上补 HashFile——磁盘内容比对（FR-468 §2.5）的唯一入口。
+// hashFileStub 在 binaryWorkerStub 之上补 HashFile——磁盘内容比对（§2.5）的唯一入口。
 type hashFileStub struct {
 	*binaryWorkerStub
 	resp *workerpb.HashFileResponse

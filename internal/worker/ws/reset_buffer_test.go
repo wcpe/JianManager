@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestResetBuffer_F3CrashTailContamination 复现 F3（FR-471 缺陷修复）：
+// TestResetBuffer_F3CrashTailContamination 复现 F3（缺陷修复）：
 // 终端环形缓冲跨运行共享、若不按本次启动清空，上一轮输出会残留并污染本轮崩溃快照的根因归类。
 //
 // 真机现场：同一实例先后注入不同崩溃，第二次注入端口占用却被判为 oom——因缓冲里上一轮的

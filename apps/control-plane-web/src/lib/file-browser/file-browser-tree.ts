@@ -1,11 +1,11 @@
-/**
- * 共享文件浏览器的扁平→层级建树（FR-213）。
+/** 
+ * 共享文件浏览器的扁平→层级建树。
  *
  * 与具体后端无关：输入一组 {@link FileEntry}（path/isDir/size），按 `path` 的 `/` 分段
  * 构建目录树，目录聚合递归文件数与字节数。供「扁平全量」数据源（如客户端分发 manifest）
  * 一次成树渲染；「懒加载分层」数据源不经此（按层拉取直接渲染）。
  *
- * 泛化自 FR-191 `lib/client-publish-wizard` 的 `buildFileTree`（那版携 manifest 专有字段
+ * 泛化自`lib/client-publish-wizard` 的 `buildFileTree`（那版携 manifest 专有字段
  * sync/platform/index，与 manifest 编排耦合）。本版只依赖通用 `FileEntry`，纯函数、node 可测。
  */
 import type { FileEntry } from './file-browser-types'
@@ -44,8 +44,8 @@ function normalizePath(raw: string): string {
   return p
 }
 
-/**
- * 把扁平条目列表构建为目录树（FR-213）。
+/** 
+ * 把扁平条目列表构建为目录树。
  *
  * - 显式 `isDir` 条目建立（或复用）对应目录节点（即便它没有子文件，空目录也会出现）。
  * - 文件条目挂到其父目录下；沿途缺失的中间目录自动补建。

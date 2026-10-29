@@ -9,8 +9,8 @@ import {
 } from '@/components/views/assistant/assistant-tool-status'
 import type { ToolCallView } from '@/components/views/assistant/assistant-tool-status'
 
-/**
- * 工具调用状态徽标列表（FR-519 §5）。
+/** 
+ * 工具调用状态徽标列表（§5）。
  *
  * 为什么是一个独立列表而不是把状态塞进消息气泡里：
  *  - 一次工具调用由 `tool_call` / `tool_status` / `tool_result` **三类事件**共同描述，
@@ -45,7 +45,7 @@ function statusVariant(status: string): 'chip-ok' | 'chip-bad' | 'chip-idle' | '
   }
 }
 
-/**
+/** 
  * 状态词 → 中文文案。
  *
  * 刻意**逐个分支写字面量 key**（而不是拼 `t('assistant.toolStatus' + x)`）：
@@ -64,7 +64,7 @@ function statusLabel(status: string, t: TFunction): string {
     case 'failed':
       return t('assistant.toolStatusFailed', '失败')
     default:
-      /*
+      /* 
         unverified：写操作**已发出但回执未经核实**（Worker 断连、超时等）。
         不能显示为「已完成」——那会让用户误以为操作确实生效了；
         也不能直接返回后端原文（界面上会冒出英文 "unverified"）。

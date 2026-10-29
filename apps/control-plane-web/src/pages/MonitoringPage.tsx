@@ -40,7 +40,7 @@ function targetFromSearch(searchParams: URLSearchParams): DrillTarget {
   return { kind: 'platform' }
 }
 
-/**
+/** 
  * 统一监控页的应用接线层（ADR-103 a 范式）。
  *
  * 页面本体是受控视图（见 components/views）；本层持有下钻目标/范围/粒度/对比选中/进程选择等状态、
@@ -54,7 +54,7 @@ export default function MonitoringPage() {
   const { data: nodes } = useNodes()
   const [target, setTarget] = useState<DrillTarget>(() => targetFromSearch(searchParams))
 
-  // 页面上报（FR-518 §4.2）：监控页发「下钻目标 + 时间窗」，不发原始时序点全量。
+  // 页面上报（§4.2）：监控页发「下钻目标 + 时间窗」，不发原始时序点全量。
   // 目标来自 URL（`?instance=<uuid>` / `?node=<uuid>`），与页面自身解析结果同源。
   usePageContext(
     useMemo(
@@ -69,7 +69,7 @@ export default function MonitoringPage() {
       [target],
     ),
   )
-  /**
+  /** 
    * 把 URL 里的实例 uuid 解析成数字 id（`useProcessTop` 要 id）。
    *
    * 用 `/instances/search?uuid=` 精确查一条，而不是拉全量实例再本地 find——后者在千级规模下

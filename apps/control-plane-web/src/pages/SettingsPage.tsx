@@ -19,7 +19,7 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
+/** 
  * 系统设置页容器（ADR-103 b 范式）：平台配置取数、保存 mutation、客户端偏好（主题/语言）落盘
  * 与两处出站连通性测试入口的接线都在这里决定，分类导航、分类面板与未保存拦截交共享视图。
  *
@@ -68,14 +68,14 @@ export default function SettingsPage() {
       onLanguageChange={changeLanguage}
       renderOutboundTest={({ category: testCategory }) =>
         testCategory === 'network' ? (
-          // 出站代理测试（FR-229）：目标可自定义（FR-280）。
+          // 出站代理测试：目标可自定义。
           <OutboundTestButton
             defaultUrl="https://www.google.com"
             editable
             label={t('diagnostics.testProxy', '测试出站连通性')}
           />
         ) : (
-          // JDK 下载源可达性测试（FR-229）：固定目标。
+          // JDK 下载源可达性测试：固定目标。
           <OutboundTestButton
             defaultUrl="https://api.foojay.io/disco/v3.0/distributions"
             label={t('diagnostics.testJdkSource', '测试 JDK 下载源')}
@@ -84,7 +84,7 @@ export default function SettingsPage() {
       }
       assistantEntry={
         isPlatformAdmin(role) ? (
-          // AI 助手配置（FR-514）：多实体 CRUD，单独成页，不并入键值设置分类。
+          // AI 助手配置：多实体 CRUD，单独成页，不并入键值设置分类。
           <Link
             to="/settings/ai"
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors duration-hover ease-ios hover:bg-accent/70 hover:text-foreground"

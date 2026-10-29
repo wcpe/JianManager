@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-389 / FR-489：CP 内嵌 MCP 鉴权、tools/list、tools/call 与 Token 维度活动视图。
+// CP 内嵌 MCP 鉴权、tools/list、tools/call 与 Token 维度活动视图。
 // 无状态化（ADR-096）：Streamable HTTP 不再有会话，故不再断言 Mcp-Session-Id。
 
 func setupMCP(t *testing.T) (db *gorm.DB, r *gin.Engine, adminJWT string, agentPlain string, inst *model.Instance) {
@@ -300,7 +300,7 @@ func TestMCP_ToolsCall_Whoami(t *testing.T) {
 	require.NotEmpty(t, resp.Result.Content)
 	assert.Contains(t, resp.Result.Content[0].Text, "mcp-test")
 
-	// FR-390：MCP tool 记 client=mcp 流水（会话类流水已随无状态化移除，只剩调用类）。
+	// MCP tool 记 client=mcp 流水（会话类流水已随无状态化移除，只剩调用类）。
 	var whoamiN int64
 	require.NoError(t, db.Model(&model.AgentCallLog{}).Where("action = ? AND client = ?", "agent.whoami", "mcp").Count(&whoamiN).Error)
 	assert.GreaterOrEqual(t, whoamiN, int64(1), "应有 agent.whoami 流水")

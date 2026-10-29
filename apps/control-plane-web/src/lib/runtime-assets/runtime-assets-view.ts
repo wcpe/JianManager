@@ -1,8 +1,8 @@
 import type { AssetType } from '@/lib/artifacts/asset-contracts'
 import type { AssetTypeGroup, JDKMatrixItem, RuntimeMatrixEntry } from './runtime-assets-contracts'
 
-/**
- * 「运行时与制品」全局页（FR-082）的纯展示逻辑：JDK 节点×版本引用矩阵、制品筛选。
+/** 
+ * 「运行时与制品」全局页的纯展示逻辑：JDK 节点×版本引用矩阵、制品筛选。
  * 抽成无 React 依赖的模块以便 vitest 单测（参照 bots-overview.ts 约定）。
  * 字节格式化已收敛到 `@/lib/shared/format-file-size`，本模块不再自带实现。
  */
@@ -42,7 +42,7 @@ function columnKey(vendor: string, major: number): string {
   return `${vendor}-${major}`
 }
 
-/**
+/** 
  * 由 JDK 矩阵项构建节点×版本引用矩阵：
  * 行按 nodeName 升序；列按 majorVersion 降序、同 major 再 vendor 升序；
  * 同节点同 vendor-major 的多条（不同小版本）合并进一格并累加引用数。
@@ -104,7 +104,7 @@ export interface RuntimeGridRow {
   cells: Record<string, RuntimeGridCell>
 }
 
-/** 节点 × 运行时矩阵（FR-301 可视化用）：行=节点，列=类型+版本，格=运行时+引用。 */
+/** 节点 × 运行时矩阵（可视化用）：行=节点，列=类型+版本，格=运行时+引用。 */
 export interface RuntimeGrid {
   columns: RuntimeGridColumn[]
   rows: RuntimeGridRow[]
@@ -116,8 +116,8 @@ function runtimeColumnKey(it: RuntimeMatrixEntry): { key: string; label: string 
   return { key: `${it.type}|${label}|${it.majorVersion}`, label }
 }
 
-/**
- * 由多运行时矩阵项构建节点 × 运行时矩阵（FR-301，泛化 buildJDKMatrix 到多类型）：
+/** 
+ * 由多运行时矩阵项构建节点 × 运行时矩阵（泛化 buildJDKMatrix 到多类型）：
  * 行按 nodeName 升序；列按 type 升序（jdk 在前）→ major 降序 → label 升序；
  * 同节点同列多条（不同小版本）合并进一格并累加引用数。
  */
@@ -163,7 +163,7 @@ export interface AssetFilter {
 /** 默认筛选：全部类型、不限引用、无搜索。 */
 export const DEFAULT_ASSET_FILTER: AssetFilter = { type: 'all', onlyReferenced: false, search: '' }
 
-/**
+/** 
  * 对制品分组应用筛选，返回过滤后的分组（保留分组结构，组内 items 过滤；空组剔除）。
  * type 筛选作用于分组；onlyReferenced/search 作用于组内每条资产。
  */

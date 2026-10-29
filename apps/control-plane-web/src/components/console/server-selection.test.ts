@@ -49,7 +49,7 @@ describe('server-selection removeServer（侧栏死链剔除，BUG 修复）', (
     unsub()
   })
 
-  it('localStorage 键沿用 FR-240/293 原键，剔除后落盘一致', () => {
+  it('localStorage 键沿用293 原键，剔除后落盘一致', () => {
     recordRecentServer(a)
     toggleFavoriteServer(a)
     removeServer(a.id)

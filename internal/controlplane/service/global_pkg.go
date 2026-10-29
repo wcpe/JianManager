@@ -12,8 +12,8 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 全局包可视化管理（FR-307）：List/Remove 代理 Worker 同步 RPC，Install 走任务中心异步
-// （复用 FR-183/ADR-040 的 jdk_install 范式）。PM 一律取节点已配置偏好（FR-306 落库值），
+// 全局包可视化管理：List/Remove 代理 Worker 同步 RPC，Install 走任务中心异步
+// （复用ADR-040 的 jdk_install 范式）。PM 一律取节点已配置偏好（落库值），
 // 不由调用方指定——单一真相源，避免面板与节点偏好漂移。
 
 // GlobalPackageView 已装全局包视图。
@@ -26,7 +26,7 @@ type GlobalPackageView struct {
 // SetTaskService 注入任务中心（异步安装用）。
 func (s *PMConfigService) SetTaskService(tasks *TaskService) { s.tasks = tasks }
 
-// ListGlobalPackages 列出节点托管全局目录的已装包（FR-307）。
+// ListGlobalPackages 列出节点托管全局目录的已装包。
 func (s *PMConfigService) ListGlobalPackages(nodeID uint) ([]GlobalPackageView, string, error) {
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
@@ -56,7 +56,7 @@ func (s *PMConfigService) ListGlobalPackages(nodeID uint) ([]GlobalPackageView, 
 	return out, cfg.PM, nil
 }
 
-// InstallGlobalPackageAsync 异步安装/升级全局包（202 语义，FR-307）：建任务 → 下发 Worker
+// InstallGlobalPackageAsync 异步安装/升级全局包（202 语义）：建任务 → 下发 Worker
 // 即返 → 置 running。进度/日志/终态经心跳 tasks 上报（taskreg 通道）。version 空=latest。
 func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version string, createdBy uint) (*model.Task, error) {
 	if s.tasks == nil {
@@ -110,7 +110,7 @@ func (s *PMConfigService) InstallGlobalPackageAsync(nodeID uint, name, version s
 	return task, nil
 }
 
-// RemoveGlobalPackage 卸载全局包（同步，FR-307）。
+// RemoveGlobalPackage 卸载全局包（同步）。
 func (s *PMConfigService) RemoveGlobalPackage(nodeID uint, name string) error {
 	node, err := s.nodeByID(nodeID)
 	if err != nil {

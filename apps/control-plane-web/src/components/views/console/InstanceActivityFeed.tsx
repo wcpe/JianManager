@@ -24,7 +24,7 @@ export interface InstanceActivityFeedProps {
   watchItems: string[]
   /** 运行时长（秒），用于「运行状态正常」行的持续时间。 */
   uptimeSeconds?: number
-  /**
+  /** 
    * 崩溃现场区块（外壳渲染——它自带快照/趋势取数，只有接线层持有）。
    * 包内不自行实例化。
    */
@@ -33,8 +33,8 @@ export interface InstanceActivityFeedProps {
   notify: ActivityNotice
 }
 
-/**
- * 动态与告警（FR-423）：把原概览区三张低信息量卡——「最近事件」「关注事项」「崩溃诊断」
+/** 
+ * 动态与告警：把原概览区三张低信息量卡——「最近事件」「关注事项」「崩溃诊断」
  * ——合流成一条时间线。
  *
  * 合流动因是量测出来的：三栏 grid 等高，高度由旁边的图表卡（229px）决定，
@@ -77,7 +77,7 @@ export default function InstanceActivityFeed({
         />
       )}
 
-      {/* 崩溃现场（FR-313）：有快照则成段可展开，无则一行灰字。 */}
+      {/* 崩溃现场：有快照则成段可展开，无则一行灰字。 */}
       {crashDiagnostics}
 
       {/* 日志倒序。 */}

@@ -103,7 +103,7 @@ func modelNameForPath(p string) string {
 
 // WriteConfig 写入配置原文；properties 以行级 round-trip 为 MVP，其他格式仅校验后原文保存。
 //
-// FR-530 起完整走「越界检查 → 写前快照 → 原子写入 → 读回校验」链路：
+// 起完整走「越界检查 → 写前快照 → 原子写入 → 读回校验」链路：
 // 验收要求「写入中 kill -9 后原文件完好」与「篡改磁盘内容返回 WRITE_VERIFY_FAILED」，
 // 因此不能再用 os.WriteFile 直接覆盖。
 func (s *Server) WriteConfig(ctx context.Context, req *workerpb.WriteConfigRequest) (*workerpb.WriteConfigResponse, error) {

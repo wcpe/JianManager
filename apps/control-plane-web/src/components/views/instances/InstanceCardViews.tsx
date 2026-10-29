@@ -35,7 +35,7 @@ export interface BackendsInlineProps {
   onOpenInstance: (id: number) => void
 }
 
-/**
+/** 
  * 工作台卡行高（px）：**声明值 = 真实行盒**，卡片行流与 `InstanceGroupManager` 右列表共用。
  *
  * 数值依据（Chromium 1440×900 实测卡片实高，逐段相加核对）：
@@ -52,7 +52,7 @@ export interface BackendsInlineProps {
  * 必然重叠；而「声明值 = 真实行盒」要求行盒是常量、不是各卡实高的最大值——
  * 卡片行流按本常量定位，行盒若随内容变长就会与下一行打架。
  */
-/*
+/* 
   【实测值，不是估算】卡片实高由内容决定，实测区间 169~229px（标签多/名称换行的更高）。
   这里取 272：卡片内部分区高度（含外边距）实测合计 233，加左右内边距 24 得 257，
   再加 CARD_ROW_GAP 8 = 265；取 272 留 7px 余量。
@@ -70,7 +70,7 @@ export const CARD_ROW_HEIGHT = 272
 /** 卡片行的行间与列间留白（px）：行盒 = CARD_ROW_HEIGHT − 本值，故行距与行盒不会各自漂移。 */
 export const CARD_ROW_GAP = 8
 
-/**
+/** 
  * 卡片行流里的一行：组头行独占一行，卡片行承载至多 `columns` 张卡。
  * 两者同属**一个**虚拟列表，故入 DOM 的卡数只与视口有关、与分组数无关。
  */
@@ -78,8 +78,8 @@ type CardFlowRow =
   | { kind: 'group'; key: string; group: Extract<InstanceTreeRow, { kind: 'group' }> }
   | { kind: 'cards'; key: string; items: InstanceInfo[] }
 
-/**
- * 分组卡片视图（FR-136）：单个滚动容器 + 单个虚拟窗口承载「组头行 + 卡片行」的行流。
+/** 
+ * 分组卡片视图：单个滚动容器 + 单个虚拟窗口承载「组头行 + 卡片行」的行流。
  *
  * 【为什么合并成一个窗口】旧实现按分组维度分段，每组一段各自挂一个 `VirtualizedCardGrid`
  * （各带一个滚动容器与一个虚拟窗口），段数 = 顶层分组数，而每段都要各自铺满视口窗口——
@@ -125,7 +125,7 @@ export function VirtualizedGroupedCardView({
 }) {
   const columns = useCardColumns()
 
-  /**
+  /** 
    * 行模型 → 卡片行流：按 `columns` 把成员行打包成卡片行，组头行独立成行。
    * 遇组头必须先冲刷当前卡片行——组头总是独占一行（行序与表格视图一致），
    * 组头之后的成员从新的一行起排，不会与上一组的尾行拼在一起。
@@ -187,7 +187,7 @@ export function VirtualizedGroupedCardView({
       onScroll={handleScroll}
       data-testid="instances-card-virtual"
       data-total-count={totalCount}
-      /*
+      /* 
         【高度交给 flex 分配，不再猜一个 calc】原来是 `max-h-[calc(100vh-18rem)]`：
         那个 18rem 是对「工具栏 + 筛选条 + 页头」高度的硬编码估算，只要上下新增一条
         （本轮加了分页条）就会算错——表现为卡片在底部被裁掉、却又不出现滚动条。
@@ -234,7 +234,7 @@ export function VirtualizedGroupedCardView({
               className="absolute inset-x-0 grid gap-4"
             >
               {row.items.map((inst) => (
-                /*
+                /* 
                   【卡片被钉在行盒高度内】虚拟化按 `CARD_ROW_HEIGHT - CARD_ROW_GAP` 这个常量
                   给每一行定位，而卡片内容是自适应的：实测卡片实高在 169~229px 之间浮动
                   （标签多的、名称换行的更高），而行盒只有 192px——超出的卡片直接盖住下一行，
@@ -268,7 +268,7 @@ export function VirtualizedGroupedCardView({
   )
 }
 
-/** proxy 行 inline 展开的已注册 backend 摘要（FR-136）。 */
+/** proxy 行 inline 展开的已注册 backend 摘要。 */
 export function BackendsInline({ registrations, isLoading = false, onOpenInstance }: BackendsInlineProps) {
   const { t } = useTranslation()
 

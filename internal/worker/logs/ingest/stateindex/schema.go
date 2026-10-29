@@ -1,4 +1,4 @@
-// Package stateindex 是 Worker 采集索引（FR-496）的嵌入式 SQLite 存储层。
+// Package stateindex 是 Worker 采集索引的嵌入式 SQLite 存储层。
 //
 // 背景：索引原先是一份由 ingest.Manager.persist **整本重写**的 JSON（`var/log/ingest.state.json`，
 // 生产实测 307MB/13 源；历史事故中单源涨到 1.2GB 后每次持久化全量重写 → 持续 117MB/s、整机

@@ -12,12 +12,12 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置分层覆盖服务（FR-529）。
+// 配置分层覆盖服务。
 //
 // 职责边界：
 //   - 只管「配置的定义」：配置文件元数据 + 各作用域的不可变版本链；
 //   - 合并/校验是纯函数（config_merge.go / config_schema.go），本文件只做取数与编排；
-//   - **不写实例落盘**——下发与生效属 FR-531/532，落盘核心属 FR-530。
+// **不写实例落盘**——下发与生效属532，落盘核心属。
 
 // 分组层相关错误。
 var (
@@ -41,7 +41,7 @@ var (
 	ErrConfigInstanceNotInScope = errors.New("实例不存在")
 )
 
-// ConfigFileService 配置分层覆盖服务（FR-529）。
+// ConfigFileService 配置分层覆盖服务。
 type ConfigFileService struct {
 	db *gorm.DB
 }
@@ -526,7 +526,7 @@ func (s *ConfigFileService) appendLayer(file *model.ConfigFile, level model.Conf
 }
 
 // ensureScopeExists 校验作用域引用的分组/实例确实存在。
-// 不存在的引用会让「配了却没人收到」的错觉发生，故 fail-closed（与 FR-458 同口径）。
+// 不存在的引用会让「配了却没人收到」的错觉发生，故 fail-closed（与同口径）。
 func (s *ConfigFileService) ensureScopeExists(level model.ConfigScopeLevel, scopeID uint) error {
 	var count int64
 	switch level {
@@ -762,7 +762,7 @@ func (s *ConfigFileService) Effective(configFileID, instanceID uint) (*Effective
 	return preview, nil
 }
 
-// EffectiveContent 只取合并后的内容与 hash（供 FR-530/531 下发链路复用，不做脱敏）。
+// EffectiveContent 只取合并后的内容与 hash（供531 下发链路复用，不做脱敏）。
 func (s *ConfigFileService) EffectiveContent(configFileID, instanceID uint) (content, effectiveHash string, err error) {
 	file, err := s.mustGet(configFileID)
 	if err != nil {

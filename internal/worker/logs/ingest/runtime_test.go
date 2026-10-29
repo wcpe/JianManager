@@ -48,7 +48,7 @@ func TestIdlePollDoesNotRewriteDurableHistory(t *testing.T) {
 	stamp := time.Unix(1700000000, 0)
 	require.NoError(t, os.Chtimes(indexPath, stamp, stamp))
 	m.pollOnce()
-	// 空闲轮询不得重写历史（FR-496 spec §2.3）：源无任何变化时不得触发落库写。
+	// 空闲轮询不得重写历史（spec §2.3）：源无任何变化时不得触发落库写。
 	require.Equal(t, samplesBefore, len(m.PersistSamples()), "idle polling must not trigger a persist at all")
 	stat, err := os.Stat(indexPath)
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func newProjectionVL(t *testing.T) (*vlsup.Client, *projectionVLFixture) {
 	return client, fixture
 }
 
-// durableEvents 返回某源的权威 canonical 事件集合（FR-484 后事件体在磁盘段，不在 state 内联）。
+// durableEvents 返回某源的权威 canonical 事件集合（后事件体在磁盘段，不在 state 内联）。
 // 顺序与事件段一致（追加序），便于断言消息内容。
 func durableEvents(t *testing.T, m *Manager, key string) []logtypes.Event {
 	t.Helper()

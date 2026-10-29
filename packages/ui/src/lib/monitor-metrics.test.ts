@@ -18,7 +18,7 @@ import {
   type RawSeries,
 } from './monitor-metrics'
 
-/**
+/** 
  * 按 id 取图表定义。
  * 定义表里没有该 id 时直接抛错，而不是让 undefined 一路传进断言——
  * 否则「图定义被改名或删除」会表现成「曲线断言莫名其妙失败」，掩盖真正原因。
@@ -163,7 +163,7 @@ describe('buildChartSeries', () => {
     expect(out).toEqual([])
   })
 
-  it('worldFilter 非空时区块图只画该世界（FR-221 下钻）', () => {
+  it('worldFilter 非空时区块图只画该世界（下钻）', () => {
     const raw: RawSeries[] = [
       { metricKey: 'world_loaded_chunks', world: 'world', points: [{ ts: 't0', value: 100 }] },
       { metricKey: 'world_loaded_chunks', world: 'world_nether', points: [{ ts: 't0', value: 20 }] },
@@ -174,7 +174,7 @@ describe('buildChartSeries', () => {
   })
 })
 
-// ===== FR-221 时序剖析增强 =====
+// =====时序剖析增强 =====
 
 describe('catalogFor', () => {
   it('据 target 类型取指标目录', () => {

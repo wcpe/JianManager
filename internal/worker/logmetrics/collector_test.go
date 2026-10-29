@@ -28,7 +28,7 @@ func newTestCollector(t *testing.T, src *fakeSource) (*Collector, *time.Time) {
 	return c, &now
 }
 
-// FR-485：采集面不可用时整组不上报（Available=false），而不是报一串 0。
+// 采集面不可用时整组不上报（Available=false），而不是报一串 0。
 //
 // 这是本项最重要的语义：0 在运维上读作「积压为零、零失败、零慢查询」——
 // 恰好是最健康的读数。把「没采集」伪装成「一切正常」，比不实现更糟。
@@ -45,7 +45,7 @@ func TestCollector_UnavailableIsNotZero(t *testing.T) {
 	require.False(t, c2.Snapshot().Available)
 }
 
-// FR-485：可用时各字段按源读数填充，速率由相邻两拍差分得出。
+// 可用时各字段按源读数填充，速率由相邻两拍差分得出。
 func TestCollector_FillsReadingsAndDerivesRates(t *testing.T) {
 	root := t.TempDir()
 	logDir := filepath.Join(root, "var", "log")
@@ -97,7 +97,7 @@ func TestCollector_FillsReadingsAndDerivesRates(t *testing.T) {
 	require.InDelta(t, 100.0, second.PersistWriteBytesPerSec, 1e-9)
 }
 
-// FR-485：索引文件不存在时不得报 0 字节（那是「索引被清空了」的虚假好转）。
+// 索引文件不存在时不得报 0 字节（那是「索引被清空了」的虚假好转）。
 func TestCollector_MissingStateFilesNotReportedAsZero(t *testing.T) {
 	root := t.TempDir() // var/log 都不存在
 	src := &fakeSource{snap: ingest.LogMetricsSnapshot{Available: true}}
@@ -109,7 +109,7 @@ func TestCollector_MissingStateFilesNotReportedAsZero(t *testing.T) {
 	require.False(t, snap.StateFileMeasured, "拿不到文件时必须标记为未测到")
 }
 
-// FR-485：旧 state 文件的迁移归档必须计入占用——事故形态增长的正是这个面。
+// 旧 state 文件的迁移归档必须计入占用——事故形态增长的正是这个面。
 func TestCollector_CountsMigratedArchive(t *testing.T) {
 	root := t.TempDir()
 	logDir := filepath.Join(root, "var", "log")
@@ -126,7 +126,7 @@ func TestCollector_CountsMigratedArchive(t *testing.T) {
 		"只计索引与迁移归档（1000+2000），不计无关文件")
 }
 
-// FR-485：persist 累计计数回绕（索引重建）时不出速率，避免出现巨大负数或假尖峰。
+// persist 累计计数回绕（索引重建）时不出速率，避免出现巨大负数或假尖峰。
 func TestCollector_PersistCounterResetSkipsRate(t *testing.T) {
 	src := &fakeSource{snap: ingest.LogMetricsSnapshot{Available: true, PersistBytesTotal: 1000}}
 	c, now := newTestCollector(t, src)
@@ -139,7 +139,7 @@ func TestCollector_PersistCounterResetSkipsRate(t *testing.T) {
 	require.Zero(t, c.Snapshot().PersistWriteBytesPerSec, "计数器重置时不出速率")
 }
 
-// FR-485：失败率的分母为 0 时返回 0（由 DeliveryBatches 区分「无投递活动」）。
+// 失败率的分母为 0 时返回 0（由 DeliveryBatches 区分「无投递活动」）。
 func TestFailureRate(t *testing.T) {
 	require.Zero(t, failureRate(0, 0), "无投递活动时失败率为 0")
 	require.InDelta(t, 50.0, failureRate(1, 2), 1e-9)

@@ -11,7 +11,7 @@ export interface TemplateInfo {
   defaultWorkDir: string
   downloadUrl: string
   createdAt: string
-  /** 最近更新时间（后端 model.Template.UpdatedAt），应用市场卡片展示用（FR-154）。 */
+  /** 最近更新时间（后端 model.Template.UpdatedAt），应用市场卡片展示用。 */
   updatedAt: string
 }
 

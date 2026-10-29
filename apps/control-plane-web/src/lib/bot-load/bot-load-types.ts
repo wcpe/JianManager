@@ -1,4 +1,4 @@
-/** FR-372 压测观测共享类型（对齐 bot-load-platform/api.md）。 */
+/** 压测观测共享类型（对齐 bot-load-platform/api.md）。 */
 
 export type BotLoadRunState =
   | 'pending'

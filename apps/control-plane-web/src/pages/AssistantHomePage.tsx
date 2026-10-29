@@ -25,8 +25,8 @@ import { usePermissionsStore } from '@/stores/permissions'
 import { useAuthStore } from '@/stores/auth'
 import { saveHomeMode, resetHomeMode, homeModeHref } from '@/lib/shared/home-mode'
 
-/**
- * AI 首页（FR-520）。
+/** 
+ * AI 首页。
  *
  * 与经典首页（`OverviewPage`）是**两棵互不嵌套的树**，由路由层按 `?home=classic` 二选一
  * （spec §9.1：页内条件渲染会让两套查询同时存活，违背「只挂载当前模式的数据查询」）。
@@ -56,15 +56,15 @@ function dayPartOf(hour: number): DayPart {
 
 export default function AssistantHomePage() {
   const { t } = useTranslation()
-  /*
+  /* 
     与浮窗共用**同一份**会话状态（外壳级单例）。这里若自行调用 useAssistantChat，
     就会退回到「首页一份、浮窗一份」的分裂状态——流式途中最容易露馅。
   */
   const chat = useAssistantChatCtx()
   const navigate = useNavigate()
 
-  /**
-   * 重置首页偏好（FR-520 §4.4）。
+  /** 
+   * 重置首页偏好（§4.4）。
    *
    * 两件事必须一起做，否则会出现「点了重置但页面没变」的假成功：
    * ① 清掉记忆；② 若当前 URL 带 `?home=`，把它去掉——因为显式参数的优先级高于记忆，
@@ -92,7 +92,7 @@ export default function AssistantHomePage() {
   )
   // 近期任务：**同样走私有 key 直调**，不复用 `useTasks`。
   //
-  // `useTasks` 在存在非终态任务时会以 2 秒间隔重取（FR-329 的 `tasksRefetchInterval`）。
+  // `useTasks` 在存在非终态任务时会以 2 秒间隔重取（的 `tasksRefetchInterval`）。
   // 首页是常开页，只要有部署/备份等长期任务在跑，就会变成每 2 秒一次全平台任务查询——
   // 与本文件另两处摘要（异常实例、集群水位）的取舍理由完全相同，也违背 spec §6「摘要不轮询」。
   // 真机实测（devmock large 规模，30 秒窗口）：复用 hook 时该端点被请求 13～14 次。
@@ -129,7 +129,7 @@ export default function AssistantHomePage() {
       return data
     },
   })
-  // 最近会话：FR-515 会话列表前 5（服务端已按 updatedAt 倒序）。
+  // 最近会话：会话列表前 5（服务端已按 updatedAt 倒序）。
   const conversationsQuery = useAssistantConversations(true)
 
   const alerts = isPlatformAdmin ? (alertsQuery.data?.items ?? []) : []
@@ -163,11 +163,11 @@ export default function AssistantHomePage() {
         title={t('assistant.homeTitle', 'AI 助手')}
         description={t('assistant.homeSubtitle', '用自然语言查运维状态、排查问题。')}
         actions={
-          // FR-520 §4.4：主操作是切到经典首页；「重置首页偏好」作为**次级操作**收在旁边的
+          // §4.4：主操作是切到经典首页；「重置首页偏好」作为**次级操作**收在旁边的
           // 小菜单里——它是低频纠错动作，不该与切换按钮同等视觉权重。
           <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" asChild>
-              {/* 目标 URL 保留现有查询参数（FR-520 §8）：切模式不该顺手清掉用户的筛选条件 */}
+              {/* 目标 URL 保留现有查询参数（§8）：切模式不该顺手清掉用户的筛选条件 */}
               <Link to={homeModeHref('classic', window.location.search)} onClick={() => saveHomeMode('classic')}>
                 {t('assistant.homeSwitchClassic', '经典首页')}
                 <ArrowRight className="ml-1 size-3.5" />

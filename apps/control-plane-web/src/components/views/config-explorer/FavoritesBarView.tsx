@@ -7,8 +7,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@jianmanage
 import type { ConfigDiscoverResult } from '@/lib/config-explorer/config-contracts'
 import { groupDiscovered, baseNameOf } from '@/lib/config-explorer/config-discover'
 
-/**
- * 配置左栏：收藏（书签）+ 已发现配置面板（FR-071）。
+/** 
+ * 配置左栏：收藏（书签）+ 已发现配置面板。
  *
  * 收藏点选打开 / 取消收藏；已发现配置为 `GET /configs/discover` 递归结果（不限内置 schema），
  * 按目录分组展示，点选打开、星标收藏。

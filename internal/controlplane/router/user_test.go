@@ -56,7 +56,7 @@ func usernamesOf(rows []interface{}) []string {
 	return out
 }
 
-// TestUser_List_QFuzzy_BareArray 无 limit 带 q：仍返回裸数组（旧形态兼容），q 模糊命中且按 username 升序（FR-336）。
+// TestUser_List_QFuzzy_BareArray 无 limit 带 q：仍返回裸数组（旧形态兼容），q 模糊命中且按 username 升序。
 func TestUser_List_QFuzzy_BareArray(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -70,7 +70,7 @@ func TestUser_List_QFuzzy_BareArray(t *testing.T) {
 	assert.Equal(t, []string{"alice", "alina"}, usernamesOf(rows))
 }
 
-// TestUser_List_QEscapesLikeWildcards q 中的 %/_ 按字面匹配而非通配符（FR-336）。
+// TestUser_List_QEscapesLikeWildcards q 中的 %/_ 按字面匹配而非通配符。
 func TestUser_List_QEscapesLikeWildcards(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -86,7 +86,7 @@ func TestUser_List_QEscapesLikeWildcards(t *testing.T) {
 	assert.Empty(t, parseJSONArray(t, w), "%% 应按字面匹配，无用户名含 %% 时命中为空")
 }
 
-// TestUser_List_Envelope_Pagination 带 limit 返回信封：窗口正确、total 为全量命中数、排序稳定（FR-336）。
+// TestUser_List_Envelope_Pagination 带 limit 返回信封：窗口正确、total 为全量命中数、排序稳定。
 func TestUser_List_Envelope_Pagination(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -110,7 +110,7 @@ func TestUser_List_Envelope_Pagination(t *testing.T) {
 	assert.Equal(t, []string{"carol", "dave"}, usernamesOf(resp["items"].([]interface{})))
 }
 
-// TestUser_List_Envelope_QTotalSameSource 信封 total 与 q 条件同源（非全表计数）（FR-336）。
+// TestUser_List_Envelope_QTotalSameSource 信封 total 与 q 条件同源（非全表计数）。
 func TestUser_List_Envelope_QTotalSameSource(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -124,7 +124,7 @@ func TestUser_List_Envelope_QTotalSameSource(t *testing.T) {
 	assert.Equal(t, []string{"alice"}, usernamesOf(resp["items"].([]interface{})))
 }
 
-// TestUser_List_Envelope_OffsetBeyond offset 越界：items 空、total 不受影响（FR-336）。
+// TestUser_List_Envelope_OffsetBeyond offset 越界：items 空、total 不受影响。
 func TestUser_List_Envelope_OffsetBeyond(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -139,7 +139,7 @@ func TestUser_List_Envelope_OffsetBeyond(t *testing.T) {
 	assert.Equal(t, float64(999), resp["offset"])
 }
 
-// TestUser_List_LimitClampAndNegativeOffset limit 钳制 [1,500] 且回显生效值；offset 负值归 0（FR-336）。
+// TestUser_List_LimitClampAndNegativeOffset limit 钳制 [1,500] 且回显生效值；offset 负值归 0。
 func TestUser_List_LimitClampAndNegativeOffset(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -158,7 +158,7 @@ func TestUser_List_LimitClampAndNegativeOffset(t *testing.T) {
 	assert.Len(t, resp["items"].([]interface{}), 1)
 }
 
-// TestUser_List_InvalidParams400 limit/offset 非法整数回 400 INVALID_REQUEST（FR-336）。
+// TestUser_List_InvalidParams400 limit/offset 非法整数回 400 INVALID_REQUEST。
 func TestUser_List_InvalidParams400(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -171,7 +171,7 @@ func TestUser_List_InvalidParams400(t *testing.T) {
 	}
 }
 
-// TestUser_List_NoLimit_KeepsBareArray 无 limit 参数（含带 offset）仍返回裸数组，旧调用方零改动不破（FR-002 兼容）。
+// TestUser_List_NoLimit_KeepsBareArray 无 limit 参数（含带 offset）仍返回裸数组，旧调用方零改动不破（兼容）。
 func TestUser_List_NoLimit_KeepsBareArray(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
@@ -236,7 +236,7 @@ func TestUser_Delete_Success(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-// TestUser_Update_ResetPassword 管理员重置用户密码后，旧密码失效、新密码可登录（FR-156 验收）。
+// TestUser_Update_ResetPassword 管理员重置用户密码后，旧密码失效、新密码可登录（验收）。
 func TestUser_Update_ResetPassword(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

@@ -4,7 +4,7 @@ import { useUserSearch } from '@/api/users'
 import { useDebounced } from '@/lib/hooks/use-debounced'
 import { GroupMembersDialogView } from '@/components/views/groups/GroupMembersDialogView'
 
-/** 候选默认窗口：只取前 50 条，靠键入服务端 q 缩小（FR-336）。请求上限属应用侧策略，故留在容器。 */
+/** 候选默认窗口：只取前 50 条，靠键入服务端 q 缩小。请求上限属应用侧策略，故留在容器。 */
 const CANDIDATE_LIMIT = 50
 
 interface GroupMembersDialogProps {
@@ -13,11 +13,11 @@ interface GroupMembersDialogProps {
   onClose: () => void
 }
 
-/**
+/** 
  * 管理用户组成员对话框的应用接线层（ADR-103 b 范式）。
  *
  * 视图已受控；本层保留「何时发请求」这一策略：组数据取实时 `useGroups`（增删后即刻反映），
- * 候选走服务端搜索（FR-336）——默认前 N 条、键入经 300ms 防抖下发 q；增删经 mutation hook
+ * 候选走服务端搜索——默认前 N 条、键入经 300ms 防抖下发 q；增删经 mutation hook
  * 执行（成功/失败 toast 挂在 hook 层）。保留同路径默认导出与同一套 props，调用点无需改动。
  */
 export default function GroupMembersDialog({ groupId, onClose }: GroupMembersDialogProps) {

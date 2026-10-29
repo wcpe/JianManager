@@ -31,7 +31,7 @@ export interface EfficientBatchEntry {
   file: File
 }
 
-/**
+/** 
  * 取数依赖（外壳注入，包内不依赖应用侧 api）。
  * 三个函数的签名与应用侧既有实现逐一对齐，注入时可直接传。
  */
@@ -60,16 +60,16 @@ export interface EfficientUploadDeps {
   ) => Promise<ChunkUploadResult>
 }
 
-/**
- * 客户端分发批量上传编排器（FR-346，增强 FR-250/251）。
+/** 
+ * 客户端分发批量上传编排器（增强251）。
  *
  * 流水线：串行 hash（≤256MiB 者）→ 分批秒传预查（失败降级全 miss，不阻断发布）→
- * 命中者零字节直取结果；miss 小文件（≤8MiB）贪心装箱走聚合端点；其余走 FR-251 分块
+ * 命中者零字节直取结果；miss 小文件（≤8MiB）贪心装箱走聚合端点；其余走分块
  * （有 hash 者 complete 顺带 expectedSha256）→ 聚合批与分块文件混入并发 4 任务池。
  * 进度经单调聚合器汇报（不倒退、不 NaN）；signal 取消贯穿各阶段（分块自带弃单）。
  */
 
-/** 一个待上传单元：调用方的复用键（FR-250 dedup key）+ 内容与展示名。 */
+/** 一个待上传单元：调用方的复用键（dedup key）+ 内容与展示名。 */
 export interface EfficientUploadEntry {
   /** 结果映射键（同键复用同一结果；调用方保证入参键唯一）。 */
   key: string
@@ -111,7 +111,7 @@ function abortError(): Error {
   return new DOMException('上传已取消', 'AbortError')
 }
 
-/**
+/** 
  * 批量上传一组文件，返回 key → ClientFileResult 映射（与逐文件 uploadFileChunked 同构结果）。
  * 任一任务失败即 fail-fast 抛错（调用方保草稿可重试）；取消抛 AbortError。
  */

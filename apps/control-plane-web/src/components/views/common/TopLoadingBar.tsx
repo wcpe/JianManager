@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-/**
- * 页眉顶部加载进度条（FR-243）。
+/** 
+ * 页眉顶部加载进度条。
  *
  * 每次路由切换走一次性进度条；有在途请求/变更时切成循环加载态。
  *
@@ -16,13 +16,13 @@ import { useEffect, useRef, useState } from 'react'
  * （防闪烁阈值），不是外部数据；外壳关心的是「忙不忙」，不是「忙多久才显示」。
  */
 export interface TopLoadingBarProps {
-  /**
+  /** 
    * 路由身份。任何变化都触发一次路由切换进度。
    * 外壳拼装建议：`${location.key}:${location.pathname}${location.search}`
    * ——必须包含 key，否则同路径重复点击不会产生变化。
    */
   routeKey: string
-  /**
+  /** 
    * 在途的请求 / 变更数（>0 视为忙碌）。
    * 外壳从数据层读取后注入（如 `useIsFetching() + useIsMutating()`）。
    */

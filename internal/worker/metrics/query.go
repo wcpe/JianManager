@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// QuerySnapshot 是 Minecraft Query（GameSpy4/UT3）Full Stat 的解析结果（FR-446）。
+// QuerySnapshot 是 Minecraft Query（GameSpy4/UT3）Full Stat 的解析结果。
 //
 // Query 面向 query.port 的 UDP，需 enable-query=true；它提供 SLP 给不了的
 // **实名玩家名单**、插件列表与地图名，是玩家名单的唯一可信来源（见 ADR-092）。
@@ -22,7 +22,7 @@ type QuerySnapshot struct {
 	Map           string
 	PlayersOnline int32
 	PlayersMax    int32
-	// PlayersOnlineAvailable 报告 numplayers 键**存在且可解析**（FR-447）。
+	// PlayersOnlineAvailable 报告 numplayers 键**存在且可解析**。
 	// Query 有响应但缺 numplayers 时该位为 false：编排链据此保持「在线人数不可用」，
 	// 绝不把「协议未给出」伪装成 0 在线。
 	PlayersOnlineAvailable bool
@@ -44,7 +44,7 @@ const (
 	queryMaxFragments = 64
 	// querySplitHeaderLen 是 Full Stat 负载前的固定头长度："splitnum\0" + 分片计数 + 分片索引。
 	//
-	// ⚠ 协议假设（**未经真机验证**，FR-446 审计项 6）：本实现对「多分片」的判定是
+	// ⚠ 协议假设（**未经真机验证**审计项 6）：本实现对「多分片」的判定是
 	// 「**每一片**负载都以 11 字节 splitnum 头（"splitnum\0" + count + index）开头」。
 	// 该假设源自社区对 Notchian 服务端的逆向描述，**未在本项目的真机环境验证过**：
 	// 不同服务端/版本在分片时的头布局、count 高位 0x80 语义、以及分片是否一定带该头，
@@ -62,7 +62,7 @@ var querySplitPrefix = []byte("splitnum\x00")
 // queryPlayerMarker 是 KV 段与玩家名单段之间的固定分隔："\x01player_\0\0"。
 var queryPlayerMarker = []byte("\x01player_\x00\x00")
 
-// QueryServer 面向 query.port 做一次 Query Full Stat 探测并解析结果（FR-446）。
+// QueryServer 面向 query.port 做一次 Query Full Stat 探测并解析结果。
 // UDP 无响应/超时/协议不符 → 返回 error，调用方据此降级（不 panic、不阻塞其它来源）。
 func QueryServer(host string, port int, timeout time.Duration) (*QuerySnapshot, error) {
 	if port <= 0 {
@@ -367,7 +367,7 @@ func buildQuerySnapshot(kv map[string]string, players []string) *QuerySnapshot {
 //
 // 服务端软件描述与插件列表以 ":" 分隔（":" 之前是 "CraftBukkit on Bukkit 1.2.5-R4.0" 这类软件/平台
 // 描述，不是插件），直接按分隔符切分会把软件描述与第一个插件粘连成一个假插件名，故丢弃该描述段
-// （FR-446 审计项 8）。**但剥离须加形态判别**（FR-446 复审 N8）：无软件描述段、只在插件名里含 ":"
+// （审计项 8）。**但剥离须加形态判别**（复审 N8）：无软件描述段、只在插件名里含 ":"
 // 的服务器（如 "MyPlugin:v1.0; OtherPlugin"）若一律剥到首个 ":" 之后，会误截插件名。故仅当前缀
 // 形态像软件名时剥离（见 looksLikeServerSoftware），否则整段按插件列表处理。
 // 无 ":" 时同样整段按插件列表处理：部分服务端（含 vanilla 的 "vanilla"）只用该字段报软件名，
@@ -405,7 +405,7 @@ var knownServerSoftware = map[string]struct{}{
 }
 
 // looksLikeServerSoftware 判别 ":" 之前的前缀是否像"服务端软件描述段"（可安全剥离），
-// 而非含 ":" 的插件名的一部分（FR-446 复审 N8）。两种形态：
+// 而非含 ":" 的插件名的一部分（复审 N8）。两种形态：
 //  1. `<软件> on <平台/版本>`：Bukkit 家族的标准形态，前缀含 " on "；
 //  2. 裸软件名：整个前缀（无空白）恰为已知服务端软件名，如 "Bukkit"、"Spigot"。
 //

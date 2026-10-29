@@ -1,4 +1,4 @@
-// Command jmctl 是 JianManager 的紧急控制台 CLI（FR-184，见 ADR-041）。
+// Command jmctl 是 JianManager 的紧急控制台 CLI（见 ADR-041）。
 //
 // 当 Control Plane 与 Worker Node 同时不可用时，daemon wrapper（ADR-003）仍托管着运行中的
 // 游戏服进程，并在本机暴露一个 Unix Socket / Windows 命名管道（二进制帧协议）。jmctl 绕过整个

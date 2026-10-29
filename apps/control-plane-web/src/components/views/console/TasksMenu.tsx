@@ -17,7 +17,7 @@ import { cn } from '@jianmanager/ui'
 import { isTerminalTask, TASK_KIND_LABEL_KEYS } from '@/lib/tasks/task-status'
 import type { Task } from '@/lib/tasks/task-status'
 
-/** 页眉任务下拉的行数上限（FR-327）：最近 N 条，看全量进任务中心页。 */
+/** 页眉任务下拉的行数上限：最近 N 条，看全量进任务中心页。 */
 export const TASKS_MENU_MAX_ROWS = 8
 
 /** 终态任务 → 徽章变体与文案键（tasks.state.*，与任务中心页同款语义）。 */
@@ -30,22 +30,22 @@ const TASK_BADGE_META: Record<string, { variant: 'secondary' | 'destructive' | '
 export interface TasksMenuProps {
   /** 任务窗口（外壳取数；未加载传 undefined）。 */
   tasks?: Task[]
-  /** 打开任务中心；带 taskId 时深链定位该任务（FR-226 `?task=`）。 */
+  /** 打开任务中心；带 taskId 时深链定位该任务（`?task=`）。 */
   onOpenTask: (taskId?: string) => void
 }
 
-/**
- * 页眉任务中心入口 + 下拉面板（FR-327，下拉化 FR-226 的「点击直跳任务中心」）：
+/** 
+ * 页眉任务中心入口 + 下拉面板（下拉化的「点击直跳任务中心」）：
  * 入口常驻——有在跑任务（pending/running）时显示数量 + 平均进度（转圈反馈），空闲时静态图标；
  * 点击弹下拉面板列最近 N 条任务（kind 徽标/名称/stage 进度/终态徽章），点条目跳任务中心定位该任务
- * （FR-226 `?task=` 深链），底部「进入任务中心」看全量。面板外点击关闭为 DropdownMenu 缺省行为。
- * 数据/轮询由外壳复用 useTasks（FR-329：活跃 2s 短轮询、空闲停），本视图不取数、下拉不额外发请求。
+ * （`?task=` 深链），底部「进入任务中心」看全量。面板外点击关闭为 DropdownMenu 缺省行为。
+ * 数据/轮询由外壳复用 useTasks（：活跃 2s 短轮询、空闲停），本视图不取数、下拉不额外发请求。
  *
  * 受控视图（ADR-103 c 范式）：任务窗口与跳转由外壳注入。
  */
 export function TasksMenu({ tasks: input, onOpenTask }: TasksMenuProps) {
   const { t } = useTranslation()
-  // FR-337 分页信封：消费 items（首窗 ≤100，active 计数/最近 N 条口径与改前一致）。
+  // 分页信封：消费 items（首窗 ≤100，active 计数/最近 N 条口径与改前一致）。
   const tasks = input ?? []
   const active = tasks.filter((tk) => !isTerminalTask(tk))
   const recent = tasks.slice(0, TASKS_MENU_MAX_ROWS)
@@ -113,14 +113,14 @@ export function TasksMenu({ tasks: input, onOpenTask }: TasksMenuProps) {
   )
 }
 
-/**
- * 页眉任务下拉单行（FR-327）：kind 徽标 + 标题 + 进行中进度条（% 数值）/终态徽章 + stage 详情。
- * 点击跳任务中心并深链定位该任务（`/tasks?task=<taskId>`，进页自动展开，FR-226）。
+/** 
+ * 页眉任务下拉单行：kind 徽标 + 标题 + 进行中进度条（% 数值）/终态徽章 + stage 详情。
+ * 点击跳任务中心并深链定位该任务（`/tasks?task=<taskId>`，进页自动展开）。
  */
 function TaskMenuRow({ task, onOpen }: { task: Task; onOpen: () => void }) {
   const { t } = useTranslation()
   const kindKey = TASK_KIND_LABEL_KEYS[task.kind]
-  // 取消中（已请求停止但 Worker 未确认）优先于状态徽章，语义与任务中心页一致（FR-227）。
+  // 取消中（已请求停止但 Worker 未确认）优先于状态徽章，语义与任务中心页一致。
   const canceling = task.state === 'running' && task.cancelRequested
   const badge = TASK_BADGE_META[task.state]
   const pct = Math.max(0, Math.min(100, task.progress))

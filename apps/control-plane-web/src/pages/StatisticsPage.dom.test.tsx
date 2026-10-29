@@ -10,8 +10,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import StatisticsPage from './StatisticsPage'
 
-/**
- * StatisticsPage 强断言（FR-220 平台级聚合统计）：验节点/实例/玩家 KPI 出数、实例状态分布含 CRASHED、
+/** 
+ * StatisticsPage 强断言（平台级聚合统计）：验节点/实例/玩家 KPI 出数、实例状态分布含 CRASHED、
  * 分发区块按平台管理员权限分支（管理员见汇总、非管理员降级）、错误注入不崩。
  *
  * /nodes、/instances、/players 非可观测域端点，用 server.use 就地桩供本页聚合；

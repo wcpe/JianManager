@@ -18,7 +18,7 @@ const DefaultResolvedGapKeepRecent = 32
 // 但该函数从未实现——`gap` 因此是索引里**唯一无界增长**的维度：
 // 已补上的缺口永远留在库里。而启动时 `Store.Load()` 要全表读 gap
 // （实测每 1k 行约 5ms），且这段耗时**发生在向 CP 注册之前**，
-// 堆积几十万行就意味着主控台要多等几秒才看得见这台机器（FR-486 的原始形态）。
+// 堆积几十万行就意味着主控台要多等几秒才看得见这台机器（的原始形态）。
 //
 // ## 判据为什么不能只看「Resolved == true」
 //
@@ -101,7 +101,7 @@ func PruneResolvedGaps(gaps []Gap, reclaim, delivery uint64, keepRecent int) ([]
 
 // pruneResolvedGapsLocked 按当前水位裁一次该源的已解决缺口。调用方必须已持写锁。
 //
-// 形态与 `pruneDeliveryBatchesLocked` 保持一致（FR-486 ③ 附带修复）：
+// 形态与 `pruneDeliveryBatchesLocked` 保持一致（③ 附带修复）：
 //
 //   - **幂等 + 按水位去重**：水位未变则直接返回，稳态下是 O(1)；
 //   - **失败只告警不阻断**：裁剪是空间优化而非正确性前提——

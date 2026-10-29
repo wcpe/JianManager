@@ -1,19 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 客户端分发拉取/下载明细事件（FR-093 追踪 + FR-249/FR-265 观测）。
+/** 
+ * 客户端分发拉取/下载明细事件（追踪观测）。
  * 机器码/IP 客户端可伪造、不可信，仅追踪统计。`errCode` 成功事件为空、失败事件填语义错误码。
  */
 
- /**
+ /** 
   * 客户端分发事件契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
   */
  export type { ClientDistEvent, ClientDistEventFilter, ClientDistEventSearchFilter, ClientDistEventPage, ClientDistEventDetail, ClientDistRealtimeSummary, ClientDistRatePoint, ClientDistRecentError, ClientDistRealtime, ClientDistErrorCount, ClientDistFailureSample, ClientDistErrorSummary } from '@/lib/client-dist/client-dist-events-contracts'
 // StatsIP 由统计契约定义（此前本文件有一份重复定义，已去重）；对外仍从本模块可用。
 export type { StatsIP } from '@/lib/client-dist/client-dist-stats-contracts'
 import type { ClientDistEventSearchFilter, ClientDistEventPage, ClientDistEventDetail, ClientDistRealtime, ClientDistErrorSummary } from '@/lib/client-dist/client-dist-events-contracts'
-/** 分页检索分发事件（FR-265），支持运行态维度联动过滤。 */
+/** 分页检索分发事件，支持运行态维度联动过滤。 */
 export function useClientDistEventSearch(filter: ClientDistEventSearchFilter) {
   const {
     channelId,
@@ -89,7 +89,7 @@ export function useClientDistEventDetail(id: number | null, enabled = true) {
   })
 }
 
-/** 查询错误码 TopN 与最近失败样例（FR-357）。 */
+/** 查询错误码 TopN 与最近失败样例。 */
 export function useClientDistErrorSummary(params: { channelId?: string; range: string; enabled?: boolean }) {
   const { channelId, range, enabled = true } = params
   return useQuery({
@@ -105,7 +105,7 @@ export function useClientDistErrorSummary(params: { channelId?: string; range: s
   })
 }
 
-/** 查询近实时分发请求聚合（FR-265）。 */
+/** 查询近实时分发请求聚合。 */
 export function useClientDistRealtime(params: { channelId?: string; enabled?: boolean }) {
   const { channelId, enabled = true } = params
   return useQuery({

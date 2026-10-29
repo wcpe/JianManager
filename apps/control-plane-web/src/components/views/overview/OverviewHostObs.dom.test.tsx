@@ -4,8 +4,8 @@ import { renderWithProviders } from '@/test/render'
 import { GaugeAttributionTooltip } from './OverviewPageView'
 import type { OverviewAttributionSnapshot } from './OverviewPageView'
 
-/**
- * FR-513：首页悬浮卡的主机级观测版式。
+/** 
+ *：首页悬浮卡的主机级观测版式。
  *
  * 核心取舍（每条都在用例里写明原因，避免后来者「修掉」）：
  *  - **null ≠ 0**：老 Worker 未上报应显示 `--`，而不是 0；
@@ -49,7 +49,7 @@ function renderTooltip(data: OverviewAttributionSnapshot, gauge: 'cpu' | 'load' 
   )
 }
 
-describe('GaugeAttributionTooltip（FR-513 主机级观测）', () => {
+describe('GaugeAttributionTooltip（主机级观测）', () => {
   it('未上报时四处新版式都不渲染（不占位）', () => {
     // 老 Worker 不报新字段。若仍然渲染「负载三档 1m -- 5m -- 15m --」这样的空壳，
     // 悬浮卡会被一堆无意义的 `--` 塞满，比不显示更差。

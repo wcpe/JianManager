@@ -1,12 +1,12 @@
-/**
+/** 
  * @file Card：通用卡片容器（标题 / 描述 / 操作 / 内容 / 底部五段）。
  * @input  lib/utils 的 cn、lib/interaction-overlay 的 cardSurface 与 shadowTransition
  * @output Card、CardHeader、CardTitle、CardDescription、CardAction、CardContent、CardFooter
  * @sync   改动基础样式时同步 panel.tsx / stat-card.tsx —— 三者共用 cardSurface 常量
- * @since  FR-502（2026-10 恢复启用，原 FR-163 弃用决策撤销）
+ * @since（2026-10 恢复启用，原弃用决策撤销）
  */
-/**
- * 【为什么撤销 FR-163 的弃用】此前把 `Card` 标记为弃用、要求统一改用 `Panel`/`StatCard`，
+/** 
+ * 【为什么撤销的弃用】此前把 `Card` 标记为弃用、要求统一改用 `Panel`/`StatCard`，
  * 理由是「松散用法被统一卡片原语取代」。但实际收敛下来暴露出两个问题：
  *
  * 1. **`Panel` 不是 `Card` 的超集**。`Panel` 强制三段式结构（header/body/footer 各自带
@@ -30,11 +30,11 @@ import * as React from "react"
 import { cn } from "../lib/utils"
 import { cardSurface, shadowTransition, cardSurfaceTone, type CardSurfaceTone } from "../lib/interaction-overlay"
 
-/**
+/** 
  * 卡片容器：圆角 + 描边 + 卡片底 + 柔和阴影，纵向堆叠子段。
  *
  * `interactive` 时叠加与 `Panel`/`StatCard` 同源的 hover 抬升（只换阴影不位移，
- * FR-176 的既定行为），供可点击卡片使用。
+ *的既定行为），供可点击卡片使用。
  *
  * `surface` 用来表达「底色强弱」，取代此前散落全站的 `bg-card/30` ~ `bg-card/98`
  * 十余种任意透明度（见 `cardSurfaceTone` 注释）。
@@ -47,7 +47,7 @@ function Card({
 }: React.ComponentProps<"div"> & {
   /** 可点击卡片：启用 hover 抬升与焦点环。 */
   interactive?: boolean
-  /**
+  /** 
    * 底色强弱档位。收敛前全站有 12 种 `bg-card/NN` 任意值，语义无法区分；
    * 现按「承载关系」分三档（见 `cardSurfaceTone`）。
    */
@@ -58,7 +58,7 @@ function Card({
       data-slot="card"
       data-surface={surface}
       className={cn(
-        /*
+        /* 
           【为什么默认 gap-0、无内边距】Card 是**容器**，不是成品区块。
           初版默认 `gap-4 py-4` 的后果是：全站 68 处手写卡片几乎都没有这两个值，
           每一处替换都要手动写 `gap-0 px-4 py-4` 去抵消，等于把「统一」做成了「到处打补丁」，

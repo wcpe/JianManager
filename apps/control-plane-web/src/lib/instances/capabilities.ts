@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 
-/**
- * 实例能力画像（FR-445，ADR-091）——前端门控的唯一真源。
+/** 
+ * 实例能力画像（ADR-091）——前端门控的唯一真源。
  *
  * 后端**详情路径**（HTTP `GET /instances/:id` 与 MCP `agent_get_instance`）在序列化前
  * 现算并以 `capabilities` 字段下发权威画像；列表/搜索响应同样逐行下发。前端**优先**用它。
@@ -100,7 +100,7 @@ export function capabilityProfileFor(type?: string, role?: string): InstanceCapa
   return hit ?? UNIVERSAL_FALLBACK
 }
 
-/**
+/** 
  * 解析实例能力画像：优先后端下发的 `capabilities`，缺失时按 (type, role) 本地兜底。
  * 纯函数（非 hook），供列表逐行渲染等无法调 hook 的场景复用。
  */
@@ -114,8 +114,8 @@ export function hasCapability(profile: InstanceCapabilityProfile, cap: Capabilit
   return profile.capabilities.includes(cap)
 }
 
-/**
- * 实例能力画像 hook（FR-445 §2.5）：稳定的画像对象，供详情页 Tab 门控与分段渲染消费。
+/** 
+ * 实例能力画像 hook（§2.5）：稳定的画像对象，供详情页 Tab 门控与分段渲染消费。
  * 传 undefined（实例尚未加载）时返回 universal 回退画像。
  */
 export function useInstanceCapabilities(inst?: CapabilitySubject | null): InstanceCapabilityProfile {

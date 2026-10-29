@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { CommandPalette, type CommandPaletteItem } from './CommandPalette'
 import { ObjectPageHeader } from './ObjectPageHeader'
 
-/**
- * 导航原语补充件测试（FR-502 阶段 4；原 `shell-extras.test.tsx`）：命令面板 + 对象页头。
+/** 
+ * 导航原语补充件测试（阶段 4；原 `shell-extras.test.tsx`）：命令面板 + 对象页头。
  *
  * 与阶段 3 的布局测试同一条思路——断言落在**结构性契约**上，不碰样式类名：
  * 命令面板锁的是「受控开合、键盘模型、检索口径（原页面名与原路由都能查到）」；
@@ -14,7 +14,7 @@ import { ObjectPageHeader } from './ObjectPageHeader'
  * 这些契约一旦被改坏，导航重构就会静默退回到「侧栏塞满路由」之前的旧问题。
  */
 
-/**
+/** 
  * 首个条目（默认高亮项）。
  * 「执行当前高亮项」「鼠标点击结果」两个用例需要在保留原字段的前提下换掉 onSelect，
  * 具名常量让它们不必按 `ITEMS[0]` 取下标。
@@ -57,7 +57,7 @@ const ITEMS: CommandPaletteItem[] = [
   },
 ]
 
-/**
+/** 
  * 受控开合用具。
  *
  * 命令面板自己不持有 open，所以用例必须提供一个真实的状态宿主，

@@ -27,7 +27,7 @@ describe('client-dist-query', () => {
     expect(href).toBe('/client-dist-ops?channelId=skyblock-s1&ip=192.0.2.9&machineId=m-1&version=2&tab=events')
   })
 
-  it('FR-430：新增冻结键 type/seg 随链接透传（位置在 tab 之后）', () => {
+  it('新增冻结键 type/seg 随链接透传（位置在 tab 之后）', () => {
     const href = buildClientDistHref(
       '/client-dist-ops',
       new URLSearchParams('channelId=skyblock-s1&tab=logs&type=request&seg=events&unknown=drop'),
@@ -37,7 +37,7 @@ describe('client-dist-query', () => {
     expect(href).toBe('/client-dist-ops?channelId=skyblock-s1&tab=logs&type=request&seg=ip')
   })
 
-  it('FR-430：type/seg 可被 clear（null 删除键）', () => {
+  it('type/seg 可被 clear（null 删除键）', () => {
     const next = updateClientDistQuery(
       new URLSearchParams('channelId=x&tab=logs&type=request&seg=events'),
       { seg: null, type: null },

@@ -18,7 +18,7 @@ describe('ConsoleLineBuffer 分行', () => {
     const previewSeq = buffer.snapshot()[0].seq
     buffer.appendChunk('345s)!\n', 'stdout')
     expect(bodies(buffer)).toEqual(['Done (12.345s)!'])
-    // 预览与落定必须同一个 seq——否则 FR-418 的选区锚点会指向一个消失的行。
+    // 预览与落定必须同一个 seq——否则的选区锚点会指向一个消失的行。
     expect(buffer.snapshot()[0].seq).toBe(previewSeq)
   })
 

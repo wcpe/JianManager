@@ -1,5 +1,5 @@
-/**
- * 配置收藏（书签）存储（FR-071）。
+/** 
+ * 配置收藏（书签）存储。
  *
  * 收藏是「常用配置快速访问」的 UI 便利项，按实例存于 localStorage，不入后端 DB
  * （见 docs/specs/config-explorer/api.md 决策）。storage 经参数注入，便于纯函数单测

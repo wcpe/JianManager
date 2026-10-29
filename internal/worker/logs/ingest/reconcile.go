@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
-// 启动增量对账（FR-497，spec：docs/specs/log-startup-reconcile/spec.md）。
+// 启动增量对账（spec：docs/specs/log-startup-reconcile/spec.md）。
 //
 // 背景：重启恢复原先无条件「整窗重发」——把该源全部事件重新写一遍 VL、逐条校验、发布新代。
 // 生产实测 13 源 ≈5 分钟，按 60 实例外推将达十几至几十分钟。而绝大多数重启时 VL 数据完好，
@@ -583,7 +583,7 @@ func (m *Manager) LastReconcileReports() []ReconcileReport {
 	return append([]ReconcileReport(nil), m.reconcileReports...)
 }
 
-// applyStartupRecovery 按对账结论执行一个源的启动恢复（FR-497 spec §2.2）。
+// applyStartupRecovery 按对账结论执行一个源的启动恢复（spec §2.2）。
 //
 // 三种走向：
 //   - 一致（无缺失、无回退）→ **零重发**：不生成新代、不写 VL、不改 catalog、不推进回收责任；
@@ -713,7 +713,7 @@ func (m *Manager) runReplayWindow(ctx context.Context, item startupSource, windo
 	return true, nil
 }
 
-// applyStartupRecovery 执行/推进一个源的启动恢复重发（FR-497 spec §2.2）。
+// applyStartupRecovery 执行/推进一个源的启动恢复重发（spec §2.2）。
 //
 // window 为 nil 表示首轮（本方法负责建窗并写回调用方传入的指针所在位置）；done=false 表示
 // 预算内没做完，调用方应保留 window 下一轮续跑。

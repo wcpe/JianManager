@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 历史会话的工具调用回显（FR-519 补缺）。
+// 历史会话的工具调用回显（补缺）。
 //
 // ## 为什么需要它
 //
@@ -22,7 +22,7 @@ import (
 // 事件流是「过程」（text_delta 逐帧、usage、run_end…），消息是「结果」。
 // 历史页要的是「这条回复里发生了哪几次工具调用、各自什么状态」，
 // 因此按 `message_id` 聚合三类工具事件（tool_call / tool_status / tool_result），
-// 用 callId 串起来——与前端实时视图的聚合口径一致（FR-519 §5）。
+// 用 callId 串起来——与前端实时视图的聚合口径一致（§5）。
 //
 // ## 为什么回放要复用同一个 callId 归并规则
 //

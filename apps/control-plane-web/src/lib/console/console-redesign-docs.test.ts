@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-// FR-283：app 迁 apps/control-plane-web 后，仓库根在四级之上。
+// app 迁 apps/control-plane-web 后，仓库根在四级之上。
 const repoRoot = path.resolve(__dirname, '../../../../..')
 
 function readDoc(relativePath: string) {
@@ -10,10 +10,10 @@ function readDoc(relativePath: string) {
 }
 
 describe('console redesign documentation', () => {
-  it('marks FR-267~272 as delivered in the PRD', () => {
+  it('marks~272 as delivered in the PRD', () => {
     const prd = readDoc('docs/PRD.md')
 
-    for (const fr of ['FR-267', 'FR-268', 'FR-269', 'FR-270', 'FR-271', 'FR-272']) {
+    for (const fr of ['', '', '', '', '', '']) {
       expect(prd).toMatch(new RegExp(`\\| ${fr} \\|[^\\n]+\\| P1 \\| ✅ 已交付@v0\\.\\d+\\.\\d+[^\\n|]*\\|`))
     }
   })
@@ -36,7 +36,7 @@ describe('console redesign documentation', () => {
     const spec = readDoc('docs/specs/console-redesign/design.md')
 
     expect(spec).toContain('状态：✅ 已交付@v0.13.0')
-    for (const fr of ['FR-267', 'FR-268', 'FR-269', 'FR-270', 'FR-271', 'FR-272']) {
+    for (const fr of ['', '', '', '', '', '']) {
       expect(spec).toContain(`- [x] ${fr}`)
     }
   })

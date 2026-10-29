@@ -39,7 +39,7 @@ interface ViewBox {
   h: number
 }
 
-/**
+/** 
  * 拓扑图数据源（ADR-103 取数留应用侧接线层）：
  * 字段为组件所需投影，应用侧 `useTopology()` 的响应结构直接满足。
  */
@@ -53,7 +53,7 @@ export interface TopologyGraphData {
     registrations: ProxyRegistration[]
   }[]
   networks: { id: number; name: string; memberInstanceIds: number[] }[]
-  /** 全量实例投影（FR-452/453）；旧后端缺省时按空数组兜底。 */
+  /** 全量实例投影（453）；旧后端缺省时按空数组兜底。 */
   instances?: TopoInstanceInput[]
 }
 
@@ -71,8 +71,8 @@ export interface TopologyGraphProps {
   onGroupTreeNeeded?: (needed: boolean) => void
 }
 
-/**
- * 群组服 proxy↔backend 拓扑图（FR-145 / FR-335）：单条聚合查询消 per-proxy N+1；
+/** 
+ * 群组服 proxy↔backend 拓扑图：单条聚合查询消 per-proxy N+1；
  * SVG 视口壳（pan/zoom + 适应视图 + 名称搜索 + 状态筛选 + 按 network 分组分层布局），
  * 百级节点可用。不引图库；布局走 lib/topology 纯函数。
  *
@@ -80,9 +80,9 @@ export interface TopologyGraphProps {
  */
 export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, onGroupTreeNeeded }: TopologyGraphProps) {
   const { t } = useTranslation()
-  // 层级维度（FR-453）：与列表页共用 GroupDimension 枚举，默认 region（大区/小区两级）。
+  // 层级维度：与列表页共用 GroupDimension 枚举，默认 region（大区/小区两级）。
   const [dim, setDim] = useState<GroupDimension>('region')
-  // groupTree 维度数据源（FR-452）：`/instance-groups` 组织分组树，与 network 的
+  // groupTree 维度数据源：`/instance-groups` 组织分组树，与 network 的
   // `/topology.networks` 是两个独立维度（键映射分离，绝不互相借数据）；仅选中该维度时才拉取。
   // 取数在应用侧：这里只把「是否需要分组树」通知出去。
   useEffect(() => {
@@ -132,9 +132,9 @@ export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, o
       registrations: p.registrations,
     }))
     const instances = data?.instances ?? []
-    // 未注册实例（beacon/独立服务/未挂 BC 的后端）作为孤立节点上拓扑（FR-453）。
+    // 未注册实例（beacon/独立服务/未挂 BC 的后端）作为孤立节点上拓扑。
     const topo = buildTopology(input, instances)
-    // 维度数据源分离（FR-452 自审修复）：
+    // 维度数据源分离（自审修复）：
     // - network：`/topology.networks` 群组软标签成员归属，键为群组名；
     // - groupTree：`/instance-groups` 组织分组树，键为组 id + 层级（同名不同组不合并）；
     // - 数据源不可用 → 该维度退化为全「未分组」，绝不借另一维度数据源。
@@ -247,7 +247,7 @@ export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, o
     )
   }
 
-  // 空态（FR-453 自审修复）：`laid.nodes` 已含 proxy（`buildTopology` 首段即入），
+  // 空态（自审修复）：`laid.nodes` 已含 proxy（`buildTopology` 首段即入），
   // 故节点数为 0 时「有 proxy」恒为假——原 hasProxy 分支为死代码，删去。
   // 仅在「无任何实例（含未注册/配套服务）」时显示空态；有实例但无 proxy 由下方提示单列。
   const totalNodes = laid.nodes.length
@@ -260,7 +260,7 @@ export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, o
   }
 
   const hasProxy = laid.nodes.some((n) => n.kind === 'proxy')
-  // 提示判定（FR-453 自审修复）：以「是否存在任一注册关系」判定，而非「有无 backend 节点」——
+  // 提示判定（自审修复）：以「是否存在任一注册关系」判定，而非「有无 backend 节点」——
   // 全量实例上拓扑后 backend 节点恒存在（未注册后端/beacon 都算），原判定被稀释恒真。
   const hasRegistration = (data?.proxies ?? []).some((p) => (p.registrations?.length ?? 0) > 0)
 
@@ -286,7 +286,7 @@ export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, o
           <Checkbox checked={onlyMatch} onCheckedChange={(v) => setOnlyMatch(v === true)} className="size-3.5" />
           {t('networks.topoOnlyMatch', { defaultValue: 'Only matches' })}
         </label>
-        {/* 层级维度选择器（FR-453）：与列表页共用 GroupDimension，默认 region 两级。
+        {/* 层级维度选择器：与列表页共用 GroupDimension，默认 region 两级。
             4 项固定枚举，但位于页头工具栏的紧凑行内 → 用样式统一、语义原生的 NativeSelect。 */}
         <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           {t('networks.topoLayer', { defaultValue: 'Layer' })}
@@ -413,7 +413,7 @@ export function TopologyGraph({ className, data, isLoading, nodes, groupNodes, o
         </svg>
       </div>
 
-      {/* 单列提示（FR-453 自审修复）：有实例但无 proxy → 暂无代理；有代理但无任一注册关系 → 未注册后端。 */}
+      {/* 单列提示（自审修复）：有实例但无 proxy → 暂无代理；有代理但无任一注册关系 → 未注册后端。 */}
       {!hasProxy && (
         <p className="mt-2 text-center text-xs text-muted-foreground">{t('networks.topoNoProxy')}</p>
       )}

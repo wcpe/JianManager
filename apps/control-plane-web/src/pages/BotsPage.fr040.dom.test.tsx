@@ -19,7 +19,7 @@ beforeAll(() => {
   }
 })
 
-describe('FR-040 全局 Bot 管理页重构', () => {
+describe('全局 Bot 管理页重构', () => {
   it('默认展示聚合总览与实例分组，未展开时不逐个铺开 Bot', async () => {
     loginMockUser()
     renderWithProviders(<BotsPage />, { route: '/bots' })

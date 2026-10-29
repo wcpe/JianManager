@@ -18,7 +18,7 @@ const messagesState = {
   isLoading: false,
   isError: false,
 }
-/** 历史工具回显（FR-519）：按 messageId 分组，键为字符串。 */
+/** 历史工具回显：按 messageId 分组，键为字符串。 */
 const toolCallsState = {
   data: {} as Record<string, unknown[]>,
   isLoading: false,
@@ -68,8 +68,8 @@ function reset() {
   rollbackMutate.mockClear()
 }
 
-/**
- * 对话历史页（FR-542 / FR-543）。
+/** 
+ * 对话历史页。
  *
  * 三条断言对应三类不可退让的行为：
  *  1) 空关键词**不检索**（否则首屏会把全部历史拖进浏览器）；
@@ -115,7 +115,7 @@ describe('AssistantHistoryPage', () => {
     expect(screen.getByText('先看 statusReason')).toBeInTheDocument()
   })
 
-  it('历史消息回显当时的工具调用与状态（FR-519）', async () => {
+  it('历史消息回显当时的工具调用与状态', async () => {
     // 关键行为：工具状态此前只落在事件流里、没有读取面，回看历史是「纯文本」的。
     // 缺了这条回显，用户无法判断助手当时到底调没调工具、卡在哪一步、失败的是什么码。
     reset()

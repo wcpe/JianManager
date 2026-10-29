@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ConfigBaselinesPageView：配置基线页的受控视图（基线列表 + 漂移面板 + 编辑弹窗），
  *       取数、三个写动作（保存 / 删除 / 收敛）与 toast 由应用容器负责。
  * @input lib/config-baseline（scopeKey 拼装与解析、哈希截断）、lib/instance-group（InstanceGroupNode）、
@@ -8,7 +8,7 @@
  *         BaselineEditorDialogView、BaselineEditorDialogViewProps、ConfigBaselineRow、BaselineDriftItemView、
  *         BaselineDriftView、BaselineConvergeOutcome、BaselineFormValues
  * @sync apps/control-plane-web/src/pages/ConfigBaselinesPage.tsx、apps/control-plane-web/src/pages/ConfigBaselinesPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-458 配置基线模板下发、跨实例漂移检测与一键收敛）
+ * @since（组件受控化迁包；原页配置基线模板下发、跨实例漂移检测与一键收敛）
  */
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -37,7 +37,7 @@ import type { ScopeKind } from '@/lib/config-explorer/config-baseline'
 import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 import { useVirtualRows } from '@/lib/shared/virtual-list'
 
-/**
+/** 
  * 配置基线行（本视图渲染与编辑回填所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/configBaselines` 的 `ConfigBaseline`：
@@ -84,7 +84,7 @@ export interface BaselineConvergeOutcome {
   failed: number
 }
 
-/**
+/** 
  * 编辑器提交的草稿值：与基线落库体同形，但**原样未归一化**
  * （`filePath` / `message` 保留首尾空格）——trim 与「空 message 省略」属落库策略，由容器做。
  */
@@ -97,7 +97,7 @@ export interface BaselineFormValues {
   message: string
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 基线列表、漂移明细、分组候选与全部加载/在途态经 props 注入
  *   （容器调 `useConfigBaselines` / `useBaselineDrift` / `useInstanceGroups`）；
@@ -115,7 +115,7 @@ export interface ConfigBaselinesPageViewProps {
   baselines?: ConfigBaselineRow[]
   /** 列表加载态。 */
   isLoading?: boolean
-  /**
+  /** 
    * 列表取数失败态：与「空数组」区分开——失败时渲染错误文案而非「尚无配置基线」，
    * 否则后端/权限故障会被读成「还没建过基线」。
    */
@@ -184,7 +184,7 @@ export interface BaselineEditorDialogViewProps {
 
 const SCOPE_KINDS: ScopeKind[] = ['all', 'group', 'network', 'tag', 'instance']
 
-/**
+/** 
  * 漂移明细行的固定行高（px）：行盒是真 `<tr>`，高度由单元格内距与最高内容决定
  * （`px-2 py-1.5` = 12 + 状态徽章 `text-xs`+`py-0.5` = 20 + 行下边框 1 = 33）。
  * 虚拟化按 `index × 该值` 定位，必须与真实行盒严格一致，否则滚动会累积漂移。
@@ -198,7 +198,7 @@ interface GroupOption {
   depth: number
 }
 
-/**
+/** 
  * 把后端扁平组织树节点（ADR-033，parentId 邻接表）按层级展开为下拉选项。
  * 只读展示用途：对孤儿/环节点健壮——先走可达节点，未覆盖的兜底按根追加，绝不丢节点
  * （否则运维会遇到「分组存在但选不到」）。
@@ -244,7 +244,7 @@ export function BaselineDriftPanelView({
 }: BaselineDriftPanelViewProps) {
   const { t } = useTranslation()
   const [result, setResult] = useState<BaselineConvergeOutcome | null>(null)
-  /**
+  /** 
    * 切换基线时清掉上一条的收敛汇总。
    *
    * 【为什么必须有】`result` 是本组件的 state，而外壳按 `driftId !== null` 条件渲染面板：
@@ -257,14 +257,14 @@ export function BaselineDriftPanelView({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部身份（baselineId）变化时对齐 state，属该规则的合法例外
     setResult(null)
   }, [baselineId])
-  // 读取失败的行无法判定一致性（FR-458 nit）：全部 drifted===0 时若仍有 error 行，
+  // 读取失败的行无法判定一致性（nit）：全部 drifted===0 时若仍有 error 行，
   // 不能报「已全部一致」，否则运维会误以为集群齐平。
   const errorCount = (drift?.items ?? []).filter((it) => it.error).length
   const allConverged = !!drift && drift.drifted === 0 && errorCount === 0
 
   const items = drift?.items ?? []
 
-  /**
+  /** 
    * 漂移明细虚拟化：`items` 的规模 = scope 内实例数（大档 1200），
    * 此前整表进 DOM（每台一行、三列），只靠 `max-h-80` 滚动遮挡。
    * 行与行之间不得出现 `space-y-*` 之类不计入行高的间距，否则 `index × DRIFT_ROW_HEIGHT`
@@ -387,7 +387,7 @@ export function BaselineDriftPanelView({
   )
 }
 
-/**
+/** 
  * 创建/编辑基线对话框。
  *
  * 挂载即打开、卸载即关闭（容器按需挂载，草稿随挂载按 `initial` 一次性初始化）——
@@ -539,8 +539,8 @@ export function BaselineEditorDialogView({
   )
 }
 
-/**
- * 配置基线页（FR-458）：配置模板下发、跨实例漂移检测、一键收敛。
+/** 
+ * 配置基线页：配置模板下发、跨实例漂移检测、一键收敛。
  *
  * 基线键为 `(scopeKey, filePath)`，`scopeKey` 限定应共享该基线的实例集合
  * （`all` / `group:<id>` 含子树 / `network:<id>` / `tag:<tag>` / `instance:<id>`）。
@@ -548,7 +548,7 @@ export function BaselineEditorDialogView({
  * 列表、漂移明细与两个弹窗的受控契约见 `ConfigBaselinesPageViewProps`。
  */
 
-/**
+/** 
  * 生效范围的人话化：`group:2` → 「分组 2」、`instance:5` → 「实例 5」、`*`/空 → 「全局」。
  *
  * 原始 key 直接摆给用户是看不懂的（尤其 `group:2` 里的数字是内部 id）；

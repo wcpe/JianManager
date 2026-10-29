@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-526 桥能力接入的三条路由：状态码、降级形态与权限口径。
+// 桥能力接入的三条路由：状态码、降级形态与权限口径。
 //
 // 这里只验证「HTTP 契约层」——service 层的语义（缓存 TTL / stale / 覆盖）在
 // internal/controlplane/service/bridge_status_test.go 里覆盖。

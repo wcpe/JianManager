@@ -1,5 +1,5 @@
-/**
- * 模板应用纯逻辑（FR-154）：把「模板」升级为应用市场所需的派生/校验逻辑下沉为纯函数，
+/** 
+ * 模板应用纯逻辑：把「模板」升级为应用市场所需的派生/校验逻辑下沉为纯函数，
  * 便于单测且与 React/i18n 解耦。两类能力：
  * 1. 变量占位（`{{var}}`）的提取 / 填充 / 校验——支撑「含占位变量时的填充预览」。
  * 2. 市场展示元数据派生（类型 label/图标/语义色、Java·RAM 需求推断）——支撑封面卡片。
@@ -9,7 +9,7 @@ import type { Tone } from '@jianmanager/ui/lib/tone'
 /** 占位变量语法：`{{ name }}`，变量名限 [A-Za-z0-9_]。全局匹配。 */
 const VAR_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g
 
-/**
+/** 
  * 从 startCommand 中提取占位变量名（去重、保持首次出现顺序）。
  * 仅识别 `{{var}}` 且变量名为 [A-Za-z0-9_]；非法占位（含连字符等）被忽略。
  */
@@ -28,7 +28,7 @@ export function extractVariables(startCommand: string): string[] {
   return out
 }
 
-/**
+/** 
  * 用 values 替换 startCommand 中的占位变量，返回填充后的命令。
  * - 未在 values 中提供的变量保持原占位（预览未填态可见缺口）。
  * - 提供空串视为「已填为空」，占位被移除。
@@ -44,7 +44,7 @@ export function fillTemplate(startCommand: string, values: Record<string, string
 /** 校验错误集：变量名 → i18n messageKey（仿 cron.ts 的 messageKey 约定，保持纯逻辑）。 */
 export type VariableErrors = Record<string, string>
 
-/**
+/** 
  * 校验占位变量是否均已填（非空白）。缺失项返回必填 messageKey。
  * 不做格式校验——值含义由模板作者决定，仅保证「全部填了」。
  */
@@ -58,7 +58,7 @@ export function validateVariableValues(vars: string[], values: Record<string, st
   return errs
 }
 
-/**
+/** 
  * 从 startCommand 解析最大堆（-Xmx）大小，返回 MiB；无 -Xmx 返回 null。
  * 支持 G/M/K（大小写不敏感）单位；不足 1 MB 向上取整为 1。
  */
@@ -133,7 +133,7 @@ export interface MarketTemplateInput {
   description?: string
 }
 
-/**
+/** 
  * 把 -Xmx 推断的堆大小或类型兜底建议格式化为 RAM 需求字符串（如 `4G+`）。
  * 优先级：startCommand 的 -Xmx（向上取整到 GB）> 类型默认建议 > null。
  */
@@ -146,7 +146,7 @@ export function formatRamRequirement(input: Pick<MarketTemplateInput, 'startComm
   return TYPE_PROFILES[normType(input.type)]?.defaultRam ?? null
 }
 
-/**
+/** 
  * 由模板派生应用市场展示元数据：类型 label/图标/语义色 + Java/RAM 需求推断。
  * 命中内置核心类型走画像，否则回退 generic（包装图标 + 原始 type 文案 + 无运行时建议）。
  */

@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import type { InstanceInfo } from '@/api/instances'
 
-/** 搭建代理请求体（对应后端 service.ProvisionProxyRequest，FR-035）。 */
+/** 搭建代理请求体（对应后端 service.ProvisionProxyRequest）。 */
 export interface ProvisionProxyBody {
   nodeId: number
   name: string

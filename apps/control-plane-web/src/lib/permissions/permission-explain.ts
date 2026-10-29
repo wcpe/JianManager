@@ -1,5 +1,5 @@
-/**
- * 权限节点「大白话」说明（FR-432）。
+/** 
+ * 权限节点「大白话」说明。
  * 键 = 权限节点 id；值 = 一句话说清「开了能干什么」。
  */
 export const PERM_EXPLAIN_ZH: Record<string, string> = {

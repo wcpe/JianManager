@@ -2,8 +2,8 @@ import * as React from 'react'
 
 import { attemptFocus, getFocusableElements } from './focusable'
 
-/**
- * 焦点陷阱（FR-502 阶段 6）：把键盘焦点关在一个容器内，关闭时把焦点还回去。
+/** 
+ * 焦点陷阱（阶段 6）：把键盘焦点关在一个容器内，关闭时把焦点还回去。
  *
  * 用途：不基于 Radix 的自绘模态/抽屉（Radix `Dialog`/`Sheet` 自带陷阱，不要重复套用）。
  *
@@ -20,12 +20,12 @@ import { attemptFocus, getFocusableElements } from './focusable'
 export interface UseFocusTrapOptions {
   /** 陷阱是否生效（弹窗打开时为 true）。 */
   isActive: boolean
-  /**
+  /** 
    * ESC 回调；不传则本 hook 不接管 ESC。
    * 嵌在 Radix 图层（Dialog/Sheet/DropdownMenu）里时应省略，交给图层自己裁决。
    */
   onEscape?: () => void
-  /**
+  /** 
    * 失效时是否把焦点还给激活前的元素，默认 true。
    *
    * 只在「焦点原本在陷阱内、且此刻已经无处可去」时才回收：

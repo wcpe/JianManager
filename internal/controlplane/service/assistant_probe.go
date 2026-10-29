@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 探测与真实测试（FR-514 spec §8）。
+// 探测与真实测试（spec §8）。
 //
 // 两个动作都由**显式请求**触发，绝不在保存后、列表刷新时或输入框失焦时自动发请求：
 // 模型调用按次计费，把「保存」与「调用上游」绑定等于让每一次手滑都产生费用。
@@ -229,7 +229,7 @@ func (s *AssistantService) buildStreamer(p *model.AssistantProvider) (ai.Streame
 	return ai.NewStreamer(p.Protocol, client, p.BaseURL, apiKey)
 }
 
-// egressClientFor 按供应商的代理模式产出出站客户端（FR-539）。
+// egressClientFor 按供应商的代理模式产出出站客户端。
 //
 // ## 为什么默认必须是直连
 //

@@ -37,7 +37,7 @@ export interface LogRuntimePending {
   gaps?: boolean
 }
 
-/**
+/** 
  * 后端错误的本地化呈现。
  *
  * 后端 `LogError.message` 是面向日志的英文诊断文本（如
@@ -67,8 +67,8 @@ export const namespaceNames: Record<LogNamespace, string> = {
   rehydrate: 'Rehydrate',
 }
 
-/**
- * VictoriaLogs 运行时面板（FR-473~484）：三分区起停、审批包上传/下发、缺口核销与分区迁移。
+/** 
+ * VictoriaLogs 运行时面板（~484）：三分区起停、审批包上传/下发、缺口核销与分区迁移。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast——七个动作全部以回调上报，
  * 数据与错误文案经 props 注入。两处需要动作结果的地方仍由视图消费：

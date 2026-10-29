@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import { render } from '@testing-library/react'
 import InstanceTagsDialog from '@/components/views/instances/InstanceTagsDialog'
 
-/**
- * FR-047 实例标签编辑器 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *实例标签编辑器 · 受控视图测（ADR-103 b 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。断言聚焦本组件自己的编辑语义：
  * 标签拆分、env: 前缀归一（防双份环境标签）、合并顺序（环境在前）、保存上报。
@@ -48,7 +48,7 @@ function renderDialog(props: Partial<Parameters<typeof InstanceTagsDialog>[0]> =
   return handlers
 }
 
-describe('InstanceTagsDialog（FR-047 · ADR-103 b 范式）', () => {
+describe('InstanceTagsDialog（ADR-103 b 范式）', () => {
   it('把既有标签拆成环境与自由标签两部分', () => {
     renderDialog()
     // env: 前缀的进环境选择，其余作为自由标签 chip（不重复出现环境标签）。

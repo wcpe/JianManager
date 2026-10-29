@@ -1,4 +1,4 @@
-/**
+/** 
  * 日志中心页容器（ADR-103 a 范式）：三路取数（经典 / Legacy / 联邦）、联邦降级编排、导出门禁与下载、
  * 路由深链与实时跟随轮询都在这里决定；筛选条、时间线与覆盖横幅交共享视图。
  *
@@ -34,7 +34,7 @@ import type { LogsFilterState, LogsInsights, LogsView } from '@/components/views
 import { buildExportParams, timeRangeToParams, windowForAnchor } from '@/lib/logs/logs-filters'
 import type { LogExportScope, TimeRangePreset } from '@/lib/logs/logs-filters'
 
-/**
+/** 
  * 把事件的原始来源标识归一为下拉取值域（instance/control_plane/worker）。
  *
  * 事件结构（SourceIdentity）只带 log_source_id、不含类别字段，其取值形如
@@ -91,7 +91,7 @@ const ROLE_PLATFORM_ADMIN = 10
 // 实时跟随轮询间隔（ms）。
 const FOLLOW_INTERVAL = 3000
 
-/**
+/** 
  * 时间窗参数（P2-9）：跟随态**只下发下界 `from`，不下发上界 `to`**。
  *
  * 根因：跟随态旧实现把 `to` 钉在浏览器 `now`，任何时钟偏移都会让「正在写入」的事件落在
@@ -112,7 +112,7 @@ function timeParamsFor(
   return bounds.from ? { from: bounds.from } : {}
 }
 
-/**
+/** 
  * 把时刻向下取整到最近一个 FOLLOW_INTERVAL 桶（纯函数，便于单测）。
  *
  * 跟随态的时间窗锚点必须落在桶边界上：若直接取挂钟毫秒，`from` 每次渲染都变，
@@ -129,7 +129,7 @@ export default function LogsPage() {
   const navigate = useNavigate()
   const isPlatformAdmin = useAuthStore((state) => state.role === ROLE_PLATFORM_ADMIN)
 
-  // 页面上报（FR-518 §5.1 / §4.2）：日志页**只发源标识与时间窗，不发日志正文**。
+  // 页面上报（§5.1 / §4.2）：日志页**只发源标识与时间窗，不发日志正文**。
   // 正文可能含敏感内容，留给工具按权限取（spec §8 末条）。
   const contextInstanceId = searchParams.get('instanceId')
   usePageContext(
@@ -144,7 +144,7 @@ export default function LogsPage() {
 
   const [view, setView] = useState<LogsView>('node_instance')
   const [filter, setFilter] = useState<LogsFilterState>(() => {
-    // 深链预筛选（FR-345）：从 URL ?instanceId= 初始化实例筛选（如从终端「查看完整历史」进入）。
+    // 深链预筛选：从 URL ?instanceId= 初始化实例筛选（如从终端「查看完整历史」进入）。
     const q = searchParams.get('instanceId')
     const n = q ? Number(q) : NaN
     return {
@@ -165,13 +165,13 @@ export default function LogsPage() {
   const [federationCursors, setFederationCursors] = useState<Record<number,
     Pick<LogQueryParams, 'from' | 'to'> & { viewId?: string; cursor?: string }
   >>({})
-  // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（FR-480 online_only）。
+  // 「仅查在线节点」：显式开启后联邦扇出收缩到在线目标（online_only）。
   const [onlineOnly, setOnlineOnly] = useState(false)
   const [follow, setFollow] = useState(false)
   const [exporting, setExporting] = useState(false)
-  /**
+  /** 
    * 时间窗锚点：非跟随态下冻结，避免每次渲染 `new Date()` 使 useLogs /
-   * useLogsFederation 的 queryKey 每毫秒变化导致请求风暴（FR-482 接线后暴露）。
+   * useLogsFederation 的 queryKey 每毫秒变化导致请求风暴（接线后暴露）。
    * 跟随态由时间桶 state 驱动（见下），配合轮询滚动时间窗。
    */
   const [rangeAnchor, setRangeAnchor] = useState(() => Date.now())
@@ -224,7 +224,7 @@ export default function LogsPage() {
   const federationEnabled = !legacyMode && view !== 'platform'
   const legacyQuery = useLegacyLogs(params, legacyMode)
 
-  // FR-482：可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
+  // 可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
   const federationParams: Record<string, unknown> = {
     ...params,
     limit: PAGE_SIZE,
@@ -240,7 +240,7 @@ export default function LogsPage() {
     // 才退回 interval 作为那一次触发；两种情况都只有**一个**触发源。
     refetchInterval: follow && !timeParams.from ? FOLLOW_INTERVAL : false,
   })
-  /**
+  /** 
    * 最近一份「联邦可用且带 items」的成功结果，用于限流期间继续渲染已有行。
    *
    * 用 state 而非 ref：渲染期要**读**它来决定列表内容，ref 读值不触发重渲染且违反
@@ -257,7 +257,7 @@ export default function LogsPage() {
   const [lastGoodFederation, setLastGoodFederation] = useState<{ filterKey: string; result: LogsFederationResult } | null>(null)
   // 「确认并清空身份冲突」对话框开关（质量标记的运维入口，见 ClearConflictsDialog）。
   const [clearConflictsOpen, setClearConflictsOpen] = useState(false)
-  /**
+  /** 
    * 限流提示闩锁：重试耗尽观测到 429 即置位，直到重新拿到**真实成功**结果才清除。
    *
    * 为什么不直接用 `federationQuery.error`：跟随态每 3 秒滚动时间桶 ⇒ queryKey 每次都变，
@@ -278,7 +278,7 @@ export default function LogsPage() {
   // `onlineOnly` 尤其容易漏判成「只是排序/展示开关」——它实际是服务端过滤条件。
   const filterKey = `${view}|${filter.source}|${onlineOnly}|${filter.instanceId ?? ''}|${filter.nodeId ?? ''}|${filter.level}|${filter.keyword.trim()}|${filter.range}`
   const latestFederation = federationQuery.data
-  /**
+  /** 
    * 「这一轮请求真的拿到结果了」——用于清除闩锁。
    *
    * 不含 degraded 条件：queryFn 只对 429 抛出，其它失败（404/连接失败）都会被转成信封、
@@ -317,7 +317,7 @@ export default function LogsPage() {
   // 404 降级才回退 useLogs 的 Legacy 表。禁止「联邦横幅 + Legacy 内容」错配。
   const federationActive = !!federation && !federation.degraded && federation.available
 
-  /**
+  /** 
    * 「确认并清空身份冲突」入口可用性。
    *
    * 三个条件缺一不可：
@@ -331,7 +331,7 @@ export default function LogsPage() {
     filter.nodeId !== null &&
     federation?.classified.coverage.duplicateUnresolved === true
 
-  /**
+  /** 
    * 经典表格查询（联邦视图下作降级回退源）。
    *
    * 两个门控都指向同一目标：**联邦视图下不要为了「可能用得上」而重复请求**。
@@ -392,7 +392,7 @@ export default function LogsPage() {
   const insights: LogsInsights | undefined = federationActive
     ? { eventsCount: statsCount, levelFacets }
     : undefined
-  /**
+  /** 
    * 列表主数据源。限流中断时回落到 {@link lastGoodFederation} 的最近一份成功列表：
    * 已有行继续可见（不清空），绝不把限流呈成「暂无日志」。
    *
@@ -438,7 +438,7 @@ export default function LogsPage() {
     ? (federationNextAvailable ? page + 1 : page)
     : Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  /**
+  /** 
    * 筛选变更：写回筛选态并**始终**回到第 1 页、清空联邦游标。
    * 三件事必须同处发生——只改其一会落在越界页或旧游标上（联邦游标与 page 一一对应）。
    */
@@ -468,7 +468,7 @@ export default function LogsPage() {
   const exportBlockedByFederation =
     !!federation && !classicExportAllowed && !federation.exportAffordance.showDownload
   const exportDisabled = legacyMode || exporting || total === 0 || exportBlockedByFederation
-  // federated 探测（FR-482）未落地前，items 可能暂时为空——此时不得判为「空结果」，
+  // federated 探测未落地前，items 可能暂时为空——此时不得判为「空结果」，
   // 否则会先闪 empty-state（且 404 降级期间显示非成功空态），把尚未就绪误报成失败。
   // 故把「联邦探测未完成」并入 loading：只有探测结束、数据源确定后才允许判空。
   //
@@ -488,7 +488,7 @@ export default function LogsPage() {
       // 联邦视图下「有数据」= 有联邦结果（含限流时保留的上一份行）。
       : !!federation
 
-  // 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
+  // 空结果语义：失败/partial 不得呈「暂无日志」空成功。
   // 引擎未就绪的降级是例外中的例外：经典路径可能确实没有行，但引擎侧数据从未被查询，
   // 此时宣称「暂无日志」是假成功，必须保留非成功空态。
   const emptySuccessAllowed =
@@ -537,8 +537,8 @@ export default function LogsPage() {
     }
   }
 
-  /**
-   * 失败态可操作引导（FR-482 §3.1）：把 helper 给出的 actionKey 落成真实动作。
+  /** 
+   * 失败态可操作引导（§3.1）：把 helper 给出的 actionKey 落成真实动作。
    * openNodes/startRehydrate → 节点页（受管运行时/归档管理入口）；reopenView → 重开固定视图；
    * requestOnline → 显式「仅查在线节点」；contactAdmin → 提示联系管理员。
    */

@@ -21,12 +21,12 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 配置分批灰度与交付编排（FR-531）。
+// 配置分批灰度与交付编排。
 //
 // ## 这个文件解决什么
 //
-// FR-458 的 `ConfigBaselineService.Converge` 是**循环逐台**：一次性推完全部实例，
-// 中间出问题只能等它跑完再复盘。FR-531 要的是「一批一批放量、每批之后停下来看一眼，
+// 的 `ConfigBaselineService.Converge` 是**循环逐台**：一次性推完全部实例，
+// 中间出问题只能等它跑完再复盘。要的是「一批一批放量、每批之后停下来看一眼，
 // 不对就熔断、就回滚」。
 //
 // ## 两个最容易做错的地方
@@ -35,7 +35,7 @@ import (
 //     结果「两台机器正常重启」就能把整个变更打停。JM 把它拆成 `deferred`：
 //     离线率 < 10% 时标 deferred、**不进失败率分母**、继续推在线目标、上线后自动补推；
 //     ≥ 10% 才熔断（半个集群失联才是真异常信号）。
-//  2. **落盘 ≠ 生效**（FR-532 §16）。目标同时记 `DiskWritten` 与生效结论，
+//  2. **落盘 ≠ 生效**（§16）。目标同时记 `DiskWritten` 与生效结论，
 //     因为「磁盘是新配置、内存是旧配置」这个状态重启就会变，必须能被人看见。
 //
 // ## 状态机
@@ -100,7 +100,7 @@ const systemActorName = "system"
 //
 // 各维度之间是 **AND**：先按分组子树 ∪ 显式 ID 求候选，再用标签/节点收敛。
 // 全空不是「全部实例」而是**报错**——灰度变更误选中全量是灾难，
-// 与 FR-535 的「不给隐式全量」同一口径。
+// 与的「不给隐式全量」同一口径。
 type DeliverySelector struct {
 	GroupIDs           []uint   `json:"groupIds,omitempty"`
 	IncludeDescendants bool     `json:"includeDescendants"`
@@ -236,7 +236,7 @@ type deliveryWriteOutcome struct {
 	PrevVersionID *uint
 }
 
-// ConfigDeliveryService 配置分批灰度与交付编排（FR-531）。
+// ConfigDeliveryService 配置分批灰度与交付编排。
 type ConfigDeliveryService struct {
 	db         *gorm.DB
 	pool       *cpgrpc.ClientPool
@@ -244,7 +244,7 @@ type ConfigDeliveryService struct {
 	audit      *AuditService
 	activation *ConfigActivationService
 
-	// writeFn 落盘实现；默认走 Worker gRPC WriteConfig（含 FR-530 的读回校验）。
+	// writeFn 落盘实现；默认走 Worker gRPC WriteConfig（含的读回校验）。
 	writeFn func(inst *model.Instance, filePath, content, message string) deliveryWriteOutcome
 	// sleepFn 观察窗等待原语；测试注入为 no-op。
 	sleepFn func(time.Duration)
@@ -688,7 +688,7 @@ func (s *ConfigDeliveryService) Submit(id uint) (*model.ConfigDeliveryOrder, err
 
 // Approve 批准：pending_approval → approved。
 //
-// 说明：正式的审批入口应走平台审批中心（FR-490），本方法同时作为那条链路被执行器调用
+// 说明：正式的审批入口应走平台审批中心，本方法同时作为那条链路被执行器调用
 // 的落点，以及「未接入审批中心时的直接批准」路径——不提供它，状态机就永远走不到 rolling。
 func (s *ConfigDeliveryService) Approve(id, approverID uint) (*model.ConfigDeliveryOrder, error) {
 	order, err := s.transit(id, model.DeliveryStatusApproved, nil)
@@ -1042,7 +1042,7 @@ func (s *ConfigDeliveryService) pushTarget(order *model.ConfigDeliveryOrder, bat
 	return s.applyActivationOutcome(order, batchNo, target, act)
 }
 
-// applyActivationOutcome 把生效结论如实落到目标行（FR-532 §16 的四象限）。
+// applyActivationOutcome 把生效结论如实落到目标行（§16 的四象限）。
 func (s *ConfigDeliveryService) applyActivationOutcome(order *model.ConfigDeliveryOrder, batchNo int, target *model.ConfigDeliveryTarget, act ActivationOutcome) (bool, error) {
 	finish := s.clock()
 	updates := map[string]any{
@@ -1545,7 +1545,7 @@ func (s *ConfigDeliveryService) rollbackOne(order *model.ConfigDeliveryOrder, ta
 // 落盘
 // ---------------------------------------------------------------------------
 
-// writeConfig 落盘并记录版本（生产走 Worker gRPC，含 FR-530 的读回校验）。
+// writeConfig 落盘并记录版本（生产走 Worker gRPC，含的读回校验）。
 func (s *ConfigDeliveryService) writeConfig(inst *model.Instance, filePath, content, message string) deliveryWriteOutcome {
 	if s.writeFn != nil {
 		return s.writeFn(inst, filePath, content, message)

@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { server } from '@jianmanager/devmock/server'
 import { resetDb } from '@jianmanager/devmock/db'
 
-/**
- * 任务列表的「活跃态会收敛」契约（FR-329 轮询能停）。
+/** 
+ * 任务列表的「活跃态会收敛」契约（轮询能停）。
  *
  * 存在的理由：前端 `api/tasks.ts` 的 `tasksRefetchInterval` 是「**只要有一条非终态任务
  * 就一直 2s 轮询**」。而旧的任务种子按状态池轮转生成，large 档 1500 条里就有 600 条被种成
@@ -49,7 +49,7 @@ afterEach(() => {
 })
 afterAll(() => server.close())
 
-describe('任务列表活跃态收敛（FR-329）', () => {
+describe('任务列表活跃态收敛', () => {
   it('首窗能取到活跃任务，且只有近窗口的少数几条', async () => {
     const token = await login()
     const page = await fetchTasks(token, 100)

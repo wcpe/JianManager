@@ -1,9 +1,9 @@
-/**
+/** 
  * 监控页指标定义表 + 序列装配纯逻辑。把「哪张图画哪些 metricKey、用什么单位/格式」
  * 收敛成与 React 无关的数据，便于 vitest 单测，也让平台/节点/实例三 target 共用同一骨架。
  *
- * 消费既有节点/实例指标及 FR-401 节点级共享 Bot Worker 指标（见 internal/controlplane/model/metric.go）。
- * 数据里没有的维度（如 load5/load15、磁盘读写速率、进程 TOP10）一律不画、不留占位（按 FR-169 决定）。
+ * 消费既有节点/实例指标及节点级共享 Bot Worker 指标（见 internal/controlplane/model/metric.go）。
+ * 数据里没有的维度（如 load5/load15、磁盘读写速率、进程 TOP10）一律不画、不留占位（按决定）。
  */
 
 /** 一条原始序列（来自 /metrics/series 或 overview.trends）。 */
@@ -19,7 +19,7 @@ export interface PlotSeries {
   name: string
   /** 线色，默认按序取 --chart-1..5（与 TimeSeriesChart 一致）。 */
   color?: string
-  /** 该序列的数值格式（FR-221 对比图据此选 Y 轴/hover 格式器；缺省由调用方统一格式化）。 */
+  /** 该序列的数值格式（对比图据此选 Y 轴/hover 格式器；缺省由调用方统一格式化）。 */
   format?: ValueFormat
   points: { ts: string; value: number | null }[]
 }
@@ -37,7 +37,7 @@ export interface MetricChartDef {
   format: ValueFormat
   /** Y 轴范围；占比类传 [0,100] 更直观，其余自适应。 */
   yDomain?: [number, number]
-  /**
+  /** 
    * 该图的序列来源。每项 = 一条曲线的 metricKey + 名称 i18n key。
    * 占比派生（mem%/disk%）通过 derive 字段表达，渲染层据此用 used/total 两条原始序列算百分比。
    */
@@ -75,8 +75,8 @@ export function formatterFor(fmt: ValueFormat): (v: number) => string {
   }
 }
 
-/**
- * 混合量纲的紧凑数值缩写（FR-221 多指标对比）：叠加序列单位不同（TPS vs 字节 vs %）时
+/** 
+ * 混合量纲的紧凑数值缩写（多指标对比）：叠加序列单位不同（TPS vs 字节 vs %）时
  * Y 轴无法用单一单位格式器，退而用十进制 SI 缩写压短大数（≥1e9→G、≥1e6→M、≥1e3→K，
  * 保留 1 位小数、整数位省略 .0），避免字节量级原始数字在窄 Y 轴里被截断。
  */
@@ -93,7 +93,7 @@ export function compactFormatter(v: number): string {
   return trim1(v)
 }
 
-/**
+/** 
  * 平台/节点监控指标定义（design §4.2）。
  * 受限于现有指标：负载只有 1 分钟（node_load），磁盘/网络 IO 用现有占用/速率指标，
  * 「资源使用率」= CPU% + 内存% + 磁盘%（占比同图对比）。
@@ -184,10 +184,10 @@ export const NODE_CHART_DEFS: MetricChartDef[] = [
   },
 ]
 
-/**
+/** 
  * 平台（集群聚合）监控的指标定义。受限于 /metrics/overview 仅聚合 4 条跨节点曲线
  * （node_cpu_pct 均值 / node_load 均值 / node_mem_used 合计 / inst_players_online 合计），
- * 平台视图只画这 4 张图——没有的维度（内存占比/磁盘/网络 IO）不画、不留占位（FR-169）。
+ * 平台视图只画这 4 张图——没有的维度（内存占比/磁盘/网络 IO）不画、不留占位。
  * 这是「同一骨架、三 target 可切」中平台 target 的 def 子集，与节点/实例共用 MonitorSkeleton。
  */
 export const PLATFORM_CHART_DEFS: MetricChartDef[] = [
@@ -218,7 +218,7 @@ export const PLATFORM_CHART_DEFS: MetricChartDef[] = [
   },
 ]
 
-/** 实例监控的指标定义（TPS/MSPT/堆/线程/玩家/区块——均现有 FR-060 指标）。 */
+/** 实例监控的指标定义（TPS/MSPT/堆/线程/玩家/区块——均现有指标）。 */
 export const INSTANCE_CHART_DEFS: MetricChartDef[] = [
   { id: 'tps', titleKey: 'monitor.chart.tps', format: 'tps', sources: [{ metricKey: 'inst_tps', nameKey: 'monitor.metric.tps' }] },
   { id: 'mspt', titleKey: 'monitor.chart.mspt', format: 'ms', sources: [{ metricKey: 'inst_mspt', nameKey: 'monitor.metric.mspt' }] },
@@ -251,7 +251,7 @@ export function ratioPctSeries(
   })
 }
 
-/**
+/** 
  * 取一条原始序列的点（按 metricKey + 可选 world 匹配）。无匹配返回空数组。
  */
 function pointsOf(raw: RawSeries[], metricKey: string, world = ''): { ts: string; value: number | null }[] {
@@ -259,10 +259,10 @@ function pointsOf(raw: RawSeries[], metricKey: string, world = ''): { ts: string
   return s ? s.points : []
 }
 
-/**
+/** 
  * 装配一张图的曲线集合。
  * - 「资源使用率」图特判：CPU% + 内存%（mem_used/mem_total）+ 磁盘%（disk_used/disk_total）三线对比。
- * - 区块图特判：按 world 拆成多条线；worldFilter 非空时只画该世界（FR-221 下钻到世界）。
+ * - 区块图特判：按 world 拆成多条线；worldFilter 非空时只画该世界（下钻到世界）。
  * - 其余按 def.sources 直接取序列。
  * nameOf 为 i18n 翻译函数（注入以保持本模块纯逻辑、不依赖 i18next）。
  */
@@ -296,19 +296,19 @@ export function buildChartSeries(
     .filter((s) => s.points.length > 0)
 }
 
-// ===== FR-221 时序剖析增强：指标目录 + 关键指标概览 + 多指标对比 =====
+// =====时序剖析增强：指标目录 + 关键指标概览 + 多指标对比 =====
 
-/** 一个可选/可对比的指标项（名称 + 单位格式）。FR-221 概览/对比据此枚举与取值。 */
+/** 一个可选/可对比的指标项（名称 + 单位格式）。概览/对比据此枚举与取值。 */
 export interface MetricCatalogItem {
   metricKey: string
   nameKey: string
   format: ValueFormat
 }
 
-/**
+/** 
  * 各 target 的指标目录（仅列「单序列、可直接取当前值」的指标——派生占比/分世界不入目录，
  * 它们在主图网格里已有专门处理）。用于「关键指标概览」与「多指标对比」枚举可选项。
- * 严格对齐既有 FR-060 指标键（model/metric.go），不新增后端字段。
+ * 严格对齐既有指标键（model/metric.go），不新增后端字段。
  */
 export const NODE_METRIC_CATALOG: MetricCatalogItem[] = [
   { metricKey: 'node_cpu_pct', nameKey: 'monitor.metric.cpu', format: 'pct' },
@@ -373,7 +373,7 @@ export interface MetricSnapshot {
   points: { ts: string; value: number | null }[]
 }
 
-/** 据目录与原始序列装配关键指标概览（当前值 + sparkline 点）。FR-221「关键指标概览」。 */
+/** 据目录与原始序列装配关键指标概览（当前值 + sparkline 点）。「关键指标概览」。 */
 export function buildSnapshots(catalog: MetricCatalogItem[], raw: RawSeries[]): MetricSnapshot[] {
   return catalog.map((item) => ({
     metricKey: item.metricKey,
@@ -384,7 +384,7 @@ export function buildSnapshots(catalog: MetricCatalogItem[], raw: RawSeries[]): 
   }))
 }
 
-/**
+/** 
  * 装配「多指标对比」叠加曲线：按 selected 的 metricKey 顺序各取一条序列叠加到同一图。
  * 跨指标量纲不同（如 TPS vs 字节），故对比图统一不约束 Y 轴（auto），按各自原值绘制——
  * 形状/趋势对比为主，绝对值看 hover。无匹配序列的 key 跳过。

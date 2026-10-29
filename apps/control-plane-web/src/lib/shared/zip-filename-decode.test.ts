@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { unzipWithNames, type ZipEntry } from './zip-filename-decode'
 
-/**
- * BUG-G（FR-250 真机缺陷）复现 + 回归：中文 Windows 打的 zip 常把文件名存为 GBK/CP936
+/** 
+ * BUG-G（真机缺陷）复现 + 回归：中文 Windows 打的 zip 常把文件名存为 GBK/CP936
  * 且未置 UTF-8 通用位（bit 11）。fflate 的高层 unzip 对未置 UTF-8 的名字按 latin1 解 → 乱码。
  * unzipWithNames 自解析 local file header 拿原始名字节 + 标志位，据此 UTF-8/GBK 解码。
  * 这里构造 GBK 文件名的 zip 字节 fixture 断言解出正确中文；UTF-8 名 zip 不回归。

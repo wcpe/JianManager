@@ -17,7 +17,7 @@ const (
 	botRuntimeMetricFreshWindow    = 90 * time.Second
 )
 
-// BotRuntimeMetricSampler 将 FR-400 的已认证 Heartbeat 当前快照沉淀为 ADR-013 时序。
+// BotRuntimeMetricSampler 将的已认证 Heartbeat 当前快照沉淀为 ADR-013 时序。
 // 它只读取 Control Plane 数据库，绝不调用 RPC、唤起 Bot Worker 或扫描任意 OS 进程。
 type BotRuntimeMetricSampler struct {
 	db      *gorm.DB

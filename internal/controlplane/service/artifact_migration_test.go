@@ -23,7 +23,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// migrationHarness 存量迁移测试基座（FR-348）：Asset + 渠道 + 任务 + 迁移服务共库同根。
+// migrationHarness 存量迁移测试基座：Asset + 渠道 + 任务 + 迁移服务共库同根。
 type migrationHarness struct {
 	assets    *AssetService
 	channels  *ArtifactStorageChannelService
@@ -502,7 +502,7 @@ func TestArtifactMigration_SkipAlreadyAtTarget(t *testing.T) {
 
 // TestArtifactMigration_SourceDeleteFailure_StillMigrated
 // 删源失败（S3 DELETE 拒）：记录已先行更新（先改记录再删源的顺序保证）、该条仍计成功、任务 succeeded；
-// 源残留归 FR-349 对账。
+// 源残留归对账。
 func TestArtifactMigration_SourceDeleteFailure_StillMigrated(t *testing.T) {
 	h := newMigrationHarness(t)
 	fake, srv := newFailableFakeS3(t)
@@ -528,7 +528,7 @@ func TestArtifactMigration_SourceDeleteFailure_StillMigrated(t *testing.T) {
 	fake.mu.Lock()
 	_, remains := fake.objects[objectKey(a.RelPath)]
 	fake.mu.Unlock()
-	require.True(t, remains, "源对象删除失败残留（FR-349 对账收口）")
+	require.True(t, remains, "源对象删除失败残留（对账收口）")
 	require.Equal(t, 1, h.registryOf(t, taskID).Migrated)
 }
 

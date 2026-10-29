@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEvidenceReconcileDispatcher_PerNodeSingleFlight FR-456 F10：同节点在飞时的重复派发被跳过，
+// TestEvidenceReconcileDispatcher_PerNodeSingleFlightF10：同节点在飞时的重复派发被跳过，
 // 不同节点互不影响。
 func TestEvidenceReconcileDispatcher_PerNodeSingleFlight(t *testing.T) {
 	d := NewEvidenceReconcileDispatcher()

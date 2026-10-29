@@ -234,7 +234,7 @@ func TestMetric_InstanceRanking_QueryCountAndIndex(t *testing.T) {
 		"排行应为常数条 SQL（聚合 + 计数），不得随实例数 N+1：%v", queries)
 }
 
-// TestMetric_InstanceRanking_AllSupportedMetricsOrder （FR-469 验收 1）5 个白名单指标
+// TestMetric_InstanceRanking_AllSupportedMetricsOrder （验收 1）5 个白名单指标
 // **逐个**锁住默认排序方向与入榜行为：仅 tps 为 asc（吞吐越低越差），
 // 其余 mspt / cpu / heap / players 均为 desc。缺任一指标的方向断言时，
 // rankingOrder 的「其余 desc」语义只靠实现存在、可被静默改坏。

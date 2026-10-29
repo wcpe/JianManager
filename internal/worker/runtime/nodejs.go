@@ -11,7 +11,7 @@ import (
 )
 
 // nodeMirrorBase 返回 Node.js dist 下载基址：CP 下发的 override 优先（来自平台设置
-// runtime.mirror.nodejs，语义同 jdk.mirror.*），其次环境变量，最后回退官方源（FR-299）。
+// runtime.mirror.nodejs，语义同 jdk.mirror.*），其次环境变量，最后回退官方源。
 func nodeMirrorBase(override string) string {
 	if v := strings.TrimSpace(override); v != "" {
 		return strings.TrimRight(v, "/")

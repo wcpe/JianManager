@@ -9,16 +9,16 @@ export type { BackupInfo } from '@/lib/backups/backup'
 /** 创建备份请求体。 */
 export interface CreateBackupBody {
   name?: string
-  /** 增量备份，挂到最近一次已完成备份后形成链（FR-056） */
+  /** 增量备份，挂到最近一次已完成备份后形成链 */
   incremental?: boolean
-  /** 目标远程存储后端 ID；缺省存于节点本地（FR-057） */
+  /** 目标远程存储后端 ID；缺省存于节点本地 */
   storageId?: number
 }
 
 /** useBackups 选项。 */
 export interface UseBackupsOptions {
-  /**
-   * 轮询间隔毫秒；存在进行中备份时由调用方传入以刷新进度（FR-151）。
+  /** 
+   * 轮询间隔毫秒；存在进行中备份时由调用方传入以刷新进度。
    * 省略或传 false 时不轮询，保持既有行为（其他调用方不受影响）。
    */
   refetchInterval?: number | false

@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-163 视觉底座与设计系统 · 单机（Playwright + mock 模式）验收。
+/** 
+ *视觉底座与设计系统 · 单机（Playwright + mock 模式）验收。
  * 覆盖：统一 Panel（data-slot=panel）/ StatCard（data-slot=stat-card）共享组件渲染，弃 shadcn Card 松散用法。
- * 证据落 .tmp/acceptance/FR-163/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-163 共享 Panel / StatCard 设计底座渲染', async ({ page }) => {
+test('共享 Panel / StatCard 设计底座渲染', async ({ page }) => {
   await login(page)
 
   // Panel 底座（实例监控段 ChartPanel → Panel data-slot）
@@ -22,5 +22,5 @@ test('FR-163 共享 Panel / StatCard 设计底座渲染', async ({ page }) => {
   await page.goto('/nodes?node=1')
   await expect(page.locator('[data-slot="stat-card"]').first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-163/single-machine-design-system.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-design-system.png', fullPage: true })
 })

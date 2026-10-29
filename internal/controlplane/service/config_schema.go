@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置 Schema 校验（FR-529 §6）。
+// 配置 Schema 校验（§6）。
 //
 // 只实现产品需要的 JSON Schema Draft 2020-12 子集：
 // `type / properties / required / enum / minimum / maximum / pattern / items / additionalProperties`。

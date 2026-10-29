@@ -65,7 +65,7 @@ export type { SparkPoint } from './charts/Sparkline'
 export type { ChartSeries, ChartReferenceLine } from './charts/TimeSeriesChart'
 export type { MonitorSource, MonitorSeriesHook } from './charts/MonitorSkeleton'
 
-// 跨组件基础设施（FR-502 阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
+// 跨组件基础设施（阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
 export * from './hooks'
 export * from './lib/interaction-overlay'
 export * from './lib/utils'
@@ -96,12 +96,12 @@ export * from './lib/focus-ring'
 // 显式列出而非 `export *`：`DragPayload` 与 `./lib/explorer-clipboard-bus` 的同名类型语义不同
 // 不导出：该模块仅有的 `fmtBytes` 与 client-dist 的 OpsShared 同名（两者格式口径不同），
 // 显式列出而非 `export *`：`HoverPrefetcher` 与 `./lib/instance-prefetch` 的同名类型语义不同；
-// server-selection 的 store 与类型（FR-240 / FR-293）。
+// server-selection 的 store 与类型。
 export * from './lib/stat-card'
 export * from './lib/tone'
 // 显式列出而非 `export *`：`VirtualWindow` / `VirtualWindowInput` 与 `./lib/logs-filters` 的同名类型语义不同
 
-// ==== FR-508 迁移批：新增视图按域补录 ====
+// ====迁移批：新增视图按域补录 ====
 // 逐条列出以便逐个核对；同名冲突沿用本文件既有先例（显式列出，冲突名走深路径）。
 // 显式列出而非 export *：AgentTokenOption 与同域其它视图同名（字段不同），
 // barrel 里不能同时通配；需要本模块版该类型的调用方走深路径。

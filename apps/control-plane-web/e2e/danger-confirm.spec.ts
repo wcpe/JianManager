@@ -1,18 +1,18 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-059 危险操作保护体系化 · 单机（Playwright + mock 模式）验收。
+/** 
+ *危险操作保护体系化 · 单机（Playwright + mock 模式）验收。
  *
- * 覆盖 FR-059 核心验收「统一危险操作确认组件 + 高危操作要求输入名称二次校验」：
+ * 覆盖核心验收「统一危险操作确认组件 + 高危操作要求输入名称二次校验」：
  * 在用户管理页对 seed 用户「operator」触发删除（scope=platform 的高危破坏性操作），
  * 断言弹出统一 DangerConfirm，且执行按钮在逐字输入资源名前一直禁用、输错仍禁用、输对才放行。
  * 以真实 UI 点击驱动（登录种子管理员 admin/admin123，role=10 为平台管理员，门禁放行→走 type-to-confirm 分支）。
  *
- * 证据落 .tmp/acceptance/FR-059/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-059 删除用户走统一确认弹窗且要求逐字输入名称二次校验', async ({ page }) => {
+test('删除用户走统一确认弹窗且要求逐字输入名称二次校验', async ({ page }) => {
   await login(page)
   await page.goto('/users')
 
@@ -40,5 +40,5 @@ test('FR-059 删除用户走统一确认弹窗且要求逐字输入名称二次�
   await typeBox.fill('operator')
   await expect(confirmBtn).toBeEnabled()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-059/single-machine-danger-confirm.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-danger-confirm.png', fullPage: true })
 })

@@ -4,8 +4,8 @@ import { renderWithProviders } from '@/test/render'
 import { NodeStartupProgressPanel } from '@/components/views/nodes/NodeStartupProgressPanel'
 import type { NodeStartupProgressInfo } from '@/api/nodes'
 
-/**
- * FR-486 范围②：节点页「正在启动的 Worker」提示条。
+/** 
+ *范围②：节点页「正在启动的 Worker」提示条。
  *
  * 三条必须守住的行为：
  *  1. 空态**不占位**——绝大多数时间没有正在启动的节点，留一块空白只是噪声；

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
-// TestLoad_OrphanScanDefaults 运行期孤儿扫描默认启用、周期 60s、策略 warn（FR-456）。
+// TestLoad_OrphanScanDefaults 运行期孤儿扫描默认启用、周期 60s、策略 warn。
 func TestLoad_OrphanScanDefaults(t *testing.T) {
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
 	require.NoError(t, err)
@@ -20,7 +20,7 @@ func TestLoad_OrphanScanDefaults(t *testing.T) {
 	assert.Equal(t, 60*time.Second, cfg.OrphanScan.ScanInterval())
 }
 
-// TestLoad_OrphanScanEnvOverride 运行期孤儿扫描可经环境变量覆盖（FR-456）。
+// TestLoad_OrphanScanEnvOverride 运行期孤儿扫描可经环境变量覆盖。
 func TestLoad_OrphanScanEnvOverride(t *testing.T) {
 	t.Setenv("JIANMANAGER_ORPHAN_SCAN_DISABLED", "true")
 	t.Setenv("JIANMANAGER_ORPHAN_SCAN_INTERVAL", "15s")
@@ -40,7 +40,7 @@ func TestOrphanScanConfig_ScanIntervalParsing(t *testing.T) {
 	assert.Equal(t, 90*time.Second, OrphanScanConfig{Interval: "90s"}.ScanInterval())
 }
 
-// TestLoad_RecoverRetryBackoffDefaults 接管重试序列默认覆盖分钟级（FR-455①）：
+// TestLoad_RecoverRetryBackoffDefaults 接管重试序列默认覆盖分钟级（①）：
 // Worker 重启后接管存活 wrapper 的重试窗口默认 1s→…→64s ≈127s（spec §6）。
 //
 // 转红方式：把默认改回旧 {1s,2s,4s}（≈7s）或删掉该键——序列值与总窗口断言失败。
@@ -58,7 +58,7 @@ func TestLoad_RecoverRetryBackoffDefaults(t *testing.T) {
 	assert.Equal(t, 127*time.Second, total, "默认重试窗口 ≈127s")
 }
 
-// TestLoad_RecoverRetryBackoffEnvOverride 接管重试序列可经环境变量/配置文件覆盖（FR-455① 测试用小值）。
+// TestLoad_RecoverRetryBackoffEnvOverride 接管重试序列可经环境变量/配置文件覆盖（① 测试用小值）。
 func TestLoad_RecoverRetryBackoffEnvOverride(t *testing.T) {
 	t.Setenv("JIANMANAGER_RECOVER_RETRY_BACKOFF", "10ms,20ms")
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
@@ -78,7 +78,7 @@ func TestRecoverConfig_RetryBackoffSequenceParsing(t *testing.T) {
 		RecoverConfig{RetryBackoff: "1s, bogus, 2s, 0s"}.RetryBackoffSequence(), "非法项应跳过")
 }
 
-// TestHealthScanConfig 巡检周期/熔断窗口解析回退默认 30s/10m；策略组装对齐本地配置（FR-459）。
+// TestHealthScanConfig 巡检周期/熔断窗口解析回退默认 30s/10m；策略组装对齐本地配置。
 func TestHealthScanConfig(t *testing.T) {
 	assert.Equal(t, 30*time.Second, HealthScanConfig{}.ScanInterval())
 	assert.Equal(t, 30*time.Second, HealthScanConfig{Interval: "bogus"}.ScanInterval())
@@ -94,7 +94,7 @@ func TestHealthScanConfig(t *testing.T) {
 	assert.False(t, HealthScanConfig{Disabled: true}.HealthPolicy().Enabled, "Disabled 应映射为 Enabled=false")
 }
 
-// TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值（FR-080，见 ADR-020）。
+// TestLoad_Defaults 零配置（无文件、无 env）时加载合理默认值（见 ADR-020）。
 func TestLoad_Defaults(t *testing.T) {
 	// 指向不存在的文件，强制走默认值（ReadInConfig 容错）。
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
@@ -178,7 +178,7 @@ func TestLoad_IgnoresLegacyGRPCPort(t *testing.T) {
 	assert.Equal(t, 19102, cfg.WS.Port)
 }
 
-// TestLoad_ControlPlaneEnvAlias 旧键 JIANMANAGER_CONTROL_PLANE 与正式键等价（FR-354）。
+// TestLoad_ControlPlaneEnvAlias 旧键 JIANMANAGER_CONTROL_PLANE 与正式键等价。
 func TestLoad_ControlPlaneEnvAlias(t *testing.T) {
 	t.Setenv("JIANMANAGER_CONTROL_PLANE", "legacy-cp:9100")
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
@@ -186,7 +186,7 @@ func TestLoad_ControlPlaneEnvAlias(t *testing.T) {
 	assert.Equal(t, "legacy-cp:9100", cfg.ControlPlane)
 }
 
-// TestLoad_ArtifactCacheCap 节点制品缓存上限默认 0（不限），可经 env 覆盖（FR-178）。
+// TestLoad_ArtifactCacheCap 节点制品缓存上限默认 0（不限），可经 env 覆盖。
 func TestLoad_ArtifactCacheCap(t *testing.T) {
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
 	require.NoError(t, err)
@@ -198,7 +198,7 @@ func TestLoad_ArtifactCacheCap(t *testing.T) {
 	assert.Equal(t, int64(1073741824), cfg2.ArtifactCache.MaxBytes)
 }
 
-// TestFindConfigFile_YmlPreferred .yml 优先于 .yaml，皆无返回空（FR-224 / FR-222 自检复用）。
+// TestFindConfigFile_YmlPreferred .yml 优先于 .yaml，皆无返回空（自检复用）。
 func TestFindConfigFile_YmlPreferred(t *testing.T) {
 	dir := t.TempDir()
 	assert.Empty(t, FindConfigFile("worker", dir), "皆无返回空")
@@ -305,7 +305,7 @@ func TestLoad_LogIngestCharsetEnvOverride(t *testing.T) {
 	assert.Equal(t, "gb18030", cfg.IngestDefaultCharset())
 }
 
-// TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（FR-222 未配置自检的一半）。
+// TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（未配置自检的一半）。
 func TestWorkerConfigExists(t *testing.T) {
 	dir := t.TempDir()
 	wd, err := os.Getwd()

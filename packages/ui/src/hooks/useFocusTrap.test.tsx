@@ -10,8 +10,8 @@ import {
 } from './focusable'
 import { useFocusTrap } from './useFocusTrap'
 
-/**
- * 焦点陷阱测试（FR-502 阶段 6）。
+/** 
+ * 焦点陷阱测试（阶段 6）。
  *
  * 焦点陷阱的 bug 都不会抛错，只会让键盘用户体验诡异——Tab 从末尾跑到遮罩背后的页面、
  * 关闭弹窗后焦点掉到 body、鼠标点出去反被拽回来。故这里逐条锁定这些**方向性契约**：

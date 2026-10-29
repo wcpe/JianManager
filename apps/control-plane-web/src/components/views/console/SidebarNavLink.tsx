@@ -15,7 +15,7 @@ export interface SidebarNavLinkProps extends NavEntry {
   renderLink: NavLinkRenderer
 }
 
-/** 侧栏单个导航链接（FR-061 高密度 + MC 绿激活态）；`/` 用 end 精确匹配。 */
+/** 侧栏单个导航链接（高密度 + MC 绿激活态）；`/` 用 end 精确匹配。 */
 export function SidebarNavLink({ to, labelKey, icon: Icon, nested = false, renderLink }: SidebarNavLinkProps) {
   const { t } = useTranslation()
   const exact = to === '/' || to === '/networks'

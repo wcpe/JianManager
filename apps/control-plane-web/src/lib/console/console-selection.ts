@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { LogLine } from './console-log-line'
 
-/**
- * 锚点选区内核（FR-418，spec §3.1）。
+/** 
+ * 锚点选区内核（spec §3.1）。
  *
  * 存在的理由是 ADR-086 代价 2：输出区改成虚拟列表后**只有可视行有 DOM 节点**，
  * 原生跨行选区一旦拖出视口，屏幕外那些行既没有节点、也进不了 `window.getSelection()`
@@ -11,12 +11,12 @@ import type { LogLine } from './console-log-line'
  * 只记 `seq` 区间，文本落定时**从行缓冲按 seq 取 `raw`**。
  *
  * 本模块**故意不含任何 DOM/组件知识**（除了两个用 ref/state 的通用 hook）：
- * FR-421 的键盘复制模式要复用同一套区间语义——`begin`/`extendTo`/`selectAll`/`setRange`
+ *的键盘复制模式要复用同一套区间语义——`begin`/`extendTo`/`selectAll`/`setRange`
  * 对应键盘的「起点 / 移动 / 全选 / 选块」，`selectionText` 则是 `yank`。
  * 鼠标与键盘只是两种「怎么算出 seq」的方式，区间与取文本的规则必须只有一份。
  */
 
-/**
+/** 
  * seq 锚点区间（闭区间，端点可逆序）。
  *
  * 保留 anchor/head 的方向而不直接存 min/max：`Shift+Click` 与键盘扩选要求
@@ -43,7 +43,7 @@ export function seqRangeContains(range: SeqRange | null | undefined, seq: number
   return seq >= start && seq <= end
 }
 
-/**
+/** 
  * 行是否属于选区。
  *
  * 除了自身落在区间内，**堆栈帧还跟随其异常头行**（`stackOf`）：折叠状态下用户只能拖到头行，
@@ -57,7 +57,7 @@ export function isLineSelected(range: SeqRange | null | undefined, line: LogLine
   return line.stackOf !== undefined && seqRangeContains(range, line.stackOf)
 }
 
-/**
+/** 
  * 区间内的行。
  *
  * 入参必须是**行缓冲的全量快照**而不是渲染用的可视行——这正是「不从 DOM 取」的落点。
@@ -97,7 +97,7 @@ export const AUTO_SCROLL_MAX_STEP = 24
 /** 自动滚动的 tick 间隔（ms，≈60fps）。 */
 export const AUTO_SCROLL_TICK_MS = 16
 
-/**
+/** 
  * 按指针到视口上/下边缘的距离算滚动步长（px/tick，负=上滚）。
  *
  * 纯函数：边缘判定与加速曲线要能单测，不必真起一个容器。指针在中间区域返回 0，
@@ -126,7 +126,7 @@ export function edgeScrollStep(
   return 0
 }
 
-/** 选区内核对外的操作面（鼠标与 FR-421 键盘复制模式共用同一套）。 */
+/** 选区内核对外的操作面（鼠标与键盘复制模式共用同一套）。 */
 export interface SeqSelectionApi {
   range: SeqRange | null
   /** 落下锚点（鼠标 mousedown / 键盘打标记）。 */
@@ -168,12 +168,12 @@ export interface EdgeAutoScrollApi {
   isRunning: () => boolean
 }
 
-/**
+/** 
  * 边缘自动滚动定时器。
  *
  * 用 `setInterval` 而非 `requestAnimationFrame`：后者在页签隐藏时不触发，
  * 会把「拖拽中切走页签」变成一个永不结束的拖拽；且 rAF 在 jsdom 下不可断言，
- * 而「自动滚动必须能停」是 FR-418 的验收项，得测得到。
+ * 而「自动滚动必须能停」是的验收项，得测得到。
  *
  * 停止有三个出口且都收敛到 `stop()`：步长归零、显式调用、组件卸载——
  * 绝不留下一个还在滚已消失容器的定时器。

@@ -403,7 +403,7 @@ func newTestSigner(t *testing.T) *BusinessConfirmTokenSigner {
 	return signer
 }
 
-// ── 动作风险的信任链（FR-532~537 安全修复）──────────────────────────
+// ── 动作风险的信任链（~537 安全修复）──────────────────────────
 //
 // ## 守的是什么
 //

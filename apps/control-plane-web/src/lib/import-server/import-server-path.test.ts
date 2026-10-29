@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { joinAbsPath, isPermissionErrorMessage } from '@/lib/import-server/import-server-path'
 
-describe('import-server-path（FR-374）', () => {
+describe('import-server-path', () => {
   it('joinAbsPath Unix', () => {
     expect(joinAbsPath('/home/mcuser', 'server.properties')).toBe('/home/mcuser/server.properties')
     expect(joinAbsPath('/home/mcuser/', 'server.properties')).toBe('/home/mcuser/server.properties')

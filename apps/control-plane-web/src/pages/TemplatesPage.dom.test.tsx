@@ -6,8 +6,8 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import TemplatesPage from './TemplatesPage'
 
-/**
- * TemplatesPage 强断言（FR-202 供给与模板域）：验 render harness + 假后端 templates 联动 + 错误注入。
+/** 
+ * TemplatesPage 强断言（供给与模板域）：验 render harness + 假后端 templates 联动 + 错误注入。
  * 三条统一断言：① 渲染出 seed 模板；② 创建 / 删除后列表联动；③ 注入错误后页面显错误态（非崩溃）。
  * 受 requireAuth 保护的端点（GET/POST/DELETE /templates）需先 loginMockUser 放行。
  */

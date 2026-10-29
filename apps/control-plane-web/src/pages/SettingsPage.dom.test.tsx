@@ -8,8 +8,8 @@ import { useAuthStore } from '@/stores/auth'
 import SettingsPage from './SettingsPage'
 import { keyCategory, validateSettingDraft } from '@/lib/settings/settings-form'
 
-/**
- * SettingsPage 强断言（FR-210）：渲染 seed 平台配置 → 改设置保存联动回读新值 → 注入 500 显错误态。
+/** 
+ * SettingsPage 强断言：渲染 seed 平台配置 → 改设置保存联动回读新值 → 注入 500 显错误态。
  * 平台配置分类仅平台管理员（role=10）可见，故以 role=10 的假 JWT 登录。
  */
 
@@ -85,7 +85,7 @@ describe('SettingsPage（mock 假后端）', () => {
     expect(validateSettingDraft('platform.public_base_url', 'http://user:pass@panel.example.com')).toBe('settings.invalidPlatformPublicBaseUrl')
   })
 
-  // github.token（FR-409）：网络分类可编辑 + 快捷创建按钮新标签打开 GitHub fine-grained 令牌创建页（名字/描述/永不过期预填）。
+  // github.token：网络分类可编辑 + 快捷创建按钮新标签打开 GitHub fine-grained 令牌创建页（名字/描述/永不过期预填）。
   it('github.token 归网络分类，快捷按钮直达 GitHub 创建页', async () => {
     loginAsPlatformAdmin()
     const user = userEvent.setup()
@@ -106,7 +106,7 @@ describe('SettingsPage（mock 假后端）', () => {
 })
 
 describe('SettingsPage 布尔设置项（输入侧优化）', () => {
-  /**
+  /** 
    * debug.mode 是唯一的布尔型平台设置。
    *
    * 此前它被做成 true/false 下拉：二值状态变成「选项」，读起来像还有第三种可能。

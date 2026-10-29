@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import InstanceBatchBar from '@/components/views/instances/InstanceBatchBar'
 import type { InstanceBatchResult } from '@/lib/instances/instance-batch'
 
-/**
- * FR-058 / FR-139 实例批量操作栏 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *实例批量操作栏 · 受控视图测（ADR-103 b 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。断言聚焦本组件自己的语义：
  * 状态感知禁用、二次确认（停止/命令复述、kill 关键字）、部分失败的明细与「保留失败项选择」。
@@ -92,7 +92,7 @@ function renderBar(props: Partial<Props> = {}) {
   return merged
 }
 
-describe('InstanceBatchBar（FR-058 / FR-139 · ADR-103 b 范式）', () => {
+describe('InstanceBatchBar（ADR-103 b 范式）', () => {
   it('未选实例时各动作禁用，并给出原因', () => {
     renderBar({ selected: [] })
 

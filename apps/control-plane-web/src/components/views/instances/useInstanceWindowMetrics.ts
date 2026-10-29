@@ -1,5 +1,5 @@
-/**
- * @file useInstanceWindowMetrics：可见窗口实例的实时指标批量取数（消费 FR-340 的
+/** 
+ * @file useInstanceWindowMetrics：可见窗口实例的实时指标批量取数（消费的
  *       `POST /metrics/series/batch`）。行渲染件不取数（ADR-103 b）：窗口归属虚拟表——
  *       表把 `range` 上报给页面，页面据此切片实例列表并在此 hook 统一取数，逐行注入快照。
  *
@@ -38,7 +38,7 @@ const WINDOW_METRIC_KEYS = [
   'inst_cpu_pct',
   'inst_heap_used',
   'inst_players_online',
-  // FR-511：侧栏行尾要「当前/最大」，上限必须在同一批里取，否则要二次请求。
+  // 侧栏行尾要「当前/最大」，上限必须在同一批里取，否则要二次请求。
   'inst_players_max',
 ]
 
@@ -57,7 +57,7 @@ interface CachedSnapshot {
   tick: number
 }
 
-/**
+/** 
  * 累积快照缓存（uuid → 快照 + 取得节拍），**模块级普通容器**。
  *
  * 【为什么不是 useState / useRef】
@@ -79,7 +79,7 @@ const snapshotCache = new Map<string, CachedSnapshot>()
 const WINDOW_RANGE: MetricRange = '1h'
 const WINDOW_RESOLUTION: MetricResolution = 'raw'
 
-/**
+/** 
  * 轻量模式的区间与粒度（侧栏用）：只需要**末点**（当前人数 / 上限 / TPS / CPU / 内存），
  * 不需要 1h 的 120 个采样点，更不需要心跳带（侧栏不画心跳带，悬停卡的心跳来自同一批数据，
  * 但侧栏滚一屏就是几十台——1h raw × 5 指标 × 30 台，实测响应 575KB）。
@@ -115,7 +115,7 @@ export function snapshotFromSeries(series: MetricSeries[]): InstanceMetricSnapsh
     playersMax: lastAvg(byKey.get('inst_players_max')?.points ?? []),
     // 心跳三态：缺测 null、值 >0 活跃、=0 停摆（TPS 归零即无活动）。
     heartbeat: tpsPoints.slice(-HEARTBEAT_SLOTS).map((p) => (p.avg == null ? null : p.avg > 0)),
-    /*
+    /* 
       序列一并带出（缩略图与悬浮图用）：这些点本来就在响应里，丢掉只会逼后续再请求一次。
       抽稀到最多 SPARK_POINTS 个点——行内缩略图只有约 60px 宽，200 个点画不出更多信息，
       却要多占内存并在悬浮时重绘整条路径。
@@ -132,7 +132,7 @@ export function snapshotFromSeries(series: MetricSeries[]): InstanceMetricSnapsh
 /** 缩略图/悬浮图的最大点数。 */
 const SPARK_POINTS = 60
 
-/**
+/** 
  * 序列抽稀：等间隔取样，保留最后一点。
  *
  * 不取平均而是**取样**：平均值会把尖峰抹平，而缩略图的价值恰恰在「刚才是不是抖过」。
@@ -150,14 +150,14 @@ function thin(points: SeriesPoint[]): { ts: string; value: number }[] {
   return out
 }
 
-/**
+/** 
  * 可见窗口实例 → uuid→快照 映射。`visible` 由页面按虚拟表上报的 range 切片而来；
  * 调用方无需稳定数组引用（内部按去重排序后的 id 集合定键）。
  */
 export function useInstanceWindowMetrics(
   visible: InstanceInfo[],
   options: {
-    /**
+    /** 
      * 轻量模式（侧栏用）：只要末点值，`range/resolution` 换成预聚合档以大幅缩小响应。
      * 代价是心跳带只有 5 分钟粒度的粗格——侧栏不展示心跳，故无影响。
      */
@@ -183,7 +183,7 @@ export function useInstanceWindowMetrics(
   }, [idsKey])
   const stableIds = useMemo(() => (stableKey ? stableKey.split(',') : []), [stableKey])
 
-  /**
+  /** 
    * 刷新节拍：每 `REFRESH_MS` 推进一次，是「同一批目标再拉一遍」的唯一表达方式
    * （查询键不变就永远命中缓存），同时作为缓存过期判定的基准。
    */
@@ -193,7 +193,7 @@ export function useInstanceWindowMetrics(
     return () => window.clearInterval(timer)
   }, [])
 
-  /**
+  /** 
    * 本批真正要请求的目标 = 视口内「还没取过」或「已过期」的那些。
    *
    * 滚动是平移窗口：上一屏通常有十几台仍在下一屏，只补新进视口的那几台。

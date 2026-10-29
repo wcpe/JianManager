@@ -25,7 +25,7 @@ import (
 
 type fakeFR034RouteWorker struct {
 	workerpb.WorkerServiceClient
-	// FR-319/323：provision 异步化后 DownloadCore/WriteConfig 在后台 goroutine 调用，
+	// 323：provision 异步化后 DownloadCore/WriteConfig 在后台 goroutine 调用，
 	// 测试主协程需并发读——加锁保证 race 安全（go test -race）。
 	mu       sync.Mutex
 	download *workerpb.DownloadCoreRequest
@@ -145,7 +145,7 @@ func TestFR034ProvisionRoutes(t *testing.T) {
 		"nodeId": node.ID, "name": "fr034-route-lobby", "coreType": "paper", "mcVersion": "1.21.1", "jdkId": jdk.ID, "memoryMb": 2048, "onlineMode": false,
 	}, adminToken)
 	require.Equal(t, http.StatusCreated, createResp.Code, createResp.Body.String())
-	// FR-319/323：provision 异步化，响应 {instance, taskId}；下载/写配置在后台任务推进。
+	// 323：provision 异步化，响应 {instance, taskId}；下载/写配置在后台任务推进。
 	var wrapper struct {
 		Instance model.Instance `json:"instance"`
 		TaskID   string         `json:"taskId"`
@@ -153,7 +153,7 @@ func TestFR034ProvisionRoutes(t *testing.T) {
 	require.NoError(t, json.Unmarshal(createResp.Body.Bytes(), &wrapper))
 	inst := wrapper.Instance
 	// 本测试未接线 TaskService（走同步回退，taskId 空）——异步任务机制由 provision_fr319_test 覆盖；
-	// 此处只验 FR-034 核心解析→下载→写配置流。
+	// 此处只验核心解析→下载→写配置流。
 	require.Equal(t, model.InstanceRoleBackend, inst.Role)
 	require.Equal(t, model.InstanceTypeMinecraftJava, inst.Type)
 	require.Equal(t, 25565, inst.ServerPort)

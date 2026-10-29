@@ -7,8 +7,8 @@ import { useAuthStore } from '@/stores/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import BusinessSegment from './BusinessSegment'
 
-/**
- * BusinessSegment 强断言（FR-206 业务台）：
+/** 
+ * BusinessSegment 强断言（业务台）：
  * manifest 驱动渲染能力清单 → 选只读动作下发命中 → 注入 manifest 500 显不可用降级。
  * manifest seed 含 economy 域 balance/leaderboard/transfer/... （见 mocks/handlers/domains/plugin.ts）。
  */
@@ -39,7 +39,7 @@ describe('BusinessSegment（mock 假后端）', () => {
   it('对象型入参下发为真嵌套对象（inventory.writeBasicAttrs 的 edited 还原为对象）', async () => {
     const user = userEvent.setup()
     loginMockUser()
-    // 写动作二次确认需组管理员及以上（FR-059 角色门禁）。
+    // 写动作二次确认需组管理员及以上（角色门禁）。
     useAuthStore.setState({ role: 1, isAuthenticated: true })
     renderWithProviders(<BusinessSegment instanceId={1} />)
 

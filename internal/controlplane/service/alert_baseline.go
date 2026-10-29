@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 动态基线检测（FR-462）。
+// 动态基线检测。
 //
 // 全部为无状态纯函数：输入一段时序窗口（已按时间升序、去掉缺测点）与规则配置，
 // 输出是否越界及偏离量。评估器每周期从时序库现算，不保留跨进程状态，重启无副作用。
@@ -304,11 +304,11 @@ var nodeMetricAliases = map[string]string{
 	model.MetricNodeDiskUsed: model.MetricNodeDiskUsed,
 	"load":                   model.MetricNodeLoad,
 	model.MetricNodeLoad:     model.MetricNodeLoad,
-	// iowait（FR-485）：别名与自键都登记，规则里写 metric: "iowait" 或 "node_iowait" 均可命中。
+	// iowait：别名与自键都登记，规则里写 metric: "iowait" 或 "node_iowait" 均可命中。
 	"iowait": model.MetricNodeIOWait, "io_wait": model.MetricNodeIOWait,
 	model.MetricNodeIOWait: model.MetricNodeIOWait,
 
-	// 日志采集面（FR-485）。每个键都给出**可读别名**：规则是运维手写的，
+	// 日志采集面。每个键都给出**可读别名**：规则是运维手写的，
 	// 逼他们背 log_state_file_growth_bytes_per_sec 这种长名会直接导致写错而静默不告警。
 	"log_state_size": model.MetricLogStateFileSize, "log_state_bytes": model.MetricLogStateFileSize,
 	model.MetricLogStateFileSize: model.MetricLogStateFileSize,
@@ -329,7 +329,7 @@ var nodeMetricAliases = map[string]string{
 	"log_slow_sql_max":          model.MetricLogSlowSQLMaxMs, "slow_sql_max_ms": model.MetricLogSlowSQLMaxMs,
 	model.MetricLogSlowSQLMaxMs: model.MetricLogSlowSQLMaxMs,
 
-	// 百分比口径的节点资源键（FR-485）：nodes 表存 0..1 分数，而阈值是百分比。
+	// 百分比口径的节点资源键：nodes 表存 0..1 分数，而阈值是百分比。
 	// 用这些键可以写出「磁盘 > 85」这种直觉阈值；旧键（disk/memory/cpu）语义**保持不变**，
 	// 因为改它会悄悄放大全部存量规则的阈值（见 getNodeMetric 的量纲说明）。
 	//
@@ -387,7 +387,7 @@ func saturationPercent(usedKey string, used, limit *float64) (float64, bool) {
 		return *used / *limit * 100, true
 	}
 	// 百分比型指标（cpu）自身即饱和度。
-	// FR-485：iowait 与 cpu 同为百分比型指标（unit=pct，0..100），自身即饱和度；
+	// iowait 与 cpu 同为百分比型指标（unit=pct，0..100），自身即饱和度；
 	// 不登记在此的话，饱和度型 iowait 规则会恒返回 (0,false) 而永不触发。
 	//
 	// 投递失败率同理（unit=pct，0..100）：「失败率饱和到 100%」本身就是规则想表达的意思，

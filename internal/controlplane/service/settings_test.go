@@ -107,7 +107,7 @@ func TestGet_SensitiveMasked(t *testing.T) {
 	require.NotContains(t, dsn.Value, "supersecret") // 口令段被打码
 }
 
-// TestGet_WSTokenSecretDisplay jwt.ws_secret 只读展示（FR-275，见 ADR-061）：
+// TestGet_WSTokenSecretDisplay jwt.ws_secret 只读展示（见 ADR-061）：
 // 显式配置掩码；未配置按 dev_mode 显示来源描述，不回显 autogen 解析出的密钥值。
 func TestGet_WSTokenSecretDisplay(t *testing.T) {
 	// 显式配置 → 掩码 + sensitive。
@@ -199,8 +199,8 @@ func TestUpdate_RejectsInvalidValue(t *testing.T) {
 	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyBackupRetentionDays: "-1"}), ErrSettingValueInvalid)
 }
 
-// TestDirectProbeTimeoutsSetting MC 直探超时可配：默认 3s、覆盖生效、非正/超上界被拒（FR-446）。
-// 上界与「单拍采集预算 < 心跳节拍」自洽（FR-446 复审 NEW-ISSUE A），故断言直接引用共享常量，
+// TestDirectProbeTimeoutsSetting MC 直探超时可配：默认 3s、覆盖生效、非正/超上界被拒。
+// 上界与「单拍采集预算 < 心跳节拍」自洽（复审 NEW-ISSUE A），故断言直接引用共享常量，
 // 上界调整时本用例自动跟随。
 func TestDirectProbeTimeoutsSetting(t *testing.T) {
 	db := newSettingsTestDB(t)
@@ -246,7 +246,7 @@ func TestDirectProbeTimeoutsSetting(t *testing.T) {
 }
 
 // TestDirectProbeTimeoutBoundMatchesSharedContract 锁定 CP 侧（写校验/读钳制/实时链路估算所引用的）
-// 直探超时默认与上界与共享契约包一致（FR-446 复审 NEW-ISSUE A）：任一处改走独立字面量即失败。
+// 直探超时默认与上界与共享契约包一致（复审 NEW-ISSUE A）：任一处改走独立字面量即失败。
 func TestDirectProbeTimeoutBoundMatchesSharedContract(t *testing.T) {
 	require.Equal(t, directprobe.DefaultTimeout, defaultDirectProbeTimeout)
 	require.Equal(t, directprobe.MaxTimeout, maxDirectProbeTimeout)
@@ -268,7 +268,7 @@ func TestDirectProbeTimeoutsFallsBackOnBadPersistedValue(t *testing.T) {
 	require.Equal(t, 3*time.Second, query)
 }
 
-// TestDirectProbeTimeoutsClampsReadSideToUpperBound 读/下发路径同样钳制到共享上界（FR-446 复审 N3）：
+// TestDirectProbeTimeoutsClampsReadSideToUpperBound 读/下发路径同样钳制到共享上界（复审 N3）：
 // 绕过写校验直接落库（模拟 yaml/env 基线或历史值）也不得把生效超时推到上界之上，
 // 否则每实例每拍最坏阻塞量会拖垮心跳采集预算与节拍（NEW-ISSUE A）。
 func TestDirectProbeTimeoutsClampsReadSideToUpperBound(t *testing.T) {
@@ -308,7 +308,7 @@ func TestNewService_ReplaysPersistedLogLevel(t *testing.T) {
 	config.SetLogLevel("info") // 复位
 }
 
-// === 出站代理（network 分类，FR-185 / ADR-043） ===
+// === 出站代理（network 分类ADR-043） ===
 
 // TestProxy_KeysEditableAndNetwork proxy.url/proxy.no_proxy 为可编辑项；proxy.url 标 sensitive、脱敏展示。
 func TestProxy_KeysEditableAndNetwork(t *testing.T) {
@@ -393,7 +393,7 @@ func TestProxy_UpdateRebuildsProvider(t *testing.T) {
 	config.SetLogLevel("info")
 }
 
-// === 调试模式开关（FR-225，增强 FR-063） ===
+// === 调试模式开关（增强） ===
 
 // TestDebugMode_DefaultFalseEditableImmediate 无覆盖时 debug.mode 默认 false、可编辑、即时生效。
 func TestDebugMode_DefaultFalseEditableImmediate(t *testing.T) {
@@ -458,7 +458,7 @@ func TestDebugMode_BaselineAppliesGinRelease(t *testing.T) {
 	require.False(t, *ginDebug)
 }
 
-// TestGitHubToken_BaselineFromYAMLAndMasked github.token（FR-063/FR-409）：无 DB 覆盖时展示
+// TestGitHubToken_BaselineFromYAMLAndMasked github.token：无 DB 覆盖时展示
 // yml/env 基线（update.github_token）的掩码，敏感、可编辑、即时生效；生效值走基线。
 func TestGitHubToken_BaselineFromYAMLAndMasked(t *testing.T) {
 	cfg := testConfig()

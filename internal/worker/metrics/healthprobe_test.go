@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// FR-459 响应维度探针：TCP connect 成功/失败、HTTP 2xx/非 2xx、未配置端口。
+// 响应维度探针：TCP connect 成功/失败、HTTP 2xx/非 2xx、未配置端口。
 
 func TestTCPHealthProbe(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -1,5 +1,5 @@
-/**
- * 日志中心「限流不清空 + 每 tick 只发一次」DOM 回归（生产 429 根因，FR-482）。
+/** 
+ * 日志中心「限流不清空 + 每 tick 只发一次」DOM 回归（生产 429 根因）。
  *
  * 生产证据（2026-10 `/api/v1/logs/federation`，近 20MB cp.out、9199 条请求）：
  * 该端点 2676 次请求中 683 次非 200，其中 429 限流 636 次（23.8%）；同一批参数还会成对
@@ -94,7 +94,7 @@ async function renderFollowing() {
   await vi.advanceTimersByTimeAsync(300)
 }
 
-describe('日志中心限流保留与轮询节流（FR-482）', () => {
+describe('日志中心限流保留与轮询节流', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     // 无 pointer capture 的 jsdom 下 Radix Select/按钮交互需要的最小补丁。

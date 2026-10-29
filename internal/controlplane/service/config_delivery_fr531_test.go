@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-531 / FR-532 单测：覆盖 spec §12 与 §17 的全部验收项。
+// 单测：覆盖 spec §12 与 §17 的全部验收项。
 //
 // 测试用纯内存 SQLite + 注入的落盘/生效实现，不触碰真实 Worker 与探针。
 
@@ -666,7 +666,7 @@ func TestActivationHotReloadPluginFailed(t *testing.T) {
 
 // TestActivationBestEffortNotReportedAsApplied 验收 3：BEST_EFFORT 不被标成「已生效」。
 //
-// 这是整个 FR-532 最容易做错的地方：Bukkit 的 reloadConfig() 是 void 返回，
+// 这是整个最容易做错的地方：Bukkit 的 reloadConfig() 是 void 返回，
 // 插件吞了异常探针也无从得知。记 activated 是为了让流程能继续，
 // 但文案与 activate_confirmed 必须明确「未提供确认」。
 func TestActivationBestEffortNotReportedAsApplied(t *testing.T) {

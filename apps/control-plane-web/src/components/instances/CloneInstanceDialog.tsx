@@ -7,7 +7,7 @@ import CloneInstanceDialogView, {
   type CloneFormDraft,
 } from '@/components/views/instances/CloneInstanceDialogView'
 
-/** 把逗号/换行分隔的 glob 串解析为数组（FR-231 高级复制筛选）。 */
+/** 把逗号/换行分隔的 glob 串解析为数组（高级复制筛选）。 */
 const parseGlobs = (s: string) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)
 
 /** 复制端点的错误形态（`error` 码 + 服务端 message）。 */
@@ -19,8 +19,8 @@ interface CloneInstanceDialogProps {
   onClose: () => void
 }
 
-/**
- * 复制子服向导接线层（ADR-103 b 范式，原 FR-036 一键复制 / FR-231 高级筛选）。
+/** 
+ * 复制子服向导接线层（ADR-103 b 范式，原一键复制高级筛选）。
  *
  * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast）；本层负责：
  * - 代理候选：`useInstances({ role: 'proxy' })` 取数后注入（原实现同源）；

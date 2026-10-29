@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// Bot 规模化查询/聚合/批量操作（FR-038）。
+// Bot 规模化查询/聚合/批量操作。
 // 万级 Bot 下不全量序列化：列表分页、摘要走 DB 聚合，批量经 gRPC 按节点分片并发委托。
 
 const (

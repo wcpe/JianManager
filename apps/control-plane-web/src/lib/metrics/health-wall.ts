@@ -1,8 +1,8 @@
 import type { HealthLevel, HealthWallNode, HealthWallSort } from './health-wall-types'
 import type { StatusLevel } from '@jianmanager/ui/lib/threshold'
 
-/**
- * 集群健康墙（FR-461）纯函数：分级排序、标签、配色与汇总计数。
+/** 
+ * 集群健康墙纯函数：分级排序、标签、配色与汇总计数。
  * 抽成无 React 依赖以便单测；排序由服务端完成，这里仅提供展示口径与统计。
  */
 

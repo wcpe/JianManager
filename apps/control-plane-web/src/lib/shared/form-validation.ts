@@ -1,5 +1,5 @@
-/**
- * 创建/编辑模态框统一字段校验（FR-072）。
+/** 
+ * 创建/编辑模态框统一字段校验。
  *
  * 纯函数，无 DOM/React 依赖，便于单测且可在任意表单复用。每个校验返回
  * i18n key（validation 命名空间）或 undefined（合法）。调用方据此做提交前阻断与内联提示。
@@ -13,7 +13,7 @@ export function validateRequired(value: string): FieldError {
   return value.trim() === '' ? 'validation.required' : undefined
 }
 
-/**
+/** 
  * 最小长度校验工厂。空串放行（交由 required 把关）；非空但短于 min 时判错。
  * 返回的错误 key 为 `validation.minLength`（调用方用 i18n 插值 {{min}} 提示具体值）。
  */
@@ -24,7 +24,7 @@ export function minLength(min: number): (value: string) => FieldError {
   }
 }
 
-/**
+/** 
  * 端口号：1–65535 的整数。空串视为合法（由 required 单独把关），
  * 这样选填端口字段不会因留空而误报。
  */
@@ -37,7 +37,7 @@ export function validatePort(value: string): FieldError {
   return undefined
 }
 
-/**
+/** 
  * 正整数（如内存 MB、大版本号）。空串合法（交由 required 把关）。
  * 0 不算正整数。
  */
@@ -49,7 +49,7 @@ export function validatePositiveInt(value: string): FieldError {
   return undefined
 }
 
-/**
+/** 
  * 非负数。空串合法（选填）。
  * 0 放行，负数判错。资源限额请用 validateResourceLimitNumber。
  */
@@ -60,9 +60,9 @@ export function validateNonNegativeNumber(value: string): FieldError {
   return Number(trimmed) < 0 ? 'validation.nonNegativeNumber' : undefined
 }
 
-/**
+/** 
  * 资源限额数字（CPU 核数允许小数，内存/磁盘 MiB 由后端归一化）。空串合法；
- * 0 与负值均表示不限制（FR-079），因此这里只校验“是不是数字”。
+ * 0 与负值均表示不限制，因此这里只校验“是不是数字”。
  */
 export function validateResourceLimitNumber(value: string): FieldError {
   const trimmed = value.trim()
@@ -70,7 +70,7 @@ export function validateResourceLimitNumber(value: string): FieldError {
   return /^-?\d+(\.\d+)?$/.test(trimmed) ? undefined : 'validation.resourceLimitNumber'
 }
 
-/**
+/** 
  * 绝对路径（工作目录/JDK 路径）。空串合法（交由 required 把关）。
  * 接受 Unix 绝对路径（`/...`）或 Windows 盘符路径（`C:\...` 或 `C:/...`），
  * 不做存在性校验（最终以 Worker 落地为准）。
@@ -83,7 +83,7 @@ export function validateAbsPath(value: string): FieldError {
   return unix || win ? undefined : 'validation.absPath'
 }
 
-/**
+/** 
  * URL（下载地址等）。空串合法（交由 required 把关）。
  * 仅接受 http/https，避免误填非法 scheme。
  */
@@ -98,7 +98,7 @@ export function validateUrl(value: string): FieldError {
   }
 }
 
-/**
+/** 
  * 环境变量引用（备份凭证等，config-files.md 要求 `${ENV_VAR}` 形式）。
  * 空串合法（选填）；非空时必须形如 `${NAME}`，NAME 由字母/数字/下划线组成且不以数字开头。
  */
@@ -121,7 +121,7 @@ export function validateHost(value: string): FieldError {
 /** 校验规则集合：字段名 → 校验函数链（按序短路，返回首个错误）。 */
 export type FieldRules<T extends string> = Partial<Record<T, Array<(v: string) => FieldError>>>
 
-/**
+/** 
  * 对一组字段值跑校验规则，返回 字段名 → 首个错误 的映射（仅含有错字段）。
  * 提交前调用：结果为空对象即可提交。
  */

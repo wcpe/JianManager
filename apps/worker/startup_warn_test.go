@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// FR-486 范围④：启动期状态规模超阈告警。
+// 范围④：启动期状态规模超阈告警。
 //
 // 这些用例只验「阈值判定与不阻断启动」这两件事——告警的**输出**是 slog，
 // 用日志库断言代价高于价值；关键是「什么时候判超、什么时候不判超、判错时会不会弄坏启动」。
@@ -55,7 +55,7 @@ func TestWarnIfStateTooLarge_BelowThresholdNoPanic(t *testing.T) {
 
 // TestWarnIfStateTooLarge_CountsSubdirectories 事件段在子目录里，必须一并计入。
 //
-// 这条守的是真实的坑：事件正文已按 FR-484 外移到 var/log/events/ 下的段文件。
+// 这条守的是真实的坑：事件正文已按外移到 var/log/events/ 下的段文件。
 // 若只 stat 顶层文件，一条 1.2GB 的事件段会被算成 0MB，告警永不触发。
 func TestWarnIfStateTooLarge_CountsSubdirectories(t *testing.T) {
 	root := newRootForTest(t, map[string]int{

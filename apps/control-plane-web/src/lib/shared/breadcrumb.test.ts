@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { breadcrumbTrail } from './breadcrumb'
 
-describe('breadcrumbTrail（FR-431 六域）', () => {
+describe('breadcrumbTrail（六域）', () => {
   it('根路径 → 平台首页（无 to）', () => {
     expect(breadcrumbTrail('/')).toEqual([{ labelKey: 'nav.platformHome' }])
     expect(breadcrumbTrail('')).toEqual([{ labelKey: 'nav.platformHome' }])

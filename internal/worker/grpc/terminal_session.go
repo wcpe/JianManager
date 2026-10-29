@@ -14,10 +14,10 @@ import (
 )
 
 // SetTerminalWSAddr 注入本机终端 WS 服务地址（如 ws://127.0.0.1:9102/ws/terminal），
-// 供 TerminalSession 回环桥接（FR-281 M2，见 ADR-066）。空值表示未装配，RPC 返回 Unavailable。
+// 供 TerminalSession 回环桥接（M2，见 ADR-066）。空值表示未装配，RPC 返回 Unavailable。
 func (s *Server) SetTerminalWSAddr(addr string) { s.terminalWSAddr = addr }
 
-// TerminalSession 终端会话隧道桥（FR-281 M2，见 ADR-066）。
+// TerminalSession 终端会话隧道桥（M2，见 ADR-066）。
 // 首帧必须为 open（携带 CP 签发的一次性终端令牌）；本方法在本机回环拨自身 WS 终端服务
 // 并把 gRPC 流 ⇄ 本机 WS 双向原样泵帧——令牌校验与会话层的单一真源仍是 ws.TerminalServer
 // （ADR-061 信任模型不变，本方法零复制校验/会话逻辑）。经反向隧道承载时 CP→Worker 终端零入站。
@@ -42,7 +42,7 @@ func (s *Server) TerminalSession(stream workerpb.WorkerService_TerminalSessionSe
 		if resp != nil {
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-				// 令牌被拒以 PermissionDenied 透传，让 CP 侧 FR-276 定向诊断在 gRPC 路径同样成立。
+				// 令牌被拒以 PermissionDenied 透传，让 CP 侧定向诊断在 gRPC 路径同样成立。
 				return status.Errorf(codes.PermissionDenied, "终端令牌被拒绝（HTTP %d）", resp.StatusCode)
 			}
 		}

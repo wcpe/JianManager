@@ -16,7 +16,7 @@ func platformListen(addr string) (net.Listener, error) {
 }
 
 // platformDial 在 Linux/macOS 上拨号到 Unix Socket。
-// 用 DialTimeout 避免对端 accept 队列打满时无限阻塞（FR-456 F9）；调用方（connectLoop / 探活）
+// 用 DialTimeout 避免对端 accept 队列打满时无限阻塞（F9）；调用方（connectLoop / 探活）
 // 自带重试或外层超时。
 func platformDial(addr string) (net.Conn, error) {
 	return platformDialTimeout(addr, platformDialDefaultTimeout)

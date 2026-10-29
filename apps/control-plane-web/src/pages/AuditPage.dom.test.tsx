@@ -9,7 +9,7 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import AuditPage from './AuditPage'
 
-/**
+/** 
  * 滚到底部。jsdom 不做布局（scrollHeight 恒 0、没有真滚动条），但 scrollTop 是普通可读写属性
  * （`Element.prototype.scrollTop` 被 jsdom 实现为取值/赋值，不参与布局），故直接设到远超内容高度的
  * 偏移再派发 scroll —— 等价于浏览器里把列表拖到底：视口裁剪随之取末段行。
@@ -19,7 +19,7 @@ function scrollToBottom(el: HTMLElement) {
   fireEvent.scroll(el)
 }
 
-/**
+/** 
  * 等 action 筛选（容器侧 300ms 防抖）真正落地。
  *
  * 必须**在同一帧内**同时成立「命中行在 + 未命中行不在」：只等未命中行消失会命中重查期间的空窗
@@ -33,8 +33,8 @@ async function waitActionFiltered() {
   })
 }
 
-/**
- * AuditPage 强断言（FR-199 身份访问域）。受 requireAuth 保护：渲染前 loginMockUser()。
+/** 
+ * AuditPage 强断言（身份访问域）。受 requireAuth 保护：渲染前 loginMockUser()。
  * AuditPage 同时调 GET /users（筛选下拉）+ GET /audit（列表），两者均由本域 mock。
  * 三条：① 渲染种子审计行 ② 筛选 action 后列表联动收窄 ③ 注入 500 后页面显错误态。
  */
@@ -45,7 +45,7 @@ describe('AuditPage（mock 假后端）', () => {
     expect(await screen.findByText('user.login')).toBeInTheDocument()
     expect(screen.getByText('instance.start')).toBeInTheDocument()
     expect(screen.getByText('group.create')).toBeInTheDocument()
-    /*
+    /* 
       种子现为 5 条：原有 3 条 + 2 条节点配置类变更（node.proxy.set / node.artifact_cache.set_cap），
       后者是给节点「配置」页签的「最近变更」提供数据用的。
       断言总数而非只断言三条 action，避免以后再加种子又连累这条用例。
@@ -148,7 +148,7 @@ describe('AuditPage（mock 假后端）', () => {
     expect(requests[2].searchParams.get('pageSize')).toBe('100')
     expect(await screen.findByText('已加载 250 / 共 250 条')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '加载更多' })).toBeDisabled()
-    // 视口裁剪（FR-502 阶段 6）：250 行已全部加载，但视口外的行不进 DOM（不再一次性铺满整页）。
+    // 视口裁剪（阶段 6）：250 行已全部加载，但视口外的行不进 DOM（不再一次性铺满整页）。
     expect(screen.queryByText('audit.row.250')).not.toBeInTheDocument()
 
     // 滚到底 → 末页数据确实可浏览（原断言「第 N 行在 DOM」要证的就是这条路径）。
@@ -217,8 +217,8 @@ describe('AuditPage（mock 假后端）', () => {
     expect(await screen.findByText('加载审计日志失败')).toBeInTheDocument()
   })
 
-  // FR-303：action 键 i18n——已知键显翻译且原键仍可见（角标+悬停），未知键回退原样不崩。
-  it('已知 action 键显示中文翻译，原键以角标保留（FR-303）', async () => {
+  // action 键 i18n——已知键显翻译且原键仍可见（角标+悬停），未知键回退原样不崩。
+  it('已知 action 键显示中文翻译，原键以角标保留', async () => {
     loginMockUser()
     renderWithProviders(<AuditPage />)
     // 种子 instance.start / group.create 均有 audit.actions 映射 → 显中文。
@@ -229,7 +229,7 @@ describe('AuditPage（mock 假后端）', () => {
     expect(screen.getByText('group.create')).toBeInTheDocument()
   })
 
-  it('未知 action 键回退原键显示，不崩（FR-303）', async () => {
+  it('未知 action 键回退原键显示，不崩', async () => {
     loginMockUser()
     renderWithProviders(<AuditPage />)
     // 种子 user.login 不在 audit.actions 映射表（后端无此键）→ 原样展示。

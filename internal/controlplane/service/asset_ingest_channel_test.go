@@ -210,7 +210,7 @@ func TestIngest_S3UploadFailure_FailsFast(t *testing.T) {
 	require.Empty(t, entries, "失败不静默回落本地")
 }
 
-// TestIngest_ReuploadHealsLostAsset 失效自愈（FR-349 spec §3.6）：lost 资产重传同内容 →
+// TestIngest_ReuploadHealsLostAsset 失效自愈（spec §3.6）：lost 资产重传同内容 →
 // 去重命中且把对象补传回记录自述的渠道、StorageState 复位 external（下载复通）。
 func TestIngest_ReuploadHealsLostAsset(t *testing.T) {
 	h := newIngestChannelHarness(t)

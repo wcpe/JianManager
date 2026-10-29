@@ -1,7 +1,7 @@
-/**
- * 编辑器迷你 IDE 增强扩展集（FR-073）。
+/** 
+ * 编辑器迷你 IDE 增强扩展集。
  *
- * 在 FR-070 共享 CodeEditor 之上叠加：搜索/替换面板、撤销/重做之外的行操作
+ * 在共享 CodeEditor 之上叠加：搜索/替换面板、撤销/重做之外的行操作
  * （删除一行/复制一行/上下移动一行/选中整行）、按文件类型的批量注释/取消注释，
  * 以及与既有 Ctrl+S 历史保存不冲突的快捷键全集。
  *
@@ -25,10 +25,10 @@ import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/sea
 import { languageKindFor } from './explorer-language'
 import { commentTokensForFilename, type CommentTokens } from './explorer-comment'
 
-/**
- * FR-073 行操作与注释快捷键。
+/** 
+ *行操作与注释快捷键。
  *
- * 键位选择避开 Ctrl+S（保存，FR-070）及 CodeMirror 默认/历史键位：
+ * 键位选择避开 Ctrl+S（保存）及 CodeMirror 默认/历史键位：
  * - 复制一行 Shift-Mod-d（向下）；删除一行 Shift-Mod-k；上下移动一行 Alt-↑/↓（CM 默认即此，显式列出便于自测断言）；
  * - 选中整行 Mod-l；批量注释/取消 Mod-/（行注释）与 Shift-Alt-a（块注释），与主流 IDE 一致。
  *
@@ -47,7 +47,7 @@ export function ideKeymap(): readonly KeyBinding[] {
   ]
 }
 
-/**
+/** 
  * 把注释符喂给 CodeMirror 的 languageData，使 toggleComment/toggleBlockComment
  * 对所有可编辑文件类型（含纯文本/自定义 StreamLanguage）都能按该格式惯例工作。
  * 同时返回的 commentTokens 形状即 CM 约定（line / block:{open,close}）。
@@ -60,8 +60,8 @@ function commentLanguageData(filename: string): Extension {
   return EditorState.languageData.of(() => [{ commentTokens }])
 }
 
-/**
- * 组装 FR-073 增强扩展。按 filename 注入对应注释符；启用搜索/替换面板
+/** 
+ * 组装增强扩展。按 filename 注入对应注释符；启用搜索/替换面板
  * （顶部、保留默认搜索键 Mod-f / 替换 Mod-Alt-f，支持正则/大小写/全词由面板勾选，
  * 全部替换由面板「replace all」）。行操作/注释键位以高优先级置于默认键位之前。
  */

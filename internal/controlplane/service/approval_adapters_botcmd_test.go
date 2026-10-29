@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// bot_send_command 批准后的下发载荷（FR-492 剩余项的可证部分）。
+// bot_send_command 批准后的下发载荷（剩余项的可证部分）。
 //
 // ## 这条用例解决的到底是什么
 //

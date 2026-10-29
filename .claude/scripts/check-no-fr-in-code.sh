@@ -27,10 +27,9 @@ extract_fr() {
 
 if [ "${1:-}" = "--stock" ]; then
   # ── 存量模式：扫全仓代码现有 FR 编号 ───────────────────────────────
-  out=$(grep -rInE '(^|[^A-Za-z0-9_-])FR-[0-9]+' apps internal packages \
-    --include='*.go' --include='*.ts' --include='*.tsx' --include='*.js' \
-    --include='*.jsx' --include='*.mjs' --include='*.cjs' \
-    --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git 2>/dev/null \
+  # 只扫 git 跟踪的代码文件：.tmp/ 与 dist/ 是构建产物，不应参与验收。
+  out=$(git grep -InE '(^|[^A-Za-z0-9_-])FR-[0-9]+' -- apps internal packages scripts \
+    ':!*.md' ':!*.json' 2>/dev/null \
     | grep -v 'no-fr-check' || true)
 
   if [ -n "$out" ]; then

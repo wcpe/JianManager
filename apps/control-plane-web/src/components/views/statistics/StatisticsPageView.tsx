@@ -1,4 +1,4 @@
-/**
+/** 
  * @file StatisticsPageView：观测·统计页的受控视图，五个查询的结果、平台管理员权限与两个区块插槽由应用容器注入。
  * @input lib/node-summary（节点在线/维护汇总）、lib/platform-stats（分桶/占比与探针可达汇总）、
  *        lib/node-types（NodeInfo）、lib/player（OnlinePlayersResult）、
@@ -6,8 +6,8 @@
  *        Panel/StatCard/MiniBar 原语、layout（PageShell/PageHeader）、charts/RangePicker、翻译上下文
  * @output StatisticsPageView、StatisticsPageViewProps、StatisticsOverviewTotals、StatisticsInstanceCounts
  * @sync apps/control-plane-web/src/pages/StatisticsPage.tsx、apps/control-plane-web/src/pages/StatisticsPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-220 平台级聚合统计 + FR-463 可用性区块 + FR-469 玩家趋势 +
- *        FR-217/FR-428 客户端分发观测 + FR-502 阶段 6 布局原语）
+ * @since（组件受控化迁包；原页平台级聚合统计可用性区块玩家趋势 +
+ *客户端分发观测阶段 6 布局原语）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -65,7 +65,7 @@ function DistPanel({ title, buckets, empty }: { title: string; buckets: DistBuck
   )
 }
 
-/**
+/** 
  * `/metrics/overview` 的 totals 中本页用到的字段（结构性最小集）。
  * 刻意不照搬应用侧 `@/api/metrics` 的类型：容器直接传该响应的 `totals` 也结构兼容，
  * 而包内无需认识整份观测响应（同 `ScheduleLogRow`、`TaskNodeOption` 的取舍）。
@@ -81,8 +81,8 @@ export interface StatisticsOverviewTotals {
   onlinePlayers: number
 }
 
-/**
- * `/instances/aggregate` 中本页用到的计数（后端聚合，FR-220）。
+/** 
+ * `/instances/aggregate` 中本页用到的计数（后端聚合）。
  * 有了它，实例维度的分布不必再拉全量实例列表（千级约 1MB/轮且带兜底轮询）。
  */
 export interface StatisticsInstanceCounts {
@@ -96,7 +96,7 @@ export interface StatisticsInstanceCounts {
   byProcessType: Record<string, number>
 }
 
-/**
+/** 
  * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast**。
  * - 五个查询的结果与错误态经 props 注入（容器调 `useMetricOverview` / `useNodes` / `useInstanceAggregate` /
  *   `useOnlinePlayers` / `useClientDistObservability`）；分桶、占比与探针可达汇总都是纯展示派生，留本组件；
@@ -120,7 +120,7 @@ export interface StatisticsPageViewProps {
   instanceCounts?: StatisticsInstanceCounts
   /** `/players` 结果（在线玩家数 + 各后端探针可达明细）。 */
   players?: OnlinePlayersResult
-  /**
+  /** 
    * 平台规模/构成区的取数失败标记（`/nodes`、`/instances/aggregate`、`/players` 任一失败）。
    *
    * 【为什么必须区分错误态与空态】这三条查询是 KPI 与五张构成分布的唯一来源；失败时各字段缺省成
@@ -135,14 +135,14 @@ export interface StatisticsPageViewProps {
   distribution?: ClientDistObservability
   /** 分发观测取数失败：管理员态下局部降级为错误文案，其余维度照常。 */
   distributionError?: boolean
-  /** 可用性区块插槽（FR-463）：取数在应用侧接线层，插槽缺省不渲染该区块。 */
+  /** 可用性区块插槽：取数在应用侧接线层，插槽缺省不渲染该区块。 */
   renderSloSection?: () => ReactNode
-  /** 玩家在线趋势插槽（FR-469）：同上。 */
+  /** 玩家在线趋势插槽：同上。 */
   renderPlayerTrend?: () => ReactNode
 }
 
-/**
- * 观测·统计页（FR-220）：平台级聚合统计——节点 / 实例 / 玩家 / 客户端分发多维计数 + 构成分布。
+/** 
+ * 观测·统计页：平台级聚合统计——节点 / 实例 / 玩家 / 客户端分发多维计数 + 构成分布。
  * 全复用既有端点（/metrics/overview、/nodes、/instances、/players、/client-dist/observability），
  * 状态构成（含 CRASHED）由 /instances 列表前端聚合得出，无后端改动。
  * 与 `/`（OverviewPage 实时资源仪表盘）互补：本页偏整体规模与构成，非此刻资源水位。
@@ -267,10 +267,10 @@ export function StatisticsPageView({
         </>
       )}
 
-      {/* 可用性（FR-463）：平台级窗口可用率/故障次数/MTTR/MTBF/误差预算。取数在应用侧接线层，经插槽注入。 */}
+      {/* 可用性：平台级窗口可用率/故障次数/MTTR/MTBF/误差预算。取数在应用侧接线层，经插槽注入。 */}
       {renderSloSection?.()}
 
-      {/* 玩家在线趋势与时段分布（FR-469）。同上，取数在应用侧接线层。 */}
+      {/* 玩家在线趋势与时段分布。同上，取数在应用侧接线层。 */}
       {renderPlayerTrend?.()}
 
       {/* 客户端分发概览（平台管理员） */}

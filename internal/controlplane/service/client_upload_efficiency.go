@@ -21,20 +21,20 @@ var (
 	ErrBatchLimitExceeded = errors.New("超出单次上限")
 )
 
-// 上传增效协议上限（FR-346，spec §3）。
+// 上传增效协议上限（spec §3）。
 const (
 	// precheckMaxEntries 单次预查最多查询的 hash 数：单条 IN 查询与响应体量护栏。
 	precheckMaxEntries = 500
 	// batchMaxFiles 单批聚合上传最多文件数：单请求 DB/审计开销可控。
 	batchMaxFiles = 200
-	// batchFileMaxBytes 聚合上传单文件上限 = FR-251 defaultChunkSize（8 MiB）：
+	// batchFileMaxBytes 聚合上传单文件上限 =defaultChunkSize（8 MiB）：
 	// 聚合阈值与分块协议界线对齐——超过者走分块，不重蹈单请求过大短板。
 	batchFileMaxBytes = defaultChunkSize
 	// batchMaxTotalBytes 单批总字节上限（32 MiB）：单请求体量护栏，低于常见反代上限。
 	batchMaxTotalBytes int64 = 32 << 20
 )
 
-// ClientUploadEfficiencyService 客户端分发上传增效服务（FR-346，增强 FR-250/251）。
+// ClientUploadEfficiencyService 客户端分发上传增效服务（增强251）。
 //
 // 秒传预查：前端上传前算好各文件**原始内容** sha256，批量查 CAS——发布链路恒 codec=none，
 // AssetService.Ingest 对上传字节原样散列，故 assets(type='client-file').sha256 即原始内容

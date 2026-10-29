@@ -14,8 +14,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
-`/logs` 游标分页的路由层契约（FR-419，spec §4.2）：模式切换、参数校验、
+/* *
+`/logs` 游标分页的路由层契约（spec §4.2）：模式切换、参数校验、
 以及「页码分页调用方行为不变」的回归。
 */
 

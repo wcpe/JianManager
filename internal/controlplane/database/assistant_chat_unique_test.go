@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// newAssistantChatDB 建一个只迁移助手运行时四张表（含手工部分唯一索引）的内存库（FR-515）。
+// newAssistantChatDB 建一个只迁移助手运行时四张表（含手工部分唯一索引）的内存库。
 //
 // 只迁移需要的表而不是跑全量 AutoMigrate：这些用例验证的是 run 表的索引语义，
 // 全量迁移会把无关表的建表开销与无关迁移的失败都混进来。

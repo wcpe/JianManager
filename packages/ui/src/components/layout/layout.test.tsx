@@ -22,8 +22,8 @@ import {
 } from './index'
 import { Panel } from '../panel'
 
-/**
- * 布局层测试（FR-502 阶段 3）。
+/** 
+ * 布局层测试（阶段 3）。
  *
  * 这些组件的职责是「约束页面骨架」，因此测试重点不是视觉，而是**结构性契约**：
  * 壳态语义（data-variant / 滚动模型）、必需的结构钩子（data-slot）、
@@ -172,7 +172,7 @@ describe('Toolbar 工具条', () => {
 })
 
 describe('PlatformTabs 工作区页签', () => {
-  /*
+  /* 
     【语义已从 navigation 改为 tablist】原用例断言 `aria-current="page"` + `role=navigation`，
     但组件实际用途是「同一份数据的几个视图就地切换」（内容面板在同页内挂载卸载），
     用 `aria-current` 会让读屏念成「当前页面」而不是「已选中的页签」。

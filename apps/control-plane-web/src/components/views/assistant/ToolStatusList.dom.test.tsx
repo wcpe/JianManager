@@ -12,8 +12,8 @@ import {
 import type { ToolCallView } from '@/components/views/assistant/assistant-tool-status'
 import type { AssistantEventFrame } from '@/api/assistant-chat'
 
-/**
- * 工具状态徽标 · 受控视图测（FR-519 §5，ADR-103）。
+/** 
+ * 工具状态徽标 · 受控视图测（§5，ADR-103）。
  *
  * 断言分两层，故意都用**同一份事件序列**驱动：
  *  1. 聚合层：三类事件（tool_call / tool_status / tool_result）按 callId 收敛成一行，
@@ -219,8 +219,8 @@ describe('ToolStatusList（工具状态徽标）', () => {
   })
 })
 
-/**
- * `unverified` 状态的展示（FR-519 §7）。
+/** 
+ * `unverified` 状态的展示（§7）。
  *
  * 后端把「写操作已发出但回执未经核实」记为 `unverified`（`AssistantReceiptUnverified`）。
  * 这个状态**必须与「已完成」区分开**：若显示成成功，用户会以为操作确实生效了，

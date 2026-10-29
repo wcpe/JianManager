@@ -7,7 +7,7 @@ export type { NodeInfo } from '@/lib/nodes/node-types'
 import type { ArchivedNode } from '@/lib/nodes/node-types'
 export type { ArchivedNode } from '@/lib/nodes/node-types'
 
-/** 节点排空结果（FR-048）。 */
+/** 节点排空结果。 */
 export interface DrainResult {
   stoppedCount: number
   stopped: number[]
@@ -15,7 +15,7 @@ export interface DrainResult {
   errors?: string[]
 }
 
-/** enrollment token 签发请求（FR-080）。 */
+/** enrollment token 签发请求。 */
 export interface IssueEnrollTokenRequest {
   /** 预设节点名；留空则注册时以 Worker 上报名生效。 */
   nodeName?: string
@@ -23,7 +23,7 @@ export interface IssueEnrollTokenRequest {
   ttlMinutes?: number
 }
 
-/** enrollment token 签发响应：含一次性明文 + 两端一键安装命令（FR-080）。 */
+/** enrollment token 签发响应：含一次性明文 + 两端一键安装命令。 */
 export interface IssuedEnrollToken {
   /** 明文 token，仅签发时一次性返回、不可二次读取。 */
   token: string
@@ -39,7 +39,7 @@ export interface IssuedEnrollToken {
   installCommandWindows: string
 }
 
-/** enrollment token 元数据（列表项，无明文，FR-080）。 */
+/** enrollment token 元数据（列表项，无明文）。 */
 export interface EnrollTokenInfo {
   id: number
   tokenPrefix: string
@@ -52,7 +52,7 @@ export interface EnrollTokenInfo {
   createdAt: string
 }
 
-/** 签发一次性 enrollment token（仅平台管理员，FR-080）。 */
+/** 签发一次性 enrollment token（仅平台管理员）。 */
 export function useIssueEnrollToken() {
   const qc = useQueryClient()
   return useMutation({
@@ -64,7 +64,7 @@ export function useIssueEnrollToken() {
   })
 }
 
-/** 列出 enrollment token 元数据（仅平台管理员，FR-080）。 */
+/** 列出 enrollment token 元数据（仅平台管理员）。 */
 export function useEnrollTokens(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['enrollTokens'],
@@ -76,7 +76,7 @@ export function useEnrollTokens(options?: { enabled?: boolean }) {
   })
 }
 
-/** 吊销未消费的 enrollment token（仅平台管理员，FR-080）。 */
+/** 吊销未消费的 enrollment token（仅平台管理员）。 */
 export function useRevokeEnrollToken() {
   const qc = useQueryClient()
   return useMutation({
@@ -85,7 +85,7 @@ export function useRevokeEnrollToken() {
   })
 }
 
-/** 获取节点列表，支持自动轮询刷新；enabled=false 可按需挂起（如侧栏常驻列双空时，FR-293）。 */
+/** 获取节点列表，支持自动轮询刷新；enabled=false 可按需挂起（如侧栏常驻列双空时）。 */
 export function useNodes(options?: { refetchInterval?: number; enabled?: boolean }) {
   return useQuery({
     queryKey: ['nodes'],
@@ -110,7 +110,7 @@ export function useNode(id: number) {
   })
 }
 
-/** 置/解节点维护模式（cordon，FR-048）。 */
+/** 置/解节点维护模式（cordon）。 */
 export function useSetNodeMaintenance() {
   const qc = useQueryClient()
   return useMutation({
@@ -120,7 +120,7 @@ export function useSetNodeMaintenance() {
   })
 }
 
-/** 排空节点：停止其上运行实例（FR-048）。 */
+/** 排空节点：停止其上运行实例。 */
 export function useDrainNode() {
   const qc = useQueryClient()
   return useMutation({
@@ -132,24 +132,24 @@ export function useDrainNode() {
   })
 }
 
-/** 节点删除被实例守卫拒绝时随 409 返回的实例摘要（FR-309）。 */
+/** 节点删除被实例守卫拒绝时随 409 返回的实例摘要。 */
 export interface NodeDeleteBlockedInstance {
   id: number
   name: string
   status: string
 }
 
-/** 节点删除结果（FR-309）：force 级联时报告删除的实例记录数。 */
+/** 节点删除结果：force 级联时报告删除的实例记录数。 */
 export interface NodeDeleteResult {
   message: string
   instancesPurged: number
 }
 
-/**
- * 主动下线节点：解除注册并保留记录（FR-048）。
- * FR-309：名下有实例回 409 NODE_HAS_INSTANCES（含实例清单）；离线节点可 force 级联
+/** 
+ * 主动下线节点：解除注册并保留记录。
+ *：名下有实例回 409 NODE_HAS_INSTANCES（含实例清单）；离线节点可 force 级联
  * 删除实例平台记录（不清理远端文件），故成功后同时失效实例列表。
- * FR-393：下线后进归档，故一并失效 archived-nodes。
+ *：下线后进归档，故一并失效 archived-nodes。
  */
 export function useDeleteNode() {
   const qc = useQueryClient()
@@ -165,13 +165,13 @@ export function useDeleteNode() {
 }
 
 
-/** 归档清理结果（FR-394）：硬删节点记录；force 时含级联实例数。 */
+/** 归档清理结果：硬删节点记录；force 时含级联实例数。 */
 export interface NodePurgeResult {
   message: string
   instancesPurged: number
 }
 
-/** 列出已下线（软删）节点，按 deletedAt 倒序（FR-393）。 */
+/** 列出已下线（软删）节点，按 deletedAt 倒序。 */
 export function useArchivedNodes(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['archived-nodes'],
@@ -183,8 +183,8 @@ export function useArchivedNodes(options?: { enabled?: boolean }) {
   })
 }
 
-/**
- * 彻底清理归档节点：仅已软删行生效；force 级联硬删名下实例平台记录，不碰远端文件（FR-394）。
+/** 
+ * 彻底清理归档节点：仅已软删行生效；force 级联硬删名下实例平台记录，不碰远端文件。
  * 成功后失效 nodes / archived-nodes / instances。
  */
 export function usePurgeArchivedNode() {
@@ -203,7 +203,7 @@ export function usePurgeArchivedNode() {
   })
 }
 
-/** 节点出站代理视图（FR-185，见 ADR-043）。含凭据的 URL 已由后端脱敏。 */
+/** 节点出站代理视图（见 ADR-043）。含凭据的 URL 已由后端脱敏。 */
 export interface NodeProxyView {
   /** inherit=继承全局默认 / custom=自定义。 */
   mode: 'inherit' | 'custom'
@@ -221,14 +221,14 @@ export interface NodeProxyView {
   online: boolean
 }
 
-/** 设置节点代理请求（FR-185）：mode=inherit 时 url/noProxy 忽略；custom 时 url 必填。 */
+/** 设置节点代理请求：mode=inherit 时 url/noProxy 忽略；custom 时 url 必填。 */
 export interface UpdateNodeProxyBody {
   mode: 'inherit' | 'custom'
   url?: string
   noProxy?: string
 }
 
-/** 查询节点出站代理配置（仅平台管理员，FR-185）。 */
+/** 查询节点出站代理配置（仅平台管理员）。 */
 export function useNodeProxy(nodeId: number, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['node-proxy', nodeId],
@@ -240,7 +240,7 @@ export function useNodeProxy(nodeId: number, options?: { enabled?: boolean }) {
   })
 }
 
-/** 设置节点出站代理（继承全局/自定义，仅平台管理员，FR-185）。 */
+/** 设置节点出站代理（继承全局/自定义，仅平台管理员）。 */
 export function useUpdateNodeProxy(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
@@ -252,8 +252,8 @@ export function useUpdateNodeProxy(nodeId: number) {
   })
 }
 
-/**
- * 正在启动的 Worker 进度（FR-486）。
+/** 
+ * 正在启动的 Worker 进度。
  *
  * 与 `useNodes` 分开取数的原因：启动中的 Worker **尚未注册**，在节点的正式列表里
  * 根本没有记录（首装连 UUID 都还没有）。混进同一个列表会凭空出现「存在但从未上线」

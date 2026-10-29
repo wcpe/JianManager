@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakePkgWorker 假 Worker：全局包三 RPC（FR-307）。
+// fakePkgWorker 假 Worker：全局包三 RPC。
 type fakePkgWorker struct {
 	workerpb.WorkerServiceClient
 	installReq *workerpb.InstallGlobalPackageRequest

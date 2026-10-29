@@ -20,8 +20,8 @@ function trackReconcilePosts() {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/**
- * RuntimeAssetsPage 强断言（FR-200/FR-053）：①渲染 seed JDK/制品 ②删 JDK→overview 联动减少
+/** 
+ * RuntimeAssetsPage 强断言：①渲染 seed JDK/制品 ②删 JDK→overview 联动减少
  * ③插件制品批量部署到多实例 plugins/ 目录 ④注入 500→错误态。
  */
 describe('RuntimeAssetsPage（mock 假后端）', () => {
@@ -131,7 +131,7 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     const card17 = screen.getByText('17.0.11+9').closest('[data-slot="panel"]') as HTMLElement
     await user.click(within(card17).getByRole('button', { name: '删除' }))
 
-    // 危险确认弹窗：seed JDK 17 为 managed（FR-228 按来源分级确认），删除需逐字输入「厂商 主版本」= temurin 17 才启用确认。
+    // 危险确认弹窗：seed JDK 17 为 managed（按来源分级确认），删除需逐字输入「厂商 主版本」= temurin 17 才启用确认。
     const dialog = await screen.findByRole('dialog')
     await user.type(within(dialog).getByPlaceholderText('temurin 17'), 'temurin 17')
     await user.click(within(dialog).getByRole('button', { name: '删除' }))

@@ -8,8 +8,8 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * 采集优先级链三态渲染（FR-446 / FR-447）：
+/** 
+ * 采集优先级链三态渲染：
  * - 探针 + 直探：TPS/在线以探针为准，来源芯片列出全部命中来源。
  * - 仅直探（SLP）：探针缺失 TPS「不可用」，在线数回落 SLP 真实值。
  * - 三源皆无：TPS/在线均「不可用」，无来源芯片（不显示 0）。
@@ -48,7 +48,7 @@ function stubMetrics(body: Record<string, unknown>) {
   )
 }
 
-describe('InstanceConsolePage 采集优先级链三态（FR-446/447）', () => {
+describe('InstanceConsolePage 采集优先级链三态（447）', () => {
   beforeEach(() => {
     loginMockUser()
   })

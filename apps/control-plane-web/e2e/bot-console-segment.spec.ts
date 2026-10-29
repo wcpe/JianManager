@@ -7,8 +7,8 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
-/** FR-039 真浏览器纵切：服务器选择器入口、实例内 Bot 分区与批量操作。 */
-test.describe('FR-039 控制台实例内 Bot 管理段（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：服务器选择器入口、实例内 Bot 分区与批量操作。 */
+test.describe('控制台实例内 Bot 管理段（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await page.addInitScript(() => {
@@ -33,11 +33,11 @@ test.describe('FR-039 控制台实例内 Bot 管理段（mock 模式真浏览器
 
     await page.getByRole('button', { name: /survival-1.*RUNNING/ }).click()
     await expect(page).toHaveURL(/\/instances\/1$/)
-    // FR-412：顶栏标题只保留实例名，无「服务器控制台 /」前缀
+    // 顶栏标题只保留实例名，无「服务器控制台 /」前缀
     await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible()
     await expect(page.locator('[data-page="instance-console"]')).toBeVisible()
 
-    // FR-413：实例分区为 role=tab（tablist「实例页签」），不再是 button
+    // 实例分区为 role=tab（tablist「实例页签」），不再是 button
     await page.getByRole('tab', { name: 'Bot', exact: true }).click()
     await expect(page.getByText('当前筛选 2 个 Bot')).toBeVisible()
     await expect(page.getByText('GuardBot')).toBeVisible()

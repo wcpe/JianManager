@@ -1,7 +1,7 @@
 import type { AuditLogInfo, AuditQueryParams } from './audit-contracts'
 
-/**
- * 审计页筛选栏的可编辑状态（FR-015）。
+/** 
+ * 审计页筛选栏的可编辑状态。
  * 时间为 HTML `datetime-local` 输入的本地值（如 `2026-06-22T10:30`），无时区。
  */
 export interface AuditFilterState {
@@ -23,7 +23,7 @@ export const DEFAULT_AUDIT_FILTER: AuditFilterState = {
   to: '',
 }
 
-/**
+/** 
  * 把 datetime-local 本地时间转为后端期望的 RFC3339（带时区偏移）。
  * 后端用 `time.Parse(time.RFC3339, ...)` 解析，必须含时区；裸的本地值（缺秒/缺时区）解析会失败。
  * 空串或非法时间返回 undefined（该维度不过滤）。
@@ -35,8 +35,8 @@ export function toRFC3339(local: string): string | undefined {
   return d.toISOString()
 }
 
-/**
- * 把筛选状态规整为 `GET /audit` 的 query 参数（FR-015 / FR-172）。
+/** 
+ * 把筛选状态规整为 `GET /audit` 的 query 参数。
  * 留空 / 非法的维度一律省略，时间转为 RFC3339。
  */
 export function toAuditParams(filter: AuditFilterState): AuditQueryParams {
@@ -63,8 +63,8 @@ export function toAuditParams(filter: AuditFilterState): AuditQueryParams {
   return params
 }
 
-/**
- * 格式化审计行详情（FR-158 行展开）。
+/** 
+ * 格式化审计行详情（行展开）。
  * detail 多为后端写入的 JSON 串，能解析则缩进美化，否则原样返回；空串返回空串。
  */
 export function formatAuditDetail(detail: string | undefined): string {
@@ -77,7 +77,7 @@ export function formatAuditDetail(detail: string | undefined): string {
   }
 }
 
-/**
+/** 
  * 把审计行序列化为 NDJSON；保留给纯函数测试与旧调用兼容。
  * 每行一条对象，扁平化 username 便于检阅。
  */

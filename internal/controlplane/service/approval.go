@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 平台级审批服务（FR-490）。
+// 平台级审批服务。
 //
 // 三条不变量，改动前请先读 spec §2：
 //  1. **批准仅人类 JWT**：Agent Token 在**服务层**永久不可批准——判据是调用方身份，
@@ -308,7 +308,7 @@ func (s *ApprovalService) Decide(ctx context.Context, p DecideApprovalParams) (*
 
 	next := model.ApprovalStatusRejected
 	if p.Approve {
-		// 批准后进入 executing，由执行器认领（FR-491）。
+		// 批准后进入 executing，由执行器认领。
 		next = model.ApprovalStatusExecuting
 	}
 	now := s.now()
@@ -330,11 +330,11 @@ func (s *ApprovalService) Decide(ctx context.Context, p DecideApprovalParams) (*
 	return s.GetApproval(p.TicketID, nil)
 }
 
-// ── 执行器支撑（FR-491）─────────────────────────────────────────────────
+// ── 执行器支撑─────────────────────────────────────────────────
 
 // ClaimForExecution 认领票据并写 in_flight 回执（**同一事务**）。
 //
-// 与 FR-516 的 approveAndRun 三步同构：CAS 消费 → 写回执 → 提交后才执行。
+// 与的 approveAndRun 三步同构：CAS 消费 → 写回执 → 提交后才执行。
 func (s *ApprovalService) ClaimForExecution(ctx context.Context, ticketID uint) (uint, error) {
 	var receiptID uint
 	now := s.now()
@@ -411,7 +411,7 @@ func (s *ApprovalService) ExpireStale() (int64, error) {
 	return res.RowsAffected, res.Error
 }
 
-// StartExpiryLoop 启动到期巡检（FR-490）。
+// StartExpiryLoop 启动到期巡检。
 //
 // 为什么需要它：读取时的惰性判定只覆盖「有人看」的票。
 // 一张没人看的过期票会一直留在待审列表里，让批准人以为还有待办。

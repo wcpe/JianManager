@@ -18,8 +18,8 @@ import { buildEntryTree } from '@/lib/file-browser/archive-tree'
 import type { EntryNode } from '@/lib/file-browser/archive-tree'
 import { cn } from '@jianmanager/ui'
 
-/**
- * 归档浏览与反编译视图（FR-075，复用 FR-070 只读编辑器）。
+/** 
+ * 归档浏览与反编译视图（复用只读编辑器）。
  *
  * - 打开 jar/zip：左栏列内部条目树（Worker archive/zip 列举），点文本条目→右栏只读查看内部文本；
  * - 反编译：点 .class 条目（或对整个 jar）→ Worker 经 CFR 反编译→右栏只读 Java 源码（超时/降级/截断态提示）。

@@ -5,7 +5,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// 渐进式工具披露的 MCP 侧接线（FR-544）。
+// 渐进式工具披露的 MCP 侧接线。
 //
 // ## 为什么放在 mcp 包
 //
@@ -36,7 +36,7 @@ func assistantToolCatalogForService() []service.AssistantToolDescriptor {
 			Name:      spec.Def.Name,
 			Summary:   spec.Def.Description,
 			Operation: operationOfAction(spec.Action),
-			// 写类必须确认（与 FR-516 的不变量一致）；只读自动执行。
+			// 写类必须确认（与的不变量一致）；只读自动执行。
 			RequiresConfirm: operationOfAction(spec.Action) != service.AgentOperationRead,
 			Category:        service.AssistantToolCategoryOf(spec.Def.Name),
 		})

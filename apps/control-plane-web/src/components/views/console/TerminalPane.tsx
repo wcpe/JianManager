@@ -12,24 +12,24 @@ import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import type { FetchTerminalCreds } from '@/lib/console/terminal-session-manager'
 import type { ConsoleHistoryState } from '@/lib/console/console-history'
 
-/**
- * 工作区终端面板：为单个实例打开控制台（ADR-009 / FR-037）。
+/** 
+ * 工作区终端面板：为单个实例打开控制台（ADR-009）。
  * 复用一次性 token，逻辑与实例详情页「终端」Tab 一致：运行态可写，否则只读。
  *
- * FR-415 起承载的是输出/输入分离的新控制台（{@link InstanceConsoleView}，ADR-086），
+ *起承载的是输出/输入分离的新控制台（{@link InstanceConsoleView}，ADR-086），
  * 不再是 xterm 渲染壳。工具栏语义（重连 / 字号 / 搜索 / 全屏）保持不变。
  */
 export interface TerminalPaneProps {
   /** 当前打开终端的实例 id */
   instanceId: number
-  /**
+  /** 
    * 隐藏自带的面包屑/占位按钮工具栏。
-   * 可组合工作区（FR-166）中由卡壳 {@link WorkspaceCard} 统一承载卡头，
+   * 可组合工作区中由卡壳 {@link WorkspaceCard} 统一承载卡头，
    * 此时本组件只渲染终端区，避免双重头部。
    */
   hideHeader?: boolean
-  /**
-   * 终端会话保活（FR-295，ADR-067）：控制台 keep-alive 宿主下传 true，
+  /** 
+   * 终端会话保活（ADR-067）：控制台 keep-alive 宿主下传 true，
    * 卸载/隐藏不释放连接；独立表面（画布卡片等）保持默认卸载即释放。
    */
   persistSession?: boolean
@@ -41,9 +41,9 @@ export interface TerminalPaneProps {
   status?: string
   /** 实例名（面包屑展示；缺省回退 `#id`）。 */
   instanceName?: string
-  /**
+  /** 
    * 现取一次性终端凭据（应用侧 `useTerminalToken` + refetch）。
-   * 每次连接前现取：一次性 token 首连即被消费失效，复用会 401（FR-140）。
+   * 每次连接前现取：一次性 token 首连即被消费失效，复用会 401。
    */
   fetchToken?: FetchTerminalCreds
   /** 启动实例（应用侧 `useStartInstance`）；停机/崩溃态的直达动作。 */
@@ -54,14 +54,14 @@ export interface TerminalPaneProps {
   isTokenLoading?: boolean
   /** 终端凭据获取失败的原因（应用侧 `useTerminalToken` 的 error；有值时展示失败态）。 */
   tokenError?: string
-  /** 是否有 `terminal.access`（应用侧权限；无则命令栏禁用，FR-432）。 */
+  /** 是否有 `terminal.access`（应用侧权限；无则命令栏禁用）。 */
   canAccessTerminal?: boolean
-  /**
-   * 在线玩家名册（FR-416 命令补全的权威候选来源，应用侧 `useOnlinePlayers` 按本实例过滤后注入）。
+  /** 
+   * 在线玩家名册（命令补全的权威候选来源，应用侧 `useOnlinePlayers` 按本实例过滤后注入）。
    * 透传给 {@link InstanceConsoleView}；缺省即只用控制台输出解析出的 join/quit/list 名册兜底。
    */
   onlinePlayers?: readonly string[]
-  /**
+  /** 
    * 提示通道（复制/跳转回执；应用侧接 toast）。
    *
    * 同时透传给 {@link InstanceConsoleView}（输出区与命令栏的回执）与沉浸台（其自身的复制回执），
@@ -70,7 +70,7 @@ export interface TerminalPaneProps {
   onNotify?: (kind: 'success' | 'error' | 'info', message: string) => void
   /** 历史回溯控制器（透传给 {@link InstanceConsoleView}；应用侧 `useConsoleHistory`）。 */
   historyBacktrack: ConsoleHistoryState
-  /**
+  /** 
    * 渲染停机日志回放（应用侧接线层组件，自带 `useLogs` 取数与「完整历史」链接）。
    * 缺省时不渲染该段（停机态只剩命令栏禁用提示）。
    */
@@ -115,7 +115,7 @@ export function TerminalPane({
 
   // 命令栏禁用时的一行原因 + 直达动作（spec §2.2）。
   // 停机/崩溃给「启动实例」；STARTING/STOPPING 是过渡态，给按钮只会诱导用户重复触发。
-  // FR-432：无 terminal.access 时命令栏禁用（平台管理员 hasPerm 恒 true）。
+  // 无 terminal.access 时命令栏禁用（平台管理员 hasPerm 恒 true）。
   const canStart = isStopped || status === 'CRASHED'
   const disabledReason = !canAccessTerminal
     ? t('permissions.terminalDenied')
@@ -197,7 +197,7 @@ export function TerminalPane({
           {status && !isRunning && !isStopped && (
             <span className="text-amber-600 dark:text-amber-400">{t('instanceDetail.terminalReadOnly', { status })}</span>
           )}
-          {/* 手动重连改经连接管理器（FR-295）：不再 remount 组件，断旧连、现取新 token 重建（FR-140）。 */}
+          {/* 手动重连改经连接管理器：不再 remount 组件，断旧连、现取新 token 重建。 */}
           <Button size="sm" variant="ghost" className="ml-auto h-7 rounded-md px-2 text-xs" onClick={() => terminalSessionManager.reconnect(instanceId)}>
             <RotateCcw className="mr-1 size-3.5" />
             {t('instanceDetail.terminalReconnect')}
@@ -255,10 +255,10 @@ export function TerminalPane({
             <p className="text-sm text-gray-500">{t('instanceDetail.connecting')}</p>
           </div>
         ) : isStopped || !canAccessTerminal ? (
-          // 完全停机：不连 WS（避免死循环刷断连 FIX-B），改从 DB 回放历史日志（FR-345）——
+          // 完全停机：不连 WS（避免死循环刷断连 FIX-B），改从 DB 回放历史日志——
           // 令关服过程/崩溃现场在停机态仍可见。命令栏仍在位但禁用 + 带「启动实例」直达动作
           // （spec §2.2）：让「为什么输不进去、怎么才能输」在同一处说清，而不是干脆没有输入框。
-          // FR-432：无 terminal.access 同样禁用输入，只读输出仍可看。
+          // 无 terminal.access 同样禁用输入，只读输出仍可看。
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-hidden">
               {renderStoppedLogs?.({ instanceId, status })}
@@ -312,7 +312,7 @@ export function TerminalPane({
               onPaneFocus={onFocus}
               // 沉浸 pane 与底层主视图共享同一会话：pane 卸载（退出沉浸台）绝不能触发
               // release-dispose，否则会连带释放实例页主视图正在用的会话导致控制台空白。
-              // 会话生命周期由管理器 LRU（FR-296）兜底，这里只租不还。
+              // 会话生命周期由管理器 LRU兜底，这里只租不还。
               persistSession
               // 沉浸 pane 复用外层已注入的取数面（状态 / 凭据 / 权限 / 回溯 / 名册 / 提示），不再各自取数。
               status={status}

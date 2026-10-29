@@ -7,8 +7,8 @@ import { useAssistantChatCtx } from '@/components/views/assistant/assistant-chat
 import { useAssistantConversationsInfinite } from '@/api/assistant-chat'
 import { useAuthStore } from '@/stores/auth'
 
-/**
- * 全局助手浮窗（FR-519 §5.4）。
+/** 
+ * 全局助手浮窗（§5.4）。
  *
  * 三条与「窗口」相关的语义，写在这里以免后来者按直觉改错：
  *  - **关闭 ≠ 停止**：`×` 只是不渲染，run 继续在服务端推进；再打开回到同一处。
@@ -21,8 +21,8 @@ import { useAuthStore } from '@/stores/auth'
  */
 const LAST_CONVERSATION_KEY = 'jm-assistant-last-conversation'
 
-/**
- * 「上次会话」的存储键（按用户隔离，FR-519「换用户不串号」）。
+/** 
+ * 「上次会话」的存储键（按用户隔离「换用户不串号」）。
  *
  * 此前键是全局固定的：用户 A 停在会话 7，登出后用户 B 登录，
  * 浮窗会尝试恢复到会话 7 —— 后端按归属会拒（403/404），但那仍是一次
@@ -46,7 +46,7 @@ export function AssistantDock({ open, onOpenChange }: AssistantDockProps) {
   const [historyOpen, setHistoryOpen] = useState(false)
   // 「上次会话」按用户隔离，需要当前用户 id（来自 JWT claims，非敏感展示字段）。
   const authUserId = useAuthStore((st) => st.claimsUserId ?? 0)
-  /*
+  /* 
     会话状态来自外壳层（DashboardPage 里的单一实例），**不在这里自建**。
     自建会导致首页与浮窗各持一份：首页正在输出的内容浮窗看不到，
     两边甚至可能对同一会话各发一轮而撞 409 CONVERSATION_BUSY。
@@ -157,8 +157,8 @@ export function AssistantDock({ open, onOpenChange }: AssistantDockProps) {
       ref={panelRef}
       role="complementary"
       aria-label={t('assistant.dockTitle', 'AI 助手')}
-      /*
-        形态随断点切换（FR-519 §7「移动端浮窗为全屏 sheet」）：
+      /* 
+        形态随断点切换（§7「移动端浮窗为全屏 sheet」）：
         - 窄屏（<640px，含验收指定的 390px）→ **全屏 sheet**：铺满视口、无圆角无边框。
           移动端浮层若只占 72% 高，底部会露出页面内容，容易误触下层操作。
         - 宽屏 → 原有右下角浮层形态（固定尺寸，不遮挡主要内容）。

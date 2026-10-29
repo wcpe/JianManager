@@ -1,4 +1,4 @@
-// CHANGELOG 段落提取（FR-173 发布管线用，见 ADR-036 §3）。
+//  CHANGELOG 段落提取（发布管线用，见 ADR-036 §3）。
 //
 // 用途：发布管线据触发类型提取 CHANGELOG.md 的一段正文作为 GitHub Release 说明（body）。
 //   - 滚动预发布（push master）：取 `## [Unreleased]` 段正文。

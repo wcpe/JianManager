@@ -3,8 +3,8 @@ import { Link } from 'react-router'
 import api from '@/api/client'
 import { InvitePageView } from '@/components/views/auth/InvitePageView'
 
-/**
- * 公开邀请接受页（FR-405）容器：令牌仅从 fragment 读取，避免跟随首个请求进入服务端日志；
+/** 
+ * 公开邀请接受页容器：令牌仅从 fragment 读取，避免跟随首个请求进入服务端日志；
  * 成功后先把 URL 中的令牌抹掉（history.replaceState），交视图展示「已接受」与去登录入口。
  * 保留同路径默认导出，路由表无需改动。
  */

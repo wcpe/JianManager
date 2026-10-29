@@ -10,9 +10,9 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientUpdaterConfigHandler 按频道生成 jm-updater.json（FR-253，见 ADR-053）。
+// ClientUpdaterConfigHandler 按频道生成 jm-updater.json（见 ADR-053）。
 //
-// FR-256 起 jm-updater.json 不再含 signPublicKey/signKeyId（验签已去，信任靠 HTTPS + 拉取密钥
+// 起 jm-updater.json 不再含 signPublicKey/signKeyId（验签已去，信任靠 HTTPS + 拉取密钥
 // 鉴权，见 docs/specs/updater-arch-simplification/spec.md §2 A，推翻 ADR-022/053）。
 // 限平台管理员（与频道管理同组）。
 type ClientUpdaterConfigHandler struct {

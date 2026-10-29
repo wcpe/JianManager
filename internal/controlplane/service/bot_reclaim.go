@@ -16,14 +16,14 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-460：失效 Bot 自动回收与容量自动补足。
+// 失效 Bot 自动回收与容量自动补足。
 const (
-	// defaultBotReclaimGracePeriod 默认宽限期：Bot 生命周期短，容忍一次世代迁移窗口即可（短于 FR-326 的 10m）。
+	// defaultBotReclaimGracePeriod 默认宽限期：Bot 生命周期短，容忍一次世代迁移窗口即可（短于的 10m）。
 	defaultBotReclaimGracePeriod = 2 * time.Minute
 	// defaultBotReclaimAuto 默认自动回收：仅对 Fleet 归属 Bot 生效；V1 手动 Bot 永不自动回收。
 	defaultBotReclaimAuto   = true
 	botReclaimSweepInterval = 60 * time.Second
-	// botReclaimFreshnessWindow 复用 FR-365 的 botFreshnessMissingWindow 口径（90s）。
+	// botReclaimFreshnessWindow 复用的 botFreshnessMissingWindow 口径（90s）。
 	botReclaimFreshnessWindow = botFreshnessMissingWindow
 	// botReclaimConnectingFirstSeenWindow N1：从未上报（last_seen_at 为空）的 connecting Bot 的
 	// 判定上限（比通用新鲜度窗口宽松 10×），既容忍慢节点首次登录，又避免永久豁免 empty_epoch。
@@ -49,11 +49,11 @@ const (
 	// botReclaimDetectLimit 单拍判定候选上限（nit：避免无界扫描）。
 	botReclaimDetectLimit = 2000
 
-	// botZombieSessionIdleThreshold 僵尸会话停滞阈值（FR-472，spec §2.4.1）：
+	// botZombieSessionIdleThreshold 僵尸会话停滞阈值（spec §2.4.1）：
 	// 会话在线 Bot 数为 0 且持续无进展超过该时长即判为僵尸并收敛为 stopped。
 	// 取 Bot 宽限期（2m）的 5 倍，容忍 Worker 短暂重启与世代迁移窗口，不误杀正常会话。
 	botZombieSessionIdleThreshold = 10 * time.Minute
-	// botReclaimSessionReapedAction 僵尸会话收敛的审计动作（FR-472）。
+	// botReclaimSessionReapedAction 僵尸会话收敛的审计动作。
 	botReclaimSessionReapedAction = "bot_reclaim.session_reaped"
 )
 
@@ -92,7 +92,7 @@ type BotReclaimNodeEpoch struct {
 
 // BotReclaimFleetSnapshotSource 提供执行节点 Worker 的 Fleet 实存快照。
 //
-// FR-460 §2.4.3 要求补足与回收都先与 Worker 快照对账；F1 亦以「Bot 是否仍在 Worker 实存中」
+// §2.4.3 要求补足与回收都先与 Worker 快照对账；F1 亦以「Bot 是否仍在 Worker 实存中」
 // 作为分片世代分叉场景下判定健康与否的真源。生产实现复用既有隧道连接池，不新增协议。
 type BotReclaimFleetSnapshotSource interface {
 	GetBotFleetSnapshot(ctx context.Context, nodeUUID, sessionUUID string) (*workerpb.GetBotFleetSnapshotResponse, error)
@@ -215,7 +215,7 @@ type botReclaimStale struct {
 	currentEpochGeneration int64
 }
 
-// BotReclaimService 失效 Bot 自动回收与容量自动补足（FR-460）。
+// BotReclaimService 失效 Bot 自动回收与容量自动补足。
 //
 // 每拍：按 workerEpoch 不匹配 + 状态判据识别失效 Fleet Bot → 宽限观察（pending）→ 宽限后
 // confirmed → auto 且 Fleet 归属则下发停用并 CP 账本去账 → 触发容量补足回计划数目标。
@@ -227,7 +227,7 @@ type BotReclaimService struct {
 	stopper    BotReclaimStopper
 	audit      *AuditService
 	resolver   *BotExecutorResolver
-	// fleet 提供执行节点 Worker 的 Fleet 实存快照（FR-460 §2.4.3 对账真源）；nil 时退回保守世代比对。
+	// fleet 提供执行节点 Worker 的 Fleet 实存快照（§2.4.3 对账真源）；nil 时退回保守世代比对。
 	fleet BotReclaimFleetSnapshotSource
 	// refill 复用执行核心的补足助手（rebuildRunningAssignment / ApplyBotLoadBatch / 结果回写）。
 	refill *BotLoadExecutionService
@@ -527,7 +527,7 @@ func (s *BotReclaimService) Sweep(ctx context.Context) error {
 	if err := s.disposeConfirmed(ctx); err != nil {
 		slog.Warn("失效 Bot 自动回收失败", "error", err)
 	}
-	// FR-472：先收敛僵尸会话，再补足——僵尸会话从根上不该进入补足扫描（spec §2.4.1）。
+	// 先收敛僵尸会话，再补足——僵尸会话从根上不该进入补足扫描（spec §2.4.1）。
 	if err := s.reapZombieSessions(ctx, now); err != nil {
 		slog.Warn("僵尸压测会话收敛失败", "error", err)
 	}
@@ -537,7 +537,7 @@ func (s *BotReclaimService) Sweep(ctx context.Context) error {
 	return nil
 }
 
-// reapZombieSessions 收敛停滞的压测会话（FR-472，spec §2.4.1）。
+// reapZombieSessions 收敛停滞的压测会话（spec §2.4.1）。
 //
 // 会话终结原本依赖显式 Stop 调用；CP 重启或 bot-worker 死亡后该路径丢失，会话永久停留 running，
 // 于是每拍被 refillRunningSessions 当作补足目标反复重建期望行并失败（失败落在事务内 → 持续写盘）。
@@ -600,7 +600,7 @@ func (s *BotReclaimService) reapZombieSession(ctx context.Context, session *mode
 		return nil
 	}
 	stalled := now.Sub(session.UpdatedAt).Round(time.Second)
-	reason := fmt.Sprintf("僵尸会话自动收敛：%s 内无进展且在线 Bot 数为 0（FR-472）", stalled)
+	reason := fmt.Sprintf("僵尸会话自动收敛：%s 内无进展且在线 Bot 数为 0", stalled)
 	updates := map[string]any{
 		"status":     model.BotStressSessionStopped,
 		"last_error": reason,
@@ -875,7 +875,7 @@ func (s *BotReclaimService) observeStale(ctx context.Context, stale *botReclaimS
 	return s.db.WithContext(ctx).Model(&rec).Updates(updates).Error
 }
 
-// cancelResolved 将本拍未见（世代已追平/被新世代认领）的活跃跟踪标记 cancelled（镜像 FR-326）。
+// cancelResolved 将本拍未见（世代已追平/被新世代认领）的活跃跟踪标记 cancelled（镜像）。
 func (s *BotReclaimService) cancelResolved(ctx context.Context, seen map[uint]struct{}, now time.Time) error {
 	var rows []model.FleetBotReclaim
 	if err := s.db.WithContext(ctx).

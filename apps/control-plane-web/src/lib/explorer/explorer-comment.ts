@@ -1,5 +1,5 @@
-/**
- * 按文件类型推导注释符（FR-073 批量注释/取消注释）。纯函数，可单测。
+/** 
+ * 按文件类型推导注释符（批量注释/取消注释）。纯函数，可单测。
  *
  * CodeMirror 的 toggleComment/toggleLineComment 通过 `EditorState.languageData` 里的
  * `commentTokens` 发现注释语法。yaml/json 的 StreamLanguage 与本项目自定义的
@@ -16,7 +16,7 @@ export interface CommentTokens {
   block?: { open: string; close: string }
 }
 
-/**
+/** 
  * 按语言种类返回注释符。
  * - yaml / properties / ini / toml / conf：`#`（脚本/配置惯例）；
  * - json（含 json5）：`//` + 块注释（JSON5 允许，普通 JSON 严格不允许但编辑器内便利优先，
@@ -36,7 +36,7 @@ export function commentTokensFor(kind: LanguageKind): CommentTokens {
   }
 }
 
-/**
+/** 
  * 按文件名（经扩展名）推导注释符。HTML/XML 类按块注释 `<!-- -->`——
  * 这类文件不在 LanguageKind 的高亮分类内（统一 plain 高亮），但批量注释需用块注释符，
  * 故在文件名层单独识别，避免给 .xml/.html 误用 `#`。

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 单条 registry 配置（FR-306）。scope 空=默认源；非空=@scope 域源。 */
+/** 单条 registry 配置。scope 空=默认源；非空=@scope 域源。 */
 export interface PMRegistry {
   name?: string
   url: string
@@ -11,7 +11,7 @@ export interface PMRegistry {
   tokenMasked?: boolean
 }
 
-/** 节点包管理器配置视图（FR-306）。 */
+/** 节点包管理器配置视图。 */
 export interface PMConfigView {
   pm: 'npm' | 'pnpm' | 'yarn'
   corepackAvailable: boolean
@@ -20,7 +20,7 @@ export interface PMConfigView {
   registries: PMRegistry[]
 }
 
-/** 读取节点 PM 配置（FR-306）。 */
+/** 读取节点 PM 配置。 */
 export function useNodePMConfig(nodeId: number, opts?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['node-pm-config', nodeId],
@@ -29,7 +29,7 @@ export function useNodePMConfig(nodeId: number, opts?: { enabled?: boolean }) {
   })
 }
 
-/** 保存节点 PM 配置（FR-306）：选 PM（corepack 激活 pnpm/yarn）+ registry。 */
+/** 保存节点 PM 配置：选 PM（corepack 激活 pnpm/yarn）+ registry。 */
 export function useSetNodePMConfig(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
@@ -41,14 +41,14 @@ export function useSetNodePMConfig(nodeId: number) {
   })
 }
 
-/** 已装全局包（FR-307）。latest 非空=可更新到该版。 */
+/** 已装全局包。latest 非空=可更新到该版。 */
 export interface GlobalPackage {
   name: string
   version: string
   latest?: string
 }
 
-/** 列出节点托管全局目录已装包（FR-307；查询较重，仅分区展开时启用）。 */
+/** 列出节点托管全局目录已装包（查询较重，仅分区展开时启用）。 */
 export function useGlobalPackages(nodeId: number, opts?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['node-global-packages', nodeId],
@@ -59,7 +59,7 @@ export function useGlobalPackages(nodeId: number, opts?: { enabled?: boolean }) 
   })
 }
 
-/** 异步安装/升级全局包（FR-307）：202+taskId，进度看任务中心；version 空=latest。 */
+/** 异步安装/升级全局包：202+taskId，进度看任务中心；version 空=latest。 */
 export function useInstallGlobalPackage(nodeId: number) {
   return useMutation({
     mutationFn: async (body: { name: string; version?: string }) =>
@@ -67,7 +67,7 @@ export function useInstallGlobalPackage(nodeId: number) {
   })
 }
 
-/** 卸载全局包（FR-307，同步）。 */
+/** 卸载全局包（同步）。 */
 export function useRemoveGlobalPackage(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({

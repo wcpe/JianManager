@@ -28,7 +28,7 @@ func newGlobalTestManager(t *testing.T, fake runner) *Manager {
 	return m
 }
 
-// TestListGlobal_ParsesNpmAndMarksOutdated npm ls/outdated JSON 解析 + 可更新标记（FR-307）。
+// TestListGlobal_ParsesNpmAndMarksOutdated npm ls/outdated JSON 解析 + 可更新标记。
 func TestListGlobal_ParsesNpmAndMarksOutdated(t *testing.T) {
 	fake := func(_ context.Context, _ string, args, _ []string, _ func(string)) ([]byte, error) {
 		if args[0] == "ls" {
@@ -61,7 +61,7 @@ type exitOneErr struct{}
 
 func (*exitOneErr) Error() string { return "exit status 1" }
 
-// TestInstallGlobal_RejectsIllegalNameAndVersion 参数注入防护（FR-307）。
+// TestInstallGlobal_RejectsIllegalNameAndVersion 参数注入防护。
 func TestInstallGlobal_RejectsIllegalNameAndVersion(t *testing.T) {
 	m := newGlobalTestManager(t, func(context.Context, string, []string, []string, func(string)) ([]byte, error) {
 		t.Fatal("非法入参不应执行命令")
@@ -75,7 +75,7 @@ func TestInstallGlobal_RejectsIllegalNameAndVersion(t *testing.T) {
 	}
 }
 
-// TestInstallGlobal_NpmArgsAndLog npm 安装参数拼装 + 行日志回调（FR-307）。
+// TestInstallGlobal_NpmArgsAndLog npm 安装参数拼装 + 行日志回调。
 func TestInstallGlobal_NpmArgsAndLog(t *testing.T) {
 	var gotArgs []string
 	fake := func(_ context.Context, _ string, args, env []string, onLine func(string)) ([]byte, error) {
@@ -111,7 +111,7 @@ func TestInstallGlobal_NpmArgsAndLog(t *testing.T) {
 	}
 }
 
-// TestGlobal_YarnRejected yarn 全局不支持，明确错误（FR-307 范围约束）。
+// TestGlobal_YarnRejected yarn 全局不支持，明确错误（范围约束）。
 func TestGlobal_YarnRejected(t *testing.T) {
 	m := newGlobalTestManager(t, nil)
 	if _, err := m.ListGlobal(context.Background(), "yarn"); err == nil || !strings.Contains(err.Error(), "yarn") {
@@ -119,7 +119,7 @@ func TestGlobal_YarnRejected(t *testing.T) {
 	}
 }
 
-// TestGlobal_NoManagedNodeExplains 无托管 Node 时给可操作错误（FR-307）。
+// TestGlobal_NoManagedNodeExplains 无托管 Node 时给可操作错误。
 func TestGlobal_NoManagedNodeExplains(t *testing.T) {
 	m := NewManager(t.TempDir())
 	if _, err := m.ListGlobal(context.Background(), "npm"); err == nil || !strings.Contains(err.Error(), "Node") {
@@ -129,7 +129,7 @@ func TestGlobal_NoManagedNodeExplains(t *testing.T) {
 
 // TestListGlobal_EmptyPrefixTreatedAsEmpty 全空全局目录（npm ls 报 ENOENT/exit 254）
 // 应视为空列表而非报错——真机复现：全新节点首次打开全局包分区直接报
-// 「列出全局包失败: exit status 254（npm error code ENOENT）」（FR-307）。
+// 「列出全局包失败: exit status 254（npm error code ENOENT）」。
 func TestListGlobal_EmptyPrefixTreatedAsEmpty(t *testing.T) {
 	fake := func(_ context.Context, _ string, args, _ []string, _ func(string)) ([]byte, error) {
 		if args[0] == "ls" {

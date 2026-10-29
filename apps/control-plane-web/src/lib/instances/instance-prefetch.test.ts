@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHoverPrefetcher, INSTANCE_PREFETCH_DELAY_MS } from './instance-prefetch'
 
-/**
- * FR-297 悬停预取防抖纯逻辑：稳定悬停 150ms 才触发一次预取，
+/** 
+ *悬停预取防抖纯逻辑：稳定悬停 150ms 才触发一次预取，
  * 快速掠过（提前 leave / 换行）不得触发，避免鼠标扫过列表放请求风暴。
  */
 describe('createHoverPrefetcher', () => {

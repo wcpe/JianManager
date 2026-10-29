@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import type { PMConfigView } from '@/api/pmConfig'
 
-/**
- * FR-306 节点包管理器子区 DOM 测：渲染当前 PM + registry（token 脱敏），
+/** 
+ *节点包管理器子区 DOM 测：渲染当前 PM + registry（token 脱敏），
  * 切 PM + 加源 + 保存 → 提交携带 pm 与 registry。
  */
 
@@ -34,7 +34,7 @@ import NodePMConfigSection from './NodePMConfigSection'
 
 beforeEach(() => saveMutate.mockClear())
 
-describe('NodePMConfigSection（FR-306）', () => {
+describe('NodePMConfigSection', () => {
   it('选 pnpm + 加源 + 保存，提交携带 pm 与 registries', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NodePMConfigSection nodeId={2} />)

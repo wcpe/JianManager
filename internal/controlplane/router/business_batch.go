@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BusinessBatchHandler 业务批量命令与跨区二次确认路由（FR-523 / FR-535 / FR-537）。
+// BusinessBatchHandler 业务批量命令与跨区二次确认路由。
 //
 // 契约见 docs/openapi/paths/business.yaml：
 //
@@ -169,11 +169,11 @@ func truncateInstanceIDs(ids []uint) ([]uint, bool) {
 // Execute POST /business/batch — 执行批量业务命令。
 //
 // 按 Accept 分流：
-//   - text/event-stream → SSE 推送 progress / done 帧（FR-537）
+// text/event-stream → SSE 推送 progress / done 帧
 //   - 其余              → 同步返回完整结果（HTTP 200，部分失败不整体失败）
 //
 // **token 校验在流开始前完成**：失败一律返回 JSON 错误（不是 SSE 帧），
-// 因为确认是「执行前」的门槛，不该进入流式阶段才校验（FR-537 §4）。
+// 因为确认是「执行前」的门槛，不该进入流式阶段才校验（§4）。
 func (h *BusinessBatchHandler) Execute(c *gin.Context) {
 	if h.batch == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "BATCH_UNAVAILABLE", "message": "业务批量未启用"})
@@ -235,7 +235,7 @@ func (h *BusinessBatchHandler) executeSync(c *gin.Context, req service.BusinessB
 	c.JSON(http.StatusOK, resp)
 }
 
-// executeStream 流式执行并推送 progress / done（FR-537）。
+// executeStream 流式执行并推送 progress / done。
 //
 // 断开语义（§5）：客户端断开 **≠ 取消执行**。已下发的实例会继续完成，只是结果不再推送；
 // 因此这里的执行使用与请求解耦的 context，写失败只结束推送、不打断执行。

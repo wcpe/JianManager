@@ -1,6 +1,6 @@
 package router
 
-// FR-515 Phase D 传输层测试：会话/消息/run/事件端点 + SSE。
+// Phase D 传输层测试：会话/消息/run/事件端点 + SSE。
 //
 // 这组用例守的是四件事，任何一条退化成"能跑但语义错"都会造成实质问题：
 //  1. **越权一律 404**：会话是私有数据（§3 冻结项），403 与 404 的差别就是一个
@@ -498,7 +498,7 @@ func (f *assistantChatFixture) submitRun(t *testing.T, token string, convID uint
 	return uint(runID)
 }
 
-// ── FR-515 §9：角色与数据保留的边界 ──────────────────────────────────────
+// ──§9：角色与数据保留的边界 ──────────────────────────────────────
 
 // loginAs 用给定账密登录，返回 accessToken（角色变更后需重新签发时用）。
 func loginAs(t *testing.T, r *gin.Engine, username, password string) string {

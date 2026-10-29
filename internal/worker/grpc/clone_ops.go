@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
+// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（一键复制）。
 // 源与目标须已注册（据其工作目录解析）；本机本地拷贝，不跨节点。
 func (s *Server) CloneWorkDir(ctx context.Context, req *workerpb.CloneWorkDirRequest) (*workerpb.CloneWorkDirResponse, error) {
 	src, ok := s.manager.GetInstance(req.SrcInstanceUuid)
@@ -35,7 +35,7 @@ func (s *Server) CloneWorkDir(ctx context.Context, req *workerpb.CloneWorkDirReq
 }
 
 // copyDirFiltered 递归复制 srcDir → dstDir：include 非空时仅复制顶层段命中 include 的项，
-// 再按 exclude 排除。返回复制文件数、字节数与被跳过的顶层项/目录（FR-036 / FR-231）。
+// 再按 exclude 排除。返回复制文件数、字节数与被跳过的顶层项/目录。
 func copyDirFiltered(srcDir, dstDir string, include, exclude []string) (int64, int64, []string, error) {
 	var files, bytesCopied int64
 	skipped := []string{}
@@ -50,7 +50,7 @@ func copyDirFiltered(srcDir, dstDir string, include, exclude []string) (int64, i
 		if rel == "." {
 			return nil
 		}
-		// include 非空：不在 include 内的顶层项/目录跳过（FR-231 快速/高级筛选）；exclude 始终排除（运行态垃圾等）。
+		// include 非空：不在 include 内的顶层项/目录跳过（快速/高级筛选）；exclude 始终排除（运行态垃圾等）。
 		if !cloneIncluded(rel, include) || cloneExcluded(rel, exclude) {
 			if info.IsDir() {
 				skipped = append(skipped, filepath.ToSlash(rel))
@@ -81,7 +81,7 @@ func copyDirFiltered(srcDir, dstDir string, include, exclude []string) (int64, i
 	return files, bytesCopied, skipped, nil
 }
 
-// cloneIncluded 判断相对路径是否命中 include（FR-231）：include 空=全包含；
+// cloneIncluded 判断相对路径是否命中 include：include 空=全包含；
 // 否则取 rel 首段，匹配某 include 模式（精确 / basename glob；自动去 "/**"、"/" 后缀，如 plugins、*.jar）。
 func cloneIncluded(rel string, include []string) bool {
 	if len(include) == 0 {

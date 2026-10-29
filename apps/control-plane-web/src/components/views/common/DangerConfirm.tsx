@@ -16,8 +16,8 @@ import { Label } from '@jianmanager/ui/components/label'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import { useDangerPermission, type DangerScope } from '@/lib/shared/danger'
 
-/**
- * 统一危险操作确认弹窗（FR-059）。
+/** 
+ * 统一危险操作确认弹窗。
  *
  * 在既有 Dialog 之上，把零散的二次确认收敛为一处：
  * - 普通破坏性操作：二次确认 + destructive 主按钮；
@@ -39,12 +39,12 @@ export interface DangerConfirmProps {
   description?: string
   /** 确认按钮文案，缺省 common.delete。 */
   confirmLabel?: string
-  /**
+  /** 
    * 高危二次校验：需用户原样输入此文本（通常为资源名称）后才能确认。
    * 省略时为普通二次确认，不要求输入。
    */
   confirmText?: string
-  /**
+  /** 
    * 角色门禁范围：'group'（组管理员+，如删实例/删备份）或 'platform'（仅平台管理员，如删用户/删节点）。
    * 省略时不做前端角色门禁（仅二次确认）。
    */

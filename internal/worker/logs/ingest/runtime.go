@@ -399,7 +399,7 @@ type Manager struct {
 	blockedLoggedMu   sync.Mutex
 	blockedLogged     map[string]struct{} // 按源去重（首次 Debug 一次，不刷屏 ✓）
 
-	// ---- FR-485 日志平台可观测性 ----
+	// 日志平台可观测性 ----
 	//
 	// 这几个计数器只增不减，供心跳按「相邻两拍差分」推导速率，或直接作为累计量上报。
 	// 定位于**事故取证**：2026-09-28 的 117 MB/s 持续重写、退避风暴、慢查询刷屏
@@ -474,7 +474,7 @@ type Manager struct {
 	pipes          map[string]*pipeline.Pipeline
 	state          persistedState
 	statePath      string
-	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行，
+	// index 是采集索引的嵌入式 SQLite 存储（spec §2.1）：persist 只写变更行，
 	// 启动时自动迁移旧 ingest.state.json（校验失败拒绝启动）。nil 表示尚未打开（
 	// 测试直接构造 Manager 的场景在首次 persist 时按需打开）。
 	index *stateindex.Store
@@ -494,7 +494,7 @@ type Manager struct {
 	// 这里用「现值与上次记录值比较」而不是「在上层每个改动点显式标记」：前者不需要任何人
 	// 记得标记（漏标记即静默丢更新），且比较只是两个标量，代价可忽略。
 	persistedCover map[string]coverSignature
-	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
+	// events 是 canonical 事件体的追加式磁盘段存储；权威副本，state 只存元数据。
 	events              *eventstore.Store
 	verificationTimeout time.Duration
 	// verifyMaxQueriesPerChunk 是单簇单次校验的尝试次数上限（0 用默认）。
@@ -541,7 +541,7 @@ type Manager struct {
 	// verifyBackoffMin/verifyBackoffMax 是投影校验重试的退避区间（B1c）；0 用默认常量。
 	verifyBackoffMin time.Duration
 	verifyBackoffMax time.Duration
-	// verifyChunkEvents 是单次校验查询覆盖的事件上限（分簇粒度，FR-498 P0）；0 用默认常量。
+	// verifyChunkEvents 是单次校验查询覆盖的事件上限（分簇粒度P0）；0 用默认常量。
 	// 作为字段而非裸常量：不同 VL 部署的返回体承载能力不同，且回归要用真实限额路径驱动。
 	verifyChunkEvents int
 	// verifyChunkConcurrency 是同批内各校验簇的查询并发度；0/负值取默认，1 为串行。
@@ -582,7 +582,7 @@ type Manager struct {
 	// sampling 保存原始已校验策略，每个源创建独立采样器。
 	sampling     sampling.Policy
 	recoveryHold func(SourceConfig, string) (bool, string)
-	// reconcile 是启动增量对账（FR-497）的生效配置（已归一化）。
+	// reconcile 是启动增量对账的生效配置（已归一化）。
 	reconcile ReconcileConfig
 	// reconcileLoop 是常驻增量对账（后续项③）的生效配置（已归一化）：周期驱动、单轮预算与
 	// 源数有界，默认温和（15m / 45s / 8 源轮转）。**关闭即完全不跑**（不打 VL 查询、
@@ -638,7 +638,7 @@ type Manager struct {
 	// 而不是落库前再过滤一遍——后者只能让库变小，内存仍会随总量线性增长。
 	indexPrune ledger.DeliveryBatchPruneConfig
 	// indexCommit 是索引持久化「提交单元预算」的生效配置（已归一化）：单次持久化按
-	// 行数 + 耗时双上界切成多个提交单元（FR-498 P0，见 stateindex.CommitBudget）。
+	// 行数 + 耗时双上界切成多个提交单元（P0，见 stateindex.CommitBudget）。
 	// 打开索引库时下发（stateindex.OpenWithBudget）。
 	indexCommit stateindex.CommitBudget
 	// walLimits 是单源 WAL **真实积压**上限的配置面（键 log_capacity.max_wal_entries /
@@ -698,7 +698,7 @@ type Manager struct {
 	pollConcurrency int
 	// publishMu 串行化「读当前权威 → 应用本源的投影 → CAS 写回」整段（见 publish）。
 	//
-	// 为什么必须有（FR-498 并发采集轮的前提）：同一 namespace 会有**多个源**（同一实例的
+	// 为什么必须有（并发采集轮的前提）：同一 namespace 会有**多个源**（同一实例的
 	// stdout/stderr、多文件源），而 publish 是读-改-写：并发轮下两个源各自读到同一份旧记录，
 	// 后写者会把先写者的 SourceProjections 覆盖掉（丢失更新）。实测：两个 stdio 源并发投递后
 	// 记录里只剩 1 条源投影（原串行实现为 2 条）。锁内重新读取当前记录即恢复串行语义。
@@ -798,18 +798,18 @@ type Options struct {
 	// VLRoute returns the Catalog-selected client and whether publication is
 	// frozen. Nil preserves initial HOT behavior.
 	VLRoute func(SourceConfig) (*vlsup.Client, bool, error)
-	// Reconcile 是启动增量对账（FR-497）的配置面；nil 表示用默认（启用，
+	// Reconcile 是启动增量对账的配置面；nil 表示用默认（启用，
 	// 并发 4、单源超时 30s、单查询超时 10s）。配置键登记见 spec §5。
 	Reconcile *ReconcileConfig
 	// ReconcileLoop 是常驻增量对账（后续项③）的配置面；nil 表示用默认（启用、15 分钟周期、
 	// 单轮预算 45s、单轮 8 源轮转）。配置键登记为 `log_reconcile_loop.*`；与 Reconcile 同样，
 	// 当前生效路径是 Options + Set（YAML → Options 接线需改 internal/worker/config.go）。
 	ReconcileLoop *ReconcileLoopConfig
-	// IndexPrune 是采集索引「历史投递批次（delivery_batch）裁剪」的配置面（FR-496 索引有界化，
+	// IndexPrune 是采集索引「历史投递批次（delivery_batch）裁剪」的配置面（索引有界化，
 	// spec §6）；nil 表示用默认（ledger.DefaultDeliveryBatchPruneConfig：**开启**、严格按
 	// reclaim 水位）。判据与证明见 ledger/delivery_batch_prune.go。
 	IndexPrune *ledger.DeliveryBatchPruneConfig
-	// IndexCommit 是索引持久化「提交单元预算」的配置面（FR-498 P0，键 log_index.persist.*，
+	// IndexCommit 是索引持久化「提交单元预算」的配置面（P0，键 log_index.persist.*，
 	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每提交单元 512 行、目标 40ms、
 	// 下限 64 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget）。
 	// 单次持久化按行数 + 耗时双上界切成多个提交单元，见 stateindex.CommitBudget。
@@ -1340,7 +1340,7 @@ func (m *Manager) resolveGapsBudgetOf() ResolveGapsBudget {
 
 // ResolveCoveredGaps 解算全部源的「已覆盖缺口」（整节点自动路径）。
 //
-// 并发纪律（2026-10-02 生产缺陷修复，与 FR-499「登记路径与长临界区解耦」同款）：
+// 并发纪律（2026-10-02 生产缺陷修复，与「登记路径与长临界区解耦」同款）：
 //
 //	此前：cycleMu 全程持有 → 逐源投影查询（段级扫描）压在锁上 → 一次调用 = 整节点采集停摆，
 //	      且调用方超时/断开后服务端无从得知，继续持锁跑完（取消无效）。
@@ -1489,7 +1489,7 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 	// 锁序：cycleMu → mu（见 cycleMu 注释的完整锁序）。
 	// 最坏持有量：**单源变更段**——账本判据复核 + ResolveGapsThrough + 静默源补段（内存状态机）
 	// + ResumeAcquire，不含任何投影查询、网络往返或持久化（persist 在调用方、锁外执行）。
-	// 量化口径与 FR-499 一致：直接测「被它挡住的那件事」的时长，不用 TryLock 探锁（饥饿模式下
+	// 量化口径与一致：直接测「被它挡住的那件事」的时长，不用 TryLock 探锁（饥饿模式下
 	// 锁空闲也返回 false）。回归 TestResolveCoveredGapsLockHoldIsBoundedPerSource 实测：
 	// 解算总时长 372ms 的同一时段内，采集轮最坏单轮仅 1.37ms ⇒ 争用上界为毫秒级，
 	// 与解算总时长（源数 × 单源投影查询）彻底解耦。
@@ -2121,7 +2121,7 @@ func New(opts Options) (*Manager, error) {
 	if m.verifyBackoffMax <= 0 {
 		m.verifyBackoffMax = defaultVerifyBackoffMax
 	}
-	// 投影校验的分簇与并发（FR-498 P0）：默认 2000 事件/簇、同批内 4 路并发。
+	// 投影校验的分簇与并发（P0）：默认 2000 事件/簇、同批内 4 路并发。
 	if m.verifyChunkEvents <= 0 {
 		m.verifyChunkEvents = defaultVerifyChunkEvents
 	}
@@ -2139,12 +2139,12 @@ func New(opts Options) (*Manager, error) {
 	}
 	m.verifyVisibilityFloor = opts.VerifyVisibilityFloor
 	m.verifyChunkEstimates = opts.VerifyChunkEstimates
-	// 采集索引（FR-496）：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
+	// 采集索引：打开 SQLite 索引，必要时一次性迁移旧 ingest.state.json；
 	// 迁移/校验失败 → 拒绝启动采集（不静默降级），保留旧文件供人工处置。
 	if err := m.openIndex(); err != nil {
 		return nil, err
 	}
-	// 事件体走追加式磁盘段（FR-484）：state 只留元数据，避免整份重写与常驻切片。
+	// 事件体走追加式磁盘段：state 只留元数据，避免整份重写与常驻切片。
 	store, err := eventstore.Open(filepath.Join(opts.Root, "var", "log", "events"))
 	if err != nil {
 		return nil, err
@@ -2171,7 +2171,7 @@ func New(opts Options) (*Manager, error) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	// 启动恢复分三阶段（FR-497）：
+	// 启动恢复分三阶段：
 	//   ① 登记全部源并重建权威集合（顺序与旧实现一致）；
 	//   ② 并发对账「源 × UTC 天」的条数（只读 VL，双超时）；
 	//   ③ 按源重发：只补缺失天 / 零重发 / 回退整窗（对账不可信时）。
@@ -2355,7 +2355,7 @@ func (m *Manager) WaitStartupRecovery(ctx context.Context) error {
 	}
 }
 
-// runStartupRecovery 是启动恢复的后台驱动（FR-497 的三阶段，顺序与语义不变）：
+// runStartupRecovery 是启动恢复的后台驱动（的三阶段，顺序与语义不变）：
 // ① 按批读回权威集合（可取消、有界内存）；② 批内并发对账（网络）；③ 逐源重发 + 落库。
 //
 // 与改动前的两处行为差异，都是 2026-10-02 事故的直接对策：
@@ -2815,7 +2815,7 @@ func (m *Manager) Register(source SourceConfig) error {
 	}
 	led := ledger.New()
 	recoveryDirty := false
-	// 历史投递批次裁剪（FR-496 索引有界化）：配置默认开启，非法值已在 indexPruneConfigOf 回退。
+	// 历史投递批次裁剪（索引有界化）：配置默认开启，非法值已在 indexPruneConfigOf 回退。
 	led.SetDeliveryBatchPrune(m.indexPrune)
 	wal := newWAL(led, ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration})
 	if saved, ok := m.state.Sources[key]; ok {
@@ -2835,7 +2835,7 @@ func (m *Manager) Register(source SourceConfig) error {
 			missing := wal.RestoreMixed(saved.WAL, saved.WALRefs, bodyLookup)
 			if len(missing) > 0 {
 				recoveryDirty = true
-				// 取不到正文的条目不得静默丢：记可见缺口并告警（与 FR-474 §5#1 同口径）。
+				// 取不到正文的条目不得静默丢：记可见缺口并告警（与§5#1 同口径）。
 				var from, to uint64 = ^uint64(0), 0
 				for _, r := range missing {
 					if r.RecordStart < from {
@@ -3117,7 +3117,7 @@ func (g *persistGate) grantableLocked(seq int64, priority bool, streakMax int) b
 
 // defaultPollConcurrency 是单轮采集的跨源并发度默认值（0 或负值取它，1 表示回到串行）。
 //
-// 为什么需要并发（FR-498 实测根因，2026-10-01）：单源单轮的时间几乎全部是**等待**而非算力——
+// 为什么需要并发（实测根因，2026-10-01）：单源单轮的时间几乎全部是**等待**而非算力——
 // 60 源基线实测单轮 99.6s 里 pollSource=99.6s、其中 deliver=90.8s、而 deliver 中
 // verify（VL 的 LogsQL 校验查询，含重试退避）=85.3s（占整轮 85.6%）；同期 Worker CPU 仅
 // 17–45%、VL CPU 仅 7–23%，两边都没打满。而采集轮是**逐源串行**的，等于把 60 份网络/磁盘
@@ -3827,7 +3827,7 @@ func stageTimingEnabled() bool {
 
 // deliveryTailPlan 描述「本批能否作为权威集合的增量尾部直接处理」。
 //
-// 背景（FR-498 单位行成本 8.3×，2026-10-02 实测定位）：
+// 背景（单位行成本 8.3×，2026-10-02 实测定位）：
 // 投递路径原先每批要做三次 O(段总行数) 的操作——身份集合重建（deliver）、权威全量构建
 // （canonicalRecoveryEvents）、段行数校准（appendEvents 的 Count）。段**只增不减**且没有裁剪
 // 路径（契约 §4.3/§5.3 要求它作为 VL 数据根丢失后的权威集合），于是单源段在生产上已达数十万行
@@ -4552,7 +4552,7 @@ func (m *Manager) identityConflictCount(namespace, sourceKey string) uint64 {
 }
 
 func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay bool) (result pipeline.DeliveryResult, err error) {
-	// FR-485：投递成功率/分类统计的唯一收口点。
+	// 投递成功率/分类统计的唯一收口点。
 	//
 	// 为什么放在这里用**命名返回**：本函数有十余个 return（预览失败、去重后无写入、
 	// 写后校验失败…），逐个埋点既易漏又会把观测逻辑撒进投递主路径。用 defer 在这里
@@ -4752,7 +4752,7 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	return result, nil
 }
 
-// projectionWritePlan 描述一次投影写入的「写入面」与「发布语义」（FR-497 spec §2.2）。
+// projectionWritePlan 描述一次投影写入的「写入面」与「发布语义」（spec §2.2）。
 //
 // 为什么要拆开：重启恢复原先只有「整窗重发」一种形态——Replace=true 时把写入面**扩为
 // 权威全量**。启动增量对账需要「只写缺失天，但发布语义仍是取代」（新代包含该天全量 →
@@ -5122,7 +5122,7 @@ func (m *Manager) writeProjectionPlan(source SourceConfig, events []logtypes.Eve
 	// 后一次落库总是把前一次的遗漏补齐。紧随其后的落库点有两个：同源下一批的 DurablePersist
 	// （VL 插入前的契约落库）与轮末的统一 persist（pollOnce 的 dirty 分支）。
 	//
-	// 为什么必须去掉（FR-498 并发采集轮的连带修复）：每源每批两次落库时，并发轮里 8 个 worker
+	// 为什么必须去掉（并发采集轮的连带修复）：每源每批两次落库时，并发轮里 8 个 worker
 	// 会在全局串行的持久化上排长队，把「短变更」调用者（实例登记）挤到队尾。去掉后单源每批
 	// 只落库一次（VL 插入前那次，契约不变），持久化总量与排队长度减半。
 	//
@@ -5221,7 +5221,7 @@ func (m *Manager) appendEvents(key string, events []logtypes.Event) error {
 	if covered > saved.EventsStoredThrough {
 		saved.EventsStoredThrough = covered
 	}
-	// 已落段后不再保留内联副本，否则常驻切片会重新把 RSS 推高（FR-484 目标）。
+	// 已落段后不再保留内联副本，否则常驻切片会重新把 RSS 推高（目标）。
 	saved.Events = nil
 	m.state.Sources[key] = saved
 	m.mu.Unlock()
@@ -6136,7 +6136,7 @@ func nextVerifyBackoff(cur, max time.Duration) time.Duration {
 	return next
 }
 
-// 投影校验的分簇与并发参数（FR-498 P0 优化，2026-10-01）。
+// 投影校验的分簇与并发参数（P0 优化，2026-10-01）。
 const (
 	// defaultVerifyChunkEvents 是单次校验查询覆盖的事件上限。
 	//
@@ -6182,7 +6182,7 @@ const (
 	// 跨源并发（pollConcurrency）只重叠了源与源之间的等待，源内部的等待仍逐个叠加。
 	defaultVerifyChunkConcurrency = 4
 	// verifySlowQueryThreshold 是单次校验查询的慢查询告警阈值。旧实现只打「查询开始」，
-	// 慢查询在现场不可见（FR-498 定位耗时构成的主要困难之一）。
+	// 慢查询在现场不可见（定位耗时构成的主要困难之一）。
 	verifySlowQueryThreshold = 500 * time.Millisecond
 )
 
@@ -6204,7 +6204,7 @@ func verifyEventTimeKey(event logtypes.Event) time.Time {
 
 // planVerifyChunks 把整批事件按**事件时间**排序后，每 max 条切成一簇。
 //
-// 为什么按时间切（FR-498 P0）：旧实现按**索引**每 500 条切一片，每片用「本片事件的
+// 为什么按时间切（P0）：旧实现按**索引**每 500 条切一片，每片用「本片事件的
 // [min-1s, max+1s]」查询。批内事件的时间与索引顺序并不一致（多条流混合、时间戳跳变、
 // 跨日批次），各片时间窗因而相互重叠，**同一批的每一行都会被重复读回 k 次**（k=片数）。
 // 按时间切簇后，各簇窗口只覆盖自己的时间范围（相邻簇最多在 ±1s 容差处相接），
@@ -6657,7 +6657,7 @@ func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Cl
 				"generation", generation, "source", source.LogSourceID,
 				"events", len(events), "rows", queryStats.Rows, "bytes", queryStats.Bytes,
 				"elapsedMs", elapsed.Milliseconds())
-			// FR-485：慢查询计数与最慢值。埋点与告警日志同源同判据（同一阈值、同一处），
+			// 慢查询计数与最慢值。埋点与告警日志同源同判据（同一阈值、同一处），
 			// 因此「日志里出现慢查询」与「指标在涨」必然一致——不会出现两套口径打架。
 			m.slowSQLCount.Add(1)
 			recordAtomicMax(&m.slowSQLMaxNs, int64(elapsed))
@@ -6700,7 +6700,7 @@ func (m *Manager) verifyProjectionChunk(parent context.Context, client *vlsup.Cl
 			return stats, fmt.Errorf("ingest: projection %s not fully visible before deadline: %w", generation, ctx.Err())
 		case <-time.After(backoff):
 		}
-		// FR-485：这一次等待就是一次「进入退避」——计数在**真正等待之后**累加，
+		// 这一次等待就是一次「进入退避」——计数在**真正等待之后**累加，
 		// 而不是在计算退避时长时累加。差别在于：能算出退避时长却没等（例如最后一轮
 		// 直接返回）不应被算作一次退避，否则计数会系统性地高于实际重试次数。
 		m.verifyBackoffCount.Add(1)
@@ -7555,7 +7555,7 @@ const (
 	// 走「探测失败按未占用继续」⇒ VL 侧占用判据被整条跳过，只剩进程内 CAS；
 	// 状态回滚/重置/迁移让计数器回退时，新名即撞上上一生命周期的同名行 ⇒
 	// `unexpected or duplicate projection event_id` ⇒ 永不发布 ⇒ 采集停摆。
-	// 这正是 2026-10-08 那次事故的成因（探测被 400 拒绝），也是 FR-496 的停摆形态。
+	// 这正是 2026-10-08 那次事故的成因（探测被 400 拒绝），也是的停摆形态。
 	//
 	// 因此窗口两端**必须一起**受本常量约束：`end - start ≤ projectionProbeSpan`。
 	// 取 31d 的依据见下（等于 VL 硬上限，落在被接受的一侧）。
@@ -7571,7 +7571,7 @@ const (
 	//
 	// 若窗口上界取 now，这类未来行落进盲区 ⇒ 探测恒报「该名字未占用」⇒ 绕过
 	// `claimGenerationLocked` 直接占住该名 ⇒ 撞上既有同名行 ⇒ 正是本函数要消灭的
-	// `unexpected or duplicate projection event_id`（FR-496 停摆形态）。
+	// `unexpected or duplicate projection event_id`（停摆形态）。
 	// 实测（本仓 generation_reuse 回归）：夹具行 `[12:00:01]` 落成当日 12:00:01Z，
 	// 探测在 `end=now` 下报未占用、重放写回同名 `projection-3`；仅把上界推到 now+1d
 	// 即进位到 `projection-4`（探测量 2→4）——因果由此确认。
@@ -7623,7 +7623,7 @@ func (m *Manager) nextFreeProjectionGenerationWithClient(client *vlsup.Client, s
 //
 // 为什么不放进 publishMu（用户明令 ✗）：publishMu 是**全局**锁，且临界区内会取 m.mu；
 // 而探测是 5s 级 VL 网络往返（projectionProbeTimeout），放进去会让所有源串行等一个源，
-// 把「跨源并发」这一 FR-498 成果直接取消。放 m.mu 的代价是探测期间其它源也要排队取 m.mu
+// 把「跨源并发」这一成果直接取消。放 m.mu 的代价是探测期间其它源也要排队取 m.mu
 // （m.mu 本就是投递路径上已被接受的短临界区），但**不会**把网络往返串成全局队列：
 // 每个源只在它自己那一次取名时占用 m.mu 一个探测周期，且探测有硬上界
 // （projectionProbeTimeout、maxProjectionGenerationProbes=16）。
@@ -8433,7 +8433,7 @@ func appendUniqueGeneration(generations []string, generation string) []string {
 }
 
 func (m *Manager) load() error {
-	// FR-496：状态从嵌入式 SQLite 索引读入（旧 JSON 迁移已在 openIndex 完成）。
+	// 状态从嵌入式 SQLite 索引读入（旧 JSON 迁移已在 openIndex 完成）。
 	if m.index == nil {
 		// 兼容直接构造 Manager 的测试：没有索引可用，只能保持空状态。
 		return nil
@@ -8446,7 +8446,7 @@ func (m *Manager) load() error {
 	return nil
 }
 
-// persist 把内存状态增量写入采集索引（FR-496 spec §2.3）：只写本批次变更的行（UPSERT），
+// persist 把内存状态增量写入采集索引（spec §2.3）：只写本批次变更的行（UPSERT），
 // 事务提交即持久；未变更行不产生任何写语句（空闲轮询不重写历史）。
 //
 // 成本按「变更源」收敛（这是「60 源下单次持久化 ≤50ms」的关键）：
@@ -8461,7 +8461,7 @@ func (m *Manager) load() error {
 // 生产 307MB 副本实测：修复前每次持久化对全部 746,884 行做规划+比对（≈3.0s），
 // 且因指纹口径缺陷每次都整表重写（47s）；修复后无变更轮次只比对几百行根表（毫秒级）。
 //
-// 并发与排队（FR-498 并发采集轮的连带修复）：
+// 并发与排队（并发采集轮的连带修复）：
 //   - 单执行者：构建 + 落库同一时刻只有一次在跑，因此「构建顺序 = 落库顺序」，不可能出现
 //     旧快照后写（那会让 persistedRev 已推进但索引回到旧值 → 变更永久丢失）；
 //   - 落库在 m.mu 之外：SQLite 事务（批量源下几十毫秒级）不再阻塞登记的 m.mu 短临界区；
@@ -8470,7 +8470,7 @@ func (m *Manager) load() error {
 //     （race 实测：不合并时登记 ≥1s 截止，TestRegisterInstanceNotBlockedBySaturatedPollRound 转红）。
 //
 // 锁序：cycleMu → registerMu → pendingMu → persistGate → m.mu。
-// persist 保持既有契约：**返回即「当前已声明的变更全部落库」**（FR-499 的「登记返回即落库」
+// persist 保持既有契约：**返回即「当前已声明的变更全部落库」**（的「登记返回即落库」
 // 保证不变），且走**优先队列**（用户面：采集轮/登记/解算/关停的延迟优先于恢复链吞吐）。
 func (m *Manager) persist() error {
 	return m.persistCtx(context.Background(), persistPriority)
@@ -10603,7 +10603,7 @@ func (m *Manager) commitPersist(ctx context.Context, plan *persistPlan) (bool, e
 		m.mu.Lock()
 		m.lastPersistStats = stats
 		m.mu.Unlock()
-		// FR-485：累计写入字节（供心跳差分出「persist 写字节/秒」）。
+		// 累计写入字节（供心跳差分出「persist 写字节/秒」）。
 		// 口径是逻辑写入量（行值字节总和），不含 SQLite 页开销与 WAL 副本——
 		// 这正是「事故里 117 MB/s 在重写什么」要回答的量，且与 Stats.BytesWritten 同源，
 		// 不另造一套口径（两套口径会在排障时互相矛盾）。
@@ -10719,7 +10719,7 @@ func (m *Manager) buildRebuiltSourceOutsideLock(t rebuildTask) persistedSource {
 	entry.WALRefs = refs
 	entry.WAL = append(entry.WAL, inline...)
 	// 事件体已在磁盘段时不写回内联切片——这正是原先 state 涨到 180MB、每次 persist
-	// 触发 130MB MarshalIndent 的根源（FR-484 阶段0 量测）。
+	// 触发 130MB MarshalIndent 的根源（阶段0 量测）。
 	if !entry.EventsStored {
 		entry.Events = append(entry.Events, t.inline...)
 	}
@@ -10864,12 +10864,12 @@ func startupRecoveryFailureLevel(err error) (slog.Level, string) {
 	return slog.LevelError, "启动恢复：源恢复失败（其余源照常继续）"
 }
 
-// ── FR-485：日志平台可观测性快照与埋点 ─────────────────────────────────────
+// ──：日志平台可观测性快照与埋点 ─────────────────────────────────────
 //
 // 本段只在**已有的事故判据点**上累加计数，不新增任何判断、不改变任何既有行为。
 // 读数由 internal/worker/logmetrics 周期取出并经心跳上报，CP 落时序后进告警规则。
 
-// LogMetricsSnapshot 是采集面自身运行指标的一次读数（FR-485）。
+// LogMetricsSnapshot 是采集面自身运行指标的一次读数。
 //
 // Available=false 表示「本进程没有可观测的采集面」（采集运行时未装配或已关闭）——
 // 消费方据此**整组不上报**，而不是上报一串 0。零值在运维上意味着「一切正常」，
@@ -10901,7 +10901,7 @@ type LogMetricsSnapshot struct {
 	SlowSQLMaxMs int64
 }
 
-// LogMetricsSnapshot 取一份采集面可观测性读数（FR-485）。
+// LogMetricsSnapshot 取一份采集面可观测性读数。
 //
 // 实现 logmetrics.Source。刻意**不持锁遍历管道**：本方法会被心跳侧每 30s 调用一次，
 // 而 m.mu 在采集热路径上是高竞争锁——为了一次观测去排那条队，会把观测量本身
@@ -10995,7 +10995,7 @@ func (m *Manager) maxPausedSecondsAmong(pipes []*pipeline.Pipeline, target int64
 	return best
 }
 
-// noteDeliveryOutcome 记一次投递尝试的结果（FR-485）。
+// noteDeliveryOutcome 记一次投递尝试的结果。
 //
 // events 为空表示这不是一次真正的投递尝试（例如「去重后无写入」），**不计入分母**：
 // 稳态下这类调用占绝大多数，计入会把失败率稀释成「投递很健康」的假象。
@@ -11035,7 +11035,7 @@ func (m *Manager) dominantDeliveryFailureClass() string {
 	return best
 }
 
-// classifyDeliveryFailure 把投递错误归入固定小集（FR-485 的「失败分类」指标）。
+// classifyDeliveryFailure 把投递错误归入固定小集（的「失败分类」指标）。
 //
 // 为什么分类而不过滤错误文本：错误文本随时间/版本漂移且基数无界，
 // 而运维真正要分辨的只有两件事——「重试有用吗」与「是不是我们自己的凭据/请求错了」。

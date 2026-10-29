@@ -23,7 +23,7 @@ import (
 // enrollTokenHeader 与 internal/controlplane/grpc、internal/worker/register 中的常量一致（wire 约定）。
 const enrollTokenHeader = "enroll-token"
 
-// newEnrollRegisterHandler 建带真实 EnrollTokenService 的 Register handler 与底层 DB（FR-080，见 ADR-020）。
+// newEnrollRegisterHandler 建带真实 EnrollTokenService 的 Register handler 与底层 DB（见 ADR-020）。
 func newEnrollRegisterHandler(t *testing.T) (*cpgrpc.ControlPlaneHandler, *gorm.DB, *service.EnrollTokenService) {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"

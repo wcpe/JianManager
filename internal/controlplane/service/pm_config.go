@@ -15,14 +15,14 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// pmTokenMask 是 registry 凭据脱敏占位（回传此值表示「不改该源 token」，同 proxy.url 保存语义，FR-306）。
+// pmTokenMask 是 registry 凭据脱敏占位（回传此值表示「不改该源 token」，同 proxy.url 保存语义）。
 const pmTokenMask = "********"
 
-// PMConfigService 管理节点包管理器与 registry 配置（FR-306）。
+// PMConfigService 管理节点包管理器与 registry 配置。
 type PMConfigService struct {
 	db    *gorm.DB
 	pool  *cpgrpc.ClientPool
-	tasks *TaskService // 任务中心（FR-307 异步装包）；SetTaskService 注入
+	tasks *TaskService // 任务中心（异步装包）；SetTaskService 注入
 }
 
 // NewPMConfigService 创建 PM 配置服务。

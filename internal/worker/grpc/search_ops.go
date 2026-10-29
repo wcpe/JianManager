@@ -13,7 +13,7 @@ import (
 // 后台构建在此预算内完成则本次即同步出结果（小目录不退化）；否则返回 indexing=true。
 const indexFastPathBudget = 200 * time.Millisecond
 
-// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（见 ADR-017）。
 //
 // 每实例一份本地持久倒排索引（落数据根 var/index/，不进 CP DB）。每次查询前先增量更新
 // 索引（扫描 + 指纹比对：新增/变化重索引、删除移除），再查询返回命中文件+行+片段。
@@ -32,7 +32,7 @@ func (s *Server) SearchFiles(ctx context.Context, req *workerpb.SearchFilesReque
 
 	ix := s.searchIndexFor(req.InstanceUuid)
 
-	// 首建后台化（FR-113，见 ADR-024）：索引未就绪时启动后台单飞构建并有界等待——
+	// 首建后台化（见 ADR-024）：索引未就绪时启动后台单飞构建并有界等待——
 	// 小目录在预算内建好本次即出结果；大目录预算内未就绪则返回 indexing=true（空命中、不阻塞），
 	// 由前端显示「索引中」并自动重试。
 	if !ix.Ready() {
@@ -42,7 +42,7 @@ func (s *Server) SearchFiles(ctx context.Context, req *workerpb.SearchFilesReque
 		}
 	}
 
-	// 已就绪：查询前增量更新索引（FR-074：文件变更增量更新）。扫描失败不阻断查询（用既有落盘索引兜底）。
+	// 已就绪：查询前增量更新索引（：文件变更增量更新）。扫描失败不阻断查询（用既有落盘索引兜底）。
 	if _, err := ix.Update(inst.WorkDir); err != nil {
 		// 仅记账级失败（如目录被并发删改）：继续用现有索引查询，避免整次搜索失败。
 		_ = err

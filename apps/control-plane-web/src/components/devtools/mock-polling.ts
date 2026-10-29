@@ -1,8 +1,8 @@
 import type { Query, QueryClient, QueryKey } from '@tanstack/react-query'
 import { MOCK_POLL_FOLLOW_ORIGINAL, getMockPollInterval } from '@jianmanager/devmock/runtime-control'
 
-/**
- * mock 模式全局轮询控制（FR-502 阶段 6 补丁）。
+/** 
+ * mock 模式全局轮询控制（阶段 6 补丁）。
  *
  * 要解决的问题：mock 下各处的 `refetchInterval`（2s/10s/15s/30s…散在 `src/api/**` 几十个调用点）
  * 不可控——想安静地看一次请求、想验证「轮询会不会带出脏数据」、想把节奏放慢看 loading，
@@ -36,7 +36,7 @@ interface PollingMarked {
   __mockPollConfigured?: boolean
 }
 
-/**
+/** 
  * 只看 queryKey / refetchInterval 两项的窄化签名。
  * 库里的 `defaultQueryOptions` 带四个泛型参数，装饰它的目的仅此两项，故局部窄化 + 一次显式断言。
  */
@@ -54,7 +54,7 @@ function notify(): void {
   listener?.()
 }
 
-/**
+/** 
  * 安装轮询控制（main.tsx 在 mock 模式下调用一次）。
  * @param queryClient 应用唯一的 QueryClient
  * @param scope 白名单 / 黑名单，按 `pollQueryLabel` 的标签做前缀匹配；
@@ -83,7 +83,7 @@ export function installMockPollingControl(
     merged.__mockPollConfigured = true
     const parsedKey = merged.queryKey
 
-    /**
+    /** 
      * 一律改写成**函数**形式（哪怕原值是静态毫秒数），一切都在排期时现算：
      * TanStack 每次给查询排下一次轮询都会调这个函数，所以改档位 / 点掉芯片立刻生效；
      * 若改成「解析时算好的静态值」，值会被写进 options 对象冻住——之后的档位变化只能等
@@ -151,7 +151,7 @@ export function isPollingQueryExcluded(label: string): boolean {
   return matchesAny(excluded, label)
 }
 
-/**
+/** 
  * 面板「作用范围」用的完整快照：标签 + 是否被排除。
  * 必须把排除状态一起放进快照——只列标签的话，点掉一个芯片时集合没变，
  * 订阅方（useSyncExternalStore）拿到相同快照就不会重渲染，界面会停在旧状态。
@@ -171,7 +171,7 @@ export function refreshMockPolling(): void {
   notify()
 }
 
-/**
+/** 
  * 切换某标签的纳入 / 排除（面板芯片点击）。改完立刻 `refreshMockPolling()`，
  * 否则要等下一次排期（最长 60s）才看得出变化。
  */

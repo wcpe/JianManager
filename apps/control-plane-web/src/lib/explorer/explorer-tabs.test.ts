@@ -13,7 +13,7 @@ import {
   MAX_EXPLORER_FLOATS,
 } from './explorer-tabs'
 
-describe('explorer-tabs（FR-376）', () => {
+describe('explorer-tabs', () => {
   beforeEach(() => {
     resetTabIdSeq(0)
   })

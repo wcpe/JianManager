@@ -6,8 +6,8 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import InstanceEnvSegment from '@/components/views/instances/InstanceEnvSegment'
 
-/**
- * FR-344 环境变量页签 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *环境变量页签 · 受控视图测（ADR-103 b 范式）。
  *
  * 自带局部 i18n（本组件文案面是整个 `env.*` 命名空间且不带 defaultValue），
  * 文案与主控台 zh.json 一致——断言落在这几个键上，故必须与线上同值。
@@ -48,7 +48,7 @@ function renderSegment(props: Partial<Props> = {}) {
   return { onSave }
 }
 
-describe('InstanceEnvSegment（FR-344 · ADR-103 b 范式）', () => {
+describe('InstanceEnvSegment（ADR-103 b 范式）', () => {
   it('已配置变量渲染为可编辑行，运行时环境渲染为只读表', () => {
     renderSegment({
       configured: { JAVA_HOME: '/opt/jdks/temurin-21' },
@@ -98,7 +98,7 @@ describe('InstanceEnvSegment（FR-344 · ADR-103 b 范式）', () => {
     expect(screen.getByText('暂无自定义环境变量，点「添加」新增。')).toBeInTheDocument()
   })
 
-  /**
+  /** 
    * 自定义变量行是可编辑行，key 必须稳定（行自己的 id，不是数组下标）。
    *
    * 用下标当 key 时，删掉中间一行会让其后每行的 DOM 身份前移一格：正在编辑的输入框

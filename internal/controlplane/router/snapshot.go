@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// SnapshotHandler 实例整机快照路由处理器（FR-466）。
+// SnapshotHandler 实例整机快照路由处理器。
 // 读走 instance:read（且实例可访问）；创建/回滚走实例写权限（canManageInstance）。
 type SnapshotHandler struct {
 	svc   *service.SnapshotService

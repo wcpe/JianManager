@@ -9,7 +9,7 @@ import ServerSelectorView from '@/components/views/instances/ServerSelector'
 
 const PAGE_SIZE = 200
 
-/**
+/** 
  * 服务器选择器的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层持有开合与搜索词（取数依赖它们）、接服务端搜索与聚合计数、
@@ -44,7 +44,7 @@ export default function ServerSelector() {
   const { data: searchResult, isLoading, isFetching } = useSearchInstances(params, open)
   const { data: aggregate } = useInstanceAggregate(aggregateParams, open)
   const { data: nodes = [] } = useNodes()
-  // 行悬停预取实例详情（FR-297）：稳定悬停 150ms 才预取，点击进入即命中缓存。
+  // 行悬停预取实例详情：稳定悬停 150ms 才预取，点击进入即命中缓存。
   const prefetcher = useInstanceHoverPrefetch()
   const nodeNames = useMemo(() => new Map(nodes.map((node) => [node.id, node.name])), [nodes])
   const items = searchResult?.items ?? []

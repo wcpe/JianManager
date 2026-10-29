@@ -1,8 +1,8 @@
-/**
- * jsdom 终端测试共享 harness（FR-295/296）：**只提供 WebSocket 替身**。
+/** 
+ * jsdom 终端测试共享 harness（296）：**只提供 WebSocket 替身**。
  *
  * 历史上它还提供 xterm / FitAddon 替身（故仍叫这个文件名，改名会牵动一批测试文件，
- * 不值当）。xterm 渲染壳已全站下线（FR-415 之后实例控制台走 DOM 输出区，ADR-086），
+ * 不值当）。xterm 渲染壳已全站下线（之后实例控制台走 DOM 输出区，ADR-086），
  * `@xterm/*` 依赖与 mock 一并移除，此处只剩 WS 桩。
  *
  * 用法：beforeEach 调 {@link resetTerminalHarness} 并

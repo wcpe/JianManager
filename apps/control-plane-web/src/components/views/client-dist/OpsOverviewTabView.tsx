@@ -1,4 +1,4 @@
-/**
+/** 
  * @file OpsOverviewTabView：页面 B · 总览 Tab（分发健康 + 运行态/请求侧速览 + 趋势 + 分布 + 安全排行）的受控视图。
  *       更新侧观测、安全态势快照与运行态数据的取数，以及排行深链构造与跳转，均由应用容器负责。
  * @input lib/client-dist-stats-contracts（ClientDistStats/ClientDistObservability）、
@@ -9,7 +9,7 @@
  * @output OpsOverviewTabView、OpsOverviewTabViewProps、RankFilterKey、OpsOverviewLinkRenderer
  * @sync apps/control-plane-web/src/components/client-dist/OpsOverviewTab.tsx、
  *       apps/control-plane-web/src/components/client-dist/OpsOverviewTab.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-430 / FR-428 / FR-356 页面 B 总览 Tab）
+ * @since（组件受控化迁包；原页面 B 总览 Tab）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -45,13 +45,13 @@ export type OpsOverviewLinkRenderer = (args: { to: string; className: string; ch
 /** 排行主体链接样式（视图持有，随渲染器一并注入）。 */
 const RANK_LINK_CLASS = 'min-w-0 truncate font-medium text-primary hover:underline'
 
-/**
+/** 
  * 总览 Tab 的注入契约（受控视图，ADR-103 a 范式）。
  *
  * 受控边界：更新侧观测、安全态势与运行态数据经 props 注入（应用容器调
  * `useClientDistObservability` / `useClientDistSecurityOverview`，运行态与请求侧由页面持有）；
  * 分布面板下钻经 `onLink` 上报，排行深链目标经 `rankLogsHref` 注入、锚点渲染经 `renderLink` 注入。
- * 视图只保留展示与口径计算（KPI 口径见 FR-356：更新侧率只信 observability，请求侧率只信 stats）。
+ * 视图只保留展示与口径计算（KPI 口径见：更新侧率只信 observability，请求侧率只信 stats）。
  */
 export interface OpsOverviewTabViewProps {
   /** 请求侧统计（`/client-dist/stats`）；缺省按 0 / 空展示。 */

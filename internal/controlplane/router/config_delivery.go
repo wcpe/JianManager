@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ConfigDeliveryHandler 配置分批灰度与交付编排路由处理器（FR-531 / FR-532）。
+// ConfigDeliveryHandler 配置分批灰度与交付编排路由处理器。
 //
 // 路径前缀 `/config-deliveries` 与 `/config-files`（分层定义）、`/config-baselines`
 // （模板收敛）刻意分开：三者描述的是同一份配置在不同阶段的三件事——定义、模板、变更，

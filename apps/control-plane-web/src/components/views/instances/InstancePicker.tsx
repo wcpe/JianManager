@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 
-/** 候选默认窗口：靠键入服务端 q 缩小，与 GroupMembersDialog（FR-336）同款。 */
+/** 候选默认窗口：靠键入服务端 q 缩小，与 GroupMembersDialog同款。 */
 export const CANDIDATE_LIMIT = 50
 
 /** 「全部」哨兵值：Combobox 用空串表示未选，无法承载一个可点选的「全部」项，故另设哨兵。 */
@@ -14,12 +14,12 @@ export interface InstancePickerItemView {
   name: string
 }
 
-/**
+/** 
  * 服务端搜索的实例选择器（面向千级 / 万级实例）。
  *
  * 【为什么需要它】原先各处用 `useInstances()` 拉全量再 map 成下拉选项：1200 实例约 1MB，
  * 万级就是十几 MB，而且它带 30 秒兜底轮询，每轮都重传整份。本组件改为「默认取前 N 条 +
- * 键入走服务端 q」，与 GroupMembersDialog（FR-336）同一模式。
+ * 键入走服务端 q」，与 GroupMembersDialog同一模式。
  *
  * 【为什么不用 Radix Select】Select 依赖全部 SelectItem mount 才能提供首字母跳转与方向键
  * 导航，因此无法只渲染前 N 项；千级候选项下它每次 render 还要把整个选项列表求值一遍。
@@ -34,12 +34,12 @@ export interface InstancePickerItemView {
 export interface InstancePickerProps<T extends InstancePickerItemView = InstancePickerItemView> {
   /** 当前值（实例 id）；未选中为 null。与 uuidValue 二选一。 */
   value?: number | null
-  /**
+  /** 
    * id 值域下的变更回调。第二参数是选中实例的完整对象（选「全部」或候选里找不到时为 undefined），
    * 供调用方顺手取用 serverPort 之类的字段——否则还得自己再查一次实例列表。
    */
   onChange?: (value: number | null, instance?: T) => void
-  /**
+  /** 
    * uuid 值域模式（与 value/onChange 二选一）。下钻选择器（DrillTargetPicker）的 DrillTarget
    * 用 uuid 标识目标，与数字 id 值域互不通用，故单开一组 prop 而不是放宽 value 的类型——
    * 后者会让既有调用方的 onChange 参数退化成联合类型，反而要逐个收窄。

@@ -7,7 +7,7 @@ import '@/i18n'
 import { loginMockUser } from '@/test/auth'
 import ConfigExplorer from './ConfigExplorer'
 
-/**
+/** 
  * jsdom 缺 Range.getClientRects / getBoundingClientRect，CodeMirror 6 的坐标测量会抛异常。
  * 与 ResourceEditor.dom.test.tsx 同款最小垫片（返回零矩形，本文件断言不依赖布局几何）。
  */
@@ -33,8 +33,8 @@ function renderConfigExplorer(instanceId = 1) {
   )
 }
 
-/**
- * 配置模式全文搜索命中定位（FR-074 复验缺陷）。
+/** 
+ * 配置模式全文搜索命中定位（复验缺陷）。
  *
  * 从配置管理主入口（ConfigExplorer → ResourceExplorer configMode）打开搜索面板、
  * 点击内容命中后，配置编辑器不仅要打开该文件，还必须把光标定位到命中行——
@@ -44,7 +44,7 @@ function renderConfigExplorer(instanceId = 1) {
  * `.cm-activeLineGutter`。files 种子中 server.properties 的 `max-players` 在第 2 行，
  * 命中点击后活动行号应为 2（缺陷态：不定位，光标停留第 1 行）。
  */
-describe('ConfigExplorer 搜索命中定位（FR-074）', () => {
+describe('ConfigExplorer 搜索命中定位', () => {
   beforeEach(() => {
     loginMockUser()
   })

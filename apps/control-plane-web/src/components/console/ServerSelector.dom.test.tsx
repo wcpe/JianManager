@@ -52,7 +52,7 @@ describe('ServerSelector DOM', () => {
     await user.click(screen.getByRole('button', { name: '选择服务器' }))
     const dialog = await screen.findByRole('dialog', { name: '服务器选择器' })
 
-    // 侧栏祖先带 transform/contain（FR-131）会给 fixed 建立包含块、把全屏模态压到侧栏宽度内；
+    // 侧栏祖先带 transform/contain会给 fixed 建立包含块、把全屏模态压到侧栏宽度内；
     // Portal 到 body 后模态不再是本组件渲染容器的后代，逃出该包含块。
     expect(container.contains(dialog)).toBe(false)
     expect(document.body.contains(dialog)).toBe(true)
@@ -103,7 +103,7 @@ describe('ServerSelector DOM', () => {
     expect(within(dialog).getByText('加载中...')).toBeInTheDocument()
   })
 
-  it('行稳定悬停 150ms 预取实例详情，快速掠过不请求（FR-297）', async () => {
+  it('行稳定悬停 150ms 预取实例详情，快速掠过不请求', async () => {
     const user = userEvent.setup()
     // 经请求事件计数实例详情请求（GET /instances/:数字id，天然排除 search/aggregate 子路径）。
     const detailHits: string[] = []
@@ -131,7 +131,7 @@ describe('ServerSelector DOM', () => {
     }
   })
 
-  // 键盘与焦点（FR-502）：弹层是自绘 portal，只声明了 `role="dialog" aria-modal="true"`。
+  // 键盘与焦点：弹层是自绘 portal，只声明了 `role="dialog" aria-modal="true"`。
   // 以下用例锁定这个声明的兑现契约——它们都不会抛错，去掉实现后只会静默失效
   // （Esc 关不掉、Tab 跑到遮罩背后的侧栏、关闭后焦点掉到 body），故必须逐条钉住。
   it('Esc 关闭弹层（自绘模态此前没有键盘出口）', async () => {

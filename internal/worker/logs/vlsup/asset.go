@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/logasset"
 )
 
-// FR-476 依赖资产基线（v1.52.0）。正式发行分发与许可清单仍属 FR-476 验收；
+// 依赖资产基线（v1.52.0）。正式发行分发与许可清单仍属验收；
 // 其他版本必须重跑受影响能力验证（worker-log-platform-contract §2.2 / §10）。
 const (
 	// AssetTag 审批 tag。

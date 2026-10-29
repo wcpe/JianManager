@@ -8,7 +8,7 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { loginMockUser } from '@/test/auth'
 import ResourceExplorer from './ResourceExplorer'
 
-/**
+/** 
  * jsdom 缺 Range.getClientRects / getBoundingClientRect，CodeMirror 6 的坐标测量会抛
  * 「textRange(...).getClientRects is not a function」（异步、可致 Vitest 误判）。在本测试文件内
  * 补最小垫片（不改 setup.ts），让编辑器在 jsdom 下不抛坐标异常。返回零矩形即可——本文件断言不依赖布局几何。
@@ -26,8 +26,8 @@ beforeAll(() => {
     ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON: () => ({}) }) as DOMRect
 })
 
-/**
- * 文件编辑器读/改/存联动强断言（FR-204 文件归档域 / FR-070 编辑器）。
+/** 
+ * 文件编辑器读/改/存联动强断言（文件归档域编辑器）。
  *
  * 编辑器（CodeEditor，CodeMirror 6）只经 ResourceExplorer 在右栏挂载，故驱动整个资源管理器：
  * 双击文件 → 读出种子内容（GET /files/read）→ 在编辑器内输入 → 保存按钮由禁用转可用 →
@@ -76,7 +76,7 @@ function editorHeaderSaveButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
 }
 
-describe('文件编辑器读/改/存（mock 假后端，FR-204）', () => {
+describe('文件编辑器读/改/存（mock 假后端）', () => {
   it('双击文件读出种子内容', async () => {
     loginMockUser()
     const user = userEvent.setup()
@@ -142,11 +142,11 @@ describe('文件编辑器读/改/存（mock 假后端，FR-204）', () => {
   })
 })
 
-/**
+/** 
  * 编辑器读/写端点的内容级 round-trip：进入子目录打开 config.yml、改写、保存、关闭、重开、读回新内容。
  * 单列一个 describe 以便用清晰的导航步骤（先下钻 plugins/ 再开 config.yml）。
  */
-describe('文件编辑器内容 round-trip（mock 假后端，FR-204）', () => {
+describe('文件编辑器内容 round-trip（mock 假后端）', () => {
   it('改写 config.yml → 保存 → 重开读回新内容', async () => {
     loginMockUser()
     const user = userEvent.setup()
@@ -178,7 +178,7 @@ describe('文件编辑器内容 round-trip（mock 假后端，FR-204）', () => 
     await waitFor(() => expect(editorHeaderSaveButton()).toBeDisabled())
 
     // 关闭编辑器（头部 关闭 X 按钮，title=common.close=关闭）。
-    // FR-502：Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分。
+    // Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分。
     await user.click(
       screen
         .getAllByRole('button', { name: '关闭' })

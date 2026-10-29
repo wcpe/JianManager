@@ -57,7 +57,7 @@ func statusOf(t *testing.T, db *gorm.DB, uuid string) (model.InstanceStatus, str
 	return got.Status, got.StatusReason
 }
 
-// TestSyncInstanceStates_EvidenceRunningKeepsState 心跳清单缺失但证据显示在跑 → 不翻 STOPPED（FR-455③）。
+// TestSyncInstanceStates_EvidenceRunningKeepsState 心跳清单缺失但证据显示在跑 → 不翻 STOPPED（③）。
 func TestSyncInstanceStates_EvidenceRunningKeepsState(t *testing.T) {
 	h, db, node := newReconcileFixture(t)
 	seedRunningInstance(t, db, node.ID, "i-running", model.InstanceStatusRunning)
@@ -124,7 +124,7 @@ func TestSyncInstanceStates_EvidenceErrorThenRunningResets(t *testing.T) {
 	require.Equal(t, model.InstanceStatusRunning, status, "清计数后重新计拍，不应立即落 STOPPED")
 }
 
-// TestSyncInstanceStates_GraceResetsWhenReported FR-456 F7：实例重新出现在心跳清单时应复位宽限计数
+// TestSyncInstanceStates_GraceResetsWhenReportedF7：实例重新出现在心跳清单时应复位宽限计数
 // （宽限语义为「连续 N 拍缺失」，非累计）。
 func TestSyncInstanceStates_GraceResetsWhenReported(t *testing.T) {
 	h, db, node := newReconcileFixture(t)

@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestKindOrInfer 旧数据（Kind 为空）的回退推断（FR-511）。
+// TestKindOrInfer 旧数据（Kind 为空）的回退推断。
 //
 // 回退必须**保守且不丢信息**：旧库里的实例没有 kind 列值，若一律显示「未知」，
 // 侧栏那一行的第二行就白占了；这里按 type+role 给出最合理的结论。

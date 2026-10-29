@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 页面上下文的外发校验与裁剪（FR-518 §4.1 / §6）。
+// 页面上下文的外发校验与裁剪（§4.1 / §6）。
 //
 // 设计要点（三条都是被 spec 点名、且容易做错的）：
 //  1. **剔除而非报错**：单个实体不存在/无权、单个 filter 超长或命名敏感、实体超上限，

@@ -1,9 +1,9 @@
 import type { LogLine } from './console-log-line'
 
-/**
- * 异常堆栈块（FR-418，spec §3.2）。
+/** 
+ * 异常堆栈块（spec §3.2）。
  *
- * 解析器（FR-415）已把 `\tat …` / `Caused by:` 标成 `stack-frame` / `stack-cause`
+ * 解析器已把 `\tat …` / `Caused by:` 标成 `stack-frame` / `stack-cause`
  * 并用 `stackOf` 指回异常头行的 seq；本模块只做「归并成块 + 折叠」这一层：
  * 一个 NPE 在控制台里常占 30~60 行，默认展开会把有用的日志整屏挤走。
  *
@@ -26,7 +26,7 @@ export type StackBlockMap = ReadonlyMap<number, StackBlock>
 
 const EMPTY_BLOCKS: StackBlockMap = new Map()
 
-/**
+/** 
  * 归并出全部堆栈块。
  *
  * 头行已被环形缓冲丢弃（只剩孤儿帧）时**不成块**：没有头行就没有可折叠的摘要行，
@@ -66,7 +66,7 @@ export function stackBlockSize(block: StackBlock): number {
   return block.frameSeqs.length + 1
 }
 
-/**
+/** 
  * 渲染用的可视行：折叠态的块只留头行。
  *
  * 没有任何块时**原样返回入参**（引用不变），让「绝大多数控制台没有异常」这条常态路径
@@ -85,10 +85,10 @@ export function visibleConsoleRows(
   })
 }
 
-/**
+/** 
  * 与级别过滤的接缝（spec §3.2）：**堆栈帧跟随其异常头行的可见性**。
  *
- * 这条规则**不在本模块实现**——它归 FR-417 的
+ * 这条规则**不在本模块实现**——它归的
  * {@link import('./console-filter').filterConsoleLines}，那里已按同一语义处理
  * （帧不单独参与级别判定、一律跟随 `stackOf`）。此处只做说明，避免同一条规则出现两份实现：
  * 帧行解析不出级别会被兜底成 `INFO`，朴素的 `lines.filter(byLevel)` 在「只看 ERROR」时

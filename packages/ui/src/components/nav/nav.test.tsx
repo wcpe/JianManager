@@ -9,8 +9,8 @@ import { SidebarSection } from './SidebarSection'
 import { SidebarShell } from './SidebarShell'
 import { TopNav } from './TopNav'
 
-/**
- * 导航原语测试（FR-502 阶段 4；原 `shell.test.tsx`）。
+/** 
+ * 导航原语测试（阶段 4；原 `shell.test.tsx`）。
  *
  * 与阶段 3 的布局层测试同一取向：不测视觉，只锁**结构性契约**与**交互行为**——
  * `data-slot` / `data-*` 钩子、槽位透传、回调参数、折叠态（后续页面迁移与阶段 5
@@ -230,7 +230,7 @@ describe('SideNav 资源侧栏', () => {
   })
 })
 
-/**
+/** 
  * 侧栏通用原语（ADR-103 拆分判据）：外壳 / 分组 / 底栏 / 钢轨 / 分区标题。
  *
  * 这五个件是给「应用侧自建侧栏」用的通用件，因此断言只锁两件事：

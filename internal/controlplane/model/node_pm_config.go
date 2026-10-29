@@ -2,10 +2,10 @@ package model
 
 import "time"
 
-// NodePMConfig 节点级包管理器与 registry 配置（FR-306，节点单例）。
+// NodePMConfig 节点级包管理器与 registry 配置（节点单例）。
 // 承载 corepack 激活的 PM 偏好与多 registry（默认源 + @scope 域源 + 可选凭据）；
 // registries 以 JSON 数组存 []PMRegistry；token 入库明文（节点级配置密级同 proxy.url），
-// 出参与日志脱敏。被 FR-307 全局包管理 / FR-308 bot-worker 依赖装全局消费。
+// 出参与日志脱敏。被全局包管理bot-worker 依赖装全局消费。
 type NodePMConfig struct {
 	ID     uint `gorm:"primaryKey" json:"id"`
 	NodeID uint `gorm:"not null;uniqueIndex" json:"nodeId"`

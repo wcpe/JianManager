@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 
-/**
- * 页面上下文的**消费端**（FR-518 §5.1 / §5.2）。
+/** 
+ * 页面上下文的**消费端**（§5.1 / §5.2）。
  *
  * 分层说明（重要）：
  *  - 本文件实现「注册表 + 芯片 + 发送时快照」三件事；
- *  - **各页面调用 `usePageContext` 上报自身上下文**属于 FR-518 自身的实现范围，
- *    尚未接入（FR-518 状态为未实现）。因此当前产品行为是「没有芯片」——
+ *  - **各页面调用 `usePageContext` 上报自身上下文**属于自身的实现范围，
+ *    尚未接入（状态为未实现）。因此当前产品行为是「没有芯片」——
  *    不是坏掉，而是还没有任何页面声明自己能提供什么。
  *
  * 为什么先把消费端做掉：`SubmitRun` 的 `contextSnapshot` 字段与芯片 UI 都是
- * FR-519 的一部分，先落地可以让 FR-518 接入时只写「注册」那一半，
+ *的一部分，先落地可以让接入时只写「注册」那一半，
  * 不必再回头改传输与界面。
  *
  * 三条不可违反的约束：
@@ -24,7 +24,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 export const PAGE_CONTEXT_MAX_ENTITIES = 8
 /** filters 单个值上限（spec §4.1：截断至 64 字符）。 */
 export const PAGE_CONTEXT_MAX_FILTER_LEN = 64
-/**
+/** 
  * 敏感筛选键的片段黑名单（与后端 assistant_context.go 同口径）。
  * 按键名子串匹配：实际键名有 apiKey / access_token / userPassword 等各种写法。
  */
@@ -35,7 +35,7 @@ export const PAGE_CONTEXT_SENSITIVE_MARKERS = [
 ]
 
 
-/**
+/** 
  * 敏感筛选**值**的形态判据（spec §8「按键名黑名单 + 值形态双重判定」）。
  *
  * 只有键名黑名单拦不住这类外发：`?q=eyJhbGciOi...`——键名 `q` 完全无害，
@@ -68,7 +68,7 @@ export const PAGE_CONTEXT_SECRET_VALUE_PATTERNS: readonly RegExp[] = [
   /^[0-9a-f]{32,}$/i,
 ]
 
-/**
+/** 
  * 判断一个筛选**值**是否形似凭据。
  *
  * 注意：必须在**截断之前**用原值判断——JWT 动辄上百字符，截到 64 会把结构截断，
@@ -79,14 +79,14 @@ export function pageContextValueLooksSecret(value: string): boolean {
   if (v === '') return false
   return PAGE_CONTEXT_SECRET_VALUE_PATTERNS.some((re) => re.test(v))
 }
-/** 允许作为上下文的实体类型（白名单，与 FR-518 spec §4 对齐）。 */
+/** 允许作为上下文的实体类型（白名单，与spec §4 对齐）。 */
 export const PAGE_CONTEXT_ENTITY_TYPES = ['instance', 'node', 'task', 'alert', 'player'] as const
 export type PageContextEntityType = (typeof PAGE_CONTEXT_ENTITY_TYPES)[number]
 
 /** 一个类型化实体引用。**只有 id，不含名称**（名称不是凭据，也不该外发）。 */
 export interface PageContextEntityRef {
   type: PageContextEntityType
-  /**
+  /** 
    * 实体标识。**允许字符串**：实例/节点深链用的是 uuid，数字主键则来自列表行。
    * 统一在序列化时转成字符串——后端的契约也是「string | number 皆可」。
    */
@@ -107,7 +107,7 @@ export interface PageContextInput {
   timeRange?: string
 }
 
-/**
+/** 
  * 外发快照的形状（序列化进 `run.context_snapshot`）。
  *
  * `v` 是契约版本：后端将来要按版本解释字段，没有它就只能靠猜。
@@ -126,7 +126,7 @@ export interface ContextChip {
   key: string
   label: string
   onRemove: () => void
-  /**
+  /** 
    * 该芯片对应的实体（仅实体类芯片有）。
    *
    * 芯片据此展开指标摘要与「打开详情」入口。刻意不把 id 塞进 label 再反解：
@@ -137,7 +137,7 @@ export interface ContextChip {
 
 // ── 全局注册表（页面 → 助手） ──────────────────────────────────────────
 
-/**
+/** 
  * 当前活跃页面的上下文。
  *
  * 用模块级 store + `useSyncExternalStore` 而不是 React Context：
@@ -173,10 +173,10 @@ export function usePageContextValue(): PageContextInput | null {
   return useSyncExternalStore(subscribePageContext, getPageContext, () => null)
 }
 
-/**
- * 页面侧 hook（供 FR-518 接入时使用）。
+/** 
+ * 页面侧 hook（供接入时使用）。
  *
- * 目前产品里没有调用方——各页面尚未注册（FR-518 未实现）。
+ * 目前产品里没有调用方——各页面尚未注册（未实现）。
  * 放在这里而不是另建文件，是为了让「注册契约」与「消费实现」在同一处可对照，
  * 接入时不必在两份文件之间来回猜字段含义。
  */
@@ -203,7 +203,7 @@ const ENTITY_LABEL: Record<PageContextEntityType, string> = {
   player: '玩家',
 }
 
-/**
+/** 
  * 白名单页键 → 展示名（spec §4.2）。
  *
  * 键名必须与后端 `assistantContextPageKeys` 完全一致：路由是 `/monitor`
@@ -229,7 +229,7 @@ const PAGE_LABEL: Record<string, string> = {
   tasks: '任务',
 }
 
-/**
+/** 
  * 把页面上下文转成可移除的芯片。
  *
  * 每条实体单独一个芯片（可单独移除）；页签/时间窗/筛选各一个。
@@ -301,7 +301,7 @@ export function useContextChips(
   }, [onChange, removed, value])
 }
 
-/**
+/** 
  * 序列化外发快照（**发送时调用一次即冻结**）。
  *
  * 没有上下文时返回 null 而不是 `"{}"`：后端据此区分「没带上下文」与
@@ -351,7 +351,7 @@ export function usePageContextChips(): {
   chips: ContextChip[]
   /** 当前生效的上下文（含手动添加的实体），供面板做去重与上限判定。 */
   entities: PageContextEntityRef[]
-  /** 手动追加一个实体（FR-518 §5.3：与自动上下文同权，可单独移除）。 */
+  /** 手动追加一个实体（§5.3：与自动上下文同权，可单独移除）。 */
   addEntity: (entity: PageContextEntityRef) => void
   buildSnapshot: () => string | null
 } {
@@ -361,7 +361,7 @@ export function usePageContextChips(): {
   const chips = useContextChips(effective, setOverride)
   const buildSnapshot = useCallback(() => serializePageContext(effective), [effective])
 
-  /**
+  /** 
    * 追加实体。
    *
    * 没有页面上下文时也要能加：此时以「当前页」为锚点建一个最小上下文。

@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 审批执行器（FR-491）。
+// 审批执行器。
 //
 // 职责边界：本文件只管「把一张已批准的票据变成一次真实执行」，
 // **不知道**任何具体领域（实例启停、文件写）。领域动作由注册进来的 adapter 提供。
@@ -21,7 +21,7 @@ import (
 //  2. **执行前重校验**：payload 哈希、目标漂移、审批人身份；任一不符即 failed 且**不执行**；
 //  3. **长操作经 TaskService.RunAsync**，不另造调度（否则任务中心会出现两条互不相识的链路）。
 
-// ApprovalAdapter 领域执行适配器（FR-492 按 action 登记时一并提供）。
+// ApprovalAdapter 领域执行适配器（按 action 登记时一并提供）。
 //
 // 签名刻意收窄成「票据 + 冻结参数」：adapter 不能自己去看请求上下文里的原始参数，
 // 只能执行**批准时冻结的那一份**——否则「批准的」与「执行的」可能不是同一件事。
@@ -33,7 +33,7 @@ type ApprovalExecutor struct {
 	svc *ApprovalService
 	// tasks 用于承载长操作；为 nil 时退化为同步执行（仅测试/未装配场景）。
 	tasks *TaskService
-	// adapters action → 领域执行器（FR-492 登记）。
+	// adapters action → 领域执行器（登记）。
 	adapters map[string]ApprovalAdapter
 	// verifyTarget 目标漂移校验；为 nil 时视为不校验（调用方负责保证已装配）。
 	verifyTarget func(t *model.ApprovalTicket, evidence map[string]any) error
@@ -49,7 +49,7 @@ func NewApprovalExecutor(db *gorm.DB, svc *ApprovalService, tasks *TaskService) 
 	return &ApprovalExecutor{db: db, svc: svc, tasks: tasks, adapters: map[string]ApprovalAdapter{}}
 }
 
-// RegisterAdapter 登记某 action 的执行器（供 FR-492 的登记表装配）。
+// RegisterAdapter 登记某 action 的执行器（供的登记表装配）。
 func (e *ApprovalExecutor) RegisterAdapter(action string, fn ApprovalAdapter) {
 	if e.adapters == nil {
 		e.adapters = map[string]ApprovalAdapter{}

@@ -57,7 +57,7 @@ const PLAYER_EVENTS = ['join', 'quit', 'chat', 'cross_server'] as const
 /** Radix Select 不接受空字符串选项值，用哨兵值表达「全部（不指定目标）」。 */
 const TARGET_ALL = 'all'
 
-/** 告警规则创建/编辑对话框（FR-085）。按触发类型动态展示字段。 */
+/** 告警规则创建/编辑对话框。按触发类型动态展示字段。 */
 export function RuleDialogView({
   rule,
   channels,
@@ -95,7 +95,7 @@ export function RuleDialogView({
   const silenceError =
     !isValidHHMM(form.silenceStart) || !isValidHHMM(form.silenceEnd) ? t('alerts.silenceFormatError') : ''
   const hasError = !!(nameError || keywordError || silenceError)
-  /**
+  /** 
    * 目标选项只保留**节点**维度。
    *
    * 实例维度已改走 InstancePicker 的服务端搜索：实例数是千级（大档 1200），而 Radix Select

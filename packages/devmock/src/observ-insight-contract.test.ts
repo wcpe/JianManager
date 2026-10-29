@@ -3,8 +3,8 @@ import { server } from '@jianmanager/devmock/server'
 import { db, resetDb } from '@jianmanager/devmock/db'
 import type { CapacityForecastInfo, SLOInfo } from '@jianmanager/devmock/contracts'
 
-/**
- * 容量预测 / 可用性（FR-463/464）**经 mock handler** 的契约测试。
+/** 
+ * 容量预测 / 可用性（464）**经 mock handler** 的契约测试。
  *
  * 存在的理由：旧用例用手写响应体（`server.use(http.get(...) => HttpResponse.json({...}))`）
  * 覆盖「无可用证据」等负例，**完全绕过 mock handler** —— 即便 mock 的字段名/分档逻辑全错，
@@ -45,7 +45,7 @@ afterEach(() => {
 })
 afterAll(() => server.close())
 
-describe('可用性 mock（FR-463）：applicable 两态都可复现（M7）', () => {
+describe('可用性 mock：applicable 两态都可复现（M7）', () => {
   it('有运行中实例 → platform 维度 applicable=true 且给可用率/预算数字', async () => {
     const token = await login()
     const body = await fetchSLO(token, '?scope=platform&range=24h')
@@ -102,7 +102,7 @@ describe('可用性 mock（FR-463）：applicable 两态都可复现（M7）', (
   })
 })
 
-describe('容量预测 mock（FR-464）：分档与量级正确（M1/M9）', () => {
+describe('容量预测 mock：分档与量级正确（M1/M9）', () => {
   it('磁盘：有增长 → 给点估计 + 80% CI，且 now/limit 与同页曲线同量级', async () => {
     const token = await login()
     const { forecasts } = await fetchCapacity(token, '?scope=node&targetId=node-alpha&range=7d&metrics=node_disk_used')

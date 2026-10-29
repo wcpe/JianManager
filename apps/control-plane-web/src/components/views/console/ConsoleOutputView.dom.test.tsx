@@ -9,8 +9,8 @@ import { ConsoleLineBuffer } from '@/lib/console/console-line-buffer'
 import type { LogLine } from '@/lib/console/console-log-line'
 import { ConsoleOutputView } from '@/components/views/console/ConsoleOutputView'
 
-/**
- * 输出区（FR-415，spec §2.1；ADR-086）· 受控视图测（ADR-103）：
+/** 
+ * 输出区（spec §2.1；ADR-086）· 受控视图测（ADR-103）：
  * 虚拟列表 / 自动滚底 / 上滚暂停 / 回溯锚点。
  *
  * jsdom 不做布局，`clientHeight`/`scrollHeight` 恒为 0，所以滚动相关用例显式把这三个
@@ -78,7 +78,7 @@ const renderedSeqs = () =>
     Number(el.getAttribute('data-console-line-seq')),
   )
 
-/**
+/** 
  * 追加新行的宿主。
  *
  * 不用 RTL 的 `rerender`：本文件的 `renderWithProviders` 把 Provider 写在元素树里，
@@ -230,7 +230,7 @@ describe('ConsoleOutputView 自动滚底与上滚暂停（spec §2.1）', () => 
 })
 
 describe('ConsoleOutputView 回溯锚点与空态', () => {
-  it('环形缓冲丢过行时顶部挂「更早日志需回溯」锚点（FR-419 据此加载）', () => {
+  it('环形缓冲丢过行时顶部挂「更早日志需回溯」锚点（据此加载）', () => {
     renderWithProviders(<ConsoleOutputView lines={makeLines(5)} droppedCount={137} fontSize={14} />)
     expect(screen.getByTestId('console-earlier-anchor')).toHaveTextContent('更早日志需回溯（已丢弃 137 行）')
   })
@@ -286,12 +286,12 @@ describe('ConsoleOutputView 行渲染', () => {
     expect(document.querySelector('[data-console-line-seq="1"]')).toHaveAttribute('data-console-line-kind', 'system')
   })
 
-  it('堆栈帧标记为 stack-frame，且默认被折叠进块（FR-418）', () => {
+  it('堆栈帧标记为 stack-frame，且默认被折叠进块', () => {
     const buffer = new ConsoleLineBuffer()
     buffer.appendChunk('java.lang.NullPointerException: boom\n\tat a.B.c(B.java:1)\n', 'stdout')
     renderWithProviders(<ConsoleOutputView lines={buffer.snapshot()} droppedCount={0} fontSize={14} />)
 
-    // FR-418 起堆栈默认折叠，故帧行先不在 DOM 里；展开后仍必须带 stack-frame 标记
+    // 起堆栈默认折叠，故帧行先不在 DOM 里；展开后仍必须带 stack-frame 标记
     // ——即「解析器标类别」与「折叠层用它收起来」两件事都要成立。
     expect(document.querySelector('[data-console-line-seq="1"]')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '展开堆栈' }))

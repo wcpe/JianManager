@@ -9,12 +9,12 @@ export interface TopologyGraphProps {
   className?: string
 }
 
-/**
+/** 
  * 群组服拓扑图接线层（ADR-103）：视图已回迁应用侧，取数留在应用侧。
  *
- * - `useTopology()`：单条聚合查询消 per-proxy N+1（FR-335）；
- * - `useNodes()`：节点负载标签数据源（FR-453，复用已缓存的节点列表，无 per-instance N+1）；
- * - `useInstanceGroups()`：groupTree 维度专用数据源（FR-452），仅选中该维度时才拉取——
+ * - `useTopology()`：单条聚合查询消 per-proxy N+1；
+ * - `useNodes()`：节点负载标签数据源（复用已缓存的节点列表，无 per-instance N+1）；
+ * - `useInstanceGroups()`：groupTree 维度专用数据源，仅选中该维度时才拉取——
  *   由视图通过 `onGroupTreeNeeded` 通知，本层据此开关查询。
  */
 export default function TopologyGraph({ className }: TopologyGraphProps) {

@@ -1,4 +1,4 @@
-// Package ledger 实现 FR-474 采集账本：按 (log_source_id, source_generation)
+// Package ledger 实现采集账本：按 (log_source_id, source_generation)
 // 保存四水位、投递状态、恢复分段引用、缺口与轮转关联。
 // 字段与状态语义以 docs/specs/worker-log-platform-contract/spec.md 为准。
 package ledger
@@ -638,7 +638,7 @@ type Entry struct {
 	// pausedAt 是本次暂停的**起始时刻**（进程内状态：不落库、不参与 JSON 序列化与索引映射，
 	// 重启后归零）。
 	//
-	// 为什么需要它（FR-485）：既有状态只有「是否暂停」这个布尔量，回答不了事故里真正
+	// 为什么需要它：既有状态只有「是否暂停」这个布尔量，回答不了事故里真正
 	// 要紧的问题——「这个源卡了多久」。2026-09-28 事故的形态正是几个源被闸住后无人察觉，
 	// 而「暂停 3 小时」与「暂停 3 秒」在运维上是完全不同的两件事。
 	//
@@ -664,7 +664,7 @@ type Entry struct {
 	// 「这个 (Reclaim, 水位) 组合已经处理过」。同样是进程内状态，语义与重启归零同上。
 	deliveryPrunedWatermark uint64
 
-	// gapPrunedThrough / gapPrunedWatermark 是已解决缺口裁剪的去重键（FR-486 ③ 附带修复），
+	// gapPrunedThrough / gapPrunedWatermark 是已解决缺口裁剪的去重键（③ 附带修复），
 	// 与上面那对同构、同为进程内状态（不落库、不参与 JSON 与索引映射，重启归零=强制再裁一次）。
 	//
 	// 为什么需要去重：缺口列表在生产可达十万级，若每轮采集都全扫一遍找可裁项，
@@ -1152,7 +1152,7 @@ func (l *Ledger) PauseAcquire(key SourceKey, reason string) error {
 
 // PausedSince 返回该源本次暂停的起始时刻与是否暂停。
 //
-// 供 FR-485 的「暂停时长」指标使用。ok=false 表示未暂停（或该源不存在）；
+// 供的「暂停时长」指标使用。ok=false 表示未暂停（或该源不存在）；
 // 起点未知（老状态加载后未再暂停）时同样 ok=false，让消费方报 0 而不是报一个
 // 由 time.Time 零值推出的巨大秒数。
 func (l *Ledger) PausedSince(key SourceKey) (time.Time, bool) {
@@ -1180,7 +1180,7 @@ func (l *Ledger) ResumeAcquire(key SourceKey) error {
 	}
 	e.AcquirePaused = false
 	e.PauseReason = ""
-	// 清除暂停起点（FR-485）：否则下次暂停会沿用旧起点，报出一个跨越两段暂停的
+	// 清除暂停起点：否则下次暂停会沿用旧起点，报出一个跨越两段暂停的
 	// 虚假时长。下次暂停时 PauseAcquire 会重新记起点。
 	e.pausedAt = time.Time{}
 	return nil

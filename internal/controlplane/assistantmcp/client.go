@@ -1,4 +1,4 @@
-// Package assistantmcp 外部 MCP 客户端（FR-517，Streamable HTTP 传输）。
+// Package assistantmcp 外部 MCP 客户端（Streamable HTTP 传输）。
 //
 // 方向明确：`internal/controlplane/mcp` 是把**本平台能力**暴露给 Agent 的 MCP **服务端**；
 // 本包相反，它作为**客户端**去调用外部 MCP 服务。两者语义相反，传输层不可复用。
@@ -566,7 +566,7 @@ func (c *Client) readSSEResponse(body io.Reader, expectID int, out any) error {
 			// 通知帧（无 id）：跳过，不当作结果。
 			continue
 		}
-		// **必须是本请求的响应**（FR-517 能力面对齐）。
+		// **必须是本请求的响应**（能力面对齐）。
 		//
 		// 为什么一定要校验 id：MCP 允许服务端在同一条流里发起**反向请求**
 		// （`sampling/createMessage`、`roots/list`、`elicitation/create`）。

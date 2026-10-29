@@ -6,7 +6,7 @@ import type { UploadFileChunkedOptions } from './chunked-upload'
 import { uploadFilesEfficient as runEfficientUpload } from './efficient-upload'
 import type { EfficientUploadEntry, EfficientUploadOptions } from './efficient-upload'
 
-/**
+/** 
  * 客户端分发上传的 **api 接线模块**：`lib/client-dist/` 内唯一 import `@/api/*` 的模块。
  *
  * 分层约定（为可测性服务，勿让纯逻辑反向依赖 api）：
@@ -28,14 +28,14 @@ interface InitUploadResult {
   chunkCount: number
 }
 
-/**
+/** 
  * 分块上传一个文件到指定频道，返回内容寻址元数据（与单次上传 usePublishClientFile 同结构）。
  *
  * 复用后端分块协议：init（声明大小得 uploadId/chunkSize/chunkCount）→ 按 chunkSize 顺序
  * PUT 各分片原始字节（幂等）→ complete（服务端拼装喂 CAS，返回与单次上传一致的
  * {sha256,md5,size,codec}）。onProgress 报已上传/总字节；signal 支持取消（取消即 DELETE 弃单）。
  *
- * 签名对 FR-250（延迟批量上传编排）稳定：uploadFileChunked(channelId,file,{onProgress,signal})。
+ * 签名对（延迟批量上传编排）稳定：uploadFileChunked(channelId,file,{onProgress,signal})。
  *
  * 流程：init → 顺序 PUT 各分片（application/octet-stream 原始字节）→ complete。
  * 0 字节文件（.gitkeep/空配置）：init(totalSize=0) 合法、无分片，直达 complete（后端落空内容 CAS）。
@@ -80,7 +80,7 @@ export async function uploadFileChunked(
     if (signal?.aborted) throw abortError()
 
     // 3) complete：服务端校验齐全 + 拼装喂 CAS，返回内容寻址元数据。
-    // 已知原始内容 sha256 时顺带强校验（FR-346；服务端既有 expectedSha256 能力）。
+    // 已知原始内容 sha256 时顺带强校验（服务端既有 expectedSha256 能力）。
     const { data: result } = await api.post<ClientFileResult>(
       `/client-channels/${channelId}/uploads/${init.uploadId}/complete`,
       expectedSha256 ? { codec: 'none', expectedSha256 } : { codec: 'none' },
@@ -103,7 +103,7 @@ async function abortUpload(channelId: string, uploadId: string): Promise<void> {
   }
 }
 
-/**
+/** 
  * 批量上传一组文件，返回 key → ClientFileResult 映射（与逐文件 uploadFileChunked 同构结果）。
  * 任一任务失败即 fail-fast 抛错（调用方保草稿可重试）；取消抛 AbortError。
  *

@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 组存储用量口径（FR-003）。
+// 组存储用量口径。
 //
 // ## 为什么必须抽成一个函数
 //

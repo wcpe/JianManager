@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import type { ImportInspectResult } from '@/api/importServer'
 
-/**
- * FR-302 导入现有服务器向导流程 DOM 测。
+/** 
+ *导入现有服务器向导流程 DOM 测。
  * 桩掉 DirectoryPicker（避开真实目录浏览）与 importServer/nodes hooks，
  * 驱动：预置节点 → 选目录触发探测 → 探测结果展示 jar → 进入模式步选「搬进托管区」→ 配置步提交。
  * 强断言：探测请求参数、模式二选一双呈现、提交时携带所选 mode/jarPath。
@@ -78,8 +78,8 @@ beforeEach(() => {
   })
 })
 
-describe('ImportServerWizard（FR-302 / FR-374）', () => {
-  it('手输绝对路径触发探测（FR-374）', async () => {
+describe('ImportServerWizard', () => {
+  it('手输绝对路径触发探测', async () => {
     const user = userEvent.setup()
     renderWithProviders(<ImportServerWizard open onClose={vi.fn()} initialNodeId={1} />)
     const input = await screen.findByLabelText(/绝对路径|Absolute path/i)
@@ -92,7 +92,7 @@ describe('ImportServerWizard（FR-302 / FR-374）', () => {
     )
   })
 
-  it('权限失败展示诊断区（FR-374）', async () => {
+  it('权限失败展示诊断区', async () => {
     inspectMutate.mockImplementationOnce((_vars: unknown, opts?: { onError?: (e: Error) => void }) => {
       opts?.onError?.(
         Object.assign(new Error('permission denied'), {

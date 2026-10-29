@@ -3,13 +3,13 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 
-/**
- * 客户端分发与平台设置域 mock handler（FR-210，照 spec §7 范式）。
+/** 
+ * 客户端分发与平台设置域 mock handler（照 spec §7 范式）。
  * 覆盖 clientChannels / clientVersions / clientStats / licenses / settings 五个 api 模块的每个 endpoint。
  * 受保护端点首行 requireAuth；字段严格匹配 web/src/api/{clientChannels,clientVersions,clientStats,licenses,settings}.ts。
  */
 
-// ── 种子时间平移（FR-095/265 体验修复）──────────────────────────────────────
+// ── 种子时间平移（265 体验修复）──────────────────────────────────────
 // 静态种子里的时间写死在 2026-06~07，而页面默认窗口是「近 24h/7d/30d」→ 取不到数据、
 // 图表全空。这里把所有种子时间整体平移一个常量偏移（不改变事件之间的相对间隔），
 // 使**最新一条分发事件** ≈ 当前时间，默认窗口（含近 24h）即可看到数据。
@@ -23,7 +23,7 @@ const T = (iso: string): string => {
   return new Date(Math.min(t + SEED_SHIFT_MS, Date.now())).toISOString()
 }
 
-// ── client-channels（频道 + 拉取密钥，FR-086/187）────────────────────────────
+// ── client-channels（频道 + 拉取密钥187）────────────────────────────
 
 /** 假后端分发频道（匹配 ClientChannel；createdAt/updatedAt 为字符串）。 */
 interface MockChannel {
@@ -60,7 +60,7 @@ interface MockVersion {
   createdBy: number
   createdAt: string
   managedDirs: string[]
-  /** 运营自定义追加排除（FR-255）。 */
+  /** 运营自定义追加排除。 */
   cleanExclude?: string[]
   files: import('@/api/clientVersions').ManifestFile[]
   agent?: import('@/api/clientVersions').ManifestAgent
@@ -224,7 +224,7 @@ const versions = db<MockVersion>('client-versions', () => [
   },
 ])
 
-/** 假后端分发明细事件（匹配 ClientDistEvent，FR-093/249）。 */
+/** 假后端分发明细事件（匹配 ClientDistEvent249）。 */
 interface MockDistEvent {
   id: number
   channelId: string
@@ -327,7 +327,7 @@ const distEvents = db<MockDistEvent>('client-dist-events', (): MockDistEvent[] =
   },
 ])
 
-/** 假后端客户端运行态（匹配 ClientRuntimeState，FR-265）。 */
+/** 假后端客户端运行态（匹配 ClientRuntimeState）。 */
 interface MockRuntimeState {
   id: number
   channelId: string
@@ -396,7 +396,7 @@ const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
   },
 ])
 
-/** 假后端分块上传会话（FR-251）：内存态，仅按 index 记账，不落字节。 */
+/** 假后端分块上传会话：内存态，仅按 index 记账，不落字节。 */
 interface MockUpload {
   channelId: string
   filename: string
@@ -411,8 +411,8 @@ const uploads = new Map<string, MockUpload>()
 /** uploadId 自增序列（mock 稳定可预测）。 */
 let uploadSeq = 0
 
-/**
- * 已知制品登记表（FR-346 秒传预查镜像）：sha256 → {md5,size}。
+/** 
+ * 已知制品登记表（秒传预查镜像）：sha256 → {md5,size}。
  * 聚合上传 / 分块 complete（带 expectedSha256）成功后登记；预查按 sha+size 全等命中。
  * 与真后端 CAS 语义一致：同内容重复发布 → 预查命中 → 零字节上传。
  */
@@ -427,7 +427,7 @@ function normalizeSha(raw: unknown): string | null {
   return /^[0-9a-f]{64}$/.test(s) ? s : null
 }
 
-/**
+/** 
  * 从 multipart 原始文本中提取指定表单字段的正文（首个命中 part）。
  * 仅供 mock 消费文本型字段（meta JSON）；不处理编码/二进制（mock 不消费文件字节）。
  */
@@ -498,7 +498,7 @@ function keyToMeta(k: MockKey) {
   }
 }
 
-// ── client-dist 统计（FR-095）────────────────────────────────────────────────
+// ── client-dist 统计────────────────────────────────────────────────
 
 /** 构造频道分发统计（匹配 ClientDistStats；只从分发请求事件派生）。 */
 function buildStats(channelId: string, days: number) {
@@ -543,8 +543,8 @@ function buildStats(channelId: string, days: number) {
   }
 }
 
-/** 构造频道观测视图（匹配 ClientDistObservability，FR-217）。
- *  FR-425/428：支持任意 from/to（RFC3339，与真后端 parseObsRange 语义一致）并透出 compare（前一等长窗口同环比）。
+/** 构造频道观测视图（匹配 ClientDistObservability）。
+ *428：支持任意 from/to（RFC3339，与真后端 parseObsRange 语义一致）并透出 compare（前一等长窗口同环比）。
  *  series 按「天×小时」确定性生成（seed = channelId|bucketTs，同窗口多次请求稳定），模拟晚间高峰 / 周末回落 / 偶发静默。 */
 function hashSeed(s: string): number {
   let h = 2166136261
@@ -643,7 +643,7 @@ function aggregateSeries(series: ReturnType<typeof buildHourlySeries>, exact: bo
     failStaticRate: denom > 0 ? updateFailStatic / denom : 0,
     rollbackRate: denom > 0 ? updateRolledBack / denom : 0,
     activeMachines: Math.max(0, ...series.map((p) => p.activeMachines), 0),
-    // FR-425/426：窗口落在 14 天明细保留窗内=精确去重；超出=小时桶近似（与真后端 ADR-049 语义一致）。
+    // 426：窗口落在 14 天明细保留窗内=精确去重；超出=小时桶近似（与真后端 ADR-049 语义一致）。
     activeMachinesExact: exact,
   }
 }
@@ -683,7 +683,7 @@ function buildObservability(channelId: string, from: Date, to: Date) {
   }
 }
 
-// ── 机器级更新聚合（FR-426 mock）─────────────────────────────────────────────
+// ── 机器级更新聚合（mock）─────────────────────────────────────────────
 
 interface MockMachineSummary {
   machineId: string
@@ -694,7 +694,7 @@ interface MockMachineSummary {
   currentVersion: number
   versionLag: number
   downloadBytes: number
-  /** FR-426 增补：身份三件套（真实栈由后端脱敏后返回；未知为空串）。 */
+  /** 增补：身份三件套（真实栈由后端脱敏后返回；未知为空串）。 */
   playerName: string
   installId: string
   ip: string
@@ -1043,7 +1043,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // 查看密钥明文（FR-192）：无 KeyEnc → 404 KEY_NOT_REVEALABLE。
+  // 查看密钥明文：无 KeyEnc → 404 KEY_NOT_REVEALABLE。
   domainRoute('get', '/client-channels/:channelId/keys/:keyId/reveal', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1108,7 +1108,7 @@ export const handlers = [
     })
   }),
 
-  // ── 大文件分块上传（FR-251）：init→chunk→complete→abort ────────────────────
+  // ── 大文件分块上传：init→chunk→complete→abort ────────────────────
   // 内存假会话：声明大小得 uploadId/chunkSize/chunkCount → 逐片累计已收 → complete 校验齐全回元数据。
 
   // init：建上传会话。
@@ -1169,7 +1169,7 @@ export const handlers = [
       return HttpResponse.json({ error: 'UPLOAD_INCOMPLETE', message: '分片不齐全' }, { status: 422 })
     }
     uploads.delete(uploadId)
-    // FR-346：complete 可带 expectedSha256（分块路径已算 hash 时强校验）——mock 回显之并登记
+    // complete 可带 expectedSha256（分块路径已算 hash 时强校验）——mock 回显之并登记
     // 进 knownArtifacts（后续预查可命中）；未带时沿用稳定伪 sha（真后端为内容寻址）。
     const body = (await info.request.json().catch(() => ({}))) as { expectedSha256?: string }
     const sha = normalizeSha(body.expectedSha256) ?? 'e'.repeat(64)
@@ -1180,7 +1180,7 @@ export const handlers = [
     )
   }),
 
-  // ── 上传增效（FR-346）：秒传预查 + 小文件聚合 ────────────────────────────
+  // ── 上传增效：秒传预查 + 小文件聚合 ────────────────────────────
 
   // 秒传预查：≤500 项，命中 knownArtifacts（sha+size 全等）者回与真上传同构结果。
   domainRoute('post', '/client-channels/:channelId/files/precheck', async (info) => {
@@ -1298,7 +1298,7 @@ export const handlers = [
     return HttpResponse.json({ version: nextVersion })
   }),
 
-  // 制品文本预览（FR-214，版本详情弹窗「预览」视图用）。
+  // 制品文本预览（版本详情弹窗「预览」视图用）。
   domainRoute('get', '/client-channels/:channelId/files/content', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1311,7 +1311,7 @@ export const handlers = [
     })
   }),
 
-  // 制品下载（FR-214，版本详情弹窗「下载」按钮）。
+  // 制品下载（版本详情弹窗「下载」按钮）。
   domainRoute('get', '/client-channels/:channelId/files/download', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1326,7 +1326,7 @@ export const handlers = [
     })
   }),
 
-  // 分发统计与安全日志 CSV 导出（FR-361）：按 kind 返回带 BOM 的最小假 CSV。
+  // 分发统计与安全日志 CSV 导出：按 kind 返回带 BOM 的最小假 CSV。
   domainRoute('get', '/client-dist/export', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1348,7 +1348,7 @@ export const handlers = [
     })
   }),
 
-  // 分发统计（FR-095）。
+  // 分发统计。
   domainRoute('get', '/client-dist/stats', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1358,8 +1358,8 @@ export const handlers = [
     return HttpResponse.json(buildStats(channelId, days))
   }),
 
-  // 客户端分发观测（FR-217，消费方含 FR-220 平台统计页）：跨频道/单频道汇总 + 分布。
-  // FR-425/428：支持任意 from/to（RFC3339）+ summary.compare（前一等长窗口同环比）。
+  // 客户端分发观测（消费方含平台统计页）：跨频道/单频道汇总 + 分布。
+  // 428：支持任意 from/to（RFC3339）+ summary.compare（前一等长窗口同环比）。
   // 平台管理员端点；mock 默认用户 role=10，requireAuth 即可放行（真后端按 role 403）。
   domainRoute('get', '/client-dist/observability', (info) => {
     const denied = requireAuth(info)
@@ -1370,7 +1370,7 @@ export const handlers = [
     return HttpResponse.json(buildObservability(channelId, win.from, win.to))
   }),
 
-  // 机器级更新清单（FR-426）：按频道+窗口聚合每台机器的更新次数/最近更新/版本滞后。
+  // 机器级更新清单：按频道+窗口聚合每台机器的更新次数/最近更新/版本滞后。
   // 明细窗（14 天）内 exact=true；超窗由小时桶近似（mock 恒按生成数据精确，字段语义对齐真后端）。
   domainRoute('get', '/client-dist/machines', (info) => {
     const denied = requireAuth(info)
@@ -1402,7 +1402,7 @@ export const handlers = [
     })
   }),
 
-  // 单机器更新事件时间线（FR-426 钻取）。
+  // 单机器更新事件时间线（钻取）。
   domainRoute('get', '/client-dist/machines/:machineId/events', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1420,7 +1420,7 @@ export const handlers = [
     })
   }),
 
-  // 客户端分发安全（FR-264）：mock 模式下提供最小可验收数据。
+  // 客户端分发安全：mock 模式下提供最小可验收数据。
   domainRoute('get', '/client-dist/security/overview', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1470,7 +1470,7 @@ export const handlers = [
     return HttpResponse.json(runtimeStates.list().map((s) => ({ id: s.id, channelId: s.channelId, machineId: s.machineId, installId: `install-${s.id}`, playerName: s.playerName, keyId: 1, keyPrefix: 'jmck_ab12', firstSeen: s.firstSeenAt, lastSeen: s.lastHeartbeatAt, lastIp: s.ip, userAgent: 'JM-Updater/1.0', coreVersion: s.coreVersion, wedgeVersion: '1', manifestVersion: s.localVersion, os: s.platform, osVersion: '', arch: 'amd64', javaVendor: 'Temurin', javaVersion: s.javaVersion, javaArch: 'amd64', launcher: s.launcher, locale: 'zh-CN', timezone: 'Asia/Shanghai', memoryTier: '4-8g', riskScore: 0, riskLevel: 'info', protectionState: 'normal', labels: [], createdAt: s.createdAt, updatedAt: s.updatedAt })))
   }),
 
-  // 画像详情（FR-358）：列表行点开后拉全量字段 + 时间线
+  // 画像详情：列表行点开后拉全量字段 + 时间线
   domainRoute('get', '/client-dist/security/profiles/:id', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1714,7 +1714,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // 运行态启动心跳（FR-265）：mock 接收后 upsert 运行态，避免端点 404。
+  // 运行态启动心跳：mock 接收后 upsert 运行态，避免端点 404。
   domainRoute('post', '/client-channels/:channelId/telemetry/heartbeat', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1756,7 +1756,7 @@ export const handlers = [
     return new HttpResponse(null, { status: 202 })
   }),
 
-  // 分发请求近实时聚合（FR-265）：只看 client-dist-events mock 集合。
+  // 分发请求近实时聚合：只看 client-dist-events mock 集合。
   domainRoute('get', '/client-dist/realtime', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1764,7 +1764,7 @@ export const handlers = [
     return HttpResponse.json(buildRealtime(url.searchParams.get('channelId') ?? ''))
   }),
 
-  // 错误码 TopN 与失败样例（FR-357）。
+  // 错误码 TopN 与失败样例。
   domainRoute('get', '/client-dist/error-summary', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1772,7 +1772,7 @@ export const handlers = [
     return HttpResponse.json(buildErrorSummary(url.searchParams.get('channelId') ?? ''))
   }),
 
-  // 客户端运行态聚合（FR-265）：运行态 + client_telemetry 更新结果 mock。
+  // 客户端运行态聚合：运行态 + client_telemetry 更新结果 mock。
   domainRoute('get', '/client-dist/clients', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1780,7 +1780,7 @@ export const handlers = [
     return HttpResponse.json(buildRuntimeOverview(url.searchParams.get('channelId') ?? '', url.searchParams.get('range') ?? '7d'))
   }),
 
-  // 分发明细分页检索（FR-265）：支持 outcome 与运行态维度联动过滤。
+  // 分发明细分页检索：支持 outcome 与运行态维度联动过滤。
   domainRoute('get', '/client-dist/events/search', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1791,7 +1791,7 @@ export const handlers = [
     return HttpResponse.json({ items: rows.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: rows.length })
   }),
 
-  // 分发明细脱敏详情（FR-265）。
+  // 分发明细脱敏详情。
   domainRoute('get', '/client-dist/events/:id', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1801,7 +1801,7 @@ export const handlers = [
     return HttpResponse.json({ ...row, requestHeaders: row.requestHeaders ?? {}, responseHeaders: row.responseHeaders ?? {} })
   }),
 
-  // 分发明细事件检索（FR-093/249 兼容旧端点）。
+  // 分发明细事件检索（249 兼容旧端点）。
   domainRoute('get', '/client-dist/events', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1810,7 +1810,7 @@ export const handlers = [
     return HttpResponse.json(searchDistEvents(url).slice(0, limit))
   }),
 
-  // 内嵌更新器 jar 信息（FR-107 接入引导）。
+  // 内嵌更新器 jar 信息（接入引导）。
   domainRoute('get', '/client-dist/updater-jars', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1822,7 +1822,7 @@ export const handlers = [
     })
   }),
 
-  // jm-updater.json 一键生成（FR-253，见 ADR-053；FR-259 起 core 改楔子自动拉取，去 signPublicKey/coreJar）。
+  // jm-updater.json 一键生成（见 ADR-053起 core 改楔子自动拉取，去 signPublicKey/coreJar）。
   domainRoute('get', '/client-channels/:channelId/updater-config', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1841,7 +1841,7 @@ export const handlers = [
     })
   }),
 
-  // updater-core 归档版本列表（FR-259）。
+  // updater-core 归档版本列表。
   domainRoute('get', '/client-channels/:channelId/updater-core/versions', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1885,14 +1885,14 @@ export const handlers = [
     })
   }),
 
-  // 切换频道选定 updater-core 版本（FR-259）。
+  // 切换频道选定 updater-core 版本。
   domainRoute('put', '/client-channels/:channelId/updater-core/selected', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     return HttpResponse.json({ ok: true })
   }),
 
-  // 下载更新器 jar（FR-107）：返回二进制占位流。
+  // 下载更新器 jar：返回二进制占位流。
   domainRoute('get', '/client-dist/updater-jars/:component', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -1901,7 +1901,7 @@ export const handlers = [
     })
   }),
 
-  // ── 平台设置（FR-063 / ADR-015）────────────────────────────────────────────
+  // ── 平台设置（ADR-015）────────────────────────────────────────────
   // 读取平台配置全量视图（仅平台管理员；mock 仅按 requireAuth 放行）。
   domainRoute('get', '/settings', (info) => {
     const denied = requireAuth(info)
@@ -1930,7 +1930,7 @@ export const handlers = [
     })
   }),
 
-  // ── 开源许可清单（FR-135）────────────────────────────────────────────────
+  // ── 开源许可清单────────────────────────────────────────────────
   // 静态资源端点（非 /api/v1，前端用原生 fetch）：用裸 http.get 注册到 licenses.json。
   http.get('*/licenses.json', () =>
     HttpResponse.json({
@@ -2050,9 +2050,9 @@ db<SettingsRow>('settings', () => [
   { id: 4, key: 'database.dsn', value: 'sqlite://****', editable: false, sensitive: true, overridden: false, effectiveImmediately: false },
   { id: 5, key: 'jwt.secret', value: '****', editable: false, sensitive: true, overridden: false, effectiveImmediately: false },
   { id: 6, key: 'debug.mode', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: true },
-  // github.token（FR-409）：敏感项，回显掩码（与后端 maskSecret 行为一致）。
+  // github.token：敏感项，回显掩码（与后端 maskSecret 行为一致）。
   { id: 7, key: 'github.token', value: 'ghp***eed', editable: true, sensitive: true, overridden: false, effectiveImmediately: true },
-  // MC 直探超时（FR-446）：同 graceful_stop.timeout 的 Go duration；Worker 侧生效（经心跳下发）。
+  // MC 直探超时：同 graceful_stop.timeout 的 Go duration；Worker 侧生效（经心跳下发）。
   { id: 8, key: 'direct_probe.slp_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   { id: 9, key: 'direct_probe.query_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
 ])

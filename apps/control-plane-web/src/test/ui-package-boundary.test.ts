@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const root = path.resolve(__dirname, '../..')
-// FR-283：组件博物馆迁 apps/ui-museum（原 web/wiki），经仓库根定位。
+// 组件博物馆迁 apps/ui-museum（原 web/wiki），经仓库根定位。
 const repoRoot = path.resolve(root, '../..')
 const museumRoot = path.join(repoRoot, 'apps/ui-museum')
 const sourceRoot = path.join(root, 'src')
@@ -82,7 +82,7 @@ describe('@jianmanager/ui package boundary', () => {
     }
   }, 15_000)
 
-  /**
+  /** 
    * 图表**组件**不得回到 barrel（2025-10 首屏走查）。
    *
    * barrel 被 120+ 个应用文件引用、几乎每个路由分块都静态可达；一旦它同步 re-export

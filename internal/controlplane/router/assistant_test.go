@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// AI 助手路由权限测试（FR-514，见 ADR-105）。
+// AI 助手路由权限测试（见 ADR-105）。
 //
 // 这组用例守的是「谁能改 AI 配置」这条线。它特别值得单独测，因为项目里已有一个
 // 名字叫 requirePlatformAdmin 的 helper，但它实际要求的是 node.manage 权限节点——
@@ -316,7 +316,7 @@ func TestAssistantProbeNotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, code)
 }
 
-// 审计留痕（FR-514 交付缺口补齐）。
+// 审计留痕（交付缺口补齐）。
 //
 // 这组用例的重点不是「有没有写审计」，而是**写进去的 detail 里绝不能有密钥**。
 // 审计表会被检索、导出、长期保留——一旦凭据进去，就等于把只在服务端内存里流转的

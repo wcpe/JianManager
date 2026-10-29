@@ -5,8 +5,8 @@ import { ansiPlainText, ansiSliceFromPlain, parseAnsi, stripAnsi } from './conso
 const ESC = '\u001b'
 const BEL = '\u0007'
 
-/**
- * ANSI 解析（FR-415，spec §1.3；ADR-086 代价 1）。
+/** 
+ * ANSI 解析（spec §1.3；ADR-086 代价 1）。
  *
  * 核心判据只有两条：SGR 要按 xterm 默认调色板着色；**其余转义一律吞掉、不留可见垃圾**。
  * 后者是 ADR-086 的验证项「构造未知转义序列不产生可见垃圾字符」。

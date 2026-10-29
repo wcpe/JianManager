@@ -18,10 +18,10 @@ function renderPage() {
   return { user }
 }
 
-describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
+describe('ConfigBaselinesPage（配置基线与漂移收敛）', () => {
   it('列出基线', async () => {
     renderPage()
-    /*
+    /* 
       生效范围列已人话化（`group:2` → 「分组 2」），原始 key 移入 title。
       这里同时断言两者：人话文案可见 + 原始值仍可取回（排查时要精确值）。
     */
@@ -217,7 +217,7 @@ describe('ConfigBaselinesPage（FR-458 配置基线与漂移收敛）', () => {
       items: [{ instanceId: 1, instanceName: '生存服', drift: true, currentHash: 'x' }],
       drifted: 1,
     }
-    /**
+    /** 
      * 就地切换 baselineId 的宿主：面板必须在不重挂载的前提下自己清空汇总
      * （外壳传 `key` 能兜住，但面板被直接挂载时没人替它清）。
      */

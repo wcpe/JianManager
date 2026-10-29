@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
-// FR-485：采集面可观测性快照的取值语义。
+// 采集面可观测性快照的取值语义。
 //
 // 覆盖三条容易写错、且写错后**不会报错只会静默**的判据：
 //  1. 没有登记任何采集源时 Available=false（「没有采集任务」不等于「采集积压为零」）；
@@ -71,7 +71,7 @@ func TestLogMetricsSnapshot_Semantics(t *testing.T) {
 	})
 }
 
-// FR-485：投递失败分类的判据。
+// 投递失败分类的判据。
 //
 // 分类的价值在于区分「重试有用吗」——凭据错（auth）重试无用且要人介入，
 // 5xx/传输错则可能自愈。判据与 vlsup.IsPermanent 同源，不另造一套。

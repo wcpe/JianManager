@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// HealthAlertNotifier 把实例健康熔断告警投递为站内信（FR-459 T4「发站内信告警」）。
+// HealthAlertNotifier 把实例健康熔断告警投递为站内信（T4「发站内信告警」）。
 // 实现 grpc.HealthAlertNotifier（接口以原始类型声明，无需 service↔grpc 结构化耦合）。
 type HealthAlertNotifier struct {
 	db            *gorm.DB

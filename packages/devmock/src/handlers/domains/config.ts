@@ -3,12 +3,12 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
 
-/**
- * 配置与数据库域 mock handler（FR-205）。
+/** 
+ * 配置与数据库域 mock handler。
  * 覆盖两组能力：
- * - **配置引擎**（FR-031/FR-071，`web/src/api/configs.ts`）：发现 / 列出 / 读 / 写（文本+字段）/
+ * - **配置引擎**（`web/src/api/configs.ts`）：发现 / 列出 / 读 / 写（文本+字段）/
  *   跨文件校验 / 版本列表 / diff / 回滚。写操作联动版本表：write → 新增版本、versions 读回。
- * - **数据库资源管理器**（FR-084，`web/src/api/db.ts`）：表清单 + 分页/排序/过滤的只读行浏览。
+ * - **数据库资源管理器**（`web/src/api/db.ts`）：表清单 + 分页/排序/过滤的只读行浏览。
  *
  * 字段保真：响应结构严格匹配上述两个 api 模块的 TS interface（`schemaJson` 为字符串化 JSON——
  * 见全局记忆「JSON 字符串字段前端解析」，前端 `JSON.parse` 后再用）。
@@ -52,8 +52,8 @@ export interface MockDbTable {
   rows: Record<string, unknown>[]
 }
 
-/**
- * 受管配置项来源登记（FR-451）。复合主键 `${instanceId}:${itemKey}`。
+/** 
+ * 受管配置项来源登记。复合主键 `${instanceId}:${itemKey}`。
  * 二态互斥：inline 内联值（平台持有）/ file 文件引用（平台不覆写）。
  */
 export interface MockConfigSource {
@@ -66,7 +66,7 @@ export interface MockConfigSource {
   fileKey: string
 }
 
-/** 配置基线（模板）（FR-458），键为 (scopeKey, filePath)。 */
+/** 配置基线（模板），键为 (scopeKey, filePath)。 */
 export interface MockConfigBaseline {
   id: number
   scopeKey: string
@@ -117,8 +117,8 @@ function mockHash(content: string): string {
   return (seed + seed).slice(0, 64)
 }
 
-/**
- * 构造实例受管配置项清单（FR-451）。GET/PUT surface 共用，保证响应与
+/** 
+ * 构造实例受管配置项清单。GET/PUT surface 共用，保证响应与
  * `web/src/api/configSurface.ts` 的 `ConfigSurfaceItem` 同构。
  * 未登记项按隐含默认：启动项内联取实例现值、props 项文件隐含（读 server.properties 预览）。
  */
@@ -276,7 +276,7 @@ const dbTables = db<MockDbTable>('dbTables', () => [
   },
 ])
 
-// 受管配置项登记（FR-451）：种子给实例 1 显式登记两项（query.port 内联 / motd 文件引用），
+// 受管配置项登记：种子给实例 1 显式登记两项（query.port 内联 / motd 文件引用），
 // 其余项走「未登记」的隐含默认（启动项内联、props 文件隐含），与后端旧实例平滑过渡语义一致。
 const configSources = db<MockConfigSource>('configSources', () => [
   {
@@ -299,7 +299,7 @@ const configSources = db<MockConfigSource>('configSources', () => [
   },
 ])
 
-// 配置基线（FR-458）：种子一条 group:2（生存分组）的 server.properties 基线，供漂移/收敛演示。
+// 配置基线：种子一条 group:2（生存分组）的 server.properties 基线，供漂移/收敛演示。
 const configBaselines = db<MockConfigBaseline>('configBaselines', () => [
   {
     id: 1,
@@ -314,7 +314,7 @@ const configBaselines = db<MockConfigBaseline>('configBaselines', () => [
   },
 ])
 
-/**
+/** 
  * 只读引用实例域集合。
  * **必须惰性取用**：`db(name)` 首次调用决定种子，若无 seedFn 则建空集合且不再播种——
  * 本模块（config.ts）在 instance.ts 之前被 eager import 时若顶层直接 `db('instances')`，
@@ -410,7 +410,7 @@ export function seed(): void {
 }
 
 export const handlers = [
-  // ── 配置引擎（FR-031 / FR-071）─────────────────────────────────────────────
+  // ── 配置引擎─────────────────────────────────────────────
 
   // 递归发现工作目录全部配置文件（扁平列表 + 截断标记）。
   domainRoute('get', '/instances/:id/configs/discover', (info) => {
@@ -586,7 +586,7 @@ export const handlers = [
     return HttpResponse.json({ versionId: newId })
   }),
 
-  // ── 配置源明面化（FR-451）────────────────────────────────────────────────
+  // ── 配置源明面化────────────────────────────────────────────────
 
   // 受管配置项清单：启动项 + server.properties 关键项，每项显式声明来源与生效值预览。
   domainRoute('get', '/instances/:id/configs/surface', (info) => {
@@ -640,7 +640,7 @@ export const handlers = [
     return HttpResponse.json({ items: buildSurfaceItems(instanceId) })
   }),
 
-  // ── 配置基线（FR-458）────────────────────────────────────────────────────
+  // ── 配置基线────────────────────────────────────────────────────
 
   domainRoute('get', '/config-baselines', (info) => {
     const denied = requireAuth(info)
@@ -736,7 +736,7 @@ export const handlers = [
     })
   }),
 
-  // ── 数据库资源管理器（FR-084，只读）────────────────────────────────────────
+  // ── 数据库资源管理器（只读）────────────────────────────────────────
 
   // 列出 CP 数据库全部表及行数（仅平台管理员，requireAuth 兜底）。
   domainRoute('get', '/db/tables', (info) => {

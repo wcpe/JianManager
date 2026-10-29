@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ImportServerHandler 导入现有服务器（FR-302，见 ADR-069）：探测 + 导入两端点。
+// ImportServerHandler 导入现有服务器（见 ADR-069）：探测 + 导入两端点。
 // 注册在平台管理员路由组下；两操作均写审计（instance.import.inspect / instance.import）。
 type ImportServerHandler struct {
 	svc   *service.ImportServerService
@@ -53,7 +53,7 @@ func (h *ImportServerHandler) Import(c *gin.Context) {
 		"nodeId": req.NodeID, "path": req.Path, "mode": req.Mode,
 		"name": req.Name, "jarPath": req.JarPath, "registerJdkPaths": len(req.RegisterJdkPaths),
 	})
-	// FR-323：migrate 搬迁异步化，响应 {instance, taskId}（taskId 空=就地接管同步完成）。
+	// migrate 搬迁异步化，响应 {instance, taskId}（taskId 空=就地接管同步完成）。
 	c.JSON(http.StatusCreated, gin.H{"instance": inst, "taskId": taskID})
 }
 

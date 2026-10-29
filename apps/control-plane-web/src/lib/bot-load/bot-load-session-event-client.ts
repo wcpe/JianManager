@@ -1,5 +1,5 @@
-/**
- * 会话级 SSE 客户端（FR-372）。
+/** 
+ * 会话级 SSE 客户端。
  * - fetch ReadableStream 解析 event/id/data
  * - Last-Event-ID 重连、退避 1→2→5→10s
  * - 按 runId 模块级单例 + 引用计数
@@ -299,7 +299,7 @@ type SharedEntry = {
 
 const shared = new Map<string, SharedEntry>()
 
-/**
+/** 
  * 按 runId 获取共享 SSE 订阅。引用计数归零时关闭连接。
  * 返回 unsubscribe。
  */

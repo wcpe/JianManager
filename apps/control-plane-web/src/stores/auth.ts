@@ -20,7 +20,7 @@ export function loadTerminalSessionManager() {
   return import('@/lib/console/terminal-session-manager')
 }
 
-/**
+/** 
  * 在途动态 import 的登记表：`logout`/`schedulePermissionsLoad` 每次发起都登记其 Promise，
  * 由 `flushAuthDynamicImports` 统一收口。
  *
@@ -41,7 +41,7 @@ function trackDynamicImport<T>(promise: Promise<T>): Promise<T> {
   return promise
 }
 
-/**
+/** 
  * 等待本模块**已经发起**的全部动态 import 落地（幂等；无在途时为 no-op）。
  *
  * 供测试 setup 的 afterEach 调用：`logout()` 保持同步（生产调用点无需等待），
@@ -63,7 +63,7 @@ interface AuthState {
   role: number | null
   /** 当前用户名（从 access token 解码），用于 UI 展示。 */
   username: string | null
-  /**
+  /** 
    * 当前用户 ID（从 access token 解码）。
    *
    * 用途仅限「按用户隔离本地状态」（如助手草稿、上次会话游标），
@@ -99,7 +99,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.setItem('accessToken', accessToken)
     localStorage.setItem('refreshToken', refreshToken)
     const claims = decodeJwt(accessToken)
-    // 草稿作用域跟随登录用户（FR-519「换用户不串号」）：
+    // 草稿作用域跟随登录用户（「换用户不串号」）：
     // resetDraftScope 会清掉**上一个用户**的持久化草稿与模块级缓存，
     // 再把作用域切到新用户。不这么做的话，「新会话」草稿 key 在换用户后会碰撞。
     resetDraftScope(claims?.userId ?? 0)
@@ -116,7 +116,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     queryClient.clear()
-    // 草稿与「上次会话」都按用户隔离，登出即释放（FR-519）：
+    // 草稿与「上次会话」都按用户隔离，登出即释放：
     // sessionStorage 不随登出消失，不清的话下一个人能读到上一个人的未发送内容。
     resetDraftScope(0)
     localStorage.removeItem('accessToken')
@@ -125,7 +125,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     // 两处都经 trackDynamicImport 登记（**不是**裸 `void import(...)`）：保持动态 import
     // 语义不变，但让测试能经 flushAuthDynamicImports 等待在途加载收口（见其文档）。
     void trackDynamicImport(loadPermissionsModule()).then((m) => m.usePermissionsStore.getState().reset())
-    // 登出即整体释放全部终端会话（FR-295/296，ADR-067）：连接常驻管理器不随组件卸载断开，
+    // 登出即整体释放全部终端会话（296，ADR-067）：连接常驻管理器不随组件卸载断开，
     // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把会话管理器卷进首屏 chunk。
     void trackDynamicImport(loadTerminalSessionManager()).then((m) => m.terminalSessionManager.disposeAll())
   },

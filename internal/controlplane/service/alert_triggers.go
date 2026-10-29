@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// AlertEventTriggers 把「事件驱动型」告警触发源接到 AlertDispatcher（FR-085）：
+// AlertEventTriggers 把「事件驱动型」告警触发源接到 AlertDispatcher：
 //   - 实例崩溃（订阅 EventService 的 state_change → CRASHED）
 //   - 日志关键字（订阅 EventService 的 stdout/stderr 命中规则关键字）
 //   - 玩家事件（订阅 PlayerEventService 的 join/quit/chat/cross_server）
@@ -146,7 +146,7 @@ func (t *AlertEventTriggers) consumePlayerEvents(ch <-chan PlayerEvent) {
 	}
 }
 
-// OnBackupFailed 备份失败告警入口（由 BackupService 钩子调用，FR-085）。
+// OnBackupFailed 备份失败告警入口（由 BackupService 钩子调用）。
 func (t *AlertEventTriggers) OnBackupFailed(backup *model.Backup, msg string) {
 	for _, rule := range t.matchRules(model.AlertTriggerBackupFailed, backup.InstanceID) {
 		t.dispatcher.Fire(AlertTrigger{

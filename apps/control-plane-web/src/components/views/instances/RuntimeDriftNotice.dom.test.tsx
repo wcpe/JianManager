@@ -8,8 +8,8 @@ import { RuntimeDriftAdoptButton, RuntimeDriftBadge, RuntimeDriftBanner } from '
 import { loginMockUserAs } from '@/test/auth'
 import { Role } from '@/lib/shared/danger'
 
-/**
- * FR-471 运行态漂移提示 · 受控视图测（ADR-103）。
+/** 
+ *运行态漂移提示 · 受控视图测（ADR-103）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。文案取自 zh.json 原值。
  * 重点覆盖「接管」的两道闸：权限门禁（canOperate）与二次确认（DangerConfirm）。
@@ -51,7 +51,7 @@ beforeEach(() => {
   loginMockUserAs(Role.GroupAdmin)
 })
 
-describe('RuntimeDriftNotice（FR-471 · ADR-103）', () => {
+describe('RuntimeDriftNotice（ADR-103）', () => {
   it('紧凑徽章带 PID 提示，且不含接管入口', () => {
     render(<RuntimeDriftBadge pid={4242} cmdline="java -jar server.jar" />, { wrapper: Wrapper })
 

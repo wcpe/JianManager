@@ -7,7 +7,7 @@ import { useNodes } from '@/api/nodes'
 import { recordRecentServer, removeServer, toggleFavoriteServer, useFavoriteServers, useRecentServers } from '@/lib/console/server-selection'
 import SidebarServerList from '@/components/views/instances/SidebarServerList'
 
-/** 状态合并查询的刷新间隔：侧栏不引入高频轮询（FR-293），仅低频合并刷新列表内实例。 */
+/** 状态合并查询的刷新间隔：侧栏不引入高频轮询，仅低频合并刷新列表内实例。 */
 const STATUS_REFRESH_MS = 60_000
 
 /** 判定错误是否为确定性 404（实例已删）——用于对账剔除死链；网络错等不算，避免误删。 */
@@ -15,7 +15,7 @@ function isNotFound(reason: unknown): boolean {
   return (reason as { response?: { status?: number } })?.response?.status === 404
 }
 
-/**
+/** 
  * 侧栏常驻服务器列的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层订阅收藏/最近存储、合并列表内实例的实时状态
@@ -48,8 +48,8 @@ export default function SidebarServerListContainer() {
   )
 }
 
-/**
- * 列表内实例的低频合并状态查询（FR-293）：与 useInstance 同端点逐个拉取后合并为 id→status。
+/** 
+ * 列表内实例的低频合并状态查询：与 useInstance 同端点逐个拉取后合并为 id→status。
  * 用 allSettled 使单个失败（如实例已删）只回落该行的本地快照，不拖垮整列；
  * 不设短轮询，仅 STATUS_REFRESH_MS 低频合并刷新一次。
  */

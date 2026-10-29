@@ -1,5 +1,5 @@
-/**
- * LogsPage × logs-federation 接线 DOM 强断言（FR-482）。
+/** 
+ * LogsPage × logs-federation 接线 DOM 强断言。
  *
  * 覆盖：
  * - partial/离线覆盖 → 横幅可见，失败不得呈空成功；
@@ -54,7 +54,7 @@ function stubBaseHandlers() {
   )
 }
 
-describe('LogsPage × logs-federation（FR-482）', () => {
+describe('LogsPage × logs-federation', () => {
   beforeEach(() => {
     stubBaseHandlers()
   })
@@ -62,7 +62,7 @@ describe('LogsPage × logs-federation（FR-482）', () => {
   it('① partial 覆盖 → 横幅可见，不得呈空成功', async () => {
     loginMockUser()
     server.use(
-      // FR-480/482 wire 形态：snake_case coverage + quality（后端门面 Search 包装）
+      // 482 wire 形态：snake_case coverage + quality（后端门面 Search 包装）
       http.get(API('/logs/federation'), () =>
         HttpResponse.json({
           ok: true,

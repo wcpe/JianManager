@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// upsertHostSnapshots 写入分挂载点与整机 top-N 进程快照（FR-513）。
+// upsertHostSnapshots 写入分挂载点与整机 top-N 进程快照。
 //
 // ## 为什么用 upsert 而不是「先删后插」
 //

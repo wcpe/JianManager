@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 import NodePortsPanel from '@/components/views/nodes/NodePortsPanel'
 import type { NodePorts } from '@/lib/nodes/node-ports'
 
-/**
+/** 
  * 本文件自带局部 i18n 实例，而不复用 `src/test/i18n.tsx` 的共享实例。
  *
  * 原因：共享实例只备了 `ReleaseNotes` 用到的三条键，而本组件需要整个 `ports.*`
@@ -56,7 +56,7 @@ const basicData: NodePorts = {
   ],
 }
 
-describe('NodePortsPanel（FR-032 端口占用 · ADR-103 a 范式）', () => {
+describe('NodePortsPanel（端口占用 · ADR-103 a 范式）', () => {
   it('加载态渲染骨架占位而非裸文字', () => {
     const { container } = renderPanel(undefined, true)
     // 骨架：范围行 + 两行表格轮廓；此时不应出现表头（数据未就绪）。

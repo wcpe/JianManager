@@ -23,7 +23,7 @@ export const EMPTY_SCHEDULE_FORM: ScheduleFormState = {
   enabled: true,
 }
 
-/** 编辑时用已有任务回填表单（实例/名称只读；command 由后端 payload 回填，FR-153）。 */
+/** 编辑时用已有任务回填表单（实例/名称只读；command 由后端 payload 回填）。 */
 export function formFromSchedule(s: ScheduleInfo): ScheduleFormState {
   return {
     instanceId: String(s.instanceId),
@@ -35,7 +35,7 @@ export function formFromSchedule(s: ScheduleInfo): ScheduleFormState {
   }
 }
 
-/**
+/** 
  * 由创建表单派生 POST /schedules 请求体。
  * 仅 action=command 时携带 payload；cronExpr 去除首尾空白。
  */
@@ -49,16 +49,16 @@ export function toCreateBody(form: ScheduleFormState): CreateScheduleBody {
   }
 }
 
-/**
+/** 
  * 由编辑表单派生 PUT /schedules/:id 请求体（实例/名称不可改）。
- * action=command 时携带 payload，使命令可在编辑时回填并修改（FR-153）。
+ * action=command 时携带 payload，使命令可在编辑时回填并修改。
  */
 export function toUpdateBody(form: ScheduleFormState): UpdateScheduleBody {
   return {
     cronExpr: form.cronExpr.trim(),
     action: form.action,
     enabled: form.enabled,
-    // 仅 command 动作携带 payload，使命令可在编辑时回填并修改（FR-153）；其余动作不含此字段。
+    // 仅 command 动作携带 payload，使命令可在编辑时回填并修改；其余动作不含此字段。
     ...(form.action === 'command' ? { payload: form.command } : {}),
   }
 }

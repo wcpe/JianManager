@@ -5437,7 +5437,7 @@
     "allTypes": "All types",
     "summary": "Summary",
     "noEvents": "No events",
-    "eventsUnavailable": "Events history API unavailable (depends on FR-370)",
+    "eventsUnavailable": "Events history API unavailable (depends on)",
     "configSnapshotHint": "Run snapshot is frozen at create time and does not follow later template edits.",
     "target": "Target",
     "templateId": "Template ID",

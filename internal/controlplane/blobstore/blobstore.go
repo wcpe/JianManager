@@ -1,4 +1,4 @@
-// Package blobstore 提供制品库 blob 的存储后端抽象（FR-347，见 ADR-073）。
+// Package blobstore 提供制品库 blob 的存储后端抽象（见 ADR-073）。
 //
 // 存储键 = CAS 相对路径 var/artifacts/<type>/<sha256 前 2 位>/<sha256><ext>
 // （与 model.Asset.RelPath 同值）；S3 适配器在键前再挂渠道 Prefix。
@@ -41,7 +41,7 @@ type ObjectInfo struct {
 	ModTime time.Time
 }
 
-// Store 制品 blob 存储后端（FR-347，见 ADR-073）。
+// Store 制品 blob 存储后端（见 ADR-073）。
 //
 // 写入口用 PutFile（收已写完的本地临时文件）而非泛化 Put(io.Reader)：
 // Ingest 恒先落临时文件边写边算 hash，local 适配器得以用与主线逐字节相同的
@@ -61,7 +61,7 @@ type Store interface {
 	Delete(ctx context.Context, key string) error
 	// List 枚举 prefix 下至多 limit 个 blob（连通探测等单页场景；limit<=0 取 1000）。
 	List(ctx context.Context, prefix string, limit int) ([]ObjectInfo, error)
-	// ListPage 分页枚举 prefix 下的 blob（FR-349 对账全量遍历用）。
+	// ListPage 分页枚举 prefix 下的 blob（对账全量遍历用）。
 	// token 传上一页返回的续传令牌（首页传空）；nextToken 非空表示还有后续页；limit<=0 取 1000。
 	// 令牌对调用方不透明（s3=ListObjectsV2 continuation-token；local=游标键），大 bucket 循环至 nextToken 为空即全量。
 	ListPage(ctx context.Context, prefix string, limit int, token string) (items []ObjectInfo, nextToken string, err error)

@@ -3,8 +3,8 @@ import api from '@/api/client'
 
 import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
-/**
- * 实例组织分组树节点（对应后端 service.InstanceGroupNodeView，FR-165 / ADR-033）。
+/** 
+ * 实例组织分组树节点（对应后端 service.InstanceGroupNodeViewADR-033）。
  * 扁平节点列表，前端据 parentId 重建层级；instanceCount 为「子树聚合去重」实例数。
  * 与用户组（RBAC）、网络群组（部署）正交——纯组织归类。
  *
@@ -33,7 +33,7 @@ export function useInstanceGroups(options: { enabled?: boolean } = {}) {
   })
 }
 
-/**
+/** 
  * 某分组「子树（含自身及后代）去重」的实例 ID 集合，供「按组筛选」与右列表共用。
  * 仅在选中某组时启用（groupId>0）。
  */
@@ -60,7 +60,7 @@ export function useCreateInstanceGroup() {
   })
 }
 
-/**
+/** 
  * 改名 / 移动父（防环）。
  * parentId 省略=不改父；null=移到根；数字=移到该父下。
  */

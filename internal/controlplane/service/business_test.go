@@ -102,7 +102,7 @@ func TestBusiness_Manifest_MetaQuery(t *testing.T) {
 	assert.Equal(t, "节点未连接", res.Error)
 }
 
-// TestInjectWriteContext 覆盖业务写注入 payload 的全规则（FR-121，纯函数）。
+// TestInjectWriteContext 覆盖业务写注入 payload 的全规则（纯函数）。
 func TestInjectWriteContext(t *testing.T) {
 	parse := func(t *testing.T, s string) map[string]any {
 		t.Helper()

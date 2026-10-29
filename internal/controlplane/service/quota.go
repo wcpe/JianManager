@@ -9,16 +9,16 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 运行期配额强制（FR-467）。
+// 运行期配额强制。
 //
 // 既有能力全部只在「创建时」或「启动时」生效：组配额只在 service/instance.go 的 Create
-// 事务里检查；docker 资源限额只在容器启动时注入 cgroup；FR-317 的内存守卫只在启动前挡一次。
+// 事务里检查；docker 资源限额只在容器启动时注入 cgroup的内存守卫只在启动前挡一次。
 // 运行期没有任何持续强制——一个 daemon 模式实例可以持续吃内存/CPU 直到把节点拖垮。
 //
 // 本文件提供「配额基准统一」与「巡检强制」两件事。裁决在 CP 侧（配额真源在 CP 数据库，
 // 架构不变量：Worker 不碰 DB），Worker 只执行处置动作。
 
-// EnforceMode 超限处置档位（FR-467 §2.5）。
+// EnforceMode 超限处置档位（§2.5）。
 type EnforceMode string
 
 const (
@@ -39,7 +39,7 @@ func ValidEnforceMode(m string) bool {
 	return false
 }
 
-// EffectiveQuota 实例可用的运行期配额（FR-467 §2.2）。
+// EffectiveQuota 实例可用的运行期配额（§2.2）。
 // 来源优先级：**实例级字段 > 组配额派生 > 不限（0）**。
 type EffectiveQuota struct {
 	// CPUCores 实例 CPU 上限（核）；0=不限。
@@ -125,7 +125,7 @@ func instanceGroupID(db *gorm.DB, instanceID uint) uint {
 
 // groupDiskFreeMB 计算组配额派生给单实例的磁盘可用余量（软限）。
 //
-// 存储用量口径（FR-003）：取 groupUsedStorageMB —— 组内各实例的真实工作目录占用，
+// 存储用量口径：取 groupUsedStorageMB —— 组内各实例的真实工作目录占用，
 // 逐实例回退到备份大小。**与创建期检查（AuthzService.GetQuotaUsage）同源同实现**：
 // 此前两处各写一遍「SUM 备份大小」，换口径时极易只改一处，导致「创建时通过、
 // 运行期立刻超限」。现在两处都调同一个函数，物理上不可能漂移。
@@ -152,7 +152,7 @@ func groupDiskFreeMB(db *gorm.DB, groupID uint) (int64, error) {
 	return free, nil
 }
 
-// QuotaService 配额解析与查询（FR-467）。
+// QuotaService 配额解析与查询。
 type QuotaService struct {
 	db     *gorm.DB
 	source quotaInstanceSource
@@ -180,7 +180,7 @@ func (s *QuotaService) defaultEnforceMode() EnforceMode {
 	return m
 }
 
-// EffectiveQuota 解析实例的运行期配额（FR-467 §2.2：实例级 > 组派生 > 不限）。
+// EffectiveQuota 解析实例的运行期配额（§2.2：实例级 > 组派生 > 不限）。
 func (s *QuotaService) EffectiveQuota(instanceID uint) (*EffectiveQuota, error) {
 	in, err := s.source.loadQuotaInputs(instanceID)
 	if err != nil {

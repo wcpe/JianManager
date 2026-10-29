@@ -57,7 +57,7 @@ import {
   type TerminalSessionManager,
 } from './terminal-session-manager'
 
-/** 递增 token 的凭据桩：可断言「重连必须现取新 token」（FR-140）。 */
+/** 递增 token 的凭据桩：可断言「重连必须现取新 token」。 */
 function credsStub() {
   let n = 0
   const fn = vi.fn(async () => {
@@ -76,7 +76,7 @@ async function flush() {
   await vi.advanceTimersByTimeAsync(0)
 }
 
-describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行缓冲）', () => {
+describe('TerminalSessionManager 状态机（296后缓冲为行缓冲）', () => {
   let manager: TerminalSessionManager
 
   /** 权威缓冲的整段文本（ADR-086：行缓冲取代 xterm buffer 成为唯一权威缓冲）。 */
@@ -294,7 +294,7 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     expect(manager.getState(1)).toBe('connected')
   })
 
-  it('idle-disconnected 后 markVisible 自动重连且现取新 token（FR-140）', async () => {
+  it('idle-disconnected 后 markVisible 自动重连且现取新 token', async () => {
     const fetchCreds = credsStub()
     manager.acquire(1, fetchCreds)
     await flush()
@@ -421,7 +421,7 @@ describe('TerminalSessionManager 状态机（FR-295/296，FR-415 后缓冲为行
     expect(manager.getLines(1).map((line) => line.raw)).toEqual(['buffered-1', 'buffered-2'])
   })
 
-  it('state 消息按诊断语义落系统行（WORKER_TOKEN_REJECTED 定向提示，FR-276 语义保留）', async () => {
+  it('state 消息按诊断语义落系统行（WORKER_TOKEN_REJECTED 定向提示语义保留）', async () => {
     const fetchCreds = credsStub()
     manager.acquire(1, fetchCreds)
     await flush()

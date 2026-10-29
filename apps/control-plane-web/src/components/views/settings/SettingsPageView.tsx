@@ -1,12 +1,12 @@
-/**
+/** 
  * @file SettingsPageView：系统设置页的受控视图（分类导航 + 分类面板 + 切分类未保存拦截），平台配置取数/保存与客户端偏好落盘由应用容器负责。
  * @input lib/settings-form（keyCategory 分类映射、diffSettings/hasUnsavedChanges 脏比对、validateSettingDraft/hasInvalidDraft 草稿校验）、
  *        Panel/PageShell/PageHeader/SettingsLayout/Dialog/Select/Input/Badge/FieldError 等原语、翻译上下文
  * @output SettingsPageView、SettingsPageViewProps、SettingsThemeMode、SettingsItemView、SettingsDataView、
  *          SettingsOutboundTestArgs
  * @sync apps/control-plane-web/src/pages/SettingsPage.tsx、apps/control-plane-web/src/pages/SettingsPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-037 系统设置 + FR-063 平台配置覆盖层 + FR-158 未保存拦截与生效时机标注 +
- *        FR-225 调试模式开关 + FR-229/FR-280 出站连通性测试入口 + FR-409 GitHub 令牌快捷创建）
+ * @since（组件受控化迁包；原页系统设置平台配置覆盖层未保存拦截与生效时机标注 +
+ *调试模式开关出站连通性测试入口GitHub 令牌快捷创建）
  */
 import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -57,8 +57,8 @@ export type SettingsThemeMode = 'light' | 'dark' | 'system'
 /** 日志级别可选值，用于可编辑项的下拉。 */
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
-/**
- * GitHub 新建 fine-grained 个人访问令牌页（FR-409）：官方 URL 模板预填表单——
+/** 
+ * GitHub 新建 fine-grained 个人访问令牌页：官方 URL 模板预填表单——
  * 名字、描述、永不过期（expires_in=none，不传则默认 30 天过期，届时 CP 同步会再次报错）；
  * 权限参数刻意留空即最小权限——fine-grained 令牌内建对所有公开仓库的只读访问，
  * 而本令牌唯一用途就是读公开仓库 releases 提升 API 限额。
@@ -83,7 +83,7 @@ function settingLabel(t: TFunction, key: string): string {
   return t(`settings.keys.${key}`, key)
 }
 
-/**
+/** 
  * 单个平台配置项（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/settings` 的 `SettingItem`：容器直接传 API 返回的
@@ -115,10 +115,10 @@ export interface SettingsDataView {
   readOnly: SettingsItemView[]
 }
 
-/**
+/** 
  * 出站连通性测试入口的插槽参数（该按钮自带 mutation，实现由外壳注入）。
  *
- * 本视图只报「在哪个分类里要测」：网络分类测出站代理（FR-229/FR-280，目标可自定义）、
+ * 本视图只报「在哪个分类里要测」：网络分类测出站代理（目标可自定义）、
  * 运行时分类测 JDK 下载源可达。测试目标与 mutation 是外壳策略，故视图不 import 该实现。
  */
 export interface SettingsOutboundTestArgs {
@@ -126,7 +126,7 @@ export interface SettingsOutboundTestArgs {
   category: 'network' | 'runtime'
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 平台配置数据与加载/错误态经 props 注入（容器调 `useSettings()`）；
  * - 保存以 `onSave(changed)` 回调上报，由容器执行 mutation 并决定成功/失败文案：返回是否成功，
@@ -168,8 +168,8 @@ export interface SettingsPageViewProps {
   renderOutboundTest?: (args: SettingsOutboundTestArgs) => ReactNode
   /** 取数失败时的重试（外壳注入）。 */
   onRetry?: () => void
-  /**
-   * AI 助手配置入口插槽（FR-514）。
+  /** 
+   * AI 助手配置入口插槽。
    *
    * 走插槽而非在此处 import 路由：视图不认识 react-router（ADR-103 b 范式），
    * 且该入口只有平台管理员可见——角色与路由都由外壳决定。
@@ -177,10 +177,10 @@ export interface SettingsPageViewProps {
   assistantEntry?: ReactNode
 }
 
-/**
- * 系统设置页（FR-037 + FR-063 + FR-158）：内部侧边栏分类 + 右侧分类面板，套「设置表单」范式。
+/** 
+ * 系统设置页：内部侧边栏分类 + 右侧分类面板，套「设置表单」范式。
  * 外观/语言为客户端偏好（localStorage）；其余为服务端平台配置（DB 覆盖层）。
- * FR-158：切分类时若有未保存草稿则拦截确认；非即时项标注生效时机；security 项视觉隔离。
+ *：切分类时若有未保存草稿则拦截确认；非即时项标注生效时机；security 项视觉隔离。
  * 草稿状态留在本组件（按键全局唯一），使切分类拦截可跨分类工作；平台配置分类仅平台管理员可见。
  */
 export function SettingsPageView({
@@ -315,7 +315,7 @@ export function SettingsPageView({
         </div>
       </SettingsLayout>
 
-      {/* FR-158：切分类未保存拦截确认 */}
+      {/*切分类未保存拦截确认 */}
       <Dialog open={pendingCat !== null} onOpenChange={(o) => !o && setPendingCat(null)}>
         <DialogContent>
           <DialogHeader>
@@ -348,7 +348,7 @@ interface AppearanceSettingsProps {
   onLanguageChange: (language: 'zh' | 'en') => void
 }
 
-/** 外观：主题模式 + 语言（客户端偏好）。主题色切换在侧栏（FR-164），此处不重复。 */
+/** 外观：主题模式 + 语言（客户端偏好）。主题色切换在侧栏，此处不重复。 */
 function AppearanceSettings({ theme, onThemeChange, language, onLanguageChange }: AppearanceSettingsProps) {
   const { t } = useTranslation()
   return (
@@ -418,7 +418,7 @@ interface PlatformCategoryProps {
   onRetry?: () => void
 }
 
-/**
+/** 
  * 平台配置分类面板：security 展示只读项（视觉隔离），其余分类展示可编辑项 + 保存。
  * 数据/草稿由页面视图提供，切分类拦截在页面视图处理。
  */
@@ -540,7 +540,7 @@ function PlatformCategory({
             )}
           </div>
           {editable.length > 0 && (
-            /*
+            /* 
               保存按钮旁给出「有没有改动」：原先按钮只有一个禁用态，
               用户看不出「是没改所以灰」还是「校验没过所以灰」。
             */
@@ -567,7 +567,7 @@ function PlatformCategory({
             </div>
           )}
 
-          {/* 连通性测试（FR-229）：代理在网络分类测出站（目标可自定义，FR-280）、JDK 下载源在运行时分类测可达。
+          {/* 连通性测试：代理在网络分类测出站（目标可自定义）、JDK 下载源在运行时分类测可达。
               按钮本体自带取数与 mutation，故经插槽注入（组件库不 import 应用侧实现）。 */}
           {category === 'network' && (
             <div className="space-y-2 border-t pt-3">
@@ -604,7 +604,7 @@ function EditableRow({ item, value, onChange }: EditableRowProps) {
   const { t } = useTranslation()
   // 文本类项按键做客户端校验，非法即红框+行内错误。
   const draftError = validateSettingDraft(item.key, value)
-  // 凭据类输入：密码框遮显 + 关闭自动填充（SMTP 密码 / GitHub API 令牌，FR-063/FR-409）。
+  // 凭据类输入：密码框遮显 + 关闭自动填充（SMTP 密码 / GitHub API 令牌）。
   const isSecretInput = item.key === 'invite.smtp.password' || item.key === 'github.token'
   const placeholder = item.key === 'invite.smtp.password' ? '${ENV_VAR}' : item.key === 'github.token' ? t('settings.githubTokenPlaceholder', 'github_pat_… 或 ${ENV_VAR}') : undefined
   return (
@@ -618,7 +618,7 @@ function EditableRow({ item, value, onChange }: EditableRowProps) {
           </FieldLabel>
           {item.overridden && <Badge variant="secondary">{t('settings.overridden', '已覆盖')}</Badge>}
           {!item.effectiveImmediately && (
-            // FR-158：非即时项标注生效时机（hover 展开说明）。
+            // 非即时项标注生效时机（hover 展开说明）。
             <Badge variant="outline" title={t('settings.effectTimingHint')}>
               {t('settings.workerSide', 'Worker 侧生效')}
             </Badge>
@@ -627,7 +627,7 @@ function EditableRow({ item, value, onChange }: EditableRowProps) {
         <p className="text-xs text-muted-foreground font-mono">{item.key}</p>
       </div>
       {item.key === 'debug.mode' ? (
-        // 调试模式开关（FR-225）：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
+        // 调试模式开关：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
         // 用 Switch 而非 true/false 下拉：它是开关语义，下拉把二值状态做成了「选项」，
         // 读起来像有第三种可能。提交值仍转回字符串，保持后端契约不变。
         <div className="flex items-center gap-2">
@@ -671,7 +671,7 @@ function EditableRow({ item, value, onChange }: EditableRowProps) {
             <FieldError error={draftError} />
           </div>
           {item.key === 'github.token' && (
-            // 快捷创建（FR-409）：新标签直达 GitHub 令牌创建页（名字已预填），创建后复制回填保存。
+            // 快捷创建：新标签直达 GitHub 令牌创建页（名字已预填），创建后复制回填保存。
             <Button
               size="sm"
               variant="outline"

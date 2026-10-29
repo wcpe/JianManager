@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// AuthMeHandler GET /auth/me（FR-432）：返回当前用户有效权限节点与 roleKey。
+// AuthMeHandler GET /auth/me：返回当前用户有效权限节点与 roleKey。
 type AuthMeHandler struct {
 	authz *service.AuthzService
 	perm  *service.PermissionService

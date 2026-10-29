@@ -1,16 +1,16 @@
 // Package orphanaudit 把 Worker 侧的孤儿处置/误杀拦截审计经既有 Worker→CP 出站 gRPC 信道
-// 上报 CP 审计库（FR-455/456）。
+// 上报 CP 审计库（456）。
 //
 // 背景：运行期周期孤儿扫描与接管兜底的处置动作（scan_detected / scan_disposed /
 // scan_dispose_blocked / dispose_blocked / dispose_reaped）此前只落 Worker 结构化日志，
 // 未进 CP 审计库，违反 spec §2.2「处置动作一律落审计（reviewer 可查）」。本包复用与崩溃快照
-// 上报（FR-313）相同的「Worker→CP 同址出站信道 + 节点身份鉴权」模式，把审计送进
+// 上报相同的「Worker→CP 同址出站信道 + 节点身份鉴权」模式，把审计送进
 // internal/controlplane/service/audit.go 的 RecordResultSafe。
 //
 // 上报为尽力而为：失败（网络 / 老 CP Unimplemented）记日志丢弃，不重试不排队——审计增强
 // 不得反向影响进程处置路径。
 //
-// 投递形态（FR-456 N4）：有界队列 + **单条复用的 gRPC 连接** + 单个派发 goroutine。
+// 投递形态（N4）：有界队列 + **单条复用的 gRPC 连接** + 单个派发 goroutine。
 // 单轮扫描可产上千 findings，此前「每事件一个 goroutine + 每条新建连接」会造成 fd/连接风暴；
 // 现改为：Report 非阻塞入队（队列满即丢弃并告警），派发 goroutine 串行复用同一 client 上报。
 package orphanaudit
@@ -33,7 +33,7 @@ import (
 const (
 	// reportTimeout 单次上报的超时上限（与崩溃快照上报同量级）。
 	reportTimeout = 10 * time.Second
-	// reportQueueSize 上报队列容量上限（FR-456 N4）。单轮扫描可产上千 findings，超出即丢弃并告警：
+	// reportQueueSize 上报队列容量上限（N4）。单轮扫描可产上千 findings，超出即丢弃并告警：
 	// 审计是尽力而为，宁可丢尾部几条，也不阻塞处置路径或把连接/fd 打满。
 	reportQueueSize = 256
 )
@@ -49,7 +49,7 @@ type Event struct {
 
 // Reporter 孤儿审计上报器：走 Worker→CP 既有出站信道（与注册/心跳同址，NAT 节点天然可达）。
 //
-// 连接经 connMu 惰性创建并**全局复用**（FR-456 N4）：单轮上千 findings 不再各建一条连接。
+// 连接经 connMu 惰性创建并**全局复用**（N4）：单轮上千 findings 不再各建一条连接。
 // Reporter 生命周期由 main 持有，进程退出前应调用 Close 释放连接与派发 goroutine。
 type Reporter struct {
 	cpAddr string
@@ -92,7 +92,7 @@ func (r *Reporter) SetIdentity(nodeUUID, nodeSecret string) {
 
 // Report 异步上报一条孤儿审计：立即返回，不阻塞调用方（扫描/处置路径）。
 //
-// 入队即返回；队列满时丢弃本条并告警（FR-456 N4）。派发由单个后台 goroutine 串行完成。
+// 入队即返回；队列满时丢弃本条并告警（N4）。派发由单个后台 goroutine 串行完成。
 func (r *Reporter) Report(ev Event) {
 	if r == nil {
 		return
@@ -131,7 +131,7 @@ func (r *Reporter) Close() {
 	}
 }
 
-// loop 单派发 goroutine：串行消费队列并以复用连接上报（FR-456 N4）。
+// loop 单派发 goroutine：串行消费队列并以复用连接上报（N4）。
 func (r *Reporter) loop() {
 	defer r.wg.Done()
 	for {
@@ -150,7 +150,7 @@ func (r *Reporter) loop() {
 	}
 }
 
-// serviceClient 返回复用的 gRPC 客户端，仅首次调用建连（FR-456 N4）。
+// serviceClient 返回复用的 gRPC 客户端，仅首次调用建连（N4）。
 func (r *Reporter) serviceClient() (workerpb.WorkerServiceClient, error) {
 	r.connMu.Lock()
 	defer r.connMu.Unlock()

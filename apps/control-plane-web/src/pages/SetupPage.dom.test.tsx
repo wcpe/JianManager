@@ -6,8 +6,8 @@ import { renderWithProviders } from '@/test/render'
 import { mockInject } from '@jianmanager/devmock/inject'
 import SetupPage from './SetupPage'
 
-/**
- * SetupPage 强断言（FR-199 身份访问域）。公开页：无需 loginMockUser。
+/** 
+ * SetupPage 强断言（身份访问域）。公开页：无需 loginMockUser。
  * 地基默认 /setup/status 返回 setupRequired:false → SetupPage 会 <Navigate to="/login">，
  * 故验「需引导」分支须先注入 setupRequired:true。
  */

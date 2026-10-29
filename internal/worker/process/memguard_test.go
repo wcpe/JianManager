@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestStart_MemGuardRejects 可用内存塞不下待启实例时 Start 被拒、状态保持 STOPPED（FR-317）。
+// TestStart_MemGuardRejects 可用内存塞不下待启实例时 Start 被拒、状态保持 STOPPED。
 func TestStart_MemGuardRejects(t *testing.T) {
 	m := NewManager(t.TempDir())
 	// 8G 主机、可用 2G；实例 -Xmx2G 估算 2611MB > 可用-保留 → 拒
@@ -24,7 +24,7 @@ func TestStart_MemGuardRejects(t *testing.T) {
 	assert.Equal(t, StateStopped, state, "被闸拒绝应保持原状态")
 }
 
-// TestStart_MemGuardConfig 自定义保留水位与显式关闭（FR-317）。
+// TestStart_MemGuardConfig 自定义保留水位与显式关闭。
 func TestStart_MemGuardConfig(t *testing.T) {
 	m := NewManager(t.TempDir())
 	m.SetMemReader(func() (int64, int64, error) { return 3000, 8192, nil })
@@ -41,7 +41,7 @@ func TestStart_MemGuardConfig(t *testing.T) {
 	}
 }
 
-// TestStart_MemGuardFailOpen 读数失败不拦启动（fail-open），禁用同理（FR-317）。
+// TestStart_MemGuardFailOpen 读数失败不拦启动（fail-open），禁用同理。
 func TestStart_MemGuardFailOpen(t *testing.T) {
 	m := NewManager(t.TempDir())
 	m.SetMemReader(func() (int64, int64, error) { return 0, 0, errors.New("psutil broken") })

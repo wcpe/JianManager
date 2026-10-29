@@ -8,15 +8,15 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
 
-/**
- * 运行态漂移提示（FR-471）。
+/** 
+ * 运行态漂移提示。
  *
  * 语义：`runtimeDriftPid > 0` 表示该实例**工作目录下存在未被平台纳管的活进程**——
  * 典型场景是运维用 tmux/脚本手工启服，平台 DB 记为 STOPPED 而磁盘实际在跑。
  * 此时面板状态与实际不一致，且直接「启动」会双开（后端启动预检会拦，但前端应尽早暴露）。
  *
  * 「接管」是写操作且有副作用：先停止该外在进程、再以受管方式重新拉起（运行中的服务器会被重启），
- * 故一律经统一危险操作确认（FR-059 DangerConfirm）后下发，绝不直发请求。
+ * 故一律经统一危险操作确认（DangerConfirm）后下发，绝不直发请求。
  * 文案全部走 i18n、配色走 `--status-warning` 令牌，明暗双主题自适应。
  *
  * 受控（ADR-103）：接管动作经 `onAdopt` 上报、在途态经 props 注入；
@@ -47,7 +47,7 @@ export function RuntimeDriftBadge({ pid, cmdline, className }: RuntimeDriftInfoV
   )
 }
 
-/**
+/** 
  * 「接管」写操作按钮：自持二次确认框，接管本身经回调上报。
  *
  * 抽成组件而非在调用点各抄一遍（确认框 + mutate + toast 三件套），保证入口行为与文案一致。
@@ -59,7 +59,7 @@ export interface RuntimeDriftAdoptButtonProps {
   instanceName: string
   /** 未被纳管的活进程 pid。 */
   pid: number
-  /** 实例写权限（FR-432）：无权限时按钮禁用并给 tooltip，最终仍由后端 RBAC 兜底。 */
+  /** 实例写权限：无权限时按钮禁用并给 tooltip，最终仍由后端 RBAC 兜底。 */
   canOperate: boolean
   size?: 'sm' | 'xs'
   className?: string
@@ -114,7 +114,7 @@ export function RuntimeDriftAdoptButton({
   )
 }
 
-/**
+/** 
  * 醒目告警横幅（实例详情页用）：说明漂移含义 + 展示 PID/命令行 + 提供「接管」入口。
  */
 export function RuntimeDriftBanner({

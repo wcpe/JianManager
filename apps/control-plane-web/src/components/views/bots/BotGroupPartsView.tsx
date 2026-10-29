@@ -1,4 +1,4 @@
-/**
+/** 
  * @file BotGroupPartsView：Bot 舰队页分组总览的展示件——分组操作区（在控制台打开 + 单组批量菜单）、
  *       分组行（勾选 + 可展开标签 + 健康条 + 总数，行下挂成员窥视）与成员窥视（分页列表 + 翻页器）。
  *       展示件不取数、不发请求、不弹 toast；分组批量与窥视成员数据分别经回调与 props 注入。
@@ -8,7 +8,7 @@
  * @output BotGroupActions、BotGroupActionsProps、BotGroupRow、BotGroupRowProps、BotGroupPeek、
  *         BotGroupPeekProps、BOT_PEEK_PAGE_SIZE
  * @sync apps/control-plane-web/src/pages/BotsPage.tsx（容器保留 useBotBatch/useBots 取数与路由装配）
- * @since FR-508（组件受控化迁包；原页 FR-040 全局 Bot 页、FR-147 分组总览与单组批量、FR-371 会话与模板页签）
+ * @since（组件受控化迁包；原页全局 Bot 页分组总览与单组批量会话与模板页签）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,8 +29,8 @@ import { PeekRow } from '@/components/views/bots/BotListParts'
 import type { BotBatchAction, BotInfo, BotSummaryGroup } from '@/lib/bots/bot'
 import type { GroupByDim } from '@/lib/bots/bots-overview'
 
-/**
- * 窥视列表的固定页大小（FR-147）。
+/** 
+ * 窥视列表的固定页大小。
  *
  * 一处导出供两处共用：容器按它请求（`useBots({ page, pageSize })`），本文件按它算总页数。
  * 若各写一份，改页大小时会静默错位——翻页器仍按旧值分页，请求却已换档。
@@ -40,7 +40,7 @@ export const BOT_PEEK_PAGE_SIZE = 10
 /** 单组批量菜单可下发的行为集合（与后端 behavior 枚举对齐）。 */
 const BEHAVIOR_OPTIONS = ['idle', 'guard', 'follow', 'patrol'] as const
 
-/**
+/** 
  * 分组操作区（卡片/行复用）：在控制台打开（仅实例维度）+ 单组批量菜单。
  *
  * 受控边界（ADR-103 b 范式）：不取数、不弹 toast。批量下发经 `onRunBatch` 上报（容器接
@@ -107,7 +107,7 @@ function BotGroupBatchMenu({
   )
 }
 
-/**
+/** 
  * 单个分组行（列表视图）：勾选 + 标签（可展开）+ 健康条 + 总数 + 操作区；展开时在行下追加成员窥视。
  *
  * 受控边界：勾选与展开态由 `BotGroupOverview` 持有后传入（与原页一致，二者都是纯 UI 状态）；
@@ -180,7 +180,7 @@ export function BotGroupRow({
   )
 }
 
-/**
+/** 
  * 展开窥视：仅展示该组当前页 Bot（分页，绝不全量铺开），用于核对组内成员。
  *
  * 受控边界：成员数据、加载态与页码全部经 props 注入——页码会触发重新取数，故由容器持有

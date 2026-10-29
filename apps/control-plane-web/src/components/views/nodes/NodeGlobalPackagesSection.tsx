@@ -10,7 +10,7 @@ import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { Spinner } from '@jianmanager/ui/components/spinner'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 
-/**
+/** 
  * 一条全局包（本组件所需的最小结构）。
  *
  * 外壳直接传 `@/api/pmConfig` 的 `GlobalPackage` 会结构兼容，故无需把该 API 类型迁进包。
@@ -29,10 +29,10 @@ export interface GlobalPackagesView {
   packages: GlobalPackageView[]
 }
 
-/**
- * 节点全局包管理（FR-307）：托管全局目录（<数据根>/opt/runtimes/global）内已装包的
+/** 
+ * 节点全局包管理：托管全局目录（<数据根>/opt/runtimes/global）内已装包的
  * 列表 / 搜索 / 安装 / 升级 / 卸载。安装与升级为任务中心异步（202+taskId，进度看任务中心）；
- * 卸载同步。包管理器与下载源取节点 FR-306 配置，此处不重复选择。
+ * 卸载同步。包管理器与下载源取节点配置，此处不重复选择。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast——数据与刷新/安装/卸载
  * 一律经 props 与回调进出；搜索词、安装表单草稿、待删包名等 UI 状态留在组件内。

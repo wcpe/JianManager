@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// newUpdaterCoreSvc 建一个含制品库 + 频道 + 版本服务的最小测试装配（FR-259）。
+// newUpdaterCoreSvc 建一个含制品库 + 频道 + 版本服务的最小测试装配。
 func newUpdaterCoreSvc(t *testing.T) (*ClientVersionService, *AssetService, *gorm.DB) {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"

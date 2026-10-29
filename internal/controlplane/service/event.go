@@ -18,7 +18,7 @@ type InstanceEvent struct {
 }
 
 // LogSink 接收来自 Worker 事件流的实例进程输出并落库（由 LogService 实现）。
-// 以接口注入而非直接依赖 LogService，保持 EventService 对持久化的解耦（FR-049）。
+// 以接口注入而非直接依赖 LogService，保持 EventService 对持久化的解耦。
 type LogSink interface {
 	// IngestInstanceOutput 落库一条实例输出。nodeUUID 标识来源节点，stream 为 stdout/stderr。
 	IngestInstanceOutput(nodeUUID, instanceUUID, stream, message string, ts int64)
@@ -31,9 +31,9 @@ type EventService struct {
 	subs   []chan InstanceEvent
 	ctx    context.Context
 	cancel context.CancelFunc
-	// logSink 可选：非 nil 时把 stdout/stderr 事件落库（FR-049）。
+	// logSink 可选：非 nil 时把 stdout/stderr 事件落库。
 	logSink LogSink
-	// streamMu/streaming 保证每节点只起一条事件流订阅（FR-456 F4）：重复的 StartWorkerStream
+	// streamMu/streaming 保证每节点只起一条事件流订阅（F4）：重复的 StartWorkerStream
 	// 会建立重复长驻订阅，导致 stdout/stderr 双写、事件重复扇出。订阅 goroutine 退出时清除标记，
 	// 使节点真正重连后仍能重建订阅。
 	streamMu  sync.Mutex
@@ -46,7 +46,7 @@ func NewEventService(pool *cpgrpc.ClientPool) *EventService {
 	return &EventService{pool: pool, ctx: ctx, cancel: cancel}
 }
 
-// SetLogSink 注入日志落库器，使实例 stdout/stderr 经事件流采集入库（FR-049）。
+// SetLogSink 注入日志落库器，使实例 stdout/stderr 经事件流采集入库。
 func (es *EventService) SetLogSink(sink LogSink) { es.logSink = sink }
 
 // Subscribe 订阅实例事件，返回只读 channel。取消时调用返回的函数。
@@ -79,7 +79,7 @@ func (es *EventService) Subscribe() (<-chan InstanceEvent, func()) {
 	return ch, unsub
 }
 
-// StartWorkerStream 启动到指定 Worker 的事件流订阅（每节点单飞，FR-456 F4）。
+// StartWorkerStream 启动到指定 Worker 的事件流订阅（每节点单飞F4）。
 // nodeUUID 为空时自动订阅所有已连接节点。
 func (es *EventService) StartWorkerStream(nodeUUID string) {
 	client, ok := es.pool.Get(nodeUUID)
@@ -135,7 +135,7 @@ func (es *EventService) streamFromWorker(nodeUUID string, client *cpgrpc.Client)
 				break
 			}
 
-			// 实例进程输出（stdout/stderr）落库供日志中心检索（FR-049）；
+			// 实例进程输出（stdout/stderr）落库供日志中心检索；
 			// 状态变更仍只走 SSE 扇出。落库与扇出相互独立。
 			if es.logSink != nil && (evt.Type == "stdout" || evt.Type == "stderr") {
 				es.logSink.IngestInstanceOutput(nodeUUID, evt.InstanceUuid, evt.Type, evt.Data, evt.Timestamp)

@@ -11,7 +11,7 @@ import { formatFileSize } from '@/lib/shared/format-file-size'
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type VersionNotice = (kind: 'success' | 'error', message: string) => void
 
-/** 历史版本抽屉（FR-070）：版本列表 / diff / 一键回滚，复用 FR-051 后端，回滚走 DangerConfirm。 */
+/** 历史版本抽屉：版本列表 / diff / 一键回滚，复用后端，回滚走 DangerConfirm。 */
 export interface VersionDrawerProps {
   /** 选中文件完整相对路径；为 null 时抽屉不渲染内容。 */
   filePath: string | null
@@ -23,7 +23,7 @@ export interface VersionDrawerProps {
   versions?: FileVersion[]
   versionsLoading: boolean
   versionsFailed: boolean
-  /**
+  /** 
    * diff 选择变化（外壳据此取 diff）。视图内点「对比」/「到」会触发；
    * 两者都选定且不同时外壳才实际发请求，与原 `enabled` 条件一致。
    */
@@ -41,7 +41,7 @@ export interface VersionDrawerProps {
   notify: VersionNotice
 }
 
-/**
+/** 
  * 受控视图（ADR-103 c 范式）：版本列表、diff 与回滚三个取数全部由外壳注入。
  * 视图内只留「选中哪两个版本对比」「要回滚哪个版本」这两处纯 UI 状态。
  */

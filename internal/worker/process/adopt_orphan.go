@@ -10,26 +10,26 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③：未纳管活进程的全自动收养。
+// ③：未纳管活进程的全自动收养。
 //
 // 背景（ADR-093 决策 1 的缺口）：Worker 重启时 RecoverDaemonInstances 对「wrapper 仍存活、仅 socket
 // 瞬时不可达」的实例只告警 + 保留 PID 文件、不杀（这是对的——绝不误杀健康服务器）；但该实例此后
 // **没有任何出口**：启动接管只有一次机会，周期扫描的 scanWrapperGone 只抓「wrapper 死 / Java 活」，
 // 对「wrapper 与 Java 都活、只是当时拨不通」完全沉默。于是它永久脱管——健康巡检不覆盖、终端与日志
-// 采集没有控制连接、心跳不上报，CP 面板 STOPPED 而磁盘上服务器正在服务（FR-436 形态）。
+// 采集没有控制连接、心跳不上报，CP 面板 STOPPED 而磁盘上服务器正在服务（形态）。
 //
 // 本文件补上这个出口：发现 PID 目录中「未纳管的活进程对」（wrapper 与 Java 均活、PID 文件有效）
 // → 归属复核通过 → **只重连、登记为 RUNNING**；不重启、不杀、不碰进程（PID 不变）。
 // 判据与 ADR-093 / docs/specs/restart-resilience/spec.md §2.1 完全一致：复核不通过一律只告警。
 //
-// 与 FR-471（AdoptForeignRuntime）的分工：那条路径处置的是**外来**进程（无 PID 记录、非 wrapper，
+// 与（AdoptForeignRuntime）的分工：那条路径处置的是**外来**进程（无 PID 记录、非 wrapper，
 // 人工确认后先停后启）；本路径只接管**平台自有 wrapper**（PID 记录 + 环境 UUID 确证），全程不碰进程。
 
-// DefaultOrphanAutoAdopt 未纳管活进程自动收养的默认开关（FR-497③，默认启用）。
+// DefaultOrphanAutoAdopt 未纳管活进程自动收养的默认开关（③，默认启用）。
 // 单一真源：worker 配置层（internal/worker/config.go 的 orphan_scan.auto_adopt）引用本常量。
 const DefaultOrphanAutoAdopt = true
 
-// AdoptUnmanagedDaemonInstances 执行一轮「未纳管活进程」自动收养（FR-497③）。返回成功收养数与观测结果。
+// AdoptUnmanagedDaemonInstances 执行一轮「未纳管活进程」自动收养（③）。返回成功收养数与观测结果。
 //
 // 逐条 PID 记录的判定顺序（任一前置条件不满足即跳过，绝不处置）：
 //  1. 记录有效：WrapperPID / JavaPID 均 >0 且互不相同；记录内 InstanceUUID 非空时必须与文件名一致；
@@ -37,7 +37,7 @@ const DefaultOrphanAutoAdopt = true
 //  3. 未纳管（内存表无该 UUID，或有但无 strategy 且状态不属「可能仍有活进程」三态）——已纳管则跳过（幂等）；
 //  4. 归属复核通过（wrapper 分支带环境 UUID 确证，Java 分支按 cmdline/cwd 匹配；复核不过只告警不收养）。
 //
-// 收养动作 = 构造 daemon 策略 + **单次** reconnect 拨号 + 登记 RUNNING（复用 FR-459 熔断态恢复）。
+// 收养动作 = 构造 daemon 策略 + **单次** reconnect 拨号 + 登记 RUNNING（复用熔断态恢复）。
 // 拨号失败只告警并保留 PID 文件，交由下一轮扫描重试（不在扫描轮内做长退避，避免拖住整轮扫描）。
 func (m *Manager) AdoptUnmanagedDaemonInstances() (int, []OrphanFinding) {
 	if m == nil || m.pidDir == "" {
@@ -93,7 +93,7 @@ func (m *Manager) AdoptUnmanagedDaemonInstances() (int, []OrphanFinding) {
 	return adopted, findings
 }
 
-// adoptableRecord 校验 PID 记录本身是否具备「有效」形态（FR-497③）：
+// adoptableRecord 校验 PID 记录本身是否具备「有效」形态（③）：
 // wrapper/java PID 齐备且互异；记录内 UUID 非空时必须与 PID 文件名一致（不符即陈旧/错配，跳过）。
 func adoptableRecord(fileUUID string, rec *daemon.PIDRecord) bool {
 	if rec == nil || fileUUID == "" {
@@ -108,7 +108,7 @@ func adoptableRecord(fileUUID string, rec *daemon.PIDRecord) bool {
 	return true
 }
 
-// instanceAdoptedOrLive 报告该实例是否已被本 Worker 纳管（FR-497③ 幂等判据）。
+// instanceAdoptedOrLive 报告该实例是否已被本 Worker 纳管（③ 幂等判据）。
 //
 // 已持有策略（strategy != nil）或状态属「可能仍有活进程」三态（RUNNING/STARTING/STOPPING，
 // 见 mayOwnLiveProcess）都算已纳管：前者有控制连接，后者正处于生命周期操作中（重复收养会争抢
@@ -127,7 +127,7 @@ func (m *Manager) instanceAdoptedOrLive(uuid string) bool {
 // adoptUnmanagedRecord 对一条未纳管的活进程记录执行收养：归属复核 → 单次拨号 → 登记 RUNNING。
 // 返回 true 表示已登记为 RUNNING（收养成功）；false 表示被复核拦截或拨号失败（只告警，PID 文件保留）。
 //
-// 安全闸（与 FR-455① / ADR-093 同口径）：配送任何动作之前先做归属复核——wrapper 分支必须确证
+// 安全闸（与① / ADR-093 同口径）：配送任何动作之前先做归属复核——wrapper 分支必须确证
 // （argv 形如 `<worker> daemon` **且** /proc/<pid>/environ 携带本实例 UUID），Java 分支按 cmdline/cwd
 // 匹配工作目录。任一不通过即放弃收养（`orphan.adopt_blocked`），**不杀、不重启、保留 PID 文件**——
 // 收养是非破坏动作，复核不过的代价只是「这次不接管」，而非「误杀」。
@@ -169,7 +169,7 @@ func (m *Manager) adoptUnmanagedRecord(instanceUUID string, rec *daemon.PIDRecor
 	}
 	strategy.SetWrapperPID(rec.WrapperPID)
 
-	// FR-459 终验 Low #3 同口径：若 Worker 重启前该实例已熔断，收养时同样恢复熔断态，
+	// 终验 Low #3 同口径：若 Worker 重启前该实例已熔断，收养时同样恢复熔断态，
 	// 避免「Worker 以为可自动重启」而 wrapper 的粘性 autoRestartOff 仍在拒绝，形成反向 desync。
 	restored := m.restorePersistedCircuit(instanceUUID)
 

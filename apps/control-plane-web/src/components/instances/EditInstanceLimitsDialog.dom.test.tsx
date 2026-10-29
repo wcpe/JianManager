@@ -7,7 +7,7 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import EditInstanceLimitsDialog from './EditInstanceLimitsDialog'
 
-describe('EditInstanceLimitsDialog 资源限额编辑器（FR-079）', () => {
+describe('EditInstanceLimitsDialog 资源限额编辑器', () => {
   it('具备共享 Dialog 语义并支持 Esc 关闭', async () => {
     const onClose = vi.fn()
     const user = userEvent.setup()
@@ -122,7 +122,7 @@ describe('EditInstanceLimitsDialog 资源限额编辑器（FR-079）', () => {
     )
 
     expect(screen.getByText(/资源限额需 Docker 模式/)).toBeInTheDocument()
-    // FR-502：Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分。
+    // Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分。
     await user.click(
       screen
         .getAllByRole('button', { name: '关闭' })

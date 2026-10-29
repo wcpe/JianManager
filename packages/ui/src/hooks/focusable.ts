@@ -1,5 +1,5 @@
-/**
- * 焦点可达性判定（FR-502 阶段 6）：把「哪些元素算可聚焦」收敛成一处。
+/** 
+ * 焦点可达性判定（阶段 6）：把「哪些元素算可聚焦」收敛成一处。
  *
  * 背景：焦点陷阱与滚动区域可达性都要回答同一个问题——「这个容器里有没有可 Tab 到的东西」。
  * 两处各自写选择器必然走偏（一个只认 button/input，另一个还认 contenteditable），
@@ -10,7 +10,7 @@
  * 但把「可见可聚焦」的判定拆成独立函数，使陷阱与滚动区共用同一套过滤规则。
  */
 
-/**
+/** 
  * 可聚焦元素选择器（不含 tabIndex=-1 的编程聚焦点）。
  *
  * 除了 button/a/input/select/textarea 这些显然的成员，还必须包含：
@@ -35,7 +35,7 @@ export const FOCUSABLE_SELECTOR = [
   'details > summary:first-child',
 ].join(', ')
 
-/**
+/** 
  * 元素是否「真的」可聚焦（浏览器会为它停下 Tab）。
  *
  * 只看选择器是不够的：被 `hidden`/`inert`/`aria-hidden="true"` 包住、或经
@@ -62,7 +62,7 @@ export function isVisiblyFocusable(element: HTMLElement): boolean {
   return true
 }
 
-/**
+/** 
  * 收集容器内全部可见可聚焦元素，按文档顺序返回。
  *
  * 用 `querySelectorAll` 的文档顺序而非自己排序：Tab 序列就是文档顺序。
@@ -79,7 +79,7 @@ export function hasFocusableContent(container: HTMLElement): boolean {
   return getFocusableElements(container).length > 0
 }
 
-/**
+/** 
  * 把焦点移到元素上，返回是否成功。
  *
  * 不用 `element.focus()` 的返回值（它恒为 undefined），而以 `document.activeElement`

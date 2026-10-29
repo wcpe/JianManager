@@ -1,8 +1,8 @@
-/**
- * 路由 → 面包屑轨迹（FR-134 统一页头/面包屑）。
+/** 
+ * 路由 → 面包屑轨迹（统一页头/面包屑）。
  *
  * 据 pathname 首段映射出「域 → 页面」两级轨迹（i18n key + 可点目标），供全局顶栏统一渲染。
- * 与 `ConsoleSidebar` 六域 IA（FR-431）、`Workspace` 路由表对齐。纯函数，便于单测。
+ * 与 `ConsoleSidebar` 六域 IA、`Workspace` 路由表对齐。纯函数，便于单测。
  */
 
 /** 单个面包屑节点：label 为 i18n key；to 存在则可点跳转。 */
@@ -20,7 +20,7 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   bots: 'nav.servers',
   // 群组网络。
   networks: 'nav.groupNetwork',
-  // 工作台（FR-431 独立域）。
+  // 工作台（独立域）。
   super: 'nav.workbench',
   director: 'nav.workbench',
   // 观测。
@@ -97,7 +97,7 @@ const SEGMENT_PAGE: Record<string, string> = {
   'agent-call-logs': 'nav.agentCallLogs',
 }
 
-/**
+/** 
  * 据 pathname 计算面包屑轨迹：
  * - 根路径 `/` → 「平台首页」（无 to，已在当前页）。
  * - 已知首段 → [域(无 to), 页面(有 to 回列表)]；若有更深子段（如 /instances/:id）则页面节点可点、末节点由调用方补具体名称。

@@ -139,7 +139,7 @@ type BotWorkerEvent struct {
 	Total            int                         `json:"total,omitempty"`
 	Status           string                      `json:"status,omitempty"`
 	Step             string                      `json:"step,omitempty"`
-	// FR-369 command-schedule-result 异步 occurrence 终态。
+	// command-schedule-result 异步 occurrence 终态。
 	CommandResult         *CommandScheduleResultPayload `json:"commandScheduleResult,omitempty"`
 	WorkerEpoch           string                        `json:"workerEpoch,omitempty"`
 	WorkerEpochGeneration int64                         `json:"workerEpochGeneration,omitempty"`
@@ -375,7 +375,7 @@ func isReliableBotEvent(event *BotWorkerEvent) bool {
 	return event != nil && (event.Evt == "action-event" || event.Evt == "worker-exit")
 }
 
-// desiredAssignment 是本节点内存中的 Bot 期望 assignment（FR-365，Worker 重启后丢失由 CP reconcile）。
+// desiredAssignment 是本节点内存中的 Bot 期望 assignment（Worker 重启后丢失由 CP reconcile）。
 type desiredAssignment struct {
 	Config       BotConfig
 	DesiredState string // running/stopped
@@ -397,7 +397,7 @@ type Manager struct {
 	cancel                 context.CancelFunc
 	waitDone               chan struct{} // 本代子进程 Wait 归来即关闭（单一 waiter，Stop 复用）
 	bots                   map[string]*BotState
-	// desired 本节点期望 Bot 集合；bot-worker 崩溃后据此重放（FR-365）。
+	// desired 本节点期望 Bot 集合；bot-worker 崩溃后据此重放。
 	desired        map[string]*desiredAssignment
 	onEvent        EventCallback
 	eventSubs      map[uint64]*eventSubscriber
@@ -408,13 +408,13 @@ type Manager struct {
 	readyCh        chan struct{}
 	prewarm        int
 	botWorker      string        // bot-worker 脚本路径
-	nodeRes        *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
-	extraEnv       []string      // spawn 追加环境（FR-308：NODE_PATH 仅作 CJS 兜底）
+	nodeRes        *NodeResolver // node 可执行解析器（：托管/扫描 Node 优先，回退 PATH）
+	extraEnv       []string      // spawn 追加环境（：NODE_PATH 仅作 CJS 兜底）
 	// prepareSpawn 在依赖预检前刷新受控 dist 的 ESM node_modules 链接。
 	prepareSpawn func(distDir string) error
 	// depsPrecheck spawn 前只按 ESM 可见路径检查依赖，避免裸全局根误放行。
 	depsPrecheck func(distDir string) error
-	// 崩溃自动恢复：连续 5 次/5 分钟开路 60 秒（FR-365）。
+	// 崩溃自动恢复：连续 5 次/5 分钟开路 60 秒。
 	crashTimes       []time.Time
 	circuitOpenUntil time.Time
 	autoRestarting   bool
@@ -425,7 +425,7 @@ type Manager struct {
 	rootCancel context.CancelFunc
 }
 
-// 崩溃熔断参数（FR-365）。
+// 崩溃熔断参数。
 const (
 	botWorkerCrashWindow       = 5 * time.Minute
 	botWorkerCrashThreshold    = 5
@@ -463,12 +463,12 @@ func (t *tailBuffer) String() string {
 type ManagerConfig struct {
 	BotWorkerPath string // bot-worker 入口脚本路径（dist/index.js）
 	PrewarmCount  int    // 预热 Bot 数量
-	// NodePath 显式指定 spawn 用的 node 可执行（FR-300；V1 无 UI/配置面，仅留结构）。
+	// NodePath 显式指定 spawn 用的 node 可执行（V1 无 UI/配置面，仅留结构）。
 	NodePath string
 	// NodeResolver 可注入的 node 解析器（测试/后续 CP 下发接入点）；
 	// nil 时按 NodePath + 本地扫描构造默认解析器。
 	NodeResolver *NodeResolver
-	// ExtraEnv spawn 时在继承环境上追加的变量（FR-308：NODE_PATH 仅作 CJS 兜底）。
+	// ExtraEnv spawn 时在继承环境上追加的变量（：NODE_PATH 仅作 CJS 兜底）。
 	ExtraEnv []string
 	// PrepareSpawn 在依赖预检前准备当前入口目录；受控 dist 用它刷新 node_modules 链接。
 	PrepareSpawn func(distDir string) error
@@ -517,7 +517,7 @@ func NewManager(config ManagerConfig) *Manager {
 	return m
 }
 
-// SetBotWorkerPath 运行时更新 bot-worker 入口脚本路径（FR-308：自愈下发完成后切到数据根物化副本）。
+// SetBotWorkerPath 运行时更新 bot-worker 入口脚本路径（：自愈下发完成后切到数据根物化副本）。
 // 只影响下一次 spawn；已运行的子进程不打扰。
 func (m *Manager) SetBotWorkerPath(p string) {
 	m.mu.Lock()
@@ -1166,7 +1166,7 @@ func (m *Manager) PendingRequestCount() int {
 	return len(m.pending)
 }
 
-// ApplyBotBatch 先按 generation 更新 desired，再发送 create-bots 并等待 batch-result（FR-365）。
+// ApplyBotBatch 先按 generation 更新 desired，再发送 create-bots 并等待 batch-result。
 func (m *Manager) ApplyBotBatch(ctx context.Context, requestID, batchID, idempotencyKey string, configs []BotConfig) (*BotWorkerEvent, error) {
 	m.rememberDesiredRunning(configs)
 	return m.sendRequest(ctx, requestID, CreateBotsCommand{
@@ -1175,7 +1175,7 @@ func (m *Manager) ApplyBotBatch(ctx context.Context, requestID, batchID, idempot
 	})
 }
 
-// StopBotBatch 先把 desired 标 stopped，再发送 stop-bots（FR-365）。
+// StopBotBatch 先把 desired 标 stopped，再发送 stop-bots。
 func (m *Manager) StopBotBatch(ctx context.Context, requestID string, botIDs []string, generation int64, reason string) (*BotWorkerEvent, error) {
 	m.rememberDesiredStopped(botIDs, generation)
 	return m.sendRequest(ctx, requestID, StopBotsCommand{

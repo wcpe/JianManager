@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 
-/**
- * FR-493 平台审批中心 · 三档视口验收。
+/** 
+ *平台审批中心 · 三档视口验收。
  *
  * 为什么要有这条 e2e：审批台是表格页，列多（操作/目标/申请人/理由/状态/时间/决策按钮）。
  * 窄屏下若只是「DOM 里还在、实际被裁掉」，`toBeVisible` 仍会通过 —— 那验不到真问题。
@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test'
 const USERNAME = process.env.E2E_USERNAME ?? 'admin'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'admin123'
 
-/**
+/** 
  * 登录并落到应用里。返回后端是否可达 —— 不可达时用例明确跳过而不是假装通过。
  */
 async function signIn(page: import('@playwright/test').Page): Promise<boolean> {

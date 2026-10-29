@@ -11,7 +11,7 @@ function errMessage(err: unknown, fallback: string): string {
   return msg || fallback
 }
 
-/**
+/** 
  * 节点运行时库分区外壳（ADR-103 b 范式）。
  *
  * 五个动作（扫描 / 登记 / 删除 / 安装 / 复制）与它们各自的提示文案都在这里。
@@ -102,9 +102,9 @@ export default function NodeRuntimeTab({
       }}
       footer={
         <>
-          {/* 包管理器与 registry 配置（FR-306） */}
+          {/* 包管理器与 registry 配置 */}
           <NodePMConfigSection nodeId={nodeId} active={active} />
-          {/* 全局包管理（FR-307）：托管全局目录已装包 列表/搜索/安装/升级/卸载。 */}
+          {/* 全局包管理：托管全局目录已装包 列表/搜索/安装/升级/卸载。 */}
           <NodeGlobalPackagesTab nodeId={nodeId} active={active} />
         </>
       }

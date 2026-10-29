@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// 配置落盘与读回校验（FR-530）。
+// 配置落盘与读回校验。
 //
 // 设计要点（对应 spec §3）：
 //  1. 原子写入：同目录临时文件 → fsync → rename → fsync 目录。

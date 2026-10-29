@@ -1,17 +1,17 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-136 实例列表汇总头 + 节点/端口列 + 角色徽标 + proxy↔backend inline · 单机（Playwright + mock）验收。
- * 覆盖 console-ux spec §FR-136 验收：
+/** 
+ *实例列表汇总头 + 节点/端口列 + 角色徽标 + proxy↔backend inline · 单机（Playwright + mock）验收。
+ * 覆盖 console-ux spec §验收：
  *   - sticky 汇总 chip（运行 N/停止 N/崩溃 M/总数）可点设状态筛选；
  *   - 列表加「节点:端口」列（serverPort 已有数据）；
  *   - 角色三态统一语义色徽标；
  *   - proxy 行可 inline 展开已注册 backend 摘要。
- * 证据落 .tmp/acceptance/FR-136/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-136 汇总头计数可点设筛选 + 节点端口列 + 角色徽标（列表视图）', async ({ page }) => {
+test('汇总头计数可点设筛选 + 节点端口列 + 角色徽标（列表视图）', async ({ page }) => {
   await login(page)
 
   // 进列表视图（节点:端口列与角色徽标列在列表视图渲染）。
@@ -35,7 +35,7 @@ test('FR-136 汇总头计数可点设筛选 + 节点端口列 + 角色徽标（�
   await runningChip.click()
   await expect.poll(() => new URLSearchParams(new URL(page.url()).search).get('status')).toBeNull()
 
-  // 2) 表头含「节点:端口」列与「角色」列（FR-136 新增列）。
+  // 2) 表头含「节点:端口」列与「角色」列（新增列）。
   await expect(page.getByTestId('instances-table-virtual')).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '节点:端口' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '角色' })).toBeVisible()
@@ -44,10 +44,10 @@ test('FR-136 汇总头计数可点设筛选 + 节点端口列 + 角色徽标（�
   await expect(page.getByText('代理').first()).toBeVisible()
   await expect(page.getByText('后端').first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-136/single-machine-summary-columns.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-summary-columns.png', fullPage: false })
 })
 
-test('FR-136 proxy 行 inline 展开已注册 backend 摘要', async ({ page }) => {
+test('proxy 行 inline 展开已注册 backend 摘要', async ({ page }) => {
   await login(page)
 
   // 收敛到 proxy 种子实例，避免 1200 规模下滚动找行。
@@ -63,5 +63,5 @@ test('FR-136 proxy 行 inline 展开已注册 backend 摘要', async ({ page }) 
   // 展开后 inline 出现「已注册后端 N」摘要标题或「暂无已注册后端」空态（BackendsInline / proxy.registeredBackends|noBackends）。
   await expect(page.getByText(/已注册后端|暂无已注册后端/).first()).toBeVisible({ timeout: 10_000 })
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-136/single-machine-proxy-inline.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-proxy-inline.png', fullPage: false })
 })

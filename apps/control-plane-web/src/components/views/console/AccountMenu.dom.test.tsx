@@ -6,8 +6,8 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import { AccountMenu } from '@/components/views/console/AccountMenu'
 
-/**
- * FR-162 账户菜单 · 受控视图测（ADR-103 c 范式）。
+/** 
+ *账户菜单 · 受控视图测（ADR-103 c 范式）。
  *
  * 补的是**账户态呈现与退出上报**：用户名/角色文案（复用包内 roles 的 ROLE_LABEL_KEY）、
  * 未知角色不显示角色行、退出经回调上报。
@@ -49,7 +49,7 @@ function renderMenu(props: Partial<Parameters<typeof AccountMenu>[0]> = {}) {
   return merged
 }
 
-describe('AccountMenu（FR-162 账户菜单）', () => {
+describe('AccountMenu（账户菜单）', () => {
   it('展开后显示用户名与角色文案（角色文案与用户管理页同源）。', async () => {
     const user = userEvent.setup()
     renderMenu()

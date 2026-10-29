@@ -1,4 +1,4 @@
-// JianManager FR-475 验收 runner（入库、跨平台）：用真 VL 独立核对 Multiline 归一化与恢复语义。
+//  JianManager验收 runner（入库、跨平台）：用真 VL 独立核对 Multiline 归一化与恢复语义。
 //
 // 为什么入库：规格 §5 要求「真实环境验收证据与自动化测试分开记录；测试全绿不替代
 // 真 Worker/VL 验收」，而 Windows 侧复验必须拿到同一套可执行入口——原先的 harness 只存在于
@@ -116,7 +116,7 @@ func main() {
 	pass = envOr("ACCEPT_VL_PASS", defaultPass)
 	crlf = strings.EqualFold(envOr("ACCEPT_LINE_ENDING", "lf"), "crlf")
 
-	fmt.Printf("FR-475 验收：真 VL 核对（VL=%s，行尾=%s）\n\n", baseURL, map[bool]string{true: "CRLF", false: "LF"}[crlf])
+	fmt.Printf("验收：真 VL 核对（VL=%s，行尾=%s）\n\n", baseURL, map[bool]string{true: "CRLF", false: "LF"}[crlf])
 
 	if _, err := vlQuery("* | count()"); err != nil {
 		fmt.Println("前置失败：真 VL 不可用：", err)

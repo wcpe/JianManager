@@ -21,8 +21,8 @@ import { Label } from '@jianmanager/ui/components/label'
 import { OBS_PRESETS, obsWindowLabel, presetLabel, toLocalInput } from '@/lib/metrics/obs-window'
 import type { ObsWindow } from '@/lib/metrics/obs-window'
 
-/**
- * 分发三页统一时间筛选（FR-425）：预设档 + 任意起止日期时间。
+/** 
+ * 分发三页统一时间筛选：预设档 + 任意起止日期时间。
  * 后端 `/client-dist/observability` 等端点的 parseObsRange 原生支持 from/to（RFC3339），本组件纯前端。
  * 值形态与 obs-window.ts 的 ObsWindow 对齐（clientStats/clientDistObservability 的窗口类型结构相同）。
  */

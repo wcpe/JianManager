@@ -9,7 +9,7 @@ import { API } from '@jianmanager/devmock/api'
 import { mockInject } from '@jianmanager/devmock/inject'
 import SchedulesPage from './SchedulesPage'
 
-/**
+/** 
  * 给 `nextRuns` 套一层计数壳（其余 cron 工具保持真实实现）：用于断言「永不命中」表达式
  * 不会在每次渲染里重算——那是纯逻辑用例抓不到的渲染期开销。
  */
@@ -26,8 +26,8 @@ vi.mock('@/lib/shared/cron', async (importOriginal) => {
   }
 })
 
-/**
- * 定时任务页（FR-207 域簇）。强断言覆盖：
+/** 
+ * 定时任务页（域簇）。强断言覆盖：
  * ① 渲染出 seed 任务；② 切换启用（PUT 写）→ 开关状态联动翻转；③ 注入 500 → 错误态（不崩溃）；
  * ④ 「永不命中」cron 只算一次；⑤ 弹窗字段可访问名；⑥ 列表视图按滚动窗口裁剪。
  * SchedulesPage 同时拉 /instances（属实例域，本域不重定义），测试内用 server.use 临时桩。

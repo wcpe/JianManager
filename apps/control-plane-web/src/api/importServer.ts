@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import type { InstanceInfo } from '@/api/instances'
 
-/** 一个核心 jar 候选（FR-302 导入探测，已知核心名排前）。 */
+/** 一个核心 jar 候选（导入探测，已知核心名排前）。 */
 export interface ImportJarCandidate {
   /** 相对导入根、以「/」分隔的路径（深度≤2）。 */
   path: string
@@ -21,7 +21,7 @@ export interface ImportJdkCandidate {
   arch: string
 }
 
-/** 目录探测结果（FR-302）。 */
+/** 目录探测结果。 */
 export interface ImportInspectResult {
   jars: ImportJarCandidate[]
   jdks: ImportJdkCandidate[]
@@ -43,7 +43,7 @@ export interface ImportServerPayload {
   memoryMb?: number
 }
 
-/** 探测节点上某现成服务器目录（平台管理员，FR-302）。 */
+/** 探测节点上某现成服务器目录（平台管理员）。 */
 export function useInspectImportDir() {
   return useMutation({
     mutationFn: async (payload: { nodeId: number; path: string }) => {
@@ -53,12 +53,12 @@ export function useInspectImportDir() {
   })
 }
 
-/** 导入现成目录为受管实例（就地接管 / 搬迁托管区，FR-302）。 */
+/** 导入现成目录为受管实例（就地接管 / 搬迁托管区）。 */
 export function useImportServer() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (payload: ImportServerPayload) => {
-      // FR-323：migrate 搬迁异步化，响应 {instance, taskId}；解包回 instance 保持消费者契约。
+      // migrate 搬迁异步化，响应 {instance, taskId}；解包回 instance 保持消费者契约。
       const { data } = await api.post<{ instance: InstanceInfo; taskId: string }>('/instances/import', payload)
       return data.instance
     },

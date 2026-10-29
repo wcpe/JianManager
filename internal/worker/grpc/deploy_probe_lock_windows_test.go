@@ -38,7 +38,7 @@ func lockFileShareRead(t *testing.T, path string) {
 // relocatorEntry 是一条典型的 classpath 依赖 jar（运行中会被 JVM 锁定）。
 const relocatorEntry = "libraries/me/lucko/jar-relocator/1.7/jar-relocator-1.7.jar"
 
-// TestDeployServerProbe_RunningInstanceLockedLibrary 复现 FR-068：运行中实例点「更新探针」时，
+// TestDeployServerProbe_RunningInstanceLockedLibrary 复现：运行中实例点「更新探针」时，
 // libraries 依赖 jar 被 JVM 独占锁定，覆盖会 Access denied——修复前整个请求 422，修复后应绕锁成功。
 func TestDeployServerProbe_RunningInstanceLockedLibrary(t *testing.T) {
 	tmp := t.TempDir()

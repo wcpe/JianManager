@@ -1,7 +1,7 @@
 import type { InstanceGroupNode } from './instance-group'
 
-/**
- * 实例组织分组树（FR-165 / ADR-033）的纯逻辑：把后端扁平节点（parentId 邻接表）重建为
+/** 
+ * 实例组织分组树（ADR-033）的纯逻辑：把后端扁平节点（parentId 邻接表）重建为
  * 嵌套树、计算子树集合、按折叠态扁平化为可见行。无 React 依赖，便于表驱动单测。
  */
 
@@ -12,7 +12,7 @@ export interface GroupTreeNode extends InstanceGroupNode {
   children: GroupTreeNode[]
 }
 
-/**
+/** 
  * 把扁平节点列表重建为嵌套树。
  * - 同级按 (sort, id) 升序。
  * - parentId 指向不存在节点的节点按根处理（不丢失孤儿）。
@@ -57,15 +57,15 @@ export function buildGroupTree(flat: InstanceGroupNode[]): GroupTreeNode[] {
   return roots
 }
 
-/**
+/** 
  * 左树某分支的折叠记忆键（写入 console store collapsedGroups）。
- * 命名空间前缀 `igroup:` 与 `tree:`（侧栏实例树 FR-069）、导航组 key 隔离，互不污染折叠态。
+ * 命名空间前缀 `igroup:` 与 `tree:`（侧栏实例树）、导航组 key 隔离，互不污染折叠态。
  */
 export function groupBranchKey(groupId: number): string {
   return `igroup:${groupId}`
 }
 
-/**
+/** 
  * 返回某分组「子树（含自身及所有后代）」的全部分组 ID。
  * 用于「按组（含子树）筛选」时确定参与的分组集合；id 未知返回空数组。
  * 对脏数据健壮：visited 去重防环。
@@ -103,7 +103,7 @@ export interface VisibleGroupRow extends GroupTreeNode {
   hasChildren: boolean
 }
 
-/**
+/** 
  * 按折叠态把嵌套树前序扁平化为可见行列表（折叠优先）。
  * collapsed[groupBranchKey(id)]===true 的节点：保留该节点本身，但其后代不渲染。
  * 这样 1000+ 实例、深嵌套下折叠分支不铺开、不卡（验收 §5）。

@@ -8,8 +8,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import ConfigAdoptPage from './ConfigAdoptPage'
 
-/**
- * 配置纳管页（FR-533）DOM 测试。
+/** 
+ * 配置纳管页DOM 测试。
  *
  * 重点盯三件容易做错的事：
  * 1. **执行必须先预演**：纳管是不可撤销的写入且已纳管不覆盖，误纳管只能人工清理；
@@ -119,7 +119,7 @@ async function pickFirstInstance(user: ReturnType<typeof userEvent.setup>) {
   await user.selectOptions(select, option)
 }
 
-describe('ConfigAdoptPage（FR-533 配置纳管）', () => {
+describe('ConfigAdoptPage（配置纳管）', () => {
   it('把「只读磁盘 / 不覆盖 / 坏的也记录」三条语义摆在页面上', async () => {
     renderPage()
     const semantics = await screen.findByTestId('adopt-semantics')

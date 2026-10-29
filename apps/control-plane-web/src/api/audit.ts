@@ -1,16 +1,16 @@
 import { useInfiniteQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 审计契约（FR-015 / FR-172 / FR-321）已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
+/** 
+ * 审计契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { AuditLogInfo, AuditQueryParams, AuditLogPage } from '@/lib/audit/audit-contracts'
 import type { AuditLogInfo, AuditQueryParams, AuditLogPage } from '@/lib/audit/audit-contracts'
 
 const AUDIT_PAGE_SIZE = 100
 
-/**
- * 无限分页查询审计日志（FR-015 / FR-172）。
+/** 
+ * 无限分页查询审计日志。
  * 业务筛选进入 queryKey，筛选变化时由 TanStack Query 自然切换到新的分页缓存。
  */
 export function useAuditLogs(params?: AuditQueryParams) {

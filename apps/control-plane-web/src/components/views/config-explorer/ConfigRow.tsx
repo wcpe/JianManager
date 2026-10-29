@@ -6,11 +6,11 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Card } from '@jianmanager/ui/components/card'
 import { toneChipClass, type Tone } from '@jianmanager/ui/lib/tone'
 
-/**
- * 配置/记录类页面的「配置行范式」原语（FR-149/151/153/156，设计 §4.5）。
+/** 
+ * 配置/记录类页面的「配置行范式」原语（151/153/156，设计 §4.5）。
  *
  * 与运行实体的工作台卡相对：配置行不含资源条/呼吸灯，承载属性字段 + 启用开关 toggle +
- * code 条件 + 级别/状态 pill，支持卡片 ⇄ 列表视图切换。视觉复用 FR-163 token（靛蓝圆角、
+ * code 条件 + 级别/状态 pill，支持卡片 ⇄ 列表视图切换。视觉复用token（靛蓝圆角、
  * 柔和阴影、iOS 缓动），不硬编码品牌色。这些原语仅供本批次「配置记录」四页复用。
  */
 
@@ -87,7 +87,7 @@ export interface SummaryChip {
   onClick?: () => void
 }
 
-/** 列表顶部汇总条：圆角 pill chip，可点设筛选（FR-149 全部/启用/告警中）。 */
+/** 列表顶部汇总条：圆角 pill chip，可点设筛选（全部/启用/告警中）。 */
 export function ConfigSummaryChips({ chips }: { chips: SummaryChip[] }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -139,9 +139,9 @@ function toneDotClass(tone: Tone): string {
   }
 }
 
-/**
+/** 
  * 配置行卡片（灵动行）：左语义图标块 + 主体（标题 + 属性/code 条件）+ 右侧 meta/pill/toggle/操作。
- * hover 换阴影反馈（iOS 缓动，FR-176 去位移不抬位）。作卡片视图时一行一卡；列表视图请直接用 shadcn Table（本原语专供卡片视图）。
+ * hover 换阴影反馈（iOS 缓动去位移不抬位）。作卡片视图时一行一卡；列表视图请直接用 shadcn Table（本原语专供卡片视图）。
  */
 export function ConfigRow({
   icon,

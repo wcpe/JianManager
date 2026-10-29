@@ -19,7 +19,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-443 验收测试：向 Beacon 推送拓扑变更。
+// 验收测试：向 Beacon 推送拓扑变更。
 //
 // 覆盖 spec §5 验收表里 JM 侧可自证的部分：
 //   #1 未配置协同端点时，实例创建/改名/删除全部正常且零请求
@@ -195,7 +195,7 @@ func TestBeaconPush_CreateSendsRegisterRequest(t *testing.T) {
 	rec := mock.recordsSnapshot()[0]
 	require.Equal(t, BeaconAPIPathAgentRegister, rec.Path)
 	require.Equal(t, http.MethodPost, rec.Method)
-	require.Equal(t, "shared-token", rec.Token, "共享 token 必须以 X-Beacon-Token 发送（FR-222）")
+	require.Equal(t, "shared-token", rec.Token, "共享 token 必须以 X-Beacon-Token 发送")
 	require.Equal(t, "prod", rec.Payload.Namespace)
 	require.Equal(t, "r1-z1-g1", rec.Payload.ServerID)
 	require.Equal(t, "bukkit", rec.Payload.Role)

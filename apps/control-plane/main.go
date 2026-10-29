@@ -77,10 +77,10 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	// stop 派发后主动 RefreshSnapshot，避免 Worker 无事件时面板 connected 不收敛。
 	execution.SetFleetSnapshotRefresher(coordinator)
 	execution.SetScenarioRunLifecycle(scenarioEvents)
-	// FR-370 V2 运行状态机：stop/complete 写 bot_load_run_events。
+	// V2 运行状态机：stop/complete 写 bot_load_run_events。
 	preflight.SetRunIntentService(intents)
 	execution.SetRunIntentService(intents)
-	// FR-365：状态新鲜度巡检，将幽灵 connected 收敛为 disconnected/error。
+	// 状态新鲜度巡检，将幽灵 connected 收敛为 disconnected/error。
 	freshnessSvc := service.NewBotFreshnessService(db, nil)
 	freshness := service.NewBotFreshnessSweeper(freshnessSvc)
 	freshness.Start()
@@ -142,9 +142,9 @@ func main() {
 
 	initLogger(cfg.Log)
 
-	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：CP 所有出站下载（自更新 feed/二进制、
+	// 出站 HTTP 客户端持有者（见 ADR-037/043）：CP 所有出站下载（自更新 feed/二进制、
 	// 服务端 jar、客户端制品入库等）经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。
-	// 非法代理 URL 启动即 fail-fast。持有者可运行时重建：设置面板改全局代理后即时生效（FR-185）。
+	// 非法代理 URL 启动即 fail-fast。持有者可运行时重建：设置面板改全局代理后即时生效。
 	// 启动时按 yaml/env 基线构造；settings 服务就绪后再据 DB 覆盖重建（优先级 DB > yaml > env）。
 	outboundProvider, err := httpclient.NewProvider(cfg.Proxy)
 	if err != nil {
@@ -170,7 +170,7 @@ func main() {
 	}
 	slog.Info("数据根就绪", "dataDir", root.Base())
 
-	// CP↔Worker 专用 WS 令牌密钥（FR-275，见 ADR-061）：只签终端/插件桥令牌，与签用户会话的
+	// CP↔Worker 专用 WS 令牌密钥（见 ADR-061）：只签终端/插件桥令牌，与签用户会话的
 	// jwt.secret 隔离（Worker 永不持有 jwt.secret）。三轨：显式 jwt.ws_secret > 生产 autogen
 	// 持久化 <dataRoot>/etc/ws-token-secret.key > dev 回退。经注册/心跳自动下发 Worker。
 	// 解析失败 fail-fast：WS 密钥不可用则终端/监控必坏，且绝不回退 jwt.secret 掩盖问题。
@@ -207,18 +207,18 @@ func main() {
 	defer instanceSvc.Shutdown()
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	instanceBatchSvc.SetInstanceService(instanceSvc)
-	// 实例组织分组树（FR-165，见 ADR-033）：文件夹式多级嵌套归类 + 实例 M:N，仅 CP 读写。
+	// 实例组织分组树（见 ADR-033）：文件夹式多级嵌套归类 + 实例 M:N，仅 CP 读写。
 	instanceGroupSvc := service.NewInstanceGroupService(db)
 	// 回填实例服务与 Worker 连接池，供节点排空（drain）和实时指标拉取复用。
 	nodeSvc.SetInstanceService(instanceSvc)
 	nodeSvc.SetClientPool(pool)
 	jdkSvc := service.NewJDKService(db, pool)
-	// 节点运行时管理（FR-178）：制品缓存 + JDK 版本目录（foojay）+ 目录浏览，经 gRPC 委托 Worker。
+	// 节点运行时管理：制品缓存 + JDK 版本目录（foojay）+ 目录浏览，经 gRPC 委托 Worker。
 	nodeRuntimeSvc := service.NewNodeRuntimeService(db, pool)
-	// 节点运行时库（FR-298）：统一 Runtime 视图 + 扫描发现 + 泛化登记（JDK 写路径委托 jdkSvc）。
+	// 节点运行时库：统一 Runtime 视图 + 扫描发现 + 泛化登记（JDK 写路径委托 jdkSvc）。
 	runtimeLibrarySvc := service.NewRuntimeLibraryService(db, pool, jdkSvc)
 	pmConfigSvc := service.NewPMConfigService(db, pool)
-	// 连通性测试（FR-229）：出站 HTTP 经当前出站代理客户端、节点存活经 gRPC GetVersion。
+	// 连通性测试：出站 HTTP 经当前出站代理客户端、节点存活经 gRPC GetVersion。
 	diagnosticsSvc := service.NewDiagnosticsService(db, pool)
 	diagnosticsSvc.SetHTTPClientProvider(outboundProvider.Client)
 	dockerImageSvc := service.NewDockerImageService(db, pool)
@@ -229,52 +229,52 @@ func main() {
 		MaxSizeBytes: cfg.FileVersion.MaxSizeBytes,
 	})
 	configSvc := service.NewConfigService(db, pool)
-	// 配置源明面化（FR-451）：复用 configSvc 的 Read/WriteFields 与 instanceSvc 的 Update 写回真源；
+	// 配置源明面化：复用 configSvc 的 Read/WriteFields 与 instanceSvc 的 Update 写回真源；
 	// 反向把内联端口提供者注入 configSvc，令跨实例端口校验覆盖内联值。
 	configSourceSvc := service.NewConfigSourceService(db, instanceSvc, configSvc)
 	configSvc.SetInlinePortProvider(func(instanceID uint) map[string]string {
 		return configSourceSvc.InlinePropValues(instanceID, []string{"server-port", "query.port"})
 	})
-	// 实例滚动/分批/灰度编排（FR-457）：复用 InstanceBatchService 的目标解析与单实例委托。
+	// 实例滚动/分批/灰度编排：复用 InstanceBatchService 的目标解析与单实例委托。
 	instanceRollingSvc := service.NewInstanceRollingService(db, instanceBatchSvc)
 	// CP 重启恢复：内存运行态随进程丢失，把未终态编排置 paused，由运维经 Resume 从游标续跑。
 	if err := instanceRollingSvc.RecoverInterrupted(); err != nil {
 		slog.Warn("CP 重启恢复滚动编排失败", "error", err)
 	}
-	// 配置基线下发/漂移/收敛（FR-458）：复用 configSvc.Write。
+	// 配置基线下发/漂移/收敛：复用 configSvc.Write。
 	configBaselineSvc := service.NewConfigBaselineService(db, configSvc)
-	// 配置分层覆盖（FR-529）：配置文件 + 各作用域不可变版本链 + 有效值预览（含逐键溯源）。
+	// 配置分层覆盖：配置文件 + 各作用域不可变版本链 + 有效值预览（含逐键溯源）。
 	configFileSvc := service.NewConfigFileService(db)
-	// 配置纳管（FR-533）：把磁盘现有配置文件读入为 config_file + 实例级 v1。
+	// 配置纳管：把磁盘现有配置文件读入为 config_file + 实例级 v1。
 	// 复用 configSvc 的 Discover/Read 作为只读磁盘视图——它只暴露这两个只读方法，
 	// 从类型上保证纳管路径拿不到任何写盘能力。
 	configAdoptSvc := service.NewConfigAdoptService(db, configFileSvc, configSvc)
-	// 配置分批灰度与生效编排（FR-531/532）：交付单状态机 + 逐批放量 + 三种生效方式。
-	// 生效编排复用 Worker 的 ReloadProbeConfig（FR-526 已建好通道，独立 10s 超时）。
+	// 配置分批灰度与生效编排（532）：交付单状态机 + 逐批放量 + 三种生效方式。
+	// 生效编排复用 Worker 的 ReloadProbeConfig（已建好通道，独立 10s 超时）。
 	configActivationSvc := service.NewConfigActivationService(db, pool)
 	configDeliverySvc := service.NewConfigDeliveryService(db, pool, configFileSvc, configActivationSvc, nil)
 	botSvc := service.NewBotService(db, pool)
 	botStressSessionSvc := service.NewBotStressSessionService(db, botSvc)
-	// FR-370 命令压测模板服务。
+	// 命令压测模板服务。
 	botLoadTemplateSvc := service.NewBotLoadTemplateService(db)
-	// FR-370 5s 指标采样器（后台循环；Stop 在进程退出前调用）。
+	// 5s 指标采样器（后台循环；Stop 在进程退出前调用）。
 	botLoadMetricSampler := service.NewBotLoadMetricSampler(db, nil)
 	botLoadMetricSampler.SetCapacityProvider(botLoadSvcs.capacity)
 	botLoadMetricSampler.SetTargetResourceProvider(service.NewGRPCBotLoadTargetResourceProvider(pool))
 	botLoadMetricSampler.Start()
 	defer botLoadMetricSampler.Stop()
-	// FR-370 failures/events 投影（读路径，无后台循环）。
+	// failures/events 投影（读路径，无后台循环）。
 	botLoadProjectionSvc := service.NewBotLoadProjectionService(db)
-	// FR-370 终态报告导出；FR-398 起同时供 MCP 工具复用。
+	// 终态报告导出起同时供 MCP 工具复用。
 	botLoadReportSvc := service.NewBotLoadReportService(db)
 	alertSvc := service.NewAlertService(db)
 	alertChannelSvc := service.NewAlertChannelService(db)
-	// QQ 群发现服务（FR-495）：分享链接 + 网关长连接 + 事件落库；Start 非阻塞，
+	// QQ 群发现服务：分享链接 + 网关长连接 + 事件落库；Start 非阻塞，
 	// 网关不可达时后台退避重试，不阻塞 CP 启动；断开不影响 ChannelNotifier.Send（纯 HTTP）。
 	qqDiscoverySvc := service.NewQQDiscoveryService(db, nil)
 	qqDiscoverySvc.Start()
 	defer qqDiscoverySvc.Stop()
-	// QQ 机器人扫码绑定（FR-495）：二维码建任务 + 轮询取凭据，取得的 appSecret 落盘到
+	// QQ 机器人扫码绑定：二维码建任务 + 轮询取凭据，取得的 appSecret 落盘到
 	// <dataRoot>/etc/qq-<appId>.key（0600），配置里只引用 ${QQ-<appId>}。
 	// 同时把 etc 目录注册为凭证密钥文件的回落查找位置（resolveEnvRef 用），
 	// 让「扫码绑定 → 通道配置引用」无需任何环境变量手工介入。
@@ -285,17 +285,17 @@ func main() {
 	qqBindSvc.SetDataRoot(root)
 	scheduleSvc := service.NewScheduleService(db)
 	backupSvc := service.NewBackupService(db, pool)
-	// 备份远程存储后端（FR-057/FR-152）：注入备份服务与 Worker 池，凭证经 ${ENV_VAR} 解析后下发 Worker。
+	// 备份远程存储后端：注入备份服务与 Worker 池，凭证经 ${ENV_VAR} 解析后下发 Worker。
 	backupStorageSvc := service.NewBackupStorageService(db, pool)
 	backupStorageSvc.SetDataRoot(root)
 	backupSvc.SetStorageService(backupStorageSvc)
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
-	// 审计装配到配置交付（FR-531/532）：熔断与回滚必须留痕（熔断记 actor=system + break_reason）。
+	// 审计装配到配置交付（532）：熔断与回滚必须留痕（熔断记 actor=system + break_reason）。
 	configDeliverySvc.SetAudit(auditSvc)
-	// Beacon 可选协同（FR-444，见 ADR-090）：未配置 beacon.endpoint 时客户端为 nil、
+	// Beacon 可选协同（见 ADR-090）：未配置 beacon.endpoint 时客户端为 nil、
 	// 服务整体跳过——本平台全部功能不受影响；拉取恒为手动触发，此处不注册任何定时器。
-	// 出站经进程级代理持有者（与其他出站调用同口径，FR-174/185）。
+	// 出站经进程级代理持有者（与其他出站调用同口径185）。
 	beaconClient := service.NewBeaconClient(service.BeaconClientConfig{
 		Endpoint:    cfg.Beacon.Endpoint,
 		Token:       cfg.Beacon.Token,
@@ -304,7 +304,7 @@ func main() {
 	beaconClient.SetHTTPClientProvider(outboundProvider.Client)
 	beaconSyncSvc := service.NewBeaconSyncService(db, beaconClient, service.BeaconSyncConfig{})
 	beaconSyncSvc.SetAuditService(auditSvc)
-	// 拓扑推送（FR-443，见 ADR-090 §6）：端点为空的客户端为 nil、push-enabled=false 时
+	// 拓扑推送（见 ADR-090 §6）：端点为空的客户端为 nil、push-enabled=false 时
 	// Enabled()=false，两类情形下 instance.go 的推送触发点直接返回（连 goroutine 都不起）。
 	// 与拉取共用同一 endpoint/token/出站代理持有者，不另立一套配置。
 	beaconPushSvc := service.NewBeaconPushService(db, service.NewBeaconPushClient(service.BeaconPushClientConfig{
@@ -320,16 +320,16 @@ func main() {
 		slog.Info("Beacon 协同端点已配置", "pullEnabled", cfg.Beacon.PullEnabled, "pushEnabled", cfg.Beacon.PushEnabled)
 	}
 	authzSvc := service.NewAuthzService(db)
-	// 权限树 seed（FR-432）：系统角色模板幂等写入；失败不阻断启动，路由侧会再 seed。
+	// 权限树 seed：系统角色模板幂等写入；失败不阻断启动，路由侧会再 seed。
 	if err := authzSvc.Permissions().SeedSystemRoles(); err != nil {
 		slog.Warn("seed permission role templates", "err", err)
 	}
 	eventSvc := service.NewEventService(pool)
-	// 日志中心：采集实例输出与平台日志入库、归档到数据根 var/log、按策略保留（FR-049）。
+	// 日志中心：采集实例输出与平台日志入库、归档到数据根 var/log、按策略保留。
 	logSvc := service.NewLogService(db, root, cfg.LogStore)
 	logSvc.Start()
 	defer logSvc.Stop()
-	// FR-480 日志联邦协调器（T11 装配）：实例/节点目标解析 + ClientPool 隧道 Dialer。
+	// 日志联邦协调器（T11 装配）：实例/节点目标解析 + ClientPool 隧道 Dialer。
 	// Readiness 以节点状态∩活跃隧道判定；onlineOnly 不扇出离线节点。
 	logHolderSvc := service.NewLogTargetHolderService(db)
 	instanceSvc.SetLogTargetHolderService(logHolderSvc)
@@ -340,7 +340,7 @@ func main() {
 	} else if holderErr := logHolderSvc.ReconcileInstances(instances, nodes, time.Now().UTC()); holderErr != nil {
 		slog.Warn("日志 holder 启动对账失败", "error", holderErr)
 	}
-	// 导出物化预算（FR-480）：默认 10000 行 / 64MiB 与既有常量一致，行为不变；
+	// 导出物化预算：默认 10000 行 / 64MiB 与既有常量一致，行为不变；
 	// 数据量超默认上限的部署经 log_export.max_rows / max_bytes 显式调大，
 	// 否则用户只能看到「导出未通过完整性校验」且无任何调大途径（前端导出不传 limit）。
 	logCoord := logcoord.AssembleWithExportBudget(pool, nodeSvc, instanceSvc, logHolderSvc, logcoord.ExportBudget{
@@ -354,10 +354,10 @@ func main() {
 		slog.SetDefault(slog.New(persist))
 	}
 	assetSvc := service.NewAssetService(db, root)
-	// 制品入库下载（如服务端核心 IngestFromURL）经进程级出站代理（FR-174，见 ADR-037）。
-	// 用持有者注入，使全局代理改动运行时即时生效（FR-185，见 ADR-043）。
+	// 制品入库下载（如服务端核心 IngestFromURL）经进程级出站代理（见 ADR-037）。
+	// 用持有者注入，使全局代理改动运行时即时生效（见 ADR-043）。
 	assetSvc.SetHTTPClientProvider(outboundProvider.Client)
-	// 通用制品版本库（FR-409）：版本元数据与既有 CAS 分层，首个接入 ServerProbe 官方 Releases。
+	// 通用制品版本库：版本元数据与既有 CAS 分层，首个接入 ServerProbe 官方 Releases。
 	artifactVersionSvc := service.NewArtifactVersionService(db, assetSvc)
 	// GitHub Releases provider 复用自更新同源的 update.github_token：匿名 API 限流 60 次/时/IP，
 	// 共享出口 IP 的 CP 同步制品版本时极易被限流成 403，配令牌后额度提升到 5000 次/时。
@@ -367,16 +367,16 @@ func main() {
 	if _, _, err := artifactVersionSvc.EnsureDefaultServerProbe(); err != nil {
 		log.Fatalf("初始化 ServerProbe 制品版本库失败: %v", err)
 	}
-	// 运行时与制品全局页聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
+	// 运行时与制品全局页聚合：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
-	// FR-301 手动刷新：强制全节点库存 syncFromWorker（失败容忍显旧数据）。
+	// 手动刷新：强制全节点库存 syncFromWorker（失败容忍显旧数据）。
 	runtimeAssetsSvc.SetJDKSync(jdkSvc)
-	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
+	// 节点 enrollment token（一键安装 / 傻瓜部署见 ADR-020）：
 	// 一次性、限时的新节点准入凭据，落库只存哈希、明文签发时一次性返回。
 	enrollTokenSvc := service.NewEnrollTokenService(db)
-	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
+	// Agent 专用令牌 + 策略引擎（见 ADR-076）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
 	agentTokenSvc := service.NewAgentTokenService(db)
-	// Agent 流式传输票据（FR-397）：MCP 不承载大文件字节，改签发短时单用途票据换取数据面。
+	// Agent 流式传输票据：MCP 不承载大文件字节，改签发短时单用途票据换取数据面。
 	// 密钥从服务端主密钥域分离派生，与计划令牌互不通用。
 	agentTransferSvc, err := service.NewAgentTransferTicketService(
 		service.DeriveAgentTransferTicketSecret([]byte(cfg.JWT.Secret)), agentTokenSvc, nil)
@@ -384,23 +384,23 @@ func main() {
 		slog.Error("初始化 Agent 传输票据服务失败", "error", err)
 		return
 	}
-	// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops；默认保留 14 天；供 MCP 复用 Record。
+	// Agent 调用流水（见 ADR-076）：读+写 Ops；默认保留 14 天；供 MCP 复用 Record。
 	agentCallLogSvc := service.NewAgentCallLogService(db)
 	if n, err := agentCallLogSvc.PurgeExpired(); err != nil {
 		log.Printf("[WARN] 清理过期 agent 调用流水失败: %v", err)
 	} else if n > 0 {
 		log.Printf("[INFO] 已清理过期 agent 调用流水 %d 条", n)
 	}
-	// CP 内嵌 MCP 网关（FR-389，见 ADR-077）：Streamable HTTP 无状态（ADR-096），
+	// CP 内嵌 MCP 网关（见 ADR-077）：Streamable HTTP 无状态（ADR-096），
 	// SSE 兼容路径的连接态收敛为传输连接登记（仅回推需要，无超时/并发上限）。
 	mcpConns := mcp.NewSSEConnRegistry()
 	defer mcpConns.Stop()
-	// mcpHandler 延后到 FR-396/397/398 依赖服务就绪后构造（ToolDeps 按值传递）。
-	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
+	// mcpHandler 延后到397/398 依赖服务就绪后构造（ToolDeps 按值传递）。
+	// 平台存储资源管理器：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
-	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
+	// 数据库资源管理器只读浏览：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
 	dbBrowseSvc := service.NewDBBrowseService(db)
-	// 面板自更新（FR-081 / FR-175，见 ADR-036 §7）：默认读 GitHub Releases 源（feed 为可选回退）
+	// 面板自更新（见 ADR-036 §7）：默认读 GitHub Releases 源（feed 为可选回退）
 	// + sha256 校验，CP 统一编排 CP 自升级与经 gRPC 全网 Worker 升级；CP 自身下载落数据根 cache/。
 	selfUpdateSvc := service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{
 		GitHubRepo:    cfg.Update.GitHubRepo,
@@ -410,10 +410,10 @@ func main() {
 		BinaryBaseURL: cfg.Update.BinaryBaseURL,
 		AllowInsecure: cfg.Update.AllowInsecure,
 	}, root)
-	// 拉取 feed 与 CP 自身二进制下载经进程级出站代理（FR-174，见 ADR-037）。
-	// 用持有者注入，使全局代理改动运行时即时生效（CP「检查更新」立即走新代理，FR-185）。
+	// 拉取 feed 与 CP 自身二进制下载经进程级出站代理（见 ADR-037）。
+	// 用持有者注入，使全局代理改动运行时即时生效（CP「检查更新」立即走新代理）。
 	selfUpdateSvc.SetHTTPClientProvider(outboundProvider.Client)
-	// 内嵌 Worker 资产装配（FR-278，见 ADR-062）：安装/升级同版本 Worker 优先取内嵌、不出网。
+	// 内嵌 Worker 资产装配（见 ADR-062）：安装/升级同版本 Worker 优先取内嵌、不出网。
 	// service 不隐式读 go:embed（测试与构建环境解耦），真实现由此处装配；
 	// 未注入（make embed-worker 未跑）时回退 缓存/远程 链路，打点便于排障。
 	selfUpdateSvc.SetEmbeddedWorkerSource(cpembed.EmbeddedWorkerManifest, cpembed.EmbeddedWorkerBinary)
@@ -426,10 +426,10 @@ func main() {
 	} else {
 		slog.Info("未内嵌 Worker 资产（make embed-worker 未注入），worker-assets 走缓存/远程链路")
 	}
-	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：鉴权只用哈希比对。
+	// 客户端分发频道与拉取密钥（见 ADR-022）：鉴权只用哈希比对。
 	clientChannelSvc := service.NewClientChannelService(db)
-	// 拉取密钥可逆加密 + 管理员可查看（FR-192，见 ADR-044）：另存 AES-256-GCM 加密副本供查看明文。
-	// 加密密钥来源三轨（FR-263，优先级 env 注入 > 生产自动生成 > dev 回退）：env 注入优先；
+	// 拉取密钥可逆加密 + 管理员可查看（见 ADR-044）：另存 AES-256-GCM 加密副本供查看明文。
+	// 加密密钥来源三轨（优先级 env 注入 > 生产自动生成 > dev 回退）：env 注入优先；
 	// 生产未注入则自动生成并持久化到 <dataRoot>/etc/client-key-enc.key（0600，跨重启用同一密钥）；
 	// dev_mode 回退内置开发密钥；自动生成失败优雅降级（密钥不可查看但不崩，与 ADR-038 降级哲学一致）。
 	keyEncPath := root.Abs("etc/client-key-enc.key")
@@ -452,7 +452,7 @@ func main() {
 		// 降级日志已在 ResolveKeyEncryptor 返回错误时带真实原因输出。
 	}
 	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
-	// 制品存储渠道（FR-347，见 ADR-073）：client-file 制品外置对象存储的落点路由配置。
+	// 制品存储渠道（见 ADR-073）：client-file 制品外置对象存储的落点路由配置。
 	// 凭证复用拉取密钥加密器（同一份主密钥，运维口径一致，ADR-073 决策 4）；
 	// EnsureBuiltin 幂等 seed 内置「本机存储」渠道并兜底活跃（local 恒可用）。
 	artifactStorageSvc := service.NewArtifactStorageChannelService(db, root)
@@ -460,103 +460,103 @@ func main() {
 	if err := artifactStorageSvc.EnsureBuiltin(); err != nil {
 		slog.Warn("内置本机存储渠道初始化失败，制品上传按本地兜底", "error", err)
 	}
-	// 制品对账（FR-349）：索引 ↔ S3 对象清单一致性——手动/定期对账产差异报告，
+	// 制品对账：索引 ↔ S3 对象清单一致性——手动/定期对账产差异报告，
 	// 处置走显式按钮（标记失效/清理孤儿），不做全自动修复。Start 含启动清障 + 定期调度。
 	artifactReconcileSvc := service.NewArtifactReconcileService(db, artifactStorageSvc)
 	artifactReconcileSvc.SetAudit(auditSvc)
 	artifactReconcileSvc.Start()
 	defer artifactReconcileSvc.Stop()
-	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
+	// 客户端分发版本与 manifest 组装（简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc)
-	// 制品外置存储接线（FR-347，见 ADR-073）：写路径 client-file 按活跃渠道路由落点；
+	// 制品外置存储接线（见 ADR-073）：写路径 client-file 按活跃渠道路由落点；
 	// 读路径 s3 制品经渠道 BlobStore（玩家端点 302 预签名 / 管理面代理直流 / 预览 / 补丁物化）。
 	assetSvc.SetStorageChannels(artifactStorageSvc)
 	clientVersionSvc.SetStorageChannels(artifactStorageSvc)
-	// updater-core 版本归档（FR-259，见 updater-arch-simplification spec §D）：
+	// updater-core 版本归档（见 updater-arch-simplification spec §D）：
 	// 内嵌 core jar 入库为 client-updater-core 类型（内容寻址去重——不同版本 sha256 不同即天然归档多版本不覆盖）。
-	// 频道选定版本经 coreEndpoint 端点返回给楔子（gradle-wrapper 模式，FR-258）；运营可一键切换回滚。
+	// 频道选定版本经 coreEndpoint 端点返回给楔子（gradle-wrapper 模式）；运营可一键切换回滚。
 	// manifest agent.core 段仍由内嵌 core 自动产出（信息性保留，见 applyEmbeddedCore）。
 	if coreJar := cpembed.UpdaterCoreJar(); len(coreJar) > 0 {
 		embeddedCore := service.NewEmbeddedCoreFromJar(coreJar, cpembed.ClientUpdaterEmbeddedCoreVersion)
 		clientVersionSvc.SetEmbeddedCore(embeddedCore)
-		// 归档入库为 client-updater-core（FR-259）：Version 字段存整数版本号，供 coreEndpoint 返回。
+		// 归档入库为 client-updater-core：Version 字段存整数版本号，供 coreEndpoint 返回。
 		if _, ierr := clientVersionSvc.ArchiveCoreJar(bytes.NewReader(coreJar), cpembed.ClientUpdaterEmbeddedCoreVersion); ierr != nil {
 			slog.Warn("内嵌 updater-core 归档入库失败，coreEndpoint 将无可用版本", "error", ierr)
 		}
 	} else {
 		slog.Warn("未内嵌 updater-core jar（make embed-client-updater 未注入），manifest 将省略 agent.core、coreEndpoint 无可用版本")
 	}
-	// 客户端分发大文件分块上传（FR-251，增强 FR-088）：init→chunk→complete，临时分片进
+	// 客户端分发大文件分块上传（增强）：init→chunk→complete，临时分片进
 	// cache/client-uploads/<id>/，complete 拼装喂 clientVersionSvc.PublishFile 落同一 CAS。
 	// Start 启动 TTL 清理并清残留分片（会话内存态，CP 重启即弃单）。
 	clientChunkUploadSvc := service.NewChunkedUploadService(root, clientVersionSvc)
 	clientChunkUploadSvc.Start()
 	defer clientChunkUploadSvc.Stop()
-	// 客户端分发上传增效（FR-346，增强 FR-250/251）：秒传预查（批量 sha256 查 CAS 命中免传）
+	// 客户端分发上传增效（增强251）：秒传预查（批量 sha256 查 CAS 命中免传）
 	// + 小文件聚合上传（一请求多小文件），复用 clientVersionSvc.PublishFile 落同一 CAS。
 	clientUploadEffSvc := service.NewClientUploadEfficiencyService(db, clientVersionSvc)
-	// 客户端机器码登记（FR-092）：manifest 拉取时 best-effort upsert，弱一致、不阻断。
+	// 客户端机器码登记：manifest 拉取时 best-effort upsert，弱一致、不阻断。
 	clientMachineSvc := service.NewClientMachineService(db)
-	// 客户端分发拉取/下载追踪（FR-093）：明细短保留 + 写时增量聚合 + 后台滚动清理。
+	// 客户端分发拉取/下载追踪：明细短保留 + 写时增量聚合 + 后台滚动清理。
 	clientDistTrackingSvc := service.NewClientDistTrackingService(db)
 	clientDistTrackingSvc.Start()
 	defer clientDistTrackingSvc.Stop()
-	// 客户端分发端点 L7 防护（FR-096，见 ADR-023）：IP 黑白名单 + per-IP 限流 + 并发限制，规则运行时可改入审计。
+	// 客户端分发端点 L7 防护（见 ADR-023）：IP 黑白名单 + per-IP 限流 + 并发限制，规则运行时可改入审计。
 	clientIPGuardSvc := service.NewClientIPGuardService(db)
-	// 客户端遥测（FR-094）：明细短保留 + 按 result 日聚合 + 后台滚动清理；端点 best-effort 202。
+	// 客户端遥测：明细短保留 + 按 result 日聚合 + 后台滚动清理；端点 best-effort 202。
 	clientTelemetrySvc := service.NewClientTelemetryService(db)
 	clientTelemetrySvc.Start()
 	defer clientTelemetrySvc.Stop()
-	// 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，供管理台看板。
+	// 分发统计后台：只读聚合094/092 数据，供管理台看板。
 	clientDistStatsSvc := service.NewClientDistStatsService(db)
-	// 客户端启动运行态（FR-265）：独立表记录心跳，不污染分发请求事件与遥测明细。
+	// 客户端启动运行态：独立表记录心跳，不污染分发请求事件与遥测明细。
 	clientRuntimeStateSvc := service.NewClientRuntimeStateService(db)
-	// 客户端分发安全防护（FR-264）：画像、处置、key/channel 防护与制品授权。
+	// 客户端分发安全防护：画像、处置、key/channel 防护与制品授权。
 	clientDistSecuritySvc := service.NewClientDistSecurityService(db, clientChannelSvc, clientVersionSvc)
-	// 客户端分发观测数据底座（FR-217，见 ADR-049）：离线把 events/telemetry 卷积为按频道×小时桶的
+	// 客户端分发观测数据底座（见 ADR-049）：离线把 events/telemetry 卷积为按频道×小时桶的
 	// 时序快照，供观测·分发监控页跨频道/平台时序。聚合落 CP、复用 scheduler 式后台 goroutine。
 	clientDistObsSvc := service.NewClientDistObservabilityService(db)
 	clientDistObsSvc.Start()
 	defer clientDistObsSvc.Stop()
-	// 分发统计、请求事件与安全日志 CSV 导出（FR-361）：复用观测语义，明细按批扫描。
+	// 分发统计、请求事件与安全日志 CSV 导出：复用观测语义，明细按批扫描。
 	clientDistExportSvc := service.NewClientDistExportService(db, clientDistObsSvc)
-	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
+	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
-	// 解析核心版本/构建的 PaperMC API 请求经进程级出站代理（FR-174，见 ADR-037）。
-	// 用持有者注入，使全局代理改动运行时即时生效（FR-185）。
+	// 解析核心版本/构建的 PaperMC API 请求经进程级出站代理（见 ADR-037）。
+	// 用持有者注入，使全局代理改动运行时即时生效。
 	coreSvc.SetHTTPClientProvider(outboundProvider.Client)
-	// 插件桥服务（FR-065，见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
+	// 插件桥服务（见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
 	pluginBridgeSvc := service.NewPluginBridgeService(wsTokenSecret)
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc, artifactVersionSvc)
-	// 通用二进制搭建（FR-441，见 ADR-090）：asset 来源复用制品库的签名分发通道；
+	// 通用二进制搭建（见 ADR-090）：asset 来源复用制品库的签名分发通道；
 	// node_file 放行根默认空集＝该来源关闭，由配置 binary.node_file_roots 显式打开。
 	provisionSvc.SetBinaryAssets(assetSvc)
 	provisionSvc.SetBinaryArtifactVersions(artifactVersionSvc)
 	provisionSvc.SetBinaryNodeFileRoots(func() []string { return cfg.Binary.NodeFileRoots })
 	registrationSvc := service.NewRegistrationService(db)
 	networkSvc := service.NewNetworkService(db, instanceSvc)
-	// 代理服务实现 RegistrationSyncer：注册变更后写代理配置 + 下发 Velocity secret（FR-035）。
+	// 代理服务实现 RegistrationSyncer：注册变更后写代理配置 + 下发 Velocity secret。
 	proxySvc := service.NewProxyService(db, pool, instanceSvc, coreSvc, registrationSvc)
 	registrationSvc.SetSyncer(proxySvc)
 	cloneSvc := service.NewCloneService(db, pool, instanceSvc, registrationSvc)
-	// 导入现有服务器（FR-302，见 ADR-069）：就地接管 / 搬迁托管区。
+	// 导入现有服务器（见 ADR-069）：就地接管 / 搬迁托管区。
 	importServerSvc := service.NewImportServerService(db, pool, instanceSvc)
 	playerSvc := service.NewPlayerService(db, pool)
-	// 服务器状态查询服务（FR-076，见 ADR-016）：按需经探针反向 WS 桥的 QueryServerState
-	// 取回某实例全量 Bukkit 内部状态（前端「服务器状态」tab 开/刷新才查，FR-077）。
+	// 服务器状态查询服务（见 ADR-016）：按需经探针反向 WS 桥的 QueryServerState
+	// 取回某实例全量 Bukkit 内部状态（前端「服务器状态」tab 开/刷新才查）。
 	serverStateSvc := service.NewServerStateService(db, pool)
 
-	// 崩溃快照只读查询（FR-313）+ 趋势/聚合/重分类（FR-470）：写入在 gRPC 层（Worker 上报，
+	// 崩溃快照只读查询+ 趋势/聚合/重分类：写入在 gRPC 层（Worker 上报，
 	// 事务内同步分类 + 统计 upsert），REST 提供列表 / 趋势 / 总览与管理员重分类。
 	crashSnapshotSvc := service.NewCrashSnapshotService(db)
-	// 崩溃与资源关联（FR-470 §2.3）：查崩前 5min 的进程 RSS / 堆指标，为 OOM 提供证据链。
+	// 崩溃与资源关联（§2.3）：查崩前 5min 的进程 RSS / 堆指标，为 OOM 提供证据链。
 	crashCorrelationSvc := service.NewCrashCorrelationService(db)
 	crashSnapshotSvc.SetCorrelation(crashCorrelationSvc)
-	// 业务对接编排服务（FR-116，见 ADR-026/027）：经探针桥下发业务命令（domain.action+payload）
-	// 并透传结果，CP 插件无关、降级即默认。FR-521 / ADR-106 起是纯透传通道，不再持有任何业务语义。
+	// 业务对接编排服务（见 ADR-026/027）：经探针桥下发业务命令（domain.action+payload）
+	// 并透传结果，CP 插件无关、降级即默认。ADR-106 起是纯透传通道，不再持有任何业务语义。
 	businessSvc := service.NewBusinessService(db, pool)
-	// 业务批量命令（FR-523 / FR-535 / FR-537）：目标解析 + 跨区风险分级 + confirmToken + 流式进度。
+	// 业务批量命令：目标解析 + 跨区风险分级 + confirmToken + 流式进度。
 	// 令牌密钥从主密钥域分离派生（与 Agent 传输票据、压测计划令牌同一套手法），
 	// 明文 JWT 密钥绝不复用为签名密钥。
 	var businessConfirmSigner *service.BusinessConfirmTokenSigner
@@ -567,17 +567,17 @@ func main() {
 		businessConfirmSigner = signer
 	}
 	businessBatchSvc := service.NewBusinessBatchService(db, businessSvc, businessConfirmSigner)
-	// 业务对账协调接口（FR-525）：复用批量引擎的目标解析与并发模型，只读透传插件快照。
+	// 业务对账协调接口：复用批量引擎的目标解析与并发模型，只读透传插件快照。
 	// JM 不做差异计算、不预设动作名、不缓存快照；动作只读校验查 manifest。
 	businessReconcileSvc := service.NewBusinessReconcileService(db, businessSvc)
-	// 桥能力接入（FR-526）：桥状态 / 主题订阅 / 业务域状态，全部经既有插件桥的
+	// 桥能力接入：桥状态 / 主题订阅 / 业务域状态，全部经既有插件桥的
 	// `core.*` 治理命令到达探针。域状态带 30s 内存缓存（不落库）。
 	bridgeSvc := service.NewBridgeService(db, pool)
-	// 玩家事件服务（FR-066，见 ADR-016）：订阅各 Worker 的插件事件流（StreamPluginEvents），
+	// 玩家事件服务（见 ADR-016）：订阅各 Worker 的插件事件流（StreamPluginEvents），
 	// 维护实时在线名册并经 SSE 推送给前端（join/quit/chat/cross_server）。
 	playerEventSvc := service.NewPlayerEventService(pool, db)
 	defer playerEventSvc.Stop()
-	// 业务事件纯透传通道（FR-522 / FR-536）：与玩家事件服务共用同一条 StreamPluginEvents 消费
+	// 业务事件纯透传通道：与玩家事件服务共用同一条 StreamPluginEvents 消费
 	// （不重复订阅 Worker），domain 非空的事件在这里进内存环形缓冲并经 /business/stream 扇出。
 	// **不落库**：缓冲 30s 或 20 万条双阈值，进程重启即失（真源在插件，镜像在业务台）。
 	businessStreamSvc := service.NewBusinessStreamService(db, nil)
@@ -609,7 +609,7 @@ func main() {
 		slog.Info("业务事件位点账本已禁用（business_cursor.enabled=false），缺口不可检测")
 	}
 
-	// 配置交付的离线补推（FR-531 §8.2）：探针（重）连入时把该实例上 deferred 的目标补推一次。
+	// 配置交付的离线补推（§8.2）：探针（重）连入时把该实例上 deferred 的目标补推一次。
 	// 挂在玩家事件服务的 connected 钩子上——那里是全平台唯一消费探针 connected 事件的地方。
 	// 钩子必须非阻塞，故这里起独立 goroutine：补推涉及合并配置 + 落盘 + 生效，可能耗时数秒，
 	// 绝不能在事件流读循环里同步执行，否则会拖住该节点所有实例的实时事件。
@@ -624,33 +624,33 @@ func main() {
 	//   - restart 方式复用 InstanceService.Restart：**必须用 Restart 而不是 Stop+Start**——
 	//     停/起都是异步委托，Stop 返回时实例仍在 STOPPING，紧接着的 Start 会撞上启动预检
 	//     （实例状态非法）而直接失败；Restart 在 Worker 侧一次完成停→起，语义才对得上。
-	//   - 探针连通判定取 FR-066 在线名册（与 probeUpdateSvc 同一口径）。
+	// 探针连通判定取在线名册（与 probeUpdateSvc 同一口径）。
 	configActivationSvc.SetRestarter(func(inst *model.Instance) error {
 		return instanceSvc.Restart(inst.ID)
 	})
 	configActivationSvc.SetProbeConnectedChecker(playerEventSvc.IsProbeConnected)
 
-	// 探针在线更新服务（FR-068/409）：Worker 从 CP 本地 CAS 拉取已选 jar，
+	// 探针在线更新服务（409）：Worker 从 CP 本地 CAS 拉取已选 jar，
 	// 不再经 gRPC 传输探针字节。复用 pluginBridgeSvc 重新生成探针 config 的 bridge 段（实例级 token）；
-	// 探针连接状态取 FR-066 在线名册（IsProbeConnected）。
+	// 探针连接状态取在线名册（IsProbeConnected）。
 	probeUpdateSvc := service.NewProbeUpdateService(db, pool, pluginBridgeSvc, artifactVersionSvc)
 	probeUpdateSvc.SetConnChecker(playerEventSvc.IsProbeConnected)
-	// FR-411 补口：部署探针前为导入/历史实例补分配缺失的探针端口（probe_port=0 会写出坏配置）。
+	// 补口：部署探针前为导入/历史实例补分配缺失的探针端口（probe_port=0 会写出坏配置）。
 	probeUpdateSvc.SetInstanceService(instanceSvc)
 
-	// 告警分发器（FR-085）：所有触发源经此统一去抖聚合 / 静默 / 分级路由 / 落库 / 通知。
+	// 告警分发器：所有触发源经此统一去抖聚合 / 静默 / 分级路由 / 落库 / 通知。
 	alertDispatcher := service.NewAlertDispatcher(db)
-	// 容量趋势告警器（FR-464）：容量预测命中「预计 N 天内耗尽」时经 metric 规则同构路径发趋势告警。
+	// 容量趋势告警器：容量预测命中「预计 N 天内耗尽」时经 metric 规则同构路径发趋势告警。
 	capacityTrendAlerter := service.NewCapacityTrendAlerter(db, alertDispatcher)
-	// 轮询型告警评估器：每 60s 评估指标阈值（FR-011）与节点离线（FR-085）。
+	// 轮询型告警评估器：每 60s 评估指标阈值与节点离线。
 	alertEvaluator := service.NewAlertEvaluator(db, alertDispatcher)
 	alertEvaluator.Start()
 	defer alertEvaluator.Stop()
-	// 事件驱动告警触发器（FR-085）：实例崩溃 / 日志关键字 / 玩家事件 / 备份失败。
+	// 事件驱动告警触发器：实例崩溃 / 日志关键字 / 玩家事件 / 备份失败。
 	alertTriggers := service.NewAlertEventTriggers(db, alertDispatcher, eventSvc, playerEventSvc)
 	alertTriggers.Start()
 	defer alertTriggers.Stop()
-	// 备份失败转入告警体系（FR-085）。
+	// 备份失败转入告警体系。
 	backupSvc.SetBackupFailedHook(alertTriggers.OnBackupFailed)
 
 	// 实例事件服务：订阅 Worker 状态变更流并推送给前端 SSE
@@ -662,32 +662,32 @@ func main() {
 	scheduler.Start()
 	defer scheduler.Stop()
 
-	// 时序指标卷积器：周期卷积 raw→5m→1h 并按 TTL 清理（FR-060/ADR-013）。
+	// 时序指标卷积器：周期卷积 raw→5m→1h 并按 TTL 清理（ADR-013）。
 	metricSvc := service.NewMetricService(db)
 	metricSvc.Start()
 	defer metricSvc.Stop()
-	// FR-462：把时序数据源注入告警评估器，启用动态基线/饱和度与实例级 metric 规则评估。
+	// 把时序数据源注入告警评估器，启用动态基线/饱和度与实例级 metric 规则评估。
 	alertEvaluator.SetMetrics(metricSvc)
-	// FR-470：把时序数据源注入崩溃关联服务，为崩溃提供堆指标证据链。
+	// 把时序数据源注入崩溃关联服务，为崩溃提供堆指标证据链。
 	crashCorrelationSvc.SetMetrics(metricSvc)
 	platformObservabilitySvc := service.NewPlatformObservabilityService(db)
-	// FR-401：仅将已认证 Heartbeat 的当前快照按固定周期沉淀为节点级历史指标。
+	// 仅将已认证 Heartbeat 的当前快照按固定周期沉淀为节点级历史指标。
 	botRuntimeMetricSampler := service.NewBotRuntimeMetricSampler(db, metricSvc)
 	botRuntimeMetricSampler.Start()
 	defer botRuntimeMetricSampler.Stop()
 
-	// 全局任务中心 + 站内信（FR-183，见 ADR-040）：长任务进度汇聚 + 终态发站内信。
+	// 全局任务中心 + 站内信（见 ADR-040）：长任务进度汇聚 + 终态发站内信。
 	// TaskService 在心跳路径处理任务快照、终态落 NodeJDK 并经 NotificationService 发信；
 	// JDKService 据此把 JDK 安装改为异步（建任务→Worker 启动即返回 taskId）。
 	notificationSvc := service.NewNotificationService(db)
 	taskSvc := service.NewTaskService(db)
-	// FR-490/493 平台审批中心：票据 + 执行器。
+	// 493 平台审批中心：票据 + 执行器。
 	// 执行器注入 taskSvc：长操作经 RunAsync 承载，避免出现第二条互不相识的异步链路。
 	approvalSvc := service.NewApprovalService(db)
 	// 执行器：批准后由路由层触发。注入 taskSvc 使长操作经 RunAsync 承载，
 	// 避免出现两条互不相识的异步链路。
 	approvalExec := service.NewApprovalExecutor(db, approvalSvc, taskSvc)
-	// 执行前目标漂移校验（FR-491）：批准的是「那一刻的那件事」，
+	// 执行前目标漂移校验：批准的是「那一刻的那件事」，
 	// 从批准到执行之间目标被改过（改名 / 换节点 / 换二进制等都会推进 updated_at），
 	// 就不能把批准人的授权挪用去执行另一件事。此前 SetTargetVerifier 只有定义、
 	// 从未被调用，漂移校验实际不生效——这里把它接上。
@@ -698,22 +698,22 @@ func main() {
 	defer approvalSvc.Stop()
 	taskSvc.SetNotificationService(notificationSvc)
 	jdkSvc.SetTaskService(taskSvc)
-	pmConfigSvc.SetTaskService(taskSvc) // FR-307 全局包异步安装走任务中心
-	// 运行时库安装异步化（FR-299）：Node.js 安装复用 jdk_install 的任务模式（kind=runtime_install）。
+	pmConfigSvc.SetTaskService(taskSvc) // 全局包异步安装走任务中心
+	// 运行时库安装异步化：Node.js 安装复用 jdk_install 的任务模式（kind=runtime_install）。
 	runtimeLibrarySvc.SetTaskService(taskSvc)
 	// 一键搭建异步化：后端服与代理的下载/配置在后台任务推进，不再受 HTTP 请求取消影响。
 	provisionSvc.SetTaskService(taskSvc)
 	proxySvc.SetTaskService(taskSvc)
-	// 长操作任务化（FR-323）：导入 migrate 搬迁 / 克隆拷贝 / 备份创建恢复 纳入任务中心。
+	// 长操作任务化：导入 migrate 搬迁 / 克隆拷贝 / 备份创建恢复 纳入任务中心。
 	importServerSvc.SetTaskService(taskSvc)
 	cloneSvc.SetTaskService(taskSvc)
 	backupSvc.SetTaskService(taskSvc)
-	// 二进制/Beacon 版本管理（FR-468）：实例当前版本查询 + 受控升级 + 一级回滚。
+	// 二进制/Beacon 版本管理：实例当前版本查询 + 受控升级 + 一级回滚。
 	// 取件复用 ProvisionService 的 Worker FetchBinary 通道与制品签名分发，不另起链路。
 	binaryVersionSvc := service.NewBinaryVersionService(db, provisionSvc)
 	binaryVersionSvc.SetAudit(auditSvc)
 
-	// 运行期配额强制（FR-467）：配额解析 + 巡检处置（alert/throttle/stop 三档）。
+	// 运行期配额强制：配额解析 + 巡检处置（alert/throttle/stop 三档）。
 	// 裁决在 CP（配额真源在 DB），Worker 只执行停服动作；非 docker 的 CPU 不做内核节流（诚实边界）。
 	quotaSvc := service.NewQuotaService(db)
 	quotaEnforcerSvc := service.NewQuotaEnforcer(db, quotaSvc)
@@ -723,12 +723,12 @@ func main() {
 	quotaEnforcerSvc.SetAudit(auditSvc)
 	quotaEnforcerSvc.SetNotificationService(notificationSvc)
 
-	// 实例整机快照与一键回滚（FR-466）：全量归档复用 BackupService 的归档/回放实现，
+	// 实例整机快照与一键回滚：全量归档复用 BackupService 的归档/回放实现，
 	// 不重建归档管线；回滚前强制建 pre_rollback 快照，回滚后停在 STOPPED 不自动拉起。
 	snapshotSvc := service.NewSnapshotService(db, backupSvc, instanceSvc)
 	snapshotSvc.SetTaskService(taskSvc)
 	snapshotSvc.SetAudit(auditSvc)
-	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397/398 依赖服务全部就绪。
+	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等397/398 依赖服务全部就绪。
 	// Handler 不再持有 AgentTokenService（授权由 middleware.AgentAuth 前置完成），
 	// Agent 依赖只经 ToolDeps 供工具解析可信目标。
 	mcpToolDeps := mcp.ToolDeps{
@@ -742,34 +742,34 @@ func main() {
 		Batch:     instanceBatchSvc,
 		Docker:    dockerImageSvc,
 		Crash:     crashSnapshotSvc,
-		// FR-468：二进制/Beacon 版本管理（读 + 受控升级 + 一级回滚）。
+		// 二进制/Beacon 版本管理（读 + 受控升级 + 一级回滚）。
 		BinaryVersion: binaryVersionSvc,
-		// FR-467：运行期配额与实时用量读取。
+		// 运行期配额与实时用量读取。
 		Quota: quotaEnforcerSvc,
-		// FR-466：整机快照列表 / 创建 / 一键回滚。
+		// 整机快照列表 / 创建 / 一键回滚。
 		Snapshot: snapshotSvc,
 		Task:     taskSvc,
-		// FR-397 内容运维：文件/配置/插件工具与大文件传输票据签发。
+		// 内容运维：文件/配置/插件工具与大文件传输票据签发。
 		File:        fileSvc,
 		FileVersion: fileVersionSvc,
 		Config:      configSvc,
 		Plugin:      pluginSvc,
 		Transfer:    agentTransferSvc,
-		// 实例分组（FR-165 / ADR-033）：按结构树批量运维。
+		// 实例分组（ADR-033）：按结构树批量运维。
 		InstanceGroup: instanceGroupSvc,
-		// Beacon 拓扑拉取（FR-444，见 ADR-090）：手动触发映射集群→大区→小区分组树。
+		// Beacon 拓扑拉取（见 ADR-090）：手动触发映射集群→大区→小区分组树。
 		BeaconSync: beaconSyncSvc,
-		// 群组服 Network 软标签与代理注册（FR-032 / FR-335）：群组管理与拓扑图数据。
+		// 群组服 Network 软标签与代理注册：群组管理与拓扑图数据。
 		Network:      networkSvc,
 		Registration: registrationSvc,
-		// FR-492 高危操作的审批拦截点。
+		// 高危操作的审批拦截点。
 		//
 		// 这一行漏了不会编译报错，只会让**所有**高危 MCP 工具在调用时被判「审批服务未装配」
 		// 并无条件失败关闭——表现像审批功能整体不可用，实际只是装配漏了一个字段。
 		// 真机验证「批准后副作用是否发生」时必须先确认这里接上了。
 		Approval: approvalSvc,
-		// FR-398：Bot 舰队与压测编排复用管理面同一批 service 实例，不另建策略副本。
-		// 助手概览类只读（FR-544 补回）：按调用者 RBAC 收敛的聚合摘要。
+		// Bot 舰队与压测编排复用管理面同一批 service 实例，不另建策略副本。
+		// 助手概览类只读（补回）：按调用者 RBAC 收敛的聚合摘要。
 		AssistantOverview: service.NewAssistantOverviewService(db, authzSvc),
 		Bot:               botSvc,
 		LoadTemplate:      botLoadTemplateSvc,
@@ -782,7 +782,7 @@ func main() {
 		Metrics:           botLoadMetricSampler,
 	}
 	mcpHandler := mcp.NewHandler(mcpConns, mcpToolDeps, agentCallLogSvc)
-	// 助手调用平台工具的执行入口（FR-544）：按用户权限派生身份后走 MCP 的 CallTool。
+	// 助手调用平台工具的执行入口：按用户权限派生身份后走 MCP 的 CallTool。
 	//
 	// 关键点：助手**不另建执行路径**，审批拦截/能力判定/scope 校验/精确确认
 	// 全部复用 MCP 那一套；这里只负责把「人类用户」翻译成合法的调用身份。
@@ -791,18 +791,18 @@ func main() {
 			return mcp.CallToolAsOwner(authzSvc, mcpToolDeps, ctx, owner, name, args)
 		}
 	})
-	// 制品存量迁移（FR-348）：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
+	// 制品存量迁移：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
 	// RecoverOrphans 清扫 CP 重启滞留的非终态迁移任务，保证在途判定即真相。
 	artifactMigrationSvc := service.NewArtifactMigrationService(db, root, artifactStorageSvc, taskSvc)
 	if err := artifactMigrationSvc.RecoverOrphans(); err != nil {
 		slog.Warn("清扫制品迁移孤儿任务失败", "error", err)
 	}
 
-	// 统一通知中心（FR-216，见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
+	// 统一通知中心（见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
 	// 为一条通知流，页眉单铃铛 + 通知中心页消费。不新建表，标记已读下推到各源既有服务。
 	notificationFeedSvc := service.NewNotificationFeedService(db, notificationSvc, alertSvc)
 
-	// 对外只读统计契约（FR-527）：六组 /stats/* 端点，只出通道与基础设施维度。
+	// 对外只读统计契约：六组 /stats/* 端点，只出通道与基础设施维度。
 	// 探针连接判定复用 PlayerEventService 的在线名册，避免为 overview 的 probes 计数
 	// 另建一份「探针是否在线」的状态（两份状态必然漂移）。
 	statsSvc := service.NewStatsService(db)
@@ -810,10 +810,10 @@ func main() {
 		statsSvc.SetProbeConnected(playerEventSvc.IsProbeConnected)
 	}
 
-	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
+	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（ADR-015）。
 	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
 	settingsSvc := service.NewSettingsService(db, cfg)
-	// AI 助手配置（FR-514，见 ADR-105）：供应商/模型与默认模型。
+	// AI 助手配置（见 ADR-105）：供应商/模型与默认模型。
 	// 凭据复用既有主密钥（clientChannelSvc 已装配的同一把 KeyEncryptor），
 	// 不为 AI 新增第二套密钥——否则运维要同时备份两份，任一份丢失都不可解密。
 	// 出站走受保护工厂：默认只允许 https 公网、拒绝云元数据、默认禁重定向。
@@ -845,14 +845,14 @@ func main() {
 	if err := assistantSvc.ApplyStoredEgress(); err != nil {
 		slog.Warn("AI 出站放行段装配失败，将按「不放行任何私网」运行", "error", err)
 	}
-	// AI 助手对话运行时（FR-515 Phase D）：会话/消息/run/事件 + SSE 观察流。
+	// AI 助手对话运行时（Phase D）：会话/消息/run/事件 + SSE 观察流。
 	// 复用同一个 AssistantService：凭据解析与出站准入必须与配置面同源，
 	// 否则「配置页测试通过、实际对话连不上」这类故障无法自查。
 	assistantChatSvc := service.NewAssistantChatService(db, assistantSvc)
-	// 技能装载（FR-541）：扫描数据根 var/skills，把结果缓存在服务上。
+	// 技能装载：扫描数据根 var/skills，把结果缓存在服务上。
 	// 装载失败的技能会记 WARN 日志——否则「我放了技能却没有」无从解释。
 	assistantChatSvc.SetSkillsRoot(root.SkillsDir())
-	// FR-517 外部 MCP 连接管理：出站复用同一套受保护 Guard（含 dev 明文放行），
+	// 外部 MCP 连接管理：出站复用同一套受保护 Guard（含 dev 明文放行），
 	// 凭据复用同一把主密钥；自环检测登记本平台监听地址。
 	assistantMCPSvc := service.NewAssistantMCPService(db, keyEncryptor)
 	assistantMCPSvc.SetAllowInsecure(cfg.Server.DevMode)
@@ -873,17 +873,17 @@ func main() {
 	})
 	// Start 做启动回收：把上一进程遗留的非终态 run 一律置 interrupted 并补 run_end，
 	// 否则会话的活跃槽会被永久占住（§8）。V1 只支持单 CP 实例，正是这条回收的前提（§8.1）。
-	// FR-517 闭环：把外部 MCP 连接服务接进运行时，外部工具才会进工具目录。
+	// 闭环：把外部 MCP 连接服务接进运行时，外部工具才会进工具目录。
 	// 顺序在 Start 之前：Start 会立即回收遗留 run，那些 run 若带工具调用，
 	// 执行器需要已经能看到外部工具。
 	assistantChatSvc.SetMCPService(assistantMCPSvc)
-	// FR-516 工具覆盖度：把领域服务接进助手执行层。
+	// 工具覆盖度：把领域服务接进助手执行层。
 	// 必须在装配阶段注入而非服务内构造——InstanceService 的启停要经 spawnDelegate
 	// 下发到 Worker，依赖构造期注入的 ClientPool；就地 new 会拿到 pool=nil 的空壳，
 	// 表现为「助手说已启动、实例实际没动」。
 	assistantChatSvc.SetDomainServices(instanceSvc, nodeSvc)
 	assistantChatSvc.Start()
-	// FR-516 §6.2 崩溃恢复：把上一进程遗留的 in_flight 回执标为 unverified。
+	// §6.2 崩溃恢复：把上一进程遗留的 in_flight 回执标为 unverified。
 	// 语义是「已可能产生副作用，不得重放、也不得当成功」——必须如实标未知，
 	// 让用户人工核实；静默当失败重试会造成重复写入。
 	if n, err := assistantChatSvc.RecoverInFlightReceipts(); err != nil {
@@ -895,22 +895,22 @@ func main() {
 	// 而不是被随后的 SIGKILL 打断在半途。
 	defer assistantChatSvc.Stop()
 	// GitHub API 令牌改从设置面板读生效值（github.token，DB > update.github_token 基线）：
-	// 自更新与 ServerProbe 制品版本库同步共用同一读取器，保存即生效、无需重启（FR-409）。
+	// 自更新与 ServerProbe 制品版本库同步共用同一读取器，保存即生效、无需重启。
 	githubTokenReader := func() string { return settingsSvc.EffectiveValue(service.SettingKeyGitHubToken) }
 	githubReleaseProvider.SetTokenProvider(githubTokenReader)
 	selfUpdateSvc.SetGitHubTokenProvider(githubTokenReader)
-	// 把设置读取器注入消费方，使覆盖项真生效（FR-063）：
+	// 把设置读取器注入消费方，使覆盖项真生效：
 	//   JDK 安装读 jdk.mirror.<vendor>；实例启动读 graceful_stop.timeout 随启动下发；
 	//   备份裁剪读 backup.retention_days 定期回收旧备份。
 	jdkSvc.SetSettingsReader(settingsSvc)
-	// Node.js 安装读 runtime.mirror.nodejs 随安装下发（FR-299）。
+	// Node.js 安装读 runtime.mirror.nodejs 随安装下发。
 	runtimeLibrarySvc.SetSettingsReader(settingsSvc)
 	instanceSvc.SetSettingsReader(settingsSvc)
 	backupSvc.SetSettingsReader(settingsSvc)
 	backupSvc.Start()
 	defer backupSvc.Stop()
 
-	// 运行期配额强制（FR-467）与会话/设置读取器接线（构造在 mcpHandler 之前，见上）。
+	// 运行期配额强制与会话/设置读取器接线（构造在 mcpHandler 之前，见上）。
 	quotaSvc.SetDefaultModeReader(func() service.EnforceMode {
 		return service.EnforceMode(settingsSvc.EffectiveValue(service.SettingKeyQuotaEnforceMode))
 	})
@@ -922,17 +922,17 @@ func main() {
 	snapshotSvc.Start()
 	defer snapshotSvc.Stop()
 
-	// 崩溃统计保留窗口（FR-470）：日粒度汇总表需有界，否则随时间无限增长。
+	// 崩溃统计保留窗口：日粒度汇总表需有界，否则随时间无限增长。
 	crashSnapshotSvc.SetSettingsReader(settingsSvc)
 	crashSnapshotSvc.Start()
 	defer crashSnapshotSvc.Stop()
 
-	// 实例反向对账（FR-326）：Worker 心跳在管清单 vs CP instances，无主运行时宽限/列表/手动或自动处置。
+	// 实例反向对账：Worker 心跳在管清单 vs CP instances，无主运行时宽限/列表/手动或自动处置。
 	// 默认 auto_dispose=false；配置经 platform_settings 白名单键即时生效。
 	orphanRuntimeSvc := service.NewOrphanRuntimeTracker(db, settingsSvc, pool)
 	orphanRuntimeSvc.SetAudit(auditSvc)
 
-	// 失效 Bot 自动回收与容量补足（FR-460）：按 workerEpoch 换代识别僵死 Fleet Bot，宽限后自动回收
+	// 失效 Bot 自动回收与容量补足：按 workerEpoch 换代识别僵死 Fleet Bot，宽限后自动回收
 	// 并复用执行核心把在线数补回 planned_count 目标。默认 auto_reclaim=true 但仅对 Fleet 归属 Bot
 	// 生效；V1 手动 Bot 永不自动回收。宽限/开关经 platform_settings 白名单键即时生效。
 	botReclaimSvc := service.NewGRPCBotReclaimService(db, settingsSvc, botLoadSvcs.capacity, pool, botLoadSvcs.execution)
@@ -941,7 +941,7 @@ func main() {
 	botReclaimSweeper.Start()
 	defer botReclaimSweeper.Stop()
 
-	// 出站代理可视化配置（FR-185，见 ADR-043）：
+	// 出站代理可视化配置（见 ADR-043）：
 	//   - settings 保存 proxy.* 后重建 CP 出站持有者（优先级 settings DB > yaml > env）；
 	//   - 启动时若 DB 已有代理覆盖，按当前生效代理重建一次（保证重启后覆盖仍生效）；
 	//   - 节点代理服务以 settings.EffectiveProxy 作全局默认，供心跳按节点算期望代理下发。
@@ -960,10 +960,10 @@ func main() {
 			slog.Info("启动时按 settings DB 覆盖应用出站代理", "proxy", httpclient.Sanitize(eff.URL))
 		}
 	}
-	// 节点级出站代理（FR-185）：全局默认取自 settings（inherit 节点用之），custom 节点用自身值。
+	// 节点级出站代理：全局默认取自 settings（inherit 节点用之），custom 节点用自身值。
 	nodeProxySvc := service.NewNodeProxyService(db, settingsSvc.EffectiveProxy)
 
-	// 调试模式（FR-225，增强 FR-063）：默认 Gin release 静默（杀启动 [GIN-debug] 路由噪音）；
+	// 调试模式（增强）：默认 Gin release 静默（杀启动 [GIN-debug] 路由噪音）；
 	// debug.mode 开关运行时切 Gin 模式 + 日志级别（gin 依赖留在入口层、不渗入 service）。
 	// 必须在 router.Setup（注册路由触发 [GIN-debug] 输出）之前设好 Gin 模式。
 	settingsSvc.SetGinModeApplier(func(debug bool) {
@@ -1004,7 +1004,7 @@ func main() {
 		ServerState:    serverStateSvc,
 		CrashSnapshot:  crashSnapshotSvc,
 		BinaryVersion:  binaryVersionSvc,
-		// FR-467 / FR-466：配额巡检视图与整机快照端点。
+		// 配额巡检视图与整机快照端点。
 		Quota:                   quotaEnforcerSvc,
 		Snapshot:                snapshotSvc,
 		Business:                businessSvc,
@@ -1103,7 +1103,7 @@ func main() {
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
 	terminalProxy := service.NewTerminalProxy(wsTokenSecret, terminalSvc)
-	// 终端仅经 gRPC TerminalSession 反向隧道桥接（FR-281 M2，见 ADR-081）。
+	// 终端仅经 gRPC TerminalSession 反向隧道桥接（M2，见 ADR-081）。
 	terminalProxy.SetWorkerClients(func(nodeUUID string) (workerpb.WorkerServiceClient, bool) {
 		client, ok := pool.Get(nodeUUID)
 		if !ok {
@@ -1118,59 +1118,59 @@ func main() {
 
 	// 启动 gRPC 服务器（用于 Worker Node 注册和心跳）
 	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
-	// WS 令牌密钥经注册/心跳下发 Worker（FR-275，见 ADR-061）。
+	// WS 令牌密钥经注册/心跳下发 Worker（见 ADR-061）。
 	grpcHandler.SetWSTokenSecret(wsTokenSecret)
-	// FR-455③：进程侧证据拉取（心跳清单缺失时二次确认实例是否真已停机）。
+	// ③：进程侧证据拉取（心跳清单缺失时二次确认实例是否真已停机）。
 	grpcHandler.SetEvidenceProbe(cpgrpc.NewEvidenceProbeFromPool(pool))
-	// FR-456 F10：证据对账异步 + 按节点单飞，移出心跳应答关键路径（最长 8s 的证据拉取不得阻塞心跳）。
+	// F10：证据对账异步 + 按节点单飞，移出心跳应答关键路径（最长 8s 的证据拉取不得阻塞心跳）。
 	grpcHandler.SetReconcileDispatcher(cpgrpc.NewEvidenceReconcileDispatcher().Dispatch)
-	// FR-455/456：Worker 孤儿处置/误杀拦截审计落 CP 审计库（不静默）。
+	// 456：Worker 孤儿处置/误杀拦截审计落 CP 审计库（不静默）。
 	grpcHandler.SetOrphanAuditRecorder(auditSvc)
-	// FR-455②：重推去重器（按节点单飞 + 冷却），吸收隧道/注册/心跳多源触发的重复重推，
+	// ②：重推去重器（按节点单飞 + 冷却），吸收隧道/注册/心跳多源触发的重复重推，
 	// 既保证「每次事件都尝试触发、不漏推」，又避免瞬时多源「猛推」。
 	resyncDeduper := cpgrpc.NewResyncDeduper(60 * time.Second)
 	// Register 成功 / 心跳兜底经此同一幂等入口触发重推（多源化的后两源）。
 	grpcHandler.SetResyncTrigger(func(nodeUUID string) {
 		resyncDeduper.Trigger(nodeUUID, instanceSvc.ResyncNode)
 	})
-	// FR-456 F4：长驻订阅类副作用（事件流 / 插件事件流 / Bot Fleet 恢复）只在节点「从无到有」
+	// F4：长驻订阅类副作用（事件流 / 插件事件流 / Bot Fleet 恢复）只在节点「从无到有」
 	//（active 0→1）时建立一次——瞬时 active=2（旧隧道 onClose 晚于新 onOpen）时重复触发会建立
 	// 重复长驻订阅流，导致 stdout/stderr 双写、事件重复扇出。
 	onWorkerFirstConnected := func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
-		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。
+		// 玩家事件流（探针经反向 WS 上报）同步订阅。
 		playerEventSvc.StartWorkerStream(nodeUUID)
 		if err := recoverConnectedBotFleetSubscriptions(context.Background(), botLoadSvcs.execution, pool, nodeUUID); err != nil {
 			slog.Warn("恢复 Worker 的 Bot Fleet 订阅失败", "nodeUUID", nodeUUID, "error", err)
 		}
 	}
-	// FR-455②：隧道每次建立都触发重推（不依赖 n==1，避免瞬时 active=2 漏推）；由去重器按节点
+	// ②：隧道每次建立都触发重推（不依赖 n==1，避免瞬时 active=2 漏推）；由去重器按节点
 	// 吸收瞬时重复触发。与上面的长驻订阅副作用分离，互不影响。
 	// 异步执行：该回调可能在心跳处理路径内触发，重推不应阻塞心跳应答。
 	onWorkerTunnelConnected := func(nodeUUID string) {
 		resyncDeduper.Trigger(nodeUUID, instanceSvc.ResyncNode)
 	}
-	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
+	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照）。
 	grpcHandler.SetMetricIngester(metricSvc)
-	// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信，FR-183，见 ADR-040）。
+	// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信见 ADR-040）。
 	grpcHandler.SetTaskIngester(taskSvc)
-	// 心跳反向对账：Worker 有、CP 无记录的无主运行时（FR-326）。
+	// 心跳反向对账：Worker 有、CP 无记录的无主运行时。
 	grpcHandler.SetOrphanRuntimeIngester(orphanRuntimeSvc)
-	// 注入 enrollment token 校验器（FR-080，见 ADR-020）：新节点首次注册必须凭有效一次性 token，
+	// 注入 enrollment token 校验器（见 ADR-020）：新节点首次注册必须凭有效一次性 token，
 	// 已登记节点必须用 UUID 与密钥重注册；新节点首次注册必须凭有效一次性 token。
 	grpcHandler.SetEnrollmentValidator(enrollTokenSvc)
-	// 注入节点期望代理解析器（FR-185，见 ADR-043）：每次心跳响应携带该节点期望出站代理
+	// 注入节点期望代理解析器（见 ADR-043）：每次心跳响应携带该节点期望出站代理
 	// （custom→节点值，inherit→全局默认）+ generation，Worker 据变化运行时重建出站 client。
 	grpcHandler.SetNodeProxyResolver(nodeProxySvc)
-	// 注入 MC 直探（SLP / Query）超时解析器（FR-446）：每次心跳响应携带 direct_probe.* 的
+	// 注入 MC 直探（SLP / Query）超时解析器：每次心跳响应携带 direct_probe.* 的
 	// 生效超时（毫秒），Worker 存内存填入采集编排链，使超时真可配且无需重启 Worker。
 	grpcHandler.SetDirectProbeTimeoutResolver(settingsSvc)
-	// 注入实例健康巡检策略解析器（FR-459）：每次心跳响应携带 health.* 生效策略（enabled/周期/
+	// 注入实例健康巡检策略解析器：每次心跳响应携带 health.* 生效策略（enabled/周期/
 	// 探针类型/阈值/动作/熔断阈值），Worker 写入巡检器生效值，无需重启 Worker。
 	grpcHandler.SetHealthPolicyResolver(settingsSvc)
-	// 注入健康熔断站内信告警投递器（FR-459）：Worker 经心跳上报熔断时给平台管理员发站内信。
+	// 注入健康熔断站内信告警投递器：Worker 经心跳上报熔断时给平台管理员发站内信。
 	grpcHandler.SetHealthAlertNotifier(service.NewHealthAlertNotifier(db, notificationSvc))
-	// 反向隧道注册表（FR-281，见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，
+	// 反向隧道注册表（见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，
 	// CP 指令仅经反向隧道下发，Worker 不开放任何 CP 直拨入口。
 	// 鉴权拦截器仅拦 OpenReverseTunnel，其余流式方法（心跳等）原样放行。
 	tunnelReg := cpgrpc.NewTunnelRegistry(db)
@@ -1210,7 +1210,7 @@ func main() {
 }
 
 func initLogger(cfg config.LogConfig) {
-	// 用动态 LevelVar 而非静态 Level，使日志级别可经平台设置运行时切换（FR-063 / ADR-015）。
+	// 用动态 LevelVar 而非静态 Level，使日志级别可经平台设置运行时切换（ADR-015）。
 	config.LogLevelVar.Set(config.ParseLogLevel(cfg.Level))
 
 	opts := &slog.HandlerOptions{Level: config.LogLevelVar}
@@ -1223,7 +1223,7 @@ func initLogger(cfg config.LogConfig) {
 	slog.SetDefault(slog.New(handler))
 }
 
-// runResetPassword 本机应急重置用户密码子命令（FR-333）。
+// runResetPassword 本机应急重置用户密码子命令。
 // 用法: jianmanager-cp reset-password -u <用户名> [-c <config>] [-p <新密码>] [-list]
 // 不给 -p 时生成随机密码并打印。密码重置同时解锁账号（Status 置回 Active）。
 // 命令落在 CP 二进制自身而非 jmctl：数据库仅 Control Plane 可读写（架构不变量），

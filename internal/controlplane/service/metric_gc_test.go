@@ -23,7 +23,7 @@ func gcHeartbeat(uuid string, available bool, count int64, millis float64) *work
 	}
 }
 
-// TestMetric_IngestHeartbeat_GCRate 据相邻心跳累计 counter 差推导 GC 次数/耗时速率（FR-465 验收 1）。
+// TestMetric_IngestHeartbeat_GCRate 据相邻心跳累计 counter 差推导 GC 次数/耗时速率（验收 1）。
 func TestMetric_IngestHeartbeat_GCRate(t *testing.T) {
 	svc := newMetricSvc(t)
 	base := metricBase()

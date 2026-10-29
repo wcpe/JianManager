@@ -27,7 +27,7 @@ afterEach(() => {
   mockedFetch.mockReset()
 })
 
-describe('FR-419 控制台游标回溯', () => {
+describe('控制台游标回溯', () => {
   it('历史行按正序映射为负 seq，并和实时缓冲的正 seq 不冲突', () => {
     const lines = historyRowsToLines([
       row(1, '2026-08-27T00:00:01Z', '[00:00:01] [Server thread/INFO]: older'),

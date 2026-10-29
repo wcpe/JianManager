@@ -11,8 +11,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
- * FR-518 §4.1 / §6 的上下文裁剪语义。
+/* *
+ *§4.1 / §6 的上下文裁剪语义。
  *
  * 这里守的是两类**容易做反**的规则：
  *  1. 「剔除后继续」与「拒收」的边界：单实体/单 filter/实体超限 → 剔除 + 告警；
@@ -314,8 +314,8 @@ func TestSanitizeAssistantContext_ValueCheckBeforeTruncate(t *testing.T) {
 	}
 }
 
-/**
- * 服务端重验实体（FR-518 §6 / §8「伪造实体 id 被剔除，run 继续，不返回存在性提示」）。
+/* *
+ * 服务端重验实体（§6 / §8「伪造实体 id 被剔除，run 继续，不返回存在性提示」）。
  *
  * 这里守两条**同生共死**的性质：
  *  1. 不存在 / 他人实例 → 该实体被**剔除**（不是整单拒绝，run 要能继续）；

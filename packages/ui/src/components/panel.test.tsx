@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { Panel } from './panel'
 
-/**
- * Panel 现状快照测试（FR-502 阶段 0）。
+/** 
+ * Panel 现状快照测试（阶段 0）。
  *
- * Panel 是全站卡片原语（FR-061 / FR-163），几乎所有页面都在用它，而它的对外契约只有两条：
+ * Panel 是全站卡片原语，几乎所有页面都在用它，而它的对外契约只有两条：
  * ① **标题栏要不要出现**——title / icon / actions 三者全空时必须不产生标题栏节点；
  * ② **内容区怎么透传**——children 恒定落在一个独立容器里，className / bodyClassName 是追加而非替换。
  * 这两点恰好是重构时最容易静默改掉的（比如把条件渲染改成"永远渲染一个空 header"、或把
@@ -116,18 +116,18 @@ describe('Panel', () => {
 
     const root = screen.getByText('内容').closest('[data-slot="panel"]') as HTMLElement
     expect(root.children).toHaveLength(1)
-    // FR-176：hover 只换阴影不抬位，对外可见结果是 shadow-lift（弱断言，不锁完整类串）
+    // hover 只换阴影不抬位，对外可见结果是 shadow-lift（弱断言，不锁完整类串）
     expect(root.className).toContain('shadow-lift')
   })
 })
 
-/**
- * FR-502 阶段 6 新增契约：三段式结构钩子与标度收敛。
+/** 
+ *阶段 6 新增契约：三段式结构钩子与标度收敛。
  *
  * 结构钩子是页面迁移时的抓手（页面按 panel-header / panel-body / panel-footer 定位，
  * 不再靠 :first-child 猜），标度收敛则是「换主题时样式跟着变」的前提。
  */
-describe('Panel 三段式钩子与标度收敛（FR-502 阶段 6）', () => {
+describe('Panel 三段式钩子与标度收敛（阶段 6）', () => {
   it('标题栏 / 内容区 / 底部区各自带 data-slot 钩子', () => {
     render(
       <Panel title="实例概览" footer={<span>共 3 条</span>}>
@@ -156,7 +156,7 @@ describe('Panel 三段式钩子与标度收敛（FR-502 阶段 6）', () => {
     expect(root.children).toHaveLength(2)
   })
 
-  it('hover 抬升的过渡仍绑 motion token（FR-244 收敛不丢）', () => {
+  it('hover 抬升的过渡仍绑 motion token（收敛不丢）', () => {
     render(<Panel hoverable>内容</Panel>)
 
     const root = screen.getByText('内容').closest('[data-slot="panel"]') as HTMLElement

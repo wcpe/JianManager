@@ -22,7 +22,7 @@ import (
 // `cannot calculate [sort by (_time) desc limit 747822], since it requires more than 51MB of memory`
 // → 校验被判「永久失败」→「日志采集运行时创建失败」→ 采集静默停摆。
 //
-// FR-498 P0 起分簇粒度是 verifyChunkEvents（默认 2000，与写入批上限 insertBatchMaxEvents
+// P0 起分簇粒度是 verifyChunkEvents（默认 2000，与写入批上限 insertBatchMaxEvents
 // **解耦**：写入批上限保护单次插入请求体积，校验成本由窗口内返回行数决定）。本用例用显式
 // 小限额驱动真实限额路径：超过上限的批必须被切成多次查询——把限额调大到 ≥ 整批 /
 // 取消分簇即红。
@@ -33,7 +33,7 @@ func TestVerifyProjectionChunksBoundQuerySize(t *testing.T) {
 	var mu sync.Mutex
 	queries, withLimit := 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 校验查询是 GET /select/logsql/query?query=…（FR-498 起不再传 limit：截断会让本簇
+		// 校验查询是 GET /select/logsql/query?query=…（起不再传 limit：截断会让本簇
 		// 记录凑不齐而被误判「不可见」，见 verify_no_limit_test.go）。
 		if r.URL.Query().Get("limit") != "" {
 			mu.Lock()

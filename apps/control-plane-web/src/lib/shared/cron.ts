@@ -1,5 +1,5 @@
-/**
- * Cron 表达式的前端工具（FR-012 / FR-153）：基本格式校验、下次执行预览、人类可读描述、常用预设。
+/** 
+ * Cron 表达式的前端工具：基本格式校验、下次执行预览、人类可读描述、常用预设。
  *
  * 校验仅做「基本格式」用于即时提示，不追求与后端 cron 库逐字段语义等价——最终合法性与调度
  * 以 Control Plane 解析为准。接受标准 5 字段（分 时 日 月 周）或含秒的 6 字段；预览/描述仅
@@ -22,7 +22,7 @@ function isValidField(field: string): boolean {
   return field.split(',').every((term) => term !== '' && TERM_RE.test(term))
 }
 
-/**
+/** 
  * 校验 cron 表达式基本格式。
  * 空串、字段数不为 5/6、或任一字段结构非法均判为不合法并给出提示 key。
  */
@@ -69,7 +69,7 @@ function expandField(field: string, min: number, max: number): Set<number> {
   return out
 }
 
-/**
+/** 
  * 计算 cron 表达式从 `from` 起的下 `count` 次执行时间（按浏览器本地时区逐分钟扫描）。
  * 仅支持标准 5 字段；非法或 6 字段返回空数组。最多向前扫描 366 天（永不命中的表达式返回已找到的部分）。
  *
@@ -131,8 +131,8 @@ export interface CronDescription {
 
 const pad2 = (s: string | number) => String(s).padStart(2, '0')
 
-/**
- * 把最常见的几类 cron 翻成可读描述（FR-153）：每 N 分钟 / 每小时第 M 分 / 每天 HH:MM。
+/** 
+ * 把最常见的几类 cron 翻成可读描述：每 N 分钟 / 每小时第 M 分 / 每天 HH:MM。
  * 复杂表达式不强行翻译，返回 null。
  */
 export function describeCron(expr: string): CronDescription | null {
@@ -155,7 +155,7 @@ export function describeCron(expr: string): CronDescription | null {
   return null
 }
 
-/** 常用 cron 预设（FR-153）：快捷填充常见调度。 */
+/** 常用 cron 预设：快捷填充常见调度。 */
 export const CRON_PRESETS: { labelKey: string; expr: string }[] = [
   { labelKey: 'schedules.presetEvery5Min', expr: '*/5 * * * *' },
   { labelKey: 'schedules.presetHourly', expr: '0 * * * *' },

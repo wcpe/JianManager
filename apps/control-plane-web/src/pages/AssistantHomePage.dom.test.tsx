@@ -13,8 +13,8 @@ import { API } from '@jianmanager/devmock/api'
 import { usePermissionsStore } from '@/stores/permissions'
 import AssistantHomePage from './AssistantHomePage'
 
-/**
- * AI 首页的**权限与取数边界**（FR-520 §6 / §8）。
+/** 
+ * AI 首页的**权限与取数边界**（§6 / §8）。
  *
  * 这些断言守的是几条「看代码像对、跑起来才知错」的规则：
  *  1. 非管理员**不发** `/alerts/events`（不是「发了再隐藏」——请求一旦发出数据就到浏览器了）；
@@ -36,7 +36,7 @@ function trackRequests() {
 
 /** 直接改权限 store：首页读的是它，不必走完整 auth 流程。 */
 
-/**
+/** 
  * 首页现在从外壳层的 Context 取会话状态（不再自建）。
  * 测试里补一层 Provider，**仍然调用真实的 useAssistantChat**——
  * 这样测到的状态装配与生产一致，而不是喂一个手工 mock。
@@ -54,7 +54,7 @@ function setAdmin(isAdmin: boolean) {
   usePermissionsStore.setState({ loaded: true, isPlatformAdmin: isAdmin, nodes: new Set() })
 }
 
-/**
+/** 
  * 让 `/auth/me` 返回**非**平台管理员。
  *
  * 只 `setAdmin(false)` 不够：外壳挂载后会拉 `/auth/me`，mock 里 userId 1 是管理员，
@@ -197,8 +197,8 @@ describe('AI 首页：权限与取数边界', () => {
   })
 })
 
-/**
- * 首页模式记忆与双向切换（FR-520 §4.1/§4.2/§4.4）。
+/** 
+ * 首页模式记忆与双向切换（§4.1/§4.2/§4.4）。
  *
  * 这几个断言守的是「只做浏览器手测就会静默退化」的行为：
  * 切换入口在不在、点了写不写记忆、重置是否连同 URL 参数一起清掉。
@@ -247,7 +247,7 @@ describe('AI 首页：模式记忆与切换入口', () => {
   })
 })
 
-describe('AI 首页：摘要区块独立失败（FR-520 §6）', () => {
+describe('AI 首页：摘要区块独立失败（§6）', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -290,7 +290,7 @@ describe('AI 首页：摘要区块独立失败（FR-520 §6）', () => {
   })
 })
 
-describe('AI 首页：平台管理员看到全部摘要区块（FR-520 §8）', () => {
+describe('AI 首页：平台管理员看到全部摘要区块（§8）', () => {
   beforeEach(() => {
     loginMockUser()
   })

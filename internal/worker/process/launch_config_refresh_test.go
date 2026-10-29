@@ -28,7 +28,7 @@ func (s *launchConfigStrategy) Close() error {
 }
 func (s *launchConfigStrategy) GetPID() int { return 0 }
 
-// TestManager_SetLaunchConfigDefersRunningStrategyReplacement 验证 FR-233：保存新启动规格时
+// TestManager_SetLaunchConfigDefersRunningStrategyReplacement 验证：保存新启动规格时
 // 不关闭当前运行策略；完成 Stop 后丢弃旧策略，下一次 Start 必须从最新实例字段重建。
 // TestManager_StartDropsLateStaleStrategy 模拟 Stop 已完成过期检查后，配置更新才在
 // STOPPING→STOPPED 收尾窗口到达：下一次 Start 仍须关闭旧策略并按新规格重建。

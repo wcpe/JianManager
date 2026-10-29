@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TestKindForCoreType coreType → 服务端类别映射（FR-511）。
+// TestKindForCoreType coreType → 服务端类别映射。
 //
 // 三分法（用户确认粒度）：插件服 / 代理 / 二进制，不细分 Paper/Spigot/Bukkit。
 func TestKindForCoreType(t *testing.T) {

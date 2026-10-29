@@ -206,7 +206,7 @@ func TestImportServer_JdkRegistrationGuards(t *testing.T) {
 	assert.EqualValues(t, 1, count, "已登记不重复、非候选跳过")
 }
 
-// 端到端锁死（FR-302 关键守则）：删除就地实例时 CP 必须显式传 skip_work_dir=true；
+// 端到端锁死（关键守则）：删除就地实例时 CP 必须显式传 skip_work_dir=true；
 // 非就地实例不传。
 func TestDeleteInPlaceInstanceSendsSkipWorkDir(t *testing.T) {
 	svc, worker, db, node := newImportEnv(t)

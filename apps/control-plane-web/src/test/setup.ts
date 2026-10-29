@@ -9,15 +9,15 @@ import { useAuthStore, flushAuthDynamicImports } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
 import type { TerminalSessionManager } from '@/lib/console/terminal-session-manager'
 
-/**
+/** 
  * jsdom Blob 缺 `stream()` 的最小 polyfill（CI Node 20 真机踩坑）：
  * msw 的 XHR 拦截器会把 blob 响应体（如审计导出 responseType:'blob'）交给 undici 的
  * `new Response()`；undici `extractBody` 见对象带 `arrayBuffer` 且 toStringTag=Blob 即按
  * blob-like 调 `object.stream()`——jsdom 的 Blob 无此方法，直接抛 Unhandled Rejection
  * 使 vitest 全绿仍以错误退出（本地 Node 24 的 undici 路径不受影响，故仅 CI 复现）。
  */
-/**
- * jsdom Crypto 缺 `subtle` 的最小 polyfill（FR-346）：发布页上传前用
+/** 
+ * jsdom Crypto 缺 `subtle` 的最小 polyfill：发布页上传前用
  * `crypto.subtle.digest('SHA-256', …)` 算秒传预查 hash，jsdom 的 window.crypto 只有
  * getRandomValues——桥接 Node 内建 WebCrypto 的 subtle（与浏览器同规范实现）。
  */
@@ -45,7 +45,7 @@ if (typeof Blob !== 'undefined' && typeof Blob.prototype.stream !== 'function') 
   })
 }
 
-/**
+/** 
  * jsdom 缺 `Range.getClientRects` / `getBoundingClientRect`，CodeMirror 6 的坐标测量会异步抛
  * 「textRange(...).getClientRects is not a function」，表现为测试文件在收集阶段即失败。
  * 原先 explorer / config-explorer 的三个测试文件各自在文件内打桩；业务视图回迁后，
@@ -61,7 +61,7 @@ if (typeof Range !== 'undefined') {
   Range.prototype.getBoundingClientRect = emptyRect
 }
 
-/**
+/** 
  * jsdom 缺 `ResizeObserver`：Radix 的 Popper 系组件（Tooltip / DropdownMenu 的定位内容）
  * 通过 `@radix-ui/react-use-size` 观测触发器尺寸，缺少该构造器会在 layout effect 里抛
  * `ReferenceError: ResizeObserver is not defined`——测试**仍然全绿**，但 vitest 记为
@@ -77,15 +77,15 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
 }
 
-/**
- * jsdom 组件 / 页面测试的全局 setup（FR-196，vitest dom project）。
+/** 
+ * jsdom 组件 / 页面测试的全局 setup（vitest dom project）。
  * onUnhandledRequest:'error' 是有意的覆盖闸：未 mock 的请求即让测试失败，逼域簇补齐 handler。
  * 每例后卸载 DOM + 重置 handler 覆盖 + 假后端 + 注入 + 鉴权态（localStorage / store），保证用例隔离
  * （否则成功登录用例写入的 token 会泄漏到下个用例，使 LoginPage 误判已登录而重定向）。
  */
 
-/**
- * 终端会话常驻单例管理器（FR-295，ADR-067），在 beforeAll 里动态 import 缓存到此，缘由有二：
+/** 
+ * 终端会话常驻单例管理器（ADR-067），在 beforeAll 里动态 import 缓存到此，缘由有二：
  * ① **动态 import**——晚于各测试文件的 `vi.mock` 注册与全局桩安装，import 拿到的是这些桩生效后的模块；
  *    静态顶层 import 会抢在它们之前把模块绑进缓存。
  * ② **缓存供 afterEach 同步调用**——afterEach 内若 `await import(...)` 会多出一个拆卸 tick，

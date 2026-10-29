@@ -25,8 +25,8 @@ function makeDataTransfer() {
   }
 }
 
-/**
- * 实例域页面强断言（FR-201）：种子渲染 + 启停状态联动 + 错误注入。
+/** 
+ * 实例域页面强断言：种子渲染 + 启停状态联动 + 错误注入。
  * 跨域端点（节点/群组）由本测试文件 server.use 桩占位——本域只管实例自身，
  * 桩仅为隔离运行（集成后真实它域 handler 接管）。列表视图免触发卡片实时指标拉取。
  */
@@ -40,10 +40,10 @@ beforeEach(() => {
   )
 })
 
-/**
+/** 
  * 切到列表视图。
  *
- * 列表自 FR-452 起已是默认视图，故这里通常只是「确认已在列表」的一次点击（幂等）；
+ * 列表自起已是默认视图，故这里通常只是「确认已在列表」的一次点击（幂等）；
  * 保留它是因为正文用例仍是从默认入口进入，写法不必随默认值变化。
  */
 async function switchToListView(user: ReturnType<typeof userEvent.setup>) {
@@ -75,7 +75,7 @@ function searchQueries(urls: string[]): string[] {
     .map((url) => new URL(url).searchParams.get('q') ?? '')
 }
 
-/*
+/* 
   【文件级超时】本文件每个用例都渲染整页 + 1000+ 条种子实例（jsdom 下单次渲染 1.5~8s，
   见各用例实测耗时），默认 10s 在并行跑多文件或机器有负载时会随机超时——超时来自渲染量，
   不是断言问题。故整文件放宽到 30s；断言本身不变，单个用例要更严格时再就地覆写。
@@ -84,7 +84,7 @@ vi.setConfig({ testTimeout: 30_000 })
 
 describe('InstancesPage（mock 假后端）', () => {
   it('渲染种子实例（名称可见）', async () => {
-    // FR-452：默认视图改为分组树表 + region 维度，故显式请求平铺以断言「实例名可见」。
+    // 默认视图改为分组树表 + region 维度，故显式请求平铺以断言「实例名可见」。
     const { container } = renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
     expect(container.firstElementChild).toHaveAttribute('data-page', 'instances')
     // 阶段 6 页面迁移起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
@@ -95,7 +95,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.getByText('creative-1')).toBeInTheDocument()
   })
 
-  /*
+  /* 
     【实现变更·本轮】列表改服务端分页后，卡片视图的行模型只剩**当前页**（每页 50 条），
     不再按 1000+ 全集建模。原断言「容器 totalCount ≥ 1000」表达的是「千条也只渲染可视窗口」，
     现改为「容器只承载当前分页、挂载卡片数不超过一页」——守的仍是「不一次铺满千条」这件事。
@@ -111,7 +111,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThanOrEqual(50)
   })
 
-  /**
+  /** 
    * 分组卡片视图同样是**一个**容器 + **一个**虚拟窗口：组头行与卡片行同属一个行流。
    *
    * 守的是「挂载量不随分组数放大」这条性质——旧实现每组一段各挂一个 `VirtualizedCardGrid`
@@ -130,7 +130,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThan(40)
     unmount()
 
-    /*
+    /* 
       第二个维度改用 env（分组数多于 groupTree，能放大「分段实现」的挂载量差异）。
       原先写的 `groupBy=tag` 不在 GROUP_DIMENSIONS 里、会被解析回退成不分组，
       那样「挂载量仍与分组数无关」这条断言其实没验到分组场景——顺手修正。
@@ -165,7 +165,7 @@ describe('InstancesPage（mock 假后端）', () => {
     fireEvent.click(screen.getByRole('button', { name: /运行/ }))
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('status')).toBe('RUNNING'))
 
-    // FR-452：list 已成为默认视图 → 选中它时不再写 view 参数（缺省即 list）。
+    // list 已成为默认视图 → 选中它时不再写 view 参数（缺省即 list）。
     fireEvent.click(screen.getByRole('button', { name: '卡片视图' }))
     expect(new URLSearchParams(window.location.search).get('view')).toBe('card')
     fireEvent.click(screen.getByRole('button', { name: '列表视图' }))
@@ -191,7 +191,7 @@ describe('InstancesPage（mock 假后端）', () => {
 
       expect(await screen.findByRole('searchbox', { name: '搜索实例' })).toHaveValue('survival')
       expect(screen.getByRole('button', { name: '列表视图' })).toHaveAttribute('aria-pressed', 'true')
-      /*
+      /* 
         【交互变更·本轮】排序字段 / 排序方向 / 每页数量 / 分组维度从工具栏的独立下拉
         收进了「显示」菜单。URL → 状态 → 请求参数这条链路没变，但界面上不再有
         combobox，故把「界面回显」的断言改为「打开菜单能看到对应项被选中」。
@@ -252,7 +252,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.queryByRole('combobox', { name: '群组' })).not.toBeInTheDocument()
   })
 
-  /**
+  /** 
    * 搜索输入必须防抖（项目硬规则：服务端搜索不得逐键下发）。
    *
    * 搜索词直接进 queryKey，不防抖就是「每敲一个字符一次 /instances/search」：1000+ 实例下
@@ -312,7 +312,7 @@ describe('InstancesPage（mock 假后端）', () => {
     }
   })
 
-  /**
+  /** 
    * 搜索键入写 URL 必须用 replace（不得 push）。
    *
    * 逐键 push 会把历史栈塞满：输 10 个字符后要按 11 次「返回」才离开本页。
@@ -339,7 +339,7 @@ describe('InstancesPage（mock 假后端）', () => {
     }
   })
 
-  /**
+  /** 
    * 表头「全选」的作用域必须写进可访问名。
    *
    * 列表分页加载，`allIds` 只覆盖**已加载页**，而页面上同时显示「已加载 N / 共 M」；
@@ -353,7 +353,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(checkbox).toHaveAccessibleName(/已加载 \d+ \/ 共 \d+/)
   })
 
-  /**
+  /** 
    * 返回列表时停在上次翻到的那一页。
    *
    * 【实现变更·本轮】列表改服务端分页、位置由 URL 的 `page` 承载，不再有滚动位置恢复
@@ -436,7 +436,7 @@ describe('InstancesPage（mock 假后端）', () => {
 
     await user.click(within(row).getByRole('button', { name: '启动' }))
 
-    /*
+    /* 
       启动现在要二次确认（本轮新增）：点击行内按钮只弹出确认框，不发请求。
       断言确认框出现、并在确认后才联动——这也顺带把「误点不会直接启服」钉成回归测试。
     */
@@ -471,14 +471,14 @@ describe('InstancesPage（mock 假后端）', () => {
     })
   })
 
-  /**
-   * 分页条给出「已加载 / 共」与页码可供性（FR-235）。
+  /** 
+   * 分页条给出「已加载 / 共」与页码可供性。
    *
    * 【实现变更·本轮】列表改服务端分页后不再有「加载更多」按钮：翻页由分页条的
    * 上一页 / 页码 / 下一页承担，计数文案也并入同一条分页条（原来它单独占一行）。
    * 断言因此改为「计数含页码上下文 + 首页上一页禁用 + 下一页可用且能翻页」。
    */
-  it('分页条给出「已加载/共」计数与上一页/下一页（FR-235 可供性）', async () => {
+  it('分页条给出「已加载/共」计数与上一页/下一页（可供性）', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstancesPage />, { route: '/instances?groupBy=none' })
 
@@ -502,8 +502,8 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.getByRole('button', { name: '上一页' })).toBeEnabled()
   })
 
-  /**
-   * 分组视图的作用域声明（FR-235 可供性）。
+  /** 
+   * 分组视图的作用域声明（可供性）。
    *
    * 【实现变更·本轮】原计数行会追加「（分组仅含当前已加载页）」后缀；分页条合并后
    * 该后缀被去掉，作用域改由「已加载 N / 共 M 条，第 x / y 页」直接表达——
@@ -535,7 +535,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.queryByText('survival-1')).not.toBeInTheDocument()
   })
 
-  /**
+  /** 
    * proxy 行的内联后端摘要（展开时追加的那一个 `<tr>`）。
    *
    * 【实现变更·本轮】列表改服务端分页后不再有虚拟高度模型，故原用例的
@@ -571,7 +571,7 @@ describe('InstancesPage（mock 假后端）', () => {
     )
   })
 
-  /**
+  /** 
    * 分组树表下同一交互不得扰动行序：摘要行只插在成员行之后，组头与成员计数都不变。
    */
   it('展开 proxy 后端摘要：分组树表的组头与行序不受影响', async () => {
@@ -590,7 +590,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(surface.querySelectorAll('tbody tr')[0]).toHaveAttribute('data-testid', 'instances-group-row')
   })
 
-  /**
+  /** 
    * 列设置（页面重构件）：取消勾选「类型 / 角色 / 标签」→ 表头「身份」列与行内身份格同步消失；
    * 选择持久化到 jm.instances.columns。菜单为 modal（打开期间外部 aria-hidden），操作后先关闭再断言页面主体。
    *
@@ -636,7 +636,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect([...stored].sort()).toEqual(['active', 'metrics'])
   })
 
-  /**
+  /** 
    * 保存视图（应用侧）：菜单列出已存视图；应用后 URL 恢复快照（分组/视图模式随 URL 同步 effect 落位），
    * 列集合同步恢复（保存时未含的列不得被勾上）。
    *
@@ -713,7 +713,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(row.style.height).toBe(`${INSTANCE_ROW_HEIGHT}px`)
   })
 
-  /**
+  /** 
    * 表头拖拽换位（用户提出的需求）。
    *
    * 断言走「表头真实顺序 + localStorage 落盘」两条：
@@ -746,7 +746,7 @@ describe('InstancesPage（mock 假后端）', () => {
       expect(after.indexOf('名称')).toBeLessThan(after.indexOf('区域'))
     })
 
-    /*
+    /* 
       【必须同时断言行内顺序】只断表头会漏掉最严重的那种错位：表头按新顺序、行仍按旧顺序。
       真实踩过——行组件的 memo 比较器漏了 columnOrder，表头变了行没变，整表列错位，
       而当时「表头 + localStorage」两条断言全绿。
@@ -774,7 +774,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(selectTh?.getAttribute('draggable')).toBeNull()
   })
 
-  /**
+  /** 
    * 行右键菜单（用户提出的需求）。
    *
    * 守三件事：右键弹出、菜单里给出与「⋯」一致的动作、Esc 关闭后可再次打开。
@@ -809,7 +809,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.getAllByTestId('instance-context-menu')).toHaveLength(1)
   })
 
-  /**
+  /** 
    * 卡片视图的启停二次确认（用户追问「卡片模式呢」时发现的缺口）。
    *
    * 此前卡片接线层自己 `useStartInstance().mutate()`，与列表视图各写一条路径：
@@ -820,7 +820,7 @@ describe('InstancesPage（mock 假后端）', () => {
     const user = userEvent.setup()
     renderWithProviders(<InstancesPage />, { route: '/instances?view=card&groupBy=none' })
 
-    /*
+    /* 
       必须把查找限定在**卡片内部**：页面工具栏也有「停止」筛选按钮，
       全局 findAllByRole('button', { name: /停止/ }) 会先命中它，点出的是筛选而不是动作。
       （这条用例初版就是这么写错的，表现为「点了没弹窗」。）
@@ -840,7 +840,7 @@ describe('InstancesPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  /**
+  /** 
    * 卡片视图的右键菜单：与列表视图共用页面级单例。
    * 此前卡片完全没有右键入口——同一台实例在列表能右键、在卡片不行。
    */
@@ -856,7 +856,7 @@ describe('InstancesPage（mock 假后端）', () => {
     expect(screen.getAllByTestId('instance-context-menu')).toHaveLength(1)
   })
 
-  /**
+  /** 
    * 卡片视图必须有分页条并能真翻页（用户追问「卡片模式」时发现的缺陷）。
    *
    * 数据早已改成服务端分页（每页 50 条），但卡片视图走的是虚拟分组渲染路径：
@@ -884,7 +884,7 @@ describe('InstancesPage（mock 假后端）', () => {
     })
   })
 
-  /**
+  /** 
    * 列设置在卡片视图下不出现：卡片没有「列」这一维度，留着就是无效控件。
    */
   it('卡片视图：不显示列设置项', async () => {

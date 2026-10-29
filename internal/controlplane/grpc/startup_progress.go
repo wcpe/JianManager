@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// ReportStartupProgress 接收 Worker 的启动阶段进度（FR-486 范围②，方案 A）。
+// ReportStartupProgress 接收 Worker 的启动阶段进度（范围②，方案 A）。
 //
 // ## 为什么不复用 Register / Heartbeat
 //

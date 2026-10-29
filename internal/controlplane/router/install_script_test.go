@@ -9,7 +9,7 @@ import (
 
 // TestInstallScript_LinuxServedAnonymously 复现并回归 BUG-B「一键安装失效」：
 // 一键命令拼 `curl <cp>/install-worker.sh | sh`，但 CP 若不托管该路径则 curl 404、安装失败。
-// CP 必须匿名（无 JWT，token 在命令参数里）以 200 返回脚本内容（FR-080，见 ADR-020 §2 CP 静态托管）。
+// CP 必须匿名（无 JWT，token 在命令参数里）以 200 返回脚本内容（见 ADR-020 §2 CP 静态托管）。
 func TestInstallScript_LinuxServedAnonymously(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupEnrollRouter(t, db)

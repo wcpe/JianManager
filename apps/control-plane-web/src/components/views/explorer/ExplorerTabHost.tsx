@@ -17,14 +17,14 @@ interface ExplorerTabHostProps {
   /** 可选初始目录（深链页可传）。 */
   initialDir?: string
   initialFile?: string
-  /**
-   * FR-422：标签条左端插槽。宿主的分段切换塞进已有的标签条，
+  /** 
+   *：标签条左端插槽。宿主的分段切换塞进已有的标签条，
    * 避免在标签条之上再多一条只放几个 pill 的横栏。
    */
   leading?: ReactNode
   /** 提示通道（本包不弹 toast）。 */
   notify: (kind: 'error', message: string) => void
-  /**
+  /** 
    * 透传给每个标签内 ResourceExplorer 的注入项（外壳提供）。
    /**
     * 渲染单个标签内的资源管理器（外壳注入）。
@@ -61,8 +61,8 @@ function defaultGeom(index: number): FloatGeom {
   }
 }
 
-/**
- * 资源管理器多标签 + 浮动宿主（FR-376）。
+/** 
+ * 资源管理器多标签 + 浮动宿主。
  * 每个标签独立 ResourceExplorer（key=tabId）；浮动时同一实例改 fixed 定位，不 remount 以保状态。
  */
 export default function ExplorerTabHost({
@@ -224,9 +224,9 @@ export default function ExplorerTabHost({
     : dockedTabs[0]?.id
 
   return (
-    // min-h：停靠 pane 为 absolute，不撑开父级；控制台资源卡等祖先未给满高时避免高度塌成 0（真机 FR-378）
+    // min-h：停靠 pane 为 absolute，不撑开父级；控制台资源卡等祖先未给满高时避免高度塌成 0（真机）
     <div className="flex h-full min-h-[480px] flex-col" data-testid="explorer-tab-host">
-      {/* 标签条：仅非浮动签。左端先放宿主插槽（FR-422 横栏合并）。 */}
+      {/* 标签条：仅非浮动签。左端先放宿主插槽（横栏合并）。 */}
       <div className="flex shrink-0 items-center gap-1 border-b bg-muted/20 px-1 py-1">
         {leading}
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">

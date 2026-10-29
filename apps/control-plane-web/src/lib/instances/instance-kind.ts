@@ -1,5 +1,5 @@
-/**
- * @file 实例「服务端类别」的归一与文案（FR-511）。
+/** 
+ * @file 实例「服务端类别」的归一与文案。
  *
  * 三分法（用户确认的粒度）：插件服 / 代理 / 二进制，不细分 Paper/Spigot/Bukkit。
  *
@@ -19,7 +19,7 @@ export function isValidKind(value: string | undefined | null): value is Instance
   return value !== undefined && value !== null && (VALID as readonly string[]).includes(value)
 }
 
-/**
+/** 
  * 取实例类别；`kind` 缺失或非法时按 role + type 回退。
  *
  * 回退顺序与后端 `model.Instance.KindOrInfer` 一致：

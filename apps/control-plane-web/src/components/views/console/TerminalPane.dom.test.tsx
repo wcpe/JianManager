@@ -7,7 +7,7 @@ import { TerminalPane } from '@/components/views/console/TerminalPane'
 import type { ConsoleHistoryState } from '@/lib/console/console-history'
 import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 
-/**
+/** 
  * 终端面板 · 受控视图测（ADR-103）。
  *
  * 补的是**注入面契约**：状态由 props 决定分支（停机 → 注入的日志回放、未知 → 不连 WS）、
@@ -73,7 +73,7 @@ function renderPane(props: Partial<ComponentProps<typeof TerminalPane>> = {}) {
   return { ...merged, renderStoppedLogs }
 }
 
-describe('TerminalPane（FR-037 工作区终端面板受控视图）', () => {
+describe('TerminalPane（工作区终端面板受控视图）', () => {
   it('停机实例渲染注入的日志回放（不连 WS），并保留禁用的命令栏。', () => {
     const { renderStoppedLogs } = renderPane({ status: 'STOPPED' })
     expect(renderStoppedLogs).toHaveBeenCalled()

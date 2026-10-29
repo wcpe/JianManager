@@ -88,7 +88,7 @@ func TestDaemonSubtreeSurvivesWorkerUnitCgroupKill(t *testing.T) {
 		PIDDir:       pidDir,
 		AutoRestart:  false,
 		// 替身 java 不消费 stdin，优雅停止只能靠超时强杀兜底；给 3s 让「显式 Stop 仍能停」快速收敛
-		// （真实部署由 CP 下发平台设置 graceful_stop.timeout，见 FR-063）。
+		// （真实部署由 CP 下发平台设置 graceful_stop.timeout，见）。
 		GracefulStopTimeoutSeconds: 3,
 	}
 	rawCfg, err := json.Marshal(cfg)
@@ -179,7 +179,7 @@ func TestDaemonSubtreeSurvivesWorkerUnitCgroupKill(t *testing.T) {
 		"wrapper 必须存活于单元级 SIGTERM（旧行为下这里即为「每次重启拖倒全部实例」的现场）")
 	assert.True(t, daemon.IsPIDAlive(rec.JavaPID), "java 必须存活于单元级 SIGTERM")
 
-	// ④ 关闭后可被下一次启动接管（FR-455① 接管 / FR-497 收养路径不受影响）。
+	// ④ 关闭后可被下一次启动接管（① 接管收养路径不受影响）。
 	m2 := NewManager(pidDir)
 	recovered2, err := m2.RecoverDaemonInstances()
 	require.NoError(t, err)

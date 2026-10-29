@@ -71,17 +71,17 @@ export default defineConfig([
   // 它不该让 lint 变红——否则每个临时脚本都会污染仓库级 lint 结果。
   // coverage/ 是覆盖率报告产物。
   globalIgnores(['dist', 'coverage', '.tmp', 'public/mockServiceWorker.js']),
-  // 共享 React+TS 基线（FR-283 抽 @jianmanager/eslint-config）作顶层条目
+  //  共享 React+TS 基线（抽 @jianmanager/eslint-config）作顶层条目
   //（含内部 extends，不能再被 extends 嵌套）；下方同 files 作用域条目为 app 语义叠加。
   reactBase,
   {
     files: ['**/*.{ts,tsx}'],
     rules: {
-      // 弃用 shadcn Card 松散用法（FR-163）：阻断业务代码新引入，统一走 Panel / StatCard。
+      //  弃用 shadcn Card 松散用法：阻断业务代码新引入，统一走 Panel / StatCard。
       // @/ 路径为 app 内部语义，故留 app 层不入共享包。
       //
       // 【card 的阻断已移除】原规则拦的是 `@/components/ui/card`——那是 ADR-103 回迁前的
-      // 应用内旧路径，如今已不存在。`Card` 本身在包内恢复启用（FR-163 的弃用撤销，
+      //  应用内旧路径，如今已不存在。`Card` 本身在包内恢复启用（的弃用撤销，
       // 理由见 packages/ui/src/components/card.tsx 文件头）：它是「最小白盒」，
       // 而 Panel（三段式）与 StatCard（KPI）都不具备该形态，弃用只会让裸容器需求散落成手写样式。
       'no-restricted-imports': [

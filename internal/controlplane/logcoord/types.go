@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// OrderVersion 稳定复合排序版本（FR-473 §6.3 / §4.5）。
+// OrderVersion 稳定复合排序版本（§6.3 / §4.5）。
 //
 //	(event_time DESC, log_source_id ASC, source_generation ASC,
 //	 record_start DESC, record_end DESC, event_id ASC)
@@ -40,7 +40,7 @@ const (
 	CoverageStale          CoverageState = "stale"
 )
 
-// DuplicateQuality / StatsQuality 独立于覆盖完整性（FR-473 §6.3）。
+// DuplicateQuality / StatsQuality 独立于覆盖完整性（§6.3）。
 type DuplicateQuality string
 
 const (
@@ -86,7 +86,7 @@ type TargetInfo struct {
 	CatalogGeneration string `json:"catalog_generation,omitempty"`
 }
 
-// QueryBudget 结果行预算与扇出/字节预算（FR-473：limit 只限结果数）。
+// QueryBudget 结果行预算与扇出/字节预算（：limit 只限结果数）。
 type QueryBudget struct {
 	Limit     int    `json:"limit"`
 	MaxBytes  uint64 `json:"max_bytes"`

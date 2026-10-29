@@ -173,7 +173,7 @@ func TestCrossFileConsistency_PortUnique(t *testing.T) {
 }
 
 func TestCrossFileConsistency_QueryPortUnique(t *testing.T) {
-	// FR-451：query.port 纳入端口唯一性校验（与 server-port 同口径）。
+	// query.port 纳入端口唯一性校验（与 server-port 同口径）。
 	cfgs := []ParsedConfig{
 		{Path: "a/server.properties", Fields: []*workerpb.ConfigField{{Key: "query.port", Value: "25566"}}},
 		{Path: "b/server.properties", Fields: []*workerpb.ConfigField{{Key: "query.port", Value: "25566"}}},
@@ -224,7 +224,7 @@ func TestCrossFileConsistency_ForwardingSecretMatch(t *testing.T) {
 	}
 }
 
-// TestBungeeCordYAMLModel_KeysMatchParsedDotPaths 守护 FR-449 §2.2.4 的键名契约。
+// TestBungeeCordYAMLModel_KeysMatchParsedDotPaths 守护§2.2.4 的键名契约。
 //
 // 背景：该 schema 早先用 `listeners[].host` 这类 JSONPath 风格键名，而 `parseFlatYAML`
 // 产出的是点号路径 `listeners.host`。两边对不上时 form 模式的每个字段都绑不到真实值，
@@ -298,7 +298,7 @@ permissions:
 // 样例取自 JM 自己生成的 velocity.toml（proxyconfig.go 的 buildVelocityToml），
 // 即运行时真正会看到的形态。
 func TestVelocityTomlModel_KeysMatchParsedPaths(t *testing.T) {
-	src := `# 由 JianManager 生成（FR-035）。servers/try/forced-hosts 由平台注册关系同步管理。
+	src := `# 由 JianManager 生成。servers/try/forced-hosts 由平台注册关系同步管理。
 config-version = "2.7"
 bind = "0.0.0.0:25577"
 motd = "Velocity"

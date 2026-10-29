@@ -41,7 +41,7 @@ const (
 //
 // 这是高写入、按条件检索的表，因此刻意不内嵌外键关联对象（不像 AuditLog 预加载 User）：
 //   - 以 InstanceID/NodeID 的整型外键 + 复合索引承接「按实例/节点 + 时间」的高频过滤；
-//   - 关键字检索走 Message 上的 DB 谓词（LIKE），不在应用层全量序列化（FR-049/FR-050）；
+// 关键字检索走 Message 上的 DB 谓词（LIKE），不在应用层全量序列化；
 //   - InstanceUUID 冗余保存，便于采集侧（仅持有 UUID 的 Worker 事件流）直接落库而不必反查。
 //
 // 归档与保留由 LogService 负责：超阈值的旧条目滚动落盘到数据根 var/log 后从表中清理

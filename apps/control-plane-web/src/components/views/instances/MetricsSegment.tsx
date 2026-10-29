@@ -55,8 +55,8 @@ export interface ResourceLimitData {
   memUsedMb: number | null
 }
 
-/**
- * 探针在线更新卡（FR-068/409）：展示探针连接状态、当前解析版本和上次下发时间。
+/** 
+ * 探针在线更新卡（409）：展示探针连接状态、当前解析版本和上次下发时间。
  * 实例可显式选择已缓存版本或恢复继承；切换后立即通知 Worker 拉取，但只在下次重启生效。
  *
  * 连接态分两路（真机 F2 修正）：
@@ -160,7 +160,7 @@ function ProbeUpdateCard({
           {t('probe.installHint')}
         </div>
       )}
-      {/* FR-411 真机排障：桥已连接 ≠ 指标通道健康。桥通而 /metrics 不采（probeAvailable=false）
+      {/*真机排障：桥已连接 ≠ 指标通道健康。桥通而 /metrics 不采（probeAvailable=false）
           时历史曲线与实时 TPS 全空，用户极易把「探针已连接」误读为监控正常——显式点破断链与去向。 */}
       {data.bridgeConnected && !data.metricsActive && (
         <div className="mx-2 mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
@@ -171,8 +171,8 @@ function ProbeUpdateCard({
   )
 }
 
-/**
- * 资源限额对比卡（FR-079）：docker 模式实例的实际占用 vs 设定上限，超限标红。
+/** 
+ * 资源限额对比卡：docker 模式实例的实际占用 vs 设定上限，超限标红。
  * - 内存：实际占用（探针 memoryMb）对比内存上限 MiB；占用越限标红。
  * - CPU：上限为核数；探针 cpuPercent 为进程 CPU%，无与核数可比的实际占用，仅展示设定上限（数据不足）。
  * - 磁盘：v1 仅持久化展示上限，无实际占用来源。
@@ -216,8 +216,8 @@ function ResourceLimitCard({ data }: { data: ResourceLimitData }) {
   )
 }
 
-/**
- * 直探信息卡（FR-446 / FR-447）：展示 SLP / Query 直探回填的基础信息——
+/** 
+ * 直探信息卡：展示 SLP / Query 直探回填的基础信息——
  * MOTD / 版本 / 在线人数 / 最大人数 / 玩家名单 / 插件列表 / 地图名。
  *
  * 每项按**可用性位**渲染：有值显示值，缺测显示「不可用」，不以 0 / 空串冒充。
@@ -270,7 +270,7 @@ function HealthStrip({ metrics, isRunning }: { metrics?: InstanceMetricsData; is
     )
   }
   if (!metrics) return null
-  // TPS/MSPT 仅探针可得（FR-447）：探针不可用显「不可用」，不以 0/0.0 冒充真实值。
+  // TPS/MSPT 仅探针可得：探针不可用显「不可用」，不以 0/0.0 冒充真实值。
   const probeOk = metrics.probeAvailable
   const unavailable = t('metrics.unavailable')
   return (
@@ -343,13 +343,13 @@ function fmtBytes(b: number): string {
   return `${(b / 1024).toFixed(0)}K`
 }
 
-/** 序列是否有任何非空点：全空等价于「无数据」，用于把空图收成一行字（FR-423 §3.2）。 */
+/** 序列是否有任何非空点：全空等价于「无数据」，用于把空图收成一行字（§3.2）。 */
 function hasSeriesData(series: ChartSeries[]): boolean {
   return series.some((s) => s.points.some((p) => p.value != null))
 }
 
-/**
- * 图表卡（FR-423）：有数据渲染曲线，无数据只留一行灰字。
+/** 
+ * 图表卡：有数据渲染曲线，无数据只留一行灰字。
  *
  * {@link TimeSeriesChart} 自带的空态会按 `height` 占满整块（本页 160px），9 张图全空就是
  * 一屏半的「暂无数据」——spec §1 记的正是这种「空态占固定高度块」。故空判提到卡这一层。
@@ -377,13 +377,13 @@ function ChartPanel({
   )
 }
 
-/**
- * 实例监控段（FR-060/FR-061）：消费历史曲线渲染 TPS/MSPT/堆/在线/线程/CPU + GC 次数/GC 暂停
- * （FR-465）+ 分世界区块。探针不可用时段渲染为断点。
+/** 
+ * 实例监控段：消费历史曲线渲染 TPS/MSPT/堆/在线/线程/CPU + GC 次数/GC 暂停
+ * + 分世界区块。探针不可用时段渲染为断点。
  *
- * 布局（FR-423）：本页不左右分栏——图表是等宽同构的，按 spec §3.1 的 62:38 切开只会把
+ * 布局：本页不左右分栏——图表是等宽同构的，按 spec §3.1 的 62:38 切开只会把
  * 同一族曲线拆成两种宽度。改为「实例指标上下两行（xl 四列 × 8 张）+ 世界统计独立一段」，
- * 头部（标题 + 区间选择）`flex-none` 常驻，其余内容在下方单一滚动容器内滚（FR-422 骨架）。
+ * 头部（标题 + 区间选择）`flex-none` 常驻，其余内容在下方单一滚动容器内滚（骨架）。
  *
  * 受控视图（ADR-103 a 范式）：不取数——历史序列、实时指标、探针卡与限额卡数据都由外壳注入，
  * 区间与三个动作经回调上报。曲线装配、阈值线、空图收口留在视图内。
@@ -466,12 +466,12 @@ export default function MetricsSegment({
       <div className="flex flex-none items-center justify-between">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">{t('metrics.title')}</h3>
-          {/* 数据来源标注（FR-447）：探针 / SLP 直探 / Query 直探。 */}
+          {/* 数据来源标注：探针 / SLP 直探 / Query 直探。 */}
           <MetricSourceChips metrics={metrics ?? {}} />
         </div>
         <RangePicker value={range} onChange={onRangeChange} />
       </div>
-      {/* 本页唯一滚动容器（FR-422：滚动收口在卡内，顶栏与 Tab 栏不滚）。 */}
+      {/* 本页唯一滚动容器（：滚动收口在卡内，顶栏与 Tab 栏不滚）。 */}
       <div className="min-h-0 flex-1 space-y-3 overflow-auto">
         {probeCard && (
           <ProbeUpdateCard
@@ -486,7 +486,7 @@ export default function MetricsSegment({
         <HealthStrip metrics={metrics} isRunning={running} />
         {resourceLimit && <ResourceLimitCard data={resourceLimit} />}
         {/* 实例指标：xl 四列 × 8 张 = 上下两行（spec §3.1 监控行）。
-            列数取 4 而非 3：本 grid 内实为 8 张卡（含 FR-465 新增的 2 张 GC 曲线），
+            列数取 4 而非 3：本 grid 内实为 8 张卡（含新增的 2 张 GC 曲线），
             三列会排成 3+3+2、末行留一个空位，与「上下两行」的布局意图不符（自审 M10）。
             items-start 是必需的（spec §3.2）：grid 默认 stretch 会把「暂无数据」的一行字卡
             拉到同排曲线卡的高度（实测被拉成 222px，卡内 141px 死区）。 */}
@@ -524,7 +524,7 @@ export default function MetricsSegment({
             valueFormatter={(v) => `${v.toFixed(0)}%`}
             referenceLines={cpuThresholds(t)}
           />
-          {/* GC（FR-465）：探针累计 counter 经 CP 相邻心跳差推导的速率（次数/s、暂停 ms/s）。
+          {/* GC：探针累计 counter 经 CP 相邻心跳差推导的速率（次数/s、暂停 ms/s）。
               标题走 `metrics.*`：与本 grid 其余 6 张卡同命名空间，避免与「性能归因」卡片耦合
               （改归因措辞不应顺带改监控页图表标题；自审 M4）。 */}
           <ChartPanel
@@ -538,7 +538,7 @@ export default function MetricsSegment({
             valueFormatter={(v) => `${v.toFixed(1)}ms/s`}
           />
         </div>
-        {/* 性能归因 + 容量预测（FR-465 / FR-464）：按需查询，与曲线区并列展示。
+        {/* 性能归因 + 容量预测：按需查询，与曲线区并列展示。
             两卡的接线层由外壳注入（它们要各自取数），故此处以插槽渲染。 */}
         <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
           {attributionSlot}

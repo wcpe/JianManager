@@ -19,10 +19,10 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientVersionHandler 客户端分发 manifest 发布与面向玩家的消费端点（FR-087，见 ADR-022、contract §2/§4）。
+// ClientVersionHandler 客户端分发 manifest 发布与面向玩家的消费端点（见 ADR-022、contract §2/§4）。
 //
 // 鉴权分两组、物理隔离（关键安全设计）：
-//   - 发布端点（运营操作）：JWT 平台管理员，挂 admin 组（同 FR-086 频道管理）。
+// 发布端点（运营操作）：JWT 平台管理员，挂 admin 组（同频道管理）。
 //     POST /client-channels/:id/files、POST /client-channels/:id/versions。
 //   - 消费端点（玩家）：X-Client-Key 拉取密钥鉴权（service.VerifyKey/VerifyAnyKey），挂公网组。
 //     GET /client-channels/:id/manifest、GET /client-artifacts/:sha256。
@@ -50,10 +50,10 @@ func NewClientVersionHandler(svc *service.ClientVersionService, channel *service
 // clientKeyHeader 玩家拉取密钥请求头（contract §5）。
 const clientKeyHeader = "X-Client-Key"
 
-// machineIDHeader 玩家机器码请求头（contract §5，FR-092）。客户端生成、不可信，仅统计/辅助限流。
+// machineIDHeader 玩家机器码请求头（contract §5）。客户端生成、不可信，仅统计/辅助限流。
 const machineIDHeader = "X-Machine-Id"
 
-// installIDHeader 安装标识请求头（FR-264）。客户端生成、不可信，仅用于关联安全画像。
+// installIDHeader 安装标识请求头。客户端生成、不可信，仅用于关联安全画像。
 const installIDHeader = "X-Install-Id"
 
 // playerNameHeader 玩家名请求头。客户端从 jm-updater.json 构造，不可信，仅用于观测与排障。
@@ -142,7 +142,7 @@ func (h *ClientVersionHandler) PublishVersion(c *gin.Context) {
 	})
 }
 
-// ListVersions GET /client-channels/:id/versions — 版本历史列表（运营，平台管理员；FR-088）。
+// ListVersions GET /client-channels/:id/versions — 版本历史列表（运营，平台管理员）。
 // 历史**仅供管理面**（运营回滚/审计）；玩家侧只认 latest（contract §2），不经此端点拉取任意版本。
 func (h *ClientVersionHandler) ListVersions(c *gin.Context) {
 	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
@@ -156,7 +156,7 @@ func (h *ClientVersionHandler) ListVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, versions)
 }
 
-// GetVersion GET /client-channels/:id/versions/:version — 版本详情（含文件清单，运营，平台管理员；FR-088）。
+// GetVersion GET /client-channels/:id/versions/:version — 版本详情（含文件清单，运营，平台管理员）。
 func (h *ClientVersionHandler) GetVersion(c *gin.Context) {
 	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
 		return
@@ -174,7 +174,7 @@ func (h *ClientVersionHandler) GetVersion(c *gin.Context) {
 	c.JSON(http.StatusOK, detail)
 }
 
-// clientRollbackRequest 运营回滚请求体（FR-088）。
+// clientRollbackRequest 运营回滚请求体。
 type clientRollbackRequest struct {
 	// SourceVersion 要回滚到的历史版本号（其内容将以更高版本号重发为新 latest）。
 	SourceVersion int `json:"sourceVersion"`
@@ -182,7 +182,7 @@ type clientRollbackRequest struct {
 	Note string `json:"note"`
 }
 
-// RollbackVersion POST /client-channels/:id/rollback — 运营回滚（运营，平台管理员；FR-088）。
+// RollbackVersion POST /client-channels/:id/rollback — 运营回滚（运营，平台管理员）。
 // 以更高版本号重发历史内容为新 latest（不下发更低号、保持单调、不触发客户端防降级，ADR-022 §3）。
 func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
 	if !requireNodes(c, "channel.write", "dist.publish") {
@@ -210,10 +210,10 @@ func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
 	})
 }
 
-// GetArtifactContent GET /client-channels/:id/files/content?sha256= — 管理面文本预览制品内容（运营，平台管理员；FR-214）。
+// GetArtifactContent GET /client-channels/:id/files/content?sha256= — 管理面文本预览制品内容（运营，平台管理员）。
 //
 // 玩家消费端点 GET /client-artifacts/:sha256 走拉取密钥鉴权、与浏览器 JWT 入口物理隔离（ADR-022/023），
-// 管理台无拉取密钥不能复用之取预览。故补此 JWT **只读**端点，仅服务发布页/版本详情的内容预览（FR-214）。
+// 管理台无拉取密钥不能复用之取预览。故补此 JWT **只读**端点，仅服务发布页/版本详情的内容预览。
 // 二进制/压缩/超大由服务层判定并以 kind 显式返回，前端据此渲染或降级。
 func (h *ClientVersionHandler) GetArtifactContent(c *gin.Context) {
 	if !requireNodes(c, "channel.read", "channel.write", "dist.publish") {
@@ -232,7 +232,7 @@ func (h *ClientVersionHandler) GetArtifactContent(c *gin.Context) {
 	c.JSON(http.StatusOK, preview)
 }
 
-// DownloadArtifact GET /client-channels/:id/files/download?sha256= — 管理面下载制品（运营，平台管理员；FR-214）。
+// DownloadArtifact GET /client-channels/:id/files/download?sha256= — 管理面下载制品（运营，平台管理员）。
 //
 // 与 GetArtifactContent 同理：玩家制品端点走拉取密钥，管理台浏览器需一个 JWT 下载入口（含降级态「不可预览必可下载」）。
 // 复用 OpenArtifact 取物理文件，附下载文件名（取 sha 末段，前端 source 会以 manifest path 末段重命名亦可）。
@@ -250,7 +250,7 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 		h.respondErr(c, err)
 		return
 	}
-	// 失效制品（FR-349）：外置对象缺失，管理面下载同样给明确 410（提示重传自愈）。
+	// 失效制品：外置对象缺失，管理面下载同样给明确 410（提示重传自愈）。
 	if asset.StorageState == model.AssetStorageLost {
 		c.JSON(http.StatusGone, gin.H{"error": "ARTIFACT_LOST", "message": "制品外置对象已缺失，重传同内容文件即可恢复"})
 		return
@@ -259,7 +259,7 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	// s3 制品：CP 经 BlobStore 代理直流，不走 302（FR-347，见 ADR-073 决策 6）——浏览器
+	// s3 制品：CP 经 BlobStore 代理直流，不走 302（见 ADR-073 决策 6）——浏览器
 	// axios blob fetch 跨域跟随预签名 URL 会撞对象存储 CORS；管理面下载是低频运维动作，
 	// CP 中继代价可接受、前端零改动、对象存储无需配 CORS。
 	if asset.StorageBackend == model.AssetBackendS3 {
@@ -304,7 +304,7 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	start := time.Now()
 	mid := c.GetHeader(machineIDHeader)
 
-	// 拉取追踪（FR-093/249）：defer 前置到鉴权之前注册，闭包捕获最终 status/errCode——
+	// 拉取追踪（249）：defer 前置到鉴权之前注册，闭包捕获最终 status/errCode——
 	// 鉴权失败(401)也记事件（此前漏记）。best-effort、不阻断玩家。
 	manifestVersion := 0
 	errCode := ""
@@ -333,8 +333,8 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 		}
 	}
 
-	// 机器码登记（FR-092）：鉴权通过后若携带 X-Machine-Id 则 best-effort upsert（弱一致、失败不阻断）。
-	// 机器码不可信，仅统计/辅助限流（限流主键为 IP，FR-096）。
+	// 机器码登记：鉴权通过后若携带 X-Machine-Id 则 best-effort upsert（弱一致、失败不阻断）。
+	// 机器码不可信，仅统计/辅助限流（限流主键为 IP）。
 	if h.machine != nil && mid != "" {
 		h.machine.RecordSafe(channelID, mid)
 	}
@@ -346,7 +346,7 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	}
 	manifestVersion = manifest.Version
 
-	// ETag = version（内容随版本变化；contract §4.1）。FR-256 起不再签名，ETag 只用 version。
+	// ETag = version（内容随版本变化；contract §4.1）。起不再签名，ETag 只用 version。
 	etag := fmt.Sprintf(`"%d"`, manifest.Version)
 	c.Header("ETag", etag)
 	c.Header("Cache-Control", "no-cache") // manifest 随版本变，须每次校验新鲜度（弱缓存，靠 ETag 命中省传输）。
@@ -366,7 +366,7 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 	sha := c.Param("sha256")
 	start := time.Now()
-	// 下载追踪（FR-093/249）：defer 前置到鉴权之前，闭包捕获最终 status/errCode——鉴权失败(401)也记事件。
+	// 下载追踪（249）：defer 前置到鉴权之前，闭包捕获最终 status/errCode——鉴权失败(401)也记事件。
 	// 频道取自密钥归属（URL 内容寻址、不带频道）；鉴权失败时频道未知，ChannelID 记空可接受。best-effort、不阻断。
 	channelID := ""
 	errCode := ""
@@ -428,7 +428,7 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 		defer lease.Release()
 	}
 
-	// 失效制品（FR-349）：完整鉴权/安全策略通过后、后端分流前返回 410，
+	// 失效制品：完整鉴权/安全策略通过后、后端分流前返回 410，
 	// 不泄露未授权制品状态，也不再 302 到必 404 的预签名 URL。重传同内容即自愈。
 	if asset.StorageState == model.AssetStorageLost {
 		errCode = "ARTIFACT_LOST"
@@ -437,7 +437,7 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 	}
 
 	// s3 制品：鉴权/防护/限流/带宽检查全部照旧先行后，302 到预签名短时效 URL
-	// （FR-347，见 ADR-073 决策 1）。CP 只当授权与调度面，字节流量走对象存储出口；
+	// （见 ADR-073 决策 1）。CP 只当授权与调度面，字节流量走对象存储出口；
 	// updater 已 setInstanceFollowRedirects(true) 自动跟随（跨协议限制见 spec §3.8 部署约束）。
 	if asset.StorageBackend == model.AssetBackendS3 {
 		if h.security != nil {
@@ -495,7 +495,7 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 // ---- 鉴权辅助 ----
 
 // authChannelKey 校验请求头 X-Client-Key 绑定指定频道；失败已写响应并返回 (错误码, false)。
-// 成功返回 ("", true)。错误码供调用方记入追踪事件（FR-249）。
+// 成功返回 ("", true)。错误码供调用方记入追踪事件。
 func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) (*model.ClientPullKey, string, bool) {
 	if h.security != nil {
 		if _, blocked := h.security.ActiveIPBlock(c.ClientIP()); blocked {
@@ -521,8 +521,8 @@ func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) 
 }
 
 // authAnyKey 校验请求头 X-Client-Key 为任一有效密钥（不绑定频道）；失败已写响应并返回 (频道空, 错误码, false)。
-// 成功时返回密钥所属频道 ID——制品下载 URL 内容寻址、不带频道，靠密钥归属频道以供按频道统计（FR-093/095）。
-// 错误码供调用方记入追踪事件（FR-249；鉴权失败时频道未知，事件 ChannelID 记空可接受）。
+// 成功时返回密钥所属频道 ID——制品下载 URL 内容寻址、不带频道，靠密钥归属频道以供按频道统计（095）。
+// 错误码供调用方记入追踪事件（鉴权失败时频道未知，事件 ChannelID 记空可接受）。
 func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (*model.ClientPullKey, string, string, bool) {
 	if h.security != nil {
 		if _, blocked := h.security.ActiveIPBlock(c.ClientIP()); blocked {
@@ -547,7 +547,7 @@ func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (*model.ClientPullKey,
 	return key, key.ChannelID, "", true
 }
 
-// respondKeyAuthErr 统一拉取密钥鉴权失败响应（不区分缺失/吊销/过期，避免泄露密钥状态）；返回所写错误码（FR-249）。
+// respondKeyAuthErr 统一拉取密钥鉴权失败响应（不区分缺失/吊销/过期，避免泄露密钥状态）；返回所写错误码。
 func (h *ClientVersionHandler) respondKeyAuthErr(c *gin.Context, err error) string {
 	if h.security != nil && (errors.Is(err, service.ErrClientKeySuspended) || errors.Is(err, service.ErrClientKeyThrottled)) {
 		return respondSecurityAuthErr(c, h.security, err)
@@ -629,10 +629,10 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrVersionNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "VERSION_NOT_FOUND", "message": "版本不存在"})
 	case errors.Is(err, service.ErrAssetNotFound):
-		// 管理面制品内容/下载（FR-214）取不存在的制品 → 404。
+		// 管理面制品内容/下载取不存在的制品 → 404。
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
 	case errors.Is(err, service.ErrArtifactLost):
-		// 失效制品（FR-349）：索引在、外置对象缺失 → 410（重传同内容自愈）。
+		// 失效制品：索引在、外置对象缺失 → 410（重传同内容自愈）。
 		c.JSON(http.StatusGone, gin.H{"error": "ARTIFACT_LOST", "message": "制品外置对象已缺失，重传同内容文件即可恢复"})
 	case errors.Is(err, service.ErrChecksumMismatch):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "CHECKSUM_MISMATCH", "message": err.Error()})
@@ -651,7 +651,7 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 	}
 }
 
-// respondConsumerErr 消费端点错误映射（manifest/制品/core；鉴权已先行通过）；返回所写错误码供追踪（FR-249）。
+// respondConsumerErr 消费端点错误映射（manifest/制品/core；鉴权已先行通过）；返回所写错误码供追踪。
 func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) string {
 	switch {
 	case errors.Is(err, service.ErrChannelNotFound):
@@ -661,14 +661,14 @@ func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) str
 		c.JSON(http.StatusNotFound, gin.H{"error": "NO_LATEST_VERSION", "message": "频道尚未发布版本"})
 		return "NO_LATEST_VERSION"
 	case errors.Is(err, service.ErrNoCoreVersion):
-		// FR-259：无 core 归档 → 404（coreEndpoint 端点）。
+		// 无 core 归档 → 404（coreEndpoint 端点）。
 		c.JSON(http.StatusNotFound, gin.H{"error": "NO_CORE_VERSION", "message": "无已归档的 updater-core 版本"})
 		return "NO_CORE_VERSION"
 	case errors.Is(err, service.ErrAssetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
 		return "ARTIFACT_NOT_FOUND"
 	case errors.Is(err, service.ErrArtifactLost):
-		// 失效制品（FR-349）：明确 410 终态（防御映射；GetArtifact 已在分流前拦截）。
+		// 失效制品：明确 410 终态（防御映射；GetArtifact 已在分流前拦截）。
 		c.JSON(http.StatusGone, gin.H{"error": "ARTIFACT_LOST", "message": "制品外置对象已缺失，请联系运营重传"})
 		return "ARTIFACT_LOST"
 	default:
@@ -688,7 +688,7 @@ func (h *ClientVersionHandler) recordAudit(c *gin.Context, action string, detail
 	h.audit.RecordSafe(id, action, "client_channel", "", marshalAuditDetail(detail), c.ClientIP())
 }
 
-// ListEvents GET /client-dist/events — 拉取/下载明细检索（运营，平台管理员；FR-093/249）。
+// ListEvents GET /client-dist/events — 拉取/下载明细检索（运营，平台管理员249）。
 // 按 channelId/machineId/ip/kind/outcome/errCode/version/since/until/limit 过滤，created_at DESC。
 func requestHeaderMap(c *gin.Context) map[string]string {
 	out := map[string]string{}
@@ -766,20 +766,20 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 	{
 		ch.POST("/:id/files", h.PublishFile)
 		ch.POST("/:id/versions", h.PublishVersion)
-		// 版本历史 / 详情 / 回滚（FR-088）：仅管理面，与玩家拉取密钥端点物理隔离。
+		// 版本历史 / 详情 / 回滚：仅管理面，与玩家拉取密钥端点物理隔离。
 		ch.GET("/:id/versions", h.ListVersions)
 		ch.GET("/:id/versions/:version", h.GetVersion)
 		ch.POST("/:id/rollback", h.RollbackVersion)
-		// 管理面制品内容预览 / 下载（FR-214）：JWT 平台管理员，供发布页/版本详情复用共享文件浏览器。
+		// 管理面制品内容预览 / 下载：JWT 平台管理员，供发布页/版本详情复用共享文件浏览器。
 		// 与玩家 GET /client-artifacts/:sha256（拉取密钥）物理隔离——浏览器无拉取密钥不能复用之。
 		ch.GET("/:id/files/content", h.GetArtifactContent)
 		ch.GET("/:id/files/download", h.DownloadArtifact)
-		// updater-core 版本管理（FR-259）：列出归档版本 + 手动上传 hotfix + 切换频道选定版本（回滚）。
+		// updater-core 版本管理：列出归档版本 + 手动上传 hotfix + 切换频道选定版本（回滚）。
 		ch.GET("/:id/updater-core/versions", h.ListUpdaterCoreVersions)
 		ch.POST("/:id/updater-core/versions", h.UploadUpdaterCoreVersion)
 		ch.PUT("/:id/updater-core/selected", h.SelectUpdaterCore)
 	}
-	// 拉取/下载明细检索（FR-093）：管理面。
+	// 拉取/下载明细检索：管理面。
 	rg.GET("/client-dist/events", h.ListEvents)
 }
 
@@ -787,11 +787,11 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 func (h *ClientVersionHandler) RegisterConsumerRoutes(rg *gin.RouterGroup) {
 	rg.GET("/client-channels/:id/manifest", h.GetManifest)
 	rg.GET("/client-artifacts/:sha256", h.GetArtifact)
-	// updater-core 版本查询（FR-259）：楔子经 coreEndpoint 拉取选定版本信息，拉取密钥鉴权。
+	// updater-core 版本查询：楔子经 coreEndpoint 拉取选定版本信息，拉取密钥鉴权。
 	rg.GET("/client-channels/:id/updater-core", h.GetUpdaterCore)
 }
 
-// ---- updater-core 版本管理端点（FR-259）----
+// updater-core 版本管理端点----
 
 // GetUpdaterCore GET /client-channels/:id/updater-core — 返回频道选定 core 版本信息（玩家，拉取密钥鉴权）。
 // 返回 {version, sha256, downloadUrl, size}（spec §2.5.3 冻结格式），楔子据此下载 core jar。
@@ -905,7 +905,7 @@ type selectUpdaterCoreRequest struct {
 	SHA256 string `json:"sha256" binding:"required"`
 }
 
-// SelectUpdaterCore PUT /client-channels/:id/updater-core/selected — 切换频道选定 core 版本（运营，平台管理员；FR-259 回滚）。
+// SelectUpdaterCore PUT /client-channels/:id/updater-core/selected — 切换频道选定 core 版本（运营，平台管理员回滚）。
 func (h *ClientVersionHandler) SelectUpdaterCore(c *gin.Context) {
 	if !requireNodes(c, "channel.write", "dist.publish") {
 		return

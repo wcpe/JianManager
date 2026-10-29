@@ -69,7 +69,7 @@ func newExternalDistFakeS3(t *testing.T) (*externalDistFakeS3, *httptest.Server)
 	return f, srv
 }
 
-// setupExternalDistRouter 客户端分发路由 + 制品存储渠道全接线（FR-347）：
+// setupExternalDistRouter 客户端分发路由 + 制品存储渠道全接线：
 // 渠道服务注入 Asset 写路径与 ClientVersion 读路径。
 func setupExternalDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.ArtifactStorageChannelService) {
 	return setupExternalDistRouterWithSecurity(t, db, false)
@@ -130,7 +130,7 @@ func createAndActivateS3Channel(t *testing.T, r *gin.Engine, token, endpoint str
 }
 
 // TestClientDist_GetArtifact_S3_302Presign 玩家消费端点对 s3 制品回 302 预签名短时效 URL：
-// Location 含签名参数与渠道 TTL、Cache-Control: no-store；跟随 URL 可取回原字节（FR-347 验收）。
+// Location 含签名参数与渠道 TTL、Cache-Control: no-store；跟随 URL 可取回原字节（验收）。
 func TestClientDist_GetArtifact_S3_302Presign(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupExternalDistRouter(t, db)
@@ -217,7 +217,7 @@ func TestClientDist_GetArtifact_S3_ChannelBroken_503(t *testing.T) {
 	assert.Equal(t, "ARTIFACT_STORAGE_UNAVAILABLE", parseJSON(t, w)["error"])
 }
 
-// TestClientDist_Artifact_Lost_410 失效制品（FR-349 对账标记）：玩家端点 410 ARTIFACT_LOST
+// TestClientDist_Artifact_Lost_410 失效制品（对账标记）：玩家端点 410 ARTIFACT_LOST
 // （不再 302 到必 404 的预签名 URL）；管理面下载与文本预览同样 410。
 func TestClientDist_Artifact_Lost_410(t *testing.T) {
 	db := setupTestDB(t)

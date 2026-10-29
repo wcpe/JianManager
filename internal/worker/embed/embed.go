@@ -3,7 +3,7 @@ package embed
 
 import "embed"
 
-// cfrFS 内嵌 CFR 反编译器 jar（FR-075 反编译，见 ADR-018）。
+// cfrFS 内嵌 CFR 反编译器 jar（反编译，见 ADR-018）。
 // jar 为构建产物，经 `make embed-cfr` 注入到 embed/cfr/；目录内的 .gitignore
 // 保证未注入 jar 时该目录依然存在、go:embed 不致编译失败（jar 不入库，~2MB）。
 //

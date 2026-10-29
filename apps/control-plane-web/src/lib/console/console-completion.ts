@@ -1,11 +1,11 @@
-/**
- * 控制台命令补全（FR-416）。
+/** 
+ * 控制台命令补全。
  *
  * MC 服务端控制台不是 PTY（ADR-086），服务端不会回送补全候选——补全表只能放在前端。
  *
  * **命令表的来源**：这是**协议事实**而非业务数据——Minecraft Java 版 / Paper 服务端
  * 内置的控制台命令名（vanilla 1.21 `/help` 列表 + Paper 附加的
- * `tps` / `timings` / `plugins` / `version` / `jfr` / `perf`）。与 FR-415 之前
+ * `tps` / `timings` / `plugins` / `version` / `jfr` / `perf`）。与之前
  * `components/Terminal.tsx` 里的同名常量同源；该文件的补全随旧 xterm 输入路径一并移除，
  * 此处补回（ADR-086 影响一节记的「已知回退」）。
  *
@@ -49,14 +49,14 @@ export interface CompletionState {
   tokenEnd: number
   /** token 原文（用户已敲的部分）。 */
   token: string
-  /**
+  /** 
    * 全部候选的最长公共前缀（**候选自身的大小写**）。
    *
    * Tab 只把输入推进到这里就停手——这是「不盲补第一个候选」的技术含义：
    * 公共前缀是所有候选都认的部分，补上去不含任何猜测；再往后必须由用户选。
    */
   commonPrefix: string
-  /**
+  /** 
    * 公共前缀中超出 token 长度的那一段（ghost 预览用）。
    *
    * 与 {@link commonPrefix} 分开存是因为大小写：用户敲 `st` 而候选是 `Steve`/`Stevie` 时，
@@ -89,8 +89,8 @@ function tokenAt(value: string, caret: number): { start: number; end: number } {
   return { start, end: caret }
 }
 
-/**
- * 计算当前光标位置可用的补全候选（FR-416）。
+/** 
+ * 计算当前光标位置可用的补全候选。
  *
  * 只补两处：**第一段命令名**与**玩家参数命令的第二段**。第三段起（坐标、物品 id、
  * gamerule 名…）不补——那些的候选集依赖服务端状态与版本，前端猜出来的候选给错方向
@@ -146,7 +146,7 @@ export function computeCompletion(
   }
 }
 
-/**
+/** 
  * 把某个候选写回输入值：替换 token 区间，并补一个空格（下一段可以直接敲）。
  * 返回新值与新光标位。
  */
@@ -163,8 +163,8 @@ export function applyCompletion(
   return { value: next, caret: head.length + candidate.length + separator.length }
 }
 
-/**
- * 把输入推进到公共前缀（多候选时 Tab 的行为，FR-416「不盲补」）。
+/** 
+ * 把输入推进到公共前缀（多候选时 Tab 的行为「不盲补」）。
  *
  * **替换** token 区间而非在末尾追加：用户敲 `op st` 而候选是 `Steve`/`Stevie` 时，
  * 追加会得到 `op stev`——一个服务端不认的玩家名（MC 玩家名大小写敏感）。替换得到

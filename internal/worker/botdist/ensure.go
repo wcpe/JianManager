@@ -1,6 +1,6 @@
-// Package botdist 实现 bot-worker dist 的自愈下发（FR-308，见 ADR-072）：
+// Package botdist 实现 bot-worker dist 的自愈下发（见 ADR-072）：
 // Worker 启动后经既有 CP gRPC 通道拉取内嵌归档，物化到 <dataroot>/opt/bot-worker/。
-// 运行时依赖不随归档分发，由 FR-307 节点受控项目根提供；ESM 经 node_modules 链接解析。
+// 运行时依赖不随归档分发，由节点受控项目根提供；ESM 经 node_modules 链接解析。
 package botdist
 
 import (
@@ -36,7 +36,7 @@ type Options struct {
 	NodeSecret string
 	// Dir 物化目标目录（<dataroot>/opt/bot-worker）。
 	Dir string
-	// GlobalNodeModules node_modules 链接目标（FR-307 托管全局包的 node_modules 布局目录）。
+	// GlobalNodeModules node_modules 链接目标（托管全局包的 node_modules 布局目录）。
 	GlobalNodeModules string
 	// client 测试注入的 gRPC 客户端；nil 时按 CPAddr 自建连接。
 	client workerpb.WorkerServiceClient
@@ -248,7 +248,7 @@ func extractTarGz(archive []byte, dst string) error {
 	}
 }
 
-// ensureNodeModulesLink 在 dist 同级补齐 node_modules 链接 → FR-307 托管全局包目录，
+// ensureNodeModulesLink 在 dist 同级补齐 node_modules 链接 →托管全局包目录，
 // 使 ESM 的 import 从 <dir>/index.js 就近解析到全局装的 mineflayer（NODE_PATH 只救 CJS）。
 // Windows 用 junction（mklink /J，无需特权），其余平台 symlink。
 func ensureNodeModulesLink(dir, target string) error {

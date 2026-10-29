@@ -1,5 +1,5 @@
-/**
- * 指标归因与容量预测的契约（FR-464 / FR-465）。
+/** 
+ * 指标归因与容量预测的契约。
  *
  * 归包理由：归因卡与容量预测卡都要读它，应用侧 API 层改从包 import，避免两处各写一份。
  */
@@ -13,7 +13,7 @@ export interface AttributionFactor {
   note?: string
 }
 
-/** 性能归因结果（FR-465）。status=insufficient 时 factors 为空，不伪造排序。 */
+/** 性能归因结果。status=insufficient 时 factors 为空，不伪造排序。 */
 export interface AttributionResult {
   target: string
   window: { from: string; to: string }
@@ -23,7 +23,7 @@ export interface AttributionResult {
   samples: number
 }
 
-/** 容量预测一行（FR-464）。 */
+/** 容量预测一行。 */
 export interface ForecastResult {
   targetId: string
   metricKey: string

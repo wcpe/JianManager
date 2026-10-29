@@ -3,8 +3,8 @@ import { server } from '@jianmanager/devmock/server'
 import { resetDb } from '@jianmanager/devmock/db'
 import type { McpActivityResponse } from '@jianmanager/devmock/handlers/domains/mcp'
 
-/**
- * MCP 活动视图（FR-391 / ADR-096）**经 mock handler** 的契约测试。
+/** 
+ * MCP 活动视图（ADR-096）**经 mock handler** 的契约测试。
  *
  * 存在的理由：devmock 此前**完全没有**该端点的 handler——mock 模式下页面直接是错误态，
  * 且前端把档位发成 `7d`（Go duration 不支持「天」）时 mock 毫无反应，缺陷只能靠真机验收发现。

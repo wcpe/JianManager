@@ -1,4 +1,4 @@
-/**
+/** 
  * @file SchedulesPageView：定时任务页的受控视图（列表 + 执行日志 + 创建/编辑弹窗），取数、四个写动作与 toast 由应用容器负责。
  * @input lib/cron（cron 校验/人类可读描述/预设）、lib/schedule-form（表单状态与初值）、lib/schedule（ScheduleInfo）、
  *        views/config-explorer/ConfigRow（卡片行/开关/视图切换/汇总筛选条）、views/DangerConfirm（删除二次确认）、
@@ -6,7 +6,7 @@
  * @output SchedulesPageView、SchedulesPageViewProps、ScheduleFilter、ScheduleLogRow、ScheduleLogsView、
  *         ScheduleLogsViewProps、ScheduleFormDialogView、ScheduleFormDialogViewProps、SchedulesInstancePickerArgs
  * @sync apps/control-plane-web/src/pages/SchedulesPage.tsx、apps/control-plane-web/src/pages/SchedulesPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-012 定时任务、FR-153 cron 可读文案与命令编辑、FR-207 mock 域簇）
+ * @since（组件受控化迁包；原页定时任务cron 可读文案与命令编辑mock 域簇）
  */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -50,7 +50,7 @@ import { EMPTY_SCHEDULE_FORM, SCHEDULE_ACTIONS, formFromSchedule } from '@/lib/s
 import type { ScheduleFormState } from '@/lib/schedules/schedule-form'
 import type { ScheduleInfo } from '@/lib/schedules/schedule'
 
-/**
+/** 
  * 列表视图主行的固定行高（px）。行盒由行内 style 钉死（「声明值即真实值」）：
  * 内容自然高约 60.5（`py-3` = 24 + cron 单元格两行 35.5 + 行边框 1），取 64 留出行内余量；
  * 虚拟化按同一常量定位，故滚动映射与真实行盒严格一致、不随行数累积漂移。
@@ -64,7 +64,7 @@ const FALLBACK_VIEWPORT_PX = 640
 /** 汇总筛选条取值：'enabled' 仅启用 / 'disabled' 仅停用 / null 全部。 */
 export type ScheduleFilter = 'enabled' | 'disabled' | null
 
-/**
+/** 
  * 执行日志行（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/schedules` 的 `ScheduleLogInfo`：
@@ -92,14 +92,14 @@ export interface SchedulesInstancePickerArgs {
   invalid: boolean
   /** 是否取数：弹窗关闭时为 false，外壳据此停发请求。 */
   enabled: boolean
-  /**
+  /** 
    * 选择器触发器应使用的 id：本组件的 `FieldLabel htmlFor` 指向它，使「实例」字段有可访问名。
    * 实现必须把它透传到触发元素上（否则标签指向不存在/不匹配的元素，读屏仍拿不到字段名）。
    */
   id: string
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 列表、日志与加载态经 props 注入（容器调 `useSchedules` / `useScheduleLogs`）；
  * - 四个写动作以回调上报，由容器执行 mutation 并决定成功/失败文案：提交回传 `Promise`，
@@ -146,7 +146,7 @@ export interface SchedulesPageViewProps {
   renderInstancePicker: (args: SchedulesInstancePickerArgs) => ReactNode
 }
 
-/**
+/** 
  * 调度行显示的实例名。
  *
  * 后端已在 `/schedules` 回填 `instanceName`（见 `service.ScheduleView`），故直接用行上的字段，
@@ -157,7 +157,7 @@ function instanceNameOf(s: { instanceId: number; instanceName?: string }): strin
   return s.instanceName ?? `#${s.instanceId}`
 }
 
-/** 执行日志展开区（FR-012 展示）：时间 / 结果 / 输出三态由容器注入，本组件只渲染。 */
+/** 执行日志展开区（展示）：时间 / 结果 / 输出三态由容器注入，本组件只渲染。 */
 export interface ScheduleLogsViewProps {
   /** 日志行；缺省或空数组渲染「暂无日志」。 */
   items?: ScheduleLogRow[]
@@ -226,7 +226,7 @@ export interface ScheduleFormDialogViewProps {
   renderInstancePicker: (args: SchedulesInstancePickerArgs) => ReactNode
 }
 
-/** 创建/编辑定时任务对话框（含 Cron 基本校验与 command 条件输入，FR-153）。 */
+/** 创建/编辑定时任务对话框（含 Cron 基本校验与 command 条件输入）。 */
 export function ScheduleFormDialogView({
   open,
   mode,
@@ -248,7 +248,7 @@ export function ScheduleFormDialogView({
   }, [open])
 
   const cron = useMemo(() => validateCron(form.cronExpr), [form.cronExpr])
-  // 合法时给出可读描述与下次执行预览（FR-153）；预览按浏览器本地时区，仅供直觉参考。
+  // 合法时给出可读描述与下次执行预览；预览按浏览器本地时区，仅供直觉参考。
   const cronDesc = useMemo(() => (cron.valid ? describeCron(form.cronExpr) : null), [cron.valid, form.cronExpr])
   const cronNext = useMemo(() => (cron.valid ? nextRuns(form.cronExpr, 3) : []), [cron.valid, form.cronExpr])
   const instanceMissing = mode === 'create' && form.instanceId === ''
@@ -403,8 +403,8 @@ export function ScheduleFormDialogView({
   )
 }
 
-/**
- * 定时任务页（FR-012 计划任务，FR-153 cron 可读文案）。
+/** 
+ * 定时任务页（计划任务cron 可读文案）。
  * 列表支持卡片/列表两种视图与汇总筛选，行内可启停、展开执行日志、编辑、删除。
  */
 export function SchedulesPageView({
@@ -433,7 +433,7 @@ export function SchedulesPageView({
   const [deleteTarget, setDeleteTarget] = useState<ScheduleInfo | null>(null)
   const [view, setView] = useState<ConfigView>('list')
 
-  // cron 人类可读文案（FR-153）：可识别则译，否则退回原表达式。
+  // cron 人类可读文案：可识别则译，否则退回原表达式。
   const cronReadable = (expr: string): string => {
     const desc = describeCron(expr)
     return desc ? t(desc.key, desc.params) : expr
@@ -448,7 +448,7 @@ export function SchedulesPageView({
     [schedules, filter],
   )
 
-  /**
+  /** 
    * 卡片行「下次执行」的预计算表（id → 展示文案）。
    *
    * 【为什么必须预计算】`nextRuns` 是**分钟级逐分扫描、上限 366 天**（见 lib/shared/cron）：
@@ -472,7 +472,7 @@ export function SchedulesPageView({
     return map
   }, [t, visible])
 
-  /**
+  /** 
    * 列表视图虚拟化。任务列表是**全库**的（容器调 `useSchedules()` 不带 instanceId，
    * 后端 `ScheduleService.List(nil)` 即返回所有实例的任务），规模随集群实例数增长，
    * 而原先整表进 DOM、只靠 `max-h-[70vh]` 滚动遮挡。

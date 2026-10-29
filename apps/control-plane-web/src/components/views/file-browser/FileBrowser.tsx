@@ -9,7 +9,7 @@ export type { FileBrowserAction, FileBrowserSource, FileEntry, PreviewContent } 
 interface FileBrowserProps {
   /** 数据源（注入；与具体后端解耦）。 */
   source: FileBrowserSource
-  /**
+  /** 
    * 只读浏览（默认 true）。仅影响是否渲染注入的 `actions`——
    * 即便 false，组件本身也不含写端点，所有操作经 `actions` 注入。
    */
@@ -26,12 +26,12 @@ interface FileBrowserProps {
   theme: 'light' | 'dark'
 }
 
-/**
- * 共享文件浏览器（FR-213）。
+/** 
+ * 共享文件浏览器。
  *
  * 双栏：左目录树/列表 + 右内容预览（文本多格式高亮 / 二进制·超大·错误降级 + 下载兜底）。
  * **展示型、数据源经 props 注入、不耦合具体后端**——主体只依赖 {@link FileBrowserSource} 契约，
- * 不 import 任何后端 api。实例工作目录与客户端分发 manifest（FR-214）各提供一份适配器即可复用。
+ * 不 import 任何后端 api。实例工作目录与客户端分发 manifest各提供一份适配器即可复用。
  *
  * `readOnly`（默认）为纯浏览；注入 `actions` 后文件行出现行操作菜单。
  * 选中文件→经 `source.readContent` 读出 {@link PreviewContent}，由 {@link FilePreview} 按 kind 渲染/降级。

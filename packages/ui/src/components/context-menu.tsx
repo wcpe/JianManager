@@ -1,12 +1,12 @@
 "use client"
-/**
+/** 
  * @file ContextMenu：右键菜单（radix-ui 原语包装；2026-10 上游同步：取长补短合并替换）。
  *       与 DropdownMenu 同族同口径（零件集/样式/可用高度约束一致），触发方式不同。
  * @input  lib/utils 的 cn、radix-ui 的 ContextMenu、lucide-react 图标
  * @output ContextMenu 及全部子组件（Trigger/Content/Group/Label/Item/CheckboxItem/
  *         RadioGroup/RadioItem/Separator/Shortcut/Sub/SubTrigger/SubContent/Portal）
  * @sync   行为/样式变更时同步 context-menu.test.tsx
- * @since   FR-502；上游同步（2026-10）
+ * @since上游同步（2026-10）
  */
 import * as React from "react"
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react"

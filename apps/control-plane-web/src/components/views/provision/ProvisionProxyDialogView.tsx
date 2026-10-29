@@ -1,4 +1,4 @@
-/**
+/** 
  * @file ProvisionProxyDialogView：搭建代理向导（代理类型 / 版本 / 资源 + forwarding secret 留存步骤）的受控视图，
  *       候选取数与搭建写请求由应用容器负责。
  * @input form-validation（validateRequired/validatePositiveInt/validateFields/hasErrors）、use-field-gate（错误展示时机门控）、
@@ -8,7 +8,7 @@
  *         ProvisionProxySubmitResult、PROVISION_PROXY_QUERY_INIT、needsProxyVersion
  * @sync apps/control-plane-web/src/components/ProvisionProxyDialog.tsx、
  *        apps/control-plane-web/src/components/ProvisionProxyDialog.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-035 搭建代理、FR-072 系统可获取项、FR-202 供给/部署流程）
+ * @since（组件受控化迁包；原搭建代理系统可获取项供给/部署流程）
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -44,7 +44,7 @@ export const PROVISION_PROXY_QUERY_INIT: ProvisionProxyQueryInput = {
   version: '',
 }
 
-/**
+/** 
  * 取数输入（查询键）：**上提容器**——代理版本列表随 `proxyType` 变、解析预览随 `proxyType`/`version` 变、
  * JDK 列表随 `nodeId` 变，一变就要重新取数。视图仍持有表单草稿并在这些字段变更或表单重置时上报快照。
  */
@@ -57,7 +57,7 @@ export interface ProvisionProxyQueryInput {
   version: string
 }
 
-/**
+/** 
  * 表单草稿（**原文**，非请求体）：数值/数组字段保持用户输入的字符串，
  * 由容器组装请求体（Number 化、bungeecord 不下发 version、jvmArgs 拆分）——「草稿 → 请求体」属请求语义，留在应用侧。
  */
@@ -88,7 +88,7 @@ export interface ProvisionProxySubmitResult {
   forwardingSecret?: string
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 四份候选经 props 注入：`nodeOptions` / `groupOptions`（容器映射为选项）、`versions`（容器调
  *   `useCoreVersions`，按 `needsProxyVersion` 折算）、`jdks`（容器调 `useNodeJDKs(nodeId)`；undefined = 尚未取到）；
@@ -128,8 +128,8 @@ export interface ProvisionProxyDialogViewProps {
   onCopyResult?: (ok: boolean) => void
 }
 
-/**
- * 搭建代理向导（FR-035）：选代理类型/版本/资源，系统分配监听端口与工作目录，
+/** 
+ * 搭建代理向导：选代理类型/版本/资源，系统分配监听端口与工作目录，
  * 后端下载核心、生成转发配置；Velocity 生成 forwarding secret 并在成功后就地展示一次供留存。
  * 注册后端在创建后经「管理后端」完成。
  */

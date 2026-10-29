@@ -10,8 +10,8 @@ import { AssistantChatPanel } from '@/components/views/assistant/AssistantChatPa
 import { SERVER_DRAG_MIME } from '@/lib/assistant/server-drag'
 import type { PageContextEntityRef } from '@/lib/assistant/page-context'
 
-/**
- * 「侧边栏服务器拖进聊天框 → 变上下文芯片」（FR-518/519 联动）。
+/** 
+ * 「侧边栏服务器拖进聊天框 → 变上下文芯片」（519 联动）。
  *
  * 这组用例守三件事，任何一条退化成「看起来能用」都会造成实质问题：
  *  1. **拖放真的接得上**：MIME 一致、dragover 被 preventDefault（否则 drop 根本不触发）、

@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-492 三入口同策略：agent 运维面 HTTP/CLI 入口的审批闸。
+// 三入口同策略：agent 运维面 HTTP/CLI 入口的审批闸。
 //
 // ## 为什么需要这组用例
 //

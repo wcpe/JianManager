@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// hoisted mock 暴露 post spy，断言 uploadFile 的 onUploadProgress → onProgress 百分比换算（FR-324）。
+// hoisted mock 暴露 post spy，断言 uploadFile 的 onUploadProgress → onProgress 百分比换算。
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }))
 vi.mock('@/api/client', () => ({ default: { post: postMock, get: vi.fn() } }))
 
 import { uploadFile } from './files'
 
-describe('uploadFile 上传进度百分比（FR-324）', () => {
+describe('uploadFile 上传进度百分比', () => {
   beforeEach(() => {
     postMock.mockReset()
     postMock.mockResolvedValue({ data: null })
@@ -37,7 +37,7 @@ describe('uploadFile 上传进度百分比（FR-324）', () => {
     expect(cfg.onUploadProgress).toBeUndefined()
   })
 
-  it('目标路径经 query 传递（FR-304 契约不回归）', async () => {
+  it('目标路径经 query 传递（契约不回归）', async () => {
     await uploadFile(7, 'dir/b.txt', new Blob(['x']))
     const [url, , cfg] = postMock.mock.calls[0] as [string, unknown, { params?: { path?: string } }]
     expect(url).toBe('/instances/7/files/upload')

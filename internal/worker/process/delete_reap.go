@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// ReapDaemonForDelete 在删除实例前强杀该实例的 daemon 进程树并清理遗留的 PID 文件 / socket（FR-310）。
+// ReapDaemonForDelete 在删除实例前强杀该实例的 daemon 进程树并清理遗留的 PID 文件 / socket。
 //
 // 背景（真机缺陷）：删除运行中 daemon 实例时，删除流程只杀 wrapper 组随即 RemoveAll 工作目录。
 // Unix 上被托管的 Java 经 wrapper 的 applyProcAttr 自成进程组（见 daemon.applyProcAttr），杀 wrapper
@@ -17,7 +17,7 @@ import (
 //
 // 处置：按 PID 记录强杀 wrapper 与 Java 两棵进程树——Unix 各杀其组，故两棵都要杀；Windows taskkill /T
 // 已覆盖子树，补杀已死 PID 无害——轮询确认死透后再由调用方 RemoveAll，杜绝存活进程回写；确认死透即
-// 清理遗留的 PID 文件与 socket。与 FR-325 接管兜底 reapOrphanWrapper 同源（复用 killTree /
+// 清理遗留的 PID 文件与 socket。与接管兜底 reapOrphanWrapper 同源（复用 killTree /
 // waitPIDsGone / pidAlive 桩，便于确定性单测）。
 //
 // 无 PID 文件（非 daemon 实例，或 wrapper 已优雅退出自清理）时为空操作。强杀后仍有存活（权限不足等）

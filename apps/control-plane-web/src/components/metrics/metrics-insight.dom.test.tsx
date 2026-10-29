@@ -24,8 +24,8 @@ function collectRequests(suffix: string) {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/**
- * FR-463/464/465/469 观测增强组件（真组件打真 devmock handler，ADR-047 机制）：
+/** 
+ *464/465/469 观测增强组件（真组件打真 devmock handler，ADR-047 机制）：
  * 覆盖「无数据不伪造」「null 语义」「时区口径」「下钻」等验收点的可断言部分，
  * 以及 loading / 空态 / 排行下钻三类原缺守护（自审 M8）。
  */

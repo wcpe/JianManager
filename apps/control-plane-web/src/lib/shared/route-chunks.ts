@@ -1,5 +1,5 @@
-/**
- * 路由 chunk 表（FR-502 阶段 6 补丁）：**路由表与预取的唯一真源**。
+/** 
+ * 路由 chunk 表（阶段 6 补丁）：**路由表与预取的唯一真源**。
  *
  * 【为什么要有这张表】
  * 切页等待的大头是目标页 JS chunk 的下载（构建产物里 `InstancesPage-*.js` 108 kB、
@@ -23,9 +23,9 @@
 /** 路由表键 → chunk 加载器。值写成箭头函数（模块级只建一次），调用方才不会每次渲染新建 import。 */
 export const ROUTE_CHUNKS = {
   '/': () => import('@/pages/OverviewPage'),
-  // AI 首页（FR-520）：与经典首页互斥挂载，由路由层按 ?home 二选一。
+  // AI 首页：与经典首页互斥挂载，由路由层按 ?home 二选一。
   '/assistant-home': () => import('@/pages/AssistantHomePage'),
-  // 对话历史（FR-542/543）：检索 + 编辑 + 回退。
+  // 对话历史（543）：检索 + 编辑 + 回退。
   '/assistant/history': () => import('@/pages/AssistantHistoryPage'),
   '/monitor': () => import('@/pages/MonitoringPage'),
   '/nodes': () => import('@/pages/NodesPage'),
@@ -34,10 +34,10 @@ export const ROUTE_CHUNKS = {
   '/instances/:id': () => import('@/pages/InstanceDetailPage'),
   '/instances/:id/files': () => import('@/pages/InstanceFilesPage'),
   '/config-baselines': () => import('@/pages/ConfigBaselinesPage'),
-  // 分层配置（FR-529）：配置文件列表与层版本编辑/有效值预览。
+  // 分层配置：配置文件列表与层版本编辑/有效值预览。
   '/config-files': () => import('@/pages/ConfigFilesPage'),
   '/config-files/:id': () => import('@/pages/ConfigFileDetailPage'),
-  // 配置纳管（FR-533）与配置交付编排（FR-531/532）：纳管是「登记磁盘现状」，
+  // 配置纳管与配置交付编排（532）：纳管是「登记磁盘现状」，
   // 交付是「把某一层版本分批下发并观察」，两者是配置生命周期的不同阶段，各自一页。
   '/config-adopt': () => import('@/pages/ConfigAdoptPage'),
   '/config-deliveries': () => import('@/pages/ConfigDeliveriesPage'),
@@ -76,7 +76,7 @@ export const ROUTE_CHUNKS = {
   '/database': () => import('@/pages/DatabasePage'),
   '/system-update': () => import('@/pages/SystemUpdatePage'),
   '/agent-tokens': () => import('@/pages/AgentTokensPage'),
-  // 平台审批中心（FR-490 / FR-493）。
+  // 平台审批中心。
   '/approvals': () => import('@/pages/ApprovalsPage'),
   '/mcp-activity': () => import('@/pages/McpActivityPage'),
   '/agent-call-logs': () => import('@/pages/AgentCallLogsPage'),
@@ -92,7 +92,7 @@ export const ROUTE_LOADERS: Record<string, () => Promise<unknown>> = ROUTE_CHUNK
 /** 路由表键集合（导航覆盖度自检用）。 */
 export const ROUTE_KEYS: readonly string[] = Object.keys(ROUTE_CHUNKS)
 
-/**
+/** 
  * 把具体路径归一到路由表键：先精确命中，再逐个动态段换成 `:id` 重试。
  *
  * 逐段替换足以覆盖本项目全部动态路由（`/instances/42`、`/instances/42/files`、

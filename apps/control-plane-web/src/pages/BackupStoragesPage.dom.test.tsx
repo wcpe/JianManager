@@ -19,10 +19,10 @@ if (!('ResizeObserver' in globalThis)) {
   }
 }
 
-/**
- * 备份存储后端页（FR-207 域簇）。三条强断言：
+/** 
+ * 备份存储后端页（域簇）。三条强断言：
  * ① 渲染出 seed 存储后端；② 新建后列表联动出现新行；③ 注入 500 → 显空态（不崩溃）。
- * FR-338 编辑流：回显现值（含 ${VAR} 凭证引用）/type 禁用/PUT 保存刷新 + lastTest 重置/撞名 422/草稿测试连接。
+ *编辑流：回显现值（含 ${VAR} 凭证引用）/type 禁用/PUT 保存刷新 + lastTest 重置/撞名 422/草稿测试连接。
  * 表单字段标签未与 input 关联（FieldLabel 无 htmlFor），故按 DOM 顺序 / placeholder 选取。
  */
 describe('BackupStoragesPage（mock）', () => {
@@ -34,7 +34,7 @@ describe('BackupStoragesPage（mock）', () => {
     renderWithProviders(<BackupStoragesPage />)
     expect(await screen.findByText('s3-primary')).toBeInTheDocument()
     expect(screen.getByText('sftp-offsite')).toBeInTheDocument()
-    // 凭证以 ${ENV_VAR} 引用展示，不返回明文（FR-057）。
+    // 凭证以 ${ENV_VAR} 引用展示，不返回明文。
     expect(screen.getByText('${JIANMANAGER_BACKUP_S3_AK}')).toBeInTheDocument()
     // 容量文案随收敛统一为共享实现的「非字节档保留 1 位小数」：seed 为 268435456 B = 256 MiB，
     // 原实现的「≥10 不保留小数」已并入 `@/lib/shared/format-file-size`，故为 256.0 MB。
@@ -134,7 +134,7 @@ describe('BackupStoragesPage（mock）', () => {
     })
   })
 
-  // ---- 编辑（FR-338）----
+  // ---- 编辑----
 
   it('编辑弹窗受控回显现值（含 ${VAR} 凭证引用原样）且 type 不可改', async () => {
     const user = userEvent.setup()

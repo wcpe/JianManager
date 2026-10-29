@@ -8,8 +8,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { ConfirmationCards } from '@/components/views/assistant/ConfirmationCards'
 
-/**
- * 确认卡的两条可访问性/时效验收（FR-519 §7）：
+/** 
+ * 确认卡的两条可访问性/时效验收（§7）：
  *
  *  1. **过期即禁用**：`expiresAt` 已过期 → 允许/拒绝两键都禁用，并说明「该确认已过期」。
  *     不禁用会让人以为还能点，点下去必然失败，白跑一趟。
@@ -100,7 +100,7 @@ describe('确认卡 · 键盘可达', () => {
     reject.focus()
     expect(document.activeElement, '「拒绝」应可获得焦点').toBe(reject)
 
-    /*
+    /* 
       「能 Tab 到」的判据放在**按钮自身**：原生 <button> 默认 tabIndex=0，
       即进入 Tab 序列；被 disabled 时才退出序列。这里断言的是「未被禁用且
       tabIndex 不小于 0」，比「从文档起按一次 Tab 恰好落在它上面」稳定得多——

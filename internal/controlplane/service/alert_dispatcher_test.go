@@ -190,7 +190,7 @@ func TestDispatcher_NotifyRoutesToChannels(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
-// TestDispatcher_FR011WebhookFallback 验证未配 ChannelIDs 时回退到 FR-011 单 webhook 直发。
+// TestDispatcher_FR011WebhookFallback 验证未配 ChannelIDs 时回退到单 webhook 直发。
 func TestDispatcher_FR011WebhookFallback(t *testing.T) {
 	db := newAlertTestDB(t)
 	d := NewAlertDispatcher(db)

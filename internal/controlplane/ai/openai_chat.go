@@ -36,7 +36,7 @@ type chatStreamRequest struct {
 	// OpenAI 兼容网关（含自托管）实际接受的字段，后者新但兼容面窄。
 	MaxTokens     int            `json:"max_tokens,omitempty"`
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
-	// ReasoningEffort 思考强度（FR-541 §3.2），仅档位合法时下发。
+	// ReasoningEffort 思考强度（§3.2），仅档位合法时下发。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 

@@ -19,8 +19,8 @@ import {
   type MCPConnectionPayload,
 } from '@/api/assistant'
 
-/**
- * 外部 MCP 连接配置（FR-517 §6）。
+/** 
+ * 外部 MCP 连接配置（§6）。
  *
  * 界面必须把三件事说清楚，否则管理员会误以为配好就能用：
  *  1. **V1 里外部工具仅平台管理员可用**（无法证明上游按调用者区分身份时，
@@ -91,7 +91,7 @@ function originsToText(origins: MCPAllowedOrigin[]): string {
     .join('\n')
 }
 
-/**
+/** 
  * 解析 origin 文本。
  *
  * 返回 `null` 表示有无法解析的行——调用方应阻止保存并把具体行回显给用户，

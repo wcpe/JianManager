@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientIPRuleHandler 客户端分发端点 IP 防护规则管理（FR-096，见 ADR-023）。运行时可改、入审计；限平台管理员。
+// ClientIPRuleHandler 客户端分发端点 IP 防护规则管理（见 ADR-023）。运行时可改、入审计；限平台管理员。
 type ClientIPRuleHandler struct {
 	svc   *service.ClientIPGuardService
 	audit *service.AuditService

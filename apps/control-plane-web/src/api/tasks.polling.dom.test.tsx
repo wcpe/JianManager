@@ -31,7 +31,7 @@ function task(state: Task['state']): Task {
   }
 }
 
-/** 造 GET /tasks 的分页信封响应（FR-337）。 */
+/** 造 GET /tasks 的分页信封响应。 */
 function page(...items: Task[]): TaskPage {
   return { items, total: items.length, limit: 100, offset: 0 }
 }
@@ -43,11 +43,11 @@ function makeWrapper() {
   )
 }
 
-/**
- * FR-329：useTasks 轮询启停行为（假计时器）。响应为 FR-337 分页信封，轮询判活取 `data.items`。
+/** 
+ *：useTasks 轮询启停行为（假计时器）。响应为分页信封，轮询判活取 `data.items`。
  * 存在非终态任务 → 每 2s 自动重取；任务到终态 → 下一拍后停止，不再空转。
  */
-describe('useTasks 自动轮询（FR-329）', () => {
+describe('useTasks 自动轮询', () => {
   afterEach(() => {
     vi.useRealTimers()
     mockedGet.mockReset()

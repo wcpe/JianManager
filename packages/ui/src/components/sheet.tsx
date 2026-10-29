@@ -1,5 +1,5 @@
 "use client"
-/**
+/** 
  * @file Sheet：侧边抽屉（radix-ui Dialog 原语包装；2026-10 上游同步：取长补短合并替换）。
  * - 采纳上游增量：`SheetPortal` / `SheetOverlay` / `SheetFooter` 独立导出、四向 `side` 变体
  *   与对应滑入/滑出动画、`showCloseButton` 开关、关闭钮走 Button（ghost/icon-sm）；
@@ -8,7 +8,7 @@
  * @input  lib/utils 的 cn、radix-ui 的 Dialog（Sheet 底座）、Button、lucide-react、翻译上下文
  * @output Sheet 及全部子组件（Trigger/Close/Portal/Overlay/Content/Header/Footer/Title/Description）
  * @sync   行为/样式变更时同步 sheet.test.tsx；使用点：ConfigVersionDrawer 等
- * @since   FR-070；上游同步（2026-10）
+ * @since上游同步（2026-10）
  */
 import * as React from "react"
 import { Dialog as SheetPrimitive } from "radix-ui"

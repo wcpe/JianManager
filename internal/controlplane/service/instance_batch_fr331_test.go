@@ -9,8 +9,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-331：搭建中实例硬性禁止启动——批量入口补漏。
-// 真机根因：单实例 Start 已有在途搭建闸（FR-319 二轮②），但批量 start/restart
+// 搭建中实例硬性禁止启动——批量入口补漏。
+// 真机根因：单实例 Start 已有在途搭建闸（二轮②），但批量 start/restart
 // 走 InstanceBatchService.delegateBatchOne 直发 Worker RPC，完全绕过该闸，
 // 搭建中实例可经批量入口被启动到半截 jar。本组测试钉死批量入口同样被拦，
 // 且拦截不把实例回写 CRASHED（实例本身无恙，只是尚不可启动）。

@@ -4,14 +4,14 @@ import { json } from '@codemirror/lang-json'
 import { yaml } from '@codemirror/lang-yaml'
 import { extName } from '@/lib/shared/paths'
 
-/**
- * 编辑器语言种类（FR-070 多格式高亮）。
+/** 
+ * 编辑器语言种类（多格式高亮）。
  * yaml/json 用专用语言包；properties/ini/toml 用轻量 StreamLanguage（无新依赖）；
  * 其余（log/txt/md/sh/...）用纯文本 + 通用高亮兜底。
  */
 export type LanguageKind = 'yaml' | 'json' | 'properties' | 'toml' | 'plain'
 
-/**
+/** 
  * 按文件名后缀分类语言种类（纯函数，可单测）。
  * 无后缀的常见运行日志名（如 latest.log 已含后缀）走后缀；纯文本兜底为 plain。
  */
@@ -105,7 +105,7 @@ const tomlStream = StreamLanguage.define<{ afterKey: boolean }>({
   },
 })
 
-/** 按文件名返回 CodeMirror 语言扩展（FR-070）。plain 返回空数组（纯文本 + 默认高亮兜底）。 */
+/** 按文件名返回 CodeMirror 语言扩展。plain 返回空数组（纯文本 + 默认高亮兜底）。 */
 export function languageExtensionFor(filename: string): Extension[] {
   switch (languageKindFor(filename)) {
     case 'yaml':

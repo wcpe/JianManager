@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { isProvisioningInstance, isRebuildingInstance } from './instances'
 
-// FR-323 启动闸缺口修复：导入/克隆在途实例 statusReason 标「导入中/克隆中」，
+// 启动闸缺口修复：导入/克隆在途实例 statusReason 标「导入中/克隆中」，
 // 前端禁启判定须与后端闸同信号源——三种长操作前缀一视同仁。
 describe('isProvisioningInstance（长操作在途禁启判定）', () => {
   it.each([
@@ -24,8 +24,8 @@ describe('isProvisioningInstance（长操作在途禁启判定）', () => {
   })
 })
 
-/**
- * FR-342 损毁重建在途判定（与 `isProvisioningInstance` 同族：读后端写入的中文前缀）。
+/** 
+ *损毁重建在途判定（与 `isProvisioningInstance` 同族：读后端写入的中文前缀）。
  *
  * 判据从 `InstanceConsolePage` 内联收敛到此处，前端只此一处认「重建中」这个词。
  * 注意其脆弱性：后端一旦改词（本地化 / 改措辞）这里会静默失效——见函数注释。

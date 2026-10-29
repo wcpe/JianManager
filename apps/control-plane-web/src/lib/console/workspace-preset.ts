@@ -1,5 +1,5 @@
-/**
- * 可组合工作区的预设与布局纯逻辑（FR-166）。
+/** 
+ * 可组合工作区的预设与布局纯逻辑。
  *
  * 预设 = 命名的画布布局快照（个人级，先 `localStorage` 持久，后端同步留后续 FR）。
  * 本模块**不依赖 React / DOM**，只做卡片生成、布局规整、序列化/校验，便于 vitest 覆盖
@@ -30,10 +30,10 @@ export interface PlacedCard {
   type: CardType
   /** 网格位置与尺寸。 */
   layout: CardLayout
-  /**
-   * 卡片所属实例 id（FR-167 跨实例超级工作台）。
+  /** 
+   * 卡片所属实例 id（跨实例超级工作台）。
    * 单实例画布省略（全部卡同一实例，由画布上下文提供）；超级工作台每卡显式携带，
-   * 故同一画布可并存不同实例的卡（监看墙）。**可选**以向后兼容 FR-166 单实例预设。
+   * 故同一画布可并存不同实例的卡（监看墙）。**可选**以向后兼容单实例预设。
    */
   instanceId?: number
 }
@@ -66,10 +66,10 @@ export const PRESETS_STORAGE_KEY = 'workspace.presets'
 
 let cardSeq = 0
 
-/**
+/** 
  * 生成一张卡片：默认尺寸取自类型目录，可经 `over` 覆写位置/尺寸。
  * id 形如 `terminal-3-<rand>`，保证同会话内唯一且可读。
- * `instanceId` 可选（FR-167）：超级工作台传入卡片所属实例；单实例画布省略。
+ * `instanceId` 可选：超级工作台传入卡片所属实例；单实例画布省略。
  */
 export function makeCard(
   type: CardType,
@@ -93,7 +93,7 @@ export function makeCard(
   return card
 }
 
-/**
+/** 
  * 默认「运维台」布局：大终端（左主区）+ 服务器状态（右上）+ 资源（右下，文件+配置合一）。
  * 新手默认布局，等价于原固定 Tab 的「终端 + 状态 + 文件」一屏掌控（design §9）。
  */
@@ -120,7 +120,7 @@ function terminalPreset(): WorkspacePreset {
   }
 }
 
-/** 仅资源（文件+配置合一，承 FR-130）。 */
+/** 仅资源（文件+配置合一，承）。 */
 function resourcePreset(): WorkspacePreset {
   return {
     id: 'resource',
@@ -130,7 +130,7 @@ function resourcePreset(): WorkspacePreset {
   }
 }
 
-/**
+/** 
  * 内置快捷预设集合。原固定 Tab（终端/文件/配置…）降级为这些一键布局。
  * 名称为空串：UI 用 i18n 键 `workspace.preset.<id>` 渲染，避免把中文写死进逻辑层。
  */
@@ -160,12 +160,12 @@ function normalizeCard(raw: unknown): PlacedCard | null {
   const h = Math.max(def.minSize.h, Math.floor(lr.h))
   const y = Math.max(0, Math.floor(lr.y))
   const card: PlacedCard = { id: r.id, type: r.type, layout: { x, y, w, h } }
-  // FR-167：携带 instanceId 的卡（超级工作台）。非有限值视为无主卡（容错而非整体失败）。
+  // 携带 instanceId 的卡（超级工作台）。非有限值视为无主卡（容错而非整体失败）。
   if (isFiniteNum(r.instanceId)) card.instanceId = r.instanceId
   return card
 }
 
-/**
+/** 
  * 规整一个预设对象（来自 localStorage / 任意来源）。
  * 结构非法（缺 id/name/cards 数组）返回 null；卡片逐张规整，非法卡片剔除（允许空 cards）。
  */
@@ -213,7 +213,7 @@ export function cardsToLayout(cards: PlacedCard[]): GridLayoutItem[] {
   })
 }
 
-/**
+/** 
  * react-grid-layout 的 onLayoutChange 回调 → 写回卡片坐标（保留 type/id）。
  * 回调里出现的未知 `i`（理论上不应发生）被忽略，卡片顺序与入参一致。
  */

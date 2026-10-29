@@ -1,4 +1,4 @@
-/**
+/** 
  * @file InstanceRowMetrics：实例列表行内的「实时指标」与「活动心跳」两个单元格（平铺表与分组树表共用）。
  *       纯展示件（ADR-103 b 范式）：不取数、不发请求——数据由容器（InstancesPage）按**可见窗口**
  *       批量取数后逐行注入；缺测一律以 `--` 呈现，不隐藏列也不造数。
@@ -23,8 +23,8 @@ export interface InstanceMetricSnapshot {
   memUsedBytes: number | null
   /** 在线玩家数（inst_players_online 末点）。 */
   players: number | null
-  /**
-   * 在线人数上限（inst_players_max 末点，FR-511）。
+  /** 
+   * 在线人数上限（inst_players_max 末点）。
    *
    * 与 `players` 成对展示为「当前/最大」；上限缺测（代理未提供 maxplayers 等）为 null，
    * 此时只显示当前人数——不要用 0 兜底，那会读成「上限 0」。
@@ -32,7 +32,7 @@ export interface InstanceMetricSnapshot {
   playersMax: number | null
   /** 活动心跳：inst_tps 末段采样逐点三态（true=活跃 / false=停摆 / null=缺测）。 */
   heartbeat: (boolean | null)[]
-  /**
+  /** 
    * 近窗口序列（缩略图与悬浮图共用）。
    *
    * 【为什么把序列带进快照】行内要画两张缩略 sparkline（TPS / 在线人数），
@@ -52,7 +52,7 @@ export interface InstanceMetricSnapshot {
   }
 }
 
-/**
+/** 
  * 心跳带格数：raw 档 30s 一采样 → 40 格 = 近 20 分钟。
  * 与取数侧切片同源（useInstanceWindowMetrics 按本常量截取末段）。
  */
@@ -73,7 +73,7 @@ function Dash() {
   return <span className="text-muted-foreground/60">--</span>
 }
 
-/**
+/** 
  * 实时指标单元格：TPS / CPU / 内存 / 玩家 四段紧凑并排（`tabular-nums` 防数值跳动）。
  * 全部缺测（如已停止且无历史）时收敛为单个 `--`，不铺四个空段。
  */
@@ -107,7 +107,7 @@ export function InstanceMetricsCell({ snapshot }: { snapshot?: InstanceMetricSna
   )
 }
 
-/**
+/** 
  * 活动心跳单元格：末段 inst_tps 采样逐格渲染（绿=活跃 / 红=停摆 / 灰=缺测）。
  * 色板沿用分组头健康色带的 status token（`bg-status-success` 等），不引入新色。
  * 读屏与悬停均以聚合文案（活跃/停摆/缺测 格数）表达，不逐格播报。

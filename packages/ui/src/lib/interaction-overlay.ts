@@ -1,5 +1,5 @@
-/**
- * 交互覆盖层常量（FR-502 阶段 6）：悬停 / 按压 / 禁用反馈的统一词汇表。
+/** 
+ * 交互覆盖层常量（阶段 6）：悬停 / 按压 / 禁用反馈的统一词汇表。
  *
  * 背景：本库此前每个组件各自发明 hover 与 active 配色（`hover:bg-accent`、`hover:bg-accent/50`、
  * `active:bg-primary/80`…），于是同一个「按住」动作在不同组件上深浅不一，
@@ -15,7 +15,7 @@
  * 所有时长/缓动一律绑 motion token（见 styles/motion.css 的词汇表），不写 `duration-150` 之类定值。
  */
 
-/**
+/** 
  * 通用交互过渡：颜色/边框/阴影之外的内容变化（渐变、滤镜）不在此列。
  *
  * 取 fast（120ms）而非 normal：指针悬停反馈必须比页面转场更快才像「即时响应」。
@@ -23,11 +23,11 @@
 export const interactionTransition =
   'transition-[background-color,border-color,color,box-shadow] duration-[var(--motion-duration-fast)] ease-ios'
 
-/**
+/** 
  * 卡片类表面的悬停抬升过渡：只换阴影、不换颜色。
  *
  * 单独成常量是因为它的时长取 slow（320ms）——阴影是「重量」线索，快切会像闪烁；
- * 且 FR-176 已定死卡片 hover 只换阴影不位移，故此常量只描述过渡，位移类名不该出现在它的使用者里。
+ * 且已定死卡片 hover 只换阴影不位移，故此常量只描述过渡，位移类名不该出现在它的使用者里。
  *
  * 注：`Panel` 自己是同源取值的字面量（`transition-[box-shadow] duration-[var(--motion-duration-slow)] ease-ios`），
  * 因为全局动效守护测试把它钉成了锚点文件；CPW 的三张工作台卡片（节点/实例/Bot）在下一批收敛时取本常量。
@@ -35,7 +35,7 @@ export const interactionTransition =
 export const shadowTransition =
   'transition-[box-shadow] duration-[var(--motion-duration-slow)] ease-ios'
 
-/**
+/** 
  * 卡片类表面的基础样式：圆角 + 描边 + 卡片底 + 柔和阴影。
  *
  * **为什么要有这个常量**：`Card`、`Panel`、`StatCard` 三个组件此前各自手写
@@ -61,7 +61,7 @@ export const shadowTransition =
 export const cardSurface =
   'rounded-xl border border-border/55 text-card-foreground shadow-soft'
 
-/**
+/** 
  * 卡片底色的强弱档位。
  *
  * 【为什么需要收敛】替换前全站有 `bg-card/30`、`/35`、`/40`、`/45`、`/50`、`/60`、`/70`、
@@ -86,7 +86,7 @@ export const cardSurfaceTone = {
 export type CardSurfaceTone = keyof typeof cardSurfaceTone
 
 /** 中性悬停涂层：浅色主色底（accent）+ 对应前景色。 */
-/**
+/** 
  * 中性悬停涂层：浅色主色底（accent）+ 对应前景色。
  *
  * 取值从「实色 accent」改为「accent/70」：实色 hover 在密集工具栏里会跳出来抢注意力，
@@ -95,7 +95,7 @@ export type CardSurfaceTone = keyof typeof cardSurfaceTone
  */
 export const hoverOverlay = 'hover:bg-accent/70 hover:text-accent-foreground dark:hover:bg-accent/40'
 
-/**
+/** 
  * 中性按压涂层：同色系加深一档，与悬停可区分。
  *
  * 不做 `active:bg-accent`（与悬停同值）是有意的：按住时若无任何变化，用户无法判断
@@ -106,7 +106,7 @@ export const pressOverlay = 'active:bg-accent/70 dark:active:bg-accent/60'
 /** 中性悬停 + 按压：ghost/outline 一类无自身底色的控件整套取用。 */
 export const interactionOverlay = `${hoverOverlay} ${pressOverlay}`
 
-/**
+/** 
  * 统一禁用态：屏蔽指针事件 + 降不透明度。
  *
  * 用 `disabled:pointer-events-none` 而非只降透明度：禁用控件仍能接收 hover/active 会
@@ -118,7 +118,7 @@ export const disabledState = 'disabled:pointer-events-none disabled:opacity-50'
 /** 按压涂层色调：与按钮变体色系一一对应。 */
 export type PressTone = 'primary' | 'destructive' | 'secondary' | 'neutral'
 
-/**
+/** 
  * 按色调取按压涂层类名。
  *
  * 供 `cva` 变体表使用：按压色必须落在控件自身色系内（见模块头注释），

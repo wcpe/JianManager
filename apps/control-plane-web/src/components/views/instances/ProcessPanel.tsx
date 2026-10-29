@@ -16,18 +16,18 @@ export interface ProcessMetricsView {
   uptimeSeconds?: number
 }
 
-/**
- * 通用进程指标面板（FR-450 §2.3.1）——不写死产品名，供二进制/beacon 与 BC 复用。
+/** 
+ * 通用进程指标面板（§2.3.1）——不写死产品名，供二进制/beacon 与 BC 复用。
  *
  * 数据来自节点侧进程采集通道（`/instances/:id/metrics` 的 CPU/内存/线程/运行时长档）：
  * - 有 JVM 堆语义（heapMaxMb>0）展示「已用/上限」；无 JVM 堆（beacon 等原生二进制）展示 RSS。
- * - 探针缺失时**不伪造 -1 占位**，缺测项显「—」，与 FR-447 三态语义一致。
+ * - 探针缺失时**不伪造 -1 占位**，缺测项显「—」，与三态语义一致。
  * - `threads` 仅 ServerProbe（JVM）提供；节点侧对非 JVM 进程恒返回 0（伪值），故无数据时
  *   显「—」而非 0。
  *
  * 受控视图（ADR-103 a 范式）：不取数——指标经 props 注入，面板只做呈现与格式化。
  *
- * TODO(FR-450 §2.3.1)：文件句柄（fd）与重启次数尚无数据源——需在 worker 指标通道补采
+ * TODO(§2.3.1)：文件句柄（fd）与重启次数尚无数据源——需在 worker 指标通道补采
  * （`GetInstanceMetricsResponse` 增可用标记字段）后再落到本面板；当前不伪造占位值。
  */
 export function ProcessPanel({ metrics }: { metrics?: ProcessMetricsView }) {

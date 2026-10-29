@@ -22,7 +22,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 本文件覆盖 FR-522 的 SSE 端点契约与 FR-536 的连接治理（429 / 心跳 / 慢消费者 / 补读）。
+// 本文件覆盖的 SSE 端点契约与的连接治理（429 / 心跳 / 慢消费者 / 补读）。
 // 用真实 httptest.Server 而不是 ResponseRecorder：SSE 是长连接，需要真正的流式写出与增量读取。
 
 // sseStream 是一个已建立的事件流连接。

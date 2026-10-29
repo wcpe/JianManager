@@ -10,8 +10,8 @@ import (
 )
 
 // TestAuditMiddleware_PasswordNotRecordedInDetail 复现审计 detail 泄漏凭据的缺陷：
-// PUT /users/:id 重置密码（FR-156）经审计中间件记为 user.update，原始请求体含明文新密码，
-// 若不脱敏则明文落 audit_logs、审计页可见且随导出（FR-155）外带。
+// PUT /users/:id 重置密码经审计中间件记为 user.update，原始请求体含明文新密码，
+// 若不脱敏则明文落 audit_logs、审计页可见且随导出外带。
 // detail 须掩蔽凭据字段，但保留非敏感字段供运维定位。
 func TestAuditMiddleware_PasswordNotRecordedInDetail(t *testing.T) {
 	gin.SetMode(gin.TestMode)

@@ -33,11 +33,11 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// testArtifactReconcile 最近一次 setupTestRouterWithPool 构造的对账服务（FR-349）——
+// testArtifactReconcile 最近一次 setupTestRouterWithPool 构造的对账服务——
 // 对账执行需注入假 BlobStore（SetStoreFactory），路由测试串行执行下按引用注入安全。
 var testArtifactReconcile *service.ArtifactReconcileService
 
-// testQQBind 最近一次 setupTestRouter 构造的 QQ 扫码绑定服务（FR-495）——绑定端点测试
+// testQQBind 最近一次 setupTestRouter 构造的 QQ 扫码绑定服务——绑定端点测试
 // 需把上游域名指向假服务端（SetBaseURL），路由测试串行执行下按引用注入安全。
 var testQQBind *service.QQBindService
 
@@ -103,7 +103,7 @@ func assistantOrDefault(provided *service.AssistantService, db *gorm.DB) *servic
 	return newTestAssistantService(db)
 }
 
-// newTestAssistantService 装配可用的 AI 配置服务（FR-514）。
+// newTestAssistantService 装配可用的 AI 配置服务。
 //
 // 用 dev 加密器（测试不碰生产密钥）与放行私网的受保护出站——测试服务跑在
 // 127.0.0.1 上的 httptest，不放行回环则探测类用例永远被准入拦住，
@@ -122,7 +122,7 @@ func newTestAssistantService(db *gorm.DB) *service.AssistantService {
 	return svc
 }
 
-// setupTestRouterWithBeacon 同 setupTestRouter，但装配 Beacon 拉取服务（FR-444）：
+// setupTestRouterWithBeacon 同 setupTestRouter，但装配 Beacon 拉取服务：
 // pullEnabled=false 时模拟「配了端点未开能力」，endpoint 指向不可达地址以覆盖失败路径。
 func setupTestRouterWithBeacon(db *gorm.DB, endpoint string, pullEnabled bool) *gin.Engine {
 	client := service.NewBeaconClient(service.BeaconClientConfig{
@@ -170,7 +170,7 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 }
 
 // setupTestRouterWithAssistantOverride 与 setupTestRouterWithOptions 等价，
-// 但可覆盖 AI 配置服务（FR-514）。
+// 但可覆盖 AI 配置服务。
 //
 // 默认装配用宽松出站（放行 http 与回环），让探测类用例能打 httptest；
 // 需要验证「严格准入拒绝明文 http」的用例则传入自己的严格实例。
@@ -198,7 +198,7 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 	// TestNode_Drain_StopsRunning 整包跑偶发失败的根因。
 	// 用委托旁路而非 Shutdown：后者会把服务置为「正在关闭」，使随后的生命周期请求明确报错。
 	instanceSvc.SetDelegateBypassForTest(true)
-	// 回填实例服务，供节点排空（drain）测试复用实例停止逻辑（FR-048）。
+	// 回填实例服务，供节点排空（drain）测试复用实例停止逻辑。
 	nodeSvc.SetInstanceService(instanceSvc)
 	// 制品库需要数据根；测试用临时根，落在本包的进程级 TMPDIR（见 main_test.go
 	// 的 TestMain）之下，随整棵根在包退出时统一回收。
@@ -206,17 +206,17 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 	assetSvc := service.NewAssetService(db, root)
 	backupStorageSvc := service.NewBackupStorageService(db, pool)
 	backupStorageSvc.SetDataRoot(root)
-	// QQ 扫码绑定（FR-495）：密钥落盘目录同样用临时数据根，避免测试写到真实 data/etc。
+	// QQ 扫码绑定：密钥落盘目录同样用临时数据根，避免测试写到真实 data/etc。
 	qqBindSvc := service.NewQQBindService(nil)
 	qqBindSvc.SetDataRoot(root)
 	testQQBind = qqBindSvc
-	// 制品存储渠道（FR-347）：dev 加密器 + 内置本机存储 seed，令渠道端点可测。
+	// 制品存储渠道：dev 加密器 + 内置本机存储 seed，令渠道端点可测。
 	artifactStorageSvc := service.NewArtifactStorageChannelService(db, root)
 	if enc, _, err := service.ResolveKeyEncryptor("", true, ""); err == nil {
 		artifactStorageSvc.SetKeyEncryptor(enc)
 	}
 	_ = artifactStorageSvc.EnsureBuiltin()
-	// 制品对账（FR-349）：不 Start（测试不跑定期调度循环）；执行走假 store——
+	// 制品对账：不 Start（测试不跑定期调度循环）；执行走假 store——
 	// 测试经包级 testArtifactReconcile.SetStoreFactory 注入（串行测试安全）。
 	artifactReconcileSvc := service.NewArtifactReconcileService(db, artifactStorageSvc)
 	testArtifactReconcile = artifactReconcileSvc
@@ -228,13 +228,13 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 	botLoadPreflight := service.NewBotLoadPreflightService(db, botLoadCapacity, botLoadReservations, botLoadSigner, nil)
 	botLoadExecution := service.NewGRPCBotLoadExecutionService(db, botLoadCapacity, botLoadReservations, botLoadSigner, pool, testImmediateBotLoadRunner{}, nil)
 	botLoadExecution.SetRunIntentService(service.NewBotLoadRunIntentService(db))
-	// 运行时资产聚合 + 强制刷新（FR-301）：注入 JDK 同步器，令 refresh 端点可测
+	// 运行时资产聚合 + 强制刷新：注入 JDK 同步器，令 refresh 端点可测
 	// （配合 SetWorkerClientForTest 注入 fake Worker）。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
 	runtimeAssetsSvc.SetJDKSync(service.NewJDKService(db, pool))
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	instanceBatchSvc.SetInstanceService(instanceSvc)
-	// FR-451/457/458：配置源明面化 / 滚动编排 / 配置基线，供对应端点测试装配。
+	// 457/458：配置源明面化 / 滚动编排 / 配置基线，供对应端点测试装配。
 	configSourceSvc := service.NewConfigSourceService(db, instanceSvc, configSvc)
 	configSvc.SetInlinePortProvider(func(instanceID uint) map[string]string {
 		return configSourceSvc.InlinePropValues(instanceID, []string{"server-port", "query.port"})
@@ -245,7 +245,7 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 	authSvc.SetPasswordCostForTest(bcrypt.MinCost)
 	userSvc := service.NewUserService(db)
 	userSvc.SetPasswordCostForTest(bcrypt.MinCost)
-	// AI 助手两层服务共用同一个 AssistantService 实例（FR-515 Phase D）：
+	// AI 助手两层服务共用同一个 AssistantService 实例（Phase D）：
 	// 对话运行时靠它解析凭据与构造出站适配器，测试里两者共用才能让
 	// 「配置页建供应商/模型 → 提交一轮对话」真正走通。
 	testAssistantSvc := assistantOrDefault(assistant, db)
@@ -293,7 +293,7 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 		Authz:             authzSvc,
 		Settings:          service.NewSettingsService(db, &config.Config{}),
 		Assistant:         testAssistantSvc,
-		// 对话运行时（FR-515 Phase D）：不 Start（测试不跑启动回收循环），
+		// 对话运行时（Phase D）：不 Start（测试不跑启动回收循环），
 		// 用例只经 HTTP 端点驱动，回收逻辑由 service 包自己的用例覆盖。
 		AssistantChat:      service.NewAssistantChatService(db, testAssistantSvc),
 		ClientChannel:      service.NewClientChannelService(db),
@@ -301,7 +301,7 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 		ClientDistSecurity: service.NewClientDistSecurityService(db, service.NewClientChannelService(db), service.NewClientVersionService(db, assetSvc, service.NewClientChannelService(db))),
 		ClientIPGuard:      service.NewClientIPGuardService(db),
 		Business:           service.NewBusinessService(db, pool),
-		// FR-526 桥能力接入：桥状态 / 主题订阅 / 业务域状态。
+		// 桥能力接入：桥状态 / 主题订阅 / 业务域状态。
 		Bridge:            service.NewBridgeService(db, pool),
 		BusinessBatch:     newTestBusinessBatchService(db, pool),
 		BusinessReconcile: service.NewBusinessReconcileService(db, service.NewBusinessService(db, pool)),
@@ -319,23 +319,23 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 		SelfUpdate:            service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
 		ServerState:           service.NewServerStateService(db, pool),
 		CrashSnapshot:         service.NewCrashSnapshotService(db),
-		// 实例整机快照（FR-466）与二进制版本管理（FR-468）：B-2 权限门禁测试需要真实路由。
+		// 实例整机快照与二进制版本管理：B-2 权限门禁测试需要真实路由。
 		Snapshot:      newTestSnapshotService(db, pool, instanceSvc),
 		BinaryVersion: newTestBinaryVersionService(db, pool, instanceSvc),
 		ImportServer:  service.NewImportServerService(db, pool, instanceSvc),
-		// Agent Token 策略真源（FR-384/388）：测试路由需挂 agent 管理/运维面。
+		// Agent Token 策略真源（388）：测试路由需挂 agent 管理/运维面。
 		AgentToken: service.NewAgentTokenService(db),
-		// Agent 调用流水（FR-390）：Ops 读+写记流水；Token 列表 callCount24h。
+		// Agent 调用流水：Ops 读+写记流水；Token 列表 callCount24h。
 		AgentCallLog: service.NewAgentCallLogService(db),
-		// 对外只读统计契约（FR-527）：六组 /stats/* 端点。
+		// 对外只读统计契约：六组 /stats/* 端点。
 		Stats: service.NewStatsService(db),
 	}
-	// Agent 流式传输票据（FR-397）：密钥与生产同样从主密钥域分离派生。
+	// Agent 流式传输票据：密钥与生产同样从主密钥域分离派生。
 	transferSecret := service.DeriveAgentTransferTicketSecret([]byte(jwtCfg.Secret))
 	if tickets, err := service.NewAgentTransferTicketService(transferSecret, svcs.AgentToken, nil); err == nil {
 		svcs.AgentTransfer = tickets
 	}
-	// CP 内嵌 MCP（FR-389，无状态化见 ADR-096）：只需 SSE 传输连接登记。
+	// CP 内嵌 MCP（无状态化见 ADR-096）：只需 SSE 传输连接登记。
 	agentTok := svcs.AgentToken
 	logSvc := svcs.Log
 	svcs.MCP = mcp.NewHandler(mcp.NewSSEConnRegistry(), mcp.ToolDeps{

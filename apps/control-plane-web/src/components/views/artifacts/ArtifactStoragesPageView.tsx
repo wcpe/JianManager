@@ -1,11 +1,11 @@
-/**
+/** 
  * @file ArtifactStoragesPageView：制品外置存储渠道页（含存量迁移）的受控视图，渠道取数、迁移状态轮询、全部写动作与 toast 由应用容器负责。
  * @input lib/form-validation（字段校验）、lib/use-field-gate（错误展示时机门控）、lib/task-status（任务终态判定）、
  *        Table/Dialog/Checkbox/DropdownMenu 等原语、views/DangerConfirm（删除二次确认）、翻译上下文
  * @output ArtifactStoragesPageView、ArtifactStoragesPageViewProps、ArtifactStorageChannelView、ArtifactStorageForm、
  *        ArtifactStorageTestOutcome、ArtifactMigrationTaskView、ArtifactMigrationInfoView、ArtifactMigrationFailureView
  * @sync apps/control-plane-web/src/pages/ArtifactStoragesPage.tsx、apps/control-plane-web/src/pages/ArtifactStoragesPage.dom.test.tsx、apps/control-plane-web/src/pages/ArtifactStoragesPage.migration.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-347 外置存储渠道管理 + FR-348 存量迁移）
+ * @since（组件受控化迁包；原页外置存储渠道管理存量迁移）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -54,7 +54,7 @@ import type { TaskState } from '@/lib/tasks/task-status'
 import { useFieldGate } from '@/lib/hooks/use-field-gate'
 import { formatFileSize } from '@/lib/shared/format-file-size'
 
-/**
+/** 
  * 存储渠道行（本视图渲染、表单回填与迁移展示所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/artifactStorages` 的 `ArtifactStorageChannel`：
@@ -90,7 +90,7 @@ export interface ArtifactStorageChannelView {
   lastTestMessage: string
 }
 
-/**
+/** 
  * 表单草稿（创建与编辑同形）。面板仅可创建 s3 渠道，local 由内置「本机存储」独占（ADR-073 决策 2）。
  * 字段全部必填（字符串不以 undefined 受控）以贴合运行时取值——编辑时由行值整体回填、
  * 创建时由 `emptyForm` 铺满，故永不出现受控/非受控切换。
@@ -153,7 +153,7 @@ const emptyForm: ArtifactStorageForm = {
   accessKey: '', secretKey: '', useSsl: false, presignTtlSeconds: 600,
 }
 
-/**
+/** 
  * 预签名有效期校验：必须是 60~3600 的整数（后端约束，见 `artifactStorages.presignTtlHint`）。
  *
  * 此前只给了 `min={60} max={3600}`——那是**浏览器约束**：清空输入得 `Number('') === 0`，
@@ -169,7 +169,7 @@ function validatePresignTtl(value: string): FieldErrorKey {
   return n < 60 || n > 3600 ? 'artifactStorages.presignTtlHint' : undefined
 }
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast、不持鉴权状态**。
  * - 渠道列表、迁移任务与计数、失败明细经 props 注入（容器调对应 hook，并按任务终态启停轮询）；
  * - 写动作以回调上报，由容器执行 mutation 并决定成功/失败文案：提交表单与草稿测试回传
@@ -220,7 +220,7 @@ export interface ArtifactStoragesPageViewProps {
   onActivate: (id: number) => void
   /** 删除渠道（二次确认已在本视图内完成）。 */
   onDelete: (id: number) => void
-  /**
+  /** 
    * 发起「迁移存量制品到渠道 :id」。
    * 原实现为「发起即关窗」（不等任务创建返回，成败由容器 toast），故本视图调用后立即复位
    * 迁移确认框与失败明细模态，不等待返回值——保持既有交互时序。
@@ -234,8 +234,8 @@ export interface ArtifactStoragesPageViewProps {
   onCloseFailures: () => void
 }
 
-/**
- * 文件存储配置页（FR-347，见 ADR-073）：客户端分发制品的外置对象存储渠道管理。
+/** 
+ * 文件存储配置页（见 ADR-073）：客户端分发制品的外置对象存储渠道管理。
  * 活跃渠道 = 新上传制品落点（存量制品按各自记录读取）；凭证直填、后端可逆加密，
  * 编辑不回显明文（留空 = 保留）。仅平台管理员可访问。
  * 表格外观为方案 A「精工卡片」（opt-in appearance="refined"）。
@@ -476,7 +476,7 @@ export function ArtifactStoragesPageView({
         description={t('artifactStorages.subtitle', '配置客户端分发制品的存储渠道。活跃渠道决定新上传制品的落点；S3 兼容渠道（rustfs / MinIO 等）由对象存储直接分发下载流量，主控不中继大文件。')}
       />
 
-      {/* 在途迁移进度卡（FR-348）：任务非终态时展示，轮询推进（启停规则归容器）；可强制停止（重新发起即续跑）。 */}
+      {/* 在途迁移进度卡：任务非终态时展示，轮询推进（启停规则归容器）；可强制停止（重新发起即续跑）。 */}
       {/* 卡片底色取 subtle（页面壳内的次级卡片）；内部各段自带 space-y-2 节奏，故 Card 默认 gap 置零。 */}
       {migrationActive && migrationTask && (
         <Card surface="subtle" className="p-4 space-y-2">
@@ -599,7 +599,7 @@ export function ArtifactStoragesPageView({
                       >
                         <Zap />
                       </TableIconButton>
-                      {/* 迁移入口（FR-348）：任意渠道可为目标（含内置本机 = 回迁）；在途迁移时禁用。 */}
+                      {/* 迁移入口：任意渠道可为目标（含内置本机 = 回迁）；在途迁移时禁用。 */}
                       <TableIconButton
                         aria-label={t('artifactStorages.migrate.action', '迁移到此')}
                         title={t('artifactStorages.migrate.action', '迁移到此')}
@@ -694,7 +694,7 @@ export function ArtifactStoragesPageView({
         </DialogContent>
       </Dialog>
 
-      {/* 迁移确认（FR-348）：说明逐条搬运语义（校验→改记录→删源、已在目标跳过、可停可续跑）。 */}
+      {/* 迁移确认：说明逐条搬运语义（校验→改记录→删源、已在目标跳过、可停可续跑）。 */}
       <Dialog open={migrateTarget !== null} onOpenChange={(o) => { if (!o) setMigrateTarget(null) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -720,7 +720,7 @@ export function ArtifactStoragesPageView({
         </DialogContent>
       </Dialog>
 
-      {/* 失败明细（FR-348）：sha256+原因逐条；重试 = 对同目标重新发起（成功条自动跳过）。
+      {/* 失败明细：sha256+原因逐条；重试 = 对同目标重新发起（成功条自动跳过）。
           打开状态是容器的取数键（`failuresTaskId`），故本组件只上报开关意图。 */}
       <Dialog open={failuresTaskId !== null} onOpenChange={(o) => { if (!o) onCloseFailures() }}>
         <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>

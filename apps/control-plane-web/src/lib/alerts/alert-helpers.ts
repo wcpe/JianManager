@@ -1,5 +1,5 @@
-/**
- * 告警 UI 纯函数助手（FR-085 / FR-149）。级别着色、通道类型展示、静默窗口格式化、
+/** 
+ * 告警 UI 纯函数助手。级别着色、通道类型展示、静默窗口格式化、
  * 触发类型字段可见性判定、级别→状态等级映射、规则汇总——抽为纯函数便于 vitest 覆盖，
  * UI 组件只做渲染。
  */
@@ -29,8 +29,8 @@ export type ChannelType =
   | 'qq'
   | 'inapp'
 
-/**
- * QQ 通道投递目标类型：仅单聊（FR-494）。
+/** 
+ * QQ 通道投递目标类型：仅单聊。
  *
  * 群聊（group）路径**保留在后端但不对用户暴露**：QQ 平台侧拒绝群主动消息（40034105，
  * 官方维护者定性「群内主动消息平台侧不支持」），前端因此彻底收敛到单聊——既不给选项，
@@ -51,8 +51,8 @@ export function levelBadgeClass(level: string): string {
   }
 }
 
-/**
- * 告警级别 → 状态等级（FR-149 / FR-163 StatusBadge 复用）：严重=危险、警告=警告、提示=信息。
+/** 
+ * 告警级别 → 状态等级（StatusBadge 复用）：严重=危险、警告=警告、提示=信息。
  * 配置行的级别 pill 与状态徽章统一走 StatusLevel，避免硬编码品牌色。
  */
 export function levelStatusLevel(level: string): StatusLevel {
@@ -87,7 +87,7 @@ export function targetTypeForTrigger(triggerType: string): 'node' | 'instance' {
   return triggerType === 'metric' || triggerType === 'node_offline' ? 'node' : 'instance'
 }
 
-/**
+/** 
  * 该触发类型是否允许用户切换目标维度（node ↔ instance）。
  *
  * `metric` 在 node 与 instance 两个维度都有评估器（`evaluateNodeMetricRule` /
@@ -119,12 +119,12 @@ export function channelIsEmail(channelType: string): boolean {
   return channelType === 'email'
 }
 
-/** 通道类型为 QQ 机器人（需 appId/appSecret/targetType/targetId，FR-494）。 */
+/** 通道类型为 QQ 机器人（需 appId/appSecret/targetType/targetId）。 */
 export function channelIsQQ(channelType: string): boolean {
   return channelType === 'qq'
 }
 
-/**
+/** 
  * 校验 QQ 目标类型字面量：**只认** `c2c`（单聊）。
  *
  * 群聊已被平台拒绝（40034105），后端虽保留 group 分支，但前端不承认——存量通道里的
@@ -139,7 +139,7 @@ export function channelIsInApp(channelType: string): boolean {
   return channelType === 'inapp'
 }
 
-/**
+/** 
  * 校验形如 ${ENV_VAR} 的环境变量引用（凭证字段强制）。
  *
  * 字符集与后端 `resolveEnvRef` 完全对齐：`${` + 首字符为字母/下划线 + 其后为
@@ -151,7 +151,7 @@ export function isEnvRef(value: string): boolean {
   return /^\$\{[A-Za-z_][A-Za-z0-9_-]*\}$/.test(value.trim())
 }
 
-/**
+/** 
  * 格式化静默窗口为可读区间；任一端为空返回空串（表示未设静默）。
  * 跨午夜（start > end）追加「(次日)」提示。
  */
@@ -170,13 +170,13 @@ export function isValidHHMM(value: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
 }
 
-/** 规则汇总统计（FR-149 配置行汇总条）：总数 / 启用数。 */
+/** 规则汇总统计（配置行汇总条）：总数 / 启用数。 */
 export interface RuleSummary {
   total: number
   enabled: number
 }
 
-/** 统计规则总数与启用数，用于列表顶部汇总 chip（FR-149）。 */
+/** 统计规则总数与启用数，用于列表顶部汇总 chip。 */
 export function summarizeRules(rules: readonly { enabled: boolean }[]): RuleSummary {
   let enabled = 0
   for (const r of rules) if (r.enabled) enabled += 1

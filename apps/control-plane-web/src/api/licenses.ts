@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 
-/** 单条依赖的许可信息（构建期由 scripts/gen-licenses.mjs 扫描生成，FR-135）。 */
+/** 单条依赖的许可信息（构建期由 scripts/gen-licenses.mjs 扫描生成）。 */
 export interface LicenseDependency {
   name: string
   version: string
@@ -22,8 +22,8 @@ export interface LicensesManifest {
   dependencies: LicenseDependency[]
 }
 
-/**
- * 读取构建期生成的依赖许可清单（FR-135）。
+/** 
+ * 读取构建期生成的依赖许可清单。
  * 走静态资源 `/licenses.json`（非 `/api`，故用原生 fetch 而非 axios client）；
  * 数据构建期生成、不手维护，缺失时返回空清单走页面空态。
  */

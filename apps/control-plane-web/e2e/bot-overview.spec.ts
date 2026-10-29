@@ -11,8 +11,8 @@ function botGroupCard(page: Page, name: string): Locator {
   return page.locator('div.bg-card').filter({ has: page.getByRole('button', { name, exact: true }) }).first()
 }
 
-/** FR-040 真浏览器纵切：全局 Bot 聚合总览、分组切换、窥视、批量与控制台联动。 */
-test.describe('FR-040 全局 Bot 管理页重构（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：全局 Bot 聚合总览、分组切换、窥视、批量与控制台联动。 */
+test.describe('全局 Bot 管理页重构（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await page.addInitScript(() => {

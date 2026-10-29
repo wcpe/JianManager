@@ -1,5 +1,5 @@
-/**
- * 客户端分发上传增效的纯逻辑（FR-346，增强 FR-250/251）。
+/** 
+ * 客户端分发上传增效的纯逻辑（增强251）。
  *
  * 这里只放与网络/React 无关的可单测部分：大小分路、贪心装箱、列表分批、
  * 有限并发任务池、单调进度聚合与浏览器内 SHA-256。编排（预查→秒传→聚合/分块）
@@ -8,7 +8,7 @@
 
 // ── 阈值常量（与服务端上限镜像，spec §3/§4）─────────────────────────────────
 
-/** 聚合上传单文件上限（= FR-251 defaultChunkSize 8 MiB）：≤ 此值走聚合，> 此值走分块。 */
+/** 聚合上传单文件上限（=defaultChunkSize 8 MiB）：≤ 此值走聚合，> 此值走分块。 */
 export const AGGREGATE_MAX_FILE_BYTES = 8 * 1024 * 1024
 /** 预查 hash 计算上限：WebCrypto 无流式、整读进内存，> 此值直接走分块不预查。 */
 export const HASH_MAX_FILE_BYTES = 256 * 1024 * 1024
@@ -28,14 +28,14 @@ export function shouldHash(size: number): boolean {
   return size <= HASH_MAX_FILE_BYTES
 }
 
-/** 未命中秒传时的上传路径：小文件聚合 / 大文件 FR-251 分块。 */
+/** 未命中秒传时的上传路径：小文件聚合 / 大文件分块。 */
 export function uploadRouteFor(size: number): 'aggregate' | 'chunked' {
   return size <= AGGREGATE_MAX_FILE_BYTES ? 'aggregate' : 'chunked'
 }
 
 // ── 装箱 / 分批 ──────────────────────────────────────────────────────────
 
-/**
+/** 
  * 贪心装箱：按输入顺序把条目装入聚合批，任一批不超过 maxFiles 个且总字节不超 maxTotal。
  * 前提：单条目 size ≤ maxTotal（聚合路径单文件 ≤ 8 MiB < 32 MiB 恒成立）；
  * 保序（批内与批间均保持输入顺序），便于断言与结果对齐。纯函数。
@@ -75,7 +75,7 @@ export function chunkList<T>(items: T[], size: number): T[][] {
 
 // ── 有限并发任务池 ────────────────────────────────────────────────────────
 
-/**
+/** 
  * 以 limit 并发运行任务，返回与 tasks 同序的结果。
  *
  * fail-fast：任一任务失败后不再启动新任务，等在途任务落定后以**首个**错误拒绝
@@ -131,7 +131,7 @@ export interface ProgressTracker {
   current(): number
 }
 
-/**
+/** 
  * 创建进度聚合器。并发任务各自回报在途字节（axios onUploadProgress / 分块片回调），
  * 聚合值 = min(total, 完成累计 + Σ在途)，再经 max(上次汇报, 本次) 单调 clamp——
  * 重试回退、multipart 开销折算等都不会让总进度倒退；NaN/负值直接忽略。
@@ -289,7 +289,7 @@ function hasNativeSha256(): boolean {
   return typeof crypto !== 'undefined' && crypto.subtle !== undefined
 }
 
-/**
+/** 
  * 计算 Blob 原始内容的 SHA-256（十六进制小写）= 秒传预查查重键（spec §2）。
  * 安全上下文优先 WebCrypto；普通 HTTP 对小文件使用纯 JS 兜底，避免增效链路阻断发布。
  */

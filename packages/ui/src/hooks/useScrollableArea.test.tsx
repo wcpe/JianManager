@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { useScrollableArea, type ScrollAxis, type ScrollKeyboardAccess } from './useScrollableArea'
 
-/**
- * 滚动区域键盘可达性测试（FR-502 阶段 6）。
+/** 
+ * 滚动区域键盘可达性测试（阶段 6）。
  *
  * jsdom 没有布局，`scrollHeight/clientHeight` 恒为 0，因此用例显式注入尺寸并触发
  * 一次 resize（hook 的重测入口之一）——这不是绕过实现，而是把浏览器里"改窗口大小后

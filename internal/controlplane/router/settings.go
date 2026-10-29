@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// SettingsHandler 平台配置路由处理器（FR-063 / ADR-015）。
+// SettingsHandler 平台配置路由处理器（ADR-015）。
 // 挂在 admin 分组下，仅平台管理员可访问。
 type SettingsHandler struct {
 	svc *service.SettingsService

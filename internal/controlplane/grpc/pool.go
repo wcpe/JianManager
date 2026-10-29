@@ -15,7 +15,7 @@ type Client struct {
 	NodeUUID string
 }
 
-// TunnelProvider 提供节点反向隧道通道（FR-281，见 ADR-066）；由 TunnelRegistry 实现。
+// TunnelProvider 提供节点反向隧道通道（见 ADR-066）；由 TunnelRegistry 实现。
 // 以接口声明避免 pool 对隧道实现的硬依赖（测试可注入假 provider）。
 type TunnelProvider interface {
 	Channel(nodeUUID string) (grpc.ClientConnInterface, bool)
@@ -48,7 +48,7 @@ func (p *ClientPool) SetWorkerClientForTest(nodeUUID string, worker workerpb.Wor
 	p.testClients[nodeUUID] = &Client{Worker: worker, NodeUUID: nodeUUID}
 }
 
-// SetTunnelProvider 注入反向隧道来源（FR-281）；main 装配时调用一次。
+// SetTunnelProvider 注入反向隧道来源；main 装配时调用一次。
 func (p *ClientPool) SetTunnelProvider(tp TunnelProvider) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

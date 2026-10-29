@@ -9,8 +9,8 @@ import {
 
 const SPARK_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
 
-/**
- * 关键指标概览（FR-221）：一屏看选中 target 的关键指标当前值 + 趋势缩略（sparkline）。
+/** 
+ * 关键指标概览：一屏看选中 target 的关键指标当前值 + 趋势缩略（sparkline）。
  * 纯消费已取的原始序列（raw），按 target 的指标目录装配格子。当前值缺测显示 —。
  */
 export function MetricsOverviewStrip({

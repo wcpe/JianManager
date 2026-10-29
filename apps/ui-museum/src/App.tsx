@@ -92,7 +92,7 @@ import { RangePicker, ResolutionPicker } from '@jianmanager/ui/charts/RangePicke
 import { Sparkline } from '@jianmanager/ui/charts/Sparkline'
 import { TimeSeriesChart } from '@jianmanager/ui/charts/TimeSeriesChart'
 
-/**
+/** 
  * 两条演示序列各自命名后再组数组。
  *
  * 不写 `rawSeries[0]` / `rawSeries[1]`：索引访问在 noUncheckedIndexedAccess 下类型是
@@ -135,7 +135,7 @@ const chartSeries: ChartSeries[] = [
 
 /** 博物馆用的演示数据源：受控组件不自行取数，数据经 source 注入。 */
 
-/**
+/** 
  * 博物馆分区清单 —— 侧边栏按它渲染，一次只展示一个分区。
  *
  * 为什么分批而不是一长页：这是**组件库/控件博物馆**，用途是「按需查某个控件长什么样」；
@@ -570,7 +570,7 @@ export default function App() {
           </Tabs>
         </Section>
 
-        {/* 布局层（FR-502 阶段 3 + 阶段 6 收尾）：此前一处都没收录，页面迁移依赖它却无从在此核对。
+        {/* 布局层（阶段 3 + 阶段 6 收尾）：此前一处都没收录，页面迁移依赖它却无从在此核对。
             它是「一页内部怎么摆」的唯一出处——页面只从这里取原语，不再手写 space-y / grid-cols 骨架类名。 */}
         <Section id="layout" active={section} title="布局" hint="页面壳与布局原语">
           <p className="text-[11px] text-muted-foreground">

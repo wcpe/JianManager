@@ -6,12 +6,12 @@ import { loginMockUser } from '@/test/auth'
 import ExplorerTabHost from './ExplorerTabHost'
 import { resetTabIdSeq } from '@/lib/explorer/explorer-tabs'
 
-/**
- * FR-376：多标签宿主 DOM——新标签、切换、弹出/收回。
+/** 
+ *：多标签宿主 DOM——新标签、切换、弹出/收回。
  * ResourceExplorer 走 mock 假后端，需 loginMockUser。
  * 注意：「新标签」不可用子串正则，会误匹配「在浏览器新标签打开」。
  */
-describe('ExplorerTabHost（FR-376）', () => {
+describe('ExplorerTabHost', () => {
   beforeEach(() => {
     resetTabIdSeq(0)
     loginMockUser()

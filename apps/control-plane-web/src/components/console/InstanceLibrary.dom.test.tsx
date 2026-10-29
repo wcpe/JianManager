@@ -8,8 +8,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import InstanceLibrary from './InstanceLibrary'
 
-/**
- * 超级工作台实例库（FR-167）虚拟化 + 服务端搜索强断言：
+/** 
+ * 超级工作台实例库虚拟化 + 服务端搜索强断言：
  * ① 折叠态只出展开按钮；② 展开态走 /instances/search 渲染 seed；
  * ③ 1000+ 实例只挂可视窗口（DOM 行数受限，不全量挂载）；
  * ④ 搜索下发服务端 q；⑤ 展开按钮有 aria-label；⑥ 加载态出骨架。
@@ -136,7 +136,7 @@ describe('InstanceLibrary（mock 假后端）', () => {
     expect(await screen.findByTestId('instance-library-skeleton')).toBeInTheDocument()
   })
 
-  /**
+  /** 
    * 拖拽期间源行必须留在 DOM 里。
    *
    * 原生 HTML5 拖拽在源元素被卸载时会被静默取消，且**不触发 `dragend`**——用户拖到一半

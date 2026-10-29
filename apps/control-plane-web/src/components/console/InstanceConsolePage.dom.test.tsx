@@ -19,7 +19,7 @@ function collectKillRequests() {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/** FR-269：服务器统一控制台 mock-api 原型。 */
+/** 服务器统一控制台 mock-api 原型。 */
 describe('InstanceConsolePage', () => {
   beforeEach(() => {
     loginMockUser()
@@ -28,7 +28,7 @@ describe('InstanceConsolePage', () => {
   it('渲染服务器状态条、固定分区和概览 KPI', async () => {
     renderWithProviders(<InstanceConsolePage instanceId={1} />)
 
-    // 瘦身顶栏（FR-412）：标题只留实例名，「服务器控制台 /」前缀与副标题已删；
+    // 瘦身顶栏：标题只留实例名，「服务器控制台 /」前缀与副标题已删；
     // 「打开终端」按钮亦删（控制台就是一个页签，无需重复入口）。
     expect(await screen.findByRole('heading', { name: 'survival-1' })).toBeInTheDocument()
     expect(screen.getByText('运行')).toBeInTheDocument()
@@ -43,14 +43,14 @@ describe('InstanceConsolePage', () => {
     expect(screen.getAllByText('CPU')).toHaveLength(2)
     expect(screen.getAllByText('内存')).toHaveLength(2)
     expect(screen.getAllByText('TPS').length).toBeGreaterThan(0)
-    // 三卡合流（FR-423）：「最近事件 / 关注事项 / 崩溃诊断」并为一条「动态与告警」流。
+    // 三卡合流：「最近事件 / 关注事项 / 崩溃诊断」并为一条「动态与告警」流。
     expect(screen.getByText('动态与告警')).toBeInTheDocument()
     expect(screen.queryByText('最近事件')).toBeNull()
     expect(screen.queryByText('关注事项')).toBeNull()
     expect(screen.getByText('运行日志预览')).toBeInTheDocument()
   })
 
-  it('Tab 重组（FR-413）：环境变量并入文件配置分段，?tab=env 旧深链仍落到该分段', async () => {
+  it('Tab 重组：环境变量并入文件配置分段，?tab=env 旧深链仍落到该分段', async () => {
     const user = userEvent.setup()
     renderWithProviders(<InstanceConsolePage instanceId={1} />, { route: '/instances/1?tab=env' })
 
@@ -82,7 +82,7 @@ describe('InstanceConsolePage', () => {
     expect(screen.getByRole('tab', { name: '概览' })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('强杀必须经危险操作确认框，确认后才发 kill 请求（FR-059）', async () => {
+  it('强杀必须经危险操作确认框，确认后才发 kill 请求', async () => {
     // DangerConfirm scope=group 要求 role>=1（loginMockUser 的 token 解不出 role）。
     useAuthStore.setState({ role: 1, isAuthenticated: true })
     const user = userEvent.setup()
@@ -104,7 +104,7 @@ describe('InstanceConsolePage', () => {
     }
   })
 
-  it('取消危险操作确认框不发 kill 请求（FR-059）', async () => {
+  it('取消危险操作确认框不发 kill 请求', async () => {
     useAuthStore.setState({ role: 1, isAuthenticated: true })
     const user = userEvent.setup()
     const spy = collectKillRequests()

@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// Beacon 拓扑拉取工具（FR-444，见 ADR-090）。
+// Beacon 拓扑拉取工具（见 ADR-090）。
 //
 // 与 instance_group_* 系列同权限面（读 instance.read、写 instance.write）：
 // 拉取改的是分组树与实例标签（归属类信息），不是实例内容。

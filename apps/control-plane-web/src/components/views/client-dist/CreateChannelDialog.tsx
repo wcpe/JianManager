@@ -15,7 +15,7 @@ import {
   scrollableDialogContentClass,
 } from '@jianmanager/ui/components/scrollable-dialog'
 
-/** 创建频道请求体（FR-187）。 */
+/** 创建频道请求体。 */
 export interface CreateChannelBody {
   channelId: string
   name: string
@@ -35,7 +35,7 @@ export interface CreateChannelDialogProps {
   onNotify?: (level: 'success' | 'error', message: string) => void
 }
 
-/** 创建频道模态（FR-187，取代原内联展开表单；内容自适应壳）。 */
+/** 创建频道模态（取代原内联展开表单；内容自适应壳）。 */
 export function CreateChannelDialog({
   open,
   onOpenChange,

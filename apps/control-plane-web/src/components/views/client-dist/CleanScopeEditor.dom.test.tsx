@@ -5,8 +5,8 @@ import { renderWithProviders } from '@/test/render'
 import { CleanScopeEditor } from '@/components/views/client-dist/CleanScopeEditor'
 import type { ManifestFileLike } from '@/lib/client-dist/client-publish-wizard'
 
-/**
- * CleanScopeEditor 组件测试（FR-262）：
+/** 
+ * CleanScopeEditor 组件测试：
  * 三态标记、右键菜单、多选、父子联动、产出正确、clean-all 全红。
  */
 
@@ -69,7 +69,7 @@ function clickMenuItem(menuId: string) {
   fireEvent.click(btn)
 }
 
-describe('CleanScopeEditor（FR-262）', () => {
+describe('CleanScopeEditor', () => {
   beforeEach(() => {
     lastChange = null
   })

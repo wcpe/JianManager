@@ -11,14 +11,14 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BusinessHandler JBIS 业务对接下发路由处理器（FR-116/FR-121，见 ADR-026/029）。
+// BusinessHandler JBIS 业务对接下发路由处理器（见 ADR-026/029）。
 // 把前端发起的业务动作（domain.action + payload）经探针桥下发到目标实例的业务对接层；
 // CP 插件无关，仅转发信封、透传结果。探针未连/域不可用由 service 层降级（200 + available=false）。
 //
-// 高危写（write=true，对应 manifest readOnly=false）叠加 FR-121 横切硬化：独立权限节点
+// 高危写（write=true，对应 manifest readOnly=false）叠加横切硬化：独立权限节点
 // instance:business:write + 注入幂等键/操作者上下文（service.DispatchWrite）+ 既有审计留痕。
 //
-// FR-521 / ADR-106：本文件只保留 Dispatch 与 Manifest 两个通道端点。JM 不做任何业务——
+// ADR-106：本文件只保留 Dispatch 与 Manifest 两个通道端点。JM 不做任何业务——
 // 不认识 domain 语义、不为任何业务域做特判，四个业务读接口（events / economy.*）已退役。
 type BusinessHandler struct {
 	bizSvc *service.BusinessService
@@ -37,21 +37,21 @@ type businessDispatchRequest struct {
 	Domain  string `json:"domain"`
 	Action  string `json:"action"`
 	Payload string `json:"payload"` // 结构化业务参数 JSON 字符串（CP 不解析，原样下发）
-	// Write 标记是否为高危写动作（前端据 manifest readOnly 取反，FR-121）。
+	// Write 标记是否为高危写动作（前端据 manifest readOnly 取反）。
 	// true → 需 instance:business:write + 注入幂等键/操作者上下文 + 审计留痕；
-	// false/缺省 → 维持 FR-116 只读行为（instance:operate，不注入、不记业务写审计）。
+	// false/缺省 → 维持只读行为（instance:operate，不注入、不记业务写审计）。
 	Write bool `json:"write"`
-	// OperationID 写动作幂等标识（前端生成的稳定 UUID，对同一逻辑操作的重试不变，FR-121）。
+	// OperationID 写动作幂等标识（前端生成的稳定 UUID，对同一逻辑操作的重试不变）。
 	// CP 原样注入 payload taskId；缺省时 service 兜底生成（但失去重试去重）。
 	OperationID string `json:"operationId"`
-	// Reason 操作原因（可选，写动作原样透传给下游 + JM 审计，FR-121）。
+	// Reason 操作原因（可选，写动作原样透传给下游 + JM 审计）。
 	Reason string `json:"reason"`
 }
 
 // Dispatch POST /instances/:id/business — 向某实例下发一条业务命令并取回结果。
 //
-// 读动作（write=false/缺省）：权限 instance:operate，payload 原样下发（FR-116）。
-// 写动作（write=true）：权限 instance:business:write，注入幂等键 + 操作者上下文并记审计（FR-121/ADR-029）。
+// 读动作（write=false/缺省）：权限 instance:operate，payload 原样下发。
+// 写动作（write=true）：权限 instance:business:write，注入幂等键 + 操作者上下文并记审计（ADR-029）。
 // 两者均须实例可访问。探针未连/域不可用由 service 降级（200 + available=false + error），不返回 5xx。
 func (h *BusinessHandler) Dispatch(c *gin.Context) {
 	id, err := parseID(c)
@@ -65,7 +65,7 @@ func (h *BusinessHandler) Dispatch(c *gin.Context) {
 	}
 
 	access := getAccess(c)
-	// 写动作要求独立高危写权限节点；读动作维持 instance:operate（FR-121）。
+	// 写动作要求独立高危写权限节点；读动作维持 instance:operate。
 	requiredPerm := service.PermInstanceOperate
 	if req.Write {
 		requiredPerm = service.PermInstanceBusinessWrite
@@ -107,10 +107,10 @@ func (h *BusinessHandler) Dispatch(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// recordWriteAudit 记录高危写的 JM 侧审计（FR-121，复用既有 AuditService）。
+// recordWriteAudit 记录高危写的 JM 侧审计（复用既有 AuditService）。
 // 仅在成功下发后记录；审计失败不阻断主流程（与 PlayerHandler.recordAudit 一致）。
 //
-// 审计边界（FR-521 / ADR-106）：只记通道事实（domain/action/幂等键/原因/是否可用），
+// 审计边界（ADR-106）：只记通道事实（domain/action/幂等键/原因/是否可用），
 // payload 与 output 一律不入审计——JM 不理解任何业务语义，也不承担业务数据的存储与查询责任。
 func (h *BusinessHandler) recordWriteAudit(c *gin.Context, instanceID uint, req businessDispatchRequest, res *service.BusinessResult) {
 	if h.audit == nil {
@@ -140,7 +140,7 @@ func getUsername(c *gin.Context) string {
 	return name
 }
 
-// Manifest GET /instances/:id/business/manifest — 取某实例的业务能力清单（JBIS 元查询，FR-116）。
+// Manifest GET /instances/:id/business/manifest — 取某实例的业务能力清单（JBIS 元查询）。
 // 只读发现，权限 instance:read 且实例须可访问。探针未连/无业务 Provider 由 service 降级（200 + available=false）。
 func (h *BusinessHandler) Manifest(c *gin.Context) {
 	id, err := parseID(c)

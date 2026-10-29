@@ -1,9 +1,9 @@
 package router
 
-// FR-515 Phase D：AI 助手对话运行时 HTTP/SSE 层。
+// Phase D：AI 助手对话运行时 HTTP/SSE 层。
 //
 // 分层关系（阅读顺序）：
-//   - assistant.go 是 FR-514 的**配置面**（供应商/模型/默认模型/出站准入），本文件不碰它；
+// assistant.go 是的**配置面**（供应商/模型/默认模型/出站准入），本文件不碰它；
 //   - service/assistant_chat.go 是 Phase C 的**运行时本体**（会话/消息/run/事件的状态机），
 //     本文件只调用它已导出的方法，不复制任何状态迁移逻辑；
 //   - 本文件只做三件事：参数解析、错误 → HTTP 语义映射、事件流的传输形态。
@@ -53,7 +53,7 @@ const (
 	assistantStreamPingInterval = 15 * time.Second
 )
 
-// AssistantChatHandler 对话运行时路由处理器（FR-515 Phase D）。
+// AssistantChatHandler 对话运行时路由处理器（Phase D）。
 type AssistantChatHandler struct {
 	svc *service.AssistantChatService
 }
@@ -80,7 +80,7 @@ func (h *AssistantChatHandler) RegisterRoutes(r *gin.RouterGroup) {
 	conv.PATCH("/:id", h.UpdateConversation)
 	conv.DELETE("/:id", h.DeleteConversation)
 	conv.GET("/:id/messages", h.ListMessages)
-	// 历史工具回显（FR-519 补缺）：按 messageId 聚合当时的工具调用与结果。
+	// 历史工具回显（补缺）：按 messageId 聚合当时的工具调用与结果。
 	conv.GET("/:id/tool-calls", h.ListMessageToolCalls)
 	conv.POST("/:id/runs", h.SubmitRun)
 
@@ -88,20 +88,20 @@ func (h *AssistantChatHandler) RegisterRoutes(r *gin.RouterGroup) {
 	runs.GET("/:runId/events", h.ListRunEvents)
 	runs.GET("/:runId/stream", h.StreamRun)
 	runs.POST("/:runId/cancel", h.CancelRun)
-	// FR-516 §7：该 run 的待确认列表（仅所有者）。
+	// §7：该 run 的待确认列表（仅所有者）。
 	runs.GET("/:runId/confirmations", h.ListConfirmations)
 
-	// FR-516 §7：逐调用确认。**只接受人类 JWT**——确认端点不能由模型/Agent 调用，
+	// §7：逐调用确认。**只接受人类 JWT**——确认端点不能由模型/Agent 调用，
 	// 因此它挂在本组（需登录、且判据是 session 归属），而不是任何 Token 鉴权组。
 	confirmations := r.Group("/confirmations")
 	confirmations.GET("/:id", h.GetConfirmation)
 	confirmations.POST("/:id/decide", h.DecideConfirmation)
 
-	// 技能管理（FR-541）：只读列举 + 手动重新扫描。
+	// 技能管理：只读列举 + 手动重新扫描。
 	//
 	// **必须仅平台管理员**：技能内容会拼进系统提示词，能改技能的人就能影响
-	// 模型被指示做什么。这里复用 assistant 的管理员门禁（与 FR-514/517 同一口径）。
-	// 历史编辑与回退（FR-543）：属会话内容操作，判据是会话归属（不是权限节点）。
+	// 模型被指示做什么。这里复用 assistant 的管理员门禁（与517 同一口径）。
+	// 历史编辑与回退：属会话内容操作，判据是会话归属（不是权限节点）。
 	r.PATCH("/messages/:id", h.EditMessage)
 	r.POST("/conversations/:id/rollback", h.RollbackConversation)
 
@@ -215,7 +215,7 @@ func (h *AssistantChatHandler) DecideConfirmation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"id": ticket.ID, "status": ticket.Status})
 }
 
-// writeConfirmError 确认票据的错误映射（FR-516 §7）。
+// writeConfirmError 确认票据的错误映射（§7）。
 //
 // 与对话错误分开：票据有自己的 410 / 409 语义（过期 / 已消费 / 已失效），
 // 混进通用映射会让客户端分不清「该重新出票」还是「该重新提交」。
@@ -318,7 +318,7 @@ func writeAssistantChatError(c *gin.Context, err error, notFoundCode string) {
 	case errors.Is(err, service.ErrAssistantInvalidCursor):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_CURSOR", "message": err.Error()})
 	case errors.Is(err, service.ErrAssistantContextTooLarge):
-		// FR-518 §6：整个上下文超 4 KiB 属「请求体异常」，必须拒收而不是裁剪后继续——
+		// §6：整个上下文超 4 KiB 属「请求体异常」，必须拒收而不是裁剪后继续——
 		// 继续裁剪会让用户以为上下文完整送达。
 		c.JSON(http.StatusBadRequest, gin.H{"error": "CONTEXT_TOO_LARGE", "message": err.Error()})
 	case errors.Is(err, service.ErrAssistantInvalid):
@@ -346,7 +346,7 @@ func (h *AssistantChatHandler) ListConversations(c *gin.Context) {
 	if !ok {
 		return
 	}
-	// `q` 为服务端检索（FR-542 §5.1）：命中标题或消息正文，不在前端过滤全量。
+	// `q` 为服务端检索（§5.1）：命中标题或消息正文，不在前端过滤全量。
 	items, next, err := h.svc.ListConversationsFiltered(currentUserID(c),
 		service.AssistantConversationFilter{Keyword: c.Query("q")}, c.Query("cursor"), limit)
 	if err != nil {
@@ -509,7 +509,7 @@ func (h *AssistantChatHandler) ListMessages(c *gin.Context) {
 type submitRunRequest struct {
 	// Text 本轮用户消息正文（必填，长度上限由 runtime 判定）。
 	Text string `json:"text"`
-	// ContextSnapshot 页面上下文快照（FR-518 写入）：本层只原样透传，不解析。
+	// ContextSnapshot 页面上下文快照（写入）：本层只原样透传，不解析。
 	ContextSnapshot *string `json:"contextSnapshot"`
 }
 
@@ -855,7 +855,7 @@ func isTerminalAssistantRunStatus(status string) bool {
 	return false
 }
 
-// editMessageRequest 编辑用户消息（FR-543 §6.2）。
+// editMessageRequest 编辑用户消息（§6.2）。
 type editMessageRequest struct {
 	Content string `json:"content"`
 }
@@ -885,7 +885,7 @@ func (h *AssistantChatHandler) EditMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, msg)
 }
 
-// assistantRollbackRequest 回退到某条消息（FR-543 §6.3）。
+// assistantRollbackRequest 回退到某条消息（§6.3）。
 type assistantRollbackRequest struct {
 	MessageID uint `json:"messageId"`
 }

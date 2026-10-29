@@ -29,8 +29,8 @@ import { resolveWorkspacePath } from '@/lib/console/workspace-navigation'
 import type { WorkspaceDef } from '@/lib/console/workspace-navigation'
 import { isDeepLink } from '@/lib/hooks/use-workspace-navigation'
 
-/**
- * 工作区外壳侧栏（FR-502 阶段 6）：把「资源优先工作区」原型的侧栏接进主控台。
+/** 
+ * 工作区外壳侧栏（阶段 6）：把「资源优先工作区」原型的侧栏接进主控台。
  *
  * 【与 `ConsoleSidebar` 的关系：新增，不替换文件】旧侧栏把六域 37 条路由铺成可展开长列表
  * （原型要修的正是这一点），新侧栏把四个工作区各装**自己的**入口，只做两件事：
@@ -52,7 +52,7 @@ function navigableEntries(group: { children?: NavEntry[] }): NavEntry[] {
   return (group.children ?? []).filter((entry) => !isDeepLink(entry.to))
 }
 
-/**
+/** 
  * 当前路径命中的登记项（`workspace-navigation.ts` 的匹配结果）。
  * 激活判定统一走它而不是各写一遍 `startsWith`：这样 `/instances/new` 归向导、
  * `/instances/:id` 归实例控制台，与工作区归属判定同一套优先级。
@@ -76,7 +76,7 @@ export interface WorkspaceSidebarPermissions {
   loaded: boolean
 }
 
-/**
+/** 
  * 链接渲染入参：与旧控制台侧栏共用同一份（见 {@link SidebarLinkArgs}），
  * 此处保留旧名以免已引用它的代码改动。
  */
@@ -101,7 +101,7 @@ export interface WorkspaceSidebarProps {
   appVersion: string
   /** 语言切换（与主题/「更多」并排在同一行）。 */
   language: { current: string; onChange: (lng: string) => void }
-  /**
+  /** 
    * 折叠/展开侧栏。
    *
    * 【为什么底部也要一个】顶栏那个按钮在折叠态是 `{!collapsed && …}`（DOM 卸载），
@@ -113,8 +113,8 @@ export interface WorkspaceSidebarProps {
   themeSwitcher: Pick<ThemeSwitcherProps, 'colorTheme' | 'theme' | 'onColorThemeChange' | 'onThemeChange'>
 }
 
-/**
- * 控制台侧栏（FR-502 阶段 6）：`ConsoleSidebar` 的接替者。受控视图——数据与路由一律由
+/** 
+ * 控制台侧栏（阶段 6）：`ConsoleSidebar` 的接替者。受控视图——数据与路由一律由
  * props 注入，本文件不触达 api / store / 路由（ADR-103）。
  *
  * 【折叠动画：宽度过渡只由侧栏自己承担】旧外壳把宽度过渡放在内层 `jm-sidebar-drawer`、
@@ -271,7 +271,7 @@ function OpsShortcuts({
   )
 }
 
-/**
+/** 
  * 非服务器运维工作区的入口列表：展开态按分组分段、折叠态摊平为图标。
  *
  * 【折叠态为什么另走一条分支】只剩 54px，装不下文字，原型
@@ -334,11 +334,11 @@ function WorkspaceEntrySections({
   )
 }
 
-/**
- * 底部偏好块（FR-132 版本号与许可 / FR-164 主题色与明暗）。
+/** 
+ * 底部偏好块（版本号与许可主题色与明暗）。
  *
  * 为什么在「照原型换侧栏」时还留着它：这三项当前**只有侧栏这一个入口**——
- * `/settings` 的「外观」分组明说不重复主题色（见 `SettingsPage` 注释，FR-164），
+ * `/settings` 的「外观」分组明说不重复主题色（见 `SettingsPage` 注释），
  * 版本号也只在旧侧栏页脚渲染。在 `/settings` 真正接住主题色与版本之前删掉本块，
  * 等于把已交付的入口抹掉。
  */
@@ -366,7 +366,7 @@ function SidebarPreferences({
     <div
       data-slot="console-sidebar-preferences"
       className={cn(
-        /*
+        /* 
           【间距收敛】此前是 `mt-[6px] pt-[7px]`，叠加 `SideNavBottom` 自身的 `p-[10px]`
           与版本行 `pt-1.5`，在没有工具行时底部区高达 85px（其中 33px 全是留白）——
           用户反馈「没有放入按钮的时候过于高」。这里把外边距与上内边距压到 2/4，
@@ -443,7 +443,7 @@ function SidebarPreferences({
   )
 }
 
-/**
+/** 
  * 语言切换（中/英两档，与 `/settings` 的「外观」同源）。
  *
  * 为什么用下拉而不是一个「切换」按钮：当前语言要能一眼看出来；两档下拉的点击成本
@@ -480,8 +480,8 @@ function LanguageButton({ language }: { language: { current: string; onChange: (
   )
 }
 
-/**
- * 一行工作区导航（FR-502 阶段 6）：统一 `SideNavRow` 的调用口径。
+/** 
+ * 一行工作区导航（阶段 6）：统一 `SideNavRow` 的调用口径。
  * 行样式只有 ui 包一处真源，这里只负责「激活判定 / 折叠态可访问名 / 链接语义」三件事。
  *
  * 语义是**链接**，所以外层包 `<Link>` 拿真 `<a href>`：可聚焦、支持中键与 Ctrl+点击、

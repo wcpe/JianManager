@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// mcpTextContentMaxBytes 是 MCP 文本正文上限（FR-397）：MCP 只承载小文本，
+// mcpTextContentMaxBytes 是 MCP 文本正文上限：MCP 只承载小文本，
 // 超限内容一律引导走流式传输票据，避免大字节经 JSON-RPC 往返。
 const mcpTextContentMaxBytes = 512 * 1024
 
@@ -84,8 +84,8 @@ func countInvalidUTF8(sample []byte) (invalid, total int) {
 	return invalid, total
 }
 
-// requireExactConfirm 危险操作的服务端精确确认（FR-397 §2.4）。
-// 该函数刻意保持独立无依赖，便于与 FR-396 的 RequiresConfirm 目录机制收敛为一份。
+// requireExactConfirm 危险操作的服务端精确确认（§2.4）。
+// 该函数刻意保持独立无依赖，便于与的 RequiresConfirm 目录机制收敛为一份。
 func requireExactConfirm(field, expected, got string) error {
 	if strings.TrimSpace(got) == "" {
 		return fmt.Errorf("危险操作需显式确认：请提供 %s 且与目标完全一致", field)
@@ -202,4 +202,4 @@ func instancePathSchema(pathDesc string, pathRequired bool, extra map[string]any
 	return map[string]any{"type": "object", "properties": props, "required": req}
 }
 
-// stringProp/numberProp 定义见 tools_bot_schema.go（FR-396/397/398 共享 schema 小工具）。
+// stringProp/numberProp 定义见 tools_bot_schema.go（397/398 共享 schema 小工具）。

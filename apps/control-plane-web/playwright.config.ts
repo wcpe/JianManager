@@ -4,8 +4,8 @@ const requestedE2EPort = process.env.PLAYWRIGHT_PORT ?? '5173'
 const e2ePort = /^\d{2,5}$/.test(requestedE2EPort) ? requestedE2EPort : '5173'
 const e2eBaseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${e2ePort}`
 
-/**
- * Playwright E2E（FR-211）：跑 mock 模式整站（VITE_MOCK，无需真后端），验关键跨页流。
+/** 
+ * Playwright E2E：跑 mock 模式整站（VITE_MOCK，无需真后端），验关键跨页流。
  * 与 vitest 组件测互补——E2E 抓登录/导航/实例生命周期等真浏览器端到端，逐页细节归 jsdom。
  */
 export default defineConfig({
@@ -18,7 +18,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
-  /**
+  /** 
    * 断言默认 5 秒对本站偏紧：mock 种子是约 1200 实例 / 12000 日志的量级，
    * 而导航重构后首屏还要按路由分块多下载几个 chunk——实测若干页面从 goto 到页头出现
    * 需要 8 秒以上。于是「goto 后 expect(标题).toBeVisible()」这个全站到处都在用的写法

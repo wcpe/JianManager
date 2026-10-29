@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 历史编辑与回退（FR-543）。核心断言都围绕「不删数据、可解释、不越权」。
+// 历史编辑与回退。核心断言都围绕「不删数据、可解释、不越权」。
 func newHistoryDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := openTestSQLite(t)

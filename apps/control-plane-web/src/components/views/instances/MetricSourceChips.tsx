@@ -3,8 +3,8 @@ import { cn } from '@jianmanager/ui'
 import { activeMetricSources, metricSourceLabelKey } from '@/lib/metrics/metrics-availability'
 import type { AvailabilityBits } from '@/lib/metrics/metrics-availability'
 
-/**
- * 数据来源标注（FR-447）：按 `探针 → SLP → Query` 优先级列出本拍命中来源。
+/** 
+ * 数据来源标注：按 `探针 → SLP → Query` 优先级列出本拍命中来源。
  *
  * 三源皆无时不渲染（由调用方显式渲染「不可用」）。`title` 悬停展示完整清单，
  * `data-metric-sources` 供测试断言（如 `probe,slp`）。

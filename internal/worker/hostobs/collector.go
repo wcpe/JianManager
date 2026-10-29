@@ -1,4 +1,4 @@
-// Package hostobs 采集主机级观测数据（FR-513）。
+// Package hostobs 采集主机级观测数据。
 //
 // ## 为什么单独成包而不是堆进 heartbeat
 //

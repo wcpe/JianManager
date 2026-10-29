@@ -12,7 +12,7 @@ import { OverviewPageView } from '@/components/views/overview/OverviewPageView'
 import type { AttributionGauge } from '@/components/views/overview/OverviewPageView'
 import { saveHomeMode, homeModeHref } from '@/lib/shared/home-mode'
 
-/**
+/** 
  * 概览页容器（ADR-103 a 范式）：六个查询、平台观测区权限判定、两处受控状态与三处接线都在这里决定，
  * 仪表盘、三张聚合卡、三张平台卡、趋势图与密集实例表交共享视图。
  *
@@ -27,11 +27,11 @@ export default function OverviewPage() {
   // 已展开的归因 Tooltip；null=全部收起（此时归因查询不发起）。
   const [activeGauge, setActiveGauge] = useState<AttributionGauge | null>(null)
   const isPlatformAdmin = useAuthStore((state) => state.role === 10)
-  // FR-432：平台观测区与权限树对齐（node.read / monitor.read 或超管）
+  // 平台观测区与权限树对齐（node.read / monitor.read 或超管）
   const hasPerm = usePermissionsStore((s) => s.hasPerm)
   const canSeePlatformObs = isPlatformAdmin || hasPerm('monitor.read') || hasPerm('node.read')
   const { data: nodes } = useNodes()
-  /**
+  /** 
    * 实例数据分两路取，各自只拿需要的量：
    *
    * - 异常卡片只要 CRASHED 的前 5 条，交给服务端按状态过滤——原先是先拉全集再本地筛，
@@ -40,7 +40,7 @@ export default function OverviewPage() {
    *   不再一次性拉全量（`useInfiniteInstanceSearch` 就是为 1000+ 实例的滚动浏览设计的）
    */
   const { data: overview } = useMetricOverview(range)
-  /*
+  /* 
     【首页不再自带实例列表】原先这里还跑着 `useInfiniteInstanceSearch`（不限量无限滚动）
     并在页底铺全量实例表——它与「服务器」页的完整版本重复，且是本页渲染量的大头
     （约 783 个元素、单次主线程阻塞约 360ms）。移除后整页元素数与阻塞都随之下降；
@@ -58,7 +58,7 @@ export default function OverviewPage() {
   const deferredOverview = useDeferredValue(overview)
   const attribution = useResourceAttribution(activeGauge !== null, activeGauge === 'memory' ? 'memory' : 'cpu')
   const platformObservability = usePlatformObservabilityOverview(canSeePlatformObs)
-  /*
+  /* 
     【首页补两个区块】
     - 玩家在线趋势：游戏服首页最该回答「现在多少人在玩、高峰在哪」，而这条数据早就有了，
       首页却一直没有。
@@ -68,8 +68,8 @@ export default function OverviewPage() {
     趋势自带 peakValue / dailyAvg / hourlyDist，无需前端二次聚合。
   */
   const playerTrend = usePlayerTrend({ range, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })
-  /*
-    可用性 SLO（FR-463）：不单独占卡，并入趋势卡头部一行。
+  /* 
+    可用性 SLO：不单独占卡，并入趋势卡头部一行。
     它属于「长期健康」指标而非日常盯盘指标，但顺手看到又有价值（用户选择塞进现有卡片）。
     目标经 target 参数下发；口径与监控页同一接口，避免两处各算一套。
   */
@@ -103,12 +103,12 @@ export default function OverviewPage() {
           {children}
         </Link>
       )}
-      // 切回 AI 对话首页（FR-520 §4.4）：**先写记忆再导航**。
+      // 切回 AI 对话首页（§4.4）：**先写记忆再导航**。
       // 顺序不能反——先导航会让新页面按旧记忆再判一次模式，出现一次闪回；
       // 且必须显式去掉 `home` 参数，否则经典的 `?home=classic` 会压过新写入的记忆。
       onSwitchToAssistant={() => {
         saveHomeMode('assistant')
-        // 保留现有查询参数（FR-520 §8）：`home` 由 homeModeHref 删掉，
+        // 保留现有查询参数（§8）：`home` 由 homeModeHref 删掉，
         // 其余（range 等）原样带走，用户切回经典时筛选条件还在。
         navigate(homeModeHref(null, window.location.search))
       }}

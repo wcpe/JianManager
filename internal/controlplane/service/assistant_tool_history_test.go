@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 历史工具回显（FR-519）：这些数据一直落在事件流里，此前没有读取面。
+// 历史工具回显：这些数据一直落在事件流里，此前没有读取面。
 // 断言围绕三件事：跨事件正确归并、缺 status 时能从 result 推断出终态、
 // 以及「别人的会话读不到」。
 func newToolHistoryDB(t *testing.T) *gorm.DB {

@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// OrphanRuntimeStatus 无主运行时处置状态（FR-326）。
+// OrphanRuntimeStatus 无主运行时处置状态。
 type OrphanRuntimeStatus string
 
 const (
@@ -21,7 +21,7 @@ const (
 	OrphanRuntimeCancelled OrphanRuntimeStatus = "cancelled"
 )
 
-// OrphanRuntime 记录 Worker 有、CP 无实例记录的无主运行时（FR-326 反向对账）。
+// OrphanRuntime 记录 Worker 有、CP 无实例记录的无主运行时（反向对账）。
 // 不重建业务实例，仅跟踪发现/宽限/处置；处置后终态保留供列表与审计对照。
 type OrphanRuntime struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`

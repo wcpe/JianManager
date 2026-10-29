@@ -19,7 +19,7 @@ const (
 	logViewAll          = "all"
 )
 
-// LogHandler 日志中心路由处理器（FR-049 查询 + 导出）。
+// LogHandler 日志中心路由处理器（查询 + 导出）。
 type LogHandler struct {
 	logSvc *service.LogService
 	authz  *service.AuthzService
@@ -39,7 +39,7 @@ func (h *LogHandler) RegisterRoutes(rg *gin.RouterGroup) {
 // buildFilter 从查询参数解析过滤条件，并按授权上下文收敛资源可见范围。
 // 返回 (filter, ok)；ok=false 表示已写出错误响应。
 //
-// 可见性规则（FR-049/FR-050/FR-403 权限）：
+// 可见性规则（权限）：
 //   - 平台管理员：可选平台、节点/实例或全部日志视图；
 //   - 组成员/组管理员：仅见有权实例的节点/实例日志，平台和全部视图均拒绝。
 func (h *LogHandler) buildFilter(c *gin.Context) (service.LogFilter, bool) {
@@ -119,7 +119,7 @@ func (h *LogHandler) buildFilter(c *gin.Context) (service.LogFilter, bool) {
 	return f, true
 }
 
-// List 日志分页查询（FR-049/FR-050），支持页码与游标两种分页（FR-419）。
+// List 日志分页查询，支持页码与游标两种分页。
 //
 // 分页模式由参数选择，二者并存互不影响（spec §4.2）：
 //   - 页码（默认）：`page` / `pageSize`，返回 `{items,total,page,pageSize}`——日志中心翻页与
@@ -169,7 +169,7 @@ func (h *LogHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// Export 按当前筛选导出日志为 NDJSON 附件（FR-049/FR-050）。
+// Export 按当前筛选导出日志为 NDJSON 附件。
 func (h *LogHandler) Export(c *gin.Context) {
 	f, ok := h.buildFilter(c)
 	if !ok {

@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url'
 import zh from './zh.json'
 import en from './en.json'
 
-/**
- * 页面 B「客户端分发运维」（FR-430）· i18n 键存在性补充校验（QA 独立补充）。
+/** 
+ * 页面 B「客户端分发运维」· i18n 键存在性补充校验（QA 独立补充）。
  *
  * 背景：既有 `missing-keys.test.ts` 只静态扫描 t 后紧跟引号字面量的调用形态，**漏掉间接键**：
  *  - `labelKey: 'clientDistOps.segLive'` 经 `t(o.labelKey)` 消费；
@@ -20,7 +20,7 @@ import en from './en.json'
 
 const i18nDir = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(i18nDir, '..')
-/**
+/** 
  * 共享 UI 包内「业务视图」的源码根，以及应用侧回迁后的视图根。
  *
  * 页面 B 的组件曾在包与应用之间迁移过（原 `packages/biz-views` → 并入 `@jianmanager/ui`
@@ -94,7 +94,7 @@ function collectReferencedKeys(): Map<string, string[]> {
   return refs
 }
 
-describe('clientDistOps i18n（页面 B · FR-430）', () => {
+describe('clientDistOps i18n（页面 B）', () => {
   const zhKeys = flattenKeys(zh as Record<string, unknown>)
   const enKeys = flattenKeys(en as Record<string, unknown>)
   const referenced = collectReferencedKeys()

@@ -7,7 +7,7 @@ import GroupMembersDialog from '@/components/groups/GroupMembersDialog'
 import { GroupsPageView } from '@/components/views/users/GroupsPageView'
 import type { GroupPanel } from '@/components/views/users/GroupsPageView'
 
-/**
+/** 
  * 用户组管理页容器（ADR-103 b 范式）：组列表取数、创建/编辑/删除三个写动作、平台级删除门禁
  * 与成员对话框的接线都在这里决定，列表、卡片与三个对话框交共享视图。
  *
@@ -24,7 +24,7 @@ export default function GroupsPage() {
   const updateQuota = useUpdateGroupQuota()
   const deleteGroup = useDeleteGroup()
 
-  // 选中组与打开的面板入 URL（FR-128 可寻址）：`?group=<id>` 深链某组、`&panel=edit|members` 打开对应面板；
+  // 选中组与打开的面板入 URL（可寻址）：`?group=<id>` 深链某组、`&panel=edit|members` 打开对应面板；
   // 直接从 searchParams 派生，浏览器前进/后退可复原。创建/删除属瞬时动作，仍走视图本地 state。
   const [searchParams, setSearchParams] = useSearchParams()
   const activeGroupId = (() => {

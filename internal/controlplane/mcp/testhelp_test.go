@@ -27,7 +27,7 @@ func testPrincipal(id uint, name string) *service.AgentPrincipal {
 
 // newStatelessTestDB 建内存库并迁移 MCP 传输层测试所需的表。
 //
-// 只迁移「Token 鉴权 + FR-390 调用流水」两张表：传输层测试要验证的是
+// 只迁移「Token 鉴权调用流水」两张表：传输层测试要验证的是
 // 「请求头 → 中间件归一 → 流水落库」这条链，不涉及工具业务表。
 func newStatelessTestDB(t *testing.T) *gorm.DB {
 	t.Helper()

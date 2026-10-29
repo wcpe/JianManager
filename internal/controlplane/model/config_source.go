@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ConfigSourceKind 受管配置项来源（FR-451 / ADR-092）。
+// ConfigSourceKind 受管配置项来源（ADR-092）。
 // 二态互斥、显式：一项同一时刻只能是内联值或文件引用，杜绝「平台改了却被文件覆盖」的静默冲突。
 type ConfigSourceKind string
 
@@ -22,7 +22,7 @@ func ValidConfigSourceKind(k ConfigSourceKind) bool {
 	return false
 }
 
-// InstanceConfigSource 受管配置项登记表（FR-451）。
+// InstanceConfigSource 受管配置项登记表。
 // ItemKey 是稳定标识，分三类前缀：startup.（启动项）、props.（server.properties 项）、flags.（预留）。
 type InstanceConfigSource struct {
 	ID         uint             `gorm:"primaryKey" json:"id"`

@@ -7,7 +7,7 @@ import { LayoutDashboard } from 'lucide-react'
 import { SidebarNavLink } from '@/components/views/console/SidebarNavLink'
 import type { NavLinkRenderArgs } from '@/components/views/console/SidebarNavLink'
 
-/**
+/** 
  * 侧栏导航链接 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：图标与文案渲染、`/` 精确匹配、激活态样式、嵌套缩进。
@@ -44,7 +44,7 @@ function renderNavLink(props: Partial<ComponentProps<typeof SidebarNavLink>> = {
   )
 }
 
-describe('SidebarNavLink（FR-061 侧栏导航链接）', () => {
+describe('SidebarNavLink（侧栏导航链接）', () => {
   it('渲染图标与文案，to 透传为链接地址。', () => {
     renderNavLink({ icon: LayoutDashboard })
     const link = screen.getByRole('link', { name: /总览/ })

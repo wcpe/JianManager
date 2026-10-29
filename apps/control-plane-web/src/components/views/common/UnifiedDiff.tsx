@@ -1,11 +1,11 @@
-/**
- * Unified diff 着色渲染（FR-141 版本 diff 增删着色）。
+/** 
+ * Unified diff 着色渲染（版本 diff 增删着色）。
  *
  * 逐行判首字符着色，用语义色 token（`--status-*`）：随明暗自适配，且与 Jian 绿 / 青绿双主题正交
  * （状态色不随品牌主题变，见 web/src/index.css 注释「结构色与状态色 --status-* 不动」），
  * 因此增删红绿在两套主题下都稳定成立。
  *
- * 文件/资源版本抽屉（FR-070）与配置版本抽屉（FR-071）共用本组件，避免两处 diff 着色实现分叉。
+ * 文件/资源版本抽屉与配置版本抽屉共用本组件，避免两处 diff 着色实现分叉。
  */
 
 interface UnifiedDiffProps {
@@ -13,7 +13,7 @@ interface UnifiedDiffProps {
   diff: string
 }
 
-/**
+/** 
  * 按 unified diff 行首字符返回语义着色类：
  * `+` 新增着绿、`-` 删除着红、`@@` 与文件头（`---`/`+++`）着中性蓝、上下文行不着色。
  */
@@ -26,7 +26,7 @@ function diffLineClass(line: string): string {
   return '' // 上下文行不着色，继承 <pre> 默认前景
 }
 
-/** 逐行渲染 unified diff 文本，增删行加语义底色 + 前景着色（FR-141）。 */
+/** 逐行渲染 unified diff 文本，增删行加语义底色 + 前景着色。 */
 export function UnifiedDiff({ diff }: UnifiedDiffProps) {
   return (
     <pre className="font-mono text-[10px] leading-5">

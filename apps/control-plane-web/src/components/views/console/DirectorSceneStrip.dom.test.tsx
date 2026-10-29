@@ -8,7 +8,7 @@ import { DirectorSceneStrip } from '@/components/views/console/DirectorSceneStri
 import { createDirectorState } from '@/lib/director/director'
 import type { DirectorState } from '@/lib/director/director'
 
-/**
+/** 
  * 导播台缩略图条 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：场景缩略卡的序号/名称/三态点、激活与删除回调、并发上限滑块。
@@ -67,7 +67,7 @@ function renderStrip(props: Partial<ComponentProps<typeof DirectorSceneStrip>> =
   return { merged, onActivate, onRemove, onLimitChange }
 }
 
-describe('DirectorSceneStrip（FR-168 导播台缩略图条受控视图）', () => {
+describe('DirectorSceneStrip（导播台缩略图条受控视图）', () => {
   it('渲染场景卡的序号、名称与三态点标签。', () => {
     renderStrip()
     expect(screen.getByRole('button', { name: '切到 主舞台' })).toBeInTheDocument()

@@ -1,11 +1,11 @@
-/**
- * MC 直探可用性位与数据来源（FR-446 / FR-447）。
+/** 
+ * MC 直探可用性位与数据来源。
  *
  * 后端 `MetricsData` 已从「`-1` / `--` 伪值」改为**显式可用性位**（`playersAvailable` /
  * `motdAvailable` / …）与 `sourceMask`（本拍命中来源位）。前端据此渲染「不可用」，
  * 不再把缺测当成 `0`（否则未就绪实例会显示「0 人在线」）。
  *
- * 采集优先级链 `探针 → SLP → Query → 不可用`（FR-447）：同指标多源以探针为准，
+ * 采集优先级链 `探针 → SLP → Query → 不可用`：同指标多源以探针为准，
  * 探针缺该指标时按 SLP → Query 回落，三档皆无即「不可用」。本模块为纯函数，便于穷举三态。
  */
 
@@ -24,8 +24,8 @@ export interface AvailabilityBits {
   queryAvailable?: boolean
 }
 
-/**
- * 解析本拍命中的来源，按 FR-447 优先级 `探针 → SLP → Query` 排序去重。
+/** 
+ * 解析本拍命中的来源，按优先级 `探针 → SLP → Query` 排序去重。
  *
  * `sourceMask` 为 0 / 缺省时按可用性位回退（兼容旧 CP 或 devmock 未发 `sourceMask` 的场景）。
  */
@@ -60,7 +60,7 @@ export function metricSourceLabelKey(source: MetricSourceKey): string {
   }
 }
 
-/**
+/** 
  * 单指标可用性 → 展示值：可用显示值，不可用显示「不可用」占位（由调用方传入文案）。
  *
  * 用于统一「缺测即不可用」的渲染语义，避免 `0` / `-1` / `--` 被误读为真实数值。

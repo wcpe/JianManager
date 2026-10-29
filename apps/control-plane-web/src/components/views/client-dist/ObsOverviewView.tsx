@@ -6,8 +6,8 @@ import type { ClientDistObservability } from '@/lib/client-dist/client-dist-stat
 import { InsightCards } from '@/components/views/client-dist/InsightCards'
 import { UpdateHeatmap } from '@/components/views/client-dist/UpdateHeatmap'
 
-/**
- * 分发观测总览区块的展示层（FR-426/427/428）。
+/** 
+ * 分发观测总览区块的展示层（427/428）。
  * 取数由应用侧容器负责（`useClientDistObservability`）；机器更新排行面板同为取数件，经 `machinePanel` slot 注入。
  */
 export function ObsOverviewView({
@@ -65,7 +65,7 @@ export function ObsOverviewView({
     <div className="space-y-4" data-testid="obs-overview">
       <InsightCards summary={data.summary} compare={data.compare} />
 
-      {/* 请求侧趋势（FR-425/427：跟随统一时间窗） */}
+      {/* 请求侧趋势（427：跟随统一时间窗） */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t('clientDistObs.trendPullsTitle', '拉取趋势')}</h3>
         <div className="rounded-lg border p-3">

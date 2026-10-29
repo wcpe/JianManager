@@ -1,5 +1,5 @@
-/**
- * 页面 B「客户端分发运维」（`/client-dist-ops`）Tab 归一化（FR-430 / ADR-088）。
+/** 
+ * 页面 B「客户端分发运维」（`/client-dist-ops`）Tab 归一化（ADR-088）。
  *
  * 两条旧路由（`/client-dist-security`、`/client-dist-monitor`）保留为透传 query 的
  * 参数翻译重定向：读取原始 `tab` → 归一化为新 7 Tab 体系（+ `seg`/`type` 派生），
@@ -81,7 +81,7 @@ export function isOpsSeg(value: string): value is OpsSeg {
   return (OPS_SEGS as readonly string[]).includes(value)
 }
 
-/**
+/** 
  * 归一化旧 `tab` 值为新 Tab 体系。
  *
  * - `source` 决定缺失/非法时的 landing（security→overview，monitor→statistics）。
@@ -101,7 +101,7 @@ export function normalizeOpsTab(
   return { tab: DEFAULT_TAB_BY_SOURCE[source] }
 }
 
-/**
+/** 
  * 解析页面 B 的实际分档：显式 `seg` 合法值 > 归一化别名派生的 `seg` > Tab 缺省。
  * 非法 `seg` 一律回落到 Tab 缺省（无缺省则该 Tab 无分档）。
  */

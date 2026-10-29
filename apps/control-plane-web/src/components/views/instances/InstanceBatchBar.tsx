@@ -14,7 +14,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instances/instance-batch'
 
-/** 批量栏所需的选中实例最小信息（含状态，用于状态感知禁用与失败明细，FR-058/FR-139）。 */
+/** 批量栏所需的选中实例最小信息（含状态，用于状态感知禁用与失败明细）。 */
 export interface BatchSelectedInstance {
   id: number
   name: string
@@ -32,10 +32,10 @@ const CONFIRM_ACTIONS: InstanceBatchAction[] = ['stop', 'kill']
 const STARTABLE = ['STOPPED', 'CRASHED']
 const KILLABLE = ['RUNNING', 'STARTING', 'STOPPING']
 
-/**
+/** 
  * 实例批量操作栏：命令下发 + 启停/重启/强制关服。
- * 危险操作（kill）要求输入关键字二次确认（FR-058 / FR-059）；停止与命令下发复述确认（FR-139）。
- * 按选中集状态分布做动作禁用 + 原因 tooltip；部分失败列明细并保留失败项选择供重试（FR-139）。
+ * 危险操作（kill）要求输入关键字二次确认；停止与命令下发复述确认。
+ * 按选中集状态分布做动作禁用 + 原因 tooltip；部分失败列明细并保留失败项选择供重试。
  *
  * 受控视图（ADR-103 b 范式）：不取数、不发请求、不弹 toast —— 批量动作经 `onRun` 上报、
  * 提示文案经 `notify` 交外壳展示。状态感知禁用、二次确认、失败明细这些**本组件自己的语义**
@@ -46,12 +46,12 @@ export interface InstanceBatchBarProps {
   selected: BatchSelectedInstance[]
   /** 操作完成后清空选择的回调。 */
   onClear: () => void
-  /**
+  /** 
    * 反选（用户提出）：在当前可见集合内翻转选中状态。
    * 省略时不渲染该按钮（例如调用方没有「可见集合」概念的场景）。
    */
   onInvert?: () => void
-  /** 部分失败后仅保留失败实例的选择，供重试（FR-139）。 */
+  /** 部分失败后仅保留失败实例的选择，供重试。 */
   onRetainFailed: (ids: number[]) => void
   /** 执行批量操作（外壳负责发请求与失效缓存），返回服务端结果。 */
   onRun: (payload: {
@@ -61,8 +61,8 @@ export interface InstanceBatchBarProps {
   }) => Promise<InstanceBatchResult>
   /** 提示通道。 */
   notify: BatchNotice
-  /**
-   * 滚动/分批/灰度编排对话框（FR-457）插槽：该对话框尚未迁包，由外壳注入；
+  /** 
+   * 滚动/分批/灰度编排对话框插槽：该对话框尚未迁包，由外壳注入；
    * 视图只持有它的开闭状态。
    */
   rollingDialog?: (onClose: () => void) => ReactNode
@@ -83,14 +83,14 @@ export default function InstanceBatchBar({
   const [keyword, setKeyword] = useState('')
   const [failures, setFailures] = useState<{ name: string; error: string }[] | null>(null)
   const [running, setRunning] = useState(false)
-  // 集群级滚动/分批/灰度编排（FR-457）入口。
+  // 集群级滚动/分批/灰度编排入口。
   const [rollingOpen, setRollingOpen] = useState(false)
 
   const selectedIds = selected.map((s) => s.id)
   const count = selectedIds.length
   const confirmKeyword = t('instanceBatch.confirmKeyword')
 
-  // 状态感知：所选集合里有无对应可操作实例，决定各动作是否可用（FR-139）。
+  // 状态感知：所选集合里有无对应可操作实例，决定各动作是否可用。
   const hasStartable = selected.some((s) => STARTABLE.includes(s.status))
   const hasRunning = selected.some((s) => s.status === 'RUNNING')
   const hasKillable = selected.some((s) => KILLABLE.includes(s.status))
@@ -107,11 +107,11 @@ export default function InstanceBatchBar({
       const res = await onRun(payload)
       const errs = res.errors ?? []
       if (errs.length > 0) {
-        // 部分/全部失败：列明细 + 仅保留失败项选择供重试，不清空（FR-139）。
+        // 部分/全部失败：列明细 + 仅保留失败项选择供重试，不清空。
         notify(
           'warning',
           t('instanceBatch.partial', { succeeded: res.succeeded, failed: res.failed, skipped: res.skipped }),
-        )
+)
         const nameOf = (id: number) => selected.find((s) => s.id === id)?.name ?? `#${id}`
         setFailures(errs.map((e) => ({ name: nameOf(e.instanceId), error: e.error })))
         onRetainFailed(errs.map((e) => e.instanceId))
@@ -119,7 +119,7 @@ export default function InstanceBatchBar({
         notify(
           'success',
           t('instanceBatch.result', { succeeded: res.succeeded, failed: res.failed, skipped: res.skipped }),
-        )
+)
         if (action === 'command') setCommand('')
         onClear()
       }
@@ -170,7 +170,7 @@ export default function InstanceBatchBar({
         <Button variant="ghost" size="sm" onClick={onInvert}>
           {t('instanceBatch.invert', '反选')}
         </Button>
-      )}
+)}
 
       <Separator orientation="vertical" className="mx-2 h-5" />
 
@@ -231,7 +231,7 @@ export default function InstanceBatchBar({
 
       <Separator orientation="vertical" className="mx-2 h-5" />
 
-      {/* 集群级滚动/分批/灰度编排（FR-457）：打开策略对话框，不再一次性扇出。 */}
+      {/* 集群级滚动/分批/灰度编排：打开策略对话框，不再一次性扇出。 */}
       <Button
         variant="outline"
         size="sm"
@@ -290,7 +290,7 @@ export default function InstanceBatchBar({
         </DialogContent>
       </Dialog>
 
-      {/* 部分失败明细：列出失败实例名 + 原因，已保留其选择供重试（FR-139）。 */}
+      {/* 部分失败明细：列出失败实例名 + 原因，已保留其选择供重试。 */}
       <Dialog open={failures !== null} onOpenChange={(v) => { if (!v) setFailures(null) }}>
         <DialogContent>
           <DialogHeader>
@@ -311,7 +311,7 @@ export default function InstanceBatchBar({
         </DialogContent>
       </Dialog>
 
-      {/* 滚动/分批/灰度编排策略与进度（FR-457）。 */}
+      {/* 滚动/分批/灰度编排策略与进度。 */}
       {rollingOpen && rollingDialog?.(() => setRollingOpen(false))}
     </div>
   )

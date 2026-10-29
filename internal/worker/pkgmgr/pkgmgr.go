@@ -1,6 +1,6 @@
 // Package pkgmgr 管理节点包管理器偏好（npm/pnpm/yarn，经 corepack 激活）与多 registry
-// 配置（FR-306）。配置落托管 .npmrc（NPM_CONFIG_USERCONFIG 指向，不污染用户 ~/.npmrc），
-// 供 FR-307 全局包管理 / FR-308 bot-worker 依赖装全局复用。
+// 配置。配置落托管 .npmrc（NPM_CONFIG_USERCONFIG 指向，不污染用户 ~/.npmrc），
+// 供全局包管理bot-worker 依赖装全局复用。
 package pkgmgr
 
 import (
@@ -39,7 +39,7 @@ type Config struct {
 type Manager struct {
 	runtimesRoot string     // 托管运行时根：nodejs-* 子目录 + 托管 .npmrc/global 落此
 	configDir    string     // .npmrc 落盘目录（默认 = runtimesRoot）
-	run          runner     // PM 命令执行器（nil=真 exec；测试经 SetRunner 注入，FR-307）
+	run          runner     // PM 命令执行器（nil=真 exec；测试经 SetRunner 注入）
 	globalMu     sync.Mutex // 节点包根的 package.json 与 node_modules 操作必须串行
 }
 
@@ -48,7 +48,7 @@ func NewManager(runtimesRoot string) *Manager {
 	return &Manager{runtimesRoot: runtimesRoot, configDir: runtimesRoot}
 }
 
-// NpmrcPath 返回托管 .npmrc 路径（FR-307 全局包操作以此作 NPM_CONFIG_USERCONFIG）。
+// NpmrcPath 返回托管 .npmrc 路径（全局包操作以此作 NPM_CONFIG_USERCONFIG）。
 func (m *Manager) NpmrcPath() string { return filepath.Join(m.configDir, ".npmrc") }
 
 var validPM = map[string]bool{"npm": true, "pnpm": true, "yarn": true}
@@ -73,7 +73,7 @@ func validateRegistry(r Registry) error {
 	return nil
 }
 
-// renderNpmrc 按 registry 列表生成 .npmrc 内容（FR-306）。
+// renderNpmrc 按 registry 列表生成 .npmrc 内容。
 func renderNpmrc(regs []Registry) string {
 	var b strings.Builder
 	for _, r := range regs {

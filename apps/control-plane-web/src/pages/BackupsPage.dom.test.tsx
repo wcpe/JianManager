@@ -9,7 +9,7 @@ import { API } from '@jianmanager/devmock/api'
 import { mockInject } from '@jianmanager/devmock/inject'
 import BackupsPage from './BackupsPage'
 
-/**
+/** 
  * 给 `countDependents` 套一层计数壳（其余备份纯逻辑保持真实实现）：
  * 用于断言渲染期不再逐行调用它（那是 O(n²)，配合 3 秒轮询会放大成百万级比较）。
  */
@@ -26,8 +26,8 @@ vi.mock('@/lib/backups/backup', async (importOriginal) => {
   }
 })
 
-/**
- * 备份管理页（FR-207 域簇）。强断言覆盖：
+/** 
+ * 备份管理页（域簇）。强断言覆盖：
  * ① 选实例后渲染出 seed 备份；② 创建全量备份（POST 写）→ 列表联动新增；③ 注入 500 → 错误态；
  * ④ 恢复守卫；⑤ 列表视图按滚动窗口裁剪；⑥ 依赖计数不再逐行全表扫描。
  * BackupsPage 需选实例才拉备份；/instances 属实例域（本域不重定义），测试内用 server.use 临时桩。
@@ -52,7 +52,7 @@ describe('BackupsPage（mock）', () => {
     )
   })
 
-  /**
+  /** 
    * 选中名为 `name` 的实例（默认 survival），触发 useBackups 拉取该实例备份。
    * 实例选择器已改 Combobox（服务端搜索）：点触发器展开 → 点选项按钮提交。
    */
@@ -132,7 +132,7 @@ describe('BackupsPage（mock）', () => {
     await waitFor(() => expect(createBody?.storageId).toBe(1))
   })
 
-  it('实例运行中 → 恢复按钮禁用并提示先停止（FR-013 恢复守卫回归）', async () => {
+  it('实例运行中 → 恢复按钮禁用并提示先停止（恢复守卫回归）', async () => {
     const user = userEvent.setup()
     server.use(
       http.get(API('/instances/search'), () =>

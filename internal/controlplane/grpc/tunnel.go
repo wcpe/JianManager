@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TunnelRegistry 管理 Worker 主动建立的 gRPC 反向隧道（FR-281，见 ADR-066）。
+// TunnelRegistry 管理 Worker 主动建立的 gRPC 反向隧道（见 ADR-066）。
 // Worker 在 CP 既有 gRPC 端口上开常驻反向隧道并以节点身份（node-uuid/node-secret
 // metadata，ADR-039）锚定归属；ClientPool 只从活跃隧道取得节点通道。
 // 鉴权在 StreamAuthInterceptor 前置完成——到达 handler 的隧道必已通过 secret 校验，
@@ -106,7 +106,7 @@ func (r *TunnelRegistry) SetOnConnected(fn func(nodeUUID string)) {
 
 // SetOnFirstConnected 设置「节点从无活跃隧道变为有活跃隧道（active 0→1）」回调。
 // 用于只应每连接建立**一次**的长驻订阅类工作（事件流 / 插件事件流 / Bot Fleet 恢复），
-// 避免瞬时 active=2 时重复建立长驻订阅流（FR-456 F4：重复订阅会导致 stdout/stderr 双写、
+// 避免瞬时 active=2 时重复建立长驻订阅流（F4：重复订阅会导致 stdout/stderr 双写、
 // 事件重复扇出）。
 func (r *TunnelRegistry) SetOnFirstConnected(fn func(nodeUUID string)) {
 	r.mu.Lock()
@@ -145,13 +145,13 @@ func (r *TunnelRegistry) onOpen(t grpctunnel.TunnelChannel) {
 	onFirstConnected := r.onFirstConnected
 	r.mu.Unlock()
 	slog.Info("节点反向隧道已建立", "nodeUUID", uuid, "active", n)
-	// FR-455②：不再以 n==1 为触发条件。CP 重启后旧隧道 onClose 常晚于新隧道 onOpen
+	// ②：不再以 n==1 为触发条件。CP 重启后旧隧道 onClose 常晚于新隧道 onOpen
 	//（瞬时 active=2），若只在 n==1 触发，新连不触发重推、该轮节点规格同步丢失。
 	// 改为「隧道建立即触发」，由回调侧按节点去重 + 幂等（ResyncDeduper）吸收重复触发。
 	if onConnected != nil {
 		go onConnected(uuid)
 	}
-	// FR-456 F4：长驻订阅类副作用（事件流 / 插件事件流 / Bot Fleet 恢复）只在节点「从无到有」
+	// F4：长驻订阅类副作用（事件流 / 插件事件流 / Bot Fleet 恢复）只在节点「从无到有」
 	//（active 0→1）时触发一次，避免瞬时 active=2 时重复建立长驻订阅流。重推仍走上面的
 	// onConnected（每次建立都触发，由 ResyncDeduper 幂等）——两条语义分离，互不影响。
 	if n == 1 && onFirstConnected != nil {

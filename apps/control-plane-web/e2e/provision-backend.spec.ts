@@ -12,8 +12,8 @@ async function pickCombo(page: Page, triggerText: string, optionName: string | R
   await page.getByRole('button', { name: optionName }).click()
 }
 
-/** FR-034 真浏览器纵切：一键搭建 Bukkit/Paper 后端子服。 */
-test.describe('FR-034 搭建 Bukkit 子服（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：一键搭建 Bukkit/Paper 后端子服。 */
+test.describe('搭建 Bukkit 子服（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await login(page)

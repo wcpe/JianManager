@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// RoleTemplate 权限角色模板（FR-432）。系统 key 不可删，节点集合可改。
+// RoleTemplate 权限角色模板。系统 key 不可删，节点集合可改。
 type RoleTemplate struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	Key         string    `gorm:"type:varchar(64);uniqueIndex;not null" json:"key"`

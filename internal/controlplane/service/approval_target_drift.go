@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 目标漂移校验（FR-491）。
+// 目标漂移校验。
 //
 // ## 为什么需要它
 //

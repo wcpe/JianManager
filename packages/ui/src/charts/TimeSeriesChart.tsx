@@ -12,13 +12,13 @@ import {
 } from 'recharts'
 import { chartAccessibleName } from '../lib/chart-a11y'
 
-/** 一条曲线序列（FR-060 消费 /metrics/series 的点；value=avg，null 为缺测断点）。 */
+/** 一条曲线序列（消费 /metrics/series 的点；value=avg，null 为缺测断点）。 */
 export interface ChartSeries {
   key: string
   name: string
   /** 线色，默认按序取 --chart-1..5。 */
   color?: string
-  /**
+  /** 
    * 初始是否隐藏该线。
    *
    * recharts 的 `hide` 语义：线不绘制，但**仍留图例**（点一下即显示），
@@ -55,8 +55,8 @@ function makeTickFormatter(spanMs: number): (ts: string) => string {
   }
 }
 
-/**
- * 历史曲线（FR-061）：多序列折线，按时间戳对齐合并，null 渲染为断点（不连线）。
+/** 
+ * 历史曲线：多序列折线，按时间戳对齐合并，null 渲染为断点（不连线）。
  * 各页传入已映射好的 ChartSeries；纵轴单位与数值格式由调用方经 valueFormatter 控制。
  */
 export function TimeSeriesChart({
@@ -73,7 +73,7 @@ export function TimeSeriesChart({
 }: {
   series: ChartSeries[]
   height?: number
-  /**
+  /** 
    * 已知确切像素宽时传入，**跳过 ResizeObserver 测宽**。
    *
    * 【为什么需要】自测宽路径有两处代价：首帧宽度为 0 不渲染图，且实测宽度要经 2000ms 防抖
@@ -82,14 +82,14 @@ export function TimeSeriesChart({
    * 传本参数即直接用给定宽度渲染，无延迟、无空白帧。
    */
   width?: number
-  /**
+  /** 
    * 悬浮时刻回调：进入时给该点的时间戳，离开时给 null。
    *
    * 【为什么需要】图表上只有聚合值（如「CPU 32%」），而运维常问「那一刻是谁在吃 CPU」。
    * 调用方据此去查该时刻的归属明细，再通过 `tooltipExtra` 塞回悬浮框。
    */
   onHoverTs?: (ts: string | null) => void
-  /**
+  /** 
    * 悬浮框的附加内容（渲染在指标值下方）。参数是当前悬浮点的时间戳。
    * 省略时悬浮框与改造前完全一致。
    */
@@ -98,11 +98,11 @@ export function TimeSeriesChart({
    *  （如多序列归一化图：图上画百分比、tooltip 显示原始值）。 */
   valueFormatter?: (v: number, seriesName?: string) => string
   emptyHint?: string
-  /** Y 轴范围。默认 ['auto','auto'] 自适应数据，使 TPS/MSPT 等窄幅指标不被 0 基线压成直线（FR-148）；占比类指标可传 [0, 100]。 */
+  /** Y 轴范围。默认 ['auto','auto'] 自适应数据，使 TPS/MSPT 等窄幅指标不被 0 基线压成直线；占比类指标可传 [0, 100]。 */
   yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax']
   /** 可选阈值线；仅调用方明确传入时渲染，避免影响其它图表。 */
   referenceLines?: ChartReferenceLine[]
-  /**
+  /** 
    * 图表的替代文本（可访问名）。省略时由序列名推导——见 {@link chartAccessibleName}。
    * 调用方若有更贴切的描述（如「近 24 小时 TPS 趋势」），传进来即可覆盖推导值。
    */
@@ -145,7 +145,7 @@ export function TimeSeriesChart({
     }
     // 同 MonitorChart：宽度逐帧变化时若立即重绘，recharts 会占满整个侧栏过渡期。
     // 防抖 + startTransition 让过渡期间不重绘、结束后的那一次也不阻塞动画帧。
-    /*
+    /* 
       首测立即生效，之后的变更才防抖。
       之前统一防抖 2000ms：图表挂载后要空白整整两秒才出现——用户会以为图画不出来。
       而防抖的本意只是「侧栏拖动/折叠过渡期间别逐帧重绘」，首次测量并不需要它。
@@ -241,7 +241,7 @@ export function TimeSeriesChart({
                 const num = typeof value === 'number' ? value : Number(value)
                 return [Number.isFinite(num) ? fmt(num, String(name)) : '—', name]
               }}
-              /*
+              /* 
                 用 `content` 包一层而不是替换：recharts 的默认渲染（label + 各序列值）保持不变，
                 只在下方追加调用方给的归属明细。这样没传 `tooltipExtra` 的图表行为逐字不变。
               */

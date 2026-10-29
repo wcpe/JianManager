@@ -5437,7 +5437,7 @@
     "allTypes": "全部类型",
     "summary": "摘要",
     "noEvents": "无事件",
-    "eventsUnavailable": "事件历史 API 暂不可用（依赖 FR-370 落地）",
+    "eventsUnavailable": "事件历史 API 暂不可用（依赖落地）",
     "configSnapshotHint": "运行快照在创建时冻结，不随模板后续修改而变化。",
     "target": "目标",
     "templateId": "模板 ID",

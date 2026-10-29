@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// 助手 run 状态（FR-515 §5.1）。
+// 助手 run 状态（§5.1）。
 //
 // 状态机的活跃态与非活跃态**不是**两个独立概念：活跃态集合直接参与数据库部分唯一索引
 // 的谓词（见 AssistantRunActiveStatuses），改这里就等于改索引语义。
@@ -15,7 +15,7 @@ const (
 	AssistantRunStatusQueued = "queued"
 	// AssistantRunStatusRunning 正在推进（模型流或工具执行中）。
 	AssistantRunStatusRunning = "running"
-	// AssistantRunStatusWaitingConfirmation 等待人工确认工具调用（由 FR-516 触发）。
+	// AssistantRunStatusWaitingConfirmation 等待人工确认工具调用（由触发）。
 	AssistantRunStatusWaitingConfirmation = "waiting_confirmation"
 	// AssistantRunStatusCompleted 正常收尾（含预算耗尽后的强制收尾，见 termination_reason）。
 	AssistantRunStatusCompleted = "completed"
@@ -29,7 +29,7 @@ const (
 	AssistantRunStatusInterrupted = "interrupted"
 )
 
-// AssistantRunActiveStatuses 返回占住「单会话单活跃 run」槽位的状态集合（FR-515 §5.2）。
+// AssistantRunActiveStatuses 返回占住「单会话单活跃 run」槽位的状态集合（§5.2）。
 //
 // 为什么用函数返回副本而不是导出 var：这是数据库部分唯一索引谓词的**唯一真源**
 // （migrateAssistantRunUniqueIndexes 按它拼 SQL）。共享可变切片迟早会被调用方就地 append
@@ -42,7 +42,7 @@ func AssistantRunActiveStatuses() []string {
 	}
 }
 
-// 助手 run 终态原因（FR-515 §4.3）：仅终态行有值，与 Status 组合表达「怎么结束的」。
+// 助手 run 终态原因（§4.3）：仅终态行有值，与 Status 组合表达「怎么结束的」。
 const (
 	AssistantTerminationCompleted       = "completed"
 	AssistantTerminationCancelled       = "cancelled"
@@ -50,27 +50,27 @@ const (
 	AssistantTerminationTimedOut        = "timed_out"
 	AssistantTerminationInterrupted     = "interrupted"
 	AssistantTerminationBudgetExhausted = "budget_exhausted"
-	// AssistantTerminationAwaitingConfirm 本轮因等待用户确认而未走完（FR-516）。
+	// AssistantTerminationAwaitingConfirm 本轮因等待用户确认而未走完。
 	// 它不是「失败」也不是「完成」：run 停在 waiting_confirmation，
 	// 用户决定后由新的执行恢复或终结。
 	AssistantTerminationAwaitingConfirm = "awaiting_confirm"
 )
 
-// 助手消息角色（FR-515 §4.2）。
+// 助手消息角色（§4.2）。
 const (
 	AssistantMessageRoleUser      = "user"
 	AssistantMessageRoleAssistant = "assistant"
 	AssistantMessageRoleTool      = "tool"
 )
 
-// 助手消息状态（FR-515 §4.2）。
+// 助手消息状态（§4.2）。
 const (
 	AssistantMessageStateComplete    = "complete"
 	AssistantMessageStateInterrupted = "interrupted"
 	AssistantMessageStateTruncated   = "truncated"
 )
 
-// 助手事件类型（FR-515 §5.3 最小集）。
+// 助手事件类型（§5.3 最小集）。
 const (
 	AssistantEventTypeTextDelta      = "text_delta"
 	AssistantEventTypeToolCall       = "tool_call"
@@ -82,7 +82,7 @@ const (
 	AssistantEventTypeRunEnd         = "run_end"
 )
 
-// AssistantConversation 助手私有会话（FR-515 §4.1）。
+// AssistantConversation 助手私有会话（§4.1）。
 //
 // 归属用单列 owner_user_id 而不是复用用户组 / 组管理员链：会话是**私有**的，
 // 组管理员也不是他人会话的所有者，所有读写都强制带 owner_user_id 条件。
@@ -108,7 +108,7 @@ type AssistantConversation struct {
 // TableName 固定表名。
 func (AssistantConversation) TableName() string { return "assistant_conversations" }
 
-// AssistantMessage 会话内一条可见消息（FR-515 §4.2）。
+// AssistantMessage 会话内一条可见消息（§4.2）。
 //
 // 消息与事件分开：消息是「用户看到的对话」，事件是「run 的过程流」。
 // 二者条数与生命周期都不同（一次 run 产生多个事件、少量消息），合并会让补读游标语义变乱。
@@ -130,7 +130,7 @@ type AssistantMessage struct {
 	State     string    `gorm:"size:16;not null" json:"state"`
 	CreatedAt time.Time `json:"createdAt"`
 
-	// ── 编辑与回退（FR-543）──
+	// ── 编辑与回退──
 	//
 	// OriginalContent 首次编辑前的原文。**只保留最初一版**而不是历史栈：
 	// 需求是「能看出改了什么」，不是版本管理；保留原文已足够审计追溯，
@@ -138,7 +138,7 @@ type AssistantMessage struct {
 	OriginalContent *string    `gorm:"column:original_content;type:text" json:"originalContent,omitempty"`
 	EditedAt        *time.Time `gorm:"column:edited_at" json:"editedAt,omitempty"`
 	EditCount       int        `gorm:"column:edit_count;not null;default:0" json:"editCount"`
-	// SupersededAt 被回退取代的时刻（FR-543 §6.3）。
+	// SupersededAt 被回退取代的时刻（§6.3）。
 	//
 	// **不物理删除**：工具调用消息关联着确认票据与平台审计，硬删会让
 	// 「这条副作用是谁批准的」失去线索。读取上下文时按 `IS NULL` 过滤。
@@ -148,7 +148,7 @@ type AssistantMessage struct {
 // TableName 固定表名。
 func (AssistantMessage) TableName() string { return "assistant_messages" }
 
-// AssistantRun 一轮对话运行（FR-515 §4.3）。
+// AssistantRun 一轮对话运行（§4.3）。
 //
 // 单会话单活跃 run 由**数据库部分唯一索引**保证，不用进程内锁：进程锁在重启后丢失，
 // 在扩容后直接失效（§5.2、§8.1）。
@@ -165,7 +165,7 @@ type AssistantRun struct {
 	ModelSnapshot string `gorm:"type:text;not null" json:"modelSnapshot"`
 	// ToolPolicyVersion 本轮工具策略版本，确认校验用（策略已变更的旧确认不得被执行）。
 	ToolPolicyVersion int `gorm:"not null;default:1" json:"toolPolicyVersion"`
-	// ContextSnapshot 可空：页面上下文快照，由 FR-518 写入。
+	// ContextSnapshot 可空：页面上下文快照，由写入。
 	ContextSnapshot *string `gorm:"type:text" json:"contextSnapshot"`
 	// Status 取值见 AssistantRunStatus* 常量。
 	Status string `gorm:"size:32;not null" json:"status"`
@@ -193,7 +193,7 @@ type AssistantRun struct {
 // TableName 固定表名。
 func (AssistantRun) TableName() string { return "assistant_runs" }
 
-// AssistantEvent 运行期 append-only 事件（FR-515 §4.4）。
+// AssistantEvent 运行期 append-only 事件（§4.4）。
 //
 // 事件**永不因保留策略被删**（§10.1）：断流补读依赖「游标不会因数据被删而失效」，
 // 否则前端一旦重连就得面对不可恢复的空洞。

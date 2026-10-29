@@ -664,7 +664,7 @@ func TestLoadingPreservesGapOrder(t *testing.T) {
 	}
 }
 
-// FR-496 加固：指纹归一化必须让「写入侧 Go 值」与「读回值」得到同一指纹——否则每次重启后
+// 加固：指纹归一化必须让「写入侧 Go 值」与「读回值」得到同一指纹——否则每次重启后
 // 首次写入都会把整张表误判为「全部变更」而整表重写（生产 307MB 副本实测：74.7 万行缺口
 // 及 position/projection 全表，单次持久化 47s / Stop 3s+，根因是 bool 字段的镜像与写入两侧
 // 编码不同）。
@@ -698,7 +698,7 @@ func TestFingerprintMatchesBetweenWriteAndRead(t *testing.T) {
 	}
 }
 
-// FR-496 加固：**重启后**幂等 Apply 必须零写入（指纹口径两侧一致的直接回归）。
+// 加固：**重启后**幂等 Apply 必须零写入（指纹口径两侧一致的直接回归）。
 //
 // 转红说明：把 encodeValue 的 bool 分支改回自成一类，本用例在「首次打开→读镜像→Apply」
 // 时就会把带 bool 字段的表（position/projection/gap）全部重写一遍，RowsWritten 远大于 0。
@@ -737,7 +737,7 @@ func TestStoreApplyAfterReopenIsIdempotent(t *testing.T) {
 	}
 }
 
-// FR-496 加固（F3）：关闭索引句柄后 `-wal` 必须被归并截断，不得残留巨量 WAL。
+// 加固（F3）：关闭索引句柄后 `-wal` 必须被归并截断，不得残留巨量 WAL。
 //
 // 转红说明：把 Store.Close 改回「只关连接不显式 checkpoint」（旧实现），本用例即红——
 // sql.DB 的连接池关闭不保证以干净方式收尾，大事务后 `-wal` 会留在盘上数百 MB。
@@ -776,7 +776,7 @@ func TestStoreCloseCheckpointsWALAway(t *testing.T) {
 	_ = reopened.Close()
 }
 
-// FR-496 加固：批量写入语句必须与表定义逐列对齐——列数不符时整批语句作废，绝不串位写入。
+// 加固：批量写入语句必须与表定义逐列对齐——列数不符时整批语句作废，绝不串位写入。
 func TestBuildBatchUpsertRejectsColumnMismatch(t *testing.T) {
 	spec := specs[tblGap]
 	rows := []pendingRow{{row: rowData{values: func() ([]any, error) {

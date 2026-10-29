@@ -87,8 +87,8 @@ function groupOptions(nodes: InstanceGroupNode[] | undefined): ComboboxOption[] 
   return out
 }
 
-/**
- * 分层配置·配置文件详情页（FR-529）。
+/** 
+ * 分层配置·配置文件详情页。
  *
  * 布局：左侧层列表（分组层 / 实例层两组，各自显示当前 head 版本号），
  * 中间选中层的编辑器（原文 + 保存新版本 + 版本历史回退），底部有效值预览
@@ -160,7 +160,7 @@ export default function ConfigFileDetailPage() {
   /** 该作用域当前的 head 版本（历史新→旧，取第一条）。 */
   const headVersion = history?.[0]
 
-  /**
+  /** 
    * 切换层时把草稿同步成该层 head 的原文。
    *
    * 用 effect 而不是在点击处直接 setDraft：`layers` 是异步查询出来的，首次进入页面时

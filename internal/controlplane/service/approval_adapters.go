@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 审批执行器与领域动作的接线（FR-490 / FR-492）。
+// 审批执行器与领域动作的接线。
 //
 // ## 为什么集中在这里而不是散在 main.go
 //

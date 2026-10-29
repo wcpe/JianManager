@@ -9,11 +9,11 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-398：普通 Bot 舰队工具。
+// 普通 Bot 舰队工具。
 // 说明：本文件与 tools_loadtest*.go 自带执行器分发与危险确认实现，
-// 待 FR-396 的 toolSpec.Exec / RequiresConfirm 骨架合入后可整体收敛为一份。
+// 待的 toolSpec.Exec / RequiresConfirm 骨架合入后可整体收敛为一份。
 
-// botToolExec 是 Bot 域工具执行器签名，等价 FR-396 规划中的 toolSpec.Exec。
+// botToolExec 是 Bot 域工具执行器签名，等价规划中的 toolSpec.Exec。
 type botToolExec func(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, action string, args map[string]any) ToolResult
 
 // BotLoadExecutor 抽象压测运行的启停与重试，便于 MCP 契约测试注入替身。

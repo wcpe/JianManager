@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// WS 保活心跳参数（FR-140 加固）：空闲终端（如 Paper 长时间无输出）经反代/LB 时，
+// WS 保活心跳参数（加固）：空闲终端（如 Paper 长时间无输出）经反代/LB 时，
 // 会被中间层按空闲超时（常见 60s）断开。定时 ping 让连接保持有流量、pong 到达即续读超时，
 // 据此既保活又能检测真正的死连。pingPeriod 须显著小于 pongWait 与常见中间层空闲超时。
 const (
@@ -50,7 +50,7 @@ type TerminalSession struct {
 // TerminalServer 终端 WebSocket 服务器。
 type TerminalServer struct {
 	// jwtSecret 终端一次性 token 校验密钥，secretMu 保护：CP 经注册/心跳下发新值时
-	// 由 SetJWTSecret 热更新（FR-275，见 ADR-061），与握手校验读并发安全。
+	// 由 SetJWTSecret 热更新（见 ADR-061），与握手校验读并发安全。
 	jwtSecret string
 	secretMu  sync.RWMutex
 	upgrader  websocket.Upgrader
@@ -61,7 +61,7 @@ type TerminalServer struct {
 	onStdin   StdinHandler
 	onResize  ResizeHandler
 
-	// pingPeriod / pongWait 控制保活心跳（FR-140），默认取包级常量；
+	// pingPeriod / pongWait 控制保活心跳，默认取包级常量；
 	// pingPeriod<=0 禁用主动 ping、pongWait<=0 不设读超时（仅测试用于模拟「无心跳」链路）。
 	pingPeriod time.Duration
 	pongWait   time.Duration
@@ -82,7 +82,7 @@ func NewTerminalServer(jwtSecret string) *TerminalServer {
 	}
 }
 
-// SetJWTSecret 热更新 token 校验密钥（FR-275，见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
+// SetJWTSecret 热更新 token 校验密钥（见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
 // 仅影响后续握手；已建立的会话不受影响（握手只校验一次）。
 func (s *TerminalServer) SetJWTSecret(secret string) {
 	s.secretMu.Lock()
@@ -205,7 +205,7 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 	}()
 
 	conn := session.Conn
-	// 保活心跳（FR-140）：pong 到达即续读超时，配合定时 ping 让空闲连接不被中间层判超时断开。
+	// 保活心跳：pong 到达即续读超时，配合定时 ping 让空闲连接不被中间层判超时断开。
 	if s.pongWait > 0 {
 		if err := conn.SetReadDeadline(time.Now().Add(s.pongWait)); err != nil {
 			slog.Debug("设置终端读取截止时间失败", "instanceId", session.InstanceID, "error", err)
@@ -256,7 +256,7 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 	}
 }
 
-// pingLoop 定时向连接发送 WS ping 帧保活（FR-140），直到 stop 关闭或写失败。
+// pingLoop 定时向连接发送 WS ping 帧保活，直到 stop 关闭或写失败。
 func (s *TerminalServer) pingLoop(conn *websocket.Conn, stop <-chan struct{}) {
 	ticker := time.NewTicker(s.pingPeriod)
 	defer ticker.Stop()
@@ -331,7 +331,7 @@ func (s *TerminalServer) getOrCreateBuffer(instanceID string) *daemon.RingBuffer
 }
 
 // BufferedOutput 返回实例终端环形缓冲区当前内容的副本；实例尚无缓冲时返回 nil。
-// 供崩溃快照截取尾部输出（FR-313）——只读旁路，不创建缓冲、不影响终端回放。
+// 供崩溃快照截取尾部输出——只读旁路，不创建缓冲、不影响终端回放。
 func (s *TerminalServer) BufferedOutput(instanceID string) []byte {
 	s.mu.RLock()
 	buf, ok := s.buffers[instanceID]
@@ -342,10 +342,10 @@ func (s *TerminalServer) BufferedOutput(instanceID string) []byte {
 	return buf.ReadAll()
 }
 
-// ResetBuffer 清空实例的终端环形缓冲区（实例每次启动时调用，FR-471 缺陷修复）。
+// ResetBuffer 清空实例的终端环形缓冲区（实例每次启动时调用缺陷修复）。
 //
 // 为什么必须在启动时清空：缓冲区对整个实例生命周期共享、不随重启轮转，于是上一轮运行的输出会
-// 残留到下一轮。崩溃快照（FR-313）截取的是「缓冲区尾部」，若不清空就会把**上一轮**的崩溃文本
+// 残留到下一轮。崩溃快照截取的是「缓冲区尾部」，若不清空就会把**上一轮**的崩溃文本
 // 一并带上——分类器按优先级取词，会把本次崩溃误判成上一轮的原因（真机实测：注入端口占用，
 // 因残留的 OutOfMemoryError 行仍在外加优先级更高，被误判为 oom）。
 //

@@ -6,7 +6,7 @@ import type { InstanceTreeRow } from '@/components/views/instances/VirtualizedIn
 import { computeVisibleColumns, type InstanceColumnKey } from '@/lib/instances/instance-view-prefs'
 import { InstancePaginationBar } from '@/components/views/instances/InstancePaginationBar'
 
-/**
+/** 
  * 各列宽度（px）。名称列不设宽度 = 吃掉剩余空间。
  * 与列顺序解耦：拖拽换位只改顺序，不改宽度分配。
  */
@@ -18,13 +18,13 @@ const COLUMN_WIDTH: Record<InstanceColumnKey, number | undefined> = {
   nodePort: 96,
   status: 84,
   health: 150,
-  // 业务插件列（FR-534）：放「N/M 正常」这类短文案即可，110 足够，
+  // 业务插件列：放「N/M 正常」这类短文案即可，110 足够，
   // 再宽会挤掉状态/操作（该列默认关，见 instance-view-prefs）。
   business: 110,
   actions: 56,
 }
 
-/**
+/** 
  * 标准分页表格（服务器页「列表视图」外壳）。
  *
  * 【为什么换掉虚拟滚动】原实现用自定义 div 容器 + 虚拟窗口模拟表格：
@@ -63,7 +63,7 @@ export function PaginatedInstanceTable({
   renderRow: (inst: InstanceInfo) => ReactNode
   emptyLabel: string
   columnCount?: number
-  /**
+  /** 
    * 分组视图的行序列（组头 + 实例混排）。给了就按它渲染，否则直接铺 `instances`。
    * 两者只取其一：分组视图下 `instances` 只是树里的一部分，直接铺会丢掉组头与层级。
    */
@@ -75,7 +75,7 @@ export function PaginatedInstanceTable({
   /** 可见的可选列（决定 colgroup 的列数与宽度，必须与表头/行渲染同源）。 */
   visibleColumns?: ReadonlySet<string>
 }) {
-  /*
+  /* 
     colgroup 的列顺序：与表头/行共用同一个计算函数（见 computeVisibleColumns 的注释）。
     此前这里自己写了一份 present 判断，新增 business 列时漏加，导致 colgroup 少一个 <col>、
     整表列宽错位——这类「三处各算一遍」的漂移已经从结构上消除。

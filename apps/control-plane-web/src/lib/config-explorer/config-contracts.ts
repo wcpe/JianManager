@@ -78,7 +78,7 @@ export interface ConfigDiff {
   toContent: string
 }
 
-/** 递归发现的单个配置文件（与后端 service.DiscoveredConfig 对应，FR-071）。 */
+/** 递归发现的单个配置文件（与后端 service.DiscoveredConfig 对应）。 */
 export interface DiscoveredConfig {
   path: string
   format: string

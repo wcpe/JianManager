@@ -11,8 +11,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
-游标分页（FR-419，spec §4.2）单测。
+/* *
+游标分页（spec §4.2）单测。
 
 本文件的存在理由就是 offset 漂移：控制台向上回溯时新日志正在往表头插，
 OFFSET/LIMIT 的「跳过前 N 行」在两次请求间指向不同的行 → 重复行或丢行。

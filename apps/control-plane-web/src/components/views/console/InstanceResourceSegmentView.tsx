@@ -1,10 +1,10 @@
-/**
+/** 
  * @file InstanceResourceSegmentView：文件配置页签的分段壳（分段切换 + 三段保活）的受控视图，三段内容经插槽注入。
  * @input lib/instance-console-tabs（ResourceSegment）、views/console/SegmentPills（分段控件，收敛原手写药丸栏）、cn
  * @output InstanceResourceSegmentView、InstanceResourceSegmentViewProps
  * @sync apps/control-plane-web/src/components/console/InstanceResourceSegment.tsx、
  *        apps/control-plane-web/src/components/console/InstanceConsolePage.tsx
- * @since FR-508（组件受控化迁包；原 FR-413 页签内分段、FR-451 关键配置段）
+ * @since（组件受控化迁包；原页签内分段关键配置段）
  */
 import { Activity, type ReactNode } from 'react'
 import { cn } from '@jianmanager/ui'
@@ -20,7 +20,7 @@ const SEGMENTS: SegmentPillOption<ResourceSegment>[] = [
   { key: 'env', labelKey: 'serverConsole.env' },
 ]
 
-/**
+/** 
  * 受控边界（ADR-103 b 范式）：**不取数、不发请求、不弹 toast**。
  * - 分段值 `segment` 归容器（它与深链 `?seg=` / `?tab=env` 解析结果同源，且决定三段各挂哪个视图）；
  *   本视图只渲染分段控件并回传切换；
@@ -30,7 +30,7 @@ const SEGMENTS: SegmentPillOption<ResourceSegment>[] = [
  * - 保活（`<Activity>`）与外壳布局留本视图：它们是与数据无关的呈现细节。
  *
  * 分段控件复用 `SegmentPills`（属既有的重复实现收敛：原先本处手写一份 `rounded-full` 药丸按钮组，
- * 与 FR-422 资源卡片视图分段重复）。`autoFocusActive` 不启用——本分段栏自成一栏、不寄居在
+ * 与资源卡片视图分段重复）。`autoFocusActive` 不启用——本分段栏自成一栏、不寄居在
  * 被切换视图内部，切换不会带走焦点，无需回送焦点。
  */
 export interface InstanceResourceSegmentViewProps {
@@ -46,12 +46,12 @@ export interface InstanceResourceSegmentViewProps {
   envContent: ReactNode
 }
 
-/**
- * 文件配置页签（FR-413）：把原独立的「环境变量」页签并入本页签的一个分段——
+/** 
+ * 文件配置页签：把原独立的「环境变量」页签并入本页签的一个分段——
  * 环境变量本质是工作目录下的 `.env`，独占一个顶级页签既挤 Tab 栏又割裂心智模型。
  *
  * 三个分段都保活（`<Activity>`）：环境变量编辑器持未保存草稿，分段来回切不得丢；
- * 文件管理器的目录展开态与选中集同理。与页签级 keep-alive（FR-295）同一手法。
+ * 文件管理器的目录展开态与选中集同理。与页签级 keep-alive同一手法。
  */
 export default function InstanceResourceSegmentView({
   segment,
@@ -68,7 +68,7 @@ export default function InstanceResourceSegmentView({
         <SegmentPills options={SEGMENTS} value={segment} onChange={onSegmentChange} />
       </div>
 
-      {/* 关键配置段（FR-451）：启动参数 + server.properties 关键项明面化，在此层滚。 */}
+      {/* 关键配置段：启动参数 + server.properties 关键项明面化，在此层滚。 */}
       <Activity mode={segment === 'config' ? 'visible' : 'hidden'}>
         <div className={cn('flex min-h-0 flex-col overflow-auto', segment === 'config' ? 'flex-1' : 'hidden')}>
           {configContent}

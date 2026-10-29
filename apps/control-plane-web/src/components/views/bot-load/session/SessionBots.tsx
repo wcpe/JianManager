@@ -30,8 +30,8 @@ export interface SessionBotsProps {
   isError?: boolean
 }
 
-/**
- * 会话 Bot 明细表（FR-371）：搜索 / 状态 / 节点三个过滤输入（失焦或回车提交），
+/** 
+ * 会话 Bot 明细表：搜索 / 状态 / 节点三个过滤输入（失焦或回车提交），
  * 整页全选与逐行勾选。勾选集合是纯 UI 状态，不外传。
  */
 export function SessionBots({ filter, onFilterChange, data, isLoading, isError }: SessionBotsProps) {

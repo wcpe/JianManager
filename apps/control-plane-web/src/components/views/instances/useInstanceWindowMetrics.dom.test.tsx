@@ -1,4 +1,4 @@
-/**
+/** 
  * @file useInstanceWindowMetrics 单测：**增量取数**语义（本轮性能修复的核心）。
  *
  * 修的是什么：滚动是平移窗口，上一次的目标多半还在下一次的窗口里。此前每次都把整窗重取，
@@ -105,7 +105,7 @@ describe('useInstanceWindowMetrics 增量取数', () => {
     expect(mockedPost.mock.calls.length).toBe(before)
   })
 
-  it('快照同时带当前人数与上限（FR-511：侧栏「当前/最大」同批取回，不二次请求）', async () => {
+  it('快照同时带当前人数与上限（：侧栏「当前/最大」同批取回，不二次请求）', async () => {
     const visible = [inst(1)]
     const { result } = renderHook(() => useInstanceWindowMetrics(visible), { wrapper: makeWrapper() })
 

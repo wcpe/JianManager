@@ -44,7 +44,7 @@ func (w *archiveStreamWriter) Write(p []byte) (int, error) {
 	return total, nil
 }
 
-// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
+// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（批量下载）。
 // 边遍历边打包边发送，Worker 不在内存缓冲整个归档。每个条目都经 validatePath 防越界。
 func (s *Server) DownloadArchive(req *workerpb.DownloadArchiveRequest, stream workerpb.WorkerService_DownloadArchiveServer) error {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)

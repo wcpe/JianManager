@@ -1,8 +1,8 @@
 package ledger
 
-// FR-496 索引有界化：历史投递批次（delivery_batch）裁剪的判据回归。
+// 索引有界化：历史投递批次（delivery_batch）裁剪的判据回归。
 //
-// 背景（FR-498 实测 @60 源）：采集索引里唯一随总量线性增长的表是 delivery_batch（≈5 MB/天），
+// 背景（实测 @60 源）：采集索引里唯一随总量线性增长的表是 delivery_batch（≈5 MB/天），
 // 而它原先没有裁剪路径。判据与其证明见 delivery_batch_prune.go 的文件头注释：
 // **batch.End <= Positions.Reclaim 的条目是 contiguousDeliveryEnd(…, Reclaim) 的恒等元**。
 //

@@ -18,11 +18,11 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TerminalProxyCodeWorkerTokenRejected 是「Worker 拒绝终端令牌」的诊断码（FR-276，见 ADR-061）。
+// TerminalProxyCodeWorkerTokenRejected 是「Worker 拒绝终端令牌」的诊断码（见 ADR-061）。
 // 前端据此展示「该节点 WS 令牌密钥与平台不一致」的定向诊断，而非裸「连接已断开」。
 const TerminalProxyCodeWorkerTokenRejected = "WORKER_TOKEN_REJECTED"
 
-// WS 保活心跳参数（FR-140 加固）：给浏览器侧与 Worker 侧连接都装 ping/pong，
+// WS 保活心跳参数（加固）：给浏览器侧与 Worker 侧连接都装 ping/pong，
 // 让空闲终端不被 CP 与浏览器之间的中间层（反代/LB）按空闲超时断开。参数含义同 worker 侧。
 const (
 	terminalProxyPongWait   = 70 * time.Second
@@ -59,12 +59,12 @@ type TerminalProxy struct {
 	upgrader  websocket.Upgrader
 	tokens    *onetimetoken.Store
 
-	// pingPeriod / pongWait 控制保活心跳（FR-140），默认取包级常量；
+	// pingPeriod / pongWait 控制保活心跳，默认取包级常量；
 	// pingPeriod<=0 禁用主动 ping、pongWait<=0 不设读超时（仅测试用于模拟「无心跳」链路）。
 	pingPeriod time.Duration
 	pongWait   time.Duration
 
-	// workerClients 按节点取 WorkerServiceClient（FR-281 M2，见 ADR-066）。
+	// workerClients 按节点取 WorkerServiceClient（M2，见 ADR-066）。
 	// 由 ClientPool 适配注入；终端只经 gRPC 反向隧道桥接，无可用隧道即提示重试。
 	workerClients func(nodeUUID string) (workerpb.WorkerServiceClient, bool)
 }
@@ -151,7 +151,7 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 	}
 }
 
-// SetWorkerClients 注入按节点取 WorkerServiceClient 的来源（main 装配自 ClientPool，FR-281 M2）。
+// SetWorkerClients 注入按节点取 WorkerServiceClient 的来源（main 装配自 ClientPoolM2）。
 func (p *TerminalProxy) SetWorkerClients(get func(nodeUUID string) (workerpb.WorkerServiceClient, bool)) {
 	p.workerClients = get
 }
@@ -181,7 +181,7 @@ func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker worker
 		case codes.Unimplemented:
 			return false
 		case codes.PermissionDenied:
-			// 令牌被 Worker 拒绝：FR-276 定向诊断在 gRPC 桥路同语义成立（见 ADR-061）。
+			// 令牌被 Worker 拒绝：定向诊断在 gRPC 桥路同语义成立（见 ADR-061）。
 			slog.Error("Worker 拒绝终端令牌（疑似节点 WS 令牌密钥与平台不一致）",
 				"instanceUUID", instanceUUID, "detail", st.Message())
 			writeTerminalProxyState(browserConn, TerminalProxyCodeWorkerTokenRejected,
@@ -246,7 +246,7 @@ func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker worker
 		}
 	}()
 
-	// 浏览器侧保活 ping（FR-140）；Worker 侧保活由 gRPC/隧道传输层承担，无需应用层 ping。
+	// 浏览器侧保活 ping；Worker 侧保活由 gRPC/隧道传输层承担，无需应用层 ping。
 	if p.pingPeriod > 0 {
 		stop := make(chan struct{})
 		go pingConn(browserConn, p.pingPeriod, stop)
@@ -258,7 +258,7 @@ func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker worker
 	return true
 }
 
-// setupKeepalive 为连接装读超时与 pong 处理器（FR-140）：收到 pong 即续读超时。
+// setupKeepalive 为连接装读超时与 pong 处理器：收到 pong 即续读超时。
 func (p *TerminalProxy) setupKeepalive(conn *websocket.Conn) {
 	if p.pongWait <= 0 {
 		return
@@ -281,7 +281,7 @@ func (p *TerminalProxy) extendReadDeadline(conn *websocket.Conn) {
 	}
 }
 
-// pingConn 定时向连接发送 WS ping 帧保活（FR-140），直到 stop 关闭或写失败。
+// pingConn 定时向连接发送 WS ping 帧保活，直到 stop 关闭或写失败。
 // WriteControl 与其它写并发安全（gorilla 保证）。
 func pingConn(conn *websocket.Conn, period time.Duration, stop <-chan struct{}) {
 	ticker := time.NewTicker(period)

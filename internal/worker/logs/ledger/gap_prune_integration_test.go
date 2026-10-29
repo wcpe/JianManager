@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-// FR-486 ③ 附带修复：gap 裁剪在 Ledger 真实路径上的行为。
+// ③ 附带修复：gap 裁剪在 Ledger 真实路径上的行为。
 //
 // 单元用例（gap_prune_test.go）验判据；这里验「接到 Ledger 之后确实生效」——
 // 因为判据正确但没人调用，是这类修复最常见的失败方式（注释承诺了、
@@ -52,7 +52,7 @@ func seedGaps(t *testing.T, l *Ledger, key SourceKey, gaps []Gap, pos logtypes.P
 //
 // 这是本修复的主路径：`gap` 表此前是索引里唯一无界增长的维度，
 // 因为已补上的缺口永远留着——启动时全表读它，几万行就是几百毫秒，
-// 而这段时间发生在向 CP 注册**之前**（FR-486 的原始形态）。
+// 而这段时间发生在向 CP 注册**之前**（的原始形态）。
 func TestLedgerPrunesResolvedGaps(t *testing.T) {
 	l, key := newGapTestLedger(t, "log-prune-1")
 	// 已解决缺口必须超过审计尾窗（DefaultResolvedGapKeepRecent=32），

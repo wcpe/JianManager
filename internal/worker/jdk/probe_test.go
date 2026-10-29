@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// normalizeJDKHome（FR-228）：java 可执行文件 → 上两级 home；目录 → 原样；空白裁剪。
+// normalizeJDKHome：java 可执行文件 → 上两级 home；目录 → 原样；空白裁剪。
 func TestNormalizeJDKHome(t *testing.T) {
 	exe := filepath.Join("opt", "jdk-21", "bin", "java")
 	if runtime.GOOS == "windows" {

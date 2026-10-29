@@ -4,8 +4,8 @@ import { Dialog as DialogPrimitive } from 'radix-ui'
 
 import { cn } from '../../lib/utils'
 
-/**
- * 命令面板（FR-502 阶段 4）：⌘K / Ctrl+K 与顶栏九宫格共用的统一检索入口。
+/** 
+ * 命令面板（阶段 4）：⌘K / Ctrl+K 与顶栏九宫格共用的统一检索入口。
  *
  * 为什么要有它：本轮把常驻侧栏从「所有页面路由」收敛为「资源优先」，被移出侧栏的页面
  * 不能因此变得难找。命令面板与「全部功能」目录是检索捷径——**不是**低频功能唯一的入口，
@@ -33,7 +33,7 @@ export interface CommandPaletteItem {
   group: string
   /** 右侧提示，通常放原路由（`/instances`）；也参与匹配。 */
   hint?: string
-  /**
+  /** 
    * 补充匹配词（支持按原页面名、原路由查找）。
    * 例：`['实例列表', '/instances', '全部实例']`。
    */
@@ -54,7 +54,7 @@ function toHaystack(item: CommandPaletteItem): string {
   return [item.label, item.group, item.hint ?? '', ...(item.keywords ?? [])].join(' ').toLowerCase()
 }
 
-/**
+/** 
  * 把一段文本按命中关键词切成「命中 / 未命中」两种片段，供高亮渲染。
  *
  * 返回分段而非 HTML 字符串：避免 `dangerouslySetInnerHTML`，索引词条是可被后端或用户
@@ -116,7 +116,7 @@ function groupFiltered(filtered: CommandPaletteItem[]) {
   return groups
 }
 
-/**
+/** 
  * 面板主体（输入 + 结果 + 底部提示）。
  *
  * 独立成组件是刻意的：查询词与高亮游标都是「一次打开会话」的临时状态。Radix 在关闭时会卸载
@@ -289,7 +289,7 @@ function CommandPaletteBody({
   )
 }
 
-/**
+/** 
  * 命令面板。
  *
  * 受控组件：`open` 由外壳持有，`onOpenChange` 在 Esc、点遮罩、执行结果三条路径上被调用。

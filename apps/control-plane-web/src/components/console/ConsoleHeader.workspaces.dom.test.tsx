@@ -10,8 +10,8 @@ import { useConsoleStore } from '@/stores/console'
 import { DEFAULT_ROLE_NODES } from '@/lib/shared/roles'
 import ConsoleHeader from './ConsoleHeader'
 
-/**
- * 顶栏工作区切换（FR-502 阶段 6 补丁：从独立成行的 `ConsoleWorkspaceBar` 并回 `ConsoleHeader`）。
+/** 
+ * 顶栏工作区切换（阶段 6 补丁：从独立成行的 `ConsoleWorkspaceBar` 并回 `ConsoleHeader`）。
  *
  * 用例整体从 `WorkspaceSidebar.dom.test.tsx` 迁来（那份文件继续只测侧栏）：契约不变——
  * 工作区由路由决定、切换即进该工作区首个可用页面、按权限裁剪、判不出路由时回落到上次选择；
@@ -37,7 +37,7 @@ function loginAsGroupAdmin() {
   })
 }
 
-describe('顶栏工作区切换（FR-502 阶段 6 补丁）', () => {
+describe('顶栏工作区切换（阶段 6 补丁）', () => {
   beforeEach(() => {
     loginAsAdmin()
     useConsoleStore.setState({ lastWorkspaceKey: null })

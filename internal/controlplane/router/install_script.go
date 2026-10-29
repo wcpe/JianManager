@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/embed"
 )
 
-// registerInstallScriptRoutes 注册 Worker 一键安装脚本的匿名静态端点（FR-080，见 ADR-020 §2）。
+// registerInstallScriptRoutes 注册 Worker 一键安装脚本的匿名静态端点（见 ADR-020 §2）。
 //
 // 一键命令拼 `curl <cp>/install-worker.sh | sh` / `iex (iwr <cp>/install-worker.ps1 -UseBasicParsing).Content`，
 // 这两个路径必须由 CP 在根（非 /api/v1）以 200 返回脚本内容，否则 curl/iwr 404、安装失败（BUG-B 根因）。

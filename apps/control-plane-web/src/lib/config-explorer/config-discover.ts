@@ -1,5 +1,5 @@
-/**
- * 已发现配置文件的展示整理（FR-071）。
+/** 
+ * 已发现配置文件的展示整理。
  *
  * 后端 `GET /configs/discover` 返回扁平配置文件列表；前端按目录分组并稳定排序，
  * 供「已发现配置」面板呈现。纯函数，便于 vitest 覆盖。
@@ -26,7 +26,7 @@ export function baseNameOf(path: string): string {
   return i < 0 ? path : path.slice(i + 1)
 }
 
-/**
+/** 
  * 按目录分组并稳定排序：
  * - 组按目录名字典序（根目录 "" 永远排最前）；
  * - 组内文件按 basename 字典序。

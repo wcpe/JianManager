@@ -10,7 +10,7 @@ export interface ManifestArtifact {
   codec: string
 }
 
-/**
+/** 
  * manifest 单文件条目（contract §2 files[]）。
  * sha256/md5/size 描述**解压后原始内容**；artifact 描述下载制品（压缩态）。
  */
@@ -27,7 +27,7 @@ export interface ManifestFile {
   artifact: ManifestArtifact
 }
 
-/** 楔子 + updater-core 自更新段（contract §2 agent）。FR-088 向导透传原值、不编辑。 */
+/** 楔子 + updater-core 自更新段（contract §2 agent）。向导透传原值、不编辑。 */
 export interface ManifestAgent {
   wedge?: { version: number }
   core?: { version: number; platforms: Record<string, ManifestArtifact> }
@@ -52,7 +52,7 @@ export interface ClientVersionDetail {
   createdAt: string
   isLatest: boolean
   managedDirs: string[]
-  /** 运营自定义追加排除（FR-255）：命中前缀的路径永不删。空则省略。 */
+  /** 运营自定义追加排除：命中前缀的路径永不删。空则省略。 */
   cleanExclude?: string[]
   files: ManifestFile[]
   agent?: ManifestAgent
@@ -105,7 +105,7 @@ export function usePublishClientFile() {
   })
 }
 
-// ── 上传增效：秒传预查 + 小文件聚合（FR-346，增强 FR-250/251）───────────────
+// ── 上传增效：秒传预查 + 小文件聚合（增强251）───────────────
 
 /** 秒传预查单项：前端算好的原始内容 sha256 + 文件字节数（spec §2 hash 对齐语义）。 */
 export interface PrecheckFileEntry {
@@ -124,8 +124,8 @@ export interface PrecheckFileResult {
   result?: ClientFileResult
 }
 
-/**
- * 批量秒传预查：一个请求查 ≤500 个 hash，命中者直接引用既有制品（FR-346）。
+/** 
+ * 批量秒传预查：一个请求查 ≤500 个 hash，命中者直接引用既有制品。
  * 预查是纯优化：调用方对请求失败应降级为「全部未命中」继续正常上传，不阻断发布。
  */
 export async function precheckClientFiles(
@@ -151,8 +151,8 @@ export interface BatchUploadEntry {
   file: Blob
 }
 
-/**
- * 小文件聚合上传（FR-346）：一个 multipart 请求携带 ≤200 个 ≤8MiB 小文件（总 ≤32MiB），
+/** 
+ * 小文件聚合上传：一个 multipart 请求携带 ≤200 个 ≤8MiB 小文件（总 ≤32MiB），
  * 返回与逐文件上传逐字段一致的结果数组（与 entries 顺序对齐）。
  * 协议：meta 首 part（JSON 声明数组）+ 同序 files part；服务端 fail-fast。
  * 显式 120s 超时：32MiB 批体量下默认 10s 不够。
@@ -189,7 +189,7 @@ export function usePublishClientVersion() {
       channelId: string
       files: ManifestFile[]
       managedDirs: string[]
-      /** 运营自定义追加排除（FR-255）：命中前缀永不删。空则不下发（omitempty）。 */
+      /** 运营自定义追加排除：命中前缀永不删。空则不下发（omitempty）。 */
       cleanExclude?: string[]
       agent?: ManifestAgent | null
       note?: string
@@ -226,8 +226,8 @@ export function useRollbackClientVersion() {
   })
 }
 
-/**
- * 管理面制品文本预览结果（FR-214，与后端 service.ArtifactTextPreview 对应）。
+/** 
+ * 管理面制品文本预览结果（与后端 service.ArtifactTextPreview 对应）。
  * 降级由 kind 显式表达——前端据此渲染文本或降级为「仅下载」，不自行猜测。
  */
 export interface ArtifactTextPreview {
@@ -241,8 +241,8 @@ export interface ArtifactTextPreview {
   codec: string
 }
 
-/**
- * 读取客户端分发制品文本内容用于**管理台**预览（FR-214）。
+/** 
+ * 读取客户端分发制品文本内容用于**管理台**预览。
  *
  * 走 JWT 平台管理员端点 `GET /client-channels/:id/files/content?sha256=`——玩家制品端点
  * `GET /client-artifacts/:sha256` 用拉取密钥、浏览器无之不能复用（ADR-022/023）。
@@ -268,8 +268,8 @@ function triggerDownload(blob: Blob, filename: string) {
   URL.revokeObjectURL(url)
 }
 
-/**
- * 下载客户端分发制品（**管理台** JWT 端点，FR-214）。
+/** 
+ * 下载客户端分发制品（**管理台** JWT 端点）。
  * downloadName 取 manifest path 末段以贴近原始文件名（制品按内容寻址，URL 用 sha256）。
  */
 export async function downloadClientArtifact(

@@ -7,8 +7,8 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
-/** FR-037 真浏览器纵切：控制台 Shell（方案 C 品牌顶栏）、服务器选择器与工作区深链。 */
-test.describe('FR-037 运维控制台布局（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：控制台 Shell（方案 C 品牌顶栏）、服务器选择器与工作区深链。 */
+test.describe('运维控制台布局（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await page.addInitScript(() => {
@@ -32,7 +32,7 @@ test.describe('FR-037 运维控制台布局（mock 模式真浏览器）', () =>
     // 侧栏已按**工作区**重构，不再是「域分组头按钮（服务器 / 平台设置 / 客户端分发）+ 子项」
     // 那种两级结构——侧栏内已无任何这类按钮。服务器运维工作区下，域内入口直接平铺为链接，
     // 其中「全部服务器」「节点」带计数，计数属于链接可访问名的一部分，故不能用 exact。
-    // 跨域切换改由顶栏工作区承担（同类适配见 FR-215 用例）。
+    // 跨域切换改由顶栏工作区承担（同类适配见用例）。
     await expect(sidebar.getByRole('link', { name: /^全部服务器/ })).toBeVisible()
     await expect(sidebar.getByRole('link', { name: /^节点/ })).toBeVisible()
     await expect(sidebar.getByRole('link', { name: '网络拓扑', exact: true })).toBeVisible()

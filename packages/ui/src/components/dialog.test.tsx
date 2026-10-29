@@ -15,8 +15,8 @@ import {
   DialogTrigger,
 } from './dialog'
 
-/**
- * Dialog 现状快照测试（FR-502 阶段 0）。
+/** 
+ * Dialog 现状快照测试（阶段 0）。
  *
  * 共享 Dialog 是全站弹窗语义的唯一出口（Radix 组合件 + role=dialog），阶段 4 重构时最容易
  * 静默破坏的是三件事：① 门户挂载点（内容必须经 Portal 挂到 body，而不是留在渲染容器里）；
@@ -73,7 +73,7 @@ async function openDialog(options: DialogOptions = {}) {
   return { ...view, dialog }
 }
 
-/**
+/** 
  * 让 Radix 真正挂上 document 级的 pointerdown 监听器。
  *
  * @radix-ui/react-dismissable-layer 的 usePointerDownOutside 把监听器注册在 `setTimeout(…, 0)` 里，
@@ -87,7 +87,7 @@ async function flushMacrotask() {
   })
 }
 
-/**
+/** 
  * 取唯一匹配 `[data-slot]` 钩子的节点，并断言它确实只有一个。
  *
  * 钩子数量本身就是契约（「关闭入口集合」必须可数），所以「恰好一个」照旧断言；
@@ -216,13 +216,13 @@ describe('Dialog', () => {
   })
 })
 
-/**
- * FR-502 阶段 6：阶段 0 记录的三个 Dialog 缺陷修复 + 关闭文案 i18n。
+/** 
+ *阶段 6：阶段 0 记录的三个 Dialog 缺陷修复 + 关闭文案 i18n。
  *
  * 缺陷本身不影响功能，但都会让"下一层"的消费者踩坑：死钩子让人以为能选到门户、
  * 钩子不对称让脚本只抓得到一个关闭入口、硬编码英文让中英混排的界面漏出一处英文。
  */
-describe('Dialog 钩子与关闭文案（FR-502 阶段 6 修复）', () => {
+describe('Dialog 钩子与关闭文案（阶段 6 修复）', () => {
   it('打开后门户钩子真正落进 DOM（阶段 0 的死钩子已修复）', async () => {
     const { dialog } = await openDialog()
 
@@ -265,7 +265,7 @@ describe('Dialog 钩子与关闭文案（FR-502 阶段 6 修复）', () => {
 
   it('宿主 i18n 生效时关闭文案跟随语言（common.close）', async () => {
     // 用独立实例 + Provider：既验证真实 i18n 链路，又不污染 react-i18next 全局单例
-    //（同文件其它用例依赖"无实例→英文回落"这条路径）
+    // （同文件其它用例依赖"无实例→英文回落"这条路径）
     const zhI18n = i18next.createInstance()
     await zhI18n.init({
       resources: { zh: { translation: { common: { close: '关闭' } } } },

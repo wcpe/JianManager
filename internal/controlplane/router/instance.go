@@ -35,7 +35,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		return
 	}
 
-	// 多维筛选（FR-047）：节点/状态/角色/群组/环境/标签任意组合。
+	// 多维筛选：节点/状态/角色/群组/环境/标签任意组合。
 	filter := service.InstanceFilter{
 		Env: c.Query("env"),
 		Tag: c.Query("tag"),
@@ -89,7 +89,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, instances)
 }
 
-// Search 分页搜索实例（FR-247）：q 名称子串 + 多维筛选 + 排序 + 分页，返回 {items,total,page,pageSize}。
+// Search 分页搜索实例：q 名称子串 + 多维筛选 + 排序 + 分页，返回 {items,total,page,pageSize}。
 func (h *InstanceHandler) Search(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermInstanceRead) {
@@ -106,7 +106,7 @@ func (h *InstanceHandler) Search(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": p.Page, "pageSize": p.PageSize})
 }
 
-// Aggregate 实例维度计数（FR-247）：同筛选下按状态/节点/角色分组计数，供前端筛选 chip / 分组头。
+// Aggregate 实例维度计数：同筛选下按状态/节点/角色分组计数，供前端筛选 chip / 分组头。
 func (h *InstanceHandler) Aggregate(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermInstanceRead) {
@@ -211,16 +211,16 @@ type createInstanceRequest struct {
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
-	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
+	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（ADR-019）。
 	Image string `json:"image"`
-	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079，ADR-019）；仅 docker 模式使用，0=不限制。
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（ADR-019）；仅 docker 模式使用，0=不限制。
 	CPULimit    float64 `json:"cpuLimit"`
 	MemLimitMB  int64   `json:"memLimitMb"`
 	DiskLimitMB int64   `json:"diskLimitMb"`
 	AutoStart   bool    `json:"autoStart"`
 	AutoRestart bool    `json:"autoRestart"`
 	GroupID     uint    `json:"groupId"`
-	// ServerPort/QueryPort/ProbePort 是 MC 实例的宿主监听端口（真机验收 FR-404 抓到：
+	// ServerPort/QueryPort/ProbePort 是 MC 实例的宿主监听端口（真机验收抓到：
 	// 此前缺这三个字段导致 gin 绑定静默丢弃、创建后恒为 0，ServerProbe 插件桥上联 Worker 失败）。
 	ServerPort int `json:"serverPort"`
 	QueryPort  int `json:"queryPort"`
@@ -282,12 +282,12 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "QUOTA_EXCEEDED", "message": err.Error()})
 			return
 		}
-		// 调度拦截（FR-048）：目标节点维护中拒绝接纳新实例。
+		// 调度拦截：目标节点维护中拒绝接纳新实例。
 		if errors.Is(err, service.ErrNodeInMaintenance) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "NODE_MAINTENANCE", "message": err.Error()})
 			return
 		}
-		// 非 docker 实例缺启动命令（FR-078）：docker 可空、其它必填。
+		// 非 docker 实例缺启动命令：docker 可空、其它必填。
 		if errors.Is(err, service.ErrStartCommandRequired) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "START_COMMAND_REQUIRED", "message": err.Error()})
 			return
@@ -306,15 +306,15 @@ type updateInstanceRequest struct {
 	AutoRestart  *bool              `json:"autoRestart"`
 	JDKID        *uint              `json:"jdkId"`
 	EnvVars      *map[string]string `json:"envVars"`
-	// Tags 环境/标签维度（FR-047）：传 null/缺省不变，传数组（含空数组）覆盖。
+	// Tags 环境/标签维度：传 null/缺省不变，传数组（含空数组）覆盖。
 	Tags *[]string `json:"tags"`
 	// Role 实例角色（backend/proxy/universal/beacon）：传 null/缺省不变，传值覆盖（非法值 400）。
 	Role *model.InstanceRole `json:"role"`
 	// Type 实例类型（minecraft_java/generic）：传 null/缺省不变，传值覆盖（非法值 400）。
 	// 与 role 独立——改 role 不会替调用方猜 type；把 beacon 实例恢复为可加载探针的 MC 服务端需显式传
-	// type=minecraft_java（FR-454）。role=beacon 时该字段被忽略并强制归一为 generic。
+	// type=minecraft_java。role=beacon 时该字段被忽略并强制归一为 generic。
 	Type *model.InstanceType `json:"type"`
-	// CPULimit/MemLimitMB/DiskLimitMB docker 资源限额（FR-079）：传 null/缺省不变，传值（含 0）覆盖。
+	// CPULimit/MemLimitMB/DiskLimitMB docker 资源限额：传 null/缺省不变，传值（含 0）覆盖。
 	CPULimit    *float64 `json:"cpuLimit"`
 	MemLimitMB  *int64   `json:"memLimitMb"`
 	DiskLimitMB *int64   `json:"diskLimitMb"`
@@ -397,7 +397,7 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.instanceSvc.Delete(id); err != nil {
-		// FR-310 后运行中实例删除由 CP 编排「先停再删」，仅在无法停止（节点未连接等）时
+		// 后运行中实例删除由 CP 编排「先停再删」，仅在无法停止（节点未连接等）时
 		// 返回 INSTANCE_RUNNING——透传具体原因与指引，而非笼统「需先停止」。
 		if errors.Is(err, service.ErrInstanceRunning) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INSTANCE_RUNNING", "message": err.Error()})
@@ -431,10 +431,10 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 		var pfErr *service.PreflightError
 		switch {
 		case errors.Is(err, service.ErrNodeOffline):
-			// 节点未连接：预检无法执行，返回 409（FR-314）。
+			// 节点未连接：预检无法执行，返回 409。
 			c.JSON(http.StatusConflict, gin.H{"error": "NODE_OFFLINE", "message": err.Error()})
 		case errors.As(err, &pfErr):
-			// 启动预检未通过：422 带具体原因，前端弹错并可在控制台横幅回显（FR-314）。
+			// 启动预检未通过：422 带具体原因，前端弹错并可在控制台横幅回显。
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "PREFLIGHT_FAILED", "message": pfErr.Reason})
 		default:
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_TRANSITION", "message": err.Error()})
@@ -514,7 +514,7 @@ func (h *InstanceHandler) Kill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已终止"})
 }
 
-// AdoptRuntime 接管实例工作目录下的外来活进程（FR-471）。
+// AdoptRuntime 接管实例工作目录下的外来活进程。
 // 权限对齐同文件 Start/Stop：requireNodes 校验实例写权限 + canAccessInstance 校验实例可见性。
 func (h *InstanceHandler) AdoptRuntime(c *gin.Context) {
 	if !requireNodes(c, "instance.operate") {
@@ -642,7 +642,7 @@ type instanceCommandRequest struct {
 	Command string `json:"command" binding:"required"`
 }
 
-// Command 向运行中的实例下发控制台命令（FR-005）。
+// Command 向运行中的实例下发控制台命令。
 // 仅对 RUNNING 实例生效，复用既有 SendCommand 委托；命令不改变实例状态。
 func (h *InstanceHandler) Command(c *gin.Context) {
 	if !requireNodes(c, "terminal.access", "instance.operate") {
@@ -700,7 +700,7 @@ func (h *InstanceHandler) Metrics(c *gin.Context) {
 	c.JSON(http.StatusOK, metrics)
 }
 
-// Env 获取实例运行时进程实际环境（FR-344 环境变量下区）。
+// Env 获取实例运行时进程实际环境（环境变量下区）。
 func (h *InstanceHandler) Env(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -723,7 +723,7 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	instances := rg.Group("/instances")
 	{
 		instances.GET("", h.List)
-		// 静态段与 /:id 同级共存（gin v1.12 支持）：分页搜索 + 维度聚合（FR-247）。
+		// 静态段与 /:id 同级共存（gin v1.12 支持）：分页搜索 + 维度聚合。
 		instances.GET("/search", h.Search)
 		instances.GET("/aggregate", h.Aggregate)
 		instances.POST("", h.Create)

@@ -3,8 +3,8 @@ import { toast } from 'sonner'
 import api from '@/api/client'
 import { apiErrorMessage } from '@/lib/shared/api-error'
 
-/**
- * 配置纳管（FR-533）：把服务器磁盘上**已经存在**的配置文件读入为 `config_file` + 实例级 v1 版本。
+/** 
+ * 配置纳管：把服务器磁盘上**已经存在**的配置文件读入为 `config_file` + 实例级 v1 版本。
  *
  * 【这不是数据导入】配置的真源就是磁盘。本模块只「记录现状」：
  * - 内容与磁盘**逐字节一致**（后端直取 Worker 读到的原文，不重新序列化、不排序键）；
@@ -14,11 +14,11 @@ import { apiErrorMessage } from '@/lib/shared/api-error'
  *   否则会冲掉运维后续做的修改；
  * - 坏掉的配置也照收（记录现状优先于校验通过），解析失败只作为 `warning` 带出。
  *
- * 契约见 `docs/API.md` 的「分层配置与纳管（FR-529~533）」与
+ * 契约见 `docs/API.md` 的「分层配置与纳管（~533）」与
  * `docs/specs/config-beacon-migration/spec.md`。
  */
 
-/**
+/** 
  * 纳管动作：让界面能说清「将要 / 已经做了什么」。
  *
  * 与后端 `service.AdoptAction*` 常量逐值对应。
@@ -37,7 +37,7 @@ export type AdoptFileStatus =
   | 'already_adopted'
   | 'failed'
 
-/**
+/** 
  * 纳管错误码（spec §6 + §10.1 补全）。
  *
  * 前端按码分类展示，不靠 message 文本猜——文案会变，码不会。
@@ -75,7 +75,7 @@ export interface AdoptFileResult {
   action?: AdoptAction
   code?: AdoptCode
   message?: string
-  /**
+  /** 
    * 内容可读但解析告警（如 YAML 语法错误）。
    * 纳管照常记录现状，因此这**不是失败**——界面须与 `status=failed` 区别展示。
    */
@@ -142,7 +142,7 @@ export interface AdoptTarget {
   instanceIds?: number[]
 }
 
-/**
+/** 
  * 纳管请求。两种形态共用一个入口：
  * - 给 `target` → 批量（`target` + `pathPatterns`）；
  * - 否则 → 按 `files` 列表逐文件纳管。
@@ -150,7 +150,7 @@ export interface AdoptTarget {
 export interface AdoptRequest {
   files?: AdoptFileInput[]
   target?: AdoptTarget
-  /**
+  /** 
    * 批量模式的通配过滤。**必填**（后端刻意不允许「纳管目录下全部文件」）。
    * 语法：逐段 glob，`**` 跨层，大小写不敏感。
    */
@@ -167,7 +167,7 @@ export interface ConfigHealthView {
   layerVersionCount: number
   /** 最近一次配置写入时间（RFC3339）；从未写入时缺省。 */
   lastWriteAt?: string
-  /**
+  /** 
    * 固定提示文案。
    *
    * **只报告 JM 侧事实，不做自动判定**：JM 无法从自身探测 Beacon 侧的配置开关
@@ -189,7 +189,7 @@ export function useConfigHealth(enabled = true) {
   })
 }
 
-/**
+/** 
  * 纳管预演（POST /config-files/adopt/preview）。
  *
  * 独立端点而非 `dryRun: true`：后端**强制**按 dryRun 执行、无视请求体里的该字段——
@@ -207,7 +207,7 @@ export function useAdoptPreview() {
   })
 }
 
-/**
+/** 
  * 执行纳管（POST /config-files/adopt）。
  *
  * 不做乐观更新：纳管的结论是逐文件的（created / already_adopted / failed / warning），

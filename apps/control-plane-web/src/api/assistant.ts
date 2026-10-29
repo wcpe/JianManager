@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * AI 助手配置 API（FR-514，见 ADR-105）。
+/** 
+ * AI 助手配置 API（见 ADR-105）。
  *
  * 两条边界写在这里，不在视图里重复：
  * - 可用模型摘要（`/assistant/models`）对所有登录用户开放，只含协议与能力，
@@ -46,7 +46,7 @@ export interface AssistantProvider {
   credentialEnv?: string
   /** 是否已配置可用凭据。 */
   hasCredential: boolean
-  /** 出站代理模式（FR-539）：direct / env / custom。 */
+  /** 出站代理模式：direct / env / custom。 */
   proxyMode: string
   /** 代理是否带 userinfo（只回布尔，绝不回显地址与口令）。 */
   proxyHasAuth: boolean
@@ -68,7 +68,7 @@ export interface AssistantModel {
   tools: boolean
   contextWindow: number | null
   maxOutputTokens: number | null
-  /** 思考强度（FR-541）；空串表示不指定。 */
+  /** 思考强度；空串表示不指定。 */
   reasoningEffort: string
   enabled: boolean
   providerEnabled: boolean
@@ -98,7 +98,7 @@ export interface ProviderPayload {
   /** 空串表示保留原密文（编辑态）或必填（创建态，由后端判定）。 */
   credentialSecret?: string
   clearCredential?: boolean
-  /** 出站代理模式（FR-539）：direct / env / custom；空串表示不改动。 */
+  /** 出站代理模式：direct / env / custom；空串表示不改动。 */
   proxyMode?: string
   /** 自定义代理地址（含 userinfo 时整串落库且永不回显）。 */
   proxyUrl?: string
@@ -114,7 +114,7 @@ export interface ModelPayload {
   tools: boolean
   contextWindow: number | null
   maxOutputTokens: number | null
-  /** 思考强度（FR-541）；空串表示不指定（由上游默认）。 */
+  /** 思考强度；空串表示不指定（由上游默认）。 */
   reasoningEffort: string
   enabled: boolean
   version?: number
@@ -241,7 +241,7 @@ export interface AssistantProbeResult {
   ok: boolean
   latencyMs: number
   modelCount?: number
-  /**
+  /** 
    * 分类码（如 upstream_auth / upstream_rate_limited / egress_denied）。
    * 前端据它给出处置建议，不解析 message。
    */
@@ -262,7 +262,7 @@ export interface AssistantModelTestResult {
   message?: string
 }
 
-/**
+/** 
  * 探测供应商连通性。
  *
  * 失败**不会**抛异常到调用方的 catch：上游失败是「结论」（ok=false + 分类码），
@@ -296,9 +296,9 @@ export interface AssistantAdminSettings {
   defaultModelId: number | null
   /** 已放行的私网段（规范化后的字符串，如 "10.0.0.0/8"）。 */
   allowPrivateCidrs: string[]
-  /** 自定义系统提示词（FR-541）；空串表示只用内置基线。 */
+  /** 自定义系统提示词；空串表示只用内置基线。 */
   systemPrompt: string
-  /** 是否向助手暴露平台自带工具（FR-540）；未配置时后端回显 true。 */
+  /** 是否向助手暴露平台自带工具；未配置时后端回显 true。 */
   builtinToolsEnabled: boolean
   version: number
   /** 当前部署是否接受 http:// 明文目标（dev 环境才为真），只读回显。 */
@@ -328,7 +328,7 @@ export function useAssistantSettings(enabled = true) {
   })
 }
 
-/**
+/** 
  * 保存助手全局设置（整体替换）。
  *
  * 保存后后端会在放行段变化时**立即重建出站工厂**，因此要让整组 assistant 缓存失效：
@@ -347,7 +347,7 @@ export function useSaveAssistantSettings() {
   })
 }
 
-// ── 外部 MCP 连接（FR-517） ──────────────────────────────────────
+// ── 外部 MCP 连接 ──────────────────────────────────────
 //
 // 全部仅平台管理员；凭据只在**提交时**上行（`authSecret`），下行永远没有它，
 // 只有 `hasCredential` 布尔。
@@ -498,7 +498,7 @@ export function useProbeMCPConnection() {
   })
 }
 
-/**
+/** 
  * 拉取工具清单。
  *
  * 超额（>200）时后端回 409 `MCP_TOOLS_LIMIT` 并**整次失败、不落库**——
@@ -546,7 +546,7 @@ export function useUpdateMCPTool() {
   })
 }
 
-// ── 模型自动发现（FR-538） ──────────────────────────────────────
+// ── 模型自动发现 ──────────────────────────────────────
 //
 // 只读候选，不自动入库：`contextWindow` / `tools` 不能从模型名推断，
 // 必须由管理员确认后走 useCreateModel 落库。
@@ -576,7 +576,7 @@ export function useDiscoverModels() {
   })
 }
 
-// ── 技能（FR-541） ──────────────────────────────────────────────
+// ── 技能 ──────────────────────────────────────────────
 
 export interface AssistantSkill {
   name: string

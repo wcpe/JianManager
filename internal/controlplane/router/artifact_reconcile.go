@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ArtifactReconcileHandler 制品索引 ↔ S3 一致性对账路由处理器（FR-349）。
+// ArtifactReconcileHandler 制品索引 ↔ S3 一致性对账路由处理器。
 // 全组挂 admin（JWT + 平台管理员）；处置/触发/设置变更写审计（audit 可 nil，静默跳过）。
 type ArtifactReconcileHandler struct {
 	svc   *service.ArtifactReconcileService

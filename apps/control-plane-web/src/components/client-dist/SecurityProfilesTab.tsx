@@ -5,8 +5,8 @@ import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/shared/priva
 import { useClientDistSecurityProfile, useClientDistSecurityProfiles } from '@/api/clientDistSecurity'
 import { useSecurityQuery } from './security-shared'
 
-/**
- * 安全侧「客户端画像」Tab + 详情弹窗（FR-430 / ADR-088）。
+/** 
+ * 安全侧「客户端画像」Tab + 详情弹窗（ADR-088）。
  * 由旧 `ProtectionCenterPage.tsx` 内联实现原样迁出，行为不变。
  *
  * 展示层已回迁应用侧（`SecurityProfilesTabView`），此处只保留取数与查询读写：
@@ -16,7 +16,7 @@ import { useSecurityQuery } from './security-shared'
  * 详情弹窗开合真源在视图，容器只镜像 id 以驱动取数。
  */
 
-/** 脱敏函数（FR-360 应用侧隐私策略）常量注入，避免每次渲染新建对象。 */
+/** 脱敏函数（应用侧隐私策略）常量注入，避免每次渲染新建对象。 */
 const MASKERS: ProfileMaskers = {
   playerName: maskPlayerName,
   machineId: maskMachineId,

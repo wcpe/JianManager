@@ -9,9 +9,9 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ServerStateHandler 服务器状态查询路由处理器（FR-076，见 ADR-016）。
+// ServerStateHandler 服务器状态查询路由处理器（见 ADR-016）。
 // 按需经探针反向 WS 桥取回某实例的全量 Bukkit 内部状态（server/worlds/jvm/classloader/scheduler/listeners），
-// 供前端「服务器状态」tab 渲染（FR-077）。轻指标走 /metrics；本端点仅前端开 tab/手动刷新时调用。
+// 供前端「服务器状态」tab 渲染。轻指标走 /metrics；本端点仅前端开 tab/手动刷新时调用。
 type ServerStateHandler struct {
 	stateSvc *service.ServerStateService
 	authz    *service.AuthzService

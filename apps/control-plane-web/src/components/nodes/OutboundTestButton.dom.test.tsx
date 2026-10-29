@@ -5,11 +5,11 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { OutboundTestButton } from './OutboundTestButton'
 
-/**
- * 出站连通性测试按钮（FR-280）：editable 模式渲染可编辑目标 URL（默认非 GitHub），
+/** 
+ * 出站连通性测试按钮：editable 模式渲染可编辑目标 URL（默认非 GitHub），
  * 测任意地址；非 editable 保持固定目标一键测试。mock /diagnostics/http-test 恒返 200 可达。
  */
-describe('OutboundTestButton（可自定义目标，FR-280）', () => {
+describe('OutboundTestButton（可自定义目标）', () => {
   it('editable：默认 google、可改任意地址并测通', async () => {
     loginMockUser()
     renderWithProviders(<OutboundTestButton defaultUrl="https://www.google.com" editable label="测试出站连通性" />)

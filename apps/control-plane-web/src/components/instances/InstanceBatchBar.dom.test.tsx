@@ -28,7 +28,7 @@ function renderBatchBar(selected: BatchSelectedInstance[]) {
   return { user, onClear, onRetainFailed }
 }
 
-describe('InstanceBatchBar（FR-058 实例批量操作）', () => {
+describe('InstanceBatchBar（实例批量操作）', () => {
   it('批量下发命令会二次确认并提交 ids + command', async () => {
     let captured: unknown = null
     server.use(

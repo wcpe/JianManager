@@ -1,4 +1,4 @@
-// Package grpcmsg 提供 CP↔Worker gRPC 单消息尺寸上限的单一真值与应用层守卫（FR-305）。
+// Package grpcmsg 提供 CP↔Worker gRPC 单消息尺寸上限的单一真值与应用层守卫。
 //
 // 背景：直拨链路的上限由 grpc.Server 选项显式限定（64MiB），而反向隧道（ADR-066）挂在
 // grpctunnel 的 ReverseTunnelServer 上——v0.3.0 不暴露任何尺寸配置，唯一天花板是硬编码的
@@ -18,7 +18,7 @@ import (
 )
 
 // MaxMessageBytes CP↔Worker 单条 gRPC 消息尺寸上限的单一真值（收/发、直拨/隧道共用）。
-// 取 64MiB：与探针依赖单文件上限同量级，为运行库缓存增长留足余量（沿革见 FR-010/FR-114 的
+// 取 64MiB：与探针依赖单文件上限同量级，为运行库缓存增长留足余量（沿革见的
 // 7.6MB DeployServerProbe 载荷把默认 4MiB 放宽到 64MiB 的决定）。
 const MaxMessageBytes = 64 << 20
 
@@ -62,7 +62,7 @@ func UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 
 // WrapRegistrar 包装 grpc.ServiceRegistrar：注册时改写 ServiceDesc 的 **unary** handler，
 // 使其经本包判限拦截器执行——grpctunnel 的 ReverseTunnelServer 实现 ServiceRegistrar，
-// 包一层即让隧道承载的 unary RPC 获得与 grpc.NewServer 尺寸选项等效的 64MiB 守卫（FR-305）。
+// 包一层即让隧道承载的 unary RPC 获得与 grpc.NewServer 尺寸选项等效的 64MiB 守卫。
 //
 // 只守 unary、**不包裹 stream handler**：大 unary 是无框架上限的整块缓冲 OOM 真风险；而
 // grpctunnel 的流按 16KiB 分块传输（`chunkMax`）、单帧天然远小于上限，包裹其 ServerStream 的
@@ -106,7 +106,7 @@ func chainInterceptors(outer, inner grpc.UnaryServerInterceptor) grpc.UnaryServe
 }
 
 // CallOptions 返回 CP 客户端两方向显式上限（防默认漂移：grpc-go 客户端接收默认仅 4MiB，
-// 发送默认无界；统一显式到 MaxMessageBytes，与 Worker 服务端同界，FR-305）。
+// 发送默认无界；统一显式到 MaxMessageBytes，与 Worker 服务端同界）。
 func CallOptions() []grpc.CallOption {
 	return []grpc.CallOption{
 		grpc.MaxCallRecvMsgSize(MaxMessageBytes),

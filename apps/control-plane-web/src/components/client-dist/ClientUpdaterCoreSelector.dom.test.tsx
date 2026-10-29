@@ -5,8 +5,8 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ClientUpdaterCoreSelector from './ClientUpdaterCoreSelector'
 
-/**
- * ClientUpdaterCoreSelector 强断言（FR-259）：列出归档版本 + 当前选定高亮 + 切换确认弹窗。
+/** 
+ * ClientUpdaterCoreSelector 强断言：列出归档版本 + 当前选定高亮 + 切换确认弹窗。
  * mock 返回 v2(selected) + v1 两版本。
  */
 describe('ClientUpdaterCoreSelector（mock 假后端）', () => {

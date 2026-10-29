@@ -33,15 +33,15 @@ export type PlayersNotice = (kind: 'success' | 'error', message: string) => void
 
 type PlayerActionKind = 'kick' | 'ban'
 
-/**
- * 实例控制台「玩家」分区（FR-339）：本实例作用域的玩家治理。
+/** 
+ * 实例控制台「玩家」分区：本实例作用域的玩家治理。
  * - 在线玩家：`GET /players` 为全后端聚合，前端按 instanceId 过滤（spec §6 拍板，不改后端）；
  * - 踢出/封禁：原因确认弹窗后 mutation 携带 `scope.instanceId` 限定单实例；
  * - 封禁列表：全量展示 + scope 徽章（network/global 封禁同样作用于本实例，不做假实例过滤）；
  * - 白名单：实例原生作用域的查改。
  * 独立页的子服筛选/批量勾选不进本分区（作用域恒为本实例）。
  *
- * 布局为分栏（FR-423）：左 38% 放两块窄内容（在线玩家 + 白名单），右 62% 放宽表（封禁记录）。
+ * 布局为分栏：左 38% 放两块窄内容（在线玩家 + 白名单），右 62% 放宽表（封禁记录）。
  * 分栏动因是量测出来的——三块原先纵向堆叠，宽度各行其是（1700 / 1700 / 460px），
  * 在线列表的名字与操作按钮被顶到 1920 视口的两端、视线要横跨 1650px；同时内容底边止于
  * y=880，底部白白空掉 150px。按「内容天然宽度需求」分栏后，窄内容不再被拉宽，
@@ -114,8 +114,8 @@ function RowsSkeleton({ rows = 3 }: { rows?: number }) {
   )
 }
 
-/**
- * 行卡片列表容器（FR-423）。
+/** 
+ * 行卡片列表容器。
  *
  * 700px 上限是验收项（「最长行宽 ≤ 700px」）而非审美偏好：左栏按比例分宽，
  * 在 2560 及更宽的屏上 38% 会重新超过 700px，视线距离又会涨回去，故显式兜住。
@@ -128,8 +128,8 @@ function PlayerRowList({ label, children }: { label: string; children: ReactNode
   )
 }
 
-/**
- * 玩家行卡片（FR-423）：头像块 + 名字 + 操作按钮收在同一行内。
+/** 
+ * 玩家行卡片：头像块 + 名字 + 操作按钮收在同一行内。
  *
  * 取代原先的 2 列表格——表格把名字压到最左、操作按钮压到最右，中间的空列越宽视线越长。
  * 行卡片让「谁」和「怎么处理」贴在一处，配合 `PlayerRowList` 的宽度上限收口。
@@ -170,7 +170,7 @@ function OnlinePlayersPanel({
     () => (online?.players ?? []).filter((p) => p.instanceId === instanceId),
     [online?.players, instanceId],
   )
-  // 本实例探针不可达 → 降级横幅（复用 players.degraded 文案形态，FR-067）。
+  // 本实例探针不可达 → 降级横幅（复用 players.degraded 文案形态）。
   const backend = (online?.backends ?? []).find((b) => b.instanceId === instanceId)
   const degraded = backend !== undefined && !backend.available
 
@@ -264,11 +264,11 @@ function OnlinePlayersPanel({
   )
 }
 
-/**
+/** 
  * 封禁列表：全量展示 + scope 徽章 + 解封。
  * 不按实例过滤：network/global 作用域的封禁同样影响本实例，隐藏会误导（spec §6 拍板）。
  *
- * 列宽显式约束（FR-424）：`table-fixed` 把宽度从「内容说了算」改成「布局说了算」——
+ * 列宽显式约束：`table-fixed` 把宽度从「内容说了算」改成「布局说了算」——
  * 一条长封禁原因原先能把整表推宽、把时间/操作列挤出视野。现在只有原因列吃剩余宽度并省略号截断，
  * 全文走 title 悬停；其余六列按内容量给定宽，时间列右对齐等宽字体便于纵向比对。
  */
@@ -299,7 +299,7 @@ function BansPanel({ bans, bansLoading = false, onUnban, notify }: InstancePlaye
   )
 
   return (
-    // 内容驱动 + 栏高封顶（FR-423）：记录多时撑到栏高上限后卡内滚动，
+    // 内容驱动 + 栏高封顶：记录多时撑到栏高上限后卡内滚动，
     // 少时贴合内容——若写死 flex-1，2 条封禁也会撑满 800+px，正是本批要消灭的
     // 「矮内容被拉平成死区」。空白落到栏位空隙，与左栏两卡策略一致。
     <Panel

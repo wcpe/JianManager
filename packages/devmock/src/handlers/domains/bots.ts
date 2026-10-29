@@ -3,15 +3,15 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
 
-/**
- * Bot 与终端域 mock handler（FR-209）。照 spec §7 范式：用 domainRoute 注册本域全部 endpoint，
+/** 
+ * Bot 与终端域 mock handler。照 spec §7 范式：用 domainRoute 注册本域全部 endpoint，
  * 读写 db('bots') 集合，受保护端点首行 requireAuth。
  *
  * 注意：终端 token（GET /instances/:id/terminal-token）与终端 WS 由地基 realtime/terminal-ws.ts
  * 提供，本文件不重定义；terminal.ts 仅取该 token，归地基。本域只负责 /bots* REST。
  */
 
-/**
+/** 
  * 假后端 Bot 行。字段严格匹配 api/bots.ts 的 BotInfo：
  * config 以 JSON 字符串存储（后端契约，前端解析；见全局记忆「JSON 字符串字段前端解析」）。
  */
@@ -19,7 +19,7 @@ export interface BotRow {
   id: number
   uuid: string
   instanceId: number
-  /**
+  /** 
    * 实例展示名（真后端 `/bots` 已回填）。前端优先用它，不必为了显示名字而拉全量实例列表。
    * 可选：实例被删时后端留空，前端回退显示 #id。
    */
@@ -53,7 +53,7 @@ interface BotStressSessionRow {
   endedAt?: string | null
   createdAt: string
   updatedAt: string
-  /** FR-370/372：1=legacy，2=命令压测 V2 */
+  /** 372：1=legacy，2=命令压测 V2 */
   schemaVersion?: number
   runState?: string
   verdict?: string
@@ -82,7 +82,7 @@ interface OrchestrationSummary {
   behaviors: string[]
 }
 
-/** FR-371 压测模板行。 */
+/** 压测模板行。 */
 interface BotLoadTemplateRow {
   id: number
   uuid: string
@@ -103,7 +103,7 @@ interface BotLoadTemplateRow {
   deleted?: boolean
 }
 
-/** FR-371 运行预检计划（mock 内存）。 */
+/** 运行预检计划（mock 内存）。 */
 interface PreflightPlan {
   planToken: string
   expiresAt: string
@@ -164,7 +164,7 @@ const bots = db<BotRow>('bots', () => [
 const DISCLAIMER =
   '命令发送成功仅表示 Bot Worker 调用 bot.chat 时未同步抛错，不证明服务器接受、权限校验通过或产生预期业务效果。'
 
-/** FR-372 演示用 V2 运行中会话（mock 可演示详情 + SSE）。 */
+/** 演示用 V2 运行中会话（mock 可演示详情 + SSE）。 */
 function seedV2RunningSession(): BotStressSessionRow {
   const targetBots = 100
   return {
@@ -644,7 +644,7 @@ export const handlers = [
     const row = stressSessions.get(id)
     if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
 
-    // FR-371：若带 planToken 则校验预检计划；旧 V1 空 body 仍兼容直接启动。
+    // 若带 planToken 则校验预检计划；旧 V1 空 body 仍兼容直接启动。
     let body: { planToken?: string } = {}
     try {
       body = (await info.request.json()) as { planToken?: string }
@@ -692,7 +692,7 @@ export const handlers = [
     return HttpResponse.json({ ...updated, counts: stressCounts(id) }, { status: body.planToken ? 202 : 200 })
   }),
 
-  // ─── FR-371 load-nodes / load-templates / preflight ───
+  // ───load-nodes / load-templates / preflight ───
 
   domainRoute('get', '/bots/load-nodes', (info) => {
     const denied = requireAuth(info)
@@ -1012,7 +1012,7 @@ export const handlers = [
     return HttpResponse.json({ ...updated, counts: stressCounts(id) })
   }),
 
-  // ── FR-372 观测子资源（简化 mock，可演示详情页）──────────────────────────
+  // ──观测子资源（简化 mock，可演示详情页）──────────────────────────
 
   domainRoute('post', '/bots/stress-sessions/:id/cancel', (info) => {
     const denied = requireAuth(info)

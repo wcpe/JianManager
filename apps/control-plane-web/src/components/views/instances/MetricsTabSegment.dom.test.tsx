@@ -6,8 +6,8 @@ import type { ReactNode } from 'react'
 import MetricsTabSegment from '@/components/views/instances/MetricsTabSegment'
 import MetricsFallbackSegment from '@/components/views/instances/MetricsFallbackSegment'
 
-/**
- * FR-448 §2.1 监控页签分流与降级视图 · 受控视图测（ADR-103 a 范式）。
+/** 
+ *§2.1 监控页签分流与降级视图 · 受控视图测（ADR-103 a 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。
  * 两个要点：分流器只按注入结果渲染、自己不做判定；直探摘要缺省即显式「不可用」，
@@ -41,7 +41,7 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <I18nextProvider i18n={testI18n}>{children}</I18nextProvider>
 }
 
-describe('MetricsTabSegment 分流（FR-448 §2.1 · ADR-103）', () => {
+describe('MetricsTabSegment 分流（§2.1 · ADR-103）', () => {
   it('style=probe 时只渲染探针分支', () => {
     render(
       <MetricsTabSegment style="probe" probeSlot={<div data-testid="probe-slot" />} fallbackSlot={<div data-testid="fallback-slot" />} />,

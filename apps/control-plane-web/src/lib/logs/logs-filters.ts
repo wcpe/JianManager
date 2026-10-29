@@ -1,5 +1,5 @@
-/**
- * 日志中心纯函数助手（FR-150）。
+/** 
+ * 日志中心纯函数助手。
  * 级别配色归一、时间范围预设、导出范围裁剪、虚拟滚动窗口计算——抽为纯函数便于 vitest 覆盖，
  * UI 组件只做渲染与状态编排。
  */
@@ -9,8 +9,8 @@ import type { LogQueryParams } from '@/lib/console/console-log-types'
 /** 日志中心固定主视图，顺序与管理员可见的切换控件一致。 */
 export const LOG_VIEWS = ['platform', 'node_instance', 'all', 'legacy'] as const
 
-/**
- * 日志级别 → 状态等级（FR-150）。
+/** 
+ * 日志级别 → 状态等级。
  * 经 StatusBadge 着色，使日志与告警页语义统一：error=danger、warn=warning、info=info、debug=neutral。
  * 着色全部走 `--status-*` token，不硬编码品牌色。
  */
@@ -42,7 +42,7 @@ const PRESET_SPAN_MS: Record<Exclude<TimeRangePreset, 'all'>, number> = {
   '7d': 7 * 24 * 60 * 60 * 1000,
 }
 
-/**
+/** 
  * 把时间范围预设转为 `from`/`to`（RFC3339）。
  * `all` 返回空对象（不约束时间）；相对预设以 `now` 为上界、回溯对应跨度为下界。
  * `now` 显式传入便于测试；UI 调用时传 `new Date()`。
@@ -59,7 +59,7 @@ export function timeRangeToParams(
   }
 }
 
-/**
+/** 
  * tail-first 分页窗口（纯函数）：以锚点为**窗口上界**、按预设窗宽整体前移，
  * 返回该窗应发的 `from/to`；首屏锚点为 now，已枚举完窗口的下一窗锚点为原 from。
  * 语义与首屏的 `timeParamsFor(range, anchor, false)` 完全一致（同一 `timeRangeToParams`）。
@@ -74,11 +74,11 @@ export function windowForAnchor(
   return timeRangeToParams(range, new Date(anchor))
 }
 
-/** 导出范围：当前页 / 全部匹配 / 时间段（FR-150 导出范围可选）。 */
+/** 导出范围：当前页 / 全部匹配 / 时间段（导出范围可选）。 */
 export type LogExportScope = 'currentPage' | 'allMatched' | 'range'
 
-/**
- * 按导出范围裁剪查询参数（FR-150）。
+/** 
+ * 按导出范围裁剪查询参数。
  * - currentPage：保留 page/pageSize，仅导出可见页。
  * - allMatched / range：去掉分页，导出整个筛选结果集（range 复用筛选区已设的 from/to）。
  * 始终返回新对象，不修改入参。未知范围按 allMatched 兜底。
@@ -116,8 +116,8 @@ export interface VirtualWindow {
   padBottom: number
 }
 
-/**
- * 计算固定行高列表的可见窗口（FR-150 虚拟滚动）。
+/** 
+ * 计算固定行高列表的可见窗口（虚拟滚动）。
  * 只渲染视口附近 overscan 圈内的行，其余以上下 spacer 占位，使千行级日志不一次性入 DOM。
  * 防御 rowHeight ≤ 0（退化为全量）与空列表。
  */

@@ -1,10 +1,10 @@
 /* eslint-disable react-refresh/only-export-components -- shadcn 组件随组件导出 cva 变体，仅影响 Fast Refresh */
-/**
+/** 
  * @file Button：全站按钮唯一出口。统一样式变体、焦点环、按压/悬停反馈与禁用态。
  * @input  lib/focus-ring（统一焦点环）、lib/interaction-overlay（交互层）、lib/utils 的 cn、Spinner
  * @output Button、buttonVariants、ButtonProps
  * @sync   改动行为时同步 button.test.tsx；导出变化时同步 index.ts
- * @since  FR-502
+ * @since
  */
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
@@ -21,7 +21,7 @@ import {
 } from "../lib/interaction-overlay"
 import { Spinner } from "./spinner"
 
-/**
+/** 
  * 判定子节点里是否存在「可见文案」。
  *
  * 用途见 `Button` 的 tooltip：只有图标、没有文字的按钮，屏幕阅读器只会念"按钮"，
@@ -51,7 +51,7 @@ function hasVisibleText(node: React.ReactNode): boolean {
 const buttonVariants = cva(
   cn(
     "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap outline-none",
-    // FR-502 阶段 6：焦点环/过渡/禁用态全部改取 lib 里的统一常量，
+    // 阶段 6：焦点环/过渡/禁用态全部改取 lib 里的统一常量，
     // 组件只表达"用哪一种"，不再各自拼同一串类名（拼错时既不报错也很难发现）。
     interactionTransition,
     disabledState,
@@ -85,7 +85,7 @@ const buttonVariants = cva(
         ),
         ghost: interactionOverlay,
         link: "text-primary underline-offset-4 hover:underline active:text-primary/80",
-        /*
+        /* 
           invisible（借鉴 GitHub Primer 的同名变体）：**零视觉外壳**，只保留焦点环与按压反馈。
 
           【为什么需要它】站内大量「整行可点击」的地方此前都是原生 `<button>` 手写样式：
@@ -105,7 +105,7 @@ const buttonVariants = cva(
           仍应直接用原生元素（Primer 也是让 ActionList.Item 独立成组件，而不是塞进 Button）。
         */
         invisible:
-          /*
+          /* 
             【必须把字号/字重/间距也归零】`Button` 的基础类含
             `text-sm font-medium gap-2 shrink-0`，而只写 `text-inherit` 只重置**颜色**，
             字号与字重仍继承基础类——于是「原本靠父级继承 13px 正文」的行内按钮，
@@ -132,7 +132,7 @@ const buttonVariants = cva(
         "icon-xs": "size-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-8",
         "icon-lg": "size-10",
-        /**
+        /** 
          * 不施加任何盒模型：高度、内边距、圆角全部交还调用方。
          * 配 `variant="invisible"` 使用，用于「整行可点击 / 纯图标 / 卡片外壳」这类
          * 需要按钮语义但视觉由内容决定的场景（见 variant 的 invisible 注释）。
@@ -161,16 +161,16 @@ function Button({
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
-    /**
-     * 加载中（FR-502 阶段 6）：内置 Spinner + 自动禁用 + `aria-busy`。
+    /** 
+     * 加载中（阶段 6）：内置 Spinner + 自动禁用 + `aria-busy`。
      *
      * 三个动作必须捆在一起：只转圈不禁用会重复提交，只禁用不转圈看起来像坏了，
      * 不标 `aria-busy` 则辅助技术用户完全不知道刚才那次点击在等什么。
      * 文案不要跟着改（如"保存中…"）：可访问名一旦变化，正在操作的控件就从用户手里"消失"了。
      */
     isLoading?: boolean
-    /**
-     * 悬停提示（FR-502 阶段 6）。
+    /** 
+     * 悬停提示（阶段 6）。
      *
      * 实现为原生 `title`，不是自绘气泡：气泡需要 wrapper 元素或 Portal，
      * 而 Button 有 139 处调用、多在 flex 行内与表格单元格里，插一层包裹会改变布局

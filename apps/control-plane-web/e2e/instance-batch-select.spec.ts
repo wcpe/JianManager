@@ -1,19 +1,19 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-058 实例批量操作 · 单机（Playwright + mock 模式）验收。
+/** 
+ *实例批量操作 · 单机（Playwright + mock 模式）验收。
  * 覆盖：列表视图行内多选 → 浮现批量操作栏（已选计数）→ 直接动作（批量重启）落结果反馈；
  * 危险动作（批量强制关服）弹二次确认并要求输入 FORCE 关键字后才放行。
  * （批量下发 payload、部分失败保留重试、状态感知禁用由 InstanceBatchBar.dom.test.tsx 单测覆盖）
  *
- * 说明：FR-452 起实例页默认为分组树表；批量多选复选框在列表视图（树表）行内，故用 `view=list` 深链；
+ * 说明：起实例页默认为分组树表；批量多选复选框在列表视图（树表）行内，故用 `view=list` 深链；
  * mock 生成 1200 实例（server-XXXX），status = STATUS_POOL[id%5]，故 id%5==0 为 RUNNING。
  * 用 `q=` + `status=RUNNING` 深链把可见集合钉到已知运行中实例，行复选框 aria-label = 实例名。
- * 证据落 .tmp/acceptance/FR-058/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-058 列表多选 → 批量操作栏 → 批量重启结果反馈 + 强制关服 FORCE 二次确认', async ({ page }) => {
+test('列表多选 → 批量操作栏 → 批量重启结果反馈 + 强制关服 FORCE 二次确认', async ({ page }) => {
   await login(page)
   // 列表视图 + 仅看运行中 + 搜索钉到 server-0005（id=5，RUNNING）。
   await page.goto('/instances?view=list&status=RUNNING&q=server-0005')
@@ -57,7 +57,7 @@ test('FR-058 列表多选 → 批量操作栏 → 批量重启结果反馈 + 强
   await killDialog.getByPlaceholder('FORCE').fill('FORCE')
   await expect(execute).toBeEnabled()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-058/single-machine-instance-batch.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-instance-batch.png', fullPage: true })
 
   // 强制关服同样按 kill action 的 POST 响应判定完成，旧的重启 toast 不参与同步。
   const killResponsePromise = page.waitForResponse((response) => {

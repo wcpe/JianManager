@@ -4,8 +4,8 @@ import { ChevronRightIcon, HelpCircleIcon } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../tooltip'
 
-/**
- * 页头（FR-502 阶段 3）：内容页的统一开头——可选面包屑 + 标题 + 可选计数 + 说明图标 + 右侧操作区。
+/** 
+ * 页头（阶段 3）：内容页的统一开头——可选面包屑 + 标题 + 可选计数 + 说明图标 + 右侧操作区。
  *
  * 布局规范要求任何内容页的第一个子元素都是它，从而消除「页名重复出现在面包屑、
  * 页面大标题、外层卡壳」的冗余（原型第四节：去掉重复的页名、指标和外层卡壳）。
@@ -48,7 +48,7 @@ export function PageHeader({
   title: React.ReactNode
   /** 标题右侧计数；数字自动按 zh-CN 千分位。 */
   count?: number | string
-  /**
+  /** 
    * 页面说明。不再渲染为标题下方的整行小字，而是收进标题右侧的问号图标里，
    * 悬停/聚焦时以 Tooltip 呈现（见文件头注释）。
    *
@@ -108,7 +108,7 @@ export function PageHeader({
             )}
           </h1>
           {description && (
-            /*
+            /* 
               说明收进问号图标：信息仍可取，但不再占用标题下方整行。
 
               用 `<button>` 而非裸图标，才能键盘聚焦、用 Esc 关掉提示；

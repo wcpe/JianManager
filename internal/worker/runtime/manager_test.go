@@ -172,7 +172,7 @@ func TestInstallNodeJS_HappyPath(t *testing.T) {
 	}
 }
 
-// TestInstallNodeJS_ResidueDirAutoCleared 上次失败遗留的残骸目录（无完成标记）自动清除重装（FR-291）。
+// TestInstallNodeJS_ResidueDirAutoCleared 上次失败遗留的残骸目录（无完成标记）自动清除重装。
 func TestInstallNodeJS_ResidueDirAutoCleared(t *testing.T) {
 	srv := newFakeDistServer(t, "22.17.0", "x64")
 	defer srv.Close()
@@ -199,7 +199,7 @@ func TestInstallNodeJS_ResidueDirAutoCleared(t *testing.T) {
 	}
 }
 
-// TestInstallNodeJS_CompleteDirRejected 完好已装目录（有 node 完成标记）拒绝覆盖（FR-291 语义不变）。
+// TestInstallNodeJS_CompleteDirRejected 完好已装目录（有 node 完成标记）拒绝覆盖（语义不变）。
 func TestInstallNodeJS_CompleteDirRejected(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(filepath.Join(root, "runtimes"))
@@ -221,7 +221,7 @@ func TestInstallNodeJS_CompleteDirRejected(t *testing.T) {
 	}
 }
 
-// TestInstallNodeJS_StallAborted 下载流卡死（连续无字节进展）由看门狗中断并归为「下载停滞」（FR-290）。
+// TestInstallNodeJS_StallAborted 下载流卡死（连续无字节进展）由看门狗中断并归为「下载停滞」。
 func TestInstallNodeJS_StallAborted(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
@@ -256,7 +256,7 @@ func TestInstallNodeJS_StallAborted(t *testing.T) {
 }
 
 // TestRemove_NestedPathClearsTopLevelDir 删除按登记的内层路径（…/bin/node）时归一到
-// 托管根下顶层子目录整体删除，不留父壳（FR-292）。
+// 托管根下顶层子目录整体删除，不留父壳。
 func TestRemove_NestedPathClearsTopLevelDir(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(root)
@@ -277,7 +277,7 @@ func TestRemove_NestedPathClearsTopLevelDir(t *testing.T) {
 	}
 }
 
-// TestRemove_RootItselfRejected 托管根本身不得作为删除目标（FR-292）。
+// TestRemove_RootItselfRejected 托管根本身不得作为删除目标。
 func TestRemove_RootItselfRejected(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(root)

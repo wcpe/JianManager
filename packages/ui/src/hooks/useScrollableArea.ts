@@ -2,8 +2,8 @@ import * as React from 'react'
 
 import { attemptFocus, getFocusableElements, hasFocusableContent } from './focusable'
 
-/**
- * 滚动区域的键盘可达性（FR-502 阶段 6）：让「只能滚、不能 Tab」的容器对键盘用户可用。
+/** 
+ * 滚动区域的键盘可达性（阶段 6）：让「只能滚、不能 Tab」的容器对键盘用户可用。
  *
  * 要解决的问题：一个 `overflow-auto` 的容器，若内容里全是纯文本/只读节点，
  * 键盘用户既进不去也滚不动——WCAG 2.1.1 意义上的"不可操作"。表格正文、
@@ -40,7 +40,7 @@ export interface ScrollAreaState {
   atEnd: boolean
 }
 
-/**
+/** 
  * 取值器接受的 props：DOM 属性 + ref，并显式放行 `data-*`。
  *
  * 放行 `data-*` 是必须的：调用方要用 `data-testid` 定位、用 `data-*` 挂样式钩子，
@@ -54,7 +54,7 @@ export type ScrollableElementProps<E extends HTMLElement> = React.HTMLAttributes
 export interface UseScrollableAreaOptions {
   /** 键盘可达策略，默认 `auto`。 */
   keyboardAccess?: ScrollKeyboardAccess
-  /**
+  /** 
    * 容器成为键盘停靠点时暴露的可访问名。
    *
    * 强烈建议给：一个可聚焦却无名的 `role="region"`，屏幕阅读器只会念"区域"，

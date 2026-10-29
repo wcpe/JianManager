@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// BackupStorageHandler 备份远程存储后端路由处理器（FR-057）。
+// BackupStorageHandler 备份远程存储后端路由处理器。
 type BackupStorageHandler struct {
 	svc *service.BackupStorageService
 }
@@ -66,7 +66,7 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 	}
 	created, err := h.svc.Create(st)
 	if err != nil {
-		// 类型非法 / 凭证非 ${ENV_VAR} 引用 / 名称冲突为可预期校验错误，回 422（FR-338 收口）。
+		// 类型非法 / 凭证非 ${ENV_VAR} 引用 / 名称冲突为可预期校验错误，回 422（收口）。
 		if errors.Is(err, service.ErrInvalidStorageType) || errors.Is(err, service.ErrCredentialNotEnvRef) ||
 			errors.Is(err, service.ErrStorageNameConflict) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
@@ -78,7 +78,7 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, created)
 }
 
-// Update 全量替换式编辑存储后端（FR-338）。body 同 Create（复用 createStorageRequest）；
+// Update 全量替换式编辑存储后端。body 同 Create（复用 createStorageRequest）；
 // type 不可改、名称冲突排除自身，404/422 语义与既有端点对齐。
 func (h *BackupStorageHandler) Update(c *gin.Context) {
 	if !requireNodes(c, "node.manage") {

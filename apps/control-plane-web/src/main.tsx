@@ -14,15 +14,15 @@ import { initThemeFromStorage } from '@jianmanager/ui/lib/theme'
 import { queryClient } from '@/lib/shared/query-client'
 import App from './App'
 
-// 首屏无闪 + 登录/初始化页也套主题（FR-164）：在 React 挂载前先把
+// 首屏无闪 + 登录/初始化页也套主题：在 React 挂载前先把
 // 主题色（data-theme）与明暗（class）套到 <html>，早于任何组件渲染。
 initThemeFromStorage()
 
-/**
- * VITE_MOCK=1 时启 MSW Service Worker，整站打到内存假后端（FR-196，`npm run dev:mock`）。
+/** 
+ * VITE_MOCK=1 时启 MSW Service Worker，整站打到内存假后端（`npm run dev:mock`）。
  * 动态 import 确保 mock 代码不进生产包。否则直连真后端，行为不变。
  *
- * FR-502 阶段 6 补丁：
+ *阶段 6 补丁：
  * - worker 起来之前先还原调试面板持久化的四个旋钮（延迟 / 数据量 / 轮询间隔 / 请求日志）：
  *   `applyPersistedMockRuntime()` 内含「按档位重播种 + 补写登录会话」，替代原先散在这里的
  *   `resetDb()` + 会话补写逻辑；worker 由 devmock 的 `startMockWorker()` 启动——它默认
@@ -51,7 +51,7 @@ async function enableMocking() {
   mountMockControlPanel()
 }
 
-/**
+/** 
  * 先挂载，再异步启动 mock —— **绝不把 render 放在 mock 就绪之后**。
  *
  * 旧实现是 `enableMocking().then(() => render())`：MSW 启动慢或卡住时，整页始终空白，

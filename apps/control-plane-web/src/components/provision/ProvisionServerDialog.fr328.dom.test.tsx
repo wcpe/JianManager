@@ -9,8 +9,8 @@ import { API } from '@jianmanager/devmock/api'
 import { server } from '@jianmanager/devmock/server'
 import ProvisionServerDialog from './ProvisionServerDialog'
 
-/**
- * FR-328：一键搭建后端子服 MC 版本下拉长列表可滚动。
+/** 
+ *：一键搭建后端子服 MC 版本下拉长列表可滚动。
  *
  * 根因（真机 Chrome 实证）：对话框是模态 Radix Dialog（react-remove-scroll 滚动锁），
  * Combobox 下拉 portal 到 body、落在滚动锁的「模态外区域」，滚轮/触摸滚动事件被
@@ -57,7 +57,7 @@ function Harness() {
   return <ProvisionServerDialog open={open} onClose={() => setOpen(false)} />
 }
 
-describe('ProvisionServerDialog MC 版本下拉可滚动（FR-328）', () => {
+describe('ProvisionServerDialog MC 版本下拉可滚动', () => {
   it('长版本列表渲染进有视口约束的内滚容器（max-h + overflow-y-auto）', async () => {
     const user = userEvent.setup()
     loginMockUser()
@@ -91,7 +91,7 @@ describe('ProvisionServerDialog MC 版本下拉可滚动（FR-328）', () => {
 
     await user.click(await screen.findByText('选择版本'))
     expect(await screen.findByRole('button', { name: '1.0.0' })).toBeInTheDocument()
-    // Popover modal：下拉注册自己的滚动锁 → 计数 +1。若退化为非 modal（回归 FR-328），
+    // Popover modal：下拉注册自己的滚动锁 → 计数 +1。若退化为非 modal（回归），
     // 计数停在 1，portal 到 body 的下拉滚动会被 Dialog 的锁 preventDefault 吞掉。
     await waitFor(() => expect(document.body.getAttribute('data-scroll-locked')).toBe('2'))
 

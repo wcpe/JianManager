@@ -5,8 +5,8 @@ import { cn } from '../../lib/utils'
 // 同一个「就地切换呈现」交互，站内不应有两种外观。
 import { segmentTrack, segmentItem, segmentItemActive } from '../toggle'
 
-/**
- * 分段控件（FR-502 阶段 6 收尾）：同一维度的少数几种互斥视图之间的切换。
+/** 
+ * 分段控件（阶段 6 收尾）：同一维度的少数几种互斥视图之间的切换。
  *
  * 与 `PlatformTabs` 的分工：`PlatformTabs` 切的是**同一工作区内的一组页面**（内容层级，
  * 原型 `.platform-tabs`，下划线样式）；本组件切的是**当前页内同一份数据的少数几种呈现**
@@ -33,7 +33,7 @@ export function Segments({ className, children, ...props }: React.ComponentProps
   )
 }
 
-/**
+/** 
  * 分段项。`active` 时抬为卡片底色并加浅阴影（原型 `.segments button.active`）。
  *
  * 用 `role="tab"` 而非 `aria-current`：前者是本形态既有的可访问语义（两处手写实现即如此），

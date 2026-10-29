@@ -6,8 +6,8 @@ import type { ReactNode } from 'react'
 import { AssistantChatPanel } from '@/components/views/assistant/AssistantChatPanel'
 import type { ToolCallView } from '@/components/views/assistant/assistant-tool-status'
 
-/**
- * 聊天面板的**工具状态接入点**（FR-519 §5）。
+/** 
+ * 聊天面板的**工具状态接入点**（§5）。
  *
  * 这里只守一件事：面板确实把容器给的 `toolCalls` 渲染在消息流**内部末尾**
  * （= 当前 run 之后），而不是漏渲染或塞到别处。聚合与徽标细节由
@@ -65,8 +65,8 @@ describe('AssistantChatPanel · 工具状态接入', () => {
   })
 })
 
-/**
- * 读屏播报的**语义属性**（FR-519 §7「消息完成时读屏播报整条，逐 token 不播报」）。
+/** 
+ * 读屏播报的**语义属性**（§7「消息完成时读屏播报整条，逐 token 不播报」）。
  *
  * 【验证边界，必须如实标注】屏幕阅读器的实际播报行为无法在无头浏览器里断言——
  * 那需要真机辅助技术（VoiceOver/NVDA）。这里锁的是**实现方式**：

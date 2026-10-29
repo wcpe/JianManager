@@ -8,8 +8,8 @@ import { useUpdaterCoreVersions, useSelectUpdaterCore, useUploadUpdaterCore } fr
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
-/**
- * updater-core 版本选择器（FR-259）的接线层（ADR-103）。频道工作台「Core 版本」tab：
+/** 
+ * updater-core 版本选择器的接线层（ADR-103）。频道工作台「Core 版本」tab：
  * 列出所有归档 core 版本，当前选定版本高亮，一键切换实现回滚。切换后提示"客户端下次启动生效"。
  *
  * 展示层已回迁应用侧（`ClientUpdaterCoreSelectorView`），此处只保留应用侧职责：
@@ -36,7 +36,7 @@ export default function ClientUpdaterCoreSelector({ channelId }: { channelId: st
     )
   }
 
-  /**
+  /** 
    * 提交上传：结果一律以 `{ ok }` 落定（不抛出），视图据此清空关窗或保留表单重试；
    * 成功文案带归档版本与 sha 前缀，失败文案优先取服务端消息。
    */

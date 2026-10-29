@@ -19,13 +19,13 @@ import type {
 import type { ProvisionProxyBody, ProvisionProxyResult } from '@jianmanager/devmock/contracts'
 import type { InstanceInfo } from '@jianmanager/devmock/contracts'
 
-/**
- * 群组服网络域 mock handler（FR-203，照 spec §7 范式）。
+/** 
+ * 群组服网络域 mock handler（照 spec §7 范式）。
  * 覆盖 networks（群组软标签）/ registrations（proxy↔backend M:N 注册）/ proxy（搭建·resync）三组 API。
  * 所有端点均为平台运维操作，首行 requireAuth。
  */
 
-/**
+/** 
  * 假后端群组行：去规范化持有 members 快照（NetworkDetail.members），
  * 列表 memberCount 由 members 长度派生，避免与实例域跨集合耦合（并行隔离）。
  */
@@ -38,7 +38,7 @@ interface NetworkRow {
   createdAt: string
 }
 
-/**
+/** 
  * 假后端注册行（ADR-007 的 server_registrations，M:N）：
  * proxyId×backendId 为联合身份；去规范化内嵌 backend 概要（贴合 Registration.backend），
  * 一个 backend 可被多个 proxy 注册 → 多行单后端，体现 M:N。
@@ -128,7 +128,7 @@ const registrations = db<RegistrationRow>('registrations', () => [
   },
 ])
 
-/** 成员状态 → 五态计数桶（未知状态计入 stopped，与后端/前端中性桶口径一致，FR-335）。 */
+/** 成员状态 → 五态计数桶（未知状态计入 stopped，与后端/前端中性桶口径一致）。 */
 function memberStatusCounts(members: NetworkMember[]): MemberStatusCounts {
   const c: MemberStatusCounts = { running: 0, stopped: 0, crashed: 0, starting: 0, stopping: 0 }
   for (const m of members) {
@@ -152,7 +152,7 @@ function memberStatusCounts(members: NetworkMember[]): MemberStatusCounts {
   return c
 }
 
-/** 群组行 → 列表概要（剥离 members，暴露计数 + 成员健康桶，FR-335）。 */
+/** 群组行 → 列表概要（剥离 members，暴露计数 + 成员健康桶）。 */
 function toSummary(n: NetworkRow): NetworkSummary {
   const memberStatus = memberStatusCounts(n.members)
   return {
@@ -309,7 +309,7 @@ export const handlers = [
     return HttpResponse.json(result)
   }),
 
-  // ---- 群组拓扑聚合（FR-335）：一次返全量 proxy 注册 + network 成员归属，消 per-proxy N+1 ----
+  // ---- 群组拓扑聚合：一次返全量 proxy 注册 + network 成员归属，消 per-proxy N+1 ----
   domainRoute('get', '/topology', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -351,7 +351,7 @@ export const handlers = [
       memberInstanceIds: n.members.map((m) => m.instanceId).filter((iid) => existing.has(iid)),
     }))
 
-    // 全量实例投影（FR-452/453）：含未注册实例与配套服务，供拓扑完整网络视图。
+    // 全量实例投影（453）：含未注册实例与配套服务，供拓扑完整网络视图。
     const briefs: TopologyInstance[] = instances.list().map((i) => ({
       id: i.id,
       name: i.name,

@@ -13,11 +13,11 @@ import { cn } from '@jianmanager/ui'
 import { Card } from '@jianmanager/ui/components/card'
 import { Button } from '@jianmanager/ui/components/button'
 
-/**
- * 客户端分发端到端流程图（FR-194，纯前端，增强 FR-187）。
+/** 
+ * 客户端分发端到端流程图（纯前端，增强）。
  * 渲染在客户端分发列表页标题下方，用运维向大白话讲清「首次发布（做一遍）」与
  * 「日常更新（反复）」两段流程 + 三条关键提醒，降低首次上手门槛。默认收起避免占太多空间。
- * 纯展示组件，不含任何接口调用；i18n（FR-016）+ 暗/亮 + 双主题随既有体系（全程主题 token）。
+ * 纯展示组件，不含任何接口调用；i18n+ 暗/亮 + 双主题随既有体系（全程主题 token）。
  */
 export default function ClientDistFlowGuide() {
   const { t } = useTranslation()
@@ -25,7 +25,7 @@ export default function ClientDistFlowGuide() {
 
   return (
     // 手风琴式折叠卡：Card 自带纵向 gap，折叠头/内容各自贴边，故置零 gap 与 padding
-    //（原实现靠无 padding 的根容器 + 内部自管留白）。
+    // （原实现靠无 padding 的根容器 + 内部自管留白）。
     <Card surface="faint" className="overflow-hidden py-0">
       <Button
         type="button"

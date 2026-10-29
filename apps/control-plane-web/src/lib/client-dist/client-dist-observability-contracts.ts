@@ -1,5 +1,5 @@
-/**
- * 客户端分发可观测性契约（FR-217 / FR-428，ADR-103）。
+/** 
+ * 客户端分发可观测性契约（ADR-103）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
@@ -21,7 +21,7 @@ export interface ClientDistObservabilitySummary {
   activeMachinesExact: boolean
 }
 
-/** FR-428：前一等长窗口的同环比基数（不含率值与 exact 标记；率由消费方现算）。 */
+/** 前一等长窗口的同环比基数（不含率值与 exact 标记；率由消费方现算）。 */
 export interface ClientDistObservabilityCompare {
   manifestPulls: number
   artifactPulls: number

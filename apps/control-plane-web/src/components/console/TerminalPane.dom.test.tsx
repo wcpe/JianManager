@@ -26,7 +26,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** 等控制台输出区挂载（FR-415 起是 DOM 虚拟列表，不再是 xterm 画布）。 */
+/** 等控制台输出区挂载（起是 DOM 虚拟列表，不再是 xterm 画布）。 */
 async function findOutput() {
   return screen.findByTestId('console-output')
 }
@@ -42,12 +42,12 @@ function currentMatchSeq() {
   return mark?.closest('[data-console-line-seq]')?.getAttribute('data-console-line-seq')
 }
 
-/**
- * TerminalPane FIX-B/FR-345 回归：停机（STOPPED）实例打开控制台必须回放 DB 历史，
+/** 
+ * TerminalPane FIX-B回归：停机（STOPPED）实例打开控制台必须回放 DB 历史，
  * 不发起 WS（杜绝死循环刷断连）；运行中实例放行控制台。
  * seed：id=1 RUNNING、id=2 STOPPED（见 mocks/handlers/domains/instance.ts）。
  *
- * FR-415 起控制台是「DOM 输出区 + 原生命令栏」（ADR-086），故本文件的断言从
+ *起控制台是「DOM 输出区 + 原生命令栏」（ADR-086），故本文件的断言从
  * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」；xterm 渲染壳随后全站下线，
  * 已无 xterm 对象可断言（原「这条路径零 xterm」的守卫随之退场）。
  */
@@ -215,7 +215,7 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(currentMatchSeq()).toBe('0')
   })
 
-  it('FR-276：WORKER_TOKEN_REJECTED 错误显示密钥不一致定向诊断，而非裸 [状态: error]', async () => {
+  it('WORKER_TOKEN_REJECTED 错误显示密钥不一致定向诊断，而非裸 [状态: error]', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
@@ -235,7 +235,7 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByText(/WS 令牌密钥与平台不一致/)).toBeInTheDocument()
   })
 
-  it('FR-276：一般错误态带出 data 原因；无 data 维持原 [状态: xxx] 行为', async () => {
+  it('一般错误态带出 data 原因；无 data 维持原 [状态: xxx] 行为', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
@@ -274,8 +274,8 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByRole('textbox', { name: '控制台命令输入' })).toHaveValue('')
   })
 
-  /** FR-140 回归：一次性 token 首连即被消费，重连必须重取。 */
-  it('FR-140：点重新连接必须重新拉取一次性 token，不复用已消费的旧 token', async () => {
+  /** 回归：一次性 token 首连即被消费，重连必须重取。 */
+  it('点重新连接必须重新拉取一次性 token，不复用已消费的旧 token', async () => {
     const user = userEvent.setup()
     loginMockUser()
 
@@ -312,14 +312,14 @@ describe('TerminalPane（mock 假后端）', () => {
   })
 })
 
-/**
- * 活路径接线守卫：`onlinePlayers`（FR-416 补全的权威名册）与 `onNotify`（复制/跳转回执）
+/** 
+ * 活路径接线守卫：`onlinePlayers`（补全的权威名册）与 `onNotify`（复制/跳转回执）
  * 在受控视图里都是**可选**的——缺省即静默降级（补全只剩控制台输出解析出的名册，回执直接丢弃）。
  * 这两处注入原挂在 `components/console/InstanceConsoleView` 上，而它已不在活路径里；
  * 本组用例把「活接线层必须注入这两者」钉在端到端行为上，避免再次无声退化。
  */
 describe('TerminalPane 活路径接线（名册与提示通道必须注入）', () => {
-  it('FR-416：命令栏补全用得上 /players 的本实例名册', async () => {
+  it('命令栏补全用得上 /players 的本实例名册', async () => {
     const user = userEvent.setup()
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)

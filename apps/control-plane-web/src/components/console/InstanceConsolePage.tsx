@@ -40,14 +40,14 @@ interface InstanceConsolePageProps {
   instanceId: number
 }
 
-/**
- * 服务器统一控制台（FR-269）的容器：固定分区的单服默认入口。
+/** 
+ * 服务器统一控制台的容器：固定分区的单服默认入口。
  *
  * 展示主体已回迁应用侧（ADR-103）：页头、页签栏与概览面板由 {@link InstanceConsolePageView} 渲染，
  * 页签内容经 `renderTabPanel` 按页签注入本层的接线组件。留在本层的是：
  * - 深链解析与写回（`?tab=` / `?seg=`）：「当前页签」会改变子组件取数（隐藏页签停轮询），属取数口径；
- * - 十余个取数 hook 的分发、能力画像门控（FR-445/448）与「最近打开」记录（FR-293）；
- * - keep-alive 生命周期宿主（FR-295，ADR-067）：`mountedTabs` 决定哪些页签常驻挂载——
+ * - 十余个取数 hook 的分发、能力画像门控（448）与「最近打开」记录；
+ * - keep-alive 生命周期宿主（ADR-067）：`mountedTabs` 决定哪些页签常驻挂载——
  *   访问过的页签进入集合全部渲染，非活跃者包 `<Activity mode="hidden">`——DOM 与本地状态保留、
  *   effects 卸载（TanStack Query 订阅随之暂停 → 隐藏页签自动停轮询），切回瞬时呈现；
  * - 各页签与横幅的接线：概览（配额/二进制版本/动态与告警）、文件配置、玩家/跨服、备份、
@@ -58,7 +58,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const [searchParams, setSearchParams] = useSearchParams()
   const resourceSegment = readResourceSegment(searchParams)
   const { data: instance } = useInstance(instanceId)
-  // 能力画像（FR-445）：Tab 显隐与顺序的唯一门控来源——后端下发的 capabilities 优先，
+  // 能力画像：Tab 显隐与顺序的唯一门控来源——后端下发的 capabilities 优先，
   // 缺失时按 (type, role) 本地兜底（离线/mock 兼容）。不再有零散 role === '...' 分支。
   const profile = useInstanceCapabilities(instance)
   const visibleTabs = useMemo(
@@ -66,7 +66,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
     [instance, profile],
   )
   const activeTabFromUrl = readActiveTab(searchParams)
-  // 深链落在隐藏 Tab（FR-448）：回退 overview，不白屏。
+  // 深链落在隐藏 Tab：回退 overview，不白屏。
   const activeTab: TabKey = visibleTabs.includes(activeTabFromUrl) ? activeTabFromUrl : 'overview'
   // 访问过即保活：渲染期把新激活页签并入集合（React 官方「渲染期间调整状态」模式）。
   const [mountedTabs, setMountedTabs] = useState<TabKey[]>([activeTab])
@@ -83,12 +83,12 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const start = useStartInstance()
   const kill = useKillInstance()
   const rebuild = useRebuildInstance()
-  // FR-432 首批写门禁：无 instance.operate 时主操作按钮禁用（平台管理员 hasPerm 恒 true）。
+  // 首批写门禁：无 instance.operate 时主操作按钮禁用（平台管理员 hasPerm 恒 true）。
   const canOperate = usePermissionsStore((s) => s.hasPerm('instance.operate'))
-  // 强杀走统一危险操作确认（FR-059），不直发请求。
+  // 强杀走统一危险操作确认，不直发请求。
   const [killConfirmOpen, setKillConfirmOpen] = useState(false)
 
-  // FR-293：直接经路由/深链进入实例也计入「最近打开」（与选择器/侧栏常驻列同一存储）；
+  // 直接经路由/深链进入实例也计入「最近打开」（与选择器/侧栏常驻列同一存储）；
   // store 侧对内容未变的写入不广播，轮询刷新不会造成订阅方空转。
   useEffect(() => {
     if (instance) recordRecentServer(instance)
@@ -111,14 +111,14 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
     return <Card className="p-6 text-sm text-muted-foreground">{t('serverConsole.noInstance')}</Card>
   }
 
-  // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮禁用 + tooltip 引导看任务中心，
-  // 与后端启动闸（FR-319 二轮②）同一信号源（statusReason「搭建中」），任务终态自然解禁。
+  // 搭建中硬性禁启：provision 未终态期间启动按钮禁用 + tooltip 引导看任务中心，
+  // 与后端启动闸（二轮②）同一信号源（statusReason「搭建中」），任务终态自然解禁。
   const provisioning = isProvisioningInstance(instance)
-  // 重建在途（FR-342）：损毁实例重建期间 statusReason 标「重建中…」，据此禁用重建按钮、且不落红色失败横幅。
+  // 重建在途：损毁实例重建期间 statusReason 标「重建中…」，据此禁用重建按钮、且不落红色失败横幅。
   // 判据已收敛到 `isRebuildingInstance`（与 `isProvisioningInstance` 同族，见其注释里的前缀匹配风险）——
   // 它自带 `status === 'DAMAGED'` 前提，故此处不再单独判 `isDamaged`。
   const rebuilding = isRebuildingInstance(instance)
-  // 运行态漂移（FR-471）：>0 即存在未纳管活进程；无漂移时为 undefined（不渲染任何标记）。
+  // 运行态漂移：>0 即存在未纳管活进程；无漂移时为 undefined（不渲染任何标记）。
   const runtimeDrift = runtimeDriftOf(instance)
   const overviewLogs = logs?.items ?? []
 
@@ -143,7 +143,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
     <Link to={to} className={className}>{children}</Link>
   )
 
-  // 概览内的「动态与告警」流（FR-423）：崩溃现场区块自带快照/趋势取数，故整块由本层接线后注入面板。
+  // 概览内的「动态与告警」流：崩溃现场区块自带快照/趋势取数，故整块由本层接线后注入面板。
   const activityFeed = (
     <InstanceActivityFeed
       instanceId={instance.id}
@@ -156,7 +156,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   // 页签内容装配：每个页签对应一组自带取数的接线层组件，故由容器按页签注入，包内视图只提供 keep-alive 外壳。
   const renderTabPanel = (tab: TabKey): ReactNode => {
     if (tab === 'overview') {
-      /* 概览（FR-445）：动态与告警流 + 指标条。FR-467/468 起把「该实例当前的可操作面」
+      /* 概览：动态与告警流 + 指标条。468 起把「该实例当前的可操作面」
          两个面板并入概览——配额（限额来源 + 实时用量 + 强制状态）与二进制版本
          （受控升级 / 一级回滚）。选概览而非「进程」页签：overview 是所有画像（含未知
          回退）都存在的唯一 Tab，而 process 只在部分画像下出现——放 process 会让
@@ -192,20 +192,20 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
       )
     }
     if (tab === 'resource') {
-      /* 文件配置（FR-413）：文件管理器 + 环境变量（FR-344）两分段，均保活。 */
+      /* 文件配置：文件管理器 + 环境变量两分段，均保活。 */
       return <InstanceResourceSegment instanceId={instance.id} segment={resourceSegment} onSegmentChange={setResourceSegment} />
     }
     if (tab === 'players') {
-      /* 玩家分区（FR-445 §2.3 按角色语义）：backend = 本实例单服实名名单（FR-339）；
-         proxy 语义（画像含 bcTopology）= 跨服玩家分布（FR-449 §2.2.2）。
+      /* 玩家分区（§2.3 按角色语义）：backend = 本实例单服实名名单；
+         proxy 语义（画像含 bcTopology）= 跨服玩家分布（§2.2.2）。
          Tab 显隐仍只由 capabilities 决定，此处仅决定同一 Tab 内的呈现形态。 */
       return hasCapability(profile, 'bcTopology')
         ? <BcPlayersPanel instanceId={instance.id} />
         : <InstancePlayersSegment instanceId={instance.id} />
     }
     if (tab === 'backup') {
-      /* 备份·定时分区接真（FR-339）：本实例定时任务启停/删 + 备份创建/恢复/删除。
-         FR-466 起追加「整机快照」面板：快照底层复用同一套归档通道（全量备份 +
+      /* 备份·定时分区接真：本实例定时任务启停/删 + 备份创建/恢复/删除。
+起追加「整机快照」面板：快照底层复用同一套归档通道（全量备份 +
          回放），与备份同页签是单一归属——两者放一起运维才看得到「归档 vs 时间点」
          的分工，也不会在 backend/proxy/generic 三种画像里各缺一处。 */
       return (
@@ -213,23 +213,23 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
           <InstanceBackupSegment instanceId={instance.id} />
           <SnapshotPanel instanceId={instance.id} />
         </div>
-      )
+)
     }
-    // BC 子服拓扑（FR-449）：子服列表 + 各自状态，由 bcTopology 能力驱动。
+    // BC 子服拓扑：子服列表 + 各自状态，由 bcTopology 能力驱动。
     // 跨服玩家/进程指标/config 分别归 players/process/config 页签（单一归属）。
     if (tab === 'bcTopology') return <BcSegment instanceId={instance.id} />
-    // 进程视图（FR-450）：进程指标 + 启动参数。端口健康归 health 页签。
+    // 进程视图：进程指标 + 启动参数。端口健康归 health 页签。
     if (tab === 'process') return <BinarySegment instanceId={instance.id} />
-    // 端口 + 主动健康检查（FR-450）。
+    // 端口 + 主动健康检查。
     if (tab === 'health') return <HealthPanel instanceId={instance.id} />
-    // 结构化配置编辑（FR-451 衔接）：BC config.yml / 原生二进制配置。
+    // 结构化配置编辑（衔接）：BC config.yml / 原生二进制配置。
     if (tab === 'config') return <GenericConfigSegment instanceId={instance.id} />
     const cardType = TAB_CARD_TYPE[tab]
     if (!cardType) return null
-    // 去掉原 min-h-[520px]（FR-422）：卡片吃满剩余高度，内部自行滚动。
+    // 去掉原 min-h-[520px]：卡片吃满剩余高度，内部自行滚动。
     return (
       <Card className="min-h-0 flex-1 overflow-hidden py-0">
-        {/* persistTerminal：终端连接由管理器常驻，页签隐藏/切换不断 WS（FR-295）。 */}
+        {/* persistTerminal：终端连接由管理器常驻，页签隐藏/切换不断 WS。 */}
         <WorkspaceCardBody instanceId={instance.id} type={cardType} persistTerminal />
       </Card>
     )
@@ -254,7 +254,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
         rebuild: () => rebuild.mutate(instance.id),
         restart: () => restart.mutate(instance.id),
         stop: () => stop.mutate(instance.id),
-        // 强杀只上报意图：二次确认由下方 DangerConfirm 承载，确认后才发请求（FR-059）。
+        // 强杀只上报意图：二次确认由下方 DangerConfirm 承载，确认后才发请求。
         kill: () => setKillConfirmOpen(true),
       }}
       onNotify={(kind, message) => (kind === 'success' ? toast.success(message) : toast.error(message))}
@@ -284,8 +284,8 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   )
 }
 
-/**
- * 概览 TPS 火花线的取数（FR-343 去 mock-api）。
+/** 
+ * 概览 TPS 火花线的取数（去 mock-api）。
  *
  * 单独成组件而非写在容器顶部：该查询原先挂在概览面板内，只有概览挂载时才建立；
  * 放在容器顶部会在实例尚未加载时先造一个 `targetId: ''` 的空查询，多一次无用订阅，

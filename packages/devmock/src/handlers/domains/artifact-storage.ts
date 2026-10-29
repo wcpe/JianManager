@@ -11,8 +11,8 @@ import type {
   Task,
 } from '@jianmanager/devmock/contracts'
 
-/**
- * 制品存储渠道域 mock handler（FR-347，见 ADR-073）。
+/** 
+ * 制品存储渠道域 mock handler（见 ADR-073）。
  * 覆盖 web/src/api/artifactStorages.ts 的全部 endpoint：列表 / 创建 / 编辑 / 删除守卫
  * （内置不可删不可编辑、活跃不可删）/ 设活跃（先清后设恰一条）/ 候选与已存连通测试。
  * seed 两条：内置 local 活跃 + s3 示例（spec §3.7）。
@@ -68,7 +68,7 @@ function sortedChannels(): ArtifactStorageChannel[] {
   )
 }
 
-// ───────────────────────── 存量迁移（FR-348）─────────────────────────
+// ───────────────────────── 存量迁移─────────────────────────
 
 const migrationTasks = db<Task>('artifactMigrationTasks', () => [])
 const migrations = db<ArtifactMigrationInfo & { id: number }>('artifactMigrations', () => [])
@@ -81,7 +81,7 @@ function latestMigrationTask(): Task | undefined {
   return [...migrationTasks.list()].sort((a, b) => b.id - a.id)[0]
 }
 
-/**
+/** 
  * 迁移进度模拟：每次 GET /artifact-storages/migration 轮询把 running 任务推进一条
  * （已迁 +1），迁完 eligible（total - skipped）后落 succeeded——预览模式下进度卡两拍走完。
  */
@@ -268,7 +268,7 @@ export const handlers = [
     return HttpResponse.json(updated)
   }),
 
-  // ===== 存量迁移（FR-348）：发起 / 状态轮询（含进度模拟推进）/ 失败明细 =====
+  // ===== 存量迁移：发起 / 状态轮询（含进度模拟推进）/ 失败明细 =====
 
   domainRoute('post', '/artifact-storages/:id/migrate', (info) => {
     const denied = requireAuth(info)

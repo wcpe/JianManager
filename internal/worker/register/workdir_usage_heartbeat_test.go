@@ -6,16 +6,16 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/dirusage"
 )
 
-// fakeWorkDirUsage 固定快照的工作目录占用采集器（FR-003）。
+// fakeWorkDirUsage 固定快照的工作目录占用采集器。
 type fakeWorkDirUsage struct {
 	usages map[string]dirusage.Usage
 }
 
 func (f fakeWorkDirUsage) Usages() map[string]dirusage.Usage { return f.usages }
 
-// TestCollectHeartbeatCarriesWorkDirUsages FR-003：采集器的读数必须进入心跳负载。
+// TestCollectHeartbeatCarriesWorkDirUsages：采集器的读数必须进入心跳负载。
 //
-// 与 FR-485/FR-513 同源理由：心跳负载是内存结构，真机上只能看到落库结果；落库为空时
+// 与同源理由：心跳负载是内存结构，真机上只能看到落库结果；落库为空时
 // 无法区分「没人采到」与「采到了没写」。这里把「采集 → 负载」一环单独钉死。
 func TestCollectHeartbeatCarriesWorkDirUsages(t *testing.T) {
 	SetWorkDirUsageObserver(fakeWorkDirUsage{usages: map[string]dirusage.Usage{

@@ -32,13 +32,13 @@ export interface BackupStorageOption {
   name: string
 }
 
-/**
- * 实例控制台「备份 · 定时」分区（FR-339）：本实例作用域的备份与定时任务。
+/** 
+ * 实例控制台「备份 · 定时」分区：本实例作用域的备份与定时任务。
  * - 定时任务：列表 + 启停（只发 `{enabled}`）+ 删除；创建/编辑表单较重，引导去独立页（spec §2.2 拍板）；
  * - 备份：列表（进行中 3s 轮询）+ 全量/增量创建（存储只读下拉，缺省本地）+ 恢复（运行态守卫）+ 删除（增量依赖警告）。
- * 备份仓库全局配置属独立页（FR-057/FR-338），不进本分区。
+ * 备份仓库全局配置属独立页，不进本分区。
  *
- * 布局为分栏（FR-423，spec §3.1 备份定时 62:38）：左 62% 放备份记录（7 列宽表，条数只增不减），
+ * 布局为分栏（spec §3.1 备份定时 62:38）：左 62% 放备份记录（7 列宽表，条数只增不减），
  * 右 38% 放定时任务（任务通常个位数，是内容驱动的窄块）。原先两者纵向堆叠，
  * 定时任务把备份表推到折叠线以下，而两张表又都被拉到同一整宽——宽表挤、窄表空。
  *
@@ -121,7 +121,7 @@ function SchedulesPanel({
   const [deleteTarget, setDeleteTarget] = useState<ScheduleInfo | null>(null)
   const [pending, setPending] = useState(false)
 
-  // cron 人类可读文案（FR-153）：可识别则译，否则退回原表达式。
+  // cron 人类可读文案：可识别则译，否则退回原表达式。
   const cronReadable = (expr: string): string => {
     const desc = describeCron(expr)
     return desc ? t(desc.key, desc.params) : expr
@@ -158,7 +158,7 @@ function SchedulesPanel({
 
   return (
     // 内容驱动高度（spec §3.2）：定时任务通常个位数条，撑高只会在卡内留死区。
-    // 6 列在 38% 栏内偏挤，用横向滚动兜住而不压缩列（列宽治理归 FR-424，本批不动）。
+    // 6 列在 38% 栏内偏挤，用横向滚动兜住而不压缩列（列宽治理归本批不动）。
     <Panel className="flex-none" icon={<CalendarClock className="size-3.5" />} title={t('schedules.title')} actions={createScheduleLink}>
       {schedulesLoading ? (
         <RowsSkeleton />
@@ -302,7 +302,7 @@ function BackupsPanel({
     }
   }
 
-  // 删除前算直接依赖此备份的增量数，用于二次确认警告（FR-151）。
+  // 删除前算直接依赖此备份的增量数，用于二次确认警告。
   const dependents = deleteTarget ? countDependents(list, deleteTarget.id) : 0
 
   const modeBadge = (b: BackupInfo) =>
@@ -322,7 +322,7 @@ function BackupsPanel({
 
   const createActions = (
     <>
-      {/* 存储选择保留只读下拉（列表消费，缺省本地）；仓库增删改属独立页（FR-338）。
+      {/* 存储选择保留只读下拉（列表消费，缺省本地）；仓库增删改属独立页。
           候选来自后端、数量不受控 → 只用统一样式的 NativeSelect，不换 Radix Select。 */}
       <NativeSelect
         className="w-auto text-xs"
@@ -348,7 +348,7 @@ function BackupsPanel({
   )
 
   return (
-    // 内容驱动 + 栏高封顶（FR-423）：备份条数只增不减，撑到栏高上限后表体内部滚（表头随之留在视野内），
+    // 内容驱动 + 栏高封顶：备份条数只增不减，撑到栏高上限后表体内部滚（表头随之留在视野内），
     // 少时贴合内容。body 去 padding 交给内部分块，滚动容器才能贴着卡边。
     <Panel
       className="max-h-full min-h-0 flex-none"

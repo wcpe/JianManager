@@ -16,7 +16,7 @@ import { Input } from '@jianmanager/ui/components/input'
 import { Label } from '@jianmanager/ui/components/label'
 import { useClearLogIdentityConflicts } from '@/api/logRuntime'
 
-/**
+/** 
  * 「确认并清空身份冲突」对话框（日志页质量标记的运维入口）。
  *
  * 语义（与后端逐条对齐）：运维**审阅后确认**这些冲突已被正确处理 —— 系统在无法自动裁定的
@@ -76,11 +76,11 @@ export function ClearConflictsDialog({
                 count: result.clearedCount,
                 skipped,
               }),
-            )
+)
           } else {
             toast.success(
               t('logsFederation.clearConflicts.success', { count: result.clearedCount }),
-            )
+)
           }
           onOpenChange(false)
           onCleared?.(result.clearedCount, skipped)
@@ -93,15 +93,15 @@ export function ClearConflictsDialog({
             detail
               ? `${t('logsFederation.clearConflicts.failed')}: ${detail}`
               : t('logsFederation.clearConflicts.failed'),
-          )
+)
         },
       },
-    )
+)
   }
 
   return (
     <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) onOpenChange(false) }}>
-      {/* FE-5：套 FR-072 高度自适应壳（`.claude/rules/ui-modals.md` 约束 2/3）——本弹窗含较长
+      {/* FE-5：套高度自适应壳（`.claude/rules/ui-modals.md` 约束 2/3）——本弹窗含较长
           描述文案 + 作用域提示 + 标签 + 输入 + 页脚，短视口（横屏手机/小窗）下必须内部滚动，
           不能让确认按钮移出可视区。比照同目录既有做法（如 InstanceTagsDialog）。 */}
       <DialogContent data-testid="logs-clear-conflicts-dialog" className={scrollableDialogContentClass}>

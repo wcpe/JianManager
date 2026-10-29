@@ -30,8 +30,8 @@ export interface SessionMetricsProps {
   liveMetrics: BotLoadMetricPoint[]
 }
 
-/**
- * 会话指标（FR-371）：在线率 / 连接时延 / 调度延迟 / 命令发送 / 屏障释放 / 执行器健康
+/** 
+ * 会话指标：在线率 / 连接时延 / 调度延迟 / 命令发送 / 屏障释放 / 执行器健康
  * 六组图表，外加目标侧 legacy 指标区块（仅当数据里出现过才渲染）。
  */
 export function SessionMetrics({

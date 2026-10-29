@@ -1,6 +1,6 @@
-/**
+/** 
  * 轻量 JWT 解码工具——仅用于前端读取自身 access token 的非敏感声明（role/username），
- * 用于危险操作的角色门禁 UI 展示（FR-059）。
+ * 用于危险操作的角色门禁 UI 展示。
  *
  * 注意：这里只做 base64url payload 解码，不验证签名。真正的鉴权与越权拒绝由
  * Control Plane 的 RBAC 中间件强制执行（architecture-invariants：前端仅复用既有 RBAC）。
@@ -43,7 +43,7 @@ export function decodeJwt(token: string | null | undefined): JwtClaims | null {
   }
 }
 
-/**
+/** 
  * 判断 access token 是否已过期（或在 skewSeconds 容差内即将过期）。
  * 用于请求拦截器在发请求前主动刷新过期 token，避免加载期一条无谓的 401（BUG-008）。
  * token 缺失或无 exp 声明时返回 false——交由后端鉴权与既有 401 拦截器兜底处理。

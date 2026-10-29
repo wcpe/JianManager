@@ -48,7 +48,7 @@ import DangerConfirm from '@/components/views/common/DangerConfirm'
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type TemplateNotice = (kind: 'success' | 'error', message: string) => void
 
-/**
+/** 
  * 模板展示所需字段（结构化子集，避免牵动应用侧更宽的 `TemplateInfo` 契约）。
  * 仅取渲染与「用此模板建实例」真正读到的字段。
  */
@@ -134,10 +134,10 @@ export interface TemplatesPageProps {
   notify: TemplateNotice
 }
 
-/**
- * 服务端模板页（FR-064 + FR-154）：升级为「应用市场」观感——封面 + 类型/Java·RAM 需求卡片，
+/** 
+ * 服务端模板页：升级为「应用市场」观感——封面 + 类型/Java·RAM 需求卡片，
  * 「用此模板创建实例」入口含变量填充预览 + startCommand 复制 + 更新时间。
- * 套 FR-163 靛蓝圆角双主题原语（Panel/StatCard），新建/删除沿用既有能力。
+ * 套靛蓝圆角双主题原语（Panel/StatCard），新建/删除沿用既有能力。
  *
  * 受控视图（ADR-103 a/b 范式）：不取数——模板列表与节点/分组候选由外壳注入，
  * 新建/删除/应用三个写动作经回调上报，提示经 `notify` 交外壳展示。
@@ -394,8 +394,8 @@ function MarketCard({
   )
 }
 
-/**
- * 应用模板对话框（FR-154）：轻量预览 + 一键创建，不改共享 ProvisionServerDialog。
+/** 
+ * 应用模板对话框：轻量预览 + 一键创建，不改共享 ProvisionServerDialog。
  * 含占位变量（`{{var}}`）时提供填充表单 + 实时 startCommand 派生预览（可复制/展开）；
  * 选节点 + 实例名后，经外壳的 `onApply` 落 `POST /instances`（与创建实例向导同流）。
  */
@@ -646,7 +646,7 @@ function CreateTemplateDialog({
   const [pending, setPending] = useState(false)
   const gate = useFieldGate()
 
-  // 类型可编辑下拉：内置常用类型 + 已有模板出现过的类型去重（FR-072）。
+  // 类型可编辑下拉：内置常用类型 + 已有模板出现过的类型去重。
   const typeOptions: ComboboxOption[] = Array.from(
     new Set(['minecraft_java', 'generic', ...templates.map((tpl) => tpl.type).filter(Boolean)]),
   ).map((v) => ({ value: v }))

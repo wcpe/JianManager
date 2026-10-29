@@ -9,8 +9,8 @@ import { API } from '@jianmanager/devmock/api'
 import { useAuthStore } from '@/stores/auth'
 import OverviewPage from './OverviewPage'
 
-/**
- * 总览页强断言（FR-201）：底部密集实例表渲染种子 + 实例集联动 + 错误注入空态。
+/** 
+ * 总览页强断言：底部密集实例表渲染种子 + 实例集联动 + 错误注入空态。
  * /nodes 与 /metrics/overview 属它域，本测试文件 server.use 桩占位（隔离运行）。
  */
 beforeEach(() => {
@@ -33,7 +33,7 @@ beforeEach(() => {
         trends: [],
       }),
     ),
-    // FR-461 健康墙属同域，默认空桩（具体用例按需覆盖）。
+    // 健康墙属同域，默认空桩（具体用例按需覆盖）。
     http.get(API('/observability/health-wall'), () => HttpResponse.json({ nodes: [] })),
   )
 })
@@ -69,25 +69,25 @@ describe('OverviewPage（mock 假后端）', () => {
 
     renderWithProviders(<OverviewPage />, { route: '/' })
 
-    /*
+    /* 
       集群健康墙已按用户要求从首页移除（首屏只保留趋势/KPI/玩家两块）。
       这里改为守护「它确实不再出现」：健康墙是页内最重的一块（逐台热力矩阵），
       若将来有人顺手加回来，首屏高度与渲染成本会无声回归。
     */
     expect(screen.queryByTestId('health-wall')).toBeNull()
-    /*
+    /* 
       【结构变更】Bot Worker 的独立面板已删除，其指标并入资源趋势图：
       图例里能看到两条 Bot 线（默认隐藏、勾选即显示），数据也参与坐标轴。
       因此这里不再断言面板存在，改为守护「趋势图里确实提供了这两条可选序列」。
     */
-    /*
+    /* 
       Bot Worker 两条序列是否真的出现在图例里，**在 jsdom 下无法稳定断言**：
       recharts 依赖容器实测尺寸才渲染线与其图例，而 jsdom 里容器高度为 0。
       该点由真机验证覆盖（图例 5 条、默认绘制 3 条，已实测）。
       这里只守「资源趋势面板仍在渲染」这一层，避免用脆弱的断言制造假绿/假红。
     */
     expect(screen.getByText('资源趋势')).toBeInTheDocument()
-    /*
+    /* 
       【结构变更·本轮】Bot Worker 的独立面板已删除，四项指标并入资源趋势图
       （图例里两条 Bot 序列，默认隐藏、勾选显示）。面板既已不存在，
       这里只守「它确实不再渲染」，避免有人把重复的面板加回来。
@@ -134,7 +134,7 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(within(tooltip).queryByText('2.0G')).not.toBeInTheDocument()
   })
 
-  /*
+  /* 
     球体的两个交互契约（本轮）：
     ① 环下方有「结论句」——首页第一眼要判断，不只有百分比读数；
     ② 球不再因悬停变色——此前 `hover:bg-accent/40` 让三张卡轮流闪浅底，干扰读数。
@@ -148,7 +148,7 @@ describe('OverviewPage（mock 假后端）', () => {
     const card = cpu.closest('[data-slot="panel"]') as HTMLElement
     expect(within(card).getByText('正常')).toBeInTheDocument()
 
-    /*
+    /* 
       ② 悬停反馈的形态：不用背景色，改用「环描边加粗」。
       用户要保留 hover 反馈，但原来整块卡变浅底（hover:bg-accent/*）在三个球并排时
       会轮流闪一下，干扰读数。故断言：
@@ -163,7 +163,7 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(cpu.className).toMatch(/hover:.*stroke-\[10\]/)
   })
 
-  /*
+  /* 
     【结构变更】「玩家趋势卡 + 玩家 Top5」合并为一张「玩家在线」卡：左侧曲线、右侧读数。
     玩家 Top5 已按用户要求删除——它与「服务器」页的实例列表回答同一件事，
     首页不再承担「哪台服在跑」的浏览职责。这里同时守住「排行确实不再出现」。
@@ -177,7 +177,7 @@ describe('OverviewPage（mock 假后端）', () => {
     expect(screen.queryByTestId('overview-player-ranking')).toBeNull()
   })
 
-  /*
+  /* 
     可用率 SLO 不单独占卡（用户选择「塞进现有卡片」），并入趋势卡头部。
     两条语义要守住：① 有证据时按 target 达标情况着色；② `applicable=false`
     （窗口内无可用证据、分母为 0）必须显示「不适用」，不能显示成 0% ——

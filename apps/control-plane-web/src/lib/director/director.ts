@@ -1,7 +1,7 @@
-/**
- * 工作区导播台的纯逻辑（FR-168 / ADR-035）。
+/** 
+ * 工作区导播台的纯逻辑（ADR-035）。
  *
- * 导播台在多个「场景」（= FR-167 预设）间瞬切。要零延迟，目标场景的卡（终端/监控）必须
+ * 导播台在多个「场景」（=预设）间瞬切。要零延迟，目标场景的卡（终端/监控）必须
  * **已建好 WS 并保活**；但「多场景同时保活 + 全速渲染」会过载浏览器（WS 连接数受限、多 xterm
  * 重绘吃满 CPU）。故本模块把 ADR-035 的并发模型显式化为一个**状态机**：
  *
@@ -17,7 +17,7 @@
 /** 场景在导播台中的运行态。 */
 export type SceneStatus = 'active' | 'preheated' | 'cold'
 
-/**
+/** 
  * 导播台状态机的不可变快照。
  *
  * `preheatOrder` 是保活连接池的 **LRU 近用序**（数组尾 = 最近激活，头 = 最久未用），
@@ -73,7 +73,7 @@ function touch(order: string[], id: string): string[] {
   return [...order.filter((x) => x !== id), id]
 }
 
-/**
+/** 
  * 在保活池上施加并发上限：从**预热**（非 active）中按 LRU 从头驱逐，直到池大小 ≤ limit。
  * active 永不被驱逐（即便它在 LRU 序里最久未"重新激活"）。
  */
@@ -93,7 +93,7 @@ function enforceLimit(order: string[], activeId: string | null, limit: number): 
   return result
 }
 
-/**
+/** 
  * 激活一个场景（瞬切的核心）：
  * - 目标置为 active；原 active 自动降为预热（仍保活，故瞬切回去零延迟）。
  * - 目标加入/刷新保活池 LRU 近用序；超上限则 LRU 驱逐最久未用的**预热**场景。
@@ -129,7 +129,7 @@ export function removeScene(s: DirectorState, sceneId: string): DirectorState {
   }
 }
 
-/**
+/** 
  * 轮播序列：按 `sceneIds` 顺序环绕到 `current` 的下一个。
  * `current` 为 null / 未知时从第一个开始；空列表返回 null。
  */

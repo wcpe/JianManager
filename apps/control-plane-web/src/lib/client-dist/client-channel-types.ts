@@ -1,16 +1,16 @@
-/**
- * 客户端分发域契约（FR-086 / FR-187 / FR-192，ADR-103）。
+/** 
+ * 客户端分发域契约（ADR-103）。
  * 与后端 model 对齐的纯数据类型，供 `@jianmanager/ui` 内视图逻辑与应用侧 api 共用。
  */
 
-/** 客户端分发频道（FR-086）。每服一个，作为 manifest/制品端点的对外标识。 */
+/** 客户端分发频道。每服一个，作为 manifest/制品端点的对外标识。 */
 export interface ClientChannel {
   id: number
   /** 频道 slug（对外标识、URL 段）。 */
   channelId: string
   name: string
   description: string
-  /** 当前 latest 版本指针占位（FR-088 编排）；0=未发布。 */
+  /** 当前 latest 版本指针占位（编排）；0=未发布。 */
   currentVersion: number
   /** 频道下密钥数量（仅列表返回）。 */
   keyCount?: number
@@ -28,7 +28,7 @@ export interface ClientPullKey {
   expiresAt: string | null
   lastUsedAt: string | null
   createdAt: string
-  /** 是否可查看明文（= 后端存有可逆加密副本 KeyEnc；FR-192）。老哈希密钥为 false。 */
+  /** 是否可查看明文（= 后端存有可逆加密副本 KeyEnc）。老哈希密钥为 false。 */
   revealable?: boolean
 }
 

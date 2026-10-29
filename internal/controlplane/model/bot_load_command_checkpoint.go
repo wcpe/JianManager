@@ -18,7 +18,7 @@ const (
 	BotLoadCommandCheckpointCancelled BotLoadCommandCheckpointStatus = "cancelled"
 )
 
-// BotLoadCommandCheckpoint 是 FR-369 命令编排 occurrence 账本。
+// BotLoadCommandCheckpoint 是命令编排 occurrence 账本。
 type BotLoadCommandCheckpoint struct {
 	ID              uint                           `gorm:"primaryKey" json:"id"`
 	StressSessionID uint                           `gorm:"not null;index" json:"stressSessionId"`

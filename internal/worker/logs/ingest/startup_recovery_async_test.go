@@ -90,7 +90,7 @@ func TestStartupRecoveryDoesNotBlockNew(t *testing.T) {
 }
 
 // TestStartupRecoveryReplayIsRegisteredNotInlined：**启动恢复不得在自己的驱动 goroutine 上
-// 跑完整窗重发**（2026-10-10 生产事故的直接对策，FR-497 资源侧）。
+// 跑完整窗重发**（2026-10-10 生产事故的直接对策资源侧）。
 //
 // 现场形态（只读统计 `worker.out`）：9 分钟内写出 2077 万事件、最大单次 573562 条，
 // 5 个启动窗口共 4×1526 + 1×3359 条重复对账日志（同一 `(源, 缺失天)` 组合反复出现）。

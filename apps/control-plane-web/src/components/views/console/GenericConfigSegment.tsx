@@ -16,21 +16,21 @@ export interface GenericConfigSegmentProps {
   /** 发现的配置文件清单。 */
   files: DiscoveredConfigFile[]
   isLoading?: boolean
-  /**
+  /** 
    * 编辑器插槽（应用侧 `ConfigFileEditor`，含 schema 表单 / 原文双模式与版本能力）。
    * 未选文件时该插槽不渲染。
    */
   renderEditor: (args: { path: string; onClose: () => void }) => ReactNode
 }
 
-/**
- * 结构化配置编辑分段（FR-451 衔接，FR-449/450 复用）——不写死产品名。
+/** 
+ * 结构化配置编辑分段（衔接450 复用）——不写死产品名。
  *
  * 递归发现实例工作目录下的配置文件（`config_discover`），左侧选择、右侧编辑：
  * 复用应用侧注入的编辑器获得「schema 表单 / 原文文本」双模式与配置版本能力。
  * BC 的 `config.yml`（监听端口 / online_mode / servers）与原生二进制的配置文件走同一条路径。
  *
- * FR-449 §2.2.4 收口说明：BC `config.yml` 的表单覆盖「确实是标量」的关键项
+ *§2.2.4 收口说明：BC `config.yml` 的表单覆盖「确实是标量」的关键项
  * （listeners.host / max_players / motd / query_port、ip_forward、online_mode、
  * connection_throttle[_limit]），键名与 `parseFlatYAML` 的点号路径精确对齐。
  *

@@ -1,5 +1,5 @@
-/**
- * 观测增强组件的共享格式化工具（FR-463/464/465/469）。
+/** 
+ * 观测增强组件的共享格式化工具（464/465/469）。
  *
  * 抽出的理由：`fmtBytes` 此前在 `CapacityForecastCard.tsx` 与 `InstanceRankingPanel.tsx`
  * 内**逐字重复两份**。

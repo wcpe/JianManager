@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/version"
 )
 
-// EnrollInstallConfig 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
+// EnrollInstallConfig 拼装一键安装命令所需的对外地址（见 ADR-020）。
 // 全部可选：留空字段在签发时按请求 Host 推断（适配同机/反代部署），显式配置可覆盖。
 type EnrollInstallConfig struct {
 	// AdvertiseGRPC 对外公布的 CP gRPC 地址（host:port）。留空则由请求 Host + GRPCPort 推断。
@@ -23,11 +23,11 @@ type EnrollInstallConfig struct {
 	GRPCPort int
 	// ScriptBaseURL 安装脚本下载基址（scheme://host）。留空则用请求 scheme://Host。
 	ScriptBaseURL string
-	// BinaryURL Worker 二进制下载地址（可选）。非空则覆盖 FR-190 CP-local 默认下载 URL。
+	// BinaryURL Worker 二进制下载地址（可选）。非空则覆盖CP-local 默认下载 URL。
 	BinaryURL string
 }
 
-// EnrollTokenHandler 节点 enrollment token 路由（FR-080，见 ADR-020）。
+// EnrollTokenHandler 节点 enrollment token 路由（见 ADR-020）。
 // 限平台管理员（挂在 admin 组）；签发/吊销写审计，detail 绝不含 token 明文。
 type EnrollTokenHandler struct {
 	svc     *service.EnrollTokenService

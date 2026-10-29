@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-396 创建/搭建/导入/克隆/重建/配置更新与任务查询。
+// 创建/搭建/导入/克隆/重建/配置更新与任务查询。
 func init() {
 	registerToolSpecs(
 		toolSpec{
@@ -39,7 +39,7 @@ func init() {
 		toolSpec{
 			Def: ToolDef{
 				Name:        "instance_provision_server",
-				Description: "一键搭建后端子服（异步，返回 taskId；须 instance.provision）。coreType=binary 时为通用二进制搭建（FR-441）：须提供 binarySource，支持 asset/url/node_file 三类来源；coreType=beacon 时为内置 Beacon 预设（FR-442）：无需 binarySource，按「制品库已有 beacon 制品 > GitHub Releases wcpe/Beacon」自动选源，落 beacon 角色",
+				Description: "一键搭建后端子服（异步，返回 taskId；须 instance.provision）。coreType=binary 时为通用二进制搭建：须提供 binarySource，支持 asset/url/node_file 三类来源；coreType=beacon 时为内置 Beacon 预设：无需 binarySource，按「制品库已有 beacon 制品 > GitHub Releases wcpe/Beacon」自动选源，落 beacon 角色",
 				InputSchema: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -52,7 +52,7 @@ func init() {
 						"memoryMb":  map[string]any{"type": "number"},
 						"binarySource": map[string]any{
 							"type":        "object",
-							"description": "coreType=binary 的制品来源（FR-441）：kind=asset 用 assetId；kind=url 用 url（须 https）+ 可选 sha256；kind=node_file 用 nodePath（节点绝对路径，须在运维放行目录内）。coreType=beacon 时不需要（来源自动解析）",
+							"description": "coreType=binary 的制品来源：kind=asset 用 assetId；kind=url 用 url（须 https）+ 可选 sha256；kind=node_file 用 nodePath（节点绝对路径，须在运维放行目录内）。coreType=beacon 时不需要（来源自动解析）",
 							"properties": map[string]any{
 								"kind":       map[string]any{"type": "string", "enum": []string{"asset", "url", "node_file"}},
 								"assetId":    map[string]any{"type": "number", "description": "kind=asset：制品库资产 ID"},
@@ -252,7 +252,7 @@ func execInstanceProvisionServer(ctx context.Context, deps ToolDeps, p *service.
 		CoreType:  strings.TrimSpace(stringArg(args, "coreType")),
 		MCVersion: strings.TrimSpace(stringArg(args, "mcVersion")),
 	}
-	// 通用二进制搭建（FR-441）：来源与启动命令由请求体直供；非 binary 时解析出的空值无副作用
+	// 通用二进制搭建：来源与启动命令由请求体直供；非 binary 时解析出的空值无副作用
 	//（服务层按核心类型分派，MC 路径不读这两个字段）。
 	if src, err := binarySourceArg(args); err != nil {
 		return toolErr(err.Error())
@@ -285,7 +285,7 @@ func execInstanceProvisionServer(ctx context.Context, deps ToolDeps, p *service.
 	return toolOK(map[string]any{"instance": inst, "taskId": taskID})
 }
 
-// binarySourceArg 解析 binarySource 对象参数（FR-441）。
+// binarySourceArg 解析 binarySource 对象参数。
 // 未提供时返回 (nil, nil)：MC 核心路径不关心该参数，缺省不应报错——
 // 「是否必填」由服务层按 coreType 判定（binary 缺来源即报「缺少 binarySource.kind」）。
 func binarySourceArg(args map[string]any) (*service.BinarySource, error) {

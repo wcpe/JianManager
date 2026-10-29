@@ -7,8 +7,8 @@ import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 import LicensesPage from './LicensesPage'
 
-/**
- * LicensesPage 强断言（FR-210）：渲染 seed 依赖清单 → 搜索过滤联动 → 注入 500 显空/错误态。
+/** 
+ * LicensesPage 强断言：渲染 seed 依赖清单 → 搜索过滤联动 → 注入 500 显空/错误态。
  * 许可清单走静态资源 /licenses.json（裸 http.get mock），非 /api，故错误注入用 server.use 覆盖。
  */
 describe('LicensesPage（mock 假后端）', () => {

@@ -9,10 +9,10 @@ import { hasActiveBackup } from '@/lib/backups/backup'
 import InstanceBackupSegmentView from '@/components/views/instances/InstanceBackupSegment'
 import { useTranslation } from 'react-i18next'
 
-/** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成（FR-151，复用 BackupsPage 模式）。 */
+/** 进行中备份时的轮询间隔（毫秒）：刷新进度直至完成（复用 BackupsPage 模式）。 */
 const ACTIVE_POLL_MS = 3000
 
-/**
+/** 
  * 实例「备份 · 定时」分区的应用接线层（ADR-103 b 范式）。
  *
  * 分区本体是受控视图（见 components/views）；本层取两份列表（备份带「进行中轮询」）、存活判定、
@@ -25,7 +25,7 @@ export default function InstanceBackupSegment({ instanceId }: { instanceId: numb
   const { data: storages } = useBackupStorages()
   const { data: schedules, isLoading: schedulesLoading } = useSchedules(instanceId)
 
-  // 先无轮询取一次判定是否有进行中备份，再据此决定轮询间隔（FR-151，复用 BackupsPage 模式）。
+  // 先无轮询取一次判定是否有进行中备份，再据此决定轮询间隔（复用 BackupsPage 模式）。
   const probe = useBackups(instanceId)
   const active = hasActiveBackup(probe.data ?? [])
   const { data: backups, isLoading: backupsLoading } = useBackups(instanceId, {

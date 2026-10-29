@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 )
 
-// botWorkerFS 内嵌与 CP 同构建的 bot-worker dist 归档（FR-308，见 ADR-070 修订 ADR-006）。
+// botWorkerFS 内嵌与 CP 同构建的 bot-worker dist 归档（见 ADR-070 修订 ADR-006）。
 // 归档与 manifest 经 `make embed-botworker` 注入到 embed/botworker/；目录内 .gitignore
 // 保证未注入时目录依然存在、go:embed 不致编译失败，运行时优雅降级「未内嵌」。
 //

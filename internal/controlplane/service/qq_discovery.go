@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// QQ 群发现与网关连接管理（FR-495，增强 FR-494）。
+// QQ 群发现与网关连接管理（增强）。
 //
 // 机器人密钥来源决策（spec §3.1 二选一拍板）：选方案 A——复用首个启用 qq 通道的
 // appSecret（从其 config 的 ${ENV} 引用解析），无独立环境变量。
@@ -144,7 +144,7 @@ type QQCredentials struct {
 	BaseURL   string
 }
 
-// QQDiscoveryService QQ 群发现服务（FR-495）：分享链接生成 + 网关连接管理 + 事件落库 + 查询。
+// QQDiscoveryService QQ 群发现服务：分享链接生成 + 网关连接管理 + 事件落库 + 查询。
 //
 // 生命周期照 AlertEvaluator 的 stopCh 模式：Start/Stop 可重复调用；
 // Start 不阻塞（网关拨号与重连在后台 goroutine），网关不可达时后台退避重试。

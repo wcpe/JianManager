@@ -18,7 +18,7 @@ import (
 // proxyMotd 是平台生成代理配置时写入的默认 motd。
 const proxyMotd = "JianManager Proxy"
 
-// ProxyService 搭建代理实例并把 proxy↔backend 注册关系落到代理实际配置（FR-035）。
+// ProxyService 搭建代理实例并把 proxy↔backend 注册关系落到代理实际配置。
 // 同时实现 RegistrationSyncer：注册关系变更后重写代理 servers/priorities/forced-host 与下发 Velocity secret。
 type ProxyService struct {
 	db       *gorm.DB
@@ -98,7 +98,7 @@ func (p *ProxyService) ProvisionProxyAsync(ctx context.Context, req ProvisionPro
 	if p.db != nil && p.instance != nil && p.db.First(&resyncNode, req.NodeID).Error == nil {
 		p.instance.ResyncNode(resyncNode.UUID)
 	}
-	// 存搭建参数供损毁后「重建」复用（FR-342）：与 server 一致，失败进 DAMAGED 后参数已在库。
+	// 存搭建参数供损毁后「重建」复用：与 server 一致，失败进 DAMAGED 后参数已在库。
 	if specJSON, mErr := json.Marshal(req); mErr == nil {
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", result.Instance.ID).Update("provision_spec", string(specJSON)).Error
 	}
@@ -143,7 +143,7 @@ func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.In
 	// 建服/克隆/代理分配选中同一端口。
 	releasePortAlloc := p.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
-	// 代理端无法加载 Bukkit 探针插件（FR-454），不分配探针端口（ProbePort 恒 0）。
+	// 代理端无法加载 Bukkit 探针插件，不分配探针端口（ProbePort 恒 0）。
 	ports, err := allocPortsForNode(p.db, req.NodeID, false)
 	if err != nil {
 		return nil, "", err
@@ -158,7 +158,7 @@ func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.In
 	}
 	inst, err := p.instance.Create(CreateInstanceRequest{
 		NodeID: req.NodeID, Name: req.Name, Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleProxy,
-		// 代理恒为 proxy 类别（FR-511）：与它跑的是 Velocity 还是 BungeeCord 无关。
+		// 代理恒为 proxy 类别：与它跑的是 Velocity 还是 BungeeCord 无关。
 		Kind: model.InstanceKindProxy,
 		ProcessType: model.ProcessTypeDaemon, JDKID: req.JDKID, LaunchSpec: string(specJSON),
 		ServerPort: ports.ServerPort, AutoRestart: true, GroupID: req.GroupID,
@@ -223,7 +223,7 @@ func (p *ProxyService) runProxyProvision(ctx context.Context, req ProvisionProxy
 	return "", nil
 }
 
-// RebuildProxy 重建损毁代理实例（FR-342）：复用已存 ProvisionSpec + forwarding_secret 重跑代理搭建到既有
+// RebuildProxy 重建损毁代理实例：复用已存 ProvisionSpec + forwarding_secret 重跑代理搭建到既有
 // 工作目录，无需重填。仅 DAMAGED 且有 ProvisionSpec 的代理可重建；成功→STOPPED、失败→仍 DAMAGED。
 func (p *ProxyService) RebuildProxy(ctx context.Context, instanceID uint, createdBy uint) (string, error) {
 	var inst model.Instance
@@ -275,7 +275,7 @@ func (p *ProxyService) runProxyRebuild(ctx context.Context, req ProvisionProxyRe
 	return "", nil
 }
 
-// markProxyDamaged 代理搭建/重建失败 → 损毁态（FR-342）：不再删除实例，改标 DAMAGED 保留原始搭建参数
+// markProxyDamaged 代理搭建/重建失败 → 损毁态：不再删除实例，改标 DAMAGED 保留原始搭建参数
 // （ProvisionSpec）与 forwarding_secret 供「重建」复用；失败原因写 statusReason。
 // （此前是删实例做失败补偿；改为可重建，与 server 搭建失败语义对齐；旧「待清理」文案无其他逻辑依赖。）
 func (p *ProxyService) markProxyDamaged(inst *model.Instance, cause error) error {
@@ -475,7 +475,7 @@ func (p *ProxyService) provisionProxyOnWorker(ctx context.Context, inst *model.I
 	}
 	dlCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
 	defer cancel()
-	// 组合缓存键成分随请求下发（FR-330）：velocity/waterfall 有 sha256 走 sha 键，
+	// 组合缓存键成分随请求下发：velocity/waterfall 有 sha256 走 sha 键，
 	// BungeeCord latest 无构建号在 Worker 侧不参与组合键（不冻结 latest 语义）。
 	dl, err := client.Worker.DownloadCore(dlCtx, &workerpb.DownloadCoreRequest{
 		InstanceUuid: inst.UUID,

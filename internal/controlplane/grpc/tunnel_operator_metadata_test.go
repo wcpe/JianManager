@@ -18,7 +18,7 @@ import (
 )
 
 // 本文件为 2026-10-02 缺陷 E2（CP 不透传操作人）修复提供**传输层证据**：
-// 生产节点 RPC 的唯一承载是反向隧道（FR-281/ADR-066），CP 侧只要把操作人放进 outgoing
+// 生产节点 RPC 的唯一承载是反向隧道（ADR-066），CP 侧只要把操作人放进 outgoing
 // metadata，Worker 侧就必须能在 incoming metadata 里读到它——否则「CP 注入 x-jm-operator」
 // 这个修法本身不成立（会变成「写了但到不了」）。
 //

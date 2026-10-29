@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestClassifyCrashSnapshot_RootCauses 各根因正例（FR-470 spec §3 验收：每类正例）。
+// TestClassifyCrashSnapshot_RootCauses 各根因正例（spec §3 验收：每类正例）。
 func TestClassifyCrashSnapshot_RootCauses(t *testing.T) {
 	tests := []struct {
 		name     string

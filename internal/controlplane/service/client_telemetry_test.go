@@ -50,7 +50,7 @@ func TestClientTelemetry_RecordAndDailyAggregate(t *testing.T) {
 	require.Equal(t, int64(1), fail.Count)
 }
 
-// TestClientTelemetry_RecordEnrichFields FR-360 新字段落库；旧客户端缺字段不失败。
+// TestClientTelemetry_RecordEnrichFields新字段落库；旧客户端缺字段不失败。
 func TestClientTelemetry_RecordEnrichFields(t *testing.T) {
 	db := newTelemetryDB(t)
 	svc := NewClientTelemetryService(db)

@@ -1,5 +1,5 @@
-/**
- * 分发观测时间窗（FR-425）：预设档 或 任意起止（RFC3339）。
+/** 
+ * 分发观测时间窗：预设档 或 任意起止（RFC3339）。
  * 后端 parseObsRange 原生支持 from/to，本类型只做前端状态与 API 参数的桥。
  */
 import type { TFunction } from 'i18next'

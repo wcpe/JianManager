@@ -29,7 +29,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// enrollTokenHeader 注册请求携带 enrollment token 的 gRPC metadata header 名（FR-080，见 ADR-020）。
+// enrollTokenHeader 注册请求携带 enrollment token 的 gRPC metadata header 名（见 ADR-020）。
 // 与 internal/controlplane/grpc 中的常量保持一致。token 经 metadata 传递、不改 proto。
 const enrollTokenHeader = "enroll-token"
 
@@ -48,7 +48,7 @@ type Config struct {
 	WsPort           int    // WebSocket 端口
 	GrpcPort         int    // 历史兼容字段；Worker 不再监听 gRPC 端口。
 	Host             string // 本机 IP（留空自动检测，优先 127.0.0.1）
-	// EnrollToken enrollment token 明文（FR-080，见 ADR-020）。
+	// EnrollToken enrollment token 明文（见 ADR-020）。
 	// 仅新节点首次注册（无本地身份文件）时携带；经 gRPC metadata 传给 CP 校验消费。
 	// 已有本地身份的重注册留空；CP 仅按 UUID 与密钥放行，不消费 token。
 	EnrollToken string
@@ -63,7 +63,7 @@ type Config struct {
 type Result struct {
 	NodeUUID   string
 	NodeSecret string
-	// WSTokenSecret CP 下发的 WS 令牌密钥（FR-275，见 ADR-061）；旧 CP 响应为空。
+	// WSTokenSecret CP 下发的 WS 令牌密钥（见 ADR-061）；旧 CP 响应为空。
 	WSTokenSecret string
 }
 
@@ -82,7 +82,7 @@ func Register(ctx context.Context, cfg Config) (*Result, error) {
 	// 采集系统信息
 	info := collectSystemInfo(cfg)
 
-	// 首次注册携带 enrollment token（经 metadata，不改 proto，FR-080）。
+	// 首次注册携带 enrollment token（经 metadata，不改 proto）。
 	// 重注册（已有本地身份）出示 node_uuid + node_secret，CP 按 UUID 匹配既有节点（ADR-039）。
 	if cfg.EnrollToken != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, enrollTokenHeader, cfg.EnrollToken)
@@ -209,7 +209,7 @@ func WaitForControlPlane(addr string, timeout time.Duration) error {
 	return fmt.Errorf("等待 Control Plane 超时: %s", addr)
 }
 
-// 日志采集健康（FR-485）：由 main 在采集运行时创建成功/失败后写入，随每次心跳上报。
+// 日志采集健康：由 main 在采集运行时创建成功/失败后写入，随每次心跳上报。
 // 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」能被告警规则命中。
 var (
 	logIngestMu      sync.RWMutex
@@ -232,7 +232,7 @@ func logIngestHealth() (bool, string) {
 
 // CollectHeartbeatData 采集心跳数据；CPU 仅读主进程注入的同窗快照。
 // 不传 reader 时标量降级为零，不启动采样、不读取累计时间。
-// CollectHeartbeatData 采集一次心跳负载（FR-513 增补主机级观测）。
+// CollectHeartbeatData 采集一次心跳负载（增补主机级观测）。
 //
 // hostObs 为可选：nil 时跳过主机级采集，其余字段照常——
 // 老调用方（测试/未装配 hostobs 的场景）不需要改动。
@@ -240,7 +240,7 @@ func CollectHeartbeatData(nodeUUID string, readers ...metrics.CPUReader) *worker
 	return CollectHeartbeatDataWithHost(nodeUUID, nil, readers...)
 }
 
-// CollectHeartbeatDataWithHost 在 CollectHeartbeatData 基础上附带主机级观测（FR-513）。
+// CollectHeartbeatDataWithHost 在 CollectHeartbeatData 基础上附带主机级观测。
 //
 // 独立成函数而不是给原函数加参数：原函数被多处测试直接调用，
 // 加必填参数会波及全部调用点，而主机级观测本身是可选增强。
@@ -260,7 +260,7 @@ func CollectHeartbeatDataWithHost(nodeUUID string, hostObs hostobs.Reader, reade
 		snapshot := readers[0].Snapshot()
 		if snapshot.Valid {
 			req.CpuUsage, req.Iowait = snapshot.CPUUsage, snapshot.IOWait
-			// FR-513：CPU 时间构成。只在 Valid 时填——无效窗口的成分是零值，
+			// CPU 时间构成。只在 Valid 时填——无效窗口的成分是零值，
 			// 上报上去会被 CP 当成「全是 idle」，比不给更容易误导。
 			req.CpuUser = snapshot.Breakdown.User
 			req.CpuNice = snapshot.Breakdown.Nice
@@ -283,15 +283,15 @@ func CollectHeartbeatDataWithHost(nodeUUID string, hostObs hostobs.Reader, reade
 		req.NetworkBytesRecv = int64(counters[0].BytesRecv)
 	}
 
-	// 系统负载 load average（FR-062）。gopsutil 跨平台：Windows 经处理器队列长度模拟，
+	// 系统负载 load average。gopsutil 跨平台：Windows 经处理器队列长度模拟，
 	// 预热期或取不到时为 0（CP 侧据此优雅留空）。
 	if avg, err := load.Avg(); err == nil && avg != nil {
 		req.LoadAvg1 = avg.Load1
-		// FR-513：5/15 分钟两档，用于区分「瞬时尖峰」与「持续爬升」。
+		// 5/15 分钟两档，用于区分「瞬时尖峰」与「持续爬升」。
 		req.LoadAvg5, req.LoadAvg15 = avg.Load5, avg.Load15
 	}
 
-	// FR-513：主机级观测（进程计数 / 整机 top-N / 分挂载点）。
+	// 主机级观测（进程计数 / 整机 top-N / 分挂载点）。
 	//
 	// 只读采集器已发布的快照，**不在这里触发采集**：进程全表扫描是重活，
 	// 放在心跳 goroutine 里会拖慢心跳本身（而心跳是 CP 判断存活的依据）。
@@ -319,7 +319,7 @@ func CollectHeartbeatDataWithHost(nodeUUID string, hostObs hostobs.Reader, reade
 		req.ProcsRunning, req.ProcsTotal = running, total
 	}
 
-	// FR-485：日志采集平台可观测性。读取周期采集器已发布的快照，**不在这里触发采集**——
+	// 日志采集平台可观测性。读取周期采集器已发布的快照，**不在这里触发采集**——
 	// 那要遍历全部源、stat 文件、读 SQLite 采样环，会拖慢心跳本身。
 	// 快照不可用（采集器未装配 / 采集面没起来）时**整组不上报**，CP 侧落 null 断点：
 	// 上报 0 会被读成「积压为零、投递零失败」，把真实故障伪装成健康。
@@ -327,15 +327,15 @@ func CollectHeartbeatDataWithHost(nodeUUID string, hostObs hostobs.Reader, reade
 		applyLogMetrics(req, *logObs)
 	}
 
-	// FR-003：实例工作目录占用。同样只读已发布快照，不在这里触发遍历。
+	// 实例工作目录占用。同样只读已发布快照，不在这里触发遍历。
 	applyWorkDirUsages(req, workDirUsageSnapshot())
 
 	return req
 }
 
-// applyLogMetrics 把日志平台读数填进心跳负载（FR-485）。
+// applyLogMetrics 把日志平台读数填进心跳负载。
 //
-// 与 FR-513 主机级字段同一套缺失值约定：**只在测到时填**，并置 log_metrics_available。
+// 与主机级字段同一套缺失值约定：**只在测到时填**，并置 log_metrics_available。
 func applyLogMetrics(req *workerpb.HeartbeatRequest, snap logmetrics.Snapshot) {
 	if req == nil || !snap.Available {
 		return
@@ -359,14 +359,14 @@ func applyLogMetrics(req *workerpb.HeartbeatRequest, snap logmetrics.Snapshot) {
 	req.LogSlowSqlMaxMs = snap.SlowSQLMaxMs
 }
 
-// 日志平台观测采集器（FR-485）：由 main 在构造后注入，随每次心跳读取快照。
+// 日志平台观测采集器：由 main 在构造后注入，随每次心跳读取快照。
 // 与 logIngestHealth 同款的可变全局——心跳是单 goroutine，写入只发生在启动装配期。
 var (
 	logMetricsMu  sync.RWMutex
 	logMetricsObs logmetrics.Reader
 )
 
-// SetLogMetricsObserver 注入日志平台观测采集器（FR-485）。
+// SetLogMetricsObserver 注入日志平台观测采集器。
 //
 // 独立成函数而不是加进 CollectHeartbeatDataWithHost 的参数：该函数被大量测试直接调用，
 // 加必填参数会波及所有调用点，而本项是可选增强（未注入时整组字段不上报）。
@@ -393,7 +393,7 @@ func logMetricsSnapshot() *logmetrics.Snapshot {
 	return &snap
 }
 
-// 实例工作目录占用采集器（FR-003）：由 main 在构造后注入，随每次心跳读取快照。
+// 实例工作目录占用采集器：由 main 在构造后注入，随每次心跳读取快照。
 //
 // 与 logMetricsObserver 同款的可变全局（心跳是单 goroutine，写入只发生在启动装配期）。
 var (
@@ -401,7 +401,7 @@ var (
 	dirUsageObs dirusage.Reader
 )
 
-// SetWorkDirUsageObserver 注入实例工作目录占用采集器（FR-003）。
+// SetWorkDirUsageObserver 注入实例工作目录占用采集器。
 //
 // 独立成函数而不是给 CollectHeartbeatDataWithHost 加必填参数：该函数被大量测试直接调用，
 // 加必填参数会波及所有调用点，而本项是可选增强（未注入时不上报该字段组）。
@@ -411,7 +411,7 @@ func SetWorkDirUsageObserver(observer dirusage.Reader) {
 	dirUsageMu.Unlock()
 }
 
-// applyWorkDirUsages 把已发布的实例工作目录占用填进心跳负载（FR-003）。
+// applyWorkDirUsages 把已发布的实例工作目录占用填进心跳负载。
 //
 // 只读快照、**不在这里触发统计**：目录遍历是 O(文件数) 的重活，放在心跳 goroutine 里会
 // 把心跳本身拖慢（而心跳是 CP 判断节点与实例存活的依据）。
@@ -464,7 +464,7 @@ func workDirUsageSnapshot() map[string]dirusage.Usage {
 	return observer.Usages()
 }
 
-// hostProcCounts 读取主机级进程计数（FR-513）。
+// hostProcCounts 读取主机级进程计数。
 //
 // 数据来源刻意选**廉价字段**而不是遍历进程表：
 //   - /proc/stat 的 procs_running / procs_blocked：内核维护的计数器，读一行即得；

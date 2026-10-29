@@ -8,8 +8,8 @@ import {
   metricSourceLabelKey,
 } from './metrics-availability'
 
-/**
- * FR-446/447 可用性位与来源解析：三态（探针+直探 / 仅直探 / 都无）与优先级。
+/** 
+ *447 可用性位与来源解析：三态（探针+直探 / 仅直探 / 都无）与优先级。
  */
 describe('metrics-availability', () => {
   it('sourceMask 按 探针 → SLP → Query 优先级解析来源', () => {

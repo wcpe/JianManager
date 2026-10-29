@@ -1,6 +1,6 @@
 package ingest
 
-// 共享 namespace 的并发发布护栏（FR-498 跨源并发的正确性回归）。
+// 共享 namespace 的并发发布护栏（跨源并发的正确性回归）。
 //
 // 背景：`publish` 是「读当前记录 → 应用本源的投影 → CAS 写回」的读-改-写。同一 namespace 会有
 // 多个源（同一实例的 stdout/stderr、多文件源）。采集轮跨源并发之后，两个源会各自读到同一份旧

@@ -9,8 +9,8 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { useInstances } from '@/api/instances'
 import CloneInstanceDialog from './CloneInstanceDialog'
 
-/**
- * CloneInstanceDialog 强断言（FR-202 供给/部署流程，POST /instances/:id/clone）。
+/** 
+ * CloneInstanceDialog 强断言（供给/部署流程，POST /instances/:id/clone）。
  * 复制对话框依赖跨域 instances（GET /instances?role=proxy）seed handler（主树 instance.ts）。
  * 断言：① 渲染对话框 + 可注册的代理勾选项（seed proxy=lobby-proxy）；② 预检 dryRun 出资源预览、
  * 不落库不关窗；③ 提交复制 → 副本落 instances 集合联动 + 对话框关闭；④ 注入端点 500 → 不崩溃、

@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// TestAutoMigrate_DropsRetiredBusinessTables 验证 FR-521 / ADR-106 的退役迁移：
+// TestAutoMigrate_DropsRetiredBusinessTables 验证ADR-106 的退役迁移：
 // 存量库里的三张业务镜像表在 AutoMigrate 后被删除，且重复迁移幂等。
 func TestAutoMigrate_DropsRetiredBusinessTables(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "retire.db")

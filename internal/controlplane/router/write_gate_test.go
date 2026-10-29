@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// R-01~R-08 提权面回归（FR-432 / ADR-089 / spec §5.4）。
+// R-01~R-08 提权面回归（ADR-089 / spec §5.4）。
 
 func gateUserToken(t *testing.T, r *gin.Engine, db *gorm.DB, authz *service.AuthzService, userSvc *service.UserService, username string, nodes []string, groupID uint) string {
 	t.Helper()

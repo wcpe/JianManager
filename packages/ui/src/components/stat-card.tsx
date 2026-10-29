@@ -7,8 +7,8 @@ import { toneChipClass, type Tone } from '../lib/tone'
 import { deltaTone } from '../lib/stat-card'
 import { cardSurface, cardSurfaceTone } from '../lib/interaction-overlay'
 
-/**
- * KPI 统计卡（FR-163）：图标块 + 标签 + 大数值 + 「按指标混搭」右侧视觉。
+/** 
+ * KPI 统计卡：图标块 + 标签 + 大数值 + 「按指标混搭」右侧视觉。
  * 占比型传 `bar`、计数型传 `delta`/`sub`、走势型传 `trend`——映射规则见 `lib/stat-card.pickStatVisual`。
  */
 export interface StatCardProps {
@@ -22,7 +22,7 @@ export interface StatCardProps {
   icon?: React.ReactNode
   /** 图标块色调，默认主色。 */
   tone?: Tone
-  /**
+  /** 
    * 数值本身的语义色。缺省沿用前景色（中性）。
    *
    * 【为什么与 `tone` 分开】`tone` 管的是左上图标块的底色，而数值要表达的常常是
@@ -40,7 +40,7 @@ export interface StatCardProps {
   trend?: React.ReactNode
   /** 悬停提示（口径说明），经原生 title 呈现。 */
   title?: string
-  /**
+  /** 
    * 点击回调。传入后卡片变成**可点的筛选项**（语义与外观同步变化）：
    * 渲染成真 `<button>`、有 hover/focus 态、`aria-pressed` 反映激活。
    *

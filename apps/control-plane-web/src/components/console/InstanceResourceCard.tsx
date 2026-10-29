@@ -9,8 +9,8 @@ import { instanceBrowseCapability, instanceFilesCapability } from '@/lib/file-br
 import { instanceFileSource } from '@/components/file-browser/sources/instanceSource'
 import type { FileBrowserAction } from '@/lib/file-browser/file-browser-types'
 
-/**
- * 实例「资源卡片」的取数接线层（FR-130 / FR-213 / FR-378 / FR-422）。
+/** 
+ * 实例「资源卡片」的取数接线层。
  *
  * 分段状态与寄居布局已入包；三个视图（ConfigExplorer 与两种 UnifiedExplorerShell）以及
  * 文件数据源、能力画像、下载动作留应用侧，经三个插槽注入。

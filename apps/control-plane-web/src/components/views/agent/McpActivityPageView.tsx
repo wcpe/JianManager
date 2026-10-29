@@ -1,9 +1,9 @@
-/**
+/** 
  * @file McpActivityPageView：MCP 活动页的受控视图，取数、刷新、端点复制提示与跳转由应用容器负责。
  * @input Panel/Button/Table 原语、layout 页壳（PageShell/PageHeader）、lucide-react 图标、翻译上下文
  * @output McpActivityPageView、McpActivityPageViewProps、McpActivityRow、WINDOW_PRESETS、McpWindowPreset
  * @sync apps/control-plane-web/src/pages/McpActivityPage.tsx、apps/control-plane-web/src/pages/McpActivityPage.dom.test.tsx、apps/control-plane-web/e2e/mcp-activity.spec.ts
- * @since FR-508（组件受控化迁包；原 FR-391 / ADR-096 去会话化后的 Token 级活动视图）
+ * @since（组件受控化迁包；原ADR-096 去会话化后的 Token 级活动视图）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -21,7 +21,7 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 
-/**
+/** 
  * 统计窗口档位：取值会原样作为 `window` 查询参数发给后端，因此必须能被
  * `internal/controlplane/mcp/handler.go` 的 `ListActivity` 按 Go duration 解析，
  * 并落在闭区间 1h~168h（同文件的 minActivityWindow / maxActivityWindow），否则该请求被 400 拒绝。
@@ -35,7 +35,7 @@ export const WINDOW_PRESETS = ['24h', '168h'] as const
 /** 统计窗口档位取值（由 `WINDOW_PRESETS` 派生）。 */
 export type McpWindowPreset = (typeof WINDOW_PRESETS)[number]
 
-/**
+/** 
  * 活动行（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/agentObservability` 的 `McpActivityItem`：
@@ -66,7 +66,7 @@ export interface McpActivityRow {
   clients: Record<string, number>
 }
 
-/**
+/** 
  * 受控边界：窗口档位是**受控**值（切档会改查询键并触发重新取数，故 state 由容器持有）；
  * 取数、刷新、端点基址计算、复制结果 toast 与页头跳转一律在容器。
  * 视图只保留展示：档位按钮的选中态、端点说明、表格与加载/错误/空三态的判定优先级。
@@ -92,7 +92,7 @@ export interface McpActivityPageViewProps {
   endpoint: string
   /** 复制端点：成功/失败提示的 toast 文案由容器决定。 */
   onCopyEndpoint: () => void
-  /**
+  /** 
    * 页头右端的路由跳转入口（容器注入 react-router `Link` 包裹的按钮；
    * 包内不依赖 react-router）。可省略——组件博物馆等无路由场景即不渲染跳转。
    */
@@ -109,8 +109,8 @@ function formatClients(clients: Record<string, number> | undefined): string {
     .join('，')
 }
 
-/**
- * MCP 活动运维页展示层（FR-391 / ADR-096）：按 Token 聚合的调用活动、MCP URL 展示与吊销入口。
+/** 
+ * MCP 活动运维页展示层（ADR-096）：按 Token 聚合的调用活动、MCP URL 展示与吊销入口。
  * 端点去会话化后已无「会话」可观测，故本视图只呈现窗口内的活动聚合。
  */
 export function McpActivityPageView({

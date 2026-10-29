@@ -26,7 +26,7 @@ import (
 // 实例规模化下的进一步优化见 spec 开放问题。
 const maxConcurrentProbeScrapes = 8
 
-// 单拍实例指标采集的**总预算**（FR-446 审计项 2 / 复审 NEW-ISSUE A）**由生效超时推导**，
+// 单拍实例指标采集的**总预算**（审计项 2 / 复审 NEW-ISSUE A）**由生效超时推导**，
 // 不再是硬编码定值。
 //
 // 旧实现把预算写死 15s，而直探超时可配（旧上界 30s）：运营把超时调大后，单实例最坏
@@ -66,14 +66,14 @@ func warnIfBudgetBreaksTickGuardrail(budget, slp, query time.Duration) {
 	})
 }
 
-// 失败来源的短期退避（FR-446 审计项 2 的「失败实例短期退避/跳拍」）。
+// 失败来源的短期退避（审计项 2 的「失败实例短期退避/跳拍」）。
 //
 // query.port 已分配但 enable-query 未开、探针端口被占这类**持续性**失败，每拍都要白等一个
 // 完整超时；69 实例规模下这正是把节拍拖垮的主因。故连续失败达阈值后按失败次数指数推迟重探：
 // 60s → 120s（上限 probeSourceMaxRetryInterval），一旦恢复立即清零。
 //
 // 首档**必须严格大于心跳节拍**（30s，ADR-013），否则退避窗口会被下一拍起点追上而形同虚设
-// （FR-446 复审 N4）；配合「退避基准取探测完成时刻」（见 collectInstanceMetricsAt），
+// （复审 N4）；配合「退避基准取探测完成时刻」（见 collectInstanceMetricsAt），
 // 首档 60s 实际至少跳过一拍。
 // 退避**只作用于 30s 时序采样**：用户手动打开详情页走的 GetInstanceMetrics 实时链路不查询退避，
 // 永远给最新值（否则一次抖动会让详情页「不可用」停留到退避结束）。
@@ -93,9 +93,9 @@ const (
 
 // probeScrapeState 记录各实例上一次采集结果的**稳定判据**（不可用来源集合），用于「变化才告警」
 // 的降噪：同一故障每拍重刷会淹没日志中心（未部署探针的实例会永久失败），而完全静默又会让
-// 「探针桥已连接但 /metrics 不通」（FR-411：导入实例 probe_port=0、端口被占、探针降级）无从排障。
-// 判据不含错误类别/退避态，避免文案抖动造成每拍重发（FR-446 复审 N5）。
-// 实例删除/迁移时由 pruneProbeState 随本拍实例集合清理（FR-446 审计项 10）。
+// 「探针桥已连接但 /metrics 不通」（：导入实例 probe_port=0、端口被占、探针降级）无从排障。
+// 判据不含错误类别/退避态，避免文案抖动造成每拍重发（复审 N5）。
+// 实例删除/迁移时由 pruneProbeState 随本拍实例集合清理（审计项 10）。
 var probeScrapeState = struct {
 	sync.Mutex
 	lastSignature map[string]string
@@ -131,12 +131,12 @@ type InstanceStateProvider interface {
 	GetAllInstanceStates() []process.InstanceSnapshot
 }
 
-// TaskSnapshotProvider 提供运行中长任务的心跳快照（FR-183，见 ADR-040）。
+// TaskSnapshotProvider 提供运行中长任务的心跳快照（见 ADR-040）。
 // 由 Worker gRPC 服务实现持有的内存任务表实现。终态任务上报后由本心跳调 Drop 移除。
 type TaskSnapshotProvider interface {
 	TaskSnapshots() []*workerpb.TaskSnapshot
 	DropTask(taskID string)
-	// CancelTask 强制停止运行中任务（FR-227）：真中断 Worker 操作（如下载）并置 canceled 终态。
+	// CancelTask 强制停止运行中任务：真中断 Worker 操作（如下载）并置 canceled 终态。
 	CancelTask(taskID string) bool
 }
 
@@ -154,22 +154,22 @@ type Heartbeat struct {
 	interval         time.Duration
 	stopCh           chan struct{}
 	instanceProvider InstanceStateProvider
-	// taskProvider 运行中任务快照来源（FR-183）；为 nil 时心跳不带任务字段（向后兼容）。
+	// taskProvider 运行中任务快照来源；为 nil 时心跳不带任务字段（向后兼容）。
 	taskProvider TaskSnapshotProvider
 	// managedRuntimeProvider 由 Worker 主进程注入；nil 时保持旧 Worker 的 Heartbeat 兼容形状。
 	managedRuntimeProvider ManagedRuntimeProvider
 	// cpuReader 由主进程注入唯一 CPU owner；心跳只读已发布窗口。
 	cpuReader metrics.CPUReader
-	// hostObserver 主机级观测采集器（FR-513）。nil 时不上报主机级数据——
+	// hostObserver 主机级观测采集器。nil 时不上报主机级数据——
 	// 老装配/测试构造无需改动，CP 侧按缺测处理。
 	hostObserver hostobs.Reader
-	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）；
+	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（见 ADR-043）；
 	// 为 nil 时心跳不应用下发代理（Worker 仅用本地 yaml/env，向后兼容旧 CP）。
 	proxyApplier *proxyApplier
-	// wsSecretApplier 据心跳响应里 CP 下发的 WS 令牌密钥热应用（FR-275，见 ADR-061）；
+	// wsSecretApplier 据心跳响应里 CP 下发的 WS 令牌密钥热应用（见 ADR-061）；
 	// 为 nil 时不应用（向后兼容旧 CP：Worker 沿用启动时生效值）。
 	wsSecretApplier *wsSecretApplier
-	// healthApplier 据心跳响应里 CP 下发的实例健康巡检策略（FR-459）热应用到巡检器；
+	// healthApplier 据心跳响应里 CP 下发的实例健康巡检策略热应用到巡检器；
 	// 为 nil 时不应用（Worker 沿用本地 worker.yml 配置，向后兼容旧 CP）。
 	healthApplier func(process.HealthPolicy)
 }
@@ -187,7 +187,7 @@ func New(controlPlaneAddr, nodeUUID, nodeSecret string, interval time.Duration, 
 	}
 }
 
-// SetHostObserver 在 Start 前注入主机级观测采集器（FR-513）。
+// SetHostObserver 在 Start 前注入主机级观测采集器。
 //
 // 与 SetCPUReader 同款：只注入**只读快照**接口，心跳不触发采集——
 // 整机进程扫描是重活，放在心跳里会拖慢心跳本身。
@@ -200,32 +200,32 @@ func (h *Heartbeat) SetCPUReader(reader metrics.CPUReader) {
 	h.cpuReader = reader
 }
 
-// SetTaskProvider 注入运行中任务快照来源（FR-183，见 ADR-040）。
+// SetTaskProvider 注入运行中任务快照来源（见 ADR-040）。
 // 由 main 装配（传入 Worker gRPC 服务实现）；不调用则心跳不携带任务进度。
 func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
 	h.taskProvider = p
 }
 
-// SetManagedRuntimeProvider 注入受管运行时快照来源（FR-400）。
+// SetManagedRuntimeProvider 注入受管运行时快照来源。
 func (h *Heartbeat) SetManagedRuntimeProvider(p ManagedRuntimeProvider) {
 	h.managedRuntimeProvider = p
 }
 
-// SetProxyRebuilder 注入「据心跳下发代理重建出站 client」的回调（FR-185，见 ADR-043）。
+// SetProxyRebuilder 注入「据心跳下发代理重建出站 client」的回调（见 ADR-043）。
 // 由 main 装配（包裹 httpclient.Provider.Rebuild）；不调用则忽略 CP 下发的代理（向后兼容）。
 // 内部用 generation 比较，仅在期望代理变化时才重建（避免每拍重建）。
 func (h *Heartbeat) SetProxyRebuilder(rebuild func(httpclient.Config) error) {
 	h.proxyApplier = newProxyApplier(rebuild)
 }
 
-// SetWSSecretApplier 注入「据心跳下发 WS 令牌密钥热应用」的回调（FR-275，见 ADR-061）。
+// SetWSSecretApplier 注入「据心跳下发 WS 令牌密钥热应用」的回调（见 ADR-061）。
 // current 为启动时已生效的密钥（首拍据此去重）；apply 由 main 装配（热更新终端/插件桥 +
 // 持久化身份文件）。不调用则忽略 CP 下发的密钥（向后兼容）。
 func (h *Heartbeat) SetWSSecretApplier(current string, apply func(secret string) error) {
 	h.wsSecretApplier = newWSSecretApplier(current, apply)
 }
 
-// SetHealthPolicyApplier 注入「据心跳下发的实例健康巡检策略热应用」回调（FR-459）。
+// SetHealthPolicyApplier 注入「据心跳下发的实例健康巡检策略热应用」回调。
 // 由 main 装配（包裹 HealthScanner.SetPolicy）；不调用则忽略 CP 下发策略（向后兼容旧 CP）。
 func (h *Heartbeat) SetHealthPolicyApplier(apply func(process.HealthPolicy)) {
 	h.healthApplier = apply
@@ -262,7 +262,7 @@ func (h *Heartbeat) loop() {
 // Control Plane 不可达时 Worker 不 panic，仅记录日志并等待下一周期。
 //
 // 采集（节点指标 + 每实例直探）**每拍只做一次**，重试只重发同一份负载
-// （FR-446 审计项 2）：旧实现把采集放在 sendHeartbeat 内，一次失败的 RPC 会让 69 实例的
+// （审计项 2）：旧实现把采集放在 sendHeartbeat 内，一次失败的 RPC 会让 69 实例的
 // 全量直探再跑一遍，把最坏成本乘以重试次数。
 func (h *Heartbeat) sendHeartbeatWithRetry() {
 	const maxBackoff = 30 * time.Second
@@ -274,7 +274,7 @@ func (h *Heartbeat) sendHeartbeatWithRetry() {
 	for {
 		if err := h.sendHeartbeat(req); err == nil {
 			// 终态任务已随本次心跳上报且 CP 已确认接收，从内存表移除避免重复上报
-			//（FR-183，见 ADR-040）。仅在心跳成功确认后才 Drop，确保 CP 至少收到一次终态快照。
+			// （见 ADR-040）。仅在心跳成功确认后才 Drop，确保 CP 至少收到一次终态快照。
 			if h.taskProvider != nil {
 				for _, id := range terminalTaskIDs {
 					h.taskProvider.DropTask(id)
@@ -304,22 +304,22 @@ func (h *Heartbeat) sendHeartbeatWithRetry() {
 func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []string) {
 	req := register.CollectHeartbeatDataWithHost(h.nodeUUID, h.hostObserver, h.cpuReader)
 
-	// 附加实例状态快照 + 每实例直探快照（FR-060 时序留存 + FR-446/447）。
+	// 附加实例状态快照 + 每实例直探快照（时序留存447）。
 	if h.instanceProvider != nil {
 		states := h.instanceProvider.GetAllInstanceStates()
-		// 显式空切片（非 nil）：新 Worker 无在管实例时仍启用反向对账「清单已空」语义（FR-326）；
+		// 显式空切片（非 nil）：新 Worker 无在管实例时仍启用反向对账「清单已空」语义；
 		// 老路径 instanceProvider==nil 才保持 Instances=nil，CP 不启用反向对账。
 		req.Instances = make([]*workerpb.InstanceState, 0, len(states))
 		for _, s := range states {
-			// pid 可选字段（FR-326）：供 CP 反向对账诊断；老 CP 忽略，零值兼容。
-			// health/status_reason（FR-459）：健康巡检结论与原因，供 CP 写 status_reason 与健康总览。
+			// pid 可选字段：供 CP 反向对账诊断；老 CP 忽略，零值兼容。
+			// health/status_reason：健康巡检结论与原因，供 CP 写 status_reason 与健康总览。
 			req.Instances = append(req.Instances, &workerpb.InstanceState{
 				InstanceUuid: s.UUID,
 				State:        s.State,
 				Pid:          int32(s.PID),
 				Health:       s.Health,
 				StatusReason: s.StatusReason,
-				// foreign_pid/foreign_cmdline（FR-471）：孤儿扫描观测到的「实例目录下外来活进程」，
+				// foreign_pid/foreign_cmdline：孤儿扫描观测到的「实例目录下外来活进程」，
 				// 供 CP 写 instances.runtime_drift_* 并在面板提示接管。0=无漂移（零值兼容老 CP）。
 				ForeignPid:     int32(s.ForeignPID),
 				ForeignCmdline: s.ForeignCmdline,
@@ -332,7 +332,7 @@ func (h *Heartbeat) buildHeartbeatRequest() (*workerpb.HeartbeatRequest, []strin
 		req.ManagedRuntime = h.managedRuntimeProvider.ManagedRuntimeSnapshot()
 	}
 
-	// 附加运行中长任务进度快照（FR-183，见 ADR-040）。
+	// 附加运行中长任务进度快照（见 ADR-040）。
 	var terminalTaskIDs []string
 	if h.taskProvider != nil {
 		req.Tasks = h.taskProvider.TaskSnapshots()
@@ -380,20 +380,20 @@ func (h *Heartbeat) sendHeartbeat(req *workerpb.HeartbeatRequest) error {
 		return err
 	}
 
-	// 应用 CP 下发的期望出站代理（FR-185，见 ADR-043）：generation 变化才重建出站 client。
+	// 应用 CP 下发的期望出站代理（见 ADR-043）：generation 变化才重建出站 client。
 	// 重连/重启天然由后续心跳重发，无需 Worker 落盘。
 	h.proxyApplier.apply(reply)
 
-	// 应用 CP 下发的 WS 令牌密钥（FR-275，见 ADR-061）：值变化才热更新终端/插件桥校验 + 持久化。
+	// 应用 CP 下发的 WS 令牌密钥（见 ADR-061）：值变化才热更新终端/插件桥校验 + 持久化。
 	h.wsSecretApplier.applyReply(reply)
 
-	// 应用 CP 下发的 MC 直探超时（FR-446）：写入 metrics 生效值，心跳与实时两条链路共用。
+	// 应用 CP 下发的 MC 直探超时：写入 metrics 生效值，心跳与实时两条链路共用。
 	applyDirectProbeTimeouts(reply)
 
-	// 应用 CP 下发的实例健康巡检策略（FR-459）：写入巡检器生效值，无需重启 Worker 即生效。
+	// 应用 CP 下发的实例健康巡检策略：写入巡检器生效值，无需重启 Worker 即生效。
 	h.applyHealthPolicy(reply)
 
-	// 应用 CP 下发的取消请求（FR-227）：真中断对应运行中任务（如下载），canceled 经下一拍心跳上报。
+	// 应用 CP 下发的取消请求：真中断对应运行中任务（如下载），canceled 经下一拍心跳上报。
 	if h.taskProvider != nil {
 		for _, id := range reply.GetCancelTaskIds() {
 			h.taskProvider.CancelTask(id)
@@ -406,19 +406,19 @@ func (h *Heartbeat) sendHeartbeat(req *workerpb.HeartbeatRequest) error {
 }
 
 // collectInstanceMetrics 对 RUNNING 且任一采集源端口已知的实例并发采集本机指标，
-// 构造心跳负载里的每实例快照（FR-060 时序 + FR-446/447 直探）。
+// 构造心跳负载里的每实例快照（时序447 直探）。
 // 采集走统一编排链 `探针 → SLP → Query → 不可用`：探针失败时由 SLP/Query 直探补基础信息；
 // 三源皆不可用则为「不可用」（CP 落 NULL 断点，不补假值），不阻塞其他实例采集。无可采实例时返回 nil。
 func collectInstanceMetrics(snaps []process.InstanceSnapshot) []*workerpb.InstanceMetricSample {
 	return collectInstanceMetricsAt(snaps, time.Now(), collectInstanceBudget())
 }
 
-// collectInstanceMetricsAt 是带**总预算**与可注入时钟的采集实现（FR-446 审计项 2）。
+// collectInstanceMetricsAt 是带**总预算**与可注入时钟的采集实现（审计项 2）。
 // 预算耗尽即返回已完成部分：未完成实例补一条「全部不可用」的空样本（与真实缺测同语义，
 // CP 落 NULL 断点），绝不把缺测伪装成 0。仍在跑的采集协程会各自在自身超时内收敛，
 // 其写入落在带缓冲的结果通道里、不会阻塞或泄漏。
 func collectInstanceMetricsAt(snaps []process.InstanceSnapshot, now time.Time, budget time.Duration) []*workerpb.InstanceMetricSample {
-	// 实例删除/迁移后清理其告警与退避状态（FR-446 审计项 10）：以本拍可见实例集合为准。
+	// 实例删除/迁移后清理其告警与退避状态（审计项 10）：以本拍可见实例集合为准。
 	pruneProbeState(snaps)
 
 	targets := make([]process.InstanceSnapshot, 0, len(snaps))
@@ -450,7 +450,7 @@ func collectInstanceMetricsAt(snaps []process.InstanceSnapshot, now time.Time, b
 			sample := &workerpb.InstanceMetricSample{InstanceUuid: t.UUID}
 			tel := metrics.CollectInstanceTelemetry(cfg)
 			fillInstanceMetricSample(sample, tel)
-			// 退避基准取**探测完成时刻**而非拍起点（FR-446 复审 N4）：以拍起点加冷却时长会与
+			// 退避基准取**探测完成时刻**而非拍起点（复审 N4）：以拍起点加冷却时长会与
 			// 下一拍起点重合，使退避窗口被下一拍「追上」而形同虚设。
 			recordProbeSourceOutcomes(t.UUID, att, tel, time.Now())
 			// 降噪：任一来源可用则清空告警；本拍来源皆不可用才记，且按**稳定判据**变化才告警
@@ -485,7 +485,7 @@ func collectInstanceMetricsAt(snaps []process.InstanceSnapshot, now time.Time, b
 
 // probeConfigWithBackoff 组装某实例本拍的采集配置：处于退避期的来源把端口置 0，
 // 使编排链跳过它（避免持续性失败每拍都白等一个完整超时）。
-// 同时把 CP 下发的直探超时**显式**填入配置（FR-446 审计项 1），不依赖包内隐式默认。
+// 同时把 CP 下发的直探超时**显式**填入配置（审计项 1），不依赖包内隐式默认。
 func probeConfigWithBackoff(t process.InstanceSnapshot, now time.Time) (metrics.CollectConfig, probeAttempt) {
 	slpTimeout, queryTimeout := metrics.DirectProbeTimeouts()
 	cfg := metrics.CollectConfig{
@@ -509,23 +509,23 @@ func probeConfigWithBackoff(t process.InstanceSnapshot, now time.Time) (metrics.
 	return cfg, att
 }
 
-// fillInstanceMetricSample 把编排链结果填入心跳负载的每实例快照（FR-060/446/447）。
+// fillInstanceMetricSample 把编排链结果填入心跳负载的每实例快照（446/447）。
 //
 // 只填**心跳链路真正有消费者**的字段（CP IngestHeartbeat）：探针深度指标 + 在线人数及其可用位 +
 // 各直探来源可用位。proto 里的 motd/version/max_players/player_names/plugins/map/source_mask/
 // player_names_partial 为预留字段，心跳不填——它们已由实时详情链路（GetInstanceMetrics）端到端
-// 提供，每拍重复携带只会放大载荷（FR-446 审计项 3）。
+// 提供，每拍重复携带只会放大载荷（审计项 3）。
 func fillInstanceMetricSample(sample *workerpb.InstanceMetricSample, tel *metrics.InstanceTelemetry) {
 	sample.ProbeAvailable = tel.ProbeAvailable
 	sample.Tps = tel.TPS
 	sample.MsptMillis = tel.MSPTMillis
 	sample.PlayersOnline = tel.PlayersOnline
-	// 人数上限（FR-511）：侧栏要显示「当前/最大人数」，而批量指标接口只能读到存好的时序序列，
+	// 人数上限：侧栏要显示「当前/最大人数」，而批量指标接口只能读到存好的时序序列，
 	// 因此心跳必须携带。它是 int32（约 4 字节/实例/拍），不像 motd/名单/插件那样放大载荷，
 	// 因此不适用上方「预留给实时详情链路」的排除规则。可用位随值一起带，CP 据此落 NULL 而非伪造 0。
 	sample.MaxPlayers = tel.PlayersMax
 	sample.MaxPlayersAvailable = tel.PlayersMaxAvailable
-	// 在线人数可用位（FR-447）：Query 有响应但缺 numplayers 时为 false，CP 据此落 NULL 断点，
+	// 在线人数可用位：Query 有响应但缺 numplayers 时为 false，CP 据此落 NULL 断点，
 	// 不把「协议未给出」写成 0 在线。
 	sample.PlayersOnlineAvailable = tel.PlayersOnlineAvailable
 	sample.HeapUsedBytes = tel.HeapUsedBytes
@@ -533,7 +533,7 @@ func fillInstanceMetricSample(sample *workerpb.InstanceMetricSample, tel *metric
 	sample.Threads = tel.Threads
 	sample.CpuLoad = tel.CPULoad
 	sample.UptimeSeconds = tel.UptimeSeconds
-	// GC（FR-465）：探针 cumulative counter，CP 侧据相邻心跳差推导速率。
+	// GC：探针 cumulative counter，CP 侧据相邻心跳差推导速率。
 	sample.GcCountTotal = tel.GCCountTotal
 	sample.GcTimeMillis = tel.GCTimeMillis
 	for name, w := range tel.Worlds {
@@ -563,7 +563,7 @@ func recordProbeSourceOutcomes(instanceUUID string, att probeAttempt, tel *metri
 }
 
 // unreachableSourcesReason 生成「本拍尝试过的来源皆不可用」时的来源化描述（供变化告警）；任一来源
-// 可用、或本拍什么都没尝试时返回空串。文案把**错误类别**并入（FR-446 审计项 4），并标注处于退避
+// 可用、或本拍什么都没尝试时返回空串。文案把**错误类别**并入（审计项 4），并标注处于退避
 // 而未尝试的来源（避免把「主动跳拍」误读成「探测成功」）。
 func unreachableSourcesReason(t process.InstanceSnapshot, att probeAttempt, tel *metrics.InstanceTelemetry) string {
 	if tel.ProbeAvailable || tel.SLPAvailable || tel.QueryAvailable {
@@ -640,7 +640,7 @@ func recordProbeSourceResult(instanceUUID, source string, available bool, now ti
 	e.nextRetry = now.Add(cooldown)
 }
 
-// pruneProbeState 清理不在本拍实例集合里的告警与退避状态（实例删除/迁移，FR-446 审计项 10）。
+// pruneProbeState 清理不在本拍实例集合里的告警与退避状态（实例删除/迁移审计项 10）。
 // 无实例（含全删）时清空全部，避免状态无界增长。
 func pruneProbeState(snaps []process.InstanceSnapshot) {
 	known := make(map[string]struct{}, len(snaps))
@@ -666,7 +666,7 @@ func pruneProbeState(snaps []process.InstanceSnapshot) {
 }
 
 // unreachableSourcesSignature 返回「本拍来源皆不可用」的**稳定判据**，仅含"哪些来源不可用"这一
-// 集合（来源标签，按固定顺序），**不含错误类别与退避态**（FR-446 复审 N5）。变化告警据此去重：
+// 集合（来源标签，按固定顺序），**不含错误类别与退避态**（复审 N5）。变化告警据此去重：
 // 错误类别抖动（timeout ↔ connection refused ↔ unreachable）或某来源进出退避（错误文案 ↔ "退避中"）
 // 都不会让同一故障每拍重发 WARN——只有真正"哪些来源挂了"发生变化才告警。任一来源可用、或本拍
 // 未配置任何来源 → 空串（无故障）。
@@ -692,7 +692,7 @@ func unreachableSourcesSignature(t process.InstanceSnapshot, att probeAttempt, t
 //
 // signature 是**稳定判据**（unreachableSourcesSignature），detail 是含错误类别/退避标注的告警正文
 // （unreachableSourcesReason）。以 signature 而非 detail 去重，使文案抖动不再触发重复 WARN，
-// 同时保留首次/变化时的完整可排障信息（FR-446 复审 N5）。
+// 同时保留首次/变化时的完整可排障信息（复审 N5）。
 func recordInstanceSourceResult(instanceUUID, signature, detail string) {
 	probeScrapeState.Lock()
 	prev, had := probeScrapeState.lastSignature[instanceUUID]

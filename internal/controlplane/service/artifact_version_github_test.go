@@ -128,7 +128,7 @@ func TestGitHubReleaseArtifactProvider_ParsesReleases(t *testing.T) {
 }
 
 // TestGitHubReleaseArtifactProvider_TokenProviderPriority 运行时令牌读取器（设置面板
-// github.token，FR-063/FR-409）优先于构造基线；读取器为空回退基线；`${ENV_VAR}` 引用经
+// github.token）优先于构造基线；读取器为空回退基线；`${ENV_VAR}` 引用经
 // 环境变量展开；引用了未配置的环境变量视同未配置（不发引用文本）。
 func TestGitHubReleaseArtifactProvider_TokenProviderPriority(t *testing.T) {
 	cases := []struct {

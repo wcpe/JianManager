@@ -28,7 +28,7 @@ function loginPlatformAdmin(): void {
   })
 }
 
-describe('PermissionsPage（FR-432）', () => {
+describe('PermissionsPage', () => {
   beforeEach(() => {
     loginPlatformAdmin()
   })

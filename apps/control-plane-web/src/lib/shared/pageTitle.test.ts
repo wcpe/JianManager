@@ -17,7 +17,7 @@ describe('consoleTitleKey', () => {
     expect(consoleTitleKey('/client-channels')).toBe('nav.clientChannels')
   })
 
-  it('观测·统计与任务中心路由映射（FR-215）', () => {
+  it('观测·统计与任务中心路由映射', () => {
     expect(consoleTitleKey('/statistics')).toBe('nav.statistics')
     expect(consoleTitleKey('/tasks')).toBe('nav.tasks')
   })

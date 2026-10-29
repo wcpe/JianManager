@@ -1,13 +1,13 @@
-// Package runtime 提供节点本地非 JDK 运行时（首批 Node.js）的下载安装与托管删除（FR-299）。
+// Package runtime 提供节点本地非 JDK 运行时（首批 Node.js）的下载安装与托管删除。
 //
-// 设计目标（见 docs/specs/node-runtime-library/spec.md §3.2「FR-299 Node 安装器」）：
+// 设计目标（见 docs/specs/node-runtime-library/spec.md §3.2「Node 安装器」）：
 //   - InstallNodeJS 从 nodejs.org dist（镜像可配）解析该 major 最新版本并下载便携归档，
 //     解压到托管目录 <数据根>/opt/runtimes/nodejs-<major>；
-//   - 下载复用 jdk 包导出的 DownloadAndExtract 基建：同一出站 client 语义（FR-174/ADR-043）、
-//     停滞看门狗判卡死（FR-290）、网络失败可操作引导（FR-279）；
-//   - 残骸自愈（FR-291）：完成标记 = node 可执行文件（bin/node | node.exe），无标记的
+// 下载复用 jdk 包导出的 DownloadAndExtract 基建：同一出站 client 语义（ADR-043）、
+//     停滞看门狗判卡死、网络失败可操作引导；
+// 残骸自愈：完成标记 = node 可执行文件（bin/node | node.exe），无标记的
 //     半截目录自动清除重装、有标记的完好目录拒绝覆盖；
-//   - Remove 删除归一到托管根下顶层子目录整体删除，拒绝根本身与根外路径（FR-292）。
+// Remove 删除归一到托管根下顶层子目录整体删除，拒绝根本身与根外路径。
 //
 // 所有操作只针对 Worker 本地文件系统；CP 通过 gRPC InstallRuntime/RemoveRuntime 触发，
 // 结果经任务心跳终态写回 CP 侧 model.NodeRuntime 表。
@@ -48,11 +48,11 @@ type Progress = jdk.Progress
 type Manager struct {
 	mu      sync.Mutex
 	rootDir string
-	// httpClient / httpProvider 出站 client 注入语义同 jdk.Manager（FR-174/FR-185/ADR-043）：
+	// httpClient / httpProvider 出站 client 注入语义同 jdk.Manager（ADR-043）：
 	// provider 优先（每次下载取当前，代理改动即时生效），皆空回退裸默认 client。
 	httpClient   *http.Client
 	httpProvider func() *http.Client
-	// stall/interval 下载停滞看门狗阈值（FR-290）；零值用 jdk 包默认，测试注入小值。
+	// stall/interval 下载停滞看门狗阈值；零值用 jdk 包默认，测试注入小值。
 	stall, interval time.Duration
 }
 
@@ -61,14 +61,14 @@ func NewManager(rootDir string) *Manager {
 	return &Manager{rootDir: rootDir}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）。
+// SetHTTPClient 注入出站 client（经进程级代理ADR-037）。
 func (m *Manager) SetHTTPClient(c *http.Client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次下载取当前 client，
 // 使 CP 经心跳下发的代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (m *Manager) SetHTTPClientProvider(p func() *http.Client) {
 	m.mu.Lock()
@@ -100,7 +100,7 @@ func (m *Manager) downloadClient() *http.Client {
 	return c
 }
 
-// InstallNodeJS 下载并安装指定 major 的最新 Node.js 到 <rootDir>/nodejs-<major>（FR-299）。
+// InstallNodeJS 下载并安装指定 major 的最新 Node.js 到 <rootDir>/nodejs-<major>。
 // arch 用 nodejs dist 命名（x64/arm64，CP 已按类型归一），空取本机推导；
 // mirrorBase 非空作下载基址（CP 从平台设置 runtime.mirror.nodejs 下发），空回退 env/官方源。
 // 返回的 Info.Path 为 node 可执行文件绝对路径（登记 node_runtimes.path 用）。
@@ -123,7 +123,7 @@ func (m *Manager) InstallNodeJS(ctx context.Context, major int, arch, mirrorBase
 
 	if _, err := os.Stat(installDir); err == nil {
 		// 有 node 可执行文件完成标记 = 完好已装目录，拒绝覆盖；无标记 = 上次安装失败/取消
-		// 遗留的残骸，自动清除重装，不堵死重试（FR-291，语义与 JDK 安装器齐平）。
+		// 遗留的残骸，自动清除重装，不堵死重试（语义与 JDK 安装器齐平）。
 		if dirLooksLikeNode(installDir) {
 			return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
 		}
@@ -171,7 +171,7 @@ func (m *Manager) InstallNodeJS(ctx context.Context, major int, arch, mirrorBase
 	}, nil
 }
 
-// Remove 删除托管运行时目录（FR-292 语义与 JDK 齐平）：登记路径可能是解压后嵌套的内层
+// Remove 删除托管运行时目录（语义与 JDK 齐平）：登记路径可能是解压后嵌套的内层
 // （…/nodejs-22/node-v22.17.0-linux-x64/bin/node），归一到托管根下的顶层子目录整体删除；
 // 托管根本身与根外路径一律拒绝。
 func (m *Manager) Remove(path string) error {
@@ -190,7 +190,7 @@ func (m *Manager) Remove(path string) error {
 		return err
 	}
 	rel, err := filepath.Rel(rootAbs, abs)
-	// rel="." 即托管根本身：整根删除会清空全部托管运行时，一并拒绝（FR-292）。
+	// rel="." 即托管根本身：整根删除会清空全部托管运行时，一并拒绝。
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("只能删除托管目录 (%s) 下的运行时", m.rootDir)
 	}
@@ -201,7 +201,7 @@ func (m *Manager) Remove(path string) error {
 	return os.RemoveAll(filepath.Join(rootAbs, top))
 }
 
-// findNodeExecutable 在 dir 本身及一级子目录下找 node 可执行文件（安装完成标记，FR-291）。
+// findNodeExecutable 在 dir 本身及一级子目录下找 node 可执行文件（安装完成标记）。
 // 兼容官方归档两种布局：linux/darwin tar.gz 为 <top>/bin/node，windows zip 为 <top>/node.exe。
 func findNodeExecutable(dir string) (string, bool) {
 	candidates := []string{
@@ -229,7 +229,7 @@ func findNodeExecutable(dir string) (string, bool) {
 }
 
 // dirLooksLikeNode 报告 dir 是否像一个完好的已装 Node.js（有完成标记；只查文件存在、
-// 不执行 node，避免安装入口引入进程执行开销，FR-291）。
+// 不执行 node，避免安装入口引入进程执行开销）。
 func dirLooksLikeNode(dir string) bool {
 	_, ok := findNodeExecutable(dir)
 	return ok

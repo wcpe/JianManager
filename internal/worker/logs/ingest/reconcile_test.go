@@ -24,7 +24,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
-// 本文件是 FR-497「重启增量对账（源 × UTC 天，条数级）」的四条回归
+// 本文件是「重启增量对账（源 × UTC 天，条数级）」的四条回归
 // （spec：docs/specs/log-startup-reconcile/spec.md §3）。
 //
 // 四条用例都必须能「转红」——即：把实现退回旧行为（无条件整窗重发）或去掉超时约束后，

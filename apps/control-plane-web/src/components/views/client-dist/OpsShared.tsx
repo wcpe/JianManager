@@ -12,8 +12,8 @@ import type { ClientDistEvent, ClientDistRealtime } from '@/lib/client-dist/clie
 import type { ClientRuntimeOverview, RuntimeUpdateSeriesPoint } from '@/lib/client-dist/client-runtime-contracts'
 import type { DistBucket } from '@/lib/overview/platform-stats'
 
-/**
- * 页面 B「客户端分发运维」共享展示件与格式化（FR-430 / ADR-088）。
+/** 
+ * 页面 B「客户端分发运维」共享展示件与格式化（ADR-088）。
  * 由旧监控页（`ClientDistMonitoringPage.tsx`）迁移而来，供
  * `OpsStatisticsTab` / `OpsRealtimeTab` / `OpsClientsTab` 复用；文案沿用既有 `clientDistOps.*` 键。
  */
@@ -58,7 +58,7 @@ export function toApiRange(r: MetricRange): string {
   }
 }
 
-/** 预设档 → FR-095 日看板天数。 */
+/** 预设档 →日看板天数。 */
 export function toStatsDays(r: MetricRange): number {
   switch (r) {
     case '1h':

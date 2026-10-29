@@ -15,7 +15,7 @@ import type { BotLoadRunV2, BotLoadVerdict } from '@/lib/bot-load/bot-load-types
 import { isLiveRunState, isTerminalRunState } from '@/lib/bot-load/bot-load-types'
 import { DisclaimerBanner } from '@/components/views/bot-load/session/DisclaimerBanner'
 
-/**
+/** 
  * 压测会话对象头（FR-…）：运行名 + 实时状态指标条 + 停止/取消/报告下载。
  *
  * 展示层：导航、停止/取消/下载均由应用侧容器注入（分别对应 router 导航与三个 mutation），
@@ -55,7 +55,7 @@ export function SessionHeaderView({
   const live = isLiveRunState(run.runState)
   const terminal = isTerminalRunState(run.runState)
   const stopping = run.runState === 'stopping' || run.runState === 'cancelling'
-  /**
+  /** 
    * 报告可导出 = 运行已终态 **且** 报告已就绪。
    *
    * 原式写成 `terminal && (reportReady || terminal)`：`terminal` 已是前置条件，括号里恒为真，
@@ -201,7 +201,7 @@ export function SessionHeaderView({
   )
 }
 
-/**
+/** 
  * 判定 → 对象头语义色。三态色值沿用原 VerdictChip 的口径
  * （通过=成功、失败=危险、中止=警告），只是从「自绘 chip」改为对象头指标条的 tone——
  * 色表本身由 StatusBadge 统一提供，不再在页面里各写一份。

@@ -1,4 +1,4 @@
-// Package logmetrics 采集日志采集平台的自身运行指标（FR-485）。
+// Package logmetrics 采集日志采集平台的自身运行指标。
 //
 // ## 为什么单独成包，而不是直接塞进心跳
 //

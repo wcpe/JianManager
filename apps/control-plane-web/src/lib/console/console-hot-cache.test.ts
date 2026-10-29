@@ -3,7 +3,7 @@ import { pickEvictionTarget, promoteHotSet } from './console-hot-cache'
 import { clearInstanceDrafts, hasInstanceDraft, reportInstanceDraft } from './console-draft-registry'
 import { HOT_SET_SIZE, HOT_SET_SIZE_MAX, resolveHotSetCapacity } from './terminal-session-manager'
 
-/** FR-296 跨服热缓存 LRU 纯逻辑 + 草稿注册表；FR-414 容量解析。 */
+/** 跨服热缓存 LRU 纯逻辑 + 草稿注册表容量解析。 */
 describe('promoteHotSet', () => {
   it('未命中插入队首', () => {
     expect(promoteHotSet([1, 2], 3)).toEqual([3, 1, 2])
@@ -21,8 +21,8 @@ describe('promoteHotSet', () => {
 
 describe('pickEvictionTarget', () => {
   const noDraft = () => false
-  /**
-   * FR-414 起 capacity 必传（不再默认取 HOT_SET_SIZE）。这些用例锁的是 **LRU 算法**
+  /** 
+   *起 capacity 必传（不再默认取 HOT_SET_SIZE）。这些用例锁的是 **LRU 算法**
    * 而非容量数值，故显式传 3 让断言与原先逐字相同——容量本身的解析另有下方 describe 覆盖。
    */
   const CAP = 3
@@ -50,13 +50,13 @@ describe('pickEvictionTarget', () => {
     expect(pickEvictionTarget([4, 3, 2, 1], hasDraft, CAP)).not.toBe(4)
   })
 
-  it('容量随参数生效：同一热集在更大容量下不再淘汰（FR-414 动态提升的落点）', () => {
+  it('容量随参数生效：同一热集在更大容量下不再淘汰（动态提升的落点）', () => {
     expect(pickEvictionTarget([4, 3, 2, 1], noDraft, 3)).toBe(1)
     expect(pickEvictionTarget([4, 3, 2, 1], noDraft, 4)).toBeNull()
   })
 })
 
-describe('resolveHotSetCapacity（FR-414 容量治理）', () => {
+describe('resolveHotSetCapacity（容量治理）', () => {
   it('可见数不超基线时用基线', () => {
     expect(resolveHotSetCapacity(0)).toBe(HOT_SET_SIZE)
     expect(resolveHotSetCapacity(1)).toBe(HOT_SET_SIZE)

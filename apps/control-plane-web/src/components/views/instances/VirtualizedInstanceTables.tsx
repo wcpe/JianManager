@@ -19,7 +19,7 @@ import type { InstanceInfo } from '@/lib/instances/instance-types'
 /** 虚拟滚动位置的 sessionStorage 键前缀（与 URL 组合成唯一键）。 */
 export const SCROLL_KEY_PREFIX = 'jm.instances.scroll:'
 
-/**
+/** 
  * 分组头行高（px）：与实例行同样是**导出常量 = 行盒行内 style** 的「声明值即真实值」，
  * 供逐行 `sizes` 与分组头行共用。
  *
@@ -37,7 +37,7 @@ export function groupRowHeight(depth: number): number {
   return depth === 0 ? INSTANCE_GROUP_ROW_HEIGHT : INSTANCE_SUBGROUP_ROW_HEIGHT
 }
 
-/**
+/** 
  * 逐行高度模型（变高虚拟窗口）：与行盒的行内 style 同源——组头用组头常量、
  * 实例行用实例行常量、展开行按「主行 + 追加行」求和，三者都不从类名反推。
  *
@@ -54,7 +54,7 @@ function useInstanceRowsSizes(count: number, heightAt: (index: number) => number
   }, [count, heightAt])
 }
 
-/**
+/** 
  * 实例「项」在虚拟模型里的高度（px）：主行恒在，展开时**追加**一个后端摘要行。
  * 与 `InstanceRowView` 里「展开时多渲染一个 `<tr>`、否则不渲染」同判据（isRowExpanded）。
  */
@@ -62,8 +62,8 @@ function instanceRowHeight(expanded: boolean): number {
   return INSTANCE_ROW_HEIGHT + (expanded ? INSTANCE_EXPANDED_ROW_HEIGHT : 0)
 }
 
-/**
- * 树表统一行模型（FR-452）：分组头行与成员实例行同属一个虚拟化列表，
+/** 
+ * 树表统一行模型：分组头行与成员实例行同属一个虚拟化列表，
  * 避免「每组一个虚拟表」的分片表头与滚动错位。
  * - group：分组头（可折叠），带成员计数与聚合健康色带；`depth` 区分 region 两级（0=大区 / 1=小区）。
  * - instance：成员实例行（沿用既有 `renderRow`）。
@@ -83,8 +83,8 @@ export type InstanceTreeRow =
     }
   | { kind: 'instance'; key: string; instance: InstanceInfo }
 
-/**
- * 由分组结果 + 维度 + 折叠态构建树表行（FR-452）。
+/** 
+ * 由分组结果 + 维度 + 折叠态构建树表行。
  * - region 维度：大区头（depth 0）→ 小区头（depth 1）→ 成员；折叠大区隐藏其全部小区。
  * - groupTree 维度：多级——组头（depth=树深度）→ 本组**直接**成员行 → 递归子组头 → 其成员；
  *   折叠某组隐藏其后代（子组头与全部成员行）。键为组 id，同名不同组各自成组。
@@ -104,7 +104,7 @@ export function buildInstanceTreeRows(
   }
   const rows: InstanceTreeRow[] = []
   if (dim === 'region') {
-    /*
+    /* 
       【大区/小区不再做层级】大区是虚拟分区（由 `region:` 标签推导），没有独立实体；
       做成「大区头 → 小区头 → 成员」两级嵌套后，真正的信息（哪台服）被两层组头压到屏幕下方，
       而两层组头的成员计数与健康色带又与卡片/行自身重复表达。
@@ -170,7 +170,7 @@ export function buildInstanceTreeRows(
   return rows
 }
 
-/** 分组头行的聚合健康色带（运行/过渡/崩溃/停止分段；FR-452 验收）。 */
+/** 分组头行的聚合健康色带（运行/过渡/崩溃/停止分段验收）。 */
 function GroupHealthBand({ health }: { health: MemberHealth }) {
   const { t } = useTranslation()
   const segs: { value: number; className: string; label: string }[] = [
@@ -206,7 +206,7 @@ function GroupHealthBand({ health }: { health: MemberHealth }) {
   )
 }
 
-/**
+/** 
  * 分组头内容（折叠按钮 + 组名 + 成员计数 + 聚合健康色带）：树表行与卡片行流**共用同一份**。
  *
  * 抽出来的理由：卡片视图此前是「每个分组一段、段头只有组名与计数、不可折叠」，与表格视图
@@ -232,7 +232,7 @@ export function InstanceGroupHeaderContent({
 }) {
   const { t } = useTranslation()
   const isTop = depth === 0
-  /*
+  /* 
     【为什么重做第二遍】上一版给两层都加了层级徽标（「大区」「小区」）+ 竖向色条 + 计数，
     结果三层（r1 / z1 / z2）长得几乎一样，都是一行 44px 的等高块：
     用户读到的不是「大区里有小区」，而是「三个并列的路由条目」——反而更乱。
@@ -321,8 +321,8 @@ export function InstanceGroupHeaderContent({
   )
 }
 
-/**
- * 实例分组树表（FR-452）：单个虚拟表承载「分组头行（可折叠）+ 成员实例行」。
+/** 
+ * 实例分组树表：单个虚拟表承载「分组头行（可折叠）+ 成员实例行」。
  * 分组头行显示折叠箭头 + 分组名 + 成员计数 + 聚合健康色带；折叠态由父级写回 URL（`?collapsed=`）。
  *
  * 行高按逐行 `sizes` 建模（组头 44 / 实例行 36 / 展开时再追加一行 160），与行盒的行内 style
@@ -396,7 +396,7 @@ export function VirtualizedGroupedInstanceTable({
   }, [onVisibleRangeChange, range.start, range.end])
 
   return (
-    /*
+    /* 
       虚拟化外壳：**只换外观，不碰几何**。
       Card 自带 `flex flex-col gap-4 py-4`，其中 `gap`/`py` 会改变滚动容器的可滚动内容高度、
       进而影响「视口高 → 可视行数」的推算，故这里用 `block`、`gap-0`、`py-0` 逐一还原成
@@ -408,7 +408,7 @@ export function VirtualizedGroupedInstanceTable({
       onScroll={handleScroll}
       data-testid="instances-table-virtual"
       data-total-count={totalCount}
-      /*
+      /* 
             高度策略：`flex-1` 吃掉父级剩余高度，而不是 `max-h-[calc(100vh-20rem)]` 猜出来的定值。
 
             原写法按「视口高度减去 20rem」估算——20rem 是当时页面其他部分的高度。
@@ -439,7 +439,7 @@ export function VirtualizedGroupedInstanceTable({
               data-collapsed={row.collapsed ? 'true' : 'false'}
               // 组头行高写进行盒（不再用单元格的 `h-11`）：声明值与逐行 sizes 是同一个常量。
               style={{ height: groupRowHeight(row.depth) }}
-              /*
+              /* 
                 【组头不再用整块灰底】原来是 `bg-muted/80 + backdrop-blur`：一整行 44px 的灰条，
                 视觉上比表头还重，把「组」压成了「分隔条」，反而看不出它在承载一棵子树。
                 改成：底色只到 `bg-muted/40`（比表头更淡），下缘一条主色发丝线作为段的分界，
@@ -480,7 +480,7 @@ export function VirtualizedGroupedInstanceTable({
   )
 }
 
-/**
+/** 
  * 平铺实例虚拟表（`?groupBy=none`）：单一行模型（只有实例行，含未加载尾部占位）。
  *
  * 行高同样逐行建模——展开行按展开行常量计入，不与行渲染分叉。
@@ -556,7 +556,7 @@ export function VirtualizedInstanceTable({
       onScroll={handleScroll}
       data-testid="instances-table-virtual"
       data-total-count={totalCount}
-      /*
+      /* 
             高度策略：`flex-1` 吃掉父级剩余高度，而不是 `max-h-[calc(100vh-20rem)]` 猜出来的定值。
 
             原写法按「视口高度减去 20rem」估算——20rem 是当时页面其他部分的高度。

@@ -60,7 +60,7 @@ interface UploadProgress {
   total: number
 }
 
-/** 插件/模组单服管理面板（FR-052）：列表 + 启用/禁用 + 上传 + 删除（二次确认）。 */
+/** 插件/模组单服管理面板：列表 + 启用/禁用 + 上传 + 删除（二次确认）。 */
 export interface PluginManagerProps {
   /** 当前实例 id */
   instanceId: number
@@ -116,8 +116,8 @@ export interface PluginManagerProps {
   onNotify?: (kind: 'success' | 'error' | 'info', message: string) => void
 }
 
-/**
- * 分栏（FR-423，spec §3.1 插件 62:38）：左 62% 是插件表（5 列 × 4 个目录分组，横向要空间、纵向要行数），
+/** 
+ * 分栏（spec §3.1 插件 62:38）：左 62% 是插件表（5 列 × 4 个目录分组，横向要空间、纵向要行数），
  * 右 38% 收「需关注」（重启提示）+ 上传投放 + 插件市场——这些都是内容驱动的窄块，
  * 原先横铺整宽压在表格上方，把表格挤到折叠线以下（重启横幅 + 投放区 ≈ 110px 纯装饰高度）。
  *

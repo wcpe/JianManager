@@ -6,8 +6,8 @@ import { initReactI18next, I18nextProvider } from 'react-i18next'
 import type { ReactNode } from 'react'
 import CreateBotDialog from '@/components/views/instances/CreateBotDialog'
 
-/**
- * FR-039 新建 Bot 对话框 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *新建 Bot 对话框 · 受控视图测（ADR-103 b 范式）。
  *
  * 本组件在应用侧原本没有测试，故这里是**新补**而非迁移。断言聚焦本组件自己的编辑语义：
  * 建议值预填与覆盖、必填校验、载荷结构（port 转数值），以及**「创建成功但委托失败」**
@@ -70,7 +70,7 @@ function renderDialog(props: Partial<Props> = {}) {
   return merged
 }
 
-describe('CreateBotDialog（FR-039 · ADR-103 b 范式）', () => {
+describe('CreateBotDialog（ADR-103 b 范式）', () => {
   it('归属实例名与建议连接地址、端口都预填好', () => {
     renderDialog()
 

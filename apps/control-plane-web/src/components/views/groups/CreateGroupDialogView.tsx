@@ -1,9 +1,9 @@
-/**
+/** 
  * @file CreateGroupDialogView：新建用户组对话框的受控视图，创建请求由应用容器负责。
  * @input form-validation、useFieldGate、FieldLabel/FieldError、Input/Textarea、Dialog/Button 原语、翻译上下文
  * @output CreateGroupDialogView、CreateGroupDialogViewProps、CreateGroupValues
  * @sync apps/control-plane-web/src/pages/GroupsPage.tsx
- * @since FR-508（组件受控化迁包；原 FR-156，兑现 FR-003）
+ * @since（组件受控化迁包；原兑现）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -31,7 +31,7 @@ export interface CreateGroupValues {
   description: string
 }
 
-/**
+/** 
  * 受控边界：开关经 `open`/`onClose` 注入，创建经 `onSubmit` 上报（失败请抛错，视图取服务端 message 提示），
  * 待提交态由 `submitting` 注入。表单态、错误展示时机门控（`useFieldGate`）留在视图内。
  */
@@ -46,7 +46,7 @@ export interface CreateGroupDialogViewProps {
   submitting?: boolean
 }
 
-/** 新建用户组：名称 + 描述（FR-156，兑现 FR-003）。 */
+/** 新建用户组：名称 + 描述（兑现）。 */
 export function CreateGroupDialogView({
   open,
   onClose,

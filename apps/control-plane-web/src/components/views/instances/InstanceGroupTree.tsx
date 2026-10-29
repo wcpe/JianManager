@@ -20,7 +20,7 @@ import type { GroupTreeNode, VisibleGroupRow } from '@/lib/instances/instance-gr
 export const INSTANCE_DND_MIME = 'application/x-jm-instances'
 
 /** 分组树行高（px）。虚拟化按行定位，须与真实渲染高度一致。 */
-/**
+/** 
  * 虚拟化行高（= 行盒高度，px）。
  *
  * 【为什么容器不能用 space-y-*】间距不计入行高：第 N 行的真实偏移是 N×行高 + 间距×(N−1)，
@@ -46,8 +46,8 @@ function flattenSearchGroups(tree: GroupTreeNode[], query: string): VisibleGroup
   return tree.flatMap(collect)
 }
 
-/**
- * 实例组织分组树（FR-165，design §4.4 左树 / ADR-033）。
+/** 
+ * 实例组织分组树（design §4.4 左树 / ADR-033）。
  * 文件夹式多级嵌套：新建组 / 嵌套子组 / 改名 / 删（非空后端拒删）/ 折叠优先（折叠分支只渲染分组头）/
  * 选中。每节点挂「子树聚合去重」实例数。折叠态由外壳注入（键 `igroup:<id>`，
  * 与侧栏实例树 `tree:` 隔离）。支持把实例从右列表拖入某组（HTML5 原生 DnD）。

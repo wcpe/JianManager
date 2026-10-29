@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import VersionDrawer, { type VersionDrawerProps } from '@/components/views/explorer/VersionDrawer'
 import type { FileVersion } from '@/lib/file-browser/file-version'
 
-/**
- * FR-070 历史版本抽屉 · 受控视图测（ADR-103 c 范式）。
+/** 
+ *历史版本抽屉 · 受控视图测（ADR-103 c 范式）。
  *
  * 应用侧 `VersionDrawer.dom.test.tsx` mock 取数 hook 验联动；
  * 这里补的是**受控契约**：列表渲染（含回滚来源标注）、对比选择上报、
@@ -74,7 +74,7 @@ function renderDrawer(over: Partial<VersionDrawerProps> = {}) {
   return props
 }
 
-describe('VersionDrawer（FR-070 历史版本抽屉）', () => {
+describe('VersionDrawer（历史版本抽屉）', () => {
   it('渲染版本行的 ID、大小与回滚来源标注。', () => {
     renderDrawer({ versions: [version({ id: 9, size: 3072, rollbackOfVersionId: 5 })] })
     expect(screen.getByText('#9')).toBeInTheDocument()

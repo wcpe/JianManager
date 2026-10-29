@@ -7,8 +7,8 @@ import type { ReactNode } from 'react'
 import { InstanceGroupTree, INSTANCE_DND_MIME } from '@/components/views/instances/InstanceGroupTree'
 import type { InstanceGroupNode } from '@/lib/instances/instance-group'
 
-/**
- * FR-165 分组树 · 受控视图测（ADR-103 b 范式）。
+/** 
+ *分组树 · 受控视图测（ADR-103 b 范式）。
  *
  * 应用侧已有 dom 测试（覆盖接线层 + msw）与纯逻辑测试；这里补的是**受控语义**：
  * 四个写动作的上报、失败提示的语义分流（建组/改名/非空拒删）、拖放解析与新增数提示。
@@ -91,7 +91,7 @@ function renderTree(props: Partial<Props> = {}) {
   return merged
 }
 
-describe('InstanceGroupTree（FR-165 · ADR-103 b 范式）', () => {
+describe('InstanceGroupTree（ADR-103 b 范式）', () => {
   it('渲染「全部实例」根行与各分组行（含子树计数）', () => {
     renderTree()
 

@@ -62,7 +62,7 @@ func TestLooksLikeJianManagerDaemon(t *testing.T) {
 	}
 }
 
-// TestProcessEnvMatchesInstance FR-456 F11：wrapper 归属复核须读进程环境校验实例 UUID。
+// TestProcessEnvMatchesInstanceF11：wrapper 归属复核须读进程环境校验实例 UUID。
 // wrapper argv 仅 `<worker> daemon`、不含 UUID，单凭 argv 会把任何实例的 wrapper 都判真。
 func TestProcessEnvMatchesInstance(t *testing.T) {
 	if runtime.GOOS == "windows" {

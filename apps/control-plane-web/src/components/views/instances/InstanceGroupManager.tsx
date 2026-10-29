@@ -32,7 +32,7 @@ export interface GroupManagerInstance extends InstanceWorktableCardInstanceView 
 /** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
 export type GroupManagerNotice = (kind: 'success' | 'error', message: string) => void
 
-/**
+/** 
  * 本次要渲染哪些行：窗口内的行，外加「拖拽中」那一行（若它已在窗口外）。
  *
  * 被拖行必须始终留在 DOM 里：原生 HTML5 拖拽期间若把源元素卸载，浏览器会直接取消拖拽
@@ -45,8 +45,8 @@ function renderRowIndexes(range: { start: number; end: number }, draggingRowInde
   return indexes
 }
 
-/**
- * 实例多级分组完整视图（FR-165，design §4.4）：左 = 分组树，右 = 选中组（含子树）的实例列表。
+/** 
+ * 实例多级分组完整视图（design §4.4）：左 = 分组树，右 = 选中组（含子树）的实例列表。
  * 右列表复用工作台卡骨架（§4.5），头部为组路径面包屑 + 批量「标记入组」；实例卡可拖入左树某组。
  * 与 InstancesPage 既有筛选/分组视图正交并列——本视图是「按组织归类浏览」的专用形态。
  *
@@ -69,7 +69,7 @@ export interface InstanceGroupManagerProps {
   nodeNameOf: (nodeId: number) => string
   /** 打开实例详情。 */
   onOpenInstance: (id: number) => void
-  /**
+  /** 
    * 实例生命周期动作（外壳接 mutation）。卡面上的启停/重启按钮本就在，故必须接上，
    * 否则点了没反应。
    */
@@ -108,7 +108,7 @@ export function InstanceGroupManager({
     return instances.filter((i) => idSet.has(i.id))
   }, [instances, selectedGroupId, subtreeIds])
 
-  /**
+  /** 
    * 右列表虚拟化。实例数是千级（大档 1200），此前整表铺进 DOM——而每张卡还各自挂了
    * 3 个 mutation hook 与 `useInstanceMetrics`（运行态轮询），单卡成本远高于普通表格行。
    * 虚拟化把入 DOM 的卡片数从 1200 降到「视口行数 × 列数」，并顺带消掉这批轮询。
@@ -241,7 +241,7 @@ export function InstanceGroupManager({
   )
 }
 
-/**
+/** 
  * 可拖拽 + 可多选的实例卡包装。
  * 左上角复选框做批量选中；整块可拖入左树某组——拖拽载荷为「当前选中集合（含本卡）」的实例 ID 数组。
  */

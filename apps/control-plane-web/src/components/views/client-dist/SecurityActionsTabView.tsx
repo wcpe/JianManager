@@ -1,4 +1,4 @@
-/**
+/** 
  * @file SecurityActionsTabView：安全侧「处置（封禁与降级）」Tab 的受控视图
  *       （顶部动作按钮 + 三个处置模态 + 全宽处置流水表）。
  *       处置流水的取数与筛选条件、以及四个候选来源（频道列表 / IP 建议 / 密钥列表 / 频道安全摘要）
@@ -11,7 +11,7 @@
  *        Combobox/Badge/Button/Input/Panel/Select/Table/Textarea/Dialog 原语、lucide 图标、翻译上下文
  * @output SecurityActionsTabView、SecurityActionsTabViewProps
  * @sync apps/control-plane-web/src/components/client-dist/SecurityActionsTab.tsx
- * @since FR-508（组件受控化迁包；原 FR-430 / ADR-088 处置 Tab，含 S2.1 常驻表单改模态）
+ * @since（组件受控化迁包；原ADR-088 处置 Tab，含 S2.1 常驻表单改模态）
  */
 import { useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -51,7 +51,7 @@ const DURATION_PRESETS = [
 const KEY_STATE_OPTIONS: KeySecurityState[] = ['normal', 'observe', 'throttled', 'suspended', 'revoked']
 const PROT_MODE_OPTIONS: ChannelProtectionMode[] = ['throttle', 'concurrency', 'queue', 'retry_after']
 
-/**
+/** 
  * 处置 Tab 的注入契约（受控视图，ADR-103 a+b 双范式）。
  *
  * 受控边界：
@@ -99,7 +99,7 @@ export interface SecurityActionsTabViewProps {
   channels: ClientChannel[]
   /** 封禁 IP 的可手输建议项（容器由近窗事件与流水汇总）。 */
   ipSuggestions: string[]
-  /**
+  /** 
    * 改 key 态模态选中频道的上报（含「打开即重置为默认频道」）。
    * 频道选择的真源在视图内部（表单草稿），容器只镜像该值以取密钥列表；
    * 容器宜用 `useCallback` 稳定引用（引用变化只会重复上报同一值，无副作用）。
@@ -107,7 +107,7 @@ export interface SecurityActionsTabViewProps {
   onKeyChannelChange: (channelId: string) => void
   /** 该频道的密钥候选（容器调 useClientChannel(镜像频道)）。 */
   keys: ClientPullKey[]
-  /**
+  /** 
    * 频道防护模态选中频道的上报（含「打开即重置为默认频道」）。
    * 同 `onKeyChannelChange`：真源在视图，容器只镜像以取安全摘要。
    */
@@ -392,7 +392,7 @@ function BlockIpDialog({
   )
 }
 
-/**
+/** 
  * 改 key 态模态。
  * 频道选择真源在本组件（表单草稿），变化时上报容器以取密钥候选；
  * 密钥/目标态/理由同为包内表单草稿。
@@ -532,7 +532,7 @@ function KeyStateDialog({
   )
 }
 
-/**
+/** 
  * 频道防护模态。
  * 频道选择真源在本组件（表单草稿），变化时上报容器以取当前保护摘要；
  * 模式/重试秒数/理由同为包内表单草稿。

@@ -1,5 +1,5 @@
-/**
- * 集群健康墙的类型（FR-461）。
+/** 
+ * 集群健康墙的类型。
  *
  * 从应用侧 `api/metrics.ts` 抽出：那里混着取数 hook，而健康墙的单格快照是纯数据，
  * 纯逻辑与视图侧要复用。应用侧原文件原样转出，调用点零改动。
@@ -7,7 +7,7 @@
 
 export type HealthLevel = 'offline' | 'stale' | 'degraded' | 'healthy'
 
-/** FR-461 健康墙单格：一台节点的当前只读快照。 */
+/** 健康墙单格：一台节点的当前只读快照。 */
 export interface HealthWallNode {
   nodeId: number
   nodeUuid: string
@@ -20,8 +20,8 @@ export interface HealthWallNode {
   running: number
   crashed: number
   stopped: number
-  /**
-   * FR-459/FR-461：活着但已不可服务的实例数（状态仍 RUNNING，巡检已写入 status_reason，
+  /** 
+   *：活着但已不可服务的实例数（状态仍 RUNNING，巡检已写入 status_reason，
    * 如假死 / 崩溃熔断）。假死进程不会退出、状态也不转 CRASHED，只按 status 分级会漏掉，
    * 故服务端单列计数并据此把节点降级。老 CP 不返回本字段。
    */
@@ -34,7 +34,7 @@ export interface HealthWallNode {
   href: string
 }
 
-/** FR-461 健康墙读模型。 */
+/** 健康墙读模型。 */
 export interface HealthWallResponse {
   nodes: HealthWallNode[]
   /** 节点数超过服务端上限、响应已按 severity 截断时为 true。 */

@@ -46,10 +46,10 @@ export interface MobileConsoleNavProps {
   renderLink: (args: SidebarLinkArgs) => ReactNode
 }
 
-/**
+/** 
  * 手机端底部导航：侧栏在小屏隐藏时的等价入口。数据与路由由 props 注入（ADR-103）。
  *
- * 【为何以「工作区」为底部格子（FR-507 阶段 6）】
+ * 【为何以「工作区」为底部格子（阶段 6）】
  * 旧实现把六域顶层分组直接铺成 5 格，于是只有前 5 个域可见——观测、客户端分发、
  * 平台设置在手机上**永远点不到**，是个静默的功能缺失。四工作区结构下如果照搮平铺，
  * 会变成 13 个分组只显示 5 个，缺失更严重。
@@ -167,7 +167,7 @@ export function MobileConsoleNav({ workspaces, pathname, renderLink }: MobileCon
   )
 }
 
-/**
+/** 
  * 面板里的一个分组：组标题 + 其下条目。
  *
  * 处理三种形态（与侧栏同构，数据同源）：

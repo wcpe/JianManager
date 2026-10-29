@@ -5,11 +5,11 @@ import MetricsFallbackSegmentView from '@/components/views/instances/MetricsFall
 export { DirectProbeSummary } from '@/components/views/instances/MetricsFallbackSegment'
 export type { DirectProbeSummaryData } from '@/components/views/instances/MetricsFallbackSegment'
 
-/**
+/** 
  * 轻量监控视图的应用接线层（ADR-103 a 范式）。
  *
  * 视图本体是受控视图（见 components/views）；本层取进程指标后注入。
- * 直探摘要暂不传（FR-446/447 编排未落地）——视图会显式呈现「不可用」，而非落回探针伪值。
+ * 直探摘要暂不传（447 编排未落地）——视图会显式呈现「不可用」，而非落回探针伪值。
  * 保留同路径的默认导出与同一套 props，调用点无需改动。
  */
 export default function MetricsFallbackSegment({ instanceId }: { instanceId: number }) {

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestJavaMajorForMCVersion 覆盖内置版本-Java 需求映射表的各版本段边界（FR-316）：
+// TestJavaMajorForMCVersion 覆盖内置版本-Java 需求映射表的各版本段边界：
 // ≤1.16→8、1.17→16、1.18~1.20.4→17、1.20.5+→21、26.1+（年号制）→25；
 // 未知/解析不出的版本返回 0（不设需求，宽容不误拦）。
 func TestJavaMajorForMCVersion(t *testing.T) {
@@ -79,7 +79,7 @@ func newPaperJavaStub(t *testing.T) *CoreService {
 	return &CoreService{client: srv.Client(), base: srv.URL, spongeBase: srv.URL, forgeBase: srv.URL}
 }
 
-// TestCoreResolveBuild_JavaMajorRequired 验证 ResolveBuild 响应携带 Java 需求（FR-316）：
+// TestCoreResolveBuild_JavaMajorRequired 验证 ResolveBuild 响应携带 Java 需求：
 // Paper 优先用 fill v3 上游元数据，上游不可得回退内置表；Sponge 用内置表；代理核心不设需求。
 func TestCoreResolveBuild_JavaMajorRequired(t *testing.T) {
 	s := newPaperJavaStub(t)

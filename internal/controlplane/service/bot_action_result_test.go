@@ -103,7 +103,7 @@ func TestActionResultService_StartUpsertsRunningWithoutDuplicating(t *testing.T)
 	require.Equal(t, int64(1), count)
 }
 
-// TestActionResultService_SyncsCommandCheckpointOnTerminal FR-369：命令编排终态回写 checkpoint。
+// TestActionResultService_SyncsCommandCheckpointOnTerminal：命令编排终态回写 checkpoint。
 func TestActionResultService_SyncsCommandCheckpointOnTerminal(t *testing.T) {
 	h := newBotActionResultHarness(t)
 	actionRunID := "00000000-0000-0000-0000-000000000352"

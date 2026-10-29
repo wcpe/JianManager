@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-444 Beacon 拓扑拉取工具的 MCP 层测试。
+// Beacon 拓扑拉取工具的 MCP 层测试。
 
 func newBeaconToolDB(t *testing.T) *gorm.DB {
 	t.Helper()

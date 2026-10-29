@@ -1,5 +1,5 @@
-/**
- * Bot 健康条多段着色（FR-147，兑现 FR-040 备注「细分 connecting/error」）。
+/** 
+ * Bot 健康条多段着色（兑现备注「细分 connecting/error」）。
  * 抽成无 React 依赖的纯函数以便单测。数据来自 summary 全局 byStatus（精确各状态计数），
  * 比旧的「在线 vs 其余」两段健康条更细：connected / connecting / error / stopped 四段。
  */
@@ -17,7 +17,7 @@ export interface HealthBreakdownSegment {
   ratio: number
 }
 
-/**
+/** 
  * 把一组 Bot 的 total 与各状态计数（byStatus）拆成多段健康分布。
  *
  * 状态归并：

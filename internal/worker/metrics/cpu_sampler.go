@@ -15,7 +15,7 @@ import (
 type CPUSnapshot struct {
 	CPUUsage float32
 	IOWait   float32
-	// Breakdown 是 CPU 时间构成（FR-513），各分量占比 0..1、按同一窗口总量归一。
+	// Breakdown 是 CPU 时间构成，各分量占比 0..1、按同一窗口总量归一。
 	//
 	// 为什么需要它：只给 CPUUsage + IOWait 无法回答「谁在吃 CPU」——
 	// iowait 高是 IO 瓶颈、system 高是内核态开销、user 高才是应用自身忙，

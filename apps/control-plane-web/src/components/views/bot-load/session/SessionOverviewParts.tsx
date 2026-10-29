@@ -25,8 +25,8 @@ export interface SessionOverviewProps {
   onNavigate?: (tab: SessionTab, params?: Record<string, string>) => void
 }
 
-/**
- * 压测会话概览（FR-371）：KPI 栅格 + 连接漏斗 + 命令计划进度 + 阈值判定 + 执行器分布 +
+/** 
+ * 压测会话概览：KPI 栅格 + 连接漏斗 + 命令计划进度 + 阈值判定 + 执行器分布 +
  * 告警与失败摘要。子件（漏斗 / 分布 / 判定 / 免责横幅）均已在包内。
  */
 export function SessionOverview({ run, live, onNavigate }: SessionOverviewProps) {
@@ -156,10 +156,10 @@ export interface SessionConfigProps {
   onNotify?: (level: 'success' | 'error', message: string) => void
 }
 
-/**
+/** 
  * 会话配置快照：目标 / 连接（脱敏）/ 命令计划 / 阈值 / 执行器分配，逐段可复制。
  *
- * 复制统一走 `copyToClipboard`（FR-188）：面板常跑在 `http://<LAN-IP>:50100` 非安全上下文，
+ * 复制统一走 `copyToClipboard`：面板常跑在 `http://<LAN-IP>:50100` 非安全上下文，
  * 那里 `navigator.clipboard` 为 undefined，裸调 writeText 必抛错、复制永远失败；封装内有
  * execCommand 回退，非安全上下文下仍能复制成功。
  */

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置 Schema 校验单测（FR-529 §6）。
+// 配置 Schema 校验单测（§6）。
 
 // TestSchemaValidate_Types 验证 type 约束。
 func TestSchemaValidate_Types(t *testing.T) {

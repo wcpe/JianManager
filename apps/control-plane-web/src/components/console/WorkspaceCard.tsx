@@ -6,7 +6,7 @@ import type { CardType } from '@/lib/console/workspace-card'
 import WorkspaceCardView from '@/components/views/instances/WorkspaceCard'
 import WorkspaceCardBody from './WorkspaceCardBody'
 
-/**
+/** 
  * 统一卡壳的应用接线层（ADR-103）。
  *
  * 卡壳本体是受控视图（见 components/views）；本层提供三样它不该自己做的事：按卡类型解析标题、
@@ -20,9 +20,9 @@ interface WorkspaceCardProps {
   type: CardType
   /** 实例 id。 */
   instanceId: number
-  /**
+  /** 
    * 实例展示名（卡头副标题）。单实例画布由父级统一传入（避免每卡各拉一次）；
-   * 超级工作台省略此 prop，本层按 instanceId 自解析（每卡可属不同实例，FR-167）。
+   * 超级工作台省略此 prop，本层按 instanceId 自解析（每卡可属不同实例）。
    */
   instanceName?: string
   /** 是否处于全屏（最大化单卡）。 */
@@ -31,7 +31,7 @@ interface WorkspaceCardProps {
   onToggleFullscreen: () => void
   /** 关闭本卡。 */
   onClose: () => void
-  /** 只读卡壳（FR-168 导播台）。 */
+  /** 只读卡壳（导播台）。 */
   readOnly?: boolean
 }
 

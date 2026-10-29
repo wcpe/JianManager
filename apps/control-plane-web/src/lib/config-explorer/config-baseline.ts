@@ -1,5 +1,5 @@
-/**
- * 配置基线的 scope 与展示纯函数（FR-458）。
+/** 
+ * 配置基线的 scope 与展示纯函数。
  *
  * 基线键为 `(scopeKey, filePath)`，`scopeKey` 限定「哪些实例应共享该基线」：
  * `all` / `group:<id>` / `network:<id>` / `tag:<tag>` / `instance:<id>`。
@@ -34,7 +34,7 @@ export function scopeValueOf(scopeKey: string): string {
   return idx < 0 ? '' : key.slice(idx + 1)
 }
 
-/**
+/** 
  * scopeKey 是否合法：
  * `all` 无取值；其余种类须带非空取值；group/network/instance 取值须为正整数。
  */

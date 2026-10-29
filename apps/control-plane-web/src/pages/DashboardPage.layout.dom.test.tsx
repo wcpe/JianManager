@@ -20,13 +20,13 @@ vi.mock('@/api/instances', () => ({
   useStopInstance: () => ({ mutate: () => undefined }),
   useRestartInstance: () => ({ mutate: () => undefined }),
   useKillInstance: () => ({ mutate: () => undefined }),
-  // FR-342：实例控制台始终初始化重建 mutation，布局测试的整模块 mock 必须同步提供。
+  // 实例控制台始终初始化重建 mutation，布局测试的整模块 mock 必须同步提供。
   useRebuildInstance: () => ({ mutate: () => undefined }),
-  // FR-331：路由挂 InstanceConsolePage 时会调用，工厂 mock 需带上（恒 false=非搭建中）。
+  // 路由挂 InstanceConsolePage 时会调用，工厂 mock 需带上（恒 false=非搭建中）。
   isProvisioningInstance: () => false,
-  // FR-342：同上，损毁重建在途判定也已收敛为 api/instances 的具名导出（恒 false=非重建中）。
+  // 同上，损毁重建在途判定也已收敛为 api/instances 的具名导出（恒 false=非重建中）。
   isRebuildingInstance: () => false,
-  // FR-313 崩溃诊断卡经 crashSnapshots.ts 引用该常量（真模块），工厂 mock 缺它会在
+  // 崩溃诊断卡经 crashSnapshots.ts 引用该常量（真模块），工厂 mock 缺它会在
   // 懒加载片段落地时抛「No export is defined」偶发炸布局用例。
   INSTANCE_QUERY_GC_TIME_MS: 15 * 60_000,
 }))
@@ -36,7 +36,7 @@ vi.mock('@/api/nodes', () => ({
 vi.mock('@/api/metrics', () => ({
   useMetricOverview: () => ({ data: { totals: { onlineNodeCount: 1, runningInstances: 2 } } }),
   useInstanceMetrics: () => ({ data: { tps: 19.8, msptMillis: 28, memoryMb: 2048, heapMaxMb: 4096, cpuPercent: 36, onlinePlayers: 12, probeAvailable: false } }),
-  // FR-343：实例概览会请求 TPS 时序，布局测试返回空序列即可。
+  // 实例概览会请求 TPS 时序，布局测试返回空序列即可。
   useMetricSeries: () => ({ data: { series: [] } }),
   // 侧栏行尾小字走 `useInstanceWindowMetrics`（内部用批量序列端点）：布局测试给空序列。
   useMetricSeriesBatch: () => ({ data: { series: {} } }),
@@ -93,7 +93,7 @@ describe('DashboardPage 宽屏布局', () => {
     expect(shell).not.toHaveAttribute('data-sidebar-target')
     expect(sidebar).toHaveAttribute('data-state', 'expanded')
     expect(content).toHaveClass('jm-console-content')
-    // FR-502 阶段 6 补丁：`data-sidebar-layout` / `data-sidebar-motion`（320ms 落位状态机）整段退场，
+    // 阶段 6 补丁：`data-sidebar-layout` / `data-sidebar-motion`（320ms 落位状态机）整段退场，
     // 宽度过渡改由 `.jm-console-sidebar` 自己承担（见 console-shell-motion.test.ts）。
     expect(shell).not.toHaveAttribute('data-sidebar-layout')
     expect(shell).not.toHaveAttribute('data-sidebar-motion')
@@ -134,7 +134,7 @@ describe('DashboardPage 宽屏布局', () => {
 
     await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
     expect(mobileNav.querySelector('[data-slot="mobile-nav-panel"]')).toHaveAttribute('data-state', 'open')
-    // FR-507 阶段 6：底部格子是「工作区」，面板里列该工作区下的分组。
+    // 阶段 6：底部格子是「工作区」，面板里列该工作区下的分组。
     // 面板内容按权限裁剪（本用例未登录特定角色，`instance.read` / `node.read` 不可见），
     // 因此只断言本用例真正关心的事：面板里出现了可点链接。
     expect(within(mobileNav).getAllByRole('link').length).toBeGreaterThan(0)
@@ -160,7 +160,7 @@ describe('DashboardPage 宽屏布局', () => {
     renderWithProviders(<DashboardPage />, { route: '/networks/topology' })
 
     const mobileNav = screen.getByLabelText('移动导航')
-    // FR-507 阶段 6：群组网络已归入「服务器运维」工作区的「群组与工作台」分组。
+    // 阶段 6：群组网络已归入「服务器运维」工作区的「群组与工作台」分组。
     await user.click(within(mobileNav).getByRole('button', { name: '服务器运维' }))
 
     expect(within(mobileNav).getByRole('link', { name: '网络拓扑' })).toHaveAttribute('aria-current', 'page')

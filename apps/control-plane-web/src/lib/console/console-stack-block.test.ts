@@ -5,8 +5,8 @@ import { ConsoleLineBuffer } from './console-line-buffer'
 import type { LogLine } from './console-log-line'
 import { buildStackBlocks, stackBlockSize, stackBlockText, visibleConsoleRows } from './console-stack-block'
 
-/**
- * 异常堆栈块（FR-418，spec §3.2）：归并 / 折叠 / 复制整块 / 与级别过滤的接缝。
+/** 
+ * 异常堆栈块（spec §3.2）：归并 / 折叠 / 复制整块 / 与级别过滤的接缝。
  */
 
 const NPE = [
@@ -108,7 +108,7 @@ describe('与级别过滤的接缝（spec §3.2：整块作为一个单位）', 
   it('切 ERROR 后堆栈块整块保留，不会只剩头行', () => {
     const lines = makeStackBuffer()
     // 帧行解析不出级别、被兜底成 INFO，朴素按级别过滤会把它们全滤掉——
-    // filterConsoleLines（FR-417）让帧跟随其 stackOf 头行，此处正是验这条。
+    // filterConsoleLines让帧跟随其 stackOf 头行，此处正是验这条。
     const filtered = filterConsoleLines(lines, 'error')
 
     expect(filtered.map((line) => line.seq)).toEqual([1, 2, 3, 4, 5, 6])

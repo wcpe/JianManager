@@ -1,8 +1,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from './client'
 
-/**
- * AI 助手对话运行时的前端契约（FR-519，对接 FR-515 的 /assistant/conversations|runs）。
+/** 
+ * AI 助手对话运行时的前端契约（对接的 /assistant/conversations|runs）。
  *
  * 三条与后端一致、但容易被前端写错的语义：
  *  1. 越权一律 **404**（后端有意不用 403）：前端不得据 404 推断「不存在」以外的任何事，
@@ -28,7 +28,7 @@ export interface AssistantMessage {
   conversationId: number
   role: 'user' | 'assistant' | 'tool' | string
   content: string
-  /**
+  /** 
    * 该消息由哪一轮 run 产出。
    *
    * 判定「本轮是否已落库」要用它：失败轮（如上游不可达）**不写消息表**，
@@ -36,11 +36,11 @@ export interface AssistantMessage {
    */
   runId?: number | null
   createdAt: string
-  /** 首次编辑前的原文（FR-543）；未编辑过为 null。 */
+  /** 首次编辑前的原文；未编辑过为 null。 */
   originalContent?: string | null
   editedAt?: string | null
   editCount?: number
-  /** 被回退取代的时刻（FR-543）；非空表示已从会话上下文中移除但未物理删除。 */
+  /** 被回退取代的时刻；非空表示已从会话上下文中移除但未物理删除。 */
   supersededAt?: string | null
 }
 
@@ -84,8 +84,8 @@ export interface AssistantRunAccepted {
 
 const CHAT_KEY = ['assistant', 'chat'] as const
 
-/**
- * 逐调用确认票据（FR-516 §7）。
+/** 
+ * 逐调用确认票据（§7）。
  *
  * 与对话事件分开取数：票据是**用户决策对象**，不是消息流的一部分。
  * 混进事件流会让「刷新后卡片消失」——而用户恰恰可能在刷新后才回来确认。
@@ -117,7 +117,7 @@ export function useRunConfirmations(runId: number | null) {
   })
 }
 
-/**
+/** 
  * 决定一张票据。
  *
  * 只发 `{decision}`：后端明确不接受新参数或新目标（防止「确认即改参」），
@@ -157,7 +157,7 @@ export function useAssistantConversations(enabled = true) {
   })
 }
 
-/**
+/** 
  * 会话列表（**无限滚动**，供历史抽屉分页）。
  *
  * 与 `useAssistantConversations` 并存而不是替换它：仪表盘/浮窗首屏只要一页，
@@ -186,12 +186,12 @@ export function useAssistantMessages(conversationId: number | null) {
   return useQuery({
     queryKey: [...CHAT_KEY, 'messages', conversationId],
     queryFn: async () => {
-      /*
+      /* 
         **翻页拉全**，而不是只取后端默认的一页。
 
         后端 `/messages` 默认 `limit=20`（`assistantChatDefaultLimit`），长会话因此
         只显示最近 20 条、滚到顶部也看不到第 1 条——这是实测确认的可用性缺口
-        （FR-519 §7.4）。游标语义：`before` 是消息 **id**（后端 `WHERE id < ?`），
+        （§7.4）。游标语义：`before` 是消息 **id**（后端 `WHERE id < ?`），
         每页内部按 id 升序返回，所以要用 `unshift` 把更早的一页拼到前面。
 
         `MAX_PAGES` 是硬上限（20 页 × 100 = 2000 条）：正常会话远达不到，
@@ -222,7 +222,7 @@ export function useAssistantMessages(conversationId: number | null) {
   })
 }
 
-/** 历史工具回显：某条消息当时调用的工具及其最终状态（FR-519）。 */
+/** 历史工具回显：某条消息当时调用的工具及其最终状态。 */
 export interface AssistantToolCallRecord {
   callId: string
   name: string
@@ -236,7 +236,7 @@ export interface AssistantToolCallRecord {
   seq: number
 }
 
-/**
+/** 
  * 会话内按 messageId 分组的工具调用记录。
  *
  * 这些数据一直在事件流里，此前只是没有读取面——回看历史看不到任何工具痕迹，
@@ -299,7 +299,7 @@ export function useDeleteConversation() {
   })
 }
 
-/**
+/** 
  * 提交一轮。
  *
  * `idempotencyKey` 由调用方生成并在重试时**复用**：同键同内容回原 run，
@@ -348,7 +348,7 @@ export function newIdempotencyKey(): string {
   return `k-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
-/**
+/** 
  * 观察一个 run 的事件流（fetch + Bearer 的 SSE）。
  *
  * 为什么不用 EventSource：它无法携带 Authorization 头，只能把 JWT 放进 URL
@@ -443,7 +443,7 @@ export function streamRunEvents(params: {
   return () => controller.abort()
 }
 
-/**
+/** 
  * 取 access token。
  *
  * 直接读 localStorage 的两个裸键（用户登出/刷新后由 auth store 维护），
@@ -458,9 +458,9 @@ function getAccessToken(): string | null {
   }
 }
 
-// ── 历史检索、编辑与回退（FR-542 / FR-543） ──────────────────────
+// ── 历史检索、编辑与回退 ──────────────────────
 
-/**
+/** 
  * 带关键词的会话检索（服务端 `q`）。
  *
  * **不在前端过滤全量**：会话量级随时间增长，把全部会话拉到浏览器再筛
@@ -499,7 +499,7 @@ export function useEditAssistantMessage() {
   })
 }
 
-/**
+/** 
  * 把会话回退到某条消息。
  *
  * **只回退会话内容，不撤销已发生的副作用**——回退到「启动实例」之前，

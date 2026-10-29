@@ -20,14 +20,14 @@ interface ProvisionServerDialogProps {
   onClose: () => void
 }
 
-/**
- * 一键搭建后端子服向导接线层（ADR-103 b 范式，原 FR-034 一键搭建 / FR-046 核心解析 / FR-316 版本-JDK 预检）。
+/** 
+ * 一键搭建后端子服向导接线层（ADR-103 b 范式，原一键搭建核心解析版本-JDK 预检）。
  *
  * 视图本体是受控视图（见 components/views，不取数、不发请求、不弹 toast）；本层负责：
  * - 候选取数：`useNodes()` 过滤启用态后映射节点选项、`useGroups()` 映射用户组选项、
  *   `useNodeJDKs(nodeId)` 注入 JDK 记录（未取到时为 undefined，视图据此跳过无 JDK 阻断）、
  *   `useCoreVersions(coreType)` 注入版本列表；
- * - 核心解析：`useResolvedCore(coreType, mcVersion, build)` 注入预览与所需 Java 大版本（FR-316），
+ * - 核心解析：`useResolvedCore(coreType, mcVersion, build)` 注入预览与所需 Java 大版本，
  *   查询以「对话框开着」为前提（关闭时不下发，与原实现一致）；
  * - 「草稿 → 请求体」组装：Number 化、空值省略、`jvmArgs` 空白拆分为数组、build 非正数取最新；
  * - 一次写请求（POST /instances/provision/server）与错误文案：部分失败（已建实例但下载/写配置未完成）
@@ -55,7 +55,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
   const provision = useProvisionServer()
 
-  // 系统可获取项 → 下拉选项（FR-072）。版本允许自定义（PaperMC 列表外的版本）。
+  // 系统可获取项 → 下拉选项。版本允许自定义（PaperMC 列表外的版本）。
   const nodeOptions: ComboboxOption[] = (nodes ?? [])
     .filter((n) => n.status === 1)
     .map((n) => ({ value: String(n.id), label: n.name }))
@@ -94,7 +94,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
             groupId: draft.groupId ? Number(draft.groupId) : undefined,
             onlineMode: draft.onlineMode,
           })
-          // FR-319 异步化：实例已建，核心下载在后台任务推进（慢源可能数分钟），进度看任务中心。
+          // 异步化：实例已建，核心下载在后台任务推进（慢源可能数分钟），进度看任务中心。
           toast.success(t('provision.submitted'))
           return true
         } catch (err) {

@@ -51,9 +51,9 @@ type botLoadExecutionDispatchCall struct {
 type botLoadExecutionDispatcher struct {
 	mu    sync.Mutex
 	calls []botLoadExecutionDispatchCall
-	// scheduleCalls 记录 FR-369 ApplyBotCommandSchedules 调用。
+	// scheduleCalls 记录ApplyBotCommandSchedules 调用。
 	scheduleCalls []botLoadScheduleDispatchCall
-	// cancelCalls 记录 FR-369 CancelBotCommandSchedules 调用。
+	// cancelCalls 记录CancelBotCommandSchedules 调用。
 	cancelCalls     []botLoadCancelDispatchCall
 	handler         func(string, *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
 	scheduleHandler func(string, *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error)
@@ -284,7 +284,7 @@ func newBotLoadExecutionHarness(t *testing.T, capacities []int, target int, runn
 	}
 	instance := &model.Instance{NodeID: nodes[0].ID, Name: "target", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, WorkDir: "var/servers/target", StartCommand: "java", ServerPort: 25570}
 	require.NoError(t, db.Create(instance).Error)
-	// 默认附带 FR-369 命令计划快照，验证 start 派发后会 ApplyBotCommandSchedules。
+	// 默认附带命令计划快照，验证 start 派发后会 ApplyBotCommandSchedules。
 	scheduleSnap := `{"commands":[{"id":"say-ready","atMs":0,"command":"/say ready {{botName}}"}],"durationMs":3000,"jitterMs":0}`
 	session := &model.BotStressSession{
 		InstanceID: instance.ID, Name: "distributed-load", NamePrefix: "load", BotCount: target,
@@ -450,7 +450,7 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 	_, reserved := h.reservations.Lease(h.session.ID)
 	require.False(t, reserved)
 
-	// FR-369：每个 accepted Bot 应触发一次命令计划 Apply（可按节点批量）。
+	// 每个 accepted Bot 应触发一次命令计划 Apply（可按节点批量）。
 	schedCalls := h.dispatcher.ScheduleCalls()
 	require.NotEmpty(t, schedCalls)
 	totalSchedItems := 0
@@ -495,7 +495,7 @@ func TestBotLoadExecutionStart_V2ReadyTransitionsToRunning(t *testing.T) {
 	require.Equal(t, int64(2), eventCount)
 }
 
-// TestBotLoadExecutionStop_CancelsOpenCommandSchedules FR-369：stop 对未终态 checkpoint 下发 Cancel。
+// TestBotLoadExecutionStop_CancelsOpenCommandSchedules：stop 对未终态 checkpoint 下发 Cancel。
 func TestBotLoadExecutionStop_CancelsOpenCommandSchedules(t *testing.T) {
 	h := newBotLoadExecutionHarness(t, []int{2}, 2, nil)
 	// 注入 V2 intent，使 stop 写 bot_load_run_events。
@@ -533,7 +533,7 @@ func TestBotLoadExecutionStop_CancelsOpenCommandSchedules(t *testing.T) {
 		Where("status = ?", model.BotLoadCommandCheckpointCancelled).Count(&cancelled).Error)
 	require.Equal(t, int64(2), cancelled)
 
-	// FR-370：stop 应通过 V2 intent 写入 run-state 事件。
+	// stop 应通过 V2 intent 写入 run-state 事件。
 	var eventCount int64
 	require.NoError(t, h.db.Model(&model.BotLoadRunEvent{}).
 		Where("stress_session_id = ?", h.session.ID).Count(&eventCount).Error)
@@ -1486,7 +1486,7 @@ func TestBotLoadExecutionReconcile_OnlyStopsRuntimeMissingFromDesired(t *testing
 	require.NoError(t, h.db.Order("name ASC").Find(&bots).Error)
 	require.Len(t, bots, 3)
 
-	// FR-365：一致 running 不重派；generation 漂移/缺失则下发 running；orphan 下发 stopped。
+	// 一致 running 不重派；generation 漂移/缺失则下发 running；orphan 下发 stopped。
 	snapshot := &workerpb.GetBotFleetSnapshotResponse{
 		CapacityGeneration: h.plan.CapacityGenerations[0].CapacityGeneration,
 		Bots: []*workerpb.BotRuntimeSnapshot{

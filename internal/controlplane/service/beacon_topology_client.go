@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Beacon 拉取侧常量（FR-444，见 ADR-090）。
+// Beacon 拉取侧常量（见 ADR-090）。
 const (
 	// BeaconAPIPathZoneTree 区服结构树只读聚合端点（BC 集群 → 大区 → 小区）。
 	BeaconAPIPathZoneTree = "/admin/v2/zone-tree"
@@ -27,7 +27,7 @@ const (
 	beaconDefaultTimeout = 15 * time.Second
 )
 
-// BeaconClientConfig 是 Beacon 拉取客户端配置（FR-444）。
+// BeaconClientConfig 是 Beacon 拉取客户端配置。
 type BeaconClientConfig struct {
 	// Endpoint Beacon 基址（如 http://beacon.internal:8090），可带/不带尾斜杠。
 	// 留空表示未配置协同——由调用方整体跳过，不视为错误。
@@ -42,7 +42,7 @@ type BeaconClientConfig struct {
 	HTTPClient *http.Client
 }
 
-// 拉取侧哨兵错误。Beacon 不可达/未配置/未启用时返回明确错误（不静默成功，FR-444 §4.4）。
+// 拉取侧哨兵错误。Beacon 不可达/未配置/未启用时返回明确错误（不静默成功§4.4）。
 var (
 	// ErrBeaconNotConfigured 未配置 beacon.endpoint——可选协同未启用。
 	ErrBeaconNotConfigured = fmt.Errorf("未配置 Beacon 协同端点（beacon.endpoint 为空）")
@@ -121,7 +121,7 @@ type BeaconServerView struct {
 	Assigned bool `json:"assigned"`
 }
 
-// BeaconTopology 是一次全量拉取的不可变快照（FR-444 §4.4：先全量拉取到内存）。
+// BeaconTopology 是一次全量拉取的不可变快照（§4.4：先全量拉取到内存）。
 // 拉取阶段不触碰本地库，映射写入阶段才以事务落地。
 type BeaconTopology struct {
 	// NamespaceID 本次拉取的 namespace（0 表示全部）。
@@ -132,11 +132,11 @@ type BeaconTopology struct {
 	Servers []BeaconServerView
 }
 
-// BeaconClient 是 Beacon 管理面只读客户端（FR-444）。仅实现拉取所需的两个 GET 端点。
+// BeaconClient 是 Beacon 管理面只读客户端。仅实现拉取所需的两个 GET 端点。
 type BeaconClient struct {
 	cfg    BeaconClientConfig
 	client *http.Client
-	// provider 是运行时出站持有者（FR-185/ADR-043）：非 nil 时每次请求取当前 client，
+	// provider 是运行时出站持有者（ADR-043）：非 nil 时每次请求取当前 client，
 	// 使平台设置里改出站代理后 Beacon 调用即时生效，无需重启。
 	provider func() *http.Client
 }
@@ -159,7 +159,7 @@ func NewBeaconClient(cfg BeaconClientConfig) *BeaconClient {
 	return &BeaconClient{cfg: cfg, client: client}
 }
 
-// SetHTTPClientProvider 注入「取当前出站 *http.Client」的提供者（FR-185 Provider.Client）。
+// SetHTTPClientProvider 注入「取当前出站 *http.Client」的提供者（Provider.Client）。
 // 注入后优先于构造期客户端，使运行时代理变更对后续拉取立即生效。
 func (c *BeaconClient) SetHTTPClientProvider(fn func() *http.Client) {
 	if c == nil {
@@ -204,7 +204,7 @@ func (c *BeaconClient) PullTopology(ctx context.Context, namespaceID uint) (*Bea
 		return nil, err
 	}
 	// 树与 server 列表均已在内存：此后校验/映射不再发起任何外部请求，
-	// 保证「拉取失败 = 本地零改动」（FR-444 §4.4）。
+	// 保证「拉取失败 = 本地零改动」（§4.4）。
 	if tree == nil {
 		tree = &BeaconZoneTree{NamespaceID: namespaceID}
 	}

@@ -14,13 +14,13 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 插件桥 gRPC 侧（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）。
+// 插件桥 gRPC 侧（ServerProbe 反向 WS ↔ Worker见 ADR-016）。
 //
 // 数据流：探针 →(WS) PluginBridgeServer →(SetPluginBridge 注入的事件回调) EmitPluginEvent
 //        → 扇出到所有 StreamPluginEvents 订阅者（CP）。
 // 指令下行：CP →(SendPluginCommand) Worker → bridge.SendCommand → 探针。
-// 地基（FR-065）仅真实承载 connected/disconnected/heartbeat 与通道层；
-// 业务事件/治理执行语义留 FR-066/067。
+// 地基仅真实承载 connected/disconnected/heartbeat 与通道层；
+// 业务事件/治理执行语义留067。
 
 // SetPluginBridge 注入插件桥服务端，并把其冒泡的事件桥接到 StreamPluginEvents 订阅者。
 // 由 Worker 主进程在启动时调用。bridge 为 nil 时插件桥相关 RPC 返回未连接/未启用。
@@ -43,8 +43,8 @@ func (s *Server) SetPluginBridge(b *ws.PluginBridgeServer) {
 			FromServer:   e.FromServer,
 			ToServer:     e.ToServer,
 			RawJson:      e.Raw,
-			Domain:       e.Domain,   // JBIS 业务域透传给 CP（FR-115）
-			DedupKey:     e.DedupKey, // JBIS 去重键透传给 CP（FR-115）
+			Domain:       e.Domain,   // JBIS 业务域透传给 CP
+			DedupKey:     e.DedupKey, // JBIS 去重键透传给 CP
 		})
 	})
 }
@@ -64,7 +64,7 @@ func (s *Server) EmitPluginEvent(evt *workerpb.PluginEvent) {
 	}
 }
 
-// StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流（FR-065）。
+// StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流。
 // CP 调用后 Worker 持续推送 connected/disconnected/heartbeat 及（下游）业务事件。
 // instance_uuid 为空时订阅所有实例；流关闭时自动取消订阅。
 func (s *Server) StreamPluginEvents(req *workerpb.StreamPluginEventsRequest, stream workerpb.WorkerService_StreamPluginEventsServer) error {
@@ -192,7 +192,7 @@ func truncateForLog(s string, maxRunes int) string {
 // 探针与 Worker 同机回环、命令为本地 Bukkit API 调用，5s 足够；放大会拖慢跨多后端聚合。
 const pluginCommandTimeout = 5 * time.Second
 
-// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（FR-067，见 ADR-016）。
+// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（见 ADR-016）。
 //
 // wait=true：同步等待探针执行回执 command_result（踢/封/解封/白名单/在线列表），把成功/输出/错误返回；
 // wait=false：即发即忘（仅校验已下发）。实例无活动探针会话时返回 success=false 且 error 说明未连接，
@@ -232,11 +232,11 @@ func (s *Server) SendPluginCommand(_ context.Context, req *workerpb.SendPluginCo
 	}, nil
 }
 
-// pluginActionQueryState 是向探针请求全量服务器状态的治理动作（FR-076，见 ADR-016）。
+// pluginActionQueryState 是向探针请求全量服务器状态的治理动作（见 ADR-016）。
 // 探针侧 BukkitBridgeCommandHandler 收到该 action 时采集全状态并把 JSON 放入 command_result.output。
 const pluginActionQueryState = "query_state"
 
-// QueryServerState 经反向 WS 桥按需向探针请求子服全量状态并取回 state_json（FR-076）。
+// QueryServerState 经反向 WS 桥按需向探针请求子服全量状态并取回 state_json。
 //
 // 探针在 Bukkit 子服内异步、非侵入地采集 server/worlds/JVM/class 加载器/调度器/监听器等内部数据，
 // 经 query_state 指令的 command_result 回执（output 字段）把整段状态 JSON 带回。Worker 仅做透传：
@@ -286,7 +286,7 @@ func pluginCommandFrame(cmd *workerpb.PluginCommand) map[string]interface{} {
 	frame["reason"] = cmd.Reason
 	frame["args"] = cmd.Args
 	frame["requestId"] = cmd.RequestId
-	// JBIS 业务命令（FR-115/ADR-027）：domain 非空即业务帧，探针 BusinessHost 按 domain 路由到 Provider；
+	// JBIS 业务命令（ADR-027）：domain 非空即业务帧，探针 BusinessHost 按 domain 路由到 Provider；
 	// payloadJson 承载结构化业务参数。仅非空时附带，治理命令帧保持原样不变。
 	if cmd.Domain != "" {
 		frame["domain"] = cmd.Domain

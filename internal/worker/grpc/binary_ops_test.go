@@ -56,7 +56,7 @@ func newBinaryWorker(t *testing.T) (*Server, *fetchBinaryStreamStub, string) {
 	return srv, &fetchBinaryStreamStub{}, workDir
 }
 
-// TestFetchBinary_URLDownloadAndVerify url 来源：Worker 直连下载、校验摘要、置可执行位（FR-441 验收项 2/7）。
+// TestFetchBinary_URLDownloadAndVerify url 来源：Worker 直连下载、校验摘要、置可执行位（验收项 2/7）。
 func TestFetchBinary_URLDownloadAndVerify(t *testing.T) {
 	srv, stream, workDir := newBinaryWorker(t)
 	payload := []byte("#!/bin/sh\necho beacon\n")
@@ -101,7 +101,7 @@ func TestFetchBinary_URLDownloadAndVerify(t *testing.T) {
 }
 
 // TestFetchBinary_SHA256MismatchRemovesTarget 摘要不符必须删除落盘文件且失败
-// （否则半截/被篡改的二进制会被当成有效文件启动，FR-441 验收项 2）。
+// （否则半截/被篡改的二进制会被当成有效文件启动验收项 2）。
 func TestFetchBinary_SHA256MismatchRemovesTarget(t *testing.T) {
 	srv, stream, workDir := newBinaryWorker(t)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -146,7 +146,7 @@ func TestFetchBinary_HTTPErrorFails(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr))
 }
 
-// TestFetchBinary_NodeFileCopy node_file 来源：就地复制到工作目录并置可执行位（FR-441 验收项 3）。
+// TestFetchBinary_NodeFileCopy node_file 来源：就地复制到工作目录并置可执行位（验收项 3）。
 func TestFetchBinary_NodeFileCopy(t *testing.T) {
 	srv, stream, workDir := newBinaryWorker(t)
 	srcDir := t.TempDir()
@@ -316,7 +316,7 @@ func TestFetchBinary_ExecutableFalseKeepsMode(t *testing.T) {
 	require.Zero(t, st.Mode().Perm()&0o111, "executable=false 不应置可执行位，实际 %v", st.Mode().Perm())
 }
 
-// TestFetchBinary_ProgressStrideOnLargePayload 大文件应按步长上报进度（FR-441 §3.3 的字节进度）。
+// TestFetchBinary_ProgressStrideOnLargePayload 大文件应按步长上报进度（§3.3 的字节进度）。
 func TestFetchBinary_ProgressStrideOnLargePayload(t *testing.T) {
 	srv, stream, _ := newBinaryWorker(t)
 	// 3MiB 载荷 > 1MiB 步长，应产生至少一个中间进度帧。

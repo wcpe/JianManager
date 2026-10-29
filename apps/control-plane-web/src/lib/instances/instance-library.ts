@@ -1,5 +1,5 @@
-/**
- * 实例库拖拽的纯逻辑（FR-167 跨实例超级工作台 / 复用 ADR-034 可组合卡片工作区）。
+/** 
+ * 实例库拖拽的纯逻辑（跨实例超级工作台 / 复用 ADR-034 可组合卡片工作区）。
  *
  * 实例库面板用 HTML5 原生 DnD 把「实例 / 单功能 / 多选实例」拖到画布。本模块只做
  * **拖拽载荷的序列化/解析**与**载荷 → 卡片**的纯转换（不依赖 React / DOM），便于 vitest 覆盖，
@@ -12,7 +12,7 @@ import { isCardType, type CardType } from '@/lib/console/workspace-card'
 /** 工作区拖拽的自定义 MIME（避免与文本/文件拖拽混淆）。 */
 export const WORKSPACE_DND_MIME = 'application/x-jm-workspace'
 
-/**
+/** 
  * 拖拽载荷三态：
  * - `instance`：拖整个实例 → 加该实例「运维台」默认卡组。
  * - `card`：拖实例下某功能 → 加该实例单卡。
@@ -33,7 +33,7 @@ export function encodeDragPayload(payload: DragPayload): string {
   return JSON.stringify(payload)
 }
 
-/**
+/** 
  * 解析拖拽载荷字符串；结构/类型非法一律回退 null（由放置区忽略），永不抛。
  * 校验严格：kind 必须合法、instanceId 必须有限数、cardType 必须合法卡片类型。
  */
@@ -63,7 +63,7 @@ export function parseDragPayload(raw: string | null | undefined): DragPayload | 
   }
 }
 
-/**
+/** 
  * 把拖拽载荷转成落到画布的卡片列表（均携 instanceId）。
  * `bottomY` = 当前画布最底行（新卡落其下，避免纵向重叠；水平由网格 compact 收拢）。
  *
@@ -87,7 +87,7 @@ export function dragPayloadToCards(payload: DragPayload, bottomY: number): Place
   }
 }
 
-/**
+/** 
  * 跨实例卡去重：同「实例 × 功能」只保留先到者（监看墙允许多实例同功能并存）。
  * 无 instanceId 的遗留卡（单实例预设）按「type only」与带 id 的卡互不误伤，各自独立保留。
  * 顺序稳定（保留首次出现位置）。

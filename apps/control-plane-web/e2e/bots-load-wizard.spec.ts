@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test'
 import { login, selectComboboxOption } from './helpers'
 
-/**
- * FR-371 压测模板创建向导 · 单机（Playwright + VITE_MOCK 模式）验收。
+/** 
+ *压测模板创建向导 · 单机（Playwright + VITE_MOCK 模式）验收。
  * 覆盖：模板 tab 列表、新建模板、从模板运行向导、会话 tab 列表。
  */
-test.describe('FR-371 压测模板创建向导', () => {
+test.describe('压测模板创建向导', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
   })

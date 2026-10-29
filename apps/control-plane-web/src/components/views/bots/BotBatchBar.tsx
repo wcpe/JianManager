@@ -41,9 +41,9 @@ export interface BotBatchBarProps {
   onNotify?: (level: 'success' | 'error', message: string) => void
 }
 
-/**
+/** 
  * 顶部批量条：对已勾选的多个分组逐组下发批量（每组一次调用，聚合结果）。
- * 删除前 DangerConfirm 二次确认 + 串行进度提示（FR-147）；选 follow/patrol 行为时旁置「配置」入口
+ * 删除前 DangerConfirm 二次确认 + 串行进度提示；选 follow/patrol 行为时旁置「配置」入口
  * 暴露目标参数（跟随目标 / 巡逻路径），随 set-behavior 一并下发。
  */
 export function BotBatchBar({
@@ -167,7 +167,7 @@ export function BotBatchBar({
         onClose={() => setShowConfig(false)}
       />
 
-      {/* 多组批量删除二次确认（FR-147） */}
+      {/* 多组批量删除二次确认 */}
       <DangerConfirm
         open={confirmDelete}
         title={t('bots.batchDeleteTitle')}

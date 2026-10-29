@@ -29,7 +29,7 @@ const federationAllTargets = "*"
 // 置 nil 后 federation 端点不注册（与其它可选服务一致）。
 var testLogCoord *logcoord.Coordinator
 
-// LogFederationHandler FR-480 CP 跨 Worker 日志联邦查询 HTTP 面。
+// LogFederationHandlerCP 跨 Worker 日志联邦查询 HTTP 面。
 //
 // 权限复用日志中心：路由组 RequireAnyPerm("log.read")；
 // Handler 内平台管理员可查全平台/指定目标，非管理员收敛到可访问实例。
@@ -352,7 +352,7 @@ func (h *LogFederationHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	if h == nil || h.coord == nil {
 		return
 	}
-	// 门面：LogsPage/双路径客户端探测 GET /logs/federation（FR-482）。
+	// 门面：LogsPage/双路径客户端探测 GET /logs/federation。
 	// 语义 = Search + envelope（ok/sourceTag/coverage/quality/items/notes）。
 	rg.GET("/logs/federation", h.FacadeSearch)
 	rg.GET("/logs/federation/search", h.Search)
@@ -364,7 +364,7 @@ func (h *LogFederationHandler) RegisterRoutes(rg *gin.RouterGroup) {
 }
 
 // FacadeSearch 前端门面：Search 结果包装为双路径 envelope。
-// coverage/quality 保持 FR-473 snake_case wire 形态，由前端 adapter 归一。
+// coverage/quality 保持snake_case wire 形态，由前端 adapter 归一。
 func (h *LogFederationHandler) FacadeSearch(c *gin.Context) {
 	q, ok := h.buildQuery(c)
 	if !ok {

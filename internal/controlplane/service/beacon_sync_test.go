@@ -160,7 +160,7 @@ func TestBeaconPull_BuildsFullTree(t *testing.T) {
 	result, err := svc.PullTopology(context.Background(), 1, "127.0.0.1")
 	require.NoError(t, err)
 
-	// bc_cluster 是根分组（FR-444 §4.1）。
+	// bc_cluster 是根分组（§4.1）。
 	byName := groupsByName(t, db)
 	bc := byName["bc-main"]
 	require.Nil(t, bc.ParentID, "BC 集群应是根分组")

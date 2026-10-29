@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-513 主机级观测四处新版式的真机截图取证。
+/** 
+ *主机级观测四处新版式的真机截图取证。
  *
  * ## 为何要单独一个 spec
- * FR-513 的实现（Worker `hostobs` 采集 → 心跳 → CP 入库 → 首页悬浮卡）已落地且有单测，
+ *的实现（Worker `hostobs` 采集 → 心跳 → CP 入库 → 首页悬浮卡）已落地且有单测，
  * 但 spec 验收要求「在真实浏览器里肉眼看四处新版式」——单测只能证明组件在构造数据下渲染正确，
  * 证明不了整条链路（接口 → 前端 → 版式）在真实页面里是通的。
  *
@@ -20,10 +20,10 @@ import { login } from './helpers'
 
 const SHOT_DIR = 'test-results/fr513'
 
-/**
+/** 
  * 打开**经典**首页（三个资源球所在页），等外壳与页面就绪。
  *
- * 【为何必须带 `?home=classic`】自 FR-520 §9.1 起，`/` 默认渲染 **AI 首页**；
+ * 【为何必须带 `?home=classic`】自§9.1 起，`/` 默认渲染 **AI 首页**；
  * 经典仪表盘（就是带三个资源球与归因浮层的那个）需显式参数进入。
  * 不带参数等 `[data-page="overview"]` 会永远超时——这一步踩过一次。
  */
@@ -41,7 +41,7 @@ async function openAttributionPopover(page: Page, label: string): Promise<void> 
   await expect(page.getByText('负载三档'), '归因浮层已展开').toBeVisible({ timeout: 20_000 })
 }
 
-test.describe('FR-513 主机级观测版式取证（真浏览器）', () => {
+test.describe('主机级观测版式取证（真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     test.setTimeout(180_000)
     await login(page)
@@ -89,7 +89,7 @@ test.describe('FR-513 主机级观测版式取证（真浏览器）', () => {
   })
 
   test.skip('无主机级数据时四处版式整体不占位（老 Worker 兼容）', async ({ page }) => {
-    /*
+    /* 
       【为何 skip：技术上做不到，且已有更合适的归属】
       这条断言本身很重要（老 Worker 不报主机级字段时不能渲染四个空壳），但它**已在
       dom 层被完整覆盖**：`OverviewHostObs.dom.test.tsx` 第 55 行

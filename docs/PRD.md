@@ -594,7 +594,7 @@
 | FR-505 | 导航外壳组件层（feat，免 spec，承 FR-504 边界） | P1 | 🔨 开发中·阶段 4 完成（导航原语层已落于 `packages/ui/src/components/nav/`；正文所述 `shell/` 路径与 AppShell/ResourceTree 已按「零引用删除」重构，按「已有 FR 只改状态字段」约定未改正文） |
 | FR-506 | 工作区导航数据层（feat，免 spec） | P1 | 🔨 开发中·阶段 5 完成（工作区导航数据层已落于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`；四工作区 × 组 × 页面共 42 条登记 + 3 认证页；权限语义与旧六域逐条等价的 17 项用例全绿） |
 | FR-507 | 主控台外壳接入与页面迁移（feat，依赖 FR-502~506，免 spec） | P1 | 🔨 开发中·阶段 6 完成（**四验收全部达成**：①桌面侧栏/移动导航/命令面板三处消费方统一以 `workspace-navigation.ts` 为真源；②内容页 41/46 已用 FR-504 原语，余 5 为认证页与全幅画布页；③真浏览器实测——日志中心 12004 条仅挂 24 行 DOM（0.2%）、滚动重挂载 326.8/286.6/691.0 ms、long task 0 次；④`nav-config.ts` 与死代码 `ConsoleSidebar` 已删，旧 41 条登记冻结成快照继续做等价性对照，`Workspace.tsx` 路由 47→54 条从未削减。全量前端回归 3284/3284 通过） |
-| FR-508 | 代码内 FR 编号全量清理（ref，免 spec，承接 `.claude/rules/no-fr-in-code.md` 的存量豁免）：代码 / 文件名 / 注释 / 测试描述里的 `FR-\d+` 全部去除，编号只留文档 | — | 🔨 开发中（存量 9,041 处 / 2,064 文件（含 js 类脚本为 19,003 处）；验收：`check-no-fr-in-code.sh --stock` 0 命中） |
+| FR-508 | 代码内 FR 编号全量清理（ref，免 spec，承接 `.claude/rules/no-fr-in-code.md` 的存量豁免）：代码 / 注释 / 测试描述里的 `FR-\d+` 全部去除，编号只留文档 | P1 | ✅ 已交付（git 跟踪的代码文件 2,083 个、9,089 处全部清零；`check-no-fr-in-code.sh --stock` 0 命中，`go build`/`go vet`/`tsc -b` 全通过） |
 | FR-509 | 侧栏资源面板收敛为「一个分组方式 + 服务器列表」（feat，增强 FR-165/FR-293，免 spec） | — | ✅ 已交付@v0.24.0 |
 | FR-510 | 删除侧栏本地自定义分组并清掉其类型错误（ref，免 spec，与 FR-509 同批交付） | P1 | ✅ 已交付@v0.24.0 |
 | FR-511 | 侧栏服务器列表精简与虚拟化（feat，增强 FR-165/FR-509，免 spec） | — | ✅ 已交付@v0.24.0 |

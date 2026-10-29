@@ -172,7 +172,7 @@ type autoRestartToggler interface {
 	EnableAutoRestart() error
 }
 
-// FR-459 终验 Major 端到端回归：熔断禁用自动重启后经人工解除（对称 enable 帧），仍在托管的
+// 终验 Major 端到端回归：熔断禁用自动重启后经人工解除（对称 enable 帧），仍在托管的
 // wrapper 必须恢复「Java 退出后自动重启」。修复前没有 enable 帧，wrapper 收到禁用后收摊退出，
 // 而 Worker/CP 认为熔断已解除 → Java 下次崩溃不再被拉起（假解除）。
 func TestManager_DaemonEnableRestartReArmsWrapper(t *testing.T) {

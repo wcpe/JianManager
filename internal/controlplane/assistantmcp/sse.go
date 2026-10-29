@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-/**
- * 请求范围 SSE 的事件读取器（FR-517 §5.1）。
+/* *
+ * 请求范围 SSE 的事件读取器（§5.1）。
  *
  * 为什么不复用 `internal/controlplane/ai/sse.go` 的 reader：那个是**可信上游**
  * （自家供应商）用的，只有分帧没有限额；外部 MCP 是不可信输入，必须额外具备

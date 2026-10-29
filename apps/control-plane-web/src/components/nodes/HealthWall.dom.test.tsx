@@ -8,8 +8,8 @@ import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import { HealthWall } from './HealthWall'
 
-/**
- * 集群健康墙（FR-461）：分级矩阵渲染 + 服务端排序切换 + 一键下钻单台。
+/** 
+ * 集群健康墙：分级矩阵渲染 + 服务端排序切换 + 一键下钻单台。
  * /observability/health-wall 属观测域，本用例 server.use 桩占位（隔离运行）。
  */
 let lastSort: string | null = null

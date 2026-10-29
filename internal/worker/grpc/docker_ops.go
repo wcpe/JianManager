@@ -8,12 +8,12 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// Docker 镜像管理 RPC（FR-078，见 ADR-019）。
+// Docker 镜像管理 RPC（见 ADR-019）。
 // Worker 经本机 Docker Engine API 管镜像；CP 不直连 Docker，所有镜像操作经此委托。
 // Docker 守护进程不可达时返回明确错误（不影响 direct/daemon 模式）。
 
-// CheckDocker 探测本机 Docker 守护进程可用性（FR-237）：可达返回 available+version，否则 available=false+error。
-// 供创建向导选 docker 模式前先测、不可用即禁用提示（与 FR-229 连通性族同范式）。
+// CheckDocker 探测本机 Docker 守护进程可用性：可达返回 available+version，否则 available=false+error。
+// 供创建向导选 docker 模式前先测、不可用即禁用提示（与连通性族同范式）。
 func (s *Server) CheckDocker(ctx context.Context, _ *workerpb.CheckDockerRequest) (*workerpb.CheckDockerResponse, error) {
 	version, err := process.CheckDockerAvailable(ctx)
 	if err != nil {

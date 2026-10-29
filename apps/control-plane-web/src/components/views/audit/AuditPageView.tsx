@@ -1,4 +1,4 @@
-/**
+/** 
  * @file AuditPageView：审计日志检索页的受控视图，列表/总数/分页态、候选用户与导出触发由应用容器负责。
  * @input lib/audit-contracts（AuditLogInfo）、lib/audit-filters（AuditFilterState / formatAuditDetail）、
  *        lib/virtual-list（变高虚拟窗口）、Button/Input/Panel/Skeleton/Select 原语、
@@ -6,8 +6,8 @@
  * @output AuditPageView、AuditPageViewProps、AuditUserOption
  * @sync apps/control-plane-web/src/pages/AuditPage.tsx、apps/control-plane-web/src/pages/AuditPage.dom.test.tsx、
  *        apps/control-plane-web/src/pages/page-loading-skeleton.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-015 审计日志检索 + FR-158 行详情展开 + FR-172 分页信封 +
- *        FR-303 action 键翻译 + FR-321 失败留痕 + FR-502 阶段 3 作用域条 / 阶段 6 视口裁剪与同壳骨架）
+ * @since（组件受控化迁包；原页审计日志检索行详情展开分页信封 +
+ *action 键翻译失败留痕阶段 3 作用域条 / 阶段 6 视口裁剪与同壳骨架）
  */
 import { useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -26,14 +26,14 @@ import { useVirtualRows } from '@/lib/shared/virtual-list'
 import { mergeMeasuredRowHeights } from '@/lib/shared/row-heights'
 import { cardSurface, cardSurfaceTone, cn } from '@jianmanager/ui'
 
-/**
+/** 
  * Combobox 用空串表示「未选」，无法承载一个可点选的「全部」项，故另设哨兵。
  * 哨兵只在「控件值 ↔ 空串」之间做转换，故不会出现在上报给容器的筛选态里。
  */
 const SENTINEL_ALL = '__all__'
 
-/**
- * 行高估算（px，FR-502 阶段 6 视口裁剪用）。行高由行内单元格的行数唯一决定：
+/** 
+ * 行高估算（px阶段 6 视口裁剪用）。行高由行内单元格的行数唯一决定：
  * `px-3 py-2`(16) + 最高单元格 + `border-b`(1)，实测（Chromium 1440×900，root 16px）：
  * 单行 action 徽章 32.7 → 33；有翻译的 action 单元格叠两行（12px 标签 + 10px 原键角标）46.3 → 33+14。
  *
@@ -48,8 +48,8 @@ const ROW_EXPANDED_PX = 180
 /** jsdom 无布局（clientHeight 恒 0）时的回退视口高，保证视口裁剪在测试里同样生效。 */
 const FALLBACK_VIEWPORT_PX = 640
 
-/**
- * FR-303：action 键 → 展示标签。有中文翻译时行内叠「翻译 + 原始 mono 角标」两行，
+/** 
+ *：action 键 → 展示标签。有中文翻译时行内叠「翻译 + 原始 mono 角标」两行，
  * 无翻译时单行 `mono` 徽章。行渲染与行高估算共用此判定，避免两处判定漂移。
  */
 function resolveActionLabel(t: TFunction, action: string): { label: string; showsRawKey: boolean } {
@@ -63,7 +63,7 @@ export interface AuditUserOption {
   username: string
 }
 
-/**
+/** 
  * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast**。
  * - 已加载行、命中总数、列表三态与分页态经 props 注入（容器调 `useAuditLogs` 的无限分页）；
  * - **归容器**的受控状态：筛选五维 `filter`——它就是 `GET /audit` 的查询键，任一项变化都触发重新取数，
@@ -74,12 +74,12 @@ export interface AuditUserOption {
  *   （详情来自行数据本身，无懒查），故不上提。
  */
 export interface AuditPageViewProps {
-  /**
+  /** 
    * 已加载的审计行（容器把分页结果摊平后注入）；缺省按空列表渲染。
    * 行序即后端返回顺序（created_at 倒序），视图不再排序。
    */
   logs?: AuditLogInfo[]
-  /**
+  /** 
    * 命中总数（分页信封口径，含尚未加载的行）；`undefined` = 首屏信封尚未到达。
    * 仅用于页脚「已加载 X / 共 Y 条」与骨架分支判定，不参与分页游标。
    */
@@ -110,8 +110,8 @@ export interface AuditPageViewProps {
   onExport: () => void
 }
 
-/**
- * 审计日志查询页（FR-015 + FR-158）。
+/** 
+ * 审计日志查询页。
  * 套「流水检索」范式：强筛选（用户/操作/目标类型/时间范围）→ 时间线行；行可展开看变更详情（detail）。
  * 「导出」走后端 NDJSON 白名单导出；「加载更多」逐页追加；「清空」恢复默认。
  * 后端分页 envelope 返回真实 total，页面展示已加载数与命中总数。
@@ -137,7 +137,7 @@ export function AuditPageView({
   /** 展开的行 id；null 表示全部折叠（纯展示态，不影响取数）。 */
   const [expanded, setExpanded] = useState<number | null>(null)
 
-  /**
+  /** 
    * 选中用户的展示名。
    *
    * 候选窗口是「前 N 条 + 键入服务端搜索」，选中的用户很可能不在当前窗口里；
@@ -145,7 +145,7 @@ export function AuditPageView({
    */
   const [pickedUser, setPickedUser] = useState<{ id: string; name: string } | null>(null)
 
-  // 视口裁剪（FR-502 阶段 6）：数百行一次性进 DOM 是本页的主开销，只渲染滚动窗口内的行。
+  // 视口裁剪（阶段 6）：数百行一次性进 DOM 是本页的主开销，只渲染滚动窗口内的行。
   // 展开行的详情正文长短不定（估算误差会让其后所有行偏移错位），故实测后回填。
   const expandedRef = useRef<HTMLDivElement>(null)
   const [expandedSize, setExpandedSize] = useState<{ id: number; px: number } | null>(null)
@@ -156,7 +156,7 @@ export function AuditPageView({
     if (expanded !== null && px > 0 && px !== expandedPx) setExpandedSize({ id: expanded, px })
   }, [expanded, expandedPx, logs])
 
-  /**
+  /** 
    * 折叠行的实测高度（行 id → px）。
    *
    * 折叠行原先只有常量估算，而估算偏差**按行数累积**（600 行 × 0.5px = 300px），
@@ -175,10 +175,10 @@ export function AuditPageView({
         return (
           measuredRows.get(String(log.id)) ??
           ROW_BASE_PX + (resolveActionLabel(t, log.action).showsRawKey ? ROW_EXTRA_LINE_PX : 0)
-        )
+)
       }),
     [expanded, expandedPx, logs, measuredRows, t],
-  )
+)
   const { containerRef, onScroll, range, crossSize } = useVirtualRows({
     total: logs.length,
     itemSize: ROW_BASE_PX,
@@ -238,7 +238,7 @@ export function AuditPageView({
         }
       />
 
-      {/* 强筛选器：套作用域条（FR-502 阶段 3 布局规范） */}
+      {/* 强筛选器：套作用域条（阶段 3 布局规范） */}
       <ScopeBar>
         {/*
           用户筛选用**服务端搜索**型选择器：候选只取前 N 条，键入经 `onUserQueryChange` 上报
@@ -303,7 +303,7 @@ export function AuditPageView({
         />
       </ScopeBar>
 
-      {/* FR-502 阶段 6 补丁：数据未到时不再只显示一行「加载中」文字。页头与筛选条本来就先渲染，
+      {/*阶段 6 补丁：数据未到时不再只显示一行「加载中」文字。页头与筛选条本来就先渲染，
           数据区这里用**同壳骨架**（同一张 Panel + 同一条吸附列头 + 行占位）顶上，
           数据到达后原地替换——期间没有整块内容突然出现，也没有列头/页脚的位移。 */}
       {isLoading && total === undefined ? (
@@ -378,8 +378,8 @@ export function AuditPageView({
   )
 }
 
-/**
- * 列表列头（FR-502 阶段 6 补丁抽出）：内容是静态列名，不依赖数据，
+/** 
+ * 列表列头（阶段 6 补丁抽出）：内容是静态列名，不依赖数据，
  * 因此加载态与就绪态共用同一份——骨架期间列名/列宽就已就位，数据到达只是「行长出来」。
  */
 function AuditColumnHeader() {
@@ -416,7 +416,7 @@ function AuditRow({
   const { t } = useTranslation()
   const detail = formatAuditDetail(log.detail)
   const hasDetail = detail !== '' || (log.failed && !!log.error)
-  // FR-303：action 键翻译。已知键显翻译 + 原键角标，未知键回退原键（defaultValue），保证不崩。
+  // action 键翻译。已知键显翻译 + 原键角标，未知键回退原键（defaultValue），保证不崩。
   const { label: actionLabel, showsRawKey } = resolveActionLabel(t, log.action)
   return (
     <div ref={rowRef} data-audit-row-id={log.id} className={cn('border-border/60', !isLast && 'border-b')}>
@@ -448,7 +448,7 @@ function AuditRow({
           {new Date(log.createdAt).toLocaleString()}
         </span>
         <span className="w-28 shrink-0 truncate">{log.user?.username ?? `#${log.userId}`}</span>
-        {/* FR-303：有翻译时显翻译 + 小号 mono 原键角标（筛选仍按原键，心智不断）；无翻译时保持原 mono 徽章。 */}
+        {/*有翻译时显翻译 + 小号 mono 原键角标（筛选仍按原键，心智不断）；无翻译时保持原 mono 徽章。 */}
         <span className="w-44 min-w-0 shrink-0" title={log.action}>
           {showsRawKey ? (
             <span className="flex flex-col">
@@ -462,7 +462,7 @@ function AuditRow({
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
           {log.targetType && `${log.targetType}#${log.targetId}`}
         </span>
-        {/* FR-321：失败操作红色徽章，一眼定位报错操作。 */}
+        {/*失败操作红色徽章，一眼定位报错操作。 */}
         {log.failed && (
           <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">
             {t('audit.failed')}

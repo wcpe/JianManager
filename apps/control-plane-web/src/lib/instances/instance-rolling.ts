@@ -1,7 +1,7 @@
 import type { InstanceBatchAction } from './instance-batch'
 
-/**
- * 实例滚动/分批/灰度编排契约（FR-457）。
+/** 
+ * 实例滚动/分批/灰度编排契约。
  *
  * 归包理由：受控视图要按会话状态渲染进度与控制按钮（`RollingOp` / `RollingState`）、
  * 按状态判定「是否仍在推进」（`isRollingActive`），这套结构是双侧共用的；应用侧 API 层
@@ -46,7 +46,7 @@ export function isRollingActive(state: RollingState | undefined): boolean {
   return state === 'pending' || state === 'running' || state === 'paused'
 }
 
-/**
+/** 
  * 创建编排的载荷（视图产出，外壳透传给 API）。
  *
  * 目标固定走 `filter.instanceIds` 而非 `ids`：后端灰度的 ratio 抽样**仅在 filter 模式生效**，

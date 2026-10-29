@@ -1,9 +1,9 @@
-/**
+/** 
  * @file SetupPageView：首次使用初始化页的受控视图，初始化状态查询、提交与跳转由应用容器负责。
  * @input lib/password-strength、Panel/Input/PasswordInput/Label/Button 原语、翻译上下文
  * @output SetupPageView、SetupPageViewProps、SetupValues
  * @sync apps/control-plane-web/src/pages/SetupPage.tsx、apps/control-plane-web/src/pages/SetupPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-157 密码强度提示、FR-199 身份访问域）
+ * @since（组件受控化迁包；原密码强度提示身份访问域）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -14,7 +14,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { PasswordInput } from '@jianmanager/ui/components/password-input'
 import { passwordStrength } from '@/lib/auth/password-strength'
 
-/** 密码强度档位对应的进度条配色（FR-157）。 */
+/** 密码强度档位对应的进度条配色。 */
 const STRENGTH_BAR: Record<number, string> = {
   1: 'bg-destructive',
   2: 'bg-yellow-500',
@@ -31,12 +31,12 @@ export interface SetupValues {
   password: string
 }
 
-/**
+/** 
  * 受控边界：表单草稿、校验提示与密码强度展示留在视图；是否「无需初始化」的重定向、
  * 创建请求、token 落地与登录后跳转全在容器（包内不依赖 react-query / zustand / react-router）。
  */
 export interface SetupPageViewProps {
-  /**
+  /** 
    * 创建初始管理员；失败请抛错（视图取服务端 `message` 作内联错误，缺失时回退「创建失败」）。
    * 成功后视图不做跳转——由容器在 mutation 内导航。
    */
@@ -47,7 +47,7 @@ export interface SetupPageViewProps {
   loading?: boolean
 }
 
-/** 首次使用引导（FR-157）：创建初始管理员，含实时密码强度与两次输入一致性提示。 */
+/** 首次使用引导：创建初始管理员，含实时密码强度与两次输入一致性提示。 */
 export function SetupPageView({ onSubmit, submitting = false, loading = false }: SetupPageViewProps) {
   const { t } = useTranslation()
   const [username, setUsername] = useState('admin')

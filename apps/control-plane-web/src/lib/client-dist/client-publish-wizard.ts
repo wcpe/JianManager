@@ -1,5 +1,5 @@
-/**
- * 客户端发布版本向导的分步逻辑（FR-187）。
+/** 
+ * 客户端发布版本向导的分步逻辑。
  *
  * 把原「一屏发布」重排为分步向导：选文件 → 逐文件配置 → 托管目录/说明 → 预览 → 发布。
  * 这里只放与 React/DOM 无关的纯逻辑（步骤顺序、单文件路径校验、各步可否前进、
@@ -23,7 +23,7 @@ export function allPathsValid(paths: string[]): boolean {
   return paths.length > 0 && paths.every(isDraftPathValid)
 }
 
-/**
+/** 
  * 解析托管目录输入（逗号/换行分隔、去重、去首尾空白与结尾斜杠、去空项）。
  * 与原实现一致，仅抽出便于单测。
  */
@@ -83,10 +83,10 @@ export function prevStep(step: PublishStepId): PublishStepId {
   return PUBLISH_STEPS.at(Math.max(i - 1, 0)) ?? step
 }
 
-// ── FR-191：zip 上传归一 / 文件树 / 草稿 dirty 判定 ─────────────────────────
+// ──：zip 上传归一 / 文件树 / 草稿 dirty 判定 ─────────────────────────
 
-/**
- * 归一为 manifest 用的 POSIX 相对路径（FR-191）：
+/** 
+ * 归一为 manifest 用的 POSIX 相对路径：
  * 反斜杠→正斜杠、剥离前导 `./` 段与前导 `/`、压缩重复斜杠、去首尾空白。
  * 仅做形态归一，**不**解析 `..` 越界（越界由 {@link isDraftPathValid} 拦），
  * 既用于 zip entry 相对路径，也用于编排时的路径输入清洗。
@@ -108,19 +108,19 @@ export function isZipFilename(name: string): boolean {
   return /\.zip$/i.test(name.trim())
 }
 
-/**
- * 发布向导是否存在未发布草稿（FR-191/FR-250 防误关判定）。
- * FR-191 语义：已上传任一文件即视为有草稿。FR-250 反转为**本地暂存**后语义不变——
+/** 
+ * 发布向导是否存在未发布草稿（防误关判定）。
+ *语义：已上传任一文件即视为有草稿。反转为**本地暂存**后语义不变——
  * 只要本地草稿非空（尚未发布）即 dirty，关闭/点遮罩/Esc/后退需二次确认才能放弃；空向导（0 文件）照常关闭。
  */
 export function hasPublishDraft(draftCount: number): boolean {
   return draftCount > 0
 }
 
-// ── FR-250：目录 entry 递归收集 / 本地去重 / 批量上传进度归并 ─────────────────
+// ──：目录 entry 递归收集 / 本地去重 / 批量上传进度归并 ─────────────────
 
-/**
- * `webkitGetAsEntry()` 返回的 `FileSystemEntry` 的最小可测形态（FR-250）。
+/** 
+ * `webkitGetAsEntry()` 返回的 `FileSystemEntry` 的最小可测形态。
  * 只声明 {@link collectEntries} 递归所需字段，避免直接依赖 DOM lib 的 FileSystemEntry
  * （其 `file()`/`readEntries()` 为回调式，难在纯逻辑单测里构造）。真实调用处传浏览器原生 entry。
  */
@@ -144,8 +144,8 @@ export interface LocalUnit {
   path: string
 }
 
-/**
- * 递归收集 `webkitGetAsEntry()` 的 entry 森林为扁平本地单元表（FR-250）。
+/** 
+ * 递归收集 `webkitGetAsEntry()` 的 entry 森林为扁平本地单元表。
  *
  * 文件 entry → 取 File + path=`normalizeManifestPath(fullPath)`（保相对目录结构）；
  * 目录 entry → `readEntries()` 深度优先下钻。跳过 `.DS_Store` 与 `__MACOSX/` 噪音、空路径项。
@@ -169,8 +169,8 @@ export async function collectEntries(entries: FileSystemEntryLike[]): Promise<Lo
   return out
 }
 
-/**
- * 本地去重键（FR-250）：`name + '\0' + size` 近似判同。
+/** 
+ * 本地去重键：`name + '\0' + size` 近似判同。
  * 精确判同需读全量算 hash（费时），本地仅用 name+size 近似省重复上传；
  * CAS 服务端按真实 sha256 兜底去重，前端误判最坏多传一次、不影响正确性。
  */
@@ -188,8 +188,8 @@ export interface DedupPlan<T> {
   keys: string[]
 }
 
-/**
- * 按 {@link localDedupKey}(name,size) 去重本地单元（FR-250 省带宽）。
+/** 
+ * 按 {@link localDedupKey}(name,size) 去重本地单元（省带宽）。
  * 同键仅首个进入 `unique`（只上传一次）；`keys[i]` 记第 i 个原单元的键，
  * 发布时先上传 `unique` 得「键→结果」，再按 `keys` 为每个原单元回填结果（含被去重者复用）。
  * 纯函数，`keyOf` 从元素取 name/size，便于单测。
@@ -210,8 +210,8 @@ export function dedupUnits<T>(units: T[], keyOf: (u: T) => { name: string; size:
   return { unique, keys }
 }
 
-/**
- * 归并批量上传的总体已传字节（FR-250）：已完成单元累计 `baseBytes` + 当前单元已传 `fileUploaded`，
+/** 
+ * 归并批量上传的总体已传字节：已完成单元累计 `baseBytes` + 当前单元已传 `fileUploaded`，
  * 上限不超过 `totalBytes`（防末片按整片计或回填误差越界）。纯函数，便于单测进度数学。
  */
 export function batchProgressBytes(baseBytes: number, fileUploaded: number, totalBytes: number): number {
@@ -257,8 +257,8 @@ export interface ManifestFileLike {
   size: number
 }
 
-/**
- * 把扁平的 manifest 文件列表按 `path` 的 `/` 分段构建为目录树（FR-191）。
+/** 
+ * 把扁平的 manifest 文件列表按 `path` 的 `/` 分段构建为目录树。
  * 叶=文件、枝=目录；目录在前文件在后、各自字母序；目录聚合递归文件数与字节数。
  * 文件携回源 `index` 以便编排（改路径/sync/platform/删除）定位原数组项。
  * 纯函数、与 React 无关，便于单测。
@@ -325,10 +325,10 @@ function aggregate(dir: TreeDir): { count: number; size: number } {
   return { count, size }
 }
 
-// ── FR-254：文件树拖拽编排（拖拽文件/目录节点改目标路径） ──────────────────
+// ──：文件树拖拽编排（拖拽文件/目录节点改目标路径） ──────────────────
 
-/**
- * 把文件移动到指定目录下，计算新目标路径（FR-254）。
+/** 
+ * 把文件移动到指定目录下，计算新目标路径。
  * @param filePath 文件当前完整相对路径
  * @param dirPath 目标目录完整路径；空串表示移到根（仅留文件名）
  * @returns 新路径；若文件名与目标目录组合后路径不变则返回原值
@@ -340,8 +340,8 @@ export function moveFileToDir(filePath: string, dirPath: string): string {
   return newPath === filePath ? filePath : newPath
 }
 
-/**
- * 把目录移动到目标目录下，计算新目录路径（FR-254）。
+/** 
+ * 把目录移动到目标目录下，计算新目录路径。
  * @param srcDirPath 被拖拽目录的完整路径
  * @param targetDirPath 目标目录完整路径；空串表示移到根
  * @returns 新目录路径；源等于目标时返回原值（no-op）
@@ -353,8 +353,8 @@ export function moveDirToDir(srcDirPath: string, targetDirPath: string): string 
   return newPath === srcDirPath ? srcDirPath : newPath
 }
 
-/**
- * 递归收集目录子树全部文件（含子目录），返回 index+path 列表（FR-254）。
+/** 
+ * 递归收集目录子树全部文件（含子目录），返回 index+path 列表。
  * 供拖拽目录节点时批量改路径用。
  */
 export function collectSubtreeFiles(dir: TreeDir): { index: number; path: string }[] {
@@ -368,8 +368,8 @@ export function collectSubtreeFiles(dir: TreeDir): { index: number; path: string
   return out
 }
 
-/**
- * 判定 targetDir 是否为 srcDir 自身或其后代（FR-254）。
+/** 
+ * 判定 targetDir 是否为 srcDir 自身或其后代。
  * 拖拽目录到自身或子目录是非法操作（会造成循环嵌套），须阻止。
  */
 export function isSelfOrDescendant(srcDirPath: string, targetDirPath: string): boolean {
@@ -378,10 +378,10 @@ export function isSelfOrDescendant(srcDirPath: string, targetDirPath: string): b
   return targetDirPath.startsWith(prefix)
 }
 
-// ── FR-255：清理范围目录树勾选 ──────────────────────────────────────────
+// ──：清理范围目录树勾选 ──────────────────────────────────────────
 
-/**
- * 从草稿文件列表派生所有目录路径（含深层嵌套，FR-255 managedDirs 目录树勾选用）。
+/** 
+ * 从草稿文件列表派生所有目录路径（含深层嵌套managedDirs 目录树勾选用）。
  *
  * 遍历每个文件 path 的目录前缀段，逐层累加收集。例：
  * `mods/a.jar` → `mods`；`mods/sub/b.jar` → `mods`、`mods/sub`；
@@ -402,23 +402,23 @@ export function collectAllDirPaths(files: ManifestFileLike[]): string[] {
   return Array.from(dirs).sort()
 }
 
-/**
- * 「清空整个 gameDir」哨兵值（FR-255）：managedDirs 含此值时，
+/** 
+ * 「清空整个 gameDir」哨兵值：managedDirs 含此值时，
  * 客户端视为整个 gameDir 托管，删除清单未列的一切（玩家区 + cleanExclude 除外）。
  */
 export const CLEAN_ALL_SENTINEL = '*'
 
-/**
+/** 
  * 判定 managedDirs 是否启用了 clean-all（含哨兵 `"*"`）。
  */
 export function isCleanAll(managedDirs: string[]): boolean {
   return managedDirs.includes(CLEAN_ALL_SENTINEL)
 }
 
-// ── FR-261：文件资源管理器（新建文件夹/重命名/冲突处理） ────────────────────
+// ──：文件资源管理器（新建文件夹/重命名/冲突处理） ────────────────────
 
-/**
- * 构树时合并空目录（FR-261 新建文件夹）。
+/** 
+ * 构树时合并空目录（新建文件夹）。
  *
  * 先用 {@link buildFileTree} 从 files 构树，再把 `emptyDirs` 中尚不存在的目录
  * 作为空目录节点插入树中。已存在（被文件占据）的目录跳过（不重复创建）。
@@ -446,8 +446,8 @@ export function buildFileTreeWithDirs(files: ManifestFileLike[], emptyDirs: stri
   return root
 }
 
-/**
- * 重命名路径的最后一段（文件名或目录名，FR-261）。
+/** 
+ * 重命名路径的最后一段（文件名或目录名）。
  *
  * 保留目录前缀，仅替换末段为 newName。例：`mods/sub/a.jar` + `b.jar` → `mods/sub/b.jar`；
  * 根级 `a.jar` + `b.jar` → `b.jar`。纯函数。
@@ -459,8 +459,8 @@ export function renamePathSegment(path: string, newName: string): string {
   return segments.join('/')
 }
 
-/**
- * 在同级已有名称中生成不冲突的唯一名（FR-261 新建文件夹命名）。
+/** 
+ * 在同级已有名称中生成不冲突的唯一名（新建文件夹命名）。
  *
  * base 不在 existingNames 中 → 返回 base；否则尝试 `base 2`、`base 3`…直到唯一。
  * 纯函数。
@@ -473,7 +473,7 @@ export function nextUniqueName(base: string, existingNames: string[]): string {
   return `${base} ${n}`
 }
 
-// ── FR-350：多级目录一次建 / 右键定点上传 ───────────────────────────────────
+// ──：多级目录一次建 / 右键定点上传 ───────────────────────────────────
 
 /** {@link parseDirPathsInput} 结果：合法目录路径 + 被拒绝的原始行。 */
 export interface ParsedDirPaths {
@@ -483,8 +483,8 @@ export interface ParsedDirPaths {
   invalid: string[]
 }
 
-/**
- * 解析「新建多级目录」多行输入（FR-350）：每行一条路径，一行可为 `a/b/c` 整条层级。
+/** 
+ * 解析「新建多级目录」多行输入：每行一条路径，一行可为 `a/b/c` 整条层级。
  *
  * 每行经 {@link normalizeManifestPath} 归一（反斜杠/前导 `./`、`/`、重复斜杠），
  * 再折叠 `.` 段与空段、剥结尾斜杠；含 `..` 段或归一后为空的非空白行进 `invalid`
@@ -514,8 +514,8 @@ export function parseDirPathsInput(raw: string): ParsedDirPaths {
   return { dirs, invalid }
 }
 
-/**
- * 把目录路径列表展开为全部层级链（FR-350）：`a/b/c` → `a`、`a/b`、`a/b/c`。
+/** 
+ * 把目录路径列表展开为全部层级链：`a/b/c` → `a`、`a/b`、`a/b/c`。
  * 跨路径共享的层级去重、保首次出现顺序。供模态预览「将创建哪些层级」与
  * 创建后展开祖先链使用。纯函数。
  */
@@ -535,8 +535,8 @@ export function expandDirChains(dirs: string[]): string[] {
   return out
 }
 
-/**
- * 拼接目录前缀与子路径（FR-350 右键定点上传 / 模态基准目录）。
+/** 
+ * 拼接目录前缀与子路径（右键定点上传 / 模态基准目录）。
  * 两侧各自归一（剥结尾/前导斜杠），任一为空返回另一侧，避免产生 `//` 或前导斜杠。
  * 纯函数。
  */
@@ -548,11 +548,11 @@ export function joinDirPath(dirPath: string, subPath: string): string {
   return `${d}/${p}`
 }
 
-/** 冲突解决策略（FR-261 同名冲突弹窗）。 */
+/** 冲突解决策略（同名冲突弹窗）。 */
 export type ConflictResolution = 'skip' | 'replace' | 'keepBoth'
 
-/**
- * 为冲突路径生成「保留两者」的新路径（文件名加 `(n)` 数字后缀，FR-261）。
+/** 
+ * 为冲突路径生成「保留两者」的新路径（文件名加 `(n)` 数字后缀）。
  *
  * 保留目录前缀，在文件名 stem 与扩展名之间插入 `(1)`、`(2)`…直到与 existing 不冲突。
  * 例：`mods/a.jar` + existing=`['mods/a.jar']` → `mods/a (1).jar`。
@@ -577,8 +577,8 @@ export function keepBothPath(conflictPath: string, existing: string[]): string {
   return candidate
 }
 
-/**
- * 检测 incoming 路径中与 existing 路径冲突的项（FR-261）。
+/** 
+ * 检测 incoming 路径中与 existing 路径冲突的项。
  *
  * @returns 冲突的 incoming 路径数组（保持 incoming 顺序，去重）
  */
@@ -595,7 +595,7 @@ export function detectConflicts(incoming: string[], existing: string[]): string[
   return out
 }
 
-// ── FR-262：清理目录树形右键菜单可视化（三态标记 + 父子联动） ──────────────
+// ──：清理目录树形右键菜单可视化（三态标记 + 父子联动） ──────────────
 
 /** 目录清理标记：清理或排除。 */
 export type CleanMark = 'clean' | 'exclude'
@@ -603,8 +603,8 @@ export type CleanMark = 'clean' | 'exclude'
 /** 目录视觉四态：清理（红）/ 排除（绿）/ 混合（橙）/ 不管理（无色）。 */
 export type DirVisualState = 'clean' | 'exclude' | 'mixed' | 'none'
 
-/**
- * 从 manifest 的 managedDirs + cleanExclude 反向构建 cleanMap（FR-262）。
+/** 
+ * 从 manifest 的 managedDirs + cleanExclude 反向构建 cleanMap。
  *
  * managedDirs 中每条 → 'clean'；cleanExclude 中每条 → 'exclude'。
  * 同一路径同时出现在两者时，cleanExclude 优先（后写入覆盖）。
@@ -617,8 +617,8 @@ export function buildCleanMap(managedDirs: string[], cleanExclude: string[]): Ma
   return m
 }
 
-/**
- * 取某目录的所有后代目录路径（不含自身，FR-262）。
+/** 
+ * 取某目录的所有后代目录路径（不含自身）。
  *
  * 按路径前缀 `dirPath/` 匹配 allDirPaths 中的项。纯字符串操作，不依赖树结构。
  */
@@ -627,8 +627,8 @@ export function getDescendantDirPaths(dirPath: string, allDirPaths: string[]): s
   return allDirPaths.filter((p) => p.startsWith(prefix))
 }
 
-/**
- * 计算目录的视觉四态（FR-262）。
+/** 
+ * 计算目录的视觉四态。
  *
  * 规则：
  * - 有效标记 = 自身显式标记（优先）或最近祖先的显式标记（继承）
@@ -670,8 +670,8 @@ export function computeDirVisualState(
   return 'mixed'
 }
 
-/**
- * 向上查找最近的祖先显式标记（FR-262）。
+/** 
+ * 向上查找最近的祖先显式标记。
  *
  * 从 dirPath 的直接父目录逐级向上，返回 cleanMap 中第一个命中的标记。
  * 纯函数。
@@ -686,8 +686,8 @@ export function findAncestorMark(dirPath: string, cleanMap: Map<string, CleanMar
   return undefined
 }
 
-/**
- * 去掉已被同标记祖先覆盖的子路径（FR-262）。
+/** 
+ * 去掉已被同标记祖先覆盖的子路径。
  *
  * 如 `mods` 和 `mods/sub` 都标记 clean，只产出 `mods`（祖先已覆盖子）。
  * 纯函数。
@@ -705,8 +705,8 @@ function dedupTopLevel(paths: string[]): string[] {
     .sort()
 }
 
-/**
- * 从 cleanMap 导出 managedDirs + cleanExclude（FR-262）。
+/** 
+ * 从 cleanMap 导出 managedDirs + cleanExclude。
  *
  * 去子优化：若祖先目录同标记，子目录不重复产出（客户端按前缀匹配，祖先已覆盖）。
  * 结果按字母序排列，便于稳定断言。纯函数。

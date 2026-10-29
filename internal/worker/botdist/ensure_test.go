@@ -142,7 +142,7 @@ func TestEnsure_MissingEntryBothLayouts(t *testing.T) {
 	}
 }
 
-// TestEnsure_FreshDownloadExtractsAndLinks 首次自愈：下载、校验、物化、建 node_modules 链接（FR-308）。
+// TestEnsure_FreshDownloadExtractsAndLinks 首次自愈：下载、校验、物化、建 node_modules 链接。
 func TestEnsure_FreshDownloadExtractsAndLinks(t *testing.T) {
 	data, sha := buildArchive(t, map[string]string{
 		"index.js":     "console.log('bot')",
@@ -178,7 +178,7 @@ func TestEnsure_FreshDownloadExtractsAndLinks(t *testing.T) {
 	}
 }
 
-// TestEnsure_SameShaSkipsRedownload 指纹一致：第二次自愈不再传归档字节（FR-308 省流语义）。
+// TestEnsure_SameShaSkipsRedownload 指纹一致：第二次自愈不再传归档字节（省流语义）。
 func TestEnsure_SameShaSkipsRedownload(t *testing.T) {
 	data, sha := buildArchive(t, map[string]string{"index.js": "x"})
 	fc := &fakeClient{archive: data, sha: sha, success: true}
@@ -198,7 +198,7 @@ func TestEnsure_SameShaSkipsRedownload(t *testing.T) {
 	}
 }
 
-// TestEnsure_FallbackToLocal CP 不可达/未内嵌：本地有副本沿用、无副本给可操作错误（FR-308 降级）。
+// TestEnsure_FallbackToLocal CP 不可达/未内嵌：本地有副本沿用、无副本给可操作错误（降级）。
 func TestEnsure_FallbackToLocal(t *testing.T) {
 	data, sha := buildArchive(t, map[string]string{"index.js": "x"})
 	good := &fakeClient{archive: data, sha: sha, success: true}
@@ -227,7 +227,7 @@ func TestEnsure_FallbackToLocal(t *testing.T) {
 	}
 }
 
-// TestEnsure_ShaMismatchRejected 传输校验：字节与宣称指纹不符拒绝物化（FR-308）。
+// TestEnsure_ShaMismatchRejected 传输校验：字节与宣称指纹不符拒绝物化。
 func TestEnsure_ShaMismatchRejected(t *testing.T) {
 	data, _ := buildArchive(t, map[string]string{"index.js": "x"})
 	fc := &fakeClient{archive: data, sha: strings.Repeat("0", 64), success: true}

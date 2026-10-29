@@ -23,8 +23,8 @@ import {
   type DeliveryStatus,
 } from '@/api/configDeliveries'
 
-/**
- * 配置交付编排（FR-531/532）DOM 与状态机逻辑测试。
+/** 
+ * 配置交付编排（532）DOM 与状态机逻辑测试。
  *
  * 这里盯住的是三条**会直接误导运维**的语义：
  * 1. `deferred` 与 `failed` 必须分开计数与分开展示（合并会让人把「机器离线」读成「配置坏了」）；

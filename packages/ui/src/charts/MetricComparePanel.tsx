@@ -9,8 +9,8 @@ import {
   type RawSeries,
 } from '../lib/monitor-metrics'
 
-/**
- * 多指标对比/叠加（FR-221）：用户从该 target 的指标目录里勾选多条指标，叠加到同一图对比趋势。
+/** 
+ * 多指标对比/叠加：用户从该 target 的指标目录里勾选多条指标，叠加到同一图对比趋势。
  * 跨指标量纲不同（TPS vs 字节 vs %），故对比图 Y 轴不约束（auto），以形状/趋势对比为主，
  * 绝对值看 hover 浮窗。Y 轴刻度：选中序列格式一致时用该单位格式器，混合量纲退紧凑 SI 缩写
  * （避免字节级原始数字截断）。选中集合受控由父级持有（随 target 切换重置）。
@@ -35,7 +35,7 @@ export function MetricComparePanel({
   const formats = [...new Set(plot.map((s) => s.format))]
   const valueFormatter = formats.length === 1 && formats[0] ? formatterFor(formats[0]) : compactFormatter
 
-  /**
+  /** 
    * ToggleGroup 交回的是**整个选中集合**，而本组件的对外契约是「切换某一条」
    * （`onToggle(metricKey)`，父级据此维护选中集合）。这里把整集差分成单键事件，
    * 从而不必改动父级的接口：一次点击只会新增或移除一项，故取首个差异即可。

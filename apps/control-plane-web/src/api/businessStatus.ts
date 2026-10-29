@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/**
- * 业务插件域状态（FR-534，见 docs/specs/business-plugin-panel/spec.md）。
+/** 
+ * 业务插件域状态（见 docs/specs/business-plugin-panel/spec.md）。
  *
  * **只渲染不解释**：本模块只按 OpenAPI 契约（`BusinessStatus` / `DomainStatus`）取回探针上报的
  * 原始状态，不做任何业务语义归类、不解析 manifest 内容。`manifestDigest` 只是内容指纹。
@@ -48,7 +48,7 @@ export async function fetchBusinessStatus(instanceId: number): Promise<BusinessS
   return data
 }
 
-/**
+/** 
  * 业务域状态的查询 hook。
  *
  * 缓存 TTL 与后端一致取 30 秒（spec §6）：后端在这段时间内直接命中内存缓存、不打探针，
@@ -66,7 +66,7 @@ export function useBusinessStatus(instanceId: number, enabled = true) {
   })
 }
 
-/** 批量域状态查询的单次上限（后端 spec FR-534 §5.2）。 */
+/** 批量域状态查询的单次上限（后端 spec§5.2）。 */
 export const BUSINESS_STATUS_BATCH_MAX = 50
 
 /** 批量结果里单个实例的条目。 */
@@ -77,7 +77,7 @@ export interface BusinessStatusBatchItem {
   status?: BusinessStatus
 }
 
-/**
+/** 
  * 批量取多个实例的业务域状态（POST /instances/business/status/batch）。
  *
  * 逐实例独立成败：某台 `notFound=true` 不影响其他台。用于实例列表的
@@ -96,7 +96,7 @@ export async function fetchBusinessStatusBatch(
   return data.results ?? []
 }
 
-/**
+/** 
  * 批量域状态的查询 hook。
  *
  * `staleTime` 与单实例保持一致（30s）；按 id 集合排序后作为 queryKey 的一部分，

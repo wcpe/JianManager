@@ -1,11 +1,11 @@
-/**
- * 平台存储的类型（FR-083）。
+/** 
+ * 平台存储的类型。
  *
  * 从应用侧 `api/storage.ts` 抽出：那里混着两个取数 hook，而概览/条目/归档统计
  * 都是纯数据，视图侧要复用。应用侧原文件原样转出，调用点零改动。
  */
 
-/** 一个 FHS 子目录的占用统计与用途（与后端 service.DirUsage 对应，FR-083）。 */
+/** 一个 FHS 子目录的占用统计与用途（与后端 service.DirUsage 对应）。 */
 export interface DirUsage {
   /** 相对数据根、以「/」分隔的路径（如 "var/artifacts"）。 */
   path: string
@@ -18,7 +18,7 @@ export interface DirUsage {
   clearable: boolean
 }
 
-/** 制品库归档冷热分布（FR-045 storage_state 可见，FR-083）。 */
+/** 制品库归档冷热分布（storage_state 可见）。 */
 export interface ArchiveSummary {
   hotCount: number
   archivedCount: number
@@ -28,7 +28,7 @@ export interface ArchiveSummary {
   externalSize: number
 }
 
-/** 平台存储概览（与后端 service.StorageOverview 对应，FR-083）。 */
+/** 平台存储概览（与后端 service.StorageOverview 对应）。 */
 export interface StorageOverview {
   /** 数据根绝对路径（只读展示）。 */
   base: string

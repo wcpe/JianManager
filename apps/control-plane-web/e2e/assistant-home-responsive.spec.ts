@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-520 §5.1 / §8 窄屏布局验收（真浏览器 + 真实小视口）。
+/** 
+ *§5.1 / §8 窄屏布局验收（真浏览器 + 真实小视口）。
  *
  * 为什么必须单列成 e2e：spec 明确要求「窄屏（<768px）单栏，摘要区**不折叠成横向滚动**」，
  * 而这两条都是**布局事实**，jsdom 没有 CSS 引擎、量不出列数与溢出；浏览器探针也改不了视口。
@@ -28,7 +28,7 @@ async function gridTracks(locator: import('@playwright/test').Locator): Promise<
   return raw.trim().split(/\s+/).filter(Boolean).length
 }
 
-test.describe('FR-520 首页响应式布局', () => {
+test.describe('首页响应式布局', () => {
   test('宽屏两栏、窄屏单栏，且窄屏摘要区不横向滚动', async ({ page }) => {
     await login(page)
     await page.goto('/')
@@ -78,7 +78,7 @@ test.describe('FR-520 首页响应式布局', () => {
     expect(pageOverflow, '窄屏整页不应横向滚动').toBe(false)
 
     await page.screenshot({
-      path: '../.tmp/acceptance/FR-520/narrow-375.png',
+      path: '../.tmp/acceptancenarrow-375.png',
       fullPage: true,
     })
   })
@@ -90,7 +90,7 @@ test.describe('FR-520 首页响应式布局', () => {
     const root = page.locator('[data-page="assistant-home"]')
     await expect(root).toBeVisible({ timeout: 20_000 })
 
-    /**
+    /** 
      * 按 y 坐标取视觉顺序。
      *
      * 不按 DOM 顺序断言：grid/flex 可以不改 DOM 就改变视觉顺序，
@@ -133,6 +133,6 @@ test.describe('FR-520 首页响应式布局', () => {
     if (idx('最近会话') >= 0) expect(idx('近期任务')).toBeLessThan(idx('最近会话'))
 
     // 明确截全高：默认视口只有 812px，摘要区在折叠线下方，只截首屏会让人误以为它没渲染。
-    await page.screenshot({ path: '../.tmp/acceptance/FR-520/narrow-full-375.png', fullPage: true })
+    await page.screenshot({ path: '../.tmp/acceptancenarrow-full-375.png', fullPage: true })
   })
 })

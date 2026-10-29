@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-515 Phase C 的运行时用例。
+// Phase C 的运行时用例。
 //
 // 两个刻意的测试口径：
 //   - 模型层全部用**假适配器**（ai.Streamer 的手写实现）注入，不打真实网络——
@@ -136,7 +136,7 @@ func toolCallScript(callID string) streamScript {
 	}
 }
 
-// fakeToolExecutor ToolExecutor 的手写实现（FR-516 在本 FR 里不存在）。
+// fakeToolExecutor ToolExecutor 的手写实现（在本 FR 里不存在）。
 type fakeToolExecutor struct {
 	mu     sync.Mutex
 	calls  []ai.ToolCall

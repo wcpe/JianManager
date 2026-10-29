@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// 配置落盘与读回校验单测（FR-530 §3 / §5 验收）。
+// 配置落盘与读回校验单测（§3 / §5 验收）。
 
 // TestResolveSafePath_RejectsEscape 验证绝对路径与 `..` 穿越被拒绝（验收 3）。
 func TestResolveSafePath_RejectsEscape(t *testing.T) {

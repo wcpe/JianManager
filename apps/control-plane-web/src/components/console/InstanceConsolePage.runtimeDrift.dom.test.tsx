@@ -19,14 +19,14 @@ function collectAdoptRequests() {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/**
- * FR-471：运行态漂移告警与「接管」入口（服务器控制台）。
+/** 
+ *：运行态漂移告警与「接管」入口（服务器控制台）。
  *
  * 种子 creative-plot（id=21）为 STOPPED + runtimeDriftPid>0，代表「面板显示已停止、
  * 磁盘上有 tmux 手工启的进程」这一现实场景。接管是会给该服造成一次真实重启的写操作，
  * 必须经 DangerConfirm 二次确认后才下发。
  */
-describe('InstanceConsolePage 运行态漂移（FR-471）', () => {
+describe('InstanceConsolePage 运行态漂移', () => {
   beforeEach(() => {
     loginMockUser()
   })

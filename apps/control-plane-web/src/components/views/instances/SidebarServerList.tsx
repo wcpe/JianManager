@@ -10,8 +10,8 @@ import type { StoredInstance } from '@/lib/console/server-selection'
 /** 最近打开在侧栏的展示上限（与存储层的 LRU 上限独立）。 */
 export const SIDEBAR_RECENT_LIMIT = 8
 
-/**
- * 侧栏常驻服务器列（FR-293，增强 FR-240）：「选择服务器」按钮下方常驻两区 =
+/** 
+ * 侧栏常驻服务器列（增强）：「选择服务器」按钮下方常驻两区 =
  * 收藏（置顶）+ 最近打开（LRU ≤8，已收藏条目去重不重复出现）。
  * 与选择器弹窗共用同一份存储、经外壳的订阅互通；
  * 行 = 状态点 + 名称（title 含节点名），点击进入该服控制台并计入最近。

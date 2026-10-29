@@ -1,4 +1,4 @@
-/**
+/** 
  * @file SystemUpdatePageView：面板自更新页（`/system-update`）的受控视图——检查结果 / 全网升级进度 /
  *       Worker 二进制缓存三份查询与检查、CP 升级回滚、节点升级回滚、全网升级、预缓存这些写动作
  *       全由应用容器注入；视图只保留弹窗开合与金丝雀草稿这类纯 UI 状态。
@@ -16,8 +16,8 @@
  *         SystemUpdateWorkerAssetRow、SystemUpdateWorkerAssetTarget、SystemUpdateNodePending、SystemUpdateRolloutDraft、
  *         SystemUpdateRollout、SystemUpdateRolloutNode、SystemUpdateCheckResult
  * @sync apps/control-plane-web/src/pages/SystemUpdatePage.tsx、apps/control-plane-web/src/pages/SystemUpdatePage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-081 面板自更新、FR-059 危险确认门禁、FR-110 未配源版本回显、
- *        FR-155 金丝雀分批、FR-182 备份回滚、FR-186 检查结果缓存、FR-190 Worker 二进制缓存）
+ * @since（组件受控化迁包；原页面板自更新危险确认门禁未配源版本回显、
+ *金丝雀分批备份回滚检查结果缓存Worker 二进制缓存）
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -38,7 +38,7 @@ import { formatFileSize } from '@/lib/shared/format-file-size'
 import { copyToClipboard } from '@/lib/shared/clipboard'
 import { formatRelativeTime } from '@/lib/shared/relative-time'
 
-/**
+/** 
  * 单个组件（CP 或某节点）的版本对比结果（本视图所需的最小结构）。
  *
  * 必填性照搬应用侧 `@/api/selfUpdate` 的 `ComponentStatus`：这些字段后端恒给（空值用空串），
@@ -57,11 +57,11 @@ export interface SystemUpdateComponentStatus {
   updateAvailable: boolean
   /** 更新源中存在匹配该组件平台（component+os+arch）的制品。 */
   artifactAvailable: boolean
-  /** 升级前备份的版本（FR-182）：非空时可一键「回滚 v{backupVersion}」。 */
+  /** 升级前备份的版本：非空时可一键「回滚 v{backupVersion}」。 */
   backupVersion?: string
 }
 
-/** Worker 二进制 CP 代理缓存条目（FR-190，本视图所需的最小结构）。 */
+/** Worker 二进制 CP 代理缓存条目（本视图所需的最小结构）。 */
 export interface SystemUpdateWorkerAssetEntry {
   version: string
   os: string
@@ -93,7 +93,7 @@ export interface SystemUpdateNodePending {
   action: 'upgrade' | 'rollback'
 }
 
-/** 全网升级策略草稿（FR-155 金丝雀分批）——输入框原样持有字符串，折算请求体由容器负责。 */
+/** 全网升级策略草稿（金丝雀分批）——输入框原样持有字符串，折算请求体由容器负责。 */
 export interface SystemUpdateRolloutDraft {
   /** 金丝雀节点数输入框原文（空串=不设金丝雀）。 */
   canarySize: string
@@ -124,28 +124,28 @@ export interface SystemUpdateRollout {
   failed: number
   pending: number
   nodes: SystemUpdateRolloutNode[]
-  /** 编排阶段（FR-155）：canary | rolling | completed | aborted。 */
+  /** 编排阶段：canary | rolling | completed | aborted。 */
   phase?: string
-  /** 本次金丝雀节点数（FR-155）。 */
+  /** 本次金丝雀节点数。 */
   canarySize?: number
-  /** 本次剩余分批大小（FR-155，<=0=剩余全部一批）。 */
+  /** 本次剩余分批大小（<=0=剩余全部一批）。 */
   batchSize?: number
-  /** 当前批次（FR-155，1-based，金丝雀=第 1 批）。 */
+  /** 当前批次（1-based，金丝雀=第 1 批）。 */
   currentBatch?: number
 }
 
 /** `GET /self-update/check` 的结果（本视图所需的最小结构）。 */
 export interface SystemUpdateCheckResult {
-  /** 是否已配置更新源；未配源时不展示「最新版本对比」与更新说明，但版本回显照旧（FR-110）。 */
+  /** 是否已配置更新源；未配源时不展示「最新版本对比」与更新说明，但版本回显照旧。 */
   configured: boolean
   latestVersion: string
-  /** 更新说明（GitHub release body 的 markdown，FR-186）。 */
+  /** 更新说明（GitHub release body 的 markdown）。 */
   notes: string
-  /** 更新源标识（FR-175）：github:owner/repo@channel | feed | 空。 */
+  /** 更新源标识：github:owner/repo@channel | feed | 空。 */
   source?: string
   controlPlane: SystemUpdateComponentStatus
   nodes: SystemUpdateComponentStatus[]
-  /** 「上次成功检查」时刻（FR-186，ISO 字符串）；无缓存/未检查时省略。 */
+  /** 「上次成功检查」时刻（ISO 字符串）；无缓存/未检查时省略。 */
   checkedAt?: string
 }
 
@@ -154,7 +154,7 @@ function workerAssetKey(version: string, os: string, arch: string) {
   return `${version}/${os}/${arch}`
 }
 
-/**
+/** 
  * 按「当前 CP 版本」聚合 Worker 缓存行。
  *
  * 两步拼装的原因：制品库可能同时存着多个版本的缓存（旧版本的条目不能遮住当前版本的缺失），
@@ -369,7 +369,7 @@ export function SystemUpdateWorkerAssetsPanel({
           <AlertCircle />
           <AlertDescription>{assetsErrorMessage}</AlertDescription>
         </Alert>
-      )}
+)}
 
       <div className="overflow-x-auto">
         <Table>
@@ -394,19 +394,19 @@ export function SystemUpdateWorkerAssetsPanel({
                 onCache={onCacheAsset}
                 onNotify={onNotify}
               />
-            ))}
+))}
             {rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={8} className="h-14 text-center text-muted-foreground">
                   {t('systemUpdate.workerAssetsEmpty', '暂无节点平台')}
                 </TableCell>
               </TableRow>
-            )}
+)}
           </TableBody>
         </Table>
       </div>
     </section>
-  )
+)
 }
 
 /** 单个节点行属性。 */
@@ -447,9 +447,9 @@ export function SystemUpdateNodeRow({
       <TableCell>
         {node.online ? (
           <Badge variant="outline" className="border-emerald-500/40 text-emerald-600">{t('systemUpdate.online', '在线')}</Badge>
-        ) : (
+) : (
           <Badge variant="outline" className="text-muted-foreground">{t('systemUpdate.offline', '离线')}</Badge>
-        )}
+)}
       </TableCell>
       <TableCell className="font-mono text-xs">{node.os}/{node.arch}</TableCell>
       <TableCell className="font-mono text-xs">{node.currentVersion || '-'}</TableCell>
@@ -483,7 +483,7 @@ export function SystemUpdateNodeRow({
           </Button>
         </div>
 
-        {/* 危险动作边界（FR-059）：scope=platform、无 confirmText、不在途标记；
+        {/* 危险动作边界：scope=platform、无 confirmText、不在途标记；
             角色门禁由 DangerConfirm 自行读登录态判定。 */}
         <DangerConfirm
           open={confirm}
@@ -615,19 +615,19 @@ export function SystemUpdateNodesSection({
                 onUpgrade={onUpgradeNode}
                 onRollback={onRollbackNode}
               />
-            ))}
+))}
             {nodes.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">
                   {t('systemUpdate.noNodes', '暂无节点')}
                 </TableCell>
               </TableRow>
-            )}
+)}
           </TableBody>
         </Table>
       </div>
     </div>
-  )
+)
 }
 
 /** Control Plane 自更新卡片属性。 */
@@ -698,7 +698,7 @@ export function SystemUpdateControlPlaneCard({
         </div>
       </div>
 
-      {/* 危险动作边界（FR-059）：scope=platform + confirmText=目标版本号（须逐字输入）。
+      {/* 危险动作边界：scope=platform + confirmText=目标版本号（须逐字输入）。
           角色门禁由 DangerConfirm 自行读登录态判定。 */}
       <DangerConfirm
         open={confirm}
@@ -737,7 +737,7 @@ export interface SystemUpdateRolloutPhaseBadgeProps {
   phase: string
 }
 
-/** rollout 编排阶段徽章（FR-155）：金丝雀 / 滚动 / 已中止 / 已完成。 */
+/** rollout 编排阶段徽章：金丝雀 / 滚动 / 已中止 / 已完成。 */
 export function SystemUpdateRolloutPhaseBadge({ phase }: SystemUpdateRolloutPhaseBadgeProps) {
   const { t } = useTranslation()
   switch (phase) {
@@ -819,7 +819,7 @@ export function SystemUpdateRolloutPanel({ rollout }: SystemUpdateRolloutPanelPr
         <span className="text-emerald-600">{t('systemUpdate.rolloutSucceeded', '成功 {{n}}', { n: rollout.succeeded })}</span>
         <span className="text-destructive">{t('systemUpdate.rolloutFailedCount', '失败 {{n}}', { n: rollout.failed })}</span>
         <span>{t('systemUpdate.rolloutPending', '待处理 {{n}}', { n: rollout.pending })}</span>
-        {/* 金丝雀分批回显（FR-155）：仅在设了金丝雀或分批时展示，避免污染原「串行全部」的简洁面板。 */}
+        {/* 金丝雀分批回显：仅在设了金丝雀或分批时展示，避免污染原「串行全部」的简洁面板。 */}
         {!!rollout.canarySize && (
           <span>{t('systemUpdate.rolloutCanary', '金丝雀 {{n}}', { n: rollout.canarySize })}</span>
         )}
@@ -856,7 +856,7 @@ export function SystemUpdateRolloutPanel({ rollout }: SystemUpdateRolloutPanelPr
   )
 }
 
-/**
+/** 
  * 受控边界（ADR-103 a 范式）：**不取数、不发请求、不弹 toast**。
  * - 三份查询的结果与错误态经 props 注入（容器调 `useSelfUpdateCheck` / `useRollout` / `useWorkerAssets`）；
  *   错误文案由容器从 axios 错误里取后端 message 后注入，故视图只认「有没有错误」。
@@ -898,7 +898,7 @@ export interface SystemUpdatePageViewProps {
   onUpgradeNode: (nodeId: number) => void
   /** 单节点回滚上报。 */
   onRollbackNode: (nodeId: number) => void
-  /**
+  /** 
    * 全网升级上报：草稿原样传出（空串=不设该项），折算请求体在容器
    * （`Math.max(0, Number(x))` 与「未设金丝雀则不传 abortOnCanaryFailure」）。
    */
@@ -919,12 +919,12 @@ export interface SystemUpdatePageViewProps {
   onNotify?: (kind: 'success' | 'error', message: string) => void
 }
 
-/**
- * 面板自更新页（FR-081，见 ADR-020）。
+/** 
+ * 面板自更新页（见 ADR-020）。
  * 平台管理员可检查更新（CP 自身 + 各节点版本对比）、CP 自更新、单节点升级、全网逐节点编排。
  * 入口在侧栏「设置」组，仅平台管理员可见；容器侧角色兜底，后端 RBAC 同样强制。
- * 升级为危险操作（二进制热替换 + 平滑重启），统一走 DangerConfirm + scope=platform 二次确认（FR-059）。
- * i18n（FR-016）+ 暗/亮色（FR-026，全程用主题 token）。
+ * 升级为危险操作（二进制热替换 + 平滑重启），统一走 DangerConfirm + scope=platform 二次确认。
+ * i18n+ 暗/亮色（全程用主题 token）。
  */
 export function SystemUpdatePageView({
   isPlatformAdmin,
@@ -949,7 +949,7 @@ export function SystemUpdatePageView({
   onNotify,
 }: SystemUpdatePageViewProps) {
   const { t } = useTranslation()
-  // 全网升级两步走：先开配置弹窗（金丝雀数/每批数/失败即中止，FR-155），确认后再走 DangerConfirm 二次确认。
+  // 全网升级两步走：先开配置弹窗（金丝雀数/每批数/失败即中止），确认后再走 DangerConfirm 二次确认。
   const [configAll, setConfigAll] = useState(false)
   const [confirmAll, setConfirmAll] = useState(false)
   const [canarySize, setCanarySize] = useState('')
@@ -1027,7 +1027,7 @@ export function SystemUpdatePageView({
         </Alert>
       )}
 
-      {/* 未配源也渲染当前版本（后端 CheckUpdate 无条件返回 CP+各节点版本，FR-110）；
+      {/* 未配源也渲染当前版本（后端 CheckUpdate 无条件返回 CP+各节点版本）；
           仅「最新版本对比」与升级动作依赖配源——配源时显示，未配源时按钮自然禁用。 */}
       {result && (
         <>
@@ -1081,7 +1081,7 @@ export function SystemUpdatePageView({
 
       {rollout && rollout.state !== 'idle' && <SystemUpdateRolloutPanel rollout={rollout} />}
 
-      {/* 全网升级第一步：金丝雀分批配置（FR-155）。留空即无金丝雀/剩余一批，等价原串行全部。 */}
+      {/* 全网升级第一步：金丝雀分批配置。留空即无金丝雀/剩余一批，等价原串行全部。 */}
       <Dialog open={configAll} onOpenChange={(v) => { if (!v) setConfigAll(false) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -1135,7 +1135,7 @@ export function SystemUpdatePageView({
         </DialogContent>
       </Dialog>
 
-      {/* 危险动作边界（FR-059，逐字保持）：scope=platform、无 confirmText（全网升级以「全部在线节点」为对象，
+      {/* 危险动作边界（逐字保持）：scope=platform、无 confirmText（全网升级以「全部在线节点」为对象，
           没有可逐字输入的单一名），开合时机与迁包前一致（确认即关窗，再交由容器发起）。 */}
       <DangerConfirm
         open={confirmAll}

@@ -9,13 +9,13 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import BotsPage from './BotsPage'
 
-/**
- * BotsPage 强断言（FR-209 域簇验收三条）：
+/** 
+ * BotsPage 强断言（域簇验收三条）：
  *  ① 渲染出 seed 派生的分组（含 seed bot 名）；
  *  ② 通过新建对话框创建 Bot → 实例分组计数联动 +1；
  *  ③ 注入 500 → 页面显示错误态（不崩溃、不整页刷新）。
  *
- * 跨域依赖（/nodes 归 FR-200、/instances 归 FR-201）本域不定义，改在测试内用 server.use
+ * 跨域依赖（/nodes 归instances 归）本域不定义，改在测试内用 server.use
  * 临时桩注入（test-local，确定性，且对最终聚合的真实 instances/nodes handler 取优先级），
  * 终端 WS 回显属真机项（jsdom 不稳），不在本测试范围 —— 只测 bots REST。
  */
@@ -150,7 +150,7 @@ describe('BotsPage（mock 假后端）', () => {
   it('⑤ 创建并启动压测会话，展示聚合状态分布', async () => {
     loginMockUser()
     stubCrossDomain()
-    // FR-371 后会话列表在「压测会话」tab；舰队「压测」仍可创建，创建后切 tab 验收列表。
+    // 后会话列表在「压测会话」tab；舰队「压测」仍可创建，创建后切 tab 验收列表。
     renderWithProviders(<BotsPage />, { route: '/bots' })
 
     await userEvent.click(await screen.findByRole('button', { name: '压测' }))

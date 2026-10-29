@@ -174,7 +174,7 @@ func TestRun_WritesYMLRegistersPersists(t *testing.T) {
 	assert.Equal(t, "uuid-123", loaded.NodeUUID)
 	assert.Equal(t, "secret-xyz", loaded.NodeSecret)
 	assert.Equal(t, "edge-7", loaded.NodeName)
-	// CP 下发的 WS 令牌密钥一并持久化（FR-275，见 ADR-061）。
+	// CP 下发的 WS 令牌密钥一并持久化（见 ADR-061）。
 	assert.Equal(t, "ws-cp-secret", loaded.WSTokenSecret)
 
 	// 身份文件 0600（POSIX 才校验权限位）。

@@ -8,8 +8,8 @@ import { DistPanel, ErrorPanel, LinkableDistPanel, TrendCard, distBuckets, fmtBy
 import type { RuntimeLink } from '@/components/views/client-dist/OpsShared'
 import { KPI_I18N, activeClientsHintKey, clientDistEmptyI18nKey, formatKpiRate, resolveActiveClients, resolveClientDistEmptyKind, resolveRequestRates } from '@/lib/client-dist/client-dist-kpi'
 
-/**
- * 页面 B · 统计 Tab（FR-430，迁自旧监控页 `StatisticsTab`）。
+/** 
+ * 页面 B · 统计 Tab（迁自旧监控页 `StatisticsTab`）。
  * 展示**跨频道**请求侧 KPI：清单/制品拉取、下载字节、活跃客户端、请求成功/失败率 + 趋势与分布。
  * 请求成功率 ≠ 更新成功率（后者在「机器 / 客户端」Tab）。
  */

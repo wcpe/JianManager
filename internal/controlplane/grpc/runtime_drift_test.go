@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// newDriftFixture 准备隔离内存库 + 处理器（FR-471 心跳漂移消费）。
+// newDriftFixture 准备隔离内存库 + 处理器（心跳漂移消费）。
 func newDriftFixture(t *testing.T) (*ControlPlaneHandler, *gorm.DB, *model.Node) {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
@@ -97,7 +97,7 @@ func TestApplyRuntimeDrift_RunningStateClears(t *testing.T) {
 func TestApplyRuntimeDrift_IgnoresUnknownInstance(t *testing.T) {
 	h, db, node := newDriftFixture(t)
 
-	// 不 panic、不报错即可（applyRuntimeDrift 无返回值；此处断言不越界到 FR-326 孤儿语义）。
+	// 不 panic、不报错即可（applyRuntimeDrift 无返回值；此处断言不越界到孤儿语义）。
 	h.applyRuntimeDrift([]*workerpb.InstanceState{{
 		InstanceUuid:   "ghost-uuid",
 		State:          string(model.InstanceStatusStopped),
@@ -107,7 +107,7 @@ func TestApplyRuntimeDrift_IgnoresUnknownInstance(t *testing.T) {
 
 	var count int64
 	require.NoError(t, db.Model(&model.Instance{}).Where("uuid = ?", "ghost-uuid").Count(&count).Error)
-	require.Zero(t, count, "不得为未知 UUID 创建实例（孤儿语义归 FR-326）")
+	require.Zero(t, count, "不得为未知 UUID 创建实例（孤儿语义归）")
 	_ = node
 }
 

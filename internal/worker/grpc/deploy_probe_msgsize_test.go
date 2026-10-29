@@ -23,7 +23,7 @@ import (
 //
 // 既有 TestDeployServerProbe 直接在进程内调用 handler，不经 gRPC 编解码，因此覆盖不到该上限——
 // 这正是真机建服/建代理时内嵌探针部署报 ResourceExhausted（7.6MB vs 4MB）的验证盲区。
-// 本用例走 bufconn + 生产 ServerOptions() 打通真实传输，把该盲区下沉为自动化回归（FR-010/FR-114）。
+// 本用例走 bufconn + 生产 ServerOptions() 打通真实传输，把该盲区下沉为自动化回归。
 func TestDeployServerProbe_OverGRPCAllowsLargePayload(t *testing.T) {
 	tmp := t.TempDir()
 	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)

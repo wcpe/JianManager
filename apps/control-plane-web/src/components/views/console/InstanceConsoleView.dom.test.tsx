@@ -6,7 +6,7 @@ import type { ComponentProps, ReactNode } from 'react'
 import { InstanceConsoleView } from '@/components/views/console/InstanceConsoleView'
 import type { ConsoleHistoryState } from '@/lib/console/console-history'
 
-/**
+/** 
  * 实例控制台视图 · 受控视图测（ADR-103）。
  *
  * 补的是**展示契约**：连接占位、搜索面板开关、命令栏禁用口径、输出区与命令栏并存。
@@ -85,7 +85,7 @@ function renderView(props: Partial<ComponentProps<typeof InstanceConsoleView>> =
   return { ...merged, onNotify, container }
 }
 
-describe('InstanceConsoleView（FR-415 实例控制台受控视图）', () => {
+describe('InstanceConsoleView（实例控制台受控视图）', () => {
   it('token 加载中显示连接占位，不渲染命令栏。', () => {
     renderView({ isLoading: true })
     expect(screen.getByText('正在连接…')).toBeInTheDocument()

@@ -19,7 +19,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 连通性测试超时：测试本身必须快失败，避免「先测再下载」的测试反而长时间挂起（FR-229）。
+// 连通性测试超时：测试本身必须快失败，避免「先测再下载」的测试反而长时间挂起。
 const (
 	httpReachabilityTimeout = 10 * time.Second
 	nodePingTimeout         = 5 * time.Second
@@ -44,8 +44,8 @@ var (
 	}
 )
 
-// DiagnosticsService 提供「先测后用」的连通性探测（FR-229）：
-//   - 出站 HTTP 可达性：经 CP 当前出站客户端（含已配置代理，FR-185）GET 目标 URL，
+// DiagnosticsService 提供「先测后用」的连通性探测：
+// 出站 HTTP 可达性：经 CP 当前出站客户端（含已配置代理）GET 目标 URL，
 //     供「代理设置测试」与「JDK 下载源测试」复用——用户先确认能通再下载，避免下载长卡死。
 //   - 节点存活：经 gRPC 调用 Worker 轻量 GetVersion 主动探活（不读心跳缓存），
 //     供 JDK 一键下载前「测试节点是否存活」，避免对离线/卡顿节点发起会卡死的下载。
@@ -63,7 +63,7 @@ func NewDiagnosticsService(db *gorm.DB, pool *cpgrpc.ClientPool) *DiagnosticsSer
 	return &DiagnosticsService{db: db, pool: pool}
 }
 
-// SetHTTPClientProvider 注入「取当前出站 *http.Client」的提供者（FR-185 Provider.Client），
+// SetHTTPClientProvider 注入「取当前出站 *http.Client」的提供者（Provider.Client），
 // 使测试随运行时代理变更即时生效（与各下载点一致）。
 func (s *DiagnosticsService) SetHTTPClientProvider(fn func() *http.Client) {
 	s.outbound = fn

@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// setupRevealRouter 建一个含客户端分发路由的最小引擎，按 withEnc 决定频道服务是否配可逆加密器（FR-192）。
+// setupRevealRouter 建一个含客户端分发路由的最小引擎，按 withEnc 决定频道服务是否配可逆加密器。
 // 返回引擎与配了（或没配）加密器的频道服务（供直接建带 KeyEnc 的密钥）。
 func setupRevealRouter(t *testing.T, db *gorm.DB, withEnc bool) (*gin.Engine, *service.ClientChannelService) {
 	t.Helper()

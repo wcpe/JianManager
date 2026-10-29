@@ -47,8 +47,8 @@ export interface StoragePageProps {
   notify: StorageNotice
 }
 
-/**
- * 平台存储资源管理器（FR-083）：对 CP 侧数据根（ADR-010 FHS 布局）只读浏览 + 占用统计
+/** 
+ * 平台存储资源管理器：对 CP 侧数据根（ADR-010 FHS 布局）只读浏览 + 占用统计
  * + 制品归档冷热可见 + cache 受控清理（二次确认）。
  *
  * 数据根是平台级资源（仅 CP 读写，见架构不变量），故整页仅平台管理员可见，后端 RBAC 同样收敛。
@@ -69,11 +69,11 @@ export default function StoragePage({
   notify,
 }: StoragePageProps) {
   const { t } = useTranslation()
-  // FR-378：FileBrowser 不走 react-query，清理 cache 后靠 refreshKey 重拉树。
+  // FileBrowser 不走 react-query，清理 cache 后靠 refreshKey 重拉树。
   const [browseRefreshKey, setBrowseRefreshKey] = useState(0)
   const bumpBrowse = () => setBrowseRefreshKey((k) => k + 1)
 
-  /**
+  /** 
    * 三态（非管理员 / 加载中 / 失败）共用的页头。
    *
    * 就绪态走 `PageShell` + `PageHeader`（标题 + 描述），三态原先直接 return 裸 `<p>`——
@@ -295,7 +295,7 @@ function DirRow({
   )
 }
 
-/** cache 受控清理按钮 + 二次确认（FR-059，平台范围）。 */
+/** cache 受控清理按钮 + 二次确认（平台范围）。 */
 function ClearCacheButton({
   size,
   fileCount,
@@ -320,7 +320,7 @@ function ClearCacheButton({
     try {
       const removed = await onClear()
       notify('success', t('storage.cacheCleared', { count: removed }))
-      // 清理后占用变化：刷新概览由外壳负责，这里通知浏览壳重拉（FR-378 FileBrowser）。
+      // 清理后占用变化：刷新概览由外壳负责，这里通知浏览壳重拉（FileBrowser）。
       onCleared?.()
     } catch {
       notify('error', t('storage.clearFailed'))
@@ -409,8 +409,8 @@ function ArchiveSection({ data }: { data: StorageOverview }) {
 
 /* ============================ 只读文件浏览 ============================ */
 
-/**
- * 数据根浏览（FR-378）：经 UnifiedExplorerShell + storage FileBrowserSource，
+/** 
+ * 数据根浏览：经 UnifiedExplorerShell + storage FileBrowserSource，
  * 与实例/分发共享只读浏览器壳；cache 清理仍在页级 DangerConfirm。
  */
 function BrowserSection({

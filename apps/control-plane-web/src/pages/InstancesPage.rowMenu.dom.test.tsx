@@ -6,8 +6,8 @@ import { renderWithProviders } from '@/test/render'
 import type { InstanceInfo } from '@/api/instances'
 import { InstanceRowMenu } from './InstancesPage'
 
-/**
- * FR-445/FR-448 回归：行菜单「克隆」的显隐判据是能力画像里的 `clone` 能力——
+/** 
+ *回归：行菜单「克隆」的显隐判据是能力画像里的 `clone` 能力——
  * **既不得**用 `role === 'backend'` 硬编码，**也不得**用 `mcSemantics`（MC 世界语义）当门控
  * （proxy 无世界语义 ≠ 不可克隆）。
  */
@@ -39,7 +39,7 @@ async function openMenu() {
 
 const noop = () => {}
 
-describe('InstanceRowMenu 克隆项门控（FR-445）', () => {
+describe('InstanceRowMenu 克隆项门控', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

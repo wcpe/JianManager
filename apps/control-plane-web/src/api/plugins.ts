@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import i18n from '@/i18n'
 import api from '@/api/client'
 
-/**
+/** 
  * 插件契约已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名，调用点无需改动。
  */
 export type { PluginInfo, PluginBatchDeployRequest } from '@/lib/plugins/plugin-contracts'
@@ -186,7 +186,7 @@ export function useTogglePlugin(instanceId: number) {
   })
 }
 
-/** 从制品库批量部署插件到多个实例（FR-053）。 */
+/** 从制品库批量部署插件到多个实例。 */
 export function usePluginBatchDeploy() {
   const qc = useQueryClient()
   return useMutation({

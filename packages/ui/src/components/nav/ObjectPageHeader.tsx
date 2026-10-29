@@ -5,8 +5,8 @@ import { cn } from '../../lib/utils'
 import type { StatusLevel } from '../../lib/threshold'
 import { StatusBadge } from '../status-badge'
 
-/**
- * 对象页头（FR-502 阶段 4）：实例详情与节点详情共用的同一个对象身份区。
+/** 
+ * 对象页头（阶段 4）：实例详情与节点详情共用的同一个对象身份区。
  *
  * 为什么只有一个组件：设计规则明确要求「节点和实例详情使用同一对象头」——对象头只出现一处，
  * 自上而下固定为「紧凑面包屑 → 对象名/状态/元信息/针对本对象的操作 → 精简指标条 → 工具导航」
@@ -51,7 +51,7 @@ export interface ObjectTool {
   /** 当前工具；以 2px 主色下划线标记。 */
   active?: boolean
   onSelect?: () => void
-  /**
+  /** 
    * 分组分隔符：渲染为一条竖向细线，而不是可点的工具项。
    *
    * 【为什么加在 ObjectTool 上而不是新建 groups 属性】nodes 详情页有 9 个工具，
@@ -62,7 +62,7 @@ export interface ObjectTool {
   separator?: true
 }
 
-/**
+/** 
  * 色调 → 状态徽章等级。
  *
  * 复用 StatusBadge 而不是自己写一份色表：状态色是设计系统的公共词汇，
@@ -119,7 +119,7 @@ export function ObjectPageHeader({
   note?: React.ReactNode
   /** 工具导航项。 */
   tools?: ObjectTool[]
-  /**
+  /** 
    * 标题右侧的附加内容（如「切换对象」的下拉选择器）。
    *
    * 【为什么需要这个插槽】云控制台的习惯是「名称 + 下拉切换」在同一行，
@@ -127,7 +127,7 @@ export function ObjectPageHeader({
    * 用独立插槽而不是塞进 `title`，是为了避免继承 h1 的 `text-xl font-bold` 样式。
    */
   titleAdornment?: React.ReactNode
-  /**
+  /** 
    * 工具导航（tab 行）右端的附加内容（如「⋯」更多操作）。
    *
    * 【为什么放在 tab 行而不是标题行】低频且含破坏性动作的入口不该占据头部主位；
@@ -137,13 +137,13 @@ export function ObjectPageHeader({
   toolsActions?: React.ReactNode
   /** 工具导航的可访问名（「实例工具」/「节点工具」）。 */
   toolsLabel?: string
-  /**
+  /** 
    * 链接导航回调。传入后，带 `to` 的面包屑会拦截默认跳转并回调，
    * 让路由层（react-router 等）接管；不传则退化为原生 `<a href>`。
    * 组件库不依赖具体路由实现，这是两者之间的唯一接缝。
    */
   onNavigate?: (to: string) => void
-  /**
+  /** 
    * 实时区标记：`true` 时整块页头挂 `aria-live="polite"`。
    *
    * 对象详情页的状态/指标可能由推送驱动（如压测会话的 SSE 流），值变化时需要播报。

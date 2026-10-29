@@ -24,7 +24,7 @@ const SchemaVersion = "1"
 
 // sampleRing 是持久化耗时的采样环容量（真机 P50/P95 验证用，见 spec §3.3）。
 //
-// 为什么从 512 提到 4096（FR-498 切分改造的连带项）：采样环的消费者（apps/worker 的
+// 为什么从 512 提到 4096（切分改造的连带项）：采样环的消费者（apps/worker 的
 // 分钟打点）按「样本身份游标」累计窗口增量，前提是「单窗口新增样本数 < 环容量」。
 // 512 是按「一周期一采样」估的（60 源实测约 2.5 周期/s ⇒ 窗口 150 样本）；切分后一次周期
 // 会产生多个提交单元采样（60 源 × 60 行/s 实测约 2 单元/周期 ⇒ 约 400 样本/分钟），
@@ -74,7 +74,7 @@ const (
 
 // DefaultCommitMaxRows / DefaultCommitMinRows / DefaultCommitTarget 是提交单元预算的默认值。
 //
-// 取值依据（FR-498 实测，60 源 × 60 行/s，真进程夹具 + 独立复刻探针）：
+// 取值依据（实测，60 源 × 60 行/s，真进程夹具 + 独立复刻探针）：
 //   - 行成本近似线性且可测——写入 26.5 µs/行、删除 29.1 µs/行（批量前口径；批量化后单提交单元
 //     p50 降到 ≈13 µs/行）；
 //   - **MaxRows=512**：同夹具实测单提交单元 p50 ≈ 12.5 ms、p95 ≈ 40.6 ms；1024 行进制的 p95
@@ -101,7 +101,7 @@ const (
 
 // CommitBudget 是**单个提交单元**（一次 IMMEDIATE 事务）的资源预算：行数上界 + 耗时上界。
 //
-// 为什么需要（FR-498 实测，60 源）：跨源并发（8）把最多 8 个源的批次合并成一次 ApplyScoped，
+// 为什么需要（实测，60 源）：跨源并发（8）把最多 8 个源的批次合并成一次 ApplyScoped，
 // 于是同一个 SQLite 事务要写上万行，单次持久化 p95 随负载线性恶化：
 // 66–73 ms @1.8k 行/s → 198–228 ms @3.6k → 348–366 ms @5.4k，是 60 源下**唯一越过**
 // 「单次持久化 ≤50 ms」验收线的指标。既然行成本近似线性，把**事务规模**限住即可把耗时限住。
@@ -200,7 +200,7 @@ type pendingRow struct {
 
 // Sample 是**一个提交单元**（一次 IMMEDIATE 事务）的耗时采样。
 //
-// 口径（FR-498 切分改造）：一次 ApplyScoped 可能被切成多个提交单元，每个单元一条采样。
+// 口径（切分改造）：一次 ApplyScoped 可能被切成多个提交单元，每个单元一条采样。
 // 口径改变的理由见 ApplyScoped 的注释：提交单元 = 原子单元 = 持写锁单元，验收线
 // 「单次持久化 ≤50 ms」约束的就是这个单元。
 type Sample struct {
@@ -395,7 +395,7 @@ func Open(path string) (*Store, error) {
 	return OpenWithBudget(path, DefaultCommitBudget())
 }
 
-// OpenWithBudget 与 Open 相同，但由调用方指定提交单元预算（FR-498：配置键 log_index.persist.*）。
+// OpenWithBudget 与 Open 相同，但由调用方指定提交单元预算（：配置键 log_index.persist.*）。
 // 非法值经 Normalized 收敛，绝不因为配置误写而让切分失效（退化成单事务写全部）。
 func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
@@ -824,8 +824,8 @@ func (s *Store) load(ctx context.Context) (State, error) {
 		if err != nil {
 			return State{}, fmt.Errorf("stateindex: 读取 %s 失败: %w", spec.name, err)
 		}
-		/*
-			【FR-486 范围③ 优化：复用扫描缓冲区】
+		/* 
+			【范围③ 优化：复用扫描缓冲区】
 			原实现每行调一次 scanRow，它在堆上新建 `values` + `targets` 两个 slice
 			（100k 行 = 20 万次分配）。而 appendRow 只读值、asText 已是 string 拷贝，
 			并不持有这个 slice——因此可以在整张表内复用一个缓冲区。
@@ -903,7 +903,7 @@ func (s *Store) Apply(desired State) (Stats, error) {
 // 因此 scopedTables 中的所有行都不参与本轮；nil 才是全量。二者必须区分，
 // 否则「空变更批次」会被误当成全量重写。
 //
-// # 提交单元切分（FR-498 P0：单次持久化 ≤50 ms）
+// # 提交单元切分（P0：单次持久化 ≤50 ms）
 //
 // 一次 ApplyScoped = 一个持久化周期，周期内**不再只开一个事务**：差异算好之后，
 // 变更行按「行数预算 + 耗时硬上界」切成若干**提交单元**，每个单元一个 IMMEDIATE 事务
@@ -926,7 +926,7 @@ func (s *Store) Apply(desired State) (Stats, error) {
 //
 // 方向是安全的：position 偏旧 ⇒ 重启后 tailer 从更早的 durable/read 位置续读（
 // acquire/tailer.go 的 cursor resume），已落库的 WAL 行与重读的区间重叠 ⇒ 至多产生**重复**
-// 投递（与 FR-497「允许重复」同口径，且这正是崩后既有行为）；反方向（水位先进、WAL 行没进）
+// 投递（与「允许重复」同口径，且这正是崩后既有行为）；反方向（水位先进、WAL 行没进）
 // 才会丢事件，而 position 最后落库恰好排除了它。删除按表倒序（子表在前）不受影响，
 // 单元边界只会落在排序序列中间，故「删父表前先删子表」的顺序全局保持。
 func (s *Store) ApplyScoped(desired State, owners []string) (Stats, error) {
@@ -1715,7 +1715,7 @@ func scopeState(st State, owned map[string]struct{}) State {
 
 // applyTableDeletes 删除一张表的一段陈旧行：同表连续的主键合并成一条多值 DELETE。
 //
-// 为什么要批量（FR-498 实测）：原实现是「逐行一条 DELETE + 一次 ExecContext」，真机删除单位
+// 为什么要批量（实测）：原实现是「逐行一条 DELETE + 一次 ExecContext」，真机删除单位
 // 成本 29.1 µs/行，而删除量在稳态与写入量同量级（60 源实测删除/写入 ≈ 0.97）——每周期上千次
 // 语句解析/规划全花在这里。合并只改变「一条语句删几行」，不改变删哪些行。
 //

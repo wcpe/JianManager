@@ -1,12 +1,12 @@
 import type { NodeInfo } from './node-types'
 import type { StatusLevel } from '@jianmanager/ui/lib/threshold'
 
-/**
- * 节点管理页（FR-177 主从双栏）左栏列表的纯逻辑：状态等级映射、搜索筛选、选中态解析、
+/** 
+ * 节点管理页（主从双栏）左栏列表的纯逻辑：状态等级映射、搜索筛选、选中态解析、
  * 收缩态持久化。抽成无 React 依赖的纯函数便于单测（列表筛选/选中/收缩态）。
  */
 
-/** 左栏收缩态持久键（FR-177：窄图标轨收缩态跨会话保留，localStorage）。 */
+/** 左栏收缩态持久键（：窄图标轨收缩态跨会话保留，localStorage）。 */
 export const NODE_LIST_COLLAPSED_KEY = 'nodesPage.listCollapsed'
 
 /** 最小持久存储接口（localStorage 的子集），便于单测注入内存实现（同 config-explorer/favorites）。 */
@@ -30,7 +30,7 @@ export function nodeStatusLevel(status: number): StatusLevel {
 /** 节点状态筛选键（用户提出的「节点多了要能把出问题的机器一把捞出来」）。 */
 export type NodeStatusFilter = 'all' | 'online' | 'offline' | 'maintenance'
 
-/**
+/** 
  * 按搜索词 + 状态筛选节点。
  *
  * 【为什么补状态维度】此前只按名称/host 匹配。运维最高频的动作是「把所有离线节点找出来」——
@@ -70,8 +70,8 @@ export function matchesStatus(node: NodeInfo, status: NodeStatusFilter): boolean
   }
 }
 
-/**
- * 把「当前选中节点 id」解析为实时列表中的最新节点对象（FR-177 右栏即时更新）。
+/** 
+ * 把「当前选中节点 id」解析为实时列表中的最新节点对象（右栏即时更新）。
  * id 为 null（未选）或命中不到（节点已被下线）时返回 null，右栏回落空态。
  * 始终返回实时列表里的对象，保证右栏仪表/状态随轮询刷新而非用陈旧选中快照。
  */
@@ -86,7 +86,7 @@ export function loadNodeListCollapsed(storage: KVStorage | null = defaultStorage
   return storage.getItem(NODE_LIST_COLLAPSED_KEY) === '1'
 }
 
-/** 持久化左栏收缩态（FR-177）。 */
+/** 持久化左栏收缩态。 */
 export function persistNodeListCollapsed(
   collapsed: boolean,
   storage: KVStorage | null = defaultStorage(),

@@ -8,14 +8,14 @@ import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import EditorShortcutsHelp from '@/components/views/explorer/editor/EditorShortcutsHelp'
 import type { ConfigReadResult, CrossCheckIssue, FieldSchema, ModelSchema, ValidationIssue } from '@/lib/config-explorer/config-contracts'
 
-/**
- * 单文件配置编辑器（FR-071）· 受控视图（ADR-103）。
+/** 
+ * 单文件配置编辑器· 受控视图（ADR-103）。
  *
- * 在共享资源管理器（FR-070）的「配置」语义下取代默认 CodeEditor 面板：
- * - schema 文件：文本 ↔ 表单双模式（FR-031 保留），表单走字段级补丁（保留注释）；
+ * 在共享资源管理器的「配置」语义下取代默认 CodeEditor 面板：
+ * - schema 文件：文本 ↔ 表单双模式（保留），表单走字段级补丁（保留注释）；
  * - 非 schema 文件：纯文本 + 多格式高亮（复用共享 CodeEditor）；
- * - Ctrl+S（CodeEditor Mod-s）/保存按钮：写入并生成**配置版本**（FR-031），保存后通知资源管理器刷新；
- * - 跨文件一致性校验（FR-031）保留。
+ * - Ctrl+S（CodeEditor Mod-s）/保存按钮：写入并生成**配置版本**，保存后通知资源管理器刷新；
+ * - 跨文件一致性校验保留。
  *
  * 历史版本（diff/回滚）经资源管理器的配置版本抽屉，故本组件只负责编辑与保存。
  * 取数、写入与编辑器本体全部由 props 注入：本视图不触达 api / store / toast。
@@ -33,9 +33,9 @@ export interface ConfigFileEditorProps {
   onOpenVersions: () => void
   /** 内部 dirty 变化时上报，供资源管理器切换/关闭守卫判断（BUG-018 #36）。 */
   onDirtyChange: (dirty: boolean) => void
-  /** 搜索命中跳转目标行（1 起，FR-074）；未定位时 undefined。 */
+  /** 搜索命中跳转目标行（1 起）；未定位时 undefined。 */
   gotoLine?: number
-  /** 定位 nonce：变化即重触发定位（同一行再次点击也能重跳，FR-074）。 */
+  /** 定位 nonce：变化即重触发定位（同一行再次点击也能重跳）。 */
   gotoNonce?: number
   /** 读取结果（应用侧 `useConfigRead`）。 */
   readData?: ConfigReadResult
@@ -187,8 +187,8 @@ export function ConfigFileEditor({
   const formInvalid = mode === 'form' && Object.keys(formErrors).length > 0
   const saving = isSaving
 
-  // 搜索命中定位（FR-074）：行定位只在文本模式有意义，命中到来时强制切回文本模式
-  //（本组件跨文件复用同一实例，上一个文件可能停留在表单模式）。
+  // 搜索命中定位：行定位只在文本模式有意义，命中到来时强制切回文本模式
+  // （本组件跨文件复用同一实例，上一个文件可能停留在表单模式）。
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 命中跳转到来时切模式，属合法同步
     if (gotoLine && gotoLine > 0) setMode('text')

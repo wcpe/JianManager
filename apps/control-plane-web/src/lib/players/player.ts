@@ -1,5 +1,5 @@
-/**
- * 玩家治理的核心契约（FR-054 / FR-067）。
+/** 
+ * 玩家治理的核心契约。
  *
  * 归包理由：实例玩家分区与玩家独立页都要读它，应用侧 API 层改从包 import，
  * 避免两处各写一份。
@@ -12,7 +12,7 @@ export interface OnlinePlayer {
   instanceName: string
 }
 
-/** 单个后端子服的探针可用性（优雅降级提示，FR-067）。 */
+/** 单个后端子服的探针可用性（优雅降级提示）。 */
 export interface BackendStatus {
   instanceId: number
   instanceName: string
@@ -36,7 +36,7 @@ export interface PlayerActionResult {
   results: { instanceId: number; instanceName: string; ok: boolean; output?: string; error?: string }[]
 }
 
-/** 封禁记录（FR-054）。 */
+/** 封禁记录。 */
 export interface BanRecord {
   id: number
   uuid: string

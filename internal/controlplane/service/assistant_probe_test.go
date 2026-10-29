@@ -18,7 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 探测与真实测试（FR-514 spec §8）。
+// 探测与真实测试（spec §8）。
 //
 // 这一组用例要守住的是几个「错了会给出误导性结论」的地方：
 //   - 上游拒绝（401/429/5xx）必须分类正确，否则管理员查错方向；

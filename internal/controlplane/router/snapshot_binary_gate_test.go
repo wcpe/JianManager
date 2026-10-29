@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// B-2：快照 / 二进制版本写端点的**权限树节点**门禁测试（FR-466 §2.5、FR-468 §2.6）。
+// B-2：快照 / 二进制版本写端点的**权限树节点**门禁测试（§2.5§2.6）。
 //
 // 缺陷现场：这五个写 handler 只挂在 permRead("instance.read") 组下，handler 内仅做
 // canManageInstance（只判「组归属」不看权限树节点）。而 group_viewer 只读角色

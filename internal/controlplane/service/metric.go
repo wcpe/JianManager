@@ -77,7 +77,7 @@ type MetricService struct {
 	netMu   sync.Mutex
 	lastNet map[string]netCounters
 
-	// lastGC 记录每实例上次心跳的累计 GC counter（FR-465），用于据相邻差推导 GC 速率。
+	// lastGC 记录每实例上次心跳的累计 GC counter，用于据相邻差推导 GC 速率。
 	gcMu   sync.Mutex
 	lastGC map[string]gcCounters
 }
@@ -88,7 +88,7 @@ type netCounters struct {
 	ts         time.Time
 }
 
-// gcCounters 某实例上次心跳的累计 GC counter 快照（FR-465）。
+// gcCounters 某实例上次心跳的累计 GC counter 快照。
 type gcCounters struct {
 	count  int64
 	millis float64
@@ -122,7 +122,7 @@ func (s *MetricService) NodeExists(uuid string) (bool, error) {
 	return n > 0, nil
 }
 
-// NodeByUUID 按 UUID 取节点（FR-463/464：容量预测取名称与容量快照）。不存在返回 found=false。
+// NodeByUUID 按 UUID 取节点（464：容量预测取名称与容量快照）。不存在返回 found=false。
 func (s *MetricService) NodeByUUID(uuid string) (model.Node, bool) {
 	var node model.Node
 	err := s.db.Where("uuid = ?", uuid).First(&node).Error
@@ -145,7 +145,7 @@ func (s *MetricService) NodeIDByUUID(uuid string) (uint, error) {
 	return node.ID, nil
 }
 
-// InstanceByID 由数值 ID 取实例（FR-464：容量趋势告警文案取名称）。不存在返回 found=false。
+// InstanceByID 由数值 ID 取实例（：容量趋势告警文案取名称）。不存在返回 found=false。
 func (s *MetricService) InstanceByID(id uint) (model.Instance, bool) {
 	var inst model.Instance
 	err := s.db.First(&inst, id).Error
@@ -155,7 +155,7 @@ func (s *MetricService) InstanceByID(id uint) (model.Instance, bool) {
 	return model.Instance{}, false
 }
 
-// ResolveInstanceUUIDs 批量由数值 ID 取实例 UUID（FR-463 平台级 SLO 的可见集收敛）。
+// ResolveInstanceUUIDs 批量由数值 ID 取实例 UUID（平台级 SLO 的可见集收敛）。
 // 输入为 nil 时返回 nil（表示不收敛）；查不到的 ID 不出现在结果中。
 func (s *MetricService) ResolveInstanceUUIDs(ids []uint) ([]string, error) {
 	if ids == nil {
@@ -188,7 +188,7 @@ func (s *MetricService) ResolveInstanceID(uuid string) (uint, bool, error) {
 	return 0, false, err
 }
 
-// ResolveInstanceIDs 批量由实例 UUID 取数值 ID（ResolveInstanceID 的批量形态，FR-340）。
+// ResolveInstanceIDs 批量由实例 UUID 取数值 ID（ResolveInstanceID 的批量形态）。
 // 一次 IN 查询返回 uuid→id 映射；查不到的 uuid 不在结果中（调用方据此归入 skipped:not_found）。
 func (s *MetricService) ResolveInstanceIDs(uuids []string) (map[string]uint, error) {
 	out := map[string]uint{}
@@ -270,13 +270,13 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	}
 	samples = append(samples,
 		nodeSample(model.MetricNodeCPUPct, "pct", ptr(float64(req.CpuUsage)*100)),
-		// iowait（FR-485）：与 cpu_pct 同量纲（0..100），老 Worker 不上报即为 0。
+		// iowait：与 cpu_pct 同量纲（0..100），老 Worker 不上报即为 0。
 		nodeSample(model.MetricNodeIOWait, "pct", ptr(float64(req.Iowait)*100)),
 		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
 		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
 		nodeSample(model.MetricLogIngestHealthy, "bool", ptr(boolToFloat(req.LogIngestHealthy))),
 	)
-	// FR-485：日志采集面自身的容量/质量信号。
+	// 日志采集面自身的容量/质量信号。
 	//
 	// 只在 Worker 明确报告「可观测」时才落点（log_metrics_available）。缺失即**不落点**，
 	// 让曲线留空——而不是落 0。0 在这组指标里的含义是「积压为零、零失败、零慢查询」，
@@ -294,7 +294,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 			nodeSample(model.MetricLogSlowSQLMaxMs, "ms", ptr(float64(req.LogSlowSqlMaxMs))),
 		)
 	}
-	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空（FR-062）。
+	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空。
 	if req.LoadAvg1 > 0 {
 		samples = append(samples, nodeSample(model.MetricNodeLoad, "load", ptr(req.LoadAvg1)))
 	}
@@ -337,7 +337,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 			if im.CpuLoad >= 0 {
 				samples = append(samples, instSample(model.MetricInstCPUPct, "pct", ptr(im.CpuLoad*100)))
 			}
-			// GC 速率（FR-465）：探针累计 counter（次数/耗时）据相邻心跳差推导速率。
+			// GC 速率：探针累计 counter（次数/耗时）据相邻心跳差推导速率。
 			// 差为负（实例重启 counter 归零）→ 跳过该拍，不产生负速率假尖峰；首拍无前值同样跳过。
 			// m3 修复：读前值与写现值放进**同一段**临界区（与上方 lastNet 同构），
 			// 避免两段临界区之间插入其它路径的更新，导致同一心跳被重复差值或前值错位。
@@ -368,7 +368,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 				)
 			}
 		} else {
-			// 探针不可用：TPS 与 GC 速率均写 NULL 断点（缺测不补假值，FR-465）。
+			// 探针不可用：TPS 与 GC 速率均写 NULL 断点（缺测不补假值）。
 			samples = append(samples,
 				instSample(model.MetricInstTPS, "tps", nil),
 				instSample(model.MetricInstGCCount, "count_per_sec", nil),
@@ -376,10 +376,10 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 			)
 		}
 
-		// 在线人数：仅当**在线人数本身可用**时落点，三源皆无/该指标缺测 → NULL 断点（FR-447）。
+		// 在线人数：仅当**在线人数本身可用**时落点，三源皆无/该指标缺测 → NULL 断点。
 		// 判定主用 im.PlayersOnlineAvailable（Worker 置位，Query 有响应但缺 numplayers 时为 false）。
 		//
-		// 兼容判定（FR-446/447 复审 N1）：不置该位的旧/中间版本 Worker 有两个来源可安全回退——
+		// 兼容判定（447 复审 N1）：不置该位的旧/中间版本 Worker 有两个来源可安全回退——
 		//  · 探针可用：探针必然给出 players_online（serverprobe_players_online / 代理回退），旧 CP 亦按此判定；
 		//  · SLP 可用：`players.online` 是 SLP 协议**必带**字段（不像 Query 的 numplayers 可缺），直探命中即有真值。
 		// 中间版本 Worker 正是「有直探、置 SlpAvailable=true + 真实 PlayersOnline，但缺 players_online_available」，
@@ -391,7 +391,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 			samples = append(samples, instSample(model.MetricInstPlayersOnline, "count", nil))
 		}
 
-		// 人数上限（FR-511）：与在线人数同一套「可用才落点」口径，但**不做**上面那条兼容回退——
+		// 人数上限：与在线人数同一套「可用才落点」口径，但**不做**上面那条兼容回退——
 		// 上限不像在线人数那样在三源里都必带（SLP 的 `players.max` 必带，Query 的 `maxplayers` 可缺，
 		// 探针不提供），回退会重新引入「伪造上限」。因此只看显式可用位。
 		if im.MaxPlayersAvailable {
@@ -407,7 +407,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	return s.IngestProcessMetrics(req.NodeUuid, req.ProcessMetrics, now)
 }
 
-// ProcessTopQuery 进程 TOPN 查询参数（FR-170）。
+// ProcessTopQuery 进程 TOPN 查询参数。
 type ProcessTopQuery struct {
 	InstanceUUID string
 	NodeUUID     string
@@ -423,7 +423,7 @@ type ProcessTopQuery struct {
 	At time.Time
 }
 
-// ProcessTopItem 进程 TOPN 返回项（FR-170）。
+// ProcessTopItem 进程 TOPN 返回项。
 type ProcessTopItem struct {
 	InstanceID       uint      `json:"instanceId"`
 	InstanceUUID     string    `json:"instanceUuid"`
@@ -631,7 +631,7 @@ func (s *MetricService) QuerySeries(q SeriesQuery) (string, []Series, error) {
 	return res, out, nil
 }
 
-// QuerySeriesBatch 批量返回多个实例目标的历史曲线（FR-340：消 N+1）。整批同档同窗，
+// QuerySeriesBatch 批量返回多个实例目标的历史曲线（：消 N+1）。整批同档同窗，
 // 序列表一次 IN 查询后按 instance_id 分组，逐序列点位复用 queryPoints（与单目标版一致）。
 // instanceIDs 为已解析的实例 UUID（每个都是响应中的 targetId 键）；out 保证每个入参 UUID
 // 都有条目（无序列的目标返空数组，与单目标端点空 series 语义一致，前端可区分「无数据」与「被剔除」）。
@@ -665,7 +665,7 @@ func (s *MetricService) QuerySeriesBatch(q SeriesQuery, instanceIDs []string) (s
 }
 
 // LatestValue 返回某 (scope, target, metric_key) 序列在 since 之后的最新非空样本值；
-// 无序列或无样本返回 nil。node scope 用 nodeUUID 定位，instance scope 用 instanceID 定位（FR-462）。
+// 无序列或无样本返回 nil。node scope 用 nodeUUID 定位，instance scope 用 instanceID 定位。
 func (s *MetricService) LatestValue(scope model.MetricScope, nodeUUID, instanceID, metricKey string, since time.Time) (*float64, error) {
 	q := s.db.Model(&model.MetricSeries{}).Where("scope = ? AND metric_key = ?", scope, metricKey)
 	if scope == model.MetricScopeNode {
@@ -746,7 +746,7 @@ type OverviewTotals struct {
 	OnlineNodeCount  int     `json:"onlineNodeCount"`
 	RunningInstances int     `json:"runningInstances"`
 	CPUPct           float64 `json:"cpuPct"`        // 在线节点 CPU 使用率均值
-	LoadAvg          float64 `json:"loadAvg"`       // 在线节点负载利用率均值（load1/核数*100，FR-062）
+	LoadAvg          float64 `json:"loadAvg"`       // 在线节点负载利用率均值（load1/核数*100）
 	MemUsedBytes     int64   `json:"memUsedBytes"`  // 在线节点已用内存合计
 	MemTotalBytes    int64   `json:"memTotalBytes"` // 在线节点内存容量合计
 	OnlinePlayers    int64   `json:"onlinePlayers"` // 各实例最近在线人数合计
@@ -773,7 +773,7 @@ const overviewRecentWindow = 2 * time.Minute
 const overviewNodeFreshWindow = 90 * time.Second
 
 // Overview 汇总跨节点当前总量 + 聚合历史曲线（总 CPU 均值 / 总内存合计 / 总在线玩家合计），
-// 供总览页一屏概览（FR-060）。曲线按区间自动选档并按档位桶跨序列对齐聚合。
+// 供总览页一屏概览。曲线按区间自动选档并按档位桶跨序列对齐聚合。
 func (s *MetricService) Overview(from, to time.Time, resolution string) (OverviewResult, error) {
 	return s.overviewAt(time.Now().UTC(), from, to, resolution)
 }
@@ -797,8 +797,8 @@ func (s *MetricService) overviewAt(now, from, to time.Time, resolution string) (
 		{model.MetricScopeNode, model.MetricNodeLoad, "load", false},
 		{model.MetricScopeNode, model.MetricNodeMemUsed, "bytes", true},
 		{model.MetricScopeInstance, model.MetricInstPlayersOnline, "count", true},
-		/*
-			Bot Worker 的两条共享进程指标也进趋势（FR-515 首页重构）：
+		/* 
+			Bot Worker 的两条共享进程指标也进趋势（首页重构）：
 			它们由 `bot_runtime_metric_sampler` 持续写入，属于「资源视角」，
 			与上面三条同轴呈现才有可比性。前端默认在图例里隐藏，按需勾选显示。
 			求和而非均值：多节点各有一个 Bot Worker 进程，看的是全平台合计占用。
@@ -1008,7 +1008,7 @@ func (s *MetricService) RollupAndPurge(now time.Time) error {
 //
 // 为什么必须分批（生产实证 2026-10-09，CP 日志统计）：单条
 // `SELECT * FROM metric_sample_raws WHERE ts < ? ORDER BY ts` 要捞 54.5 万行、最慢 145.8 秒，
-// 而 CP 的 SQLite 连接池被刻意收敛为 1 条（FR-318，避免 COMMIT 因 BUSY 失败后连接毒化）。
+// 而 CP 的 SQLite 连接池被刻意收敛为 1 条（避免 COMMIT 因 BUSY 失败后连接毒化）。
 // 于是一条巨查询独占唯一连接期间，同库上「只返回 1 行」的 `SELECT * FROM nodes` 也要排队 4 秒——
 // 这就是用户感知的「日志页慢」的第二层根因（第一层限流已单独修复）。
 //
@@ -1439,7 +1439,7 @@ func (s *MetricService) Stop() {
 	slog.Info("时序指标卷积器已停止")
 }
 
-// boolToFloat 把布尔指标转成 0/1 浮点值（FR-485：采集健康指标）。
+// boolToFloat 把布尔指标转成 0/1 浮点值（：采集健康指标）。
 func boolToFloat(v bool) float64 {
 	if v {
 		return 1

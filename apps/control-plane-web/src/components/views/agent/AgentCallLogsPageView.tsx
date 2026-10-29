@@ -1,9 +1,9 @@
-/**
+/** 
  * @file AgentCallLogsPageView：Agent 调用流水页的受控视图，取数与跳转由应用容器负责。
  * @input Panel/Button/Input/Select/Table/Badge 原语、layout 页壳（PageShell/PageHeader）、lucide-react 图标、翻译上下文
  * @output AgentCallLogsPageView、AgentCallLogsPageViewProps、AgentCallLogsQuery、AgentCallLogRow、AgentTokenOption
  * @sync apps/control-plane-web/src/pages/AgentCallLogsPage.tsx、apps/control-plane-web/src/pages/AgentCallLogsPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原页 FR-391 / FR-390 Agent 调用流水）
+ * @since（组件受控化迁包；原页Agent 调用流水）
  */
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -30,19 +30,19 @@ import {
   TableRow,
 } from '@jianmanager/ui/components/table'
 
-/**
+/** 
  * Radix Select 不接受空字符串值，用哨兵代表「该维度不过滤」。
  * 哨兵只是本视图的 Select 细节：对外契约里「不过滤」一律用空串表达。
  */
 const SENTINEL_ALL = '__all__'
 
-/**
+/** 
  * 客户端枚举：与后端记录的 client 标识一一对应，是**闭集**而非数据列举，
  * 故下拉直接列全（不同于 Token 下拉，后者候选来自服务端返回的 Token 列表）。
  */
 const CLIENT_OPTIONS = ['mcp', 'jmagent', 'curl', 'unknown'] as const
 
-/**
+/** 
  * 筛选与分页状态（受控）。
  *
  * 全部维度都会进入查询键并触发重新取数，故 state 由容器持有、逐字段注入：
@@ -61,7 +61,7 @@ export interface AgentCallLogsQuery {
   page: number
 }
 
-/**
+/** 
  * 流水行（本视图渲染所需的最小字段集）。
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/agentObservability` 的 `AgentCallLogInfo`：
@@ -97,7 +97,7 @@ export interface AgentCallLogRow {
   createdAt: string
 }
 
-/**
+/** 
  * Token 下拉候选（容器取数注入）。
  * 只含非明文元数据：`tokenPrefix` 是后端给出的**前缀**，后端从不返回明文，视图不得展示或补全完整密钥。
  */
@@ -108,7 +108,7 @@ export interface AgentTokenOption {
   tokenPrefix: string
 }
 
-/**
+/** 
  * 受控边界：筛选、分页、取数三态与数据全部经 props 注入（改筛选要回到第 1 页这类
  * 「重新取数策略」由容器决定）；视图只保留展示与逐字段的改动上报。
  * 空/加载/错误三态的判定优先级、表格列、操作名与客户端的中文映射留在视图。
@@ -116,7 +116,7 @@ export interface AgentTokenOption {
 export interface AgentCallLogsPageViewProps {
   /** 当前筛选与分页（受控）。 */
   query: AgentCallLogsQuery
-  /**
+  /** 
    * 筛选维度变更：仅上报被改动的字段。
    * 页码复位（改筛选即回第 1 页）属取数策略，由容器负责，视图不代为重置。
    */
@@ -137,14 +137,14 @@ export interface AgentCallLogsPageViewProps {
   isError: boolean
   /** 后台取数中：汇总行追加「加载中」后缀，不清空已有内容。 */
   isFetching: boolean
-  /**
+  /** 
    * 页头右端的路由跳转入口（容器注入 react-router `Link` 包裹的按钮；
    * 包内不依赖 react-router）。可省略——组件博物馆等无路由场景即不渲染跳转。
    */
   headerLinks?: ReactNode
 }
 
-/** Agent 调用流水页展示层（FR-391 / FR-390）：筛选条 + 流水表 + 简单翻页。 */
+/** Agent 调用流水页展示层：筛选条 + 流水表 + 简单翻页。 */
 export function AgentCallLogsPageView({
   query,
   onQueryChange,

@@ -18,8 +18,8 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// setupClientDistRouterWithTracking 建一个含客户端分发消费端点的最小引擎（FR-249 追踪事件覆盖）。
-// FR-256 起 manifest 不再签名，装配不再依赖签名器。返回引擎与追踪服务（供断言落库）。
+// setupClientDistRouterWithTracking 建一个含客户端分发消费端点的最小引擎（追踪事件覆盖）。
+// 起 manifest 不再签名，装配不再依赖签名器。返回引擎与追踪服务（供断言落库）。
 func setupClientDistRouterWithTracking(t *testing.T, db *gorm.DB) (*gin.Engine, *service.ClientDistTrackingService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -66,7 +66,7 @@ func latestEvent(t *testing.T, tracking *service.ClientDistTrackingService, kind
 	return evs[0].Status, evs[0].ErrCode
 }
 
-// TestClientDist_Manifest_AuthFailure_Recorded 鉴权失败(401)也记录追踪事件且带 INVALID_CLIENT_KEY（FR-249 核心：此前漏记）。
+// TestClientDist_Manifest_AuthFailure_Recorded 鉴权失败(401)也记录追踪事件且带 INVALID_CLIENT_KEY（核心：此前漏记）。
 func TestClientDist_Manifest_AuthFailure_Recorded(t *testing.T) {
 	db := setupTestDB(t)
 	r, tracking := setupClientDistRouterWithTracking(t, db)
@@ -92,7 +92,7 @@ func TestClientDist_Manifest_AuthFailure_Recorded(t *testing.T) {
 	}
 }
 
-// TestClientDist_Manifest_NoVersion_Recorded 鉴权通过但无 latest → 404 记 NO_LATEST_VERSION（FR-249）。
+// TestClientDist_Manifest_NoVersion_Recorded 鉴权通过但无 latest → 404 记 NO_LATEST_VERSION。
 func TestClientDist_Manifest_NoVersion_Recorded(t *testing.T) {
 	db := setupTestDB(t)
 	r, tracking := setupClientDistRouterWithTracking(t, db)
@@ -117,7 +117,7 @@ func TestClientDist_Manifest_NoVersion_Recorded(t *testing.T) {
 	}
 }
 
-// TestClientDist_Artifact_AuthFailure_Recorded 制品鉴权失败(401)记 INVALID_CLIENT_KEY（FR-249）。
+// TestClientDist_Artifact_AuthFailure_Recorded 制品鉴权失败(401)记 INVALID_CLIENT_KEY。
 func TestClientDist_Artifact_AuthFailure_Recorded(t *testing.T) {
 	db := setupTestDB(t)
 	r, tracking := setupClientDistRouterWithTracking(t, db)
@@ -139,7 +139,7 @@ func TestClientDist_Artifact_AuthFailure_Recorded(t *testing.T) {
 	}
 }
 
-// TestClientDist_Artifact_NotFound_Recorded 鉴权通过但制品不存在 → 404 记 ARTIFACT_NOT_FOUND（FR-249）。
+// TestClientDist_Artifact_NotFound_Recorded 鉴权通过但制品不存在 → 404 记 ARTIFACT_NOT_FOUND。
 func TestClientDist_Artifact_NotFound_Recorded(t *testing.T) {
 	db := setupTestDB(t)
 	r, tracking := setupClientDistRouterWithTracking(t, db)
@@ -164,7 +164,7 @@ func TestClientDist_Artifact_NotFound_Recorded(t *testing.T) {
 	}
 }
 
-// TestClientDist_Manifest_Success_NoErrCode 成功拉取事件 errCode 为空（不回归 FR-093）。
+// TestClientDist_Manifest_Success_NoErrCode 成功拉取事件 errCode 为空（不回归）。
 func TestClientDist_Manifest_Success_NoErrCode(t *testing.T) {
 	db := setupTestDB(t)
 	r, tracking := setupClientDistRouterWithTracking(t, db)
@@ -201,7 +201,7 @@ func TestClientDist_Manifest_Success_NoErrCode(t *testing.T) {
 	}
 }
 
-// TestClientDist_ListEvents_OutcomeFilter ListEvents 读 outcome/errCode query 参数并透传（FR-249）。
+// TestClientDist_ListEvents_OutcomeFilter ListEvents 读 outcome/errCode query 参数并透传。
 func TestClientDist_ListEvents_OutcomeFilter(t *testing.T) {
 	db := setupTestDB(t)
 	r, tracking := setupClientDistRouterWithTracking(t, db)

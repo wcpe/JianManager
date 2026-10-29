@@ -10,8 +10,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import StoragePage from './StoragePage'
 
-/**
- * 平台存储页强断言（FR-204 文件归档域）：验 mock 假后端 storage 集合渲染 + 浏览导航联动 + 错误注入。
+/** 
+ * 平台存储页强断言（文件归档域）：验 mock 假后端 storage 集合渲染 + 浏览导航联动 + 错误注入。
  * StoragePage 仅平台管理员（role=10）可见，故登录态需带 role=10 的 JWT 声明（loginMockUser 用的纯 token
  * 解不出 role，会被角色门禁挡住），这里就地构造一个 payload 含 role=10 的伪 JWT。
  */
@@ -72,7 +72,7 @@ describe('StoragePage（mock 假后端）', () => {
       expect(within(cacheRow as HTMLElement).getByText('0 B')).toBeInTheDocument()
       expect(within(cacheRow as HTMLElement).getByText('0')).toBeInTheDocument()
     })
-    // FR-378：refreshKey 重拉后目录折叠，再展开 cache 应为空且无旧文件
+    // refreshKey 重拉后目录折叠，再展开 cache 应为空且无旧文件
     await user.click(screen.getByRole('button', { name: 'cache' }))
     expect(await screen.findByText(/该目录为空|空目录/)).toBeInTheDocument()
     expect(screen.queryByText('tmp-build.log')).not.toBeInTheDocument()
@@ -110,7 +110,7 @@ describe('StoragePage（mock 假后端）', () => {
     expect(await screen.findByText('加载平台存储概览失败')).toBeInTheDocument()
   })
 
-  /**
+  /** 
    * 数据源对象必须跨渲染稳定。
    *
    * `FileBrowserTree` 的取数 effect 把 `source` 列为依赖（`[source, dirPath, refreshKey, t]`）；
@@ -147,7 +147,7 @@ describe('StoragePage（mock 假后端）', () => {
     }
   })
 
-  /**
+  /** 
    * 非管理员 / 加载中 / 失败三态也必须落在同一套外壳里。
    *
    * 原先三态直接 return 裸 `<p>`：页面在加载与失败时整体塌成一行无标题文字，

@@ -1,5 +1,5 @@
-/**
- * 沉浸控制台的 pane 树纯逻辑（FR-420 / FR-421）。
+/** 
+ * 沉浸控制台的 pane 树纯逻辑。
  *
  * 组件只负责把树画成 flex 布局；分割、切换实例和关闭都在这里按不可变数据处理，
  * 避免把递归状态转换散落在可见按钮的事件处理器里。
@@ -23,7 +23,7 @@ export interface ImmersivePaneSplit {
   direction: PaneSplitDirection
   first: ImmersivePaneTree
   second: ImmersivePaneTree
-  /**
+  /** 
    * 分割点占容器的比例（first 侧的份额，0-1）。
    * 省略时两半均分（flex-1）；拖拽分隔条后写入并钳制在 [MIN_RATIO, MAX_RATIO]。
    */
@@ -68,7 +68,7 @@ export function splitPane(
   return second === tree.second ? tree : { ...tree, second }
 }
 
-/**
+/** 
  * 移除一个 pane，并把只剩一个子树的 split 自动收缩。
  *
  * 返回 null 表示根 leaf 被移除；调用方据此决定最后一个 pane 是否允许关闭。
@@ -98,7 +98,7 @@ export function instanceIdsInTrees(trees: readonly ImmersivePaneTree[]): number[
   return [...new Set(trees.flatMap((tree) => paneLeaves(tree).map((pane) => pane.instanceId)))]
 }
 
-/**
+/** 
  * 更新目标 split 节点的分割占比；目标按**引用**匹配（渲染层持有的就是状态树里的节点），
  * 找不到时原样返回同一棵树。写入前钳制到 [MIN_RATIO, MAX_RATIO]。
  */
@@ -111,7 +111,7 @@ export function setSplitRatio(tree: ImmersivePaneTree, target: ImmersivePaneSpli
   return second === tree.second ? tree : { ...tree, second }
 }
 
-/**
+/** 
  * 深拷贝整棵树并给每个 leaf 发新 id（restored 回调收旧换新）。
  *
  * 从 sessionStorage 恢复布局时必须重编 id：历史快照里的 id 可能与新会话的

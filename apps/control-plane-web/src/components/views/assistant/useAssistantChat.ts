@@ -19,8 +19,8 @@ import type { ChatMessage } from '@/components/views/assistant/assistant-chat-ty
 import { applyEventToToolCalls } from '@/components/views/assistant/assistant-tool-status'
 import type { ToolCallView } from '@/components/views/assistant/assistant-tool-status'
 
-/**
- * 对话状态容器（FR-519）。
+/** 
+ * 对话状态容器。
  *
  * 取数、提交、事件流与断线补读都在这里；`AssistantChatPanel` 只负责渲染。
  * 这里集中了几处**必须一次做对、否则会重复回话**的语义：
@@ -42,8 +42,8 @@ export function useAssistantChat(enabled: boolean) {
 
   /** 流式消息（当前 run 的增量）。与历史消息分开存，避免历史分页把流式内容冲掉。 */
   const [streamingMessages, setStreamingMessages] = useState<ChatMessage[]>([])
-  /**
-   * 本轮的工具调用状态（FR-519 §5）。
+  /** 
+   * 本轮的工具调用状态（§5）。
    *
    * 与消息流分开存而不是塞进 `ChatMessage`：工具状态由三类事件（call/tool_status/result）
    * 按 callId 聚合而来，是多对一的，塞进消息会让「一条回复」与「若干调用」的层级关系
@@ -51,7 +51,7 @@ export function useAssistantChat(enabled: boolean) {
    * 只有开新一轮或切会话时才清空。
    */
   const [toolCalls, setToolCalls] = useState<ToolCallView[]>([])
-  /**
+  /** 
    * 本轮失败原因（与消息流分开）。
    *
    * 失败轮只落库 user 提问、没有 assistant 消息，因此错误提示没有「消息」可以挂——
@@ -77,7 +77,7 @@ export function useAssistantChat(enabled: boolean) {
   /** 本轮幂等键：一轮内固定，重试用同一个。 */
   const idemKey = useRef<string>('')
 
-  /**
+  /** 
    * 当前会话 = 显式选择优先，否则取最近一个（派生，不在 effect 里 setState）。
    *
    * 早先版本用 effect 把「列表第一条」写进 state，那会在每次列表刷新时触发一次
@@ -96,8 +96,8 @@ export function useAssistantChat(enabled: boolean) {
   /** 历史消息的 refetch（稳定引用，供 observe 在 run 结束后回读真源）。 */
   const refetchHistory = messagesQuery.refetch
 
-  /**
-   * 草稿（按会话保存，切会话恢复；FR-519 §5.1）。
+  /** 
+   * 草稿（按会话保存，切会话恢复§5.1）。
    *
    * 状态放在容器而不是面板：面板随浮窗开关卸载/挂载，草稿若在面板内部，
    * 关一次浮窗就丢一次内容——正是「关闭不丢状态」要防的。
@@ -133,7 +133,7 @@ export function useAssistantChat(enabled: boolean) {
 
   useEffect(() => () => abortRef.current?.(), [])
 
-  /**
+  /** 
    * 订阅某 run 的事件（带一次自动补读）。
    *
    * 断线表现为 onError：此时用 lastSeq 重连一次。只重试一次——连续失败说明

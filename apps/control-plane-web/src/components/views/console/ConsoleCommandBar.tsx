@@ -28,16 +28,16 @@ import type { CommandHistoryMatch } from '@/lib/console/console-command-history'
 import { applyCommonPrefix, applyCompletion, computeCompletion } from '@/lib/console/console-completion'
 import type { CompletionState } from '@/lib/console/console-completion'
 
-/**
- * 控制台命令栏（FR-415 spec §2.2 + FR-416 智能输入；ADR-086）：原生 `<input>`。
+/** 
+ * 控制台命令栏（spec §2.2智能输入；ADR-086）：原生 `<input>`。
  *
  * 之所以必须是原生控件：Worker 给的是 stdin 管道而不是 pty，旧实现只能在 xterm 的
  * `onData` 里手工重建行编辑器——逐字符回显、手工退格、手工 ↑↓——结果长着终端的样子
  * 却没有终端的能力（← 只会往 stdin 发 `ESC[D`、readline 键全失效、输入法组合过程被打乱）。
  * 换成原生 input，**行编辑 / 输入法 / 粘贴 / 撤销全部免费获得**。
  *
- * 本组件补浏览器不给、而排障确实需要的几样（FR-416）：
- * - readline 惯用键（`Ctrl+A/E/W/U`）与 ↑↓ 历史（FR-415）
+ * 本组件补浏览器不给、而排障确实需要的几样：
+ * - readline 惯用键（`Ctrl+A/E/W/U`）与 ↑↓ 历史
  * - `Ctrl+R` 模糊搜索历史（历史的持久化由宿主负责，此处只消费 `history`）
  * - 候选式 Tab 补全：**多候选时只推进到公共前缀 + 开候选列表，绝不盲补第一个**
  * - 多行粘贴保护：≥2 行先问「逐行发送 / 仅首行 / 取消」，不一股脑连发
@@ -54,8 +54,8 @@ export interface ConsoleCommandBarProps {
   onSubmit: (line: string) => void
   /** 命令历史（旧→新）。↑ 从最新一条开始回溯；`^R` 在其上模糊搜索。 */
   history?: readonly string[]
-  /**
-   * 在线玩家名（FR-416 第二段补全的候选）。
+  /** 
+   * 在线玩家名（第二段补全的候选）。
    *
    * **必须来自真实来源**（`/players` 在线聚合 + 控制台 join/quit/list 行），
    * 本组件不内置任何玩家名——补出一个不存在的玩家只会让命令白跑一趟。
@@ -75,7 +75,7 @@ function deleteWordBefore(value: string, caret: number): { value: string; caret:
   return { value: value.slice(0, at) + value.slice(caret), caret: at }
 }
 
-/**
+/** 
  * 把粘贴文本切成待发送行。
  *
  * 尾部空行丢弃：从别处复制的一条命令常带尾随换行（`stop\n`），那仍是**一行**，
@@ -113,12 +113,12 @@ export function ConsoleCommandBar({
   /** 需要在 value 落定后设置的光标位（React 受控 input 无法在 setState 同步设选区）。 */
   const pendingCaretRef = useRef<number | null>(null)
 
-  // ---- FR-416：Tab 补全候选 ----
+  // ----：Tab 补全候选 ----
   const [completion, setCompletion] = useState<{ state: CompletionState; index: number } | null>(null)
-  // ---- FR-416：^R 反向历史搜索 ----
+  // ----：^R 反向历史搜索 ----
   const [reverseSearch, setReverseSearch] = useState<{ query: string; index: number } | null>(null)
   const reverseInputRef = useRef<HTMLInputElement>(null)
-  // ---- FR-416：多行粘贴确认 ----
+  // ----：多行粘贴确认 ----
   const [pastedLines, setPastedLines] = useState<string[] | null>(null)
 
   useEffect(() => {
@@ -216,7 +216,7 @@ export function ConsoleCommandBar({
       setCompletion(null)
       return
     }
-    // 多候选：只推进到**所有候选都认的公共前缀**，其余交给用户选（FR-416「不盲补」）。
+    // 多候选：只推进到**所有候选都认的公共前缀**，其余交给用户选（「不盲补」）。
     const advanced = applyCommonPrefix(input.value, state)
     if (advanced) {
       applyEdit(advanced.value, advanced.caret)
@@ -330,8 +330,8 @@ export function ConsoleCommandBar({
     }
   }
 
-  /**
-   * 多行粘贴保护（FR-416）。
+  /** 
+   * 多行粘贴保护。
    *
    * 单行粘贴一律放行给浏览器原生路径——`readText()` 在 HTTP 非安全上下文不可用（FIX-1），
    * 原生 paste 事件则始终可用，不能为了「统一处理」把它接管掉。
@@ -416,8 +416,8 @@ export function ConsoleCommandBar({
     }
   }
 
-  /**
-   * Ghost 预览（FR-416）：把高亮候选的剩余部分以灰字排在光标之后。
+  /** 
+   * Ghost 预览：把高亮候选的剩余部分以灰字排在光标之后。
    *
    * 两个前提缺一不可：
    * ① token 就在行尾（否则 ghost 会盖住光标之后的既有文本，看起来像输入被篡改）；
@@ -594,7 +594,7 @@ export function ConsoleCommandBar({
         </Button>
       </div>
 
-      {/* 多行粘贴确认（FR-416）：走模态而非内联展开（.claude/rules/ui-modals.md）。 */}
+      {/* 多行粘贴确认：走模态而非内联展开（.claude/rules/ui-modals.md）。 */}
       <Dialog open={pastedLines !== null} onOpenChange={(open) => !open && setPastedLines(null)}>
         <DialogContent className={cn(scrollableDialogContentClass, 'sm:max-w-lg')}>
           <DialogHeader>

@@ -14,10 +14,10 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// maxCrashSnapshotsPerInstance 每实例滚动保留的崩溃快照条数（K=5，写死不做配置，FR-313 spec §6）。
+// maxCrashSnapshotsPerInstance 每实例滚动保留的崩溃快照条数（K=5，写死不做配置spec §6）。
 const maxCrashSnapshotsPerInstance = 5
 
-// ReportCrashSnapshot Worker 上报实例崩溃快照（FR-313）。
+// ReportCrashSnapshot Worker 上报实例崩溃快照。
 //
 // 走注册/心跳同信道（Worker→CP 出站 gRPC，NAT 节点天然可达），凭 node_uuid+node_secret
 // 鉴权（与 FetchBotWorkerArchive 同源校验），且实例必须属于该节点（节点只能报自己的实例）。
@@ -64,7 +64,7 @@ func (h *ControlPlaneHandler) ReportCrashSnapshot(ctx context.Context, req *work
 		if err := tx.Create(&snap).Error; err != nil {
 			return err
 		}
-		// FR-470：事务内同步分类并回填分类列 + upsert 日粒度统计，
+		// 事务内同步分类并回填分类列 + upsert 日粒度统计，
 		// 保证「快照行」与「趋势统计行」一致（统计不受下方 K=5 裁剪影响）。
 		//
 		// m-8 容错：统计 upsert 失败**不得**回滚快照落库——崩溃现场是稀缺且不可重放的证据，

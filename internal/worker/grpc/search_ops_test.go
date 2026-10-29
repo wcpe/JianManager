@@ -68,7 +68,7 @@ func TestSearchFiles_Content(t *testing.T) {
 	require.Contains(t, resp.Hits[0].Snippet, "online-mode=false")
 }
 
-// TestSearchFiles_IndexingThenReady 验证首建后台化的 RPC 契约（FR-113，ADR-024）：
+// TestSearchFiles_IndexingThenReady 验证首建后台化的 RPC 契约（ADR-024）：
 // 构建在途时首查返回 indexing=true、空命中；就绪后再查返回 indexing=false + 命中。
 func TestSearchFiles_IndexingThenReady(t *testing.T) {
 	gate := make(chan struct{})

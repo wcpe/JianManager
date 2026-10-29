@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-445 回归：MCP `agent_get_instance` 必须与 HTTP GET /instances/:id 同口径，
+// 回归：MCP `agent_get_instance` 必须与 HTTP GET /instances/:id 同口径，
 // 在返回实例详情时携带 `capabilities` 能力画像。
 //
 // 第一轮把 AttachCapabilities 移出 ResolveInstanceTarget 后，只有 HTTP 路径补回了画像，

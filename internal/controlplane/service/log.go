@@ -39,11 +39,11 @@ type IngestEntry struct {
 	Time         time.Time
 }
 
-// LogService 负责日志的采集入库、检索、导出、归档与保留（FR-049）。
+// LogService 负责日志的采集入库、检索、导出、归档与保留。
 //
 // 设计要点（守 ADR-005 单二进制不引 ELK、ADR-010 数据根布局）：
 //   - 写入：异步缓冲通道 + 批量 Create，采集侧非阻塞；
-//   - 检索：过滤维度全部下沉为 DB 谓词（source/level/instance/node/keyword/time），分页 LIMIT/OFFSET，不全量序列化（FR-050 复用）；
+// 检索：过滤维度全部下沉为 DB 谓词（source/level/instance/node/keyword/time），分页 LIMIT/OFFSET，不全量序列化（复用）；
 //   - 归档：超保留天数或总量上限的旧条目，先按 NDJSON 滚动落盘到数据根 var/log，再从表中批量删除；
 //   - 便携：归档路径恒由数据根派生（var/log），整体拷走自洽。
 type LogService struct {
@@ -57,17 +57,17 @@ type LogService struct {
 	wg     sync.WaitGroup
 	// cache 缓存采集侧 UUID→ID 解析，避免每条实例日志反查数据库。
 	cache *resolveCache
-	// cutover FR-481 日志入库切换开关与逐 Worker 水位。恒非 nil；默认关闭（旧行为不变）。
+	// cutover日志入库切换开关与逐 Worker 水位。恒非 nil；默认关闭（旧行为不变）。
 	cutover *LogCutover
-	// legacy FR-481 Legacy 只读访问器与独立保留预算。
+	// legacyLegacy 只读访问器与独立保留预算。
 	legacy *LegacyLogReader
-	// dual FR-481 Federated vs Legacy 双路径查询门面。
+	// dualFederated vs Legacy 双路径查询门面。
 	dual *LogDualPath
 }
 
 // NewLogService 创建日志服务。root 用于解析归档目录 var/log，可为 nil（此时归档落盘跳过，仅做表内保留删除）。
 //
-// FR-481：cfg.Cutover 接线切换开关与 Legacy 独立保留预算。零值嵌套结构走 Default*：
+// cfg.Cutover 接线切换开关与 Legacy 独立保留预算。零值嵌套结构走 Default*：
 // 切换默认关闭；Legacy 时间预算默认 30 天。打开切换不会停 platform 持久化路径。
 func NewLogService(db *gorm.DB, root *dataroot.Root, cfg config.LogStoreConfig) *LogService {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,7 +99,7 @@ func NewLogService(db *gorm.DB, root *dataroot.Root, cfg config.LogStoreConfig) 
 func (s *LogService) Enabled() bool { return s.cfg.Enabled }
 
 // Ingest 投递一条日志到异步入库通道。通道满时丢弃并返回 false（不阻塞采集侧）。
-// FR-481：cutover 打开时 instance/worker 来源不再写入 CP logs；platform 来源不受影响。
+// cutover 打开时 instance/worker 来源不再写入 CP logs；platform 来源不受影响。
 func (s *LogService) Ingest(e IngestEntry) bool {
 	if !s.cfg.Enabled {
 		return false
@@ -215,9 +215,9 @@ type LogFilter struct {
 	InstanceIDs []uint // 资源级隔离：非平台管理员收敛到可访问实例集（平台与 Worker 日志由 router 层隔离）
 	Page        int
 	PageSize    int
-	// Cursor 游标分页起点（FR-419）：nil 表示从最新一条开始。仅 QueryCursor 读取。
+	// Cursor 游标分页起点：nil 表示从最新一条开始。仅 QueryCursor 读取。
 	Cursor *LogCursor
-	// Limit 游标分页单页行数（FR-419）：<=0 取默认，上限与 PageSize 同为 500。仅 QueryCursor 读取。
+	// Limit 游标分页单页行数：<=0 取默认，上限与 PageSize 同为 500。仅 QueryCursor 读取。
 	Limit int
 }
 
@@ -260,7 +260,7 @@ func (s *LogService) Query(filter LogFilter) (*LogPage, error) {
 	return &LogPage{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
-// 游标分页参数（FR-419）。上限与页码分页的 pageSize 保持同一个 500，避免出现两套「单次最多拿多少」。
+// 游标分页参数。上限与页码分页的 pageSize 保持同一个 500，避免出现两套「单次最多拿多少」。
 const (
 	logCursorDefaultLimit = 200
 	logCursorMaxLimit     = 500
@@ -268,7 +268,7 @@ const (
 	logCursorSep = "_"
 )
 
-// LogCursor 是「(时间, 自增主键)」复合游标（FR-419）。
+// LogCursor 是「(时间, 自增主键)」复合游标。
 //
 // 为什么不用 OFFSET：`/logs` 按 `time DESC, id DESC` 排序，OFFSET 的语义是「跳过前 N 行」，
 // 而控制台向上回溯期间新日志正在持续涌入表头——同一个 offset 在两次请求间指向不同的行，
@@ -306,7 +306,7 @@ func ParseLogCursor(s string) (LogCursor, error) {
 	return LogCursor{Time: ts, ID: uint(id)}, nil
 }
 
-// LogCursorPage 游标分页结果（FR-419）。
+// LogCursorPage 游标分页结果。
 //
 // 刻意不带 total：游标分页用于「一直往更早翻」，每页再做一次全表 COUNT 纯属浪费
 // （SQLite 下尤其明显），而调用方需要的「还有没有更早的」由 NextCursor 是否为 nil 表达。
@@ -317,7 +317,7 @@ type LogCursorPage struct {
 	Limit      int     `json:"limit"`
 }
 
-// QueryCursor 按 (time, id) 游标向更早方向分页检索日志（FR-419）。
+// QueryCursor 按 (time, id) 游标向更早方向分页检索日志。
 //
 // 与 Query 并存而非取代：日志中心的页码分页需要 total 与任意跳页，控制台回溯需要的是
 // 「表头插入不影响的稳定顺序流」，两种语义各用各的入口（spec §4.2）。

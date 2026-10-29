@@ -2,7 +2,7 @@ import { useAdoptInstanceRuntime } from '@/api/instances'
 import type { RuntimeDriftInfo } from '@/lib/runtime-assets/runtime-drift'
 import { RuntimeDriftAdoptButton as RuntimeDriftAdoptButtonView, RuntimeDriftBanner as RuntimeDriftBannerView } from '@/components/views/instances/RuntimeDriftNotice'
 
-/**
+/** 
  * 运行态漂移提示的应用接线层（ADR-103）。
  *
  * 三个导出里 `RuntimeDriftBadge` 本就是纯展示，直接从组件库再导出；
@@ -23,7 +23,7 @@ export function RuntimeDriftAdoptButton({
   instanceId: number
   instanceName: string
   pid: number
-  /** 实例写权限（FR-432）：无权限时按钮禁用并给 tooltip，最终仍由后端 RBAC 兜底。 */
+  /** 实例写权限：无权限时按钮禁用并给 tooltip，最终仍由后端 RBAC 兜底。 */
   canOperate: boolean
   size?: 'sm' | 'xs'
   className?: string

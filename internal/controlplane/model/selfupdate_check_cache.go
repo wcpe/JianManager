@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// SelfUpdateCheckCache 持久化最近一次「成功」检查更新的结果（FR-186，增强 FR-182/FR-081）。
+// SelfUpdateCheckCache 持久化最近一次「成功」检查更新的结果（增强）。
 //
 // 仅一行（ID 固定 1 单行表）：每次 live 检查成功后 upsert 覆盖。整段 CheckResult 序列化为
 // JSON blob 存 ResultJSON，而非拆字段——CheckResult 随版本演进加字段时无需迁移，反序列化

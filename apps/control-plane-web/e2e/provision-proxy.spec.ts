@@ -12,8 +12,8 @@ async function pickCombo(page: Page, triggerText: string, optionName: string | R
   await page.getByRole('button', { name: optionName }).click()
 }
 
-/** FR-035 真浏览器纵切：搭建 Velocity 代理并返回 forwarding secret。 */
-test.describe('FR-035 搭建代理（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：搭建 Velocity 代理并返回 forwarding secret。 */
+test.describe('搭建代理（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await login(page)

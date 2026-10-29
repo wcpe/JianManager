@@ -1,14 +1,14 @@
 import { createLogLineParser, type LogLine, type LogStream } from './console-log-line'
 
-/**
- * 控制台行环形缓冲（FR-415，spec §2.1）。
+/** 
+ * 控制台行环形缓冲（spec §2.1）。
  *
  * 取代 xterm 内部 buffer 成为「常驻缓冲」的载体（ADR-086）：会话保活语义不变——
  * 缓冲挂在 {@link import('./terminal-session-manager').TerminalSessionManager} 的会话上，
  * 渲染层卸载只解绑订阅，缓冲与 WS 都不动（ADR-067）。
  */
 
-/** 缓冲上限（spec §2.1）。超出丢最旧，更早历史由 FR-419 从数据库游标分页取回。 */
+/** 缓冲上限（spec §2.1）。超出丢最旧，更早历史由从数据库游标分页取回。 */
 export const CONSOLE_BUFFER_LIMIT = 5000
 
 /** 按 `\r\n` / `\n` / 裸 `\r` 断行。裸 `\r` 断成多行而非原地覆盖，见 ADR-086 代价 5。 */
@@ -26,7 +26,7 @@ export class ConsoleLineBuffer {
   /** 尚未收到换行的尾段（WS 分包会把一行切两半）。 */
   private pendingText = ''
   private pendingStream: LogStream = 'stdout'
-  /**
+  /** 
    * 快照缓存。`useSyncExternalStore` 要求 getSnapshot 在无变更时返回同一引用，
    * 否则会判定「快照未缓存」并陷入重渲染循环。
    */
@@ -56,7 +56,7 @@ export class ConsoleLineBuffer {
     return this.appendSynthetic(text, 'system')
   }
 
-  /**
+  /** 
    * 当前全部行（含未落定的尾段预览）。
    *
    * 尾段用 `preview` 而非 `parse`：它稍后还会以同一个 `seq` 真正落定，
@@ -81,8 +81,8 @@ export class ConsoleLineBuffer {
     return this.nextSeq
   }
 
-  /**
-   * 历史回溯接缝（FR-419）。
+  /** 
+   * 历史回溯接缝。
    *
    * 未溢出时，内存缓冲覆盖整个会话，数据库只需取会话开始前的行；溢出后，`startedAt` 到
    * 当前首行之间正是被环形缓冲挤掉的日志。此时必须把接缝推进到**最早保留行的接收时刻**，

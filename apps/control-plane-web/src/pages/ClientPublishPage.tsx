@@ -24,8 +24,8 @@ function isAbortError(e: unknown): boolean {
   return code === 'ERR_CANCELED' || name === 'CanceledError' || name === 'AbortError'
 }
 
-/**
- * 客户端分发「发布新版本」独立页面（FR-191，编排重做 FR-250）的接线层（ADR-103）。
+/** 
+ * 客户端分发「发布新版本」独立页面（编排重做）的接线层（ADR-103）。
  *
  * 展示层已回迁应用侧（`ClientPublishPageView`），此处只保留应用侧职责：
  * - 步骤与 `?step=` 的双向同步（浏览器前进/后退）；
@@ -63,7 +63,7 @@ export default function ClientPublishPage() {
 
   // 发布批量上传中（点发布后置位，禁止前进/再次发布；与选文件解耦——选文件不再上传）。
   const [uploading, setUploading] = useState(false)
-  // 发布批量上传进度（FR-250/251）：跨所有待上传文件的字节级累计 + 当前文件名/序号。
+  // 发布批量上传进度（251）：跨所有待上传文件的字节级累计 + 当前文件名/序号。
   const [progress, setProgress] = useState<ClientPublishUploadProgress | null>(null)
 
   /** 离页：回频道工作台版本 tab（发布成功 / 视图确认放弃草稿）。 */
@@ -76,8 +76,8 @@ export default function ClientPublishPage() {
     if (!channelId) navigate('/client-channels', { replace: true })
   }, [channelId, navigate])
 
-  /**
-   * 发布：本地去重 → 批量上传（FR-250，FR-346 增效）→ 回填 manifest → 提交版本。
+  /** 
+   * 发布：本地去重 → 批量上传（增效）→ 回填 manifest → 提交版本。
    * 取消信号由视图创建（点发布时）并经载荷透传，取消即中止上传 + 弃单。
    * 结果一律以 `{ ok }` 落定（不抛出）：视图据此决定保留草稿还是离页。
    */

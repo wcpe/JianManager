@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-398：压测运行观测与报告投影工具。
+// 压测运行观测与报告投影工具。
 // SSE 流不开放——MCP 是请求-响应模型，流式观测用轮询这些工具代替。
 
 // maxReportInlineBytes 是 tool 响应内联报告的体量护栏（512KiB）。

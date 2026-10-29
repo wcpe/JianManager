@@ -5,11 +5,11 @@ export const CLIENT_DIST_QUERY_KEYS = [
   'errCode',
   'version',
   'tab',
-  // FR-430：页面 B「客户端分发运维」新增冻结键——`type`=全量日志视图（all/request/…），
+  // 页面 B「客户端分发运维」新增冻结键——`type`=全量日志视图（all/request/…），
   // `seg`=Tab 内分档（live/events/client/ip/player/actions/groups）；随旧路由重定向一并透传。
   'type',
   'seg',
-  // FR-425：自定义时间区间（RFC3339；与 RangePicker 预设档 range 互斥——设置 from/to 时清 range）。
+  // 自定义时间区间（RFC3339；与 RangePicker 预设档 range 互斥——设置 from/to 时清 range）。
   'from',
   'to',
 ] as const

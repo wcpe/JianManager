@@ -9,8 +9,8 @@ import { API } from '@jianmanager/devmock/api'
 import { server } from '@jianmanager/devmock/server'
 import ProvisionServerDialog from './ProvisionServerDialog'
 
-/**
- * ProvisionServerDialog FR-316 强断言：版本-JDK 兼容预检。
+/** 
+ * ProvisionServerDialog强断言：版本-JDK 兼容预检。
  * 解析响应（GET /cores 带 mcVersion）携带 javaMajorRequired，向导据此校验所选/默认 JDK：
  * ① 选 26.1（需 Java 25）而节点最高 JDK 21 → 表单级阻断（提交禁用 + 差距文案 + 去 JDK 面板链接）；
  * ② 选 1.21.1（需 Java 21）且默认 JDK 21 → 放行（无阻断文案、提交可点）；
@@ -56,7 +56,7 @@ async function fillRequired(user: ReturnType<typeof userEvent.setup>, version: s
   await pickCombo(user, '选择版本', version)
 }
 
-describe('ProvisionServerDialog FR-316（版本-JDK 兼容预检）', () => {
+describe('ProvisionServerDialog（版本-JDK 兼容预检）', () => {
   it('① 选 26.1（需 Java 25）而节点最高 JDK 21 → 阻断 + 差距文案 + 引导链接', async () => {
     const user = userEvent.setup()
     loginMockUser()

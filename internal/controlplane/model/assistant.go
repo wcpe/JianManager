@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// AI 供应商协议枚举（FR-514）。协议决定流式适配分支，不从显示名或模型名推断。
+// AI 供应商协议枚举。协议决定流式适配分支，不从显示名或模型名推断。
 const (
 	// AssistantProtocolOpenAIChat OpenAI 兼容 Chat Completions。
 	AssistantProtocolOpenAIChat = "openai-chat"
@@ -12,7 +12,7 @@ const (
 	AssistantProtocolAnthropic = "anthropic"
 )
 
-// AI 供应商出站代理模式（FR-539）。
+// AI 供应商出站代理模式。
 const (
 	// AssistantProxyDirect 直连，**不**读取进程环境代理。
 	AssistantProxyDirect = "direct"
@@ -22,7 +22,7 @@ const (
 	AssistantProxyCustom = "custom"
 )
 
-// AI 供应商凭据模式（FR-514）。
+// AI 供应商凭据模式。
 const (
 	// AssistantCredentialNone 该供应商无需凭据（如本机自托管的无鉴权网关）。
 	AssistantCredentialNone = "none"
@@ -32,7 +32,7 @@ const (
 	AssistantCredentialStored = "stored"
 )
 
-// AssistantProvider 模型供应商（FR-514）。
+// AssistantProvider 模型供应商。
 //
 // 为什么单独建表而不复用 PlatformSetting 白名单字符串键：设置项是「一个键一个标量」的
 // 覆盖层，多供应商 / 多模型 / 每项带凭据与版本的关系型数据塞进去只能序列化成 JSON，
@@ -58,7 +58,7 @@ type AssistantProvider struct {
 	CredentialEnc string `gorm:"size:1024" json:"-"`
 	// CredentialSetAt 仅用于「已配置」标志与展示，不代表凭据当前可用。
 	CredentialSetAt *time.Time `json:"credentialSetAt"`
-	// ProxyMode 出站代理模式（FR-539）：direct 直连 / env 跟随进程环境 / custom 自定义。
+	// ProxyMode 出站代理模式：direct 直连 / env 跟随进程环境 / custom 自定义。
 	//
 	// **默认 direct** 是刻意的：不回退到 `http.ProxyFromEnvironment`。
 	// 否则「本机为了别的用途设了全局 HTTPS_PROXY」会悄悄把模型出站改道，
@@ -80,7 +80,7 @@ type AssistantProvider struct {
 // TableName 固定表名，避免 GORM 对缩写做意外蛇形化。
 func (AssistantProvider) TableName() string { return "assistant_providers" }
 
-// AssistantModel 某个供应商下的具体模型（FR-514）。
+// AssistantModel 某个供应商下的具体模型。
 //
 // ModelID 存上游原始标识（原样字符串），平台不硬编码任何品牌型号——型号会变，
 // 而「哪个供应商的哪个 ID 可用」是管理员在配置时确认的事实。
@@ -97,7 +97,7 @@ type AssistantModel struct {
 	// ContextWindow / MaxOutputTokens 可空：未知就不填，前端显示「未声明」而不是 0。
 	ContextWindow   *int `json:"contextWindow"`
 	MaxOutputTokens *int `json:"maxOutputTokens"`
-	// ReasoningEffort 思考强度（FR-541 §3.2）：minimal / low / medium / high。
+	// ReasoningEffort 思考强度（§3.2）：minimal / low / medium / high。
 	// 空 = 不指定，由上游默认。**不从模型名推断**——同名模型在不同网关上的支持度不同。
 	ReasoningEffort string    `gorm:"size:16" json:"reasoningEffort"`
 	Enabled         bool      `gorm:"not null;default:true" json:"enabled"`
@@ -130,13 +130,13 @@ type AssistantSetting struct {
 	// 显式 column：GORM 的默认蛇形转换把 `CIDRs` 拆成 `c_id_rs`
 	// （缩写与复数被逐字母拆开），得到 `allow_private_c_id_rs` 这种没法读的列名。
 	AllowPrivateCIDRs string `gorm:"column:allow_private_cidrs;type:text" json:"allowPrivateCidrs"`
-	// SystemPrompt 自定义系统提示词（FR-541 §3.1）。空 = 只用内置基线。
+	// SystemPrompt 自定义系统提示词（§3.1）。空 = 只用内置基线。
 	//
 	// 组装顺序固定为「内置基线 + 自定义 + 已启用技能」，三层各自可为空。
 	// 自定义内容**不得**被当作可信指令去放开工具权限——它只改「说什么」，
 	// 不改「能做什么」（写操作仍逐个确认）。
 	SystemPrompt string `gorm:"column:system_prompt;type:text" json:"systemPrompt"`
-	// BuiltinToolsEnabled 是否向助手暴露平台自带工具（FR-540 §4.2）。
+	// BuiltinToolsEnabled 是否向助手暴露平台自带工具（§4.2）。
 	//
 	// 用 *bool 而不是 bool：零值 bool 会把「未配置」读成 false，
 	// 而默认语义是**启用**。指针让「没配置」与「显式关闭」可区分。

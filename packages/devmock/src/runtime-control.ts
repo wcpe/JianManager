@@ -1,5 +1,5 @@
-/**
- * 假后端运行时控制面（FR-502 阶段 6 补丁）：接口延迟 + 数据量规模 + 轮询间隔 + 请求日志，
+/** 
+ * 假后端运行时控制面（阶段 6 补丁）：接口延迟 + 数据量规模 + 轮询间隔 + 请求日志，
  * 开着 mock 就能改。
  *
  * 为什么要单独立一个模块：这些旋钮必须**运行时**可变，才能用同一份 mock 复现多种环境
@@ -39,7 +39,7 @@ export interface MockDataScaleProfile {
   taskCount: number
   /** 告警事件 / 通知行数。 */
   feedCount: number
-  /**
+  /** 
    * 额外的「压力验证」节点行数（0 = 只有手工种子 alpha/beta 等）。
    *
    * ## 为什么它必须进档位而不是硬编码
@@ -56,7 +56,7 @@ export interface MockDataScaleProfile {
   nodeSeedCount: number
 }
 
-/**
+/** 
  * 三档数据量。`small` 的实例数（60）刻意大于手工种子实例的最大 id（30），
  * 否则那些专门造出来演示特定状态的实例（survival-1 / lobby-proxy 等）会被裁掉。
  */
@@ -82,14 +82,14 @@ export const MOCK_DATA_SCALE_LABELS: Record<MockDataScale, string> = {
 /** 默认档位 = 改造前的规模，保证不调档位时 mock 行为与既有测试基线完全一致。 */
 export const MOCK_DEFAULT_DATA_SCALE: MockDataScale = 'large'
 
-/**
+/** 
  * 轮询间隔档位哨兵值：**跟随原始间隔**——不接管任何查询，完全按 `src/api/**` 各自定义的值走。
  * 这是默认档，理由：mock 的默认状态必须等于「改造前行为」，否则「用同一份 mock 复现真机现象」
  * 这件事就失效了（把原本 30s 的 alerts 统一拉到 1s，是在制造新负载，不是在复现）。
  */
 export const MOCK_POLL_FOLLOW_ORIGINAL = -1
 
-/**
+/** 
  * 轮询间隔预设（ms）：`跟随原始` / `0 关闭` / 具体毫秒数。
  * 0 与具体值都是**显式覆盖**语义——统一改掉所有「本来在轮询」的查询，用于模拟极端环境；
  * 一次性加载的查询（未配置 refetchInterval）在任何档位下都不受影响。
@@ -163,7 +163,7 @@ export function mockDataScaleProfile(): MockDataScaleProfile {
   return MOCK_DATA_SCALES[dataScale]
 }
 
-/**
+/** 
  * 切换数据量档位（只改配置，**不**重播种）。单独暴露是为了让调用方明确知道
  * 「改档位」与「重播种」是两步：不重播种则集合里还是旧规模，列表 total 不会变。
  */
@@ -172,7 +172,7 @@ export function setMockDataScale(scale: MockDataScale): void {
   writeStorage(MOCK_DATA_SCALE_STORAGE_KEY, scale)
 }
 
-/**
+/** 
  * 按当前档位重播种整个假后端，并补回登录会话。
  *
  * 为什么必须补会话：`sessions` 也在内存集合里，重播种会把它清空，而前端 localStorage
@@ -184,7 +184,7 @@ export function resetMockData(): void {
   restoreMockSession()
 }
 
-/**
+/** 
  * 当前生效的轮询档位。`MOCK_POLL_FOLLOW_ORIGINAL` = 不接管，其它值 = 统一覆盖（0 表示关闭轮询）。
  * 主控台侧在每个查询**排期时**实时读——不要缓存到模块级常量（缓存了就改不动了）。
  */
@@ -200,7 +200,7 @@ export function setMockPollInterval(ms: number): number {
   return pollInterval
 }
 
-/**
+/** 
  * 是否把 MSW 的请求日志打进控制台。默认关闭：
  * 一次首屏就有几十个请求，MSW 每个请求打一组 Request/Handler/Response（响应体整段进 console，
  * `/instances` 一行就是 1200 条实例），业务日志会被彻底埋掉。
@@ -215,7 +215,7 @@ export function setMockRequestLogEnabled(enabled: boolean): void {
   writeStorage(MOCK_REQUEST_LOG_STORAGE_KEY, enabled ? '1' : '0')
 }
 
-/**
+/** 
  * 启动期还原：读 localStorage 的延迟 / 档位 / 轮询间隔 / 请求日志 → 按档位重播种。
  * main.tsx 在 `worker.start()` 之前调用，否则刷新后档位看着还在、数据规模却已是默认值
  * （档位是 import 时播种的，晚于它的修改才对得上）。
@@ -255,7 +255,7 @@ interface Sess {
   userId: number
 }
 
-/**
+/** 
  * handler 统一 `await` 的全局延迟。0 时直接返回、不排队任何宏任务——
  * 默认档下不给既有测试和交互增加哪怕一个 tick。
  */

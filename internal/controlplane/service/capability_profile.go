@@ -9,7 +9,7 @@ type profileKey struct {
 }
 
 // universalFallback 未知 (type, role) 组合的安全回退画像：只保留对任何进程都成立的能力，
-// 保证非白屏（FR-445 §2.3、ADR-091 §理由）。
+// 保证非白屏（§2.3、ADR-091 §理由）。
 var universalFallback = model.InstanceCapabilityProfile{
 	Type:         "",
 	Role:         "",
@@ -56,7 +56,7 @@ var capabilityRegistry = map[profileKey]model.InstanceCapabilityProfile{
 			model.CapConfig:     {model.SourceNode},
 		},
 	},
-	// 通用/beacon：配套服务与非群组原生二进制，进程指标 + 端口健康 + 配置（FR-450）。
+	// 通用/beacon：配套服务与非群组原生二进制，进程指标 + 端口健康 + 配置。
 	{model.InstanceTypeGeneric, model.InstanceRoleBeacon}: {
 		Type:        string(model.InstanceTypeGeneric),
 		Role:        string(model.InstanceRoleBeacon),
@@ -110,7 +110,7 @@ func KnownProfileTypes() []profileKey {
 	return out
 }
 
-// AttachCapabilities 给实例挂上按当前 (type, role) 现算的画像（FR-445 §2.4）。
+// AttachCapabilities 给实例挂上按当前 (type, role) 现算的画像（§2.4）。
 // 详情/单查路径与列表路径都会调用（列表逐行，故列表响应也带 capabilities）。
 func AttachCapabilities(inst *model.Instance) {
 	if inst == nil {
@@ -120,7 +120,7 @@ func AttachCapabilities(inst *model.Instance) {
 	inst.Capabilities = &p
 }
 
-// attachCapabilitiesAll 给一批实例逐行挂画像（FR-445 §2.4/§2.5）：列表也优先用后端画像，
+// attachCapabilitiesAll 给一批实例逐行挂画像（§2.4/§2.5）：列表也优先用后端画像，
 // 前端本地兜底表仅作降级。纯计算（map 查表 + 切片拷贝），不查库、不落库。
 func attachCapabilitiesAll(insts []model.Instance) {
 	for i := range insts {

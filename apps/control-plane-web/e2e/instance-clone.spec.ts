@@ -11,8 +11,8 @@ function instanceCard(page: Page, name: string): Locator {
   return page.locator('div.bg-card').filter({ has: page.getByRole('button', { name, exact: true }) })
 }
 
-/** FR-036 真浏览器纵切：一键复制 backend 子服、预检、配置修正参数与代理注册选择。 */
-test.describe('FR-036 一键复制子服（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：一键复制 backend 子服、预检、配置修正参数与代理注册选择。 */
+test.describe('一键复制子服（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await login(page)
@@ -25,7 +25,7 @@ test.describe('FR-036 一键复制子服（mock 模式真浏览器）', () => {
 
     const name = `fr036-clone-${Date.now()}`
 
-    // FR-452 起 `/instances` 默认走分组树表；本用例断言工作台卡，显式带 view=card。
+    // 起 `/instances` 默认走分组树表；本用例断言工作台卡，显式带 view=card。
     await page.goto('/instances?view=card')
     await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
     const sourceCard = instanceCard(page, 'creative-1')

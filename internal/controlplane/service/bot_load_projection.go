@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// BotLoadProjectionService 投影 failures/events 读模型（FR-370）。
+// BotLoadProjectionService 投影 failures/events 读模型。
 type BotLoadProjectionService struct {
 	db *gorm.DB
 }
@@ -430,7 +430,7 @@ type ListBotsQuery struct {
 	ErrorCode      string
 }
 
-// ListBots 投影会话关联 Bot 列表（FR-370/372）。
+// ListBots 投影会话关联 Bot 列表（372）。
 func (s *BotLoadProjectionService) ListBots(ctx context.Context, sessionID uint, q ListBotsQuery) (*BotLoadBotListResult, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("投影服务未初始化")

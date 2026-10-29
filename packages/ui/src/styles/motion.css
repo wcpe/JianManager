@@ -1,5 +1,5 @@
 /**
- * 动效词汇表（FR-244；FR-502 阶段 1 自主控台迁入）。
+ * 动效词汇表（阶段 1 自主控台迁入）。
  *
  * 这里只有 @keyframes：时长/缓动 token 在 theme-map.css 定义（--motion-duration-*、
  * --motion-easing-*），动画名 token（--animate-breathing / --animate-top-progress）
@@ -9,7 +9,7 @@
  * 仍留在各应用自己的样式表中消费这些关键帧——关键帧是全局作用域，跨文件引用有效。
  */
 
-/* 呼吸灯（FR-163）：运行对象脉动光环。环色取 currentColor，套用方设 text-* 即定色。 */
+/* 呼吸灯：运行对象脉动光环。环色取 currentColor，套用方设 text-* 即定色。 */
 @keyframes breathing {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
@@ -22,7 +22,7 @@
   }
 }
 
-/* 页眉顶部加载进度条（FR-243）：切页时一次性 0→100% 后淡出。 */
+/* 页眉顶部加载进度条：切页时一次性 0→100% 后淡出。 */
 @keyframes top-progress {
   0% {
     transform: scaleX(0);

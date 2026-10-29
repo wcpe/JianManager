@@ -1,9 +1,9 @@
-/**
+/** 
  * @file LoginPageView：登录页的受控视图，认证请求、token 落地与路由跳转由应用容器负责。
  * @input Panel/Input/PasswordInput/Label/Button 原语、翻译上下文
  * @output LoginPageView、LoginPageViewProps、LoginValues
  * @sync apps/control-plane-web/src/pages/LoginPage.tsx、apps/control-plane-web/src/pages/LoginPage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-157 认证体验、FR-199 身份访问域）
+ * @since（组件受控化迁包；原认证体验身份访问域）
  */
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -19,12 +19,12 @@ export interface LoginValues {
   password: string
 }
 
-/**
+/** 
  * 受控边界：表单草稿与内联错误留在视图；登录请求、token 落地、`returnTo` 解析以及
  * 「已登录/待初始化」重定向全在容器（包内不依赖 zustand 鉴权 store、react-query、react-router）。
  */
 export interface LoginPageViewProps {
-  /**
+  /** 
    * 提交凭据；失败请抛错（视图取服务端 `message` 作内联错误，缺失时回退「登录失败」）。
    * 成功后视图不做任何跳转——由容器在 mutation 内导航。
    */
@@ -35,7 +35,7 @@ export interface LoginPageViewProps {
   loading?: boolean
 }
 
-/** 登录页（FR-157）：账号密码登录，认证失败内联提示且停留本页。 */
+/** 登录页：账号密码登录，认证失败内联提示且停留本页。 */
 export function LoginPageView({ onSubmit, submitting = false, loading = false }: LoginPageViewProps) {
   const { t } = useTranslation()
   const [username, setUsername] = useState('')

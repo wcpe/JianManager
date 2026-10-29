@@ -1,8 +1,8 @@
 import { http, HttpResponse } from 'msw'
 import { API } from '@jianmanager/devmock/api'
 
-/**
- * 实例事件 SSE 流仿真（FR-198）。
+/** 
+ * 实例事件 SSE 流仿真。
  * web/src/api/events.ts 用 fetch+ReadableStream 消费 `event: instance` / `data: {...}`，
  * 收到 `type==='state_change'` 且含 `instanceUuid` 即失效 ['instances'] query。
  */

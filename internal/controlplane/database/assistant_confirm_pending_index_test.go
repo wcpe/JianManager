@@ -13,8 +13,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-/**
- * FR-516 §8「同 run 最多 1 张 pending 票据」的迁移验收。
+/* *
+ *§8「同 run 最多 1 张 pending 票据」的迁移验收。
  *
  * 两个必须验证的点，缺一个这条迁移就是不完备的：
  *  1. **脏库能迁**：早期版本不限制这一条，历史库里可能已有同 run 多张 pending。

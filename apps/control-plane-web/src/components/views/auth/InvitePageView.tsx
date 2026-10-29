@@ -1,9 +1,9 @@
-/**
+/** 
  * @file InvitePageView：公开邀请接受页的受控视图，令牌读取与接受请求由应用容器负责。
  * @input Panel/Button/Input/FieldLabel 原语、翻译上下文
  * @output InvitePageView、InvitePageViewProps、InviteValues
  * @sync apps/control-plane-web/src/pages/InvitePage.tsx、apps/control-plane-web/src/pages/InvitePage.dom.test.tsx
- * @since FR-508（组件受控化迁包；原 FR-405 邮箱邀请，其前身 FR-001/002/156）
+ * @since（组件受控化迁包；原邮箱邀请，其前身002/156）
  */
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -20,7 +20,7 @@ export interface InviteValues {
 
 /** 受控边界：接受请求与成功后清理 URL（history）由容器负责，视图只管表单草稿与结果展示。 */
 export interface InvitePageViewProps {
-  /**
+  /** 
    * 接受邀请；失败请抛错（视图取服务端 `message` 作内联错误，缺失时回退「邀请无效」，
    * 令牌缺失同样走此兜底）。成功后视图切到「已接受」态并给出去登录入口。
    */
@@ -29,7 +29,7 @@ export interface InvitePageViewProps {
   renderLoginLink?: (args: { to: string; children: ReactNode }) => ReactNode
 }
 
-/** 公开邀请接受页（FR-405）：令牌仅从 fragment 读取，避免跟随首个请求进入服务端日志。 */
+/** 公开邀请接受页：令牌仅从 fragment 读取，避免跟随首个请求进入服务端日志。 */
 export function InvitePageView({ onSubmit, renderLoginLink }: InvitePageViewProps) {
   const { t } = useTranslation()
   const [username, setUsername] = useState('')

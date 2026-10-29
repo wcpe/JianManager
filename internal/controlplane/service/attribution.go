@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// attributionMinSamples 归因所需的最小对齐样本数；不足则返回 insufficient 而不硬给排序（FR-465）。
+// attributionMinSamples 归因所需的最小对齐样本数；不足则返回 insufficient 而不硬给排序。
 const attributionMinSamples = 30
 
 // 归因结果状态（AttributionResult.Status）的具名取值（m2）。
@@ -28,7 +28,7 @@ const (
 // attributionTopN 归因输出保留的因子数上限。
 const attributionTopN = 6
 
-// AttributionQuery 性能归因查询参数（FR-465）。v1 仅支持 instance 维度。
+// AttributionQuery 性能归因查询参数。v1 仅支持 instance 维度。
 type AttributionQuery struct {
 	InstanceID string // 实例 UUID
 	Target     string // 目标指标键，默认 inst_tps
@@ -57,7 +57,7 @@ type AttributionWindow struct {
 	To   time.Time `json:"to"`
 }
 
-// AttributionResult 性能归因结果（FR-465）。Status=insufficient 时 Factors 为空、不伪造排序。
+// AttributionResult 性能归因结果。Status=insufficient 时 Factors 为空、不伪造排序。
 type AttributionResult struct {
 	Target  string            `json:"target"`
 	Window  AttributionWindow `json:"window"`
@@ -67,7 +67,7 @@ type AttributionResult struct {
 	Samples int               `json:"samples"`
 }
 
-// AnalyzeAttribution 对指定实例窗口内的目标指标做相关性 + 标准化系数归因（FR-465）。
+// AnalyzeAttribution 对指定实例窗口内的目标指标做相关性 + 标准化系数归因。
 // 世界级因子（区块/实体/方块实体）先按 instance_id 跨 world 求和成实例级序列。
 func (s *MetricService) AnalyzeAttribution(q AttributionQuery) (AttributionResult, error) {
 	target := q.Target
@@ -223,7 +223,7 @@ func attributionCandidateKeys() []string {
 	return out
 }
 
-// AnalyzeAttributionFactors 是归因评分的纯函数内核（可穷举测试，FR-465）。
+// AnalyzeAttributionFactors 是归因评分的纯函数内核（可穷举测试）。
 //
 // 步骤：① 逐因子算与目标的 Pearson 相关 r；② 取目标低于基线（窗口 P10）的样本子集，
 // 算各因子相对窗口均值的 z 分；③ 贡献权重 = 归一化的 |r|·|z|，降序输出 TopN。

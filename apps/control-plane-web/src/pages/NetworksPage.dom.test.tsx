@@ -11,8 +11,8 @@ import NetworksPage from './NetworksPage'
 import { NetworkInstancePickerView } from '@/components/views/networks/NetworksPageView'
 import { WORKSPACES } from '@/lib/console/workspace-navigation'
 
-/**
- * NetworksPage 强断言纵切（FR-203 群组服网络域）：验种子渲染 + 创建联动 + 错误注入。
+/** 
+ * NetworksPage 强断言纵切（群组服网络域）：验种子渲染 + 创建联动 + 错误注入。
  * NetworksPage 初始（列表视图）还会拉 GET /instances?role=proxy（拓扑用）——该端点归实例域，
  * 本域 worktree 无之，故用 server.use 临时桩，避免 onUnhandledRequest:'error' 误伤本域断言。
  */
@@ -30,7 +30,7 @@ describe('NetworksPage（mock 假后端）', () => {
   })
 
   it('侧栏群组网络两个入口分别指向分组管理与拓扑页', () => {
-    // FR-507 阶段 6：侧栏改以四工作区为真源（原六域的 `groupNetwork` 已归入
+    // 阶段 6：侧栏改以四工作区为真源（原六域的 `groupNetwork` 已归入
     // 「服务器运维 → 群组与工作台」分组）。两个入口的顺序不变。
     const group = WORKSPACES.flatMap((ws) => ws.groups).find((item) => item.key === 'opsGroupsWorkbench')
     const targets = group?.children?.map((item) => item.to)
@@ -55,7 +55,7 @@ describe('NetworksPage（mock 假后端）', () => {
     expect(screen.getByText('0 个成员')).toBeInTheDocument()
   })
 
-  it('①-1 列表健康分布读概要 memberStatus 计数，零 per-network 详情请求（FR-335）', async () => {
+  it('①-1 列表健康分布读概要 memberStatus 计数，零 per-network 详情请求', async () => {
     const perNetwork: string[] = []
     const listener = ({ request }: { request: Request }) => {
       const url = new URL(request.url)

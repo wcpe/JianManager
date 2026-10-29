@@ -56,7 +56,7 @@ export function SecretDialog({
   )
 }
 
-/** 查看已存密钥明文弹窗（FR-192，可逆加密存储 → 可随时查看）：展示明文 + 复制（走 copyToClipboard）。 */
+/** 查看已存密钥明文弹窗（可逆加密存储 → 可随时查看）：展示明文 + 复制（走 copyToClipboard）。 */
 export function RevealDialog({
   revealed,
   onClose,

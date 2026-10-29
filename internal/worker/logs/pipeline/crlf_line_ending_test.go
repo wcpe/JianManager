@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-// FR-475 Windows 就绪：CRLF 文件经完整 pipeline（FileTailer → NormalizeBoundary）
+// Windows 就绪：CRLF 文件经完整 pipeline（FileTailer → NormalizeBoundary）
 // 后，事件正文不得含行终止符，且 record 位置仍与文件**字节偏移**精确对齐。
 //
 // 位置断言是本次修复的关键不变量：行终止符只在归一化收口（normalize.FeedAt）剥除，

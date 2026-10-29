@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// newSearchTestDB 为 FR-247 搜索/聚合测试准备隔离的命名内存库。
+// newSearchTestDB 为搜索/聚合测试准备隔离的命名内存库。
 func newSearchTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"

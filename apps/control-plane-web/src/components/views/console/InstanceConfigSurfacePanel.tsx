@@ -8,8 +8,8 @@ import { Input } from '@jianmanager/ui/components/input'
 import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { cn } from '@jianmanager/ui'
 
-/**
- * 实例「关键配置」面板（FR-451 / ADR-092）。
+/** 
+ * 实例「关键配置」面板（ADR-092）。
  *
  * 把启动参数 + `server.properties` 关键项明面化：每项显式声明来源——
  * **内联值**（平台持有、可编辑）或**文件引用**（外部文件提供、平台不覆写，只读展示生效值预览）。
@@ -113,7 +113,7 @@ function SurfaceEditor({
   const { t } = useTranslation()
   const [drafts, setDrafts] = useState<Record<string, DraftState>>(() => buildDrafts(items))
 
-  /**
+  /** 
    * 取某清单项的草稿。
    *
    * `buildDrafts(items)` 覆盖全部 item，故命中是常态；万一取不到（items 已变而编辑器尚未按

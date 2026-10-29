@@ -7,8 +7,8 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import UsersPage from './UsersPage'
 
-/**
- * UsersPage 强断言（FR-199 身份访问域）。受 requireAuth 保护：渲染前 loginMockUser()。
+/** 
+ * UsersPage 强断言（身份访问域）。受 requireAuth 保护：渲染前 loginMockUser()。
  * 三条：① 渲染种子用户行 ② 创建用户后列表联动多一行 ③ 注入 500 后页面降级不崩溃。
  */
 
@@ -43,7 +43,7 @@ describe('UsersPage（mock 假后端）', () => {
     // 打开创建对话框（标题「创建用户」所在的共享 Dialog）。
     await user.click(screen.getByRole('button', { name: /创建用户/ }))
     const dialog = await screen.findByRole('dialog', { name: '创建用户' })
-    // FR-026：创建用户弹窗必须走 shadcn Dialog，并用可访问 label 关联 Input。
+    // 创建用户弹窗必须走 shadcn Dialog，并用可访问 label 关联 Input。
     await user.type(within(dialog).getByLabelText(/用户名/), 'newbie')
     await user.type(within(dialog).getByLabelText(/密码/), 'newbie123')
     await user.click(within(dialog).getByRole('button', { name: '创建' }))
@@ -63,7 +63,7 @@ describe('UsersPage（mock 假后端）', () => {
     await user.click(within(dialog).getByRole('button', { name: '创建邀请' }))
 
     expect(await screen.findByText('member@example.com')).toBeInTheDocument()
-    // FR-502：Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分：
+    // Dialog 右上角 X 也走 i18n 后与页脚按钮同名为「关闭」，故按 data-slot 区分：
     // 页脚关闭按钮是 data-slot="button"，右上角 X 是 data-slot="dialog-close"。
     await user.click(
       within(dialog)

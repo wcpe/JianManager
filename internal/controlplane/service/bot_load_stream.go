@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// BotLoadStreamSnapshot 会话 SSE 一帧聚合投影（FR-370/372）。
+// BotLoadStreamSnapshot 会话 SSE 一帧聚合投影（372）。
 type BotLoadStreamSnapshot struct {
 	Run          map[string]any
 	RunState     string

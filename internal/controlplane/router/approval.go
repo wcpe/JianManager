@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// 审批中心 HTTP 面（FR-490 / FR-493）。
+// 审批中心 HTTP 面。
 //
 // ## 两组端点的身份边界
 //
@@ -35,7 +35,7 @@ import (
 // ApprovalHandler 审批中心处理器。
 type ApprovalHandler struct {
 	svc *service.ApprovalService
-	// exec 批准后触发执行（FR-491）。nil 时只落状态不执行——
+	// exec 批准后触发执行。nil 时只落状态不执行——
 	// 但那样批准就成了空操作，因此装配层必须注入。
 	exec *service.ApprovalExecutor
 	// audit 决策审计。nil 时跳过审计（执行器仍会在执行侧留痕）。
@@ -240,7 +240,7 @@ func (h *ApprovalHandler) decide(c *gin.Context, approve bool) {
 // respondApprovalErr 审批错误映射。
 //
 // 判序要点：`ErrApprovalNotFound` 与「不是你的票」共用 404——分开回 403/404
-// 等于给出「这个 id 存在吗」的探测接口（与 FR-515 会话端点同一取舍）。
+// 等于给出「这个 id 存在吗」的探测接口（与会话端点同一取舍）。
 func respondApprovalErr(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrApprovalNotFound):

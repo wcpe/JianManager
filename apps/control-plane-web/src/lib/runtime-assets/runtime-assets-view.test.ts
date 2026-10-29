@@ -144,7 +144,7 @@ describe('shortSha', () => {
   })
 })
 
-describe('buildRuntimeGrid（FR-301 多运行时矩阵）', () => {
+describe('buildRuntimeGrid（多运行时矩阵）', () => {
   function rt(p: Partial<import('./runtime-assets-contracts').RuntimeMatrixEntry>): import('./runtime-assets-contracts').RuntimeMatrixEntry {
     return {
       id: 1,

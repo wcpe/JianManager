@@ -48,8 +48,8 @@ export function useDeleteClientChannel() {
   })
 }
 
-/**
- * 创建拉取密钥；返回一次性明文（创建后亦可经 reveal 查看，FR-192）。
+/** 
+ * 创建拉取密钥；返回一次性明文（创建后亦可经 reveal 查看）。
  * value 可空：留空自动生成；填入则用作自定义密钥明文值（管理员自控这把永久 key）。
  */
 export function useCreateClientKey() {
@@ -76,8 +76,8 @@ export function useCreateClientKey() {
   })
 }
 
-/**
- * 编辑拉取密钥（值/名称，FR-192）。改值时后端重算 KeyHash（鉴权切到新值）+ 重写 KeyEnc，
+/** 
+ * 编辑拉取密钥（值/名称）。改值时后端重算 KeyHash（鉴权切到新值）+ 重写 KeyEnc，
  * 响应回显新明文；改值会使持旧值的已分发客户端失效。value 可空=只改名。
  */
 export function useUpdateClientKey() {
@@ -116,8 +116,8 @@ export function useRevokeClientKey() {
   })
 }
 
-/**
- * 查看拉取密钥明文（FR-192，见 ADR-044）。仅平台管理员；后端有 KeyEnc 时解密返明文。
+/** 
+ * 查看拉取密钥明文（见 ADR-044）。仅平台管理员；后端有 KeyEnc 时解密返明文。
  * 无 KeyEnc（存量老密钥/创建时未配加密）→ 404 KEY_NOT_REVEALABLE，调用方据此提示不可找回。
  */
 export function useRevealClientKey() {
@@ -129,7 +129,7 @@ export function useRevealClientKey() {
   })
 }
 
-/** 内嵌客户端更新器 jar 的版本与可用性（FR-107 接入引导）。 */
+/** 内嵌客户端更新器 jar 的版本与可用性（接入引导）。 */
 export interface UpdaterJarsInfo {
   /** 内嵌更新器展示版本号（与 client-updater 构建同步）。 */
   version: string
@@ -139,7 +139,7 @@ export interface UpdaterJarsInfo {
   core: { available: boolean; size: number }
 }
 
-/** 查询内嵌更新器 jar 信息（FR-107）。供接入引导展示版本 + 禁用缺失下载。 */
+/** 查询内嵌更新器 jar 信息。供接入引导展示版本 + 禁用缺失下载。 */
 export function useUpdaterJarsInfo() {
   return useQuery({
     queryKey: ['client-updater-jars'],
@@ -150,7 +150,7 @@ export function useUpdaterJarsInfo() {
   })
 }
 
-/** 下载内嵌更新器 jar（FR-107）。component ∈ wedge | core；带鉴权流式下载并触发浏览器保存。 */
+/** 下载内嵌更新器 jar。component ∈ wedge | core；带鉴权流式下载并触发浏览器保存。 */
 export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<void> {
   const { data } = await api.get(`/client-dist/updater-jars/${component}`, {
     responseType: 'blob',
@@ -164,7 +164,7 @@ export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<v
   URL.revokeObjectURL(url)
 }
 
-/** updater-core 归档版本摘要（FR-259）。 */
+/** updater-core 归档版本摘要。 */
 export interface UpdaterCoreVersion {
   /** 数字归档版本，兼容旧接口与 wedge 分发兜底。 */
   version: number
@@ -185,7 +185,7 @@ export interface UpdaterCoreVersion {
   selected: boolean
 }
 
-/** 列出频道可选的 updater-core 归档版本（FR-259，JWT 平台管理员）。 */
+/** 列出频道可选的 updater-core 归档版本（JWT 平台管理员）。 */
 export function useUpdaterCoreVersions(channelId: string) {
   return useQuery({
     queryKey: ['client-channels', channelId, 'updater-core-versions'],
@@ -218,7 +218,7 @@ export function useUploadUpdaterCore() {
   })
 }
 
-/** 切换频道选定的 updater-core 版本（FR-259 回滚，JWT 平台管理员）。 */
+/** 切换频道选定的 updater-core 版本（回滚，JWT 平台管理员）。 */
 export function useSelectUpdaterCore() {
   const qc = useQueryClient()
   return useMutation({

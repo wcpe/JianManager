@@ -21,7 +21,7 @@ interface PromptDialogProps {
   onCancel: () => void
 }
 
-/** 通用输入对话框（FR-070 新建/重命名）。基于 shadcn Dialog，回车提交、Esc 取消。 */
+/** 通用输入对话框（新建/重命名）。基于 shadcn Dialog，回车提交、Esc 取消。 */
 export default function PromptDialog({
   open,
   title,

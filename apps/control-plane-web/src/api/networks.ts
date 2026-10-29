@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 成员实例按运行状态的计数桶（五态零补齐，FR-335）。 */
+/** 成员实例按运行状态的计数桶（五态零补齐）。 */
 export interface MemberStatusCounts {
   running: number
   stopped: number
@@ -10,14 +10,14 @@ export interface MemberStatusCounts {
   stopping: number
 }
 
-/** 群组（Network 软标签）列表项（对应后端 service.NetworkSummary，FR-032/FR-335）。 */
+/** 群组（Network 软标签）列表项（对应后端 service.NetworkSummary）。 */
 export interface NetworkSummary {
   id: number
   uuid: string
   name: string
   description: string
   memberCount: number
-  /** 成员健康计数桶（FR-335）：列表页免详情请求直接渲染健康分布。 */
+  /** 成员健康计数桶：列表页免详情请求直接渲染健康分布。 */
   memberStatus: MemberStatusCounts
   createdAt: string
 }

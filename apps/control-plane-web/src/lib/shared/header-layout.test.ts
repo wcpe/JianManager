@@ -8,7 +8,7 @@ import {
   type HeaderSlot,
 } from './header-layout'
 
-describe('header-layout（FR-179 全局页眉右对齐 + FR-216 通知铃铛合并）', () => {
+describe('header-layout（全局页眉右对齐通知铃铛合并）', () => {
   it('右侧操作区按「搜索→集群徽标→通知铃铛→账户」固定顺序', () => {
     expect(HEADER_RIGHT_SLOTS).toEqual(['search', 'clusterBadges', 'notifications', 'account'])
   })
@@ -18,7 +18,7 @@ describe('header-layout（FR-179 全局页眉右对齐 + FR-216 通知铃铛合�
     expect(HEADER_RIGHT_SLOTS).toContain('search')
   })
 
-  it('FR-216：通知铃铛为单一入口（合并原 收件箱 + 告警铃铛），紧邻账户之前', () => {
+  it('通知铃铛为单一入口（合并原 收件箱 + 告警铃铛），紧邻账户之前', () => {
     const notifIdx = HEADER_RIGHT_SLOTS.indexOf('notifications')
     const accountIdx = HEADER_RIGHT_SLOTS.indexOf('account')
     expect(notifIdx).toBeGreaterThanOrEqual(0)

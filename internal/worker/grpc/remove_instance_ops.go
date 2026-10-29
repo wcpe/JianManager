@@ -16,7 +16,7 @@ import (
 
 const (
 	// removeWorkDirAttempts / removeWorkDirBackoff：删除工作目录的校验重试参数。
-	// RemoveAll 返回 nil 不代表目录真消失——FR-310 竞态下未死透的 Java 会在 unlink 之后重建 world/；
+	// RemoveAll 返回 nil 不代表目录真消失——竞态下未死透的 Java 会在 unlink 之后重建 world/；
 	// 故删完复核目录是否仍在，仍在则退避重试。正常路径已由 ReapDaemonForDelete 杀死写者，此处为纵深防御，
 	// 同时吸收 Windows 上被占用文件的瞬时共享冲突。
 	removeWorkDirAttempts = 5
@@ -51,7 +51,7 @@ func (s *Server) RemoveInstance(ctx context.Context, req *workerpb.RemoveInstanc
 		return &workerpb.RemoveInstanceResponse{Success: false, Error: fmt.Sprintf("移除实例注册失败: %v", err)}, nil
 	}
 
-	// FR-310：删除运行中 daemon 实例的竞态——manager.Remove 只杀 wrapper 组，Unix 上自成进程组的
+	// 删除运行中 daemon 实例的竞态——manager.Remove 只杀 wrapper 组，Unix 上自成进程组的
 	// Java 子进程未死，会在下方 RemoveAll 之后继续写 world region 把工作目录重建出来（且遗留 pid/sock）。
 	// 删目录前先按 PID 记录强杀整棵进程树并确认死透，顺带清理遗留的 <uuid>.pid / <uuid>.sock。
 	s.manager.ReapDaemonForDelete(req.InstanceUuid)
@@ -59,7 +59,7 @@ func (s *Server) RemoveInstance(ctx context.Context, req *workerpb.RemoveInstanc
 	resp := &workerpb.RemoveInstanceResponse{Success: true}
 	switch {
 	case req.SkipWorkDir:
-		// 就地导入实例（FR-302，见 ADR-069）：CP 显式指示保留原目录，
+		// 就地导入实例（见 ADR-069）：CP 显式指示保留原目录，
 		// 与下方托管区守卫互为双保险——任一生效原目录都完好。
 		resp.WorkDirSkipped = true
 		resp.SkipReason = "就地导入实例：按 CP 指示保留原目录，未删除任何文件"
@@ -108,7 +108,7 @@ func (s *Server) dropSearchIndex(instanceUUID string) {
 
 // removeInstanceWorkDir 删除工作目录并校验其确已消失，最多重试 removeWorkDirAttempts 次。
 // 兜底两种竞态：① 存活进程在一次「成功」的 RemoveAll 之后重建目录（Unix 上 unlink 成功而写者仍在——
-// FR-310 的核心症状，正常路径已由 ReapDaemonForDelete 杀死写者消除，此处为纵深防御）；② Windows 上
+// 的核心症状，正常路径已由 ReapDaemonForDelete 杀死写者消除，此处为纵深防御）；② Windows 上
 // 被占用文件导致 RemoveAll 瞬时报共享冲突。目录最终不存在即视为成功（幂等）。
 func removeInstanceWorkDir(dir string) error {
 	var lastErr error
