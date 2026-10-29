@@ -173,3 +173,77 @@ func mustEncryptorFrom(t *testing.T, secretB64 string) *KeyEncryptor {
 	}
 	return enc
 }
+
+// TestSettingSurvivesThreeStarts 验收「迁移首启 → 停 → 二启 → 三启，且读回同一 default_model_id」。
+//
+// 为什么单独写：FR-515 已有一个三启周期用例，但它验的是**会话/run 表与唯一索引**；
+// 本 FR 关心的是 `assistant_settings` 单行表能不能在反复迁移后仍保住默认模型指针。
+// 两者表不同、失效模式也不同：settings 是「单行 + 可空外键」，
+// 最容易出的问题是「AutoMigrate 重跑时把行重建了」或「可空指针被写成 0」。
+func TestSettingSurvivesThreeStarts(t *testing.T) {
+	db, dsn := newFileDB(t, "three-starts")
+	enc := testEncryptor(t)
+
+	// 首启：建供应商 + 模型，并把模型的 id 设为默认。
+	sA := newServiceOn(t, db, enc)
+	provider, err := sA.CreateProvider(SaveProviderParams{
+		Name:           "三启用例",
+		Protocol:       model.AssistantProtocolOpenAIChat,
+		BaseURL:        "https://api.example.com/v1",
+		Enabled:        true,
+		CredentialMode: model.AssistantCredentialNone,
+	})
+	if err != nil {
+		t.Fatalf("建供应商失败: %v", err)
+	}
+	m, err := sA.CreateModel(SaveModelParams{
+		ProviderID: provider.ID, ModelID: "gpt-4o-mini", Enabled: true, Streaming: true,
+	})
+	if err != nil {
+		t.Fatalf("建模型失败: %v", err)
+	}
+	if err := db.Model(&model.AssistantSetting{}).Where("id = ?", 1).
+		Update("default_model_id", m.ID).Error; err != nil {
+		t.Fatalf("设默认模型失败: %v", err)
+	}
+	sqlA, err := db.DB()
+	if err != nil {
+		t.Fatalf("取连接失败: %v", err)
+	}
+	if err := sqlA.Close(); err != nil {
+		t.Fatalf("首启关闭失败: %v", err)
+	}
+
+	// 二启、三启：各自重新迁移一遍（脏库），并读回同一个 default_model_id。
+	for cycle := 2; cycle <= 3; cycle++ {
+		dbN := openExistingDB(t, dsn)
+		sN := newServiceOn(t, dbN, enc) // 内部再跑一次 EnsureSetting + AutoMigrate
+		_ = sN
+
+		var row model.AssistantSetting
+		if err := dbN.First(&row, 1).Error; err != nil {
+			t.Fatalf("第 %d 启读设置失败: %v", cycle, err)
+		}
+		if row.DefaultModelID == nil {
+			t.Fatalf("第 %d 启后 default_model_id 丢了", cycle)
+		}
+		if *row.DefaultModelID != m.ID {
+			t.Fatalf("第 %d 启后 default_model_id 变了: want %d got %d", cycle, m.ID, *row.DefaultModelID)
+		}
+		// 设置表是单行表：反复迁移不能把它变成多行。
+		var count int64
+		if err := dbN.Model(&model.AssistantSetting{}).Count(&count).Error; err != nil {
+			t.Fatalf("第 %d 启计数失败: %v", cycle, err)
+		}
+		if count != 1 {
+			t.Fatalf("第 %d 启后设置表应恰好 1 行，实际 %d", cycle, count)
+		}
+		sqlN, nerr := dbN.DB()
+		if nerr != nil {
+			t.Fatalf("第 %d 启取连接失败: %v", cycle, nerr)
+		}
+		if err := sqlN.Close(); err != nil {
+			t.Fatalf("第 %d 启关闭失败: %v", cycle, err)
+		}
+	}
+}

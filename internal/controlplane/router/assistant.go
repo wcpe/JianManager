@@ -177,7 +177,8 @@ func (h *AssistantHandler) CreateProvider(c *gin.Context) {
 		return
 	}
 	h.auditProvider(c, "assistant.provider.create", itoaID(created.ID), map[string]any{
-		"name": created.Name, "protocol": created.Protocol, "credentialMode": created.CredentialMode,
+		"name": created.Name, "protocol": created.Protocol, "baseUrl": created.BaseURL,
+		"credentialMode": created.CredentialMode,
 	})
 	c.JSON(http.StatusCreated, created)
 }
@@ -213,8 +214,11 @@ func (h *AssistantHandler) UpdateProvider(c *gin.Context) {
 		return
 	}
 	// 只记「凭据是否被动过」的布尔，不记任何值：审计表会被检索与长期保留。
+	// baseUrl 要记：它是出站目的地，改它就是改「数据往哪发」，是本 FR
+	// 最早列出的两个高风险动作之一（另一个是清凭据）。baseUrl 本身不是秘密，
+	// 但仍是白名单逐字段拼，不从请求体整体序列化。
 	h.auditProvider(c, "assistant.provider.update", itoaID(updated.ID), map[string]any{
-		"name": updated.Name, "protocol": updated.Protocol,
+		"name": updated.Name, "protocol": updated.Protocol, "baseUrl": updated.BaseURL,
 		"credentialMode":    updated.CredentialMode,
 		"credentialChanged": strings.TrimSpace(req.CredentialSecret) != "" || req.ClearCredential,
 	})
