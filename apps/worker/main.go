@@ -681,7 +681,11 @@ func runWorker() {
 			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
 			// 删除三闸保持默认关闭；原生整日 TTL 仍独立运行，不提供永久副本保证。
 			DeleteEnabled: cfg.LogVL.DeleteEnabled,
-			AuthUsername:  cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
+			// 磁盘占用上限（2026-10-29）：与 retention_period 同时生效，谁先到谁触发。
+			// 默认 0 = 不限制（保持改动前行为）；生产建议显式配 max_disk_space_bytes。
+			MaxDiskSpaceUsageBytes: cfg.LogVL.MaxDiskSpaceBytes,
+			MaxDiskUsagePercent:    cfg.LogVL.MaxDiskUsagePercent,
+			AuthUsername:           cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
 			Ports: map[vlsup.Namespace]int{
 				vlsup.NamespaceHot: cfg.LogVL.HotPort,
 			},

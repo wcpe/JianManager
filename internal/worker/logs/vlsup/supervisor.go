@@ -72,6 +72,15 @@ type Options struct {
 	// DeleteEnabled 打开 VL 的 -delete.enable（默认关）。
 	// 只有它为真时才允许孤儿代次 GC / 按级别 TTL 真正删除数据；关闭时行为与改动前一致。
 	DeleteEnabled bool
+	// MaxDiskSpaceUsageBytes / MaxDiskUsagePercent 是 VL 的**磁盘占用上限**（二者互斥）。
+	//
+	// 与 RetentionPeriod 的关系：保留期管「最老留多久」，磁盘上限管「总共能占多少」，
+	// 谁先到谁触发，两者可以同时开（VL 官方也推荐搭配）。
+	//
+	// 为什么需要它（2026-10-29 用户要求）：只有 retentionPeriod 时，磁盘用量由
+	// 「180 天 × 实际写入量」决定——某个源日志暴增会让磁盘跟着涨，没有上限。
+	MaxDiskSpaceUsageBytes int64
+	MaxDiskUsagePercent    int
 	// AuthUsername / AuthPassword 本地 Basic-auth；生产必须非空。
 	AuthUsername string
 	AuthPassword string
@@ -127,22 +136,24 @@ type instance struct {
 
 // Supervisor 管理受管 VL 实例（2026-10-29 起只有一个）。
 type Supervisor struct {
-	binPath       string
-	assetSHA      string
-	dataRoot      string
-	retention     string
-	authUser      string
-	deleteEnabled bool
-	authPass      string
-	ports         map[Namespace]int
-	memOverride   map[Namespace]int64
-	memPercent    int
-	factory       CmdFactory
-	sink          Sink
-	allowVLRec    bool
-	assetTag      string
-	assetBuild    string
-	newClient     func(baseURL, user, pass string) (*Client, error)
+	binPath        string
+	assetSHA       string
+	dataRoot       string
+	retention      string
+	authUser       string
+	deleteEnabled  bool
+	maxDiskBytes   int64
+	maxDiskPercent int
+	authPass       string
+	ports          map[Namespace]int
+	memOverride    map[Namespace]int64
+	memPercent     int
+	factory        CmdFactory
+	sink           Sink
+	allowVLRec     bool
+	assetTag       string
+	assetBuild     string
+	newClient      func(baseURL, user, pass string) (*Client, error)
 
 	mu          sync.Mutex
 	instances   map[Namespace]*instance
@@ -259,24 +270,26 @@ func New(opts Options) (*Supervisor, error) {
 		}
 	}
 	s := &Supervisor{
-		binPath:       opts.BinaryPath,
-		assetSHA:      opts.AssetSHA256,
-		dataRoot:      opts.DataRoot,
-		retention:     retention,
-		authUser:      opts.AuthUsername,
-		deleteEnabled: opts.DeleteEnabled,
-		authPass:      opts.AuthPassword,
-		ports:         map[Namespace]int{},
-		memOverride:   map[Namespace]int64{},
-		memPercent:    opts.MemoryAllowedPercent,
-		factory:       factory,
-		sink:          sink,
-		allowVLRec:    opts.AllowVLRecursiveSink,
-		assetTag:      tag,
-		assetBuild:    build,
-		newClient:     newClient,
-		instances:     map[Namespace]*instance{},
-		budget:        DefaultCacheBudget(),
+		binPath:        opts.BinaryPath,
+		assetSHA:       opts.AssetSHA256,
+		dataRoot:       opts.DataRoot,
+		retention:      retention,
+		authUser:       opts.AuthUsername,
+		deleteEnabled:  opts.DeleteEnabled,
+		maxDiskBytes:   opts.MaxDiskSpaceUsageBytes,
+		maxDiskPercent: opts.MaxDiskUsagePercent,
+		authPass:       opts.AuthPassword,
+		ports:          map[Namespace]int{},
+		memOverride:    map[Namespace]int64{},
+		memPercent:     opts.MemoryAllowedPercent,
+		factory:        factory,
+		sink:           sink,
+		allowVLRec:     opts.AllowVLRecursiveSink,
+		assetTag:       tag,
+		assetBuild:     build,
+		newClient:      newClient,
+		instances:      map[Namespace]*instance{},
+		budget:         DefaultCacheBudget(),
 	}
 	for _, ns := range managedNamespaces() {
 		port := DefaultPort(ns)
@@ -317,15 +330,17 @@ func (s *Supervisor) configFor(ns Namespace) InstanceConfig {
 		port = DefaultPort(ns)
 	}
 	return InstanceConfig{
-		Namespace:            ns,
-		Port:                 port,
-		StorageDataPath:      StoragePathUnder(s.dataRoot, ns),
-		RetentionPeriod:      s.retentionFor(ns),
-		MemoryAllowedBytes:   s.memOverride[ns],
-		MemoryAllowedPercent: s.memPercent,
-		AuthUsername:         s.authUser,
-		AuthPassword:         s.authPass,
-		EnableDelete:         s.deleteEnabled,
+		Namespace:              ns,
+		Port:                   port,
+		StorageDataPath:        StoragePathUnder(s.dataRoot, ns),
+		RetentionPeriod:        s.retentionFor(ns),
+		MemoryAllowedBytes:     s.memOverride[ns],
+		MemoryAllowedPercent:   s.memPercent,
+		AuthUsername:           s.authUser,
+		AuthPassword:           s.authPass,
+		EnableDelete:           s.deleteEnabled,
+		MaxDiskSpaceUsageBytes: s.maxDiskBytes,
+		MaxDiskUsagePercent:    s.maxDiskPercent,
 	}
 }
 

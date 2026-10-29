@@ -629,8 +629,22 @@ type LogVLConfig struct {
 	// **不会让旧行不存在**；VL 只追加。缺删除能力时，任何「整窗重写 + 换代次」
 	// 都会线性放大体积（生产实测单日 75×、880MB）。打开后可由孤儿代次 GC 回收。
 	// 默认关：删除不可逆，必须运维显式承担。
-	DeleteEnabled bool  `mapstructure:"delete_enabled"`
-	HotCacheBytes int64 `mapstructure:"hot_cache_bytes"`
+	DeleteEnabled bool `mapstructure:"delete_enabled"`
+	// MaxDiskSpaceBytes / MaxDiskUsagePercent 是受管 VL 的**磁盘占用上限**（二者互斥）。
+	//
+	// 为什么需要它（2026-10-29）：只有 `retention_period` 时，磁盘用量 = 保留期 × 实际写入量，
+	// 没有任何上限——单个源日志暴增就会把磁盘拖涨。VL 提供两种上限：
+	//   - `max_disk_space_bytes`：`-retention.maxDiskSpaceUsageBytes`，按绝对字节数；
+	//   - `max_disk_usage_percent`：`-retention.maxDiskUsagePercent`，按磁盘使用百分比（1-100）。
+	//
+	// **推荐用字节数**（本项目生产是 VL 与游戏服**共享磁盘**，`/home` 已 71%）：
+	// 百分比口径在共享盘上会被**其它进程**的写入触发，那会把日志丢掉而非删别的，风险更大。
+	//
+	// 注意 VL 的语义：超过上限时**丢最旧的按日分区**，不是按字节精确切；
+	// 它与 `retention_period` **同时生效**（谁先到谁触发），不是替代关系。
+	MaxDiskSpaceBytes   int64 `mapstructure:"max_disk_space_bytes"`
+	MaxDiskUsagePercent int   `mapstructure:"max_disk_usage_percent"`
+	HotCacheBytes       int64 `mapstructure:"hot_cache_bytes"`
 	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
 	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
 	// MemoryAllowedPercent 非 0 时用 VL 官方推荐的 -memory.allowedPercent，
@@ -665,6 +679,30 @@ type LogVLReservationBudgets struct {
 	WAL     int64 `mapstructure:"wal"`
 	Staging int64 `mapstructure:"staging"`
 	Export  int64 `mapstructure:"export"`
+}
+
+// ValidateDiskLimit 校验受管 VL 的磁盘占用上限配置。
+//
+// 三条红线（均在**启动时**拒绝，不静默忽略）：
+//  1. 负数：无意义，几乎必然是配置写错；
+//  2. 两者同时非零：VL 官方明确二者**互斥**。2026-10-29 用真实 v1.52.0 实跑确认：
+//     同配时 VL 自己直接 `fatal` 退出（不是告警、也不是选一个）。我们提前到配置层拦，
+//     是为了给出中文原因与键名，而不是让运维去看 VL 的 fatal；
+//  3. 百分比 > 100：超出 VL 接受范围（1-100）。
+//
+// 为什么特意不把“两个都配”降级成告警：这是那种“只在出事时才暴露”的配置——
+// 磁盘满的那一刻，运维以为自己设了 N GiB，实际生效的是另一条，事故现场才发現。
+func (c LogVLConfig) ValidateDiskLimit() error {
+	if c.MaxDiskSpaceBytes < 0 {
+		return fmt.Errorf("log_vl.max_disk_space_bytes 必须非负（0 = 不限制）")
+	}
+	if c.MaxDiskUsagePercent < 0 || c.MaxDiskUsagePercent > 100 {
+		return fmt.Errorf("log_vl.max_disk_usage_percent 必须在 [0,100]（0 = 不限制）")
+	}
+	if c.MaxDiskSpaceBytes > 0 && c.MaxDiskUsagePercent > 0 {
+		return fmt.Errorf("log_vl.max_disk_space_bytes 与 max_disk_usage_percent 互斥（VL 官方限制），只能配一个")
+	}
+	return nil
 }
 
 // RuntimeBudget 将新键与旧内存键归并为运行时唯一预算，拒绝拼错层名和负上界。
@@ -1954,6 +1992,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.password", "")
 	v.SetDefault("log_vl.data_root", "")
 	v.SetDefault("log_vl.retention_period", vlruntime.DefaultRetentionPeriod)
+	// 磁盘占用上限（2026-10-29）：默认 0 = 不限制，与改动前行为逐字一致。
+	// 不在这里给“聪明”的默认值：上限该设多少取决于运维给 VL 划了多少盘，代码猜不出来。
+	v.SetDefault("log_vl.max_disk_space_bytes", 0)
+	v.SetDefault("log_vl.max_disk_usage_percent", 0)
 	// 2026-10-29：`log_vl.cold_retention_period` 已删除（冷热双层废除）。
 	// `log_retention.cold_retention` 作为**声明**保留：它现在表达「期望的可查范围」，
 	// 与 hot_retention 一起取最大值去校 `log_vl.retention_period`（见 validateRuntimeRetention）。
@@ -2224,6 +2266,9 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	if _, err := cfg.LogVL.RuntimeBudget(); err != nil {
+		return nil, err
+	}
+	if err := cfg.LogVL.ValidateDiskLimit(); err != nil {
 		return nil, err
 	}
 	if _, err := cfg.IngestReadLimits(); err != nil {

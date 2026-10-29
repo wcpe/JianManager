@@ -72,6 +72,28 @@ type InstanceConfig struct {
 	//
 	// 默认关闭（零值）：删除是不可逆操作，必须由运维显式承担；关闭时行为与改动前逐字一致。
 	EnableDelete bool
+
+	// MaxDiskSpaceUsageBytes 是 `-retention.maxDiskSpaceUsageBytes`：在 -storageDataPath
+	// 所在分区上**超过这个字节数**时，VL 自动丢弃**最旧的按日分区**。
+	//
+	// 为什么要它（2026-10-29 用户要求「加磁盘上限」）：此前只有 `-retentionPeriod`，
+	// 即磁盘用量完全由「180 天 × 实际写入量」决定——某个游戏服日志暴增时，磁盘跟着涨，
+	// 没有任何上限。VL 提供了两种磁盘上限（**二者互斥**，见下方的 Percent 字段）：
+	// 绝对字节数（本字段）与磁盘使用百分比。
+	//
+	// VL 官方语义：超过上限时**按最旧优先丢整日分区**（不是按字节精确切）。
+	// 所以它买的是「磁盘不会被写满」，不是「永远保留恰好 N 字节」。
+	MaxDiskSpaceUsageBytes int64
+
+	// MaxDiskUsagePercent 是 `-retention.maxDiskUsagePercent`：按**磁盘使用百分比**（1-100）
+	// 触发同一机制。
+	//
+	// 为什么保留两种而不只选一种（它们互斥，不能同时给）：
+	//   - 字节数适合「我给 VL 划了多少盘」这种确定预算；
+	//   - 百分比适合「和别的进程共享一块盘」——但共享盘上**任何**进程涨都会触发 VL 丢弃，
+	//     包括非日志的进程，所以它只在 VL 独占一块盘时才是好口径。
+	// 本项目的生产形态是 VL 与游戏服共享磁盘（/home 71%），因此**默认建议用字节数**。
+	MaxDiskUsagePercent int
 }
 
 // DefaultPort 返回 namespace 的默认监听端口。
@@ -140,6 +162,18 @@ func (c InstanceConfig) Validate() error {
 	if c.MemoryAllowedPercent < 0 || c.MemoryAllowedPercent > 100 {
 		return fmt.Errorf("vlsup: memory.allowedPercent must be within [0,100]")
 	}
+	if c.MaxDiskSpaceUsageBytes < 0 {
+		return fmt.Errorf("vlsup: retention.maxDiskSpaceUsageBytes must be >= 0")
+	}
+	if c.MaxDiskUsagePercent < 0 || c.MaxDiskUsagePercent > 100 {
+		return fmt.Errorf("vlsup: retention.maxDiskUsagePercent must be within [0,100]")
+	}
+	// 两者互斥是 VL 自己的约束（官方 help："mutually exclusive with"）。
+	// 同时给出时不能“选一个先用”：运维写了两条就说明他自己也不确定要哪个，
+	// 静默选一个会让磁盘上限的真值取决于我们而不是他。必须拒绝启动。
+	if c.MaxDiskSpaceUsageBytes > 0 && c.MaxDiskUsagePercent > 0 {
+		return fmt.Errorf("vlsup: retention.maxDiskSpaceUsageBytes 与 retention.maxDiskUsagePercent 互斥，只能配一个")
+	}
 	return nil
 }
 
@@ -182,6 +216,16 @@ func BuildArgs(cfg InstanceConfig) ([]string, error) {
 		// 删除 API 默认关闭：它不可逆，且会把「物理回收」这一能力从运维手里交给调用方。
 		// 只有显式配置（log_vl.delete_enabled）才打开，用于孤儿代次 GC / 按级别 TTL。
 		args = append(args, "-delete.enable")
+	}
+	// 磁盘上限（2026-10-29）：与 -retentionPeriod **同时生效**且语义互补——
+	// 保留期是「最老能留多久」的上限，磁盘上限是「总共能占多少」的上限，谁先到谁触发。
+	// VL 侧的行为是**丢最旧的按日分区**，所以两者都开时是合理的兜底组合：
+	// 日志量稳定时保留期满 180d 才淘汰；日志量暴涨时先撞磁盘上限、老分区提前丢。
+	if cfg.MaxDiskSpaceUsageBytes > 0 {
+		args = append(args, "-retention.maxDiskSpaceUsageBytes="+strconv.FormatInt(cfg.MaxDiskSpaceUsageBytes, 10))
+	}
+	if cfg.MaxDiskUsagePercent > 0 {
+		args = append(args, "-retention.maxDiskUsagePercent="+strconv.Itoa(cfg.MaxDiskUsagePercent))
 	}
 	args = append(args,
 		"-httpAuth.username="+cfg.AuthUsername,

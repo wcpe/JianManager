@@ -66,6 +66,21 @@ log:
 #                                # 2026-10-29：冷热双层已废除，只剩余一个 VL；`cold_retention_period`
 #                                # / `cold_port` / `rehydrate_port` / `start_cold` / `start_rehydrate`
 #                                # 均已删除，写了也不会生效。
+#
+#   # ── 磁盘占用上限（2026-10-29）───────────────────────────────────────────
+#   # 只有 retention_period 时，磁盘用量 = 保留期 × 实际写入量，**没有上限**：
+#   # 某个源日志暴增就会把磁盘拖涨。下列**两选一**（同时配会在启动时报错）：
+#   #
+#   # max_disk_space_bytes：按绝对字节数（**推荐**，尤其 VL 与其它进程共享盘时）。
+#   # max_disk_usage_percent：按磁盘使用百分比 1-100。
+#   #   ⚠ 百分比口径在**共享盘**上会被其它进程的写入触发（比如游戏服自己在写），
+#   #     结果是把日志丢掉而不是删别的 ⇒ 只在 VL 独占一块盘时才是好口径。
+#   #
+#   # 两者与 retention_period **同时生效**（谁先到谁触发），不是替代关系：
+#   # 日志量稳定时满保留期才淘汰；暴涨时先撞磁盘上限、旧分区提前丢。
+#   # VL 的行为是**丢最旧的按日分区**，不是按字节精确切。
+#   max_disk_space_bytes: 21474836480   # 20 GiB；0/不写 = 不限制
+#   # max_disk_usage_percent: 85
 
 # Optional persistent Worker/Node or offline FILE_PRIMARY sources. Instance
 # sources are registered automatically by CP instance lifecycle RPCs.
