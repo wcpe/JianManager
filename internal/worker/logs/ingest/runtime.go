@@ -395,10 +395,7 @@ type Manager struct {
 	reclaimRollFirstAdvance atomic.Int64 // 累计"首步推进量"（= 陈旧覆盖段的上界缺口 ✓ 现场判据）
 	reclaimRollNanos        atomic.Int64 // 累计墙钟（ns）⇒ 位·s⁻¹ = Advanced/(Nanos/1e9)
 	reclaimRollLast         atomic.Value // ReclaimRollSnapshot：上一轮读数（reclaim/delivery/firstAdvance/steps/advanced）
-	// reclaimRollMaxSteps / reclaimRollBudget 是**单轮有界**（#63 裁定：≤8 步 / ≤200ms）；
-	// 现场与回归都可覆盖（0 ⇒ 默认 8 / 200ms ✓）。
-	reclaimRollMaxSteps int
-	reclaimRollBudget   time.Duration
+	// reclaimRollMaxSteps / reclaimRollBudget 已于 2026-10-29 删除（它们只服务「分段链逐跳推进」）。
 
 	// replayScheduledTotal 是「追加被拒 ⇒ 登记待办」的累计次数（观测面：证明调度确实发生）。
 	replayScheduledTotal atomic.Int64
@@ -925,8 +922,8 @@ type Options struct {
 	SweepBackpressureStreak int
 	// SweepInflightCap 是在飞被放弃调用的并发上限（0 ⇒ 默认 4 ✓）。
 	SweepInflightCap int
-	// ReclaimRoll 是**滚动回收**（#63/#64）的单轮上界旋钮（键 log_index.reclaim_roll.*；nil/零值 ⇒ 默认）。
-	ReclaimRoll *ReclaimRollTuning
+	// ReclaimRoll 已于 2026-10-29 删除（旧字段是 *ReclaimRollTuning，服务「分段链逐跳推进」；
+	// 一次 `TryReclaim` 即可到顶后两个旋钮失去作用对象）。
 	// ResolvePersistBudget 是解算收尾落库在持久化门上的有界等待预算（#59；0 ⇒ 默认 2s）。
 	// 超预算即交办后台并返回（受理即返，最终一致），详见 persistResolveTail 的说明。
 	ResolvePersistBudget time.Duration
@@ -2536,15 +2533,7 @@ func New(opts Options) (*Manager, error) {
 	m.vlNotReady = make(map[string]string)
 	m.defaultCharset = opts.DefaultCharset
 	m.resolvePersistBudget = opts.ResolvePersistBudget
-	// #64：滚动回收的单轮上界（键 log_index.reclaim_roll.*；nil/非正 ⇒ 用默认 32 步 / 1s ✓）。
-	if opts.ReclaimRoll != nil {
-		if opts.ReclaimRoll.MaxSteps > 0 {
-			m.reclaimRollMaxSteps = opts.ReclaimRoll.MaxSteps
-		}
-		if opts.ReclaimRoll.Budget > 0 {
-			m.reclaimRollBudget = opts.ReclaimRoll.Budget
-		}
-	}
+	// #64：滚动回收单轮上界旋钮已于 2026-10-29 删除（见 Options.ReclaimRoll 处注释）。
 	// #57：cycleMu 持有者观测仪（env 默认关；Options 可显式打开，供回归与现场按需取读数）。
 	m.cycleMuProfile = opts.CycleMuProfile || cycleMuProfileEnabled()
 	m.defaultTimeZone = opts.DefaultTimeZone
@@ -6050,7 +6039,15 @@ func (m *Manager) earlierWrittenCandidates(ctx context.Context, hint *writtenAtt
 		return nil, nil, err
 	}
 	from := positions.Reclaim
-	for step := 0; step < defaultReclaimRollMaxSteps && from < hint.from; step++ {
+	// 2026-10-29：原上界是 `defaultReclaimRollMaxSteps`（32）——那个数字服务的是
+	// 「分段链逐跳推进」（一次只能跨一段，所以要限轮数）。现在 `CaptureAcknowledgedPrefix`
+	// 一次就尽量往后取，循环只是把已 ACK 的连续前缀抽到头；保留一个固定上限防止
+	// 退化成无界扫描，但不再与 reclaim 的推进模型挂钩。
+	//
+	// 为什么是 64：每次取 500 条，64 轮 = 32000 条；超过这个量级的未 ACK 前缀
+	// 本来就不该在这里一次性补齐（调用方自身也有 500 条窗口与 ctx 预算）。
+	const maxAckedPrefixSteps = 64
+	for step := 0; step < maxAckedPrefixSteps && from < hint.from; step++ {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
@@ -9363,103 +9360,76 @@ func (m *Manager) reclaimStep0RollingOnly(p *pipeline.Pipeline, source SourceCon
 	m.rollingReclaimRepair(p, source)
 }
 
+// rollingReclaimRepair 对单个源做一次有界回收推进。
+//
+// ## 2026-10-29 简化：不再需要「逐跳推进」框架
+//
+// 旧实现是为「分段链」设计的：每次 `repairStalledReclaim` 只能跨过一个恢复段
+// （`target = ref.CoversTo`），于是 reclaim 与 delivery 之间夹着 N 段就要跑 N 轮，
+// 才需要 `MaxSteps`（单轮最多跳几段）与 `Budget`（单轮墙钟）两个旋钮。
+//
+// reclaim 改按投递证据推进后，一次 `TryReclaim` 就直接到
+// `min(REQUEST_DONE 连续覆盖末端, max(read, durable))` —— **一跳到顶**。
+// 两个旋钮因此失去作用对象，已连同 `ReclaimRollTuning.MaxSteps/Budget` 一并删除；
+// 保留 `ReclaimRollSnapshot` 与累计计数，是因为它们是现场读数面（推进了多少、花了多久）。
+//
+// 调用方（`reclaimStep0RollingOnly`）只关心「这轮动了没」与「读数」，与旧行为一致。
 func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig, contexts ...context.Context) {
 	if m == nil || p == nil || p.Ledger() == nil {
 		return
 	}
-	maxSteps := m.reclaimRollMaxSteps
-	if maxSteps <= 0 {
-		maxSteps = defaultReclaimRollMaxSteps
-	}
-	budget := m.reclaimRollBudget
-	if budget <= 0 {
-		budget = defaultReclaimRollBudget
-	}
 	start := time.Now()
-	ctx := m.lifecycleContext()
-	if len(contexts) > 0 && contexts[0] != nil {
-		ctx = contexts[0]
-	}
 	before, ok := p.Ledger().Positions(p.Key())
 	if !ok {
 		return
 	}
-	// 2026-10-29：reclaim 改为「按投递水位推进」后不再需要「分段链逐跳推进」——一跳即可到
-	// `min(delivery, max(read,durable))`。这里保留一次有界的 TryReclaim（内部可能因调用方条件
-	// 被拒，但那属于正常形态，不是错误）。
-	steps := 0
-	var advanced, firstAdvance uint64
-	if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimPrecondition) {
-		slog.Warn("滚动回收：推进被拒（下轮重试）", "logSourceID", source.LogSourceID, "error", err.Error())
-	} else {
-		steps = 1
-	}
-	if cur, ok := p.Ledger().Positions(p.Key()); ok && cur.Reclaim > before.Reclaim {
-		firstAdvance = cur.Reclaim - before.Reclaim
-		advanced = firstAdvance
-		before = cur
-	} else {
-		steps = 0
-	}
-	_ = ctx
-	_ = budget
-	_ = start
-	if advanced > 0 {
-		// 静默未暂停源不会再产生采集提交；真实回收推进也须交既有消费者落库，不能等Stop代落。
-		m.requestPersist()
-	}
-	if steps == 0 && advanced == 0 {
-		// 诊断（#64-④）：本轮一步未动 ⇒ 取一次**拒绝原因**（按源去重：同因不刷屏、换因再报 ✓）。
-		// 现场据此分辨三者：「无料（reclaim ≥ delivery，正常终态 ⇒ 不打点 ✓）」
-		// 「CanReclaim 拒（state=… / hold=…）」「配置层 hold（CanCleanup 假）⇒ 连补段都不做」✓。
-		if before.Reclaim < before.Delivery {
-			if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimPrecondition) {
-				if m.noteSourceError(source.LogSourceID, err.Error()) {
-					slog.Warn("滚动回收：本轮未推进（回收被拒）", "logSourceID", source.LogSourceID,
-						"reclaim", before.Reclaim, "delivery", before.Delivery, "error", err.Error())
-				}
-			}
+	_, err := p.TryReclaim()
+	// `ErrReclaimPrecondition` 是调用方逐条 ACK 复核未通过的**正常形态**（不是错误），
+	// 与旧实现同口径：只有其它错误才上报。
+	if err != nil && !errors.Is(err, ledger.ErrReclaimPrecondition) {
+		if m.noteSourceError(source.LogSourceID, err.Error()) {
+			slog.Warn("滚动回收：推进被拒（下轮重试）", "logSourceID", source.LogSourceID, "error", err.Error())
 		}
-		return // 无活可做：不打"本轮链式推进"行（避免刷屏 ✗）
 	}
+	after, ok := p.Ledger().Positions(p.Key())
+	if !ok {
+		return
+	}
+	if after.Reclaim <= before.Reclaim {
+		return // 无活可做：不打日志（避免刷屏）
+	}
+	advanced := after.Reclaim - before.Reclaim
 	elapsed := time.Since(start)
 	m.reclaimRollRounds.Add(1)
-	m.reclaimRollSteps.Add(int64(steps))
+	m.reclaimRollSteps.Add(1)
 	m.reclaimRollAdvanced.Add(int64(advanced))
-	m.reclaimRollFirstAdvance.Add(int64(firstAdvance))
+	m.reclaimRollFirstAdvance.Add(int64(advanced))
 	m.reclaimRollNanos.Add(int64(elapsed))
 	m.reclaimRollLast.Store(ReclaimRollSnapshot{
-		Reclaim: before.Reclaim, Delivery: before.Delivery,
-		FirstAdvance: firstAdvance, Steps: steps, Advanced: advanced, Elapsed: elapsed,
+		Reclaim: after.Reclaim, Delivery: after.Delivery,
+		FirstAdvance: advanced, Steps: 1, Advanced: advanced, Elapsed: elapsed,
 	})
-	slog.Info("滚动回收：本轮链式推进",
+	slog.Info("滚动回收：推进完成",
 		"logSourceID", source.LogSourceID,
-		"reclaim", before.Reclaim, "delivery", before.Delivery,
-		"firstAdvance", firstAdvance, "advance", advanced,
-		"steps", steps, "elapsedMs", elapsed.Milliseconds())
+		"reclaim", after.Reclaim, "delivery", after.Delivery,
+		"advance", advanced, "elapsedMs", elapsed.Milliseconds())
+	// 静默未暂停源不会再产生采集提交；真实回收推进也须交既有消费者落库。
+	m.requestPersist()
 }
 
-const (
-	// defaultReclaimRollMaxSteps / defaultReclaimRollBudget 是单轮有界（#64 裁定：≤32 步 / ≤1s ✓）。
-	//
-	// 为什么从 8 步/200ms 提到 32 步/1s（#63 落地首读）：现场单源已见 `steps=8` **打满** ⇒ 说明
-	// reclaim 与 delivery 之间还夹着 >8 条**首尾相接的陈旧段**（每段一跳 ✓，段可多达几十~上千 ✗）⇒
-	// 每轮只走 8 跳 ⇒ 段链长 N 时需 ⌈N/8⌉ 轮（每轮 10s）。提到 32 步 ⇒ ⌈N/32⌉ 轮；且现场可用
-	// 配置键 `log_index.reclaim_roll.*` 热调（免发版 ✓）；仍属**单轮有界**（1s ≪ 轮周期，且只对有洞的源 ✓）。
-	defaultReclaimRollMaxSteps = 32
-	defaultReclaimRollBudget   = time.Second
-)
+// defaultReclaimRollMaxSteps / defaultReclaimRollBudget 已于 2026-10-29 删除（同上：作用对象消失）。
 
-// ReclaimRollTuning 是「滚动回收」单轮上界的配置面（#64；零值 ⇒ ingest 侧默认 32 步 / 1s ✓）。
+// ReclaimRollTuning 已于 2026-10-29 删除：它只有 `MaxSteps` / `Budget` 两个字段，
+// 而它们服务的是「分段链逐跳推进」（一次只能跳一段 ⇒ 需要限制单轮跳几段、花多久）。
+// reclaim 改按投递证据推进后一次就到顶，两个旋钮失去作用对象。
+// 配置键 `log_index.reclaim_roll.max_steps` / `.budget` 同步删除（viper 忽略未知键，
+// 旧 worker.yml 里留着不会报错）。
+
+// ReclaimRollSnapshot 是「上一轮回收」的读数（#63-Z3-c；现场读数与红/绿判据同一套数 ✓）。
 //
-// 取舍口径（与 ScanTuning 同）：这类旋钮**回退默认永远安全**（最坏只是"下一轮继续滚"✓），
-// 因此非正数一律视为"用默认"，绝不解释成"关闭"✗。
-type ReclaimRollTuning struct {
-	MaxSteps int           // 单轮最多推进步数；≤0 ⇒ 默认
-	Budget   time.Duration // 单轮墙钟上界；≤0 ⇒ 默认
-}
-
-// ReclaimRollSnapshot 是「上一轮滚动回收」的读数（#63-Z3-c；现场读数与红/绿判据同一套数 ✓）。
+// 2026-10-29：`Steps` 恒为 1（一次 `TryReclaim` 即可到顶，不再逐段跳），
+// `FirstAdvance` 与 `Advanced` 因此总是相等。两个字段保留是为了让既有读数面与
+// 累计计数器的形状不变（现场/dashboard 按它们算「位·s⁻¹」）。
 type ReclaimRollSnapshot struct {
 	Reclaim      uint64        // 本轮结束时的回收位置
 	Delivery     uint64        // 同刻的已确认投递水位（上界）
