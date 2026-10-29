@@ -4,6 +4,65 @@
 >
 > 本规格是 FR-473～484 的开发前闸门。它定义正式版契约基线；后续发现问题允许通过显式评审修订，但必须同步依赖模块、兼容规则和测试。未通过本规格的验收，不得按模块全面开发 Lifecycle、Archive 或 CP 联邦。
 
+### 2026-10-29 显式评审修订：废除受管恢复分段，`reclaim` 改按投递证据推进
+
+**本次修订改变 Shared Contracts，按 §10 末尾要求重新评审并同步依赖模块、兼容规则和测试。**
+它撤销了 §4.3 的「受管恢复副本证明」体系，因为该体系的论证前提已随本日另两项变更一起消失。
+
+#### 前提怎么消失的
+
+1. **WAL 改纯内存队列**（同日）：`source_wal` 表删除，队列内容不再跨重启恢复；可靠性改由
+   「持久化 position 水位 + 重启重读」承担（对齐 Filebeat `queue.mem` + registry 语义）。
+2. **积压越界改为丢弃最旧、不暂停**：对齐 Fluent Bit `memrb` 语义（丢最旧，配套
+   `memrb_dropped_chunks/bytes` 指标）。
+
+§4.3 整套机制的前提是「WAL 里还有未投递副本，需要一个受管副本接管责任后才能删 WAL」。
+WAL 不落盘后：没有副本需要别人接管，也没有 WAL 行需要「删得掉」⇒ **机制失去对象**。
+
+更关键的是它成了生产卡死的直接原因：生产 10 个源 `reclaim = 0`，链为
+「找不到恢复段 → `ErrReclaimNoSegment` → 补段要求已发布投影证据 → 超热层保留期取不到
+→ 补段永不成 → `reclaim` 永为 0 →（旧架构）WAL 撞上限 → 整源停采」。
+
+#### 新规则（取代本节旧 §4.3）
+
+```go
+reclaim = min(contiguousCertifiedEnd(entry), max(read_position, durable_position))
+```
+
+- `contiguousCertifiedEnd` = 从当前 `reclaim_position` 起、被 **`REQUEST_DONE` 证据连续覆盖**
+  到的最远位置（`RequestDoneRangesOf` 归并后逐段推进）。
+- **不得用 `delivery_position` 当回收上界**：它的语义是「所有字节均有**请求结果**」，而请求结果
+  **包括 `UNKNOWN`**（`acquire.recordHTTPResultLocked` 把响应丢失 / 非 2xx 也登记成批次以保留审计）。
+  拿它作上界 = 把「发出去了但不知落没落库」的数据从内存队列删掉。旧架构正好靠
+  「恢复段仅在 `REQUEST_DONE` 覆盖时才建」避开了这一层，撤销该体系时必须显式接管这条红线。
+- `UNKNOWN` 区间因此成为回收的**停滞点**：直到重投成功，或队列越界按丢弃语义处置——两个出口都是显式的。
+- 不再需要 `release_reason`、责任接收者、恢复分段 hold、`recovery_audit` 归档表、补段链。
+
+#### 被撤销的条款
+
+| 位置 | 原内容 | 现状态 |
+|---|---|---|
+| §4.2 | 「受管恢复分段提交成功」作为一类证据 | **删除** |
+| §4.3 | 全部 5 条前置 + `STAGED→…→CLEANED` 状态机 + 三个 `release_reason` | **删除**，代以上方新规则 |
+| §4.4 | 「从已登记受管恢复分段恢复」 | 改为「从持久 position 水位 + 重启重读恢复」 |
+| §9 | 「重启从 WAL 或已登记恢复分段恢复」/「恢复分段责任状态…」 | 改为验证新规则与 `UNKNOWN` 不得被回收 |
+| §10.1 | 「投递与回收：验证受管恢复分段责任状态…」 | 改为验证新规则 |
+
+#### 代码落点
+
+- 语义：`internal/worker/logs/ledger/ledger.go` 的 `tryReclaimLocked` / `contiguousCertifiedEnd`
+- 回归：`internal/worker/logs/ledger/reclaim_evidence_test.go`（5 条，含「UNKNOWN 不得被回收」）
+- 完整论证与删除清单：`docs/specs/reclaim-by-delivery/spec.md`
+- 落地提交：`84d3c5e4`（+ `c77b98b7` 删孤儿、`8dd65b12` 回归）
+
+#### 不变的部分（明确保留）
+
+- 四水位模型本身（`read`/`durable`/`delivery`/`reclaim`）与「位置与状态分开保存」
+- `durable_position` 同代次单调前进
+- 「乱序响应不得用最大位置越过未解决空洞」
+- 缺口（`Gap`）机制、人工弃投凭据（`Abandonments`）、`PositionInvariantViolations` 观测面
+- `published_evidence.go` 全部调用面（缺口消解 + 延迟投递确认）
+
 ### 2026-10-26 ACKLoss 与静默 766 闭环
 
 以下两项自「2026-10-25 功能修复收口与延期专项」的延期条目中**闭环**；其余延期项（250ms 首屏、原 9×30min 长窗、Worker fileCPU 诊断）**状态不变**，门限不放宽、不计通过。
@@ -150,7 +209,7 @@
 | `read_position` | 运行时采集读指针 | 可在崩溃后从账本重建并回退；不属于单调持久化水位 |
 | `durable_position` | 标准事件和账本已写入本地 WAL 且完成 fsync/等效提交 | 同一 generation 内单调前进 |
 | `delivery_position` | 已有请求级结果的批次边界 | 伴随 `delivery_state`（NOT_SENT/UNKNOWN/REQUEST_DONE/REPLAY_REQUIRED），不能赋值为 UNKNOWN |
-| `reclaim_position` | 之前的 WAL 前缀已由其他可靠来源承担恢复责任 | 只按 §4.3 的回收证明单调前进 |
+| `reclaim_position` | 之前的 WAL 前缀已由可靠来源承担或已取得确认投递证据 | 只按 §4.3 的规则单调前进 |
 
 ### 4.2 投递语义与可用证据
 
@@ -164,11 +223,22 @@
 | `VerifiedRuns` 精确区间 | 该区间完成逐字段可见性证明 | 存在新的 HTTP ACK 或无限保留保证 |
 | HTTP 请求成功 | 请求完成 | 所有记录逐条入库、持久落盘或可恢复 |
 | 按 event_id 查询核验成功 | 核验时对应事件可见 | 后续掉电仍可恢复、没有重复 |
-| 受管恢复分段提交成功 | Worker 有可定位、可校验的恢复来源 | VL 当前索引完整或统计无重复 |
+
+> 原表末行「受管恢复分段提交成功」已于 [2026-10-29 显式评审修订](#2026-10-29-显式评审修订废除受管恢复分段reclaim-改按投递证据推进) 删除。
 
 选定的 JSON stream 请求级接口支持请求结果；本次能力基线不得假定原生逐事件接受回执或批次耐久提交回执。非法 JSON 行、请求级错误和未知结果分别进入逐事件状态；服务端全局日志/指标不能伪装成该批次逐记录结果。`UNKNOWN` 不得直接进入坏记录隔离，必须保留恢复或核验责任。
 
 ### 4.3 `reclaim_position` 推进规则
+
+> **本节已于 2026-10-29 显式评审修订全面重写**，见文首
+> [2026-10-29 显式评审修订](#2026-10-29-显式评审修订废除受管恢复分段reclaim-改按投递证据推进)。
+> 现行规则：`reclaim = min(contiguousCertifiedEnd, max(read, durable))`，
+> 其中 `contiguousCertifiedEnd` 是 `REQUEST_DONE` 证据的连续覆盖末端；
+> 受管恢复分段、责任状态机与 `release_reason` 已全部废除。
+> 下文原文保留作为历史记录，**不代表现契约**。
+
+<details>
+<summary>历史原文（2026-10-29 之前，已废止）</summary>
 
 默认采用“受管恢复副本证明”，不把日志可靠性建立在尚未验证的 VL 批次耐久回执上。Worker 仅在下列条件全部成立时推进并持久化 `reclaim_position`：
 
@@ -196,14 +266,16 @@
 
 该链条只覆盖同盘进程崩溃；整盘或整机损失需要独立副本/归档证据，不能由本地 WAL+Raw 推导零损失。
 
+</details>
+
 ### 4.4 崩溃状态转换
 
 | 场景 | 状态 | 动作 |
 |---|---|---|
-| 请求前崩溃 | `delivery_state=NOT_SENT` | 按持久账本定位事件，从尚存 WAL 或已登记的受管恢复分段恢复；原 WAL 合法回收不构成恢复失败 |
-| 请求已发出、响应丢失 | `delivery_state=UNKNOWN` | 保留恢复分段；按 event_id/范围核验，无法确认则重放并记录可能重复 |
+| 请求前崩溃 | `delivery_state=NOT_SENT` | 按持久账本定位事件，从尚存 WAL 或重启重读恢复；原 WAL 合法回收不构成恢复失败 |
+| 请求已发出、响应丢失 | `delivery_state=UNKNOWN` | 保留恢复责任（UNKNOWN 区间不参与回收）；按 event_id/范围核验，无法确认则重放并记录可能重复 |
 | 请求完成但本地账本未提交 | 若存在持久证据则 `REQUEST_DONE` + `verification_state=UNKNOWN`；仅存在崩溃前内存则 `UNKNOWN` | 先核验/补账本；不得根据原执行阶段补写成功状态 |
-| VL 在确认窗口内重启 | `REPLAY_REQUIRED` | 受影响 view 失效或暂停；保留恢复来源，健康恢复后再核验 |
+| VL 在确认窗口内重启 | `REPLAY_REQUIRED` | 受影响 view 失效或暂停；保留恢复责任，健康恢复后再核验 |
 | WAL/恢复预算即将耗尽 | `DEGRADED_STORAGE` | 暂停低优先级采集或切换受控 Raw；暴露缺口和人工动作，禁止静默删除未确认前缀 |
 
 ### 4.5 逻辑事件投影与重复对账
@@ -357,8 +429,9 @@ Export 是 CP Coordinator 的业务操作，不新增 Worker Export RPC：CP 使
 
 - [ ] 同一 Query View 在回灌、迁移、到期清理期间分页结果稳定；无法维持时在数据变化前阻止后续读取并返回 `VIEW_STALE`，不先返回变化后的页再补发失效。
 - [ ] 导出与同 view 的 Search 事件集合、排序、授权和覆盖摘要一致；完整性校验前没有可下载附件；完成后源 Worker 离线不改变已完成产物的语义。
-- [ ] 响应丢失、VL 确认窗口重启、非法 NDJSON、批次部分接受均能按表进入 UNKNOWN/PENDING_VERIFY 等状态；没有 HTTP 2xx 直接回收 WAL 的路径；重启从 WAL 或已登记恢复分段恢复。
-- [ ] 恢复分段责任状态能从 WAL 转移到 projection/下一份副本，并仅在明确解除条件满足后清理。
+- [ ] 响应丢失、VL 确认窗口重启、非法 NDJSON、批次部分接受均能按表进入 UNKNOWN/PENDING_VERIFY 等状态；没有 HTTP 2xx 直接回收 WAL 的路径；重启由「持久 position 水位 + 重启重读」恢复。
+- [x] **`UNKNOWN` 区间不得被回收**，回收上界是 `REQUEST_DONE` 证据的连续覆盖末端（2026-10-29 修订；回归 `reclaim_evidence_test.go`）。
+- [ ] 重启后 `read`/`durable` 回退到 `reclaim`、tailer 从 `min(durable, read)` 重读那段并能重新产生并投递（取代原「恢复分段责任状态转移」验收项）。
 - [ ] canonical projection 让 Search、Stats、Facets、Export 在重复事件和分页边界上使用同一逻辑集合。
 - [ ] WAL 逼近预算时出现可见降级、缺口和处理动作；未确认数据不被静默删除。
 - [ ] Catalog 切换后残留旧目录即使被 VL 自动 attach，也不进入 QueryPlanner；启动先恢复 Catalog/journal，冲突范围为 PARTIAL/RECOVERY_REQUIRED。
@@ -370,12 +443,12 @@ Export 是 CP Coordinator 的业务操作，不新增 Worker Export RPC：CP 使
 
 Shared Contracts 冻结完成；以下项目属于冻结后的显式评审/下游 FR 验收，不重新打开基础契约：
 
-1. 投递与回收：验证受管恢复分段责任状态、责任解除条件、清理保护和预算耗尽动作；
+1. 投递与回收：验证 `reclaim = min(REQUEST_DONE 连续覆盖末端, max(read, durability))`、`UNKNOWN` 区间不被回收、重启重读契约（2026-10-29 取代原「受管恢复分段责任状态」验收项）；
 2. 身份与重复：验证 canonical projection 在重复、冲突、分页边界和重启后的稳定性；
 3. 固定视图：验证每源 `ingest_seq`/`closed_visible_seq` 连续前缀、空洞、重放、重启和数据修复顺序；
 4. Catalog 与资源：租约恢复、retention 协同、预算耗尽和受影响范围隔离；
 5. 协议与验证基线：具体 VL 测试版本、完整 proto、旧 Worker 能力协商和性能阈值。
 
-当前验证进度：冻结前证据已登记 VL v1.52.0 JSON stream 依赖行为 PASS、g1 响应不确定隔离→g2 重建→PublishedProjection 发布及真实 Search/Stats/Facets/Export 逻辑集合一致性 PASS；v1.52.0 双平台资产审批已完成。Worker 级恢复分段/ACK-loss、真实 Catalog 崩溃矩阵、失败态和发布级性能阈值仍属于下游 FR 验收。
+当前验证进度：冻结前证据已登记 VL v1.52.0 JSON stream 依赖行为 PASS、g1 响应不确定隔离→g2 重建→PublishedProjection 发布及真实 Search/Stats/Facets/Export 逻辑集合一致性 PASS；v1.52.0 双平台资产审批已完成。Worker 级 ACK-loss、真实 Catalog 崩溃矩阵、失败态和发布级性能阈值仍属于下游 FR 验收。（受管恢复分段已于 2026-10-29 修订废除，不再属于下游验收范围。）
 
 FR-473 已达到“契约已冻结”门槛。后续 A/B/C Worker 生产组件实验分别归入 FR-474/476/477；若改变 Shared Contracts，必须重新评审并同步依赖模块、兼容规则和测试。
