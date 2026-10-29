@@ -1676,7 +1676,8 @@ func (l *Ledger) tryReclaimLocked(e *Entry, conditions ...func(ReclaimTarget) bo
 	return e.Positions.Reclaim, nil
 }
 
-// contiguousCertifiedEnd 返回从当前 reclaim 起、被 **REQUEST_DONE 证据连续覆盖**到的最远位置。
+// contiguousCertifiedEnd 返回从当前 reclaim 起、被 **REQUEST_DONE 证据连续覆盖**、
+// 或已被**容量裁定丢弃**到的最远位置。
 //
 // 两个容易被写错的点：
 //
@@ -1687,12 +1688,43 @@ func (l *Ledger) tryReclaimLocked(e *Entry, conditions ...func(ReclaimTarget) bo
 //     「容差到底在哪里生效」的假防护，已删。
 //  2. `pos` 从 **Reclaim** 起算（不是 0、也不是 Read）：已经回收过的前缀不需要证据重现，
 //     否则回收一旦越过某段、那段证据又被裁掉，就会当场退回去。
+//
+// ## 为什么要把「容量裁定丢弃」也当成可穿过的段（2026-10-29 生产死锁）
+//
+// 用户裁定「WAL 内存满就直接丢最旧」后，丢弃会在投递流上留下一段**真实字节空地**
+//（`WAL_BACKLOG_DROPPED`，真实位置区间，已进 `gapReasonsNonBlocking` ⇒ 不挡恢复）。
+// 但 `RequestDoneRangesOf` **只认真实投递证据**（这是对的：绝不能把没投出去的说成投出去了 ✗），
+// 于是那段空地永远没有 REQUEST_DONE 覆盖 ⇒ 连续覆盖断在那里 ⇒ reclaim 永久钉死。
+//
+// 生产实证（`ingest.index.db`，19 个源）：
+//
+//	有 WAL_BACKLOG_DROPPED 洞的 8 个源：reclaim 全钉在 ~1784xxx，read 已到 310-445 万，差 1.3-4.1MB
+//	零洞的 11 个源：reclaim == read，差 0
+//
+// 一一对应、无例外 ⇒ 病根就是这个断点。合计约 13.6MB WAL 永远回收不掉，
+// 进而 backlog 撞上限 → 再丢最旧 → 再造新洞（自我放大）。
+//
+// ## 红线（改了这里必须守住）
+//
+// **只把「已经落过 PERMANENTLY_LOST 凭据的空洞」当作可穿过**，
+// 绝不把空洞写进 `RequestDoneRanges` / `DeliveryEvidence`：
+// 那样才是“谎报已投递”，会让下游以为那些字节真在 VL 里。
+// 空洞之所以可以穿过，不是因为“它被投递了”，而是因为
+// **它已被明确裁定为「永远不会有了」且有痕迹可查**（`Entry.Abandonments` 即“痕迹”）。
+//
+// 这也正是 `abandonmentIntersectingLocked` 当年为恢复分段写下的同一个理由：
+// 「这一段之所以无法完成校验，正因为其中有个已裁定的空洞」。
 func contiguousCertifiedEnd(e *Entry) uint64 {
 	if e == nil {
 		return 0
 	}
 	pos := e.Positions.Reclaim
-	for _, r := range MergePositionRanges(RequestDoneRangesOf(e)) {
+	certified := RequestDoneRangesOf(e)
+	if holes := capacityDroppedRangesLocked(e); len(holes) > 0 {
+		// 合并后仍保留区间语义：空洞只“不再阻断”连续性，绝不因此声称那些字节已投递。
+		certified = MergePositionRanges(append(certified, holes...))
+	}
+	for _, r := range certified {
 		if r.To <= pos {
 			continue
 		}
@@ -1702,6 +1734,32 @@ func contiguousCertifiedEnd(e *Entry) uint64 {
 		pos = r.To
 	}
 	return pos
+}
+
+// capacityDroppedRangesLocked 返回本源「因容量越界被丢弃、已在不阻塞名单内」的缺口区间（升序合并）。
+//
+// 只认 `IsGapReasonNonBlocking` 这一个名单（当前即 `WAL_BACKLOG_DROPPED`）。
+// **刻意不复用** `gapReasonsPermanentlyLost`：后者含 `ARCHIVE_CONTENT_UNKNOWN` 等归档类，
+// 它们同样不阻塞恢复，但语义是「历史归档归属证明不了」——那些位置**从未进过投递流**，
+// 把它们也当作可穿过会让 reclaim 越过真正该重读的区间。
+// 容量丢弃才是「字节确实进过 WAL、又被确定性地扔掉」这种形态，与 reclaim 的连续性判断同域。
+//
+// 调用方必须已持锁（读或写）。
+func capacityDroppedRangesLocked(e *Entry) []PositionRange {
+	if e == nil || len(e.Gaps) == 0 {
+		return nil
+	}
+	holes := make([]PositionRange, 0, len(e.Gaps))
+	for _, gap := range e.Gaps {
+		if gap.Resolved || !IsGapReasonNonBlocking(gap.Reason) {
+			continue
+		}
+		holes = append(holes, PositionRange{From: gap.StartPos, To: gap.EndPos})
+	}
+	if len(holes) == 0 {
+		return nil
+	}
+	return MergePositionRanges(holes)
 }
 
 // IncrementIngestSeq 递增本地单调接纳序号（重放沿用原值由调用方保证）。
