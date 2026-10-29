@@ -1194,6 +1194,47 @@ func (l *Ledger) RecordDelivery(key SourceKey, start, end uint64, state logtypes
 	return nil
 }
 
+// RecordDroppedRange 登记「该区间已被主动丢弃」：同时记一条 DROPPED 批次、
+// 并把 `Positions.Delivery` 直接推到区间末端。
+//
+// ## 为什么不直接 RecordDelivery
+//
+// `RecordDelivery` 靠 `advanceDeliveryEnd` 重算，而后者只从**已连续覆盖**的前缀推进：
+// 若丢弃区间前面有洞（历史未认领段常常如此），它会停在洞前，水位根本推不上去。
+// 而丢弃的语义是「这段不再等了、也不应该再阻住后续」——水位必须能跨过去。
+//
+// ## 为什么不往 RequestDoneRanges 里写
+//
+// 那段字节**确实没投递成功过**。写进去就是谎报已投递，会让下游以为 VL 里有它。
+// 所以这里只推 `Positions.Delivery`，不碰投递证据。
+//
+// 与 `ResolveDeliveryThroughRecovery`（记 REPLAY_REQUIRED）的区别：
+// 那个是“拿别处的证据证明它曾落库”，本方法是“确定它永远不会有了”。
+func (l *Ledger) RecordDroppedRange(key SourceKey, from, to uint64) error {
+	if to <= from {
+		return fmt.Errorf("ledger: dropped range requires a non-empty interval [%d,%d)", from, to)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, err := l.require(key)
+	if err != nil {
+		return err
+	}
+	ensureDeliveryEvidence(e)
+	batch := DeliveryBatch{Start: from, End: to, State: logtypes.DeliveryDropped}
+	e.DeliveryBatches = append(e.DeliveryBatches, batch)
+	// 只进诊断证据（DeliveryEvidence），不进 RequestDoneRanges：
+	// preserveDeliveryEvidence 只把 REQUEST_DONE 写进后者，这里手动走同一路径不写后者。
+	e.DeliveryEvidence = appendDeliveryEvidence(e.DeliveryEvidence, batch)
+	e.DeliveryState = logtypes.DeliveryDropped
+	// 直接推进到区间末端（单调不减）：丢弃就是“不再等这段”。
+	if to > e.Positions.Delivery {
+		e.Positions.Delivery = to
+	}
+	l.pruneDeliveryBatchesLocked(e)
+	return nil
+}
+
 // advanceDeliveryEnd 把投递前缀推进到「所有字节均有请求结果」的连续末端（**单调不减**）。
 //
 // ## 为什么 floor 是 Positions.Delivery 自己，而不是 Positions.Reclaim（2026-10-29 修正）

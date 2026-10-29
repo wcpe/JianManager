@@ -78,6 +78,14 @@ const (
 	// 而这里恰恰相反——回读不会发生（游标已过）⇒ 进了名单就等于把真丢的数据当成已愈合。
 	GapReasonWALBacklogDropped = "WAL_BACKLOG_DROPPED"
 
+	// GapReasonUnclaimedHistoryDropped 表示事件段中「从未被本进程认领」的区间
+	// （既无 verified_runs 也无 request_done）被主动丢弃（2026-10-30）。
+	//
+	// 与 WAL_BACKLOG_DROPPED 的区别：那是**积压越界**的容量处置（队列里有、但放不下）；
+	// 本原因处理的是**历史遗留**——账本从未认领过它，拿不出任何当前证据，
+	// 留着只会让 delivery/reclaim 永久卡在那一段。
+	GapReasonUnclaimedHistoryDropped = "UNCLAIMED_HISTORY_DROPPED"
+
 	// GapReasonArchiveDiscoveryFailed 表示归档发现失败（列举目录出错）：该源本轮根本没有归档可用，
 	// 是否丢字节无法由回读证明 ⇒ 不在白名单，需人工裁定。
 	GapReasonArchiveDiscoveryFailed = "ARCHIVE_DISCOVERY_FAILED"
@@ -201,6 +209,20 @@ func GapReasonsPermanentlyLost() []string {
 var gapReasonsNonBlocking = []string{
 	// WAL 积压越界丢弃：用户裁定的容量策略，丢弃即最终态（读游标已越过）。
 	GapReasonWALBacklogDropped,
+	// 历史未认领段丢弃（2026-10-30 用户裁定）：
+	//
+	// 定义：事件段里有数据，但**既无 verified_runs 也无 request_done** 的区间。
+	// 它们的正文可能来自早已消失的代次（如历史重建写入 VL 但账本从未认领），
+	// 无法证明属于当前权威集。
+	//
+	// 生产实例（inst:318）：VL 里 [313900,443835] 有 1670 行真实数据，
+	// 但 verified_runs 与 request_done 都只有 [(0,313900),(4093898,4472739)]
+	// ⇒ delivery 卡在 313900、reclaim 卡在 443835、pending 永不消、
+	//   WAL 打满、每分钟丢 2 条——一条永不推进的死锁。
+	//
+	// 裁定：**直接丢掉**。既然账本从未认领、也拿不出本进程校验证据，
+	// 它就不属于当前权威集；留着只会永久卡死采集。丢弃必须可查（进缺口账）。
+	GapReasonUnclaimedHistoryDropped,
 }
 
 // IsGapReasonNonBlocking 报告某原因是否属于「立即不阻塞但仍可见」类。

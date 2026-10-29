@@ -37,6 +37,18 @@ const (
 	DeliveryUnknown        DeliveryState = "UNKNOWN"
 	DeliveryRequestDone    DeliveryState = "REQUEST_DONE"
 	DeliveryReplayRequired DeliveryState = "REPLAY_REQUIRED"
+	// DeliveryDropped 表示该区间已被**主动丢弃**（不再投递、也不再等它）。
+	//
+	// 与 UNKNOWN 的区别（重要）：UNKNOWN = “发出去了但不知落没落库”，它**仍欠一个结果**，
+	// 所以它必须阻住回收（不能把“不确定”当“已完成”删掉）。
+	//
+	// DROPPED = “确定不会有结果了”：系统的处置已终局（容量越界丢、历史未认领丢弃等）。
+	// 它可以把 `delivery` 水位推过去（否则水位永久卡死、WAL 永远不回收），
+	// 但**绝不进 `RequestDoneRanges`**（那不是“已投递”，是“永远没了”）。
+	//
+	// `preserveDeliveryEvidence` 只把 REQUEST_DONE 写进 RequestDoneRanges，
+	// 所以用本状态推进水位不会污染投递证据——这正是设计意图。
+	DeliveryDropped DeliveryState = "DROPPED"
 )
 
 // Positions 四水位；位置与投递状态分离保存。

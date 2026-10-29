@@ -11432,6 +11432,19 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 				m.skipBlocked.Add(1)
 			}
 			m.nsResolve.Add(int64(time.Since(tResolve)))
+			// **历史未认领段丢弃**（2026-10-30 用户裁定）：
+			//
+			// 放在自动消解**之后**：先尽最大努力用已发布证据认领，认领不了的才丢。
+			// 这一段是先前的**死锁根因**（inst:318）：事件段里有数据但 verified_runs 与
+			// request_done 都不覆盖 ⇒ delivery/reclaim 永远卡在那一段 ⇒ WAL 打满继续丢。
+			// 丢弃后登记 UNCLAIMED_HISTORY_DROPPED（nonBlocking）⇒ 不再挡住任何推进。
+			tDrop := time.Now()
+			if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+				m.dropUnclaimedHistory(m.lifecycleContext(), src, p)
+			}) {
+				m.skipBlocked.Add(1)
+			}
+			m.nsResolve.Add(int64(time.Since(tDrop)))
 		}
 		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
 		// **有界等待**（2026-10-05 现场 ✓）：`DeliverPending`→`deliver` 会拿 `m.mu`，而"长持 m.mu 的
