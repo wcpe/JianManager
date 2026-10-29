@@ -1678,22 +1678,26 @@ func (l *Ledger) tryReclaimLocked(e *Entry, conditions ...func(ReclaimTarget) bo
 
 // contiguousCertifiedEnd 返回从当前 reclaim 起、被 **REQUEST_DONE 证据连续覆盖**到的最远位置。
 //
-// 两端各容差 1 字节（与 CoveredByPositionRanges / rangesTouch 同一口径）：事件区间不含行分隔符，
-// 相邻两条事件之间会空出 1 字节；不宽容差会把每个换行符都当成空洞，回收就永远以 1 字节步进。
-// 容差严格为 1，所以真正的空洞（≥2 字节）仍然会阻断。
+// 两个容易被写错的点：
+//
+//  1. **分隔符容差在 `MergePositionRanges` 里，不在本函数里**。它把 `r.From <= 当前.To+1`
+//     的区间并入（容差严格 1 字节），所以合并后的相邻区间至少相隔 2 字节。
+//     本函数只需比较 `r.From > pos` 即可；再在这里加一次 `pos+1` 容差是**冗余而不可测**的：
+//     去掉它任何用例都不会变红（它永远不改变结果）——那是让人仅凭代码无法判断
+//     「容差到底在哪里生效」的假防护，已删。
+//  2. `pos` 从 **Reclaim** 起算（不是 0、也不是 Read）：已经回收过的前缀不需要证据重现，
+//     否则回收一旦越过某段、那段证据又被裁掉，就会当场退回去。
 func contiguousCertifiedEnd(e *Entry) uint64 {
 	if e == nil {
 		return 0
 	}
 	pos := e.Positions.Reclaim
-	ranges := MergePositionRanges(RequestDoneRangesOf(e))
-	for _, r := range ranges {
+	for _, r := range MergePositionRanges(RequestDoneRangesOf(e)) {
 		if r.To <= pos {
 			continue
 		}
-		// 允许空出 1 字节（分隔符）：`pos+1 == r.From` 视为相接。
-		if r.From > pos+1 {
-			break // 真实空洞：不越过
+		if r.From > pos {
+			break // 真实空洞（≥2 字节，见上面的容差说明）：不越过
 		}
 		pos = r.To
 	}
