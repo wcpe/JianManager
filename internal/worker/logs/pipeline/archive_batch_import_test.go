@@ -61,11 +61,10 @@ func writeBigGzip(t *testing.T, dir string, count int) string {
 
 // newLimitedPipeline 建一条**带真实 WAL 上限**的管道（用于按生效上限推导放行量的断言）。
 //
-// 同时注入 **ReclaimProof**：回收（TryReclaim）在无恢复分段时会被门禁拒绝
-// （`no recovery segment covers position`），而回收不推进 ⇒ 积压不回落 ⇒ 余量永不恢复。
-// 生产路径由 ingest.Manager 的 releaseRecovery 提供该证明；这里用等价的最小实现
-// （登记一个「责任已转移」的分段覆盖当前位置），使「积压回落 → 余量恢复 → 导入续推」
-// 这条链在用例里**能真的走通**，否则测的就不是修复而是死锁。
+// 同时注入 **ReclaimProof**：它现在只需触发一次 TryReclaim（2026-10-29 起回收只看
+// REQUEST_DONE 认证覆盖与读入量，不再需要建段/转移责任）。生产路径由 ingest.Manager 的
+// releaseRecovery 提供该证明；这里用等价的最小实现，使「投递成功 → 回收推进 → 积压回落 →
+// 余量恢复 → 导入续推」这条链在用例里**能真的走通**，否则测的就不是修复而是死锁。
 func newLimitedPipeline(t *testing.T, maxEntries int64, hook DeliveryHook) *Pipeline {
 	t.Helper()
 	dir := t.TempDir()
@@ -96,27 +95,43 @@ func newLimitedPipeline(t *testing.T, maxEntries int64, hook DeliveryHook) *Pipe
 	return p
 }
 
-// registerReclaimProof 登记「已投递区间的内容级保证」：把恢复分段标为责任已转移，
-// 使 CanReclaim 放行回收（与生产 releaseRecovery 的终态等价，只是不写 catalog）。
+// registerReclaimProof 触发一次回收推进（等价于生产 releaseRecovery 的终端动作）。
+//
+// 2026-10-29 改写：旧实现要登记恢复分段并推进到 WAL_RESPONSIBILITY_TRANSFERRED，
+// 那套机制已删。现在回收只认「REQUEST_DONE 连续覆盖 + 读入量」，投递成功后调一次
+// TryReclaim 即可推进（无事可做时它返回 (当前Reclaim, nil)，不报错）。
 func registerReclaimProof(p *Pipeline, through uint64) error {
 	if through == 0 {
 		return nil
 	}
-	segID := fmt.Sprintf("test-recovery-%d", through)
-	if err := p.BindRecoverySegment(segID, "test-recovery", 0, through); err != nil {
+	pos, err := p.TryReclaim()
+	if err != nil {
 		return err
 	}
-	return p.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer,
-		logtypes.ReleaseProjectionBacked, "test")
+	// 保留旧断言的语义：回收位置不得越过本次已投递末端。
+	if pos > through {
+		return fmt.Errorf("reclaim %d advanced past delivered end %d", pos, through)
+	}
+	return nil
 }
 
 // drainArchive 反复调用 ImportArchive 直到归档被读完（模拟采集轮的多轮推进）。
 //
 // 返回：累计投递事件、每轮放行条数、轮数。任一错误立即返回（由调用方断言）。
 // maxRounds 兜住「永远推进不完」的死循环（真实场景由采集轮 ticker 持续驱动，测试里必须自己设界）。
+//
+// 每轮先 DeliverPending 再导入（与生产采集轮同序：先投递存量、再取新数据）。
+//
+// 为什么这一步不能省（2026-10-29）：回收上界改成「REQUEST_DONE 连续覆盖」后，一段 UNKNOWN
+// （投递失败）区间会成为回收的**停滞点**——它不再像旧架构那样靠「恢复段责任转移」被跳过去。
+// 停滞点必须由**重投成功**解开（这是新语义下唯一的出口），而重投就发生在 DeliverPending。
+// 少了它，源会停在「余量耗尽 + 认证前缀推不动」上，看上去像死锁，其实只是缺了这一轮投递。
 func drainArchive(t *testing.T, p *Pipeline, gzPath string, maxRounds int) (delivered []logtypes.Event, perRound []int, err error) {
 	t.Helper()
 	for round := 0; round < maxRounds; round++ {
+		if _, derr := p.DeliverPending(); derr != nil {
+			return delivered, perRound, derr
+		}
 		res, callErr := p.ImportArchive(gzPath)
 		if callErr != nil {
 			return delivered, perRound, callErr

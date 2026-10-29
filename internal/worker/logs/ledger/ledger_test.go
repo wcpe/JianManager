@@ -12,77 +12,6 @@ func keyOf(id, gen string) SourceKey {
 	return SourceKey{LogSourceID: id, SourceGeneration: gen}
 }
 
-// F-004：非法 release_reason / self-reference / hold / CLEANED 路径必须拒绝。
-func TestTransitionRecovery_ReleaseValidation(t *testing.T) {
-	setup := func() (*Ledger, SourceKey) {
-		led := New()
-		key := keyOf("rel", "g1")
-		led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "rel", SourceGeneration: "g1"})
-		_ = led.AdvanceDurable(key, 100)
-		_ = led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone)
-		_ = led.RegisterRecovery(key, RecoveryRef{
-			SegmentID: "seg1", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 100,
-		})
-		if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryDurableVerified, "", ""); err != nil {
-			t.Fatal(err)
-		}
-		if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryWALResponsibilityXfer, "", "receiver-A"); err != nil {
-			t.Fatal(err)
-		}
-		return led, key
-	}
-
-	// 非法 reason
-	led, key := setup()
-	if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryReleased, "NOT_A_REASON", "receiver-B"); err == nil {
-		t.Fatal("invalid release_reason must fail")
-	}
-	// self-reference
-	led, key = setup()
-	if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryReleased, logtypes.ReleaseNextCopyVerified, "seg1"); err == nil {
-		t.Fatal("self-reference receiver must fail")
-	}
-	// CLEANED 只能从 RELEASED
-	led, key = setup()
-	if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryCleaned, logtypes.ReleaseNextCopyVerified, "receiver-B"); err == nil {
-		t.Fatal("CLEANED from non-RELEASED must fail")
-	}
-	// hold 阻止释放
-	led, key = setup()
-	if err := led.SetRecoveryHold(key, "seg1", true); err != nil {
-		t.Fatal(err)
-	}
-	if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryReleased, logtypes.ReleaseNextCopyVerified, "receiver-B"); err == nil {
-		t.Fatal("release under hold must fail")
-	}
-	// 合法路径：TRANSFERRED → RELEASED → CLEANED
-	led, key = setup()
-	if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryReleased, logtypes.ReleaseProjectionBacked, "receiver-B"); err != nil {
-		t.Fatal(err)
-	}
-	if err := led.TransitionRecovery(key, "seg1", logtypes.RecoveryCleaned, "", ""); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestRecoveryRestartBindingPreservesAdvancedStateAndRejectsBackwardsTransition(t *testing.T) {
-	led := New()
-	key := SourceKey{LogSourceID: "s", SourceGeneration: "g"}
-	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "s", SourceGeneration: "g"})
-	ref := RecoveryRef{SegmentID: "seg", Path: "projection://g1", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 10}
-	require.NoError(t, led.RegisterRecovery(key, ref))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryWALResponsibilityXfer, "", "projection:g1"))
-	require.NoError(t, led.SetRecoveryHold(key, "seg", true))
-	require.NoError(t, led.RegisterRecovery(key, ref), "restart binding must be idempotent")
-	got := led.Get(key).RecoveryRefs[0]
-	require.Equal(t, logtypes.RecoveryWALResponsibilityXfer, got.State)
-	require.True(t, got.HasHold)
-	require.Equal(t, "projection:g1", got.ResponsibilityReceiver)
-	require.ErrorContains(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryDurableVerified, "", ""), "cannot move backward")
-	require.ErrorContains(t, led.RegisterRecovery(key, RecoveryRef{SegmentID: "seg", Path: "other", State: logtypes.RecoveryStaged, CoversTo: 10}), "identity conflict")
-}
-
 func TestResolveGapsKeepsAuditAndRequiresFullCoverageBeforeResume(t *testing.T) {
 	ledger := New()
 	key := SourceKey{LogSourceID: "source", SourceGeneration: "g1"}
@@ -180,98 +109,102 @@ func TestLedgerGapAndPause(t *testing.T) {
 	}
 }
 
-func TestLedgerReclaimGateTable(t *testing.T) {
+// TestTryReclaimTargetTable 固定新语义下 reclaim 的**上界推导**本身：
+//
+//	reclaim = min(REQUEST_DONE 连续覆盖末端, max(Read, Durable))
+//
+// 它取代了旧的「恢复段状态机门禁表」（STAGED/DURABLE_VERIFIED 阻断、WAL_RESPONSIBILITY_TRANSFERRED
+// 放行、hold 阻断）。那套门禁 2026-10-29 随受管恢复分段机制一并删除（机制失去对象，
+// 见 tryReclaimLocked 的注释）。原表验证的**关切**是「reclaim 只在证据充分时放行，
+// 且放行到具体位置」；新表把同一关切表达为三个真实输入（认证覆盖 / 读入量 / 耐久量）
+// 与一个具体位置输出 —— 每一行都断言推进到**哪个字节**，而不是只断言“成功/失败”。
+//
+// 分工（避免与 reclaim_evidence_test.go 重复）：证据轴（UNKNOWN 不算证据、真实空洞阻断、
+// 1 字节分隔符容差、读入量夹取）由 reclaim_evidence_test.go 逐条钉死；**本表只负责它没盖的**——
+// 两个下界的 max 语义（Durable 单独立得住 / Read 单独立得住）与「完全无证据」的空操作。
+//
+// 转红方式（实测）：把 tryReclaimLocked 的 `max(e.Positions.Read, e.Positions.Durable)`
+// 改成只用 Read ⇒「Durable 单独立得住上界」一行立即红（Read=0 ∧ Durable=200 会被误判成
+// 「无事可做」，而实际上确有 200 字节可回收）；把 `target <= Reclaim` 提前返回删掉并改成
+// 总是推进 ⇒「完全无证据」一行立即红。
+func TestTryReclaimTargetTable(t *testing.T) {
 	tests := []struct {
-		name     string
-		state    logtypes.RecoverySegmentState
-		reason   logtypes.ReleaseReason
-		hold     bool
-		delivery uint64
-		wantOK   bool
+		name          string
+		read, durable uint64
+		batches       []DeliveryBatch
+		wantReclaim   uint64
 	}{
-		{"staged blocks", logtypes.RecoveryStaged, logtypes.ReleaseProjectionBacked, false, 100, false},
-		{"durable verified blocks", logtypes.RecoveryDurableVerified, logtypes.ReleaseNextCopyVerified, false, 100, false},
-		{"xfer allows", logtypes.RecoveryWALResponsibilityXfer, logtypes.ReleaseNextCopyVerified, false, 100, true},
-		{"xfer hold blocks", logtypes.RecoveryWALResponsibilityXfer, logtypes.ReleaseNextCopyVerified, true, 100, false},
-		// 契约 §4.3：责任转移即可 reclaim，无需 release_reason（reason 仅用于 RELEASED）
-		{"xfer no reason allows", logtypes.RecoveryWALResponsibilityXfer, "", false, 100, true},
+		{
+			// AdvanceDurable 只推 Durable、不动 Read ⇒ Read=0 ∧ Durable=200 是合法状态；
+			// 只用 Read 当上界会误判成「无事可做」（这是 tryReclaimLocked 注释里点名的那一条）。
+			name: "Durable 单独立得住上界（Read 滞后）", read: 0, durable: 200,
+			batches:     []DeliveryBatch{batchOf(0, 200)},
+			wantReclaim: 200,
+		},
+		{
+			name: "Read 单独立得住上界（Durable 滞后）", read: 200, durable: 0,
+			batches:     []DeliveryBatch{batchOf(0, 200)},
+			wantReclaim: 200,
+		},
+		{
+			// 无事可做返回 (当前Reclaim, nil)：旧实现此时报 ErrReclaimNoSegment，
+			// 让调用方对空区间反复补段（生产 inst:317 自旋 34 次/分）。
+			name: "完全没有证据：无事可做，不报错", read: 200, durable: 200,
+			batches:     nil,
+			wantReclaim: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			led := New()
 			key := keyOf("r", "g1")
 			led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "r", SourceGeneration: "g1"})
-			if err := led.AdvanceDurable(key, 100); err != nil {
-				t.Fatal(err)
+			require.NoError(t, led.AdvanceRead(key, tt.read))
+			require.NoError(t, led.AdvanceDurable(key, tt.durable))
+			for _, b := range tt.batches {
+				require.NoError(t, led.RecordDelivery(key, b.Start, b.End, b.State))
 			}
-			if err := led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone); err != nil {
-				t.Fatal(err)
-			}
-			_ = tt.delivery
-			ref := RecoveryRef{
-				SegmentID:  "seg",
-				State:      logtypes.RecoveryStaged,
-				CoversFrom: 0,
-				CoversTo:   100,
-				HasHold:    tt.hold,
-			}
-			if err := led.RegisterRecovery(key, ref); err != nil {
-				t.Fatal(err)
-			}
-			// 推进到目标状态。
-			if tt.state != logtypes.RecoveryStaged {
-				next := logtypes.RecoveryDurableVerified
-				if err := led.TransitionRecovery(key, "seg", next, "", ""); err != nil {
-					t.Fatal(err)
-				}
-				if tt.state == logtypes.RecoveryWALResponsibilityXfer {
-					reason := tt.reason
-					if reason == "" {
-						reason = logtypes.ReleaseProjectionBacked
-					}
-					if err := led.TransitionRecovery(key, "seg", logtypes.RecoveryWALResponsibilityXfer, reason, "receiver"); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			_, err := led.TryReclaim(key)
-			if tt.wantOK {
-				if err != nil {
-					t.Fatalf("want reclaim ok: %v", err)
-				}
-				if led.Get(key).Positions.Reclaim != 100 {
-					t.Fatalf("reclaim pos=%d", led.Get(key).Positions.Reclaim)
-				}
-			} else if err == nil {
-				t.Fatalf("want reclaim blocked")
-			}
+			pos, err := led.TryReclaim(key)
+			require.NoError(t, err, "新语义下「无事可做」返回 (当前Reclaim, nil)，不再有 ErrReclaimNoSegment")
+			require.Equal(t, tt.wantReclaim, pos)
+			require.Equal(t, tt.wantReclaim, led.Get(key).Positions.Reclaim)
 		})
 	}
 }
 
-func TestReleaseRequiresReason(t *testing.T) {
+// TestReclaimUnknownIsAStallPointNotADeadEnd 钉住 UNKNOWN 区间的**可恢复性**：
+// 它只是回收的停滞点，重投成功（补上 REQUEST_DONE）后回收必须能继续推进。
+//
+// 与 reclaim_evidence_test.go 的 TestReclaimDoesNotCrossUnknownDelivery 分工：
+// 那条只断言「不得越过」，若实现把「遇 UNKNOWN 就永久停止」写死（比如把它当成硬边界），
+// 那条仍然是绿的——而现场就是「源永久停在 100，重投成功也不恢复」。
+//
+// 转红方式（实测）：把 contiguousCertifiedEnd 的 `if r.To <= pos { continue }` 改成
+// 「遇到非 REQUEST_DONE 区间就 return pos 且不再重新计算」之类的一次性缓存，本用例后半立即红。
+func TestReclaimUnknownIsAStallPointNotADeadEnd(t *testing.T) {
 	led := New()
-	key := keyOf("rel", "g1")
-	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "rel", SourceGeneration: "g1"})
-	_ = led.RegisterRecovery(key, RecoveryRef{
-		SegmentID:  "s",
-		State:      logtypes.RecoveryStaged,
-		CoversFrom: 0,
-		CoversTo:   10,
-	})
-	if err := led.TransitionRecovery(key, "s", logtypes.RecoveryDurableVerified, "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := led.TransitionRecovery(key, "s", logtypes.RecoveryWALResponsibilityXfer, logtypes.ReleaseNextCopyVerified, "next"); err != nil {
-		t.Fatal(err)
-	}
-	// RELEASED 必须有 reason + receiver。
-	if err := led.TransitionRecovery(key, "s", logtypes.RecoveryReleased, "", ""); err == nil {
-		t.Fatal("RELEASED must require reason and receiver")
-	}
-	if err := led.TransitionRecovery(key, "s", logtypes.RecoveryReleased, logtypes.ReleaseNextCopyVerified, "next"); err != nil {
-		t.Fatal(err)
-	}
+	key := keyOf("ack-lost", "g1")
+	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "ack-lost", SourceGeneration: "g1"})
+	require.NoError(t, led.AdvanceRead(key, 300))
+	require.NoError(t, led.AdvanceDurable(key, 300))
+	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
+	// 响应丢失：请求发出去了，但不知道落没落库。
+	require.NoError(t, led.RecordDelivery(key, 100, 200, logtypes.DeliveryUnknown))
+	require.NoError(t, led.RecordDelivery(key, 200, 300, logtypes.DeliveryRequestDone))
+
+	e := led.Get(key)
+	require.Equal(t, uint64(300), e.Positions.Delivery, "Delivery 含 UNKNOWN ⇒ 连续前缀照常推进到 300")
+
+	pos, err := led.TryReclaim(key)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), pos, "reclaim 只认 REQUEST_DONE ⇒ 停在 UNKNOWN 之前")
+	require.Equal(t, uint64(100), led.Get(key).Positions.Reclaim)
+
+	// 重投成功（UNKNOWN 区间补上 REQUEST_DONE）后，认证覆盖才接上，reclaim 继续推进。
+	require.NoError(t, led.RecordDelivery(key, 100, 200, logtypes.DeliveryRequestDone))
+	pos, err = led.TryReclaim(key)
+	require.NoError(t, err)
+	require.Equal(t, uint64(300), pos, "补上 ACK 后认证覆盖连续 ⇒ 推进到读入量，不是永久死路")
 }
 
 // FR-496 加固：账本修订号必须在**每一个**写路径上推进——上层「只持久化变更源」依赖它是
@@ -298,14 +231,14 @@ func TestLedgerRevisionAdvancesOnEveryMutation(t *testing.T) {
 		{"RecordGap", func() { _ = led.RecordGap(key, 0, 10, "TEST", "detail") }},
 		{"PauseAcquire", func() { _ = led.PauseAcquire(key, "disk full") }},
 		{"ResumeAcquire", func() { _ = led.ResumeAcquire(key) }},
-		{"RegisterRecovery", func() { _ = led.RegisterRecovery(key, RecoveryRef{SegmentID: "s1", State: logtypes.RecoveryStaged}) }},
 		{"TryReclaim", func() { _, _ = led.TryReclaim(key) }},
 		{"IncrementIngestSeq", func() { _, _ = led.IncrementIngestSeq(key) }},
 	}
-	// 让 TryReclaim 有可推进的靶子（先走完责任链）。
-	_ = led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone)
-	_ = led.RegisterRecovery(key, RecoveryRef{SegmentID: "s1", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 100})
-	_ = led.TransitionRecovery(key, "s1", logtypes.RecoveryWALResponsibilityXfer, "", "receiver")
+	// 让 TryReclaim 有可推进的靶子：认证覆盖 + 读入量都在 100（旧实现靠「注册恢复段 + 推进状态」，
+	// 2026-10-29 那套机制删除后，靶子就是两个真实水位）。
+	require.NoError(t, led.AdvanceRead(key, 100))
+	require.NoError(t, led.AdvanceDurable(key, 100))
+	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
 
 	for index, mutation := range mutations {
 		before := led.Revision(key)

@@ -201,10 +201,7 @@ func TestAckLossSetsUnknown(t *testing.T) {
 			if err := wal.Commit(); err != nil {
 				t.Fatal(err)
 			}
-			// 绑定 STAGED 恢复分段：无论 REQUEST_DONE 还是 UNKNOWN，HTTP 结果都不单独放行 reclaim。
-			if err := wal.BindRecoverySegment("seg-1", "/tmp/seg-1", 0, 10); err != nil {
-				t.Fatal(err)
-			}
+			// 2026-10-29：恢复段已删，不再需要任何绑定——回收只看投递证据（见下方断言）。
 			err := wal.RecordHTTPResult(DeliveryResult{
 				StartPos:   0,
 				EndPos:     10,
@@ -221,10 +218,20 @@ func TestAckLossSetsUnknown(t *testing.T) {
 			if ent.Positions.Durable != 10 {
 				t.Fatalf("durable must stay at fsync end, got %d", ent.Positions.Durable)
 			}
-			// UNKNOWN / REQUEST_DONE 均不得在 STAGED 下 reclaim。
+			// 2026-10-29：回收不再看恢复段，只看「REQUEST_DONE 连续覆盖」与「max(Read,Durable)」。
+			// 两者逐条对应原来的两条断言：
+			//   - UNKNOWN（响应丢失 / 非 2xx）⇒ 认证覆盖为空 ⇒ 停在 0；
+			//   - REQUEST_DONE ⇒ 认证覆盖到 durable(10) ⇒ 推进到 10。
 			pos, rerr := wal.TryReclaim()
-			if rerr == nil && pos > 0 {
-				t.Fatalf("reclaim must be blocked while recovery STAGED (or no transfer), pos=%d", pos)
+			if rerr != nil {
+				t.Fatalf("新语义下「推不动」不是错误（旧哨兵已删），实测 %v", rerr)
+			}
+			if tt.wantState == logtypes.DeliveryRequestDone {
+				if pos != 10 {
+					t.Fatalf("REQUEST_DONE 覆盖到读入量 ⇒ 回收应推进到 10，实测 %d", pos)
+				}
+			} else if pos != 0 {
+				t.Fatalf("UNKNOWN 不是认证证据 ⇒ 回收必须停在 0，实测 %d", pos)
 			}
 			if tt.ackLost && ent.DeliveryState != logtypes.DeliveryUnknown {
 				t.Fatal("ACK loss must keep UNKNOWN recovery responsibility")
@@ -233,8 +240,17 @@ func TestAckLossSetsUnknown(t *testing.T) {
 	}
 }
 
-// TestReclaimBlockedOnStaged 恢复分段 STAGED 时 reclaim 被门禁拦截。
-func TestReclaimBlockedOnStaged(t *testing.T) {
+// TestReclaimBlockedOnUnknownDelivery（2026-10-29 重写）：UNKNOWN（响应丢失 / 非 2xx）
+// 不是认证证据 ⇒ 回收停在原地。
+//
+// 旧用例（TestReclaimBlockedOnStaged）验的是「恢复段 STAGED 时 reclaim 被门禁拦截」。
+// 恢复段机制已删（WAL 改纯内存后前提消失），但它的**真实关切**（2026-10-21 数据丢失事故
+// 的防线：发出去了但不知落没落库的字节不得被回收）在新语义下由**认证覆盖**承担，
+// 而且现在更直接：UNKNOWN 区间本身就是回收的停滞点。
+//
+// 转红方式（实测）：把 tryReclaimLocked 的上界改回 Positions.Delivery
+// ⇒ 本用例立即红（reclaim 会跟着 UNKNOWN 推到 20）。
+func TestReclaimBlockedOnUnknownDelivery(t *testing.T) {
 	key := testKey("src-staged", "g1")
 	led := ledger.New()
 	wal := NewWAL(led, key)
@@ -249,68 +265,73 @@ func TestReclaimBlockedOnStaged(t *testing.T) {
 	if err := wal.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if err := wal.BindRecoverySegment("seg-s", "seg-s", 0, 20); err != nil {
-		t.Fatal(err)
-	}
-	// 即使 HTTP 2xx REQUEST_DONE，STAGED 仍拦截。
-	if err := wal.RecordHTTPResult(DeliveryResult{StartPos: 0, EndPos: 20, HTTPStatus: 200}); err != nil {
+	// 响应丢失：已发出、但不知落没落库。
+	if err := wal.RecordHTTPResult(DeliveryResult{StartPos: 0, EndPos: 20, HTTPStatus: 200, AckLost: true}); err != nil {
 		t.Fatal(err)
 	}
 	ent := led.Get(key)
-	if ent.DeliveryState != logtypes.DeliveryRequestDone {
-		t.Fatalf("want REQUEST_DONE, got %s", ent.DeliveryState)
+	if ent.DeliveryState != logtypes.DeliveryUnknown {
+		t.Fatalf("want UNKNOWN, got %s", ent.DeliveryState)
 	}
-	if _, err := wal.TryReclaim(); err == nil {
-		t.Fatal("CanReclaim must block reclaim when recovery segment is STAGED")
+	// 断言不是“报错”，而是“不推进”——这是新语义里两种完全不同的结果。
+	pos, err := wal.TryReclaim()
+	if err != nil {
+		t.Fatalf("UNKNOWN 停滞不是错误（旧哨兵已删），实测 %v", err)
+	}
+	if pos != 0 {
+		t.Fatalf("UNKNOWN 不是认证证据 ⇒ reclaim 必须停在 0，实测 %d", pos)
 	}
 	if got := led.Get(key).Positions.Reclaim; got != 0 {
-		t.Fatalf("reclaim_position must remain 0 on STAGED, got %d", got)
+		t.Fatalf("reclaim_position must remain 0 on UNKNOWN, got %d", got)
+	}
+	// 对照：重投成功（补上 REQUEST_DONE）后回收必须能继续推进。
+	if err := wal.RecordHTTPResult(DeliveryResult{StartPos: 0, EndPos: 20, HTTPStatus: 200}); err != nil {
+		t.Fatal(err)
+	}
+	pos, err = wal.TryReclaim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pos != 20 {
+		t.Fatalf("补上 ACK 后认证覆盖连续 ⇒ 应推进到 20，实测 %d", pos)
 	}
 }
 
-// TestReclaimAllowedAfterWALResponsibilityTransferred 责任转移后允许 reclaim。
-func TestReclaimAllowedAfterWALResponsibilityTransferred(t *testing.T) {
+// TestReclaimAllowedWithRequestDoneCoverage（2026-10-29 重写）：REQUEST_DONE 连续覆盖
+// 到读入量 ⇒ 回收推进到那个位置；覆盖不全时停在缺口前。
+//
+// 旧用例（TestReclaimAllowedAfterWALResponsibilityTransferred）的表格把「恢复段状态 ×
+// release_reason × hold」当作自变量。三个自变量已随受管恢复分段机制全部删除，
+// 但用例的真实关切是「什么条件下 reclaim 能推进、推进到哪里」——现在这个自变量的
+// 新形态就是「REQUEST_DONE 覆盖到哪儿」。
+//
+// 转红方式（实测）：把 contiguousCertifiedEnd 的 `break` 换成「跳过缺口继续扫」
+// ⇒ 「认证覆盖有缺口」一行立即红（会推进到 50）。
+func TestReclaimAllowedWithRequestDoneCoverage(t *testing.T) {
 	tests := []struct {
-		name     string
-		segState logtypes.RecoverySegmentState
-		reason   logtypes.ReleaseReason
-		hold     bool
-		wantOK   bool
+		name    string
+		batches []ledger.DeliveryBatch
+		wantPos uint64
 	}{
 		{
-			name:     "xfer + next copy verified",
-			segState: logtypes.RecoveryWALResponsibilityXfer,
-			reason:   logtypes.ReleaseNextCopyVerified,
-			hold:     false,
-			wantOK:   true,
+			name:    "完整覆盖：推进到读入量",
+			batches: []ledger.DeliveryBatch{{Start: 0, End: 50, State: logtypes.DeliveryRequestDone}},
+			wantPos: 50,
 		},
 		{
-			name:     "xfer + projection backed",
-			segState: logtypes.RecoveryWALResponsibilityXfer,
-			reason:   logtypes.ReleaseProjectionBacked,
-			hold:     false,
-			wantOK:   true,
+			name:    "1 字节分隔符：仍算连续",
+			batches: []ledger.DeliveryBatch{{Start: 0, End: 20, State: logtypes.DeliveryRequestDone}, {Start: 21, End: 50, State: logtypes.DeliveryRequestDone}},
+			wantPos: 50,
 		},
 		{
-			name:     "xfer blocked by hold",
-			segState: logtypes.RecoveryWALResponsibilityXfer,
-			reason:   logtypes.ReleaseNextCopyVerified,
-			hold:     true,
-			wantOK:   false,
+			name:    "认证覆盖有真洞：停在洞前",
+			batches: []ledger.DeliveryBatch{{Start: 0, End: 20, State: logtypes.DeliveryRequestDone}, {Start: 22, End: 50, State: logtypes.DeliveryRequestDone}},
+			wantPos: 20,
 		},
 		{
-			name:     "durable verified not enough",
-			segState: logtypes.RecoveryDurableVerified,
-			reason:   logtypes.ReleaseNextCopyVerified,
-			hold:     false,
-			wantOK:   false,
-		},
-		{
-			name:     "staged never",
-			segState: logtypes.RecoveryStaged,
-			reason:   logtypes.ReleaseProjectionBacked,
-			hold:     false,
-			wantOK:   false,
+			name:    "UNKNOWN 不算认证：停在 UNKNOWN 前",
+			batches: []ledger.DeliveryBatch{{Start: 0, End: 20, State: logtypes.DeliveryRequestDone}, {Start: 20, End: 50, State: logtypes.DeliveryUnknown}},
+			wantPos: 20,
 		},
 	}
 	for _, tt := range tests {
@@ -329,51 +350,25 @@ func TestReclaimAllowedAfterWALResponsibilityTransferred(t *testing.T) {
 			if err := wal.Commit(); err != nil {
 				t.Fatal(err)
 			}
-			if err := wal.BindRecoverySegment("seg-r", "seg-r", 0, 50); err != nil {
+			led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "src-reclaim", SourceGeneration: "g1", ParserVersion: "acquire-v1"})
+			if err := led.AdvanceRead(key, 50); err != nil {
 				t.Fatal(err)
 			}
-			// 推进到目标状态。
-			if tt.segState != logtypes.RecoveryStaged {
-				if err := led.TransitionRecovery(key, "seg-r", logtypes.RecoveryDurableVerified, "", ""); err != nil {
+			for _, b := range tt.batches {
+				if err := led.RecordDelivery(key, b.Start, b.End, b.State); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if tt.segState == logtypes.RecoveryWALResponsibilityXfer {
-				if err := led.TransitionRecovery(key, "seg-r", logtypes.RecoveryWALResponsibilityXfer, tt.reason, "next-copy"); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if tt.segState == logtypes.RecoveryDurableVerified {
-				// 保持 DURABLE_VERIFIED，reason 可有可无。
-				_ = tt.reason
-			}
-			if tt.hold {
-				if err := led.SetRecoveryHold(key, "seg-r", true); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := wal.RecordHTTPResult(DeliveryResult{StartPos: 0, EndPos: 50, HTTPStatus: 200}); err != nil {
-				t.Fatal(err)
 			}
 
 			pos, err := wal.TryReclaim()
-			if tt.wantOK {
-				if err != nil {
-					t.Fatalf("reclaim should be allowed: %v", err)
-				}
-				if pos != 50 {
-					t.Fatalf("reclaim_position want 50, got %d", pos)
-				}
-				if got := led.Get(key).Positions.Reclaim; got != 50 {
-					t.Fatalf("ledger reclaim_position=%d", got)
-				}
-			} else {
-				if err == nil {
-					t.Fatalf("reclaim must be blocked, got pos=%d", pos)
-				}
-				if got := led.Get(key).Positions.Reclaim; got != 0 {
-					t.Fatalf("reclaim_position must stay 0, got %d", got)
-				}
+			if err != nil {
+				t.Fatalf("reclaim should be allowed: %v", err)
+			}
+			if pos != tt.wantPos {
+				t.Fatalf("reclaim_position want %d, got %d", tt.wantPos, pos)
+			}
+			if got := led.Get(key).Positions.Reclaim; got != tt.wantPos {
+				t.Fatalf("ledger reclaim_position=%d want %d", got, tt.wantPos)
 			}
 		})
 	}
@@ -731,7 +726,12 @@ func TestWALBacklogLimitDropsOnDrain(t *testing.T) {
 			"t0", "t1", "INFO", "stdout", "line")
 	}
 
-	// ① 越界判定**当场**发生：一批塞 3 条，上限 2 ⇒ 立即丢最旧 1 条、剩 2 条。
+	// ① 越界判定**当场**发生：一批塞 3 条，上限 2 ⇒ 立即丢最旧 1 条。
+	//
+	// 2026-10-29 改写（观测面）：投递成功现在会**当场**推进回收并剪掉已确认前缀，
+	// 所以“队列里还剩 N 条”这个读数被两件事同时决定（丢弃 + 回收），不再是一个干净的判据。
+	// 丢弃本身改用专用的**累计丢弃**读数 `DropStats()`（对齐 Fluent Bit 的
+	// memrb_dropped_chunks / memrb_dropped_bytes）——它只由丢弃路径推进，语义单一。
 	if err := pipe.Ingest([]logtypes.Event{build(0, 4), build(5, 9), build(10, 14)}); err != nil {
 		t.Fatalf("首批本身应当成功（越界在追加后判定）: %v", err)
 	}
@@ -739,11 +739,11 @@ func TestWALBacklogLimitDropsOnDrain(t *testing.T) {
 	if ent.AcquirePaused {
 		t.Fatalf("丢弃语义下不得暂停采集: %+v", ent.PauseReason)
 	}
-	if n := len(wal.Snapshot()); n != 2 {
-		t.Fatalf("越界必须当场丢到上限内：期望 2 条，得到 %d", n)
+	if dropped, _ := wal.DropStats(); dropped != 1 {
+		t.Fatalf("越界必须当场丢最旧 1 条：期望 dropped=1，得到 %d", dropped)
 	}
-	if got := wal.Snapshot()[0].Event.Record.Start; got != 5 {
-		t.Fatalf("必须丢最旧前缀：剩下的首条应从 5 开始，实测 %d", got)
+	if n, _ := wal.Backlog(); n > 2 {
+		t.Fatalf("队列必须恒有界：期望积压 ≤ 2，得到 %d", n)
 	}
 
 	// ② 丢弃必须留下可查凭据（不是静默丢）。
@@ -776,8 +776,11 @@ func TestWALBacklogLimitDropsOnDrain(t *testing.T) {
 	if err := wal2.seedEntries(entries); err != nil {
 		t.Fatalf("恢复失败: %v", err)
 	}
-	if n := len(wal2.Snapshot()); n > 1 {
-		t.Fatalf("恢复后必须当场把积压裁到上限内：期望 ≤1 条，得到 %d", n)
+	if dropped, _ := wal2.DropStats(); dropped == 0 {
+		t.Fatalf("恢复后必须当场把积压裁到上限内：期望有丢弃，实测 dropped=0")
+	}
+	if n, _ := wal2.Backlog(); n > 1 {
+		t.Fatalf("恢复后队列必须恒有界：期望积压 ≤ 1，得到 %d", n)
 	}
 	if led.Get(key).AcquirePaused {
 		t.Fatal("恢复后也不得因积压而暂停")
@@ -827,20 +830,13 @@ func TestReplayDrainIsRateLimited(t *testing.T) {
 		t.Fatalf("夹具前提不成立：期望 6 条存量，实测 %d", entries)
 	}
 
-	// 责任转移随投递**逐段**推进（见循环内 RegisterRecovery）：此处不预置宽 ref ——
-	// 一条覆盖全量的 ref 会让首轮回收把存量**一次扫空** ⇒ 后两轮无米下锅 ✗。
+	// 2026-10-29：回收只认「REQUEST_DONE 连续覆盖 + max(Read,Durable)」，不再需要
+	// 「逐段登记恢复责任」——每轮排空自身就写 REQUEST_DONE，回收随投递自动前进。
+	// 夹具因此不再预置任何恢复段（那套 API 已删），但「每轮只发一批、下一轮发下一批」
+	// 这条意图与断言完全不变。
 	batchStart := len(batches)
 	var deliveredTotal int
 	for round := 0; round < 3; round++ {
-		// 每轮前把**该轮覆盖的那一段**交给恢复责任（现场：责任转移随投递逐段推进）⇒
-		// 该轮排空后的 `TryReclaim` 才会真的推进回收水位、已确认前缀才会离开 WAL
-		// ⇒ 下一轮发的是**下一批**（而不是重发同一头）。
-		// #60-Z1 的抑制闸正是以「投递/回收水位有没有前进」为放行判据，故夹具必须真逐段推进 ✓。
-		require.NoError(t, led.RegisterRecovery(key, ledger.RecoveryRef{
-			SegmentID: "seg-replay-rate-" + string(rune('a'+round)), Path: "seg-replay-rate.log",
-			State:      logtypes.RecoveryWALResponsibilityXfer,
-			CoversFrom: uint64(round * 10), CoversTo: uint64(round*10 + 10),
-		}))
 		pending, err := pipe.DeliverPending()
 		if err != nil {
 			t.Fatalf("第 %d 轮排空失败: %v", round, err)
@@ -1024,12 +1020,11 @@ func TestWALPrunesReclaimedEntries(t *testing.T) {
 	require.NoError(t, pipe.Ingest(events))
 	require.Len(t, wal.Snapshot(), 10, "尚未回收时保留全部条目")
 
-	// 登记受管恢复分段并转移责任，令 CanReclaim 放行。
-	require.NoError(t, led.RegisterRecovery(key, ledger.RecoveryRef{
-		SegmentID: "seg", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 99,
-	}))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryWALResponsibilityXfer, "", "recv"))
+	// 2026-10-29：回收只认「REQUEST_DONE 连续覆盖 + max(Read,Durable)」。
+	// 旧夹具靠「登记恢复段 + 责任转移」让 CanReclaim 放行，那套 API 已删；
+	// 现在直接给出真实证据：整段 [0,100) 已确认投递且已读入。
+	require.NoError(t, led.AdvanceRead(key, 100))
+	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
 	if _, err := wal.TryReclaim(); err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}
@@ -1051,12 +1046,9 @@ func TestWALKeepsUnreclaimedEntries(t *testing.T) {
 		))
 	}
 	require.NoError(t, pipe.Ingest(events))
-	// 仅覆盖前两条。
-	require.NoError(t, led.RegisterRecovery(key, ledger.RecoveryRef{
-		SegmentID: "seg", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 19,
-	}))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryWALResponsibilityXfer, "", "recv"))
+	// 仅确认前两条（[0,19]）已投递且已读入。
+	require.NoError(t, led.AdvanceRead(key, 19))
+	require.NoError(t, led.RecordDelivery(key, 0, 19, logtypes.DeliveryRequestDone))
 	if _, err := wal.TryReclaim(); err != nil {
 		t.Fatalf("reclaim: %v", err)
 	}

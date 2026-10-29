@@ -157,8 +157,6 @@ func outboxAcquireFixture(t *testing.T) (*Pipeline, []logtypes.Event) {
 	require.NoError(t, led.AdvanceRead(key, 7660))
 	require.NoError(t, p.AppendEvents(events))
 	require.NoError(t, wal.Commit())
-	require.NoError(t, wal.BindRecoverySegment("held", "raw", 0, 7660))
-	require.NoError(t, led.SetRecoveryHold(key, "held", true))
 	p.SetCommittedPersist(func(context.Context, []CommitIdentity) error { return nil })
 	return p, events
 }
@@ -218,9 +216,9 @@ func TestDurableOutboxPruneAppendSameLengthAndProbeDoNotConsumeCursorBasis(t *te
 	first, err := p.DeliverPending()
 	require.NoError(t, err)
 	require.Len(t, first, 500)
-	require.NoError(t, wal.BindRecoverySegment("prefix", "raw", 0, 5000))
-	require.NoError(t, led.TransitionRecovery(key, "prefix", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "prefix", logtypes.RecoveryWALResponsibilityXfer, "", "receiver"))
+	// 2026-10-29：让前 500 条（[0,5000)）可回收——旧夹具靠「登记恢复段 + 责任转移」，
+	// 现在直接给真实证据：投递结果（REQUIRE_DONE）+ 读入量。
+	require.NoError(t, led.AdvanceRead(key, 5000))
 	_, err = wal.TryReclaim()
 	require.NoError(t, err)
 	require.Len(t, wal.Snapshot(), 400)
@@ -261,7 +259,15 @@ func TestDurableOutboxQualificationFailureDoesNotAdvancePendingCursor(t *testing
 	require.Equal(t, all[0].EventID, first[0].EventID, "未获资格的旧批次不得在零外发时丢掉队列进度")
 }
 
-func TestDurableOutboxHeldACKHeadDoesNotStarveTail(t *testing.T) {
+// TestDurableOutboxDeliveredHeadDoesNotStarveTail（2026-10-29 改写）：已投递的头部
+// 不得挡住尾部——两轮排空必须把 766 条全部发出，且每条只发一次。
+//
+// 旧用例（TestDurableOutboxHeldACKHeadDoesNotStarveTail）靠「hold 钉住已 ACK 的前 500」造
+// 「头部不可回收」的形态。hold 随受管恢复分段机制一并删除，那两条 hold 断言失去对象；
+// 但**排空游标的公平性**（已发过的头部不得让尾部饿死）是游标本身的属性，与 hold 无关，
+// 所以本用例只保留这部分，并把「头部不可回收」改为新语义下真实的停滞点：
+// 头部**从未得到 REQUEST_DONE**（夹具里的 deliver 只返回状态码，不写 ACK）。
+func TestDurableOutboxDeliveredHeadDoesNotStarveTail(t *testing.T) {
 	p, all := outboxAcquireFixture(t)
 	seen := make(map[string]int)
 	p.SetDeliver(func(events []logtypes.Event, _ bool) (int, bool, error) {
@@ -273,19 +279,16 @@ func TestDurableOutboxHeldACKHeadDoesNotStarveTail(t *testing.T) {
 	first, err := p.DeliverPending()
 	require.NoError(t, err)
 	require.Len(t, first, 500)
-	require.Equal(t, uint64(0), p.led.Get(p.key).Positions.Reclaim)
 	second, err := p.DeliverPending()
 	require.NoError(t, err)
-	require.Len(t, second, 266, "持续hold的已ACK前500不得挡住静默尾266")
+	require.Len(t, second, 266, "已发出的前 500 不得挡住静默尾 266")
 	require.Equal(t, all[500].EventID, second[0].EventID)
 	for _, event := range all {
-		require.Equal(t, 1, seen[event.EventID])
+		require.Equal(t, 1, seen[event.EventID], "每条只能发一次")
 	}
 	pending, err := p.HasPendingDelivery(context.Background())
 	require.NoError(t, err)
 	require.False(t, pending)
-	require.Len(t, p.wal.Snapshot(), 766, "投递完成不等于允许释放hold责任")
-	require.True(t, p.led.Get(p.key).RecoveryRefs[0].HasHold)
 }
 
 func TestDurableOutboxFailedHeadFairCursorDoesNotSkipHole(t *testing.T) {
@@ -305,12 +308,20 @@ func TestDurableOutboxFailedHeadFairCursorDoesNotSkipHole(t *testing.T) {
 	require.Len(t, tail, 266)
 	require.Equal(t, uint64(5000), tail[0].Record.Start)
 	require.Equal(t, uint64(0), p.led.Get(p.key).Positions.Delivery, "尾部成功不能用最大值越过首批未知洞")
+	// 2026-10-29：未确认的头部就是回收的停滞点——尾部虽已成功，reclaim 仍停在 0。
+	// （旧断言靠恢复段门禁让 reclaim 永远为 0；现在它会因**头部重投成功**而推进，
+	//  见下方对照。）
+	require.Zero(t, p.led.Get(p.key).Positions.Reclaim, "头部未确认 ⇒ 回收不得越过该洞")
+
+	// 对照：下一轮排空会重试那个未确认的头部，成功后认证覆盖接上 ⇒ 回收推进到读入量。
+	// 这条是“停滞点必须可被重投解开”的直接证据（否则源会永久停在 0）。
 	for n := 0; n < 3; n++ {
 		_, err = p.DeliverPending()
 		require.NoError(t, err)
 	}
 	require.Equal(t, uint64(7660), p.led.Get(p.key).Positions.Delivery)
-	require.Zero(t, p.led.Get(p.key).Positions.Reclaim)
+	require.Equal(t, uint64(7660), p.led.Get(p.key).Positions.Reclaim,
+		"头部重投成功后认证覆盖连续 ⇒ 回收推进到读入量")
 }
 
 func TestDurableOutboxPreexistingCommittedSiblingsAcross500RemainDeliverable(t *testing.T) {
@@ -328,8 +339,6 @@ func TestDurableOutboxPreexistingCommittedSiblingsAcross500RemainDeliverable(t *
 	require.NotEqual(t, original.CanonicalHash, events[765].CanonicalHash)
 	require.NoError(t, wal.Append(events...))
 	require.NoError(t, wal.Commit())
-	require.NoError(t, wal.BindRecoverySegment("hold", "raw", 0, 7660))
-	require.NoError(t, led.SetRecoveryHold(key, "hold", true))
 	seen := make(map[CommitIdentity]int)
 	p.SetDeliver(func(actual []logtypes.Event, _ bool) (int, bool, error) {
 		for _, event := range actual {
@@ -353,7 +362,6 @@ func TestDurableOutboxPreexistingCommittedSiblingsAcross500RemainDeliverable(t *
 		require.NoError(t, err)
 		require.Equal(t, 1, seen[id])
 	}
-	require.Len(t, wal.Snapshot(), 766, "hold仍独立阻止正文回收，不能借兄弟资格释放")
 }
 
 func TestDurableOutboxPostCaptureSiblingRejectedButUnrelatedTailAllowed(t *testing.T) {
@@ -432,9 +440,7 @@ func TestDurableOutboxACKBodyGateRejectsPostACKUncommittedVariant(t *testing.T) 
 	require.NoError(t, wal.Append(event))
 	require.NoError(t, wal.Commit())
 	require.NoError(t, p.RecordDeliveryResult(context.Background(), []logtypes.Event{event}, 200, false))
-	require.NoError(t, wal.BindRecoverySegment("original", "raw", 0, 10))
-	require.NoError(t, led.TransitionRecovery(key, "original", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "original", logtypes.RecoveryWALResponsibilityXfer, "", "receiver"))
+	require.NoError(t, led.AdvanceRead(key, 10))
 	variant := logtypes.BuildEvent(event.Source, event.Record, "2026-10-22T12:00:00.1Z", event.IngestTimeUTC, event.Level, event.Stream, event.Message)
 	require.NoError(t, wal.AppendReplay(variant))
 	_, err := wal.TryReclaim()
@@ -462,9 +468,6 @@ func TestDurableOutboxACKStampNeverSurvivesRestoreOrOldReclaim(t *testing.T) {
 			require.NoError(t, wal.Append(event))
 			require.NoError(t, wal.Commit())
 			require.NoError(t, p.RecordDeliveryResult(context.Background(), []logtypes.Event{event}, 200, false))
-			require.NoError(t, wal.BindRecoverySegment("old", "raw", 0, 10))
-			require.NoError(t, led.TransitionRecovery(key, "old", logtypes.RecoveryDurableVerified, "", ""))
-			require.NoError(t, led.TransitionRecovery(key, "old", logtypes.RecoveryWALResponsibilityXfer, "", "receiver"))
 			entries := wal.Snapshot()
 			if restore == "json" {
 				encoded, err := json.Marshal(entries)
@@ -507,10 +510,10 @@ func TestDurableOutboxManualEvidenceExactClosedUnionAndThroughLimit(t *testing.T
 	require.True(t, walRecordAbandoned(logtypes.RecordRange{Start: 10, End: 20}, []ledger.GapAbandonment{proof(10, 14), proof(15, 19)}))
 	require.False(t, walRecordAbandoned(logtypes.RecordRange{Start: 10, End: 20}, []ledger.GapAbandonment{proof(10, 13), proof(15, 19)}), "不能用凸包填健康洞")
 	require.True(t, walRecordAbandoned(logtypes.RecordRange{Start: ^uint64(0) - 1, End: ^uint64(0)}, []ledger.GapAbandonment{proof(^uint64(0)-1, ^uint64(0))}))
+	// 第一部分：发布证明（through）只能收紧回收上界，不能放宽。
+	//
+	// 2026-10-29：恢复段已删，夹具不再需要 hold/责任转移——投递结果本身就构成认证覆盖。
 	p, events := outboxAcquireFixture(t)
-	require.NoError(t, p.led.SetRecoveryHold(p.key, "held", false))
-	require.NoError(t, p.led.TransitionRecovery(p.key, "held", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, p.led.TransitionRecovery(p.key, "held", logtypes.RecoveryWALResponsibilityXfer, "", "receiver"))
 	require.NoError(t, p.RecordDeliveryResult(context.Background(), events, 200, false))
 	_, err := p.wal.TryReclaimThrough(5000)
 	require.ErrorIs(t, err, ledger.ErrReclaimPrecondition, "actual target7660不得越当前发布proof5000")
@@ -519,6 +522,14 @@ func TestDurableOutboxManualEvidenceExactClosedUnionAndThroughLimit(t *testing.T
 	_, err = p.wal.TryReclaimThrough(7660)
 	require.NoError(t, err)
 	require.Empty(t, p.wal.Snapshot())
+
+	// 第二部分（2026-10-29 语义迁移）：人工终局凭据是**独立审计出口**，它既不伪造 ACK、
+	// 也不再能把 reclaim 推过认证空洞。
+	//
+	// 旧版这里断言「凭据完整覆盖时 reclaim 推进到 20 且 WAL 清空」——那靠的是
+	// tryReclaimLocked 的凭据放行分支，该分支随恢复段机制一并删除。现在凭据的唯一回收侧
+	// 消费者是 `walRecordAbandoned`（剪枝时允许跳过一个已裁定的空洞），它**不能**让
+	// contiguousCertifiedEnd 越过认证缺口。本用例把这条边界钉下来。
 	for _, complete := range []bool{false, true} {
 		key, led := testKey("outbox-manual-real", "g1"), ledger.New()
 		wal := NewWAL(led, key)
@@ -526,6 +537,7 @@ func TestDurableOutboxManualEvidenceExactClosedUnionAndThroughLimit(t *testing.T
 		current.SetCommittedPersist(func(context.Context, []CommitIdentity) error { return nil })
 		require.NoError(t, wal.Append(sixFixEvent(key, 0, 10), sixFixEvent(key, 10, 20)))
 		require.NoError(t, wal.Commit())
+		require.NoError(t, led.AdvanceRead(key, 20))
 		from := uint64(10)
 		if complete {
 			from = 0
@@ -533,17 +545,19 @@ func TestDurableOutboxManualEvidenceExactClosedUnionAndThroughLimit(t *testing.T
 		require.NoError(t, led.RecordGap(key, from, 19, ledger.GapReasonWALBodyMissing, "人工审计正文损毁"))
 		_, err := led.AbandonGapsThrough(key, 20, proof(from, 19))
 		require.NoError(t, err)
-		require.NoError(t, wal.BindRecoverySegment("manual", "raw", 0, 20))
+
+		// 凭据本身成立（剪枝面认它）。
+		_, covered := led.AbandonmentsCovering(key, from)
+		require.True(t, covered, "前置：凭据已覆盖空洞")
+
+		// 但回收位置不得因凭据而推进（没有任何 REQUEST_DONE 证据）。
 		pos, err := wal.TryReclaim()
-		if complete {
-			require.NoError(t, err)
-			require.Equal(t, uint64(20), pos)
-			require.Empty(t, wal.Snapshot())
-		} else {
-			require.ErrorIs(t, err, ledger.ErrReclaimPrecondition)
-			require.Zero(t, pos)
-			require.Len(t, wal.Snapshot(), 2)
-		}
+		require.NoError(t, err, "推不动不是错误")
+		require.Zero(t, pos, "人工凭据不得伪造认证覆盖（from=%d）", from)
+		require.Zero(t, led.Get(key).Positions.Reclaim)
+		require.Len(t, wal.Snapshot(), 2, "未认证的条目一条都不能离开队列")
+
+		// 而凭据绝不伪造 ACK stamp。
 		require.Empty(t, ledger.RequestDoneRangesOf(led.Get(key)), "人工终局是独立审计出口，绝不能伪造ACK stamp")
 	}
 }

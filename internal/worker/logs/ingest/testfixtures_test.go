@@ -93,10 +93,7 @@ func migrationFixture() *persistedState {
 			{StartPos: 300, EndPos: 350, Reason: "ROTATION_HOLE", Detail: "previous process", Resolved: true, Resolution: "recovered"},
 			{StartPos: 700, EndPos: 750, Reason: "PAUSED", Detail: "disk 95.0%"},
 		},
-		RecoveryRefs: []ledger.RecoveryRef{
-			{SegmentID: "seg-1", Path: "/data/recovery/seg-1", State: logtypes.RecoveryReleased,
-				ReleaseReason: logtypes.ReleaseProjectionBacked, ResponsibilityReceiver: "catalog", CoversFrom: 0, CoversTo: 500},
-		},
+		// 2026-10-29：RecoveryRefs 已随受管恢复分段机制删除，夹具不再携带它。
 		ErrorCount:    3,
 		IngestSeq:     42,
 		AcquirePaused: false,

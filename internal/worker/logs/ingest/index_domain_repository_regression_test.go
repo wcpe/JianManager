@@ -1,7 +1,6 @@
 package ingest
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -96,124 +95,12 @@ func TestIndexManagerConfirmedPhysicalFingerprintAndGapThreeOpens(t *testing.T) 
 	}
 }
 
-func TestIndexRecoveryArchiveLedgerThousandBatchesThreeOpens(t *testing.T) {
-	ctx := context.Background()
-	root := t.TempDir()
-	m := &Manager{root: root}
-	s, err := stateindex.Open(m.indexPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.index = s
-	key := ledger.SourceKey{LogSourceID: "disk-recovery", SourceGeneration: "g1"}
-	led := ledger.New()
-	led.Ensure(key, logtypes.SourceIdentity{})
-	led.SetRecoveryArchiveStore(m)
-	for i := 0; i < 1000; i++ {
-		from, to := uint64(i*10), uint64((i+1)*10)
-		id := fmt.Sprintf("recovery-%04d", i)
-		if err := led.AdvanceRead(key, to); err != nil {
-			t.Fatal(err)
-		}
-		if err := led.RecordDelivery(key, from, to, logtypes.DeliveryRequestDone); err != nil {
-			t.Fatal(err)
-		}
-		if err := led.RegisterRecovery(key, ledger.RecoveryRef{SegmentID: id, Path: "projection://disk", State: logtypes.RecoveryStaged, CoversFrom: from, CoversTo: to}); err != nil {
-			t.Fatal(err)
-		}
-		for _, state := range []logtypes.RecoverySegmentState{logtypes.RecoveryDurableVerified, logtypes.RecoveryWALResponsibilityXfer, logtypes.RecoveryReleased, logtypes.RecoveryCleaned} {
-			reason := logtypes.ReleaseReason("")
-			if state == logtypes.RecoveryReleased {
-				reason = logtypes.ReleaseProjectionBacked
-			}
-			if err := led.TransitionRecovery(key, id, state, reason, "projection:disk"); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, err := led.TryReclaim(key); err != nil {
-			t.Fatal(err)
-		}
-		if (i+1)%16 == 0 {
-			if _, err := led.ArchiveCleanedRecovery(ctx, key, 16); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if active := len(led.Get(key).RecoveryRefs); active > 15 {
-			t.Fatalf("活动恢复历史随累计批次增长：%d", active)
-		}
-	}
-	canceled, cancel := context.WithCancel(ctx)
-	cancel()
-	before := len(led.Get(key).RecoveryRefs)
-	if _, err := led.ArchiveCleanedRecovery(canceled, key, 16); err == nil {
-		t.Fatal("取消仓储不能返回成功回执")
-	}
-	if got := len(led.Get(key).RecoveryRefs); got != before {
-		t.Fatalf("取消后未归档责任被裁：%d -> %d", before, got)
-	}
-	if _, err := led.ArchiveCleanedRecovery(ctx, key, 16); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := m.stateToIndexState(&persistedState{Sources: map[string]persistedSource{key.String(): {Ledger: []ledger.Entry{*led.Get(key)}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows.Aux[0].Payload) > 8192 {
-		t.Fatalf("活动aux仍携带全部历史：%d", len(rows.Aux[0].Payload))
-	}
-	if _, err := s.Apply(rows); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	for round := 1; round <= 3; round++ {
-		m.index, err = stateindex.Open(m.indexPath())
-		if err != nil {
-			t.Fatal(err)
-		}
-		saved, err := m.loadStateFromIndex()
-		if err != nil {
-			t.Fatal(err)
-		}
-		entry := saved.Sources[key.String()].Ledger[0]
-		if len(entry.RecoveryRefs) != 0 {
-			t.Fatalf("第%d次重开历史复活：%d", round, len(entry.RecoveryRefs))
-		}
-		count, cursor := 0, ""
-		for {
-			records, receipts, err := m.ListRecoveryArchive(ctx, key, cursor, 37)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(records) == 0 {
-				break
-			}
-			if len(records) != len(receipts) {
-				t.Fatal("审计与回执不对应")
-			}
-			count += len(records)
-			cursor = records[len(records)-1].Ref.SegmentID
-		}
-		if count != 1000 {
-			t.Fatalf("第%d次重开完整历史仅%d", round, count)
-		}
-		restored := ledger.New()
-		if err := restored.Restore([]ledger.Entry{entry}); err != nil {
-			t.Fatal(err)
-		}
-		restored.SetRecoveryArchiveStore(m)
-		if err := restored.RegisterRecovery(key, ledger.RecoveryRef{SegmentID: "recovery-0042", Path: "projection://disk", State: logtypes.RecoveryStaged, CoversFrom: 420, CoversTo: 430}); err != nil {
-			t.Fatal(err)
-		}
-		if len(restored.Get(key).RecoveryRefs) != 0 {
-			t.Fatal("幂等重绑把已归档CLEANED重新激活")
-		}
-		if err := m.index.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
+// 2026-10-29：`TestIndexRecoveryArchiveLedgerThousandBatchesThreeOpens` 随受管恢复分段机制
+// 一并删除。它整条都在验「recovery_audit 仓储 + ArchiveCleanedRecovery 的分页/取消/重开语义」，
+// 而那套仓储（`RecoveryAuditRow` / `AppendRecoveryAudit` / `ListRecoveryAudit`）已随机制删除
+// —— 原关切「活动恢复历史不得随累计批次无界增长」失去了被测对象（那个历史本身不存在了）。
+// 现在索引里唯一会随批次线性增长的是 delivery_batch，它的有界性由
+// `TestDeliveryBatchPruneBoundsIndexGrowth` 与 `TestIndexDeliveryMixedEvidencePrunedThreeOpens` 守。
 
 func TestIndexDeliveryMixedEvidencePrunedThreeOpens(t *testing.T) {
 	key := ledger.SourceKey{LogSourceID: "mixed-evidence", SourceGeneration: "g1"}

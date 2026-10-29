@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -512,22 +511,29 @@ func TestStdioRawWriteFailureGapIsNeverAutoResolved(t *testing.T) {
 	}
 }
 
-// TestSilentSourceExitIsMarkedAsNoCopy 是复审 P2-13 的转红闸门：静默源出口补出的恢复分段
-// **没有任何物理副本**，因此不得把它包装成「已验证副本」。
+// TestSilentSourceExitAdvancesReclaimOnDeliveryEvidence（2026-10-29 改写）：
+// 静默源（不再有新批次）的回收必须能在**没有新输入**的情况下被推进。
 //
-// 旧实现：路径写 `manual://admin-confirmed`（看着像「管理员确认过一个已验证副本」），
-// 释放依据写 `NEXT_COPY_VERIFIED`（字面就是「下一份副本已验证」）——事后审计分不清这段
-// 到底有没有副本，而事实是：凭据只有「整段已投递并被逐字段校验」。
+// ## 旧用例为何失去对象
 //
-// 夹具形态（与现场一致：投递前缀已到读位置、但 durable 落后且尾部无分段可依）：
-//  1. 正常投递一批 → 有已发布投影、回收推进到该批末端；
-//  2. 直接向 WAL 追加下一批（不提交）→ read 前进、durable 落后（「durable 落后于 read」正是
-//     静默源出口成立的前提条件之一）；
-//  3. 按既有语义解算该批的投递（ResolveDeliveryThroughRecovery，与启动对账解算 UNKNOWN 同路径）
-//     → delivery 追平 read，而回收责任证明仍未建立（无分段覆盖尾部）。
+// 旧用例（TestSilentSourceExitIsMarkedAsNoCopy）验的是「静默源出口补出的恢复分段必须
+// 如实标注为 no-copy（路径 manual://delivered-no-copy、依据 PROJECTION_BACKED）——
+// 因为它没有任何物理副本，不得包装成「已验证副本」」。
+// 补段链与 RecoveryRef 已随受管恢复分段机制删除 ⇒ 那个分段不复存在，
+// 「标注得对不对」也就无从谈起（机制失去对象）。
 //
-// 转红：把路径退回 `manual://admin-confirmed` 或把释放依据退回 `NEXT_COPY_VERIFIED` 即红。
-func TestSilentSourceExitIsMarkedAsNoCopy(t *testing.T) {
+// ## 新语义下的同一关切
+//
+// 真正不能丢的是「**静默源不会因为“没人再投递”而永久卡在回收推不动上**」。
+// 新实现（见 resolveOneSourceGaps）在 `delivery >= read > reclaim` 时直接调一次 `TryReclaim`——
+// 安全性由账本保证：`reclaim = min(REQUEST_DONE 覆盖末端, max(read,durable))`，
+// 只有全部确认投递的字节才会被跨过。
+//
+// 本用例逐条钉住：
+//   - ① 负控：只有 UNKNOWN 结论、没有真实 ACK 时，reclaim 必须**不动**（不得冒充已确认副本）；
+//   - ② 真实 ACK + 逐字段校验后，`ResolveCoveredGaps` 必须把 reclaim 推进到尾部末端；
+//   - ③ 且**绝不**伪造任何恢复分段（旧机制已删，不得以别的形式复活）。
+func TestSilentSourceExitAdvancesReclaimOnDeliveryEvidence(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
@@ -571,9 +577,6 @@ func TestSilentSourceExitIsMarkedAsNoCopy(t *testing.T) {
 	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
 	entry = pipe.Ledger().Get(pipe.Key())
 	require.Equal(t, tailStart, entry.Positions.Reclaim, "缺证据负控必须保留尾部责任")
-	for _, ref := range entry.RecoveryRefs {
-		require.False(t, strings.HasPrefix(ref.SegmentID, "manual-recovery-"))
-	}
 	// 补齐真实物理写、逐字段校验、发布与独立HTTP ACK，但不调用常规恢复释放口。
 	_, err = m.deliver(source, tail, false)
 	require.NoError(t, err)
@@ -583,22 +586,10 @@ func TestSilentSourceExitIsMarkedAsNoCopy(t *testing.T) {
 	entry = pipe.Ledger().Get(pipe.Key())
 	require.Equal(t, tailEnd, entry.Positions.Reclaim)
 
-	var manual *ledger.RecoveryRef
-	for index := range entry.RecoveryRefs {
-		if strings.HasPrefix(entry.RecoveryRefs[index].SegmentID, "manual-recovery-") {
-			manual = &entry.RecoveryRefs[index]
-			break
-		}
-	}
-	require.NotNil(t, manual, "静默源出口必须补出一条恢复分段")
-	require.Equal(t, silentExitNoCopyPath, manual.Path,
-		"无副本段必须在路径上如实标注（不得写成看着像「已确认副本」的名字）")
-	require.Contains(t, manual.Path, "no-copy")
-	require.Equal(t, logtypes.ReleaseProjectionBacked, manual.ReleaseReason,
-		"释放依据必须是 PROJECTION_BACKED：这段没有副本，凭据只有已发布投影 + 逐字段校验")
-	require.NotEqual(t, logtypes.ReleaseNextCopyVerified, manual.ReleaseReason,
-		"绝不能把无副本段登记成「下一份副本已验证」")
-	require.Equal(t, silentExitNoCopyReceiver, manual.ResponsibilityReceiver)
-	require.Contains(t, manual.ResponsibilityReceiver, "no-copy")
-	require.Equal(t, logtypes.RecoveryCleaned, manual.State)
+	// ③ 静默源出口不得以任何形式伪造恢复分段（旧机制已删，也不得借别的手段复活）。
+	require.NotContains(t, fmt.Sprint(entry), "manual://delivered-no-copy",
+		"补段链已删：静默源出口不再建段，也不得留一个“看起来像段”的残留")
+	// 对照：再来一次也必须幂等（已追平 ⇒ 不动、不报错）。
+	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
+	require.Equal(t, tailEnd, pipe.Ledger().Get(pipe.Key()).Positions.Reclaim)
 }

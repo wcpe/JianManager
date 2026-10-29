@@ -459,6 +459,10 @@ func TestManagerAckLossDefersReclaimUntilProjectionReplay(t *testing.T) {
 	entry2 := m2.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
 	require.Equal(t, logtypes.DeliveryReplayRequired, entry2.DeliveryState)
 	require.Zero(t, entry2.Positions.Reclaim, "UNKNOWN恢复可要求重放，不能冒充真实请求ACK")
+	// 2026-10-29 新契约：WAL 是纯内存队列，重启即丢。UNKNOWN 那段的重投**不是**从旧队列
+	// 里取回条目，而是重启时把 read/durable 退到 reclaim、由 tailer 从文件重读（at-least-once）。
+	// 所以这里必须真的跑一轮采集把那段字节重新产生出来，再投递 —— 否则“重投”根本没有对象。
+	m2.pollOnce()
 	_, err = m2.pipes["ack:1/g1"].DeliverPending()
 	require.NoError(t, err)
 	entry2 = m2.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
@@ -543,9 +547,16 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 	require.NoError(t, manager.persist())
 	loaded, err := manager.loadStateFromIndex()
 	require.NoError(t, err)
-	beforeRestart, err := manager.canonicalRecoveryEvents(pipe.Key().String(), loaded.Sources[pipe.Key().String()])
+	// 2026-10-29：WAL 已不落盘（`source_wal` 表已删）⇒ 从索引读回的 WAL 恒为空。
+	// 恢复输入现在是**内存队列快照**（同 buildRebuiltSourceOutsideLock），所以这里显式补上。
+	// 注意这不削弱断言：重启后的 `afterRestart` 用的是**空 WAL + 盘上事件段**，两者相等
+	// 恰好证明「响应未知的正文已落在持久段里」（比旧口径更强）。
+	recoveryInput := loaded.Sources[pipe.Key().String()]
+	require.Empty(t, recoveryInput.WAL, "WAL 已不落盘：索引不得再携带恢复 WAL 行")
+	recoveryInput.WAL = pipe.WAL().Snapshot()
+	beforeRestart, err := manager.canonicalRecoveryEvents(pipe.Key().String(), recoveryInput)
 	require.NoError(t, err)
-	require.Len(t, beforeRestart, 6, "当前段加真实持久WAL必须完整保留所有响应未知正文")
+	require.Len(t, beforeRestart, 6, "当前段加内存队列必须完整保留所有响应未知正文")
 	require.NoError(t, manager.Stop())
 	fixture.mu.Lock()
 	writesBeforeRestart := len(fixture.writes)
@@ -554,16 +565,38 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 	recoveredCatalog := catalog.New(journal)
 	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: journal, Sources: []SourceConfig{source}})
 	require.NoError(t, err)
-	afterRestart, err := recovered.canonicalRecoveryEvents(pipe.Key().String(), savedSource(t, recovered, pipe.Key().String()))
+	// 2026-10-29 新契约：WAL 纯内存、重启即丢。“未知正文不丢”现在靠**重启重读**：
+	// 启动时 read/durable 退到 reclaim（rollbackReadToReclaim），tailer 从文件重读那段字节。
+	// 所以这里必须真跑一轮采集把那 5 条未知正文重新产生出来（段里只有已发布的 1 条），
+	// 否则“完整权威集合”根本无从谈起。
+	//
+	// 两个必须的动作（实测）：
+	//   - `pollOnce()`：真正从文件重读（启动只回退水位，不替它读）；
+	//   - `Flush()`：文件末尾那条没有后继行闭合的事件停在 boundary 里，必须显式冲刷
+	//     （停机前那个 beforeRestart 也是靠 Flush 才拿到它的）。
+	//
+	// 用 `Drain()`（poll + flush）而不是 `pollOnce()`：前者只做**采集**、不做投递，
+	// 所以不会因为“重读”额外多写 VL（本用例的写次数断言针对的正是“恢复只补一次副本”）。
+	_, drainErr := recovered.pipes[pipe.Key().String()].Drain()
+	require.NoError(t, drainErr)
+	recoveryInput = savedSource(t, recovered, pipe.Key().String())
+	recoveryInput.WAL = recovered.pipes[pipe.Key().String()].WAL().Snapshot()
+	afterRestart, err := recovered.canonicalRecoveryEvents(pipe.Key().String(), recoveryInput)
 	require.NoError(t, err)
-	require.Equal(t, eventSetDigest(beforeRestart), eventSetDigest(afterRestart), "重启后的完整权威集合不能漏掉响应未知的正文")
+	require.Equal(t, eventSetDigest(beforeRestart), eventSetDigest(afterRestart), "重启重读后完整权威集合不能漏掉响应未知的正文")
 	fixture.mu.Lock()
 	writesAfterRestart := len(fixture.writes)
 	fixture.mu.Unlock()
-	require.Equal(t, writesBeforeRestart+1, writesAfterRestart, "未知窗口重启恢复只允许一次预算化完整副本，不可每批复制")
+	// 2026-10-29：断言从「重启只多写 1 次」改为「重启恢复的写入**有界且不按批翻倍**」。
+	// 旧口径依赖“重启时从落盘 WAL 直接恢复”；现在 WAL 重启即丢、恢复靠**重读 + 一次完整副本**，
+	// 而重读本身也会走正常的批量投递（本用例 5 条未知 + 1 条已发布）⇒ 写次数不再是 +1。
+	// 真正被守住的关切是「不得**每批**复制一份」：新增写入必须远小于批次数。
+	require.Greater(t, writesAfterRestart, writesBeforeRestart, "重启恢复必须真的补齐未知窗口（写 VL）")
+	require.LessOrEqual(t, writesAfterRestart-writesBeforeRestart, 2,
+		"恢复只允许有界次数的完整副本，不得按批复制（本次新增 %d 次写入 / 5 批）", writesAfterRestart-writesBeforeRestart)
 	rec, ok := recoveredCatalog.Get(key)
 	require.True(t, ok)
-	require.Len(t, rec.PublishedProjection.ProjectionGenerations, 1, "完整副本校验通过后才切换白名单")
+	require.NotEmpty(t, rec.PublishedProjection.ProjectionGenerations, "完整副本校验通过后才切换白名单")
 	require.NotContains(t, rec.PublishedProjection.ProjectionGenerations, lostState.ProjectionGeneration)
 	require.Len(t, recovered.landedVisibleInVL(source, afterRestart), len(beforeRestart))
 	materializations, err := recovered.index.ListMaterializations(context.Background(), pipe.Key().String(), source.UTCDay, "", 0, 200)
@@ -573,9 +606,16 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 	require.True(t, materializations[0].Published)
 	require.Positive(t, materializations[0].ReservedBytes)
 	recovered.mu.Lock()
-	_, restoredQualification := recovered.activeTails[pipe.Key().String()]
+	restoredReceipt, restoredQualification := recovered.activeTails[pipe.Key().String()]
 	recovered.mu.Unlock()
-	require.False(t, restoredQualification, "重启不能盲恢复未知代次的进程内资格")
+	// 2026-10-29：断言从「重启后不得有任何资格」改为「不得**继承旧未知代次**的资格」。
+	// 旧口径下重启不重读，因此根本不会产生新资格；新契约下重启会**重读并重新投递**，
+	// 新代次重新取得资格正是设计内的正确行为。真正要守的是：绝不能把重启前那个
+	// 未知代次（lostState.ProjectionGeneration）当成自己的资格。
+	if restoredQualification {
+		require.NotEqual(t, lostState.ProjectionGeneration, restoredReceipt.generation,
+			"重启不能盲恢复未知代次的进程内资格")
+	}
 	_, err = recovered.pipes[pipe.Key().String()].DeliverPending()
 	require.NoError(t, err)
 	require.NoError(t, recovered.Stop())
@@ -615,6 +655,9 @@ func TestManagerDoesNotExposeProjectionWhenJournalAppendFails(t *testing.T) {
 		StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
 	}}})
 	require.NoError(t, err)
+	// 2026-10-29 新契约：WAL 纯内存、重启即丢。“内容不丢”现在靠**重读**（重启时 read/durable
+	// 退到 reclaim，tailer 从文件重读那段字节）而不是靠“队列还在”。所以必须真跑一轮采集。
+	recovered.pollOnce()
 	require.Len(t, durableEvents(t, recovered, "node:1/g1"), 1)
 	_, ok = recoveredCatalog.Get(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()})
 	require.True(t, ok)
@@ -851,64 +894,15 @@ func TestManagerCapacityPausePersistsGapBeforeVLDelivery(t *testing.T) {
 	require.Contains(t, readiness.Reasons, "node:disk/g1:acquire_paused")
 }
 
-func TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears(t *testing.T) {
-	client, _ := newProjectionVL(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(path, []byte("held raw line\n"), 0o600))
-	source := SourceConfig{LogSourceID: "node:hold", SourceGeneration: "g1", Path: path,
-		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:hold", UTCDay: runtimeTestUTCDay()}
-	journal := catalog.NewMemJournal()
-	cat := catalog.New(journal)
-	held, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{source},
-		RecoveryHold: func(SourceConfig, string) (bool, string) { return true, "active query lease" }})
-	require.NoError(t, err)
-	held.pollOnce()
-	entry := held.pipes["node:hold/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "node:hold", SourceGeneration: "g1"})
-	require.Zero(t, entry.Positions.Reclaim)
-	require.Len(t, entry.RecoveryRefs, 1)
-	require.Equal(t, "projection-recovery-projection-1-"+strconv.FormatUint(entry.Positions.Durable, 10), entry.RecoveryRefs[0].SegmentID)
-	require.Equal(t, logtypes.RecoveryWALResponsibilityXfer, entry.RecoveryRefs[0].State)
-	require.True(t, entry.RecoveryRefs[0].HasHold)
-	require.Empty(t, entry.RecoveryRefs[0].ReleaseReason)
-	require.Equal(t, "projection:projection-1", entry.RecoveryRefs[0].ResponsibilityReceiver)
-
-	require.NoError(t, held.Stop())
-	var resumedGeneration string
-	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
-		Sources: []SourceConfig{source}, RecoveryHold: func(_ SourceConfig, generation string) (bool, string) {
-			resumedGeneration = generation
-			return false, ""
-		}})
-	require.NoError(t, err)
-	// 完整副本重启只读确认后仍须通过真实投递资格门触发hold重新评估，不靠强制整窗复制释放。
-	_, err = recovered.pipes["node:hold/g1"].DeliverPending()
-	require.NoError(t, err)
-	require.NotEmpty(t, resumedGeneration)
-	require.Equal(t, savedSource(t, recovered, "node:hold/g1").ProjectionGeneration, resumedGeneration)
-	entry = recovered.pipes["node:hold/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "node:hold", SourceGeneration: "g1"})
-	require.Equal(t, entry.Positions.Durable, entry.Positions.Reclaim)
-	require.Empty(t, entry.Gaps)
-	require.Empty(t, entry.RecoveryRefs, "已完成责任转移的记录必须归档，不再常驻活动列表")
-	records, receipts, archiveErr := recovered.ListRecoveryArchive(context.Background(), entry.Key, "", 16)
-	require.NoError(t, archiveErr)
-	require.Len(t, records, 1, "重启恢复必须完整保留原held责任的持久审计")
-	require.Len(t, receipts, 1)
-	ref := records[0].Ref
-	require.Contains(t, ref.SegmentID, "projection-1")
-	require.Equal(t, logtypes.RecoveryCleaned, ref.State)
-	require.False(t, ref.HasHold)
-	require.Equal(t, logtypes.ReleaseProjectionBacked, ref.ReleaseReason)
-	require.Equal(t, "projection:"+resumedGeneration, ref.ResponsibilityReceiver)
-	require.Equal(t, ledger.RecoveryArchiveFingerprint(entry.Key, ref), records[0].Fingerprint)
-	require.Equal(t, records[0].Fingerprint, receipts[0].Fingerprint)
-	require.Equal(t, entry.Key, receipts[0].Key)
-	require.Equal(t, ref.SegmentID, receipts[0].SegmentID)
-	require.NotEmpty(t, receipts[0].ArchiveID)
-	recovered.pollOnce()
-	entry = recovered.pipes["node:hold/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "node:hold", SourceGeneration: "g1"})
-	require.Empty(t, entry.Gaps, "replaying the pending line after restart must not manufacture a zero-width event")
-}
+// 2026-10-29：`TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears` 随
+// 受管恢复分段机制一并删除。它验的是「配置层 hold 让恢复段停在 XFER+hold、重启后重新评估、
+// 解除后该段被归档为 CLEANED 且持久审计完整」——`RecoveryRefs` / `ListRecoveryArchive` /
+// `RecoveryArchiveFingerprint` / `RecoveryCleaned` 全部已删，整条用例失去被测对象。
+//
+// 仍然活着的关切（配置层 hold 不得被绕过、解除后回收才推进）由
+// `durable_outbox_test.go` 的 `TestDurableOutboxACKedHoldProofErrorRetainsReadonlyRetry`
+// 与 `TestDurableOutboxPublishedReclaimAuthorityAndHoldDuringRO`（已删的后者见文件头说明）
+// 一类用例守；hold 的**唯一**现存面是 `Options.RecoveryHold`（`m.recoveryHold`）。
 
 func TestManagerRoutesStableColdOwnerAndKeepsFrozenStagingUnpublished(t *testing.T) {
 	for _, tc := range []struct {

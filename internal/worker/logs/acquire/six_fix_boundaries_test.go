@@ -45,7 +45,17 @@ func TestSixFixPersistCaptureDoesNotAuthorizeLaterCommit(t *testing.T) {
 			}
 			require.Len(t, delivered, 1)
 			require.Equal(t, first.EventID, delivered[0].EventID, "本次persist只授权在回调前捕获的批次")
-			require.False(t, wal.Snapshot()[2].Durable)
+			// 2026-10-29：不能按固定下标取尾部条目——`first` 投递成功后会当场被回收剪掉，
+			// 队列位置整体前移。改为按 event_id 找那个**未 Commit** 的尾部条目。
+			var uncommittedEntry *WALEntry
+			for i, entry := range wal.Snapshot() {
+				if entry.Event.EventID == uncommitted.EventID {
+					uncommittedEntry = &wal.Snapshot()[i]
+					break
+				}
+			}
+			require.NotNil(t, uncommittedEntry, "未 Commit 的尾部条目必须仍在队列里")
+			require.False(t, uncommittedEntry.Durable, "未 Commit 的尾部不得被本次 persist 授权为已耐久")
 		})
 	}
 }
@@ -255,13 +265,18 @@ func TestSixFixWALReservationsPersistUntilActualPruneAndRestore(t *testing.T) {
 	}
 	require.NoError(t, wal.SetByteReservation(reserve))
 	pipe := NewPipeline(led, key, wal)
-	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) { return 200, false, nil })
+	// 2026-10-29 改写：旧夹具靠“成功投递后条目仍留在 WAL”观察预留，而新语义下成功投递
+	// 会当场推进回收并剪掉已确认前缀 ⇒ 预留随之合法释放，那一步就不再是“仍在 WAL 里”。
+	// 改用 AckLost（UNKNOWN）：条目**确实**必须留在队列里（不是回收证据），正是本用例
+	// 要守的“请求返回不能释放仍在WAL里的字节”的形态。
+	pipe.SetDeliver(func(events []logtypes.Event, replay bool) (int, bool, error) { return 200, true, nil })
 	require.NoError(t, pipe.Ingest([]logtypes.Event{sixFixEvent(key, 0, 7)}))
 	one := held
 	require.Positive(t, one, "请求返回不能释放仍在WAL里的字节")
 	_, err := pipe.DeliverPending()
 	require.NoError(t, err)
-	require.Equal(t, one, held)
+	require.Equal(t, one, held, "UNKNOWN 的条目仍在队列里 ⇒ 预留不得释放")
+	require.Len(t, wal.Snapshot(), 1, "UNKNOWN 不得让条目离开队列")
 	require.Error(t, wal.Append(sixFixEvent(key, 7, 14), sixFixEvent(key, 14, 21), sixFixEvent(key, 21, 28)))
 	require.Len(t, wal.Snapshot(), 1, "整批预留中途失败要撤回本批全部租约且零追加")
 	require.Equal(t, one, held)

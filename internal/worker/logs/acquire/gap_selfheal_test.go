@@ -67,8 +67,12 @@ func TestPausedSourceSelfHealsAfterDeliveryRecovers(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, delivered, "恢复投递后必须把已 durable 存量外发")
 	require.Greater(t, deliveries, before, "存量外发必须真正经过投递路径")
-	// 存量投递同样登记请求结果；此时还没有回收证据，条目仍应保留（不得静默丢）。
-	require.Len(t, wal.Snapshot(), 5)
+	// 2026-10-29：存量投递成功 ⇒ 认证覆盖接上 ⇒ 回收当场推进并剪掉已确认前缀。
+	// （旧实现此时要等“恢复段责任转移”，所以断言是“仍应保留 5 条”；新语义下这 5 条
+	//  已经具备回收条件，留着才是异常——它们已经在 VL 里了。）
+	require.Equal(t, uint64(499), func() uint64 { p, _ := led.Positions(key); return p.Reclaim }(),
+		"存量全部投递成功 ⇒ 回收推进到认证覆盖末端（最后一条事件结束于 499）")
+	require.Empty(t, wal.Snapshot(), "已确认投递的前缀必须离开内存队列")
 
 	// 阶段三：缺口被消解——**由自愈链自己完成**，不需要外部证据。
 	//
@@ -90,10 +94,10 @@ func TestPausedSourceSelfHealsAfterDeliveryRecovers(t *testing.T) {
 	require.False(t, entry.AcquirePaused, "存量外发 + 缺口分类消解后必须自动恢复采集")
 	require.Empty(t, entry.PauseReason)
 
-	// 阶段四：回收推进 + 自动恢复。责任转移后 CanReclaim 放行，回收前缀被剪掉。
-	require.NoError(t, wal.BindRecoverySegment("seg-selfheal", "projection://g1", 0, 500))
-	require.NoError(t, led.TransitionRecovery(key, "seg-selfheal", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "seg-selfheal", logtypes.RecoveryWALResponsibilityXfer, "", "projection:g1"))
+	// 阶段四：回收推进 + 自动恢复。2026-10-29：回收只认「REQUEST_DONE 连续覆盖 + max(Read,Durable)」，
+	// 旧夹具的「登记恢复段 + 责任转移」已删；这里直接给真实证据（上面阶段二的投递已写 REQUEST_DONE，
+	// 缺的只是读入量）。
+	require.NoError(t, led.AdvanceRead(key, 500))
 	_, err = wal.TryReclaim()
 	require.NoError(t, err)
 	require.Empty(t, wal.Snapshot(), "回收前缀内的条目应被剪掉")

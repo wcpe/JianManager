@@ -87,14 +87,29 @@ func newGateFixture(t *testing.T, injected int, cycleRows int) (*Manager, string
 	// 为什么选投递批次而不是缺口行（两个都试过）：
 	//   - 缺口行会被 ledger 自己的上界机制压掉——同因相邻会自动合并（gapMergeScanWindow），
 	//     超过 DefaultMaxUnresolvedGapsPerSource(64) 还会按原因折叠成 64 条 ⇒ 根本造不出 2000 行；
-	//   - 投递批次只有一条“水位以下才能裁”的约束，reclaim=0 时水位=0 ⇒ 一条都不裁，
-	//     多少条就多少行，且每次 RecordDelivery 都是一次真实账本写入（自动推修订号）。
-	// 而且它走的是同一条「按归属增量 + 切分续跑」落库路径，验证强度不变。
+	//   - 投递批次每次 RecordDelivery 都是一次真实账本写入（自动推修订号），走的是同一条
+	//     「按归属增量 + 切分续跑」落库路径，验证强度不变。
+	//
+	// ## 为什么注入区间必须**远离**当前投递水位（2026-10-29 第二次修正）
+	//
+	// 裁剪水位是 `Positions.Delivery`（见 ledger.deliveryBatchWatermark），而 `batch.End <= 水位`
+	// 的条目会被当场裁掉。若像旧夹具那样从 0 开始连续注入，每登记一条都会把 `Delivery` 往前推，
+	// 下一条登记时上一条就已经在水位之内 ⇒ 只剩最后一条（实测：注入 2000 条只留 1 条）。
+	//
+	// 所以注入区间从 `injectBase`（远在现有水位之后）开始：起点 > 水位+1 是**真空洞**，
+	// `contiguousDeliveryEnd` 在第一个 span 处就 break ⇒ `Positions.Delivery` 一步都不前进
+	// ⇒ 水位停在原值 ⇒ 注入的条目一条都不会被裁。夹具要的是「行数够多」，
+	// 而不是「这些行在语义上连续」，所以这样造不削弱任何被测性质。
 	// injected=0 是“无长差异”的对照组（TestPersistGateCoalescedWaitersKeepFIFO 用它验证合并），
 	// 那里不需要也没必要造差异 ⇒ 跳过注入。
+	const injectBase = uint64(10_000_000)
 	for i := 0; i < injected; i++ {
 		require.NoError(t, pipe.Ledger().RecordDelivery(pipe.Key(),
-			uint64(i*10), uint64((i+1)*10), logtypes.DeliveryReplayRequired))
+			injectBase+uint64(i*10), injectBase+uint64((i+1)*10), logtypes.DeliveryReplayRequired))
+	}
+	if injected > 0 {
+		require.Less(t, pipe.Ledger().Get(pipe.Key()).Positions.Delivery, injectBase,
+			"夹具前提：注入区间的起点必须在水位之后（否则会被当场裁掉，造不出长差异）")
 	}
 	require.Len(t, pipe.Ledger().Get(pipe.Key()).DeliveryBatches, injected,
 		"夹具：必须真的有 %d 条待落库的批次行（被裁剪或折叠就失去判别力）", injected)

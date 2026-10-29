@@ -155,7 +155,18 @@ func TestSixFixReorderedResultsDoNotCoverCappedOrNonDurableTail(t *testing.T) {
 			require.Len(t, got, 2)
 			sixFixReorderedEvidence(t, led, key, logtypes.DeliveryRequestDone, []ledger.PositionRange{{From: 0, To: 7}, {From: 28, To: 35}})
 			require.Equal(t, uint64(7), led.Get(key).Positions.Delivery)
-			require.Len(t, wal.Snapshot(), 3, "未外发区间仍须留在WAL保有恢复责任")
+			// 2026-10-29：不能按固定条数断言——已外发且被确认的 `low` 会当场被回收剪掉。
+			// 本用例的关切是「**未外发**区间仍须留在 WAL 保有恢复责任」，所以按 event_id 断言：
+			// 未外发的两条必须在；已确认的 `low` 不得再占内存。
+			kept := wal.Snapshot()
+			require.Len(t, kept, 2, "未外发的两条仍须留在 WAL 保有恢复责任")
+			keptIDs := map[string]bool{}
+			for _, entry := range kept {
+				keptIDs[entry.Event.EventID] = true
+			}
+			require.True(t, keptIDs[hole.EventID], "未外发的 `hole` 必须留在 WAL")
+			require.True(t, keptIDs[tail.EventID], "未外发的 `tail` 必须留在 WAL")
+			require.False(t, keptIDs[low.EventID], "已确认投递且在水位之下的条目必须离开内存队列")
 		})
 	}
 }

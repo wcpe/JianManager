@@ -17,23 +17,40 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
-// Runbook A：ACK 丢失 → 不可 reclaim；责任转移后可 reclaim；非法 reason 拒绝。
+// Runbook A（2026-10-29 改写）：ACK 丢失 ⇒ 不可 reclaim；重投成功（REQUEST_DONE）后
+// 回收推进到 min(认证覆盖, max(read,durable))。
+//
+// 旧版第二步是「登记 STAGED 恢复段 → 责任转移 → 回收放行」；受管恢复分段机制已删
+// （WAL 改纯内存后前提消失），所以改成直接验证新口径的真实证据链。
+// Runbook 的价值在于“运维处置手册里的每一步都能复现”，因此这里保留同样的三段式：
+//
+//	① 响应丢失 ⇒ 回收停在原地（且不报错）；
+//	② 重投成功（REQUEST_DONE）⇒ 回收推进到具体位置；
+//	③ 幂等：已追平后再调不推进。
+//
+// 转红方式（实测）：把 tryReclaimLocked 的上界改回 Positions.Delivery ⇒ ① 立即红。
 func TestRunbookA_WALAckLossAndReclaimGate(t *testing.T) {
 	led := ledger.New()
 	key := ledger.SourceKey{LogSourceID: "runbook-a", SourceGeneration: "g1"}
 	led.Ensure(key, logtypes.SourceIdentity{LogSourceID: "runbook-a", SourceGeneration: "g1", ParserVersion: "1.0.0"})
+	require.NoError(t, led.AdvanceRead(key, 100))
 	require.NoError(t, led.AdvanceDurable(key, 100))
-	require.NoError(t, led.RecordDelivery(key, 0, 50, logtypes.DeliveryUnknown))
-	_, err := led.TryReclaim(key)
-	require.Error(t, err)
 
-	require.NoError(t, led.RegisterRecovery(key, ledger.RecoveryRef{
-		SegmentID: "seg", State: logtypes.RecoveryStaged, CoversFrom: 0, CoversTo: 100,
-	}))
-	require.Error(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryReleased, "NOT_A_REASON", "recv"))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, "seg", logtypes.RecoveryWALResponsibilityXfer, "", "recv-A"))
+	// ① 响应丢失（UNKNOWN）：不是认证证据 ⇒ 回收停在 0，但**不报错**
+	// （旧实现此时报 ErrReclaimNoSegment，已随补段链删除）。
+	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryUnknown))
 	n, err := led.TryReclaim(key)
+	require.NoError(t, err, "新语义下「推不动」是 (当前Reclaim, nil)，不是错误")
+	assert.EqualValues(t, 0, n, "UNKNOWN 区间不得被回收")
+
+	// ② 重投成功：认证覆盖接上 ⇒ 回收推进到读入量。
+	require.NoError(t, led.RecordDelivery(key, 0, 100, logtypes.DeliveryRequestDone))
+	n, err = led.TryReclaim(key)
+	require.NoError(t, err)
+	assert.EqualValues(t, 100, n)
+
+	// ③ 幂等：已追平后不推进。
+	n, err = led.TryReclaim(key)
 	require.NoError(t, err)
 	assert.EqualValues(t, 100, n)
 }

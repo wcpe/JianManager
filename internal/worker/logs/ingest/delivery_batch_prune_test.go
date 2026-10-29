@@ -15,7 +15,6 @@ package ingest
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,20 +35,21 @@ const (
 	pruneTestBatchSpan = 100
 )
 
-// advanceWatermarkTo 走完责任转移链把 reclaim 推到 to（生产里由 releaseRecovery 完成）。
+// advanceWatermarkTo 把 reclaim 推到 to（生产里由 releaseRecovery 完成）。
+//
+// 2026-10-29：旧实现走「登记恢复段 + 责任转移」，那套机制已删。新语义下回收只认
+// 「REQUEST_DONE 连续覆盖 + max(Read,Durable)」⇒ 本夹具的批次已全是 REQUEST_DONE，
+// 只要把读入量推上去，`TryReclaim` 就能推进到 to。
 func advanceWatermarkTo(t *testing.T, pipe *pipeline.Pipeline, to uint64) {
 	t.Helper()
 	from := pipe.Ledger().Get(pipe.Key()).Positions.Reclaim
 	if to <= from {
 		return
 	}
-	segID := fmt.Sprintf("seg-%d-%d", from, to)
-	require.NoError(t, pipe.BindRecoverySegment(segID, "recovery://prune-test", from, to))
-	require.NoError(t, pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "test:receiver"))
+	require.NoError(t, pipe.Ledger().AdvanceRead(pipe.Key(), to))
 	pos, err := pipe.TryReclaim()
 	require.NoError(t, err)
-	require.Equal(t, to, pos, "水位应推进到恢复分段覆盖末端")
+	require.Equal(t, to, pos, "水位应推进到认证覆盖末端")
 }
 
 // pruneBoundFixture 建一个真实 pipeline 的 Manager（单源），返回管道与账本键。
@@ -144,12 +144,22 @@ func TestDeliveryBatchPruneBoundsIndexGrowth(t *testing.T) {
 }
 
 // TestDeliveryBatchPruneKeepsBoundaryAndRoundTrip 是正确性回归：
-// 水位之上的条目一条不裁；水位、最近状态、恢复引用、落库往返全部照旧。
+// 水位之上的条目一条不裁；水位、最近状态、落库往返全部照旧。
 //
-// 夹具刻意让**裁剪路径真正运行一次**且带「刚越过水位一字节」的条目：先记满 400 条 100 字节批次
-// （[0,40000)），再记一条 `[40000,40001)`——它的末位正好是即将推进到的水位 + 1（仍会把连续前缀
-// 从水位推到水位+1），最后才推进水位到 40000。这一步同时被 -overlay 的判据变异臂用作端到端证据
-// （放宽判据一字节 ⇒ 这条会被误裁）。
+// ## 2026-10-29 改写（边界条目的形态）
+//
+// 旧夹具把「边界条目」记成 `[40000,40001)`（UNKNOWN），并断言它必须留下。那依赖旧水位口径
+// `min(Reclaim, Delivery)`——Reclaim 停在 40000，于是 40001 那条在水位之上。
+//
+// 新口径下水**就是 `Positions.Delivery`**，而 `[40000,40001)` 是连续前缀的一部分
+// （`Delivery` 因此变成 40001）⇒ 它落在水位之内，**应当**被裁掉。这不是放宽，而是同一判据
+// 在新口径下的正确结果：`batch.End <= Delivery` 的条目对 `contiguousDeliveryEnd(…, Delivery)`
+// 是恒等元（裁掉它派生值不变）。
+//
+// 所以本用例改为用一条**真正在水位之上**的条目来验边界：先记满 400 条到 40000，
+// 再记 `[50000,50001)`（起点在水位之后 ⇒ 不推进连续前缀 ⇒ `Delivery` 仍是 40000），
+// 它才是「末位 > 水位、必须留下」的那条。同时补一条断言：**水位之内的 UNKNOWN 条目
+// 也会被裁掉，但它的诊断证据必须留在 DeliveryEvidence 里**（这正是 LEDGER-1 的关切）。
 func TestDeliveryBatchPruneKeepsBoundaryAndRoundTrip(t *testing.T) {
 	m, pipe := pruneBoundFixture(t, nil)
 	led := pipe.Ledger()
@@ -160,22 +170,33 @@ func TestDeliveryBatchPruneKeepsBoundaryAndRoundTrip(t *testing.T) {
 		start := uint64(i) * pruneTestBatchSpan
 		require.NoError(t, led.RecordDelivery(key, start, start+pruneTestBatchSpan, logtypes.DeliveryRequestDone))
 	}
-	// 边界条目：末位 = 水位 + 1。
+	// 水位之内的 UNKNOWN（会被裁掉，但证据必须留下）。
 	require.NoError(t, led.RecordDelivery(key, watermark, watermark+1, logtypes.DeliveryUnknown))
+	// 真正在水位之上的边界条目：起点在水位之后 ⇒ 不推进连续前缀。
+	const aboveStart = uint64(50000)
+	require.NoError(t, led.RecordDelivery(key, aboveStart, aboveStart+1, logtypes.DeliveryUnknown))
 	const expectedDelivery = watermark + 1
 
-	// 推进水位到 40000：裁剪按判据在这里取舍（水位之下的 400 条被裁，边界那条必须留下）。
+	// 推进回收到 40000（读入量跟上，认证覆盖到 watermark+1）。
 	advanceWatermarkTo(t, pipe, watermark)
 	require.Equal(t, watermark, led.Get(key).Positions.Reclaim)
 
 	// 内存口径：只留水位之上的那一条，派生值不变。
 	memory := led.Get(key)
 	require.Equal(t, []ledger.DeliveryBatch{
-		{Start: watermark, End: watermark + 1, State: logtypes.DeliveryUnknown},
-	}, memory.DeliveryBatches)
+		{Start: aboveStart, End: aboveStart + 1, State: logtypes.DeliveryUnknown},
+	}, memory.DeliveryBatches, "水位之下的 401 条被裁；起点在水位之后的边界条目必须留下")
 	require.Equal(t, expectedDelivery, memory.Positions.Delivery, "裁剪不得改变 delivery_position")
 	require.Equal(t, logtypes.DeliveryUnknown, memory.DeliveryState, "最近状态另存，不随裁剪丢失")
-	require.NotEmpty(t, memory.RecoveryRefs, "恢复引用不受裁剪影响")
+	// 被裁掉的 UNKNOWN 区间的精确证据仍在（否则 event_status 会把它报成“未发送”）。
+	evidence := ledger.DeliveryEvidenceOf(memory)
+	foundWatermarkEvidence := false
+	for _, batch := range evidence {
+		if batch.Start == watermark && batch.End == watermark+1 && batch.State == logtypes.DeliveryUnknown {
+			foundWatermarkEvidence = true
+		}
+	}
+	require.True(t, foundWatermarkEvidence, "被裁的 UNKNOWN 区间必须仍在 DeliveryEvidence 里：%+v", evidence)
 
 	// 落库口径：库里只剩边界那一条，且没有任何「水位之下」的残留行。
 	require.NoError(t, m.persist())
@@ -185,8 +206,8 @@ func TestDeliveryBatchPruneKeepsBoundaryAndRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 	require.Len(t, state.Batches, 1, "库中只应留下水位之上的那条")
-	require.Equal(t, watermark, state.Batches[0].StartPos)
-	require.Equal(t, watermark+1, state.Batches[0].EndPos)
+	require.Equal(t, aboveStart, state.Batches[0].StartPos)
+	require.Equal(t, aboveStart+1, state.Batches[0].EndPos)
 
 	// 读回口径（重放/对账依赖它）：批列表仍能自证 delivery_position，水位逐项一致。
 	reloaded, err := m.loadStateFromIndex()
@@ -194,9 +215,12 @@ func TestDeliveryBatchPruneKeepsBoundaryAndRoundTrip(t *testing.T) {
 	entry := reloaded.Sources["node:000/g1"].Ledger[0]
 	require.Equal(t, memory.Positions, entry.Positions, "四水位必须逐项一致")
 	require.Equal(t, expectedDelivery, entry.Positions.Delivery)
+	// 2026-10-29：floor 取 **Delivery 自己**（与 advanceDeliveryEnd 同一口径）。
+	// 旧写法用 Reclaim 当 floor——新语义下 Reclaim 可以低于 Delivery，用它会得到一个更小的值，
+	// 而那个值并不是“连续前缀的末端”，只是“回收水位”。
 	require.Equal(t, expectedDelivery,
-		ledger.ContiguousDeliveryEnd(entry.DeliveryBatches, entry.Positions.Reclaim),
-		"读回的批次列表必须仍给出同一个连续前缀")
+		ledger.ContiguousDeliveryEnd(entry.DeliveryBatches, entry.Positions.Delivery),
+		"读回的批次列表必须仍给出同一个连续前缀（floor = Delivery 自身）")
 	require.Equal(t, logtypes.DeliveryUnknown, entry.DeliveryState)
 
 	// 二次落库（读回后再持久化）必须零写入：裁剪是幂等的，稳态不得因裁剪反复重写。

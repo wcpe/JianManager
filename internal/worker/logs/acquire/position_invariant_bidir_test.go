@@ -12,10 +12,13 @@ import (
 // TestPositionInvariantBidirectional（① 双向判别，按"零猜测配方"落地 ✓✓）：
 // **暂停源的 `reclaim > read` 良性豁免** ✓ / **未暂停源的越界必须报出** ✓（真损坏 ✓）。
 //
-// 配方依据（全部行号级核实过 ✓）：`CanReclaim` 对 `RecoveryReleased` 放行（types.go:151-162 ✓）；
-// `Positions.Delivery` 只反映**连续前缀**（ledger.go:508-509 ✓）⇒ 批次须从 0 连续覆盖到 `CoversTo` ✓；
-// `target := ref.CoversTo`（ledger.go:1086 ✓）⇒ 回收只能由该写入点产生 ✓；`Restore` 会**归一**越界
-// （A 案 ✓）⇒ 夹具必须先"合法"再让回收把 `reclaim` 推过 `read` ✓。
+// 配方依据（2026-10-29 重写）：`reclaim = min(REQUEST_DONE 连续覆盖末端, max(Read, Durable))`
+// —— 认证覆盖到 `coversTo` 而 `Durable = coversTo`、`Read = coversTo/2` ⇒ `max = coversTo`
+// ⇒ 回收可以合法地推进到 `coversTo`（即越过 Read）。`Restore` 会**归一**越界（A 案 ✓）
+// ⇒ 夹具必须先"合法"再让回收把 `reclaim` 推过 `read` ✓。
+//
+// 旧配方靠 `RecoveryReleased` 让 `CanReclaim` 放行——该机制与 `CanReclaim` 均已删；
+// 新配方更直接：**投递证据 + 耐久量**就是全部自变量。
 //
 // 转红方式（实测两条方向，各自独立红 ✓）：
 //   - 变异①：去掉暂停豁免 ⇒ 良性越界被报成违规 ⇒ 红；
@@ -35,10 +38,6 @@ func TestPositionInvariantBidirectional(t *testing.T) {
 		snap.DeliveryBatches = []ledger.DeliveryBatch{{Start: 0, End: coversTo, State: logtypes.DeliveryRequestDone}}
 		require.NoError(t, l.Restore([]ledger.Entry{*snap}))
 		require.Equal(t, uint64(coversTo), l.Get(key).Positions.Delivery, "Restore 必须把 Delivery 算到位 ✓（连续前缀 ✓）")
-		require.NoError(t, l.RegisterRecovery(key, ledger.RecoveryRef{
-			SegmentID: "seg1", Path: "/x", CoversFrom: 0, CoversTo: coversTo,
-			State: logtypes.RecoveryReleased, ResponsibilityReceiver: "worker", // CanReclaim 放行态 ✓（无 hold ✓）
-		}))
 		wal := NewWAL(l, key)
 		reclaimed, err := wal.TryReclaim()
 		got := l.Get(key)

@@ -50,10 +50,9 @@ func scaleFixtureState(n int) *persistedState {
 			Segments: []ledger.Segment{
 				{Path: fmt.Sprintf("/data/logs/%03d/latest.log", i), Kind: ledger.SegmentLive, StartPos: 0, EndPos: uint64(i * 1000)},
 			},
-			Gaps:         []ledger.Gap{},
-			RecoveryRefs: []ledger.RecoveryRef{},
-			ErrorCount:   0,
-			IngestSeq:    uint64(i),
+			Gaps:       []ledger.Gap{},
+			ErrorCount: 0,
+			IngestSeq:  uint64(i),
 		}
 		gaps := make([]ledger.Gap, 0, 24)
 		for seq := 1; seq <= 24; seq++ {

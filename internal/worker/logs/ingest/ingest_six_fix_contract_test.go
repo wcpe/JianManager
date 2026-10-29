@@ -255,11 +255,20 @@ func TestIngestSixFixReplaySubsetDoesNotPublishOrAckFutureBodies(t *testing.T) {
 			loaded, err := m.loadStateFromIndex()
 			require.NoError(t, err)
 			persisted := loaded.Sources[p.Key().String()]
-			wantWAL := len(batch)
-			if check == "local-body-is-not-ack" {
-				wantWAL-- // 已实际ACK的较新一条已转入事件段，欠账仍必须完整持久化。
-			}
-			require.Len(t, persisted.WAL, wantWAL, "夹具必须来自真实SQLite提交后的完整恢复WAL")
+			// 2026-10-29 新契约：WAL 已改为**纯内存队列**，`source_wal` 表已删 ⇒ 索引里不再有
+			// 恢复 WAL 行。旧断言（`Len(persisted.WAL, N)`）失去对象，改成两部分：
+			//   ① 索引里确实不带 WAL（防止有人把表悄悄加回来）；
+			//   ② 恢复输入就是内存队列快照（与 buildRebuiltSourceOutsideLock 同源）。
+			// 被测关切（“重放子集不得发布/ACK 未来正文”）一字未变——它只看恢复输入的内容，
+			// 不关心那些内容存在表里还是存在内存里。
+			require.Empty(t, persisted.WAL, "WAL 已不落盘：索引不得再携带恢复 WAL 行")
+			persisted.WAL = p.WAL().Snapshot()
+			// 2026-10-29：旧夹具在这里对 `local-body-is-not-ack` 减一（“已 ACK 的那条已转入事件段”）。
+			// 那个减一依赖旧架构的“ACK 即转段 + 从队列搜走”机制；新语义下条目要等 `Record.End <= Reclaim`
+			// 才离开内存队列，而本例 [0,40) 是真空洞 ⇒ Reclaim 恒为 0 ⇒ 五条全在队列里（实测）。
+			// 被测关切是“完整本地正文不得授权 ACK 未来段”，它只要求恢复输入是**完整**的，
+			// 不要求其中某条已离开队列 ⇒ 这里断言完整五条，后面“中段仍缺”的断言一字未改。
+			require.Len(t, persisted.WAL, len(batch), "恢复输入必须是完整的未投递正文（内存队列快照）")
 			// 模拟恢复入口已装载、尚未启动恢复worker的输入，保留真实SQLite正文与资格。
 			m.mu.Lock()
 			m.state.Sources[p.Key().String()] = persisted
@@ -327,8 +336,15 @@ func TestIngestSixFixNewTailCannotSealKnownSameDayDebt(t *testing.T) {
 			require.NoError(t, m.persist())
 			loaded, err := m.loadStateFromIndex()
 			require.NoError(t, err)
+			// 2026-10-29：WAL 已不落盘，`source_wal` 表已删 ⇒ 从索引读回的 `persisted.WAL` 恒为空。
+			// 新契约下「恢复输入」= 内存队列快照（见 buildRebuiltSourceOutsideLock），
+			// 所以这里显式补上，否则重建看不到旧欠账，后面的“补齐后才追平”断言失去对象。
+			recovery := loaded.Sources[p.Key().String()]
+			require.Empty(t, recovery.WAL, "WAL 已不落盘：索引不得再携带恢复 WAL 行")
+			recovery.WAL = p.WAL().Snapshot()
+			require.Len(t, recovery.WAL, 2, "恢复输入必须包含旧欠账与新尾（内存队列快照）")
 			m.mu.Lock()
-			m.state.Sources[p.Key().String()] = loaded.Sources[p.Key().String()]
+			m.state.Sources[p.Key().String()] = recovery
 			m.mu.Unlock()
 			_, err = m.deliver(source, []logtypes.Event{tail}, false)
 			require.Equal(t, 1, fixture.rowCount(), "旧欠账不能阻挡新尾实际物理写入")

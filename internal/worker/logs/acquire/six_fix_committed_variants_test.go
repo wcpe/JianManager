@@ -243,11 +243,21 @@ func TestSixFixCommittedVariantsDrainSkipsNonDurableSibling(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []logtypes.Event{a}, got)
 
-	// 队列里两条都在，且耐久态未被改动（内存队列以自身条目为准）。
+	// 队列里那条**非耐久**变体仍在，且耐久态未被改动（内存队列以自身条目为准）。
+	//
+	// 2026-10-29：不能按固定下标/固定条数断言——已投递的 `a` 会当场被回收剪掉。
+	// 本用例的关切是「非耐久标记必须由种子原样带过来，不能被同身份的耐久兄弟补造」，
+	// 所以按 canonical hash 定位那条变体并断言它仍未耐久。
 	after := wal.Snapshot()
-	require.Len(t, after, 2)
-	require.True(t, after[0].Durable)
-	require.False(t, after[1].Durable)
+	var nonDurable *WALEntry
+	for i, entry := range after {
+		if entry.Event.CanonicalHash == b.CanonicalHash {
+			nonDurable = &after[i]
+			break
+		}
+	}
+	require.NotNil(t, nonDurable, "非耐久变体必须仍在队列里（未被投递、不得被回收）")
+	require.False(t, nonDurable.Durable, "同身份耐久条目不能替另一变体补造提交证据")
 }
 
 func TestSixFixCommittedVariantsPersistFailuresBlockDrain(t *testing.T) {
@@ -381,10 +391,14 @@ func TestSixFixCommittedVariantsCaptureExcludesConcurrentAppend(t *testing.T) {
 		t.Fatal("并发追加后排空未完成")
 	}
 	entries := wal.Snapshot()
-	require.Len(t, entries, 4)
-	for i := range want {
-		require.Equal(t, want[i], entries[i].Event)
-	}
-	require.True(t, entries[2].Durable)
-	require.False(t, entries[3].Durable, "本批真实持久化快照不应把回调期间追加的未提交变体算进去")
+	// 2026-10-29：不能按固定下标/固定条数断言。本用例的关切是
+	// 「本批真实持久化快照不应把回调期间追加的**未提交**变体算进去」，按 canonical hash 定位它。
+	//
+	// 为什么只剩 1 条：`want` 两条已投递且被确认（reclaim 推到 7）；回调期间追加的
+	// `later` 区间也是 [0,7) 且已 Commit ⇒ 同样落在回收水位之内被剪掉（正确的行为：
+	// 它已在队列里被确认过的那段区间里）。只有**未提交**的 `uncommitted` 留下。
+	require.Len(t, entries, 1, "回调期间追加的未提交变体仍在队列里（未投递、不得被回收）")
+	uncommittedEntry := entries[0]
+	require.Equal(t, uncommitted.CanonicalHash, uncommittedEntry.Event.CanonicalHash)
+	require.False(t, uncommittedEntry.Durable, "本批真实持久化快照不应把回调期间追加的未提交变体算进去")
 }

@@ -15,7 +15,6 @@ package config
 //     例如映射方法返回零值配置、或 Enabled 恒为 true，行数断言即红）。
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -123,22 +122,21 @@ func TestLogIndexBatchPruneConfigDrivesLedgerBounds(t *testing.T) {
 	assert.Less(t, keep, off, "尾窗再多也不得退化成线性增长")
 }
 
-// advanceLedgerReclaim 走完责任转移链把 reclaim 推到 to（生产里由 releaseRecovery 完成）：
-// 裁剪判据是 `batch.End <= Positions.Reclaim`，没有水位推进就没有可裁条目。
+// advanceLedgerReclaim 把 reclaim 推到 to（生产里由 releaseRecovery 完成）。
+//
+// 2026-10-29：旧实现走「登记恢复段 + 责任转移」，那套机制已删。新语义下裁剪水位是
+// `Positions.Delivery`（= REQUEST_DONE 连续覆盖末端），而 `RecordDelivery(REQUEST_DONE)`
+// 本身就会推进它——本函数因此只剩“把读入量也推上去并确认回收真的推进”这一步。
+// 它仍然是夹具的关键点：没有水位推进就没有可裁条目。
 func advanceLedgerReclaim(t *testing.T, led *ledger.Ledger, key ledger.SourceKey, to uint64) {
 	t.Helper()
 	from := led.Get(key).Positions.Reclaim
 	if to <= from {
 		return
 	}
-	segID := fmt.Sprintf("seg-%d-%d", from, to)
-	require.NoError(t, led.RegisterRecovery(key, ledger.RecoveryRef{
-		SegmentID: segID, Path: "recovery://config-test", State: logtypes.RecoveryStaged,
-		CoversFrom: from, CoversTo: to,
-	}))
-	require.NoError(t, led.TransitionRecovery(key, segID, logtypes.RecoveryDurableVerified, "", ""))
-	require.NoError(t, led.TransitionRecovery(key, segID, logtypes.RecoveryWALResponsibilityXfer, "", "test:receiver"))
+	// 认证覆盖要接得上：读入量也得推到 to（否则回收被 max(Read,Durable) 夹住）。
+	require.NoError(t, led.AdvanceRead(key, to))
 	pos, err := led.TryReclaim(key)
 	require.NoError(t, err)
-	require.Equal(t, to, pos, "水位应推进到恢复分段覆盖末端")
+	require.Equal(t, to, pos, "水位应推进到认证覆盖末端")
 }

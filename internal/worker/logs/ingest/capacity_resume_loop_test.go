@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
@@ -35,6 +36,20 @@ func TestCapacityResumeLoopHealsPausedSource(t *testing.T) {
 	// 2026-10-29：积压闸已改为丢弃语义，本包不再产生新的积压暂停，但**存量库里仍有**旧二进制
 	// 写下的这种暂停（生产 10 个源就是此形态），`maybeResumeBacklogLocked` 负责它们。
 	// 这里就用那个存量原因造夹具——它才是这条收敛路径的真实输入。
+	//
+	// **必须先造出真实回收欠账（reclaim < delivery）**：兜底环在候选门**之前**先给该源一次回收步
+	// （`if pos.Reclaim < pos.Delivery` 才进，见 runtime.go 的 #66-⑤），而回收步末尾的
+	// `WAL.pruneReclaimed` → `maybeResumeBacklogLocked` 才是本用例要钉的那条收敛路径。
+	// 没有欠账时环只会走候选分支（那是**另一条**路，probe 会被调用），本用例的"门之前"判别力
+	// 就消失了。欠账用一条真实的 REQUEST_DONE 投递批次制造：它把 delivery 推上去，而
+	// reclaim 被 read/durable 夹住 ⇒ 欠账长期存在（这正是现场"已确认投递但未回收"的形态）。
+	pos, ok := pipe.Ledger().Positions(pipe.Key())
+	require.True(t, ok)
+	require.NoError(t, pipe.Ledger().RecordDelivery(pipe.Key(),
+		pos.Delivery, pos.Delivery+100, logtypes.DeliveryRequestDone))
+	debt := pipe.Ledger().Get(pipe.Key())
+	require.Greater(t, debt.Positions.Delivery, debt.Positions.Reclaim,
+		"夹具前提：必须存在真实回收欠账（reclaim < delivery），否则兜底环不会走「门之前的回收步」")
 	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), legacyBacklogPauseReason))
 	require.True(t, pipe.Ledger().Get(pipe.Key()).AcquirePaused)
 
