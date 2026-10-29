@@ -11061,24 +11061,6 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 			if src, srcOK := m.sourceConfigFor(p); srcOK {
 				m.noteReclaimStall(p, src, pos)
 			}
-			// **历史未认领段丢弃**（2026-10-30 用户裁定）：
-			//
-			// 必须挂在这个**每个源必过的轮转窗口**里，而不是后面的「积压类暂停」分支。
-			// 事故现场：初版把它放在 `entry.AcquirePaused` 之后，而 inst:318 **根本没暂停**
-			//（paused=false，只是 delivery 卡死）⇒ 那段代码永远跑不到 ⇒ 丢弃从不触发。
-			//
-			// 语义上与 #66-⑤/#66-⑥ 完全同型：它们也是「三条现存面都到不了的落后源」的
-			// 唯一驱动点。轮转窗口保证任意源在 ⌈E/batch⌉ 轮内被处理一次。
-			//
-			// 性能边界：函数内先做 O(1) 前置（无未认领区间就立即返回），
-			// 且走**既有有界执行器**（单步预算 + 在飞上限）⇒ 每轮有界。
-			if src, srcOK := m.sourceConfigFor(p); srcOK {
-				if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
-					m.dropUnclaimedHistory(m.lifecycleContext(), src, p)
-				}) {
-					m.skipBlocked.Add(1)
-				}
-			}
 			if pos.Reclaim < pos.Delivery {
 				if src, srcOK := m.sourceConfigFor(p); srcOK {
 					m.sweepRollingProbes.Add(1)
