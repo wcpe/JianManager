@@ -32,7 +32,9 @@ import { expect, test } from '@playwright/test'
  */
 
 const BASE_URL = process.env.FR518_BASE_URL ?? 'http://127.0.0.1:5299'
-const CP_DB = process.env.FR518_CP_DB ?? '/home/wxys233/projects/JianManager-web-overhaul/.tmp/fr514-live/data/jm.db'
+// 不写死绝对路径：本文件入了仓库，写死本机路径会泄漏用户名与目录结构。
+// 未设 FR518_CP_DB 时下面的 skip 会生效并明写「未验证」。
+const CP_DB = process.env.FR518_CP_DB ?? ''
 const ADMIN_USER = process.env.FR518_USER ?? 'admin'
 const ADMIN_PASS = process.env.FR518_PASS ?? 'fr514live'
 
