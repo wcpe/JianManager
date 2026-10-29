@@ -119,10 +119,14 @@ rows(delivery_batch) → ingest.indexStateToState → ledger.Entry.DeliveryBatch
 **恒等元**：删掉它既不改变本次计算结果，也不改变后续跨度的处理结果（后续只依赖当前 `pos`，而
 `pos` 未被它改变）。
 
-⇒ **安全水位 = `Positions.Reclaim`**：`batch.End <= Reclaim` 的条目确定不会再被需要。语义上与 reclaim
-的既有含义一致：reclaim 只能经 `logtypes.CanReclaim` 门禁推进（恢复分段到 `WAL_RESPONSIBILITY_TRANSFERRED`
-及其后、无 hold），即「这些字节的恢复责任已由受管恢复分段/投影承担」——责任既已转移，批次级请求
-结果对这些字节不再承载决定性信息。
+⇒ **安全水位 = `Positions.Delivery`**：`batch.End <= Delivery` 的条目对读者 A 是恒等元。
+
+> **2026-10-29 修订**：旧口径是 `min(Reclaim, Delivery)`。reclaim 改按投递证据推进后，
+> `Reclaim <= Delivery` 恒成立，且 `Delivery` 的推导 floor 已改为**自身**（`advanceDeliveryEnd`）
+> ⇒ 裁剪水位必须是 `Positions.Delivery`。两边必须用同一 floor：若有人把 Reclaim 当 floor 重算，
+> 就会得出 `delivery == reclaim`，使「已确认投递前缀」凭空后退并挡住下一轮回收。
+> 完整论证见 `internal/worker/logs/ledger/delivery_batch_prune.go` 文件头与
+> `docs/specs/reclaim-by-delivery/spec.md` §2.1。
 
 判据的单调性（为什么裁过一次之后永远安全）：水位只前进（`TryReclaim` 仅在 `target > Reclaim` 时推进；
 `AdvanceRead` 只把读指针夹到水位之上），而 `end <= W` 在更晚的 `W' >= W` 下依然成立。
@@ -444,9 +448,11 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
 **都**回退到 `reclaim`，让 tailer 从该处重读。只退 `read` 不够——tailer 游标取
 `min(durable, read)`（见 `acquire/tailer.go`），`durable` 留着会把它拉高。
 
-回退下界是 `reclaim` 而不是 0：`reclaim` 之前的字节已被证明安全另存，重读它们不只是浪费，
-还会让 `releaseRecovery` 的 `from >= to` 恒成立、静默不再建恢复段，最终把回收永久卡死
-（2026-09-30 生产实证）。
+回退下界是 `reclaim` 而不是 0：`reclaim` 之前的字节已取得确认投递证据，重读它们不只是浪费。
+
+> **2026-10-29 修订**：原文此处写「会让 `releaseRecovery` 的 `from >= to` 恒成立、静默不再建恢复段」。
+> `releaseRecovery` 的建段分支已随受管恢复分段一并删除，该具体机制不再存在；
+> 但**回退下界仍是 `reclaim` 而不是 0** 的结论不变。
 
 ### 7.4 丢弃的审计面
 

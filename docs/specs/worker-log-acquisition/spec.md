@@ -11,7 +11,7 @@
 - **持久提交资格是所有投递入口的前置门**：正常采集、暂停源排空、append 被拒后的排空必须等待对应批次的索引提交成功。WAL 内存中的 durable 标记不代表索引已提交；后台交办、`Incomplete`、提交失败或超时均不能外发该批事件，后续成功重试才可放行。
 - **三种证据不能互相升级**：`Positions.Delivery` 仅是请求结果连续前缀；ACK 只能来自真实 `REQUEST_DONE`；`VerifiedRuns` 只能来自完整逐字段可见性核验。条数相同、最大位置、恢复责任转移或人工裁定均不生成核验凭据。自动缺口消解仍要求精确连续区间与原因允许名单，人工永久裁定另存审计。
 - **读入前限制字节**：单行与单轮读取独立有界；活文件暂时 EOF 不能提交无换行的半行。UTF-8、CRLF 和跨轮续写必须保持正文与源字节位置完整；超长记录须受管隔离或背压，不能裸截断并跳过源责任。归档发现、导入和恢复不得递归占用同源操作门；归档状态区分可接管、证据不足与读取失败。
-- **恢复责任先审计后摘引用**：`CLEANED` 记录先在锁外按有界批次持久归档并取得回执，再短锁复核状态、hold、消费者与候选身份；失败或并发变化则保留活动引用。完整审计历史独立保留且可随累计清理增长，不是总空间常数；活动引用也只在正常解除/归档窗口下收敛，长期故障/hold 不承诺固定条数。最大结束位置不是恢复分段实际可取证明，不能据此降低 WAL 正文引用。
+- ~~**恢复责任先审计后摘引用**：`CLEANED` 记录先在锁外按有界批次持久归档并取得回执，再短锁复核状态、hold、消费者与候选身份；失败或并发变化则保留活动引用。~~ **2026-10-29 删**：该机制属于受管恢复分段，已随其废除（WAL 改纯内存后无副本需接管）；`recovery_audit` 表与 `RecoveryArchiveStore` 一并删除。
 - **物化成本独立计账**：按源、UTC 日、稳定内容窗口预留并持久记录成本；部分写、ACK 未知及“写成功但发布 CAS 失效”均消耗实际或保守成本。耗尽只阻止再造副本，不阻止只读取证、合法复用、正常尾采与有界 WAL 排空。迁移冻结期必须先取得 Catalog 物理日写许可才可写入、核验和发布。
 
 待验收：对应反例正式回归红转绿；旧 JSON/SQLite 与残留 WAL、归档、事件段环境的首启→二启→三启及回滚后再启；逐轮核对位置、指纹、缺口、审计与恢复责任。`SIGKILL` 恢复不等同真实断电耐久。
@@ -48,9 +48,9 @@ Worker 组合根内部 `Options.DeferredDelivery=true`，独立 Manager 默认 `
 
 ## 2. 需求（要什么）
 
-- 契约继承：采集失败后的 UNKNOWN/恢复责任由 FR-473 §4.2～§4.4 定义；WAL 合法回收后必须从登记的恢复分段恢复。
+- 契约继承：采集失败后的 UNKNOWN 保留由 FR-473 §4.2～§4.4 定义；WAL 合法回收后由「持久 position 水位 + 重启重读」恢复（**2026-10-29**：受管恢复分段已废除，原「从登记的恢复分段恢复」不再适用）。
 - 范围内：FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转通过 source_generation 关联；坏记录进入隔离队列；WAL 先 durable 再 delivery，按 FR-473 reclaim 证明回收。
-- 继承 FR-473：未知投递结果不进入坏记录隔离；受管恢复分段承担 WAL 回收后的恢复责任，恢复来源未解除前不得普通到期清理。
+- 继承 FR-473：未知投递结果不进入坏记录隔离；UNKNOWN 区间不参与回收（回收上界是 `REQUEST_DONE` 证据的连续覆盖末端），因此它天然保留重投机会。
 - 范围外：新增日志告警引擎、第二日志查询引擎、浏览器直连 Worker/VL。
 
 ## 3. 设计（怎么做）
@@ -97,9 +97,9 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
 - `source=worker` 的 Worker/Node 自身日志也进入同一采集面；采集失败不能递归写回自身 VL 失败日志。
 - FILE_PRIMARY 常驻循环自动发现同目录 `.gz`（可用 `archive_glob` 收窄），以文件名 UTC 日锚定归一化时间。账本持久保存当前 live 分段的逻辑基址与稳定前缀摘要：同路径替换必须先关闭旧分段 EOF，再由 ArchiveImporter 跳过已经 durable 的物理前缀、补齐未读尾部，最后才给新 `latest.log` 分配后续位置。历史 gzip、live 文件、WAL 和投影继续使用同一 source generation；压缩包 hash 只作 provenance。
 - gzip 只有在事件已由 durable WAL 覆盖后才标记 `imported`。损坏或不可读对象登记可见缺口及观测 size/mtime，未变化前保持隔离、不在每轮轮询重复制造缺口；对象变化后才允许受控重试。**截断对象**（已读出行之后，下一次读取以零字节 + `unexpected EOF` 收尾）同样必须留 `ARCHIVE_READ_ERROR` 缺口，已读出的完整行仍计入——不得以静默 `break` 丢尾（2026-09-28 Windows 真机全量测试发现旧实现只在「读到字节且带错误」时记缺口，零字节错误分支直接跳出，尾部凭空消失且不可见）。自动回归：`TestManagerAutoImportsHistoricalGzipBeforeCurrentFile`、`TestManagerRotationImportsOnlyUnreadTailBeforeReplacementFile`、`TestManagerQuarantinesUnchangedCorruptGzipWithoutRepeatingGap`、`TestArchiveTruncatedGzipRecordsGap`。
-- HTTP 2xx 只写入 `REQUEST_DONE`，不能推进 `reclaim_position`；响应丢失进入 `UNKNOWN`，按 event_id/位置核验或从受管恢复分段重放。
+- HTTP 2xx 只写入 `REQUEST_DONE`；**回收上界只看 `REQUEST_DONE` 的连续覆盖**（不只看 2xx，也不看 `delivery_position`——后者含 UNKNOWN）。响应丢失进入 `UNKNOWN`，按 event_id/位置核验或重投。
 - Multiline 缓冲未形成完整事件时只能推进 `read_position`，不得推进 durable checkpoint；崩溃后从首行位置恢复拼接。
-- WAL、隔离队列或受管恢复分段达到预算时暂停低优先级采集，返回缺口、暂停原因和恢复动作；不得用丢弃计数伪装完整。
+- ~~WAL、隔离队列或受管恢复分段达到预算时暂停低优先级采集~~ ⇒ **2026-10-29 改**：WAL 是**纯内存队列**，越界不再暂停而是**丢弃最旧**（对齐 Fluent Bit `memrb`），并以缺口与 `DropStats` 双维如实登记。隔离队列仍按原语义暂停。
 
 ## 3.2 失败验收
 
@@ -144,7 +144,7 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
   人工接口 `ResolveGapsThrough` / `ResolveCoveredGapsForSource` 语义不变（仍按末端消解，
   可显式确认放弃不可证明的原因）。永久放弃凭据按实际连续区间并集分别记录，只合并相接/重叠项，
   不以首尾凸包覆盖健康位置；实名操作人、理由、时间、Through 与最近 64 条上限及持久化语义保持。
-  回收仅匹配恢复段 `[from, CoversTo)` 的半开相交，恰在 exclusive 上界的凭据不能放行；hold 与责任转移门禁不放宽。
+  回收只按 §4.3 新规则（`REQUEST_DONE` 连续覆盖末端）判定（**2026-10-29**：原「匹配恢复段 `[from, CoversTo)` 的半开相交」已随受管恢复分段废除；`Abandonments` 仍作为人工裁定凭据保留，供 `event_status` 判 ABANDONED 与 WAL 剪枝使用）。
 - **恢复分类不等于落库证据**：积压回落时可将 `APPEND_REJECTED` 与
   `DELIVER_ERROR/DELIVER_ERROR_WORKER_SOURCE` 分账分类为待重读，必须使用各自明确允许集；
   末端水位只作候选扫描上界，独立 found 标志支持零位置。未知、归档、Raw 写失败、WAL 提交失败不得顺带消解。
