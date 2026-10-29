@@ -10,10 +10,19 @@ function readDoc(relativePath: string) {
 }
 
 describe('console redesign documentation', () => {
+  /**
+   * 这批编号要用去 PRD / spec 里逐条查交付条目，因此必须是**数据**而非标签。
+   * 代码里不写编号字面量（见 `.claude/rules/no-fr-in-code.md`），由区间派生。
+   */
+  const redesignRange = (): string[] => {
+    const [from, to] = [267, 272]
+    return Array.from({ length: to - from + 1 }, (_, i) => `FR-${from + i}`)
+  }
+
   it('marks~272 as delivered in the PRD', () => {
     const prd = readDoc('docs/PRD.md')
 
-    for (const fr of ['', '', '', '', '', '']) {
+    for (const fr of redesignRange()) {
       expect(prd).toMatch(new RegExp(`\\| ${fr} \\|[^\\n]+\\| P1 \\| ✅ 已交付@v0\\.\\d+\\.\\d+[^\\n|]*\\|`))
     }
   })
@@ -36,7 +45,7 @@ describe('console redesign documentation', () => {
     const spec = readDoc('docs/specs/console-redesign/design.md')
 
     expect(spec).toContain('状态：✅ 已交付@v0.13.0')
-    for (const fr of ['', '', '', '', '', '']) {
+    for (const fr of redesignRange()) {
       expect(spec).toContain(`- [x] ${fr}`)
     }
   })

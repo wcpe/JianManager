@@ -72,7 +72,9 @@ describe('ClientDistOpsPage 外壳（7 Tab / data-page / 守卫）', () => {
     expect(await screen.findByText('拉取趋势')).toBeInTheDocument()
     expect(await screen.findByText('版本滞后分布')).toBeInTheDocument()
     expect(await screen.findByText('安全排行')).toBeInTheDocument()
-    expect(screen.queryByText('')).not.toBeInTheDocument()
+    // 页面上不应出现需求编号徽章（代码不写编号，界面也不展示）。
+    // no-fr-check: 这条用例的职责就是检测编号是否外泄到界面，必须写编号形状
+    expect(screen.queryByText(/^FR-\d+$/)).not.toBeInTheDocument()
   })
 
   it('旧别名 tab（ip）直达页面 B 落到「画像 / IP 剖析」分档', async () => {
