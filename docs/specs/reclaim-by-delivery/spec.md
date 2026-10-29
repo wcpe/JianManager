@@ -114,9 +114,14 @@ Delivery = max(旧值, contiguousDeliveryEnd(batches, Delivery))
 
 ## 4. 绝对不能删的（已守住）
 
-- **`published_evidence.go` 一个字未动**：缺口消解（`gap_autoresolve.go` + `runtime.go` 的
-  `autoResolveGapsFromPublished`）依赖 `capturePublishedEvidence` / `applyPublishedEvidence` /
-  `currentPublishedRuns`。只服务补段的 `capturePublishedPrefixEvidence` 已随调用方一起删。
+- **`published_evidence.go` 一个字未动**。它有两个调用面，两拨都必须留：
+  - **缺口消解**（`gap_autoresolve.go` + `runtime.go` 的 `autoResolveGapsFromPublished`）
+    用 `capturePublishedEvidence` / `applyPublishedEvidence` / `currentPublishedRuns`；
+  - **延迟投递的确认路径**（`confirmPublishedEarlier`，runtime.go:6160）用
+    `capturePublishedPrefixEvidence` —— 这一点我一开始判错了（以为是「只服务补段」），
+    实测该函数有**生产调用方**，而且它与 reclaim 无关（它只负责取已发布证据）。
+  ⇒ 整个文件最终**一行未改**，`capturePublishedPrefixEvidence` 也保留。
+  这也侧面说明：补段链的删除不必涉及这个文件，两条调用面天然是分开的。
 - `delivery_batch` 表（`Restore` 用它重算 `Positions.Delivery`）
 - `PositionInvariantViolations`（reclaim ≤ read 观测面）
 - `gap` 表与缺口机制、`Abandonments` 弃投凭据（人工裁定永久丢失仍可让回收跨过空洞）
