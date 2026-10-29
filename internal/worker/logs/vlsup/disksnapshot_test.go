@@ -6,22 +6,28 @@ package vlsup
 // 「告警不响」或「告警误响」——后者会让运维关掉告警。
 
 import (
+	"bytes"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 )
 
 // 真实 VL v1.52.0 的 /metrics 片段（逐字取自实跑输出，路径已脱敏）。
+//
+// 注意：`vl_free_disk_space_bytes` / `vl_total_disk_space_bytes` **仍在样里**，
+// 但它们只用于证明「我们不拿它们算 used」（下面有专门的防回归用例）。
 const realVLMetricsSample = `
 # HELP vl_free_disk_space_bytes Available disk space at -storageDataPath
 # TYPE vl_free_disk_space_bytes gauge
-vl_free_disk_space_bytes{path="/data/vl"} 5.38967658496e+11
+vl_free_disk_space_bytes{path="/data/vl"} 534399922176
 # HELP vl_total_disk_space_bytes Total disk space at -storageDataPath
 # TYPE vl_total_disk_space_bytes gauge
-vl_total_disk_space_bytes{path="/data/vl"} 1.504075358208e+12
+vl_total_disk_space_bytes{path="/data/vl"} 1504075358208
 # HELP vl_partitions Number of partitions
 # TYPE vl_partitions gauge
 vl_partitions 5
@@ -33,34 +39,11 @@ vl_rows_dropped_total{reason="too_many_fields"} 0
 vl_rows_dropped_total{reason="too_small_timestamp"} 42
 `
 
-// 字节数必须按带标签的样本正确取出，并能算出 used = total - free。
-//
-// 注意：这两个指标在真实 VL 上是**带标签**的（`{path="…"}`），
-// 所以断言必须走 anyLabel 而不是 scalar —— 早期版本用了 scalar，
-// 结果恒得 0，而那只会在"告警永不触发"时才被发现。这条用例就是为它写的。
-func TestParsePrometheusDiskSpace(t *testing.T) {
+// 分区数与丢弃数解析正确。
+func TestParsePrometheusCounters(t *testing.T) {
 	g := parsePrometheus(realVLMetricsSample)
-
-	// 先钉住前提：这两个指标确实是带标签的。
-	if v := g.scalar(vlMetricTotalDiskSpace); v != 0 {
-		t.Fatalf("前提失效：真实样里 total 不应能被无标签 scalar 读到（得到 %v）", v)
-	}
-
-	total := g.anyLabel(vlMetricTotalDiskSpace)
-	free := g.anyLabel(vlMetricFreeDiskSpace)
-	if total <= 0 || free <= 0 {
-		t.Fatalf("total=%v free=%v，两个都应有值", total, free)
-	}
-	if total < free {
-		t.Fatalf("total(%v) 应 >= free(%v)", total, free)
-	}
-	// used = total - free 必须为正且小于 total（否则 used 就是脏值）。
-	used := total - free
-	if used <= 0 || used >= total {
-		t.Fatalf("used=%v 不合理（total=%v free=%v）", used, total, free)
-	}
 	if parts := g.scalar(vlMetricPartitions); parts != 5 {
-		t.Fatalf("vl_partitions 应为 5（无标签），实际 %v", parts)
+		t.Fatalf("vl_partitions 应为 5，实际 %v", parts)
 	}
 }
 
@@ -121,8 +104,6 @@ func TestVLDiskSnapshotUsesPerReasonDropped(t *testing.T) {
 	// 假 VL：只回一个最小 /metrics，但里刻意把几个 reason 写成不同值。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`
-vl_free_disk_space_bytes{path="/data"} 400
-vl_total_disk_space_bytes{path="/data"} 1000
 vl_partitions 4
 vl_rows_dropped_total{reason="debug"} 999
 vl_rows_dropped_total{reason="too_many_fields"} 888
@@ -132,21 +113,21 @@ vl_rows_dropped_total{reason="too_small_timestamp"} 5
 	}))
 	defer srv.Close()
 
-	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
-	if err != nil {
-		t.Fatalf("拆解 httptest 地址失败: %v", err)
+	dataDir := t.TempDir()
+	// 建两个已知大小的文件：600 字节总和。
+	if err := os.WriteFile(filepath.Join(dataDir, "a.bin"), bytes.Repeat([]byte("x"), 400), 0o600); err != nil {
+		t.Fatalf("写夹具失败: %v", err)
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		t.Fatalf("端口不是数字: %v", err)
+	if err := os.WriteFile(filepath.Join(dataDir, "sub-dir-marker.bin"), bytes.Repeat([]byte("x"), 200), 0o600); err != nil {
+		t.Fatalf("写夹具失败: %v", err)
 	}
 
 	s := &Supervisor{
 		instances: map[Namespace]*instance{
 			NamespaceHot: {cfg: InstanceConfig{
 				Namespace:              NamespaceHot,
-				Port:                   port,
-				StorageDataPath:        "/data",
+				Port:                   portOfTestServer(t, srv),
+				StorageDataPath:        dataDir,
 				MaxDiskSpaceUsageBytes: 10000,
 			}},
 		},
@@ -154,7 +135,7 @@ vl_rows_dropped_total{reason="too_small_timestamp"} 5
 
 	r := s.VLDiskSnapshot()
 	if r.UsedBytes != 600 {
-		t.Fatalf("used 应为 total-free=600，实际 %d", r.UsedBytes)
+		t.Fatalf("used 应为目录实际大小 600，实际 %d", r.UsedBytes)
 	}
 	if r.LimitBytes != 10000 {
 		t.Fatalf("limit 应原样带出 10000，实际 %d", r.LimitBytes)
@@ -166,5 +147,63 @@ vl_rows_dropped_total{reason="too_small_timestamp"} 5
 	if r.RowsDroppedTotal != 5 {
 		t.Fatalf("RowsDroppedTotal 必须是 too_small_timestamp 的值 5，实际 %d"+
 			"（若是 999/888/777 说明把无关 reason 当成数据丢失了）", r.RowsDroppedTotal)
+	}
+}
+
+// portOfTestServer 取 httptest 服务的监听端口。
+func portOfTestServer(t *testing.T, srv *httptest.Server) int {
+	t.Helper()
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("拆解 httptest 地址失败: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("端口不是数字: %v", err)
+	}
+	return port
+}
+
+// ⚠ 防回归（2026-10-29 真机缺陷）：UsedBytes **必须**是 VL 目录自身的占用，
+// 不得是「整块磁盘已用」(total-free)。
+//
+// 现场事故：第一版用 `vl_total_disk_space_bytes - vl_free_disk_space_bytes` 当 used，
+// 部署后在 CP 时序库里读到 `log_vl_disk_used = 903 GiB`、`log_vl_disk_pct = 903%`，
+// 而 VL 目录实际只有 22.3 GiB —— 多出的 880 GiB 是游戏服/数据库/其它。
+// 拿这个值去比 100GiB 上限，告警会立刻误报（而且永远“超限”）。
+//
+// 本用例故意让假 /metrics 里的 total/free 差得很大（1TiB 已用），
+// 而目录里只放 600 字节 —— 若实现又回去用 total-free，这条立红。
+func TestVLDiskSnapshotUsedIsDirectorySizeNotFilesystem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// 差 = 1TiB，若被当作 used，远大于下面的 600 与目录实际值。
+		_, _ = w.Write([]byte(`
+vl_free_disk_space_bytes{path="/x"} 100
+vl_total_disk_space_bytes{path="/x"} 1099511627876
+vl_partitions 3
+vl_rows_dropped_total{reason="too_small_timestamp"} 0
+`))
+	}))
+	defer srv.Close()
+
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, "only.bin"), bytes.Repeat([]byte("y"), 600), 0o600); err != nil {
+		t.Fatalf("写夹具失败: %v", err)
+	}
+
+	s := &Supervisor{instances: map[Namespace]*instance{
+		NamespaceHot: {cfg: InstanceConfig{
+			Namespace: NamespaceHot, Port: portOfTestServer(t, srv),
+			StorageDataPath: dataDir, MaxDiskSpaceUsageBytes: 107374182400,
+		}},
+	}}
+
+	r := s.VLDiskSnapshot()
+	if r.UsedBytes != 600 {
+		t.Fatalf("used 必须是目录自身大小 600，实际 %d"+
+			"（若是 ~1TiB 说明又用 total-free 当目录占用了 —— 那会得出 >100%% 的 disk_pct）", r.UsedBytes)
+	}
+	if pct := float64(r.UsedBytes) / float64(r.LimitBytes) * 100; pct > 100 {
+		t.Fatalf("used/limit 得出 %.2f%%，不可能超过 100%%", pct)
 	}
 }

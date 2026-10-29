@@ -16,29 +16,27 @@ package vlsup
 // 第 2 条是真正的危险点：磁盘写满后 VL **进入只读、反而无力丢弃**（丢弃也要写元数据）。
 // 所以"设了上限"不等于"磁盘不可能写满"，必须把占用读数带到告警链路上。
 //
-// ## 为什么不自己 du 数据目录
+// ## 为什么 UsedBytes 自己算目录大小，而不是用 total-free
 //
-// VL 自己已经把这些数值算好了且是**权威口径**（它知道哪些是活跃 part、有多少临时文件）。
-// `du` 会得到另一个数，而告警要对齐的是 VL 的判据，不是我们的猜测。
+// `vl_free_disk_space_bytes` / `vl_total_disk_space_bytes` 是**整块磁盘**的可用/总量
+// （带 `path` 标签但语义是文件系统维度）。拿 total-free 当「VL 占了多少」是错的：
+// 生产环境 2026-10-29 实测得到 903 GiB，而 VL 目录实际只有 22.3 GiB ——
+// 多出的 880 GiB 是游戏服、数据库和其它一切。用它除 100GiB 上限会得出
+// `disk_pct = 903%` 这种荒谬读数，告警立刻误报。
 //
-// ## 指标名是实测确认的，不是猜的
+// VL **没有**一个“目录占用”的直接指标（已核 v1.52.0 的 /metrics）。
+// 所以自己 walk `-storageDataPath`；这与 VL 自己判断磁盘上限的口径一致
+// （官方 help："total size of data at -storageDataPath directory"）。
 //
-// 2026-10-29 用 v1.52.0 实跑 `GET /metrics` 确认存在：
-//
-//	vl_free_disk_space_bytes{path="…"}
-//	vl_total_disk_space_bytes{path="…"}
-//	vl_partitions
-//	vl_rows_dropped_total{reason="too_small_timestamp"}   ← 超保留期被丢
-//	vl_rows_dropped_total{reason="too_big_timestamp"}     ← 超未来窗口
-//	vl_rows_dropped_total{reason="debug"}                 ← 调试日志丢弃
-//	vl_rows_dropped_total{reason="too_many_fields"}       ← 字段过多
-//
-// **必须按 reason 取值**：把四个 reason 加总会把「正常丢弃的 debug 日志」也算成数据丢失。
+// 代价：周期性 walk 一个有界目录树。心跳 30s 一次、目录通常几千个文件，
+// 实测毫秒级；若将来目录大到影响心跳，再加缓存。
 
 import (
 	"context"
 	"io"
+	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -46,10 +44,8 @@ import (
 
 // VL 指标名（v1.52.0 实测确认）。
 const (
-	vlMetricFreeDiskSpace  = "vl_free_disk_space_bytes"
-	vlMetricTotalDiskSpace = "vl_total_disk_space_bytes"
-	vlMetricPartitions     = "vl_partitions"
-	vlMetricRowsDropped    = "vl_rows_dropped_total"
+	vlMetricPartitions  = "vl_partitions"
+	vlMetricRowsDropped = "vl_rows_dropped_total"
 
 	// vlDropReasonTooSmall 是「事件时间早于 now-retentionPeriod ⇒ ingest 阶段直接丢」。
 	// 这是唯一与「保留期/磁盘上限导致的历史数据消失」对应的 reason。
@@ -105,18 +101,37 @@ func (s *Supervisor) VLDiskSnapshot() VLDiskSnapshotResult {
 	}
 
 	g := parsePrometheus(body)
-	total := g.anyLabel(vlMetricTotalDiskSpace)
-	free := g.anyLabel(vlMetricFreeDiskSpace)
-	used := int64(0)
-	if total > 0 && free >= 0 && free <= total {
-		used = int64(total - free)
-	}
+	used := dirSizeBytes(inst.cfg.StorageDataPath)
 	return VLDiskSnapshotResult{
 		UsedBytes:        used,
 		LimitBytes:       inst.cfg.MaxDiskSpaceUsageBytes,
 		Partitions:       int32(g.scalar(vlMetricPartitions)),
 		RowsDroppedTotal: uint64(g.withLabel(vlMetricRowsDropped, "reason", vlDropReasonTooSmall)),
 	}
+}
+
+// dirSizeBytes 递归统计目录下所有常规文件的大小之和（与 VL 判上限的口径一致）。
+//
+// 单个文件 stat 失败不影响其它文件（少算一点点，宁可低估也不误报）；
+// 目录不存在返回 0。不跟随符号链接（避免环）。
+func dirSizeBytes(root string) int64 {
+	if root == "" {
+		return 0
+	}
+	var total int64
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // 单个条目读不到不影响汇总
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if info, statErr := d.Info(); statErr == nil && info.Mode().IsRegular() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // fetchMetrics 抓取本机 VL 的 /metrics（带 Basic Auth）。
@@ -162,26 +177,6 @@ type prometheusGauges struct {
 
 // scalar 取一个**无标签** gauge 的值；缺失返回 0。
 func (g prometheusGauges) scalar(name string) float64 { return g.scalars[name] }
-
-// anyLabel 取 name 在**任意标签组合**下的值（单实例受管 VL 只有一个存储路径）。
-//
-// 为什么需要它：`vl_free_disk_space_bytes` / `vl_total_disk_space_bytes` 实际是**带标签**的
-// （`{path="…"}`，2026-10-29 实跑确认）——只用 scalar() 会恒得 0，
-// 而那会让盘上告警永远不触发（本文件的用例当场抓到了这一点）。
-//
-// 单实例受管 VL 只有一个 storageDataPath，所以取到哪个都行；
-// 若将来多路径共存，应改成按具体 path 精确匹配（而不是现在这样取首个）。
-func (g prometheusGauges) anyLabel(name string) float64 {
-	if v, ok := g.scalars[name]; ok {
-		return v
-	}
-	for _, metrics := range g.labeled {
-		if v, ok := metrics[name]; ok {
-			return v
-		}
-	}
-	return 0
-}
 
 // withLabel 取 name{labelName="labelValue"} 的值；缺失返回 0。
 //
