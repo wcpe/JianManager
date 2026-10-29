@@ -204,7 +204,8 @@ func (w *WAL) RecordCurrentResults(events []logtypes.Event, results []DeliveryRe
 		if !sameID && !overlaps {
 			continue
 		}
-		id, err := CommitIdentityOf(entry.Event)
+		// 每条真实响应都要把全表过一遍（同 ID / 区间重叠双重筛），用缓存避免重算。
+		id, err := w.entries[i].eventIdentityLocked()
 		if err != nil {
 			return err
 		}
@@ -230,7 +231,7 @@ func (w *WAL) RecordCurrentResults(events []logtypes.Event, results []DeliveryRe
 	}
 	if acked {
 		for _, i := range matched {
-			id, err := CommitIdentityOf(w.entries[i].Event)
+			id, err := w.entries[i].eventIdentityLocked()
 			if err != nil {
 				return err
 			}
@@ -419,6 +420,50 @@ type WALEntry struct {
 	appendRevision uint64   `json:"-"`
 	captureToken   uint64   `json:"-"`
 	captureBody    [32]byte `json:"-"`
+	// identity / identityOK 是本条目 Event 的**完整身份缓存**。
+	//
+	// 为什么必须有（2026-10-29 pprof 实测）：`CommitIdentityOf` 要对整条 event 做
+	// json.Marshal + SHA256（单条约 6µs）。而 WAL 快照类入口是**逐条**算身份的：
+	//   · `HasPendingDelivery(limit=1)` —— 只想探「有没有待投递」，旧实现却把**整个 WAL**
+	//     (积压满时 5000 条) 全算一遍；
+	//   · `CommittedIdentities` —— 每次排空后的回执裁剪同样全表算一遍。
+	// 生产实测这两条合计吃掉 **63% CPU**（30s profile：snapshotPending 34% +
+	// committedIdentities 32%，全部落在 json.Marshal/sha256）。节流毫无意义 —— 每次结果逐字相同。
+	//
+	// 失效面极窄且完整：Event 只在三处变化 —— 追加时构造（:1155）、回放去重原位替换
+	// （:1217 `adjudicateReplayDuplicatesLocked`）、以及被 prune 移出切片（条目消失）。
+	// 因此所有写 Event 的地方都必须走 `setEventLocked`。切片本身按值拷贝（Snapshot 的
+	// `copy`、snapshotPending 的 `entry := w.entries[index]`）⇒ 缓存随之复制，跨拷贝仍有效 ✓。
+	identity   CommitIdentity
+	identityOK bool
+}
+
+// setEventLocked 是**唯一**允许改写条目正文的入口：正文变了，身份缓存必须一起失效。
+//
+// 为什么收成一个函数而不是各处手动清：`CommitIdentity` 是对 Event 的完整摘要，
+// 漏清一处就会让下游拿到**上一个版本的**身份 —— 那是「用旧身份冒充新正文」的静默数据错误，
+// 比不缓存更糟。故把「改正文」与「清缓存」绑成一次不可分的写（调用方须持 w.mu）。
+func (entry *WALEntry) setEventLocked(event logtypes.Event) {
+	entry.Event = event
+	entry.identity = CommitIdentity{}
+	entry.identityOK = false
+}
+
+// eventIdentityLocked 返回本条目 Event 的完整身份（命中缓存则直接返回）。
+//
+// 调用方须持 w.mu：缓存只在写锁下的 setEventLocked 里失效，读过晚会在并发窗口内
+// 拿到「旧正文的身份」，而那正是这个缓存唯一可能出错的形态。
+func (entry *WALEntry) eventIdentityLocked() (CommitIdentity, error) {
+	if entry.identityOK {
+		return entry.identity, nil
+	}
+	id, err := CommitIdentityOf(entry.Event)
+	if err != nil {
+		return CommitIdentity{}, err
+	}
+	entry.identity = id
+	entry.identityOK = true
+	return id, nil
 }
 
 // DeliveryResult 请求级投递结果模拟。
@@ -1214,7 +1259,7 @@ func (w *WAL) adjudicateReplayDuplicatesLocked(events []logtypes.Event) []logtyp
 		sameLine := existing.Level == ev.Level && existing.Stream == ev.Stream && existing.Message == ev.Message
 		if sameSpan && sameLine {
 			w.pendingEpoch++
-			w.entries[idx].Event = ev // 胜者原位替换：静止态收敛为同一内容 ✓
+			w.entries[idx].setEventLocked(ev) // 胜者原位替换：静止态收敛为同一内容 ✓
 			w.entries[idx].Replay = true
 			w.entries[idx].acknowledged = nil
 			w.entries[idx].appendRevision = w.revision
@@ -1670,24 +1715,24 @@ func (w *WAL) CaptureDeliverySubset(events []logtypes.Event, original *DeliveryC
 		wantedIDs[id.EventID] = struct{}{}
 	}
 	found := make(map[CommitIdentity]logtypes.Event, len(wanted))
-	for _, entry := range w.entries {
-		if _, sameID := wantedIDs[entry.Event.EventID]; !sameID {
+	for i := range w.entries {
+		if _, sameID := wantedIDs[w.entries[i].Event.EventID]; !sameID {
 			continue
 		}
-		if entry.appendRevision > capture.revision {
+		if w.entries[i].appendRevision > capture.revision {
 			return nil, nil, nil, nil, ErrWALWindowChanged
 		}
-		id, err := CommitIdentityOf(entry.Event)
+		id, err := w.entries[i].eventIdentityLocked()
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
 		if _, selected := wanted[id]; !selected {
 			continue
 		}
-		if !entry.Durable || entry.appendRevision > capture.revision {
+		if !w.entries[i].Durable || w.entries[i].appendRevision > capture.revision {
 			return nil, nil, nil, nil, ErrWALWindowChanged
 		}
-		found[id] = entry.Event
+		found[id] = w.entries[i].Event
 	}
 	var active, historical []logtypes.Event
 	var ids []CommitIdentity
@@ -1723,13 +1768,15 @@ func (w *WAL) MarkDeliveryMembers(events []logtypes.Event, capture *DeliveryCapt
 	defer w.mu.Unlock()
 	found := make(map[CommitIdentity]struct{}, len(expected))
 	matched := make(map[int]CommitIdentity)
-	for i, entry := range w.entries {
-		id, err := CommitIdentityOf(entry.Event)
+	for i := range w.entries {
+		// 本循环跑在**每批投递**路径上，且扫的是全表：用身份缓存后，只有本批新追加的
+		// 那些条目会付出一次 Marshal+SHA256（之前每批都把全表重算一遍）。
+		id, err := w.entries[i].eventIdentityLocked()
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := expected[id]; ok && entry.Durable {
-			if entry.appendRevision > capture.revision {
+		if _, ok := expected[id]; ok && w.entries[i].Durable {
+			if w.entries[i].appendRevision > capture.revision {
 				return nil, ErrWALWindowChanged
 			}
 			found[id] = struct{}{}
@@ -1758,11 +1805,12 @@ func (w *WAL) SnapshotDeliveryMembers(capture *DeliveryCapture, count int) ([]WA
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var out []WALEntry
-	for _, entry := range w.entries {
-		if entry.captureToken != capture.token {
+	for i := range w.entries {
+		if w.entries[i].captureToken != capture.token {
 			continue
 		}
-		id, err := CommitIdentityOf(entry.Event)
+		entry := w.entries[i]
+		id, err := w.entries[i].eventIdentityLocked()
 		if err != nil {
 			return nil, err
 		}
@@ -1812,18 +1860,18 @@ func (w *WAL) captureCommitted(events []logtypes.Event, cut *walCapture) ([]logt
 		wanted[event.EventID] = struct{}{}
 	}
 	found := make(map[CommitIdentity]logtypes.Event, len(events))
-	for _, entry := range w.entries {
-		if !entry.Durable {
+	for i := range w.entries {
+		if !w.entries[i].Durable {
 			continue
 		}
-		if _, ok := wanted[entry.Event.EventID]; !ok {
+		if _, ok := wanted[w.entries[i].Event.EventID]; !ok {
 			continue
 		}
-		id, err := CommitIdentityOf(entry.Event)
+		id, err := w.entries[i].eventIdentityLocked()
 		if err != nil {
 			return nil, nil, err
 		}
-		found[id] = entry.Event
+		found[id] = w.entries[i].Event
 	}
 	captured := make([]logtypes.Event, 0, len(events))
 	for _, id := range required {
@@ -1870,10 +1918,12 @@ func (w *WAL) snapshotPending(limit, cursor int, acknowledged map[CommitIdentity
 		if !entry.Durable {
 			continue
 		}
-		id, err := CommitIdentityOf(entry.Event)
+		// 算完写回**原切片**：`entry` 是值拷贝，只在拷贝上置位等于每次重算（缓存会失效）。
+		id, err := entry.eventIdentityLocked()
 		if err != nil {
 			return nil, cursor, nil, err
 		}
+		w.entries[index].identity, w.entries[index].identityOK = entry.identity, entry.identityOK
 		if _, done := acknowledged[id]; done {
 			live[id] = struct{}{}
 			continue
@@ -1902,23 +1952,23 @@ func (w *WAL) CommittedIdentities() (map[CommitIdentity]struct{}, error) {
 
 func (w *WAL) committedIdentities(copied func()) (map[CommitIdentity]struct{}, error) {
 	w.mu.Lock()
-	events := make([]logtypes.Event, 0, len(w.entries))
-	for _, entry := range w.entries {
-		if entry.Durable {
-			events = append(events, cloneWALEvent(entry.Event))
+	out := make(map[CommitIdentity]struct{}, len(w.entries))
+	for i := range w.entries {
+		if !w.entries[i].Durable {
+			continue
 		}
+		// 直接用条目的身份缓存：这是本函数过去的最大开销（全表 json.Marshal + SHA256），
+		// 而条目正文在两次 Append 之间不变 ⇒ 缓存命中率接近 100%。
+		identity, err := w.entries[i].eventIdentityLocked()
+		if err != nil {
+			w.mu.Unlock()
+			return nil, err
+		}
+		out[identity] = struct{}{}
 	}
 	w.mu.Unlock()
 	if copied != nil {
 		copied()
-	}
-	out := make(map[CommitIdentity]struct{}, len(events))
-	for _, event := range events {
-		identity, err := CommitIdentityOf(event)
-		if err != nil {
-			return nil, err
-		}
-		out[identity] = struct{}{}
 	}
 	return out, nil
 }
