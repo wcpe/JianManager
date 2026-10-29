@@ -53,6 +53,19 @@ func (m *Manager) dropUnclaimedHistory(ctx context.Context, source SourceConfig,
 		return 0
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
+	// ## O(1) 前置（每轮都被调用，不能无脑全段扫）
+	//
+	// 健康源的 delivery 已经追平段尾 ⇒ 不可能存在未认领区间，直接返回。
+	// 只有「有欠账」的源才走下面的全段遍历（与 #66-⑤ 的「先 O(1) 判有欠账」同型）。
+	//
+	// 判据取 `Delivery < Read`：这正是「有未认领数据挡住了水位」的形态。
+	// 水位已追平（含空源 read=0）⇒ 不可能有未认领区间，直接返回。
+	if pos, ok := p.Ledger().Positions(p.Key()); ok && pos.Delivery >= pos.Read && pos.Read > 0 {
+		return 0
+	}
+	if read, ok := p.Ledger().Positions(p.Key()); ok && read.Read == 0 {
+		return 0
+	}
 	events, err := m.canonicalRecoveryEvents(key, m.stateOf(key))
 	if err != nil || len(events) == 0 {
 		return 0

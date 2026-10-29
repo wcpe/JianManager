@@ -11322,6 +11322,24 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 			if src, srcOK := m.sourceConfigFor(p); srcOK {
 				m.noteReclaimStall(p, src, pos)
 			}
+			// **历史未认领段丢弃**（2026-10-30 用户裁定）：
+			//
+			// 必须挂在这个**每个源必过的轮转窗口**里，而不是后面的「积压类暂停」分支。
+			// 事故现场：初版把它放在 `entry.AcquirePaused` 之后，而 inst:318 **根本没暂停**
+			//（paused=false，只是 delivery 卡死）⇒ 那段代码永远跑不到 ⇒ 丢弃从不触发。
+			//
+			// 语义上与 #66-⑤/#66-⑥ 完全同型：它们也是「三条现存面都到不了的落后源」的
+			// 唯一驱动点。轮转窗口保证任意源在 ⌈E/batch⌉ 轮内被处理一次。
+			//
+			// 性能边界：函数内先做 O(1) 前置（无未认领区间就立即返回），
+			// 且走**既有有界执行器**（单步预算 + 在飞上限）⇒ 每轮有界。
+			if src, srcOK := m.sourceConfigFor(p); srcOK {
+				if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
+					m.dropUnclaimedHistory(m.lifecycleContext(), src, p)
+				}) {
+					m.skipBlocked.Add(1)
+				}
+			}
 			if pos.Reclaim < pos.Delivery {
 				if src, srcOK := m.sourceConfigFor(p); srcOK {
 					m.sweepRollingProbes.Add(1)
@@ -11432,19 +11450,6 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 				m.skipBlocked.Add(1)
 			}
 			m.nsResolve.Add(int64(time.Since(tResolve)))
-			// **历史未认领段丢弃**（2026-10-30 用户裁定）：
-			//
-			// 放在自动消解**之后**：先尽最大努力用已发布证据认领，认领不了的才丢。
-			// 这一段是先前的**死锁根因**（inst:318）：事件段里有数据但 verified_runs 与
-			// request_done 都不覆盖 ⇒ delivery/reclaim 永远卡在那一段 ⇒ WAL 打满继续丢。
-			// 丢弃后登记 UNCLAIMED_HISTORY_DROPPED（nonBlocking）⇒ 不再挡住任何推进。
-			tDrop := time.Now()
-			if !m.runSweepStepBounded(m.sweepStepBudgetOf(), func() {
-				m.dropUnclaimedHistory(m.lifecycleContext(), src, p)
-			}) {
-				m.skipBlocked.Add(1)
-			}
-			m.nsResolve.Add(int64(time.Since(tDrop)))
 		}
 		// 排空侧：先把已 durable 未确认的存量发出去（投递成功才会推进回收）✓
 		// **有界等待**（2026-10-05 现场 ✓）：`DeliverPending`→`deliver` 会拿 `m.mu`，而"长持 m.mu 的

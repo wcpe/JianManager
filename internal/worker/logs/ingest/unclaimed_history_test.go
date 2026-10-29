@@ -54,6 +54,9 @@ func unclaimedHistoryFixture(t *testing.T) (*Manager, SourceConfig, *pipeline.Pi
 		"2026-10-29T00:00:00Z", "2026-10-29T00:00:01Z", "INFO", "stdout", "未认领的历史行",
 	)
 	require.NoError(t, m.events.Append(key, []logtypes.Event{ev}))
+	// 模拟真实形态：正文已读入（read 到段尾），但账本从未认领它。
+	// 这正是 inst:318 的形态：read=449万、delivery=313900。
+	require.NoError(t, pipe.Ledger().AdvanceRead(pipe.Key(), 199))
 	return m, source, pipe
 }
 
