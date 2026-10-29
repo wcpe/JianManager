@@ -243,26 +243,18 @@ describe('日志六模块正式行为回归', () => {
     expect(exports).toBe(0)
   })
 
-  it.each(['unchanged', 'changed', 'revoked'])('经典当前页%s：真实同页全量、即时鉴权且变化不下载旧行', async (mode) => {
-    const rows = Array.from({ length: 101 }, (_, index) => ({ id: index + 1, source: 'control_plane', level: 'info', instanceId: 0, instanceUuid: '', nodeId: 0, message: `平台原始-${index}`, time: new Date(Date.now() - index).toISOString() }))
-    let calls = 0
-    server.use(
-      http.get(API('/logs/federation'), () => HttpResponse.json(envelope([]))),
-      http.get(API('/logs'), () => {
-        calls++
-        if (calls > 1 && mode === 'revoked') return HttpResponse.json({ error: 'PERMISSION_REVOKED' }, { status: 403 })
-        return HttpResponse.json({ items: calls > 1 && mode === 'changed' ? rows.slice(1, 101) : rows.slice(0, 100), total: 101, page: 1, pageSize: 100 })
-      }),
-    )
-    renderWithProviders(<LogsPage />)
-    await userEvent.setup().click(screen.getByRole('tab', { name: '平台日志' }))
-    await screen.findByText('平台原始-0')
-    await chooseExport('导出当前页')
-    await waitFor(() => expect(calls).toBe(2))
-    await waitFor(() => expect(screen.getByTestId('logs-export-trigger')).toBeEnabled())
-    if (mode === 'unchanged') expect(await blobRows(0)).toEqual(rows.slice(0, 100))
-    else expect(blobs).toHaveLength(0)
-  })
+  /**
+   * 已删除（2026-10-29）：「经典当前页导出」的三个用例（unchanged/changed/revoked）。
+   *
+   * 它们守的不变量是「平台视图导出前重新拉一次 `/logs` 当前页，若行变了或权限被撤就不下载」。
+   * 但这条路径已整体不存在：CP `logs` 表与其 `/logs` 接口已删，平台视图改读**进程日志文件
+   * 尾部**（`/diagnostics/log`，无分页、无总数），且平台视图的导出按钮被显式禁用
+   * （`exportDisabled = platformView || …`）——文件尾部本来就没有「当前页」与「全量导出」可言。
+   *
+   * 保留它们只能靠 mock 一个已 404 的接口维系，那已经不是在验证行为，而是在验证 mock。
+   * 该不变量在仍存活的数据源（联邦「导出当前页」）上由本文件前面的用例继续守着：
+   * 「101+ 事件跳页」「导出可取消且卸载也取消」等。
+   */
 
   it('导出可取消且卸载也取消：迟到附件不得触发下载', async () => {
     const raw = row(1)

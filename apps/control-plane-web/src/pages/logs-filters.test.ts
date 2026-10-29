@@ -27,9 +27,10 @@ describe('logLevelStatus', () => {
 })
 
 describe('LOG_VIEWS', () => {
-  it('defines the primary views plus the administrator-only full search and legacy view', () => {
-    // legacy 由 FR-482 引入：切换后存量日志走 Legacy 只读路径，需与 federated 视图分列。
-    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all', 'legacy'])
+  it('defines the primary views plus the administrator-only full search view', () => {
+    // legacy 已于 2026-10-29 随 CP logs 表下线并从取值域移除：留着它会让 ?view=legacy
+    // 深链落进一个不存在的数据源（不报错也不给数据，静默失效）。
+    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all'])
   })
 })
 

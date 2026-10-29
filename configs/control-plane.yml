@@ -24,13 +24,20 @@ log:
   level: info
   format: text
 
-# 日志中心：持久化、归档与保留（FR-049）。均有默认值，可整体省略。
-log_store:
-  enabled: true                 # 是否启用日志入库与归档
-  persist_platform: true        # 平台结构化日志是否一并落库
-  retention_days: 14            # 保留天数，<=0 不按时间清理
-  max_total_mb: 512             # 表内日志总量上限(MB)，<=0 不按总量清理
-  archive_interval_minutes: 30  # 后台归档/保留巡检周期（分钟）
+# 日志中心（2026-10-29 变更）：CP 本地 `logs` 表已**废弃**，以下 log_store 不再生效。
+#
+# 日志现在分两路：
+#   - 实例日志 → Worker 的受管 VictoriaLogs，CP 只做授权与联邦查询（/logs/federation）；
+#   - 平台（CP 自身）日志 → 自轮转文件 <data>/var/log/control-plane.log，
+#     面板读尾部（/api/v1/diagnostics/log），保留期为 MaxBackups 个轮转档。
+#
+# 旧配置保留为注释，供对照历史与后续归档参考：
+# log_store:
+#   enabled: true                 # 是否启用日志入库与归档
+#   persist_platform: true        # 平台结构化日志是否一并落库
+#   retention_days: 14            # 保留天数，<=0 不按时间清理
+#   max_total_mb: 512             # 表内日志总量上限(MB)，<=0 不按总量清理
+#   archive_interval_minutes: 30  # 后台归档/保留巡检周期（分钟）
 
 # 联邦日志导出物化预算（FR-480）。均有默认值，可整体省略。
 # 导出是「单次请求逐页读全量并在 CP 内存里物化 NDJSON」的操作，上限即为此设。

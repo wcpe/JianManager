@@ -31,7 +31,15 @@ func (m *Manager) indexPath() string {
 // 任何失败都返回带「拒绝启动采集」字样的错误——由 New() 向上传递，调用方（apps/worker）
 // 现网路径会重试后显式 ERROR，绝不静默降级为「不记账继续采集」。
 func (m *Manager) openIndex() error {
-	store, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
+	// 2026-10-30 用户裁定：机械盘不做任何落盘 ⇒ 索引库改用**纯内存** SQLite。
+	//
+	// 原话：「因为当前是机械盘不要做任何落盘的操作 只做最基础的」。
+	// 磁盘索引库在生产已 344MB + 4MB WAL，每次提交都要 fsync，而机械盘的 fsync 就是
+	// 寻道+旋转惩罚——它是采集延迟的主要来源。
+	//
+	// 用 :memory: 而不是重写成 map：SQL/表结构/索引全部原样保留，风险最小。
+	// 代价是重启后状态全丢——这正是用户接受的取舍。
+	store, err := stateindex.OpenInMemory(m.indexPath(), m.indexCommit)
 	if err != nil {
 		return fmt.Errorf("ingest: 打开采集索引失败（拒绝启动采集）: %w", err)
 	}

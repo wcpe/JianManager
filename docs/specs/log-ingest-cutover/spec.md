@@ -1,6 +1,19 @@
 # 功能规格：日志入库切换与 Legacy 只读（FR-481）
 
-> 状态：实现中（地基：`LogCutover`+`LegacyLogReader`+DualPath；**HTTP 管理面已注册** GET/PUT `/api/v1/logs/cutover`、GET `/api/v1/logs/legacy`；默认关闭）　·　关联 PRD：FR-481　·　依赖：FR-479/480
+> **状态：❌ 已废弃（2026-10-29）**　·　关联 PRD：FR-481　·　依赖：FR-479/480（已交付）
+>
+> **废弃原因**：本规格的前提已不存在。它要解决的是「把实例/Worker 日志从 CP `logs` 表**切换**到
+> Worker 的受管 VL」——而 CP `logs` 表已整张废弃并删除（连同 `LogService`、`LogCutover`、
+> `LegacyLogReader`、`DualPath` 门面与 `router/log_cutover.go`）。**没有“旧路径”就没有“切换”**，
+> 逐 Worker 水位、容量预检、Legacy 独立预算等机制随之失去作用对象。
+>
+> HTTP 管理面 `GET/PUT /api/v1/logs/cutover` 与 `GET /api/v1/logs/legacy` 已不再注册（一律 404），
+> 前端 `legacy` 视图也从 `LOG_VIEWS` 移除。当前日志体系形态见
+> [ARCHITECTURE §10.1 日志体系全景](../ARCHITECTURE.md)。
+>
+> 下文为**历史规格正文，保留不删**（ADR 与规格只追加不删的同一口径），但**不得**按它实现或验收。
+
+## 历史正文（已废弃）
 
 ## 1. 背景与目标
 

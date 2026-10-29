@@ -795,6 +795,36 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 			continue
 		}
 		launched++
+		// 分页前瞻探针（2026-10-29 修）：向 Worker 多要 1 行。
+		//
+		// # 为什么必须多要一行
+		//
+		// 分页靠“多拿一行当探针”判定还有没有下一页：MergeStreams 只在
+		// 「已凑够 capRows」时才置 pageMore。若只向 Worker 要 N 行、Worker 也只
+		// 返回 N 行，合并侧就永远凑不到第 N+1 行 ⇒ pageMore=false ⇒
+		// 既不下发 next_cursor、Exhausted 又因 coverage 未确认而为 false
+		// ⇒ **分页在满页处静默断头**：更早的数据永远拿不到，且无错误信号。
+		//
+		// 实测证据（dev 环境联邦库共 15 条，修复前）：
+		//
+		//	limit=3  → items=3  nextCursor=NO exhausted=false
+		//	limit=7  → items=7  nextCursor=NO exhausted=false
+		//	limit=10 → items=10 nextCursor=NO exhausted=false
+		//	limit=50 → items=15 nextCursor=NO exhausted=true（只有一页装下才“正常”）
+		//
+		// # 为什么只加在 Search
+		//
+		// 只有 Search 有游标翻页；Stats/Facets/Tail 不需要前瞻，多要一行是白花预算。
+		//
+		// # 为什么不动 q.Budget.Limit
+		//
+		// 它与游标里的 PageLimit 必须**严格相等**（否则复用时
+		// ErrViewReuseMismatch: cursor page limit mismatch），改它会直接弄坏跨页复用。
+		// 这里只影响下发给单个 Worker 的额度；capRows 与游标仍用原始 limit，
+		// 多出的那行由 MergeStreams 在 capRows 处截掉（仅用于判定 pageMore）。
+		if local.Limit > 0 {
+			local.Limit++
+		}
 		go func(workerID string, targets []TargetInfo, budget QueryBudget) {
 			select {
 			case sem <- struct{}{}:
@@ -807,6 +837,8 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 				results <- fanoutResult{err: ctx.Err()}
 				return
 			}
+			// 这里用形参 budget——调用点传入的是 local（= reserved[workerID]，
+			// 含 +1 行前瞻探针）。若传的是含循环变量的外变量会有竞态。
 			workerStreams, workerCoverage, coverageSummary, workerGaps, cut, open, workerQuality, binding, callErr := c.fanoutOne(ctx, view, q, budget, workerID, targets, tailMode)
 			results <- fanoutResult{streams: workerStreams, coverage: workerCoverage, coverageSummary: coverageSummary, gaps: workerGaps, cut: cut, open: open, quality: workerQuality, binding: binding, err: callErr}
 		}(workerID, append([]TargetInfo(nil), targets...), local)
@@ -819,7 +851,7 @@ func (c *Coordinator) fanoutSearch(ctx context.Context, view View, resolved *Res
 		bindings = append(bindings, result.binding)
 		streams = append(streams, result.streams...)
 		gaps = append(gaps, result.gaps...)
-		mergeWorkerCoverage(&workerCoverage, result.coverageSummary)
+		mergeWorkerCoverage(&workerCoverage, result.coverageSummary, tailMode != "")
 		for targetID, coverage := range result.coverage {
 			covByTarget[targetID] = coverage
 		}
@@ -913,12 +945,20 @@ func markTargetsPartial(dst map[string]TargetCoverage, targets []TargetInfo, rea
 }
 
 // mergeWorkerCoverage 保留顶层部分覆盖与原因；开放/失效枚举不能被另一完整响应覆盖。
-func mergeWorkerCoverage(dst *Coverage, src *Coverage) {
+//
+// `tolerantOpen`（2026-10-30 新增）**只用于 Tail（FOLLOW_LIVE）**：Worker 在 tail 每轮都
+// 重新起短租约，显式置 `OPEN` 表示“实时流仍在继续”，不是失败也不是待重试。
+//
+// 为何只给 tail 开：Search 的 `OPEN` 意味着枚举没跑完、边界不安全，必须降为不完整；
+// 若把它也放宽，一个带 `OPEN` 的页就会看起来“完整”，进而被拿去导出/统计。
+// 两者唯一的区别就是这个枚举值的含义，所以用一个布尔开关而不是拆两份实现。
+func mergeWorkerCoverage(dst *Coverage, src *Coverage, tolerantOpen bool) {
 	if src == nil {
 		return
 	}
 	dst.Complete = dst.Complete && src.Complete && len(src.PartialReasons) == 0 &&
-		src.EnumerationState != EnumStale && src.EnumerationState != EnumCancelled
+		src.EnumerationState != EnumStale && src.EnumerationState != EnumCancelled &&
+		!(tolerantOpen && src.EnumerationState == EnumOpen)
 	dst.Pending = dst.Pending || src.Pending
 	for _, r := range src.PartialReasons {
 		dst.PartialReasons = appendUniqueReason(dst.PartialReasons, r)
@@ -1081,11 +1121,16 @@ func (c *Coordinator) fanoutOne(ctx context.Context, view View, q Query, budget 
 		return
 	}
 	coverageSummary = resp.Coverage
-	if !resp.Exhausted && resp.NextCursor == "" {
-		// 没有 Worker 安全续页边界时，即便目标状态成功也不能用行尾猜全局游标。
+	// Search 语义：没有 Worker 安全续页边界时，即便目标状态成功也不能用行尾猜全局游标。
+	//
+	// 2026-10-30 修：这个判定**只对 Search 成立**。Tail（FOLLOW_LIVE）本来就不分页、
+	// 当然不会回 `Exhausted` 或 `NextCursor`，旧代码于是在 tail 上无条件进入本分支，
+	// 把 `PAGE_RETRY_REQUIRED`（“需要重试分页”）盖到一份根本没有分页的响应上。
+	// 前端未登记该码 ⇒ 走 unknown 兼底 ⇒ 用户在实时跟随状态下看到“无法解析覆盖状态”。
+	if tailMode == "" && !resp.Exhausted && resp.NextCursor == "" {
 		summary := Coverage{Complete: false, EnumerationState: EnumOpen, PartialReasons: []string{"PAGE_RETRY_REQUIRED"}}
 		if resp.Coverage != nil {
-			mergeWorkerCoverage(&summary, resp.Coverage)
+			mergeWorkerCoverage(&summary, resp.Coverage, false)
 		}
 		coverageSummary = &summary
 	}
@@ -1461,7 +1506,7 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 		resp, callErr := client.Fields(ctx, WorkerSearchRequest{TargetIDs: targetIDs, FromUTC: view.FromUTC,
 			ToUTC: view.ToUTC, Filter: view.Filter, Budget: local, ViewID: workerView, OrderVersion: view.OrderVersion})
 		if resp != nil {
-			mergeWorkerCoverage(&workerCoverage, resp.Coverage)
+			mergeWorkerCoverage(&workerCoverage, resp.Coverage, false)
 			truncated = truncated || resp.Truncated
 		}
 		if callErr != nil || resp == nil || resp.Unsupported || resp.Error != "" {
@@ -1496,9 +1541,9 @@ func (c *Coordinator) Fields(ctx context.Context, q Query) (*FieldsResponse, err
 	}
 	sort.Strings(fields)
 	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, EnumExhausted)
-	mergeWorkerCoverage(&cov, &workerCoverage)
+	mergeWorkerCoverage(&cov, &workerCoverage, false)
 	if truncated {
-		mergeWorkerCoverage(&cov, &Coverage{Complete: false, EnumerationState: EnumOpen, PartialReasons: []string{"TRUNCATED"}})
+		mergeWorkerCoverage(&cov, &Coverage{Complete: false, EnumerationState: EnumOpen, PartialReasons: []string{"TRUNCATED"}}, false)
 	}
 	if err := c.persistClosedVisibleSeq(&view, cov); err != nil {
 		return nil, err
@@ -1666,7 +1711,7 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 		}
 		// Worker 上报的统计质量按最差值并入（M-3）：它在 coverage 仍 complete 时也可能
 		// 为 partial/unavailable，丢弃会让 CP 把不完整统计当成 exact 并放行导出。
-		mergeWorkerCoverage(&workerCoverage, resp.Coverage)
+		mergeWorkerCoverage(&workerCoverage, resp.Coverage, false)
 		quality.StatsQuality = worstStatsQuality(quality.StatsQuality, resp.Quality.StatsQuality)
 		quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, resp.Quality.DuplicateQuality)
 		if resp.Truncated {
@@ -1703,9 +1748,9 @@ func (c *Coordinator) Stats(ctx context.Context, q StatsQuery) (*StatsResponse, 
 
 	points := MergeStatsPoints(merged)
 	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, EnumExhausted)
-	mergeWorkerCoverage(&cov, &workerCoverage)
+	mergeWorkerCoverage(&cov, &workerCoverage, false)
 	if anyTrunc {
-		mergeWorkerCoverage(&cov, &Coverage{Complete: false, EnumerationState: EnumOpen, PartialReasons: []string{"BUDGET_EXCEEDED"}})
+		mergeWorkerCoverage(&cov, &Coverage{Complete: false, EnumerationState: EnumOpen, PartialReasons: []string{"BUDGET_EXCEEDED"}}, false)
 	}
 	if !cov.Complete && quality.StatsQuality == StatsQExact {
 		quality.StatsQuality = StatsQPartial
@@ -1797,7 +1842,7 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 			OrderVersion: view.OrderVersion,
 		}, q.Dimensions, q.DimensionLimit)
 		if resp != nil {
-			mergeWorkerCoverage(&workerCoverage, resp.Coverage)
+			mergeWorkerCoverage(&workerCoverage, resp.Coverage, false)
 			workerTruncated = workerTruncated || resp.Truncated
 		}
 		if callErr != nil || resp == nil {
@@ -1859,7 +1904,7 @@ func (c *Coordinator) Facets(ctx context.Context, q FacetsQuery) (*FacetsRespons
 	dims := MergeFacets(perWorker, q.Dimensions, q.DimensionLimit)
 	truncated := workerTruncated || FacetsTruncated(dims)
 	cov := BuildCoverage(resolved.All, covBy, resolved.OnlineOnly, resolved.Excluded, EnumExhausted)
-	mergeWorkerCoverage(&cov, &workerCoverage)
+	mergeWorkerCoverage(&cov, &workerCoverage, false)
 	if truncated {
 		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, "facet_truncated")
 	}

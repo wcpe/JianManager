@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { AlertTriangle, Download, Info, MoreHorizontal, PackageOpen, Radio } from 'lucide-react'
-import { useLegacyLogs, useLogs, exportLogs, exportCurrentLogPage, type LogQueryParams } from '@/api/logs'
+import { AlertTriangle, Download, Info, PackageOpen, Radio } from 'lucide-react'
+import { type LogQueryParams } from '@/api/logs'
 import {
 	buildFederationResult,
   describeLogAggregate,
@@ -18,6 +18,7 @@ import {
 	type LogsFederationResult,
 } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
+import { usePlatformDiagnosticsLog } from '@/api/nodeDiagnostics'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
@@ -92,6 +93,38 @@ function normalizeSource(raw: string): string {
   if (raw.startsWith('control_plane:') || raw.startsWith('cp:')) return 'control_plane'
   // 已是取值域内的裸类别（含旧数据）原样返回；其余保持原值由 i18n 兜底显示。
   return raw
+}
+
+/**
+ * 从一行平台日志文本里推断级别。
+ *
+ * 为什么要在前端推断：平台日志现在是**纯文本文件**，不是结构化行。
+ * slog 两种格式都在行内带级别：
+ *   - text：`time=... level=WARN msg=...`
+ *   - json：`{"time":"...","level":"WARN","msg":"..."}`
+ * 两者都没命中时归 info（与后端 log_level.go 的推断口径一致）。
+ */
+function inferLineLevel(line: string): string {
+  const m = /level[=":]+\s*"?(DEBUG|INFO|WARN|WARNING|ERROR)"?/i.exec(line)
+  if (!m) return 'info'
+  const v = m[1].toUpperCase()
+  if (v === 'WARNING') return 'warn'
+  return v.toLowerCase()
+}
+
+/**
+ * 从一行平台日志文本里取时间（用于排序与展示）。
+ *
+ * 取不到就返回空串——不伪造当前时间：那会让排序看起来正常、实际是错的。
+ */
+function inferLineTime(line: string): string {
+  // json 格式："time":"2026-10-29T15:04:32+08:00"
+  const json = /"time"\s*:\s*"([^"]+)"/.exec(line)
+  if (json) return json[1]
+  // text 格式：time=2026-10-29T15:04:32.000+08:00
+  const text = /\btime=(\S+)/.exec(line)
+  if (text) return text[1]
+  return ''
 }
 
 /** 联邦事件 → LogEntry 行（F-003：列表主数据源）。 */
@@ -178,7 +211,17 @@ export default function LogsPage() {
   const navigate = useNavigate()
   const isPlatformAdmin = useAuthStore((state) => state.role === ROLE_PLATFORM_ADMIN)
 
-  const [view, setView] = useState<(typeof LOG_VIEWS)[number]>('node_instance')
+	// 视图从 URL `?view=` 初始化（深链/书签/分享必须落到正确视图）。
+	//
+	// 2026-10-29 修：此前硬编码 `'node_instance'`，导致 `?view=platform` 这类深链
+	// 一律静默回到「节点/实例日志」——页面不报错、只是视图不对，最难察觉的一类。
+	// 非法值回退默认，不把 URL 里的垃圾值当成视图名。
+	const [view, setView] = useState<(typeof LOG_VIEWS)[number]>(() => {
+		const raw = searchParams.get('view')
+		return (LOG_VIEWS as readonly string[]).includes(raw ?? '')
+			? (raw as (typeof LOG_VIEWS)[number])
+			: 'node_instance'
+	})
   const [source, setSource] = useState('')
   const [level, setLevel] = useState('')
   const [nodeId, setNodeId] = useState<number | null>(null)
@@ -235,17 +278,15 @@ export default function LogsPage() {
     ...(nodeId !== null ? { nodeId } : {}),
     ...(instanceId !== null ? { instanceId } : {}),
     keyword: debouncedKeyword,
-    ...(view !== 'platform' && view !== 'legacy' && onlineOnly ? { onlineOnly: true } : {}),
+    ...(view !== 'platform' && onlineOnly ? { onlineOnly: true } : {}),
     ...timeParams,
     ...(!follow && page > 1 ? { from: federationCursors[page]?.from, to: federationCursors[page]?.to } : {}),
   })
   const params: LogQueryParams = { ...scope, page: follow ? 1 : page, pageSize: PAGE_SIZE }
   const scopeKey = logScopeKey(scope)
 
-  const legacyMode = view === 'legacy'
-  // 平台视图的权威来源是 CP 经典日志接口；联邦数据只覆盖节点/实例日志。
-  const federationEnabled = !legacyMode && view !== 'platform'
-	const legacyQuery = useLegacyLogs(params, legacyMode)
+  // 平台视图读进程日志文件尾部；联邦数据覆盖节点/实例日志。
+  const federationEnabled = view !== 'platform'
   // FR-482：可选联邦覆盖探测。与 useLogs 同筛选参数；API 404 → degraded legacy。
 	const federationParams: Record<string, unknown> = {
 		...params,
@@ -323,15 +364,13 @@ export default function LogsPage() {
     setLastGoodFederation({ filterKey, result: latestFederation })
   }
   const federationRateLimited = rateLimited
-  const federation = legacyMode && legacyQuery.data
-    ? buildFederationResult({ sourceTag: 'legacy', items: legacyQuery.data.items, coverage: legacyQuery.data.coverage })
-    : federationEnabled
-      ? (federationRateLimited
-        ? buildFederationResult(rateLimitedEnvelope(
-          federationQuery.error instanceof Error ? federationQuery.error.message : undefined,
-        ))
-        : federationQuery.data)
-      : undefined
+  const federation = federationEnabled
+    ? (federationRateLimited
+      ? buildFederationResult(rateLimitedEnvelope(
+        federationQuery.error instanceof Error ? federationQuery.error.message : undefined,
+      ))
+      : federationQuery.data)
+    : undefined
 
   // F-003：联邦视图的列表**只**以 federation.items 为主数据源；降级不再回退 useLogs 的
   // Legacy 表（用户裁定：没有就是没有）。禁止「联邦横幅 + 平台/历史内容」错配。
@@ -420,8 +459,42 @@ export default function LogsPage() {
    * 「联邦不可用 ⇒ 空且非成功」的语义上，无需各处重复判断。
    */
   const classicAuthoritative = !federationEnabled
-  const classicQuery = useLogs(params, { enabled: !legacyMode && classicAuthoritative })
-  const { data, isLoading: classicLoading, isError: classicError, refetch: refetchLogs } = classicQuery
+  // 平台视图（view=platform）的权威来源已改为**进程日志文件尾部诊断**（2026-10-29）。
+  //
+  // 为什么改：CP `logs` 表已废弃——它把日志正文与业务数据混在同一个库，
+  // 关键词检索是 LIKE 全表扫，保留期靠“归档后 DELETE”维持。
+  // 新形态是诚实的降级：平台日志只提供“最近 N 行 + 时间/级别/关键字可见性”，
+  // **不提供**分页、总条数、任意时间窗——那些能力在文件上实现不了，也不该假装能。
+  // 要看完整历史请直接在该机器上 grep（面板会给出可复制的命令）。
+  const platformLogQuery = usePlatformDiagnosticsLog(view === 'platform', 500)
+  const platformLogLines = useMemo<LogEntry[]>(() => {
+    const content = platformLogQuery.data?.content
+    if (!content) return []
+    return content
+      .split('\n')
+      .filter((line) => line.length > 0)
+      // 尾部原文是「旧→新」，页面按时间倒序渲染，故反转。
+      .reverse()
+      .map((line, index) => ({
+        id: -(index + 1),
+        source: 'control_plane',
+        // 级别由行内 level= 推断（slog text/json 两种格式都覆盖），失败则归 info。
+        level: inferLineLevel(line),
+        instanceId: 0,
+        instanceUuid: '',
+        nodeId: 0,
+        message: line,
+        time: inferLineTime(line),
+      }) satisfies LogEntry)
+  }, [platformLogQuery.data])
+  // CP 经典日志接口（/logs、/logs/export）已随 `logs` 表下线，不再发起查询。
+  // 保留同名占位量是为了让下游渲染分支（loading/error/data）保持单一形态，
+  // 而不必在三处删条件；它们的值恒为“未加载/无错/空”。
+  type ClassicLogPage = { items?: LogEntry[]; total?: number }
+  const data = undefined as ClassicLogPage | undefined
+  const classicLoading = false
+  const classicError = false
+  const refetchLogs = () => undefined
   // 同条件的聚合可复用搜索视图；实际时间窗与在线目标必须逐字段同源。
   const aggregateParams: Record<string, unknown> = {
     ...scope,
@@ -432,7 +505,7 @@ export default function LogsPage() {
     ...normalizeLogScope({ ...scope, ...timeParamsFor(range, new Date(rangeAnchor), true), to: undefined }),
 		limit: 1,
   }, { enabled: federationEnabled && follow && !federationQuery.isFetching })
-  const mainFetching = federationEnabled ? federationQuery.isFetching : classicQuery.isFetching
+  const mainFetching = federationEnabled ? federationQuery.isFetching : classicLoading
   const refetchMain = federationEnabled ? federationQuery.refetch : refetchLogs
   useEffect(() => {
     if (!follow || mainFetching || followEvidenceQuery.isFetching || exporting) return
@@ -505,8 +578,20 @@ export default function LogsPage() {
     )
     : null
 
-  const items = legacyMode ? (legacyQuery.data?.items ?? []) : federationActive ? (federationItems ?? []) : (data?.items ?? [])
-  const total = legacyMode ? (legacyQuery.data?.total ?? 0) : federationActive ? items.length : (data?.total ?? 0)
+  // 两源：联邦（节点与实例）/ 平台进程日志尾部。
+  // 平台视图不再有服务端分页与总数：total 就是拿到的行数（尾部条数），
+  // 这不是“偷懒”，而是文件末尾的真相——不伪造一个算不出来的总数。
+  const platformView = view === 'platform'
+  const items = platformView
+    ? platformLogLines
+    : federationActive
+      ? (federationItems ?? [])
+      : (data?.items ?? [])
+  const total = platformView
+    ? platformLogLines.length
+    : federationActive
+      ? items.length
+      : (data?.total ?? 0)
   // 有游标时必须原 view 续页（预算截断空页也可续）；明确结束才移动完整窗口。
   const federationCanContinue = Boolean(federation?.response.nextCursor && federation?.response.viewId)
   const federationCanShift = !federation?.response.nextCursor && federation?.response.exhausted === true
@@ -539,19 +624,12 @@ export default function LogsPage() {
   )
 
   /**
-   * 切换视图。进入 Legacy 时只停「跟随」，**保留** nodeId / instanceId 筛选。
+   * 切换视图：只重置分页状态，**保留** nodeId / instanceId 等筛选。
    *
-   * 曾一度在这里清掉两者（2026-10-19 评审 M-4），依据是「平台与历史日志不带这两个维度」。
-   * 该前提是错的，已回退：Legacy 集合是 `legacyLogSources = [LogSourceInstance, LogSourceWorker]`
-   * （见 internal/controlplane/service/log_cutover.go），**只有实例与 Worker 日志，平台自身日志
-   * 根本不在其中**；而这两类行的 `node_id` 非零（model.Log.NodeID 注释：「实例/Worker 日志
-   * 非零」），且 `applyFilter` 确实按它下推 SQL（internal/controlplane/service/log.go:395）。
-   * 也就是说 nodeId 在 Legacy 上是有意义的过滤条件，清掉它只会把用户已经选定的范围放大成
-   * 「全部实例 + 全部 Worker」，属于替用户改查询。当时观察到 `/logs/legacy?...&nodeId=1`
-   * 返回 0 条，真实原因是那台节点上确实没有 legacy 存量行，不是维度不存在。
+   * 保留筛选而非清空：用户选定的范围不该在切视图时被替他放大（曾一度在这里清掉
+   * nodeId/instanceId，依据是「平台日志不带这两个维度」——该前提是错的，已回退）。
    *
-   * 顺带记一笔真正的错配：横幅文案原说 Legacy 可「查看平台与历史日志」，但平台日志不在
-   * Legacy 集合内——该措辞已同步改成「切换前的历史日志」，避免把用户指向一个查不到的东西。
+   * 已无 `legacy` 分支：该视图随 CP `logs` 表删除而下线（2026-10-29）。
    */
   const switchView = useCallback(
     (candidate: (typeof LOG_VIEWS)[number]) => {
@@ -559,22 +637,23 @@ export default function LogsPage() {
       setView(candidate)
       setPage(1)
       setFederationCursors({})
-      // 只停跟随：跟随态按 3 秒滚动时间桶，切到 Legacy 后继续滚会让时间窗不停漂移。
-      if (candidate === 'legacy') setFollow(false)
     },
     [],
   )
 
-  // 导出门禁：联邦可用且覆盖/校验未过 → 禁用。
-  // `classicExportAllowed` 与查询同源，同样**只在平台视图**成立：联邦视图降级后列表已空，
-  // 此时放行经典导出会导出与当前视图无关的平台日志——与「静默换源」是同一处误导。
-  const classicExportAllowed = !federationEnabled
+  // 导出门禁（2026-10-29 变更）：
+  //
+  // CP `/logs/export` 已随 `logs` 表一并下线，**平台视图没有导出能力**。
+  // 要导出就把 grep 结果自己重定向（面板会给出可复制的命令）。
+  //
+  // 联邦视图仍按覆盖/校验门禁；平台文件尾部不提供导出（见上）。
+  const classicExportAllowed = false
   const exportBlockedByFederation =
     !!federation && !classicExportAllowed && !federation.exportAffordance.showDownload
-  const exportDisabled = legacyMode || exporting || total === 0 || exportBlockedByFederation
+  const exportDisabled = platformView || exporting || total === 0 || exportBlockedByFederation
     || keyword.trim() !== debouncedKeyword
     || (federationEnabled ? federationQuery.isFetching || federationQuery.isPlaceholderData || federationQuery.isError
-      : classicQuery.isFetching || classicQuery.isPlaceholderData || classicQuery.isError)
+      : true)
 	// federated 探测（FR-482）未落地前，items 可能暂时为空——此时不得判为「空结果」，
 	// 否则会先闪 empty-state（且 404 降级期间显示非成功空态），把尚未就绪误报成失败。
 	// 故把「联邦探测未完成」并入 loading：只有探测结束、数据源确定后才允许判空。
@@ -582,18 +661,12 @@ export default function LogsPage() {
 	// 联邦视图下经典查询根本不参与页面态（`classicAuthoritative=false` ⇒ 不发起、无数据）：
 	// 页面态只由联邦探测与联邦结果决定，不再存在「降级后由经典表说话」这条路径。
 	const federationProbePending = federationEnabled && federationQuery.isLoading
-	const isLoading = legacyMode
-		? legacyQuery.isLoading
-		: federationProbePending || (classicAuthoritative && classicLoading)
-	const isError = legacyMode
-		? legacyQuery.isError
-		: classicAuthoritative && classicError
-	const hasData = legacyMode
-		? !!legacyQuery.data
-		: classicAuthoritative
-			? !!data
-			// 联邦视图下「有数据」= 有联邦结果（含限流时保留的上一份行）。
-			: !!federation
+	const isLoading = federationProbePending || (classicAuthoritative && classicLoading)
+	const isError = classicAuthoritative && classicError
+	const hasData = classicAuthoritative
+		? !!data
+		// 联邦视图下「有数据」= 有联邦结果（含限流时保留的上一份行）。
+		: !!federation
 	// 空结果语义：失败/partial 不得呈「暂无日志」空成功（FR-482）。
 	// 查询服务未启用（降级）亦然：经典路径可能确实没有行，但引擎侧数据从未被查询，
 	// 此时宣称「暂无日志」是假成功，必须保留非成功空态。
@@ -629,10 +702,6 @@ export default function LogsPage() {
             ? { range: 'page', limit: PAGE_SIZE, ...(federationParams.cursor ? { cursor: federationParams.cursor } : {}) }
             : { range: 'all' }),
         }, { signal: controller.signal, ...(exportScope === 'currentPage' ? { pageItems: frozenPage } : {}) })
-      } else if (exportScope === 'currentPage') {
-        await exportCurrentLogPage({ ...frozenScope, page, pageSize: PAGE_SIZE }, structuredClone(data?.items ?? []), controller.signal)
-      } else {
-        await exportLogs(frozenScope, controller.signal)
       }
       setExportRangeOpen(false)
       toast.success(t('logs.exportStarted'))
@@ -787,10 +856,8 @@ export default function LogsPage() {
         aria-label={t('logs.viewLabel')}
       >
         {LOG_VIEWS.filter(
-          // legacy 是「切换前存量日志」的只读入口，不是平级主视图：收纳到右侧「更多」，
-          // 避免与平台/节点视图并列造成误解，也减少工具栏元素数量。
-          (candidate) =>
-            candidate !== 'legacy' && (isPlatformAdmin || candidate === 'node_instance'),
+          // 非平台管理员只能看 node_instance（联邦查询按实例范围收敛）。
+          (candidate) => isPlatformAdmin || candidate === 'node_instance',
         ).map(
           (candidate) => (
             <Button
@@ -807,33 +874,6 @@ export default function LogsPage() {
             </Button>
           ),
         )}
-        {/* 右侧收纳：非常用入口（Legacy 只读）进「更多」，保持主视图区稳定。 */}
-        <div className="ml-auto flex items-center">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                data-testid="logs-more-trigger"
-                aria-label={t('logs.more')}
-              >
-                <MoreHorizontal className="size-4" />
-                {t('logs.more')}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                data-testid="logs-view-legacy"
-                disabled={!isPlatformAdmin}
-                onSelect={() => {
-                  switchView('legacy')
-                }}
-              >
-                {t('logs.view_legacy')}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
       </div>
 
       {/* 强筛选工具栏 */}
@@ -971,7 +1011,7 @@ export default function LogsPage() {
 			setPage(1)
 			setFederationCursors({})
 		  }}
-		  disabled={legacyMode}
+		  disabled={platformView}
           className={cn(
             'ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-200 ease-ios',
             follow
@@ -1028,8 +1068,7 @@ export default function LogsPage() {
           onClearConflicts={canClearConflicts ? () => setClearConflictsOpen(true) : undefined}
           qualityGuidanceKey={qualityGuidanceKey}
           onRetry={() => {
-			if (legacyMode) void legacyQuery.refetch()
-			else { void federationQuery.refetch(); void refetchLogs() }
+			void federationQuery.refetch(); void refetchLogs()
           }}
         />
       )}
@@ -1042,8 +1081,7 @@ export default function LogsPage() {
           open={clearConflictsOpen}
           onOpenChange={setClearConflictsOpen}
           onCleared={() => {
-            if (legacyMode) void legacyQuery.refetch()
-            else { void federationQuery.refetch(); void refetchLogs() }
+            void federationQuery.refetch(); void refetchLogs()
           }}
         />
       )}
@@ -1110,6 +1148,7 @@ export default function LogsPage() {
           />
           <LogFooter
             follow={follow}
+            platformTail={platformView}
             total={total}
             page={follow ? 1 : page}
             totalPages={totalPages}
@@ -1497,15 +1536,24 @@ function LogFooter({
   canNext,
   onPrev,
   onNext,
+  platformTail,
 }: {
   follow: boolean
   total: number
   page: number
   totalPages: number
-  /** 联邦 tail-first 模式的显式可翻性（服务端 next_cursor 驱动）；省略时回退页码比较（legacy）。 */
+  /** 联邦 tail-first 模式的显式可翻性（服务端 next_cursor 驱动）；省略时回退页码比较。 */
   canNext?: boolean
   onPrev: () => void
   onNext: () => void
+  /**
+   * 平台视图：数据源是**日志文件尾部**（最近 N 行），没有服务端分页。
+   *
+   * 此时**不得**渲染上一页/下一页与“第 X / Y 页”——那些能力在文件上不存在。
+   * 显示一个永远禁用的分页条并不是“降级”，而是让用户以为“再翻一页可能有更多”，
+   * 与“诚实告知只有尾部”相矛盾。改为显式提示去看更早的记录该怎么做。
+   */
+  platformTail?: boolean
 }) {
   const { t } = useTranslation()
   if (follow) {
@@ -1514,6 +1562,13 @@ function LogFooter({
         <span className="size-1.5 animate-pulse rounded-full bg-status-success" />
         {t('logs.followingHint')}
         <span className="ml-auto text-muted-foreground">{t('logs.totalCount', { count: total })}</span>
+      </div>
+    )
+  }
+  if (platformTail) {
+    return (
+      <div className="flex shrink-0 items-center gap-2 border-t px-3 py-2 text-[11px] text-muted-foreground">
+        <span>{t('logs.platformTailHint', { count: total })}</span>
       </div>
     )
   }

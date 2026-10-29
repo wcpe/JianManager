@@ -1309,7 +1309,7 @@
     "loadFailed": "Failed to load log collection settings",
     "noChanges": "No changes to save",
     "heartbeatHint": "Applied via heartbeat within ~30s",
-      "unsavedHint": "{{count}} unsaved change(s)",
+    "unsavedHint": "{{count}} unsaved change(s)",
     "scanIntervalPlaceholder": "Empty = unset (falls back to node baseline), e.g. 1h",
     "pathOverridesPlaceholder": "{\"inst:1\":\"proxy.log.0\"}"
   },
@@ -1463,18 +1463,16 @@
     }
   },
   "diagnostics": {
-    "reachable": "Reachable",
-    "unreachable": "Unreachable",
-    "testFailed": "Test failed",
-    "testProxy": "Test outbound",
-    "proxyTestHint": "Enter any URL to test whether CP can reach the internet via the current outbound proxy (default https://www.google.com).",
-    "testJdkSource": "Test JDK source",
-    "jdkSourceTestHint": "Test whether the JDK download source (foojay) is reachable.",
-    "testNode": "Test node",
-    "nodeAlive": "Online",
-    "nodeOffline": "Offline",
-    "proxyTrafficHint": "Traffic via this outbound proxy: JDK downloads, Worker binary/self-update fetches, probe dependency downloads, client-distribution outbound calls and update-source checks — outbound downloads/requests from CP and nodes.",
-    "testUrlLabel": "Test target URL"
+    "linesLabel": "Lines",
+    "refresh": "Refresh",
+    "loadFailed": "Failed to read log (node offline or file logging disabled)",
+    "empty": "No log lines to display",
+    "truncated": "Truncated: file is {{size}}, showing only the tail",
+    "moreHint": "For older entries, run on that machine:",
+    "openNodeLog": "View diagnostics log",
+    "offlineHint": "Node offline, cannot pull log",
+    "nodeTitle": "Node {{name}} diagnostics log",
+    "platformTitle": "Platform diagnostics log"
   },
   "instanceBatch": {
     "selected": "{{count}} selected",
@@ -3433,7 +3431,6 @@
     "view_platform": "Platform Logs",
     "view_node_instance": "Node / Instance Logs",
     "view_all": "All Logs",
-    "view_legacy": "Legacy Read-only",
     "time": "Time",
     "level": "Level",
     "source": "Source",
@@ -3492,7 +3489,7 @@
     "exportScope_currentPage": "Export current page",
     "exportScope_allMatched": "Export all matches",
     "exportScope_range": "Export selected range",
-    "more": "More"
+    "platformTailHint": "Showing the last {{count}} lines of the log file (the file is the only source; no server-side paging). For older entries, grep on that machine — see the diagnostics log for the command."
   },
   "logsFederation": {
     "positionGaps": {
@@ -3539,6 +3536,7 @@
       "truncated": "Results truncated",
       "offline": "Node offline",
       "archiveMissing": "Archive missing",
+      "archivePurged": "Purged per retention policy",
       "gap": "Data gap",
       "viewStale": "View stale",
       "duplicateUnresolved": "Duplicates unresolved",
@@ -3606,14 +3604,14 @@
       "legacy": "Legacy",
       "federated": "Federated"
     },
-    "degraded": "Log query service is not enabled; this view has no data. For pre-switch historical logs, use More → Legacy (read-only).",
-    "degradedUnavailable": "Live log query service is unavailable; this view has no data. For pre-switch historical logs, use More → Legacy (read-only).",
-    "federatedNotReady": "Log query service is not enabled; this view has no data. For pre-switch historical logs, use More → Legacy (read-only).",
+    "degraded": "Log query service is not enabled; this view has no data.",
+    "degradedUnavailable": "Live log query service is unavailable; this view has no data.",
+    "federatedNotReady": "Log query service is not enabled; this view has no data.",
     "emptyNotSuccess": "Coverage incomplete or query failed — this is not an empty result",
-    "degradedHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute historical logs. For pre-switch historical logs, use More → Legacy (read-only). To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
-    "federatedNotReadyHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute historical logs. For pre-switch historical logs, use More → Legacy (read-only). To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
+    "degradedHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute historical logs. To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
+    "federatedNotReadyHint": "This view shows per-server live logs only; when the service is not enabled it will not substitute historical logs. To enable live querying, go to Nodes → node → Log runtime panel and enable the log platform.",
     "degradedTitleShort": "Log query service off · no data in this view",
-    "degradedUnavailableHint": "This view shows per-server live logs only; when the service is unreachable it will not substitute historical logs. For pre-switch historical logs, use More → Legacy (read-only). The live service: retry later or contact an administrator.",
+    "degradedUnavailableHint": "This view shows per-server live logs only; when the service is unreachable it will not substitute historical logs. The live service: retry later or contact an administrator.",
     "degradedUnavailableTitleShort": "Live log query service unavailable · no data in this view"
   },
   "users": {
@@ -3917,7 +3915,7 @@
     "invalidLogAcqScanInterval": "Must be a positive duration (empty = unset, falls back to the node baseline; disable the master switch to stop scanning; 0 is invalid)",
     "invalidLogAcqScanIntervalTooLong": "Scan interval is too long (limit ≈ 24.85 days; the protocol carries int32 milliseconds, so longer values are truncated to a wrong interval) — decrease it",
     "invalidLogAcqScanIntervalTooShort": "Scan interval is too short (minimum 1ms; the protocol carries milliseconds, so shorter values truncate to 0 = unset) — increase it",
-  "invalidNonNegativeInt": "Must be a non-negative integer",
+    "invalidNonNegativeInt": "Must be a non-negative integer",
     "invalidProxyUrl": "Invalid proxy URL (http/https/socks5 supported)",
     "invalidPlatformPublicBaseUrl": "The platform public base URL must be an HTTP or HTTPS URL without a query or fragment",
     "invalidInviteSmtpPort": "SMTP port must be between 1 and 65535",

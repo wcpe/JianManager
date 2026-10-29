@@ -200,7 +200,7 @@ func BuildCoverage(all []TargetInfo, byID map[string]TargetCoverage, onlineOnly 
 // 名字与返回值的落差（评审 m-2，已知并有意保留）：函数只回答「要不要带原因」，
 // 不回答「该目标处于什么状态」——状态由调用方 absentTargetCoverage 决定。
 // 之所以不合并成一个函数：`BuildCoverage` 的缺目标分支只需要原因码、不需要改 state
-//（它自己按 readiness 判），两处需求不同。返回 nil 表示「Worker 给了响应、只是没这个目标」，
+// （它自己按 readiness 判），两处需求不同。返回 nil 表示「Worker 给了响应、只是没这个目标」，
 // 此时目标按无数据处理，不带原因。
 //
 // 语义修正（2026-09-30）：Worker 只为「自己有 Catalog 分区的目标」返回 coverage，故

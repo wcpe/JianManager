@@ -3064,10 +3064,18 @@
 
 ## 日志中心（FR-049 / FR-403）
 
-> 实例运行日志（stdout/stderr）、Worker 日志与平台结构化日志统一持久化、检索与导出。FR-403 在同一路径按视图分流，存储模型不变；过滤与分页在 DB 完成，不全量序列化。
+> 实例运行日志（stdout/stderr）与 Worker 日志经受管 VictoriaLogs 联邦检索（`/logs/federation`，见下文 Worker 日志平台节）；
+> 平台（CP 自身）日志落自轮转文件，面板只读尾部（`GET /api/v1/diagnostics/log`）。
+> **CP `logs` 表已废弃（2026-10-29）**：`GET /api/v1/logs`、`/logs/export`、`/logs/legacy`、`/logs/cutover` 全部下线（一律 404）。
 
-### GET /api/v1/logs
-- **描述**: 分页查询日志；默认进入节点/实例视图。页码模式供日志中心任意跳页；游标模式供实例控制台稳定地向更早日志回溯。
+### ~~GET /api/v1/logs~~（已下线 2026-10-29）
+
+> **端点已随 CP `logs` 表删除而移除，现返回 404。**
+> 实例日志请用 `GET /api/v1/logs/federation`（游标分页，`range=all` 跨全时段）；
+> 平台日志请用 `GET /api/v1/diagnostics/log`（文件尾部，无分页、无总数）。
+> 下方历史文档仅存作演进参考，**不要按它接入**。
+
+- **描述（历史）**: 分页查询日志；默认进入节点/实例视图。页码模式供日志中心任意跳页；游标模式供实例控制台稳定地向更早日志回溯。
 - **关联 FR**: FR-049, FR-050, FR-403, FR-419
 - **权限**: 所有认证用户可查节点/实例视图。平台管理员可另查平台或全部视图；组成员/组管理员仅见有权实例日志，平台和全部视图均返回 `403 FORBIDDEN`，节点 Worker 日志不对其开放。
 - **Query**: `?view=node_instance&level=error&instanceId=12&nodeId=3&keyword=NPE&from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z&page=1&pageSize=50`
@@ -3092,12 +3100,53 @@
 }
 ```
 
-### GET /api/v1/logs/export
-- **描述**: 按当前筛选导出日志为 NDJSON 附件（每行一条 JSON，按时间正序）
+### ~~GET /api/v1/logs/export~~（已下线 2026-10-29）
+
+> **同上，端点已随 CP `logs` 表删除，现返回 404。**
+> 联邦视图的导出走 `POST /api/v1/logs/federation/export`（NDJSON，带覆盖/质量门禁）；
+> 平台文件尾部不提供导出——要留存就在该机器上 `grep` 重定向。
+
+- **描述（历史）**: 按当前筛选导出日志为 NDJSON 附件（每行一条 JSON，按时间正序）
 - **关联 FR**: FR-049, FR-050, FR-403
 - **权限**: 同 `GET /logs`（同样的视图限制与资源可见性收敛）
 - **Query**: 同 `GET /logs` 的筛选参数；额外 `limit`（最大导出行数，默认/上限 50000）。分页参数忽略
 - **响应**: `Content-Type: application/x-ndjson`，`Content-Disposition: attachment`
+
+---
+
+## 进程日志诊断（2026-10-29，非日志检索）
+
+> **不是日志中心。** 这两个端点只回答「某个进程最近发生了什么」：不做关键字检索、时间窗、分页、多目标聚合。
+> 需要按条件检索请用日志中心的联邦查询；这里只用于排障时看几百行。
+> 存在理由：CP / Worker 的进程日志此前只写 stdout/stderr（systemd journald 或外部重定向），CP 读不到 Worker 的 journald，节点出问题时只能 SSH。
+
+### GET /api/v1/diagnostics/log
+- **描述**: 读 CP **自身**进程日志文件的尾部（`<data>/var/log/control-plane.log`）
+- **权限**: 平台管理员（路由 `system.update` + handler 内再判）
+- **Query**: `lines`（目标行数，默认 200；页面上可选 100/200/500）
+- **响应**:
+```json
+{
+  "content": "{\"time\":\"…\",\"level\":\"INFO\",\"msg\":\"…\"}\n…",
+  "truncated": true,
+  "fileBytes": 472453,
+  "path": "/…/data/var/log/control-plane.log",
+  "note": ""
+}
+```
+  - `content`：尾部原文（旧→新）。读取只读有界区间，**与文件大小无关**（不因文件大而变慢或 OOM）。
+  - `truncated`：是否因行数/字节上限被裁——UI 必须显式标出，否则会让人以为看到全部。
+  - `fileBytes`：文件总大小，让运维知道「还有多少没看到」。
+  - `path`：实际读取的文件路径，供 UI 展示可复制的 `tail -n N <path>` 命令。
+  - `note`：读取失败/文件尚未创建时的说明；非空时 `content` 通常为空。
+- **与日志中心的关系**: 严格分开。平台日志**不进** VictoriaLogs，不参与联邦查询、不参与检索/聚合/导出——文件是唯一来源。
+
+### GET /api/v1/nodes/:id/diagnostics/log
+- **描述**: 读**节点 Worker** 进程日志文件的尾部，经反向隧道调 Worker 的 `PullSelfLog` RPC 拉取
+- **权限**: `node.manage`（路由）+ 目标节点存在性校验
+- **Query**: 同 CP 版（`lines`，默认 200）
+- **响应**: 同 CP 版（`content` / `truncated` / `fileBytes` / `path` / `note`）；`path` 是**该节点本机**的路径，命令需在该节点上执行
+- **失败语义**: 节点离线 / 隧道未建立 / Worker 过旧无此 RPC ⇒ 明确错误，**不得返回空 content 冒充「没有日志」**
 
 ---
 
@@ -3369,11 +3418,15 @@
 - **审计**：成功受理由 handler 写 `node.log_archive.rehydrate`，目标为路由节点，detail 包含归一后的 `target`、`archiveObjectIds`、`fromUtc/toUtc`、`operator` 和任务 `state`。拒绝或 Worker/传输失败不写成功受理行。
 - **状态**: 已注册；**当前无调用方**；仅有目标授权回归 `log_archive_authz_test.go`。
 
-### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）
+### ~~日志入库切换与 Legacy 端点~~（FR-481，已下线 2026-10-29）
 
-> 路由：`internal/controlplane/router/log_cutover.go`，在 `router.go` 经 `permRead("node.manage")` 挂载；handler 再判 **平台管理员**。PUT 写审计 `log.cutover.update`。**默认 `enabled=false`**。
+> **本节描述的三个端点（`/logs/cutover` GET/PUT、`/logs/legacy` GET）已随 CP `logs` 表删除而下线：**
+> `router/log_cutover.go` 与 `service/log_cutover.go` 已删除，路径不再注册（404）。
+> 切换的前提「CP 与 Worker 双写同一张表」已不存在——现在实例日志只进 Worker 的 VL，
+> 平台日志只进本地文件，**没有可切换的两侧**，FR-481 随表废弃而失去意义。
+> 下方历史文档仅存作演进参考，**不要按它接入**。
 
-#### GET /api/v1/logs/cutover
+#### ~~GET /api/v1/logs/cutover~~（已下线）
 - **描述**: 读取全局切换开关、逐 Worker 水位与 Legacy 独立保留预算
 - **关联 FR**: FR-481
 - **权限**: 平台管理员（非管理员 403）
@@ -3397,7 +3450,7 @@
 }
 ```
 
-#### PUT /api/v1/logs/cutover
+#### ~~PUT /api/v1/logs/cutover~~（已下线）
 - **描述**: 设置全局开关与/或登记逐 Worker 水位
 - **关联 FR**: FR-481
 - **权限**: 平台管理员
@@ -3423,7 +3476,7 @@
 - **响应**: 同 GET，并附 `applied[]`（本次写入的水位）
 - **审计**: `action=log.cutover.update`
 
-#### GET /api/v1/logs/legacy
+#### ~~GET /api/v1/logs/legacy~~（已下线）
 - **描述**: Legacy 只读查询——切换水位前仍留在 CP `logs` 的 instance/worker 存量
 - **关联 FR**: FR-481
 - **权限**: 平台管理员

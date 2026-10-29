@@ -8,16 +8,23 @@ import api from '@/api/client'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { getWithRateLimitRetry, isLogRequestCanceled, useLogsFederation, useLogsFederationFacets, useLogsFederationStats } from './logFederation'
-import { useLegacyLogs, useLogs } from './logs'
 
+/**
+ * 取消/信号贯穿（FR-482 回归）。
+ *
+ * 2026-10-29 缩范围：经典 `useLogs` / `useLegacyLogs` 已随 CP `logs` 表删除而下线，
+ * 本文件原先把它们也纳入「路径列表」，那两路现在不存在，保留只会让用例挂在一个
+ * 已 404 的端点上。现在只守仍存活的三路联邦请求（Search / Stats / Facets）——
+ * 它们共用同一个客户端令牌桶，恰恰是最需要确认「取消真的传到底」的地方。
+ */
 beforeEach(() => loginMockUser())
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
-it('条件切换/卸载把AbortSignal贯穿联邦Search、Stats、Facets、经典与历史请求', async () => {
+it('条件切换/卸载把AbortSignal贯穿联邦Search、Stats、Facets', async () => {
   const requests: { signal: AbortSignal; finish: () => void }[] = []
   const get = vi.spyOn(api, 'get')
   const abort = vi.spyOn(XMLHttpRequest.prototype, 'abort')
-  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets', '/logs', '/logs/legacy']
+  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets']
   server.use(...paths.map((path) => http.get(API(path), async ({ request }) => {
     await new Promise<void>((finish) => requests.push({ signal: request.signal, finish }))
     return HttpResponse.json({ items: [], points: [], dimensions: [], coverage: { complete: true } })
@@ -27,30 +34,28 @@ it('条件切换/卸载把AbortSignal贯穿联邦Search、Stats、Facets、经�
     useLogsFederation({ keyword })
     useLogsFederationStats({ keyword }, true)
     useLogsFederationFacets({ keyword }, true)
-    useLogs({ keyword })
-    useLegacyLogs({ keyword }, true)
     return <button onClick={() => setKeyword('第二组')}>换查询</button>
   }
   const view = renderWithProviders(<Probe />)
-  await waitFor(() => expect(requests).toHaveLength(5))
+  await waitFor(() => expect(requests).toHaveLength(3))
   fireEvent.click(screen.getByRole('button', { name: '换查询' }))
-  await waitFor(() => expect(requests).toHaveLength(10))
+  await waitFor(() => expect(requests).toHaveLength(6))
   // MSW 的 XHR 请求投影不联动 request.signal；同时核对传给 axios 的真信号与原生 abort 调用。
   const signals = get.mock.calls.filter(([path]) => paths.includes(path)).map(([, config]) => config?.signal)
-  expect(signals).toHaveLength(10)
-  expect(signals.slice(0, 5).every((signal) => signal?.aborted)).toBe(true)
-  expect(abort).toHaveBeenCalledTimes(5)
+  expect(signals).toHaveLength(6)
+  expect(signals.slice(0, 3).every((signal) => signal?.aborted)).toBe(true)
+  expect(abort).toHaveBeenCalledTimes(3)
   view.unmount()
   expect(signals.every((signal) => signal?.aborted)).toBe(true)
-  expect(abort).toHaveBeenCalledTimes(10)
+  expect(abort).toHaveBeenCalledTimes(6)
   requests.forEach(({ finish }) => finish())
 })
 
-it('同key其它活跃observer保护Search/Stats/Facets，最后禁用才精确取消且不伤独立scope和经典查询', async () => {
+it('同key其它活跃observer保护Search/Stats/Facets，最后禁用才精确取消且不伤独立scope', async () => {
   const get = vi.spyOn(api, 'get')
   const abort = vi.spyOn(XMLHttpRequest.prototype, 'abort')
   const releases: (() => void)[] = []
-  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets', '/logs']
+  const paths = ['/logs/federation', '/logs/federation/stats', '/logs/federation/facets']
   server.use(...paths.map((path) => http.get(API(path), async () => {
     await new Promise<void>((finish) => releases.push(finish))
     return HttpResponse.json({ items: [], points: [], dimensions: [], coverage: { complete: true } })
@@ -66,16 +71,15 @@ it('同key其它活跃observer保护Search/Stats/Facets，最后禁用才精确�
     const [first, setFirst] = useState(true)
     const [second, setSecond] = useState(true)
     useLogsFederation({ keyword: 'independent-scope' })
-    useLogs({ keyword: 'classic-scope' })
     return <><Observer enabled={first} /><Observer enabled={second} /><button onClick={() => setFirst(false)}>禁用首个观察者</button><button onClick={() => setSecond(false)}>禁用最后观察者</button></>
   }
   const view = renderWithProviders(<Probe />)
   try {
-    await waitFor(() => expect(releases).toHaveLength(5))
+    await waitFor(() => expect(releases).toHaveLength(4))
     const shared = get.mock.calls.filter(([, config]) => config?.params?.keyword === 'shared-evidence').map(([, config]) => config?.signal)
-    const independent = get.mock.calls.filter(([, config]) => ['independent-scope', 'classic-scope'].includes(config?.params?.keyword)).map(([, config]) => config?.signal)
+    const independent = get.mock.calls.filter(([, config]) => ['independent-scope'].includes(config?.params?.keyword)).map(([, config]) => config?.signal)
     expect(shared).toHaveLength(3)
-    expect(independent).toHaveLength(2)
+    expect(independent).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: '禁用首个观察者' }))
     expect(shared.every((signal) => signal?.aborted === false)).toBe(true)
     expect(abort).not.toHaveBeenCalled()

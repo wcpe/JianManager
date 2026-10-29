@@ -71,20 +71,23 @@ describe('TerminalPane（mock 假后端）', () => {
   it('停机实例：按旧→新回放历史正文，重新挂载仍持久且不发起 WS', async () => {
     loginMockUser()
     let logReads = 0
+    // 2026-10-29：数据源已从 CP `logs` 表改为 VL 联邦（`GET /logs/federation`）。
+    // 仍 mock 旧的 `/logs` 会让用例靠一个已 404 的接口假绿——这里跟着改盯真实请求。
     server.use(
-      http.get('*/api/v1/logs', ({ request }) => {
+      http.get('*/api/v1/logs/federation', ({ request }) => {
         const url = new URL(request.url)
-        if (url.searchParams.get('instanceId') !== '2') return HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 300 })
+        if (url.searchParams.get('instanceId') !== '2') {
+          return HttpResponse.json({ sourceTag: 'federated', items: [], coverage: { complete: true, targets: [] } })
+        }
         logReads += 1
         // 后端契约为 time DESC（新→旧），StoppedLogsView 必须反转为终端阅读顺序（旧→新）。
         return HttpResponse.json({
+          sourceTag: 'federated',
+          coverage: { complete: true, targets: [] },
           items: [
-            { id: 2, source: 'instance', level: 'info', instanceId: 2, instanceUuid: 'stopped-2', nodeId: 1, message: '[Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved', time: '2026-07-18T12:00:02Z' },
-            { id: 1, source: 'instance', level: 'info', instanceId: 2, instanceUuid: 'stopped-2', nodeId: 1, message: '[Server thread/INFO]: Saving chunks for level minecraft:overworld', time: '2026-07-18T12:00:01Z' },
+            { event_id: 'e2', message: '[Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved', event_time_utc: '2026-07-18T12:00:02Z', level: 'INFO' },
+            { event_id: 'e1', message: '[Server thread/INFO]: Saving chunks for level minecraft:overworld', event_time_utc: '2026-07-18T12:00:01Z', level: 'INFO' },
           ],
-          total: 2,
-          page: 1,
-          pageSize: 300,
         })
       }),
     )
@@ -111,7 +114,7 @@ describe('TerminalPane（mock 假后端）', () => {
   it('停机实例：命令栏禁用并给出原因与「启动实例」直达动作', async () => {
     loginMockUser()
     server.use(
-      http.get('*/api/v1/logs', () => HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 300 })),
+      http.get('*/api/v1/logs/federation', () => HttpResponse.json({ sourceTag: 'federated', items: [], coverage: { complete: true, targets: [] } })),
     )
     renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
 

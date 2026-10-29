@@ -429,12 +429,12 @@ func runWorker() {
 		slog.Error("日志格式配置非法，拒绝启动", "error", logFormatErr)
 		os.Exit(1)
 	}
-	logOpts := &slog.HandlerOptions{Level: logLevelVar}
-	if logFormat == "json" {
-		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, logOpts)))
-	} else {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, logOpts)))
-	}
+	// 日志落地：stderr 之外再写一份自轮转文件（见 process_log.go 的说明）。
+	// stderr 保留，因此前台/容器/CI 场景不变；文件供面板诊断与运维 grep。
+	installProcessLogger(cfg.DataDir, logLevelVar, logFormat)
+	// 诊断接口需要知道日志文件在哪：注入路径提供者（见 internal/worker/grpc/self_log.go）。
+	// 为空时 PullSelfLog 返回结构化错误而不是空成功。
+	wgrpc.SetSelfLogPathProvider(ProcessLogPath)
 	slog.Info("Worker 日志已按配置装配", "level", logLevel.String(), "format", logFormat,
 		"note", "等级在启动期生效，调整需重启进程")
 
@@ -808,13 +808,19 @@ func runWorker() {
 	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
 	// 且必须与 /metrics 的读数出口共用同一个实例。
 	var logArchivePurge *retention.ArchiveObjectReclaimer
-	if store, journalErr := catalog.NewJSONLFileStore(root.Abs("var/log/catalog.journal.jsonl")); journalErr != nil {
-		slog.Error("日志 Catalog journal 打开失败，查询面保持无权威分区", "error", journalErr)
-	} else if journal, journalErr := catalog.NewJournalWithStore(store); journalErr != nil {
-		slog.Error("日志 Catalog journal 恢复失败，查询面保持无权威分区", "error", journalErr)
-	} else {
-		logJournal = journal
-		slog.Info("日志 Catalog journal 已恢复", "path", root.Abs("var/log/catalog.journal.jsonl"), "entries", journal.LastSeq())
+	// 日志 Catalog journal：改用**纯内存**（2026-10-30 用户裁定：机械盘不做落盘）。
+	//
+	// 它原本写 catalog.journal.jsonl（生产已 1MB，每次发布追加一行 + fsync）。
+	// 在机械盘上那是每批投递都要付费的寻道开销，而它记录的只是「哪些分区已发布」——
+	// 查询侧靠它判断可查性，而这个判断只对**当前进程**有意义（重启后重新采集、重新发布）。
+	//
+	// 代价：重启后查询侧短暂显示「无已发布分区」，直到采到新数据重新发布。
+	//
+	// 保留写入磁盘的路径在新代码里已无调用点；历史文件保留在原处供老数据取证。
+	{
+		logJournal = catalog.NewMemJournal()
+		slog.Info("日志 Catalog journal 使用纯内存模式（零磁盘写入）",
+			"note", "重启后已发布分区状态从头重建")
 	}
 	logStack := logassemble.Build(logJournal, rangeClient, version.Version)
 	logStack.LogRPC.SetResourceBudget(resourceBudget)
@@ -1839,6 +1845,16 @@ func runWorker() {
 	hb.SetCPUReader(cpuSampler)
 	// 受管运行时快照随反向隧道 Heartbeat 上报；只读取既有 Worker/Bot Worker，不会拉起 Bot 子进程。
 	hb.SetManagedRuntimeProvider(workerServer)
+	// 日志存储层（VL）磁盘占用读数随心跳上报（2026-10-29）：
+	//
+	// 配了磁盘上限后，VL 超限会**丢弃最旧的按日分区**；而它把磁盘写满时会进入
+	// **只读模式、连丢弃都做不了**。两种情形默认全静 ⇒ 必须进告警链路。
+	//
+	// 未启用受管 VL（vlSupervisor==nil）时不注入：心跳不带这四个字段，
+	// CP 按「无读数」处理，不会误报成「磁盘 0 字节」。
+	if vlSupervisor != nil {
+		hb.SetVLDiskProvider(vlDiskProviderAdapter{sup: vlSupervisor})
+	}
 	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
 	hb.SetTaskProvider(workerServer)
 	// CP 经心跳响应下发节点期望出站代理（FR-185，见 ADR-043）：generation 变化时重建出站持有者，
@@ -1920,6 +1936,9 @@ func runWorker() {
 	if vlSupervisor != nil {
 		vlSupervisor.StopAll(shutdownCtx)
 	}
+	// 日志文件放在最后关：上面每一条 Warn/Info 还要落到它里；
+	// Close 会等后台 gzip 收尾，避免刚 rename 的轮转档卡在未压缩状态。
+	closeProcessLogger()
 	slog.Info("Worker Node 已停止")
 }
 
@@ -2276,4 +2295,23 @@ func resolveHotRetention(cfg *workercfg.Config) time.Duration {
 	slog.Info("热层可发布窗口已启用：超出热层保留期的 UTC 天不再重建、也不算对账缺失天",
 		"retentionPeriod", raw, "hotRetention", period)
 	return period
+}
+
+// vlDiskProviderAdapter 把 vlsup.Supervisor 的磁盘读数适配成 heartbeat.VLDiskProvider。
+//
+// 为什么要这么一层：vlsup 不 import heartbeat（heartbeat 已经 import ingest/metrics，
+// 反向依赖会成环），所以两边各自定义同形结构体，由装配层在这里做一次转换。
+type vlDiskProviderAdapter struct {
+	sup *vlsup.Supervisor
+}
+
+func (a vlDiskProviderAdapter) VLDiskSnapshot() heartbeat.VLDiskReading {
+	r := a.sup.VLDiskSnapshot()
+	return heartbeat.VLDiskReading{
+		UsedBytes:        r.UsedBytes,
+		LimitBytes:       r.LimitBytes,
+		LimitPercent:     r.LimitPercent,
+		Partitions:       r.Partitions,
+		RowsDroppedTotal: r.RowsDroppedTotal,
+	}
 }

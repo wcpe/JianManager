@@ -167,8 +167,8 @@ func TestSixModuleEmptyFacetsKeepWireTruncationAndWorstSummary(t *testing.T) {
 	require.True(t, out.Truncated)
 	require.Equal(t, StatsQPartial, out.Quality.StatsQuality)
 	merged := Coverage{Complete: true, EnumerationState: EnumExhausted}
-	mergeWorkerCoverage(&merged, &Coverage{Complete: false, EnumerationState: EnumCancelled, PartialReasons: []string{"CANCELLED"}})
-	mergeWorkerCoverage(&merged, mapped.Coverage)
+	mergeWorkerCoverage(&merged, &Coverage{Complete: false, EnumerationState: EnumCancelled, PartialReasons: []string{"CANCELLED"}}, false)
+	mergeWorkerCoverage(&merged, mapped.Coverage, false)
 	require.False(t, merged.Complete)
 	require.Equal(t, EnumCancelled, merged.EnumerationState)
 }

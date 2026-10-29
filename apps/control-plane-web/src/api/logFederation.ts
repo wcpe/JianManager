@@ -121,6 +121,15 @@ export interface LogsFederationResult {
   classified: ClassifiedLogViewState
   banner: CoverageBannerProps
   exportAffordance: ExportDownloadAffordance
+  /**
+   * 降级（`degraded=true`）时被转换掉的原始错误——request 失败的原因本身。
+   *
+   * 为何必须带出来：降级信袋的 `items` 恒为空、`degraded` 恒为 true，从它本身分不清
+   * 「403 无权」「超时」「端点不存在」。日志中心（LogsPage）不在乎这个区别（降级后它会去读平台日志），
+   * 但停机控制台（StoppedLogsView）没有别的数据源可退——它必须把降级也当失败，
+   * 而区分「无权」与「超时」靠的就是这里保留的原始错误。
+   */
+  failure?: unknown
 }
 
 /** axios / fetch 风格 404 判定。 */
@@ -342,16 +351,25 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
     (envelope.items !== undefined || envelope.quality !== undefined)
   const sourceTag =
     resolveSourceTag(envelope) ?? (looksLikeSearch ? 'federated' : null)
-  const quality = normalizeQuality(envelope.quality)
-  const dq = quality?.duplicateQuality
-  const federatedNotReady =
-    isFederatedNotReady(notes) ||
-    envelope.federatedReady === false ||
-    envelope.errorCode === PARTIAL_REASONS.ENGINE_NOT_READY ||
-    envelope.errorCode === PARTIAL_REASONS.LOG_UNSUPPORTED ||
-    dq === 'UNSPECIFIED'
+	const quality = normalizeQuality(envelope.quality)
+	// `federatedNotReady` 只回答一件事：**联邦路径本身是否可用**。
+	//
+	// 2026-10-30 修：这里曾把 `dq === 'UNSPECIFIED'` 也算成未就绪，后果是
+	// **每一次实时跟随都报“日志查询服务未启用”**——因为 tail 路径不输出质量
+	// （`quality` 恒为零值 unspecified）。两个概念被混为一谈：
+	//
+	//   - 未就绪 = 引擎/数据面没起来（EngineNotReady / Unsupported / federatedReady=false）；
+	//   - 质量未知 = 数据拿到了，只是没有一个来源断言过它的重复度。
+	//
+	// 后者应当交给 `classifyLogViewState` 以 `quality=unspecified` 的标签温和展示，
+	// 而不是把整页判成“服务未启用”并清空。
+	const federatedNotReady =
+		isFederatedNotReady(notes) ||
+		envelope.federatedReady === false ||
+		envelope.errorCode === PARTIAL_REASONS.ENGINE_NOT_READY ||
+		envelope.errorCode === PARTIAL_REASONS.LOG_UNSUPPORTED
 
-  let coverage = normalizeFederationCoverage(envelope.coverage, sourceTag)
+	let coverage = normalizeFederationCoverage(envelope.coverage, sourceTag)
   let errorCode = asString(envelope.errorCode)
   const items = Array.isArray(envelope.items) ? envelope.items : null
 
@@ -510,7 +528,7 @@ function finalize(
 /** 把 envelope 组装为完整 UI 结果。 */
 export function buildFederationResult(
   envelope: LogsFederationEnvelope,
-  options: { degraded?: boolean; rateLimited?: boolean } = {},
+  options: { degraded?: boolean; rateLimited?: boolean; failure?: unknown } = {},
 ): LogsFederationResult {
   const mapped = mapFederationEnvelope(envelope)
   return finalize({
@@ -522,6 +540,8 @@ export function buildFederationResult(
     rateLimited:
       options.rateLimited === true || mapped.response.errorCode === PARTIAL_REASONS.RATE_LIMITED,
     response: mapped.response,
+    // 只对降级保留：正常结果不需要这份原始错误。
+    ...(options.failure !== undefined ? { failure: options.failure } : {}),
   })
 }
 
@@ -662,7 +682,7 @@ export function useLogsFederation(
         // （此前仅 404 降级，其他失败走 transportFailureEnvelope 且 degraded=false，
         //   使 federationActive 误判为 true 并以空的 federationItems 为准 → 列表永久空白）。
         if (isFederationUnavailable(error)) {
-          return buildFederationResult(legacyDegradeEnvelope(), { degraded: true })
+          return buildFederationResult(legacyDegradeEnvelope(), { degraded: true, failure: error })
         }
         return buildFederationResult(
           transportFailureEnvelope(

@@ -70,11 +70,14 @@ func (c *Coordinator) ExportPage(ctx context.Context, query Query) (*ExportResul
 	if err != nil {
 		return nil, err
 	}
-	mergeWorkerCoverage(&coverage, &stats.Coverage)
-	quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, stats.Quality.DuplicateQuality)
-	quality.StatsQuality = worstStatsQuality(quality.StatsQuality, stats.Quality.StatsQuality)
 	// Stats 没有分页：完整性与质量证明其输入是否齐全，不能把共享 View 的 OPEN 当作失败。
 	// 失效和取消仍必须阻断，页面无需把整个 Search 集合枚举到尾。
+	//
+	// 2026-10-30：这行注释一直是对的，但旧实现把 `OPEN` 一律当不安全，
+	// 与下面的 Stale/Cancelled 检查互相矛盾。现传 `openIsUnsafe=false` 让代码追上注释。
+	mergeWorkerCoverage(&coverage, &stats.Coverage, false)
+	quality.DuplicateQuality = worstDuplicateQuality(quality.DuplicateQuality, stats.Quality.DuplicateQuality)
+	quality.StatsQuality = worstStatsQuality(quality.StatsQuality, stats.Quality.StatsQuality)
 	if stats.Coverage.EnumerationState == EnumStale || stats.Coverage.EnumerationState == EnumCancelled {
 		coverage.Complete = false
 		coverage.PartialReasons = appendUniqueReason(coverage.PartialReasons, "PAGE_VALIDATION_INCOMPLETE")

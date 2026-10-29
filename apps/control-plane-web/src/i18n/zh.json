@@ -1395,18 +1395,16 @@
     }
   },
   "diagnostics": {
-    "reachable": "可达",
-    "unreachable": "不通",
-    "testFailed": "测试失败",
-    "testProxy": "测试出站连通性",
-    "proxyTestHint": "填任意地址测试 CP 能否经当前出站代理访问外网（默认 https://www.google.com）。",
-    "testJdkSource": "测试 JDK 下载源",
-    "jdkSourceTestHint": "测试 JDK 下载源（foojay）是否可达。",
-    "testNode": "测试节点存活",
-    "nodeAlive": "在线",
-    "nodeOffline": "离线",
-    "proxyTrafficHint": "经此出站代理的流量：JDK 一键下载、Worker 二进制/自更新拉取、探针依赖下载、客户端分发外呼与更新源检查等 CP/节点的对外下载与请求。",
-    "testUrlLabel": "测试目标地址"
+    "linesLabel": "显示行数",
+    "refresh": "刷新",
+    "loadFailed": "读取日志失败（节点离线或未启用文件日志）",
+    "empty": "暂无可显示的日志",
+    "truncated": "已截断：文件共 {{size}}，仅显示尾部",
+    "moreHint": "更早的记录请在该机器上执行：",
+    "openNodeLog": "查看诊断日志",
+    "offlineHint": "节点离线，无法拉取日志",
+    "nodeTitle": "节点 {{name}} 诊断日志",
+    "platformTitle": "平台诊断日志"
   },
   "instanceBatch": {
     "selected": "已选 {{count}} 个",
@@ -3387,7 +3385,6 @@
     "view_platform": "平台日志",
     "view_node_instance": "节点/实例日志",
     "view_all": "全部日志",
-    "view_legacy": "Legacy 只读",
     "time": "时间",
     "level": "级别",
     "source": "来源",
@@ -3446,7 +3443,7 @@
     "exportScope_currentPage": "导出当前页",
     "exportScope_allMatched": "导出全部匹配",
     "exportScope_range": "导出所选时间段",
-    "more": "更多"
+    "platformTailHint": "已显示日志文件尾部最近 {{count}} 行（文件是唯一来源，无服务端分页）；更早的记录请在该机器上 grep，命令见诊断日志"
   },
   "logsFederation": {
     "positionGaps": {
@@ -3561,14 +3558,14 @@
       "legacy": "Legacy",
       "federated": "联邦"
     },
-    "degraded": "日志查询服务未启用，本视图暂无数据。切换前的历史日志请到工具栏「更多 → Legacy 只读」查看。",
-    "degradedUnavailable": "实时日志查询服务暂不可用，本视图暂无数据。切换前的历史日志请到工具栏「更多 → Legacy 只读」查看。",
-    "federatedNotReady": "日志查询服务未启用，本视图暂无数据。切换前的历史日志请到工具栏「更多 → Legacy 只读」查看。",
+    "degraded": "日志查询服务未启用，本视图暂无数据。",
+    "degradedUnavailable": "实时日志查询服务暂不可用，本视图暂无数据。",
+    "federatedNotReady": "日志查询服务未启用，本视图暂无数据。",
     "emptyNotSuccess": "覆盖不完整或查询失败，不能视作「无日志」",
-    "degradedHint": "本视图只呈现各服务器实时日志，服务未启用时不会以平台或历史日志代替。切换前的历史日志请到工具栏「更多 → Legacy 只读」查看；如需启用实时查询，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
-    "federatedNotReadyHint": "本视图只呈现各服务器实时日志，服务未启用时不会以平台或历史日志代替。切换前的历史日志请到工具栏「更多 → Legacy 只读」查看；如需启用实时查询，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
+    "degradedHint": "本视图只呈现各服务器实时日志，服务未启用时不会以平台或历史日志代替；如需启用实时查询，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
+    "federatedNotReadyHint": "本视图只呈现各服务器实时日志，服务未启用时不会以平台或历史日志代替；如需启用实时查询，请到「节点」页 → 对应节点 → 日志运行时面板启用日志平台。",
     "degradedTitleShort": "日志查询服务未启用 · 本视图无数据",
-    "degradedUnavailableHint": "本视图只呈现各服务器实时日志，服务暂不可达时不会以平台或历史日志代替。切换前的历史日志请到工具栏「更多 → Legacy 只读」查看；实时服务请稍后重试或联系管理员。",
+    "degradedUnavailableHint": "本视图只呈现各服务器实时日志，服务暂不可达时不会以平台或历史日志代替；实时服务请稍后重试或联系管理员。",
     "degradedUnavailableTitleShort": "实时日志查询服务暂不可用 · 本视图无数据"
   },
   "users": {
@@ -3872,7 +3869,7 @@
     "invalidLogAcqScanInterval": "须为正的时长（留空 = 未配置，回落到节点基线；要停扫描请关闭总开关，写 0 非法）",
     "invalidLogAcqScanIntervalTooLong": "扫描周期过长（上限约 24.85 天；协议以 int32 毫秒下发，更长的值会被截断成错误的周期），请调小",
     "invalidLogAcqScanIntervalTooShort": "扫描周期过短（下限 1ms；协议以毫秒下发，不足 1ms 会被截断成 0 = 未配置），请调大",
-  "invalidNonNegativeInt": "须为非负整数",
+    "invalidNonNegativeInt": "须为非负整数",
     "invalidProxyUrl": "代理地址非法（支持 http/https/socks5）",
     "invalidPlatformPublicBaseUrl": "平台公共基址须为不含查询参数或片段的 HTTP 或 HTTPS 地址",
     "invalidInviteSmtpPort": "SMTP 端口须为 1-65535",
@@ -3986,7 +3983,7 @@
     "loadFailed": "加载日志采集配置失败",
     "noChanges": "没有需要保存的改动",
     "heartbeatHint": "保存后经心跳下发，约 30s 内生效",
-      "unsavedHint": "有 {{count}} 项未保存改动",
+    "unsavedHint": "有 {{count}} 项未保存改动",
     "scanIntervalPlaceholder": "留空 = 未配置（回落节点基线），如 1h",
     "pathOverridesPlaceholder": "{\"inst:1\":\"proxy.log.0\"}"
   },
@@ -5511,7 +5508,8 @@
       "notReady": "日志平台正在启动，请稍后重试",
       "unauthorized": "日志平台鉴权失败，请检查节点凭据",
       "budget": "节点资源预算不足，日志平台已降级",
-      "archiveMissing": "历史日志尚未取回"
+      "archiveMissing": "历史日志尚未取回",
+      "archivePurged": "这段日志已按保留期清除，无法恢复"
     },
     "asset": {
       "label": "服务端资产",

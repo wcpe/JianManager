@@ -5,7 +5,8 @@
  * - partial/离线覆盖 → 横幅可见，失败不得呈空成功；
  * - resolveExportDownloadAffordance 阻断 → 导出按钮禁用；
  * - sourceTag=legacy → Legacy 徽标；404 → 横幅说明服务不可达，且**不降级**（本视图列表为空，
- *   经典 /logs 的行不再冒充本视图的内容；要看存量日志走「更多 → Legacy 只读」）；
+ *   经典 /logs 的行不再冒充本视图的内容）；
+ * - Legacy 只读视图已随 CP logs 表下线（2026-10-29）——入口已删，旧深链回退默认视图。
  * - ErrFederatedNotReady → 联邦未就绪说明，空结果不当成功。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -194,27 +195,26 @@ describe('LogsPage × logs-federation（FR-482）', () => {
     expect(banner.dataset.exportAllowed).toBe('false')
   })
 
-  it('Legacy 只读页签不与联邦集合拼接，并关闭导出和实时跟随', async () => {
+  it('Legacy 只读入口已随 CP logs 表下线，不得留下死入口', async () => {
 	const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
 	loginMockUser(`mock.${payload}.sig`)
+	const legacyCalls: string[] = []
 	server.use(
-	  http.get(API('/logs/federation'), () => HttpResponse.json({ sourceTag: 'federated', items: [], coverage: { complete: true, targets: [] } })),
-	  http.get(API('/logs/legacy'), () => HttpResponse.json({
-		sourceTag: 'legacy', items: [{ ...seedLogsPage.items[0], message: 'legacy-explicit-row' }],
-		total: 1, page: 1, pageSize: 100,
-		coverage: { sourceTag: 'legacy', complete: false, notes: ['legacy rows only'] },
-	  })),
+	  http.get(API('/logs/federation'), () => HttpResponse.json({ sourceTag: 'federated', items: seedLogsPage.items, coverage: { complete: true, targets: [] } })),
+	  http.get(API('/logs/legacy'), () => {
+		legacyCalls.push('called')
+		return HttpResponse.json({ items: [], total: 0 })
+	  }),
 	)
-	const user = userEvent.setup()
-	renderWithProviders(<LogsPage />)
-	// Legacy 只读入口已收纳到右侧「更多」菜单（不再与主视图并列的页签）。
-	await user.click(await screen.findByTestId('logs-more-trigger'))
-	await user.click(await screen.findByTestId('logs-view-legacy'))
-	expect(await screen.findByText('legacy-explicit-row')).toBeInTheDocument()
-	expect(await screen.findByTestId('logs-source-tag')).toHaveTextContent(/Legacy/i)
-	expect(screen.getByTestId('logs-export-trigger')).toBeDisabled()
-	expect(screen.getByRole('button', { name: '实时跟随' })).toBeDisabled()
-	expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
+	// 回归背景（2026-10-29）：把 legacyMode 恒置 false 却留下「更多 → Legacy 只读」菜单项，
+	// 点击后 URL/视图都不变、列表仍是联邦行——一个点了没反应的死入口。现整条入口删除。
+	renderWithProviders(<LogsPage />, { route: '/logs?view=legacy' })
+	await screen.findByText('federation-seed-log-line')
+	// ?view=legacy 是非法值（已从 LOG_VIEWS 移除）→ 回退默认视图，且不发 /logs/legacy。
+	expect(screen.getByRole('tab', { name: '节点/实例日志' })).toHaveAttribute('aria-selected', 'true')
+	expect(screen.queryByTestId('logs-more-trigger')).not.toBeInTheDocument()
+	expect(screen.queryByTestId('logs-view-legacy')).not.toBeInTheDocument()
+	expect(legacyCalls).toEqual([])
   })
 
   it('F-003 联邦返回唯一事件时列表必须显示联邦 items，不得混入 Legacy 行', async () => {
@@ -838,31 +838,35 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 		)
 	})
 
-	it('平台视图只使用 CP 经典日志，不应发起联邦覆盖请求', async () => {
+	/**
+	 * 2026-10-29 改：平台视图的数据源已从 CP `logs` 表（`/logs` 经典接口）换成
+	 * **进程日志文件尾部**（`/diagnostics/log`），且联邦请求依旧不得被它触发。
+	 *
+	 * 原用例断的是 `GET /logs` 被调用——那条路径已随 logs 表下线，留着它只会让测试
+	 * 靠一个不存在的接口假绿。现在改盯真实数据源，并把「不跨源」这条不变量保留。
+	 */
+	it('平台视图只读进程日志文件尾部，不应发起联邦覆盖请求', async () => {
 		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
 		loginMockUser(`mock.${payload}.sig`)
 		let federationCalls = 0
-		let classicCalls = 0
 		server.use(
 			http.get(API('/logs/federation'), () => {
 				federationCalls += 1
 				return HttpResponse.json({ sourceTag: 'federated', items: seedLogsPage.items, coverage: { complete: true, targets: [] } })
 			}),
-			http.get(API('/logs'), () => {
-				classicCalls += 1
-				return HttpResponse.json({
-					items: [{ ...seedLogsPage.items[0], message: 'platform-classic-log' }],
-					total: 1, page: 1, pageSize: 100,
-				})
-			}),
+			http.get(API('/diagnostics/log'), () =>
+				HttpResponse.json({
+					content: 'platform-file-tail-line\n',
+					truncated: false, fileBytes: 26, path: '/var/log/control-plane.log',
+				}),
+			),
 		)
 		const user = userEvent.setup()
 		renderWithProviders(<LogsPage />)
 		await screen.findByText('federation-seed-log-line')
 		const federationBefore = federationCalls
 		await user.click(screen.getByRole('tab', { name: '平台日志' }))
-		expect(await screen.findByText('platform-classic-log')).toBeInTheDocument()
-		await waitFor(() => expect(classicCalls).toBeGreaterThan(0))
+		expect(await screen.findByText('platform-file-tail-line')).toBeInTheDocument()
 		expect(federationCalls).toBe(federationBefore)
 		expect(screen.queryByText('federation-seed-log-line')).not.toBeInTheDocument()
 	})
@@ -943,48 +947,44 @@ describe('LogsPage × logs-federation（FR-482）', () => {
 	})
 
 	/**
-	 * 回归（2026-10-19，评审复核纠正）：进入 Legacy **保留** nodeId / instanceId 筛选。
+	 * 回归（2026-10-19，评审复核纠正；2026-10-29 改为跨视图而非 Legacy）：切视图**保留**
+	 * instanceId / nodeId 筛选。
 	 *
-	 * 这条用例原本断言相反（进入 Legacy 时清除筛选），依据是「平台与历史日志不带这两个维度」。
-	 * 该前提经核对为错：Legacy 集合是 `legacyLogSources = [LogSourceInstance, LogSourceWorker]`
-	 * （internal/controlplane/service/log_cutover.go:15-18），平台自身日志根本不在其中；而实例与
-	 * Worker 行的 `node_id` 非零（model.Log.NodeID 注释：「实例/Worker 日志非零」），
-	 * `applyFilter` 也确实按它下推 SQL（internal/controlplane/service/log.go:395-397）。
-	 * 所以 nodeId/instanceId 在 Legacy 上是有意义的条件，清掉等于把用户选定的范围放大成
-	 * 「全部实例 + 全部 Worker」，属于替用户改查询。
+	 * 曾一度在 switchView 里清掉两者，依据是「平台与历史日志不带这两个维度」——该前提是错的，
+	 * 已回退；清掉只会把用户已经选定的范围放大，属于替用户改查询。
+	 *
+	 * Legacy 视图已于 2026-10-29 随 CP logs 表下线，本不变量改由「全部日志」视图承载：
+	 * 它仍走同一条联邦查询链路，最能体现“切视图不改筛选”。
 	 */
-	it('⑱ 进入 Legacy 视图时保留 nodeId / instanceId 筛选', async () => {
+	it('⑲ 切换视图时保留 instanceId 筛选', async () => {
 		const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }))
 		loginMockUser(`mock.${payload}.sig`)
-		const legacyCalls: URLSearchParams[] = []
+		const fedCalls: URLSearchParams[] = []
 		server.use(
-			http.get(API('/logs/federation'), () =>
-				HttpResponse.json({
+			http.get(API('/logs/federation'), ({ request }) => {
+				fedCalls.push(new URL(request.url).searchParams)
+				return HttpResponse.json({
 					sourceTag: 'federated',
 					items: seedLogsPage.items,
 					coverage: { complete: true, partial_reasons: [], targets: [] },
 					quality: { duplicate_quality: 'exact', stats_quality: 'exact' },
-					view: { view_id: 'legacy-switch-view' },
-				}),
-			),
-			http.get(API('/logs/legacy'), ({ request }) => {
-				legacyCalls.push(new URL(request.url).searchParams)
-				return HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 100 })
+					view: { view_id: 'switch-view' },
+				})
 			}),
 		)
 		// 深链进入时带 instanceId，模拟「从实例详情跳该实例日志」的真实路径。
 		renderWithProviders(<LogsPage />, { route: '/logs?instanceId=2' })
 		await screen.findByText('federation-seed-log-line')
+		expect(fedCalls.at(-1)?.get('instanceId')).toBe('2')
 
 		const user = userEvent.setup()
-		// 「更多 → Legacy 只读」仅平台管理员可用（token 已按 admin 构造）。
-		await user.click(screen.getByTestId('logs-more-trigger'))
-		await user.click(await screen.findByTestId('logs-view-legacy'))
+		// 「全部日志」仅平台管理员渲染（token 已按 admin 构造）。
+		await user.click(screen.getByRole('tab', { name: '全部日志' }))
 
-		await waitFor(() => expect(legacyCalls.length).toBeGreaterThan(0), {
-			message: '切到 Legacy 后应发起 /logs/legacy 查询',
-		})
-		const first = legacyCalls[0]
-		expect(first.get('instanceId')).toBe('2')
+		await waitFor(() => {
+			const last = fedCalls.at(-1)
+			expect(last?.get('view')).toBe('all')
+			expect(last?.get('instanceId')).toBe('2')
+		}, { message: '切换视图后 instanceId 必须保留' })
 	})
 })

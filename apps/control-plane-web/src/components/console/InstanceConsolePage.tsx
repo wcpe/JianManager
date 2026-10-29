@@ -9,7 +9,7 @@ import { usePermissionsStore } from '@/stores/permissions'
 import { runtimeDriftOf } from '@/lib/runtime-drift'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useInstanceMetrics, useMetricSeries } from '@/api/metrics'
-import { useLogs } from '@/api/logs'
+import { useLogsFederation } from '@/api/logFederation'
 import { useNodes } from '@/api/nodes'
 import { useServerState } from '@/api/serverState'
 import { Button } from '@jianmanager/ui/components/button'
@@ -20,6 +20,7 @@ import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { copyToClipboard } from '@/lib/clipboard'
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import { useInstanceCapabilities, hasCapability, type Capability } from '@/lib/capabilities'
+import type { LogEntry } from '@/api/logs'
 import type { CardType } from '@/lib/workspace-card'
 import InstanceActivityFeed from './InstanceActivityFeed'
 import InstanceBackupSegment from './InstanceBackupSegment'
@@ -163,7 +164,31 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
   const { data: metrics } = useInstanceMetrics(instanceId, true)
   const { data: serverState } = useServerState(instanceId, true, 15_000)
-  const { data: logs } = useLogs({ source: 'instance', instanceId, page: 1, pageSize: 8 }, { refetchInterval: 10_000 })
+  // 控制台底部「最近 8 行」：数据源改为 VL 联邦（GET /logs/federation）。
+  // 原因：CP `logs` 表正在废弃（正文与业务数据混库、关键词检索全表扫），
+  // 而实例日志的权威副本本就在 Worker 的 VL 里。
+  // 注意：实例停机不影响本查询——Worker 仍在跑、VL 数据仍在。
+  const { data: logFederation } = useLogsFederation(
+    { instanceId, limit: 8 },
+    { refetchInterval: 10_000 },
+  )
+  const logs = useMemo<LogEntry[]>(() => {
+    const items = logFederation?.response.items
+    if (!Array.isArray(items)) return []
+    return items.map((raw, index) => {
+      const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+      return {
+        id: typeof o.id === 'number' ? o.id : -(index + 1),
+        source: 'instance',
+        level: typeof o.level === 'string' ? o.level.toLowerCase() : 'info',
+        instanceId,
+        instanceUuid: instance?.uuid ?? '',
+        nodeId: 0,
+        message: typeof o.message === 'string' ? o.message : typeof o._msg === 'string' ? o._msg : '',
+        time: typeof o.event_time_utc === 'string' ? o.event_time_utc : '',
+      } satisfies LogEntry
+    })
+  }, [logFederation, instanceId, instance?.uuid])
   const restart = useRestartInstance()
   const stop = useStopInstance()
   const start = useStartInstance()
@@ -595,7 +620,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                   playersAvailable={playersAvailable}
                   maxPlayersAvailable={maxPlayersAvailable}
                   nodeDiskUsage={node?.diskUsage}
-                  logs={logs?.items ?? []}
+                  logs={logs}
                   watchItems={watchItems}
                   probeConnected={serverState?.connected ?? false}
                   uptimeSeconds={metrics?.uptimeSeconds}

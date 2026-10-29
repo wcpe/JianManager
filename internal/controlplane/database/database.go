@@ -224,7 +224,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ArtifactReconcileRun{},
 		&model.ArtifactReconcileDiff{},
 		&model.ArtifactReconcileSetting{},
-		&model.LogEntry{},
 		&model.MetricSeries{},
 		&model.MetricSampleRaw{},
 		&model.ProcessMetricSnapshot{},

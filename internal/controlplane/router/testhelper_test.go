@@ -253,7 +253,6 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 		ArtifactVersion:       service.NewArtifactVersionService(db, assetSvc),
 		RuntimeAssets:         runtimeAssetsSvc,
 		Storage:               service.NewStorageService(db, root),
-		Log:                   service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
 		Metric:                service.NewMetricService(db),
 		PlatformObservability: service.NewPlatformObservabilityService(db),
 		DBBrowse:              service.NewDBBrowseService(db),
@@ -276,11 +275,12 @@ func setupTestRouterWithOptions(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync
 	}
 	// CP 内嵌 MCP（FR-389，无状态化见 ADR-096）：只需 SSE 传输连接登记。
 	agentTok := svcs.AgentToken
-	logSvc := svcs.Log
 	svcs.MCP = mcp.NewHandler(mcp.NewSSEConnRegistry(), mcp.ToolDeps{
-		Instance: instanceSvc,
-		Node:     nodeSvc,
-		Log:      logSvc,
+		Instance: svcs.Instance,
+		Node:     svcs.Node,
+		// 实例日志走联邦查询（真源在 Worker 的 VL）。测试未注入协调器时
+		// agent_get_instance_logs 返回「日志服务不可用」——与未配置时的行为一致。
+		LogCoord: svcs.LogCoord,
 		Agent:    agentTok,
 	}, svcs.AgentCallLog)
 	return Setup(svcs, jwtCfg.Secret)

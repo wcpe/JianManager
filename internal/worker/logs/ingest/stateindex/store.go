@@ -328,6 +328,9 @@ type Store struct {
 	path     string
 	db       *sql.DB
 	readOnly bool
+	// inMemory 标记这是纯内存库（见 OpenInMemory）：跳过一切持久化相关行为
+	// （checkpoint / 受控截断 / VACUUM 都无意义，且其中任何一个都会试图写盘）。
+	inMemory bool
 
 	mu sync.Mutex
 	// mirror 记录每张表当前已落库行的指纹，结构为「归属键 → 主键编码 → fp」。
@@ -434,37 +437,80 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stateindex: 打开索引库失败: %w", err)
 	}
+	return openWithDB(path, db, budget, false)
+}
+
+// OpenInMemory 打开一个**纯内存**索引库（零磁盘 IO）。
+//
+// ## 为什么需要它（2026-10-30 用户裁定）
+//
+// 原话：「因为当前是机械盘不要做任何落盘的操作 只做最基础的」。
+//
+// 磁盘上的索引库（`ingest.index.db`，生产已 344MB + 4MB WAL）在机械盘上是采集延迟
+// 的主要来源：每次提交都要 fsync，而 fsync 在机械盘上就是寻道 + 旋转惩罚。
+//
+// 换成 `:memory:` 后：
+//   - SQL 语义、表结构、索引、UPSERT 全部**原样保留**（不用重写成 map，风险最小）；
+//   - 零磁盘写入；
+//   - 代价：进程重启后状态全丢。这正是用户接受的取舍——重启从当前活文件末尾重新开始。
+//
+// 保留 `path` 参数的原因：部分内部逻辑（如 readersInFlightFor 的键、调试日志）用它作标识，
+// 但**不会用它建任何文件**。
+func OpenInMemory(path string, budget CommitBudget) (*Store, error) {
+	// 每个连接独立的 :memory: 库；连接池已限 1 ⇒ 只存在一个库实例。
+	db, err := sql.Open("sqlite", "file::memory:?mode=memory&cache=private")
+	if err != nil {
+		return nil, fmt.Errorf("stateindex: 打开内存索引库失败: %w", err)
+	}
+	return openWithDB(path, db, budget, true)
+}
+
+// openWithDB 是 Open* 系列的共同装配段。inMemory=true 时跳过所有持久化相关 PRAGMA。
+func openWithDB(path string, db *sql.DB, budget CommitBudget, inMemory bool) (*Store, error) {
 	// 单写者单连接：连接池上限 1，避免同进程内出现并发写事务。
+	// （:memory: 库必须限 1，否则新连接会拿到一个**空库**）
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	budget = budget.Normalized()
 	s := &Store{path: path, db: db, mirror: newMirror(), budget: budget, rowBudget: budget.MaxRows,
-		readersInFlight: readersInFlightFor(path)}
+		readersInFlight: readersInFlightFor(path), inMemory: inMemory}
 	ctx := context.Background()
-	// journal_mode=WAL + synchronous=NORMAL（spec §2.1）：提交即持久、崩溃可恢复；
-	// busy_timeout 用于同进程内只读连接短暂持锁时等待，而非立即报错。
-	if err := execPragma(ctx, db, "PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	for _, pragma := range []string{
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA foreign_keys=ON",
-		// cache_size 用负数表示 KiB（-131072 = 128 MiB）。索引库在真机上可达 GB 级，
-		// 默认 2 MiB 缓存会让迁移/对账期的写入不断回落到读页；128 MiB 在 Worker 的
-		// 内存预算内（真机 RSS 上限 2 GiB 量级），且实测对本仓库最大的表有稳定收益。
-		"PRAGMA cache_size=-131072",
-		// 关闭 SQLite 的自动 WAL checkpoint（默认 wal_autocheckpoint=1000 页）：
-		// 它会在**某个 COMMIT 内部**同步做「WAL 页回写主库 +（synchronous=NORMAL 下）随后的
-		// fsync」，于是那一次提交的耗时被维护成本污染（同一夹具实测：开启时单提交单元 Max 225 ms、
-		// 关闭时 56 ms）。归并本身不可省，但**时机可以自己定**——改由 checkpointPassiveIfNeeded
-		// 在每个持久化周期末尾显式执行（阈值与默认一致 ≈4 MiB），成本仍完整计入周期总耗时。
-		"PRAGMA wal_autocheckpoint=0",
-	} {
-		if _, err := db.ExecContext(ctx, pragma); err != nil {
+	if inMemory {
+		// 内存库没有 journal/fsync 可言，只保留功能必需的 pragma。
+		for _, pragma := range []string{"PRAGMA foreign_keys=ON", "PRAGMA cache_size=-65536"} {
+			if err := execPragma(ctx, db, pragma); err != nil {
+				_ = db.Close()
+				return nil, err
+			}
+		}
+	} else {
+		// journal_mode=WAL + synchronous=NORMAL（spec §2.1）：提交即持久、崩溃可恢复；
+		// busy_timeout 用于同进程内只读连接短暂持锁时等待，而非立即报错。
+		if err := execPragma(ctx, db, "PRAGMA journal_mode=WAL"); err != nil {
 			_ = db.Close()
-			return nil, fmt.Errorf("stateindex: 设置 %s 失败: %w", pragma, err)
+			return nil, err
+		}
+	}
+	if !inMemory {
+		for _, pragma := range []string{
+			"PRAGMA synchronous=NORMAL",
+			"PRAGMA busy_timeout=5000",
+			"PRAGMA foreign_keys=ON",
+			// cache_size 用负数表示 KiB（-131072 = 128 MiB）。索引库在真机上可达 GB 级，
+			// 默认 2 MiB 缓存会让迁移/对账期的写入不断回落到读页；128 MiB 在 Worker 的
+			// 内存预算内（真机 RSS 上限 2 GiB 量级），且实测对本仓库最大的表有稳定收益。
+			"PRAGMA cache_size=-131072",
+			// 关闭 SQLite 的自动 WAL checkpoint（默认 wal_autocheckpoint=1000 页）：
+			// 它会在**某个 COMMIT 内部**同步做「WAL 页回写主库 +（synchronous=NORMAL 下）随后的
+			// fsync」，于是那一次提交的耗时被维护成本污染（同一夹具实测：开启时单提交单元 Max 225 ms、
+			// 关闭时 56 ms）。归并本身不可省，但**时机可以自己定**——改由 checkpointPassiveIfNeeded
+			// 在每个持久化周期末尾显式执行（阈值与默认一致 ≈4 MiB），成本仍完整计入周期总耗时。
+			"PRAGMA wal_autocheckpoint=0",
+		} {
+			if _, err := db.ExecContext(ctx, pragma); err != nil {
+				_ = db.Close()
+				return nil, fmt.Errorf("stateindex: 设置 %s 失败: %w", pragma, err)
+			}
 		}
 	}
 	// 2026-10-29 遗留迁移：`source_wal` 表已废弃（WAL 已改为纯内存队列，不再落盘），但旧版本
@@ -622,6 +668,10 @@ func (s *Store) Checkpoint() error {
 }
 
 func (s *Store) checkpoint(ctx context.Context) error {
+	// 内存库没有 WAL 可归并（2026-10-30 零落盘模式）。
+	if s.inMemory {
+		return nil
+	}
 	// wal_checkpoint(TRUNCATE) 返回 (busy, log, checkpointed)：busy=1 表示本次因并发读者
 	// 未能完全归并。此时不算错误（数据仍在 WAL 里、依然可见），但必须让调用方知道，
 	// 故以错误形态暴露，由调用点决定是否降级。
@@ -666,7 +716,7 @@ func (s *Store) WALBytes() int64 {
 // 增长，下个周期再试）。失败只告警不阻断：数据始终在 WAL 里且可见，最坏情况是 WAL 偏大，
 // 绝不让「归并没做完」变成「采集出错」。
 func (s *Store) checkpointPassiveIfNeeded(ctx context.Context) {
-	if s == nil || s.db == nil || s.readOnly {
+	if s == nil || s.db == nil || s.readOnly || s.inMemory {
 		return
 	}
 	walBytes := s.WALBytes()
@@ -1187,7 +1237,7 @@ func (s *Store) SetControlledTruncate(enabled bool) {
 // 为什么必须锁外：TRUNCATE 会等读者、并做页拷贝 —— 在持 s.mu 时做，会把落库/采样/读面一起冻住 ✗✗
 // （2026-10-05 生产 58min 停摆的机制本体 ✓）。
 func (s *Store) TryControlledTruncate(ctx context.Context) bool {
-	if s == nil || s.readOnly || s.db == nil {
+	if s == nil || s.readOnly || s.db == nil || s.inMemory {
 		return false
 	}
 	if ctx == nil {
@@ -1859,6 +1909,10 @@ func dropLegacyTable(ctx context.Context, db *sql.DB, table string) (bool, error
 func (s *Store) Vacuum(ctx context.Context) error {
 	if s == nil || s.db == nil || s.readOnly {
 		return errors.New("stateindex: 只读句柄不接受 VACUUM")
+	}
+	if s.inMemory {
+		// 内存库没有磁盘空间可回收。
+		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()

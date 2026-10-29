@@ -1,25 +1,30 @@
 # JianManager 日志轮转（logrotate 片段）
 #
-# 为什么需要这个文件（2026-10-27 真机事故）：
-# 生产 `worker.out` 长到 **35GB**（日志目录总计 40GB）而**从未轮转过**，后果是：
-#   - 现场取证必须先 `tail -c 200000000` 绕开前面的数据，`grep` 整个文件要几十秒；
-#   - 单文件超过某些工具/编辑器的处理上限；
-#   - 磁盘被日志吃掉（`/home` 已用 71%）。
-# 根因不是「忘了配」——而是**安装/部署脚本里压根没有这一项**（已核实
-# `scripts/install-worker.sh` 与 `scripts/deploy-worker.sh` 均无 logrotate 相关行）。
-# 所以轮转必须作为**部署资产**随仓库发布，而不是靠运维个人记得配。
+# ⚠️ 2026-10-29 变更：进程现在**自己轮转**（internal/platform/rollog）。
+# 本文件降级为**外部兜底**：只在进程自轮转失效（如卡死、旧版本）时起作用。
+# 两侧阈值可相同（都是 1G × 5），但滚动到同一文件时会互相“抢”：
+# 进程刚 rename 出的 `<name>-<ts>.log` 不在本文件的匹配范围内（只匹配 `*.log` /
+# `*.out` 的**活文件**），因此不会双重轮转已归档的档。
 #
-# ## 为什么必须用 copytruncate
+# ## 自轮转与 copytruncate 的本质区别（为什么这个改动重要）
 #
-# Worker/CP 的 stdout 由 systemd 以 `StandardOutput=append:<path>` 接管。
-# 内核持有的是**打开的文件描述符**，进程自己无法重开它（SIGHUP 也不起作用，
-# systemd 的 `append:` 不是 `file:` 那样可 reopen 的语义）。
-# 因此只能「复制一份再截断原文件」。代价：copy 与 truncate 之间可能有极少数行
-# 落在两个文件之间——对日志可接受（日志不是账本，不需要字节级不丢）。
+# 旧形态：日志文件由 systemd `StandardOutput=append:` 或 `nohup >> file` 接管，
+# 进程手里只有 fd、无法 reopen ⇒ logrotate 只能 `copytruncate`，而它每次要
+# **完整读一遍 + 写一遍**整个文件。2026-10-27 现场 `worker.out` 长到 35GB，
+# 轮转一次就是 35GB 的读写（机械盘上几十秒到分钟级停顿）。
 #
-# ## 参数取舍
+# 新形态：进程自己持有文件并自己轮转——`rename`（O(1)、零字节复制），
+# 再后台异步 gzip。因此本文件的 `copytruncate` **正常路径上不再被触发**。
 #
-#   - `size 1G` 而非 `daily`：故障期的日志增速远快于平时，按天挡不住；
+# ## 保留本文件的原因
+#
+#   1. 旧版二进制（未升级）仍依赖它，不能一刀切删掉；
+#   2. 进程若因权限/磁盘满等原因自轮转失败，外部仍有最后一道闸；
+#   3. 手动 `nohup >> logs/xxx.out` 启动的临时部署仍需要它。
+#
+# ## 参数取舍（外部兜底档）
+#
+#   - `size 1G`：与进程自轮转阈值对齐，避免两边不同步导致单边异常增长；
 #   - `rotate 5`：单目录上限 ≈ 6GB（5 个压缩档 + 当前 1GB 文件）；
 #   - `compress` + `delaycompress`：刚轮转出的那个保持明文，方便立刻 grep；
 #   - `notifempty`：无输出不产生空档；
@@ -33,10 +38,13 @@
 
 /var/lib/jianmanager/logs/*.log
 /var/lib/jianmanager/logs/*.out
+/var/lib/jianmanager/data/var/log/*.log
 /home/*/jm/prod/worker/logs/*.log
 /home/*/jm/prod/worker/logs/*.out
+/home/*/jm/prod/worker/data/var/log/*.log
 /home/*/jm/prod/cp/logs/*.log
-/home/*/jm/prod/cp/logs/*.out {
+/home/*/jm/prod/cp/logs/*.out
+/home/*/jm/prod/cp/data/var/log/*.log {
     size 1G
     rotate 5
     compress

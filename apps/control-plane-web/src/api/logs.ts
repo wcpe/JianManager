@@ -1,5 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
-import api from '@/api/client'
+// 说明（2026-10-29）：本文件原本还导出 useLogs / useLegacyLogs / fetchLogCursorPage /
+// exportLogs / exportCurrentLogPage —— 它们都直接请求 CP 的 `/logs`、`/logs/export`、
+// `/logs/legacy`，而这三个端点在 CP `logs` 表删除后已不存在，故一并删除。
+//
+// 保留的是**类型与纯工具**：LogEntry / LogQueryParams 等仍被日志中心、控制台历史、
+// 联邦查询与实例控制台使用；downloadLogBlob / sameLogItems 是联邦导出复用的纯函数，
+// 与“日志从哪来”无关。日志数据现在只有两个来源：VL 联邦（实例）与进程日志文件（平台）。
 
 /** 单条日志（实例运行日志或平台运行日志，FR-049）。 */
 export interface LogEntry {
@@ -20,8 +25,12 @@ export interface LogEntry {
 
 /** 日志查询筛选条件（DB 侧过滤 + 分页，FR-049/FR-050）。 */
 export interface LogQueryParams {
-  /** 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。 */
-  view?: 'platform' | 'node_instance' | 'all' | 'legacy'
+  /**
+   * 主视图：平台仅 CP；节点/实例聚合 Worker 与实例；all 仅平台管理员。
+   *
+   * 曾有 `legacy`（CP `logs` 表的切换前存量），随该表删除而下线（2026-10-29）。
+   */
+  view?: 'platform' | 'node_instance' | 'all'
   source?: string
   level?: string
   instanceId?: number
@@ -72,57 +81,6 @@ export interface LogCursorPage {
  * 不走 useQuery：回溯是「按用户滚动逐页累积」的命令式流程，缓存键会随 cursor 变化而无限增长，
  * 且页与页之间必须严格串行（上一页的 nextCursor 是下一页的入参），交给 react-query 反而更绕。
  */
-export async function fetchLogCursorPage(params: LogCursorParams, signal?: AbortSignal): Promise<LogCursorPage> {
-  const { data } = await api.get<LogCursorPage>('/logs', { params, signal })
-  return data
-}
-
-/** useLogs 可选项。 */
-export interface UseLogsOptions {
-  /**
-   * 自动重拉间隔（ms）；用于「实时跟随」(tail, FR-150)。
-   * 传 false 或省略则不轮询，仅在 params 变化时取数。
-   */
-  refetchInterval?: number | false
-  enabled?: boolean
-}
-
-/**
- * 分页查询日志。
- * 过滤与分页全部在后端 DB 完成，不全量序列化（FR-049）。
- * keepPreviousData 让翻页/改筛选时旧页保留，避免表格闪烁。
- * 传 refetchInterval 时按间隔自动重拉，实现实时跟随（FR-150）。
- */
-export function useLogs(params: LogQueryParams, options: UseLogsOptions = {}) {
-  return useQuery({
-    queryKey: ['logs', params],
-    queryFn: async ({ signal }) => {
-      const { data } = await api.get<LogPage>('/logs', { params, signal })
-      return data
-    },
-    placeholderData: (prev) => prev,
-    refetchInterval: options.refetchInterval ?? false,
-    enabled: options.enabled ?? true,
-  })
-}
-
-export interface LegacyLogPage extends LogPage {
-  sourceTag: 'legacy'
-  coverage?: Record<string, unknown>
-}
-
-export function useLegacyLogs(params: LogQueryParams, enabled: boolean) {
-  // legacy 路径不接受 view 参数（视图维度由 federated 侧承担），构造参数时剔除。
-  const legacyParams = { ...params }
-  delete legacyParams.view
-  return useQuery({
-    queryKey: ['logsLegacy', legacyParams],
-    queryFn: async ({ signal }) => (await api.get<LegacyLogPage>('/logs/legacy', { params: { ...legacyParams, source: 'legacy' }, signal })).data,
-    enabled,
-    placeholderData: (prev) => prev,
-  })
-}
-
 /** 仅在请求仍属于当前页面时下载，卸载或用户取消后不得偷偷交付附件。 */
 export function downloadLogBlob(blob: Blob, prefix: string, signal?: AbortSignal): void {
   signal?.throwIfAborted()
@@ -146,25 +104,4 @@ export function sameLogItems(left: readonly unknown[], right: readonly unknown[]
     return JSON.stringify(value) ?? 'null'
   }
   return canonical(left) === canonical(right)
-}
-
-/** 经典当前页重新鉴权并核对完整行；变化时要求刷新，不下载旧敏感行。 */
-export async function exportCurrentLogPage(
-  params: LogQueryParams,
-  frozenItems: readonly LogEntry[],
-  signal?: AbortSignal,
-): Promise<void> {
-  const { data } = await api.get<LogPage>('/logs', { params, signal })
-  if (!sameLogItems(frozenItems, data.items)) throw new Error('LOG_PAGE_CHANGED')
-  const ndjson = data.items.map((entry) => JSON.stringify(entry)).join('\n')
-  downloadLogBlob(new Blob([ndjson + (ndjson ? '\n' : '')], { type: 'application/x-ndjson' }), 'logs-page', signal)
-}
-
-/** 全部匹配及显式时间段交由服务端枚举，不带页码。 */
-export async function exportLogs(params: LogQueryParams, signal?: AbortSignal): Promise<void> {
-  const exportParams: LogQueryParams = { ...params }
-  delete exportParams.page
-  delete exportParams.pageSize
-  const { data } = await api.get('/logs/export', { params: exportParams, responseType: 'blob', signal })
-  downloadLogBlob(data as Blob, 'logs', signal)
 }

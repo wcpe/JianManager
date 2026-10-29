@@ -636,7 +636,13 @@ func (s *SettingsService) defaultValue(key string) string {
 	case SettingKeyLogAcqPathOverrides:
 		return ""
 	case SettingKeyBackupRetentionDays:
-		return strconv.Itoa(s.cfg.LogStore.RetentionDays)
+		// 备份保留天数的出厂默认值。
+		//
+		// 历史（2026-10-29 修正）：这里曾写 `s.cfg.LogStore.RetentionDays`——把
+		// 「日志保留天数」借来当「备份保留天数」的默认值。那是个**语义耦合错误**：
+		// 两个毫不相干的设置被绑在同一个数字上，改日志保留会静默改掉备份保留。
+		// log_store 废弃后该字段已不存在，故在此给一个独立的、符合备份语义的值。
+		return "7"
 	case SettingKeyQuotaEnforceInterval:
 		// M-2：30s×3=90s 窗口短于 MC 世界加载/GC 长尾，stop 档误停风险高；改 60s。
 		// 周期下限与规模有关：一轮最坏耗时 ≈ ceil(限额实例数 / quotaSampleConcurrency)

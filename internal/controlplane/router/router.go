@@ -38,14 +38,19 @@ type Services struct {
 	// PMConfig 节点包管理器与 registry 配置（FR-306）；nil 时 /nodes/:id/pm-config 端点关闭。
 	PMConfig    *service.PMConfigService
 	Diagnostics *service.DiagnosticsService
-	DockerImage *service.DockerImageService
-	Terminal    *service.TerminalService
-	File        *service.FileService
-	FileVersion *service.FileVersionService
-	Plugin      *service.PluginService
-	Player      *service.PlayerService
-	PlayerEvent *service.PlayerEventService
-	ServerState *service.ServerStateService
+	// ProcessLogPath 返回 CP 进程自身日志文件的绝对路径（空串 = 未启用文件日志）。
+	//
+	// 仅供 /diagnostics/log 读取尾部用：它是“进程自身诊断”，与日志中心（实例/平台
+	// 日志检索）是两件不同的事。为 nil 或返回空串时该端点返回 503。
+	ProcessLogPath func() string
+	DockerImage    *service.DockerImageService
+	Terminal       *service.TerminalService
+	File           *service.FileService
+	FileVersion    *service.FileVersionService
+	Plugin         *service.PluginService
+	Player         *service.PlayerService
+	PlayerEvent    *service.PlayerEventService
+	ServerState    *service.ServerStateService
 	// CrashSnapshot 实例崩溃快照只读查询（FR-313）；nil 时端点关闭。
 	CrashSnapshot *service.CrashSnapshotService
 	// BinaryVersion 实例二进制/Beacon 版本管理（FR-468）；nil 时相关信息端点关闭。
@@ -111,7 +116,6 @@ type Services struct {
 	ImportServer *service.ImportServerService
 	Registration *service.RegistrationService
 	Network      *service.NetworkService
-	Log          *service.LogService
 	Metric       *service.MetricService
 	// CapacityTrend 容量趋势告警器（FR-464）；nil 时容量预测仍可用，仅不发趋势告警。
 	CapacityTrend *service.CapacityTrendAlerter
@@ -501,10 +505,8 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			runtimeAssetsHandler.RegisterRoutes(permRead("node.read", "node.manage"))
 		}
 
-		// 日志中心：所有认证用户可查询，Handler 内部按可访问实例收敛、平台日志仅管理员可见（FR-049）。
-		logHandler := NewLogHandler(svcs.Log, svcs.Authz)
-		logHandler.RegisterRoutes(permRead("log.read"))
-
+		// 日志中心：实例日志走 VL 联邦（/logs/federation）；平台日志走进程日志文件尾部
+		// （/diagnostics/log）。CP `logs` 表已废弃，这里不再注册 /logs 与 /logs/export。
 		// FR-480 跨 Worker 日志联邦查询：复用 log.read 权限；平台管理员或授权实例范围。
 		logCoord := svcs.LogCoord
 		if logCoord == nil {
@@ -527,10 +529,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			assets.RegisterAdminRoutes(permRead("system.update"))
 			assets.RegisterNodeRoutes(permRead("node.manage"))
 		}
-		// FR-481 日志入库切换与 Legacy 只读管理面：平台管理员专用（handler 再判 IsPlatformAdmin）。
-		if svcs.Log != nil {
-			NewLogCutoverHandler(svcs.Log, svcs.Audit, nodeWorkerUUIDLister{svcs}).RegisterRoutes(permRead("node.manage"))
-		}
+		// 进程自身日志诊断（不存储、不检索）：仅平台管理员，handler 内部再判一次。
+		// 与日志中心严格分开：它只回答“本进程最近发生了什么”，不做关键字/时间窗/分页。
+		NewDiagnosticsLogHandler(svcs.ProcessLogPath).RegisterRoutes(permRead("system.update"))
+		// 节点（Worker）进程日志尾部：经反向隧道拉取，同样仅平台管理员。
+		NewNodeDiagnosticsHandler(svcs.Node, svcs.LogRuntimePool).RegisterRoutes(permRead("node.manage"))
+
+		// FR-481 日志入库切换与 Legacy 只读管理面：随 logs 表废弃一并未注册。
 
 		// 时序监控历史曲线（FR-060）：node 维度对认证用户开放，instance 维度按 CanAccessInstance 收敛。
 		metricHandler := NewMetricHandler(svcs.Metric, svcs.Authz, svcs.CapacityTrend)

@@ -141,6 +141,30 @@ func OpenReadOnly(root string) (*Store, error) {
 	return openStore(root, true)
 }
 
+// MemoryRoot 返回一个**在内存文件系统上**的事件段根目录（零磁盘 IO）。
+//
+// ## 为什么这样做而不是重写 eventstore（2026-10-30 用户裁定）
+//
+// 原话：「因为当前是机械盘不要做任何落盘的操作 只做最基础的」。
+//
+// eventstore 与文件系统的耦合很深（*os.File、MANIFEST、校准、回收前滚），
+// 重写成纯内存实现风险远大于收益。而它的职责本来就是「投递前的暂存 + 投递后可回收」，
+// 数据本身就是短命的——放到 tmpfs 上语义完全不变，只是写入不再碰到机械盘。
+//
+// 选择顺序：
+//  1. /dev/shm（本机实测 126G tmpfs，纯内存）；
+//  2. 退而使用调用方给的 fallback（通常是系统临时目录，也可能是 tmpfs）。
+//
+// 为什么不直接返回空用内存 map：那要重写 segment/manifest 整套，且会丢掉
+// 「按段滚动 + 回收」的内存上界能力——一个源的无界增长仍然要有人管。
+func MemoryRoot(base string) string {
+	const shm = "/dev/shm"
+	if fi, err := os.Stat(shm); err == nil && fi.IsDir() {
+		return filepath.Join(shm, "jianmanager-events", base)
+	}
+	return filepath.Join(os.TempDir(), "jianmanager-events", base)
+}
+
 func openStore(root string, readOnly bool) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("eventstore: root is required")

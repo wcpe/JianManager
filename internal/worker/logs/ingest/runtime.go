@@ -512,6 +512,14 @@ type Manager struct {
 	vlReadyWait    time.Duration
 	vlNotReady     map[string]string
 	root           string
+	// logScratch 是所有**临时落盘面**的根目录（raw / pending spool）。
+	//
+	// 2026-10-30 用户裁定：机械盘不做任何落盘。而 raw（stdio 原始字节）与 pending
+	// （未绑定实例的暂存）本质上都是**投递前的中转**，不是长期存储 ⇒ 放到 tmpfs。
+	//
+	// 为什么单独一个字段而不是改 root：root 同时用于定位配置文件、诊断等需要长期
+	// 保留的东西；拿它当临时目录会一并搬走不该搬的东西。
+	logScratch     string
 	vl             *vlsup.Client
 	vlRoute        func(SourceConfig) (*vlsup.Client, bool, error)
 	cat            *catalog.Catalog
@@ -2450,6 +2458,8 @@ func New(opts Options) (*Manager, error) {
 	}
 	m := &Manager{
 		root: opts.Root, vl: opts.VL, vlRoute: opts.VLRoute, vlReadRoute: opts.VLReadRoute, cat: opts.Catalog, journal: opts.Journal, archive: opts.Archive,
+		// 临时中转目录放 tmpfs（见 logScratch 字段注释）。
+		logScratch: eventstore.MemoryRoot("scratch-" + filepath.Base(opts.Root)),
 		vlWritePermitRoute:    opts.VLWritePermitRoute,
 		resourceBudget:        opts.ResourceBudget,
 		readLimits:            opts.ReadLimits,
@@ -2593,7 +2603,12 @@ func New(opts Options) (*Manager, error) {
 		return nil, err
 	}
 	// 事件体走追加式磁盘段（FR-484）：state 只留元数据，避免整份重写与常驻切片。
-	store, err := eventstore.Open(filepath.Join(opts.Root, "var", "log", "events"))
+	// 事件体存到 **tmpfs**（2026-10-30 用户裁定：机械盘不做任何落盘）。
+	//
+	// eventstore 的职责是「投递前的暂存 + 投递后可回收」，数据本来就短命；
+	// 放到 /dev/shm 后写入不再碰机械盘，而段滚动与回收的内存上界能力全部保留。
+	// 代价：Worker 重启后段没了——与「cursor 不落盘」是同一取舍。
+	store, err := eventstore.Open(eventstore.MemoryRoot(filepath.Base(opts.Root)))
 	if err != nil {
 		return nil, err
 	}
@@ -2722,7 +2737,7 @@ func (m *Manager) recoverPendingSpools() error {
 func (m *Manager) pendingSpoolState() ([]string, error) {
 	m.pendingMu.Lock()
 	defer m.pendingMu.Unlock()
-	root := filepath.Join(m.root, "var", "log", pendingSpoolRoot)
+	root := filepath.Join(m.logScratch, pendingSpoolRoot)
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -12507,7 +12522,7 @@ func (m *Manager) planPersist(ctx context.Context) (*persistPlan, error) {
 	store := m.index
 	if store == nil {
 		// 直接构造 Manager 的测试路径：按需打开索引（不触发迁移）。
-		opened, err := stateindex.OpenWithBudget(m.indexPath(), m.indexCommit)
+		opened, err := stateindex.OpenInMemory(m.indexPath(), m.indexCommit)
 		if err != nil {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("ingest: 打开采集索引失败: %w", err)

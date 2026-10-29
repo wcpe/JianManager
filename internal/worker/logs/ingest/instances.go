@@ -951,12 +951,12 @@ func fileArchiveGlob(binding InstanceBinding) string {
 
 func (m *Manager) rawInstancePath(binding InstanceBinding, stream string) string {
 	identity := sha256.Sum256([]byte(binding.UUID + "\x00" + binding.Generation))
-	return filepath.Join(m.root, "var", "log", "raw", fmt.Sprintf("%x", identity), stream+".log")
+	return filepath.Join(m.logScratch, "raw", fmt.Sprintf("%x", identity), stream+".log")
 }
 
 func (m *Manager) pendingInstancePath(uuid, stream string) string {
 	identity := sha256.Sum256([]byte(uuid))
-	return filepath.Join(m.root, "var", "log", pendingSpoolRoot, fmt.Sprintf("%x", identity), stream+".spool")
+	return filepath.Join(m.logScratch, pendingSpoolRoot, fmt.Sprintf("%x", identity), stream+".spool")
 }
 
 func (m *Manager) ensureRawFile(path string) error {
@@ -992,7 +992,7 @@ const (
 // 不缓存结果：spool 会在绑定时被 rename 或删除（见 flushPendingForBinding），
 // 缓存会让限额在接管后残留并误伤正常采集。
 func (m *Manager) pendingSpoolUsage() (total int64, perFile map[string]int64, err error) {
-	root := filepath.Join(m.root, "var", "log", pendingSpoolRoot)
+	root := filepath.Join(m.logScratch, pendingSpoolRoot)
 	perFile = map[string]int64{}
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
