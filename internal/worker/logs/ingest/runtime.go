@@ -1658,38 +1658,13 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 	}); err != nil {
 		return err
 	}
-	// 静默源出口（2026-09-30 生产实证）：为「已全部投递、但无分段覆盖的尾部」补一段显式覆盖。
+	// 静默源出口（2026-09-30 生产实证；2026-10-29 简化）：静默流（如某实例的 stderr，自 09-27
+	// 起再无新行）永远不会有新批次 —— 旧实现靠「补一段无副本的恢复分段」把 reclaim 推出去。
+	// reclaim 改为按投递水位推进后，这一步只剩**推进动作**本身。
 	//
-	// 为何需要：建段只发生在 releaseRecovery（有新批次投递时）——而**静默流**（如某实例的
-	// stderr，自 09-27 起再无新行）永远不会有新批次 → 尾部永远无段可依 → 回收停滞 → 积压不落 →
-	// 源反复被暂停，且 read 已被夹到水位、自己永远走不出去。
-	//
-	// 安全性：仅当尾部**已全部确认投递**（delivery >= read）时才补段 —— 覆盖的是「已证明安全
-	// 另存」的区间，不存在任何未投递数据被跳过；条件不满足则一律不动。
-	//
-	// 「无副本」标记（复审 P2-13）：这一段**没有任何物理副本**（路径不是文件、也不是
-	// project://<代次>），此前却写 `manual://admin-confirmed` 并登记 `NEXT_COPY_VERIFIED`——
-	// 前者看着像「管理员确认过某个已验证副本」，后者字面就是「下一份副本已验证」，
-	// 于是状态链把「无副本」包装成了「已验证副本」，事后审计分不清这段到底有没有副本。
-	// 现在如实标注：路径带 no-copy 标记，释放依据用 PROJECTION_BACKED（本段成立的前提正是
-	// 「整段已投递并被逐字段校验」→ 已发布投影就是它的凭据），接收者显式说明无副本。
-	if d := entry.Positions.Delivery; d >= entry.Positions.Read && entry.Positions.Read > entry.Positions.Reclaim &&
-		ledger.CoveredByPositionRanges(gapRangesOfEvents(proof.events), entry.Positions.Reclaim, entry.Positions.Read) &&
-		ledger.CoveredByPositionRanges(ledger.RequestDoneRangesOf(entry), entry.Positions.Reclaim, entry.Positions.Read) {
-		segID := fmt.Sprintf("manual-recovery-%d-%d", entry.Positions.Reclaim, entry.Positions.Read)
-		if _, exists := pipe.RecoveryRef(segID); !exists {
-			if err := pipe.BindRecoverySegment(segID, silentExitNoCopyPath, entry.Positions.Reclaim, entry.Positions.Read); err != nil {
-				return err
-			}
-		}
-		// 走完责任转移链，使 CanReclaim 放行（与 releaseRecovery 的状态机同构）。
-		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", "")
-		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", silentExitNoCopyReceiver)
-		// 释放依据必须与事实一致：没有第二份副本，凭据是「已发布投影 + 逐字段校验」。
-		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryReleased, logtypes.ReleaseProjectionBacked, silentExitNoCopyReceiver)
-		// CLEANED 不登记新依据（账本契约：清理沿用已登记证明）；此处**不要**再传一次 reason，
-		// 否则会把 RELEASED 阶段的依据覆盖成调用点写的值，「这段到底凭什么被释放」当场失真。
-		_ = pipe.TransitionRecovery(segID, logtypes.RecoveryCleaned, "", "")
+	// 安全性由账本门禁保证：`reclaim = min(delivery, max(read, durable))`，尾部全部确认投递时
+	// （`delivery >= read`）它才会跨过 [reclaim, read) 这一段；任何未投递数据都不会被跳过。
+	if d := entry.Positions.Delivery; d >= entry.Positions.Read && entry.Positions.Read > entry.Positions.Reclaim {
 		// 推进回收并按当前水位剪枝；失败不置死——下一轮自动重试。
 		_, _ = pipe.TryReclaim()
 	}
@@ -2964,7 +2939,6 @@ func (m *Manager) Register(source SourceConfig) error {
 			}
 		}
 	}
-	led.SetRecoveryArchiveStore(m)
 	var deferred func()
 	var committed func(context.Context, []acquire.CommitIdentity) error
 	var p *pipeline.Pipeline
@@ -3824,7 +3798,6 @@ func (m *Manager) archiveOwnerLookup() func(logSourceID, cleanPath, objectID str
 }
 
 func (m *Manager) pollSource(source SourceConfig, p *pipeline.Pipeline) ([]logtypes.Event, bool, error) {
-	defer m.archiveCleanedRecovery(p)
 	// FR-504 应急停采（realtime_tail=false）：整源本轮不做任何读取/轮转/归档导入。
 	//
 	// 刻意在最前面整源返回，而不是只跳过 p.Poll()：轮转探测会触碰实例目录
@@ -9411,27 +9384,26 @@ func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig
 	if !ok {
 		return
 	}
+	// 2026-10-29：reclaim 改为「按投递水位推进」后不再需要「分段链逐跳推进」——一跳即可到
+	// `min(delivery, max(read,durable))`。这里保留一次有界的 TryReclaim（内部可能因调用方条件
+	// 被拒，但那属于正常形态，不是错误）。
 	steps := 0
 	var advanced, firstAdvance uint64
-	for ; steps < maxSteps; steps++ {
-		if err := m.repairStalledReclaim(p, source, ctx); err != nil {
-			slog.Warn("滚动回收：补段失败（下轮重试）", "logSourceID", source.LogSourceID, "error", err.Error())
-			break
-		}
-		// 助手内部的探测**本身就会推进**（有覆盖即跳到该段末端；无覆盖则先补段再推进）⇒ 此处只读结果 ✓。
-		cur, ok := p.Ledger().Positions(p.Key())
-		if !ok || cur.Reclaim <= before.Reclaim {
-			break // 不再推进：无料（reclaim ≥ delivery）/ hold / 状态未转移 ⇒ 退出（有界 ✓）
-		}
-		if advanced == 0 {
-			firstAdvance = cur.Reclaim - before.Reclaim // 首步 = 陈旧覆盖段的上界缺口 ✓（现场判据）
-		}
-		advanced += cur.Reclaim - before.Reclaim
-		before = cur
-		if time.Since(start) >= budget {
-			break // 单轮墙钟上界 ✓
-		}
+	if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimPrecondition) {
+		slog.Warn("滚动回收：推进被拒（下轮重试）", "logSourceID", source.LogSourceID, "error", err.Error())
+	} else {
+		steps = 1
 	}
+	if cur, ok := p.Ledger().Positions(p.Key()); ok && cur.Reclaim > before.Reclaim {
+		firstAdvance = cur.Reclaim - before.Reclaim
+		advanced = firstAdvance
+		before = cur
+	} else {
+		steps = 0
+	}
+	_ = ctx
+	_ = budget
+	_ = start
 	if advanced > 0 {
 		// 静默未暂停源不会再产生采集提交；真实回收推进也须交既有消费者落库，不能等Stop代落。
 		m.requestPersist()
@@ -9441,7 +9413,7 @@ func (m *Manager) rollingReclaimRepair(p *pipeline.Pipeline, source SourceConfig
 		// 现场据此分辨三者：「无料（reclaim ≥ delivery，正常终态 ⇒ 不打点 ✓）」
 		// 「CanReclaim 拒（state=… / hold=…）」「配置层 hold（CanCleanup 假）⇒ 连补段都不做」✓。
 		if before.Reclaim < before.Delivery {
-			if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimNoSegment) {
+			if _, err := p.TryReclaim(); err != nil && !errors.Is(err, ledger.ErrReclaimPrecondition) {
 				if m.noteSourceError(source.LogSourceID, err.Error()) {
 					slog.Warn("滚动回收：本轮未推进（回收被拒）", "logSourceID", source.LogSourceID,
 						"reclaim", before.Reclaim, "delivery", before.Delivery, "error", err.Error())
@@ -9544,91 +9516,15 @@ func (m *Manager) ReclaimRollingStats() ReclaimRollingStats {
 	return st
 }
 
-// repairStalledReclaim 是"回收被『无段覆盖』拒 ⇒ 按已确认水位补段"的**共用收口助手**
-// （#61-Z-a ＋ #62）：两条面共用同一助手，避免"只有有投递的源才治得了洞"✗：
+// noteReclaimBlocked 按类别计一次「回收被拦下」并打一条按源去重的日志。
 //
-//	· **投递确认面**（releaseRecovery 顶部）—— 有新批次/排空/对账的源 ✓；
-//	· **恢复/自愈面**（selfHealPausedSource 步 0）—— **已停投的源**（#62 现场：四个落后源
-//	  `inst:160/202/203/179` 补段闸一次都没轮到它们，因为没人再投递 ⇒ 谁也走不到投递确认面 ✗✓）。
-//
-// 触发判据不变（#61 口径）：**先探一次回收**，只有被哨兵 `ErrReclaimNoSegment` 拒才补 ✓（绝不盲补 ✗）。
-// 覆盖上界仍是账本里的 **delivery 已确认水位**（单次大覆盖 [reclaim, delivery] 合法 ✓，与补段助手同源 ✓）；
-// hold 闸 / 幂等 / 绑定前后复读水位（变则弃）全部继承自 backfillDeliveryConfirmedCoverage ✓。
-func (m *Manager) repairStalledReclaim(p *pipeline.Pipeline, source SourceConfig, contexts ...context.Context) error {
-	if m == nil || p == nil || p.Ledger() == nil {
-		return nil
-	}
-	_, reclaimErr := p.TryReclaim()
-	positions, ok := p.Ledger().Positions(p.Key())
-	if !ok {
-		return nil
-	}
-	if !errors.Is(reclaimErr, ledger.ErrReclaimNoSegment) {
-		// 锁外归档身份检查可先留下STAGED；失败后只能对本助手的同一前缀重新RO，不能让准备态焊死重试。
-		prepared := false
-		if m.deferredDelivery && reclaimErr != nil {
-			for _, ref := range p.Ledger().Get(p.Key()).RecoveryRefs {
-				if strings.HasPrefix(ref.SegmentID, deliveryConfirmedSegPrefix) && ref.CoversFrom == positions.Reclaim && ref.CoversTo <= positions.Delivery && !ref.HasHold && (ref.State == logtypes.RecoveryStaged || ref.State == logtypes.RecoveryDurableVerified) {
-					positions.Delivery = ref.CoversTo
-					prepared = true
-					break
-				}
-			}
-		}
-		if !prepared {
-			return nil
-		}
-	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	m.mu.Lock()
-	generation := m.state.Sources[key].ProjectionGeneration
-	m.mu.Unlock()
-	slog.Warn("回收被『无段覆盖』拒：按「已确认投递水位」补段（停在 R 的源由此走出去）",
-		"logSourceID", source.LogSourceID, "generation", source.SourceGeneration,
-		"reclaim", positions.Reclaim, "delivery", positions.Delivery)
-	return m.backfillDeliveryConfirmedCoverage(p, source, generation, positions, contexts...)
-}
-
-// firstConfirmedCoverageStart 回答“已确认投递的覆盖到底从哪个位置开始”。
-// 取值来源：`Entry.RequestDoneRanges`（只承接真实 REQUEST_DONE，见 ledger.Entry 注释；
-// 请求结果前缀与回收水位都不能生成 ACK）。
-//
-// 抽成**纯函数**（而不是直接摸 Ledger）的理由：本判据是本修复的**全部**新增语义，
-// 它必须能被逐条穷举地铉在用例里（早/晚/空/越界/多段），而不是隐藏在需要"造出真实
-// 缝"的重夹具后面。夹具越重，越容易变成“用例长什么样，判据就长什么样”的自证。
-//
-// 语义：返回严格落在 [from, to) 内的**最小覆盖起点**。
-// 若没有这样的范围，返回 false——调用方据此保持原行为（default-deny）。
-func firstConfirmedCoverageStart(ranges []ledger.PositionRange, from, to uint64) (uint64, bool) {
-	best := uint64(0)
-	found := false
-	for _, r := range ranges {
-		if r.From < from || r.From >= to {
-			continue
-		}
-		if !found || r.From < best {
-			best = r.From
-			found = true
-		}
-	}
-	return best, found
-}
-
-// noteReclaimBlocked 记录一次"补段被静默拦下"（#179 第 1 步③）：按类别计数 + **按源首次 Debug**（不刷屏 ✓）。
-// 行为中性：只加计数与一次性日志，不改变任何判据或返回值 ✓。
+// 类别只剩 `no-confirmed-copy`（投递结果未被确认）——其余四类（seg-hold / config-hold /
+// no-material / watermark-moved）随恢复分段与补段链一并删除（2026-10-29）。
 func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, source SourceConfig) {
 	if m == nil {
 		return
 	}
 	switch category {
-	case "seg-hold":
-		m.blockedSegHold.Add(1)
-	case "config-hold":
-		m.blockedConfigHold.Add(1)
-	case "no-material":
-		m.blockedNoMaterial.Add(1)
-	case "watermark-moved":
-		m.blockedWatermark.Add(1)
 	case "no-confirmed-copy":
 		m.blockedNoCopy.Add(1)
 	}
@@ -9651,401 +9547,32 @@ func (m *Manager) noteReclaimBlocked(category string, p *pipeline.Pipeline, sour
 	}
 	m.blockedLoggedMu.Unlock()
 	if !dup {
-		// 用 Info 而非 Debug（2026-10-29）：该诊断此前是 Debug 级，而 Worker 的日志级别没接到
-		// `log.level=debug` 上（实测不生效）⇒ 现场「补段为什么不建段」完全不可见，
-		// 使得本次排查反复绕路。按源只打一次（dups 去重），不构成刷屏。
-		slog.Info("补段被拦下（首次可见；后续同源同类不再打点）",
+		slog.Info("回收推进被拦下（首次可见；后续同源同类不再打点）",
 			"logSourceID", source.LogSourceID, "category", category)
 	}
 }
 
-// backfillDeliveryConfirmedCoverage 在**投递确认点**补注册覆盖段（#61-Z-a，父级裁刀）。
+// releaseRecovery 在「请求结果已确认」之后推进回收水位（2026-10-29 简化）。
 //
-// 现场（今晚全部悬案同源）：`paused 42` 钉死 / 放血落账失败 / tier 达成率下滑，皆系一条链 ——
-// `ledger: reclaim blocked: no recovery segment covers position <R>` ⇒ WAL 不能回收 ⇒ 顶 8000/5000
-// ⇒ 源暂停 ⇒ 采集端落后（position 表：reclaim 落后上亿而 **delivery 已 = read** ✗）。
+// ## 旧实现做什么、为什么不要了
 //
-// 为什么既有绑定点会留洞（以实际代码为准）：全部绑定点都**以 `from = 当前 Reclaim` 起段** ——
+// 旧语义是「把 WAL 责任转移给 projection://<代次>」：建恢复分段 → 逐状态迁移 → 等到
+// `Delivery >= to` 且已发布证据覆盖 → RELEASED → CLEANED → 才让 reclaim 跨过 CoversTo。
+// 那一整套的前提是「WAL 里还有未投递副本，必须有人接管责任才能删 WAL 行」。
+// WAL 改纯内存队列后（`source_wal` 表已删）前提消失：队列本来就不存副本，也无需别人接管。
 //
-//	· `pipeline.ingest` / `DeliverPending` 的 proof 面带 `DeliveryState != UNKNOWN` 闸；
-//	· `releaseRecovery` 的 `if from >= to { return nil }` 会**静默不绑**（不是错误）；
-//	· 段状态链（Staged→DurableVerified→Xfer）任一步失败即 `return err`，段停在中间态；
-//	· 静默流只有 `resolveOneSourceGaps` 的 `manual-recovery-*` 出口能补，而它要先被人工/自动解算触发。
+// 现在这里只剩两件真实的事：
+//  1. **确认这段确实落地过** —— `Delivery >= to` 且 REQUEST_DONE 证据覆盖 [reclaim, to)；
+//     不满足就什么都不做（条目留在队列，由投递欠账步重投）。
+//  2. **推进 reclaim** —— 账本门禁 `reclaim = min(delivery, max(read,durable))` 负责上界，
+//     本函数只触发一次推进与剪枝。
 //
-// 只要某一轮"绑定者没跑"，位置就停在 R 无人补 ⇒ 报 `no recovery segment covers position R` ✓。
-// 本函数与上述成因**正交**：只要发生一次投递确认，就把 [当前 Reclaim, 已确认投递水位) 补上 ✓。
-//
-// 凭据（不越界未来 + default-deny 未放宽）：Delivery 水位只在「投递成功被记入 WAL」之后推进
-// （`acquire.Pipeline` 的投递路径 → `WAL.RecordHTTPResult`），故它就是"已证明另存"的水位 ✓；
-// 越过 Delivery 的位置**永远**没有本段覆盖 ⇒ 未确认数据一个字节都不会被跳过 ✓。
-//
-// **一处必须写清的边界（2026-10-21 复核纠正）**：本注释此前写作
-// 「（writeProjectionPlan → RecordHTTPResult）」，这是**不准确的** —— 重建路径
-// （`writeProjectionPlan`）只构造并返回 `pipeline.DeliveryResult`，**从不**把它写进 WAL，
-// 全文 `RecordHTTPResult` 的真实调用点只有「破环直投」（`repairStalledReclaim` 一带）。
-// 后果有两层，都必须知道：
-//
-//	· 重建当天**不会**把 Delivery 推高 ⇒ 重建路径走 `releaseRecovery` 时，那道
-//	  `positions.Delivery < to` 闸门会因「Delivery 未前进」而早退，回收责任不推进；
-//	· 但**不能因此认为闸门安全**：若该源在更早的（仍在保留期内的）正常投递中已把
-//	  Delivery 推到与本批 `to` 齐平（生产上受影响的源正是 `delivery == read`），
-//	  闸门就会放行。所以「本批这些天是否真的发布过」不能只靠 Delivery 判断 ——
-//	  这正是 `rebuildDaysInner` 必须**自己**在 `beyondWindow` 非空时直接跳过
-//	  `releaseRecovery` 的原因（见该函数尾部注释）。
-//
-// （2026-10-06 曾试把上界放宽到 durable 以解停滞 ✗ —— 被不变量测试当场捉住：覆盖未投递区间会让其
-// WAL 条目被回收 ⇒ 事件再也投不出去 ✗ ⇒ 已撤回；停滞真修点＝让投递水位前进 ✓。）
-// 审计：段名 `delivery-confirmed-<from>-<to>`、路径 `delivery-confirmed://<generation>`，状态链只推进到
-// `WAL_RESPONSIBILITY_TRANSFERRED`（接收者 = projection:<generation>），**不**直接 Released/Cleaned ——
-// 把"这一段凭什么被释放"留给常规释放链独立裁定 ✓。
-//
-// 只在**真的存在洞**时补段：触发条件是"先探一次回收**被哨兵 `ErrReclaimNoSegment` 拒**"（见调用点）——
-// 健康源一个段都不会多出来 ⇒ RecoveryRefs 不会无界增长 ✓；且与"回收到底能不能过"同一判据，不会自说自话 ✓。
-// 幂等与并发：段名含区间 ⇒ 同区间重复调用不重复建段；绑定前**复读水位**，Reclaim 已前移或 Delivery 倒退
-// ⇒ 本段已过期 ⇒ 跳过（下一轮以新 Reclaim 起段，与 #55-B/#58 的"取快照 → 复验 → 变则弃"同型）✓。
-func (m *Manager) backfillDeliveryConfirmedCoverage(p *pipeline.Pipeline, source SourceConfig, generation string, positions logtypes.Positions, contexts ...context.Context) error {
-	if p == nil || p.Ledger() == nil {
-		return nil
-	}
-	// hold 闸（hold 优先于任何自动补段 —— 与 tryReclaimLocked 里"hold 优先于凭据"同口径 ✓）：
-	// 补出的新段**不带 hold**，若放任它就会把 reclaim 推过被运维钉住的位置 ✗（2026-10-05 实测红：
-	// TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears 断言 reclaim 不动 + 段只有既有那一条）。
-	//   · **已登记的**段 hold：账本里可查（新段绕过它 = 直接违约束 ✗）；
-	//   · **配置层** hold（Options.RecoveryHold）：运维显式钉住 ⇒ 连补段都不做（此处按源自身的
-	//     UTCDay 求值，属保守口径：宁可少补一段，也不越过人工约束 ✓ —— 既有绑定点不受本闸影响 ✓）。
-	if p.Ledger().HasRecoveryHold(p.Key()) {
-		m.noteReclaimBlocked("seg-hold", p, source)
-		return nil
-	}
-	if m.recoveryHold != nil {
-		if hold, _ := m.recoveryHold(source, generation); hold {
-			m.noteReclaimBlocked("config-hold", p, source)
-			return nil
-		}
-	}
-	from := positions.Reclaim
-	to := positions.Delivery // 不越界未来：只覆盖"已确认投递"到的那一段
-	// **2026-10-06 记录（已撤回的错误改法）**：曾试过"read==durable ∧ 无缺口 ⇒ 上界放宽到 durable"，
-	// 被现有不变量测试当场捉住 ✗ —— 覆盖未投递区间会让其 WAL 条目被回收 ⇒ 那些事件**再也投不出去** ✗
-	// ⇒ 红线：**未确认投递的数据一个字节都不许被越过** ✓（见 reclaim_backfill_test.go 的不变量断言）。
-	// 停滞的真修点＝**让投递水位前进**（delivery==reclaim<read 的环 ✗），不是放宽本上界 ✗。
-	//
-	// **2026-10-28 现场修复（delivery==reclaim 的死锁）**：
-	// 上面那句"让投递水位前进"在本形态下**无法成立** —— 投递水位是**派生量**
-	// （`ContiguousDeliveryEnd`：所有字节都有请求结果的连续前缀），而它卡住的原因恰好是
-	// **没有任何恢复分段覆盖 reclaim 位置**。于是形成闭环：
-	//
-	//	无段覆盖 reclaim ⇒ tryReclaim 报 ErrReclaimNoSegment ⇒ 走到这里 ⇒ to<=from ⇒ 什么都不做
-	//	⇒ 无段覆盖 reclaim ⇒ …… （每轮空转，reclaim 永不前进）
-	//
-	// 循环的成因不是"缺数据"，而是**区间恰好在边界上交错一格**：生产 inst:317 实测
-	// reclaim=7674788、首个已确认批次 start=7674897、`request_done_ranges=[7674897,7871859]`。
-	// 那 109 字节 [7674788,7674897) 既没有投递请求、也没有 WAL 行（不在任何批次里），
-	// 所以它永远不可能出现在 delivery 覆盖内；而它又挡在 reclaim 上，让"从 reclaim 起补段"
-	// 补出零长度区间。换言之：**这里要补的不是"从 reclaim 到 delivery"，而是"已确认但尚未
-	// 被任何分段覆盖的前缀"** —— 起点应由该前缀决定，不是无条件取 reclaim。
-	//
-	// 修法（不放宽任何红线）：先算出"已确认覆盖但无分段"的首个起点 `firstUncovered`，
-	// 只补 `[firstUncovered, to)`。red line 不变 —— 补段上界仍严格是 delivery，
-	// 未确认投递的字节一个都不越；只是不再因为 reclaim 落在"无人认领的缝"上就整轮放弃。
-	if to <= from {
-		// 在放弃之前先确认：这段"缝"是不是真的没有任何已确认覆盖 material。
-		//
-		// 判据只读账本不自造证据：从 `RequestDoneRanges`（仅承接真实 REQUEST_DONE）里
-		// 取 "起点 >= from 的最小起点"。它回答的正是"已确认覆盖到底从哪开始"——
-		// 若这个起点 > from 且 < to，说明 [from, start) 是一段**永不会被投递覆盖的缝**
-		// （没有落在任何批次里），把它当作补段起点是**不越过任何已确认字节**的。
-		// 反之若找不到这样的起点，就真的没有 material，保持原行为（default-deny）。
-		//
-		// 注意窗口上界必须是 max(Read, Durable) 而不是 to：`to` 在 `to<=from` 时
-		// 恰好等于（或小于）`from`，拿它做上界会永远查不到东西（这是本修复初版的 bug，
-		// 当场被 reclaim_seam_backfill_test.go 的 TestFirstConfirmedCoverageStartPicks... 抑住）。
-		// 真正要回答的问题是"reclaim 之后、已有读取的范围内，已确认覆盖从哪开始"。
-		frontier := max(positions.Read, positions.Durable)
-		entry := p.Ledger().Get(p.Key())
-		var acked []ledger.PositionRange
-		if entry != nil {
-			acked = entry.RequestDoneRanges
-		}
-		uncovered, ok := firstConfirmedCoverageStart(acked, from, frontier)
-		if !ok || uncovered <= from || uncovered >= frontier {
-			m.noteReclaimBlocked("no-material", p, source)
-			return nil // 无"已确认但未覆盖"的区间
-		}
-		from = uncovered
-	}
-	entry := p.Ledger().Get(p.Key())
-	if entry == nil {
-		return nil
-	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	m.mu.Lock()
-	saved := m.state.Sources[key]
-	ownerSource, ownerPresent := m.sources[key]
-	owned := m.pipes[key] == p
-	m.mu.Unlock()
-	// 进入补段主体的诊断（2026-10-29）：现场排查时「补段被拦下」一条都没有，
-	// 无法判断是没进主体还是在主体内静默返回。按源首次打一条，把关键状态一次性摊开。
-	slog.Info("补段开始（已确认覆盖但无段）",
-		"logSourceID", source.LogSourceID, "from", from, "to", to,
-		"deferredDelivery", m.deferredDelivery, "owned", owned, "ownerPresent", ownerPresent,
-		"ranges", len(entry.RequestDoneRanges))
-	if m.deferredDelivery {
-		if !owned || !ownerPresent {
-			return errPublicationStale
-		}
-		ctx := m.lifecycleContext()
-		if len(contexts) > 0 && contexts[0] != nil {
-			ctx = contexts[0]
-		}
-		ctx, releaseOwner, ownerErr := m.acquireSourceDelivery(ctx, source)
-		if ownerErr != nil {
-			return ownerErr
-		}
-		defer releaseOwner()
-		// 原cut在任何网络前取得；候选只取真实耐久、连续且已ACK的有界前缀，窗外新尾不受租约影响。
-		events, capture, selectedEnd, captureErr := m.captureReclaimPrefix(p, entry, from, to)
-		if captureErr != nil {
-			return captureErr
-		}
-		if len(events) == 0 {
-			m.noteReclaimBlocked("no-confirmed-copy", p, source)
-			return nil
-		}
-		to = selectedEnd
-		proof, proofErr := m.capturePublishedPrefixEvidence(ctx, source, events)
-		if proofErr != nil || !ledger.CoveredByPositionRanges(gapRangesOfEvents(proof.events), from, to) {
-			// 永久丢失情形（2026-10-29 用户裁定）：本批数据**全部**落在已超出热层保留期的 UTC 天，
-			// 那些天在 VL 里物理上不存在（VL 对超期数据返回 200 但立即丢弃），因此
-			// `capturePublishedPrefixEvidence` 必然取不到证据 —— 补段在这里**永远**不会成功。
-			//
-			// 不处理它的代价（真机）：reclaim 卡在 0 ⇒ WAL 删不掉 ⇒ 撞 20000 条上限 ⇒ 整个源停采。
-			// 为了一段 VL 里本就不存在的历史数据，牺牲之后全部新日志的采集。
-			//
-			// 处置：如实登记为永久丢失凭据（`PERMANENTLY_LOST`，带操作人与时间，可查可审计），
-			// 然后让回收链跨过这段空洞。**不撒谎**——VL 里确实没有这段数据，账本如实记下这个事实，
-			// 与「静默跳过」的区别是：有结构化凭据、有原因码、有操作人、且不会被后续对账重复补账。
-			if m.beyondHotRetentionForEvents(source, events) {
-				if abErr := m.abandonBeyondHotRetention(p, source, from, to); abErr != nil {
-					return abErr
-				}
-				// 丢弃裁定必须**当场落库**（2026-10-29）：`AbandonGapsThrough` 只改内存账本，
-				// 而本路径下一次触发要等一整轮。不落库的后果有两个：
-				//   ① 重启即丢（现场实测：每重启一次这些源都得从头再来）；
-				//   ② 索引库里的 `abandonments` 恒为 0，而回收链在**重启后**正是从库里读它
-				//      ⇒ 一旦重启，已放弃的区间又变成「无凭据」⇒ 死锁复现。
-				if persistErr := m.persist(); persistErr != nil {
-					// 落库失败不让整轮失败（账本内存态已改，下一轮会再试），但要可见。
-					slog.Warn("丢弃裁定落库失败（账本内存态已改，将重试）",
-						"source", source.LogSourceID, "error", persistErr)
-				}
-				m.noteReclaimBlocked("permanently-lost-beyond-retention", p, source)
-				return nil
-			}
-			m.noteReclaimBlocked("proof-coverage-short", p, source)
-			return nil
-		}
-		segID := fmt.Sprintf("%s%d-%d", deliveryConfirmedSegPrefix, from, to)
-		if _, exists := p.RecoveryRef(segID); !exists {
-			// RegisterRecovery自身保留锁外归档lookup与epoch复核；这里只预绑不可回收的STAGED，不取WAL.mu/publishMu/m.mu跨SQL。
-			if err := p.Ledger().RegisterRecovery(p.Key(), ledger.RecoveryRef{SegmentID: segID, Path: "projection://" + generation, State: logtypes.RecoveryStaged, CoversFrom: from, CoversTo: to}); err != nil {
-				return err
-			}
-		}
-		prepared, preparedExists := p.RecoveryRef(segID)
-		if !preparedExists {
-			return nil
-		}
-		releaseWindow, windowErr := p.WAL().AcquireCapturedWindow(events, true, nil, false, capture)
-		if windowErr != nil {
-			return windowErr
-		}
-		defer releaseWindow()
-		// 原半开窗租约已钉住完整正文；ACK复核只认原cut的实际成员，不借RequestDone范围给新体授证。
-		acked, ackErr := p.WAL().CapturedMembersAcknowledged(events, capture)
-		if ackErr != nil {
-			return ackErr
-		}
-		if !acked {
-			return acquire.ErrWALWindowChanged
-		}
-		transferred := false
-		// 锁序为原窗口逻辑租约→publishMu→m.mu→ledger短锁；至多64段的内存合并与状态转移，不跨网络、磁盘或退避。
-		if err := m.applyPublishedEvidence(source, proof, func(ranges []ledger.PositionRange) error {
-			if p.Ledger().HasRecoveryHold(p.Key()) {
-				return nil
-			}
-			if m.recoveryHold != nil {
-				for day := range proof.authorities {
-					daySource := source
-					daySource.UTCDay = day
-					if hold, _ := m.recoveryHold(daySource, generation); hold {
-						return nil
-					}
-				}
-			}
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			current, exists := m.state.Sources[key]
-			if ctx.Err() != nil || !exists || m.pipes[key] != p || !sameSourceConfig(ownerSource, m.sources[key]) || current.ProjectionGeneration != saved.ProjectionGeneration {
-				return errPublicationStale
-			}
-			if attempt, _ := ctx.Value(verifyAttemptKey{}).(*verifyAttemptBudget); attempt != nil && attempt.state.deadlineNanos.Load() > 0 && time.Now().UnixNano() >= attempt.state.deadlineNanos.Load() {
-				return ErrVerifyDeferred
-			}
-			for day, observed := range proof.authorities {
-				actual, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
-				if !sameCatalogAuthority(observed, actual) || sourcePublicationToken(observed, source) != sourcePublicationToken(actual, source) {
-					return errPublicationStale
-				}
-			}
-			now, ok := p.Ledger().Positions(p.Key())
-			if !ok || now.Reclaim != from || now.Delivery < to || !ledger.CoveredByPositionRanges(ledger.RequestDoneRangesOf(p.Ledger().Get(p.Key())), from, to) {
-				return nil
-			}
-			merged := ledger.MergePositionRanges(append(append([]ledger.PositionRange{}, current.VerifiedRuns...), ranges...))
-			grew := !samePositionRanges(merged, current.VerifiedRuns)
-			if len(merged) > maxVerifiedRunsPerSource {
-				merged = merged[len(merged)-maxVerifiedRunsPerSource:]
-			}
-			current.VerifiedRuns = merged
-			m.state.Sources[key] = current
-			if grew {
-				if m.verifiedCoverageEpoch == nil {
-					m.verifiedCoverageEpoch = make(map[string]uint64)
-				}
-				m.verifiedCoverageEpoch[key]++
-				delete(m.selfHealBackoff, key)
-			}
-			var transferErr error
-			transferred, transferErr = m.transferPreparedDeliveryPrefix(p, generation, from, to, prepared.Path)
-			return transferErr
-		}); err != nil {
-			return err
-		}
-		if transferred {
-			// 当前权威/owner在上面的Xfer线性化点授权；释放外锁后沿原WAL完整ACK/hold/目标闸回收，原窗口仍持有。
-			_, err := p.TryReclaimThrough(to)
-			return err
-		}
-		return nil
-	} else {
-		// 同步库保留原有已验证canonical取证链，不改变其投递语义。
-		if !ledger.CoveredByPositionRanges(ledger.RequestDoneRangesOf(entry), from, to) {
-			return nil
-		}
-		proof, proofErr := m.currentPublishedRuns(m.lifecycleContext(), source, saved)
-		if proofErr != nil || !ledger.CoveredByPositionRanges(gapRangesOfEvents(proof.events), from, to) {
-			m.noteReclaimBlocked("no-confirmed-copy", p, source)
-			return nil
-		}
-		if err := m.applyPublishedEvidence(source, proof, func([]ledger.PositionRange) error { return nil }); err != nil {
-			return err
-		}
-	}
-	// gate 由调用方给出；补段同时要求精确ACK和当前权威逐字段证明。
-	segID := fmt.Sprintf("%s%d-%d", deliveryConfirmedSegPrefix, from, to)
-	if ref, exists := p.RecoveryRef(segID); exists {
-		return m.advanceDeliveryConfirmedSegment(p, segID, generation, ref)
-	}
-	// 复验守卫（变则弃）：绑定前再读一次水位 —— 期间 Reclaim 前移 ⇒ 本段起点已过期。
-	if now, ok := p.Ledger().Positions(p.Key()); !ok || now.Reclaim != from || now.Delivery < to {
-		m.noteReclaimBlocked("watermark-moved", p, source)
-		return nil
-	}
-	// Path 用**与投影背书段同款**的 `projection://<generation>`：常规释放链会据此把释放依据登记为
-	// PROJECTION_BACKED（复审 P2-13 的口径 ✓）；"这一段从哪来"由**段名前缀** `delivery-confirmed-` 标注 ✓。
-	if err := p.BindRecoverySegment(segID, "projection://"+generation, from, to); err != nil {
-		return err
-	}
-	ref, ok := p.RecoveryRef(segID)
-	if !ok {
-		return nil
-	}
-	slog.Warn("回收位置无段覆盖：已按「投递已确认水位」补段（解滞回链的根因）",
-		"logSourceID", p.Key().LogSourceID, "generation", p.Key().SourceGeneration,
-		"segment", segID, "coversFrom", from, "coversTo", to,
-		"delivery", to, "note", "凭据 = 该区间已确认投递（插入 + 逐字段校验 + 已发布投影）")
-	return m.advanceDeliveryConfirmedSegment(p, segID, generation, ref)
-}
-
-// transferPreparedDeliveryPrefix只在同一权威/owner短临界区消费已完成归档身份检查的STAGED，授予恢复责任。
-// 不在这里建段或回收：前者可能SQL查归档，后者可记录恢复日志；此处仅调用ledger内存接口。
-func (m *Manager) transferPreparedDeliveryPrefix(p *pipeline.Pipeline, generation string, from, to uint64, preparedPath string) (bool, error) {
-	segID := fmt.Sprintf("%s%d-%d", deliveryConfirmedSegPrefix, from, to)
-	ref, exists := p.RecoveryRef(segID)
-	// 原Path只是已查归档的准备身份，不能因后来真实发布新代次而改写；责任接收者只绑定本次新RO已证明的generation。
-	if !exists || !strings.HasPrefix(preparedPath, "projection://") || ref.Path != preparedPath || ref.CoversFrom != from || ref.CoversTo != to || ref.HasHold {
-		return false, errPublicationStale
-	}
-	if ref.State == logtypes.RecoveryStaged {
-		if err := p.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", ""); err != nil {
-			return false, err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	if ref.State == logtypes.RecoveryDurableVerified {
-		if err := p.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "projection:"+generation); err != nil {
-			return false, err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	return ref.State == logtypes.RecoveryWALResponsibilityXfer, nil
-}
-
-// captureReclaimPrefix只捕获当前回收点之后的连续有界前缀；洞和未ACK后缀保留给原滚动排空链。
-// WAL同锁捕获正文与原cut；网络后仍须先取得原窗租约并复核完整ACK，原cut全程不得重造。
-func (m *Manager) captureReclaimPrefix(p *pipeline.Pipeline, entry *ledger.Entry, from, to uint64) ([]logtypes.Event, *acquire.DeliveryCapture, uint64, error) {
-	limit := 500
-	if m.maxReplayEventsPerDrain > 0 {
-		limit = min(limit, m.maxReplayEventsPerDrain)
-	}
-	events, capture, err := p.WAL().CaptureAcknowledgedPrefix(from, to, limit)
-	if err != nil {
-		return nil, nil, from, err
-	}
-	end := from
-	acked := ledger.RequestDoneRangesOf(entry)
-	for i, event := range events {
-		if !ledger.CoveredByPositionRanges(acked, event.Record.Start, event.Record.End) {
-			events = events[:i]
-			break
-		}
-		end = event.Record.End
-	}
-	return events, capture, end, nil
-}
-
-// 到达 Xfer 即让 `CanReclaim` 放行；随后立即尝试推进回收 —— 成功即"积压回落 → 滞回满足 → 采集恢复"当场打开 ✓。
-func (m *Manager) advanceDeliveryConfirmedSegment(p *pipeline.Pipeline, segID, generation string, ref ledger.RecoveryRef) error {
-	if ref.State == logtypes.RecoveryStaged {
-		if err := p.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", ""); err != nil {
-			return err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	if ref.State == logtypes.RecoveryDurableVerified {
-		// 接收者必须显式（账本拒绝空/self/等于段名）：本段的接收者就是该代次的已发布投影 ✓。
-		if err := p.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", "projection:"+generation); err != nil {
-			return err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	if ref.State != logtypes.RecoveryWALResponsibilityXfer {
-		return nil // 已被常规释放链推进过（Released/Cleaned）：本轮无需再动
-	}
-	if _, err := p.TryReclaim(); err != nil {
-		// 回收推进失败**不**让投递失败（投递已确认，段已就位 ⇒ 下一轮/下一面会自动再试 ✓）；
-		// 但必须留痕（该类失败此前是静默的，正是本悬案难查的原因之一 ✓）。
-		slog.Warn("补段后就地推进回收失败（下一轮自动再试）",
-			"logSourceID", p.Key().LogSourceID, "segment", segID, "error", err.Error())
-	}
-	return nil
-}
-
-// releaseRecovery transfers WAL responsibility only after the delivery result
-// and canonical projection have both been persisted. The projection itself is
-// the durable receiver; HTTP 2xx alone never reaches this method.
+// 第 1 条不是形式主义：`acquire.Pipeline.Ingest` 的 suppressRecursiveVL 分支为避免
+// 「失败日志再写回 VL」会 `return nil`，投递失败因此被上层读成成功（2026-10-21 数据丢失事故
+// 正是这个形状）。判据取 `Delivery >= to`（`RecordHTTPResult` 只在投递成功后由
+// `acquire.Pipeline` 调用，故它恰好等价于「这段确实落地过」）。不满足即返回 nil 而不报错是
+// 刻意的：调用点（worker 自源）正是为了避免「失败 → 记日志 → 又被自己采集」的递归才吞掉
+// 投递错误的，这里再抛错会把同一条递归链重新接上。
 func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event, contexts ...context.Context) error {
 	if len(events) == 0 {
 		return nil
@@ -10058,22 +9585,13 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event, 
 	if err := writtenProofContextErr(ctx); err != nil {
 		return err
 	}
-	if attempt, _ := ctx.Value(verifyAttemptKey{}).(*verifyAttemptBudget); attempt != nil {
-		if deadline := attempt.state.deadlineNanos.Load(); deadline > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, time.Unix(0, deadline))
-			defer cancel()
-		}
-	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	m.mu.Lock()
 	p := m.pipes[key]
-	generation := m.state.Sources[key].ProjectionGeneration
 	m.mu.Unlock()
 	if p == nil {
 		return fmt.Errorf("ingest: pipeline %s missing for reclaim proof", key)
 	}
-	defer m.archiveCleanedRecovery(p)
 	if m.deferredDelivery {
 		defer m.pruneCommittedReceipt(key, p)
 	}
@@ -10085,156 +9603,22 @@ func (m *Manager) releaseRecovery(source SourceConfig, events []logtypes.Event, 
 	if !ok {
 		return fmt.Errorf("ingest: missing ledger positions for %s", key)
 	}
-	// **责任转移的前置判据：该区间必须已有「确认副本」**（2026-10-21 数据丢失修复）。
-	//
-	// 为什么必须有这道闸：本函数的全部语义都是「WAL 的责任已转移给 projection://<代次>」——
-	// 一旦段走到 RELEASED，`Ledger.tryReclaimLocked` 就会把 `Reclaim` 推到 `ref.CoversTo`
-	// （判据只看段状态，**不看投递水位**），随后 `WAL.pruneReclaimed` 按
-	// `Durable && Record.End <= Reclaim` 丢掉那些条目。也就是说：这里若在没有副本的情况下
-	// 建段，等于**当场把未投递的数据从 WAL 里删掉**，而且账本上还写着"有副本"。
-	//
-	// 现场形态（实测，`source=worker` 自源 + VL 端口不可达）：`acquire.Pipeline.Ingest` 的
-	// suppressRecursiveVL 分支为避免"失败日志再写回 VL"而 `return nil`，投递失败因此被上层
-	// 读成成功 ⇒ 走到本函数 ⇒ 为**从未写入 VL、也不在 canonical 集合里**的区间建段并置
-	// CLEANED ⇒ `reclaim` 越过它 ⇒ WAL 条目被剪 ⇒ 事件彻底消失（数据丢失）。
-	//
-	// 判据取 `Delivery >= to`（`to` 是本批实际投递面末端）：`RecordHTTPResult` 只在投递
-	// 成功后由 `acquire.Pipeline` 调用，故它恰好等价于"这段确实落地过"。不满足即**什么都不做**：
-	// 不建段、不推进、不报错 —— 条目留在 WAL，由维护环的投递欠账步（`Delivery < Read` 时
-	// 触发 `DeliverPending`）在 VL 恢复后重投。返回 nil 而不返回错误是刻意的：调用点
-	// （worker 自源）正是为了避免"失败 -> 记日志 -> 又被自己采集"的递归才吞掉投递错误的，
-	// 这里再抛错会把同一条递归链重新接上。
 	entry := p.Ledger().Get(p.Key())
 	if positions.Delivery < to || entry == nil || !ledger.CoveredByPositionRanges(ledger.RequestDoneRangesOf(entry), positions.Reclaim, to) {
 		m.noteReclaimBlocked("no-confirmed-copy", p, source)
 		return nil
 	}
-	_, _, capture, captureErr := p.WAL().CaptureDelivery(events)
-	if captureErr != nil {
-		capture = nil
-	}
-	proof := m.capturePublishedEvidence(source, events, ctx)
-	if !ledger.CoveredByPositionRanges(gapRangesOfEvents(proof.events), positions.Reclaim, to) {
-		m.noteReclaimBlocked("no-confirmed-copy", p, source)
-		return nil
-	}
+	// 推进回收并按当前水位剪枝。失败不置死：下一轮投递/维护环会自动重试。
+	var reclaimErr error
 	if m.deferredDelivery {
-		releaseWindow, windowErr := p.WAL().AcquireCapturedWindow(proof.events, false, nil, false, capture)
-		if windowErr != nil {
-			return windowErr
-		}
-		defer releaseWindow()
+		_, reclaimErr = p.TryReclaimThrough(to)
+	} else {
+		_, reclaimErr = p.TryReclaim()
 	}
-	if err := m.applyPublishedEvidence(source, proof, func([]ledger.PositionRange) error {
-		// 原RO完成后仍可能等待发布锁，责任转移前必须复查同一ctx与绝对截止。
-		return writtenProofContextErr(ctx)
-	}); err != nil {
-		return err
+	if reclaimErr != nil && !errors.Is(reclaimErr, ledger.ErrReclaimPrecondition) {
+		return reclaimErr
 	}
-	// #61-Z-a：投递确认点补段（共用助手，见 repairStalledReclaim）：先探一次回收，只有被"无段覆盖"
-	// 拒才按"已确认投递水位"补段 ⇒ 把滞回链的根因当场解掉 ✓；再走下面原有的"本批区间"责任转移链
-	//（补段后 reclaim 可能已前移 ⇒ 下面自然早退 ✓，两者可组合 ✓）。
-	// 正常投递只转移本批精确证明的区间；历史空洞交维护面独立取证，不在每批全源扫描。
-	from := positions.Reclaim
-	currentSegID := fmt.Sprintf("projection-recovery-%s-%d", generation, to)
-	segID := currentSegID
-	ref, exists := p.RecoveryCovering(from, to)
-	if exists {
-		segID = ref.SegmentID
-	}
-	if !exists {
-		if from >= to {
-			return nil
-		}
-		if err := p.BindRecoverySegment(segID, "projection://"+generation, from, to); err != nil {
-			return err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	releaseUse, useErr := p.Ledger().AcquireRecoveryUse(p.Key(), segID, "ingest-release")
-	if useErr != nil {
-		return useErr
-	}
-	defer releaseUse()
-	if ref.State == logtypes.RecoveryStaged {
-		if err := p.TransitionRecovery(segID, logtypes.RecoveryDurableVerified, "", ""); err != nil {
-			return err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	receiver := "projection:" + generation
-	if ref.State == logtypes.RecoveryDurableVerified {
-		if err := p.TransitionRecovery(segID, logtypes.RecoveryWALResponsibilityXfer, "", receiver); err != nil {
-			return err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	if ref.State == logtypes.RecoveryCleaned {
-		return nil
-	}
-	if m.recoveryHold != nil {
-		_, days, err := groupEventsByUTCDay(source, events)
-		if err != nil {
-			return err
-		}
-		for _, day := range days {
-			daySource := source
-			daySource.UTCDay = day
-			hold, reason := m.recoveryHold(daySource, generation)
-			if !hold {
-				continue
-			}
-			if err := p.SetRecoveryHold(segID, true); err != nil {
-				return err
-			}
-			// 恢复链：**一步一让**（不在这里把整段差异吃完，见 persistRecoveryStep 的说明）。
-			if err := m.persistRecoveryStep(ctx); err != nil {
-				return err
-			}
-			return fmt.Errorf("ingest: recovery segment %s retained by hold for %s: %s", segID, day, reason)
-		}
-		if err := p.SetRecoveryHold(segID, false); err != nil {
-			return err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	if ref.State == logtypes.RecoveryWALResponsibilityXfer {
-		// 释放依据必须与「这段到底有没有副本」一致（复审 P2-13）：
-		//   - project://<代次>：本段的凭据就是该代次的已发布投影 → PROJECTION_BACKED；
-		//   - manual://delivered-no-copy：静默源出口补出的**无副本**段，凭据同样是「整段已投递并
-		//     被逐字段校验」（见 ResolveCoveredGaps 的说明）→ 仍是 PROJECTION_BACKED，
-		//     绝不能登记成「下一份副本已验证」；
-		//   - 其余路径：按既有语义视为「另有已验证副本」。
-		reason := logtypes.ReleaseNextCopyVerified
-		switch ref.Path {
-		case "projection://" + generation, silentExitNoCopyPath:
-			reason = logtypes.ReleaseProjectionBacked
-		}
-		if err := p.TransitionRecovery(segID, logtypes.RecoveryReleased, reason, receiver); err != nil {
-			return err
-		}
-		ref, _ = p.RecoveryRef(segID)
-	}
-	if ref.State != logtypes.RecoveryReleased {
-		return fmt.Errorf("ingest: recovery segment %s cannot be completed from %s", segID, ref.State)
-	}
-	if positions.Reclaim < ref.CoversTo {
-		var reclaimErr error
-		if m.deferredDelivery {
-			_, reclaimErr = p.TryReclaimThrough(to)
-		} else {
-			_, reclaimErr = p.TryReclaim()
-		}
-		if err := reclaimErr; err != nil && !errors.Is(err, ledger.ErrReclaimNoSegment) {
-			// #61-Z-a：分段末端之后的"无段覆盖"**不是错误** —— 它正是"本段覆盖到此为止"的正常形态
-			//（回收已推进到 ref.CoversTo ✓）。其余拒绝（状态未转移 / hold）仍照旧上报 ✓。
-			return err
-		}
-	}
-	if err := p.TransitionRecovery(segID, logtypes.RecoveryCleaned, logtypes.ReleaseProjectionBacked, receiver); err != nil {
-		return err
-	}
-	return m.persistRecoveryStep(ctx)
+	return nil
 }
 
 func nextProjectionGeneration(current string) string {

@@ -1229,59 +1229,19 @@ func (p *Pipeline) SelfFailureReasons() []string {
 	return p.inner.SelfFailureReasons()
 }
 
-// CanReclaimNow 按当前账本恢复分段状态评估是否允许回收。
+// CanReclaimNow 报告当前是否还有「已确认投递但未回收」的前缀。
+//
+// 2026-10-29 改写：不再看恢复分段——回收只需 `min(delivery, max(read,durable)) > reclaim`。
 func (p *Pipeline) CanReclaimNow() bool {
 	ent := p.led.Get(p.key)
 	if ent == nil {
 		return false
 	}
-	for _, ref := range ent.RecoveryRefs {
-		if ref.CoversFrom <= ent.Positions.Reclaim && ref.CoversTo > ent.Positions.Reclaim {
-			return logtypes.CanReclaim(ent.Positions, ref.State, ref.ReleaseReason, ref.HasHold)
-		}
+	frontier := max(ent.Positions.Read, ent.Positions.Durable)
+	if ent.Positions.Delivery < frontier {
+		frontier = ent.Positions.Delivery
 	}
-	// 无覆盖 reclaim 前缀的恢复分段：不得回收。
-	return false
-}
-
-// BindRecoverySegment 登记受管恢复分段（STAGED）。
-func (p *Pipeline) BindRecoverySegment(segID, path string, coversFrom, coversTo uint64) error {
-	return p.wal.BindRecoverySegment(segID, path, coversFrom, coversTo)
-}
-
-// TransitionRecovery 推进恢复分段责任状态。
-func (p *Pipeline) TransitionRecovery(segID string, to logtypes.RecoverySegmentState, reason logtypes.ReleaseReason, receiver string) error {
-	return p.led.TransitionRecovery(p.key, segID, to, reason, receiver)
-}
-
-func (p *Pipeline) RecoveryRef(segID string) (ledger.RecoveryRef, bool) {
-	entry := p.led.Get(p.key)
-	if entry == nil {
-		return ledger.RecoveryRef{}, false
-	}
-	for _, ref := range entry.RecoveryRefs {
-		if ref.SegmentID == segID {
-			return ref, true
-		}
-	}
-	return ledger.RecoveryRef{}, false
-}
-
-func (p *Pipeline) RecoveryCovering(from, to uint64) (ledger.RecoveryRef, bool) {
-	entry := p.led.Get(p.key)
-	if entry == nil {
-		return ledger.RecoveryRef{}, false
-	}
-	for _, ref := range entry.RecoveryRefs {
-		if ref.State != logtypes.RecoveryCleaned && ref.CoversFrom <= from && ref.CoversTo >= to {
-			return ref, true
-		}
-	}
-	return ledger.RecoveryRef{}, false
-}
-
-func (p *Pipeline) SetRecoveryHold(segID string, hold bool) error {
-	return p.led.SetRecoveryHold(p.key, segID, hold)
+	return frontier > ent.Positions.Reclaim
 }
 
 // Gaps 返回账本缺口（容量暂停/坏记录/投递失败可见）。

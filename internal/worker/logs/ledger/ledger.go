@@ -4,7 +4,6 @@
 package ledger
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -93,14 +92,14 @@ type Segment struct {
 	Inode    uint64 `json:"inode,omitempty"`
 	// InodeKnown 区分"真实 inode 为 0"与"未记录"：零值 inode 合法（某些伪文件系统），
 	// 但未记录必须显式可知，否则判据会把两者混为一谈。
-	InodeKnown    bool   `json:"inode_known,omitempty"`
-	IdentityBytes int64  `json:"identity_bytes,omitempty"`    // live 文件稳定前缀长度
-	IdentitySHA256 string `json:"identity_sha256,omitempty"` // 检测同路径替换，不能参与 event_id
-	ArchiveObjectID      string `json:"archive_object_id,omitempty"` // provenance only
-	Imported             bool   `json:"imported"`
-	ImportError          string `json:"import_error,omitempty"`
-	ObservedSize         int64  `json:"observed_size,omitempty"`
-	ObservedModNano      int64  `json:"observed_mod_unix_nano,omitempty"`
+	InodeKnown      bool   `json:"inode_known,omitempty"`
+	IdentityBytes   int64  `json:"identity_bytes,omitempty"`    // live 文件稳定前缀长度
+	IdentitySHA256  string `json:"identity_sha256,omitempty"`   // 检测同路径替换，不能参与 event_id
+	ArchiveObjectID string `json:"archive_object_id,omitempty"` // provenance only
+	Imported        bool   `json:"imported"`
+	ImportError     string `json:"import_error,omitempty"`
+	ObservedSize    int64  `json:"observed_size,omitempty"`
+	ObservedModNano int64  `json:"observed_mod_unix_nano,omitempty"`
 	// BaseDay 是该段**首次导入时固化**的无日期时刻锚点日（UTC，形如 "2006-01-02"）。
 	//
 	// 为什么需要（2026-10-20 真机验收根因）：只有时刻、没有日期格式的日志行（如 BungeeCord
@@ -769,22 +768,6 @@ func (l *Ledger) SupersedeDeliveredReReadGaps(key SourceKey, ranges []PositionRa
 	return superseded, nil
 }
 
-// RecoveryRef 受管恢复分段在账本中的引用。
-type RecoveryRef struct {
-	SegmentID     string                        `json:"segment_id"`
-	Path          string                        `json:"path"`
-	State         logtypes.RecoverySegmentState `json:"state"`
-	ReleaseReason logtypes.ReleaseReason        `json:"release_reason,omitempty"`
-	// ResponsibilityReceiver 责任接收者（RELEASED 前必填）。
-	ResponsibilityReceiver string `json:"responsibility_receiver,omitempty"`
-	// CoversFrom/CoversTo 覆盖的 WAL 前缀（exclusive end）。
-	CoversFrom uint64 `json:"covers_from"`
-	CoversTo   uint64 `json:"covers_to"`
-	HasHold    bool   `json:"has_hold"`
-	// RetentionDeadlineUnixSec 保留约束；未解除责任前不得普通到期清理。
-	RetentionDeadlineUnixSec int64 `json:"retention_deadline_unix_sec,omitempty"`
-}
-
 // DeliveryBatch 批次级请求结果；位置与状态分开保存。
 type DeliveryBatch struct {
 	Start uint64                 `json:"start"`
@@ -826,7 +809,6 @@ type Entry struct {
 	// Abandonments 是「人工确认永久丢失」裁定的凭据列表（有界，见 DefaultMaxAbandonmentsPerSource）。
 	// 它比 Gap 记录活得更久：缺口会被裁剪，而「回收链凭什么跨过那个空洞」的凭据必须留存。
 	Abandonments []GapAbandonment `json:"abandonments,omitempty"`
-	RecoveryRefs []RecoveryRef    `json:"recovery_refs"`
 	ErrorCount   int              `json:"error_count"`
 	IngestSeq    uint64           `json:"ingest_seq"`
 	// AcquirePaused 容量/预算耗尽时置位；暂停期间不得静默丢数据。
@@ -900,12 +882,6 @@ type Ledger struct {
 	// DefaultDeliveryBatchPruneConfig 与 delivery_batch_prune.go 的判据与证明）。
 	// 它是内存与索引两侧同时有界的唯一开关：账本自己持批次列表，故裁剪点必须在这里。
 	batchPrune DeliveryBatchPruneConfig
-	// recoveryArchive 是独立历史审计仓储；任何仓储调用必须在账本锁外执行。
-	recoveryArchive RecoveryArchiveStore
-	// recoveryArchiveEpoch 使锁外历史查询与并发摘除之间的 SegmentID 重绑可重试。
-	recoveryArchiveEpoch uint64
-	// recoveryUses 只承接当前进程真实持有者，重启后已退出的消费者不应形成永久租约。
-	recoveryUses map[recoveryUseKey]uint64
 }
 
 // New 创建空账本。
@@ -939,32 +915,8 @@ func (l *Ledger) touch(key SourceKey) {
 	l.revisions[key]++
 }
 
-// HasRecoveryHold 报告该源是否有任一恢复分段处于 hold（运维显式钉住）。
-//
-// 为什么需要它（#61-Z-a）：补段的**新段不带 hold** —— 若放任补段，就会绕过已有 hold 把 reclaim
-// 推过被钉住的位置（实测 TestManagerRecoveryHoldSurvivesRestartAndReleasesAfterConstraintClears 转红 ✗）；
-// 补段侧据此**一律让路**（hold 优先于任何自动补段 ✓，与 tryReclaimLocked 里 hold 优先于凭据同口径 ✓）。
-func (l *Ledger) HasRecoveryHold(key SourceKey) bool {
-	if l == nil {
-		return false
-	}
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	e, ok := l.entries[key]
-	if !ok || e == nil {
-		return false
-	}
-	for _, r := range e.RecoveryRefs {
-		if r.HasHold {
-			return true
-		}
-	}
-	return false
-}
-
-// ErrReclaimNoSegment 表示"回收被拒：没有任何恢复分段覆盖当前回收位置"（#61）。
-// 调用方（ingest 的投递确认点）据此判定存在**覆盖洞**并补段；其余拒绝（状态未转移 / hold）不带本哨兵 ✓。
-var ErrReclaimNoSegment = errors.New("ledger: reclaim blocked")
+// 回收现在只需要一条证据链：`delivery`（请求结果连续前缀）与 `max(Read, Durable)`（已读入量）。
+// 恢复分段与 `ErrReclaimNoSegment` 已于 2026-10-29 删除（用户裁定「两者都删」）。
 
 // Positions 返回该源当前水位（读/耐久/投递/回收）—— **O(1) 只读**，不含 Entry 克隆。
 //
@@ -1098,7 +1050,7 @@ func (l *Ledger) Restore(entries []Entry) error {
 				"reclaim", copy.Positions.Reclaim, "read", copy.Positions.Read)
 			copy.Positions.Reclaim = copy.Positions.Read
 		}
-		copy.Positions.Delivery = contiguousDeliveryEnd(copy.DeliveryBatches, copy.Positions.Reclaim)
+		copy.Positions.Delivery = ContiguousDeliveryEnd(copy.DeliveryBatches, copy.Positions.Delivery)
 		l.entries[entry.Key] = copy
 		l.touch(entry.Key)
 	}
@@ -1174,7 +1126,7 @@ func (l *Ledger) AdvanceRead(key SourceKey, pos uint64) error {
 // 但 WAL 改为**纯内存队列**后，“durable 与 WAL 行是同一个提交单元落库”这个前提没了——
 // 那些字节其实只在内存里，重启就没了。它在库里记录的那个 durable 位置不再对应任何
 // 可恢复的内容。因此**重启恢复期**必须把它退回去，才能让 tailer 重读那一段
-//（tailer 游标取 min(durable, read)，见 acquire/tailer.go）。
+// （tailer 游标取 min(durable, read)，见 acquire/tailer.go）。
 //
 // ## 为什么是单独一个方法而不是放宽 AdvanceDurable
 //
@@ -1238,8 +1190,37 @@ func (l *Ledger) RecordDelivery(key SourceKey, start, end uint64, state logtypes
 	preserveDeliveryEvidence(e, batch)
 	e.DeliveryState = state
 	l.pruneDeliveryBatchesLocked(e)
-	e.Positions.Delivery = contiguousDeliveryEnd(e.DeliveryBatches, e.Positions.Reclaim)
+	e.Positions.Delivery = advanceDeliveryEnd(e)
 	return nil
+}
+
+// advanceDeliveryEnd 把投递前缀推进到「所有字节均有请求结果」的连续末端（**单调不减**）。
+//
+// ## 为什么 floor 是 Positions.Delivery 自己，而不是 Positions.Reclaim（2026-10-29 修正）
+//
+// 用 reclaim 当 floor 会形成**自引用**：回收是 `min(REQUEST_DONE 覆盖末端, max(read,durable))`，而
+// `delivery = contiguousDeliveryEnd(batches, reclaim)` 又把 reclaim 当输入 ⇒ 回收推进后
+// 重算 delivery 会退回到新 reclaim，再反过来挡住下一轮回收。更致命的是裁剪：
+// 批次水位取 `min(Reclaim, Delivery)`，一旦两者追平，全部历史批次都成了「水位之下的恒等元」
+// 被裁掉 ⇒ 下一轮 `contiguousDeliveryEnd(空列表, reclaim) == reclaim` ⇒ **回收永久停滞**。
+// 即「推进依据被裁剪吃掉」——这正是旧架构最终必须靠「恢复段 + 投影证据」兜底的根因。
+//
+// 改用**自身**作 floor 后两者都解掉：
+//   - 自引用消失：delivery 不再读取 reclaim；
+//   - 裁剪吃掉依据也不成立：裁掉的条目都满足 `End <= watermark <= Delivery`，
+//     而 `contiguousDeliveryEnd(裁剪后, Delivery) == Delivery` 是恒等的 ⇒ floor 处信息不用重建。
+//
+// 单调性由 `max` 保住：批次只追加、裁剪只摘「水位之下」的条目，任何一轮重算都不该让
+// 已确认的前缀退回去（退回等于凭空否认已发生的事实）。
+func advanceDeliveryEnd(e *Entry) uint64 {
+	if e == nil {
+		return 0
+	}
+	next := contiguousDeliveryEnd(e.DeliveryBatches, e.Positions.Delivery)
+	if next > e.Positions.Delivery {
+		return next
+	}
+	return e.Positions.Delivery
 }
 
 // ResolveDeliveryThroughRecovery records that a previously UNKNOWN batch was
@@ -1601,124 +1582,31 @@ func (l *Ledger) ResumeAcquire(key SourceKey) error {
 	return nil
 }
 
-// RegisterRecovery 登记受管恢复分段引用。
-func (l *Ledger) RegisterRecovery(key SourceKey, ref RecoveryRef) error {
-	return l.registerRecovery(key, ref)
-}
-
-// TransitionRecovery 推进恢复分段责任状态。
-// 进入 RELEASED 前必须登记合法 release_reason 与责任接收者（F-004）。
-// CLEANED 只能从 RELEASED 进入；hold 中禁止释放。
-func (l *Ledger) TransitionRecovery(key SourceKey, segmentID string, to logtypes.RecoverySegmentState, reason logtypes.ReleaseReason, receiver string) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	e, err := l.require(key)
-	if err != nil {
-		return err
-	}
-	for i, r := range e.RecoveryRefs {
-		if r.SegmentID != segmentID {
-			continue
-		}
-		if r.HasHold && (to == logtypes.RecoveryReleased || to == logtypes.RecoveryCleaned) {
-			return fmt.Errorf("ledger: cannot release recovery segment %s while hold is set", segmentID)
-		}
-		if recoveryRank(to) < recoveryRank(r.State) {
-			return fmt.Errorf("ledger: recovery transition cannot move backward %s → %s", r.State, to)
-		}
-		if to == r.State {
-			return nil
-		}
-		switch to {
-		case logtypes.RecoveryReleased:
-			if !logtypes.ValidReleaseReason(reason) {
-				return fmt.Errorf("ledger: invalid release_reason %q", reason)
-			}
-			if receiver == "" || receiver == segmentID || strings.HasPrefix(receiver, "self:") {
-				return fmt.Errorf("ledger: invalid responsibility receiver %q", receiver)
-			}
-			if r.State != logtypes.RecoveryWALResponsibilityXfer {
-				return fmt.Errorf("ledger: cannot release recovery segment from state %s without WAL_RESPONSIBILITY_TRANSFERRED", r.State)
-			}
-		case logtypes.RecoveryCleaned:
-			if r.State != logtypes.RecoveryReleased {
-				return fmt.Errorf("ledger: CLEANED only allowed from RELEASED, got %s", r.State)
-			}
-			// 清理不要求新 reason；沿用已登记证明。
-		case logtypes.RecoveryWALResponsibilityXfer:
-			if r.State != logtypes.RecoveryDurableVerified && r.State != logtypes.RecoveryStaged && r.State != logtypes.RecoveryWALResponsibilityXfer {
-				return fmt.Errorf("ledger: invalid recovery transition %s → %s", r.State, to)
-			}
-		}
-		r.State = to
-		if reason != "" {
-			r.ReleaseReason = reason
-		}
-		if receiver != "" {
-			r.ResponsibilityReceiver = receiver
-		}
-		e.RecoveryRefs[i] = r
-		return nil
-	}
-	return fmt.Errorf("ledger: recovery segment %q not found", segmentID)
-}
-
-func recoveryRank(state logtypes.RecoverySegmentState) int {
-	switch state {
-	case logtypes.RecoveryStaged:
-		return 1
-	case logtypes.RecoveryDurableVerified:
-		return 2
-	case logtypes.RecoveryWALResponsibilityXfer:
-		return 3
-	case logtypes.RecoveryReleased:
-		return 4
-	case logtypes.RecoveryCleaned:
-		return 5
-	default:
-		return 0
-	}
-}
-
-// SetRecoveryHold 设置/清除恢复分段 hold；有 hold 时禁止 reclaim。
-func (l *Ledger) SetRecoveryHold(key SourceKey, segmentID string, hasHold bool) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	e, err := l.require(key)
-	if err != nil {
-		return err
-	}
-	for i, r := range e.RecoveryRefs {
-		if r.SegmentID == segmentID {
-			r.HasHold = hasHold
-			e.RecoveryRefs[i] = r
-			return nil
-		}
-	}
-	return fmt.Errorf("ledger: recovery segment %q not found", segmentID)
-}
-
-// TryReclaim 按 logtypes.CanReclaim 门禁推进 reclaim_position。
-// HTTP 2xx / REQUEST_DONE 单独不构成回收依据。
+// TryReclaim 尝试把 reclaim_position 推进到「已确认投递且已读入」的前缀末端。
+//
+// 语义（2026-10-29 改写，用户裁定「两者都删」）：
+//
+//	reclaim = min(REQUEST_DONE 连续覆盖末端, max(Positions.Read, Positions.Durable))
+//
+// 不再需要恢复分段、不再需要投影证据、不再有 ErrReclaimNoSegment。
+// 理由见 tryReclaimLocked 的注释。
 //
 // 无论回收是否放行，都用**最终**水位裁一次历史投递批次（水位是本方法唯一的输入、裁剪幂等）；
-// 因此「回收被门禁挡住」的源同样会被裁剪，不会因为挡着就长期保留无用历史。
+// 因此「回收被调用方条件挡住」的源同样会被裁剪，不会因为挡着就长期保留无用历史。
 func (l *Ledger) TryReclaim(key SourceKey) (uint64, error) {
 	return l.TryReclaimIf(key, nil)
 }
 
-// ErrReclaimPrecondition表示实际回收目标未获调用方的精确当前证明，不是缺恢复段。
+// ErrReclaimPrecondition表示实际回收目标未获调用方的精确当前证明（逐条 ACK 复核未通过）。
 var ErrReclaimPrecondition = fmt.Errorf("ledger: reclaim precondition rejected")
 
-// ReclaimTarget只携带本次原门禁选出的实际目标与分离值凭据，不泄露账本内部指针或切片。
+// ReclaimTarget只携带本次实际目标与弃投凭据，不泄露账本内部指针或切片。
 type ReclaimTarget struct {
-	From, Target  uint64
-	State         logtypes.RecoverySegmentState
-	ReleaseReason logtypes.ReleaseReason
-	Abandonments  []GapAbandonment
+	From, Target uint64
+	Abandonments []GapAbandonment
 }
 
-// TryReclaimIf只在原门禁算出真实目标后同锁执行纯内存条件；条件禁止IO、外部锁和重入账本。
+// TryReclaimIf只在算出真实目标后同锁执行纯内存条件；条件禁止IO、外部锁和重入账本。
 // 条件拒绝不推进水位也不裁投递证据；nil逐字保留旧TryReclaim语义。
 func (l *Ledger) TryReclaimIf(key SourceKey, allow func(ReclaimTarget) bool) (uint64, error) {
 	l.mu.Lock()
@@ -1736,90 +1624,80 @@ func (l *Ledger) TryReclaimIf(key SourceKey, allow func(ReclaimTarget) bool) (ui
 }
 
 // tryReclaimLocked 是 TryReclaim 的门禁主体。调用方必须已持写锁。
+//
+// ## 为什么不再需要恢复分段（2026-10-29，用户裁定「两者都删」）
+//
+// 旧机制的全部论证前提是：**WAL 里还有未投递副本，需要一个受管副本（恢复分段）接管责任后才能删 WAL**。
+// 于是形成一条前置链：伪造段 → 需要「已发布投影」证据 → 证据取不到（超热层保留期 / 投影缺陷）
+// ⇒ 补段永不成功 ⇒ `ErrReclaimNoSegment` 每轮重现 ⇒ reclaim 永为 0 ⇒ WAL 删不掉 ⇒ 撞上限 ⇒ 源停采。
+//
+// WAL 改纯内存（不落盘、`source_wal` 表已删）后：
+//   - 没有副本需要别人接管；
+//   - 没有 WAL 行需要「删得掉」（只需从内存队列中丢掉已确认的条目）；
+//
+// ⇒ **前提消失，机制失去对象**。现在只剩一条真实的证据链：请求结果（delivery）与已读入量。
+//
+// ## 为什么上界取 max(Read, Durable)
+//
+// `AdvanceDurable` 只推 Durable、**不动 Read**，因此存在合法状态 `Read=0 ∧ Durable=100`：
+// 此时确有 100 字节可回收，只用 Read 会误判成「无事可做」。取两者最大值即「待回收前缀的实际上界」
+// （与旧实现同口径，此处逐字保留）。
+//
+// ## 为什么还要与 Delivery 取 min
+//
+// Read/Durable 只说明「数据已到手」，不说明「已投递」。拿它当唯一上界等于把未确认投递的
+// 数据当作可弃——正是 2026-10-21 那次数据丢失的形状。
+//
+// ## 为什么上界是 REQUEST_DONE 证据而不是 Positions.Delivery（关键）
+//
+// `Delivery` 的语义是「所有字节均有**请求结果**」，而请求结果**包括 UNKNOWN**：
+// `acquire.recordHTTPResultLocked` 把「响应丢失 / 非 2xx」也登记成批次，为的是可审计。
+// 拿 Delivery 当回收上界，就等于把「发出去了但不知道落没落库」的数据从内存队列里删掉——
+// 那正是最不能删的一段（旧架构就是靠「只在 REQUEST_DONE 覆盖时才建恢复段」避开的）。
+//
+// 所以回收只用 **REQUEST_DONE 的连续覆盖**（`RequestDoneRangesOf`）：
+// 只有「确实拿到 2xx 且逐字段校验通过」的字节才能离开队列。UNKNOWN 区间不包含在内，
+// 于是它会成为回收的停滞点，直到重投成功、或队列越界按丢弃语义处理——两个出口都是显式的。
 func (l *Ledger) tryReclaimLocked(e *Entry, conditions ...func(ReclaimTarget) bool) (uint64, error) {
-	// 选取覆盖当前 reclaim 前缀的恢复分段。
-	var ref *RecoveryRef
-	for i := range e.RecoveryRefs {
-		r := &e.RecoveryRefs[i]
-		if r.CoversFrom <= e.Positions.Reclaim && r.CoversTo > e.Positions.Reclaim {
-			ref = r
-			break
-		}
-	}
-	if ref == nil {
-		// 无恢复分段时：仅当 CanReclaim 在“无 seg”语义下不放行。
-		// 契约要求受管恢复副本证明；没有分段不得回收。
-		//
-		// 但「无分段」不必然等于「存在覆盖洞」（2026-10-20 真机验收修复）：判据是**是否还有待回收前缀**，
-		// 而前缀的上界是**读水位**、不是投递水位 —— 反例见 reclaim_backfill_test.go：
-		// Read=19（4 条全读入）、Delivery=9（只确认前 2 条）、Reclaim=9 时，Reclaim 仍可推进到 Read，
-		// 只是缺确认依据 ⇒ 必须继续报哨兵（否则「未确认数据不得跳过」的 default-deny 被吞掉）。
-		//
-		// 真正的「无事可做」是 Reclaim 已追平**读水位**：读入的全部回收完，没有任何前缀待回收。
-		// 此时无分段是常态（分段在回收后即被消费/裁剪）✓。
-		//
-		// 修前该形态同样返回哨兵，于是 `repairStalledReclaim`（runtime.go）把「无事可做」误判为
-		// 「有洞」，对空区间反复补段：补不出覆盖分段 ⇒ 哨兵每轮重现 ⇒ 无进展自旋。
-		// 生产实测 inst:317 约 34 次/分、位置 7582367 三轮不变、空闲 CPU 18.9%，
-		// 且每轮刷一条 WARN 淹没真实信号。故此处返回成功（幂等无操作）✓。
-		//
-		// 判据取 `>=` 而非 `==`：Restore 侧会把越界的 Reclaim 归一回 Read，
-		// 运行期一旦出现 Reclaim > Read，同样无前缀可回收，一律按「无事可做」收敛，避免再次自旋。
-		//
-		// **上界必须取 max(Read, Durable) 而不是只取 Read**（2026-10-21 回归修复，runbook 用例捉住）：
-		// `AdvanceDurable` 只推进 Durable、**不动 Read**（见其实现），而 Read 由采集侧另行推进。
-		// 因此存在合法状态 `Read=0 ∧ Durable=100 ∧ Reclaim=0`——此时**确有 100 字节待回收**，
-		// 只用 `Reclaim >= Read`（0 >= 0）会误判成「无事可做」⇒ 直接返回成功，
-		// 把「尚未回收的已落盘数据」当成已回收放过（default-deny 被吞）。
-		// 取两者最大值即「待回收前缀的实际上界」：只有连 Durable 都追平，才真的没有前缀。
-		if frontier := max(e.Positions.Read, e.Positions.Durable); e.Positions.Reclaim >= frontier {
-			return e.Positions.Reclaim, nil
-		}
-		// 哨兵（#61-Z-a）："无段覆盖"是**可分类**的一类拒绝 —— 调用方据此判定"存在覆盖洞"并补段，
-		// 而不是靠匹配错误文本 ✗。消息文案逐字保留（既有回归与现场排障都按它定位 ✓）。
-		return e.Positions.Reclaim, fmt.Errorf("%w: no recovery segment covers position %d", ErrReclaimNoSegment, e.Positions.Reclaim)
-	}
-	// CanReclaim 是回收门禁：STAGED/DURABLE_VERIFIED/hold 一律拒绝。
-	allowed := logtypes.CanReclaim(e.Positions, ref.State, ref.ReleaseReason, ref.HasHold)
-	if !allowed && !ref.HasHold {
-		// 凭据放行（2026-10-02，用户质疑「永久空洞的出口」）：
-		// 当本分段覆盖的区间内已有人工裁定的**永久丢失**空洞（PERMANENTLY_LOST + 审计凭据）时，
-		// 恢复责任**不可能**再通过校验转移（数据物理没了），常规门禁会让回收链永久卡在空洞之前
-		// → WAL 积压永不回落 → 滞回永不满足 → 源永久 PAUSED。
-		//
-		// 这是**独立的有凭据的放行**，不是放宽门禁本身：没有凭据时依旧拒绝（default-deny 未动）。
-		// 放行范围严格限定在**本分段覆盖之上界**（target 仍是 ref.CoversTo），不会因为一个凭据
-		// 就把回收推到任意位置；hold 优先于凭据（hold 是运维显式钉住，凭据是裁定丢失，两者冲突时
-		// 以"不许动"为准）。
-		if ab, ok := l.abandonmentIntersectingLocked(e, e.Positions.Reclaim, ref.CoversTo); ok {
-			slog.Warn("回收链发现「永久丢失」审计凭据（待精确条件复核，尚未推进水位）",
-				"logSourceID", e.Key.LogSourceID, "sourceGeneration", e.Key.SourceGeneration,
-				"reclaimFrom", e.Positions.Reclaim, "segmentCoversTo", ref.CoversTo,
-				"abandonedFrom", ab.From, "abandonedTo", ab.To,
-				"operator", ab.Operator, "at", ab.AtUTC, "through", ab.Through)
-			allowed = true
-		}
-	}
-	if !allowed {
-		return e.Positions.Reclaim, fmt.Errorf("ledger: reclaim blocked by CanReclaim: state=%s reason=%q hold=%v delivery=%d reclaim=%d",
-			ref.State, ref.ReleaseReason, ref.HasHold, e.Positions.Delivery, e.Positions.Reclaim)
-	}
-	target := ref.CoversTo
-	if e.Positions.Delivery > 0 && e.Positions.Delivery < target && ref.State == logtypes.RecoveryWALResponsibilityXfer {
-		// 责任已转移：可覆盖未确认事件，允许 reclaim 推进到分段覆盖末端。
-		target = ref.CoversTo
+	target := contiguousCertifiedEnd(e)
+	if frontier := max(e.Positions.Read, e.Positions.Durable); target > frontier {
+		target = frontier
 	}
 	if target <= e.Positions.Reclaim {
 		return e.Positions.Reclaim, nil
 	}
 	if len(conditions) > 0 && conditions[0] != nil {
-		proof := ReclaimTarget{From: e.Positions.Reclaim, Target: target, State: ref.State, ReleaseReason: ref.ReleaseReason, Abandonments: append([]GapAbandonment(nil), e.Abandonments...)}
+		proof := ReclaimTarget{From: e.Positions.Reclaim, Target: target, Abandonments: append([]GapAbandonment(nil), e.Abandonments...)}
 		if !conditions[0](proof) {
 			return e.Positions.Reclaim, ErrReclaimPrecondition
 		}
 	}
 	e.Positions.Reclaim = target
 	return e.Positions.Reclaim, nil
+}
+
+// contiguousCertifiedEnd 返回从当前 reclaim 起、被 **REQUEST_DONE 证据连续覆盖**到的最远位置。
+//
+// 两端各容差 1 字节（与 CoveredByPositionRanges / rangesTouch 同一口径）：事件区间不含行分隔符，
+// 相邻两条事件之间会空出 1 字节；不宽容差会把每个换行符都当成空洞，回收就永远以 1 字节步进。
+// 容差严格为 1，所以真正的空洞（≥2 字节）仍然会阻断。
+func contiguousCertifiedEnd(e *Entry) uint64 {
+	if e == nil {
+		return 0
+	}
+	pos := e.Positions.Reclaim
+	ranges := MergePositionRanges(RequestDoneRangesOf(e))
+	for _, r := range ranges {
+		if r.To <= pos {
+			continue
+		}
+		// 允许空出 1 字节（分隔符）：`pos+1 == r.From` 视为相接。
+		if r.From > pos+1 {
+			break // 真实空洞：不越过
+		}
+		pos = r.To
+	}
+	return pos
 }
 
 // IncrementIngestSeq 递增本地单调接纳序号（重放沿用原值由调用方保证）。
@@ -1866,7 +1744,6 @@ func (e *Entry) clone() *Entry {
 		cp.Gaps[i].FoldSpans = append([]PositionRange(nil), e.Gaps[i].FoldSpans...)
 	}
 	cp.Abandonments = append([]GapAbandonment(nil), e.Abandonments...)
-	cp.RecoveryRefs = append([]RecoveryRef(nil), e.RecoveryRefs...)
 	return &cp
 }
 

@@ -45,7 +45,7 @@ import (
 // 恒等元性质只证明读者 A 的连续前缀，不能替代读者 B 的成功/未知证据。
 // 读者 B 所需区间已先独立保存，水位仍保守夹一层 Delivery，保持既有裁剪边界：
 //
-//	⇒ 判据取 watermark = min(Reclaim, Delivery)，被裁条目满足 End <= Delivery。
+//	⇒ 判据取 watermark = Positions.Delivery（与 advanceDeliveryEnd 的 floor 同一口径）。
 //
 // 为什么这个下界让两个读者同时安全（LEDGER-1 的论证）：
 //
@@ -230,25 +230,22 @@ func (l *Ledger) DeliveryBatchPrune() DeliveryBatchPruneConfig {
 	return l.batchPrune
 }
 
-// deliveryBatchWatermark 返回本次裁剪使用的水位：min(Positions.Reclaim, Positions.Delivery)。
+// deliveryBatchWatermark 返回本次裁剪使用的水位：Positions.Delivery。
 //
-// 为什么夹 Delivery 这一层（LEDGER-1）：reclaim 可以越过 delivery——凭据放行与「责任已转移」
-// 都会把 Reclaim 推到恢复分段末端 CoversTo，而 Positions.Delivery 只在 RecordDelivery / Restore
-// 重算、TryReclaim 从不重算它。区间 (Delivery, Reclaim] 是诊断面（event_status 按批次判态）
-// 历史请求结果仍值得保守保留。夹上 Delivery 后被裁条目满足 End <= Delivery；诊断所需的
-// ACK 与未知请求区间已经独立持久化，绝不再用 delivery 前缀兜底判成功。完整论证见文件头。
+// **2026-10-29 修正**：旧口径是 min(Reclaim, Delivery)，理由是「reclaim 可越过 delivery，
+// 区间 (Delivery, Reclaim] 的请求结果仍值得保守保留」。新语义下两者关系倒过来了——
+// `reclaim = min(delivery, read)` ⇒ `Reclaim <= Delivery` 恒成立，且 `Delivery` 的推导 floor
+// 已改为**自己**（见 advanceDeliveryEnd）⇒ 裁剪的恒等元集合恰好是 `batch.End <= Delivery`。
 //
-// 顺序不可换：必须先取 min 再比较，绝不能「Delivery 为 0 就当没裁过」——Delivery = 0 且
-// Reclaim > 0 是真实形态（从未成功投递过却已有责任转移），此时水位 0 ⇒ 一条都不裁，
-// 正是安全方向。
+// 不能再用 Reclaim 当水位：它会留下 (Reclaim, Delivery] 的批次，而这段在每轮
+// `advanceDeliveryEnd` 重算时并不需要（floor 是 Delivery）——只是白占空间；更糟的是
+// 若有人反过来把 Reclaim 当 floor 重算（旧代码正是），就会得出 `delivery == reclaim`，
+// 使「已确认投递前缀」凭空后退并挡住下一轮回收。两边必须用**同一个 floor**。
 func deliveryBatchWatermark(e *Entry) uint64 {
 	if e == nil {
 		return 0
 	}
-	if e.Positions.Delivery < e.Positions.Reclaim {
-		return e.Positions.Delivery
-	}
-	return e.Positions.Reclaim
+	return e.Positions.Delivery
 }
 
 // pruneDeliveryBatchesLocked 按当前水位裁一次该源的投递批次。调用方必须已持写锁。

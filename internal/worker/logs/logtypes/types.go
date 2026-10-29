@@ -39,27 +39,10 @@ const (
 	DeliveryReplayRequired DeliveryState = "REPLAY_REQUIRED"
 )
 
-// Reclaim 与恢复分段责任状态（契约 §4.3）。
-type RecoverySegmentState string
-
-const (
-	RecoveryStaged                RecoverySegmentState = "STAGED"
-	RecoveryDurableVerified       RecoverySegmentState = "DURABLE_VERIFIED"
-	RecoveryWALResponsibilityXfer RecoverySegmentState = "WAL_RESPONSIBILITY_TRANSFERRED"
-	RecoveryReleased              RecoverySegmentState = "RELEASED"
-	RecoveryCleaned               RecoverySegmentState = "CLEANED"
-)
-
-// ReleaseReason 恢复分段释放证明；进入 RELEASED 前必须登记其一。
-type ReleaseReason string
-
-const (
-	ReleaseProjectionBacked       ReleaseReason = "PROJECTION_BACKED"
-	ReleaseNextCopyVerified       ReleaseReason = "NEXT_COPY_VERIFIED"
-	ReleaseRetentionExpiredNoHold ReleaseReason = "RETENTION_EXPIRED_WITHOUT_HOLDS"
-)
-
 // Positions 四水位；位置与投递状态分离保存。
+//
+// 水位关系（2026-10-29 裁定后）：`Reclaim = min(Delivery, max(Read, Durable))`。
+// `Delivery` 自身单调不减地推到「所有字节均有请求结果的连续前端」，不再以 Reclaim 为 floor。
 type Positions struct {
 	Read     uint64 `json:"read_position"`
 	Durable  uint64 `json:"durable_position"`
@@ -131,36 +114,6 @@ func BuildEvent(src SourceIdentity, rec RecordRange, eventTimeUTC, ingestTimeUTC
 	ev.EventID = EventID(src, rec)
 	ev.CanonicalHash = CanonicalContentHash(eventTimeUTC, level, stream, message)
 	return ev
-}
-
-// ValidReleaseReason 报告 reason 是否为契约 §4.3 登记的释放证明。
-func ValidReleaseReason(r ReleaseReason) bool {
-	switch r {
-	case ReleaseProjectionBacked, ReleaseNextCopyVerified, ReleaseRetentionExpiredNoHold:
-		return true
-	default:
-		return false
-	}
-}
-
-// CanReclaim 评估 reclaim_position 是否可推进（契约 §4.3）。
-//
-// 回收前置：WAL 前缀已有可靠恢复责任（恢复分段到 WAL_RESPONSIBILITY_TRANSFERRED
-// 或其后），且无 hold。HTTP 2xx / REQUEST_DONE 单独不得回收。
-// release_reason 仅在转入 RELEASED 时登记，不作为 reclaim 的前置。
-func CanReclaim(pos Positions, seg RecoverySegmentState, reason ReleaseReason, hasHold bool) bool {
-	if hasHold {
-		return false
-	}
-	switch seg {
-	case RecoveryWALResponsibilityXfer, RecoveryReleased, RecoveryCleaned:
-		// 责任已转移/已释放/已清理：允许推进 reclaim（与 reason 无关）。
-		return true
-	default:
-		// STAGED / DURABLE_VERIFIED：责任尚未转移，禁止 reclaim。
-		_ = reason
-		return false
-	}
 }
 
 // StreamAllowed 报告字段是否允许进入 stream identity。

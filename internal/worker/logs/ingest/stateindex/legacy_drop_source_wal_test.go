@@ -43,6 +43,20 @@ CREATE TABLE IF NOT EXISTS source_wal (
 CREATE INDEX IF NOT EXISTS idx_source_wal_key ON source_wal(key);
 `
 
+// legacyRecoveryAuditDDL 是旧版本的 recovery_audit 定义（逐字取自被删除的 recovery_audit.go）。
+// 它随「受管恢复分段」一并废弃（2026-10-29：reclaim 改按投递水位推进）。
+const legacyRecoveryAuditDDL = `
+CREATE TABLE IF NOT EXISTS recovery_audit (
+  source_key TEXT NOT NULL,
+  ref_key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  payload BLOB NOT NULL,
+  payload_sha TEXT NOT NULL,
+  archive_id TEXT NOT NULL,
+  PRIMARY KEY(source_key, ref_key)
+) WITHOUT ROWID;
+`
+
 // seedLegacyIndexDB 造一个「旧版本建的」索引库：完整的规范表 + 一张带数据的 source_wal。
 func seedLegacyIndexDB(t *testing.T, path string, walRows int) {
 	t.Helper()
@@ -50,7 +64,7 @@ func seedLegacyIndexDB(t *testing.T, path string, walRows int) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	ctx := context.Background()
-	for _, ddl := range []string{specDDL, extensionDDL, recoveryAuditDDL, materializationDDL, legacySourceWALDDL} {
+	for _, ddl := range []string{specDDL, extensionDDL, materializationDDL, legacySourceWALDDL, legacyRecoveryAuditDDL} {
 		_, err = db.ExecContext(ctx, ddl)
 		require.NoError(t, err)
 	}

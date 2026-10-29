@@ -481,7 +481,14 @@ func OpenWithBudget(path string, budget CommitBudget) (*Store, error) {
 		slog.Info("索引库已删除废弃的 source_wal 表（WAL 改纯内存队列后的遗留迁移）", "path", path,
 			"freelistBytesHint", "可择机调用 stateindex.Store.Vacuum 回收磁盘空间")
 	}
-	for _, ddl := range []string{specDDL, extensionDDL, recoveryAuditDDL, materializationDDL} {
+	if dropped, err := dropLegacyRecoveryAudit(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	} else if dropped {
+		slog.Info("索引库已删除废弃的 recovery_audit 表（reclaim 改按投递水位推进后的遗留迁移）", "path", path,
+			"freelistBytesHint", "可择机调用 stateindex.Store.Vacuum 回收磁盘空间")
+	}
+	for _, ddl := range []string{specDDL, extensionDDL, materializationDDL} {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("stateindex: 建表失败: %w", err)
@@ -1808,16 +1815,31 @@ func asBool(value any) bool {
 // 成本：DROP TABLE 是一次 schema 变更 + 把表占的页回收进 freelist，不重写其余表；
 // 20 万行级别实测在毫秒量级。它不在任何临界区内（Open 阶段、业务写入之前）。
 func dropLegacySourceWAL(ctx context.Context, db *sql.DB) (bool, error) {
+	return dropLegacyTable(ctx, db, "source_wal")
+}
+
+// dropLegacyRecoveryAudit 幂等地删除已废弃的 `recovery_audit` 表（2026-10-29），返回是否真的删了。
+//
+// 背景：reclaim 改按投递水位推进后，受管恢复分段被整体删除 ⇒ 「已清理恢复段的历史审计」
+// 失去对象（它存的全是 RecoveryRef 的 CLEANED 快照）。同 dropLegacySourceWAL 的理由：
+// 旧版本的 DDL 已经把表建在磁盘上了，`CREATE TABLE IF NOT EXISTS` 只建不删 ⇒ 不显式 DROP，
+// 既有生产库会永远拖着一张没人读的表。
+func dropLegacyRecoveryAudit(ctx context.Context, db *sql.DB) (bool, error) {
+	return dropLegacyTable(ctx, db, "recovery_audit")
+}
+
+// dropLegacyTable 幂等地删除一张废弃表，返回是否真的删了。
+func dropLegacyTable(ctx context.Context, db *sql.DB, table string) (bool, error) {
 	var exists bool
 	if err := db.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_wal')").Scan(&exists); err != nil {
-		return false, fmt.Errorf("stateindex: 检查遗留 source_wal 表失败: %w", err)
+		"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)", table).Scan(&exists); err != nil {
+		return false, fmt.Errorf("stateindex: 检查遗留 %s 表失败: %w", table, err)
 	}
 	if !exists {
 		return false, nil
 	}
-	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS source_wal"); err != nil {
-		return false, fmt.Errorf("stateindex: 删除遗留 source_wal 表失败: %w", err)
+	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+		return false, fmt.Errorf("stateindex: 删除遗留 %s 表失败: %w", table, err)
 	}
 	return true, nil
 }

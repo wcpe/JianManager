@@ -459,7 +459,6 @@ type WAL struct {
 	pendingStart uint64
 
 	// recoverySegs WAL 关联的恢复分段登记（由 pipeline 更新账本）。
-	recoverySegID string
 
 	// maxEntries / maxBytes 是单源积压上限（B1b）；0 表示用本包默认常量。
 	// 作为字段以便测试用小额度覆盖真实限额路径，而非只断言常量本身。
@@ -1326,27 +1325,6 @@ func (w *WAL) recordHTTPResultLocked(res DeliveryResult) error {
 	}
 	// REQUEST_DONE / UNKNOWN 都不直接 reclaim。
 	return nil
-}
-
-// BindRecoverySegment 将 WAL 前缀绑定到受管恢复分段（STAGED）。
-func (w *WAL) BindRecoverySegment(segID, path string, coversFrom, coversTo uint64) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.recoverySegID = segID
-	return w.led.RegisterRecovery(w.key, ledger.RecoveryRef{
-		SegmentID:  segID,
-		Path:       path,
-		State:      logtypes.RecoveryStaged,
-		CoversFrom: coversFrom,
-		CoversTo:   coversTo,
-	})
-}
-
-// RecoverySegmentID 返回当前绑定的恢复分段 ID。
-func (w *WAL) RecoverySegmentID() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.recoverySegID
 }
 
 // TryReclaim 经账本 CanReclaim 门禁尝试推进 reclaim_position，并回收 WAL 中已被

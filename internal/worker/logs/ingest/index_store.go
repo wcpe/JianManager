@@ -5,7 +5,6 @@ package ingest
 //   - JSON 只读导出（排障与回滚前的快照）。
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,81 +51,6 @@ func (m *Manager) loadStateFromIndex() (*persistedState, error) {
 	return indexStateToState(rows)
 }
 
-// ArchiveRecovery 是账本历史审计仓储适配；只有独立表提交成功才产生领域回执。
-func (m *Manager) ArchiveRecovery(ctx context.Context, records []ledger.RecoveryArchiveRecord) ([]ledger.RecoveryArchiveReceipt, error) {
-	if m == nil || m.index == nil {
-		return nil, fmt.Errorf("ingest: 恢复审计仓储不可用")
-	}
-	rows := make([]stateindex.RecoveryAuditRow, 0, len(records))
-	for _, record := range records {
-		if err := ledger.ValidateRecoveryArchiveRecord(record); err != nil {
-			return nil, err
-		}
-		payload, err := json.Marshal(record)
-		if err != nil {
-			return nil, err
-		}
-		rows = append(rows, stateindex.RecoveryAuditRow{SourceKey: record.Key.String(), RefKey: record.Ref.SegmentID, Fingerprint: record.Fingerprint, Payload: payload})
-	}
-	committed, err := m.index.AppendRecoveryAudit(ctx, rows)
-	if err != nil {
-		return nil, err
-	}
-	receipts := make([]ledger.RecoveryArchiveReceipt, 0, len(committed))
-	for i, row := range committed {
-		receipts = append(receipts, ledger.RecoveryArchiveReceipt{Key: records[i].Key, SegmentID: row.RefKey, Fingerprint: row.Fingerprint, ArchiveID: row.ArchiveID})
-	}
-	return receipts, nil
-}
-
-func decodeRecoveryArchive(row stateindex.RecoveryAuditRow) (ledger.RecoveryArchiveRecord, ledger.RecoveryArchiveReceipt, error) {
-	var record ledger.RecoveryArchiveRecord
-	if err := json.Unmarshal(row.Payload, &record); err != nil {
-		return record, ledger.RecoveryArchiveReceipt{}, err
-	}
-	if err := ledger.ValidateRecoveryArchiveRecord(record); err != nil {
-		return record, ledger.RecoveryArchiveReceipt{}, err
-	}
-	if record.Key.String() != row.SourceKey || record.Ref.SegmentID != row.RefKey || record.Fingerprint != row.Fingerprint || row.ArchiveID == "" {
-		return record, ledger.RecoveryArchiveReceipt{}, fmt.Errorf("ingest: 恢复审计身份与正文不匹配")
-	}
-	return record, ledger.RecoveryArchiveReceipt{Key: record.Key, SegmentID: record.Ref.SegmentID, Fingerprint: record.Fingerprint, ArchiveID: row.ArchiveID}, nil
-}
-
-func (m *Manager) LookupRecovery(ctx context.Context, key ledger.SourceKey, segmentID string) (ledger.RecoveryArchiveRecord, ledger.RecoveryArchiveReceipt, bool, error) {
-	if m == nil || m.index == nil {
-		return ledger.RecoveryArchiveRecord{}, ledger.RecoveryArchiveReceipt{}, false, fmt.Errorf("ingest: 恢复审计仓储不可用")
-	}
-	row, found, err := m.index.LookupRecoveryAudit(ctx, key.String(), segmentID)
-	if err != nil || !found {
-		return ledger.RecoveryArchiveRecord{}, ledger.RecoveryArchiveReceipt{}, false, err
-	}
-	record, receipt, err := decodeRecoveryArchive(row)
-	return record, receipt, err == nil, err
-}
-
-// ListRecoveryArchive 按稳定分段键分页读取历史，不回填活动 aux 或恢复引用。
-func (m *Manager) ListRecoveryArchive(ctx context.Context, key ledger.SourceKey, afterSegmentID string, limit int) ([]ledger.RecoveryArchiveRecord, []ledger.RecoveryArchiveReceipt, error) {
-	if m == nil || m.index == nil {
-		return nil, nil, fmt.Errorf("ingest: 恢复审计仓储不可用")
-	}
-	rows, err := m.index.ListRecoveryAudit(ctx, key.String(), afterSegmentID, limit)
-	if err != nil {
-		return nil, nil, err
-	}
-	records := make([]ledger.RecoveryArchiveRecord, 0, len(rows))
-	receipts := make([]ledger.RecoveryArchiveReceipt, 0, len(rows))
-	for _, row := range rows {
-		record, receipt, err := decodeRecoveryArchive(row)
-		if err != nil {
-			return nil, nil, err
-		}
-		records = append(records, record)
-		receipts = append(receipts, receipt)
-	}
-	return records, receipts, nil
-}
-
 // --- 状态 ↔ 行 映射 -------------------------------------------------------------
 
 // indexAux 是 source_aux.payload 的载体：spec 五张表之外的持久化字段（零行为变更所必需，
@@ -171,7 +95,6 @@ type indexLedgerCore struct {
 	DeliveryState logtypes.DeliveryState  `json:"delivery_state,omitempty"`
 	Segments      []ledger.Segment        `json:"segments,omitempty"`
 	Rotations     []ledger.RotationLink   `json:"rotations,omitempty"`
-	RecoveryRefs  []ledger.RecoveryRef    `json:"recovery_refs,omitempty"`
 	ErrorCount    int                     `json:"error_count,omitempty"`
 	IngestSeq     uint64                  `json:"ingest_seq,omitempty"`
 	// PositionsFingerprint / PositionsFingerprintAt 是「已确认水位处」的内容采样指纹与它对应的位置
@@ -321,7 +244,7 @@ func ledgerCoreOf(entry *ledger.Entry) *indexLedgerCore {
 	return &indexLedgerCore{
 		Key: entry.Key, Identity: entry.Identity, DeliveryPos: entry.Positions.Delivery,
 		DeliveryState: entry.DeliveryState, Segments: entry.Segments, Rotations: entry.Rotations,
-		RecoveryRefs: entry.RecoveryRefs, ErrorCount: entry.ErrorCount, IngestSeq: entry.IngestSeq,
+		ErrorCount: entry.ErrorCount, IngestSeq: entry.IngestSeq,
 		// 指纹必须随其余残余字段一起落库：漏搬即等于「重启后指纹归零 ⇒ 段 3 判不一致 ⇒
 		// 禁止按旧偏移续读」，把 w18 要消除的漂移重复摄取原样放回来（见 indexLedgerCore 注释）。
 		PositionsFingerprint:   entry.PositionsFingerprint,
@@ -484,7 +407,6 @@ func indexStateToState(rows stateindex.State) (*persistedState, error) {
 				Rotations:       core.Rotations,
 				Gaps:            gaps[key],
 				Abandonments:    aux.Abandonments,
-				RecoveryRefs:    core.RecoveryRefs,
 				ErrorCount:      core.ErrorCount,
 				IngestSeq:       core.IngestSeq,
 				// 指纹读回：与 ledgerCoreOf 成对，缺一侧就等于断链。旧索引无该字段时
@@ -575,9 +497,6 @@ func normalizePersistedState(st *persistedState) {
 			if entry.Rotations == nil {
 				entry.Rotations = []ledger.RotationLink{}
 			}
-			if entry.RecoveryRefs == nil {
-				entry.RecoveryRefs = []ledger.RecoveryRef{}
-			}
 		}
 		if saved.WAL == nil {
 			saved.WAL = []acquire.WALEntry{}
@@ -624,7 +543,7 @@ func comparisonState(st *persistedState) *persistedState {
 			entry.RequestDoneRanges = ledger.RequestDoneRangesOf(entry)
 			entry.DeliveryEvidence = ledger.DeliveryEvidenceOf(entry)
 			entry.DeliveryBatches = prunedBatchesForComparison(entry)
-			entry.Positions.Delivery = ledger.ContiguousDeliveryEnd(entry.DeliveryBatches, entry.Positions.Reclaim)
+			entry.Positions.Delivery = ledger.ContiguousDeliveryEnd(entry.DeliveryBatches, entry.Positions.Delivery)
 		}
 		st.Sources[key] = saved
 	}
