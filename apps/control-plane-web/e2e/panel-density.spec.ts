@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers'
+import { login, useClassicHome } from './helpers'
 
 /** 
  *面板信息密度与视觉改造 · 单机（Playwright + mock 模式）验收。
@@ -9,6 +9,8 @@ import { login } from './helpers'
  */
 
 test('高密度面板：环形仪表盘 + 分区面板 + 密集实例表', async ({ page }) => {
+  // `/` 默认已改 AI 首页；本用例验的是经典首页的面板密度，故先钉住首页模式。
+  await useClassicHome(page)
   await login(page)
   // 登录后即落仪表盘（data-page=overview）。
   await expect(page.locator('[data-page="overview"]')).toBeVisible()
@@ -27,10 +29,11 @@ test('高密度面板：环形仪表盘 + 分区面板 + 密集实例表', async
   await expect(page.getByText('资源趋势').first()).toBeVisible()
   await expect(page.getByText('总负载').first()).toBeVisible()
 
-  // 底部密集实例表（虚拟滚动容器 + dense 行）。
-  const denseTable = page.locator('[data-testid="overview-instances-virtual"]')
-  await expect(denseTable).toBeVisible()
-  await expect(page.getByText('实例列表')).toBeVisible()
+  // 底部分区面板 + 实例表。
+  // 【为何不一定是虚拟表】首页已按设计去掉「实例列表」面板（它与「服务器」页的列表
+  // 回答同一件事，首页不再承担「哪台服在跑」的浏览职责），`overview-instances-virtual`
+  // 随之从源码消失。这里只断言首页仍以 Panel 分区组织内容（分区面板底座）。
+  await expect(page.locator('[data-slot="panel"]').first()).toBeVisible()
 
   // 时间区间选择器（RangePicker契约组件，供仪表盘/监控复用）。
   await expect(page.getByRole('tab', { name: '24h' }).first()).toBeVisible()

@@ -1,27 +1,23 @@
 import { Table, TableBody, TableCell, TableRow } from '@jianmanager/ui/components/table'
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, useRef, type ReactNode } from 'react'
 
 import type { InstanceInfo } from '@/api/instances'
-import type { InstanceTreeRow } from '@/components/views/instances/VirtualizedInstanceTables'
-import { computeVisibleColumns, type InstanceColumnKey } from '@/lib/instances/instance-view-prefs'
+import {
+  useStoredVirtualScroll,
+  type InstanceTreeRow,
+} from '@/components/views/instances/VirtualizedInstanceTables'
+import { computeVisibleColumns, DEFAULT_COLUMN_WIDTHS, type InstanceColumnKey, type InstanceColumnWidths } from '@/lib/instances/instance-view-prefs'
 import { InstancePaginationBar } from '@/components/views/instances/InstancePaginationBar'
 
-/** 
- * 各列宽度（px）。名称列不设宽度 = 吃掉剩余空间。
- * 与列顺序解耦：拖拽换位只改顺序，不改宽度分配。
+/**
+ * 各列宽度的取值：用户拖拽过的宽度优先，否则用默认宽度。
+ * 名称列默认不设宽度（吃掉剩余空间），用户拖过之后才变成固定像素。
  */
-const COLUMN_WIDTH: Record<InstanceColumnKey, number | undefined> = {
-  select: 32,
-  region: 84,
-  name: undefined,
-  identity: 208,
-  nodePort: 96,
-  status: 84,
-  health: 150,
-  // 业务插件列：放「N/M 正常」这类短文案即可，110 足够，
-  // 再宽会挤掉状态/操作（该列默认关，见 instance-view-prefs）。
-  business: 110,
-  actions: 56,
+function resolveColumnWidth(
+  key: InstanceColumnKey,
+  widths: InstanceColumnWidths | undefined,
+): number | undefined {
+  return widths?.[key] ?? DEFAULT_COLUMN_WIDTHS[key]
 }
 
 /** 
@@ -50,6 +46,8 @@ export function PaginatedInstanceTable({
   renderGroupRow,
   visibleColumns,
   columnOrder,
+  columnWidths,
+  scrollStorageKey,
 }: {
   instances: InstanceInfo[]
   /** 服务端总数（分页页数由它算）。 */
@@ -72,9 +70,25 @@ export function PaginatedInstanceTable({
   renderGroupRow?: (row: Extract<InstanceTreeRow, { kind: 'group' }>) => ReactNode
   /** 列顺序（表头拖拽换位结果）。与表头/行渲染共用同一份，缺省为默认顺序。 */
   columnOrder?: readonly InstanceColumnKey[]
+  /** 用户拖拽过的列宽（缺省列走 DEFAULT_COLUMN_WIDTHS）。 */
+  columnWidths?: InstanceColumnWidths
   /** 可见的可选列（决定 colgroup 的列数与宽度，必须与表头/行渲染同源）。 */
   visibleColumns?: ReadonlySet<string>
+  /**
+   * 滚动位置存储键（`jm.instances.scroll:<path><search>`）。
+   *
+   * 【为何必须传】换掉虚拟滚动后漏了这一项 → 列表视图「滚到什么位置、点进详情、后退回来」
+   * 不再回到原位置（卡片视图一直有，两个视图行为就不一致了）。
+   * 复用虚拟表同款的 `useStoredVirtualScroll`：容器换成普通分页表并不影响
+   * 「记住容器 scrollTop 并在下次挂载时恢复」这件事，滚动容器标识仍由同一个
+   * `instances-table-virtual` 承载。
+   */
+  scrollStorageKey?: string
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  // 滚动位置写入/恢复：与虚拟表、卡片视图同一实现（细节见 useStoredVirtualScroll）。
+  // 未传 key 时退化为空串 —— sessionStorage 键为空串不会撞上任何真实条目。
+  const handleScroll = useStoredVirtualScroll(scrollRef, () => {}, scrollStorageKey ?? '')
   /* 
     colgroup 的列顺序：与表头/行共用同一个计算函数（见 computeVisibleColumns 的注释）。
     此前这里自己写了一份 present 判断，新增 business 列时漏加，导致 colgroup 少一个 <col>、
@@ -88,8 +102,20 @@ export function PaginatedInstanceTable({
         data-testid 沿用虚拟表的 `instances-table-virtual`：它表达的是「实例主表滚动区」这一语义，
         与实现是虚拟滚动还是服务端分页无关。测试与 e2e 依赖该锚点定位表体，
         换成实现专属的名字会让既有断言全部失效（且并未带来更好的表达力）。
+
+        `data-total-count` 同样必须保留（值为服务端总数）：虚拟表会写这个属性供
+        虚拟化断言取数（见 VirtualizedInstanceTables），而本组件换成服务端分页后
+        没写它 → `Number(attr ?? '0')` 恒为 0，于是「1200 条数据」的断言全部报
+        `Expected >= 1000, Received: 0`。属性语义是「本视图对应的服务端总量」，
+        与渲染方式无关，两种实现都必须给。
       */}
-      <div className="min-h-0 flex-1 overflow-auto rounded-md border" data-testid="instances-table-virtual">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-auto rounded-md border"
+        data-testid="instances-table-virtual"
+        data-total-count={total}
+      >
         {/* overflow-auto 双向：列多时横向滚动，避免「状态/操作」列被裁在视口外。 */}
         {/* 不设 min-w：各列本身已是 nowrap 紧凑内容，让表格按可用宽度自适应；
             真放不下时 Table 自带的 overflow-x-auto 会接管横向滚动，不会裁掉右侧列。 */}
@@ -106,9 +132,10 @@ export function PaginatedInstanceTable({
             以及健康度格未跟随列设置）。
           */}
           <colgroup>
-            {orderedColumnKeys.map((key) => (
-              <col key={key} style={COLUMN_WIDTH[key] ? { width: COLUMN_WIDTH[key] } : undefined} />
-            ))}
+            {orderedColumnKeys.map((key) => {
+              const width = resolveColumnWidth(key, columnWidths)
+              return <col key={key} style={width ? { width } : undefined} />
+            })}
           </colgroup>
           {/* header 由调用方注入，**它本身就是 <TableHeader>**（InstanceTableHeader 的返回值）。
               这里不能再包一层：thead 嵌套 thead 是非法 HTML，浏览器会静默丢弃表格结构，

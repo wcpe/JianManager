@@ -85,6 +85,25 @@ describe('NodesPage（mock 假后端）', () => {
     expect(screen.getAllByText('10.0.0.11').length).toBeGreaterThan(0) // alpha host：列表 + 详情
   })
 
+  it('顶部 KPI：状态卡带图标，资源占用卡用环形仪表', async () => {
+    loginMockUser()
+    stubInstances()
+    renderWithProviders(<NodesPage />)
+
+    // 状态卡沿用 StatCard：图标块 + 大数字 + 标签。
+    const total = await screen.findByTestId('nodes-kpi-total')
+    expect(total.querySelector('[data-slot="stat-card"] svg')).not.toBeNull()
+
+    // 资源卡不再是一排裸百分比：环由两条 circle（底轨 + 进度）组成，中心仍给出百分比。
+    const cpu = await screen.findByTestId('nodes-kpi-cpu')
+    expect(cpu.querySelectorAll('svg circle')).toHaveLength(2)
+    expect(cpu.querySelector('[data-slot="stat-card"]')).toBeNull()
+    // 圆球不套卡片，且中心只留数字（用户要求去掉百分号）。
+    expect(cpu.firstElementChild?.className).not.toMatch(/\bborder\b|\bbg-card\b|\bshadow-/)
+    expect(cpu.textContent).toMatch(/\d+/)
+    expect(cpu.textContent).not.toContain('%')
+  })
+
   it('切换归档视图可见 gamma-archived，清理确认文案明示不清理远端文件（394）', async () => {
     loginPlatformAdmin()
     stubInstances()
@@ -488,6 +507,37 @@ describe('NodesPage（mock 假后端）', () => {
     const table = await screen.findByTestId('nodes-table')
     const statusTh = table.querySelector('thead th[data-column-key="status"]')
     expect(statusTh?.getAttribute('draggable')).toBeNull()
+  })
+
+  /** 节点表与服务器表同款列宽拖拽：钉住只限制「换位」，不限制「调宽」。 */
+  it('节点表每列都有列宽手柄，排序表头也不例外', async () => {
+    loginMockUser()
+    renderWithProviders(<NodesPage />, { route: '/nodes' })
+    const table = await screen.findByTestId('nodes-table')
+    for (const key of ['status', 'name', 'address', 'load', 'heartbeat']) {
+      expect(table.querySelector(`[data-testid="node-col-resize-${key}"]`)).not.toBeNull()
+    }
+  })
+
+  /**
+   * 批量操作：勾选后出现批量条，取消选择后消失。
+   *
+   * 这条守的是「勾选框确实接在选择状态上」——只渲染复选框、不接状态的话，
+   * 批量条永远不会出现，属于看着有、其实没接线的那类假功能。
+   */
+  it('勾选节点后出现批量操作条，取消后消失', async () => {
+    loginMockUser()
+    stubInstances()
+    const user = userEvent.setup()
+    renderWithProviders(<NodesPage />, { route: '/nodes' })
+
+    const box = await screen.findByTestId('node-select-1')
+    await user.click(box)
+    expect(await screen.findByTestId('nodes-batch-bar')).toBeInTheDocument()
+    expect(screen.getByText(/已选\s*1\s*台节点/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '取消选择' }))
+    await waitFor(() => expect(screen.queryByTestId('nodes-batch-bar')).not.toBeInTheDocument())
   })
 
   /** 底部分页（用户要求「底部的节点…改成分页」）。 */

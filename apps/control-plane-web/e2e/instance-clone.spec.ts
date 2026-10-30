@@ -7,8 +7,11 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
+/** 工作台卡：用卡片自身的 testid，不靠样式类名（`bg-card` 已收敛到 `Card` 的 `bg-card/95`）。 */
 function instanceCard(page: Page, name: string): Locator {
-  return page.locator('div.bg-card').filter({ has: page.getByRole('button', { name, exact: true }) })
+  return page
+    .locator('[data-testid="instance-worktable-card"]')
+    .filter({ has: page.getByRole('button', { name, exact: true }) })
 }
 
 /** 真浏览器纵切：一键复制 backend 子服、预检、配置修正参数与代理注册选择。 */
@@ -27,7 +30,8 @@ test.describe('一键复制子服（mock 模式真浏览器）', () => {
 
     // 起 `/instances` 默认走分组树表；本用例断言工作台卡，显式带 view=card。
     await page.goto('/instances?view=card')
-    await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
+    // 页名已随 i18n 统一由「实例管理」改为「服务器」（instances.title）。
+    await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
     const sourceCard = instanceCard(page, 'creative-1')
     await expect(sourceCard).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr036-e2e-instances-before.png'), fullPage: true })

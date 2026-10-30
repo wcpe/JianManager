@@ -72,7 +72,7 @@ export function SegmentPills<T extends string>({
             size === 'sm' ? 'px-2.5 py-0.5 text-xs' : 'px-3 py-1 text-xs',
             value === key
               ? 'bg-card font-semibold text-foreground shadow-soft'
-              : 'text-muted-foreground hover:text-foreground',
+              : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
           )}
         >
           {t(labelKey)}

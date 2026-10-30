@@ -5,7 +5,6 @@ import { Check, ChevronDown, Search, Server, ServerOff, Wrench } from 'lucide-re
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
-import type { NodeInfo } from '@/lib/nodes/node-types'
 
 /**
  * 节点选择器（下拉）：替代原来的左侧节点列表。
@@ -21,13 +20,23 @@ import type { NodeInfo } from '@/lib/nodes/node-types'
  * 【分组依据】按状态分组（离线 / 维护中 / 在线）：这三类的处理优先级不同，
  * 把「需要处理的」排在前面，比按字母序更有用。
  */
+/** 节点选择器需要的最小字段集（活跃/归档节点都满足）。 */
+export interface NodeSelectorItem {
+  id: number
+  name: string
+  host: string
+  status: number
+  maintenance: boolean
+}
+
 export function NodeSelector({
   nodes,
   selectedId,
   onSelect,
   className,
 }: {
-  nodes: NodeInfo[]
+  /** 只需要「能被选中的节点」这一子集：活跃节点与归档节点都能传（两者字段并不相同）。 */
+  nodes: NodeSelectorItem[]
   selectedId: number | null
   onSelect: (id: number) => void
   className?: string
@@ -40,7 +49,7 @@ export function NodeSelector({
 
   const groups = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const match = (n: NodeInfo) =>
+    const match = (n: NodeSelectorItem) =>
       q === '' || n.name.toLowerCase().includes(q) || n.host.toLowerCase().includes(q)
     const pool = nodes.filter(match)
     return [

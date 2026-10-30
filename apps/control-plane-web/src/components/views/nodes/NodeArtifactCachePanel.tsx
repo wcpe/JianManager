@@ -97,7 +97,8 @@ export default function NodeArtifactCachePanel({
   return (
     <div className="space-y-3">
       {/* 头部：容量条（占用/上限）+ 上限设置 + 一键清空（常驻稳定区，布局不跳） */}
-      <Card className="space-y-2 px-3 py-2.5">
+      {/* 容量条：外层 Panel 已提供边框，此处用浅底色区分层级，避免「卡片套卡片」。 */}
+      <div className="space-y-2 rounded-md bg-muted/30 px-3 py-2.5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="min-w-[200px] flex-1">
             <div className="mb-1.5 flex items-baseline gap-2">
@@ -141,9 +142,9 @@ export default function NodeArtifactCachePanel({
           </Button>
           </div>
         </div>
-      </Card>
+      </div>
 
-      {/* 列表：搜索 + 行卡片 */}
+      {/* 列表：搜索 + 行 */}
       {isLoading ? (
         /* 骨架占位：按行卡片（size-9 图标 + 双行文本 ≈ h-14）轮廓，替代裸文字。 */
         <div className="space-y-2">

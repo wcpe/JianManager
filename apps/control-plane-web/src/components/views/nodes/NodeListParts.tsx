@@ -100,7 +100,22 @@ function RowUsage({ label, pct, online }: { label: string; pct: number; online: 
  * 与 `NodeListRow` 分工不同——那是双栏形态下给「已选中节点」当导航用的紧凑行；
  * 卡片墙要在一屏里横向铺开、彼此可比，故把 host / 核数 / 内存 / 实例数 / 三项水位都摆出来。
  */
-export function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; instanceCount: number; onOpen: () => void }) {
+export function NodeCard({
+  node,
+  instanceCount,
+  onOpen,
+  selectable,
+  selected,
+  onToggleSelect,
+}: {
+  node: NodeInfo
+  instanceCount: number
+  onOpen: () => void
+  /** 显示勾选框（批量操作）。 */
+  selectable?: boolean
+  selected?: boolean
+  onToggleSelect?: (id: number) => void
+}) {
   const { t } = useTranslation()
   const online = node.status === 1
   const level = nodeStatusLevel(node.status)
@@ -132,6 +147,24 @@ export function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; inst
       )}
     >
       <div className="flex items-center gap-2">
+        {/*
+          勾选框放卡片左上：与整卡点击共存，必须 stopPropagation，
+          否则勾选会同时把卡片打开（批量选择直接变成跳转）。
+        */}
+        {selectable && (
+          <input
+            type="checkbox"
+            className="size-3.5 shrink-0 cursor-pointer accent-[var(--primary)]"
+            checked={!!selected}
+            onChange={(e) => {
+              e.stopPropagation()
+              onToggleSelect?.(node.id)
+            }}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={t('nodes.selectNode', { name: node.name })}
+            data-testid={`node-card-select-${node.id}`}
+          />
+        )}
         <span
           className={cn('size-2 shrink-0 rounded-full', online && 'animate-breathing')}
           style={{ backgroundColor: dotColor, color: dotColor }}
@@ -144,6 +177,25 @@ export function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; inst
       </div>
       <div className="truncate text-[11px] text-muted-foreground" title={node.host}>
         {node.host}
+      </div>
+      {/*
+        卡片补齐与表格一致的关键字段：端口 / 系统 / 隧道 / 心跳。
+        原先卡片只有 名/host/核数/内存/实例数，切到卡片视图就丢掉了排障要看的那几项，
+        用户得切回表格才能确认「这台是不是走隧道、端口是多少」。
+      */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <span className="tabular-nums" title={t('nodes.grpcPort')}>
+          {node.grpcPort || '--'}/{node.wsPort || '--'}
+        </span>
+        <span className="truncate" title={`${node.os} ${node.arch}`}>
+          {node.os || '--'} {node.arch || ''}
+        </span>
+        <span className={node.tunnelConnected ? 'text-status-success' : undefined}>
+          {node.tunnelConnected ? t('nodes.tunnelConnected') : t('nodes.tunnelDirect')}
+        </span>
+        <span title={node.lastHeartbeat ?? ''}>
+          {relativeAge(node.lastHeartbeat)}
+        </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
         <span>
@@ -162,6 +214,19 @@ export function NodeCard({ node, instanceCount, onOpen }: { node: NodeInfo; inst
       </div>
     </Card>
   )
+}
+
+/** 心跳相对时间（卡片用）：`3s` / `5m` / `2h` / `3d`。 */
+function relativeAge(iso: string | null): string {
+  if (!iso) return '--'
+  const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (!Number.isFinite(sec)) return '--'
+  if (sec < 60) return `${sec}s`
+  const min = Math.round(sec / 60)
+  if (min < 60) return `${min}m`
+  const hour = Math.round(min / 60)
+  if (hour < 24) return `${hour}h`
+  return `${Math.round(hour / 24)}d`
 }
 
 /** 左栏节点列表行：状态点呼吸灯 + 名 + host + mini 水位（CPU/内存）+ 实例数；选中高亮、离线置灰。 */
@@ -294,4 +359,68 @@ export function ArchivedNodeListRow({
       </span>
     </Button>
   )
+}
+
+/**
+ * 归档节点列表（已下线节点）。
+ *
+ * 【为什么单独一个表】归档节点没有实时水位（CPU/内存/磁盘用量），塞进 `NodeTable`
+ * 会出现一整列空条；这里只展示「它是谁、什么时候下线的、还剩什么要清理」。
+ * 它也是归档视图唯一的入口——此前 `?view=archive` 只能手输 URL 到达，列表还显示活跃节点。
+ */
+export function ArchivedNodeList({
+  nodes,
+  onOpen,
+  onPurge,
+  purging,
+}: {
+  nodes: ArchivedNode[]
+  onOpen: (id: number) => void
+  onPurge: (node: ArchivedNode) => void
+  purging: boolean
+}) {
+  const { t } = useTranslation()
+  if (nodes.length === 0) {
+    return <p className="py-10 text-center text-sm text-muted-foreground">{t('nodes.archivedEmpty')}</p>
+  }
+  return (
+    <ul className="divide-y rounded-lg border bg-card/60">
+      {nodes.map((n) => (
+        <li key={n.id} className="flex items-start gap-3 px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-sm font-medium text-foreground">{n.name}</span>
+              <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                {t('nodes.viewArchive')}
+              </Badge>
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+              <span className="font-mono">{n.host || '--'}</span>
+              <span className="tabular-nums">
+                {n.grpcPort || '--'} / {n.wsPort || '--'}
+              </span>
+              <span>{t('nodes.archivedAt')} {formatArchivedAt(n.deletedAt)}</span>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={() => onOpen(n.id)}>
+              {t('common.details')}
+            </Button>
+            <Button variant="outline" size="sm" className="text-destructive" disabled={purging} onClick={() => onPurge(n)}>
+              {t('nodes.purge')}
+            </Button>
+          </div>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** 归档时间：`YYYY-MM-DD HH:mm`；无效值回退 `--`。 */
+function formatArchivedAt(iso: string | null | undefined): string {
+  if (!iso) return '--'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '--'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }

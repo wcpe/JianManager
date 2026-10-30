@@ -1,7 +1,19 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login } from './helpers'
+import { login, useClassicHome } from './helpers'
 
-const ROUTE_READY_TIMEOUT_MS = 15_000
+/**
+ * 页面就绪等待上限。
+ *
+ * 【为何是 45s 而不是 15s】本文件遍历的是**重页**（实例列表 1200 条、日志中心 12000 条、
+ * 实例详情控制台）。在 mock large 规模 + 负载较高的机器上，单页从 goto 到 `data-page`
+ * 出现实测：`/instances/1` 19.8s、`/nodes` 6.6s、`/logs` 约 15s、`/bots` 约 9s；
+ * 早先测到 12s 的那次是空载。15s 上限因此会在「机器忙一点」时必挂，
+ * 失败信息却是「element(s) not found」，看不出是预算问题（本轮踩了两次）。
+ *
+ * 这里放宽的只是**就绪等待**，不是断言严格度：页面真的没渲染出来仍然会失败，
+ * 只是 45 秒内没出来才算失败。
+ */
+const ROUTE_READY_TIMEOUT_MS = 45_000
 
 interface BenchRoute {
   label: string
@@ -25,21 +37,15 @@ interface BenchRoute {
 
 const ROUTES: BenchRoute[] = [
   {
-    label: '平台首页',
+    label: '首页',
     href: '/',
     readySelector: '[data-page="overview"]',
-    // 该表的 data-total-count 表示「已加载条数」而非服务端总数：它已改为按需分页
-    // （首屏一页、滚到底续取），故这里断言「首屏取到了一页」而不是 1000+。
-    // 真正要守住的是 maxRendered——DOM 里不能把上千行全铺出来。
-    virtual: {
-      surfaceSelector: '[data-testid="overview-instances-virtual"]',
-      itemSelector: '[data-testid="overview-instance-row"]',
-      minTotal: 1,
-      maxRendered: 80,
-    },
+    // 【为何没有 virtual 断言】首页已按设计去掉「实例列表」面板（与「服务器」页重复，
+    // 首页不再承担「哪台服在跑」的浏览职责），`overview-instances-virtual` 已从源码消失。
+    // 首页只测切页耗时与响应式布局；虚拟化的 DOM 裁剪证据由下面 /instances 与 /logs 承担。
   },
   {
-    label: '全部服务器',
+    label: '服务器',
     href: '/instances',
     readySelector: '[data-page="instances"]',
     // 起 `/instances` 默认走分组树表（虚拟化 container = instances-table-virtual）。
@@ -88,6 +94,9 @@ async function resetConsoleLayout(page: Page): Promise<void> {
     localStorage.setItem('sidebar.collapsed', '0')
     localStorage.removeItem('sidebar.collapsedGroups')
   })
+  // `/` 的默认首页已改为 AI 首页，而本文件的首页基准用 `[data-page="overview"]`（经典首页）
+  // 作就绪信号，故统一钉住首页模式。
+  await useClassicHome(page)
 }
 
 /** 
@@ -595,7 +604,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     const mobilePanel = page.locator('[data-slot="mobile-nav-panel"]')
     await expect(mobilePanel, '移动端导航抽屉展开').toHaveAttribute('data-state', 'open')
     await expect.poll(async () => mobilePanel.evaluate((el) => getComputedStyle(el).animationName), { message: '移动端导航抽屉展开动画' }).toContain('jm-panel-up')
-    await expect(mobileNav.getByRole('link', { name: '全部服务器' }), '服务器分组链接可见').toBeVisible()
+    await expect(mobileNav.getByRole('link', { name: '服务器' }), '服务器分组链接可见').toBeVisible()
     await expect(mobileNav.getByRole('link', { name: '节点' }), '节点链接可见').toBeVisible()
 
     // 四工作区在手机上均可达（这是换格子的直接收益，旧实现后三个域不可达）。

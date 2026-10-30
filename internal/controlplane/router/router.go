@@ -22,7 +22,6 @@ type Services struct {
 	User       *service.UserService
 	Group      *service.GroupService
 	Node       *service.NodeService
-	NodeRepair *service.NodeRepairService
 	// NodeProxy 节点级出站代理管控（见 ADR-043）；nil 时节点代理端点关闭。
 	NodeProxy     *service.NodeProxyService
 	Instance      *service.InstanceService
@@ -348,7 +347,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			return protected.Group("", middleware.RequireAnyPerm(nodes...))
 		}
 
-		nodeHandler := NewNodeHandler(svcs.Node, svcs.NodeRepair, svcs.Audit)
+		nodeHandler := NewNodeHandler(svcs.Node, svcs.Audit)
 		nodeHandler.RegisterRoutes(permRead("node.read", "node.manage"))
 
 		jdkHandler := NewJDKHandler(svcs.JDK)

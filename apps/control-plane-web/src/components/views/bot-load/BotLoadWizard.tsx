@@ -253,7 +253,7 @@ export function BotLoadWizard({
                   'px-2.5',
                   draft.step === s
                     ? 'border-primary bg-primary/10 font-semibold'
-                    : 'text-muted-foreground hover:text-foreground',
+                    : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
                 )}
                 aria-current={draft.step === s ? 'step' : undefined}
                 onClick={() => go(s)}

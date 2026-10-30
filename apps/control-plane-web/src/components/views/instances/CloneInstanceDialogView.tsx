@@ -189,7 +189,7 @@ export default function CloneInstanceDialogView({
                     onClick={() => setMode(m)}
                     className={cn(
                       'flex-1 rounded px-2 py-1.5 transition-colors',
-                      mode === m ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                      mode === m ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
                     )}
                   >
                     {t(`clone.mode_${m}`, m === 'quick' ? '快速复制' : '高级复制')}

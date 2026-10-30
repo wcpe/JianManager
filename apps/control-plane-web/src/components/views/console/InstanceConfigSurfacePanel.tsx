@@ -249,7 +249,7 @@ function SurfaceRow({
             }
             className={cn(
               'rounded-full px-2.5 py-1 text-[11px] font-normal transition-colors',
-              isInline ? 'bg-card font-semibold text-foreground shadow-soft' : 'text-muted-foreground hover:text-foreground',
+              isInline ? 'bg-card font-semibold text-foreground shadow-soft' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
             )}
           >
             {t('configSurface.sourceInline')}
@@ -262,7 +262,7 @@ function SurfaceRow({
             onClick={() => onChange({ source: 'file' })}
             className={cn(
               'rounded-full px-2.5 py-1 text-[11px] font-normal transition-colors',
-              !isInline ? 'bg-card font-semibold text-foreground shadow-soft' : 'text-muted-foreground hover:text-foreground',
+              !isInline ? 'bg-card font-semibold text-foreground shadow-soft' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
             )}
           >
             {t('configSurface.sourceFile')}

@@ -124,6 +124,83 @@ export const PINNED_COLUMNS: readonly InstanceColumnKey[] = ['select', 'actions'
 
 export const DEFAULT_COLUMN_ORDER: readonly InstanceColumnKey[] = INSTANCE_COLUMN_KEYS
 
+/**
+ * 各列默认宽度（px）。名称列 `undefined` = 吃掉剩余空间。
+ * 与列顺序解耦：拖拽换位只改顺序，不改宽度分配。
+ */
+export const DEFAULT_COLUMN_WIDTHS: Record<InstanceColumnKey, number | undefined> = {
+  select: 32,
+  region: 84,
+  name: undefined,
+  identity: 208,
+  nodePort: 96,
+  status: 84,
+  health: 150,
+  business: 110,
+  actions: 56,
+}
+
+/**
+ * 列宽边界。表头拖拽只允许在这区间内，避免拖成 0 宽或一列占满整屏。
+ * 名称列给更高的下限——它承载实例名与徽章，过窄会把主要信息截没。
+ */
+export const MIN_COLUMN_WIDTH: Record<InstanceColumnKey, number> = {
+  select: 32,
+  region: 64,
+  name: 120,
+  identity: 120,
+  nodePort: 80,
+  status: 72,
+  health: 110,
+  business: 80,
+  actions: 48,
+}
+
+export const MAX_COLUMN_WIDTH = 720
+
+/** 列宽集合：只存用户**显式拖过**的列；缺省列走 `DEFAULT_COLUMN_WIDTHS`。 */
+export type InstanceColumnWidths = Partial<Record<InstanceColumnKey, number>>
+
+/** 把宽度收敛到该列的允许区间；非法输入回落默认宽度或最小宽度。 */
+export function clampColumnWidth(key: InstanceColumnKey, width: number): number {
+  const min = MIN_COLUMN_WIDTH[key] ?? 56
+  if (!Number.isFinite(width)) return DEFAULT_COLUMN_WIDTHS[key] ?? min
+  return Math.round(Math.min(MAX_COLUMN_WIDTH, Math.max(min, width)))
+}
+
+const WIDTHS_KEY = 'jm.instances.columnWidths'
+
+/** 读取用户拖过的列宽；缺省/损坏/未知列一律忽略，交给默认宽度。 */
+export function readStoredColumnWidths(): InstanceColumnWidths {
+  try {
+    const raw = localStorage.getItem(WIDTHS_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const known = new Set<string>(INSTANCE_COLUMN_KEYS)
+    const next: InstanceColumnWidths = {}
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!known.has(key) || typeof value !== 'number' || !Number.isFinite(value)) continue
+      // select 固定成复选框列，不接受用户宽度（即使旧存储里被手工写入）。
+      if (key === 'select') continue
+      next[key as InstanceColumnKey] = clampColumnWidth(key as InstanceColumnKey, value)
+    }
+    return next
+  } catch {
+    return {}
+  }
+}
+
+/** 写入列宽；空集合直接删键，避免把「全部恢复默认」留成一份空对象脏数据。 */
+export function writeStoredColumnWidths(widths: InstanceColumnWidths): void {
+  try {
+    if (Object.keys(widths).length === 0) localStorage.removeItem(WIDTHS_KEY)
+    else localStorage.setItem(WIDTHS_KEY, JSON.stringify(widths))
+  } catch {
+    /* 忽略：无存储能力时仅本次会话有效 */
+  }
+}
+
 const ORDER_KEY = 'jm.instances.columnOrder'
 
 /** 

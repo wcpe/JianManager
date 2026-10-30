@@ -5,6 +5,7 @@ import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { ColumnResizeHandle } from '@jianmanager/ui/components/column-resize-handle'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -98,6 +99,12 @@ function DraggableHead({
   onDragEnd,
   onDragOverColumn,
   onDropColumn,
+  resizable = false,
+  resizeLabel,
+  resizeTitle,
+  onResize,
+  onResizeEnd,
+  onResetWidth,
   children,
 }: {
   columnKey: InstanceColumnKey
@@ -107,6 +114,13 @@ function DraggableHead({
   onDragEnd: () => void
   onDragOverColumn: (key: InstanceColumnKey) => void
   onDropColumn: (key: InstanceColumnKey) => void
+  /** 是否渲染右缘的列宽手柄；省略则不显示手柄。 */
+  resizable?: boolean
+  resizeLabel?: string
+  resizeTitle?: string
+  onResize?: (width: number) => void
+  onResizeEnd?: () => void
+  onResetWidth?: () => void
   /** 
    * **已经是 `<TableHead>` 的元素**（由 renderHead 产出）。
    * 本组件不自己再包一层 th：包了就会出现「一个列两个 th」，表头列数翻倍、
@@ -116,10 +130,27 @@ function DraggableHead({
   children: ReactElement
 }) {
   const [over, setOver] = useState(false)
+  const headProps = children.props as { className?: string; children?: React.ReactNode }
+  const headChildren = resizable && onResize ? (
+    <>
+      {headProps.children}
+      <ColumnResizeHandle
+        testId={`instance-col-resize-${columnKey}`}
+        label={resizeLabel ?? '调整列宽'}
+        title={resizeTitle ?? '拖动调整列宽'}
+        onResize={onResize}
+        onResizeEnd={onResizeEnd}
+        onReset={onResetWidth}
+      />
+    </>
+  ) : (
+    headProps.children
+  )
   return cloneElement(children as ReactElement<Record<string, unknown>>, {
     'data-column-key': columnKey,
     'data-dragging': draggingKey === columnKey ? 'true' : undefined,
     'data-drag-over': over && draggingKey !== columnKey ? 'true' : undefined,
+    children: headChildren,
     draggable: draggable || undefined,
     onDragStart: draggable
       ? (event: React.DragEvent) => {
@@ -148,8 +179,9 @@ function DraggableHead({
         }
       : undefined,
     className: cn(
-      (children.props as { className?: string }).className,
+      headProps.className,
       'select-none',
+      resizable && 'relative',
       draggable && 'cursor-grab active:cursor-grabbing',
       draggingKey === columnKey && 'opacity-40',
       // 插入位提示：左侧一条实色竖线（不用背景色，避免与表头 muted 底混淆）
@@ -176,6 +208,9 @@ export function InstanceTableHeader({
   visibleColumns = ALL_OPTIONAL_COLUMNS,
   columnOrder,
   onReorderColumn,
+  onColumnResize,
+  onColumnResizeEnd,
+  onResetColumnWidth,
 }: {
   t: (k: string, options?: Record<string, unknown>) => string
   allSelected: boolean
@@ -195,6 +230,12 @@ export function InstanceTableHeader({
   columnOrder?: readonly InstanceColumnKey[]
   /** 列被拖动到目标列时的回调（省略则整表不可拖拽）。 */
   onReorderColumn?: (from: InstanceColumnKey, to: InstanceColumnKey) => void
+  /** 拖动列宽时的实时回调；omit 则不渲染列宽手柄。 */
+  onColumnResize?: (key: InstanceColumnKey, width: number) => void
+  /** 列宽拖动结束（落 localStorage）。 */
+  onColumnResizeEnd?: () => void
+  /** 双击列宽手柄恢复该列默认宽度。 */
+  onResetColumnWidth?: (key: InstanceColumnKey) => void
 }) {
   const [dragging, setDragging] = useState<InstanceColumnKey | null>(null)
   /* 
@@ -283,45 +324,40 @@ export function InstanceTableHeader({
   return (
     <TableHeader className="border-t border-border/70 bg-muted/25">
       <TableRow>
-        {ordered.map((key) =>
-          canDrag && !PINNED_COLUMNS.includes(key) ? (
-            <DraggableHead
-              key={key}
-              columnKey={key}
-              draggable
-              draggingKey={dragging}
-              onDragStart={(k) => {
-                dragSourceRef.current = k
-                setDragging(k)
-              }}
-              onDragEnd={() => {
-                dragSourceRef.current = null
-                setDragging(null)
-              }}
-              onDragOverColumn={() => {
-                // 目标列由 drop 事件自己的 columnKey 提供，这里无需记录。
-              }}
-              onDropColumn={(target) => {
-                // 源列优先取 ref（同步可靠），再退回 state（正常拖拽路径）。
-                const from = dragSourceRef.current ?? dragging
-                if (from && from !== target) onReorderColumn?.(from, target)
-                dragSourceRef.current = null
-                setDragging(null)
-              }}
-            >
-              {renderHead(key)}
-            </DraggableHead>
-          ) : (
-            /* 
-              钉住的列（首/尾）不可拖拽，但仍要打上 data-column-key：
-              它是「这一格是哪一列」的唯一锚点，测试与后续列宽/对齐逻辑都靠它定位。
-              漏掉会让钉住列在 DOM 里变成无标识的野节点。
-            */
-            cloneElement(renderHead(key) as ReactElement<Record<string, unknown>>, {
-              'data-column-key': key,
-            })
-          ),
-        )}
+        {ordered.map((key) => (
+          <DraggableHead
+            key={key}
+            columnKey={key}
+            draggable={canDrag && !PINNED_COLUMNS.includes(key)}
+            draggingKey={dragging}
+            resizable={Boolean(onColumnResize) && key !== 'select'}
+            resizeLabel={t('instances.resizeColumnHint', { defaultValue: '拖动调整列宽' })}
+            resizeTitle={t('instances.resizeColumnTitle', { defaultValue: '拖动调整列宽（双击恢复默认）' })}
+            onResize={(width) => onColumnResize?.(key, width)}
+            onResizeEnd={onColumnResizeEnd}
+            onResetWidth={() => onResetColumnWidth?.(key)}
+            onDragStart={(k) => {
+              dragSourceRef.current = k
+              setDragging(k)
+            }}
+            onDragEnd={() => {
+              dragSourceRef.current = null
+              setDragging(null)
+            }}
+            onDragOverColumn={() => {
+              // 目标列由 drop 事件自己的 columnKey 提供，这里无需记录。
+            }}
+            onDropColumn={(target) => {
+              // 源列优先取 ref（同步可靠），再退回 state（正常拖拽路径）。
+              const from = dragSourceRef.current ?? dragging
+              if (from && from !== target) onReorderColumn?.(from, target)
+              dragSourceRef.current = null
+              setDragging(null)
+            }}
+          >
+            {renderHead(key)}
+          </DraggableHead>
+        ))}
       </TableRow>
     </TableHeader>
   )
@@ -333,6 +369,7 @@ export function SortableTableHead({
   currentSort,
   currentOrder,
   onSort,
+  children,
   ...rest
 }: {
   label: string
@@ -340,6 +377,8 @@ export function SortableTableHead({
   currentSort: InstanceSortKey
   currentOrder: InstanceSortOrder
   onSort: (key: InstanceSortKey) => void
+  /** 表头额外内容（列宽手柄由 DraggableHead 注入）。 */
+  children?: React.ReactNode
 } & Omit<React.ComponentProps<typeof TableHead>, 'children'>) {
   const { t } = useTranslation()
   const active = currentSort === sortValue
@@ -361,6 +400,7 @@ export function SortableTableHead({
         <span>{label}</span>
         <ArrowUpDown className={cn('size-3.5', active ? 'text-primary' : 'text-muted-foreground/60')} aria-hidden="true" />
       </Button>
+      {children}
     </TableHead>
   )
 }

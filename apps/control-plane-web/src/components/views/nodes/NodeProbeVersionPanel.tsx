@@ -1,6 +1,9 @@
 import { useTranslation } from 'react-i18next'
 import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { cn } from '@jianmanager/ui'
+import { PackageCheck } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 
 /** 
@@ -82,10 +85,30 @@ export default function NodeProbeVersionPanel({
       </div>
     )
 
+  const current = versions.find((v) => v.id === versionId)
+  const inheritVersion = catalog.versions.find((v) => v.id === catalog.package.defaultVersionId)
+
   return (
     <div className="space-y-3">
       {/* 标题由外层 Panel 提供，这里只留说明，避免同一句话出现两遍。 */}
       <p className="text-xs text-muted-foreground">{t('probe.nodeVersionHint')}</p>
+
+      {/* 当前状态摘要：先回答「现在到底用哪个版本」，再让人去改。 */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <PackageCheck className="size-3.5 text-primary/70" aria-hidden />
+          {t('probe.probeCurrent')}
+          <span className="font-mono font-semibold text-foreground">
+            {(current ?? inheritVersion)?.version ?? '--'}
+          </span>
+        </span>
+        <span>
+          {versionId === 0 ? t('probe.probeModeInherit') : t('probe.probeModePinned')}
+        </span>
+        <span>
+          {t('probe.probeCandidates')} <span className="tabular-nums font-medium text-foreground">{versions.length}</span>
+        </span>
+      </div>
       {versions.length === 0 && (
         // 没有已落库的版本时只有「继承」一项可选：说清楚「要先去制品库上传」，否则看着像下拉坏了。
         <p className="rounded-md border border-dashed px-2.5 py-2 text-[11px] text-muted-foreground">
@@ -104,6 +127,28 @@ export default function NodeProbeVersionPanel({
         <option value="0">{t('probe.nodeInherit', { version: catalog.versions.find((version) => version.id === catalog.package.defaultVersionId)?.version || '—' })}</option>
         {versions.map((version) => <option key={version.id} value={version.id}>{version.version}</option>)}
       </NativeSelect>
+
+      {/*
+        候选版本一览：下拉收起时看不到有哪些可选，这里给一行小徽标。
+        对「要不要固定到这个版本」的判断，比一个折叠下拉有用。
+      */}
+      {versions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">{t('probe.probeAvailable')}</span>
+          {versions.map((v) => (
+            <Badge
+              key={v.id}
+              variant="outline"
+              className={cn(
+                'h-5 px-1.5 font-mono text-[10px]',
+                v.id === versionId ? 'border-primary/50 text-primary' : 'text-muted-foreground',
+              )}
+            >
+              {v.version}
+            </Badge>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -23,7 +23,8 @@ test.describe('搭建代理（mock 模式真浏览器）', () => {
     const name = `fr035-velocity-${Date.now()}`
 
     await page.goto('/instances')
-    await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
+    // 页名已随 i18n 统一由「实例管理」改为「服务器」（instances.title）。
+    await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr035-e2e-instances-before.png'), fullPage: true })
 
     await page.getByRole('button', { name: '搭建代理', exact: true }).click()

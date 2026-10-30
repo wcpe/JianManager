@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { usePageContext } from '@/lib/assistant/page-context'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Plus, Search, Server } from 'lucide-react'
+import { CircleCheck, Cpu, HardDrive, MemoryStick, Plus, Search, Server, WifiOff, Wrench } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { useNodes, useSetNodeMaintenance, useDrainNode, useDeleteNode, useArchivedNodes, usePurgeArchivedNode, useNodeStartupProgress, type NodeInfo, type ArchivedNode } from '@/api/nodes'
 import type { NodeDeleteBlockedInstance } from '@/api/nodes'
 import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
@@ -41,6 +42,7 @@ import { cn } from '@jianmanager/ui'
 import NodeJDKTab from '@/components/nodes/NodeJDKTab'
 import NodeLogRuntimeTab from '@/components/nodes/NodeLogRuntimeTab'
 import NodePortsTab from '@/components/nodes/NodePortsTab'
+import NodeRuntimeTab from '@/components/nodes/NodeRuntimeTab'
 import {
   NodeProcessPanel,
   NodeProcessDetailDialog,
@@ -50,12 +52,13 @@ import {
 import NodeArtifactCacheTab from '@/components/nodes/NodeArtifactCacheTab'
 import NodeProxyTab from '@/components/nodes/NodeProxyTab'
 import NodeProbeVersionTab from '@/components/nodes/NodeProbeVersionTab'
-import NodeRepairTab from '@/components/nodes/NodeRepairTab'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
 import AddNodeDialogContainer from '@/components/nodes/AddNodeDialogContainer'
 import { Button } from '@jianmanager/ui/components/button'
 import { BlockedByInstancesDialog } from '@/components/views/nodes/BlockedByInstancesDialog'
-import { NodeCard } from '@/components/views/nodes/NodeListParts'
+import { ArchivedNodeList, NodeCard } from '@/components/views/nodes/NodeListParts'
+import { NodeUsageKpiCard } from '@/components/views/nodes/NodeUsageKpiCard'
+import { NodePaginationBar } from '@/components/views/nodes/NodeTable'
 import { NodeOverviewSection } from '@/components/views/nodes/NodeOverviewSection'
 import { NodeInstanceList, type NodeInstanceUsage } from '@/components/views/nodes/NodeInstanceList'
 import { NodeTable, type NodeSortKey, type NodeSortOrder } from '@/components/views/nodes/NodeTable'
@@ -65,9 +68,13 @@ import { NodeConfigSection } from '@/components/views/nodes/NodeConfigSection'
 import { useDynamicPageSize } from '@/lib/hooks/use-dynamic-page-size'
 import {
   applyNodeColumnMove,
+  clampNodeColumnWidth,
+  readStoredNodeColumnWidths,
   readStoredNodeOrder,
+  writeStoredNodeColumnWidths,
   writeStoredNodeOrder,
   type NodeColumnKey,
+  type NodeColumnWidths,
 } from '@/lib/nodes/node-columns'
 import { ArchivedNodeDetailPane } from '@/components/views/nodes/ArchivedNodeDetailPane'
 import { NodeStartupProgressPanel } from '@/components/views/nodes/NodeStartupProgressPanel'
@@ -135,6 +142,15 @@ export default function NodesPage() {
   const navigate = useNavigate()
   const view = readNodesView(searchParams)
   const isArchive = view === 'archive'
+  /** 切换活跃 / 归档；同时清掉页码与选中，避免带着活跃节点的 page/id 进归档视图。 */
+  const setView = (next: NodesView) => {
+    const params = new URLSearchParams(searchParams)
+    if (next === 'archive') params.set('view', 'archive')
+    else params.delete('view')
+    params.delete('page')
+    params.delete('node')
+    setSearchParams(params, { replace: true })
+  }
 
   // 页面上报（§5.1）：`?node=<id>` 深链即「正在看哪个节点」，可直接派生。
   // 只发类型化引用，不发节点名/凭证（名称由后端按权限回填）。
@@ -216,10 +232,30 @@ export default function NodesPage() {
    * 与实例页同一套实现（lib/shared/column-order），但列定义独立（jm.nodes.columnOrder）。
    */
   const [columnOrder, setColumnOrder] = useState<NodeColumnKey[]>(readStoredNodeOrder)
+  const [columnWidths, setColumnWidths] = useState<NodeColumnWidths>(readStoredNodeColumnWidths)
+  const columnWidthsRef = useRef(columnWidths)
   const reorderColumn = (from: NodeColumnKey, to: NodeColumnKey) => {
     setColumnOrder((prev) => {
       const next = applyNodeColumnMove(prev, from, to)
       writeStoredNodeOrder(next)
+      return next
+    })
+  }
+
+  const resizeColumn = (key: NodeColumnKey, width: number) => {
+    setColumnWidths((prev) => {
+      const next = { ...prev, [key]: clampNodeColumnWidth(key, width) }
+      columnWidthsRef.current = next
+      return next
+    })
+  }
+  const commitColumnWidths = () => writeStoredNodeColumnWidths(columnWidthsRef.current)
+  const resetColumnWidth = (key: NodeColumnKey) => {
+    setColumnWidths((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      columnWidthsRef.current = next
+      writeStoredNodeColumnWidths(next)
       return next
     })
   }
@@ -254,7 +290,19 @@ export default function NodesPage() {
     headerHeight: 36,
     footerHeight: 0,
   })
-  const pageSize = Number(searchParams.get('size')) || dynamicPageSize
+  const sizeParam = Number(searchParams.get('size'))
+  /*
+    每页条数：URL 的 `size` 优先，缺省走「按可视行数自动」。
+    手动选大小后写进 URL（可分享），选回「自动」即清掉参数——两条路径共用同一份派生逻辑。
+  */
+  const pageSize = sizeParam || dynamicPageSize
+  const changePageSize = (size: number | null) => {
+    const params = new URLSearchParams(searchParams)
+    if (size === null) params.delete('size')
+    else params.set('size', String(size))
+    params.delete('page')
+    setSearchParams(params, { replace: true })
+  }
   const page = Math.max(1, Number(searchParams.get('page')) || 1)
   const setPage = (next: number) => {
     const params = new URLSearchParams(searchParams)
@@ -375,6 +423,23 @@ export default function NodesPage() {
 
 
   const [maintenanceTarget, setMaintenanceTarget] = useState<NodeInfo | null>(null)
+  /*
+    批量操作：勾选的节点 id 集合。
+    放在页面层而不是表格里——卡片视图与表格视图共用同一份选择，
+    切视图时不会丢；批量操作条也只需要读这一份状态。
+  */
+  const [selectedNodeIds, setSelectedNodeIds] = useState<ReadonlySet<number>>(new Set())
+  const toggleRowSelect = (id: number) => {
+    setSelectedNodeIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  /** 批量确认弹窗：记录要做哪种批量动作。 */
+  const [batchAction, setBatchAction] = useState<'maintenanceOn' | 'drain' | null>(null)
+  const [batchRunning, setBatchRunning] = useState(false)
 
   const runMaintenance = (node: NodeInfo, enabled: boolean) => {
     setMaintenance.mutate(
@@ -386,6 +451,35 @@ export default function NodesPage() {
           toast.error(e?.response?.data?.message || t('common.error')),
       },
     )
+  }
+
+  /**
+   * 批量执行：逐台串行调用既有单节点接口。
+   *
+   * 【为什么串行】排空会停掉节点上的全部实例，并发下发会让多台机器同时断服；
+   * 串行还有一个好处：任意一台失败不影响其余，最后统一汇报成功/失败台数。
+   * 后端没有节点级批量端点，这里也不新造——单节点接口的权限/审计照旧生效。
+   */
+  const runBatch = async (action: 'maintenanceOn' | 'maintenanceOff' | 'drain') => {
+    const targets = (nodes ?? []).filter((n) => selectedNodeIds.has(n.id))
+    if (targets.length === 0) return
+    setBatchRunning(true)
+    let ok = 0
+    const failed: string[] = []
+    for (const node of targets) {
+      try {
+        if (action === 'drain') await drain.mutateAsync(node.id)
+        else await setMaintenance.mutateAsync({ id: node.id, enabled: action === 'maintenanceOn' })
+        ok += 1
+      } catch (e) {
+        const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        failed.push(`${node.name}${msg ? `：${msg}` : ''}`)
+      }
+    }
+    setBatchRunning(false)
+    setSelectedNodeIds(new Set())
+    if (failed.length === 0) toast.success(t('nodes.batchDone', { count: ok }))
+    else toast.error(t('nodes.batchPartial', { ok, failed: failed.length, detail: failed.slice(0, 3).join('；') }))
   }
 
   // 进入维护会中断新实例调度（不影响运行实例、可退出回退），故进入方向加二次确认；退出无害直接执行。
@@ -486,13 +580,17 @@ export default function NodesPage() {
    *
    * 与服务器页同一套 `StatCard` + auto-fit 网格：数字优先于文字——
    * 「几台在跑、几台挂了、集群还剩多少资源」是进这页最先要回答的三个问题。
-   * 前三张点一下就按状态筛（与旧 SummaryChips 行为一致），后三张是集群资源水位，不可点。
+   * 前四张点一下就按状态筛（与旧 SummaryChips 行为一致），后三张是集群资源水位，不可点。
    */
   const nodeStatCards: Array<{
     key: string
     label: string
     value: string
     tone: 'neutral' | 'success' | 'danger' | 'warning' | 'info'
+    icon: LucideIcon
+    /** 资源占用类卡片的百分比；状态类不传。 */
+    gauge?: number | null
+    hint?: string
     onClick?: () => void
     active?: boolean
   }> = [
@@ -501,6 +599,7 @@ export default function NodesPage() {
       label: t('nodes.total', '节点总数'),
       value: summary.total.toLocaleString('zh-CN'),
       tone: 'neutral',
+      icon: Server,
       // 点「总数」= 取消状态筛选，回到全部（等价于服务器页的「全部」卡）。
       onClick: () => setStatusFilter('all'),
       active: statusFilter === 'all',
@@ -510,6 +609,7 @@ export default function NodesPage() {
       label: t('nodes.online'),
       value: summary.online.toLocaleString('zh-CN'),
       tone: 'success',
+      icon: CircleCheck,
       // 点 KPI 卡即按该状态筛（与服务器页 StatCard 同一手感）；再点一次取消。
       onClick: () => setStatusFilter(statusFilter === 'online' ? 'all' : 'online'),
       active: statusFilter === 'online',
@@ -519,6 +619,7 @@ export default function NodesPage() {
       label: t('nodes.offline'),
       value: summary.offline.toLocaleString('zh-CN'),
       tone: summary.offline > 0 ? 'danger' : 'neutral',
+      icon: WifiOff,
       onClick: () => setStatusFilter(statusFilter === 'offline' ? 'all' : 'offline'),
       active: statusFilter === 'offline',
     },
@@ -527,6 +628,7 @@ export default function NodesPage() {
       label: t('nodes.maintenance'),
       value: summary.maintenance.toLocaleString('zh-CN'),
       tone: summary.maintenance > 0 ? 'warning' : 'neutral',
+      icon: Wrench,
       onClick: () => setStatusFilter(statusFilter === 'maintenance' ? 'all' : 'maintenance'),
       active: statusFilter === 'maintenance',
     },
@@ -535,18 +637,27 @@ export default function NodesPage() {
       label: t('nodes.avgCpu', '平均 CPU'),
       value: gauge(summary.cpuPct),
       tone: 'info',
+      icon: Cpu,
+      gauge: summary.cpuPct,
+      hint: t('nodes.avgCpuHint', '在线节点 CPU 使用率均值'),
     },
     {
       key: 'mem',
       label: t('nodes.avgMem', '平均内存'),
       value: gauge(summary.memPct),
       tone: 'info',
+      icon: MemoryStick,
+      gauge: summary.memPct,
+      hint: t('nodes.avgMemHint', '在线节点内存使用率均值'),
     },
     {
       key: 'disk',
       label: t('nodes.avgDisk', '平均磁盘'),
       value: gauge(summary.diskPct),
       tone: 'info',
+      icon: HardDrive,
+      gauge: summary.diskPct,
+      hint: t('nodes.avgDiskHint', '在线节点磁盘使用率均值'),
     },
   ]
   const listLoading = isArchive ? archivedLoading : isLoading
@@ -585,6 +696,11 @@ export default function NodesPage() {
           ① 顶部 KPI 大卡片  ② 节点运行概览图  ③ 铺满的节点表格
           原先是「一排 chip + 卡片网格」，2 个节点时页面约 62% 是空白。
         */}
+        {/*
+          KPI 卡与下面的运行概览都统计**活跃节点**（归档时全为 0 或停在旧值），
+          在归档视图里显示会让人以为归档节点还在跑。归档只保留归档列表本身。
+        */}
+        {!isArchive && (
         <div
           role="group"
           aria-label={t('nodes.summaryLabel', '节点概览')}
@@ -597,22 +713,36 @@ export default function NodesPage() {
           className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(120px,1fr))]"
         >
           {nodeStatCards.map((card) => (
-            <div key={card.key} data-testid={`nodes-kpi-${card.key}`}>
-            <StatCard
-              label={card.label}
-              value={card.value}
-              tone={card.tone}
-              {...(card.onClick ? { onClick: card.onClick, active: card.active } : {})}
-            />
+            <div key={card.key} data-testid={`nodes-kpi-${card.key}`} className="min-w-0">
+            {card.gauge !== undefined ? (
+              /* 资源占用：环形仪表替代裸百分比，弧长直接表达「离满还有多远」。 */
+              <NodeUsageKpiCard
+                label={card.label}
+                icon={card.icon}
+                value={card.gauge}
+                hint={card.hint ?? card.label}
+              />
+            ) : (
+              <StatCard
+                label={card.label}
+                value={card.value}
+                icon={<card.icon className="size-3.5" aria-hidden="true" />}
+                tone={card.tone}
+                className="h-full w-full"
+                {...(card.onClick ? { onClick: card.onClick, active: card.active } : {})}
+              />
+            )}
             </div>
           ))}
         </div>
+        )}
 
         {/* ② 节点运行概览：集群平均水位 + 各节点负载对比（零额外请求，见组件内注释）。 */}
         {!isArchive && <NodeRuntimeOverview nodes={nodes ?? []} summary={summary} />}
 
         <ScopeBar>
-          <SummaryChips chips={summaryChips} />
+          {/* 归档视图下列表是已下线节点，活跃汇总 chips 会误导，直接不显示。 */}
+          {!isArchive && <SummaryChips chips={summaryChips} />}
           {/*
             视图切换：列表（默认）/ 卡片。
             列表是「比较与巡检」的视角（列对齐、一屏多行），卡片是「少量节点时看概览」。
@@ -645,6 +775,19 @@ export default function NodesPage() {
             {t('nodes.attentionSort', '异常优先')}
           </Button>
 
+          {/*
+            活跃 / 归档 切换：归档功能此前没有任何界面入口（只能手输 ?view=archive），
+            等于把「已下线节点 + 清理」藏成了隐藏功能。
+          */}
+          <Segments role="tablist" aria-label={t('nodes.viewSwitch')}>
+            <Segment active={!isArchive} onClick={() => setView('active')} role="tab" aria-selected={!isArchive}>
+              {t('nodes.viewActive')}
+            </Segment>
+            <Segment active={isArchive} onClick={() => setView('archive')} role="tab" aria-selected={isArchive}>
+              {t('nodes.viewArchive')}
+            </Segment>
+          </Segments>
+
           <Segments role="tablist" aria-label={t('nodes.layoutSwitch', '视图切换')}>
             <Segment active={layout === 'list'} onClick={() => setLayout('list')} role="tab" aria-selected={layout === 'list'}>
               {t('nodes.layoutList', '列表')}
@@ -657,13 +800,73 @@ export default function NodesPage() {
             <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                setQuery(e.target.value)
+                // 搜索改了结果集，停在第 N 页很可能已越界 → 表格显示「暂无节点」，看着像没搜到。
+                setPage(1)
+              }}
               placeholder={t('nodes.searchPlaceholder')}
               aria-label={t('nodes.searchPlaceholder')}
               className="h-8 w-56 pl-7"
             />
           </div>
         </ScopeBar>
+        {/*
+          批量操作条：只勾选后才出现。动作限于「维护 / 排空」——
+          删除不提供批量入口（破坏性且需要逐台确认实例级联，不适合一把梭）。
+        */}
+        {!isArchive && selectedNodeIds.size > 0 && (
+          <div
+            className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+            data-testid="nodes-batch-bar"
+          >
+            <span className="font-medium text-foreground">{t('nodes.batchSelected', { count: selectedNodeIds.size })}</span>
+            {/* 全选本页：36 台节点逐台勾选不现实；只选当前页，避免「全选」含义随筛选漂移。 */}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={batchRunning}
+              onClick={() => setSelectedNodeIds((prev) => {
+                const next = new Set(prev)
+                for (const n of pagedNodes) next.add(n.id)
+                return next
+              })}
+            >
+              {t('nodes.batchSelectPage')}
+            </Button>
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={batchRunning}
+                onClick={() => setBatchAction('maintenanceOn')}
+              >
+                {t('nodes.batchMaintenanceOn')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={batchRunning}
+                onClick={() => void runBatch('maintenanceOff')}
+              >
+                {t('nodes.batchMaintenanceOff')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive"
+                disabled={batchRunning}
+                onClick={() => setBatchAction('drain')}
+              >
+                {t('nodes.batchDrain')}
+              </Button>
+              <Button size="sm" variant="ghost" disabled={batchRunning} onClick={() => setSelectedNodeIds(new Set())}>
+                {t('nodes.batchClear')}
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/*正在启动的 Worker。放在列表之上，因为它解释「为什么列表里还没有这台机器」——
             旧事故中 8m39s 的启动期里主控台完全看不到该节点，运维无从判断是没装好还是正在加载。 */}
         {!isArchive && (
@@ -673,18 +876,41 @@ export default function NodesPage() {
           <DataPanelSkeleton />
         ) : listError ? (
           <NodeListErrorState onRetry={retryList} />
+        ) : isArchive ? (
+          /* 归档视图：只用归档列表（归档节点没有实时水位，卡片视图对它没有意义）。 */
+          <ArchivedNodeList
+            nodes={filteredArchived}
+            onOpen={(id) => setSelectedId(id)}
+            onPurge={(n) => setPurgeTarget(n)}
+            purging={purge.isPending}
+          />
         ) : (
           layout === 'card' ? (
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
             <CardsGrid className="min-h-0 flex-1">
-              {sortedNodes.map((node) => (
+              {pagedNodes.map((node) => (
                 <NodeCard
                   key={node.id}
                   node={node}
                   instanceCount={instanceCountByNode.get(node.id) ?? 0}
                   onOpen={() => setSelectedId(node.id)}
+                  selectable
+                  selected={selectedNodeIds.has(node.id)}
+                  onToggleSelect={toggleRowSelect}
                 />
               ))}
             </CardsGrid>
+            {/* 卡片视图同样分页：此前直接 map 全量，超过一页的节点被静默隐藏。 */}
+            <NodePaginationBar
+              page={page}
+              pageSize={pageSize}
+              total={sortedNodes.length}
+              loaded={pagedNodes.length}
+              onPageChange={setPage}
+              onPageSizeChange={changePageSize}
+              autoSize={!sizeParam}
+            />
+            </div>
           ) : (
             <NodeTable
               nodes={pagedNodes}
@@ -694,18 +920,46 @@ export default function NodesPage() {
               onSort={setSort}
               onOpen={(id) => setSelectedId(id)}
               columnOrder={columnOrder}
+              columnWidths={columnWidths}
               onReorderColumn={reorderColumn}
+              onColumnResize={resizeColumn}
+              onColumnResizeEnd={commitColumnWidths}
+              onResetColumnWidth={resetColumnWidth}
               containerRef={nodesTableRef}
+              selectedIds={selectedNodeIds}
+              onToggleRow={toggleRowSelect}
+              emptyKind={filtered.length === 0 && (query.trim() !== '' || statusFilter !== 'all') ? 'noMatch' : 'noNodes'}
               pagination={{
                 page,
                 pageSize,
                 total: sortedNodes.length,
                 onPageChange: setPage,
+                onPageSizeChange: changePageSize,
+                autoSize: !sizeParam,
               }}
             />
           )
         )}
         <AddNodeDialogContainer open={addOpen} onClose={() => setAddOpen(false)} />
+
+      {/* 批量破坏性动作的二次确认：维护会中断新实例调度，排空会停掉节点上全部实例。 */}
+      <DangerConfirm
+        open={batchAction !== null}
+        title={batchAction === 'drain' ? t('nodes.batchDrainTitle') : t('nodes.batchMaintenanceTitle')}
+        description={
+          batchAction === 'drain'
+            ? t('nodes.batchDrainDesc', { count: selectedNodeIds.size })
+            : t('nodes.batchMaintenanceDesc', { count: selectedNodeIds.size })
+        }
+        confirmLabel={batchAction === 'drain' ? t('nodes.drain') : t('nodes.batchMaintenanceOn')}
+        scope="platform"
+        onConfirm={() => {
+          const action = batchAction
+          setBatchAction(null)
+          if (action) void runBatch(action)
+        }}
+        onCancel={() => setBatchAction(null)}
+      />
       </PageShell>
     )
   }
@@ -736,6 +990,14 @@ export default function NodesPage() {
               onPurge={() => setPurgeTarget(selectedArchived)}
               purging={purge.isPending}
               onNavigate={navigate}
+              /* 归档节点之间也要能直接切换：下拉数据用归档列表，不能用活跃节点。 */
+              nodeSelector={
+                <NodeSelector
+                  nodes={filteredArchived}
+                  selectedId={selectedArchived.id}
+                  onSelect={(id) => setSelectedId(id)}
+                />
+              }
             />
           ) : (
             <div className="grid h-full place-items-center rounded-lg border border-dashed bg-card/50 shadow-soft">
@@ -774,10 +1036,18 @@ export default function NodesPage() {
                   否则切页签时有的分区有标题栏、有的像裸内容，用户会丢失「我在哪一区」的锚点。
                   面板内部不再重复渲染同名标题。
                 */}
+                {/*
+                  运行时页签 = 三块独立面板，而不是「一个 JDK 面板里塞四件事」：
+                  JDK 管理 / 节点运行时（运行时库 + 包管理器 + 全局包）/ 日志平台运行时。
+                  间距统一 space-y-3，与其它页签一致。
+                */}
                 {tabKey === 'runtime' && (
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     <Panel title={t('nodes.jdkTitle')}>
                       <NodeJDKTab nodeId={paneNode.id} active />
+                    </Panel>
+                    <Panel title={t('nodes.runtimeLib.title')}>
+                      <NodeRuntimeTab nodeId={paneNode.id} active />
                     </Panel>
                     <Panel title={t('logsRuntime.title')}>
                       <NodeLogRuntimeTab
@@ -806,11 +1076,6 @@ export default function NodesPage() {
                   </Panel>
                 )}
                 {tabKey === 'monitor' && <NodeMonitorChartsContainer node={paneNode} />}
-                {tabKey === 'repair' && (
-                  <Panel title={t('nodeRepair.title')}>
-                    <NodeRepairTab node={paneNode} active />
-                  </Panel>
-                )}
               </>
             )}
           />

@@ -15,7 +15,11 @@ test('模板一键部署 + 变量填充预览 + startCommand 复制', async ({ p
   await expect(page.getByText('Paper 1.21')).toBeVisible()
   await expect(page.getByText('Java 21').first()).toBeVisible() // 版本（更新时间见真机快照/组件测）
 
-  await page.getByRole('button', { name: '一键部署' }).first().click()
+  // 【为何限定 `button.w-full`】「一键部署」这个可及名会匹配到 4 个元素：
+  // 页顶「一键开服」统计卡里的 <Zap> 图标（16×16、元文本）也是 button 且排在最前，
+  // `.first()` 会点到它 —— 点了没反应，报错却是「对话框不存在」。
+  // 真正带部署动作的是卡片底部那个满宽按钮。
+  await page.locator('button.w-full').filter({ hasText: '一键部署' }).first().click()
   const dialog = page.getByRole('dialog', { name: /部署「Paper 1.21」/ })
   await expect(dialog).toBeVisible()
   // 变量填充预览

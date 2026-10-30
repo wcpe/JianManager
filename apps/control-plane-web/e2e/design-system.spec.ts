@@ -8,6 +8,7 @@ import { login } from './helpers'
  */
 
 test('共享 Panel / StatCard 设计底座渲染', async ({ page }) => {
+  test.setTimeout(90_000)
   await login(page)
 
   // Panel 底座（实例监控段 ChartPanel → Panel data-slot）
@@ -16,11 +17,12 @@ test('共享 Panel / StatCard 设计底座渲染', async ({ page }) => {
   await expect(page.locator('[data-slot="panel"]').first()).toBeVisible({ timeout: 15_000 })
   expect(await page.locator('[data-slot="panel"]').count()).toBeGreaterThanOrEqual(1)
 
-  // StatCard 底座（节点详情态左栏的 CPU / 内存 / 磁盘聚合水位）。
-  // 阶段 6 起 /nodes 是列表态（状态计数 chip + 节点卡片墙，照原型不含 StatCard），
-  // 故指向详情态。
-  await page.goto('/nodes?node=1')
-  await expect(page.locator('[data-slot="stat-card"]').first()).toBeVisible()
+  // StatCard 底座。
+  // 【为何不再指 /nodes 详情】节点详情的水位已改为对象页头里的一组环形仪表
+  // （`data-testid="node-detail-header-gauges"`，与首页同一套 `ResourceGauge`），
+  // 左栏不再有 StatCard。改为指向仍在用 StatCard 的客户端分发概览。
+  await page.goto('/client-dist-ops')
+  await expect(page.locator('[data-slot="stat-card"]').first()).toBeVisible({ timeout: 20_000 })
 
   await page.screenshot({ path: '../.tmp/acceptancesingle-machine-design-system.png', fullPage: true })
 })

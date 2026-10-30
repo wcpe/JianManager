@@ -531,10 +531,10 @@ export function InstanceConsolePageView({
                   tabIndex={activeTab === key ? 0 : -1}
                   onClick={() => onActiveTabChange(key)}
                   className={cn(
-                    'inline-flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors',
+                    'inline-flex shrink-0 items-center gap-1.5 rounded-t-[var(--radius-sm)] border-b-2 px-2.5 py-1.5 text-xs font-medium transition-colors',
                     activeTab === key
                       ? 'border-primary text-primary'
-                      : 'border-transparent text-muted-foreground hover:text-foreground',
+                      : 'border-transparent text-muted-foreground hover:bg-accent/60 hover:text-foreground',
                   )}
                 >
                   <Icon className="size-3.5 shrink-0" />

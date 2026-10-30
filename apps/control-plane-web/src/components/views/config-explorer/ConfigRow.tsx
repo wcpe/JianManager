@@ -66,7 +66,7 @@ function ToggleSeg({
       title={label}
       className={cn(
         'flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors duration-200 ease-ios',
-        active ? 'bg-card text-foreground shadow-soft' : 'text-muted-foreground hover:text-foreground',
+        active ? 'bg-card text-foreground shadow-soft' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
       )}
     >
       {children}

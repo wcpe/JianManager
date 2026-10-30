@@ -36,9 +36,12 @@ test('MCP 活动页：渲染 mock 活动行 + 切档请求成功', async ({ page
   await expect(page.getByText('加载 MCP 活动失败')).toHaveCount(0)
 
   // 档位按钮文案来自 i18n（键名与档位值同名），按分组内顺序定位第二档，免得断言绑死在文案上。
-  const presets = page.getByRole('group', { name: '统计窗口' }).getByRole('button')
+  // 【为何是 tablist/tab】档位控件已收敛到布局层 `Segments` 原语，它渲染的是
+  // `role="tablist"` 容器 + `role="tab"` 子项（配 `aria-selected`），不再是
+  // `role="group"` + `aria-pressed` 的自绘按钮组。旧写法会让 locator 直接解析到 0 个元素。
+  const presets = page.getByRole('tablist', { name: '统计窗口' }).getByRole('tab')
   await expect(presets).toHaveCount(2)
-  await expect(presets.nth(0)).toHaveAttribute('aria-pressed', 'true')
+  await expect(presets.nth(0)).toHaveAttribute('aria-selected', 'true')
 
   // 以初始档位值做排除，避免 10s 轮询的旧窗口响应被误捕。
   const initialWindow = new URL(initial.url()).searchParams.get('window')
@@ -51,7 +54,7 @@ test('MCP 活动页：渲染 mock 活动行 + 切档请求成功', async ({ page
 
   // 200 才说明第二档的 window 真能被后端解析并落在允许区间内（非法/越界一律 400）。
   expect(switched.status(), `切档响应体：${await switched.text()}`).toBe(200)
-  await expect(presets.nth(1)).toHaveAttribute('aria-pressed', 'true')
+  await expect(presets.nth(1)).toHaveAttribute('aria-selected', 'true')
   // 切档后表格仍渲染：168h 窗口能看到 24h 窗口之外更早的活动。
   await expect(page.getByText('ops-laptop')).toBeVisible()
   await expect(page.getByText('加载 MCP 活动失败')).toHaveCount(0)

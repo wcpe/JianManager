@@ -20,11 +20,10 @@ export type DetailTab =
   | 'proxy'
   | 'probe'
   | 'monitor'
-  | 'repair'
   /** 配置总览：汇总散落在各分区的可写配置 + 只读项（见 NodeConfigSection）。 */
   | 'config'
 
-export const DETAIL_TABS: DetailTab[] = ['overview', 'process', 'monitor', 'config', 'runtime', 'cache', 'proxy', 'probe', 'repair']
+export const DETAIL_TABS: DetailTab[] = ['overview', 'process', 'monitor', 'config', 'runtime', 'cache', 'proxy', 'probe']
 
 /** 
  * tab 分组（用户要求「tab 栏分组」）。
@@ -35,8 +34,11 @@ export const DETAIL_TABS: DetailTab[] = ['overview', 'process', 'monitor', 'conf
  */
 export const DETAIL_TAB_GROUPS: Array<{ key: string; tabs: DetailTab[] }> = [
   { key: 'daily', tabs: ['overview', 'process', 'monitor'] },
-  { key: 'assets', tabs: ['config', 'runtime', 'cache', 'proxy'] },
-  { key: 'diagnose', tabs: ['probe', 'repair'] },
+  /*
+    探针版本并入「运行与资产」组：坏节点修复删除后，原「诊断与修复」组只剩它一项，
+    分组名与分隔线都不再成立。它本质也是这个节点的一项资产配置。
+  */
+  { key: 'assets', tabs: ['config', 'runtime', 'cache', 'proxy', 'probe'] },
 ]
 
 /** 某 tab 属于哪个顶层分组。 */
@@ -265,11 +267,18 @@ v2 明确「资源仪表内联右置」，那个设计比原型新且是有意�
         而且自定义时间窗只挂在概览那套上，反倒让「看历史」的监控页只能选预设。
         现在概览只回答「这台机器是什么、现在怎么样」，时序一律归监控。
       */}
-      <div
-        className={tab === 'overview' ? 'flex min-h-0 flex-1 flex-col' : 'min-w-0'}
-        {...(tab === 'overview' ? { 'data-testid': 'node-detail-overview-stack' } : {})}
-      >
-        {renderTab(tab, node)}
+      {/*
+        【固定壳 + 页签内滚动】所有页签统一成「占满剩余高度 + 自己滚动」：
+        切页签时内容区高度不变，滚动条只出现在内容区内部，不会带着整个页面跳。
+        之前只有概览是 flex-1、其余是内容高度，从概览切到配置时整页高度骤变、滚动位置乱跳。
+
+        `min-h-full` 内层是关键：概览的两栏要「内容短时撑满、内容长时正常溢出」，
+        只写 flex-1 在滚动容器里拿不到确定高度，就撑不满了。
+      */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex min-h-full flex-col" data-testid="node-detail-tab-body">
+          {renderTab(tab, node)}
+        </div>
       </div>
     </div>
   )

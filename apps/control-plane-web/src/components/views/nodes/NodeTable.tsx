@@ -4,6 +4,8 @@ import { cloneElement, Fragment, useEffect, useRef, useState, type ReactElement,
 
 import { cn } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
+import { ColumnResizeHandle } from '@jianmanager/ui/components/column-resize-handle'
+import { NativeSelect } from '@jianmanager/ui/components/native-select'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
@@ -12,8 +14,10 @@ import type { NodeInfo } from '@/lib/nodes/node-types'
 import {
   NODE_COLUMN_WIDTH,
   NODE_DEFAULT_ORDER,
+  NODE_PAGE_SIZES,
   NODE_PINNED_COLUMNS,
   type NodeColumnKey,
+  type NodeColumnWidths,
 } from '@/lib/nodes/node-columns'
 
 /**
@@ -64,6 +68,7 @@ function SortableHead({
   currentOrder,
   onSort,
   align = 'left',
+  children,
   ...rest
 }: {
   label: string
@@ -72,6 +77,8 @@ function SortableHead({
   currentOrder: NodeSortOrder
   onSort: (key: NodeSortKey) => void
   align?: 'left' | 'right'
+  /** 表头额外内容（列宽手柄由 DraggableNodeHead 注入）。 */
+  children?: ReactNode
 } & Omit<React.ComponentProps<typeof TableHead>, 'children'>) {
   const { t } = useTranslation()
 
@@ -105,6 +112,7 @@ function SortableHead({
           aria-hidden="true"
         />
       </Button>
+      {children}
     </TableHead>
   )
 }
@@ -121,49 +129,90 @@ const COLUMN_DRAG_MIME = 'application/x-jm-node-column'
  */
 function DraggableNodeHead({
   columnKey,
+  draggable,
   draggingKey,
   onDragStart,
   onDragEnd,
   onDropColumn,
+  resizable,
+  resizeLabel,
+  resizeTitle,
+  onResize,
+  onResizeEnd,
+  onResetWidth,
   children,
 }: {
   columnKey: NodeColumnKey
+  draggable: boolean
   draggingKey: NodeColumnKey | null
   onDragStart: (key: NodeColumnKey) => void
   onDragEnd: () => void
   onDropColumn: (key: NodeColumnKey) => void
+  resizable?: boolean
+  resizeLabel?: string
+  resizeTitle?: string
+  onResize?: (width: number) => void
+  onResizeEnd?: () => void
+  onResetWidth?: () => void
   children: ReactElement
 }) {
   const [over, setOver] = useState(false)
+  const headProps = children.props as { className?: string; children?: ReactNode }
+  const headChildren = resizable && onResize ? (
+    <>
+      {headProps.children}
+      <ColumnResizeHandle
+        testId={`node-col-resize-${columnKey}`}
+        label={resizeLabel ?? '调整列宽'}
+        title={resizeTitle ?? '拖动调整列宽'}
+        onResize={onResize}
+        onResizeEnd={onResizeEnd}
+        onReset={onResetWidth}
+      />
+    </>
+  ) : (
+    headProps.children
+  )
   return cloneElement(children as ReactElement<Record<string, unknown>>, {
     'data-column-key': columnKey,
     'data-dragging': draggingKey === columnKey ? 'true' : undefined,
-    draggable: true,
-    onDragStart: (event: React.DragEvent) => {
-      // 只带 key：列是可重排的语义单元，搬 DOM 片段没有意义。
-      event.dataTransfer.setData(COLUMN_DRAG_MIME, columnKey)
-      event.dataTransfer.effectAllowed = 'move'
-      onDragStart(columnKey)
-    },
-    onDragEnd: () => {
-      setOver(false)
-      onDragEnd()
-    },
-    onDragOver: (event: React.DragEvent) => {
-      // 必须 preventDefault 才会触发 drop。
-      event.preventDefault()
-      event.dataTransfer.dropEffect = 'move'
-      setOver(true)
-    },
-    onDragLeave: () => setOver(false),
-    onDrop: (event: React.DragEvent) => {
-      event.preventDefault()
-      setOver(false)
-      onDropColumn(columnKey)
-    },
+    children: headChildren,
+    draggable: draggable || undefined,
+    onDragStart: draggable
+      ? (event: React.DragEvent) => {
+          // 只带 key：列是可重排的语义单元，搬 DOM 片段没有意义。
+          event.dataTransfer.setData(COLUMN_DRAG_MIME, columnKey)
+          event.dataTransfer.effectAllowed = 'move'
+          onDragStart(columnKey)
+        }
+      : undefined,
+    onDragEnd: draggable
+      ? () => {
+          setOver(false)
+          onDragEnd()
+        }
+      : undefined,
+    onDragOver: draggable
+      ? (event: React.DragEvent) => {
+          // 必须 preventDefault 才会触发 drop。
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+          setOver(true)
+        }
+      : undefined,
+    onDragLeave: draggable ? () => setOver(false) : undefined,
+    onDrop: draggable
+      ? (event: React.DragEvent) => {
+          event.preventDefault()
+          setOver(false)
+          onDropColumn(columnKey)
+        }
+      : undefined,
     className: cn(
-      (children.props as { className?: string }).className,
-      'select-none cursor-grab active:cursor-grabbing',
+      headProps.className,
+      'select-none',
+      resizable && 'relative',
+      draggable && 'cursor-grab active:cursor-grabbing',
       draggingKey === columnKey && 'opacity-40',
       // 插入位提示：左侧一条实色竖线（不用背景色，避免与表头 muted 底混淆）
       over && draggingKey !== columnKey && 'shadow-[inset_2px_0_0_0_var(--primary)]',
@@ -180,11 +229,22 @@ export function NodeTable({
   onOpen,
   /** 列顺序（表头拖拽换位结果）。缺省为默认顺序。 */
   columnOrder = NODE_DEFAULT_ORDER,
+  /** 用户拖过的列宽；缺省列走 NODE_COLUMN_WIDTH。 */
+  columnWidths,
   /** 列被拖到目标列时回调；省略则整表不可拖拽。 */
   onReorderColumn,
+  /** 拖动列宽时实时回调；省略则不渲染列宽手柄。 */
+  onColumnResize,
+  /** 列宽拖动结束（落存储）。 */
+  onColumnResizeEnd,
+  /** 双击列宽手柄恢复该列默认宽度。 */
+  onResetColumnWidth,
   now: injectedNow,
+  selectedIds,
+  onToggleRow,
   pagination,
   containerRef,
+  emptyKind = 'noNodes',
 }: {
   nodes: NodeInfo[]
   instanceCountByNode: Map<number, number>
@@ -193,14 +253,27 @@ export function NodeTable({
   onSort: (key: NodeSortKey) => void
   onOpen: (id: number) => void
   columnOrder?: readonly NodeColumnKey[]
+  columnWidths?: NodeColumnWidths
   onReorderColumn?: (from: NodeColumnKey, to: NodeColumnKey) => void
+  onColumnResize?: (key: NodeColumnKey, width: number) => void
+  onColumnResizeEnd?: () => void
+  onResetColumnWidth?: (key: NodeColumnKey) => void
   /** 注入「当前时间」便于测试相对心跳；缺省取系统时间。 */
   now?: number
+  /** 已勾选的节点 id（批量操作）。省略则不显示勾选框。 */
+  selectedIds?: ReadonlySet<number>
+  /** 勾选/取消一行。 */
+  onToggleRow?: (id: number) => void
   /**
    * 表格滚动容器的 ref 回传（动态分页用）。
    * 页面据此测量「一屏能放几行」，再把页大小喂回来——测量与切片在同一处，不会打架。
    */
   containerRef?: React.RefObject<HTMLDivElement | null>
+  /**
+   * 空态原因：`noMatch` 表示有筛选/搜索条件但没匹配，`noNodes` 表示确实一台都没有。
+   * 两者混用会让「搜错字」看起来像「集群里没有节点」。
+   */
+  emptyKind?: 'noNodes' | 'noMatch'
   /** 分页。省略时不分页、全量渲染。 */
   pagination?: {
     page: number
@@ -213,9 +286,15 @@ export function NodeTable({
      * 并把它回报给页面，让页面的切片与这里算的一致。
      */
     onDynamicPageSizeChange?: (size: number) => void
+    /** 手动选择每页条数；null = 回到自动（按一屏行数）。 */
+    onPageSizeChange?: (size: number | null) => void
+    /** 当前是否处于自动模式（决定选择器显示「自动」还是具体条数）。 */
+    autoSize?: boolean
   }
 }) {
   const { t } = useTranslation()
+   /* 选中状态由外部持有（批量操作条要跨卡片/表格两视图共用同一份选择）。 */
+   const selectable = !!onToggleRow
 
   /*
     心跳相对时间需要一个「会走的现在」。
@@ -302,42 +381,43 @@ export function NodeTable({
     >
       <Table className="table-fixed">
         <colgroup>
-          {orderedKeys.map((key) => (
-            <col key={key} style={NODE_COLUMN_WIDTH[key] ? { width: NODE_COLUMN_WIDTH[key] } : undefined} />
-          ))}
+          {orderedKeys.map((key) => {
+            const width = columnWidths?.[key] ?? NODE_COLUMN_WIDTH[key]
+            return <col key={key} style={width ? { width } : undefined} />
+          })}
         </colgroup>
         <TableHeader className="border-t border-border/70 bg-muted/25">
           <TableRow>
-            {orderedKeys.map((key) => {
-              const head = renderHead(key)
-              // 钉住的列（状态）与「未启用拖拽」时原样输出，只补 data-column-key 作为锚点。
-              if (!onReorderColumn || NODE_PINNED_COLUMNS.includes(key)) {
-                return cloneElement(head as ReactElement<Record<string, unknown>>, { 'data-column-key': key })
-              }
-              return (
-                <DraggableNodeHead
-                  key={key}
-                  columnKey={key}
-                  draggingKey={dragging}
-                  onDragStart={(k) => {
-                    dragSourceRef.current = k
-                    setDragging(k)
-                  }}
-                  onDragEnd={() => {
-                    dragSourceRef.current = null
-                    setDragging(null)
-                  }}
-                  onDropColumn={(target) => {
-                    const from = dragSourceRef.current ?? dragging
-                    if (from && from !== target) onReorderColumn(from, target)
-                    dragSourceRef.current = null
-                    setDragging(null)
-                  }}
-                >
-                  {head}
-                </DraggableNodeHead>
-              )
-            })}
+            {orderedKeys.map((key) => (
+              <DraggableNodeHead
+                key={key}
+                columnKey={key}
+                draggable={Boolean(onReorderColumn) && !NODE_PINNED_COLUMNS.includes(key)}
+                draggingKey={dragging}
+                resizable={Boolean(onColumnResize)}
+                resizeLabel={t('instances.resizeColumnHint', { defaultValue: '拖动调整列宽' })}
+                resizeTitle={t('instances.resizeColumnTitle', { defaultValue: '拖动调整列宽（双击恢复默认）' })}
+                onResize={(width) => onColumnResize?.(key, width)}
+                onResizeEnd={onColumnResizeEnd}
+                onResetWidth={() => onResetColumnWidth?.(key)}
+                onDragStart={(k) => {
+                  dragSourceRef.current = k
+                  setDragging(k)
+                }}
+                onDragEnd={() => {
+                  dragSourceRef.current = null
+                  setDragging(null)
+                }}
+                onDropColumn={(target) => {
+                  const from = dragSourceRef.current ?? dragging
+                  if (from && from !== target) onReorderColumn?.(from, target)
+                  dragSourceRef.current = null
+                  setDragging(null)
+                }}
+              >
+                {renderHead(key)}
+              </DraggableNodeHead>
+            ))}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -345,7 +425,7 @@ export function NodeTable({
             <TableRow>
               {/* 8 列：空态横跨整行，否则右侧会露出空白列边界。 */}
               <TableCell colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
-                {t('nodes.empty', '暂无节点')}
+                {emptyKind === 'noMatch' ? t('nodes.emptyNoMatch', '没有匹配的节点，试试清空搜索或筛选') : t('nodes.empty', '暂无节点')}
               </TableCell>
             </TableRow>
           ) : (
@@ -366,6 +446,22 @@ export function NodeTable({
               const cell_status = (
               <TableCell>
                 <div className="flex items-center gap-1.5">
+                  {/*
+                    勾选框放在状态格里，**不新增一列**：这表的列由列设置/拖拽换位驱动，
+                    三处（表头/行/colgroup）各算一遍列数曾经错位过，加列的风险远高于放这里。
+                    点击时 stopPropagation，避免与「整行打开详情」冲突。
+                  */}
+                  {selectable && (
+                    <input
+                      type="checkbox"
+                      className="size-3.5 shrink-0 cursor-pointer accent-[var(--primary)]"
+                      checked={selectedIds?.has(node.id) ?? false}
+                      onChange={() => onToggleRow?.(node.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={t('nodes.selectNode', { name: node.name })}
+                      data-testid={`node-select-${node.id}`}
+                    />
+                  )}
                   <span
                     className={cn('size-2 shrink-0 rounded-full', online && 'animate-breathing')}
                     style={{ backgroundColor: dotColor, color: dotColor }}
@@ -507,25 +603,33 @@ export function NodeTable({
           total={pagination.total}
           loaded={nodes.length}
           onPageChange={pagination.onPageChange}
+          {...(pagination.onPageSizeChange ? { onPageSizeChange: pagination.onPageSizeChange } : {})}
+          {...(pagination.autoSize !== undefined ? { autoSize: pagination.autoSize } : {})}
         />
       )}
     </div>
   )
 }
 
-/** 节点分页条（结构对齐服务器页的 InstancePaginationBar）。 */
-function NodePaginationBar({
+/** 节点分页条（结构对齐服务器页的 InstancePaginationBar）。卡片视图也复用它。 */
+export function NodePaginationBar({
   page,
   pageSize,
   total,
   loaded,
   onPageChange,
+  onPageSizeChange,
+  autoSize,
 }: {
   page: number
   pageSize: number
   total: number
   loaded: number
   onPageChange: (page: number) => void
+  /** 选择每页条数；传 null 表示回到「按可视行数自动」。省略则不显示选择器。 */
+  onPageSizeChange?: (size: number | null) => void
+  /** 当前是否处于「自动（按一屏行数）」模式。 */
+  autoSize?: boolean
 }) {
   const { t } = useTranslation()
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -544,7 +648,30 @@ function NodePaginationBar({
           defaultValue: '已加载 {{loaded}} / 共 {{total}} 个节点，第 {{page}} / {{pages}} 页',
         })}
       </span>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-2">
+        {/*
+          每页条数：默认「自动」= 按当前可视行数分页（节点页原设计）。
+          手动选择后写入 URL，页大小可分享；选回「自动」即清掉该参数。
+        */}
+        {onPageSizeChange && (
+          <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            {t('nodes.pageSize', '每页')}
+            <NativeSelect
+              className="h-7 w-20 text-xs"
+              value={autoSize ? 'auto' : String(pageSize)}
+              onChange={(e) => onPageSizeChange(e.target.value === 'auto' ? null : Number(e.target.value))}
+              aria-label={t('nodes.pageSize', '每页')}
+              data-testid="nodes-page-size"
+            >
+              <option value="auto">{t('nodes.pageSizeAuto', '自动')}</option>
+              {NODE_PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
+        )}
         <Button type="button" variant="outline" size="sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
           {t('common.prevPage', { defaultValue: '上一页' })}
         </Button>

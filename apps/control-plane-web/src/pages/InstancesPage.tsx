@@ -75,11 +75,15 @@ import { InstanceContextMenu } from '@/components/views/instances/InstanceContex
 import { buildContextMenuActions } from '@/components/views/instances/instanceContextMenuActions'
 import {
   applySelectionClick,
+  clampColumnWidth,
   invertSelection,
   moveColumn,
   readStoredColumnOrder,
+  readStoredColumnWidths,
   writeStoredColumnOrder,
+  writeStoredColumnWidths,
   type InstanceColumnKey,
+  type InstanceColumnWidths,
 } from '@/lib/instances/instance-view-prefs'
 import { InstanceGroupHeaderContent } from '@/components/views/instances/VirtualizedInstanceTables'
 
@@ -358,6 +362,12 @@ export default function InstancesPage() {
     它在顺序里的位置仍然保留，用户不用重排一遍。
   */
   const [columnOrder, setColumnOrder] = useState<InstanceColumnKey[]>(readStoredColumnOrder)
+  /*
+    列宽（用户拖拽表头右缘）。同样独立存储：顺序、可见性、宽度三者正交，
+    任意一项变化都不应该把另外两项重置。拖动过程只改内存状态，松手才落盘。
+  */
+  const [columnWidths, setColumnWidths] = useState<InstanceColumnWidths>(readStoredColumnWidths)
+  const columnWidthsRef = useRef(columnWidths)
   // 保存视图：整串 search 快照 + 列集合（jm.instances.views）。恢复=导航回快照，
   // 由 `location.search → 状态` 的同步 effect 落全部字段（过滤/分组/排序/页大小天然保真）。
   const [savedViews, setSavedViews] = useState<SavedInstanceView[]>(readStoredViews)
@@ -860,6 +870,37 @@ export default function InstancesPage() {
     })
   }
 
+  /** 列宽实时预览：只改内存状态，避免拖动时每帧写 localStorage。 */
+  const resizeColumn = (key: InstanceColumnKey, width: number) => {
+    setColumnWidths((prev) => {
+      const next = { ...prev, [key]: clampColumnWidth(key, width) }
+      columnWidthsRef.current = next
+      return next
+    })
+  }
+
+  /** 松手落盘：拖动期间已连续更新内存，这里只持久化最终值。 */
+  const commitColumnWidths = () => writeStoredColumnWidths(columnWidthsRef.current)
+
+  /** 恢复单列默认宽度（双击列宽手柄）。 */
+  const resetColumnWidth = (key: InstanceColumnKey) => {
+    setColumnWidths((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      columnWidthsRef.current = next
+      writeStoredColumnWidths(next)
+      return next
+    })
+  }
+
+  /** 恢复全部列宽（「显示」菜单）。 */
+  const resetAllColumnWidths = () => {
+    const next: InstanceColumnWidths = {}
+    columnWidthsRef.current = next
+    setColumnWidths(next)
+    writeStoredColumnWidths(next)
+  }
+
   /** 列设置：切换可选列可见性并持久化。 */
   const toggleColumn = (column: InstanceOptionalColumn) => {
     setVisibleColumns((prev) => {
@@ -1140,6 +1181,9 @@ export default function InstancesPage() {
                         {t(COLUMN_LABEL_KEY[column])}
                       </DropdownMenuCheckboxItem>
                     ))}
+                    <DropdownMenuItem onSelect={resetAllColumnWidths}>
+                      {t('instances.resetColumnWidths', '重置列宽')}
+                    </DropdownMenuItem>
                   </>
                 )}
                 {/* 折叠控制只在有分组头时才有意义（平铺视图无处可折叠）。 */}
@@ -1394,6 +1438,8 @@ export default function InstancesPage() {
               onPageChange={(next) => updateUrl({ page: String(next) })}
                       visibleColumns={visibleColumns}
               columnOrder={columnOrder}
+              columnWidths={columnWidths}
+              scrollStorageKey={scrollStorageKey}
               header={
                 <InstanceTableHeader
                   t={t}
@@ -1406,6 +1452,9 @@ export default function InstancesPage() {
                   visibleColumns={visibleColumns}
                   columnOrder={columnOrder}
                   onReorderColumn={reorderColumn}
+                  onColumnResize={resizeColumn}
+                  onColumnResizeEnd={commitColumnWidths}
+                  onResetColumnWidth={resetColumnWidth}
                 />
               }
               renderRow={renderRow}
@@ -1420,7 +1469,10 @@ export default function InstancesPage() {
               isFetching={isFetching}
               onPageChange={(next) => updateUrl({ page: String(next) })}
                       visibleColumns={visibleColumns}
+              columnOrder={columnOrder}
+              columnWidths={columnWidths}
               treeRows={treeRows}
+              scrollStorageKey={scrollStorageKey}
               renderGroupRow={(row) => (
                 <TableRow
                   key={row.key}
@@ -1451,6 +1503,11 @@ export default function InstancesPage() {
                   onSort={setTableSortParam}
                   selectAllLabel={selectAllLabel}
                   visibleColumns={visibleColumns}
+                  columnOrder={columnOrder}
+                  onReorderColumn={reorderColumn}
+                  onColumnResize={resizeColumn}
+                  onColumnResizeEnd={commitColumnWidths}
+                  onResetColumnWidth={resetColumnWidth}
                 />
               }
               renderRow={renderRow}

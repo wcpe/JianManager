@@ -6,7 +6,7 @@ import { mockDataScaleProfile } from '@jianmanager/devmock/runtime-control'
 
 /** 
  * 节点与运行时域 mock handler（照 spec §7 范式）。
- * 覆盖 api 模块：nodes / nodeRuntime / nodeRepair / jdks / runtimeAssets / selfUpdate 的每个 endpoint。
+ * 覆盖 api 模块：nodes / nodeRuntime / jdks / runtimeAssets / selfUpdate 的每个 endpoint。
  * 字段严格匹配各 `web/src/api/*.ts` 的 interface；写操作改 db 联动（如装 JDK→列表出现、删 JDK→overview 减少、
  * 升级节点→check 当前版本变更）。受保护端点首行 requireAuth。集合 nodes/node-jdks/enroll-tokens/assets
  * 各在本模块顶层带 seedFn 唯一声明。
@@ -886,39 +886,6 @@ export const handlers = [
       noProxy: custom ? body.noProxy ?? '' : '',
     })
     return HttpResponse.json(proxyViewOf(id, n.status === 1))
-  }),
-
-  /* ===================== node repair（BUG-A / ADR-039） ===================== */
-  domainRoute('get', '/nodes/repair/suspects', (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    return HttpResponse.json([])
-  }),
-
-  domainRoute('get', '/nodes/:id/orphans', (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const id = Number((info.params as { id: string }).id)
-    return HttpResponse.json({ nodeId: id, jdkCount: 0, instanceCount: 0 })
-  }),
-
-  domainRoute('post', '/nodes/:id/reenroll', async (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const id = Number((info.params as { id: string }).id)
-    const n = nodes.get(id)
-    if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
-    const oldUuid = n.uuid
-    const newUuid = `node-reenrolled-${id}`
-    nodes.update(id, { uuid: newUuid })
-    return HttpResponse.json({ nodeId: id, newUuid, newSecret: 'jm_secret_rotated', oldUuid })
-  }),
-
-  domainRoute('post', '/nodes/:id/purge-orphans', (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const id = Number((info.params as { id: string }).id)
-    return HttpResponse.json({ nodeId: id, jdkDeleted: 0, instancesPurged: 0 })
   }),
 
   /* ===================== JDK 托管 ===================== */

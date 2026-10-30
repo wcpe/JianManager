@@ -11,10 +11,11 @@ test('实例组织分组 多级嵌套树', async ({ page }) => {
   await login(page)
   await page.goto('/instances')
 
-  // 分组维度控件由独立按钮改为 Radix Select（aria-label = grouping.groupBy「分组」）。
-  // 选「组织分组」把列表切到 groupTree 维度，组管理入口随之出现在工具栏。
-  await page.getByRole('combobox', { name: '分组' }).click()
-  await page.getByRole('option', { name: '组织分组' }).click()
+  // 分组维度控件已从「工具栏上的独立 Select」收进「显示」下拉菜单：
+  // 一级控件只留搜索/视图/筛选，排序、分页、列、分组维度都归入「显示」。
+  // 故先开菜单，再在菜单里的「分组」分组处选「组织分组」。
+  await page.getByRole('button', { name: '显示' }).click()
+  await page.getByRole('menuitemradio', { name: '组织分组' }).click()
 
   // groupTree 维度下才渲染「管理分组」入口，点开组树面板。
   await page.getByRole('button', { name: '管理分组' }).click()

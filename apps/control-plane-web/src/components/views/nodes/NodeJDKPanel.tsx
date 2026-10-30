@@ -303,7 +303,7 @@ export default function NodeJDKPanel({
             size="auto"
             onClick={() => setTab(k)}
             className={`flex-1 rounded px-3 py-1.5 font-normal transition-colors ${
-              tab === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'
+              tab === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
             }`}
           >
             {t(`artifactCache.jdkTab.${k}`)}
@@ -354,7 +354,7 @@ export default function NodeJDKPanel({
                   'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
                   sourceFilter === key
                     ? 'border-primary/50 bg-accent text-primary'
-                    : 'border-border bg-card text-muted-foreground hover:text-foreground',
+                    : 'border-border bg-card text-muted-foreground hover:bg-accent/60 hover:text-foreground',
                 )}
               >
                 {label}

@@ -11,7 +11,8 @@ export function ResourceGauge({
   thickness = 8,
   decimals = 0,
 }: {
-  label: string
+  /** 环下方的说明；省略则只渲染环，供「环 + 卡内标签」的紧凑布局复用。 */
+  label?: string
   value: number
   max?: number
   unit?: string
@@ -22,7 +23,9 @@ export function ResourceGauge({
   /** 中心数值保留的小数位（默认 0；如负载倍数用 2）。 */
   decimals?: number
 }) {
-  const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0
+  // 缺数（NaN）时环按 0% 画：中心仍显示「—」，但不能把 NaN 写进 SVG 属性。
+  const safeValue = Number.isFinite(value) ? value : 0
+  const pct = max > 0 ? Math.min(100, Math.max(0, (safeValue / max) * 100)) : 0
   const lvl = level ?? resourceLevel(pct)
   const r = (size - thickness) / 2
   const circ = 2 * Math.PI * r
@@ -47,13 +50,16 @@ export function ResourceGauge({
           />
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-lg font-semibold tabular-nums" style={{ color }}>
+          <span
+            className={`font-semibold tabular-nums ${size < 56 ? 'text-sm' : 'text-lg'}`}
+            style={{ color }}
+          >
             {Number.isFinite(value) ? value.toFixed(decimals) : '—'}
           </span>
-          <span className="text-[11px] text-muted-foreground">{unit}</span>
+          {unit && <span className="text-[11px] text-muted-foreground">{unit}</span>}
         </div>
       </div>
-      <span className="text-xs text-muted-foreground">{label}</span>
+      {label && <span className="text-xs text-muted-foreground">{label}</span>}
     </div>
   )
 }
