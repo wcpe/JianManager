@@ -2660,6 +2660,15 @@ func New(opts Options) (*Manager, error) {
 	//
 	// 为什么 opts.Sources 必须最高：它是当次进程的显式声明（worker.yml / 部署面），
 	// 历史记录不得覆盖当前声明——否则改了 yml 的路径重启后仍按旧路径采，现场无从解释。
+	//
+	// **从 yml 删掉一个源，它不会因此消失**：游标表里那条登记仍在，下一轮启动仍会把它
+	// 重建出来。这是**有意的**，不是 bug：
+	//   - 该源是真的存在、真的在被读的（游标表里记着它的位置）；
+	//   - 「停止采集某个源」应该是一个**显式删除动作**，而不是从「yml 里没有它」这种
+	//     缺席证据去推断。靠缺席推断会在两处误伤：yml 临时只写部分源（灰度/排障）、
+	//     以及实例源（它们本来就不在 opts.Sources 里，靠这条推断会全部失效）；
+	//   - 如果以后真的要加「yml 即权威白名单」的开关，它必须能区分「显式源」与
+	//     「实例源」两张面，不能是一刀切。
 	registrySources := m.sourcesFromCursorRegistry()
 	for key, source := range registrySources {
 		restoredSources[key] = source
@@ -3198,13 +3207,17 @@ func (m *Manager) Stop() error {
 			slog.Warn("停止采集时关闭归档读取会话失败", "source", p.Key().String(), "error", err)
 		}
 	}
-	// 关停前把游标与源登记一起落盘：没有任何采集轮的进程（登记后立即停）也必须留下
+	// 关停前补写一次游标表：没有任何采集轮的进程（登记后立即停）也必须留下
 	// 自己的源，否则下一次启动就“不知道采哪个文件”。
+	//
+	// 为什么走 OnStop 而不是 flushCursorRegistry：两者实现相同（同一个变更判据），
+	// 但关停不属于周期节拍，它**只在确有变更时才写盘**——正常关停前采集轮已刷过，
+	// 这里绝大多数时候是空操作（零磁盘 IO）。用独立的函数名把这件事写在调用点上。
 	//
 	// 调用位置：在全部管道 Flush 之后（此时 tailer.cursor 已推进到已处理字节）、
 	// 在 persist 与 CloseIndex 之前（不需要索引参与，读写的是独立的 ingest.cursor）。
-	// 锁状态：此处未持 m.mu（上面的 pipes 快照已释放），符合 flushCursorRegistry 的锁序纪律。
-	m.flushCursorRegistry()
+	// 锁状态：此处未持 m.mu（上面的 pipes 快照已释放），符合游标表的锁序纪律。
+	m.flushCursorRegistryOnStop()
 	// 关停落库：**有界尽力**（P0 复盘 2026-10-03 ✓）。
 	//
 	// 语义自检（改的是承诺的形状，不是数据安全 ✓）：

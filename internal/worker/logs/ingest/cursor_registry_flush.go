@@ -2,10 +2,11 @@ package ingest
 
 // 游标表的读写入口与节拍（2026-10-30 裁定 D）。
 //
-// 调用点一共三处：
-//   1. 启动时 loadCursorRegistryIntoManager —— 把上次的游标读进内存；
+// 调用点一共四处：
+//   1. 启动时 loadCursorRegistryIntoManager —— 把上次的游标与源登记读进内存；
 //   2. 登记时 resumeCursorFor —— 给管道一个续读点（没有就从 EOF 开始）；
-//   3. 采集轮尾部 flushCursorRegistry —— 把当前游标整表写回盘。
+//   3. 采集轮尾部 flushCursorRegistry —— 把当前游标整表写回盘（周期节拍）；
+//   4. 关停时 flushCursorRegistryOnStop —— 只在**确有变更**时补写一次。
 //
 // 第 3 处用「周期刷盘」而不是每字节刷：不 fsync，写一次整个文件（约 2KB），
 // 最坏丢一个周期的进度，代价是那一段重读一遍（不丢数据）。
@@ -58,7 +59,10 @@ func (m *Manager) sourcesFromCursorRegistry() map[string]SourceConfig {
 			continue
 		}
 		if entry.Path != entry.Source.Path {
-			slog.Warn("采集游标行内路径与源配置路径不一致，跳过该源的恢复",
+			// 两个路径都打出来：运维一眼就能分辨是「绑定换了路径」还是「有人手改了文件」。
+			// 选「少一个源」而不是「拿其中一个路径建源」：日志采集读错位置的代价是
+			// 重复投递或丢内容，两者都比少一个源难查得多。
+			slog.Warn("采集游标行内路径与源配置路径不一致，跳过该源的恢复（下次登记会重建）",
 				"source", key, "cursorPath", entry.Path, "sourcePath", entry.Source.Path)
 			continue
 		}
@@ -111,6 +115,32 @@ func (m *Manager) resumeCursorFor(key, path string) *acquire.SourceCursor {
 // (2) 放锁后再逐源调 Cursor()。代价是快照可能包含一个刚被摘除的源——那无害：
 // 它的游标与配置仍是一条真话，而 flush 只写“表”不写“源的存活状态”。
 func (m *Manager) flushCursorRegistry() {
+	m.applyCursorRegistryCandidates(m.collectCursorRegistryCandidates())
+}
+
+// flushCursorRegistryOnStop 是**关停路径**的补写：只在游标表确有变更时落盘。
+//
+// 为什么关停要单独一次（而不是只靠采集轮节拍）：进程可能「登记后立即停」（部署/重启风暴），
+// 那一轮采集轮从未跑过 ⇒ 源登记从未落盘 ⇒ 下次启动又不知道采哪个文件。
+//
+// 为什么与 flushCursorRegistry 同一个实现：变更判据（sameCursorRegistryEntry）只该有一个，
+// 两套判据就一定会分叉。区别只在名字——它把「关停时不该无条件做整表 IO」这件事写在调用点上。
+// 正常关停前采集轮已刷过，这里绝大多数时候是 changed=false ⇒ 零磁盘 IO。
+func (m *Manager) flushCursorRegistryOnStop() {
+	m.applyCursorRegistryCandidates(m.collectCursorRegistryCandidates())
+}
+
+// cursorRegistryCandidate 是一条待写入游标表的候选行（游标 + 显式口径的源配置）。
+type cursorRegistryCandidate struct {
+	key    string
+	cursor acquire.SourceCursor
+	source *SourceConfig
+}
+
+// collectCursorRegistryCandidates 收集各源的**当前**游标与**显式**配置。
+//
+// 锁纪律见 flushCursorRegistry 的注释：m.mu 内只拷指针与配置副本，p.Cursor() 一律在锁外。
+func (m *Manager) collectCursorRegistryCandidates() []cursorRegistryCandidate {
 	// 第 1 步：m.mu 内只拿指针与显式配置副本。
 	m.mu.Lock()
 	type keyedPipe struct {
@@ -132,23 +162,23 @@ func (m *Manager) flushCursorRegistry() {
 	}
 	m.mu.Unlock()
 	if len(pipes) == 0 {
-		return
+		return nil
 	}
 
 	// 第 2 步：锁外取游标（此处会拍 p.mu，必须已经不在 m.mu 内）。
-	type entry struct {
-		key    string
-		cursor acquire.SourceCursor
-		source *SourceConfig
-	}
-	entries := make([]entry, 0, len(pipes))
+	entries := make([]cursorRegistryCandidate, 0, len(pipes))
 	for _, kp := range pipes {
 		if c, ok := kp.pipe.Cursor(); ok {
-			entries = append(entries, entry{key: kp.key, cursor: c, source: kp.source})
+			entries = append(entries, cursorRegistryCandidate{key: kp.key, cursor: c, source: kp.source})
 		}
 	}
+	return entries
+}
+
+// applyCursorRegistryCandidates 把候选行并入内存表，**有变更才落盘**。返回是否写了盘。
+func (m *Manager) applyCursorRegistryCandidates(entries []cursorRegistryCandidate) bool {
 	if len(entries) == 0 {
-		return
+		return false
 	}
 	// 游标表的更新与快照必须在 cursorRegistryMu 内完成（登记路径会并发读它，见字段注释）。
 	// 落盘在锁**外**：open+write+rename 是整表磁盘 IO，不能把登记路径堵在里面。
@@ -172,7 +202,7 @@ func (m *Manager) flushCursorRegistry() {
 	}
 	if !changed {
 		m.cursorRegistryMu.Unlock()
-		return // 没变就不写盘：空转周期零磁盘 IO
+		return false // 没变就不写盘：空转周期与正常关停都零磁盘 IO
 	}
 	snapshot := make(cursorRegistry, len(m.cursorRegistry))
 	for key, entry := range m.cursorRegistry {
@@ -181,7 +211,9 @@ func (m *Manager) flushCursorRegistry() {
 	m.cursorRegistryMu.Unlock()
 	if err := saveCursorRegistry(m.cursorRegistryPath(), snapshot); err != nil {
 		slog.Warn("采集游标落盘失败（下一轮重试）", "error", err)
+		return false
 	}
+	return true
 }
 
 // sameCursorRegistryEntry 判定两行在语义上是否一致（用于「没变就不写盘」）。
