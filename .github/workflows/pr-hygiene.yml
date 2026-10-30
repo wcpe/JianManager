@@ -137,6 +137,20 @@ jobs:
             fail=1
           fi
 
+          # 提交信息里的绝对路径。
+          #
+          # 【为何单独查】上面的「扫描绝对路径」只覆盖 git diff 的**新增行**，提交信息（尤其是
+          # 排查记录、实测数据这类正文）完全不在它的视野内，也不在 PR 正文检查里。
+          # 实际踩过：一条 chore 提交的信息里写了「本机 TMPDIR=/home/<用户名>/tmpwork（25 字节）」，
+          # 肉眼看不出问题，三道检查全部放行，但用户名与目录结构已经进了公开仓库。
+          #
+          # 口径与内容检查保持一致：允许占位用户名与常见 CI/容器路径，其余 /home|/Users/<名>/ 一律拦。
+          MSG_PATH_ALLOW='(/home/(user|example|runner|app|node|ubuntu|assistant)/)|(/Users/(user|example|runner|shared)/)|(/opt/(app|jm|jianmanager)/)|(/tmp/)|(/var/(log|lib|run)/)|(/usr/)|(/etc/)|(C:\\\\Users\\\\(user|example|runner)\\\\)'
+          if printf '%s\n' "$MSGS" | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\\\Users\\\\' | grep -vE "$MSG_PATH_ALLOW"; then
+            echo "::error::提交信息含真实绝对路径（泄露用户名/目录结构）；请改成占位路径或只说「本机」"
+            fail=1
+          fi
+
           exit "$fail"
 
       - name: 扫描 PR 标题与正文
