@@ -150,6 +150,17 @@ export function NodeDetailPane({
 v2 明确「资源仪表内联右置」，那个设计比原型新且是有意的，故留在内容区；
           ② 隧道/维护徽标同理，对象头只有单个 status，它们在仪表行一并呈现。 */}
       <ObjectPageHeader
+        /*
+          【面包屑：节点管理 > 当前节点】
+          对象头只在层级 ≥2 时渲染面包屑（`showBreadcrumbs = breadcrumbs.length > 1`），
+          所以这里必须传两级，否则整段导航消失。
+          它曾在「节点详情页签重构」(56847ee4) 中被删，但本组件末尾的 `onNavigate`
+          （注释就写「面包屑导航」）一直保留着 —— 属漏删而非有意移除，现按原样恢复。
+        */
+        breadcrumbs={[
+          { label: t('nodes.title'), to: '/nodes' },
+          { label: node.name },
+        ]}
         icon={<Server className="size-5" />}
         title={node.name}
         /* 选择器并入标题行（节点名右侧）：云控制台惯例，省掉独立一行。 */
