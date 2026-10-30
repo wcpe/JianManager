@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, useClassicHome } from './helpers'
+import { login, pinClassicHome } from './helpers'
 
 /** 
  *面板信息密度与视觉改造 · 单机（Playwright + mock 模式）验收。
@@ -10,7 +10,7 @@ import { login, useClassicHome } from './helpers'
 
 test('高密度面板：环形仪表盘 + 分区面板 + 密集实例表', async ({ page }) => {
   // `/` 默认已改 AI 首页；本用例验的是经典首页的面板密度，故先钉住首页模式。
-  await useClassicHome(page)
+  await pinClassicHome(page)
   await login(page)
   // 登录后即落仪表盘（data-page=overview）。
   await expect(page.locator('[data-page="overview"]')).toBeVisible()

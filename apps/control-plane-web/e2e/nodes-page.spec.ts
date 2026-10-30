@@ -13,6 +13,8 @@ import { login } from './helpers'
  */
 
 test('节点列表态：集群概览 + 本地搜索 + 添加节点 + 卡片墙', async ({ page }) => {
+  // 本机 mock 大库下 /nodes 首屏可达 10~20s，叠加上多步断言容易顶穿默认预算。
+  test.setTimeout(120_000)
   await login(page)
   await page.goto('/nodes')
 
@@ -28,14 +30,19 @@ test('节点列表态：集群概览 + 本地搜索 + 添加节点 + 卡片墙',
   await expect(page.getByPlaceholder('搜索名称 / host')).toBeVisible()
   await expect(page.getByRole('button', { name: '添加节点' })).toBeVisible()
 
-  // 卡片墙：卡片本身是可点进详情的按钮（可访问名收敛为「节点名 + 状态」）。
-  await expect(page.getByRole('button', { name: /^alpha / }).first()).toBeVisible()
-  await expect(page.getByRole('button', { name: /^beta / }).first()).toBeVisible()
+  // 卡片墙：卡片本身是可点进详情的按钮。
+  //
+  // 【为何是精确名而不是 /^alpha /】注释里「可访问名收敛为「节点名 + 状态」」是旧版，
+  // 现在节点卡片按钮的可及名**就是节点名本身**（实测 `alpha-like buttons: ["alpha"]`）。
+  // 旧正则 `/^alpha /` 要求后面跟空格与内容，于是一个也匹配不到。
+  await expect(page.getByRole('button', { name: 'alpha', exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'beta', exact: true }).first()).toBeVisible()
 
   await page.screenshot({ path: '../.tmp/acceptancesingle-machine-nodes-list.png', fullPage: true })
 })
 
 test('节点详情态：操作 kebab + 分段工具', async ({ page }) => {
+  test.setTimeout(120_000)
   await login(page)
   await page.goto('/nodes?node=1')
 

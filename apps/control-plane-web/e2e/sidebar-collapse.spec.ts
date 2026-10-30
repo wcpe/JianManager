@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, useClassicHome } from './helpers'
+import { login, pinClassicHome } from './helpers'
 
 /** 
  *侧边栏可折叠图标轨 + 隐藏滚动条 + 布局持久化 · 单机（Playwright + mock 模式）验收。
@@ -10,7 +10,7 @@ import { login, useClassicHome } from './helpers'
 
 test('折叠为图标轨 + 隐藏滚动条 + 折叠态刷新持久', async ({ page }) => {
   // 刷新后的就绪信号是经典首页的 `[data-page="overview"]`，故先固定首页模式。
-  await useClassicHome(page)
+  await pinClassicHome(page)
   await login(page)
   const aside = page.locator('aside').first()
 
