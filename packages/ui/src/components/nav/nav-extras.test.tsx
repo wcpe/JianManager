@@ -311,7 +311,9 @@ describe('ObjectPageHeader 对象页头', () => {
       'object-breadcrumb',
       'object-identity',
       'object-metrics',
-      'object-tools',
+      // 工具段外包了一层 `object-tools-row`：nav 与右侧 toolsActions 需要并排，
+      // 由这一层 flex 容器承载，故页头的第四个子块是 row 而非 nav（nav 在它内部）。
+      'object-tools-row',
     ])
   })
 

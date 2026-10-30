@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers'
+import { login, useClassicHome } from './helpers'
 
 /** 
  *节点负载（load average）采集与仪表盘 · 单机（Playwright + mock 模式）验收。
@@ -10,6 +10,8 @@ import { login } from './helpers'
  */
 
 test('仪表盘总负载环 + 负载趋势曲线', async ({ page }) => {
+  // `/` 默认已改 AI 首页；经典首页的负载环只在经典模式下渲染，故先钉住模式。
+  await useClassicHome(page)
   await login(page)
   await expect(page.locator('[data-page="overview"]')).toBeVisible()
 

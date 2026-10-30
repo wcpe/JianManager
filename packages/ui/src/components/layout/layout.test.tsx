@@ -222,15 +222,20 @@ describe('Segments 分段控件', () => {
     expect(idle).toHaveAttribute('aria-selected', 'false')
   })
 
-  it('选中块抬为卡片底色，未选中项走中性前景色', () => {
+  it('选中块抬为卡片底色，未选中项走中性前景色并保留可见 hover', () => {
     render(
       <Segments>
         <Segment active>活跃</Segment>
         <Segment>归档</Segment>
       </Segments>,
     )
-    expect(screen.getByRole('tab', { name: '活跃' }).className).toContain('bg-card')
-    expect(screen.getByRole('tab', { name: '归档' }).className).not.toContain('bg-card')
+    const active = screen.getByRole('tab', { name: '活跃' })
+    const idle = screen.getByRole('tab', { name: '归档' })
+    expect(active.className).toContain('bg-card')
+    expect(idle.className).not.toContain('bg-card')
+    // hover 必须看得见：未选中项淡染主色，选中项保持卡片底色不被 hover 改掉。
+    expect(idle.className).toContain('hover:bg-accent/60')
+    expect(active.className).toContain('hover:bg-card')
   })
 
   it('容器与项都透传 className（调用方需要 w-full / flex-1 这类宽度覆盖）', () => {

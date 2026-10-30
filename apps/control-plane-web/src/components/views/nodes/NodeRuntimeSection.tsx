@@ -156,13 +156,14 @@ export default function NodeRuntimeSection({
   }
 
   return (
-    <div className="space-y-3 border-t pt-4">
-      {/* 分区头：标题 + 扫描发现 */}
+    <div className="space-y-3">
+      {/*
+        标题由外层 Panel 提供，这里只留说明 + 操作。
+        原先还有 `border-t pt-4`：那是「接在 JDK 列表后面」时的分隔线，
+        现在它自成一块面板，这条线会变成顶部一道多余的横线。
+      */}
       <div className="flex items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold">{t('nodes.runtimeLib.title')}</h3>
-          <p className="text-xs text-muted-foreground">{t('nodes.runtimeLib.subtitle')}</p>
-        </div>
+        <p className="text-xs text-muted-foreground">{t('nodes.runtimeLib.subtitle')}</p>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setInstallOpen(true)}>
             <Download className="size-4" />

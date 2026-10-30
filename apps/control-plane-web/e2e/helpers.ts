@@ -22,6 +22,26 @@ export async function login(page: Page, username = 'admin', password = 'admin123
   await expect(page.locator('[data-slot="console-shell"]')).toBeVisible({ timeout: 20_000 })
 }
 
+/**
+ * 把首页模式固定为「经典」，供需要经典首页（`[data-page="overview"]`）的用例使用。
+ *
+ * 【为什么需要】`/` 的默认模式已改为 AI 首页（`DEFAULT_HOME_MODE = 'assistant'`），
+ * 而经典首页的 `data-page="overview"` 只在记忆为 classic 或深链带 `?home=classic` 时才会出现。
+ * 靠 localStorage 记忆而不是每次都改写 URL，是因为多数用例进首页不是靠 `goto('/')`，
+ * 而是靠登录后的默认落地 —— 那时已经没有“改 URL”的机会了。
+ *
+ * 必须在**任何导航之前**调用（`addInitScript` 在每次文档创建时都会跑，比 `evaluate` 可靠）。
+ */
+export async function useClassicHome(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('console.homeMode', 'classic')
+    } catch {
+      // 隐私模式下列 localStorage 可能抛错；失败即退化为默认模式，由调用方的断言报错。
+    }
+  })
+}
+
 /** 在服务端搜索型 Combobox 中输入并选择精确选项。 */
 export async function selectComboboxOption(page: Page, triggerText: string, optionText: string): Promise<void> {
   const trigger = page.locator('[data-slot="combobox-trigger"]').filter({ hasText: triggerText }).first()

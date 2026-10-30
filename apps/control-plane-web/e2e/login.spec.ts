@@ -5,7 +5,11 @@ test.describe('登录（mock 模式）', () => {
   test('正确凭据 → 进入控制台仪表盘', async ({ page }) => {
     await login(page)
     expect(new URL(page.url()).pathname).toBe('/')
-    await expect(page.getByRole('heading', { name: '平台首页' })).toBeVisible()
+    // `/` 的默认首页是 AI 首页（`DEFAULT_HOME_MODE = 'assistant'`），其页名为「AI 助手」；
+    // 经典首页（标题「首页」）要靠记忆或 `?home=classic` 才会出现。
+    // 本用例验的是「登录成功并落进控制台」，那就断言默认落地的那一面。
+    await expect(page.locator('[data-page="assistant-home"]')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'AI 助手', exact: true })).toBeVisible()
   })
 
   test('错误凭据 → 显示错误提示且停留登录页（不整页刷新）', async ({ page }) => {

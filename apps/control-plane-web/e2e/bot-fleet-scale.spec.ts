@@ -7,8 +7,13 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
+/**
+ * 分组卡：`BotWorktableCard` 渲染为 ui 包的 `Card`（`data-slot="card"`）。
+ * 不再按 `div.bg-card` 定位——卡片底色已收敛到 `cardSurface` 常量（`bg-card/95`），
+ * `bg-card` 这个裸类名已从工作台卡上消失。
+ */
 function botGroupCard(page: Page, name: string): Locator {
-  return page.locator('div.bg-card').filter({ has: page.getByRole('button', { name, exact: true }) }).first()
+  return page.locator('[data-slot="card"]').filter({ has: page.getByRole('button', { name, exact: true }) }).first()
 }
 
 /** 真浏览器纵切：Bot 聚合摘要、分页窥视与批量 API。 */

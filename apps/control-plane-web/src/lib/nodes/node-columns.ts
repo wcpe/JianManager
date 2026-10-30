@@ -66,6 +66,60 @@ export const NODE_COLUMN_WIDTH: Record<NodeColumnKey, number | undefined> = {
   heartbeat: 78,
 }
 
+/** 用户可拖拽的列宽下限；低于它表头文字或关键数值会被截没。 */
+export const NODE_MIN_COLUMN_WIDTH: Record<NodeColumnKey, number> = {
+  status: 76,
+  name: 120,
+  address: 110,
+  system: 100,
+  load: 140,
+  instances: 72,
+  tunnel: 68,
+  heartbeat: 72,
+}
+
+export const NODE_MAX_COLUMN_WIDTH = 720
+
+export type NodeColumnWidths = Partial<Record<NodeColumnKey, number>>
+
+const WIDTHS_KEY = 'jm.nodes.columnWidths'
+
+/** 把宽度收敛到该列允许区间；非法值回落默认宽度。 */
+export function clampNodeColumnWidth(key: NodeColumnKey, width: number): number {
+  const fallback = NODE_COLUMN_WIDTH[key] ?? NODE_MIN_COLUMN_WIDTH[key]
+  if (!Number.isFinite(width)) return fallback
+  return Math.round(Math.min(NODE_MAX_COLUMN_WIDTH, Math.max(NODE_MIN_COLUMN_WIDTH[key], width)))
+}
+
+/** 读取用户拖过的节点列宽；未知列/非法值忽略。 */
+export function readStoredNodeColumnWidths(): NodeColumnWidths {
+  try {
+    const raw = localStorage.getItem(WIDTHS_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const known = new Set<string>(NODE_COLUMN_KEYS)
+    const next: NodeColumnWidths = {}
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!known.has(key) || typeof value !== 'number' || !Number.isFinite(value)) continue
+      next[key as NodeColumnKey] = clampNodeColumnWidth(key as NodeColumnKey, value)
+    }
+    return next
+  } catch {
+    return {}
+  }
+}
+
+/** 写入节点列宽；空集合删键，避免留下空对象脏数据。 */
+export function writeStoredNodeColumnWidths(widths: NodeColumnWidths): void {
+  try {
+    if (Object.keys(widths).length === 0) localStorage.removeItem(WIDTHS_KEY)
+    else localStorage.setItem(WIDTHS_KEY, JSON.stringify(widths))
+  } catch {
+    /* 忽略：无存储能力时仅本次会话有效 */
+  }
+}
+
 /** 分页大小档位（与服务器页同一组数值，减少两页之间的认知切换）。 */
 export const NODE_PAGE_SIZES = [10, 20, 50] as const
 export const NODE_DEFAULT_PAGE_SIZE = 20

@@ -27,7 +27,9 @@ test('a 全量平台配置分类可视化 + 运行时开关项存在', async ({ 
   // 日志分类：可见 log.level 与 debug.mode（运行时热重载开关，共用运行时机制）。
   await page.getByRole('button', { name: '日志', exact: true }).click()
   await expect(page.getByText('log.level')).toBeVisible()
-  await expect(page.getByText('debug.mode')).toBeVisible()
+  // 【为何 .first()】同一键会渲染两次：左侧可编辑项行里的键名 + 右侧变更预览里的键名。
+  // 不加 .first() 会直接触发 strict mode violation（已因此红过两次）。
+  await expect(page.getByText('debug.mode').first()).toBeVisible()
 
   // 运行时分类：可见 graceful_stop.timeout（可运行时调整的平台项）。
   await page.getByRole('button', { name: '运行时', exact: true }).click()

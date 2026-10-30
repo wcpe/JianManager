@@ -154,7 +154,7 @@ function ViewTab({
       variant={active ? 'default' : 'ghost'}
       onClick={onClick}
       aria-pressed={active}
-      className={cn('h-7 px-2.5', active ? 'shadow-soft' : 'text-muted-foreground hover:text-foreground')}
+      className={cn('h-7 px-2.5', active ? 'shadow-soft' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground')}
     >
       {icon}
       {children}

@@ -775,6 +775,47 @@ describe('InstancesPage（mock 假后端）', () => {
   })
 
   /** 
+   * 列宽手柄必须覆盖「可排序表头」。
+   *
+   * 排序表头是自绘组件（SortableTableHead），最初只给普通 th 注入了手柄，
+   * 结果名称/节点:端口/状态三列能拖顺序却拖不了宽度——用户看到的正是「有的能拖有的不能」。
+   */
+  it('列宽手柄：排序表头也有，复选框列没有', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=none' })
+    const surface = await screen.findByTestId('instances-table-virtual')
+    for (const key of ['name', 'nodePort', 'status', 'region']) {
+      expect(surface.querySelector(`[data-testid="instance-col-resize-${key}"]`)).not.toBeNull()
+    }
+    expect(surface.querySelector('[data-testid="instance-col-resize-select"]')).toBeNull()
+  })
+
+  /**
+   * 默认视图是「按区域分组」，此前只有平铺视图（groupBy=none）传了列顺序回调，
+   * 于是用户一进服务器页（默认分组）拖表头完全没反应。
+   */
+  it('默认分组视图同样支持表头拖拽换位并持久化', async () => {
+    localStorage.removeItem('jm.instances.columnOrder')
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list' })
+    const surface = await screen.findByTestId('instances-table-virtual')
+
+    const regionTh = surface.querySelector('thead th[data-column-key="region"]') as HTMLElement
+    const nameTh = surface.querySelector('thead th[data-column-key="name"]') as HTMLElement
+    expect(regionTh.getAttribute('draggable')).not.toBeNull()
+    expect(nameTh.getAttribute('draggable')).not.toBeNull()
+
+    fireEvent.dragStart(regionTh, { dataTransfer: makeDataTransfer() })
+    fireEvent.dragOver(nameTh, { dataTransfer: makeDataTransfer() })
+    fireEvent.drop(nameTh, { dataTransfer: makeDataTransfer() })
+
+    await waitFor(() => {
+      const keys = [...surface.querySelectorAll('thead th[data-column-key]')].map((th) => th.getAttribute('data-column-key'))
+      expect(keys.indexOf('name')).toBeLessThan(keys.indexOf('region'))
+    })
+    const stored = JSON.parse(localStorage.getItem('jm.instances.columnOrder') ?? '[]')
+    expect(stored.indexOf('name')).toBeLessThan(stored.indexOf('region'))
+  })
+
+  /**
    * 行右键菜单（用户提出的需求）。
    *
    * 守三件事：右键弹出、菜单里给出与「⋯」一致的动作、Esc 关闭后可再次打开。

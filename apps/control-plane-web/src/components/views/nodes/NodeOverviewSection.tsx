@@ -308,10 +308,11 @@ export function NodeOverviewSection({ node, instances, onOpenInstances, onOpenIn
       窄屏单列堆叠，右栏自然落到清单下面。
     */
     <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-      <div
-        className="min-h-0 overflow-auto rounded-lg border bg-card/60 p-3"
-        data-testid="node-overview-grid"
-      >
+      {/*
+        左栏不再自带 overflow：页签外壳已经统一滚动（NodeDetailPane 的 overflow-y-auto），
+        这里再套一层会出现同屏两条滚动条，且滚轮停在左栏时外层不动，很难用。
+      */}
+      <div className="rounded-lg border bg-card/60 p-3" data-testid="node-overview-grid">
       {/*
         【单列】左栏现在是「两栏布局里的左栏」（宽度约 500px），若继续按视口断点分 4 列，
         每列只剩 ~120px——标签被截断、数值贴到边上，整块挤成一团。

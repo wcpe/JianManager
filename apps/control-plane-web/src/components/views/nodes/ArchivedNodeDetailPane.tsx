@@ -12,6 +12,8 @@ export interface ArchivedNodeDetailPaneProps {
   purging: boolean
   /** 面包屑导航（容器注入路由跳转；组件库不依赖 react-router）。 */
   onNavigate: (to: string) => void
+  /** 归档节点切换器（容器注入）；省略则不显示。 */
+  nodeSelector?: ReactNode
 }
 /** 归档只读详情 + 清理按钮（394）。 */
 export function ArchivedNodeDetailPane({
@@ -19,6 +21,7 @@ export function ArchivedNodeDetailPane({
   onPurge,
   purging,
   onNavigate,
+  nodeSelector,
 }: ArchivedNodeDetailPaneProps) {
   const { t } = useTranslation()
   const when = node.deletedAt ? new Date(node.deletedAt).toLocaleString() : '--'
@@ -43,9 +46,16 @@ export function ArchivedNodeDetailPane({
         status={{ tone: 'default', label: t('nodes.viewArchive') }}
         meta={[{ label: t('nodes.ip'), value: node.host }]}
         actions={
-          <Button variant="destructive" size="sm" onClick={onPurge} disabled={purging}>
-            {t('nodes.purge')}
-          </Button>
+          /*
+            归档详情此前没有节点切换器：选中某一台归档节点后，想换另一台只能回列表或手改 URL。
+            活跃详情早就有这个下拉（nodeSelector 插槽），这里补齐，且不覆盖「清理」按钮。
+          */
+          <div className="flex items-center gap-2">
+            {nodeSelector}
+            <Button variant="destructive" size="sm" onClick={onPurge} disabled={purging}>
+              {t('nodes.purge')}
+            </Button>
+          </div>
         }
         onNavigate={onNavigate}
       />

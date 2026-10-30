@@ -254,7 +254,6 @@ func setupTestRouterFull(db *gorm.DB, pool *cpgrpc.ClientPool, beaconSync *servi
 		User:              userSvc,
 		Group:             groupSvc,
 		Node:              nodeSvc,
-		NodeRepair:        service.NewNodeRepairService(db),
 		Instance:          instanceSvc,
 		InstanceBatch:     instanceBatchSvc,
 		InstanceGroup:     service.NewInstanceGroupService(db),

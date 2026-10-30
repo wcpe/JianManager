@@ -160,7 +160,7 @@ export default function RollingBatchDialog({
                     onClick={() => setRatioPercent(p)}
                     className={cn(
                       'rounded-full border px-2.5 py-1 text-xs transition-colors',
-                      ratioPercent === p ? 'border-primary bg-primary/10 font-semibold text-primary' : 'text-muted-foreground hover:text-foreground',
+                      ratioPercent === p ? 'border-primary bg-primary/10 font-semibold text-primary' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground',
                     )}
                   >
                     {p === 100 ? t('rolling.ratioAll') : `${p}%`}

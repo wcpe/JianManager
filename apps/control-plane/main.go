@@ -193,8 +193,6 @@ func main() {
 	userSvc := service.NewUserService(db)
 	groupSvc := service.NewGroupService(db)
 	nodeSvc := service.NewNodeService(db)
-	// 坏节点检测/修复（见 ADR-039 §2）：检测重名/被串改节点、重新 enroll、清理孤立 JDK/实例。
-	nodeRepairSvc := service.NewNodeRepairService(db)
 	pool := cpgrpc.NewClientPool()
 	botLoadSvcs, err := assembleBotLoadServices(db, pool, cfg.JWT.Secret)
 	if err != nil {
@@ -983,7 +981,6 @@ func main() {
 		Group:          groupSvc,
 		Permission:     authzSvc.Permissions(),
 		Node:           nodeSvc,
-		NodeRepair:     nodeRepairSvc,
 		NodeProxy:      nodeProxySvc,
 		Instance:       instanceSvc,
 		InstanceBatch:  instanceBatchSvc,

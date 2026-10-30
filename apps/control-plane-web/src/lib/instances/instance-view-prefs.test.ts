@@ -2,14 +2,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
 import {
   applySelectionClick,
+  clampColumnWidth,
   computeVisibleColumns,
   DEFAULT_COLUMN_ORDER,
+  DEFAULT_COLUMN_WIDTHS,
   invertSelection,
   INSTANCE_COLUMN_KEYS,
+  MAX_COLUMN_WIDTH,
+  MIN_COLUMN_WIDTH,
   PINNED_COLUMNS,
   moveColumn,
   readStoredColumnOrder,
+  readStoredColumnWidths,
   writeStoredColumnOrder,
+  writeStoredColumnWidths,
   type InstanceColumnKey,
 } from '@/lib/instances/instance-view-prefs'
 
@@ -154,6 +160,45 @@ describe('列顺序：持久化', () => {
   it('存储为非数组时回落默认', () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ order: ['name'] }))
     expect(readStoredColumnOrder()).toEqual([...DEFAULT_COLUMN_ORDER])
+  })
+})
+
+describe('列宽：clamp 与持久化', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('宽度被收敛到该列上下限内', () => {
+    expect(clampColumnWidth('name', 10)).toBe(MIN_COLUMN_WIDTH.name)
+    expect(clampColumnWidth('name', 9999)).toBe(MAX_COLUMN_WIDTH)
+    expect(clampColumnWidth('name', 240.4)).toBe(240)
+    // NaN / Infinity 等非法值回落默认宽度（名称列默认不设宽，回落最小宽度）。
+    expect(clampColumnWidth('name', Number.NaN)).toBe(MIN_COLUMN_WIDTH.name)
+  })
+
+  it('写入后可原样读回；空集合会删键', () => {
+    writeStoredColumnWidths({ name: 320, status: 96 })
+    expect(readStoredColumnWidths()).toEqual({ name: 320, status: 96 })
+    writeStoredColumnWidths({})
+    expect(localStorage.getItem('jm.instances.columnWidths')).toBeNull()
+  })
+
+  it('忽略未知列、非数字与 select 固定列', () => {
+    localStorage.setItem(
+      'jm.instances.columnWidths',
+      JSON.stringify({ name: 300, ghost: 200, status: 'wide', select: 180 }),
+    )
+    expect(readStoredColumnWidths()).toEqual({ name: 300 })
+  })
+
+  it('存储损坏时回落空对象，不抛错', () => {
+    localStorage.setItem('jm.instances.columnWidths', 'not-json{{{')
+    expect(readStoredColumnWidths()).toEqual({})
+  })
+
+  it('默认宽度表覆盖全部列，且除名称列外都有确定宽度', () => {
+    for (const key of INSTANCE_COLUMN_KEYS) expect(DEFAULT_COLUMN_WIDTHS).toHaveProperty(key)
+    expect(DEFAULT_COLUMN_WIDTHS.name).toBeUndefined()
   })
 })
 

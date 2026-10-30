@@ -6,7 +6,6 @@ import { useJDKCatalog } from '@/api/nodeRuntime'
 import NodeJDKPanel from '@/components/views/nodes/NodeJDKPanel'
 import { PingNodeButton } from '@/components/nodes/PingNodeButton'
 import DirectoryPicker from '@/components/nodes/DirectoryPicker'
-import NodeRuntimeTab from '@/components/nodes/NodeRuntimeTab'
 
 /** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
 function errMessage(err: unknown, fallback: string): string {
@@ -68,7 +67,6 @@ export default function NodeJDKTab({
       renderDirectoryPicker={({ onPick, onCancel }) => (
         <DirectoryPicker nodeId={nodeId} onPick={onPick} onCancel={onCancel} />
       )}
-      runtimeSlot={<NodeRuntimeTab nodeId={nodeId} active={active} />}
       onInstall={async (body) => {
         try {
           await install.mutateAsync(body)

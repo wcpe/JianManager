@@ -7,7 +7,7 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
-/** 真浏览器纵切：服务器选择器入口、实例内 Bot 分区与批量操作。 */
+/** 真浏览器纵切：侧栏资源面板入口、实例内 Bot 分区与批量操作。 */
 test.describe('控制台实例内 Bot 管理段（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })

@@ -52,7 +52,7 @@ const TYPE_OPTIONS: ComboboxOption[] = TYPES.map((tp) => ({ value: tp, label: tp
  *
  * 刻意只声明用到的字段，而非照搬应用侧 `@/api/backupStorages` 的 `BackupStorage`：
  * 容器直接传 API 返回的完整对象也结构兼容，无需把该 API 类型迁进包
- * （同 `ArtifactVersionsPageView`、`NodeRepairPanel` 的取舍）。
+ * （同 `ArtifactVersionsPageView` 的取舍）。
  *
  * 注意 `accessKeyEnv` / `secretKeyEnv` 是 `${ENV_VAR}` **引用**而非明文——后端从不返回明文，
  * 视图只回显这串引用，故不存在打码问题；视图任何位置都不得展示解密后的凭据。
