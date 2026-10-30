@@ -23,11 +23,12 @@ test('底部主题/语言图标 + 三态直选主题 + 版本/开源许可 + 退
   await expect(aside.getByRole('button', { name: '中文', exact: true })).toHaveCount(0)
 
   // ③ 底部版本号（左下）+ 开源许可入口（右下），许可指向 /licenses
-  // 注：侧栏另有一处「开源许可」导航项（jm-nav-link），底部页脚入口用非 nav-link 精确定位。
+  // 注：侧栏另有一处「开源协议」导航项（jm-nav-link），底部页脚入口用非 nav-link 精确定位。
+  // 【文案变更】页脚入口用 `licenses.entry`=「开源协议」，页面标题才是 `licenses.title`=「开源许可」（i18n/zh.json）。
   await expect(aside.getByText(/^v\d+\.\d+/)).toBeVisible()
   const licenseFooterLink = aside.locator('a[href="/licenses"]:not(.jm-nav-link)')
   await expect(licenseFooterLink).toBeVisible()
-  await expect(licenseFooterLink).toContainText('开源许可')
+  await expect(licenseFooterLink).toContainText('开源协议')
 
   // ④ 退出登录不在侧栏底部（已迁顶栏账户菜单）
   await expect(aside.getByRole('button', { name: '退出登录' })).toHaveCount(0)

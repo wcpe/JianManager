@@ -32,7 +32,9 @@ test('折叠为图标轨 + 隐藏滚动条 + 折叠态刷新持久', async ({ pa
   await expect(scrollArea).toBeVisible()
 
   // 点「收起侧栏」→ 收缩为仅图标轨（宽度 < 100）
-  await page.getByRole('button', { name: '收起侧栏' }).first().click()
+  // 按 data-testid 定位：折叠入口现在只有侧栏底部常驻开关，且顶栏那个已删；
+  // 名字会随态变成「展开侧栏」，故不用文案。
+  await page.getByTestId('sidebar-collapse-toggle').click()
   await expect.poll(async () => (await aside.boundingBox())!.width).toBeLessThan(100)
 
   // 折叠态已写 localStorage（持久键）
