@@ -95,7 +95,7 @@ type Options struct {
 	WALReserve func(int64) (func(), error)
 }
 
-// Pipeline 端到端：tail/stdio → normalize → WAL → DeliveryHook → CanReclaim 门禁。
+// Pipeline 端到端：tail/stdio → normalize → WAL → DeliveryHook → 投递证据门禁。
 type Pipeline struct {
 	mode                AcquireMode
 	key                 ledger.SourceKey
@@ -923,8 +923,9 @@ func (p *Pipeline) SetDelivery(h DeliveryHook) {
 // SuppressedReplayDrains 转发 acquire 层的「冗余整窗重投抑制」读数（#60-Z1）。
 func (p *Pipeline) SuppressedReplayDrains() int64 { return p.inner.SuppressedReplayDrains() }
 
-// TryReclaim 经 logtypes.CanReclaim 门禁推进 reclaim_position。
-// HTTP 2xx / REQUEST_DONE 单独不得回收；需恢复分段责任已转移且无 hold。
+// TryReclaim 推进 reclaim_position（回收上界 = 投递证据的连续前缀）。
+// 判据只有一条：REQUEST_DONE 连续覆盖 + max(Read,Durable)。
+// 2026-10-29 起不再有「恢复分段责任转移」这道门禁（恢复分段已删）。
 func (p *Pipeline) TryReclaim() (uint64, error) {
 	return p.wal.TryReclaim()
 }

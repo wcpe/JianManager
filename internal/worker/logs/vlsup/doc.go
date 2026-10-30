@@ -1,7 +1,10 @@
 // Package vlsup 实现 VictoriaLogs Worker 运行时 supervisor 基础（FR-476）。
 //
 // 范围（本轮 foundation）：
-//   - 按 namespace（hot|cold|rehydrate）管理 VL 实例：start / stop / health / status；
+//   - 按 namespace 管理 VL 实例：start / stop / health / status。
+//     本包是**通用**的 namespace 管理器（不限定名字）；当前装配只启用 `hot`（单 VL）。
+//     历史上的 `cold` / `rehydrate` 已随「单 VL」改造从**装配层**移除（引擎能力仍在，
+//     但生产不再启动它们）。下文偶尔出现的这两个词是遗留痕迹，不是现行形态；
 //   - 命令行构造：-storageDataPath、-retentionPeriod、-memory.allowedBytes（HOT 默认模板 512MiB）、
 //     仅绑定 localhost；
 //   - 资产校验钩子 VerifyAsset(path, sha256)，在 exec 前强制执行，并在 status 中记录 tag/build id；

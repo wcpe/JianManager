@@ -6,6 +6,95 @@
 
 本轮已覆盖完整增量字段往返、真实删除/周期预算、审计持久回执和兼容迁移；旧已完成 v1 裁剪桥接按原来源 SHA/全态凭据校验，keep=0/2 的三开提交进度及负控已过，适配器与 stateindex 完整普通/race 退出 0。结合最终完整 ingest/全 Go 证据收口本次修复，不把局部三开外推为新生产部署或断电通过。下文旧候选“待验/仍在执行”按原时点保留，当前范围以顶部声明及共享验收表为准。
 
+### 2026-10-30 显式评审修订：索引库改纯内存（`:memory:`），不再落盘
+
+**本次修订改变 §2.1 的选型与 §2.3 的崩溃语义，按同一显式评审流程记录；被修改的条款逐条列在下表。**
+它不是一次性能优化：它把「索引落盘」这条前提整个撤掉，因此 §3 里以磁盘索引为对象的验收判据也一并失去对象。
+
+#### 前提怎么消失的
+
+1. **生产机的盘是机械盘**（`/dev/sda7`，`ROTA=1`）：fsync 在这类设备上是寻道 + 旋转惩罚，
+   而索引库原先是「每次 `persist` 事务提交即 fsync」——它就是采集延迟的主要来源。
+2. **库已经很大**：生产 `ingest.index.db` 实测 **344MB + 4MB WAL**（与 §7.1 同一读数）。
+   库越大，checkpoint / VACUUM 这类整库维护在机械盘上越贵，而它们本来就跑在采集热路径旁边。
+
+⇒ 用户裁定（2026-10-30 原话）：「现在不做任何的索引 账本落盘 因为是机械盘 性能不行」。
+
+#### 新规则
+
+- `stateindex.OpenInMemory(path, budget)` 打开 `file::memory:?mode=memory&cache=private`，**零磁盘 IO**。
+  `path` 只作标识（`readersInFlightFor` 的键、调试日志），**不建任何文件**。
+- **SQL 语义、表结构、索引、UPSERT、增量 `ApplyScoped` 全部原样保留**，**不改写成 map**。
+  理由：§2.4 的裁剪归一、§2.5 的外键序与提交切分、§2.7 的镜像逐字段比对都是承重件；
+  重写一遍会把「换介质」放大成「重写账本」，风险与收益完全不成比例。
+- 连接池仍限 1：`:memory:` 库**必须**如此（新连接会拿到一个空库）。
+- 持久化相关 PRAGMA 只在磁盘模式设置。内存模式只保留功能必需的 `foreign_keys=ON` / `cache_size`；
+  `journal_mode=WAL` / `synchronous` / `wal_autocheckpoint` 在内存库上无对象。
+- **checkpoint / truncate / `Vacuum` 在内存模式下全部短路**：`Store.checkpoint`、
+  `checkpointPassiveIfNeeded`、`TryControlledTruncate`、`Vacuum` 直接跳过——这几条任何一条都会试图写盘，
+  且对内存库没有任何意义。
+
+#### 代价（如实写，不粉饰）
+
+- **进程重启后索引全丢**：`source` / `position` / `gap` / `projection` / `instance_binding` /
+  `delivery_batch` 一律为空，**没有任何跨进程恢复路径**。
+  **这不是 bug，是取舍**：用「重启后重新开始」换掉机械盘上的每一次 fsync。
+- 跨重启仍然存活的只有两样：
+  1. **采集游标** `ingest.cursor`（每源一行、整表约 2KB，**不 fsync**；带源登记字段，
+     因此重启后「采哪个文件、读到第几字节」还知道）；
+  2. **VL 里的数据**。
+- 重启不再有「以索引库为准恢复」这一步：三水位没有历史可读，`reclaim` 之前的字节不会因为记账而免于重读
+  ⇒ 至多重读一段并重复投递（与「允许重复」同口径）；但**缺口、暂停态、投递批次审计这些记账面
+  在重启后同样归零**——它们随索引一起消失，不是被裁剪。
+- 「崩溃不丢索引」这条原承诺**不再成立**：进程崩溃与正常重启等价，索引一起消失。
+
+#### 一个真机坑（`f5b882f0` 修的，必须留档）
+
+赋值型 PRAGMA（`PRAGMA foreign_keys=ON`、`PRAGMA cache_size=-65536`）**不返回结果集**，
+必须用 `ExecContext` 执行。原实现复用了面向查询型 PRAGMA 的 `execPragma`
+（内部 `QueryRowContext(...).Scan(&v)`），于是稳定得到 `sql.ErrNoRows`：
+
+```
+stateindex: 设置 PRAGMA foreign_keys=ON 失败: sql: no rows in result set
+```
+
+⇒ `OpenInMemory` **永远失败** ⇒ `ingest` 拒绝启动采集 ⇒ **整条日志采集链路起不来**。
+只跑 `build` + `vet` 发现不了它。查询型 PRAGMA（`journal_mode=WAL`，会回一行 `wal`）才适用 `execPragma`。
+回归：`TestOpenInMemorySucceeds`（含把 `PRAGMA foreign_keys` 读回 1 的断言）与
+`TestOpenInMemoryCreatesNoFile`（内存库不得在磁盘上留下任何文件）。
+
+#### 被修改的条款
+
+| 位置 | 原内容 | 现状态 |
+|---|---|---|
+| §2.1 选型·库文件 | `data/var/log/ingest.index.db`，随 Worker 数据目录迁移 | **改为 `:memory:`**；`path` 仅作标识，不建文件 |
+| §2.1 连接模式 | 单写者 + `journal_mode=WAL` + `synchronous=NORMAL` | 单连接保留；WAL / `synchronous` **不再设置**（内存库没有 journal 可言） |
+| §2.2 表结构 | 表结构是为**磁盘库**取舍的（`WITHOUT ROWID`、去冗余二级索引等都是为了压库文件体积） | 表结构与索引**逐字保留**；其中「为减小库文件而砍索引」的论据已不成立，但**不据此改结构**（改它就是重写账本） |
+| §2.3「提交即持久」 | 「事务提交即持久；WAL 保证崩溃可恢复」 | **作废**：提交只发生在内存内，没有持久化与崩溃恢复 |
+| §2.3「启动以索引库为准」 | 「不存在就建、存在就读」 | **改为**：每次启动都是一个新建的空库，「存在就读」不再发生 |
+| §2.3 回滚 / `ExportIndexJSON` | 以索引库为受控回滚与排障的权威来源 | 进程内仍可导出（排障用）；但**磁盘上不存在可恢复的索引**，受控回滚这条路失去对象 |
+| §3 验收 3（单次持久化 ≤50 ms） | 机械盘上的单提交单元耗时 | 提交不再落盘 ⇒ 该判据在内存模式下**无对象**；§2.5 的切分与预算仍保留（避免单事务过大），但已不是延迟瓶颈 |
+| §3 验收 4（崩溃不丢） | 随机 `kill -9` 后索引无丢失、回退不超过一个批次 | **作废**：崩溃与重启等价，索引整体消失 |
+| §4 风险表「单文件损坏 → `integrity_check` 巡检」 | 磁盘库文件的破损巡检 | 内存库无文件可巡检；`IntegrityCheck` 仍在，但只覆盖本次进程内的内存库 |
+
+#### 代码落点
+
+- 语义：`internal/worker/logs/ingest/stateindex/store.go` 的 `OpenInMemory` 与 `openWithDB(inMemory=true)`；
+  短路点 `checkpoint` / `checkpointPassiveIfNeeded` / `TryControlledTruncate` / `Vacuum`
+- 接线：`internal/worker/logs/ingest/index_store.go`（`Manager.openIndex`）与 `ingest/runtime.go`（`New` 及测试路径的按需打开）
+- 回归：`internal/worker/logs/ingest/stateindex/open_in_memory_test.go`
+- 采集游标（跨重启唯一幸存者）：`internal/worker/logs/ingest/cursor_registry.go`、`cursor_registry_flush.go`
+- 落地提交：`7456d716`（P1 切断全部落盘）＋ `f5b882f0`（PRAGMA 修复 + 采集游标持久化）
+- **已知遗留口径（未改代码，如实登记）**：离线只读入口 `ExportIndexJSON` 与 `log-event-status`
+  仍按磁盘路径 `var/log/ingest.index.db` 打开索引库 ⇒ 内存架构下必然「库不存在」。
+  它不再是回滚/排障的可用面，去留待后续决定。
+
+#### 不变的部分（明确保留）
+
+- §2.4 `delivery_batch` 裁剪、§2.5 提交切分与 `CommitBudget`、§2.6/§2.7 字段往返、§2.8 物化预算——机制全部保留
+- §6 配置键仍在（`log_index.batch_prune.*`、`log_index.persist.*`），但 checkpoint 相关档位在内存模式下短路
+- §7 的 `source_wal` 删除结论不变：WAL 仍是纯内存队列
+
 ## 1. 背景与目标
 
 现采集侧索引为**单一 JSON 文件**（`data/var/log/ingest.state.json`），由 `ingest.Manager.persist` **整本重写**：
@@ -23,8 +112,8 @@
 ### 2.1 选型
 
 - **`modernc.org/sqlite`（纯 Go，无 cgo）**：生产构建 `CGO_ENABLED=0` 可直接编译；不引入系统依赖。
-- 库文件：`data/var/log/ingest.index.db`（与现有 `var/log` 同级目录，随 Worker 数据目录迁移）。
-- 连接模式：**单写者**（Worker 进程内单连接 + `journal_mode=WAL` + `synchronous=NORMAL`）；读路径仅本进程（无跨进程共享）。
+- ~~库文件：`data/var/log/ingest.index.db`（与现有 `var/log` 同级目录，随 Worker 数据目录迁移）。~~ **2026-10-30 改**：库改为 `:memory:`（见文首修订节），**磁盘上不再有任何库文件**；`path` 仅作标识，不建文件。
+- ~~连接模式：**单写者**（Worker 进程内单连接 + `journal_mode=WAL` + `synchronous=NORMAL`）；读路径仅本进程（无跨进程共享）。~~ **2026-10-30 改**：单连接保留（`:memory:` 必须限 1）；`journal_mode` / `synchronous` **不再设置**（内存库无 journal 可言）。
 
 ### 2.2 表结构（首版）
 

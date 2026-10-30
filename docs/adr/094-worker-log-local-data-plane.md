@@ -1,8 +1,44 @@
 # ADR-094: Worker 日志本地数据面与 Control Plane 联邦查询
 
 - **日期**: 2026-09-20
-- **状态**: accepted
+- **状态**: accepted（**2026-10-30 部分推翻：WAL / 采集账本 / 事件段不再持久化，见下方追记**）
 - **关联**: FR-473～484 · ADR-005 · ADR-013 · ADR-066 · ADR-081
+
+> ### 2026-10-30 追记：决定哪些东西真正持久化
+>
+> 决策提案第 2 条把「VL 数据、WAL、规范事件恢复分段、Partition Catalog、采集账本、
+> projection manifest/checkpoint」统统列进“允许持久化”的清单。实际上**其中四项现在不落盘**，
+> 因为在机械盘（`ROTA=1`）上 fsync 是寻道 + 旋转惩罚，用户 2026-10-30 裁定：
+> 「现在不做任何的索引 账本落盘 因为是机械盘 性能不行」。
+>
+> #### 现行归属（取代第 2 条里那四项）
+>
+> | 数据 | 现在的介质 | 重启后 |
+> |---|---|---|
+> | VL 数据 | 磁盘（`var/log/vl/hot/data`） | **在**（真正持久） |
+> | 采集索引库 | `:memory:` SQLite | 没了 |
+> | WAL | 纯内存队列（满了丢最旧） | 没了 |
+> | canonical 事件段 | `/dev/shm` tmpfs | 没了 |
+> | **采集游标** | 磁盘（`ingest.cursor`，每源一行） | **在**（**不 fsync**） |
+> | Partition Catalog / projection 元数据 | 随索引库（`:memory:`） | 没了 |
+>
+> #### 本 ADR 真正要保的东西（不变）
+>
+> 本 ADR 的**核心决策仍然成立且重要**：Worker 与 CP 的数据所有权必须分开——
+> Worker-owned 日志数据面不得与 CP 业务数据库混为一谈。这一条与介质选择无关。
+> 另：Worker 本地 SQLite **只保存元数据、不是第二个全文检索引擎** —— 这条也仍成立，
+> 只是元数据库现在是内存态而非磁盘态。
+>
+> #### 代价（如实写）
+>
+> Worker 重启后：索引库、WAL、事件段、Catalog/projection 元数据全部丢失。
+> 采集会从 `ingest.cursor` 记的位置继续（停机期间写入的字节会被补读），
+> 但“VL 数据根丢失后从事件段重建 projection”这个能力**不再存在**
+> （详见 ADR-095 的 2026-10-30 追记）。
+>
+> #### 代码落点
+> `stateindex.OpenInMemory` · `eventstore.MemoryRoot` · 纯内存 WAL · `ingest.cursor`；
+> 提交 `7456d716`、`f5b882f0`、`eca823ac`。
 
 ## 背景
 

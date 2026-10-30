@@ -677,26 +677,26 @@ func (m *Manager) PersistNow() (stateindex.Stats, error) {
 	return stats, nil
 }
 
-// ExportIndexJSON 只读导出索引内容为 persistedState 同等结构的 JSON（排障与回滚前快照）。
-// 库不存在或不可读时返回错误；不创建、不修改任何文件。
+// ExportIndexJSON 是**保留的兼容出口，但已无对象可导**。
+//
+// 2026-10-30 索引库改纯内存（`stateindex.OpenInMemory`）后，磁盘上不再有
+// `var/log/ingest.index.db`：索引只活在 Worker 进程里。因此：
+//
+//   - 进程**运行中**时，没有任何从外部读取它的路径（进程内存不对外开放）；
+//   - 进程**停止**后，库里本来就已经什么都不剩。
+//
+// 保留本函数与 `worker log-index-export` 子命令而不直接删的理由：它是排障手册与
+// 现有运维脚本里的入口，突然消失比明确报错更难查。所以它现在**总是返回一个
+// 说明性错误**，而不是假装成功输出空 JSON（那会被误读成“索引是空的”）。
+//
+// 如果将来需要导索引，正确做法是在 Worker 进程内加一个 HTTP 端点（如
+// `/debug/index-dump`）从*活动*的内存库导出——而不是回到磁盘文件。
 func ExportIndexJSON(root string, out io.Writer) error {
 	if root == "" {
 		return fmt.Errorf("ingest: 导出需要数据根目录")
 	}
-	store, err := stateindex.OpenReadOnly(filepath.Join(root, "var", "log", "ingest.index.db"))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = store.Close() }()
-	rows, err := store.Load()
-	if err != nil {
-		return fmt.Errorf("ingest: 读取索引失败: %w", err)
-	}
-	state, err := indexStateToState(rows)
-	if err != nil {
-		return err
-	}
-	encoder := json.NewEncoder(out)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(state)
+	return fmt.Errorf("ingest: 采集索引已改为纯内存（2026-10-30 机械盘不落盘裁定），"+
+		"磁盘上不再有 %s，无法离线导出；"+
+		"当前唯一跨重启命存的采集侧状态是 var/log/ingest.cursor（每源一行位置）",
+		filepath.Join(root, "var", "log", "ingest.index.db"))
 }

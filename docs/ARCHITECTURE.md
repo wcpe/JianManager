@@ -330,11 +330,42 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **实例日志源的路径发现（FR-502）**：实例活动日志的物理路径**不再硬编码**为 `WorkDir/logs/latest.log`，而是按**采集规则**解析——规则表内置四条（`bukkit`＝`logs/latest.log`+`logs/*.gz`、`bungee`＝`proxy.log.0`+轮转产物、`waterfall`、`velocity`），未知或空 key 回退 bukkit。规则名由 CP 按实例 `role` + `launch_spec.coreKind`（**优先**）+ `launch_spec.coreJar`（历史数据回退）推导（`deriveLogRuleKey`）。**为什么必须优先 coreKind**（2026-10-20 补记）：一键搭建统一把核心落盘为 `server.jar`，jar 名不携带核心类型；只看 jar 名会让重建后的代理仍按 bukkit 规则采集，即本项要修的生产缺陷静默复现。判定顺序为 `waterfall → velocity → bungee`（Waterfall 是 BungeeCord 的分支，jar 名可能同时含两者字样，须优先识别）经 `CreateInstanceRequest` 增量字段 `log_rule_key` 下发（同消息的 `log_relative_path` 是**预留**字段：CP 当前没有生产者，面板的实例级路径覆盖走心跳 `log.acq.path_overrides`），覆盖创建/重连重推/更新/补端口四条路径。**路径覆盖的实际优先级（高 → 低）：CP 心跳 `path_overrides` > 节点侧 `log_sources` 配置 > proto `log_relative_path` > 规则默认**——心跳覆盖在登记时无条件压过其余来源（`internal/worker/logs/ingest/instances.go`），即两处都配了同一实例的路径时以 CP 侧为准，节点侧 `worker.yml` 的显式 path 会被静默压过。**路径一律相对实例 WorkDir 且不得逃出**（2026-10-19 用户裁定「限定在工作目录内」）：`path_overrides` 的值在 CP 写入侧即拒绝绝对路径与折叠 `..` 后的逃逸，Worker 登记时（`validateInstanceRelativePath`）独立再校验一次，`instanceLivePath` 解析时还有一道兜底——越界值回退规则默认而非直通。理由是 CP 与 Worker 分属不同信任域，放行绝对路径等于允许把任意实例的日志源指向宿主机任意可读文件（`/etc/shadow` 之类）并入库。规则随实例绑定持久化（`instance_binding.rule_key`/`relative_path`，历史库经 `addColumnIfMissing` 幂等补列，旧行零值即回退 bukkit）。规则升级走「源位置不变则平滑重建」语义：`sameSourceIdentity`（WorkDir/TargetID/Generation/Mode）判定源身份未变时才允许，且重建时**段落起点锚到文件末尾**（不重读既有内容，避免重复导入）；源位置类变更仍按原保护拒绝。详见 [规格](specs/log-acquisition-rules/spec.md)。
 
-**归档导入开关口径（FR-503/504）**：`log.acq.gz_import_enabled` 是 gz 导入**总开关**——关闭 = 折算出的定时扫描周期一律为 0（不启用定时归档扫描），**手动导入入口不受影响**；它**不停**常驻采集轮的自动发现（FR-474 的既有承诺：新接管源先导入历史再给当前段分配位置，停掉会造成静默的历史缺失）。`log.acq.gz_scan_interval` **空/0 = 未配置** → Worker 回落 `worker.yml` 基线 `log_ingest.archive_scan_interval`（协议上 0 只表示未配置，「关闭」只由总开关表达；写入侧禁止配 0/负数）。因此**默认（周期空）⇒ 回落内置基线的周期 0 ⇒ 不扫描**——与开关默认取值无关；要显式停扫描请关总开关，而不是清周期。**该键的校验面已前后端同源**：除「空 / 正 duration / 非全零」外还限上下界——上界 `math.MaxInt32` 毫秒（约 24.85 天：下发载体是 int32 毫秒，更长会截断成负数被当「未配置」，或截成错值被照用）、下界 1ms（不足会被截断成 0 = 未配置）；前端保存草稿时即按同一阈值在本地拦下并给出「调大 / 调小」可区分的提示，不再等到提交后 422 只报「保存失败」。`0s` 仍按「零周期非法」单独提示、不混入越界文案（零周期是语义非法，不是长度问题）。
+**归档导入开关口径（FR-503/504）**
+
+> **2026-10-30 整体下线**：gz 归档采集已按用户裁定删除（「只需要读取日志然后往 vl 塞，
+> 有就有没有就算了」）。下面这段描述的开关与周期**仍在配置面上存在，但已无消费者**：
+> `ImportArchivesNow` 恒返回 `(0,0,nil)`，`discoverSourceArchives` 已删，
+> `log.acq.gz_import_enabled` / `log_ingest.archive_scan_interval` 打开与关闭不改变任何行为。
+> 保留配置键是为了不破现有的 worker.yml 与心跳协议。下文为**下线前口径**的历史参考。
+
+`log.acq.gz_import_enabled` 是 gz 导入**总开关**——关闭 = 折算出的定时扫描周期一律为 0（不启用定时归档扫描），**手动导入入口不受影响**；它**不停**常驻采集轮的自动发现（FR-474 的既有承诺：新接管源先导入历史再给当前段分配位置，停掉会造成静默的历史缺失）。`log.acq.gz_scan_interval` **空/0 = 未配置** → Worker 回落 `worker.yml` 基线 `log_ingest.archive_scan_interval`（协议上 0 只表示未配置，「关闭」只由总开关表达；写入侧禁止配 0/负数）。因此**默认（周期空）⇒ 回落内置基线的周期 0 ⇒ 不扫描**——与开关默认取值无关；要显式停扫描请关总开关，而不是清周期。**该键的校验面已前后端同源**：除「空 / 正 duration / 非全零」外还限上下界——上界 `math.MaxInt32` 毫秒（约 24.85 天：下发载体是 int32 毫秒，更长会截断成负数被当「未配置」，或截成错值被照用）、下界 1ms（不足会被截断成 0 = 未配置）；前端保存草稿时即按同一阈值在本地拦下并给出「调大 / 调小」可区分的提示，不再等到提交后 422 只报「保存失败」。`0s` 仍按「零周期非法」单独提示、不混入越界文案（零周期是语义非法，不是长度问题）。
 
 **归档发现的缺省口径（FR-503）**：显式 `archive_glob`（规则表下发或 `worker.yml` 写死）**逐字使用**、不做扩展——写了 `logs/*.gz` 就只发现 `*.gz`。缺省（空）时在历史的「活文件同目录 `*.gz`」之外，再发现**与活文件同前缀的无扩展名数字轮转**（`proxy.log.1`、`proxy.log.2`……）：BungeeCord 的轮转产物正是纯文本无扩展名，导入侧早已按文件头识别（`DetectArchiveFormat` 分流到纯文本、账本登记 `rotated_text`）；规则表的 `bungee` 条目已显式给出 `proxy.log.[1-9]*`，故实例绑定的 bungee 源一直可达，**落到缺省分支的源**（`worker.yml` 的 `log_sources` 条目等）此前却只有 `*.gz` ⇒ 该形态**永远进不了候选**，形成「能力已有、发现不到」的静默缺口。判据为「同前缀 + 纯数字后缀 + 普通文件 + 路径 ≠ 活文件」：同前缀把范围收敛到同一逻辑源的轮转族（不纳入同目录其它 `*.log`，避免与实时 tail 抢同一份字节），纯数字后缀天然排除 `proxy.log.0.lck`、`.bak` 与日期名而不必另立黑名单；活文件按**路径**排除（log4j 形态活跃文件是 `proxy.log`、java.util.logging 形态活跃文件就是 `proxy.log.0`），活文件名本身不带数字后缀时再排除 `proxy.log.0`（那是 JUL 的当前文件）。目录不存在按「没有归档」处理，只有目录真正不可读才登记 `ARCHIVE_DISCOVERY_FAILED` 缺口。
 
 **采集索引与查询一致性**：旧 JSON 迁移绑定原始字节 SHA-256、映射版本与 meta 进度凭据，分块数据/进度同事务提交；启动循环续跑 `Incomplete`，全量逐值校验及来源复核后才归档旧 JSON，非空无凭据不一致库拒绝覆盖。全表读取共用一个只读事务的 WAL 快照。锁外持久化计划携快照顺序令牌，提交门内整份拒绝过期计划（包括根行及剪枝），部分提交同样推进接纳门槛。本地 SQLite 新增 `recovery_audit` 与 `materialization_attempt`：后者保留按源/日/窗/代次核算的物化预留、失败和实际成本，不随活动引用裁剪归零（**2026-10-29**：前者已随受管恢复分段废除而删除 —— `Open` 会幂等 `DROP TABLE recovery_audit`；同批 `source_wal` 表也已删除，WAL 改纯内存队列，reclaim 改按 `REQUEST_DONE` 证据推进）。物理映射、已确认指纹与实际 ACK 证明的持久化模型见 [索引规格](specs/log-index-sqlite/spec.md)。只读 JSON 导出不含这两张历史表，不是完整备份；旧 JSON 回退仅为备份时间点受控恢复，不能承诺旧二进制直接读取新元数据或迁移后增量无损降级。
+
+> **2026-10-30 重大变更：索引库改纯内存（`:memory:`），事件段改 tmpfs。**
+>
+> 用户裁定：「现在不做任何的索引 账本落盘 因为是机械盘 性能不行」。
+> 生产机 `/dev/sda7` 是**机械盘**（`ROTA=1`），fsync 在这里是寻道+旋转惩罚，
+> 而索引库（生产已 344MB + 4MB WAL）与事件段（≈300MiB NDJSON）都在投递热路径上写。
+>
+> | 数据 | 介质 | 重启后 |
+> |---|---|---|
+> | 采集索引库 | `:memory:` SQLite（`stateindex.OpenInMemory`） | **没了** |
+> | canonical 事件段 | `/dev/shm/jianmanager-events`（`eventstore.MemoryRoot`） | **没了** |
+> | WAL | 纯内存队列（满了丢最旧） | **没了** |
+> | **采集游标** | 磁盘 `var/log/ingest.cursor`（每源一行，≈2KB，**不 fsync**） | **在** |
+> | VL 数据 | 磁盘 `var/log/vl/hot/data` | **在** |
+>
+> ⇒ 上面那段描述的「旧 JSON 迁移 / 启动续跑 `Incomplete` / 全表读取共享 WAL 快照 /
+> 只读 JSON 导出 / 旧 JSON 回退」**全部失去对象**（磁盘上已没有索引库）。
+> `worker log-index-export` 子命令保留但**总是返回说明性错误**，不再假装成功。
+> 上述迁移与快照语义仅作**历史参考**，现行细节见
+> [索引规格](specs/log-index-sqlite/spec.md) 的 2026-10-30 修订节。
+>
+> **代价（必须知道）**：进程重启后索引、事件段、WAL 全部归零。
+> 「VL 数据根丢失后从事件段重建 projection」这个能力**不再存在**（详见 ADR-095 追记）。
 
 **续读物理/逻辑定位（模型已扩展，适配与采集复验中）**：`Segment.PhysicalStart` 与 `PhysicalMappingKnown` 把逻辑 `StartPos` 映射到文件偏移，真实 0 与旧状态缺证据分开。`ConfirmedFingerprint` 绑定分段身份、逻辑/物理采点、窗口与摘要；旧 `PositionsFingerprint/PositionsFingerprintAt` 保留兼容，但不能自动升级成可信绑定，更不能把逻辑投递水位直接用于物理 Seek。新增字段须经索引双向映射并在二启/三启保持，不造兼容证据；旧缺证据的具体续读/重锚路径仍在联合修复验收。准确字段、读取字节限与归档三态见 [采集规格](specs/worker-log-acquisition/spec.md)。
 

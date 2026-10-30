@@ -3281,6 +3281,13 @@
 
 ### POST /api/v1/nodes/:id/log-runtime/ingest/import-archives
 
+> **2026-10-30 状态变更：归档采集已整体删除，本端点保留但恒返回「无归档可导」。**
+> 用户裁定「把读取gz归档日志通通给我删了，只需要读取日志然后往vl塞，有就有没有就算了」。
+> 端点、授权、审计与下传链路均**未改动**（删接口要跳 proto/grpcsvc/前端三处），
+> 但 Worker 侧 `ImportArchivesNow` 现在**恒返回 `(0, 0, nil)`** ⇒ 响应仍是「成功触发」，
+> 而 `scanned=0 / imported=0`。**这不是故障，是功能已下线。**
+> 下文描述的是**下线前的语义**，保留作历史参考。
+
 - **请求**：`{ "storageNamespace": "实例存储命名空间（可选）", "reason": "导入理由（必填）" }`。`storageNamespace` 取值形如 `inst:317`，与 Worker 侧 `ImportArchivesNow` 的过滤口径一致——**传完整源键不会匹配到任何源**（实测得到 `scanned=0`，看着像"成功但没东西可导"）；**空 = 本 Worker 全部可导入源**。
 - **语义**：把「已经躺在源目录里、但还没被导入」的历史归档（`.gz`）走一遍与自动路径完全相同的导入管道。**不受 `log.acq.gz_import_enabled` 总开关影响**——应急补历史永远可用。为什么需要它：定时扫描默认关闭，且采集轮的历史导入受 acquire 层不变量约束（历史段只能前置到**未被读过**的当前段），存量源因此没有别的自动出口。
 - **授权**：非空命名空间须绑定真实实例并做实例级对象授权（畸形 400；未知实例/组外 403），**空命名空间（全 Worker 范围）额外要求平台管理员**。
@@ -3292,6 +3299,9 @@
 ### GET /api/v1/nodes/:id/log-runtime
 
 - **描述**：读取该节点受管 VictoriaLogs 的运行时状态。CP 经反向隧道代理 Worker（不直连 VictoriaLogs），按 `hot` / `cold` / `rehydrate` 三个命名空间逐个采集。
+  > **2026-10-30 修订**：`cold` / `rehydrate` 两个 namespace 已随「单 VL」改造从**装配层**移除，
+  > 当前只启动 `hot`。`vlsup` 包本身仍是通用的 namespace 管理器（引擎能力保留），
+  > 所以接口形状不变，只是返回里只剩 `hot` 一项。
 - **权限**：路由经 `permRead("node.manage")` 挂载（`RequireAnyPerm`，任一命中即放行）。**无目标级授权**：handler 只按 `:id` 解析节点与隧道 client，不做 `CanAccessInstance` 或归属校验 ⇒ 任何持有 `node.manage` 的自定义角色都能读取任意节点的运行时状态。
 - **请求**：无 body、无 query 参数影响行为；可选 header `X-Request-ID`，作为 `request_id` 下发并由 Worker 回显。CP **不填** `protocol_version`。
 - **错误顺序**（顺序即优先级）：

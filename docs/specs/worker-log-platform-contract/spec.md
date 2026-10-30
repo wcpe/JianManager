@@ -63,6 +63,67 @@ reclaim = min(contiguousCertifiedEnd(entry), max(read_position, durable_position
 - 缺口（`Gap`）机制、人工弃投凭据（`Abandonments`）、`PositionInvariantViolations` 观测面
 - `published_evidence.go` 全部调用面（缺口消解 + 延迟投递确认）
 
+### 2026-10-30 显式评审修订：投递主路径取消逐字段回查（verify）
+
+**本次修订改变 Shared Contracts，按 § 10 末尾要求重新评审并同步依赖模块、兼容规则和测试。**
+它收窄了 §4.2 证据表中 `VerifiedRuns` 的作用域，并解除了 ADR-099 §9 中
+「verify 的 fail-loud 语义不得削弱」这条红线在**投递主路径**上的适用。
+
+> 裁定来源：用户 2026-10-30 明确选择「承认旧规矩过时了，把它正式改掉」（选项 A）。
+
+#### 前提怎么消失的
+
+1. **它占掉了整轮墙钟的绝大部分**：60 源逐源串行基线实测，单轮 99.6s 中
+   deliver=90.8s，其中 verify（VL 的 LogsQL 校验查询，含重试退避）=85.3s（**占整轮 85.6%**）。
+   同期 Worker CPU 17–45%、VL CPU 7–23%，双方都没打满 ⇒ 瓶颈是「写完再读回来」这个往返本身。
+2. **它有正反馈灾难形态**：一旦 VL 负载偏高使校验反复超时，就变成
+   「写完 573562 条 → 校验不过 → 换代次再写一遍」，VL 体积曾因此放大到 **75 倍**。
+3. **回收链从不需要它**：回收上界由 `REQUEST_DONE`（HTTP 状态码）直接决定，
+   经 `recordHTTPResultLocked` → `contiguousCertifiedEnd`，全程不经过 `VerifiedRuns`。
+   已核对：`VerifiedRuns` 在 `ledger` 包内**零命中**，从未被桥接进 `RequestDoneRanges`。
+4. **业界没有一家这么做**：Vector / Fluent Bit / Filebeat / Promtail 的共识是
+   「后端返回 2xx 即 ACK」，没有任何一家在写完之后回查读。
+5. **VL 自身已经实测接受压缩后的写入并返回 200**（v1.52.0，65090B → 895B，约 73×）。
+
+#### 新规则（取代本节旧 §4.2 中 verify 作为投递前置的部分）
+
+- **投递主路径以 HTTP 状态码为唯一结论**：单批要么整批被 VL 接受（2xx）、要么整批失败
+  （非 2xx / 传输错）。**没有第三种「写没写进去未知」的状态**——请求体是一次 POST 送完的。
+- 事件重发幂等由 `event_id` 承担（VL 侧按 `event_id` 去重），所以「宁可重发」仍然安全。
+- **逐字段核验保留在取证路径上**，不再在投递主路径上同步执行：
+  `repairWrittenEarlierDebt` / `tryConfirmPendingPublication` / `hot_retention_window` /
+  `scoped_query_budget`。那里面对的是「历史欠账是否真的在 VL 里」，
+  与「本批刚发出去的 POST 是否被接受」是两个问题。
+- 保守方向由下游的 pending / debt 判据承担：`hasKnownUnpublishedDayDebt` /
+  `hasResidualUnpublishedDebt` / `currentPublishedRuns` 在 `verified` 输入为空时
+  **判定更保守**（更易保留 pending），属安全方向。
+- 自愈退避的「有进展」信号改由**投递成功**提供（`noteDeliveryProgress`），
+  与 `recordVerifiedRunsReporting` 同一语义（进展就地解除退避），不退避算法本身不变。
+
+#### 被修改的条款
+
+| 位置 | 原内容 | 现状态 |
+|---|---|---|
+| §4.2 证据表 | `VerifiedRuns` 精确区间 = 「逐字段可见性证明」（作为投递前置证据） | **降为可选/异步**；投递主路径不再生成，取证路径仍生成 |
+| §9 验收 | 「未确认数据不被静默删除」 | 保留（改由 `REQUEST_DONE` + pending/debt 判据保证） |
+| ADR-099 §9 | 「任何采样/降级/预算都不得削弱 … verify 的 fail-loud 语义」 | **在投递主路径上解除**；取证路径仍适用 |
+
+#### 代码落点
+
+- 投递路径：`internal/worker/logs/ingest/runtime.go` 的 `writeProjectionDay`（删 `verify` 调用与 `verifyErr` 分支）
+- 进展登记：`internal/worker/logs/ingest/gap_autoresolve.go` 的 `noteDeliveryProgress`
+- 回归：`internal/worker/logs/vlsup/client_compression_test.go`、`client_gzip_fallback_test.go`
+- 落地提交：`c0c132f4`
+
+#### 不变的部分（明确保留）
+
+- §4.2 证据表的其余四类证据与它们的独立性（不互相升级）
+- `reclaim = min(contiguousCertifiedEnd, max(read, durable))`
+- `UNKNOWN` 区间不得被回收
+- 缺口（`Gap`）机制与人工弃投凭据
+- 取证路径上的逐字段核验能力与调用面
+- 「未确认数据不被静默删除」这条意图
+
 ### 2026-10-26 ACKLoss 与静默 766 闭环
 
 以下两项自「2026-10-25 功能修复收口与延期专项」的延期条目中**闭环**；其余延期项（250ms 首屏、原 9×30min 长窗、Worker fileCPU 诊断）**状态不变**，门限不放宽、不计通过。
@@ -220,7 +281,7 @@ reclaim = min(contiguousCertifiedEnd(entry), max(read_position, durable_position
 | Worker 本地校验通过 | 序列化、字段和时间检查通过 | VL 已接受或已耐久 |
 | 对应批次索引提交成功 | 本批事件取得投递资格；交办/`Incomplete` 不成立 | 远端已接受或已核验 |
 | `REQUEST_DONE` 精确区间 | 该区间有真实请求完成 ACK | 逐字段可见或长期可恢复 |
-| `VerifiedRuns` 精确区间 | 该区间完成逐字段可见性证明 | 存在新的 HTTP ACK 或无限保留保证 |
+| `VerifiedRuns` 精确区间 | 该区间完成逐字段可见性证明（**取证路径产出，非投递前置**；2026-10-30 修订） | 存在新的 HTTP ACK 或无限保留保证 |
 | HTTP 请求成功 | 请求完成 | 所有记录逐条入库、持久落盘或可恢复 |
 | 按 event_id 查询核验成功 | 核验时对应事件可见 | 后续掉电仍可恢复、没有重复 |
 
@@ -429,7 +490,7 @@ Export 是 CP Coordinator 的业务操作，不新增 Worker Export RPC：CP 使
 
 - [ ] 同一 Query View 在回灌、迁移、到期清理期间分页结果稳定；无法维持时在数据变化前阻止后续读取并返回 `VIEW_STALE`，不先返回变化后的页再补发失效。
 - [ ] 导出与同 view 的 Search 事件集合、排序、授权和覆盖摘要一致；完整性校验前没有可下载附件；完成后源 Worker 离线不改变已完成产物的语义。
-- [ ] 响应丢失、VL 确认窗口重启、非法 NDJSON、批次部分接受均能按表进入 UNKNOWN/PENDING_VERIFY 等状态；没有 HTTP 2xx 直接回收 WAL 的路径；重启由「持久 position 水位 + 重启重读」恢复。
+- [ ] 投递主路径以 HTTP 2xx 为唯一结论、不再逐字段回查（2026-10-30 修订）；逐字段核验保留在取证路径（欠账修复/待定发布确认/热层窗口/查询预算）；`VerifiedRuns` 不再作为投递前置证据；重启由「持久 position 水位 + 重启重读」恢复。
 - [x] **`UNKNOWN` 区间不得被回收**，回收上界是 `REQUEST_DONE` 证据的连续覆盖末端（2026-10-29 修订；回归 `reclaim_evidence_test.go`）。
 - [ ] 重启后 `read`/`durable` 回退到 `reclaim`、tailer 从 `min(durable, read)` 重读那段并能重新产生并投递（取代原「恢复分段责任状态转移」验收项）。
 - [ ] canonical projection 让 Search、Stats、Facets、Export 在重复事件和分页边界上使用同一逻辑集合。

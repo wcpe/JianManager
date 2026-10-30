@@ -1,5 +1,5 @@
 // Package ledger 实现 FR-474 采集账本：按 (log_source_id, source_generation)
-// 保存四水位、投递状态、恢复分段引用、缺口与轮转关联。
+// 保存四水位、投递状态、缺口与轮转关联。
 // 字段与状态语义以 docs/specs/worker-log-platform-contract/spec.md 为准。
 package ledger
 
@@ -277,7 +277,8 @@ const GapReasonPermanentlyLost = "PERMANENTLY_LOST"
 //
 // 为什么独立于 Gap 存一份（而不是只写在 Gap 上）：已解决缺口会被 trimResolvedGapsLocked
 // 按数量裁剪（只留审计尾部），若把裁定只挂在 Gap 上，「回收链凭什么跨过它」的凭据会随
-// 缺口一并被裁掉。裁定的生命周期必须长于缺口记录本身——它要一直支撑 CanReclaim 的放行判定。
+// 缺口一并被裁掉。裁定的生命周期必须长于缺口记录本身——它要一直支撑
+// TryReclaimIf 跨过该区间的判据（凭据经 ReclaimTarget.Abandonments 传入回调）。
 type GapAbandonment struct {
 	// From/To 是被放弃的源位置闭区间（取裁定当时被解算的缺口区间）。
 	From uint64 `json:"from"`
@@ -428,8 +429,8 @@ func (l *Ledger) mergeAndTrimAbandonmentsLocked(e *Entry) {
 // AbandonmentsCovering 报告位置 pos 是否落在某条放弃凭据覆盖的区间内。
 //
 // 语义（务必按名字读准）：它只回答「该位置被人工裁定为永久丢失」，
-// **不回答**「回收可以推进」——那是 CanReclaim 与恢复分段状态机的事。
-// 本函数是那个判定的**输入凭据**，不是判定本身。
+// **不回答**「回收可以推进」——那是 contiguousCertifiedEnd 与 TryReclaimIf 的事。
+// 本函数只是那个判定的**输入凭据**，不是判定本身。
 func (l *Ledger) AbandonmentsCovering(key SourceKey, pos uint64) (GapAbandonment, bool) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
