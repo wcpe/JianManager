@@ -477,10 +477,19 @@ func openWithDB(path string, db *sql.DB, budget CommitBudget, inMemory bool) (*S
 	ctx := context.Background()
 	if inMemory {
 		// 内存库没有 journal/fsync 可言，只保留功能必需的 pragma。
+		//
+		// **必须用 ExecContext，不能用 execPragma**（2026-10-30 真机/单测实测）：
+		// `PRAGMA foreign_keys=ON` / `PRAGMA cache_size=...` 是**赋值型** pragma，
+		// 它们**不返回结果集**——用 `QueryRowContext(...).Scan(&v)` 会稳定得到
+		// `sql.ErrNoRows`。execPragma 只对**查询型** pragma（如 `journal_mode=WAL`,
+		// 它会回一行 `wal`）成立。写错会合 Open 直接失败：
+		// `stateindex: 设置 PRAGMA foreign_keys=ON 失败: sql: no rows in result set`
+		// ⇒ ingest 拒绝启动采集（整个日志采集链路倒下）。实测：ExecContext 正常，
+		// 读回 `PRAGMA foreign_keys` 得 1（确实生效）。
 		for _, pragma := range []string{"PRAGMA foreign_keys=ON", "PRAGMA cache_size=-65536"} {
-			if err := execPragma(ctx, db, pragma); err != nil {
+			if _, err := db.ExecContext(ctx, pragma); err != nil {
 				_ = db.Close()
-				return nil, err
+				return nil, fmt.Errorf("stateindex: 设置 %s 失败: %w", pragma, err)
 			}
 		}
 	} else {
@@ -584,7 +593,11 @@ func openWithDB(path string, db *sql.DB, budget CommitBudget, inMemory bool) (*S
 	return s, nil
 }
 
-// execPragma 执行会返回一行的 PRAGMA（如 journal_mode），丢弃返回值。
+// execPragma 执行**查询型** pragma（如 `PRAGMA journal_mode=WAL`，它回一行当前模式）
+// 并断言它没报错。
+//
+// **不要用它跑赋值型 pragma**（`PRAGMA foreign_keys=ON` / `cache_size=..` / `synchronous=..`）：
+// 那些不返回结果集，Scan 会得到 sql.ErrNoRows（2026-10-30 实测）。赋值型一律用 ExecContext。
 func execPragma(ctx context.Context, db *sql.DB, pragma string) error {
 	var value string
 	if err := db.QueryRowContext(ctx, pragma).Scan(&value); err != nil {

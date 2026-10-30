@@ -1,10 +1,6 @@
 package ingest
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
@@ -63,139 +59,10 @@ func indexReloadAcquire(t *testing.T, path string, key ledger.SourceKey, led *le
 	return restored, restoredWAL
 }
 
-func TestIndexTruncatedPhysicalMappingActuallyPollsAfterThreeRestarts(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "latest.log")
-	var lines []string
-	for i := 0; i < 30; i++ {
-		lines = append(lines, fmt.Sprintf("[00:00:%02d] line-%02d padding padding padding padding", i, i))
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	key := ledger.SourceKey{LogSourceID: "sqlite-truncation", SourceGeneration: "g1"}
-	led := ledger.New()
-	wal := acquire.NewWAL(led, key)
-	tailer := acquire.NewFileTailer(led, key, path, wal, acquire.NewLineHook())
-	events, err := tailer.Poll()
-	if err != nil || len(events) != 30 {
-		t.Fatalf("初读：%d %v", len(events), err)
-	}
-	if err := wal.Append(events...); err != nil {
-		t.Fatal(err)
-	}
-	if err := wal.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	originalEnd := tailer.LogicalPos()
-	prefix := strings.Join(lines[:5], "\n") + "\n"
-	if err := os.Truncate(path, int64(len(prefix))); err != nil {
-		t.Fatal(err)
-	}
-	if rotated, err := tailer.PrepareRotation(); err != nil || rotated {
-		t.Fatalf("纯截断被判轮转：%v %v", rotated, err)
-	}
-	if events, err := tailer.Poll(); err != nil || len(events) != 0 {
-		t.Fatalf("截断残留重读：%d %v", len(events), err)
-	}
-	for round := 1; round <= 3; round++ {
-		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led)
-		tailer = acquire.NewFileTailer(led, key, path, wal, nil)
-		if events, err := tailer.Poll(); err != nil || len(events) != 0 {
-			t.Fatalf("第%d次SQLite重启残留前缀被重投：%d %v", round, len(events), err)
-		}
-		if tailer.LogicalPos() != originalEnd {
-			t.Fatalf("第%d次SQLite重启逻辑EOF变化", round)
-		}
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString("fresh\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	events, err = tailer.Poll()
-	if err != nil || len(events) != 1 || events[0].Record.Start != originalEnd {
-		t.Fatalf("追加没有沿用原逻辑EOF：%+v %v", events, err)
-	}
-}
-
-func TestIndexRotatedConfirmedFingerprintActuallyPollsAfterThreeRestarts(t *testing.T) {
-	root := t.TempDir()
-	live, rotated := filepath.Join(root, "latest.log"), filepath.Join(root, "latest.log.1")
-	old, current := strings.Repeat("old-old-old\n", 70), strings.Repeat("new-new-new\n", 140)
-	if err := os.WriteFile(live, []byte(old), 0600); err != nil {
-		t.Fatal(err)
-	}
-	key := ledger.SourceKey{LogSourceID: "sqlite-old-fingerprint", SourceGeneration: "g1"}
-	led := ledger.New()
-	wal := acquire.NewWAL(led, key)
-	tailer := acquire.NewFileTailer(led, key, live, wal, nil)
-	tailer.SetRotateTarget(rotated)
-	events, err := tailer.Poll()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := wal.Append(events...); err != nil {
-		t.Fatal(err)
-	}
-	if err := wal.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	if err := led.RecordDelivery(key, 0, uint64(len(old)), "REQUEST_DONE"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tailer.Poll(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(live, rotated); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(live, []byte(current), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if changed, err := tailer.PrepareRotation(); err != nil || !changed {
-		t.Fatalf("真实轮转未识别：%v %v", changed, err)
-	}
-	events, err = tailer.Poll()
-	if err != nil || len(events) != 140 {
-		t.Fatalf("新live未完整采集：%d %v", len(events), err)
-	}
-	if err := wal.Append(events...); err != nil {
-		t.Fatal(err)
-	}
-	if err := wal.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	for round := 1; round <= 3; round++ {
-		led, wal = indexReloadAcquire(t, filepath.Join(root, "index.db"), key, led)
-		tailer = acquire.NewFileTailer(led, key, live, wal, nil)
-		f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.WriteString("fresh-after-restart\n"); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.Close(); err != nil {
-			t.Fatal(err)
-		}
-		events, err = tailer.Poll()
-		if err != nil || len(events) != 1 {
-			t.Fatalf("第%d次SQLite重启把旧段指纹套新live：%d %v", round, len(events), err)
-		}
-		if led.UnresolvedGapCount(key) != 0 {
-			t.Fatalf("第%d次SQLite重启产生假FILE_REWRITTEN：%+v", round, led.Get(key).Gaps)
-		}
-		if err := wal.Append(events...); err != nil {
-			t.Fatal(err)
-		}
-		if err := wal.Commit(); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
+// 2026-10-30 P2.1：本文件原有两个用例
+//   TestIndexTruncatedPhysicalMappingActuallyPollsAfterThreeRestarts
+//   TestIndexRotatedConfirmedFingerprintActuallyPollsAfterThreeRestarts
+// 验的是「已确认水位指纹跨重启不得被误用」。那条指纹链（ConfirmedFingerprint /
+// refreshConfirmedFingerprintLocked / 续读前三态校验）随「跨实例 resume」一起下线了
+// （用户裁定 D：起点改由 ingest 的游标表决定），故两条用例一并删除。
+// indexReloadAcquire 保留：它仍被其它回归用例用于「账本经真 SQLite 往返」。

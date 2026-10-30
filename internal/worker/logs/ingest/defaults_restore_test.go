@@ -32,8 +32,10 @@ func TestDefaultTimeZoneAppliesToRestoredSource(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[02:56:53] [Server thread/INFO]: 历史行\n[02:56:54] [Server thread/INFO]: 历史行二\n"), 0o644))
+	// 夹具时序（2026-10-30 裁定 D）：源**先登记**（新源默认从文件末尾起读），
+	// 然后才写入日志行——这才是真实形态（实例先被发现，之后才产生日志）。
+	// 旧写法先写两行再登记，依赖「新源从文件头读」，而那个隐式契约已经不存在了。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:tz-restore/file", SourceGeneration: "g1", Path: logPath,
@@ -46,6 +48,9 @@ func TestDefaultTimeZoneAppliesToRestoredSource(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 源已登记（起点钉在空文件末尾）；现在才产生第一批日志。
+	appendLogLine(t, logPath, "[02:56:53] [Server thread/INFO]: 历史行\n")
+	appendLogLine(t, logPath, "[02:56:54] [Server thread/INFO]: 历史行二\n")
 	before.pollOnce()
 	require.Equal(t, "", savedConfigOf(t, before, key).TimeZone, "夹具：历史状态的源配置里 TimeZone 为空（=UTC）")
 	require.NoError(t, before.Stop())

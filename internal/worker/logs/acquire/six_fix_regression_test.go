@@ -124,7 +124,12 @@ func TestSixFixFsyncFailureDoesNotQualifyAtHigherDurable(t *testing.T) {
 	require.Equal(t, uint64(1000), led.Get(key).Positions.Durable)
 }
 
-func TestSixFixTruncationMappingSurvivesThreeStarts(t *testing.T) {
+// TestSixFixTruncationMappingKeepsAnchorAfterRewrite 验：纯截断重锚后，段映射自洽——
+// 存活前缀不被赋新身份，续写的字节接着锚点逻辑位置。
+//
+// P2.1：原先这里播了三次「快照 → 新建 tailer → 查 LogicalPos」，那是跨进程恢复 cursor
+// 的契约；该路径已撤销（账本不跨重启，启动一律锤 EOF）。保留本用例真正要验的部分。
+func TestSixFixTruncationMappingKeepsAnchorAfterRewrite(t *testing.T) {
 	key := testKey("six-trunc-restart", "g1")
 	tailer, lines := truncateFixture(t, key, true)
 	prefix := strings.Join(lines[:5], "\n") + "\n"
@@ -135,22 +140,12 @@ func TestSixFixTruncationMappingSurvivesThreeStarts(t *testing.T) {
 	_, err = tailer.Poll()
 	require.NoError(t, err)
 	originalEnd := tailer.LogicalPos()
-	for round := 2; round <= 3; round++ {
-		led := ledger.New()
-		require.NoError(t, led.Restore(tailer.led.Snapshot()))
-		wal := NewWAL(led, key)
-		require.NoError(t, wal.seedEntries(tailer.wal.Snapshot()))
-		tailer = NewFileTailer(led, key, tailer.path, wal, nil)
-		events, err := tailer.Poll()
-		require.NoError(t, err)
-		require.Empty(t, events, "第%d次启动不得把durable存活前缀赋新身份", round)
-		require.Equal(t, originalEnd, tailer.LogicalPos())
-	}
+
 	appendBytes(t, tailer.path, []byte("fresh\n"))
 	events, err := tailer.Poll()
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	require.Equal(t, originalEnd, events[0].Record.Start)
+	require.Equal(t, originalEnd, events[0].Record.Start, "重锚后的续写必须接着锚点，不得从头重赋身份")
 }
 
 func TestSixFixOldSegmentFingerprintDoesNotInspectNewFile(t *testing.T) {
@@ -179,22 +174,16 @@ func TestSixFixOldSegmentFingerprintDoesNotInspectNewFile(t *testing.T) {
 	require.Len(t, events, 140)
 	require.NoError(t, wal.Append(events...))
 	require.NoError(t, wal.Commit())
-	for round := 2; round <= 3; round++ {
-		led2 := ledger.New()
-		require.NoError(t, led2.Restore(led.Snapshot()))
-		wal2 := NewWAL(led2, key)
-		require.NoError(t, wal2.seedEntries(wal.Snapshot()))
-		tailer = NewFileTailer(led2, key, live, wal2, nil)
-		fresh := "fresh-after-restart\n"
-		appendBytes(t, live, []byte(fresh))
-		events, err = tailer.Poll()
-		require.NoError(t, err)
-		require.Len(t, events, 1, "第%d次启动不能把旧段指纹拿来校验新文件", round)
-		require.Zero(t, led2.UnresolvedGapCount(key))
-		require.NoError(t, wal2.Append(events...))
-		require.NoError(t, wal2.Commit())
-		led, wal = led2, wal2
-	}
+	// P2.1：原先这里「重启三轮、每轮启动前追加一行」，验的是旧段指纹不能拿来校验新文件。
+	// 指纹那条链随 resume 一起删了；本用例保留真正要验的：**轮转后新文件的 140 行全部读到、
+	// 且不留假缺口**，以及此后追写的行照常采集。
+	require.Zero(t, led.UnresolvedGapCount(key), "正常轮转不得产生假缺口")
+	fresh := "fresh-after-restart\n"
+	appendBytes(t, live, []byte(fresh))
+	events, err = tailer.Poll()
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Zero(t, led.UnresolvedGapCount(key))
 }
 
 func TestSixFixLiveUTF8AndCRLFWaitForPhysicalLine(t *testing.T) {

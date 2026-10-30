@@ -68,6 +68,18 @@ type Options struct {
 	// Ledger/WAL 可由 Worker 生产运行时注入持久恢复实例；为空时创建内存实例。
 	Ledger *ledger.Ledger
 	WAL    *acquire.WAL
+	// StartAtEOF 是 FILE_PRIMARY 的**默认起点**：tailer 从当前文件末尾起读。
+	//
+	// 语义分工（2026-10-30 裁定 D）：
+	//   - ResumeCursor != nil ⇒ 采过而且找得到上次位置，从那里继续（不受本字段影响）；
+	//   - ResumeCursor == nil ⇒ 这个源没采过（首次部署/换绑定），按本字段决定起点。
+	//
+	// 生产置 true：新绑定时不回头吃文件里的历史（那是别人的日志）。
+	// 测试保持零值（false）以便验 tailer 从文件头读起的机制本身。
+	StartAtEOF bool
+	// ResumeCursor 是持久化的采集游标（每源一行，见 ingest/cursor_registry.go）。
+	// 非 nil 且与当前文件匹配时，tailer 从该位置续读（不重复投递上次已投递的字节）。
+	ResumeCursor *acquire.SourceCursor
 	// Sampling 采集侧采样与降级策略。零值 = 未启用 = 恒等（零行为变化）。
 	// 启用后所有事件入口统一经 emit 收口，保证「进 WAL 的事件」与「deliver 面看到的事件」
 	// 是同一批——两者分叉是最危险的一类不一致。
@@ -274,6 +286,16 @@ func New(opts Options) (*Pipeline, error) {
 		tailer.SetSourceCategory(cat)
 		if opts.RotateTo != "" {
 			tailer.SetRotateTarget(opts.RotateTo)
+		}
+		if opts.StartAtEOF {
+			if err := tailer.AnchorAtEOF(); err != nil {
+				return nil, err
+			}
+		}
+		if opts.ResumeCursor != nil {
+			if err := tailer.ResumeFrom(*opts.ResumeCursor); err != nil {
+				return nil, err
+			}
 		}
 		p.tailer = tailer
 	case ModeStdioPrimary:

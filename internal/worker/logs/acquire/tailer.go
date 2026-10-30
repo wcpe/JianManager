@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 )
 
-// FileTailer 从源文件 tail 采集：cursor resume + 轮转检测。
+// FileTailer 从源文件 tail 采集：纯内存 cursor + 轮转检测。
 // Multiline 未完成事件只推进 read_position，不推进 durable。
 // defaultMaxLinesPerPoll 是单次 Poll 的读取行数上限（B1b **准入限流**）。
 //
@@ -33,7 +33,7 @@ type FileTailer struct {
 	wal    *WAL
 	parser logtypes.SourceIdentity
 
-	// cursor 当前文件内偏移（可从账本 read_position 恢复）。
+	// cursor 当前文件内偏移（纯内存，不跨进程恢复；启动起点由 AnchorAtEOF 决定）。
 	cursor int64
 	// logicalPos 逻辑源位置（跨轮转累计）。
 	logicalPos uint64
@@ -59,9 +59,6 @@ type FileTailer struct {
 	// 文件头不动、尾部区域被吞 ⇒ 偏移漂移 ⇒ IDENTITY_CONFLICT ⇒ 水位钉死 ✗）。每次 Poll 收束后刷新 ✓。
 	tailSHA256 string
 	tailHashAt int64
-	// confirmedFingerprintChecked 标记「续读前已确认水位指纹校验」是否已做过（w18 防护段 3）。
-	// 每进程每源只判一次：判过之后运行期的漂移由 tailSHA256 那条链负责 ✓。
-	confirmedFingerprintChecked bool
 	// rotateTo 轮转目标路径模板（可选）；检测到截断时登记关联。
 	rotateTo string
 	// rotationCount 轮转次数（测试断言）。
@@ -139,22 +136,65 @@ func NewFileTailer(led *ledger.Ledger, key ledger.SourceKey, path string, wal *W
 		identityBytes:        live.IdentityBytes,
 		identitySHA256:       live.IdentitySHA256,
 	}
-	// cursor resume：从账本 durable/read 重建。崩溃后 read 可回退到 pending 多行首行。
-	if ent := led.Get(key); ent != nil {
-		base := ent.Positions.Durable
-		if ent.Positions.Read < base {
-			// read 回退合法：以 read 为恢复点（未完成多行从首行重拼）。
-			base = ent.Positions.Read
-		}
-		if base < t.segmentStart {
-			base = t.segmentStart
-		}
-		t.logicalPos = base
-		t.cursor = int64(t.physicalStart + base - t.segmentStart)
-		t.lastSize = t.cursor
-		t.active = false
-	}
+	// cursor 纯内存（2026-10-30 P2.1）：不再从账本四水位重建。
+	// 默认从文件头起读（构造函数的自然语义）；生产向的「不重读历史」由 pipeline 组装处
+	// 显式调 AnchorAtEOF() 表达（见该方法注释）。
+	t.cursor = 0
+	t.lastSize = 0
+	t.active = false
 	return t
+}
+
+// AnchorAtEOF 把游标锚到当前文件末尾：本进程只采「自此之后」新写入的字节。
+//
+// ## 为什么必须由组装处显式决定
+//
+// 旧实现在 NewFileTailer 里按「账本 durable/read 四水位」恢复 cursor，前提是**账本跨重启存活**。
+// P1（7456d716）已把索引库改成 `:memory:` SQLite —— 账本每进程启动都是空的，于是旧逻辑
+// 得到 base=0 ⇒ cursor=0 ⇒ 每个源重启后都会把**整份历史日志重新读一遍并重新投递 VL**。
+// 那不是恢复，是重复投递；源文件在生产上动辄几百 MB，机械盘上读一遍就是灾难。
+//
+// 用户裁定「直接读取到的往 vl 塞啊，内存队列满了就丢啊」——不承诺跨重启不丢，也就不需要
+// 跨重启的游标。所以生产组装时一律调用本方法：**新进程只采自己出生之后写入的字节**。
+//
+// ## 代价（已知且接受）
+//
+// 进程停机期间源写入的字节不会被采集，也不做任何追溯。这是「不落盘」换来的直接后果，
+// 与「有就有没有就算了」同一语义。
+//
+// ## 与 anchorAtEOFLocked 的区别
+//
+// 那个是**运行期**检测到重写/截断后的重锚，必须登记可见缺口（真的漏了字节）。
+// 这里是**启动时**的起点选择：文件里既有内容不属于「被跳过的损失」，它在本进程出生前
+// 就存在，故不记缺口、也不做身份重置（身份留给第一轮 PrepareRotation 去采）。
+//
+// ## 映射一致性
+//
+// 只推 cursor 与 logicalPos，不动 segmentStart/physicalStart：新进程的账本是空的，
+// 活段总是 (StartPos=0, PhysicalStart=0)，于是「逻辑 = segmentStart + 文件内偏移」
+// 与 physicalStart 的映射天然自洽（物理 size ↔ 逻辑 segmentStart+size）。
+func (t *FileTailer) AnchorAtEOF() error {
+	fi, err := os.Stat(t.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// 文件尚未创建：cursor 留 0，首轮 Poll/PrepareRotation 会在文件出现后接管。
+			// 那时从 0 读起正是同一个语义（文件是新的，内容都是新写入的）。
+			return nil
+		}
+		return err
+	}
+	size := fi.Size()
+	t.cursor = size
+	t.lastSize = size
+	t.logicalPos = t.segmentStart + uint64(size)
+	t.active = false
+	t.identityBytes, t.identitySHA256 = 0, ""
+	t.identityDev, t.identityIno, t.identityOK = 0, 0, false
+	t.tailSHA256, t.tailHashAt = "", 0
+	// 让 checkPhysicalMapping 直接放行：刚 stat 到一个真文件，「逻辑 0 ↔ 物理 0」已成立。
+	t.physicalMappingKnown = true
+	t.physicalStart = 0
+	return nil
 }
 
 // SetRotateTarget 设置轮转后的目标路径（用于登记 latest.log → rotated 关联）。
@@ -355,62 +395,6 @@ func (t *FileTailer) Poll() ([]logtypes.Event, error) {
 		}
 	}
 
-	// **续读前三态校验（w18 漂移防护段 3）**：既有重写检测靠**进程内**尾窗指纹（tailSHA256），重启后它为空
-	// ⇒ 对「重启 ＋ 外部保头重写」结构性看不见 ✗ ⇒ 会按旧偏移回读历史内容 ⇒ 同内容以漂移后的新身份再摄取。
-	// 本校验每进程每源只判一次（confirmedFingerprintChecked ✓），用**持久化**的已确认水位指纹：
-	//   ① 一致（水位处 [at-512, at) 与持久化值相符）⇒ 按水位续读 ✓（落到下方正常读取路径）；
-	//   ② 不一致（漂移/重写/截断，含"同 inode 保头"）⇒ 记可见缺口 ⇒ 锚 EOF ⇒ 段/身份重置，禁止按旧偏移
-	//      回读历史内容 ✗，缺的东西交给既有对账补齐 ✓；
-	//   ③ 缺指纹（旧账本/尚未采样）⇒ 同不一致 ✓（宁可走对账，绝不赌）。
-	if !t.confirmedFingerprintChecked && t.cursor > 0 {
-		t.confirmedFingerprintChecked = true
-		state, okState := t.led.AcquireState(t.key)
-		watermark := uint64(0)
-		if okState {
-			watermark = state.Positions.Delivery
-		}
-		at, fingerprint, ok := t.led.PositionsFingerprint(t.key)
-		switch {
-		case watermark == 0 && (!ok || at == 0 || fingerprint == ""):
-			// 尚无任何已确认水位（新源/初启）：没有需要保护的历史内容 ⇒ 按现状续读 ✓
-			// （否则每个新源第二轮都会吃一条假缺口 ✗）。
-		case !ok || at == 0 || fingerprint == "":
-			// 缺指纹＝无从证明一致。**不在此处重锚** ✗：历史归档导入（gzip 回灌）等真路径会合法地
-			// "有水位但无指纹"，一律重锚会给出假缺口并打断导入 ✗（ingest 用例实测）。
-			// 防护由已采样的情形承担：部署后段 2 会在水位前进时写入指纹 ⇒ 之后的重启走 ①② ✓。
-		default:
-			bound, boundOK := t.led.ConfirmedFingerprint(t.key)
-			physicalAt, window := int64(0), int64(0)
-			if boundOK {
-				if bound.SegmentPath != t.path || bound.SegmentStartPos != t.segmentStart || bound.SegmentIdentitySHA256 != t.identitySHA256 {
-					// 投递落后时凭据仍属于旧段；绝不拿旧段的逻辑采点读取当前新文件。
-					break
-				}
-				physicalAt, window, fingerprint = bound.PhysicalOffset, bound.WindowBytes, bound.SHA256
-			} else {
-				// 旧平面凭据没有跨段定位证明。仅兼容零基址原文件，其他情况保持未知，不伪造绑定。
-				if t.segmentStart != 0 || t.physicalStart != 0 || at > t.logicalPos {
-					break
-				}
-				physicalAt = int64(at)
-				window = physicalAt
-				if window > 512 {
-					window = 512
-				}
-			}
-			cur, herr := prefixSHA256At(t.path, physicalAt-window, window)
-			if herr != nil || cur != fingerprint {
-				if err := t.reanchorAtEOFLocked(fi.Size(), "resume fingerprint mismatch at confirmed watermark; refusing to re-read history from stale offset"); err != nil {
-					return events, err
-				}
-				return events, nil
-			}
-		}
-	}
-
-	// 必须先识别轮转并核验旧凭据，再采样新确认线；否则会先读新文件，再给旧物理段贴摘要。
-	// 放在无新数据的返回之前，投递线单独前进时仍能及时保存凭据。
-	t.refreshConfirmedFingerprintLocked()
 	if fi.Size() == t.cursor {
 		return events, nil
 	}
@@ -557,7 +541,6 @@ func (t *FileTailer) detectRotationLocked() {
 		covered = entry.Positions.Durable
 	}
 	_ = t.led.LinkRotation(t.key, from, to, covered)
-	fingerprint, fingerprintOK := t.led.ConfirmedFingerprint(t.key)
 	_ = t.led.RegisterSegment(t.key, ledger.Segment{
 		Path:                 to,
 		Kind:                 ledger.SegmentRotated,
@@ -569,10 +552,6 @@ func (t *FileTailer) detectRotationLocked() {
 		IdentitySHA256:       t.identitySHA256,
 		ParserVersion:        t.parser.ParserVersion,
 	})
-	if fingerprintOK && fingerprint.SegmentPath == t.path && fingerprint.SegmentStartPos == t.segmentStart {
-		fingerprint.SegmentPath = to
-		_ = t.led.SetConfirmedFingerprint(t.key, fingerprint)
-	}
 	t.segmentStart = t.logicalPos
 	t.physicalStart, t.physicalMappingKnown = 0, true
 	t.cursor = 0
@@ -678,48 +657,6 @@ func (t *FileTailer) anchorAtEOFLocked(size int64) {
 	t.identityBytes, t.identitySHA256, t.tailSHA256, t.tailHashAt = 0, "", "", 0
 	t.identityDev, t.identityIno, t.identityOK = 0, 0, false
 	_ = t.registerLiveSegment()
-}
-
-// refreshConfirmedFingerprintLocked 把「已确认水位（回收线）处的内容采样指纹」成对写入账本（w18 漂移防护段 2）。
-//
-// 恢复/重启续读前的三态判定在段 3（一致续读／不一致或缺指纹禁旧偏移回读走对账 ✗），本函数只负责采样＋持久化。
-// 语义：水位前进 ⇒ 位置上移 ⇒ 旧指纹失效 ⇒ 在**新水位**重采样 ✓；水位未前进 ⇒ 不重复采样（O(512) 只在变化时付出 ✓）。
-// 采样失败 ⇒ 不写（缺指纹在段 3 视作不一致 ⇒ 宁可走对账，绝不带漂移偏移续读 ✗）。
-func (t *FileTailer) refreshConfirmedFingerprintLocked() {
-	state, ok := t.led.AcquireState(t.key)
-	if !ok {
-		return
-	}
-	// 已确认水位取**投递线**：它是平台确认落库的最强水位（回收线只代表本地消费，可能滞后）。
-	// 段 3 的三态判定将按同一水位校验 ✓。
-	watermark := state.Positions.Delivery
-	if watermark == 0 {
-		return // 尚无已确认水位：无凭证可写（段 3 按「缺指纹」处理 ✓）
-	}
-	if at, fp, ok := t.led.PositionsFingerprint(t.key); ok && at == watermark && fp != "" {
-		return // 水位未前进，指纹仍有效 ✓
-	}
-	// 只在已确认水位确属当前物理段时采样；边界处属于前段，不能查新文件。
-	if watermark <= t.segmentStart || watermark > t.logicalPos || !t.physicalMappingKnown || t.identityBytes <= 0 || t.identitySHA256 == "" {
-		return
-	}
-	physicalAt := int64(t.physicalStart + watermark - t.segmentStart)
-	size := physicalAt
-	if size > 512 {
-		size = 512
-	}
-	if size <= 0 {
-		return
-	}
-	fingerprint, err := prefixSHA256At(t.path, physicalAt-size, size)
-	if err != nil {
-		return
-	}
-	_ = t.led.SetConfirmedFingerprint(t.key, ledger.ConfirmedFingerprint{
-		SegmentPath: t.path, SegmentStartPos: t.segmentStart,
-		SegmentIdentityBytes: t.identityBytes, SegmentIdentitySHA256: t.identitySHA256,
-		LogicalPos: watermark, PhysicalOffset: physicalAt, WindowBytes: size, SHA256: fingerprint,
-	})
 }
 
 // refreshTailHashLocked 维护「游标前 512B 窗口」指纹（每次 Poll 收束后调用一次，O(512) ✓）。

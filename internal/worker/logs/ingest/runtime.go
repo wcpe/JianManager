@@ -714,6 +714,21 @@ type Manager struct {
 	// 行数 + 耗时双上界切成多个提交单元（FR-498 P0，见 stateindex.CommitBudget）。
 	// 打开索引库时下发（stateindex.OpenWithBudget）。
 	indexCommit stateindex.CommitBudget
+	// cursorRegistry 是每个源「上次读到哪」的**最小持久化**（2026-10-30 裁定 D）。
+	// 每源一行（path+inode+cursor），整表约 2KB；整表重写 + rename，**不 fsync**。
+	// 详见 cursor_registry.go 文件头。
+	cursorRegistry cursorRegistry
+	// cursorRegistryMu 保护 cursorRegistry 这张 map **本身**的并发访问。
+	//
+	// 为什么需要独立一把锁（而不是复用 m.mu）：写方有两条互不相同的线程——
+	// 采集轮尾部 flushCursorRegistry 跑在 ticker goroutine 上，登记路径 resumeCursorFor
+	// 跑在 gRPC 登记/实例发现的 goroutine 上；两者**确实会并发**（登记可以在采集轮之外的
+	// 任何时刻发生），而 map 的并发读写是 Go 里唯一会直接 fatal 的一类竞态
+	// （`concurrent map read and map write`，无法被 recover）。
+	// 也不复用 m.mu：持 m.mu 去做整表落盘（open+write+rename）会把采集主线拖进磁盘 IO。
+	// 锁序：cursorRegistryMu 在 m.mu **之外**获取（flushCursorRegistry 先取 m.mu 拿管道快照、
+	// 放 m.mu 之后才取本锁），从不在持本锁时回头取 m.mu。
+	cursorRegistryMu sync.Mutex
 	// walLimits 是单源 WAL **真实积压**上限的配置面（键 log_capacity.max_wal_entries /
 	// max_wal_bytes）；建管道时下发到 acquire.WAL.SetLimits。nil 表示沿用 acquire 包默认。
 	//
@@ -2616,6 +2631,10 @@ func New(opts Options) (*Manager, error) {
 	// 耐久调用从 3 次降到 1 次（清单里的派生元数据允许滞后，崩溃后由校准精确补齐）。
 	store.SetManifestSyncPolicy(opts.EventStoreManifestSyncEvery, opts.EventStoreManifestSyncInterval)
 	m.events = store
+	// 采集游标（每源一行）必须在建管道**之前**读进来：
+	// 登记路径的 resumeCursorFor 靠它决定「从上次位置继续」还是「从文件末尾起读」。
+	// 读失败只是空表（最坏重读一段），不阻断启动。
+	m.loadCursorRegistryIntoManager()
 	if err := m.load(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -2921,28 +2940,23 @@ func (m *Manager) Register(source SourceConfig) error {
 	// 被以新位置重新摄取（真机 30 倍重复的形态），且使 CurrentSegmentUnread() 恒真、
 	// 绕过下方「历史归档只能前置到未被读过的当前段」的守卫。段基址是**逻辑源**的起点，
 	// 不是「开始读取的位置」；后者只能由水位表达。
+	// 起点选择（2026-10-30 P2.1）：一律从**当前文件末尾**起读。
+	//
+	// **为什么全部源都锤 EOF，不只是规则变更的源**：P1（7456d716）把索引库改成 `:memory:`
+	// SQLite 后，账本不再跨重启存活 ⇒ 旧实现按「四水位恢复 cursor」恒得 0 ⇒ 每个源
+	// 重启后都会把**整份历史日志重读一遍并重投 VL**（源文件在生产上动辄几百 MB）。
+	// 用户裁定「直接读取到的往 vl 塞啊，内存队列满了就丢啊」——不承诺跨重启不丢，
+	// 也就不需要跨重启的游标。
+	//
+	// 旧的 `source.StartAtEOF` 分支（在账本里把 Read/Durable 水位推到 EOF）一并命去了：
+	// 那个机制表达的是「用账本水位间接告诉 tailer 从哪读」，现在 tailer 自己就錨在 EOF，
+	// 再由账本去表达只会多一套要维护的状态（而且水位推进本身需要账本跨重启存活才成立）。
+	//
+	// `source.StartAtEOF` 字段保留：`takeStartAtEOF` 仍会在实例规则升级时置位它，
+	// 而现在的语义是「规则变更源与其它源同一样锤 EOF」——两者结果一致，日志仍留一条痕迹。
 	if source.StartAtEOF && source.Mode == pipeline.ModeFilePrimary && source.Path != "" {
-		if fi, statErr := os.Stat(source.Path); statErr == nil && fi.Size() > 0 {
-			key := ledger.SourceKey{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration}
-			size := uint64(fi.Size())
-			// 位置推进到 EOF（读与持久化两侧都要，否则 tailer 会按旧水位回读）。
-			if err := led.AdvanceRead(key, size); err != nil {
-				return err
-			}
-			if err := led.AdvanceDurable(key, size); err != nil {
-				return err
-			}
-			// 登记段：基址留在 0、EndPos 记到当前文件大小。EndPos 是「该段已观察到多远」
-			// 的记账（轮转关联会读它），与 cursor 无关。
-			// 从文件末端开始采集时，逻辑 0 对应物理 0 恒成立，映射前提直接成立。
-			if err := led.RegisterSegment(key, ledger.Segment{
-				Path: source.Path, Kind: ledger.SegmentLive, StartPos: 0,
-				EndPos: size, PhysicalStart: 0, PhysicalMappingKnown: true,
-				ParserVersion: "acquire-v1",
-			}); err != nil {
-				return err
-			}
-		}
+		slog.Info("源起点：规则变更后从文件末尾开始采集（与全局 EOF 起点一致）",
+			"log_source_id", source.LogSourceID, "generation", source.SourceGeneration, "path", source.Path)
 	}
 	var deferred func()
 	var committed func(context.Context, []acquire.CommitIdentity) error
@@ -2997,6 +3011,11 @@ func (m *Manager) Register(source SourceConfig) error {
 		// #56：追加被拒（暂停/上限）不再在本路径内同步整窗重投，改为**调度**一次路径外排空
 		//（见 schedulePendingReplay：摄取路径内只登记待办 + 非阻塞唤醒）。
 		AppendRejected: func() { m.schedulePendingReplay(key) },
+		// 起点选择（2026-10-30 裁定 D）：
+		//   - 游标表里有这个源 ⇒ ResumeCursor 生效，从上次位置续读（重启不重复投递）；
+		//   - 没有（首次部署/换绑定）⇒ 从文件末尾起读，不回头吃别人的历史。
+		StartAtEOF:   true,
+		ResumeCursor: m.resumeCursorFor(key, source.Path),
 	})
 	if err != nil {
 		return err
@@ -3410,6 +3429,9 @@ func (m *Manager) pollOnce() {
 		// 采集轮**不为落库阻塞**：有界等待、超时交给后台持久化通道（见 persistHot 的说明）。
 		m.persistPollTail()
 	}
+	// 游标落盘与「脏不脏」无关：一个空的采集轮同样可能因为轮转把 cursor 归零了，
+	// 那正是最需要记住的时刻。flushCursorRegistry 内部再判一次有没有变化（无变化零磁盘 IO）。
+	m.flushCursorRegistry()
 }
 
 // archiveScanCycleMuWait 是归档扫描等待采集轮锁（cycleMu）的墙钟预算。

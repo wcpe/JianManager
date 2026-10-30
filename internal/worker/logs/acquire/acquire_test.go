@@ -780,59 +780,74 @@ func TestDeliveryPositionIgnoresOutOfOrderHoles(t *testing.T) {
 	}
 }
 
-// TestFileTailerCursorResume 崩溃后从账本 cursor 恢复续读。
-func TestFileTailerCursorResume(t *testing.T) {
+// TestFileTailerStartsAtHeadByDefault 构造函数的自然语义：从文件头读。
+// 生产向的「不重读历史」由 pipeline 组装处显式调 AnchorAtEOF 表达（见下一条用例）。
+func TestFileTailerStartsAtHeadByDefault(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "resume.log")
-	if err := os.WriteFile(path, []byte("r1\nr2\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	key := testKey("src-resume", "g1")
+	path := filepath.Join(dir, "head.log")
+	require.NoError(t, os.WriteFile(path, []byte("r1\nr2\n"), 0o644))
+	key := testKey("src-head", "g1")
 	led := ledger.New()
 	wal := NewWAL(led, key)
-	t1 := NewFileTailer(led, key, path, wal, NewLineHook())
-	evs, err := t1.Poll()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(evs) != 2 {
-		t.Fatalf("want 2, got %d", len(evs))
-	}
-	if err := wal.Append(evs...); err != nil {
-		t.Fatal(err)
-	}
-	if err := wal.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	saved := t1.LogicalPos()
 
-	// 追加新行，模拟重启：新建 tailer 从账本恢复。
-	if err := os.WriteFile(path, []byte("r1\nr2\nr3\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t2 := NewFileTailer(led, key, path, wal, NewLineHook())
-	// resume：逻辑位置与文件 cursor 均对齐 durable，不重复读取已耐久前缀。
-	if t2.LogicalPos() != saved {
-		t.Fatalf("resume logical pos want %d got %d", saved, t2.LogicalPos())
-	}
-	more, err := t2.Poll()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(more) != 1 {
-		t.Fatalf("resume must only emit new line r3, got %d", len(more))
-	}
-	if more[0].Message != "r3" {
-		t.Fatalf("want r3, got %q", more[0].Message)
-	}
-	// 新事件位置在 saved 之后，不与 r1/r2 重叠。
-	if more[0].Record.Start < saved {
-		t.Fatalf("new event must start at/after durable cursor %d, got %d", saved, more[0].Record.Start)
-	}
-	ent := led.Get(key)
-	if ent.Positions.Durable < saved {
-		t.Fatalf("durable %d < saved %d", ent.Positions.Durable, saved)
-	}
+	tailer := NewFileTailer(led, key, path, wal, NewLineHook())
+	require.Zero(t, tailer.LogicalPos(), "默认起点必须是文件头")
+	evs, err := tailer.Poll()
+	require.NoError(t, err)
+	require.Len(t, evs, 2)
+	require.NoError(t, wal.Append(evs...))
+	require.NoError(t, wal.Commit())
+}
+
+// TestFileTailerAnchorAtEOFDoesNotRereadHistory 锤住 P2.1 的核心契约。
+//
+// 索引库改 :memory: 后账本不跨重启存活 ⇒ 旧的「按四水位恢复 cursor」恒得 0 ⇒ 每个源
+// 重启后都会把整份历史日志重读并重投 VL。所以生产组装一律调 AnchorAtEOF：
+// **新 tailer 只采自己出生之后写入的字节。**
+//
+// 变异（人工验证过）：把 AnchorAtEOF 的 `t.cursor = size` 改回 0 ⇒ 本条转红（会重读历史）。
+func TestFileTailerAnchorAtEOFDoesNotRereadHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "latest.log")
+	history := "old-1\nold-2\nold-3\n"
+	require.NoError(t, os.WriteFile(path, []byte(history), 0o644))
+	key := testKey("src-eof-anchor", "g1")
+	led := ledger.New()
+	wal := NewWAL(led, key)
+
+	// “进程启动”：文件里已有三行历史，一律不读。
+	tailer := NewFileTailer(led, key, path, wal, NewLineHook())
+	require.NoError(t, tailer.AnchorAtEOF())
+	require.EqualValues(t, len(history), tailer.LogicalPos(), "锚点必须落在文件末尾")
+
+	evs, err := tailer.Poll()
+	require.NoError(t, err)
+	require.Empty(t, evs, "启动不得重读已经存在的历史内容")
+
+	// 此后写入的字节照常采到，且逻辑位置接着锚点往后走。
+	af, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = af.WriteString("fresh-1\n")
+	require.NoError(t, err)
+	require.NoError(t, af.Close())
+
+	evs2, err := tailer.Poll()
+	require.NoError(t, err)
+	require.Len(t, evs2, 1)
+	require.Equal(t, "fresh-1", evs2[0].Message)
+	require.EqualValues(t, len(history), evs2[0].Record.Start,
+		"新事件的逻辑位置必须接着锚点，不与历史重叠也不留空洞")
+}
+
+// TestFileTailerAnchorAtEOFMissingFile 文件尚未创建时不得报错。
+// 那时从 0 读起正是同一个语义：文件是新的，内容都是新写入的。
+func TestFileTailerAnchorAtEOFMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-yet.log")
+	key := testKey("src-eof-missing", "g1")
+	led := ledger.New()
+	tailer := NewFileTailer(led, key, path, NewWAL(led, key), NewLineHook())
+	require.NoError(t, tailer.AnchorAtEOF(), "文件不存在不得当成错误")
+	require.Zero(t, tailer.LogicalPos())
 }
 
 // TestWALPrunesReclaimedEntries 锁定 WAL 在 reclaim 推进后回收已覆盖条目（否则内存随采集总量线性增长）。
