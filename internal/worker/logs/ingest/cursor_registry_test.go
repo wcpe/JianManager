@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
@@ -16,8 +17,8 @@ import (
 func TestCursorRegistryRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ingest.cursor")
 	in := cursorRegistry{
-		"inst:1/g1": {Path: "/srv/inst1/logs/latest.log", DeviceID: 64768, Inode: 1234567, Cursor: 8192, LogicalPos: 40960},
-		"node:2/g3": {Path: "/var/log/worker.log", Cursor: 0, LogicalPos: 0},
+		"inst:1/g1": {SourceCursor: acquire.SourceCursor{Path: "/srv/inst1/logs/latest.log", DeviceID: 64768, Inode: 1234567, Cursor: 8192, LogicalPos: 40960}},
+		"node:2/g3": {SourceCursor: acquire.SourceCursor{Path: "/var/log/worker.log", Cursor: 0, LogicalPos: 0}},
 	}
 	require.NoError(t, saveCursorRegistry(path, in))
 
@@ -53,7 +54,7 @@ func TestCursorRegistryCorruptLineSkipped(t *testing.T) {
 // TestResumeCursorForRequiresMatchingPath 路径对不上就不给续读点（换绑定的源必须重新从 EOF 起）。
 func TestResumeCursorForRequiresMatchingPath(t *testing.T) {
 	m := &Manager{cursorRegistry: cursorRegistry{
-		"inst:1/g1": {Path: "/old/path.log", Cursor: 100},
+		"inst:1/g1": {SourceCursor: acquire.SourceCursor{Path: "/old/path.log", Cursor: 100}},
 	}}
 	require.Nil(t, m.resumeCursorFor("inst:1/g1", "/new/path.log"), "路径变了不得复用旧游标")
 	require.Nil(t, m.resumeCursorFor("inst:9/g1", "/old/path.log"), "没有游标返回 nil")

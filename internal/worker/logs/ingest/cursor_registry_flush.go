@@ -20,14 +20,51 @@ import (
 // loadCursorRegistryIntoManager 在 New 阶段把游标表读进内存。
 //
 // 读失败/文件不存在一律当空表：游标丢了最多重读一段，绝不能因此拒绝启动采集。
+//
+// 这张表同时还承担**源配置的跨重启载体**（见 cursorRegistryEntry 注释）：索引库是
+// `:memory:`，重启后 m.state 永远是空的，唯一记得「有哪些源」的持久面就是这里。
 func (m *Manager) loadCursorRegistryIntoManager() {
 	loaded := loadCursorRegistry(m.cursorRegistryPath())
 	m.cursorRegistryMu.Lock()
 	m.cursorRegistry = loaded
 	m.cursorRegistryMu.Unlock()
 	if n := len(loaded); n > 0 {
-		slog.Info("采集游标已加载（重启将从上次位置续读）", "sources", n, "path", m.cursorRegistryPath())
+		withSource := 0
+		for _, entry := range loaded {
+			if entry.Source != nil {
+				withSource++
+			}
+		}
+		slog.Info("采集游标已加载（重启将从上次位置续读）",
+			"sources", n, "withSourceConfig", withSource, "path", m.cursorRegistryPath())
 	}
+}
+
+// sourcesFromCursorRegistry 把游标表里「带源配置」的行转成源配置（key → SourceConfig）。
+//
+// 只返回**可重建**的行：
+//   - v1 行（没有源配置列）不返回——只恢复游标，不重建源；
+//   - 游标路径与源配置路径不一致的行不返回：那说明两者不是同一次写入的产物，
+//     按任一个重建都可能指向错的文件（宁可少一个源，也不建一个读错位置的源）。
+//
+// 实例源不在这里重算路径：重算靠 recalcInstanceSourceConfig（它需要 m.state.Instances，
+// 而内存索引重启后为空），由 New 的启动恢复循环统一处理。
+func (m *Manager) sourcesFromCursorRegistry() map[string]SourceConfig {
+	m.cursorRegistryMu.Lock()
+	defer m.cursorRegistryMu.Unlock()
+	out := make(map[string]SourceConfig, len(m.cursorRegistry))
+	for key, entry := range m.cursorRegistry {
+		if entry.Source == nil {
+			continue
+		}
+		if entry.Path != entry.Source.Path {
+			slog.Warn("采集游标行内路径与源配置路径不一致，跳过该源的恢复",
+				"source", key, "cursorPath", entry.Path, "sourcePath", entry.Source.Path)
+			continue
+		}
+		out[key] = *entry.Source
+	}
+	return out
 }
 
 // resumeCursorFor 取一个源的续读点；没有就返回 nil（调用方会退回 EOF 起点）。
@@ -41,14 +78,26 @@ func (m *Manager) resumeCursorFor(key, path string) *acquire.SourceCursor {
 	if !ok || c.Path != path {
 		return nil
 	}
-	out := c
+	out := c.SourceCursor
 	return &out
 }
 
-// flushCursorRegistry 把各源 tailer 的**当前**游标写回表中并落盘。
+// flushCursorRegistry 把各源 tailer 的**当前**游标与各源的**显式**配置写回表中并落盘。
 //
-// 由采集轮尾部调用（已有周期节拍）。任一步失败只记日志、不阻断采集：
+// 由采集轮尾部与 Stop 调用。任一步失败只记日志、不阻断采集：
 // 游标是可丢的优化，不是正确性前提。
+//
+// ## 为什么连源配置一起写
+//
+// 索引库是 `:memory:`，重启后源集合只能从这里恢复（见 cursorRegistryEntry）。
+// 不写它，游标就是一条「读到哪」但没人知道「读什么」的死数据。
+//
+// ## 为什么取 m.state.SourceConfigs（而不是 m.sources）
+//
+// m.sources 是**生效**配置（Charset/TimeZone 里可能混着继承来的节点默认），
+// m.state.SourceConfigs 才是**显式口径**（继承来的值不写回）。存的必须是后者：
+// 存生效值会把「本次继承了 gbk」固化成「该源显式配了 gbk」，之后改节点默认重启对
+// 这个源永不生效（TestNodeDefaultsFollowRestartAndExplicitValuesWin 第 1/2 轮吊销）。
 //
 // ## 锁序（必须遵守 pipeline.go 的纪律）
 //
@@ -58,22 +107,28 @@ func (m *Manager) resumeCursorFor(key, path string) *acquire.SourceCursor {
 // **绝不能在持 m.mu 时调 p.Cursor()**——那会构造 m.mu → p.mu 的边，与采集轮
 // （先经 cycleMu/registerMu 到 m.mu，再取 p.mu）形成反向等待，就是死锁形态。
 //
-// 所以这里分两步：(1) 持 m.mu 只把**管道指针切片**拷出来（O(源数)，微秒级）；
+// 所以这里分两步：(1) 持 m.mu 只把**管道指针切片与源配置副本**拷出来（O(源数)，微秒级）；
 // (2) 放锁后再逐源调 Cursor()。代价是快照可能包含一个刚被摘除的源——那无害：
-// 它的游标仍是一条真话，而 flush 只写“表”不写“源的存活状态”（源是否还在由 state 决定）。
+// 它的游标与配置仍是一条真话，而 flush 只写“表”不写“源的存活状态”。
 func (m *Manager) flushCursorRegistry() {
-	// 第 1 步：m.mu 内只拿指针。
+	// 第 1 步：m.mu 内只拿指针与显式配置副本。
 	m.mu.Lock()
 	type keyedPipe struct {
-		key  string
-		pipe *pipeline.Pipeline
+		key    string
+		pipe   *pipeline.Pipeline
+		source *SourceConfig
 	}
 	pipes := make([]keyedPipe, 0, len(m.pipes))
 	for key, p := range m.pipes {
 		if p == nil {
 			continue
 		}
-		pipes = append(pipes, keyedPipe{key: key, pipe: p})
+		item := keyedPipe{key: key, pipe: p}
+		if source, ok := m.state.SourceConfigs[key]; ok {
+			copy := source
+			item.source = &copy
+		}
+		pipes = append(pipes, item)
 	}
 	m.mu.Unlock()
 	if len(pipes) == 0 {
@@ -84,11 +139,12 @@ func (m *Manager) flushCursorRegistry() {
 	type entry struct {
 		key    string
 		cursor acquire.SourceCursor
+		source *SourceConfig
 	}
 	entries := make([]entry, 0, len(pipes))
 	for _, kp := range pipes {
 		if c, ok := kp.pipe.Cursor(); ok {
-			entries = append(entries, entry{key: kp.key, cursor: c})
+			entries = append(entries, entry{key: kp.key, cursor: c, source: kp.source})
 		}
 	}
 	if len(entries) == 0 {
@@ -104,8 +160,13 @@ func (m *Manager) flushCursorRegistry() {
 	}
 	changed := false
 	for _, e := range entries {
-		if prev, ok := m.cursorRegistry[e.key]; !ok || prev != e.cursor {
-			m.cursorRegistry[e.key] = e.cursor
+		next := cursorRegistryEntry{SourceCursor: e.cursor}
+		if e.source != nil {
+			copy := *e.source
+			next.Source = &copy
+		}
+		if prev, ok := m.cursorRegistry[e.key]; !ok || !sameCursorRegistryEntry(prev, next) {
+			m.cursorRegistry[e.key] = next
 			changed = true
 		}
 	}
@@ -114,11 +175,22 @@ func (m *Manager) flushCursorRegistry() {
 		return // 没变就不写盘：空转周期零磁盘 IO
 	}
 	snapshot := make(cursorRegistry, len(m.cursorRegistry))
-	for key, cursor := range m.cursorRegistry {
-		snapshot[key] = cursor
+	for key, entry := range m.cursorRegistry {
+		snapshot[key] = entry
 	}
 	m.cursorRegistryMu.Unlock()
 	if err := saveCursorRegistry(m.cursorRegistryPath(), snapshot); err != nil {
 		slog.Warn("采集游标落盘失败（下一轮重试）", "error", err)
 	}
+}
+
+// sameCursorRegistryEntry 判定两行在语义上是否一致（用于「没变就不写盘」）。
+func sameCursorRegistryEntry(a, b cursorRegistryEntry) bool {
+	if a.SourceCursor != b.SourceCursor {
+		return false
+	}
+	if a.Source == nil || b.Source == nil {
+		return a.Source == nil && b.Source == nil
+	}
+	return *a.Source == *b.Source
 }

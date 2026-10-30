@@ -2648,8 +2648,28 @@ func New(opts Options) (*Manager, error) {
 	for key, source := range m.state.SourceConfigs {
 		restoredSources[key] = source
 	}
+	// 源配置的跨重启载体（2026-10-30 第二轮）：索引库是 `:memory:`，重启后 m.state 是空的，
+	// 而实例源本来就不在 opts.Sources 里（它由 CP 登记时产生）——不从这里恢复，重启后
+	// `m.pipes` 就是 0，采集器“不知道该采哪个文件”（实测：SourceConfigs=0 pipes=0 游标表=1）。
+	//
+	// 恢复源与重建管道同处一个位置，不拆到两处：两边都是一个 key → 一份配置。
+	// 优先级依次为（后者覆盖前者）：
+	//	1. 索引里的持久配置（本进程内有效；重启后为空）
+	//	2. 游标表里的源登记（上次运行的显式口径，跨重启唯一来源）
+	//	3. Options.Sources（当次装配的显式配置）——**优先级最高**
+	//
+	// 为什么 opts.Sources 必须最高：它是当次进程的显式声明（worker.yml / 部署面），
+	// 历史记录不得覆盖当前声明——否则改了 yml 的路径重启后仍按旧路径采，现场无从解释。
+	registrySources := m.sourcesFromCursorRegistry()
+	for key, source := range registrySources {
+		restoredSources[key] = source
+	}
 	for _, source := range opts.Sources {
 		restoredSources[source.LogSourceID+"/"+source.SourceGeneration] = source
+	}
+	if len(restoredSources) > 0 {
+		slog.Info("采集源已恢复（启动重建）", "sources", len(restoredSources),
+			"fromCursorRegistry", len(registrySources), "fromOptions", len(opts.Sources))
 	}
 	keys := make([]string, 0, len(restoredSources))
 	for key := range restoredSources {
@@ -3178,6 +3198,13 @@ func (m *Manager) Stop() error {
 			slog.Warn("停止采集时关闭归档读取会话失败", "source", p.Key().String(), "error", err)
 		}
 	}
+	// 关停前把游标与源登记一起落盘：没有任何采集轮的进程（登记后立即停）也必须留下
+	// 自己的源，否则下一次启动就“不知道采哪个文件”。
+	//
+	// 调用位置：在全部管道 Flush 之后（此时 tailer.cursor 已推进到已处理字节）、
+	// 在 persist 与 CloseIndex 之前（不需要索引参与，读写的是独立的 ingest.cursor）。
+	// 锁状态：此处未持 m.mu（上面的 pipes 快照已释放），符合 flushCursorRegistry 的锁序纪律。
+	m.flushCursorRegistry()
 	// 关停落库：**有界尽力**（P0 复盘 2026-10-03 ✓）。
 	//
 	// 语义自检（改的是承诺的形状，不是数据安全 ✓）：

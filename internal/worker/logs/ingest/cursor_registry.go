@@ -16,10 +16,18 @@ package ingest
 //
 // ## 这个文件为什么不是「又一套账本」
 //
-// 它只存三样东西：path、inode（含 device）、文件内 cursor。
+// 它只存 path、inode（含 device）、文件内 cursor，以及**源登记所需的字段**。
 // 它**不记录**：投递证据、缺口、四水位、分段、暂停——那些一概没有。
-// 它唯一回答的问题是「上次读到这个文件的第几个字节」。所以它是一本 **offset registry**
-// （对齐 Filebeat 的 registry 文件 / Fluent Bit 的 db 语义），不是账本。
+// 它回答两个问题：这个源是谁（采哪个文件、属于哪个命名空间）、上次读到第几字节。
+// 所以它是一本 **offset registry**（对齐 Filebeat 的 registry 文件 / Fluent Bit 的 db 语义），
+// 不是账本。
+//
+// 2026-10-30 第二轮补充（源配置跨重启丢失，缺陷实证 `SourceConfigs=0 pipes=0 游标表=1`）：
+// 第一轮只存游标，默认「源配置由索引库负责」；而索引库同样是 `:memory:`，于是重启后
+// 游标记着「读到 12345 字节」，系统却不知道「读的是哪个文件」。因此每行加上了
+// 源登记字段（见 cursor_registry_row.go 的列布局）。加进来的只是「这个源是谁」与
+// 「读到哪」——一对必须同生共死的事实：分开存会出现「有游标无源」或「有源无游标」
+// 两种都必须特殊处理的半成品状态。
 //
 // ## 盘上开销
 //
@@ -29,10 +37,9 @@ package ingest
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
@@ -41,7 +48,32 @@ import (
 // cursorRegistry 是内存态的游标表：key = "log_source_id/source_generation"。
 //
 // 读写都在 Manager.mu 之外由调用方串行化（只会在登记路径与落库节拍上碰，不是高频路径）。
-type cursorRegistry map[string]acquire.SourceCursor
+type cursorRegistry map[string]cursorRegistryEntry
+
+// cursorRegistryEntry 是游标表的一行：**游标**（必有）+ **源配置**（可选，nil = 这一行不带）。
+//
+// ## 为什么源配置也要落在这里（2026-10-30 第二轮：源配置跨重启丢失）
+//
+// 第一轮（f5b882f0）只存了游标，理由是「源配置由索引库负责」。但 P1 之后索引库是
+// `:memory:` SQLite ⇒ 重启后 `m.state` 是空库 ⇒ `Register` 里 `m.state.Sources[key]`
+// 恒不命中，而实例源本来就不在 `opts.Sources` 里（那条路是 CP 登记时才产生的）⇒
+// 采集器重启后**根本不知道该采哪个文件**：游标里记着「读到第 12345 字节」，却没有
+// 任何地方记得「读的是哪个文件、属于哪个源」。实测探针：重启后
+// `SourceConfigs=0 pipes=0 游标表=1`。
+//
+// 于是这张表从纯粹的 offset registry 升为「offset + 源登记表」：它同时回答
+// 「采哪个文件」与「读到第几字节」，重启后据此把源重建起来。代价是每源多约 80 字节。
+type cursorRegistryEntry struct {
+	// 游标部分内嵌：字段访问仍是 entry.Path / entry.Cursor，语义与第一轮完全一致。
+	acquire.SourceCursor
+	// Source 是**显式口径**的源配置（对应 m.state.SourceConfigs，不是 m.sources）。
+	//
+	// 为什么必须是显式口径而不是生效口径：Charset/TimeZone 的生效值里可能混着
+	// 「本次运行继承来的节点默认」，把它落进表里等于把继承值固化成显式值，之后改
+	// `log_ingest.time_zone` 重启对已登记源永不生效（defaults_restore_test.go 第 2 轮钉的
+	// 就是这个语义）。空串 = 跟随节点默认。
+	Source *SourceConfig
+}
 
 // cursorRegistryPath 返回游标文件路径（与索引库同目录，便于一起备份/清理）。
 func (m *Manager) cursorRegistryPath() string {
@@ -66,22 +98,11 @@ func loadCursorRegistry(path string) cursorRegistry {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// 格式：key<TAB>path<TAB>dev<TAB>ino<TAB>cursor<TAB>offset
-		fields := strings.Split(line, "\t")
-		if len(fields) != 6 {
+		key, entry, ok := parseCursorRegistryRow(strings.Split(line, "\t"))
+		if !ok {
 			continue // 单行坏不牵连整表：跳过它，其余照用
 		}
-		dev, err1 := strconv.ParseUint(fields[2], 10, 64)
-		ino, err2 := strconv.ParseUint(fields[3], 10, 64)
-		cursor, err3 := strconv.ParseInt(fields[4], 10, 64)
-		offset, err4 := strconv.ParseUint(fields[5], 10, 64)
-		if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
-			continue
-		}
-		out[fields[0]] = acquire.SourceCursor{
-			Path: fields[1], DeviceID: dev, Inode: ino,
-			Cursor: cursor, LogicalPos: offset,
-		}
+		out[key] = entry
 	}
 	return out
 }
@@ -102,10 +123,16 @@ func saveCursorRegistry(path string, reg cursorRegistry) error {
 		return err
 	}
 	w := bufio.NewWriter(f)
-	_, _ = w.WriteString("# jianmanager ingest cursor registry v1\n")
-	for key, c := range reg {
-		if _, err := fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\n",
-			key, c.Path, c.DeviceID, c.Inode, c.Cursor, c.LogicalPos); err != nil {
+	_, _ = w.WriteString(cursorRegistryHeaderV2 + "\n")
+	// 按 key 排序写：表本身无序，但固定顺序让「同内容两次写出的文件逐字节相同」，
+	// 排障时可以直接 diff 两次落盘结果（源数 20 量级，排序成本可忽略）。
+	keys := make([]string, 0, len(reg))
+	for key := range reg {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := writeCursorRegistryRow(w, key, reg[key]); err != nil {
 			_ = f.Close()
 			return err
 		}
