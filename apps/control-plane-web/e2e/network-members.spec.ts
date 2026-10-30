@@ -49,7 +49,10 @@ test.describe('群组服关系模型（mock 模式真浏览器）', () => {
     // 故端口占用改走详情态深链。
     await page.goto('/nodes?node=1')
     await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
-    await page.getByRole('button', { name: '端口', exact: true }).click()
+    // 【契约变更】原「端口」页签已并入「进程」（NodeDetailPane 的 DetailTab 注释：
+    // 「进程：受管实例的进程清单（含端口占用），原『实例』与『端口』两页签合并」）。
+    // 端口面板（ports.title=「端口占用」）与进程同屏挂在 process tab 下，直接断即可。
+    await page.getByRole('button', { name: '进程', exact: true }).click()
     await expect(page.getByText('端口占用')).toBeVisible()
     await expect(page.getByText('分配范围：server 25565+（每段 100 个）')).toBeVisible()
     await expect(page.getByText('survival-proxy')).toBeVisible()

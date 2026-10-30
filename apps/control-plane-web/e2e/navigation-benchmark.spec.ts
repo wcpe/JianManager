@@ -650,8 +650,12 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       await expect(drawer, `${route.label} 侧栏内部 drawer 可见`).toBeVisible()
       await expect(sidebar, `${route.label} 侧栏默认展开状态`).toHaveAttribute('data-state', 'expanded')
 
-      const collapseButton = page.locator('[data-slot="console-header"]').getByRole('button', { name: '收起侧栏' }).filter({ hasNotText: 'JianManager' })
-      await expect(collapseButton, `${route.label} 显式侧栏收起按钮唯一`).toHaveCount(1)
+      // 【契约变更】折叠入口**只有一处**：侧栏底部常驻开关（ConsoleHeader 里的那个已删除——
+      // 它在折叠态被条件卸载，正是「缩回去展不开」的成因；DashboardPage.layout.dom.test.tsx 断言其唯一）。
+      // 因此不能再用 [data-slot="console-header"] 限定，改按稳定的 data-testid 定位。
+      const collapseButton = page.getByTestId('sidebar-collapse-toggle')
+      await expect(collapseButton, `${route.label} 侧栏底部收起开关唯一且可见`).toHaveCount(1)
+      await expect(collapseButton).toBeVisible()
       const collapseProbe = await sidebarFrameStats(page)
       await collapseButton.click()
       // 控制端延迟超过侧栏 320ms 动画，验证探针不依赖断言恢复时机。
@@ -680,11 +684,14 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       // `renderCollapsed` 延迟切换图标轨，没有那两层。相关结构契约由 WorkspaceSidebar.dom.test.tsx 守。
       expect(collapseStats.contentFinalX, `${route.label} 收起结束内容区落到图标轨后`).toBeLessThanOrEqual(80)
 
-      // 展开入口在顶栏品牌区：新侧栏的折叠态是纯图标轨，没有旧侧栏那个 PanelLeftOpen 按钮。
-      const headerExpandButton = page.locator('[data-slot="console-header"]').getByRole('button', { name: '展开侧栏' })
-      await expect(headerExpandButton, `${route.label} 顶栏展开入口唯一`).toHaveCount(1)
+      // 展开入口**也在侧栏底部那个常驻开关上**——它按折叠态把标签切成「展开侧栏」
+      // （logoToggleLabelKey 的语义规则）。旧注释说「顶栏品牌区有展开入口」已不再成立：
+      // 顶栏品牌区现在是首页入口（nav.home），折叠入口只留底部一处，两种态都可用。
+      const expandButton = page.getByTestId('sidebar-collapse-toggle')
+      await expect(expandButton, `${route.label} 底部开关在折叠态转为展开入口`).toHaveCount(1)
+      await expect(expandButton).toHaveAttribute('aria-label', '展开侧栏')
       const expandProbe = await sidebarFrameStats(page)
-      await headerExpandButton.click()
+      await expandButton.click()
       // 控制端延迟超过侧栏 320ms 动画，验证探针可在慢速 CI 中保留完整结果。
       await page.waitForTimeout(400)
       const expandStats = await expandProbe.read()

@@ -50,8 +50,10 @@ test('日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页'
   await page.goto('/logs')
 
   await expect(page.getByRole('heading', { name: '日志中心' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '实时跟随' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '导出' })).toBeVisible()
+  // 「实时跟随」必须 exact：页头 help 问号的 aria-label 里也含这四个字（真源在 LogsPageView 的 description），
+  // 散写会命中两个按钮 → strict mode violation。
+  await expect(page.getByRole('button', { name: '实时跟随', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '导出', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '错误', exact: true })).toBeVisible()
   await expect(page.getByPlaceholder('搜索日志内容…')).toBeVisible()
 

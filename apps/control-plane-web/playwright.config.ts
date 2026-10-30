@@ -41,7 +41,7 @@ export default defineConfig({
    * 落在「元素 not found」，看不出是预算问题——本仓已有多处用例各自写
    * `test.setTimeout(120_000)` 来绕这个坑（instance-clone / bot-overview / render-cost 等）。
    *
-   * 提到 60 秒后，单个断言仍由 `expect.timeout`（15s）守住，**真正的缺陷依旧会失败**，
+   * 提到 60 秒后，单个断言仍由 `expect.timeout`（30s）守住，**真正的缺陷依旧会失败**，
    * 只是不再把「页面慢」报成「元素不存在」。个别确实多步且含多张截图的用例
    * 可以继续在用例内上调（如 120s）。
    */

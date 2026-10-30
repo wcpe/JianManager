@@ -18,7 +18,9 @@ test('侧栏入口进开源许可页 + 依赖清单渲染 + 搜索过滤 + 行�
 
   // 页头 + 返回按钮（带返回）
   await expect(page.getByRole('heading', { name: '开源许可' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '返回' })).toBeVisible()
+  // 页头右侧的「返回」（licenses.back=「返回」）。必须 exact：侧栏首页按钮的 aria-label
+  // 是 nav.home=「返回平台首页」，散写 '返回' 会同时命中两者 → strict mode violation。
+  await expect(page.getByRole('button', { name: '返回', exact: true })).toBeVisible()
 
   // 五类发行来源均有代表依赖，Java 来源不得静默漏扫。
   await expect(page.getByText('react', { exact: true }).first()).toBeVisible()
