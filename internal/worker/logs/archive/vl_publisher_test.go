@@ -2,7 +2,6 @@ package archive
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -38,7 +37,7 @@ func rehydratePublisherFixture(t *testing.T, priorConflict uint64) (*VLRehydrate
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/insert/jsonline":
-			payload, _ := io.ReadAll(r.Body)
+			payload := vlInsertBody(r)
 			writes = append(writes, payload)
 			w.WriteHeader(http.StatusOK)
 		case "/select/logsql/query":

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -75,7 +74,8 @@ func (f *reconcileVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// VL 真实服务提供 /health；夹具此前没有它——于是「VL 未就绪」这条路径从没被任何用例走过。
 		w.WriteHeader(http.StatusOK)
 	case "/insert/jsonline":
-		payload, _ := io.ReadAll(r.Body)
+		// gzip（vlsup 默认）：不解压则 parseReconcileRows 恒得 0 行，整套对账用例失去判别力。
+		payload, _ := vlInsertRequestBody(r)
 		f.mu.Lock()
 		fail := f.failInsert
 		drop := f.silentDropInsert

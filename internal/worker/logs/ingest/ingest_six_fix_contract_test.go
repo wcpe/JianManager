@@ -3,7 +3,6 @@ package ingest
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -539,7 +538,7 @@ func TestIngestSixFixLostActiveAppendRetryCannotExposeDuplicate(t *testing.T) {
 					lose := insertCount == 2
 					insertMu.Unlock()
 					if lose {
-						payload, readErr := io.ReadAll(r.Body)
+						payload, readErr := vlInsertRequestBody(r)
 						if readErr != nil {
 							http.Error(w, readErr.Error(), http.StatusBadRequest)
 							return

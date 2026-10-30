@@ -24,7 +24,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,7 +96,7 @@ func newPartialVerifyVL(t *testing.T) (*vlsup.Client, *partialVerifyVL) {
 		case "/health":
 			w.WriteHeader(http.StatusOK)
 		case "/insert/jsonline":
-			payload, _ := io.ReadAll(r.Body)
+			payload, _ := vlInsertRequestBody(r)
 			fixture.mu.Lock()
 			for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
 				var row map[string]any

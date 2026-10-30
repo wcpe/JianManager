@@ -277,12 +277,31 @@ func TestReplayWaitsForVLReady(t *testing.T) {
 	require.Equal(t, before, fixture.insertAttempts(),
 		"VL 未就绪时不得发起任何写入尝试（这正是现场 18+ 分钟失败重试的成因）")
 	require.Positive(t, m.RebuildStats().Failed, "VL 未就绪必须计为一次可见的重建失败")
-	m.mu.Lock()
-	require.True(t, m.state.Sources[key].PublicationPending || m.state.Sources[key].ProjectionGeneration != "",
-		"撤销的登记不得被当成「已重建」")
-	m.mu.Unlock()
 
-	// ③ 就绪后必须恢复工作（门禁不是永久关闭）。
+	// ③ **「登记过」与「被当成已重建」是两件事**——本节断言的是后者。
+	//
+	// 观测点为什么是**重建台账**而不是 `m.state.Sources`（2026-10-30 修正）：
+	// 上两段已经断言了「零写入尝试」，而 `m.state.Sources[key]` 这个条目正是**投递路径**
+	// （writeProjectionPlan 的 `saved := m.state.Sources[key]` 落地处）创建的——
+	// 「零写入」⇒ 条目按设计**不存在**。拿一个按设计为空的东西去证明「有痕迹」是拿错观测点，
+	// 那条断言于是恒为假（它从 d83824c6 引入起从未被执行过：种子阶段就死在别的断言上）。
+	//
+	// 真要有鉴别力，得看「这次撤销到底被判成了什么」：
+	//   - 台账必须真的跑过一次（`handled`：证明上面的 drain 不是空转）；
+	//   - 它必须**没有**以「零写入确认成功」（ConfirmedOnly）收尾——那才是「被当成已重建」；
+	//   - 也不能有完整成功（Err == nil 且无 Pending）。
+	// 三项合起来：登记了、跑了、没被当成成功。把 ensureVLReady 的提前 return 去掉（变异）
+	// 就能让最后两项之一破坏，本断言随之转红。
+	lastResult, handled := m.RebuildLastResult(key)
+	require.True(t, handled, "重建台账必须留下本轮结论（否则下面的断言无从谈起）")
+	require.NotNil(t, lastResult.Err, "VL 未就绪的撤销必须如实带错误结论，不得冒充成功")
+	require.False(t, lastResult.ConfirmedOnly,
+		"撤销的登记不得被当成「已确认发布」（零写入确认会清 pending，等于宣称已重建）")
+	require.True(t, lastResult.Pending)
+	require.Len(t, lastResult.Days, 0, "撤销不得回报任何「已发布的天」")
+	require.Zero(t, m.RebuildStats().Completed, "撤销不得计入完整成功")
+
+	// ④ 就绪后必须恢复工作（门禁不是永久关闭）。
 	// 这里清掉退避窗口：本用例测的是「就绪后能继续」，不是退避计时本身（退避由专门用例覆盖）。
 	fixture.setHealthy(true)
 	m.rebuilds.mu.Lock()

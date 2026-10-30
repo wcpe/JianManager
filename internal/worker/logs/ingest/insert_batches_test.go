@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -30,7 +29,7 @@ func TestInsertInBatchesSplitsLargePayload(t *testing.T) {
 	var mu sync.Mutex
 	requests, maxLines := 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, _ := vlInsertRequestBody(r)
 		lines := 0
 		sc := bufio.NewScanner(bytes.NewReader(body))
 		for sc.Scan() {

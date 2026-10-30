@@ -2,16 +2,36 @@ package vlsup
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
+)
+
+// 连接池默认值。
+//
+// 为什么需要显式 Transport（此前用 net/http 的默认 Transport）：默认 Transport 的
+// MaxIdleConnsPerHost 是 2，而采集侧是**多源并发投递**（pollConcurrency 默认 8，生产 60 源），
+// 每源每轮一次 POST + 若干次查询。空闲连接超出 2 条就被关掉、下一次请求重新 TCP 握手，
+// 等于把并发压回「2 条长连接轮流排队」。这与 2026-09-28 事故的观感一致：
+// 单请求耗时里含握手 + 首字节延迟，而 VL 就在 127.0.0.1 上、握手成本纯属浪费。
+const (
+	// defaultMaxIdleConnsPerHost 取并发投递的源数量级（8）的 4 倍余量。
+	// 取 32 而不是 8 的理由：一轮里每源还会发查询（探测/幂等过滤/缺口取证），
+	// 写入与查询共用同一池，按「并发源数 × 每源在飞请求数」的上界给，宁多不多少。
+	defaultMaxIdleConnsPerHost = 32
+	// defaultIdleConnTimeout 远大于采集轮周期（250ms ticker、轮级十几秒），
+	// 保证「上一轮用过的连接下一轮还在」，同时不让死连接长期占住 fd。
+	defaultIdleConnTimeout = 90 * time.Second
 )
 
 // ErrUnauthorized 表示 VL Basic-auth 未通过（401/403）。
@@ -60,6 +80,13 @@ type Client struct {
 	password string
 	hc       *http.Client
 	hq       *http.Client
+	// compress 开启 /insert/jsonline 请求体的 gzip 压缩（见 ClientOptions.DisableCompression）。
+	compress bool
+	// compressionRejected 是「VL 实测拒掉了 gzip 请求体」的进程内标记。
+	//
+	// 只在“重试未压缩形态成功”时置位：那是能证明「问题在压缩、不在数据」的唯一形态。
+	// 一旦置位，后续写入直接走未压缩形态（不再每次都白跑一趟被拒的请求）；重启复位。
+	compressionRejected atomic.Bool
 }
 
 // ClientOptions 构造 Client。
@@ -77,6 +104,17 @@ type ClientOptions struct {
 	QueryTimeout time.Duration
 	// AllowNonLoopback 仅测试使用：跳过 loopback 校验。生产必须保持 false。
 	AllowNonLoopback bool
+	// DisableCompression 关闭 /insert/jsonline 请求体的 gzip 压缩（默认开启）。
+	//
+	// 为什么默认开：NDJSON 投影行的重复度极高（同一批的 log_source_id /
+	// projection_generation / parser_version 等字段完全重复），实测 200 × 326B 的批
+	// 压到 895B（约 73×）。写入是本仓唯一的高频对外请求，省下的字节直接换成 VL 侧的
+	// 解压/解析压力下降。
+	//
+	// 为什么要留开关：传输层优化不该成为采集失败的单点。VL 侧若不接受
+	// `Content-Encoding: gzip`（历史版本或改配），运维可以用它退回不压缩形态，
+	// 而不必改代码（见 InsertJSONLines 的退回逻辑）。
+	DisableCompression bool
 }
 
 // NewClient 构造 localhost VL 客户端。BaseURL 可注入以便单元测试。
@@ -98,7 +136,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	hc := opts.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Timeout: 5 * time.Second}
+		hc = &http.Client{Timeout: 5 * time.Second, Transport: newTransport()}
 	}
 	// 查询客户端：与写入分离，避免「扫全天的校验查询」被 5s 写入超时误杀。
 	hq := opts.HTTPClient
@@ -107,7 +145,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		if qt <= 0 {
 			qt = 60 * time.Second
 		}
-		hq = &http.Client{Timeout: qt}
+		hq = &http.Client{Timeout: qt, Transport: newTransport()}
 	}
 	return &Client{
 		baseURL:  strings.TrimRight(raw, "/"),
@@ -115,7 +153,29 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		password: opts.Password,
 		hc:       hc,
 		hq:       hq,
+		compress: !opts.DisableCompression,
 	}, nil
+}
+
+// newTransport 构造带连接池的 Transport（写入与查询各一只，互不影响对方的空闲计数）。
+//
+// 除连接池参数外一律沿用 net/http 的默认值（DialContext 超时、TLS 握手超时、HTTP/2、
+// Proxy 等）：本客户端只面向 127.0.0.1 的 VL，默认值是经生产验证的，改它们只会引入
+// 新的超时面。
+func newTransport() *http.Transport {
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		clone := base.Clone()
+		clone.MaxIdleConns = defaultMaxIdleConnsPerHost
+		clone.MaxIdleConnsPerHost = defaultMaxIdleConnsPerHost
+		clone.IdleConnTimeout = defaultIdleConnTimeout
+		return clone
+	}
+	// 理论上不可达（DefaultTransport 恒为 *http.Transport）；退化为手搭等价配置。
+	return &http.Transport{
+		MaxIdleConns:        defaultMaxIdleConnsPerHost,
+		MaxIdleConnsPerHost: defaultMaxIdleConnsPerHost,
+		IdleConnTimeout:     defaultIdleConnTimeout,
+	}
 }
 
 // BaseURL 返回注入的 base URL。
@@ -276,16 +336,71 @@ func (c *Client) streamWithBudget(ctx context.Context, path string, query url.Va
 }
 
 // InsertJSONLines 将规范事件以 NDJSON 投递到 Worker 本地 VL。
-// 调用方仍需单独记录请求状态和可见性核验，HTTP 2xx 不构成逐记录耐久证明。
+// 调用方仍需单独记录请求状态：HTTP 2xx 是 VL **接收**的确认（写入账本的唯一依据），
+// 不是逐记录耐久性证明。
+//
+// 请求体默认 gzip 压缩（`Content-Encoding: gzip`）：VL v1.52.0 实测接受该形态并把数据
+// 正常入库（用 curl 单独验过：200 且 `/select/logsql/query` 可查回，原文 65090B → 线上 895B）。
+// 开关见 ClientOptions.DisableCompression。
+//
+// **退回不压缩**：若压缩体被 VL 以“看不懂的请求体”类状态码（400 / 415）拒掉，本函数
+// 会改用未压缩形态**重试一次**，并根据重试结果判定责任归谁：
+//   - 重试成功 ⇒ 确实是压缩兼容性问题 ⇒ 本进程内永久退回不压缩（打 WARN）；
+//   - 重试也失败 ⇒ 数据本身有问题（比如工端发来了一行非法 JSON）⇒ **不动**压缩状态，
+//     原样返回该错误，不让一次偶发的脏数据把压缩永久关掉。
+//
+// 为什么需要这个退回：传输层优化不该成为采集失败的单点。VL 侧解压支持一旦因改版/改配
+// 消失，采集应该继续跑（以未压缩形态），而不是全线停摆。
+// 重试是否安全：非 2xx 意味着 VL 未接收该批；即使有部分接收，重发幂等由 event_id 承担。
 func (c *Client) InsertJSONLines(ctx context.Context, lines []byte) (int, error) {
 	if c == nil {
 		return 0, fmt.Errorf("vlsup: nil client")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/insert/jsonline", bytes.NewReader(lines))
+	body, compressed := lines, false
+	if c.compressionEnabled() && len(lines) > 0 {
+		if encoded, err := gzipPayload(lines); err == nil {
+			body, compressed = encoded, true
+		}
+		// 压缩失败不是投递失败：退回不压缩形态（传输层优化不得成为采集失败的单点）。
+	}
+	status, err := c.insertOnce(ctx, body, compressed)
+	if err == nil || !compressed || !isEncodingRejected(status) {
+		return status, err
+	}
+	plainStatus, plainErr := c.insertOnce(ctx, lines, false)
+	if plainErr == nil {
+		c.compressionRejected.Store(true)
+		slog.Warn("VL 不接受 gzip 压缩的写入请求体，本进程内已退回不压缩形态",
+			"path", "/insert/jsonline", "gzipStatus", status,
+			"hint", "如需再次开启，重启 Worker 或检查 VL 版本/压缩支持")
+	}
+	return plainStatus, plainErr
+}
+
+// compressionEnabled 返回当前是否应当压缩：开关打开且尚未被 VL 实测拒绝。
+func (c *Client) compressionEnabled() bool {
+	return c.compress && !c.compressionRejected.Load()
+}
+
+// isEncodingRejected 判定“压缩体被拒”的候选状态码。
+//
+// 400 是 VL 对不可解析请求体的通用回应（含“这堆字节不是合法 NDJSON” —— 压缩体未解就会
+// 长这样）；415 是标准的 Unsupported Media Type。两者都会诱使调用方把“压了一个能解释的错”
+// 误当作“数据有问题”去判定，所以必须先排除。
+func isEncodingRejected(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusUnsupportedMediaType
+}
+
+// insertOnce 发一次写入请求。compressed 为 true 时声明 Content-Encoding: gzip。
+func (c *Client) insertOnce(ctx context.Context, body []byte, compressed bool) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/insert/jsonline", bytes.NewReader(body))
 	if err != nil {
 		return 0, fmt.Errorf("vlsup: build insert request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/stream+json")
+	if compressed {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 	if c.username != "" || c.password != "" {
 		token := base64.StdEncoding.EncodeToString([]byte(c.username + ":" + c.password))
 		req.Header.Set("Authorization", "Basic "+token)
@@ -295,14 +410,30 @@ func (c *Client) InsertJSONLines(ctx context.Context, lines []byte) (int, error)
 		return 0, fmt.Errorf("vlsup: insert request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return resp.StatusCode, fmt.Errorf("%w: insert status %d", ErrUnauthorized, resp.StatusCode)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return resp.StatusCode, fmt.Errorf("vlsup: insert status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return resp.StatusCode, fmt.Errorf("vlsup: insert status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return resp.StatusCode, nil
+}
+
+// gzipPayload 返回 lines 的 gzip 压缩形态（NDJSON 重复字段多，压率极高）。
+func gzipPayload(lines []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	// 预分配：压缩后通常不到原文的 1/10，按 1/8 给初始容量，避免多次扩容。
+	buf.Grow(len(lines)/8 + 64)
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(lines); err != nil {
+		_ = zw.Close()
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // Post calls a localhost management endpoint with Basic auth and returns a

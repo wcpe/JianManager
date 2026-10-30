@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -56,7 +58,7 @@ func TestLoadSamplingThroughRealManagerWALAndDelivery(t *testing.T) {
 				case "/health":
 					w.WriteHeader(http.StatusOK)
 				case "/insert/jsonline":
-					payload, readErr := io.ReadAll(r.Body)
+					payload, readErr := vlInsertBodyForTest(r)
 					if readErr != nil {
 						w.WriteHeader(http.StatusBadRequest)
 						return
@@ -297,4 +299,28 @@ func TestLoadSamplingThroughRealManagerWALAndDelivery(t *testing.T) {
 			}
 		})
 	}
+}
+
+// vlInsertBodyForTest 返回一次 VL 写入请求的**解压后**正文。
+//
+// 为什么夹具必须走它（2026-10-30）：vlsup 客户端默认对 `/insert/jsonline` 请求体做 gzip 并
+// 声明 `Content-Encoding: gzip`。夹具若直接 `io.ReadAll(r.Body)`，拿到的就是压缩字节，
+// 按行解析必然得到 0 行 ⇒ 「投递身份已先持久化」等断言静默变成空断言（不是变红）。
+func vlInsertBodyForTest(r *http.Request) ([]byte, error) {
+	if r == nil || r.Body == nil {
+		return nil, nil
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") {
+		return raw, nil
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = zr.Close() }()
+	return io.ReadAll(zr)
 }

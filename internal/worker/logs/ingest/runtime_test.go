@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -202,7 +201,9 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		// VL 真实服务提供 /health；夹具此前没有它——于是「VL 未就绪」这条路径从没被任何用例走过。
 		w.WriteHeader(http.StatusOK)
 	case "/insert/jsonline":
-		payload, _ := io.ReadAll(r.Body)
+		// 请求体默认是 gzip（vlsup 客户端 2026-10-30 起）：夹具必须解压后再解析，
+		// 否则行数恒为 0 ⇒ 这一整套用例的断言全部静默失效（不是变红，是变成空格）。
+		payload, _ := vlInsertRequestBody(r)
 		f.mu.Lock()
 		f.writes = append(f.writes, payload)
 		f.refreshFixtureRowsLocked()
@@ -480,7 +481,7 @@ func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
 		if r.URL.Path == "/insert/jsonline" {
 			insertCount++
 			if insertCount == 2 {
-				payload, _ := io.ReadAll(r.Body)
+				payload, _ := vlInsertRequestBody(r)
 				fixture.mu.Lock()
 				fixture.writes = append(fixture.writes, payload)
 				fixture.mu.Unlock()

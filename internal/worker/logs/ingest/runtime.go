@@ -7621,58 +7621,29 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 			return pipeline.DeliveryResult{HTTPStatus: status}, archiveErr
 		}
 	}
-	mergedGenerations := []string{generation}
-	if !replace && expectedAuthority != nil {
-		for _, previous := range publishedSourceProjectionGenerations(expectedAuthority.PublishedProjection, source) {
-			mergedGenerations = appendUniqueGeneration(mergedGenerations, previous)
-		}
-	}
-	var generationScopes [][]string
-	if tailPlanned {
-		// 校验未来实际允许的并集；只验新代会把旧代响应未知的同ID物理行随高水位解封成重复。
-		generationScopes = [][]string{mergedGenerations}
-	}
-	var passedRuns []ledger.PositionRange
-	var verifyErr error
-	if writtenHint != nil && !writtenHint.allWritten {
-		passedRuns, verifyErr = m.verifyWrittenAttemptOnce(ctx, client, source, generation, writeEvents, generationScopes...)
-	} else {
-		passedRuns, verifyErr = m.verifyProjectionCtxYieldRuns(ctx, client, source, generation, writeEvents, yield, generationScopes...)
-	}
-	if verifyErr == nil && !tailPlanned && !replace && len(mergedGenerations) > 1 {
-		// 慢支先保留原代次全窗校验，再核对并集，不能用ID过滤掩盖新代中的未知额外行。
-		passedRuns, verifyErr = m.verifyProjectionCtxYieldRuns(ctx, client, source, generation, writeEvents, yield, mergedGenerations)
-	}
-	if verifyErr != nil {
-		// **渐进进展登记（2026-10-10 生产活锁修复，改动 A）**：本批被切成数百簇时，
-		// 单源预算只够跑完其中一部分；旧实现让**已通过的那些簇不留痕迹**，于是每轮都从
-		// 第 1 簇重来、永远跑不完（现场 `inst:220/file`：544205 事件 / 2000 ⇒ 272 簇，
-		// 单源预算 30s 而单簇查询 17–23s ⇒ 每轮只推进约 30 簇且下一轮归零，3.5 小时零进展）。
-		//
-		// 这里把**本次逐字段校验通过**的簇区间并进该源的持久凭据（见 recordVerifiedRuns）：
-		// 它是既有「投递成功」路径（resolveGapsLandedByDelivery）使用的**同一个**原语，
-		// 语义完全一致——只登记 err == nil 的簇，失败簇绝不进入（见 verifyProjectionCtxYieldRuns）。
-		// 于是「已校验覆盖」逐轮累积，即使单轮跑不完全部簇也能持续推进，而不是原地打转。
-		//
-		// 只做 best-effort：登记失败不影响本次结论（校验失败本身就是返回值，如实上报 ✓）。
-		if len(passedRuns) > 0 {
-			key := source.LogSourceID + "/" + source.SourceGeneration
-			m.recordVerifiedRuns(key, passedRuns)
-			slog.Info("投影校验部分通过：已登记本轮逐字段校验覆盖区间（下一轮只差剩余部分）",
-				"generation", generation, "source", source.LogSourceID,
-				"events", len(writeEvents), "passedRuns", len(passedRuns),
-				"verifiedRuns", len(m.verifiedRuns(key)), "err", verifyErr.Error())
-		}
-		// **显式标记「本次已成功写入 VL，但校验未通过」**（见 errProjectionVerifyFailed 的说明）：
-		// 这正是生产循环的形态（写完 573562 条 → 校验不过 → 换代次再写一遍），
-		// 重建调度器据此把它判为**确定性**失败并计上限。不依赖错误串匹配 ⇒ 不会随文案漂移失效。
-		if writtenHint != nil {
-			return pipeline.DeliveryResult{HTTPStatus: status}, fmt.Errorf("%w: %w", errWrittenReadOnlyVerify, verifyErr)
-		}
-		return pipeline.DeliveryResult{HTTPStatus: status}, fmt.Errorf(
-			"ingest: projection %s %w: %w", generation, errProjectionVerifyFailed, verifyErr)
-	}
-	if err := m.updateMaterialization(ctx, materialization, "verified", true, false, "逐字段校验成功；尚未发布，CAS失效仍保留成本"); err != nil {
+	// **投递主路径不做逐字段回查**（2026-10-30 改造）：HTTP 状态码即结论。
+	//
+	// 为什么（2026-09-28 与 2026-10-22 两次现场 + 60 源基线实测）：写完再“逐字段回查”
+	// 占了整轮墙钟的绝大多数——60 源逐源串行基线里 verify（VL 的 LogsQL 校验查询，含重试退避）
+	// =85.3s / 99.6s（85.6%，见 defaultPollConcurrency 的注释）。而它产出的结论只有两种：
+	// “查得到” ⇒ 发布；“查不到” ⇒ 把整批重写一遍再查一次。后一种形态一旦因 VL 负载偏高
+	// 而反复超时，就变成「写完 573562 条 → 校验不过 → 换代次再写一遍」的正反馈（VL 体积放大到 75×）。
+	//
+	// 现在的语义边界（与 Vector / Fluent Bit 那类官方采集器对齐）：
+	//   - 单批要么整批被 VL 接受（2xx）、要么整批失败（非 2xx / 传输错），由 insertInBatchesCtxYield
+	//     的返回决定；**没有第三种“写没写进去未知”的状态**，因为请求体是一次 POST 送完的；
+	//   - 事件重发幂等由 event_id 承担（VL 侧按 event_id 去重），所以“宁可重发”仍安全；
+	//   - 回收链只依赖 REQUEST_DONE（按 HTTP 状态码落，见 acquire 的 recordHTTPResultLocked），
+	//     不依赖本处的回查结果（VerifiedRuns 从未进入 ledger 包）；
+	//   - 逐字段核验仍保留在**取证路径**上（repairWrittenEarlierDebt / tryConfirmPendingPublication /
+	//     hot_retention_window / scoped_query_budget），那里面对的是“历史欠账是否真的在 VL 里”，
+	//     与“本批刚发出去的 POST 是否被接受”是两个问题，不可混为一谈。
+	//
+	// 因此这里只做一件事：把本次投递的成功当进展登记（HTTP 2xx 本身就是进展），
+	// 然后继续走发布。即使 VL 因某种原因“收下了但没入库”，后果也是“这批数据的可见性
+	// 只能由后续的取证路径确认”，而不是“整批重写”——保守方向由下游的 pending/debt 判据承担。
+	m.noteDeliveryProgress(source.LogSourceID + "/" + source.SourceGeneration)
+	if err := m.updateMaterialization(ctx, materialization, "verified", true, false, "VL 已受理本批写入（HTTP 2xx）；逐字段可见性核验不在投递主路径上，尚未发布，CAS失效仍保留成本"); err != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
 	checkWAL := !tailPlanned || (snapshot != nil && snapshot.checkPendingWAL)

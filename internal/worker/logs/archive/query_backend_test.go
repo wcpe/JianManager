@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -77,7 +76,7 @@ func TestRehydratePublishesOnlyAfterActualVLRowsAreVerified(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/insert/jsonline":
-			payload, _ := io.ReadAll(r.Body)
+			payload := vlInsertBody(r)
 			writes = append(writes, payload)
 			w.WriteHeader(http.StatusOK)
 		case "/select/logsql/query":
@@ -126,7 +125,7 @@ func TestRehydrateLostVLResponseAbandonsPhysicalGeneration(t *testing.T) {
 	var writes [][]byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/insert/jsonline" {
-			data, _ := io.ReadAll(r.Body)
+			data := vlInsertBody(r)
 			writes = append(writes, data)
 			if len(writes) == 1 {
 				conn, _, hijackErr := w.(http.Hijacker).Hijack()
@@ -204,7 +203,7 @@ func TestRehydrateDamagedObjectPersistsFailureAndCanRecover(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/insert/jsonline":
-			body, _ := io.ReadAll(r.Body)
+			body := vlInsertBody(r)
 			w.Header().Set("X-Test-Payload", string(body))
 			w.WriteHeader(http.StatusOK)
 		case "/select/logsql/query":

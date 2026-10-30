@@ -428,6 +428,38 @@ func (m *Manager) recordVerifiedRuns(key string, runs []ledger.PositionRange) {
 	m.recordVerifiedRunsReporting(key, runs)
 }
 
+// noteDeliveryProgress 把「一次投递被 VL 接受（HTTP 2xx）」登记为该源的**进展**。
+//
+// 为什么需要它（2026-10-30 投递主路径去回查的直接连带）：
+// 在此之前的「有进展」判据几乎全部来自 recordVerifiedRunsReporting——即「逐字段校验覆盖前进了」。
+// 而回查已从投递主路径上摘除（见 writeProjectionDay 的长注释），VerifiedRuns 从此只在取证路径上
+// 还会增长，于是自愈面的 verifiedCoverageEpoch 会几乎不再自增 ⇒ 自愈退避不再被「有进展」重置
+// ⇒ 渐进收敛被扼杀（gap_autoresolve.go 的 noteSelfHealStall 注释里明确写过的反向风险）。
+//
+// 因此这里补上**同一个单调代次**的另一个自增点：HTTP 2xx = VL 确实收下了这批字节 = 账本上
+// 确有一批数据前进了。这里**不改退避算法本身**（滞回、指数退避、上限一字不动），只把“什么算进展”
+// 的口径从“逐字段可见性前进了”放宽到“写入被接受了”——后者是前者的必要条件，不会把失败掩盖成进展。
+//
+// 有界性：与 verifiedCoverageEpoch 同锁（m.mu）、同键空间（源键）、单调递增（uint64）；
+// 不新增任何表，不随失败次数增长 ✓。
+func (m *Manager) noteDeliveryProgress(key string) {
+	if m == nil || key == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.verifiedCoverageEpoch == nil {
+		m.verifiedCoverageEpoch = map[string]uint64{}
+	}
+	m.verifiedCoverageEpoch[key]++
+	// 与 recordVerifiedRunsReporting 一致：进展必须**就地**解除退避。
+	//
+	// 为什么不能只丢给自愈面收尾：退避闸在自愈面**开头**（派发投递之前）判定，而本轮的
+	// 进展是由投递路径（deliver → writeProjectionDay → 本函数）登记的。若等到下一轮收尾才解
+	// 除，这一次调用早已被退避挡下（投递零次执行）⇒ 渐进收敛在退避期内整体停摆 ✗。
+	delete(m.selfHealBackoff, key)
+}
+
 // recordVerifiedRunsReporting 是 recordVerifiedRuns 的报告形态：返回本次是否**真的新增了覆盖**
 // （即校验进展），供自愈路径的退避判定使用（见 selfHealPausedSource 的"有进展不退避"约束）。
 //

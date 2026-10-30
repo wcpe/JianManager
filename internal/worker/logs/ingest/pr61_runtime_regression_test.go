@@ -3,7 +3,6 @@ package ingest
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 
@@ -35,12 +34,12 @@ func TestPR61OldReplayCompletionCannotClearNewPending(t *testing.T) {
 	latestEntered, latestRelease := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/insert/jsonline" {
-			payload, err := io.ReadAll(r.Body)
+			payload, err := vlInsertRequestBody(r)
 			if err != nil {
 				t.Error(err)
 				return
 			}
-			r.Body = io.NopCloser(bytes.NewReader(payload))
+			vlRewindInsertBody(r, payload)
 			if bytes.Contains(payload, []byte(`"projection_generation":"projection-2"`)) {
 				close(oldEntered)
 				<-oldRelease
