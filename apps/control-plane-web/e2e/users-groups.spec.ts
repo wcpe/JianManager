@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login, useClassicHome } from './helpers'
+import { login, pinClassicHome } from './helpers'
 
 /** 
  *用户与组管理能力补齐 · 单机（Playwright + mock 模式）验收。
@@ -36,7 +36,7 @@ test('用户/组 管理能力 + 角色权限说明', async ({ page }) => {
 
 test('真机流: 改密后新密码可登录', async ({ page }) => {
   // 本用例的就绪信号是经典首页（`[data-page="overview"]`），而 `/` 默认已改 AI 首页。
-  await useClassicHome(page)
+  await pinClassicHome(page)
   await login(page)
   await page.goto('/users')
   const opRow = page.getByRole('row').filter({ hasText: 'operator' })

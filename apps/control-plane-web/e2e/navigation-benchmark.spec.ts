@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login, useClassicHome } from './helpers'
+import { login, pinClassicHome } from './helpers'
 
 /**
  * 页面就绪等待上限。
@@ -96,7 +96,7 @@ async function resetConsoleLayout(page: Page): Promise<void> {
   })
   // `/` 的默认首页已改为 AI 首页，而本文件的首页基准用 `[data-page="overview"]`（经典首页）
   // 作就绪信号，故统一钉住首页模式。
-  await useClassicHome(page)
+  await pinClassicHome(page)
 }
 
 /** 

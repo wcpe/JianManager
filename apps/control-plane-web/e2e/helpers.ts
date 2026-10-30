@@ -31,8 +31,11 @@ export async function login(page: Page, username = 'admin', password = 'admin123
  * 而是靠登录后的默认落地 —— 那时已经没有“改 URL”的机会了。
  *
  * 必须在**任何导航之前**调用（`addInitScript` 在每次文档创建时都会跑，比 `evaluate` 可靠）。
+ *
+ * 【为何不叫 useXxx】它不是 React Hook，只是个 async 工具函数；但以 `use` 开头会被
+ * `react-hooks/rules-of-hooks` 当成 Hook（已在 navigation-benchmark 里报 error）。
  */
-export async function useClassicHome(page: Page): Promise<void> {
+export async function pinClassicHome(page: Page): Promise<void> {
   await page.addInitScript(() => {
     try {
       localStorage.setItem('console.homeMode', 'classic')
