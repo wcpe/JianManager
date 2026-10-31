@@ -1697,6 +1697,16 @@ func runWorker() {
 	// 重启后回到 log.level 配置值（见 retention.LogLevelController 的边界说明）。
 	// 这里正是 logLevelVar 注释里预留的接线点：此前它是 runWorker 的局部量、无任何可达入口。
 	wsMux.HandleFunc("/debug/log-level", retention.NewLogLevelController(logLevelVar).Handler())
+	// FR-511：HTTP 日志接收入口，对齐官方 VictoriaLogs 的 /insert/jsonline 端点。
+	// 挂在同一 127.0.0.1 回环 mux（localWSAddr 固定回环），不新增暴露面；跨机推送走 SSH 隧道。
+	// 复用现有 ingest 管道与 WAL（不新建存储、不开独立队列），事件经 NewJSONLineReceiver
+	// 注入到对应 PUSH_ONLY 源的 Pipeline.Ingest，继承 WAL 的攒批 / gzip / 背压 / 丢弃语义。
+	// logIngest 可能为 nil（采集运行时创建失败），此时不挂载该端点，避免「带类型的 nil」陷阱。
+	if logIngest != nil {
+		wsMux.HandleFunc("/insert/jsonline", ingest.NewJSONLineReceiver(logIngest, ingest.JSONLineReceiverOptions{
+			JWTSecret: wsTokenSecret,
+		}).ServeHTTP)
+	}
 
 	wsAddr := localWSAddr(wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}
