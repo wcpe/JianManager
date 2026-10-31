@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -272,13 +271,30 @@ func (r *JSONLineReceiver) decodeLines(logSourceID, generation string, raw []byt
 	return events, nil
 }
 
-// rangeFor 返回（必要时初始化）某源的单调游标指针，基底随机以降低跨重启撞车概率。
+// rangeFor 返回（必要时初始化）某源的单调游标指针。
+//
+// # 基底必须从 0 起（一次实测 bug 的修正，不要改回随机基底）
+//
+// 初版用 `rand.Uint64() % (1<<40)` 当基底，理由是「降低跨重启撞车概率」。
+// 它导致 **reclaim 恒为 0**：
+//
+//	ledger.contiguousDeliveryEnd 以 Positions.Delivery（初始 0）为 floor 往后扫，
+//	判据是「区间必须从 floor 处连续才能前进」：
+//	    if s.start > pos { if s.start == pos+1 { pos = s.start } else { break } }
+//	随机基底让首条记录落在 9e11 量级 ⇒ s.start != pos+1 ⇒ 直接 break
+//	⇒ Delivery 永不推进 ⇒ WAL 条目永不回收
+//	⇒ 推送源内存随总量线性增长，只能靠积压越界丢弃兜底。
+//
+// 跨重启撞车并不靠随机基底解决：event_id 含 source_generation，代次不同就不撞；
+// 同代次重投本就是**故意幂等**的（下游靠 event_id 去重）。
+// 真实保证是「游标从 0 起 + 同进程内严格递增」：重启后从 0 重来，
+// 重投区间与上次完全一致 ⇒ event_id 相同 ⇒ VL 侧去重，行为正确。
 func (r *JSONLineReceiver) rangeFor(logSourceID, generation string) *uint64 {
 	key := logSourceID + "/" + generation
 	if v, ok := r.ranges.Load(key); ok {
 		return v.(*uint64)
 	}
-	base := rand.Uint64() % (uint64(1) << 40) // 仅用于错开不同进程/源的起始，避免从 0 起步
+	base := uint64(0)
 	ptr := &base
 	actual, _ := r.ranges.LoadOrStore(key, ptr)
 	return actual.(*uint64)

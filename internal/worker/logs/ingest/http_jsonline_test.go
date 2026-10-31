@@ -11,6 +11,7 @@ package ingest
 //   - 变异验证 ≥2 处（见 TestJSONLineReceiverInvariants 注释）。
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -251,4 +252,63 @@ func TestJSONLineReceiverUnknownSource(t *testing.T) {
 // 二者均为"常驻对照"式变异点，运行不依赖任何外部故障注入。
 func TestJSONLineReceiverInvariants(t *testing.T) {
 	require.True(t, true, "变异验证点已分别由 TestJSONLineReceiverMalformedJSON / TestJSONLineReceiverBodyTooLarge 守卫")
+}
+
+// TestJSONLineReceiverWALReclaims 推送源必须能回收 WAL —— 否则内存会随推送无限增长。
+//
+// # 这条用例为什么这么写（一次修错留下的教训）
+//
+// 第一版直接调 p.TryReclaim() 断言 >0，结果恒为 0。查下来**不是产品 bug**：
+// 测试夹具用 SetDelivery 替换了整个投递动作，于是 acquire 层的 recordHTTPResults
+// 从未执行 ⇒ REQUEST_DONE 证据不存在 ⇒ 按设计就不该回收（否则会丢掉「已写入但没确认」的数据）。
+//
+// 所以正确的验证方式是：模拟真实路径的**两个步骤**——
+//   1. 投递动作发生（桩）；
+//   2. 投递结果落账（RecordDeliveryResult，真实实现）。
+// 两步都做过之后，reclaim 必须推进。这才证明 PUSH_ONLY 的伪 record 区间能喂进回收判据。
+func TestJSONLineReceiverWALReclaims(t *testing.T) {
+	m, p, spy := newPushSourceManager(t)
+	r := NewJSONLineReceiver(m, JSONLineReceiverOptions{})
+
+	const total = 50
+	for i := 0; i < total; i++ {
+		body := fmt.Sprintf(`{"message":"reclaim-%d"}`, i)
+		req := httptest.NewRequest(http.MethodPost,
+			"/insert/jsonline?log_source_id="+pushSourceID, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "第 %d 条推送应当成功", i)
+	}
+
+	deadline := time.Now().Add(waitEventTimeout)
+	for spy.total() < total && time.Now().Before(deadline) {
+		time.Sleep(pollStep)
+	}
+	require.Equal(t, total, spy.total(), "全部事件应当被投递")
+
+	// 关键一步：把投递结果落账（真实路径里由 DeliverQualified 内联完成，
+	// 但夹具用 SetDelivery 替换了整个动作，所以要显式补上这一步）。
+	events := spy.allEvents()
+	require.NoError(t, p.RecordDeliveryResult(context.Background(), events,
+		pipeline.DeliveryResult{HTTPStatus: 200}),
+		"投递结果必须能落账")
+
+	reclaimed, err := p.TryReclaim()
+	require.NoError(t, err, "推送源必须能推进 reclaim")
+	require.Greater(t, reclaimed, uint64(0),
+		"投递+落账之后 reclaim 必须往前走（恒为 0 意味着 WAL 永不释放）")
+
+	remaining, _ := p.WAL().Backlog()
+	require.Less(t, remaining, int64(total),
+		"回收后 WAL 积压必须下降（当前 %d/%d）", remaining, total)
+	t.Logf("推送 %d 条：reclaim=%d，剩余积压 %d 条", total, reclaimed, remaining)
+}
+
+// allEvents 返回已投递事件的拷贝，供回收测试喂给 RecordDeliveryResult。
+func (s *pushDeliverySpy) allEvents() []logtypes.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]logtypes.Event, len(s.all))
+	copy(out, s.all)
+	return out
 }
