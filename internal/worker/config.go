@@ -66,7 +66,9 @@ type Config struct {
 	LogQuery        LogQueryConfig    `mapstructure:"log_query"`
 	LogVL           LogVLConfig       `mapstructure:"log_vl"`
 	LogCapacity     LogCapacityConfig `mapstructure:"log_capacity"`
-	LogSources      []LogSourceConfig `mapstructure:"log_sources"`
+	// LogSpool 是 VL 不可用时的磁盘缓冲（FR-510）。
+	LogSpool   LogSpoolConfig    `mapstructure:"log_spool"`
+	LogSources []LogSourceConfig `mapstructure:"log_sources"`
 	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
 	LogReconcile LogReconcileConfig `mapstructure:"log_reconcile"`
 	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
@@ -816,6 +818,88 @@ const DefaultMaxWALEntries int64 = 5000
 // 一次自我制造的流量尖峰。限速只把尖峰摊成若干轮（采集轮持续在跑），未发的条目留在
 // WAL 与位置账本里，**不丢数据**。
 const DefaultMaxReplayEventsPerDrain int = 500
+
+// LogSpoolConfig 是 VL 不可用时的磁盘缓冲配置（FR-510）。
+//
+// # 默认关闭
+//
+// 它只在「VL 挂了几分钟」这类场景下救回本来会被 WAL 丢掉的条目；
+// 但它是采集侧唯一会写磁盘的路径，而生产盘是机械盘、且 2026-10-30 已裁定
+// 采集侧不做 fsync 落盘。所以默认关闭，由运维显式开启并承担那块磁盘占用。
+//
+// # 边界（必须写清，否则会误以为开了就「绝不丢」）
+//
+// 它只把「VL 重启几分钟」从丢日志变成不丢。VL 挂很久、缓冲写满之后仍然丢最旧，
+// 与官方 vlagent 的 -remoteWrite.maxDiskUsagePerURL 语义一致。
+type LogSpoolConfig struct {
+	// Enabled 是否启用。
+	Enabled bool `mapstructure:"enabled"`
+	// Path 缓冲文件路径。
+	//
+	// 相对路径**相对 Worker 数据根**（不是进程 cwd）：运维写 `var/log/ingest.spool`
+	// 即可，不必把宿主绝对路径硬编码进配置文件。绝对路径原样使用。
+	Path string `mapstructure:"path"`
+	// CapacityBytes 数据区字节数，默认 100MiB。
+	CapacityBytes int64 `mapstructure:"capacity_bytes"`
+	// MaxRecordBytes 单条 payload 上限，默认 1MiB。
+	MaxRecordBytes int `mapstructure:"max_record_bytes"`
+}
+
+// DefaultLogSpoolCapacity 磁盘缓冲默认容量：100MiB。
+//
+// 取值依据：100MiB ÷ 平均 2KB/条 ≈ 5 万条；生产 19 源在正常负载下 VL 重启几分钟
+// 产生的量远低于此。再大就变成「用机械盘做一个不可靠队列」，得不偿失。
+const DefaultLogSpoolCapacity int64 = 100 << 20
+
+// DefaultLogSpoolMaxRecord 单条上限 1MiB（与 spool 包默认一致）。
+const DefaultLogSpoolMaxRecord = 1 << 20
+
+// spoolPathUnset 表示未配置路径时用的相对路径（相对数据根）。
+const spoolPathUnset = "var/log/ingest.spool"
+
+// ResolveSpoolPath 把配置里的缓冲路径解析成**绝对路径**。
+//
+// base 是 Worker 数据根（dataroot.Root.Base()）。相对路径相对它解析，不是相对进程 cwd——
+// 后者会随 systemd 的 WorkingDirectory 变化，运维写配置时无法预期落到哪。
+// 绝对路径原样返回。
+//
+// 为什么 base 从外面传而不是在这里读 cfg：数据根不是配置字段（它可以被 --data-dir
+// 或环境变量覆盖），由装配层在拿到 Root 之后传进来才是唯一真源。
+func (c *Config) ResolveSpoolPath(base string) string {
+	if c == nil {
+		return ""
+	}
+	p := strings.TrimSpace(c.LogSpool.Path)
+	if p == "" {
+		p = spoolPathUnset
+	}
+	if filepath.IsAbs(p) {
+		return p
+	}
+	base = strings.TrimSpace(base)
+	if base == "" {
+		// 没给数据根：保持原样（相对路径），由调用方决定落在哪。
+		// 不在这里偷偷用 cwd 或临时目录——那会产出运维找不到的缓冲文件。
+		return p
+	}
+	return filepath.Join(base, p)
+}
+
+// EffectiveSpoolCapacity 返回数据区容量；非正值回退默认。
+func (c *Config) EffectiveSpoolCapacity() int64 {
+	if c == nil || c.LogSpool.CapacityBytes <= 0 {
+		return DefaultLogSpoolCapacity
+	}
+	return c.LogSpool.CapacityBytes
+}
+
+// EffectiveSpoolMaxRecord 返回单条上限；非正值回退默认。
+func (c *Config) EffectiveSpoolMaxRecord() int {
+	if c == nil || c.LogSpool.MaxRecordBytes <= 0 {
+		return DefaultLogSpoolMaxRecord
+	}
+	return c.LogSpool.MaxRecordBytes
+}
 
 type LogCapacityConfig struct {
 	MaxWALBytes uint64 `mapstructure:"max_wal_bytes"`
@@ -2093,6 +2177,10 @@ func Load(path string) (*Config, error) {
 	// 2026-10-29：冷热双层废除后这 4 个键已删（结构体字段不存在）。
 	// 此处不再写它们的 SetDefault——那只会造成「键还在」的错觉；viper 对未知键不报错，
 	// 旧 worker.yml 里留着它们也不会出问题。
+	v.SetDefault("log_spool.enabled", false)
+	v.SetDefault("log_spool.path", spoolPathUnset)
+	v.SetDefault("log_spool.capacity_bytes", DefaultLogSpoolCapacity)
+	v.SetDefault("log_spool.max_record_bytes", DefaultLogSpoolMaxRecord)
 	v.SetDefault("log_capacity.max_wal_bytes", DefaultMaxWALBytes)
 	v.SetDefault("log_capacity.recovery_quota_factor", 4)
 	v.SetDefault("log_capacity.recovery_drain_grace", "30m")

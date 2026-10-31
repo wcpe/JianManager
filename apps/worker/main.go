@@ -47,6 +47,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
+	"github.com/wcpe/JianManager/internal/worker/logs/spool"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/orphanaudit"
@@ -1358,6 +1359,38 @@ func runWorker() {
 			logIngest = manager
 			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
+			// FR-510：磁盘缓冲（VL 不可用时把即将被丢弃的 WAL 条目先写盘）。
+			//
+			// 默认关闭——它是采集侧唯一会写磁盘的路径，而生产盘是机械盘、
+			// 且 2026-10-30 已裁定采集侧不做 fsync。开关由运维显式打开。
+			//
+			// 路径解析：相对路径相对 Worker 数据根（不是进程 cwd）。
+			// 配 `var/log/ingest.spool` 即落在 <dataRoot>/var/log/ingest.spool，
+			// 运维不必把宿主绝对路径硬编码进配置文件。
+			if cfg.LogSpool.Enabled {
+				spoolPath := cfg.ResolveSpoolPath(root.Base())
+				sp, spoolErr := spool.Open(spoolPath, spool.Options{
+					Capacity:  cfg.EffectiveSpoolCapacity(),
+					MaxRecord: cfg.EffectiveSpoolMaxRecord(),
+				})
+				if spoolErr != nil {
+					// 不因缓冲打不开而拒绝启动采集：缓冲是「额外的救命层」，
+					// 它的失败不该让本来能跑的采集停摆。
+					slog.Error("磁盘缓冲打开失败，本次启动不使用缓冲（采集继续，VL 不可用时仍会丢最旧）",
+						"path", spoolPath, "error", spoolErr)
+				} else {
+					spoolMetricsSource = spoolAdapter{s: sp}
+					manager.AttachSpool(sp)
+					rc := sp.Recovered()
+					slog.Info("磁盘缓冲已启用",
+						"path", spoolPath,
+						"capacity", cfg.EffectiveSpoolCapacity(),
+						"recoveredRecords", rc.Records,
+						"recoveredStop", rc.Stopped.String())
+				}
+			} else {
+				slog.Info("磁盘缓冲未启用（log_spool.enabled=false）：VL 不可用且 WAL 到上限时会丢最旧条目")
+			}
 			// FR-502 §3.4：把 log_sources 配置接线到实例注册路径。
 			// 按实例的日志命名空间（inst:<id>）匹配配置条目，命中时以其 path
 			// 覆盖规则默认路径（运维在节点侧的显式配置优先于 CP 推导的规则）。
