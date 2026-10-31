@@ -923,6 +923,20 @@ func validateLogSources(sources []LogSourceConfig) error {
 			cat != string(logtypes.SourceInstance) && cat != string(logtypes.SourceWorker) && cat != string(logtypes.SourceNode) {
 			return fmt.Errorf("%s.source_category = %q 非法：只接受 instance / worker / node（留空按 instance）", where, cat)
 		}
+		// 采集模式白名单校验（与 pipeline.AcquireMode 的合法值逐字一致：worker.yml 直接写
+		// 字面量 FILE_PRIMARY / STDIO_PRIMARY / PUSH_ONLY，由 main.go 透传为 pipeline.AcquireMode）。
+		// 空串沿用 FILE_PRIMARY（pipeline 默认值）。PUSH_ONLY 为纯接收源（FR-511 的 HTTP 端点）：
+		// 不读取任何物理文件，因此允许 path 为空——它走自己的 ledger+WAL，事件经 Ingest 注入。
+		mode := strings.TrimSpace(s.Mode)
+		if mode != "" && mode != "FILE_PRIMARY" && mode != "STDIO_PRIMARY" && mode != "PUSH_ONLY" {
+			return fmt.Errorf("%s.mode = %q 非法：只接受 FILE_PRIMARY / STDIO_PRIMARY / PUSH_ONLY（留空按 FILE_PRIMARY）", where, s.Mode)
+		}
+		if mode == "FILE_PRIMARY" && strings.TrimSpace(s.Path) == "" {
+			return fmt.Errorf("%s.mode = FILE_PRIMARY 必须有 path（采集文件的绝对路径）", where)
+		}
+		if mode == "PUSH_ONLY" && strings.TrimSpace(s.Path) != "" {
+			return fmt.Errorf("%s.mode = PUSH_ONLY 为纯接收源，不应配置 path（事件经 HTTP 注入）", where)
+		}
 		if _, dup := seen[id]; dup {
 			return fmt.Errorf("%s.log_source_id = %q 与前面的源重复：同一源不能登记两次", where, s.LogSourceID)
 		}

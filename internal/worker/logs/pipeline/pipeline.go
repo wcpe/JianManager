@@ -314,6 +314,17 @@ func New(opts Options) (*Pipeline, error) {
 			Kind:          ledger.SegmentStdio,
 			ParserVersion: src.ParserVersion,
 		})
+	case ModePushOnly:
+		// 纯推送接收源：不读取任何物理载体，无 tailer、无 reader。
+		// 事件只经 Pipeline.Ingest 从外部（HTTP 接收端点等）注入。
+		// 这里只登记一个纯逻辑分段（不绑定文件路径），让 ledger 的回收 / 对账口径有归属。
+		_ = led.RegisterSegment(key, ledger.Segment{
+			Path:          "push://" + key.LogSourceID + "/" + key.SourceGeneration,
+			Kind:          ledger.SegmentStdio,
+			ParserVersion: src.ParserVersion,
+		})
+	default:
+		return nil, fmt.Errorf("pipeline: unsupported mode %q", mode)
 	}
 	if opts.ReadLimits != nil {
 		if err := p.SetReadLimits(*opts.ReadLimits); err != nil {
@@ -632,6 +643,10 @@ func (p *Pipeline) pollLocked() ([]logtypes.Event, error) {
 			return p.pollFile()
 		}
 		return p.pollStdio()
+	case ModePushOnly:
+		// 纯推送源没有物理读取：主动 Poll 永远无新事件。
+		// 事件由外部经 Pipeline.Ingest 注入，回收 / 对账水位也只由 Ingest 路径推进。
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("pipeline: unsupported mode %q", p.mode)
 	}
@@ -990,6 +1005,15 @@ func (p *Pipeline) DeliveryState() logtypes.DeliveryState {
 
 // Stats 返回 normalize 统计（事件数与行数分列）。
 func (p *Pipeline) Stats() normalize.Stats { p.mu.Lock(); defer p.mu.Unlock(); return p.bound.Stats() }
+
+// Ingest 把外部注入的事件送入本源的 WAL，并继承既有攒批 / gzip / 流标签 / 容量门禁 / 背压 /
+// 丢弃语义。它是「推送接收」（如 FR-511 的 HTTP /insert/jsonline 端点）把事件注入既有管道的
+// 唯一正向入口：复用与文件源完全相同的 WAL，不另开队列、不绕过内存上限保护。
+//
+// 本方法直接委派给内部 acquire.Pipeline.Ingest —— 真正的「Append → 容量门禁 → 提交 → 投递」
+// 都在那里发生；管道自己的 ledger / 回收 / 对账水位也只由这条路径推进。调用方必须保证传入的
+// 事件已具备合法且互不重叠的 record 区间（同一源内 event_id 由 record 区间决定，见 logtypes）。
+func (p *Pipeline) Ingest(events []logtypes.Event) error { return p.inner.Ingest(events) }
 
 // EnsurePathFile 便捷：校验 FILE_PRIMARY 路径存在。
 func EnsurePathFile(path string) error {
