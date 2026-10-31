@@ -35,6 +35,17 @@ const (
 	MetricNodeNetRxRate = "node_net_rx_rate"
 	MetricNodeNetTxRate = "node_net_tx_rate"
 	MetricNodeLoad      = "node_load" // 1 分钟 load average（FR-062）
+	// MetricNodeMemPct / MetricNodeDiskPct 是内存与磁盘的**利用率百分比**（0-100，FR-485）。
+	//
+	// 为什么需要单独指标而不是让告警自己算 used/total：
+	// 告警规则引擎只支持「单个指标值与阈值比较」（见 alert_evaluator 的
+	// evaluateNodeMetricRule），不支持跨两个指标的除法。如果不在落库时算好百分比，
+	// 内存/磁盘的高水位告警就根本写不出来——只能写绝对字节阈值，
+	// 而节点之间磁盘大小差异很大，同一个字节阈值在一个节点上是告警、在另一个上是常态。
+	//
+	// 量纲与 node_cpu_pct 一致（都是 0-100 的百分比），可直接参与百分比触发。
+	MetricNodeMemPct  = "node_mem_pct"
+	MetricNodeDiskPct = "node_disk_pct"
 	// MetricNodeIOWait 是 CPU 等 IO 的占比（pct，FR-485）。
 	// 与 cpu_pct 同为 0..100 的百分比量纲，可直接参与百分比触发。
 	MetricNodeIOWait = "node_iowait"
