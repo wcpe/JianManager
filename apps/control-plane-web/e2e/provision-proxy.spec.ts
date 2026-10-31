@@ -31,7 +31,11 @@ test.describe('搭建代理（mock 模式真浏览器）', () => {
     await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr035-e2e-instances-before.png'), fullPage: true })
 
-    await page.getByRole('button', { name: '搭建代理', exact: true }).click()
+    // 【改】「搭建代理」在「更多新建方式」下拉菜单里（role=menuitem），不是页头 button。
+
+    await page.getByRole('button', { name: '更多新建方式', exact: true }).click()
+
+    await page.getByRole('menuitem', { name: '搭建代理', exact: true }).click()
     await expect(page.getByRole('heading', { name: '搭建代理（BungeeCord/Waterfall/Velocity）' })).toBeVisible()
     await expect(page.getByText('端口与工作目录由系统自动分配，无需填写')).toBeVisible()
 

@@ -19,11 +19,12 @@ export async function login(page: Page, username = 'admin', password = 'admin123
   await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码', { exact: true }).fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
-  // 【为何是 30s 而不是 20s】登录后要拉 /auth/me + 权限节点 + 首屏路由 chunk，
-  // CI runner 首例时还要等 vite 依赖预构建；实测 alerts-page 首轮就死在
-  // 这里的 20s，retry 就过（同一台 runner、同一份代码）—— 是预算不够，不是功能坏。
-  // 与 playwright.config 的 `expect.timeout`（30s）保持一致，避免两套口径。
-  await expect(page.locator('[data-slot="console-shell"]')).toBeVisible({ timeout: 30_000 })
+  // 【为何是 45s】登录后要拉 /auth/me + 权限节点 + 首屏路由 chunk；shard 的**第一个**用例
+  // 还要等 vite 依赖预构建（首例几十秒很正常）。实测 ops-console-layout / bots-load-wizard
+  // 首轮卡在登录就绪、**retry 就过**（同一 runner、同一份代码）—— 是冷启动预算不够，
+  // 不是功能坏，也不是断言错。45s 只影响首次等待，不影响后续用例（模块已缓存）。
+  // 注意：这不是放宽断言，真实登不进去仍会失败（只是晚 15s）。
+  await expect(page.locator('[data-slot="console-shell"]')).toBeVisible({ timeout: 45_000 })
 }
 
 /**

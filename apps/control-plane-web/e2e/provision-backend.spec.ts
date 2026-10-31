@@ -31,7 +31,12 @@ test.describe('搭建 Bukkit 子服（mock 模式真浏览器）', () => {
     await expect(page.getByRole('heading', { name: '服务器', exact: true })).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr034-e2e-instances-before.png'), fullPage: true })
 
-    await page.getByRole('button', { name: '一键搭建', exact: true }).click()
+    // 【改】页头四个新建入口已收成一个分裂按钮：「创建实例」在主按钮上，
+    // 其余三种（一键搭建 / 搭建代理 / 导入现有服务器）收进右侧「更多新建方式」下拉菜单，
+    // 是 DropdownMenuItem（role=menuitem），不是页面上直接可见的 button。
+    // 旧写法 getByRole('button', { name: '一键搭建' }) 永远找不到（两轮 CI 都超时在这）。
+    await page.getByRole('button', { name: '更多新建方式', exact: true }).click()
+    await page.getByRole('menuitem', { name: '一键搭建', exact: true }).click()
     await expect(page.getByRole('heading', { name: '一键搭建后端子服' })).toBeVisible()
     await expect(page.getByText('端口与工作目录由系统自动分配，无需填写')).toBeVisible()
 

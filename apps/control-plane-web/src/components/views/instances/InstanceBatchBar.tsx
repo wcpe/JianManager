@@ -160,7 +160,15 @@ export default function InstanceBatchBar({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-3">
+    /*
+      【为何要 relative z-20】批量栏与表格是上下级 flex 兄弟，但表格的 thead 是
+      `sticky top-0 z-10`。当滚动容器高度被按压（批量栏出现后列表区变矮）时，
+      吸顶的表头会越过自己的滚动区，盖在批量栏上——实测 Playwright 报
+      「`<th data-column-key="region">` … intercepts pointer events」，
+      表现是「批量强制关服」按钮明明 enabled 却永远点不到（用户侧同样点不到，
+      不是测试问题）。批量栏作浮动操作条，层级高于表头才是正确语义。
+    */
+    <div className="relative z-20 flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-3">
       <span className="text-sm text-muted-foreground">{t('instanceBatch.selected', { count })}</span>
       <Button variant="ghost" size="sm" onClick={onClear} disabled={count === 0}>
         {t('instanceBatch.clear')}

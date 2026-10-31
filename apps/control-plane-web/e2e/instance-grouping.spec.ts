@@ -20,8 +20,11 @@ test('实例组织分组 多级嵌套树', async ({ page }) => {
   await page.getByRole('button', { name: '显示' }).click()
   await page.getByRole('menuitemradio', { name: '组织分组' }).click()
 
-  // groupTree 维度下才渲染「管理分组」入口，点开组树面板。
-  await page.getByRole('button', { name: '管理分组' }).click()
+  // 【改】「管理分组」是「显示」菜单里的 DropdownMenuItem（role=menuitem），不是页面上的 button。
+  // 真源：InstancesPage.tsx 里 `<DropdownMenuItem onSelect={() => setGroupManagerOpen(...)}>`
+  // 且仅在 groupBy === 'groupTree' 时渲染。旧写法 getByRole('button', { name: '管理分组' })
+  // 永远找不到 —— 就算给到 120s 也只会超时（上一轮就是这样挂的）。
+  await page.getByRole('menuitem', { name: '管理分组' }).click()
 
   const tree = page.getByRole('tree', { name: '分组树' })
   await expect(tree).toBeVisible()
