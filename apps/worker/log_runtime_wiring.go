@@ -206,6 +206,35 @@ func (b *dayMigrationInputBridge) input(record *catalog.Record) ([]logtypes.Even
 	return manager.CanonicalDayMigrationInput(record)
 }
 
+// logStreamFieldsState 在启动时输出一次 VL 流标签的生效形态。
+//
+// 为什么需要这条日志（而不是“让运维自己 curl 看”）：
+//   - 流是**分区键**，启用它会在 VL 里留下永久的 `_stream` 形态；
+//   - 切换点**之前**写入的历史数据 `_stream` 是空串，VL 不会自动迁移（只追加）；
+//   - 于是同一个 VL 里会同时存在两类流，按 `_stream` 分组的查询在切换点会看到断崖。
+//
+// 运维将来一定会问「为什么查询里有的日志没有 stream 标签？」——不给这条线索，
+// 他们只会把它当故障排查（“流标签没生效？”），而实际上那是历史数据。
+// 它只在启动时打一次，不在采集热路径上，不存在噪声问题。
+//
+// disabled 为真时打一条对照日志，让「为什么没有流标签」的另一种答案也留在日志里：
+// 那是配置显式关掉的，不是没接上。
+func logStreamFieldsState(disabled bool, override string) {
+	if disabled {
+		slog.Info("VL 流标签已关闭（log_vl.disable_stream_fields）；写入请求不带任何 query 参数，所有日志落在同一个 stream",
+			"stream_fields", "",
+			"hint", "新写入与历史数据的分区形态一致，但查询无法按源/通道收敛；如需开启请移除 disable_stream_fields")
+		return
+	}
+	fields := strings.TrimSpace(override)
+	if fields == "" {
+		fields = vlsup.DefaultStreamFields
+	}
+	slog.Info("VL 流标签已启用；本次启动之前写入的日志 _stream 为空，不会自动迁移",
+		"stream_fields", fields,
+		"hint", "按 _stream 分组的查询在切换点会看到两类；旧数据随 retention 自然淘汰")
+}
+
 // logReapedVLOrphan 仅输出归属核对所需元数据，绝不接收原始命令行或鉴权配置。
 func logReapedVLOrphan(orphan vlsup.OrphanMatch) {
 	slog.Warn("已回收本节点 vlsup 孤儿（启前）", "pid", orphan.PID, "namespace", orphan.Namespace, "exe", orphan.Exe)

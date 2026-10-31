@@ -109,6 +109,12 @@ type Options struct {
 	AssetBuildID string
 	// HealthClient 可选：按实例 base URL 构造健康客户端；nil 时用 NewClient。
 	HealthClient func(baseURL, user, pass string) (*Client, error)
+	// DisableStreamFields 关闭 `/insert/jsonline` 的流标签（见 ClientOptions.DisableStreamFields）。
+	//
+	// 只作用于本 supervisor **默认构造**的客户端；注入了 HealthClient 时由注入方决定。
+	// 放在这一层的原因：写入客户端一律经 ClientFor 得到（采集侧的写路由最终指向这里），
+	// 不经过这一层就无法用配置关掉流标签。
+	DisableStreamFields bool
 }
 
 type instance struct {
@@ -266,7 +272,10 @@ func New(opts Options) (*Supervisor, error) {
 	newClient := opts.HealthClient
 	if newClient == nil {
 		newClient = func(baseURL, user, pass string) (*Client, error) {
-			return NewClient(ClientOptions{BaseURL: baseURL, Username: user, Password: pass})
+			return NewClient(ClientOptions{
+				BaseURL: baseURL, Username: user, Password: pass,
+				DisableStreamFields: opts.DisableStreamFields,
+			})
 		}
 	}
 	s := &Supervisor{

@@ -95,6 +95,27 @@ log:
 #   #   log_vl_rows_dropped  >  0  持续 60s  ⇒ warn（已经因保留期在丢日志）
 #   max_disk_space_bytes: 107374182400  # 100 GiB；0/不写 = 不限制
 #   # max_disk_usage_percent: 85
+#
+#   # ── 流标签（2026-10-31，对齐 VL 官方接入方式）───────────────────────────
+#   # VictoriaLogs 的「流」是**分区键**：同一 stream 内的行共享元数据与索引，
+#   # 所以 stream 的基数直接决定 VL 的元数据/内存开销。默认值就是架构裁定的：
+#   #   stream_fields: log_source_id,stream     # 总流数上界 ≈ 19 × 3 ≈ 57
+#   #
+#   # ✅ 入流：log_source_id（19 个，查询最常用）、stream（2-3 个，stdout/stderr）
+#   # ❌ 不入流：level（随内容变化 ⇒ 同一源今天全 INFO、明天冒 WARN 就切新分区）
+#   # ❌ 绝对禁止：event_id / record_start / record_end / ingest_time_utc / …
+#   #     这些字段基数**无界**，每行不同 ⇒ VL 为每行建一个 stream ⇒ 元数据爆炸。
+#   #     写进这些字段会在 Load 阶段直接**拒绝启动**（不是告警），因为这一步不可逆：
+#   #     stream 元数据只能靠删分区回收。
+#   #
+#   # 验一下生效没有（写入后执行，看返回的 values 是不是按源/通道分开了）：
+#   #   curl -u $USER:$PASS 'http://127.0.0.1:19441/select/logsql/field_values?field=_stream&query=*'
+#   # stream_fields: log_source_id,stream
+#   #
+#   # 关闭流标签（一般**不要**关）：适用于「外部回环 VL 由别的系统一并写入」或
+#   # 需要与既有 stream 布局对齐的部署。关掉后写入请求**一个参数都不带**（与本改动前
+#   # 字节级一致）。⚠ 注意：同一个 VL 里新旧数据的分区形态会不一致（旧数据全在 "{}" 里）。
+#   # disable_stream_fields: false
 
 # Optional persistent Worker/Node or offline FILE_PRIMARY sources. Instance
 # sources are registered automatically by CP instance lifecycle RPCs.

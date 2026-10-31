@@ -695,6 +695,9 @@ func runWorker() {
 			// 官方推荐按可用内存百分比自适应；显式 hot_cache_bytes 时由
 			// EffectiveCacheBytes 走 allowedBytes，此处仅作默认路径。
 			MemoryAllowedPercent: cfg.LogVL.MemoryAllowedPercent,
+			// 流标签（2026-10-31）：默认开，取值由架构裁定（`_stream_fields=log_source_id,stream`）。
+			// 写入客户端一律经 supervisor.ClientFor 得到，所以开关必须传到这里。
+			DisableStreamFields: cfg.LogVL.DisableStreamFields,
 		})
 		if err != nil {
 			slog.Error("VictoriaLogs supervisor 创建失败", "error", err)
@@ -744,6 +747,10 @@ func runWorker() {
 			BaseURL:  cfg.LogQuery.VLURL,
 			Username: cfg.LogQuery.Username,
 			Password: cfg.LogQuery.Password,
+			// 外部回环 VL 同时兼任写入端（未配受管 binary 时 vlHTTPClient 就是它），
+			// 因此流标签开关必须与受管路径同口径，否则两种部署的写入形态会不一致。
+			StreamFields:        cfg.LogVL.StreamFields,
+			DisableStreamFields: cfg.LogVL.DisableStreamFields,
 		})
 		if vlErr != nil {
 			slog.Warn("VictoriaLogs 查询客户端配置无效，保持 LOG_UNSUPPORTED", "error", vlErr)
@@ -762,6 +769,14 @@ func runWorker() {
 			}
 		}
 	}
+	// VL 流标签生效形态（启动时打一次）。
+	//
+	// 为什么值得占一行启动日志：流是**分区键**，启用它会在 VL 里留下永久的 `_stream` 形态；
+	// 而切换点之前写入的历史数据 `_stream` 是空串，不会被自动迁移。运维将来一定会问
+	// 「为什么查询里有的日志没有 stream 标签？」，没有这条线索就只能当故障排查。
+	// 它只出现一次（不是每轮采集都打），不存在噪声问题。
+	logStreamFieldsState(cfg.LogVL.DisableStreamFields, cfg.LogVL.StreamFields)
+
 	logBudgetRoots := []string{root.Abs("var/log")}
 	if strings.TrimSpace(cfg.LogVL.DataRoot) != "" {
 		logBudgetRoots = append(logBudgetRoots, cfg.LogVL.DataRoot)

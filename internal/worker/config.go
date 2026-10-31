@@ -656,6 +656,19 @@ type LogVLConfig struct {
 	// Budget 区分全局日志磁盘与数据面 RSS，并限制临时空间预留。
 	Budget  LogVLRuntimeBudget `mapstructure:"budget"`
 	HotPort int                `mapstructure:"hot_port"`
+	// StreamFields 是 `/insert/jsonline` 的 `_stream_fields`（逗号分隔）；空 = 默认 `log_source_id,stream`。
+	//
+	// 默认开流标签（与 VL 官方接入方式对齐）：流是**分区键**，把逐行变化的字段放进去
+	// 会让 VL 为每行建一个 stream。取值默认由架构裁定，这里只作为**诊断/应急**旋钮，
+	// 且构造客户端时会校验——无界基数字段（event_id / record_* / ingest_time_utc …）
+	// 一律报错拒启，不会静默生效。
+	StreamFields string `mapstructure:"stream_fields"`
+	// DisableStreamFields 关闭流标签（不发 `_stream_fields` 等写入参数）。
+	//
+	// 供「外部回环 VL 由其他系统一并写入」或需要与既有 stream 布局对齐的部署退回：
+	// 一旦启用流标签，同一个 VL 里新旧数据的分区形态就不一致。关掉后与本改动前的
+	// 线上请求字节级一致（连 `_msg_field` / `_time_field` 也不发）。
+	DisableStreamFields bool `mapstructure:"disable_stream_fields"`
 }
 
 // LogVLNamespaceBudget 表达单层 cache、Go 软限制与 RSS 准入阈值。
@@ -703,6 +716,22 @@ func (c LogVLConfig) ValidateDiskLimit() error {
 		return fmt.Errorf("log_vl.max_disk_space_bytes 与 max_disk_usage_percent 互斥（VL 官方限制），只能配一个")
 	}
 	return nil
+}
+
+// ValidateStreamFields 校验流标签配置（启动即拒，不静默忽略）。
+//
+// 为什么要单独校验而不是只靠 vlsup.NewClient：这个错误的代价是**单向不可逆**的（写进 VL 的
+// stream 元数据只能靠删分区回收），且生效点深在写入链路里、首次写入时才暴露。放到 Load
+// 阶段拒，运维在启动日志里就能看到中文原因与具体字段名。
+func (c LogVLConfig) ValidateStreamFields() error {
+	if c.DisableStreamFields {
+		return nil
+	}
+	spec := strings.TrimSpace(c.StreamFields)
+	if spec == "" {
+		spec = vlsup.DefaultStreamFields
+	}
+	return vlsup.ValidateStreamFields(spec)
 }
 
 // RuntimeBudget 将新键与旧内存键归并为运行时唯一预算，拒绝拼错层名和负上界。
@@ -2042,6 +2071,11 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_retention.archive_object_retention.retention", "")
 	v.SetDefault("log_retention.archive_object_retention.sweep_at_hour", 3)
 	v.SetDefault("log_vl.hot_port", 0)
+	// 流标签（2026-10-31）：默认开启，取值就是架构裁定的 `log_source_id,stream`。
+	// 与以往保持一致：默认值不写在 SetDefault 里（那是 vlsup 的单一真源），
+	// 这里只登记空串，让未配置时走 vlsup.DefaultStreamFields。
+	v.SetDefault("log_vl.stream_fields", "")
+	v.SetDefault("log_vl.disable_stream_fields", false)
 	// 2026-10-29：冷热双层废除后这 4 个键已删（结构体字段不存在）。
 	// 此处不再写它们的 SetDefault——那只会造成「键还在」的错觉；viper 对未知键不报错，
 	// 旧 worker.yml 里留着它们也不会出问题。
@@ -2268,6 +2302,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	if err := cfg.LogVL.ValidateDiskLimit(); err != nil {
+		return nil, err
+	}
+	if err := cfg.LogVL.ValidateStreamFields(); err != nil {
 		return nil, err
 	}
 	if _, err := cfg.IngestReadLimits(); err != nil {

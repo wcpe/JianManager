@@ -37,6 +37,73 @@ const (
 // ErrUnauthorized 表示 VL Basic-auth 未通过（401/403）。
 var ErrUnauthorized = errors.New("vlsup: unauthorized")
 
+// DefaultStreamFields 是 `/insert/jsonline` 的 `_stream_fields` 默认取值。
+//
+// VictoriaLogs 的「流（stream）」是比字段更粗一级的**分区键**：同一 stream 内的行共享
+// 元数据与倒排索引，所以 **stream 的基数直接决定 VL 的元数据与内存开销**。把逐行变化的
+// 字段放进 stream，等于让 VL 为每一行建一个 stream —— 元数据爆炸、内存被拖死，而且这种
+// 错误只在写入量上来之后才显形，事后无法靠查询侧补救。
+//
+// 因此这个取值是**架构裁定**（2026-10-31），不是可随手调整的调优项：
+//
+//	字段            基数         入流  理由
+//	log_source_id   19（实测）   ✅    查询最常用维度，基数极小
+//	stream          2-3          ✅    日志固有的 stdout/stderr 分流
+//	level           5-10         ❌    级别随内容变化 ⇒ 同一源今天全 INFO、明天冒 WARN
+//	                                   就会切出新分区（流数随内容漂移，不可预测）
+//	event_id 等     无界         ❌    每行不同 ⇒ 见 forbiddenStreamFields
+//
+// 总流数上界 ≈ 19 × 3 ≈ 57。
+//
+// ⚠ level 属于「**可配置但不推荐**」那一类，而不是「忘了排除」：它的基数（5-10）小得
+// 足以入流，但**会随日志内容漂移**（同一源今天全 INFO、明天冒 WARN 就切出新分区），
+// 于是 stream 数缓慢增长且不可预测。它不像 event_id 那样“每行一个流”，也不会把 VL
+// 拖垮，因此不列入 forbiddenStreamFields（那张表的语义是“会让 VL 崩溃”，必须与“不推荐”
+// 严格分开，否则真出问题时运维无法从错误文案里分辨严重程度）。
+const DefaultStreamFields = "log_source_id,stream"
+
+// DefaultMsgField / DefaultTimeField 显式声明消息与时间字段名。
+//
+// 这两个值恰好是 VL 的缺省值（不传时它就按 `_msg` / `_time` 读我们投递的 JSON 行），
+// 显式传的意义**不是**改变行为，而是不让行为依赖 VL 的版本默认值：默认值一旦随版本
+// 变化，我们的行会被静默解释成「没有消息 / 没有时间」—— 那是静默数据损坏，不是报错。
+const (
+	DefaultMsgField  = "_msg"
+	DefaultTimeField = "_time"
+)
+
+// forbiddenStreamFields 是「绝对禁止放进 stream」的字段名及其理由：基数无界。
+//
+// 这张表的语义边界很窄：**仅收「会给每行建一个新 stream」的字段**。不要把“不推荐但
+// 可控”的字段放进来（典型是 level）—— 两者混在一起会让错误文案失去严重程度的分辨力。
+//
+// 为什么要这道守卫（而不是只写在注释里）：这个错误是**单向不可逆**的 —— 一旦写进 VL，
+// stream 元数据只能靠删除分区才回收。所以在构造客户端时就拒（fail fast），让配错的人
+// 在启动日志里看到中文原因，而不是等生产内存曲线爆掉再回查。
+var forbiddenStreamFields = map[string]string{
+	"event_id":               "每条事件唯一 ⇒ 每行一个新 stream",
+	"record_start":           "随事件时间单调前进 ⇒ 每行一个新 stream",
+	"record_end":             "同 record_start",
+	"ingest_time_utc":        "随投递时刻前进 ⇒ 每行一个新 stream",
+	"canonical_content_hash": "按内容变化 ⇒ 基数随日志内容无限增长",
+	"_msg":                   "消息正文 ⇒ 基数无界",
+	"_time":                  "事件时间 ⇒ 基数无界",
+}
+
+// ValidateStreamFields 校验逗号分隔的 stream 字段列表（空项与无界字段都拒绝）。
+func ValidateStreamFields(spec string) error {
+	for _, raw := range strings.Split(spec, ",") {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			return fmt.Errorf("vlsup: _stream_fields 含空字段名（%q）", spec)
+		}
+		if reason, bad := forbiddenStreamFields[name]; bad {
+			return fmt.Errorf("vlsup: _stream_fields 不得包含 %q：%s；无界基数字段入流会让 VL 为每行建 stream，元数据与内存不可控", name, reason)
+		}
+	}
+	return nil
+}
+
 // ErrNotLoopback 表示客户端 base URL 非 localhost（生产强制 localhost 查询）。
 var ErrNotLoopback = errors.New("vlsup: client base URL must be loopback")
 
@@ -82,6 +149,9 @@ type Client struct {
 	hq       *http.Client
 	// compress 开启 /insert/jsonline 请求体的 gzip 压缩（见 ClientOptions.DisableCompression）。
 	compress bool
+	// streamFields 是 `/insert/jsonline` 的 `_stream_fields` 取值；空串表示**不发**该参数
+	// （退回本改动之前的线上形态）。取值只能来自 DefaultStreamFields 或经校验的覆盖值。
+	streamFields string
 	// compressionRejected 是「VL 实测拒掉了 gzip 请求体」的进程内标记。
 	//
 	// 只在“重试未压缩形态成功”时置位：那是能证明「问题在压缩、不在数据」的唯一形态。
@@ -115,6 +185,19 @@ type ClientOptions struct {
 	// `Content-Encoding: gzip`（历史版本或改配），运维可以用它退回不压缩形态，
 	// 而不必改代码（见 InsertJSONLines 的退回逻辑）。
 	DisableCompression bool
+	// StreamFields 覆盖 `/insert/jsonline` 的 `_stream_fields`（逗号分隔）。
+	//
+	// 空 = DefaultStreamFields。生产不走这条路（取值由架构裁定）；它留给测试与诊断，
+	// 例如验证「把无界字段塞进 stream 会被拒绝」。任何取值都要过 ValidateStreamFields。
+	StreamFields string
+	// DisableStreamFields 关闭流标签（不发 `_stream_fields`）。
+	//
+	// 为什么留这个开关：流标签是**新建分区键**，一旦启用，同一个 VL 里新旧数据的分区形态
+	// 就不一致（旧数据全落在同一个 stream 里）。绝大多数部署要的是「新数据按源/通道分流」，
+	// 但外部回环 VL 由别的系统一并写入、或需要与既有 stream 布局对齐的部署不希望改变
+	// 分区形态 —— 它们必须能退回。关掉后退回本改动之前的线上形态：写入请求一个参数都不带
+	// （`_msg_field` / `_time_field` 也一并省略，保持字节级一致）。
+	DisableStreamFields bool
 }
 
 // NewClient 构造 localhost VL 客户端。BaseURL 可注入以便单元测试。
@@ -147,14 +230,68 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		}
 		hq = &http.Client{Timeout: qt, Transport: newTransport()}
 	}
+	streamFields := ""
+	if !opts.DisableStreamFields {
+		streamFields = strings.TrimSpace(opts.StreamFields)
+		if streamFields == "" {
+			streamFields = DefaultStreamFields
+		}
+		if err := ValidateStreamFields(streamFields); err != nil {
+			// 构造即拒：写错流字段的单向代价太高，不允许拖到第一次写入才爆。
+			return nil, err
+		}
+	}
 	return &Client{
-		baseURL:  strings.TrimRight(raw, "/"),
-		username: opts.Username,
-		password: opts.Password,
-		hc:       hc,
-		hq:       hq,
-		compress: !opts.DisableCompression,
+		baseURL:      strings.TrimRight(raw, "/"),
+		username:     opts.Username,
+		password:     opts.Password,
+		hc:           hc,
+		hq:           hq,
+		compress:     !opts.DisableCompression,
+		streamFields: streamFields,
 	}, nil
+}
+
+// InsertQuery 返回 `/insert/jsonline` 要带的 query 参数（单一拼装点）。
+//
+// 为什么不把这些参数散在 insertOnce 里逐条拼：写入参数是「VL 侧入库语义」的一部分，
+// 将来 VL 再推出新参数时只需要改这一个函数，不必在压缩退回重试、错误分类等等路径上
+// 各改一遍（insertOnce 有两条调用路径 —— 压缩与未压缩重试）。
+//
+// 不传 `_stream_fields`（DisableStreamFields）时**一个参数都不发**，包括 `_msg_field` /
+// `_time_field`：退回的是与本改动之前**字节级一致**的请求，而不是「少一个参数的近似形态」。
+// 这两个字段名一旦带上去，就断言了「我们的行里有 `_msg`/`_time`」；而关掉流标签的场景
+// 恰恰包含外部回环 VL（行由别的系统生成），不应由我们把解析口径写死。
+func (c *Client) InsertQuery() url.Values {
+	q := url.Values{}
+	if c == nil || c.streamFields == "" {
+		return q
+	}
+	q.Set("_stream_fields", c.streamFields)
+	q.Set("_msg_field", DefaultMsgField)
+	q.Set("_time_field", DefaultTimeField)
+	return q
+}
+
+// StreamFields 返回当前生效的 `_stream_fields` 取值；空串表示未启用流标签。
+//
+// 供启动日志使用：流标签是一个**会在 VL 里留下永久分区形态**的设置，且启用点之后的
+// 数据与之前的数据 `_stream` 不同 —— 运维应当能在启动日志里看到“现在生效的是什么”，
+// 而不是只能靠 curl 反推。
+func (c *Client) StreamFields() string {
+	if c == nil {
+		return ""
+	}
+	return c.streamFields
+}
+
+// insertURL 返回本次写入的完整 URL（含 query；无参数时不带 "?"）。
+func (c *Client) insertURL() string {
+	u := c.baseURL + "/insert/jsonline"
+	if q := c.InsertQuery(); len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	return u
 }
 
 // newTransport 构造带连接池的 Transport（写入与查询各一只，互不影响对方的空闲计数）。
@@ -393,7 +530,7 @@ func isEncodingRejected(status int) bool {
 
 // insertOnce 发一次写入请求。compressed 为 true 时声明 Content-Encoding: gzip。
 func (c *Client) insertOnce(ctx context.Context, body []byte, compressed bool) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/insert/jsonline", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.insertURL(), bytes.NewReader(body))
 	if err != nil {
 		return 0, fmt.Errorf("vlsup: build insert request: %w", err)
 	}
