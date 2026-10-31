@@ -98,6 +98,9 @@ type Options struct {
 // Pipeline 端到端：tail/stdio → normalize → WAL → DeliveryHook → 投递证据门禁。
 type Pipeline struct {
 	mode                AcquireMode
+	// source 是采集来源的统一抽象（FR-512）。它决定「事件从哪来」，
+	// 不参与「事件进去之后怎么走」——那部分三种模式完全共享。
+	source Source
 	key                 ledger.SourceKey
 	led                 *ledger.Ledger
 	wal                 *acquire.WAL
@@ -276,6 +279,14 @@ func New(opts Options) (*Pipeline, error) {
 	} else {
 		inner.SetAppendRejectedHook(func() { p.fallbackDrain.Store(true) })
 	}
+
+	// FR-512：来源统一装配。三种模式的差异只在「事件从哪来」与「分段怎么登记」，
+	// 后面 Ingest/攒批/投递/回收全部共享，所以这里只选实现、不写分支逻辑。
+	srcImpl, err := sourceFor(mode, p)
+	if err != nil {
+		return nil, err
+	}
+	p.source = srcImpl
 
 	switch mode {
 	case ModeFilePrimary:
@@ -635,21 +646,22 @@ func (p *Pipeline) Poll() (batch []logtypes.Event, errOut error) {
 
 // pollLocked 是 Poll 的**锁内实现**：调用方必须已持 `p.mu`（见 `Pipeline.mu` 的锁序说明）。
 func (p *Pipeline) pollLocked() ([]logtypes.Event, error) {
-	switch p.mode {
-	case ModeFilePrimary:
-		return p.pollFile()
-	case ModeStdioPrimary:
-		if p.tailer != nil {
-			return p.pollFile()
-		}
-		return p.pollStdio()
-	case ModePushOnly:
-		// 纯推送源没有物理读取：主动 Poll 永远无新事件。
-		// 事件由外部经 Pipeline.Ingest 注入，回收 / 对账水位也只由 Ingest 路径推进。
+	// FR-512：把「从哪拉」抽象成 Poller。
+	//
+	// 推送型来源（PUSH_ONLY）**不实现** Poller，所以类型断言失败即表示
+	// 「这个模式确实不需要主动拉取」——主动轮询它永远无新事件。
+	// 这与改造前 `case ModePushOnly: return nil, nil` 语义完全一致，
+	// 但把那个「空分支」从 switch 里的假实现变成了接口层面的类型事实：
+	// 读者不会再误以为 PUSH_ONLY 的 Poll 有朝一日会返回事件。
+	if p.source == nil {
+		// 未装配来源（零值 Pipeline，测试/异常路径）：保持空轮询。
 		return nil, nil
-	default:
-		return nil, fmt.Errorf("pipeline: unsupported mode %q", p.mode)
 	}
+	poller, ok := p.source.(Poller)
+	if !ok {
+		return nil, nil
+	}
+	return poller.Poll()
 }
 
 func (p *Pipeline) pollFile() ([]logtypes.Event, error) {
