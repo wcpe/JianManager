@@ -6,8 +6,8 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { loginMockUser } from '@/test/auth'
 import ConfigFileEditor from './ConfigFileEditor'
 
-/**
- * ConfigFileEditor 强断言（FR-205 配置域代表组件）：验 configs 域 mock 读写联动 + 错误注入。
+/** 
+ * ConfigFileEditor 强断言（配置域代表组件）：验 configs 域 mock 读写联动 + 错误注入。
  * 用表单模式（schema 命中的 server.properties）断言——字段为原生 input，jsdom 下可查可改，
  * 避开文本模式 CodeMirror 在 jsdom 的不可靠渲染。
  */

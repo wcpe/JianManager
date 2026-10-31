@@ -16,6 +16,12 @@ func newTriggersTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.AlertRule{}, &model.AlertEvent{}, &model.AlertChannel{}, &model.Instance{}))
 	return db
 }
@@ -138,7 +144,7 @@ func TestPlayerEventSubtype(t *testing.T) {
 	assert.Equal(t, "", playerEventSubtype("connected"))
 }
 
-// TestTriggers_LogKeywordUnaffectedByCutover 锁定 FR-473 §9「现有日志关键字告警在切换后仍有效、未被新数据路径绕过」。
+// TestTriggers_LogKeywordUnaffectedByCutover 锁定§9「现有日志关键字告警在切换后仍有效、未被新数据路径绕过」。
 //
 // 关键事实（设计层不变量）：关键字告警消费的是实例事件流（`InstanceEvent` stdout/stderr，见
 // consumeInstanceEvents），与 CP `logs` 表的入库切换（LogCutover）是两条独立路径——切换停止的是

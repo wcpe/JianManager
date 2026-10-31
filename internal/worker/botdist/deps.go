@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// requiredDeps bot-worker 运行必需、但不随归档分发的依赖（经 FR-307 节点受控包根安装）。
+// requiredDeps bot-worker 运行必需、但不随归档分发的依赖（经节点受控包根安装）。
 var requiredDeps = []string{"mineflayer", "mineflayer-pathfinder"}
 
 // GlobalNodeModulesDir 返回节点受控依赖根的 node_modules 链接目标（见 ADR-072）。

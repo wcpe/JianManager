@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// fakeWorkerClient 假 WorkerServiceClient（FR-314 CP 预检测试）：仅覆盖预检/注册/启动三方法，
+// fakeWorkerClient 假 WorkerServiceClient（CP 预检测试）：仅覆盖预检/注册/启动三方法，
 // 其余走嵌入接口（本测试不触达）。
 // CreateInstance 默认 Success:true——与真实 Worker 的幂等语义一致（已注册也返回成功）；
 // 注册失败场景用 createResp/createErr 显式注入。

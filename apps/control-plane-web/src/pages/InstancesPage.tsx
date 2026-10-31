@@ -1,93 +1,110 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+// 列表行展示层已回迁应用侧（迁包已撤销，见 ADR-103）：平铺表与分组树表共用的行渲染件在包内；
+// 本层保留取数（无限搜索 / 聚合 / 节点 / 群组 / 分组树）、URL 状态、批量选择与各弹窗目标的装配。
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { useTranslation } from 'react-i18next'
-import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Wrench } from 'lucide-react'
-import {
-  useInfiniteInstanceSearch,
-  useInstanceAggregate,
-  useStartInstance,
-  useStopInstance,
-  useRestartInstance,
-  useDeleteInstance,
-  useKillInstance,
-  useAdoptInstanceRuntime,
-  isProvisioningInstance,
-  type InstanceListParams,
-  type InstanceSearchParams,
-  type InstanceInfo,
-} from '@/api/instances'
+import { Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal, Settings2, Bookmark, Trash2, ServerCog, CircleCheck, CircleSlash, TriangleAlert, ChevronDown } from 'lucide-react'
+import { useSearchInstances, useInstanceAggregate, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance, useAdoptInstanceRuntime, isProvisioningInstance, type InstanceInfo } from '@/api/instances'
+import type { InstanceListParams, InstanceSearchParams } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useNetworks } from '@/api/networks'
 import { useTopology } from '@/api/topology'
 import { useInstanceGroups } from '@/api/instanceGroups'
 import { useRegistrations } from '@/api/registrations'
 import { useConsoleStore } from '@/stores/console'
-import DangerConfirm from '@/components/DangerConfirm'
-import InstanceBatchBar from '@/components/InstanceBatchBar'
-import ProvisionServerDialog from '@/components/ProvisionServerDialog'
-import ProvisionProxyDialog from '@/components/ProvisionProxyDialog'
-import ImportServerWizard from '@/components/ImportServerWizard'
-import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
-import CloneInstanceDialog from '@/components/CloneInstanceDialog'
-import InstanceTagsDialog from '@/components/InstanceTagsDialog'
-import EditInstanceLimitsDialog from '@/components/EditInstanceLimitsDialog'
-import EditInstanceConfigDialog from '@/components/EditInstanceConfigDialog'
-import { hasCapability, resolveCapabilities } from '@/lib/capabilities'
+import DangerConfirm from '@/components/views/common/DangerConfirm'
+import InstanceBatchBar from '@/components/instances/InstanceBatchBar'
+import ProvisionServerDialog from '@/components/provision/ProvisionServerDialog'
+import ProvisionProxyDialog from '@/components/provision/ProvisionProxyDialog'
+import ImportServerWizard from '@/components/provision/ImportServerWizard'
+import ProxyRegistrationsDialog from '@/components/instances/ProxyRegistrationsDialog'
+import CloneInstanceDialog from '@/components/instances/CloneInstanceDialog'
+import InstanceTagsDialog from '@/components/instances/InstanceTagsDialog'
+import EditInstanceLimitsDialog from '@/components/instances/EditInstanceLimitsDialog'
+import EditInstanceConfigDialog from '@/components/instances/EditInstanceConfigDialog'
+import { useDebounced } from '@/lib/hooks/use-debounced'
+import { resolveCapabilities } from '@/lib/instances/capabilities'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
-import { RuntimeDriftBadge } from '@/components/console/RuntimeDriftNotice'
+import { buildGroupTreeSource, buildKeyMap, collectEnvs, collectTags, groupInstances, groupInstancesByGroupTree, parseTags, GROUP_DIMENSIONS } from '@/lib/instances/instance-grouping'
+import type { GroupDimension } from '@/lib/instances/instance-grouping'
+import { runtimeDriftOf } from '@/lib/runtime-assets/runtime-drift'
+import { summarizeInstances, summaryFilterStatus } from '@/lib/instances/instance-summary'
+import type { SummaryFilterKey } from '@/lib/instances/instance-summary'
 import {
-  buildGroupTreeSource,
-  buildKeyMap,
-  collectEnvs,
-  collectTags,
-  envOf,
-  freeTagsOf,
-  groupInstances,
-  groupInstancesByGroupTree,
-  parseTags,
-  GROUP_DIMENSIONS,
-  type GroupDimension,
-  type InstanceGroup,
-} from '@/components/console/instance-grouping'
-import { memberHealth, type MemberHealth } from '@/lib/topology'
-import { runtimeDriftOf } from '@/lib/runtime-drift'
-import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
-import { Badge } from '@jianmanager/ui/components/badge'
-import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
-import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
-import { cn, instanceStatusLevel } from '@jianmanager/ui'
-import { Button } from '@jianmanager/ui/components/button'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import { Input } from '@jianmanager/ui/components/input'
+  INSTANCE_OPTIONAL_COLUMNS,
+  readStoredColumns,
+  readStoredViews,
+  writeStoredColumns,
+  writeStoredViews,
+  type InstanceOptionalColumn,
+  type SavedInstanceView,
+} from '@/lib/instances/instance-view-prefs'
+import { DataPanelSkeleton, PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { ViewToggle } from '@jianmanager/ui/components/view-toggle'
+import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
 import {
   DropdownMenu,
-  DropdownMenuTrigger,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
+import { TableCell, TableRow } from '@jianmanager/ui/components/table'
+import { Input } from '@jianmanager/ui/components/input'
+import { SCROLL_KEY_PREFIX, buildInstanceTreeRows } from '@/components/views/instances/VirtualizedInstanceTables'
+import { FilterSelect, InstanceRowMenu, InstanceTableHeader } from '@/components/views/instances/InstanceTableParts'
+import { useInstanceWindowMetrics } from '@/components/views/instances/useInstanceWindowMetrics'
+import { useBusinessStatusBatch, type BusinessStatus } from '@/api/businessStatus'
+import type { InstanceSortKey, InstanceSortOrder } from '@/components/views/instances/InstanceTableParts'
+import { InstanceRowView } from '@/components/views/instances/InstanceRowView'
+import { BackendsInline, VirtualizedGroupedCardView } from '@/components/views/instances/InstanceCardViews'
+import { PaginatedInstanceTable } from '@/components/views/instances/PaginatedInstanceTable'
+import { InstancePaginationBar } from '@/components/views/instances/InstancePaginationBar'
+import { InstanceHealthHoverLayer } from '@/components/views/instances/InstanceRowSpark'
+import { InstanceContextMenu } from '@/components/views/instances/InstanceContextMenu'
+import { buildContextMenuActions } from '@/components/views/instances/instanceContextMenuActions'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
-import { useVirtualRows } from '@/lib/virtual-list'
+  applySelectionClick,
+  clampColumnWidth,
+  invertSelection,
+  moveColumn,
+  readStoredColumnOrder,
+  readStoredColumnWidths,
+  writeStoredColumnOrder,
+  writeStoredColumnWidths,
+  type InstanceColumnKey,
+  type InstanceColumnWidths,
+} from '@/lib/instances/instance-view-prefs'
+import { InstanceGroupHeaderContent } from '@/components/views/instances/VirtualizedInstanceTables'
+
+// 供针对性测试（rowMenu 门控）沿用既有导入路径。
+export { InstanceRowMenu }
 
 /** Radix Select 不允许空字符串 value，用哨兵值表示「全部 / 不过滤」。 */
+/** 代理行内联后端摘要的取数接线层（ADR-103）：视图已入包，此处只做取数与跳转注入。 */
+function BackendsInlineContainer({ proxyId }: { proxyId: number }) {
+  const { data, isLoading } = useRegistrations(proxyId)
+  const navigate = useNavigate()
+  return (
+    <BackendsInline
+      registrations={data}
+      isLoading={isLoading}
+      onOpenInstance={(id) => navigate(`/instances/${id}`)}
+    />
+  )
+}
+
 const ALL = '__all__'
-const SCROLL_KEY_PREFIX = 'jm.instances.scroll:'
 
 type InstanceUrlState = Partial<{
   q: string
@@ -98,7 +115,7 @@ type InstanceUrlState = Partial<{
   sort: InstanceSortKey
   order: InstanceSortOrder
   pageSize: string
-  /** 折叠的分组键（FR-452），逗号分隔、逐键 encodeURIComponent。 */
+  /** 折叠的分组键，逗号分隔、逐键 encodeURIComponent。 */
   collapsed: string
   networkId: string
   env: string
@@ -106,21 +123,38 @@ type InstanceUrlState = Partial<{
   nodeId: string
 }>
 
-type InstanceSortKey = NonNullable<InstanceSearchParams['sort']>
-type InstanceSortOrder = NonNullable<InstanceSearchParams['order']>
-
 const INSTANCE_SORT_KEYS: InstanceSortKey[] = ['name', 'status', 'createdAt', 'nodeId']
 const INSTANCE_PAGE_SIZES = [50, 100, 200] as const
 
-/**
- * 视图模式：FR-452 起 `list`（分组树表）为 `/instances` 默认——64 台跨区可一屏折叠管理。
+/** 
+ * 实例搜索防抖（毫秒）：停止输入后才把 `q` 下发 `/instances/search`。
+ *
+ * 搜索词直接进 queryKey，不防抖就是「每个键击一次服务端搜索」——1000+ 实例下这既是
+ * 无谓的请求风暴，也会让列表在输入过程中反复闪回加载态。取值与 `InstancePicker` /
+ * `InstanceLibrary` / `GroupMembersDialog` 同一量级（250~300ms）。
+ */
+const SEARCH_DEBOUNCE_MS = 300
+
+/** 
+ * 视图模式：起 `list`（分组树表）为 `/instances` 默认——64 台跨区可一屏折叠管理。
  * 卡片视图保留为紧凑模式（`?view=card`）。
  */
 function readViewMode(searchParams: URLSearchParams): ViewMode {
   return searchParams.get('view') === 'card' ? 'card' : 'list'
 }
 
-/** 默认分组维度：region/zone 两级（FR-452）。 */
+/** 列设置项的文案键（复用既有列名键，不另造同义键）。 */
+const COLUMN_LABEL_KEY: Record<InstanceOptionalColumn, string> = {
+  type: 'instances.type',
+  role: 'instances.role',
+  tags: 'grouping.tagsColumn',
+  metrics: 'instances.metrics.column',
+  active: 'instances.metrics.activeColumn',
+  heartbeat: 'instances.metrics.heartbeatColumn',
+  business: 'instances.business.column',
+}
+
+/** 默认分组维度：region/zone 两级。 */
 const DEFAULT_GROUP_DIMENSION: GroupDimension = 'region'
 
 function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
@@ -129,10 +163,21 @@ function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
   return DEFAULT_GROUP_DIMENSION
 }
 
-/** 读取折叠分组键集合（FR-452）：URL `?collapsed=` 逗号分隔、逐键 decode。 */
+/** 
+ * 无折叠项时复用的常量空集合（**共享只读实例，任何调用方都不得就地修改**；
+ * 本页所有变更折叠态的路径都先 `new Set(...)` 再改副本）。
+ *
+ * 为什么必须是常量：同步 effect 会在每次 URL 变化时用 `readCollapsed` 的结果 setState。
+ * 若空值也新建 `Set`，则「URL 变了但折叠态没变」的场景（改排序、改分页、改视图…）
+ * 每次都会拿到一个新身份 → 一次额外重渲染，且依赖它的 `treeRows` /
+ * `allCollapsibleGroupKeys` 两个 useMemo 全部失效重算。
+ */
+const EMPTY_COLLAPSED: Set<string> = new Set()
+
+/** 读取折叠分组键集合：URL `?collapsed=` 逗号分隔、逐键 decode。 */
 function readCollapsed(searchParams: URLSearchParams): Set<string> {
   const raw = searchParams.get('collapsed')
-  if (!raw) return new Set()
+  if (!raw) return EMPTY_COLLAPSED
   return new Set(
     raw
       .split(',')
@@ -164,7 +209,7 @@ function readSortOrder(searchParams: URLSearchParams): InstanceSortOrder {
 
 function readPageSize(searchParams: URLSearchParams): number {
   const value = Number(searchParams.get('pageSize'))
-  return INSTANCE_PAGE_SIZES.includes(value as (typeof INSTANCE_PAGE_SIZES)[number]) ? value : 200
+  return INSTANCE_PAGE_SIZES.includes(value as (typeof INSTANCE_PAGE_SIZES)[number]) ? value : 50
 }
 
 function readPage(searchParams: URLSearchParams): number {
@@ -198,6 +243,16 @@ function writeInstanceUrlState(searchParams: URLSearchParams, updates: InstanceU
   if (updates.nodeId !== undefined) writeParam(searchParams, 'nodeId', updates.nodeId)
 }
 
+/** 
+ * proxy 行判定（能力画像 `bcTopology`）。
+ *
+ * 抽成模块级函数是为了让**行渲染与虚拟高度模型共用同一判据**：展开行会在同一虚拟「项」下
+ * 多渲染一个 `<tr>`，模型必须按展开行高计入，两处判据一旦分叉就会重新引入行位漂移。
+ */
+function isProxyInstance(inst: InstanceInfo): boolean {
+  return resolveCapabilities(inst).capabilities.includes('bcTopology')
+}
+
 export default function InstancesPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -206,10 +261,15 @@ export default function InstancesPage() {
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const hadUrlNodeRef = useRef(searchParams.has('nodeId'))
-  const updateUrl = useCallback((updates: InstanceUrlState) => {
+  /** 
+   * 写回 URL 状态。`replace: true` 用 `history.replaceState` 原地改写当前条目，
+   * 不往历史栈追加——高频来源（如搜索框逐键）必须走这条路，否则每敲一个字符
+   * 就多一条历史记录，用户输 10 个字符后要按 11 次「返回」才离开本页。
+   */
+  const updateUrl = useCallback((updates: InstanceUrlState, options?: { replace?: boolean }) => {
     const next = new URLSearchParams(searchParams)
     writeInstanceUrlState(next, updates)
-    setSearchParams(next)
+    setSearchParams(next, { replace: options?.replace })
   }, [searchParams, setSearchParams])
   const [showProvision, setShowProvision] = useState(false)
   const [showProvisionProxy, setShowProvisionProxy] = useState(false)
@@ -218,7 +278,7 @@ export default function InstancesPage() {
   const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
   const [editConfigTarget, setEditConfigTarget] = useState<InstanceInfo | null>(null)
   const [tagsTarget, setTagsTarget] = useState<{ id: number; name: string; tags: string[] } | null>(null)
-  // 资源限额编辑目标（FR-079）：携带启动方式与当前限额回填。
+  // 资源限额编辑目标：携带启动方式与当前限额回填。
   const [limitsTarget, setLimitsTarget] = useState<{
     id: number
     name: string
@@ -229,21 +289,32 @@ export default function InstancesPage() {
   } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; inPlace?: boolean; running?: boolean } | null>(null)
   const [killTarget, setKillTarget] = useState<{ id: number; name: string } | null>(null)
-  // 接管运行态漂移（FR-471）：先把目标置入待确认，DangerConfirm 确认后才发请求（与强杀同款纪律）。
+  /* 
+    启停二次确认（用户提出）：启动/停止/重启都会打断正在游戏的玩家，尤其「停止」会把在线玩家直接踢下线，
+    误点代价不可忽略。此前行内图标按钮与「⋯」菜单都是**一发即执行**，没有任何确认。
+    这里统一收敛为「先置入待确认目标，DangerConfirm 确认后才发请求」——
+    与删除/强杀/接管漂移完全同一套纪律（那三处早已如此，只有启停是漏的）。
+  */
+  /** 右键菜单目标与光标坐标：**全表一份**，由行上报（见 InstanceContextMenu 的注释）。 */
+  const [contextMenu, setContextMenu] = useState<{ inst: InstanceInfo; x: number; y: number } | null>(null)
+  const [lifecycleTarget, setLifecycleTarget] = useState<{ id: number; name: string; op: 'start' | 'stop' | 'restart' } | null>(null)
+  // 接管运行态漂移：先把目标置入待确认，DangerConfirm 确认后才发请求（与强杀同款纪律）。
   const [adoptTarget, setAdoptTarget] = useState<{ id: number; name: string; pid: number } | null>(null)
-  // 批量操作选中的实例 ID 集合（FR-058）。
+  // 批量操作选中的实例 ID 集合。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
-  // 工作台卡 ⇄ 列表视图（FR-136，§4.5）；运行实体默认卡片。
+  // 工作台卡 ⇄ 列表视图（§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>(() => readViewMode(searchParams))
-  // 分组树表：折叠态入 URL（FR-452，`?collapsed=`），切换维度即时重排（客户端聚合）。
+  // 分组树表：折叠态入 URL（`?collapsed=`），切换维度即时重排（客户端聚合）。
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => readCollapsed(searchParams))
-  // 「管理分组」面板开关（FR-165 的组织分组能力在 groupTree 维度内可达，不再单开 orgView 视图）。
+  // 「管理分组」面板开关（的组织分组能力在 groupTree 维度内可达，不再单开 orgView 视图）。
   const [groupManagerOpen, setGroupManagerOpen] = useState(false)
-  // proxy 行 inline 展开已注册 backend 的代理 id 集合（FR-136）。
+  // proxy 行 inline 展开已注册 backend 的代理 id 集合。
   const [expandedProxies, setExpandedProxies] = useState<Set<number>>(new Set())
 
-  // 多维筛选状态（FR-047 / FR-268）：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
+  // 多维筛选状态：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '')
+  // 防抖后的搜索词才是「查询真源」：输入框保持即时回显，服务端搜索等落定。
+  const debouncedSearchQuery = useDebounced(searchQuery, SEARCH_DEBOUNCE_MS)
   const [networkId, setNetworkId] = useState<string>(() => readParamOrAll(searchParams, 'networkId'))
   const [env, setEnv] = useState<string>(() => readParamOrAll(searchParams, 'env'))
   const [tag, setTag] = useState<string>(() => readParamOrAll(searchParams, 'tag'))
@@ -255,13 +326,53 @@ export default function InstancesPage() {
     updateUrl({ nodeId: value, page: '1' })
   }
   const [statusFilter, setStatusFilter] = useState<string>(() => readParamOrAll(searchParams, 'status'))
+
   // 分组视图维度。
   const [groupBy, setGroupBy] = useState<GroupDimension>(() => readGroupDimension(searchParams))
   const [sortKey, setSortKey] = useState<InstanceSortKey>(() => readSortKey(searchParams))
   const [sortOrder, setSortOrder] = useState<InstanceSortOrder>(() => readSortOrder(searchParams))
+
+  // 页面上报「对外可说什么」（§5.1）：只发结构，不发正文。
+  // 上报值全部来自 URL 派生状态（筛选/分组/排序），不读内部 state 对象、不遍历 DOM。
+  // 敏感键由 serializePageContext 统一丢弃，这里不重复判定。
+  // 空值不塞进 filters：一个 `status=all` 对模型没有信息量，反而占长度。
+  const pageContextFilters = useMemo(() => {
+    const f: Record<string, string> = {}
+    if (statusFilter && statusFilter !== ALL) f.status = statusFilter
+    if (groupBy) f.groupBy = groupBy
+    return f
+  }, [statusFilter, groupBy])
+  usePageContext(
+    useMemo(
+      () => ({
+        pageKey: 'instances',
+        ...(Object.keys(pageContextFilters).length ? { filters: pageContextFilters } : {}),
+      }),
+      [pageContextFilters],
+    ),
+  )
   const [page, setPage] = useState(() => readPage(searchParams))
   const [pageSize, setPageSize] = useState(() => readPageSize(searchParams))
   const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  // 列设置（页面重构件）：可见可选列持久化于 jm.instances.columns；缺省全开（旧行为不变）。
+  const [visibleColumns, setVisibleColumns] = useState<Set<InstanceOptionalColumn>>(readStoredColumns)
+  /* 
+    列顺序（用户提出的表头拖拽换位）。与可见列分开存储：
+    一个管「显示哪些列」、一个管「按什么顺序排」，两者正交——隐藏再显示某列时，
+    它在顺序里的位置仍然保留，用户不用重排一遍。
+  */
+  const [columnOrder, setColumnOrder] = useState<InstanceColumnKey[]>(readStoredColumnOrder)
+  /*
+    列宽（用户拖拽表头右缘）。同样独立存储：顺序、可见性、宽度三者正交，
+    任意一项变化都不应该把另外两项重置。拖动过程只改内存状态，松手才落盘。
+  */
+  const [columnWidths, setColumnWidths] = useState<InstanceColumnWidths>(readStoredColumnWidths)
+  const columnWidthsRef = useRef(columnWidths)
+  // 保存视图：整串 search 快照 + 列集合（jm.instances.views）。恢复=导航回快照，
+  // 由 `location.search → 状态` 的同步 effect 落全部字段（过滤/分组/排序/页大小天然保真）。
+  const [savedViews, setSavedViews] = useState<SavedInstanceView[]>(readStoredViews)
+  const [saveViewOpen, setSaveViewOpen] = useState(false)
+  const [viewNameDraft, setViewNameDraft] = useState('')
   const scrollStorageKey = useMemo(
     () => `${SCROLL_KEY_PREFIX}${location.pathname}${location.search}`,
     [location.pathname, location.search],
@@ -308,20 +419,23 @@ export default function InstancesPage() {
 
   const instanceSearchParams: Omit<InstanceSearchParams, 'page'> = useMemo(() => ({
     ...params,
-    ...(searchQuery.trim() ? { q: searchQuery.trim() } : {}),
+    ...(debouncedSearchQuery.trim() ? { q: debouncedSearchQuery.trim() } : {}),
     pageSize,
     sort: sortKey,
     order: sortOrder,
-  }), [pageSize, params, searchQuery, sortKey, sortOrder])
+  }), [debouncedSearchQuery, pageSize, params, sortKey, sortOrder])
+  /* 
+    列表改为**服务端分页**（之后的服务器页重构）：
+    原先是无限滚动 + 虚拟窗口，一次滞千条；改成标准分页表格后，每页 pageSize 条，
+    页码进 URL（已有 `page` 状态），刷新与深链都能回到同一页。
+  */
   const {
     data: searchData,
     isLoading,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteInstanceSearch(instanceSearchParams, page)
-  const instances = useMemo(() => searchData?.pages.flatMap((p) => p.items) ?? [], [searchData])
-  const totalCount = searchData?.pages[0]?.total ?? instances.length
+    isFetching,
+  } = useSearchInstances({ ...instanceSearchParams, page }, true)
+  const instances = useMemo(() => searchData?.items ?? [], [searchData])
+  const totalCount = searchData?.total ?? instances.length
   const aggregateParams = useMemo(() => {
     const next: InstanceListParams = { ...params }
     delete next.status
@@ -330,7 +444,7 @@ export default function InstancesPage() {
   const { data: aggregate } = useInstanceAggregate(aggregateParams)
   const { data: nodes } = useNodes()
   const { data: networks } = useNetworks()
-  // FR-452 `network` / `groupTree` 维度取数：均为一次请求、无 N+1；按维度分别按需预取——
+  // `network` / `groupTree` 维度取数：均为一次请求、无 N+1；按维度分别按需预取——
   // network 维度只需 `/topology`（群组成员映射），groupTree 维度只需 `/instance-groups`（分组树）；
   // 其余维度两者皆不请求（避免「任一为真即同时预取」造成多余请求）。
   const { data: topology } = useTopology({ enabled: groupBy === 'network' })
@@ -343,31 +457,80 @@ export default function InstancesPage() {
   const adopt = useAdoptInstanceRuntime()
   const del = useDeleteInstance()
 
-  // 批量选择（FR-058）：select-all 作用于当前筛选后的可见集合。
+  // 批量选择：select-all 作用于当前筛选后的可见集合。
+  //
+  // 已选集合改 `Set`：行渲染按 `selectedIds.includes(id)` 判定，`includes` 是 O(已选数)——
+  // 全选 1200 台后「可见行 × 1200」的线性扫描会成为渲染热点（对照 NetworksPageView 同款处理）。
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  /* 
+    Shift 连选要按「用户看到的顺序」取区间，而不是 id 顺序。
+    分组维度下展示顺序来自 treeRows（组头 + 成员），平铺视图来自 instances；
+    两者都只取实例 id、跳过组头行。
+  */
+  const selectionOrderIds = useMemo<number[]>(() => instances.map((i) => i.id), [instances])
+  /** 
+   * 单次点击选择（含 Shift 连选 / Ctrl 点选）。
+   *
+   * 语义统一由 `applySelectionClick` 决定（纯函数，单测穷举各修饰键组合），
+   * 列表与卡片两个视图共用——避免「列表能 Shift 连选、卡片不能」这类不一致。
+   * 连选区间按**当前展示顺序**（`selectionOrderIds`）取，而非 id 大小。
+   */
+  const toggleOneWithModifiers = (
+    id: number,
+    modifiers: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } = {},
+  ) => {
+    setSelectedIds((prev) => [...applySelectionClick({
+      orderedIds: selectionOrderIds,
+      selected: new Set(prev),
+      targetId: id,
+      shiftKey: modifiers.shiftKey,
+      ctrlKey: modifiers.ctrlKey,
+      metaKey: modifiers.metaKey,
+    })])
+  }
+  /** 兼容旧调用：无修饰键的单项切换（复选框点选即此类）。 */
   const toggleOne = (id: number) =>
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  const allIds = instances?.map((i) => i.id) ?? []
-  const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.includes(id))
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
+  const allIds = useMemo(() => instances?.map((i) => i.id) ?? [], [instances])
+  const allSelected = allIds.length > 0 && allIds.every((id) => selectedIdSet.has(id))
   const toggleAll = () => setSelectedIds(allSelected ? [] : allIds)
+  /** 
+   * 反选（用户提出）：在当前可见集合内翻转。
+   * 只翻转当前页/筛选结果里的项——否则会静默丢掉用户在其他页选好的内容。
+   */
+  const invertAll = () => setSelectedIds((prev) => [...invertSelection(allIds, new Set(prev))])
   const clearSelection = () => setSelectedIds([])
-  // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细（FR-139）。
+  // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细。
   const selectedInstances = useMemo(
     () =>
       instances
-        .filter((i) => selectedIds.includes(i.id))
+        .filter((i) => selectedIdSet.has(i.id))
         .map((i) => ({ id: i.id, name: i.name, status: i.status })),
-    [instances, selectedIds],
+    [instances, selectedIdSet],
   )
 
   const scopedAllInstances = useMemo(
     () => (selectedNodeId == null ? instances : instances.filter((i) => i.nodeId === selectedNodeId)),
     [instances, selectedNodeId],
   )
+  // 环境 / 标签候选由「已加载分页」推导（见下方 FilterSelect 处的局限说明）。
   const envOptions = useMemo(() => collectEnvs(scopedAllInstances), [scopedAllInstances])
   const tagOptions = useMemo(() => collectTags(scopedAllInstances), [scopedAllInstances])
-  const nodeName = (id: number) => nodes?.find((n) => n.id === id)?.name ?? t('console.unknownNode', { id })
+  // 节点 id → 名称：行渲染逐行调用 `nodeName`，若每次线性 `find` 节点表，
+  // 「可见行 × 节点数」会随两侧规模一起放大，故先建索引再查。
+  const nodeNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const n of nodes ?? []) map.set(n.id, n.name)
+    return map
+  }, [nodes])
+  const nodeName = useCallback(
+    (id: number) => nodeNameById.get(id) ?? t('console.unknownNode', { id }),
+    [nodeNameById, t],
+  )
 
-  // 「实例→分组键」映射（FR-452）：仅 network 维度需要外部映射（键=群组名）；
+  // 「实例→分组键」映射：仅 network 维度需要外部映射（键=群组名）；
   // groupTree 维度走独立的层级聚合（键=组 id + 按 parentId 重建的层级，见下）。
   // 维度数据源不可用（预取未启用/未加载）时返回空映射 → 该维度整体落「未分组」，绝不借错数据源。
   const networkKeyMap = useMemo(() => {
@@ -381,7 +544,7 @@ export default function InstancesPage() {
     [groupBy, groupTree],
   )
 
-  // 分组聚合（FR-452）：groupTree 走多级层级聚合（父组头 → 子组头 → 成员）；其余维度单级/两级。
+  // 分组聚合：groupTree 走多级层级聚合（父组头 → 子组头 → 成员）；其余维度单级/两级。
   const groups = useMemo(() => {
     if (groupBy === 'groupTree') return groupInstancesByGroupTree(instances, groupTree ?? [])
     return groupInstances(instances, groupBy, networkKeyMap)
@@ -399,15 +562,26 @@ export default function InstancesPage() {
     }
   }, [aggregate, scopedAllInstances])
 
-  const loadMoreInstances = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      void fetchNextPage()
-    }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
+  /** 
+   * 表头全选框的可访问名。
+   *
+   * 列表分页加载，「全选」实际只覆盖**已加载页**（`allIds = instances.map(...)`），
+   * 而页面上同时显示「已加载 N / 共 M」——两处口径不一致时，用户会把「全选」
+   * 当成「全库全选」，批量删除的作用域与理解不符。这里把作用域直接写进可访问名，
+   * 复用既有文案（`instanceBatch.selectAll` + `instances.loadedOfTotal`），不新增 i18n 键。
+   */
+  const selectAllLabel = `${t('instanceBatch.selectAll')} · ${t('instances.loadedOfTotal', {
+    loaded: instances.length,
+    total: totalCount,
+  })}`
 
+  /** 
+   * 搜索框：输入即时回显，但服务端 `q` 走防抖（见 `SEARCH_DEBOUNCE_MS`）。
+   * URL 同步改为 replace——逐键 push 会把历史栈塞满（输 10 个字符要按 11 次返回）。
+   */
   const setSearchQueryFilter = (value: string) => {
     setSearchQuery(value)
-    updateUrl({ q: value, page: '1' })
+    updateUrl({ q: value, page: '1' }, { replace: true })
   }
   const setNetworkFilter = (value: string) => {
     setNetworkId(value)
@@ -449,11 +623,11 @@ export default function InstancesPage() {
   }
   const setPageSizeParam = (value: string) => {
     const parsed = Number(value)
-    const next = INSTANCE_PAGE_SIZES.includes(parsed as (typeof INSTANCE_PAGE_SIZES)[number]) ? parsed : 200
+    const next = INSTANCE_PAGE_SIZES.includes(parsed as (typeof INSTANCE_PAGE_SIZES)[number]) ? parsed : 50
     setPageSize(next)
     updateUrl({ pageSize: String(next), page: '1' })
   }
-  /** 切换某分组折叠态并写回 URL（FR-452，`?collapsed=`）。 */
+  /** 切换某分组折叠态并写回 URL（`?collapsed=`）。 */
   const toggleGroupCollapsed = (key: string) => {
     // 纯计算放在 updater 之外：setState updater 须为纯函数（URL 写入是副作用，不能在里面）。
     const next = new Set(collapsedGroups)
@@ -470,6 +644,12 @@ export default function InstancesPage() {
 
   const hasActiveFilter =
     searchQuery.trim() !== '' || networkId !== ALL || env !== ALL || tag !== ALL || nodeId !== ALL || statusFilter !== ALL
+  /** 
+   * 生效中的筛选条件数：给「筛选」按钮的徽标用。
+   * 只数面板里的五个维度，不含搜索词——搜索框自己就可见，重复计入会让人误以为
+   * 还有一个没找到的筛选条件。
+   */
+  const activeFilterCount = [networkId, env, tag, nodeId, statusFilter].filter((v) => v !== ALL).length
   const resetFilters = () => {
     setSearchQuery('')
     setNetworkId(ALL)
@@ -486,36 +666,46 @@ export default function InstancesPage() {
     const next = statusFilter === (target ?? ALL) ? ALL : (target ?? ALL)
     setStatusFilterParam(next)
   }
-  const summaryChips: SummaryChip[] = [
+
+  /* 
+    KPI 卡：把 summaryChips 同一批数据换成「图标 + 大数字」形态。
+    刻意**不加**「总在线玩家」这张卡——它的口径是跨全部实例求和，
+    与「按状态筛选」不是同一维度，点它筛什么说不清；先不引入这个歧义。
+  */
+  const summaryStatCards = [
     {
       key: 'all',
       label: t('grouping.all'),
-      count: counts.total,
+      value: counts.total.toLocaleString('zh-CN'),
+      icon: ServerCog,
+      tone: 'neutral' as const,
       active: statusFilter === ALL,
       onClick: () => resetFilters(),
     },
     {
       key: 'running',
       label: t('instances.running'),
-      count: counts.running,
-      level: 'success',
-      breathing: counts.running > 0,
+      value: counts.running.toLocaleString('zh-CN'),
+      icon: CircleCheck,
+      tone: 'success' as const,
       active: statusFilter === 'RUNNING',
       onClick: () => applySummaryFilter('running'),
     },
     {
       key: 'stopped',
       label: t('instances.stopped'),
-      count: counts.stopped,
-      level: 'neutral',
+      value: counts.stopped.toLocaleString('zh-CN'),
+      icon: CircleSlash,
+      tone: 'neutral' as const,
       active: statusFilter === 'STOPPED',
       onClick: () => applySummaryFilter('stopped'),
     },
     {
       key: 'crashed',
       label: t('instances.crashed'),
-      count: counts.crashed,
-      level: 'danger',
+      value: counts.crashed.toLocaleString('zh-CN'),
+      icon: TriangleAlert,
+      tone: 'danger' as const,
       active: statusFilter === 'CRASHED',
       onClick: () => applySummaryFilter('crashed'),
     },
@@ -529,8 +719,8 @@ export default function InstancesPage() {
     CRASHED: { text: t('instances.crashed'), variant: 'destructive' },
   }
 
-  /**
-   * 按分组维度给出分组标题（FR-452 各维度统一落此处）；空 key 显示该维度的「未分…」文案。
+  /** 
+   * 按分组维度给出分组标题（各维度统一落此处）；空 key 显示该维度的「未分…」文案。
    * 多级维度由 `level` 区分层级（region：外层大区 / 内层小区；groupTree：按 `groupTreeLabels` 的组名）。
    */
   const groupLabel = (key: string, level: number = 0): string => {
@@ -561,7 +751,7 @@ export default function InstancesPage() {
     }
   }
 
-  // 树表行模型（FR-452）：分组头 + 成员行统一行模型，供单个虚拟表渲染。
+  // 树表行模型：分组头 + 成员行统一行模型，供单个虚拟表渲染。
   const treeRows = useMemo(
     () => buildInstanceTreeRows(groups, groupBy, groupLabel, collapsedGroups),
     // groupLabel 依赖 nodes/t/groupBy/groupTreeLabels，随其变化重算；折叠态变化即时反映。
@@ -575,11 +765,16 @@ export default function InstancesPage() {
   )
 
   const buildMenu = (inst: InstanceInfo) => {
-    // 运行态漂移（FR-471）：无漂移为 undefined，据此决定是否给出「接管」菜单项。
+    // 运行态漂移：无漂移为 undefined，据此决定是否给出「接管」菜单项。
     const drift = runtimeDriftOf(inst)
     return (
       <InstanceRowMenu
         inst={inst}
+        // 生命周期动作同时出现在行内主按钮与「⋯」菜单：列表行内只留当前状态最常用的那一个，
+        // 卡片视图没有行内按钮，全靠菜单——两处共用同一批 mutation，不走第二条路径。
+        onStart={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'start' })}
+        onStop={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'stop' })}
+        onRestart={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'restart' })}
         onTags={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
         onEditConfig={() => setEditConfigTarget(inst)}
         onLimits={() => setLimitsTarget({
@@ -592,7 +787,7 @@ export default function InstancesPage() {
         })}
         onProxy={() => setManageProxy({ id: inst.id, name: inst.name })}
         onClone={() => setCloneTarget({ id: inst.id, name: inst.name })}
-        // 接管运行态漂移（FR-471）：仅当目录下确有未纳管活进程时给出入口。
+        // 接管运行态漂移：仅当目录下确有未纳管活进程时给出入口。
         onAdoptRuntime={
           drift ? () => setAdoptTarget({ id: inst.id, name: inst.name, pid: drift.pid }) : undefined
         }
@@ -600,7 +795,7 @@ export default function InstancesPage() {
           id: inst.id,
           name: inst.name,
           inPlace: !!inst.workDirInPlace,
-          // FR-310：非停止态删除由后端编排「先停止（超时强杀）再删除」，确认框据此提示。
+          // 非停止态删除由后端编排「先停止（超时强杀）再删除」，确认框据此提示。
           running: inst.status !== 'STOPPED' && inst.status !== 'CRASHED',
         })}
       />
@@ -615,189 +810,272 @@ export default function InstancesPage() {
       return next
     })
 
-  const renderRow = (inst: InstanceInfo) => {
-    const st = statusConfig[inst.status] || statusConfig.STOPPED
-    const instEnv = envOf(inst)
-    const free = freeTagsOf(inst)
-    // 代理的分组展开行由画像 `bcTopology` 能力判定（FR-445），取代写死的 role === 'proxy'。
-    const isProxy = resolveCapabilities(inst).capabilities.includes('bcTopology')
-    const proxyExpanded = expandedProxies.has(inst.id)
-    // 运行态漂移（FR-471）：无漂移为 undefined，行内据此决定是否出标记。
-    const rowDrift = runtimeDriftOf(inst)
-    return (
-      <Fragment key={inst.id}>
-        <TableRow data-state={selectedIds.includes(inst.id) ? 'selected' : undefined}>
-          <TableCell>
-            <Checkbox
-              checked={selectedIds.includes(inst.id)}
-              onCheckedChange={() => toggleOne(inst.id)}
-              aria-label={inst.name}
-            />
-          </TableCell>
-          <TableCell className="font-medium">
-            <div className="flex items-center gap-1.5">
-              {isProxy && (
-                <button
-                  type="button"
-                  onClick={() => toggleProxy(inst.id)}
-                  aria-label={t('proxy.manageBackends')}
-                  className="text-muted-foreground hover:text-foreground"
-                >
-                  {proxyExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                </button>
-              )}
-              <button
-                type="button"
-                className="text-left text-primary hover:underline"
-                onClick={() => openInstance(inst.id)}
-              >
-                {inst.name}
-              </button>
-              {/* 就地导入徽章（FR-302）：工作目录在托管区外，删除实例不删原目录。 */}
-              {inst.workDirInPlace && (
-                <Badge variant="outline" className="shrink-0 border-amber-500/50 text-amber-600 dark:text-amber-400">
-                  {t('importServer.inPlaceBadge')}
-                </Badge>
-              )}
-              {/* 运行态漂移标记（FR-471）：目录下有未纳管活进程，面板状态可能不准（行内只做标记，
-                  接管入口收在「⋯」菜单，避免每行多插一个破坏密度的按钮）。 */}
-              {rowDrift && <RuntimeDriftBadge pid={rowDrift.pid} cmdline={rowDrift.cmdline} />}
-            </div>
-          </TableCell>
-          <TableCell className="text-muted-foreground">{inst.type}</TableCell>
-          {/* 节点:端口（FR-136）：serverPort 已有数据 */}
-          <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-            {nodeName(inst.nodeId)}
-            {inst.serverPort > 0 && <span className="tabular-nums">:{inst.serverPort}</span>}
-          </TableCell>
-          <TableCell>
-            <RoleBadge role={inst.role} />
-          </TableCell>
-          <TableCell>
-            <div className="flex flex-wrap items-center gap-1">
-              {instEnv && (
-                <Badge variant="outline" className="border-primary/40 text-primary">
-                  {t(`grouping.env_${instEnv}`, { defaultValue: instEnv })}
-                </Badge>
-              )}
-              {free.map((tg) => (
-                <Badge key={tg} variant="secondary" className="font-normal">
-                  {tg}
-                </Badge>
-              ))}
-              {!instEnv && free.length === 0 && <span className="text-muted-foreground text-xs">--</span>}
-            </div>
-          </TableCell>
-          <TableCell>
-            <StatusBadge
-              level={instanceStatusLevel(inst.status)}
-              label={st.text}
-              pulse={inst.status === 'STARTING' || inst.status === 'STOPPING'}
-            />
-          </TableCell>
-          <TableCell>
-            <div className="flex items-center gap-1">
-              {/* 主操作随状态，操作进行中禁用防连点（FR-138）；
-                  搭建中硬性禁启（FR-331），tooltip 由外层 span 承载（禁用态 pointer-events-none）。 */}
-              {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
-                <span title={isProvisioningInstance(inst) ? t('instances.provisioningBlocked') : undefined}>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={isProvisioningInstance(inst) || (start.isPending && start.variables === inst.id)}
-                    onClick={() => start.mutate(inst.id)}
-                    aria-label={t('instances.start')}
-                    className="text-green-600 hover:text-green-700"
-                  >
-                    {start.isPending && start.variables === inst.id ? t('instances.processing') : t('instances.start')}
-                  </Button>
-                </span>
-              )}
-              {inst.status === 'RUNNING' && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={stop.isPending && stop.variables === inst.id}
-                    onClick={() => stop.mutate(inst.id)}
-                    aria-label={t('instances.stop')}
-                    className="text-yellow-600 hover:text-yellow-700"
-                  >
-                    {stop.isPending && stop.variables === inst.id ? t('instances.processing') : t('instances.stop')}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={restart.isPending && restart.variables === inst.id}
-                    onClick={() => restart.mutate(inst.id)}
-                    aria-label={t('instances.restart')}
-                    className="text-blue-600 hover:text-blue-700"
-                  >
-                    {restart.isPending && restart.variables === inst.id ? t('instances.processing') : t('instances.restart')}
-                  </Button>
-                </>
-              )}
-              {(inst.status === 'STARTING' || inst.status === 'STOPPING') && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => setKillTarget({ id: inst.id, name: inst.name })}
-                  aria-label={t('instances.kill')}
-                  className="text-yellow-600 hover:text-yellow-700"
-                >
-                  {t('instances.kill')}
-                </Button>
-              )}
-              {buildMenu(inst)}
-            </div>
-          </TableCell>
-        </TableRow>
-        {isProxy && proxyExpanded && (
-          <TableRow className="bg-muted/30 hover:bg-muted/30">
-            <TableCell colSpan={8} className="p-0">
-              <BackendsInline proxyId={inst.id} />
-            </TableCell>
-          </TableRow>
-        )}
-      </Fragment>
-    )
+  /** 
+   * 可见窗口上报（虚拟表 → 页面）：表格把 `range` 变化回报，页面据此切片实例列表，
+   * 走 useInstanceWindowMetrics 批量取行内指标（≤50/次、300ms 防抖、30s 轮询）后逐行注入。
+   * 下标语义随视图：平铺表按 `instances`、分组树表按 `treeRows`——两者由各自表格的 range 决定。
+   */
+  /* 
+    行内指标只取**当前页**的实例（原先是虚拟窗口的可见区间）。
+    改成分页后「可见」= 当前页，语义更简单；每页 50 条也远小于原先一屏能滚到的规模，
+    批量取指标的压力反而更小。
+  */
+  const visibleInstances = useMemo(() => instances, [instances])
+
+  const windowMetrics = useInstanceWindowMetrics(visibleInstances)
+
+  /* 
+    业务域状态：**只在「业务插件」列开启时才取数**。
+
+    理由：这条链路会实打实打到探针（批量端点每次最多 50 台）。
+    列关着还去取，等于让每个打开实例页的用户都白白打一轮探针。
+
+    批量端点上限 50 台，故按当前页切片——分页大小可能被用户调到 100+，
+    超出部分由后续页各自承担，不在这里一次性全发。
+  */
+  const businessColumnOn = visibleColumns.has('business')
+  const businessIds = useMemo(
+    () => (businessColumnOn ? visibleInstances.slice(0, 50).map((i) => i.id) : []),
+    [businessColumnOn, visibleInstances],
+  )
+  const { data: businessRows } = useBusinessStatusBatch(businessIds, businessColumnOn)
+  const businessById = useMemo(() => {
+    const map = new Map<number, BusinessStatus>()
+    for (const row of businessRows ?? []) {
+      if (row.status) map.set(row.instanceId, row.status)
+    }
+    return map
+  }, [businessRows])
+
+  /** 
+   * 当前表格实际渲染的列数：分组头行/空态占位的 colSpan 必须与之一致。
+   *
+   * 【为什么不再写死 11】列模型已从 11 列合并为 8 列（三列指标合并成健康度、身份列合并为一格），
+   * 此前仍按 11 减，colSpan 比实际列数大 3——浏览器会截断，视觉无害但语义错。
+   * 这里按「固定 6 列 + 两个可合并组是否可见」现算，与表头/行/colgroup 同一判据。
+   */
+  const hasIdentity = (['type', 'role', 'tags'] as const).some((c) => visibleColumns.has(c))
+  const hasHealth = (['metrics', 'active', 'heartbeat'] as const).some((c) => visibleColumns.has(c))
+  const columnCount = 6 + (hasIdentity ? 1 : 0) + (hasHealth ? 1 : 0)
+
+  /** 
+   * 表头拖拽换位：把 from 列移动到 to 列的位置，并持久化。
+   * `moveColumn` 是纯函数（钉住的列不参与），这里只负责落状态与存储。
+   */
+  const reorderColumn = (from: InstanceColumnKey, to: InstanceColumnKey) => {
+    setColumnOrder((prev) => {
+      const next = moveColumn(prev, from, to)
+      writeStoredColumnOrder(next)
+      return next
+    })
   }
 
+  /** 列宽实时预览：只改内存状态，避免拖动时每帧写 localStorage。 */
+  const resizeColumn = (key: InstanceColumnKey, width: number) => {
+    setColumnWidths((prev) => {
+      const next = { ...prev, [key]: clampColumnWidth(key, width) }
+      columnWidthsRef.current = next
+      return next
+    })
+  }
+
+  /** 松手落盘：拖动期间已连续更新内存，这里只持久化最终值。 */
+  const commitColumnWidths = () => writeStoredColumnWidths(columnWidthsRef.current)
+
+  /** 恢复单列默认宽度（双击列宽手柄）。 */
+  const resetColumnWidth = (key: InstanceColumnKey) => {
+    setColumnWidths((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      columnWidthsRef.current = next
+      writeStoredColumnWidths(next)
+      return next
+    })
+  }
+
+  /** 恢复全部列宽（「显示」菜单）。 */
+  const resetAllColumnWidths = () => {
+    const next: InstanceColumnWidths = {}
+    columnWidthsRef.current = next
+    setColumnWidths(next)
+    writeStoredColumnWidths(next)
+  }
+
+  /** 列设置：切换可选列可见性并持久化。 */
+  const toggleColumn = (column: InstanceOptionalColumn) => {
+    setVisibleColumns((prev) => {
+      const next = new Set(prev)
+      if (next.has(column)) next.delete(column)
+      else next.add(column)
+      writeStoredColumns(next)
+      return next
+    })
+  }
+
+
+  /** 应用保存的视图：导航回快照 search（状态由同步 effect 落位），并恢复列集合。 */
+  const applySavedView = (view: SavedInstanceView) => {
+    navigate(`/instances${view.search}`)
+    const next = new Set(view.columns)
+    setVisibleColumns(next)
+    writeStoredColumns(next)
+  }
+
+  /** 保存当前视图（同名覆盖）；快照 = 当前 location.search + 当前列集合。 */
+  const saveCurrentView = () => {
+    const name = viewNameDraft.trim()
+    if (!name) return
+    const next = [
+      ...savedViews.filter((view) => view.name !== name),
+      { name, search: location.search, columns: [...visibleColumns] },
+    ]
+    setSavedViews(next)
+    writeStoredViews(next)
+    setSaveViewOpen(false)
+  }
+
+  const deleteSavedView = (name: string) => {
+    const next = savedViews.filter((view) => view.name !== name)
+    setSavedViews(next)
+    writeStoredViews(next)
+  }
+
+  /** 
+   * 行装配（ADR-103）：行展示件已入包（平铺表与分组树表共用），此处只注入数据与回调。
+   * 逐行判别留在应用侧：节点名（查节点表）、代理画像、搭建中、运行态漂移、
+   * 三个动作的按 id 在途态（别的行在提交不该禁用本行）。
+   * proxy 内联展开与批量勾选是跨行共享状态，故仍由本页持有——虚拟窗口滚动会卸载行，
+   * 行内自持会丢失展开态；勾选还与表头全选、批量栏同源。
+   */
+  const renderRow = (inst: InstanceInfo) => (
+    <InstanceRowView
+      inst={inst}
+      nodeName={nodeName(inst.nodeId)}
+      selected={selectedIdSet.has(inst.id)}
+      onToggleSelect={() => toggleOne(inst.id)}
+      isProxy={isProxyInstance(inst)}
+      provisioning={isProvisioningInstance(inst)}
+      drift={runtimeDriftOf(inst)}
+      metrics={windowMetrics.get(inst.uuid)}
+      businessStatus={businessById.get(inst.id)}
+      columns={visibleColumns}
+      columnOrder={columnOrder}
+      proxyExpanded={expandedProxies.has(inst.id)}
+      onToggleProxy={() => toggleProxy(inst.id)}
+      renderBackends={() => <BackendsInlineContainer proxyId={inst.id} />}
+      starting={start.isPending && start.variables === inst.id}
+      stopping={stop.isPending && stop.variables === inst.id}
+      menu={buildMenu(inst)}
+      onOpenInstance={openInstance}
+      onStart={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'start' })}
+      onStop={() => setLifecycleTarget({ id: inst.id, name: inst.name, op: 'stop' })}
+      onKill={() => setKillTarget({ id: inst.id, name: inst.name })}
+      onContextMenu={(row, x, y) => setContextMenu({ inst: row, x, y })}
+    />
+  )
+
   return (
-    <div data-page="instances" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <h1 className="jm-page-title">{t('instances.title')}</h1>
-        {/* flex-wrap：四个入口按钮在移动端（390px）超行宽须换行——修 v0.15.0 验收 e2e
-            抓出的移动端横向溢出 120px（FR-302 加第 4 按钮后顶爆无 wrap 的一行）。 */}
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => setShowProvision(true)}>
-            <Zap className="size-4" /> {t('provision.entry')}
-          </Button>
-          <Button variant="outline" onClick={() => setShowProvisionProxy(true)}>
-            <Globe className="size-4" /> {t('proxy.entry')}
-          </Button>
-          <Button variant="outline" onClick={() => setShowImport(true)}>
-            <HardDriveDownload className="size-4" /> {t('importServer.entry')}
-          </Button>
-          <Button onClick={() => navigate('/instances/new')}>
-            <Plus className="size-4" /> {t('instances.createInstance')}
-          </Button>
-        </div>
+    // 阶段 6 页面迁移：外壳与页头改用布局层原语（PageShell / PageHeader）。
+    // data-page 由 PageShell spread 透传，e2e 的就绪信号依赖它。
+    // variant="fixed"：本页的滚动发生在**表格内部**（表头吸顶 + 容器内滚），不是整页滚动。
+    // `default` 变体会给一个 overflow-auto 的整页滚动容器，页内 `flex-1` 就拿不到
+    // 「视口剩余高度」，退回按内容撑高、又被外层滚动——两层滚动叠加，表格底部被推出视口。
+    // fixed 是 overflow-hidden，高度钉在视口内，`flex-1` 才有意义。
+    <PageShell data-page="instances" variant="fixed">
+      {/*
+        【页头只留小标题 + 右侧按钮】此前标题下还有一行「42 台服务器 · 36 运行中 · 3 异常 ·
+        2,431 在线玩家」的统计副标题——那些数字已经由下面的 KPI 卡片承担，两处重复表达同一信息，
+        既占高度又分散注意力。现在标题行只负责「我在哪一页」这一件事。
+      */}
+      <PageHeader
+        className="[&_[data-slot=page-header]]:gap-0"
+        title={t('instances.title')}
+        description={t('instances.subtitle')}
+        actions={
+          /* 
+            【四种新建入口收成一个分裂按钮】
+            「一键搭建 / 搭建代理 / 导入现有服务器 / 创建实例」四个并列按钮占满整个页头右侧，
+            每个都是同样权重，用户无法一眼分出主次——而它们其实是同一件事（弄一个实例出来）
+            的四种方式。改为：主按钮直接进最常用的「创建实例」，右侧▾ 展开另外三种。
+            主次由此分明，页头宽度也不再被四个按钮吃掉。
+          */
+          <div className="flex items-stretch">
+            <Button onClick={() => navigate('/instances/new')} className="rounded-r-none">
+              <Plus className="size-4" /> {t('instances.createInstance')}
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  aria-label={t('instances.moreCreateWays')}
+                  title={t('instances.moreCreateWays')}
+                  className="rounded-l-none border-l border-primary-foreground/25 px-1.5"
+                >
+                  <ChevronDown className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem onSelect={() => setShowProvision(true)}>
+                  <Zap className="size-4" /> {t('provision.entry')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setShowProvisionProxy(true)}>
+                  <Globe className="size-4" /> {t('proxy.entry')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setShowImport(true)}>
+                  <HardDriveDownload className="size-4" /> {t('importServer.entry')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        }
+      />
+
+      {/*
+        概览区：KPI 卡片（图标 + 大数字，可点一键筛选）。
+        与原来的 SummaryChips（一排 pill）相比，这里读的是**数字**而不是文字——
+        「有多少台在跑、有多少台挂了」是这一页最先被扫的信息，值得给到卡片级的权重。
+        卡片直接复用 ui 包的 `StatCard`，只额外传 `onClick` / `active`；
+        激活态由 `statusFilter` 驱动，点同一张再点一次即取消（与旧 chip 行为一致）。
+      */}
+      <div role="group" aria-label={t('instances.summaryLabel')} className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
+        {summaryStatCards.map((card) => (
+          <StatCard
+            key={card.key}
+            label={card.label}
+            value={card.value}
+            icon={<card.icon className="size-3.5" aria-hidden="true" />}
+            tone={card.tone}
+            onClick={card.onClick}
+            active={card.active}
+          />
+        ))}
       </div>
 
-      {/* 汇总头：运行/停止/崩溃计数，可点设筛选（FR-136） + 视图切换 */}
-      <div className="flex items-center gap-2">
-        <SummaryChips chips={summaryChips} className="flex-1" />
-        <ViewToggle
-          value={view}
-          onChange={setViewParam}
-          cardLabel={t('grouping.viewCard')}
-          listLabel={t('grouping.viewList')}
-        />
-      </div>
+      {/* 多维筛选 + 分组视图（137）：sticky + 可折叠，避免长筛选条在移动端翻屏。 */}
+      {/*
+        工具栏收成一张明确的卡片：此前它只是 `jm-toolbar-surface`（半透明白底），
+        与页面底色差不到 1% 明度，视觉上是「飘着的一排控件」而不是「一块工具区」。
+        改成带描边与内边距的实心面板后，搜索 / 筛选 / 视图切换才有归属。
+      */}
+      {/* 吸附工具栏：Card 承载统一表面（圆角/描边/底色/阴影）。
+          原为块级容器且内部两段无间距，故 gap 置零；sticky 定位与毛玻璃按需保留。 */}
+      {/*
+        【工具栏收敛为「一行主导航 + 一个可折叠筛选面板」】
+        改前是 4 行控件（搜索/排序/页大小/收起筛选 → 卡片列表切换/列设置/视图/折叠展开 →
+        群组/环境/标签/节点/状态 → 分组），其中「排序/排序方向/每页条数/列设置/保存视图/
+        全部折叠/全部展开」都是低频设置，却与「搜索」和「卡片/列表」同为一级可见，
+        一级控件因此被淹没，用户每次都要在四行里找。
 
-      {/* 多维筛选 + 分组视图（FR-047/137）：sticky + 可折叠，避免长筛选条在移动端翻屏。 */}
-      <div className="sticky top-16 z-20 jm-toolbar-surface space-y-2 p-2">
+        现在一级只留三个动作：搜索、看哪种视图（卡片/列表）、筛什么（带条件数徽标）；
+        其余按语义归入两个菜单——「显示」放呈现相关的（排序/每页/列/分组维度/折叠），
+        「视图」只放保存的快照。低频不再占位，但功能一个都没删。
+      */}
+      {/*
+        【去掉 Card 外壳，与数据区合并成一层】此前筛选条是独立一张卡片（自带 border/底色/
+        内边距），下面又是另一张表格卡片——两层壳之间还有 12px 间距，首屏被吃掉约 115px。
+        现在筛选条直接作为数据区的头部：保留吸附与毛玻璃，但不再有自己的边框，
+        视觉上与表格同属一块。
+      */}
+      <div className="sticky top-16 z-20 -mx-1 rounded-lg bg-background/85 px-1 py-1.5 backdrop-blur-sm">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-52 flex-1 sm:flex-none">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -810,97 +1088,188 @@ export default function InstancesPage() {
               className="h-8 pl-8"
             />
           </div>
-          <Select value={sortKey} onValueChange={(v) => setSortKeyParam(v as InstanceSortKey)}>
-            <SelectTrigger size="sm" className="w-36" aria-label={t('grouping.sortBy')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="createdAt">{t('grouping.sort_createdAt')}</SelectItem>
-              <SelectItem value="name">{t('grouping.sort_name')}</SelectItem>
-              <SelectItem value="status">{t('grouping.sort_status')}</SelectItem>
-              <SelectItem value="nodeId">{t('grouping.sort_nodeId')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={sortOrder} onValueChange={(v) => setSortOrderParam(v as InstanceSortOrder)}>
-            <SelectTrigger size="sm" className="w-28" aria-label={t('grouping.sortOrder')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="asc">{t('grouping.orderAsc')}</SelectItem>
-              <SelectItem value="desc">{t('grouping.orderDesc')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={String(pageSize)} onValueChange={setPageSizeParam}>
-            <SelectTrigger size="sm" className="w-28" aria-label={t('grouping.pageSize')}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {INSTANCE_PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)}>
-                  {t('grouping.pageSizeValue', { count: size })}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setFiltersCollapsed((v) => !v)}
-            aria-expanded={!filtersCollapsed}
-            aria-controls="instances-advanced-filters"
-          >
-            <SlidersHorizontal className="size-4" />
-            {filtersCollapsed ? t('grouping.showFilters') : t('grouping.hideFilters')}
-          </Button>
           <div className="ml-auto flex items-center gap-2">
-            {hasActiveFilter && (
-              <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
-                {t('grouping.clearFilters')}
-              </Button>
-            )}
-            {/* FR-452：分组树表提供全部折叠/展开（长列表一屏可管）。 */}
-            {groupBy !== 'none' && view === 'list' && (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  data-testid="instances-collapse-all"
-                  onClick={() => setAllCollapsed(true, allCollapsibleGroupKeys)}
-                >
-                  {t('grouping.collapseAll')}
+            {/* 视图切换：卡片 / 列表。一级常驻——它决定「怎么看这份数据」。 */}
+            <ViewToggle
+              value={view}
+              onChange={setViewParam}
+              cardLabel={t('grouping.viewCard')}
+              listLabel={t('grouping.viewList')}
+            />
+            {/* 筛选：面板开合 + 生效条件数徽标——徽标让「我筛过东西」无需展开即可见。 */}
+            <Button
+              variant={filtersCollapsed ? 'outline' : 'default'}
+              size="sm"
+              onClick={() => setFiltersCollapsed((v) => !v)}
+              aria-expanded={!filtersCollapsed}
+              aria-controls="instances-advanced-filters"
+            >
+              <SlidersHorizontal className="size-4" />
+              {t('grouping.filter')}
+              {activeFilterCount > 0 && (
+                <span className="rounded-full bg-background/25 px-1.5 text-[11px] tabular-nums">
+                  {activeFilterCount}
+                </span>
+              )}
+            </Button>
+            {/* 显示：排序 / 排序方向 / 分组维度 / 每页 / 列 / 折叠——「这份数据怎么排布」。 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Settings2 className="size-4" /> {t('grouping.display')}
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  data-testid="instances-expand-all"
-                  disabled={collapsedGroups.size === 0}
-                  onClick={() => setAllCollapsed(false, [])}
-                >
-                  {t('grouping.expandAll')}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>{t('grouping.sortBy')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={sortKey} onValueChange={(v) => setSortKeyParam(v as InstanceSortKey)}>
+                  {(['createdAt', 'name', 'status', 'nodeId'] as const).map((key) => (
+                    <DropdownMenuRadioItem
+                      key={key}
+                      value={key}
+                      // 就地单选：保持菜单打开，避免「改一项就要重开一次」。
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {t(`grouping.sort_${key}`)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t('grouping.sortOrder')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={sortOrder} onValueChange={(v) => setSortOrderParam(v as InstanceSortOrder)}>
+                  <DropdownMenuRadioItem value="asc" onSelect={(event) => event.preventDefault()}>
+                    {t('grouping.orderAsc')}
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="desc" onSelect={(event) => event.preventDefault()}>
+                    {t('grouping.orderDesc')}
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t('grouping.groupBy')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={groupBy} onValueChange={(v) => setGroupByParam(v as GroupDimension)}>
+                  {GROUP_DIMENSIONS.map((dim) => (
+                    <DropdownMenuRadioItem key={dim} value={dim} onSelect={(event) => event.preventDefault()}>
+                      {t(`grouping.dim_${dim}`)}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{t('grouping.pageSize')}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={String(pageSize)} onValueChange={setPageSizeParam}>
+                  {INSTANCE_PAGE_SIZES.map((size) => (
+                    <DropdownMenuRadioItem
+                      key={size}
+                      value={String(size)}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {t('grouping.pageSizeValue', { count: size })}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                {/* 列设置只对列表视图有意义：卡片没有「列」这一维度，在卡片视图下显示
+                    这个入口等于给一个点了没反应（或只影响切回列表后的样子）的控件。 */}
+                {view === 'list' && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t('instances.columnsLabel')}</DropdownMenuLabel>
+                    {INSTANCE_OPTIONAL_COLUMNS.map((column) => (
+                      <DropdownMenuCheckboxItem
+                        key={column}
+                        checked={visibleColumns.has(column)}
+                        onCheckedChange={() => toggleColumn(column)}
+                        onSelect={(event) => event.preventDefault()}
+                      >
+                        {t(COLUMN_LABEL_KEY[column])}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                    <DropdownMenuItem onSelect={resetAllColumnWidths}>
+                      {t('instances.resetColumnWidths', '重置列宽')}
+                    </DropdownMenuItem>
+                  </>
+                )}
+                {/* 折叠控制只在有分组头时才有意义（平铺视图无处可折叠）。 */}
+                {groupBy !== 'none' && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => setAllCollapsed(true, allCollapsibleGroupKeys)}>
+                      {t('grouping.collapseAll')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={collapsedGroups.size === 0}
+                      onSelect={() => setAllCollapsed(false, [])}
+                    >
+                      {t('grouping.expandAll')}
+                    </DropdownMenuItem>
+                    {groupBy === 'groupTree' && (
+                      <DropdownMenuItem onSelect={() => setGroupManagerOpen((v) => !v)}>
+                        <FolderTree className="size-4" /> {t('instanceGroups.manage')}
+                      </DropdownMenuItem>
+                    )}
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {/* 视图：只放保存的快照（整串 search + 列集合），与「显示」菜单分工明确。 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Bookmark className="size-4" /> {t('instances.viewsLabel')}
                 </Button>
-              </>
-            )}
-            {/* 组织分组视图（FR-165）收敛为 groupTree 维度；分组管理入口随之挂在该维度下。 */}
-            {groupBy === 'groupTree' && (
-              <Button
-                variant={groupManagerOpen ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setGroupManagerOpen((v) => !v)}
-                aria-pressed={groupManagerOpen}
-              >
-                <FolderTree className="size-4" /> {t('instanceGroups.manage')}
-              </Button>
-            )}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>{t('instances.viewsSaved')}</DropdownMenuLabel>
+                {savedViews.length === 0 ? (
+                  <DropdownMenuItem disabled>{t('instances.viewsEmpty')}</DropdownMenuItem>
+                ) : (
+                  savedViews.map((view) => (
+                    <DropdownMenuItem key={view.name} onSelect={() => applySavedView(view)}>
+                      <span className="min-w-0 flex-1 truncate">{view.name}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t('instances.viewDelete', { name: view.name })}
+                        title={t('instances.viewDelete', { name: view.name })}
+                        // 菜单项内的次级动作：按下不得触发 Radix 的项选择，故阻止冒泡链。
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          deleteSavedView(view.name)
+                        }}
+                        className="text-muted-foreground/70 hover:text-destructive"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </DropdownMenuItem>
+                  ))
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setViewNameDraft('')
+                    setSaveViewOpen(true)
+                  }}
+                >
+                  <Plus className="size-4" /> {t('instances.saveView')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
         {!filtersCollapsed && (
-          <div id="instances-advanced-filters" className="flex flex-wrap items-center gap-2">
+          <div id="instances-advanced-filters" className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2">
             <FilterSelect
               label={t('grouping.filterNetwork')}
               value={networkId}
               onChange={setNetworkFilter}
               options={(networks ?? []).map((n) => ({ value: String(n.id), label: n.name }))}
             />
+            {/* 已知局限（本次不修，需后端补 facet）：环境 / 标签候选由**已加载分页**推导
+                （见 `envOptions` / `tagOptions`），因此
+                ① 尚未加载到的环境 / 标签在此根本选不到——在「已加载 200 / 共 1200」时
+                   用户可能找不到某个确实存在的标签；
+                ② 滚动续取后候选会突然变多，同一个下拉的内容随加载进度变化。
+                根治要后端在 /instances/search（或 aggregate）上给出全量 facet（distinct 值 + 计数），
+                前端不擅自改接口契约，故此处只标注局限。 */}
             <FilterSelect
               label={t('grouping.filterEnv')}
               value={env}
@@ -925,22 +1294,10 @@ export default function InstancesPage() {
               onChange={setStatusFilterParam}
               options={Object.entries(statusConfig).map(([k, v]) => ({ value: k, label: v.text }))}
             />
-            {(
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">{t('grouping.groupBy')}</span>
-                <Select value={groupBy} onValueChange={(v) => setGroupByParam(v as GroupDimension)}>
-                  <SelectTrigger size="sm" className="w-36" aria-label={t('grouping.groupBy')}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {GROUP_DIMENSIONS.map((dim) => (
-                      <SelectItem key={dim} value={dim}>
-                        {t(`grouping.dim_${dim}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            {hasActiveFilter && (
+              <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
+                {t('grouping.clearFilters')}
+              </Button>
             )}
           </div>
         )}
@@ -986,60 +1343,102 @@ export default function InstancesPage() {
         />
       )}
 
-      {isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
-      ) : (
+      {/*阶段 6 补丁：数据未到时不再只给一行「加载中」。页头与（吸附的）筛选条先渲染，
+          数据区用同壳骨架顶上：上面一条计数行占位、下面一张列表外壳 + 行占位，
+          与就绪态「计数行 + 列表」两段结构一致，数据到达原地替换而不整页跳。 */}
+      {isLoading && instances.length === 0 ? (
         <div className="space-y-3">
-          {selectedIds.length > 0 && (
-            <InstanceBatchBar selected={selectedInstances} onClear={clearSelection} onRetainFailed={setSelectedIds} />
-          )}
-          {/* 加载可供性（FR-235）：已加载/总数计数 + 显式「加载更多」兜底（不依赖滚动触发）。
-              分组视图下 total 为服务端总数，各组仅反映「当前已加载页」，组头计数即已加载子集。 */}
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted-foreground">
-            <span data-testid="instances-loaded-count">
-              {t('instances.loadedOfTotal', {
-                defaultValue: 'Loaded {{loaded}} / {{total}}',
-                loaded: instances.length,
-                total: totalCount,
-              })}
-              {groupBy !== 'none' && (
-                <span className="ml-2 text-xs">
-                  {t('instances.groupsLoadedOnly', { defaultValue: '(groups show loaded pages only)' })}
-                </span>
-              )}
-            </span>
-            {instances.length < totalCount && (
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="instances-load-more"
-                disabled={isFetchingNextPage}
-                onClick={loadMoreInstances}
-              >
-                {isFetchingNextPage
-                  ? t('instances.loadingMore', { defaultValue: 'Loading…' })
-                  : t('instances.loadMore', { defaultValue: 'Load more' })}
-              </Button>
-            )}
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-8 w-24" />
           </div>
+          <DataPanelSkeleton rows={12} />
+        </div>
+      ) : (
+        /* 
+          数据区用 flex 列：让内部的虚拟表靠 `flex-1` 吃掉剩余高度（表格容器已改成 flex-1）。
+          此前这里是 `div.space-y-3`——纯块级、不分配高度，表格只能用
+          `max-h-[calc(100vh-20rem)]` 猜一个定值，页面一变高就算错、把列表顶出视口。
+          `min-h-0` 是 flex 列里子项可收缩的前提，缺了它表格仍会被内容撑高、溢出照旧。
+        */
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+          {/*
+            批量栏只在列表视图出现：卡片视图的卡片**没有勾选入口**（卡片组件不接选择相关 props），
+            所以从列表选中若干实例再切到卡片时，会出现一个「选着东西但无法取消」的批量栏，
+            且用户没法在卡片里继续加选——这是无效 UI，也会让人以为卡片也能批量操作。
+          */}
+          {selectedIds.length > 0 && (
+            <InstanceBatchBar
+              selected={selectedInstances}
+              onClear={clearSelection}
+              onRetainFailed={setSelectedIds}
+              onInvert={invertAll}
+            />
+          )}
           {view === 'card' ? (
-            <CardView
-              groupBy={groupBy}
-              groups={groups}
-              totalCount={totalCount}
-              onNeedMore={loadMoreInstances}
+            /* 
+              卡片视图同样需要分页条：数据是服务端分页（每页 50 条），而卡视图走的是
+              虚拟分组渲染路径，此前既没有分页条、onNeedMore 也是空实现——
+              第 2 页及之后的实例在卡片视图里完全够不着（实测 1200+ 实例只看到 28 张）。
+              这里用 flex 列把分页条固定在底部，卡区吃掉剩余高度。
+            */
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
+            <VirtualizedGroupedCardView
+              // 卡片视图与表格视图共用同一行模型（buildInstanceTreeRows）：折叠、大区/小区两级、
+              // 多级分组树的展开/收起行为由构造一致，不再各写一套分段逻辑。
+              rows={treeRows}
+              // 分页后「总数」= 当前页行数：虚拟滚动的高度模型必须与实际行数一致，
+              // 否则会按 1200 条算出行盒、而只有 50 条内容，表现为大片空白或整片骨架屏。
+              totalCount={treeRows.length}
+              loadedCount={instances.length}
+              onNeedMore={() => {}}
+              onToggleCollapse={toggleGroupCollapsed}
               scrollStorageKey={scrollStorageKey}
-              groupLabel={groupLabel}
               nodeName={nodeName}
               buildMenu={buildMenu}
-              hasActiveFilter={hasActiveFilter}
               onOpenInstance={openInstance}
+              emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
+              renderCard={(args) => (
+                <InstanceWorktableCard
+                  {...args}
+                  /* 
+                    卡片视图的启停/右键：与列表视图走完全相同的页面级流程。
+                    此前卡片自己 useStartInstance().mutate()，绕过了二次确认——
+                    同一台实例在列表里会确认、在卡片里一点就停，安全语义不一致。
+                  */
+                  onStart={() => setLifecycleTarget({ id: args.inst.id, name: args.inst.name, op: 'start' })}
+                  onStop={() => setLifecycleTarget({ id: args.inst.id, name: args.inst.name, op: 'stop' })}
+                  onRestart={() => setLifecycleTarget({ id: args.inst.id, name: args.inst.name, op: 'restart' })}
+                  onContextMenu={(card, x, y) => setContextMenu({ inst: card, x, y })}
+                  selected={selectedIdSet.has(args.inst.id)}
+                  onToggleSelect={(modifiers) => toggleOneWithModifiers(args.inst.id, modifiers)}
+                  /* 身份徽章开关跟随列设置：卡片与表格展示同一组信息，用户关掉的列在卡片里也不显示。 */
+                  showType={visibleColumns.has('type')}
+                  showRole={visibleColumns.has('role')}
+                  showTags={visibleColumns.has('tags')}
+                />
+              )}
             />
+            <InstancePaginationBar
+              loaded={instances.length}
+              total={totalCount}
+              page={page}
+              pageSize={pageSize}
+              isFetching={isFetching}
+              onPageChange={(next) => updateUrl({ page: String(next) })}
+            />
+            </div>
           ) : groupBy === 'none' ? (
-            <VirtualizedInstanceTable
+            <PaginatedInstanceTable
               instances={instances}
-              totalCount={totalCount}
-              onNeedMore={loadMoreInstances}
+              total={totalCount}
+              page={page}
+              pageSize={pageSize}
+              isFetching={isFetching}
+              onPageChange={(next) => updateUrl({ page: String(next) })}
+                      visibleColumns={visibleColumns}
+              columnOrder={columnOrder}
+              columnWidths={columnWidths}
               scrollStorageKey={scrollStorageKey}
               header={
                 <InstanceTableHeader
@@ -1049,19 +1448,51 @@ export default function InstancesPage() {
                   sortKey={sortKey}
                   sortOrder={sortOrder}
                   onSort={setTableSortParam}
+                  selectAllLabel={selectAllLabel}
+                  visibleColumns={visibleColumns}
+                  columnOrder={columnOrder}
+                  onReorderColumn={reorderColumn}
+                  onColumnResize={resizeColumn}
+                  onColumnResizeEnd={commitColumnWidths}
+                  onResetColumnWidth={resetColumnWidth}
                 />
               }
               renderRow={renderRow}
               emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
             />
           ) : (
-            <VirtualizedGroupedInstanceTable
-              rows={treeRows}
-              totalCount={totalCount}
-              loadedCount={instances.length}
-              onNeedMore={loadMoreInstances}
-              onToggleCollapse={toggleGroupCollapsed}
+            <PaginatedInstanceTable
+              instances={instances}
+              total={totalCount}
+              page={page}
+              pageSize={pageSize}
+              isFetching={isFetching}
+              onPageChange={(next) => updateUrl({ page: String(next) })}
+                      visibleColumns={visibleColumns}
+              columnOrder={columnOrder}
+              columnWidths={columnWidths}
+              treeRows={treeRows}
               scrollStorageKey={scrollStorageKey}
+              renderGroupRow={(row) => (
+                <TableRow
+                  key={row.key}
+                  data-testid="instances-group-row"
+                  data-group-depth={row.depth}
+                  data-collapsed={row.collapsed ? 'true' : 'false'}
+                  className="border-b bg-muted/40"
+                >
+                  <TableCell colSpan={columnCount} className="px-4 py-1.5">
+                    <InstanceGroupHeaderContent
+                      label={row.label}
+                      depth={row.depth}
+                      count={row.count}
+                      health={row.health}
+                      collapsed={row.collapsed}
+                      onToggle={() => toggleGroupCollapsed(row.collapseKey)}
+                    />
+                  </TableCell>
+                </TableRow>
+              )}
               header={
                 <InstanceTableHeader
                   t={t}
@@ -1070,22 +1501,100 @@ export default function InstancesPage() {
                   sortKey={sortKey}
                   sortOrder={sortOrder}
                   onSort={setTableSortParam}
+                  selectAllLabel={selectAllLabel}
+                  visibleColumns={visibleColumns}
+                  columnOrder={columnOrder}
+                  onReorderColumn={reorderColumn}
+                  onColumnResize={resizeColumn}
+                  onColumnResizeEnd={commitColumnWidths}
+                  onResetColumnWidth={resetColumnWidth}
                 />
               }
               renderRow={renderRow}
               emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
             />
           )}
-          {/* 组织分组管理（FR-165）：收敛到 groupTree 维度下的可选面板，保留建组/移入能力。 */}
+          {/* 组织分组管理：收敛到 groupTree 维度下的可选面板，保留建组/移入能力。 */}
           {groupBy === 'groupTree' && groupManagerOpen && <InstanceGroupManager />}
+          {/* 健康度悬浮面板：**全表单例**（全表只渲染这一个，与行数无关）。 */}
+          <InstanceHealthHoverLayer />
+          {/*
+            实例行右键菜单：同样**全表单例**。动作集合由 buildContextMenuActions 生成，
+            与「⋯」下拉菜单共用同一批 mutation / 弹窗目标——两处入口不会各写一套判据。
+          */}
+          {contextMenu && (
+            <InstanceContextMenu
+              inst={contextMenu.inst}
+              position={{ x: contextMenu.x, y: contextMenu.y }}
+              actions={buildContextMenuActions({
+                inst: contextMenu.inst,
+                t: (key, fallback, opts) => t(key, { defaultValue: fallback, ...opts }),
+                onStart: () => setLifecycleTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name, op: 'start' }),
+                onStop: () => setLifecycleTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name, op: 'stop' }),
+                onRestart: () => setLifecycleTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name, op: 'restart' }),
+                onEditConfig: () => setEditConfigTarget(contextMenu.inst),
+                onTags: () =>
+                  setTagsTarget({
+                    id: contextMenu.inst.id,
+                    name: contextMenu.inst.name,
+                    tags: parseTags(contextMenu.inst.tags),
+                  }),
+                onLimits: () =>
+                  setLimitsTarget({
+                    id: contextMenu.inst.id,
+                    name: contextMenu.inst.name,
+                    processType: contextMenu.inst.processType,
+                    cpuLimit: contextMenu.inst.cpuLimit ?? 0,
+                    memLimitMb: contextMenu.inst.memLimitMb ?? 0,
+                    diskLimitMb: contextMenu.inst.diskLimitMb ?? 0,
+                  }),
+                onProxy: () => setManageProxy({ id: contextMenu.inst.id, name: contextMenu.inst.name }),
+                onClone: () => setCloneTarget({ id: contextMenu.inst.id, name: contextMenu.inst.name }),
+                onDelete: () =>
+                  setDeleteTarget({
+                    id: contextMenu.inst.id,
+                    name: contextMenu.inst.name,
+                    inPlace: !!contextMenu.inst.workDirInPlace,
+                    running: contextMenu.inst.status !== 'STOPPED' && contextMenu.inst.status !== 'CRASHED',
+                  }),
+              })}
+              onClose={() => setContextMenu(null)}
+            />
+          )}
         </div>
       )}
+
+      {/* 保存视图：命名后落 jm.instances.views（同名覆盖）。 */}
+      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t('instances.saveViewTitle')}</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={viewNameDraft}
+            onChange={(event) => setViewNameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') saveCurrentView()
+            }}
+            placeholder={t('instances.viewNamePlaceholder')}
+            aria-label={t('instances.viewNamePlaceholder')}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveViewOpen(false)}>
+              {t('common.cancel', { defaultValue: '取消' })}
+            </Button>
+            <Button disabled={!viewNameDraft.trim()} onClick={saveCurrentView}>
+              {t('common.save', { defaultValue: '保存' })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DangerConfirm
         open={deleteTarget !== null}
         title={t('danger.deleteInstanceTitle', { name: deleteTarget?.name ?? '' })}
         description={[
-          // FR-310：运行中删除先停止再删除，确认时明示进程处置方式。
+          // 运行中删除先停止再删除，确认时明示进程处置方式。
           deleteTarget?.running ? t('danger.deleteInstanceStopFirst') : null,
           deleteTarget?.inPlace ? t('importServer.deleteInPlaceDesc') : t('danger.deleteInstanceDesc'),
         ].filter(Boolean).join(' ')}
@@ -1094,6 +1603,53 @@ export default function InstancesPage() {
         scope="group"
         onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget.id); setDeleteTarget(null) }}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/*
+        启停二次确认：三个动作各自给一句「会发生什么」的说明。
+        - 停止会把在线玩家直接踢下线，不可撤销地打断一局游戏；
+        - 重启同理但会自己回来；
+        - 启动本身无破坏性，但仍确认一次（与另两个保持同一交互，避免「有的确认有的不确认」）。
+        scope 不传：启停只影响单台实例，与 node.operate 那类平台级权限无关。
+      */}
+      <DangerConfirm
+        open={lifecycleTarget !== null}
+        title={t(
+          lifecycleTarget?.op === 'stop'
+            ? 'danger.stopInstanceTitle'
+            : lifecycleTarget?.op === 'restart'
+              ? 'danger.restartInstanceTitle'
+              : 'danger.startInstanceTitle',
+          { name: lifecycleTarget?.name ?? '' },
+        )}
+        description={t(
+          lifecycleTarget?.op === 'stop'
+            ? 'danger.stopInstanceDesc'
+            : lifecycleTarget?.op === 'restart'
+              ? 'danger.restartInstanceDesc'
+              : 'danger.startInstanceDesc',
+        )}
+        confirmLabel={t(
+          lifecycleTarget?.op === 'stop'
+            ? 'instances.stop'
+            : lifecycleTarget?.op === 'restart'
+              ? 'instances.restart'
+              : 'instances.start',
+        )}
+        pending={
+          (lifecycleTarget?.op === 'start' && start.isPending) ||
+          (lifecycleTarget?.op === 'stop' && stop.isPending) ||
+          (lifecycleTarget?.op === 'restart' && restart.isPending)
+        }
+        onConfirm={() => {
+          if (!lifecycleTarget) return
+          const { id, op } = lifecycleTarget
+          if (op === 'start') start.mutate(id)
+          else if (op === 'stop') stop.mutate(id)
+          else restart.mutate(id)
+          setLifecycleTarget(null)
+        }}
+        onCancel={() => setLifecycleTarget(null)}
       />
 
       <DangerConfirm
@@ -1106,7 +1662,7 @@ export default function InstancesPage() {
         onCancel={() => setKillTarget(null)}
       />
 
-      {/* 接管运行态二次确认（FR-471）：会给该服造成一次真实重启，故与强杀同款二次确认。 */}
+      {/* 接管运行态二次确认：会给该服造成一次真实重启，故与强杀同款二次确认。 */}
       <DangerConfirm
         open={adoptTarget !== null}
         title={t('serverConsole.runtimeDriftAdoptTitle', { name: adoptTarget?.name ?? '' })}
@@ -1116,920 +1672,8 @@ export default function InstancesPage() {
         onConfirm={() => { if (adoptTarget) adopt.mutate(adoptTarget.id); setAdoptTarget(null) }}
         onCancel={() => setAdoptTarget(null)}
       />
-    </div>
+    </PageShell>
   )
 }
 
-/**
- * 树表统一行模型（FR-452）：分组头行与成员实例行同属一个虚拟化列表，
- * 避免「每组一个虚拟表」的分片表头与滚动错位。
- * - group：分组头（可折叠），带成员计数与聚合健康色带；`depth` 区分 region 两级（0=大区 / 1=小区）。
- * - instance：成员实例行（沿用既有 `renderRow`）。
- */
-type InstanceTreeRow =
-  | {
-      kind: 'group'
-      key: string
-      /** 折叠态在 URL 中的稳定键（组头行自身用 key 渲染，与 collapseKey 解耦）。 */
-      collapseKey: string
-      label: string
-      /** 层级深度（0 起）；region 两级为 0/1，groupTree 为分组树实际深度。 */
-      depth: number
-      count: number
-      health: MemberHealth
-      collapsed: boolean
-    }
-  | { kind: 'instance'; key: string; instance: InstanceInfo }
 
-/**
- * 由分组结果 + 维度 + 折叠态构建树表行（FR-452）。
- * - region 维度：大区头（depth 0）→ 小区头（depth 1）→ 成员；折叠大区隐藏其全部小区。
- * - groupTree 维度：多级——组头（depth=树深度）→ 本组**直接**成员行 → 递归子组头 → 其成员；
- *   折叠某组隐藏其后代（子组头与全部成员行）。键为组 id，同名不同组各自成组。
- * - 其余维度：单级分组头 → 成员；`none` 维度直接平铺（无分组头）。
- * 未分组（空 key）由聚合函数保证排在末尾，此处不额外排序。
- */
-function buildInstanceTreeRows(
-  groups: InstanceGroup[],
-  dim: GroupDimension,
-  labelOf: (key: string, level: number) => string,
-  collapsed: Set<string>,
-): InstanceTreeRow[] {
-  if (dim === 'none') {
-    return groups.flatMap((g) =>
-      g.instances.map((instance) => ({ kind: 'instance' as const, key: `instance:${instance.id}`, instance })),
-    )
-  }
-  const rows: InstanceTreeRow[] = []
-  if (dim === 'region') {
-    for (const region of groups) {
-      const regionKey = `region:${region.key}`
-      const regionCollapsed = collapsed.has(regionKey)
-      rows.push({
-        kind: 'group',
-        key: `group:${regionKey}`,
-        collapseKey: regionKey,
-        label: labelOf(region.key, 0),
-        depth: 0,
-        count: region.instances.length,
-        health: memberHealth(region.instances),
-        collapsed: regionCollapsed,
-      })
-      if (regionCollapsed) continue
-      const zones = region.children ?? [{ key: '', instances: region.instances }]
-      for (const zone of zones) {
-        const zoneKey = `region:${region.key}/zone:${zone.key}`
-        const zoneCollapsed = collapsed.has(zoneKey)
-        rows.push({
-          kind: 'group',
-          key: `group:${zoneKey}`,
-          collapseKey: zoneKey,
-          label: labelOf(zone.key, 1),
-          depth: 1,
-          count: zone.instances.length,
-          health: memberHealth(zone.instances),
-          collapsed: zoneCollapsed,
-        })
-        if (zoneCollapsed) continue
-        for (const instance of zone.instances) {
-          rows.push({ kind: 'instance', key: `instance:${instance.id}`, instance })
-        }
-      }
-    }
-    return rows
-  }
-  if (dim === 'groupTree') {
-    // 多级层级展开：组头 → 直接成员 → 子组（递归）；折叠即隐藏整棵子树。
-    const walk = (list: InstanceGroup[], depth: number) => {
-      for (const group of list) {
-        const collapseKey = `${dim}:${group.key}`
-        const groupCollapsed = collapsed.has(collapseKey)
-        rows.push({
-          kind: 'group',
-          key: `group:${collapseKey}`,
-          collapseKey,
-          label: labelOf(group.key, depth),
-          depth,
-          count: group.instances.length,
-          health: memberHealth(group.instances),
-          collapsed: groupCollapsed,
-        })
-        if (groupCollapsed) continue
-        for (const instance of group.direct ?? group.instances) {
-          rows.push({ kind: 'instance', key: `instance:${instance.id}`, instance })
-        }
-        if (group.children && group.children.length > 0) walk(group.children, depth + 1)
-      }
-    }
-    walk(groups, 0)
-    return rows
-  }
-  for (const group of groups) {
-    const collapseKey = `${dim}:${group.key}`
-    const groupCollapsed = collapsed.has(collapseKey)
-    rows.push({
-      kind: 'group',
-      key: `group:${collapseKey}`,
-      collapseKey,
-      label: labelOf(group.key, 0),
-      depth: 0,
-      count: group.instances.length,
-      health: memberHealth(group.instances),
-      collapsed: groupCollapsed,
-    })
-    if (groupCollapsed) continue
-    for (const instance of group.instances) {
-      rows.push({ kind: 'instance', key: `instance:${instance.id}`, instance })
-    }
-  }
-  return rows
-}
-
-/** 分组头行的聚合健康色带（运行/过渡/崩溃/停止分段；FR-452 验收）。 */
-function GroupHealthBand({ health }: { health: MemberHealth }) {
-  const { t } = useTranslation()
-  const segs: { value: number; className: string; label: string }[] = [
-    { value: health.running, className: 'bg-status-success', label: t('networks.healthRunning') },
-    { value: health.transitioning, className: 'bg-status-warning', label: t('networks.healthTransitioning') },
-    { value: health.crashed, className: 'bg-status-danger', label: t('networks.healthCrashed') },
-    { value: health.stopped, className: 'bg-muted-foreground/40', label: t('networks.healthStopped') },
-  ]
-  const summary = t('grouping.healthBand', {
-    running: health.running,
-    transitioning: health.transitioning,
-    crashed: health.crashed,
-    stopped: health.stopped,
-  })
-  return (
-    <span
-      className="flex h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted"
-      role="img"
-      aria-label={summary}
-      title={summary}
-      data-testid="instances-group-health"
-    >
-      {segs.map((s, i) =>
-        s.value > 0 ? (
-          <span
-            key={i}
-            className={s.className}
-            style={{ width: `${(s.value / Math.max(health.total, 1)) * 100}%` }}
-          />
-        ) : null,
-      )}
-    </span>
-  )
-}
-
-/**
- * 实例分组树表（FR-452）：单个虚拟表承载「分组头行（可折叠）+ 成员实例行」。
- * 分组头行显示折叠箭头 + 分组名 + 成员计数 + 聚合健康色带；折叠态由父级写回 URL（`?collapsed=`）。
- */
-function VirtualizedGroupedInstanceTable({
-  rows,
-  totalCount,
-  loadedCount,
-  onNeedMore,
-  onToggleCollapse,
-  scrollStorageKey,
-  header,
-  renderRow,
-  emptyLabel,
-}: {
-  rows: InstanceTreeRow[]
-  totalCount: number
-  loadedCount: number
-  onNeedMore: () => void
-  onToggleCollapse: (key: string) => void
-  scrollStorageKey: string
-  header: React.ReactNode
-  renderRow: (inst: InstanceInfo) => React.ReactNode
-  emptyLabel: string
-}) {
-  const { t } = useTranslation()
-  const {
-    containerRef,
-    onScroll,
-    range,
-  } = useVirtualRows({
-    total: rows.length,
-    itemSize: 44,
-    overscan: 10,
-    fallbackViewportSize: 520,
-  })
-  const handleScroll = useStoredVirtualScroll(containerRef, onScroll, scrollStorageKey)
-
-  useEffect(() => {
-    if (range.end + 20 >= rows.length && loadedCount < totalCount) {
-      onNeedMore()
-    }
-  }, [loadedCount, onNeedMore, range.end, rows.length, totalCount])
-
-  return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      data-testid="instances-table-virtual"
-      data-total-count={totalCount}
-      className="max-h-[calc(100vh-20rem)] min-h-72 overflow-auto rounded-lg border bg-card/95 shadow-soft"
-    >
-      <Table>
-        {header}
-        <TableBody>
-          {range.before > 0 && (
-            <TableRow aria-hidden="true">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
-            </TableRow>
-          )}
-          {rows.slice(range.start, range.end).map((row) => row.kind === 'group' ? (
-            <TableRow
-              key={row.key}
-              data-testid="instances-group-row"
-              data-group-depth={row.depth}
-              data-collapsed={row.collapsed ? 'true' : 'false'}
-              className="sticky top-9 z-10 bg-muted/80 backdrop-blur"
-            >
-              <TableCell colSpan={8} className="h-11 px-4 py-2">
-                <div className="flex items-center gap-2" style={{ paddingLeft: row.depth * 16 }}>
-                  <button
-                    type="button"
-                    onClick={() => onToggleCollapse(row.collapseKey)}
-                    aria-expanded={!row.collapsed}
-                    aria-label={
-                      row.collapsed
-                        ? t('grouping.expandGroup', { name: row.label })
-                        : t('grouping.collapseGroup', { name: row.label })
-                    }
-                    data-testid="instances-group-toggle"
-                    className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-                  >
-                    {row.collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-                  </button>
-                  <span className="text-sm font-medium">{row.label}</span>
-                  <Badge variant="outline" className="font-normal">{row.count}</Badge>
-                  <GroupHealthBand health={row.health} />
-                </div>
-              </TableCell>
-            </TableRow>
-          ) : (
-            <Fragment key={row.key}>{renderRow(row.instance)}</Fragment>
-          ))}
-          {range.after > 0 && (
-            <TableRow aria-hidden="true">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
-            </TableRow>
-          )}
-          {rows.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground">
-                {emptyLabel}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-function VirtualizedInstanceTable({
-  instances,
-  totalCount,
-  onNeedMore,
-  scrollStorageKey,
-  header,
-  renderRow,
-  emptyLabel,
-}: {
-  instances: InstanceInfo[]
-  totalCount: number
-  onNeedMore: () => void
-  scrollStorageKey: string
-  header: React.ReactNode
-  renderRow: (inst: InstanceInfo) => React.ReactNode
-  emptyLabel: string
-}) {
-  const {
-    containerRef,
-    onScroll,
-    range,
-  } = useVirtualRows({
-    total: totalCount,
-    itemSize: 44,
-    overscan: 10,
-    fallbackViewportSize: 520,
-  })
-  const handleScroll = useStoredVirtualScroll(containerRef, onScroll, scrollStorageKey)
-
-  useEffect(() => {
-    if (range.end + 20 >= instances.length && instances.length < totalCount) {
-      onNeedMore()
-    }
-  }, [instances.length, onNeedMore, range.end, totalCount])
-
-  const visible = []
-  for (let index = range.start; index < range.end; index++) {
-    visible.push({ index, inst: instances[index] })
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      data-testid="instances-table-virtual"
-      data-total-count={totalCount}
-      className="max-h-[calc(100vh-20rem)] min-h-72 overflow-auto rounded-lg border bg-card/95 shadow-soft"
-    >
-      <Table>
-        {header}
-        <TableBody>
-          {range.before > 0 && (
-            <TableRow aria-hidden="true">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
-            </TableRow>
-          )}
-          {visible.map(({ index, inst }) => (
-            <Fragment key={inst?.id ?? `placeholder-${index}`}>
-              {inst ? renderRow(inst) : (
-                <TableRow aria-hidden="true">
-                  <TableCell colSpan={8} className="p-0" style={{ height: 44 }} />
-                </TableRow>
-              )}
-            </Fragment>
-          ))}
-          {range.after > 0 && (
-            <TableRow aria-hidden="true">
-              <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
-            </TableRow>
-          )}
-          {totalCount === 0 && (
-            <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground">
-                {emptyLabel}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </div>
-  )
-}
-
-function useStoredVirtualScroll(
-  containerRef: React.RefObject<HTMLDivElement | null>,
-  onScroll: () => void,
-  storageKey: string,
-) {
-  const clearZeroTimerRef = useRef<number | null>(null)
-
-  const cancelClearZeroTimer = useCallback(() => {
-    if (clearZeroTimerRef.current == null) return
-    window.clearTimeout(clearZeroTimerRef.current)
-    clearZeroTimerRef.current = null
-  }, [])
-
-  useLayoutEffect(() => {
-    const saved = Number(sessionStorage.getItem(storageKey) ?? 0)
-    if (!Number.isFinite(saved) || saved <= 0) return
-
-    let cancelled = false
-    let attempts = 0
-    let timer: number | null = null
-    const restore = () => {
-      if (cancelled) return
-      const el = containerRef.current
-      attempts += 1
-      if (!el) {
-        if (attempts < 20) timer = window.setTimeout(restore, 50)
-        return
-      }
-      el.scrollTop = saved
-      onScroll()
-      if (el.scrollTop < saved && attempts < 20) timer = window.setTimeout(restore, 50)
-    }
-
-    timer = window.setTimeout(restore, 0)
-    return () => {
-      cancelled = true
-      if (timer != null) window.clearTimeout(timer)
-    }
-  }, [containerRef, onScroll, storageKey])
-
-  useEffect(() => cancelClearZeroTimer, [cancelClearZeroTimer])
-
-  return useCallback(() => {
-    onScroll()
-    const el = containerRef.current
-    if (!el) return
-
-    const scrollTop = Math.round(el.scrollTop)
-    if (scrollTop <= 0) {
-      cancelClearZeroTimer()
-      clearZeroTimerRef.current = window.setTimeout(() => {
-        const currentKey = `${SCROLL_KEY_PREFIX}${window.location.pathname}${window.location.search}`
-        if (currentKey === storageKey) sessionStorage.removeItem(storageKey)
-        clearZeroTimerRef.current = null
-      }, 150)
-      return
-    }
-
-    cancelClearZeroTimer()
-    sessionStorage.setItem(storageKey, String(scrollTop))
-  }, [cancelClearZeroTimer, containerRef, onScroll, storageKey])
-}
-
-/**
- * 卡片视图（FR-136 工作台卡）：平铺或按分组维度分段渲染工作台卡网格。
- * 分组维度非 none 时每组一段（组头 + 该组卡片网格）。
- */
-function CardView({
-  groupBy,
-  groups,
-  totalCount,
-  onNeedMore,
-  scrollStorageKey,
-  groupLabel,
-  nodeName,
-  buildMenu,
-  hasActiveFilter,
-  onOpenInstance,
-}: {
-  groupBy: GroupDimension
-  groups: { key: string; instances: InstanceInfo[] }[]
-  totalCount: number
-  onNeedMore: () => void
-  scrollStorageKey: string
-  groupLabel: (key: string) => string
-  nodeName: (id: number) => string
-  buildMenu: (inst: InstanceInfo) => React.ReactNode
-  hasActiveFilter: boolean
-  onOpenInstance: (id: number) => void
-}) {
-  const { t } = useTranslation()
-  const grid = (list: InstanceInfo[], count = list.length, onMore: () => void = () => {}, key = scrollStorageKey) => (
-    <VirtualizedCardGrid
-      instances={list}
-      totalCount={count}
-      onNeedMore={onMore}
-      scrollStorageKey={key}
-      nodeName={nodeName}
-      buildMenu={buildMenu}
-      onOpenInstance={onOpenInstance}
-    />
-  )
-
-  const loadedTotal = groups.reduce((sum, g) => sum + g.instances.length, 0)
-  if (totalCount === 0 && loadedTotal === 0) {
-    return (
-      <p className="text-center text-muted-foreground py-8">
-        {hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
-      </p>
-    )
-  }
-
-  if (groupBy === 'none') {
-    return grid(groups[0]?.instances ?? [], totalCount, onNeedMore)
-  }
-  // groupTree 为多级树：卡片视图按树前序展平为「每组一段」（每段只画本组**直接**成员，
-  // 子组各自成段），保留层级结构；其余维度沿用顶层单段（region 的顶层 instances 即全量成员）。
-  // `count` 为组头徽标计数：groupTree 用子树并集（含后代去重，与列表组头一致），
-  // `instances` 仅为该段实际渲染的直接成员卡片。
-  const segments: { key: string; label: string; instances: InstanceInfo[]; count: number; depth: number }[] = []
-  if (groupBy === 'groupTree') {
-    const walk = (list: InstanceGroup[], depth: number) => {
-      for (const g of list) {
-        segments.push({
-          key: `${g.key}`,
-          label: groupLabel(g.key),
-          instances: g.direct ?? g.instances,
-          count: g.instances.length,
-          depth,
-        })
-        if (g.children && g.children.length > 0) walk(g.children, depth + 1)
-      }
-    }
-    walk(groups, 0)
-  } else {
-    for (const g of groups) {
-      segments.push({ key: g.key, label: groupLabel(g.key), instances: g.instances, count: g.instances.length, depth: 0 })
-    }
-  }
-  return (
-    <div className="space-y-4">
-      {segments.map((seg) => (
-        <div key={seg.key || '__none__'} className="space-y-2">
-          <div className="flex items-center gap-2 px-1" style={{ paddingLeft: 4 + seg.depth * 16 }}>
-            <span className="text-sm font-medium">{seg.label}</span>
-            <Badge variant="outline" className="font-normal">{seg.count}</Badge>
-          </div>
-          {grid(seg.instances, seg.instances.length, () => undefined, `${scrollStorageKey}:group:${seg.key || '__none__'}`)}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-const CARD_ROW_HEIGHT = 244
-
-function readCardColumns(): number {
-  if (typeof window === 'undefined') return 3
-  if (window.innerWidth >= 1280) return 3
-  if (window.innerWidth >= 640) return 2
-  return 1
-}
-
-function useCardColumns(): number {
-  const [columns, setColumns] = useState(readCardColumns)
-
-  useEffect(() => {
-    const update = () => setColumns(readCardColumns())
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
-
-  return columns
-}
-
-function VirtualizedCardGrid({
-  instances,
-  totalCount,
-  onNeedMore,
-  scrollStorageKey,
-  nodeName,
-  buildMenu,
-  onOpenInstance,
-}: {
-  instances: InstanceInfo[]
-  totalCount: number
-  onNeedMore: () => void
-  scrollStorageKey: string
-  nodeName: (id: number) => string
-  buildMenu: (inst: InstanceInfo) => React.ReactNode
-  onOpenInstance: (id: number) => void
-}) {
-  const columns = useCardColumns()
-  const rowCount = Math.ceil(totalCount / columns)
-  const {
-    containerRef,
-    onScroll,
-    range,
-    totalSize,
-  } = useVirtualRows({
-    total: rowCount,
-    itemSize: CARD_ROW_HEIGHT,
-    overscan: 4,
-    fallbackViewportSize: 720,
-  })
-  const handleScroll = useStoredVirtualScroll(containerRef, onScroll, scrollStorageKey)
-
-  useEffect(() => {
-    if (range.end * columns + 20 >= instances.length && instances.length < totalCount) {
-      onNeedMore()
-    }
-  }, [columns, instances.length, onNeedMore, range.end, totalCount])
-
-  const rows = []
-  for (let rowIndex = range.start; rowIndex < range.end; rowIndex++) {
-    const startIndex = rowIndex * columns
-    const rowItems: Array<{ index: number; inst?: InstanceInfo }> = []
-    for (let offset = 0; offset < columns; offset++) {
-      const index = startIndex + offset
-      if (index < totalCount) rowItems.push({ index, inst: instances[index] })
-    }
-    rows.push({ rowIndex, rowItems })
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      data-testid="instances-card-virtual"
-      data-total-count={totalCount}
-      className="max-h-[calc(100vh-18rem)] min-h-96 overflow-auto pr-1"
-    >
-      <div className="relative" style={{ height: totalSize }}>
-        {rows.map(({ rowIndex, rowItems }) => (
-          <div
-            key={rowIndex}
-            className="absolute inset-x-0 grid gap-4"
-            style={{
-              top: rowIndex * CARD_ROW_HEIGHT,
-              minHeight: CARD_ROW_HEIGHT - 16,
-              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-            }}
-          >
-            {rowItems.map(({ index, inst }) => (
-              <div key={inst?.id ?? `placeholder-${index}`} data-testid="instances-card-virtual-item">
-                {inst ? (
-                  <InstanceWorktableCard
-                    inst={inst}
-                    nodeName={nodeName(inst.nodeId)}
-                    roleBadge={<RoleBadge role={inst.role} compact />}
-                    menu={buildMenu(inst)}
-                    onOpen={onOpenInstance}
-                  />
-                ) : (
-                  <div className="h-[228px] rounded-lg border border-dashed bg-card/70" aria-hidden="true" />
-                )}
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-/** proxy 行 inline 展开的已注册 backend 摘要（FR-136），用既有 useRegistrations。 */
-function BackendsInline({ proxyId }: { proxyId: number }) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const { data, isLoading } = useRegistrations(proxyId)
-
-  if (isLoading) {
-    return <p className="px-6 py-3 text-sm text-muted-foreground">{t('common.loading')}</p>
-  }
-  const regs = data ?? []
-  if (regs.length === 0) {
-    return <p className="px-6 py-3 text-sm text-muted-foreground">{t('proxy.noBackends')}</p>
-  }
-  return (
-    <div className="px-6 py-3">
-      <div className="mb-2 text-xs font-medium text-muted-foreground">
-        {t('proxy.registeredBackends', { count: regs.length })}
-      </div>
-      <ul className="space-y-1">
-        {regs.map((r) => {
-          const b = r.backend
-          return (
-            <li key={r.id} className="flex items-center gap-3 text-sm">
-              <span className="text-muted-foreground">{r.priority}</span>
-              {b ? (
-                <button
-                  type="button"
-                  className="font-medium text-primary hover:underline"
-                  onClick={() => navigate(`/instances/${b.id}`)}
-                >
-                  {b.name}
-                </button>
-              ) : (
-                <span className="font-medium">{r.alias || `#${r.backendId}`}</span>
-              )}
-              {r.alias && <span className="text-xs text-muted-foreground">({r.alias})</span>}
-              {b && (
-                <StatusBadge
-                  level={instanceStatusLevel(b.status)}
-                  label={t(`instances.${b.status.toLowerCase()}`, b.status)}
-                  className="ml-auto"
-                />
-              )}
-              {b && b.serverPort > 0 && (
-                <span className="text-xs tabular-nums text-muted-foreground">:{b.serverPort}</span>
-              )}
-              {!r.enabled && (
-                <Badge variant="outline" className="text-muted-foreground">
-                  {t('common.disabled')}
-                </Badge>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}
-
-/** 角色统一语义色徽标（FR-136）：proxy 主色 / backend 次色 / beacon 提示色 / universal 中性。 */
-function RoleBadge({ role, compact = false }: { role: string; compact?: boolean }) {
-  const { t } = useTranslation()
-  if (role === 'proxy') {
-    return (
-      <Badge variant="outline" className="border-primary/40 bg-accent text-primary">
-        {t('networks.role_proxy')}
-      </Badge>
-    )
-  }
-  if (role === 'backend') {
-    return (
-      <Badge variant="outline" className="border-status-info/40 text-status-info">
-        {t('networks.role_backend')}
-      </Badge>
-    )
-  }
-  if (role === 'beacon') {
-    // 配套服务实例（非 MC 群组服角色）：用中性偏提示的样式与集群服角色区分开。
-    return (
-      <Badge variant="outline" className="border-status-warning/40 text-status-warning">
-        {t('networks.role_beacon')}
-      </Badge>
-    )
-  }
-  if (compact) return null
-  return <span className="text-muted-foreground text-xs">{t('networks.role_universal')}</span>
-}
-
-/** 实例表头（平铺与分组视图复用）。含批量全选复选框（FR-058）与节点:端口列（FR-136）。 */
-function InstanceTableHeader({
-  t,
-  allSelected,
-  onToggleAll,
-  sortKey,
-  sortOrder,
-  onSort,
-}: {
-  t: (k: string, options?: Record<string, unknown>) => string
-  allSelected: boolean
-  onToggleAll: () => void
-  sortKey: InstanceSortKey
-  sortOrder: InstanceSortOrder
-  onSort: (key: InstanceSortKey) => void
-}) {
-  return (
-    <TableHeader className="bg-muted/50">
-      <TableRow>
-        <TableHead className="w-10">
-          <Checkbox checked={allSelected} onCheckedChange={onToggleAll} aria-label={t('instanceBatch.selectAll')} />
-        </TableHead>
-        <SortableTableHead
-          label={t('instances.name')}
-          sortValue="name"
-          currentSort={sortKey}
-          currentOrder={sortOrder}
-          onSort={onSort}
-        />
-        <TableHead>{t('instances.type')}</TableHead>
-        <SortableTableHead
-          label={t('instances.nodePort')}
-          sortValue="nodeId"
-          currentSort={sortKey}
-          currentOrder={sortOrder}
-          onSort={onSort}
-        />
-        <TableHead>{t('instances.role')}</TableHead>
-        <TableHead>{t('grouping.tagsColumn')}</TableHead>
-        <SortableTableHead
-          label={t('instances.status')}
-          sortValue="status"
-          currentSort={sortKey}
-          currentOrder={sortOrder}
-          onSort={onSort}
-        />
-        <TableHead>{t('instances.actions')}</TableHead>
-      </TableRow>
-    </TableHeader>
-  )
-}
-
-function SortableTableHead({
-  label,
-  sortValue,
-  currentSort,
-  currentOrder,
-  onSort,
-}: {
-  label: string
-  sortValue: InstanceSortKey
-  currentSort: InstanceSortKey
-  currentOrder: InstanceSortOrder
-  onSort: (key: InstanceSortKey) => void
-}) {
-  const { t } = useTranslation()
-  const active = currentSort === sortValue
-  const orderLabel = currentOrder === 'desc' ? t('grouping.orderDesc') : t('grouping.orderAsc')
-  return (
-    <TableHead aria-sort={active ? (currentOrder === 'desc' ? 'descending' : 'ascending') : 'none'}>
-      <button
-        type="button"
-        onClick={() => onSort(sortValue)}
-        aria-label={active ? t('grouping.sortHeaderActive', { label, order: orderLabel }) : t('grouping.sortHeader', { label })}
-        className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-      >
-        <span>{label}</span>
-        <ArrowUpDown className={cn('size-3.5', active ? 'text-primary' : 'text-muted-foreground/60')} aria-hidden="true" />
-      </button>
-    </TableHead>
-  )
-}
-
-interface FilterOption {
-  value: string
-  label: string
-}
-
-/** 单个筛选下拉：含「全部」哨兵项 + 给定选项；无选项时禁用。 */
-function FilterSelect({
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  options: FilterOption[]
-}) {
-  const { t } = useTranslation()
-  return (
-    <Select value={value} onValueChange={onChange} disabled={options.length === 0}>
-      <SelectTrigger size="sm" className="w-40" aria-label={label}>
-        <SelectValue placeholder={label} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL}>
-          {label}：{t('grouping.all')}
-        </SelectItem>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-/**
- * 实例行的「⋯」次要操作菜单（FR-138）：标签 / 资源限额 / 代理后端 / 克隆 / 删除收入下拉，
- * 行内只保留启停/重启主操作。运行态下克隆改禁用 + tooltip（非消失）；删除标红且运行态
- * 仍可用（FR-310：后端编排先停止再删除），tooltip 提示该行为。
- *
- * 导出供按键/能力画像门控的针对性测试直接挂载（避免整页渲染）。
- */
-export function InstanceRowMenu({
-  inst,
-  onTags,
-  onEditConfig,
-  onLimits,
-  onProxy,
-  onClone,
-  onAdoptRuntime,
-  onDelete,
-}: {
-  inst: InstanceInfo
-  onTags: () => void
-  onEditConfig: () => void
-  onLimits: () => void
-  onProxy: () => void
-  onClone: () => void
-  /** 接管运行态漂移（FR-471）：仅在实例存在漂移时由调用方传入。 */
-  onAdoptRuntime?: () => void
-  onDelete: () => void
-}) {
-  const { t } = useTranslation()
-  // 克隆要求实例已停止（运行/过渡态禁用并提示原因，而非隐藏）；
-  // 删除运行态可用（FR-310 先停再删），仅以 tooltip 提示行为。
-  const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="xs" aria-label={t('instances.moreActions')} className="px-1.5">
-          ⋯
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={onEditConfig}>{t('instances.editConfig')}</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onTags}>{t('grouping.editTags')}</DropdownMenuItem>
-        {inst.processType === 'docker' && (
-          <DropdownMenuItem onSelect={onLimits}>{t('instances.resourceLimit')}</DropdownMenuItem>
-        )}
-        {resolveCapabilities(inst).capabilities.includes('bcTopology') && (
-          <DropdownMenuItem onSelect={onProxy}>{t('proxy.manageBackends')}</DropdownMenuItem>
-        )}
-        {/* 接管运行态漂移（FR-471）：工作目录下有未纳管活进程时出现；点击只开确认框，
-            真正下发由页面级 DangerConfirm 完成（与强杀同款：菜单不直接发写请求）。 */}
-        {onAdoptRuntime && (
-          <DropdownMenuItem onSelect={onAdoptRuntime} data-testid="instance-menu-adopt-runtime">
-            <Wrench className="size-3.5" />
-            {t('serverConsole.runtimeDriftAdopt')}
-          </DropdownMenuItem>
-        )}
-        {/* 「可克隆」由能力画像 `clone` 承担（仅后端子服类实例声明），不复用 `role === 'backend'`
-            硬编码，也不拿 `mcSemantics` 当门控（那是 MC 世界语义，proxy 无世界语义 ≠ 不可克隆）。 */}
-        {hasCapability(resolveCapabilities(inst), 'clone') && (
-          <DropdownMenuItem
-            title={stopped ? undefined : t('instances.cloneRunningHint')}
-            className={stopped ? undefined : 'opacity-50 cursor-not-allowed'}
-            onSelect={(e) => {
-              if (!stopped) {
-                e.preventDefault()
-                return
-              }
-              onClone()
-            }}
-          >
-            {t('clone.action')}
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          variant="destructive"
-          title={stopped ? undefined : t('instances.deleteRunningHint')}
-          onSelect={onDelete}
-        >
-          {t('common.delete')}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}

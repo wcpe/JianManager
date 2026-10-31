@@ -16,13 +16,13 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 玩家管理相关错误（FR-054 / FR-067）。
+// 玩家管理相关错误。
 var (
 	ErrNoReachableBackend = errors.New("没有可达的后端子服")
 	ErrInvalidBanScope    = errors.New("不支持的封禁范围")
 )
 
-// 探针治理指令 action（FR-067，见 ADR-016；与探针侧 BridgePlayerGovernor 约定一致）。
+// 探针治理指令 action（见 ADR-016；与探针侧 BridgePlayerGovernor 约定一致）。
 const (
 	pluginActionKick            = "kick"
 	pluginActionBan             = "ban"
@@ -37,12 +37,12 @@ const (
 // 须大于 Worker 侧 pluginCommandTimeout(5s)，留出网络与排队余量。
 const pluginExecTimeout = 8 * time.Second
 
-// PlayerService 玩家管理服务（FR-054 治理能力，FR-067 迁移到探针）。
+// PlayerService 玩家管理服务（治理能力迁移到探针）。
 //
 // 在线玩家、踢/封/解封、白名单均经各后端子服的 ServerProbe 探针实现（退役 RCON，见 ADR-016）：
 // CP 经 Worker 的 SendPluginCommand(wait=true) 下发治理指令，探针执行平台 API 后同步回执。
 // BC 跨服感知通过聚合「群组内各后端探针的 list」并标注玩家所在子服实现；封禁记录入库留档
-// （model.BanRecord）。实时在线列表另由 PlayerEventService 的事件名册提供（FR-066）。
+// （model.BanRecord）。实时在线列表另由 PlayerEventService 的事件名册提供。
 type PlayerService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
@@ -140,7 +140,7 @@ func (s *PlayerService) OnlinePlayers(scopeIDs []uint, scoped bool) (*OnlinePlay
 	return result, nil
 }
 
-// Kick 踢出玩家：向目标后端集合的探针下发 kick 指令（FR-067）。
+// Kick 踢出玩家：向目标后端集合的探针下发 kick 指令。
 func (s *PlayerService) Kick(player string, scope PlayerActionScope, scopeIDs []uint, scoped bool) (*PlayerActionResult, error) {
 	player = strings.TrimSpace(player)
 	if player == "" {
@@ -153,7 +153,7 @@ func (s *PlayerService) Kick(player string, scope PlayerActionScope, scopeIDs []
 	return s.fanout(player, pluginActionKick, scope.Reason, targets), nil
 }
 
-// Ban 封禁玩家：向目标后端集合的探针下发 ban 指令，并写入封禁记录（FR-067）。
+// Ban 封禁玩家：向目标后端集合的探针下发 ban 指令，并写入封禁记录。
 // operatorID 用于审计与解封追溯。
 func (s *PlayerService) Ban(player string, scope PlayerActionScope, operatorID uint, scopeIDs []uint, scoped bool) (*PlayerActionResult, error) {
 	player = strings.TrimSpace(player)
@@ -175,7 +175,7 @@ func (s *PlayerService) Ban(player string, scope PlayerActionScope, operatorID u
 	return res, nil
 }
 
-// Unban 解封玩家：向目标后端集合的探针下发 unban 指令，并把对应封禁记录置为失效（FR-067）。
+// Unban 解封玩家：向目标后端集合的探针下发 unban 指令，并把对应封禁记录置为失效。
 func (s *PlayerService) Unban(player string, scope PlayerActionScope, scopeIDs []uint, scoped bool) (*PlayerActionResult, error) {
 	player = strings.TrimSpace(player)
 	if player == "" {
@@ -205,7 +205,7 @@ type WhitelistResult struct {
 	Error      string   `json:"error,omitempty"`
 }
 
-// Whitelist 查询单个后端子服的白名单（探针 whitelist_list，FR-067）。
+// Whitelist 查询单个后端子服的白名单（探针 whitelist_list）。
 func (s *PlayerService) Whitelist(instanceID uint) (*WhitelistResult, error) {
 	b, err := s.backendByID(instanceID)
 	if err != nil {
@@ -221,7 +221,7 @@ func (s *PlayerService) Whitelist(instanceID uint) (*WhitelistResult, error) {
 	return res, nil
 }
 
-// WhitelistAction 对单个后端子服的白名单增/删（探针 whitelist_add|whitelist_remove，FR-067）。
+// WhitelistAction 对单个后端子服的白名单增/删（探针 whitelist_add|whitelist_remove）。
 func (s *PlayerService) WhitelistAction(instanceID uint, action, player string) (*PlayerActionItem, error) {
 	var pluginAction string
 	switch action {
@@ -255,7 +255,7 @@ type BanFilter struct {
 	Limit      int
 }
 
-// ListBans 查询封禁记录（可查询 FR-054 验收）。
+// ListBans 查询封禁记录（可查询验收）。
 func (s *PlayerService) ListBans(filter BanFilter) ([]model.BanRecord, error) {
 	var bans []model.BanRecord
 	q := s.db.Model(&model.BanRecord{}).Preload("Operator")
@@ -392,7 +392,7 @@ func (s *PlayerService) fanout(player, action, reason string, targets []model.In
 	return res
 }
 
-// execPluginCommand 经 Worker 的 SendPluginCommand(wait=true) 在指定实例的探针上执行一条治理/查询指令（FR-067）。
+// execPluginCommand 经 Worker 的 SendPluginCommand(wait=true) 在指定实例的探针上执行一条治理/查询指令。
 // target 为目标玩家名（list/whitelist_list 时为空），reason 仅 kick/ban 用（nil 表示不带）。
 // 返回 (输出, 是否可用, 错误信息文本)。任何失败（节点未连/探针未连/超时/执行失败）均归为「不可用」，
 // 由调用方优雅降级（取代退役的 RCON 路径）。

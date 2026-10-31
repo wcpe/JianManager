@@ -11,14 +11,14 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 群组（Network 软标签）相关错误（FR-032）。
+// 群组（Network 软标签）相关错误。
 var (
 	ErrNetworkNotFound     = errors.New("群组不存在")
 	ErrNetworkNameConflict = errors.New("群组名已存在")
 	ErrInvalidBatchAction  = errors.New("不支持的批量操作")
 )
 
-// NetworkService 管理 Network 软标签（FR-032 / ADR-007）：非独占分组，仅供 UI 筛选/批量运维。
+// NetworkService 管理 Network 软标签（ADR-007）：非独占分组，仅供 UI 筛选/批量运维。
 type NetworkService struct {
 	db       *gorm.DB
 	instance *InstanceService
@@ -29,7 +29,7 @@ func NewNetworkService(db *gorm.DB, instance *InstanceService) *NetworkService {
 	return &NetworkService{db: db, instance: instance}
 }
 
-// MemberStatusCounts 群组成员按运行状态的计数桶（五态零补齐，FR-335）。
+// MemberStatusCounts 群组成员按运行状态的计数桶（五态零补齐）。
 // 供列表页免详情请求直接渲染健康分布条。
 type MemberStatusCounts struct {
 	Running  int `json:"running"`
@@ -39,7 +39,7 @@ type MemberStatusCounts struct {
 	Stopping int `json:"stopping"`
 }
 
-// NetworkSummary 群组列表项（含成员数与成员健康计数，FR-032/FR-335）。
+// NetworkSummary 群组列表项（含成员数与成员健康计数）。
 type NetworkSummary struct {
 	ID           uint               `json:"id"`
 	UUID         string             `json:"uuid"`
@@ -84,7 +84,7 @@ type BatchActionResult struct {
 	Results   []BatchActionItemResult `json:"results"`
 }
 
-// List 返回所有群组及成员健康计数（新→旧，FR-335）。
+// List 返回所有群组及成员健康计数（新→旧）。
 // 一次 JOIN+GROUP BY 聚合出全部群组按状态的成员计数（替代原 per-network Count 循环）；
 // INNER JOIN 天然剔除悬空成员（实例已删但 network_members 残留），与 Get 的成员列表口径一致。
 // memberCount 为五桶之和（即实际存在的成员数）。
@@ -155,7 +155,7 @@ func addStatusCount(c *MemberStatusCounts, status model.InstanceStatus, n int) {
 	}
 }
 
-// MembersIndex 一次返回所有群组的成员归属（network_id → 成员实例 ID 列表，FR-335）。
+// MembersIndex 一次返回所有群组的成员归属（network_id → 成员实例 ID 列表）。
 // 供拓扑聚合端点按 network 分组布局；不 JOIN 实例表（悬空成员由聚合端点侧按 proxy/backend 存在性自然过滤）。
 func (s *NetworkService) MembersIndex() (map[uint][]uint, error) {
 	var members []model.NetworkMember
@@ -169,14 +169,14 @@ func (s *NetworkService) MembersIndex() (map[uint][]uint, error) {
 	return idx, nil
 }
 
-// NetworkTopoBrief 供拓扑分组布局的群组概要（含成员归属，FR-335）。
+// NetworkTopoBrief 供拓扑分组布局的群组概要（含成员归属）。
 type NetworkTopoBrief struct {
 	ID                uint   `json:"id"`
 	Name              string `json:"name"`
 	MemberInstanceIDs []uint `json:"memberInstanceIds"`
 }
 
-// TopoBriefs 返回所有群组的分组概要（id/name/成员归属），供拓扑聚合端点（FR-335）。
+// TopoBriefs 返回所有群组的分组概要（id/name/成员归属），供拓扑聚合端点。
 // 成员归属仅收敛到「实际存在的实例 ID」——existing 为存在的实例 ID 集合（proxy+backend），
 // 不在其中的悬空成员被剔除，与 api.md「悬空成员不出现」一致。
 func (s *NetworkService) TopoBriefs(existing map[uint]bool) ([]NetworkTopoBrief, error) {

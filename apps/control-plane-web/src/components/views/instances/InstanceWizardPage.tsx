@@ -1,0 +1,543 @@
+import { Children, isValidElement, cloneElement, useId, useState, type ReactElement, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Boxes, ChevronLeft, ChevronRight, Check, Plus, X } from 'lucide-react'
+
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { Switch } from '@jianmanager/ui/components/switch'
+import { cn } from '@jianmanager/ui'
+import { validateRequired, validateResourceLimitNumber, validateFields } from '@/lib/shared/form-validation'
+import { useFieldGate } from '@/lib/hooks/use-field-gate'
+import { buildNodeOptions } from '@/lib/instances/instance-wizard-options'
+import type { NodeOptionInput, NodeStatusLabels } from '@/lib/instances/instance-wizard-options'
+
+/** 提示通道：视图算好文案交外壳展示（本包不弹 toast）。 */
+export type WizardNotice = (kind: 'success' | 'error', message: string) => void
+
+/** 模板最小信息（视图据它回填启动命令与类型）。 */
+export interface WizardTemplateOption {
+  id: number
+  name: string
+  startCommand: string
+  type?: string
+}
+
+/** Docker 可用性检测结果（外壳探目标节点）。 */
+export interface WizardDockerCheck {
+  fetching: boolean
+  /** 可用时为 true；未探到为 undefined。 */
+  available?: boolean
+  version?: string
+  error?: string
+  /** 不可用或检测失败 → 阻止提交。 */
+  blocked: boolean
+}
+
+/** 向导步骤键。advanced 仅 docker 启动方式出现。 */
+type StepKey = 'basic' | 'launch' | 'advanced' | 'review'
+
+const inputClass =
+  'w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive'
+
+/** 
+ * docker 环境变量键值对行。
+ *
+ * `id` 只服务于渲染 key（增删行时保住其余行的 DOM 身份），不参与提交载荷——
+ * 载荷由 `envVarsFromPairs` 只取 `key`/`value` 组装。
+ */
+interface EnvVarPair {
+  id: string
+  key: string
+  value: string
+}
+
+/** 环境变量行的 id 序号（模块级单调递增即可：同一页面生命周期内唯一）。 */
+let envPairSeq = 0
+
+/** 铸一个新的环境变量行 id。 */
+function nextEnvPairId(): string {
+  envPairSeq += 1
+  return `env-${envPairSeq}`
+}
+
+/** 把 docker 环境变量键值对收敛为对象（去空键、key 去首尾空格）；无有效项返回 undefined。 */
+function envVarsFromPairs(pairs: EnvVarPair[]): Record<string, string> | undefined {
+  const out: Record<string, string> = {}
+  for (const p of pairs) {
+    const k = p.key.trim()
+    if (k) out[k] = p.value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 
+ * 创建实例向导页（取代的创建模态）：
+ * 单独路由 `/instances/new`，分步引导（基本→启动→[高级]→确认）+ 每步大白话提示，
+ * 复用既有 POST /instances 与字段校验。?node= / ?template= 支持从实例页/模板页预填。
+ * 编辑等其它场景仍用模态（本页只接管「创建」）。
+ *
+ * 受控视图（ADR-103 a 范式）：不取数、不导航——候选与检测态由外壳注入，
+ * 创建经 `onCreate` 上报、取消/完成后由外壳导航。表单态、分步推进与逐步骤校验留在视图内。
+ */
+export interface InstanceWizardPageProps {
+  /** 预填节点 id（外壳从 `?node=` 或当前选中节点解析）。 */
+  initialNodeId: string
+  /** 预填模板 id（外壳从 `?template=` 解析）。 */
+  initialTemplateId: string
+  /** 节点候选（含状态标签）。 */
+  nodes?: NodeOptionInput[]
+  /** 节点状态标签文案。 */
+  nodeStatusLabels: NodeStatusLabels
+  /** 无可用节点时的提示开关。 */
+  hasNoNodes: boolean
+  /** JDK 候选（随选中节点变）。 */
+  jdkOptions: ComboboxOption[]
+  /** 用户组候选。 */
+  groupOptions: ComboboxOption[]
+  /** 模板候选（含回填字段）。 */
+  templates: WizardTemplateOption[]
+  /** 选中节点变化（外壳据此取 JDK 与 Docker 检测）。 */
+  onNodeChange: (nodeId: string) => void
+  /** 启动方式变化（外壳据此开关 Docker 检测）。 */
+  onProcessTypeChange?: (processType: string) => void
+  /** Docker 可用性检测态。 */
+  dockerCheck: WizardDockerCheck
+  /** 创建实例；失败请抛错，视图取服务端 message 提示。 */
+  onCreate: (payload: Record<string, unknown>) => Promise<void>
+  /** 取消/离开向导（外壳导航回实例列表）。 */
+  onCancel: () => void
+  /** 提示通道。 */
+  notify: WizardNotice
+}
+
+export function InstanceWizardPage({
+  initialNodeId,
+  initialTemplateId,
+  nodes,
+  nodeStatusLabels,
+  hasNoNodes,
+  jdkOptions,
+  groupOptions,
+  templates,
+  onNodeChange,
+  onProcessTypeChange,
+  dockerCheck,
+  onCreate,
+  onCancel,
+  notify,
+}: InstanceWizardPageProps) {
+  const { t } = useTranslation()
+
+  const [name, setName] = useState('')
+  const [nodeId, setNodeId] = useState(initialNodeId)
+  const [type, setType] = useState('minecraft_java')
+  const [processType, setProcessType] = useState('daemon')
+  const [image, setImage] = useState('')
+  const [cpuLimit, setCpuLimit] = useState('')
+  const [memLimitMb, setMemLimitMb] = useState('')
+  const [diskLimitMb, setDiskLimitMb] = useState('')
+  const [startCommand, setStartCommand] = useState('java -Xmx2G -jar server.jar nogui')
+  const [autoRestart, setAutoRestart] = useState(true)
+  const [groupId, setGroupId] = useState('')
+  const [templateId, setTemplateId] = useState(initialTemplateId)
+  const [jdkId, setJdkId] = useState('')
+  // docker 环境变量键值对：一键 Minecraft 预设注入 EULA=TRUE；可手动增删。
+  const [envPairs, setEnvPairs] = useState<EnvVarPair[]>([])
+  const [pending, setPending] = useState(false)
+  const gate = useFieldGate()
+
+  const isDocker = processType === 'docker'
+  const nodeOptions: ComboboxOption[] = buildNodeOptions(nodes, nodeStatusLabels)
+  const templateOptions: ComboboxOption[] = templates.map((tpl) => ({ value: String(tpl.id), label: tpl.name }))
+  const typeOptions: ComboboxOption[] = [
+    { value: 'minecraft_java', label: 'Minecraft Java' },
+    { value: 'generic', label: t('common.type') },
+  ]
+  const processTypeOptions: ComboboxOption[] = [
+    { value: 'daemon', label: `daemon (${t('common.enabled')})` },
+    { value: 'direct', label: 'direct' },
+    { value: 'docker', label: 'docker' },
+  ]
+
+  const errors = validateFields(
+    { name, nodeId, startCommand, image, cpuLimit, memLimitMb, diskLimitMb },
+    {
+      name: [validateRequired],
+      nodeId: [validateRequired],
+      startCommand: isDocker ? [] : [validateRequired],
+      image: isDocker ? [validateRequired] : [],
+      cpuLimit: isDocker ? [validateResourceLimitNumber] : [],
+      memLimitMb: isDocker ? [validateResourceLimitNumber] : [],
+      diskLimitMb: isDocker ? [validateResourceLimitNumber] : [],
+    },
+  )
+
+  const steps: StepKey[] = isDocker ? ['basic', 'launch', 'advanced', 'review'] : ['basic', 'launch', 'review']
+  const [stepIdx, setStepIdx] = useState(0)
+  const safeIdx = Math.min(stepIdx, steps.length - 1)
+  // steps 恒非空（按 isDocker 构造为 4/3 项）且 safeIdx 已夹在 [0, len-1]，故一定取到；
+  // 兜底 'basic' 恰是它必然的取值（steps[0]），只为让类型系统接受这次下标访问。
+  const step = steps[safeIdx] ?? 'basic'
+  const isLast = safeIdx === steps.length - 1
+
+  // 单步是否可继续（仅校验该步内的必填项）。
+  const stepValid = (k: StepKey): boolean => {
+    if (k === 'basic') return !errors.name && !errors.nodeId
+    if (k === 'launch') return !errors.startCommand
+    if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb && !errors.diskLimitMb && !dockerCheck.fetching && !dockerCheck.blocked
+    return true
+  }
+
+  // 各步受校验字段：「下一步」点击视为该步提交，仅揭示该步字段错误（不波及后续步）。
+  const STEP_FIELDS: Record<StepKey, string[]> = {
+    basic: ['name', 'nodeId'],
+    launch: ['startCommand'],
+    advanced: ['image', 'cpuLimit', 'memLimitMb', 'diskLimitMb'],
+    review: [],
+  }
+
+  const onPickTemplate = (tid: string) => {
+    setTemplateId(tid)
+    if (tid) {
+      const tpl = templates.find((tpl) => String(tpl.id) === tid)
+      if (tpl) {
+        setStartCommand(tpl.startCommand)
+        setType(tpl.type || type)
+      }
+    }
+  }
+
+  // 一键 Minecraft docker 傻瓜建服：itzg 镜像 + EULA=TRUE + 空命令（交镜像 entrypoint 自管启动）。
+  const applyMinecraftDockerPreset = () => {
+    setType('minecraft_java')
+    setImage('itzg/minecraft-server:latest')
+    setEnvPairs([{ id: nextEnvPairId(), key: 'EULA', value: 'TRUE' }])
+    setStartCommand('')
+  }
+
+  const submit = async () => {
+    gate.submit()
+    if (!steps.every(stepValid)) return
+    setPending(true)
+    try {
+      await onCreate({
+        nodeId: Number(nodeId),
+        name,
+        type,
+        processType,
+        startCommand,
+        autoRestart,
+        groupId: groupId ? Number(groupId) : undefined,
+        jdkId: jdkId ? Number(jdkId) : undefined,
+        image: isDocker ? image : undefined,
+        cpuLimit: isDocker ? (cpuLimit.trim() ? Number(cpuLimit) : 0) : undefined,
+        memLimitMb: isDocker ? (memLimitMb.trim() ? Number(memLimitMb) : 0) : undefined,
+        diskLimitMb: isDocker ? (diskLimitMb.trim() ? Number(diskLimitMb) : 0) : undefined,
+        envVars: isDocker ? envVarsFromPairs(envPairs) : undefined,
+      })
+      notify('success', t('instances.created', '实例已创建'))
+      onCancel()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+      notify('error', msg || t('instances.createFailed'))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const nodeLabel = nodeOptions.find((o) => o.value === nodeId)?.label || nodeId
+  const jdkLabel = jdkOptions.find((o) => o.value === jdkId)?.label || t('instances.jdkSystemDefault')
+
+  return (
+    // 阶段 6 页面迁移：外壳改用 PageShell，保留 `mx-auto max-w-3xl`——向导是窄栏流程，
+    // 不是全宽内容页（原型 `wizardPage` 也是 `.page > .wizard` 的窄栏包裹）。
+    <PageShell className="mx-auto max-w-3xl">
+      {/* 页头按原型 `wizardPage` 的形态：面包屑「实例 > 创建实例」+ 右侧「取消」。
+          原先左侧的返回箭头按钮去掉——原型里流程页的返回语义由面包屑承载，
+          它原先的 aria-label 是「返回」，与「取消」构成两个同义入口，属冗余。 */}
+      <PageHeader
+        title={t('instances.createInstance')}
+        description={t('instances.wizardSubtitle', '按步骤填写，几步就能在某台节点上建好一个服。')}
+        breadcrumbs={[
+          { label: t('nav.allInstances'), to: '/instances' },
+          { label: t('instances.createInstance') },
+        ]}
+        actions={
+          <Button variant="outline" onClick={onCancel}>
+            {t('common.cancel')}
+          </Button>
+        }
+      />
+
+      {/* 步骤指示器 */}
+      <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+        {steps.map((k, i) => (
+          // aria-current="step" 标出「当前步骤」：原先当前步骤只靠底色与字重表达，
+          // 读屏用户听不出自己在第几步（列表项顺序也只能推出相对位置）。
+          <li key={k} aria-current={i === safeIdx ? 'step' : undefined} className="flex items-center gap-2">
+            <span
+              className={cn(
+                'flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold',
+                i < safeIdx ? 'bg-primary text-primary-foreground'
+                  : i === safeIdx ? 'bg-primary/15 text-primary ring-2 ring-primary/40'
+                    : 'bg-muted text-muted-foreground',
+              )}
+            >
+              {i < safeIdx ? <Check className="size-3.5" /> : i + 1}
+            </span>
+            <span className={cn(i === safeIdx ? 'font-medium text-foreground' : 'text-muted-foreground')}>
+              {t(`instances.wizardStep.${k}`)}
+            </span>
+            {i < steps.length - 1 && <ChevronRight className="size-4 text-muted-foreground/50" />}
+          </li>
+        ))}
+      </ol>
+
+      <Panel bodyClassName="space-y-4 p-5">
+        {/* 大白话提示 */}
+        <p className="rounded-md bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          {t(`instances.wizardHint.${step}`)}
+        </p>
+
+        {step === 'basic' && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label={t('instances.instanceName')} required error={gate.show('name', errors.name)}>
+              <input value={name} onChange={(e) => setName(e.target.value)} onBlur={() => gate.touch('name')} className={inputClass} placeholder="Survival Server" aria-invalid={!!gate.show('name', errors.name)} />
+            </Field>
+            <Field label={t('instances.node')} required error={gate.show('nodeId', errors.nodeId)}>
+              <div className="mt-1">
+                <Combobox options={nodeOptions} value={nodeId} onChange={(v) => { gate.touch('nodeId'); setNodeId(v); onNodeChange(v) }} allowCustom={false} placeholder={t('instances.selectNode')} invalid={!!gate.show('nodeId', errors.nodeId)} />
+                {hasNoNodes && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.noNodesHint')}</p>
+                )}
+              </div>
+            </Field>
+            <Field label={t('instances.type')}>
+              <div className="mt-1"><Combobox options={typeOptions} value={type} onChange={setType} /></div>
+            </Field>
+            <Field label={t('templates.selectTemplate').replace(/[（(].*[）)]/, '').trim()}>
+              <div className="mt-1">
+                <Combobox options={templateOptions} value={templateId} onChange={onPickTemplate} allowCustom={false} placeholder={t('templates.noTemplate')} />
+              </div>
+            </Field>
+            <Field label={t('instances.group')}>
+              <div className="mt-1">
+                <Combobox options={groupOptions} value={groupId} onChange={setGroupId} allowCustom={false} placeholder={t('instances.noGroup')} />
+              </div>
+            </Field>
+          </div>
+        )}
+
+        {step === 'launch' && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label={t('instanceDetail.processType')}>
+                <div className="mt-1"><Combobox options={processTypeOptions} value={processType} onChange={(v) => { setProcessType(v); onProcessTypeChange?.(v) }} allowCustom={false} /></div>
+              </Field>
+              <Field label={t('instances.jdkOptional')}>
+                <div className="mt-1"><Combobox options={jdkOptions} value={jdkId} onChange={setJdkId} allowCustom={false} placeholder={t('instances.jdkSystemDefault')} /></div>
+              </Field>
+            </div>
+            <Field label={t('instanceDetail.startCommand')} required={!isDocker} error={gate.show('startCommand', errors.startCommand)}>
+              <input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} onBlur={() => gate.touch('startCommand')} className={cn(inputClass, 'font-mono')} placeholder="java -Xmx2G -jar server.jar nogui" aria-invalid={!!gate.show('startCommand', errors.startCommand)} />
+              <p className="mt-1.5 text-xs text-muted-foreground">{isDocker ? t('instances.startCommandDockerHint') : t('instances.startCommandHint')}</p>
+            </Field>
+            <div className="flex items-center gap-2 text-sm">
+              {/* 启用/禁用语义走 Switch；Radix Switch 是 button，故用 id + label htmlFor 关联文案 */}
+              <Switch id="wizard-auto-restart" checked={autoRestart} onCheckedChange={setAutoRestart} />
+              <label htmlFor="wizard-auto-restart" className="cursor-pointer">
+                {t('instanceDetail.autoRestart')}
+              </label>
+            </div>
+          </div>
+        )}
+
+        {step === 'advanced' && (
+          <div className="space-y-3">
+            {/* Docker 可用性检测：探目标节点 Docker，不可用提示并阻止提交 */}
+            {dockerCheck.fetching && (
+              <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('instances.dockerChecking')}</p>
+            )}
+            {!dockerCheck.fetching && dockerCheck.available && (
+              <p className="rounded-md border border-status-success/40 bg-status-success/5 px-3 py-2 text-xs text-status-success">
+                {t('instances.dockerAvailable', { version: dockerCheck.version })}
+              </p>
+            )}
+            {dockerCheck.blocked && (
+              <p className="rounded-md border border-status-danger/40 bg-status-danger/5 px-3 py-2 text-xs text-status-danger">
+                {t('instances.dockerUnavailable')}
+                {dockerCheck.error ? `：${dockerCheck.error}` : ''}
+              </p>
+            )}
+            {/* 一键 Minecraft 傻瓜建服：itzg 镜像 + EULA=TRUE + 空命令 */}
+            <div className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{t('instances.dockerMcPresetTitle')}</p>
+                <p className="text-xs text-muted-foreground">{t('instances.dockerMcPresetHint')}</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" className="shrink-0" onClick={applyMinecraftDockerPreset}>
+                <Boxes className="size-4" />
+                {t('instances.dockerMcPresetApply')}
+              </Button>
+            </div>
+            <Field label={t('instances.dockerImage')} required error={gate.show('image', errors.image)}>
+              <input value={image} onChange={(e) => setImage(e.target.value)} onBlur={() => gate.touch('image')} className={cn(inputClass, 'font-mono')} placeholder="itzg/minecraft-server:latest" aria-invalid={!!gate.show('image', errors.image)} />
+            </Field>
+            <EnvVarsEditor pairs={envPairs} onChange={setEnvPairs} />
+            <div>
+              <p className="mb-2 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label={t('instances.cpuLimit')} error={gate.show('cpuLimit', errors.cpuLimit)}>
+                  <input value={cpuLimit} onChange={(e) => setCpuLimit(e.target.value)} onBlur={() => gate.touch('cpuLimit')} className={inputClass} placeholder="1.5" inputMode="decimal" aria-invalid={!!gate.show('cpuLimit', errors.cpuLimit)} />
+                </Field>
+                <Field label={t('instances.memLimit')} error={gate.show('memLimitMb', errors.memLimitMb)}>
+                  <input value={memLimitMb} onChange={(e) => setMemLimitMb(e.target.value)} onBlur={() => gate.touch('memLimitMb')} className={inputClass} placeholder="2048" inputMode="numeric" aria-invalid={!!gate.show('memLimitMb', errors.memLimitMb)} />
+                </Field>
+                <Field label={t('instances.diskLimit')} error={gate.show('diskLimitMb', errors.diskLimitMb)}>
+                  <input value={diskLimitMb} onChange={(e) => setDiskLimitMb(e.target.value)} onBlur={() => gate.touch('diskLimitMb')} className={inputClass} placeholder="10240" inputMode="numeric" aria-invalid={!!gate.show('diskLimitMb', errors.diskLimitMb)} />
+                  <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.diskLimitHint')}</p>
+                </Field>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 'review' && (
+          <dl className="divide-y rounded-md border text-sm">
+            <ReviewRow label={t('instances.instanceName')} value={name} />
+            <ReviewRow label={t('instances.node')} value={nodeLabel} />
+            <ReviewRow label={t('instances.type')} value={type} />
+            <ReviewRow label={t('instanceDetail.processType')} value={processType} />
+            <ReviewRow label={t('instanceDetail.startCommand')} value={startCommand} mono />
+            <ReviewRow label={t('instances.jdkOptional')} value={jdkLabel} />
+            {isDocker && <ReviewRow label={t('instances.dockerImage')} value={image} mono />}
+            {isDocker && <ReviewRow label={t('instances.cpuLimit')} value={cpuLimit || t('instances.unlimited')} />}
+            {isDocker && <ReviewRow label={t('instances.memLimit')} value={memLimitMb || t('instances.unlimited')} />}
+            {isDocker && <ReviewRow label={t('instances.diskLimit')} value={diskLimitMb || t('instances.unlimited')} />}
+            <ReviewRow label={t('instanceDetail.autoRestart')} value={autoRestart ? t('common.enabled') : t('common.disabled', '关闭')} />
+          </dl>
+        )}
+      </Panel>
+
+      {/* 底部导航 */}
+      <div className="flex items-center justify-between">
+        <Button type="button" variant="outline" onClick={() => (safeIdx === 0 ? onCancel() : setStepIdx(safeIdx - 1))}>
+          <ChevronLeft className="size-4" />
+          {safeIdx === 0 ? t('common.cancel') : t('common.back')}
+        </Button>
+        {isLast ? (
+          <Button type="button" onClick={() => void submit()} disabled={pending || !steps.every(stepValid)}>
+            {pending ? t('common.creating') : t('common.create')}
+          </Button>
+        ) : (
+          <Button type="button" onClick={() => { STEP_FIELDS[step].forEach(gate.touch); setStepIdx(safeIdx + 1) }} disabled={!stepValid(step)}>
+            {t('instances.wizardNext')}
+            <ChevronRight className="size-4" />
+          </Button>
+        )}
+      </div>
+    </PageShell>
+  )
+}
+
+/** 
+ * 字段壳：标签 + 必填星 + 子控件 + 错误。
+ *
+ * **可访问名**：`FieldLabel` 渲染的是 `<label>`，但没有 `htmlFor` 时它不与任何控件关联——
+ * 本页原状即如此（标签与输入框只是兄弟节点），于是每个文本输入框在读屏里都没有名字。
+ * 这里给子节点里的第一个文本控件注入 `useId()` 生成的 id，并把同一个 id 交给
+ * `FieldLabel htmlFor`，两者才真正绑定。
+ *
+ * 子节点可能是数组（输入框后面还跟一行提示文字，如启动命令 / 磁盘限额），故按
+ * `Children.toArray` 展平后查找，而不是只看单个 `children`。非文本控件（Combobox 等）
+ * 不注入：它们的可访问名由各自组件负责，硬塞 id 只会造出指向不存在元素的 dangling `htmlFor`。
+ */
+function Field({ label, required, error, children }: { label: string; required?: boolean; error?: string; children: ReactNode }) {
+  const controlId = useId()
+  const items = Children.toArray(children)
+  const textControlIndex = items.findIndex((child) => isValidElement(child) && child.type === 'input')
+  const linked = textControlIndex >= 0
+  return (
+    <div>
+      <FieldLabel required={required} htmlFor={linked ? controlId : undefined}>{label}</FieldLabel>
+      {linked
+        ? items.map((child, i) =>
+            i === textControlIndex
+              ? cloneElement(child as ReactElement<{ id?: string }>, { id: controlId })
+              : child,
+          )
+        : children}
+      <FieldError error={error} />
+    </div>
+  )
+}
+
+/** 确认页一行：标签 + 值（空显占位）。 */
+function ReviewRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-4 px-3 py-2">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className={cn('min-w-0 break-all text-right', mono && 'font-mono text-xs')}>{value || '—'}</dd>
+    </div>
+  )
+}
+
+/** docker 环境变量键值对编辑器：itzg 需 EULA=TRUE 等；增删行、空键提交时忽略。 */
+function EnvVarsEditor({
+  pairs,
+  onChange,
+}: {
+  pairs: EnvVarPair[]
+  onChange: (p: EnvVarPair[]) => void
+}) {
+  const { t } = useTranslation()
+  const setAt = (i: number, patch: Partial<EnvVarPair>) =>
+    onChange(pairs.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
+  return (
+    <Field label={t('instances.dockerEnvVars')}>
+      <div className="mt-1 space-y-2">
+        {pairs.length === 0 && <p className="text-xs text-muted-foreground">{t('instances.dockerEnvEmpty')}</p>}
+        {pairs.map((p, i) => (
+          // key 用行自己的稳定 id，不用下标：这是**可编辑行**，删掉中间一行时下标会让其后
+          // 每一行的 DOM 身份前移一格——正在编辑的输入框（焦点、光标位置、输入法组合态）
+          // 会落到下一条数据上，用户删一行却把别人的内容改了。
+          <div key={p.id} className="flex items-center gap-2">
+            <input
+              value={p.key}
+              onChange={(e) => setAt(i, { key: e.target.value })}
+              placeholder="KEY"
+              aria-label={t('instances.dockerEnvKey')}
+              className={cn(inputClass, 'mt-0 font-mono')}
+            />
+            <span className="shrink-0 text-muted-foreground">=</span>
+            <input
+              value={p.value}
+              onChange={(e) => setAt(i, { value: e.target.value })}
+              placeholder="VALUE"
+              aria-label={t('instances.dockerEnvValue')}
+              className={cn(inputClass, 'mt-0 font-mono')}
+            />
+            {/* 纯图标删除：与左侧输入框同高，故保留 p-1.5 尺寸，用 invisible + auto */}
+            <Button
+              type="button"
+              variant="invisible"
+              size="auto"
+              onClick={() => onChange(pairs.filter((_, idx) => idx !== i))}
+              aria-label={t('common.delete')}
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-destructive"
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        ))}
+        <Button type="button" size="sm" variant="outline" onClick={() => onChange([...pairs, { id: nextEnvPairId(), key: '', value: '' }])}>
+          <Plus className="size-4" />
+          {t('instances.dockerEnvAdd')}
+        </Button>
+      </div>
+    </Field>
+  )
+}

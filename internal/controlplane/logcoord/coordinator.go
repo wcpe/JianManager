@@ -1284,7 +1284,7 @@ func (c *Coordinator) Search(ctx context.Context, q Query) (*SearchResponse, err
 		cov.PartialReasons = appendUniqueReason(cov.PartialReasons, "BUDGET_EXCEEDED")
 		cov.Complete = false
 	}
-	// FR-480：Search 完成后把 coverage 上的 closed_visible_seq 向量固化到 View，
+	// Search 完成后把 coverage 上的 closed_visible_seq 向量固化到 View，
 	// Export 与后续 view 复用必须看到同一向量。
 	// 快路径（Fast）未做逐目标校验 ⇒ 该向量无意义，**不固化** ✗（避免下游把它当已校验证据 ✓）。
 	if !q.Fast {

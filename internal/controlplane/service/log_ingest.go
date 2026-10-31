@@ -74,14 +74,14 @@ func (s *LogService) resolveNode(nodeUUID string) uint {
 	return node.ID
 }
 
-// IngestInstanceOutput 实现 EventService.LogSink：把实例进程输出落库（FR-049）。
+// IngestInstanceOutput 实现 EventService.LogSink：把实例进程输出落库。
 // 多行 chunk 拆成每行一条记录，便于按行检索；空行跳过。
 // 级别推断：优先解析行内结构化 level=（slog/logrus 等）；没有则 stderr→error、stdout→info。
 func (s *LogService) IngestInstanceOutput(nodeUUID, instanceUUID, stream, message string, ts int64) {
 	if !s.cfg.Enabled || message == "" {
 		return
 	}
-	// FR-481 cutover：instance 来源停止写入 CP logs 表（platform slog 持久化路径不变）。
+	// cutover：instance 来源停止写入 CP logs 表（platform slog 持久化路径不变）。
 	if s.cutoverBlocked(model.LogSourceInstance) {
 		return
 	}

@@ -73,7 +73,7 @@ func TestScopePlatformRetentionNoopWhenCutoverOff(t *testing.T) {
 // 改写后 Legacy 行仍必须被排除、platform 行仍必须被纳入（这是修复不能破坏的语义）。
 //
 // 这条防的是「为了让查询走索引而把排除条件写丢」——那会让 Legacy 行被 platform
-// 容量淘汰挤出，违背 FR-481 的独立预算承诺。
+// 容量淘汰挤出，违背的独立预算承诺。
 func TestScopePlatformRetentionKeepsLegacyRowsOut(t *testing.T) {
 	svc, _, db := newLogSvc(t, defaultCfg())
 	require.NoError(t, svc.cutover.SetEnabledChecked(true))

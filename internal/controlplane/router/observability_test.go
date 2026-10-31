@@ -19,7 +19,7 @@ func TestPlatformObservabilityOverview_AdminOnly(t *testing.T) {
 	require.Equalf(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 }
 
-// TestHealthWall_AdminOnly 集群健康墙（FR-461）平台级权限：非平台管理员被拒，管理员可读。
+// TestHealthWall_AdminOnly 集群健康墙平台级权限：非平台管理员被拒，管理员可读。
 func TestHealthWall_AdminOnly(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

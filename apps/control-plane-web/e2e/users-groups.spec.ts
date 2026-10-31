@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test'
-import { login } from './helpers'
+import { login, pinClassicHome } from './helpers'
 
-/**
- * FR-156 用户与组管理能力补齐 · 单机（Playwright + mock 模式）验收。
+/** 
+ *用户与组管理能力补齐 · 单机（Playwright + mock 模式）验收。
  * 覆盖：用户 改密/启停/编辑；组 编辑/删除/改配额/管成员；角色权限差异说明；
  * 并做「真机」端到端：改密后新密码可登录、停用账户被拒登录（mock 登录校验 username+password+!disabled）。
- * 证据落 .tmp/acceptance/FR-156/。
+ * 证据落 .tmp/acceptance。
  */
 
 async function logout(page: Page): Promise<void> {
@@ -14,7 +14,7 @@ async function logout(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible()
 }
 
-test('FR-156 用户/组 管理能力 + 角色权限说明', async ({ page }) => {
+test('用户/组 管理能力 + 角色权限说明', async ({ page }) => {
   await login(page)
   await page.goto('/users')
   await expect(page.getByRole('heading', { name: '用户管理' })).toBeVisible()
@@ -31,10 +31,12 @@ test('FR-156 用户/组 管理能力 + 角色权限说明', async ({ page }) => 
   await expect(page.getByRole('button', { name: '编辑' }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: '成员' }).first()).toBeVisible()
   await expect(page.getByText('实例配额').first()).toBeVisible() // 配额
-  await page.screenshot({ path: '../.tmp/acceptance/FR-156/single-machine-groups.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-groups.png', fullPage: true })
 })
 
-test('FR-156 真机流: 改密后新密码可登录', async ({ page }) => {
+test('真机流: 改密后新密码可登录', async ({ page }) => {
+  // 本用例的就绪信号是经典首页（`[data-page="overview"]`），而 `/` 默认已改 AI 首页。
+  await pinClassicHome(page)
   await login(page)
   await page.goto('/users')
   const opRow = page.getByRole('row').filter({ hasText: 'operator' })
@@ -52,7 +54,7 @@ test('FR-156 真机流: 改密后新密码可登录', async ({ page }) => {
   await expect(page.locator('[data-page="overview"]')).toBeVisible()
 })
 
-test('FR-156 真机流: 停用账户被拒登录', async ({ page }) => {
+test('真机流: 停用账户被拒登录', async ({ page }) => {
   await login(page)
   await page.goto('/users')
   const opRow = page.getByRole('row').filter({ hasText: 'operator' })
@@ -63,5 +65,9 @@ test('FR-156 真机流: 停用账户被拒登录', async ({ page }) => {
   await page.getByLabel('密码', { exact: true }).fill('op123456')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page.getByText(/用户名或密码错误|已停用|禁用/).first()).toBeVisible({ timeout: 10_000 })
-  await expect(page.locator('[data-page="overview"]')).toHaveCount(0)
+  // 被拒 ⇒ 停在登录页（而不是进入了控制台）。
+  // 【为何不断言 `[data-page="overview"]` 计数为 0】`/` 的默认首页已是 AI 首页，
+  // 那个选择器在未登录时也本就为 0——“计数为 0”不能区分“被拒”与“首页形态变了”。
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.locator('[data-slot="console-shell"]')).toHaveCount(0)
 })

@@ -131,3 +131,13 @@ INFO Worker Node 已停止
 - **生产复验已完成**（原「生产复验未做」条目已由 §4.4 取代）：生产 unit 的 `KillMode=process` 以 drop-in 补齐并实测生效。原条目担心的「首次重启仍会杀掉旧代码 spawn 的 wrapper」在本次实测中**未发生**——该批 wrapper 因处于 `/system.slice/ssh.service`（非 Worker 单元）而不在连坐范围内；对仍留在 Worker 单元 cgroup 内的 wrapper，接管迁移按 §3.2 覆盖。
 - **已知残留**：13 个历史孤儿仍停在 `/system.slice/ssh.service`，其安全性来自「不在 Worker 单元内」而非隔离目录，若该 ssh 单元被重启仍会波及；隔离状态目前只落审计/日志，未上行到 CP 面板展示。
 - **无配置键**：为守住改动面（`internal/worker/process/**`、`internal/worker/daemon/**`、`apps/worker/main.go` 的信号/关闭路径），逃生开关用环境变量而非 `worker.yml`；若后续需要配置化，再按仓库既有 `SetDefault` 风格补键。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-500 daemon 子树脱离 Worker 单元 cgroup（fix，事故根因修复；spec
+
+**需求补充**：`docs/specs/daemon-cgroup-isolation/spec.md`）：2026-10-01 生产事故——**每次 `systemctl restart jm-prod-worker` 杀死全部 11 台正在运行的 MC 服务器**。**根因不在 Worker 代码**：unit 缺 `KillMode=process`（`KillMode=control-group`、`KillSignal=15`），systemd 对单元 cgroup 内全员发 SIGTERM，`setsid` 逃得出进程组、逃不出 cgroup；Worker 关闭路径当时已正确（日志 `daemon 实例已断开连接（wrapper 继续运行）` 先于 `wrapper 进程退出 err="signal: terminated"`，且 11 台实例的 Java 自身日志同秒 `Stopping server` 证明 Java 被 cgroup 级 SIGTERM 直接打中）。**修法**：运行期自持 cgroup 隔离——wrapper 启动时**先自迁**到 `…/app.slice/jianmanager-daemons/<uuid>`（早于 `startJava`，java 随后 fork 继承），Worker 接管存活 wrapper 时按 PPID 链**连后代一并迁移**（覆盖「部署后第一个重启」场景）；仅在自身 cgroup 确为 `*.service` 单元时生效，失败只告警保持原状，`JM_DAEMON_CGROUP_ISOLATION=0` 可关。**契约**：Worker 关闭路径只断连不杀实例；显式停止/删除照旧；cgroup 边界不依赖 unit 配置（见 restart-resilience spec §7）。验收：真实进程端到端用例（关闭路径 + 单元级 cgroup SIGTERM 后 wrapper/java 存活、可被接管、显式 Stop 仍能停）逐字还原旧实现实测转红；真实 worker 三臂实验（red 复现生产现场 / fixed-adopt / fixed-self 存活）；`go build`、`go vet`、`gofmt`、`go test ./internal/worker/...`、`-race` 全绿
+
+**交付状态**：🔨 开发中（代码 + 回归 + 三臂实验完成；**2026-10-11 生产部署与真机验收已做**——生产 unit 已补 `KillMode=process`（运维侧变更已落地），daemon/java 实测运行在 `app.slice/jianmanager-daemons/<uuid>` 而**不在** `jm-prod-worker.service` 单元 cgroup 内；2026-10-10 00:56 启动的 daemon/java 进程跨当日多次 Worker 重启全程存活、PID 零漂移。**取证口径（可复算）**：数据源＝生产 Worker journal（`journalctl -u jm-prod-worker --since 2026-10-10 --until 2026-10-11`），判据＝`grep -c '单元 KillMode 已保护 daemon 子树'`（重启保护计数）与 `grep -c '收到退出信号'`（重启计数）两数并读，并要求期间 `ps -o lstart=,pid= -C java` 的启动时刻不变。**如实登记的边界**：上一版此处写的「17 次 / 18 次」取自本机一次性人工统计，其原始产物在 `.tmp/`（**不入库**：`.gitignore:62`）⇒ 外部读者**无法复算**。故此处不再引用任何 `.tmp/` 路径，只给数据源与命令；若需具体计数，请按上述命令在对应窗口自行统计，或以 `docs/specs/*/signoff-ledger.md` 的脱敏摘录为准（**该形式化验收记录尚未补**，见「待归真」）。**待归真**：本项验收条款中「真实 worker 三臂实验」仍是本地形态，生产侧以「重启不连坐」实测替代，未补形式化验收记录）

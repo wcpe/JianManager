@@ -1,8 +1,8 @@
 package ingest
 
-// FR-496 索引有界化回归：历史投递批次（delivery_batch）裁剪。
+// 索引有界化回归：历史投递批次（delivery_batch）裁剪。
 //
-// 背景（FR-498 实测 @60 源）：采集索引里唯一随总量线性增长的表是 delivery_batch
+// 背景（实测 @60 源）：采集索引里唯一随总量线性增长的表是 delivery_batch
 // （≈5 MB/天），原先没有裁剪路径。判据与证明见 ledger/delivery_batch_prune.go 的文件头注释：
 // **batch.End <= Positions.Reclaim 的条目是 contiguousDeliveryEnd(…, Reclaim) 的恒等元**。
 //
@@ -234,7 +234,7 @@ func TestDeliveryBatchPruneIsIdempotentAcrossRestart(t *testing.T) {
 func TestDeliveryBatchPruneKeepsInstanceBindings(t *testing.T) {
 	m, _ := pruneBoundFixture(t, nil)
 	work := t.TempDir()
-	// 登记是同步落库的（FR-499：登记只做「读写 state.Instances + 幂等建管道 + persist」）。
+	// 登记是同步落库的（：登记只做「读写 state.Instances + 幂等建管道 + persist」）。
 	require.NoError(t, m.RegisterInstance("uuid-prune", "inst:prune", "holder-g1", "STDIO_PRIMARY", work))
 	root := m.root
 	require.NoError(t, m.Stop())
@@ -248,7 +248,7 @@ func TestDeliveryBatchPruneKeepsInstanceBindings(t *testing.T) {
 	require.Equal(t, "holder-g1", binding.Generation)
 }
 
-// TestMigrationComparisonToleratesPruneProgress 是 FR-496 迁移校验与裁剪的相容性回归。
+// TestMigrationComparisonToleratesPruneProgress 是迁移校验与裁剪的相容性回归。
 //
 // 真机可达形态：迁移已在库中提交、归档尚未完成（migrateLegacyState 的那条分支），而索引里
 // 的历史批次已按水位裁过、旧 JSON 里仍是完整历史。若按原样逐字段比对，会把一次正常启动

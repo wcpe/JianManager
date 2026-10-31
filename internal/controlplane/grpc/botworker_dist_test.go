@@ -30,7 +30,7 @@ func newBotDistHandler(t *testing.T) (*cpgrpc.ControlPlaneHandler, *model.Node) 
 	return cpgrpc.NewControlPlaneHandler(db, cpgrpc.NewClientPool()), node
 }
 
-// TestFetchBotWorkerArchive_AuthRejects 身份缺失/伪造一律拒（FR-308：与重注册同源校验）。
+// TestFetchBotWorkerArchive_AuthRejects 身份缺失/伪造一律拒（：与重注册同源校验）。
 func TestFetchBotWorkerArchive_AuthRejects(t *testing.T) {
 	h, node := newBotDistHandler(t)
 

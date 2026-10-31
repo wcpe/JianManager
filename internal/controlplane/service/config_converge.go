@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 配置基线（模板）下发、漂移检测、一键收敛（FR-458）。
+// 配置基线（模板）下发、漂移检测、一键收敛。
 //
 // 复用既有 ConfigService.Write（版本落库 + Worker 侧 WriteConfig 校验），不另建写入通道；
 // 漂移检测只读零副作用（优先读最新 InstanceConfigVersion，缺失则现场 Read + 计算哈希）。
@@ -31,12 +31,12 @@ const (
 // BaselineScopeAllKey 是「全部实例」的 scope 键。
 const BaselineScopeAllKey = "all"
 
-// ErrBaselineScopeForbidden 表示非管理员试图创建/覆盖 scope 超出其可访问实例范围的基线（FR-458 越权修复）。
+// ErrBaselineScopeForbidden 表示非管理员试图创建/覆盖 scope 超出其可访问实例范围的基线（越权修复）。
 var ErrBaselineScopeForbidden = errors.New("基线 scope 超出可访问实例范围")
 
 // ErrBaselineScopeGroupNotFound 表示 group:<id> 的 id 在组织树（ADR-033 InstanceGroupNode）中不存在。
 // 与用户组（ADR-004 GroupInstance）/网络群组（ADR-007 Network）的 id 空间正交，极易混淆——
-// 因此这里 fail-closed 报错，绝不静默解析为空集（FR-458 修复：误填用户组 id 会被明确拒绝）。
+// 因此这里 fail-closed 报错，绝不静默解析为空集（修复：误填用户组 id 会被明确拒绝）。
 var ErrBaselineScopeGroupNotFound = errors.New("基线 scope 引用的组织树分组不存在")
 
 // ErrBaselineScopeGroupEmpty 表示 group:<id> 指向的组织树分组存在，但其子树内没有任何成员实例。
@@ -44,7 +44,7 @@ var ErrBaselineScopeGroupNotFound = errors.New("基线 scope 引用的组织树�
 // 否则运维会以为已下发，实际无人接收）。
 var ErrBaselineScopeGroupEmpty = errors.New("基线 scope 引用的组织树分组没有成员实例")
 
-// ConfigBaselineService 配置基线服务（FR-458）。
+// ConfigBaselineService 配置基线服务。
 type ConfigBaselineService struct {
 	db     *gorm.DB
 	config *ConfigService
@@ -79,7 +79,7 @@ type BaselineInput struct {
 	Message  string `json:"message"`
 }
 
-// DriftItem 是单实例的漂移比对结果（FR-458）。
+// DriftItem 是单实例的漂移比对结果。
 type DriftItem struct {
 	InstanceID   uint   `json:"instanceId"`
 	InstanceName string `json:"instanceName"`
@@ -153,7 +153,7 @@ func (s *ConfigBaselineService) UpsertBaseline(in BaselineInput, authorID uint) 
 	return &existing, nil
 }
 
-// UpsertBaselineScoped 在校验调用者归属后创建/更新基线（FR-458 越权修复）。
+// UpsertBaselineScoped 在校验调用者归属后创建/更新基线（越权修复）。
 // 非管理员（scoped=true）仅能创建/覆盖「scopeKey 指向的实例全部落在其可访问集合内」的基线，
 // 防止组成员以 scopeKey:"all" 覆盖平台基线；平台管理员（scoped=false）不受限。
 func (s *ConfigBaselineService) UpsertBaselineScoped(in BaselineInput, authorID uint, scopeIDs []uint, scoped bool) (*model.ConfigBaseline, error) {
@@ -163,7 +163,7 @@ func (s *ConfigBaselineService) UpsertBaselineScoped(in BaselineInput, authorID 
 	return s.UpsertBaseline(in, authorID)
 }
 
-// ensureScopeOwned 校验调用者对 scopeKey 指向的实例集合拥有完整访问权（FR-458 越权修复）。
+// ensureScopeOwned 校验调用者对 scopeKey 指向的实例集合拥有完整访问权（越权修复）。
 // scopeKey 非法、未匹配任何实例、或存在可访问集合之外的实例 → ErrBaselineScopeForbidden（fail-closed）。
 func (s *ConfigBaselineService) ensureScopeOwned(scopeKey string, scopeIDs []uint, scoped bool) error {
 	if !scoped {
@@ -187,7 +187,7 @@ func (s *ConfigBaselineService) ListBaselines() ([]model.ConfigBaseline, error) 
 	return s.ListBaselinesScoped(nil, false)
 }
 
-// ListBaselinesScoped 列出调用者可见的基线（FR-458 越权修复）。
+// ListBaselinesScoped 列出调用者可见的基线（越权修复）。
 // 非平台管理员（scoped=true）仅返回 scope 与可访问实例集合相交的基线，避免读到无关基线与内容。
 func (s *ConfigBaselineService) ListBaselinesScoped(scopeIDs []uint, scoped bool) ([]model.ConfigBaseline, error) {
 	var rows []model.ConfigBaseline
@@ -243,7 +243,7 @@ func (s *ConfigBaselineService) DeleteBaseline(id uint) error {
 	return s.db.Delete(&model.ConfigBaseline{}, id).Error
 }
 
-// DeleteBaselineScoped 按 scope 归属删除基线（FR-458 越权修复）。
+// DeleteBaselineScoped 按 scope 归属删除基线（越权修复）。
 // 非管理员仅能删除「scopeKey 指向的实例全部落在其可访问集合内」的基线；越权/不可见
 // 一律以 ErrRollingOpNotFound 隐藏存在性，避免探测与跨 scope 破坏性删除（如删除平台 all 基线）。
 func (s *ConfigBaselineService) DeleteBaselineScoped(id uint, scopeIDs []uint, scoped bool) error {
@@ -265,7 +265,7 @@ func (s *ConfigBaselineService) DetectDrift(baselineID uint) ([]DriftItem, error
 	return s.DetectDriftScoped(baselineID, nil, false)
 }
 
-// DetectDriftScoped 在 scope 限定下检测漂移（FR-458 越权修复）：非管理员（scoped=true）
+// DetectDriftScoped 在 scope 限定下检测漂移（越权修复）：非管理员（scoped=true）
 // 只对「scope ∩ 可访问实例」求交后的集合检测，越权基线直接以 NOT_FOUND 隐藏。
 func (s *ConfigBaselineService) DetectDriftScoped(baselineID uint, scopeIDs []uint, scoped bool) ([]DriftItem, error) {
 	bl, err := s.GetBaselineScoped(baselineID, scopeIDs, scoped)
@@ -294,15 +294,15 @@ func (s *ConfigBaselineService) DetectDriftScoped(baselineID uint, scopeIDs []ui
 	return out, nil
 }
 
-// Converge 对所有漂移实例推送基线内容，收敛后再跑一次检测复核并回报残余漂移（FR-458）。
+// Converge 对所有漂移实例推送基线内容，收敛后再跑一次检测复核并回报残余漂移。
 func (s *ConfigBaselineService) Converge(baselineID uint, opts ConvergeOptions, authorID uint) (*ConvergeResult, error) {
 	return s.ConvergeScoped(baselineID, opts, authorID, nil, false)
 }
 
-// ConvergeScoped 在 scope 限定下收敛（FR-458 越权修复）：非管理员（scoped=true）只收敛
+// ConvergeScoped 在 scope 限定下收敛（越权修复）：非管理员（scoped=true）只收敛
 // 「scope ∩ 可访问实例」，绝不下发到 scope 外的实例。
 //
-// 取舍（spec §5）：本方法同步阻塞至收敛完成，未复用 FR-457 的 InstanceRollingService 会话实体
+// 取舍（spec §5）：本方法同步阻塞至收敛完成，未复用的 InstanceRollingService 会话实体
 // （无独立 progress/cancel 端点）。收敛是幂等写，失败以「逐台失败明细 + 收敛后残余漂移」暴露；
 // 客户端可轮询 DetectDrift 观察进度（漂移数递减）。
 func (s *ConfigBaselineService) ConvergeScoped(baselineID uint, opts ConvergeOptions, authorID uint, scopeIDs []uint, scoped bool) (*ConvergeResult, error) {
@@ -459,7 +459,7 @@ func (s *ConfigBaselineService) resolveScopeInstances(scopeKey string) ([]model.
 //   - 分组存在但子树内无成员实例 → ErrBaselineScopeGroupEmpty。
 //
 // 二者均返回错误而非空集：空的 scope 会让「基线已创建」与「真的覆盖到实例」产生错觉，且会让
-// 越权隔离断言以空集空转通过（FR-458 修复）。
+// 越权隔离断言以空集空转通过（修复）。
 func (s *ConfigBaselineService) instancesByGroupNode(root uint) ([]model.Instance, error) {
 	var node model.InstanceGroupNode
 	if err := s.db.First(&node, root).Error; err != nil {

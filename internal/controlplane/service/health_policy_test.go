@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// FR-459 平台设置面：默认值、可写白名单、写值校验、生效策略组装。
+// 平台设置面：默认值、可写白名单、写值校验、生效策略组装。
 
 func TestHealthSettings_DefaultsShown(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
@@ -78,11 +78,11 @@ func TestHealthScanPolicy_Defaults(t *testing.T) {
 	assert.Equal(t, 3, pol.SuspicionThreshold)
 	assert.Equal(t, 5, pol.CircuitBreakerThreshold)
 	assert.Equal(t, 10*time.Minute, pol.CircuitBreakerWindow)
-	assert.Equal(t, 5*time.Minute, pol.StartupWarmup, "启动宽限期默认 5m（FR-459 复审项 2）")
+	assert.Equal(t, 5*time.Minute, pol.StartupWarmup, "启动宽限期默认 5m（复审项 2）")
 	assert.Equal(t, 3, pol.SelfHealMaxRestarts, "假死自愈重启上限默认 3（复审项 7）")
 }
 
-// 新增两键可写、有校验，且生效策略随之变化（FR-459 复审项 2/7 可配）。
+// 新增两键可写、有校验，且生效策略随之变化（复审项 2/7 可配）。
 func TestHealthSettings_WarmupAndSelfHealCapConfigurable(t *testing.T) {
 	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
 	require.NoError(t, svc.Update(map[string]string{

@@ -34,9 +34,9 @@ var (
 	ErrInvalidStorageType = errors.New("非法的存储后端类型")
 	// ErrStorageInUse 存储后端被备份引用，禁止删除。
 	ErrStorageInUse = errors.New("存储后端被备份引用，无法删除")
-	// ErrStorageTypeImmutable 存储后端类型不可修改（改型=删重建，FR-338）。
+	// ErrStorageTypeImmutable 存储后端类型不可修改（改型=删重建）。
 	ErrStorageTypeImmutable = errors.New("存储后端类型不可修改")
-	// ErrStorageNameConflict 存储后端名称已存在（FR-338）。
+	// ErrStorageNameConflict 存储后端名称已存在。
 	ErrStorageNameConflict = errors.New("存储后端名称已存在")
 	// ErrCredentialEnvMissing 凭证引用的环境变量未设置。
 	ErrCredentialEnvMissing = errors.New("凭证环境变量未设置")
@@ -48,11 +48,11 @@ const backupStorageProbeTimeout = 2 * time.Second
 
 // envRefPattern 匹配整串恰为一个 ${VAR} 引用（VAR 为字母/数字/下划线/连字符）。
 //
-// 允许连字符是为了 QQ 扫码绑定（FR-495）：凭据文件名约定为 etc/qq-<appId>.key，
+// 允许连字符是为了 QQ 扫码绑定：凭据文件名约定为 etc/qq-<appId>.key，
 // 变量名取小写化后的同名形态（QQ-<appId>），否则「变量名 → 密钥文件」不再是单射。
 var envRefPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_-]*)\}$`)
 
-// BackupStorageService 备份远程存储后端服务（FR-057）。
+// BackupStorageService 备份远程存储后端服务。
 // 负责后端 CRUD 与「把存储配置 + 从 ${ENV_VAR} 解析的明文凭证」组装为下发 Worker 的传输参数。
 type BackupStorageService struct {
 	db   *gorm.DB
@@ -95,7 +95,7 @@ func (s *BackupStorageService) SetDataRoot(root *dataroot.Root) {
 }
 
 // Create 创建远程存储后端。校验类型合法且凭证字段为 ${ENV_VAR} 引用（非空时）；
-// 名称冲突预检回 422 语义错误（FR-338 对称收口，替代裸撞 DB 唯一索引的 500）。
+// 名称冲突预检回 422 语义错误（对称收口，替代裸撞 DB 唯一索引的 500）。
 func (s *BackupStorageService) Create(st *model.BackupStorage) (*model.BackupStorage, error) {
 	if !model.ValidBackupStorageType(st.Type) {
 		return nil, ErrInvalidStorageType
@@ -116,7 +116,7 @@ func (s *BackupStorageService) Create(st *model.BackupStorage) (*model.BackupSto
 	return st, nil
 }
 
-// Update 全量更新存储后端配置（FR-338）。类型不可改（改型=删重建）；校验与 Create 同源
+// Update 全量更新存储后端配置。类型不可改（改型=删重建）；校验与 Create 同源
 // （仅静态校验，不在保存时强制探活——连通性由「测试连接」显式做）；成功后清空 lastTest*
 // （配置已变，旧测试结论失效）。被备份引用的后端允许编辑（换密钥/endpoint 为合法运维场景，不加引用锁）。
 func (s *BackupStorageService) Update(id uint, st model.BackupStorage) (*model.BackupStorage, error) {
@@ -159,7 +159,7 @@ func (s *BackupStorageService) Update(id uint, st model.BackupStorage) (*model.B
 	return s.GetByID(id)
 }
 
-// checkNameConflict 名称冲突预检（FR-338）：与其他后端同名回 ErrStorageNameConflict；
+// checkNameConflict 名称冲突预检：与其他后端同名回 ErrStorageNameConflict；
 // excludeID 排除自身（Create 传 0）。并发窗口由 DB uniqueIndex 兜底。
 func (s *BackupStorageService) checkNameConflict(name string, excludeID uint) error {
 	var count int64
@@ -512,7 +512,7 @@ func validateCredentialRefs(st *model.BackupStorage) error {
 // 非 ${...} 形式则报错（杜绝明文）。
 //
 // 取值顺序：环境变量 > 数据根 etc/<VAR_NAME>.key 密钥文件。文件回落是为 QQ 扫码绑定
-// （FR-495）服务的——绑定拿到的 appSecret 落盘为密钥文件，配置里只引用 ${ENV} 名，
+// 服务的——绑定拿到的 appSecret 落盘为密钥文件，配置里只引用 ${ENV} 名，
 // 无需运维把密钥抄进环境变量。文件不存在时行为与纯环境变量版本完全一致（仍报
 // ErrCredentialEnvMissing），既有备份/Webhook 凭证配置不受影响。
 func resolveEnvRef(ref string) (string, error) {

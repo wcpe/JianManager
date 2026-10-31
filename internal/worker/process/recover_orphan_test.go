@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-325 兜底路径单测：wrapper 存活但 reconnect 拨号失败时，接管扫描应
+// 兜底路径单测：wrapper 存活但 reconnect 拨号失败时，接管扫描应
 // 有界重试（期间保留 PID 文件）→ 重试耗尽按 PID 记录强杀孤儿进程树 → 死透才清理；
 // 杀不死则保留 PID 文件待下次扫描。拨号/杀树/存活探测/等待均经 Manager 注入桩替身。
 
@@ -35,12 +35,12 @@ func writeOrphanPIDRecord(t *testing.T, dir, uuid string) string {
 	return pidPath
 }
 
-// FR-325/FR-455 启动期接管扫描的行为，经 FR-471 修订为**非破坏**：
+// 启动期接管扫描的行为，经修订为**非破坏**：
 //
 //   - wrapper 存活但 reconnect 拨不通 → 有界重试（期间保留 PID 文件）；耗尽后按 ADR-093 只告警不杀；
 //   - wrapper 已死、Java 仍活 → **不再强杀**（真机事故 2026-09-23：一条陈旧 PID 记录一次打断 54 台在跑农场）；
 //     改为只观测 + 保留 PID 文件，落审计 `orphan.startup_detected_not_reaped`，
-//     交由周期孤儿扫描（默认 warn）与 FR-471 漂移/接管流程处置。
+//     交由周期孤儿扫描（默认 warn）与漂移/接管流程处置。
 //
 // 本用例集据此只断言「重试次数、PID 文件保留、是否登记、审计」——**断言不再出现杀树**。
 func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
@@ -75,7 +75,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			wantBlocked:    true,
 		},
 		{
-			name:                   "重试期间 wrapper 已死→只观测不强杀（FR-471 非破坏）",
+			name:                   "重试期间 wrapper 已死→只观测不强杀（非破坏）",
 			succeedOnDial:          0,
 			wrapperDiesDuringRetry: true,
 			wantRecovered:          0,
@@ -99,7 +99,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			var audits []string
 			dials := 0
 
-			// FR-455①：夹具 PID 非真实进程，注入复核桩恒通过（本用例关注重试/处置流程）。
+			// ①：夹具 PID 非真实进程，注入复核桩恒通过（本用例关注重试/处置流程）。
 			m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
 			// wrapper：入口存活；若 wrapperDiesDuringRetry，则在开始重试（dials>0）后视为死亡。
 			m.recoverPIDAlive = func(pid int) bool {
@@ -135,7 +135,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantDials, dials, "拨号次数 = 初拨 + 有界重试")
-			assert.Empty(t, killed, "FR-471：启动恢复路径任何分支都不得强杀")
+			assert.Empty(t, killed, "启动恢复路径任何分支都不得强杀")
 			if tt.wantBlocked {
 				assert.Contains(t, audits, "orphan.dispose_blocked",
 					"wrapper 仍存活（瞬时不可达）时应落 dispose_blocked 审计")
@@ -153,7 +153,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 			require.GreaterOrEqual(t, len(sleeps), retrySleeps)
 			assert.Equal(t, DefaultRecoverRetryBackoff[:retrySleeps], sleeps[:retrySleeps], "重试间隔应按递增序列")
 
-			// FR-471：启动路径不删 PID 文件（交由周期扫描/接管），故恒保留。
+			// 启动路径不删 PID 文件（交由周期扫描/接管），故恒保留。
 			assert.FileExists(t, pidPath, "启动恢复路径应保留 PID 文件")
 
 			st, stErr := m.GetState(uuid)
@@ -167,7 +167,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 	}
 }
 
-// TestRecoverDaemonInstances_StartupNeverKills FR-471 核心不变量：**启动恢复路径任何分支都不强杀**。
+// TestRecoverDaemonInstances_StartupNeverKills核心不变量：**启动恢复路径任何分支都不强杀**。
 //
 // 真机事故（2026-09-23）：换二进制重启 Worker 时，一条陈旧 PID 记录触发对在跑农场的强杀（一次 54 台）。
 // 因此本用例穷举启动路径的各种「wrapper 已死」形态，断言杀树桩**永不被调用**、PID 文件恒保留。
@@ -191,7 +191,7 @@ func TestRecoverDaemonInstances_StartupNeverKills(t *testing.T) {
 		recovered, err := m.RecoverDaemonInstances()
 		require.NoError(t, err)
 		assert.Equal(t, 0, recovered)
-		assert.Empty(t, killed, "启动路径不得强杀（FR-471）")
+		assert.Empty(t, killed, "启动路径不得强杀")
 		assert.FileExists(t, pidPath)
 	})
 
@@ -215,7 +215,7 @@ func TestRecoverDaemonInstances_StartupNeverKills(t *testing.T) {
 		recovered, err := m.RecoverDaemonInstances()
 		require.NoError(t, err)
 		assert.Equal(t, 0, recovered)
-		assert.Empty(t, killed, "启动路径不得强杀（FR-471）")
+		assert.Empty(t, killed, "启动路径不得强杀")
 		assert.FileExists(t, pidPath, "PID 文件应保留供周期扫描/接管处置")
 		// 复核不通过这一态在新语义下不再单独分支（启动一律观测），审计只要求「已发现未处置」不静默。
 		assert.Contains(t, audits, "orphan.startup_detected_not_reaped")
@@ -224,10 +224,10 @@ func TestRecoverDaemonInstances_StartupNeverKills(t *testing.T) {
 
 // TestRecoverDaemonInstances_WrapperGoneJavaAlive 覆盖「wrapper 已死、Java 仍活」的场景。
 //
-// 旧行为（FR-325/FR-455）：按 PID 记录强杀 Java 树，死透才清理 PID 文件。
-// **FR-471 修订为非破坏**：真机事故（2026-09-23）证明该强杀会直接打断正在服务的服务器
+// 旧行为：按 PID 记录强杀 Java 树，死透才清理 PID 文件。
+// **修订为非破坏**：真机事故（2026-09-23）证明该强杀会直接打断正在服务的服务器
 // （换二进制重启 Worker 时，一条陈旧 PID 记录一次打断 54 台在跑农场）。而它原本要解决的
-// 「面板 STOPPED 却占着端口、实例再也起不来」已由 FR-471 的启动冲突预检（防双开）与
+// 「面板 STOPPED 却占着端口、实例再也起不来」已由的启动冲突预检（防双开）与
 // 漂移观测 + 接管入口非破坏地覆盖。
 //
 // 新行为：**不杀任何进程、保留 PID 文件**、落 `orphan.startup_detected_not_reaped` 审计，
@@ -256,8 +256,8 @@ func TestRecoverDaemonInstances_WrapperGoneJavaAlive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, recovered)
 	assert.Equal(t, 0, dials, "wrapper 已死时不应尝试 reconnect")
-	assert.Empty(t, killed, "FR-471：启动期发现 wrapper 已死 / Java 仍活时不得强杀")
-	assert.FileExists(t, pidPath, "FR-471：应保留 PID 文件供周期扫描与接管流程使用")
+	assert.Empty(t, killed, "启动期发现 wrapper 已死 / Java 仍活时不得强杀")
+	assert.FileExists(t, pidPath, "应保留 PID 文件供周期扫描与接管流程使用")
 	assert.Contains(t, audits, "orphan.startup_detected_not_reaped",
 		"应落「已发现但未处置」审计，不静默")
 
@@ -286,7 +286,7 @@ func TestRecoverDaemonInstances_WrapperAndJavaBothGone(t *testing.T) {
 	assert.NoFileExists(t, pidPath, "两者都已死时应清理 PID 文件")
 }
 
-// TestRecoverDaemonInstances_OwnershipVerifyBlocksKill FR-455① 的误杀拦截在 FR-471 后收敛为
+// TestRecoverDaemonInstances_OwnershipVerifyBlocksKill① 的误杀拦截在后收敛为
 // 「启动路径一律不杀」——本用例断言即便归属复核**通过**（最危险的情形：目录被外部进程占用），
 // 启动期也不得强杀，只观测 + 保留 PID 文件 + 落审计（不静默）。
 func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
@@ -317,7 +317,7 @@ func TestRecoverDaemonInstances_OwnershipVerifyBlocksKill(t *testing.T) {
 	recovered, err := m.RecoverDaemonInstances()
 	require.NoError(t, err)
 	assert.Equal(t, 0, recovered)
-	assert.Empty(t, killed, "FR-471：启动路径即便复核通过也不得强杀")
+	assert.Empty(t, killed, "启动路径即便复核通过也不得强杀")
 	assert.FileExists(t, pidPath, "应保留 PID 文件待周期扫描/接管处置")
 
 	require.NotEmpty(t, audits, "应落审计，不静默")
@@ -364,7 +364,7 @@ func newOrphanReapFixture(t *testing.T, uuid string) (*Manager, string, *daemon.
 	return m, pidPath, rec, killed, audits
 }
 
-// TestReapOrphanWrapper_WrapperAliveOnlyWarns FR-455① 验收 2b 回归（可转红）。
+// TestReapOrphanWrapper_WrapperAliveOnlyWarns① 验收 2b 回归（可转红）。
 //
 // 直接打处置原语 reapOrphanWrapper——它是「接管兜底」与「周期扫描 auto 档」共用的**唯一**强杀入口。
 // 传入「接管重试耗尽」而非 errOrphanedWrapperGone、且 wrapper 仍存活：即旧行为最危险的形态
@@ -397,7 +397,7 @@ func TestReapOrphanWrapper_WrapperAliveOnlyWarns(t *testing.T) {
 	}
 }
 
-// TestReapOrphanWrapper_OwnershipUnverifiedBlocksKill FR-455① 验收 2 回归（可转红）。
+// TestReapOrphanWrapper_OwnershipUnverifiedBlocksKill① 验收 2 回归（可转红）。
 //
 // 真孤儿形态（wrapper 已死、Java 仍活）但**归属复核不通过**——PID 可能已被 OS 复用给无关进程。
 // 此时代码必须只告警 + 落审计、不杀、保留 PID 文件，等下一轮扫描或人工介入。
@@ -437,7 +437,7 @@ func TestReapOrphanWrapper_OwnershipUnverifiedBlocksKill(t *testing.T) {
 	}
 }
 
-// TestRecoverDaemonInstances_ShortRetryWindowNeverKillsLiveServer FR-455① 验收 1/2b 端到端回归（可转红）。
+// TestRecoverDaemonInstances_ShortRetryWindowNeverKillsLiveServer① 验收 1/2b 端到端回归（可转红）。
 //
 // 场景即缺陷原文：接管 reconnect 在**很短的窗口内**（旧序列 {1s,2s,4s}≈7s，此处用注入的等价小值
 // 替身以便瞬时跑完）重试耗尽，而 wrapper 与 Java 都仍存活。新行为：只告警 + 落审计、保留 PID 文件、
@@ -477,7 +477,7 @@ func TestRecoverDaemonInstances_ShortRetryWindowNeverKillsLiveServer(t *testing.
 	assert.NotContains(t, auditActions(*audits), "orphan.dispose_reaped")
 }
 
-// TestDefaultRecoverRetryBackoff_CoversMinuteScale FR-455① 回归（可转红）：默认序列必须是覆盖
+// TestDefaultRecoverRetryBackoff_CoversMinuteScale① 回归（可转红）：默认序列必须是覆盖
 // 分钟级的递增序列（spec §6：1s→2s→4s→8s→16s→32s→64s ≈127s）。
 //
 // 转红方式：改回旧 {1s,2s,4s}（≈7s）——长度、逐项值、总窗口三条断言全部失败。

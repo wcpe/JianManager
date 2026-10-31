@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientDistObservabilityHandler 客户端分发观测查询端点（FR-217，见 ADR-049）。限平台管理员 + 审计。
+// ClientDistObservabilityHandler 客户端分发观测查询端点（见 ADR-049）。限平台管理员 + 审计。
 type ClientDistObservabilityHandler struct {
 	svc   *service.ClientDistObservabilityService
 	audit *service.AuditService

@@ -77,3 +77,16 @@
 
 - 与 FR-351 并行时：dev 未 embed 只能验失败态；正式路径验收依赖 351 或本机已有 jar。
 - 多 agent 勿改 PRD 非本行；CHANGELOG 只追加。
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-351~353（客户端更新器内嵌硬门禁 + 接入/版本面板信息补齐 + 楔子/core 本地日志轮换 2026-07-21：发版构建缺 wedge/updater-core 硬失败；guide 与版本旁路展示内嵌版本；`.jm-updater/logs` 按 10MiB/跨日轮换 gzip 保留 5；增强 FR-107/193/260/090；计划见 `.tmp/brainstorm-client-updater-embed-logrotate-2026-07-21.md`）
+
+FR-351~353（客户端更新器内嵌硬门禁 + 接入/版本面板信息补齐 + 楔子/core 本地日志轮换 2026-07-21：发版构建缺 wedge/updater-core 硬失败；guide 与版本旁路展示内嵌版本；`.jm-updater/logs` 按 10MiB/跨日轮换 gzip 保留 5；增强 FR-107/193/260/090；计划见 `.tmp/brainstorm-client-updater-embed-logrotate-2026-07-21.md`）→ FR-351 免 spec；FR-352 `docs/specs/client-updater-guide-embed-info/spec.md`；FR-353 `docs/specs/updater-local-log-rotate/spec.md`（均已交付@v0.19.0）
+
+### FR-351~353（客户端更新器内嵌硬门禁 + 接入/版本面板信息补齐 + 楔子/core 本地日志轮换 2026-07-21…
+
+FR-351~353（客户端更新器内嵌硬门禁 + 接入/版本面板信息补齐 + 楔子/core 本地日志轮换 2026-07-21：发版构建缺 wedge/updater-core 硬失败；guide 与版本旁路展示内嵌版本；`.jm-updater/logs` 按 10MiB/跨日轮换 gzip 保留 5；增强 FR-107/193/260/090；计划见 `.tmp/brainstorm-client-updater-embed-logrotate-2026-07-21.md`） → `docs/specs/client-updater-guide-embed-info/spec.md`
+

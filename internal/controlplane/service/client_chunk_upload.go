@@ -30,7 +30,7 @@ var (
 	ErrInvalidUploadInit = errors.New("上传初始化参数非法")
 )
 
-// 分块上传协议常量（FR-251，增强 FR-088 单次上传）。
+// 分块上传协议常量（增强单次上传）。
 const (
 	// defaultChunkSize 默认分片大小 8 MiB：远低于常见反代 body 上限，单请求不超时；
 	// 4 GiB 文件 ≈ 512 片，会话/HTTP 开销可接受。init 未指定 chunkSize 时用它。
@@ -70,7 +70,7 @@ type uploadSession struct {
 	lastActivity time.Time
 }
 
-// ChunkedUploadService 客户端分发大文件分块上传服务（FR-251，增强 FR-088）。
+// ChunkedUploadService 客户端分发大文件分块上传服务（增强）。
 //
 // 协议：init（建会话）→ 顺序/乱序 PUT 各分片（幂等，失败可重传）→ complete（校验齐全 +
 // 总字节 → io.MultiReader 顺序拼装喂 ClientVersionService.PublishFile 落 CAS）→ 返回与单次

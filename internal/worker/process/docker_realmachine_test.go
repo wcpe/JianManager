@@ -6,7 +6,7 @@
 //	go test -tags docker_integration -run TestDockerRealMachine ./internal/worker/process/ -v
 //
 // 用 alpine 轻量镜像驱动真实 dockerStrategy 走完整生命周期（拉镜像→创建→attach→
-// stdin/stdout→停止→清理），验证 FR-078 容器化实例真机链路（ADR-019）。
+// stdin/stdout→停止→清理），验证容器化实例真机链路（ADR-019）。
 package process
 
 import (
@@ -92,7 +92,7 @@ func TestDockerRealMachine_Lifecycle(t *testing.T) {
 	requireContainerGone(t, "jianmanager-"+uuid)
 }
 
-// TestDockerRealMachine_ResourceLimits 真机验证 FR-079：CPU / 内存限额真实写入 Docker HostConfig，
+// TestDockerRealMachine_ResourceLimits 真机验证：CPU / 内存限额真实写入 Docker HostConfig，
 // 磁盘限额不伪装注入；Docker stats 能读到容器内存上限。
 func TestDockerRealMachine_ResourceLimits(t *testing.T) {
 	mgr := NewManager(t.TempDir())
@@ -155,7 +155,7 @@ func TestDockerRealMachine_ImageManagement(t *testing.T) {
 	require.True(t, found, "拉取后镜像列表应含 %s", realImage)
 }
 
-// TestDockerRealMachine_CheckAvailable 真机验 CheckDockerAvailable（FR-237）：本机 Docker 可用应返回版本。
+// TestDockerRealMachine_CheckAvailable 真机验 CheckDockerAvailable：本机 Docker 可用应返回版本。
 func TestDockerRealMachine_CheckAvailable(t *testing.T) {
 	version, err := CheckDockerAvailable(context.Background())
 	require.NoError(t, err, "本机 Docker 可用，CheckDockerAvailable 应成功")

@@ -9,22 +9,13 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
-import { clearInstanceDrafts, reportInstanceDraft } from '@/lib/console-draft-registry'
+import { clearInstanceDrafts, reportInstanceDraft } from '@/lib/console/console-draft-registry'
 
-vi.mock('@xterm/xterm', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { Terminal: harness.MockTerminal }
-})
-vi.mock('@xterm/addon-fit', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { FitAddon: harness.MockFitAddon }
-})
-
-import { MockWebSocket, resetTerminalHarness, wsSockets, xtermInstances } from '@/test/xterm-ws-harness'
-import { HOT_SET_SIZE, IDLE_DISCONNECT_MS, terminalSessionManager } from '@/lib/terminal-session-manager'
+import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
+import { HOT_SET_SIZE, IDLE_DISCONNECT_MS, terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import InstanceConsoleCache from './InstanceConsoleCache'
 
-/**
+/** 
  * 已知 RUNNING 的 mock 实例 id 池。
  *
  * 1/10/11/20 是 seed override（survival-1 / survival-proxy / survival-lobby / creative-proxy）；
@@ -33,8 +24,8 @@ import InstanceConsoleCache from './InstanceConsoleCache'
  */
 const RUNNING_IDS = [1, 10, 11, 20, 5, 15, 25, 30, 35, 40, 45, 50, 55]
 
-/**
- * 恰好「填满热集 + 1」的实例序列，**由 HOT_SET_SIZE 推导而非写死**（FR-414）：
+/** 
+ * 恰好「填满热集 + 1」的实例序列，**由 HOT_SET_SIZE 推导而非写死**：
  * 容量默认值从 3 改到 6 时本测试不需要改任何数字，改到 7、8 也一样。
  */
 const IDS = RUNNING_IDS.slice(0, HOT_SET_SIZE + 2)
@@ -45,7 +36,7 @@ const SECOND_OVERFLOW_ID = IDS[HOT_SET_SIZE + 1]
 /** LRU 尾 = 最先打开的那个（其名字被 seed override 为 survival-1，供 toast 断言）。 */
 const LRU_TAIL_ID = FILL_IDS[0]
 
-/**
+/** 
  * 驱动宿主切换实例的最小外壳（等价路由参数变化——路由级 key 归并由
  * Workspace.routekey 测试覆盖，此处专注热集语义）。
  */
@@ -76,12 +67,12 @@ async function waitSockets(count: number) {
   await waitFor(() => expect(wsSockets.length).toBe(count))
 }
 
-describe('InstanceConsoleCache 跨服热缓存（FR-296）', () => {
+describe('InstanceConsoleCache 跨服热缓存', () => {
   beforeEach(() => {
     loginMockUser()
     resetTerminalHarness()
     vi.stubGlobal('WebSocket', MockWebSocket)
-    // 递增 token：断言重连「现取新 token」（FR-140）。
+    // 递增 token：断言重连「现取新 token」。
     let tokenSeq = 0
     server.use(
       http.get(API('/instances/:id/terminal-token'), () => {
@@ -125,10 +116,9 @@ describe('InstanceConsoleCache 跨服热缓存（FR-296）', () => {
     await user.click(screen.getByRole('button', { name: 'open-1' }))
     expect(wsSockets).toHaveLength(3)
     expect(wsSockets.every((s) => !s.closedByClient)).toBe(true)
-    // FR-415 起实例控制台走 DOM 输出区（ADR-086），常驻缓冲是行缓冲而非 xterm buffer。
-    // 原「3 个 xterm 未被销毁」的断言在此拆成两条更强的：①三个会话与其缓冲逐一存活、
-    // ②这条路径根本不创建 xterm（防日后误把 xterm 渲染器接回实例控制台）。
-    expect(xtermInstances).toHaveLength(0)
+    // 起实例控制台走 DOM 输出区（ADR-086），常驻缓冲是行缓冲而非 xterm buffer。
+    // 原「3 个 xterm 未被销毁」的断言：xterm 渲染壳已全站下线（已无 xterm 对象可断言），
+    // 保活语义落在下面的更强证据上——三个会话与其缓冲逐一存活。
     expect([1, 10, 11].map((id) => terminalSessionManager.hasSession(id))).toEqual([true, true, true])
     expect(terminalSessionManager.getLines(10)).toBe(buffersBefore[0])
     expect(terminalSessionManager.getLines(11)).toBe(buffersBefore[1])
@@ -149,7 +139,6 @@ describe('InstanceConsoleCache 跨服热缓存（FR-296）', () => {
       await user.click(screen.getByRole('button', { name }))
     }
     expect(wsSockets).toHaveLength(3)
-    expect(xtermInstances).toHaveLength(0)
     expect(terminalSessionManager.getLines(10)).toBe(buffersBefore[0])
     expect(terminalSessionManager.getLines(11)).toBe(buffersBefore[1])
   })

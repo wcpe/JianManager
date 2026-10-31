@@ -18,7 +18,7 @@ const logPersistSkipKey = "_log_persist_skip"
 func SkipPersist() slog.Attr { return slog.Bool(logPersistSkipKey, true) }
 
 // persistHandler 是一个 slog.Handler 装饰器：在委托给底层 handler（stdout）之外，
-// 把平台（Control Plane）结构化日志同时落库到 LogService（FR-049）。
+// 把平台（Control Plane）结构化日志同时落库到 LogService。
 //
 // 落库经 LogService.Ingest 异步非阻塞，不拖慢日志调用方；带 SkipPersist 属性的记录跳过落库。
 type persistHandler struct {

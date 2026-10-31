@@ -2,85 +2,47 @@ import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import api from '@/api/client'
-import { removeServer } from '@/components/console/server-selection'
-import { apiErrorMessage } from '@/lib/api-error'
-import type { InstanceCapabilityProfile } from '@/lib/capabilities'
+import { removeServer } from '@/lib/console/server-selection'
+import { apiErrorMessage } from '@/lib/shared/api-error'
+import type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instances/instance-batch'
 
-/**
- * 实例域查询缓存保留时长（FR-297）：控制台来回切换（页签/跨服）时命中缓存先呈现旧数据、
+/** 
+ * 实例域查询缓存保留时长：控制台来回切换（页签/跨服）时命中缓存先呈现旧数据、
  * 后台刷新，避免每次回切都白屏等待。默认 gcTime 5 分钟不够覆盖运营者巡检节奏，提至 15 分钟。
  */
 export const INSTANCE_QUERY_GC_TIME_MS = 15 * 60_000
 
-export interface InstanceInfo {
-  id: number
-  uuid: string
-  nodeId: number
-  name: string
-  type: string
-  /** 群组服角色（FR-032）：proxy / backend / universal。 */
-  role: string
-  processType: string
-  status: string
-  /** 当前状态原因，主要用于 CRASHED：异步委托失败的具体错误（如「实例未绑定 JDK…」），供前端显示。 */
-  statusReason?: string
-  startCommand: string
-  /** 绑定的 JDK id（0/缺省=未绑定，用系统 Java）。 */
-  jdkId?: number
-  workDir: string
-  /** 就地导入标记（FR-302）：工作目录为托管区外原目录，删除实例不删原目录。 */
-  workDirInPlace?: boolean
-  /** docker 模式的容器镜像引用（FR-078，ADR-019）；非 docker 模式为空。 */
-  image?: string
-  /** docker 模式 CPU 核数上限（FR-079）；0=不限制，仅 docker 模式生效。 */
-  cpuLimit?: number
-  /** docker 模式内存上限（MiB，FR-079）；0=不限制，仅 docker 模式生效。 */
-  memLimitMb?: number
-  /** docker 模式磁盘上限（MiB，FR-079）；0=不限制，v1 仅持久化/展示不注入。 */
-  diskLimitMb?: number
-  /** 系统分配的游戏服监听端口（FR-032），Bot 默认据此连入所属实例。 */
-  serverPort: number
-  /** MC 查询端口（Query 协议）；0/缺省=未启用。 */
-  queryPort?: number
-  /** ServerProbe 监控探针 /metrics 端口（系统分配，FR-010）；0=未部署探针。 */
-  probePort?: number
-  autoStart: boolean
-  autoRestart: boolean
-  /**
-   * 标签集合（FR-047）：环境维度复用 `env:` 前缀（如 `env:prod`），其余为自由标签。
-   * 后端以原始 JSON 字符串返回（空为 ""、有值为 `'["env:prod"]'`、清空为 "null"），与
-   * envVars/launchSpec 一致；消费前一律经 `parseTags()` 规范化为数组，勿直接当数组用。
-   */
-  tags: string | string[] | null
-  /**
-   * 实例能力画像（FR-445，ADR-091）：仅详情/单查响应携带（列表不计），前端据此显隐 Tab。
-   * 缺失时前端按 (type, role) 本地兜底（`lib/capabilities.ts`），故为可选。
-   */
-  capabilities?: InstanceCapabilityProfile | null
-  /**
-   * 运行态漂移 PID（FR-471）：>0 表示该实例工作目录下存在**未被平台纳管的活进程**——
-   * 面板可能显示 STOPPED 而磁盘实际在跑（如 tmux/脚本手工启动）。0/缺省=无漂移。
-   * 判定一律经 `@/lib/runtime-drift` 的 `hasRuntimeDrift()`，勿直接读该字段做真值判断（0 与缺省同义）。
-   */
-  runtimeDriftPid?: number
-  /** 漂移进程的命令行摘要（已截断，FR-471）；无漂移为空串。 */
-  runtimeDriftCmdline?: string
-  /** 漂移最近观测时间（FR-471）；无漂移为 null。 */
-  runtimeDriftAt?: string | null
-  createdAt: string
-}
+// 实例实体类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
+import type { InstanceInfo } from '@/lib/instances/instance-types'
+export type { InstanceInfo } from '@/lib/instances/instance-types'
 
-/**
- * 实例是否处于「长操作在途」（FR-331，FR-323 扩展导入/克隆）：一键搭建 / 导入搬迁 / 克隆拷贝
+/** 
+ * 实例是否处于「长操作在途」（扩展导入/克隆）：一键搭建 / 导入搬迁 / 克隆拷贝
  * 任务未终态期间，后端把实例 statusReason 固定标注为「搭建中：…/导入中：…/克隆中：…」
- * 且状态保持 STOPPED（FR-319 二轮③）。前端据此硬性禁用启动入口（与后端启动闸同一信号源）；
+ * 且状态保持 STOPPED（二轮③）。前端据此硬性禁用启动入口（与后端启动闸同一信号源）；
  * 任务终态后 reason 被清空/改写，自然解禁。
  */
 export function isProvisioningInstance(inst: Pick<InstanceInfo, 'status' | 'statusReason'>): boolean {
   return inst.status === 'STOPPED' && /^(搭建中|导入中|克隆中)/.test(inst.statusReason ?? '')
 }
 
-/** 实例列表多维筛选参数（FR-047）：任意组合，留空表示该维度不过滤。 */
+/** 
+ * 实例是否正在「损毁重建」。
+ *
+ * 与 `isProvisioningInstance` 同族：都是**读后端写入 statusReason 的中文前缀**来判定在途长操作，
+ * 没有独立的状态字段。判据收敛到一处，避免同一信号在多个组件里各写一份前缀匹配
+ * （原先只有 `InstanceConsolePage` 内联了 `statusReason?.startsWith('重建中')`）。
+ *
+ * ⚠️ 已知脆弱点（本次只做前端收敛，不动后端契约）：后端 `provision*.go` / `proxy.go` 把该原因
+ * 固定写成「重建中：…」，前端只能靠这个前缀认。后端一旦改词（本地化、加前缀、改写措辞），
+ * 这里会**静默失效**——按钮不再禁用、进行中的原因被当成失败横幅渲染，且不会有任何测试变红。
+ * 真要根治需要后端给出结构化字段（如 `statusReasonCode` / `operation`），前端再改为读它。
+ */
+export function isRebuildingInstance(inst: Pick<InstanceInfo, 'status' | 'statusReason'>): boolean {
+  return inst.status === 'DAMAGED' && (inst.statusReason ?? '').startsWith('重建中')
+}
+
+/** 实例列表多维筛选参数：任意组合，留空表示该维度不过滤。 */
 export interface InstanceListParams {
   nodeId?: number
   status?: string
@@ -95,8 +57,13 @@ export interface InstanceListParams {
 }
 
 export interface InstanceSearchParams extends InstanceListParams {
-  /** 名称子串搜索（FR-247）。 */
+  /** 名称子串搜索。 */
   q?: string
+  /** 
+   * 按实例 uuid 精确查。用于把 URL 里的实例 uuid（下钻深链 `?instance=<uuid>`）解析成数字 id，
+   * 无需为此拉全量实例列表。
+   */
+  uuid?: string
   sort?: 'name' | 'status' | 'createdAt' | 'nodeId'
   order?: 'asc' | 'desc'
   page?: number
@@ -120,25 +87,52 @@ export interface InstanceAggregate {
   byStatus: Record<string, number>
   byNode: InstanceNodeCount[]
   byRole: Record<string, number>
+  /** 
+   * 按进程类型（direct / daemon / docker / rcon）的计数，含全部枚举键零补。
+   * 有了它，统计页不必为一张「进程类型分布」图而拉全量实例列表。
+   */
+  byProcessType: Record<string, number>
 }
 
-/** 获取实例列表（有过过渡状态实例时自动轮询）。 */
-export function useInstances(params?: InstanceListParams) {
+/** 
+ * 实例列表的兜底轮询间隔（阶段 6 补丁）。
+ *
+ * 【为什么删掉了原先的「过渡态 2 秒轮询」】原实现是
+ * `some(STARTING || STOPPING) ? 2000 : false`，设计意图是「只在实例启停过程中加速刷新」。
+ * 它有两个致命问题：
+ *   1. **与 SSE 重复**。`api/events.ts` 的 `useInstanceEvents` 已经在推送 `state_change`
+ *      并 `invalidateQueries(['instances'])`，其注释写明定位就是「替代轮询方案」。
+ *      两套机制同时存在，等于每次状态变化都要走一遍推送 + 一遍轮询。
+ *   2. **条件可能永久为真**。真实环境里实例卡在 STARTING（启动超时、端口占用、OOM）
+ *      是常见故障，而非瞬时态；一旦如此，这些查询就退化为**永不停止的 2 秒轮询**。
+ *      实测（devmock 把 2/5 状态随机设为过渡态且不收敛）：静止无操作时 6 秒内仍产生
+ *      37 个请求、132 次 DOM 变更，每 2 秒触发约 440ms 的 React 渲染，页面持续发烫。
+ *
+ * 现在只留一个很长的兜底：SSE 是长连接，经代理/网关时仍可能被静默切断，
+ * 兜底保证「推送万一失效，状态最终仍会收敛」。30 秒一次的固定开销可忽略，
+ * 与原先动辄 2 秒一轮完全不是一个量级。
+ */
+const INSTANCE_FALLBACK_POLL_MS = 30_000
+
+/** 
+ * 获取实例列表（状态变化由 SSE 推送，兜底见 INSTANCE_FALLBACK_POLL_MS）。
+ *
+ * `enabled` 用于抑制「只在特定视图下才需要」的调用：例如监控页仅在下钻到实例层时才需要
+ * 把 URL 里的实例 uuid 解析成 id，平台/节点层不该为这件事付千级全量列表的代价。
+ */
+export function useInstances(params?: InstanceListParams, enabled = true) {
   return useQuery({
     queryKey: ['instances', params],
+    enabled,
     queryFn: async () => {
       const { data } = await api.get<InstanceInfo[]>('/instances', { params })
       return data
     },
-    refetchInterval: (query) => {
-      const instances = query.state.data
-      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
   })
 }
 
-/** 分页搜索实例（FR-235）：用于 1000+ 实例页面，避免首屏拉取全集。 */
+/** 分页搜索实例：用于 1000+ 实例页面，避免首屏拉取全集。 */
 export function useInstanceSearch(params: InstanceSearchParams = {}, enabled = true) {
   return useQuery({
     queryKey: ['instances', 'search', params],
@@ -147,18 +141,20 @@ export function useInstanceSearch(params: InstanceSearchParams = {}, enabled = t
       const { data } = await api.get<InstanceSearchResult>('/instances/search', { params })
       return data
     },
-    refetchInterval: (query) => {
-      const instances = query.state.data?.items
-      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
+    /* 
+      【换排序/翻页时保留上一批数据】此前换排序键会让查询进入 pending、`data` 变 undefined，
+      列表页据此渲染整表骨架——用户看到的是一次全屏闪动，而不是「表格还在、只是内容更新」。
+      保留旧数据后配合 `isFetching` 做局部淡出，才是列表页该有的手感。
+    */
+    placeholderData: keepPreviousData,
   })
 }
 
-/** 分页搜索实例（FR-247，面向 1000+ 实例）。 */
+/** 分页搜索实例（面向 1000+ 实例）。 */
 export const useSearchInstances = useInstanceSearch
 
-/** 无限分页实例搜索（FR-235）：滚动到未加载区域时按页补齐。 */
+/** 无限分页实例搜索：滚动到未加载区域时按页补齐。 */
 export function useInfiniteInstanceSearch(params: Omit<InstanceSearchParams, 'page'>, initialPage = 1) {
   return useInfiniteQuery({
     queryKey: ['instances', 'search', 'infinite', params, initialPage],
@@ -173,15 +169,11 @@ export function useInfiniteInstanceSearch(params: Omit<InstanceSearchParams, 'pa
       const loaded = lastPage.page * lastPage.pageSize
       return loaded < lastPage.total ? lastPage.page + 1 : undefined
     },
-    refetchInterval: (query) => {
-      const instances = query.state.data?.pages.flatMap((p) => p.items)
-      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
   })
 }
 
-/** 获取实例维度聚合计数（FR-247）。 */
+/** 获取实例维度聚合计数。 */
 export function useInstanceAggregate(params?: InstanceListParams & { q?: string }, enabled = true) {
   return useQuery({
     queryKey: ['instances', 'aggregate', params],
@@ -193,8 +185,8 @@ export function useInstanceAggregate(params?: InstanceListParams & { q?: string 
   })
 }
 
-/**
- * 实例详情查询选项（FR-297）：useInstance 与悬停预取（`lib/instance-prefetch.ts`）共用
+/** 
+ * 实例详情查询选项：useInstance 与悬停预取（`lib/instance-prefetch.ts`）共用
  * 同一 queryKey/queryFn/gcTime，保证预取结果能被后续 useInstance 直接命中。
  */
 export function instanceQueryOptions(id: number) {
@@ -208,17 +200,17 @@ export function instanceQueryOptions(id: number) {
   })
 }
 
-/** 获取实例详情（过渡状态时自动轮询；FR-297 回切先呈现缓存后台刷新）。 */
+/** 
+ * 获取实例详情（回切先呈现缓存后台刷新）。
+ * 状态刷新同样走 SSE：`useInstanceEvents` 的 `invalidateQueries(['instances'])`
+ * 前缀匹配会命中本 query 的 `['instances', id]`，故这里也只留兜底间隔。
+ */
 export function useInstance(id: number) {
   return useQuery({
     ...instanceQueryOptions(id),
     enabled: !!id,
     placeholderData: keepPreviousData,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status
-      if (status === 'STARTING' || status === 'STOPPING') return 2000
-      return false
-    },
+    refetchInterval: INSTANCE_FALLBACK_POLL_MS,
   })
 }
 
@@ -282,8 +274,8 @@ export function useKillInstance() {
   })
 }
 
-/**
- * 接管运行态漂移（FR-471）：把实例工作目录下未被平台纳管的活进程接管进平台生命周期。
+/** 
+ * 接管运行态漂移：把实例工作目录下未被平台纳管的活进程接管进平台生命周期。
  * 后端语义为「先停止该外在进程，再以受管方式重新拉起」——成功后实例真正进入平台管理，
  * 面板状态与磁盘进程一一对应（此前可能显示 STOPPED 而磁盘在跑）。
  * 失败信息由后端定向给出（如进程无法停止），原样透传给后端 message。
@@ -293,7 +285,7 @@ export async function adoptInstanceRuntime(id: number): Promise<{ message?: stri
   return data
 }
 
-/**
+/** 
  * 接管运行态漂移的写操作 hook：成功后 toast 并失效实例列表/详情缓存，
  * 失败把后端定向 message（如「节点未连接」）原样透出。
  */
@@ -314,7 +306,7 @@ export function useAdoptInstanceRuntime() {
   })
 }
 
-/** 重建损毁实例（FR-342）：复用已存搭建参数重跑搭建，无需重填；起后台任务，进度见任务中心。 */
+/** 重建损毁实例：复用已存搭建参数重跑搭建，无需重填；起后台任务，进度见任务中心。 */
 export function useRebuildInstance() {
   const qc = useQueryClient()
   return useMutation({
@@ -330,7 +322,7 @@ export function useRebuildInstance() {
   })
 }
 
-/** 可更新的实例字段（FR-047 新增 tags：环境/标签维度）。 */
+/** 可更新的实例字段（新增 tags：环境/标签维度）。 */
 export interface UpdateInstanceBody {
   name?: string
   startCommand?: string
@@ -339,9 +331,9 @@ export interface UpdateInstanceBody {
   jdkId?: number
   /** 传数组（含空数组）覆盖标签；不传则不变。 */
   tags?: string[]
-  /** 自定义启动环境变量（FR-344）：传对象（含空对象=清空）覆盖，不传则不变。变更对下次启动生效。 */
+  /** 自定义启动环境变量：传对象（含空对象=清空）覆盖，不传则不变。变更对下次启动生效。 */
   envVars?: Record<string, string>
-  /** docker 资源限额（FR-079）：传值（含 0=清除限制）覆盖，不传则不变。变更对下次启动生效。 */
+  /** docker 资源限额：传值（含 0=清除限制）覆盖，不传则不变。变更对下次启动生效。 */
   cpuLimit?: number
   memLimitMb?: number
   diskLimitMb?: number
@@ -363,7 +355,7 @@ export function useUpdateInstance() {
   })
 }
 
-/** 实例环境（FR-344 环境变量页签）：configured=自定义启动 env（可编辑源）、runtime=运行时进程实际环境。 */
+/** 实例环境（环境变量页签）：configured=自定义启动 env（可编辑源）、runtime=运行时进程实际环境。 */
 export interface InstanceEnvData {
   configured: Record<string, string>
   runtime: Record<string, string> | null
@@ -371,7 +363,7 @@ export interface InstanceEnvData {
   note: string
 }
 
-/** 查询实例环境（FR-344）：configured + 运行时实际环境；15s 轮询（运行时段随进程变化）。 */
+/** 查询实例环境：configured + 运行时实际环境；15s 轮询（运行时段随进程变化）。 */
 export function useInstanceEnv(instanceId: number, enabled = true) {
   return useQuery({
     queryKey: ['instance-env', instanceId],
@@ -398,15 +390,18 @@ export function useDeleteInstance() {
   })
 }
 
-/** 实例批量操作动作（FR-058）。 */
-export type InstanceBatchAction = 'command' | 'start' | 'stop' | 'restart' | 'kill'
+/** 
+ * 实例批量操作动作与结果计数：契约归包，受控视图与 API 层共用（ADR-103）。
+ * 本地绑定来自文件顶部的 import，此处仅对外再导出，避免两处各写一份。
+ */
+export type { InstanceBatchAction, InstanceBatchResult } from '@/lib/instances/instance-batch'
 
 /** 批量操作筛选条件（与列表筛选维度一致）。 */
 export interface InstanceBatchFilter {
   nodeId?: number
   status?: string
   role?: string
-  /** 显式实例集合（可选）：按选中实例走 filter 语义，使滚动编排的灰度抽样（ratio）生效（FR-457）。 */
+  /** 显式实例集合（可选）：按选中实例走 filter 语义，使滚动编排的灰度抽样（ratio）生效。 */
   instanceIds?: number[]
 }
 
@@ -419,17 +414,9 @@ export interface InstanceBatchRequest {
   command?: string
 }
 
-/** 批量操作结果计数。 */
-export interface InstanceBatchResult {
-  action: string
-  requested: number
-  succeeded: number
-  failed: number
-  skipped: number
-  errors: { instanceId: number; error: string }[]
-}
+// 批量操作结果计数 `InstanceBatchResult` 的定义已随受控视图归包（见上方 re-export）。
 
-/** 批量执行 command/start/stop/restart/kill（FR-058）。 */
+/** 批量执行 command/start/stop/restart/kill。 */
 export function useInstanceBatch() {
   const qc = useQueryClient()
   return useMutation({

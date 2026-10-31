@@ -1,5 +1,5 @@
 #!/bin/sh
-# 采集索引回滚脚本（FR-496 spec §2.3）：把采集索引从 SQLite 退回旧 ingest.state.json。
+#  采集索引回滚脚本（spec §2.3）：把采集索引从 SQLite 退回旧 ingest.state.json。
 #
 # 步骤：停止 Worker → 归档现有 ingest.index.db → 把归档的旧 JSON 改回 ingest.state.json → 启动 Worker。
 # 因两种格式共用同一语义层（游标/缺口/投影/实例绑定），回滚**不需要反向导出**：

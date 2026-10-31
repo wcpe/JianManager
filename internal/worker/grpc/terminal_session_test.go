@@ -103,7 +103,7 @@ func TestTerminalSession_ReadyAndEcho(t *testing.T) {
 	require.Equal(t, "echo:hello", string(f.Payload))
 }
 
-// 令牌被本机 WS 拒绝（401）→ PermissionDenied 透传（FR-276 诊断语义）。
+// 令牌被本机 WS 拒绝（401）→ PermissionDenied 透传（诊断语义）。
 func TestTerminalSession_TokenRejected(t *testing.T) {
 	stream := dialTerminalSession(t, startFakeTerminalWS(t))
 	require.NoError(t, stream.Send(openFrame("bad")))

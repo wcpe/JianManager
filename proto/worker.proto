@@ -8,6 +8,17 @@ option go_package = "github.com/wcpe/JianManager/proto/workerpb";
 service WorkerService {
   // Register Worker Node 首次启动时注册到 Control Plane。
   rpc Register(RegisterRequest) returns (RegisterResponse);
+  // ReportStartupProgress Worker 上报启动阶段进度（FR-486，CP 侧实现）。
+  //
+  // 存在的理由：加载（尤其大索引的全表扫描）发生在**注册之前**，那段时间 CP 侧完全看不到
+  // 该节点——2026-09-28 生产事故中这段黑盒长达 8m39s，主控台连节点都不存在。
+  // 本 RPC 让 Worker 在注册前就能把「当前处于第几阶段」送上来。
+  //
+  // 语义约束（刻意设计）：
+  //   - **best-effort**：Worker 侧上报失败一律静默丢弃，绝不阻塞或拖慢启动；
+  //   - **不构成就绪**：上报过进度不等于节点可服务，就绪判据仍只看注册与心跳；
+  //   - 老 CP 返回 Unimplemented 时 Worker 直接放弃上报（记一条 debug，不重试）。
+  rpc ReportStartupProgress(ReportStartupProgressRequest) returns (ReportStartupProgressResponse);
   // Heartbeat 双向心跳流，Worker 上报资源指标。
   rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
   // FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
@@ -297,6 +308,26 @@ service WorkerService {
   // QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
   rpc QueryServerState(QueryServerStateRequest) returns (QueryServerStateResponse);
 
+  // === 桥能力接入（FR-526）===
+  //
+  // ServerProbe 已具备、JM 此前未消费的桥能力：桥状态、主题订阅、业务域状态、配置重载。
+  // 全部经既有反向 WS 桥以 `core.*` 治理域命令下发，**不改 WS 帧协议**（探针侧早已就位），
+  // 本组 RPC 只是把这些能力的通道在 Worker/CP 之间显式化，避免复用业务命令的降级语义。
+
+  // QueryBridgeStatus 取探针桥线路健康度（`core.bridge_status`）：重连次数/队列深度/丢弃帧数/在途重载数。
+  // 只读诊断，Worker 不缓存；探针未连时返回 connected=false（不返回 error）。
+  rpc QueryBridgeStatus(QueryBridgeStatusRequest) returns (QueryBridgeStatusResponse);
+  // SetBridgeSubscription 设置事件主题订阅（`core.subscribe`）：整批覆盖、不是追加。
+  rpc SetBridgeSubscription(SetBridgeSubscriptionRequest) returns (SetBridgeSubscriptionResponse);
+  // QueryBusinessStatus 取探针已注册业务域与健康状态（`core.business_status`）。
+  rpc QueryBusinessStatus(QueryBusinessStatusRequest) returns (QueryBusinessStatusResponse);
+  // ReloadProbeConfig 下发配置重载（`core.config_reload`）。
+  //
+  // **独立超时**是本 RPC 存在的唯一理由：探针侧重载跑在独立的 reload 协调池上（不与业务命令争用），
+  // 默认 10s，远大于业务命令的 5s（FR-526 §2.2）。走 SendPluginCommand 就无法表达这个差异。
+  // FR-532（生效编排）之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
+  rpc ReloadProbeConfig(ReloadProbeConfigRequest) returns (ReloadProbeConfigResponse);
+
   // === 面板自更新（FR-081，见 ADR-020 §4）===
 
   // GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
@@ -356,6 +387,38 @@ message RegisterResponse {
   // 首注册与重注册均下发；Worker 持久化到 etc/node-identity.json 并热应用到 WS 校验。
   // 空 = 旧 CP 未下发，Worker 回退本地 jwt_secret 配置（向后兼容）。
   string ws_token_secret = 3;
+}
+
+// === 启动阶段进度上报（FR-486，CP 侧实现）===
+
+message ReportStartupProgressRequest {
+  // 节点自称的名字（CP 侧用于在未注册时也能展示「谁在启动」）。
+  string name = 1;
+  // 当前阶段标识，取值与 Worker 侧 startup.Phase 对齐
+  //（config / dataroot / identity / process_recover / ingest_state_load / register / heartbeat）。
+  string phase = 2;
+  // 该阶段耗时（毫秒）。0 表示阶段刚开始、尚未结束（用于让面板显示「卡在这一段」）。
+  int64 phase_elapsed_ms = 3;
+  // 自进程启动起的总耗时（毫秒）。
+  int64 total_elapsed_ms = 4;
+  // 已完成的阶段数 / 阶段总数，供面板渲染进度（如 5/7）。
+  int32 phases_done = 5;
+  int32 phases_total = 6;
+
+  // 鉴权二选一（与 Register 一致的两种身份）：
+  //   - 首次启动：enrollment token 明文；
+  //   - 已有身份：node_uuid + node_secret。
+  // 两者都没有时 CP 拒绝——不允许匿名上报，否则任何进程都能伪造「某节点在启动」。
+  string enroll_token = 7;
+  string node_uuid = 8;
+  string node_secret = 9;
+}
+
+message ReportStartupProgressResponse {
+  // accepted=false 时 CP 未记录（鉴权失败/参数非法/未实现），Worker 静默放弃。
+  bool accepted = 1;
+  // 拒绝原因（仅诊断用，不进面板）。
+  string reason = 2;
 }
 
 // === 崩溃快照上报（FR-313，CP 侧实现）===
@@ -438,6 +501,155 @@ message HeartbeatRequest {
   // 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」进入告警。
   bool log_ingest_healthy = 15;
   string log_ingest_detail = 16;  // 不健康原因（可空）
+
+  // ---- 主机级观测补全（FR-513，编号从 18 起；17 已被 iowait 占用）----
+  //
+  // 兼容策略与 iowait 一致：全部是**新增字段**，老 CP 忽略未知字段、老 Worker 不发
+  //（取零值），两侧都不改变既有语义。CP 侧据此把缺失值落为 null、前端显示 `--`，
+  // 而不是当成「读数为 0」——0 与「没有数据」在运维判断上是两回事。
+
+  // 1/5/15 分钟负载三档（原始值，未按核数归一）。load_avg1 已由字段 11 承载，不重复。
+  // 归一口径与 load_avg1 一致，仍在 CP 侧按核数完成（Worker 不猜 `loadPct` 的分母）。
+  double load_avg5 = 18;
+  double load_avg15 = 19;
+
+  // 进程计数（主机级，**不是**实例内进程数）。
+  //
+  // 注意与 GetInstanceResourceSnapshotResponse.process_count 区分：后者是
+  // 「某实例的进程树内进程数」，语义完全不同，不可互相代入。
+  int32 procs_running = 20;  // 活动（runnable）进程/线程数
+  int32 procs_total = 21;    // 总进程/线程数
+
+  // CPU 时间构成（窗口增量归一后的占比，0..1，各分量之和 ≈ 1）。
+  //
+  // 只给 user/system/iowait 无法定位「谁在吃 CPU」：iowait 高说明 IO 瓶颈、
+  // system 高说明内核态开销（如频繁上下文切换）、user 高才是应用自身忙。
+  // iowait 单列已由字段 17 承载（FR-485），此处补齐其余主要分量。
+  float cpu_user = 22;
+  float cpu_nice = 23;
+  float cpu_system = 24;
+  float cpu_idle = 25;
+  float cpu_irq = 26;
+  float cpu_softirq = 27;
+  float cpu_steal = 28;
+
+  // 整机 top-N 进程（**不是**受管进程树——后者是 process_metrics，字段 13）。
+  //
+  // 隐私边界（spec 明确约束）：只上报 pid/comm/指标，**不上报完整 cmdline**。
+  // cmdline 常含密码、token、内网地址等敏感参数，而运维判断「谁在吃 CPU」只需 comm。
+  // 采集节流：≤ 1 次 / 10s（见 host_observe.top_interval）。
+  repeated HostProcessSample host_top_processes = 29;
+
+  // 分挂载点磁盘用量。
+  //
+  // 为什么需要：disk_usage/disk_used_mb（字段 4/6）只覆盖根分区。
+  // `/var` 写满而 `/` 还宽松时，单值表现完全无感——而这正是日志/数据盘最常见的故障形态。
+  repeated HostMountUsage host_mounts = 30;
+
+  // ---- 日志采集平台可观测性（FR-485，编号从 31 起）----
+  //
+  // 2026-09-28 生产事故（ingest.state.json 涨至 1.2 GB、117 MB/s 持续重写 25 小时、
+  // iowait 91%）**完全靠人肉排查发现**，平台当时对这些信号一无所知。本组字段把
+  // 「采集面自身是否健康」变成可告警的数字。
+  //
+  // 兼容策略与前序字段一致：全部**新增**，老 CP 忽略未知字段、老 Worker 不发（取零值）。
+  // 但这里的零值语义特殊——见 log_metrics_available。
+  //
+  // 缺失值约定：Worker 侧采集器不可用（未装配 / 采集面从未启动）时**不发任何字段**，
+  // 并把 log_metrics_available 置 false；CP 据此不落点（曲线留空），而不是落一串 0。
+  // 「积压 0 条」与「不知道积压」在运维上要做的事完全不同。
+  bool log_metrics_available = 31;
+
+  // 采集索引（含旧 state 文件迁移归档）在磁盘上的实际占用字节。
+  // 口径：ingest.index.db + -wal + -shm 的文件尺寸之和（旧 ingest.state.json 及其
+  // .migrated 归档也计入，因为它们在事故形态里正是同一个增长面）。
+  // 事故靶点：该值曾达 1.2 GB 且无人知晓。
+  int64 log_state_file_size_bytes = 32;
+
+  // 上述文件在最近一个采样窗口内的**增速**（字节/秒，可为负——裁剪/迁移会使其下降）。
+  // 单独给尺寸不够：1.2 GB 静止无害，117 MB/s 持续 25 小时才是事故。
+  double log_state_file_growth_bytes_per_sec = 33;
+
+  // 采集索引持久化的写入吞吐（字节/秒），由相邻两次心跳的累计写入字节差推导，
+  // 口径与 node_net_*_rate 一致。事故靶点：117 MB/s 的持续重写。
+  double log_persist_write_bytes_per_sec = 34;
+
+  // 单源 WAL **最大**积压条数（跨全部采集源取最大值，不是求和）。
+  // 为什么取最大值而非求和：单源洪流才是事故形态，求和会被源数量稀释——
+  // 一个源积压 50 万条（该源已被闸住）与 60 个源各积压 8 千条，求和后同样都是 48 万，
+  // 但前者要立刻处置该源、后者说明整体在缓慢消化。
+  int64 log_wal_backlog_entries = 35;
+
+  // 上述「积压最重的那一个源」已处于采集暂停状态的**持续秒数**（0 = 未被暂停）。
+  // 暂停本身是设计行为（闸住洪流）；事故形态是「暂停了几小时没人发现」。
+  int64 log_wal_paused_seconds = 36;
+
+  // 投递失败率（0..100 百分比），窗口内失败批次数 / 总批次数。
+  // 无投递活动（分母为 0）时为 0，并由 log_metrics_available/窗口计数区分。
+  double log_delivery_failure_rate = 37;
+
+  // 投递失败的主要分类（窗口内出现次数最多的那一类；空 = 窗口内无失败）。
+  // 取值来自 Worker 侧投递错误的分类：auth / status_4xx / status_5xx / transport / other。
+  // 分类的价值在于区分「凭据错（重试无用）」与「VL 忙（等一等会好）」。
+  string log_delivery_failure_class = 38;
+
+  // 投影校验进入退避的累计次数（进程内单调递增）。
+  // 退避激增说明写后可见性校验在反复重试——VL 压力或可见延迟异常的先兆。
+  int64 log_verify_backoff_count = 39;
+
+  // 慢查询累计次数与其中最慢单次耗时（毫秒）。
+  // Worker 侧「慢」的判据是单次投影校验查询 ≥ 500 ms（verifySlowQueryThreshold）。
+  int64 log_slow_sql_count = 40;
+  int64 log_slow_sql_max_ms = 41;
+
+  // ---- 实例工作目录占用（FR-003，编号从 42 起）----
+  //
+  // 为什么要进心跳：组配额的存储口径必须从「按备份大小估算」换成「真实工作目录占用」。
+  // 既有实时链路 GetInstanceResourceSnapshot（FR-399）是**按需逐实例 gRPC**——组配额查询要
+  // 遍历组内全部实例，直接接会变成 N 次跨节点 RPC，配额页被拖慢。随心跳批量上报后 CP 落库，
+  // 配额读路径退化成一次 SQL 聚合，且「创建期检查」与「运行期强制」用同一份数据。
+  //
+  // 兼容策略与前序字段一致：**新增**字段，老 CP 忽略未知字段、老 Worker 不发（空列表），
+  // 两侧都不改变既有语义。空列表 = 该 Worker 不支持该项，CP 侧保持既有值不动
+  //（不回退成 0：清空会让用量凭空归零 → 低估占用 → 超卖）。
+  //
+  // 单实例粒度而非节点总量：配额按「组内实例集合」核算，节点总量无法归因到组。
+  repeated InstanceWorkDirUsage work_dir_usages = 42;
+}
+
+// InstanceWorkDirUsage 单个实例的工作目录占用（FR-003 心跳批量上报）。
+//
+// 与 GetInstanceResourceSnapshotResponse 的 work_dir_bytes 同源同口径（都统计目录树内
+// 常规文件尺寸之和），区别只在**投递方式**：那个是按需 RPC 的单实例响应，本消息是心跳里的
+// 批量项。两处口径必须一致，否则「配额页显示的用量」与「运行期强制判定的用量」会打架。
+message InstanceWorkDirUsage {
+  string instance_uuid = 1;
+  // work_dir_bytes 工作目录内常规文件尺寸之和（字节）。available=false 时本值无意义。
+  int64 work_dir_bytes = 2;
+  // available 本拍统计是否成功（目录不存在/不可读/超时/实例无工作目录时为 false）。
+  //
+  // 语义边界（消费方必读）：false **不等于占用为 0**。配额侧对 false 的实例必须回退到
+  // 备份大小估算，而不是按 0 计入——按 0 会低估用量，让超卖通过创建期检查。
+  bool available = 3;
+}
+
+// HostProcessSample 整机 top-N 进程的一项（FR-513）。
+//
+// 隐私边界：**刻意不含 cmdline**。这不是遗漏，是 spec §2「不做」明确列出的约束——
+// cmdline 里常有密码/token/内网地址。若将来要加，必须先过隐私评审。
+message HostProcessSample {
+  uint32 pid = 1;
+  string comm = 2;        // 进程名（不含参数）
+  float cpu_pct = 3;      // CPU 占用百分比（0..100，按单核口径，与 ps 一致）
+  uint64 rss_bytes = 4;   // 常驻内存字节
+}
+
+// HostMountUsage 一个挂载点的磁盘用量（FR-513）。
+message HostMountUsage {
+  string mountpoint = 1;   // 挂载点路径，如 /、/var
+  uint64 total_bytes = 2;
+  uint64 used_bytes = 3;
+  float used_pct = 4;      // 使用率 0..100
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
@@ -520,10 +732,15 @@ message InstanceMetricSample {
   // 字段号 24/25：13/14 已被预留的 motd/version 占用（spec 原稿写 13/14，实现按现状顺延）。
   int64 gc_count_total = 24;   // Σ serverprobe_gc_count_total{gc=...}
   double gc_time_millis = 25;  // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000
-  // 上方的 motd / version / max_players / player_names / plugins / map / source_mask /
+  // 上方的 motd / version / player_names / plugins / map / source_mask /
   // player_names_partial 是**预留字段**：实时详情链路（GetInstanceMetrics）已端到端提供这些值，
   // 而心跳时序链路（本消息）的 CP 消费者只用到可用位与 players_online；故 Worker 不再每拍填充，
   // 避免 69 实例规模下每 30s 的文本载荷放大（FR-446 审计项 3）。
+  //
+  // max_players 是例外：侧栏要显示「当前/最大人数」（FR-511），而批量的
+  // POST /metrics/series/batch 只能读到存好的时序序列。它是 int32、约 4 字节/实例/拍，
+  // 相比被排除的 motd/名单/插件/图标（KB 级）可忽略，因此本拍填充并由 CP 落 inst_players_max。
+  bool max_players_available = 26;  // max_players 本拍是否真实可用（三源皆无时 false → CP 落 NULL）
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
@@ -1048,6 +1265,9 @@ message WriteConfigRequest {
   string path = 2;
   string content = 3;
   repeated ConfigField fields = 4;
+  // expected_hash 落盘后读回校验的目标 sha256（小写 hex）。
+  // 空表示调用方不做校验（兼容旧 CP），此时仍会读回并回填 actual_hash。
+  string expected_hash = 5;
 }
 
 message WriteConfigResponse {
@@ -1055,6 +1275,15 @@ message WriteConfigResponse {
   string error = 2;
   ConfigValidationResult validation = 3;
   uint32 version_id = 4;
+  // error_code 机器可读原因码：PATH_ESCAPE / WRITE_FAILED / WRITE_VERIFY_FAILED /
+  // BACKUP_FAILED / VALIDATION_FAILED。success=false 时必填，便于 CP 分支处置。
+  string error_code = 5;
+  // actual_hash 读回文件后的实际 sha256；未读回（写失败）时为空。
+  string actual_hash = 6;
+  // backup_created 写前是否创建了快照（仅当原文件存在且内容不同）。
+  bool backup_created = 7;
+  // backup_path 快照路径（相对工作目录，便于运维定位与回滚）。
+  string backup_path = 8;
 }
 
 message ValidateConfigRequest {
@@ -1891,6 +2120,82 @@ message QueryServerStateResponse {
   string error = 2;
   bool connected = 3;       // 探针当前是否在线
   string state_json = 4;    // 聚合状态 JSON（下游填充）
+}
+
+// === 桥能力接入（FR-526）===
+
+message QueryBridgeStatusRequest {
+  string instance_uuid = 1;
+}
+
+// QueryBridgeStatusResponse `core.bridge_status` 的透传回执。
+//
+// status_json 是探针产出的完整快照（含 pools/sender/inbound/routes/topics 等分层结构），
+// Worker 与 CP 都**不解析**它：字段演进不需要改两端，前端按结构渲染。
+// connected 单独提出来是为了让 CP 在探针不在时无需解析就能判断降级路径。
+message QueryBridgeStatusResponse {
+  bool success = 1;         // 探针执行成功（未必 connected=false 时也为 false，看 error）
+  string error = 2;
+  bool connected = 3;       // 探针当前是否连入本机 Worker
+  string status_json = 4;   // 桥状态快照 JSON（探针产出，原样透传）
+  int64 fetched_at_ms = 5;  // Worker 取到快照的时刻（毫秒），供 CP 判断新鲜度
+}
+
+message SetBridgeSubscriptionRequest {
+  string instance_uuid = 1;
+  // topics 主题表达式列表，支持 `.*` 后缀通配。
+  //
+  // **空数组 = 订阅全部**（探针侧 clear → 全量上报），与「未设置过订阅」等价。
+  // 未出现在本请求里的历史订阅**不会保留**：整批覆盖，不是追加。
+  repeated string topics = 2;
+  // domains 业务域列表。探针侧的过滤维度只有 topic，没有独立 domain 维度；
+  // 故本字段由 Worker **展开成通配表达式**（`activity` → `activity.*`）后并入 topics 下发，
+  // 保持对外契约里有 domains 而无需改探针帧协议。
+  repeated string domains = 3;
+}
+
+message SetBridgeSubscriptionResponse {
+  bool success = 1;
+  string error = 2;
+  bool connected = 3;
+  // applied_topics 探针回执的**生效集合**（探针按字典序去重返回）。
+  // 与请求值不同是正常现象（通配展开、去重、空数组清空），CP 以本字段回给前端。
+  repeated string applied_topics = 4;
+}
+
+message QueryBusinessStatusRequest {
+  string instance_uuid = 1;
+  // domain 可选：非空时只查该域（探针 payload 的 `domain` 键），空为全量。
+  string domain = 2;
+}
+
+message QueryBusinessStatusResponse {
+  bool success = 1;
+  string error = 2;
+  bool connected = 3;
+  // status_json 探针产出的 `{"domains":{...},"refresh":{...},"timestamp":...}`，原样透传。
+  string status_json = 4;
+  int64 fetched_at_ms = 5;
+}
+
+message ReloadProbeConfigRequest {
+  string instance_uuid = 1;
+  // paths 待重载的配置路径列表；**空数组 = 全量重载**（探针侧语义）。
+  repeated string paths = 2;
+  // timeout_ms 本次重载等待回执的上限（毫秒）。0 = 用 Worker 侧默认（10s）。
+  //
+  // 由 CP 显式给值而非 Worker 硬编码：FR-532 编排可能需要按目标调整，
+  // 但默认值仍独立于业务命令的 5s，绝不复用。
+  int64 timeout_ms = 3;
+}
+
+message ReloadProbeConfigResponse {
+  bool success = 1;
+  string error = 2;
+  bool connected = 3;
+  // receipt_json 探针的结构化重载回执（reloaded / bestEffort / failed / applied 等），原样透传。
+  string receipt_json = 4;
+  int64 duration_ms = 5;
 }
 
 // === 面板自更新（FR-081，见 ADR-020 §4） ===

@@ -86,6 +86,12 @@ func newInstanceTestDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.GroupInstance{}, &model.GroupQuota{}, &model.Bot{}, &model.Backup{}))
 	return db
 }
@@ -134,7 +140,7 @@ func TestCreate_GenericKeepsUserWorkDir(t *testing.T) {
 	}
 }
 
-// generic 实例：调用方未传 WorkDir 时系统同样分配（FR-234，创建向导隐藏工作目录、统一自动生成）。
+// generic 实例：调用方未传 WorkDir 时系统同样分配（创建向导隐藏工作目录、统一自动生成）。
 func TestCreate_GenericEmptyWorkDirAllocated(t *testing.T) {
 	db := newInstanceTestDB(t)
 	svc := NewInstanceService(db, nil, nil)
@@ -153,7 +159,7 @@ func TestCreate_GenericEmptyWorkDirAllocated(t *testing.T) {
 	}
 }
 
-// docker 实例允许空启动命令（交镜像 entrypoint 自管启动，FR-078）；非 docker 仍必填。
+// docker 实例允许空启动命令（交镜像 entrypoint 自管启动）；非 docker 仍必填。
 func TestCreate_DockerAllowsEmptyStartCommand(t *testing.T) {
 	db := newInstanceTestDB(t)
 	svc := NewInstanceService(db, nil, nil)

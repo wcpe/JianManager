@@ -5,7 +5,7 @@ import (
 	"sort"
 )
 
-// Agent 策略版本与 V2 能力常量（FR-395 / ADR-080）。
+// Agent 策略版本与 V2 能力常量（ADR-080）。
 const (
 	AgentPolicyVersionV1 = 1
 	AgentPolicyVersionV2 = 2
@@ -34,7 +34,7 @@ const (
 	AgentResourceNone     = "none"
 	AgentResourceNode     = "node"
 	AgentResourceInstance = "instance"
-	// FR-398：Bot 与压测运行资源；授权均回落到所属实例（botrun 另叠加 executor 节点校验）。
+	// Bot 与压测运行资源；授权均回落到所属实例（botrun 另叠加 executor 节点校验）。
 	AgentResourceBot    = "bot"
 	AgentResourceBotRun = "botrun"
 
@@ -54,7 +54,7 @@ type AgentActionDescriptor struct {
 	HTTPMethod      string
 	HTTPPath        string
 	HTTPInContract  bool
-	RequiresConfirm bool // FR-396：destructive 操作须服务端精确确认参数
+	RequiresConfirm bool // destructive 操作须服务端精确确认参数
 }
 
 // AgentAuthorization 授权结果；Capability 供调用流水记录。
@@ -118,6 +118,22 @@ var agentActionCatalog = map[string]AgentActionDescriptor{
 		ResourceType: AgentResourceInstance, Operation: AgentOperationRead,
 		V1Allowed: true, // MCP 专属，不进 HTTP 契约投影
 	},
+	// 助手概览类只读（补回）：ResourceType=none，只按能力把关。
+	AgentActionClusterOverview: {
+		Action: AgentActionClusterOverview, V2Capability: AgentCapabilityInstanceRead,
+		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		V1Allowed: true, // 只读聚合，MCP 专属，不进 HTTP 契约投影
+	},
+	AgentActionListTasksBrief: {
+		Action: AgentActionListTasksBrief, V2Capability: AgentCapabilityInstanceRead,
+		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		V1Allowed: true,
+	},
+	AgentActionListAlertsBrief: {
+		Action: AgentActionListAlertsBrief, V2Capability: AgentCapabilityInstanceRead,
+		ResourceType: AgentResourceNone, Operation: AgentOperationRead,
+		V1Allowed: true,
+	},
 	AgentActionInstanceStart: {
 		Action: AgentActionInstanceStart, V2Capability: AgentCapabilityInstanceLife,
 		ResourceType: AgentResourceInstance, Operation: AgentOperationWrite,
@@ -150,8 +166,8 @@ var agentActionCatalog = map[string]AgentActionDescriptor{
 	},
 }
 
-// fr396DomainActions 是 FR-396 节点/实例扩展 action，经 init 注入 catalog，
-// 保持 map 字面量本体不被并行分支争用（与 FR-397/398 的追加风格一致）。
+// fr396DomainActions 是节点/实例扩展 action，经 init 注入 catalog，
+// 保持 map 字面量本体不被并行分支争用（与398 的追加风格一致）。
 var fr396DomainActions = []AgentActionDescriptor{
 	{Action: AgentActionNodeGet, V2Capability: AgentCapabilityNodeRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
 	{Action: AgentActionNodeGetMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
@@ -170,7 +186,7 @@ var fr396DomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceClone, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceRebuild, V2Capability: AgentCapabilityInstanceProvision, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	{Action: AgentActionInstanceUpdateConfig, V2Capability: AgentCapabilityInstanceConfigure, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
-	// 实例标签（FR-440）：权限面比 configure 更轻（instance.write），仅动 tags 字段。
+	// 实例标签：权限面比 configure 更轻（instance.write），仅动 tags 字段。
 	{Action: AgentActionInstanceUpdateTags, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	// task_get 无固定资源类型：先按 task 关联实例归属重验，再走 instance.read 能力。
 	{Action: AgentActionTaskGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
@@ -194,7 +210,7 @@ func init() {
 	}
 }
 
-// networkDomainActions 是群组服 Network 软标签与代理注册（FR-032 / FR-335）的 MCP 专属 action。
+// networkDomainActions 是群组服 Network 软标签与代理注册的 MCP 专属 action。
 // 与实例分组同权限面（读 instance.read、写 instance.write）：这些操作改的是实例间的归属
 // 与代理注册关系，不是实例内容，故不占用 configure/content 等更细能力。
 // 全部 V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /networks、/topology 路由）。
@@ -218,7 +234,7 @@ func init() {
 	}
 }
 
-// beaconDomainActions 是 Beacon 拓扑拉取（FR-444，见 ADR-090）的 MCP 专属 action。
+// beaconDomainActions 是 Beacon 拓扑拉取（见 ADR-090）的 MCP 专属 action。
 // 权限面与实例分组一致（读 instance.read、写 instance.write）：拉取改的是分组树与实例标签
 // （归属类信息），不是实例内容，故不占用 configure/content 等更细能力。
 // 刻意不标 destructive——拉取是幂等对账（重复拉取不产生重复分组、不删本地数据），
@@ -235,7 +251,7 @@ func init() {
 	}
 }
 
-// fr470DomainActions 是崩溃诊断增强（FR-470）的 MCP 专属 action：崩溃趋势读。
+// fr470DomainActions 是崩溃诊断增强的 MCP 专属 action：崩溃趋势读。
 // 与既有 instance_list_crash_snapshots 同权限面（observability.read）——趋势是观测聚合，
 // 不改实例，故只读。V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /crash-trend 路由）。
 var fr470DomainActions = []AgentActionDescriptor{
@@ -248,7 +264,7 @@ func init() {
 	}
 }
 
-// fr468DomainActions 是二进制/Beacon 版本管理（FR-468）的 MCP 专属 action。
+// fr468DomainActions 是二进制/Beacon 版本管理的 MCP 专属 action。
 // 读走 instance.read；升级/回滚改的是实例的二进制版本（影响可执行内容），
 // 故走 instance.write（比 destructive 轻——不回数据、删文件，且可一级回滚）。
 // V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /binary-version 三端点）。
@@ -264,7 +280,7 @@ func init() {
 	}
 }
 
-// fr467DomainActions 是运行期配额强制（FR-467）的 MCP 专属 action：配额与实时用量读。
+// fr467DomainActions 是运行期配额强制的 MCP 专属 action：配额与实时用量读。
 // V1Allowed=false、HTTPInContract=false（HTTP 侧另有 /instances/:id/quota）。
 var fr467DomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceQuotaStatus, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
@@ -276,7 +292,7 @@ func init() {
 	}
 }
 
-// fr466DomainActions 是实例整机快照（FR-466）的 MCP 专属 action。
+// fr466DomainActions 是实例整机快照的 MCP 专属 action。
 // 列表走 instance.read；创建快照与一键回滚走 instance.write——回滚会覆盖工作目录，
 // 但它是**可再回滚**的（强制 pre_rollback 快照），故不落 destructive；
 // 真正的破坏性动作（删除快照）暂不通过 MCP 暴露。
@@ -293,7 +309,7 @@ func init() {
 	}
 }
 
-// botDomainActions 是 FR-398 新增 action 的紧凑声明：action → (capability, resource, operation)。
+// botDomainActions 是新增 action 的紧凑声明：action → (capability, resource, operation)。
 // 全部 V1Allowed=false、HTTPInContract=false，故不逐条重复这两个字段。
 var botDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionBotList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
@@ -326,14 +342,14 @@ var botDomainActions = []AgentActionDescriptor{
 	{Action: AgentActionLoadTestRunReport, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
 }
 
-// init 把 FR-398 的 Bot 域 action 追加进唯一真源目录，保持 catalog 的追加式演进。
+// init 把的 Bot 域 action 追加进唯一真源目录，保持 catalog 的追加式演进。
 func init() {
 	for _, d := range botDomainActions {
 		agentActionCatalog[d.Action] = d
 	}
 }
 
-// init 追加 FR-397 内容运维 action（文件/配置/插件/传输票据）。
+// init 追加内容运维 action（文件/配置/插件/传输票据）。
 // 全部 V1Allowed=false、MCP 专属（无 HTTP 契约投影），资源恒为 instance。
 func init() {
 	registerAgentInstanceActions(AgentCapabilityInstanceRead, AgentOperationRead,
@@ -508,7 +524,7 @@ func PrincipalCanAccessNode(p *AgentPrincipal, nodeID uint) bool {
 // 供实例分组、群组等「非实例、非节点」目标的 destructive 授权使用：这类资源自身无独立资源类型
 // （descriptor 复用 instance 以便按节点/实例 scope 判定可发现性），其 id 也不是实例 id，
 // 无法按实例目标授权；改按节点 scope 判定（与可发现性口径一致），避免把分组/群组 id 误当实例 id
-// 而导致授权恒拒（FR-435）。
+// 而导致授权恒拒。
 func PrincipalHasNodeScope(p *AgentPrincipal) bool {
 	return p != nil && p.PolicyVersion == AgentPolicyVersionV2 && len(p.ScopedNodeIDs) > 0
 }

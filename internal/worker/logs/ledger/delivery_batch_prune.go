@@ -7,9 +7,9 @@ import (
 
 // 历史投递批次（delivery_batch）裁剪：把「已确定不会再被需要」的条目从账本里摘掉。
 //
-// 为什么需要（FR-498 实测，60 源）：采集索引 stateindex 里唯一随总量线性增长的表是
+// 为什么需要（实测，60 源）：采集索引 stateindex 里唯一随总量线性增长的表是
 // delivery_batch（≈5 MB/天 @60 源），而它原先没有任何裁剪路径——长跑会把索引无界撑大，
-// 与 FR-496「索引稳态不随总量增长」的初衷相悖。本文件给出**判据、理由与调用点**。
+// 与「索引稳态不随总量增长」的初衷相悖。本文件给出**判据、理由与调用点**。
 //
 // # 谁在读投递批次（消费者）
 //
@@ -17,7 +17,7 @@ import (
 //	  ├─ contiguousDeliveryEnd(batches, floor=Positions.Reclaim)      ← 读者 A：连续前缀
 //	  └─ ingest.classifyEventStatus(facts with Batches)               ← 读者 B：按批次判态
 //
-// 读者 A 的三个调用点的 floor 都是 reclaim：RecordDelivery、Restore、以及 FR-496 迁移校验的
+// 读者 A 的三个调用点的 floor 都是 reclaim：RecordDelivery、Restore、以及迁移校验的
 // comparisonState（ingest/index_store.go 的 ledger.ContiguousDeliveryEnd）。
 //
 // 读者 B 是**第二个有语义的读者**（此前被漏掉，PR #61 审查 LEDGER-1 补上）：它按批次状态把

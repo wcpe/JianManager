@@ -1,6 +1,6 @@
 package ingest
 
-// 持久化规模回归（FR-496 spec §3.3 的可转红替身）：
+// 持久化规模回归（spec §3.3 的可转红替身）：
 //   persist 的写入量必须只随「本批次变更」增长，不随索引总量增长。
 //   退回整本重写（或让 FP 把写入时刻算进指纹）会让 RowsWritten/BytesWritten 随源数线性增长，
 //   本用例即红。
@@ -262,7 +262,7 @@ func TestPersistKeepsIndexUsableAfterFloodBound(t *testing.T) {
 		"增量写入后索引必须与内存状态逐字段一致")
 }
 
-// FR-496 加固（F2）：**重启后**的首次 persist（无任何采集活动）必须零写入。
+// 加固（F2）：**重启后**的首次 persist（无任何采集活动）必须零写入。
 //
 // 转红说明 ①（指纹缺陷）：encodeValue 的 bool 分支若改回自成一类，重启后 position/gap/
 // projection 会被整表重写，RowsWritten ≈ 全量行数 → 本用例红。
@@ -286,7 +286,7 @@ func TestPersistIsIdempotentAfterRestart(t *testing.T) {
 	}
 }
 
-// FR-496 加固（F3）：Stop 关闭索引句柄后，-wal 必须被归并（不再残留）。
+// 加固（F3）：Stop 关闭索引句柄后，-wal 必须被归并（不再残留）。
 //
 // 转红说明：删掉 Stop 里的 CloseIndex（旧行为只关事件段），本用例即红——索引库仍开着，
 // 退出后 -wal 不会归并（重启后用 sqlite 打开仍能看到残留物）。
@@ -305,7 +305,7 @@ func TestStopCheckpointsIndex(t *testing.T) {
 	require.NoError(t, m.Stop())
 }
 
-// FR-496 加固（F2 的稳态口径）：**真实 pipeline** 下的稳态持久化必须只随「本批次变更的源」
+// 加固（F2 的稳态口径）：**真实 pipeline** 下的稳态持久化必须只随「本批次变更的源」
 // 增长，不随索引总量增长。
 //
 // 与 TestPersistWritesOnlyChangedRowsAtScale 的区别：那个用例直接构造 Manager 状态

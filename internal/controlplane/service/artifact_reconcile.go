@@ -44,7 +44,7 @@ const (
 	artifactReconcileListPageSize = 1000
 )
 
-// ArtifactReconcileService 制品索引 ↔ S3 对象清单一致性对账服务（FR-349）。
+// ArtifactReconcileService 制品索引 ↔ S3 对象清单一致性对账服务。
 //
 // 逐 s3 渠道比对「Asset 索引键集合」vs「渠道 prefix 下 CAS 命名空间对象清单」，产出
 // 缺失/孤儿差异报告落库；处置走显式按钮（标记失效 / 二次确认清理），**不做全自动修复**。

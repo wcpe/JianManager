@@ -16,6 +16,12 @@ func newBaselineTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{}, &model.Node{}, &model.InstanceConfigVersion{},
 		&model.ConfigBaseline{}, &model.InstanceGroupNode{}, &model.InstanceGroupMember{},
@@ -176,7 +182,7 @@ func TestConfigBaseline_GroupScopeFailClosed(t *testing.T) {
 	require.ErrorIs(t, err, ErrBaselineScopeGroupNotFound)
 }
 
-// TestConfigBaseline_ScopeFiltering 覆盖 FR-458 越权修复：非管理员只能看到/收敛「scope ∩ 可访问集合」。
+// TestConfigBaseline_ScopeFiltering 覆盖越权修复：非管理员只能看到/收敛「scope ∩ 可访问集合」。
 func TestConfigBaseline_ScopeFiltering(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 3)
@@ -254,7 +260,7 @@ func TestConfigBaseline_ScopeHidesInvisible(t *testing.T) {
 	require.Len(t, rows, 1)
 }
 
-// TestConfigBaseline_DetectDriftReadErrorNotDrift 读取错误单独分类，不计入漂移（FR-458 nit）。
+// TestConfigBaseline_DetectDriftReadErrorNotDrift 读取错误单独分类，不计入漂移（nit）。
 func TestConfigBaseline_DetectDriftReadErrorNotDrift(t *testing.T) {
 	db := newBaselineTestDB(t)
 	seedPlainInstances(t, db, 1) // 该实例无版本；config 未注入 → Read 报错
@@ -278,7 +284,7 @@ func TestConfigBaseline_DetectDriftReadErrorNotDrift(t *testing.T) {
 	require.Equal(t, 0, res.Targeted)
 }
 
-// TestConfigBaseline_UpsertScopedGuard 覆盖 FR-458 越权修复：非管理员不能创建/覆盖 scope 超出可访问范围的基线。
+// TestConfigBaseline_UpsertScopedGuard 覆盖越权修复：非管理员不能创建/覆盖 scope 超出可访问范围的基线。
 func TestConfigBaseline_UpsertScopedGuard(t *testing.T) {
 	db := newBaselineTestDB(t)
 	ids := seedPlainInstances(t, db, 3)

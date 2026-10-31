@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// cacheHitProvisionWorker 核心缓存命中的 worker 替身（FR-330）：记录请求并回 cache_hit。
+// cacheHitProvisionWorker 核心缓存命中的 worker 替身：记录请求并回 cache_hit。
 type cacheHitProvisionWorker struct {
 	fakeProvisionWorker
 	download *workerpb.DownloadCoreRequest
@@ -23,7 +23,7 @@ func (f *cacheHitProvisionWorker) DownloadCore(_ context.Context, in *workerpb.D
 	return &workerpb.DownloadCoreResponse{Success: true, Size: 47 << 20, CacheHit: true}, nil
 }
 
-// TestProvisionServerAsync_CacheHitStage 缓存命中链路（FR-330）：
+// TestProvisionServerAsync_CacheHitStage 缓存命中链路：
 // ① DownloadCore 请求携带组合缓存键成分（CoreType/McVersion/Build，latest 已在 CP 解析为具体构建）；
 // ② worker 回 cache_hit 时任务 stage 轨迹出现「缓存命中」文案（与「下载」区分）。
 func TestProvisionServerAsync_CacheHitStage(t *testing.T) {
@@ -50,7 +50,7 @@ func TestProvisionServerAsync_CacheHitStage(t *testing.T) {
 		"cache_hit 时任务 stage 轨迹应出现「缓存命中」文案")
 }
 
-// TestProvisionServerAsync_DownloadStage 未命中链路（FR-330 对照）：worker 未回 cache_hit 时
+// TestProvisionServerAsync_DownloadStage 未命中链路（对照）：worker 未回 cache_hit 时
 // stage 轨迹是「下载核心…下载完成」，不得出现「缓存命中」。
 func TestProvisionServerAsync_DownloadStage(t *testing.T) {
 	svc, taskSvc, node, done := newFR319Harness(t, &fakeProvisionWorker{})

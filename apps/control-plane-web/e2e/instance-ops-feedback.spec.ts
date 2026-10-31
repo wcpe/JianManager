@@ -1,41 +1,45 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-138 单实例操作可发现性与反馈 · 单机（Playwright + mock）验收。
- * 覆盖 console-ux spec §FR-138 验收：
+/** 
+ *单实例操作可发现性与反馈 · 单机（Playwright + mock）验收。
+ * 覆盖 console-ux spec §验收：
  *   - 行内仅留启停/重启主操作，余项收「⋯」菜单（删除标红）；
  *   - 主操作点击有反馈（状态联动翻牌 = 乐观/失效重取反馈）；
  *   - 运行态克隆/删除改禁用 + tooltip（非消失）。
- * 证据落 .tmp/acceptance/FR-138/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-138 行内主操作可发现 + 次要操作收「⋯」菜单', async ({ page }) => {
+test('行内主操作可发现 + 次要操作收「⋯」菜单', async ({ page }) => {
   await login(page)
 
   await page.goto('/instances?view=list&q=survival-1')
   const row = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'survival-1', exact: true }) })
   await expect(row).toBeVisible()
 
-  // survival-1 种子为 RUNNING：行内主操作「停止」「重启」直接可见（可发现）。
+  // survival-1 种子为 RUNNING：行内只保留**当前态最常用**那一颗（停止）。
+  // 【契约变更】重启已收进「⋯」菜单：操作列只留图标，否则四档状态 + 重启 + ⋯ 把列撑到 135px，
+  // 1280 宽下表格横向溢出、⋯ 被挤出视口（InstanceRowView 操作列注释）。
   await expect(row.getByRole('button', { name: '停止', exact: true })).toBeVisible()
-  await expect(row.getByRole('button', { name: '重启', exact: true })).toBeVisible()
 
-  // 次要操作收进「更多操作（⋯）」下拉菜单：点开后出现「编辑配置 / 删除」等项。
+  // 次要操作收进「更多操作（⋯）」下拉菜单：点开后出现重启 / 编辑配置 / 删除。
   const kebab = row.getByRole('button', { name: '更多操作' })
   await expect(kebab).toBeVisible()
   await kebab.click()
 
   const menu = page.getByRole('menu')
   await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: '重启' })).toBeVisible()
   await expect(menu.getByRole('menuitem', { name: '编辑配置' })).toBeVisible()
   // 删除项在菜单内（destructive 标红），运行态下禁用样式仍可见（非消失）。
   await expect(menu.getByRole('menuitem', { name: '删除' })).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-138/single-machine-row-menu.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-row-menu.png', fullPage: false })
 })
 
-test('FR-138 主操作点击有反馈：停止 → 状态联动翻牌为「启动」', async ({ page }) => {
+test('主操作点击有反馈：停止 → 状态联动翻牌为「启动」', async ({ page }) => {
+  // 登录 + 列表首屏（1200 实例种子）+ 停止后的失效重取，CI 慢 runner 上默认 60s 不够。
+  test.setTimeout(120_000)
   await login(page)
 
   await page.goto('/instances?view=list&q=survival-1')
@@ -44,12 +48,28 @@ test('FR-138 主操作点击有反馈：停止 → 状态联动翻牌为「启�
 
   const stopBtn = row.getByRole('button', { name: '停止', exact: true })
   await expect(stopBtn).toBeVisible()
+
+  // 【关键：行内点「停止」不会直接发请求】它只是把 `lifecycleTarget` 置位、弹 DangerConfirm
+  // （InstancesPage 里 onStop={() => setLifecycleTarget({...op:'stop'})}），
+  // 必须在确认框里再点一次 confirmLabel「停止」才会 `stop.mutate(id)`。
+  // 旧写法点完行内按钮就直接等响应，所以 waitForResponse 永远超时（之前报
+  // "element not found" 也是同一个原因：状态从未变过）。
+  const stopResp = page.waitForResponse((r) => {
+    const u = new URL(r.url())
+    return r.request().method() === 'POST' && /\/instances\/\d+\/stop$/.test(u.pathname)
+  })
   await stopBtn.click()
 
-  // 反馈：mock 停止后列表失效重取，该行主操作翻牌为「启动」（停止消失）。
+  const confirm = page.getByRole('alertdialog').or(page.getByRole('dialog'))
+  await expect(confirm.getByRole('heading', { name: /停止实例/ })).toBeVisible({ timeout: 10_000 })
+  await confirm.getByRole('button', { name: '停止', exact: true }).click()
+
+  expect((await stopResp).ok()).toBe(true)
+
+  // 反馈：停止后该行主操作翻牌为「启动」（停止消失）。
   const updatedRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'survival-1', exact: true }) })
-  await expect(updatedRow.getByRole('button', { name: '启动', exact: true })).toBeVisible({ timeout: 10_000 })
+  await expect(updatedRow.getByRole('button', { name: '启动', exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(updatedRow.getByRole('button', { name: '停止', exact: true })).toHaveCount(0)
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-138/single-machine-action-feedback.png', fullPage: false })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-action-feedback.png', fullPage: false })
 })

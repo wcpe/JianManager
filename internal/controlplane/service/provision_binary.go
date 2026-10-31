@@ -16,17 +16,17 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 通用二进制运行时搭建（FR-441，见 ADR-090）。
+// 通用二进制运行时搭建（见 ADR-090）。
 //
 // 与 MC 核心搭建的分工：paper/sponge/velocity 走 CoreService.ResolveBuild 的「版本 → 构建 →
 // 下载 URL」三段解析；binary 跳过全部三段，由请求直供制品来源（BinarySource），
 // 因而 CoreService 对 binary 直接短路（ErrBinaryCoreNotResolvable）。
 //
 // 强制异步：二进制体积大（Beacon 约 30MB）、慢链路下载可达分钟级，且需下载进度与终态站内信。
-// 故沿用 FR-319 已验证的两段式——同步段只做「校验来源 + 建实例 + 登记任务」，取件在 CP 后台
+// 故沿用已验证的两段式——同步段只做「校验来源 + 建实例 + 登记任务」，取件在 CP 后台
 // goroutine 经 Worker FetchBinary 推进。绝不提供同步搭建入口。
 //
-// FR-442 在本文件之上叠一层 Beacon 预设（另见 core.go 的 ResolveBeaconRelease）：
+// 在本文件之上叠一层 Beacon 预设（另见 core.go 的 ResolveBeaconRelease）：
 // coreType=beacon 是语法糖，展开为 binary + 固定参数（落盘名/启动命令/角色），
 // 制品来源按「制品库 > GitHub Releases」自动解析，见 resolveBeaconPresetSource。
 
@@ -48,7 +48,7 @@ const (
 	// binaryFetchTimeout 是一次二进制取件的自限超时。二进制可达数十 MB，取 30 分钟口径与
 	// ServerProbe 缓存下载/备份等长耗时操作一致，覆盖慢链路又不无限悬挂。
 	binaryFetchTimeout = 30 * time.Minute
-	// binaryDiskDigestTimeout 是版本视图里磁盘 sha256 比对的超时（FR-468 §2.5）。
+	// binaryDiskDigestTimeout 是版本视图里磁盘 sha256 比对的超时（§2.5）。
 	// 比对要流式读整个二进制（上限 binaryDiskDigestMaxBytes），故比普通读文件宽；
 	// 但版本视图是交互式读接口，仍需比取件短得多，避免详情页被一次哈希拖住。
 	binaryDiskDigestTimeout = 2 * time.Minute
@@ -96,7 +96,7 @@ type binaryFetchPlan struct {
 	NodePath    string
 	Filename    string
 	Executable  bool
-	// AssetID 制品库来源的资产 ID（FR-468）：非 0 时该 plan 可登记为版本绑定，
+	// AssetID 制品库来源的资产 ID：非 0 时该 plan 可登记为版本绑定，
 	// 使重建能冻结版本、并提供受控升级/回滚。url / node_file 来源为 0。
 	AssetID uint
 }
@@ -109,7 +109,7 @@ func binarySourceOf(req ProvisionServerRequest) BinarySource {
 	return *req.BinarySource
 }
 
-// ---- Beacon 预设（FR-442，见 ADR-090）----
+// Beacon 预设（见 ADR-090）----
 //
 // coreType=beacon 是 coreType=binary 之上的语法糖：把「Beacon 该用哪个二进制、叫什么名字、
 // 怎么启动、什么角色」这几件固定事实内置，用户不必知道这些细节就能一键搭出可用实例。
@@ -117,17 +117,17 @@ func binarySourceOf(req ProvisionServerRequest) BinarySource {
 // 展开后与 binary 完全同路：同样经 Worker FetchBinary 取件、同样落 startCommand、
 // 同样不绑 JDK、同样异步 + 损毁可重建。差异只有三处：
 //  1. 制品来源自动解析（resolveBeaconPresetSource）而非请求直供；
-//  2. 角色为 beacon（FR-433）而非 universal；
+//  2. 角色为 beacon而非 universal；
 //  3. 落盘名固定为 beacon-{version}-linux-amd64（不可由请求覆盖），启动命令由其派生。
 
 // beaconPlaceholderPlan 是来源解析失败时的占位取件计划。
 //
-// 为什么需要它：FR-441 的既有语义是「来源不合法 → 立刻失败且不建实例」，因为那类错误
+// 为什么需要它：的既有语义是「来源不合法 → 立刻失败且不建实例」，因为那类错误
 // （kind 缺失、url 非 https、node_file 越界）用户改一下请求就能修好。Beacon 预设的来源是
 // **系统自动解析**的，失败原因多为「内网访问不了 GitHub 且制品库没有 beacon 制品」这类
 // 需要运维介入的环境问题——此时若按「同步段立即失败」处理，用户拿不到任何可观察痕迹
 // （没有实例、没有任务、没有站内信），只能反复重试。故此处建实例 + 登记任务，
-// 把失败原因作为**任务终态 + 实例 DAMAGED 原因**呈现，保留 FR-441 的「取件失败 → 损毁可重建」闭环。
+// 把失败原因作为**任务终态 + 实例 DAMAGED 原因**呈现，保留的「取件失败 → 损毁可重建」闭环。
 //
 // 该 plan 永不真正下发：后台段在取件前先用 resolveErr 短路，不会发起下载。
 func beaconPlaceholderPlan() *binaryFetchPlan {
@@ -259,9 +259,9 @@ func (p *ProvisionService) latestBeaconAsset() (*model.Asset, error) {
 	return nil, nil
 }
 
-// ProvisionBinaryAsync 通用二进制异步搭建入口（FR-441）；coreType=beacon 时为 Beacon 预设（FR-442）。
+// ProvisionBinaryAsync 通用二进制异步搭建入口；coreType=beacon 时为 Beacon 预设。
 //
-// 两段式（沿用 FR-319 已验证形态）：
+// 两段式（沿用已验证形态）：
 //   - 同步段：解析/校验制品来源 → 建实例（STOPPED）→ 存 provisionSpec →
 //     登记 binary_provision 任务 → 立即返回 {instance, taskId}；
 //   - 后台段：CP 后台 goroutine 经 Worker FetchBinary 取件，按字节进度上报阶段，
@@ -296,13 +296,13 @@ func (p *ProvisionService) ProvisionBinaryAsync(ctx context.Context, req Provisi
 		return nil, "", err
 	}
 
-	// 存搭建参数供损毁后「重建」复用（FR-342 同语义：修好网络/换好文件点重建即复用重跑）。
+	// 存搭建参数供损毁后「重建」复用（同语义：修好网络/换好文件点重建即复用重跑）。
 	// 注意不落私有基址——重建时基址重新解析，冻结旧基址会在面板搬迁/换域名后失效。
 	if specJSON, mErr := json.Marshal(req); mErr == nil {
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 			Update("provision_spec", string(specJSON)).Error
 	}
-	// FR-468：登记版本绑定（asset 来源记 assetID；url/node_file 记落盘名+摘要）。
+	// 登记版本绑定（asset 来源记 assetID；url/node_file 记落盘名+摘要）。
 	p.recordBinaryBindingOnProvision(inst, plan, plan.AssetID)
 	p.markBinaryProvisioning(inst.ID)
 
@@ -332,10 +332,10 @@ func (p *ProvisionService) ProvisionBinaryAsync(ctx context.Context, req Provisi
 	return inst, taskID, nil
 }
 
-// provisionBeaconPresetAsync 是 Beacon 预设的异步搭建（FR-442）。
+// provisionBeaconPresetAsync 是 Beacon 预设的异步搭建。
 //
 // 与 binary 路径的差异（除来源自动解析外）：
-//   - 角色落 beacon（FR-433）：不参与 MC 群组拓扑，避免被当成后端子服；
+// 角色落 beacon：不参与 MC 群组拓扑，避免被当成后端子服；
 //   - 落盘名固定 beacon-{version}-linux-amd64，启动命令由其派生（用户无需知道这些细节）。
 //
 // 来源解析在同步段完成，但**解析失败不在此中断**（见 beaconPlaceholderPlan 的说明）：
@@ -361,14 +361,14 @@ func (p *ProvisionService) provisionBeaconPresetAsync(ctx context.Context, req P
 		slog.Error("Beacon 预设搭建失败：创建实例", "name", req.Name, "error", err)
 		return nil, "", err
 	}
-	// 存搭建参数供损毁后重建（FR-342 同语义）：beacon 重跑时**重新解析来源**，
+	// 存搭建参数供损毁后重建（同语义）：beacon 重跑时**重新解析来源**，
 	// 因而这里落的是请求原文（coreType=beacon），不冻结本次选中的具体制品——否则
 	// 重建会一直钉在旧版本/旧地址上，与「制品库优先」的意图相反。
 	if specJSON, mErr := json.Marshal(req); mErr == nil {
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 			Update("provision_spec", string(specJSON)).Error
 	}
-	// FR-468：登记版本绑定（Beacon 制品库来源记 assetID；GitHub/占位来源记落盘名+摘要）。
+	// 登记版本绑定（Beacon 制品库来源记 assetID；GitHub/占位来源记落盘名+摘要）。
 	p.recordBinaryBindingOnProvision(inst, plan, plan.AssetID)
 	p.markBinaryProvisioning(inst.ID)
 
@@ -424,7 +424,7 @@ func (p *ProvisionService) markBinaryProvisioning(instanceID uint) {
 		Update("status_reason", "搭建中：正在获取二进制（完成前请勿启动）").Error
 }
 
-// createBeaconInstance 建 Beacon 预设实例（FR-442 §4.2）：在 binary 实例属性之上把角色落 beacon。
+// createBeaconInstance 建 Beacon 预设实例（§4.2）：在 binary 实例属性之上把角色落 beacon。
 //
 // 其余默认值全与 binary 一致：generic 类型（非 MC Java 进程）、daemon、不绑 JDK、
 // startCommand 承载启动命令——预设只改「角色」一处，避免同一语义在两条路径上各有一套默认值。
@@ -435,7 +435,7 @@ func (p *ProvisionService) createBeaconInstance(req ProvisionServerRequest, plan
 	}
 	releasePortAlloc := p.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
-	// Beacon 非 MC Java 服务端，探针（Bukkit 插件）不适用，不分配探针端口（FR-454）。
+	// Beacon 非 MC Java 服务端，探针（Bukkit 插件）不适用，不分配探针端口。
 	ports, err := allocPortsForNode(p.db, req.NodeID, false)
 	if err != nil {
 		return nil, err
@@ -445,6 +445,8 @@ func (p *ProvisionService) createBeaconInstance(req ProvisionServerRequest, plan
 		Name:         req.Name,
 		Type:         model.InstanceTypeGeneric,
 		Role:         model.InstanceRoleBeacon,
+		// 二进制类别：Beacon 预设与通用二进制同属这一类。
+		Kind:         model.InstanceKindBinary,
 		ProcessType:  model.ProcessTypeDaemon,
 		JDKID:        0,
 		StartCommand: startCommand,
@@ -826,7 +828,7 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 	// 端口分配互斥同 MC 路径：防同节点并发创建选中同一端口。
 	releasePortAlloc := p.instance.lockNodePortAlloc()
 	defer releasePortAlloc()
-	// 通用二进制非 MC Java 进程，探针（Bukkit 插件）不适用，不分配探针端口（FR-454）。
+	// 通用二进制非 MC Java 进程，探针（Bukkit 插件）不适用，不分配探针端口。
 	ports, err := allocPortsForNode(p.db, req.NodeID, false)
 	if err != nil {
 		return nil, err
@@ -834,6 +836,8 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 	return p.instance.Create(CreateInstanceRequest{
 		NodeID: req.NodeID,
 		Name:   req.Name,
+		// 二进制类别：与 Beacon 预设同类，运维视角都是「非 MC 核心的可执行程序」。
+		Kind:   model.InstanceKindBinary,
 		// Type 落 generic：二进制不是 Minecraft Java 进程，落 minecraft_java 会让
 		// docker 端口映射按 25565 约定改写、模板 RAM 需求按 JVM 估算，均不适用。
 		Type:        model.InstanceTypeGeneric,
@@ -849,10 +853,10 @@ func (p *ProvisionService) createBinaryInstance(req ProvisionServerRequest, plan
 	})
 }
 
-// rebuildBinaryInstance 重建损毁的 binary 实例（FR-441 + FR-342 语义）：
+// rebuildBinaryInstance 重建损毁的 binary 实例（语义）：
 // 复用存库的搭建参数重跑取件到既有实例，不需再次提供来源；成功 → STOPPED，失败 → 仍 DAMAGED。
 //
-// FR-468 起**冻结版本**：优先读 InstanceBinaryBinding 取绑定版本重取，而非重新按优先级
+// 起**冻结版本**：优先读 InstanceBinaryBinding 取绑定版本重取，而非重新按优先级
 // 解析来源。旧行为（ADR-090 原文「重解析而非复用上次制品」）会在制品库出现更高版本时
 // 把重建变成一次静默升降级，运维无法预期；「吃到新版本」现由受控升级
 // （BinaryVersionService.Upgrade）显式承担，重建回归「恢复原状」职责。
@@ -918,7 +922,7 @@ func (p *ProvisionService) rebuildBinaryInstance(ctx context.Context, inst *mode
 			updates["start_command"] = binaryStartCommand
 		}
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Updates(updates).Error
-		// FR-468：重建完成后刷新绑定的落盘名/摘要（冻结版本的实例可能曾被人手换过文件）。
+		// 重建完成后刷新绑定的落盘名/摘要（冻结版本的实例可能曾被人手换过文件）。
 		p.refreshBindingAfterRebuild(inst.ID, plan)
 		slog.Info("二进制实例重建完成", "instance", inst.Name, "instanceId", inst.ID, "preset", kindText)
 		return "", nil

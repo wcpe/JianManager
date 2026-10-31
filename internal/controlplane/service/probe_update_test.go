@@ -16,6 +16,12 @@ func newProbeUpdateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{}, &model.Node{}, &model.Network{}, &model.NetworkMember{}, &model.GroupInstance{},
 	))
@@ -94,7 +100,7 @@ func TestProbeUpdate_NotEmbedded(t *testing.T) {
 }
 
 // TestProbeUpdate_ResolveTargets_Skipped 请求 IDs 中不存在的实例计入 skipped（存在性隐藏）；
-// 不适用的实例走 excluded 而非 skipped（FR-454）。
+// 不适用的实例走 excluded 而非 skipped。
 func TestProbeUpdate_ResolveTargets_Skipped(t *testing.T) {
 	db := newProbeUpdateTestDB(t)
 	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
@@ -165,7 +171,7 @@ func TestProbeUpdate_Update_RejectsProxy(t *testing.T) {
 	require.Contains(t, err.Error(), "代理实例不适用", "拒绝原因必须明确指向代理不适用")
 }
 
-// TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc FR-411 守卫：
+// TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc守卫：
 // probe_port=0 的实例（导入/历史）在未注入 instanceSvc 时，部署必须明确拒绝，
 // 绝不写出 `port: 0` 的探针配置（探针绑 OS 随机端口 → 监控永无数据的静默断链）。
 func TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc(t *testing.T) {
@@ -180,7 +186,7 @@ func TestProbeUpdate_DeployVersionTo_RejectsMissingProbePortWithoutSvc(t *testin
 	require.Contains(t, err.Error(), "未分配探针端口", "拒绝原因必须明确指向缺失端口")
 }
 
-// TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort FR-411 补口主路径：
+// TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort补口主路径：
 // 注入 instanceSvc 后，probe_port=0 的实例在部署前自动补分配端口、落库并刷新传入实例，
 // 随后链路继续推进到 Worker 下发阶段（此处 pool 无 Worker，停在「未连接」而非端口错误）。
 func TestProbeUpdate_DeployVersionTo_AutoAllocatesProbePort(t *testing.T) {
@@ -249,7 +255,7 @@ func TestProbeUpdate_ResolveTargets_SkipsProxy(t *testing.T) {
 	}
 }
 
-// TestProbeUpdate_Update_RejectsNonApplicable FR-454：不适用探针的实例（Beacon/通用二进制，及历史
+// TestProbeUpdate_Update_RejectsNonApplicable：不适用探针的实例（Beacon/通用二进制，及历史
 // 误记 type=minecraft_java 的 Beacon）单发推送直接拒绝并带明确原因，不再推入无效 Bukkit jar。
 func TestProbeUpdate_Update_RejectsNonApplicable(t *testing.T) {
 	db := newProbeUpdateTestDB(t)
@@ -298,7 +304,7 @@ func TestProbeUpdate_Update_RejectsNonApplicable(t *testing.T) {
 	}
 }
 
-// TestProbeUpdate_ResolveTargets_SkipsNonApplicable FR-454：IDs 模式批量目标解析排除代理/Beacon/通用
+// TestProbeUpdate_ResolveTargets_SkipsNonApplicable：IDs 模式批量目标解析排除代理/Beacon/通用
 // 二进制，被排除者回传类型+原因（excluded），不再静默 skipped；filter 模式 SQL 侧排除。
 func TestProbeUpdate_ResolveTargets_SkipsNonApplicable(t *testing.T) {
 	db := newProbeUpdateTestDB(t)
@@ -342,7 +348,7 @@ func TestProbeUpdate_ResolveTargets_SkipsNonApplicable(t *testing.T) {
 	}
 }
 
-// TestApplyProbeApplicableScope_NullRoleIncluded FR-454 nit：role 为 NULL 的历史行不应被
+// TestApplyProbeApplicableScope_NullRoleIncludednit：role 为 NULL 的历史行不应被
 // `role NOT IN (…)` 的三值逻辑误排除，须与 model.IsProbeApplicable 同口径（视为适用）。
 func TestApplyProbeApplicableScope_NullRoleIncluded(t *testing.T) {
 	db := newProbeUpdateTestDB(t)

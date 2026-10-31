@@ -2,14 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { screen } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
 import UnifiedExplorerShell from './UnifiedExplorerShell'
-import {
-  instanceFilesCapability,
-  storageBrowseCapability,
-  customExplorerCapability,
-} from './capability'
-import type { FileBrowserSource } from './types'
+import { instanceFilesCapability, storageBrowseCapability, customExplorerCapability } from '@/lib/file-browser/file-browser-capability'
+import type { FileBrowserSource } from '@/lib/file-browser/file-browser-types'
 
-vi.mock('@/components/explorer/ExplorerTabHost', () => ({
+// 组件已回迁应用侧（迁包已撤销，见 ADR-103）：包内 UnifiedExplorerShell 从包内 import 标签宿主，
+// 因此 mock 必须打在包路径上才拦得到。
+vi.mock('@/components/views/explorer/ExplorerTabHost', () => ({
   default: ({ instanceId }: { instanceId: number }) => (
     <div data-testid="mock-tab-host">tab-host-{instanceId}</div>
   ),
@@ -20,7 +18,7 @@ const stubSource: FileBrowserSource = {
   readContent: async () => ({ kind: 'text', content: 'x' }),
 }
 
-describe('UnifiedExplorerShell（FR-378）', () => {
+describe('UnifiedExplorerShell', () => {
   it('instance-files 渲染 TabHost', () => {
     renderWithProviders(
       <UnifiedExplorerShell capability={instanceFilesCapability()} instanceId={7} />,

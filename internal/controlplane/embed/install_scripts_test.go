@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestInstallScripts_NonEmpty 内嵌的一键安装脚本不得为空（FR-080 一键安装依赖 CP 托管脚本）。
+// TestInstallScripts_NonEmpty 内嵌的一键安装脚本不得为空（一键安装依赖 CP 托管脚本）。
 func TestInstallScripts_NonEmpty(t *testing.T) {
 	if len(InstallWorkerScriptSh()) == 0 {
 		t.Fatal("内嵌 install-worker.sh 为空")
@@ -18,11 +18,11 @@ func TestInstallScripts_NonEmpty(t *testing.T) {
 }
 
 // TestInstallWorkerScript_KillModeProcess 守护 worker systemd 单元含 KillMode=process。
-// daemon wrapper 必须在 Worker 重启后存活（ADR-003、FR-341）：缺此则 systemd 默认 control-group
+// daemon wrapper 必须在 Worker 重启后存活（ADR-003）：缺此则 systemd 默认 control-group
 // 会连坐 SIGKILL cgroup 内经 setsid 脱离的 wrapper，游戏服随之被杀、命中「清理残留」而非「接管重连」。
 func TestInstallWorkerScript_KillModeProcess(t *testing.T) {
 	if !bytes.Contains(InstallWorkerScriptSh(), []byte("KillMode=process")) {
-		t.Fatal("install-worker.sh 缺少 KillMode=process（FR-341：daemon wrapper 需逃过 systemd cgroup 连坐）")
+		t.Fatal("install-worker.sh 缺少 KillMode=process（：daemon wrapper 需逃过 systemd cgroup 连坐）")
 	}
 }
 

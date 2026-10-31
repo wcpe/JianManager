@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientTelemetryService 客户端遥测落库与治理（FR-094 / FR-360，见 ADR-023）。
+// ClientTelemetryService 客户端遥测落库与治理（见 ADR-023）。
 // 明细短保留 + 后台滚动清理；按 result 写时增量日聚合长保留。Record best-effort 弱一致、失败不阻塞客户端（202）。
 type ClientTelemetryService struct {
 	db            *gorm.DB
@@ -60,7 +60,7 @@ func validTelemetryResult(r string) string {
 }
 
 // Record 落一条遥测明细 + 按 result 日聚合 upsert。best-effort（失败返回错误供调用方忽略）。
-// 旧客户端缺 FR-360 字段时对应列为空串，不 4xx。
+// 旧客户端缺字段时对应列为空串，不 4xx。
 func (s *ClientTelemetryService) Record(e ClientTelemetryInput) error {
 	if s == nil {
 		return nil

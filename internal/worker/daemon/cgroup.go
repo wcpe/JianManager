@@ -21,7 +21,7 @@ import (
 // 只下发 `strategy.Close()`（`internal/worker/process/manager.go` 的 daemon 分支，日志
 // `daemon 实例已断开连接（wrapper 继续运行）`），全程没有任何杀 wrapper 的调用。
 //
-// 部署层已有对策（`scripts/install-worker.sh` 的 `KillMode=process`，FR-341 的 K2），但它是
+// 部署层已有对策（`scripts/install-worker.sh` 的 `KillMode=process`的 K2），但它是
 // **部署期**属性：单元漂移（手写单元、旧版本单元、非 systemd 托管）一旦缺该项，运行期零保障，
 // 每次重启就赔上全部服务器。本文件把该承诺下沉到**运行期**：让 wrapper 把自身（以及由它 fork 的
 // java 子树）迁到 Worker 单元 cgroup **之外**的同级目录，于是「重启单元」在 cgroup 维度也碰不到它们，

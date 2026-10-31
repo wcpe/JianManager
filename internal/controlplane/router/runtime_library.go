@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// RuntimeLibraryHandler 节点运行时库路由（FR-298）：统一 Runtime 视图（node_jdks +
+// RuntimeLibraryHandler 节点运行时库路由：统一 Runtime 视图（node_jdks +
 // node_runtimes 读侧拼装）+ 扫描发现 + 泛化登记 + 删除。全部仅平台管理员可达；
 // 扫描/登记/删除写审计（action 见 node.runtime.*，i18n 翻译随本 FR 进 audit.actions.*）。
 type RuntimeLibraryHandler struct {
@@ -36,7 +36,7 @@ func (h *RuntimeLibraryHandler) writeRuntimeLibErr(c *gin.Context, err error) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接"})
 	case errors.Is(err, service.ErrInvalidRuntimeType), errors.Is(err, service.ErrRuntimeDuplicated),
 		errors.Is(err, service.ErrInvalidRuntimeArch):
-		// 未知 arch 明确 422 拒绝（FR-299，齐平 FR-289），不直透下载源产出误导性 404。
+		// 未知 arch 明确 422 拒绝（齐平），不直透下载源产出误导性 404。
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 	default:
 		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_ERROR", "message": err.Error()})
@@ -126,7 +126,7 @@ func (h *RuntimeLibraryHandler) Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, view)
 }
 
-// Install POST /nodes/:id/runtimes/install — 异步一键安装运行时（FR-299，首批 nodejs）：
+// Install POST /nodes/:id/runtimes/install — 异步一键安装运行时（首批 nodejs）：
 // 建任务、令 Worker 启动即返回，立即回 202 + {taskId}（任务中心 kind=runtime_install）。
 // 终态落 node_runtimes（managed=true）；进度/完成经任务中心与站内信查看。
 func (h *RuntimeLibraryHandler) Install(c *gin.Context) {
@@ -159,7 +159,7 @@ func (h *RuntimeLibraryHandler) Install(c *gin.Context) {
 }
 
 // Delete DELETE /nodes/:id/runtimes/:rid?type= — 删除（type=jdk 走现链路含占用守卫与
-// 托管连文件语义；其它类型托管的经 Worker 删托管目录、外部登记只删记录，FR-299）。
+// 托管连文件语义；其它类型托管的经 Worker 删托管目录、外部登记只删记录）。
 // type 必带以定位承载表。
 func (h *RuntimeLibraryHandler) Delete(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -193,7 +193,7 @@ func (h *RuntimeLibraryHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
-// RegisterRoutes 注册节点运行时库路由（FR-298）。
+// RegisterRoutes 注册节点运行时库路由。
 func (h *RuntimeLibraryHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rt := rg.Group("/nodes/:id/runtimes")
 	rt.GET("", h.List)

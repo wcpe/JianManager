@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// permRouteCase：路由组权限门禁用例（FR-432）。期望无节点用户 403、有节点用户非 403。
+// permRouteCase：路由组权限门禁用例。期望无节点用户 403、有节点用户非 403。
 type permRouteCase struct {
 	name   string
 	method string

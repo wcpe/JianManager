@@ -33,7 +33,7 @@ var (
 	ErrInvalidAssetType = errors.New("非法的资产类型")
 	// ErrChecksumMismatch 校验和不符，拒绝入库。
 	ErrChecksumMismatch = errors.New("校验和不符")
-	// ErrArtifactLost 制品失效：索引在、外置对象缺失（FR-349 对账「标记失效」处置），
+	// ErrArtifactLost 制品失效：索引在、外置对象缺失（对账「标记失效」处置），
 	// 下载/预览不可用，重传同内容文件去重命中即自愈。
 	ErrArtifactLost = errors.New("制品外置对象已缺失")
 )
@@ -74,13 +74,13 @@ func (e *AssetInUseError) Unwrap() error { return ErrAssetInUse }
 type AssetService struct {
 	db   *gorm.DB
 	root *dataroot.Root
-	// httpClient IngestFromURL 下载远端资源所用出站 client（经进程级代理，FR-174/ADR-037）。
+	// httpClient IngestFromURL 下载远端资源所用出站 client（经进程级代理ADR-037）。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站 client 持有者（FR-185/ADR-043）：非 nil 时每次取当前 client，
+	// httpProvider 运行时出站 client 持有者（ADR-043）：非 nil 时每次取当前 client，
 	// 使设置面板改全局代理后立即生效（无需重启），优先于 httpClient。
 	httpProvider func() *http.Client
-	// storageChannels 制品存储渠道服务（FR-347，见 ADR-073）：注入后 client-file 类型入库
+	// storageChannels 制品存储渠道服务（见 ADR-073）：注入后 client-file 类型入库
 	// 按活跃渠道路由落点（local 行为原文不变；s3 上传对象并在记录上自述位置）。
 	// 不注入 = 纯 local（既有装配/测试零改动）。
 	storageChannels *ArtifactStorageChannelService
@@ -91,19 +91,19 @@ func NewAssetService(db *gorm.DB, root *dataroot.Root) *AssetService {
 	return &AssetService{db: db, root: root}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：IngestFromURL 下载经此 client。
+// SetHTTPClient 注入出站 client（经进程级代理ADR-037）：IngestFromURL 下载经此 client。
 // 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
 func (s *AssetService) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次下载取当前 client，
 // 使全局代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (s *AssetService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
 }
 
-// SetStorageChannels 注入制品存储渠道服务（FR-347，见 ADR-073）：仅 client-file 类型的
+// SetStorageChannels 注入制品存储渠道服务（见 ADR-073）：仅 client-file 类型的
 // Ingest 落点按活跃渠道路由，其余类型恒本地。由 main 装配；不调用则行为与历史完全一致。
 func (s *AssetService) SetStorageChannels(ch *ArtifactStorageChannelService) {
 	s.storageChannels = ch
@@ -196,7 +196,7 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 	var existing model.Asset
 	err = s.db.Where("type = ? AND sha256 = ?", p.Type, sum256).First(&existing).Error
 	if err == nil {
-		// 失效自愈（FR-349，见 artifact-s3-reconcile spec §3.6）：命中记录已标 lost（对账「标记失效」）
+		// 失效自愈（见 artifact-s3-reconcile spec §3.6）：命中记录已标 lost（对账「标记失效」）
 		// 时，把同内容临时文件补传回**记录自述的渠道**（非当前活跃渠道——位置由记录自述，ADR-073）
 		// 并复位 external。恢复闭环：报缺失 → 标失效 → 重传同文件 → 自愈复通。补传失败快失败（决策 5）。
 		if existing.StorageState == model.AssetStorageLost && existing.StorageBackend == model.AssetBackendS3 {
@@ -226,7 +226,7 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 
 	relPath := casRelPath(p.Type, sum256, p.Filename)
 
-	// 落点路由（FR-347，见 ADR-073）：仅 client-file 且渠道服务已注入时取活跃渠道；
+	// 落点路由（见 ADR-073）：仅 client-file 且渠道服务已注入时取活跃渠道；
 	// 活跃=s3 上传对象（键=CAS 相对路径挂渠道 prefix），失败快失败不静默回落（决策 5）；
 	// 活跃=local 与其余类型走下方既有 CAS 落盘原文（行为零变化）。
 	storageBackend := model.AssetBackendLocal
@@ -315,7 +315,7 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 }
 
 // IngestFromURL 下载远端资源并入库（download → store）。
-// 供 FR-034 建服取核心时复用：优先命中去重、缺失才真正落盘。
+// 供建服取核心时复用：优先命中去重、缺失才真正落盘。
 // 若 p.SourceURL 为空则填为 rawURL；若 p.Filename 为空则取 URL 末段。
 func (s *AssetService) IngestFromURL(ctx context.Context, rawURL string, p IngestParams) (*model.Asset, error) {
 	if p.SourceURL == "" {
@@ -411,7 +411,7 @@ func (s *AssetService) Delete(id uint) error {
 	if err := s.db.Delete(&model.Asset{}, id).Error; err != nil {
 		return fmt.Errorf("删除资产记录失败: %w", err)
 	}
-	// 物理清理按记录后端路由（FR-347）：s3 → 渠道 store 删对象；local → 删 CAS 文件
+	// 物理清理按记录后端路由：s3 → 渠道 store 删对象；local → 删 CAS 文件
 	// （均尽力而为，与既有删除语义一致）。
 	if asset.StorageBackend == model.AssetBackendS3 && s.storageChannels != nil {
 		if store, serr := s.storageChannels.StoreForAsset(asset); serr != nil {
@@ -435,9 +435,9 @@ func (s *AssetService) AbsPath(a *model.Asset) string {
 	return s.root.Abs(a.RelPath)
 }
 
-// OpenContent 按资产记录自述路由打开内容读取流（FR-347 语义，与客户端制品读取同口径）：
+// OpenContent 按资产记录自述路由打开内容读取流（语义，与客户端制品读取同口径）：
 // local → 打开 CAS 物理文件（缺失返回 ErrAssetNotFound）；s3 → 经渠道 BlobStore 拉取对象。
-// 供二进制搭建（FR-441）的签名分发端点流式返回资产内容。
+// 供二进制搭建的签名分发端点流式返回资产内容。
 func (s *AssetService) OpenContent(a *model.Asset) (io.ReadCloser, error) {
 	if a == nil {
 		return nil, ErrAssetNotFound

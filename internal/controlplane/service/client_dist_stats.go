@@ -8,8 +8,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientDistStatsService 分发统计后台只读聚合（FR-095，见 ADR-023）。
-// 复用 FR-093/094 聚合表 + 明细 + FR-092 机器码登记，**只读 GROUP BY、不引入新表**。
+// ClientDistStatsService 分发统计后台只读聚合（见 ADR-023）。
+// 复用094 聚合表 + 明细机器码登记，**只读 GROUP BY、不引入新表**。
 type ClientDistStatsService struct {
 	db *gorm.DB
 }
@@ -44,7 +44,7 @@ type StatsIP struct {
 	Count int64  `json:"count"`
 }
 
-// ClientDistStats 分发统计复合视图（FR-095）。
+// ClientDistStats 分发统计复合视图。
 type ClientDistStats struct {
 	ChannelID      string          `json:"channelId"`
 	Days           int             `json:"days"`

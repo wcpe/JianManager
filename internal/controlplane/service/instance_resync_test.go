@@ -18,6 +18,12 @@ func newResyncTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.NodeJDK{}))
 	return db
 }
@@ -57,13 +63,13 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 	assert.Equal(t, "var/servers/lobby-ab12", spec.WorkDir)
 	assert.Equal(t, "/opt/jdks/temurin-21", spec.JdkPath, "应解析绑定 JDK 安装路径")
 	assert.Equal(t, "end", spec.StopCommand, "代理角色派生优雅停止命令 end")
-	assert.Equal(t, int32(0), spec.ProbePort, "代理不适用探针，下发的 probe_port 归零（FR-454）")
+	assert.Equal(t, int32(0), spec.ProbePort, "代理不适用探针，下发的 probe_port 归零")
 	assert.Equal(t, "bar", spec.EnvVars["FOO"], "EnvVars JSON 应解出")
 	assert.Equal(t, "itzg/minecraft-server:latest", spec.Image)
 	assert.Equal(t, 1.5, spec.CpuLimit)
 	assert.Equal(t, int64(2048), spec.MemLimitMb)
 	assert.Equal(t, int64(10240), spec.DiskLimitMb)
-	// 日志采集绑定（FR-474）：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
+	// 日志采集绑定：Minecraft Java 走文件主源，holder 身份含实例 UUID 与节点 UUID。
 	assert.Equal(t, fmt.Sprintf("inst:%d", inst.ID), spec.LogTargetId)
 	assert.Equal(t, "FILE_PRIMARY", spec.LogAcquireMode)
 	assert.Equal(t, fmt.Sprintf("instance:%s@worker:%s", inst.UUID, node.UUID), spec.LogSourceGeneration)

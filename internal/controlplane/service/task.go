@@ -21,10 +21,10 @@ import (
 // ErrTaskNotFound 任务不存在。
 var ErrTaskNotFound = errors.New("任务不存在")
 
-// ErrTaskAlreadyTerminal 任务已终态，无法强制停止（FR-227）。
+// ErrTaskAlreadyTerminal 任务已终态，无法强制停止。
 var ErrTaskAlreadyTerminal = errors.New("任务已结束，无法停止")
 
-// TaskService 全局任务中心服务（FR-183，见 ADR-040）。
+// TaskService 全局任务中心服务（见 ADR-040）。
 // 负责：建任务（被 JDKService 等长任务发起方调用）、按归属列任务/查任务+日志、
 // 以及把 Worker 经心跳上报的任务快照汇聚落库（IngestSnapshots）+ 终态副作用。
 type TaskService struct {
@@ -38,7 +38,7 @@ func NewTaskService(db *gorm.DB) *TaskService {
 	return &TaskService{db: db}
 }
 
-// SetNotificationService 注入站内信服务，用于任务终态发信（FR-183）。
+// SetNotificationService 注入站内信服务，用于任务终态发信。
 // 在 main 装配阶段调用，避免构造期循环依赖。
 func (s *TaskService) SetNotificationService(n *NotificationService) {
 	s.notifications = n
@@ -94,7 +94,7 @@ func (s *TaskService) MarkFailed(taskID, reason string) error {
 	return nil
 }
 
-// MarkSucceeded 把任务置为 succeeded（CP 侧执行体完成时调用，FR-319）。
+// MarkSucceeded 把任务置为 succeeded（CP 侧执行体完成时调用）。
 // 与 MarkFailed 对称：终态幂等 + 触发 finalizeTerminal 副作用（站内信）。
 func (s *TaskService) MarkSucceeded(taskID, result string) error {
 	var t model.Task
@@ -114,7 +114,7 @@ func (s *TaskService) MarkSucceeded(taskID, result string) error {
 	return nil
 }
 
-// SetStage 更新 CP 侧执行任务的阶段展示（进度百分比 + 详情行，FR-319）。
+// SetStage 更新 CP 侧执行任务的阶段展示（进度百分比 + 详情行）。
 // 同时把阶段行落 TaskLog（绝对序号自增），任务中心日志区可见完整阶段轨迹。
 func (s *TaskService) SetStage(taskID string, progress int, stage string) {
 	_ = s.db.Model(&model.Task{}).Where("task_id = ?", taskID).
@@ -125,10 +125,10 @@ func (s *TaskService) SetStage(taskID string, progress int, stage string) {
 	_ = s.db.Create(&model.TaskLog{TaskID: taskID, Seq: int(maxSeq) + 1, Line: stage}).Error
 }
 
-// RunSpec 一次长操作任务化的参数（FR-323 共享底座）。
+// RunSpec 一次长操作任务化的参数（共享底座）。
 type RunSpec struct {
 	NodeID     uint          // 任务归属节点
-	InstanceID uint          // 关联实例（0=无）；非 0 写 task.instance_id（启动闸/关联展示复用 FR-319）
+	InstanceID uint          // 关联实例（0=无）；非 0 写 task.instance_id（启动闸/关联展示复用）
 	Kind       string        // TaskKind（import/clone/backup_create/backup_restore/provision）
 	Title      string        // 任务标题
 	Detail     string        // 初始详情（空=「排队中」）
@@ -136,7 +136,7 @@ type RunSpec struct {
 	Timeout    time.Duration // 后台执行超时（0=默认 30min）
 }
 
-// RunAsync 把一个长操作跑成后台任务（FR-323 共享底座）：登记任务→CP 后台 goroutine 执行→
+// RunAsync 把一个长操作跑成后台任务（共享底座）：登记任务→CP 后台 goroutine 执行→
 // SetStage 阶段进度→MarkSucceeded/Failed→终态站内信。立即返回 taskID（不阻塞请求，独立
 // context 不受前端断开影响）。work 收 (ctx, stage)，stage(progress,text) 上报阶段；返回
 // (resultJSON, err)。业务副作用（statusReason/Backup record 状态/落库）由 work 自负——
@@ -176,7 +176,7 @@ func (s *TaskService) RunAsync(spec RunSpec, work func(ctx context.Context, stag
 	return taskID
 }
 
-// TaskListFilter 任务列表筛选条件（FR-227）。零值字段表示不限制。
+// TaskListFilter 任务列表筛选条件。零值字段表示不限制。
 type TaskListFilter struct {
 	Kind    string     // 任务种类（如 jdk_install）
 	State   string     // 状态（pending/running/succeeded/failed/canceled）
@@ -184,17 +184,17 @@ type TaskListFilter struct {
 	Keyword string     // 标题/详情模糊匹配
 	Since   *time.Time // 创建时间下界
 	Until   *time.Time // 创建时间上界
-	Limit   int        // 每窗行数，缺省 100、钳制 [1,500]（FR-337）
-	Offset  int        // 偏移，负值归 0（FR-337）
+	Limit   int        // 每窗行数，缺省 100、钳制 [1,500]
+	Offset  int        // 偏移，负值归 0
 }
 
-// 任务列表分页窗口的缺省与上限（FR-337）。
+// 任务列表分页窗口的缺省与上限。
 const (
 	taskListLimitDefault = 100
 	taskListLimitMax     = 500
 )
 
-// EffectiveWindow 返回钳制后的生效分页窗口（FR-337）：limit 缺省 100、钳制 [1,500]；offset 负值归 0。
+// EffectiveWindow 返回钳制后的生效分页窗口：limit 缺省 100、钳制 [1,500]；offset 负值归 0。
 // service 查询与 router 信封回显共用，保证「实际生效值」单一来源。
 func (f TaskListFilter) EffectiveWindow() (limit, offset int) {
 	limit = f.Limit
@@ -211,7 +211,7 @@ func (f TaskListFilter) EffectiveWindow() (limit, offset int) {
 	return limit, offset
 }
 
-// List 列出任务（FR-183/227/337）。返回 (items, total, error)；
+// List 列出任务（227/337）。返回 (items, total, error)；
 // total 为同筛选（含归属隔离）的命中总数。倒序 created_at DESC, id DESC（既有稳定序），
 // 分页窗口按 EffectiveWindow 钳制。非平台管理员只见自己发起的（createdBy）；平台管理员见全部。
 func (s *TaskService) List(access *UserAccess, f TaskListFilter) ([]model.Task, int64, error) {
@@ -239,7 +239,7 @@ func (s *TaskService) List(access *UserAccess, f TaskListFilter) ([]model.Task, 
 	if f.Until != nil {
 		q = q.Where("created_at <= ?", *f.Until)
 	}
-	// Session 复用同一组筛选子句、Count 与 Find 各自克隆语句，避免子句互染（FR-337）。
+	// Session 复用同一组筛选子句、Count 与 Find 各自克隆语句，避免子句互染。
 	q = q.Session(&gorm.Session{})
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -271,7 +271,7 @@ func (s *TaskService) Get(access *UserAccess, taskID string) (*model.Task, []mod
 	return &t, logs, nil
 }
 
-// Cancel 请求强制停止任务（FR-227）。权限同 Get（非管理员仅能停自己发起的，越权返回 ErrTaskNotFound）。
+// Cancel 请求强制停止任务。权限同 Get（非管理员仅能停自己发起的，越权返回 ErrTaskNotFound）。
 // 已终态 → ErrTaskAlreadyTerminal。pending（Worker 未起）或节点离线 → 直接置 canceled（无 Worker 操作可中断）；
 // running 在线 → 置 CancelRequested=true，由心跳下发 cancel_task_ids 真中断、Worker 回报 canceled 落终态。
 func (s *TaskService) Cancel(access *UserAccess, taskID string) error {
@@ -312,7 +312,7 @@ func (s *TaskService) nodeOnline(nodeID uint) bool {
 	return n.Status == model.NodeStatusOnline
 }
 
-// PendingCancelTaskIDsByNodeUUID 返回某节点（按 UUID）上「已请求取消且未终态」的任务 id（FR-227），
+// PendingCancelTaskIDsByNodeUUID 返回某节点（按 UUID）上「已请求取消且未终态」的任务 id，
 // 供心跳下发 cancel_task_ids。join 一次查询，避免心跳路径上额外解析节点 id。
 func (s *TaskService) PendingCancelTaskIDsByNodeUUID(nodeUUID string) []string {
 	var ids []string
@@ -324,7 +324,7 @@ func (s *TaskService) PendingCancelTaskIDsByNodeUUID(nodeUUID string) []string {
 	return ids
 }
 
-// IngestSnapshots 把 Worker 经心跳上报的任务快照汇聚落库（FR-183，见 ADR-040）。
+// IngestSnapshots 把 Worker 经心跳上报的任务快照汇聚落库（见 ADR-040）。
 // 对每条快照：按 task_id upsert Task（更新 state/progress/error/result）+ 幂等追加日志；
 // 并在任务**首次**从非终态跃迁为终态时触发副作用（落 NodeJDK / 发站内信）。
 // 失败不影响心跳本身，仅记录告警。Worker 心跳侧不会上报未经 CP 建过的任务（task_id 由 CP 下发），
@@ -385,12 +385,12 @@ func (s *TaskService) IngestSnapshots(nodeUUID string, snaps []*workerpb.TaskSna
 	return nil
 }
 
-// finalizeTerminal 执行任务终态副作用（FR-183，见 ADR-040）。
+// finalizeTerminal 执行任务终态副作用（见 ADR-040）。
 // 调用方须保证「首次进入终态」（用 DB 旧 state 非终态判定），本方法不再去重。
 //   - jdk_install 成功：解析 result→落 model.NodeJDK + 发成功站内信；
 //   - 失败：发失败站内信。
 func (s *TaskService) finalizeTerminal(t *model.Task) {
-	// 被强制停止（FR-227）：发中性「已停止」站内信，不落 JDK、不发「失败」。
+	// 被强制停止：发中性「已停止」站内信，不落 JDK、不发「失败」。
 	if t.State == model.TaskStateCanceled {
 		s.notify(t.CreatedBy, model.NotificationLevelInfo, t.Title+" 已停止", "任务已被强制停止", t.TaskID)
 		return
@@ -406,7 +406,7 @@ func (s *TaskService) finalizeTerminal(t *model.Task) {
 				"JDK 安装失败", failBody(t), t.TaskID)
 		}
 	case model.TaskKindRuntimeInstall:
-		// 运行时安装（FR-299，首批 Node.js）：成功落 node_runtimes（managed=true）+ 发信。
+		// 运行时安装（首批 Node.js）：成功落 node_runtimes（managed=true）+ 发信。
 		if t.State == model.TaskStateSucceeded {
 			s.persistRuntimeFromTask(t)
 			s.notify(t.CreatedBy, model.NotificationLevelSuccess,
@@ -461,7 +461,7 @@ func (s *TaskService) persistJDKFromTask(t *model.Task) {
 }
 
 // persistRuntimeFromTask 解析 runtime_install 任务的 result 落一条 model.NodeRuntime
-// （managed=true，FR-299）。同 (node,type,path) 已存在则跳过（幂等双保险，同 persistJDKFromTask）。
+// （managed=true）。同 (node,type,path) 已存在则跳过（幂等双保险，同 persistJDKFromTask）。
 func (s *TaskService) persistRuntimeFromTask(t *model.Task) {
 	var r struct {
 		Type    string `json:"type"`
@@ -495,7 +495,7 @@ func (s *TaskService) persistRuntimeFromTask(t *model.Task) {
 	}
 }
 
-// appendLogs 幂等追加日志行（FR-183，见 ADR-040）。
+// appendLogs 幂等追加日志行（见 ADR-040）。
 // 每行编码为 "<绝对序号>\t<正文>"（Worker 侧赋予的全局单调序号）；CP 解析出绝对序号后
 // 按 (task_id, seq) 唯一约束 ON CONFLICT DO NOTHING 入库——心跳「最近 N 行」窗口跨周期重叠时，
 // 重叠行因绝对序号相同被天然去重，既不丢行也不重复。无法解析序号的行（异常）跳过。

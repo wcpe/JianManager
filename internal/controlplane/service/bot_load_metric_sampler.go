@@ -19,7 +19,7 @@ import (
 
 const botLoadMetricSampleInterval = 5 * time.Second
 
-// BotLoadMetricSampler 每 5s 为活跃压测会话写入一条聚合样本（FR-370）。
+// BotLoadMetricSampler 每 5s 为活跃压测会话写入一条聚合样本。
 // 首版只聚合 Bot 状态计数与命令 checkpoint 终态计数；延迟百分位/探针 targetLegacy 后续迭代。
 type BotLoadMetricSampler struct {
 	db              *gorm.DB

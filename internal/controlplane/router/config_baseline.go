@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ConfigBaselineHandler 配置基线（模板）下发/漂移/收敛路由处理器（FR-458）。
+// ConfigBaselineHandler 配置基线（模板）下发/漂移/收敛路由处理器。
 type ConfigBaselineHandler struct {
 	svc   *service.ConfigBaselineService
 	authz *service.AuthzService
@@ -40,7 +40,7 @@ func (h *ConfigBaselineHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"baselines": rows})
 }
 
-// scope 解析调用者可访问实例集合（FR-458 越权修复）。平台管理员返回 (nil,false)（不收敛）。
+// scope 解析调用者可访问实例集合（越权修复）。平台管理员返回 (nil,false)（不收敛）。
 // 出错时已写响应并返回 ok=false。
 func (h *ConfigBaselineHandler) scope(c *gin.Context) ([]uint, bool, bool) {
 	access := getAccess(c)
@@ -49,7 +49,7 @@ func (h *ConfigBaselineHandler) scope(c *gin.Context) ([]uint, bool, bool) {
 		return nil, false, false
 	}
 	if h.authz == nil {
-		// fail-closed（FR-458 越权修复）：授权服务不可用时拒绝，绝不退化为「不收敛」的平台管理员视图。
+		// fail-closed（越权修复）：授权服务不可用时拒绝，绝不退化为「不收敛」的平台管理员视图。
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限校验不可用"})
 		return nil, false, false
 	}
@@ -61,7 +61,7 @@ func (h *ConfigBaselineHandler) scope(c *gin.Context) ([]uint, bool, bool) {
 	return scopeIDs, scoped, true
 }
 
-// Create 创建/更新基线（FR-458）。非管理员仅能创建/覆盖 scope 落在其可访问实例集合内的基线，
+// Create 创建/更新基线。非管理员仅能创建/覆盖 scope 落在其可访问实例集合内的基线，
 // 防止以 scopeKey:"all" 覆盖平台基线（越权修复）。
 func (h *ConfigBaselineHandler) Create(c *gin.Context) {
 	if !requireNodes(c, "file.write", "instance.write") {
@@ -112,7 +112,7 @@ func (h *ConfigBaselineHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, row)
 }
 
-// Delete 删除基线（FR-458）。先按 scope 可见性校验归属（同 GetBaselineScoped 的 404 隐藏语义），
+// Delete 删除基线。先按 scope 可见性校验归属（同 GetBaselineScoped 的 404 隐藏语义），
 // 越权删除以 NOT_FOUND 拒绝，防止非管理员删除任意基线。
 func (h *ConfigBaselineHandler) Delete(c *gin.Context) {
 	if !requireNodes(c, "file.write", "instance.write") {

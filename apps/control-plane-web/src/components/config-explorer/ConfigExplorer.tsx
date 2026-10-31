@@ -3,27 +3,22 @@ import ResourceExplorer, { type ConfigCapabilities } from '@/components/explorer
 import ConfigFileEditor from './ConfigFileEditor'
 import ConfigVersionDrawer from './ConfigVersionDrawer'
 import FavoritesBar from './FavoritesBar'
-import {
-  browserStorage,
-  loadFavorites,
-  saveFavorites,
-  toggleFavorite as toggleFav,
-} from './favorites'
+import { browserStorage, loadFavorites, saveFavorites, toggleFavorite as toggleFav } from '@/lib/config-explorer/config-favorites'
 
-/**
- * 配置管理资源管理器（FR-071）。
+/** 
+ * 配置管理资源管理器。
  *
- * **复用 FR-070 `ResourceExplorer`**（左树右内容/编辑器 + 交互全集：重命名/多选/批量/拖拽/
+ * **复用`ResourceExplorer`**（左树右内容/编辑器 + 交互全集：重命名/多选/批量/拖拽/
  * 剪切粘贴/移动/新建/删除/上传/下载），并经 `config` 能力注入叠加配置语义：
- * - 打开文件 → 配置编辑器（schema 表单/文本双模式 + 跨文件校验 + Ctrl+S 存配置版本，FR-031）；
+ * - 打开文件 → 配置编辑器（schema 表单/文本双模式 + 跨文件校验 + Ctrl+S 存配置版本）；
  * - 左栏顶部 → 收藏（书签，localStorage）+ 已发现配置（`GET /configs/discover` 递归全部配置）；
- * - 历史 → 配置版本抽屉（FR-031 版本/diff/回滚）。
+ * - 历史 → 配置版本抽屉（版本/diff/回滚）。
  *
  * 树/列表本身呈现工作目录全部文件（含非配置），满足「目录树呈现自动发现的全部配置」。
  */
 interface ConfigExplorerProps {
   instanceId: number
-  /** FR-422：透传到资源管理器工具栏左端的宿主控件（分段切换并入同一条横栏）。 */
+  /** 透传到资源管理器工具栏左端的宿主控件（分段切换并入同一条横栏）。 */
   toolbarLeading?: ReactNode
 }
 

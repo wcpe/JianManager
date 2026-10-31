@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// DBBrowseService 是数据库资源管理器（FR-084）的只读元数据/行查询服务。
+// DBBrowseService 是数据库资源管理器的只读元数据/行查询服务。
 //
 // 它在 Control Plane 自身的 *gorm.DB 上提供「表清单 + 分页行浏览」，严守架构不变量
 // 「数据库仅 Control Plane 可读写」——只发 SELECT，无任何写/改/删。

@@ -19,7 +19,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-443 验收测试：向 Beacon 推送拓扑变更。
+// 验收测试：向 Beacon 推送拓扑变更。
 //
 // 覆盖 spec §5 验收表里 JM 侧可自证的部分：
 //   #1 未配置协同端点时，实例创建/改名/删除全部正常且零请求
@@ -100,6 +100,12 @@ func newBeaconPushTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{},
 		&model.Node{},
@@ -189,7 +195,7 @@ func TestBeaconPush_CreateSendsRegisterRequest(t *testing.T) {
 	rec := mock.recordsSnapshot()[0]
 	require.Equal(t, BeaconAPIPathAgentRegister, rec.Path)
 	require.Equal(t, http.MethodPost, rec.Method)
-	require.Equal(t, "shared-token", rec.Token, "共享 token 必须以 X-Beacon-Token 发送（FR-222）")
+	require.Equal(t, "shared-token", rec.Token, "共享 token 必须以 X-Beacon-Token 发送")
 	require.Equal(t, "prod", rec.Payload.Namespace)
 	require.Equal(t, "r1-z1-g1", rec.Payload.ServerID)
 	require.Equal(t, "bukkit", rec.Payload.Role)

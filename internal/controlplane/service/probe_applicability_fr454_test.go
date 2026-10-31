@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TestBuildCreateInstanceRequest_ProbePortByApplicability FR-454：下发给 Worker 的 probe_port
+// TestBuildCreateInstanceRequest_ProbePortByApplicability：下发给 Worker 的 probe_port
 // 按探针适用性收敛——只有 MC Java 服务端保留探针端口；代理/Beacon/通用二进制一律归零。
 // 这样 Worker 侧心跳采集（按 ProbePort>0 过滤）不再对这类实例每拍抓取 /metrics 必失败；
 // 并兜底历史脏数据（早期误配、仍留在库中的 probe_port）。
@@ -84,7 +84,7 @@ func TestBuildCreateInstanceRequest_ProbePortByApplicability(t *testing.T) {
 	}
 }
 
-// TestCreate_ProbePortZeroedForNonApplicable FR-454：手工 API 建实例不得把非 0 ProbePort 直落库；
+// TestCreate_ProbePortZeroedForNonApplicable：手工 API 建实例不得把非 0 ProbePort 直落库；
 // 且 role=beacon 的 type 与搭建路径同口径归一为 generic（否则手工 API 可持续制造 type 脏值）。
 func TestCreate_ProbePortZeroedForNonApplicable(t *testing.T) {
 	db := newFR032ServiceTestDB(t)
@@ -129,7 +129,7 @@ func TestCreate_ProbePortZeroedForNonApplicable(t *testing.T) {
 	}
 }
 
-// TestEnsureProbePort_SkipsNonApplicable FR-454 防御性守卫：不适用探针的实例永不补分配端口，
+// TestEnsureProbePort_SkipsNonApplicable防御性守卫：不适用探针的实例永不补分配端口，
 // 否则会写回一个永不被采集的 probe_port，并让调用方误以为「探针端口已就绪」。
 func TestEnsureProbePort_SkipsNonApplicable(t *testing.T) {
 	db := newProbeUpdateTestDB(t)

@@ -3,7 +3,6 @@ package service
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -12,10 +11,9 @@ import (
 
 func newRuntimeAssetsTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := openTestSQLite(t)
 	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}, &model.NodeRuntime{}, &model.Instance{}, &model.Asset{}, &model.ArtifactStorageChannel{}))
-	// 每个用例独立清表（cache=shared 共享同库）。
+	// 每个用例独立清表（库名已含 t.Name()，用例之间本就独立——见 openTestSQLite）。
 	require.NoError(t, db.Exec("DELETE FROM nodes").Error)
 	require.NoError(t, db.Exec("DELETE FROM node_jdks").Error)
 	require.NoError(t, db.Exec("DELETE FROM node_runtimes").Error)

@@ -20,7 +20,7 @@ func (f *fakeHealthNotifier) NotifyInstanceCircuitBroken(nodeUUID, instanceUUID,
 	f.calls = append(f.calls, instanceUUID+":"+reason)
 }
 
-// FR-459：熔断上报 → 站内信告警，按实例去重（原因变化才重发，恢复后清除记录）。
+// 熔断上报 → 站内信告警，按实例去重（原因变化才重发，恢复后清除记录）。
 func TestMaybeNotifyCircuitBroken_Dedup(t *testing.T) {
 	h := &ControlPlaneHandler{healthAlerted: map[string]string{}}
 	n := &fakeHealthNotifier{}

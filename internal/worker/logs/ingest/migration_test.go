@@ -1,6 +1,6 @@
 package ingest
 
-// 迁移一致性回归（FR-496 spec §3.1）：
+// 迁移一致性回归（spec §3.1）：
 //   旧 ingest.state.json → SQLite 索引后逐字段一致；任一字段被篡改/遗漏即红。
 
 import (

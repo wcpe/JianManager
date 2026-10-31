@@ -7,8 +7,8 @@ import { server } from '@jianmanager/devmock/server'
 import { useAuthStore } from '@/stores/auth'
 import InstanceBackupSegment from './InstanceBackupSegment'
 
-/**
- * InstanceBackupSegment 强断言（FR-339 备份·定时分区接真）。
+/** 
+ * InstanceBackupSegment 强断言（备份·定时分区接真）。
  * devmock 种子：实例1 定时任务 每晚重启(启用) / 每日备份(停用)；实例1 备份 full-2026-06-01(已完成) / inc-2026-06-02(增量·挂 #1)；
  * 实例1 状态 RUNNING（domains/instance.ts）→ 恢复入口按运行态守卫禁用。定时/备份均为实例原生作用域（天然按 instanceId=1）。
  */
@@ -100,7 +100,7 @@ describe('InstanceBackupSegment（mock 假后端）', () => {
     await waitFor(() => expect(within(panelByTitle('定时任务')).queryByText('每日备份')).not.toBeInTheDocument())
   })
 
-  it('渲染本实例备份列表；实例运行中 → 恢复入口禁用并提示先停止（FR-013 守卫）', async () => {
+  it('渲染本实例备份列表；实例运行中 → 恢复入口禁用并提示先停止（守卫）', async () => {
     loginMockUser()
     renderWithProviders(<InstanceBackupSegment instanceId={1} />)
 

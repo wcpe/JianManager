@@ -1,6 +1,6 @@
 package service
 
-// FR-281 M2（见 ADR-066）终端 gRPC 桥路测试：
+// M2（见 ADR-066）终端 gRPC 桥路测试：
 // 浏览器 WS → CP 代理（bridgeViaGRPC）→ bufconn 真 gRPC → 真 worker TerminalSession
 // → 回环拨真 workerws.TerminalServer——全真链路，不 mock 会话层。
 
@@ -117,7 +117,7 @@ func TestTerminalProxy_DoesNotFallbackToDirectWSOnUnimplemented(t *testing.T) {
 	require.Contains(t, state["data"], "反向隧道不可用")
 }
 
-// 令牌被拒诊断：worker 侧密钥与平台不一致 → gRPC 桥路给出 FR-276 同款定向诊断。
+// 令牌被拒诊断：worker 侧密钥与平台不一致 → gRPC 桥路给出同款定向诊断。
 func TestTerminalProxy_GRPCBridge_TokenRejectedDiagnostic(t *testing.T) {
 	// 直拨黑洞，强制走 gRPC 桥；worker 终端用不同密钥 → 回环 401 → PermissionDenied。
 	db, instanceID := newTerminalTestDB(t, "http://127.0.0.1:1")
@@ -142,5 +142,5 @@ func TestTerminalProxy_GRPCBridge_TokenRejectedDiagnostic(t *testing.T) {
 	require.NoError(t, conn.ReadJSON(&state))
 	require.Equal(t, "state", state["type"])
 	require.Equal(t, TerminalProxyCodeWorkerTokenRejected, state["code"],
-		"gRPC 桥路的令牌拒绝必须给出 FR-276 定向诊断码")
+		"gRPC 桥路的令牌拒绝必须给出定向诊断码")
 }

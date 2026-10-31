@@ -1,0 +1,37 @@
+/* eslint-disable react-refresh/only-export-components -- 视图与随其导出的纯逻辑/变体同文件（沿用原组织方式），非组件导出按仓库约定在此豁免 */
+import type { SecurityLevel } from '@/lib/client-dist/client-dist-security-contracts'
+
+/** 
+ * 客户端分发安全侧的展示工具（ADR-088）。
+ * 从应用侧 `security-shared` 原样提取的纯展示部分（查询读写 hook 仍留应用侧）。
+ */
+
+/** 空值占位符。 */
+export const SECURITY_EMPTY = '—'
+
+/** ISO 时间 → 本地化字符串（空值返回占位符，非法值原样返回）。 */
+export function fmtTime(iso?: string | null): string {
+  if (!iso) return SECURITY_EMPTY
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+}
+
+/** 风险等级 → 徽标变体。 */
+export function levelVariant(level?: SecurityLevel): 'default' | 'secondary' | 'destructive' | 'outline' {
+  if (level === 'critical' || level === 'high') return 'destructive'
+  if (level === 'warn') return 'default'
+  return 'secondary'
+}
+
+/** 处置动作状态 → 徽标变体。 */
+export function statusVariant(status?: string): 'default' | 'secondary' | 'destructive' | 'outline' {
+  if (status === 'active' || status === 'suspended' || status === 'revoked') return 'destructive'
+  if (status === 'throttled' || status === 'observe') return 'default'
+  if (status === 'canceled' || status === 'expired') return 'outline'
+  return 'secondary'
+}
+
+/** 居中空态文案。 */
+export function EmptyState({ text }: { text: string }) {
+  return <p className="py-10 text-center text-sm text-muted-foreground">{text}</p>
+}

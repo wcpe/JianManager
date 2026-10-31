@@ -2,9 +2,9 @@ package model
 
 import "time"
 
-// FileVersion 通用文件版本快照记录（FR-051）。
+// FileVersion 通用文件版本快照记录。
 //
-// 与 InstanceConfigVersion（FR-031，仅限配置文件）共用「改前快照 + 列表 + diff + 回滚」
+// 与 InstanceConfigVersion（仅限配置文件）共用「改前快照 + 列表 + diff + 回滚」
 // 的版本机制，但适用于实例工作目录下的任意文件（含上传覆盖的二进制文件）。
 // 二者刻意分表：配置版本带 schema/校验语义，通用文件版本只关心字节内容，
 // 避免把二进制内容混入按文本语义设计的 instance_config_versions 表。

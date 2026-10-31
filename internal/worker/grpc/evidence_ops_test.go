@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TestProbeInstanceEvidence_DaemonPIDFile PID 文件显示 wrapper 存活时证据 running=true（FR-455③）。
+// TestProbeInstanceEvidence_DaemonPIDFile PID 文件显示 wrapper 存活时证据 running=true（③）。
 func TestProbeInstanceEvidence_DaemonPIDFile(t *testing.T) {
 	dir := t.TempDir()
 	mgr := process.NewManager(dir)

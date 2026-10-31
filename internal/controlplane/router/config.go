@@ -14,7 +14,7 @@ import (
 type ConfigHandler struct {
 	svc   *service.ConfigService
 	authz *service.AuthzService
-	// source 配置源明面化服务（FR-451）；nil 时 surface 端点不注册、写入不做冲突提示。
+	// source 配置源明面化服务；nil 时 surface 端点不注册、写入不做冲突提示。
 	source *service.ConfigSourceService
 	// audit 审计服务；nil 时不写配置源变更审计。
 	audit *service.AuditService
@@ -24,7 +24,7 @@ func NewConfigHandler(svc *service.ConfigService, authz *service.AuthzService) *
 	return &ConfigHandler{svc: svc, authz: authz}
 }
 
-// SetConfigSource 注入配置源服务（FR-451），启用 surface 端点与写入冲突提示。
+// SetConfigSource 注入配置源服务，启用 surface 端点与写入冲突提示。
 func (h *ConfigHandler) SetConfigSource(src *service.ConfigSourceService) {
 	h.source = src
 }
@@ -33,7 +33,6 @@ func (h *ConfigHandler) SetConfigSource(src *service.ConfigSourceService) {
 func (h *ConfigHandler) SetAudit(a *service.AuditService) {
 	h.audit = a
 }
-
 func (h *ConfigHandler) List(c *gin.Context) {
 	if !requireNodes(c, "file.read", "instance.read") {
 		return
@@ -54,7 +53,7 @@ func (h *ConfigHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, files)
 }
 
-// Discover 递归发现实例工作目录下全部配置文件（FR-071）。
+// Discover 递归发现实例工作目录下全部配置文件。
 func (h *ConfigHandler) Discover(c *gin.Context) {
 	if !requireNodes(c, "file.read", "instance.read") {
 		return
@@ -167,7 +166,7 @@ func (h *ConfigHandler) WriteFields(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"versionId": versionID, "validation": validation, "warnings": h.conflictWarnings(id, req.Path, mapKeys(req.Fields))})
 }
 
-// conflictWarnings 返回命中受管 file 项的写入提示（不静默覆盖，FR-451 §2.2）；未注入源服务时为空。
+// conflictWarnings 返回命中受管 file 项的写入提示（不静默覆盖§2.2）；未注入源服务时为空。
 func (h *ConfigHandler) conflictWarnings(instanceID uint, filePath string, keys []string) []map[string]any {
 	if h.source == nil {
 		return []map[string]any{}
@@ -244,7 +243,7 @@ func (h *ConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	cfg.POST("/write", h.Write)
 	cfg.POST("/write-fields", h.WriteFields)
 	cfg.POST("/cross-check", h.CrossCheck)
-	// 配置源明面化（FR-451）：受管项清单读 + 按项来源更新。
+	// 配置源明面化：受管项清单读 + 按项来源更新。
 	if h.source != nil {
 		cfg.GET("/surface", h.Surface)
 		cfg.PUT("/surface", h.UpdateSurface)
@@ -255,7 +254,7 @@ func (h *ConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	cfg.GET("/diff/*file", h.Diff)
 }
 
-// Surface 返回受管配置项清单（FR-451）。门禁 file.read/instance.read。
+// Surface 返回受管配置项清单。门禁 file.read/instance.read。
 func (h *ConfigHandler) Surface(c *gin.Context) {
 	if h.source == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "配置源端点未启用"})
@@ -284,7 +283,7 @@ type surfaceUpdateRequest struct {
 	Items []service.SurfaceUpdateItem `json:"items" binding:"required"`
 }
 
-// UpdateSurface 按项更新配置源（FR-451）：二态互斥、内联写回真源、文件引用仅登记 + 生效值预览。
+// UpdateSurface 按项更新配置源：二态互斥、内联写回真源、文件引用仅登记 + 生效值预览。
 // 门禁 file.write/instance.write。切换来源与内联写入均写审计。
 func (h *ConfigHandler) UpdateSurface(c *gin.Context) {
 	if h.source == nil {

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ResyncDeduper 按节点对「实例规格重推」（InstanceService.ResyncNode）做单飞 + 节流（FR-455②）。
+// ResyncDeduper 按节点对「实例规格重推」（InstanceService.ResyncNode）做单飞 + 节流（②）。
 //
 // 背景：重推触发当前多源化——隧道 onOpen、Register 成功、心跳兜底都会触发同一入口。
 // 多源必然带来重复触发（如瞬时 active=2 的两次 onOpen、Register 紧随心跳）；由于 Worker 侧

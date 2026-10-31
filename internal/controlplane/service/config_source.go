@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service/schema"
 )
 
-// 受管配置项 ItemKey（FR-451）。稳定标识，分三类前缀：
+// 受管配置项 ItemKey。稳定标识，分三类前缀：
 //   - startup. 启动项（写 Instance.StartCommand / LaunchSpec）
 //   - props.   server.properties 项（写文件对应键）
 //   - flags.   预留（未来 JVM 参数）
@@ -29,7 +29,7 @@ const (
 	// defaultServerPropertiesPath 是内联 props 项的固定落点（切回内联后平台只写标准路径，避免写出两个文件）。
 	defaultServerPropertiesPath = "server.properties"
 
-	// maxStartupFilePreviewLen 整文件引用生效值预览的截断长度（FR-451 nit：避免整份文件刷屏）。
+	// maxStartupFilePreviewLen 整文件引用生效值预览的截断长度（nit：避免整份文件刷屏）。
 	maxStartupFilePreviewLen = 512
 )
 
@@ -62,7 +62,7 @@ var managedPropSet = func() map[string]struct{} {
 	return m
 }()
 
-// SurfaceItem 是受管配置项清单中的一行（FR-451）。
+// SurfaceItem 是受管配置项清单中的一行。
 type SurfaceItem struct {
 	ItemKey string                 `json:"itemKey"`
 	Source  model.ConfigSourceKind `json:"source"`
@@ -91,7 +91,7 @@ type SurfaceUpdateItem struct {
 	Message     string                 `json:"message"`
 }
 
-// ConfigSourceService 实现受管配置项登记表 CRUD、二态互斥与迁移语义、生效值预览、冲突防护（FR-451）。
+// ConfigSourceService 实现受管配置项登记表 CRUD、二态互斥与迁移语义、生效值预览、冲突防护。
 type ConfigSourceService struct {
 	db       *gorm.DB
 	instance *InstanceService
@@ -117,11 +117,11 @@ type previewResult struct {
 	err     error
 }
 
-// Surface 返回实例的受管配置项清单（FR-451）。
+// Surface 返回实例的受管配置项清单。
 // 旧实例登记表为空时：startup.command 视作 inline（取 Instance.StartCommand），关键 props 视作文件隐含，
 // 保证平滑过渡、不报错。file 项的 effectiveValue 为解析预览（只读）。
 //
-// 能力画像过滤（FR-451 验收 #8 / ADR-091）：startup.* 与 props.* 均为 MC 语义配置项，仅对具备
+// 能力画像过滤（验收 #8 / ADR-091）：startup.* 与 props.* 均为 MC 语义配置项，仅对具备
 // MC 配置语义的实例（minecraft_java 且非配套服务角色）呈现；generic / beacon 返回空清单，
 // 使其走各自画像，不出现 MC 专有配置项。
 func (s *ConfigSourceService) Surface(instanceID uint) ([]SurfaceItem, error) {
@@ -252,7 +252,7 @@ func (s *ConfigSourceService) resolveSourceItem(item SurfaceItem, row model.Inst
 	}
 }
 
-// UpdateSource 按项更新配置源（FR-451）。返回刷新后的清单。
+// UpdateSource 按项更新配置源。返回刷新后的清单。
 //   - source=inline 且 startup.* → 经 InstanceService.Update 写 StartCommand/LaunchSpec。
 //   - source=inline 且 props.*  → 经 ConfigService.WriteFields 写 server.properties（保留注释/顺序、生成版本）。
 //   - source=file               → 仅写登记表（+ 预览校验文件/键，离线时降级为警告不阻断）。
@@ -275,7 +275,7 @@ func (s *ConfigSourceService) applySourceUpdate(inst *model.Instance, it Surface
 	if !isManagedItemKey(it.ItemKey) {
 		return fmt.Errorf("未知受管配置项: %s", it.ItemKey)
 	}
-	// 画像门控（FR-451 验收 #8）：无 MC 配置语义的实例（generic / beacon）不接受 MC 专有受管项写入。
+	// 画像门控（验收 #8）：无 MC 配置语义的实例（generic / beacon）不接受 MC 专有受管项写入。
 	if !mcSemanticConfigSurface(inst) {
 		return fmt.Errorf("实例 %d（type=%s role=%s）无 MC 配置语义，不支持受管项 %s", inst.ID, inst.Type, inst.Role, it.ItemKey)
 	}
@@ -335,7 +335,7 @@ func (s *ConfigSourceService) resolveInlineValue(inst *model.Instance, it Surfac
 
 // resolveFileRef 归一化 file 引用的路径与键。
 func (s *ConfigSourceService) resolveFileRef(it SurfaceUpdateItem) (string, string, error) {
-	// 启动项不接受文件引用来源（FR-451 审计）：startup.* 登记为 file 后既不读文件也无消费路径，
+	// 启动项不接受文件引用来源（审计）：startup.* 登记为 file 后既不读文件也无消费路径，
 	// 启动仍用 Instance.StartCommand。故显式拒绝，UI 侧同步隐藏启动项的「引用文件」切换。
 	if strings.HasPrefix(it.ItemKey, ConfigItemStartupPrefix) {
 		return "", "", fmt.Errorf("启动项 %s 不支持文件引用来源：启动命令须由平台持有（对下次启动生效）", it.ItemKey)
@@ -385,7 +385,7 @@ func (s *ConfigSourceService) applyInline(inst *model.Instance, itemKey, value s
 		if s.instance == nil {
 			return errors.New("实例服务未注入")
 		}
-		// launchSpec 以纯字符串暴露，写入前做 JSON 校验，避免落库非法 JSON（FR-451 nit）。
+		// launchSpec 以纯字符串暴露，写入前做 JSON 校验，避免落库非法 JSON（nit）。
 		if trimmed := strings.TrimSpace(value); trimmed != "" && !json.Valid([]byte(trimmed)) {
 			return fmt.Errorf("startup.launchSpec 必须是合法 JSON")
 		}
@@ -421,7 +421,7 @@ func (s *ConfigSourceService) upsertSource(row model.InstanceConfigSource) error
 	return s.db.Save(&existing).Error
 }
 
-// InlinePropValues 返回实例上以 inline 登记的属性值（键→值），供跨实例端口校验并入（FR-451 §2.4）。
+// InlinePropValues 返回实例上以 inline 登记的属性值（键→值），供跨实例端口校验并入（§2.4）。
 func (s *ConfigSourceService) InlinePropValues(instanceID uint, keys []string) map[string]string {
 	out := map[string]string{}
 	if len(keys) == 0 || s.db == nil {
@@ -442,7 +442,7 @@ func (s *ConfigSourceService) InlinePropValues(instanceID uint, keys []string) m
 	return out
 }
 
-// ConflictWarnings 返回与受管 file 项冲突的写入警告（FR-451 §2.2）。
+// ConflictWarnings 返回与受管 file 项冲突的写入警告（§2.2）。
 // 命中受管 file 项时不静默覆盖，仅提示「平台编辑器改动可能与生效值不一致」，与 CrossCheck 同响应风格。
 func (s *ConfigSourceService) ConflictWarnings(instanceID uint, filePath string, keys []string) []map[string]any {
 	out := []map[string]any{}
@@ -551,18 +551,18 @@ func isManagedItemKey(key string) bool {
 	return false
 }
 
-// mcSemanticConfigSurface 判定实例是否具备 MC 配置语义（FR-451 验收 #8 / ADR-091 能力画像）。
-// 语义对齐 FR-445 能力画像的 `MCSemantics`：仅「运行 Minecraft 服务端（server.properties）」的实例
+// mcSemanticConfigSurface 判定实例是否具备 MC 配置语义（验收 #8 / ADR-091 能力画像）。
+// 语义对齐能力画像的 `MCSemantics`：仅「运行 Minecraft 服务端（server.properties）」的实例
 // 呈现 startup.* / props.* 受管项。明文排除：
 //   - proxy：BungeeCord/Waterfall/Velocity 使用 config.yml，无 server.properties 语义（W6 画像 MCSemantics=false）；
-//   - beacon：配套服务角色（FR-450），走各自画像；
+// beacon：配套服务角色，走各自画像；
 //   - generic 类型：通用二进制。
 //
 // 取舍：W6 画像把未知组合 `(minecraft_java, universal)` 归入「兜底 universal（MCSemantics=false）」，
 // 但本 FR 保留该组合为 MC 语义——`minecraft_java` 且未显式设角色（GORM 默认 universal）是
 // 手动/MCP `instance_create` 创建 MC 服务端的现实路径（provision/proxy/import/clone 才显式落 backend/proxy），
 // 若一并排除会把这些存量实例的关键配置面板静默清空。故此处按「排除 proxy/beacon/generic」收敛，
-// 与 FR-451 spec（`props.*`/`startup.*` 对 `minecraft_java` 呈现）一致。
+// 与spec（`props.*`/`startup.*` 对 `minecraft_java` 呈现）一致。
 func mcSemanticConfigSurface(inst *model.Instance) bool {
 	if inst == nil {
 		return false
@@ -570,7 +570,7 @@ func mcSemanticConfigSurface(inst *model.Instance) bool {
 	return instanceMCSemantics(inst.Type, inst.Role)
 }
 
-// instanceMCSemantics 是 FR-445 能力画像 `MCSemantics` 在本 FR 的最小实现（以 (type, role) 为键）。
+// instanceMCSemantics 是能力画像 `MCSemantics` 在本 FR 的最小实现（以 (type, role) 为键）。
 func instanceMCSemantics(t model.InstanceType, r model.InstanceRole) bool {
 	if t != model.InstanceTypeMinecraftJava {
 		return false

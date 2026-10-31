@@ -24,7 +24,7 @@ type Handler struct {
 	// conns SSE 兼容路径的传输连接登记；Streamable HTTP 不使用。
 	conns *SSEConnRegistry
 	deps  ToolDeps
-	// callLog 可选；tools/call 记 FR-390 流水。
+	// callLog 可选；tools/call 记流水。
 	callLog *service.AgentCallLogService
 }
 
@@ -420,7 +420,7 @@ func (h *Handler) handleToolsCall(c *gin.Context, ctx context.Context, p *servic
 	return newResult(req.ID, result)
 }
 
-// recordToolCall 记 FR-390 调用流水。
+// recordToolCall 记调用流水。
 //
 // Client 取本次请求经 AgentAuth 归一后的 X-JM-Agent-Client：运维要靠它区分调用来自
 // MCP 代理还是 curl/脚本，硬编码成 mcp 会把客户端分布抹平成一根柱子。
@@ -465,7 +465,7 @@ func (h *Handler) recordToolCall(c *gin.Context, p *service.AgentPrincipal, tran
 	})
 }
 
-// agentClientOf 取本次请求归一化后的客户端标识（FR-390）。
+// agentClientOf 取本次请求归一化后的客户端标识。
 //
 // 值由 middleware.AgentAuth 归一后写入上下文：自报 X-JM-Agent-Client 且在白名单内取其值，
 // 缺省、超长、含非法字符或不在白名单一律为 unknown——与 Ops HTTP 面同一口径。

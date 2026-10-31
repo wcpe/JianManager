@@ -17,7 +17,7 @@ async function pickOption(user: ReturnType<typeof userEvent.setup>, triggerName:
   await user.click(await screen.findByRole('button', { name: optionName }))
 }
 
-describe('InstanceWizardPage Docker 创建向导（FR-078）', () => {
+describe('InstanceWizardPage Docker 创建向导', () => {
   it('一键 Minecraft 预设提交 docker 镜像、空启动命令与 EULA 环境变量', async () => {
     const user = userEvent.setup()
     let payload: Record<string, unknown> | undefined

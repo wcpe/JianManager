@@ -1,15 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
+import { server } from '@jianmanager/devmock/server'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 import StoragePage from './StoragePage'
 
-/**
- * 平台存储页强断言（FR-204 文件归档域）：验 mock 假后端 storage 集合渲染 + 浏览导航联动 + 错误注入。
+/** 
+ * 平台存储页强断言（文件归档域）：验 mock 假后端 storage 集合渲染 + 浏览导航联动 + 错误注入。
  * StoragePage 仅平台管理员（role=10）可见，故登录态需带 role=10 的 JWT 声明（loginMockUser 用的纯 token
  * 解不出 role，会被角色门禁挡住），这里就地构造一个 payload 含 role=10 的伪 JWT。
  */
@@ -70,7 +72,7 @@ describe('StoragePage（mock 假后端）', () => {
       expect(within(cacheRow as HTMLElement).getByText('0 B')).toBeInTheDocument()
       expect(within(cacheRow as HTMLElement).getByText('0')).toBeInTheDocument()
     })
-    // FR-378：refreshKey 重拉后目录折叠，再展开 cache 应为空且无旧文件
+    // refreshKey 重拉后目录折叠，再展开 cache 应为空且无旧文件
     await user.click(screen.getByRole('button', { name: 'cache' }))
     expect(await screen.findByText(/该目录为空|空目录/)).toBeInTheDocument()
     expect(screen.queryByText('tmp-build.log')).not.toBeInTheDocument()
@@ -106,5 +108,68 @@ describe('StoragePage（mock 假后端）', () => {
     renderWithProviders(<StoragePage />, { route: '/storage' })
 
     expect(await screen.findByText('加载平台存储概览失败')).toBeInTheDocument()
+  })
+
+  /** 
+   * 数据源对象必须跨渲染稳定。
+   *
+   * `FileBrowserTree` 的取数 effect 把 `source` 列为依赖（`[source, dirPath, refreshKey, t]`）；
+   * 在渲染体里每次新建对象 → source 身份每次父组件重渲染都变 → 目录树被 `setEntries(null)`
+   * 打回加载态并重拉 `/storage/files`。
+   *
+   * 用「与目录树无关的重渲染」（切主题 → StoragePageConnected 重渲染）来验：
+   * 稳定的 source 不该因此产生任何新请求。
+   */
+  it('数据源稳定：无关重渲染不会重拉 /storage/files', async () => {
+    loginAsPlatformAdmin()
+    const calls: string[] = []
+    const listener = ({ request }: { request: Request }) => {
+      const url = new URL(request.url)
+      if (url.pathname === '/api/v1/storage/files') calls.push(url.search)
+    }
+    server.events.on('request:start', listener)
+    try {
+      renderWithProviders(<StoragePage />, { route: '/storage' })
+      // 等目录树真正出数据（var 是根层可下钻目录），此时首帧取数已全部发生。
+      expect(await screen.findByRole('button', { name: 'var' })).toBeInTheDocument()
+      const afterMount = calls.length
+      expect(afterMount).toBeGreaterThan(0)
+
+      // 与文件浏览无关的重渲染：切主题（store 变更 → 连接层重渲染 → 新 source 对象）。
+      act(() => {
+        useThemeStore.getState().setTheme('dark')
+      })
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'var' })).toBeInTheDocument())
+      expect(calls.length).toBe(afterMount)
+    } finally {
+      server.events.removeListener('request:start', listener)
+    }
+  })
+
+  /** 
+   * 非管理员 / 加载中 / 失败三态也必须落在同一套外壳里。
+   *
+   * 原先三态直接 return 裸 `<p>`：页面在加载与失败时整体塌成一行无标题文字，
+   * 页头消失、与就绪态之间布局跳变。
+   */
+  it('错误态与权限态仍渲染页壳与页头（不再是裸文本）', async () => {
+    loginAsPlatformAdmin()
+    mockInject('get', '/storage/overview', { kind: 'status', status: 500 })
+    const { container, unmount } = renderWithProviders(<StoragePage />, { route: '/storage' })
+
+    expect(await screen.findByText('加载平台存储概览失败')).toBeInTheDocument()
+    const shell = container.querySelector('[data-page="storage"]')
+    expect(shell).not.toBeNull()
+    expect(within(shell as HTMLElement).getByRole('heading', { name: /平台存储/ })).toBeInTheDocument()
+    unmount()
+
+    // 非管理员：同样保留页壳 + 页头。
+    useAuthStore.getState().logout()
+    const member = renderWithProviders(<StoragePage />, { route: '/storage' })
+    expect(await screen.findByText(/仅平台管理员/)).toBeInTheDocument()
+    const memberShell = member.container.querySelector('[data-page="storage"]')
+    expect(memberShell).not.toBeNull()
+    expect(within(memberShell as HTMLElement).getByRole('heading', { name: /平台存储/ })).toBeInTheDocument()
   })
 })

@@ -2,21 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}))
+
+import { toast } from 'sonner'
+
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { server } from '@jianmanager/devmock/server'
 
-vi.mock('@xterm/xterm', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { Terminal: harness.MockTerminal }
-})
-vi.mock('@xterm/addon-fit', async () => {
-  const harness = await import('@/test/xterm-ws-harness')
-  return { FitAddon: harness.MockFitAddon }
-})
-
-import { MockWebSocket, resetTerminalHarness, wsSockets, xtermInstances } from '@/test/xterm-ws-harness'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { MockWebSocket, resetTerminalHarness, wsSockets } from '@/test/xterm-ws-harness'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import TerminalPane from './TerminalPane'
 
 beforeEach(() => {
@@ -28,7 +26,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** 等控制台输出区挂载（FR-415 起是 DOM 虚拟列表，不再是 xterm 画布）。 */
+/** 等控制台输出区挂载（起是 DOM 虚拟列表，不再是 xterm 画布）。 */
 async function findOutput() {
   return screen.findByTestId('console-output')
 }
@@ -44,13 +42,14 @@ function currentMatchSeq() {
   return mark?.closest('[data-console-line-seq]')?.getAttribute('data-console-line-seq')
 }
 
-/**
- * TerminalPane FIX-B/FR-345 回归：停机（STOPPED）实例打开控制台必须回放 DB 历史，
+/** 
+ * TerminalPane FIX-B回归：停机（STOPPED）实例打开控制台必须回放 DB 历史，
  * 不发起 WS（杜绝死循环刷断连）；运行中实例放行控制台。
  * seed：id=1 RUNNING、id=2 STOPPED（见 mocks/handlers/domains/instance.ts）。
  *
- * FR-415 起控制台是「DOM 输出区 + 原生命令栏」（ADR-086），故本文件的断言从
- * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」，并新增「这条路径零 xterm」的守卫。
+ *起控制台是「DOM 输出区 + 原生命令栏」（ADR-086），故本文件的断言从
+ * 「xterm 实例/缓冲」平移到「输出区 DOM / 权威行缓冲」；xterm 渲染壳随后全站下线，
+ * 已无 xterm 对象可断言（原「这条路径零 xterm」的守卫随之退场）。
  */
 describe('TerminalPane（mock 假后端）', () => {
   it('F11 进入沉浸模式，覆盖实例详情外壳而不改当前路由', async () => {
@@ -96,14 +95,12 @@ describe('TerminalPane（mock 假后端）', () => {
     const newLine = screen.getByText('[Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved')
     expect(oldLine.compareDocumentPosition(newLine) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(screen.getByRole('link', { name: '查看完整历史' })).toHaveAttribute('href', '/logs?instanceId=2')
-    expect(xtermInstances).toHaveLength(0)
     expect(wsSockets).toHaveLength(0)
 
     firstMount.unmount()
     renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
     expect(await screen.findByText('[Server thread/INFO]: Saving chunks for level minecraft:overworld')).toBeInTheDocument()
     await waitFor(() => expect(logReads).toBeGreaterThanOrEqual(2))
-    expect(xtermInstances).toHaveLength(0)
     expect(wsSockets).toHaveLength(0)
   })
 
@@ -121,7 +118,7 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByRole('button', { name: '启动实例' })).toBeEnabled()
   })
 
-  it('运行中实例：挂载控制台（不显示停机占位），且不创建 xterm', async () => {
+  it('运行中实例：挂载控制台（不显示停机占位）', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
@@ -131,8 +128,8 @@ describe('TerminalPane（mock 假后端）', () => {
     await waitFor(() => {
       expect(screen.queryByText(/实例未运行/)).not.toBeInTheDocument()
     })
-    // ADR-086：实例控制台路径不再经 xterm 渲染。
-    expect(xtermInstances).toHaveLength(0)
+    // 原「这条路径零 xterm」的守卫已退场：xterm 渲染壳全站下线，无 xterm 对象可断言；
+    // 挂载成功的证据即上面的 findOutput()（DOM 输出区已就位）。
   })
 
   it('运行中实例：显示读写徽标、重连和字号工具', async () => {
@@ -218,7 +215,7 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(currentMatchSeq()).toBe('0')
   })
 
-  it('FR-276：WORKER_TOKEN_REJECTED 错误显示密钥不一致定向诊断，而非裸 [状态: error]', async () => {
+  it('WORKER_TOKEN_REJECTED 错误显示密钥不一致定向诊断，而非裸 [状态: error]', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
@@ -238,7 +235,7 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByText(/WS 令牌密钥与平台不一致/)).toBeInTheDocument()
   })
 
-  it('FR-276：一般错误态带出 data 原因；无 data 维持原 [状态: xxx] 行为', async () => {
+  it('一般错误态带出 data 原因；无 data 维持原 [状态: xxx] 行为', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
 
@@ -277,8 +274,8 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByRole('textbox', { name: '控制台命令输入' })).toHaveValue('')
   })
 
-  /** FR-140 回归：一次性 token 首连即被消费，重连必须重取。 */
-  it('FR-140：点重新连接必须重新拉取一次性 token，不复用已消费的旧 token', async () => {
+  /** 回归：一次性 token 首连即被消费，重连必须重取。 */
+  it('点重新连接必须重新拉取一次性 token，不复用已消费的旧 token', async () => {
     const user = userEvent.setup()
     loginMockUser()
 
@@ -312,5 +309,50 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(tokenFetches).toBeGreaterThan(fetchesBeforeReconnect)
     // 新连接携带的是新签发的一次性 token，而非复用首连已消费的旧 token。
     expect(secondToken).not.toBe(firstToken)
+  })
+})
+
+/** 
+ * 活路径接线守卫：`onlinePlayers`（补全的权威名册）与 `onNotify`（复制/跳转回执）
+ * 在受控视图里都是**可选**的——缺省即静默降级（补全只剩控制台输出解析出的名册，回执直接丢弃）。
+ * 这两处注入原挂在 `components/console/InstanceConsoleView` 上，而它已不在活路径里；
+ * 本组用例把「活接线层必须注入这两者」钉在端到端行为上，避免再次无声退化。
+ */
+describe('TerminalPane 活路径接线（名册与提示通道必须注入）', () => {
+  it('命令栏补全用得上 /players 的本实例名册', async () => {
+    const user = userEvent.setup()
+    loginMockUser()
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    const input = await screen.findByRole('textbox', { name: '控制台命令输入' })
+    // seed 的 /players 返回 Alice(instanceId=1) 与 Bob(instanceId=2)：只有本实例的 Alice 该进候选。
+    await user.type(input, 'kick Al')
+    // /players 是异步查询：名册到位前 Tab 无可补（不吞键），故重试到补全生效为止。
+    await waitFor(() => {
+      fireEvent.keyDown(input, { key: 'Tab' })
+      expect(input).toHaveValue('kick Alice ')
+    })
+  })
+
+  it('复制回执：输出区复制结果接回 toast，而不是静默丢弃', async () => {
+    loginMockUser()
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: vi.fn(async () => undefined) },
+    })
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    const output = await findOutput()
+    const ws = await findSocket()
+    act(() => ws.emitMessage({ type: 'stdout', data: 'hello console\n' }))
+    await screen.findByText('hello console')
+
+    // Ctrl+A 全选缓冲 → 工具条「复制」：回执必须经 onNotify 变成 toast。
+    // 限定在选区工具条内点：控制台头部另有一个同名「复制」菜单按钮。
+    fireEvent.keyDown(output, { key: 'a', ctrlKey: true })
+    const toolbar = await screen.findByTestId('console-selection-toolbar')
+    fireEvent.click(within(toolbar).getByRole('button', { name: '复制' }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('已复制'))
   })
 })

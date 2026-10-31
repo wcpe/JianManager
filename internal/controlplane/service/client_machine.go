@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientMachineService 客户端机器码登记（FR-092，见 ADR-023）。
+// ClientMachineService 客户端机器码登记（见 ADR-023）。
 //
 // 弱一致、best-effort：失败仅返回错误供调用方忽略，**绝不阻断玩家拉取**。机器码不可信，仅统计 + 辅助限流。
 type ClientMachineService struct {

@@ -17,6 +17,12 @@ func newRunAsyncDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskLog{}, &model.Notification{}))
 	return db
 }
@@ -37,7 +43,7 @@ func waitTaskState(t *testing.T, svc *TaskService, taskID string, want model.Tas
 	return model.Task{}
 }
 
-// TestRunAsync_SucceedsInBackground work 成功 → 后台推进到 succeeded + result（FR-323）。
+// TestRunAsync_SucceedsInBackground work 成功 → 后台推进到 succeeded + result。
 func TestRunAsync_SucceedsInBackground(t *testing.T) {
 	svc := NewTaskService(newRunAsyncDB(t))
 	done := make(chan struct{})
@@ -54,7 +60,7 @@ func TestRunAsync_SucceedsInBackground(t *testing.T) {
 	require.Equal(t, `{"ok":true}`, task.Result)
 }
 
-// TestRunAsync_FailurePropagates work 报错 → failed + 错误链（FR-323）。
+// TestRunAsync_FailurePropagates work 报错 → failed + 错误链。
 func TestRunAsync_FailurePropagates(t *testing.T) {
 	svc := NewTaskService(newRunAsyncDB(t))
 	taskID := svc.RunAsync(RunSpec{NodeID: 1, Kind: model.TaskKindBackupCreate, Title: "备份 x", CreatedBy: 1},
@@ -65,7 +71,7 @@ func TestRunAsync_FailurePropagates(t *testing.T) {
 	require.Contains(t, task.Error, "磁盘满")
 }
 
-// TestRunAsync_LinksInstance InstanceID 必须随 pending 任务在同一 INSERT 中写入（FR-319/323）。
+// TestRunAsync_LinksInstance InstanceID 必须随 pending 任务在同一 INSERT 中写入（323）。
 func TestRunAsync_LinksInstance(t *testing.T) {
 	db := newRunAsyncDB(t)
 	require.NoError(t, db.Exec(`CREATE TRIGGER require_runasync_instance
@@ -94,7 +100,7 @@ func TestRunAsync_LinksInstance(t *testing.T) {
 	waitTaskState(t, svc, taskID, model.TaskStateSucceeded)
 }
 
-// TestRunAsync_DefaultDetail 空 Detail 落「排队中」（FR-323）。
+// TestRunAsync_DefaultDetail 空 Detail 落「排队中」。
 func TestRunAsync_DefaultDetail(t *testing.T) {
 	svc := NewTaskService(newRunAsyncDB(t))
 	block := make(chan struct{})

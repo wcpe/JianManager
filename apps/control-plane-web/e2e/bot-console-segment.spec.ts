@@ -7,8 +7,8 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
-/** FR-039 真浏览器纵切：服务器选择器入口、实例内 Bot 分区与批量操作。 */
-test.describe('FR-039 控制台实例内 Bot 管理段（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：侧栏资源面板入口、实例内 Bot 分区与批量操作。 */
+test.describe('控制台实例内 Bot 管理段（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await page.addInitScript(() => {
@@ -21,23 +21,22 @@ test.describe('FR-039 控制台实例内 Bot 管理段（mock 模式真浏览器
     await login(page)
   })
 
-  test('服务器选择器入口 → Bot 分区 → 批量设行为', async ({ page }) => {
-    await page.getByRole('button', { name: '选择服务器' }).click()
-    await expect(page.getByRole('dialog', { name: '服务器选择器' })).toBeVisible()
-    await page.getByRole('searchbox', { name: '搜索服务器' }).fill('survival-1')
-    const selector = page.getByTestId('server-selector-virtual')
-    await expect(selector).toBeVisible()
-    await expect.poll(async () => Number(await selector.getAttribute('data-total-count'))).toBeGreaterThanOrEqual(1)
-    await expect(page.getByRole('button', { name: /survival-1.*RUNNING/ })).toBeVisible()
+  test('侧栏资源面板搜索 → 实例内 Bot 分区 → 批量设行为', async ({ page }) => {
+    // 【为何不再走「选择服务器」弹窗】侧栏重构删除了 `ServerSelector`（服务选择器按钮）与
+    // 它的虚拟列表（`server-selector-virtual`），资源定位改为资源面板内的搜索框。
+    const sidebar = page.locator('[data-slot="console-sidebar"]')
+    await sidebar.getByRole('textbox', { name: '搜索服务器' }).fill('survival-1')
+    const hit = sidebar.getByText('survival-1').first()
+    await expect(hit).toBeVisible({ timeout: 10_000 })
     await page.screenshot({ path: path.join(artifactsDir, 'fr039-e2e-server-selector-entry.png'), fullPage: true })
 
-    await page.getByRole('button', { name: /survival-1.*RUNNING/ }).click()
+    await hit.click()
     await expect(page).toHaveURL(/\/instances\/1$/)
-    // FR-412：顶栏标题只保留实例名，无「服务器控制台 /」前缀
+    // 顶栏标题只保留实例名，无「服务器控制台 /」前缀
     await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible()
     await expect(page.locator('[data-page="instance-console"]')).toBeVisible()
 
-    // FR-413：实例分区为 role=tab（tablist「实例页签」），不再是 button
+    // 实例分区为 role=tab（tablist「实例页签」），不再是 button
     await page.getByRole('tab', { name: 'Bot', exact: true }).click()
     await expect(page.getByText('当前筛选 2 个 Bot')).toBeVisible()
     await expect(page.getByText('GuardBot')).toBeVisible()

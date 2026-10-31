@@ -134,3 +134,13 @@ FileTailer、STDIO_PRIMARY 和 ArchiveImporter 统一写入事件管道；轮转
 `ingest.TestDeliveryFailureGapsAutoResolveAfterDeliveryRecovers`、
 `ingest.TestPausedSourceSelfHealsEndToEnd`、
 `ingest.TestStdioRawWriteFailureGapIsNeverAutoResolved`。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-474 Worker 日志采集与持久化通道（feat）
+
+**需求补充**：FileTailer + StdIO + ArchiveImporter **共用采集账本**；源分段身份与 `latest.log→轮转→.gz` 关联；cursor/WAL/分水位回收/坏记录隔离；STDIO 受管 Raw 分段；容量耗尽与缺口可见；**hash+size 仅识别归档对象**；不引入 Filebeat 等。**验收含 Runbook A**（Worker WAL 强杀/ACK 丢失/reclaim/恢复分段释放与 hold 保护真实 PASS）→ `docs/specs/worker-log-acquisition/spec.md`
+
+**交付状态**：✅ 已交付@v0.24.0·生产采集/投影/ACK恢复/reclaim 已通过；**Runbook A 真机（强杀 `-9` 重启）通过并修复重启时序缺陷**；磁盘容量**真实填盘验收通过**（容器内受限 tmpfs：真实越过 80%→`DEGRADED_STORAGE`、91.67%→`PAUSED` 且必记缺口；经真实 `Pipeline.Ingest` 落账本 `AcquirePaused`+缺口+未投递；**真实 ENOSPC** 填至 100% 观测到 `no space left on device`；见 `worker-log-acquisition/acceptance-real.md`）；**2026-10-02 缺陷加固（缺口风暴）**：登记合并（相邻同因）+ 按原因数量级上限 + 投递成功/已发布投影两条自动消解出口 + 暂停源限频自愈（只投递不读取），人工解算接口与 `ResumeAcquire` 门禁语义不变；转红回归见 CHANGELOG [Unreleased] 与 `worker-log-acquisition/spec.md` §3.3

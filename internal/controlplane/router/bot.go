@@ -52,7 +52,7 @@ func parseBotFilter(c *gin.Context) service.BotFilter {
 	return f
 }
 
-// List Bot 列表，分页 + 多维筛选（FR-038）。
+// List Bot 列表，分页 + 多维筛选。
 // 平台管理员返回全部；其余按其可访问实例集合在 SQL 层收敛。
 func (h *BotHandler) List(c *gin.Context) {
 	access := getAccess(c)
@@ -79,7 +79,7 @@ func (h *BotHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// Summary Bot 计数聚合（全局或按 groupBy 分组），不返回逐条 Bot（FR-038）。
+// Summary Bot 计数聚合（全局或按 groupBy 分组），不返回逐条 Bot。
 func (h *BotHandler) Summary(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermBotRead) {
@@ -117,7 +117,7 @@ type batchRequest struct {
 	Target   string               `json:"target"`
 }
 
-// Batch 批量执行 set-behavior/start/stop/delete，经 gRPC 委托对应 Worker（FR-038）。
+// Batch 批量执行 set-behavior/start/stop/delete，经 gRPC 委托对应 Worker。
 func (h *BotHandler) Batch(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermBotManage) {
@@ -315,7 +315,7 @@ type sendBotCommandRequest struct {
 	Command string `json:"command" binding:"required"`
 }
 
-// SendCommand 向 Bot 下发聊天/控制命令（FR-009）。
+// SendCommand 向 Bot 下发聊天/控制命令。
 func (h *BotHandler) SendCommand(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -355,7 +355,7 @@ func (h *BotHandler) SendCommand(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已发送"})
 }
 
-// Events SSE 推送单个 Bot 的实时状态、聊天和行为事件（FR-041）。
+// Events SSE 推送单个 Bot 的实时状态、聊天和行为事件。
 func (h *BotHandler) Events(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {

@@ -16,6 +16,12 @@ func newTrackingDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.ClientDistEvent{}, &model.ClientDistDaily{}, &model.ClientRuntimeState{}))
 	return db
 }
@@ -99,7 +105,7 @@ func TestClientDistTracking_QueryEventsFilters(t *testing.T) {
 	require.Len(t, byKind, 2)
 }
 
-// TestClientDistTracking_RecordPersistsErrCode 失败事件写入语义错误码（FR-249）。
+// TestClientDistTracking_RecordPersistsErrCode 失败事件写入语义错误码。
 func TestClientDistTracking_RecordPersistsErrCode(t *testing.T) {
 	db := newTrackingDB(t)
 	svc := NewClientDistTrackingService(db)
@@ -112,7 +118,7 @@ func TestClientDistTracking_RecordPersistsErrCode(t *testing.T) {
 	require.Equal(t, "NO_LATEST_VERSION", ev.ErrCode, "失败事件应保留错误码")
 }
 
-// TestClientDistTracking_QueryOutcomeAndErrCode 按 outcome（成功/失败）+ errCode 精确筛（FR-249）。
+// TestClientDistTracking_QueryOutcomeAndErrCode 按 outcome（成功/失败）+ errCode 精确筛。
 // 失败⟺status>=400；成功⟺status>0 且 <400（含 304/200/206）。
 func TestClientDistTracking_QueryOutcomeAndErrCode(t *testing.T) {
 	db := newTrackingDB(t)

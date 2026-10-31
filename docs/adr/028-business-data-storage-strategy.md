@@ -1,7 +1,7 @@
 # ADR-028: CP 业务数据与时序监控数据分表分策略
 
 - **日期**: 2026-06-24
-- **状态**: accepted（通用 envelope + 经济镜像/审计表已随 FR-122 落地：`business_events` / `economy_balance_mirrors` / `economy_ledger_entries`；背包专表随 FR-126 续）
+- **状态**: accepted（通用 envelope + 经济镜像/审计表已随 FR-122 落地：`business_events` / `economy_balance_mirrors` / `economy_ledger_entries`；背包专表随 FR-126 续）　**⛔ 已被 ADR-106 取代（FR-521）：JM 不再存储任何业务数据，上述三表已 DROP 且不备份。业务数据由下游业务台持有。**
 - **上下文**: JBIS 汇聚回 CP 的业务数据（余额变动、背包操作）与既有时序监控数据（指标快照）性质不同：监控是时序、可降采样、可丢（ADR-013 已有降采样策略）；业务是状态 + 审计，要幂等、要留痕、不能丢。架构不变量：数据库仅 CP 可读写，Worker/探针不碰 DB（业务真源仍在各插件存储，JM 存的是汇聚镜像 + 操作审计）。
 
 ## 决策

@@ -77,3 +77,14 @@ func CallOptions() []grpc.CallOption // MaxCallRecvMsgSize/MaxCallSendMsgSize = 
 - `WrapRegistrar` 改写 ServiceDesc handler 需精确保持 grpc-go handler 签名语义（dec 回调、拦截器链）——单测以真实生成代码的 ServiceDesc 驱动，不手搓假 desc。
 - `proto.Size` 对含未知字段的消息与 wire 尺寸可能有极小偏差——用于限额判定（同数量级），非计费，可接受。
 - CP 直拨请求方向从无界收到 64MiB：现存最大请求 DeployServerProbe ~7.6MB，余量 8 倍；若未来单请求逼近上限应改流式（spec 留档）。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-305 反向隧道单消息尺寸上限统一治理（fix/健壮性，增强 FR-281 隧道传输 + FR-010/114 探针部署，需 spec + 宜随 FR-281 M1 一并做）
+
+**需求补充**：Worker `ServerOptions()` 的 `MaxRecvMsgSize=64MiB`（5de8778 为 `DeployServerProbe` ~7.6MB 载荷特意从默认 4MiB 放宽）只作用于 `grpc.NewServer`；而反向隧道把 WorkerService 挂在 `grpctunnel.NewReverseTunnelServer`（`internal/worker/tunnel/tunnel.go:107`）上，**不消费任何 `grpc.ServerOption` 消息上限**——grpctunnel v0.3.0 不暴露尺寸上限选项，唯一天花板是硬编码 `math.MaxUint32`≈4GB。后果：① **双传输行为不一致**——直拨 >64MiB 显式 `ResourceExhausted` 拒收，隧道同载荷一路吞到 4GB（FR-304 复现坐实：65MB `WriteFile` 隧道成功）；② 隧道已是 ADR-066 首选路径，那个「特意放宽到 64MiB」的安全边界在主链路上**等于不存在**，大 unary RPC（`DeployServerProbe` jar、老 `WriteFile` 直传、`ReadFile` 10MiB 返回等）整块缓冲、无早拒，构成内存/OOM 暴露面。范围：统一直拨与隧道两路的收/发单消息尺寸策略（含 CP 侧 `MaxCallRecvMsgSize`/`MaxCallSendMsgSize` 与 Worker 收发两向），做成有意为之的显式上限而非默认漂移；大载荷优先走流式（与 FR-304/`DownloadFile` 同向，`DeployServerProbe` 是否流化由 spec 定），合法 7.6MB 探针部署与既有 <64MB 载荷必须仍通过。**待定**：grpctunnel 无原生上限选项，落地手段（应用层拦截器早拒 vs 大 RPC 全面流式化 vs 二者结合 + 文档化 4GB 硬顶）由 spec 决策 → `docs/specs/tunnel-message-size-guard/spec.md`
+
+**交付状态**：✅ 已交付@v0.15.0·真机验收（隧道 unary 64MiB 守卫与直拨同界；含缺陷修复=守卫只守 unary 不包裹 stream，修探针部署 30s 死锁；探针 3.6s 恢复/70MiB 流式仍通/65MiB 拒收单测锁死）
+

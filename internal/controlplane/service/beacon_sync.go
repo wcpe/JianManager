@@ -12,10 +12,10 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Beacon 拉取映射相关常量（FR-444，见 ADR-090 §5）。
+// Beacon 拉取映射相关常量（见 ADR-090 §5）。
 const (
 	// BeaconTagRegionPrefix / BeaconTagZonePrefix / BeaconTagRolePrefix 是拉取时补齐的标签前缀。
-	// 与 FR-047 的 `env:` 同属「前缀即维度」约定，不新增字段、不新增迁移。
+	// 与的 `env:` 同属「前缀即维度」约定，不新增字段、不新增迁移。
 	BeaconTagRegionPrefix = "region:"
 	BeaconTagZonePrefix   = "zone:"
 	BeaconTagRolePrefix   = "role:"
@@ -25,7 +25,7 @@ const (
 	BeaconRoleLobby = "lobby"
 	BeaconRoleGame  = "game"
 
-	// 拉取审计动作（FR-444）。与 FR-443 的 instance.beacon_push_* 分列，便于按方向排查。
+	// 拉取审计动作。与的 instance.beacon_push_* 分列，便于按方向排查。
 	AuditActionBeaconPullOK   = "instance.beacon_pull_ok"
 	AuditActionBeaconPullFail = "instance.beacon_pull_fail"
 	// 拉取写入的审计目标类型（分组树整体，非单个实例）。
@@ -45,7 +45,7 @@ var (
 	ErrBeaconTopologyInvalid = fmt.Errorf("Beacon 拓扑数据不合法")
 )
 
-// BeaconSyncConfig 是 Beacon 拉取映射服务配置（FR-444）。
+// BeaconSyncConfig 是 Beacon 拉取映射服务配置。
 type BeaconSyncConfig struct {
 	// NamespaceID Beacon namespace；0 表示不限（Beacon 侧全量）。
 	NamespaceID uint
@@ -67,13 +67,13 @@ type BeaconPullResult struct {
 	RetaggedInstances int `json:"retaggedInstances"`
 	// MovedInstances 因归属变化而被移入 Beacon 分组的实例数。
 	MovedInstances int `json:"movedInstances"`
-	// SkippedServers 本地无对应实例而跳过的 server（Beacon 有而本地无，FR-444 §4.3）。
+	// SkippedServers 本地无对应实例而跳过的 server（Beacon 有而本地无§4.3）。
 	SkippedServers []string `json:"skippedServers"`
 	// Warnings 非致命的映射告警（如 code 缺失被跳过），逐条供运维核对。
 	Warnings []string `json:"warnings"`
 }
 
-// BeaconSyncService 实现 FR-444「从 Beacon 拉取拓扑并映射为分组树」。
+// BeaconSyncService 实现「从 Beacon 拉取拓扑并映射为分组树」。
 //
 // 两个硬约束（ADR-090 §5）：
 //  1. 可选协同，绝非依赖——未配置 endpoint 时全部方法返回 ErrBeaconSyncDisabled，
@@ -115,7 +115,7 @@ func (s *BeaconSyncService) Enabled() bool {
 	return s != nil && s.client.Enabled() && s.client.cfg.PullEnabled
 }
 
-// PullTopology 从 Beacon 拉取拓扑并映射为本地分组树（FR-444）。
+// PullTopology 从 Beacon 拉取拓扑并映射为本地分组树。
 //
 // 调用方为「手动触发」（ADR-090：首次拉取必须手动，不自动建树）。
 // 流程严格两段：
@@ -131,7 +131,7 @@ func (s *BeaconSyncService) PullTopology(ctx context.Context, userID uint, ip st
 
 	topo, err := s.client.PullTopology(ctx, s.cfg.NamespaceID)
 	if err != nil {
-		// 拉取失败：本地数据一个字节都没动（FR-444 §4.4）。
+		// 拉取失败：本地数据一个字节都没动（§4.4）。
 		s.recordPull(userID, ip, nil, err)
 		return nil, err
 	}
@@ -167,7 +167,7 @@ type beaconPlan struct {
 type beaconPlanNode struct {
 	// key 是树内唯一键（用于父子引用），形如 bc:<clusterCode> / region:<code> / zone:<code>。
 	key string
-	// parentKey 为空表示根分组（FR-444 §4.1：bc_cluster → 根分组）。
+	// parentKey 为空表示根分组（§4.1：bc_cluster → 根分组）。
 	parentKey string
 	name      string
 }
@@ -196,7 +196,7 @@ func (s *BeaconSyncService) plan(topo *BeaconTopology) (*beaconPlan, error) {
 	}
 	p := &beaconPlan{namespaceID: s.cfg.NamespaceID}
 
-	// ① Beacon 结构 → 计划节点（FR-444 §4.1 映射规则）：
+	// ① Beacon 结构 → 计划节点（§4.1 映射规则）：
 	//    bc_cluster → 根分组；region → 子分组；zone → 孙分组；server → 实例加入 zone 分组。
 	// 同时建立 zone.ID → 分组 key/code 索引，供 server 归位与标签生成。
 	zoneKeyByID := map[uint]string{}
@@ -367,7 +367,7 @@ func (s *BeaconSyncService) apply(p *beaconPlan) (*BeaconPullResult, error) {
 // resolvePlanNodes 在既有节点中定位计划节点：已存在同名同父节点则复用，否则标记待建。
 // 返回 key → 现有节点 ID 的映射（新建节点不在其中，由事务内补齐）与本轮待建数。
 //
-// FR-444 §4.1：bc_cluster 是**根分组**（ParentID=nil），故根层匹配在同层节点间按名比对；
+// §4.1：bc_cluster 是**根分组**（ParentID=nil），故根层匹配在同层节点间按名比对；
 // 大区/小区则按「父 ID + 名」在同父兄弟间比对。
 func (s *BeaconSyncService) resolvePlanNodes(existing []model.InstanceGroupNode, p *beaconPlan) (map[string]uint, int, error) {
 	byKey := map[string]uint{}
@@ -408,7 +408,7 @@ func (s *BeaconSyncService) resolvePlanNodes(existing []model.InstanceGroupNode,
 }
 
 // recordPull 写拉取审计（成功 ok / 失败 fail + 错误详情）。
-// 审计失败不阻断主流程（与 FR-443 推送同口径）。
+// 审计失败不阻断主流程（与推送同口径）。
 func (s *BeaconSyncService) recordPull(userID uint, ip string, result *BeaconPullResult, pullErr error) {
 	if s.audit == nil {
 		return
@@ -452,7 +452,7 @@ func beaconServerParticipates(s *BeaconServerView) bool {
 	}
 }
 
-// beaconTags 生成 FR-444 §4.1 约定的三个标签：region / zone / role。
+// beaconTags 生成§4.1 约定的三个标签：region / zone / role。
 // role 由 isDefaultEntry 推断：默认入口 = lobby（大厅），其余 = game（游戏）。
 func beaconTags(regionCode, zoneCode string, isDefaultEntry bool) []string {
 	tags := make([]string, 0, 3)
@@ -512,7 +512,7 @@ func sameTags(a, b []string) bool {
 }
 
 // loadInstanceIndexByName 建立「实例名 → 实例」索引。
-// Beacon 的 serverId 与 JianManager 的实例名对应（FR-444 §4.1 的映射约定）。
+// Beacon 的 serverId 与 JianManager 的实例名对应（§4.1 的映射约定）。
 func (s *BeaconSyncService) loadInstanceIndexByName() (map[string]*model.Instance, error) {
 	var instances []model.Instance
 	if err := s.db.Find(&instances).Error; err != nil {

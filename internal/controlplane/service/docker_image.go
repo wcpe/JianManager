@@ -16,7 +16,7 @@ import (
 // ErrDockerUnavailable 表示目标节点未安装/未运行 Docker 守护进程。
 var ErrDockerUnavailable = errors.New("目标节点 Docker 不可用")
 
-// DockerImageService 经 gRPC 委托目标节点 Worker 管理本机 Docker 镜像（FR-078，见 ADR-019）。
+// DockerImageService 经 gRPC 委托目标节点 Worker 管理本机 Docker 镜像（见 ADR-019）。
 // CP 不直连 Docker，所有镜像操作（列出/拉取/删除）经 Worker 中转，守架构边界。
 type DockerImageService struct {
 	db   *gorm.DB
@@ -28,7 +28,7 @@ func NewDockerImageService(db *gorm.DB, pool *cpgrpc.ClientPool) *DockerImageSer
 	return &DockerImageService{db: db, pool: pool}
 }
 
-// DockerImageInfo 是镜像列表的对外返回（FR-078）。
+// DockerImageInfo 是镜像列表的对外返回。
 type DockerImageInfo struct {
 	ID        string   `json:"id"`
 	Tags      []string `json:"tags"`
@@ -49,14 +49,14 @@ func (s *DockerImageService) workerClient(nodeID uint) (*cpgrpc.Client, error) {
 	return client, nil
 }
 
-// DockerCheckResult 是节点 Docker 可用性检测结果（FR-237）。
+// DockerCheckResult 是节点 Docker 可用性检测结果。
 type DockerCheckResult struct {
 	Available bool   `json:"available"`
 	Version   string `json:"version,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
-// CheckDocker 探测目标节点本机 Docker 守护进程可用性（FR-237）。
+// CheckDocker 探测目标节点本机 Docker 守护进程可用性。
 // 节点不存在/离线返回相应错误（router 映射）；Docker 不可用不作错误，返回 available=false + 原因。
 func (s *DockerImageService) CheckDocker(nodeID uint) (*DockerCheckResult, error) {
 	client, err := s.workerClient(nodeID)

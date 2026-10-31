@@ -28,6 +28,9 @@
 | ADR-098 | 日志保留、分层与归档 | 到期默认**搬运 COLD**（禁裸删）；删除三闸（`discard`+`sweep.vl_sweep`+VL `-delete.enable`）默认全关、过滤器只由代码按白名单生成；热 90d 分级（3d/7d/30d/90d 可配）/冷 730d 统一；分层触发=年龄+磁盘水位取先到（磁盘触发 min_age=7d）；gz 只归档文件不解析、**本地 gz 一律不动**；对象存储非第一阶段必需 |
 | ADR-099 | 日志成本治理与不变量 R | 抑制不得造洞（`MergePositionRanges(Process(in)) == MergePositionRanges(in)`，汇总事件承接，R2/R2b 为锚点）；采样/降级/预算默认关；不得绕过缺口 default-deny 判据、`VerifiedRuns`、verify fail-loud；投递路径不得回归每批 O(段总行数) 遍历；correlation 不得进 `stream_fields` |
 | ADR-096 | MCP 端点在 Streamable HTTP 路径上无状态化 | 不得重新引入协议会话（`Mcp-Session-Id` 与随之而来的超时、并发上限、列表/踢线、`SESSION_GONE`）；授权必须取**每请求重建的 principal**；SSE 兼容路径只保留传输连接登记；MCP 运维视图按 Token 聚合（`agent_call_logs`），不依赖进程内状态 |
+| ADR-103 | 业务视图与业务契约退回应用，组件库回归设计系统 | 业务视图只在 `apps/control-plane-web/src/components/views/`、业务 lib 只在 `apps/control-plane-web/src/lib/`；`@jianmanager/ui` 只含设计系统（原语/布局/外壳/12 个 helper），不得再并入业务代码；包与应用不得互相引用（应用→包单向）。由 `ui-package-rollback.test.ts` 守门 |
+| ADR-104 | 危险操作角色门禁由 `DangerConfirm` 自行判定 | 不在 `DangerConfirm` 与其调用点之间传 `allowed`（已删除该 prop）——调用点只声明 `scope`，判定在组件内。新增危险操作不得自行注入门禁结果，也不得依赖「外壳会拦」；后端 RBAC 仍是最终防线 |
+| ADR-105 | AI 助手内置在 Go Control Plane | 助手逻辑必须在 CP 进程内、纯 Go 实现：**不得新增 Node.js/Python 常驻服务或 stdio 子进程**，不得把模型调用或工具循环下放到浏览器（密钥与策略在服务端）。人类 JWT **不得**进入 `/api/v1/mcp`（该端点仍只认 `jmat_` Agent Token，`AgentOrJWT` 中间件保持无实现）；用户委托另走受限执行器，不构造假 AgentPrincipal。AI 配置面的权限判据是 `UserAccess.IsPlatformAdmin`，**不得**用 `requirePlatformAdmin(c)`（该函数只校验 `node.manage`）。供应商/外部 MCP 出站一律经受保护工厂，不得直接 `http.DefaultClient` |
 
 ## 检查时机
 

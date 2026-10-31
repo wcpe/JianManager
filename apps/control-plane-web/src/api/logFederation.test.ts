@@ -1,5 +1,5 @@
-/**
- * api/logFederation 纯映射单测（FR-482）。
+/** 
+ * api/logFederation 纯映射单测。
  * 覆盖 envelope→foundation 归一、ErrFederatedNotReady、404 降级、导出门禁结果。
  */
 import { describe, expect, it } from 'vitest'
@@ -17,7 +17,7 @@ import {
 } from './logFederation'
 import { PARTIAL_REASONS } from '@/lib/logs-federation'
 
-describe('logFederation client mapping（FR-482）', () => {
+describe('logFederation client mapping', () => {
   it('永久位置证据无损映射，旧Worker缺字段兼容，且不改变coverage/quality/导出闸', () => {
     const evidence = { worker_id: 'trusted-worker', storage_namespace: 'shared', from: '18446744073709551614', to: '18446744073709551615', reason_code: 'PERMANENTLY_LOST', operator: '实名', at_utc: '2026-10-08T00:00:00Z', log_source_id: 'inst:1/stdout', source_generation: 'gen-1' }
     const base = { sourceTag: 'federated' as const, items: [], coverage: { complete: true, targets: [] }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' } }

@@ -1,5 +1,5 @@
-/**
- * logs-federation foundation 单测（FR-482）。
+/** 
+ * logs-federation foundation 单测。
  * 覆盖 partial / offline / zero-vs-failure / nextCursor 语义 / 导出下载阻断。
  */
 import { describe, expect, it } from 'vitest'
@@ -23,7 +23,7 @@ import realEn from '@/i18n/en.json'
   import { EXPORT_BLOCK_REASONS, PARTIAL_REASONS } from './types'
   import type { Coverage, LogFederationResponse } from './types'
 
-/**
+/** 
  * get 按点路径从嵌套对象里取值（测试专用，不引第三方依赖）。
  * i18n 键形如 `logsFederation.export.blocked_row_limit`，locale 对象是同形嵌套结构。
  */
@@ -46,7 +46,7 @@ function coverage(partial: Partial<Coverage> = {}): Coverage {
   }
 }
 
-describe('formatCoverageSummary（FR-482 foundation）', () => {
+describe('formatCoverageSummary（foundation）', () => {
   it('complete=true 且无 partial → complete，允许成功空态', () => {
     const s = formatCoverageSummary(coverage())
     expect(s.status).toBe('complete')
@@ -154,7 +154,7 @@ describe('formatCoverageSummary（FR-482 foundation）', () => {
   })
 })
 
-describe('classifyLogViewState（FR-482 foundation）', () => {
+describe('classifyLogViewState（foundation）', () => {
   it('传输失败 ok=false → query_failed，非空成功', () => {
     const res: LogFederationResponse = {
       ok: false,
@@ -346,7 +346,7 @@ describe('classifyLogViewState（FR-482 foundation）', () => {
   })
 })
 
-describe('resolveExportDownloadAffordance（FR-482）', () => {
+describe('resolveExportDownloadAffordance', () => {
   it('覆盖完整 + 校验通过 → showDownload=true，并提示下载前复核权限', () => {
     const res: LogFederationResponse = {
       ok: true,
@@ -432,7 +432,7 @@ describe('resolveExportDownloadAffordance（FR-482）', () => {
   })
 })
 
-describe('导出预算上限文案（FR-480 导出闸）', () => {
+describe('导出预算上限文案（导出闸）', () => {
   // 缺陷背景：导出上限原是编译期常量、前端导出又不传 limit，数据超 10000 行的
   // 用户只能看到笼统的「导出未通过完整性校验」，看不出是行数到顶。
   // 本组用例锁定「行数 / 字节」两条精确 reason 各自映射到专用文案。

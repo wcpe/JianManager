@@ -25,7 +25,7 @@ beforeEach(() => {
   loginMockUser()
 })
 
-describe('InstanceEnvSegment（FR-344 当前 SHA 契约）', () => {
+describe('InstanceEnvSegment（当前 SHA 契约）', () => {
   it('分区展示可编辑 configured 与只读 runtime，并保存 envVars', async () => {
     const user = userEvent.setup()
     let savedBody: Record<string, unknown> | null = null

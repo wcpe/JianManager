@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// topologyRespFull 是 GET /topology 全量响应的测试镜像，含 FR-452/453 新增的 instances 投影。
+// topologyRespFull 是 GET /topology 全量响应的测试镜像，含453 新增的 instances 投影。
 type topologyRespFull struct {
 	Proxies []struct {
 		ID            uint  `json:"id"`
@@ -32,7 +32,7 @@ type topologyRespFull struct {
 	} `json:"instances"`
 }
 
-// TestFR453TopologyIncludesAllInstances 验证 GET /topology 带出全量实例投影（FR-452/453）：
+// TestFR453TopologyIncludesAllInstances 验证 GET /topology 带出全量实例投影（453）：
 // 未注册实例（beacon / 独立服务 / 未挂 BC 的后端）也出现在 instances 里，而 proxies 仍只含已注册代理。
 func TestFR453TopologyIncludesAllInstances(t *testing.T) {
 	db := setupTestDB(t)
@@ -50,7 +50,7 @@ func TestFR453TopologyIncludesAllInstances(t *testing.T) {
 	node := createTestNode(t, db)
 	proxy := createFR032Instance(t, db, node.ID, "topo-proxy", model.InstanceRoleProxy, 25565)
 	backend := createFR032Instance(t, db, node.ID, "reg-backend", model.InstanceRoleBackend, 25566)
-	// 未注册/配套服务：不进 proxies，但必须在 instances 里（FR-453 完整网络视图）。
+	// 未注册/配套服务：不进 proxies，但必须在 instances 里（完整网络视图）。
 	orphan := createFR032Instance(t, db, node.ID, "orphan-backend", model.InstanceRoleBackend, 25567)
 	beacon := createFR032Instance(t, db, node.ID, "beacon-cp", model.InstanceRoleBeacon, 0)
 	require.NoError(t, db.Model(&beacon).Update("type", model.InstanceTypeGeneric).Error)
@@ -87,7 +87,7 @@ func TestFR453TopologyIncludesAllInstances(t *testing.T) {
 }
 
 // TestFR453TopologyInstancesScoped 验证 GET /topology 的 instances 投影按调用者可访问实例收敛
-// （FR-453 自审修复）：路由守卫 network.read 被组管理员/运维/只读持有，非管理员不得看到全量实例元数据。
+// （自审修复）：路由守卫 network.read 被组管理员/运维/只读持有，非管理员不得看到全量实例元数据。
 // 平台管理员仍取全量；proxies/networks 维持既有全量契约不变。
 func TestFR453TopologyInstancesScoped(t *testing.T) {
 	db := setupTestDB(t)

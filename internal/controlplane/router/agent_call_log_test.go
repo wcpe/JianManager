@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-390：Agent 调用流水 HTTP 集成（读成功 / 403 失败 / 401 不刷库 / 查询 API / callCount24h）。
+// Agent 调用流水 HTTP 集成（读成功 / 403 失败 / 401 不刷库 / 查询 API / callCount24h）。
 
 func TestAgentCallLog_WhoamiRecordsAndListAPI(t *testing.T) {
 	db, r, adminJWT, node, inst := setupAgentGate(t)

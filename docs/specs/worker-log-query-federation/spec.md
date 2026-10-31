@@ -55,3 +55,13 @@ QueryPlanner 创建并执行 Query View；Search/Stats/Fields/Facets/Tail/Rehydr
 - Search/Stats/Fields 采用有界增量调度，最多 8 个真实在途；先预留总扫描额度、完成归并后释放未用份额，零份额不调度。入站 `max_bytes=0` 默认整请求 32 MiB，执行时不能把零剩余额度转成默认额度；merged 各段及边界组共享额度。NDJSON 流式读取同时限制预读和超大单行，不先读完整超大行再检查。
 - fanout 截断以原始 Catalog ranges 计，不以合并后任务数偷换；Stats 发起前标 `BUDGET_EXCEEDED` 与 partial 统计质量。达到扫描额度或取消时停止调度并取消在途，正常 limit 分页不误标预算失败。
 - `LogSearchResponse.ingest_position_gaps` 单独返回人工永久放弃位置凭据，实际源/代次由采集账本提供；未知值不推断。它不改变查询时间覆盖、事件统计质量或导出判据；协议字段与 CP 无损 HTTP 形态见 [API.md](../../API.md)。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-479 Worker 日志查询服务（feat）
+
+**需求补充**：Catalog 驱动不重叠权威副本；Search/Stats/Tail/Fields/Facets/StorageHealth/Rehydrate/ArchiveStatus；覆盖状态与 Cursor/水位；取消与预算；**完整验收依赖 477/478** → `docs/specs/worker-log-query-federation/spec.md`
+
+**交付状态**：✅ 已交付@v0.24.0·全查询 RPC/受管 VL 已接线，远程 Search/Stats/Facets/Export 通过；**CP 联邦真机查询通过**（`complete=true`、目标 success、返回事件）

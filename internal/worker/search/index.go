@@ -1,4 +1,4 @@
-// Package search 实现 Worker 本地持久全文索引（FR-074，见 ADR-017）。
+// Package search 实现 Worker 本地持久全文索引（见 ADR-017）。
 //
 // 每个实例一份倒排索引，落进节点数据根的 var/index/<instance-uuid>/（ADR-010）。
 // 索引是 Worker 私有派生资产，绝不进 Control Plane 数据库（架构不变量）：
@@ -71,7 +71,7 @@ func SetBuildStartHookForTest(fn func()) func() {
 
 // Index 是单实例的全文索引。并发安全（自带锁，构建/增量/查询串行化到该实例）。
 //
-// 首建后台化（FR-113，见 ADR-024）：ready/building 为进程内就绪态（不落盘，Worker 重启归零）；
+// 首建后台化（见 ADR-024）：ready/building 为进程内就绪态（不落盘，Worker 重启归零）；
 // builtCh 在首建完成（成功或失败）时关闭，供有界等待者唤醒。building 经 CAS 保证单飞构建。
 type Index struct {
 	mu       sync.Mutex
@@ -112,7 +112,7 @@ func NewIndex(indexRoot, instanceUUID string, extraIgnore []string) *Index {
 	}
 }
 
-// Ready 报告索引是否已完成至少一次构建（可信查询）。进程内状态，Worker 重启归零（FR-113，ADR-024）。
+// Ready 报告索引是否已完成至少一次构建（可信查询）。进程内状态，Worker 重启归零（ADR-024）。
 func (ix *Index) Ready() bool { return ix.ready.Load() }
 
 // EnsureBuilding 若索引未就绪且无构建在途，则启动一次后台全量构建（CAS 单飞，非阻塞）。
@@ -202,7 +202,7 @@ func (ix *Index) save() error {
 	return nil
 }
 
-// Update 扫描工作目录并增量更新索引（FR-074，见 ADR-017）。
+// Update 扫描工作目录并增量更新索引（见 ADR-017）。
 //
 // 遍历当前文件，按指纹(size+mtime)与索引内记录比对：
 //   - 新增/变化文件：重新索引（读内容切词，更新倒排）。
@@ -363,7 +363,7 @@ func (ix *Index) candidateFiles(tokens []string) (map[string]struct{}, bool) {
 	return cand, true
 }
 
-// SearchContent 全文搜索：返回包含 query 的文件中匹配行的行号与片段（FR-074）。
+// SearchContent 全文搜索：返回包含 query 的文件中匹配行的行号与片段。
 // 匹配按子串（大小写不敏感）。倒排缩小候选后在候选文件内精确扫描定位行。
 // workDir 用于读取候选文件内容；maxResults<=0 时取默认上限。
 func (ix *Index) SearchContent(workDir, query string, maxResults int) (Result, error) {

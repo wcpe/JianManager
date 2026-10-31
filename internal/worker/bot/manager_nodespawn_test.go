@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 )
 
-// FR-300：Manager spawn bot-worker 时须用 NodeResolver 的解析结果，
+// Manager spawn bot-worker 时须用 NodeResolver 的解析结果，
 // 无候选回退 PATH "node"（现行为不变），解析缓存失效时 spawn 前重扫重试一次。
 
 // spawnedNodePath 取本代子进程实际使用的 node（Args[0]），加锁避免与 waitChild 竞态。

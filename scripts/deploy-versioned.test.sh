@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FR-410 部署脚本的本地回归测试：使用伪 SSH/SCP 与临时目标目录，不连接真实主机。
+#  部署脚本的本地回归测试：使用伪 SSH/SCP 与临时目标目录，不连接真实主机。
 set -euo pipefail
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -486,7 +486,7 @@ main() {
     prepare_scripts_under_test
     test_cp_first_install_and_legacy_migration
     test_worker_node2_migration_and_failure_rollback
-    printf '%s\n' '通过: FR-410 版本化 user-systemd 部署脚本测试'
+    printf '%s\n' '通过: 版本化 user-systemd 部署脚本测试'
 }
 
 main "$@"

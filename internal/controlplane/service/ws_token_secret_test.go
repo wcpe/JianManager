@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// wsSecretFilePath 在临时数据根下拼出 etc/ws-token-secret.key 路径（FR-275）。
+// wsSecretFilePath 在临时数据根下拼出 etc/ws-token-secret.key 路径。
 func wsSecretFilePath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "etc", wsTokenSecretFileName)
@@ -53,7 +53,7 @@ func TestResolveWSTokenSecret_AutogenPersistsAndStable(t *testing.T) {
 	require.Equal(t, WSTokenSecretSourceGenerated, src1)
 	require.NotEmpty(t, secret1)
 
-	// 文件已落盘且内容即密钥。注：0600 在 Windows 语义有限，不跨平台硬断言权限值（同 FR-263 测试）。
+	// 文件已落盘且内容即密钥。注：0600 在 Windows 语义有限，不跨平台硬断言权限值（同测试）。
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, secret1, string(data))
@@ -86,7 +86,7 @@ func TestResolveWSTokenSecret_EmptyPersistedFileFailsClosed(t *testing.T) {
 	require.Empty(t, src)
 }
 
-// TestWSTokenSecret_IsolatedFromUserSessionSecret 密钥隔离契约（FR-275 验收 #2，见 ADR-061 决策 1）：
+// TestWSTokenSecret_IsolatedFromUserSessionSecret 密钥隔离契约（验收 #2，见 ADR-061 决策 1）：
 // 终端令牌用注入的专用 WS 密钥签发——jwt.secret 校验必须不过（轮换 jwt.secret 不影响终端；
 // 反向亦然：Worker 仅持 WS 密钥，伪造不了会话类令牌）。签发点与 jwt.secret 的分离由
 // cmd/control-plane/main.go 装配保证（TerminalService/TerminalProxy/PluginBridgeService

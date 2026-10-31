@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 备份远程存储后端。凭证以 ${ENV_VAR} 引用，后端不返回明文（FR-057）。 */
+/** 备份远程存储后端。凭证以 ${ENV_VAR} 引用，后端不返回明文。 */
 export interface BackupStorage {
   id: number
   name: string
@@ -57,7 +57,7 @@ export function useBackupStorages() {
   })
 }
 
-/** PUT body 与创建同形；type 须与现值一致（FR-338）。 */
+/** PUT body 与创建同形；type 须与现值一致。 */
 export type UpdateBackupStorageBody = CreateBackupStorageBody
 
 export interface UpdateBackupStorageVars extends CreateBackupStorageBody {
@@ -72,7 +72,7 @@ export function useCreateBackupStorage() {
   })
 }
 
-/** 更新存储后端（FR-338）。全量替换，body 同创建（type 须与现值一致，否则后端回 422）。 */
+/** 更新存储后端。全量替换，body 同创建（type 须与现值一致，否则后端回 422）。 */
 export function useUpdateBackupStorage() {
   const qc = useQueryClient()
   return useMutation({

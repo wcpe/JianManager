@@ -14,32 +14,33 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// paperAPIBase 是 PaperMC 下载 API 根（FR-034/035 核心下载源：paper/velocity/waterfall）。
+// paperAPIBase 是 PaperMC 下载 API 根（035 核心下载源：paper/velocity/waterfall）。
 // 用 fill v3——旧 v2（api.papermc.io/v2）已 sunset（返回 410），真机建服因此全部失效。
 // v3：versions 为 {minor:[patch...]} 分组对象；builds 为数组，下载在 downloads["server:default"]（直给 CDN url + sha256）。
 const paperAPIBase = "https://fill.papermc.io/v3/projects"
 
-// spongeMavenBase 是 Sponge 官方 Maven release 仓库根（FR-046：SpongeVanilla/SpongeForge）。
+// spongeMavenBase 是 Sponge 官方 Maven release 仓库根（：SpongeVanilla/SpongeForge）。
 const spongeMavenBase = "https://repo.spongepowered.org/repository/maven-releases/org/spongepowered"
 
-// forgeMavenBase 是 MinecraftForge 官方 Maven 仓库根（FR-046：SpongeForge 依赖 Forge installer）。
+// forgeMavenBase 是 MinecraftForge 官方 Maven 仓库根（：SpongeForge 依赖 Forge installer）。
 const forgeMavenBase = "https://maven.minecraftforge.net/net/minecraftforge/forge"
 
 // coreHTTPUserAgent 避免部分官方下载页/仓库拒绝 Go 默认 User-Agent。
-const coreHTTPUserAgent = "JianManager/FR-046 (+https://github.com/wcpe/JianManager)"
+const coreHTTPUserAgent = "JianManager(+https://github.com/wcpe/JianManager)"
 
-// bungeeJenkinsURL 是 BungeeCord 最新成功构建的 jar 地址（md-5 Jenkins，FR-035）。
+// bungeeJenkinsURL 是 BungeeCord 最新成功构建的 jar 地址（md-5 Jenkins）。
 // BungeeCord 不在 PaperMC API 上，仅提供单一 latest jar，无 sha256 校验。
 const bungeeJenkinsURL = "https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar"
 
-// CoreTypeBinary 是通用二进制运行时核心类型（FR-441）。
+// CoreTypeBinary 是通用二进制运行时核心类型。
 // 二进制程序（Go/Rust 等编译型配套服务）没有「官方版本解析 API」，分发形态也不是 jar，
 // 因此 ResolveBuild/ListVersions 对其一律短路，制品来源由请求直供（见 BinarySource）。
 const CoreTypeBinary = "binary"
 
-// CoreTypeBeacon 是内置 Beacon 快速搭建预设的核心类型（FR-442，见 ADR-090）。
+// CoreTypeBeacon 是内置 Beacon 快速搭建预设的核心类型（见 ADR-090）。
 //
 // 它是 coreType=binary 之上的**语法糖**：内部展开为 binary + 固定参数
 //（落盘名 `beacon-{version}-linux-amd64`、启动命令 `./beacon-{version}-linux-amd64`、
@@ -47,7 +48,7 @@ const CoreTypeBinary = "binary"
 //（见 ProvisionService.resolveBeaconPresetSource）；本服务只负责「官方来源」的版本解析。
 const CoreTypeBeacon = "beacon"
 
-// beaconReleaseRepo 是 Beacon 官方发布仓库（FR-442 §4.1 的回落来源）。
+// beaconReleaseRepo 是 Beacon 官方发布仓库（§4.1 的回落来源）。
 const beaconReleaseRepo = "wcpe/Beacon"
 
 // beaconLatestVersion 是 Beacon 预设的版本占位（同 bungeecord 的 latest 语义）：
@@ -55,14 +56,14 @@ const beaconReleaseRepo = "wcpe/Beacon"
 const beaconLatestVersion = "latest"
 
 // ErrBinaryCoreNotResolvable 表示对 binary 核心调用了 MC 核心的版本/构建解析。
-// binary 跳过「版本 → 构建 → 下载 URL + 校验和」全部三段解析（FR-441 §3.1），
+// binary 跳过「版本 → 构建 → 下载 URL + 校验和」全部三段解析（§3.1），
 // 调用方应改走 ProvenanceBinarySource 直供制品来源，而非在此解析核心。
 var ErrBinaryCoreNotResolvable = errors.New("binary 核心不适用版本/构建解析：请直接提供制品来源（asset/url/node_file）")
 
 // ErrBeaconReleaseUnavailable 表示 GitHub Releases 中没有可用的 Beacon Linux 产物。
 var ErrBeaconReleaseUnavailable = errors.New("Beacon 官方发布没有可用的 linux-amd64 产物")
 
-// BeaconRelease 是 GitHub Releases 归一后的 Beacon 发布资产（FR-442）。
+// BeaconRelease 是 GitHub Releases 归一后的 Beacon 发布资产。
 type BeaconRelease struct {
 	// Version 是 tag 去掉 `v` 前缀后的版本号，用于拼 beacon-{version}-linux-amd64。
 	Version string
@@ -76,10 +77,10 @@ type BeaconRelease struct {
 	SHA256 string
 }
 
-// IsBeaconCore 判断核心类型是否为内置 Beacon 预设（FR-442）。
+// IsBeaconCore 判断核心类型是否为内置 Beacon 预设。
 func IsBeaconCore(coreType string) bool { return project(coreType) == CoreTypeBeacon }
 
-// IsBinaryCore 判断核心类型是否走通用二进制搭建路径（FR-441 / FR-442）。
+// IsBinaryCore 判断核心类型是否走通用二进制搭建路径。
 //
 // beacon 是 binary 之上的预设语法糖，取件形态（Worker FetchBinary）+ 实例默认属性
 //（generic 类型、不绑 JDK、startCommand 承载启动）与 binary 完全一致，故一并归入该路径；
@@ -111,22 +112,22 @@ type CoreInfo struct {
 	DownloadURL string           `json:"downloadUrl"`
 	SHA256      string           `json:"sha256"`
 	Runtime     *CoreRuntimeInfo `json:"runtime,omitempty"`
-	// JavaMajorRequired 该 MC 版本所需的最低 Java 大版本（FR-316 搭建向导 JDK 兼容预检）。
+	// JavaMajorRequired 该 MC 版本所需的最低 Java 大版本（搭建向导 JDK 兼容预检）。
 	// Paper 取 fill v3 官方元数据、失败回退内置映射表；Sponge 用内置映射表；
 	// 0=未知/不设需求（代理核心或解析不出的版本，前端不据此拦截）。
 	JavaMajorRequired int `json:"javaMajorRequired,omitempty"`
 }
 
-// CoreService 解析 MC 服务端核心的可用版本与下载信息（FR-034/046）。
+// CoreService 解析 MC 服务端核心的可用版本与下载信息（046）。
 type CoreService struct {
 	client *http.Client
-	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次请求取当前 client，
+	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次请求取当前 client，
 	// 使全局代理改动即时生效（补足 20s 超时）。优先于固定 client。
 	httpProvider func() *http.Client
 	base         string // PaperMC 下载 API 根，测试可注入 httptest 地址
 	spongeBase   string // Sponge Maven 根，测试可注入 httptest 地址
 	forgeBase    string // Forge Maven 根，测试可注入 httptest 地址
-	// beaconAPIBase 是 GitHub REST API 根（FR-442 Beacon 预设的官方回落来源），
+	// beaconAPIBase 是 GitHub REST API 根（Beacon 预设的官方回落来源），
 	// 测试可注入 httptest 地址；空时用 defaultGitHubAPIBase。
 	beaconAPIBase string
 }
@@ -141,7 +142,7 @@ func NewCoreService() *CoreService {
 	}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：解析核心版本/构建的 API 请求经此 client。
+// SetHTTPClient 注入出站 client（经进程级代理ADR-037）：解析核心版本/构建的 API 请求经此 client。
 // 由 main 装配；client 为 nil 时忽略（保留默认）。注入的 client 若未设 Timeout，补足 20s 避免无限等待。
 func (s *CoreService) SetHTTPClient(c *http.Client) {
 	if c == nil {
@@ -150,7 +151,7 @@ func (s *CoreService) SetHTTPClient(c *http.Client) {
 	s.client = withDefaultTimeout(c)
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次请求取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次请求取当前 client，
 // 使全局代理改动即时生效。优先于 SetHTTPClient 注入的固定 client；补足 20s 超时避免无限等待。
 func (s *CoreService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
@@ -183,14 +184,14 @@ func withDefaultTimeout(c *http.Client) *http.Client {
 // paper/velocity/waterfall 走 PaperMC API；Sponge 走官方 Maven metadata；bungeecord 仅有单一 latest。
 func (s *CoreService) ListVersions(ctx context.Context, coreType string) ([]string, error) {
 	p := project(coreType)
-	// binary（FR-441）无官方版本源：不给「版本列表」语义，显式报错而非返回空列表被误读为「无可用版本」。
+	// binary无官方版本源：不给「版本列表」语义，显式报错而非返回空列表被误读为「无可用版本」。
 	if p == CoreTypeBinary {
 		return nil, ErrBinaryCoreNotResolvable
 	}
 	if p == "bungeecord" {
 		return []string{"latest"}, nil
 	}
-	// beacon 预设（FR-442）同样无版本选择语义，与 bungeecord 同口径给单一 latest：
+	// beacon 预设同样无版本选择语义，与 bungeecord 同口径给单一 latest：
 	// 实际生效版本在搭建时解析（制品库最新 > GitHub 最新 release），避免此处发起网络请求
 	// 把「版本列表」变成搭建链路的隐性前置依赖。
 	if p == CoreTypeBeacon {
@@ -237,7 +238,7 @@ func flattenPaperVersions(raw json.RawMessage) ([]string, error) {
 	return versions, nil
 }
 
-// beaconBinaryFilename 拼出 Beacon 的落盘文件名（FR-442 §4.2）：beacon-{version}-linux-amd64。
+// beaconBinaryFilename 拼出 Beacon 的落盘文件名（§4.2）：beacon-{version}-linux-amd64。
 // 该名同时是 startCommand 的派生依据（`./beacon-{version}-linux-amd64`）。
 func beaconBinaryFilename(version string) string {
 	return fmt.Sprintf("beacon-%s-linux-amd64", strings.TrimSpace(version))
@@ -254,7 +255,7 @@ func beaconVersionFromTag(tag string) string {
 	return version
 }
 
-// ResolveBeaconRelease 解析 Beacon 官方 GitHub Releases 的最新发布（FR-442 §4.1 的回落来源）。
+// ResolveBeaconRelease 解析 Beacon 官方 GitHub Releases 的最新发布（§4.1 的回落来源）。
 //
 // 走 `/repos/wcpe/Beacon/releases/latest`：GitHub 的 latest 端点只返回**非 prerelease、非 draft**
 // 的最新正式发布，恰好符合「预设恒取最新稳定版」的语义，无需自行从列表中筛。
@@ -339,7 +340,7 @@ func isBeaconLinuxBinaryName(name string) bool {
 	return true
 }
 
-// beaconAPIBaseURL 返回 GitHub REST API 根（FR-442）：测试可注入 httptest 地址，生产用官方基址。
+// beaconAPIBaseURL 返回 GitHub REST API 根：测试可注入 httptest 地址，生产用官方基址。
 func (s *CoreService) beaconAPIBaseURL() string {
 	if s != nil && strings.TrimSpace(s.beaconAPIBase) != "" {
 		return strings.TrimRight(strings.TrimSpace(s.beaconAPIBase), "/")
@@ -349,8 +350,8 @@ func (s *CoreService) beaconAPIBaseURL() string {
 
 // ResolveBuild 解析指定核心类型/版本的下载信息。build<=0 取最新构建。
 // bungeecord 直接返回 md-5 Jenkins 的 latest jar（无版本/构建/校验）。
-// binary（FR-441）不做任何解析，直接报错引导调用方走制品来源直供路径。
-// beacon（FR-442）解析官方 GitHub Releases 的最新 linux-amd64 产物。
+// binary不做任何解析，直接报错引导调用方走制品来源直供路径。
+// beacon解析官方 GitHub Releases 的最新 linux-amd64 产物。
 func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion string, build int) (*CoreInfo, error) {
 	p := project(coreType)
 	if p == CoreTypeBinary {
@@ -385,7 +386,7 @@ func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion stri
 		if err != nil {
 			return nil, err
 		}
-		// Sponge 官方 Maven 无 java 需求元数据，用 CP 内置映射表（FR-316）。
+		// Sponge 官方 Maven 无 java 需求元数据，用 CP 内置映射表。
 		info.JavaMajorRequired = javaMajorForMCVersion(info.MCVersion)
 		return info, nil
 	}
@@ -440,7 +441,7 @@ func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion stri
 		DownloadURL: dl.URL,
 		SHA256:      dl.Checksums.SHA256,
 	}
-	// 仅后端核心 paper 附带 java 需求（FR-316）：velocity/waterfall 是代理，
+	// 仅后端核心 paper 附带 java 需求：velocity/waterfall 是代理，
 	// 其版本号非 MC 版本语义，搭建向导 JDK 预检不适用，不设需求。
 	if p == "paper" {
 		info.JavaMajorRequired = s.paperVersionJavaMinimum(ctx, p, mcVersion)
@@ -451,7 +452,7 @@ func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion stri
 	return info, nil
 }
 
-// paperVersionJavaMinimum 查 fill v3 版本详情中的 java.version.minimum（Paper 官方元数据，FR-316）。
+// paperVersionJavaMinimum 查 fill v3 版本详情中的 java.version.minimum（Paper 官方元数据）。
 // 任一环节失败（网络/404/字段缺失）返回 0，由调用方回退内置映射表——java 需求获取绝不阻断核心解析。
 func (s *CoreService) paperVersionJavaMinimum(ctx context.Context, project, mcVersion string) int {
 	var out struct {
@@ -472,7 +473,7 @@ func (s *CoreService) paperVersionJavaMinimum(ctx context.Context, project, mcVe
 	return out.Version.Java.Version.Minimum
 }
 
-// javaRequirementThresholds 是 MC 版本 → 最低 Java 大版本的保守映射表（FR-316），
+// javaRequirementThresholds 是 MC 版本 → 最低 Java 大版本的保守映射表，
 // 按版本下限从新到旧排列，命中首个「mcVersion ≥ 下限」的条目。
 // 依据 Mojang 公告/PaperMC 元数据：≤1.16→8、1.17→16、1.18~1.20.4→17、1.20.5+→21、
 // 26.1+（2026 年起年号制命名，真机事故：26.1 要求 Java 25）→25。
@@ -489,7 +490,7 @@ var javaRequirementThresholds = []struct {
 }
 
 // javaMajorForMCVersion 返回 mcVersion 所需的最低 Java 大版本；
-// 未知/解析不出的版本返回 0（不设需求，宽容不误拦，FR-316）。
+// 未知/解析不出的版本返回 0（不设需求，宽容不误拦）。
 func javaMajorForMCVersion(mcVersion string) int {
 	segs, ok := parseVersionSegments(mcVersion)
 	if !ok {
@@ -627,7 +628,7 @@ func paperFamily(t string) bool {
 	return false
 }
 
-// spongeFamily 判断核心类型是否为 Sponge 后端核心（FR-046）。
+// spongeFamily 判断核心类型是否为 Sponge 后端核心。
 func spongeFamily(t string) bool {
 	switch project(t) {
 	case "spongevanilla", "spongeforge":
@@ -636,7 +637,7 @@ func spongeFamily(t string) bool {
 	return false
 }
 
-// IsProxyCore 判断核心类型是否为代理核心（FR-035）。
+// IsProxyCore 判断核心类型是否为代理核心。
 func IsProxyCore(coreType string) bool {
 	switch project(coreType) {
 	case "velocity", "waterfall", "bungeecord":
@@ -651,6 +652,26 @@ func IsVelocityCore(coreType string) bool {
 }
 
 func project(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+
+// KindForCoreType 把搭建用的 coreType 映射成面向运维的「服务端类别」。
+//
+// 三分法（用户确认的粒度，不细分 Paper/Spigot/Bukkit）：
+//   - 代理：velocity / waterfall / bungeecord
+//   - 二进制：binary / beacon（以及任何非 MC 核心的通用二进制）
+//   - 插件服：其余 MC 服务端核心（paper / spongevanilla / spongeforge / purpur …）
+//
+// 【为什么「其余」归插件服而不是报错】coreType 是开放集合（新增核心不该逼迫本函数同步），
+// 而 MC Java 服务端的绝大多数形态都是「装插件的服务端」。未知值归到最常见的一类，
+// 比让整行显示「未知」更有信息量；真出现非插件服的新核心时，`Instance.Kind` 显式赋值优先。
+func KindForCoreType(coreType string) model.InstanceKind {
+	switch project(coreType) {
+	case "velocity", "waterfall", "bungeecord":
+		return model.InstanceKindProxy
+	case CoreTypeBinary, CoreTypeBeacon:
+		return model.InstanceKindBinary
+	}
+	return model.InstanceKindPlugin
+}
 
 type mavenMetadata struct {
 	Versioning struct {

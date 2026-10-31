@@ -6,10 +6,10 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import SettingsPage from './SettingsPage'
-import { keyCategory, validateSettingDraft } from './settings-form'
+import { keyCategory, validateSettingDraft } from '@/lib/settings/settings-form'
 
-/**
- * SettingsPage 强断言（FR-210）：渲染 seed 平台配置 → 改设置保存联动回读新值 → 注入 500 显错误态。
+/** 
+ * SettingsPage 强断言：渲染 seed 平台配置 → 改设置保存联动回读新值 → 注入 500 显错误态。
  * 平台配置分类仅平台管理员（role=10）可见，故以 role=10 的假 JWT 登录。
  */
 
@@ -85,7 +85,7 @@ describe('SettingsPage（mock 假后端）', () => {
     expect(validateSettingDraft('platform.public_base_url', 'http://user:pass@panel.example.com')).toBe('settings.invalidPlatformPublicBaseUrl')
   })
 
-  // github.token（FR-409）：网络分类可编辑 + 快捷创建按钮新标签打开 GitHub fine-grained 令牌创建页（名字/描述/永不过期预填）。
+  // github.token：网络分类可编辑 + 快捷创建按钮新标签打开 GitHub fine-grained 令牌创建页（名字/描述/永不过期预填）。
   it('github.token 归网络分类，快捷按钮直达 GitHub 创建页', async () => {
     loginAsPlatformAdmin()
     const user = userEvent.setup()
@@ -102,5 +102,38 @@ describe('SettingsPage（mock 假后端）', () => {
       'noopener,noreferrer',
     )
     openSpy.mockRestore()
+  })
+})
+
+describe('SettingsPage 布尔设置项（输入侧优化）', () => {
+  /** 
+   * debug.mode 是唯一的布尔型平台设置。
+   *
+   * 此前它被做成 true/false 下拉：二值状态变成「选项」，读起来像还有第三种可能。
+   * 改为 Switch 后必须保证**提交值仍是字符串 "true"/"false"**——后端契约不变，
+   * 否则一次「界面优化」会静默改变 API 语义。
+   */
+  it('debug.mode 渲染为开关，切换后提交字符串值', async () => {
+    loginAsPlatformAdmin()
+    const user = userEvent.setup()
+    renderWithProviders(<SettingsPage />)
+
+    await user.click(await screen.findByRole('button', { name: /日志/ }))
+    // 键名在标签与等宽说明里各出现一次，故用 getAllByText。
+    expect((await screen.findAllByText('debug.mode')).length).toBeGreaterThan(0)
+
+    // 开关的可访问名取的是**中文标签**（不是键名），故按标签文字断言，
+    // 这样能同时证明「用户看到的名字」与「控件的可访问名」一致。
+    // 用 getAllByRole 取首个：Radix Switch 内部还会渲染一个隐藏的 input[role=switch]，
+    // 两者可访问名相同，getByRole 会因歧义失败。
+    const toggles = await screen.findAllByRole('switch', { name: /调试模式/ })
+    const toggle = toggles[0]!
+    // 种子里是 false，故初始未选中。
+    expect(toggle).not.toBeChecked()
+
+    await user.click(toggle)
+    await waitFor(() => expect(toggle).toBeChecked())
+    // 旁边文字同步反映状态（避免只有颜色/位置变化这一个信号），用 getAllByText 避免歧义。
+    expect(screen.getAllByText('开启').length).toBeGreaterThan(0)
   })
 })

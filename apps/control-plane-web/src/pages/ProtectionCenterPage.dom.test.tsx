@@ -9,8 +9,8 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import ProtectionCenterPage from './ProtectionCenterPage'
 
-/**
- * 页面 B 安全侧行为（FR-264/430）：全量日志聚合视图、画像详情、事件行 DangerConfirm 写入门控。
+/** 
+ * 页面 B 安全侧行为（430）：全量日志聚合视图、画像详情、事件行 DangerConfirm 写入门控。
  * 页面已重写为「客户端分发运维」外壳；`data-page="client-dist-ops"`，Tab/路由均改新体系。
  */
 function loginPlatformAdmin(): void {
@@ -75,7 +75,8 @@ describe('ProtectionCenterPage（页面 B · 安全侧）', () => {
     const { container } = renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-ops?tab=logs&type=all' })
 
     expect(container.firstElementChild).toHaveAttribute('data-page', 'client-dist-ops')
-    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    // 全量对齐起，外壳改用布局层 PageShell（原为手写的 jm-page-stack 骨架类）。
+    expect(container.firstElementChild).toHaveAttribute('data-slot', 'page-shell')
     expect(screen.getByRole('heading', { name: '客户端分发运维' })).toBeInTheDocument()
     expect(screen.getByRole('tablist')).toHaveClass('jm-toolbar-surface')
     expect(screen.queryByRole('tab', { name: '遥测告知' })).not.toBeInTheDocument()

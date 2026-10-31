@@ -26,7 +26,7 @@ import (
 // GET/DELETE 改 405、无凭据仍 401；SSE 兼容路径（/message）的连接语义保持不变；
 // 以及传输层的生命周期归属——进行中的 tool call 在 SSE 路径上挂在**连接 ctx**上
 // （POST 的请求 ctx 不参与）、在无状态路径上挂在请求 ctx 上；
-// 调用流水的 client 取自 X-JM-Agent-Client（FR-390）。
+// 调用流水的 client 取自 X-JM-Agent-Client。
 
 func newStatelessHandler() (*Handler, *SSEConnRegistry) {
 	reg := NewSSEConnRegistry()
@@ -489,7 +489,7 @@ func TestHandleSSE_ConnCloseUnregistersEntry(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond, "connDone 分支也应注销，否则连接会永久滞留在 map 中")
 }
 
-// ---- 调用流水的 client 标识（FR-390）----
+// 调用流水的 client 标识----
 
 // TestToolsCall_RecordsClientFromAgentClientHeader 流水记录请求头声明的客户端。
 //
@@ -537,7 +537,7 @@ func TestToolsCall_RecordsClientFromAgentClientHeader(t *testing.T) {
 
 // TestToolsCall_ClientUnreportedIsUnknown 未经 AgentAuth 注入 client 时归 unknown。
 //
-// 与 Ops HTTP 面同一口径（FR-390）：缺省、不在白名单一律归 unknown。handler 不按
+// 与 Ops HTTP 面同一口径：缺省、不在白名单一律归 unknown。handler 不按
 // 「MCP 路径」兜底为 mcp——本端点同样接受 curl/脚本直连，硬编码会把这类未自报的调用
 // 记成 MCP 客户端，抹平活动视图的客户端分布（理由详见 agentClientOf）。
 func TestToolsCall_ClientUnreportedIsUnknown(t *testing.T) {

@@ -1,13 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  logLevelStatus,
-  timeRangeToParams,
-  buildExportParams,
-  computeVirtualWindow,
-  TIME_RANGE_PRESETS,
-  LOG_VIEWS,
-  type LogExportScope,
-} from './logs-filters'
+import { logLevelStatus, timeRangeToParams, buildExportParams, computeVirtualWindow, TIME_RANGE_PRESETS, LOG_VIEWS } from '@/lib/logs/logs-filters'
+import type { LogExportScope } from '@/lib/logs/logs-filters'
 import type { LogQueryParams } from '@/api/logs'
 
 describe('logLevelStatus', () => {
@@ -29,7 +22,7 @@ describe('logLevelStatus', () => {
 
 describe('LOG_VIEWS', () => {
   it('defines the primary views plus the administrator-only full search and legacy view', () => {
-    // legacy 由 FR-482 引入：切换后存量日志走 Legacy 只读路径，需与 federated 视图分列。
+    // legacy 由引入：切换后存量日志走 Legacy 只读路径，需与 federated 视图分列。
     expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all', 'legacy'])
   })
 })

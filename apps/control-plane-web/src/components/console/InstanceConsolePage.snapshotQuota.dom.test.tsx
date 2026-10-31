@@ -10,11 +10,11 @@ import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionsStore } from '@/stores/permissions'
-import { DEFAULT_ROLE_NODES } from '@/lib/roles'
+import { DEFAULT_ROLE_NODES } from '@/lib/shared/roles'
 import InstanceConsolePage from './InstanceConsolePage'
 
-/**
- * FR-466 / FR-467 / FR-468：实例控制台内的三个新面板（按能力画像落位）。
+/** 
+ *：实例控制台内的三个新面板（按能力画像落位）。
  * 数据来自 devmock：
  * - GET /instances/:id/snapshots（实例 3 两条：一条 manual + 一条 pre_rollback；实例 2 空）
  * - GET /instances/:id/quota（实例 3 有内存限额且为 docker；实例 1 为 daemon）
@@ -26,7 +26,7 @@ import InstanceConsolePage from './InstanceConsolePage'
  * - 配额 / 二进制版本 → 「概览」页签（overview 是所有画像都存在的唯一 Tab）
  */
 
-/**
+/** 
  * 授予组管理员角色：快照回滚/删除走 DangerConfirm `scope="group"`，需 role≥1 才放行确认。
  * loginMockUser 的默认 token 解不出 role（未登录态 → 门禁判拒绝）。
  */
@@ -51,7 +51,7 @@ function snapshotRow(panel: HTMLElement, name: string): HTMLElement {
   return row as HTMLElement
 }
 
-/**
+/** 
  * 模拟只读角色（group_viewer：持 `instance.read`，但**无** `instance.write` / `instance.delete`）。
  *
  * 必须**同时**改假后端用户表：页面挂载后会拉 `/auth/me` 并覆盖权限 store，
@@ -75,7 +75,7 @@ function loginAsReadOnly(): void {
   })
 }
 
-describe('实例控制台 快照 / 配额 / 二进制版本（FR-466/467/468）', () => {
+describe('实例控制台 快照 / 配额 / 二进制版本（467/468）', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -399,7 +399,7 @@ describe('实例控制台 快照 / 配额 / 二进制版本（FR-466/467/468）'
   })
 })
 
-/**
+/** 
  * W-10：前端权限门禁（与后端 RBAC 同口径的**提前提示**，最终拒绝仍由 CP 强制）。
  * 只读角色持 `instance.read`（能看到面板），但不持 `instance.write` / `instance.delete`。
  * 原先三个面板的按钮不看权限，只读用户看到的是「可点击的破坏性按钮」，点下去只得一个 403。

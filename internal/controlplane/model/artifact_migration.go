@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ArtifactMigration 一次制品存量迁移任务的登记与实时计数（FR-348，底座见 ADR-073）。
+// ArtifactMigration 一次制品存量迁移任务的登记与实时计数（底座见 ADR-073）。
 // task_id 1:1 关联 tasks 行（kind=artifact_migrate）。计数独立成行而非塞 Task.Result/Detail：
 // 失败任务无 result、Detail 被阶段文本覆写，独立行保证「总数/已迁/失败/跳过」随迁移逐条
 // 持久推进，前端渠道页可精确展示。
@@ -23,7 +23,7 @@ type ArtifactMigration struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// ArtifactMigrationFailure 迁移失败明细（FR-348）：逐条落库可查（制品 sha256 + 原因），
+// ArtifactMigrationFailure 迁移失败明细：逐条落库可查（制品 sha256 + 原因），
 // 按 task_id 隔离（每次任务独立一批）；重试 = 重新发起同目标迁移。
 type ArtifactMigrationFailure struct {
 	ID      uint   `gorm:"primaryKey" json:"id"`

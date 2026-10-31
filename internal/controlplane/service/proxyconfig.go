@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// proxyServerEntry 是写入代理配置的单条后端 server（由 ServerRegistration + 后端地址派生，FR-035）。
+// proxyServerEntry 是写入代理配置的单条后端 server（由 ServerRegistration + 后端地址派生）。
 // 由 ProxyService 预先按 priority 升序排列、过滤掉 disabled，并解析好 Address（host:port）。
 type proxyServerEntry struct {
 	Alias      string
@@ -39,7 +39,7 @@ func tomlEscapeString(s string) string {
 // secret 不写入此文件，而是写入 forwarding-secret-file 指向的 forwarding.secret。
 func buildVelocityToml(listenPort int, motd string, onlineMode bool, entries []proxyServerEntry) string {
 	var b strings.Builder
-	b.WriteString("# 由 JianManager 生成（FR-035）。servers/try/forced-hosts 由平台注册关系同步管理。\n")
+	b.WriteString("# 由 JianManager 生成。servers/try/forced-hosts 由平台注册关系同步管理。\n")
 	b.WriteString("config-version = \"2.7\"\n")
 	fmt.Fprintf(&b, "bind = \"0.0.0.0:%d\"\n", listenPort)
 	fmt.Fprintf(&b, "motd = \"%s\"\n", tomlEscapeString(motd))
@@ -71,7 +71,7 @@ func buildVelocityToml(listenPort int, motd string, onlineMode bool, entries []p
 	return b.String()
 }
 
-// bungee config.yml 的最小可用结构（FR-035）。BungeeCord/Waterfall 启动时会补全其余默认键。
+// bungee config.yml 的最小可用结构。BungeeCord/Waterfall 启动时会补全其余默认键。
 type bungeeServerCfg struct {
 	Motd       string `yaml:"motd"`
 	Address    string `yaml:"address"`
@@ -138,7 +138,7 @@ func buildBungeeConfig(listenPort int, motd string, onlineMode bool, entries []p
 	if err != nil {
 		return "", fmt.Errorf("生成 bungee config.yml 失败: %w", err)
 	}
-	return "# 由 JianManager 生成（FR-035）。servers/priorities/forced_hosts 由平台注册关系同步管理。\n" + string(out), nil
+	return "# 由 JianManager 生成。servers/priorities/forced_hosts 由平台注册关系同步管理。\n" + string(out), nil
 }
 
 // setNestedYAML 在 YAML 文本中设置嵌套键（缺失路径自动创建），保留其它键。

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useConsoleStore } from './console'
 
-/**
- * 侧栏折叠态切换（FR-131 / FR-181）。
- * FR-181 让顶部 logo 整体复用既有 `toggleSidebar` action 触发收缩/展开，
+/** 
+ * 侧栏折叠态切换。
+ *让顶部 logo 整体复用既有 `toggleSidebar` action 触发收缩/展开，
  * 折叠态下 logo 仍可点回展开。这里直接验证被复用的 store action：
  * 反复切换须在「展开 ⇄ 折叠」间严格取反，保证 logo 点击行为可预期。
  */

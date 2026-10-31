@@ -1,5 +1,5 @@
-/**
- * 批量注释/取消注释的行为级集成测试（FR-073）。
+/** 
+ * 批量注释/取消注释的行为级集成测试。
  *
  * 不只断言纯函数表，而是真在 EditorState 上跑 CodeMirror 的 toggleComment：
  * 验证「按文件类型注释符」是经 EditorState.languageData 注入 commentTokens 后
@@ -11,8 +11,8 @@
 import { describe, it, expect } from 'vitest'
 import { EditorState, EditorSelection, type Command } from '@codemirror/state'
 import { toggleComment } from '@codemirror/commands'
-import { languageKindFor } from '../language'
-import { commentTokensForFilename } from './comment'
+import { languageKindFor } from '@/lib/explorer/explorer-language'
+import { commentTokensForFilename } from '@/lib/explorer/explorer-comment'
 
 /** 用某文件名对应的注释符建一个光标在行首的最小编辑状态。 */
 function stateFor(filename: string, doc: string): EditorState {
@@ -42,7 +42,7 @@ function runCommand(cmd: Command, state: EditorState): string {
   return ok ? next.doc.toString() : state.doc.toString()
 }
 
-describe('toggleComment with file-type comment tokens (FR-073)', () => {
+describe('toggleComment with file-type comment tokens ', () => {
   it('comments a plain/yaml line with #', () => {
     expect(runCommand(toggleComment, stateFor('latest.log', 'hello'))).toBe('# hello')
     expect(runCommand(toggleComment, stateFor('config.yml', 'a: 1'))).toBe('# a: 1')

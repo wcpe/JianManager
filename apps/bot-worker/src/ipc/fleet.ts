@@ -22,7 +22,7 @@ const MAX_BATCH_SIZE = 50
 const MAX_SIGNAL_BATCH_SIZE = 100
 const DEFAULT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000
-/**
+/** 
  * 大舰队默认客户端视距：2 是协议允许的最小值。
  *
  * 实测（30 Bot 稳态，同机同服）：视距从 'tiny'(6) 降到 2，
@@ -30,14 +30,14 @@ const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000
  * CPU 持平——区块解析开销在收到时已付清，常驻的是区块数据本身。
  */
 const DEFAULT_VIEW_DISTANCE = process.env.JM_BOT_WORKER_VIEW_DISTANCE || 2
-/**
+/** 
  * 无需本地物理模拟的行为集合：这些行为不让 Bot 自行移动。
  * Mineflayer 给每个 Bot 挂一个 50ms 物理 timer（碰撞/重力/区块查询），
  * 数百 Bot 时是单线程事件循环的最大开销，会导致 keepalive 滞后被服务器
  * 判 Timed out 集体踢下线；站立不动的 Bot 关掉它可显著降低稳态占用。
  */
 const PHYSICS_FREE_BEHAVIORS = new Set(['idle'])
-/**
+/** 
  * 大舰队默认禁用的 Mineflayer 内建插件。
  *
  * Mineflayer 无条件加载 39 个插件，其中多数只服务于「真实玩法」（挖矿、合成、
@@ -114,7 +114,7 @@ function resolvePhysicsEnabled(config: BotConfig): boolean {
   const behavior = (config.behavior || 'idle').toLowerCase()
   return !PHYSICS_FREE_BEHAVIORS.has(behavior)
 }
-/** 自动重连：base=1s、max=60s、jitter=20%；连续失败 ≥10 次后固定 max delay（FR-365）。 */
+/** 自动重连：base=1s、max=60s、jitter=20%；连续失败 ≥10 次后固定 max delay。 */
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_MAX_MS = 60_000
 const RECONNECT_JITTER_RATIO = 0.2
@@ -351,7 +351,7 @@ export class FleetController {
         // 快速跳过无实际工作的 Bot。
         //
         // 必要性：本 tick 每 250ms 跑一次全量 Bot。若对每个 Bot 都 await 一次
-        //（即使 IdleBehavior.tick 是空函数），500 Bot 会产生 2000 次/秒的微任务
+        // （即使 IdleBehavior.tick 是空函数），500 Bot 会产生 2000 次/秒的微任务
         // 让出与恢复，与 mineflayer 的收包处理争抢事件循环调度，实测把 p95 推到
         // 十几秒（心跳/keepalive 随之停发）。这里把「不需要 tick」的判定提到 await 之前，
         // 让纯 idle 的 Bot 完全不产生微任务。
@@ -363,7 +363,7 @@ export class FleetController {
     }
   }
 
-  /**
+  /** 
    * 该实例本轮是否需要执行行为 tick。
    *
    * 只有「有场景脚本」或「行为确实需要周期性推进」的实例才需要；
@@ -426,7 +426,7 @@ export class FleetController {
     return this.bots.get(botId)?.mcBot ?? null
   }
 
-/** 通过 Bot UUID 查找 Mineflayer 实例（FR-369 命令编排使用）。 */
+/** 通过 Bot UUID 查找 Mineflayer 实例（命令编排使用）。 */
   getBotByUuid(botUuid: string): McBotLike | null {
     for (const instance of this.bots.values()) {
       if (instance.config.id === botUuid || instance.config.id.toLowerCase() === botUuid.toLowerCase()) {
@@ -796,7 +796,7 @@ export class FleetController {
     this.scheduleReconnect(botId, instance, reason)
   }
 
-  /**
+  /** 
    * ReconnectController：kicked/end/error 且 desiredRunning 时调度重连。
    * delay = min(base*2^attempt, max) + jitter；≥10 次后固定 max delay。
    */

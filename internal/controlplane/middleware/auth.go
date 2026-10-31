@@ -80,7 +80,7 @@ func RequireRole(minRole model.UserRole) gin.HandlerFunc {
 	}
 }
 
-// RequirePerm 要求权限树节点（FR-432 / ADR-089）。
+// RequirePerm 要求权限树节点（ADR-089）。
 // 平台管理员始终放行；其余用户按 UserAccess.Nodes 判断。
 func RequirePerm(node string) gin.HandlerFunc {
 	return RequireAnyPerm(node)

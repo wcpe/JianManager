@@ -1,6 +1,6 @@
 package config
 
-// 采集索引（FR-496）配置键的接线回归：`log_index.batch_prune.*`（§6 索引有界化）与
+// 采集索引配置键的接线回归：`log_index.batch_prune.*`（§6 索引有界化）与
 // `log_index.persist.*`（§3.4 持久化切分）。
 //
 // 为什么需要本文件：`ledger.DeliveryBatchPruneConfig` 早就实现且默认开启，但此前只经

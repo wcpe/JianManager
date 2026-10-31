@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// PlatformSetting 平台配置的 DB 覆盖项（FR-063 / ADR-015）。
+// PlatformSetting 平台配置的 DB 覆盖项（ADR-015）。
 //
 // 只存「被显式覆盖过的白名单键」：未覆盖的键不落库，沿用 env/YAML 基线。
 // 生效优先级 DB 覆盖 > 环境变量 > YAML 默认，由 SettingsService 解析有效配置时叠加。

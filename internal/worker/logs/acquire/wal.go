@@ -1,5 +1,5 @@
-// Package acquire 实现 FR-474 采集通道：FileTailer / ArchiveImporter / WAL / 容量门禁。
-// 与 normalize 的边界通过 EventBoundaryHook 导出，本包不实现 FR-475 解析逻辑。
+// Package acquire 实现采集通道：FileTailer / ArchiveImporter / WAL / 容量门禁。
+// 与 normalize 的边界通过 EventBoundaryHook 导出，本包不实现解析逻辑。
 package acquire
 
 import (
@@ -15,7 +15,7 @@ import (
 )
 
 // WALRef 是 WAL 条目的**引用形式**：只保存身份与位置，正文以 canonical 事件段存储
-// （events/，FR-484 的权威副本）为准（B1a）。
+// （events的权威副本）为准（B1a）。
 //
 // 为什么需要：WALEntry 内联 logtypes.Event（含正文），而整份 WAL 会随 ingest.state.json
 // 持久化——单源积压曾因此把状态文件撑到 1.2 GB（2026-09-28 生产事故）。
@@ -63,7 +63,7 @@ func (w *WAL) SnapshotSplit(covered func(logtypes.Event) bool) (refs []WALRef, i
 // RestoreMixed 恢复内存 WAL：inline 为内联正文条目，refs 为引用条目（正文经 hydrate 取回）。
 //
 // 合并后按 Seq 升序排列，保持投递顺序。取不到正文的引用**不得静默丢弃**：以 missing 原样
-// 返回，由调用方记可见缺口并告警（与 FR-474 §5#1「截断可见」同口径）。
+// 返回，由调用方记可见缺口并告警（与§5#1「截断可见」同口径）。
 //
 // 回放标记随 refs 双向往返（ACQ-1）：`WALRef.Replay` 落到重建条目的 `WALEntry.Replay` 上，
 // 否则重启后回放条目会重新计入闸视图（见 WALRef.Replay 的说明 ✓）。

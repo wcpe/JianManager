@@ -2,14 +2,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import type { InstanceInfo } from '@/api/instances'
 
-/** 复制子服请求体（对应后端 service.CloneInstanceRequest，FR-036）。 */
+/** 复制子服请求体（对应后端 service.CloneInstanceRequest）。 */
 export interface CloneBody {
   name: string
   motd?: string
   levelName?: string
   registerToProxyIds?: number[]
   dryRun?: boolean
-  /** 复制模式（FR-231）：quick=核心 jar+插件+根配置；advanced=按 include/exclude（省略=advanced）。 */
+  /** 复制模式：quick=核心 jar+插件+根配置；advanced=按 include/exclude（省略=advanced）。 */
   mode?: 'quick' | 'advanced'
   include?: string[]
   exclude?: string[]
@@ -34,7 +34,7 @@ export function useCloneInstance(sourceId: number) {
     onSuccess: (res) => {
       if (!res.dryRun) {
         qc.invalidateQueries({ queryKey: ['instances'] })
-        qc.invalidateQueries({ queryKey: ['tasks'] }) // FR-323：克隆拷贝走任务中心
+        qc.invalidateQueries({ queryKey: ['tasks'] }) // 克隆拷贝走任务中心
       }
     },
   })

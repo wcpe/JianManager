@@ -34,7 +34,7 @@ func startReapedSleeper(t *testing.T) (int, func()) {
 	}
 }
 
-// TestRemoveInstance_ReapsLingeringDaemonTree 复现 FR-310 真机缺陷：删除运行中 daemon 实例时，
+// TestRemoveInstance_ReapsLingeringDaemonTree 复现真机缺陷：删除运行中 daemon 实例时，
 // 删除流程只杀 wrapper 组，Unix 上自成进程组（wrapper.applyProcAttr）的 Java 子进程未死，
 // RemoveAll 之后 Java 继续写 world region 把工作目录重建出来（worker 日志打印「已清理工作目录」，
 // 盘上却残留 world/plugins），且 wrapper 被强杀时其 defer 未执行、遗留 <uuid>.pid / <uuid>.sock。

@@ -217,7 +217,7 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 	defer d.readWg.Done()
 	// 连接断开时收回引用（仅在它仍是当前连接时）：否则 controlConnected 会长期误判
 	// 「仍持有长连接」，从而抑制证据采集在缺乏进程证据时的 socket 兜底探活——那会让
-	// FR-455 的存活判定退化（进程其实在跑，却因探活被抑制而报不在跑）。
+	// 的存活判定退化（进程其实在跑，却因探活被抑制而报不在跑）。
 	// 身份比对不可省：换连后旧 readLoop 也会走到这里，不能把新连接一并清掉。
 	defer func() {
 		d.mu.Lock()
@@ -248,7 +248,7 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 				d.mgr.onOutput(d.spec.UUID, stream, data)
 			}
 		case daemon.ChannelControl:
-			// wrapper 上抛的进程退出事件（FR-313）：daemon 模式退出码只有 wrapper 能拿到，
+			// wrapper 上抛的进程退出事件：daemon 模式退出码只有 wrapper 能拿到，
 			// 经此扇出崩溃现场供组装快照上报 CP。老 wrapper 不发事件帧，此分支自然不触达。
 			if fr.Type == daemon.TypeEvent {
 				if ev, ok := daemon.DecodeExitEvent(fr.Payload); ok {
@@ -364,7 +364,7 @@ func (d *daemonStrategy) stopViaFreshDial() bool {
 }
 
 // sendControlViaFreshDial 即时拨号 wrapper socket 下发一条控制帧（不缓存连接）。
-// 供「连接尚未建立 / 既有连接已断」的兜底路径复用（FIX-C 停止、FR-459 熔断禁用自动重启）。
+// 供「连接尚未建立 / 既有连接已断」的兜底路径复用（FIX-C 停止熔断禁用自动重启）。
 func (d *daemonStrategy) sendControlViaFreshDial(cmd string) bool {
 	addr := daemon.SocketAddr(d.pidDir, d.spec.UUID)
 	conn, err := daemon.Dial(addr)
@@ -379,7 +379,7 @@ func (d *daemonStrategy) sendControlViaFreshDial(cmd string) bool {
 	return f.Encode(conn) == nil
 }
 
-// DisableAutoRestart 实现 FR-459 崩溃熔断的 daemon 生效路径：向 wrapper 下发「禁用自动重启」
+// DisableAutoRestart 实现崩溃熔断的 daemon 生效路径：向 wrapper 下发「禁用自动重启」
 // 控制帧（粘性），使 wrapper 内部按启动期 env 快照完成的自动重启被真正拦住——Worker 无法
 // 直接触及 wrapper 内部状态，必须经此控制通道。
 //
@@ -395,7 +395,7 @@ func (d *daemonStrategy) DisableAutoRestart() error {
 	return nil
 }
 
-// EnableAutoRestart 实现 FR-459 熔断人工解除的 daemon 复位路径：向 wrapper 下发「恢复自动重启」
+// EnableAutoRestart 实现熔断人工解除的 daemon 复位路径：向 wrapper 下发「恢复自动重启」
 // 控制帧（清 wrapper 内粘性 autoRestartOff），与 DisableAutoRestart 对称。
 //
 // 必要性（终验 Major）：熔断在 Java 仍在运行时触发时只发禁用帧、保 RUNNING；人工解除若只清 Worker

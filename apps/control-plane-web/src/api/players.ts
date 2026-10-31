@@ -3,59 +3,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
-/** 在线玩家及其所在子服（BC 跨服感知，FR-054）。 */
-export interface OnlinePlayer {
-  name: string
-  instanceId: number
-  instanceName: string
-}
-
-/** 单个后端子服的探针可用性（优雅降级提示，FR-067）。 */
-export interface BackendStatus {
-  instanceId: number
-  instanceName: string
-  available: boolean
-  error?: string
-}
-
-/** 在线玩家聚合结果。 */
-export interface OnlinePlayersResult {
-  players: OnlinePlayer[]
-  backends: BackendStatus[]
-}
-
-/** 踢/封/解封在多后端的执行汇总。 */
-export interface PlayerActionResult {
-  player: string
-  action: string
-  total: number
-  succeeded: number
-  failed: number
-  results: { instanceId: number; instanceName: string; ok: boolean; output?: string; error?: string }[]
-}
-
-/** 封禁记录（FR-054）。 */
-export interface BanRecord {
-  id: number
-  uuid: string
-  playerName: string
-  reason: string
-  scope: 'network' | 'instance' | 'global'
-  scopeId: number
-  operatorId: number
-  active: boolean
-  createdAt: string
-  unbannedAt?: string | null
-  operator?: { id: number; username: string }
-}
-
-/** 单后端白名单查询结果。 */
-export interface WhitelistResult {
-  instanceId: number
-  available: boolean
-  players: string[]
-  error?: string
-}
+/** 在线玩家及其所在子服（BC 跨服感知）。 */
+// 玩家治理契约已回迁应用侧（受控视图与业务页面共用，ADR-103）；此处原样再导出，调用点无需改动。
+// 本地绑定供本文件的查询/变更泛型使用。
+import type { BanRecord, OnlinePlayersResult, PlayerActionResult, WhitelistResult } from '@/lib/players/player'
+export type { BackendStatus, BanRecord, OnlinePlayer, OnlinePlayersResult, PlayerActionResult, WhitelistResult } from '@/lib/players/player'
 
 /** 踢/封/解封作用域（互斥，按 instanceId > networkId > 全部 解析）。 */
 export interface PlayerActionScope {
@@ -64,14 +16,20 @@ export interface PlayerActionScope {
   reason?: string
 }
 
-/** 在线玩家列表（聚合可达后端探针，标注所在子服，FR-067）。每 10s 刷新。 */
-export function useOnlinePlayers() {
+/** 
+ * 在线玩家列表（聚合可达后端探针，标注所在子服）。每 10s 刷新。
+ *
+ * `options.enabled` 供调用方按当前 Tab 门控：名册原挂在「在线玩家」Tab 组件内，Radix 未激活即不挂载，
+ * 因此只有该 Tab 才请求（且才带 10s 轮询）；视图受控化后 hook 归容器，改由该开关保住同一时机。
+ */
+export function useOnlinePlayers(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['players', 'online'],
     queryFn: async () => {
       const { data } = await api.get<OnlinePlayersResult>('/players')
       return data
     },
+    enabled: options?.enabled ?? true,
     refetchInterval: 10000,
   })
 }
@@ -109,8 +67,13 @@ export function useUnbanPlayer() {
   })
 }
 
-/** 封禁记录列表。 */
-export function useBans(params?: { player?: string; active?: boolean }) {
+/** 
+ * 封禁记录列表。
+ *
+ * `options.enabled` 供调用方按当前 Tab 门控：列表原挂在「封禁记录」Tab 组件内，Radix 未激活即不挂载，
+ * 因此只有该 Tab 才请求；视图受控化后 hook 归容器，改由该开关保住同一时机。
+ */
+export function useBans(params?: { player?: string; active?: boolean }, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['bans', params],
     queryFn: async () => {
@@ -119,6 +82,7 @@ export function useBans(params?: { player?: string; active?: boolean }) {
       })
       return data
     },
+    enabled: options?.enabled ?? true,
   })
 }
 
@@ -144,7 +108,7 @@ export function useWhitelistAction(instanceId: number | null) {
   })
 }
 
-/** 探针经反向 WS 实时上报的玩家事件类型（FR-066）。 */
+/** 探针经反向 WS 实时上报的玩家事件类型。 */
 export type PlayerEventType =
   | 'connected'
   | 'disconnected'
@@ -189,8 +153,8 @@ export interface PlayerEventsState {
 /** 事件面板保留的最近事件条数上限。 */
 const MAX_EVENTS = 100
 
-/**
- * 订阅某实例的实时玩家事件 SSE（FR-066）：维护在线名册 + 最近事件流。
+/** 
+ * 订阅某实例的实时玩家事件 SSE：维护在线名册 + 最近事件流。
  *
  * 经 `/instances/:id/players/events` 连接（fetch + ReadableStream，复用 events.ts 的 SSE 解析形态，
  * 因 EventSource 不支持自定义鉴权头）。首帧 `event: init` 携带探针连接状态 + 名册快照；

@@ -72,7 +72,7 @@ func TestParseChecksums(t *testing.T) {
 }
 
 // ghTestServer 起一个模拟 GitHub Releases API 的 httptest 服务，
-// 覆盖 /releases/latest（stable）与 /releases/tags/latest（prerelease 滚动，FR-182）两端点与 checksums.txt 资产下载。
+// 覆盖 /releases/latest（stable）与 /releases/tags/latest（prerelease 滚动）两端点与 checksums.txt 资产下载。
 func ghTestServer(t *testing.T, latestBody, prereleaseBody string, withChecksums bool, checksumsBody string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -110,7 +110,7 @@ func ghTestServer(t *testing.T, latestBody, prereleaseBody string, withChecksums
 		}
 		_, _ = w.Write([]byte(releaseJSON(latestBody)))
 	})
-	// prerelease 渠道：滚动预发布固定 tag 名为 latest（FR-182，由 nightly 改名）。
+	// prerelease 渠道：滚动预发布固定 tag 名为 latest（由 nightly 改名）。
 	mux.HandleFunc("/repos/owner/repo/releases/tags/latest", func(w http.ResponseWriter, _ *http.Request) {
 		if prereleaseBody == "" {
 			w.WriteHeader(http.StatusNotFound)
@@ -152,7 +152,7 @@ func TestFetchGitHubRelease_Stable(t *testing.T) {
 
 func TestFetchGitHubRelease_PrereleaseChannel(t *testing.T) {
 	checksums := fmt.Sprintf("ccc  %s\nddd  %s\n", assetName(ComponentControlPlane), assetName(ComponentWorker))
-	// /releases/latest 返回 v1.0.0；/releases/tags/latest 返回滚动预发布。channel=prerelease 应取后者（FR-182）。
+	// /releases/latest 返回 v1.0.0；/releases/tags/latest 返回滚动预发布。channel=prerelease 应取后者。
 	srv := ghTestServer(t, "v1.0.0", "0.0.0-dev+abc1234", true, checksums)
 	svc := newGHService(t, srv.URL, "prerelease")
 
@@ -244,7 +244,7 @@ func TestConfigured_GitHubRepo(t *testing.T) {
 }
 
 func TestResolveRelease_FallbackToFeed(t *testing.T) {
-	// github_repo 空 + feed_url 非空 → 走原 feed 路径（FR-081 行为不破）。
+	// github_repo 空 + feed_url 非空 → 走原 feed 路径（行为不破）。
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"version":"5.0.0","notes":"feed","artifacts":[{"component":"worker","os":"linux","arch":"amd64","url":"u","sha256":"s"}]}`))
 	}))
@@ -326,7 +326,7 @@ func TestCheckUpdate_RateLimitedPropagates(t *testing.T) {
 }
 
 // TestSelfUpdate_EffectiveGitHubToken 令牌解析：动态读取器（设置面板 github.token）优先于
-// 启动基线；`${ENV_VAR}` 引用经环境变量展开（FR-063/FR-409）。
+// 启动基线；`${ENV_VAR}` 引用经环境变量展开。
 func TestSelfUpdate_EffectiveGitHubToken(t *testing.T) {
 	svc := NewSelfUpdateService(newSelfUpdateTestDB(t), cpgrpc.NewClientPool(), SelfUpdateConfig{GitHubToken: "ghp_base"}, nil)
 	require.Equal(t, "ghp_base", svc.effectiveGitHubToken())

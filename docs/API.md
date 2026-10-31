@@ -225,6 +225,15 @@
 - **权限**: `node.read`
 - **响应**: `[{ id, uuid, name, host, status, os, cpuCores, memoryMb, lastHeartbeat }]`
 
+### GET /api/v1/nodes/startup-progress
+- **描述**: 返回**正在启动、尚未注册**的 Worker 进度（FR-486）。启动中的 Worker 在 `nodes` 表里没有记录（首装连 UUID 都还没有），故单独成端点，避免在节点列表里凭空出现「存在但从未上线」的节点。
+- **关联 FR**: FR-486
+- **权限**: `node.read`
+- **响应**: `{ items: [{ key, nodeUuid?, nodeName, phase, phaseElapsedMs, totalElapsedMs, phasesDone, phasesTotal, updatedAt, stale }] }`
+  - `phase` 取值与 Worker 侧 `startup.Phase` 对齐：`config` / `dataroot` / `identity` / `process_recover` / `ingest_state_load` / `register` / `heartbeat`（`ingest_index_open` 因 `ingest.New` 内部不可拆而合并入 `ingest_state_load`）。
+  - **只返回未陈旧的进度**：`stale` 恒为 `false`（陈旧行代表已死掉的启动过程，展示成「启动中」会误导运维去等待而非查进程）。陈旧阈值为 5 分钟，由后端计算——前端拿 `updatedAt` 自行比较会受客户端时钟偏差影响。
+  - 注册成功后该行被归并到真实 UUID，并在终态 `heartbeat` 阶段删除。
+
 ### GET /api/v1/nodes/:id
 - **描述**: 节点详情（含资源使用率）
 - **关联 FR**: FR-004
@@ -722,10 +731,13 @@
 
 ### GET /api/v1/metrics/resource-attribution
 - **描述**: 首页仪表 Tooltip 的有界受管资源归因。节点当前资源来自已认证 Heartbeat；实例/进程只来自 RUNNING 的 JianManager 受管实例进程树最新快照。Worker 与共享 Bot Worker 资源均为观察值，RSS 可能含共享页，不能与节点已用内存相加或当作单 Bot 资源。
-- **关联 FR**: FR-400
+- **关联 FR**: FR-400、**FR-513**（主机级观测字段）
 - **权限**: 平台管理员；不扩展 `/metrics/overview` 的普通登录聚合权限。
 - **Query**: `sort=cpu|memory`（默认 `memory`）；`limit=1..10`（默认 `5`）。
-  - **响应**: `{ sampledAt, freshness, nodes, topInstances, topProcesses }`；节点 `status`/顶层 `freshness` 为 `fresh|stale|offline|unavailable`。不可用 CPU/RSS/Bot 数值为 `null`；`nodes` 含 `nodeUuid` 供监控页下钻。`botWorker.capacityMax` 仅为已就绪共享 Bot Worker 上报的真实最大容量，缺失时为 `null` 且由 `capacityUnavailableReason` 解释。Bot Worker 未启动、旧 Worker 未上报或快照过期时 `botWorker.available=false` 且带 `reason`。
+  - **响应**: `{ sampledAt, freshness, nodes, topInstances, topProcesses, hostTopProcesses }`；节点 `status`/顶层 `freshness` 为 `fresh|stale|offline|unavailable`。不可用 CPU/RSS/Bot 数值为 `null`；`nodes` 含 `nodeUuid` 供监控页下钻。
+  - **FR-513 主机级字段（全部可 null，null≠0）**：节点增 `load5Pct`/`load15Pct`（已按核数归一，与 `loadPct` 同口径）、`procsRunning`/`procsTotal`（**主机级**，非实例内）、`cpuBreakdown{user,nice,system,idle,iowait,irq,softirq,steal}`（百分比 0..100）、`mounts[]{mountpoint,totalBytes,usedBytes,usedPct}`（按使用率降序，仅鲜度窗口内）；顶层 `hostTopProcesses[]{nodeId,nodeName,pid,comm,cpuPct,rssBytes}` 是**整机** top-N（含系统进程，与 `topProcesses` 的受管进程树口径不同，不可混用）。
+  - **`null` 与 `0` 的语义必须区分**：`null` = 该 Worker 未上报（老版本）或快照过期，前端渲染 `--`；`0` = 上报了且读数为零。把「不知道」画成 0 会让运维误判机器空闲。
+  - **隐私边界**：`hostTopProcesses` 只含 `comm`，**不含 cmdline**（cmdline 常带密码/token/内网地址）。`botWorker.capacityMax` 仅为已就绪共享 Bot Worker 上报的真实最大容量，缺失时为 `null` 且由 `capacityUnavailableReason` 解释。Bot Worker 未启动、旧 Worker 未上报或快照过期时 `botWorker.available=false` 且带 `reason`。
 - **错误**: 400 `INVALID_ARGUMENT`（非法排序或上限）；403 `FORBIDDEN`。
 
 ### GET /api/v1/metrics/processes/top
@@ -947,6 +959,42 @@
 - **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
 - **关联 FR**: FR-076 ｜ **关联 ADR**: ADR-016
 
+### GET /api/v1/instances/:id/bridge/status
+- **描述**: 查询某实例探针桥的线路健康度（FR-526 §2.3）。经 Worker 下发 `core.bridge_status` 治理命令到探针，取回线路快照并**扁平化**为契约字段（重连次数/队列深度/丢弃帧数/在途重载数/探针版本）。用于排障：探针是否在线、是否频繁重连（网络不稳）、队列是否积压（背压）、是否有丢弃。CP 不解析探针的完整快照（`pools`/`routes`/`inbound` 等更细结构刻意不建模，避免长出本不该有的语义）
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `200`，`{ "instanceId":3, "connected":true, "connectedSince":"2026-10-23T12:00:00Z", "reconnectCount":3, "lastDisconnectReason":"network_reset", "queueDepth":14, "droppedFrames":10, "pendingReloads":6, "probeVersion":"2", "fetchedAt":"2026-10-23T12:00:05Z", "error":"" }`
+  - `connected=false`：探针未连入 / 节点未连 → 字段留零值 + `error` 说明（HTTP 200，排障接口不因"要查的东西不在"返回 5xx）
+  - `queueDepth` = 探针 sender 的 `commandResultQueue` + `reliableQueue` + cmd/event 池 `queued`
+  - `droppedFrames` = `bestEffortDropped` + `reliableRejected` + `spillDropped`（都是"已受理但没送到"）
+  - `pendingReloads` = 探针 reload 池的 `active`
+- **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
+- **关联 FR**: FR-526 ｜ **关联 ADR**: ADR-016, ADR-106
+
+### PUT /api/v1/instances/:id/bridge/subscription
+- **描述**: 设置某实例的事件主题订阅（FR-526 §2.1）。转成探针 `core.subscribe` 下发，用于减少上行流量
+  - **未设置过订阅**：探针全量上报（兼容现状）
+  - **设置订阅后**：只上报匹配 `topics`/`domains` 的业务事件 **+ 所有非业务事件**（connected/heartbeat/bridge_status 等不受过滤影响，否则平台失去连接状态感知）
+  - **重复 PUT 覆盖**之前的订阅，**不是追加**
+  - **空数组表示"订阅全部"**（等价于从未设置）
+  - `domains` 由 Worker 展开成 `<domain>.*` 后并入 topics 下发（探针侧过滤维度只有 topic，无独立 domain 维度）
+- **权限**: `instance.read`（订阅改的是「上报多少」（流量/可观测性），不是实例配置也不是业务数据；提到 `instance.operate` 只会逼运维借写权限）
+- **请求**: `{ "topics":["activity.spring","activity.*"], "domains":["activity"] }`
+- **响应**: `200`，`{ "applied":true, "topics":["activity.spring","activity.*"], "domains":["activity"] }`
+  - `topics` 是探针回执的**实际生效集合**（去重、字典序、已展开），可能与请求值不同
+- **错误**: `400 INVALID_REQUEST`（请求体非法）、`403 FORBIDDEN`、`404 NOT_FOUND`、**`409 PROBE_UNAVAILABLE`**（探针未连接——订阅没有探针就无从生效，不假装成功）
+- **关联 FR**: FR-526 ｜ **关联 ADR**: ADR-016, ADR-106
+
+### GET /api/v1/instances/:id/business/status
+- **描述**: 查询某实例探针上注册的所有业务域及其健康状态（FR-526 §2.4）。经 Worker 下发 `core.business_status` 治理命令，返回域清单 + 可用性 + manifest 指纹 + 调用计数
+  - **只渲染不解释**：返回探针上报的原始状态，`manifestDigest` 只是指纹（先用它判断是否变化，再决定是否拉全量），JM 不解析 manifest 内容、不按 domain 做业务语义归类
+  - **缓存 TTL 30 秒**：缓存存内存不落库（域状态是探针运行期快照，落库会让人误以为它是平台数据）；探针不可达时返回**最后已知**状态并置 `stale=true`（比返回空更有用）
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `200`，`{ "instanceId":3, "instanceName":"smp-1", "probeConnected":true, "fetchedAt":"2026-10-23T12:00:00Z", "stale":false, "domains":[ { "domain":"activity", "available":true, "degradedReason":"", "manifestDigest":"sha256:…", "lastDispatchAt":1700000000, "dispatchCount":12, "failureCount":1 } ], "error":"" }`
+  - `stale=true`：探针不可达，`domains` 是最后一次已知状态（可能为空）+ `error` 说明（HTTP 200，面板要能渲染）
+  - `domains` 恒为数组（空为 `[]`，不会是 `null`），按域名排序
+- **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
+- **关联 FR**: FR-526 ｜ **关联 ADR**: ADR-016, ADR-106
+
 ### GET /api/v1/instances/:id/crash-snapshots
 - **描述**: 实例崩溃快照列表（FR-313，增强 FR-470）：进程非正常退出的现场留存（Worker 经 gRPC `ReportCrashSnapshot` 上报入库，每实例滚动保留最近 5 条，删实例级联清）。按发生时间倒序返回（最新在前），空结果回 `[]`；供实例控制台「崩溃诊断」卡。**FR-470 起每条附根因归类 + 置信度 + 命中证据 + 资源关联**
 - **权限**: `instance.read`（且实例须可访问；不可访问按存在性隐藏返回 404）
@@ -1065,53 +1113,110 @@
 - **关联 FR**: FR-466
 
 ### POST /api/v1/instances/:id/business
-- **描述**: JBIS 业务对接——向某实例下发一条业务命令（`domain.action` + 结构化 `payload`）并取回结果（FR-116/FR-121，见 ADR-026/027/029）。CP **插件无关**：经既有探针桥（ADR-016）把信封下发到目标实例 ServerProbe 业务对接层（BusinessHost→per-plugin Provider 执行），结果 JSON 原样透传，CP 不解析。`domain` 区分业务域（`economy`/`inventory`…），与监控/治理（`core.*`）同桥分流
-- **权限**: 读动作（`write=false`/缺省）`instance.operate`；**写动作（`write=true`，对应 manifest `readOnly=false`，如改余额/改背包）`instance.business.write`**（FR-121）。两者均须实例可访问
-- **请求**: `{ "domain":"economy", "action":"balance", "payload":"{\"player\":\"alice\",\"currency\":\"coin\"}", "write":false }`
+- **描述**: JBIS 业务对接——向某实例下发一条业务命令（`domain.action` + 结构化 `payload`）并取回结果（FR-116/FR-121，见 ADR-026/029；FR-521 起收窄为纯透传通道，见 ADR-106）。CP **插件无关**：经既有探针桥（ADR-016）把信封下发到目标实例 ServerProbe 业务对接层（BusinessHost→per-plugin Provider 执行），结果 JSON 原样透传，CP 不解析。`domain` 由下游约定（JM 不定义任何取值），与监控/治理（`core.*`）同桥分流
+- **权限**: 读动作（`write=false`/缺省）`instance.operate`；**写动作（`write=true`，对应 manifest `readOnly=false`）`instance.business.write`**（FR-121）。两者均须实例可访问
+- **请求**: `{ "domain":"<下游约定>", "action":"<下游约定>", "payload":"{...}", "write":false }`
   - `payload`：结构化参数 JSON 字符串，CP 不解析原样下发；`domain`/`action` 必填
   - `write`（可选，默认 `false`）：是否为高危写动作；前端据 manifest `readOnly` 取反设置
-  - `operationId`（可选，写动作必带）：**幂等标识**，对同一逻辑操作的重试必须稳定。CP 用作 payload `taskId`（探针→插件 mce `BusinessOrder` 幂等键，跨节点重试天然防重）；缺省时 CP 兜底生成（但失去重试去重）
-  - `reason`（可选）：操作原因，透传进插件流水 `reason` + JM 审计
-  - 写动作时 CP 向 payload 注入 `taskId`/`operator`/`operatorId`/`nodeId`/`reason`（仅当业务方未显式同名入参时），使插件审计流水记录操作者（哪个管理员/哪个节点/为什么）
-- **响应**: `200`，`{ "instanceId":3, "domain":"economy", "action":"balance", "available":true, "output": {...业务结果JSON...}, "error":"" }`
+  - `operationId`（可选，写动作必带）：**幂等标识**，对同一逻辑操作的重试必须稳定。CP 原样注入 payload `taskId`（跨节点重试天然防重）；缺省时 CP 兜底生成（但失去重试去重）
+  - `reason`（可选）：操作原因，原样透传给下游 + JM 审计
+  - 写动作时 CP 向 payload 注入 `taskId`/`operator`/`operatorId`/`nodeId`/`reason`（仅当业务方未显式同名入参时），供下游插件审计流水记录操作者（哪个管理员/哪个节点/为什么）
+- **响应**: `200`，`{ "instanceId":3, "domain":"…", "action":"…", "available":true, "output": {...下游返回JSON...}, "error":"" }`
   - `available=false`：探针未连入/域不可用/Provider 执行失败 → `output` 为 `null` + `error` 说明（HTTP 200，降级不 5xx）
-- **背包域当前写能力**: `domain=inventory, action=writeBasicAttrs` 写玩家基础属性；payload 形如 `{player, base:{dataVersion,basicAttrs}, edited:{dataVersion,basicAttrs}}`。物品发放/回收因 AllinInventorySync 2.0.0 未导出可外部消费的结构化物品写门面，当前不在 manifest 中
-- **审计**: 写动作记 `business.write`（detail 含 domain/action/operationId/reason/available）；`inventory.writeBasicAttrs` 额外记录 `player` 与变更字段列表 `fields`；审计中间件兜底记 `business.dispatch`（覆盖读+写）
+- **背包域当前写能力**: 见 manifest（JM 不解析 manifest 内容、不在文档里定义任何业务动作与 payload 字段——FR-521 / ADR-106）。业务动作名、payload 与 output 字段的权威定义在下游业务台与插件侧
+- **审计**: 写动作记 `business.write`（detail 仅含通道事实：domain/action/operationId/reason/available）；审计中间件兜底记 `business.dispatch`（覆盖读+写）。**payload 与 output 一律不入审计**（ADR-106 §4：可能含玩家数据、密钥、PII，且一旦记录就会长出业务查询能力）
 - **错误**: `400 INVALID_REQUEST`（缺 domain/action 或 payload 非法 JSON）、`403 FORBIDDEN`（读缺 `instance.operate` / 写缺 `instance.business.write`）、`404 NOT_FOUND`（实例不可见/不存在）
-- **关联 FR**: FR-116, FR-121 ｜ **关联 ADR**: ADR-026, ADR-027, ADR-029
+- **关联 FR**: FR-116, FR-121, FR-521 ｜ **关联 ADR**: ADR-026, ADR-027, ADR-029, ADR-106
+
+> **边界铁律（FR-521 / ADR-106）**：本接口是**纯透传通道**。JM 不理解任何业务语义——不定义动作名、不规定 payload/output 字段、不解析 manifest 内容、不存储任何业务数据。四个业务读接口（`GET /business/events`、`/business/economy/{mirror,aggregate,leaderboard}`）已随 FR-521 整体退役。
 
 ### GET /api/v1/instances/:id/business/manifest
-- **描述**: 取某实例的业务能力清单（JBIS 元查询，FR-116）。CP 复用业务下发通道下发保留元命令（`domain=jbis` + `action=manifest`），探针侧 `BusinessHost` 返回各业务 Provider 汇总的能力清单 JSON（`{"domains":{...}}`），供前端**动态发现各域能力、动态渲染**（不硬编码具体插件）。元命令不派发到任何业务 Provider
+- **描述**: 取某实例的业务能力清单（JBIS 元查询，FR-116；FR-521 起见 ADR-106）。CP 复用业务下发通道下发保留元命令（`domain=jbis` + `action=manifest`），探针侧 `BusinessHost` 返回各业务 Provider 汇总的能力清单 JSON（`{"domains":{...}}`），**原样透传**。元命令不派发到任何业务 Provider。JM 不解析清单内容、不据此做任何业务决策
 - **权限**: `instance.read`（只读发现；且实例须可访问）
-- **响应**: `200`，`{ "instanceId":3, "domain":"jbis", "action":"manifest", "available":true, "output": { "domains": { "economy": { "actions":[{"action":"balance","args":["player","currency"],"readOnly":true}] } } }, "error":"" }`
+- **响应**: `200`，`{ "instanceId":3, "domain":"jbis", "action":"manifest", "available":true, "output": { "domains": { "...": { "actions":[...] } } }, "error":"" }`（`output` 结构由下游探针/插件决定，JM 不作为契约对外承诺）
   - `available=false`：探针未连入/无业务 Provider → `output` 为 `null` + `error`（HTTP 200，降级不 5xx）
 - **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
-- **关联 FR**: FR-116 ｜ **关联 ADR**: ADR-026, ADR-027
+- **关联 FR**: FR-116, FR-521 ｜ **关联 ADR**: ADR-026, ADR-027, ADR-106
 
-### GET /api/v1/business/economy/mirror
-- **描述**: 经济余额镜像（FR-122，CP 自有汇聚镜像、非业务真源）：逐 `node→zone` 行返回最新余额（跨区同名玩家分行不混）。Query `?player=&currency=&node=&zone=&limit=`（任意组合过滤）
-- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
-- **响应**: `{ "balances":[{ "nodeUuid":"","instanceUuid":"","zoneId":"0","playerName":"Steve","currency":"coin","currencyId":1,"balance":"100.00","lastSeq":3,"lastLedgerId":7,"occurredAt":0 }] }`（余额字符串承载 BigDecimal，禁浮点）
-- **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
+### POST /api/v1/business/batch/preview
+- **描述**: 解析批量目标并评估风险，必要时签发确认令牌（FR-523 / FR-535 两阶段流程第一步）。**无副作用，可重复调用**
+- **权限**: `instance.operate`（只解析不产生副作用）；结果按调用方可访问实例集合收敛
+- **请求**: `{ "target": { "groupIds":[3,7], "includeDescendants":true }, "actionRisk":"WRITE" }`
+  - `target.groupIds[]` + `includeDescendants`：按实例组织分组树（集群→大区→小区，ADR-033）递归展开为实例集合
+  - `target.instanceIds[]`（可选）：与分组展开结果**取交集**
+  - `target.filters`（可选）：`{ nodeId, status, role }` 进一步收敛
+  - `groupIds` 与 `instanceIds` 至少给一个；都不给返回 `TARGET_EMPTY`（**刻意不退化成「全量实例」**）
+  - `actionRisk`（可选）：动作自身风险 `READ`/`WRITE`/`DESTRUCTIVE`，由业务台从 manifest `ActionSpec.risk` 读取后透传。未声明或非法值一律按 `WRITE` 处理（与规格「插件未声明时按 WRITE 处理」一致）
+- **响应**: `200`
+  ```json
+  { "resolved": { "instanceCount": 87, "online": 84, "offline": 3, "instanceIds": [1,2,5], "truncated": false },
+    "groups": [ { "id": 3, "name": "region1", "path": "cluster-main/region1", "instanceCount": 45 } ],
+    "risk": { "level": "high", "reasons": ["跨 2 个大区","影响 87 个实例","含 3 个离线实例"],
+              "requiresConfirmation": true, "requiresReason": false, "online": 84, "offline": 3 },
+    "confirmToken": "bpt_...", "expiresAt": "2026-10-23T12:05:00Z" }
+  ```
+  - `resolved.instanceIds`：超过 500 个只返回前 100 个并置 `truncated=true`
+  - `risk.level`：`low` / `medium` / `high` / `critical`（**注意**：这是「本次批量影响面」的分级，与动作自身的 `READ`/`WRITE`/`DESTRUCTIVE` 是两个不同维度）
+  - `confirmToken`：**仅在 `high`/`critical` 时签发**（5 分钟有效）；低风险不签发，调用方据 `risk.requiresConfirmation` 决定是否走确认步骤
+  - `offline` 判定口径：实例状态非 `RUNNING`（预览是廉价只读操作，不实探探针名册；执行阶段按真实下发结果给出精确计数）
+- **风险分级**（多条件命中取最高）:
 
-### GET /api/v1/business/economy/aggregate
-- **描述**: 跨区经济聚合明细（FR-122）：按 `player`+`currency` 逐 `node→zone` 返回**不盲目求和**（mce 账户按 zone 隔离，是否相加由调用方按业务语义定）。Query `?player=&currency=`
-- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
-- **响应**: `{ "rows":[{ "nodeUuid":"","zoneId":"0","balance":"100.00" }] }`
-- **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
+  | 条件 | 级别 |
+  |---|---|
+  | 单实例 / 同小区 ≤10 台 | `low` |
+  | 同小区 >10 台 | `medium` |
+  | 跨小区、同大区 | `medium` |
+  | 含离线实例 | `medium` |
+  | **跨大区** | **`high`** |
+  | **跨集群** | **`high`** |
+  | **实例数 > 50** | **`high`** |
+  | 动作 `risk=DESTRUCTIVE` | **`critical`**（另需填 `reason`） |
 
-### GET /api/v1/business/economy/leaderboard
-- **描述**: 某货币余额倒序 Top-N（FR-123 旁路排行：mce 无 leaderboard API，从 JM 自有镜像表派生、不穿透探针；按 DB 方言数值 CAST 排序，避免 BigDecimal 字符串字典序错排）。逐 `node→zone` 行参与排行
-- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
-- **请求**: Query `?currency=（必填）&zone=&node=&limit=`（默认 100，上限 500）
-- **响应**: `{ "currency":"coin", "rows":[{ "rank":1,"playerName":"Steve","currency":"coin","nodeUuid":"","zoneId":"0","balance":"100.00" }] }`
-- **关联 FR**: FR-123 ｜ **关联 ADR**: ADR-028
+  「大区」的判定依据是**分组树深度**：第 1 层 = 集群，第 2 层 = 大区，第 3 层 = 小区；祖先链不足时自动降级取最深可用祖先（两层树部署下「跨大区」不会误报）。层级约定集中在 `service.BusinessScopeLevels`，可整体调整
+- **错误**: `400 TARGET_EMPTY`（解析后无实例）、`403 FORBIDDEN`（无 `instance.operate`）
+- **关联 FR**: FR-523, FR-535 ｜ **关联 ADR**: ADR-033, ADR-106
 
-### GET /api/v1/business/events
-- **描述**: 通用业务事件流（FR-122，按 `(domain,dedupKey)` 去重的 envelope 表，CP 自有汇聚）。经济流水由 `?domain=economy` 过滤后前端解析信封。Query `?domain=&node=&limit=`
-- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
-- **响应**: `{ "events":[{ "domain":"economy","dedupKey":"<ledgerId>","action":"","nodeUuid":"","instanceUuid":"","operator":"","payloadJson":"{...}","occurredAt":0 }] }`
-- **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
+### POST /api/v1/business/batch
+- **描述**: 对多个实例下发**同一** `domain.action`（FR-523 执行阶段；FR-537 流式进度）。**部分失败不整体失败**——HTTP 200，逐实例结果在 `results` 中表达
+- **权限**: `instance.business.write`；结果按调用方可访问实例集合收敛
+- **请求**: `{ "confirmToken":"bpt_...", "domain":"activity", "action":"start", "payload":{...}, "requestId":"uuid-v4", "reason":"", "actionRisk":"WRITE" }`
+  - `confirmToken`：风险 `high`/`critical` 时**必填**，否则 `409 CONFIRMATION_REQUIRED`。执行端**以令牌正文中的目标选择为准**重新解析并比对实例集指纹——分组在预览后发生增删即 `409 TARGET_CHANGED`
+  - `target`（可选）：契约外的扩展字段，仅供**低风险**（无需确认）批量指定目标；带 `confirmToken` 时被令牌正文覆盖
+  - `requestId`：**必填**幂等键。同 `requestId` + 同参数重复提交返回首次结果（窗口 24 小时，内存态，进程重启即失）；同 `requestId` + **不同参数**返回 `409 IDEMPOTENCY_KEY_REUSED`
+  - `payload`：不透明载荷，必须是 JSON 对象或空（CP 不解析内容，只注入操作者/幂等上下文）；批量写会注入 `taskId`(=requestId)/`operator`/`operatorId`/`reason`
+  - `reason`：`DESTRUCTIVE` 动作**必填**，否则 `400 REASON_REQUIRED`
+  - `actionRisk`：同预览；执行期会**重新计算风险**，无令牌却实际命中 `high`/`critical` 时仍拒绝
+- **并发与超时**: 单批并发默认 20；单实例超时默认 30s（**独立于**单实例业务命令的 5s）；单实例超时不影响其他实例
+- **逐实例结果状态**:
+
+  | status | 含义 |
+  |---|---|
+  | `success` | 探针回执成功 |
+  | `failed` | 探针回执失败（含错误文案） |
+  | `offline` | 实例未运行 / 节点或探针未连（**未下发**） |
+  | `timeout` | 下发后超时未回执 |
+  | `skipped` | 前置校验失败或调用已取消（**未下发**） |
+- **响应（`Accept: application/json`，默认）**: `200`，响应头 `X-Total-Count`
+  ```json
+  { "requestId":"uuid", "total":100, "succeeded":98, "failed":1, "offline":1, "timeout":0, "skipped":0,
+    "results":[ { "instanceId":1, "status":"success", "output":{...}, "durationMs":42 } ],
+    "idempotentReplay": false }
+  ```
+  恒有 `total == succeeded + failed + offline + timeout + skipped`
+- **响应（`Accept: text/event-stream`）**: SSE 流，帧格式
+  ```
+  event: progress
+  data: {"done":20,"total":100,"succeeded":19,"failed":1,"offline":0,"timeout":0,"skipped":0}
+
+  event: done
+  data: {"requestId":"uuid","total":100,"succeeded":98,"failed":1,"offline":1,"results":[...]}
+  ```
+  - `progress` 每完成 20 个推一次，`done` 单调递增，末帧 `done == total`；`done` 帧数值与末帧 `progress` 一致
+  - **确认门槛的校验在流开始前完成**：`confirmToken` / 目标 / 原因等前置失败一律返回 JSON 错误（带正确 HTTP 状态码），**不写任何 SSE 帧**
+  - 客户端断开 **≠ 取消执行**：已下发的实例继续完成，只是结果不再推送（进度帧可丢，执行不被反压）
+- **审计**: `business.batch`（detail 仅通道事实：domain/action/requestId/reason/actionRisk + 各项计数）。**payload 与 output 一律不入审计**（ADR-106 §4）
+- **错误**: `400 TARGET_EMPTY` / `400 REASON_REQUIRED` / `400 INVALID_REQUEST`（缺 requestId、payload 非 JSON 对象）／`403 TOKEN_MISMATCH`、`403 FORBIDDEN`／`409 CONFIRMATION_REQUIRED`、`409 TOKEN_EXPIRED`、`409 TARGET_CHANGED`、`409 IDEMPOTENCY_KEY_REUSED`
+- **关联 FR**: FR-523, FR-535, FR-537 ｜ **关联 ADR**: ADR-033, ADR-106
 
 ### POST /api/v1/players/:name/kick
 - **描述**: 踢出玩家，经探针插件桥 `SendPluginCommand` 向目标后端集合下发 kick（FR-067）。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
@@ -1523,6 +1628,77 @@
 
 ## 配置管理
 
+### 分层配置与纳管（FR-529~533）
+
+把配置从「单实例文件」升级为「可跨实例分层覆盖的真源」。端点前缀 `/api/v1/config-files`，
+契约见 `docs/openapi`（对内接口，不进对外 OpenAPI）。
+
+| 端点 | 用途 |
+|---|---|
+| `GET/POST/PUT/DELETE /config-files` | 配置逻辑文件（name / format / schema） |
+
+**`PUT /config-files/:id` 字段三态**（`description` / `schemaJson` / `sensitivePaths`）：
+
+| 请求体形态 | 语义 |
+|---|---|
+| 字段**缺席** | 不修改该项 |
+| 字段**显式传空串**（或 `sensitivePaths: []`） | **清空**该项 |
+| 字段传非空值 | 改成新值 |
+
+> 旧实现把空串当作「没传」，导致这两个字段**永远清不掉**（接口返回 200 但值不变）。
+> 前端清空描述/删掉 schema 时请显式传空串，不要省略字段。
+
+> 响应体注意：`schemaJson` / `sensitivePaths` 带 `omitempty`，清空后在 JSON 里**该键会被省略**
+>（前端读到 `undefined` 而非 `""`），属既有契约。
+| `GET /config-files/:id/layers` | 各作用域的当前 head |
+| `GET /config-files/:id/layers/:scopeType/:scopeId/history` | 某作用域的版本历史 |
+| `POST /config-files/:id/layers` | 保存某作用域的新版本 |
+| `POST .../rollback` | 回退到指定历史版本 |
+| `GET /config-files/:id/effective?instanceId=` | **有效值预览 + 来源追溯** |
+| `POST /config-files/adopt` | 纳管磁盘现有文件（FR-533） |
+| `POST /config-files/adopt/preview` | 纳管预演 |
+| `GET /config-files/health` | JM 侧配置规模自检 |
+
+#### ⚠️ 两条容易踩的语义（前端必须明示，否则用户会误操作）
+
+**1. `effective.content` 是规范化结果，不是磁盘原文**
+
+| 维度 | 磁盘原文 | `effective.content` |
+|---|---|---|
+| 缩进 | 原文（可能 4 空格） | 解析器输出格式（通常 2 空格） |
+| 键顺序 | 原文顺序 | **按字典序重排** |
+| 注释 | 保留 | **全部丢失** |
+
+合并必须先解析再序列化，这是必然结果、不是缺陷。但**用户若把预览复制回磁盘，注释与格式会丢**。
+
+前端文案要求：
+
+> 预览为**合并后的规范化结果**，用于确认取值与来源。它**不保留原始注释、缩进与键顺序**，请勿直接复制回磁盘。需要原文请查看「层版本历史」。
+
+**2. 实例层优先级高于分组层**
+
+作用域链 `[group:root, ..., group:parent, instance:self]` 中实例层在最右、**优先级最高**。
+
+后果：纳管后在分组层设 `port: 25999`，`effective` 仍返回实例层的 `25566`。
+
+前端文案要求：
+
+> **实例层优先级最高，分组层覆盖不了它。** 要让分组值生效，需先删除该实例的层版本，或直接改实例层。
+
+#### 纳管（adopt）的语义
+
+- 把**磁盘现有内容原样**读入为 `config_file` + 实例级 v1 版本
+- **逐字节一致**：不重新格式化、不排序键，`contentHash` = 磁盘 sha256
+- **不改写磁盘**：纳管前后文件 mtime 不变
+- 已纳管（该实例已有层版本）返回 `ALREADY_ADOPTED`，**不覆盖**
+- 错的配置也照收（记录现状优先于校验通过），解析失败只作 warning
+
+
+> **分层配置（FR-529~533）另有一套 `/api/v1/config-files/*` 接口**，与本节按实例组织的
+> `/instances/:id/configs/*` 并存：后者是"直接读写某台实例的某个文件"，
+> 前者是"管理可跨实例分层覆盖的配置真源"。两层关系见下方「分层配置与纳管」小节。
+
+
 > 配置引擎（FR-031）在工作目录内读写配置文件并维护**配置版本**（`instance_config_versions`，与文件版本分离）：保留注释的多格式读写、schema 表单/文本双模式、跨文件一致性校验、版本 diff/回滚。配置读写经 gRPC 委托 Worker。前端「配置」段复用 FR-070 资源管理器组件（左树右内容/编辑器 + 交互全集），叠加 schema 双模式编辑、收藏与配置版本（FR-071）。
 
 ### GET /api/v1/instances/:id/configs/discover
@@ -1631,6 +1807,32 @@
 - **权限**: `file.write` / `instance.write`
 - **请求**: `{ "batchSize": 0, "failFast": false }`
 - **响应**: `{ "baselineId": 3, "targeted": 5, "succeeded": 5, "failed": 0, "results": [{ "instanceId": 1, "success": true, "versionId": 42 }], "residualDrift": [] }`
+
+### POST /api/v1/config-files/adopt
+- **描述**: **配置纳管**（FR-533）——把服务器磁盘上**已经存在**的配置文件读入为 `config_file` + 实例级 v1 版本，之后由 JM 接管版本管理与下发。**不是数据导入**：配置的真源就是磁盘，本端点只「记录现状」，**不搬运任何外部系统数据、不改写任何文件**。纳管内容与磁盘**逐字节一致**（不重新格式化、不排序键、不重新序列化），`contentHash` 即磁盘文件的 sha256。已纳管（该实例作用域已有版本）一律跳过并报 `ALREADY_ADOPTED`，**绝不覆盖**，否则会冲掉运维后续做的修改。
+- **两种形态**：① 显式文件列表 `files[]`；② 批量 `target` + `pathPatterns[]`（复用 FR-535 的分组目标解析）。同时给出时以 `target` 为准。
+- **批量语义**：逐实例 `Discover` 扫描 → `pathPatterns` 过滤 → 逐实例纳管。**同名文件在不同实例内容不同时各自独立存 v1**（记录真实状态，不假设一致）。逐实例返回结果，**部分实例离线/失败不整体失败**。
+- **`pathPatterns` 语法**：逐段 glob（`*` `?` `[...]`）+ 单独一段 `**` 表示跨层零到多段；**大小写不敏感**。非法模式不匹配任何路径。
+- **格式推断**：按扩展名推断 `format`，只支持 `.properties` / `.yml` `.yaml` / `.json`。`.toml` / `.txt` / `.conf` / 无扩展名返回 `FORMAT_UNSUPPORTED`（`config_file` 不支持这些格式，不硬塞成 yaml）。
+- **离线口径**：以**节点未连接**判定 `INSTANCE_OFFLINE`，而非实例状态非 RUNNING——纳管读的是磁盘文件，实例停止时文件依然在，维护窗口恰恰是最需要纳管的时机。
+- **关联 FR**: FR-533（依赖 FR-529 的分层模型）
+- **权限**: `file.write` / `instance.write`
+- **请求（显式列表）**: `{ "files": [{ "instanceId": 5, "path": "plugins/Foo/config.yml", "asName": "plugins/Foo/config.yml" }, { "instanceId": 5, "path": "server.properties" }], "createBaseline": true, "dryRun": false }`
+- **请求（批量）**: `{ "target": { "groupIds": [3], "includeDescendants": true }, "pathPatterns": ["plugins/*/config.yml", "server.properties"], "createBaseline": true, "dryRun": false }`
+- **响应**: `{ "results": [{ "instanceId": 5, "path": "server.properties", "name": "server.properties", "format": "properties", "size": 42, "contentHash": "<sha256>", "configFileId": 7, "versionId": 12, "versionNo": 1, "status": "created|appended|unchanged|already_adopted|failed", "action": "create_file_and_baseline|append_baseline|create_file_only|none", "code": "ADOPTED|ALREADY_ADOPTED|FILE_NOT_FOUND|READ_FAILED|INSTANCE_OFFLINE|PATH_ESCAPE|FORMAT_UNSUPPORTED|FORMAT_CONFLICT|CONFIG_FILE_ARCHIVED|WRITE_FAILED", "message": "string?", "warning": "string?", "dryRun": false }], "instances": [{ "instanceId": 5, "status": "matched|no_match|failed", "code": "string?", "discoveredFiles": 3, "matchedFiles": 2, "truncated": false, "results": [] }], "summary": { "total": 2, "created": 2, "appended": 0, "unchanged": 0, "alreadyAdopted": 0, "failed": 0, "instances": 0, "truncatedInstances": 0, "dryRun": false }, "dryRun": false }`
+- **状态码**: `200` 部分/全部失败也在 200（逐项 code 表达）；`400` 请求级校验（`FILES_REQUIRED` / `PATTERN_REQUIRED` / `INVALID_REQUEST` / `PATH_ESCAPE`）；`422` 其他业务错误
+
+### POST /api/v1/config-files/adopt/preview
+- **描述**: 纳管的**预演端点**，等价 `dryRun=true`，独立端点便于前端不必自己翻转布尔值。**无论请求体里 `dryRun` 写什么，本端点都强制按 dryRun 执行**——「预演真的没写库」是调用方唯一合理的期待。请求/响应结构与 `/adopt` 完全一致（`summary.created` 表示「将新建」的项数，`configFileId`/`versionId` 恒为 0）。
+- **关联 FR**: FR-533
+- **权限**: `file.read` / `instance.read`
+- **响应**: 同 `/adopt`，`dryRun` 恒为 `true`
+
+### GET /api/v1/config-files/health
+- **描述**: 配置纳管的**健康自检**。**只报告 JM 侧事实，不做任何自动判定**：JM 无法从自身探测 Beacon 侧的配置开关（那是另一个系统），而 CP 的 Beacon 协同**只推送实例注册**、不含配置内容，据此告警会把正常的拓扑同步误报成「配置双写风险」。因此本端点返回规模统计 + 最近写入时间，附固定文案提示运维人工核对。
+- **关联 FR**: FR-533
+- **权限**: `file.read` / `instance.read`
+- **响应**: `{ "configFileCount": 42, "layerVersionCount": 512, "lastWriteAt": "2026-10-23T12:00:00Z", "notice": "若 Beacon 侧配置功能仍开启，请确认不会两边同时修改同一份配置。JM 无法自动检测该状态。" }`
 
 ---
 
@@ -3579,7 +3781,7 @@
 
 ## 客户端分发 manifest 与制品（FR-087/088）
 
-> **鉴权分两组、物理隔离（ADR-022/023、contract §4；信任模型见 [ADR-054](../adr/054-updater-arch-simplification.md)）**：
+> **鉴权分两组、物理隔离（ADR-022/023、contract §4；信任模型见 [ADR-054](adr/054-updater-arch-simplification.md)）**：
 > - **发布/版本管理端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同频道管理 FR-086）。`POST .../files`、`POST .../versions`、`GET .../versions`、`GET .../versions/:version`、`POST .../rollback`、`GET/POST .../updater-core/versions`、`PUT .../updater-core/selected`。
 > - **消费端点**（玩家）：**拉取密钥**鉴权（请求头 `X-Client-Key`，无 JWT），与运营浏览器入口隔离。`GET .../manifest`、`GET /client-artifacts/:sha256`、`GET .../updater-core`。
 >
@@ -3933,7 +4135,7 @@
     "lagDist": [{ lag, count }]              // current_version - toVersion，按 lag 升序
   }
   ```
-- **KPI 语义（FR-356）**: `summary.successRate`/`failStaticRate`/`rollbackRate` 为 **更新遥测**率（`client_telemetry.result`，分母 `updateTotal`）；与 stats 的 HTTP 请求率严格区分。`activeMachines`+`activeMachinesExact` 为活跃客户端权威源。前端共享字典见 `apps/control-plane-web/src/lib/client-dist-kpi.ts` 与 `docs/specs/client-dist-kpi-semantics/spec.md`。
+- **KPI 语义（FR-356）**: `summary.successRate`/`failStaticRate`/`rollbackRate` 为 **更新遥测**率（`client_telemetry.result`，分母 `updateTotal`）；与 stats 的 HTTP 请求率严格区分。`activeMachines`+`activeMachinesExact` 为活跃客户端权威源。前端共享字典见 `apps/control-plane-web/src/lib/client-dist/client-dist-kpi.ts` 与 `docs/specs/client-dist-kpi-semantics/spec.md`。
 - **错误**: 400 `INVALID_RANGE`（from/to 非法或 `to<=from`，或 range 非枚举）| 403 `FORBIDDEN`（非平台管理员）| 500 `INTERNAL_ERROR`
 - **说明**: 未知 `channelId` 返 200 空时序 + 零汇总（不 404，避免泄露频道存在性、便于前端统一空态）。machineId 客户端可伪造、不可信，仅统计近似（ADR-023）
 
@@ -3952,7 +4154,7 @@
 - **错误**: 400 `INVALID_COMPONENT`（非 wedge/core）| 404 `JAR_NOT_EMBEDDED`（构建未 `make embed-client-updater`）
 
 ### GET /api/v1/client-channels/:id/manifest
-- **描述**: 返回频道 **latest** 的 manifest（contract §2；FR-256 起去 `sig` 段不再验签，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。只提供当前版本，不暴露历史。`agent.core` 由频道选定 updater-core 版本驱动（FR-259，见 ADR-054 修订 ADR-045）；无选定版本时回退手填透传（兼容）。`agent.wedge` 仍来自发布快照（楔子冻结、信息性）
+- **描述**: 返回频道 **latest** 的 manifest（contract §2；FR-256 起去 `sig` 段不再验签，见 [ADR-054](adr/054-updater-arch-simplification.md)）。只提供当前版本，不暴露历史。`agent.core` 由频道选定 updater-core 版本驱动（FR-259，见 ADR-054 修订 ADR-045）；无选定版本时回退手填透传（兼容）。`agent.wedge` 仍来自发布快照（楔子冻结、信息性）
 - **关联 FR**: FR-087、FR-092（机器码登记）、FR-259（`agent.core` 由选定 core 版本驱动）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）；`X-Machine-Id`（可，机器码统计/辅助限流）。**无 JWT**
 - **机器码登记（FR-092）**: 鉴权通过后若 `X-Machine-Id` 非空，则 best-effort 登记入 `client_machines`（弱一致、失败不阻断）。机器码**客户端生成、不可信**，仅统计 + 辅助限流（限流主键 IP，FR-096），**不作授权依据**
@@ -3970,7 +4172,7 @@
 - **错误**: 401 `INVALID_CLIENT_KEY` | 403 `ARTIFACT_NOT_ALLOWED` | 404 `ARTIFACT_NOT_FOUND` | **410 `ARTIFACT_LOST`**（完整鉴权后发现外置对象已确认缺失，明确终态；重传同内容可自愈）| 416（Range 越界，由 `http.ServeContent` 处理）| 503 `ARTIFACT_STORAGE_UNAVAILABLE`（s3 渠道失效/凭证解密失败，可重试语义）
 
 ### GET /api/v1/client-channels/:id/updater-core
-- **描述**: 返回频道当前选定 updater-core 分发信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动只按 `version` 是否大于本地 `selectedVersion` 决定是否下载；这里的 `version` 是频道级递增分发版本，不等同于归档列表里的 jar 版本。切回旧 `sha256` 回滚时，后端仍会抬高分发版本，确保冻结 wedge 会下载目标旧 jar。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
+- **描述**: 返回频道当前选定 updater-core 分发信息（FR-259，见 [ADR-054](adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动只按 `version` 是否大于本地 `selectedVersion` 决定是否下载；这里的 `version` 是频道级递增分发版本，不等同于归档列表里的 jar 版本。切回旧 `sha256` 回滚时，后端仍会抬高分发版本，确保冻结 wedge 会下载目标旧 jar。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
 - **关联 FR**: FR-259、FR-258
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）。**无 JWT**
 - **响应** (200): `{ "version": 3, "sha256": "ab12…", "downloadUrl": "/api/v1/client-artifacts/<sha256>", "size": 2097152 }`（`version` 为频道级分发版本；`sha256` 才是实际 core jar 制品；`downloadUrl` 指向制品分发端点，可 Range 续传）
@@ -4115,6 +4317,13 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 - **描述**: 实例生命周期
 - **V1**: 写白名单 `instance.life` + 显式实例 scope  
 - **V2**: 能力 `instance.life` + 显式实例或节点继承 scope；派发前锁内重验归属
+- **审批（FR-492）**: `stop` 属于需审 action（与 MCP 面同策略）。未批准时返回
+  **202 Accepted** + `{status:"awaiting_approval", requestId, ticketId, message}`，
+  **本次调用零副作用**（实例状态不变）。`start` / `restart` 免审、直执。
+  审批服务未装配时 `stop` 失败关闭（503 `APPROVAL_UNAVAILABLE`）。
+- **状态查询**: Agent 面**当前没有**审批查询端点；`requestId` 供人工在审批中心
+  （`GET /api/v1/approvals`、`GET /api/v1/approvals/:id`，需 `approval.read`）核对与决策。
+  批准后由执行器在服务端执行，调用方重新查询实例状态即可看到结果。
 - **错误**: 403 能力/scope 不足；kill **永不**对 agent 开放（未登记 action）
 
 ### POST /api/v1/agent/nodes/:id/maintenance/enter|leave
@@ -4245,3 +4454,739 @@ Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP S
   "details": { "maxInstances": 10, "currentInstances": 10 }
 }
 ```
+
+## AI 助手配置（FR-514 / ADR-105）
+
+内置 AI 助手的模型接入配置面。**管理面与只读面分开**：可用模型摘要对所有登录用户开放，
+供应商/模型/默认模型仅平台管理员。凭据**永不回显**——响应里只有 `hasCredential` 标志。
+
+> 边界：人类 JWT 不进入 `/api/v1/mcp`（该端点仍只认 `jmat_` Agent Token，见上文）。
+> 助手对业务工具的受限委托与逐调用确认属 FR-515/516，尚未实现。
+
+### 通用约定
+
+| 项 | 说明 |
+|---|---|
+| 协议枚举 | `openai-chat` / `openai-responses` / `anthropic` |
+| 凭据模式 | `none` / `env` / `stored` |
+| 乐观并发 | 供应商与模型均带 `version`；写入携带过期 version 返回 **409** |
+| 错误映射 | 404 不存在 / 409 冲突或在用 / 422 参数不合规 / 403 非平台管理员 |
+| 地址校验 | 仅 `https`（明文 http 回 422）、不得含 userinfo / query / fragment |
+
+### GET /api/v1/assistant/models
+- **描述**: 当前用户可用的模型摘要与默认模型。只含协议与能力，**不含**端点与任何凭据。
+- **关联 FR**: FR-514
+- **权限**: 任意已登录用户
+- **响应** (200):
+  ```json
+  {
+    "items": [
+      { "id": 1, "modelId": "gpt-4o-mini", "displayName": "快速模型",
+        "protocol": "openai-chat", "streaming": true, "tools": true }
+    ],
+    "defaultModelId": 1
+  }
+  ```
+- 说明：只列「模型启用且其供应商也启用」的行；`defaultModelId` 仅在默认模型确实可用时非 null，
+  否则回 `null` 让前端展示「未配置默认模型」，而不是指向一个不可用的模型。
+
+### GET /api/v1/assistant/admin/providers
+- **描述**: 全量供应商（含停用）。
+- **权限**: 平台管理员（`UserAccess.IsPlatformAdmin`；**不按业务权限节点放行**）
+- **响应** (200):
+  ```json
+  { "items": [ {
+      "id": 1, "name": "主供应商", "protocol": "openai-chat",
+      "baseUrl": "https://api.example.com/v1",
+      "credentialMode": "stored", "credentialEnv": null,
+      "hasCredential": true, "enabled": true, "version": 3,
+      "createdAt": "2026-10-22T10:00:00Z", "updatedAt": "2026-10-22T10:00:00Z"
+  } ] }
+  ```
+- 说明：`credentialEnv` 回显**变量名**（不是值）；密文字段不在任何响应中出现。
+
+### POST /api/v1/assistant/admin/providers
+- **描述**: 创建供应商。
+- **权限**: 平台管理员
+- **请求体**:
+  | 字段 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | name | string | 是 | 1-64 字符，全平台唯一 |
+  | protocol | string | 是 | 协议枚举 |
+  | baseUrl | string | 是 | 仅 https origin（可含固定路径前缀） |
+  | enabled | bool | 否 | 默认 true |
+  | credentialMode | string | 是 | 凭据模式枚举 |
+  | credentialEnv | string | 条件 | 仅 `env` 模式；须匹配 `^JIANMANAGER_ASSISTANT_[A-Z0-9_]{1,64}$` |
+  | credentialSecret | string | 条件 | 仅 `stored` 模式；**创建时必填** |
+- **响应** (201): 供应商视图（同列表项）
+- **错误**: 409 名称重复 / 422 参数不合规 / 422 `ENCRYPTOR_UNAVAILABLE`（未配置加密器却提交 stored 凭据）
+
+### GET /api/v1/assistant/admin/providers/:id
+- **描述**: 单个供应商详情。
+- **权限**: 平台管理员
+- **错误**: 404 不存在
+
+### PUT /api/v1/assistant/admin/providers/:id
+- **描述**: 更新供应商。
+- **请求体**: 同创建 + `version`（乐观并发）+ `clearCredential`
+- **凭据三态**:
+  - `credentialSecret` **省略或为空** → **保留**原密文（改个显示名不会丢密钥）
+  - `credentialSecret` **非空** → 替换
+  - `clearCredential: true` → 清除，且模式自动降为 `none`（不留「stored 但无密文」的悬空态）
+- **错误**: 409 version 不匹配 / 404 不存在 / 422 参数不合规
+
+### DELETE /api/v1/assistant/admin/providers/:id
+- **描述**: 删除供应商。
+- **错误**: **409 `IN_USE`（该供应商下仍有模型时不删，不级联）** / 404 不存在
+
+### GET /api/v1/assistant/admin/models
+- **描述**: 全量模型，含 `providerName` / `protocol` / `providerEnabled` 回填（前端不必为显示一个名字再拉供应商）。
+- **权限**: 平台管理员
+
+### POST /api/v1/assistant/admin/models
+- **请求体**:
+  | 字段 | 类型 | 必填 | 说明 |
+  |---|---|---|---|
+  | providerId | uint | 是 | 必须存在 |
+  | modelId | string | 是 | 上游原始标识，**同一供应商下唯一** |
+  | displayName | string | 否 | ≤128 字符 |
+  | streaming / tools | bool | 否 | 显式能力声明 |
+  | contextWindow / maxOutputTokens | int? | 否 | 留空表示未声明（不是 0） |
+  | enabled | bool | 否 | 默认 true |
+- **错误**: 409 同供应商下 modelId 重复 / 422 供应商不存在或参数不合规
+
+> 唯一约束是 `(providerId, modelId)` 而非 `modelId` 全局唯一——不同网关提供同名模型是常态。
+
+### PUT /api/v1/assistant/admin/models/:id
+- **描述**: 更新模型（带 `version`）。
+
+### DELETE /api/v1/assistant/admin/models/:id
+- **描述**: 删除模型。若它是当前默认模型，**同一事务内清空默认指针**，不留悬空引用。
+
+### POST /api/v1/assistant/admin/providers/:id/discover-models
+- **描述**: 从上游自动拉取模型候选（FR-538）。**只读，不落库**——`contextWindow` / `tools` 等能力声明不能从模型名推断，必须由管理员确认后走 `POST /admin/models`。
+- **权限**: 平台管理员
+- **出站**: 复用该供应商自己的受保护出站（含其代理配置与准入），与聊天走同一条策略——否则会出现「聊天被准入拦住、发现却能连通」的自相矛盾状态。
+- **响应** (200):
+  ```json
+  { "discovered": [{ "modelId": "deepseek-v4.1-flash", "alreadyConfigured": true }],
+    "total": 1, "truncated": false, "skipped": { "…超长 id…": "模型 ID 超过 256 字符，已跳过" } }
+  ```
+- **错误**: 404 供应商不存在 / 422 上游非 200 或列表无法解析
+- **说明**:
+  - 上游非 200 时**报错而不是回空列表**：空列表会让管理员以为「这个供应商没有模型」，而真实原因是列表端点不支持或鉴权失败，排查方向会完全错误。
+  - `truncated=true` 表示上游条目超过上限（200），不是「上游只有这么多」。
+  - `alreadyConfigured=true` 的项由前端默认不勾选，避免重复导入撞唯一索引。
+
+### GET /api/v1/assistant/admin/skills
+- **描述**: 列出已装载的技能（FR-541）与被跳过的条目及原因。
+- **权限**: 平台管理员
+- **响应** (200):
+  ```json
+  { "skills": [{ "name": "instance-triage", "description": "…", "whenToUse": "…",
+                 "version": "1.0", "source": "official", "instructions": "…", "path": "…" }],
+    "skipped": { "broken-skill": "技能文件不合法: 缺少以 --- 开头的 YAML frontmatter" } }
+  ```
+- **说明**: 技能来自 `<dataRoot>/var/skills/<name>/SKILL.md`（YAML frontmatter + Markdown 正文），目录名即技能名。`instructions` 一并返回，因为管理员要能预览「模型会被告知什么」才谈得上启停判断；`skipped` 必须可见，否则改坏一个 `SKILL.md` 表现为「该技能凭空消失」。
+
+### POST /api/v1/assistant/admin/skills/reload
+- **描述**: 重新扫描技能目录（放好文件后免重启）。
+- **权限**: 平台管理员
+- **响应** (200): `{ "loaded": 2, "skipped": {} }`
+
+### POST /api/v1/assistant/admin/providers/:id/test
+- **描述**: 显式探测供应商连通性（用该供应商下第一个启用模型跑一次最小补全）。
+- **权限**: 平台管理员
+- **响应** (200):
+  ```json
+  { "ok": true, "latencyMs": 412 }
+  ```
+  失败时**仍是 200**（这是结论，不是请求失败）：
+  ```json
+  { "ok": false, "latencyMs": 12000, "classifiedError": "upstream_auth",
+    "message": "upstream_auth（HTTP 401）: …" }
+  ```
+- **错误**: 404 不存在 / 422 该供应商下没有模型（无模型可探测，不假装通过）
+- **说明**:
+  - 上游失败不映射成 401/502——把「密钥错」映射成 401 会让前端误以为登录态失效，
+    把「上游 5xx」映射成 502 会让管理员以为面板坏了。
+  - `message` 已脱敏：上游回显的密钥按模式掩蔽（`sk-***`）后截断至 512 字节。
+  - 不写会话、不产生 run；前端每行按钮在请求中禁用，防连点重复付费。
+
+### POST /api/v1/assistant/admin/models/:id/test
+- **描述**: 用该模型跑一次最小补全（固定提示，不带用户数据、**不执行任何工具**）。
+- **权限**: 平台管理员
+- **请求体**（可空）: `{ "withTools": true }`
+- **响应** (200):
+  ```json
+  { "ok": true, "latencyMs": 830, "textPreview": "pong",
+    "promptTokens": 9, "outputTokens": 2, "toolCallParsed": false }
+  ```
+- **错误**: 404 不存在 / 422 `withTools=true` 但该模型未声明 `tools` 能力
+- **说明**:
+  - `promptTokens` / `outputTokens` 为 `null` 表示上游未报告（不补 0）。
+  - 未声明 tools 却要求工具验证**显式拒绝**，不静默去掉工具再测——后者会给出 `ok:true` 的假绿。
+  - `textPreview` ≤200 字符。
+
+> 分类码全集与「管理员该做什么」的对应表见 `docs/specs/ai-provider-models/api.md` §7。
+
+### GET /api/v1/assistant/admin/settings
+- **描述**: 读取助手全局设置（默认模型 + 出站准入放行段）。两者同属 `assistant_settings`
+  单行，故按**单例资源**整体读写，与 `/api/v1/settings` 同构。
+- **权限**: 平台管理员
+- **响应** (200):
+  ```json
+  { "defaultModelId": 12, "allowPrivateCidrs": ["10.0.0.0/8"], "version": 3, "insecureAllowed": false }
+  ```
+- **说明**: `insecureAllowed` 是**只读回显**，表示当前部署是否接受 `http://` 明文目标
+  （仅 dev 部署为 true）。放行网段不等于放行明文——两者是独立开关。
+
+### PUT /api/v1/assistant/admin/settings
+- **描述**: 整体替换助手全局设置，**放行段变化时立即重建出站工厂生效**，无需重启。
+- **权限**: 平台管理员
+- **请求体**:
+  ```json
+  { "defaultModelId": 12, "allowPrivateCidrs": ["10.0.0.0/8"], "version": 3 }
+  ```
+- **整体替换语义**：未提供的字段等于置空——不传 `defaultModelId` 即清空默认模型，
+  `allowPrivateCidrs` 传空即不放行任何私网段。因此「请求体即最终状态」，
+  不必区分「省略」与「显式 null」。
+- **响应** (200): 与 GET 同构（返回生效后的值与自增后的 version）
+- **校验**:
+  - `defaultModelId` 非空时：模型必须存在，且自身与所属供应商都已启用。
+  - `allowPrivateCidrs` 每项必须是合法 CIDR；**非法项整单拒绝并指出是哪一项**
+    （不静默丢弃——静默丢弃会变成「保存成功、行为不变、无提示」）。
+  - 自动规范化（掩掉主机位）与去重：`10.0.0.1/8` 与 `10.0.0.0/8` 视为同一段。
+- **错误**: 409 `version` 不匹配 / 422 非法 CIDR、默认模型不可用 / 404 设置未初始化
+- **不变量**: 云元数据地址段**永远拒绝**，即便被显式放行也不生效。
+
+> 每次写入都记审计 `assistant.settings.update`（detail 含 `defaultModelId` 与 `allowPrivateCidrs`）。
+
+### AI 配置面的审计事件
+
+供应商/模型的增删改与探测均写审计（`detail` **按白名单逐字段构造**，不含明文密钥/密文）：
+
+| action | targetType | detail 字段 |
+|---|---|---|
+| `assistant.provider.create` | `assistant_provider` | name, protocol, credentialMode |
+| `assistant.provider.update` | `assistant_provider` | 同上 + `credentialChanged`（布尔，**不记值**） |
+| `assistant.provider.delete` | `assistant_provider` | name（删除前先取，删完就查不到） |
+| `assistant.model.create` / `.update` | `assistant_model` | providerId, modelId, enabled |
+| `assistant.model.delete` | `assistant_model` | id |
+| `assistant.settings.update` | `assistant_settings` | defaultModelId（清空记 `"null"`）与 allowPrivateCidrs（一个端点承载两类设置，故记录两类值） |
+| `assistant.provider.test` / `assistant.model.test` | 对应类型 | ok, classifiedError, latencyMs（模型另含 withTools/toolCallParsed） |
+
+> 探测会产生**可能计费**的真实上游调用，因此也留痕；但只记结论元数据，不记 `message`
+> （它可能含上游回显的片段）。
+
+## AI 助手对话运行时（FR-515 Phase D）
+
+> 覆盖 spec [fr-515-agent-runtime.md](specs/ai-assistant/fr-515-agent-runtime.md) §6 的全部端点。
+> 会话是**私有**数据：所有读写按 `owner_user_id` 收敛，权限判据是会话归属而非权限节点——
+> 组管理员也不是他人会话的所有者（§3 冻结项）。
+>
+> **越权与不存在一律 404**（不区分）：分开回 403 与 404 等于提供「这个 id 存在吗」的探测接口。
+
+### 统一错误码
+
+| `error` | HTTP | 触发条件 |
+|---|---|---|
+| `CONVERSATION_NOT_FOUND` | 404 | 会话不存在**或不属于当前用户** |
+| `RUN_NOT_FOUND` | 404 | run 不存在**或不属于当前用户** |
+| `CONVERSATION_BUSY` | 409 | 该会话已有活跃 run；响应体**必带** `runId`（供前端接续观察，§5.2） |
+| `IDEMPOTENCY_CONFLICT` | 409 | 同一 `Idempotency-Key` 被用于内容不同的请求（§6.1） |
+| `CONFLICT` | 409 | run 已被另一方推进（乐观并发 CAS 失败） |
+| `BUDGET_EXCEEDED` | 429 | 该用户跨会话活跃 run 已达上限（`CONCURRENT_RUNS_PER_USER`） |
+| `INVALID_CURSOR` | 400 | `cursor` / `before` / `after` 不合法；**`after` 超过该 run 的 maxSeq 也是 400（不是 410）**（§6.2） |
+| `INVALID_REQUEST` | 400 | 请求体或 `limit` 不合法 |
+| `MODEL_UNAVAILABLE` | 503 | 会话选定/默认模型不可用（停用、已删、供应商停用等） |
+| `INTERNAL_ERROR` | 500 | 其它 |
+
+> **为什么 `after` 越界是 400 而不是 410**：事件永不因保留策略被删，补读游标不会因过期失效。
+> 越界只可能是伪造游标或跨 run 误用，此时 410 会让前端误判「历史已被清理」而永久放弃补读。
+
+### 会话
+
+#### GET /api/v1/assistant/conversations
+- **描述**: 当前用户的会话列表，按 `updated_at` 倒序。
+- **查询**: `q`（关键词检索，FR-542）、`cursor`（上一页 `nextCursor`）、`limit`（默认 20，上限 100）
+- **响应** (200): `{ "items": [ … ], "nextCursor": "v1:N" }`；`nextCursor` 为空表示没有更多
+- **说明**（`q` 检索）:
+  - 命中**标题**或**未取代的消息正文**；`LIKE` 通配符（`%` `_`）已转义——不转义时搜 `100%`
+    会变成「以 100 开头」，用户只会觉得「搜索不准」。
+  - **归属条件在外层与子查询双重限定**：只回调用者自己的会话，否则一次检索会变成越权读。
+  - 列表**不回消息正文**，正文在详情里取；否则一次检索会把大量内容拖进响应。
+  - 检索在服务端执行，不在前端过滤已加载的那一页 —— 否则「结果不全」会变成难察觉的假象。
+
+#### PATCH /api/v1/assistant/messages/:id
+- **描述**: 编辑一条**用户消息**（FR-543）。
+- **请求体**: `{ "content": "更正后的文本" }`
+- **响应** (200): 消息对象（含 `originalContent` / `editedAt` / `editCount`）
+- **错误**: 404 消息不存在或不属于调用者（不泄露存在性）/ 400 `MESSAGE_NOT_EDITABLE` 非 user 消息或已被回退取代 / 400 内容为空
+- **说明**:
+  - **首次编辑保留原文**（`original_content`），只存最初一版而非历史栈：需求是「能看出改了什么」，无限历史会让消息表随编辑次数线性膨胀。
+  - **不自动重跑**：编辑是「改错别字」，自动重跑会让一次编辑意外产生两条回复、两次计费，且旧回复还留在历史里。
+
+#### POST /api/v1/assistant/conversations/:id/rollback
+- **描述**: 把会话回退到某条消息（FR-543）：该消息**之后**的消息全部标记 `supersededAt`。
+- **请求体**: `{ "messageId": 123 }`
+- **响应** (200): `{ "superseded": 2 }`
+- **错误**: 404 会话不存在或不属于调用者 / 400 消息不属于该会话 / **409 `CONVERSATION_BUSY` 会话有进行中的 run**
+- **说明**:
+  - **只回退会话内容，不撤销已发生的副作用**——回退到「启动实例」之前，那个实例仍然是启动着的。UI 必须显式提示，否则用户会以为回退等于撤销。
+  - **软删而非物理删除**：工具调用消息关联着确认票据与平台审计，硬删会让「这条副作用是谁批准的」失去线索。
+  - 有活跃 run 时拒绝：正在生成的 run 仍在追加消息，此时回退会让事件 `seq` 与消息 `turn` 错乱。
+  - 按 `(turn, id)` 定序，只影响目标会话。
+
+#### POST /api/v1/assistant/conversations
+- **描述**: 新建会话。
+- **请求体**: `{ "title": "…", "modelId": 1 }`，两字段均可省略（`title` 省缺为「新会话」，
+  首轮提交时按用户消息截取；`modelId` 省缺表示跟随全局默认模型）
+- **响应** (201): 会话对象
+
+#### GET /api/v1/assistant/conversations/:id
+- **描述**: 会话详情 + 最近消息（一次往返即可渲染首屏）。
+- **查询**: `limit`（最近消息条数）
+- **响应** (200): `{ "conversation": { … }, "messages": [ … ] }`
+
+#### PATCH /api/v1/assistant/conversations/:id
+- **描述**: 改标题 / 换模型。
+- **请求体**: `{ "title": "…", "modelId": 1 }`；`modelId` 三态——缺省=不改、`null`=清空（回跟随默认模型）、数字=改用该模型
+- **响应** (200): 会话对象
+
+#### DELETE /api/v1/assistant/conversations/:id
+- **描述**: 软删除自己的会话（消息与事件随之不可读但**不物理删除**）。
+- **响应** (200): `{ "deleted": true }`
+- **错误**: 409 `CONVERSATION_BUSY`（已有活跃 run，需先取消）
+
+#### GET /api/v1/assistant/conversations/:id/messages
+- **描述**: 消息分页，按时间正序返回。
+- **查询**: `before`（比该消息 id 更早的 N 条）、`limit`
+- **响应** (200): `{ "items": [ … ] }`
+- **错误**: 400 `INVALID_CURSOR`（`before` 非正整数）
+
+#### GET /api/v1/assistant/conversations/:id/tool-calls
+- **描述**: 历史工具回显（FR-519）。按 `messageId` 聚合该会话内每条回复当时
+  调用了哪些工具、各自终态、失败码与结果预览。数据源为 `assistant_events` 的
+  `tool_call` / `tool_status` / `tool_result` 三类事件。
+- **响应** (200):
+  ```json
+  { "byMessage": { "22": [ { "callId": "call_a", "name": "system_agent_node_get",
+      "status": "ok", "preview": "节点正常", "seq": 1 } ] } }
+  ```
+- **说明**:
+  - 只回**有工具调用**的消息；没有的消息不出现在 `byMessage` 里（前端据此跳过渲染）。
+  - 没有工具调用时回 `{}` 而不是 `null`，前端不必写两套判空。
+  - JSON 对象键只能是字符串，`messageId` 以字符串形式作键。
+  - `status` 取值 `running` / `pending_confirmation` / `ok` / `failed`；
+    **缺 `tool_status` 但有 `tool_result` 时推断为 `ok`** ——「有结果」本身就是执行完成的证据，
+    显示 `running`（永远转圈）会误导。
+- **错误**: 404 `CONVERSATION_NOT_FOUND`（含**非所有者**读取：不区分「不存在」与「不属于你」，
+  避免泄露他人会话的存在性）
+
+#### POST /api/v1/assistant/conversations/:id/runs
+- **描述**: 提交一轮对话，异步推进。
+- **请求头**: `Idempotency-Key`（前端**必须**带；绑定 `(ownerUserId, conversationId)`，由数据库唯一约束保证）
+- **请求体**: `{ "text": "…", "contextSnapshot": { … } }`
+- **响应**: **202** `{ "runId": 1, "conversationId": 1, "status": "queued" }`
+  （202 而非 201：返回的是「已受理、正在后台推进」的运行，不是已完成的资源）
+- **幂等**: 同键同内容 → 回原 `runId` 且不新建 run；同键异内容 → 409 `IDEMPOTENCY_CONFLICT`
+- **错误**: 409 `CONVERSATION_BUSY`（带 `runId`）/ 429 `BUDGET_EXCEEDED` / 503 `MODEL_UNAVAILABLE`
+
+### 运行与事件
+
+#### GET /api/v1/assistant/runs/:runId/events
+- **描述**: 补读事件，返回 **JSON 数组**（不是 `{items:[]}`）。
+- **查询**: `after`（上次收到的最大 `seq`，缺省 0 = 从头补）
+- **响应** (200):
+  ```json
+  [ { "seq": 1, "type": "text_delta", "data": { "text": "你" },
+      "messageId": 2, "createdAt": "2026-10-23T10:00:00Z" } ]
+  ```
+- **错误**: 400 `INVALID_CURSOR`（`after` 非整数或超出该 run 的 maxSeq）/ 404 `RUN_NOT_FOUND`
+
+#### GET /api/v1/assistant/runs/:runId/stream
+- **描述**: SSE 观察流（**fetch + Bearer**，不用 `EventSource`——不把 JWT 放进 URL）。
+- **查询**: `after`（缺省 0）
+- **响应头**: `Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`、`X-Accel-Buffering: no`
+- **帧格式**: `event: <type>\ndata: <json>\n\n`，`data` 为上面 `/events` 的同款帧（含 `seq`）。
+  事件类型见 spec §5.3 最小集（`text_delta` / `tool_call` / `tool_status` / `tool_result` /
+  `usage` / `context_warning` / `error` / `run_end`）。
+- **行为**: 先把 `seq > after` 的历史事件补发完，再持续推送新事件；无新事件时每 15 秒发一行
+  注释帧 `: ping`。读到 `run_end`（每 run 恰好一条）即结束。
+- **实现现状**: 服务端**暂无事件订阅机制**，此端点以 400ms 间隔轮询事件表实现（Phase D 临时实现）；
+  帧格式与断线补读语义不随实现变化。
+- **错误**: 在写 SSE 头**之前**校验归属与游标，故 404/400 仍是普通 JSON 响应。
+
+#### POST /api/v1/assistant/runs/:runId/cancel
+- **描述**: 停止本轮。**幂等**——已终态再取消返回 200（「已经停住」即达成目的）。
+- **响应** (200): `{ "cancelled": true, "runId": 1 }`
+- **错误**: 404 `RUN_NOT_FOUND`
+
+## 对外只读统计契约（FR-527）
+
+六组只读端点，契约真源 [docs/openapi/paths/stats.yaml](docs/openapi/paths/stats.yaml)，
+规格 [docs/specs/external-stats-contract/spec.md](docs/specs/external-stats-contract/spec.md)。
+
+> **边界（最重要）**：只出**通道与基础设施维度**，不出任何业务指标。
+> 上表之外的任何「需要理解业务语义的指标」（活动参与人数、经济流水、余额分布、
+> 活动完成率、留存）都**不属于**平台，由业务台自行计算。
+
+### 通用约定
+
+| 项 | 规则 |
+|---|---|
+| 认证 | Agent Token（`jmat_` 前缀）与用户 JWT **均可**；Agent Token 受 scope 收敛 |
+| 分页 | `page`（从 1 起，缺省 1）、`pageSize`（缺省 100，**上限 200**） |
+| 响应头 | `X-Total-Count` / `X-Page` / `X-Page-Size` / `X-RateLimit-Remaining` |
+| 限流 | 每 token **每分钟 120 次**；超限 429 + `Retry-After` |
+| 时间格式 | RFC3339 |
+
+**`pageSize` 超过 200 返回 `400 PAGE_SIZE_EXCEEDED`（含 `maxPageSize`），刻意不静默截断**
+——静默截断会让调用方以为拿到了全部数据。
+
+**时间窗超上限返回 `400 TIME_RANGE_EXCEEDED`（含 `maxRange`）**，同样不静默收敛。
+
+### GET /api/v1/stats/overview
+
+- **描述**: 集群规模与资源水位**当前快照**。无时间窗参数。
+- **响应** (200):
+  ```json
+  {
+    "nodes": { "total": 3, "online": 3, "maintenance": 0 },
+    "instances": { "total": 120, "running": 118, "stopped": 2, "crashed": 0 },
+    "resources": { "cpuCores": 120, "cpuUsagePct": 43.2,
+                   "memoryTotalMb": 262144, "memoryUsedMb": 98304 },
+    "probes": { "connected": 115, "disconnected": 5 }
+  }
+  ```
+- **口径**: `resources` 只统计**在线节点**（离线节点读数是陈旧值，计入会虚高容量）。
+  `probes` 来自探针在线名册（`PlayerEventService`）。
+
+### GET /api/v1/stats/instances
+
+- **描述**: 实例资源指标时序。
+- **查询**: `instanceIds`（逗号分隔，缺省=scope 内全部）、`from`/`to`（缺省最近 1 小时，
+  **上限 30 天 = `720h`**）、`resolution`、`page`/`pageSize`。
+- **`resolution`**: `raw` / `15s` / `1m` / `5m` / `1h`，缺省 `5m`。
+  **`raw` 仅允许 < 1 小时的区间**，超出返回 `TIME_RANGE_EXCEEDED`（`maxRange=1h`）。
+- **响应** (200):
+  ```json
+  { "series": [ { "instanceId": 1, "metric": "cpu_pct",
+                  "points": [ { "t": "2026-10-23T12:00:00Z", "v": 43.2 } ] } ],
+    "pagination": { "page": 1, "pageSize": 100, "total": 120 } }
+  ```
+- **数据来源（硬约束）**：`5m`/`1m`/`15s` 走 `metric_rollup_5ms`，`1h` 走 `metric_rollup_1hs`，
+  **只有 `raw` 才查 `metric_sample_raws`**。`15s`/`1m` 无独立预聚合表，统一落到 5m 档
+  （存储层最小预聚合粒度），**不回落原始表**。
+- **分页语义**: 作用在**序列**上（`pagination.total` = 序列总数），只对当前页的序列查点位。
+
+### GET /api/v1/stats/nodes
+
+- **描述**: 节点（宿主机）资源指标时序。结构、上限、数据来源同上，维度为节点
+  （响应用 `nodeId` 而非 `instanceId`）。
+- **查询**: `nodeIds`、`from`/`to`（上限 30 天）、`resolution`、`page`/`pageSize`。
+
+### GET /api/v1/stats/logs
+
+- **描述**: 检索实例或节点日志。
+- **查询**: `instanceId`、`nodeId`、`level`（`ERROR`/`WARN`/`INFO`/`DEBUG`）、`q`（全文）、
+  `from`/`to`（缺省最近 1 小时，**上限 7 天 = `168h`**）、`page`/`pageSize`。
+- **响应** (200):
+  ```json
+  { "entries": [ { "timestamp": "2026-10-23T12:00:00Z", "level": "ERROR",
+                   "instanceId": 1, "nodeId": 1, "message": "…", "source": "stderr" } ],
+    "pagination": { "page": 1, "pageSize": 200, "total": 42 } }
+  ```
+- **脱敏**: 日志内容在采集侧已脱敏，不含玩家敏感信息；但检索结果仍可能包含业务相关文本
+  ——**平台不对其语义负责**。
+
+### GET /api/v1/stats/crashes
+
+- **描述**: 按天与按原因聚合的崩溃统计。
+- **查询**: `instanceId`（缺省=scope 内全部）、`days`（缺省 30，`1..365`，超出返回
+  `TIME_RANGE_EXCEEDED` 含 `maxRange`）。
+- **响应** (200):
+  ```json
+  { "byDay": [ { "date": "2026-10-23", "count": 2 } ],
+    "byReason": [ { "reason": "OOM", "count": 5 } ] }
+  ```
+- **数据源**: 独立汇总表 `instance_crash_stats`（FR-470），**不受单次崩溃快照 K=5 滚动裁剪影响**。
+  同一天多指纹会合并成一个 `byDay` 点（`count` 求和）。`byReason` 按计数倒序。
+
+### GET /api/v1/stats/changes
+
+- **描述**: 配置交付的**进行中**任务。**不返回配置内容**——只返回任务状态、目标数与进度。
+- **查询**: `status`（逗号分隔，如 `rolling,paused,observing`）、`page`/`pageSize`。
+- **响应** (200):
+  ```json
+  { "changes": [ { "id": 7, "title": "restart × 12", "status": "rolling",
+                   "totalTargets": 12, "succeeded": 5, "failed": 0, "deferred": 0,
+                   "createdAt": "2026-10-23T10:00:00Z",
+                   "startedAt": "2026-10-23T10:00:01Z" } ],
+    "pagination": { "page": 1, "pageSize": 50, "total": 1 } }
+  ```
+- **`status` 枚举**: `draft` / `pending_approval` / `approved` / `rolling` / `observing` /
+  `paused` / `completed` / `failed` / `rolled_back`。缺省只返回**非终态**
+  （`draft`/`rolling`/`paused`）。
+- **实现现状（重要）**: 契约描述的是配置交付变更单（FR-531 的 `DeliveryOrder` 状态机），
+  该模型**尚未落地**。当前数据源是 FR-457 的滚动/分批/灰度编排会话
+  （`InstanceRollingOp`），其状态经双向映射落在契约 enum 内：
+
+  | 契约状态 | 会话状态 |
+  |---|---|
+  | `draft` / `pending_approval` / `approved` | `pending` |
+  | `rolling` / `observing` | `running` |
+  | `paused` | `paused` |
+  | `completed` / `failed` | `done` |
+  | `rolled_back` | `canceled` |
+
+  因此 `title` 由「动作 × 目标数」派生（会话无标题列），`deferred` 恒为 0
+  （滚动编排没有「离线不计入失败率」这个分类，不编造数据）。
+  待 FR-531 落地后只需替换映射层，路由与契约不变。
+
+---
+
+## 对外 API 总览（FR-528）
+
+本节是**对外 API** 的入口索引。所谓「对外」，指面向**机器调用方**（业务台、第三方集成）的稳定契约。
+
+### 对内 vs 对外的区别
+
+| | 对内 API | 对外 API |
+|---|---|---|
+| 调用方 | JM 自己的前端（浏览器） | 业务台、第三方系统 |
+| 认证 | 用户 JWT | **Agent Token（`jmat_` 前缀）** |
+| 稳定性 | 随版本可变 | **向后兼容**（破坏性变更走 `/v2/`） |
+| 文档 | 本文件各章节 | **`docs/openapi/`（契约真源）** |
+
+两者**共用 `/api/v1` 前缀**。中间件按 `Authorization` 头的 token 前缀分流：`jmat_` 走 Agent 鉴权，其余走 JWT。
+
+### 契约真源
+
+对外 API 的机器可读契约在 `docs/openapi/`：
+
+```
+docs/openapi/
+├── external.yaml           # 入口（info / security / paths 汇总）
+├── components/
+│   ├── common.yaml         # 通用参数、响应、分页头
+│   ├── errors.yaml         # 18 个错误码
+│   └── schemas.yaml        # 共享 schema
+└── paths/
+    ├── business.yaml       # 业务通道（5）
+    ├── stream.yaml         # SSE 事件流（1）
+    ├── stats.yaml          # 统计（6）
+    └── bridge.yaml         # 桥状态（3）
+```
+
+**本文件不重复契约细节**——请求/响应结构以 `docs/openapi/` 为准。本节只做入口索引与跨接口约定说明。
+
+校验：`./scripts/check-openapi.sh` 做三项检查（YAML 语法、`$ref` 可解析、与 Gin 路由双向一致）。**路由不一致会导致 CI 失败。**
+
+### 接口清单
+
+| 分组 | 端点 | 说明 |
+|---|---|---|
+| **业务通道** | `POST /instances/:id/business` | 单实例命令 |
+| | `GET /instances/:id/business/manifest` | 能力发现 |
+| | `POST /business/batch/preview` | 批量目标解析 + 风险分级 |
+| | `POST /business/batch` | 批量命令（可选 SSE 响应） |
+| | `POST /business/reconcile` | 对账（拉快照） |
+| **事件流** | `GET /business/stream` | SSE（见下节） |
+| **统计** | `GET /stats/{overview,instances,nodes,logs,crashes,changes}` | 见「对外只读统计契约（FR-527）」 |
+| **桥状态** | `GET /instances/:id/bridge/status` | 桥线路健康度 |
+| | `PUT /instances/:id/bridge/subscription` | 主题订阅 |
+| | `GET /instances/:id/business/status` | 已注册业务域与健康 |
+
+---
+
+## 业务事件流（FR-522 / FR-536）
+
+`GET /api/v1/business/stream` — SSE 长连接，推送探针上报的业务事件。
+
+**契约**：`docs/openapi/paths/stream.yaml`
+
+### 为什么是 SSE 而不是 WebSocket
+
+| 因素 | SSE | WebSocket |
+|---|---|---|
+| 方向 | 服务端→客户端单向 | 双向（此处用不上） |
+| 断线重连 | 浏览器原生 + `Last-Event-ID` | 需自行实现 |
+| 补读 | 原生 `id` 字段支持 | 需自定义协议 |
+| 代理穿透 | 纯 HTTP | 需 Upgrade 握手 |
+
+命令方向由 HTTP POST 覆盖，单向足够。
+
+### 两个序号必须区分（最容易踩的坑）
+
+| 名称 | 生成方 | 作用域 | 用途 |
+|---|---|---|---|
+| **`streamSeq`** | JM CP | **CP 全局**单调 | SSE 的 `id` 字段，补读用这个 |
+| **`seq`** | 探针 | **单个 domain 内**单调 | 判断"某实例某域的事件有无缺失" |
+
+`seq` 跨实例不可比——实例 A 和实例 B 的 `seq=1024` 是不同事件。**用 `seq` 当 `Last-Event-ID` 会导致跨实例串位。**
+
+### 帧格式
+
+```
+id: 9001
+event: business.event
+data: {"streamSeq":9001,"node":"node-main","instance":5,"instanceName":"game-01",
+       "domain":"activity","topic":"activity.spring-2026","dedupKey":"e-8891",
+       "seq":1024,"occurredAt":1730000000,"payload":{...}}
+
+event: ping
+data: {"t":1730000000}
+
+event: replay_gap
+data: {"requestedSeq":888,"oldestAvailableSeq":1002,"reason":"BUFFER_EXPIRED"}
+```
+
+### 缓冲的性质
+
+- **非持久**：进程重启即失
+- **非真源**：真源在插件，镜像在业务台
+- **可丢**：窗口外必然补不到
+
+窗口为 **30 秒或 20 万条（先到者生效）**。超出窗口返回 `replay_gap`，**收到后必须触发全量对账**。
+
+**请勿把本接口当可靠消息队列用。**
+
+### 慢消费者保护
+
+每订阅者有独立有界队列（1024 条）。队列满时断开该订阅者并尽力发送 `event: error`（`code: SLOW_CONSUMER`），**不阻塞其他订阅者**。
+
+客户端完全停止读取（TCP 窗口为 0）时终止帧物理上送不出去——这是 TCP 性质，不是缺陷。重连带 `Last-Event-ID` 可补齐（窗口内）。
+
+### 连接限制
+
+| 项 | 值 |
+|---|---|
+| 单 Token 并发 SSE | 5（超出 429） |
+| 心跳间隔 | 20 秒 |
+| 客户端超时判定 | 50 秒无任何帧 |
+
+### GET /api/v1/business/cursor（位点账本，ADR-107）
+
+```
+GET /api/v1/business/cursor?instanceId=&domain=&fromSeq=&toSeq=&limit=
+```
+
+返回该 `(instanceId, domain)` 区间内**存在过的位点**，按 `seq` 升序：
+
+```json
+{ "cursors": [ { "streamSeq": 1024, "seq": 100, "dedupKey": "e-1", "occurredAt": 1730000000 } ] }
+```
+
+| 参数 | 必填 | 说明 |
+|---|---|---|
+| `instanceId` | 是 | 实例 ID |
+| `domain` | 是 | 业务域（`seq` 只在同域内单调） |
+| `fromSeq` / `toSeq` | 否 | 探针位点闭区间；缺省不限 |
+| `limit` | 否 | 默认 1000，上限 5000（超出钳制） |
+
+**只有位点，没有 payload。** 这是与 SSE 流的关键区别：SSE 是「信封 + 信」，本接口只有「运输单据」。
+
+**为什么 JM 不返回"缺失区间"**：JM 不知道你收到了哪些事件，无法单方计算缺口。调用方拿自己的已收 `seq` 与这里做**差集**，才是唯一正确的信息来源。
+
+**无数据返回 `{"cursors": []}` + 200，不是 404**——「这段时间没有位点」是有效答案。
+
+恢复流程：收到 `replay_gap` → 查本接口 → 对受影响的 `(instance, domain)` 调 `POST /business/reconcile` 拉快照 → 把水位推进到快照位点。**只对受影响的实例/域拉快照**，不做全量对账。
+
+| 项 | 值 |
+|---|---|
+| 保留期 | 默认 7 天（`business_cursor.retention_days`），后台巡检裁剪，**查询不触发删除** |
+| 落库方式 | 异步批量（500 条或 1 秒）；写失败只记 WARN，**不影响事件投递** |
+| 队列打满 | 丢最旧并计数。位点丢失的后果是「保守多拉一次快照」，比阻塞投递可接受 |
+| 关闭 | `business_cursor.enabled=false`，接口回 503，投递路径完全不变 |
+
+---
+
+## 业务通道约定（FR-522 / FR-523 / FR-524 / FR-525）
+
+### 不透明载荷
+
+`payload` 与 `output` 是**不透明**的——平台不解析、不校验、不写入审计。
+
+**为什么**：一旦 JM 开始解析业务内容，它就会长出业务能力，与「JM 不做任何业务」的架构边界（ADR-106）冲突。
+
+### 写穿保证
+
+命令**必须先达插件**，插件成功才算成功。JM 不缓存、不排队、不重试到本地。
+
+前置校验顺序（任一失败即返回，**不产生任何副作用**）：
+1. 实例存在且有权 → `INSTANCE_NOT_FOUND` (404)
+2. 实例运行中 → `INSTANCE_OFFLINE` (409)
+3. 节点在线 → `NODE_OFFLINE` (409)
+4. 探针已连接 → `PROBE_UNAVAILABLE` (409)
+5. 域已注册 → `DOMAIN_UNAVAILABLE` (409)
+6. 动作在 manifest 中声明 → `ACTION_UNSUPPORTED` (422)
+
+### 审计边界
+
+记通道事实：`actor / target / domain / action / requestId / result / duration`。
+
+**绝对不记 `payload` 与 `output`**——可能含玩家数据、密钥、PII。且一旦记录，就会有人问"能不能按 payload 搜索"，然后长出业务查询能力。
+
+### 幂等
+
+`requestId` 必填，窗口 24 小时。同 ID 不同 `payload` → `409 IDEMPOTENCY_KEY_REUSED`（静默返回首次结果会掩盖调用方 bug）。
+
+### 批量与跨区确认
+
+两阶段流程：`preview` 拿 `confirmToken` → `batch` 执行。
+
+**`confirmToken` 绑定解析后的实例集哈希**，不是"用户点过确认"的布尔标记。分组在预览后发生增删 → `409 TARGET_CHANGED`，强制重新预览。
+
+这是防止「确认时看到 87 台、实际执行 95 台」的机制。
+
+风险分级（多条件取最高）：
+
+| 条件 | 级别 | 行为 |
+|---|---|---|
+| 单实例 / 同小区 ≤10 台 | low | 无需确认 |
+| 同小区 >10 台 / 跨小区同大区 | medium | 前端提示 |
+| **跨大区 / 跨集群** | **high** | **强制 token** |
+| 实例数 > 50 | high | 强制 token |
+| 含离线实例 | medium | 提示 |
+| 动作 `risk=DESTRUCTIVE` | **critical** | **token + 必填 reason** |
+
+### 对账
+
+JM 只做「拉取并透传」，**不做差异计算**。`action` 由调用方指定，JM **不预设任何快照动作名**。
+
+差异比对、写回决策全部是业务台的职责——JM 不理解业务语义，无法判断"哪个字段不一致算差异"。
+
+---
+
+## 桥状态与域状态（FR-526 / FR-534）
+
+### GET /api/v1/instances/:id/bridge/status
+
+桥线路健康度：连接状态、重连次数、队列深度、丢弃帧数、在途重载数、探针版本。
+
+**`error` 字段**：探针不可达时的降级原因。有值时其余指标为最后一次已知或零值——**前端必须据此区分「连接正常但计数为 0」与「根本没连上」**。
+
+`queueDepth` 是探针三池（命令/事件/回执）的**求和**，属通道层聚合，不涉及业务语义。
+
+### PUT /api/v1/instances/:id/bridge/subscription
+
+控制探针上报哪些事件。
+
+- **未设置过订阅**：全量上报（兼容现状）
+- **设置后**：只上报匹配 `topics` / `domains` 的事件 **+ 所有非业务事件**（connected/heartbeat 等不受过滤影响，否则平台会失去连接状态感知）
+- 重复 PUT **覆盖**，不是追加
+- 空数组表示订阅全部
+
+**`domains` 的落地**：探针只认 `topic`，JM 会把它展开成 `<domain>.*` 并入 topics 下发。
+
+**注意**：裸 `*` 不等于"全部"（匹配不到任何主题），要订阅全部请传空数组。
+
+### GET /api/v1/instances/:id/business/status
+
+返回该实例探针注册的所有业务域：健康状态、`manifestDigest`、调用计数、降级原因。
+
+**平台只渲染，不解释**：不解析 manifest 内容，`manifestDigest` 只是指纹（用于判断是否变化，避免每次传几 KB）。
+
+缓存 TTL 30 秒，**不落库**（这是运行态信息）。探针不可达时返回最后已知 + `stale: true`（比返回空更有用）。

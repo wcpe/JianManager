@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 二进制资产分发通道（FR-441，spec §3.2 的 kind=asset）。
+// 二进制资产分发通道（spec §3.2 的 kind=asset）。
 //
 // 复用既有制品库分发通道：与 ServerProbe 的 `/probe-artifacts/:id/download` 同用
 // ArtifactVersionService 的 HMAC 签名密钥（probeDownloadSigningKey），仅 scope 结构不同。
@@ -39,7 +39,7 @@ type BinaryDownloadTokenScope struct {
 	ExpiresAt int64  `json:"exp"`
 }
 
-// IssueBinaryDownloadToken 为指定资产签发短期分发 token（FR-441 kind=asset）。
+// IssueBinaryDownloadToken 为指定资产签发短期分发 token（kind=asset）。
 //
 // 复用 ArtifactVersionService 的签名密钥与签名/编解码实现，仅换 scope——这样
 // 「制品库的分发通道」在实现层也只有一条，不会出现两处签名逻辑各自演进。
@@ -114,7 +114,7 @@ func normalizeBinaryDownloadScope(scope *BinaryDownloadTokenScope) error {
 	return nil
 }
 
-// BuildBinaryDownloadURLForRequest 解析 CP 公共基址后拼出下载地址（FR-441）。
+// BuildBinaryDownloadURLForRequest 解析 CP 公共基址后拼出下载地址。
 // 请求可见基址优先，缺失时回退平台设置 platform.public_base_url——二进制下载既可能由
 // 控制台发起，也可能由 MCP/脚本发起，没有请求上下文时仍需可用的绝对地址。
 func (p *ProvisionService) BuildBinaryDownloadURLForRequest(assetID uint, token, requestBaseURL string) (string, error) {
@@ -151,7 +151,7 @@ func (p *ProvisionService) resolveBinaryBaseURL(requestBase string) (string, err
 		"请在平台设置中配置 platform.public_base_url，或改用 kind=url / node_file 来源")
 }
 
-// platformPublicBaseURL 读平台公共基址设置（FR-405：平台生成绝对链接唯一允许的基址）。
+// platformPublicBaseURL 读平台公共基址设置（：平台生成绝对链接唯一允许的基址）。
 // 未配置/不合法时返回空串——由调用方决定报错还是换来源，不在此静默兜底成一个可能错的地址。
 func (p *ProvisionService) platformPublicBaseURL() string {
 	if p.db == nil {
@@ -168,7 +168,7 @@ func (p *ProvisionService) platformPublicBaseURL() string {
 	return value
 }
 
-// SetBinaryBaseURLProvider 注入 CP 公共基址提供者（FR-441，main 接线）。
+// SetBinaryBaseURLProvider 注入 CP 公共基址提供者（main 接线）。
 // 未注入时回退平台设置读取；两者皆无则 asset 来源报错（不静默拼出不可用地址）。
 func (p *ProvisionService) SetBinaryBaseURLProvider(provider func() string) {
 	p.binaryBaseURL = provider

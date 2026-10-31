@@ -42,7 +42,7 @@ func TestInstance_Create_InvalidRequest(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestInstance_Create_PortsPropagate 真机验收 FR-404 抓到：路由层 createInstanceRequest
+// TestInstance_Create_PortsPropagate 真机验收抓到：路由层 createInstanceRequest
 // 缺 serverPort/queryPort/probePort 字段导致 gin 绑定静默丢弃、创建后恒为 0，
 // ServerProbe 插件桥上联 Worker 失败。回归断言三端口正确透传到 model。
 func TestInstance_Create_PortsPropagate(t *testing.T) {

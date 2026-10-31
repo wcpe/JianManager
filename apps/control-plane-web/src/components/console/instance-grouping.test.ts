@@ -1,20 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  envOf,
-  freeTagsOf,
-  collectEnvs,
-  collectTags,
-  groupInstances,
-  groupInstancesByGroupTree,
-  buildGroupTreeSource,
-  groupTreeKey,
-  regionOf,
-  zoneOf,
-  GROUP_DIMENSIONS,
-  dimensionNeedsKeyMap,
-  buildKeyMap,
-  dimensionValueOf,
-} from './instance-grouping'
+import { envOf, freeTagsOf, collectEnvs, collectTags, groupInstances, groupInstancesByGroupTree, buildGroupTreeSource, groupTreeKey, regionOf, zoneOf, GROUP_DIMENSIONS, dimensionNeedsKeyMap, buildKeyMap, dimensionValueOf } from '@/lib/instances/instance-grouping'
 import type { InstanceInfo } from '@/api/instances'
 import type { InstanceGroupNode } from '@/api/instanceGroups'
 
@@ -168,7 +153,7 @@ describe('groupInstances — role / type', () => {
     const g = groupInstances(list, 'type')
     expect(g.map((x) => x.key)).toEqual(['generic', 'minecraft_java'])
   })
-  it('role/type 优先取能力画像，画像缺失回退实例字面字段（FR-445）', () => {
+  it('role/type 优先取能力画像，画像缺失回退实例字面字段', () => {
     // 权威画像与实例字面字段不一致时以画像为准。
     const withProfile = inst(1, 1, null, 'RUNNING', {
       role: 'backend',
@@ -247,7 +232,7 @@ describe('GROUP_DIMENSIONS / dimensionNeedsKeyMap', () => {
   })
 })
 
-/** 组织分组树节点构造器（FR-452）。 */
+/** 组织分组树节点构造器。 */
 function gnode(
   id: number,
   name: string,
@@ -258,7 +243,7 @@ function gnode(
   return { id, uuid: `g-${id}`, name, parentId, sort, instanceCount: memberInstanceIds.length, memberInstanceIds }
 }
 
-describe('groupInstancesByGroupTree（FR-452 多级 + 组 id 键）', () => {
+describe('groupInstancesByGroupTree（多级 + 组 id 键）', () => {
   // 两个同名组（「生存」）分属不同父：键用组 id → 不合并。
   const nodes: InstanceGroupNode[] = [
     gnode(1, '亚洲区', null, 0, []),

@@ -7,8 +7,8 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import GroupsPage from './GroupsPage'
 
-/**
- * GroupsPage 强断言（FR-199 身份访问域）。受 requireAuth 保护：渲染前登录。
+/** 
+ * GroupsPage 强断言（身份访问域）。受 requireAuth 保护：渲染前登录。
  * 三条：① 渲染种子用户组 ② 创建用户组后列表联动多一项 ③ 注入 500 后页面降级不崩溃。
  */
 function adminJwt(role = 10): string {
@@ -41,7 +41,7 @@ describe('GroupsPage（mock 假后端）', () => {
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /创建用户组/ }))
     const dialog = await screen.findByRole('dialog', { name: '创建用户组' })
-    // FR-026：创建用户组弹窗必须走 shadcn Dialog，并用可访问 label 关联 Input/Textarea。
+    // 创建用户组弹窗必须走 shadcn Dialog，并用可访问 label 关联 Input/Textarea。
     await user.type(within(dialog).getByLabelText(/名称/), '测试组')
     expect(within(dialog).getByLabelText('描述')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '创建' }))
@@ -74,7 +74,7 @@ describe('GroupsPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: '管理「默认组」成员' })).not.toBeInTheDocument())
   })
 
-  it('URL 带 ?group=1&panel=members 时深链打开默认组成员管理面板（FR-128）', async () => {
+  it('URL 带 ?group=1&panel=members 时深链打开默认组成员管理面板', async () => {
     loginMockUser()
     renderWithProviders(<GroupsPage />, { route: '/groups?group=1&panel=members' })
     // 无需点按，成员管理弹窗随 URL 深链直接打开。
@@ -82,14 +82,14 @@ describe('GroupsPage（mock 假后端）', () => {
     expect(heading.closest('[role="dialog"]')).toBeInTheDocument()
   })
 
-  it('URL 带 ?group=1&panel=edit 时深链打开默认组编辑面板（FR-128）', async () => {
+  it('URL 带 ?group=1&panel=edit 时深链打开默认组编辑面板', async () => {
     loginMockUser()
     renderWithProviders(<GroupsPage />, { route: '/groups?group=1&panel=edit' })
     const heading = await screen.findByRole('heading', { name: '编辑用户组「默认组」' })
     expect(heading.closest('[role="dialog"]')).toBeInTheDocument()
   })
 
-  it('点「成员」→ URL 写入 ?group=&panel=members，关闭后参数清除（FR-128）', async () => {
+  it('点「成员」→ URL 写入 ?group=&panel=members，关闭后参数清除', async () => {
     loginMockUser()
     renderWithProviders(<GroupsPage />, { route: '/groups' })
     await screen.findByText('默认组')

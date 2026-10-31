@@ -83,3 +83,20 @@ Worker 单元名沿用 FR-282 的安装目录派生规则。部署、回滚和�
 - 回滚不等于数据库 schema 回滚；需要先停止或备份数据的跨版本降级由运维自行评估。
 - 正式版与开发版都按版本、UTC 时间和摘要命名，避免开发版本号重复覆盖。
 - `.env` 目标已有两个 Worker，但当前均未运行；真机验收须先确认其保留身份能正常重连，再进行 ServerProbe 的后续全链路验收。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入（保留原文）。
+
+### FR-410 Linux 用户级 systemd 版本化直装与节点部署
+
+Linux 用户级 systemd 版本化直装与节点部署（feat，增强 FR-277/282）：操作机 SSH 推送 CP 或 Worker 至 Linux 普通用户，二进制按版本/UTC 时间/摘要落入永久保留的不可变目录，`current` 原子指针决定运行版本；稳定保留 `data`、CP 配置与 Worker 身份，旧裸二进制布局首次自动迁移；新增 CP / Worker 显式回滚脚本。仅覆盖 user unit，不引入公开镜像、Docker Compose 生产部署或 Kubernetes（需 spec + ADR）→ `docs/specs/versioned-user-systemd-deploy/spec.md`
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-410（Linux 用户级 systemd 版本化直装与节点部署）
+
+FR-410（Linux 用户级 systemd 版本化直装与节点部署）：将 CP / Worker 的 user unit 部署升级为 `current` 指针 + 不可变版本目录 + 稳定数据目录，自动迁移旧布局并提供显式回滚脚本；不引入公开镜像或 Docker Compose 生产路径 → `docs/specs/versioned-user-systemd-deploy/spec.md`（✅ 已交付@v0.21.0）
+

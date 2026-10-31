@@ -2,45 +2,23 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 备份记录。status/mode/type 取值与后端 model.Backup 对齐。 */
-export interface BackupInfo {
-  id: number
-  uuid: string
-  instanceId: number
-  name: string
-  filePath: string
-  fileSizeMb: number
-  /** 触发来源：0=手动, 1=定时 */
-  type: number
-  /** 备份模式：0=全量, 1=增量（FR-056） */
-  mode: number
-  /** 状态：0=待处理, 1=进行中, 2=已完成, 3=失败 */
-  status: number
-  /** 增量备份的父备份 ID，串成备份链；全量为空（FR-056） */
-  parentId?: number
-  /** 远程存储后端 ID；空表示本地（FR-057） */
-  storageId?: number
-  /** 远程对象键；本地备份为空（FR-057） */
-  storageKey?: string
-  /** 归档 SHA-256，用于恢复前完整性校验（FR-171） */
-  checksum?: string
-  /** 校验算法，当前固定 sha256（FR-171） */
-  checksumAlgo?: string
-  createdAt: string
-}
+// 备份记录契约已回迁应用侧（受控视图与业务页面共用，ADR-103）；此处原样再导出，调用点无需改动。
+import type { BackupInfo } from '@/lib/backups/backup'
+export type { BackupInfo } from '@/lib/backups/backup'
 
 /** 创建备份请求体。 */
 export interface CreateBackupBody {
   name?: string
-  /** 增量备份，挂到最近一次已完成备份后形成链（FR-056） */
+  /** 增量备份，挂到最近一次已完成备份后形成链 */
   incremental?: boolean
-  /** 目标远程存储后端 ID；缺省存于节点本地（FR-057） */
+  /** 目标远程存储后端 ID；缺省存于节点本地 */
   storageId?: number
 }
 
 /** useBackups 选项。 */
 export interface UseBackupsOptions {
-  /**
-   * 轮询间隔毫秒；存在进行中备份时由调用方传入以刷新进度（FR-151）。
+  /** 
+   * 轮询间隔毫秒；存在进行中备份时由调用方传入以刷新进度。
    * 省略或传 false 时不轮询，保持既有行为（其他调用方不受影响）。
    */
   refetchInterval?: number | false

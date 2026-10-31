@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// hoisted mock：暴露内容/下载 spy，断言适配器对管理面端点的调用与映射（FR-214）。
+// hoisted mock：暴露内容/下载 spy，断言适配器对管理面端点的调用与映射。
 const { fetchMock, downloadMock } = vi.hoisted(() => ({
   fetchMock: vi.fn(),
   downloadMock: vi.fn(),
@@ -19,7 +19,7 @@ const FILES: ClientDistFile[] = [
   { path: 'config/ignored.txt', size: 0, artifactSha: '' }, // 无制品（如 sync=ignore 占位）
 ]
 
-describe('clientDistSource 映射（FR-214）', () => {
+describe('clientDistSource 映射', () => {
   beforeEach(() => {
     fetchMock.mockReset()
     downloadMock.mockReset()
@@ -90,7 +90,7 @@ describe('clientDistSource 映射（FR-214）', () => {
   })
 })
 
-describe('manifestFilesToDistFiles 映射（FR-214）', () => {
+describe('manifestFilesToDistFiles 映射', () => {
   it('取 artifact.sha256 作内容寻址 key，保留 path/size', () => {
     const manifest: ManifestFile[] = [
       {

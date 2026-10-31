@@ -12,7 +12,7 @@ const (
 	MetricScopeInstance MetricScope = "instance"
 	// MetricScopeWorld 实例下单个世界的负载，来自 ServerProbe serverprobe_world_*。
 	MetricScopeWorld MetricScope = "world"
-	// MetricScopePlatform 平台汇总维度（FR-463 平台级 SLO）：仅作查询维度，不作为序列身份存储。
+	// MetricScopePlatform 平台汇总维度（平台级 SLO）：仅作查询维度，不作为序列身份存储。
 	MetricScopePlatform MetricScope = "platform"
 )
 
@@ -34,14 +34,29 @@ const (
 	MetricNodeDiskTotal = "node_disk_total"
 	MetricNodeNetRxRate = "node_net_rx_rate"
 	MetricNodeNetTxRate = "node_net_tx_rate"
-	MetricNodeLoad      = "node_load" // 1 分钟 load average（FR-062）
-	// MetricNodeIOWait 是 CPU 等 IO 的占比（pct，FR-485）。
+	MetricNodeLoad      = "node_load" // 1 分钟 load average
+	// MetricNodeIOWait 是 CPU 等 IO 的占比（pct）。
 	// 与 cpu_pct 同为 0..100 的百分比量纲，可直接参与百分比触发。
 	MetricNodeIOWait = "node_iowait"
-	// MetricLogIngestHealthy 日志采集健康（FR-485）：1=采集运行时在运行，0=未运行/创建失败。
+	// MetricLogIngestHealthy 日志采集健康：1=采集运行时在运行，0=未运行/创建失败。
 	MetricLogIngestHealthy = "log_ingest_healthy"
 
-	// FR-401：由 FR-400 已认证 Heartbeat 当前快照沉淀的共享 Bot Worker 运行时指标。
+	// 日志采集面自身的容量与质量信号。事故（2026-09-28）当时这些量
+	// **平台一无所知**，全靠人肉从 journal 里翻，故全部纳入时序并接入告警。
+	//
+	// 缺失值约定：Worker 未上报时**不落点**（曲线留空），绝不落 0——
+	// 「积压 0 条」与「不知道积压」对应的处置完全相反。
+	MetricLogStateFileSize    = "log_state_file_size_bytes"           // 采集索引占用（bytes）
+	MetricLogStateFileGrowth  = "log_state_file_growth_bytes_per_sec" // 索引增速（bytes_per_sec，可负）
+	MetricLogPersistWrite     = "log_persist_write_bytes_per_sec"     // 持久化写入吞吐（bytes_per_sec）
+	MetricLogWALBacklog       = "log_wal_backlog_entries"             // 单源 WAL 最大积压（count）
+	MetricLogWALPaused        = "log_wal_paused_seconds"              // 积压最重源暂停时长（seconds）
+	MetricLogDeliveryFailRate = "log_delivery_failure_rate"           // 投递失败率（pct，0..100）
+	MetricLogVerifyBackoff    = "log_verify_backoff_count"            // 校验退避累计次数（count）
+	MetricLogSlowSQLCount     = "log_slow_sql_count"                  // 慢查询累计次数（count）
+	MetricLogSlowSQLMaxMs     = "log_slow_sql_max_ms"                 // 最慢单次查询（ms）
+
+	// 由已认证 Heartbeat 当前快照沉淀的共享 Bot Worker 运行时指标。
 	// 它们属于节点维度，不代表任一 Bot 或压测会话独占的资源。
 	MetricWorkerProcessRSSBytes = "worker_process_rss_bytes"
 	MetricWorkerProcessCPUPct   = "worker_process_cpu_pct"
@@ -55,12 +70,15 @@ const (
 	MetricInstTPS           = "inst_tps"
 	MetricInstMSPT          = "inst_mspt"
 	MetricInstPlayersOnline = "inst_players_online"
-	MetricInstHeapUsed      = "inst_heap_used"
-	MetricInstHeapMax       = "inst_heap_max"
-	MetricInstThreads       = "inst_threads"
-	MetricInstCPUPct        = "inst_cpu_pct"
-	MetricInstUptime        = "inst_uptime"
-	// FR-465：GC 累计 counter 经 CP 相邻心跳差推导的速率（探针累计值不直接当曲线）。
+	// MetricInstPlayersMax 在线人数上限：来自 SLP `players.max` / Query `maxplayers`。
+	// 供侧栏与列表显示「当前/最大」；与 `inst_players_online` 成对消费，单看它会误导（重启后归零等）。
+	MetricInstPlayersMax = "inst_players_max"
+	MetricInstHeapUsed   = "inst_heap_used"
+	MetricInstHeapMax    = "inst_heap_max"
+	MetricInstThreads    = "inst_threads"
+	MetricInstCPUPct     = "inst_cpu_pct"
+	MetricInstUptime     = "inst_uptime"
+	// GC 累计 counter 经 CP 相邻心跳差推导的速率（探针累计值不直接当曲线）。
 	MetricInstGCCount = "inst_gc_count"   // GC 次数速率（count_per_sec）
 	MetricInstGCTime  = "inst_gc_time_ms" // GC 暂停占用（ms_per_sec）
 
@@ -101,7 +119,7 @@ type MetricSampleRaw struct {
 	Value    *float64  `json:"value"`
 }
 
-// ProcessMetricSnapshot 受管实例进程 TOPN 短期快照（FR-170）。
+// ProcessMetricSnapshot 受管实例进程 TOPN 短期快照。
 type ProcessMetricSnapshot struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// NodeUUID 所属节点。
@@ -109,7 +127,7 @@ type ProcessMetricSnapshot struct {
 	// InstanceUUID 受管实例 UUID。
 	InstanceUUID string `gorm:"type:varchar(64);not null;index:idx_process_metric_instance_sampled,priority:1" json:"instanceUuid"`
 	// PID 显式列名 pid：避免 GORM 把 PID 缩写蛇形化为 p_id，与 managedProcessHistory 的
-	// WHERE pid = ? 查询对齐（真机验收 FR-407 抓到：SQL logic error: no such column: pid）。
+	// WHERE pid = ? 查询对齐（真机验收抓到：SQL logic error: no such column: pid）。
 	PID              int32     `gorm:"column:pid;not null" json:"pid"`
 	Name             string    `gorm:"type:varchar(128)" json:"name"`
 	CPUPercent       float64   `json:"cpuPercent"`

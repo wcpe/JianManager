@@ -21,7 +21,7 @@ var (
 	ErrIPRuleNotFound = errors.New("IP 规则不存在")
 )
 
-// ClientIPGuardService 客户端分发端点 IP 防护（FR-096，见 ADR-023）。
+// ClientIPGuardService 客户端分发端点 IP 防护（见 ADR-023）。
 //
 // 内存缓存规则快照（CRUD 时重载），`Allowed` 无 DB 访问（热路径）；deny 始终优先，存在 allow 规则即白名单模式。
 // 防护拦截用内存原子计数器（可观测、**不按请求写库**，避免攻击下自我放大）。机器码不可信，限流/封禁以 IP 为主。

@@ -154,7 +154,7 @@ type CommandSchedulePlan struct {
 	Occurrences []CommandScheduleOccurrence `json:"occurrences"`
 }
 
-// CommandScheduleCommand FR-369 命令计划准备（Worker → Bot Worker）。
+// CommandScheduleCommand命令计划准备（Worker → Bot Worker）。
 type CommandScheduleCommand struct {
 	Cmd                   string                 `json:"cmd"`
 	RequestID             string                 `json:"requestId"`
@@ -174,7 +174,7 @@ type CommandScheduleCommand struct {
 	SkipOccurrences       []CommandOccurrenceKey `json:"skipOccurrences"`
 }
 
-// CommandScheduleReleaseCommand FR-369 release barrier 命令计划。
+// CommandScheduleReleaseCommandrelease barrier 命令计划。
 type CommandScheduleReleaseCommand struct {
 	Cmd             string `json:"cmd"`
 	RequestID       string `json:"requestId"`
@@ -187,7 +187,7 @@ type CommandScheduleReleaseCommand struct {
 	ReleaseAtUnixMs int64  `json:"releaseAtUnixMs"`
 }
 
-// CommandScheduleCancelCommand FR-369 cancel 命令计划。
+// CommandScheduleCancelCommandcancel 命令计划。
 type CommandScheduleCancelCommand struct {
 	Cmd              string `json:"cmd"`
 	RequestID        string `json:"requestId"`

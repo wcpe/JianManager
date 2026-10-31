@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ClientDistEvent 客户端分发拉取/下载明细事件（FR-093，见 ADR-023）。
+// ClientDistEvent 客户端分发拉取/下载明细事件（见 ADR-023）。
 // **短保留 + 滚动清理**（数据量治理）；供按 IP/机器码/频道/版本/时间检索与近窗去重分布。
 // 机器码/IP 客户端可伪造、不可信，仅追踪统计。
 type ClientDistEvent struct {
@@ -23,24 +23,24 @@ type ClientDistEvent struct {
 	Bytes int64 `gorm:"default:0;not null" json:"bytes"`
 	// Status HTTP 状态码（200/206/304/404…）。
 	Status int `gorm:"default:0;not null" json:"status"`
-	// ErrCode 语义错误码（FR-249）。成功事件为空；失败事件填与响应 error 字段一致的码
+	// ErrCode 语义错误码。成功事件为空；失败事件填与响应 error 字段一致的码
 	// （INVALID_CLIENT_KEY/NO_LATEST_VERSION/ARTIFACT_NOT_FOUND/SIGN_KEY_NOT_CONFIGURED/CHANNEL_NOT_FOUND/INTERNAL_ERROR）。
 	ErrCode string `gorm:"column:err_code;type:varchar(48);index" json:"errCode"`
-	// ErrReason 可读错误原因（FR-265）。
+	// ErrReason 可读错误原因。
 	ErrReason string `gorm:"column:err_reason;type:varchar(255)" json:"errReason"`
-	// Method HTTP 方法（FR-265 日志详情）。
+	// Method HTTP 方法（日志详情）。
 	Method string `gorm:"type:varchar(8)" json:"method"`
-	// Path 请求路径（含 query，FR-265 日志详情）。
+	// Path 请求路径（含 query日志详情）。
 	Path string `gorm:"type:varchar(1024)" json:"path"`
-	// RequestBody 请求体预览（FR-265 排障详情，最多保存短文本；凭证类字段不写入）。
+	// RequestBody 请求体预览（排障详情，最多保存短文本；凭证类字段不写入）。
 	RequestBody string `gorm:"column:request_body;type:text" json:"-"`
-	// ResponseBody 响应体预览（FR-265 排障详情，最多保存短文本；二进制响应不写入）。
+	// ResponseBody 响应体预览（排障详情，最多保存短文本；二进制响应不写入）。
 	ResponseBody string `gorm:"column:response_body;type:text" json:"-"`
-	// RequestHeadersJSON 请求头 JSON（FR-265）。凭证类头不落库。
+	// RequestHeadersJSON 请求头 JSON。凭证类头不落库。
 	RequestHeadersJSON string `gorm:"column:request_headers_json;type:text" json:"-"`
-	// ResponseHeadersJSON 响应头 JSON（FR-265）。凭证类头不落库。
+	// ResponseHeadersJSON 响应头 JSON。凭证类头不落库。
 	ResponseHeadersJSON string `gorm:"column:response_headers_json;type:text" json:"-"`
-	// ETag 响应 ETag 快捷列（FR-265）。
+	// ETag 响应 ETag 快捷列。
 	ETag string `gorm:"column:etag;type:varchar(128)" json:"etag"`
 	// DurationMs 处理耗时（毫秒）。
 	DurationMs int64 `gorm:"column:duration_ms;default:0;not null" json:"durationMs"`
@@ -48,7 +48,7 @@ type ClientDistEvent struct {
 	CreatedAt time.Time `gorm:"index:idx_cde_channel_time" json:"createdAt"`
 }
 
-// ClientDistDaily 客户端分发按日聚合（FR-093）。**长保留**，写时增量 upsert；供下载量趋势 + 版本分布（FR-095）。
+// ClientDistDaily 客户端分发按日聚合。**长保留**，写时增量 upsert；供下载量趋势 + 版本分布。
 type ClientDistDaily struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// Day UTC 日期 YYYY-MM-DD。与 channel/version/kind 组成唯一键。

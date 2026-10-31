@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -17,9 +18,9 @@ import (
 
 var (
 	ErrNodeNotFound = errors.New("节点不存在")
-	// ErrNodeInMaintenance 目标节点处于维护模式，拒绝新实例调度。参见 FR-048。
+	// ErrNodeInMaintenance 目标节点处于维护模式，拒绝新实例调度。参见。
 	ErrNodeInMaintenance = errors.New("节点处于维护模式，已拒绝新实例调度")
-	// ErrNodeNotArchived 目标节点未下线（非软删归档），拒绝彻底清理。参见 FR-394。
+	// ErrNodeNotArchived 目标节点未下线（非软删归档），拒绝彻底清理。参见。
 	ErrNodeNotArchived = errors.New("节点未下线，请先下线再清理")
 )
 
@@ -30,7 +31,7 @@ type NodeService struct {
 	// 同包内通过 SetInstanceService 注入，规避构造期循环依赖。
 	instanceSvc *InstanceService
 	pool        *cpgrpc.ClientPool
-	// tunnelStatus 反向隧道状态来源（FR-281）；nil 表示未启用，响应恒 false。
+	// tunnelStatus 反向隧道状态来源；nil 表示未启用，响应恒 false。
 	tunnelStatus TunnelStatus
 }
 
@@ -51,7 +52,7 @@ func (s *NodeService) SetClientPool(pool *cpgrpc.ClientPool) {
 	s.pool = pool
 }
 
-// TunnelStatus 报告节点反向隧道连接状态（FR-281，见 ADR-066）；由 TunnelRegistry 实现。
+// TunnelStatus 报告节点反向隧道连接状态（见 ADR-066）；由 TunnelRegistry 实现。
 type TunnelStatus interface {
 	Connected(nodeUUID string) bool
 }
@@ -238,7 +239,7 @@ func (s *NodeService) GetByUUID(uuid string) (*model.Node, error) {
 
 // SetMaintenance 置/解节点维护模式（cordon）。
 // 维护模式只影响新实例调度（见 ScheduleAllowed），不触碰已运行实例，
-// 也不改变节点在线/离线状态。参见 FR-048。
+// 也不改变节点在线/离线状态。参见。
 func (s *NodeService) SetMaintenance(id uint, enabled bool) (*model.Node, error) {
 	node, err := s.GetByID(id)
 	if err != nil {
@@ -262,7 +263,7 @@ type DrainResult struct {
 // Drain 排空节点：停止其上所有运行中（含启动中）的实例。
 // 复用 InstanceService.Stop（经 gRPC 委托 Worker 优雅停止），不做实例迁移（迁移为后续可选）。
 // 排空不强制要求节点已处于维护模式，但调用方通常先 cordon 再 drain 以防停止过程中又有新实例落入。
-// 参见 FR-048。
+// 参见。
 func (s *NodeService) Drain(id uint) (*DrainResult, error) {
 	if _, err := s.GetByID(id); err != nil {
 		return nil, err
@@ -293,14 +294,14 @@ func (s *NodeService) Drain(id uint) (*DrainResult, error) {
 	return result, nil
 }
 
-// NodeInstanceBrief 节点删除守卫随拒绝返回的实例摘要（FR-309），供前端展示阻断清单。
+// NodeInstanceBrief 节点删除守卫随拒绝返回的实例摘要，供前端展示阻断清单。
 type NodeInstanceBrief struct {
 	ID     uint                 `json:"id"`
 	Name   string               `json:"name"`
 	Status model.InstanceStatus `json:"status"`
 }
 
-// NodeHasInstancesError 节点名下仍有实例、拒绝删除（FR-309）。
+// NodeHasInstancesError 节点名下仍有实例、拒绝删除。
 // 用类型化错误携带实例清单，handler 据此组装 409 响应体。
 type NodeHasInstancesError struct {
 	Instances []NodeInstanceBrief
@@ -311,13 +312,13 @@ func (e *NodeHasInstancesError) Error() string {
 	return fmt.Sprintf("节点名下仍有 %d 个实例，请先删除或迁移实例后再下线", len(e.Instances))
 }
 
-// NodeDeleteResult 节点删除结果（FR-309）：force 级联时报告删除的实例记录数。
+// NodeDeleteResult 节点删除结果：force 级联时报告删除的实例记录数。
 type NodeDeleteResult struct {
 	InstancesPurged int `json:"instancesPurged"`
 }
 
 // Delete 主动下线节点：解除注册并保留记录（软删除），复连需重新注册。
-// 安全约束（FR-048 / FR-309）：
+// 安全约束：
 //   - 节点在线时一律拒绝（force 亦无效）——活节点必须先排空并断开 Worker，force 仅为
 //     离线节点的孤儿记录兜底；
 //   - 名下仍有实例且未 force 时拒绝并返回实例清单（*NodeHasInstancesError），避免删节点
@@ -377,7 +378,7 @@ func (s *NodeService) Delete(id uint, force bool) (*NodeDeleteResult, error) {
 	return result, nil
 }
 
-// ArchivedNode 归档节点对外视图（FR-393）：公开字段 + deletedAt，不含 secret。
+// ArchivedNode 归档节点对外视图：公开字段 + deletedAt，不含 secret。
 type ArchivedNode struct {
 	ID            uint             `json:"id"`
 	UUID          string           `json:"uuid"`
@@ -413,7 +414,7 @@ func toArchivedNode(n *model.Node) ArchivedNode {
 	return out
 }
 
-// ListArchived 返回已软删下线节点（FR-393），按 deleted_at 倒序；空列表非 nil。
+// ListArchived 返回已软删下线节点，按 deleted_at 倒序；空列表非 nil。
 func (s *NodeService) ListArchived() ([]ArchivedNode, error) {
 	var nodes []model.Node
 	if err := s.db.Unscoped().Where("deleted_at IS NOT NULL").
@@ -430,7 +431,7 @@ func (s *NodeService) ListArchived() ([]ArchivedNode, error) {
 // GetName 返回归档节点名称，供确认逻辑与活跃节点统一处理。
 func (n ArchivedNode) GetName() string { return n.Name }
 
-// GetArchived 按 ID 取单个归档节点；非归档或不存在 → ErrNodeNotFound（FR-393）。
+// GetArchived 按 ID 取单个归档节点；非归档或不存在 → ErrNodeNotFound。
 func (s *NodeService) GetArchived(id uint) (*ArchivedNode, error) {
 	var node model.Node
 	if err := s.db.Unscoped().Where("id = ? AND deleted_at IS NOT NULL", id).
@@ -444,7 +445,7 @@ func (s *NodeService) GetArchived(id uint) (*ArchivedNode, error) {
 	return &a, nil
 }
 
-// Purge 彻底清理归档节点（FR-394）：硬删库记录；有实例须 force 级联硬删实例平台记录，
+// Purge 彻底清理归档节点：硬删库记录；有实例须 force 级联硬删实例平台记录，
 // 不清理远端文件。活跃（未软删）节点返回 ErrNodeNotArchived。
 func (s *NodeService) Purge(id uint, force bool) (*NodeDeleteResult, error) {
 	var node model.Node
@@ -502,7 +503,7 @@ func (s *NodeService) Purge(id uint, force bool) (*NodeDeleteResult, error) {
 
 // ScheduleAllowed 判断节点当前是否允许接纳新实例调度。
 // 维护模式（cordon）下拒绝；返回的 error 为 ErrNodeInMaintenance 或 ErrNodeNotFound。
-// 实例创建/分配选节点前必须经此校验。参见 FR-048。
+// 实例创建/分配选节点前必须经此校验。参见。
 func (s *NodeService) ScheduleAllowed(id uint) error {
 	node, err := s.GetByID(id)
 	if err != nil {
@@ -532,4 +533,86 @@ func generateSecret() (string, error) {
 
 func ptrTime(t time.Time) *time.Time {
 	return &t
+}
+
+// StartupProgressView 是「正在启动的节点」的读模型（范围②）。
+//
+// 为什么不复用 model.Node：启动中的 Worker **还没有注册**，CP 里没有它的节点记录
+// （首装时连 UUID 都没有）。若硬塞进 nodes 表，节点列表会凭空出现「存在但从未上线」的节点。
+type StartupProgressView struct {
+	// Key 进度行主键：node_uuid 或 "name:<名字>"。
+	Key string `json:"key"`
+	// NodeUUID 已注册节点的 UUID；首装未注册时为空。
+	NodeUUID string `json:"nodeUuid,omitempty"`
+	// NodeName Worker 自称的节点名。
+	NodeName string `json:"nodeName"`
+	// Phase 当前阶段标识（config / dataroot / ... / heartbeat）。
+	Phase string `json:"phase"`
+	// PhaseElapsedMs 该阶段已耗时。
+	PhaseElapsedMs int64 `json:"phaseElapsedMs"`
+	// TotalElapsedMs 自进程启动起的总耗时。
+	TotalElapsedMs int64 `json:"totalElapsedMs"`
+	// PhasesDone / PhasesTotal 供前端渲染 n/m。
+	PhasesDone  int32 `json:"phasesDone"`
+	PhasesTotal int32 `json:"phasesTotal"`
+	// UpdatedAt 最近上报时刻。
+	UpdatedAt time.Time `json:"updatedAt"`
+	// Stale true 表示超时未更新，Worker 可能已崩溃或被杀。
+	//
+	// 必须由后端算并下发：前端拿 updatedAt 自行比较会依赖客户端时钟，
+	// 而运维机器的时钟偏差恰恰是常见现象——那会让「启动中断」判定随机失真。
+	Stale bool `json:"stale"`
+}
+
+// ListStartupProgress 返回当前所有「正在启动」的节点进度。
+//
+// 过滤规则：只返回**未陈旧**的进度行。陈旧行不展示——它们代表已经死掉的启动过程，
+// 面板上显示「启动中」会误导运维以为还在加载（实际情况往往需要去查进程）。
+// 陈旧行本身不在这里删除：清理交给注册路径与后续巡检，读路径保持只读。
+func (s *NodeService) ListStartupProgress() ([]StartupProgressView, error) {
+	var rows []model.NodeStartupProgress
+	if err := s.db.Order("updated_at DESC").Find(&rows).Error; err != nil {
+		// 老库可能还没建这张表（迁移未跑）——按「没有正在启动的节点」处理，
+		// 不让一个可选可观测性功能把节点列表整体打挂。
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return []StartupProgressView{}, nil
+		}
+		return nil, fmt.Errorf("查询启动进度失败: %w", err)
+	}
+	now := time.Now()
+	out := make([]StartupProgressView, 0, len(rows))
+	for i := range rows {
+		r := rows[i]
+		stale := r.IsStale(now)
+		if stale {
+			// 陈旧行不进入「正在启动」列表；由 CleanupStaleStartupProgress 清理。
+			continue
+		}
+		out = append(out, StartupProgressView{
+			Key:            r.Key,
+			NodeUUID:       r.NodeUUID,
+			NodeName:       r.NodeName,
+			Phase:          r.Phase,
+			PhaseElapsedMs: r.PhaseElapsedMs,
+			TotalElapsedMs: r.TotalElapsedMs,
+			PhasesDone:     r.PhasesDone,
+			PhasesTotal:    r.PhasesTotal,
+			UpdatedAt:      r.UpdatedAt,
+			Stale:          false,
+		})
+	}
+	return out, nil
+}
+
+// CleanupStaleStartupProgress 删除陈旧进度行，返回删除条数。
+//
+// 由定期巡检调用。之所以要清理而不是永久保留：陈旧行是「启动中途死掉」的残留，
+// 永远留着只会让表慢慢变大，且下次同节点启动时会与新进度混在一起。
+func (s *NodeService) CleanupStaleStartupProgress() (int64, error) {
+	cutoff := time.Now().Add(-5 * time.Minute)
+	res := s.db.Where("updated_at < ?", cutoff).Delete(&model.NodeStartupProgress{})
+	if res.Error != nil {
+		return 0, fmt.Errorf("清理陈旧启动进度失败: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }

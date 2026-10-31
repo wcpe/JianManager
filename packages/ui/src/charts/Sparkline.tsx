@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components -- 与组件同文件导出纯函数 sparkPath（可测），仅影响 Fast Refresh */
-/**
- * 迷你趋势线（FR-221「关键指标概览」）：用纯 SVG 画一条无坐标轴的缩略折线，
+/** 
+ * 迷你趋势线（「关键指标概览」）：用纯 SVG 画一条无坐标轴的缩略折线，
  * 供「当前值 + 趋势缩略」一屏概览。不用 recharts/ResizeObserver——固定 viewBox + 百分比铺满，
  * 在 jsdom 下也可渲染与断言（无需实测宽度）。缺测（null）断开不连线。
  */
@@ -40,7 +40,7 @@ export function sparkPath(points: SparkPoint[]): string {
   return d.trim()
 }
 
-/**
+/** 
  * 迷你趋势线。color 默认取主色变量；空数据渲染为一条淡基线，不报错。
  */
 export function Sparkline({

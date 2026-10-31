@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 二进制版本管理服务（FR-468 §2.3/§2.4/§2.5）。
+// 二进制版本管理服务（§2.3/§2.4/§2.5）。
 //
 // 升级 = 换绑定 + 换文件（走任务中心）；回滚 = 一级对称操作（Current ↔ Previous 交换）。
 // 制品内容是版本真源（Asset），本服务只改「实例当前跑哪个 asset」这一事实。
@@ -24,16 +24,16 @@ import (
 // 与 BackupService.Restore 的 ErrInstanceNotStopped 同口径：替换正在执行的可执行文件
 // 在 Unix 上虽不必然失败，但会留下「进程跑旧 inode、磁盘是新文件」的不一致窗口，
 // 且升级后必须重启才生效——静默进入这个窗口比直接拒绝更糟。首版不做自动停服编排
-// （见 FR-466 快照回滚负责停服编排），由运维先停服再升级。
+// （见快照回滚负责停服编排），由运维先停服再升级。
 var ErrBinaryUpgradeInstanceRunning = errors.New("实例运行中，请先停止实例再执行版本变更")
 
-// ErrBinaryVersionOperationInFlight 同实例已有在途的破坏性操作（FR-468 M-4）。
+// ErrBinaryVersionOperationInFlight 同实例已有在途的破坏性操作（M-4）。
 //
 // 升级/回滚都会覆盖工作目录里的可执行文件，与快照回滚/创建属于同一互斥域；
 // 两个并发版本变更（或一个版本变更与一个快照回滚）交错执行会互相覆盖文件与绑定记录。
 var ErrBinaryVersionOperationInFlight = errors.New("同实例已有在途操作")
 
-// BinaryVersionService 实例二进制版本查询 / 受控升级 / 一级回滚（FR-468）。
+// BinaryVersionService 实例二进制版本查询 / 受控升级 / 一级回滚。
 type BinaryVersionService struct {
 	db        *gorm.DB
 	provision *ProvisionService
@@ -48,7 +48,7 @@ func NewBinaryVersionService(db *gorm.DB, provision *ProvisionService) *BinaryVe
 // SetAudit 注入审计服务（main 接线）；nil 时不写审计。
 func (s *BinaryVersionService) SetAudit(a *AuditService) { s.audit = a }
 
-// BinaryUpgradeCandidate 可升级到的候选版本（FR-468 §2.5）。
+// BinaryUpgradeCandidate 可升级到的候选版本（§2.5）。
 type BinaryUpgradeCandidate struct {
 	AssetID  uint   `json:"assetId"`
 	Filename string `json:"filename"`
@@ -60,7 +60,7 @@ type BinaryUpgradeCandidate struct {
 // BinaryVersionView 实例二进制版本视图（GET /instances/:id/binary-version）。
 type BinaryVersionView struct {
 	InstanceID uint `json:"instanceId"`
-	// Bound 是否登记了版本绑定（非 binary/beacon 实例或搭建早于 FR-468 时为 false）。
+	// Bound 是否登记了版本绑定（非 binary/beacon 实例或搭建早于时为 false）。
 	Bound bool `json:"bound"`
 	// CurrentAssetID 当前生效制品；0 = 无制品库版本（url/node_file 来源）。
 	CurrentAssetID  uint   `json:"currentAssetId"`
@@ -75,7 +75,7 @@ type BinaryVersionView struct {
 	// DriftDetected 版本漂移（启动命令不再指向绑定文件 / 绑定摘要与制品库不一致 / 磁盘实际摘要不符）。
 	DriftDetected bool   `json:"driftDetected"`
 	DriftReason   string `json:"driftReason,omitempty"`
-	// DiskSHA256 工作目录里实际二进制文件的 SHA-256（FR-468 §2.5，经 Worker HashFile 现算）。
+	// DiskSHA256 工作目录里实际二进制文件的 SHA-256（§2.5，经 Worker HashFile 现算）。
 	// 仅在 DiskSHA256Checked 为 true 时有效。
 	DiskSHA256 string `json:"diskSha256,omitempty"`
 	// DiskSHA256Checked 本次查询是否真的做了磁盘比对（节点离线/实例运行中/文件过大时为 false）。
@@ -150,7 +150,7 @@ func (s *BinaryVersionService) View(instanceID uint) (*BinaryVersionView, error)
 		view.Note = "当前二进制来自 url / node_file 来源，无制品库版本；如需版本管理请先把它入库为制品再升级"
 	}
 
-	// 漂移检测（FR-468 §2.5）：三层判据，从「确定」到「可疑」。
+	// 漂移检测（§2.5）：三层判据，从「确定」到「可疑」。
 	//
 	// ①启动命令是否仍指向绑定文件（最确定的漂移：命令被人工改过）；
 	// ②绑定记录的摘要 vs 制品库摘要（DB vs DB，能发现「制品被替换或重新入库」）；
@@ -196,7 +196,7 @@ func (s *BinaryVersionService) View(instanceID uint) (*BinaryVersionView, error)
 	return view, nil
 }
 
-// binaryDiskDigestMaxBytes 磁盘摘要比对的单次读盘上限（FR-468 §2.5）。
+// binaryDiskDigestMaxBytes 磁盘摘要比对的单次读盘上限（§2.5）。
 //
 // 版本视图是**高频读**接口（详情页打开即调），不能每次都去读一个数 GB 的文件：
 // 这里给一个上限，超过即放弃比对并在 DriftReason 里如实说明「未校验」，
@@ -230,7 +230,7 @@ type diskBinaryDigestResult struct {
 	skipReason string
 }
 
-// diskBinaryDigest 经 Worker 现算工作目录里启动二进制的真实 sha256（FR-468 §2.5 / M-3）。
+// diskBinaryDigest 经 Worker 现算工作目录里启动二进制的真实 sha256（§2.5 / M-3）。
 //
 // 情形与措辞：
 //   - 实例运行中：可执行文件可能正被正常使用/自动更新，比对结论不可靠 → 不校验；
@@ -336,7 +336,7 @@ func (s *BinaryVersionService) upgradeCandidates(binding *model.InstanceBinaryBi
 	return out, nil
 }
 
-// Upgrade 把实例升级到指定制品版本（FR-468 §2.3）。
+// Upgrade 把实例升级到指定制品版本（§2.3）。
 //
 // 步骤：校验目标制品 → 校验实例状态（必须已停止）→ Previous=Current（回滚点）→
 // 下发取件 → 落盘名变化则更新 startCommand → 换绑定 → 审计 instance.binary_upgrade。
@@ -362,7 +362,7 @@ func (s *BinaryVersionService) Upgrade(ctx context.Context, instanceID, targetAs
 	return s.applyVersionChange(ctx, inst, binding, asset, operatorID, "upgrade")
 }
 
-// Rollback 回滚到上一版本（FR-468 §2.4，一级回滚，语义对称：回滚本身也可再回滚）。
+// Rollback 回滚到上一版本（§2.4，一级回滚，语义对称：回滚本身也可再回滚）。
 func (s *BinaryVersionService) Rollback(ctx context.Context, instanceID, operatorID uint) (*BinaryVersionResult, error) {
 	inst, err := s.loadStoppedBinaryInstance(instanceID)
 	if err != nil {

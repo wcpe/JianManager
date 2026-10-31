@@ -33,7 +33,7 @@ type ActionSignalClient interface {
 	SignalBotActions(ctx context.Context, nodeUUID string, request *workerpb.SignalBotActionsRequest) (*workerpb.SignalBotActionsResponse, error)
 }
 
-// ActionSignalInput 是 FR-353/355 可复用的内部动作信号输入。
+// ActionSignalInput 是355 可复用的内部动作信号输入。
 type ActionSignalInput struct {
 	RunID            string
 	BotUUID          string

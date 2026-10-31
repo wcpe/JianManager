@@ -123,7 +123,7 @@ func newDeleteCleanupEnv(t *testing.T) (*InstanceService, *cpgrpc.ClientPool, *m
 	return svc, pool, node, inst
 }
 
-// TestDeleteInstanceRemovesBinaryBinding F5（FR-468）：删除实例必须级联清理其二进制版本绑定。
+// TestDeleteInstanceRemovesBinaryBinding F5：删除实例必须级联清理其二进制版本绑定。
 //
 // 缺陷现场：绑定表无 DB 级外键，删除事务原本只清四张关系表 + 崩溃快照 + 快照底链，
 // 绑定行滞留成孤儿（真机发现：删实例后 instance_binary_bindings 仍留 1 行）。

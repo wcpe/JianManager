@@ -1,25 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** proxy↔backend 注册关系（对应后端 model.ServerRegistration + backend 概要，FR-032/035）。 */
-export interface Registration {
-  id: number
-  proxyId: number
-  backendId: number
-  alias: string
-  priority: number
-  forcedHost: string
-  restricted: boolean
-  enabled: boolean
-  backend?: {
-    id: number
-    name: string
-    role: string
-    nodeId: number
-    serverPort: number
-    status: string
-  }
-}
+// 本地绑定仍叫 `Registration`（本文件内使用），对外导出名不变。
+import type { ProxyRegistration as Registration } from '@/lib/instances/proxy-registration'
+
+/** 
+ * proxy↔backend 注册关系契约（对应后端 model.ServerRegistration + backend 概要035）
+ * 已回迁应用侧，双侧共用（ADR-103）；对外保留原导出名 `Registration`，调用点无需改动。
+ */
+export type { ProxyRegistration as Registration } from '@/lib/instances/proxy-registration'
 
 /** 创建注册请求体。 */
 export interface CreateRegistrationBody {
@@ -51,7 +40,7 @@ export function useCreateRegistration(proxyId: number) {
       api.post(`/proxies/${proxyId}/registrations`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['registrations', proxyId] })
-      // 拓扑聚合视图（FR-335）随注册变更失效。
+      // 拓扑聚合视图随注册变更失效。
       qc.invalidateQueries({ queryKey: ['topology'] })
     },
   })

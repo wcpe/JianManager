@@ -30,7 +30,7 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		if err := ensureSQLiteParentDir(cfg.DSN); err != nil {
 			return nil, err
 		}
-		// SQLite 走自建连接池（FR-318 机制化防护，见 sqlite_pool.go）：
+		// SQLite 走自建连接池（机制化防护，见 sqlite_pool.go）：
 		// ① 每条物理连接经 guardConn 包装，让「连接带未提交事务」可被 database/sql 在回池前
 		//    检测并驱逐（原先靠 SetMaxOpenConns(1) 消灭锁竞争来回避，放开连接数后必须换成检测）；
 		// ② 启用 WAL，使读不阻塞写、写不阻塞读；
@@ -49,7 +49,7 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	db, err := gorm.Open(dialector, &gorm.Config{
-		// SQL 日志跟随 FR-225 调试开关（FIX-7）：非调试静默、调试打印，运行时即时生效，
+		// SQL 日志跟随调试开关（FIX-7）：非调试静默、调试打印，运行时即时生效，
 		// 不再硬编码 logger.Info 致生产 / 迁移仍逐条刷 SQL。
 		Logger: newGormLogger(os.Stdout),
 	})
@@ -77,8 +77,8 @@ func logSQLitePoolPlan(plan sqlitePoolPlan) {
 			"max_open_conns", plan.MaxOpenConns,
 			"note", "读并发不再被长写任务阻塞；写事务由写闸门串行化")
 	default:
-		// 逃生阀路径：不切 WAL，回到 FR-318 原始形态。
-		slog.Warn("SQLite 已显式收敛为单连接（逃生阀），退回 FR-318 原始行为",
+		// 逃生阀路径：不切 WAL，回到原始形态。
+		slog.Warn("SQLite 已显式收敛为单连接（逃生阀），退回原始行为",
 			"max_open_conns", plan.MaxOpenConns, "reason", plan.Reason)
 	}
 }
@@ -120,7 +120,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateGRPCPortColumn(db); err != nil {
 		return err
 	}
-	// 迁移 process_metric_snapshots.p_id → pid（真机验收 FR-407 抓到：
+	// 迁移 process_metric_snapshots.p_id → pid（真机验收抓到：
 	// GORM 把 PID 蛇形化为 p_id，与 managedProcessHistory 的 WHERE pid 查询不一致）。
 	if err := migrateProcessMetricPIDColumn(db); err != nil {
 		return err
@@ -130,7 +130,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.User{},
 		&model.UserInvitation{},
 		&model.AuthSetupLock{},
-		// 权限树（FR-432 / ADR-089）：角色模板 + 节点 + 用户绑定 + 覆盖
+		// 权限树（ADR-089）：角色模板 + 节点 + 用户绑定 + 覆盖
 		&model.RoleTemplate{},
 		&model.RolePermission{},
 		&model.UserRoleBinding{},
@@ -140,15 +140,21 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.GroupQuota{},
 		&model.Node{},
 		&model.NodeJDK{},
-		// 节点运行时库（FR-298）：非 JDK 运行时（nodejs/python 预留）承载表，
+		// 节点运行时库：非 JDK 运行时（nodejs/python 预留）承载表，
 		// 读侧与 node_jdks 拼统一视图，写侧各走各表；JDK 不迁移。
 		&model.NodeRuntime{},
-		// 节点包管理器与 registry 配置（FR-306，节点单例）。
+		// 节点包管理器与 registry 配置（节点单例）。
 		&model.NodePMConfig{},
 		&model.NodeEnrollToken{},
-		// Agent 专用令牌（FR-384，见 ADR-076）：与人类 JWT 分离，scope + 写白名单。
+		// Worker 启动阶段进度：注册前的临时进度，注册成功后删除。
+		// 单独成表而非给 Node 加列——首装时 CP 还没有该节点的正式记录（连 UUID 都没有）。
+		&model.NodeStartupProgress{},
+		// 主机级观测快照：分挂载点磁盘与整机 top-N 进程，均为多值维度。
+		&model.HostMountSnapshot{},
+		&model.HostProcessSnapshot{},
+		// Agent 专用令牌（见 ADR-076）：与人类 JWT 分离，scope + 写白名单。
 		&model.AgentToken{},
-		// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops 与日后 MCP tool。
+		// Agent 调用流水（见 ADR-076）：读+写 Ops 与日后 MCP tool。
 		&model.AgentCallLog{},
 		&model.AgentTransferTicket{},
 		&model.Instance{},
@@ -156,24 +162,27 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.LogCutoverState{},
 		&model.LogCutoverWorker{},
 		&model.GroupInstance{},
-		// 实例组织分组树（FR-165，见 ADR-033）：自引用邻接表 + 实例 M:N，
+		// 实例组织分组树（见 ADR-033）：自引用邻接表 + 实例 M:N，
 		// 与用户组 / 网络群组正交，仅供组织归类，不承载 RBAC / 部署语义。
 		&model.InstanceGroupNode{},
 		&model.InstanceGroupMember{},
-		// 实例崩溃快照（FR-313）：进程非正常退出现场留存，每实例滚动保留最近 5 条。
-		// FR-470 起快照增根因/指纹/证据/置信度列（旧行为空，读侧降级 unknown）。
+		// 实例崩溃快照：进程非正常退出现场留存，每实例滚动保留最近 5 条。
+		// 起快照增根因/指纹/证据/置信度列（旧行为空，读侧降级 unknown）。
 		&model.InstanceCrashSnapshot{},
-		// 崩溃趋势汇总（FR-470）：按 (实例, 天, 根因, 指纹) 计数，独立于 K=5 滚动裁剪，
+		// 崩溃趋势汇总：按 (实例, 天, 根因, 指纹) 计数，独立于 K=5 滚动裁剪，
 		// 使「连崩 >5 次」「同类聚合」等趋势不被快照裁剪抹掉。
 		&model.InstanceCrashStat{},
-		// 实例二进制版本绑定（FR-468）：记录实例当前/上一版本制品，使重建冻结版本、
+		// 业务事件位点账本（ADR-107）：只存投递元数据（streamSeq/seq/dedupKey），**无 payload**，
+		// 让业务台能精确定位缺口并只对受影响的实例/域拉快照。默认保留 7 天，定期巡检裁剪。
+		&model.BusinessEventCursor{},
+		// 实例二进制版本绑定：记录实例当前/上一版本制品，使重建冻结版本、
 		// 并提供受控升级与一级回滚。
 		&model.InstanceBinaryBinding{},
-		// 实例整机快照（FR-466）：时间点语义的可回滚点，底层复用 Backup 的归档与回放。
+		// 实例整机快照：时间点语义的可回滚点，底层复用 Backup 的归档与回放。
 		&model.InstanceSnapshot{},
-		// 无主运行时反向对账跟踪（FR-326）：Worker 有、CP 无记录的实例宽限/处置状态。
+		// 无主运行时反向对账跟踪：Worker 有、CP 无记录的实例宽限/处置状态。
 		&model.OrphanRuntime{},
-		// 失效 Bot 自动回收（FR-460）：按 workerEpoch 换代判定僵死 Fleet Bot 的宽限/处置状态。
+		// 失效 Bot 自动回收：按 workerEpoch 换代判定僵死 Fleet Bot 的宽限/处置状态。
 		&model.FleetBotReclaim{},
 		&model.ServerRegistration{},
 		&model.Network{},
@@ -181,9 +190,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.BotStressSession{},
 		&model.BotLoadBatch{},
 		&model.BotLoadActionResult{},
-		// FR-369 命令编排 occurrence checkpoint。
+		// 命令编排 occurrence checkpoint。
 		&model.BotLoadCommandCheckpoint{},
-		// FR-370 压测模板、5 秒聚合样本与 append-only 运行事件。
+		// 压测模板、5 秒聚合样本与 append-only 运行事件。
 		&model.BotLoadTemplate{},
 		&model.BotLoadMetricSample{},
 		&model.BotLoadRunEvent{},
@@ -192,7 +201,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.AlertRule{},
 		&model.AlertEvent{},
 		&model.AlertChannel{},
-		// QQ 已发现群 + 网关连接状态（FR-495）：网关事件落库与连接状态持久化。
+		// QQ 已发现群 + 网关连接状态：网关事件落库与连接状态持久化。
 		&model.QQDiscoveredGroup{},
 		&model.QQGatewayConnection{},
 		&model.Schedule{},
@@ -202,25 +211,34 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Template{},
 		&model.AuditLog{},
 		&model.InstanceConfigVersion{},
-		// 受管配置项来源登记表（FR-451）：二态来源（内联/文件引用）。
+		// 受管配置项来源登记表：二态来源（内联/文件引用）。
 		&model.InstanceConfigSource{},
-		// 实例滚动/分批/灰度编排会话（FR-457）。
+		// 实例滚动/分批/灰度编排会话。
 		&model.InstanceRollingOp{},
-		// 配置基线（模板）与漂移收敛（FR-458）。
+		// 配置基线（模板）与漂移收敛。
 		&model.ConfigBaseline{},
+		// 配置分层覆盖：配置逻辑文件 + 各作用域独立的不可变版本追加链。
+		// 作用域只有 group/instance 两级，多层语义由分组树深度表达（不硬编码大区/小区）。
+		&model.ConfigFile{},
+		&model.ConfigLayerVersion{},
+		// 配置分批灰度与生效编排（532）：交付单（状态机）+ 目标（逐台经历）+ 回滚记录
+		// （回滚可再回滚，必须留链）。三者都在配置交付链路内，与分层覆盖的「定义」分表存放。
+		&model.ConfigDeliveryOrder{},
+		&model.ConfigDeliveryTarget{},
+		&model.ConfigDeliveryRollback{},
 		&model.FileVersion{},
 		&model.Asset{},
-		// 通用制品版本库（FR-409）：逻辑包/来源/版本映射到既有 Asset CAS，首个接入为 ServerProbe。
+		// 通用制品版本库：逻辑包/来源/版本映射到既有 Asset CAS，首个接入为 ServerProbe。
 		&model.ArtifactPackage{},
 		&model.ArtifactSource{},
 		&model.ArtifactVersion{},
-		// 制品存储渠道（FR-347，见 ADR-073）：client-file 制品外置对象存储的渠道配置，
+		// 制品存储渠道（见 ADR-073）：client-file 制品外置对象存储的渠道配置，
 		// 内置「本机存储」行由 service EnsureBuiltin 幂等 seed。
 		&model.ArtifactStorageChannel{},
-		// 制品存量迁移（FR-348）：迁移任务登记与实时计数 + 逐条失败明细。
+		// 制品存量迁移：迁移任务登记与实时计数 + 逐条失败明细。
 		&model.ArtifactMigration{},
 		&model.ArtifactMigrationFailure{},
-		// 制品索引 ↔ S3 对象一致性对账（FR-349）：运行记录 + 差异明细 + 定期设置（单行）。
+		// 制品索引 ↔ S3 对象一致性对账：运行记录 + 差异明细 + 定期设置（单行）。
 		&model.ArtifactReconcileRun{},
 		&model.ArtifactReconcileDiff{},
 		&model.ArtifactReconcileSetting{},
@@ -231,10 +249,34 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.MetricRollup5m{},
 		&model.MetricRollup1h{},
 		&model.PlatformSetting{},
+		// AI 助手配置底座（见 ADR-105）：供应商、模型与单行全局设置。
+		// 与 PlatformSetting 的字符串键覆盖层分开——这三张表有唯一约束、默认模型指针
+		// 与乐观并发版本，塞进标量键会把约束全让给应用层自己守。
+		&model.AssistantProvider{},
+		&model.AssistantModel{},
+		&model.AssistantSetting{},
+		// AI 助手运行时：会话 / 消息 / run / 事件四表。
+		// run 与事件是**两套**语义——run 是状态机（乐观并发 + 会终态），事件是 append-only 过程流；
+		// 单会话单活跃 run 的部分唯一索引无法用 GORM tag 表达，随后手工建（见 migrateAssistantRunUniqueIndexes）。
+		&model.AssistantConversation{},
+		&model.AssistantMessage{},
+		&model.AssistantRun{},
+		&model.AssistantEvent{},
+		// 工具调用的确认票据与执行回执。
+		// 票据表达「用户是否批准这次写入」，回执表达「这次调用实际发生了什么」；
+		// 只读调用不出票（confirmation_id 可空）但同样写回执，供审计串联。
+		&model.AssistantConfirmation{},
+		&model.AssistantReceipt{},
+		// 491：平台级审批票据与执行回执（与聊天确认是两套，见 model/approval.go 注释）。
+		&model.ApprovalTicket{},
+		&model.ApprovalReceipt{},
+		// 外部 MCP 连接与工具（工具逐条启停与设定风险，故单独成表）。
+		&model.AssistantMCPConnection{},
+		&model.AssistantMCPTool{},
 		&model.ClientChannel{},
 		&model.ClientPullKey{},
 		&model.ClientVersion{},
-		// 原 updater-core 集中版本注册表（client_core_versions）已随 FR-193 反转废弃（见 ADR-045 改写）：
+		// 原 updater-core 集中版本注册表（client_core_versions）已随反转废弃（见 ADR-045 改写）：
 		// updater-core 改由 CP 内嵌默认版本自动驱动 manifest agent.core，运营不再管理。AutoMigrate 不删表，
 		// 存量库的旧表留着无害、不再写入；模型已移除，故此处不再 AutoMigrate 该表。
 		&model.ClientMachine{},
@@ -243,7 +285,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientIPRule{},
 		&model.ClientTelemetry{},
 		&model.ClientTelemetryDaily{},
-		// 客户端启动运行态（FR-265）：独立于 client_telemetry，避免运行态污染分发请求观测。
+		// 客户端启动运行态：独立于 client_telemetry，避免运行态污染分发请求观测。
 		&model.ClientRuntimeState{},
 		&model.ClientSecurityProfile{},
 		&model.ClientSecurityHello{},
@@ -251,20 +293,18 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientProtectionAction{},
 		&model.ClientSecurityGroup{},
 		&model.ClientSecurityCounter{},
-		// 客户端分发观测时序快照（FR-217，见 ADR-049）：离线把 events/telemetry 卷积为
+		// 客户端分发观测时序快照（见 ADR-049）：离线把 events/telemetry 卷积为
 		// 按频道×小时桶的观测快照，供观测·分发监控页跨频道/平台时序，与写时聚合解耦。
 		&model.ClientDistSnapshot{},
-		// JBIS 业务事件汇聚（FR-116 底座 / FR-122 经济，见 ADR-028）：
-		// 通用 envelope（按 domain+dedupKey 去重）+ 经济结构化镜像（node→zone 维度）+ 经济变更审计。
-		&model.BusinessEvent{},
-		&model.EconomyBalanceMirror{},
-		&model.EconomyLedgerEntry{},
-		// 全局任务中心 + 站内信（FR-183，见 ADR-040）：长任务（Task）+ 滚动日志（TaskLog）+
+		// JBIS 业务事件汇聚三表（business_events / economy_balance_mirrors /
+		// economy_ledger_entries）已随退役（ADR-106），不再 AutoMigrate。
+		// AutoMigrate 不删表，存量库由 migrateRetireBusinessTables 显式 DROP。
+		// 全局任务中心 + 站内信（见 ADR-040）：长任务（Task）+ 滚动日志（TaskLog）+
 		// 站内信（Notification）；任务进度经心跳上报、CP 汇聚 upsert，终态发站内信。
 		&model.Task{},
 		&model.TaskLog{},
 		&model.Notification{},
-		// 系统更新页检查结果缓存（FR-186，增强 FR-182）：单行覆盖式，存上次成功 CheckResult 的
+		// 系统更新页检查结果缓存（增强）：单行覆盖式，存上次成功 CheckResult 的
 		// JSON blob + checkedAt，进页即显 + 后台静默刷新，刷新失败保留旧缓存。
 		&model.SelfUpdateCheckCache{},
 	); err != nil {
@@ -285,20 +325,37 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateArtifactVersionSourceVersionIndex(db); err != nil {
 		return err
 	}
-	// FR-454：幂等归正 role=beacon 的历史实例 type（早期误记为 minecraft_java）→ generic，
+	// §5.2 / §6.1：助手 run 的两个部分唯一索引（单会话单活跃 run、提交幂等键）。
+	// 必须在 AutoMigrate 建出 assistant_runs 之后执行。
+	if err := migrateAssistantRunUniqueIndexes(db); err != nil {
+		return err
+	}
+	// §8：同 run 单张 pending 票据（部分唯一索引，随后手工建）。
+	if err := migrateAssistantConfirmPendingIndex(db); err != nil {
+		return err
+	}
+	// §3.1：审批票据的幂等部分唯一索引。
+	if err := migrateApprovalPendingUniqueIndex(db); err != nil {
+		return err
+	}
+	// ADR-106：V1 业务镜像表退役，直接删表（用户明确决策，不备份）。
+	if err := migrateRetireBusinessTables(db); err != nil {
+		return err
+	}
+	// 幂等归正 role=beacon 的历史实例 type（早期误记为 minecraft_java）→ generic，
 	// 并顺带归零非适用实例的历史脏 probe_port。best-effort：这是「仅告警/补偿」的数据归正，
 	// 不承担 CP 启动的关键路径（失败不阻断启动，仅日志告警，因而不 return err）。
 	if err := backfillBeaconInstanceType(db); err != nil {
-		slog.Warn("FR-454 Beacon 实例 type/probe_port 归正未完成（不阻断启动）", "error", err)
+		slog.Warn("Beacon 实例 type/probe_port 归正未完成（不阻断启动）", "error", err)
 	}
-	// FR-365：幂等回填 bots.desired_state / desired_state_generation。
+	// 幂等回填 bots.desired_state / desired_state_generation。
 	return backfillBotDesiredState(db)
 }
 
-// backfillBeaconInstanceType 幂等归正 role=beacon 的历史实例 type → generic（FR-454 验收③），
-// 并顺带归零非适用实例的历史脏 probe_port（FR-454 补口）。
+// backfillBeaconInstanceType 幂等归正 role=beacon 的历史实例 type → generic（验收③），
+// 并顺带归零非适用实例的历史脏 probe_port（补口）。
 //
-// 背景：Beacon 配套服务实例（FR-442）不是 Minecraft Java 进程，早期搭建路径把其 type 误记为
+// 背景：Beacon 配套服务实例不是 Minecraft Java 进程，早期搭建路径把其 type 误记为
 // minecraft_java，于是 ServerProbe（Bukkit 插件）被误判为可加载。运行时 IsProbeApplicable 已按
 // role 兜底（端口分配/心跳采集/探针推送三处均收口），但库中 type 仍是脏值；验收③要求数据层归正。
 //
@@ -319,9 +376,9 @@ func backfillBeaconInstanceType(db *gorm.DB) error {
 		return fmt.Errorf("归正 Beacon 实例 type 失败: %w", res.Error)
 	}
 	if res.RowsAffected > 0 {
-		slog.Info("已将 role=beacon 实例的 type 归正为 generic（FR-454）", "rows", res.RowsAffected)
+		slog.Info("已将 role=beacon 实例的 type 归正为 generic", "rows", res.RowsAffected)
 	}
-	// 顺带归零非适用实例的历史脏 probe_port（FR-454）：早期误配会在代理/Beacon/通用二进制上
+	// 顺带归零非适用实例的历史脏 probe_port：早期误配会在代理/Beacon/通用二进制上
 	// 留下一个永不被采集的探针端口。SQL 条件与 model.IsProbeApplicable 严格同口径的反面：
 	// 不适用 ⇔ type<>minecraft_java（type 非空）或 role∈(proxy,beacon)。role IS NULL 视为适用
 	// （NULL 既不等于 proxy 也不等于 beacon），故不会被本条件命中而误清。
@@ -332,7 +389,7 @@ func backfillBeaconInstanceType(db *gorm.DB) error {
 		Update("probe_port", 0); res.Error != nil {
 		return fmt.Errorf("归零非适用实例探针端口失败: %w", res.Error)
 	} else if res.RowsAffected > 0 {
-		slog.Info("已归零非适用实例的历史探针端口（FR-454）", "rows", res.RowsAffected)
+		slog.Info("已归零非适用实例的历史探针端口", "rows", res.RowsAffected)
 	}
 	// 仅日志提示，绝不写入；纯诊断，失败不应影响启动（best-effort）。
 	if ids := listBeaconNamedNonBeaconInstances(db); len(ids) > 0 {
@@ -343,7 +400,7 @@ func backfillBeaconInstanceType(db *gorm.DB) error {
 }
 
 // listBeaconNamedNonBeaconInstances 返回 name 含 beacon（大小写不敏感）但 role 非 beacon 的实例 ID，
-// 仅供调用方打日志提示人工复核，不做任何写入（FR-454：name 不是身份依据，不擅自归正名字匹配的实例）。
+// 仅供调用方打日志提示人工复核，不做任何写入（：name 不是身份依据，不擅自归正名字匹配的实例）。
 //
 // best-effort：本函数是纯诊断，若把 error 冒泡给 AutoMigrate（CP 启动关键路径），一条「告警查询」
 // 失败就会让 CP 起不来——收益与代价严重不匹配，故失败仅降级为一条 warn 日志并返回 nil（N4）。
@@ -360,7 +417,7 @@ func listBeaconNamedNonBeaconInstances(db *gorm.DB) []uint {
 	return ids
 }
 
-// backfillBotDesiredState 将历史 Bot 的 desired_state 按活动会话与 runtime status 回填（FR-365）。
+// backfillBotDesiredState 将历史 Bot 的 desired_state 按活动会话与 runtime status 回填。
 // 活动会话中 status=pending/connecting/connected/disconnected/error → running；
 // stopped 或无活动会话 → stopped；DesiredStateGeneration≤0 时修正为 1。可重复运行。
 func backfillBotDesiredState(db *gorm.DB) error {
@@ -546,7 +603,7 @@ func migrateGRPCPortColumn(db *gorm.DB) error {
 
 // migrateProcessMetricPIDColumn 将 process_metric_snapshots 的 p_id 列迁移为 pid。
 // GORM 默认 snake_case 命名把全大写缩写 PID 转成 p_id，而 managedProcessHistory 查询用
-// pid 列名，二者不一致导致 FR-407 进程历史样本查询报 no such column: pid（真机验收抓到）。
+// pid 列名，二者不一致导致进程历史样本查询报 no such column: pid（真机验收抓到）。
 // 迁移在 AutoMigrate 建表前执行：新库直接按模型建 pid 列；存量库检测到 p_id 时重命名。
 func migrateProcessMetricPIDColumn(db *gorm.DB) error {
 	if !db.Migrator().HasTable("process_metric_snapshots") {
@@ -557,6 +614,28 @@ func migrateProcessMetricPIDColumn(db *gorm.DB) error {
 	}
 	if err := db.Migrator().RenameColumn("process_metric_snapshots", "p_id", "pid"); err != nil {
 		return fmt.Errorf("迁移 process_metric_snapshots.p_id → pid 失败: %w", err)
+	}
+	return nil
+}
+
+// migrateRetireBusinessTables 删除 V1 业务镜像三表（见 ADR-106）。
+//
+// 背景：JM 第五期 JBIS 业务对接把经济/背包的业务语义收进了平台（业务事件 envelope、
+// 经济余额镜像、经济流水审计）。ADR-106 决定 JM 不做任何业务，业务数据由下游业务台持有，
+// 平台只保留纯透传通道。故三表整体退役。
+//
+// 数据处置：**直接删表，不备份**（用户明确决策，V1 业务数据属早期实验性质、无生产依赖）。
+//
+// 幂等：DROP TABLE IF EXISTS，重复执行无副作用；新库本就没有这三张表，空跑。
+func migrateRetireBusinessTables(db *gorm.DB) error {
+	for _, table := range []string{
+		"business_events",
+		"economy_balance_mirrors",
+		"economy_ledger_entries",
+	} {
+		if err := db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
+			return fmt.Errorf("删除已退役业务表 %s 失败: %w", table, err)
+		}
 	}
 	return nil
 }
@@ -585,8 +664,6 @@ func migrateScopedUniqueIndexes(db *gorm.DB) error {
 	}{
 		{&model.BackupStorage{}, "idx_backup_storages_name"},
 		{&model.BackupStorage{}, "uniq_backup_storage_name_active"},
-		{&model.BusinessEvent{}, "idx_be_domain_dedup"},
-		{&model.EconomyLedgerEntry{}, "idx_ele_ledger"},
 	} {
 		if db.Migrator().HasIndex(migration.model, migration.index) {
 			if err := db.Migrator().DropIndex(migration.model, migration.index); err != nil {
@@ -597,9 +674,161 @@ func migrateScopedUniqueIndexes(db *gorm.DB) error {
 	return nil
 }
 
-const artifactVersionSourceVersionIndexName = "idx_artifact_versions_source_version"
+// 助手 run 的两个部分唯一索引名。
+const (
+	// assistantRunActiveIndexName 单会话单活跃 run：只约束 queued/running/waiting_confirmation 行。
+	assistantRunActiveIndexName = "ux_assistant_runs_active"
+	// assistantRunIdemIndexName 提交幂等键：只约束 idempotency_key 非空的行。
+	assistantRunIdemIndexName = "ux_assistant_runs_idem"
+)
 
-// migrateArtifactVersionSourceVersionIndex 修复 FR-411 首版遗漏 Version 字段的唯一索引。
+// assistantConfirmPendingIndexName 同 run 单张 pending 票据（§8）。
+//
+// 为什么需要它：一轮 run 可能在**同一个工具轮次里**产生多个写调用
+// （模型一次回多个 tool_calls）。若每个都出票，前端会同时出现多张确认卡，
+// 而 run 只有一个 waiting_confirmation 状态，用户批准先后顺序无法表达——
+// 更糟的是先批的那张执行后 run 已推进，后一张的确认语义就落空了。
+const assistantConfirmPendingIndexName = "ux_assistant_confirmations_pending"
+
+// migrateAssistantRunUniqueIndexes 为 assistant_runs 建两个部分唯一索引（§5.2 / §6.1）。
+//
+// 为什么必须是数据库约束而不是进程内锁：单活跃 run 要能挡住重启后的残留槽与同一实例内的并发提交，
+// 进程锁在重启后丢失、在两个实例下直接失效；而幂等键的唯一性一旦让给应用层「先查再插」，
+// 两个并发请求同时未命中就都会插入，幂等当场破功（§6.1「插入冲突即回读」正是为这个窗口准备的）。
+//
+// 为什么是**部分**索引：
+//   - 单活跃索引只覆盖活跃态——终态 run 必须允许同一会话继续累积历史，普通唯一索引会让一个会话
+//     永久只能有一个 run；
+//   - 幂等索引排除空值（NULL 与空串都排除）——不带 Idempotency-Key 的请求不应互相顶掉，
+//     这是 §6.1 的硬要求。
+//
+// 幂等：HasIndex 先行跳过 + DDL 自带 IF NOT EXISTS，重复执行（每次 CP 启动）不报错。
+func migrateAssistantRunUniqueIndexes(db *gorm.DB) error {
+	if !db.Migrator().HasTable("assistant_runs") {
+		return nil
+	}
+	// 活跃态谓词由 model.AssistantRunActiveStatuses 拼装而非另写一份字面量：
+	// 两处一旦漂移，索引会放过本该冲突的插入，而这种漏洞在测试里几乎是静默的。
+	quoted := make([]string, 0, len(model.AssistantRunActiveStatuses()))
+	for _, status := range model.AssistantRunActiveStatuses() {
+		quoted = append(quoted, "'"+status+"'")
+	}
+	ddls := []struct {
+		name string
+		stmt string
+	}{
+		{
+			name: assistantRunActiveIndexName,
+			stmt: fmt.Sprintf(
+				"CREATE UNIQUE INDEX IF NOT EXISTS %s ON assistant_runs (conversation_id) WHERE status IN (%s)",
+				assistantRunActiveIndexName, strings.Join(quoted, ", ")),
+		},
+		{
+			name: assistantRunIdemIndexName,
+			stmt: fmt.Sprintf(
+				"CREATE UNIQUE INDEX IF NOT EXISTS %s ON assistant_runs (owner_user_id, conversation_id, idempotency_key) "+
+					"WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''",
+				assistantRunIdemIndexName),
+		},
+	}
+	for _, ddl := range ddls {
+		// HasIndex 对部分索引同样适用（与 migrateNodeNameUnique 同口径）。
+		if db.Migrator().HasIndex(&model.AssistantRun{}, ddl.name) {
+			continue
+		}
+		if err := db.Exec(ddl.stmt).Error; err != nil {
+			return fmt.Errorf("创建助手 run 唯一索引 %s 失败: %w", ddl.name, err)
+		}
+	}
+	return nil
+}
+
+// migrateAssistantConfirmPendingIndex 建「同 run 单张 pending 票据」的部分唯一索引。
+//
+// 与 run 的两个索引同构：约束放在数据库层而不是应用层「先查再插」，
+// 因为后者在并发下两个请求都未命中就会双双插入（这正是 run 幂等键踩过的坑）。
+//
+// **存量数据处理**：早期版本不限制同 run 多张 pending，历史库里可能已有此类行。
+// 直接建索引会让 CP 启动失败，所以先把同一 run 的多余 pending **标为失效**，
+// 只保留最新一张。这是有意的取舍：那些票据从未被确认过，且对应 run 早已推进到
+// 终态或本身已不可达，把它们标失效不会丢掉任何「用户已批准」的事实
+// （已批准的票据状态是 consumed/approved，不在本处理范围内）。
+func migrateAssistantConfirmPendingIndex(db *gorm.DB) error {
+	if !db.Migrator().HasTable("assistant_confirmations") {
+		return nil
+	}
+	if db.Migrator().HasIndex(&model.AssistantConfirmation{}, assistantConfirmPendingIndexName) {
+		return nil
+	}
+
+	// 先归正存量：每个 run 只留 id 最大的那张 pending。
+	//
+	// 用 id 而不是 created_at 判「最新」：同一次事务里插入的行 created_at 可能相同，
+	// 而 id 单调，能给出确定的唯一选择。
+	var dupRunIDs []uint
+	if err := db.Model(&model.AssistantConfirmation{}).
+		Where("status = ?", model.AssistantConfirmStatusPending).
+		Group("run_id").
+		Having("COUNT(*) > 1").
+		Pluck("run_id", &dupRunIDs).Error; err != nil {
+		return fmt.Errorf("统计重复 pending 票据失败: %w", err)
+	}
+	for _, runID := range dupRunIDs {
+		// 找出该 run 下应保留的那张。
+		var keepID uint
+		if err := db.Model(&model.AssistantConfirmation{}).
+			Where("run_id = ? AND status = ?", runID, model.AssistantConfirmStatusPending).
+			Order("id DESC").Limit(1).Pluck("id", &keepID).Error; err != nil {
+			return fmt.Errorf("查询保留票据失败: %w", err)
+		}
+		if err := db.Model(&model.AssistantConfirmation{}).
+			Where("run_id = ? AND status = ? AND id <> ?", runID, model.AssistantConfirmStatusPending, keepID).
+			Update("status", model.AssistantConfirmStatusInvalidated).Error; err != nil {
+			return fmt.Errorf("归正重复 pending 票据失败: %w", err)
+		}
+	}
+
+	stmt := fmt.Sprintf(
+		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON assistant_confirmations (run_id) WHERE status = '%s'",
+		assistantConfirmPendingIndexName, model.AssistantConfirmStatusPending)
+	if err := db.Exec(stmt).Error; err != nil {
+		return fmt.Errorf("创建助手确认票据 pending 唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+// approvalPendingIndexName 审批票据幂等索引（§3.1）。
+//
+// 语义：同一 (申请人, action, 目标, payload) 在 **pending 期间**只允许一张票。
+// 重复提交返回原票，而不是新建——否则 Agent 重试就会刷出多张票，
+// 批准人多批一张就多执行一次。
+const approvalPendingIndexName = "ux_approval_tickets_pending"
+
+// migrateApprovalPendingUniqueIndex 建审批票据的幂等部分唯一索引。
+//
+// 为什么必须是数据库约束：应用层「先查再插」在并发下两个请求都未命中就都会插入，
+// 幂等当场破功。这与 assistant_runs 幂等键踩过的是同一个坑。
+//
+// 为什么是**部分**索引：终态票据必须允许同一组条件再次申请（上一张被驳回了，
+// 申请人改好理由再来一次是正常流程）；只有 pending 需要互斥。
+func migrateApprovalPendingUniqueIndex(db *gorm.DB) error {
+	if !db.Migrator().HasTable("approval_tickets") {
+		return nil
+	}
+	if db.Migrator().HasIndex(&model.ApprovalTicket{}, approvalPendingIndexName) {
+		return nil
+	}
+	stmt := fmt.Sprintf(
+		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON approval_tickets "+
+			"(applicant_user_id, action, target_type, target_id, payload_hash) WHERE status = '%s'",
+		approvalPendingIndexName, model.ApprovalStatusPending)
+	if err := db.Exec(stmt).Error; err != nil {
+		return fmt.Errorf("创建审批票据幂等唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+const artifactVersionSourceVersionIndexName = "idx_artifact_versions_source_version" // migrateArtifactVersionSourceVersionIndex 修复首版遗漏 Version 字段的唯一索引。
 // 来源已从属于制品包，故同一来源内只允许一个同名版本，允许同一来源有多个不同版本。
 func migrateArtifactVersionSourceVersionIndex(db *gorm.DB) error {
 	if !db.Migrator().HasTable(&model.ArtifactVersion{}) {
@@ -639,9 +868,9 @@ func artifactVersionSourceVersionIndexIsCorrect(db *gorm.DB) (bool, error) {
 	return false, nil
 }
 
-// dynamicGormLogger 让 GORM 的 SQL 日志跟随 FR-225 调试开关（FIX-7）。
+// dynamicGormLogger 让 GORM 的 SQL 日志跟随调试开关（FIX-7）。
 //
-// 原实现把 GORM logger 硬编码为 logger.Info，与 config.LogLevelVar（FR-063/225 运行时日志级别）
+// 原实现把 GORM logger 硬编码为 logger.Info，与 config.LogLevelVar（225 运行时日志级别）
 // 脱钩，导致生产（release / 非 debug）启动与迁移仍逐条打印 SQL（如 migrator 的
 // `SELECT count(*) FROM sqlite_master`）。改为按调试开关动态取级别：调试（LogLevelVar ≤ Debug）
 // → Info（打印全部 SQL）；否则 → Warn（仅错误 / 慢查询，生产静默）。LogLevelVar 可运行时切换

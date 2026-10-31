@@ -16,6 +16,12 @@ func newTelemetryDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.ClientTelemetry{}, &model.ClientTelemetryDaily{}))
 	return db
 }
@@ -44,7 +50,7 @@ func TestClientTelemetry_RecordAndDailyAggregate(t *testing.T) {
 	require.Equal(t, int64(1), fail.Count)
 }
 
-// TestClientTelemetry_RecordEnrichFields FR-360 新字段落库；旧客户端缺字段不失败。
+// TestClientTelemetry_RecordEnrichFields新字段落库；旧客户端缺字段不失败。
 func TestClientTelemetry_RecordEnrichFields(t *testing.T) {
 	db := newTelemetryDB(t)
 	svc := NewClientTelemetryService(db)

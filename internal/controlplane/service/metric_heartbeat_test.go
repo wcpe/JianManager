@@ -119,8 +119,8 @@ func TestMetric_IngestHeartbeat_ProbeUnavailableWritesNull(t *testing.T) {
 }
 
 // TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull 直探来源可用但**在线人数缺测**时
-// 落 NULL 断点而非伪造 0（FR-447；Query 有响应但缺 numplayers 的场景）。
-// 注意：兼容回退刻意**不含 Query**（FR-446 复审 N1）——Query 可响应而缺 numplayers，回退会重新
+// 落 NULL 断点而非伪造 0（Query 有响应但缺 numplayers 的场景）。
+// 注意：兼容回退刻意**不含 Query**（复审 N1）——Query 可响应而缺 numplayers，回退会重新
 // 引入「伪造 0」；故 Query-only 且未置 players_online_available 时仍写 NULL。
 func TestMetric_IngestHeartbeat_PlayersUnavailableWritesNull(t *testing.T) {
 	svc := newMetricSvc(t)
@@ -177,8 +177,71 @@ func TestMetric_IngestHeartbeat_PlayersAvailableFromDirectProbe(t *testing.T) {
 	require.Nil(t, tps.Points[0].Avg)
 }
 
+// TestMetric_IngestHeartbeat_PlayersMaxLandsSeries 人数上限可用时落 inst_players_max。
+// 侧栏「当前/最大人数」依赖这条序列——批量指标接口只能读到存好的时序，心跳不落就永远没有。
+func TestMetric_IngestHeartbeat_PlayersMaxLandsSeries(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true,
+			PlayersOnline:          16,
+			PlayersOnlineAvailable: true,
+			MaxPlayers:             50,
+			MaxPlayersAvailable:    true,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	playersMax := findSeries(instSeries, model.MetricInstPlayersMax, "")
+	require.NotNil(t, playersMax, "上限可用时落 inst_players_max 序列")
+	require.NotNil(t, playersMax.Points[0].Avg)
+	require.Equal(t, 50.0, *playersMax.Points[0].Avg)
+	// 同一拍在线人数与上限并存，前端才能拼出「16/50」。
+	players := findSeries(instSeries, model.MetricInstPlayersOnline, "")
+	require.NotNil(t, players)
+	require.Equal(t, 16.0, *players.Points[0].Avg)
+}
+
+// TestMetric_IngestHeartbeat_PlayersMaxUnavailableWritesNull 上限缺测时写 NULL 断点，
+// **不做**在线人数那条「探针/SLP 可用就回退」的兼容判定——上限不像在线人数在三源里都必带，
+// 回退会重新引入「伪造上限」（例如把 0 当成「上限 0 人」）。
+func TestMetric_IngestHeartbeat_PlayersMaxUnavailableWritesNull(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	req := &workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		InstanceMetrics: []*workerpb.InstanceMetricSample{{
+			InstanceUuid:           "inst-1",
+			SlpAvailable:           true, // 就连 SLP 可用也不回退
+			PlayersOnline:          5,
+			PlayersOnlineAvailable: true,
+			MaxPlayers:             0, // 未置可用位：视为缺测，不写 0
+			MaxPlayersAvailable:    false,
+		}},
+	}
+	require.NoError(t, svc.ingestHeartbeatAt(req, base))
+
+	from, to := wideWindow(base)
+	_, instSeries, err := svc.QuerySeries(SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "inst-1", From: from, To: to, Resolution: "raw",
+	})
+	require.NoError(t, err)
+	playersMax := findSeries(instSeries, model.MetricInstPlayersMax, "")
+	require.NotNil(t, playersMax, "仍写一条断点序列")
+	require.Len(t, playersMax.Points, 1)
+	require.Nil(t, playersMax.Points[0].Avg, "上限缺测写 NULL，绝不写 0")
+}
+
 // TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample 中间版本 Worker（有直探、置 SlpAvailable
-// 与真实 PlayersOnline，但缺 players_online_available）仍落真实值而非 NULL（FR-446 复审 N1）：
+// 与真实 PlayersOnline，但缺 players_online_available）仍落真实值而非 NULL（复审 N1）：
 // SLP 命中的实例在线人数被误判为缺测会污染全网总在线合计与 bot 容量采样。
 func TestMetric_IngestHeartbeat_PlayersAvailableLegacySlpSample(t *testing.T) {
 	svc := newMetricSvc(t)
@@ -418,6 +481,11 @@ func TestMetric_OverviewTrendQueryCountIsConstant(t *testing.T) {
 		}
 		db2, err := gorm.Open(sqlite.Open("file:"+t.Name()+strconv.Itoa(seriesCount)+"?mode=memory&cache=shared"), cb)
 		require.NoError(t, err)
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db2.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 		require.NoError(t, db2.AutoMigrate(&model.MetricSeries{}, &model.MetricSampleRaw{},
 			&model.MetricRollup5m{}, &model.MetricRollup1h{}, &model.Node{}, &model.Instance{}))
 		svc2 := NewMetricService(db2)

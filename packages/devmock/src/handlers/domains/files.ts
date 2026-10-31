@@ -3,8 +3,8 @@ import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
 
-/**
- * 文件与归档域 mock handler（FR-204）。覆盖 web/src/api/{files,fileVersions,storage,archive}.ts
+/** 
+ * 文件与归档域 mock handler。覆盖 web/src/api/{files,fileVersions,storage,archive}.ts
  * 的全部 endpoint：实例工作目录文件树（列举/读/写/删/改名/上传/下载/搜索/打包）、文件版本（列举/diff/回滚）、
  * 平台存储概览/浏览/缓存清理、归档浏览/读条目/反编译。
  *
@@ -96,7 +96,7 @@ function isDirectChild(path: string, dir: string): boolean {
   return !path.slice(dir.length + 1).includes('/')
 }
 
-/** 把文件树投影为某目录的直接子项列表（对齐 service.FileInfo，目录在前再按名排序；FR-373 权限字段默认全开）。 */
+/** 把文件树投影为某目录的直接子项列表（对齐 service.FileInfo，目录在前再按名排序权限字段默认全开）。 */
 function listDir(instanceId: number, dir: string) {
   const norm = dir.replace(/^\/+|\/+$/g, '')
   return files
@@ -130,11 +130,11 @@ function matchesSearchScope(path: string, root: string, extensions: Set<string>)
   return dot >= 0 && extensions.has(name.slice(dot).toLowerCase())
 }
 
-/** 写文件：存在则覆盖（先快照旧内容入 fileVersions，FR-051 联动），否则新建；自动补建缺失父目录。 */
+/** 写文件：存在则覆盖（先快照旧内容入 fileVersions联动），否则新建；自动补建缺失父目录。 */
 function writeNode(instanceId: number, path: string, content: string): void {
   const existing = getNode(instanceId, path)
   if (existing && !existing.isDir) {
-    // 覆盖写前快照当前内容（改前自动快照，FR-051）。
+    // 覆盖写前快照当前内容（改前自动快照）。
     const nextId = (fileVersions.list().at(-1)?.id ?? 0) + 1
     fileVersions.insert({
       id: nextId,
@@ -171,7 +171,7 @@ export const handlers = [
     return HttpResponse.json(listDir(instanceId, queryPath(info.request)))
   }),
 
-  // ---- 写前权限探测（POST /instances/:id/files/check-access，FR-373）----
+  // ---- 写前权限探测（POST /instances/:id/files/check-access）----
   domainRoute('post', '/instances/:id/files/check-access', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -203,7 +203,7 @@ export const handlers = [
     })
   }),
 
-  // ---- 单 path chmod（POST /instances/:id/files/chmod，FR-373；mock 仅回显）----
+  // ---- 单 path chmod（POST /instances/:id/files/chmodmock 仅回显）----
   domainRoute('post', '/instances/:id/files/chmod', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -270,7 +270,7 @@ export const handlers = [
   }),
 
   // ---- 上传（POST /instances/:id/files/upload，multipart）：写入 form 的 file 内容 ----
-  // FR-304：目标路径优先经 query 参数（与真 CP 流式契约一致），form path 字段兼容回退。
+  // 目标路径优先经 query 参数（与真 CP 流式契约一致），form path 字段兼容回退。
   domainRoute('post', '/instances/:id/files/upload', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -341,7 +341,7 @@ export const handlers = [
     })
   }),
 
-  /* ============================ 文件版本（FR-051） ============================ */
+  /* ============================ 文件版本 ============================ */
 
   // ---- 列出某文件版本（GET /instances/:id/files/versions?path=），按 ID 倒序 ----
   domainRoute('get', '/instances/:id/files/versions', (info) => {
@@ -408,7 +408,7 @@ export const handlers = [
     return HttpResponse.json({ versionId: newId })
   }),
 
-  /* ============================ 归档浏览 / 反编译（FR-075） ============================ */
+  /* ============================ 归档浏览 / 反编译 ============================ */
 
   // ---- 列举归档条目（GET /instances/:id/files/archive/entries?path=）----
   domainRoute('get', '/instances/:id/files/archive/entries', (info) => {
@@ -462,7 +462,7 @@ export const handlers = [
     })
   }),
 
-  /* ============================ 平台存储（FR-083） ============================ */
+  /* ============================ 平台存储 ============================ */
 
   // ---- 存储概览（GET /storage/overview）----。dirs/总计实时从 storageDirs 派生，故 cache 清理后概览随之变化。
   domainRoute('get', '/storage/overview', (info) => {

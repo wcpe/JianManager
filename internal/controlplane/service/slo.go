@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// sloDefaultTarget 默认可用性目标（FR-463）。可由查询覆盖。
+// sloDefaultTarget 默认可用性目标。可由查询覆盖。
 const sloDefaultTarget = 0.995
 
 // sloNormalizeTarget 归一化可用性目标：非有限值（NaN/±Inf）或 <=0 一律回落到默认目标。
@@ -27,14 +27,14 @@ func sloNormalizeTarget(target float64) float64 {
 	return target
 }
 
-// sloEventTriggers 计入故障的告警触发类型（FR-463）。与告警体系一致：崩溃 / 节点离线 / 指标阈值。
+// sloEventTriggers 计入故障的告警触发类型。与告警体系一致：崩溃 / 节点离线 / 指标阈值。
 var sloEventTriggers = []string{
 	model.AlertTriggerInstanceCrash,
 	model.AlertTriggerNodeOffline,
 	model.AlertTriggerMetric,
 }
 
-// SLOQuery 可用性/SLO 查询参数（FR-463）。Scope=node 用 NodeUUID 定位，Scope=instance 用 InstanceID（UUID），
+// SLOQuery 可用性/SLO 查询参数。Scope=node 用 NodeUUID 定位，Scope=instance 用 InstanceID（UUID），
 // Scope=platform 汇总全部**有探针序列**的实例（各实例可用拍求和 / 总拍求和，不做简单平均）。
 type SLOQuery struct {
 	Scope      model.MetricScope
@@ -46,7 +46,7 @@ type SLOQuery struct {
 	InstanceUUIDs []string
 }
 
-// SLOResult 窗口内可用性与 SLO 聚合结果（FR-463）。
+// SLOResult 窗口内可用性与 SLO 聚合结果。
 type SLOResult struct {
 	Scope           model.MetricScope `json:"scope"`
 	Availability    float64           `json:"availability"` // 0~1
@@ -66,7 +66,7 @@ type SLOResult struct {
 	Applicable bool `json:"applicable"`
 }
 
-// ComputeSLO 计算窗口内可用率、故障次数、MTTR/MTBF 与误差预算（FR-463）。
+// ComputeSLO 计算窗口内可用率、故障次数、MTTR/MTBF 与误差预算。
 //
 // 可用性口径：以「有可用证据的心跳/探针拍」为在线，缺拍计不可用（保守默认）。实例用非 NULL 的
 // inst_uptime 拍；节点用非 NULL 的 node_cpu_pct 拍（无节点状态历史表，见 spec 偏差说明）。
@@ -461,7 +461,7 @@ func (s *MetricService) sloTargetID(q SLOQuery) (uint, error) {
 // sloEventQuery 构造故障事件查询：窗口 + 触发类型过滤，并 JOIN alert_rules 取目标类型维度
 // （M3：`alert_events` 只有数字 target_id，目标类型只存在于规则上）。
 //
-// 维度判定不只看 r.target_type：存量行可能是 FR-462 之前的旧规则（target_type 缺失/空），
+// 维度判定不只看 r.target_type：存量行可能是之前的旧规则（target_type 缺失/空），
 // 此时退回按触发类型家族判定（node_offline 恒为节点；崩溃等实例家族恒为实例）；
 // metric 触发在 node/instance **两个维度都存在**，无冗余列时无法安全判别，故只在
 // target_type 明确时才计入对应维度（宁可少计，也不跨维度错计）。
@@ -485,7 +485,7 @@ func sloEventQuery(db *gorm.DB, from, to time.Time) *gorm.DB {
 //
 // 两层判定：
 //  1. `r.target_type` 明确等于目标维度 → 命中；
-//  2. `r.target_type` 缺失（FR-462 之前的旧规则）→ 只在触发类型**只可能属于该维度**时才收：
+//  2. `r.target_type` 缺失（之前的旧规则）→ 只在触发类型**只可能属于该维度**时才收：
 //     `node_offline` 恒为节点、`instance_crash` 恒为实例。
 //     `metric` 在 node 与 instance **两个维度都存在**（`AlertRule.TargetType` 可为 "node" 或
 //     "instance"，见 `alert_evaluator.go` 的 `evaluateNodeMetricRule`/`metricTargetInstances`），

@@ -17,6 +17,12 @@ func newCrashTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Instance{}, &model.Node{}, &model.InstanceCrashSnapshot{}, &model.InstanceCrashStat{},
 		&model.ProcessMetricSnapshot{},
@@ -215,7 +221,7 @@ func TestReclassifyAll_BackfillsAndIsIdempotent(t *testing.T) {
 	svc := NewCrashSnapshotService(db)
 	occurred := time.Now().UTC().Add(-2 * time.Hour)
 
-	// 模拟 FR-470 之前入库的快照：分类列为空、无统计行。
+	// 模拟之前入库的快照：分类列为空、无统计行。
 	snap := &model.InstanceCrashSnapshot{
 		InstanceID: inst.ID, OccurredAt: occurred, ExitCode: 1,
 		TailOutput: "java.lang.OutOfMemoryError: Java heap space",
@@ -348,7 +354,7 @@ func TestCrashSnapshotService_CorrelationGate(t *testing.T) {
 	assert.True(t, svc.CorrelationEnabled())
 }
 
-// TestPruneCrashStats_RetentionWindow 统计保留窗口按天裁剪（crash.stat_retention_days，FR-470 §5）。
+// TestPruneCrashStats_RetentionWindow 统计保留窗口按天裁剪（crash.stat_retention_days§5）。
 func TestPruneCrashStats_RetentionWindow(t *testing.T) {
 	db := newCrashTestDB(t)
 	inst := seedCrashInstance(t, db, "smp")

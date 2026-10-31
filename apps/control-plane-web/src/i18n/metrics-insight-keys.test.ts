@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url'
 import zh from './zh.json'
 import en from './en.json'
 
-/**
- * FR-463/464/465/469 观测增强命名空间（slo / capacity / attribution / ranking / playerTrend
+/** 
+ *464/465/469 观测增强命名空间（slo / capacity / attribution / ranking / playerTrend
  * 及 `metrics.gc*`）的 i18n 守护。
  *
  * 背景：既有的 `missing-keys.test.ts` 只查「代码引用的键是否存在」，**不查反向**
@@ -49,8 +49,15 @@ function listSourceFiles(dir: string): string[] {
   return out
 }
 
+/** 
+ * 包内源码根：视图迁入 @jianmanager/ui 后不再位于应用侧 src。
+ * 孤儿键检查必须一并覆盖包内源码，否则迁包即误报「键零引用」。
+ */
+const uiPackageSrcDir = join(i18nDir, '../../../../packages/ui/src')
+
 function collectSourceBlob(): string {
-  return listSourceFiles(srcDir)
+  return [srcDir, uiPackageSrcDir]
+    .flatMap((dir) => listSourceFiles(dir))
     .filter((f) => statSync(f).isFile())
     .map((f) => readFileSync(f, 'utf-8'))
     .join('\n')
@@ -58,7 +65,7 @@ function collectSourceBlob(): string {
 
 const inScope = (k: string) => NAMESPACES.some((n) => k.startsWith(n)) || EXTRA_PREFIXES.includes(k)
 
-describe('观测增强 i18n（FR-463/464/465/469）', () => {
+describe('观测增强 i18n（464/465/469）', () => {
   const zhKeys = [...flattenKeys(zh as Record<string, unknown>)].filter(inScope).sort()
   const enKeys = [...flattenKeys(en as Record<string, unknown>)].filter(inScope).sort()
   const blob = collectSourceBlob()

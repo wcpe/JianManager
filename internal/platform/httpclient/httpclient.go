@@ -1,4 +1,4 @@
-// Package httpclient 提供 CP 与 Worker 共用的「每进程出站 HTTP 客户端工厂」（FR-174，见 ADR-037）。
+// Package httpclient 提供 CP 与 Worker 共用的「每进程出站 HTTP 客户端工厂」（见 ADR-037）。
 //
 // 所有出站下载（自更新 feed/二进制、JDK 归档、服务端 jar、CFR、未来 GitHub API）经本工厂
 // 构造的 *http.Client 出站，统一受进程级代理配置约束：

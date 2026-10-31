@@ -1,11 +1,11 @@
 import { test, expect, type Page } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-150 日志中心增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *日志中心增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：实时跟随、时间范围、级别过滤、搜索、导出（范围/格式）、分页。
  * （级别配色/时间预设/导出范围/虚拟窗口逻辑由 logs-filters.test.ts 单测覆盖）
- * 证据落 .tmp/acceptance/FR-150/。
+ * 证据落 .tmp/acceptance。
  *
  * 默认时间范围的断言走**请求参数**而非下拉显示文案：文案受 i18n 与默认值漂移影响，
  * 断言窗口宽度（== 默认预设跨度）＋ 上界≈now 才锁得住「默认最近 15 分钟」这一 2026-10-11
@@ -17,7 +17,7 @@ import { login } from './helpers'
 
 /** 默认时间窗跨度：15 分钟（与 LogsPage 的 `useState<TimeRangePreset>('15m')` 对齐）。 */
 const DEFAULT_WINDOW_MS = 15 * 60 * 1000
-/**
+/** 
  * 上界与挂钟的容差（NEW-4，2026-10-12 收紧）。
  *
  * 语义是「仅覆盖挂载/网络往返」——实际实现里上界锚点就是 `Date.now()`，偏差应在毫秒级。
@@ -44,14 +44,16 @@ function lastParams(seen: string[], path: string): URLSearchParams | null {
   return last ? new URL(last).searchParams : null
 }
 
-test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页', async ({ page }) => {
+test('日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 分页', async ({ page }) => {
   const seen = watchAPIRequests(page)
   await login(page)
   await page.goto('/logs')
 
   await expect(page.getByRole('heading', { name: '日志中心' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '实时跟随' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '导出' })).toBeVisible()
+  // 「实时跟随」必须 exact：页头 help 问号的 aria-label 里也含这四个字（真源在 LogsPageView 的 description），
+  // 散写会命中两个按钮 → strict mode violation。
+  await expect(page.getByRole('button', { name: '实时跟随', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '导出', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '错误', exact: true })).toBeVisible()
   await expect(page.getByPlaceholder('搜索日志内容…')).toBeVisible()
 
@@ -86,5 +88,5 @@ test('FR-150 日志中心 实时跟随 + 时间范围 + 级别过滤 + 导出 + 
 
   await expect(page.getByRole('button', { name: '下一页' })).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-150/single-machine-logs.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-logs.png', fullPage: true })
 })

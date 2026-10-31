@@ -38,7 +38,7 @@ type BotLoadCapacityRefresher interface {
 }
 
 // BotLoadBatchDispatcher 隔离连接池和 proto client，便于测试逐批编排。
-// FR-369：加性支持命令计划 Apply/Cancel（与 Bot 批同节点下发）。
+// 加性支持命令计划 Apply/Cancel（与 Bot 批同节点下发）。
 type BotLoadBatchDispatcher interface {
 	ApplyBotBatch(ctx context.Context, nodeUUID string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
 	ApplyBotCommandSchedules(ctx context.Context, nodeUUID string, request *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error)
@@ -148,7 +148,7 @@ type botLoadSerialQueue struct {
 	identities map[string]struct{}
 }
 
-// ScenarioRunLifecycle 收束 FR-352 场景内存任务，不介入后续运行状态机字段。
+// ScenarioRunLifecycle 收束场景内存任务，不介入后续运行状态机字段。
 type ScenarioRunLifecycle interface {
 	StopRun(runID string)
 }
@@ -158,7 +158,7 @@ type BotFleetSnapshotRefresher interface {
 	RefreshSnapshot(ctx context.Context, nodeID uint, nodeUUID, sessionUUID string) error
 }
 
-// BotLoadExecutionService 实现 FR-351 的 start、后台 dispatch、批量 stop 与基础 snapshot 收敛。
+// BotLoadExecutionService 实现的 start、后台 dispatch、批量 stop 与基础 snapshot 收敛。
 type BotLoadExecutionService struct {
 	db                *gorm.DB
 	capacities        BotLoadCapacityRefresher
@@ -739,7 +739,7 @@ func materializeBotLoadBots(tx *gorm.DB, sessionID uint, expected []model.Bot) e
 // samePlannedBotLoadBot 判定已存在行是否仍与「服务端分配计划」一致。
 //
 // 注意：desired_state_generation 属 CP 运行时状态而非计划字段——重试失败（RetryFailed +1）与
-// FR-460 的失效 Bot 重新武装（+1，使重派发获得新的 Worker 幂等键）都会合法推进它。
+// 的失效 Bot 重新武装（+1，使重派发获得新的 Worker 幂等键）都会合法推进它。
 // 把它纳入计划一致性比对，会让任何一次世代推进后的补足/重启被永久拒绝（「与服务端计划不一致」），
 // 因此这里只比对真正的计划字段。
 func samePlannedBotLoadBot(existing, expected model.Bot) bool {
@@ -1030,7 +1030,7 @@ func (s *BotLoadExecutionService) dispatchAllocation(ctx context.Context, sessio
 		slog.Error("Bot 负载 RPC 成功后数据库回写失败", "runId", session.ID, "batchId", batch.UUID, "error", err)
 		return err
 	}
-	// FR-369：Bot 批 accepted 后下发命令编排 plan（无快照则跳过，兼容旧会话）。
+	// Bot 批 accepted 后下发命令编排 plan（无快照则跳过，兼容旧会话）。
 	if err := s.applyCommandSchedulesAfterBatch(ctx, session, allocation.ExecutorNodeUUID, items); err != nil {
 		slog.Error("Bot 命令编排下发失败", "runId", session.ID, "batchId", batch.UUID, "error", err)
 		// 不回滚 Bot 批：连接已 accepted；编排失败记日志，后续可由恢复路径重放。
@@ -1127,7 +1127,7 @@ func (s *BotLoadExecutionService) applyBotLoadBatch(ctx context.Context, nodeUUI
 	return s.dispatcher.ApplyBotBatch(rpcCtx, nodeUUID, request)
 }
 
-// applyCommandSchedulesAfterBatch 对批次内 accepted 的 Bot 下发 FR-369 命令计划（absolute 模式）。
+// applyCommandSchedulesAfterBatch 对批次内 accepted 的 Bot 下发命令计划（absolute 模式）。
 // 会话无 CommandScheduleSnap 时 no-op；单 Bot Finalize/RPC 失败不阻断其余 Bot。
 func (s *BotLoadExecutionService) applyCommandSchedulesAfterBatch(ctx context.Context, session *model.BotStressSession, nodeUUID string, items []botLoadDispatchItem) error {
 	if session == nil || strings.TrimSpace(session.CommandScheduleSnap) == "" {
@@ -1678,7 +1678,7 @@ func sortedBotLoadStopGroups(byNode map[uint]*botLoadStopGroup) []botLoadStopGro
 }
 
 func (s *BotLoadExecutionService) dispatchStopChunk(ctx context.Context, session *model.BotStressSession, node model.Node, bots []model.Bot) error {
-	// FR-369：先取消未终态命令计划，再下发 Bot stopped 批。
+	// 先取消未终态命令计划，再下发 Bot stopped 批。
 	if err := s.cancelCommandSchedulesForBots(ctx, session, node.UUID, bots); err != nil {
 		slog.Error("Bot 命令编排取消失败", "runId", session.ID, "nodeId", node.ID, "error", err)
 	}
@@ -1934,7 +1934,7 @@ func (s *BotLoadExecutionService) ReconcileBotFleetRuntimeState(ctx context.Cont
 	return nil
 }
 
-// ReconcileBotFleetSnapshot 以 CP desired 真源创建缺失、停止多余、修正配置（FR-365）。
+// ReconcileBotFleetSnapshot 以 CP desired 真源创建缺失、停止多余、修正配置。
 func (s *BotLoadExecutionService) ReconcileBotFleetSnapshot(ctx context.Context, nodeID uint, nodeUUID, sessionUUID string, snapshot *workerpb.GetBotFleetSnapshotResponse) error {
 	if snapshot == nil {
 		return nil
@@ -1978,7 +1978,7 @@ func (s *BotLoadExecutionService) buildBotLoadReconcileItems(ctx context.Context
 	return items, nil
 }
 
-// desiredBotLoadReconcileItems 按 desired_state 生成 running 缺失/配置漂移与 stopped 清理项（FR-365）。
+// desiredBotLoadReconcileItems 按 desired_state 生成 running 缺失/配置漂移与 stopped 清理项。
 func (s *BotLoadExecutionService) desiredBotLoadReconcileItems(ctx context.Context, session *model.BotStressSession, bots []model.Bot, runtime map[string]*workerpb.BotRuntimeSnapshot) ([]botLoadReconcileItem, error) {
 	if session == nil {
 		return nil, nil
@@ -2051,7 +2051,7 @@ func (s *BotLoadExecutionService) rebuildRunningAssignment(ctx context.Context, 
 }
 
 // deterministicBotConnectNotBefore 由批次 ConnectStartAt + 该 Bot 在批次内的 ordinal 偏移
-// 推导确定性的 ConnectNotBefore（FR-460 F3 / spec §2.4.3）。
+// 推导确定性的 ConnectNotBefore（F3 / spec §2.4.3）。
 //
 // 原实现用 time.Now() 使每次 sweep 构建出的 assignment 字节不同 → reconcile 幂等键每次都变 →
 // Worker 无法去重，与 ReconcileBotFleetSnapshot 反复重复派发同一 ordinal。改为确定性后可恢复

@@ -122,7 +122,7 @@ func resetDirectProbeStateNoT() {
 }
 
 // TestCollectInstanceMetrics_BudgetFastReturn 采集总预算生效：探针卡住时按预算快速返回，
-// 未完成实例补「不可用」空样本，不阻塞整拍（FR-446 审计项 2）。
+// 未完成实例补「不可用」空样本，不阻塞整拍（审计项 2）。
 func TestCollectInstanceMetrics_BudgetFastReturn(t *testing.T) {
 	resetDirectProbeState(t)
 
@@ -175,7 +175,7 @@ func TestProbeSourceBackoffSkipsAfterRepeatedFailures(t *testing.T) {
 }
 
 // TestProbeSourceBackoffCooldownBounded 退避时长按失败次数递增（60s→120s）且不超过上限，
-// 且首档严格大于 30s 心跳节拍（FR-446 复审 N4：首档 == 节拍会被下一拍追上而形同虚设）。
+// 且首档严格大于 30s 心跳节拍（复审 N4：首档 == 节拍会被下一拍追上而形同虚设）。
 func TestProbeSourceBackoffCooldownBounded(t *testing.T) {
 	resetDirectProbeState(t)
 	now := time.Now()
@@ -226,7 +226,7 @@ func TestProbeConfigWithBackoffSkipsBackedOffSource(t *testing.T) {
 	assert.NotZero(t, cfg.QueryTimeout)
 }
 
-// TestPruneProbeStateDropsRemovedInstances 实例删除后其告警与退避状态被清理（FR-446 审计项 10）。
+// TestPruneProbeStateDropsRemovedInstances 实例删除后其告警与退避状态被清理（审计项 10）。
 func TestPruneProbeStateDropsRemovedInstances(t *testing.T) {
 	resetDirectProbeState(t)
 	now := time.Now()
@@ -258,7 +258,7 @@ func TestPruneProbeStateDropsRemovedInstances(t *testing.T) {
 	directProbeBackoff.Unlock()
 }
 
-// TestUnreachableSourcesReasonIncludesErrorCategory 告警文案并入错误类别与退避标注（FR-446 审计项 4）。
+// TestUnreachableSourcesReasonIncludesErrorCategory 告警文案并入错误类别与退避标注（审计项 4）。
 func TestUnreachableSourcesReasonIncludesErrorCategory(t *testing.T) {
 	snap := process.InstanceSnapshot{UUID: "i1", ServerPort: 25565, QueryPort: 25566}
 	tel := &metrics.InstanceTelemetry{
@@ -283,7 +283,7 @@ func TestUnreachableSourcesReasonIncludesErrorCategory(t *testing.T) {
 }
 
 // TestUnreachableSourcesSignatureStableAcrossCategoryJitter 变化告警的**稳定判据**不受错误类别抖动
-// 与退避态切换影响（FR-446 复审 N5）：否则同一故障会因文案每秒变化而每拍重发 WARN。
+// 与退避态切换影响（复审 N5）：否则同一故障会因文案每秒变化而每拍重发 WARN。
 func TestUnreachableSourcesSignatureStableAcrossCategoryJitter(t *testing.T) {
 	snap := process.InstanceSnapshot{UUID: "i1", ServerPort: 25565, QueryPort: 25566}
 
@@ -340,7 +340,7 @@ func TestRecordInstanceSourceResultDeduplicatesBySignature(t *testing.T) {
 }
 
 // TestCollectInstanceMetrics_BackoffBaseIsProbeCompletion 退避窗口从**探测完成时刻**起算而非拍起点
-// （FR-446 复审 N4）：以拍起点为基准会被下一拍提前追上。
+// （复审 N4）：以拍起点为基准会被下一拍提前追上。
 func TestCollectInstanceMetrics_BackoffBaseIsProbeCompletion(t *testing.T) {
 	resetDirectProbeState(t)
 
@@ -368,7 +368,7 @@ func TestCollectInstanceMetrics_BackoffBaseIsProbeCompletion(t *testing.T) {
 }
 
 // TestCollectInstanceBudget_FollowsEffectiveTimeouts 单拍采集预算**由生效直探超时推导**
-// （FR-446 复审 NEW-ISSUE A）：运营把 direct_probe.* 调大后预算随之变大，不再被硬编码 15s 封顶。
+// （复审 NEW-ISSUE A）：运营把 direct_probe.* 调大后预算随之变大，不再被硬编码 15s 封顶。
 func TestCollectInstanceBudget_FollowsEffectiveTimeouts(t *testing.T) {
 	t.Cleanup(func() { metrics.SetDirectProbeTimeouts(0, 0) })
 
@@ -384,7 +384,7 @@ func TestCollectInstanceBudget_FollowsEffectiveTimeouts(t *testing.T) {
 	assert.Greater(t, big, def, "预算必须随生效超时增大，否则大超时组合仍会被静默砍掉")
 }
 
-// TestCollectInstanceBudget_CoversWorstCaseBelowTick 不变量（FR-446 复审 NEW-ISSUE A）：
+// TestCollectInstanceBudget_CoversWorstCaseBelowTick 不变量（复审 NEW-ISSUE A）：
 // 允许上界下，单实例同源串行最坏 ≤ 预算 ≤ 节拍 − 余量。
 func TestCollectInstanceBudget_CoversWorstCaseBelowTick(t *testing.T) {
 	t.Cleanup(func() { metrics.SetDirectProbeTimeouts(0, 0) })
@@ -413,7 +413,7 @@ func TestWarnIfBudgetBreaksTickGuardrail(t *testing.T) {
 }
 
 // TestCollectInstanceMetrics_OverBudgetKeepsUnavailableSamples 超预算不静默丢：每个实例仍给出
-// 样本（不可用语义），并保留「用已完成部分快速返回」的既有行为（FR-446 审计项 2 / NEW-ISSUE A 要求 4）。
+// 样本（不可用语义），并保留「用已完成部分快速返回」的既有行为（审计项 2 / NEW-ISSUE A 要求 4）。
 func TestCollectInstanceMetrics_OverBudgetKeepsUnavailableSamples(t *testing.T) {
 	resetDirectProbeState(t)
 
@@ -438,7 +438,7 @@ func TestCollectInstanceMetrics_OverBudgetKeepsUnavailableSamples(t *testing.T) 
 }
 
 // TestFillInstanceMetricSample TrimsUnconsumedFields 心跳只填有 CP 消费者的字段；
-// 文本类直探字段不再每拍携带（FR-446 审计项 3），在线人数可用位随编排结果下发。
+// 文本类直探字段不再每拍携带（审计项 3），在线人数可用位随编排结果下发。
 func TestFillInstanceMetricSampleTrimsUnconsumedFields(t *testing.T) {
 	tel := metrics.Orchestrate(
 		&metrics.ProbeSnapshot{TPS: 19.5, PlayersOnline: 7},
@@ -455,18 +455,38 @@ func TestFillInstanceMetricSampleTrimsUnconsumedFields(t *testing.T) {
 	assert.True(t, sample.SlpAvailable)
 	assert.True(t, sample.QueryAvailable)
 
-	// 预留字段不填充（减少每拍载荷）。
+	// 预留的文本类字段不填充（减少每拍载荷）。
 	assert.Empty(t, sample.Motd)
 	assert.Empty(t, sample.Version)
 	assert.Empty(t, sample.PlayerNames)
 	assert.Empty(t, sample.Plugins)
 	assert.Empty(t, sample.Map)
-	assert.Zero(t, sample.MaxPlayers)
 	assert.Empty(t, sample.SourceMask)
 	assert.False(t, sample.PlayerNamesPartial)
+
+	// 【契约变更】max_players 不再是预留字段：侧栏要显示「当前/最大人数」，
+	// 而批量指标接口只能读到存好的时序，心跳必须携带它。它是 int32（约 4 字节/实例/拍），
+	// 与被排除的 motd/名单/插件/图标（KB 级）不在一个量级，因此不受「减少载荷」约束。
+	assert.Equal(t, int32(20), sample.MaxPlayers)
+	assert.True(t, sample.MaxPlayersAvailable)
 }
 
-// TestCollectInstanceMetrics_SkipsNonProbeInstances FR-454：探针不适用（代理/通用二进制/Beacon）
+// TestFillInstanceMetricSample_MaxPlayersUnavailable 三源都没有人数上限时，
+// 可用位必须为 false —— CP 据此落 NULL 断点，绝不把缺测写成「上限 0 人」。
+func TestFillInstanceMetricSample_MaxPlayersUnavailable(t *testing.T) {
+	tel := metrics.Orchestrate(
+		&metrics.ProbeSnapshot{TPS: 19.5, PlayersOnline: 7},
+		nil,
+		nil,
+	)
+	sample := &workerpb.InstanceMetricSample{InstanceUuid: "u1"}
+	fillInstanceMetricSample(sample, tel)
+
+	assert.Zero(t, sample.MaxPlayers)
+	assert.False(t, sample.MaxPlayersAvailable, "缺测时可用位为 false，CP 落 NULL")
+}
+
+// TestCollectInstanceMetrics_SkipsNonProbeInstances：探针不适用（代理/通用二进制/Beacon）
 // 的实例不分配探针端口（ProbePort=0），心跳采集据 ProbePort>0 过滤——不再对它们每拍抓取 /metrics
 // 必失败（采集器只对 ProbePort>0 的 RUNNING 实例发起抓取，此类实例无目标返回 nil）。
 func TestCollectInstanceMetrics_SkipsNonProbeInstances(t *testing.T) {

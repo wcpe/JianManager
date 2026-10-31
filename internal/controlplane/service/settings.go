@@ -16,31 +16,31 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
-// 平台设置可写白名单键（FR-063 / ADR-015）。
+// 平台设置可写白名单键（ADR-015）。
 // 只有这些键允许经 PUT /settings 落库覆盖，其余键一律拒绝。
 const (
 	// SettingKeyLogLevel CP 日志级别（debug|info|warn|error）。落库即时生效（slog LevelVar）。
 	SettingKeyLogLevel = "log.level"
-	// SettingKeyDebugMode 调试模式总开关（true|false，FR-225，增强 FR-063）。落库即时生效：
+	// SettingKeyDebugMode 调试模式总开关（true|false增强）。落库即时生效：
 	// 开=日志 debug + Gin debug 模式；关=日志回 log.level 基线 + Gin release（默认 false，启动即静默）。
 	SettingKeyDebugMode = "debug.mode"
 	// SettingKeyJDKMirrorTemurin / Corretto / Zulu JDK 下载镜像源基址。
-	// 安装 JDK 时 CP 取生效值经 InstallJDKRequest.mirror_base 下发 Worker，使配置真生效（FR-063）。
+	// 安装 JDK 时 CP 取生效值经 InstallJDKRequest.mirror_base 下发 Worker，使配置真生效。
 	SettingKeyJDKMirrorTemurin  = "jdk.mirror.temurin"
 	SettingKeyJDKMirrorCorretto = "jdk.mirror.corretto"
 	SettingKeyJDKMirrorZulu     = "jdk.mirror.zulu"
-	// SettingKeyRuntimeMirrorNodeJS Node.js dist 下载镜像源基址（FR-299，语义同 jdk.mirror.*）。
+	// SettingKeyRuntimeMirrorNodeJS Node.js dist 下载镜像源基址（语义同 jdk.mirror.*）。
 	// 安装 Node.js 时 CP 取生效值经 InstallRuntimeRequest.mirror_base 下发 Worker。
 	SettingKeyRuntimeMirrorNodeJS = "runtime.mirror.nodejs"
 	// SettingKeyGracefulStopTimeout 优雅停止超时（Go duration 文本）。
-	// 启动实例时 CP 取生效值经 CreateInstanceRequest 下发 Worker→wrapper，对其后新启动的实例生效（FR-063）。
+	// 启动实例时 CP 取生效值经 CreateInstanceRequest 下发 Worker→wrapper，对其后新启动的实例生效。
 	SettingKeyGracefulStopTimeout = "graceful_stop.timeout"
-	// SettingKeyDirectProbeSLPTimeout / QueryTimeout 是 MC 直探（SLP / Query）超时（Go duration 文本，FR-446）。
+	// SettingKeyDirectProbeSLPTimeout / QueryTimeout 是 MC 直探（SLP / Query）超时（Go duration 文本）。
 	// 心跳响应按拍下发（HeartbeatResponse.direct_probe_*_timeout_ms），Worker 填入采集编排链；
 	// 与 graceful_stop.timeout 同风格：DB 覆盖 > 基线默认，Worker 侧生效、无需重启。
 	SettingKeyDirectProbeSLPTimeout   = "direct_probe.slp_timeout"
 	SettingKeyDirectProbeQueryTimeout = "direct_probe.query_timeout"
-	// SettingKeyHealth* 是实例健康巡检与自愈（FR-459）策略：心跳响应按拍下发
+	// SettingKeyHealth* 是实例健康巡检与自愈策略：心跳响应按拍下发
 	// （HeartbeatResponse.health_*），Worker 写入巡检器生效值；与 direct_probe.* 同风格
 	// （DB 覆盖 > 基线默认，Worker 侧生效、无需重启）。
 	//   - scan_enabled 巡检总开关（默认 true）；
@@ -50,7 +50,7 @@ const (
 	//   - action 假死动作 warn（默认）|restart；
 	//   - circuit_breaker_threshold 熔断窗口内重启次数阈值（默认 5）；
 	//   - circuit_breaker_window 熔断滚动窗口（默认 10m）；
-	//   - startup_warmup 启动宽限期（默认 5m，FR-459 复审项 2：慢启动 MC 不被误判假死）；
+	// startup_warmup 启动宽限期（默认 5m复审项 2：慢启动 MC 不被误判假死）；
 	//   - self_heal_max_restarts 假死自愈在熔断窗口内的重启次数上限（默认 3，复审项 7）。
 	SettingKeyHealthScanEnabled         = "health.scan_enabled"
 	SettingKeyHealthScanInterval        = "health.scan_interval"
@@ -61,46 +61,46 @@ const (
 	SettingKeyHealthCircuitWindow       = "health.circuit_breaker_window"
 	SettingKeyHealthStartupWarmup       = "health.startup_warmup"
 	SettingKeyHealthSelfHealMaxRestarts = "health.self_heal_max_restarts"
-	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份（FR-063）。
+	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份。
 	SettingKeyBackupRetentionDays = "backup.retention_days"
-	// SettingKeyQuotaEnforceInterval 运行期配额强制巡检周期（Go duration，FR-467）。默认 60s（M-2）。
+	// SettingKeyQuotaEnforceInterval 运行期配额强制巡检周期（Go duration）。默认 60s（M-2）。
 	SettingKeyQuotaEnforceInterval = "quota.enforce_interval"
-	// SettingKeyQuotaEnforceMode 平台默认的运行期配额超限处置档位（alert|throttle|stop，FR-467）。
+	// SettingKeyQuotaEnforceMode 平台默认的运行期配额超限处置档位（alert|throttle|stop）。
 	// 默认 alert：最保守，绝不因配额误停实例；组的 EnforceMode 可覆盖本值。
 	SettingKeyQuotaEnforceMode = "quota.enforce_mode"
-	// SettingKeyQuotaEnforceStreak 连续超限拍数阈值（整数，FR-467）。默认 5（M-2：与 60s 组合约 5 分钟窗口）。
+	// SettingKeyQuotaEnforceStreak 连续超限拍数阈值（整数）。默认 5（M-2：与 60s 组合约 5 分钟窗口）。
 	SettingKeyQuotaEnforceStreak = "quota.enforce_streak"
-	// SettingKeySnapshotRetentionCount 实例快照按条数保留上限（整数，FR-466）。默认 10。
+	// SettingKeySnapshotRetentionCount 实例快照按条数保留上限（整数）。默认 10。
 	SettingKeySnapshotRetentionCount = "snapshot.retention_count"
-	// SettingKeySnapshotRetentionDays 实例快照按天数保留上限（整数，FR-466）。默认 30。
+	// SettingKeySnapshotRetentionDays 实例快照按天数保留上限（整数）。默认 30。
 	SettingKeySnapshotRetentionDays = "snapshot.retention_days"
-	// SettingKeySnapshotPreRollbackKeep pre_rollback 快照保留条数下限（整数，FR-466）。
+	// SettingKeySnapshotPreRollbackKeep pre_rollback 快照保留条数下限（整数）。
 	// pre_rollback 不受 snapshot.retention_count 裁剪，至少保留这么多条，避免「回滚把回滚点挤掉」。
 	SettingKeySnapshotPreRollbackKeep = "snapshot.pre_rollback_keep"
-	// SettingKeySnapshotMaxPerInstance 单实例快照条数上限（整数，FR-466 m-2）。默认 20；0=不限。
+	// SettingKeySnapshotMaxPerInstance 单实例快照条数上限（整数m-2）。默认 20；0=不限。
 	// 创建前保护：拦截「保留策略尚未生效就把磁盘写满」的自伤（快照是全量归档）。
 	SettingKeySnapshotMaxPerInstance = "snapshot.max_per_instance"
-	// SettingKeySnapshotMaxTotalMB 单实例快照总占用上限（MiB 整数，FR-466 m-2）。默认 0=不限。
+	// SettingKeySnapshotMaxTotalMB 单实例快照总占用上限（MiB 整数m-2）。默认 0=不限。
 	SettingKeySnapshotMaxTotalMB = "snapshot.max_total_mb"
-	// SettingKeyCrashStatRetentionDays 崩溃趋势统计保留天数（整数，FR-470）。默认 90。
+	// SettingKeyCrashStatRetentionDays 崩溃趋势统计保留天数（整数）。默认 90。
 	SettingKeyCrashStatRetentionDays = "crash.stat_retention_days"
-	// SettingKeyProxyURL CP 出站代理地址（network 类，FR-185/ADR-043）。敏感（脱敏展示）。
+	// SettingKeyProxyURL CP 出站代理地址（network 类ADR-043）。敏感（脱敏展示）。
 	// 落库即重建 CP 出站持有者（优先级 DB > control-plane.yml > env）；同时作为各节点默认代理。
 	SettingKeyProxyURL = "proxy.url"
-	// SettingKeyProxyNoProxy CP/全局默认出站代理的免代理列表（逗号分隔，语义同 NO_PROXY，FR-185）。
+	// SettingKeyProxyNoProxy CP/全局默认出站代理的免代理列表（逗号分隔，语义同 NO_PROXY）。
 	SettingKeyProxyNoProxy = "proxy.no_proxy"
-	// SettingKeyOrphanGracePeriod 无主运行时宽限期（Go duration，FR-326）。默认 10m；首次发现后观察期内若 CP 又有记录则取消。
+	// SettingKeyOrphanGracePeriod 无主运行时宽限期（Go duration）。默认 10m；首次发现后观察期内若 CP 又有记录则取消。
 	SettingKeyOrphanGracePeriod = "instance_reverse_reconcile.grace_period"
-	// SettingKeyOrphanAutoDispose 宽限后是否自动下发处置（true|false，FR-326）。默认 false：只列表/日志，管理员手动确认。
+	// SettingKeyOrphanAutoDispose 宽限后是否自动下发处置（true|false）。默认 false：只列表/日志，管理员手动确认。
 	SettingKeyOrphanAutoDispose = "instance_reverse_reconcile.auto_dispose"
-	// SettingKeyBotReclaimGracePeriod 失效 Bot 回收宽限期（Go duration，FR-460）。默认 2m——Bot 生命周期短，容忍一次世代迁移窗口即可。
+	// SettingKeyBotReclaimGracePeriod 失效 Bot 回收宽限期（Go duration）。默认 2m——Bot 生命周期短，容忍一次世代迁移窗口即可。
 	SettingKeyBotReclaimGracePeriod = "bot_reclaim.grace_period"
-	// SettingKeyBotReclaimAuto 宽限后是否自动回收失效 Bot（true|false，FR-460）。默认 true，但仅对 Fleet 归属 Bot 生效；V1 手动 Bot 永不自动回收。
+	// SettingKeyBotReclaimAuto 宽限后是否自动回收失效 Bot（true|false）。默认 true，但仅对 Fleet 归属 Bot 生效；V1 手动 Bot 永不自动回收。
 	SettingKeyBotReclaimAuto = "bot_reclaim.auto_reclaim"
-	// SettingKeyBotZombieSessionIdleThreshold 僵尸压测会话停滞阈值（Go duration，FR-472）。
+	// SettingKeyBotZombieSessionIdleThreshold 僵尸压测会话停滞阈值（Go duration）。
 	// 默认 10m——会话在线 Bot 数为 0 且停滞超过该时长即收敛为 stopped，终止对失联会话的无效补足与写放大。
 	SettingKeyBotZombieSessionIdleThreshold = "bot_reclaim.zombie_session_idle_threshold"
-	// SettingKeyPlatformPublicBaseURL 是平台生成绝对链接唯一允许使用的公共基址（FR-405）。
+	// SettingKeyPlatformPublicBaseURL 是平台生成绝对链接唯一允许使用的公共基址。
 	// 允许 HTTP 供无 TLS 的自托管内网使用；不允许由请求头推断。
 	SettingKeyPlatformPublicBaseURL = "platform.public_base_url"
 	// SettingKeyInviteSMTPHost / Port / Username / Password / From 是独立于告警通道的邀请邮件配置。
@@ -110,7 +110,7 @@ const (
 	SettingKeyInviteSMTPPassword = "invite.smtp.password"
 	SettingKeyInviteSMTPFrom     = "invite.smtp.from"
 	// SettingKeyGitHubToken 可选 GitHub API token（敏感，脱敏展示）。落库即时生效（各 GitHub API
-	// 调用点在发请求时读取生效值）：自更新（FR-175）与 ServerProbe 制品版本库同步（FR-409）共用，
+	// 调用点在发请求时读取生效值）：自更新与 ServerProbe 制品版本库同步共用，
 	// 非空时请求带 Authorization 把额度从匿名 60 次/时/IP 提升到 5000 次/时——共享出口 IP 耗尽
 	// 匿名额度即 403。基线取 update.github_token（yml/env），优先级 DB > yml > env；值支持
 	// ${ENV_VAR} 引用（与 SMTP 密码同约定）或字面令牌。明文落库的暴露面与 proxy.url 含凭据时一致。
@@ -132,17 +132,17 @@ type SettingsReader interface {
 	EffectiveValue(key string) string
 }
 
-// SettingsService 平台配置服务（FR-063 / ADR-015）。
+// SettingsService 平台配置服务（ADR-015）。
 //
 // 在 YAML+env 基线（cfg）之上叠加 platform_settings 的 DB 覆盖层，
 // 解析「有效配置」、按白名单读写、并对可即时生效项接到真实读取点。
 type SettingsService struct {
 	db  *gorm.DB
 	cfg *config.Config
-	// proxyRebuilder 在 proxy.* 覆盖落库后被调用，令 CP 重建出站持有者使新代理即时生效（FR-185）。
+	// proxyRebuilder 在 proxy.* 覆盖落库后被调用，令 CP 重建出站持有者使新代理即时生效。
 	// 由 main 注入（传入重建 httpclient.Provider 的闭包）；为 nil 时不重建（仅落库，下次重启生效）。
 	proxyRebuilder func(httpclient.Config)
-	// ginModeApplier 在 debug.mode 切换 / 启动基线时被调用切 Gin 模式（true=debug / false=release，FR-225）。
+	// ginModeApplier 在 debug.mode 切换 / 启动基线时被调用切 Gin 模式（true=debug / false=release）。
 	// 由 main 注入（闭包调 gin.SetMode），使 gin 依赖留在入口层、不渗入 service。为 nil 时仅切日志级别。
 	ginModeApplier func(debug bool)
 }
@@ -155,20 +155,20 @@ func NewSettingsService(db *gorm.DB, cfg *config.Config) *SettingsService {
 	return s
 }
 
-// SetProxyRebuilder 注入 CP 出站持有者重建回调（FR-185，见 ADR-043）。
+// SetProxyRebuilder 注入 CP 出站持有者重建回调（见 ADR-043）。
 // 保存 proxy.url/proxy.no_proxy 后以「当前生效代理」（DB 覆盖 > yaml > env）回调之，
 // 令 CP 自身出站立即走新代理、免重启。不注入则代理覆盖仅落库、下次重启生效。
 func (s *SettingsService) SetProxyRebuilder(fn func(httpclient.Config)) {
 	s.proxyRebuilder = fn
 }
 
-// SetGinModeApplier 注入 Gin 模式切换回调（FR-225）。由 main 注入闭包调 gin.SetMode，使 gin 依赖留在入口层。
+// SetGinModeApplier 注入 Gin 模式切换回调。由 main 注入闭包调 gin.SetMode，使 gin 依赖留在入口层。
 // 须在 ApplyDebugBaseline 前注入，以便启动按 debug.mode 设初始 Gin 模式。
 func (s *SettingsService) SetGinModeApplier(fn func(debug bool)) {
 	s.ginModeApplier = fn
 }
 
-// ApplyDebugBaseline 按当前生效 debug.mode 设初始 Gin 模式 + 日志级别（FR-225）。
+// ApplyDebugBaseline 按当前生效 debug.mode 设初始 Gin 模式 + 日志级别。
 // main 须在 router.Setup 前调用：默认 debug.mode=false → Gin release（不刷 [GIN-debug] 路由噪音）+ 日志 info。
 func (s *SettingsService) ApplyDebugBaseline() {
 	s.applyDebugMode(s.debugModeOn())
@@ -179,7 +179,7 @@ func (s *SettingsService) debugModeOn() bool {
 	return s.EffectiveValue(SettingKeyDebugMode) == "true"
 }
 
-// applyDebugMode 应用调试模式（FR-225）：开=日志强制 debug + Gin debug；关=日志回 log.level 基线 + Gin release。
+// applyDebugMode 应用调试模式：开=日志强制 debug + Gin debug；关=日志回 log.level 基线 + Gin release。
 func (s *SettingsService) applyDebugMode(on bool) {
 	if on {
 		config.SetLogLevel("debug")
@@ -191,7 +191,7 @@ func (s *SettingsService) applyDebugMode(on bool) {
 	}
 }
 
-// EffectiveProxy 返回 CP 当前生效的出站代理配置（FR-185，见 ADR-043）。
+// EffectiveProxy 返回 CP 当前生效的出站代理配置（见 ADR-043）。
 // 优先级：settings DB 覆盖（全局） > control-plane.yml proxy > 环境变量（空配回退）。
 // 同时作为各节点的「全局默认代理」（节点 inherit 时下发此值）。
 func (s *SettingsService) EffectiveProxy() httpclient.Config {
@@ -208,7 +208,7 @@ func (s *SettingsService) EffectiveProxy() httpclient.Config {
 	return httpclient.Config{URL: url, NoProxy: noProxy}
 }
 
-// DirectProbeTimeouts 返回 MC 直探（SLP / Query）当前生效超时（FR-446）。
+// DirectProbeTimeouts 返回 MC 直探（SLP / Query）当前生效超时。
 // 心跳响应据此下发毫秒值给 Worker，使其填入采集编排链（无需重启 Worker）。
 // 值非法/无覆盖时回退基线默认（3s），保证消费方始终拿到可用正超时。
 func (s *SettingsService) DirectProbeTimeouts() (slp, query time.Duration) {
@@ -218,7 +218,7 @@ func (s *SettingsService) DirectProbeTimeouts() (slp, query time.Duration) {
 
 // defaultDirectProbeTimeout / maxDirectProbeTimeout / probeScrapeTimeoutCap 是 MC 直探相关数值。
 //
-// **单一来源**：一律引用 internal/platform/directprobe（FR-446 复审 NEW-ISSUE A），
+// **单一来源**：一律引用 internal/platform/directprobe（复审 NEW-ISSUE A），
 // 与 Worker 侧（`internal/worker/metrics` 的归一、`internal/worker/heartbeat` 的采集预算）
 // 引用同一批常量。上界 maxDirectProbeTimeout 由心跳节拍护栏反推（推导见 directprobe 包文档），
 // 故「超时可配」与「心跳护栏」不可能再出现各写一份字面量而互相矛盾的情况。
@@ -239,10 +239,10 @@ const (
 const realtimeMetricsBudgetMargin = 5 * time.Second
 
 // parseDurationOr 解析 Go duration 文本；解析失败或非正时回退 fallback，并钳制到 MC 直探超时上界。
-// 仅供直探超时（SLP/Query）读取，故读侧钳制与写侧校验对称（FR-446 复审 N3）：基线（yaml/env）或
+// 仅供直探超时（SLP/Query）读取，故读侧钳制与写侧校验对称（复审 N3）：基线（yaml/env）或
 // 历史落库值即便超限也只以 maxDirectProbeTimeout 生效，不让无限大超时冻结详情页与采集链。
 //
-// 归一委托 directprobe.NormalizeTimeout（FR-446 复审 NEW-ISSUE A）：与 Worker 侧归一、CP 写校验
+// 归一委托 directprobe.NormalizeTimeout（复审 NEW-ISSUE A）：与 Worker 侧归一、CP 写校验
 // 引用同一上界，三处不可能漂移。
 func parseDurationOr(raw string, fallback time.Duration) time.Duration {
 	d, err := time.ParseDuration(strings.TrimSpace(raw))
@@ -282,18 +282,18 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 
 	editable := []SettingItem{
 		s.editableItem(SettingKeyLogLevel, s.defaultValue(SettingKeyLogLevel), overrides, true),
-		// 调试模式总开关（FR-225）：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
+		// 调试模式总开关：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
 		s.editableItem(SettingKeyDebugMode, s.defaultValue(SettingKeyDebugMode), overrides, true),
 		s.editableItem(SettingKeyJDKMirrorTemurin, s.defaultValue(SettingKeyJDKMirrorTemurin), overrides, false),
 		s.editableItem(SettingKeyJDKMirrorCorretto, s.defaultValue(SettingKeyJDKMirrorCorretto), overrides, false),
 		s.editableItem(SettingKeyJDKMirrorZulu, s.defaultValue(SettingKeyJDKMirrorZulu), overrides, false),
-		// Node.js dist 镜像源（FR-299）：随安装下发 Worker（同 jdk.mirror.*，非 CP 内即时生效）。
+		// Node.js dist 镜像源：随安装下发 Worker（同 jdk.mirror.*，非 CP 内即时生效）。
 		s.editableItem(SettingKeyRuntimeMirrorNodeJS, s.defaultValue(SettingKeyRuntimeMirrorNodeJS), overrides, false),
 		s.editableItem(SettingKeyGracefulStopTimeout, s.defaultValue(SettingKeyGracefulStopTimeout), overrides, false),
-		// MC 直探超时（FR-446）：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
+		// MC 直探超时：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
 		s.editableItem(SettingKeyDirectProbeSLPTimeout, s.defaultValue(SettingKeyDirectProbeSLPTimeout), overrides, false),
 		s.editableItem(SettingKeyDirectProbeQueryTimeout, s.defaultValue(SettingKeyDirectProbeQueryTimeout), overrides, false),
-		// 实例健康巡检与自愈（FR-459）：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
+		// 实例健康巡检与自愈：经心跳下发 Worker，Worker 侧生效（非 CP 内即时生效）。
 		s.editableItem(SettingKeyHealthScanEnabled, s.defaultValue(SettingKeyHealthScanEnabled), overrides, false),
 		s.editableItem(SettingKeyHealthScanInterval, s.defaultValue(SettingKeyHealthScanInterval), overrides, false),
 		s.editableItem(SettingKeyHealthProbeKind, s.defaultValue(SettingKeyHealthProbeKind), overrides, false),
@@ -304,27 +304,27 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		s.editableItem(SettingKeyHealthStartupWarmup, s.defaultValue(SettingKeyHealthStartupWarmup), overrides, false),
 		s.editableItem(SettingKeyHealthSelfHealMaxRestarts, s.defaultValue(SettingKeyHealthSelfHealMaxRestarts), overrides, false),
 		s.editableItem(SettingKeyBackupRetentionDays, s.defaultValue(SettingKeyBackupRetentionDays), overrides, false),
-		// 运行期配额强制（FR-467）：CP 后台巡检读取生效值（即时生效，下一拍用新值）。
+		// 运行期配额强制：CP 后台巡检读取生效值（即时生效，下一拍用新值）。
 		s.editableItem(SettingKeyQuotaEnforceInterval, s.defaultValue(SettingKeyQuotaEnforceInterval), overrides, true),
 		s.editableItem(SettingKeyQuotaEnforceMode, s.defaultValue(SettingKeyQuotaEnforceMode), overrides, true),
 		s.editableItem(SettingKeyQuotaEnforceStreak, s.defaultValue(SettingKeyQuotaEnforceStreak), overrides, true),
-		// 实例快照保留（FR-466）：CP 后台裁剪循环读取生效值。
+		// 实例快照保留：CP 后台裁剪循环读取生效值。
 		s.editableItem(SettingKeySnapshotRetentionCount, s.defaultValue(SettingKeySnapshotRetentionCount), overrides, true),
 		s.editableItem(SettingKeySnapshotRetentionDays, s.defaultValue(SettingKeySnapshotRetentionDays), overrides, true),
 		s.editableItem(SettingKeySnapshotPreRollbackKeep, s.defaultValue(SettingKeySnapshotPreRollbackKeep), overrides, true),
-		// 快照创建上限（FR-466 m-2）：创建前保护，读侧即时生效。
+		// 快照创建上限（m-2）：创建前保护，读侧即时生效。
 		s.editableItem(SettingKeySnapshotMaxPerInstance, s.defaultValue(SettingKeySnapshotMaxPerInstance), overrides, true),
 		s.editableItem(SettingKeySnapshotMaxTotalMB, s.defaultValue(SettingKeySnapshotMaxTotalMB), overrides, true),
-		// 崩溃趋势统计保留（FR-470）：日粒度统计表的清理窗口。
+		// 崩溃趋势统计保留：日粒度统计表的清理窗口。
 		s.editableItem(SettingKeyCrashStatRetentionDays, s.defaultValue(SettingKeyCrashStatRetentionDays), overrides, true),
-		// 出站代理（network 类，FR-185/ADR-043）：保存即在 CP 内重建出站持有者（即时生效）。
+		// 出站代理（network 类ADR-043）：保存即在 CP 内重建出站持有者（即时生效）。
 		// proxy.url 标 sensitive：含凭据时回显脱敏（仅展示 scheme://host:port），不外泄明文密码。
 		s.proxyURLItem(overrides),
 		s.editableItem(SettingKeyProxyNoProxy, s.defaultValue(SettingKeyProxyNoProxy), overrides, true),
-		// 实例反向对账护栏（FR-326）：宽限期与自动处置开关；读侧即时生效（下一次心跳观察即用）。
+		// 实例反向对账护栏：宽限期与自动处置开关；读侧即时生效（下一次心跳观察即用）。
 		s.editableItem(SettingKeyOrphanGracePeriod, s.defaultValue(SettingKeyOrphanGracePeriod), overrides, true),
 		s.editableItem(SettingKeyOrphanAutoDispose, s.defaultValue(SettingKeyOrphanAutoDispose), overrides, true),
-		// 失效 Bot 自动回收护栏（FR-460）：宽限期与自动回收开关；读侧即时生效（下一拍巡检即用）。
+		// 失效 Bot 自动回收护栏：宽限期与自动回收开关；读侧即时生效（下一拍巡检即用）。
 		s.editableItem(SettingKeyBotReclaimGracePeriod, s.defaultValue(SettingKeyBotReclaimGracePeriod), overrides, true),
 		s.editableItem(SettingKeyBotReclaimAuto, s.defaultValue(SettingKeyBotReclaimAuto), overrides, true),
 		s.editableItem(SettingKeyPlatformPublicBaseURL, s.defaultValue(SettingKeyPlatformPublicBaseURL), overrides, true),
@@ -344,7 +344,7 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		readOnlyItem("database.driver", s.cfg.Database.Driver, false),
 		readOnlyItem("database.dsn", maskDSN(s.cfg.Database.DSN), true),
 		readOnlyItem("jwt.secret", maskSecret(s.cfg.JWT.Secret), true),
-		// CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：显式配置时掩码显示；未配置时展示来源
+		// CP↔Worker WS 令牌密钥（见 ADR-061）：显式配置时掩码显示；未配置时展示来源
 		// （生产 autogen / dev 回退），不回显解析后的密钥值（避免把生成密钥带进设置响应）。
 		readOnlyItem("jwt.ws_secret", s.wsTokenSecretDisplay(), s.cfg.JWT.WSSecret != ""),
 		readOnlyItem("jwt.access_ttl", s.cfg.JWT.AccessTTL.String(), false),
@@ -388,7 +388,7 @@ func (s *SettingsService) Update(values map[string]string) error {
 		s.applyOverride(key, val)
 	}
 
-	// 本批涉及出站代理键 → 以当前生效代理（DB 覆盖 > yaml > env）重建 CP 出站持有者（FR-185/ADR-043）。
+	// 本批涉及出站代理键 → 以当前生效代理（DB 覆盖 > yaml > env）重建 CP 出站持有者（ADR-043）。
 	// 单独于 applyOverride：重建不依赖单个键值、而依赖「全部覆盖叠加后的生效代理」，故落库后整体算一次。
 	if _, ok := values[SettingKeyProxyURL]; ok {
 		s.rebuildProxy()
@@ -398,7 +398,7 @@ func (s *SettingsService) Update(values map[string]string) error {
 	return nil
 }
 
-// rebuildProxy 以当前生效代理重建 CP 出站持有者（FR-185）。rebuilder 未注入时静默跳过（仅落库）。
+// rebuildProxy 以当前生效代理重建 CP 出站持有者。rebuilder 未注入时静默跳过（仅落库）。
 func (s *SettingsService) rebuildProxy() {
 	if s.proxyRebuilder == nil {
 		return
@@ -422,7 +422,7 @@ func (s *SettingsService) editableItem(key, base string, overrides map[string]st
 	}
 }
 
-// proxyURLItem 组装出站代理地址项（FR-185）：可编辑 + sensitive，回显时脱敏含凭据的 URL，
+// proxyURLItem 组装出站代理地址项：可编辑 + sensitive，回显时脱敏含凭据的 URL，
 // 保存在 CP 内即时生效（重建出站持有者）。
 func (s *SettingsService) proxyURLItem(overrides map[string]string) SettingItem {
 	val, overridden := overrides[SettingKeyProxyURL]
@@ -671,7 +671,7 @@ func validateSettingValue(key, val string) error {
 			return fmt.Errorf("%w: MC 直探超时须为正的 Go duration（如 3s）", ErrSettingValueInvalid)
 		}
 		// 上界守护：直探超时是每实例每拍的最坏阻塞量，过大直接把心跳节拍拖垮（见 ADR-013 与
-		// FR-446 审计项 2 / 复审 NEW-ISSUE A）。上界由节拍护栏反推（directprobe.MaxTimeout），
+		// 审计项 2 / 复审 NEW-ISSUE A）。上界由节拍护栏反推（directprobe.MaxTimeout），
 		// 超出拒绝而非静默截断，使「可配」与「护栏」始终自洽。
 		if d > maxDirectProbeTimeout {
 			return fmt.Errorf("%w: MC 直探超时不得大于 %s（单拍采集预算 = 余量 + 探针 %s + slp + query，"+
@@ -771,7 +771,7 @@ func validateSettingValue(key, val string) error {
 		}
 	case SettingKeyProxyURL:
 		// 复用 httpclient 的 URL/scheme 校验：空=清除代理覆盖（合法，回退 yaml/env）；
-		// 非空但非法（不支持 scheme / 不可解析）则拒绝，不静默直连（FR-185/ADR-043）。
+		// 非空但非法（不支持 scheme / 不可解析）则拒绝，不静默直连（ADR-043）。
 		if val != "" {
 			if _, err := httpclient.New(httpclient.Config{URL: val}); err != nil {
 				return fmt.Errorf("%w: 代理地址非法（%v）", ErrSettingValueInvalid, err)
@@ -827,7 +827,7 @@ func validateSettingValue(key, val string) error {
 	return nil
 }
 
-// wsTokenSecretDisplay 生成 jwt.ws_secret 只读展示值（FR-275，见 ADR-061）。
+// wsTokenSecretDisplay 生成 jwt.ws_secret 只读展示值（见 ADR-061）。
 // 显式配置 → 掩码；未配置 → 按 dev_mode 推导来源描述（不回显 autogen 解析出的密钥值）。
 func (s *SettingsService) wsTokenSecretDisplay() string {
 	if s.cfg.JWT.WSSecret != "" {

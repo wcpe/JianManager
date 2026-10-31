@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// normalizeNodeArch（FR-299）：别名归一为 nodejs dist 命名（x64/arm64，区别于 adoptium aarch64）。
+// normalizeNodeArch：别名归一为 nodejs dist 命名（x64/arm64，区别于 adoptium aarch64）。
 func TestNormalizeNodeArch(t *testing.T) {
 	tests := []struct {
 		in      string
@@ -75,6 +75,11 @@ func newFR299DB(t *testing.T) *gorm.DB {
 	dsn := "file:fr299_" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+
+	// 关闭底层连接（共享内存库在最后一个连接关闭后才释放，见 testdb_test.go）。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.NodeJDK{}, &model.NodeRuntime{}, &model.Instance{},
 		&model.Task{}, &model.TaskLog{}, &model.Notification{},
@@ -146,7 +151,7 @@ func TestRuntimeLibrary_InstallAsync_Rejections(t *testing.T) {
 	require.Zero(t, taskCount, "被拒请求不应建悬挂任务")
 }
 
-// runtime_install 成功终态：落一条 NodeRuntime（managed=true）+ 发成功站内信（FR-299）。
+// runtime_install 成功终态：落一条 NodeRuntime（managed=true）+ 发成功站内信。
 func TestTaskService_Ingest_RuntimeSuccess_PersistsRuntime(t *testing.T) {
 	db := newFR299DB(t)
 	svc := NewTaskService(db)

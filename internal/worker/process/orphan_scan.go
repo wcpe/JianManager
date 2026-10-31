@@ -16,18 +16,18 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-456 运行期周期孤儿扫描：把孤儿清理从「仅 Worker 启动时」升级为「运行期持续兜底」。
+// 运行期周期孤儿扫描：把孤儿清理从「仅 Worker 启动时」升级为「运行期持续兜底」。
 // 扫描三态孤儿并按策略处置：
 //  1. wrapper 死 / Java 活（daemon 模式：wrapper 自身死亡，Java 仍占端口与 Paper session.lock）；
 //  2. direct 孤儿（Worker 硬崩后 Java 未 setsid、reparent 到 init，内存表已无该实例）；
 //  3. docker 残留（Worker 重启后容器仍在跑，但内存表未认作 RUNNING）。
 //
-// FR-471 增加第四相（只观测不处置）：已注册实例的工作目录下存在外来活进程（平台记账 STOPPED、磁盘
+// 增加第四相（只观测不处置）：已注册实例的工作目录下存在外来活进程（平台记账 STOPPED、磁盘
 // 却在跑），聚合后写 Manager 缓存供心跳上报 CP，处置由人工「接管」动作触发。
 //
-// 与启动期 RecoverDaemonInstances 复用同一 `daemon.KillPIDTree` 基座与 FR-455① 的处置前置复核。
+// 与启动期 RecoverDaemonInstances 复用同一 `daemon.KillPIDTree` 基座与① 的处置前置复核。
 
-// OrphanDisposePolicy 运行期孤儿处置策略（FR-456）。
+// OrphanDisposePolicy 运行期孤儿处置策略。
 type OrphanDisposePolicy string
 
 const (
@@ -55,12 +55,12 @@ const (
 	OrphanKindDirect OrphanKind = "direct_orphan"
 	// OrphanKindDockerLeftover docker 容器残留（内存表未认作 RUNNING 却容器在跑/已退出）。
 	OrphanKindDockerLeftover OrphanKind = "docker_leftover"
-	// OrphanKindForeignRuntime 已注册实例的工作目录下存在外来活进程（FR-471）。
+	// OrphanKindForeignRuntime 已注册实例的工作目录下存在外来活进程。
 	// 与前三类不同，它不是孤儿（实例仍在内存表中），而是「平台记账 STOPPED、磁盘却在跑」的对齐线索：
 	// 本相只观测并上报，处置须由人工确认后经 AdoptForeignRuntime 接管。
 	OrphanKindForeignRuntime OrphanKind = "foreign_runtime"
 	// OrphanKindUnmanagedLiveRuntime PID 目录中未纳管的活进程对（wrapper 与 Java 均活、PID 文件有效，
-	// 但本 Worker 尚未纳管；FR-497③）。它不是孤儿——平台自有 wrapper 仍在托管服务器，只是控制连接
+	// 但本 Worker 尚未纳管③）。它不是孤儿——平台自有 wrapper 仍在托管服务器，只是控制连接
 	// 缺失；处置是**非破坏**的：归属复核通过即自动重连并登记 RUNNING（见 adopt_orphan.go）。
 	OrphanKindUnmanagedLiveRuntime OrphanKind = "unmanaged_live_runtime"
 )
@@ -76,15 +76,15 @@ type OrphanFinding struct {
 	PIDs []int
 	// ContainerName docker 残留的容器名（其余为空）。
 	ContainerName string
-	// ContainerRunning docker 残留容器是否仍处于 running（FR-456 F13：running 容器 auto 档更保守）。
+	// ContainerRunning docker 残留容器是否仍处于 running（F13：running 容器 auto 档更保守）。
 	ContainerRunning bool
-	// ManagedLabel docker 残留容器是否带本平台受管标签（归属复核证据，FR-456 N5）。
+	// ManagedLabel docker 残留容器是否带本平台受管标签（归属复核证据N5）。
 	ManagedLabel bool
 	// LabelInstanceUUID docker 残留容器受管标签内记录的实例 UUID（与容器名交叉核对用）。
 	LabelInstanceUUID string
 	// Disposed 是否已按 auto 策略实际处置。
 	Disposed bool
-	// Adopted 是否已被自动收养为 RUNNING（仅 OrphanKindUnmanagedLiveRuntime；FR-497③）。
+	// Adopted 是否已被自动收养为 RUNNING（仅 OrphanKindUnmanagedLiveRuntime③）。
 	// 与 Disposed 语义正交：收养是**非破坏**动作（只重连，不杀不重启进程）。
 	Adopted bool
 	// Detail 供审计的补充说明。
@@ -94,7 +94,7 @@ type OrphanFinding struct {
 // ScannedProcess 进程枚举快照（供 direct 孤儿扫描；可由测试注入）。
 type ScannedProcess struct {
 	PID     int
-	PPID    int // 父进程 PID（用于按进程树归属判定，如 preflight 排除实例自身进程树，FR-471）
+	PPID    int // 父进程 PID（用于按进程树归属判定，如 preflight 排除实例自身进程树）
 	Cmdline string
 	Cwd     string
 }
@@ -105,18 +105,18 @@ type ManagedContainer struct {
 	Name    string // jianmanager-<uuid>
 	Running bool
 	PID     int
-	// ManagedLabel 容器是否带平台受管标签（FR-456 N5，见 containerManagedLabelKey）。
+	// ManagedLabel 容器是否带平台受管标签（N5，见 containerManagedLabelKey）。
 	ManagedLabel bool
 	// LabelInstanceUUID 受管标签内记录的实例 UUID，用于与容器名交叉核对（可能为空）。
 	LabelInstanceUUID string
 }
 
-// OrphanScanner 运行期周期孤儿扫描器（FR-456）。
+// OrphanScanner 运行期周期孤儿扫描器。
 type OrphanScanner struct {
 	mgr      *Manager
 	interval time.Duration
 	policy   OrphanDisposePolicy
-	// autoAdopt 未纳管活进程自动收养开关（FR-497③，默认 DefaultOrphanAutoAdopt=true）。
+	// autoAdopt 未纳管活进程自动收养开关（③，默认 DefaultOrphanAutoAdopt=true）。
 	// 只影响 ScanOnce 第 0 相；三态孤儿的 warn/auto 处置策略不受其影响。装配期写入、运行期读取。
 	autoAdopt bool
 
@@ -128,7 +128,7 @@ type OrphanScanner struct {
 }
 
 // NewOrphanScanner 构造运行期孤儿扫描器。interval<=0 时取默认 60s；policy 空取 warn。
-// 未纳管活进程自动收养默认启用（FR-497③，见 DefaultOrphanAutoAdopt）；可用 SetAutoAdopt(false) 关闭。
+// 未纳管活进程自动收养默认启用（③，见 DefaultOrphanAutoAdopt）；可用 SetAutoAdopt(false) 关闭。
 func NewOrphanScanner(mgr *Manager, interval time.Duration, policy OrphanDisposePolicy) *OrphanScanner {
 	if interval <= 0 {
 		interval = 60 * time.Second
@@ -148,7 +148,7 @@ func NewOrphanScanner(mgr *Manager, interval time.Duration, policy OrphanDispose
 	}
 }
 
-// SetAutoAdopt 设置未纳管活进程自动收养开关（FR-497③）：false = 只告警不收养（应急逃生口）。
+// SetAutoAdopt 设置未纳管活进程自动收养开关（③）：false = 只告警不收养（应急逃生口）。
 func (s *OrphanScanner) SetAutoAdopt(enabled bool) {
 	if s == nil {
 		return
@@ -158,7 +158,7 @@ func (s *OrphanScanner) SetAutoAdopt(enabled bool) {
 
 // Start 启动周期扫描 goroutine（随 ctx 取消而退出）。interval<=0 或 mgr 为空时不启动。
 //
-// 启动后**立即执行一轮**再进入 ticker（FR-497③）：「Worker 启动」窗口与新产生的未纳管活进程
+// 启动后**立即执行一轮**再进入 ticker（③）：「Worker 启动」窗口与新产生的未纳管活进程
 // 不能等到第一个周期才发现——main 在 RecoverDaemonInstances 之后启动本扫描器，故这一轮正好接在
 // 启动接管之后，既不与它重复拨号，又能在接管只告警（socket 瞬时不可达）后第一时间补齐收养。
 func (s *OrphanScanner) Start(ctx context.Context) {
@@ -184,13 +184,13 @@ func (s *OrphanScanner) Start(ctx context.Context) {
 }
 
 // ScanOnce 执行一轮孤儿扫描并落审计。返回本轮发现（供单测/观测）。
-// 本轮耗时超过 maxScanRoundDuration 时告警（FR-456 F14：扫描成本可观测）。
+// 本轮耗时超过 maxScanRoundDuration 时告警（F14：扫描成本可观测）。
 //
-// 相位顺序（FR-497③）：第 0 相 autoAdoptUnmanaged 先跑——把本轮可收养的未纳管活进程纳入管理，
+// 相位顺序（③）：第 0 相 autoAdoptUnmanaged 先跑——把本轮可收养的未纳管活进程纳入管理，
 // 使同一轮后续相位的「受管 PID / 工作目录」集合立刻包含它们，避免刚收养实例的 Java 在同轮被
 // direct 相误判为无主进程。
 //
-// FR-471：第四相 scanForeignInRegisteredWorkdirs 与前三相共用同一轮进程枚举快照
+// 第四相 scanForeignInRegisteredWorkdirs 与前三相共用同一轮进程枚举快照
 // （procs 只枚举一次），观测「已注册实例目录下的外来活进程」并写入 Manager 缓存供心跳上报。
 func (s *OrphanScanner) ScanOnce() []OrphanFinding {
 	if s == nil || s.mgr == nil {
@@ -215,7 +215,7 @@ func (s *OrphanScanner) ScanOnce() []OrphanFinding {
 	return findings
 }
 
-// autoAdoptUnmanaged 是扫描的第 0 相（FR-497③）：把 PID 目录中未纳管的活进程对自动收养为 RUNNING。
+// autoAdoptUnmanaged 是扫描的第 0 相（③）：把 PID 目录中未纳管的活进程对自动收养为 RUNNING。
 // 开关关闭（autoAdopt=false）时不做任何事——不拨号、不登记、不落审计。
 func (s *OrphanScanner) autoAdoptUnmanaged() []OrphanFinding {
 	if !s.autoAdopt {
@@ -265,7 +265,7 @@ func (s *OrphanScanner) scanWrapperGone() []OrphanFinding {
 }
 
 // handleWrapperGone 按策略处置 wrapper 死/Java 活孤儿。
-// auto 走 FR-325 同源处置（reapOrphanWrapper，经 FR-455① 复核）；warn 只告警 + 落审计。
+// auto 走同源处置（reapOrphanWrapper，经① 复核）；warn 只告警 + 落审计。
 func (s *OrphanScanner) handleWrapperGone(pidPath string, rec *daemon.PIDRecord, finding *OrphanFinding) {
 	if s.policy == OrphanPolicyAuto {
 		s.mgr.reapOrphanWrapper(rec.InstanceUUID, pidPath, rec, errOrphanedWrapperGone)
@@ -318,7 +318,7 @@ func (s *OrphanScanner) scanDirectOrphans(procs []ScannedProcess) []OrphanFindin
 
 // handleDirectOrphan 按策略处置 direct 孤儿。
 //
-// FR-456（F1/F6）：auto 档每个 PID 在 killTree 前先复用 FR-455① 的归属复核入口
+// （F1/F6）：auto 档每个 PID 在 killTree 前先复用① 的归属复核入口
 // （verifyProcessOwnership）——复核不通过（PID 可能已被 OS 复用给无关进程，或已不在该工作目录）
 // 只告警 + 落审计、不杀。审计 success 依逐 PID 实际处置结果判定（此前恒 true，误报成功）。
 func (s *OrphanScanner) handleDirectOrphan(finding *OrphanFinding) {
@@ -346,7 +346,7 @@ func (s *OrphanScanner) handleDirectOrphan(finding *OrphanFinding) {
 			}
 		}
 		finding.Disposed = allDisposed
-		// 仅在确有杀树尝试时落「已处置」审计（其 success 依逐 PID 实际结果判定，FR-456 F6）；
+		// 仅在确有杀树尝试时落「已处置」审计（其 success 依逐 PID 实际结果判定F6）；
 		// 全部被归属复核拦截时只留 dispose_blocked，避免同一处置落两条矛盾审计。
 		if killAttempted {
 			s.mgr.auditOrphan("orphan.scan_disposed", finding.WorkDir,
@@ -394,7 +394,7 @@ func (s *OrphanScanner) scanDockerLeftovers(ctx context.Context) []OrphanFinding
 
 // handleDockerLeftover 按策略处置 docker 残留。
 //
-// FR-456（F1/F13）：auto 档不再无条件 Force 删除容器——
+// （F1/F13）：auto 档不再无条件 Force 删除容器——
 //   - Running=true 的容器更保守：仅告警不删（可能正是启动中/优雅停止中而内存表暂未认作 RUNNING
 //     的实例，强删=误杀运行中服务；待其自然退出成「已退出容器」后再由下一轮清理）。
 //   - 内存表已登记该实例（任何状态）时也仅告警：其运行态由实例生命周期掌管，扫描不插手（F1，与
@@ -418,7 +418,7 @@ func (s *OrphanScanner) handleDockerLeftover(ctx context.Context, finding *Orpha
 				false, "实例仍在内存表中，保守不删")
 			return
 		}
-		// 归属复核（FR-456 F1 / N5 修复）：显式两级证据，不再是恒真的伪复核。
+		// 归属复核（F1 / N5 修复）：显式两级证据，不再是恒真的伪复核。
 		//
 		// 此前这里对 Name 再跑一次 containerUUID——但 Name 在 listManagedContainers 里正是用同一个
 		// containerUUID 过滤出来的，判据恒真，称不上归属证明。现改为：
@@ -453,7 +453,7 @@ func (s *OrphanScanner) handleDockerLeftover(ctx context.Context, finding *Orpha
 		true, "")
 }
 
-// scanForeignInRegisteredWorkdirs 是运行期扫描的第四相（FR-471）：识别「已注册实例的工作目录下存在
+// scanForeignInRegisteredWorkdirs 是运行期扫描的第四相：识别「已注册实例的工作目录下存在
 // 活进程、但该实例并未认作在跑」的运行态漂移（真机场景：/home/<user>/server 下的农场由 tmux 外部拉起，
 // 平台 DB 记 STOPPED 而磁盘进程仍在跑）。**本相只观测、不杀任何进程**，处置由人工「接管」动作触发
 // （Manager.AdoptForeignRuntime）。
@@ -558,7 +558,7 @@ func (s *OrphanScanner) scanForeignInRegisteredWorkdirs(procs []ScannedProcess, 
 }
 
 // procInWorkDir 报告进程是否「落在」给定工作目录下：cwd 位于该目录之下，或其命令行引用了该目录。
-// 判据与 directOrphanWorkDir 同源（cmdline/cwd），但**不限定 serversDir**——FR-471 要求覆盖任意路径
+// 判据与 directOrphanWorkDir 同源（cmdline/cwd），但**不限定 serversDir**——要求覆盖任意路径
 // 的实例工作目录（真机农场目录在 /home/<user>/server 下，不在受管服务器根内）。
 func procInWorkDir(proc ScannedProcess, workDir string) bool {
 	if workDir == "" || workDir == "." {
@@ -571,7 +571,7 @@ func procInWorkDir(proc ScannedProcess, workDir string) bool {
 }
 
 // managedInstanceRuntime 返回本节点「内存表中已知实例」的根 PID 集合与工作目录集合。
-// FR-456（F2 + 回归修复）：两集合的判据刻意不对称——
+// （F2 + 回归修复）：两集合的判据刻意不对称——
 //
 //   - 工作目录集合只收「可能仍有活进程」的状态（RUNNING/STARTING/STOPPING，见 mayOwnLiveProcess）。
 //     优雅停止期（STOPPING）必须在内，否则 auto 档会 killTree 其 Java、**绕过优雅关服**
@@ -606,9 +606,9 @@ func (m *Manager) managedInstanceRuntime() (pids map[int]struct{}, workDirs map[
 // mayOwnLiveProcess 报告该状态是否「可能仍有活进程」，据此决定其工作目录是否受运行期扫描保护。
 //
 // RUNNING/STARTING/STOPPING 三态可能仍有活着的 Java（运行中 / 启动中 / 优雅停止尚未退净），
-// 其工作目录须受保护，避免被误判为 direct 孤儿后强杀（FR-456 F2）。STOPPED/CRASHED 的进程已死，
+// 其工作目录须受保护，避免被误判为 direct 孤儿后强杀（F2）。STOPPED/CRASHED 的进程已死，
 // 不保护——否则 Worker 硬崩重启后按 STOPPED 重登记的直接实例会「保护」掉目录下真实的残留 Java，
-// 恰是 scanner 要抓的场景（FR-456 N1 回归修复）。
+// 恰是 scanner 要抓的场景（N1 回归修复）。
 func mayOwnLiveProcess(state InstanceState) bool {
 	switch state {
 	case StateRunning, StateStarting, StateStopping:
@@ -620,7 +620,7 @@ func mayOwnLiveProcess(state InstanceState) bool {
 
 // instanceKnown 报告该实例是否登记在本节点内存表中（任何状态）。
 // docker 残留 auto 处置前用它复核：内存表已知（哪怕 STOPPING/STOPPED）说明其运行态由
-// 实例生命周期掌管，容器不应被扫描强删（FR-456 F1/F13）。
+// 实例生命周期掌管，容器不应被扫描强删（F1/F13）。
 func (m *Manager) instanceKnown(uuid string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -667,7 +667,7 @@ func pathUnder(p, root string) bool {
 	return strings.HasPrefix(cp, cr+string(os.PathSeparator))
 }
 
-// 运行期孤儿扫描的每轮规模上限（FR-456 F14；spec §5：全机进程/容器枚举有 CPU/权限开销，
+// 运行期孤儿扫描的每轮规模上限（F14；spec §5：全机进程/容器枚举有 CPU/权限开销，
 // 须设上限并在超限时降级告警，避免单轮扫描拖垮节点）。
 const (
 	// maxScannedProcesses 单轮 direct 孤儿扫描枚举的进程数上限；超限仅取前 N 个并告警降级。
@@ -679,7 +679,7 @@ const (
 )
 
 // defaultListProcesses 用 gopsutil 枚举本机进程（cmdline/cwd 快照）。
-// 枚举数量受 maxScannedProcesses 限制：超限取前 N 个并告警降级（FR-456 F14）。
+// 枚举数量受 maxScannedProcesses 限制：超限取前 N 个并告警降级（F14）。
 func defaultListProcesses() ([]ScannedProcess, error) {
 	procs, err := psproc.Processes()
 	if err != nil {
@@ -734,7 +734,7 @@ func listManagedContainers(ctx context.Context) ([]ManagedContainer, error) {
 				UUID:    uuid,
 				Name:    trimmed,
 				Running: strings.EqualFold(c.State, "running"),
-				// 受管标签证据（FR-456 N5）：供归属复核把强归属与「仅名字形似」区分开。
+				// 受管标签证据（N5）：供归属复核把强归属与「仅名字形似」区分开。
 				ManagedLabel:      c.Labels[containerManagedLabelKey] == containerManagedLabelValue,
 				LabelInstanceUUID: c.Labels[containerInstanceLabelKey],
 			})
@@ -777,7 +777,7 @@ func containerUUID(name string) (string, bool) {
 	return uuid, true
 }
 
-// verifyContainerOwnership 复核容器是否确为本平台受管容器（FR-456 N5）。
+// verifyContainerOwnership 复核容器是否确为本平台受管容器（N5）。
 //
 // 返回 (evidence, ok)：ok=false 表示归属不通过（不得删除）；evidence 是本次复核所依证据档位，
 // 随审计 detail 落库供运维核查。与容器名同源的「格式校验」不再是唯一判据：

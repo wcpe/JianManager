@@ -1,4 +1,4 @@
-// Package memguard 内存水位启动守卫的共享估算与判定逻辑（FR-317）。
+// Package memguard 内存水位启动守卫的共享估算与判定逻辑。
 // CP 预警闸（按心跳预判）与 Worker 实时闸（启动前读系统内存）复用同一套
 // 估算口径，避免两侧判定标准漂移。真机事故背景：验收开 Paper -Xmx2048M 把
 // 4G 主机 OOM 至用户态僵死（SSH/面板全失联），启动前无任何水位防线。
@@ -68,7 +68,7 @@ func DefaultReserveMB(totalMB int64) int64 {
 // Check 判定水位：可用 − 需求 < 保留 即拒绝，错误文案含三个数字可直接面向用户。
 func Check(availMB, requiredMB, reserveMB int64) error {
 	if availMB-requiredMB < reserveMB {
-		return fmt.Errorf("节点可用内存不足：可用 %dMB，实例预估需 %dMB，需保留 %dMB 安全水位——已拒绝启动以防节点失去响应（FR-317）。请先停止其它实例、调低 -Xmx，或上调节点内存",
+		return fmt.Errorf("节点可用内存不足：可用 %dMB，实例预估需 %dMB，需保留 %dMB 安全水位——已拒绝启动以防节点失去响应。请先停止其它实例、调低 -Xmx，或上调节点内存",
 			availMB, requiredMB, reserveMB)
 	}
 	return nil

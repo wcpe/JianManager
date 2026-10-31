@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-149 告警增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *告警增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：规则表内联启停 Switch；事件加时间范围/规则/关键字筛选。
  * （静默跨夜 formatSilenceWindow 与通道测试由单测/组件测覆盖）
- * 证据落 .tmp/acceptance/FR-149/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-149 规则内联 Switch + 事件多维筛选', async ({ page }) => {
+test('规则内联 Switch + 事件多维筛选', async ({ page }) => {
   await login(page)
   await page.goto('/alerts')
 
@@ -24,5 +24,5 @@ test('FR-149 规则内联 Switch + 事件多维筛选', async ({ page }) => {
   // 时间范围：datetime-local 输入（原生选择器）
   await expect(page.locator('input[type="datetime-local"]').first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-149/single-machine-alerts-events.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-alerts-events.png', fullPage: true })
 })

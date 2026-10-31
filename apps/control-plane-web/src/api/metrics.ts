@@ -1,5 +1,18 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+// 序列与实时指标契约已回迁应用侧（受控视图与业务页面共用，ADR-103）；此处原样再导出，调用点无需改动。
+// 本地绑定供本文件的查询泛型使用。
+import type { InstanceMetricsData } from '@/lib/instances/instance-metrics'
+import type { PlayerTrendResult } from '@/lib/players/player-trend'
+import type { SLOResult } from '@/lib/metrics/slo'
+import type { RankingMetric, RankingResult } from '@/lib/instances/ranking'
+import type { MetricSeries, SeriesPoint } from '@/lib/metrics/metric-series'
+export type { InstanceMetricsData, WorldMetric } from '@/lib/instances/instance-metrics'
+export type { MetricSeries, SeriesPoint } from '@/lib/metrics/metric-series'
+export type { PlayerTrendResult } from '@/lib/players/player-trend'
+export type { SLOResult } from '@/lib/metrics/slo'
+export type { RankingItem, RankingMetric, RankingResult } from '@/lib/instances/ranking'
+
 import api from '@/api/client'
 import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
 import type { MetricRange } from '@jianmanager/ui'
@@ -14,53 +27,7 @@ export interface NodeMetricsData {
   diskTotalMb: number
 }
 
-export interface WorldMetric {
-  name: string
-  loadedChunks: number
-  entities: number
-  tileEntities: number
-}
 
-export interface InstanceMetricsData {
-  tps: number
-  onlinePlayers: number
-  memoryMb: number
-  msptMillis: number
-  threads: number
-  cpuPercent: number
-  heapMaxMb: number
-  uptimeSeconds: number
-  worlds: WorldMetric[] | null
-  probeAvailable: boolean
-  // === MC 直探（SLP / Query，FR-446 / FR-447）补充字段与显式可用性位 ===
-  // 采集优先级链 `探针 → SLP → Query → 不可用`：`*Available=false` 即「不可用」，
-  // 前端据此渲染「不可用」而非 `0` / `-1` / `--` 伪值（消除「0 人在线」回归）。
-  playersAvailable: boolean
-  motd: string
-  motdAvailable: boolean
-  version: string
-  versionAvailable: boolean
-  /**
-   * 服务端图标（`data:image/png;base64,...`，可达 ~50KB）。**预留字段**：后端 SLP → Worker →
-   * `MetricsData.favicon` 已端到端回传，前端当前仅声明未渲染；若要展示应在实例详情页 MOTD
-   * 卡片按需渲染，避免把大 base64 注入卡片列表（FR-446 审计项 7）。
-   */
-  favicon: string
-  maxPlayers: number
-  maxPlayersAvailable: boolean
-  playerNames: string[] | null
-  playerNamesAvailable: boolean
-  /** true=名单取自 SLP sample（弱信息，可能不完整，非实名）。 */
-  playerNamesPartial: boolean
-  plugins: string[] | null
-  pluginsAvailable: boolean
-  map: string
-  mapAvailable: boolean
-  slpAvailable: boolean
-  queryAvailable: boolean
-  /** 本拍命中来源位：1=探针 2=SLP 4=Query（与后端 `metrics.SourceMask` 对齐）。 */
-  sourceMask: number
-}
 
 export function useNodeMetrics(nodeId: number) {
   return useQuery({
@@ -83,29 +50,17 @@ export function useInstanceMetrics(instanceId: number, enabled = true) {
     },
     enabled: !!instanceId && enabled,
     refetchInterval: enabled ? 10_000 : false,
-    // FR-297：跨服回切先呈现缓存指标后台刷新，避免 KPI 区闪空。
+    // 跨服回切先呈现缓存指标后台刷新，避免 KPI 区闪空。
     gcTime: INSTANCE_QUERY_GC_TIME_MS,
     placeholderData: keepPreviousData,
   })
 }
 
-// === 时序历史指标（FR-060：/metrics/series、/metrics/overview） ===
+// === 时序历史指标（：/metrics/series、/metrics/overview） ===
 
 /** 曲线上一点：raw 档 avg=min=max；缺测为 null（断点）。 */
-export interface SeriesPoint {
-  ts: string
-  avg: number | null
-  min: number | null
-  max: number | null
-}
 
 /** 一条历史序列。scope=instance 含分世界时 world 非空。 */
-export interface MetricSeries {
-  metricKey: string
-  unit: string
-  world: string
-  points: SeriesPoint[]
-}
 
 export interface MetricSeriesResponse {
   resolution: string
@@ -114,7 +69,7 @@ export interface MetricSeriesResponse {
   series: MetricSeries[]
 }
 
-/** FR-401 节点关联的共享 Bot Worker 运行时历史响应。 */
+/** 节点关联的共享 Bot Worker 运行时历史响应。 */
 export interface BotRuntimeMetricResponse {
   resolution: string
   from: string
@@ -125,28 +80,51 @@ export interface BotRuntimeMetricResponse {
   unavailable: { nodeId: number; reason: string }[]
 }
 
-/**
- * 聚合粒度档位（FR-221，ADR-013 三档降采样）：
+/** 
+ * 聚合粒度档位（ADR-013 三档降采样）：
  * auto=按区间自动选档；raw=原始 30s；5m/1h=对应降采样卷积档。
  */
 export type MetricResolution = 'auto' | 'raw' | '5m' | '1h'
 
-/** 节点/实例历史曲线（FR-060；FR-221 增自定义粒度）。按区间自动选档（或显式 resolution），30s 轮询。 */
+/** 节点/实例历史曲线（增自定义粒度）。按区间自动选档（或显式 resolution），30s 轮询。 */
 export function useMetricSeries(params: {
   scope: 'node' | 'instance'
   targetId: string
   range: MetricRange
+  /** 
+   * 自定义时间窗（RFC3339）。**同时提供时优先于 `range`**——
+   * 后端 `parseMetricRange` 早就在支持 `from`/`to`，只是前端此前只发预设。
+   * 用户要「自己选时间范围」时传这两个，`range` 仍必填（作为缺省档位与 queryKey 的一部分）。
+   */
+  from?: string
+  to?: string
   /** 指标键过滤（逗号合并下发）；不传返回该目标全部序列。 */
   metrics?: string[]
-  /** 聚合粒度档位（FR-221）；auto/留空=按区间自动选档。 */
+  /** 聚合粒度档位；auto/留空=按区间自动选档。 */
   resolution?: MetricResolution
   enabled?: boolean
 }) {
-  const { scope, targetId, range, metrics, resolution, enabled = true } = params
+  const { scope, targetId, range, from, to, metrics, resolution, enabled = true } = params
+  const custom = !!from && !!to
   return useQuery({
-    queryKey: ['metricSeries', scope, targetId, range, metrics?.join(',') ?? '', resolution ?? 'auto'],
+    // 自定义窗口进 queryKey：否则切换时间范围会命中同一份缓存、图表不刷新。
+    queryKey: [
+      'metricSeries',
+      scope,
+      targetId,
+      custom ? `${from}~${to}` : range,
+      metrics?.join(',') ?? '',
+      resolution ?? 'auto',
+    ],
     queryFn: async () => {
-      const q = new URLSearchParams({ scope, targetId, range })
+      const q = new URLSearchParams({ scope, targetId })
+      // 有自定义窗口就只发 from/to：两者同时下发时后端以 from/to 优先，这里显式二选一更清晰。
+      if (custom) {
+        q.set('from', from!)
+        q.set('to', to!)
+      } else {
+        q.set('range', range)
+      }
       if (metrics?.length) q.set('metrics', metrics.join(','))
       if (resolution && resolution !== 'auto') q.set('resolution', resolution)
       const { data } = await api.get<MetricSeriesResponse>(`/metrics/series?${q.toString()}`)
@@ -178,14 +156,14 @@ export function useBotRuntimeMetrics(params: {
   })
 }
 
-/** 被剔除的目标（FR-340）：无实例访问权（forbidden）或 UUID 不存在（not_found）。 */
+/** 被剔除的目标：无实例访问权（forbidden）或 UUID 不存在（not_found）。 */
 export interface SkippedTarget {
   targetId: string
   reason: 'forbidden' | 'not_found'
 }
 
-/**
- * 批量序列响应（FR-340）：整批共用 resolution/from/to；series 按 targetId(UUID) 分组，
+/** 
+ * 批量序列响应：整批共用 resolution/from/to；series 按 targetId(UUID) 分组，
  * 值与单目标端点 series 数组同构；被剔除的目标入 skipped（前端可区分「无数据」空数组与「被剔除」）。
  */
 export interface MetricSeriesBatchResponse {
@@ -196,8 +174,8 @@ export interface MetricSeriesBatchResponse {
   skipped: SkippedTarget[]
 }
 
-/**
- * 批量多实例历史曲线（FR-340：消 NodeInstanceCompare 的 N+1）。一次请求返回各目标序列，
+/** 
+ * 批量多实例历史曲线（：消 NodeInstanceCompare 的 N+1）。一次请求返回各目标序列，
  * 30s 轮询。targetIds 为空时不请求。v1 仅 scope=instance（对比场景只有实例维度有 N+1）。
  */
 export function useMetricSeriesBatch(params: {
@@ -206,13 +184,38 @@ export function useMetricSeriesBatch(params: {
   range: MetricRange
   /** 指标键过滤（逗号合并下发）；不传返回各目标全部序列。 */
   metrics?: string[]
-  /** 聚合粒度档位（FR-221）；auto/留空=按区间自动选档。 */
+  /** 聚合粒度档位；auto/留空=按区间自动选档。 */
   resolution?: MetricResolution
   enabled?: boolean
+  /** 
+   * 刷新令牌：参与查询键，值变化即视为一次新请求。
+   *
+   * 【为什么需要】调用方按节拍刷新同一批目标时，`targetIds` 不变 → 查询键不变 → React Query
+   * 直接命中缓存、连 `refetchInterval` 都不会另起一次（键相同就是同一条查询）。有了令牌，
+   * 「同一目标集合重新拉一遍」才有明确的表达方式；不传时恒为 0，既有调用点行为不变。
+   */
+  refreshToken?: number
 }) {
-  const { scope, targetIds, range, metrics, resolution, enabled = true } = params
+  const {
+    scope,
+    targetIds,
+    range,
+    metrics,
+    resolution,
+    enabled = true,
+    refreshToken = 0,
+  } = params
+  const targetsKey = targetIds.join(',')
   return useQuery({
-    queryKey: ['metricSeriesBatch', scope, targetIds.join(','), range, metrics?.join(',') ?? '', resolution ?? 'auto'],
+    queryKey: [
+      'metricSeriesBatch',
+      scope,
+      targetsKey,
+      range,
+      metrics?.join(',') ?? '',
+      resolution ?? 'auto',
+      refreshToken,
+    ],
     queryFn: async () => {
       const { data } = await api.post<MetricSeriesBatchResponse>('/metrics/series/batch', {
         scope,
@@ -225,6 +228,8 @@ export function useMetricSeriesBatch(params: {
     },
     enabled: enabled && targetIds.length > 0,
     refetchInterval: 30_000,
+    // 目标集合变化（如 /instances 可见窗口滚动）会改查询键：保留上一批数据避免整表指标闪空。
+    placeholderData: keepPreviousData,
   })
 }
 
@@ -233,7 +238,7 @@ export interface OverviewTotals {
   onlineNodeCount: number
   runningInstances: number
   cpuPct: number
-  /** 在线节点负载利用率均值（load1/核数*100，FR-062）。 */
+  /** 在线节点负载利用率均值（load1/核数*100）。 */
   loadAvg: number
   memUsedBytes: number
   memTotalBytes: number
@@ -252,7 +257,7 @@ export interface MetricOverviewResponse {
   trends: OverviewTrend[]
 }
 
-/** 总览页跨节点聚合：当前总量 + 聚合曲线（FR-060；FR-221 增自定义粒度）。可见页每 10 秒轮询。 */
+/** 总览页跨节点聚合：当前总量 + 聚合曲线（增自定义粒度）。可见页每 10 秒轮询。 */
 export function useMetricOverview(range: MetricRange, resolution?: MetricResolution) {
   return useQuery({
     queryKey: ['metricOverview', range, resolution ?? 'auto'],
@@ -269,7 +274,7 @@ export function useMetricOverview(range: MetricRange, resolution?: MetricResolut
 
 export type ResourceFreshness = 'fresh' | 'stale' | 'offline' | 'unavailable'
 
-/** FR-402 平台管理员首页的有界全景观测读模型。 */
+/** 平台管理员首页的有界全景观测读模型。 */
 export interface PlatformObservabilityOverviewResponse {
   sampledAt: string | null
   health: {
@@ -321,47 +326,12 @@ export function usePlatformObservabilityOverview(enabled: boolean) {
   })
 }
 
-/** FR-461 健康墙单格分级。 */
-export type HealthLevel = 'offline' | 'stale' | 'degraded' | 'healthy'
+/** 健康墙单格分级。 */
+// 健康墙类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
+import type { HealthWallResponse, HealthWallSort } from '@/lib/metrics/health-wall-types'
+export type { HealthLevel, HealthWallNode, HealthWallResponse, HealthWallSort } from '@/lib/metrics/health-wall-types'
 
-/** FR-461 健康墙单格：一台节点的当前只读快照。 */
-export interface HealthWallNode {
-  nodeId: number
-  nodeUuid: string
-  name: string
-  zone?: string
-  freshness: 'fresh' | 'stale' | 'offline'
-  cpuPct: number | null
-  memPct: number | null
-  diskPct: number | null
-  running: number
-  crashed: number
-  stopped: number
-  /**
-   * FR-459/FR-461：活着但已不可服务的实例数（状态仍 RUNNING，巡检已写入 status_reason，
-   * 如假死 / 崩溃熔断）。假死进程不会退出、状态也不转 CRASHED，只按 status 分级会漏掉，
-   * 故服务端单列计数并据此把节点降级。老 CP 不返回本字段。
-   */
-  degraded?: number
-  activeAlerts: number
-  botActive: number | null
-  botConnecting: number | null
-  level: HealthLevel
-  /** 一键定位下钻地址：/monitoring?node=<uuid>。 */
-  href: string
-}
-
-/** FR-461 健康墙读模型。 */
-export interface HealthWallResponse {
-  nodes: HealthWallNode[]
-  /** 节点数超过服务端上限、响应已按 severity 截断时为 true。 */
-  truncated?: boolean
-}
-
-/** 健康墙服务端排序键。 */
-export type HealthWallSort = 'level' | 'cpu' | 'mem' | 'disk' | 'instances'
-
-/** 集群健康墙（FR-461）：只读快照一次查询给全，不触发 Worker RPC。 */
+/** 集群健康墙：只读快照一次查询给全，不触发 Worker RPC。 */
 export function useHealthWall(enabled: boolean, sort: HealthWallSort = 'level') {
   return useQuery({
     queryKey: ['healthWall', sort],
@@ -386,6 +356,26 @@ export interface ResourceAttributionBotWorker {
   reason: string
 }
 
+/** CPU 时间构成占比（0..100）。后端已按百分比下发，前端直接当百分比用。 */
+export interface ResourceAttributionCPUBreakdown {
+  user: number
+  nice: number
+  system: number
+  idle: number
+  iowait: number
+  irq: number
+  softirq: number
+  steal: number
+}
+
+/** 一个挂载点的磁盘用量；后端已按使用率降序。 */
+export interface ResourceAttributionMount {
+  mountpoint: string
+  totalBytes: number
+  usedBytes: number
+  usedPct: number
+}
+
 export interface ResourceAttributionNode {
   nodeId: number
   nodeUuid: string
@@ -399,6 +389,21 @@ export interface ResourceAttributionNode {
   workerProcessRssBytes: number | null
   workerProcessCpuPct: number | null
   botWorker: ResourceAttributionBotWorker
+  /* 
+主机级观测（后端 `ManagedResourceAttribution` 同步下发）。
+    全部可选且可 null，且 null 与 0 语义不同：
+    - 缺失 / null = 老 Worker 未上报 → 前端渲染 `--`
+    - 0 = 真实读数就是 0
+    把「不知道」画成 0 会让运维误判机器空闲。
+  */
+  /** 已按核数归一的负载（与 `loadPct` 同口径，便于同图对比）。 */
+  load5Pct?: number | null
+  load15Pct?: number | null
+  /** 活动进程/线程数；总数。 */
+  procsRunning?: number | null
+  procsTotal?: number | null
+  cpuBreakdown?: ResourceAttributionCPUBreakdown | null
+  mounts?: ResourceAttributionMount[]
 }
 
 export interface ResourceAttributionInstance {
@@ -429,6 +434,25 @@ export interface ResourceAttributionResponse {
   nodes: ResourceAttributionNode[]
   topInstances: ResourceAttributionInstance[]
   topProcesses: ResourceAttributionProcess[]
+  /* 
+整机 top-N 进程。与 `topProcesses` 是两个口径，**不可混为一谈**：
+    - `topProcesses`：只覆盖受管实例的进程树（我们知道它是谁）
+    - `hostTopProcesses`：整机按 CPU 排序前几名（含系统进程、别人的进程）
+    运维判断「这台机器为什么慢」要看后者。
+
+    隐私边界：无 `cmdline`（与后端 `model.HostProcessSnapshot` 一致），只给进程名。
+  */
+  hostTopProcesses?: ResourceAttributionHostProcess[]
+}
+
+/** 整机 top-N 进程的一项。 */
+export interface ResourceAttributionHostProcess {
+  nodeId: number
+  nodeName: string
+  pid: number
+  comm: string
+  cpuPct: number
+  rssBytes: number
 }
 
 /** 首页受管资源归因；仅在管理员打开仪表 Tooltip 后轮询，隐藏标签页默认暂停。 */
@@ -455,7 +479,9 @@ export interface ProcessTopItem {
   rssBytes: number
   readBytesPerSec: number
   writeBytesPerSec: number
+  /** 运行用户——粗粒度的「位置」线索（不同实例常用不同系统用户跑）。 */
   user: string
+  /** 命令行摘要：含 jar 路径 / 工作目录线索，是最接近「位置」的字段。 */
   commandSummary: string
   sampledAt: string
 }
@@ -512,25 +538,40 @@ export interface ManagedProcessActionResult {
 
 export type ManagedProcessAction = 'terminate' | 'kill_tree'
 
+/** 
+ * 进程 TOPN。
+ *
+ * `at`（RFC3339，可选）取「该时刻之前最近一拍」的快照——用于在历史曲线上悬浮时
+ * 回答「那一刻是谁在吃 CPU/内存/磁盘」。不传则取最新（原有行为）。
+ *
+ * 【数据边界】只覆盖**受管实例进程**（游戏服本体及其包装器），不是任意系统进程；
+ * 快照与原始指标同档保留 48h，更早的时刻查不到。
+ */
 export function useProcessTop(params: {
   instanceId?: number
   nodeId?: string
   sort?: 'cpu' | 'memory' | 'io'
   limit?: number
   enabled?: boolean
+  /** 指定时刻（RFC3339）；省略=最新。 */
+  at?: string
 }) {
-  const { instanceId, nodeId, sort = 'cpu', limit = 10, enabled = true } = params
+  const { instanceId, nodeId, sort = 'cpu', limit = 10, enabled = true, at } = params
   return useQuery({
-    queryKey: ['processTop', instanceId ?? '', nodeId ?? '', sort, limit],
+    // at 进 queryKey：不同时刻是不同结果，不进 key 会命中同一份缓存。
+    queryKey: ['processTop', instanceId ?? '', nodeId ?? '', sort, limit, at ?? 'latest'],
     queryFn: async () => {
       const q = new URLSearchParams({ sort, limit: String(limit) })
       if (instanceId) q.set('instanceId', String(instanceId))
       if (nodeId) q.set('nodeId', nodeId)
+      if (at) q.set('at', at)
       const { data } = await api.get<ProcessTopItem[]>(`/metrics/processes/top?${q.toString()}`)
       return data
     },
     enabled,
-    refetchInterval: enabled ? 30_000 : false,
+    // 悬浮场景要快：有 at 时不轮询，避免每次悬浮都重新请求。
+    refetchInterval: enabled && !at ? 30_000 : false,
+    ...(at ? { staleTime: 15_000 } : {}),
   })
 }
 
@@ -572,9 +613,9 @@ export function useManagedProcessAction() {
   })
 }
 
-// === FR-463/464/465/469：SLO 可用性 / 容量预测 / 性能归因 / 跨实例排行与玩家趋势 ===
+// ===464/465/469：SLO 可用性 / 容量预测 / 性能归因 / 跨实例排行与玩家趋势 ===
 
-/** 归因因子（FR-465）：与目标的 Pearson 相关、归一化贡献权重。 */
+/** 归因因子：与目标的 Pearson 相关、归一化贡献权重。 */
 export interface AttributionFactor {
   metricKey: string
   label: string
@@ -583,7 +624,7 @@ export interface AttributionFactor {
   note?: string
 }
 
-/** 性能归因结果（FR-465）。status=insufficient 时 factors 为空，不伪造排序。 */
+/** 性能归因结果。status=insufficient 时 factors 为空，不伪造排序。 */
 export interface AttributionResult {
   target: string
   window: { from: string; to: string }
@@ -593,8 +634,8 @@ export interface AttributionResult {
   samples: number
 }
 
-/**
- * 实例性能归因（FR-465）：按需触发（enabled=false 时不请求），不做常驻轮询——
+/** 
+ * 实例性能归因：按需触发（enabled=false 时不请求），不做常驻轮询——
  * 归因基于窗口相关分析，随每 30s 心跳变动的意义不大。
  */
 export function usePerformanceAttribution(params: {
@@ -617,30 +658,11 @@ export function usePerformanceAttribution(params: {
 }
 
 /** 排行支持的指标键（与后端 rankingSupportedMetrics 对齐）。 */
-export type RankingMetric = 'inst_tps' | 'inst_mspt' | 'inst_cpu_pct' | 'inst_heap_used' | 'inst_players_online'
+/** 排行一项。 */
 
-/** 排行一项（FR-469）。 */
-export interface RankingItem {
-  instanceId: number
-  instanceUuid: string
-  name: string
-  nodeUuid: string
-  value: number
-  rank: number
-  sampledAt: string
-}
+/** 排行结果。scoped=true 表示非管理员受限视图。 */
 
-/** 排行结果（FR-469）。scoped=true 表示非管理员受限视图。 */
-export interface RankingResult {
-  metricKey: string
-  order: 'asc' | 'desc'
-  windowSeconds: number
-  scoped: boolean
-  skippedNoData: number
-  items: RankingItem[]
-}
-
-/** 跨实例全局排行（FR-469）。30s 轮询与采样节奏对齐。 */
+/** 跨实例全局排行。30s 轮询与采样节奏对齐。 */
 export function useInstanceRanking(params: {
   metric: RankingMetric
   window?: string
@@ -664,19 +686,10 @@ export function useInstanceRanking(params: {
   })
 }
 
-/** 玩家在线趋势结果（FR-469）：全网合计曲线 + 24 时段分布 + 峰值/日均。 */
-export interface PlayerTrendResult {
-  resolution: string
-  timezone: string
-  trend: SeriesPoint[]
-  hourlyDist: number[]
-  peakValue: number
-  peakAt: string | null
-  dailyAvg: number
-}
+/** 玩家在线趋势结果：全网合计曲线 + 24 时段分布 + 峰值/日均。 */
 
-/**
- * 玩家在线趋势与时段分析（FR-469）。tz 缺省时后端按服务器本地时区分桶，
+/** 
+ * 玩家在线趋势与时段分析。tz 缺省时后端按服务器本地时区分桶，
  * 前端用浏览器时区下发以便时段口径与运维所在时区一致。
  */
 export function usePlayerTrend(params: { range: MetricRange; resolution?: MetricResolution; tz?: string; enabled?: boolean }) {
@@ -695,26 +708,10 @@ export function usePlayerTrend(params: { range: MetricRange; resolution?: Metric
   })
 }
 
-/** 可用性/SLO 结果（FR-463）。MTTR/MTBF 为 null 表示无已恢复故障/无故障（不是 Infinity）。 */
-export interface SLOResult {
-  scope: 'platform' | 'node' | 'instance'
-  availability: number
-  totalSamples: number
-  upSamples: number
-  incidents: number
-  activeIncidents: number
-  mttrSeconds: number | null
-  mtbfSeconds: number | null
-  budgetAllowedSec: number
-  budgetBurnedSec: number
-  target: number
-  approximatedBuckets: boolean
-  /** false=窗口内无可用证据（分母为 0）：可用率与误差预算均不适用，前端显示「不适用」。 */
-  applicable: boolean
-}
+/** 可用性/SLO 结果。MTTR/MTBF 为 null 表示无已恢复故障/无故障（不是 Infinity）。 */
 
-/**
- * 平台/实例/节点可用性与 SLO 聚合（FR-463）。platform 为非管理员的可见实例汇总；
+/** 
+ * 平台/实例/节点可用性与 SLO 聚合。platform 为非管理员的可见实例汇总；
  * node/instance 维度需 targetId，实例无权时后端 403。
  */
 export function useSLO(params: {
@@ -739,7 +736,7 @@ export function useSLO(params: {
   })
 }
 
-/** 单指标容量外推结果（FR-464）。Exhaust* 为 null 表示无增长/样本不足，不伪造预测。 */
+/** 单指标容量外推结果。Exhaust* 为 null 表示无增长/样本不足，不伪造预测。 */
 export interface ForecastResult {
   targetId: string
   metricKey: string
@@ -754,12 +751,12 @@ export interface ForecastResult {
   note?: string
 }
 
-/** 容量预测响应（FR-464）。 */
+/** 容量预测响应。 */
 export interface CapacityForecastResponse {
   forecasts: ForecastResult[]
 }
 
-/** 实例/节点容量耗尽预测（FR-464）。60s 轮询。 */
+/** 实例/节点容量耗尽预测。60s 轮询。 */
 export function useCapacityForecast(params: {
   scope: 'node' | 'instance'
   targetId: string
@@ -780,3 +777,7 @@ export function useCapacityForecast(params: {
     refetchInterval: 60_000,
   })
 }
+
+/** 进程 TOPN 单项：PID / 进程名 / CPU / 内存 / 磁盘读写 / 归属用户 / 命令行。 */
+
+

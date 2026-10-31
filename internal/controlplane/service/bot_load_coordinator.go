@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// BotLoadRunCoordinator 进程内 V2 运行注册表（FR-370 partial）。
+// BotLoadRunCoordinator 进程内 V2 运行注册表（partial）。
 // 完整 runner 循环（分片/采样/SSE）后续迭代；本版提供启停登记与恢复扫描钩子。
 type BotLoadRunCoordinator struct {
 	mu      sync.Mutex

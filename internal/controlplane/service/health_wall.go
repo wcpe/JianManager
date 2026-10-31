@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 健康墙单格分级（FR-461）。严重度递增，用于着色与排序。
+// 健康墙单格分级。严重度递增，用于着色与排序。
 const (
 	HealthLevelHealthy  = "healthy"
 	HealthLevelDegraded = "degraded"
@@ -39,7 +39,7 @@ type HealthWallNode struct {
 	Running int `json:"running"`
 	Crashed int `json:"crashed"`
 	Stopped int `json:"stopped"`
-	// Degraded 是「活着但已不可服务」的实例数（FR-459/FR-461 验收 7）：状态仍为 RUNNING
+	// Degraded 是「活着但已不可服务」的实例数（验收 7）：状态仍为 RUNNING
 	// 但巡检已写入 status_reason（假死 / 崩溃熔断等）。假死进程不会退出、状态也不会转 CRASHED，
 	// 只按 status 分级会让这类实例在健康墙上完全不可见，故单列计数并参与降级判定。
 	Degraded int `json:"degraded"`
@@ -54,7 +54,7 @@ type HealthWallNode struct {
 	Href string `json:"href"`
 }
 
-// HealthWall 是逐台健康矩阵读模型（FR-461）。
+// HealthWall 是逐台健康矩阵读模型。
 type HealthWall struct {
 	Nodes []HealthWallNode `json:"nodes"`
 	// Truncated 为 true 表示节点数超过 healthWallNodeLimit，响应已被按 severity 截断。
@@ -144,7 +144,7 @@ type healthWallInstanceAgg struct {
 // healthWallInstances 以 GROUP BY (node_id, status) 在库侧聚合各节点实例状态计数（有界聚合，
 // 替代全表加载逐行累加）。
 //
-// degraded 取 RUNNING 且 status_reason 非空的行数（FR-459：假死实例状态仍是 RUNNING，
+// degraded 取 RUNNING 且 status_reason 非空的行数（：假死实例状态仍是 RUNNING，
 // 只看 status 分级会让它对健康墙完全不可见）。
 //
 // 但 status_reason 一列双语义混用：既是健康巡检的降级信号（假死/熔断，来源标记为 "worker"），
@@ -222,7 +222,7 @@ func (s *PlatformObservabilityService) healthWallAlertCounts() (map[uint]int, er
 // 触发类型家族（node_offline 恒为节点，实例家族恒为实例）。
 //   - 节点维度：target 直接作节点 ID；
 //   - 实例维度：经 instances 映射回所属节点，映射不到则不归因；
-//   - 维度完全缺失（scope/target_type 皆空，如前 FR-462 存量行的 baseline/saturation）：node 与
+// 维度完全缺失（scope/target_type 皆空，如前存量行的 baseline/saturation）：node 与
 //     instance 的 target_id 数字空间重叠，无法安全判别，故不归因（宁可少计，也不把 instance 的
 //     target_id 当节点 ID 错归因到某台节点）。
 func attributeAlertNode(targetID uint, targetType, scope, triggerType string, instanceNodeID *uint) (uint, bool) {

@@ -1,8 +1,8 @@
-/**
- * FR-482 日志联邦可选 API 客户端。
+/** 
+ *日志联邦可选 API 客户端。
  *
  * 职责：
- * - 探测 `GET /logs/federation`（双路径门面，契约见 FR-473/481）；
+ * - 探测 `GET /logs/federation`（双路径门面，契约见481）；
  * - 把后端 envelope / LegacyCoverage 映射为 foundation 的 {@link LogFederationResponse}；
  * - API 404 时降级为 legacy logs 视图（页面继续消费既有 `/logs` 表格，横幅说明回退）；
  * - ErrFederatedNotReady 透传为结构化失败态，**不得**把空 items 当完整零结果。
@@ -34,7 +34,7 @@ export const FEDERATED_NOT_READY_MESSAGE = 'federated log query path not ready'
 /** 可选联邦查询路径：后端门面 GET /api/v1/logs/federation（Search + envelope）。 */
 export const LOGS_FEDERATION_PATH = '/logs/federation'
 
-/** 精确 Search 端点（FR-480 HTTP）；门面不可用时可降级探测。 */
+/** 精确 Search 端点（HTTP）；门面不可用时可降级探测。 */
 export const LOGS_FEDERATION_SEARCH_PATH = '/logs/federation/search'
 export const LOGS_FEDERATION_TAIL_PATH = '/logs/federation/tail'
 
@@ -59,7 +59,7 @@ export interface FederationCoverageBody {
   notes?: string[]
 }
 
-/** 双路径查询 envelope（同时接受门面 envelope 与 FR-480 SearchResponse snake_case）。 */
+/** 双路径查询 envelope（同时接受门面 envelope 与SearchResponse snake_case）。 */
 export interface LogsFederationEnvelope {
   ok?: boolean
   sourceTag?: LogSourceTag
@@ -108,7 +108,7 @@ export interface LogsFederationResult {
   sourceTag: LogSourceTag | null
   /** 后端 notes/errorCode 标明 ErrFederatedNotReady / ENGINE_NOT_READY。 */
   federatedNotReady: boolean
-  /**
+  /** 
    * 持久限流（HTTP 429，重试已耗尽）：**本次没拿到数据**，不是「查到 0 条」。
    * 页面据此保留上一份已渲染列表并给出可见的限流提示，禁止空成功、也不降级 legacy
    * （联邦路径本身是好的，降级只会拿旧数据把问题掩盖掉）。
@@ -121,7 +121,7 @@ export interface LogsFederationResult {
 }
 
 /** axios / fetch 风格 404 判定。 */
-/**
+/** 
  * 联邦路径是否「不可用」（应降级到经典 /logs）。
  *
  * 覆盖：404（端点未部署）、401/403（未授权或认证不通过）、以及无响应的连接类失败
@@ -145,7 +145,7 @@ export function isHttp404(error: unknown): boolean {
   return status === 404
 }
 
-/**
+/** 
  * 是否为限流（HTTP 429）错误。
  *
  * 429 的含义是「这次没拿到数据」，**不是**「查到的结果是空的」：调用方必须与其它失败
@@ -177,7 +177,7 @@ function normalizeReasons(raw: unknown): PartialReason[] {
   return raw.filter((r): r is PartialReason => typeof r === 'string' && r.length > 0)
 }
 
-/** TargetCoverage 宽松投影：兼容 FR-473 snake_case（target_id/state）与 UI camelCase。 */
+/** TargetCoverage 宽松投影：兼容snake_case（target_id/state）与 UI camelCase。 */
 function normalizeTargets(raw: unknown): TargetCoverage[] {
   if (!Array.isArray(raw)) return []
   return raw.map((t) => {
@@ -204,8 +204,8 @@ function normalizeTargets(raw: unknown): TargetCoverage[] {
   })
 }
 
-/**
- * 把后端 coverage（可能是 LegacyCoverage 或 FR-473 Coverage）规范为 foundation Coverage。
+/** 
+ * 把后端 coverage（可能是 LegacyCoverage 或Coverage）规范为 foundation Coverage。
  * Legacy 恒 complete=false；未知形状不返回 null-success。
  */
 export function normalizeFederationCoverage(
@@ -351,7 +351,7 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
   let errorCode = asString(envelope.errorCode)
   const items = Array.isArray(envelope.items) ? envelope.items : null
 
-  // FR-473 §4.5：duplicate 未决/冲突 → coverage 不完整，禁止空成功。
+  // §4.5：duplicate 未决/冲突 → coverage 不完整，禁止空成功。
   if (dq === 'UNRESOLVED' || dq === 'CONFLICT') {
     const reason = PARTIAL_REASONS.DUPLICATE_UNRESOLVED
     if (!coverage || coverage.complete) {
@@ -422,7 +422,7 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
   }
 }
 
-/**
+/** 
  * 降级信封：经典 `/logs` 表格继续工作，coverage 标 LEGACY 不完整。
  * UI 侧 classicExportAllowed=true，保留既有导出入口；横幅说明联邦 API 不可用。
  *
@@ -477,7 +477,7 @@ export function transportFailureEnvelope(message?: string): LogsFederationEnvelo
   }
 }
 
-/**
+/** 
  * 限流失败信封：HTTP 429（重试已耗尽）。
  *
  * 与 {@link transportFailureEnvelope} 的区别只在一个可机读的原因码，但语义完全不同：
@@ -527,7 +527,7 @@ export function buildFederationResult(
   })
 }
 
-/**
+/** 
  * 限流重试策略（主查询 / stats / facets 共用，避免三处定义漂移）。
  *
  * 生产实测（2026-10 `/api/v1/logs/federation`，近 20MB cp.out、9199 条请求）：
@@ -556,8 +556,10 @@ export function rateLimitRetry(failureCount: number, error: unknown): boolean {
 
 /** 与 rateLimitRetry 配套的退避（按失败次数取，越界用最后一段）。 */
 export function rateLimitRetryDelay(attempt: number): number {
+  // 末尾兜底：延迟表是字面量元组、恒非空，`!` 仅安抚 noUncheckedIndexedAccess
+  // （合并态：主干此段写于本仓库启用该严格选项之前）。
   return RATE_LIMIT_QUERY_RETRY_DELAYS_MS[attempt] ??
-    RATE_LIMIT_QUERY_RETRY_DELAYS_MS[RATE_LIMIT_QUERY_RETRY_DELAYS_MS.length - 1]
+    RATE_LIMIT_QUERY_RETRY_DELAYS_MS[RATE_LIMIT_QUERY_RETRY_DELAYS_MS.length - 1]!
 }
 
 /** 带短退避重试的 GET：**仅对 429（限流）重试**，其它错误原样抛出。 */
@@ -578,7 +580,7 @@ export async function getWithRateLimitRetry<T>(
   }
 }
 
-/**
+/** 
  * 探测联邦覆盖（与 LogsPage 筛选参数同源）。
  * 404 → degraded legacy；其它错误 → 传输失败态（非空成功）。
  */
@@ -590,7 +592,7 @@ export function useLogsFederation(
   const isFollowMode = asString(params.tailMode) !== undefined
   return useQuery({
     queryKey: ['logsFederation', params],
-    /**
+    /** 
      * 持久 429 时**抛出**而不是返回失败信封。
      *
      * 根因（生产 636 次 429）：queryFn 内部吞错 ⇒ react-query 视为成功 ⇒ 页面无从区分
@@ -709,7 +711,7 @@ export interface FederationFacetsResponse {
 	coverage?: FederationCoverageBody
 }
 
-/**
+/** 
  * 联邦聚合统计（洞察栏「当前视图 N 个事件」）。
  *
  * 429 与主查询同样走两层重试（短退避 + react-query 退避）：聚合与主查询共用同一个
@@ -739,10 +741,10 @@ export function useLogsFederationFacets(params: Record<string, unknown>, enabled
 	})
 }
 
-/**
+/** 
  * 后端导出闸阻断（200 JSON 报告 + artifact:null，不交付附件）。
  *
- * FR-482 的「覆盖不完整时不得下载成功附件」由后端闸执行：覆盖 / 质量 / 预算
+ *的「覆盖不完整时不得下载成功附件」由后端闸执行：覆盖 / 质量 / 预算
  * 任一未过即不产出文件（见 internal/controlplane/router/log_federation.go 的 Export）。
  * 本错误携带 incomplete_reasons，供 UI 展示「为什么没有文件」而不是笼统失败。
  * limits 为后端本次实际采用的上限（行/字节），让「超上限」类原因能说出具体数字。
@@ -774,7 +776,7 @@ function asPositiveNumber(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
 }
 
-/**
+/** 
  * 从导出闸阻断响应体（JSON 文本）提取 incomplete_reasons 与 limits；非法输入返回空。
  *
  * limits 供 UI 把「预算超了」说成「单次最多 N 行」——没有它，用户只知道失败、
@@ -808,7 +810,7 @@ export function parseExportBlockedReasons(text: string): string[] {
   return parseExportBlockedReport(text).reasons
 }
 
-/**
+/** 
  * 单次导出默认请求行数上限。
  *
  * 为什么导出**必须**带显式 limit（原实现删掉了它）：

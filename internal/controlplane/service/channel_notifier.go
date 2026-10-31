@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// QQ 开放平台（FR-494）常量。
+// QQ 开放平台常量。
 const (
 	// qqDefaultAPIBase 开放平台 API 根地址默认值（现行官方口径：api.bot.qq.com）。
 	// 可在通道配置 baseUrl 中覆盖，用于适配沙箱或域名变更。
@@ -36,7 +36,7 @@ const (
 	qqTokenRefreshAhead = 5 * time.Minute
 )
 
-// ChannelConfig 通道连接配置（FR-085）。按 AlertChannel.Type 取用对应子集，
+// ChannelConfig 通道连接配置。按 AlertChannel.Type 取用对应子集，
 // 凭证子字段（URL 含 secret、SMTP 密码、bot token）经 ${ENV_VAR} 引用（config-files 规范）。
 type ChannelConfig struct {
 	// 通用 webhook / dingtalk / wecom / feishu / discord 的目标地址。
@@ -44,7 +44,7 @@ type ChannelConfig struct {
 	// telegram：bot token + 目标 chatId。
 	Token  string `json:"token,omitempty"`
 	ChatID string `json:"chatId,omitempty"`
-	// qq（FR-494）：开放平台机器人凭证 + 推送目标。
+	// qq：开放平台机器人凭证 + 推送目标。
 	// appId / targetId 是公开标识（明文）；appSecret 是唯一凭证，强制 ${ENV_VAR} 引用。
 	// targetType 取 group（群聊，targetId 为 group_openid）或 c2c（单聊，targetId 为 user_openid）。
 	// baseUrl 可选，留空取 qqDefaultAPIBase。
@@ -210,13 +210,13 @@ type qqTokenEntry struct {
 	err error
 }
 
-// ChannelNotifier 按通道类型把告警通知投递到外部出口（FR-085）。
+// ChannelNotifier 按通道类型把告警通知投递到外部出口。
 // inapp 不在此处理（由 dispatcher 直接落库为站内通知）。
 type ChannelNotifier struct {
 	client          *http.Client
 	telegramAPIBase string
 
-	// qqTokens 按 appId 缓存的 AccessToken（FR-494），由 qqMu 保护。
+	// qqTokens 按 appId 缓存的 AccessToken，由 qqMu 保护。
 	qqMu     sync.Mutex
 	qqTokens map[string]*qqTokenEntry
 }
@@ -316,7 +316,7 @@ func plainText(note AlertNotification) string {
 	return b.String()
 }
 
-// webhookBody 通用 webhook 结构化载荷（兼容 FR-011 WebhookPayload 字段）。
+// webhookBody 通用 webhook 结构化载荷（兼容WebhookPayload 字段）。
 func webhookBody(note AlertNotification) map[string]interface{} {
 	return map[string]interface{}{
 		"event":   note.Event,
@@ -455,7 +455,7 @@ func qqSnippet(body []byte) string {
 	return s
 }
 
-// qqTokenNeedsRefresh 判定缓存的 AccessToken 是否需要刷新（FR-494）。
+// qqTokenNeedsRefresh 判定缓存的 AccessToken 是否需要刷新。
 // 提前刷新窗口取 min(5 分钟, 总有效期/3)：剩余有效期小于该窗口即视为临近过期。
 // 例：官方默认 2 小时有效期 → 窗口 5 分钟；若平台下发更短有效期的 token，
 // 窗口按 1/3 比例收缩（而非固定 5 分钟），否则短寿命 token 会每次投递都重新取。
@@ -528,7 +528,7 @@ func (n *ChannelNotifier) fetchQQAccessToken(baseURL, appID, appSecret string) (
 	return parsed.AccessToken, time.Duration(expiresIn) * time.Second, nil
 }
 
-// qqAccessToken 取可用的 AccessToken（FR-494）：缓存未接近过期则直接复用、不发请求；
+// qqAccessToken 取可用的 AccessToken：缓存未接近过期则直接复用、不发请求；
 // 同一 appId 并发调用时只有一次在途请求，其余等待并复用其结果（单飞）。
 func (n *ChannelNotifier) qqAccessToken(baseURL, appID, appSecret string) (string, error) {
 	n.qqMu.Lock()
@@ -591,7 +591,7 @@ func (n *ChannelNotifier) qqAccessToken(baseURL, appID, appSecret string) (strin
 	return token, nil
 }
 
-// sendQQ 经 QQ 开放平台主动推送纯文本消息（FR-494）。
+// sendQQ 经 QQ 开放平台主动推送纯文本消息。
 // targetType=group 走群聊接口、c2c 走单聊接口；均为主动推送（不带 msg_id），不依赖入站消息上下文。
 func (n *ChannelNotifier) sendQQ(cfg *ChannelConfig, note AlertNotification) error {
 	base, err := qqAPIBase(cfg)

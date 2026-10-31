@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 )
 
-// 客户端分发 manifest 的类型与 JSON 序列化（FR-087 / FR-256 简化后）。
+// 客户端分发 manifest 的类型与 JSON 序列化（简化后）。
 //
-// FR-256 起 manifest 不再携带 Ed25519 签名段（信任模型改为 HTTPS + 拉取密钥鉴权，
+// 起 manifest 不再携带 Ed25519 签名段（信任模型改为 HTTPS + 拉取密钥鉴权，
 // 见 docs/specs/updater-arch-simplification/spec.md §2 A，推翻 ADR-022/053）。
 // 客户端 updater-core 拉到 manifest 直接用，不再验签。
 //
@@ -26,7 +26,7 @@ type ManifestArtifact struct {
 	Codec string `json:"codec"`
 }
 
-// ManifestPatch manifest 单文件的 zstd patch-from 增量制品引用（FR-098）。
+// ManifestPatch manifest 单文件的 zstd patch-from 增量制品引用。
 type ManifestPatch struct {
 	// OldSHA256 patch 适用的本地旧文件原始内容 hash。
 	OldSHA256 string `json:"oldSha256"`
@@ -87,8 +87,8 @@ type ManifestWedge struct {
 	Version int `json:"version"`
 }
 
-// ManifestCore updater-core 自更新段（FR-091 消费）：版本 + 各平台制品。
-// FR-256 起 core 自更新上移到楔子（FR-258），但 manifest 仍透传该段供楔子消费。
+// ManifestCore updater-core 自更新段（消费）：版本 + 各平台制品。
+// 起 core 自更新上移到楔子，但 manifest 仍透传该段供楔子消费。
 type ManifestCore struct {
 	Version   int                              `json:"version"`
 	Platforms map[string]ManifestAgentArtifact `json:"platforms"`
@@ -102,7 +102,7 @@ type ManifestAgent struct {
 
 // SignedManifest 完整 manifest（contract §2）。
 //
-// 类型名保留「Signed」以兼容既有引用（FR-256 起不再签名，sig 段已去）。
+// 类型名保留「Signed」以兼容既有引用（起不再签名，sig 段已去）。
 // MarshalJSON 走 manifestToTree 单一真源：全平台文件 platform 统一为 JSON null。
 type SignedManifest struct {
 	SchemaVersion int      `json:"schemaVersion"`
@@ -110,7 +110,7 @@ type SignedManifest struct {
 	Version       int      `json:"version"`
 	IssuedAt      string   `json:"issuedAt"`
 	ManagedDirs   []string `json:"managedDirs"`
-	// CleanExclude 运营自定义追加排除（FR-255）：命中前缀的路径永不删（叠加在 PLAYER_ZONE 之上）。
+	// CleanExclude 运营自定义追加排除：命中前缀的路径永不删（叠加在 PLAYER_ZONE 之上）。
 	// 空则省略（omitempty）——老 manifest canonical 字节不变，schemaVersion 维持 1（方案 A）。
 	CleanExclude []string       `json:"cleanExclude,omitempty"`
 	Files        []ManifestFile `json:"files"`
@@ -124,7 +124,7 @@ func (m *SignedManifest) MarshalJSON() ([]byte, error) {
 
 // manifestToTree 把 SignedManifest 转为有序无关的原生对象树（map/slice/string/int64/nil），
 // 供 MarshalJSON 序列化。键名与 contract §2 字段名严格一致。
-// FR-256 起不再产 sig 段。
+// 起不再产 sig 段。
 func manifestToTree(m *SignedManifest) map[string]any {
 	root := map[string]any{
 		"schemaVersion": int64(m.SchemaVersion),
@@ -134,7 +134,7 @@ func manifestToTree(m *SignedManifest) map[string]any {
 		"managedDirs":   stringsToTree(m.ManagedDirs),
 		"files":         filesToTree(m.Files),
 	}
-	// FR-255：cleanExclude 仅在非空时输出（omitempty）。
+	// cleanExclude 仅在非空时输出（omitempty）。
 	if len(m.CleanExclude) > 0 {
 		root["cleanExclude"] = stringsToTree(m.CleanExclude)
 	}

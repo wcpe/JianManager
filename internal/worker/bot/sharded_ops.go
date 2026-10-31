@@ -271,7 +271,7 @@ func (s *ShardedManager) GetBot(botID string) (*BotState, bool) {
 	return sh.GetBot(botID)
 }
 
-// CreateBots 分配后创建（单 bot 路径，FR-395 旧接口）。
+// CreateBots 分配后创建（单 bot 路径旧接口）。
 func (s *ShardedManager) CreateBots(configs []BotConfig) error {
 	for _, cfg := range configs {
 		idx, sh := s.pickShard()

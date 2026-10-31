@@ -147,3 +147,13 @@ type ForecastResult struct {
 - **平台 SLO 为常数条 SQL（M-1，性能）**：`sloUpTicksForSeries` 原对**每条序列**各发一条 `COUNT`（raw 档）/ `Pluck("count")`（rollup 档），而平台维序列数 ≈ 实例数，于是 SELECT 条数随实例数线性增长（审查实测：5 实例=7 条、50 实例=52 条）；`/metrics/slo?scope=platform` 是前端 60s 轮询，该 N+1 会直接放大成持续往返成本。现改为**常数条 SQL**：raw 档单条条件聚合 `COUNT(*) WHERE series_id IN ? AND value IS NOT NULL AND ts BETWEEN ?`（逐序列计数再求和 ≡ 全体非空样本计数，同一行只属于一条序列），rollup 档单条 `SUM(MIN(count, ticksPerBucket))`（与原先 Go 侧逐桶 `min` 后累加是同一运算）。数值语义逐字节不变，回归测试锁定三档「4 实例与 40 实例的 SQL 条数相等」。
 - **Theil–Sen 的 O(n²) 成本**：两点斜率中位数在 30d/5m 窗口（~8640 点）约 3700 万对。实现按 `capacityMaxSlopePoints=800` 等距抽稀（保留首尾）后再算斜率，点集仍用于残差/标准误，故稳健性与精度不受实质影响。
 - **spec↔现状偏差（已按现状实现）**：`slo.go`/`capacity.go` 落在 `MetricService` 上（`ComputeSLO` / `ForecastCapacity`），不新立独立 Service 类型——与既有 `AnalyzeAttribution`/`InstanceRanking` 同构，避免为纯查询再穿一层 `Services` 装配；无实例/节点状态历史表（`InstanceEvent` 是内存 pub/sub 不落库），故可用性只能走 `inst_uptime` 拍 + `AlertEvent` 口径。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+以下内容原先写在 PRD 的 FR「需求」列里。按「**PRD 只保留一行 FR + 状态，详情归 spec**」的约定迁入本文件，PRD 表内只留简短介绍。
+
+### FR-463 SLO / 可用性统计（feat，增强 FR-011/220）
+
+**需求补充**：无 uptime 达成率 / MTTR / MTBF / 误差预算。新增按窗口的可用性与可靠性统计与展示。**验收**：可查看指定窗口内实例/平台的可用率、故障次数、平均恢复时长（平台可用率为**拍加权**；窗口内无任何可用证据即无探针实例时按 `applicable:false` 渲染「不适用」，不伪造数值——详见 `docs/specs/capacity-and-slo/spec.md` §4）
+
+**交付状态**：✅ 已交付@v0.23.0

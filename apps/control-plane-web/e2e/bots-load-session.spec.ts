@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-372 会话实时观测 · 单机（Playwright + VITE_MOCK 模式）验收。
+/** 
+ *会话实时观测 · 单机（Playwright + VITE_MOCK 模式）验收。
  * 覆盖：详情页路由 /bots/sessions/:id、六个 tab 骨架、SSE 连接状态、tab 切换不 crash。
  * devmock 种子 V2 演示会话 id=100（runState=running）。
  */
-test.describe('FR-372 会话实时观测', () => {
+test.describe('会话实时观测', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
   })

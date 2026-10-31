@@ -14,12 +14,18 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// newUpdaterCoreSvc 建一个含制品库 + 频道 + 版本服务的最小测试装配（FR-259）。
+// newUpdaterCoreSvc 建一个含制品库 + 频道 + 版本服务的最小测试装配。
 func newUpdaterCoreSvc(t *testing.T) (*ClientVersionService, *AssetService, *gorm.DB) {
 	t.Helper()
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(&model.Asset{}, &model.ClientChannel{}, &model.ClientPullKey{}, &model.ClientVersion{}))
 	root, err := dataroot.Init(t.TempDir())
 	require.NoError(t, err)

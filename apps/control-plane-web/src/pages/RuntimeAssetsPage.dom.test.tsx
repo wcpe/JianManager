@@ -6,6 +6,8 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { server } from '@jianmanager/devmock/server'
+import { http, HttpResponse } from 'msw'
+import { API } from '@jianmanager/devmock/api'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 import RuntimeAssetsPage from './RuntimeAssetsPage'
 
@@ -18,8 +20,8 @@ function trackReconcilePosts() {
   return { paths, stop: () => server.events.removeListener('request:start', listener) }
 }
 
-/**
- * RuntimeAssetsPage 强断言（FR-200/FR-053）：①渲染 seed JDK/制品 ②删 JDK→overview 联动减少
+/** 
+ * RuntimeAssetsPage 强断言：①渲染 seed JDK/制品 ②删 JDK→overview 联动减少
  * ③插件制品批量部署到多实例 plugins/ 目录 ④注入 500→错误态。
  */
 describe('RuntimeAssetsPage（mock 假后端）', () => {
@@ -129,7 +131,7 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     const card17 = screen.getByText('17.0.11+9').closest('[data-slot="panel"]') as HTMLElement
     await user.click(within(card17).getByRole('button', { name: '删除' }))
 
-    // 危险确认弹窗：seed JDK 17 为 managed（FR-228 按来源分级确认），删除需逐字输入「厂商 主版本」= temurin 17 才启用确认。
+    // 危险确认弹窗：seed JDK 17 为 managed（按来源分级确认），删除需逐字输入「厂商 主版本」= temurin 17 才启用确认。
     const dialog = await screen.findByRole('dialog')
     await user.type(within(dialog).getByPlaceholderText('temurin 17'), 'temurin 17')
     await user.click(within(dialog).getByRole('button', { name: '删除' }))
@@ -214,5 +216,34 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     renderWithProviders(<RuntimeAssetsPage />)
 
     expect(await screen.findByText('加载运行时与制品失败')).toBeInTheDocument()
+  })
+
+  it('批量部署的实例搜索按 300ms 防抖下发，逐击键不打满服务端搜索', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const queries: string[] = []
+    server.use(
+      http.get(API('/instances/search'), ({ request }) => {
+        const q = new URL(request.url).searchParams.get('q') ?? ''
+        if (q) queries.push(q)
+        return HttpResponse.json({
+          items: [{ id: 1, name: 'survival-1', uuid: 'i-1', status: 'RUNNING' }],
+          total: 1,
+          page: 1,
+          pageSize: 200,
+        })
+      }),
+    )
+    renderWithProviders(<RuntimeAssetsPage />)
+    await screen.findByText('ViaVersion')
+
+    await user.click(screen.getByRole('button', { name: '批量部署' }))
+    const dialog = await screen.findByRole('dialog')
+    const search = within(dialog).getByPlaceholderText('搜索实例名称')
+
+    // 逐字符键入 9 次：不防抖时每个字符都会触发一次服务端搜索。
+    await user.type(search, 'survival-1')
+    await waitFor(() => expect(queries.length).toBeGreaterThan(0))
+    expect(queries).toEqual(['survival-1'])
   })
 })

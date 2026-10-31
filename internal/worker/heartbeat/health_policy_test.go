@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-459 心跳响应策略下发应用：presence（optional）标记 + 字段映射 + 老 CP 不下发不改动。
+// 心跳响应策略下发应用：presence（optional）标记 + 字段映射 + 老 CP 不下发不改动。
 
 func TestApplyHealthPolicy_AppliesWhenPresent(t *testing.T) {
 	hb := New("localhost:9100", "node", "secret", 30*time.Second, nil)

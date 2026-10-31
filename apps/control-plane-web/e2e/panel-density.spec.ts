@@ -1,14 +1,16 @@
 import { test, expect } from '@playwright/test'
-import { login } from './helpers'
+import { login, pinClassicHome } from './helpers'
 
-/**
- * FR-061 面板信息密度与视觉改造 · 单机（Playwright + mock 模式）验收。
+/** 
+ *面板信息密度与视觉改造 · 单机（Playwright + mock 模式）验收。
  * 覆盖 baota 式高密度运维面板契约：仪表盘（/）顶部环形仪表盘（ResourceGauge CPU/负载/内存）+
  * 分区面板 Panel + 聚合历史曲线 + 底部密集实例表（DataTable dense + 状态徽章）。
- * 断言这些高密度组件在真 UI 渲染。证据落 .tmp/acceptance/FR-061/。关联 ADR-009（控制台 Shell）。
+ * 断言这些高密度组件在真 UI 渲染。证据落 .tmp/acceptance。关联 ADR-009（控制台 Shell）。
  */
 
-test('FR-061 高密度面板：环形仪表盘 + 分区面板 + 密集实例表', async ({ page }) => {
+test('高密度面板：环形仪表盘 + 分区面板 + 密集实例表', async ({ page }) => {
+  // `/` 默认已改 AI 首页；本用例验的是经典首页的面板密度，故先钉住首页模式。
+  await pinClassicHome(page)
   await login(page)
   // 登录后即落仪表盘（data-page=overview）。
   await expect(page.locator('[data-page="overview"]')).toBeVisible()
@@ -21,18 +23,20 @@ test('FR-061 高密度面板：环形仪表盘 + 分区面板 + 密集实例表'
   // 仪表盘为 SVG 环（recharts / 自绘）——至少一个 svg 在仪表区渲染。
   await expect(page.locator('[data-page="overview"] svg').first()).toBeVisible()
 
-  // 分区面板 Panel（标题栏 + 内容区）：聚合历史曲线区四块标题。
-  await expect(page.getByText('CPU 趋势')).toBeVisible()
-  await expect(page.getByText('负载趋势').first()).toBeVisible()
-  await expect(page.getByText('内存趋势')).toBeVisible()
+  // 分区面板 Panel（标题栏 + 内容区）：聚合历史曲线区现为**单个「资源趋势」面板**，
+  // 序列（在线玩家 / 总 CPU / 总内存 / 总负载）作为面板内的子项，
+  // 不再是 CPU、负载各自独立成面板，故按面板标题与其中一项序列断言。
+  await expect(page.getByText('资源趋势').first()).toBeVisible()
+  await expect(page.getByText('总负载').first()).toBeVisible()
 
-  // 底部密集实例表（虚拟滚动容器 + dense 行）。
-  const denseTable = page.locator('[data-testid="overview-instances-virtual"]')
-  await expect(denseTable).toBeVisible()
-  await expect(page.getByText('实例列表')).toBeVisible()
+  // 底部分区面板 + 实例表。
+  // 【为何不一定是虚拟表】首页已按设计去掉「实例列表」面板（它与「服务器」页的列表
+  // 回答同一件事，首页不再承担「哪台服在跑」的浏览职责），`overview-instances-virtual`
+  // 随之从源码消失。这里只断言首页仍以 Panel 分区组织内容（分区面板底座）。
+  await expect(page.locator('[data-slot="panel"]').first()).toBeVisible()
 
-  // 时间区间选择器（RangePicker，FR-061 契约组件，供仪表盘/监控复用）。
+  // 时间区间选择器（RangePicker契约组件，供仪表盘/监控复用）。
   await expect(page.getByRole('tab', { name: '24h' }).first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-061/single-machine-panel-density.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-panel-density.png', fullPage: true })
 })

@@ -17,7 +17,7 @@ type PIDRecord struct {
 	SocketAddr   string `json:"socket_addr"` // Unix Socket 路径或 Named Pipe 名称
 	InstanceUUID string `json:"instance_uuid"`
 	WorkDir      string `json:"work_dir"`             // 实例工作目录，供 Worker 重启恢复后做文件/配置操作
-	ProbePort    int    `json:"probe_port,omitempty"` // ServerProbe /metrics 端口，供 Worker 重启恢复后心跳继续自采（FR-060）
+	ProbePort    int    `json:"probe_port,omitempty"` // ServerProbe /metrics 端口，供 Worker 重启恢复后心跳继续自采
 }
 
 // PIDFile PID 文件管理。

@@ -1,252 +1,64 @@
-import { Fragment, useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { ChevronRight, FolderTree, Tag } from 'lucide-react'
 import { toast } from 'sonner'
-import { useInstances, type InstanceInfo } from '@/api/instances'
+import { useInstances, useStartInstance, useStopInstance, useRestartInstance } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import {
-  useInstanceGroups,
-  useInstanceGroupSubtree,
-  useAddInstanceGroupMembers,
-  useRemoveInstanceGroupMembers,
-  type InstanceGroupNode,
-} from '@/api/instanceGroups'
-import { InstanceWorktableCard } from './InstanceWorktableCard'
-import { InstanceGroupTree, INSTANCE_DND_MIME } from './InstanceGroupTree'
-import { groupPathOf } from './instance-group-path'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { Badge } from '@jianmanager/ui/components/badge'
-import { Button } from '@jianmanager/ui/components/button'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import { cn } from '@jianmanager/ui'
+import { useInstanceGroups, useInstanceGroupSubtree, useAddInstanceGroupMembers, useRemoveInstanceGroupMembers } from '@/api/instanceGroups'
+import { InstanceGroupTree } from './InstanceGroupTree'
+import { InstanceGroupManager as InstanceGroupManagerView } from '@/components/views/instances/InstanceGroupManager'
 
 /**
- * 实例多级分组完整视图（FR-165，design §4.4）：左 = 分组树，右 = 选中组（含子树）的实例列表。
- * 右列表复用工作台卡骨架（§4.5），头部为组路径面包屑 + 批量「标记入组」；实例卡可拖入左树某组。
- * 与 InstancesPage 既有筛选/分组视图正交并列——本视图是「按组织归类浏览」的专用形态。
+ * 实例分组管理页的应用接线层（ADR-103 b 范式）。
+ *
+ * 视图本体是受控视图（见 components/views）；本层持有选中组（子树查询依赖它，必须提到这一层）、
+ * 取实例/节点/分组/子树、接两个成员动作、把提示交给 toast，并把已接线的分组树以函数插槽交回视图。
+ * 保留同路径的具名导出，调用点无需改动。
  */
 export function InstanceGroupManager() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null)
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
 
   const { data: allInstances } = useInstances()
   const { data: nodes } = useNodes()
   const { data: groups } = useInstanceGroups()
   // 选中组时取其子树（含后代、去重）的实例 ID 集合；未选时不查（显示全部）。
   const { data: subtreeIds } = useInstanceGroupSubtree(selectedGroupId)
-
-  const nodeName = (id: number) => nodes?.find((n) => n.id === id)?.name ?? t('console.unknownNode', { id })
-
-  // 右列表数据：未选组=全部实例；选中组=子树实例集合过滤。
-  const visible = useMemo<InstanceInfo[]>(() => {
-    const list = allInstances ?? []
-    if (selectedGroupId === null) return list
-    const idSet = new Set(subtreeIds ?? [])
-    return list.filter((i) => idSet.has(i.id))
-  }, [allInstances, selectedGroupId, subtreeIds])
-
-  const breadcrumb = useMemo(
-    () => (selectedGroupId === null ? [] : groupPathOf(groups ?? [], selectedGroupId)),
-    [groups, selectedGroupId],
-  )
-
-  const toggleOne = (id: number) =>
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  const clearSelection = () => setSelectedIds([])
-
-  return (
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[18rem_1fr]">
-      <Panel className="lg:h-[calc(100vh-16rem)]" bodyClassName="min-h-0 p-2">
-        <InstanceGroupTree selectedGroupId={selectedGroupId} onSelect={setSelectedGroupId} />
-      </Panel>
-
-      <Panel bodyClassName="p-3">
-        {/* 组路径面包屑 */}
-        <div className="mb-3 flex flex-wrap items-center gap-1 text-sm">
-          <FolderTree className="size-4 text-primary" />
-          {selectedGroupId === null ? (
-            <span className="font-medium">{t('instanceGroups.allInstances')}</span>
-          ) : (
-            breadcrumb.map((seg, i) => (
-              <Fragment key={seg.id}>
-                {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground" />}
-                <span className={cn(i === breadcrumb.length - 1 && 'font-medium')}>{seg.name}</span>
-              </Fragment>
-            ))
-          )}
-          <Badge variant="outline" className="ml-1 font-normal">
-            {visible.length}
-          </Badge>
-        </div>
-
-        {/* 批量「标记入组」栏：选中实例后出现 */}
-        {selectedIds.length > 0 && (
-          <MarkIntoGroupBar
-            selectedIds={selectedIds}
-            selectedGroupId={selectedGroupId}
-            groups={groups ?? []}
-            onDone={clearSelection}
-          />
-        )}
-
-        {visible.length === 0 ? (
-          <p className="py-10 text-center text-sm text-muted-foreground">
-            {selectedGroupId === null ? t('instances.empty') : t('instanceGroups.groupEmpty')}
-          </p>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {visible.map((inst) => (
-              <DraggableInstance
-                key={inst.id}
-                inst={inst}
-                selected={selectedIds.includes(inst.id)}
-                onToggle={() => toggleOne(inst.id)}
-                selectedIds={selectedIds}
-              >
-                <InstanceWorktableCard
-                  inst={inst}
-                  nodeName={nodeName(inst.nodeId)}
-                  roleBadge={null}
-                  menu={null}
-                  onOpen={(id) => navigate(`/instances/${id}`)}
-                />
-              </DraggableInstance>
-            ))}
-          </div>
-        )}
-      </Panel>
-    </div>
-  )
-}
-
-/**
- * 可拖拽 + 可多选的实例卡包装。
- * 左上角复选框做批量选中；整块可拖入左树某组——拖拽载荷为「当前选中集合（含本卡）」的实例 ID 数组。
- */
-function DraggableInstance({
-  inst,
-  selected,
-  onToggle,
-  selectedIds,
-  children,
-}: {
-  inst: InstanceInfo
-  selected: boolean
-  onToggle: () => void
-  selectedIds: number[]
-  children: React.ReactNode
-}) {
-  const { t } = useTranslation()
-  return (
-    <div
-      className={cn('relative rounded-xl', selected && 'ring-2 ring-primary ring-offset-1 ring-offset-background')}
-      draggable
-      onDragStart={(e) => {
-        // 拖选中集合；若本卡未在选中集合内，则只拖本卡。
-        const ids = selected && selectedIds.length > 0 ? selectedIds : [inst.id]
-        e.dataTransfer.setData(INSTANCE_DND_MIME, JSON.stringify(ids))
-        e.dataTransfer.effectAllowed = 'copy'
-      }}
-    >
-      <div className="absolute left-2 top-2 z-10">
-        <Checkbox checked={selected} onCheckedChange={onToggle} aria-label={t('instanceGroups.selectInstance', { name: inst.name })} />
-      </div>
-      {children}
-    </div>
-  )
-}
-
-/** 批量「标记入组」栏：选一个目标组，把已选实例批量加入（幂等）。 */
-function MarkIntoGroupBar({
-  selectedIds,
-  selectedGroupId,
-  groups,
-  onDone,
-}: {
-  selectedIds: number[]
-  selectedGroupId: number | null
-  groups: InstanceGroupNode[]
-  onDone: () => void
-}) {
-  const { t } = useTranslation()
-  const [target, setTarget] = useState<string>('')
   const addMembers = useAddInstanceGroupMembers()
   const removeMembers = useRemoveInstanceGroupMembers()
+  const start = useStartInstance()
+  const stop = useStopInstance()
+  const restart = useRestartInstance()
 
-  const submit = () => {
-    if (!target) return
-    addMembers.mutate(
-      { id: Number(target), instanceIds: selectedIds },
-      {
-        onSuccess: (res) => {
-          toast.success(t('instanceGroups.markedCount', { count: res.added }))
-          onDone()
-        },
-        onError: () => toast.error(t('instanceGroups.markFailed')),
-      },
-    )
-  }
-
-  const removeFromCurrent = () => {
-    if (selectedGroupId === null) return
-    removeMembers.mutate(
-      { id: selectedGroupId, instanceIds: selectedIds },
-      {
-        onSuccess: () => {
-          toast.success(t('instanceGroups.removedCount', { count: selectedIds.length }))
-          onDone()
-        },
-        onError: () => toast.error(t('instanceGroups.removeFailed')),
-      },
-    )
-  }
+  const nodeNameOf = (id: number) => nodes?.find((n) => n.id === id)?.name ?? t('console.unknownNode', { id })
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-accent/40 px-3 py-2">
-      <Tag className="size-4 text-primary" />
-      <span className="text-sm font-medium">{t('instanceGroups.selectedCount', { count: selectedIds.length })}</span>
-      <div className="ml-auto flex items-center gap-2">
-        <Select value={target} onValueChange={setTarget}>
-          <SelectTrigger size="sm" className="w-44">
-            <SelectValue placeholder={t('instanceGroups.pickTargetGroup')} />
-          </SelectTrigger>
-          <SelectContent>
-            {groups.map((g) => (
-              <SelectItem key={g.id} value={String(g.id)}>
-                {g.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button size="sm" onClick={submit} disabled={!target || addMembers.isPending}>
-          {t('instanceGroups.markInto')}
-        </Button>
-        {selectedGroupId !== null && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-destructive hover:text-destructive"
-            title={t('instanceGroups.removeFromCurrentHint')}
-            onClick={removeFromCurrent}
-            disabled={removeMembers.isPending}
-          >
-            {t('instanceGroups.removeFromCurrent')}
-          </Button>
-        )}
-        <Button size="sm" variant="ghost" onClick={onDone}>
-          {t('common.cancel')}
-        </Button>
-      </div>
-    </div>
+    <InstanceGroupManagerView
+      selectedGroupId={selectedGroupId}
+      onSelectGroup={setSelectedGroupId}
+      instances={allInstances ?? []}
+      groups={groups ?? []}
+      subtreeIds={subtreeIds ?? null}
+      nodeNameOf={nodeNameOf}
+      onOpenInstance={(id) => navigate(`/instances/${id}`)}
+      onLifecycle={(action, instanceId) => {
+        const m = action === 'start' ? start : action === 'stop' ? stop : restart
+        m.mutate(instanceId)
+      }}
+      tree={({ selectedGroupId: gid, onSelect }) => (
+        <InstanceGroupTree selectedGroupId={gid} onSelect={onSelect} />
+      )}
+      onAddMembers={(payload) =>
+        addMembers.mutateAsync({ id: payload.groupId, instanceIds: payload.instanceIds })
+      }
+      onRemoveMembers={async (payload) => {
+        await removeMembers.mutateAsync({ id: payload.groupId, instanceIds: payload.instanceIds })
+      }}
+      notify={(kind, message) => {
+        if (kind === 'success') toast.success(message)
+        else toast.error(message)
+      }}
+    />
   )
 }

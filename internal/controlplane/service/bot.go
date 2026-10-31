@@ -133,6 +133,19 @@ func (s *BotService) Create(req CreateBotRequest) (*model.Bot, error) {
 		Behavior:        req.Behavior,
 		Status:          model.BotStatusPending,
 		StressSessionID: req.StressSessionID,
+		/*
+		 * 创建即表达"期望它运行"。
+		 *
+		 * 不写会落到列的默认值 `stopped`（model/bot.go 的 `default:stopped`），
+		 * 于是刚建出来的 Bot 在账本上就是"期望停止"——后续所有按 desired_state 筛选的
+		 * 归真机制（新鲜度收敛 / 失效回收 / Worker 重启后的 reconcile）都不会管它。
+		 *
+		 * 这违反 `docs/specs/bot-runtime-recovery/spec.md`「创建/启动：DesiredState=running，
+		 * DesiredStateGeneration 从 1 开始」。Fleet 建 Bot 路径（bot_load_execution.go）
+		 * 一直是对的，这里是 V1 单建路径的漏配。
+		 */
+		DesiredState:           model.BotDesiredRunning,
+		DesiredStateGeneration: 1,
 	}
 	if err := s.db.Create(bot).Error; err != nil {
 		return nil, fmt.Errorf("创建 Bot 失败: %w", err)
@@ -270,7 +283,7 @@ func (s *BotService) refreshStatus(bot *model.Bot) {
 	}
 }
 
-// SendCommand 向 Bot 下发聊天/控制命令（同步委托 Worker，复用 SendBotCommand RPC，FR-009）。
+// SendCommand 向 Bot 下发聊天/控制命令（同步委托 Worker，复用 SendBotCommand RPC）。
 // 链路：CP → Worker(SendBotCommand) → bot-worker(send-command IPC) → Mineflayer chat。
 func (s *BotService) SendCommand(id uint, command string) error {
 	var bot model.Bot
@@ -299,7 +312,7 @@ func (s *BotService) SendCommand(id uint, command string) error {
 	return nil
 }
 
-// StreamEvents 订阅单个 Bot 在所属 Worker 上的实时事件流（FR-041）。
+// StreamEvents 订阅单个 Bot 在所属 Worker 上的实时事件流。
 func (s *BotService) StreamEvents(ctx context.Context, id uint) (*model.Bot, workerpb.WorkerService_StreamBotEventsClient, error) {
 	var bot model.Bot
 	if err := s.db.First(&bot, id).Error; err != nil {

@@ -20,8 +20,8 @@ if (!('ResizeObserver' in globalThis)) {
   }
 }
 
-/**
- * 文件存储配置页（FR-347，见 ADR-073）。
+/** 
+ * 文件存储配置页（见 ADR-073）。
  * 覆盖 spec §3.7 验收：列表（内置/活跃徽章）/ 创建校验 / 草稿连通测试 / 设活跃（确认语义 +
  * 恰一条活跃）/ 删除守卫（422 用后端 message 呈现）/ SK 脱敏（编辑不回显明文）。
  */
@@ -161,14 +161,64 @@ describe('ArtifactStoragesPage（mock）', () => {
     expect(passwordInputs[0]).toHaveAttribute('placeholder', '已配置，留空保留')
   })
 
-  it('注入 500 → 显示空态而非崩溃', async () => {
+  it('注入 500 → 显示错误态而非「暂无存储渠道」（不崩溃）', async () => {
     mockInject('get', '/artifact-storages', { kind: 'status', status: 500 })
     renderWithProviders(<ArtifactStoragesPage />)
-    expect(await screen.findByText('暂无存储渠道')).toBeInTheDocument()
-    // 空态说明需可换行：承载 EmptyState 的单元格必须覆盖表格基类 whitespace-nowrap。
-    expect(screen.getByText('暂无存储渠道').closest('td')).toHaveClass('whitespace-normal')
+    // 报「暂无存储渠道」会让管理员以为渠道配置都丢了，故必须与取数失败区分开。
+    expect(await screen.findByText('错误')).toBeInTheDocument()
+    expect(screen.queryByText('暂无存储渠道')).not.toBeInTheDocument()
     await waitFor(() => {
       expect(screen.queryByText('rustfs-主渠道')).not.toBeInTheDocument()
     })
+  })
+
+  it('新建弹窗的名称/Bucket/Endpoint 有可访问名', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<ArtifactStoragesPage />)
+    await screen.findByText('rustfs-主渠道')
+
+    await user.click(screen.getByRole('button', { name: '新增 S3 渠道' }))
+    const dialog = await screen.findByRole('dialog')
+
+    // 三处 FieldLabel 此前都没关联到 input（读屏拿不到字段名），也不与其它字段统一的 <label> 包裹写法一致。
+    expect(within(dialog).getByLabelText(/^名称/)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/^Bucket/)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/^Endpoint/)).toBeInTheDocument()
+  })
+
+  it('预签名有效期提交前受前端校验：清空/超范围都不得提交', async () => {
+    const user = userEvent.setup()
+    let posted = 0
+    server.use(
+      http.post(API('/artifact-storages'), () => {
+        posted += 1
+        return HttpResponse.json({}, { status: 201 })
+      }),
+    )
+    renderWithProviders(<ArtifactStoragesPage />)
+    await screen.findByText('rustfs-主渠道')
+
+    await user.click(screen.getByRole('button', { name: '新增 S3 渠道' }))
+    const dialog = await screen.findByRole('dialog')
+    const ttl = within(dialog).getByLabelText(/^预签名有效期/) as HTMLInputElement
+    await user.type(within(dialog).getByLabelText(/^名称/), 'ttl-test')
+    await user.type(within(dialog).getByLabelText(/^Bucket/), 'bucket-a')
+    await user.type(within(dialog).getByLabelText(/^Endpoint/), 'minio.local:9000')
+
+    // 清空 → Number('') = 0：此前会照原样提交给后端。
+    await user.clear(ttl)
+    expect(within(dialog).getByRole('button', { name: '创建' })).toBeDisabled()
+
+    // 超出 60~3600 同样拦下（min/max 只是浏览器约束，直填不会被拦）。
+    await user.type(ttl, '5000')
+    expect(within(dialog).getByRole('button', { name: '创建' })).toBeDisabled()
+
+    // 回到合法区间即可提交。
+    await user.clear(ttl)
+    await user.type(ttl, '900')
+    const submit = within(dialog).getByRole('button', { name: '创建' })
+    expect(submit).toBeEnabled()
+    await user.click(submit)
+    await waitFor(() => expect(posted).toBe(1))
   })
 })

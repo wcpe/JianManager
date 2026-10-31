@@ -1,347 +1,152 @@
-import { useState } from 'react'
+// 视图已回迁应用侧（迁包已撤销，见 ADR-103）；本层只做列表/详情取数、筛选与窗口状态、取消任务与 toast 接线。
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useSearchParams } from 'react-router'
-import { ChevronRight, Ban, Loader2, Wifi } from 'lucide-react'
-import { isNetworkDownloadFailure } from '@/lib/download-failure'
-import { useTasks, useTask, useCancelTask, isTerminalTask, TASK_KIND_LABEL_KEYS, type Task, type TaskState } from '@/api/tasks'
-import { useNodes } from '@/api/nodes'
-import { Badge } from '@jianmanager/ui/components/badge'
-import { Panel } from '@jianmanager/ui/components/panel'
-import { Button } from '@jianmanager/ui/components/button'
-import { Input } from '@jianmanager/ui/components/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import DangerConfirm from '@/components/DangerConfirm'
+import { Link, useLocation } from 'react-router'
+import { usePageContext } from '@/lib/assistant/page-context'
 import { toast } from 'sonner'
-import { cn } from '@jianmanager/ui'
+import { useNodes } from '@/api/nodes'
+import { useTasks, useTask, useCancelTask } from '@/api/tasks'
+import { useDebounced } from '@/lib/hooks/use-debounced'
+import { TASKS_WINDOW_MAX, TASKS_WINDOW_STEP, TasksPageView } from '@/components/views/tasks/TasksPageView'
+import type { TasksFilterState } from '@/components/views/tasks/TasksPageView'
 
-/** 任务状态 → Badge 变体与文案键。 */
-const STATE_META: Record<TaskState, { variant: 'default' | 'secondary' | 'destructive' | 'outline'; key: string }> = {
-  pending: { variant: 'outline', key: 'tasks.state.pending' },
-  running: { variant: 'default', key: 'tasks.state.running' },
-  succeeded: { variant: 'secondary', key: 'tasks.state.succeeded' },
-  failed: { variant: 'destructive', key: 'tasks.state.failed' },
-  canceled: { variant: 'outline', key: 'tasks.state.canceled' },
-}
-
-const STATE_OPTIONS: TaskState[] = ['pending', 'running', 'succeeded', 'failed', 'canceled']
+/** 全部筛选清空（重置按钮与初次进入共用同一份初值）。 */
+const EMPTY_FILTERS: TasksFilterState = { state: '', kind: '', nodeId: '', keyword: '', time: '' }
 
 /** 时间快捷筛选 → 创建时间下界（RFC3339）。在事件处理器中调用（避免 render 里的不纯 Date.now）。 */
-function sinceFromFilter(v: string): string | undefined {
+function sinceFromFilter(v: '' | '24h' | '7d'): string | undefined {
   if (v === '24h') return new Date(Date.now() - 86_400_000).toISOString()
   if (v === '7d') return new Date(Date.now() - 7 * 86_400_000).toISOString()
   return undefined
 }
 
-/** 任务列表增长窗口（FR-337）：初始/步长 100，封顶 500（到顶引导用筛选缩小范围）。 */
-const TASKS_WINDOW_STEP = 100
-const TASKS_WINDOW_MAX = 500
+/** 从 mutation 错误里取后端消息，缺省回落到兜底文案。 */
+function errMessage(err: unknown, fallback: string): string {
+  const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+  return msg || fallback
+}
 
-/**
- * 全局任务中心页（FR-183 + FR-227 + FR-337）。
- * 轮询 `/tasks` 列长任务（如 JDK 安装）：进度条 + 状态徽标 + 展开看滚动日志。
- * 进行中任务可「强制停止」（FR-227：经心跳真中断 Worker 操作）；列表按 kind/state/node/关键词/时间筛选。
- * 分页信封（FR-337）：顶部「共 N 条 · 已加载 M」，「加载更多」扩大 limit 的增长窗口（offset 恒 0），
- * 任一筛选变化时窗口复位；轮询重取整个已加载窗口，进度与总数同步刷新。
- * 存在进行中任务时自动短轮询刷新；全部终态时停止。非平台管理员只见自己发起的任务（后端收敛）。
+/** 
+ * 全局任务中心页容器（ADR-103 b 范式）：列表与详情取数、短轮询、筛选/增长窗口状态、
+ * 取消任务的 mutation 与 toast 文案都在这里决定，行渲染与二次确认框交共享视图。
+ *
+ * 受控状态归属：会触发重新取数的——筛选五维、`limit` 增长窗口、`expandedId`（展开即拉详情）——归本层；
+ * 展开行实测高度、确认框开合等纯 UI 状态留包内。
+ * 保留同路径默认导出，路由表无需改动。
  */
 export default function TasksPage() {
   const { t } = useTranslation()
-  // 通知中心/页眉跳转深链（FR-226）：?task=<taskId> 进页即自动展开该任务，定位上下文。
-  const [searchParams] = useSearchParams()
-  const [expanded, setExpanded] = useState<string | null>(() => searchParams.get('task'))
+  // 通知中心/页眉跳转深链：?task=<taskId> 进页即自动展开该任务，定位上下文。
+  const location = useLocation()
+  const [expandedId, setExpandedId] = useState<string | null>(
+    () => new URLSearchParams(location.search).get('task'),
+  )
 
-  // 筛选条件（FR-227）。
-  const [stateF, setStateF] = useState('')
-  const [kindF, setKindF] = useState('')
-  const [nodeF, setNodeF] = useState('')
-  const [keyword, setKeyword] = useState('')
-  const [timeF, setTimeF] = useState('') // ''=全部 | 24h | 7d
+  /** 
+   * 深链同步：只在挂载时读一次 `?task=` 是不够的——页眉任务菜单 / 通知中心在**本页已挂载**时再跳
+   * `/tasks?task=<id>`，路由只换查询串、组件不重挂，初值不再生效，展开的仍是上一个任务（甚至什么都不展开）。
+   * 故按「每次导航」（location.key 每次都变，重复点同一条菜单也算）回灌 URL 里的 task。
+   * 反向不回写：用户手动展开/折叠不写 URL——否则折叠一行就会把深链抹掉，刷新后定位丢失。
+   * 无 `task` 参数时不动展开态（一次无参导航不该收起用户手动展开的行）。
+   */
+  const deepLinkTask = new URLSearchParams(location.search).get('task')
+
+  // 页面上报（§4.2）：任务页只发「正在看哪个任务」，不发任务详情正文
+  // （详情可能含命令与环境信息，由工具按权限取）。
+  const contextTaskId = useMemo(
+    () => new URLSearchParams(location.search).get('task'),
+    [location.search],
+  )
+  usePageContext(
+    useMemo(
+      () => ({
+        pageKey: 'tasks',
+        ...(contextTaskId ? { entities: [{ type: 'task' as const, id: contextTaskId }] } : {}),
+      }),
+      [contextTaskId],
+    ),
+  )
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- URL（外部输入）变化时回灌展开态，属该规则的合法例外
+    if (deepLinkTask) setExpandedId(deepLinkTask)
+  }, [deepLinkTask, location.key])
+
+  // 筛选条件。
+  const [filters, setFilters] = useState<TasksFilterState>(EMPTY_FILTERS)
   const [since, setSince] = useState<string | undefined>(undefined)
-  // 增长窗口（FR-337）：「加载更多」+100 封顶 500；筛选变化复位。
+  // 增长窗口：「加载更多」+100 封顶 500；筛选变化复位。
   const [limit, setLimit] = useState(TASKS_WINDOW_STEP)
 
-  /** 包装筛选 setter：任一筛选变化时窗口复位（FR-337），避免停留在放大的窗口。 */
-  const withWindowReset = <T,>(set: (v: T) => void) => (v: T) => {
-    setLimit(TASKS_WINDOW_STEP)
-    set(v)
-  }
+  /** 
+   * 关键字防抖（300ms）：输入框仍即时回显（`filters.keyword` 原样喂给视图），但请求键只用停止键入后的值。
+   * 本页 `useTasks` 是 `staleTime: 0` + 2 秒短轮询，不防抖的话每敲一个字都要发一次全量列表请求，
+   * 还会与在途请求、轮询请求叠在一起（叠加越滚越大）。取数口径（含防抖）归容器，与通知中心同款。
+   */
+  const debouncedKeyword = useDebounced(filters.keyword, 300).trim()
 
   const { data: nodes } = useNodes()
   const { data: page, isLoading, isError } = useTasks({
-    state: (stateF as TaskState) || '',
-    kind: kindF,
-    nodeId: nodeF ? Number(nodeF) : undefined,
-    keyword,
+    state: filters.state,
+    kind: filters.kind,
+    nodeId: filters.nodeId ? Number(filters.nodeId) : undefined,
+    keyword: debouncedKeyword || undefined,
     since,
     limit,
   })
-  const tasks = page?.items ?? []
-  const total = page?.total ?? 0
-  const canLoadMore = tasks.length < total && limit < TASKS_WINDOW_MAX
-  const windowCapped = tasks.length < total && limit >= TASKS_WINDOW_MAX
+  const tasks = useMemo(() => page?.items ?? [], [page])
+  // 详情懒查：仅展开时取；进行中 2s 短轮询（规则在 api/tasks 内）。
+  const { data: detail, isLoading: detailLoading } = useTask(expandedId ?? undefined)
+  const cancel = useCancelTask()
+  // 在途取消的任务 id 集合：原实现每行各自一个 useCancelTask，多行同时取消时「取消中」并存；
+  // 共享单个 mutation 实例后 isPending 只反映最后一次，故在此按任务累计，保住逐行独立反馈。
+  const [cancelingIds, setCancelingIds] = useState<string[]>([])
 
-  const hasFilters = !!(stateF || kindF || nodeF || keyword || timeF)
-  const resetFilters = () => {
-    setStateF(''); setKindF(''); setNodeF(''); setKeyword(''); setTimeF(''); setSince(undefined)
+  /** 
+   * 筛选变更：任一维度变化即复位增长窗口，避免停留在放大的窗口；
+   * 时间快捷项在此换算成查询用的 `since`（含 Date.now()，故只在事件处理器里算）。
+   */
+  const changeFilters = (patch: Partial<TasksFilterState>) => {
     setLimit(TASKS_WINDOW_STEP)
+    if (patch.time !== undefined) setSince(sinceFromFilter(patch.time))
+    setFilters((f) => ({ ...f, ...patch }))
   }
 
   return (
-    <div data-page="tasks" className="jm-page-stack space-y-4">
-      <div className="jm-page-header">
-        <h1 className="jm-page-title">{t('tasks.title')}</h1>
-        {page != null && !isError && (
-          <span className="self-center text-xs tabular-nums text-muted-foreground">
-            {t('tasks.countSummary', { total, loaded: tasks.length })}
-          </span>
-        )}
-      </div>
-
-      {/* 筛选条（FR-227） */}
-      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
-        <Input
-          value={keyword}
-          onChange={(e) => withWindowReset(setKeyword)(e.target.value)}
-          placeholder={t('tasks.filter.keyword', '搜索标题 / 详情')}
-          className="h-8 w-52"
-        />
-        <FilterSelect value={stateF} onChange={withWindowReset(setStateF)} placeholder={t('tasks.filter.allStates', '全部状态')}
-          options={STATE_OPTIONS.map((s) => ({ value: s, label: t(STATE_META[s].key) }))} />
-        <FilterSelect value={kindF} onChange={withWindowReset(setKindF)} placeholder={t('tasks.filter.allKinds', '全部种类')}
-          options={Object.entries(TASK_KIND_LABEL_KEYS).map(([value, key]) => ({ value, label: t(key) }))} />
-        <FilterSelect value={nodeF} onChange={withWindowReset(setNodeF)} placeholder={t('tasks.filter.allNodes', '全部节点')}
-          options={(nodes ?? []).map((n) => ({ value: String(n.id), label: n.name }))} />
-        <FilterSelect value={timeF} onChange={withWindowReset((v: string) => { setTimeF(v); setSince(sinceFromFilter(v)) })} placeholder={t('tasks.filter.allTime', '全部时间')}
-          options={[{ value: '24h', label: t('tasks.filter.last24h', '近 24 小时') }, { value: '7d', label: t('tasks.filter.last7d', '近 7 天') }]} />
-        {hasFilters && (
-          <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
-            {t('common.reset', '重置')}
-          </Button>
-        )}
-      </div>
-
-      {isLoading && !page ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
-      ) : isError ? (
-        <p className="text-destructive">{t('tasks.loadError')}</p>
-      ) : tasks.length === 0 ? (
-        <Panel>
-          <p className="px-3 py-10 text-center text-sm text-muted-foreground">
-            {hasFilters ? t('tasks.emptyFiltered', '没有匹配筛选条件的任务') : t('tasks.empty')}
-          </p>
-        </Panel>
-      ) : (
-        <>
-          <Panel bodyClassName="p-0">
-            <div className="flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-              <span className="w-4 shrink-0" />
-              <span className="min-w-0 flex-1">{t('tasks.task')}</span>
-              <span className="w-24 shrink-0">{t('tasks.stateLabel')}</span>
-              <span className="w-40 shrink-0">{t('tasks.progress')}</span>
-              <span className="w-40 shrink-0">{t('tasks.updatedAt')}</span>
-              <span className="w-20 shrink-0" />
-            </div>
-            {tasks.map((task) => (
-              <TaskRow
-                key={task.taskId}
-                task={task}
-                open={expanded === task.taskId}
-                onToggle={() => setExpanded((id) => (id === task.taskId ? null : task.taskId))}
-              />
-            ))}
-          </Panel>
-
-          {/* 加载更多（FR-337）：扩大 limit 的增长窗口；到顶（500）且仍有剩余时引导筛选收窄。 */}
-          {(canLoadMore || windowCapped) && (
-            <div className="flex items-center justify-center pb-1">
-              {windowCapped ? (
-                <p className="text-xs text-muted-foreground">{t('tasks.loadMoreCapped')}</p>
-              ) : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setLimit((l) => Math.min(l + TASKS_WINDOW_STEP, TASKS_WINDOW_MAX))}
-                >
-                  {t('tasks.loadMore')}
-                </Button>
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
-/** 筛选下拉：空值=占位（全部）。 */
-function FilterSelect({ value, onChange, placeholder, options }: {
-  value: string
-  onChange: (v: string) => void
-  placeholder: string
-  options: { value: string; label: string }[]
-}) {
-  // shadcn Select 不接受空字符串 value；用哨兵 '__all__' 表示「全部」。
-  const ALL = '__all__'
-  return (
-    <Select value={value || ALL} onValueChange={(v) => onChange(v === ALL ? '' : v)}>
-      <SelectTrigger size="sm" className="h-8 w-36">
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL}>{placeholder}</SelectItem>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  )
-}
-
-/** 单条任务行：进度条 + 状态徽标 + 强制停止；点击展开看日志（详情懒查）。 */
-function TaskRow({ task, open, onToggle }: { task: Task; open: boolean; onToggle: () => void }) {
-  const { t } = useTranslation()
-  // 在线 running 已请求取消 → 显「取消中」；否则按状态。
-  const canceling = task.state === 'running' && task.cancelRequested
-  const badge = canceling
-    ? { variant: 'outline' as const, label: t('tasks.state.canceling', '取消中') }
-    : { variant: STATE_META[task.state].variant, label: t(STATE_META[task.state].key) }
-  return (
-    <div className="border-b border-border/60 last:border-b-0">
-      <div className="flex items-center">
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent/50"
-        >
-          <ChevronRight
-            className={cn(
-              'size-4 shrink-0 text-muted-foreground transition-transform duration-200 ease-ios',
-              open && 'rotate-90',
-            )}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium">{task.title || task.kind}</span>
-            {task.detail && <span className="block truncate text-[11px] text-muted-foreground">{task.detail}</span>}
-          </span>
-          <span className="w-24 shrink-0">
-            <Badge variant={badge.variant}>{badge.label}</Badge>
-          </span>
-          <span className="w-40 shrink-0">
-            <ProgressBar value={task.progress} terminal={isTerminalTask(task)} failed={task.state === 'failed'} />
-          </span>
-          <span className="w-40 shrink-0 font-mono text-[11px] text-muted-foreground">
-            {new Date(task.updatedAt).toLocaleString()}
-          </span>
-        </button>
-        <span className="flex w-20 shrink-0 justify-center px-2">
-          {!isTerminalTask(task) && <CancelTaskButton task={task} />}
-        </span>
-      </div>
-      {open && <TaskDetail taskId={task.taskId} error={task.error} />}
-    </div>
-  )
-}
-
-/** 强制停止按钮（FR-227）：二次确认后调取消端点，经心跳真中断 Worker 操作。 */
-function CancelTaskButton({ task }: { task: Task }) {
-  const { t } = useTranslation()
-  const cancel = useCancelTask()
-  const [confirm, setConfirm] = useState(false)
-  return (
-    <>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 px-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
-        disabled={cancel.isPending || task.cancelRequested}
-        onClick={() => setConfirm(true)}
-        title={t('tasks.forceStop', '强制停止')}
-      >
-        {cancel.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Ban className="size-3.5" />}
-      </Button>
-      <DangerConfirm
-        open={confirm}
-        title={t('tasks.forceStopTitle', '强制停止任务?')}
-        description={t('tasks.forceStopDesc', '将中断该任务在节点上的执行（如下载会被取消、临时文件清理），不可恢复。')}
-        confirmLabel={t('tasks.forceStop', '强制停止')}
-        onCancel={() => setConfirm(false)}
-        onConfirm={() => {
-          setConfirm(false)
-          cancel.mutate(task.taskId, {
-            onSuccess: () => toast.success(t('tasks.cancelRequested', '已请求停止')),
-            onError: (err: Error & { response?: { data?: { message?: string } } }) =>
-              toast.error(err.response?.data?.message || t('tasks.cancelFailed', '停止失败')),
-          })
-        }}
-      />
-    </>
-  )
-}
-
-/** 进度条：失败时用 destructive 色，终态成功满格。 */
-function ProgressBar({ value, terminal, failed }: { value: number; terminal: boolean; failed: boolean }) {
-  const pct = Math.max(0, Math.min(100, value))
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn('h-full rounded-full transition-all', failed ? 'bg-destructive' : 'bg-primary')}
-          style={{ width: `${failed ? 100 : pct}%` }}
-        />
-      </div>
-      <span className="w-9 text-right text-[11px] tabular-nums text-muted-foreground">
-        {terminal && !failed ? 100 : pct}%
-      </span>
-    </div>
-  )
-}
-
-/** 任务详情：懒查日志 + 错误（行展开时才拉，进行中短轮询）。 */
-function TaskDetail({ taskId, error }: { taskId: string; error: string }) {
-  const { t } = useTranslation()
-  const { data, isLoading } = useTask(taskId)
-  const logs = data?.logs ?? []
-  return (
-    <div className="space-y-2 bg-muted/30 px-3 pb-3 pl-10">
-      {error && (
-        <div>
-          <p className="mb-1 text-[11px] font-medium text-destructive">{t('tasks.error')}</p>
-          <pre className="overflow-x-auto rounded-md border border-destructive/40 bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all text-destructive">
-            {error}
-          </pre>
-          {isNetworkDownloadFailure(error) && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-700 dark:text-amber-400">
-              <Wifi className="size-3.5 shrink-0" />
-              <span>{t('tasks.networkFailureHint', '出站网络不可达：下载源疑似被墙或超时。可配置出站代理或更换下载镜像源后重试。')}</span>
-              <Link to="/settings" className="font-medium underline underline-offset-2 hover:text-amber-800 dark:hover:text-amber-300">
-                {t('tasks.networkFailureProxyLink', '去配置出站代理')}
-              </Link>
-              <Link to="/runtime-assets" className="font-medium underline underline-offset-2 hover:text-amber-800 dark:hover:text-amber-300">
-                {t('tasks.networkFailureMirrorLink', '更换下载源/镜像')}
-              </Link>
-            </div>
-          )}
-        </div>
-      )}
-      <div>
-        <p className="mb-1 text-[11px] font-medium text-muted-foreground">{t('tasks.logs')}</p>
-        {isLoading && logs.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">{t('common.loading')}</p>
-        ) : logs.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">{t('tasks.noLogs')}</p>
-        ) : (
-          <pre className="max-h-64 overflow-auto rounded-md border bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all">
-            {logs.map((l) => l.line).join('\n')}
-          </pre>
-        )}
-      </div>
-    </div>
+    <TasksPageView
+      tasks={tasks}
+      total={page?.total}
+      limit={limit}
+      isLoading={isLoading}
+      isError={isError}
+      nodes={nodes}
+      filters={filters}
+      expandedId={expandedId}
+      detail={{ logs: detail?.logs, isLoading: detailLoading }}
+      // 只有容器知道在取消哪些任务；集合为空时所有行都可点。
+      cancelingIds={cancelingIds}
+      renderLink={({ to, className, children }) => <Link to={to} className={className}>{children}</Link>}
+      onChangeFilters={changeFilters}
+      onResetFilters={() => {
+        setFilters(EMPTY_FILTERS)
+        setSince(undefined)
+        setLimit(TASKS_WINDOW_STEP)
+      }}
+      onLoadMore={() => setLimit((l) => Math.min(l + TASKS_WINDOW_STEP, TASKS_WINDOW_MAX))}
+      onToggleExpand={(taskId) => setExpandedId((id) => (id === taskId ? null : taskId))}
+      onCancelTask={async (taskId) => {
+        setCancelingIds((ids) => (ids.includes(taskId) ? ids : [...ids, taskId]))
+        try {
+          await cancel.mutateAsync(taskId)
+          toast.success(t('tasks.cancelRequested', '已请求停止'))
+          return true
+        } catch (err) {
+          toast.error(errMessage(err, t('tasks.cancelFailed', '停止失败')))
+          return false
+        } finally {
+          // 无论成败都出集合：成功由列表刷新体现「取消中」，失败要恢复可点。
+          setCancelingIds((ids) => ids.filter((id) => id !== taskId))
+        }
+      }}
+    />
   )
 }

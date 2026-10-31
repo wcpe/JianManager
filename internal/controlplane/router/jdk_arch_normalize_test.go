@@ -10,7 +10,7 @@ import (
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 )
 
-// TestFR289InstallArchAliasNormalized 安装请求 arch 别名归一化（FR-289）：
+// TestFR289InstallArchAliasNormalized 安装请求 arch 别名归一化：
 // API 调用方传 amd64/arm64 等 Go 系写法时，CP 应归一为下载源认的 x64/aarch64 再下发 Worker——
 // 真机复现：arch=amd64 直透 adoptium 得下载 404 且错误不指向真因。
 func TestFR289InstallArchAliasNormalized(t *testing.T) {
@@ -43,7 +43,7 @@ func TestFR289InstallArchAliasNormalized(t *testing.T) {
 	}
 }
 
-// TestFR289InstallUnknownArchRejected 未知 arch 直接 422 拒绝（FR-289）：
+// TestFR289InstallUnknownArchRejected 未知 arch 直接 422 拒绝：
 // 不再直透下载源产出误导性的「下载返回 HTTP 404」。
 func TestFR289InstallUnknownArchRejected(t *testing.T) {
 	db := setupTestDB(t)

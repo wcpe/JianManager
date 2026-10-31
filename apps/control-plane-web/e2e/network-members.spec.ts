@@ -7,8 +7,8 @@ const artifactsDir = process.cwd().endsWith(`${path.sep}web`)
   ? path.resolve(process.cwd(), '..', '.tmp')
   : path.resolve(process.cwd(), '.tmp')
 
-/** FR-032 真浏览器纵切：Network 软标签、proxy↔backend 拓扑、节点端口占用。 */
-test.describe('FR-032 群组服关系模型（mock 模式真浏览器）', () => {
+/** 真浏览器纵切：Network 软标签、proxy↔backend 拓扑、节点端口占用。 */
+test.describe('群组服关系模型（mock 模式真浏览器）', () => {
   test.beforeEach(async ({ page }) => {
     mkdirSync(artifactsDir, { recursive: true })
     await login(page)
@@ -45,9 +45,14 @@ test.describe('FR-032 群组服关系模型（mock 模式真浏览器）', () =>
 
     await page.screenshot({ path: path.join(artifactsDir, 'fr032-e2e-topology.png'), fullPage: true })
 
-    await page.goto('/nodes')
-    await expect(page.getByRole('heading', { name: '节点管理' })).toBeVisible()
-    await page.getByRole('button', { name: '端口', exact: true }).click()
+    // 阶段 6 起 /nodes 是列表态（状态计数 + 节点卡片墙），分段工具只在详情态，
+    // 故端口占用改走详情态深链。
+    await page.goto('/nodes?node=1')
+    await expect(page.getByRole('heading', { name: 'alpha' })).toBeVisible()
+    // 【契约变更】原「端口」页签已并入「进程」（NodeDetailPane 的 DetailTab 注释：
+    // 「进程：受管实例的进程清单（含端口占用），原『实例』与『端口』两页签合并」）。
+    // 端口面板（ports.title=「端口占用」）与进程同屏挂在 process tab 下，直接断即可。
+    await page.getByRole('button', { name: '进程', exact: true }).click()
     await expect(page.getByText('端口占用')).toBeVisible()
     await expect(page.getByText('分配范围：server 25565+（每段 100 个）')).toBeVisible()
     await expect(page.getByText('survival-proxy')).toBeVisible()

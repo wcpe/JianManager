@@ -19,10 +19,10 @@ if (!('ResizeObserver' in globalThis)) {
   }
 }
 
-/**
- * 备份存储后端页（FR-207 域簇）。三条强断言：
+/** 
+ * 备份存储后端页（域簇）。三条强断言：
  * ① 渲染出 seed 存储后端；② 新建后列表联动出现新行；③ 注入 500 → 显空态（不崩溃）。
- * FR-338 编辑流：回显现值（含 ${VAR} 凭证引用）/type 禁用/PUT 保存刷新 + lastTest 重置/撞名 422/草稿测试连接。
+ *编辑流：回显现值（含 ${VAR} 凭证引用）/type 禁用/PUT 保存刷新 + lastTest 重置/撞名 422/草稿测试连接。
  * 表单字段标签未与 input 关联（FieldLabel 无 htmlFor），故按 DOM 顺序 / placeholder 选取。
  */
 describe('BackupStoragesPage（mock）', () => {
@@ -34,9 +34,11 @@ describe('BackupStoragesPage（mock）', () => {
     renderWithProviders(<BackupStoragesPage />)
     expect(await screen.findByText('s3-primary')).toBeInTheDocument()
     expect(screen.getByText('sftp-offsite')).toBeInTheDocument()
-    // 凭证以 ${ENV_VAR} 引用展示，不返回明文（FR-057）。
+    // 凭证以 ${ENV_VAR} 引用展示，不返回明文。
     expect(screen.getByText('${JIANMANAGER_BACKUP_S3_AK}')).toBeInTheDocument()
-    expect(screen.getByText('256 MB · 1 个备份')).toBeInTheDocument()
+    // 容量文案随收敛统一为共享实现的「非字节档保留 1 位小数」：seed 为 268435456 B = 256 MiB，
+    // 原实现的「≥10 不保留小数」已并入 `@/lib/shared/format-file-size`，故为 256.0 MB。
+    expect(screen.getByText('256.0 MB · 1 个备份')).toBeInTheDocument()
     expect(screen.getByText('连接正常')).toBeInTheDocument()
   })
 
@@ -121,19 +123,18 @@ describe('BackupStoragesPage（mock）', () => {
     await waitFor(() => expect(within(row).getByText('连接正常')).toBeInTheDocument())
   })
 
-  it('注入 500 → 显示空态而非崩溃', async () => {
+  it('注入 500 → 显示错误态而非「暂无存储后端」（不崩溃）', async () => {
     mockInject('get', '/backup-storages', { kind: 'status', status: 500 })
     renderWithProviders(<BackupStoragesPage />)
-    // 列表查询失败 → storages 为 undefined → 渲染空态文案，页面不崩。
-    expect(await screen.findByText('暂无存储后端，备份默认存于节点本地')).toBeInTheDocument()
-    // 空态说明需可换行：承载 EmptyState 的单元格必须覆盖表格基类 whitespace-nowrap。
-    expect(screen.getByText('暂无存储后端，备份默认存于节点本地').closest('td')).toHaveClass('whitespace-normal')
+    // 列表查询失败 → 渲染错误文案：报「暂无存储后端」会让管理员以为后端配置都丢了。
+    expect(await screen.findByText('错误')).toBeInTheDocument()
+    expect(screen.queryByText('暂无存储后端，备份默认存于节点本地')).not.toBeInTheDocument()
     await waitFor(() => {
       expect(screen.queryByText('s3-primary')).not.toBeInTheDocument()
     })
   })
 
-  // ---- 编辑（FR-338）----
+  // ---- 编辑----
 
   it('编辑弹窗受控回显现值（含 ${VAR} 凭证引用原样）且 type 不可改', async () => {
     const user = userEvent.setup()
@@ -155,9 +156,24 @@ describe('BackupStoragesPage（mock）', () => {
     expect(accessKeyInput).toHaveValue('${JIANMANAGER_BACKUP_S3_AK}')
     expect(secretKeyInput).toHaveValue('${JIANMANAGER_BACKUP_S3_SK}')
     // type 不可改（改型=删重建，后端 422 双保险）。
-    expect(within(dialog).getByRole('button', { name: 'S3' })).toBeDisabled()
+    // 触发器现在有显式可访问名（FieldLabel htmlFor + Combobox ariaLabel = 「类型」），故按名定位。
+    expect(within(dialog).getByRole('button', { name: '类型' })).toBeDisabled()
     // s3-primary 被 1 个备份引用 → 显示改指向风险提示条。
     expect(within(dialog).getByText(/已被备份引用/)).toBeInTheDocument()
+  })
+
+  it('弹窗的名称/Access Key/Secret Key 字段有可访问名', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<BackupStoragesPage />)
+    await screen.findByText('s3-primary')
+
+    await user.click(screen.getByRole('button', { name: '新增存储后端' }))
+    const dialog = await screen.findByRole('dialog')
+
+    // 这三个字段此前用 FieldLabel 但没关联（同文件其它字段却是 <label> 包裹），读屏只能念「编辑框」。
+    expect(within(dialog).getByLabelText(/^名称/)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/^Access Key 环境变量/)).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/^Secret Key 环境变量/)).toBeInTheDocument()
   })
 
   it('编辑保存提交 PUT → 列表反映新值且最近测试列回未测试态', async () => {

@@ -102,22 +102,40 @@ func modelNameForPath(p string) string {
 }
 
 // WriteConfig 写入配置原文；properties 以行级 round-trip 为 MVP，其他格式仅校验后原文保存。
+//
+// 起完整走「越界检查 → 写前快照 → 原子写入 → 读回校验」链路：
+// 验收要求「写入中 kill -9 后原文件完好」与「篡改磁盘内容返回 WRITE_VERIFY_FAILED」，
+// 因此不能再用 os.WriteFile 直接覆盖。
 func (s *Server) WriteConfig(ctx context.Context, req *workerpb.WriteConfigRequest) (*workerpb.WriteConfigResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
 		return nil, fmt.Errorf("实例 %s 不存在", req.InstanceUuid)
 	}
-	path := filepath.Join(inst.WorkDir, req.Path)
-	if err := validateNonRootPath(inst.WorkDir, path); err != nil {
-		return nil, err
+	// 路径越界检查（绝对路径 / `..` 穿越 / 符号链接逃逸）。
+	path, err := resolveSafePath(inst.WorkDir, req.Path)
+	if err != nil {
+		return &workerpb.WriteConfigResponse{
+			Success:   false,
+			Error:     err.Error(),
+			ErrorCode: ErrCodePathEscape,
+		}, nil
 	}
 	format, supported := detectConfigFormat(req.Path)
 	if !supported {
-		return nil, fmt.Errorf("仅允许操作配置文件")
+		return &workerpb.WriteConfigResponse{
+			Success:   false,
+			Error:     "仅允许操作配置文件",
+			ErrorCode: ErrCodeValidationFailed,
+		}, nil
 	}
 	validation := validateConfigText(format, req.Content)
 	if !validation.Valid {
-		return &workerpb.WriteConfigResponse{Success: false, Error: "配置格式校验失败", Validation: validation}, nil
+		return &workerpb.WriteConfigResponse{
+			Success:    false,
+			Error:      "配置格式校验失败",
+			ErrorCode:  ErrCodeValidationFailed,
+			Validation: validation,
+		}, nil
 	}
 	finalContent := req.Content
 	// YAML AST round-trip：保留注释与键顺序。
@@ -126,13 +144,69 @@ func (s *Server) WriteConfig(ctx context.Context, req *workerpb.WriteConfigReque
 			finalContent = normalized
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return &workerpb.WriteConfigResponse{Success: false, Error: fmt.Sprintf("创建目录失败: %v", err), Validation: validation}, nil
+	payload := []byte(finalContent)
+
+	// 同实例同路径串行化：避免两个写并发 rename 互相覆盖、快照被冲掉。
+	unlock := globalPathWriteLocks.lock(writeLockKey(inst.UUID, path))
+	defer unlock()
+
+	// 写前快照（仅原文件存在且内容不同）。
+	backupRel, backupCreated, err := writeSnapshot(inst.WorkDir, path, payload, defaultBackupRetention)
+	if err != nil {
+		return &workerpb.WriteConfigResponse{
+			Success:    false,
+			Error:      fmt.Sprintf("写前快照失败: %v", err),
+			ErrorCode:  ErrCodeBackupFailed,
+			Validation: validation,
+		}, nil
 	}
-	if err := os.WriteFile(path, []byte(finalContent), 0644); err != nil {
-		return &workerpb.WriteConfigResponse{Success: false, Error: fmt.Sprintf("写入配置失败: %v", err), Validation: validation}, nil
+
+	// 原子写入：临时文件 + fsync + rename + fsync 目录。
+	if err := atomicWriteFile(path, payload); err != nil {
+		return &workerpb.WriteConfigResponse{
+			Success:       false,
+			Error:         fmt.Sprintf("写入配置失败: %v", err),
+			ErrorCode:     ErrCodeWriteFailed,
+			Validation:    validation,
+			BackupCreated: backupCreated,
+			BackupPath:    backupRel,
+		}, nil
 	}
-	return &workerpb.WriteConfigResponse{Success: true, Validation: validation}, nil
+
+	// 读回校验：重开文件读全量、算 sha256。
+	actualHash, err := hashFile(path)
+	if err != nil {
+		return &workerpb.WriteConfigResponse{
+			Success:       false,
+			Error:         fmt.Sprintf("读回校验失败: %v", err),
+			ErrorCode:     ErrCodeWriteVerifyFailed,
+			Validation:    validation,
+			BackupCreated: backupCreated,
+			BackupPath:    backupRel,
+		}, nil
+	}
+	// expected_hash 为空表示调用方不做校验（兼容旧 CP），此时仅回填 actual_hash。
+	if want := strings.TrimSpace(req.ExpectedHash); want != "" {
+		// 大小写不敏感比较：CP 侧可能传大写 hex。
+		if !strings.EqualFold(want, actualHash) {
+			return &workerpb.WriteConfigResponse{
+				Success:       false,
+				Error:         fmt.Sprintf("读回校验失败：写入内容与磁盘不一致（期望 %s，实际 %s），可能是磁盘故障或有并发写", want, actualHash),
+				ErrorCode:     ErrCodeWriteVerifyFailed,
+				Validation:    validation,
+				ActualHash:    actualHash,
+				BackupCreated: backupCreated,
+				BackupPath:    backupRel,
+			}, nil
+		}
+	}
+	return &workerpb.WriteConfigResponse{
+		Success:       true,
+		Validation:    validation,
+		ActualHash:    actualHash,
+		BackupCreated: backupCreated,
+		BackupPath:    backupRel,
+	}, nil
 }
 
 // roundTripYAML 通过 yaml.v3 重新序列化以保留注释、锚点引用、键顺序等。

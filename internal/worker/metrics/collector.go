@@ -17,7 +17,7 @@ import (
 // NodeMetrics 节点指标。
 type NodeMetrics struct {
 	CPUUsage float32
-	// IOWait 是 CPU 处于 IO 等待的占比（0..1，FR-485）。
+	// IOWait 是 CPU 处于 IO 等待的占比（0..1）。
 	// 只看 CPUUsage 会把 IO 瓶颈看成「CPU 不满」，本机事故中 iowait 曾达 90%。
 	IOWait           float32
 	MemoryUsage      float32

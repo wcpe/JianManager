@@ -1,6 +1,6 @@
-// Package botdist 实现 bot-worker dist 的自愈下发（FR-308，见 ADR-072）：
+// Package botdist 实现 bot-worker dist 的自愈下发（见 ADR-072）：
 // Worker 启动后经既有 CP gRPC 通道拉取内嵌归档，物化到 <dataroot>/opt/bot-worker/。
-// 运行时依赖不随归档分发，由 FR-307 节点受控项目根提供；ESM 经 node_modules 链接解析。
+// 运行时依赖不随归档分发，由节点受控项目根提供；ESM 经 node_modules 链接解析。
 package botdist
 
 import (
@@ -36,7 +36,7 @@ type Options struct {
 	NodeSecret string
 	// Dir 物化目标目录（<dataroot>/opt/bot-worker）。
 	Dir string
-	// GlobalNodeModules node_modules 链接目标（FR-307 托管全局包的 node_modules 布局目录）。
+	// GlobalNodeModules node_modules 链接目标（托管全局包的 node_modules 布局目录）。
 	GlobalNodeModules string
 	// client 测试注入的 gRPC 客户端；nil 时按 CPAddr 自建连接。
 	client workerpb.WorkerServiceClient
@@ -51,12 +51,41 @@ type localManifest struct {
 }
 
 // Ensure 自愈 bot-worker dist：与 CP 内嵌归档比对指纹，不一致则拉取并原子换新，
-// 每次都补齐 node_modules 链接。返回入口脚本绝对路径（<Dir>/index.js）。
-// CP 不可达或未内嵌时回退本地已有物化副本（有则用、无则报错），不阻断 Worker 启动。
+// 每次都补齐 node_modules 链接。返回入口脚本绝对路径。
+//
+// ## 入口路径为什么不能写死 `<Dir>/index.js`
+//
+// CP 内嵌的归档是**整个 bot-worker 包**（含 `dist/`、`package.json`），
+// 所以解包后入口在 `<Dir>/dist/index.js`；但旧实现硬写 `<Dir>/index.js`，
+// 于是每次自愈都报「归档物化后缺少入口脚本（归档内容异常）」，
+// 然后回退到相对路径 `apps/bot-worker/dist/index.js`。
+//
+// 回退后的相对路径是致命的：`Manager.Start` 会拿它的 dirname 当 distDir 去扫
+// `node_modules` 祖先链，而 Worker 进程的 cwd 是部署目录，向上永远到不了
+// `<dataDir>/opt/bot-worker/node_modules`——于是报「bot 依赖未在同一目录完整安装」，
+// 而依赖其实就在那里。
+//
+// 因此这里按实际布局探测，两种都认。
 func Ensure(ctx context.Context, opts Options) (string, error) {
-	entry := filepath.Join(opts.Dir, "index.js")
+	// 两种可能的入口布局：归档根目录直接有 index.js，或包了一层 dist/。
+	detectEntry := func() (string, bool) {
+		for _, candidate := range []string{
+			filepath.Join(opts.Dir, "index.js"),
+			filepath.Join(opts.Dir, "dist", "index.js"),
+		} {
+			if fileExists(candidate) {
+				return candidate, true
+			}
+		}
+		return "", false
+	}
+
+	entry, entryExists := detectEntry()
+	if !entryExists {
+		entry = filepath.Join(opts.Dir, "index.js") // 占位：后续以 detectEntry 的结果为准
+	}
 	known := readLocalSHA(opts.Dir)
-	if !fileExists(entry) {
+	if !entryExists {
 		known = "" // 清单在但脚本没了：视为本地无，强制重拉
 	}
 
@@ -96,10 +125,13 @@ func Ensure(ctx context.Context, opts Options) (string, error) {
 		// 链接失败不致命：ESM 解析会缺依赖，但 CheckDeps 会在 spawn 前给可操作报错。
 		slog.Warn("bot-worker node_modules 链接创建失败", "error", err)
 	}
-	if !fileExists(entry) {
-		return "", fmt.Errorf("归档物化后缺少入口脚本 %s（归档内容异常）", entry)
+	// 物化/换新后重新探测一次入口（布局可能刚变）
+	finalEntry, ok := detectEntry()
+	if !ok {
+		return "", fmt.Errorf("归档物化后找不到入口脚本（试过 %s 与 %s；归档内容异常）",
+			filepath.Join(opts.Dir, "index.js"), filepath.Join(opts.Dir, "dist", "index.js"))
 	}
-	return entry, nil
+	return finalEntry, nil
 }
 
 // fetchArchive 经既有 CP gRPC 通道拉取归档（注册/心跳同通道，NAT 节点天然可达）。
@@ -216,7 +248,7 @@ func extractTarGz(archive []byte, dst string) error {
 	}
 }
 
-// ensureNodeModulesLink 在 dist 同级补齐 node_modules 链接 → FR-307 托管全局包目录，
+// ensureNodeModulesLink 在 dist 同级补齐 node_modules 链接 →托管全局包目录，
 // 使 ESM 的 import 从 <dir>/index.js 就近解析到全局装的 mineflayer（NODE_PATH 只救 CJS）。
 // Windows 用 junction（mklink /J，无需特权），其余平台 symlink。
 func ensureNodeModulesLink(dir, target string) error {

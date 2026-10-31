@@ -15,7 +15,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// BotLoadRetryRequest 是 retry-failed 请求体（FR-365）。
+// BotLoadRetryRequest 是 retry-failed 请求体。
 type BotLoadRetryRequest struct {
 	RequestID  string   `json:"requestId"`
 	BotUUIDs   []string `json:"botUuids,omitempty"`
@@ -68,7 +68,7 @@ func (s *BotLoadExecutionService) RetryFailed(ctx context.Context, sessionID uin
 	if err != nil {
 		return nil, err
 	}
-	// V1 仅 running；degraded 待 FR-370 run_state，当前用 status=running 等价。
+	// V1 仅 running；degraded 待run_state，当前用 status=running 等价。
 	if session.Status != model.BotStressSessionRunning {
 		return nil, ErrBotLoadInvalidState
 	}

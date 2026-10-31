@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// TestCreateInstance_RefreshesExistingLaunchSpec 验证 FR-233 的 Worker 注册入口：
+// TestCreateInstance_RefreshesExistingLaunchSpec 验证的 Worker 注册入口：
 // 同 UUID 幂等重注册必须刷新启动命令、JDK、环境变量与 autoRestart，供下一次生命周期采用。
 func TestCreateInstance_RefreshesExistingLaunchSpec(t *testing.T) {
 	mgr := process.NewManager(t.TempDir())

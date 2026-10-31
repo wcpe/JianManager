@@ -70,7 +70,7 @@ export function useDeleteGroup() {
   })
 }
 
-/** 编辑用户组名称/描述（FR-156，兑现 FR-003）。 */
+/** 编辑用户组名称/描述（兑现）。 */
 export function useUpdateGroup() {
   const qc = useQueryClient()
   const { t } = useTranslation()
@@ -84,7 +84,7 @@ export function useUpdateGroup() {
   })
 }
 
-/** 修改用户组配额（实例/Bot/存储上限，FR-156）。 */
+/** 修改用户组配额（实例/Bot/存储上限）。 */
 export function useUpdateGroupQuota() {
   const qc = useQueryClient()
   const { t } = useTranslation()
@@ -98,7 +98,7 @@ export function useUpdateGroupQuota() {
   })
 }
 
-/** 向用户组添加成员（FR-156）。role 省略为普通成员。 */
+/** 向用户组添加成员。role 省略为普通成员。 */
 export function useAddGroupMember() {
   const qc = useQueryClient()
   const { t } = useTranslation()
@@ -115,7 +115,7 @@ export function useAddGroupMember() {
   })
 }
 
-/** 从用户组移除成员（按用户 ID，FR-156）。 */
+/** 从用户组移除成员（按用户 ID）。 */
 export function useRemoveGroupMember() {
   const qc = useQueryClient()
   const { t } = useTranslation()

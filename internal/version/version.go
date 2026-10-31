@@ -7,7 +7,7 @@ package version
 //     `-dev` 是 SemVer 预发布标识，语义「正朝 X.Y.Z 前进但尚未发布」，
 //     优先级天然满足 `X.Y.(Z-1) < X.Y.Z-dev < X.Y.Z`，不构成漂移。
 //
-// 真值由发布/构建管线（FR-173、`make dist`）在 go build 时经 -ldflags 注入覆盖此默认值：
+// 真值由发布/构建管线（`make dist`）在 go build 时经 -ldflags 注入覆盖此默认值：
 // go build -ldflags "-X github.com/wcpe/JianManager/internal/version.Version=X.Y.Z"
 var Version = "0.24.0-dev"
 

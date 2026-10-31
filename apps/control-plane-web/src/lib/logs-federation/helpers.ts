@@ -1,5 +1,5 @@
-/**
- * 日志联邦覆盖 / 失败态纯函数（FR-482 foundation）。
+/** 
+ * 日志联邦覆盖 / 失败态纯函数（foundation）。
  *
  * 硬约束（spec §3.1 / 验收）：
  * - **失败不得显示为空成功**：formatCoverageSummary / classifyLogViewState 在
@@ -10,7 +10,7 @@
  *   partial、VIEW_STALE、DUPLICATE_UNRESOLVED、校验未通过时均为 false。
  * - **未校验（Coverage.Pending）不等于缺失**：state='verifying' 走温和提示，
  *   不得渲染「部分日志无法查询」的缺失文案，也不得宣称完整；导出入口保持开放，
- *   由后端慢路径在产出前做完整校验（FR-482 的「校验后可下载」由后端闸保证）。
+ *   由后端慢路径在产出前做完整校验（的「校验后可下载」由后端闸保证）。
  *
  * 本模块无 React / i18n 运行时依赖；只产出 key 与结构化状态。
  */
@@ -171,7 +171,7 @@ function pickPrimaryReason(reasons: PartialReason[]): PartialReason | undefined 
   return reasons[0]
 }
 
-/**
+/** 
  * 汇总 Coverage → 结构化横幅数据。
  *
  * **契约**：入参为 null/undefined（典型：请求失败后无 body）或 complete 非 true 时，
@@ -268,7 +268,7 @@ export function formatCoverageSummary(
   }
 }
 
-/**
+/** 
  * 将 quality 并入已格式化的 coverage 摘要（重复未解析 → 降级为 partial）。
  * formatCoverageSummary 已可直接传 quality；本函数供已缓存 summary 的调用方使用。
  */
@@ -326,7 +326,7 @@ function stateFromReason(reason: PartialReason): LogViewState {
   }
 }
 
-/**
+/** 
  * 导出阻断原因码（后端 incomplete_reasons）→ 专用 i18n key；无法精确归因时返回 undefined。
  *
  * 为什么需要它：导出闸阻断报告里的原因码此前全部落到泛化的「导出未通过完整性校验」，
@@ -383,7 +383,7 @@ function exportBlockedKeyFor(
   return LOGS_FEDERATION_KEYS.exportBlockedIncomplete
 }
 
-/**
+/** 
  * 分类日志联邦响应 → UI 视图状态。
  *
  * - `ok===false` / `errorCode` / coverage 缺失 → `query_failed`（失败，非空成功）。
@@ -546,11 +546,11 @@ export function classifyLogViewState(
   }
 }
 
-/**
+/** 
  * 导出下载 affordance：**已判定缺失 / 失败 / 未决**时不给下载入口；
  * 未校验（verifying，快路径 Pending）例外——入口开放，由后端慢路径在产出前做完整校验。
  *
- * FR-482：「导出只有校验后可下载且下载前复核权限」；「覆盖不完整时不得下载成功附件」。
+ *：「导出只有校验后可下载且下载前复核权限」；「覆盖不完整时不得下载成功附件」。
  * 前者的「校验」由后端导出闸执行（前端无法独立判定完整性）；后者对应已判定不完整
  * （partial/view_stale/重复未决等）——这些仍一律不展示下载成功入口。
  * 允许下载时仍提示服务端会在下载前复核权限。
@@ -574,7 +574,7 @@ export function resolveExportDownloadAffordance(
   }
 }
 
-/**
+/** 
  * 薄 UI 适配：把 classify 结果映射为 Coverage 横幅 props。
  * LogsPage 未改版时可先在测试 / 后续横幅组件中消费；不触碰页面本体。
  */

@@ -1,4 +1,4 @@
-// Package storage 提供备份远程存储后端的传输抽象（FR-057）。
+// Package storage 提供备份远程存储后端的传输抽象。
 //
 // Worker Node 在本机数据根创建备份归档后，按本包的 Backend 接口把归档上传到
 // 远程后端（S3 兼容 / SFTP / WebDAV），恢复时再拉回本地。凭证由 Control Plane 侧

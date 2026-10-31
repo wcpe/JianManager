@@ -6,7 +6,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// 群组服 Network 软标签与代理注册（FR-032 / FR-335）的 MCP 工具：
+// 群组服 Network 软标签与代理注册的 MCP 工具：
 // Networks 是非独占软标签，仅供分组/筛选/批量运维，不驱动真实路由（路由由 server_registrations 驱动）；
 // 代理注册描述「哪个 proxy 聚合哪些 backend」，是群组拓扑图的边。
 // 权限与实例分组同面：读走 instance.read、写走 instance.write。

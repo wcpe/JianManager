@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 全链路 e2e（FR-043）：节点在线 → 创建并启动 MC 实例 → 终端交互 → Bot 真正进服 → 运维闭环。
+// 全链路 e2e：节点在线 → 创建并启动 MC 实例 → 终端交互 → Bot 真正进服 → 运维闭环。
 //
 // 受限于 e2e 主机仅有 Java 8，真实 Paper 1.21 无法启动，故实例进程使用确定性的
 // 假 MC 服务器（apps/bot-worker/test/fake-mc-server.mjs，基于 mineflayer 自带的
@@ -117,7 +117,7 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 	return client, nodeID, projectRoot
 }
 
-// TestE2E_FullChainTerminalBot 逐条验证 FR-043 的 1~5 项验收标准。
+// TestE2E_FullChainTerminalBot 逐条验证的 1~5 项验收标准。
 func TestE2E_FullChainTerminalBot(t *testing.T) {
 	client, nodeID, projectRoot := setupCluster(t, 18200)
 
@@ -205,7 +205,7 @@ func TestE2E_FullChainTerminalBot(t *testing.T) {
 	requireBotStatus(t, client, botID, "disconnected", 30*time.Second)
 	t.Log("验收5(b) 通过：实例停止后 Bot 回落 disconnected")
 
-	t.Log("FR-043 全链路 e2e（验收 1~5）通过")
+	t.Log("全链路 e2e（验收 1~5）通过")
 }
 
 // freePort 取一个当前空闲的 TCP 端口。

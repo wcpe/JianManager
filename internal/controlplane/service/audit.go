@@ -32,7 +32,7 @@ func (s *AuditService) RecordSafe(userID uint, action, targetType, targetID, det
 	}
 }
 
-// RecordResult 记录带结果的审计日志（FR-321）：失败操作也留痕并带错误内容，
+// RecordResult 记录带结果的审计日志：失败操作也留痕并带错误内容，
 // 回答「这个操作为什么报错」（此前失败操作审计无错误内容）。
 func (s *AuditService) RecordResult(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string) error {
 	if len(errMsg) > 512 {
@@ -61,16 +61,66 @@ func (s *AuditService) RecordResultSafe(userID uint, action, targetType, targetI
 	}
 }
 
+// AuditCorrelation 助手调用的串联维度（§9）。
+//
+// 三个字段都可空：非助手产生的审计行没有会话/运行概念。
+// 但一旦非空，审计就能「按 runId 查出这一轮助手到底改了什么」——
+// 这正是「工具结果与审计闭环」那条验收要回答的问题。
+type AuditCorrelation struct {
+	ConversationID *uint
+	RunID          *uint
+	CallID         string
+}
+
+// RecordCorrelatedSafe 记录带助手串联维度的审计；失败只告警，不阻断主流程。
+//
+// 为什么审计失败不该阻断：工具动作此时已经执行完了（审计在之后写）。
+// 把它做成阻断项只会让「动作成功、但接口报错」，反而更难排查。
+// 代价是可能丢审计行——用告警留痕，由运维侧告警规则兜住。
+func (s *AuditService) RecordCorrelatedSafe(
+	userID uint, action, targetType, targetID, detail, ip string,
+	success bool, errMsg string, corr AuditCorrelation,
+) {
+	if len(errMsg) > 512 {
+		errMsg = errMsg[:512]
+	}
+	log := &model.AuditLog{
+		UserID:         userID,
+		Action:         action,
+		TargetType:     targetType,
+		TargetID:       targetID,
+		Detail:         detail,
+		IP:             ip,
+		Failed:         !success,
+		Error:          errMsg,
+		ConversationID: corr.ConversationID,
+		RunID:          corr.RunID,
+		CallID:         corr.CallID,
+	}
+	if err := s.db.Create(log).Error; err != nil {
+		slog.Warn("记录助手审计失败", "action", action, "runId", corr.RunID,
+			"callId", corr.CallID, "error", err)
+	}
+}
+
 // List 查询审计日志。
 type AuditFilter struct {
 	UserID     *uint
 	Action     *string
 	TargetType *string
-	From       *time.Time
+	// TargetID 目标对象 id（字符串，按写入时的原值匹配）。
+	// 用于「某个节点/实例被改过什么」这类按对象回溯；与 TargetType 合用才精确。
+	TargetID *string
+	From     *time.Time
 	To         *time.Time
 	Limit      int
 	Page       int
 	PageSize   int
+	// 助手调用串联过滤（§9）：任一非空即按该维度收敛。
+	// 有了这三项，运维才能回答「某一轮助手到底执行了哪些写操作」。
+	ConversationID *uint
+	RunID          *uint
+	CallID         *string
 }
 
 type AuditPage struct {
@@ -99,11 +149,24 @@ func (s *AuditService) auditQuery(filter AuditFilter) *gorm.DB {
 	if filter.TargetType != nil {
 		q = q.Where("target_type = ?", *filter.TargetType)
 	}
+	if filter.TargetID != nil {
+		q = q.Where("target_id = ?", *filter.TargetID)
+	}
 	if filter.From != nil {
 		q = q.Where("created_at >= ?", *filter.From)
 	}
 	if filter.To != nil {
 		q = q.Where("created_at <= ?", *filter.To)
+	}
+	// 助手串联（§9）：按列而非 Detail JSON，才能走索引。
+	if filter.ConversationID != nil {
+		q = q.Where("conversation_id = ?", *filter.ConversationID)
+	}
+	if filter.RunID != nil {
+		q = q.Where("run_id = ?", *filter.RunID)
+	}
+	if filter.CallID != nil && *filter.CallID != "" {
+		q = q.Where("call_id = ?", *filter.CallID)
 	}
 	return q
 }

@@ -76,11 +76,11 @@ func mustGuard(t *testing.T, db *gorm.DB) *sqliteTxGuard {
 //  1. 在池上钉住两条物理连接，读者持读事务占住 SHARED 锁；
 //  2. 写者在写事务里 UPDATE 后 COMMIT——rollback journal 模式下 COMMIT 需 EXCLUSIVE，
 //     被读者挡住，busy_timeout 耗尽后返回 SQLITE_BUSY，此时 **SQLite 的事务仍然打开**
-//     （COMMIT 因 BUSY 失败不会自动回滚，这是 FR-318 的驱动级事实）；
+//     （COMMIT 因 BUSY 失败不会自动回滚，这是的驱动级事实）；
 //  3. 让写者连接「回池」（Conn.Close 与请求结束走的是同一条 putConn 路径）。
 //
 // 本用例刻意把库切回 rollback journal（journal_mode=DELETE）来构造毒化：WAL 下读者挡不住
-// 写者 COMMIT，这个场景根本撞不出来。要验证的正是「即便退化到 journal 模式，FR-318 的
+// 写者 COMMIT，这个场景根本撞不出来。要验证的正是「即便退化到 journal 模式的
 // 故障面仍被 IsValid 驱逐覆盖」——即防护不再依赖「WAL 一定可用」这一前提。
 //
 // 修复前（驱动不实现 driver.Validator）：database/sql 原样把毒连接放回空闲队列且永不驱逐，
@@ -145,7 +145,7 @@ func TestSQLiteTxPoison_ConnNotReused(t *testing.T) {
 	require.NoError(t, reader.Close())
 
 	// 决定性行为证据：驱逐之后，池上后续取连接不再报嵌套事务错。
-	// 若 IsValid 未生效，毒连接会一直留在池里，这里必然复现 FR-318 的线上报错
+	// 若 IsValid 未生效，毒连接会一直留在池里，这里必然复现的线上报错
 	// （`cannot start a transaction within a transaction`），也就是「重启 CP 即愈」的那条。
 	for i := 0; i < 20; i++ {
 		newTx, err := raw.BeginTx(ctx, nil)
@@ -192,10 +192,10 @@ func TestSQLitePool_ResetSessionRejectsPoisonedConn(t *testing.T) {
 }
 
 // TestGuardConnPreservesDriverInterfaces 守护包装器不得丢失驱动的可选接口，并固化
-// FR-318 赖以成立的驱动事实。
+// 赖以成立的驱动事实。
 //
 // 两个方向都要守：
-//   - 原生驱动**不实现** driver.Validator / SessionResetter —— 这正是 FR-318 的根因
+// 原生驱动**不实现** driver.Validator / SessionResetter —— 这正是的根因
 //     （database/sql 因此无法识别并驱逐带打开事务的连接）。一旦驱动改版补上这两个接口，
 //     本用例会失败提醒我们重新评估防线是否还需要自建。
 //   - 包装后**必须保留** ExecerContext / QueryerContext / ConnPrepareContext / ConnBeginTx /
@@ -216,7 +216,7 @@ func TestGuardConnPreservesDriverInterfaces(t *testing.T) {
 	require.False(t, hasValidator,
 		"原生驱动已实现 driver.Validator：本方案的判据前提变化，请复核是否还需要自建检测")
 	require.False(t, hasResetter,
-		"原生驱动已实现 driver.SessionResetter：同上，请复核 FR-318 防线的必要性")
+		"原生驱动已实现 driver.SessionResetter：同上，请复核防线的必要性")
 
 	wrapped := newGuardConn(rawConn, &sqliteTxGuard{})
 
@@ -234,7 +234,7 @@ func TestGuardConnPreservesDriverInterfaces(t *testing.T) {
 // TestSQLiteTxPoison_ControlWithoutGuardReuses 是上面用例的**对照实验**，用于排除
 // 「毒化本来就不会发生」这一解释：同样的驱动、同样的锁顺序，只把 guardConn 包装换成直通
 // 包装（等价于修复前的驱动形态——不实现 driver.Validator / SessionResetter），毒化连接
-// 就会被原样复用，并复现 FR-318 的线上报错。
+// 就会被原样复用，并复现的线上报错。
 //
 // 两条用例合起来构成差分证据：
 //   - 直通（修复前形态）→ 复用毒连接 → `cannot start a transaction within a transaction`
@@ -303,7 +303,7 @@ func TestSQLiteTxPoison_ControlWithoutGuardReuses(t *testing.T) {
 	require.NoError(t, err)
 	defer reused.Close()
 	_, beginErr := reused.BeginTx(ctx, nil)
-	require.Error(t, beginErr, "对照组：毒化连接被复用时必须复现 FR-318 报错")
+	require.Error(t, beginErr, "对照组：毒化连接被复用时必须复现报错")
 	require.Contains(t, beginErr.Error(), "cannot start a transaction within a transaction",
 		"对照组应复现「事务内不能开事务」，实际: %v", beginErr)
 	t.Logf("对照组复现成功（修复前形态）: %v", beginErr)
@@ -335,7 +335,7 @@ func TestSQLitePool_DirtyCommitErrorStaysPoisoned(t *testing.T) {
 	require.True(t, gc.IsValid(), "无未提交事务的连接必须可用")
 
 	// BEGIN 失败却报「事务内不能开事务」⇒ 连接上确实残留着打开事务，必须标记污染。
-	// 这是 FR-317 线上症状的形态（重启 CP 才愈），必须被识别而不是继续复用。
+	// 这是线上症状的形态（重启 CP 才愈），必须被识别而不是继续复用。
 	_, err := gc.trackTx(nil, fmt.Errorf("SQL logic error: cannot start a transaction within a transaction (1)"), nil)
 	require.Error(t, err)
 	require.False(t, gc.IsValid(), "报嵌套事务错的连接必须被判为不可复用")
@@ -373,7 +373,7 @@ func TestSQLitePool_DirtyCommitErrorStaysPoisoned(t *testing.T) {
 // ② 并发读写下不再出现嵌套事务错
 // ---------------------------------------------------------------------------
 
-// TestSQLitePool_ConcurrentNoNestedTxError 是 FR-318 压力门在**新形态**下的对应版本：
+// TestSQLitePool_ConcurrentNoNestedTxError 是压力门在**新形态**下的对应版本：
 // 连接数已放开（多连接），并发状态转换写 + 事务内建/删 + 故意回滚 + 慢读者混跑，
 // 断言全程不出现 `cannot start a transaction within a transaction` 与 `database is locked`。
 //

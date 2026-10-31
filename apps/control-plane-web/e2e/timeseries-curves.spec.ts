@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-060 时序监控与历史曲线 · 单机（Playwright + mock 模式）验收。
+/** 
+ *时序监控与历史曲线 · 单机（Playwright + mock 模式）验收。
  * 覆盖：监控页平台级历史曲线网格（CPU/负载/内存/在线玩家 4 图，node_load/node_cpu_pct/... 时序）
  * 经 /metrics/overview 落图；时间范围选择器（RangePicker 1h~90d）供历史回看；下钻到节点后
  * 经 /metrics/series 出节点级 6 图。断言曲线容器（recharts SVG）真渲染，而非空态。
- * 证据落 .tmp/acceptance/FR-060/。关联 ADR-013（分级降采样）、FR-061（RangePicker/TimeSeriesChart 依赖）。
+ * 证据落 .tmp/acceptance。关联 ADR-013（分级降采样）（RangePicker/TimeSeriesChart 依赖）。
  */
 
-test('FR-060 平台历史曲线网格 + 时间范围 + 下钻节点级序列', async ({ page }) => {
+test('平台历史曲线网格 + 时间范围 + 下钻节点级序列', async ({ page }) => {
   await login(page)
   await page.goto('/monitor')
 
@@ -53,5 +53,5 @@ test('FR-060 平台历史曲线网格 + 时间范围 + 下钻节点级序列', a
   await expect(page.getByText('磁盘').first()).toBeVisible()
   await expect(page.getByText('网络 IO').first()).toBeAttached()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-060/single-machine-timeseries-curves.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-timeseries-curves.png', fullPage: true })
 })

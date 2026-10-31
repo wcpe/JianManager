@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TestSQLiteCommitBusyPoisonsConnection 固化 FR-318 根因机制（驱动级，确定性复现）：
+// TestSQLiteCommitBusyPoisonsConnection 固化根因机制（驱动级，确定性复现）：
 //
 // glebarez/go-sqlite 的 tx.Commit() 是裸 `exec("commit")`。SQLite 语义下 COMMIT 因
 // SQLITE_BUSY 失败时事务**保持打开**（区别于其他错误的自动回滚）；而该驱动既不实现
@@ -64,7 +64,7 @@ func TestSQLiteCommitBusyPoisonsConnection(t *testing.T) {
 	require.NoError(t, err)
 	commitErr := wtx.Commit()
 	if commitErr == nil {
-		t.Skip("驱动 COMMIT 未再因读锁 BUSY 失败（驱动行为已变化），毒化前提不复存在，可重评估 FR-318 防线")
+		t.Skip("驱动 COMMIT 未再因读锁 BUSY 失败（驱动行为已变化），毒化前提不复存在，可重评估防线")
 	}
 	require.Contains(t, commitErr.Error(), "locked",
 		"预期 COMMIT 因 SQLITE_BUSY 失败，实际: %v", commitErr)
@@ -77,7 +77,7 @@ func TestSQLiteCommitBusyPoisonsConnection(t *testing.T) {
 	require.Contains(t, err.Error(), "cannot start a transaction within a transaction")
 }
 
-// TestNewSQLiteStressNoNestedTransactionError FR-318 压力回归门：并发状态转换写 +
+// TestNewSQLiteStressNoNestedTransactionError压力回归门：并发状态转换写 +
 // 事务内建/删 Bot + 故意回滚 + 慢读者（长持读事务，模拟 OOM/swap 慢 IO 把持锁窗口放大）
 // 混跑，断言全程不出现 "cannot start a transaction within a transaction" 与
 // "database is locked"。

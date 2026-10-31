@@ -1,5 +1,5 @@
-/**
- * 监控页 hover 浮窗（FR-169）的纯逻辑：给定一个目标时间戳（recharts 激活点回传），
+/** 
+ * 监控页 hover 浮窗的纯逻辑：给定一个目标时间戳（recharts 激活点回传），
  * 在按时间戳升序的样本行里定位最近的一行，并取出该时刻各序列值。无 React 依赖，便于 vitest 单测。
  */
 
@@ -19,7 +19,7 @@ export interface HoverSnapshot {
   entries: HoverEntry[]
 }
 
-/**
+/** 
  * 在升序行集合里二分定位时间戳最接近 targetTs 的行下标。
  * 空数组返回 -1。targetTs 落在两点之间时取时间差更小的一侧（并列取左）。
  */
@@ -34,18 +34,25 @@ export function nearestRowIndex(rows: { ts: string }[], targetTs: string): numbe
   // 二分收敛到相邻两点
   while (hi - lo > 1) {
     const mid = (lo + hi) >> 1
-    const t = new Date(rows[mid].ts).getTime()
+    // lo/hi 恒在 [0, len-1]（初值由 len 决定，之后只在区间内收敛），故 mid 处元素必存在
+    const midRow = rows[mid]
+    if (midRow === undefined) break
+    const t = new Date(midRow.ts).getTime()
     if (t === target) return mid
     if (t < target) lo = mid
     else hi = mid
   }
 
-  const dLo = Math.abs(new Date(rows[lo].ts).getTime() - target)
-  const dHi = Math.abs(new Date(rows[hi].ts).getTime() - target)
+  // 同上：lo/hi 恒为合法下标
+  const loRow = rows[lo]
+  const hiRow = rows[hi]
+  if (loRow === undefined || hiRow === undefined) return -1
+  const dLo = Math.abs(new Date(loRow.ts).getTime() - target)
+  const dHi = Math.abs(new Date(hiRow.ts).getTime() - target)
   return dLo <= dHi ? lo : hi
 }
 
-/**
+/** 
  * 取某时刻各序列值快照：在 rows 里定位最近 targetTs 的行，按 series 顺序读出每条序列的值。
  * 无数据返回 null。某序列在该行缺测或不存在时其 value 为 null。
  */
@@ -57,6 +64,8 @@ export function hoverSnapshotAt(
   const idx = nearestRowIndex(rows, targetTs)
   if (idx < 0) return null
   const row = rows[idx]
+  // nearestRowIndex 只返回 -1 或 [0, len-1] 内的下标（<0 已在上方返回），故该行必存在
+  if (row === undefined) return null
   const entries: HoverEntry[] = series.map((s) => {
     const v = row[s.key]
     return { key: s.key, name: s.name, value: typeof v === 'number' && Number.isFinite(v) ? v : null }

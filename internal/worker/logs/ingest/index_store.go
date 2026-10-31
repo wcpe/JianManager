@@ -1,6 +1,6 @@
 package ingest
 
-// 采集索引（FR-496）的 Manager 侧粘合层：
+// 采集索引的 Manager 侧粘合层：
 //   - 内存状态（persistedState）↔ stateindex 行的双向映射；
 //   - 旧 ingest.state.json 的一次性迁移：事务写入 → 读回逐字段校验 → 归档；
 //     校验不一致时拒绝启动采集（不静默降级），保留旧文件供人工处置；
@@ -190,7 +190,7 @@ func (m *Manager) loadStateFromIndex() (*persistedState, error) {
 type indexAux struct {
 	PublicationPending bool `json:"publication_pending,omitempty"`
 	EventsStored       bool `json:"events_stored,omitempty"`
-	// Events 仅旧格式或事件段存储不可用时非空（与 FR-484 语义一致）。
+	// Events 仅旧格式或事件段存储不可用时非空（与语义一致）。
 	Events []logtypes.Event `json:"events,omitempty"`
 	// VerifiedRuns 是该源逐字段校验通过的源位置连续区间（见 persistedSource.VerifiedRuns）。
 	// 直接随本 payload 的 JSON 落盘：payload 列的指纹覆盖其全部字节，故变更必然被索引层发现。
@@ -847,7 +847,7 @@ func (m *Manager) PersistLatency() stateindex.Latency {
 //
 // 口径：返回的是**整个周期**的合计（Chunks 是周期内切出的提交单元数，MaxChunkRows 是其中
 // 最大单元的写+删行数）；验收线约束的**单提交单元**耗时请读 PersistLatency().P95/Max——
-// 一次周期可能被切成多个单元（FR-498 切分），二者不可混用。
+// 一次周期可能被切成多个单元（切分），二者不可混用。
 func (m *Manager) PersistNow() (stateindex.Stats, error) {
 	if m == nil {
 		return stateindex.Stats{}, nil

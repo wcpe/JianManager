@@ -127,3 +127,20 @@ jar 常达数十 MB，缓存下载因此是长耗时操作：它**不绑定触�
 - GitHub Release API 未提供摘要的历史版本不进入可部署状态，避免无校验二进制。
 - Worker 必须能访问 CP 的下载基址；CP-local URL 的解析与代理部署沿用 FR-190 已有基址规则。
 - 其他来源 provider、自动同步和批量升级明确留给后续 FR，当前模型只保留扩展边界。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入（保留原文）。
+
+### FR-409 制品版本库与 ServerProbe 在线分发
+
+制品版本库与 ServerProbe 在线分发（feat，增强 FR-045/068/114/173/174）：在既有 CAS `assets` 上新增通用制品包 / 来源 / 版本层；首个包 ServerProbe 由 CP 同步 GitHub Releases、校验并缓存 jar，Worker 从 CP 拉取。版本按全局默认 → Worker 默认 → 实例显式覆盖解析；Worker 改默认仅影响新实例，已有实例须手动切换以升级或回滚。不再嵌入 ServerProbe 源码、jar 或依赖缓存（需 spec + ADR）→ `docs/specs/artifact-version-library/spec.md`
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-409（制品版本库与 ServerProbe 在线分发）
+
+FR-409（制品版本库与 ServerProbe 在线分发）：在既有 CAS 制品库之上新增制品包 / 来源 / 版本层；ServerProbe 首个接入，CP 从 GitHub Releases 校验缓存 jar、Worker 从 CP 拉取，支持全局 / Worker / 实例版本选择与回滚。旧制品消费者保持兼容 → `docs/specs/artifact-version-library/spec.md`（✅ 已交付@v0.21.0）
+

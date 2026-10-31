@@ -13,7 +13,7 @@ var (
 	ErrGroupNotFound = errors.New("用户组不存在")
 	ErrAlreadyMember = errors.New("已经是组成员")
 	ErrNotMember     = errors.New("不是组成员")
-	// ErrInvalidEnforceMode 组配额处置档位非法（FR-467）：须为 alert|throttle|stop 或留空继承平台默认。
+	// ErrInvalidEnforceMode 组配额处置档位非法：须为 alert|throttle|stop 或留空继承平台默认。
 	ErrInvalidEnforceMode = errors.New("非法的配额处置档位")
 )
 
@@ -158,7 +158,7 @@ func (s *GroupService) UpdateQuota(groupID uint, maxInstances, maxBots, maxStora
 	if maxStorageMB != nil {
 		updates["max_storage_mb"] = *maxStorageMB
 	}
-	// FR-467：组级运行期配额强制档位。空串合法（= 继承平台默认 quota.enforce_mode），
+	// 组级运行期配额强制档位。空串合法（= 继承平台默认 quota.enforce_mode），
 	// 其余必须是三档枚举之一——写进库的值会被配额巡检直接当处置力度用，校验不能只在 HTTP 层。
 	if enforceMode != nil {
 		if !ValidEnforceMode(*enforceMode) && *enforceMode != "" {

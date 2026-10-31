@@ -1,21 +1,21 @@
 import { ws, HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 
-/**
- * 终端实时流仿真（FR-198）。
+/** 
+ * 终端实时流仿真。
  * token handler 走 HTTP（node 测试可验）；WS 伪交互仅并入浏览器 mock 模式（browser.ts）——
  * jsdom 下 WebSocket 不稳，按 ADR-047/spec §6 退路：终端交互真机验收，jsdom 只测 token handler。
  */
 const MOCK_TERMINAL_URL = 'ws://localhost/_mock/terminal'
 
-/** GET /instances/:id/terminal-token：返回 mock WS 地址（FR-198）。FR-201 实例域不重定义本路由。 */
+/** GET /instances/:id/terminal-token：返回 mock WS 地址。实例域不重定义本路由。 */
 export const terminalTokenHandler = domainRoute('get', '/instances/:id/terminal-token', () =>
   HttpResponse.json({ token: 'mock-terminal-token', wsUrl: MOCK_TERMINAL_URL, expiresIn: 30 }),
 )
 
 const terminal = ws.link(MOCK_TERMINAL_URL)
 
-/** 终端 WS PTY 伪交互：连接发 banner，收 {type:'stdin'} 回 {type:'stdout'} 假输出（FR-198）。 */
+/** 终端 WS PTY 伪交互：连接发 banner，收 {type:'stdin'} 回 {type:'stdout'} 假输出。 */
 export const terminalWsHandler = terminal.addEventListener('connection', ({ client }) => {
   client.send(JSON.stringify({ type: 'stdout', data: '[mock 终端已连接]\r\n' }))
   client.addEventListener('message', (event) => {
@@ -29,7 +29,7 @@ export const terminalWsHandler = terminal.addEventListener('connection', ({ clie
     const cmd = (msg.data ?? '').trim()
     const flood = /^flood\s+(\d{1,5})$/.exec(cmd)
     if (flood) {
-      // 灌量命令（FR-415 性能闸）：spec §2.3 要求「灌 10000 行滚动 ≥50fps」，
+      // 灌量命令（性能闸）：spec §2.3 要求「灌 10000 行滚动 ≥50fps」，
       // 没有它这条验收标准在 mock 环境里无法复现。分批发送，模拟真实分包节奏。
       const total = Number(flood[1])
       const batch = 200

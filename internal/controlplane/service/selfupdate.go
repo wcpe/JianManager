@@ -33,12 +33,12 @@ var (
 	ErrUpdateNoArtifact = errors.New("更新源无匹配本平台的制品")
 	// ErrUpdateAlreadyLatest 目标已是最新版本（无更高版本可升）。
 	ErrUpdateAlreadyLatest = errors.New("已是最新版本")
-	// ErrNoBackup 无可回滚的备份（CP/节点从未升级过，或备份缺失）。FR-182，见 ADR-042。
+	// ErrNoBackup 无可回滚的备份（CP/节点从未升级过，或备份缺失）。见 ADR-042。
 	ErrNoBackup = selfupdate.ErrNoBackup
 )
 
 // errNodeNoBackup 是 Worker 回报「无备份」时 error 文案的前缀标记，
-// CP 据此把节点回滚的「无备份」映射为 ErrNoBackup 透出友好码（FR-182）。
+// CP 据此把节点回滚的「无备份」映射为 ErrNoBackup 透出友好码。
 const workerNoBackupMarker = "NO_BACKUP"
 
 // errNodeNoBackup 是节点回滚无备份的内部哨兵（测试桩与映射用）。
@@ -50,7 +50,7 @@ const (
 	ComponentWorker       = "worker"
 )
 
-// Feed 是 release feed 的 JSON 结构（FR-081，见 spec api.md 契约）。
+// Feed 是 release feed 的 JSON 结构（见 spec api.md 契约）。
 type Feed struct {
 	Version   string         `json:"version"`
 	Notes     string         `json:"notes"`
@@ -68,34 +68,34 @@ type FeedArtifact struct {
 
 // SelfUpdateConfig 是注入自更新服务的更新源配置（对齐 config.UpdateConfig）。
 type SelfUpdateConfig struct {
-	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（FR-175，见 ADR-036 §7）。
+	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（见 ADR-036 §7）。
 	GitHubRepo string
-	// Channel GitHub 源渠道：stable（取 /releases/latest）| prerelease（取 /releases/tags/latest，FR-182）。空=stable。
+	// Channel GitHub 源渠道：stable（取 /releases/latest）| prerelease（取 /releases/tags/latest）。空=stable。
 	Channel string
 	// GitHubToken 可选 GitHub API token；非空时请求带 Authorization 提升限流额度。
 	GitHubToken string
 	// GitHubAPIBase GitHub API 基址（默认 https://api.github.com）；仅测试经 httptest 覆盖。
 	GitHubAPIBase string
-	// FeedURL release feed JSON 地址（可选回退）：github_repo 为空且 feed_url 非空时走原 feed 路径（FR-081）。
+	// FeedURL release feed JSON 地址（可选回退）：github_repo 为空且 feed_url 非空时走原 feed 路径。
 	FeedURL       string
 	BinaryBaseURL string
 	AllowInsecure bool
 }
 
-// SelfUpdateService 面板自更新编排（FR-081，见 ADR-020 §4）。
+// SelfUpdateService 面板自更新编排（见 ADR-020 §4）。
 // CP 统一编排：检查更新（CP + 各节点版本对比）、CP 自升级、经 gRPC 令 Worker 升级、全网逐节点编排。
 type SelfUpdateService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
 	cfg  SelfUpdateConfig
-	// githubTokenFunc 运行时令牌读取器（settings.github.token 生效值，FR-063），
+	// githubTokenFunc 运行时令牌读取器（settings.github.token 生效值），
 	// 非空返回值优先于 cfg.GitHubToken 基线；使设置面板改令牌即时生效。由 main 注入。
 	githubTokenFunc func() string
 	root            *dataroot.Root
-	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：拉 feed 与 CP 自身二进制下载共用。
+	// httpClient 出站 client（经进程级代理ADR-037）：拉 feed 与 CP 自身二进制下载共用。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
-	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次取当前 client，
+	// httpProvider 运行时出站持有者（ADR-043）：非 nil 时每次取当前 client，
 	// 使设置面板改全局代理后立即生效。优先于 httpClient。
 	httpProvider func() *http.Client
 
@@ -112,9 +112,9 @@ type SelfUpdateService struct {
 	cpUpgradeFn    func(art *FeedArtifact) error                                 // 覆盖 CP 自身下载替换重启
 	restartCPFn    func()                                                        // 覆盖 CP 重启动作
 	nodeUpgradeFn  func(nodeID uint, wantVersion string) (string, string, error) // 覆盖 rollout 内单节点升级
-	cpRollbackFn   func() (toVersion string, err error)                          // 覆盖 CP 自身回滚（FR-182）
-	nodeRollbackFn func(nodeID uint) (from, to string, err error)                // 覆盖单节点回滚（FR-182）
-	// 内嵌 Worker 资产源（FR-278/ADR-062）；生产为 nil 走 cpembed 真实现。
+	cpRollbackFn   func() (toVersion string, err error)                          // 覆盖 CP 自身回滚
+	nodeRollbackFn func(nodeID uint) (from, to string, err error)                // 覆盖单节点回滚
+	// 内嵌 Worker 资产源（ADR-062）；生产为 nil 走 cpembed 真实现。
 	embeddedWorkerManifestFn func() *cpembed.WorkerAssetManifest
 	embeddedWorkerBinaryFn   func(cpembed.WorkerAssetManifestEntry) []byte
 }
@@ -124,19 +124,19 @@ func NewSelfUpdateService(db *gorm.DB, pool *cpgrpc.ClientPool, cfg SelfUpdateCo
 	return &SelfUpdateService{db: db, pool: pool, cfg: cfg, root: root}
 }
 
-// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037），供拉 feed 与 CP 自身下载使用。
+// SetHTTPClient 注入出站 client（经进程级代理ADR-037），供拉 feed 与 CP 自身下载使用。
 // 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
 func (s *SelfUpdateService) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次拉 feed/下载取当前 client，
+// SetHTTPClientProvider 注入运行时出站持有者（ADR-043）：每次拉 feed/下载取当前 client，
 // 使全局代理改动即时生效（CP「检查更新」立即走新代理）。优先于固定 client。
 func (s *SelfUpdateService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
 }
 
-// SetGitHubTokenProvider 注入运行时令牌读取器（settings.github.token 生效值，FR-063/FR-409）：
+// SetGitHubTokenProvider 注入运行时令牌读取器（settings.github.token 生效值）：
 // 非空返回值优先于启动基线 cfg.GitHubToken，使设置面板改令牌即时生效。由 main 装配。
 func (s *SelfUpdateService) SetGitHubTokenProvider(fn func() string) {
 	if s == nil {
@@ -170,7 +170,7 @@ func (s *SelfUpdateService) outboundClient() *http.Client {
 	return http.DefaultClient
 }
 
-// Configured 报告是否已配置更新源：github_repo 非空 或 feed_url 非空（FR-175，见 ADR-036 §7）。
+// Configured 报告是否已配置更新源：github_repo 非空 或 feed_url 非空（见 ADR-036 §7）。
 func (s *SelfUpdateService) Configured() bool {
 	return strings.TrimSpace(s.cfg.GitHubRepo) != "" || strings.TrimSpace(s.cfg.FeedURL) != ""
 }
@@ -188,7 +188,7 @@ func (s *SelfUpdateService) sourceLabel() string {
 }
 
 // resolveRelease 取归一 *Feed：feedFetcher 桩优先 → github_repo→GitHub Releases API →
-// feed_url→原 feed JSON → 都空 ErrUpdateNotConfigured（FR-175，见 ADR-036 §7）。
+// feed_url→原 feed JSON → 都空 ErrUpdateNotConfigured（见 ADR-036 §7）。
 // 替代既有 FetchFeed 作为「取 Feed」的统一入口；FetchFeed 保留为 feed_url 专用实现供回退调用。
 func (s *SelfUpdateService) resolveRelease(ctx context.Context) (*Feed, error) {
 	if s.feedFetcher != nil {
@@ -203,7 +203,7 @@ func (s *SelfUpdateService) resolveRelease(ctx context.Context) (*Feed, error) {
 	return nil, ErrUpdateNotConfigured
 }
 
-// FetchFeed 拉取并解析 feed_url 指向的 release feed JSON（FR-081 回退路径）。
+// FetchFeed 拉取并解析 feed_url 指向的 release feed JSON（回退路径）。
 // GitHub 源走 fetchGitHubRelease；统一入口是 resolveRelease。feed_url 为空返回 ErrUpdateNotConfigured。
 func (s *SelfUpdateService) FetchFeed(ctx context.Context) (*Feed, error) {
 	if s.feedFetcher != nil {
@@ -351,7 +351,7 @@ type ComponentStatus struct {
 	Arch              string `json:"arch"`
 	UpdateAvailable   bool   `json:"updateAvailable"`
 	ArtifactAvailable bool   `json:"artifactAvailable"`
-	// BackupVersion 升级前备份的版本（FR-182，见 ADR-042）：CP 取自本地备份、节点取自 GetVersion 回报。
+	// BackupVersion 升级前备份的版本（见 ADR-042）：CP 取自本地备份、节点取自 GetVersion 回报。
 	// 非空时前端可一键「回滚 v{BackupVersion}」；空表示无备份（回滚按钮禁用）。
 	BackupVersion string `json:"backupVersion,omitempty"`
 }
@@ -361,14 +361,14 @@ type CheckResult struct {
 	Configured    bool   `json:"configured"`
 	LatestVersion string `json:"latestVersion"`
 	Notes         string `json:"notes"`
-	// Source 更新源标识（FR-175）：github:owner/repo@channel | feed | 空（未配置）。
+	// Source 更新源标识：github:owner/repo@channel | feed | 空（未配置）。
 	Source       string            `json:"source"`
 	ControlPlane ComponentStatus   `json:"controlPlane"`
 	Nodes        []ComponentStatus `json:"nodes"`
-	// Cached 报告本结果是否来自服务端缓存（FR-186）：GET /check 命中缓存为 true、空缓存为 false；
+	// Cached 报告本结果是否来自服务端缓存：GET /check 命中缓存为 true、空缓存为 false；
 	// refresh（live 检查）成功后亦标 true（结果已落缓存）。加性字段，旧客户端忽略不受影响。
 	Cached bool `json:"cached"`
-	// CheckedAt 该结果对应的「上次成功检查」时刻（FR-186）；无缓存/未检查为 nil。
+	// CheckedAt 该结果对应的「上次成功检查」时刻；无缓存/未检查为 nil。
 	// 前端据此展示「上次检查：<相对时间>」。
 	CheckedAt *time.Time `json:"checkedAt,omitempty"`
 }
@@ -385,7 +385,7 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 			Online:         true,
 		},
 	}
-	// CP 自身备份版本（供前端回滚按钮，FR-182）。
+	// CP 自身备份版本（供前端回滚按钮）。
 	if meta, ok := selfupdate.BackupInfo(selfupdate.ComponentControlPlane, s.root); ok {
 		res.ControlPlane.BackupVersion = meta.Version
 	}
@@ -434,7 +434,7 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 				if vr.Arch != "" {
 					st.Arch = vr.Arch
 				}
-				st.BackupVersion = vr.BackupVersion // 节点本地备份版本（FR-182）
+				st.BackupVersion = vr.BackupVersion // 节点本地备份版本
 			}
 			cancel()
 		}
@@ -450,7 +450,7 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 	return res, nil
 }
 
-// CachedCheck 返回服务端缓存的「上次成功检查结果」（FR-186），不触发任何 live 网络调用，毫秒级返回。
+// CachedCheck 返回服务端缓存的「上次成功检查结果」，不触发任何 live 网络调用，毫秒级返回。
 // 进系统更新页直接读此即时回显；缓存空时返回 Cached=false 的结果（带当前 configured/CP 当前版本），
 // 让前端据此后台触发一次 RefreshCheck。反序列化兼容旧 blob：缺字段自然降级（见 spec §6）。
 //
@@ -527,7 +527,7 @@ func (s *SelfUpdateService) emptyCachedResult() *CheckResult {
 	}
 }
 
-// RefreshCheck 执行一次 live 检查（经 FR-174/185 出站代理）并在成功后 upsert 覆盖缓存（FR-186）。
+// RefreshCheck 执行一次 live 检查（经185 出站代理）并在成功后 upsert 覆盖缓存。
 // 成功返回带 Cached=true + CheckedAt 的最新结果；失败透出 error 且**不清缓存**（断网/限流仍保留上次结果）。
 // 「检查更新」按钮与进页后台静默刷新均调此。
 func (s *SelfUpdateService) RefreshCheck(ctx context.Context) (*CheckResult, error) {
@@ -545,7 +545,7 @@ func (s *SelfUpdateService) RefreshCheck(ctx context.Context) (*CheckResult, err
 	return res, nil
 }
 
-// persistCheckCache 把一次成功的 CheckResult 序列化为 JSON blob，单行 upsert 覆盖缓存（FR-186）。
+// persistCheckCache 把一次成功的 CheckResult 序列化为 JSON blob，单行 upsert 覆盖缓存。
 func (s *SelfUpdateService) persistCheckCache(res *CheckResult, checkedAt time.Time) error {
 	// 序列化前剥离 Cached/CheckedAt（这两项是「读出来时」的元信息，不应进 blob 造成自指）。
 	snapshot := *res
@@ -624,7 +624,7 @@ func (s *SelfUpdateService) UpgradeControlPlane(ctx context.Context, wantVersion
 		_ = os.Remove(dest)
 		return from, feed.Version, fmt.Errorf("定位自身可执行文件失败: %w", err)
 	}
-	// 替换前备份当前 CP 二进制供回滚（FR-182）；备份失败不阻断升级（仅记日志，本次升级无退路）。
+	// 替换前备份当前 CP 二进制供回滚；备份失败不阻断升级（仅记日志，本次升级无退路）。
 	if err := selfupdate.BackupCurrentFrom(selfupdate.ComponentControlPlane, from, target, s.root); err != nil {
 		slog.Warn("CP 升级前备份失败，本次升级无回滚退路", "error", err)
 	}
@@ -643,7 +643,7 @@ func (s *SelfUpdateService) UpgradeNode(ctx context.Context, nodeID uint, wantVe
 	return s.UpgradeNodeWithBaseURL(ctx, nodeID, wantVersion, "")
 }
 
-// UpgradeNodeWithBaseURL 经 gRPC 令目标节点升级，并把 CP-local Worker 资产下载 URL 下发给 Worker（FR-190）。
+// UpgradeNodeWithBaseURL 经 gRPC 令目标节点升级，并把 CP-local Worker 资产下载 URL 下发给 Worker。
 // baseURL 必须是 Worker 可访问的 CP HTTP 基址（通常由发起升级请求的 Host 推断）。
 func (s *SelfUpdateService) UpgradeNodeWithBaseURL(ctx context.Context, nodeID uint, wantVersion, baseURL string) (string, string, error) {
 	var node model.Node
@@ -716,7 +716,7 @@ func (s *SelfUpdateService) UpgradeNodeWithBaseURL(ctx context.Context, nodeID u
 	return resp.FromVersion, feed.Version, nil
 }
 
-// === 全网逐节点升级编排（FR-081） ===
+// === 全网逐节点升级编排 ===
 
 // RolloutNodeState 是 rollout 中单个节点的升级状态。
 type RolloutNodeState struct {
@@ -741,7 +741,7 @@ type Rollout struct {
 	Failed        int                `json:"failed"`
 	Pending       int                `json:"pending"`
 	Nodes         []RolloutNodeState `json:"nodes"`
-	// FR-155 金丝雀分批：Phase 标记编排阶段，CanarySize/BatchSize 回显本次配置，
+	// 金丝雀分批：Phase 标记编排阶段，CanarySize/BatchSize 回显本次配置，
 	// CurrentBatch 为 1-based 当前批（金丝雀=第 1 批）。省略金丝雀/分批时退化为原「串行全部」行为。
 	Phase        string `json:"phase"` // canary | rolling | completed | aborted
 	CanarySize   int    `json:"canarySize"`
@@ -749,7 +749,7 @@ type Rollout struct {
 	CurrentBatch int    `json:"currentBatch"`
 }
 
-// RolloutOptions 是全网升级的金丝雀 + 分批编排参数（FR-155，全部可选、零值=原串行全部行为）。
+// RolloutOptions 是全网升级的金丝雀 + 分批编排参数（全部可选、零值=原串行全部行为）。
 type RolloutOptions struct {
 	// CanarySize 先行升级的金丝雀节点数（0=无金丝雀，直接进滚动阶段）。
 	CanarySize int
@@ -765,13 +765,13 @@ func (s *SelfUpdateService) StartRollout(ctx context.Context, nodeIDs []uint, wa
 	return s.StartRolloutWithBaseURL(ctx, nodeIDs, wantVersion, "")
 }
 
-// StartRolloutWithBaseURL 对给定节点发起逐节点升级，并把同一个 CP HTTP 基址用于 FR-190 资产下发。
+// StartRolloutWithBaseURL 对给定节点发起逐节点升级，并把同一个 CP HTTP 基址用于资产下发。
 // 无金丝雀/分批参数（零值 RolloutOptions），等价原「串行全部」行为——保持向后兼容。
 func (s *SelfUpdateService) StartRolloutWithBaseURL(ctx context.Context, nodeIDs []uint, wantVersion, baseURL string) (*Rollout, error) {
 	return s.StartRolloutWithOptions(ctx, nodeIDs, wantVersion, baseURL, RolloutOptions{})
 }
 
-// StartRolloutWithOptions 在 StartRolloutWithBaseURL 基础上支持金丝雀 + 分批编排（FR-155）。
+// StartRolloutWithOptions 在 StartRolloutWithBaseURL 基础上支持金丝雀 + 分批编排。
 // opts 全部字段可选：CanarySize 先行升级的金丝雀数、BatchSize 剩余分批大小、AbortOnCanaryFailure 金丝雀失败即中止。
 func (s *SelfUpdateService) StartRolloutWithOptions(_ context.Context, nodeIDs []uint, wantVersion, baseURL string, opts RolloutOptions) (*Rollout, error) {
 	if !s.Configured() {
@@ -844,7 +844,7 @@ func (s *SelfUpdateService) selectRolloutTargets(nodeIDs []uint) ([]model.Node, 
 	return online, nil
 }
 
-// runRollout 编排全网升级（FR-155 金丝雀分批）：
+// runRollout 编排全网升级（金丝雀分批）：
 // 先升级金丝雀批（Phase=canary）；若配了 AbortOnCanaryFailure 且金丝雀有失败，则中止——
 // 剩余节点标 skipped、Phase=aborted，rollout 收尾为 completed。否则进入滚动阶段（Phase=rolling），
 // 把剩余节点按 batchSize 分批（<=0=剩余全部一批，等价原行为）逐节点串行升级；单节点失败不阻断本批后续。
@@ -976,7 +976,7 @@ func (s *SelfUpdateService) updateRolloutNode(nodeID uint, fn func(*RolloutNodeS
 }
 
 // recountRolloutLocked 重算 succeeded/failed/pending（须持 rolloutMu）。
-// FR-155：中止后剩余节点标 skipped，既非成功也非失败，且不计入 pending（编排已结束、无待处理项）。
+// 中止后剩余节点标 skipped，既非成功也非失败，且不计入 pending（编排已结束、无待处理项）。
 func (s *SelfUpdateService) recountRolloutLocked() {
 	var ok, fail, pend int
 	for _, n := range s.rollout.Nodes {

@@ -1,0 +1,474 @@
+import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { ChevronRight, File, Folder, FolderOpen, Loader2, MoreVertical } from 'lucide-react'
+import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@jianmanager/ui/components/dropdown-menu'
+import type { FileBrowserAction, FileBrowserSource, FileEntry } from '@/lib/file-browser/file-browser-types'
+import { buildTree } from '@/lib/file-browser/file-browser-tree'
+import type { BrowserTreeDir, BrowserTreeFile } from '@/lib/file-browser/file-browser-tree'
+import { formatFileSize } from '@/lib/shared/format-file-size'
+
+interface FileBrowserTreeProps {
+  source: FileBrowserSource
+  /** 当前选中文件 path（高亮）。 */
+  selectedPath: string | null
+  /** 点击文件 → 选中预览。 */
+  onSelectFile: (entry: FileEntry) => void
+  /** 行操作（可操作态注入；空则不显示行菜单）。 */
+  actions: FileBrowserAction[]
+  /** 刷新信号：变化时重拉。 */
+  refreshKey?: number
+}
+
+/** 
+ * 共享文件浏览器的目录树。
+ *
+ * 两种数据源形态统一渲染为可折叠树：
+ * - 懒加载分层（`source.flat` 省略）：点目录展开时按需 `source.list(dir)` 拉该层。
+ * - 扁平全量（`source.flat===true`）：一次 `source.list('')` 取全部，`buildTree` 内部成树。
+ *
+ * 文件行点击→选中（右栏预览）；注入 `actions` 时文件行末尾出现行操作菜单（下载/重命名/删除等，
+ * 全部由调用方提供）。本组件不含任何写端点。
+ */
+export default function FileBrowserTree({
+  source,
+  selectedPath,
+  onSelectFile,
+  actions,
+  refreshKey = 0,
+}: FileBrowserTreeProps) {
+  const { t } = useTranslation()
+
+  if (source.flat) {
+    return (
+      <FlatTree
+        source={source}
+        selectedPath={selectedPath}
+        onSelectFile={onSelectFile}
+        actions={actions}
+        refreshKey={refreshKey}
+      />
+    )
+  }
+  return (
+    <LazyTree
+      source={source}
+      selectedPath={selectedPath}
+      onSelectFile={onSelectFile}
+      actions={actions}
+      refreshKey={refreshKey}
+      emptyLabel={t('fileBrowser.empty')}
+    />
+  )
+}
+
+// ── 扁平全量：一次拉取 + buildTree ────────────────────────────────────────
+
+function FlatTree({ source, selectedPath, onSelectFile, actions, refreshKey }: FileBrowserTreeProps) {
+  const { t } = useTranslation()
+  const [entries, setEntries] = useState<FileEntry[] | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 源/刷新变化时复位为加载态再异步拉取，属合法同步
+    setEntries(null)
+    setError('')
+    source
+      .list('')
+      .then((es) => alive && setEntries(es))
+      .catch((e: unknown) => alive && setError(e instanceof Error ? e.message : t('fileBrowser.loadFailed')))
+    return () => {
+      alive = false
+    }
+  }, [source, refreshKey, t])
+
+  const tree = useMemo(() => (entries ? buildTree(entries) : null), [entries])
+
+  if (error) return <p className="p-3 text-sm text-destructive">{error}</p>
+  if (!tree) {
+    return (
+      <p className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" /> {t('fileBrowser.loading')}
+      </p>
+    )
+  }
+  if (tree.fileCount === 0 && tree.dirs.length === 0) {
+    return <p className="p-3 text-sm text-muted-foreground">{t('fileBrowser.empty')}</p>
+  }
+
+  return (
+    <div className="text-sm">
+      <StaticLevel
+        dir={tree}
+        depth={0}
+        selectedPath={selectedPath}
+        onSelectFile={onSelectFile}
+        actions={actions}
+      />
+    </div>
+  )
+}
+
+/** 扁平树的一层（子目录 + 直属文件），目录默认展开。 */
+function StaticLevel({
+  dir,
+  depth,
+  selectedPath,
+  onSelectFile,
+  actions,
+}: {
+  dir: BrowserTreeDir
+  depth: number
+  selectedPath: string | null
+  onSelectFile: (entry: FileEntry) => void
+  actions: FileBrowserAction[]
+}) {
+  return (
+    <ul className="space-y-0.5">
+      {dir.dirs.map((d) => (
+        <li key={d.path}>
+          <StaticDirRow
+            dir={d}
+            depth={depth}
+            selectedPath={selectedPath}
+            onSelectFile={onSelectFile}
+            actions={actions}
+          />
+        </li>
+      ))}
+      {dir.files.map((f) => (
+        <li key={f.entry.path}>
+          <FileRow
+            file={f}
+            depth={depth}
+            selected={selectedPath === f.entry.path}
+            onSelect={onSelectFile}
+            actions={actions}
+          />
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function StaticDirRow({
+  dir,
+  depth,
+  selectedPath,
+  onSelectFile,
+  actions,
+}: {
+  dir: BrowserTreeDir
+  depth: number
+  selectedPath: string | null
+  onSelectFile: (entry: FileEntry) => void
+  actions: FileBrowserAction[]
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(true)
+  return (
+    <>
+      {/* 目录行：整行可点击但外观是条目而非按钮，取 invisible + auto；
+          缩进仍由 style.paddingLeft 按层级计算，className 原样保留。 */}
+      <Button
+        type="button"
+        variant="invisible"
+        size="auto"
+        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-[background-color] hover:bg-accent"
+        style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <ChevronRight
+          className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')}
+        />
+        {open ? (
+          <FolderOpen className="size-4 shrink-0 text-amber-500" />
+        ) : (
+          <Folder className="size-4 shrink-0 text-amber-500" />
+        )}
+        <span className="truncate font-medium">{dir.name}</span>
+        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+          {t('fileBrowser.dirSummary', { n: dir.fileCount, size: formatFileSize(dir.totalSize) })}
+        </span>
+      </Button>
+      {open && (
+        <StaticLevel
+          dir={dir}
+          depth={depth + 1}
+          selectedPath={selectedPath}
+          onSelectFile={onSelectFile}
+          actions={actions}
+        />
+      )}
+    </>
+  )
+}
+
+// ── 懒加载分层：点目录展开时拉该层 ──────────────────────────────────────
+
+function LazyTree({
+  source,
+  selectedPath,
+  onSelectFile,
+  actions,
+  refreshKey,
+  emptyLabel,
+}: FileBrowserTreeProps & { emptyLabel: string }) {
+  return (
+    <div className="text-sm">
+      <LazyDirChildren
+        source={source}
+        dirPath=""
+        depth={0}
+        selectedPath={selectedPath}
+        onSelectFile={onSelectFile}
+        actions={actions}
+        refreshKey={refreshKey ?? 0}
+        emptyLabel={emptyLabel}
+      />
+    </div>
+  )
+}
+
+/** 拉取并渲染某目录的直接子项（懒加载）。 */
+function LazyDirChildren({
+  source,
+  dirPath,
+  depth,
+  selectedPath,
+  onSelectFile,
+  actions,
+  refreshKey,
+  emptyLabel,
+}: {
+  source: FileBrowserSource
+  dirPath: string
+  depth: number
+  selectedPath: string | null
+  onSelectFile: (entry: FileEntry) => void
+  actions: FileBrowserAction[]
+  refreshKey: number
+  emptyLabel: string
+}) {
+  const { t } = useTranslation()
+  const [entries, setEntries] = useState<FileEntry[] | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 目录/刷新变化时复位为加载态再异步拉该层，属合法同步
+    setEntries(null)
+    setError('')
+    source
+      .list(dirPath)
+      .then((es) => alive && setEntries(es))
+      .catch((e: unknown) => alive && setError(e instanceof Error ? e.message : t('fileBrowser.loadFailed')))
+    return () => {
+      alive = false
+    }
+  }, [source, dirPath, refreshKey, t])
+
+  // 目录在前、文件在后，各自字母序。
+  const sorted = useMemo(() => {
+    if (!entries) return null
+    const dirs = entries.filter((e) => e.isDir).sort((a, b) => a.name.localeCompare(b.name))
+    const files = entries.filter((e) => !e.isDir).sort((a, b) => a.name.localeCompare(b.name))
+    return [...dirs, ...files]
+  }, [entries])
+
+  if (error) {
+    return (
+      <p className="px-2 py-1 text-xs text-destructive" style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}>
+        {error}
+      </p>
+    )
+  }
+  if (!sorted) {
+    return (
+      <p
+        className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground"
+        style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
+      >
+        <Loader2 className="size-3.5 animate-spin" /> {t('fileBrowser.loading')}
+      </p>
+    )
+  }
+  if (sorted.length === 0) {
+    return (
+      <p className="px-2 py-1 text-xs text-muted-foreground" style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}>
+        {depth === 0 ? emptyLabel : t('fileBrowser.emptyDir')}
+      </p>
+    )
+  }
+
+  return (
+    <ul className="space-y-0.5">
+      {sorted.map((e) =>
+        e.isDir ? (
+          <li key={e.path}>
+            <LazyDirRow
+              source={source}
+              entry={e}
+              depth={depth}
+              selectedPath={selectedPath}
+              onSelectFile={onSelectFile}
+              actions={actions}
+              refreshKey={refreshKey}
+              emptyLabel={emptyLabel}
+            />
+          </li>
+        ) : (
+          <li key={e.path}>
+            <FileRow
+              file={{ entry: e, name: e.name }}
+              depth={depth}
+              selected={selectedPath === e.path}
+              onSelect={onSelectFile}
+              actions={actions}
+            />
+          </li>
+        ),
+      )}
+    </ul>
+  )
+}
+
+function LazyDirRow({
+  source,
+  entry,
+  depth,
+  selectedPath,
+  onSelectFile,
+  actions,
+  refreshKey,
+  emptyLabel,
+}: {
+  source: FileBrowserSource
+  entry: FileEntry
+  depth: number
+  selectedPath: string | null
+  onSelectFile: (entry: FileEntry) => void
+  actions: FileBrowserAction[]
+  refreshKey: number
+  emptyLabel: string
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      {/* 目录行：整行可点击但外观是条目而非按钮，取 invisible + auto；
+          缩进仍由 style.paddingLeft 按层级计算，className 原样保留。 */}
+      <Button
+        type="button"
+        variant="invisible"
+        size="auto"
+        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-[background-color] hover:bg-accent"
+        style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <ChevronRight
+          className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')}
+        />
+        {open ? (
+          <FolderOpen className="size-4 shrink-0 text-amber-500" />
+        ) : (
+          <Folder className="size-4 shrink-0 text-amber-500" />
+        )}
+        <span className="truncate font-medium">{entry.name}</span>
+      </Button>
+      {open && (
+        <LazyDirChildren
+          source={source}
+          dirPath={entry.path}
+          depth={depth + 1}
+          selectedPath={selectedPath}
+          onSelectFile={onSelectFile}
+          actions={actions}
+          refreshKey={refreshKey}
+          emptyLabel={emptyLabel}
+        />
+      )}
+    </>
+  )
+}
+
+// ── 文件行（两形态共用）────────────────────────────────────────────────
+
+function FileRow({
+  file,
+  depth,
+  selected,
+  onSelect,
+  actions,
+}: {
+  file: BrowserTreeFile
+  depth: number
+  selected: boolean
+  onSelect: (entry: FileEntry) => void
+  actions: FileBrowserAction[]
+}) {
+  const { t } = useTranslation()
+  const visibleActions = actions.filter((a) => !a.visible || a.visible(file.entry))
+  return (
+    <div
+      className={cn(
+        'group flex items-center gap-2 rounded-md px-2 py-1.5 transition-[background-color] hover:bg-accent/50',
+        selected && 'bg-accent',
+      )}
+      style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
+    >
+      {/* 文件条目：占满行内剩余宽度，视觉与左侧目录行同档（无底色无常驻边框），
+          故取 invisible + auto，让行高/间距完全由 className 与父容器决定。
+          gap-2 与 Button 基础类同值，故不重复。 */}
+      <Button
+        type="button"
+        variant="invisible"
+        size="auto"
+        className="flex min-w-0 flex-1 items-center text-left"
+        onClick={() => onSelect(file.entry)}
+      >
+        <File className="size-4 shrink-0 text-muted-foreground" />
+        <span className="truncate font-mono text-xs">{file.name}</span>
+        {file.entry.size != null && (
+          <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+            {formatFileSize(file.entry.size)}
+          </span>
+        )}
+      </Button>
+      {visibleActions.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            {/* 纯图标触发器：默认隐形（opacity-0），行 hover 或菜单展开时才浮现。
+                原尺寸只有图标本身（无内边距），用 invisible + auto 保持这个紧凑占位，
+                换成 icon-xs 会撑到 24px 并与文件名的 ml-auto 布局抢宽度。 */}
+            <Button
+              type="button"
+              variant="invisible"
+              size="auto"
+              className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 data-[state=open]:opacity-100"
+              aria-label={t('fileBrowser.actions')}
+            >
+              <MoreVertical className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {visibleActions.map((a) => (
+              <DropdownMenuItem key={a.key} onSelect={() => a.onAction(file.entry)}>
+                {a.icon}
+                {a.label}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
+  )
+}

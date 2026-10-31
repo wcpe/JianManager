@@ -1,4 +1,4 @@
-// changelog-extract.mjs 纯解析逻辑单测（FR-173）。
+//  changelog-extract.mjs 纯解析逻辑单测。
 // 运行：node --test scripts/changelog-extract.test.mjs
 //
 // 只测纯函数 extractSection（不跑 CLI / 不读真文件），覆盖：

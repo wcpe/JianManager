@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -22,8 +21,7 @@ import (
 
 func newSelfUpdateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := openTestSQLite(t)
 	require.NoError(t, db.AutoMigrate(&model.Node{}))
 	return db
 }
@@ -327,7 +325,7 @@ func seedRolloutNodes(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, names 
 	return out
 }
 
-// TestRollout_CanarySucceedsThenRolling 验证金丝雀成功后进入滚动阶段、全部升级、Phase 递进至 completed（FR-155）。
+// TestRollout_CanarySucceedsThenRolling 验证金丝雀成功后进入滚动阶段、全部升级、Phase 递进至 completed。
 func TestRollout_CanarySucceedsThenRolling(t *testing.T) {
 	db := newSelfUpdateTestDB(t)
 	pool := cpgrpc.NewClientPool()
@@ -366,7 +364,7 @@ func TestRollout_CanarySucceedsThenRolling(t *testing.T) {
 	_ = ns
 }
 
-// TestRollout_CanaryFailsAborts 验证金丝雀失败 + abortOnCanaryFailure 时剩余节点不升级、Phase=aborted（FR-155）。
+// TestRollout_CanaryFailsAborts 验证金丝雀失败 + abortOnCanaryFailure 时剩余节点不升级、Phase=aborted。
 func TestRollout_CanaryFailsAborts(t *testing.T) {
 	db := newSelfUpdateTestDB(t)
 	pool := cpgrpc.NewClientPool()
@@ -414,7 +412,7 @@ func TestRollout_CanaryFailsAborts(t *testing.T) {
 	}
 }
 
-// TestRollout_CanaryFailsNoAbortContinues 验证不设 abortOnCanaryFailure 时金丝雀失败仍继续滚动升级剩余（FR-155）。
+// TestRollout_CanaryFailsNoAbortContinues 验证不设 abortOnCanaryFailure 时金丝雀失败仍继续滚动升级剩余。
 func TestRollout_CanaryFailsNoAbortContinues(t *testing.T) {
 	db := newSelfUpdateTestDB(t)
 	pool := cpgrpc.NewClientPool()
@@ -446,7 +444,7 @@ func TestRollout_CanaryFailsNoAbortContinues(t *testing.T) {
 	}
 }
 
-// TestRollout_BatchSizeChunksRemaining 验证 batchSize 正确分批剩余节点、全部升级且 Phase 收敛（FR-155）。
+// TestRollout_BatchSizeChunksRemaining 验证 batchSize 正确分批剩余节点、全部升级且 Phase 收敛。
 func TestRollout_BatchSizeChunksRemaining(t *testing.T) {
 	db := newSelfUpdateTestDB(t)
 	pool := cpgrpc.NewClientPool()
@@ -488,7 +486,7 @@ func TestRollout_BatchSizeChunksRemaining(t *testing.T) {
 	}
 }
 
-// TestRollout_NoCanaryNoBatchBackCompat 验证零值 options（无金丝雀/分批）退化为原「串行全部」行为（FR-155 向后兼容）。
+// TestRollout_NoCanaryNoBatchBackCompat 验证零值 options（无金丝雀/分批）退化为原「串行全部」行为（向后兼容）。
 func TestRollout_NoCanaryNoBatchBackCompat(t *testing.T) {
 	db := newSelfUpdateTestDB(t)
 	pool := cpgrpc.NewClientPool()

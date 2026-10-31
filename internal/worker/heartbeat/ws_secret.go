@@ -7,7 +7,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// wsSecretApplier 据心跳响应携带的 WS 令牌密钥热应用到 Worker（FR-275，见 ADR-061）。
+// wsSecretApplier 据心跳响应携带的 WS 令牌密钥热应用到 Worker（见 ADR-061）。
 //
 // CP 每拍下发当前 WS 令牌密钥（终端/插件桥校验用）；applier 仅当值与当前生效值不同时才
 // 调 apply（热更新两个 WS 服务器 + 持久化身份文件）——CP 轮换密钥后 Worker 不重启即自愈。

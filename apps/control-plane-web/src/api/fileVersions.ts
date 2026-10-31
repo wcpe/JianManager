@@ -1,23 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 通用文件版本元数据（与后端 service.FileVersion 对应，FR-051）。 */
-export interface FileVersion {
-  id: number
-  filePath: string
-  size: number
-  authorId: number
-  createdAt: string
-  rollbackOfVersionId?: number
-}
-
-/** 文件版本差异结果；二进制内容 binary=true 且 unifiedDiff 为空。 */
-export interface FileVersionDiff {
-  fromVersionId: number
-  toVersionId: number
-  unifiedDiff: string
-  binary: boolean
-}
+// 版本类型已回迁应用侧（迁包已撤销，见 ADR-103）；此处转出，调用点零改动。
+import type { FileVersion, FileVersionDiff } from '@/lib/file-browser/file-version'
+export type { FileVersion, FileVersionDiff } from '@/lib/file-browser/file-version'
 
 /** 列出某文件的历史版本（按 ID 倒序，最新在前）。 */
 export function useFileVersions(instanceId: number, filePath: string | null) {

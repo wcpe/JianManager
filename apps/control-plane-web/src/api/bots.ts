@@ -1,49 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+// Bot 域契约已回迁应用侧（受控视图与业务页面共用，ADR-103）；此处原样再导出，调用点无需改动。
+// 本地绑定供本文件的 hook 签名使用。
+import type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bots/bot'
+export type { BotConfig, BotInfo, BotListParams, BotListResponse, BotSummary, BotSummaryGroup, BotBatchAction, BotBatchFilter, BotBatchRequest, BotBatchResult, CreateBotRequest } from '@/lib/bots/bot'
+
 import api, { ensureFreshToken } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import type { BotRealtimeEvent, BotRealtimeState } from '@/lib/bots/bot-realtime-types'
 
-export interface BotConfig {
-  server: string
-  port: number
-  auth: string
-}
-
-export interface BotInfo {
-  id: number
-  uuid: string
-  instanceId: number
-  name: string
-  status: string
-  /** 最近一次委托 Worker 失败的原因（status=error 时非空，如 bot 依赖未装）。 */
-  lastError?: string
-  /** Bot 连接配置，后端以 JSON 字符串存储。 */
-  config: string
-  behavior: string
-  workerId: string
-  createdAt: string
-  updatedAt: string
-}
-
-/** Bot 实时事件（SSE event: bot）。 */
-export interface BotRealtimeEvent {
-  botId: number
-  botUuid: string
-  type: string
-  data: Record<string, unknown>
-  timestamp: number
-}
-
-/** 单 Bot 实时状态。 */
-export interface BotRealtimeState {
-  status?: string
-  health?: number
-  food?: number
-  behavior?: string
-  position?: { x: number; y: number; z: number }
-  events: BotRealtimeEvent[]
-  connected: boolean
-}
+// 实现已回迁应用侧（迁包已撤销，见 ADR-103），此处保留 re-export 维持既有导入路径。
+export type { BotRealtimeEvent, BotRealtimeState }
 
 export interface BotStressSessionCounts {
   total: number
@@ -93,84 +60,26 @@ export interface CreateBotStressSessionRequest {
   orchestrationYaml?: string
 }
 
-export interface CreateBotRequest {
-  instanceId: number
-  name: string
-  config: BotConfig
-  behavior: string
-}
 
-/** Bot 列表筛选条件（分页 + 多维过滤，FR-038）。 */
-export interface BotListParams {
-  page?: number
-  pageSize?: number
-  instanceId?: number
-  nodeId?: number
-  status?: string
-  behavior?: string
-  /** 关键字，匹配 name 或 uuid。 */
-  q?: string
-}
+/** Bot 列表筛选条件（分页 + 多维过滤）。 */
 
 /** 分页列表响应。 */
-export interface BotListResponse {
-  items: BotInfo[]
-  total: number
-  page: number
-  pageSize: number
-}
 
 /** 摘要分组计数。 */
-export interface BotSummaryGroup {
-  key: string
-  label: string
-  total: number
-  online: number
-}
 
-/** Bot 计数聚合（FR-038），不含逐条 Bot。 */
-export interface BotSummary {
-  total: number
-  byStatus: Record<string, number>
-  groupBy?: string
-  groups?: BotSummaryGroup[]
-}
-
-export type BotBatchAction = 'set-behavior' | 'start' | 'stop' | 'delete'
+/** Bot 计数聚合，不含逐条 Bot。 */
 
 /** 批量操作筛选条件（与列表筛选维度一致）。 */
-export interface BotBatchFilter {
-  instanceId?: number
-  nodeId?: number
-  status?: string
-  behavior?: string
-  q?: string
-}
 
 /** 批量操作请求，目标由 ids 或 filter 二选一指定。 */
-export interface BotBatchRequest {
-  action: BotBatchAction
-  ids?: number[]
-  filter?: BotBatchFilter
-  behavior?: string
-  target?: string
-}
 
 /** 批量操作结果计数。 */
-export interface BotBatchResult {
-  action: string
-  requested: number
-  succeeded: number
-  failed: number
-  skipped: number
-  errors: { botId: number; error: string }[]
-}
 
 /** Bot 状态是异步演进的（connecting→connected/error 在秒级发生、且由读取触发回填），
  * 列表与聚合必须短轮询：此前仅挂载取一次，真机表现为「bot 已进服、面板永远显示连接中」。 */
 const BOT_REFETCH_MS = 5000
 
-/** 获取 Bot 分页列表，支持多维筛选（FR-038）。 */
+/** 获取 Bot 分页列表，支持多维筛选。 */
 export function useBots(params?: BotListParams) {
   return useQuery({
     queryKey: ['bots', params],
@@ -182,14 +91,23 @@ export function useBots(params?: BotListParams) {
   })
 }
 
-/** 获取 Bot 计数聚合，可按 instance/node/status/behavior 分组（FR-038）。 */
-export function useBotSummary(params?: BotListParams & { groupBy?: string }) {
+/** 
+ * 获取 Bot 计数聚合，可按 instance/node/status/behavior 分组。
+ *
+ * `options.enabled` 供调用方门控：分组总览同时挂着 5 路 summary，每路都是 5s 轮询
+ * （稳定 ≈1 req/s），而其中只有当前分组维度那一路是当场要用的。未启用的维度不必轮询。
+ */
+export function useBotSummary(
+  params?: BotListParams & { groupBy?: string },
+  options?: { enabled?: boolean },
+) {
   return useQuery({
     queryKey: ['bots', 'summary', params],
     queryFn: async () => {
       const { data } = await api.get<BotSummary>('/bots/summary', { params })
       return data
     },
+    enabled: options?.enabled ?? true,
     refetchInterval: BOT_REFETCH_MS,
   })
 }
@@ -237,7 +155,7 @@ export function useSetBotBehavior() {
   })
 }
 
-/** 批量执行 set-behavior/start/stop/delete（FR-038）。 */
+/** 批量执行 set-behavior/start/stop/delete。 */
 export function useBotBatch() {
   const qc = useQueryClient()
   return useMutation({
@@ -324,7 +242,7 @@ export function useSendBotCommand() {
   })
 }
 
-/** 订阅单个 Bot 的实时事件流（FR-041）。 */
+/** 订阅单个 Bot 的实时事件流。 */
 export function useBotEvents(botId: number | null): BotRealtimeState {
   const [state, setState] = useState<BotRealtimeState>({ connected: false, events: [] })
   const mounted = useRef(true)

@@ -62,7 +62,7 @@ func TestGetInstanceMetrics_RunningWithoutProbeUsesSystemMetrics(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 
 	assert.False(t, resp.ProbeAvailable)
-	// FR-447：无探针且未下发直探端口 → 在线人数显式「不可用」（可用位 false，零值），
+	// 无探针且未下发直探端口 → 在线人数显式「不可用」（可用位 false，零值），
 	// 不再以 -1 伪值占位。
 	assert.False(t, resp.PlayersAvailable)
 	assert.Zero(t, resp.Tps)

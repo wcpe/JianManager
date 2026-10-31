@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, screen } from '@testing-library/react'
 
 import { renderWithProviders } from '@/test/render'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
+import { terminalSessionManager } from '@/lib/console/terminal-session-manager'
 import ConsoleImmersiveMode from './ConsoleImmersiveMode'
 
 vi.mock('@/api/instances', () => ({
@@ -47,7 +47,7 @@ function renderImmersive(onExit = vi.fn()) {
   return onExit
 }
 
-describe('FR-420/421 可视沉浸工作台', () => {
+describe('421 可视沉浸工作台', () => {
   beforeEach(() => {
     // 布局持久化会跨测试残留快照，统一清掉保证每个用例从单 pane 起步。
     sessionStorage.clear()

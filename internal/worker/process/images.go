@@ -9,7 +9,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
-// ImageSummary 是 Worker 本机一个 Docker 镜像的精简描述（FR-078，ADR-019）。
+// ImageSummary 是 Worker 本机一个 Docker 镜像的精简描述（ADR-019）。
 type ImageSummary struct {
 	ID        string
 	Tags      []string
@@ -35,7 +35,7 @@ var newImageClient = func() (dockerImageClient, error) {
 }
 
 // ListDockerImages 列出 Worker 本机 Docker 镜像。
-// Docker 不可用时返回错误，调用方据此回报 docker_available=false（FR-078）。
+// Docker 不可用时返回错误，调用方据此回报 docker_available=false。
 func ListDockerImages(ctx context.Context) ([]ImageSummary, error) {
 	cli, err := newImageClient()
 	if err != nil {

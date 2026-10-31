@@ -16,7 +16,7 @@ var (
 	ErrAlertEventNotFound = errors.New("告警事件不存在")
 )
 
-// AlertService 告警服务（FR-011 + FR-085）。
+// AlertService 告警服务。
 type AlertService struct {
 	db *gorm.DB
 }
@@ -26,7 +26,7 @@ func NewAlertService(db *gorm.DB) *AlertService {
 	return &AlertService{db: db}
 }
 
-// CreateRuleRequest 创建告警规则请求（FR-011 + FR-085 扩展）。
+// CreateRuleRequest 创建告警规则请求（扩展）。
 type CreateRuleRequest struct {
 	Name        string `json:"name" binding:"required"`
 	TriggerType string `json:"triggerType"`
@@ -40,7 +40,7 @@ type CreateRuleRequest struct {
 	Threshold   float64 `json:"threshold"`
 	DurationSec int     `json:"durationSec"`
 
-	// 动态基线 / 饱和度触发（FR-462）
+	// 动态基线 / 饱和度触发
 	BaselineMethod    string  `json:"baselineMethod"`
 	BaselineWindowSec int     `json:"baselineWindowSec"`
 	Sensitivity       float64 `json:"sensitivity"`
@@ -59,7 +59,7 @@ type CreateRuleRequest struct {
 	SilenceEnd     string `json:"silenceEnd"`
 	NotifyRecover  *bool  `json:"notifyRecover"`
 
-	// FR-011 兼容
+	// 兼容
 	NotifyType   string `json:"notifyType"`
 	NotifyTarget string `json:"notifyTarget"`
 }
@@ -73,7 +73,7 @@ var validTriggerTypes = map[string]bool{
 	model.AlertTriggerQuotaExceeded: true,
 }
 
-// 动态基线/饱和度（FR-462）字段合法枚举。
+// 动态基线/饱和度字段合法枚举。
 var validBaselineMethods = map[string]bool{
 	"": true, model.BaselineMethodEWMA: true, model.BaselineMethodROC: true,
 	model.BaselineMethodMoM: true, model.BaselineMethodYoY: true,
@@ -92,7 +92,7 @@ var validPlayerEventMatches = map[string]bool{
 	"": true, "join": true, "quit": true, "chat": true, "cross_server": true,
 }
 
-// normalizeRuleTypeAndLevel 填充 FR-011 兼容默认值，并校验触发类型/级别枚举。
+// normalizeRuleTypeAndLevel 填充兼容默认值，并校验触发类型/级别枚举。
 func normalizeRuleTypeAndLevel(triggerType, level string) (string, string, error) {
 	if triggerType == "" {
 		triggerType = model.AlertTriggerMetric
@@ -118,9 +118,9 @@ func expectedTargetTypeForTrigger(triggerType string) string {
 		return "node"
 	case model.AlertTriggerMetric:
 		// metric 触发在 node 与 instance 两个维度都有评估器
-		// （evaluateNodeMetricRule / evaluateInstanceMetricRule，后者由 FR-462 补齐），
+		// （evaluateNodeMetricRule / evaluateInstanceMetricRule，后者由补齐），
 		// 故两种目标都合法——此前只放行 node，导致实例级 metric 规则建不出来，
-		// 连带 FR-464 的实例维度容量趋势告警不可达（Notify 按 target_type="instance" 查规则）。
+		// 连带的实例维度容量趋势告警不可达（Notify 按 target_type="instance" 查规则）。
 		return ""
 	case model.AlertTriggerBaseline, model.AlertTriggerSaturation, model.AlertTriggerQuotaExceeded:
 		return ""
@@ -140,7 +140,7 @@ func scopeForRule(scope, targetType string) string {
 	return "node"
 }
 
-// validateBaselineFields 校验 FR-462 基线/饱和度扩展字段。
+// validateBaselineFields 校验基线/饱和度扩展字段。
 func validateBaselineFields(triggerType, method, direction, scope string) error {
 	if !validBaselineMethods[method] {
 		return fmt.Errorf("非法基线方法: %s", method)
@@ -341,7 +341,7 @@ func (s *AlertService) ListRules() ([]model.AlertRule, error) {
 	return rules, nil
 }
 
-// validateLegacyWebhook 收紧 FR-011 兼容直发通道：URL 常含 token，只允许环境变量引用。
+// validateLegacyWebhook 收紧兼容直发通道：URL 常含 token，只允许环境变量引用。
 func validateLegacyWebhook(notifyType, notifyTarget string) error {
 	if notifyType == "" && notifyTarget == "" {
 		return nil
@@ -365,7 +365,7 @@ type UpdateRuleRequest struct {
 	Keyword        *string  `json:"keyword"`
 	EventMatch     *string  `json:"eventMatch"`
 
-	// FR-462 动态基线 / 饱和度可调字段。
+	// 动态基线 / 饱和度可调字段。
 	BaselineMethod    *string  `json:"baselineMethod"`
 	BaselineWindowSec *int     `json:"baselineWindowSec"`
 	Sensitivity       *float64 `json:"sensitivity"`
@@ -415,7 +415,7 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if err := validateRuleFields(ruleTriggerType(&current), current.TargetType, keyword, eventMatch, silenceStart, silenceEnd, current.DurationSec, dedup); err != nil {
 		return nil, err
 	}
-	// FR-462：饱和度阈值必须合法（缺省 0 会恒真）；baseline 忽略阈值。
+	// 饱和度阈值必须合法（缺省 0 会恒真）；baseline 忽略阈值。
 	triggerType := ruleTriggerType(&current)
 	effectiveThreshold := current.Threshold
 	if req.Threshold != nil {
@@ -424,7 +424,7 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if err := validateSaturationThreshold(triggerType, effectiveThreshold); err != nil {
 		return nil, err
 	}
-	// FR-462：合并并校验基线/饱和度字段。
+	// 合并并校验基线/饱和度字段。
 	baselineMethod := current.BaselineMethod
 	if req.BaselineMethod != nil {
 		baselineMethod = *req.BaselineMethod
@@ -481,7 +481,7 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 	if req.EventMatch != nil {
 		updates["event_match"] = *req.EventMatch
 	}
-	// FR-462 扩展字段。
+	// 扩展字段。
 	if req.BaselineMethod != nil {
 		updates["baseline_method"] = *req.BaselineMethod
 	}
@@ -517,23 +517,36 @@ func (s *AlertService) DeleteRule(id uint) error {
 	return s.db.Delete(&model.AlertRule{}, id).Error
 }
 
-// EventFilter 告警事件列表筛选条件（FR-085 + FR-149：关键字 / 时间范围 / 分页）。
+// EventFilter 告警事件列表筛选条件（：关键字 / 时间范围 / 分页）。
 type EventFilter struct {
 	RuleID       *uint
 	Resolved     *bool
 	Acknowledged *bool
 	Level        string
 	TriggerType  string
-	Keyword      string     // 模糊匹配 message（FR-149）
-	From         *time.Time // fired_at 下界（含），FR-149
-	To           *time.Time // fired_at 上界（含），FR-149
-	Page         int        // 页码，从 1 起；FR-149
-	PageSize     int        // 每页条数，<=0 取默认 50；FR-149
+	Keyword      string     // 模糊匹配 message
+	From         *time.Time // fired_at 下界（含）
+	To           *time.Time // fired_at 上界（含）
+	Page         int        // 页码，从 1 起
+	PageSize     int        // 每页条数，<=0 取默认 50
 }
 
-// ListEvents 返回告警事件分页列表（FR-011 + FR-085 多维筛选 + FR-149 关键字/时间范围/分页）。
-// 预加载规则名；返回当前页与命中总数。
-func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, int64, error) {
+// AlertEventView 告警事件列表项：在 model.AlertEvent 之上补一个实例名（仅当规则维度是实例）。
+//
+// 【为什么要判定 rule.TargetType】事件的 TargetID 是「规则目标 id」，含义随规则维度而变：
+// instance 维度才是实例 id，node 维度是节点 id。不判定就会把节点 id 当成实例 id 去查名。
+//
+// 【可见性说明——有意为之的取舍，决策记录】本端点没有 scope 收敛，加 instanceName 会把实例名
+// 交给每个能读告警事件的人。我们显式接受：改造前前端为了显示实例名直接拉**全量实例列表**
+// （千级约 1MB + 30 秒兜底轮询），对调用者暴露的实例清单更完整。将来若补 scope 收敛，同步复查此处。
+type AlertEventView struct {
+	model.AlertEvent
+	InstanceName string `json:"instanceName,omitempty"`
+}
+
+// ListEvents 返回告警事件分页列表（多维筛选关键字/时间范围/分页）。
+// 预加载规则名；为 instance 维度的事件回填实例名；返回当前页与命中总数。
+func (s *AlertService) ListEvents(f EventFilter) ([]AlertEventView, int64, error) {
 	page := f.Page
 	if page < 1 {
 		page = 1
@@ -576,13 +589,45 @@ func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, int64, err
 		Limit(pageSize).Offset((page - 1) * pageSize).Find(&events).Error; err != nil {
 		return nil, 0, err
 	}
-	if events == nil {
-		events = []model.AlertEvent{}
+	views := make([]AlertEventView, len(events))
+	for i := range events {
+		views[i] = AlertEventView{AlertEvent: events[i]}
 	}
-	return events, total, nil
+
+	// 一次主键 IN 查询回填实例名，避免按行查（N+1）。**必须先用 rule.TargetType 判定**：
+	// 事件的 TargetID 语义随规则维度而变，node 维度的值不是实例 id。
+	ids := make([]uint, 0, len(events))
+	seen := make(map[uint]struct{}, len(events))
+	for i := range events {
+		if events[i].Rule.TargetType != "instance" || events[i].TargetID == 0 {
+			continue
+		}
+		if _, ok := seen[events[i].TargetID]; ok {
+			continue
+		}
+		seen[events[i].TargetID] = struct{}{}
+		ids = append(ids, events[i].TargetID)
+	}
+	if len(ids) > 0 {
+		// 实例是软删除：已删实例查不到名字 → 留空，由前端回退显示 #id。
+		// 刻意不用 Unscoped()，那会把已删实例的存在也暴露出去。
+		var insts []model.Instance
+		s.db.Select("id", "name").Where("id IN ?", ids).Find(&insts)
+		nameByID := make(map[uint]string, len(insts))
+		for _, in := range insts {
+			nameByID[in.ID] = in.Name
+		}
+		for i := range views {
+			if views[i].Rule.TargetType == "instance" {
+				views[i].InstanceName = nameByID[views[i].TargetID]
+			}
+		}
+	}
+
+	return views, total, nil
 }
 
-// Acknowledge 确认/认领一条告警事件（FR-085）。记录确认人与时间，并置为已读。
+// Acknowledge 确认/认领一条告警事件。记录确认人与时间，并置为已读。
 func (s *AlertService) Acknowledge(eventID uint, userID uint) (*model.AlertEvent, error) {
 	now := time.Now()
 	result := s.db.Model(&model.AlertEvent{}).Where("id = ?", eventID).Updates(map[string]interface{}{
@@ -604,7 +649,7 @@ func (s *AlertService) Acknowledge(eventID uint, userID uint) (*model.AlertEvent
 	return &event, nil
 }
 
-// MarkRead 标记一条或全部告警事件为已读（FR-085 站内已读）。eventID 为 0 时标记全部未读。
+// MarkRead 标记一条或全部告警事件为已读（站内已读）。eventID 为 0 时标记全部未读。
 func (s *AlertService) MarkRead(eventID uint) error {
 	q := s.db.Model(&model.AlertEvent{}).Where("read = ?", false)
 	if eventID != 0 {

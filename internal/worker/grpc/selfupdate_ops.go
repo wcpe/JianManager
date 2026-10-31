@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 面板自更新 RPC（FR-081，见 ADR-020 §4）。
+// 面板自更新 RPC（见 ADR-020 §4）。
 // Worker 经 CP gRPC 编排升级：CP 下发二进制地址/sha256，Worker 下载校验替换重启。
 // daemon 模式下不杀游戏服——替换/重启只动 Worker 主进程，wrapper 子进程（持有 Java 游戏服）
 // 独立存活；Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper（ADR-003）。
@@ -25,8 +25,8 @@ import (
 // 再退出/重启进程（确保 CP 收到升级结果而非因连接被切而误判失败）。
 const restartDelay = 800 * time.Millisecond
 
-// GetVersion 返回 Worker 当前版本与平台信息（CP 自更新检查比对用，FR-081）。
-// BackupVersion 透出本地升级前备份版本（无备份为空），供 CP 检查更新展示节点 backupVersion（FR-182）。
+// GetVersion 返回 Worker 当前版本与平台信息（CP 自更新检查比对用）。
+// BackupVersion 透出本地升级前备份版本（无备份为空），供 CP 检查更新展示节点 backupVersion。
 func (s *Server) GetVersion(_ context.Context, _ *workerpb.GetVersionRequest) (*workerpb.GetVersionResponse, error) {
 	resp := &workerpb.GetVersionResponse{
 		Version: version.Version,
@@ -39,7 +39,7 @@ func (s *Server) GetVersion(_ context.Context, _ *workerpb.GetVersionRequest) (*
 	return resp, nil
 }
 
-// UpgradeWorker 下载目标二进制 → sha256 校验 → 替换自身 → 计划重启（FR-081）。
+// UpgradeWorker 下载目标二进制 → sha256 校验 → 替换自身 → 计划重启。
 //
 // 校验不符或替换失败时回 success=false、error 说明，绝不替换/重启。
 // 替换成功后先返回 success=true，再异步延迟重启（restartFn 默认 selfupdate.Restart，
@@ -47,7 +47,7 @@ func (s *Server) GetVersion(_ context.Context, _ *workerpb.GetVersionRequest) (*
 func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerRequest) (*workerpb.UpgradeWorkerResponse, error) {
 	from := version.Version
 
-	// action=rollback：回滚本地升级前备份，不下载（FR-182，见 ADR-042）。
+	// action=rollback：回滚本地升级前备份，不下载（见 ADR-042）。
 	if strings.EqualFold(strings.TrimSpace(req.Action), workerRollbackAction) {
 		return s.rollbackWorker(from), nil
 	}
@@ -76,7 +76,7 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 		_ = os.Remove(dest)
 		return &workerpb.UpgradeWorkerResponse{Success: false, Error: fmt.Sprintf("定位自身可执行文件失败: %v", err), FromVersion: from}, nil
 	}
-	// 替换前备份当前二进制供回滚（FR-182）；备份失败不阻断升级（仅记日志，本次升级无退路）。
+	// 替换前备份当前二进制供回滚；备份失败不阻断升级（仅记日志，本次升级无退路）。
 	if err := selfupdate.BackupCurrentFrom(selfupdate.ComponentWorker, from, target, s.root); err != nil {
 		slog.Warn("Worker 升级前备份失败，本次升级无回滚退路", "error", err)
 	}
@@ -96,10 +96,10 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 	return &workerpb.UpgradeWorkerResponse{Success: true, FromVersion: from}, nil
 }
 
-// workerRollbackAction 是 UpgradeWorkerRequest.action 触发回滚的取值（FR-182）。
+// workerRollbackAction 是 UpgradeWorkerRequest.action 触发回滚的取值。
 const workerRollbackAction = "rollback"
 
-// rollbackWorker 回滚本地升级前备份（FR-182，见 ADR-042）：校验备份 sha → 换回 → 异步延迟重启。
+// rollbackWorker 回滚本地升级前备份（见 ADR-042）：校验备份 sha → 换回 → 异步延迟重启。
 // 无备份回 success=false（error 文案含 NO_BACKUP 供 CP 映射友好码）；不下载任何远端制品。
 func (s *Server) rollbackWorker(from string) *workerpb.UpgradeWorkerResponse {
 	target, err := s.resolveExecutable()

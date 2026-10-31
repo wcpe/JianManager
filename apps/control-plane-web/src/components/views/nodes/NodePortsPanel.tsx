@@ -1,0 +1,178 @@
+import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Search } from 'lucide-react'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@jianmanager/ui/components/table'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
+import { Button } from '@jianmanager/ui/components/button'
+import { useVirtualRows } from '@/lib/shared/virtual-list'
+import type { NodePorts } from '@/lib/nodes/node-ports'
+
+/** 
+ * 端口表行高（px）：**声明值 = 真实值**——同一常量既喂虚拟窗口（`itemSize`），
+ * 也写成行盒的行内 style，不由类名反推（先例：`views/logs/LogsPageView` 的 `ROW_HEIGHT`）。
+ *
+ * 数值依据（实测）：本表单元格只有一行文本（`text-[13px]`，行高约 19.5）加上
+ * `TableCell` 的 `py-1.5`（12）≈ 32，原先声明 44 比真实行盒高，滚动条偏长；
+ * 取 36 与实例页行高栅格一致（36 = 24px 控件 + 12px 内距），只要行内容不超过 24px 行盒就恒为 36。
+ */
+const PORT_ROW_HEIGHT = 36
+
+/** 
+ * 节点端口占用面板：展示系统已分配的 server/query 端口与分配范围。
+ *
+ * 受控视图（ADR-103 a 范式）：**不取数**——端口数据与加载态由外壳经 props 注入
+ * （外壳调 `@/api/ports` 的 `useNodePorts`）。过滤词、虚拟滚动窗口等 UI 状态留在本组件内，
+ * 它们不随应用运行时变化，不属于注入范围。
+ */
+export interface NodePortsPanelProps {
+  /** 端口占用与分配范围；外壳取数后注入。未就绪时为 undefined。 */
+  data?: NodePorts
+  /** 加载态；外壳注入。为真时渲染骨架占位。 */
+  isLoading?: boolean
+  /** 取数失败；外壳注入。为真时渲染错误态与重试，而不是伪装成「暂无端口」。 */
+  isError?: boolean
+  /** 错误态的重试回调（外壳注入）。 */
+  onRetry?: () => void
+}
+
+export default function NodePortsPanel({ data, isLoading, isError, onRetry }: NodePortsPanelProps) {
+  const { t } = useTranslation()
+  // 实例名过滤（大量占用时便于定位某端口，大小写不敏感子串匹配）。
+  const [filter, setFilter] = useState('')
+
+  const occupied = useMemo(() => data?.occupied ?? [], [data])
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase()
+    if (!q) return occupied
+    return occupied.filter((p) => p.name.toLowerCase().includes(q))
+  }, [occupied, filter])
+
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: filtered.length,
+    itemSize: PORT_ROW_HEIGHT,
+    overscan: 8,
+    fallbackViewportSize: 480,
+  })
+
+  // 过滤收敛后可视窗口可能越界（如从 100 行过滤到 3 行）；重置滚动到顶避免空窗。
+  useEffect(() => {
+    const el = containerRef.current
+    if (el && el.scrollTop > 0 && range.start >= filtered.length) {
+      el.scrollTop = 0
+      onScroll()
+    }
+  }, [filtered.length, range.start, containerRef, onScroll])
+
+  if (isLoading)
+    // 骨架占位：范围说明行 + 两行表格行轮廓，替代裸文字避免布局跳动。
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-56" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </div>
+)
+
+  const visible = filtered.slice(range.start, range.end)
+
+  /* 
+    错误态必须排在空态之前：请求失败时 data 为空、isLoading 已为假，
+    若直接落到空态，界面会写「该节点暂无端口占用」——把故障说成没有数据。
+  */
+  if (isError)
+    return (
+      <div className="flex flex-col items-start gap-2" data-testid="node-ports-error">
+        <p className="text-sm text-destructive">{t('ports.loadFailed')}</p>
+        {onRetry && (
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            {t('common.retry')}
+          </Button>
+)}
+      </div>
+)
+
+  return (
+    <div>
+      {data && (
+        <p className="text-xs text-muted-foreground mb-3">
+          {t('ports.range', {
+            server: data.ranges.serverPortBase,
+            size: data.ranges.rangeSize,
+          })}
+        </p>
+)}
+      {/* 实例名过滤（增强）：大量端口占用时快速定位。 */}
+      <div className="relative mb-2 max-w-xs">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          aria-label={t('ports.filterPlaceholder')}
+          placeholder={t('ports.filterPlaceholder')}
+          className="h-8 w-full rounded-md border bg-background pl-8 pr-2 text-sm outline-none ring-primary/30 focus:ring-2"
+        />
+      </div>
+      <div
+        ref={containerRef}
+        onScroll={onScroll}
+        data-testid="node-ports-virtual"
+        /* 
+          必须保留一个有限高度的滚动容器：虚拟滚动按容器可视高算窗口，
+          高度交给内容（不设 max-h）会让容器高度恰好等于已渲染行高，
+          于是永远量不到「还有更多行」，后半张表根本滚不到。
+          高度改成随视口收缩（短屏不独占整页），长度仍由虚拟窗口控制。
+        */
+        className="max-h-[min(26rem,60vh)] overflow-auto rounded-md border"
+      >
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>{t('ports.instance')}</TableHead>
+              <TableHead>{t('ports.role')}</TableHead>
+              <TableHead>{t('ports.serverPort')}</TableHead>
+              <TableHead>{t('ports.queryPort')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {range.before > 0 && (
+              <TableRow aria-hidden="true">
+                <TableCell colSpan={4} className="p-0" style={{ height: range.before }} />
+              </TableRow>
+            )}
+            {visible.map((p) => (
+              // 行高写进行盒：与 itemSize 同源，滚动条长度因而不虚长。
+              <TableRow key={p.instanceId} style={{ height: PORT_ROW_HEIGHT }}>
+                <TableCell className="font-medium">{p.name}</TableCell>
+                <TableCell>{t(`networks.role_${p.role}`, { defaultValue: p.role })}</TableCell>
+                <TableCell>{p.serverPort || '--'}</TableCell>
+                <TableCell>{p.queryPort || '--'}</TableCell>
+              </TableRow>
+            ))}
+            {range.after > 0 && (
+              <TableRow aria-hidden="true">
+                <TableCell colSpan={4} className="p-0" style={{ height: range.after }} />
+              </TableRow>
+            )}
+            {filtered.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={4} className="text-center text-muted-foreground">
+                  {filter.trim() && occupied.length > 0
+                    ? t('ports.noMatch')
+                    : t('ports.empty')}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}

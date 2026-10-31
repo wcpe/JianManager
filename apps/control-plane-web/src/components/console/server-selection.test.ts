@@ -1,17 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-import {
-  FAVORITES_KEY,
-  RECENT_KEY,
-  getFavoriteServers,
-  getRecentServers,
-  recordRecentServer,
-  removeServer,
-  subscribeServerSelection,
-  toggleFavoriteServer,
-  type StoredInstance,
-} from './server-selection'
+import { FAVORITES_KEY, RECENT_KEY, getFavoriteServers, getRecentServers, recordRecentServer, removeServer, subscribeServerSelection, toggleFavoriteServer } from '@/lib/console/server-selection'
+import type { StoredInstance } from '@/lib/console/server-selection'
 
 const a: StoredInstance = { id: 1, uuid: 'i-a', nodeId: 1, name: 'a', status: 'RUNNING' }
 const b: StoredInstance = { id: 2, uuid: 'i-b', nodeId: 1, name: 'b', status: 'STOPPED' }
@@ -58,7 +49,7 @@ describe('server-selection removeServer（侧栏死链剔除，BUG 修复）', (
     unsub()
   })
 
-  it('localStorage 键沿用 FR-240/293 原键，剔除后落盘一致', () => {
+  it('localStorage 键沿用293 原键，剔除后落盘一致', () => {
     recordRecentServer(a)
     toggleFavoriteServer(a)
     removeServer(a.id)

@@ -20,47 +20,47 @@ import (
 // 使结构化启动命令与具体 Paper/SpongeVanilla 构建文件名解耦。
 const provisionCoreJar = "server.jar"
 
-// ProvisionService 一键搭建 MC 子服（FR-034/046）：解析核心 → 分配端口/目录 →
-// 结构化启动 → 下载/安装核心 + 写基础配置。串起 FR-032/033/034/044/045/046 的运行时底座。
+// ProvisionService 一键搭建 MC 子服（046）：解析核心 → 分配端口/目录 →
+// 结构化启动 → 下载/安装核心 + 写基础配置。串起033/034/044/045/046 的运行时底座。
 type ProvisionService struct {
 	db       *gorm.DB
 	pool     *cpgrpc.ClientPool
 	instance *InstanceService
 	core     *CoreService
-	// bridge 用于建服时签发实例级插件桥 token 并写入探针 config（FR-065，见 ADR-016）。
+	// bridge 用于建服时签发实例级插件桥 token 并写入探针 config（见 ADR-016）。
 	// 为 nil 时探针 config 不含 bridge 段（探针只跑 /metrics，不连反向 WS）。
 	bridge *PluginBridgeService
 	// artifacts 是版本化制品库；非 nil 时建服只下发 CP 本地下载引用，不再传 jar 字节。
 	artifacts *ArtifactVersionService
-	// tasks 任务中心（FR-319）：搭建的下载/写配置阶段经任务异步执行与展示；
+	// tasks 任务中心：搭建的下载/写配置阶段经任务异步执行与展示；
 	// nil 时（测试/未接线）回退同步执行（旧行为）。
 	tasks *TaskService
-	// binaryAssets 是制品库资产服务（FR-441）：coreType=binary 且 kind=asset 时据此取
+	// binaryAssets 是制品库资产服务：coreType=binary 且 kind=asset 时据此取
 	// 资产元数据与 sha256，再经签名分发通道交给 Worker。
 	binaryAssets *AssetService
-	// artifactVersions 是制品版本库服务（FR-441）：复用其签名分发通道（token 签发/校验与
+	// artifactVersions 是制品版本库服务：复用其签名分发通道（token 签发/校验与
 	// 下载端点）交付 asset 来源，不另起第二套密码学体系。
 	artifactVersions *ArtifactVersionService
-	// binaryRoots 返回 node_file 来源的受控放行根（FR-441）；nil 时一律拒绝该来源。
+	// binaryRoots 返回 node_file 来源的受控放行根；nil 时一律拒绝该来源。
 	// 以函数而非切片注入，使运维改配置后无需重启即对后续搭建生效（与其它运行时可改项同口径）。
 	binaryRoots func() []string
 	// binaryBaseURL 返回 CP 公共基址（asset 来源拼下载地址用）；nil 时回退平台公共基址设置。
 	binaryBaseURL func() string
 }
 
-// SetTaskService 注入任务中心（FR-319，main 接线）：非 nil 后搭建走异步任务模式。
+// SetTaskService 注入任务中心（main 接线）：非 nil 后搭建走异步任务模式。
 func (p *ProvisionService) SetTaskService(t *TaskService) { p.tasks = t }
 
-// SetBinaryAssets 注入制品库资产服务（FR-441，main 接线）：coreType=binary 的 asset 来源经此取件。
+// SetBinaryAssets 注入制品库资产服务（main 接线）：coreType=binary 的 asset 来源经此取件。
 func (p *ProvisionService) SetBinaryAssets(a *AssetService) { p.binaryAssets = a }
 
-// SetBinaryArtifactVersions 注入制品版本库服务（FR-441，main 接线）：
-// asset 来源复用其签名分发通道（FR-441 spec §3.2 的「复用 artifact_version_delivery 的签名 token」）。
+// SetBinaryArtifactVersions 注入制品版本库服务（main 接线）：
+// asset 来源复用其签名分发通道（spec §3.2 的「复用 artifact_version_delivery 的签名 token」）。
 func (p *ProvisionService) SetBinaryArtifactVersions(a *ArtifactVersionService) {
 	p.artifactVersions = a
 }
 
-// SetBinaryNodeFileRoots 注入 node_file 来源的受控放行根提供者（FR-441，main 接线）。
+// SetBinaryNodeFileRoots 注入 node_file 来源的受控放行根提供者（main 接线）。
 // 传 nil 或不调用 = 放行根为空集，node_file 来源一律被拒（默认安全的关闭态）。
 func (p *ProvisionService) SetBinaryNodeFileRoots(provider func() []string) {
 	p.binaryRoots = provider
@@ -91,9 +91,9 @@ type ProvisionServerRequest struct {
 	GroupID   uint     `json:"groupId"`
 	// OnlineMode 子服是否向 Mojang 校验正版（缺省 false=代理就绪/离线；独立正版服可传 true）。
 	OnlineMode *bool `json:"onlineMode"`
-	// BinarySource 制品来源（FR-441）：coreType=binary 时必填，三类来源见 BinarySource。
+	// BinarySource 制品来源：coreType=binary 时必填，三类来源见 BinarySource。
 	BinarySource *BinarySource `json:"binarySource,omitempty"`
-	// StartCommand 显式启动命令（FR-441，spec §3.4 决策 2A：复用 startCommand，不引入新结构）。
+	// StartCommand 显式启动命令（spec §3.4 决策 2A：复用 startCommand，不引入新结构）。
 	// 仅 coreType=binary 使用；留空则由落盘文件名派生 `./<filename>`。
 	// 需要附加参数时（如 `./beacon-1.1.0-linux-amd64 -config config.yml`）在此指定。
 	StartCommand string `json:"startCommand,omitempty"`
@@ -157,7 +157,7 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 	return inst, nil
 }
 
-// ProvisionServerAsync 一键搭建的异步入口（FR-319）：同步段只做核心解析 + 建实例 + 登记任务
+// ProvisionServerAsync 一键搭建的异步入口：同步段只做核心解析 + 建实例 + 登记任务
 // （立即返回，前端不再被慢下载拖到超时），下载/写配置/探针在 CP 后台 goroutine 执行——
 // 用独立 context（不挂请求），前端断开不再连锁取消下载（真机事故：Paper CDN ~200KB/s、
 // 47MB 需 4 分钟，同步链路被前端超时腰斩后留空壳实例且错误进黑洞）。
@@ -168,7 +168,7 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 
 // ProvisionServerAsyncWithBaseURL 在请求可见的 CP 公共基址下异步搭建，并把该基址用于 Worker 拉取探针。
 //
-// coreType=binary（FR-441）在此分流到二进制搭建路径：两者只共享「同步段建实例 + 登记任务 +
+// coreType=binary在此分流到二进制搭建路径：两者只共享「同步段建实例 + 登记任务 +
 // 后台取件 + 失败进 DAMAGED」的骨架，而核心解析、制品获取方式、实例默认属性均不同，
 // 故各自成函数而非在同一函数里堆分支。
 func (p *ProvisionService) ProvisionServerAsyncWithBaseURL(ctx context.Context, req ProvisionServerRequest, createdBy uint, probeBaseURL string) (*model.Instance, string, error) {
@@ -196,7 +196,7 @@ func (p *ProvisionService) ProvisionServerAsyncWithBaseURL(ctx context.Context, 
 		return nil, "", err
 	}
 
-	// 存搭建参数供损毁后「重建」复用（FR-342）：搭建任一阶段失败进 DAMAGED 时参数已在库，
+	// 存搭建参数供损毁后「重建」复用：搭建任一阶段失败进 DAMAGED 时参数已在库，
 	// 用户修好网络/环境点重建即复用重跑，无需重填。
 	if specJSON, mErr := json.Marshal(req); mErr == nil {
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("provision_spec", string(specJSON)).Error
@@ -207,13 +207,13 @@ func (p *ProvisionService) ProvisionServerAsyncWithBaseURL(ctx context.Context, 
 		Update("status_reason", "搭建中：正在下载核心（完成前请勿启动）").Error
 	onlineMode := boolOr(req.OnlineMode, false)
 	title := fmt.Sprintf("一键搭建 %s（%s %s）", inst.Name, req.CoreType, req.MCVersion)
-	// 迁 FR-323 共享底座：CreateTask→后台 goroutine→阶段进度→终态，statusReason 副作用在 work 内自负。
-	// InstanceID 关联使启动闸拦截「核心还在下载就点启动」（FR-319 二轮）。
+	// 迁共享底座：CreateTask→后台 goroutine→阶段进度→终态，statusReason 副作用在 work 内自负。
+	// InstanceID 关联使启动闸拦截「核心还在下载就点启动」（二轮）。
 	taskID := p.tasks.RunAsync(RunSpec{
 		NodeID: req.NodeID, InstanceID: inst.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
 	}, func(ctx context.Context, stage func(int, string)) (string, error) {
 		if err := p.provisionOnWorkerWithBaseURL(ctx, inst, core, onlineMode, stage, probeBaseURL); err != nil {
-			// 搭建任一阶段失败 → 损毁态（FR-342）：直写 DAMAGED＋原因，参数已存 ProvisionSpec 可重建。
+			// 搭建任一阶段失败 → 损毁态：直写 DAMAGED＋原因，参数已存 ProvisionSpec 可重建。
 			// statusReason 让实例卡片/详情可见「为什么不可用」，启动前一目了然（损毁态亦拦启动）。
 			_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 				Updates(map[string]any{"status": model.InstanceStatusDamaged, "status_reason": "搭建未完成：" + err.Error()}).Error
@@ -229,7 +229,7 @@ func (p *ProvisionService) ProvisionServerAsyncWithBaseURL(ctx context.Context, 
 	return inst, taskID, nil
 }
 
-// InstanceRoleFor 返回实例角色（供重建端点按 server/proxy 分派，FR-342 阶段二）。
+// InstanceRoleFor 返回实例角色（供重建端点按 server/proxy 分派阶段二）。
 func (p *ProvisionService) InstanceRoleFor(id uint) (model.InstanceRole, error) {
 	var inst model.Instance
 	if err := p.db.Select("role").First(&inst, id).Error; err != nil {
@@ -238,7 +238,7 @@ func (p *ProvisionService) InstanceRoleFor(id uint) (model.InstanceRole, error) 
 	return inst.Role, nil
 }
 
-// RebuildInstance 重建损毁实例（FR-342）：复用已存搭建参数（ProvisionSpec）重跑搭建到既有工作目录，
+// RebuildInstance 重建损毁实例：复用已存搭建参数（ProvisionSpec）重跑搭建到既有工作目录，
 // 无需重填。仅 DAMAGED 且有 ProvisionSpec 的实例可重建；成功→STOPPED，失败→仍 DAMAGED。
 // 起后台任务（任务中心可见进度），返回任务 ID。
 func (p *ProvisionService) RebuildInstance(ctx context.Context, instanceID uint, createdBy uint) (string, error) {
@@ -264,7 +264,7 @@ func (p *ProvisionService) RebuildInstanceWithBaseURL(ctx context.Context, insta
 	if p.tasks == nil {
 		return "", fmt.Errorf("重建需任务中心底座")
 	}
-	// binary 实例（FR-441）走二进制重建：取件方式与 MC 核心完全不同，且不重解析核心版本。
+	// binary 实例走二进制重建：取件方式与 MC 核心完全不同，且不重解析核心版本。
 	if IsBinaryCore(req.CoreType) {
 		return p.rebuildBinaryInstance(ctx, &inst, req, createdBy, probeBaseURL)
 	}
@@ -322,10 +322,12 @@ func (p *ProvisionService) createProvisionInstance(req ProvisionServerRequest, c
 		return nil, err
 	}
 	return p.instance.Create(CreateInstanceRequest{
-		NodeID:      req.NodeID,
-		Name:        req.Name,
-		Type:        model.InstanceTypeMinecraftJava,
-		Role:        model.InstanceRoleBackend,
+		NodeID: req.NodeID,
+		Name:   req.Name,
+		Type:   model.InstanceTypeMinecraftJava,
+		Role:   model.InstanceRoleBackend,
+		// 类别由本次搭建选的 coreType 决定：比事后按 type+role 推断准。
+		Kind:        KindForCoreType(req.CoreType),
 		ProcessType: model.ProcessTypeDaemon,
 		JDKID:       req.JDKID,
 		LaunchSpec:  string(specJSON),
@@ -366,7 +368,7 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 	return p.ProvisionServer(ctx, req)
 }
 
-// NodePorts 返回某节点的端口占用与分配范围（FR-032：系统分配端口的可视化）。
+// NodePorts 返回某节点的端口占用与分配范围（：系统分配端口的可视化）。
 func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
 	var node model.Node
 	if err := p.db.First(&node, nodeID).Error; err != nil {
@@ -383,7 +385,7 @@ func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
 }
 
 // provisionOnWorker 在 Worker 上下载/安装核心并写入 eula.txt / server.properties。
-// stage 非 nil 时各阶段经任务中心上报（FR-319/323）；nil = 旧同步路径不上报。
+// stage 非 nil 时各阶段经任务中心上报（323）；nil = 旧同步路径不上报。
 func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool, stageFn func(int, string)) error {
 	return p.provisionOnWorkerWithBaseURL(ctx, inst, core, onlineMode, stageFn, "")
 }
@@ -414,7 +416,7 @@ func (p *ProvisionService) provisionOnWorkerWithBaseURL(ctx context.Context, ins
 		if err != nil {
 			return err
 		}
-		// stage 文案区分「缓存命中/下载中」（FR-330）：命中免远程下载，任务轨迹一眼可辨。
+		// stage 文案区分「缓存命中/下载中」：命中免远程下载，任务轨迹一眼可辨。
 		if cacheHit {
 			stage(60, "核心缓存命中：已从节点缓存秒级复用，跳过远程下载")
 		} else {
@@ -443,7 +445,7 @@ func (p *ProvisionService) provisionOnWorkerWithBaseURL(ctx context.Context, ins
 		}
 	}
 
-	// 部署 ServerProbe 监控探针（FR-010/409）：只下发 CP 本地 jar 下载引用；
+	// 部署 ServerProbe 监控探针（409）：只下发 CP 本地 jar 下载引用；
 	// 未选择已缓存版本时跳过。探针为辅助监控，部署失败仅告警、不阻断建服。
 	stage(85, "部署监控探针 …")
 	if err := p.deployServerProbe(ctx, inst, &node, probeBaseURL); err != nil {
@@ -488,7 +490,7 @@ func (p *ProvisionService) deployServerProbe(ctx context.Context, inst *model.In
 	return nil
 }
 
-// downloadSingleCore 委托 Worker 下载核心，返回是否节点缓存命中（FR-330 stage 文案用）。
+// downloadSingleCore 委托 Worker 下载核心，返回是否节点缓存命中（stage 文案用）。
 // 组合缓存键成分（CoreType/MCVersion/Build）随请求下发：ResolveBuild 已把 latest/未指定构建
 // 解析为具体构建，无 sha256 源（Sponge Maven 等）在 Worker 侧按组合键复用缓存。
 func (p *ProvisionService) downloadSingleCore(ctx context.Context, client *cpgrpc.Client, inst *model.Instance, core *CoreInfo) (bool, error) {
@@ -561,10 +563,10 @@ func stringOr(v, fallback string) string {
 
 // buildServerProbeConfig 生成实例的 ServerProbe config.yml：仅本机开启 /metrics 端点于分配的
 // probe 端口，token 留空依赖本机 IP 白名单（探针与 Worker 同机，Worker 抓 localhost）。
-// bridgeBlock 为插件桥配置段（FR-065，见 ADR-016）；为空时 config 不含 bridge 段（探针只跑 /metrics）。
+// bridgeBlock 为插件桥配置段（见 ADR-016）；为空时 config 不含 bridge 段（探针只跑 /metrics）。
 func buildServerProbeConfig(probePort int, bridgeBlock string) string {
 	var b strings.Builder
-	b.WriteString("# 本文件由 JianManager 建服时自动生成：开启 ServerProbe /metrics 供 Worker 抓取（FR-010）。\n")
+	b.WriteString("# 本文件由 JianManager 建服时自动生成：开启 ServerProbe /metrics 供 Worker 抓取。\n")
 	b.WriteString("# 仅本机回环可访问；如需远程 Prometheus 抓取请改 host 并配置 token/allowed-ips。\n")
 	b.WriteString("metrics:\n")
 	b.WriteString("  enabled: true\n")
@@ -580,7 +582,7 @@ func buildServerProbeConfig(probePort int, bridgeBlock string) string {
 	return b.String()
 }
 
-// bridgeConfigBlock 为实例签发插件桥 token 并生成探针 config.yml 的 bridge 段（FR-065）。
+// bridgeConfigBlock 为实例签发插件桥 token 并生成探针 config.yml 的 bridge 段。
 // bridge 服务未注入或签发失败时返回空串（探针不连反向 WS，监控 /metrics 不受影响、建服不阻断）。
 func (p *ProvisionService) bridgeConfigBlock(instanceUUID string, wsPort int) string {
 	if p.bridge == nil {
@@ -595,11 +597,11 @@ func (p *ProvisionService) bridgeConfigBlock(instanceUUID string, wsPort int) st
 }
 
 // buildServerProperties 生成基础 server.properties：分配的 server-port、按 onlineMode 设正版校验
-// （代理转发场景传 false）与 query。RCON 已退役（FR-067，见 ADR-016）：治理改走 ServerProbe 探针，
+// （代理转发场景传 false）与 query。RCON 已退役（见 ADR-016）：治理改走 ServerProbe 探针，
 // 不再开启 rcon，去除额外暴露面。
 func buildServerProperties(serverPort, queryPort int, onlineMode bool) string {
 	var b strings.Builder
-	b.WriteString("# 由 JianManager 一键开服生成（FR-034/046）\n")
+	b.WriteString("# 由 JianManager 一键开服生成（046）\n")
 	fmt.Fprintf(&b, "server-port=%d\n", serverPort)
 	fmt.Fprintf(&b, "online-mode=%t\n", onlineMode)
 	b.WriteString("enable-query=true\n")

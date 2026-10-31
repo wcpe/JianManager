@@ -1,26 +1,18 @@
 import { create } from 'zustand'
-import type { CardType } from '@/lib/workspace-card'
-import {
-  builtinPresets,
-  defaultOpsPreset,
-  deserializePresets,
-  layoutToCards,
-  makeCard,
-  serializePresets,
-  PRESETS_STORAGE_KEY,
-  type PlacedCard,
-  type WorkspacePreset,
-} from '@/lib/workspace-preset'
-import { dedupeCards, dragPayloadToCards, type DragPayload } from '@/lib/instance-library'
+import type { CardType } from '@/lib/console/workspace-card'
+import { builtinPresets, defaultOpsPreset, deserializePresets, layoutToCards, makeCard, serializePresets, PRESETS_STORAGE_KEY } from '@/lib/console/workspace-preset'
+import type { PlacedCard, WorkspacePreset } from '@/lib/console/workspace-preset'
+import { dedupeCards, dragPayloadToCards } from '@/lib/instances/instance-library'
+import type { DragPayload } from '@/lib/instances/instance-library'
 
-/**
- * 可组合工作区状态（FR-166 单实例 / FR-167 跨实例超级工作台 / ADR-034 取代 ADR-030）。
+/** 
+ * 可组合工作区状态（单实例跨实例超级工作台 / ADR-034 取代 ADR-030）。
  *
  * 承 ADR-034 的「状态外提 + 惰性挂载」：画布维护卡片树（哪些卡、各卡 layout、实例 id），
  * 各卡自管 dirty（在卡组件内部，store 不持久化草稿）；非激活/未挂载卡不建 WS。
  * 预设为命名布局快照，**个人级**先 `localStorage` 持久（纯函数 `lib/workspace-preset`）。
  *
- * **两种作用域并存（FR-167）**：
+ * **两种作用域并存**：
  * - 单实例画布（`canvasByInstance[instanceId]`）：卡片限当前实例，卡省略 instanceId，按实例 id 记忆。
  * - 超级工作台（`superCanvas`）：跨实例，卡显式携带 instanceId，同画布并存多实例卡（监看墙）。
  *
@@ -53,8 +45,8 @@ function persistUserPresets(presets: WorkspacePreset[]): void {
   localStorage.setItem(PRESETS_STORAGE_KEY, serializePresets(presets))
 }
 
-/**
- * 克隆预设的卡片并赋新 id，避免不同画布/多次应用共享同一卡 id；保留 instanceId（FR-167）。
+/** 
+ * 克隆预设的卡片并赋新 id，避免不同画布/多次应用共享同一卡 id；保留 instanceId。
  */
 function instantiateCards(preset: WorkspacePreset): PlacedCard[] {
   return preset.cards.map((c) => makeCard(c.type, { ...c.layout }, c.instanceId))
@@ -71,14 +63,14 @@ function bottomOf(cards: PlacedCard[]): number {
 }
 
 interface WorkspaceState {
-  /** 每实例画布运行态，按实例 id 记忆（FR-166 单实例作用域）。 */
+  /** 每实例画布运行态，按实例 id 记忆（单实例作用域）。 */
   canvasByInstance: Record<number, Canvas>
-  /** 超级工作台跨实例画布（FR-167）；首次访问惰性以空画布初始化。 */
+  /** 超级工作台跨实例画布；首次访问惰性以空画布初始化。 */
   superCanvas: Canvas | null
   /** 个人级用户预设（持久化 localStorage；两作用域共享）。 */
   userPresets: WorkspacePreset[]
 
-  // —— 单实例作用域（FR-166，签名不变） ——
+  // —— 单实例作用域（签名不变） ——
   /** 取某实例画布；不存在时惰性以默认「运维台」初始化（写回）。 */
   ensureCanvas: (instanceId: number) => Canvas
   /** 应用预设到某实例画布（内置或用户），卡片重新实例化为新 id。 */
@@ -94,7 +86,7 @@ interface WorkspaceState {
   /** 把某实例当前画布另存为命名用户预设；返回新预设 id。 */
   savePresetAs: (instanceId: number, name: string) => string
 
-  // —— 超级工作台作用域（FR-167，跨实例） ——
+  // —— 超级工作台作用域（跨实例） ——
   /** 取超级工作台画布；不存在时惰性以空画布初始化（写回）。 */
   ensureSuperCanvas: () => Canvas
   /** 应用预设到超级工作台（卡片携 instanceId 重新实例化为新 id）。 */

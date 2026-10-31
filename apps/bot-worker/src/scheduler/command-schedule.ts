@@ -1,5 +1,5 @@
-/**
- * FR-369 通用 Bot 命令编排：Bot Worker 本地集中 scheduler。
+/** 
+ *通用 Bot 命令编排：Bot Worker 本地集中 scheduler。
  *
  * 单一职责：每个 scheduleRunId 由一个本地 scheduler 统一管理 occurrence 计划；
  *  - 每个 occurrence 有唯一 actionRunId（CP 冻结，本地不再生成）；

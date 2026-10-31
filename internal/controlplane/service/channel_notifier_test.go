@@ -192,7 +192,7 @@ func TestValidWebhookURL(t *testing.T) {
 	assert.False(t, validWebhookURL("not a url"))
 }
 
-// ── QQ 通道（FR-494）──
+// ── QQ 通道──
 
 // TestChannelNotifier_QQCredentialEnvRef 明文 appSecret 必须被拒，${ENV_VAR} 形式通过。
 func TestChannelNotifier_QQCredentialEnvRef(t *testing.T) {

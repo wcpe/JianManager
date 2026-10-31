@@ -21,7 +21,7 @@ var ErrRoleExists = errors.New("角色 key 已存在")
 // ErrOverrideInvalid 非法覆盖项。
 var ErrOverrideInvalid = errors.New("非法权限覆盖项")
 
-// PermissionService 角色模板 / 用户覆盖 / 有效权限（FR-432）。
+// PermissionService 角色模板 / 用户覆盖 / 有效权限。
 type PermissionService struct {
 	db *gorm.DB
 }

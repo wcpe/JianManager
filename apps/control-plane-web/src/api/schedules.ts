@@ -2,20 +2,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /** 定时任务（与后端 model.Schedule 对齐）。 */
-export interface ScheduleInfo {
-  id: number
-  uuid: string
-  instanceId: number
-  name: string
-  cronExpr: string
-  /** 动作：start / stop / restart / command / backup。 */
-  action: string
-  /** action=command 时的命令文本（后端 model.Schedule.Payload，FR-153）。 */
-  payload: string
-  enabled: boolean
-  lastRun: string | null
-  createdAt: string
-}
+// 定时任务契约已回迁应用侧（受控视图与业务页面共用，ADR-103）；此处原样再导出，调用点无需改动。
+import type { ScheduleInfo } from '@/lib/schedules/schedule'
+export type { ScheduleInfo } from '@/lib/schedules/schedule'
+export type { CreateScheduleBody, UpdateScheduleBody } from '@/lib/schedules/schedule'
+import type { CreateScheduleBody, UpdateScheduleBody } from '@/lib/schedules/schedule'
 
 /** 定时任务执行日志（与后端 model.ScheduleExecutionLog 对齐）。 */
 export interface ScheduleLogInfo {
@@ -38,24 +29,6 @@ export interface ScheduleLogPage {
   pageSize: number
 }
 
-/** 创建定时任务请求体（与后端 CreateScheduleRequest 对齐）。 */
-export interface CreateScheduleBody {
-  instanceId: number
-  name: string
-  cronExpr: string
-  action: string
-  /** action=command 时携带的命令文本（后端存入 payload）。 */
-  payload?: string
-}
-
-/** 更新定时任务请求体（后端按 PUT /schedules/:id 仅接收这三个可选字段）。 */
-export interface UpdateScheduleBody {
-  cronExpr?: string
-  enabled?: boolean
-  action?: string
-  /** action=command 时携带的命令文本，使编辑可改命令（FR-153）。 */
-  payload?: string
-}
 
 /** 获取定时任务列表（可按实例过滤）。 */
 export function useSchedules(instanceId?: number) {

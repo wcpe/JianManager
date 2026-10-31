@@ -17,7 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/version"
 )
 
-// SelfUpdateHandler 面板自更新路由（FR-081，见 ADR-020 §4）。
+// SelfUpdateHandler 面板自更新路由（见 ADR-020 §4）。
 // 挂在平台管理员组下（仅平台管理员）；升级类操作写审计（detail 仅含版本，绝不含下载凭据）。
 type SelfUpdateHandler struct {
 	svc   *service.SelfUpdateService
@@ -40,11 +40,11 @@ type upgradeAllRequest struct {
 	Version string `json:"version"`
 	// NodeIDs 限定升级的节点；留空=全部在线节点。
 	NodeIDs []uint `json:"nodeIds"`
-	// CanarySize 金丝雀节点数：先行升级这么多个（0=无金丝雀，FR-155）。
+	// CanarySize 金丝雀节点数：先行升级这么多个（0=无金丝雀）。
 	CanarySize int `json:"canarySize"`
-	// BatchSize 金丝雀之后剩余节点的分批大小（<=0=剩余全部一批，等价原行为，FR-155）。
+	// BatchSize 金丝雀之后剩余节点的分批大小（<=0=剩余全部一批，等价原行为）。
 	BatchSize int `json:"batchSize"`
-	// AbortOnCanaryFailure 金丝雀有失败即中止、剩余不升级（FR-155）。
+	// AbortOnCanaryFailure 金丝雀有失败即中止、剩余不升级。
 	AbortOnCanaryFailure bool `json:"abortOnCanaryFailure"`
 }
 
@@ -53,7 +53,7 @@ type cacheWorkerAssetRequest struct {
 	Arch string `json:"arch"`
 }
 
-// Check GET /self-update/check — 返回服务端缓存的上次检查结果（FR-186）。
+// Check GET /self-update/check — 返回服务端缓存的上次检查结果。
 // 不触发 live 网络调用，毫秒级返回；缓存空时返回 cached=false，由前端据此触发 refresh。
 // live 检查走 POST /self-update/check/refresh。
 func (h *SelfUpdateHandler) Check(c *gin.Context) {
@@ -65,7 +65,7 @@ func (h *SelfUpdateHandler) Check(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// RefreshCheck POST /self-update/check/refresh — 显式 live 检查更新并更新缓存（FR-186）。
+// RefreshCheck POST /self-update/check/refresh — 显式 live 检查更新并更新缓存。
 // 经更新源在线拉取 + 逐节点 RPC，成功覆盖缓存并返回最新结果；失败透出错误码但**不清缓存**。
 func (h *SelfUpdateHandler) RefreshCheck(c *gin.Context) {
 	res, err := h.svc.RefreshCheck(c.Request.Context())
@@ -120,7 +120,7 @@ func (h *SelfUpdateHandler) UpgradeNode(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"status": "upgrading", "nodeId": id, "fromVersion": from, "toVersion": to})
 }
 
-// RollbackControlPlane POST /self-update/control-plane/rollback — 回滚 CP 自身到升级前备份（FR-182）。
+// RollbackControlPlane POST /self-update/control-plane/rollback — 回滚 CP 自身到升级前备份。
 func (h *SelfUpdateHandler) RollbackControlPlane(c *gin.Context) {
 	from, to, err := h.svc.RollbackControlPlane(c.Request.Context())
 	if err != nil {
@@ -131,7 +131,7 @@ func (h *SelfUpdateHandler) RollbackControlPlane(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"status": "restarting", "fromVersion": from, "toVersion": to})
 }
 
-// RollbackNode POST /self-update/nodes/:id/rollback — 回滚单个节点到其升级前备份（FR-182）。
+// RollbackNode POST /self-update/nodes/:id/rollback — 回滚单个节点到其升级前备份。
 func (h *SelfUpdateHandler) RollbackNode(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -153,7 +153,7 @@ func (h *SelfUpdateHandler) UpgradeAll(c *gin.Context) {
 		slog.Debug("批量自更新请求体按零值处理", "error", err)
 	}
 
-	// FR-155：金丝雀 + 分批参数经 RolloutOptions 透传；零值=原「串行全部」行为。
+	// 金丝雀 + 分批参数经 RolloutOptions 透传；零值=原「串行全部」行为。
 	ro, err := h.svc.StartRolloutWithOptions(c.Request.Context(), req.NodeIDs, req.Version, selfUpdateRequestBaseURL(c), service.RolloutOptions{
 		CanarySize:           req.CanarySize,
 		BatchSize:            req.BatchSize,
@@ -179,7 +179,7 @@ func (h *SelfUpdateHandler) Rollout(c *gin.Context) {
 	c.JSON(http.StatusOK, h.svc.RolloutSnapshot())
 }
 
-// ListWorkerAssets GET /self-update/worker-assets — 查看 CP 本地 Worker 二进制缓存元信息（FR-190）。
+// ListWorkerAssets GET /self-update/worker-assets — 查看 CP 本地 Worker 二进制缓存元信息。
 func (h *SelfUpdateHandler) ListWorkerAssets(c *gin.Context) {
 	items, err := h.svc.ListWorkerAssets()
 	if err != nil {
@@ -189,7 +189,7 @@ func (h *SelfUpdateHandler) ListWorkerAssets(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
-// CacheWorkerAsset POST /self-update/worker-assets/cache — 手动预缓存目标平台 Worker 二进制（FR-190）。
+// CacheWorkerAsset POST /self-update/worker-assets/cache — 手动预缓存目标平台 Worker 二进制。
 func (h *SelfUpdateHandler) CacheWorkerAsset(c *gin.Context) {
 	var req cacheWorkerAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -210,7 +210,7 @@ func (h *SelfUpdateHandler) CacheWorkerAsset(c *gin.Context) {
 	c.JSON(http.StatusOK, entry)
 }
 
-// DownloadWorkerAsset GET /worker-assets/:version/:os/:arch/worker — 短 token 保护的 Worker 二进制下载端点（FR-190）。
+// DownloadWorkerAsset GET /worker-assets/:version/:os/:arch/worker — 短 token 保护的 Worker 二进制下载端点。
 func (h *SelfUpdateHandler) DownloadWorkerAsset(c *gin.Context) {
 	assetVersion := c.Param("version")
 	goos := c.Param("os")

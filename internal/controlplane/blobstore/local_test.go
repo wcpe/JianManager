@@ -78,7 +78,7 @@ func TestLocalStore_OpenStatDeleteList(t *testing.T) {
 	require.ErrorIs(t, err, ErrBlobNotFound)
 }
 
-// TestLocalStore_ListPage_Cursor ListPage 以末键游标分页（FR-349）：跨页全量、字典序、无重复。
+// TestLocalStore_ListPage_Cursor ListPage 以末键游标分页：跨页全量、字典序、无重复。
 func TestLocalStore_ListPage_Cursor(t *testing.T) {
 	store, root := newLocalStore(t)
 	want := []string{

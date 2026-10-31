@@ -16,6 +16,11 @@
 
 ## 索引（最近新增）
 
+- [ADR-107](107-business-event-cursor-ledger.md) 业务事件位点账本——不落 payload 的可恢复投递（**精化 ADR-106 边界而非突破**：位点是传输元数据、payload 才是业务数据；新增 `business_event_cursors` 表与 `GET /business/cursor`，只存/只返位点，差集由业务台计算）
+- [ADR-106](106-business-capability-retirement.md) 业务能力退役（JM 不持有任何业务语义与业务数据表，只保留纯透传通道）
+- [ADR-105](105-ai-assistant-in-go-cp.md) AI 助手内置在 Go Control Plane（FR-514～520 的根决策：纯 Go 进程内实现、人类 JWT 与 jmat Token 两条授权链、写入逐调用确认、外部 MCP 仅远程 Streamable HTTP；**不改动 `/api/v1/mcp` 契约**）
+- [ADR-104](104-danger-gate-self-judged.md) 危险操作的角色门禁由 DangerConfirm 自行判定（**修订 ADR-103** 保留的 a+b 范式中的门禁归属一环：删除 `allowed` prop，漏配即静默空转的失效模式随之消失）
+- [ADR-103](103-business-views-return-to-app.md) 业务视图与业务契约退回应用，组件库回归设计系统（收起「业务组件并入包」的归属决策；a+b 双范式作为组件写法保留，包内只留设计系统）
 - [ADR-101](101-manual-gap-abandonment-with-audit-trail.md) 永久空洞只许人工裁定放弃且必须留痕（结构化凭据 + 操作人闸 + 回收链带上界放行；FR-474 配套）
 - [ADR-100](100-archive-generation-ownership-enforcement.md) 归档代次归属必须有执行体（禁止"假设当前代次"；FR-474/475 配套）
 - [ADR-099](099-log-cost-governance-and-invariant-r.md) 日志成本治理与不变量 R（采样折叠/默认不丢/单位成本结论；FR-501 配套）

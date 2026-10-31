@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// Agent 调用客户端约定值（FR-390）。
+// Agent 调用客户端约定值。
 const (
 	AgentClientMCP     = "mcp"
 	AgentClientJmagent = "jmagent"
@@ -43,7 +43,7 @@ var agentClientAllow = map[string]struct{}{
 	AgentClientUnknown: {},
 }
 
-// AgentCallLogService Agent 调用流水（FR-390）。
+// AgentCallLogService Agent 调用流水。
 // 供 Ops 中间件/handler 与日后 MCP 路径调用 Record；失败只打 WARN 不阻断主请求。
 type AgentCallLogService struct {
 	db            *gorm.DB

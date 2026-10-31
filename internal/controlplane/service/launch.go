@@ -22,7 +22,7 @@ type LaunchSpec struct {
 	JavaArgFiles []string `json:"javaArgFiles,omitempty"`
 	// ExtraArgs 传给服务端的额外参数（`nogui` 已默认附加，无需重复）。
 	ExtraArgs []string `json:"extraArgs"`
-	// OmitNogui 为 true 时不追加 `nogui`（代理 Velocity/BungeeCord 不接受该参数，FR-035）。
+	// OmitNogui 为 true 时不追加 `nogui`（代理 Velocity/BungeeCord 不接受该参数）。
 	OmitNogui bool `json:"omitNogui,omitempty"`
 }
 

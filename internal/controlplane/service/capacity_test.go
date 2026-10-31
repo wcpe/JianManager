@@ -23,7 +23,7 @@ func linearPoints(n int, dt, base, slope, noise float64) []TrendPoint {
 	return pts
 }
 
-// TestForecastLinear_ExactSlope 纯线性序列的 Theil–Sen 斜率与残差精确可断言（FR-464）。
+// TestForecastLinear_ExactSlope 纯线性序列的 Theil–Sen 斜率与残差精确可断言。
 func TestForecastLinear_ExactSlope(t *testing.T) {
 	pts := linearPoints(50, 60, 1000, 0.5, 0)
 	lf := ForecastLinear(pts)
@@ -84,7 +84,7 @@ func forecastSeed(t *testing.T, svc *MetricService) (nodeUUID string, from, to t
 	return nodeUUID, from, to
 }
 
-// TestMetric_ForecastCapacity_Growth 有增长时给出耗尽时间与 80% CI（FR-464 验收 4）。
+// TestMetric_ForecastCapacity_Growth 有增长时给出耗尽时间与 80% CI（验收 4）。
 func TestMetric_ForecastCapacity_Growth(t *testing.T) {
 	svc := newMetricSvc(t)
 	nodeUUID, from, to := forecastSeed(t, svc)

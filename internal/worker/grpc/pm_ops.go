@@ -7,12 +7,12 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// SetPkgManager 注入包管理器（FR-306）。由 main 装配；不注入则 PM 配置 RPC 返回明确错误。
+// SetPkgManager 注入包管理器。由 main 装配；不注入则 PM 配置 RPC 返回明确错误。
 func (s *Server) SetPkgManager(m *pkgmgr.Manager) {
 	s.pkgMgr = m
 }
 
-// GetPMConfig 读取节点包管理器与 registry 配置（FR-306）。
+// GetPMConfig 读取节点包管理器与 registry 配置。
 func (s *Server) GetPMConfig(ctx context.Context, req *workerpb.GetPMConfigRequest) (*workerpb.GetPMConfigResponse, error) {
 	if s.pkgMgr == nil {
 		return &workerpb.GetPMConfigResponse{Pm: "npm"}, nil
@@ -27,7 +27,7 @@ func (s *Server) GetPMConfig(ctx context.Context, req *workerpb.GetPMConfigReque
 	}, nil
 }
 
-// SetPMConfig 设置 PM 偏好（corepack 激活 pnpm/yarn）并写托管 .npmrc（FR-306）。
+// SetPMConfig 设置 PM 偏好（corepack 激活 pnpm/yarn）并写托管 .npmrc。
 func (s *Server) SetPMConfig(ctx context.Context, req *workerpb.SetPMConfigRequest) (*workerpb.SetPMConfigResponse, error) {
 	if s.pkgMgr == nil {
 		return &workerpb.SetPMConfigResponse{Success: false, Error: "节点未启用包管理器"}, nil

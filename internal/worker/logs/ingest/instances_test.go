@@ -43,7 +43,7 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	require.False(t, restarted.CutoverReadiness().LedgerReady)
 	require.ErrorContains(t, restarted.ResolveCoveredGaps(context.Background()), "projection alone cannot resolve")
 
-	// 显式人工确认路径（FR-485 后续）：自动路径对 Raw 写失败一律拒绝，
+	// 显式人工确认路径（后续）：自动路径对 Raw 写失败一律拒绝，
 	// 而**指名源**的解法应成功——这正是「自动拒绝 vs 管理员显式确认」的分工。
 	// 旧调用（不传参=整节点）行为未改动，由上一条断言守住。
 	var stdoutKey string

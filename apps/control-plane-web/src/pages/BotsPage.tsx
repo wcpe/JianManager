@@ -1,112 +1,84 @@
-import { useMemo, useState, type FormEvent } from 'react'
+// 分组总览的展示件已回迁应用侧（迁包已撤销，见 ADR-103）：分组操作区、分组行与成员窥视在包内；
+// 本层保留取数（概览 summary / 窥视 bots / 批量 mutation）、路由跳转与提示。
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import {
-  useBots,
-  useBot,
-  useBotEvents,
-  useBotSummary,
-  useBotBatch,
-  useCreateBot,
-  useCreateBotStressSession,
-  useSendBotCommand,
-  type BotInfo,
-  type BotRealtimeEvent,
-  type BotSummaryGroup,
-  type BotBatchAction,
-  type BotListParams,
-} from '@/api/bots'
-import { useInstances } from '@/api/instances'
+import { useBots, useBot, useBotEvents, useBotSummary, useBotBatch, useCreateBot, useCreateBotStressSession, useSendBotCommand, type BotBatchAction, type BotListParams, type BotSummaryGroup } from '@/api/bots'
 import { useNodes } from '@/api/nodes'
-import { useDebounced } from '@/lib/use-debounced'
-import { useTabParam } from '@/lib/use-tab-param'
-import { BOTS_TABS, type BotsTab } from '@/lib/bot-load/url-state'
+import { useDebounced } from '@/lib/hooks/use-debounced'
+import { useTabParam } from '@/lib/hooks/use-tab-param'
+import { BOTS_TABS } from '@/lib/bot-load/bot-load-url-state'
+import type { BotsTab } from '@/lib/bot-load/bot-load-url-state'
 import BotLoadSessionsTab from '@/pages/bots/BotLoadSessionsTab'
 import BotLoadTemplatesTab from '@/pages/bots/BotLoadTemplatesTab'
 import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
-import {
-  statusCounts,
-  toListParams,
-  groupFilter,
-  distribution,
-  GROUP_BY_DIMS,
-  BOT_STATUSES,
-  type GroupByDim,
-  type OverviewFilter,
-  type BotStatusCounts,
-  type Distribution,
-} from './bots-overview'
-import { BotHealthBar } from '@/components/console/BotHealthBar'
-import { BotWorktableCard } from '@/components/console/BotWorktableCard'
-import DangerConfirm from '@/components/DangerConfirm'
-import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
-import { Activity, Plus, Send } from 'lucide-react'
+import { statusCounts, toListParams, groupFilter, distribution } from '@/lib/bots/bots-overview'
+import type { GroupByDim, OverviewFilter } from '@/lib/bots/bots-overview'
+import { SummaryCards } from '@/components/views/bots/BotListParts'
+import { BotToolbar } from '@/components/views/bots/BotToolbar'
+import { BotBatchBar } from '@/components/views/bots/BotBatchBar'
+import { BotGroupOverview } from '@/components/views/bots/BotGroupOverview'
+import { BOT_PEEK_PAGE_SIZE, BotGroupActions, BotGroupPeek, BotGroupRow } from '@/components/views/bots/BotGroupPartsView'
+import { BotStressSessionDialog } from '@/components/views/bots/BotStressSessionDialog'
+import { BotDetailDialog as BotDetailDialogView } from '@/components/views/bots/BotDetailDialog'
+import { BotWorktableCard } from '@/components/views/console/ConsoleLeafParts'
+import type { ViewMode } from '@jianmanager/ui/components/view-toggle'
+import { Plus } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
-import { Input } from '@jianmanager/ui/components/input'
-import { Checkbox } from '@jianmanager/ui/components/checkbox'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@jianmanager/ui/components/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@jianmanager/ui/components/select'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
-import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
-import { useFieldGate } from '@/lib/use-field-gate'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@jianmanager/ui/components/table'
-import { cn } from '@jianmanager/ui'
+import { PageHeader, PageShell } from '@jianmanager/ui/components/layout'
+import { InstancePicker } from '@/components/instances/InstancePicker'
+import CreateBotDialogView from '@/components/views/instances/CreateBotDialog'
 
-const SENTINEL_ALL = 'all'
+/** 
+ * Bot 详情弹窗的取数接线层（ADR-103）：视图已入包，此处注入元数据、实时流与命令下发。
+ */
+function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpenChange: (open: boolean) => void }) {
+  const { data: bot } = useBot(botId ?? 0)
+  const realtime = useBotEvents(botId)
+  const sendCommand = useSendBotCommand()
+  return (
+    <BotDetailDialogView
+      botId={botId}
+      onOpenChange={onOpenChange}
+      bot={bot}
+      realtime={realtime}
+      onSendCommand={async (command) => {
+        await sendCommand.mutateAsync({ id: botId ?? 0, command })
+      }}
+      sending={sendCommand.isPending}
+      onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+    />
+  )
+}
 
-const BEHAVIOR_OPTIONS = ['idle', 'guard', 'follow', 'patrol'] as const
+/** 
+ * 分组窥视的取数接线层（ADR-103）：展示件已入包，此处只做参数展开、页码状态与成员取数。
+ *
+ * 页码会触发重新取数，故由本层持有（与列表页码同规则）；窥视随分组展开态挂载/卸载——
+ * 收起即卸载、换组即重挂（行与卡都按 `group.key` 成键），页码自然复位为 1，与原页
+ * 「各窥视件自持页码」的行为一致。
+ */
+function BotGroupPeekContainer({ params, onOpenBot }: { params: BotListParams; onOpenBot: (id: number) => void }) {
+  const [page, setPage] = useState(1)
+  const { data, isLoading } = useBots({ ...params, page, pageSize: BOT_PEEK_PAGE_SIZE })
+  return (
+    <BotGroupPeek
+      items={data?.items}
+      total={data?.total}
+      isLoading={isLoading}
+      page={page}
+      onPage={setPage}
+      onOpenBot={onOpenBot}
+    />
+  )
+}
 
-const DEFAULT_ORCHESTRATION_YAML = `loop: true
-staggerMs: 500
-phases:
-  - durationSec: 60
-    behavior: idle
-  - durationSec: 120
-    behavior: patrol
-    target: "0,64,0;8,64,8"
-  - durationSec: 60
-    behavior: guard
-  - durationSec: 90
-    behavior: custom
-    steps:
-      - type: chat
-        message: hello
-      - type: wait
-        durationMs: 3000
-      - type: move
-        pos:
-          x: 0
-          y: 64
-          z: 0
-`
-
-/**
- * 全局 Bot 管理页（FR-040 / ADR-009 + FR-371）。
+/** 
+ * 全局 Bot 管理页（ADR-009）。
  * URL 可寻址 tab：fleet / sessions / templates；旧链接默认 fleet。
- * 舰队 tab 保持聚合优先、永不全量铺开；会话与模板由 FR-371 承接，详情页由 FR-372。
+ * 舰队 tab 保持聚合优先、永不全量铺开；会话与模板由承接，详情页由。
  */
 export default function BotsPage() {
   const { t } = useTranslation()
@@ -114,17 +86,21 @@ export default function BotsPage() {
   const [showWizard, setShowWizard] = useState(false)
 
   return (
-    <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t('bots.title')}</h1>
-        <div className="flex gap-2">
-          {(tab === 'sessions' || tab === 'templates') && (
+    // 全量对齐：外壳与页头改用布局层原语。原为裸 <div> + 手写页头，且无 data-page。
+    // 「创建运行」按钮按 tab 条件显示（仅 sessions/templates 下有意义）——PageHeader 的
+    // actions 对 falsy 会短路，故该条件可原样保留。
+    <PageShell data-page="bots">
+      <PageHeader
+        title={t('bots.title')}
+        description={t('bots.subtitle')}
+        actions={
+          (tab === 'sessions' || tab === 'templates') && (
             <Button variant="outline" onClick={() => setShowWizard(true)}>
               {t('botsLoad.createRun')}
             </Button>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
         <TabsList className="mb-4">
@@ -144,16 +120,18 @@ export default function BotsPage() {
       </Tabs>
 
       <BotLoadWizard open={showWizard} onOpenChange={setShowWizard} />
-    </div>
+    </PageShell>
   )
 }
 
-/**
- * 舰队 tab：聚合优先、永不全量铺开（FR-040 行为保持）。
+/** 
+ * 舰队 tab：聚合优先、永不全量铺开（行为保持）。
  * 页顶概览 + 分组总览；展开才分页窥视；批量经 useBotBatch 委托。
  */
 function BotFleetTab() {
   const { t } = useTranslation()
+  // 分组操作区的「在控制台打开」要跳实例深链（原在 GroupActions 内取 navigate，视图入包后上提到容器）。
+  const navigate = useNavigate()
   const [showCreate, setShowCreate] = useState(false)
   const [showStress, setShowStress] = useState(false)
   const [search, setSearch] = useState('')
@@ -161,8 +139,14 @@ function BotFleetTab() {
   const [status, setStatus] = useState<string>('')
   const [groupBy, setGroupBy] = useState<GroupByDim>('instance')
   const [detailBotId, setDetailBotId] = useState<number | null>(null)
-  // 工作台卡 ⇄ 列表视图（FR-147，§4.5）；运行实体默认卡片。
+  // 工作台卡 ⇄ 列表视图（§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>('card')
+  // 节点筛选数据源（原在 Toolbar 内取数，视图入包后上提到容器）。
+  const { data: nodes } = useNodes()
+  // 分组总览的批量与门禁（原在 GroupOverview 内，视图入包后上提到容器）。
+  const batch = useBotBatch()
+  // 压测会话创建（原在 StressSessionDialog 内，视图入包后上提到容器）。
+  const createStressSession = useCreateBotStressSession()
 
   const debouncedSearch = useDebounced(search, 300)
   const filter: OverviewFilter = useMemo(
@@ -177,11 +161,13 @@ function BotFleetTab() {
 
   // 全局概览：无 groupBy → total + byStatus（受工具栏筛选影响，便于「筛选后看分布」）
   const globalSummary = useBotSummary(baseParams)
-  // 分布计数 + 实例/节点维度总览（一并取，分组维度切换时无需重查）
+  // 分布计数 + 实例/节点维度总览（实例/节点两路恒定要用：舰队分布条与两种分组维度）
   const instanceSummary = useBotSummary({ ...baseParams, groupBy: 'instance' })
   const nodeSummary = useBotSummary({ ...baseParams, groupBy: 'node' })
-  const statusSummary = useBotSummary({ ...baseParams, groupBy: 'status' })
-  const behaviorSummary = useBotSummary({ ...baseParams, groupBy: 'behavior' })
+  // status/behavior 两路只在切到该维度时才被读：原先无条件挂 5 路 summary、每路 5s 轮询，
+  // 稳定 1 req/s，其中至少两路是纯浪费；按当前维度门控后默认只剩 3 路。
+  const statusSummary = useBotSummary({ ...baseParams, groupBy: 'status' }, { enabled: groupBy === 'status' })
+  const behaviorSummary = useBotSummary({ ...baseParams, groupBy: 'behavior' }, { enabled: groupBy === 'behavior' })
 
   const summaryByDim: Record<GroupByDim, typeof instanceSummary> = {
     instance: instanceSummary,
@@ -194,9 +180,33 @@ function BotFleetTab() {
   const counts = statusCounts(globalSummary.data)
   const dist = distribution(instanceSummary.data, nodeSummary.data)
   const groups = activeSummary.data?.groups ?? []
-  // 全局各状态精确计数，供舰队健康条多段着色（FR-147）。
+  // 全局各状态精确计数，供舰队健康条多段着色。
   const byStatus = globalSummary.data?.byStatus
   const fleetTotal = globalSummary.data?.total ?? 0
+
+  /** 
+   * 单组批量下发：目标 = 该组筛选，结果经 toast 回执（mutation 与提示都留在应用侧）。
+   * 与原页一致：成功回执带成功/失败计数，失败只报动作失败。
+   */
+  const runGroupBatch = (group: BotSummaryGroup, action: BotBatchAction, behavior?: string) =>
+    batch.mutate(
+      { action, filter: groupFilter(groupBy, group, filter), behavior },
+      {
+        onSuccess: (res) =>
+          toast.success(t('bots.batchDone', { succeeded: res.succeeded, failed: res.failed })),
+        onError: () => toast.error(t('bots.batchFailed')),
+      },
+    )
+
+  /** 分组操作区（卡片与行共用）：在控制台打开（仅实例维度）+ 单组批量菜单。 */
+  const renderGroupActions = (group: BotSummaryGroup) => (
+    <BotGroupActions
+      groupBy={groupBy}
+      onOpenInConsole={() => navigate(`/instances/${group.key}`)}
+      pending={batch.isPending}
+      onRunBatch={(action, behavior) => runGroupBatch(group, action, behavior)}
+    />
+  )
 
   return (
     <div>
@@ -217,7 +227,7 @@ function BotFleetTab() {
         byStatus={byStatus}
       />
 
-      <Toolbar
+      <BotToolbar
         search={search}
         onSearch={setSearch}
         nodeId={nodeId}
@@ -228,1217 +238,112 @@ function BotFleetTab() {
         onGroupBy={setGroupBy}
         view={view}
         onView={setView}
+        nodes={nodes}
       />
 
-      {/* key=groupBy：维度切换时重挂 GroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
-      <GroupOverview
+      {/* key=groupBy：维度切换时重挂 BotGroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
+      <BotGroupOverview
         key={groupBy}
         groupBy={groupBy}
         groups={groups}
-        baseFilter={filter}
         loading={activeSummary.isLoading}
         view={view}
-        onOpenBot={setDetailBotId}
+        renderBatchBar={({ selectedGroups, onClear }) => (
+          <BotBatchBar
+            groupBy={groupBy}
+            groups={selectedGroups}
+            baseFilter={filter}
+            onClear={onClear}
+            onBatch={(body) => batch.mutateAsync(body)}
+            batchPending={batch.isPending}
+            onNotify={(level, message) => (level === 'success' ? toast.success(message) : toast.error(message))}
+          />
+        )}
+        renderCard={({ group, checked, onCheck, expanded, onToggleExpand }) => (
+          <BotWorktableCard
+            groupBy={groupBy}
+            group={group}
+            checked={checked}
+            onCheck={onCheck}
+            expanded={expanded}
+            onToggleExpand={onToggleExpand}
+            actions={renderGroupActions(group)}
+          >
+            <BotGroupPeekContainer params={groupFilter(groupBy, group, filter)} onOpenBot={setDetailBotId} />
+          </BotWorktableCard>
+        )}
+        renderRow={({ group, checked, onCheck, expanded, onToggleExpand }) => (
+          <BotGroupRow
+            group={group}
+            checked={checked}
+            onCheck={onCheck}
+            expanded={expanded}
+            onToggleExpand={onToggleExpand}
+            actions={renderGroupActions(group)}
+            // 窥视经函数传入：折叠行不建窥视元素，保持原页「仅展开才取数」的行为。
+            renderPeek={() => (
+              <BotGroupPeekContainer params={groupFilter(groupBy, group, filter)} onOpenBot={setDetailBotId} />
+            )}
+          />
+        )}
       />
 
-      <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} />
-      <StressSessionDialog open={showStress} onOpenChange={setShowStress} />
+      <CreateBotDialogContainer open={showCreate} onOpenChange={setShowCreate} />
+      <BotStressSessionDialog
+        open={showStress}
+        onOpenChange={setShowStress}
+        onCreate={async (body) => {
+          await createStressSession.mutateAsync(body)
+        }}
+        submitting={createStressSession.isPending}
+        renderInstancePicker={(args) => <InstancePicker {...args} />}
+      />
       <BotDetailDialog botId={detailBotId} onOpenChange={(open) => { if (!open) setDetailBotId(null) }} />
     </div>
   )
 }
 
-/** 页顶概览卡片：总计/在线/连接中/异常 + 分布（X 实例·Y 节点）+ 舰队健康条（多段）。 */
-function SummaryCards({
-  counts,
-  dist,
-  loading,
-  fleetTotal,
-  byStatus,
-}: {
-  counts: BotStatusCounts
-  dist: Distribution
-  loading: boolean
-  /** 舰队 Bot 总数（健康条分母）。 */
-  fleetTotal: number
-  /** 各状态精确计数（健康条多段着色）。 */
-  byStatus?: Record<string, number>
-}) {
+/** 新建 Bot 弹窗的取数接线层（ADR-103）：视图已入包，此处注入实例选择与创建 mutation。 */
+function CreateBotDialogContainer({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
-  const cards = [
-    { key: 'total', label: t('bots.total'), value: counts.total, color: 'text-foreground' },
-    { key: 'online', label: t('bots.online'), value: counts.online, color: 'text-status-success' },
-    { key: 'connecting', label: t('bots.connecting'), value: counts.connecting, color: 'text-status-warning' },
-    { key: 'error', label: t('bots.abnormal'), value: counts.error, color: 'text-status-danger' },
-  ]
-  return (
-    <div className="mb-4 space-y-3">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        {cards.map((card) => (
-          <div key={card.key} className="rounded-xl border bg-card p-4 shadow-soft">
-            <p className="text-sm text-muted-foreground">{card.label}</p>
-            <p className={cn('mt-1 text-2xl font-bold tabular-nums', card.color)}>{loading ? '—' : card.value}</p>
-            {card.key === 'total' && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t('bots.distribution', { instances: dist.instances, nodes: dist.nodes })}
-              </p>
-            )}
-          </div>
-        ))}
-      </div>
-      {/* 舰队健康条（FR-147）：按全局 byStatus 多段着色 connected/connecting/error/stopped */}
-      {fleetTotal > 0 && (
-        <div className="rounded-xl border bg-card p-3 shadow-soft">
-          <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{t('bots.fleetHealth')}</span>
-            <LegendDot className="bg-status-success" label={t('bots.statusKind.online')} />
-            <LegendDot className="bg-status-warning" label={t('bots.statusKind.connecting')} />
-            <LegendDot className="bg-status-danger" label={t('bots.statusKind.error')} />
-            <LegendDot className="bg-muted-foreground/40" label={t('bots.status_stopped')} />
-          </div>
-          <BotHealthBar total={fleetTotal} online={counts.online} byStatus={byStatus} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** 图例点：色块 + 文案，用于舰队健康条说明各段语义。 */
-function LegendDot({ className, label }: { className: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      <span className={cn('size-2 rounded-full', className)} />
-      {label}
-    </span>
-  )
-}
-
-/** 工具栏：搜索 + 节点筛选 + 状态筛选 + 分组维度切换 + 卡/列表视图切换。 */
-function Toolbar({
-  search,
-  onSearch,
-  nodeId,
-  onNode,
-  status,
-  onStatus,
-  groupBy,
-  onGroupBy,
-  view,
-  onView,
-}: {
-  search: string
-  onSearch: (v: string) => void
-  nodeId: number | null
-  onNode: (v: number | null) => void
-  status: string
-  onStatus: (v: string) => void
-  groupBy: GroupByDim
-  onGroupBy: (v: GroupByDim) => void
-  view: ViewMode
-  onView: (v: ViewMode) => void
-}) {
-  const { t } = useTranslation()
-  const { data: nodes } = useNodes()
-
-  return (
-    <div className="mb-3 flex flex-wrap items-center gap-2">
-      <Input
-        value={search}
-        onChange={(e) => onSearch(e.target.value)}
-        placeholder={t('bots.searchPlaceholder')}
-        className="h-9 w-56"
-      />
-      <Select
-        value={nodeId === null ? SENTINEL_ALL : String(nodeId)}
-        onValueChange={(v: string) => onNode(v === SENTINEL_ALL ? null : Number(v))}
-      >
-        <SelectTrigger size="sm" className="w-40">
-          <SelectValue placeholder={t('bots.allNodes')} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={SENTINEL_ALL}>{t('bots.allNodes')}</SelectItem>
-          {nodes?.map((node) => (
-            <SelectItem key={node.id} value={String(node.id)}>
-              {node.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={status === '' ? SENTINEL_ALL : status}
-        onValueChange={(v: string) => onStatus(v === SENTINEL_ALL ? '' : v)}
-      >
-        <SelectTrigger size="sm" className="w-36">
-          <SelectValue placeholder={t('bots.allStatus')} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={SENTINEL_ALL}>{t('bots.allStatus')}</SelectItem>
-          {BOT_STATUSES.map((s) => (
-            <SelectItem key={s} value={s}>
-              {t(`bots.status_${s}`)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <div className="ml-auto flex items-center gap-2">
-        <div className="flex items-center gap-1 rounded-md border p-0.5">
-          <span className="px-2 text-xs text-muted-foreground">{t('bots.groupBy')}</span>
-          {GROUP_BY_DIMS.map((dim) => (
-            <Button
-              key={dim}
-              type="button"
-              size="xs"
-              variant={groupBy === dim ? 'default' : 'ghost'}
-              onClick={() => onGroupBy(dim)}
-            >
-              {t(`bots.groupDim_${dim}`)}
-            </Button>
-          ))}
-        </div>
-        <ViewToggle
-          value={view}
-          onChange={onView}
-          cardLabel={t('grouping.viewCard')}
-          listLabel={t('grouping.viewList')}
-        />
-      </div>
-    </div>
-  )
-}
-
-function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { t } = useTranslation()
-  const { data: instances } = useInstances()
-  const createSession = useCreateBotStressSession()
-  const [instanceId, setInstanceId] = useState('')
-  const [count, setCount] = useState('20')
-  const [namePrefix, setNamePrefix] = useState('stress')
-  const [server, setServer] = useState('')
-  const [port, setPort] = useState('25565')
-  const [auth, setAuth] = useState('offline')
-  const [behavior, setBehavior] = useState('idle')
-  const [orchestrationYaml, setOrchestrationYaml] = useState(DEFAULT_ORCHESTRATION_YAML)
-  const [error, setError] = useState('')
-  const gate = useFieldGate()
-
-  const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
-    value: String(inst.id),
-    label: inst.name,
-  }))
-  const parsedCount = Number(count)
-  const errors = validateFields(
-    { instanceId, count, namePrefix, server, port },
-    {
-      instanceId: [validateRequired],
-      count: [validateRequired, (v) => (Number(v) >= 1 && Number(v) <= 5000 ? '' : t('bots.countRange'))],
-      namePrefix: [validateRequired],
-      server: [validateRequired, validateHost],
-      port: [validateRequired, validatePort],
-    },
-  )
-
-  const reset = () => {
-    setInstanceId('')
-    setCount('20')
-    setNamePrefix('stress')
-    setServer('')
-    setPort('25565')
-    setAuth('offline')
-    setBehavior('idle')
-    setOrchestrationYaml(DEFAULT_ORCHESTRATION_YAML)
-    setError('')
-    gate.reset()
-  }
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    gate.submit()
-    if (hasErrors(errors)) return
-    setError('')
-    createSession.mutate(
-      {
-        instanceId: Number(instanceId),
-        count: parsedCount,
-        behavior,
-        namePrefix,
-        config: { server, port: Number(port), auth },
-        orchestrationYaml: orchestrationYaml.trim() ? orchestrationYaml : undefined,
-      },
-      {
-        onSuccess: () => {
-          onOpenChange(false)
-          reset()
-        },
-        onError: (err: unknown) => {
-          const msg =
-            err instanceof Error && 'response' in err
-              ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
-              : undefined
-          setError(msg || t('bots.stressCreateFailed'))
-        },
-      },
-    )
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
-        <DialogHeader>
-          <DialogTitle>{t('bots.createStressSession')}</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
-          <ScrollableDialogBody className="space-y-3 py-1">
-            {error && <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>}
-            <div className="space-y-1">
-              <FieldLabel required>{t('bots.instance')}</FieldLabel>
-              <Combobox
-                options={instanceOptions}
-                value={instanceId}
-                onChange={(v: string) => {
-                  gate.touch('instanceId')
-                  setInstanceId(v)
-                  const inst = instances?.find((i) => String(i.id) === v)
-                  if (inst) {
-                    setServer('127.0.0.1')
-                    setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
-                  }
-                }}
-                allowCustom={false}
-                placeholder={t('bots.selectInstance')}
-                invalid={!!gate.show('instanceId', errors.instanceId)}
-              />
-              <FieldError error={gate.show('instanceId', errors.instanceId)} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <FieldLabel required>{t('bots.namePrefix')}</FieldLabel>
-                <Input aria-label={t('bots.namePrefix')} value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)} onBlur={() => gate.touch('namePrefix')} />
-                <FieldError error={gate.show('namePrefix', errors.namePrefix)} />
-              </div>
-              <div className="space-y-1">
-                <FieldLabel required>{t('bots.count')}</FieldLabel>
-                <Input aria-label={t('bots.count')} value={count} type="number" onChange={(e) => setCount(e.target.value)} onBlur={() => gate.touch('count')} />
-                <FieldError error={gate.show('count', errors.count)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1">
-                <FieldLabel required>{t('bots.serverAddr')}</FieldLabel>
-                <Input aria-label={t('bots.serverAddr')} value={server} onChange={(e) => setServer(e.target.value)} onBlur={() => gate.touch('server')} aria-invalid={!!gate.show('server', errors.server)} />
-                <FieldError error={gate.show('server', errors.server)} />
-              </div>
-              <div className="space-y-1">
-                <FieldLabel required>{t('bots.port')}</FieldLabel>
-                <Input aria-label={t('bots.port')} value={port} onChange={(e) => setPort(e.target.value)} type="number" onBlur={() => gate.touch('port')} aria-invalid={!!gate.show('port', errors.port)} />
-                <FieldError error={gate.show('port', errors.port)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.authMethod')}</FieldLabel>
-                <Select value={auth} onValueChange={setAuth}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="offline">{t('bots.offline')}</SelectItem>
-                    <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.initialBehavior')}</FieldLabel>
-                <Select value={behavior} onValueChange={setBehavior}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {BEHAVIOR_OPTIONS.map((b) => (
-                      <SelectItem key={b} value={b}>{t(`bots.${b}`)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <FieldLabel>{t('bots.orchestrationYaml')}</FieldLabel>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setOrchestrationYaml(DEFAULT_ORCHESTRATION_YAML)}
-                >
-                  {t('bots.restoreTemplate')}
-                </Button>
-              </div>
-              <textarea
-                aria-label={t('bots.orchestrationYaml')}
-                className="min-h-72 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm leading-5 shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
-                value={orchestrationYaml}
-                onChange={(e) => setOrchestrationYaml(e.target.value)}
-                spellCheck={false}
-              />
-            </div>
-          </ScrollableDialogBody>
-          <DialogFooter className="pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                onOpenChange(false)
-                reset()
-              }}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={createSession.isPending || hasErrors(errors)}>
-              {createSession.isPending ? t('common.creating') : t('common.create')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/** 分组总览：每组一卡/行（含多段健康条 + 总数 + 批量 + 展开窥视 + 在控制台打开）。 */
-function GroupOverview({
-  groupBy,
-  groups,
-  baseFilter,
-  loading,
-  view,
-  onOpenBot,
-}: {
-  groupBy: GroupByDim
-  groups: BotSummaryGroup[]
-  baseFilter: OverviewFilter
-  loading: boolean
-  view: ViewMode
-  onOpenBot: (id: number) => void
-}) {
-  const { t } = useTranslation()
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-
-  const selectedGroups = useMemo(
-    () => groups.filter((g) => selected.has(g.key)),
-    [groups, selected],
-  )
-
-  const toggle = (key: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  const toggleExpand = (key: string) => setExpanded((cur) => (cur === key ? null : key))
-
-  if (loading) {
-    return <p className="text-muted-foreground">{t('common.loading')}</p>
-  }
-
-  return (
-    <div className="space-y-3">
-      {selectedGroups.length > 0 && (
-        <BatchBar
-          groupBy={groupBy}
-          groups={selectedGroups}
-          baseFilter={baseFilter}
-          onClear={() => setSelected(new Set())}
-        />
-      )}
-
-      {groups.length === 0 ? (
-        <p className="rounded-lg border py-10 text-center text-muted-foreground">{t('bots.empty')}</p>
-      ) : view === 'card' ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {groups.map((group) => (
-            <BotWorktableCard
-              key={group.key}
-              groupBy={groupBy}
-              group={group}
-              checked={selected.has(group.key)}
-              onCheck={() => toggle(group.key)}
-              expanded={expanded === group.key}
-              onToggleExpand={() => toggleExpand(group.key)}
-              actions={<GroupActions groupBy={groupBy} group={group} baseFilter={baseFilter} />}
-            >
-              <GroupPeek params={groupFilter(groupBy, group, baseFilter)} onOpenBot={onOpenBot} />
-            </BotWorktableCard>
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-lg border">
-          <Table>
-            <TableHeader className="bg-muted/50">
-              <TableRow>
-                <TableHead className="w-10" />
-                <TableHead>{t(`bots.groupDim_${groupBy}`)}</TableHead>
-                <TableHead className="w-[34%]">{t('bots.health')}</TableHead>
-                <TableHead className="w-20 text-right">{t('bots.count')}</TableHead>
-                <TableHead className="w-44 text-right">{t('bots.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {groups.map((group) => (
-                <GroupRow
-                  key={group.key}
-                  groupBy={groupBy}
-                  group={group}
-                  baseFilter={baseFilter}
-                  checked={selected.has(group.key)}
-                  onCheck={() => toggle(group.key)}
-                  expanded={expanded === group.key}
-                  onToggleExpand={() => toggleExpand(group.key)}
-                  onOpenBot={onOpenBot}
-                />
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** 分组操作区（卡片/行复用）：在控制台打开（仅实例维度）+ 单组批量菜单。 */
-function GroupActions({
-  groupBy,
-  group,
-  baseFilter,
-}: {
-  groupBy: GroupByDim
-  group: BotSummaryGroup
-  baseFilter: OverviewFilter
-}) {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const openInConsole = () => navigate(`/instances/${group.key}`)
-  return (
-    <>
-      {groupBy === 'instance' && (
-        <Button variant="ghost" size="xs" onClick={openInConsole}>
-          {t('bots.openInConsole')}
-        </Button>
-      )}
-      <GroupBatchMenu groupBy={groupBy} group={group} baseFilter={baseFilter} />
-    </>
-  )
-}
-
-/** 单个分组行（列表视图）：勾选 + 标签 + 健康条 + 总数 + 操作（批量/在控制台打开/展开）。 */
-function GroupRow({
-  groupBy,
-  group,
-  baseFilter,
-  checked,
-  onCheck,
-  expanded,
-  onToggleExpand,
-  onOpenBot,
-}: {
-  groupBy: GroupByDim
-  group: BotSummaryGroup
-  baseFilter: OverviewFilter
-  checked: boolean
-  onCheck: () => void
-  expanded: boolean
-  onToggleExpand: () => void
-  onOpenBot: (id: number) => void
-}) {
-  const { t } = useTranslation()
-
-  return (
-    <>
-      <TableRow>
-        <TableCell>
-          <Checkbox checked={checked} onCheckedChange={onCheck} aria-label={t('bots.select')} />
-        </TableCell>
-        <TableCell>
-          <button
-            type="button"
-            onClick={onToggleExpand}
-            className="flex items-center gap-1.5 text-left font-medium hover:underline"
-          >
-            <span className="text-muted-foreground">{expanded ? '▾' : '▸'}</span>
-            <span className="truncate">{group.label || group.key}</span>
-          </button>
-        </TableCell>
-        <TableCell>
-          <BotHealthBar total={group.total} online={group.online} />
-        </TableCell>
-        <TableCell className="text-right tabular-nums">{group.total}</TableCell>
-        <TableCell>
-          <div className="flex items-center justify-end gap-1">
-            <GroupActions groupBy={groupBy} group={group} baseFilter={baseFilter} />
-          </div>
-        </TableCell>
-      </TableRow>
-      {expanded && (
-        <TableRow className="bg-muted/30 hover:bg-muted/30">
-          <TableCell colSpan={5} className="p-0">
-            <GroupPeek params={groupFilter(groupBy, group, baseFilter)} onOpenBot={onOpenBot} />
-          </TableCell>
-        </TableRow>
-      )}
-    </>
-  )
-}
-
-/** 每组批量操作菜单：设行为 / 停止 / 删除（经 useBotBatch，目标=该组筛选）。 */
-function GroupBatchMenu({
-  groupBy,
-  group,
-  baseFilter,
-}: {
-  groupBy: GroupByDim
-  group: BotSummaryGroup
-  baseFilter: OverviewFilter
-}) {
-  const { t } = useTranslation()
-  const batch = useBotBatch()
-  const params = groupFilter(groupBy, group, baseFilter)
-
-  const run = (action: BotBatchAction, behavior?: string) => {
-    batch.mutate(
-      { action, filter: params, behavior },
-      {
-        onSuccess: (res) =>
-          toast.success(t('bots.batchDone', { succeeded: res.succeeded, failed: res.failed })),
-        onError: () => toast.error(t('bots.batchFailed')),
-      },
-    )
-  }
-
-  return (
-    <Select
-      value=""
-      onValueChange={(v: string) => {
-        if (v.startsWith('behavior:')) run('set-behavior', v.slice('behavior:'.length))
-        else run(v as BotBatchAction)
-      }}
-    >
-      <SelectTrigger size="sm" className="w-28" disabled={batch.isPending}>
-        <SelectValue placeholder={t('bots.batch')} />
-      </SelectTrigger>
-      <SelectContent>
-        {BEHAVIOR_OPTIONS.map((b) => (
-          <SelectItem key={b} value={`behavior:${b}`}>
-            {t('bots.setBehaviorTo', { behavior: t(`bots.${b}`) })}
-          </SelectItem>
-        ))}
-        <SelectItem value="stop">{t('bots.batchStop')}</SelectItem>
-        <SelectItem value="delete">{t('bots.batchDelete')}</SelectItem>
-      </SelectContent>
-    </Select>
-  )
-}
-
-/** 行为是否需要目标参数（巡逻路径 / 跟随目标）。 */
-const BEHAVIOR_NEEDS_TARGET = new Set(['follow', 'patrol'])
-
-/**
- * 顶部批量条：对已勾选的多个分组逐组下发批量（每组一次调用，聚合结果）。
- * 删除前 DangerConfirm 二次确认 + 串行进度提示（FR-147）；选 follow/patrol 行为时旁置「配置」入口
- * 暴露目标参数（跟随目标 / 巡逻路径），随 set-behavior 一并下发（useBotBatch.target）。
- */
-function BatchBar({
-  groupBy,
-  groups,
-  baseFilter,
-  onClear,
-}: {
-  groupBy: GroupByDim
-  groups: BotSummaryGroup[]
-  baseFilter: OverviewFilter
-  onClear: () => void
-}) {
-  const { t } = useTranslation()
-  const batch = useBotBatch()
-  const [behavior, setBehavior] = useState<string>('')
-  const [target, setTarget] = useState<string>('')
-  const [showConfig, setShowConfig] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  // 串行进度：已处理组数 / 总组数（null=未在进行）。
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
-
-  const totalSelected = groups.reduce((sum, g) => sum + g.total, 0)
-  const needsTarget = BEHAVIOR_NEEDS_TARGET.has(behavior)
-
-  // 逐组下发同一动作（后端批量按单一 filter 收敛，多组需多次调用），聚合成功/失败计数，逐组报进度
-  const runAll = async (action: BotBatchAction, beh?: string, tgt?: string) => {
-    let succeeded = 0
-    let failed = 0
-    setProgress({ done: 0, total: groups.length })
-    for (let i = 0; i < groups.length; i++) {
-      const g = groups[i]
-      try {
-        const res = await batch.mutateAsync({
-          action,
-          filter: groupFilter(groupBy, g, baseFilter),
-          behavior: beh,
-          target: tgt,
-        })
-        succeeded += res.succeeded
-        failed += res.failed
-      } catch {
-        failed += g.total
-      }
-      setProgress({ done: i + 1, total: groups.length })
-    }
-    setProgress(null)
-    toast.success(t('bots.batchDone', { succeeded, failed }))
-    onClear()
-  }
-
-  const busy = batch.isPending || progress !== null
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 p-2">
-      <span className="text-sm font-medium">
-        {t('bots.selectedGroups', { groups: groups.length, bots: totalSelected })}
-      </span>
-      {progress && (
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {t('bots.batchProgress', { done: progress.done, total: progress.total })}
-        </span>
-      )}
-      <div className="ml-auto flex items-center gap-2">
-        <Select
-          value={behavior}
-          onValueChange={(v) => {
-            setBehavior(v)
-            // 切到不需目标的行为时清空已填目标，避免误带。
-            if (!BEHAVIOR_NEEDS_TARGET.has(v)) setTarget('')
-          }}
-        >
-          <SelectTrigger size="sm" className="w-32">
-            <SelectValue placeholder={t('bots.setBehavior')} />
-          </SelectTrigger>
-          <SelectContent>
-            {BEHAVIOR_OPTIONS.map((b) => (
-              <SelectItem key={b} value={b}>
-                {t(`bots.${b}`)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {needsTarget && (
-          <Button size="sm" variant="outline" onClick={() => setShowConfig(true)}>
-            {t('bots.behaviorConfig')}
-            {target && <span className="ml-1 max-w-24 truncate text-xs text-muted-foreground">· {target}</span>}
-          </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!behavior || busy || (needsTarget && !target)}
-          title={needsTarget && !target ? t('bots.behaviorTargetRequired') : undefined}
-          onClick={() => runAll('set-behavior', behavior, target || undefined)}
-        >
-          {t('bots.apply')}
-        </Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => runAll('stop')}>
-          {t('bots.batchStop')}
-        </Button>
-        <Button
-          size="sm"
-          variant="destructive"
-          disabled={busy}
-          onClick={() => setConfirmDelete(true)}
-        >
-          {t('bots.batchDelete')}
-        </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onClear}>
-          {t('common.cancel')}
-        </Button>
-      </div>
-
-      {/* 行为目标配置（跟随目标玩家名 / 巡逻路径点），随 set-behavior 一并下发 */}
-      <BehaviorConfigDialog
-        open={showConfig}
-        behavior={behavior}
-        target={target}
-        onApply={(v) => {
-          setTarget(v)
-          setShowConfig(false)
-        }}
-        onClose={() => setShowConfig(false)}
-      />
-
-      {/* 多组批量删除二次确认（FR-147） */}
-      <DangerConfirm
-        open={confirmDelete}
-        title={t('bots.batchDeleteTitle')}
-        description={t('bots.batchDeleteConfirm', { count: totalSelected })}
-        confirmLabel={t('bots.batchDelete')}
-        scope="group"
-        onConfirm={() => {
-          setConfirmDelete(false)
-          runAll('delete')
-        }}
-        onCancel={() => setConfirmDelete(false)}
-      />
-    </div>
-  )
-}
-
-/** 行为参数化配置对话框（FR-147）：跟随=目标玩家名，巡逻=路径点（逗号分隔坐标）。 */
-function BehaviorConfigDialog({
-  open,
-  behavior,
-  target,
-  onApply,
-  onClose,
-}: {
-  open: boolean
-  behavior: string
-  target: string
-  onApply: (target: string) => void
-  onClose: () => void
-}) {
-  const { t } = useTranslation()
-  const [value, setValue] = useState(target)
-  const [prevOpen, setPrevOpen] = useState(open)
-  // 打开时以当前 target 回填（渲染期同步，避免 effect）。
-  if (open !== prevOpen) {
-    setPrevOpen(open)
-    if (open) setValue(target)
-  }
-
-  const isFollow = behavior === 'follow'
-  const label = isFollow ? t('bots.followTarget') : t('bots.patrolPath')
-  const placeholder = isFollow ? t('bots.followTargetPlaceholder') : t('bots.patrolPathPlaceholder')
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>{t('bots.behaviorConfigTitle', { behavior: t(`bots.${behavior}`, behavior) })}</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-2 py-1">
-          <FieldLabel>{label}</FieldLabel>
-          <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder={placeholder} autoFocus />
-          <p className="text-xs text-muted-foreground">
-            {isFollow ? t('bots.followTargetHint') : t('bots.patrolPathHint')}
-          </p>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-          <Button onClick={() => onApply(value.trim())}>{t('common.save')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-/** 展开窥视：仅拉该组首页 Bot（分页，绝不全量），用于核对组内成员。 */
-function GroupPeek({ params, onOpenBot }: { params: BotListParams; onOpenBot: (id: number) => void }) {
-  const { t } = useTranslation()
-  const [page, setPage] = useState(1)
-  const peekSize = 10
-  const { data, isLoading } = useBots({ ...params, page, pageSize: peekSize })
-
-  if (isLoading) {
-    return <p className="px-4 py-3 text-sm text-muted-foreground">{t('common.loading')}</p>
-  }
-  const items = data?.items ?? []
-  const total = data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / peekSize))
-
-  if (items.length === 0) {
-    return <p className="px-4 py-3 text-sm text-muted-foreground">{t('bots.empty')}</p>
-  }
-
-  return (
-    <div className="px-4 py-3">
-      <ul className="divide-y text-sm">
-        {items.map((bot) => (
-          <PeekRow key={bot.id} bot={bot} onOpen={() => onOpenBot(bot.id)} />
-        ))}
-      </ul>
-      <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-        <span>{t('bots.peekTotal', { total })}</span>
-        <div className="flex items-center gap-2">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            {t('bots.prevPage')}
-          </Button>
-          <span>{t('bots.pageOf', { page, totalPages })}</span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-const STATUS_COLOR: Record<string, string> = {
-  connected: 'text-status-success',
-  connecting: 'text-status-warning',
-  error: 'text-status-danger',
-  stopped: 'text-muted-foreground',
-  pending: 'text-muted-foreground',
-}
-
-/** 窥视行：单个 Bot 的名称 / 状态 / 行为，并可打开实时详情。 */
-function PeekRow({ bot, onOpen }: { bot: BotInfo; onOpen: () => void }) {
-  const { t } = useTranslation()
-  return (
-    <li className="flex items-center justify-between py-1.5">
-      <button type="button" onClick={onOpen} className="truncate text-left font-medium hover:underline">
-        {bot.name}
-      </button>
-      <div className="flex items-center gap-4">
-        <span className={cn('text-xs', STATUS_COLOR[bot.status] ?? 'text-muted-foreground')}>
-          {t(`bots.status_${bot.status}`, bot.status)}
-        </span>
-        <span className="w-16 text-right text-xs text-muted-foreground">
-          {t(`bots.${bot.behavior}`, bot.behavior)}
-        </span>
-        <Button size="xs" variant="ghost" onClick={onOpen}>
-          <Activity className="size-3" />
-          {t('bots.detail')}
-        </Button>
-      </div>
-    </li>
-  )
-}
-
-function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpenChange: (open: boolean) => void }) {
-  const { t } = useTranslation()
-  const { data: bot } = useBot(botId ?? 0)
-  const realtime = useBotEvents(botId)
-  const sendCommand = useSendBotCommand()
-  const [command, setCommand] = useState('')
-  const open = botId !== null
-
-  const status = realtime.status || bot?.status || ''
-  const behavior = realtime.behavior || bot?.behavior || ''
-  const health = realtime.health
-  const food = realtime.food
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    const text = command.trim()
-    if (!botId || !text) return
-    sendCommand.mutate(
-      { id: botId, command: text },
-      {
-        onSuccess: () => setCommand(''),
-        onError: () => toast.error(t('bots.commandFailed')),
-      },
-    )
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
-        <DialogHeader>
-          <DialogTitle>{bot ? bot.name : t('bots.detail')}</DialogTitle>
-        </DialogHeader>
-        <ScrollableDialogBody className="space-y-4 py-1">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <BotMetric label={t('bots.status')} value={status ? t(`bots.status_${status}`, status) : '—'} />
-            <BotMetric label={t('bots.behavior')} value={behavior ? t(`bots.${behavior}`, behavior) : '—'} />
-            <BotMetric label={t('bots.health')} value={health == null ? '—' : String(Math.round(health))} />
-            <BotMetric label={t('bots.food')} value={food == null ? '—' : String(food)} />
-          </div>
-
-          {realtime.position && (
-            <div className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">
-              {t('bots.position')}: {formatPosition(realtime.position)}
-            </div>
-          )}
-
-          <form onSubmit={submit} className="flex gap-2">
-            <Input
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder={t('bots.commandPlaceholder')}
-            />
-            <Button type="submit" disabled={!command.trim() || sendCommand.isPending}>
-              <Send className="size-4" />
-              {t('bots.sendCommand')}
-            </Button>
-          </form>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="font-medium">{t('bots.realtimeEvents')}</span>
-              <span className="text-xs text-muted-foreground">
-                {realtime.connected ? t('bots.streamConnected') : t('bots.streamConnecting')}
-              </span>
-            </div>
-            <div className="max-h-72 overflow-auto rounded-lg border">
-              {realtime.events.length === 0 ? (
-                <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('bots.noEvents')}</p>
-              ) : (
-                <ul className="divide-y text-sm">
-                  {realtime.events.map((event, index) => (
-                    <li key={`${event.timestamp}-${index}`} className="px-3 py-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="font-medium">{t(`bots.event_${event.type}`, event.type)}</span>
-                        <span className="text-xs text-muted-foreground">{formatEventTime(event.timestamp)}</span>
-                      </div>
-                      <p className="mt-1 break-words text-muted-foreground">{formatBotEvent(event)}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </ScrollableDialogBody>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function BotMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border px-3 py-2">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate font-medium">{value}</p>
-    </div>
-  )
-}
-
-function formatPosition(pos: { x: number; y: number; z: number }) {
-  return `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`
-}
-
-function formatEventTime(timestamp: number) {
-  const value = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000
-  return new Date(value).toLocaleTimeString()
-}
-
-function formatBotEvent(event: BotRealtimeEvent) {
-  const data = event.data
-  if (event.type === 'chat') {
-    return `${data.username ?? ''}: ${data.message ?? ''}`.trim()
-  }
-  if (event.type === 'error') {
-    return String(data.error ?? '')
-  }
-  if (event.type === 'behavior-changed') {
-    return String(data.behavior ?? '')
-  }
-  if (event.type === 'command-sent') {
-    return String(data.command ?? '')
-  }
-  return JSON.stringify(data)
-}
-
-interface CreateBotDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}
-
-/** 新建 Bot 对话框（沿用 FR-009 既有表单，复用 useCreateBot）。 */
-function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
-  const { t } = useTranslation()
-  const { data: instances } = useInstances()
   const create = useCreateBot()
-
-  const [name, setName] = useState('')
-  const [instanceId, setInstanceId] = useState('')
-  const [server, setServer] = useState('')
-  const [port, setPort] = useState('25565')
-  const [auth, setAuth] = useState('offline')
-  const [behavior, setBehavior] = useState('idle')
-  const [error, setError] = useState('')
-  const gate = useFieldGate()
-
-  const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
-    value: String(inst.id),
-    label: inst.name,
-  }))
-
-  const errors = validateFields(
-    { name, instanceId, server, port },
-    {
-      name: [validateRequired],
-      instanceId: [validateRequired],
-      server: [validateRequired, validateHost],
-      port: [validateRequired, validatePort],
-    },
-  )
-
-  const resetForm = () => {
-    setName('')
-    setInstanceId('')
-    setServer('')
-    setPort('25565')
-    setAuth('offline')
-    setBehavior('idle')
-    setError('')
-    gate.reset()
-  }
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault()
-    gate.submit()
-    if (hasErrors(errors)) return
-    setError('')
-    create.mutate(
-      {
-        instanceId: Number(instanceId),
-        name,
-        config: { server, port: Number(port), auth },
-        behavior,
-      },
-      {
-        onSuccess: () => {
-          onOpenChange(false)
-          resetForm()
-        },
-        onError: (err: unknown) => {
-          const msg =
-            err instanceof Error && 'response' in err
-              ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
-              : undefined
-          setError(msg || t('bots.createFailed'))
-        },
-      },
-    )
-  }
+  const [instanceId, setInstanceId] = useState<number | null>(null)
+  const [suggestedServer, setSuggestedServer] = useState('')
+  const [suggestedPort, setSuggestedPort] = useState(25565)
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
-        <DialogHeader>
-          <DialogTitle>{t('bots.createBot')}</DialogTitle>
-        </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-          <ScrollableDialogBody className="space-y-3 py-1">
-            {error && (
-              <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
-            )}
-
-            <div className="space-y-1">
-              <FieldLabel required>{t('bots.name')}</FieldLabel>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onBlur={() => gate.touch('name')}
-                placeholder="GuardBot"
-                aria-invalid={!!gate.show('name', errors.name)}
-              />
-              <FieldError error={gate.show('name', errors.name)} />
-            </div>
-
-            <div className="space-y-1">
-              <FieldLabel required>{t('bots.instance')}</FieldLabel>
-              <Combobox
-                options={instanceOptions}
-                value={instanceId}
-                onChange={(v: string) => {
-                  gate.touch('instanceId')
-                  setInstanceId(v)
-                  // 选实例即默认连到该实例（本机回环 + 实例实际端口），避免端口填错连不进
-                  const inst = instances?.find((i) => String(i.id) === v)
-                  if (inst) {
-                    setServer('127.0.0.1')
-                    setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
-                  }
-                }}
-                allowCustom={false}
-                placeholder={t('bots.selectInstance')}
-                invalid={!!gate.show('instanceId', errors.instanceId)}
-              />
-              <FieldError error={gate.show('instanceId', errors.instanceId)} />
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1">
-                <FieldLabel required>{t('bots.serverAddr')}</FieldLabel>
-                <Input
-                  value={server}
-                  onChange={(e) => setServer(e.target.value)}
-                  onBlur={() => gate.touch('server')}
-                  placeholder="mc.example.com"
-                  aria-invalid={!!gate.show('server', errors.server)}
-                />
-                <FieldError error={gate.show('server', errors.server)} />
-              </div>
-              <div className="space-y-1">
-                <FieldLabel required>{t('bots.port')}</FieldLabel>
-                <Input
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  onBlur={() => gate.touch('port')}
-                  type="number"
-                  aria-invalid={!!gate.show('port', errors.port)}
-                />
-                <FieldError error={gate.show('port', errors.port)} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.authMethod')}</FieldLabel>
-                <Select value={auth} onValueChange={setAuth}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="offline">{t('bots.offline')}</SelectItem>
-                    <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <FieldLabel>{t('bots.initialBehavior')}</FieldLabel>
-                <Select value={behavior} onValueChange={setBehavior}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {BEHAVIOR_OPTIONS.map((b) => (
-                      <SelectItem key={b} value={b}>
-                        {t(`bots.${b}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </ScrollableDialogBody>
-
-          <DialogFooter className="pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                onOpenChange(false)
-                resetForm()
-              }}
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={create.isPending || hasErrors(errors)}>
-              {create.isPending ? t('common.creating') : t('common.create')}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <CreateBotDialogView
+      open={open}
+      onOpenChange={onOpenChange}
+      suggestedServer={suggestedServer}
+      suggestedPort={suggestedPort}
+      creating={create.isPending}
+      instanceId={instanceId}
+      instanceSelected={instanceId !== null}
+      onInstancePick={(id, inst) => {
+        setInstanceId(id)
+        if (inst) {
+          setSuggestedServer('127.0.0.1')
+          setSuggestedPort(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565)
+        }
+      }}
+      renderInstancePicker={(args) => (
+        <InstancePicker {...args} enabled={open} placeholder={t('bots.selectInstance')} />
+      )}
+      onCreate={async (payload) => {
+        try {
+          await create.mutateAsync({
+            instanceId: instanceId ?? 0,
+            name: payload.name,
+            config: { server: payload.server, port: payload.port, auth: payload.auth },
+            behavior: payload.behavior,
+          })
+          return { ok: true }
+        } catch (err) {
+          const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+          return { ok: false, error: msg || t('bots.createFailed') }
+        }
+      }}
+    />
   )
 }

@@ -20,11 +20,11 @@ beforeAll(() => {
   }
 })
 
-/**
- * FR-449：BC 代理「子服拓扑」分段。minor 5 单一归属后本分段只承载子服列表；
+/** 
+ *：BC 代理「子服拓扑」分段。minor 5 单一归属后本分段只承载子服列表；
  * 跨服玩家归 BcPlayersPanel（players 页签），自身指标/配置归各自页签。
  */
-describe('BcSegment（FR-449，devmock）', () => {
+describe('BcSegment（devmock）', () => {
   beforeEach(() => {
     loginMockUser()
   })
@@ -54,7 +54,7 @@ describe('BcSegment（FR-449，devmock）', () => {
   })
 })
 
-/** FR-449 §2.2.2（proxy 语义的 players 能力）：跨服玩家分布 + 本代理已注册子服在线总数。 */
+/** §2.2.2（proxy 语义的 players 能力）：跨服玩家分布 + 本代理已注册子服在线总数。 */
 describe('BcPlayersPanel（跨服玩家，devmock）', () => {
   beforeEach(() => {
     loginMockUser()
@@ -86,8 +86,8 @@ describe('BcPlayersPanel（跨服玩家，devmock）', () => {
   })
 })
 
-/** FR-450：进程能力分段（进程指标 + 启动参数）；端口健康归 health 页签。 */
-describe('BinarySegment（FR-450，devmock）', () => {
+/** 进程能力分段（进程指标 + 启动参数）；端口健康归 health 页签。 */
+describe('BinarySegment（devmock）', () => {
   beforeEach(() => {
     loginMockUser()
   })

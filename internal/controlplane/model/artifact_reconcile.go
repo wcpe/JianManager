@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// 对账运行状态（FR-349，见 spec artifact-s3-reconcile §3.2）。
+// 对账运行状态（见 spec artifact-s3-reconcile §3.2）。
 const (
 	// ArtifactReconcileRunning 对账进行中（异步执行，前端轮询）。
 	ArtifactReconcileRunning = "running"
@@ -43,11 +43,11 @@ const (
 	// ArtifactDiffActionCleaned 孤儿 → S3 对象已清理删除。
 	ArtifactDiffActionCleaned = "cleaned"
 	// ArtifactDiffActionStale 差异已过时（run 后资产被删/迁移、或同键对象已被新上传合法引用），
-	// 处置时守卫命中，不动资产也不删对象（FR-349 处置安全性，见 spec §3.5）。
+	// 处置时守卫命中，不动资产也不删对象（处置安全性，见 spec §3.5）。
 	ArtifactDiffActionStale = "stale"
 )
 
-// ArtifactReconcileRun 一次制品索引 ↔ S3 对象清单的对账运行记录（FR-349）。
+// ArtifactReconcileRun 一次制品索引 ↔ S3 对象清单的对账运行记录。
 // 逐 s3 渠道对账；local 不对账（本地文件系统由 CAS 自管）。面板查最近 N 次。
 type ArtifactReconcileRun struct {
 	ID        uint `gorm:"primaryKey" json:"id"`
@@ -73,7 +73,7 @@ type ArtifactReconcileRun struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
-// ArtifactReconcileDiff 差异明细（缺失/孤儿），随 run 落库，处置后翻 resolved（FR-349）。
+// ArtifactReconcileDiff 差异明细（缺失/孤儿），随 run 落库，处置后翻 resolved。
 type ArtifactReconcileDiff struct {
 	ID        uint `gorm:"primaryKey" json:"id"`
 	RunID     uint `gorm:"not null;index" json:"runId"`
@@ -99,7 +99,7 @@ type ArtifactReconcileDiff struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
-// ArtifactReconcileSetting 定期对账设置（单行 id=1，服务 firstOrCreate 兜底；FR-349）。
+// ArtifactReconcileSetting 定期对账设置（单行 id=1，服务 firstOrCreate 兜底）。
 type ArtifactReconcileSetting struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// Enabled 定期对账开关，默认开。

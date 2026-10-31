@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 )
 
-// visibleArchiveGap 判定台账是否留下了可见的归档读/损坏痕迹（FR-474 §5#1「截断可见」）。
+// visibleArchiveGap 判定台账是否留下了可见的归档读/损坏痕迹（§5#1「截断可见」）。
 func visibleArchiveGap(ent *ledger.Entry) bool {
 	if ent == nil {
 		return false
@@ -45,7 +45,7 @@ func gzipAtFlushBoundary(t *testing.T) (raw []byte, firstBlock int) {
 	return buf.Bytes(), firstBlock
 }
 
-// FR-474 §5#1：截断归档必须留下可见缺口。
+// §5#1：截断归档必须留下可见缺口。
 //
 // 本用例锁住的是「读错误但零残余字节」这条分支：它原先直接 break，绕过了记录缺口的路径，
 // 于是截断归档静默丢尾。是否命中该分支取决于压缩布局（截断点落在行边界还是行中），

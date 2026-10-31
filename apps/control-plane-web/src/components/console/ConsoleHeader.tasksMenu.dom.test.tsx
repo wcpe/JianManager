@@ -7,8 +7,8 @@ import { renderWithProviders } from '@/test/render'
 import { db } from '@jianmanager/devmock/db'
 import ConsoleHeader from './ConsoleHeader'
 
-/**
- * FR-327 页眉任务中心下拉面板：入口点击弹面板（最近 N 条：kind 徽标/名称/进行中进度/终态徽章），
+/** 
+ *页眉任务中心下拉面板：入口点击弹面板（最近 N 条：kind 徽标/名称/进行中进度/终态徽章），
  * 点条目跳任务中心 `?task=` 深链定位，底部「进入任务中心」看全量，面板外点击关闭。
  * 数据来自 devmock 种子任务（task-jdk-1 已完成 / task-backup-2 进行中 45%）。
  */
@@ -19,7 +19,7 @@ function removeAllTasks() {
   tasks.list().forEach((t) => tasks.remove(t.id))
 }
 
-describe('ConsoleHeader 任务中心下拉面板（FR-327）', () => {
+describe('ConsoleHeader 任务中心下拉面板', () => {
   it('点击入口弹面板：行 = kind 徽标 + 名称 + 进行中进度 / 终态徽章', async () => {
     loginMockUser()
     const user = userEvent.setup()

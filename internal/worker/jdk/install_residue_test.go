@@ -9,7 +9,7 @@ import (
 )
 
 // TestInstall_ResidueDirAutoCleared 安装失败/取消遗留的残骸目录（无 bin/java 完成标记）
-// 不再堵死重装：安装前检测到残骸即自动清除并继续（FR-291）。
+// 不再堵死重装：安装前检测到残骸即自动清除并继续。
 // 真机复现：卡死任务遗留 4KB 半截 temurin-21/，此后同版本重装永远撞「目标目录已存在」。
 // 用不支持的 vendor 使流程在「解析下载源」步失败——只要错误不再是「目标目录已存在」
 // 且残骸已被移除，即证明检查已越过并清理，无需真实下载。
@@ -34,7 +34,7 @@ func TestInstall_ResidueDirAutoCleared(t *testing.T) {
 }
 
 // TestInstall_CompleteDirStillRejected 完好已装目录（有 bin/java 完成标记）仍拒绝覆盖，
-// 语义不变（FR-291）。
+// 语义不变。
 func TestInstall_CompleteDirStillRejected(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(filepath.Join(root, "jdks"), nil)
@@ -57,7 +57,7 @@ func TestInstall_CompleteDirStillRejected(t *testing.T) {
 }
 
 // TestInstall_NestedCompleteDirStillRejected 归档外层多包一层目录的完好安装
-// （bin/java 在一级子目录下）同样识别为完好、拒绝覆盖（FR-291）。
+// （bin/java 在一级子目录下）同样识别为完好、拒绝覆盖。
 func TestInstall_NestedCompleteDirStillRejected(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(filepath.Join(root, "jdks"), nil)

@@ -56,7 +56,7 @@ func TestBackupStorage_LocalStats(t *testing.T) {
 	require.Equal(t, float64(1), resp["backupCount"])
 }
 
-// TestBackupStorage_Update PUT 编辑链路（FR-338）：全量替换生效 + lastTest* 清空，
+// TestBackupStorage_Update PUT 编辑链路：全量替换生效 + lastTest* 清空，
 // 404 / 改 type 422 / 名称冲突 422（排除自身）语义与既有端点对齐。
 func TestBackupStorage_Update(t *testing.T) {
 	db := setupTestDB(t)
@@ -114,7 +114,7 @@ func TestBackupStorage_Update(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// TestBackupStorage_CreateNameConflict Create 撞名由 500 收口为 422（FR-338 对称收口）。
+// TestBackupStorage_CreateNameConflict Create 撞名由 500 收口为 422（对称收口）。
 func TestBackupStorage_CreateNameConflict(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

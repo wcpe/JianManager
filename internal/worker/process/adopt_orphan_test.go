@@ -11,7 +11,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
-// FR-497③ 回归：未纳管活进程的全自动收养。
+// ③ 回归：未纳管活进程的全自动收养。
 //
 // 判据与 ADR-093 / docs/specs/restart-resilience/spec.md §2.1 一致：只有「确属本实例」的活进程对
 // （wrapper 分支须 /proc cmdline+environ 确证、Java 分支按 cmdline/cwd 匹配）才被收养；复核不过

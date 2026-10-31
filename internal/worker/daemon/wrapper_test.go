@@ -157,7 +157,7 @@ func TestWrapper_StopControl(t *testing.T) {
 	waitForProcGone(t, javaPID)
 }
 
-// TestWrapper_StopDuringJavaStartDoesNotOrphanJava 锁定真机验收（FR-475 轮次）发现的产品缺陷：
+// TestWrapper_StopDuringJavaStartDoesNotOrphanJava 锁定真机验收（轮次）发现的产品缺陷：
 // stop/kill 落在「startJava 已发起、javaCmd 尚未登记」的窗口内时，旧实现直接 signalClose 收摊退出，
 // 而 startJava 随后拉起的 Java 无人托管——真机表现为 wrapper 已退出、Java 仍在跑并占着实例工作目录
 // （Worker 侧显示已停止；用例侧则表现为 t.TempDir 的 RemoveAll 撞上该进程的 CWD 句柄而失败）。
@@ -328,7 +328,7 @@ func TestWrapper_PIDFileCleanup(t *testing.T) {
 }
 
 // crashImmediatelyCommand 返回一个「启动即崩溃」的命令（跨平台），
-// 用于验证 FR-459 崩溃熔断的 daemon 生效路径：wrapper 收到「禁用自动重启」后不得再拉起 Java。
+// 用于验证崩溃熔断的 daemon 生效路径：wrapper 收到「禁用自动重启」后不得再拉起 Java。
 func crashImmediatelyCommand() string {
 	if runtime.GOOS == "windows" {
 		return "exit /b 1"
@@ -336,7 +336,7 @@ func crashImmediatelyCommand() string {
 	return "exit 1"
 }
 
-// TestWrapper_DisableRestartStopsAutoRestart 验证 FR-459 blocker 的 daemon 生效路径：
+// TestWrapper_DisableRestartStopsAutoRestart 验证blocker 的 daemon 生效路径：
 // AutoRestart=true 且 Java 启动即崩溃时，wrapper 本会按退避自动重启；一旦 Worker 下发
 // ControlDisableRestart（崩溃熔断），wrapper 必须停止自动重启并自行收摊退出。
 //
@@ -413,7 +413,7 @@ func TestWrapper_DisableAutoRestartIsSticky(t *testing.T) {
 	require.True(t, w.isClosed(), "空闲态应立即收摊，避免空占进程")
 }
 
-// FR-459 终验 Major：对称的 enable_restart 控制帧必须清掉粘性「禁用自动重启」，使 wrapper
+// 终验 Major：对称的 enable_restart 控制帧必须清掉粘性「禁用自动重启」，使 wrapper
 // 恢复自动重启（人工解除熔断的 daemon 复位路径）。
 func TestWrapper_EnableAutoRestartClearsSticky(t *testing.T) {
 	w := &Wrapper{cfg: WrapperConfig{AutoRestart: true}, closing: make(chan struct{}), state: StateStopped}
@@ -437,7 +437,7 @@ func TestWrapper_EnableAutoRestartClearsSticky(t *testing.T) {
 	require.False(t, w.isAutoRestartOff())
 }
 
-// FR-459 终验 Low #5：startJava 在临界区内复核「已关闭/已禁用」，消除 javaWait 复核点与 startJava
+// 终验 Low #5：startJava 在临界区内复核「已关闭/已禁用」，消除 javaWait 复核点与 startJava
 // 取锁之间的 TOCTOU——否则该窗口内到达的禁用帧会误判空闲而收摊，紧接着 startJava 却拉起 Java，
 // 造成 wrapper 已退出、Java 无人托管的孤儿。
 func TestWrapper_StartJavaRefusesWhenAutoRestartDisabled(t *testing.T) {

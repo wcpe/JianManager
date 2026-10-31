@@ -7,19 +7,19 @@ async function expectInputValue(page: Page, value: string): Promise<void> {
     .toBe(true)
 }
 
-/** FR-031：配置文件管理引擎在真实浏览器 + MSW mock 模式下的关键链路。 */
-test.describe('配置文件管理引擎（FR-031，mock 模式）', () => {
+/** 配置文件管理引擎在真实浏览器 + MSW mock 模式下的关键链路。 */
+test.describe('配置文件管理引擎（mock 模式）', () => {
   test.beforeEach(async ({ page }) => {
     await login(page)
   })
 
   test('文件配置页可打开 schema 文件、切表单、校验并查看版本 diff/回滚入口', async ({ page }) => {
     await page.goto('/instances/1')
-    // FR-412：标题为实例名，无「服务器控制台 /」前缀
+    // 标题为实例名，无「服务器控制台 /」前缀
     await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible({ timeout: 15_000 })
     await expect(page.locator('[data-page="instance-console"]')).toBeVisible()
 
-    // FR-413：实例分区为 role=tab（tablist「实例页签」）
+    // 实例分区为 role=tab（tablist「实例页签」）
     await page.getByRole('tab', { name: '文件配置', exact: true }).click()
     await expect(page.getByRole('button', { name: /已发现配置/ })).toBeVisible()
     await expect(page.getByText('server.properties').first()).toBeVisible()

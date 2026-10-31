@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { tasksRefetchInterval, ACTIVE_TASKS_REFETCH_MS, type TaskState } from './tasks'
 
-/**
- * FR-329：任务轮询启停规则（纯函数）。
+/** 
+ *：任务轮询启停规则（纯函数）。
  * 有任一非终态任务（pending/running）→ 2s 短轮询；全部终态 / 空 / 未加载 → 停（false）。
  */
-describe('tasksRefetchInterval（FR-329）', () => {
+describe('tasksRefetchInterval', () => {
   const of = (...states: TaskState[]) => states.map((state) => ({ state }))
 
   it('未加载（undefined）→ 停轮询', () => {

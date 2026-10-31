@@ -2,7 +2,7 @@ import * as React from 'react'
 import { cn } from '../lib/utils'
 import { statusColorVar, type StatusLevel } from '../lib/threshold'
 
-/** 单个汇总 chip 定义（FR-136/144 汇总头）。 */
+/** 单个汇总 chip 定义（144 汇总头）。 */
 export interface SummaryChip {
   /** 唯一键。 */
   key: string
@@ -20,9 +20,9 @@ export interface SummaryChip {
   breathing?: boolean
 }
 
-/**
- * 汇总头 chip 组（FR-136/144）：sticky 一排 pill，可点设筛选。
- * 长表滚动时吸顶常驻（sticky）。视觉用 FR-163 圆角 pill + 柔和阴影 + iOS 缓动。
+/** 
+ * 汇总头 chip 组（144）：sticky 一排 pill，可点设筛选。
+ * 长表滚动时吸顶常驻（sticky）。视觉用圆角 pill + 柔和阴影 + iOS 缓动。
  */
 export function SummaryChips({
   chips,
@@ -49,7 +49,7 @@ export function SummaryChips({
             disabled={!clickable}
             aria-pressed={clickable ? !!chip.active : undefined}
             className={cn(
-              // FR-244 收敛：hover 反馈时长绑 motion token（normal≈180ms），不再散落硬编码定值。
+              // 收敛：hover 反馈时长绑 motion token（normal≈180ms），不再散落硬编码定值。
               'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium shadow-soft transition-all duration-[var(--motion-duration-normal)] ease-ios',
               clickable && 'cursor-pointer hover:shadow-lift',
               !clickable && 'cursor-default',

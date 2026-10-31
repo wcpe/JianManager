@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ArtifactStorageHandler 制品存储渠道路由处理器（FR-347，见 ADR-073）。
+// ArtifactStorageHandler 制品存储渠道路由处理器（见 ADR-073）。
 // 全组限平台管理员（挂 admin 组）；响应永不含凭证明文或密文（model json:"-" + Has* 标示）。
 type ArtifactStorageHandler struct {
 	svc *service.ArtifactStorageChannelService

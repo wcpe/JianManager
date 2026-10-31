@@ -257,3 +257,36 @@ ListAccessibleInstances(principal, optionalNodeFilter) -> instances
 - **规则散落再次漂移**：action 目录为唯一能力真源；ToolSpec 只做协议映射。
 - **能力组未来扩展的授权含义**：V2 Token 持有的是分组授权，组内新增 action 可被其获得；高危 action 必须放入独立 destructive 组，永久禁区永不进入目录。
 - **前端默认值误授权**：服务端不增加默认能力；UI 默认只读并明确展示，最终创建请求可见且可取消。
+
+## 附：PRD 表内原始记录（2026-10-26 迁入）
+
+按「PRD 只保留一行 FR + 状态，详情归 spec」的约定，以下内容自 PRD 需求列迁入。
+
+### FR-395 Agent 能力策略 v2 与节点继承实例作用域（feat，增强 FR-384/389）
+
+**需求补充**：把 `write_allowlist` 扩为强类型能力分组（节点读/操作/破坏性、实例读/生命周期/命令/搭建配置/内容/破坏性、Bot 读/管理/压测、观测读），节点 scope 自动覆盖该节点当前与未来实例，实例 ID scope 继续支持最小授权；旧 Token 迁移后不扩权，未知动作默认拒绝；`tools/list` 按能力裁剪，调用流水记录能力与目标；永久禁区仍为用户/组/RBAC、Agent Token 管理、密钥明文、数据库浏览、自更新、平台设置（需 spec + 新 ADR 取代 ADR-076 对 Agent 硬拒绝面的旧定义，并修订 ADR-077；被 FR-396~399 依赖）→ `docs/specs/agent-capability-policy-v2/spec.md`
+
+**交付状态**：✅ 已交付@v0.21.0
+
+### FR-396 MCP 节点与实例全生命周期强类型工具
+
+MCP 节点与实例全生命周期强类型工具（feat，增强 FR-005/302/314/342/389）：在 FR-395 策略闸内开放节点详情/指标/维护/排空/Docker 与运行时可用性/归档清理，以及实例搜索/指标/日志/崩溃快照/创建搭建/导入克隆/配置/启停重启重建/命令/批量/强杀/删除；全部直接复用 CP service 与现有状态机、启动预检、内存水位和任务闸，不经本机 HTTP 回环；强杀、删除和节点清理须独立 destructive 能力 + 服务端精确确认；不开放返回明文 enrollment token 的节点准入签发（需 spec，依赖 FR-395）→ `docs/specs/mcp-instance-operations/spec.md`
+
+
+### FR-397 MCP 文件、配置与插件运维强类型工具
+
+MCP 文件、配置与插件运维强类型工具（feat，增强 FR-008/031/052/373/389）：开放目录/元数据/文本读写/权限预检与 chmod/移动删除/历史 diff 回滚，配置发现/字段与文本写入/校验/历史，以及从既有制品 assetId 部署、启停、删除插件；控制与数据分离——MCP 不承载大型 base64/jar/世界包，改签发短时单用途且绑定 Token/scope/实例/path 的流式 HTTP 传输票据；保留路径越界、二进制与文本体积护栏、原子落盘和危险确认（需 spec，依赖 FR-395；可与 FR-396/398 并行）→ `docs/specs/mcp-content-operations/spec.md`
+
+
+### FR-398 MCP Bot 舰队与压测编排全工具
+
+MCP Bot 舰队与压测编排全工具（feat，增强 FR-362/369~372/389）：普通 Bot 列表/详情/创建/停止/删除/行为/命令，压测模板 CRUD 与结构化 JSON/YAML 命令计划/负载曲线/阈值，以及运行创建→发压节点容量→预检→启动→状态→停止→失败子集重试→分页 Bot/失败/事件/指标→JSON/CSV 报告全部由强类型 tool 覆盖；目标实例与每个执行节点均过 FR-395 scope，planToken 保持不透明，5000 条明细走分页/游标，命令成功边界继续遵循 ADR-075（需 spec，依赖 FR-395）→ `docs/specs/mcp-bot-orchestration/spec.md`
+
+## 附：PRD 索引段原始记录（2026-10-26 迁入）
+
+按「PRD 只留索引行，详情见 spec」的约定，以下内容自 PRD 的「活跃 FR 详细规格索引」迁入（保留原文）。
+
+### FR-395~399（Agent MCP 全域运维 + 500 Bot 资源容量闭环 2026-07-26）
+
+FR-395~399（Agent MCP 全域运维 + 500 Bot 资源容量闭环 2026-07-26）：能力分组白名单与节点继承实例 scope / 节点实例全生命周期强类型工具 / 文件配置插件控制与流式数据分离 / Bot 舰队压测全编排 / 全链路资源采样与容量报告；永久禁区保留用户组与 RBAC、Agent Token 管理、密钥明文、数据库浏览、自更新、平台设置；计划见 `.tmp/brainstorm-mcp-full-ops-bot-capacity-2026-07-26.md` → FR-395 `docs/specs/agent-capability-policy-v2/spec.md`、FR-396 `docs/specs/mcp-instance-operations/spec.md`、FR-397 `docs/specs/mcp-content-operations/spec.md`、FR-398 `docs/specs/mcp-bot-orchestration/spec.md`、FR-399 `docs/specs/bot-load-resource-capacity/spec.md`（✅ 均已交付@v0.21.0；依赖序 395→[396,397,398]→399→500 Bot 真机容量战役）
+

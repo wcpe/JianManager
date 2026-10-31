@@ -14,7 +14,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// BotLoadReportService 终态运行报告（FR-370 partial）。
+// BotLoadReportService 终态运行报告（partial）。
 type BotLoadReportService struct {
 	db *gorm.DB
 }

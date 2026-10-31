@@ -5,7 +5,7 @@ import { resetDb } from './db'
 import { clearInjections, mockInject } from './inject'
 import { requireAuth } from './auth-middleware'
 
-/**
+/** 
  * 地基整合测试（node project）：经 MSW server 验证 auth 联动 + 错误注入 + 鉴权中间件 + 终端 token。
  * 用原生 fetch（不经 axios 拦截器），直接验 mock handler 契约。
  */
@@ -27,7 +27,7 @@ function login(username: string, password: string) {
   })
 }
 
-describe('假后端 auth 纵切（FR-197/198/199 地基）', () => {
+describe('假后端 auth 纵切（198/199 地基）', () => {
   it('错误凭据 → 401', async () => {
     const r = await login('admin', 'wrong')
     expect(r.status).toBe(401)
@@ -59,7 +59,7 @@ describe('假后端 auth 纵切（FR-197/198/199 地基）', () => {
     expect(r.status).toBe(200)
   })
 
-  it('终端 token handler 返回 mock wsUrl（FR-198）', async () => {
+  it('终端 token handler 返回 mock wsUrl', async () => {
     const r = await fetch(`${BASE}/instances/1/terminal-token?permission=write`)
     expect(r.status).toBe(200)
     const body = (await r.json()) as { wsUrl: string }

@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zh from './zh.json'
 import en from './en.json'
 
-/**
- * 页面 B「客户端分发运维」（FR-430）· i18n 键存在性补充校验（QA 独立补充）。
+/** 
+ * 页面 B「客户端分发运维」· i18n 键存在性补充校验（QA 独立补充）。
  *
  * 背景：既有 `missing-keys.test.ts` 只静态扫描 t 后紧跟引号字面量的调用形态，**漏掉间接键**：
  *  - `labelKey: 'clientDistOps.segLive'` 经 `t(o.labelKey)` 消费；
@@ -20,6 +20,18 @@ import en from './en.json'
 
 const i18nDir = dirname(fileURLToPath(import.meta.url))
 const srcDir = join(i18nDir, '..')
+/** 
+ * 共享 UI 包内「业务视图」的源码根，以及应用侧回迁后的视图根。
+ *
+ * 页面 B 的组件曾在包与应用之间迁移过（原 `packages/biz-views` → 并入 `@jianmanager/ui`
+ * → 业务视图回迁应用侧）。键扫描必须**覆盖所有现存位置**，否则文件挪走时
+ * 其引用的键会静默漏检——这正是本测试要防的那类缺口。
+ * 因此下面按「目录存在才扫」处理，两侧都不假设。
+ * 布局：apps/control-plane-web/src/i18n → 仓库根为再上溯三级。
+ */
+const uiViewsDir = join(srcDir, '..', '..', '..', 'packages', 'ui', 'src', 'components', 'views')
+/** 回迁后的视图根（apps/control-plane-web/src/components/views）。 */
+const appViewsDir = join(srcDir, 'components', 'views')
 
 function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
   const out = new Set<string>()
@@ -34,15 +46,32 @@ function flattenKeys(obj: Record<string, unknown>, prefix = ''): Set<string> {
   return out
 }
 
-/** 页面 B 相关源码文件（相对 src）——外壳 + 安全侧区块 + 迁移组件 + 不可信徽标。 */
+/** 绝对路径 → 便于阅读的仓库内相对路径（断言失败时能直接看出是哪个文件）。 */
+function rel(abs: string): string {
+  const marker = 'JianManager-web-overhaul/'
+  const i = abs.indexOf(marker)
+  return i >= 0 ? abs.slice(i + marker.length) : abs
+}
+
+/** 页面 B 相关源码文件（绝对路径）——外壳 + 安全侧区块 + 迁移组件 + 不可信徽标。 */
 function pageBFiles(): string[] {
-  const files = ['pages/ProtectionCenterPage.tsx', 'components/UntrustedFieldBadge.tsx']
-  const distDir = join(srcDir, 'components', 'client-dist')
-  for (const entry of readdirSync(distDir, { withFileTypes: true })) {
-    if (!entry.isFile()) continue
-    if (!/\.(ts|tsx)$/.test(entry.name)) continue
-    if (/\.(dom\.)?test\.(ts|tsx)$/.test(entry.name)) continue
-    files.push(`components/client-dist/${entry.name}`)
+  const files = [
+    join(srcDir, 'pages/ProtectionCenterPage.tsx'),
+    // 顶层零散视图：仍在包内，故按包的路径取
+    join(uiViewsDir, 'UntrustedFieldBadge.tsx'),
+  ].filter((f) => existsSync(f))
+  for (const dir of [
+    join(srcDir, 'components', 'client-dist'),
+    join(uiViewsDir, 'client-dist'),
+    join(appViewsDir, 'client-dist'),
+  ]) {
+    if (!existsSync(dir)) continue
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue
+      if (!/\.(ts|tsx)$/.test(entry.name)) continue
+      if (/\.(dom\.)?test\.(ts|tsx)$/.test(entry.name)) continue
+      files.push(join(dir, entry.name))
+    }
   }
   return files
 }
@@ -52,19 +81,20 @@ const KEY_RE = /(['"])(clientDistOps\.[A-Za-z0-9_.]+)\1/g
 
 function collectReferencedKeys(): Map<string, string[]> {
   const refs = new Map<string, string[]>()
-  for (const rel of pageBFiles()) {
-    const text = readFileSync(join(srcDir, rel), 'utf-8')
+  for (const abs of pageBFiles()) {
+    const text = readFileSync(abs, 'utf-8')
     for (const m of text.matchAll(KEY_RE)) {
       const key = m[2]
+      const label = rel(abs)
       const list = refs.get(key) ?? []
-      if (!list.includes(rel)) list.push(rel)
+      if (!list.includes(label)) list.push(label)
       refs.set(key, list)
     }
   }
   return refs
 }
 
-describe('clientDistOps i18n（页面 B · FR-430）', () => {
+describe('clientDistOps i18n（页面 B）', () => {
   const zhKeys = flattenKeys(zh as Record<string, unknown>)
   const enKeys = flattenKeys(en as Record<string, unknown>)
   const referenced = collectReferencedKeys()

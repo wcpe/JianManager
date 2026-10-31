@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
 import { login, selectComboboxOption } from './helpers'
 
-/**
- * FR-151 备份页增强 · 单机（Playwright + mock 模式）验收。
+/** 
+ *备份页增强 · 单机（Playwright + mock 模式）验收。
  * 覆盖：顶部汇总（总占用/份数/最近成功）、校验和展示、增量行 + 删父依赖警告。
  * （进行中条件轮询/汇总/增量子计数逻辑由 backups-view.test.ts 单测覆盖）
- * 证据落 .tmp/acceptance/FR-151/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-151 备份汇总 + 校验和 + 增量链警告', async ({ page }) => {
+test('备份汇总 + 校验和 + 增量链警告', async ({ page }) => {
   await login(page)
   await page.goto('/backups')
   await expect(page.getByRole('heading', { name: '备份管理' })).toBeVisible()
@@ -26,5 +26,5 @@ test('FR-151 备份汇总 + 校验和 + 增量链警告', async ({ page }) => {
   // 删父备份依赖警告（挂在删除按钮 aria-description）
   await expect(page.getByRole('button', { name: '删除', description: /增量备份依赖/ }).first()).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-151/single-machine-backups.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-backups.png', fullPage: true })
 })

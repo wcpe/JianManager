@@ -16,7 +16,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// FR-442 内置 Beacon 快速搭建预设。
+// 内置 Beacon 快速搭建预设。
 //
 // 覆盖点（对应 spec 第 4 节）：
 //   - coreType=beacon 展开为 binary + 固定参数（落盘名/启动命令/角色 beacon/不绑 JDK）；
@@ -297,7 +297,7 @@ func TestBeaconPresetAsync_ArtifactLibraryWins(t *testing.T) {
 
 	var got model.Instance
 	require.NoError(t, svc.db.First(&got, inst.ID).Error)
-	require.Equal(t, model.InstanceRoleBeacon, got.Role, "预设默认角色 beacon（FR-433）")
+	require.Equal(t, model.InstanceRoleBeacon, got.Role, "预设默认角色 beacon")
 	require.Equal(t, "./beacon-1.1.0-linux-amd64", got.StartCommand, "启动命令由落盘名派生（spec §4.2）")
 	require.Equal(t, model.InstanceTypeGeneric, got.Type)
 	require.Zero(t, got.JDKID, "Go 二进制不绑 JDK")

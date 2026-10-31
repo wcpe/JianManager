@@ -23,7 +23,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// migrationHarness 存量迁移测试基座（FR-348）：Asset + 渠道 + 任务 + 迁移服务共库同根。
+// migrationHarness 存量迁移测试基座：Asset + 渠道 + 任务 + 迁移服务共库同根。
 type migrationHarness struct {
 	assets    *AssetService
 	channels  *ArtifactStorageChannelService
@@ -38,6 +38,12 @@ func newMigrationHarness(t *testing.T) *migrationHarness {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
+	// 关闭底层连接：共享内存库在最后一个连接关闭后才释放。不关就长期占着句柄，
+	// 整包跑时累积数百个未释放的库，后续用例的 AutoMigrate（要写锁）会长时间等锁
+	// ——表现为「单个用例秒过、整包随机卡住」，且每次卡住的用例都不一样。
+	if sqlDB, derr := db.DB(); derr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, db.AutoMigrate(
 		&model.Asset{}, &model.ArtifactStorageChannel{}, &model.Node{},
 		&model.Task{}, &model.TaskLog{},
@@ -496,7 +502,7 @@ func TestArtifactMigration_SkipAlreadyAtTarget(t *testing.T) {
 
 // TestArtifactMigration_SourceDeleteFailure_StillMigrated
 // 删源失败（S3 DELETE 拒）：记录已先行更新（先改记录再删源的顺序保证）、该条仍计成功、任务 succeeded；
-// 源残留归 FR-349 对账。
+// 源残留归对账。
 func TestArtifactMigration_SourceDeleteFailure_StillMigrated(t *testing.T) {
 	h := newMigrationHarness(t)
 	fake, srv := newFailableFakeS3(t)
@@ -522,7 +528,7 @@ func TestArtifactMigration_SourceDeleteFailure_StillMigrated(t *testing.T) {
 	fake.mu.Lock()
 	_, remains := fake.objects[objectKey(a.RelPath)]
 	fake.mu.Unlock()
-	require.True(t, remains, "源对象删除失败残留（FR-349 对账收口）")
+	require.True(t, remains, "源对象删除失败残留（对账收口）")
 	require.Equal(t, 1, h.registryOf(t, taskID).Migrated)
 }
 

@@ -1,6 +1,6 @@
 package stateindex
 
-// 本文件是「索引持久化提交单元切分」（FR-498 P0）的回归，三条断言各自可独立转红：
+// 本文件是「索引持久化提交单元切分」（P0）的回归，三条断言各自可独立转红：
 //
 //	① 每事务行数有界（TestApplySplitsCommitsWithinRowBudget）——无时序，绝对可复现；
 //	② 单提交单元耗时 p95（TestSingleCommitLatencyBoundedAtScale）——与「不切分」对照臂做比值

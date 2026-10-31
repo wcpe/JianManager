@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	WorkerService_Register_FullMethodName                    = "/worker.WorkerService/Register"
+	WorkerService_ReportStartupProgress_FullMethodName       = "/worker.WorkerService/ReportStartupProgress"
 	WorkerService_Heartbeat_FullMethodName                   = "/worker.WorkerService/Heartbeat"
 	WorkerService_FetchBotWorkerArchive_FullMethodName       = "/worker.WorkerService/FetchBotWorkerArchive"
 	WorkerService_ReportCrashSnapshot_FullMethodName         = "/worker.WorkerService/ReportCrashSnapshot"
@@ -127,6 +128,10 @@ const (
 	WorkerService_StreamPluginEvents_FullMethodName          = "/worker.WorkerService/StreamPluginEvents"
 	WorkerService_SendPluginCommand_FullMethodName           = "/worker.WorkerService/SendPluginCommand"
 	WorkerService_QueryServerState_FullMethodName            = "/worker.WorkerService/QueryServerState"
+	WorkerService_QueryBridgeStatus_FullMethodName           = "/worker.WorkerService/QueryBridgeStatus"
+	WorkerService_SetBridgeSubscription_FullMethodName       = "/worker.WorkerService/SetBridgeSubscription"
+	WorkerService_QueryBusinessStatus_FullMethodName         = "/worker.WorkerService/QueryBusinessStatus"
+	WorkerService_ReloadProbeConfig_FullMethodName           = "/worker.WorkerService/ReloadProbeConfig"
 	WorkerService_GetVersion_FullMethodName                  = "/worker.WorkerService/GetVersion"
 	WorkerService_CheckDocker_FullMethodName                 = "/worker.WorkerService/CheckDocker"
 	WorkerService_UpgradeWorker_FullMethodName               = "/worker.WorkerService/UpgradeWorker"
@@ -144,6 +149,17 @@ const (
 type WorkerServiceClient interface {
 	// Register Worker Node 首次启动时注册到 Control Plane。
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
+	// ReportStartupProgress Worker 上报启动阶段进度（FR-486，CP 侧实现）。
+	//
+	// 存在的理由：加载（尤其大索引的全表扫描）发生在**注册之前**，那段时间 CP 侧完全看不到
+	// 该节点——2026-09-28 生产事故中这段黑盒长达 8m39s，主控台连节点都不存在。
+	// 本 RPC 让 Worker 在注册前就能把「当前处于第几阶段」送上来。
+	//
+	// 语义约束（刻意设计）：
+	//   - **best-effort**：Worker 侧上报失败一律静默丢弃，绝不阻塞或拖慢启动；
+	//   - **不构成就绪**：上报过进度不等于节点可服务，就绪判据仍只看注册与心跳；
+	//   - 老 CP 返回 Unimplemented 时 Worker 直接放弃上报（记一条 debug，不重试）。
+	ReportStartupProgress(ctx context.Context, in *ReportStartupProgressRequest, opts ...grpc.CallOption) (*ReportStartupProgressResponse, error)
 	// Heartbeat 双向心跳流，Worker 上报资源指标。
 	Heartbeat(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HeartbeatRequest, HeartbeatResponse], error)
 	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
@@ -397,6 +413,19 @@ type WorkerServiceClient interface {
 	SendPluginCommand(ctx context.Context, in *SendPluginCommandRequest, opts ...grpc.CallOption) (*SendPluginCommandResponse, error)
 	// QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
 	QueryServerState(ctx context.Context, in *QueryServerStateRequest, opts ...grpc.CallOption) (*QueryServerStateResponse, error)
+	// QueryBridgeStatus 取探针桥线路健康度（`core.bridge_status`）：重连次数/队列深度/丢弃帧数/在途重载数。
+	// 只读诊断，Worker 不缓存；探针未连时返回 connected=false（不返回 error）。
+	QueryBridgeStatus(ctx context.Context, in *QueryBridgeStatusRequest, opts ...grpc.CallOption) (*QueryBridgeStatusResponse, error)
+	// SetBridgeSubscription 设置事件主题订阅（`core.subscribe`）：整批覆盖、不是追加。
+	SetBridgeSubscription(ctx context.Context, in *SetBridgeSubscriptionRequest, opts ...grpc.CallOption) (*SetBridgeSubscriptionResponse, error)
+	// QueryBusinessStatus 取探针已注册业务域与健康状态（`core.business_status`）。
+	QueryBusinessStatus(ctx context.Context, in *QueryBusinessStatusRequest, opts ...grpc.CallOption) (*QueryBusinessStatusResponse, error)
+	// ReloadProbeConfig 下发配置重载（`core.config_reload`）。
+	//
+	// **独立超时**是本 RPC 存在的唯一理由：探针侧重载跑在独立的 reload 协调池上（不与业务命令争用），
+	// 默认 10s，远大于业务命令的 5s（FR-526 §2.2）。走 SendPluginCommand 就无法表达这个差异。
+	// FR-532（生效编排）之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
+	ReloadProbeConfig(ctx context.Context, in *ReloadProbeConfigRequest, opts ...grpc.CallOption) (*ReloadProbeConfigResponse, error)
 	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
 	GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error)
 	// CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
@@ -439,6 +468,16 @@ func (c *workerServiceClient) Register(ctx context.Context, in *RegisterRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RegisterResponse)
 	err := c.cc.Invoke(ctx, WorkerService_Register_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReportStartupProgress(ctx context.Context, in *ReportStartupProgressRequest, opts ...grpc.CallOption) (*ReportStartupProgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportStartupProgressResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReportStartupProgress_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1593,6 +1632,46 @@ func (c *workerServiceClient) QueryServerState(ctx context.Context, in *QuerySer
 	return out, nil
 }
 
+func (c *workerServiceClient) QueryBridgeStatus(ctx context.Context, in *QueryBridgeStatusRequest, opts ...grpc.CallOption) (*QueryBridgeStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryBridgeStatusResponse)
+	err := c.cc.Invoke(ctx, WorkerService_QueryBridgeStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) SetBridgeSubscription(ctx context.Context, in *SetBridgeSubscriptionRequest, opts ...grpc.CallOption) (*SetBridgeSubscriptionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetBridgeSubscriptionResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SetBridgeSubscription_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) QueryBusinessStatus(ctx context.Context, in *QueryBusinessStatusRequest, opts ...grpc.CallOption) (*QueryBusinessStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryBusinessStatusResponse)
+	err := c.cc.Invoke(ctx, WorkerService_QueryBusinessStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReloadProbeConfig(ctx context.Context, in *ReloadProbeConfigRequest, opts ...grpc.CallOption) (*ReloadProbeConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReloadProbeConfigResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReloadProbeConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetVersionResponse)
@@ -1674,6 +1753,17 @@ func (c *workerServiceClient) ProbeInstanceEvidence(ctx context.Context, in *Pro
 type WorkerServiceServer interface {
 	// Register Worker Node 首次启动时注册到 Control Plane。
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
+	// ReportStartupProgress Worker 上报启动阶段进度（FR-486，CP 侧实现）。
+	//
+	// 存在的理由：加载（尤其大索引的全表扫描）发生在**注册之前**，那段时间 CP 侧完全看不到
+	// 该节点——2026-09-28 生产事故中这段黑盒长达 8m39s，主控台连节点都不存在。
+	// 本 RPC 让 Worker 在注册前就能把「当前处于第几阶段」送上来。
+	//
+	// 语义约束（刻意设计）：
+	//   - **best-effort**：Worker 侧上报失败一律静默丢弃，绝不阻塞或拖慢启动；
+	//   - **不构成就绪**：上报过进度不等于节点可服务，就绪判据仍只看注册与心跳；
+	//   - 老 CP 返回 Unimplemented 时 Worker 直接放弃上报（记一条 debug，不重试）。
+	ReportStartupProgress(context.Context, *ReportStartupProgressRequest) (*ReportStartupProgressResponse, error)
 	// Heartbeat 双向心跳流，Worker 上报资源指标。
 	Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error
 	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
@@ -1927,6 +2017,19 @@ type WorkerServiceServer interface {
 	SendPluginCommand(context.Context, *SendPluginCommandRequest) (*SendPluginCommandResponse, error)
 	// QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
 	QueryServerState(context.Context, *QueryServerStateRequest) (*QueryServerStateResponse, error)
+	// QueryBridgeStatus 取探针桥线路健康度（`core.bridge_status`）：重连次数/队列深度/丢弃帧数/在途重载数。
+	// 只读诊断，Worker 不缓存；探针未连时返回 connected=false（不返回 error）。
+	QueryBridgeStatus(context.Context, *QueryBridgeStatusRequest) (*QueryBridgeStatusResponse, error)
+	// SetBridgeSubscription 设置事件主题订阅（`core.subscribe`）：整批覆盖、不是追加。
+	SetBridgeSubscription(context.Context, *SetBridgeSubscriptionRequest) (*SetBridgeSubscriptionResponse, error)
+	// QueryBusinessStatus 取探针已注册业务域与健康状态（`core.business_status`）。
+	QueryBusinessStatus(context.Context, *QueryBusinessStatusRequest) (*QueryBusinessStatusResponse, error)
+	// ReloadProbeConfig 下发配置重载（`core.config_reload`）。
+	//
+	// **独立超时**是本 RPC 存在的唯一理由：探针侧重载跑在独立的 reload 协调池上（不与业务命令争用），
+	// 默认 10s，远大于业务命令的 5s（FR-526 §2.2）。走 SendPluginCommand 就无法表达这个差异。
+	// FR-532（生效编排）之前本 RPC 只保证「能下发并拿回回执」，不维护生效状态机。
+	ReloadProbeConfig(context.Context, *ReloadProbeConfigRequest) (*ReloadProbeConfigResponse, error)
 	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
 	GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error)
 	// CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
@@ -1967,6 +2070,9 @@ type UnimplementedWorkerServiceServer struct{}
 
 func (UnimplementedWorkerServiceServer) Register(context.Context, *RegisterRequest) (*RegisterResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Register not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReportStartupProgress(context.Context, *ReportStartupProgressRequest) (*ReportStartupProgressResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportStartupProgress not implemented")
 }
 func (UnimplementedWorkerServiceServer) Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Heartbeat not implemented")
@@ -2289,6 +2395,18 @@ func (UnimplementedWorkerServiceServer) SendPluginCommand(context.Context, *Send
 func (UnimplementedWorkerServiceServer) QueryServerState(context.Context, *QueryServerStateRequest) (*QueryServerStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryServerState not implemented")
 }
+func (UnimplementedWorkerServiceServer) QueryBridgeStatus(context.Context, *QueryBridgeStatusRequest) (*QueryBridgeStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryBridgeStatus not implemented")
+}
+func (UnimplementedWorkerServiceServer) SetBridgeSubscription(context.Context, *SetBridgeSubscriptionRequest) (*SetBridgeSubscriptionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetBridgeSubscription not implemented")
+}
+func (UnimplementedWorkerServiceServer) QueryBusinessStatus(context.Context, *QueryBusinessStatusRequest) (*QueryBusinessStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryBusinessStatus not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReloadProbeConfig(context.Context, *ReloadProbeConfigRequest) (*ReloadProbeConfigResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReloadProbeConfig not implemented")
+}
 func (UnimplementedWorkerServiceServer) GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetVersion not implemented")
 }
@@ -2345,6 +2463,24 @@ func _WorkerService_Register_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).Register(ctx, req.(*RegisterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ReportStartupProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportStartupProgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReportStartupProgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReportStartupProgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReportStartupProgress(ctx, req.(*ReportStartupProgressRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4197,6 +4333,78 @@ func _WorkerService_QueryServerState_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_QueryBridgeStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryBridgeStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).QueryBridgeStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_QueryBridgeStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).QueryBridgeStatus(ctx, req.(*QueryBridgeStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_SetBridgeSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBridgeSubscriptionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SetBridgeSubscription(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SetBridgeSubscription_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SetBridgeSubscription(ctx, req.(*SetBridgeSubscriptionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_QueryBusinessStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryBusinessStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).QueryBusinessStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_QueryBusinessStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).QueryBusinessStatus(ctx, req.(*QueryBusinessStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ReloadProbeConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReloadProbeConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReloadProbeConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReloadProbeConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReloadProbeConfig(ctx, req.(*ReloadProbeConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_GetVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetVersionRequest)
 	if err := dec(in); err != nil {
@@ -4322,6 +4530,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Register",
 			Handler:    _WorkerService_Register_Handler,
+		},
+		{
+			MethodName: "ReportStartupProgress",
+			Handler:    _WorkerService_ReportStartupProgress_Handler,
 		},
 		{
 			MethodName: "FetchBotWorkerArchive",
@@ -4710,6 +4922,22 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryServerState",
 			Handler:    _WorkerService_QueryServerState_Handler,
+		},
+		{
+			MethodName: "QueryBridgeStatus",
+			Handler:    _WorkerService_QueryBridgeStatus_Handler,
+		},
+		{
+			MethodName: "SetBridgeSubscription",
+			Handler:    _WorkerService_SetBridgeSubscription_Handler,
+		},
+		{
+			MethodName: "QueryBusinessStatus",
+			Handler:    _WorkerService_QueryBusinessStatus_Handler,
+		},
+		{
+			MethodName: "ReloadProbeConfig",
+			Handler:    _WorkerService_ReloadProbeConfig_Handler,
 		},
 		{
 			MethodName: "GetVersion",

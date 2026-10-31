@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 实例批量操作（FR-058）。镜像 FR-038 Bot 批量：按 id/filter 选目标，CP 侧信号量分片有界并发，
+// 实例批量操作。镜像Bot 批量：按 id/filter 选目标，CP 侧信号量分片有界并发，
 // 经 gRPC 复用既有 per-instance RPC 扇出到各自所属 Worker，返回成功/失败/skipped 计数。
 //
 // 与单实例 InstanceService.Start/Stop/... 的差异：单实例路径先做 DB 状态转换再异步 goroutine 委托，
@@ -73,7 +73,7 @@ type InstanceBatchFilter struct {
 	Status *model.InstanceStatus
 	Role   *model.InstanceRole
 	// InstanceIDs 显式实例集合（可选）。用于「按选中实例」走 filter 语义，使滚动编排的
-	// 灰度抽样（ratio）在 filter 模式下生效（FR-457）；为空时不附加该谓词。
+	// 灰度抽样（ratio）在 filter 模式下生效；为空时不附加该谓词。
 	InstanceIDs []uint
 }
 
@@ -283,7 +283,7 @@ func (s *InstanceBatchService) delegateBatchOneContext(parent context.Context, r
 		return fmt.Errorf("实例未运行，无法下发命令（当前状态 %s）", inst.Status)
 	}
 
-	// 在途长操作闸（FR-331 补漏 FR-319 二轮②，FR-323 扩展 import/clone）：批量 start/restart
+	// 在途长操作闸（补漏二轮②扩展 import/clone）：批量 start/restart
 	// 直发 Worker RPC，原先完全绕过单实例 Start 的闸——搭建/导入/克隆中实例会被启动到
 	// 半截工作目录。启动类动作先过同一道闸；闸拦只计 failed、不回写 CRASHED（实例本身无恙）。
 	if req.Action == InstanceBatchStart || req.Action == InstanceBatchRestart {

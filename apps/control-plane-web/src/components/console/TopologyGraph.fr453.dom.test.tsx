@@ -1,12 +1,19 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import TopologyGraph from './TopologyGraph'
 
-/**
- * FR-453 拓扑完整网络视图强断言：
+/* 
+  单个用例要渲染整个拓扑图（多节点 + 边 + 多维度切换），实测单跑约 5.8s。
+  默认 10s 在并行跑全量、机器负载高时会随机超时（同一份代码单跑稳定通过）。
+  这里放宽超时，避免把「机器忙」误报成功能回归。
+*/
+vi.setConfig({ testTimeout: 30_000 })
+
+/** 
+ *拓扑完整网络视图强断言：
  * 1) 未注册实例（beacon/配套服务）也上拓扑（不再只画已注册关系）；
  * 2) 层级随所选分组维度变化（默认 region 两级带）；
  * 3) 节点负载标签来自节点指标，离线节点不显示（不装 0）。
@@ -20,12 +27,12 @@ function bandLabels(): string[] {
   return screen.queryAllByTestId('topology-band-label').map((el) => (el.textContent ?? '').trim())
 }
 
-describe('TopologyGraph（FR-453 完整网络视图）', () => {
+describe('TopologyGraph（完整网络视图）', () => {
   it('未注册实例与配套服务上拓扑（beacon 可见）', async () => {
     renderWithProviders(<TopologyGraph />)
     await screen.findByText('survival-proxy')
 
-    // beacon-1 无注册关系（配套服务），FR-453 前根本不在图上。
+    // beacon-1 无注册关系（配套服务）前根本不在图上。
     expect(await screen.findByText('beacon-1')).toBeInTheDocument()
   })
 

@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// TestUpdate_RoleChangeNormalizesTypeAndProbePort FR-454（第二轮复审 N1）：
+// TestUpdate_RoleChangeNormalizesTypeAndProbePort（第二轮复审 N1）：
 // 改 role 必须重新归一 type 并同步 probe_port，且**与创建路径共用同一口径**——
 // 否则「改 role」会把探索路径刚消灭的脏值（beacon 的 type=minecraft_java）重新制造出来；
 // beacon→backend 又因无 Type 字段而永久卡死（新增 UpdateInstanceFields.Type 作为修回入口）。

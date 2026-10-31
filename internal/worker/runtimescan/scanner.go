@@ -1,4 +1,4 @@
-// Package runtimescan 扫描节点常见安装路径发现运行时候选（FR-298 节点运行时库）。
+// Package runtimescan 扫描节点常见安装路径发现运行时候选（节点运行时库）。
 //
 // 设计约束（见 docs/specs/node-runtime-library/spec.md §3.2）：
 //   - 路径表按 GOOS 内置（jdk / nodejs 两类），路径不存在或探测失败**静默跳过**，
@@ -58,9 +58,9 @@ func New(managedRoots []string) *Scanner {
 	}
 }
 
-// AddNodeGlobs 追加 Node 可执行扫描 glob（FR-299×FR-300 胶合）：默认路径表只含系统常见位，
+// AddNodeGlobs 追加 Node 可执行扫描 glob（×胶合）：默认路径表只含系统常见位，
 // 托管安装根（<数据根>/opt/runtimes/nodejs-*）由 main 据 dataroot 动态追加——否则一键安装的
-// 托管 Node 对扫描发现与 Bot spawn 解析器（FR-300 NodeResolver）不可见。
+// 托管 Node 对扫描发现与 Bot spawn 解析器（NodeResolver）不可见。
 func (s *Scanner) AddNodeGlobs(globs ...string) {
 	s.nodeGlobs = append(s.nodeGlobs, globs...)
 }

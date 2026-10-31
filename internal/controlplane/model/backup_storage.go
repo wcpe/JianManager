@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// BackupStorageType 备份远程存储后端类型（FR-057）。
+// BackupStorageType 备份远程存储后端类型。
 // 与制品库 Asset.StorageBackend 的语义对齐：local 表示节点本地数据根，其余为外置后端。
 type BackupStorageType string
 
@@ -21,7 +21,7 @@ const (
 	BackupStorageWebDAV BackupStorageType = "webdav"
 )
 
-// BackupStorage 备份远程存储后端配置（FR-057）。
+// BackupStorage 备份远程存储后端配置。
 //
 // 凭证字段（AccessKey/SecretKey）按 .claude/rules/config-files.md 规范以 ${ENV_VAR} 形式存储，
 // 不落明文；下发 Worker 前由 service 从环境变量解析为明文（CP 拥有配置）。参见 ADR-011 对齐。
@@ -50,7 +50,7 @@ type BackupStorage struct {
 	LastTestAt      *time.Time `json:"lastTestAt,omitempty"`
 	LastTestOk      bool       `json:"lastTestOk"`
 	LastTestMessage string     `gorm:"type:varchar(255)" json:"lastTestMessage"`
-	// BackupCount/UsedBytes 为 FR-152 列表聚合展示字段，不落库。
+	// BackupCount/UsedBytes 为列表聚合展示字段，不落库。
 	BackupCount int64          `gorm:"-" json:"backupCount"`
 	UsedBytes   int64          `gorm:"-" json:"usedBytes"`
 	CreatedAt   time.Time      `json:"createdAt"`

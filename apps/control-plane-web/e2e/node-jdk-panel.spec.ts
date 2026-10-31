@@ -1,17 +1,18 @@
 import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
-/**
- * FR-178 节点内 JDK + 制品管理面板 · 单机（Playwright + mock 模式）验收。
+/** 
+ *节点内 JDK + 制品管理面板 · 单机（Playwright + mock 模式）验收。
  * 覆盖：JDK 面板（已登记/一键下载/登记已有）+ foojay 多厂商多版本 + 异步安装进度接任务中心 + 测试节点存活。
- * 证据落 .tmp/acceptance/FR-178/。
+ * 证据落 .tmp/acceptance。
  */
 
-test('FR-178 节点 JDK 面板: foojay 下载 + 异步进度 + 测试存活', async ({ page }) => {
+test('节点 JDK 面板: foojay 下载 + 异步进度 + 测试存活', async ({ page }) => {
   await login(page)
-  await page.goto('/nodes')
+  // 阶段 6 起 /nodes 是列表态，分段工具只在详情态，故 JDK 面板改走详情态深链。
+  await page.goto('/nodes?node=1')
 
-  await page.getByRole('button', { name: '运行时', exact: true }).click() // FR-311：JDK 分段更名运行时
+  await page.getByRole('button', { name: '运行时', exact: true }).click() // JDK 分段更名运行时
   await expect(page.getByRole('button', { name: '一键下载' })).toBeVisible()
   await expect(page.getByRole('button', { name: '登记已有' })).toBeVisible()
   await expect(page.getByRole('button', { name: /托管/ })).toBeVisible() // 托管 JDK 分区
@@ -23,5 +24,5 @@ test('FR-178 节点 JDK 面板: foojay 下载 + 异步进度 + 测试存活', as
   await expect(page.getByRole('button', { name: '测试节点存活' })).toBeVisible() // 连通性
   await expect(page.getByRole('button', { name: '下载安装' })).toBeVisible()
 
-  await page.screenshot({ path: '../.tmp/acceptance/FR-178/single-machine-jdk-download.png', fullPage: true })
+  await page.screenshot({ path: '../.tmp/acceptancesingle-machine-jdk-download.png', fullPage: true })
 })

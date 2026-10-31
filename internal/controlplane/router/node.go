@@ -14,14 +14,13 @@ import (
 // NodeHandler 节点路由处理器。
 type NodeHandler struct {
 	nodeSvc   *service.NodeService
-	repairSvc *service.NodeRepairService
 	audit     *service.AuditService
 }
 
 // NewNodeHandler 创建节点路由处理器。
-// repairSvc / audit 可为 nil（坏节点修复入口随之关闭），保证既有装配与测试零改动可用。
-func NewNodeHandler(nodeSvc *service.NodeService, repairSvc *service.NodeRepairService, audit *service.AuditService) *NodeHandler {
-	return &NodeHandler{nodeSvc: nodeSvc, repairSvc: repairSvc, audit: audit}
+// audit 可为 nil（审计未注入时静默跳过），保证既有装配与测试零改动可用。
+func NewNodeHandler(nodeSvc *service.NodeService, audit *service.AuditService) *NodeHandler {
+	return &NodeHandler{nodeSvc: nodeSvc, audit: audit}
 }
 
 // requireNodeRead 节点只读。
@@ -57,6 +56,26 @@ func (h *NodeHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, nodes)
 }
 
+// StartupProgress GET /nodes/startup-progress — 正在启动的 Worker 进度。
+//
+// 单独成端点而不并入 GET /nodes：启动中的 Worker 尚未注册，在 nodes 表里**没有记录**
+// （首装连 UUID 都还没有）。若硬塞进节点列表，会凭空出现「存在但从未上线」的节点；
+// 分开返回让前端能明确区分「已注册的节点」与「正在启动、还没注册的 Worker」。
+func (h *NodeHandler) StartupProgress(c *gin.Context) {
+	if !requireNodeRead(c) {
+		return
+	}
+	items, err := h.nodeSvc.ListStartupProgress()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "查询启动进度失败",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
 // Get 节点详情（仅平台管理员）。
 func (h *NodeHandler) Get(c *gin.Context) {
 	if !requireNodeRead(c) {
@@ -85,7 +104,7 @@ type maintenanceRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
-// Maintenance 置/解节点维护模式（cordon，仅平台管理员）。参见 FR-048。
+// Maintenance 置/解节点维护模式（cordon，仅平台管理员）。参见。
 // Maintenance 维护模式（写）。
 func (h *NodeHandler) Maintenance(c *gin.Context) {
 	if !requireNodeManage(c) {
@@ -115,7 +134,7 @@ func (h *NodeHandler) Maintenance(c *gin.Context) {
 	c.JSON(http.StatusOK, node)
 }
 
-// Drain 排空节点：停止其上运行实例（仅平台管理员，危险操作）。参见 FR-048。
+// Drain 排空节点：停止其上运行实例（仅平台管理员，危险操作）。参见。
 // Drain 排空节点（写）。
 func (h *NodeHandler) Drain(c *gin.Context) {
 	if !requireNodeManage(c) {
@@ -139,8 +158,8 @@ func (h *NodeHandler) Drain(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// Delete 主动下线节点：解除注册并保留记录（仅平台管理员，危险操作）。参见 FR-048。
-// FR-309 实例守卫：名下有实例回 409 并携实例清单；离线节点可 `?force=true` 显式级联
+// Delete 主动下线节点：解除注册并保留记录（仅平台管理员，危险操作）。参见。
+// 实例守卫：名下有实例回 409 并携实例清单；离线节点可 `?force=true` 显式级联
 // 删除实例平台记录（不清理远端文件）；在线节点无论 force 一律拒绝。
 // Delete 删除节点（写）。
 func (h *NodeHandler) Delete(c *gin.Context) {
@@ -179,7 +198,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已下线", "instancesPurged": result.InstancesPurged})
 }
 
-// ListArchived 已下线（软删）节点列表（FR-393，仅平台管理员）。
+// ListArchived 已下线（软删）节点列表（仅平台管理员）。
 func (h *NodeHandler) ListArchived(c *gin.Context) {
 	if !requireNodeRead(c) {
 		return
@@ -192,7 +211,7 @@ func (h *NodeHandler) ListArchived(c *gin.Context) {
 	c.JSON(http.StatusOK, nodes)
 }
 
-// GetArchived 单个归档节点详情（FR-393，仅平台管理员）。
+// GetArchived 单个归档节点详情（仅平台管理员）。
 func (h *NodeHandler) GetArchived(c *gin.Context) {
 	if !requireNodeRead(c) {
 		return
@@ -213,7 +232,7 @@ func (h *NodeHandler) GetArchived(c *gin.Context) {
 	c.JSON(http.StatusOK, node)
 }
 
-// PurgeArchived 彻底清理归档节点（FR-394，硬删库记录，不清理远端文件）。
+// PurgeArchived 彻底清理归档节点（硬删库记录，不清理远端文件）。
 // PurgeArchived 清理归档节点（写）。
 func (h *NodeHandler) PurgeArchived(c *gin.Context) {
 	if !requireNodeManage(c) {
@@ -255,11 +274,21 @@ func (h *NodeHandler) PurgeArchived(c *gin.Context) {
 		return
 	}
 
-	h.recordRepairAudit(c, "node.purge", strconv.FormatUint(uint64(id), 10), map[string]any{
+	h.recordNodeAudit(c, "node.purge", strconv.FormatUint(uint64(id), 10), map[string]any{
 		"force":           force,
 		"instancesPurged": result.InstancesPurged,
 	})
 	c.JSON(http.StatusOK, gin.H{"message": "已清理", "instancesPurged": result.InstancesPurged})
+}
+
+// recordNodeAudit 记录节点操作的审计；audit 未注入时静默跳过。
+func (h *NodeHandler) recordNodeAudit(c *gin.Context, action, targetID string, detail map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	userID, _ := uid.(uint)
+	h.audit.RecordSafe(userID, action, "node", targetID, marshalAuditDetail(detail), c.ClientIP())
 }
 
 // Metrics 返回节点实时指标快照（仅平台管理员）。
@@ -285,149 +314,21 @@ func (h *NodeHandler) Metrics(c *gin.Context) {
 	c.JSON(http.StatusOK, metrics)
 }
 
-// repairConfirmRequest 破坏性修复操作的二次确认请求体（见 ADR-039 §2）。
-type repairConfirmRequest struct {
-	// Confirm 必须显式为 true 才执行破坏性操作。
-	Confirm bool `json:"confirm"`
-}
-
-// recordRepairAudit 记录坏节点修复审计（FR-015/FR-059）；audit 未注入时静默跳过。
-func (h *NodeHandler) recordRepairAudit(c *gin.Context, action, targetID string, detail map[string]any) {
-	if h.audit == nil {
-		return
-	}
-	uid, _ := c.Get(middleware.CtxUserID)
-	userID, _ := uid.(uint)
-	h.audit.RecordSafe(userID, action, "node", targetID, marshalAuditDetail(detail), c.ClientIP())
-}
-
-// repairUnavailable 当坏节点修复服务未注入时统一回 404（功能未开启）。
-func (h *NodeHandler) repairUnavailable(c *gin.Context) bool {
-	if h.repairSvc == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "坏节点修复未启用"})
-		return true
-	}
-	return false
-}
-
-// Suspects GET /nodes/repair/suspects — 列出疑似被串改/重名的节点（只读诊断，仅平台管理员）。参见 ADR-039 §2。
-// Suspects 坏节点可疑列表（读）。
-func (h *NodeHandler) Suspects(c *gin.Context) {
-	if !requireNodeRead(c) || h.repairUnavailable(c) {
-		return
-	}
-	suspects, err := h.repairSvc.ListSuspects()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "检测坏节点失败"})
-		return
-	}
-	c.JSON(http.StatusOK, suspects)
-}
-
-// Orphans GET /nodes/:id/orphans — 统计节点上孤立 JDK/实例数量（只读，仅平台管理员）。参见 ADR-039 §2。
-// Orphans 孤儿列表（读）。
-func (h *NodeHandler) Orphans(c *gin.Context) {
-	if !requireNodeRead(c) || h.repairUnavailable(c) {
-		return
-	}
-	id, err := parseID(c)
-	if err != nil {
-		return
-	}
-	rep, err := h.repairSvc.OrphanReport(id)
-	if err != nil {
-		if errors.Is(err, service.ErrNodeNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "统计孤立资源失败"})
-		return
-	}
-	c.JSON(http.StatusOK, rep)
-}
-
-// Reenroll POST /nodes/:id/reenroll — 把被挤占机器作为新节点重新 enroll（轮换 UUID/secret，破坏性，
-// 需 confirm=true，仅平台管理员，入审计）。参见 ADR-039 §2。
-// Reenroll 重新注册（写）。
-func (h *NodeHandler) Reenroll(c *gin.Context) {
-	if !requireNodeManage(c) || h.repairUnavailable(c) {
-		return
-	}
-	id, err := parseID(c)
-	if err != nil {
-		return
-	}
-	var req repairConfirmRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
-		return
-	}
-	res, err := h.repairSvc.Reenroll(id, req.Confirm)
-	if err != nil {
-		h.writeRepairError(c, err)
-		return
-	}
-	h.recordRepairAudit(c, "node.reenroll", res.OldUUID, map[string]any{"nodeId": id, "newUuid": res.NewUUID})
-	c.JSON(http.StatusOK, res)
-}
-
-// PurgeOrphans POST /nodes/:id/purge-orphans — 清理节点上孤立 JDK/实例（破坏性，需 confirm=true，
-// 仅平台管理员，入审计）。参见 ADR-039 §2。
-// PurgeOrphans 清理孤儿（写）。
-func (h *NodeHandler) PurgeOrphans(c *gin.Context) {
-	if !requireNodeManage(c) || h.repairUnavailable(c) {
-		return
-	}
-	id, err := parseID(c)
-	if err != nil {
-		return
-	}
-	var req repairConfirmRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
-		return
-	}
-	res, err := h.repairSvc.PurgeOrphans(id, req.Confirm)
-	if err != nil {
-		h.writeRepairError(c, err)
-		return
-	}
-	h.recordRepairAudit(c, "node.purge_orphans", c.Param("id"),
-		map[string]any{"nodeId": id, "jdkDeleted": res.JDKDeleted, "instancesPurged": res.InstancesPurged})
-	c.JSON(http.StatusOK, res)
-}
-
-// writeRepairError 把修复服务错误映射为 HTTP 响应：未确认→409、节点不存在→404、其它→500。
-func (h *NodeHandler) writeRepairError(c *gin.Context, err error) {
-	switch {
-	case errors.Is(err, service.ErrRepairNotConfirmed):
-		c.JSON(http.StatusConflict, gin.H{"error": "CONFIRM_REQUIRED", "message": err.Error()})
-	case errors.Is(err, service.ErrNodeNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
-	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "修复操作失败"})
-	}
-}
-
 // RegisterRoutes 注册节点路由。
 func (h *NodeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	nodes := rg.Group("/nodes")
 	{
 		nodes.GET("", h.List)
-		// 坏节点修复（见 ADR-039 §2）：诊断只读 + 破坏性修复（二次确认 + 审计）。
-		// 静态段 repair 须在 /:id 之前注册，避免被 :id 通配吞掉。
-		nodes.GET("/repair/suspects", h.Suspects)
-		// 归档列表/详情/清理（FR-393/394）：静态段 archived 须在 /:id 之前。
+		// 归档列表/详情/清理（394）：静态段 archived 须在 /:id 之前。
 		nodes.GET("/archived", h.ListArchived)
 		nodes.GET("/archived/:id", h.GetArchived)
+		// 正在启动的 Worker 进度：静态段 startup-progress 须在 /:id 之前。
+		nodes.GET("/startup-progress", h.StartupProgress)
 		nodes.DELETE("/archived/:id", h.PurgeArchived)
 		nodes.GET("/:id", h.Get)
 		nodes.GET("/:id/metrics", h.Metrics)
-		nodes.GET("/:id/orphans", h.Orphans)
 		nodes.POST("/:id/maintenance", h.Maintenance)
 		nodes.POST("/:id/drain", h.Drain)
-		nodes.POST("/:id/reenroll", h.Reenroll)
-		nodes.POST("/:id/purge-orphans", h.PurgeOrphans)
 		nodes.DELETE("/:id", h.Delete)
 	}
 }

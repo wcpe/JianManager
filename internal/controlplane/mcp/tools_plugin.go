@@ -4,7 +4,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// pluginToolSpecs 插件域工具（FR-397）：只认既有制品 assetId，不接受任何文件字节。
+// pluginToolSpecs 插件域工具：只认既有制品 assetId，不接受任何文件字节。
 var pluginToolSpecs = []toolSpec{
 	{
 		Def: ToolDef{

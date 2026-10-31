@@ -2,12 +2,12 @@ package model
 
 import "time"
 
-// InstanceBinaryBinding 实例 ↔ 二进制版本的绑定（FR-468 §2.1）。
+// InstanceBinaryBinding 实例 ↔ 二进制版本的绑定（§2.1）。
 //
 // 版本真源是制品库 Asset（内容寻址，SHA256 去重；ADR-011），本表只记录
 // 「该实例当前跑的是哪个 asset」这一事实，避免再建一套版本表形成双真源。
 //
-// 关键决策（FR-468 §2.2）：重建（rebuildBinaryInstance）从「重新按优先级解析制品」
+// 关键决策（§2.2）：重建（rebuildBinaryInstance）从「重新按优先级解析制品」
 // 改为「读本绑定」——旧行为会在制品库出现新版本时把运行中的实例静默升级/降级，
 // 运维无法预期。新的「吃到新版本」由受控升级（BinaryVersionService.Upgrade）显式承担。
 // 语义修订见 ADR-090 补记。

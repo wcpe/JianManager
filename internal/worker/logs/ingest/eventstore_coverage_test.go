@@ -264,7 +264,7 @@ func TestAppendEventsMemoHitAvoidsRescan(t *testing.T) {
 }
 
 // TestAppendEventsLegacyStoredThroughStillAdvances 守住既有契约：落段后仍要推进
-// EventsStoredThrough 并清掉内联副本（B1a 的按条引用判据 + FR-484 的 RSS 目标）。
+// EventsStoredThrough 并清掉内联副本（B1a 的按条引用判据的 RSS 目标）。
 func TestAppendEventsLegacyStoredThroughStillAdvances(t *testing.T) {
 	m := newCoverageTestManager(t)
 	key := "inst:190/file/g1"

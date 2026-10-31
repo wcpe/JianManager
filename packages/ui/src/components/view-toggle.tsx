@@ -1,11 +1,11 @@
 import { LayoutGrid, List } from 'lucide-react'
 import { cn } from '../lib/utils'
 
-/** 列表呈现形态：卡片网格 / 紧凑列表（FR-136/144/147 工作台卡 ⇄ 列表切换）。 */
+/** 列表呈现形态：卡片网格 / 紧凑列表（144/147 工作台卡 ⇄ 列表切换）。 */
 export type ViewMode = 'card' | 'list'
 
-/**
- * 卡片 / 列表视图切换分段控件（FR-163 视觉，靛蓝圆角 + iOS 缓动）。
+/** 
+ * 卡片 / 列表视图切换分段控件（视觉，靛蓝圆角 + iOS 缓动）。
  * 运行实体三页（实例/节点/Bot）复用，激活项主色高亮。
  */
 export function ViewToggle({
@@ -40,7 +40,7 @@ export function ViewToggle({
             aria-pressed={active}
             title={label}
             className={cn(
-              // FR-244 收敛：切换态时长绑 motion token（normal≈180ms），不再散落硬编码定值。
+              // 收敛：切换态时长绑 motion token（normal≈180ms），不再散落硬编码定值。
               'flex size-7 items-center justify-center rounded-md transition-all duration-[var(--motion-duration-normal)] ease-ios',
               active
                 ? 'bg-card text-primary shadow-soft'

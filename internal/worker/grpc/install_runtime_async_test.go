@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 异步 InstallRuntime（携带 task_id，FR-299）：RPC 立即返回并登记内存任务表，
+// 异步 InstallRuntime（携带 task_id）：RPC 立即返回并登记内存任务表，
 // 不阻塞下载完成；随后后台 goroutine 因无可达源最终把任务置 failed。
 func TestServer_InstallRuntime_Async_ReturnsImmediatelyAndRegisters(t *testing.T) {
 	s := NewServer(process.NewManager(t.TempDir()), "node-rt", nil, nil, nil)

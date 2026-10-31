@@ -31,11 +31,11 @@ var (
 	ErrInvalidInstanceRole = errors.New("无效的实例角色")
 	// ErrInvalidInstanceType 实例类型不在允许枚举内（minecraft_java/generic）。
 	ErrInvalidInstanceType = errors.New("无效的实例类型")
-	// ErrStartCommandRequired 非 docker 实例缺启动命令（docker 可空，交镜像 entrypoint 自管启动，FR-078）。
+	// ErrStartCommandRequired 非 docker 实例缺启动命令（docker 可空，交镜像 entrypoint 自管启动）。
 	ErrStartCommandRequired = errors.New("非 docker 实例必须提供启动命令")
 )
 
-// PreflightError 启动预检未通过错误（FR-314）：携带面向用户的原因，供 HTTP 层映射 422 PREFLIGHT_FAILED。
+// PreflightError 启动预检未通过错误：携带面向用户的原因，供 HTTP 层映射 422 PREFLIGHT_FAILED。
 type PreflightError struct {
 	Reason string
 }
@@ -64,7 +64,7 @@ type InstanceService struct {
 	groupSvc *GroupService
 	pool     *cpgrpc.ClientPool
 	// settings 提供平台设置生效值（graceful_stop.timeout），随启动下发使优雅停止超时真生效；
-	// 为 nil 时不下发，Worker 回退本地 env/默认（FR-063）。
+	// 为 nil 时不下发，Worker 回退本地 env/默认。
 	settings   SettingsReader
 	logHolders *LogTargetHolderService
 
@@ -92,7 +92,7 @@ type InstanceService struct {
 	// 唯一约束 + 冲突重试，暂超范围（见 ports.go 注释）。
 	nodePortAllocMu sync.Mutex
 
-	// beaconPush 是 FR-443 的 Beacon 拓扑推送钩子（可选协同）。为 nil 表示未部署协同，
+	// beaconPush 是的 Beacon 拓扑推送钩子（可选协同）。为 nil 表示未部署协同，
 	// 或未开启 beacon.push-enabled——此时全部触发点直接返回，实例创建/删除/改名照常成功。
 	// 由 main 装配阶段经 SetBeaconPush 注入，避免 service 层反向依赖装配顺序。
 	beaconPush *BeaconPushService
@@ -146,12 +146,12 @@ func (s *InstanceService) acquireInstanceOperation(id uint) func() {
 	}
 }
 
-// SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
+// SetSettingsReader 注入平台设置读取器。在 main 装配阶段调用，避免构造期循环依赖。
 func (s *InstanceService) SetSettingsReader(r SettingsReader) {
 	s.settings = r
 }
 
-// SetBeaconPush 注入 Beacon 拓扑推送服务（FR-443，见 ADR-090）。在 main 装配阶段调用。
+// SetBeaconPush 注入 Beacon 拓扑推送服务（见 ADR-090）。在 main 装配阶段调用。
 //
 // **可选协同，绝非依赖**：传 nil（未配置 beacon.endpoint 或未开 push-enabled）时全部推送
 // 触发点直接返回——实例创建/删除/改名照常成功，无任何报错或降级提示。
@@ -159,7 +159,7 @@ func (s *InstanceService) SetBeaconPush(p *BeaconPushService) {
 	s.beaconPush = p
 }
 
-// pushTopologyAsync 是 FR-443 的推送触发点：把一次**拓扑变更**异步推给 Beacon。
+// pushTopologyAsync 是的推送触发点：把一次**拓扑变更**异步推给 Beacon。
 //
 // 只有四类事件会走到这里：实例创建 / 删除 / 改名 / 改归属（role、tags）。
 // **实例启停与重启刻意不推送**（ADR-090 §6）：高频操作（批量重启 60 台 = 120 次推送），
@@ -213,6 +213,9 @@ type CreateInstanceRequest struct {
 	Name             string             `json:"name" binding:"required,min=1,max=128"`
 	Type             model.InstanceType `json:"type" binding:"required"`
 	Role             model.InstanceRole `json:"role"`
+	// Kind 服务端类别：plugin / proxy / binary。留空由 Create 按 type+role 回退推断，
+	// 但各搭建入口应显式传入（它们知道用户的 coreType，比推断准确）。
+	Kind model.InstanceKind `json:"kind"`
 	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
 	StartCommand     string             `json:"startCommand"`
 	JDKID            uint               `json:"jdkId"`
@@ -220,9 +223,9 @@ type CreateInstanceRequest struct {
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
-	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
+	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（ADR-019）。
 	Image string `json:"image"`
-	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079，ADR-019）；仅 processType=docker 使用，0=不限制。
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（ADR-019）；仅 processType=docker 使用，0=不限制。
 	CPULimit    float64 `json:"cpuLimit"`
 	MemLimitMB  int64   `json:"memLimitMb"`
 	DiskLimitMB int64   `json:"diskLimitMb"`
@@ -233,7 +236,7 @@ type CreateInstanceRequest struct {
 	QueryPort   int     `json:"queryPort"`
 	ProbePort   int     `json:"probePort"`
 
-	// importWorkDir / importInPlace 仅供包内导入流程（FR-302，见 ADR-069）预置工作目录：
+	// importWorkDir / importInPlace 仅供包内导入流程（见 ADR-069）预置工作目录：
 	// 就地=原目录绝对路径、搬迁=已搬迁的系统分配相对路径，绕过下方系统分配。
 	// 未导出故 JSON 绑定不可注入——外部 API 依旧无法手填任意工作目录（ADR-007 原则不破）。
 	importWorkDir string
@@ -242,7 +245,7 @@ type CreateInstanceRequest struct {
 
 // Create 创建实例。
 func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, error) {
-	// 调度拦截（FR-048）：维护模式（cordon）节点拒绝接纳新实例。
+	// 调度拦截：维护模式（cordon）节点拒绝接纳新实例。
 	// 直接查目标节点的维护标记，避免 InstanceService 反向依赖 NodeService。
 	// 节点不存在时不在此处硬失败（沿用既有创建行为，注册/启动阶段另有校验），
 	// 仅当节点存在且处于维护模式时拒绝。
@@ -269,7 +272,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		req.StartCommand = derived
 	}
 
-	// 非 docker 实例必须有启动命令；docker 实例可空——交镜像 entrypoint 自管启动（FR-078，ADR-019）。
+	// 非 docker 实例必须有启动命令；docker 实例可空——交镜像 entrypoint 自管启动（ADR-019）。
 	if strings.TrimSpace(req.StartCommand) == "" && req.ProcessType != model.ProcessTypeDocker {
 		return nil, ErrStartCommandRequired
 	}
@@ -279,9 +282,9 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	req.DiskLimitMB = normalizeResourceLimitMB(req.DiskLimitMB)
 
 	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例始终系统分配（忽略用户手填）；
-	// 其它类型（generic）调用方未传则同样系统分配（FR-234 创建向导隐藏工作目录、统一自动生成），
+	// 其它类型（generic）调用方未传则同样系统分配（创建向导隐藏工作目录、统一自动生成），
 	// 显式传入则保留（API 调用方仍可指定）。一律落数据根 var/servers 下相对路径保证便携。
-	// 导入流程（FR-302）经包内未导出字段预置工作目录，是系统分配的唯一例外（ADR-069）。
+	// 导入流程经包内未导出字段预置工作目录，是系统分配的唯一例外（ADR-069）。
 	workDir := req.WorkDir
 	switch {
 	case req.importWorkDir != "":
@@ -296,16 +299,24 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		role = model.InstanceRoleUniversal
 	}
 
-	// FR-454 归一口径（与搭建路径 createBeaconInstance 一致）：Beacon 配套服务不是 MC Java 进程，
+	// 归一口径（与搭建路径 createBeaconInstance 一致）：Beacon 配套服务不是 MC Java 进程，
 	// role=beacon 时 type 一律归一为 generic，避免手工 API / 后续路径再次写入 minecraft_java 脏值
 	// （历史脏值另有 database.backfillBeaconInstanceType 幂等回填）。仅看 role，不看 name。
 	// 归一逻辑收敛到 model.NormalizeInstanceType，与 Update 共用一份口径防漂移。
 	instType := model.NormalizeInstanceType(req.Type, role)
-	// FR-454：不适用 ServerProbe 的实例（代理/Beacon/通用二进制）一律不落探针端口，
+	// 不适用 ServerProbe 的实例（代理/Beacon/通用二进制）一律不落探针端口，
 	// 防手工 API 直落非 0 probe_port（此前会写出 port>0 的探针配置、心跳每拍抓 /metrics 必失败）。
 	probePort := req.ProbePort
 	if !model.IsProbeApplicable(instType, role) {
 		probePort = 0
+	}
+
+	// 类别：调用方显式给了就用它；否则按归一后的 type+role 回退推断。
+	// 放在归一之后——role=beacon 会把 type 改成 generic，若先推断会得到错误的「二进制」/「插件服」边界。
+	kind := req.Kind
+	if !model.ValidInstanceKind(kind) {
+		probe := &model.Instance{Type: instType, Role: role}
+		kind = probe.KindOrInfer()
 	}
 
 	instance := &model.Instance{
@@ -313,6 +324,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		Name:             req.Name,
 		Type:             instType,
 		Role:             role,
+		Kind:             kind,
 		ProcessType:      req.ProcessType,
 		StartCommand:     req.StartCommand,
 		JDKID:            req.JDKID,
@@ -355,7 +367,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 			}
 
 			// Bot 数配额：组内关联 Bot 已达上限时拒绝新建实例
-			// 参见 FR-003 验收：配额检查覆盖 MaxBots。
+			// 参见验收：配额检查覆盖 MaxBots。
 			if quota.MaxBots > 0 {
 				var botCount int64
 				tx.Model(&model.Bot{}).
@@ -367,20 +379,19 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 				}
 			}
 
-			// 存储配额：按组内备份总大小预估，超额拒绝创建。
-			// 参见 FR-003 验收：配额检查覆盖 MaxStorageMB。
-			// TODO(FR-003): 接入 Worker 工作目录大小上报后替换为更精确的累计。
+			// 存储配额：口径与运行期强制、配额页**同源同实现**。
+			//
+			// 走 groupUsedStorageMB：组内各实例的真实工作目录占用，逐实例回退备份大小。
+			// 三处（创建检查 / groupDiskFreeMB / GetQuotaUsage）都调这一个函数——
+			// 此前各写一遍 SUM(备份大小)，换口径时只改一处的后果正是
+			// 「创建时判通过、运行期立刻判超限」。
 			if quota.MaxStorageMB > 0 {
-				var storageSum struct {
-					Total float64
+				usedMB, uerr := groupUsedStorageMB(tx, req.GroupID)
+				if uerr != nil {
+					return fmt.Errorf("统计组存储用量失败: %w", uerr)
 				}
-				tx.Model(&model.Backup{}).
-					Select("COALESCE(SUM(file_size_mb), 0) as total").
-					Joins("JOIN group_instances ON group_instances.instance_id = backups.instance_id").
-					Where("group_instances.group_id = ?", req.GroupID).
-					Scan(&storageSum)
-				if int(storageSum.Total) >= quota.MaxStorageMB {
-					return fmt.Errorf("%w: 存储 %d/%d MB", ErrQuotaExceeded, int(storageSum.Total), quota.MaxStorageMB)
+				if int(usedMB) >= quota.MaxStorageMB {
+					return fmt.Errorf("%w: 存储 %d/%d MB", ErrQuotaExceeded, int(usedMB), quota.MaxStorageMB)
 				}
 			}
 		}
@@ -418,14 +429,14 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		slog.Warn("实例已创建但未注册到 Worker，启动时将重试", "instanceId", instance.UUID, "error", err)
 	}
 
-	// 拓扑推送（FR-443）：实例创建 = 需在 Beacon 建立 server 记录。异步、失败只写审计，
+	// 拓扑推送：实例创建 = 需在 Beacon 建立 server 记录。异步、失败只写审计，
 	// 未配置协同则整体跳过——本函数的成功返回不受其影响（可选协同，绝非依赖）。
 	s.pushTopologyAsync(beaconPushEventCreate, instance)
 
 	return instance, nil
 }
 
-// InstanceFilter 聚合实例列表的多维筛选条件（FR-047）。
+// InstanceFilter 聚合实例列表的多维筛选条件。
 // 各字段为零值（nil / 空串）时表示该维度不参与过滤；多维之间为 AND 组合。
 // 群组(NetworkID)、节点/状态/角色/组用 DB 侧过滤；环境(Env)/标签(Tag)因 Tags 以
 // JSON 字符串存储，DB 侧用 LIKE 粗筛，最终由应用层精确校验（避免子串误命中）。
@@ -483,7 +494,7 @@ func filterByTags(instances []model.Instance, env, tag string) []model.Instance 
 	return out
 }
 
-// List 返回实例列表，支持按节点/状态/组/角色/群组/环境/标签多维组合过滤（FR-047）。
+// List 返回实例列表，支持按节点/状态/组/角色/群组/环境/标签多维组合过滤。
 func (s *InstanceService) List(f InstanceFilter) ([]model.Instance, error) {
 	var instances []model.Instance
 	q := applyDBFilters(s.db.Model(&model.Instance{}), f)
@@ -496,13 +507,13 @@ func (s *InstanceService) List(f InstanceFilter) ([]model.Instance, error) {
 		return nil, fmt.Errorf("查询实例列表失败: %w", err)
 	}
 	out := filterByTags(instances, f.Env, f.Tag)
-	// 列表也下发能力画像（FR-445 §2.4/§2.5）：前端列表优先用后端画像，本地兜底表仅作降级。
+	// 列表也下发能力画像（§2.4/§2.5）：前端列表优先用后端画像，本地兜底表仅作降级。
 	attachCapabilitiesAll(out)
 	return out, nil
 }
 
 // ListByGroups 返回指定组集合内的实例列表，用于非平台管理员的权限过滤。
-// 在权限组约束之上叠加 InstanceFilter 的多维筛选（FR-047）。
+// 在权限组约束之上叠加 InstanceFilter 的多维筛选。
 func (s *InstanceService) ListByGroups(groupIDs []uint, f InstanceFilter) ([]model.Instance, error) {
 	if len(groupIDs) == 0 {
 		return []model.Instance{}, nil
@@ -521,7 +532,7 @@ func (s *InstanceService) ListByGroups(groupIDs []uint, f InstanceFilter) ([]mod
 	return out, nil
 }
 
-// ── FR-247 实例规模化：服务端分页搜索 + 维度聚合 ─────────────────────────────
+// ──实例规模化：服务端分页搜索 + 维度聚合 ─────────────────────────────
 
 const (
 	// defaultInstancePageSize 分页默认每页条数；maxInstancePageSize 上限（约束响应体大小）。
@@ -537,11 +548,17 @@ var instanceSortColumns = map[string]string{
 	"nodeId":    "instances.node_id",
 }
 
-// InstanceSearchParams 分页搜索参数（FR-247）。嵌 InstanceFilter 复用多维筛选，
+// InstanceSearchParams 分页搜索参数。嵌 InstanceFilter 复用多维筛选，
 // 另加自由文本 Query（名称子串）、Sort/Order、Page/PageSize。
 type InstanceSearchParams struct {
 	InstanceFilter
-	Query    string
+	Query string
+	// UUID 按实例 uuid 精确查。
+	//
+	// 用途：前端持有的是 URL 里的实例 uuid（下钻深链 `?instance=<uuid>`），但下游接口要的是
+	// 数字 id（例如进程详情按 instanceId 取）。此前前端只能拉全量实例列表再本地 find，
+	// 千级规模下约 1MB/轮且带 30 秒兜底轮询——加这个参数后一次精确查询即可。
+	UUID     *string
 	Sort     string
 	Order    string
 	Page     int
@@ -570,25 +587,32 @@ func (p *InstanceSearchParams) Normalize() {
 	}
 }
 
-// NodeCount 单节点实例计数（FR-247 聚合）。
+// NodeCount 单节点实例计数（聚合）。
 type NodeCount struct {
 	NodeID uint  `json:"nodeId" gorm:"column:node_id"`
 	Count  int64 `json:"count" gorm:"column:cnt"`
 }
 
-// InstanceAggregate 实例维度计数（FR-247）：供前端筛选 chip / 分组头不拉全集即得计数。
-// ByStatus/ByRole 含全部枚举键（零补 0）；ByNode 仅含出现的节点（按 nodeId 升序）。
+// InstanceAggregate 实例维度计数：供前端筛选 chip / 分组头不拉全集即得计数。
+// ByStatus/ByRole/ByProcessType 含全部枚举键（零补 0）；ByNode 仅含出现的节点（按 nodeId 升序）。
+//
+// 加 ByProcessType 的动机：统计页原先为画「按进程类型分布」而拉全量实例列表（千级约 1MB + 30 秒
+// 兜底轮询）。聚合里补上这一维后，前端不必再为一张分布图付全量代价。
 type InstanceAggregate struct {
-	Total    int64            `json:"total"`
-	ByStatus map[string]int64 `json:"byStatus"`
-	ByNode   []NodeCount      `json:"byNode"`
-	ByRole   map[string]int64 `json:"byRole"`
+	Total         int64            `json:"total"`
+	ByStatus      map[string]int64 `json:"byStatus"`
+	ByNode        []NodeCount      `json:"byNode"`
+	ByRole        map[string]int64 `json:"byRole"`
+	ByProcessType map[string]int64 `json:"byProcessType"`
 }
 
 // applySearchFilters 把可下推维度附加到查询；env/tag 用引号定界 LIKE 精确下推到 SQL
 // （分页路径不能再 Go 后置过滤，否则破坏 page/total 一致性），并加名称子串 q。
 // 不含 GroupID / 权限作用域（由 scopedBase 按管理员/非管理员分别 JOIN）。
 func applySearchFilters(q *gorm.DB, p InstanceSearchParams) *gorm.DB {
+	if p.UUID != nil {
+		q = q.Where("instances.uuid = ?", *p.UUID)
+	}
 	if p.NodeID != nil {
 		q = q.Where("instances.node_id = ?", *p.NodeID)
 	}
@@ -631,7 +655,7 @@ func (s *InstanceService) scopedBase(scope []uint, p InstanceSearchParams) *gorm
 	return q
 }
 
-// TopologyInstanceBrief 是 GET /topology 里的全量实例最小投影（FR-452/453）：
+// TopologyInstanceBrief 是 GET /topology 里的全量实例最小投影（453）：
 // 让未注册实例（beacon / 独立服务 / 已建未挂 BC 的后端）也能上拓扑图。
 // 一次全表查询组装（无 N+1），字段与拓扑前端消费面一致。
 type TopologyInstanceBrief struct {
@@ -646,7 +670,7 @@ type TopologyInstanceBrief struct {
 	Tags string `json:"tags"`
 }
 
-// AllBriefs 返回实例的最小投影（FR-452/453），供 GET /topology 一次带出。
+// AllBriefs 返回实例的最小投影（453），供 GET /topology 一次带出。
 // scope==nil 表示平台管理员（全量，不收敛）；scope 非 nil 时按可访问实例集合收敛
 // （非管理员；空切片=无可访问实例 → 空结果），口径与 SearchInstances/scopedBase 一致。
 // 单条 SELECT 固定列查询，无 per-instance 二次查询；id asc 保序，前端聚合稳定。
@@ -689,7 +713,7 @@ func (s *InstanceService) AllBriefs(scope []uint) ([]TopologyInstanceBrief, erro
 	return out, nil
 }
 
-// SearchInstances 分页搜索实例（FR-247）。返回当前页实例 + 筛选下全量 total。
+// SearchInstances 分页搜索实例。返回当前页实例 + 筛选下全量 total。
 // scope==nil=平台管理员；非空=限定可访问组；非空且为空集=无可访问组，直接空结果。
 func (s *InstanceService) SearchInstances(scope []uint, p InstanceSearchParams) ([]model.Instance, int64, error) {
 	p.Normalize()
@@ -714,9 +738,13 @@ func (s *InstanceService) SearchInstances(scope []uint, p InstanceSearchParams) 
 	return items, total, nil
 }
 
-// AggregateInstances 在同筛选 + 作用域下按状态/节点/角色分组计数（FR-247）。
+// AggregateInstances 在同筛选 + 作用域下按状态/节点/角色分组计数。
 func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParams) (InstanceAggregate, error) {
-	agg := InstanceAggregate{ByStatus: map[string]int64{}, ByRole: map[string]int64{}}
+	agg := InstanceAggregate{
+		ByStatus:      map[string]int64{},
+		ByRole:        map[string]int64{},
+		ByProcessType: map[string]int64{},
+	}
 	// 预置全枚举键为 0，前端 chip 不缺键。
 	for _, st := range []model.InstanceStatus{
 		model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning,
@@ -729,6 +757,11 @@ func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParam
 		model.InstanceRoleUniversal, model.InstanceRoleBeacon,
 	} {
 		agg.ByRole[string(r)] = 0
+	}
+	for _, pt := range []model.ProcessType{
+		model.ProcessTypeDirect, model.ProcessTypeDaemon, model.ProcessTypeDocker, model.ProcessTypeRCON,
+	} {
+		agg.ByProcessType[string(pt)] = 0
 	}
 	if scope != nil && len(scope) == 0 {
 		return agg, nil
@@ -761,6 +794,15 @@ func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParam
 		agg.ByRole[r.Grp] = r.Cnt
 	}
 
+	var ptRows []countRow
+	if err := s.scopedBase(scope, p).Select("instances.process_type as grp, count(*) as cnt").
+		Group("instances.process_type").Scan(&ptRows).Error; err != nil {
+		return agg, fmt.Errorf("按进程类型聚合失败: %w", err)
+	}
+	for _, r := range ptRows {
+		agg.ByProcessType[r.Grp] = r.Cnt
+	}
+
 	if err := s.scopedBase(scope, p).Select("instances.node_id as node_id, count(*) as cnt").
 		Group("instances.node_id").Order("instances.node_id asc").Scan(&agg.ByNode).Error; err != nil {
 		return agg, fmt.Errorf("按节点聚合失败: %w", err)
@@ -778,18 +820,18 @@ func (s *InstanceService) GetByID(id uint) (*model.Instance, error) {
 		}
 		return nil, fmt.Errorf("查询实例失败: %w", err)
 	}
-	// 详情/单查路径支付能力画像（FR-445 §2.4）：按当前 (type, role) 现算，不落库。
+	// 详情/单查路径支付能力画像（§2.4）：按当前 (type, role) 现算，不落库。
 	AttachCapabilities(&instance)
 	return &instance, nil
 }
 
 // UpdateInstanceFields 实例可更新字段（nil 表示不变）。
-// tags 用于环境/标签多维分组（FR-047）：写入前规范化（去空/去重/保序），
+// tags 用于环境/标签多维分组：写入前规范化（去空/去重/保序），
 // 环境维度复用 `env:` 前缀标签，不单独建字段。
 type UpdateInstanceFields struct {
 	Name         *string
 	StartCommand *string
-	// LaunchSpec MC 结构化启动规格 JSON（FR-451 配置源明面化：startup.launchSpec 内联项写入）。
+	// LaunchSpec MC 结构化启动规格 JSON（配置源明面化：startup.launchSpec 内联项写入）。
 	// nil=不变；写入仅更新持久化字段并同步 Worker 下次启动规格，不在 Update 内重派生 start_command
 	// （start_command 由 Create 派生，二者保持一致由调用方负责）。
 	LaunchSpec  *string
@@ -803,18 +845,18 @@ type UpdateInstanceFields struct {
 	// 导致群组拓扑与注册关系都认不出它是代理）。变更只写本表，不做级联：
 	// 原为 proxy 的 server_registrations 保留，避免误删运维数据。
 	//
-	// 与 Type 的约束（FR-454）：改 role=beacon 会强制把 type 归一为 generic，并把 probe_port 归零；
+	// 与 Type 的约束：改 role=beacon 会强制把 type 归一为 generic，并把 probe_port 归零；
 	// 改为不适用探针的 role/type 时 probe_port 一并归零。见 Update 内的不变量收口。
 	Role *model.InstanceRole
 	// Type 实例类型（minecraft_java/generic）；nil=不变。
 	//
-	// 用途（FR-454）：role 与 type 是**两个独立字段**，改 role 不会替调用方猜测 type。
+	// 用途：role 与 type 是**两个独立字段**，改 role 不会替调用方猜测 type。
 	// 特别是「beacon→backend」时实例的 type 仍是 generic（Beacon 搭建/幂等回填会把它归一为
 	// generic），此时若要恢复为可加载探针的 MC 服务端，必须**同时显式**传 Type=minecraft_java
 	// ——否则实例会永久停留在 IsProbeApplicable=false，且此前无任何 API 可修回（本字段即为修回入口）。
 	// 非法值直接拒绝（不静默回落）。role=beacon 时本字段被忽略并强制归一为 generic（硬不变量）。
 	Type *model.InstanceType
-	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079）；nil=不变，0=清除限制。
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额；nil=不变，0=清除限制。
 	CPULimit    *float64
 	MemLimitMB  *int64
 	DiskLimitMB *int64
@@ -885,7 +927,7 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		}
 		updates["tags"] = string(raw)
 	}
-	// docker 资源限额（FR-079）：传指针即写入（含 0=清除限制）。变更对下一次启动生效（启动时随 spec 定型）。
+	// docker 资源限额：传指针即写入（含 0=清除限制）。变更对下一次启动生效（启动时随 spec 定型）。
 	if f.CPULimit != nil {
 		updates["cpu_limit"] = normalizeCPULimit(*f.CPULimit)
 	}
@@ -896,7 +938,7 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		updates["disk_limit_mb"] = normalizeResourceLimitMB(*f.DiskLimitMB)
 	}
 
-	// FR-454 不变量收口：role 与 type/probe_port 必须自洽，且**与创建路径共用同一口径**，
+	// 不变量收口：role 与 type/probe_port 必须自洽，且**与创建路径共用同一口径**，
 	// 否则「改 role」会把探索路径刚消灭的脏值（beacon 的 type=minecraft_java）重新制造出来。
 	//
 	// 此前缺陷：
@@ -951,7 +993,7 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		}
 	}
 
-	// 拓扑推送（FR-443 §3.1）：只推**幂等语义变更**——改名（serverId 语义变更）与改归属
+	// 拓扑推送（§3.1）：只推**幂等语义变更**——改名（serverId 语义变更）与改归属
 	// （role/tags 影响区服分派）。其它字段（启动命令/环境变量/JDK/资源限额）属实例内部配置，
 	// 不改变拓扑，推了只是噪声。
 	//
@@ -968,7 +1010,7 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 	return updated, nil
 }
 
-// deleteStopSettleInterval / deleteStopSettleMargin 是删除编排的停止收敛节奏（FR-310）。
+// deleteStopSettleInterval / deleteStopSettleMargin 是删除编排的停止收敛节奏。
 // StopInstance 对 daemon 策略是「发起停止」即返回（wrapper 端优雅关服、超时强杀进程树兜底），
 // 进程真正退出并释放文件锁可能滞后整个优雅停止窗口，Windows 上 Worker 的 RemoveAll 在此
 // 窗口内会撞锁失败——删除编排在窗口内按 interval 重试清理，而非把「删除失败请重试」抛给用户；
@@ -978,7 +1020,7 @@ var (
 	deleteStopSettleMargin   = 15 * time.Second
 )
 
-// Delete 删除实例。运行中/启动中/停止中的实例先同步停止（FR-310：Worker 侧优雅停，
+// Delete 删除实例。运行中/启动中/停止中的实例先同步停止（：Worker 侧优雅停，
 // 超时强杀进程树），停成才继续删；停不成中止删除并返回可操作错误——此前 CP 删记录而
 // Worker 运行态守卫拒杀进程，DB 与现实脱钩，java 进程沦为无主孤儿继续占端口。
 // 随后经 gRPC 让 Worker 清理实例数据（工作目录 + 派生索引 + 注册表条目），成功后再删记录，
@@ -988,7 +1030,7 @@ func (s *InstanceService) Delete(id uint) error {
 	return s.deleteInternal(id, 0)
 }
 
-// DeleteForExpectedNode Agent 专用删除：锁内重验 node 归属，变化则拒绝（FR-396）。
+// DeleteForExpectedNode Agent 专用删除：锁内重验 node 归属，变化则拒绝。
 func (s *InstanceService) DeleteForExpectedNode(id, expectedNodeID uint) error {
 	if expectedNodeID == 0 {
 		return fmt.Errorf("expectedNodeID 无效")
@@ -1031,9 +1073,9 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 		// 级联删除群组服关系（ADR-007）：作为代理或后端的注册记录、群组成员关系。
 		tx.Where("proxy_id = ? OR backend_id = ?", id, id).Delete(&model.ServerRegistration{})
 		tx.Where("instance_id = ?", id).Delete(&model.NetworkMember{})
-		// 级联清理崩溃快照（FR-313）。
+		// 级联清理崩溃快照。
 		tx.Where("instance_id = ?", id).Delete(&model.InstanceCrashSnapshot{})
-		// 级联清理二进制版本绑定（FR-468）：绑定以 instance_id 为外键语义、无 DB 级 FK，
+		// 级联清理二进制版本绑定：绑定以 instance_id 为外键语义、无 DB 级 FK，
 		// 不显式清会残留成孤儿行——实例 UUID 重建（同名新建）时可能被误认作既有绑定，
 		// 使「当前版本」显示上一次实例的制品（真机发现：删实例后 instance_binary_bindings 仍留痕）。
 		tx.Where("instance_id = ?", id).Delete(&model.InstanceBinaryBinding{})
@@ -1073,7 +1115,7 @@ func (s *InstanceService) deleteInternal(id, expectedNodeID uint) error {
 		return err
 	}
 
-	// 拓扑推送（FR-443 §3.1）：实例删除 = 需在 Beacon 侧归档记录。
+	// 拓扑推送（§3.1）：实例删除 = 需在 Beacon 侧归档记录。
 	// 刻意放在事务**提交成功之后**：事务失败时实例仍在本地，推删除会让两侧不一致。
 	// 传入删除前的实例快照（instance 是本函数开头读出的副本，名字仍在），故投影不依赖已删的记录。
 	s.pushTopologyAsync(beaconPushEventDelete, instance)
@@ -1095,7 +1137,7 @@ type snapshotCleanupPlan struct {
 // backup.retention_days 裁剪，绝不能被实例删除牵连。
 //
 // 为什么要区分 deletable/demote：底链是**全量**基，可能已被用户的手工**增量**备份
-// （FR-056 的 ParentID 链）占为父。直接删除会让用户的增量备份失去基准（BackupService.Delete
+// （的 ParentID 链）占为父。直接删除会让用户的增量备份失去基准（BackupService.Delete
 // 正是为此拒绝删有子备份的行）。这类底链保留行但清除 snapshot 标记，使其回归
 // backup.retention_days 的裁剪范围——泄漏仍在「有策略管辖」的集合里，而不是无主滞留。
 //
@@ -1185,7 +1227,7 @@ func demoteRemainingSnapshotBacklinksInTx(tx *gorm.DB, instanceID uint) error {
 		Update("origin", model.BackupOriginManual).Error
 }
 
-// stopForDelete 删除前的同步停止编排（FR-310）。与 Stop 的异步委托不同：删除必须确证
+// stopForDelete 删除前的同步停止编排。与 Stop 的异步委托不同：删除必须确证
 // 进程处置已发起且 Worker 受理，才能继续删目录/删记录，故同步调 StopInstance 并等待结果。
 func (s *InstanceService) stopForDelete(instance *model.Instance) error {
 	var node model.Node
@@ -1227,7 +1269,7 @@ func (s *InstanceService) stopForDelete(instance *model.Instance) error {
 	return nil
 }
 
-// removeWorkerDataSettled 删除前的 Worker 数据清理（FR-310）。与 Stop 的异步委托不同：删除必须确证
+// removeWorkerDataSettled 删除前的 Worker 数据清理。与 Stop 的异步委托不同：删除必须确证
 // Worker 已受理清理，才能继续删目录/删记录；刚停过的实例允许在停止收敛窗口内重试清理。
 func (s *InstanceService) removeWorkerDataSettled(instance *model.Instance, stoppedForDelete bool) error {
 	deadline := time.Now().Add(deleteStopSettleMargin)
@@ -1265,7 +1307,7 @@ func (s *InstanceService) removeWorkerDataOnce(instance *model.Instance) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	// 就地导入实例（FR-302，见 ADR-069）：显式指示 Worker 跳过目录删除，
+	// 就地导入实例（见 ADR-069）：显式指示 Worker 跳过目录删除，
 	// 原目录归用户自管；Worker 托管区守卫是第二道保险。
 	resp, err := client.Worker.RemoveInstance(ctx, &workerpb.RemoveInstanceRequest{
 		InstanceUuid: instance.UUID,
@@ -1290,7 +1332,7 @@ func (s *InstanceService) Start(id uint) error {
 	return s.startInternal(id, 0)
 }
 
-// StartForExpectedNode Agent 专用启动：锁内重验 node 归属，变化则拒绝派发（FR-395）。
+// StartForExpectedNode Agent 专用启动：锁内重验 node 归属，变化则拒绝派发。
 func (s *InstanceService) StartForExpectedNode(id, expectedNodeID uint) error {
 	if expectedNodeID == 0 {
 		return fmt.Errorf("expectedNodeID 无效")
@@ -1315,26 +1357,26 @@ func (s *InstanceService) startInternal(id, expectedNodeID uint) error {
 		return ErrAgentForbidden
 	}
 
-	// 损毁实例不可直接启动（FR-342）：搭建任一阶段失败进 DAMAGED，须先「重建」复用参数重跑搭建，
+	// 损毁实例不可直接启动：搭建任一阶段失败进 DAMAGED，须先「重建」复用参数重跑搭建，
 	// 成功→STOPPED 再启动。返回 *PreflightError（HTTP 422）带明确原因，前端启动按钮亦禁用。
 	if instance.Status == model.InstanceStatusDamaged {
 		return &PreflightError{Reason: "实例已损毁（搭建未完成），请先重建再启动"}
 	}
 
-	// 在途长操作闸（FR-319/FR-323）：搭建/导入/克隆异步化后实例秒回 STOPPED 可点启动，
+	// 在途长操作闸：搭建/导入/克隆异步化后实例秒回 STOPPED 可点启动，
 	// 但核心可能还在下载、目录还在搬迁/拷贝——此时启动会得到半截工作目录。
 	// 若有未终态的 provision/import/clone 任务关联本实例即拒。
 	if err := longOpInFlightGate(s.db, id); err != nil {
 		return err
 	}
 
-	// 内存水位预警闸（FR-317 CP 侧）：按节点最近心跳预判，不足直接拒绝不下发 RPC。
+	// 内存水位预警闸（CP 侧）：按节点最近心跳预判，不足直接拒绝不下发 RPC。
 	// Worker 侧启动前还有实时闸兜底（心跳数据最多滞后一个心跳周期）。
 	if err := s.memoryGate(instance); err != nil {
 		return err
 	}
 
-	// 启动前同步预检（FR-314）：转 STARTING 前同步问 Worker 校验 JDK/jar/工作目录，
+	// 启动前同步预检：转 STARTING 前同步问 Worker 校验 JDK/jar/工作目录，
 	// 失败即带具体原因返回、状态不进 STARTING，终结「配置错误也要启动中→崩溃兜一圈」。
 	if err := s.preflightStart(instance); err != nil {
 		return err
@@ -1356,11 +1398,11 @@ func (s *InstanceService) startInternal(id, expectedNodeID uint) error {
 	return nil
 }
 
-// longOpInFlightGate 拦截「工作目录尚未就绪就点启动」（FR-319 二轮②，FR-323 补漏扩展）：
+// longOpInFlightGate 拦截「工作目录尚未就绪就点启动」（二轮②补漏扩展）：
 // 搭建（provision，核心下载中）/二进制搭建（binary_provision，制品取件中）/
 // 导入（import，migrate 搬迁中）/克隆（clone，目录拷贝中）
 // 任一未终态（pending/running）任务关联本实例即拒启，文案按 kind 区分并引导看任务中心。
-// 包级函数：单实例 Start 与批量 start/restart（FR-331 补漏）共用同一道闸。
+// 包级函数：单实例 Start 与批量 start/restart（补漏）共用同一道闸。
 func longOpInFlightGate(db *gorm.DB, instanceID uint) error {
 	var kinds []string
 	err := db.Model(&model.Task{}).
@@ -1385,7 +1427,7 @@ func longOpInFlightGate(db *gorm.DB, instanceID uint) error {
 	}
 }
 
-// memoryGate 启动前按节点心跳数据预判内存水位（FR-317）。
+// memoryGate 启动前按节点心跳数据预判内存水位。
 // 心跳过旧（>90s，节点观测不可信）或字段缺失时放行——实时判定交给 Worker 闸；
 // 这里只拦「数据可信且明显塞不下」的启动，避免白走一趟 RPC 和状态翻转。
 func (s *InstanceService) memoryGate(instance *model.Instance) error {
@@ -1411,7 +1453,7 @@ func (s *InstanceService) Stop(id uint) error {
 	return s.stopInternal(id, 0)
 }
 
-// StopForExpectedNode Agent 专用停止：锁内重验 node 归属（FR-395）。
+// StopForExpectedNode Agent 专用停止：锁内重验 node 归属。
 func (s *InstanceService) StopForExpectedNode(id, expectedNodeID uint) error {
 	if expectedNodeID == 0 {
 		return fmt.Errorf("expectedNodeID 无效")
@@ -1453,7 +1495,7 @@ func (s *InstanceService) Restart(id uint) error {
 	return s.restartInternal(id, 0)
 }
 
-// RestartForExpectedNode Agent 专用重启：锁内重验 node 归属（FR-395）。
+// RestartForExpectedNode Agent 专用重启：锁内重验 node 归属。
 func (s *InstanceService) RestartForExpectedNode(id, expectedNodeID uint) error {
 	if expectedNodeID == 0 {
 		return fmt.Errorf("expectedNodeID 无效")
@@ -1511,7 +1553,7 @@ func (s *InstanceService) Kill(id uint) error {
 	return s.killInternal(id, 0)
 }
 
-// KillForExpectedNode Agent 专用强杀：锁内重验 node 归属，变化则拒绝派发（FR-396）。
+// KillForExpectedNode Agent 专用强杀：锁内重验 node 归属，变化则拒绝派发。
 func (s *InstanceService) KillForExpectedNode(id, expectedNodeID uint) error {
 	if expectedNodeID == 0 {
 		return fmt.Errorf("expectedNodeID 无效")
@@ -1551,12 +1593,12 @@ func (s *InstanceService) killInternal(id, expectedNodeID uint) error {
 	return nil
 }
 
-// adoptRuntimeTimeout 是「接管外来运行时」（FR-471）CP 侧 RPC 截止时间。
+// adoptRuntimeTimeout 是「接管外来运行时」CP 侧 RPC 截止时间。
 // Worker 侧需先优雅停止外来进程（等待退出，超时升级 SIGKILL 进程树）再以受管方式重新拉起，
 // 故预算须覆盖「一次优雅停止 + 一次启动」，取较宽裕的 60s。
 const adoptRuntimeTimeout = 60 * time.Second
 
-// AdoptForeignRuntime 接管实例工作目录下的外来活进程（FR-471）：委托 Worker 先停外来进程再以受管方式拉起。
+// AdoptForeignRuntime 接管实例工作目录下的外来活进程：委托 Worker 先停外来进程再以受管方式拉起。
 //
 // 与 Start/Kill 同源：取实例 → 取节点 → 取 pool client → 下发 RPC → 失败写 status_reason。
 // 差异在反馈方式——接管需要立刻告知结果是「已接管」还是「失败原因」，故走**同步**委托（与
@@ -1612,7 +1654,7 @@ func (s *InstanceService) AdoptForeignRuntime(id uint) error {
 	return nil
 }
 
-// SendCommand 向运行中的实例下发一行控制台命令（复用既有 SendCommand RPC，FR-005）。
+// SendCommand 向运行中的实例下发一行控制台命令（复用既有 SendCommand RPC）。
 // 仅 RUNNING 实例可下发（其它状态进程 stdin 不存在，返回 ErrInstanceNotRunning）；命令不改变实例状态。
 // 与 Start/Stop 的异步委托不同：命令需即时反馈成功/失败，故走同步委托（与 GetMetrics 一致），
 // 不经 spawnDelegate，因此测试中 Shutdown 禁用异步委托后仍可观测结果。
@@ -1620,7 +1662,7 @@ func (s *InstanceService) SendCommand(id uint, command string) error {
 	return s.sendCommandInternal(id, command, 0)
 }
 
-// SendCommandForExpectedNode Agent 专用命令：重验 node 归属后同步下发（FR-396）。
+// SendCommandForExpectedNode Agent 专用命令：重验 node 归属后同步下发。
 func (s *InstanceService) SendCommandForExpectedNode(id uint, command string, expectedNodeID uint) error {
 	if expectedNodeID == 0 {
 		return fmt.Errorf("expectedNodeID 无效")
@@ -1677,13 +1719,13 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	return s.registerOnWorkerLocked(current)
 }
 
-// EnsureProbePort 确保实例已分配探针 /metrics 端口（FR-411 补口，真机：导入实例装探针后监控永无数据）。
+// EnsureProbePort 确保实例已分配探针 /metrics 端口（补口，真机：导入实例装探针后监控永无数据）。
 // 导入/历史实例不经 allocPortsForNode，probe_port 保持 0：探针 config 被写成 port: 0（探针绑 OS 随机端口），
 // Worker 心跳又按 ProbePort>0 过滤采集，形成「探针桥已连接但监控永无数据」的静默断链。
 // 已有端口时幂等直返（changed=false）；否则分配、落库并幂等重注册 Worker（刷新其内存表 ProbePort，
 // 使下一拍心跳立即采集，无需等待实例重启）。重注册失败不阻断（Worker 离线时下次启动/重连重推补齐）。
 func (s *InstanceService) EnsureProbePort(instance *model.Instance) (changed bool, err error) {
-	// FR-454 防御性守卫：不适用探针的实例（代理/Beacon/通用二进制）永不补分配探针端口。
+	// 防御性守卫：不适用探针的实例（代理/Beacon/通用二进制）永不补分配探针端口。
 	// 否则会为这类实例写回一个永远不会被采集的 probe_port，并让调用方误以为「探针端口已就绪」。
 	if !model.IsProbeApplicable(instance.Type, instance.Role) {
 		return false, nil
@@ -1778,13 +1820,13 @@ func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (
 	}
 
 	// 解析实例绑定的 JDK 安装路径下发给 Worker：Worker 启动时据此注入 JAVA_HOME 并把
-	// <jdk>/bin 接入 PATH（ADR-008 / FR-033），结构化启动命令里的 `java` 即指向它。
+	// <jdk>/bin 接入 PATH（ADR-008），结构化启动命令里的 `java` 即指向它。
 	jdkPath, err := s.resolveJDKPath(instance)
 	if err != nil {
 		return nil, err
 	}
 
-	// 探针端口下发给 Worker 前做适用性收敛（FR-454）：代理/通用二进制/Beacon 不适用探针，
+	// 探针端口下发给 Worker 前做适用性收敛：代理/通用二进制/Beacon 不适用探针，
 	// 下发的 probe_port 一律置 0——worker 侧心跳采集按 ProbePort>0 过滤，从而不再对这类实例
 	// 每拍抓取 /metrics 必失败。此举同时兜底历史脏数据（早期误配的 probe_port 仍留在库中）。
 	probePort := 0
@@ -1958,7 +2000,7 @@ func (s *InstanceService) ResyncNode(nodeUUID string) {
 // docker 模式把端口池分配的宿主端口映射到此容器内端口（ADR-019）。
 const mcContainerServerPort = 25565
 
-// dockerPortMappings 为 docker 模式实例派生容器↔宿主端口映射（FR-078，ADR-019）。
+// dockerPortMappings 为 docker 模式实例派生容器↔宿主端口映射（ADR-019）。
 // 非 docker 模式返回 nil（direct/daemon 直接监听宿主端口，无需映射）。
 // MC 实例：宿主 ServerPort 映射到容器内 25565（tcp + query 同号 udp）；
 // 其它类型：缺乏容器内端口约定，宿主端口与容器内端口同号直通（host=container）。
@@ -1985,7 +2027,7 @@ func dockerPortMappings(instance *model.Instance) []*workerpb.PortMapping {
 
 // gracefulStopCommand 按实例角色派生优雅停止命令（daemon 模式写入进程 stdin）。
 // 代理（BungeeCord/Waterfall/Velocity）控制台用 `end`，不认 MC 的 `stop`；若误发 `stop`
-// 代理不退出，会一直挂到超时强杀，期间旧进程仍占监听端口，重启时端口冲突崩溃（FR-035）。
+// 代理不退出，会一直挂到超时强杀，期间旧进程仍占监听端口，重启时端口冲突崩溃。
 // 后端/通用实例沿用 MC 的 `stop`。
 func gracefulStopCommand(role model.InstanceRole) string {
 	if role == model.InstanceRoleProxy {
@@ -2043,7 +2085,7 @@ func (s *InstanceService) SetDelegateBypassForTest(on bool) {
 
 // spawnDelegate 在后台异步委托实例动作给 Worker，并登记到 bgWG 以便优雅关闭时 join。
 // releaseOperation 由后台委托在 RPC 与状态回写结束后调用，使删除与后续生命周期请求等待在途动作。
-// expectedNodeID>0 时派发前再次重读实例归属；变化则拒绝 Worker RPC（FR-395）。
+// expectedNodeID>0 时派发前再次重读实例归属；变化则拒绝 Worker RPC。
 // Shutdown 之后（bgCtx 取消）不再发起新委托，返回 false 让调用方自行释放生命周期锁。
 func (s *InstanceService) spawnDelegate(instance *model.Instance, action string, expectedNodeID uint, releaseOperation func()) bool {
 	s.bgMu.Lock()
@@ -2384,7 +2426,7 @@ type MetricsData struct {
 	TPS           float32 `json:"tps"`
 	OnlinePlayers int32   `json:"onlinePlayers"`
 	MemoryMB      int64   `json:"memoryMb"`
-	// 以下为 ServerProbe 富指标（FR-010）；探针不可用时为零值，ProbeAvailable=false。
+	// 以下为 ServerProbe 富指标；探针不可用时为零值，ProbeAvailable=false。
 	MSPTMillis     float32       `json:"msptMillis"`
 	Threads        int32         `json:"threads"`
 	CPUPercent     float64       `json:"cpuPercent"`
@@ -2392,7 +2434,7 @@ type MetricsData struct {
 	UptimeSeconds  float64       `json:"uptimeSeconds"`
 	Worlds         []WorldMetric `json:"worlds"`
 	ProbeAvailable bool          `json:"probeAvailable"`
-	// 以下为 MC 直探（SLP/Query，FR-446/447）补充字段与显式可用性位。
+	// 以下为 MC 直探（SLP/Query447）补充字段与显式可用性位。
 	// 采集优先级链 `探针 → SLP → Query → 不可用`；*Available=false 即「不可用」，前端据此渲染，
 	// 不再依赖 -1/-- 伪值。
 	PlayersAvailable     bool     `json:"playersAvailable"`
@@ -2416,7 +2458,7 @@ type MetricsData struct {
 	SourceMask uint8 `json:"sourceMask"`
 }
 
-// WorldMetric 单个世界的负载（来自 ServerProbe），供前端 FR-010 监控页展示。
+// WorldMetric 单个世界的负载（来自 ServerProbe），供前端监控页展示。
 type WorldMetric struct {
 	Name         string `json:"name"`
 	LoadedChunks int64  `json:"loadedChunks"`
@@ -2424,7 +2466,7 @@ type WorldMetric struct {
 	TileEntities int64  `json:"tileEntities"`
 }
 
-// metricsFetchTimeout 计算实时指标链路（Worker.GetInstanceMetrics）的 CP 侧截止时间（FR-446 复审 N2）。
+// metricsFetchTimeout 计算实时指标链路（Worker.GetInstanceMetrics）的 CP 侧截止时间（复审 N2）。
 //
 // Worker 侧编排链是**串行**的：探针 `/metrics`（HTTP 硬编码 `directprobe.ProbeScrapeTimeoutCap`）→
 // SLP(t_slp) → Query(t_query)，故单实例最坏时延 = 5s + t_slp + t_query。固定 10s 在默认 3s 下即已偏紧
@@ -2468,14 +2510,14 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 		return nil, fmt.Errorf("节点 %s 未连接", node.UUID)
 	}
 
-	// 实时链路预算随生效直探超时与来源端口动态给出（FR-446 复审 N2）：固定 10s 会被
+	// 实时链路预算随生效直探超时与来源端口动态给出（复审 N2）：固定 10s 会被
 	// Worker 侧的串行 `探针→SLP→Query` 最坏时延追上而 DROP，详情页误报「获取指标失败」。
 	ctx, cancel := context.WithTimeout(context.Background(), s.metricsFetchTimeout(instance))
 	defer cancel()
 
-	// 下发探针端口（适用性收敛，FR-454）+ MC 直探端口（server_port / query_port，FR-446）：
+	// 下发探针端口（适用性收敛）+ MC 直探端口（server_port / query_port）：
 	// Worker 据此走 `探针 → SLP → Query → 不可用` 编排链，探针缺失时用直探回填基础信息。
-	// FR-454：不适用探针的实例（代理/Beacon/通用二进制）探针端口一律下发 0——与 CreateInstance/Resync
+	// 不适用探针的实例（代理/Beacon/通用二进制）探针端口一律下发 0——与 CreateInstance/Resync
 	// 同口径收敛，兜底历史脏数据，避免 Worker 对 localhost:probe_port 空抓。
 	probePort := 0
 	if model.IsProbeApplicable(instance.Type, instance.Role) {
@@ -2501,7 +2543,7 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 		HeapMaxMB:      resp.HeapMaxMb,
 		UptimeSeconds:  resp.UptimeSeconds,
 		ProbeAvailable: resp.ProbeAvailable,
-		// FR-446/447：直探补充字段与显式可用性位（清除 -1/-- 占位）。
+		// 447：直探补充字段与显式可用性位（清除 -1/-- 占位）。
 		PlayersAvailable:     resp.PlayersAvailable,
 		Motd:                 resp.Motd,
 		MotdAvailable:        resp.MotdAvailable,
@@ -2540,7 +2582,7 @@ func sourceMaskFromBytes(b []byte) uint8 {
 	return b[0]
 }
 
-// InstanceEnvData 实例环境（FR-344 环境变量页签）：configured=自定义启动 env（可编辑源），
+// InstanceEnvData 实例环境（环境变量页签）：configured=自定义启动 env（可编辑源），
 // runtime=运行时进程实际环境（含继承，只读）；runtimeAvailable=false 表示未运行/平台受限。
 type InstanceEnvData struct {
 	Configured       map[string]string `json:"configured"`
@@ -2549,7 +2591,7 @@ type InstanceEnvData struct {
 	Note             string            `json:"note"`
 }
 
-// GetInstanceEnv 返回实例自定义启动环境变量 + 运行时进程实际环境（FR-344）。
+// GetInstanceEnv 返回实例自定义启动环境变量 + 运行时进程实际环境。
 // configured 恒返回（解自 instance.EnvVars）；runtime 尽力而为——节点未连/未运行/平台受限时
 // runtimeAvailable=false + note，不阻塞 configured 返回（上区编辑不受运行态影响）。
 type ManagedProcessInfo struct {
@@ -2698,7 +2740,7 @@ const managedProcessHistoryWindow = 30 * time.Minute
 func (s *InstanceService) managedProcessHistory(instanceUUID string, pid int32) (ManagedProcessHistory, []model.ProcessMetricSnapshot, error) {
 	var rows []model.ProcessMetricSnapshot
 	// 采样入库统一存 UTC（metric.go 写入 sampledAt.UTC()），查询窗口须用 UTC 时间对齐，
-	// 否则本地时区（如 +08:00）比较会把窗口起点推后 8 小时、永远查不到样本（真机验收 FR-407 抓到）。
+	// 否则本地时区（如 +08:00）比较会把窗口起点推后 8 小时、永远查不到样本（真机验收抓到）。
 	from := time.Now().UTC().Add(-managedProcessHistoryWindow)
 	err := s.db.Where("instance_uuid = ? AND pid = ? AND sampled_at >= ?", instanceUUID, pid, from).
 		Order("sampled_at ASC").Find(&rows).Error
@@ -2874,7 +2916,7 @@ func (s *InstanceService) GetInstanceEnv(id uint) (*InstanceEnvData, error) {
 	return data, nil
 }
 
-// preflightStart 启动前同步预检（FR-314）：查节点连通 → 确保实例已注册 → 调 Worker 预检 RPC。
+// preflightStart 启动前同步预检：查节点连通 → 确保实例已注册 → 调 Worker 预检 RPC。
 // 节点未连接返回 ErrNodeOffline（HTTP 409）；预检未过返回 *PreflightError（HTTP 422）并写 statusReason；
 // 老 Worker 无该 RPC（Unimplemented）则跳过预检、保持现有异步启动行为不变（向后兼容）。
 func (s *InstanceService) preflightStart(instance *model.Instance) error {
@@ -2943,7 +2985,7 @@ func (s *InstanceService) preflightStart(instance *model.Instance) error {
 	return &PreflightError{Reason: reason}
 }
 
-// updateStatusReasonOnly 仅更新 status_reason，不动 status（FR-314 预检失败：状态保持、不进 STARTING）。
+// updateStatusReasonOnly 仅更新 status_reason，不动 status（预检失败：状态保持、不进 STARTING）。
 // 同 updateStatusReasonAsync：写 CP 原因的同时复位来源标记，避免被下一拍心跳当作巡检原因清掉。
 func (s *InstanceService) updateStatusReasonOnly(id uint, reason string) {
 	if err := s.db.Model(&model.Instance{}).Where("id = ?", id).

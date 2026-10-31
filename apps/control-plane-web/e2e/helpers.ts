@@ -1,12 +1,53 @@
 import { type Page, expect } from '@playwright/test'
 
-/** 经 mock 登录页用种子管理员（admin/admin123）登录，等待进入控制台仪表盘。 */
+/**
+ * 经 mock 登录页用种子管理员（admin/admin123）登录，等待**控制台外壳**就绪。
+ *
+ * 【为什么不等 `[data-page="overview"]`】那是首页的**内容**节点，其渲染依赖
+ * `/metrics/overview` 等一组查询；导航重构引入路由分块后首屏要多下载几个 chunk，
+ * 实测从登录到内容就绪可超过 5 秒——而 Playwright 默认断言超时正是 5 秒，
+ * 于是每一个调用 login() 的用例都会卡在这一行上失败（曾一次波及 39 个用例）。
+ *
+ * 外壳 `[data-slot="console-shell"]` 在鉴权通过后立即挂载，语义上它才是「已进入控制台」
+ * 的标志；各用例真正关心的页面元素由它们自己断言，不该由公共 helper 代劳。
+ *
+ * 注：mock 调试面板曾钉在右下角挡住表格行按钮，现由 mount-mock-control-panel 在
+ * `navigator.webdriver` 下直接不挂载（见该文件注释），这里无需再做处理。
+ */
 export async function login(page: Page, username = 'admin', password = 'admin123'): Promise<void> {
   await page.goto('/login')
   await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码', { exact: true }).fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
-  await expect(page.locator('[data-page="overview"]')).toBeVisible()
+  // 【为何是 45s】登录后要拉 /auth/me + 权限节点 + 首屏路由 chunk；shard 的**第一个**用例
+  // 还要等 vite 依赖预构建（首例几十秒很正常）。实测 ops-console-layout / bots-load-wizard
+  // 首轮卡在登录就绪、**retry 就过**（同一 runner、同一份代码）—— 是冷启动预算不够，
+  // 不是功能坏，也不是断言错。45s 只影响首次等待，不影响后续用例（模块已缓存）。
+  // 注意：这不是放宽断言，真实登不进去仍会失败（只是晚 15s）。
+  await expect(page.locator('[data-slot="console-shell"]')).toBeVisible({ timeout: 45_000 })
+}
+
+/**
+ * 把首页模式固定为「经典」，供需要经典首页（`[data-page="overview"]`）的用例使用。
+ *
+ * 【为什么需要】`/` 的默认模式已改为 AI 首页（`DEFAULT_HOME_MODE = 'assistant'`），
+ * 而经典首页的 `data-page="overview"` 只在记忆为 classic 或深链带 `?home=classic` 时才会出现。
+ * 靠 localStorage 记忆而不是每次都改写 URL，是因为多数用例进首页不是靠 `goto('/')`，
+ * 而是靠登录后的默认落地 —— 那时已经没有“改 URL”的机会了。
+ *
+ * 必须在**任何导航之前**调用（`addInitScript` 在每次文档创建时都会跑，比 `evaluate` 可靠）。
+ *
+ * 【为何不叫 useXxx】它不是 React Hook，只是个 async 工具函数；但以 `use` 开头会被
+ * `react-hooks/rules-of-hooks` 当成 Hook（已在 navigation-benchmark 里报 error）。
+ */
+export async function pinClassicHome(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('console.homeMode', 'classic')
+    } catch {
+      // 隐私模式下列 localStorage 可能抛错；失败即退化为默认模式，由调用方的断言报错。
+    }
+  })
 }
 
 /** 在服务端搜索型 Combobox 中输入并选择精确选项。 */

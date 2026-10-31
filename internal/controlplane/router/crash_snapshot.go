@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// CrashSnapshotHandler 实例崩溃快照路由处理器（FR-313，增强 FR-470）。
+// CrashSnapshotHandler 实例崩溃快照路由处理器（增强）。
 // 崩溃现场由 Worker 经 gRPC 上报入库（滚动保留最近 5 条 + 同步分类），此处提供读侧
 // （列表 / 趋势 / 总览）与管理员重分类入口。
 type CrashSnapshotHandler struct {
@@ -26,12 +26,12 @@ func NewCrashSnapshotHandler(svc *service.CrashSnapshotService, authz *service.A
 	return &CrashSnapshotHandler{svc: svc, authz: authz, audit: audit}
 }
 
-// crashSnapshotView 列表项视图（FR-470）：在快照之上附带解析后的证据行与资源关联。
+// crashSnapshotView 列表项视图：在快照之上附带解析后的证据行与资源关联。
 type crashSnapshotView struct {
 	model.InstanceCrashSnapshot
 	// EvidenceLines 证据行（解析自 Evidence JSON 文本），前端「证据」区直接消费。
 	EvidenceLines []string `json:"evidenceLines,omitempty"`
-	// Correlation 崩溃与资源关联证据（FR-470 §2.3）；无关联服务时省略。
+	// Correlation 崩溃与资源关联证据（§2.3）；无关联服务时省略。
 	Correlation *service.CrashCorrelation `json:"correlation,omitempty"`
 }
 
@@ -85,7 +85,7 @@ func (h *CrashSnapshotHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, views)
 }
 
-// Trend GET /instances/:id/crash-trend?days=30 — 实例崩溃趋势（FR-470）。
+// Trend GET /instances/:id/crash-trend?days=30 — 实例崩溃趋势。
 // 数据来自独立汇总表 InstanceCrashStat，不受 K=5 快照裁剪影响。
 func (h *CrashSnapshotHandler) Trend(c *gin.Context) {
 	id, err := parseID(c)
@@ -114,7 +114,7 @@ func (h *CrashSnapshotHandler) Trend(c *gin.Context) {
 	c.JSON(http.StatusOK, trend)
 }
 
-// Overview GET /crash-overview?days=30 — 平台崩溃总览（FR-470）：Top 根因/实例/同类 + 趋势。
+// Overview GET /crash-overview?days=30 — 平台崩溃总览：Top 根因/实例/同类 + 趋势。
 //
 // m-3：总览会回填实例名，属跨实例聚合读，不能只判 instance.read——否则组只读角色
 // 能经此看到其它组的实例清单。按 AccessibleInstanceIDs 收敛到调用方可见范围

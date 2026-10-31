@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// AgentTransferHandler 流式传输票据数据面（FR-397）。
+// AgentTransferHandler 流式传输票据数据面。
 //
 // 控制与数据分离：MCP 只承载小文本，大文件经此端点走既有流式链路。
 // 票据即凭据——本端点不挂 Agent 鉴权中间件，也不接受任何路径/实例参数：
@@ -53,7 +53,7 @@ func (h *AgentTransferHandler) consume(c *gin.Context, wantDirection string) (*s
 }
 
 // Upload 票据上传：请求体为原始字节流，经 FileService 流式转发到 Worker（内存 O(chunk)）。
-// 覆盖已存在文件前做改前快照，与管理面上传语义一致（FR-051）。
+// 覆盖已存在文件前做改前快照，与管理面上传语义一致。
 func (h *AgentTransferHandler) Upload(c *gin.Context) {
 	claims, ok := h.consume(c, service.AgentTransferDirectionUpload)
 	if !ok {

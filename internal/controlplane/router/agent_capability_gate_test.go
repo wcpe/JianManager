@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// FR-395：V1 无扩权 / V2 能力 / 节点 scope 继承实例 的 HTTP 门禁矩阵。
+// V1 无扩权 / V2 能力 / 节点 scope 继承实例 的 HTTP 门禁矩阵。
 
 // TestAgentCapability_V1_NodeScopeDoesNotInheritInstances V1 Token 的节点 scope 不授予该节点实例权限。
 func TestAgentCapability_V1_NodeScopeDoesNotInheritInstances(t *testing.T) {

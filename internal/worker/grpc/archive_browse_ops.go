@@ -12,7 +12,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 归档浏览的安全上限（FR-075，见 ADR-018）。只读浏览，绝不成为节点事故源。
+// 归档浏览的安全上限（见 ADR-018）。只读浏览，绝不成为节点事故源。
 const (
 	// maxArchiveEntries 是单个归档列举条目数上限，超出截断（防恶意/异常巨包拖垮列举）。
 	maxArchiveEntries = 50000
@@ -28,7 +28,7 @@ func isArchivePath(p string) bool {
 	return archiveExts[strings.ToLower(filepath.Ext(p))]
 }
 
-// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程；FR-075，见 ADR-018）。
+// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程见 ADR-018）。
 func (s *Server) ListArchiveEntries(ctx context.Context, req *workerpb.ListArchiveEntriesRequest) (*workerpb.ListArchiveEntriesResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -103,7 +103,7 @@ func isSafeArchiveEntryName(name string) bool {
 	return true
 }
 
-// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限（FR-075）。
+// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限。
 func (s *Server) ReadArchiveEntry(ctx context.Context, req *workerpb.ReadArchiveEntryRequest) (*workerpb.ReadArchiveEntryResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {

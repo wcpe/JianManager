@@ -1,4 +1,4 @@
-// FR-275（见 ADR-061）：终端/插件桥校验密钥热更新（SetJWTSecret）对握手的即时影响。
+// （见 ADR-061）：终端/插件桥校验密钥热更新（SetJWTSecret）对握手的即时影响。
 package ws
 
 import (
@@ -48,7 +48,7 @@ func TestTerminalServer_SetJWTSecret_RotatesValidation(t *testing.T) {
 	// 初始密钥可握手。
 	require.True(t, dialTerminal(t, srv.URL, terminalToken(t, "old-secret", "inst-1")), "初始密钥应握手成功")
 
-	// 热更新密钥（模拟 CP 注册/心跳下发，FR-275）。
+	// 热更新密钥（模拟 CP 注册/心跳下发）。
 	s.SetJWTSecret("new-secret")
 
 	assert.False(t, dialTerminal(t, srv.URL, terminalToken(t, "old-secret", "inst-2")), "旧密钥签的 token 应被拒")

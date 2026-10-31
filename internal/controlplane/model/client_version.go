@@ -2,11 +2,11 @@ package model
 
 import "time"
 
-// ClientVersion 客户端分发版本快照（FR-087，见 ADR-022、contract §2）。
+// ClientVersion 客户端分发版本快照（见 ADR-022、contract §2）。
 // 一条记录 = 频道某次发布的完整文件清单 + 同步策略 + 自更新段。Version 单调递增、与 ClientChannel.CurrentVersion
 // 配合定位 latest。manifest 由该快照即时组装 + Ed25519 签名（不缓存签名，密钥轮换/防降级见 ADR-022）。
 //
-// 本 FR（latest-only）只需「能发布一版并以 latest 返回」；完整版本历史/运营回滚/管理台见 FR-088。
+// 本 FR（latest-only）只需「能发布一版并以 latest 返回」；完整版本历史/运营回滚/管理台见。
 type ClientVersion struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// ChannelID 所属频道 slug（随频道删除级联清理）。
@@ -16,9 +16,9 @@ type ClientVersion struct {
 	// FilesJSON 文件清单快照（[]ManifestFile 的 JSON）：path/sha256/md5/size/sync/platform/artifact。
 	FilesJSON string `gorm:"column:files_json;type:text;not null" json:"-"`
 	// ManagedDirsJSON 托管目录快照（[]string 的 JSON）：仅这些目录可增删（减量）。
-	// FR-255：可含 "*" 哨兵表「整个 gameDir」（clean-all）。
+	// 可含 "*" 哨兵表「整个 gameDir」（clean-all）。
 	ManagedDirsJSON string `gorm:"column:managed_dirs_json;type:text;not null" json:"-"`
-	// CleanExcludeJSON 运营自定义排除快照（[]string 的 JSON，FR-255）：命中前缀永不删。
+	// CleanExcludeJSON 运营自定义排除快照（[]string 的 JSON）：命中前缀永不删。
 	// 空串=未声明（向后兼容，老版本无此列）。
 	CleanExcludeJSON string `gorm:"column:clean_exclude_json;type:text" json:"-"`
 	// AgentJSON 楔子 + updater-core 自更新段快照（ManifestAgent 的 JSON），可空（未声明自更新段）。
