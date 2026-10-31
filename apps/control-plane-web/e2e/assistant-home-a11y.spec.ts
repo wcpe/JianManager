@@ -103,34 +103,56 @@ test.describe('两模式互不嵌套（网络层）', () => {
     await page.waitForTimeout(1500)
     await login(page)
 
-    const assistantSummaryPaths: string[] = []
-    page.on('request', (req) => {
-      const url = new URL(req.url())
-      // 只认 **AI 首页摘要区独有**的请求。判据必须精确到参数，不能只看路径：
-      // `/metrics/overview` 经典首页也在用（OverviewPage 的 useMetricOverview），
-      // 按路径匹配会把正常请求误判成「AI 首页被挂载过」——这条初版正是这么错的。
-      // - `/instances/search?status=CRASHED&pageSize=5`：AI 首页「异常实例」摘要专用
-      // - `/alerts/events`：AI 首页「告警」摘要专用（经典首页不引 useAlertEvents）
-      const isCrashedSummary =
-        url.pathname.endsWith('/instances/search') &&
-        url.searchParams.get('status') === 'CRASHED' &&
-        url.searchParams.get('pageSize') === '5'
-      const isAlertsSummary = url.pathname.endsWith('/alerts/events')
-      if (isCrashedSummary || isAlertsSummary) {
-        assistantSummaryPaths.push(`${url.pathname}${url.search}`)
-      }
-    })
-
+    // 【顺序很关键】login() 落地的是**默认首页 = AI 首页**（DEFAULT_HOME_MODE='assistant'），
+    // 它初始化时就会发 /tasks?limit=5。若先挂监听器再导航，这条请求会被记成
+    // 「经典模式下也发了 AI 请求」——其实是上一步 AI 首页的尾巴，与产品无关。
+    // 所以：先把记忆写成 classic 并整页导航到经典首页，等它落定，再开始监听。
     await page.evaluate((key) => localStorage.setItem(key, 'classic'), HOME_MODE_KEY)
     await page.goto('/?home=classic', { waitUntil: 'commit' })
     await expectHomeMode(page, 'classic', '经典首页')
     // 落定后观察一小窗，确认没有迟到的请求
-    await page.waitForTimeout(3000)
+    await page.waitForTimeout(1500)
+
+    const assistantHomeOnlyPaths: string[] = []
+    page.on('request', (req) => {
+      const url = new URL(req.url())
+      // 判据：**AI 首页页面组件本身**发出的请求（不是外壳共享的）。
+      //
+      // 【不能用 /assistant/*】会话状态按设计是**外壳级单例**：DashboardPage 在 Shell 层
+      // 调一次 useAssistantChat(true)，供 AI 首页（路由树内）与助手浮窗 AssistantDock
+      // （跨路由常驻）共用（见该文件注释「会话状态的唯一持有者」）。
+      // 所以经典模式也会拉 /assistant/conversations —— 那是浮窗所需，**不是嵌套**。
+      //
+      // 【不能用 alerts/events 或 instances/search?status=CRASHED&pageSize=5】
+      // 经典首页（OverviewPage）自己也引 useAlertEvents、也按该参数取异常卡片，
+      // 用它当判据会让正常渲染必然报错（本用例前一版正是这么错的）。
+      //
+      // 真正只有 AI 首页页面组件会发的是 /tasks?limit=5：
+      // AssistantHomePage 自建 queryKey=['assistantHome','tasks'] 的查询；
+      // 经典首页整棵树没有调用 useTasks（已 grep 确认）。
+      const isTasksSummary =
+        url.pathname.endsWith('/tasks') && url.searchParams.get('limit') === '5'
+      if (isTasksSummary) {
+        assistantHomeOnlyPaths.push(`${url.pathname}${url.search}`)
+      }
+    })
+
 
     expect(
-      assistantSummaryPaths,
-      `经典模式下不得发出 AI 首页摘要请求，实际发出：${assistantSummaryPaths.join(', ')}`,
+      assistantHomeOnlyPaths,
+      `经典模式下不得发出 AI 首页专属请求（/tasks?limit=5），实际发出：${assistantHomeOnlyPaths.join(', ')}`,
     ).toEqual([])
+
+    // 【对照断言・防空转】上面那条「不得有」只有在判据真能抓到请求时才有意义。
+    // 再把 AI 首页按正常路径走一遍，确认该请求确实会被发出——否则将来有人
+    // 去掉它、或改了 limit 参数，这条用例会永远空跑成假绿。
+    await page.goto('/?home=assistant', { waitUntil: 'commit' })
+    await expectHomeMode(page, 'assistant', 'AI 首页')
+    await page.waitForTimeout(3000)
+    expect(
+      assistantHomeOnlyPaths.length,
+      '判据失效：AI 首页也未发出 /tasks?limit=5 —— 本用例已无法证明两模式互不嵌套',
+    ).toBeGreaterThan(0)
 
     await page.evaluate((key) => localStorage.removeItem(key), HOME_MODE_KEY)
   })
