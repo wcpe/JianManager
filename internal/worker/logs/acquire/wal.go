@@ -493,6 +493,16 @@ type WAL struct {
 	entries        []WALEntry
 	reserveBytes   func(int64) (func(), error)
 	reservationErr error
+
+	// 磁盘缓冲（FR-510 P1.3）。spoolCh 为 nil 即未挂载，此时行为与改造前逐字一致。
+	//
+	// 设计要点：**持 w.mu 时只入 channel（非阻塞），磁盘 IO 由后台协程做**。
+	// 持锁做磁盘 IO 会让整个源的采集停摆，那是 2026-10-29 裁定要避免的形态。
+	spoolSink    SpoolSink
+	spoolCh      chan spoolJob
+	spoolSaved   int64
+	spoolFailed  int64
+	spoolSkipped int64
 	// windowRegistered仅为确定性交错测试观测注册线性化点；生产nil，不改变锁或正文语义。
 	windowRegistered func()
 	// fsync 持久提交钩子；nil 视为成功（测试可注入失败）。
@@ -834,6 +844,16 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 		return
 	}
 
+	// FR-510 P1.3：丢弃前先把这批条目交给磁盘缓冲。
+	//
+	// **这里只做内存拷贝与非阻塞 channel 发送，不做磁盘 IO**——
+	// 本函数由调用方持 w.mu 调用，持锁做磁盘 IO 会让整个源的采集停摆。
+	// 真正写盘在 runSpoolWriter 里（不持锁）。
+	//
+	// 未挂载缓冲时（spoolCh == nil）offerSpoolLocked 直接返回 0，
+	// 行为与改造前逐字一致。
+	spooled := w.offerSpoolLocked(cut)
+
 	// 先算丢弃区间的真实位置（半开区间，取被丢条目首尾）。
 	var from, to uint64
 	dropped := 0
@@ -862,6 +882,12 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 	if to > from {
 		detail := fmt.Sprintf("WAL backlog exceeded (entries=%d/%d, approx_bytes=%d/%d); dropped %d oldest entries to stay in memory",
 			entriesBefore, maxEntries, bytesBefore, maxBytes, dropped)
+		if spooled > 0 {
+			// 有 spool 时必须如实区分“真丢”与“交给磁盘缓冲” ——
+			// 否则缺口审计面会把已经救回来的数据也报成损失。
+			detail = fmt.Sprintf("WAL backlog exceeded (entries=%d/%d, approx_bytes=%d/%d); dropped %d oldest entries to stay in memory; %d handed to disk spool",
+				entriesBefore, maxEntries, bytesBefore, maxBytes, dropped, spooled)
+		}
 		if err := w.led.RecordGap(w.key, from, to, walBacklogDropReason, detail); err != nil {
 			slog.Warn("积压越界丢弃后登记缺口失败（丢弃已生效，但审计面缺凭据）",
 				"logSourceID", w.key.LogSourceID, "dropped", dropped, "from", from, "to", to, "error", err)
@@ -869,6 +895,7 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 	}
 	slog.Warn("单源积压超过上限，已丢弃最旧条目（不暂停采集、不背压）",
 		"logSourceID", w.key.LogSourceID, "dropped", dropped, "from", from, "to", to,
+		"spooled", spooled,
 		"remainingEntries", len(w.entries), "maxEntries", maxEntries, "maxBytes", maxBytes)
 }
 
