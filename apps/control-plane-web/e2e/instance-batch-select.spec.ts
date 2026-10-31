@@ -45,14 +45,25 @@ test('列表多选 → 批量操作栏 → 批量重启结果反馈 + 强制关�
 
   // 响应成功后再断言结果反馈与选择清理。
   await expect(page.locator('[data-sonner-toast]').filter({ hasText: /批量完成：成功 \d+/ }).first()).toBeVisible({
-    timeout: 10_000,
+    timeout: 15_000,
   })
-  await expect(rowCheckbox).not.toBeChecked()
-  await rowCheckbox.check()
-  await expect(page.getByText('已选 1 个')).toBeVisible()
+
+  // 【为何重新取行单选及并等可交互】重启会把状态改成 RUNNING，列表随后 invalidate 重取，
+  // 整行 DOM 重建；上文的 rowCheckbox 句柄指向旧节点，直接 check() 在 CI 上会
+  // 「一直等不到可操作」直至用例预算耗尽（表现为点了 120s 的 locator.click 超时）。
+  const rowCheckbox2 = page.getByRole('checkbox', { name: 'server-0005' }).first()
+  await expect(rowCheckbox2).toBeVisible({ timeout: 30_000 })
+  await expect(rowCheckbox2).toBeEnabled()
+  await expect(rowCheckbox2).not.toBeChecked()
+  await rowCheckbox2.check()
+  await expect(page.getByText('已选 1 个')).toBeVisible({ timeout: 15_000 })
 
   // 危险动作：批量强制关服需输入 FORCE 才放行。
-  await page.getByRole('button', { name: '批量强制关服' }).click()
+  // 该按钮在「所选实例里有可 kill 状态（RUNNING/STARTING/STOPPING）」时才 enabled，
+  // 所以先把 enabled 等出来再点，而不是拿一个 disabled 按钮去 click 等到超时。
+  const killBtn = page.getByRole('button', { name: '批量强制关服' })
+  await expect(killBtn).toBeEnabled({ timeout: 15_000 })
+  await killBtn.click()
   const killDialog = page.getByRole('dialog', { name: '确认批量强制关服？' })
   await expect(killDialog).toBeVisible()
   const execute = killDialog.getByRole('button', { name: '执行' })

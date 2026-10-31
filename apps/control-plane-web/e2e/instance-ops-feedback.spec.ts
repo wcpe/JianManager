@@ -38,6 +38,8 @@ test('行内主操作可发现 + 次要操作收「⋯」菜单', async ({ page 
 })
 
 test('主操作点击有反馈：停止 → 状态联动翻牌为「启动」', async ({ page }) => {
+  // 登录 + 列表首屏（1200 实例种子）+ 停止后的失效重取，CI 慢 runner 上默认 60s 不够。
+  test.setTimeout(120_000)
   await login(page)
 
   await page.goto('/instances?view=list&q=survival-1')
@@ -46,11 +48,27 @@ test('主操作点击有反馈：停止 → 状态联动翻牌为「启动」', 
 
   const stopBtn = row.getByRole('button', { name: '停止', exact: true })
   await expect(stopBtn).toBeVisible()
+
+  // 【关键：行内点「停止」不会直接发请求】它只是把 `lifecycleTarget` 置位、弹 DangerConfirm
+  // （InstancesPage 里 onStop={() => setLifecycleTarget({...op:'stop'})}），
+  // 必须在确认框里再点一次 confirmLabel「停止」才会 `stop.mutate(id)`。
+  // 旧写法点完行内按钮就直接等响应，所以 waitForResponse 永远超时（之前报
+  // "element not found" 也是同一个原因：状态从未变过）。
+  const stopResp = page.waitForResponse((r) => {
+    const u = new URL(r.url())
+    return r.request().method() === 'POST' && /\/instances\/\d+\/stop$/.test(u.pathname)
+  })
   await stopBtn.click()
 
-  // 反馈：mock 停止后列表失效重取，该行主操作翻牌为「启动」（停止消失）。
+  const confirm = page.getByRole('alertdialog').or(page.getByRole('dialog'))
+  await expect(confirm.getByRole('heading', { name: /停止实例/ })).toBeVisible({ timeout: 10_000 })
+  await confirm.getByRole('button', { name: '停止', exact: true }).click()
+
+  expect((await stopResp).ok()).toBe(true)
+
+  // 反馈：停止后该行主操作翻牌为「启动」（停止消失）。
   const updatedRow = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'survival-1', exact: true }) })
-  await expect(updatedRow.getByRole('button', { name: '启动', exact: true })).toBeVisible({ timeout: 10_000 })
+  await expect(updatedRow.getByRole('button', { name: '启动', exact: true })).toBeVisible({ timeout: 30_000 })
   await expect(updatedRow.getByRole('button', { name: '停止', exact: true })).toHaveCount(0)
 
   await page.screenshot({ path: '../.tmp/acceptancesingle-machine-action-feedback.png', fullPage: false })
