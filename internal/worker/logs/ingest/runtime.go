@@ -222,6 +222,12 @@ type Manager struct {
 	republishSkipped atomic.Int64
 	// replaceRowsWritten：写入面（差集后）实际落库行数读数（w21 稿 ③），用于 #12 判读「整窗重发 vs 只写差集」。
 	replaceRowsWritten atomic.Int64
+	// insertBatch 是「双阈值攒批 + 并发投递」的生效参数（New 时定格，之后不改写 ⇒ 读不加锁）。
+	// 见 insert_batch.go 的文件头：4 MiB 字节 / 500 条 / 1s 时间，三者先到先发。
+	insertBatch insertBatchLimits
+	// insertBatchCounters 是攒批/投递读数（批大小分布、攒批等待、请求数、失败数）。
+	// 内存计数器，供 InsertBatchStats() 读；接 /metrics 是下一个任务（FR-485）。
+	insertBatchCounters insertBatchCounters
 	// registerMu 串行化「实例登记 / 采集绑定」自身，使这条路径**永不等待采集轮的长临界区**。
 	//
 	// 为什么要与 cycleMu 分离（2026-10-01 生产事故根因）：cycleMu 的持有者是「整轮采集」
@@ -970,6 +976,9 @@ type Options struct {
 	// log_ingest.multiline_unclosed_timeout）；0 表示用默认（normalize.DefaultUnclosedTimeout），
 	// 负值表示关闭强制冲刷。见 Pipeline.FlushStaleMultiline。
 	MultilineUnclosedTimeout time.Duration
+	// InsertBatch 是「双阈值攒批 + 并发投递」的配置面（键 log_ingest.insert_batch.*）；nil ⇒ 全部用默认
+	// （4 MiB 字节 / 500 条 / 1s 时间 / 4 并发 / 3 次尝试）。见 insert_batch.go 的文件头。
+	InsertBatch *InsertBatchTuning
 	// ResolveGapsBudget 是整节点解算（ResolveCoveredGaps）单次调用的预算（源数 + 墙钟），
 	// 键 log_ingest.resolve_gaps_max_sources / log_ingest.resolve_gaps_max_duration；
 	// nil 表示用默认（defaultResolveGapsMaxSources / defaultResolveGapsMaxDuration）。
@@ -2510,6 +2519,7 @@ func New(opts Options) (*Manager, error) {
 		scanBudget:               scanValueOf(opts.ScanBudget, opts.Scan, func(t *ScanTuning) time.Duration { return t.Budget }),
 		maxReplayEventsPerDrain:  opts.MaxReplayEventsPerDrain,
 		multilineUnclosedTimeout: multilineUnclosedTimeoutOf(opts.MultilineUnclosedTimeout),
+		insertBatch:              insertBatchLimitsFrom(opts.InsertBatch),
 	}
 	// 生命周期 ctx：持久化的可取消面（Stop 取消）。只在 New 中赋值、之后不再改写 ⇒ 读不加锁。
 	m.lifecycleCtx, m.lifecycleCancel = context.WithCancel(context.Background())
@@ -7540,17 +7550,13 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 	return pipeline.DeliveryResult{HTTPStatus: status}, nil
 }
 
-// insertBatchMaxEvents 是单次 VL 插入的批量上限。
+// insertBatchMaxEvents / insertBatchMaxBytes / insertBatchFlushTimeout 等攒批常量已移到
+// insert_batch.go（双阈值攒批层），本文件只保留调用点。
 //
-// 背景（2026-09-28 生产事故）：vlsup 客户端是 http.Client{Timeout: 5 * time.Second}，
-// 而恢复期会把积压一次性拼成一个大 payload 投递；当状态文件达 1.2 GB 时，
-// 单请求远超 5s → `vlsup: insert request: ... context deadline exceeded`
-// → writeProjectionDay 失败 → 「日志采集运行时创建失败」→ 采集静默停摆（无重试、无告警）。
-// 分批后每批体量可控，单请求远低于该超时。
-const insertBatchMaxEvents = 500
+// 插入面有两个入口：insertInBatches（按攒批阈值分批投递，返回最后一批的 HTTP 状态；
+// 任一批失败即中断并原样返回该批状态与错误，调用方据此判定投递结果）与
+// dropEventsAlreadyWritten（写面幂等过滤，见下）。
 
-// insertInBatches 按条数上限把事件分批投递到 VL，返回最后一批的 HTTP 状态。
-// 任一批失败即中断，并原样返回该批状态与错误（调用方据此判定投递结果）。
 // dropEventsAlreadyWritten 对「已写入过的同 id 同 hash」做 id 级幂等过滤
 // （w21 ② 第四落点，2026-10-10 扩展到 replace 路径）：≤500 个 event_id 一批查询，
 // 命中则从本次**插入面**剔除 ✓（调用方保持校验面为全量，见 writeProjectionDay 的说明）。
@@ -7698,43 +7704,34 @@ func (m *Manager) insertInBatchesCtx(ctx context.Context, client *vlsup.Client, 
 	return m.insertInBatchesCtxYield(ctx, client, events, generation, nil)
 }
 
-// insertInBatchesCtxYield 是插入循环的**限速形态**：每完成一个批调用一次 yield（可为 nil）。
+// insertInBatchesCtxYield 是插入的**限速形态**：每完成一个批调用一次 yield（可为 nil）。
 //
-// 为什么需要（2026-10-09 生产实证）：单天 57 万事件 = 1147 个 500 条批，原文一次跑完，
+// 2026-10-31 改造（对齐 Vector / Filebeat）：本函数现在是 insert_batch.go 那层的**薄入口**——
+// 先把事件按「4 MiB 字节 / 500 条 / 1s 时间」三阈值（先到先发）攒成批，再由 insertBatchWorkers
+// 个 worker **并发**投递，每批失败按指数退避有界重试。改造前这里是「固定 500 条、串行、无重试」。
+//
+// 为什么需要批间让出（2026-10-09 生产实证）：单天 57 万事件 = 1147 个 500 条批，原文一次跑完，
 // 期间（连同紧随其后的 287 簇校验）连续吃满算力、把采集轮挤在身后。批间让出把这次重建
 // 从「连续吃满」摊成「间歇性让路」，而让出期间**不持任何锁**。
 //
-// 不变量（安全论证）：yield 只发生在**批与批之间**，不插入到某个批的请求内部，
-// 因此「一个批要么整批成功、要么整批失败」的既有语义逐字不变；批间不改变任何状态，
-// 所以让出既不能把失败变成成功，也不能把已写成功当作失败（幂等由 event_id 承担，既有语义）。
+// 不变量（安全论证，逐条保持）：
+//   - yield 只发生在**批与批之间**，不插入到某个批的请求内部 ⇒ 「一个批要么整批成功、要么
+//     整批失败」的语义逐字不变；
+//   - **派发顺序 = 事件顺序**（worker 从 FIFO 按 seq 取批），因此同源批的发出次序与事件次序一致，
+//     `record_start/end` 的连续性判定不受影响；只有完成次序可能交错，而结果本就按区间并集记账；
+//   - 取消即收手：已写入的批**保持已写**（VL 幂等由 event_id 承担），调用方据此判定「未完成」，
+//     不得当成发布成功（见 rebuildDays 的返回值语义）。
 func (m *Manager) insertInBatchesCtxYield(ctx context.Context, client *vlsup.Client, events []logtypes.Event, generation string, yield func()) (int, error) {
-	status := 0
-	for start := 0; start < len(events); start += insertBatchMaxEvents {
-		end := start + insertBatchMaxEvents
-		if end > len(events) {
-			end = len(events)
-		}
-		// 让出点（重建路径）：在发起本批之前交还时间片，保证采集轮有稳定机会推进。
-		if start > 0 && yield != nil {
-			yield()
-		}
-		if err := ctx.Err(); err != nil {
-			// 取消即收手：已写入的批**保持已写**（VL 幂等由 event_id 承担），
-			// 本次调用方据此判定「未完成」，不得当成发布成功（见 rebuildDays 的返回值语义）。
-			return status, err
-		}
-		payload, err := projectionPayload(events[start:end], generation)
-		if err != nil {
-			return status, err
-		}
-		st, err := client.InsertJSONLines(ctx, payload)
-		status = st
-		if err != nil {
-			return status, err
-		}
-		m.replaceRowsWritten.Add(int64(end - start))
+	limits := m.insertBatchLimitsOf()
+	batches, err := m.accumulateInsertBatches(events, generation, limits)
+	if err != nil {
+		return 0, err
 	}
-	return status, nil
+	if err := ctx.Err(); err != nil {
+		// 取消即收手（一个请求都不发）：与改造前「首批之前就检查一次」同语义。
+		return 0, err
+	}
+	return m.dispatchInsertBatches(ctx, client, batches, limits, yield)
 }
 
 func projectionPayload(events []logtypes.Event, generation string) ([]byte, error) {
