@@ -625,14 +625,17 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
   依赖：FR-491→490、FR-492→490/491、FR-493→490；四项仍为计划。
 - **FR-362/370 既有验收边界**：362按用户确认缩比验≥2真Worker、>50跨节点预检及真实connected，500真连仍是扩容档。
   370的500×60min harness未跑满；不替代以上正式500规模/十Worker门限。
-- **FR-485 部分交付**：仅 `log_ingest_healthy` 经Worker心跳→CP落库→内置告警链路已落。
-  已有：`log_ingest_healthy`、`log_vl_disk_{used,limit,pct}`、`log_vl_partitions`、`log_vl_rows_dropped_total`。
-  其余仍未实现：state尺寸/增速、persist字节率、单源WAL积压/暂停时长、投递失败率/分类、校验退避、慢SQL计数/最长耗时；
-  节点iowait与内存/磁盘比率触发亦未实现。仍要求规则一次配好、动态基线增速检测、推荐阈值与处置手册入口。
-  **2026-10-31 补充缺口（本轮优化无一条有指标可看）**：投递延迟 p50/p95、批量大小分布、实测压缩比、丢弃条数（按原因）、单批耗时、重试次数全未实现——
-  即 gzip（实测 73×）、流标签、攒批、并发投递、去 verify 这几项改造的**效果在生产上无法观测**。
-- **FR-486 计划**：注册前启动进度、首轮采集耗时观测、超阈启动前告警。
-  零实现且无spec；不得由既有状态压缩或启动改善推定交付。
+- **FR-485 已交付（2026-11-01）**：指标链路已补齐并上线。
+  - 投递链路 13 条：batches/events/bytes/requests/retries/failures/aborted + batch_{max,avg}_{events,bytes} + wait_{max,avg}_seconds
+  - 磁盘缓冲 6 条：enabled/used_bytes/capacity_bytes/records/dropped_total/recovered_records
+  - 节点利用率 2 条：`node_mem_pct` / `node_disk_pct`（真机实测 89.95% / 15.63%）
+  - 预置 5 条告警规则（默认不启用）：内存/磁盘/IO等待/采集健康/VL磁盘
+  - **仍缺**：SQL 慢查询计数（需 SQL 层埋点，独立小工程）。
+  - 设计约束：指标不把 `log_source_id` 做标签——投递计数是全局聚合，按源拆会让序列数从 13 涨到 247，而有源数随实例增减变化。有测试钉死这条。
+- **FR-486 已交付（2026-11-01）**：4 阶段启动分段计时（config/bootstrap/logIngest/wsReady）+ 30s 超阈 Warn + slowestPhase 点名。
+  **真机实测**：`totalMs=6846`，其中 `logIngest=6700ms`（占 **97.9%**）——启动慢的真凶就是日志采集运行时，
+  配置/bootstrab/WS 都很正常（7.4ms / 0.4ms / 138ms）。这个数字之前完全不可见。
+  阈值有测试钉死区间（10s..60s），防止被随手改小（正常启动刷 Warn）或改大（真卡住看不见）。
   **2026-10-31 标题修订**：原「启动**加载**分阶段计时（读取/解析/恢复/首次持久化）、**流式/引用化加载优化**」已无对象——
   索引库改 `:memory:` 后重启就是空库，没有「加载索引」这个阶段可计时、可优化（也就没有「状态尺寸/加载耗时」这个观测点）。
 - **FR-497 开发中**：按源×天与VL条数对账只补缺，绝不丢失、允许极少重复；人为删VL某天可检出补回。
