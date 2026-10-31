@@ -110,6 +110,35 @@ type SpoolStats struct {
 	Skipped int64
 	// Pending 尚在队列中未处理的条数。
 	Pending int
+	// DiskUsed / DiskCapacity 是底层环形缓冲文件当前的**已用/总容量**字节（非落盘队列深度）。
+	// 仅当 sink 实现了 DiskSpoolStatsReader 时才有值；未挂载缓冲或 sink 不实现该接口时为 0。
+	DiskUsed int64
+	// DiskCapacity 是环形缓冲文件的数据区容量字节。
+	DiskCapacity int64
+	// DiskRecords 环形缓冲中当前可读条目数。
+	DiskRecords int64
+	// DiskDropped 缓冲内累计丢弃的条目数（环形满了顶掉最旧的）。
+	DiskDropped int64
+	// DiskRecovered 缓冲打开时从磁盘恢复的完整条目数（0 = 无恢复/冷启动）。
+	DiskRecovered int64
+}
+
+// DiskSpoolStatsReader 是可选的磁盘缓冲读数接口。spool.Spool 天然满足。
+//
+// 为什么用可选接口而不是 import spool 包：acquire 不应为了一个可选的落盘能力反向绑定
+// 具体实现；且 spool 包不 import acquire（保持单向依赖）。类型断言失败即视为「无该读数」。
+type DiskSpoolStatsReader interface {
+	// DiskSpoolStats 返回环形缓冲的运行期读数（used/capacity/records/dropped/recovered）。
+	DiskSpoolStats() DiskSpoolReadout
+}
+
+// DiskSpoolReadout 是 DiskSpoolStatsReader 的返回形态。
+type DiskSpoolReadout struct {
+	Used       int64
+	Capacity   int64
+	Records    int64
+	Dropped    int64
+	Recovered  int64
 }
 
 // SpoolStats 返回落盘侧读量。
@@ -119,6 +148,7 @@ func (w *WAL) SpoolStats() SpoolStats {
 	}
 	w.mu.Lock()
 	ch := w.spoolCh
+	sink := w.spoolSink
 	w.mu.Unlock()
 	s := SpoolStats{
 		Saved:   atomic.LoadInt64(&w.spoolSaved),
@@ -127,6 +157,16 @@ func (w *WAL) SpoolStats() SpoolStats {
 	}
 	if ch != nil {
 		s.Pending = len(ch)
+	}
+	// 底层环形缓冲读数：仅在 sink 实现 DiskSpoolStatsReader 时合并进来。
+	// 用接口而非类型断言到具体包，避免 acquire 反向依赖 spool。
+	if r, ok := sink.(DiskSpoolStatsReader); ok {
+		ro := r.DiskSpoolStats()
+		s.DiskUsed = ro.Used
+		s.DiskCapacity = ro.Capacity
+		s.DiskRecords = ro.Records
+		s.DiskDropped = ro.Dropped
+		s.DiskRecovered = ro.Recovered
 	}
 	return s
 }

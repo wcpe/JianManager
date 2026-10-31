@@ -157,6 +157,14 @@ type Client struct {
 	// 只在“重试未压缩形态成功”时置位：那是能证明「问题在压缩、不在数据」的唯一形态。
 	// 一旦置位，后续写入直接走未压缩形态（不再每次都白跑一趟被拒的请求）；重启复位。
 	compressionRejected atomic.Bool
+	// compressOrigBytes / compressGzipBytes 是**实测**压缩比的累计分子/分母（仅压缩成功计入）。
+	//
+	// 为什么累加而不用常量 73×：实测比与数据形态强相关（重复度低时远不到 73×），而本仓的
+	// 写入是唯一高频对外请求，运维必须能在时序库里看到「实际压到多少」——否则「压缩优化没生效」
+	// 这种事在生产上完全不可观测。计数只增不减、读侧零锁，不参与任何判定。
+	compressOrigBytes  atomic.Int64
+	compressGzipBytes atomic.Int64
+	compressSamples   atomic.Int64
 }
 
 // ClientOptions 构造 Client。
@@ -497,6 +505,11 @@ func (c *Client) InsertJSONLines(ctx context.Context, lines []byte) (int, error)
 	if c.compressionEnabled() && len(lines) > 0 {
 		if encoded, err := gzipPayload(lines); err == nil {
 			body, compressed = encoded, true
+			// 实测压缩比累计：仅 gzip 成功计入，作为 /metrics 的压缩比读数分子/分母。
+			// 走累加而非派生比率：数据形态决定实际压率，运维必须看到实测值。
+			c.compressOrigBytes.Add(int64(len(lines)))
+			c.compressGzipBytes.Add(int64(len(encoded)))
+			c.compressSamples.Add(1)
 		}
 		// 压缩失败不是投递失败：退回不压缩形态（传输层优化不得成为采集失败的单点）。
 	}
@@ -555,6 +568,18 @@ func (c *Client) insertOnce(ctx context.Context, body []byte, compressed bool) (
 		return resp.StatusCode, fmt.Errorf("vlsup: insert status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return resp.StatusCode, nil
+}
+
+// CompressStats 返回观测用的实测压缩比累计量（仅 gzip 成功计入）。
+//
+// 返回值是「原始字节」「压缩后字节」「样本数」三个单调累加量，由读数面相除得到实测压率。
+// 不与任何判定耦合：它只是把「压缩优化到底压出了多少」这件事变得可观测，否则生产上只能
+// 凭经验拍一个 73×，真没生效也发现不了。
+func (c *Client) CompressStats() (origBytes, gzipBytes, samples int64) {
+	if c == nil {
+		return 0, 0, 0
+	}
+	return c.compressOrigBytes.Load(), c.compressGzipBytes.Load(), c.compressSamples.Load()
 }
 
 // gzipPayload 返回 lines 的 gzip 压缩形态（NDJSON 重复字段多，压率极高）。

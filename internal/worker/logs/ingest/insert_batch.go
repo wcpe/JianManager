@@ -3,9 +3,11 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -195,6 +197,11 @@ type InsertBatchStats struct {
 	// AvgEventsPerBatch / AvgBytesPerBatch 由上面推出，方便读而不必自己做除法（Batches=0 时为 0）。
 	AvgEventsPerBatch float64
 	AvgBytesPerBatch  float64
+	// FailuresByReason 是按失败原因的**累计**批失败数（键为小写原因串，高基数字段绝不能进键）。
+	//
+	// 故意只按「原因类别」聚合（timeout / 4xx / 5xx / context_canceled / other），不按源、不按
+	// event_id：无界的标签会让时序库爆掉。运维据此区分「是 VL 抽风（5xx）还是源数据被拒（4xx）」。
+	FailuresByReason map[string]int64
 }
 
 // insertBatchCounters 是 InsertBatchStats 的原子累加器（并发 worker 各自原子累加，读侧零锁）。
@@ -210,6 +217,12 @@ type insertBatchCounters struct {
 	maxBytes  atomic.Int64
 	waitTotal atomic.Int64
 	waitMax   atomic.Int64
+	// failuresByReason 是按失败原因类别的累计批失败数；键为小写类别，无高基数字段。
+	// map 本身为引用类型，读侧（snapshot）在持锁快照时一次性复制，写侧在 m.mu 保护下累加
+	// 不可行（写来自并发投递 worker，不持 Manager 锁）；故用独立的 sync.Mutex 串行化 map 写，
+	// 不挤占热路径上的 atomic 计数。
+	failuresMu       sync.Mutex
+	failuresByReason map[string]int64
 }
 
 // observe 记一次「被组织出来的批」（成功或失败都算：它确实被组出来并尝试投递了）。
@@ -253,7 +266,29 @@ func (c *insertBatchCounters) snapshot() InsertBatchStats {
 		s.AvgEventsPerBatch = float64(s.Events) / float64(b)
 		s.AvgBytesPerBatch = float64(s.Bytes) / float64(b)
 	}
+	// 失败原因分类：独立锁下复制，避免读侧与并发投递 worker 竞争同一 map。
+	c.failuresMu.Lock()
+	if len(c.failuresByReason) > 0 {
+		s.FailuresByReason = make(map[string]int64, len(c.failuresByReason))
+		for k, v := range c.failuresByReason {
+			s.FailuresByReason[k] = v
+		}
+	}
+	c.failuresMu.Unlock()
 	return s
+}
+
+// recordFailureByReason 按原因类别累加一次批失败（并发投递 worker 调用，无高基数标签）。
+func (c *insertBatchCounters) recordFailureByReason(reason string) {
+	if c == nil || reason == "" {
+		return
+	}
+	c.failuresMu.Lock()
+	if c.failuresByReason == nil {
+		c.failuresByReason = make(map[string]int64)
+	}
+	c.failuresByReason[reason]++
+	c.failuresMu.Unlock()
 }
 
 // insertBatch 是一个已组好、待发出的批。
@@ -447,6 +482,7 @@ func (m *Manager) dispatchInsertBatches(ctx context.Context, client *vlsup.Clien
 	if firstErr != nil {
 		// 可见失败：计数 + 日志（不静默）。未发出的批单独计数，它们的 WAL 条目仍在。
 		m.insertBatchCounters.failures.Add(1)
+		m.insertBatchCounters.recordFailureByReason(classifyBatchFailure(firstErr, firstFailStatus))
 		if dropped := int64(len(batches) - sent); dropped > 0 {
 			m.insertBatchCounters.aborted.Add(dropped)
 		}
@@ -513,6 +549,43 @@ func insertBatchFailureIsPermanent(status int, err error) bool {
 		return status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
 	}
 	return false
+}
+
+// classifyBatchFailure 把一次批失败归到**低基数的原因类别**，供失败计数按类别聚合。
+//
+// 刻意只产出固定几类（timeout / 4xx / 5xx / context_canceled / other），绝不把源、event_id、
+// 具体状态码以外的文本塞进去——无界标签会让时序库爆掉（见 InsertBatchStats.FailuresByReason）。
+// 判定优先级：先判上下文取消（关停/超时），再判 HTTP 状态码（4xx=数据被拒、5xx=VL 抽风），
+// 其余归 other。
+func classifyBatchFailure(err error, status int) string {
+	if err == nil {
+		if status == 0 {
+			return "other"
+		}
+		return statusClass(status)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "context_canceled"
+	}
+	if strings.Contains(err.Error(), "Client.Timeout") || strings.Contains(err.Error(), "timeout") {
+		return "timeout"
+	}
+	if status != 0 {
+		return statusClass(status)
+	}
+	return "other"
+}
+
+// statusClass 把 HTTP 状态码归为 4xx / 5xx / other 三类。
+func statusClass(status int) string {
+	switch {
+	case status >= 400 && status < 500:
+		return "4xx"
+	case status >= 500 && status < 600:
+		return "5xx"
+	default:
+		return "other"
+	}
 }
 
 // sleepInsertBatchRetry 是可取消的退避等待（关停不许被退避拖住）。

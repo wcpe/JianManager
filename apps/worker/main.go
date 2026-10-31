@@ -823,6 +823,9 @@ func runWorker() {
 	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
 	// 且必须与 /metrics 的读数出口共用同一个实例。
 	var logArchivePurge *retention.ArchiveObjectReclaimer
+	// 磁盘缓冲（FR-510）：VL 不可用时把即将丢弃的 WAL 条目先写盘。
+	// 默认关闭（log_ingest.spool.enabled=false），未启用时为 nil，装配处会上报 Disabled。
+	var spoolMetricsSource ingest.SpoolMetricsSource
 	// 日志 Catalog journal：改用**纯内存**（2026-10-30 用户裁定：机械盘不做落盘）。
 	//
 	// 它原本写 catalog.journal.jsonl（生产已 1MB，每次发布追加一行 + fsync）。
@@ -1691,7 +1694,11 @@ func runWorker() {
 	if logArchivePurge != nil {
 		purgeSource = logArchivePurge
 	}
-	wsMux.HandleFunc("/metrics", retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource))
+	wsMux.HandleFunc("/metrics", combineMetrics(
+		retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource),
+		logIngest,
+		spoolMetricsSource,
+	))
 	// 运行期日志等级调整（GET 读 / POST 改）。
 	// 同样挂在 127.0.0.1 回环 mux 上，不新增暴露面；只调等级不改格式、不持久化，
 	// 重启后回到 log.level 配置值（见 retention.LogLevelController 的边界说明）。
