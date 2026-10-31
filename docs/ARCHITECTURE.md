@@ -1384,47 +1384,86 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 
 一条实例日志从磁盘到面板要穿过 **9 个包**。这张图回答“哪一步是谁做的、在哪里留下了持久化痕迹”：
 
+> **2026-10-31 更新**：本图已按「不落盘 + 官方采集器范式」重写。被删掉的环节用 `~~删除线~~` 标注，
+> 并说明它原本承担什么。**“持久痕迹”一行现在很短**——整条链路只剩两处能跨重启存活。
+
 ```
 【采集】进程 stdout/stderr → 实例日志文件（logs/latest.log 等，路径由采集规则解析）
    │
-   ▼ acquire.FileTailer / ArchiveImporter ........................ 包 acquire
+   ▼ acquire.FileTailer ....................................... 包 acquire
    │   读文件尾巴与轮转产物；物理身份 + 游标决定“从哪读到哪”
-   │   持久痕迹：ledger 里的物理映射与分段位置
+   │   持久痕迹：**ingest.cursor（每源一行，≈2KB，不 fsync）** ← 全链路唯一采集侧持久面
+   │   ~~ArchiveImporter（gz 归档回读）~~ 2026-10-30 删除：只读活文件，轮转后直接读新文件
    ▼ NormalizeBoundary（实现 acquire.EventBoundaryHook）....... 包 pipeline → normalize
    │   把物理行聚成 Multiline 事件（堆栈行归入头行）、算 event_id / canonical hash
    │   不持久化：纯函数式转换
-   ▼ WAL（有界内存队列）........................................ 包 acquire
-   │   已 durable 但未确认投递的事件暂存处（非磁盘）
-   ▼ 投递（deliverContext）→ 受管 VictoriaLogs .............. 包 pipeline
-   │   写 VL → 逐字段校验 → 通过才 publish
+   ▼ WAL（纯内存有界队列，满则丢最旧）............................ 包 acquire
+   │   已 durable 但未确认投递的事件暂存处 —— **重启即丢**
+   ▼ 攒批（4MiB / 1s / 500 条三阈值先到先发 + 4 路并发）..... 包 ingest
+   │   ~~单请求 500 条直发~~ 2026-10-31 改：单批体量有硬上界（事故形态：40MiB 单请求撞5s超时）
+   ▼ 投递（deliverContext）→ 受管 VictoriaLogs .............. 包 pipeline → vlsup
+   │   gzip 压缩（实测 73×）+ 连接池 + **流标签 `_stream_fields=log_source_id,stream`**
+   │   ~~逐字段回查校验~~ 2026-10-31 删除：HTTP 2xx 即结论（原占整轮 85.6% 时间）
    │   持久痕迹：ledger 的 REQUEST_DONE 证据（回收上界的唯一依据）
-   ▼ canonical 事件体追加落盘 ............................. 包 eventstore
-   │   按 source-key 摘要分目录的追加式磁盘段（重放/对账的底本）
+   ▼ canonical 事件体（tmpfs 内存段，**不落盘**）................. 包 eventstore
+   │   ~~磁盘追加落盘段（VL 数据根丢失后的重建底本）~~ 2026-10-30 改 tmpfs：
+   │   **重启即丢，原「可从事件段重建 projection」承诺不再成立**（ADR-095 已追记）
    ▼ Partition Catalog 登记“哪些日有可查分区” ................ 包 catalog
-   │   纯逻辑 + 内存 journal；投影发布状态与租约
+   │   纯逻辑 + **内存 journal**（原 catalog.journal.jsonl + fsync 已下线）
    ▼ 发布投影（PublishedProjection）
          │
          ├──【查询】query.Planner 按 Catalog 选分区、算 ranges、发租约 ........ 包 query
          │      逐源固定 view + budget + read pin；Search/Stats/Fields/Facets/Tail 共享
+         │      受控分面白名单：level / stream / instance_id / **log_source_id**（2026-10-31 补）
          │      │
          │      ▼ 【跨节点】CP logcoord 联邦（反向 gRPC 隧道）................ 包 internal/controlplane/logcoord
          │           扇出到各 Worker → 合并流 → 游标分页 → 覆盖/质量聚合 → HTTP
          │
-         └──【保留】retention 策略 + lifecycle 搬运 ................. 包 retention / lifecycle
-                 每日固定时刻：年龄+磁盘水位取先到 → 搬 COLD → （可选）归档副本 → 删除
+         └──【保留】retention 策略 .................................. 包 retention
+                 每日固定时刻：年龄+磁盘水位取先到 → archive_copy 或 blocked（保留原物）
+                 ~~搬 COLD~~ 2026-10-29 废除：`retention.NewDriver(…, nil, …)`，mover 恒为 nil
                  持久痕迹：Journal 状态机（ROUTING_FROZEN→…→CLEANED）
 
 旁路：
   sampling  — 采集侧采样/抑制/风暴降级（默认全关）
   vlsup     — 受管 VictoriaLogs 进程 supervisor（启动、15s 看护、熔断）
+              **诊断日志按行自带级别分流**（2026-10-31）：info⇒Info、warn⇒Warn、
+              error/fatal/panic⇒Error、解析不出⇒Error（panic 栈必须保留 ERROR）
   archive   — Deep Archive + Rehydrate 基础包（Provider 抽象）
   logassemble — 生产装配入口（把上面这些包按选项拼起来）
 ```
+
+### 整个日志子系统的介质归属（2026-10-31 终态）
+
+> 用户裁定（2026-10-30）：「**不要做任何落盘的操作，因为是机械盘，性能不行**」。
+> 下表是这条裁定落实到每个部件后的最终形态。
+
+| 组件 | 介质 | 重启后 | 说明 |
+|---|---|---|---|
+| **VL 数据** | 磁盘 | ✅ 在 | 唯一可靠长期存储，180d / 100GiB 上限 |
+| **采集游标 `ingest.cursor`** | 磁盘 | ✅ 在 | 每源一行（15 列 v2），≈2KB，**不 fsync**，整表重写 + rename 原子 |
+| 采集索引库 | `:memory:` SQLite | ❌ 没了 | 零磁盘 IO；不建任何文件（`path` 仅作标识） |
+| canonical 事件段 | `/dev/shm` tmpfs | ❌ 没了 | 内存文件系统（126G），**不是** `/tmp`（那是磁盘） |
+| WAL 队列 | 纯内存 | ❌ 没了 | 满则丢最旧（对齐 Fluent Bit `memrb`） |
+| catalog journal | 内存 | ❌ 没了 | 原 `catalog.journal.jsonl` + fsync 已下线 |
+| 账本（缺口/水位/投递证据） | 内存 | ❌ 没了 | 记账面重启后归零，不是被裁剪 |
+
+**这张表最重要的一行是第二行**：整条采集链路上，只有**采集游标**和 **VL 里的数据**能跨重启存活。
+所有中间状态（队列、事件段、索引、账本）都是进程内的瞬时结构。
+
+**如实记录的代价**：
+- 重启后至多重读一段并重复投递（允许重复，不丢）
+- **VL 数据根丢失 = 那段日志事实丢失**，没有可重建的权威集合
+- 缺口、暂停态、投递批次审计这些记账面重启后同样归零
 
 **跨包不变量（改任何一个包前先看这条）**：
 
 - **`ledger` 是回收的唯一真源**。`reclaim_position` 只能被带 `REQUEST_DONE` 证据的区间推进；
   HTTP 2xx 不构成证据，“我认为已写入”也不构成。丢了这条就会**静默丢日志而不报错**。
+  **2026-10-31 补注**：账本本身现在是**内存态**（重启即空），所以这条不变量的作用域是「**进程内**」——
+  它保证进程运行期间不静默丢日志；跨重启的保护靠「采集游标 + 至少一次重发」而不是账本。
+  另：投递主路径已不再逐字段回查（HTTP 2xx 即结论，见 FR-508），
+  但「回收只看 `REQUEST_DONE`、不看 HTTP 结果」这条**没变**——两者是两个不同的东西。
 - **`normalize` 的 event_id / canonical hash 一旦写下就不能变**。它是去重、对账、导出的身份；
   改算法等于让旧数据与新数据彼此不相认。
 - **`catalog` 的 owner/generation 决定“该去哪读”**。迟到事件必须按 Catalog 路由，
@@ -1437,7 +1476,7 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 
 ### 日志规格索引（FR → spec → 现状）
 
-日志相关规格有 **20 份**，分散在 `docs/specs/` 下。下表是它们的唯一入口——
+日志相关规格有 **21 份**，分散在 `docs/specs/` 下。下表是它们的唯一入口——
 **先查这里确定该读哪份、以及那份是否还代表现状**，不要按文件名猜。
 
 状态口径：**已交付** = 代码与回归已落地（不代表性能/长稳已达标）；
@@ -1449,20 +1488,24 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 | FR-474 | `worker-log-acquisition/` + `log-ingest-register-lock/` | 采集通道、WAL、账本、注册锁 | 已交付 / 注册锁开发中 |
 | FR-475 | `worker-log-normalizer/` | Multiline 与归一化、event_id / hash | 已交付（Linux 范围） |
 | FR-476 | `worker-victorialogs-runtime/` | 受管 VL 资产、supervisor、TTL | 已交付 |
-| FR-477 | `worker-log-lifecycle/` | Partition Catalog 与冷热搬运 | 已交付 |
+| FR-477 | `worker-log-lifecycle/` | Partition Catalog 与分区生命周期 | 已交付·~~冷热搬运~~ 2026-10-29 废除（mover 恒 nil） |
 | FR-478 | `worker-log-deep-archive/` | Deep Archive + Rehydrate | 已交付 |
 | FR-479 | `worker-log-query-federation/` | Worker 侧查询规划与租约 | 已交付 |
 | FR-480 | `cp-log-query-coordinator/` | CP 联邦扇出、合并、游标、覆盖 | 已交付 |
-| ~~FR-481~~ | ~~`log-ingest-cutover/`~~ | ~~入库切换与 Legacy 只读~~ | **❌ 已废弃（2026-10-29）** — CP `logs` 表删除，无切换两侧 |
 | FR-482 | `logs-center-tiered-ui/` | 分层日志中心、统计、导出、失败态 | 已交付 |
-| FR-484 | `worker-log-canonical-eventstore/` | canonical 事件体追加存储 | 已交付 |
-| FR-498 | `log-acquire-concurrency/` + `log-verify-chunking/` | 采集并发/长稳、校验分簇 | 部分达成 / **已延后** |
+| FR-484 | `worker-log-canonical-eventstore/` | canonical 事件体（**2026-10-30 起为 tmpfs 内存段**） | 已交付（落盘承诺已废） |
+| **FR-505** | `log-index-sqlite/` + ADR-094/095 | **不落盘采集架构**（索引库 `:memory:`、事件段 tmpfs、WAL 纯内存） | 已交付 |
+| **FR-506** | `ingest/cursor_registry*.go` | **采集游标跨重启持久化**（方案 D，仅 2KB 不 fsync） | 已交付 |
+| **FR-507** | `worker-victorialogs-runtime/` + `insert_batch.go` | **VL 投递客户端**（流标签/gzip/连接池/攒批并发） | 已交付 |
+| **FR-508** | `worker-log-platform-contract/` §4.2 + ADR-099 §9 | **投递主路径去 verify**（HTTP 2xx 即结论） | 已交付（取证路径保留） |
+| **FR-509** | `vlsup/sink.go` | **VL 诊断日志按级别分流** | 已交付 |
+| FR-498 | `log-acquire-concurrency/` + `log-verify-chunking/` | 采集并发/长稳、校验分簇 | 部分达成 / **已延后** ·~~索引持久化 p95~~ 已无对象 |
 | FR-499 | `log-ingest-register-lock/` | 登记锁防双写 | 开发中 |
 | FR-500 | —（无独立 spec） | cgroup 隔离 | 未消二 |
-| FR-501 | `log-cost-governance/` | 成本治理、保留分层、归档回收 | 开发中（部分落地） |
+| FR-501 | `log-cost-governance/` | 成本治理、采样、删前归档 | 开发中（部分落地）·~~保留分层~~ 2026-10-29 删 |
 | FR-502 | `log-acquisition-rules/` | 实例日志路径发现（coreKind 优先） | 已交付 |
-| FR-503/504 | `log-collection-switches/` + `log-config-delivery/` | gz 导入开关、配置下发 | 已交付 |
-| — | `log-index-sqlite/` | Worker 本地日志元数据索引 | 已交付 |
+| FR-503/504 | `log-collection-switches/` + `log-config-delivery/` | 配置下发与停续采（~~gz 导入~~ 2026-10-30 删） | 已交付 |
+| — | `log-index-sqlite/` | Worker 本地日志元数据索引（**现为 `:memory:`**） | 已交付 |
 | — | `log-startup-reconcile/` | 启动恢复与对账 | 开发中 |
 | FR-415/418/419 | `console-log-view-redesign/` | 终端输出区、命令栏、游标上溯 | 已交付（上溯已改读联邦） |
 | FR-345 | `instance-log-history/` | 停机实例历史回放 | 已交付（已改读联邦） |

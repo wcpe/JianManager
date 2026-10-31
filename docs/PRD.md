@@ -523,7 +523,6 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-478 | local/S3/MinIO深归档与租约/预算/generation隔离Rehydrate [规格][s157] | P1·发布必需 | ✅ 已交付@v0.24.0·既有RustFS S3已验；无新增生产S3认证 |
 | FR-479 | Worker按权威副本查询/统计/尾随/字段/存储/恢复与覆盖游标 [规格][s158] | P0 | ✅ 已交付@v0.24.0·功能回归收口；首屏性能延期未达标 |
 | FR-480 | CP全授权目标联邦/覆盖/排序与同快照导出，缺口不交成功附件 [规格][s159] | P0 | ✅ 已交付@v0.24.0·功能回归收口；真机/浏览器限既有scope |
-| FR-481 | 实例/节点停新入CP，platform/audit/Legacy只读与逐节点切换 [规格][s160] | — | ~~❌ 已废弃@2026-10-29·CP `logs` 表整体删除，无“旧路径”即无“切换”~~ **2026-10-31 删除**：本条从未出现在任何已发布版本（v0.23.0 最大编号 FR-471），废弃后无历史包袱，整条移除。现行形态见 ARCHITECTURE §10.1 |
 | FR-482 | 分层日志中心/统计/导出与失败态；游标结束不冒历史完整 [规格][s161] | P1·发布必需 | ✅ 已交付@v0.24.0·live限基础15项及第16项确认409，不含全部UI分支 |
 | FR-483 | 日志契约/许可/恢复/损失/预算/配置/切换文档与实现对账 [规格][s152] | — | ✅ 已交付@v0.24.0·按实现/已覆盖验收/延期专项对账 |
 | FR-484 | canonical事件体追加落盘/迁移恢复与内存有界，禁止按reclaim裁剪 [规格][s162] | P1 | ✅ 已交付@v0.24.0·真机与已覆盖回归；150源RSS≤300MiB·2026-10-30 修订：事件段改 tmpfs（/dev/shm），不再落盘；重启后段消失，原「VL 数据根丢失后可重建」的承诺不再成立 |
@@ -546,6 +545,11 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-502 | 四核心采集规则/轮转/实例路径覆盖，Velocity用logs/latest.log [规格][s173] | P1 | ✅ 已交付@v0.24.0·既有代码/回归/真机归真，不冒新增生产验收 |
 | FR-503 | 日志配置基线→平台默认→Worker覆盖，心跳≤30s热应用并持久化 [规格][s174] | P1 | ✅ 已交付@v0.24.0·节点只覆盖五个log.acq键；开关行为归FR-504 |
 | FR-504 | 实时停续采、纯文本轮转归档与审计入口 [规格][s153] [规格][s175] | P1 | ✅ 已交付@v0.24.0·既有真机/浏览器已验·**2026-10-31 标题修订**：删「gz 定时及手动导入」——gz 归档采集已随 `6ff9ca49` 整体删除；`RunArchiveScan` 与 `ImportArchivesNow` 仍在但**恒返回空**（无实际效果），因其同时是 gRPC 接口成员与前端按钮入口，删接口要跳 proto/grpcsvc/前端三处 |
+| FR-505 | 不落盘采集架构：索引库 `:memory:`、事件段 tmpfs、WAL 纯内存、catalog 内存 journal | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**（补登既有实现：这批改造原本无任何 FR 承载）。介质归属：VL 数据在磁盘 180d/100GiB，**采集游标 `ingest.cursor` 是唯一跨重启持久面**（每源一行、整表约 2KB、不 fsync、整表重写+rename 原子）。代价如实记录：重启后索引/事件段/WAL/缺口/暂停态全部归零，至多重读一段并重复投递；**VL 数据根丢失后无法再从事件段重建 projection**（ADR-095 已追记）。实测：索引 p50/p95 = 0ms、checkpoint 0 次；死守「机械盘不 fsync」裁定 |
+| FR-506 | 采集游标跨重启持久化（方案 D，并承载源配置重建） | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**。TSV v2 共 15 列，每源一行：`key/path/dev/ino/cursor/logicalpos/mode/source_category/storage_namespace/rotate_to/utc_day/charset/time_zone/stream/archive_glob`。起点决策：有游标且文件匹配⇒续读；无⇒从文件末尾（新源不补历史）；路径/inode 变或文件变短⇒退回从头。后 4 列必需：`charset`/`time_zone` 存**显式值**（存生效值会把节点默认继承固化，`TestNodeDefaultsFollowRestartAndExplicitValuesWin` 会红）；`stream` 决定 STDIO 源 raw 布局；`archive_glob` 对 yml 显式源重算不出。带 v1（6列）向后兼容。设计约束：**不 fsync**、无变化零磁盘 IO、单行损坏只跳过该行、读不到当空表且**绝不因此拒绝启动采集** |
+| FR-507 | VL 投递客户端：流标签、gzip 压缩、连接池、字节+时间双阈值攒批与并发投递 | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**。对齐 Vector/Fluent Bit/Filebeat 官方做法：① **流标签** `_stream_fields=log_source_id,stream` —— 只放稳定低基数身份维度（基数≈源数×通道数=57），`level` 故意不入流（基数会随内容漂移），`event_id/record_start/record_end/ingest_time_utc` 等无界字段**构造即拒**（实测错配 3 行⇒3 个流，跑一天即百万级流）；② **gzip** 实测 65090B→895B（**73×**），400/415 自动退回不压缩；③ **连接池** MaxIdleConns/PerHost=32；④ **攒批** 4MiB / 1s / 500 条三阈值先到先发 + 4 路并发（派发序=事件序，仅完成可乱序）。未采用官方 10MB 的原因：2026-09-28 事故即单请求过大撞 5s 超时致采集停摆 |
+| FR-508 | 投递主路径取消逐字段回查（verify），以 HTTP 2xx 为唯一结论 | P0 | ✅ 已交付@v0.24.0·**2026-10-31 登记**（ADR-099 §9 已走显式评审修订，作用域收窄到取证路径）。理由：占整轮 **85.6%** 时间（60源实测 verify=85.3s/99.6s）、曾因校验超时导致整批重写使 VL 体积放大 **75×**、回收链只用 HTTP 状态码（`recordHTTPResultLocked`）从不消费它、业界四家采集器无一如此。**不安全的边界已核实**：`VerifiedRuns` 在 ledger 包零命中，删后回收仍由 `REQUEST_DONE` 连续覆盖推进，不会重演 2026-10-28 钉死事故。保留：取证路径（补债/待定发布确认/热层窗口/查询预算）仍用它 |
+| FR-509 | VL 诊断日志按自身级别分流，info 不再冒充 ERROR | P1 | ✅ 已交付@v0.24.0·**2026-10-31 登记**。`exec.go` 把 VL 进程整个 stderr 包成 diagnosticWriter，VL 把所有级别（含 info）都写 stderr，旧代码无条件 `logger.Error` ⇒ 每次启动几十行 info 全变 ERROR，运维 grep ERROR 被噪音淹没。现按行自带级别分流：`info`⇒Info、`warn`⇒Warn、`error/fatal/panic`⇒Error、**解析不出⇒Error（保守方向：panic 栈/segfault 必须保留 ERROR）**。变异验证：default 改 Info 则 4 条子用例同时转红 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
@@ -691,7 +695,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - **日志交付边界**：FR-473冻结是契约/治理/依赖证据闸，Runbook A/B/C分别归FR-474/476/477，不作冻结前置。
   FR-475仅Linux；FR-476的Windows包校验/解包通过，不等于Windows运行时认证。
   FR-477不外推本轮浏览器迁移成功分支；FR-478既有S3证据不冒新增生产认证；FR-479首屏性能仍延期。
-  FR-480真机/浏览器仅既有scope；FR-481管理面默认关闭、联邦API无生产调用方。
+  FR-480真机/浏览器仅既有scope。
   FR-482 live仅基础15项及第16项确认409，不冒全部UI分支；FR-484 canonical全集禁止按reclaim裁剪。
   日志底座不做CH/Loki实现、日志告警引擎或浏览器直连VL；Paper默认FILE_PRIMARY，CP仅platform/audit与Legacy只读。
 - **QQ交付边界**：FR-494仅单聊；群主动消息受平台40034105限制，前端已下线，保留group实现待平台开放，不改做被动回复。
