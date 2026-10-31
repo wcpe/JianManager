@@ -20,6 +20,10 @@ test.describe('搭建代理（mock 模式真浏览器）', () => {
   })
 
   test('搭建 Velocity 代理：版本解析、系统分配提示、secret 提示与代理实例出现', async ({ page }) => {
+    // CI runner 上单路由就绪就要 10~20s，本用例要 登录 → 搭建向导多步 → 提交 → 回列表查验，
+    // 默认 60s 预算在慢 runner 上会超时（是预算不够，不是断言失败）。
+    test.setTimeout(120_000)
+
     const name = `fr035-velocity-${Date.now()}`
 
     await page.goto('/instances')

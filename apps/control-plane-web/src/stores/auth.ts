@@ -5,9 +5,15 @@ import { queryClient } from '@/lib/shared/query-client'
 
 /** 登录/恢复后异步拉取 /auth/me，填充权限 store（失败由 store 自身回落）。 */
 function schedulePermissionsLoad(): void {
-  void trackDynamicImport(loadPermissionsModule()).then((m) => {
-    void m.usePermissionsStore.getState().loadFromAuthMe()
-  })
+  // 两段都要登记：① 模块本身还没加载完；② 模块加载后 `loadFromAuthMe()` 还会发一个
+  // `await api.get('/auth/me')`（后者会把 axios 拉进模块图）。只登记 ① 的话，flush 会在
+  // 「模块就绪」时就返回，而 ② 仍在飞 → 拆卸环境时它才去读 axios，报
+  // EnvironmentTeardownError（CI 实测：408 files / 3294 tests 全 passed 却判失败）。
+  void trackDynamicImport(
+    trackDynamicImport(loadPermissionsModule()).then((m) =>
+      m.usePermissionsStore.getState().loadFromAuthMe(),
+    ),
+  )
 }
 
 /** 权限 store 的动态 import 入口。 */
@@ -52,7 +58,19 @@ function trackDynamicImport<T>(promise: Promise<T>): Promise<T> {
  */
 export function flushAuthDynamicImports(): Promise<void> {
   if (inFlightDynamicImports.size === 0) return Promise.resolve()
-  return Promise.all([...inFlightDynamicImports]).then(() => undefined)
+  // 【为何要循环】collect 只等**快照那一刻**已发起的那些；而 await 它们的过程中，
+  // 被等到的模块可能又发起新的动态 import（典型链：auth → permissions → api/client → axios）。
+  // 只 await 一轮快照就返回，等于把后一波留在飞——拆卸环境时它们才去读模块，
+  // 于是报 `EnvironmentTeardownError: Cannot load '.../axios/index.js' ... after the
+  // environment was torn down` 的 unhandled rejection，**全部用例都通过**的轮次仍以
+  // 非零码退出（CI 实测：408 files / 3294 tests 全 passed 却判失败）。
+  // 循环到「登记表为空」才真安定；每轮只等已存在的 Promise，不新增解析。
+  const settle = (): Promise<void> => {
+    if (inFlightDynamicImports.size === 0) return Promise.resolve()
+    const wave = [...inFlightDynamicImports]
+    return Promise.all(wave).then(settle)
+  }
+  return settle()
 }
 
 interface AuthState {
@@ -124,10 +142,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null, claimsUserId: null })
     // 两处都经 trackDynamicImport 登记（**不是**裸 `void import(...)`）：保持动态 import
     // 语义不变，但让测试能经 flushAuthDynamicImports 等待在途加载收口（见其文档）。
-    void trackDynamicImport(loadPermissionsModule()).then((m) => m.usePermissionsStore.getState().reset())
+    // 登记整条链（含 .then 里的同步 reset）：只登记模块 import 的话，flush 会提前返回，
+    // 后面的 reset 仍可能在拆卸后才跑（虽不快，但保持与 schedulePermissionsLoad 同一口径）。
+    void trackDynamicImport(
+      trackDynamicImport(loadPermissionsModule()).then((m) => m.usePermissionsStore.getState().reset()),
+    )
     // 登出即整体释放全部终端会话（296，ADR-067）：连接常驻管理器不随组件卸载断开，
     // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把会话管理器卷进首屏 chunk。
-    void trackDynamicImport(loadTerminalSessionManager()).then((m) => m.terminalSessionManager.disposeAll())
+    void trackDynamicImport(
+      trackDynamicImport(loadTerminalSessionManager()).then((m) => m.terminalSessionManager.disposeAll()),
+    )
   },
 
   loadFromStorage: () => {

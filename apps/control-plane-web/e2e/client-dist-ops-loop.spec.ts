@@ -52,12 +52,12 @@ test.describe('客户端分发运营闭环', () => {
     await banBtn.click()
     const banDialog = page.getByRole('dialog')
     await expect(banDialog).toBeVisible()
-    // 现网处置弹窗：标题是「临时封禁 IP {{ip}}」——带具体 IP 的动态标题，
-    // 描述为「将对该 IP 施加临时封禁，确认后立即生效…」。
-    // 浏览器直读 dialog 内的 heading 实测即此（`H2:临时封禁 IP 203.0.113.20`）；
-    // 此前这里断言固定标题「封禁 IP」并注明「临时封禁 IP {{ip}} 已下线」，与实际正好相反。
-    await expect(banDialog.getByRole('heading', { name: /^临时封禁 IP / })).toBeVisible()
-    await expect(banDialog.getByText(/将对该 IP 施加临时封禁/).first()).toBeVisible()
+    // 处置弹窗标题是**固定文案** `clientDistOps.actions.blockIpTitle`=「封禁 IP」；
+    // 描述是 `blockIpDesc`=「对可疑来源 IP 下发临时封禁，可限定频道。」
+    // 【旧写法错在哪】它断言 /^临时封禁 IP /（动态带 IP），但现网标题并不插值 IP；
+    // 历史注释里前人也在这两者间反复横跳，一律以 i18n 真值为准。
+    await expect(banDialog.getByRole('heading', { name: '封禁 IP', exact: true })).toBeVisible()
+    await expect(banDialog.getByText(/对可疑来源 IP 下发临时封禁/).first()).toBeVisible()
     await page.keyboard.press('Escape')
 
     await page.screenshot({ path: path.join(evidenceDir, '03-ops-actions.png'), fullPage: true })

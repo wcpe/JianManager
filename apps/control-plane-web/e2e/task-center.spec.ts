@@ -16,8 +16,13 @@ test('任务中心 列表+筛选+进度+强制停止', async ({ page }) => {
   // 状态 / 节点 筛选
   await expect(page.getByRole('combobox').filter({ hasText: '全部状态' })).toBeVisible()
   await expect(page.getByRole('combobox').filter({ hasText: '全部节点' })).toBeVisible()
-  // 任务行（kind + node + state + progress）
-  await expect(page.getByRole('button', { name: /安装 JDK Temurin 21.*已完成 100%/ })).toBeVisible()
+  // 任务行（title + 状态 badge + 进度条 + 更新时间）
+  // 【为何不能用「已完成 100%」】行的可及名由四段拼成：`<title> <badge> <title> 进度 <更新时间>`
+  // ——进度条的 label 是 `${title} 进度`，插在 badge 与数值之间，所以
+  // `/title.*已完成 100%/` 永远匹配不上（中间隔了「title 进度」）。
+  // 改为只断 title + 状态两个锚点，不断具体百分比（百分比由 ProgressBar 内部渲染）。
+  await expect(page.getByRole('button', { name: /安装 JDK Temurin 21/ }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /安装 JDK Temurin 21.*已完成/ }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: /已失败/ }).first()).toBeVisible()
   // 运行态任务可强制停止
   await expect(page.getByRole('button', { name: '强制停止' }).first()).toBeVisible()

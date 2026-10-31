@@ -14,6 +14,9 @@ import { login } from './helpers'
  */
 
 test('列表多选 → 批量操作栏 → 批量重启结果反馈 + 强制关服 FORCE 二次确认', async ({ page }) => {
+  // CI runner 上单路由就绪就要 10~20s，本用例要 登录 → 实例列表(1200 种子) → 勾选行 → 批量栏 → 二次确认，
+  // 默认 60s 预算在慢 runner 上会超时（是预算不够，不是断言失败）。
+  test.setTimeout(120_000)
   await login(page)
   // 列表视图 + 仅看运行中 + 搜索钉到 server-0005（id=5，RUNNING）。
   await page.goto('/instances?view=list&status=RUNNING&q=server-0005')
