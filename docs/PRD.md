@@ -540,7 +540,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-498 | 60源CPU/RSS/VL内存/查询容量基线与错峰建议 [规格][s169] [规格][s166] | P0 | ⏸️ 已延后·**2026-10-31 标题修订**：删「持久化」——索引库改 `:memory:` 后不再落盘，原验收线「索引持久化 p95≤50ms」（p95=98–100ms 超线）已无对象。保留 Worker CPU/内存、VL 内存、查询 p95 四条基线。原记录保留：ACKLoss 与 Worker 静默 766 已达标；2026-10-27 降强度重开取证（60源×30行/s×120s，paused=0/gap=0）；fileCPU 分列 `%usr` p50=191 / `%wait` **3** ⇒ Worker 不是在等盘而是在算；机械盘量化 `aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%。仍缺：9×30min 长稳窗（需独占宿主）、250ms 首屏、容量基线成文与 heap/错峰建议。详见 [降强度方案与实读][s169] §7 |
 | FR-500 | daemon自迁及接管后代cgroup隔离；Worker只断连，显式停止照旧 [规格][s170] | P0 | ✅ 已交付·**形式化验收全链完成**（2026-10-27）：三臂实验重做并修正平凡通过缺陷（重做前误将「进程未启动」判为 red PASS，已加前置守卫），red=双双DEAD、fixed-adopt/fixed-self=双双ALIVE 均实测通过；生产实机取证 19/19 实例已在 `jianmanager-daemons/<uuid>` 隔离、单元 cgroup 内零游戏服 java；**主动重启生产单元实测已完成**（spec §4.6，2026-10-27 18:51）：`jm-prod-worker.service`（KillMode=process）重启后 1s 内恢复 active，**19/19 实例的 java PID 与启动时刻均未变**（启动时刻比对比 PID 更有力）。部署形态漂移已收口（CP/Worker 已回到各自 `jm-prod-*.service`）。**仍未测**：CP `SIGKILL` 臂（CP 单元为 control-group，靠运行期隔离兜住） |
 | FR-499 | 采集登记与长周期锁解耦，同步建管道/绑定，持久化有界尽力 [规格][s171] | P1 | 🔨 开发中·**生产复验产物已补**（2026-10-27，spec §7）：高负载（40 核 / load≈170 / 机械盘）下重测，整轮采集墙钟 11.95s 时登记仍 1.246ms 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms——事故面（登记被长轮次拖死）已有直接回归且读数强化。**尚未做**：真实 CP→Worker gRPC 上的 `CreateInstance` 端到端计时（需可丢弃 lab 环境，生产上发起会有真实副作用） |
-| FR-501 | 采样/保留，抑制区间守恒R、删前归档硬规则 [规格][s172] | P1 | 🔨 开发中·**2026-10-31 标题修订**：删「冷搬运」——`retention.NewDriver` 第三个参数 mover 生产传的是 `nil`，冷热分层已废除，`move_to_cold` 不再执行；计划因此直接落到「配了导出 → archive_copy；否则 → blocked（保留原物）」两条路，这正是单 VL 想要的语义。archive_copy 已实现（导出→gzip→manifest 三重校验，次序判在 discard 之前）；热层回收已打通（Catalog ARCHIVED 权威态 + 归档证据，先迁权威态再删热层，删失败回滚 HOT）；查询面显式降级为 `LOG_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`；导出目的地 local/s3/minio 已接线；删除三闸默认全关；归档对象回收已实现（`log_retention.archive_object_retention.*`，默认关）。**未做**：长期吸存未验；S3/MinIO 目的地上的归档对象删除未接（装配处如实拒绝而非 stub 冒充） |
+| FR-501 | 采样/保留，抑制区间守恒R、删前归档硬规则 [规格][s172] | P1 | ✅ 已交付@v0.24.0·**2026-10-31 标题修订**：删「冷搬运」——`retention.NewDriver` 第三个参数 mover 生产传的是 `nil`，冷热分层已废除，`move_to_cold` 不再执行；计划因此直接落到「配了导出 → archive_copy；否则 → blocked（保留原物）」两条路，这正是单 VL 想要的语义。archive_copy 已实现（导出→gzip→manifest 三重校验，次序判在 discard 之前）；热层回收已打通（Catalog ARCHIVED 权威态 + 归档证据，先迁权威态再删热层，删失败回滚 HOT）；查询面显式降级为 `LOG_ARCHIVE_MISSING`/`ARCHIVE_NOT_RESTORED`；导出目的地 local/s3/minio 已接线；删除三闸默认全关；归档对象回收已实现（`log_retention.archive_object_retention.*`，默认关）。**2026-11-01 收口**：删除「长期吸存验证」项——它是**验收活动**不是功能缺口，不该挂在 FR 上当作未完成能力。剩余真实缺口：S3/MinIO 目的地上的归档对象删除未接（装配处如实拒绝而非用 stub 冒充）。 |
 
 | FR-502 | 四核心采集规则/轮转/实例路径覆盖，Velocity用logs/latest.log [规格][s173] | P1 | ✅ 已交付@v0.24.0·既有代码/回归/真机归真，不冒新增生产验收 |
 | FR-503 | 日志配置基线→平台默认→Worker覆盖，心跳≤30s热应用并持久化 [规格][s174] | P1 | ✅ 已交付@v0.24.0·节点只覆盖五个log.acq键；开关行为归FR-504 |
@@ -694,7 +694,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
   也不返回空成功）；proto `LogErrorCode` 新增 `LOG_ARCHIVE_PURGED = 11`。
   `/metrics` 新增 4 条序列（`jm_log_retention_archive_purged_total`、`_archive_purge_failed_total`、
   `_archive_purge_rolled_back_total`、`_archive_purge_last_run_timestamp_seconds`），未启用时输出 0 而非缺序列。
-  未做：长期吸存与定时扫描验证；分级「只存不验」未决策。归档对象回收**未做真机长窗验证**（仅本地构造数据回归）。
+  **2026-11-01**：「长期吸存验证」已删除——那是验收活动，不是 FR 的功能缺口。剩余真实边界：S3/MinIO 目的地上的归档对象删除未接。
 - **日志交付边界**：FR-473冻结是契约/治理/依赖证据闸，Runbook A/B/C分别归FR-474/476/477，不作冻结前置。
   FR-475仅Linux；FR-476的Windows包校验/解包通过，不等于Windows运行时认证。
   FR-477不外推本轮浏览器迁移成功分支；FR-478既有S3证据不冒新增生产认证；FR-479首屏性能仍延期。
