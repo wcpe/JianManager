@@ -75,3 +75,53 @@ func TestLogSpoolConfigKeysReadable(t *testing.T) {
 	require.True(t, cfg.LogSpool.Enabled)
 	require.True(t, strings.Contains(cfg.ResolveSpoolPath("/r"), "var/log/s.spool"))
 }
+
+// TestResolveSpoolPathExplicitDotSlash `./` 开头必须相对 **cwd** 解析，不是数据根。
+//
+// 用户要求「支持 ./ 相对路径也支持绝对路径」。./ 是调用方显式表达
+// 「就是当前目录」，不该被数据根改写。
+func TestResolveSpoolPathExplicitDotSlash(t *testing.T) {
+	cfg := &Config{LogSpool: LogSpoolConfig{Path: "./spool/s.bin"}}
+	got := cfg.ResolveSpoolPath("/data/worker")
+	cwd, _ := filepath.Abs(".")
+	require.Equal(t, filepath.Join(cwd, "spool/s.bin"), got,
+		"./ 必须相对 cwd，得到 %q", got)
+	require.NotContains(t, got, "/data/worker",
+		"./ 路径不应被数据根改写")
+}
+
+// TestResolveSpoolPathExplicitDotDot `../` 也相对 cwd。 
+func TestResolveSpoolPathExplicitDotDot(t *testing.T) {
+	cfg := &Config{LogSpool: LogSpoolConfig{Path: "../spool/s.bin"}}
+	got := cfg.ResolveSpoolPath("/data/worker")
+	require.True(t, filepath.IsAbs(got), "../ 应解析成绝对路径")
+	require.NotContains(t, got, "/data/worker")
+}
+
+// TestResolveSpoolPathDotHiddenNotExplicit `.hidden/x` 不能被误判为 ./。
+//
+// 这是本条测试存在的唯一理由：以点开头的目录名很常见（.config/.cache），
+// 误判会把一个本来相对数据根的路径偷偷改成相对 cwd，落点完全变了。
+func TestResolveSpoolPathDotHiddenNotExplicit(t *testing.T) {
+	cfg := &Config{LogSpool: LogSpoolConfig{Path: ".hidden/s.bin"}}
+	got := cfg.ResolveSpoolPath("/data/worker")
+	require.Equal(t, filepath.Join("/data/worker", ".hidden/s.bin"), got,
+		".hidden/ 应当相对数据根（它是目录名，不是 ./ 前缀）")
+}
+
+// TestResolveSpoolPathAllForms 三种写法一起验，防止后改一个碰坏另一个。
+func TestResolveSpoolPathAllForms(t *testing.T) {
+	cwd, _ := filepath.Abs(".")
+	cases := []struct{ path, base, want string }{
+		// 绝对：原样
+		{"/mnt/ssd/s.bin", "/data/w", "/mnt/ssd/s.bin"},
+		// 显式相对：相对 cwd
+		{"./s.bin", "/data/w", filepath.Join(cwd, "s.bin")},
+		// 隐式相对：相对数据根
+		{"var/log/s.bin", "/data/w", filepath.Join("/data/w", "var/log/s.bin")},
+	}
+	for _, c := range cases {
+		cfg := &Config{LogSpool: LogSpoolConfig{Path: c.path}}
+		require.Equal(t, c.want, cfg.ResolveSpoolPath(c.base), "路径 %q", c.path)
+	}
+}

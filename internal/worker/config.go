@@ -859,12 +859,20 @@ const spoolPathUnset = "var/log/ingest.spool"
 
 // ResolveSpoolPath 把配置里的缓冲路径解析成**绝对路径**。
 //
-// base 是 Worker 数据根（dataroot.Root.Base()）。相对路径相对它解析，不是相对进程 cwd——
-// 后者会随 systemd 的 WorkingDirectory 变化，运维写配置时无法预期落到哪。
-// 绝对路径原样返回。
+// 支持三种写法（用户明确要求「支持 ./ 相对路径也支持绝对路径」）：
 //
-// 为什么 base 从外面传而不是在这里读 cfg：数据根不是配置字段（它可以被 --data-dir
-// 或环境变量覆盖），由装配层在拿到 Root 之后传进来才是唯一真源。
+//  1. **绝对路径**（`/mnt/ssd/ingest.spool`、`D:\\spool\\s.bin`）—— 原样返回。
+//  2. **显式相对路径**（`./spool/ingest.spool`、`../spool/s.bin`）—— 相对**进程 cwd**；
+//     这是调用方显式表达了「就是当前目录」的意图，不应被数据根改写。
+//  3. **隐式相对路径**（`var/log/ingest.spool`）—— 相对 **Worker 数据根**（base）。
+//     为什么这一类比 cwd 优先于数据根：运维写这个配置时想的是「放在 Worker 自己的数据目录里」，
+//     而 cwd 会随 systemd 的 WorkingDirectory 变化，无法预期。
+//
+// base 是 Worker 数据根（dataroot.Root.Base()）。它不从 cfg 读——数据根不是配置项
+// （可被 --data-dir / 环境变量覆盖），由拿到 Root 的地方传进来才是唯一真源。
+//
+// 没给 base 且是隐式相对路径时，**保持原样**，不偷偷用 cwd 或临时目录：
+// 那会产出运维根本找不到的缓冲文件，比「不开缓冲」更坑。
 func (c *Config) ResolveSpoolPath(base string) string {
 	if c == nil {
 		return ""
@@ -873,16 +881,43 @@ func (c *Config) ResolveSpoolPath(base string) string {
 	if p == "" {
 		p = spoolPathUnset
 	}
+
+	// 1) 绝对路径：原样。
 	if filepath.IsAbs(p) {
 		return p
 	}
+
+	// 2) 显式相对（./ 或 ../ 开头）：相对 cwd。
+	//
+	// 判据用 Clean 后的前两级，而不是简单看 `strings.HasPrefix(p, "./")`：
+	// `./a` 与 `.\\a`（Windows 写法）都应识到；而 `.hidden/x`（以点开头的目录名）
+	// 不应被误判为「./」——它不是路径前缀，是个正常目录名。
+	if isExplicitRelative(p) {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+		return p
+	}
+
+	// 3) 隐式相对：相对数据根。
 	base = strings.TrimSpace(base)
 	if base == "" {
-		// 没给数据根：保持原样（相对路径），由调用方决定落在哪。
-		// 不在这里偷偷用 cwd 或临时目录——那会产出运维找不到的缓冲文件。
+		// 没给数据根：保持原样。
 		return p
 	}
 	return filepath.Join(base, p)
+}
+
+// isExplicitRelative 报告路径是否以 `./` 或 `../` 显式开头。
+//
+// 分开判断而不是看首字符是 `.`：`.hidden/x` 是个以点开头的目录名，
+// 不是「当前目录」的表示。误判会把一个本来相对数据根的路径偷偷改成相对 cwd。
+func isExplicitRelative(p string) bool {
+	if p == "." || p == ".." {
+		return true
+	}
+	return strings.HasPrefix(p, "./") || strings.HasPrefix(p, ".\\") ||
+		strings.HasPrefix(p, "../") || strings.HasPrefix(p, "..\\")
 }
 
 // EffectiveSpoolCapacity 返回数据区容量；非正值回退默认。
