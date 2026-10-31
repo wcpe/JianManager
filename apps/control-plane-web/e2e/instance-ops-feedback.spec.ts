@@ -17,17 +17,19 @@ test('行内主操作可发现 + 次要操作收「⋯」菜单', async ({ page 
   const row = page.getByRole('row').filter({ has: page.getByRole('button', { name: 'survival-1', exact: true }) })
   await expect(row).toBeVisible()
 
-  // survival-1 种子为 RUNNING：行内主操作「停止」「重启」直接可见（可发现）。
+  // survival-1 种子为 RUNNING：行内只保留**当前态最常用**那一颗（停止）。
+  // 【契约变更】重启已收进「⋯」菜单：操作列只留图标，否则四档状态 + 重启 + ⋯ 把列撑到 135px，
+  // 1280 宽下表格横向溢出、⋯ 被挤出视口（InstanceRowView 操作列注释）。
   await expect(row.getByRole('button', { name: '停止', exact: true })).toBeVisible()
-  await expect(row.getByRole('button', { name: '重启', exact: true })).toBeVisible()
 
-  // 次要操作收进「更多操作（⋯）」下拉菜单：点开后出现「编辑配置 / 删除」等项。
+  // 次要操作收进「更多操作（⋯）」下拉菜单：点开后出现重启 / 编辑配置 / 删除。
   const kebab = row.getByRole('button', { name: '更多操作' })
   await expect(kebab).toBeVisible()
   await kebab.click()
 
   const menu = page.getByRole('menu')
   await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: '重启' })).toBeVisible()
   await expect(menu.getByRole('menuitem', { name: '编辑配置' })).toBeVisible()
   // 删除项在菜单内（destructive 标红），运行态下禁用样式仍可见（非消失）。
   await expect(menu.getByRole('menuitem', { name: '删除' })).toBeVisible()

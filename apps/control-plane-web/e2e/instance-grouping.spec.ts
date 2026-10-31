@@ -8,6 +8,9 @@ import { login } from './helpers'
  */
 
 test('实例组织分组 多级嵌套树', async ({ page }) => {
+  // 本用例要 "登录 → 实例页(1200 实例种子) → 开显示菜单 → 选维度 → 开管理分组 → 断树"，
+  // CI 上单路由就绪就 10~20s，默认 60s 预算在慢 runner 上会超时（不是断言失败）。
+  test.setTimeout(120_000)
   await login(page)
   await page.goto('/instances')
 

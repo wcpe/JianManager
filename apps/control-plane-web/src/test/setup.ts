@@ -99,9 +99,6 @@ beforeAll(async () => {
 })
 afterEach(async () => {
   cleanup()
-  server.resetHandlers()
-  resetDb()
-  clearInjections()
   localStorage.clear()
   useAuthStore.getState().logout()
   usePermissionsStore.getState().reset()
@@ -117,5 +114,12 @@ afterEach(async () => {
   // 解析/加载；无在途时立即 resolve ⇒ 常规用例的拆卸不增加 tick（本文件 ② 条注释规避的
   // 正是「await 一个新解析」这类污染）。
   await flushAuthDynamicImports()
+  // 【为何 MSW 的重置放在 flush 之后】在途的 `loadFromAuthMe()` 会发一个真的
+  // `GET /auth/me`；先 resetHandlers() 再 flush，这个请求就会落到「无 handler」分支，
+  // 虽被 catch 住不再抛，但会污染 MSW 的 unhandled 计数并拖慢拆卸。
+  // 先让它拿到响应（或按现有 handler 失败回落），再清服务端状态。
+  server.resetHandlers()
+  resetDb()
+  clearInjections()
 })
 afterAll(() => server.close())

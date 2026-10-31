@@ -19,7 +19,11 @@ export async function login(page: Page, username = 'admin', password = 'admin123
   await page.getByLabel('用户名', { exact: true }).fill(username)
   await page.getByLabel('密码', { exact: true }).fill(password)
   await page.getByRole('button', { name: '登录', exact: true }).click()
-  await expect(page.locator('[data-slot="console-shell"]')).toBeVisible({ timeout: 20_000 })
+  // 【为何是 30s 而不是 20s】登录后要拉 /auth/me + 权限节点 + 首屏路由 chunk，
+  // CI runner 首例时还要等 vite 依赖预构建；实测 alerts-page 首轮就死在
+  // 这里的 20s，retry 就过（同一台 runner、同一份代码）—— 是预算不够，不是功能坏。
+  // 与 playwright.config 的 `expect.timeout`（30s）保持一致，避免两套口径。
+  await expect(page.locator('[data-slot="console-shell"]')).toBeVisible({ timeout: 30_000 })
 }
 
 /**

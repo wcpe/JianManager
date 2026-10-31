@@ -20,6 +20,10 @@ test.describe('搭建 Bukkit 子服（mock 模式真浏览器）', () => {
   })
 
   test('一键搭建后端子服：核心解析、系统分配提示、提交后实例列表出现 backend', async ({ page }) => {
+    // CI runner 上单路由就绪就要 10~20s，本用例要 登录 → 搭建向导多步 → 提交 → 回列表查验，
+    // 默认 60s 预算在慢 runner 上会超时（是预算不够，不是断言失败）。
+    test.setTimeout(120_000)
+
     const name = `fr034-paper-${Date.now()}`
 
     await page.goto('/instances')

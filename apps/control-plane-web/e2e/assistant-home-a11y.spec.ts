@@ -275,10 +275,13 @@ test.describe('移动端 390px', () => {
           .find(e => e.children.length === 0 && e.textContent?.trim() === text)
         return el ? Math.round(el.getBoundingClientRect().top) : -1
       }
+      // 问候语按时间段三档（AssistantHomePage.tsx：morning/afternoon/其余→evening）。
+      // 【旧写法错在哪】它枚举的是「上午好」——不存在这一档，真源是「早上好」
+      // （i18n `assistant.greet_morning`），于是上午时段跑必挂，与本用例要验的顺序无关。
+      // 这里只断言「三档中任一出现」，与时段解耦；具体取哪档由页面自己按本地时钟决定。
+      const rootText = document.querySelector('[data-page="assistant-home"]')?.textContent ?? ''
       return {
-        greeting: document.querySelector('[data-page="assistant-home"]')?.innerText?.includes('下午好') ||
-          document.querySelector('[data-page="assistant-home"]')?.innerText?.includes('上午好') ||
-          document.querySelector('[data-page="assistant-home"]')?.innerText?.includes('晚上好') || false,
+        greeting: ['早上好', '下午好', '晚上好'].some((g) => rootText.includes(g)),
         chat: find('对话'),
         suggest: find('可以这样问'),
         alerts: find('需要关注'),
