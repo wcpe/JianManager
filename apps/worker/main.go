@@ -348,6 +348,9 @@ func parseDataDirArg(args []string) []string {
 }
 
 func runWorker() {
+	// FR-486：启动分段计时。放在最前面，第一个 Mark 才有意义。
+	startup := newStartupTimer()
+
 	// Windows 服务默认 cwd=System32，会把 setup 写出的 worker.yml 落到错误位置且重启找不到（FIX-2/3）。
 	// 以服务身份运行时先把工作目录切到 exe 所在的安装目录（与 Linux systemd WorkingDirectory 对齐）。
 	chdirToExeDirIfService()
@@ -451,6 +454,7 @@ func runWorker() {
 		"configPath", configSource,
 		"logIngestTimeZone", cfg.IngestDefaultTimeZone(),
 		"logIngestCharset", cfg.IngestDefaultCharset())
+	startup.Mark("config")
 
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
@@ -505,6 +509,7 @@ func runWorker() {
 	}
 
 	slog.Info("Worker Node 启动", "name", nodeName, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
+	startup.Mark("bootstrap")
 
 	// 启后自检：本 Worker 所在 systemd 单元的 KillMode 是否会让「重启单元」连坐杀掉全部游戏服
 	// （见 daemon.WarnIfUnitKillModeUnprotected：该属性是部署期属性，手工 systemd-run / 手写单元
@@ -1539,6 +1544,7 @@ func runWorker() {
 				slog.Info("实例 gz 吸存未装配：本次没有可用的归档目的地（log_archive）")
 			}
 			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
+			startup.Mark("logIngest")
 		}
 	}
 	if rangeClient == nil {
@@ -1897,6 +1903,9 @@ func runWorker() {
 	}
 	go func() {
 		slog.Info("WebSocket 服务器就绪", "addr", wsAddr)
+		startup.Mark("wsReady")
+		// FR-486：所有关键阶段都已就绪，这时输出分段耗时最有意义。
+		startup.Report()
 		if err := wsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("WS 服务器退出", "error", err)
 		}
