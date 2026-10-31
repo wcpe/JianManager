@@ -1091,9 +1091,19 @@ func (s *Service) ArchiveStatus(ctx context.Context, req QueryRequest, objectIDs
 	return s.archive.ArchiveStatus(ctx, req, objectIDs)
 }
 
+// streamFieldAllowed 判定某个字段是否可作为受控的分面/字段返回维度。
+//
+// 这里是一份**白名单**（不是黑名单）：查询面只在白名单内的字段才允许被
+// Fields()/Facets() 暴露出去，避免调用方用任意 event 字段做高基数聚合把 VL 拖垮。
+//
+// 2026-10-31：新增 log_source_id。起因是投递侧已接入 VL 流标签
+// （`_stream_fields=log_source_id,stream`，见 vlsup.DefaultStreamFields），
+// 而本白名单此前只认 level/stream/instance_id —— 结果是**写入侧按源分了流，
+// 查询侧却不承认这个维度**，按源分面会被静默过滤掉，流标签对平台查询面等于没接。
+// log_source_id 的基数 = 源数（生产 19），与 instance_id 同量级，可安全开放。
 func streamFieldAllowed(field string) bool {
 	switch field {
-	case "level", "stream", "instance_id":
+	case "level", "stream", "instance_id", "log_source_id":
 		return true
 	default:
 		return false
