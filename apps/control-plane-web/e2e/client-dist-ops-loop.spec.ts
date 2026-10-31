@@ -44,23 +44,18 @@ test.describe('客户端分发运营闭环', () => {
 
     // 旧 events → 运维「实时监控/异常」分档；处置动作在「处置」Tab
     await page.getByRole('tab', { name: '处置' }).click()
-    /**
-     * 定位改为**处置容器内的稳定 testid**（2026-10-20 消除 flaky）。
-     *
-     * 原写法是 `getByRole('button', { name: '封禁 IP' }).first()`：页面上叫「封禁 IP」的
-     * 元素不止一个——「实时监控」Tab 的行内处置按钮、KPI 卡片的 `kpiBlockedIp` 同名，
-     * 处置 Tab 自己的按钮反而排在其后。Tab 切换瞬间若上一个 Tab 的节点还没卸载，
-     * `.first()` 会拿到那个即将消失的元素，点击自然不弹窗 ⇒ 偶发失败。
-     * 容器 `data-testid="ops-actions"` + 按钮 testid 是这个页面给出的稳定契约，
-     * 用它就不存在「命中同名的另一个元素」这一可能。
-     */
+    // 处置页有**两组**按钮，文案还不完全一样，别按名字瞎撞：
+    //   顶部动作按钮（稳定 testid）：封禁 IP / **密钥状态** / 频道防护
+    //   事件行内按钮（仅当有事件数据时渲染）：封禁 IP / **改 key 态** / 频道防护
+    // mock 的处置动作流水为空（快照：「暂无处置动作」），事件行不出现，
+    // 所以「改 key 态」永远匹配不到；而「封禁 IP」两处同名，`.first()` 会点到顶部那个。
+    // 这里直接锚 testid，既避开同名，也不受事件数据有无影响。
     const actions = page.getByTestId('ops-actions')
-    await expect(actions).toBeVisible()
-    const banBtn = actions.getByTestId('action-open-block-ip')
-    await expect(banBtn).toBeVisible()
+    await expect(actions.getByTestId('action-open-block-ip')).toBeVisible({ timeout: 15_000 })
     await expect(actions.getByTestId('action-open-key-state')).toBeVisible()
     await expect(actions.getByTestId('action-open-protection')).toBeVisible()
 
+    const banBtn = actions.getByTestId('action-open-block-ip')
     await banBtn.click()
     const banDialog = page.getByRole('dialog')
     await expect(banDialog).toBeVisible()
