@@ -522,7 +522,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-490 | 审批票据与状态机内核（feat） | P0 | ✅ 已交付@v0.24.0 |
 | FR-491 | 审批执行器与执行回执 | P0 | ✅ 已交付@v0.24.0 |
 | FR-492 | 高危 MCP 工具接入审批 | P0 | ✅ 已交付@v0.24.0 |
-| FR-493 | 审批中心与权限节点 | P1 | ✅ 已交付·审批中心页面（待审列表 + 批准执行 / 驳回 + 历史追溯）、`approval.read` / `approval.decide` 权限节点接线、7 项 DOM 用例与 3 档视口 e2e 均已完成；无权限账号 403 由路由守卫 + 服务层双重拦（决策端点另有「Agent 身份不可决策」的服务层拒绝，不靠路由兜底） |
+| FR-493 | 审批中心与权限节点 | P1 | ✅ 已交付@v0.24.0·审批中心页面（待审列表 + 批准执行 / 驳回 + 历史追溯）、`approval.read` / `approval.decide` 权限节点接线、7 项 DOM 用例与 3 档视口 e2e 均已完成；无权限账号 403 由路由守卫 + 服务层双重拦（决策端点另有「Agent 身份不可决策」的服务层拒绝，不靠路由兜底） |
 | FR-494 | QQ 机器人告警通知通道 | P1 | ✅ 已交付@v0.24.0 |
 | FR-495 | QQ 机器人扫码接入与已发现群列表 | P1 | 开发中（真机验收：扫码绑定 / 网关连接 / 入群事件自动落库**均通过**；建通道与前端待验） |
 | FR-496 | 采集索引迁移至本地 SQLite | P0 | 🔨 开发中 |
@@ -531,18 +531,18 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-499 | 采集登记路径与长临界区解耦 | P1 | 🔨 开发中 |
 | FR-500 | daemon 子树脱离 Worker 单元 cgroup | P0 | 🔨 开发中 |
 | FR-501 | 日志成本治理（分层/采样/保留）与冷层搬运 | P1 | 🔨 开发中 |
-| FR-502 | 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec） | P1 | ✅ 已交付（设计底座单一真源已落：`packages/ui/src/styles/` 的 token/主题/动效入口齐备，主控台与控件博物馆均改为一次 `@import` 取底座；`dark:` 变体经 `@custom-variant` 绑定 `.dark` class。明细见 `docs/specs/unspecced-fr-records/spec.md`；阶段 1~6 全部完成，见 FR-507 的四项验收） |
-| FR-503 | 主题配色对比度自动校验（test，免 spec） | P1 | ✅ 已交付（对比度门禁已落：`packages/ui/src/lib/color-contrast.ts` + 110 项配对断言，5 套主题 × 明暗全覆盖。明细见免 spec 记录） |
-| FR-504 | 内容页布局规范层 | P1 | ✅ 已交付（布局规范层已落：`packages/ui/src/components/layout/` 提供 PageShell 三壳态 / PageHeader / ScopeBar / SummaryStrip / Toolbar / PlatformTabs 与网格原语；实测 views 下 46 个 `*PageView` 中 41 个已改用该层） |
-| FR-505 | 导航外壳组件层 | P1 | ✅ 已交付（导航原语层已落于 `packages/ui/src/components/nav/`；正文所述 `shell/` 路径与 AppShell/ResourceTree 已按「零引用删除」重构，按「已有 FR 只改状态字段」约定未改正文） |
-| FR-506 | 工作区导航数据层 | P1 | ✅ 已交付（工作区导航数据层已落于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`；四工作区 × 组 × 页面共 42 条登记 + 3 认证页；权限语义与旧六域逐条等价的 17 项用例全绿） |
-| FR-507 | 主控台外壳接入与页面迁移 | P1 | ✅ 已交付（**四验收全部达成**：①桌面侧栏/移动导航/命令面板三处消费方统一以 `workspace-navigation.ts` 为真源；②内容页 41/46 已用 FR-504 原语，余 5 为认证页与全幅画布页；③真浏览器实测——日志中心 12004 条仅挂 24 行 DOM（0.2%）、滚动重挂载 326.8/286.6/691.0 ms、long task 0 次；④`nav-config.ts` 与死代码 `ConsoleSidebar` 已删，旧 41 条登记冻结成快照继续做等价性对照，`Workspace.tsx` 路由 47→54 条从未削减。全量前端回归 3284/3284 通过） |
-| FR-508 | 代码内 FR 编号全量清理| P1 | ✅ 已交付（git 跟踪的代码文件 2,083 个、9,089 处全部清零；`check-no-fr-in-code.sh --stock` 0 命中，`go build`/`go vet`/`tsc -b` 全通过） |
+| FR-502 | 前端设计底座单一真源与 `dark:` 变体修复（ref，免 spec） | P1 | ✅ 已交付@v0.24.0（设计底座单一真源已落：`packages/ui/src/styles/` 的 token/主题/动效入口齐备，主控台与控件博物馆均改为一次 `@import` 取底座；`dark:` 变体经 `@custom-variant` 绑定 `.dark` class。明细见 `docs/specs/unspecced-fr-records/spec.md`；阶段 1~6 全部完成，见 FR-507 的四项验收） |
+| FR-503 | 主题配色对比度自动校验（test，免 spec） | P1 | ✅ 已交付@v0.24.0（对比度门禁已落：`packages/ui/src/lib/color-contrast.ts` + 110 项配对断言，5 套主题 × 明暗全覆盖。明细见免 spec 记录） |
+| FR-504 | 内容页布局规范层 | P1 | ✅ 已交付@v0.24.0（布局规范层已落：`packages/ui/src/components/layout/` 提供 PageShell 三壳态 / PageHeader / ScopeBar / SummaryStrip / Toolbar / PlatformTabs 与网格原语；实测 views 下 46 个 `*PageView` 中 41 个已改用该层） |
+| FR-505 | 导航外壳组件层 | P1 | ✅ 已交付@v0.24.0（导航原语层已落于 `packages/ui/src/components/nav/`；正文所述 `shell/` 路径与 AppShell/ResourceTree 已按「零引用删除」重构，按「已有 FR 只改状态字段」约定未改正文） |
+| FR-506 | 工作区导航数据层 | P1 | ✅ 已交付@v0.24.0（工作区导航数据层已落于 `apps/control-plane-web/src/lib/console/workspace-navigation.ts`；四工作区 × 组 × 页面共 42 条登记 + 3 认证页；权限语义与旧六域逐条等价的 17 项用例全绿） |
+| FR-507 | 主控台外壳接入与页面迁移 | P1 | ✅ 已交付@v0.24.0（**四验收全部达成**：①桌面侧栏/移动导航/命令面板三处消费方统一以 `workspace-navigation.ts` 为真源；②内容页 41/46 已用 FR-504 原语，余 5 为认证页与全幅画布页；③真浏览器实测——日志中心 12004 条仅挂 24 行 DOM（0.2%）、滚动重挂载 326.8/286.6/691.0 ms、long task 0 次；④`nav-config.ts` 与死代码 `ConsoleSidebar` 已删，旧 41 条登记冻结成快照继续做等价性对照，`Workspace.tsx` 路由 47→54 条从未削减。全量前端回归 3284/3284 通过） |
+| FR-508 | 代码内 FR 编号全量清理| P1 | ✅ 已交付@v0.24.0（git 跟踪的代码文件 2,083 个、9,089 处全部清零；`check-no-fr-in-code.sh --stock` 0 命中，`go build`/`go vet`/`tsc -b` 全通过） |
 | FR-509 | 侧栏资源面板收敛为「一个分组方式 + 服务器列表」 | — | ✅ 已交付@v0.24.0 |
 | FR-510 | 删除侧栏本地自定义分组并清掉其类型错误（ref，免 spec，与 FR-509 同批交付） | P1 | ✅ 已交付@v0.24.0 |
 | FR-511 | 侧栏服务器列表精简与虚拟化 | — | ✅ 已交付@v0.24.0 |
 | FR-512 | 侧栏服务器行标注「服务端类别」三分法 | — | ✅ 已交付@v0.24.0 |
-| FR-513 | 节点主机级观测采集补全 → `docs/specs/inflight-backlog/spec.md` | — | ✅ 已交付（实现与真机取证均已完成：Worker `hostobs` 采集 → 心跳 → CP 入库 → 首页悬浮卡四处新版式：负载三档 / CPU 构成含 iowait / 分挂载点磁盘 / 整机 Top 进程+进程数。§6 四个待定项已在实现中定案：不含 guest、进程计数读 `/proc` 走独立 goroutine、挂载点进快照表。**真机截图取证已完成**：`docs/screenshots/fr513-host-obs/` 5 张，实测渲染出负载 42.5/58.7/71.2%、iowait 19.3%（总占用仅 32% 的 IO 瓶颈）、`/var` 95% 而 `/` 14.4%、整机 Top 含 `rsync`/`mysqld` 等非受管进程。取证中一并补齐 `api/metrics.ts` 缺失的 6 个主机级字段契约与 devmock 缺失的 `/metrics/resource-attribution` 端点） |
+| FR-513 | 节点主机级观测采集补全 → `docs/specs/inflight-backlog/spec.md` | — | ✅ 已交付@v0.24.0（实现与真机取证均已完成：Worker `hostobs` 采集 → 心跳 → CP 入库 → 首页悬浮卡四处新版式：负载三档 / CPU 构成含 iowait / 分挂载点磁盘 / 整机 Top 进程+进程数。§6 四个待定项已在实现中定案：不含 guest、进程计数读 `/proc` 走独立 goroutine、挂载点进快照表。**真机截图取证已完成**：`docs/screenshots/fr513-host-obs/` 5 张，实测渲染出负载 42.5/58.7/71.2%、iowait 19.3%（总占用仅 32% 的 IO 瓶颈）、`/var` 95% 而 `/` 14.4%、整机 Top 含 `rsync`/`mysqld` 等非受管进程。取证中一并补齐 `api/metrics.ts` 缺失的 6 个主机级字段契约与 devmock 缺失的 `/metrics/resource-attribution` 端点） |
 | FR-514 | AI 供应商、模型与平台配置 | P0 | ✅ 已交付@v0.24.0（spec §11 全部 13 项已关闭，2026-10-29 收口：三协议用本地真 HTTP + 真 SSE 假供应商各实跑通过（文本增量 / 工具参数 / usage / 探测）；审计流水 9 个动作齐全且白名单逐字段拼、本轮补 baseUrl 留痕；跨重启凭据 `TestCredentialSurvivesRestart` 与换密钥保密文 `TestCredentialKeyChangeKeepsCiphertext`；三启回读 `default_model_id` 新增 `TestSettingSurvivesThreeStarts`。真实商业厂商验证按 §11 #13 由用户确认关闭——**仓库内无该次验证的日志/截图留痕**） |
 | FR-515 | Go 内置轻量 Agent 与私有会话 | P0 | ✅ 已交付@v0.24.0 |
 | FR-516 | 当前用户受限系统工具与逐调用写入确认 | P0 | ✅ 已交付@v0.24.0 |

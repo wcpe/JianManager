@@ -85,8 +85,24 @@ func interceptApproval(
 		}
 	}
 
-	// 申请人：Token 归属的管理员用户（不是 Token 自己——审批要落到一个真实的人）。
-	applicantUserID := tokenOwnerUserID(deps, p.TokenID)
+	// 申请人：优先取 principal 自带的“代表哪个用户”（助手委托身份），
+	// 其次才回退到 Token 归属（Agent Token 场景）。
+	//
+	// 【为何不能只靠 TokenID】助手派生的 principal 没有 Token（ADR-105 不为人类用户签发
+	// jmat_），TokenID 恒为 0 → tokenOwnerUserID 直接返回 0 → 票据 applicant_user_id=0。
+	// 后果不是“显示不好看”，而是实质错误：
+	//   ① 幂等部分唯一索引含 applicant_user_id，于是**不同用户**经助手触发的
+	//      同 action + 同目标 + 同参数写操作会互相命中同一张票并被回读；
+	//   ② own.* 接口按 applicant 过滤，真申请人看不到自己的申请，也无法 withdraw。
+	applicantUserID := p.ActAsUserID
+	if applicantUserID == 0 {
+		applicantUserID = tokenOwnerUserID(deps, p.TokenID)
+	}
+	// tokenID 只在真有 Token 时落库；助手场景留空，避免造出“Token 0”这种假引用。
+	tokenID := ""
+	if p.TokenID != 0 {
+		tokenID = fmt.Sprintf("%d", p.TokenID)
+	}
 
 	res := deps.Approval.InterceptForApproval(service.ApprovalInterceptParams{
 		ToolName:        name,
@@ -98,7 +114,7 @@ func interceptApproval(
 		Evidence:        service.CaptureTargetSnapshot(deps.Instance, deps.Node, targetType, targetID),
 		ApplicantUserID: applicantUserID,
 		ApplicantKind:   model.ApprovalApplicantAgent,
-		TokenID:         fmt.Sprintf("%d", p.TokenID),
+		TokenID:         tokenID,
 	})
 	if !res.Blocked {
 		return false, ToolResult{}

@@ -291,20 +291,27 @@
 - **错误**: `404 NOT_FOUND` / `409 NODE_HAS_INSTANCES` / `422 BUSINESS_ERROR`（未下线）/ `400 INVALID_REQUEST`
 - **审计**: `node.purge`
 
-### GET /api/v1/nodes/repair/suspects
+### 节点修复接口（已退役）
+
+> **下方四个端点在 v0.24.0 已随 `node_repair` 退役被删除**，现在调用均返回 404。
+> 保留原文仅为历史对照与迁移参考；新系统请用节点页现有的维护/排空/下线能力。
+> （原因：UUID 锢定身份（ADR-039）落地后，“重名覆盖”这一类存量数据已不可再产生，
+> 专职修复面失去存在前提。）
+
+#### ~~GET /api/v1/nodes/repair/suspects~~（已删除）
 - **描述**: 列出疑似被串改/重名的节点（只读诊断）。信号：名字带迁移去重后缀 `-dup-<id>`（曾因重名被自动改名）、或仍存在同名活跃节点组。修复重名覆盖 BUG-A 的存量数据排查入口
 - **关联 FR**: FR-004（见 ADR-039 §2）；UI 入口随 FR-177
 - **权限**: 平台管理员
 - **响应**: `[{ node: <节点对象>, reasons: [string] }]`
 
-### GET /api/v1/nodes/:id/orphans
+#### ~~GET /api/v1/nodes/:id/orphans~~（已删除）
 - **描述**: 统计指定节点上孤立的 JDK / 实例数量（只读，修复前评估影响面）
 - **关联 FR**: FR-004（见 ADR-039 §2）
 - **权限**: 平台管理员
 - **响应**: `{ nodeId, jdkCount, instanceCount }`
 - **错误码**: `404 NOT_FOUND`（节点不存在）
 
-### POST /api/v1/nodes/:id/reenroll
+#### ~~POST /api/v1/nodes/:id/reenroll~~（已删除）
 - **描述**: 把被挤占的机器作为新节点重新 enroll——为该节点行轮换全新 `node_uuid`/`node_secret`（切断与被冒用旧身份的关联，旧 secret 即刻失效，节点置离线待重注册）。挂在该节点的 JDK/实例随 `node_id` 保留。**破坏性操作**
 - **关联 FR**: FR-004（见 ADR-039 §2）
 - **权限**: 平台管理员（危险操作，前端二次确认）
@@ -313,7 +320,7 @@
 - **错误码**: `409 CONFIRM_REQUIRED`（未确认）、`404 NOT_FOUND`（节点不存在）
 - **审计**: `node.reenroll`
 
-### POST /api/v1/nodes/:id/purge-orphans
+#### ~~POST /api/v1/nodes/:id/purge-orphans~~（已删除）
 - **描述**: 清理指定节点上孤立的 JDK / 实例引用——硬删该节点 NodeJDK 行、软删该节点实例（清掉冒用期间错误挂上的残留资源）。**破坏性操作**
 - **关联 FR**: FR-004（见 ADR-039 §2）
 - **权限**: 平台管理员（危险操作，前端二次确认）
@@ -5409,7 +5416,12 @@ docs/openapi/
 
 **本文件不重复契约细节**——请求/响应结构以 `docs/openapi/` 为准。本节只做入口索引与跨接口约定说明。
 
-校验：`./scripts/check-openapi.sh` 做三项检查（YAML 语法、`$ref` 可解析、与 Gin 路由双向一致）。**路由不一致会导致 CI 失败。**
+校验：`./scripts/check-openapi.sh` 做三项检查（YAML 语法、`$ref` 可解析、声明的路径在 Gin 里真实存在）。
+它已接入 `ci.yml` 的 `workflow-contract` job，**不一致会直接失败**。
+
+> 早前这一句写的是「路由不一致会导致 CI 失败」，而脚本实际上“只告警、恒退出 0”
+> 且未接任何 workflow——于是“文档写了没实现”与“对外声明错鉴权”两类断裂都能全绿合入。
+> 现已改为硬失败 + 接入 CI。
 
 ### 接口清单
 
@@ -5584,6 +5596,47 @@ GET /api/v1/business/cursor?instanceId=&domain=&fromSeq=&toSeq=&limit=
 JM 只做「拉取并透传」，**不做差异计算**。`action` 由调用方指定，JM **不预设任何快照动作名**。
 
 差异比对、写回决策全部是业务台的职责——JM 不理解业务语义，无法判断"哪个字段不一致算差异"。
+
+---
+
+## 配置交付与放量（FR-531 / FR-532）
+
+分层覆盖（`/config-files`）只解决「配置怎么定义」；这一段解决「怎么把合并好的配置
+安全地推到一批实例上」。
+
+**权限**：整组挂 `permRead("file.read","instance.read","file.write","instance.write")`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/config-deliveries` | 交付单列表（可按状态/配置文件筛） |
+| POST | `/api/v1/config-deliveries` | 创建草稿单（含目标选择器、分批策略、生效方式） |
+| GET | `/api/v1/config-deliveries/:id` | 单张详情 |
+| PUT | `/api/v1/config-deliveries/:id` | 修改草稿（仅 draft/paused 可改） |
+| DELETE | `/api/v1/config-deliveries/:id` | 删除草稿单 |
+| POST | `/api/v1/config-deliveries/:id/submit` | 提交审批（draft → pending） |
+| POST | `/api/v1/config-deliveries/:id/approve` | 审批通过（pending → approved，需平台管理员） |
+| POST | `/api/v1/config-deliveries/:id/start` | 开始放量（approved → rolling，后台异步执行） |
+| POST | `/api/v1/config-deliveries/:id/pause` | 人工暂停（rolling/observing → paused） |
+| POST | `/api/v1/config-deliveries/:id/resume` | 继续（paused → rolling；重试失败目标或跳过） |
+| POST | `/api/v1/config-deliveries/:id/cancel` | 中止（未下发目标置 skipped） |
+| POST | `/api/v1/config-deliveries/:id/rollback` | 回滚（整批或子集；子集需传 `instanceIds`） |
+| GET | `/api/v1/config-deliveries/:id/targets` | 逐目标状态（pushing/pushed/activating/deferred/failed） |
+| GET | `/api/v1/config-deliveries/:id/impact` | 变更影响预览（会改多少台、哪些已一致） |
+| GET | `/api/v1/config-deliveries/:id/observe` | 观察窗内的健康状况 |
+
+**状态机**：`draft → pending → approved → rolling ⇄ observing → completed`，
+旁支 `paused`（可 resume）/ `cancelled` / `failed` / `rolling_back → rolled_back`。
+
+**几个不显然的语义**：
+
+- **离线目标不判失败**：目标实例当时不在线会被置 `deferred`，探针重连后自动补推；
+  只有“推了但失败”才计入 `failed`。全部推完但仍有 deferred 时单子仍为 `completed`，
+  运维从 `deferred_count` 区分「配置坏了」与「目标不在」。
+- **合并结果不可信就不下发**：任一层配置语法错误时 `EffectiveContent` 返回
+  `ErrConfigLayerInvalid`，目标直接判 `EFFECTIVE_MERGE_FAILED`，
+  不会把“少了一层覆盖”的配置写进目标磁盘。
+- **分批与熔断**：按 `BatchMode` 切批，每批后观察 `ObserveWindowSec`；
+  离线率超阈则中止并保留已下发结果。
 
 ---
 

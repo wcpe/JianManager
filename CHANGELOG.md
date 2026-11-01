@@ -17,6 +17,15 @@
   **新登记一处部署形态漂移**：本机生产 CP/Worker 被 systemd 收养进 `vantaloom-runtime.service`（`KillMode=control-group`），带 `KillMode=process` 的 `jm-prod-worker.service` 在册但 inactive，`jm-worker-node-main.service.d/10-killmode.conf` 已成孤儿 drop-in。该形态下运行期隔离是**唯一防线**，Worker 启动自检已如实告警。未做本机生产单元主动重启（需停机窗口人工执行），因此 PRD 不升级为已交付。
 - **FR-499 生产复验产物（2026-10-27）**：量化读数重测于高负载机械盘宿主——整轮采集墙钟 **11.95s** 时登记仍 **1.246ms** 返回（`idempotent_rebind` 0.518ms），解算 385ms 内采集轮最坏单轮 11.9ms，`m.mu` 单次最长 1.298ms。澄清 PRD 原记的「CP 连通性超时残余」**不是网络层**，而是事故当时 `CreateInstance` 中登记那一步的 `DeadlineExceeded`。未做真实 CP→Worker gRPC 上的端到端计时（需可丢弃 lab 环境，生产上发起有真实副作用）。
 - **FR-498 降强度压测与 fileCPU 取证（2026-10-27）**：按用户要求不跑原 9×30min、适配机械盘目标机。60 源 × 30 行/s × 120s 跑两次（L1 档），均 `paused=0` / `gap=0`、checkpoint 后 WAL 归 0。**首次拿到 fileCPU 分列**：`%usr` p50=191% / `%system` p50=16% / `%wait` p50=**3%** ⇒ Worker **不是在等磁盘而是在算**（VL 的 `%wait` 恒 0）。**机械盘量化**：`aqu-sz` 50–76、`w_await`≈56ms、`%util`≈92%、`wrqm` 20–52%。**新发现一项确定不达标**：索引持久化 p95 = **98–100 ms**（验收线 50 ms）。同夹具两次稳态达成率相差 13 pp（80.4% ↔ 93.7%）⇒ 直接实证了「load≈150 宿主上不能得出容量结论」。原门限（250ms 首屏、9×30min、持久化 ≤50ms）与失败记录**全部原样保留**，FR-498 仍为⏸️已延后。
+### ⚠️ 升级前必读（不可逆变更）
+- **业务镜像三表将被永久删除（ADR-106）**：启动时 `AutoMigrate` 会执行
+  `DROP TABLE IF EXISTS` 删除 `business_events` / `economy_balance_mirrors` /
+  `economy_ledger_entries`，**不备份、不可恢复**。
+  - 升级前如需留底，**必须先自行导出**（平台不做备份）；
+  - **降级回旧版本不会重建这三张表**——回滚只恢复代码，不恢复数据；
+  - 删除前会逐表打 WARN 日志（含表名与“降级不会重建”提示），便于事后追溯。
+  - 已覆盖「三张都在 / 只残留一张 / 全新库」× 「首启 / 二启 / 三启」六种形态，
+    见 `internal/controlplane/database/business_retirement_restart_cycle_test.go`。
 
 ### 修复
 - **FR-497③ 三项登记缺口补齐（2026-10-27，未发布）**：收养链路此前有三处「仍未做到」，本轮补上并留下可转红证据。

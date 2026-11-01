@@ -158,6 +158,18 @@ func (s *TaskService) RunAsync(spec RunSpec, work func(ctx context.Context, stag
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
+		// 【为何必须 recover】这是裸 goroutine：work 里是各领域的具体业务代码，
+		// 一次 panic 会直接终止整个 CP 进程（无 gin.Recovery 保护）。
+		// 审批执行、JDK 安装、运行时安装都跑在这条路上，
+		// 而它们的输入可能来自用户参数/上游响应。
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("长操作任务 panic 已捕获（进程存活）", "taskId", taskID, "kind", spec.Kind, "panic", rec)
+				if err := s.MarkFailed(taskID, fmt.Sprint("任务内部错误：", rec)); err != nil {
+					slog.Warn("panic 后标记任务失败失败", "taskId", taskID, "error", err)
+				}
+			}
+		}()
 		if err := s.MarkRunning(taskID); err != nil {
 			slog.Warn("标记长操作任务运行中失败", "taskId", taskID, "error", err)
 		}

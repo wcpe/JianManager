@@ -245,6 +245,68 @@ func parseDataDirArg(args []string) []string {
 	return out
 }
 
+// logStartupPhase 打一条启动阶段耗时日志（范围①）。
+//
+// 为什么默认开启而不藏在开关后面：启动期每次进程生命周期只跑一遍，没有噪声成本；
+// 而运行期那套 `JIANMANAGER_STAGE_TIMING=1`（采集轮内计时）是高频路径，才需要开关。
+// 现场出问题时，人最需要的是「上一次启动的日志里本来就有数据」。
+func logStartupPhase(phase string, cost time.Duration) {
+	slog.Info("启动阶段完成", "phase", phase, "elapsed_ms", cost.Milliseconds())
+}
+
+// warnIfStateTooLarge 启动期状态规模超阈告警（范围④）。
+//
+// 为什么要这条：旧事故（2026-09-28）里，1.2GB 状态把注册拖到 8m39s，而全程没有任何提示。
+// 那时若有一条「状态偏大，启动会变慢」的 WARN，排查方向会完全不同。
+//
+// 判据用**索引库 + 事件段**的实际字节数，而不是行数：行数要开库才能数（那本身就要花时间），
+// 而文件大小是 stat 一次即得，恰好在「加载之前」就能判断——这正是「启动前告警」的语义。
+//
+// 【修复：此前只扫了 var/log，漏掉 var/index】上面这句话一直是对的，但实现漏了一半：
+// 只扫 `var/log`（事件段），没扫 `var/index`（状态索引库）——而后者才是慢加载的
+// 主因承担者：`Store.load()` 对每张表做全表 SELECT + ORDER BY，成本随索引行数线性增长
+// （实测 100k 行 = 453ms，见 stateindex/load_scaling_bench_test.go）。
+// 只扫 log 目录会出现「索引库已涨到 GB 级、告警却一声不响」的假安全。
+func warnIfStateTooLarge(root *dataroot.Root, thresholdMB int) {
+	if thresholdMB <= 0 {
+		return
+	}
+
+	// 两个目录分别统计，告警时一并给出，便于直接定位是哪一侧涨了。
+	logBytes := dirSizeQuiet(root.LogDir())
+	indexBytes := dirSizeQuiet(root.IndexDir())
+	total := logBytes + indexBytes
+
+	mb := total / (1 << 20)
+	if mb < int64(thresholdMB) {
+		return
+	}
+	slog.Warn("启动期状态数据规模偏大，加载与注册可能变慢",
+		"state_size_mb", mb,
+		"log_mb", logBytes/(1<<20),
+		"index_mb", indexBytes/(1<<20),
+		"threshold_mb", thresholdMB,
+		"log_dir", root.LogDir(),
+		"index_dir", root.IndexDir(),
+		"suggestion", "加载成本主因是索引库行数（load 全表扫描），可降低采集源数/保留窗口；"+
+			"若增长来自 var/log 则检查事件段是否异常膨胀；本项仅告警，不改变启动行为")
+}
+
+// dirSizeQuiet 统计目录下所有普通文件的总字节数；目录不存在或读取失败返回 0（不报错）。
+func dirSizeQuiet(dir string) int64 {
+	var total int64
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, statErr := d.Info(); statErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 func runWorker() {
 	// 启动分段计时。放在最前面，第一个 Mark 才有意义。
 	startup := newStartupTimer()

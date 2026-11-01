@@ -22,13 +22,18 @@ info:
 
     ## 认证
 
-    使用 Agent Token（前缀 `jmat_`）：
+    本文件列出的端点均接受 **Agent Token**（前缀 `jmat_`）：
 
     ```
     Authorization: Bearer jmat_xxxxxxxxxxxx
     ```
 
     Agent Token 受 scope 收敛与写白名单约束。无权限时返回 `403 FORBIDDEN`。
+
+    > **本文件只覆盖对外面**。业务命令下发、批量、对账、桥状态等路径挂在
+    > `JWTAuth` 组（只接受用户会话 token），属于**对内 API**，不在本文件范围，
+    > 见 `docs/API.md`。早前本文件曾全局声明 AgentToken 并把那些路径收进来，
+    > 导致按文档调用必然 401——现已按实际鉴权面收缩。
 
     ## 同步模型
 
@@ -55,38 +60,36 @@ servers:
     description: 当前实例
 
 tags:
-  - name: business
-    description: 业务通道（命令下发、能力发现、对账）
   - name: stream
     description: 业务事件流（SSE）
   - name: stats
     description: 统计与观测（只读）
-  - name: bridge
-    description: 探针桥状态与订阅
 
 security:
   - AgentToken: []
 
 paths:
-  # 业务通道
-  /instances/{id}/business:
-    $ref: './paths/business.yaml#/paths/~1instances~1{id}~1business'
-  /instances/{id}/business/manifest:
-    $ref: './paths/business.yaml#/paths/~1instances~1{id}~1business~1manifest'
-  /business/batch/preview:
-    $ref: './paths/business.yaml#/paths/~1business~1batch~1preview'
-  /business/batch:
-    $ref: './paths/business.yaml#/paths/~1business~1batch'
-  /business/reconcile:
-    $ref: './paths/business.yaml#/paths/~1business~1reconcile'
+  # ── 对外面（接受 Agent Token）────────────────────────────
+  #
+  # 【为何只有这几条】鉴权实现是判据，不是意图：
+  #   - `/business/stream`、`/business/cursor` → `businessStreamAuth`（Agent Token 优先、JWT 兑底）
+  #   - `/stats/*` → `statsAuth`（同上）+ 限流
+  #   - `/mcp*` → Agent Token 专用（不在本文件范围，见 ADR-096）
+  # 其余路径（`/instances/{id}/business`、`/business/batch`、`/business/reconcile`、
+  # `/instances/{id}/bridge/*` 等）挂在 `protected` 组，而那里是 **JWTAuth**，
+  # 它只接受 HS256 用户会话 token，`jmat_` 会直接 401。
+  #
+  # 早前本文件把这些内部路径也收进来、并在全局声明 `security: AgentToken`，
+  # 结果是“按文档拿 Agent Token 调 9 个端点全部 401”。现在按实际鉴权面收缩：
+  # 对外文档只写真正对外的那几条，其余属于对内 API（docs/API.md）。
+
+  # 事件流（对外）
+  /business/stream:
+    $ref: './paths/stream.yaml#/paths/~1business~1stream'
   /business/cursor:
     $ref: './paths/business.yaml#/paths/~1business~1cursor'
 
-  # 事件流
-  /business/stream:
-    $ref: './paths/stream.yaml#/paths/~1business~1stream'
-
-  # 统计
+  # 统计（对外，只读）
   /stats/overview:
     $ref: './paths/stats.yaml#/paths/~1stats~1overview'
   /stats/instances:
@@ -100,15 +103,6 @@ paths:
   /stats/changes:
     $ref: './paths/stats.yaml#/paths/~1stats~1changes'
 
-  # 桥状态
-  /instances/{id}/bridge/status:
-    $ref: './paths/bridge.yaml#/paths/~1instances~1{id}~1bridge~1status'
-  /instances/{id}/bridge/subscription:
-    $ref: './paths/bridge.yaml#/paths/~1instances~1{id}~1bridge~1subscription'
-  /instances/{id}/business/status:
-    $ref: './paths/bridge.yaml#/paths/~1instances~1{id}~1business~1status'
-  /instances/business/status/batch:
-    $ref: './paths/bridge.yaml#/paths/~1instances~1business~1status~1batch'
 
 components:
   securitySchemes:

@@ -39,6 +39,11 @@ var (
 	ErrConfigVersionNotFound = errors.New("层版本不存在")
 	// ErrConfigInstanceNotInScope 实例不存在或不在调用者可见范围内。
 	ErrConfigInstanceNotInScope = errors.New("实例不存在")
+	// ErrConfigLayerInvalid 层链无法合并出可信配置（至少一层语法错误/不可解析）。
+	//
+	// 单独一个哨兵：调用方据此区分「层内容坏了」（需人工修复，重试无用）
+	// 与「数据库/网络抖动」（可重试）。灰度交付遇到它应直接把目标判失败，而非反复重试。
+	ErrConfigLayerInvalid = errors.New("配置层内容无效")
 )
 
 // ConfigFileService 配置分层覆盖服务。
@@ -779,6 +784,15 @@ func (s *ConfigFileService) EffectiveContent(configFileID, instanceID uint) (con
 	merged, err := MergeConfigLayers(file.Format, layers)
 	if err != nil {
 		return "", "", err
+	}
+	// **不可信结果不得下发**：只要有一层解析失败，merged.Content 就是“少了整层覆盖”的
+	// 合并结果。它看起来合法、服务也能起来，只是丢了所有更高优先级的覆盖——
+	// 这是灰度通道里最难被发现的一类失真。
+	//
+	// 修复前 Valid 是个没人读的字段：置了 false 照样落盘，
+	// 而 config_delivery 里专为它准备的 TargetCodeMergeFailed 分支永远走不到。
+	if !merged.Valid {
+		return "", "", fmt.Errorf("%w: 至少一层解析失败，合并结果不可信", ErrConfigLayerInvalid)
 	}
 	return merged.Content, merged.EffectiveHash, nil
 }

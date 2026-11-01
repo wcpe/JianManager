@@ -222,10 +222,23 @@ func (h *ApprovalHandler) decide(c *gin.Context, approve bool) {
 	// 为什么在请求内触发而不是靠后台轮询：批准是用户的明确动作，它应当马上产生结果；
 	// 轮询会引入「批了但过一会儿才生效」的不可解释延迟。
 	// 执行器内部是 CAS 认领 +（长操作时）RunAsync，因此这里不会阻塞太久。
+	//
+	// 【为何必须 recover】这是个裸 goroutine：一晨 adapter 或领域 service panic，
+	// Go 会直接终止**整个 CP 进程**（gin.Recovery 只管 handler goroutine）。
+	// 而这里跑的恰好是“已被人批准”的高危动作——攻击面是「先拿到一次批准，
+	// 再用畸形参数打到 panic」。recover 后把票收口到 failed，不留悬挂。
 	if approve && h.exec != nil {
 		// 用**独立 context**：请求结束后仍要继续执行
 		//（用户关页面不该中断一个已被批准的动作）。
 		go func(ticketID uint) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					slog.Error("审批执行 panic 已捕获（进程存活）", "ticketId", ticketID, "panic", rec)
+					if err := h.svc.MarkExecutionPanicked(ticketID, fmt.Sprint(rec)); err != nil {
+						slog.Warn("审批 panic 后收口票据失败", "ticketId", ticketID, "error", err)
+					}
+				}
+			}()
 			execCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			if execErr := h.exec.Execute(execCtx, ticketID); execErr != nil {

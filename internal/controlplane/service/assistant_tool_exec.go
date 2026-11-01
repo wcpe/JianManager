@@ -464,6 +464,10 @@ func (s *AssistantChatService) DecideConfirmation(
 			return nil, err
 		}
 		s.writeToolRejectedEvent(&ticket)
+		s.recordConfirmationToolMessage(&ticket, "用户拒绝了这个操作，本次调用未执行。")
+		// 拒绝也要把 run 接回执行：否则它停在 waiting_confirmation，
+		// 占着单会话单活跃 run 的唯一索引，会话从此再也提不了新消息。
+		s.resumeRunAfterDecision(owner, &ticket, "用户拒绝了该操作")
 		return &ticket, nil
 	}
 
@@ -487,7 +491,7 @@ func (s *AssistantChatService) approveAndRun(
 	if err != nil {
 		return nil, fmt.Errorf("%w: 无法确认当前权限", ErrAssistantForbidden)
 	}
-	if tool != nil && tool.Capability != "" && !access.Can(tool.Capability) {
+	if tool != nil && tool.Capability != "" && !access.CanWithCapability(tool.Capability) {
 		s.invalidateTicket(ticket.ID, "权限已变更")
 		return nil, fmt.Errorf("%w: 权限已变更，确认失效", ErrAssistantConfirmStale)
 	}
@@ -604,9 +608,122 @@ func (s *AssistantChatService) approveAndRun(
 	}
 	s.auditToolExecution(ticket, true, "")
 
+	// 批准路径也要补一条 tool 消息：`buildHistory` 要求「assistant 工具调用」与
+	// 「role=tool 结果」严格成对（含顺序与 callId），缺一条就会把整轮丢弃（dropped），
+	// 模型下轮就看不到这次调用的结果。现在工具已真执行完，回灌真实结果。
+	s.recordConfirmationToolMessage(ticket, s.confirmationToolResultText(ticket))
+
+	// 执行完也必须把 run 接回执行（批/拒两条路径都要，缺一条就把会话锁死）。
+	s.resumeRunAfterDecision(ticket.OwnerUserID, ticket, "")
+
 	var updated model.AssistantConfirmation
 	_ = s.db.First(&updated, ticket.ID).Error
 	return &updated, nil
+}
+
+// resumeRunAfterDecision 把这张票据所属的 run 从 waiting_confirmation 接回执行。
+//
+// 【为何静默失败而不向调用方报错】
+// 走到这里时票据已经 CAS 消费、工具可能已经真的执行完（批准路径），
+// 把「续跑失败」向上报成 500 会让用户以为**动作没执行**，从而重试——
+// 而重试只会得到 409 已消费。正确做法是：动作结果照常返回，
+// 续跑失败只影响「模型能不能接着说下一句」，属于可降级问题。
+// 因此这里只记日志 + 把 run 收尾到终态（不让它继续占住唯一索引），不反抛。
+func (s *AssistantChatService) resumeRunAfterDecision(owner uint, ticket *model.AssistantConfirmation, note string) {
+	if ticket == nil || ticket.RunID == 0 {
+		return
+	}
+	var run model.AssistantRun
+	if err := s.db.First(&run, ticket.RunID).Error; err != nil {
+		slog.Warn("助手运行时：续跑前读取 run 失败", "runId", ticket.RunID, "error", err)
+		return
+	}
+	if note == "" {
+		note = "用户已确认并执行完成"
+	}
+	if err := s.resumeAfterConfirmation(owner, &run); err != nil {
+		slog.Warn("助手运行时：确认后续跑失败", "runId", run.ID, "error", err)
+	}
+}
+
+// recordConfirmationToolMessage 在用户做出确认决定后，补一条 role=tool 的消息。
+//
+// 【为什么必须补】`buildHistory` 的配对规则是：assistant 消息带 N 个 tool_call 时，
+// 它后面必须紧跟 N 条 `role=tool` 且 `tool_call_id` 对得上的消息；否则**整轮被丢弃**
+// （见 assistant_chat.go 的 dropped 分支）。
+// 写操作在确认时提前结束了那一轮，工具结果消息根本没写过——
+// 不补的话，续跑时模型看到的历史里这次调用凭空消失，它会重新发起同一个写操作。
+//
+// 【为什么不复用 append 事件的那段代码】那段在 runExecutor 内部（需要 sink + callID 上下文）；
+// 这里手里只有票据，而 tool 消息只需要 CallID，不需要 sink。
+func (s *AssistantChatService) recordConfirmationToolMessage(ticket *model.AssistantConfirmation, content string) {
+	if ticket == nil || ticket.CallID == "" {
+		return
+	}
+	// 幂等：同一张票据只能补一条。重试确认（已消费）不会再走到这里，
+	// 但扫描回填等旁路路径可能重入，故先查一次。
+	var exists int64
+	if err := s.db.Model(&model.AssistantMessage{}).
+		Where("run_id = ? AND tool_call_id = ?", ticket.RunID, ticket.CallID).
+		Count(&exists).Error; err != nil {
+		slog.Warn("助手运行时：检查工具消息是否已存失败", "runId", ticket.RunID, "error", err)
+		return
+	}
+	if exists > 0 {
+		return
+	}
+
+	body, truncated := truncateToBytes(content, assistantChatToolResultMax)
+	state := model.AssistantMessageStateComplete
+	if truncated {
+		state = model.AssistantMessageStateTruncated
+	}
+	// Turn 取该 run 的最大轮次：与 runExecutor 里工具消息的口径一致
+	// （用户消息在 SubmitRun 落库，执行体用 nextTurn-1）。
+	turn := 1
+	if t, err := nextTurn(s.db, ticket.ConversationID); err == nil && t > 1 {
+		turn = t - 1
+	}
+	runID := ticket.RunID
+	callID := ticket.CallID
+	msg := model.AssistantMessage{
+		ConversationID: ticket.ConversationID,
+		RunID:          &runID,
+		Role:           model.AssistantMessageRoleTool,
+		Content:        body,
+		ToolCallID:     &callID,
+		Turn:           turn,
+		State:          state,
+	}
+	if err := s.db.Create(&msg).Error; err != nil {
+		slog.Warn("助手运行时：写入确认后的工具消息失败", "runId", ticket.RunID, "callId", ticket.CallID, "error", err)
+	}
+}
+
+// confirmationToolResultText 构造批准路径回灌给模型的文本。
+//
+// 【为何从回执取而不直接说「成功」】回执里记录着这次调用实际发生了什么，
+// 包括「执行失败」「结果未确认（unverified）」两种非成功结局。把它们统一说成
+// 成功会让模型在错误前提上继续推理（比如以为文件已经改好）。
+func (s *AssistantChatService) confirmationToolResultText(ticket *model.AssistantConfirmation) string {
+	var rec model.AssistantReceipt
+	err := s.db.Where("confirmation_id = ?", ticket.ID).Order("id DESC").First(&rec).Error
+	if err != nil {
+		// 查不到回执（极端并发/DB 抖动）：不编结结论，只说已决定。
+		return "用户已确认该操作。"
+	}
+	switch rec.Outcome {
+	case model.AssistantReceiptOK:
+		return "用户已确认，操作已执行成功。"
+	case model.AssistantReceiptUnverified:
+		return "用户已确认；操作已执行但结果未确认（" + rec.ErrorCode + "）。可能已部分生效，不要直接重试。"
+	default:
+		msg := "用户已确认，但操作执行失败"
+		if rec.ErrorMessage != "" {
+			msg += "：" + rec.ErrorMessage
+		}
+		return msg
+	}
 }
 
 // auditToolExecution 把一次**已批准并执行过**的写操作写进平台审计（§9）。
@@ -881,7 +998,12 @@ func (e *assistantDelegatedExecutor) metaCallTool(ctx context.Context, owner uin
 			return assistantToolOutcome{Err: fmt.Errorf("%w: 无法确认当前权限", ErrAssistantForbidden)}
 		}
 		// 权限重验在出票前完成：没有权限的请求不该变成一张等人批准的票。
-		if tool.Capability != "" && !access.Can(tool.Capability) {
+		//
+		// 判据用 `CanWithCapability` 而不是 `Can`：tool.Capability 是 **agent 能力名**
+		// （instance.life / instance.configure …），与 RBAC 权限节点名是两套命名空间，
+		// 直接拿去查节点会让非管理员对几乎所有写工具永久 403，
+		// 而少数同名项又会“碰巧通过”。反查表在 assistant_principal.go。
+		if tool.Capability != "" && !access.CanWithCapability(tool.Capability) {
 			return assistantToolOutcome{Err: fmt.Errorf("%w: 缺少能力 %s", ErrAssistantForbidden, tool.Capability)}
 		}
 		targetType, targetID := assistantToolTargetOf(tool, inner)

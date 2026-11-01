@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # 校验对外 API 契约（docs/openapi）的正确性与路由一致性。
 #
-# 用途：
+# 检查三项：
 #   1. YAML 语法可解析
 #   2. OpenAPI 声明的每个 path+method 在 Gin 路由里真实存在
-#   3. /api/v1/business/* 与 /api/v1/stats/* 下的每条路由都在 OpenAPI 里声明
+#   3. 对外面（/business/* 与 /stats/* 中接受 Agent Token 的那些）每条路由都已声明
+#
+# **失败即退出码 1**（早前是“只告警、恒退出 0”，而且没接进任何 workflow——
+# 于是“文档写了没实现”与“对外声明错鉴权”两类断裂都能全绿合入）。
+# 现已接入 ci.yml 的 workflow-contract job。
 #
 # 用法：./scripts/check-openapi.sh
 set -euo pipefail
@@ -144,21 +148,28 @@ gn = {norm(x.split(' ', 1)[1]): x for x in gin_routes}
 only_openapi = set(dn) - set(gn)
 only_gin = set(gn) - set(dn)
 
+fail = False
+
 if only_openapi:
     print('\n  OpenAPI 声明了但 Gin 未实现：')
     for p in sorted(only_openapi):
         print(f'    {dn[p]}')
+    fail = True
+
+# 反方向只对**对外面**强制：入口文件只写对外那几条，内部路由本来就不该出现。
+# 这里的 gin_routes 已经是“对外面白名单”（见上方筛选），所以两边应该完全相等。
 if only_gin:
-    print('\n  Gin 已实现但 OpenAPI 未声明：')
+    print('\n  对外路由已实现但 OpenAPI 未声明：')
     for p in sorted(only_gin):
         print(f'    {gn[p]}')
+    fail = True
 
-# 注意：开发期间允许不一致（实现尚未完成），此处只告警不失败。
-#  待完成后改为 set -e 失败退出。
-if only_openapi or only_gin:
-    print('\n  WARN 路由不一致（迁移完成前允许，完成后须清零）')
-else:
-    print('  ok   路由完全一致')
+if fail:
+    print('\n  FAIL 路由与对外契约不一致（见上方清单）')
+    print('  修复方向：要么把实现补上，要么把 external.yaml 的 paths 补齐/改正。')
+    sys.exit(1)
+
+print('  ok   路由与对外契约一致')
 PY
 
 echo

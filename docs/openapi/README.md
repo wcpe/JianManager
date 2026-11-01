@@ -19,14 +19,21 @@ openapi/
 ├── external.yaml           # 入口：info / servers / tags / security / $ref 汇总
 ├── components/
 │   ├── common.yaml         # 通用参数、响应、分页头
-│   ├── errors.yaml         # 15 个错误码（每个一个 schema）
+│   ├── errors.yaml         # 错误码（每个一个 schema，共 19 个 + ErrorBase）
 │   └── schemas.yaml        # 共享数据结构
 └── paths/
-    ├── business.yaml       # 业务通道（5 个接口）
+    ├── business.yaml       # 业务通道（6 个接口）
     ├── stream.yaml         # SSE 事件流（1 个）
     ├── stats.yaml          # 统计数据（6 个）
-    └── bridge.yaml         # 桥状态（3 个）
+    └── bridge.yaml         # 桥状态（4 个）
 ```
+
+**路径文件 vs 入口声明**：`paths/*.yaml` 里写的是**全部**业务域接口（含内部面），
+而 `external.yaml` 的 `paths:` 只 $ref **真正接受 Agent Token 的那几条**
+（目前 8 条：`/business/stream`、`/business/cursor`、`/stats/*` 六条）。
+两者数量不同是有意的——入口文件就是「对外面」的定义。
+其余（`/instances/{id}/business`、`/business/batch`、`/business/reconcile`、
+`/instances/{id}/bridge/*` 等）挂在 `JWTAuth` 组，属对内 API，见 `docs/API.md`。
 
 **拆分原则**：按业务域分，不按 HTTP 方法分；单文件 ≤ 200 行；只有一个入口供工具链读取。
 
@@ -38,11 +45,13 @@ openapi/
 
 ```yaml
 payload:
-  description: 不透明载荷，平台不解析
-  type: [object, array, string, number, boolean, 'null']
+  description: 不透明载荷的 JSON 文本，平台不解析
+  type: string
 ```
 
-不写 `type: object` —— 业务可能传数组或标量，平台不该拒绝。
+**注意**：实现里 `payload` 是 **string**（JSON 文本），不是对象——
+调用方需自行序列化，发对象会被 400。早前文档写 `type: [object, array, ...]`
+与实现相反，已按实现校正。
 
 ### 2. 动态路由
 
@@ -81,12 +90,18 @@ npx @redocly/cli lint docs/openapi/external.yaml
 
 ### CI
 
-`scripts/check-openapi.sh` 做了两件事：
+`scripts/check-openapi.sh` 做了三件事：
 
 1. **YAML 语法与 $ref 可解析**
-2. **路由一致性**：OpenAPI 声明的每个 path+method 在 Gin 里真实存在；反之 `/api/v1/business/*` 与 `/api/v1/stats/*` 下的每条路由都在 OpenAPI 里声明
+2. **路由一致性**：OpenAPI 声明的每个 path+method 在 Gin 里真实存在（反方向不强制——
+   入口文件只写对外面，内部路由本来就不该出现在这里）
+3. **入口路径不得是内部面**：若 `external.yaml` 声明了属于 `JWTAuth` 组的路径，直接失败
 
-防止「实现了但没写文档」和「文档写了但没实现」。
+防止「文档写了但没实现」与「对外契约里混进了不吃 Agent Token 的路径」。
+
+> 早前该脚本“只告警不失败”且未接进任何 CI workflow——于是上面那四类断裂
+> （文档写了没实现 / 实现了没文档 / 对外声明错鉴权 / 契约与实现相反）
+> 都能全绿合入。现已改为硬失败并接入 `ci.yml`。
 
 ## 渲染
 

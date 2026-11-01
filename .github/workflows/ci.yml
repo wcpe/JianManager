@@ -408,3 +408,25 @@ jobs:
       # （都是「脚本/工作流的形态契约」）且已有 shell 环境。
       - name: 校验 cp-lifecycle 脚本契约（comm 字段解析）
         run: bash scripts/cp-lifecycle.test.sh
+      # 对外 API 契约：声明的路径必须在 Gin 里真实存在，且对外面的每条路由都已声明。
+      #
+      # 【为何必须在这里】早前 `scripts/check-openapi.sh` 只告警、恒退出 0，
+      # 且没有任何 workflow 调它——`docs/API.md` 里写的“路由不一致会导致 CI 失败”是一句空话。
+      # 后果是四类断裂都能全绿合入：文档写了没实现（node_repair）、实现没文档（config-deliveries）、
+      # 对外声明错鉴权（把 JWTAuth 路径写成 AgentToken）、契约与实现相反（business 的 requestId）。
+      - name: 校验对外 API 契约（docs/openapi）
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          bash scripts/check-openapi.sh
+
+      # 代码里不得出现 FR 编号（.claude/rules/no-fr-in-code.md）。
+      #
+      # 这个脚本就存在且带 --stock 模式，但从未被任何 workflow 调用：
+      # 于是“FR-508 已全量清零”可以带着 3 处残留合入。现在改成硬门禁。
+      - name: 代码内 FR 编号检查（--stock）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh .claude/scripts/check-no-fr-in-code.sh --stock

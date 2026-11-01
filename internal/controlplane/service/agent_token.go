@@ -280,6 +280,16 @@ func IsAgentHardDeny(action string) bool {
 type AgentPrincipal struct {
 	TokenID uint
 	Name    string
+	// ActAsUserID 该 principal 代表哪个**人类用户**行事（仅有非 Token 场景会填）。
+	//
+	// 【为何需要】审批票要记“申请人是谁”。 Agent Token 场景下能从 TokenID 反查
+	// created_by；但助手派生出的用户委托身份**没有 Token**（ADR-105 明确不为人类
+	// 用户签发 jmat_），TokenID 恒为 0 —— 只靠 TokenID 反查会让所有助手触发的
+	// 审批票 applicant_user_id=0，进而：① 幂等唯一索引把不同用户的同参数请求当成
+	// 同一张票；② own.* 接口按 applicant 过滤，真申请人看不到自己的申请也撤回不了。
+	//
+	// 因此这里显式带上用户 id，由审批拦截层优先采用。
+	ActAsUserID uint
 	// TokenPrefix 明文前缀（如 jmat_ab12），供 MCP 会话列表展示；不泄露全文。
 	TokenPrefix       string
 	PolicyVersion     int

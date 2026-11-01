@@ -33,8 +33,15 @@ import (
 // 表现是「助手用不了某个工具」，属安全的一侧；反过来则会静默放开，那不可接受。
 var agentCapabilitiesForPermissions = map[string][]string{
 	// 实例
+	//
+	// 【`instance.write` 为什么**不**给 `instance.configure`】
+	// `instance.configure` 对应的 action 包含 `instance_update_config`，它能改 `startCommand`
+	// ——等价任意命令执行，平台为此单设了高风险节点 `instance.launchspec.write` 并只给组管理员。
+	// 而 `instance.write` 是**组员就有**的普通写权限（改名/标签/资源限额等）。
+	// 把两者接在一起，就等于让普通组员经助手改启动命令，绕过 launchspec 门禁。
+	// 因此配置类能力只由 `instance.launchspec.write` 授予（见下方）。
 	"instance.read":             {AgentCapabilityInstanceRead, AgentCapabilityObservabilityRead},
-	"instance.write":            {AgentCapabilityInstanceRead, AgentCapabilityInstanceWrite, AgentCapabilityInstanceConfigure},
+	"instance.write":            {AgentCapabilityInstanceRead, AgentCapabilityInstanceWrite},
 	"instance.operate":          {AgentCapabilityInstanceRead, AgentCapabilityInstanceLife, AgentCapabilityInstanceCommand},
 	"instance.create":           {AgentCapabilityInstanceProvision},
 	"instance.delete":           {AgentCapabilityInstanceDestructive},
@@ -62,6 +69,62 @@ var agentCapabilitiesForPermissions = map[string][]string{
 	// 拓扑与注册（agent 能力目录同样没有 network.*：按实例读/写收敛）
 	"network.read":   {AgentCapabilityInstanceRead},
 	"network.manage": {AgentCapabilityInstanceWrite},
+}
+
+// capabilityRequiredPermissions 是「agent 能力 → 必需 RBAC 权限节点」的反查表。
+//
+// 【为什么必须有这张表】
+// agent 能力名（`instance.life` / `instance.configure` / `node.operate` …）与 RBAC 权限
+// 节点名（`instance.operate` / `instance.launchspec.write` / `node.manage` …）是**两套
+// 独立的命名空间**，只有 5 个名字偶然重合（instance.read / instance.write / node.read /
+// bot.read / bot.manage）。修复前，执行期直接 `access.Can(tool.Capability)`，效果是：
+//   - 非平台管理员对几乎全部写工具永久 403（拿能力名去查节点，永远查不到）；
+//   - 而那 5 个重合名又“碰巧能过”，于是权限判定看起来时灵时不灵。
+//
+// 语义：**拥有该能力所需的全部权限节点**（any-of）。空切片表示“平台管理员专属”
+// （目前没有这种能力，留着便于将来显式表达）。
+var capabilityRequiredPermissions = map[string][]string{
+	AgentCapabilityNodeRead:            {"node.read"},
+	AgentCapabilityNodeOperate:         {"node.manage"},
+	AgentCapabilityNodeDestructive:     {"node.manage"},
+	AgentCapabilityInstanceRead:        {"instance.read", "file.read"},
+	AgentCapabilityInstanceWrite:       {"instance.write"},
+	AgentCapabilityInstanceLife:        {"instance.operate"},
+	AgentCapabilityInstanceCommand:     {"instance.operate"},
+	AgentCapabilityInstanceProvision:   {"instance.create"},
+	AgentCapabilityInstanceConfigure:   {"instance.launchspec.write"},
+	AgentCapabilityInstanceContent:     {"file.write", "instance.business.write"},
+	AgentCapabilityInstanceDestructive: {"instance.delete"},
+	AgentCapabilityBotRead:             {"bot.read"},
+	AgentCapabilityBotManage:           {"bot.manage"},
+	AgentCapabilityBotLoad:             {"bot.manage"},
+	AgentCapabilityObservabilityRead:   {"monitor.read", "log.read", "stats.read"},
+}
+
+// CanWithCapability 判断用户是否具备某个 agent 能力（按反查表落到权限节点）。
+//
+// 判据是 any-of：反查表里任一节点命中即放行。这与 `agentCapabilitiesForPermissions`
+// 的授予侧是镜像关系（那里是“有节点 → 给能力”，这里是“要能力 → 需节点”）。
+//
+// **表里没有的能力一律拒绝**（fail-closed）：新增能力时忘了登记，
+// 表现是“助手用不了”，而不是静默放开。
+func (a *UserAccess) CanWithCapability(capability string) bool {
+	if a == nil {
+		return false
+	}
+	if a.IsPlatformAdmin {
+		return true
+	}
+	nodes, ok := capabilityRequiredPermissions[capability]
+	if !ok {
+		return false
+	}
+	for _, n := range nodes {
+		if a.HasNode(n) {
+			return true
+		}
+	}
+	return false
 }
 
 // AssistantPrincipalForOwner 由用户 ID 派生 MCP 调用身份。
@@ -156,6 +219,9 @@ func AssistantPrincipalForOwner(authz *AuthzService, owner uint) (*AgentPrincipa
 
 	return &AgentPrincipal{
 		Name: "assistant:" + fmt.Sprint(owner),
+		// ActAsUserID 让下游（尤其是审批票的申请人字段）知道这次调用代表谁。
+		// 没有它，助手触发的写操作落到审批层时申请人恒为 0。
+		ActAsUserID: owner,
 		// PolicyVersion 用当前策略版本：助手身份不走 Token 策略演进，
 		// 但确认票据会记版本，写一个真实值以便区分「策略变更前的旧确认」。
 		PolicyVersion:     AgentPolicyVersionV2,

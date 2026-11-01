@@ -1,28 +1,25 @@
-/** 
- *阶段 5：工作区导航数据层（四工作区 × 组 × 页面）。
+/**
+ * 工作区导航数据层（四工作区 × 组 × 页面）。
  *
- * 【为什么「新增」而不是「改写」nav-config.ts】
- * 这一步牵动权限裁剪与深链，是整轮重构中最敏感的一步，因此：
- * - `nav-config.ts` 保持原样不动，作为六域扁平 IA 的**对照物**与回滚路径；
- *   两套数据并存，由 `workspace-navigation.test.ts` 逐条证明「37 个导航目的地的可见性语义等价」；
- * - 归位依据是 `.tmp/设计/原路由-新入口对照.csv`（45 路由 = 37 导航 + 5 子路由 + 3 认证页）：
- *   本文件登记其中 42 条（37 + 5）并按工作区分组；3 个认证页见 {@link AUTH_ROUTE_PATHS}，不进工作区；
- * - 阶段 6 把 ConsoleSidebar / MobileConsoleNav / CommandPalette 切到本文件后，再删 `nav-config.ts`
- *   的六域定义（`Workspace.tsx` 的路由表承接 RouteRegistry 语义，不得为缩短侧栏删登记项）。
+ * 【这是导航的**唯一真源**】
+ * 侧栏（`WorkspaceSidebar`）、移动导航（`MobileConsoleNav`）、命令面板（`CommandPalette`）
+ * 三处消费方全部从这里取数，不再各自维护一份。旧的 `nav-config.ts`（六域扁平 IA）
+ * 与其单测已删除，不再作为“对照物”或回滚路径存在——历史快照保留在
+ * `__fixtures_nav-snapshot.json` 里，仅用于等价性回归。
  *
  * 【权限语义：一个不发明、一个不省略】
- * - 37 个导航目的地：`perm` / `labelKey` / `icon` 与 `NAV_GROUPS` 同路径项**逐条同值**（含 any-of 数组），
- *   由测试机械核对，避免两套数据悄悄漂移；
- * - 5 个子路由：`NAV_GROUPS` 里没有对应项，故**继承其入口页的 perm**（如 `/instances/:id` 继承
- *   `/instances` 的 `instance.read`）。语义上「看不见列表页 ⇒ 也看不见它的深链」，
- *   空权限下不会漏出任何实例/发布/会话深链——这是新增项而非权限放宽；
- * - 裁剪算法（`permOk` / `filterGroups`）与 `nav-config.ts` 私有实现保持同形，只在本层复刻一份，
- *   不 import 私有函数（那需要改 nav-config.ts，违背本阶段约束）。
+ * - 导航目的地：`perm` / `labelKey` / `icon` 与旧六域表同路径项逐条同值（含 any-of 数组），
+ *   由测试机械核对；
+ * - 子路由（见 {@link SUB_ROUTE_PATTERNS}）：旧表里没有对应项，故**继承其入口页的 perm**
+ *   （如 `/instances/:id` 继承 `/instances` 的 `instance.read`）。语义上「看不见列表页 ⇒
+ *   也看不见它的深链」，空权限下不会漏出任何实例/发布/会话深链——这是新增项而非权限放宽；
+ * - 裁剪算法（`permOk` / `filterGroups`）与旧表私有实现同形。
  *
- * 【i18n】`labelKey` 沿用现有 `nav.*` 风格：能用既有键的地方一律复用（观测 / 客户端分发 /
- * 身份与访问 / 存储与备份 / Agent 接入 / 系统与维护 / 实例），仅新增工作区、组与子路由所需的键，
- * 清单见 {@link WORKSPACE_I18N_KEYS_TO_ADD}，待阶段 6/7 补进 `src/i18n/{zh,en}.json`。
- * 本文件不调用 `t()`，因此不影响 `i18n/missing-keys.test.ts` 的缺键门禁。
+ * 【i18n】`labelKey` 沿用现有 `nav.*` 风格：能用既有键的地方一律复用
+ * （观测 / 客户端分发 / 身份与访问 / 存储与备份 / Agent 接入 / 系统与维护 / 实例），
+ * 仅新增工作区、组与子路由所需的键。新增键清单见 `WORKSPACE_I18N_KEYS_TO_ADD`，
+ * **那份清单现已全部落进 `src/i18n/{zh,en}.json`**，测试会在“登记了但语言包没有”时报错。
+ * 本文件不调用 `t()`，因此不参与 `i18n/missing-keys.test.ts` 的缺键门禁。
  */
 
 import {

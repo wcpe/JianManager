@@ -7,7 +7,12 @@
 
 BusinessDispatchRequest:
   type: object
-  required: [domain, action, requestId]
+  # 【与实现对齐】必填是 domain/action/payload——**没有 requestId**。
+  # 实现（router/business.go 的 businessDispatchRequest）用 `operationId` 作幂等键，
+  # 且 `payload` 是 **JSON 字符串**而不是任意 JSON 值。
+  # 早前这里写 `required: [... requestId]` + `payload` 任意类型，
+  # 导致按文档构造的请求要么被忽略键、要么直接 400。
+  required: [domain, action, payload]
   properties:
     domain:
       type: string
@@ -23,38 +28,50 @@ BusinessDispatchRequest:
         调用前应通过 manifest 确认该动作存在。
       examples: [start]
     payload:
-      description: |
-        **不透明载荷**。由业务台与插件约定，平台不解析、不校验、不写入审计。
-
-        可以是任意 JSON 值（对象 / 数组 / 标量 / null）。
-        schema 此处不施加任何结构约束——这是刻意的。
-      type: [object, array, string, number, boolean, 'null']
-    requestId:
       type: string
-      format: uuid
       description: |
-        幂等键，必填。同一 `requestId` 重复提交返回首次结果，不重复执行。
-        窗口 24 小时。若同 ID 携带不同 payload，返回 `IDEMPOTENCY_KEY_REUSED`。
+        **不透明载荷的 JSON 文本**（不是对象）。
+
+        实现里它是 `string` 字段：调用方需自行序列化——
+        发对象会因类型不匹配被 400。平台不解析其内容。
+      examples: ['{"player":"alice"}']
+    write:
+      type: boolean
+      default: false
+      description: |
+        是否高危写动作。`true` 时需 `instance.business.write`，
+        且服务端会注入幂等键/操作者上下文并记审计。
+    operationId:
+      type: string
+      description: |
+        写动作幂等键（前端生成）。CP 原样注入 payload 的 `taskId`；
+        缺省时服务端兜底生成（但失去重试去重）。
+    reason:
+      type: string
+      description: 操作原因（写动作可空，但建议填）。
 
 BusinessDispatchResponse:
   type: object
-  required: [available, success]
+  # 【与实现对齐】`BusinessResult` 没有 `success` 字段——
+  # 成败由 `available` + `error` 共同表达（见 service/business.go）。
+  required: [available]
   properties:
+    instanceId:
+      type: integer
+    domain:
+      type: string
+    action:
+      type: string
     available:
       type: boolean
-      description: 通道是否可用（false 时 success 恒为 false）
-    success:
-      type: boolean
+      description: 通道是否可用（探针在线且域已注册）
     output:
       description: |
         **插件返回的原始输出**，平台不解析。结构由业务台与插件约定。
       type: [object, array, string, number, boolean, 'null']
     error:
       type: string
-      description: 失败描述（`success=false` 时填充）。机器处理请用外层 `code`。
-    durationMs:
-      type: integer
-      description: 端到端耗时（含探针往返）
+      description: 失败描述（`available=false` 时填充）。机器处理请用 `code`。
 
 DomainManifest:
   type: object
@@ -180,7 +197,11 @@ BatchPreviewRequest:
 
 BatchPreviewResponse:
   type: object
-  required: [resolved, risk, confirmToken, expiresAt]
+  # 【与实现对齐】`confirmToken` / `expiresAt` **只在高风险（high/critical）时签发**，
+  # 低风险路径下它们带 `omitempty` 直接不出现。
+  # 早前把两者写进 required，导致任何按 schema 校验的客户端在低风险预览上必然报错。
+  # 行为本身是对的（低风险不需二次确认），是契约写错了。
+  required: [resolved, risk]
   properties:
     resolved:
       type: object

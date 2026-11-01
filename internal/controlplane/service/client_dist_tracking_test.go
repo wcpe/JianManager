@@ -22,7 +22,7 @@ func newTrackingDB(t *testing.T) *gorm.DB {
 	if sqlDB, derr := db.DB(); derr == nil {
 		t.Cleanup(func() { _ = sqlDB.Close() })
 	}
-	require.NoError(t, db.AutoMigrate(&model.ClientDistEvent{}, &model.ClientDistDaily{}, &model.ClientRuntimeState{}))
+	require.NoError(t, db.AutoMigrate(&model.ClientDistEvent{}, &model.ClientDistDaily{}, &model.ClientRuntimeState{}, &model.ClientTelemetry{}))
 	return db
 }
 

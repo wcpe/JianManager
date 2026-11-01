@@ -96,6 +96,15 @@ func (s *ApprovalService) SubmitApproval(p SubmitApprovalParams) (*model.Approva
 	if p.Action == "" {
 		return nil, false, fmt.Errorf("%w: 缺少 action", ErrAssistantInvalid)
 	}
+	// 申请人必须是具体的人：0 代表“无人”。
+	//
+	// 【为何在服务层也卡】上游（mcp 拦截层）应当已经填对，但一旦漏填，后果不是
+	// 报个错就完了：幂等部分唯一索引含 applicant_user_id，applicant=0 会让**不同用户**
+	// 的同 action+同目标+同参数请求共用同一张票并被回读；而 own.* 按 applicant 过滤，
+	// 真申请人看不到自己的申请也撤不回。两条都是静默的，所以必须在这里 fail-fast。
+	if p.ApplicantUserID == 0 {
+		return nil, false, fmt.Errorf("%w: 申请人不能为空（无法确定审批归属）", ErrAssistantInvalid)
+	}
 	if p.ApplicantKind == "" {
 		p.ApplicantKind = model.ApprovalApplicantHuman
 	}
@@ -457,6 +466,82 @@ func (s *ApprovalService) Stop() {
 	}
 	s.running = false
 	close(s.stopCh)
+}
+
+// RecoverInterruptedExecutions 启动时收口上次进程遗留的执行中状态。
+//
+// 【为何必须有】审批票的执行态是“已认领、未收尾”：
+// 批准时置 `executing`（approval.go 的 Decide）→ 执行器 CAS 认领写 `in_flight` 回执
+// → adapter 跑完后 `finish` 写终态。若进程在这两步之间挂掉（部署重启、崩溃、
+// 或 router 里那个 10 分钟异步 goroutine 被 SIGKILL），票据会**永久停在 executing**：
+//   - `ExpireStale` 只扫 pending，永远碰不到它；
+//   - 重试被 CAS 拒（consumed_at 已写）；
+//   - `ApprovalTerminalStatuses()` 不含 executing，所以它既不终态也不可再决策。
+// 运维只能回答“谁批准了”，回答不了“到底执行了没有”——而那正是审批中心的核心承诺。
+//
+// 处理方向取**保守的一侧**：回执标 `unverified` + `PROCESS_RESTART`，票据置 `failed`。
+// 不把回执标成 failed：动作可能已经真的生效了，标 failed 会诱使人重试 → 重复执行；
+// `unverified` 的语义正是“可能已生效，去核对”，与助手侧 `RecoverInFlightReceipts` 逐条对称。
+// 票据则必须离开 executing（否则占着状态机不动），failed 是冻结状态集里最贴近的一个。
+//
+// 返回（收口的票数, 标未知的回执数）。幂等：已终态的不会被再选。
+func (s *ApprovalService) RecoverInterruptedExecutions() (int64, int64, error) {
+	now := s.now()
+
+	// ① 回执：in_flight → unverified（带原因，不默默变成 failed）。
+	receipts := s.db.Model(&model.ApprovalReceipt{}).
+		Where("outcome = ?", model.ApprovalReceiptInFlight).
+		Updates(map[string]any{
+			"outcome":       model.ApprovalReceiptUnverified,
+			"error_code":    "PROCESS_RESTART",
+			"error_message": "进程重启时该审批仍在执行中，结果未知；动作可能已生效，不要直接重试",
+			"finished_at":   now,
+		})
+	if receipts.Error != nil {
+		return 0, 0, fmt.Errorf("收口执行中回执失败: %w", receipts.Error)
+	}
+
+	// ② 票据：executing → failed，并把原因写到 failure_reason。
+	//
+	// 用 failed 而不是新造一个状态：状态机是 spec §2 冻结的，不得增删；
+	// 而“执行已经不再进行”这个事实与 failed 最接近。
+	// 与回执的 unverified 并存：回执说“未知”，票据说“本轮不再推进”——
+	// 两者语义不同，恰好一起表达“动作可能生效了，但要人去看”。
+	tickets := s.db.Model(&model.ApprovalTicket{}).
+		Where("status = ?", model.ApprovalStatusExecuting).
+		Updates(map[string]any{
+			"status":         model.ApprovalStatusFailed,
+			"failure_reason": "PROCESS_RESTART: 进程重启时该审批仍在执行中，结果未知（可能已生效），请人工核对目标状态",
+			"finished_at":    now,
+		})
+	if tickets.Error != nil {
+		return 0, receipts.RowsAffected, fmt.Errorf("收口执行中票据失败: %w", tickets.Error)
+	}
+
+	if tickets.RowsAffected > 0 || receipts.RowsAffected > 0 {
+		slog.Warn("审批：已收口上次进程遗留的执行中状态",
+			"tickets", tickets.RowsAffected, "receipts", receipts.RowsAffected,
+			"note", "标为未知而非失败：动作可能已生效，需人工核对")
+	}
+	return tickets.RowsAffected, receipts.RowsAffected, nil
+}
+
+// MarkExecutionPanicked 执行体 panic 时的收口：把票从 executing 推到 failed。
+//
+// 【为何需要单独一个方法】panic 发生在 adapter/领域 service 里，那里不知道票据状态机，
+// 也不应依赖它；而 router 层只持有 ticketID。这里集中做「把票从一个会永久卡住的状态
+// 推出去」这一件事，并保留 panic 原因供事后排障。
+//
+// 幂等：只对 executing 生效；已被 finish 正常收口的不会被覆盖。
+func (s *ApprovalService) MarkExecutionPanicked(ticketID uint, panicValue string) error {
+	reason := truncateRunes("EXECUTION_PANIC: 执行中发生 panic（"+panicValue+"）；动作可能已部分生效，请人工核对", 500)
+	return s.db.Model(&model.ApprovalTicket{}).
+		Where("id = ? AND status = ?", ticketID, model.ApprovalStatusExecuting).
+		Updates(map[string]any{
+			"status":         model.ApprovalStatusFailed,
+			"failure_reason": reason,
+			"finished_at":    s.now(),
+		}).Error
 }
 
 // isExpired 是否已超期（纯判定，不回写）。

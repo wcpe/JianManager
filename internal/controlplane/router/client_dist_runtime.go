@@ -36,6 +36,14 @@ func (h *ClientDistRuntimeHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	rg.GET("/client-dist/error-summary", h.ErrorSummary)
 	rg.GET("/client-dist/events/search", h.SearchEvents)
 	rg.GET("/client-dist/events/:id", h.EventDetail)
+	// 机器级更新清单与钻取：前端 `clientDistMachines.ts` 调的就是这两个路径。
+	//
+	// 之前它们只存在于 devmock，真栈一直是 404——而 spec 却标着「已交付@v0.22.0」。
+	// 现在由 CP 侧聚合明细表兑现，未新增任何表结构（spec §3「不改后端 schema」）。
+	//
+	// 挂在 admin 组（与 events/search 同权限口径：观测数据含 IP/机器码维度，访问留痕）。
+	rg.GET("/client-dist/machines", h.Machines)
+	rg.GET("/client-dist/machines/:machineId/events", h.MachineEvents)
 }
 
 // RegisterConsumerRoutes 注册玩家启动心跳端点。
@@ -150,6 +158,59 @@ func (h *ClientDistRuntimeHandler) SearchEvents(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// Machines 机器级更新清单：服务端聚合 + 排序 + 分页。
+//
+// 时间窗必填（from/to 或 range，口径与 observability 一致）：不提供「无窗即全量」——
+// 一次全量聚合会把短保留（14 天）的明细表扫穿，也会让「最近 7 天」的页在缺参时
+// 静默变成「有史以来」，而运营看到的是同一个标题。
+func (h *ClientDistRuntimeHandler) Machines(c *gin.Context) {
+	if h.tracking == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "分发追踪服务未初始化"})
+		return
+	}
+	from, to, ok := parseObsRange(c)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_RANGE", "message": "range/from/to 非法"})
+		return
+	}
+	res, err := h.tracking.QueryMachines(service.ClientMachineListQuery{
+		ChannelID: c.Query("channelId"),
+		From:      from,
+		To:        to,
+		Sort:      c.Query("sort"),
+		Order:     c.Query("order"),
+		Page:      parseIntDefault(c.Query("page"), 1),
+		PageSize:  parseIntDefault(c.Query("pageSize"), 20),
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
+	h.recordAudit(c, "client_dist_machines.list", map[string]any{"channelId": c.Query("channelId")})
+	c.JSON(http.StatusOK, res)
+}
+
+// MachineEvents 单台机器的更新时间线（钻取）。
+func (h *ClientDistRuntimeHandler) MachineEvents(c *gin.Context) {
+	if h.tracking == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "分发追踪服务未初始化"})
+		return
+	}
+	from, to, ok := parseObsRange(c)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_RANGE", "message": "range/from/to 非法"})
+		return
+	}
+	machineID := c.Param("machineId")
+	res, err := h.tracking.QueryMachineEvents(machineID, c.Query("channelId"), from, to)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
+	h.recordAudit(c, "client_dist_machines.events", map[string]any{"machineId": machineID})
+	c.JSON(http.StatusOK, res)
 }
 
 // EventDetail 查询单条分发事件脱敏详情。

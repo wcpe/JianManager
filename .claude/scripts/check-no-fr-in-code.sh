@@ -32,18 +32,41 @@ if [ "${1:-}" = "--stock" ]; then
     ':!*.md' ':!*.json' 2>/dev/null \
     | grep -v 'no-fr-check' || true)
 
-  if [ -n "$out" ]; then
-    n=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
-    echo "❌ 代码里仍有 FR 编号共 $n 处（FR-508 验收要求 0）"
-    echo "   规则见 .claude/rules/no-fr-in-code.md"
-    echo ""
-    printf '%s\n' "$out" | head -40
-    echo ""
-    exit 1
-  fi
+    # 文件名也要查。规则 .claude/rules/no-fr-in-code.md 的「禁止」表里
+    # 明确列了「文件名」（示例 `proxy_fr035_test.go`、`fr513-host-obs-visual.spec.ts`），
+    # 而早前本脚本只 git grep **内容**，对文件名零覆盖——
+    # 于是一整批 `*_fr5xx_test.go` 能在“已全量清零”的情况下安静地存在。
+    #
+    # 存量模式对文件名**只报告不失败**：仓库存量有 71 个这种文件名，
+    # 一次性打开门禁会要求“改这一处顺便重命名 71 个文件”（每个都要改引用与用例路径），
+    # 那是另一个量级的改动。真正该硬拦的是「**新引入**」，见 diff 模式。
+    name_out=$(git ls-files -- apps internal packages scripts \
+      | grep -iE 'fr[0-9]+' || true)
 
-  echo "✅ 存量模式：代码里已无 FR 编号"
-  exit 0
+    if [ -n "$out" ]; then
+      n=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+      echo "❌ 代码内容里仍有 FR 编号共 $n 处（规则要求 0）"
+      echo "   规则见 .claude/rules/no-fr-in-code.md"
+      echo ""
+      printf '%s\n' "$out" | head -40
+      echo ""
+      if [ -n "$name_out" ]; then
+        echo "（另有文件名命中 FR 编号 $(( $(printf '%s\n' "$name_out" | wc -l) )) 个，存量债，不在此处阻断）"
+      fi
+      exit 1
+    fi
+
+    if [ -n "$name_out" ]; then
+      m=$(printf '%s\n' "$name_out" | wc -l | tr -d ' ')
+      echo "⚠️  代码内容已无 FR 编号；但仍有 $m 个文件名带 FR 编号（存量债）"
+      echo "   规则禁止文件名带 FR，但一次性改名成本另计；新增文件由 diff 模式硬拦。"
+      echo "   前 10 个："
+      printf '%s\n' "$name_out" | head -10
+      exit 0
+    fi
+
+    echo "✅ 存量模式：代码里与文件名中已无 FR 编号"
+    exit 0
 fi
 
 # ── diff 模式：只算「本次新引入」的 FR 编号 ────────────────────────
@@ -114,6 +137,23 @@ if [ "$vcount" != "0" ]; then
   head -40 "$TMP/violations"
   echo ""
   echo "共 $vcount 处。同一行里本来就有的存量编号不算违规；用 --stock 检查存量。"
+  exit 1
+fi
+
+# 3) **新引入的文件名**也不得带 FR 编号。
+#
+# 规则 .claude/rules/no-fr-in-code.md 的「禁止」表里「文件名」是单独一行，
+# 但早前脚本只查内容——于是一批 `*_fr5xx_test.go` 与 `fr513-*.spec.ts`
+# 能带着“已全量清零”的结论被新增进来。这里只看 **A（新增）/R（重命名后）**，
+# 存量文件不追究（它们由 --stock 报告但不阻断）。
+name_added=$(git diff --diff-filter=AR --name-only "$BASE"...HEAD -- apps internal packages scripts \
+  | grep -iE 'fr[0-9]+' || true)
+if [ -n "$name_added" ]; then
+  echo "❌ 新增/重命名的文件名里带了 FR 编号（规则见 .claude/rules/no-fr-in-code.md）"
+  echo "   文件名不得含 FR 编号；要说明归属请把 FR 写进文档或提交信息。"
+  echo ""
+  printf '%s\n' "$name_added" | head -20
+  echo ""
   exit 1
 fi
 

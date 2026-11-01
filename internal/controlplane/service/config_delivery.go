@@ -259,6 +259,18 @@ type ConfigDeliveryService struct {
 	// 操作同一张单的同一批目标。两边都对目标行做「读状态 → 改状态」，没有这把锁就会出现
 	// 同一台实例被下发两次、以及 deferred 补推把刚被熔断跳过的目标又拉起来。
 	// 用 keyedMutex 而非全局锁：不同交付单之间不应互相阻塞。
+	//
+	// 【锁序与最坏持有量（gate-merge.md 长临界区审计要求，必须保持更新）】
+	// 锁序：orderLocks（交付单级）→ cancelMu（进程内取消标记），不反向嵌套。
+	//
+	// 最坏持有量：**单批**，不再是整轮。单批 ≈ 批内台数 ×（写盘 gRPC ≤30s + 生效等待 ≤300s）
+	// + 批内聚合。按批 10 台、全部走 restart 生效算约 55 分钟（这是最坏的理论值，
+	// 实际受生效方式与实例数决定）。
+	//
+	// **观察窗 sleep 不得落在这把锁内**（见 Run 里的分段注释）：
+	// 修复前整轮持锁，含每批 120s 的观察窗；那是该仓既有生产事故的同构——
+	// 一个与本流程无关的调用方（探针重连补推）会因「等整轮跑完」而拿不到锁，
+	// 而集群重启（探针批量重连）恰好是补推需求最集中、也是锁竞争最激烈的时刻。
 	orderLocks *deliveryOrderLocks
 }
 
@@ -833,9 +845,6 @@ func (s *ConfigDeliveryService) Cancel(id uint, reason string) (*model.ConfigDel
 // 熔断要求「批内未下发的目标置 skipped」，并发下「已决定下发但还没发」的目标无法停下，
 // 会出现「熔断了但还在往外推」的窗口。
 func (s *ConfigDeliveryService) Run(orderID uint) error {
-	unlock := s.orderLocks.lock(orderID)
-	defer unlock()
-
 	order, err := s.mustGet(orderID)
 	if err != nil {
 		return err
@@ -858,43 +867,27 @@ func (s *ConfigDeliveryService) Run(orderID uint) error {
 		if s.isCancelRequested(order.ID) {
 			break
 		}
-		pending, loadErr := s.pendingTargets(order.ID, batchNo)
-		if loadErr != nil {
-			return loadErr
-		}
-		if len(pending) == 0 {
-			continue // 该批已无待下发目标（续跑/跳过场景）
-		}
-		order.CurrentBatch = batchNo
-		_ = s.db.Model(order).Update("current_batch", batchNo).Error
-
-		// ① 每批开始时算离线率（§8.2）：≥10% 熔断，<10% 标 deferred 继续。
-		offlineCount, err := s.countOfflinePending(order, instances)
+		// 锁的粒度是**单批**，不是整轮（gate-merge.md 长临界区纪律）。
+		//
+		// 【为何不能在循环外一次性拿锁】那会把「每批 120s 观察窗」与「整轮下发」
+		// 全都算进临界区：一个只关心单台目标的补推（HandleProbeConnected）
+		// 要等整轮跑完才能动手，而集群重启时恰恰是补推最密集的时刻。
+		// 现在它最多等一个批次。
+		order, err = s.runBatchLocked(order, batchNo, instances)
 		if err != nil {
 			return err
 		}
-		if shouldBreakOnOffline(offlineCount, order.PlannedCount) {
-			return s.triggerBreak(order, batchNo, BreakReasonOfflineRate,
-				deliveryOfflineBreakPercent, offlineRatePercent(offlineCount, order.PlannedCount),
-				fmt.Sprintf("离线率 %.1f%% 达到熔断阈值 %d%%（%d/%d 台离线）",
-					offlineRatePercent(offlineCount, order.PlannedCount), deliveryOfflineBreakPercent, offlineCount, order.PlannedCount),
-				"离线目标占比过高，疑似集群级故障，停止放量")
-		}
-		if err := s.deferOfflineTargets(order, batchNo, instances); err != nil {
-			return err
-		}
-
-		// ② 逐台下发 + 生效；每次进入终态即时评估熔断（§9.2）。
-		broken, err := s.runBatch(order, batchNo, instances)
-		if err != nil {
-			return err
-		}
-		if broken {
+		if order == nil {
+			// 熔断或已收尾：不再往下走。
 			return nil
 		}
-		s.markBatchState(order, batchNo, "completed")
 
-		// ③ 观察窗：等一段时间看健康是否回归（§9 / §18 待定 1）。
+		if s.isCancelRequested(order.ID) {
+			break
+		}
+
+		// ③ 观察窗：**在锁外** sleeping。这是本次关键修复——
+		// 窗口内没有任何目标级写入，不需要持锁；而它恰好是最长的一段（默认 120s/批）。
 		if order.ObserveWindowSec > 0 {
 			if err := s.setStatus(order, model.DeliveryStatusObserving); err != nil {
 				return err
@@ -914,7 +907,72 @@ func (s *ConfigDeliveryService) Run(orderID uint) error {
 		}
 	}
 
-	// 收尾：根据目标终态决定 completed / failed / cancelled。
+	return s.finishRun(order)
+}
+
+// runBatchLocked 在交付单锁内推进一批（离线率判定 → 延迟离线 → 逐台下发）。
+//
+// 返回 (nil, nil) 表示“已熔断或已收尾，Run 应当直接返回”。
+// 锁的获取/释放完全内聚在这里，调用方（Run）不关心锁。
+func (s *ConfigDeliveryService) runBatchLocked(order *model.ConfigDeliveryOrder, batchNo int, instances map[uint]*model.Instance) (*model.ConfigDeliveryOrder, error) {
+	unlock := s.orderLocks.lock(order.ID)
+	defer unlock()
+
+	// 锁内重读一次：等待锁期间单子可能被暂停/取消。
+	fresh, err := s.mustGet(order.ID)
+	if err != nil {
+		return nil, err
+	}
+	if fresh.Status != model.DeliveryStatusRolling {
+		// 已被暂停/取消/收尾：不是错误，但也不应继续推进。
+		return nil, nil
+	}
+	order = fresh
+
+	// 续跑/跳过场景：该批已经没有待下发目标就整批跳过（不更新 current_batch，
+	// 也不跑一次空批的离线率判定——那会让已完成的批把熔断率算进去）。
+	pending, err := s.pendingTargets(order.ID, batchNo)
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return order, nil
+	}
+
+	if err := s.db.Model(order).Update("current_batch", batchNo).Error; err != nil {
+		return nil, err
+	}
+
+	// ① 每批开始时算离线率（§8.2）：≥10% 熔断，<10% 标 deferred 继续。
+	offlineCount, err := s.countOfflinePending(order, instances)
+	if err != nil {
+		return nil, err
+	}
+	if shouldBreakOnOffline(offlineCount, order.PlannedCount) {
+		return nil, s.triggerBreak(order, batchNo, BreakReasonOfflineRate,
+			deliveryOfflineBreakPercent, offlineRatePercent(offlineCount, order.PlannedCount),
+			fmt.Sprintf("离线率 %.1f%% 达到熔断阈值 %d%%（%d/%d 台离线）",
+				offlineRatePercent(offlineCount, order.PlannedCount), deliveryOfflineBreakPercent, offlineCount, order.PlannedCount),
+			"离线目标占比过高，疑似集群级故障，停止放量")
+	}
+	if err := s.deferOfflineTargets(order, batchNo, instances); err != nil {
+		return nil, err
+	}
+
+	// ② 逐台下发 + 生效；每次进入终态即时评估熔断（§9.2）。
+	broken, err := s.runBatch(order, batchNo, instances)
+	if err != nil {
+		return nil, err
+	}
+	if broken {
+		return nil, nil
+	}
+	s.markBatchState(order, batchNo, "completed")
+	return order, nil
+}
+
+// finishRun 收尾：根据目标终态决定 completed / failed / cancelled。
+func (s *ConfigDeliveryService) finishRun(order *model.ConfigDeliveryOrder) error {
 	if err := s.refreshCounters(order); err != nil {
 		return err
 	}

@@ -176,7 +176,7 @@ func mustEncryptorFrom(t *testing.T, secretB64 string) *KeyEncryptor {
 
 // TestSettingSurvivesThreeStarts 验收「迁移首启 → 停 → 二启 → 三启，且读回同一 default_model_id」。
 //
-// 为什么单独写：FR-515 已有一个三启周期用例，但它验的是**会话/run 表与唯一索引**；
+// 为什么单独写：已有三启周期用例验的是**会话/run 表与唯一索引**；
 // 本 FR 关心的是 `assistant_settings` 单行表能不能在反复迁移后仍保住默认模型指针。
 // 两者表不同、失效模式也不同：settings 是「单行 + 可空外键」，
 // 最容易出的问题是「AutoMigrate 重跑时把行重建了」或「可空指针被写成 0」。

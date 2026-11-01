@@ -65,7 +65,7 @@ export type { SparkPoint } from './charts/Sparkline'
 export type { ChartSeries, ChartReferenceLine } from './charts/TimeSeriesChart'
 export type { MonitorSource, MonitorSeriesHook } from './charts/MonitorSkeleton'
 
-// 跨组件基础设施（阶段 6）：焦点环/交互覆盖层常量与 a11y hooks
+// 跨组件基础设施：焦点环 / 交互覆盖层常量与 a11y hooks
 export * from './hooks'
 export * from './lib/interaction-overlay'
 export * from './lib/utils'
@@ -73,53 +73,20 @@ export * from './lib/threshold'
 export * from './lib/brush'
 export * from './lib/chart-hover'
 export * from './lib/monitor-metrics'
-
-
-// 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者语义不同，
-// 前者格式化存储占用、后者格式化监控指标），barrel 里不能同时通配导出。
-// 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics`、`FieldError` 与
-// `./components/field-label` 同名（语义不同），barrel 里不能同时通配导出。
-// 同上：`FieldError` 与 `./components/field-label` 同名（此处是「校验错误条目」，
-// 那边是「表单字段错误壳」）。需要本模块版的调用方走深路径。
-// 显式列出而非 `export *`：`SummaryChip` 与 `./components/summary-chips` 同名但语义不同
-// （前者是可点击筛选 chip、后者是带状态等级的汇总 chip）；`ConfigSwitch` 已由
-// 显式列出而非 `export *`：`formatBytes` 与 `./lib/monitor-metrics` 同名（两者格式不同，
-// 前者 1024 进制带 B/KB/MB 后缀、后者是监控指标的 G/M/K 缩写），barrel 里不能同时通配导出。
 export * from './lib/theme'
-// WorkbenchLeafParts 的 PageBreadcrumb 与 './components/layout' 的同名导出（类型）冲突，
-// 故显式列出其余导出；PageBreadcrumb 组件走深路径
-// 显式列出而非 `export *`：`BotStatusKind` 与 `./lib/bots-overview` 的后端状态枚举同名但语义不同
 export * from './lib/combobox'
 export * from './lib/color-contrast'
 export * from './lib/focus-ring'
-// 显式列出而非 `export *`：`FieldError` 与 `./components/field-label` 的展示组件同名但语义不同
-// 显式列出而非 `export *`：`DragPayload` 与 `./lib/explorer-clipboard-bus` 的同名类型语义不同
-// 不导出：该模块仅有的 `fmtBytes` 与 client-dist 的 OpsShared 同名（两者格式口径不同），
-// 显式列出而非 `export *`：`HoverPrefetcher` 与 `./lib/instance-prefetch` 的同名类型语义不同；
-// server-selection 的 store 与类型。
 export * from './lib/stat-card'
 export * from './lib/tone'
-// 显式列出而非 `export *`：`VirtualWindow` / `VirtualWindowInput` 与 `./lib/logs-filters` 的同名类型语义不同
 
-// ====迁移批：新增视图按域补录 ====
-// 逐条列出以便逐个核对；同名冲突沿用本文件既有先例（显式列出，冲突名走深路径）。
-// 显式列出而非 export *：AgentTokenOption 与同域其它视图同名（字段不同），
-// barrel 里不能同时通配；需要本模块版该类型的调用方走深路径。
-// audit 域
-// client-dist 域
-// config-baselines 域
-// config-explorer 域
-// console 域
-// import-server 域
-// instances 域
-// logs 域
-// networks 域
-// notifications 域
-// overview 域
-// permissions 域
-// players 域
-// runtime-assets 域
-// settings 域
-// statistics 域
-// system-update 域
-// tasks 域
+// 【说明】本文件只导出设计系统（ADR-103）。
+//
+// 早前这里堆了十几条“显式列出而非 export *：XXX 与 YYY 同名”的注释，
+// 而那些模块（bots-overview / logs-filters / instance-prefetch / …）
+// 早随业务代码回迁应用侧，在包内已不存在——注释比代码活得久，
+// 让后来者以为包里还有这些模块。回迁完成后它们已全部删除。
+//
+// 新增设计系统模块时：能 `export *` 就通配；确需同名冲突时，
+// 就地写明「是哪两个同名、语义差在哪、需要另一份时走哪个深路径」，
+// 并删除对应模块回迁后遗留的注释。

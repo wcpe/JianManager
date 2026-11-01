@@ -300,6 +300,8 @@ type AssistantChatService struct {
 	runCtx    context.Context
 	runCancel context.CancelFunc
 	wg        sync.WaitGroup
+	// sweepOnce 保证过期确认巡检只启一份（Start 可能被调多次）。
+	sweepOnce sync.Once
 
 	// cancelMu 保护 cancels：管理运行中 run 的取消函数，终态时清理。
 	cancelMu sync.Mutex
@@ -472,6 +474,44 @@ func (s *AssistantChatService) Start() {
 	if reaped > 0 {
 		slog.Info("助手运行时：已回收非终态 run", "count", reaped)
 	}
+	s.startConfirmationSweeper()
+}
+
+// startConfirmationSweeper 周期收口过期确认并把对应 run 接回执行。
+//
+// 周期与票据有效期同量级（1 分钟）：太稀会让用户多等一倍时间才能重试，
+// 太密则每个 CP 都在空转一次查询。票有效期是 10 分钟，1 分钟巡检已足够。
+func (s *AssistantChatService) startConfirmationSweeper() {
+	s.sweepOnce.Do(func() {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			// 巡检跑在独立 goroutine 里：一次 panic 会带走整个 CP 进程，
+			// 而它的输入是库里任意存量票据，必须自己兜底。
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("助手运行时：确认过期巡检 panic 已捕获", "panic", r)
+				}
+			}()
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-s.runCtx.Done():
+					return
+				case <-ticker.C:
+					expired, resumed, err := s.SweepStaleConfirmations(time.Now())
+					if err != nil {
+						slog.Warn("助手运行时：确认过期巡检失败", "error", err)
+						continue
+					}
+					if expired > 0 {
+						slog.Info("助手运行时：已收口过期确认并接回 run", "expired", expired, "resumed", resumed)
+					}
+				}
+			}
+		}()
+	})
 }
 
 // Stop 取消所有在途 run 并等待执行体退出。
@@ -484,6 +524,131 @@ func (s *AssistantChatService) Stop() {
 	}
 	s.runCancel()
 	s.wg.Wait()
+}
+
+// resumeAfterConfirmation 用户对确认票据做出决定后，把暂停的 run 接回执行。
+//
+// 【为什么必须有这个方法】
+// 工具轮遇到写操作时，`executeToolCalls` 返回 `waiting_confirmation` 并结束本轮。
+// 而 `waiting_confirmation` **占着「单会话单活跃 run」的数据库唯一索引槽位**——
+// 它不主动退出，会话就永远提交不了新消息（409 CONVERSATION_BUSY）。
+// 修复前全仓没有任何代码推进这个状态：`startExecutor` 只在 SubmitRun 里调用，
+// 也没有 resume 端点。结果是**用户一旦点过批准或拒绝，该会话就只能等到重启 CP**。
+//
+// 【为什么分成两个决定走不同分支】
+//   - 批准：工具已经真执行完（`approveAndRun` 同步完成），把结果以 tool 消息回灌，
+//     让模型基于**真实执行结果**继续推理。这与「不把还没执行的结果回灌」是同一条纪律的两面。
+//   - 拒绝：同样要回灌一条 tool 消息（内容是用户的拒绝），否则模型会以为调用成功了、
+//     或干脆再次尝试同一个写操作。
+//
+// 【续跑为何能自然继续】
+// `runExecutor.loop` 每次都重新调 `buildHistory` 从库内重建消息与历史事件，
+// 不依赖上一轮进程内内存；因此把 run 从 `waiting_confirmation` 推回 `running` 后，
+// `executeRun` 会接着把「工具结果」作为新输入喂给模型，语义与同一轮内继续一致。
+func (s *AssistantChatService) resumeAfterConfirmation(owner uint, run *model.AssistantRun) error {
+	if run == nil {
+		return nil
+	}
+	// 只接接真的停在确认态的 run。已经被取消/已完成的不碰——
+	// 那是用户或上一个执行体的决定，不应被一次确认覆盖。
+	if run.Status != model.AssistantRunStatusWaitingConfirmation {
+		return nil
+	}
+
+	conv := model.AssistantConversation{}
+	if err := s.db.First(&conv, run.ConversationID).Error; err != nil {
+		slog.Warn("助手运行时：续跑时读取会话失败", "runId", run.ID, "error", err)
+		return err
+	}
+	snapshot, streamer, err := s.modelPreparer()(&conv)
+	if err != nil {
+		// 模型可能已被管理员禁用/删除：此时不能默默卡住，要把 run 收尾到终态，
+		// 否则会话又被锁死在 waiting_confirmation。
+		return s.failResume(run, "继续执行失败：当前模型不可用（"+err.Error()+"）")
+	}
+
+	s.startExecutor(owner, run, snapshot, streamer)
+	return nil
+}
+
+// failResume 续跑前就失败时，把 run 推到终态并写 run_end。
+//
+// 单独一个方法而不是直接调 finishRun：这里手里没有事件 sink（未进入执行体），
+// 而 finishRun 需要它来补 run_end 事件。
+func (s *AssistantChatService) failResume(run *model.AssistantRun, note string) error {
+	updates := map[string]any{
+		"status":             model.AssistantRunStatusFailed,
+		"termination_reason": model.AssistantTerminationFailed,
+		"ended_at":           time.Now(),
+		"version":            run.Version + 1,
+	}
+	moved, err := s.casRunStatus(run.ID, run.Version, model.AssistantRunActiveStatuses(), model.AssistantRunStatusFailed, updates)
+	if err != nil {
+		slog.Error("助手运行时：续跑失败后写终态失败", "runId", run.ID, "error", err)
+		return err
+	}
+	if !moved {
+		// 已被别的路径推进（比如用户同时点了停止）：以库内为准。
+		return nil
+	}
+	sink := newAssistantEventSink(s.db, run, s.limits)
+	sink.hub = s.hub
+	if err := sink.ensureRunEnd(model.AssistantRunStatusFailed, model.AssistantTerminationFailed, note); err != nil {
+		slog.Warn("助手运行时：续跑失败后写 run_end 失败", "runId", run.ID, "error", err)
+	}
+	s.clearActiveRun(run.ConversationID, run.ID)
+	s.forgetCancel(run.ID)
+	return nil
+}
+
+// SweepStaleConfirmations 把超期未决策的确认票据收口，并把对应 run 接回执行。
+//
+// 【与 ExpireStaleConfirmations 的分工】后者（assistant_tool_exec.go）只改票据状态，
+// 不碰 run——那是因为它原本只承担“列表里不要挂着一堆假的待确认”。
+// 但只改票据就漏掉了一半：run 停在 `waiting_confirmation` 时仍占着
+// 「单会话单活跃 run」的唯一索引，会话依旧 409。本方法把两件事一次做完。
+//
+// 【为什么必须有】票据有效期 10 分钟，而 run 停在 `waiting_confirmation` 期间
+// 占着「单会话单活跃 run」的唯一索引。用户若不决定（关页面/忘了），
+// 那个会话就永久 409——和「确认后不推进」是同一个死锁，只是触发条件不同。
+//
+// 【为何在巡检里连同 run 一起处理】只改票据不改 run，会话依旧锁着；
+// 两者必须同一个动作完成，否则又是一条只能重启才能恢复的路径。
+//
+// 返回 (过期票据数, 续跑的 run 数)。幂等：已终态的票据不会被再选。
+func (s *AssistantChatService) SweepStaleConfirmations(now time.Time) (int, int, error) {
+	var stale []model.AssistantConfirmation
+	if err := s.db.Where("status = ? AND expires_at < ?", model.AssistantConfirmStatusPending, now).
+		Order("id ASC").Limit(200).Find(&stale).Error; err != nil {
+		return 0, 0, fmt.Errorf("查询过期确认失败: %w", err)
+	}
+	if len(stale) == 0 {
+		return 0, 0, nil
+	}
+	expired := 0
+	resumed := 0
+	for _, tk := range stale {
+		res := s.db.Model(&model.AssistantConfirmation{}).
+			Where("id = ? AND status = ?", tk.ID, model.AssistantConfirmStatusPending).
+			Updates(map[string]any{"status": model.AssistantConfirmStatusExpired, "decided_at": now})
+		if res.Error != nil {
+			continue
+		}
+		if res.RowsAffected == 0 {
+			continue // 已被用户/其他路径处理
+		}
+		expired++
+		// 过期票据对应的写操作从未执行，给模型一条明确的「未执行」结果，
+		// 否则续跑后它会在历史里看不到这次调用。
+		s.recordConfirmationToolMessage(&tk, "确认已过期（10 分钟内未处理），本次调用未执行。如需执行请重新发起。")
+		var run model.AssistantRun
+		if err := s.db.First(&run, tk.RunID).Error; err == nil {
+			if err := s.resumeAfterConfirmation(tk.OwnerUserID, &run); err == nil {
+				resumed++
+			}
+		}
+	}
+	return expired, resumed, nil
 }
 
 // ── 会话 ────────────────────────────────────────────────────────────────
@@ -982,6 +1147,23 @@ func (s *AssistantChatService) startExecutor(owner uint, run *model.AssistantRun
 	go func() {
 		defer s.wg.Done()
 		defer cancel()
+		// 【为何必须 recover】这是裸 goroutine，而且**吃的是模型输出**——全系统最不可信的输入。
+		// 一次 panic 会直接带走整个 CP 进程；而 run 留下 pending 状态时，
+		// 用户看到的是“助手没反应”，而不是一个可读的错误。
+		// recover 后把 run 收口到 failed 并写 run_end，让会话能继续用。
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("助手执行体 panic 已捕获（进程存活）", "runId", execRun.ID, "panic", rec)
+				// execRun 是副本且 Version 可能已被执行体推进过，不能拿它直接 CAS；
+				// 重读库内当前行再收口（failResume 内部用当前 Version 做 CAS）。
+				var cur model.AssistantRun
+				if err := s.db.First(&cur, execRun.ID).Error; err == nil {
+					s.failResume(&cur, fmt.Sprint("执行体内部错误：", rec))
+				} else {
+					slog.Warn("panic 后重读 run 失败，跳过收口", "runId", execRun.ID, "error", err)
+				}
+			}
+		}()
 		s.executeRun(ctx, owner, &execRun, snapshot, streamer)
 	}()
 }

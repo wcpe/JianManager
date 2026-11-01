@@ -638,13 +638,25 @@ func migrateProcessMetricPIDColumn(db *gorm.DB) error {
 //
 // 数据处置：**直接删表，不备份**（用户明确决策，V1 业务数据属早期实验性质、无生产依赖）。
 //
+// ⚠️ **不可逆**：执行后数据不可恢复，且**降级回旧版本也拿不回这三张表**
+// （回滚脚本只切换版本目录，不重建 schema）。因此：
+//   - 升级前如需留底，必须由运维自己导出（平台不做备份）；
+//   - 回滚到 ADR-106 之前的版本只恢复代码，不恢复数据；
+//   - 任何误删都只能从外部备份恢复。
+//
 // 幂等：DROP TABLE IF EXISTS，重复执行无副作用；新库本就没有这三张表，空跑。
+// 已覆盖重启循环与脏环境三种形态，见 business_retirement_restart_cycle_test.go。
 func migrateRetireBusinessTables(db *gorm.DB) error {
 	for _, table := range []string{
 		"business_events",
 		"economy_balance_mirrors",
 		"economy_ledger_entries",
 	} {
+		// 只在真存在时记日志：新库里"空跑"不需要噪音，但真删了什么是必须留痕的。
+		if db.Migrator().HasTable(table) {
+			slog.Warn("ADR-106 退役：即将永久删除业务表（不可逆，不备份）",
+				"table", table, "note", "降级回旧版本不会重建该表")
+		}
 		if err := db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
 			return fmt.Errorf("删除已退役业务表 %s 失败: %w", table, err)
 		}

@@ -59,6 +59,13 @@ const (
 	WarnTypeConflict = "TYPE_CONFLICT"
 	// WarnRootNotObject 该层根节点不是对象，整层忽略。
 	WarnRootNotObject = "ROOT_NOT_OBJECT"
+	// WarnPropertyLineDropped properties 里无法解析的数据行被丢弃。
+	//
+	// 【为何必须告警】properties 合并只保留「键=值」，而分隔符缺失的行（`foo bar`）、
+	// 续行（行尾反斜杠）在旧实现里与注释同样被归为 Comment 后静默丢掉。
+	// 结果：层内容看起来合法、合并输出也对——只是少了几行；
+	// 下发到目标实例后那几行就从文件里消失了，而调用方看不到任何提示。
+	WarnPropertyLineDropped = "PROPERTY_LINE_DROPPED"
 )
 
 // MergeLayer 是参与合并的一层输入（已从 DB 读出）。
@@ -594,8 +601,14 @@ func mergePropertiesLayers(layers []MergeLayer) (*MergeResult, error) {
 			continue
 		}
 		src := layer.source()
+		dropped := 0
 		for _, e := range parsePropertiesLines(layer.Content) {
-			if e.Comment || e.Key == "" {
+			if e.Comment {
+				continue
+			}
+			if e.Key == "" {
+				// 无法解析的数据行：不静默丢，计入告警。
+				dropped++
 				continue
 			}
 			if _, seen := values[e.Key]; !seen {
@@ -603,6 +616,16 @@ func mergePropertiesLayers(layers []MergeLayer) (*MergeResult, error) {
 			}
 			values[e.Key] = e.Value
 			res.Traced[e.Key] = TracedValue{Value: e.Value, Source: src}
+		}
+		if dropped > 0 {
+			// 结果不可信：与“层解析失败”同一条口径——
+			// 下发一份“静默少了内容”的配置，比明确报错更危险。
+			res.Valid = false
+			res.Warnings = append(res.Warnings, MergeWarning{
+				Level: "error", Code: WarnPropertyLineDropped,
+				Message: fmt.Sprintf("有 %d 行无法解析（缺 `=`/`:` 分隔符或为续行），已从合并结果中剔除", dropped),
+				Source:  src,
+			})
 		}
 	}
 	var buf strings.Builder
@@ -619,6 +642,12 @@ func mergePropertiesLayers(layers []MergeLayer) (*MergeResult, error) {
 
 // parsePropertiesLines 解析 properties 文本为行列表。
 // 分隔符取第一个 `=` 或 `:`（与既有 parseProperties 同口径），值不做引号剥离。
+//
+// 三种行必须能区分开（旧实现把后两种混为一谈，造成了静默丢行）：
+//   - **注释/空行**：`#`、`!` 开头或空行 → Comment=true，丢弃合法；
+//   - **数据行**：含 `=` 或 `:` → 键值对；
+//   - **无法解析的行**：既不是注释也没有分隔符（`foo bar`）、或行尾续行反斜杠
+//     → Comment=false 且 Key=""，由调用方产出 WarnPropertyLineDropped。
 func parsePropertiesLines(content string) []propertiesEntry {
 	lines := strings.Split(content, "\n")
 	out := make([]propertiesEntry, 0, len(lines))
@@ -628,9 +657,16 @@ func parsePropertiesLines(content string) []propertiesEntry {
 			out = append(out, propertiesEntry{Raw: line, Comment: true})
 			continue
 		}
+		// 续行（行尾反斜杠）：本合并器不做多行拼接，且拼接后可能改变语义，
+		// 所以不静默接受——归为“无法解析”，让上层告警。
+		if strings.HasSuffix(trimmed, "\\") {
+			out = append(out, propertiesEntry{Raw: line})
+			continue
+		}
 		sep := strings.IndexAny(line, "=:")
 		if sep < 0 {
-			out = append(out, propertiesEntry{Raw: line, Comment: true})
+			// 注意：Comment 保持 false，这是与旧实现的关键区别。
+			out = append(out, propertiesEntry{Raw: line})
 			continue
 		}
 		out = append(out, propertiesEntry{
@@ -652,11 +688,22 @@ func ParseConfigContent(format model.ConfigFileFormat, content string) (map[stri
 	switch format {
 	case model.ConfigFormatProperties:
 		out := map[string]any{}
+		badLines := 0
 		for _, e := range parsePropertiesLines(content) {
-			if e.Comment || e.Key == "" {
+			if e.Comment {
+				continue
+			}
+			if e.Key == "" {
+				badLines++
 				continue
 			}
 			out[e.Key] = e.Value
+		}
+		// 在**保存层时**就把无法解析的行报出来，而不是等到下发才暴露：
+		// 否则层内容看着存成功了，实际上它在合并时会被剔除。
+		if badLines > 0 {
+			return nil, fmt.Errorf(
+				"properties 有 %d 行无法解析（需形如 key=value 或 key:value；注释行以 # 或 ! 开头）", badLines)
 		}
 		return out, nil
 	case model.ConfigFormatYAML, model.ConfigFormatJSON:

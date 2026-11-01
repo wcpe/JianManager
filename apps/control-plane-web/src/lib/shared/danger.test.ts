@@ -13,6 +13,25 @@ describe('canRunDanger', () => {
     expect(canRunDanger(Role.GroupAdmin, 'platform')).toBe(false)
   })
 
+  it('组运维（role=2）不得执行组范围危险操作', () => {
+    // 回归：早前判定是 `role >= 1`，于是 2 与 3 都被当成“组管理员及以上”。
+    // 而它们的权限种子不含 instance.delete / instance.write。
+    expect(canRunDanger(Role.GroupOperator, 'group')).toBe(false)
+    expect(canRunDanger(Role.GroupOperator, 'platform')).toBe(false)
+  })
+
+  it('组只读（role=3）不得执行任何危险操作', () => {
+    // 最高危：只读账号点「删除实例」时，前端门禁必须拦住，不能只靠后端 403。
+    expect(canRunDanger(Role.GroupViewer, 'group')).toBe(false)
+    expect(canRunDanger(Role.GroupViewer, 'platform')).toBe(false)
+  })
+
+  it('未知角色值一律拒绝（fail-closed）', () => {
+    expect(canRunDanger(5, 'group')).toBe(false)
+    expect(canRunDanger(99, 'group')).toBe(false)
+    expect(canRunDanger(-1, 'platform')).toBe(false)
+  })
+
   it('平台管理员可执行所有范围', () => {
     expect(canRunDanger(Role.PlatformAdmin, 'group')).toBe(true)
     expect(canRunDanger(Role.PlatformAdmin, 'platform')).toBe(true)

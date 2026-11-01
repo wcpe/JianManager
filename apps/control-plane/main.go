@@ -693,6 +693,16 @@ func main() {
 	approvalExec.SetTargetVerifier(service.VerifyTargetDrift(instanceSvc, nodeSvc))
 	// 到期巡检：读取路径有惰性判定，但没人看的过期票会一直留在待审列表里，
 	// 巡检负责把它们收口（两条互补，缺一条就有残留）。
+	// 启动回收必须先于巡检：上次进程若在“已认领、未收尾”之间挂掉，
+	// 票据会停在 executing——而过期巡检只扫 pending，永远碰不到它。
+	// 不先收口，那些票就永久卡死（既不可终态也不可重试），
+	// 且运维无法回答“到底执行了没有”。
+	if n, r, rerr := approvalSvc.RecoverInterruptedExecutions(); rerr != nil {
+		slog.Warn("审批：启动回收执行中状态失败", "error", rerr)
+	} else if n > 0 || r > 0 {
+		slog.Warn("审批：已把上次进程遗留的执行中状态标为未知",
+			"tickets", n, "receipts", r, "note", "动作可能已生效，需人工核对目标状态")
+	}
 	approvalSvc.StartExpiryLoop()
 	defer approvalSvc.Stop()
 	taskSvc.SetNotificationService(notificationSvc)

@@ -743,3 +743,332 @@ func parseHeaderJSON(s string) map[string]string {
 	}
 	return out
 }
+
+// ── 机器级更新清单与钻取 ────────────────────────────────────────
+//
+// 【为什么在 CP 侧聚合而不是前端拉明细自己算】
+// 前端的机器清单要按「机器」去重后排序（更新次数 / 最近更新 / 版本滞后）再分页。
+// 明细表是短保留的（默认 14 天）且按事件行存储，一次 7 天窗、上千台机器的明细可达数十万行；
+// 拉到浏览器再去重排序既不可分页（total 要在服务端算），也会把「明细墙」推给前端。
+//
+// 【为什么排序与分页必须在 SQL 里做】
+// 前端契约里 `total` 决定分页器，`page/pageSize` 决定当前页；
+// 若在内存里聚合全量再切片，翻到第 2 页就要重算全部机器——与本仓既有
+// 「千级实例走服务端搜索」的口径一致，不放任前端全量列举。
+
+// ClientMachineListQuery 机器清单查询条件。
+// From/To 必填（零值视为非法，由 service 返回错误而不是默认全量）。
+type ClientMachineListQuery struct {
+	ChannelID string
+	From      time.Time
+	To        time.Time
+	Sort      string // updates | lastUpdateAt | versionLag
+	Order     string // asc | desc
+	Page      int
+	PageSize  int
+}
+
+// ClientMachineSummary 单台机器在窗口内的更新聚合。
+//
+// 字段与前端契约 `client-dist-machines-contracts.ts` 的 ClientMachineSummary 逐字对齐。
+type ClientMachineSummary struct {
+	MachineID      string `json:"machineId"`
+	ChannelID      string `json:"channelId"`
+	Updates        int64  `json:"updates"`
+	LastUpdateAt   string `json:"lastUpdateAt"`
+	LatestVersion  int    `json:"latestVersion"`
+	CurrentVersion int    `json:"currentVersion"`
+	VersionLag     int    `json:"versionLag"`
+	DownloadBytes  int64  `json:"downloadBytes"`
+	// PlayerName / InstallID / IP 来自另外两张表（运行态快照与遥测明细），非明细表聚合得出。
+	// 取不到时留空串（前端按「未上报」渲染），**不以占位串冒充**。
+	PlayerName string `json:"playerName"`
+	InstallID  string `json:"installId"`
+	IP         string `json:"ip"`
+}
+
+// ClientMachineListResult 机器清单分页结果。
+type ClientMachineListResult struct {
+	ChannelID string                `json:"channelId"`
+	From      string                `json:"from"`
+	To        string                `json:"to"`
+	Exact     bool                  `json:"exact"`
+	Total     int64                 `json:"total"`
+	Page      int                   `json:"page"`
+	PageSize  int                   `json:"pageSize"`
+	Items     []ClientMachineSummary `json:"items"`
+}
+
+// ClientMachineEvent 单机器时间线上的一个事件。
+type ClientMachineEvent struct {
+	Ts         string `json:"ts"`
+	Version    int    `json:"version"`
+	Result     string `json:"result"`
+	Bytes      int64  `json:"bytes"`
+	DurationMs int64  `json:"durationMs"`
+}
+
+// ClientMachineEventsResult 单机器时间线。
+type ClientMachineEventsResult struct {
+	MachineID string               `json:"machineId"`
+	ChannelID string               `json:"channelId"`
+	From      string               `json:"from"`
+	To        string               `json:"to"`
+	Items     []ClientMachineEvent `json:"items"`
+}
+
+// machineRow SQL 聚合的中间行（只用于取值，不对外）。
+type machineRow struct {
+	MachineID      string
+	ChannelID      string
+	Updates        int64
+	LastUpdateAt   time.Time
+	LatestVersion  int
+	CurrentVersion int
+	DownloadBytes  int64
+}
+
+// 机器清单的排序白名单。用白名单而不是拼接字符串：排序字段来自 query，
+// 直接拼进 ORDER BY 就是注入面（本仓既有的分页实现同样按白名单映射）。
+var clientMachineSortColumns = map[string]string{
+	"updates":      "updates",
+	"lastUpdateAt": "last_update_at",
+	"versionLag":   "version_lag",
+}
+
+// machineEventResultOf 把 HTTP status + err_code 归到前端契约的四个取值。
+//
+// 归并与契约 `ClientMachineEvent.result` 的枚举一致：success / fail-static / rollback / error。
+// 判序要点：**先看 err_code 再看 status**——rollback 与 fail-static 都是 200/206 之外的主流形态，
+// 只按 status 判会把它们统统压成 error，运营就看不出「是回滚了还是挂了」。
+func machineEventResultOf(status int, errCode string) string {
+	switch strings.ToLower(strings.TrimSpace(errCode)) {
+	case "rollback", "rollback_failed", "rolled_back":
+		return "rollback"
+	case "static_mismatch", "static_fail", "static_verify_failed":
+		return "fail-static"
+	}
+	if status > 0 && status < 400 {
+		return "success"
+	}
+	return "error"
+}
+
+// QueryMachines 按机器维度聚合窗口内的更新事件（服务端排序 + 分页）。
+//
+// Exact 的含义与前端契约一致：窗口起点落在明细保留窗内时为 true（聚合精确），
+// 否则为 false（明细已被清理，只能给出近似值）。这里不谎报 true——
+// 运营据此判断「这台机器的更新次数是不是真的只有这么点」。
+func (s *ClientDistTrackingService) QueryMachines(q ClientMachineListQuery) (*ClientMachineListResult, error) {
+	if q.From.IsZero() || q.To.IsZero() || !q.To.After(q.From) {
+		return nil, fmt.Errorf("机器清单时间窗非法")
+	}
+	page, size := normalizePage(q.Page, q.PageSize)
+
+	col, ok := clientMachineSortColumns[q.Sort]
+	if !ok {
+		col = "updates"
+	}
+	dir := "DESC"
+	if strings.EqualFold(q.Order, "asc") {
+		dir = "ASC"
+	}
+
+	base := s.db.Model(&model.ClientDistEvent{}).
+		Where("created_at >= ? AND created_at <= ?", q.From, q.To).
+		Where("machine_id <> ''")
+	if q.ChannelID != "" {
+		base = base.Where("channel_id = ?", q.ChannelID)
+	}
+
+	// latest_version 用窗口内出现过的最大 version 近似「当前可用的最新版本」，
+	// current_version 取该机器**最近一次**事件的 version。
+	// 两者相减即版本滞后；用窗口内最大值而不是跨表查 manifest，是为了让本端点
+	// 只碰明细表（spec §3「不改后端 schema」）。
+	selectSQL := "machine_id, MAX(channel_id) AS channel_id, COUNT(*) AS updates, " +
+		"MAX(created_at) AS last_update_at, MAX(version) AS latest_version, " +
+		"COALESCE(SUM(bytes), 0) AS download_bytes"
+
+	// 当前版本：按机器取最近一条事件的 version。用相关子查询而不是再扫一遍全表。
+	selectSQL += ", COALESCE((SELECT e2.version FROM client_dist_events e2 " +
+		"WHERE e2.machine_id = client_dist_events.machine_id " +
+		"AND e2.created_at >= ? AND e2.created_at <= ? " +
+		"ORDER BY e2.created_at DESC LIMIT 1), 0) AS current_version"
+
+	countStmt := base.Session(&gorm.Session{}).Select("COUNT(DISTINCT machine_id)")
+	var total int64
+	if err := countStmt.Scan(&total).Error; err != nil {
+		return nil, fmt.Errorf("统计机器数失败: %w")
+	}
+
+	var rows []machineRow
+	agg := base.Session(&gorm.Session{}).
+		Select(selectSQL, q.From, q.To).
+		Group("machine_id")
+	// 排序键：version_lag 是派生值（latest_version - current_version），
+	// 它**不是**聚合结果里的真实列，直接 ORDER BY version_lag 在 MySQL/SQLite 都会报未知列。
+	// 因此按表达式排序，而不是按别名。
+	orderExpr := col
+	if col == "version_lag" {
+		orderExpr = "(latest_version - current_version)"
+	}
+	agg = agg.Order(fmt.Sprintf("%s %s", orderExpr, dir))
+	// 次序键保证分页稳定：同一排序值下若没有唯一键，翻页可能重复或漏行。
+	agg = agg.Order("machine_id ASC").Offset((page - 1) * size).Limit(size)
+	if err := agg.Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("聚合机器清单失败: %w")
+	}
+
+	items := make([]ClientMachineSummary, 0, len(rows))
+	identity := s.machineIdentityOf(rows)
+	for _, r := range rows {
+		lag := r.LatestVersion - r.CurrentVersion
+		if lag < 0 {
+			lag = 0
+		}
+		id := identity[r.MachineID]
+		items = append(items, ClientMachineSummary{
+			MachineID:      r.MachineID,
+			ChannelID:      r.ChannelID,
+			Updates:        r.Updates,
+			LastUpdateAt:   r.LastUpdateAt.UTC().Format(time.RFC3339),
+			LatestVersion:  r.LatestVersion,
+			CurrentVersion: r.CurrentVersion,
+			VersionLag:     lag,
+			DownloadBytes:  r.DownloadBytes,
+			PlayerName:     id.playerName,
+			InstallID:      id.installID,
+			IP:             id.ip,
+		})
+	}
+
+	return &ClientMachineListResult{
+		ChannelID: q.ChannelID,
+		From:      q.From.UTC().Format(time.RFC3339),
+		To:        q.To.UTC().Format(time.RFC3339),
+		Exact:     s.windowExact(q.From, q.To),
+		Total:     total,
+		Page:      page,
+		PageSize:  size,
+		Items:     items,
+	}, nil
+}
+
+// QueryMachineEvents 取单台机器在窗口内的更新时间线。
+//
+// 直接复用明细检索 + 契约映射，不另建一套查询：
+// 时间线的每一条本来就对应一条明细事件，重复实现只会让两处口径漂移。
+func (s *ClientDistTrackingService) QueryMachineEvents(machineID, channelID string, from, to time.Time) (*ClientMachineEventsResult, error) {
+	if strings.TrimSpace(machineID) == "" {
+		return nil, fmt.Errorf("machineId 不能为空")
+	}
+	if from.IsZero() || to.IsZero() || !to.After(from) {
+		return nil, fmt.Errorf("机器时间线时间窗非法")
+	}
+	events, err := s.QueryEvents(ClientDistEventFilter{
+		ChannelID: channelID,
+		MachineID: machineID,
+		Since:     &from,
+		Until:     &to,
+		// 时间线的用途是「这台机器最近发生了什么」，一次给足一屏即可；
+		// QueryEvents 自带 1000 条硬上限，避免恶意 machineId 把整段历史拉出来。
+		Limit: 500,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ClientMachineEvent, 0, len(events))
+	for _, e := range events {
+		items = append(items, ClientMachineEvent{
+			Ts:         e.CreatedAt.UTC().Format(time.RFC3339),
+			Version:    e.Version,
+			Result:     machineEventResultOf(e.Status, e.ErrCode),
+			Bytes:      e.Bytes,
+			DurationMs: e.DurationMs,
+		})
+	}
+	return &ClientMachineEventsResult{
+		MachineID: machineID,
+		ChannelID: channelID,
+		From:      from.UTC().Format(time.RFC3339),
+		To:        to.UTC().Format(time.RFC3339),
+		Items:     items,
+	}, nil
+}
+
+// machineIdentity 三张表拼出来的机器展示信息。
+type machineIdentity struct {
+	playerName string
+	installID  string
+	ip         string
+}
+
+// machineIdentityOf 批量取机器展示信息（玩家名/IP/安装 ID）。
+//
+// 【为什么不在主查询里 JOIN】主查询是带 GROUP BY 的聚合 + 相关子查询，再 JOIN 两张表
+// 会把分组列逐个引入 SELECT/GROUP BY，改一处就得同步改排序表达式。
+// 这里只对**当前页**那一小批 machineId（≤ pageSize）做两次 IN 查询，
+// 两次都走 machine_id 索引，代价远低于把主查询变复杂。
+//
+// 【为什么允许取不到】运行态快照只存最近一次心跳、遥测是短保留且可 opt-out：
+// 老客户端/已清理的机器就是没有这些值。界面应显示「未上报」而不是空串或 0。
+// 查询失败也不阻断清单——它只是展示增强，不是统计口径（失败仅返回空映射）。
+func (s *ClientDistTrackingService) machineIdentityOf(rows []machineRow) map[string]machineIdentity {
+	out := make(map[string]machineIdentity, len(rows))
+	if len(rows) == 0 {
+		return out
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.MachineID != "" {
+			ids = append(ids, r.MachineID)
+		}
+	}
+	if len(ids) == 0 {
+		return out
+	}
+
+	var states []model.ClientRuntimeState
+	if err := s.db.Model(&model.ClientRuntimeState{}).
+		Where("machine_id IN ?", ids).
+		Order("last_heartbeat_at DESC").
+		Find(&states).Error; err != nil {
+		slog.Warn("查询机器运行态失败，清单仍返回", "error", err)
+	} else {
+		for _, st := range states {
+			// ORDER BY 保证同一个 machineId 多条时先到的是最新心跳；后者不覆盖。
+			if _, ok := out[st.MachineID]; ok {
+				continue
+			}
+			out[st.MachineID] = machineIdentity{playerName: st.PlayerName, ip: st.IP}
+		}
+	}
+
+	var teles []model.ClientTelemetry
+	if err := s.db.Model(&model.ClientTelemetry{}).
+		Select("machine_id, install_id").
+		Where("machine_id IN ? AND install_id <> ''", ids).
+		Order("created_at DESC").
+		Find(&teles).Error; err != nil {
+		slog.Warn("查询机器遥测失败，安装 ID 缺省", "error", err)
+	} else {
+		for _, t := range teles {
+			if _, ok := out[t.MachineID]; ok && out[t.MachineID].installID != "" {
+				continue
+			}
+			cur := out[t.MachineID]
+			cur.installID = t.InstallID
+			out[t.MachineID] = cur
+		}
+	}
+	return out
+}
+
+// windowExact 判断查询窗口是否完整落在明细保留期内（决定 exact 标记）。
+//
+// 只要求**起点**在保留窗内：终点必然 <= now，故起点在窗内即整段都在窗内。
+func (s *ClientDistTrackingService) windowExact(from, to time.Time) bool {
+	_ = to
+	cutoff := time.Now().Add(-time.Duration(s.retentionDays) * 24 * time.Hour)
+	return !from.Before(cutoff)
+}

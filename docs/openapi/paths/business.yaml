@@ -44,29 +44,29 @@ paths:
         '200':
           description: |
             命令已处理。注意：HTTP 200 **不代表业务成功**——
-            必须检查响应体的 `success` 字段。
+            必须检查响应体的 `available`：
+            `false` 时看 `error` 给出原因（探针未连、域不可用等都在这里降级，
+            而不是报 409/422）。
           content:
             application/json:
               schema:
                 $ref: '../components/schemas.yaml#/BusinessDispatchResponse'
+        '400':
+          description: 请求体字段非法（如 `payload` 传了对象而不是 JSON 字符串）
+          content:
+            application/json:
+              schema:
+                $ref: '../components/errors.yaml#/ErrorBase'
         '401':
           $ref: '../components/common.yaml#/Unauthorized'
         '403':
           $ref: '../components/common.yaml#/Forbidden'
         '404':
           $ref: '../components/common.yaml#/NotFound'
-        '409':
-          description: |
-            通道不可用或幂等冲突。`code` 为以下之一：
-            `INSTANCE_OFFLINE` / `NODE_OFFLINE` / `PROBE_UNAVAILABLE` /
-            `DOMAIN_UNAVAILABLE` / `IDEMPOTENCY_KEY_REUSED`
-          content:
-            application/json:
-              schema:
-                $ref: '../components/errors.yaml#/ErrorBase'
-        '422':
-          $ref: '../components/common.yaml#/ErrorResponse'
-          description: 动作未在 manifest 中声明（`ACTION_UNSUPPORTED`）
+        # 【为何删了 409/422】实现把“通道不可用/动作不支持”降级为 200 + available=false
+        # （见 service/business.go 的 mapBusinessResponse）。文档写 409/422 会让调用方
+        # 去写一套永远不会触发的错误分支，反而漏掉真正的降级信号。
+        # 幂等冲突也有自己的语义（同 operationId 异参），目前由 400 回错误码。
 
   /instances/{id}/business/manifest:
     get:
@@ -91,26 +91,27 @@ paths:
             type: integer
       responses:
         '200':
-          description: 能力清单
+          description: |
+            能力清单。
+
+            **与实现对齐**：返回体就是通用的 `BusinessResult` 信封——
+            manifest 内容在 `output` 里，而**不在**顶层 `domains`/`apiVersion`。
+            早前这里把 `domains` 提到顶层，与实现不符，按它写的解析代码会拿到 undefined。
+
+            `output` 的具体结构**JM 不作为契约承诺**（ADR-106：平台不解析 manifest）。
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  instanceId:
-                    type: integer
-                  apiVersion:
-                    type: integer
-                  domains:
-                    type: object
-                    additionalProperties:
-                      $ref: '../components/schemas.yaml#/DomainManifest'
+                $ref: '../components/schemas.yaml#/BusinessDispatchResponse'
         '401':
           $ref: '../components/common.yaml#/Unauthorized'
+        '403':
+          $ref: '../components/common.yaml#/Forbidden'
         '404':
           $ref: '../components/common.yaml#/NotFound'
+        # 探针未连不报 409，而是 200 + available=false（同 dispatch）。
         '409':
-          description: 探针未连接（`PROBE_UNAVAILABLE`）
+          description: 保留位：当前实现不返回此状态（探针未连走 200 + available=false）
           content:
             application/json:
               schema:

@@ -2,7 +2,7 @@
 /**
  * 本地 OpenAI 兼容假供应商（SSE 流式），用于验收 AI 助手真实链路。
  *
- * 为什么需要它：FR-515 的运行时已实现，但一直缺「真实供应商」验证（缺凭据）。
+ * 为什么需要它：助手运行时已实现，但一直缺「真实供应商」验证（缺凭据）。
  * 这个脚本提供一个**真的走 HTTP + 真 SSE 分帧**的上游，让 CP 的受保护出站、SSE 解析、
  * 事件落库、前端增量渲染全部按生产路径跑一遍——而不是只靠 devmock 里那段回放。
  *
@@ -311,7 +311,7 @@ const server = createServer(async (req, res) => {
   /** 让出事件循环，保证每个 write 都真的成为一个独立 TCP 段（这才叫流式）。 */
   const tick = () => new Promise((r) => setTimeout(r, FRAME_DELAY))
 
-  // 工具调用分支（FR-516 验收）。
+  // 工具调用分支（验收用）。
   //
   // 触发方式：最后一条 user 消息里含 `PLEASE_CALL <tool> <json-args>`。
   // 走**消息内容**而不是 querystring，是因为这个供应商要由 CP 按配置里的 baseUrl 调用，

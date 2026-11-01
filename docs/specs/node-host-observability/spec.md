@@ -149,7 +149,7 @@
 ### 7.1 真机截图取证（2026-10-29 完成）
 
 四处版式已在真实 Chromium 中逐块截图存证，归档于 `docs/screenshots/fr513-host-obs/`，
-取证脚本 `apps/control-plane-web/e2e/fr513-host-obs-visual.spec.ts`。
+取证脚本 `apps/control-plane-web/e2e/host-obs-visual.spec.ts`。
 
 实测渲染出的浮层文本（Playwright 从 DOM 直接提取，非人工誊写）：
 

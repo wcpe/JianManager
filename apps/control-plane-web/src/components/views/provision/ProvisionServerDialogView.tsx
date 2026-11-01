@@ -7,8 +7,8 @@
  *         ProvisionServerLinkArgs、ProvisionJdkOption、ProvisionResolvedCore、PROVISION_SERVER_QUERY_INIT
  * @sync apps/control-plane-web/src/components/ProvisionServerDialog.tsx、
  *        apps/control-plane-web/src/components/ProvisionServerDialog.dom.test.tsx、
- *        apps/control-plane-web/src/components/ProvisionServerDialog.fr316.dom.test.tsx、
- *        apps/control-plane-web/src/components/ProvisionServerDialog.fr328.dom.test.tsx
+ *        apps/control-plane-web/src/components/provision/ProvisionServerDialog.pathSafety.dom.test.tsx、
+ *        apps/control-plane-web/src/components/provision/ProvisionServerDialog.resourceLimits.dom.test.tsx
  * @since（组件受控化迁包；原一键搭建核心解析系统可获取项版本-JDK 预检下拉可滚动）
  */
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'

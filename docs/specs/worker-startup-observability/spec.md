@@ -128,7 +128,7 @@
    | 50,200 | 267 ms | 5.3 ms |
    | 100,400 | **441 ms** | 4.4 ms |
 
-   夹具见 `internal/worker/logs/ingest/stateindex/load_scaling_bench_fr486_test.go`，跑法：
+   夹具见 `internal/worker/logs/ingest/stateindex/load_scaling_bench_test.go`，跑法：
    `go test ./internal/worker/logs/ingest/stateindex/ -run '^$' -bench BenchmarkLoadScaling -benchtime 1x`。
 
    **原因（代码级）**：`Store.load()` 对**每张表**做 `SELECT ... ORDER BY`（`store.go:823`），是**全表扫描 + 逐行解码**；`persist` 那套「只写变更源、根表 O(源数)」的增量优化**不覆盖 load 路径**。所以加载成本随总行数线性增长。
@@ -189,7 +189,7 @@ phases="[register=5.574ms config=1.806ms dataroot=482µs heartbeat=28µs identit
 
 ### 7.3 范围③ 部分完成 —— 分配优化已落，4× 目标未达成
 
-**实测规模曲线**（当前代码，本机，夹具 `load_scaling_bench_fr486_test.go`）：
+**实测规模曲线**（当前代码，本机，夹具 `load_scaling_bench_test.go`）：
 
 | 索引行数 | `Load()` 耗时 | 每 1k 行 |
 |---|---|---|
