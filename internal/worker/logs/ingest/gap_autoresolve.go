@@ -116,22 +116,54 @@ func (m *Manager) resolveGapsLandedByDelivery(source SourceConfig, events []logt
 // 30s 预算进来，但**判定语义一字未改**（仍走同一个 capturePublishedEvidence /
 // applyPublishedEvidence / ResolveGapsCoveredByRanges）。
 func (m *Manager) resolveGapsLandedByDeliveryCtx(ctx context.Context, source SourceConfig, events []logtypes.Event) {
+	m.resolveGapsLandedByDeliveryScope(ctx, source, events)
+}
+
+// resolveGapsLandedByDeliveryScope 是核对的实际实现，**额外返回「仍未确认可见的事件」**。
+//
+// 返回值的历史动机（2026-11-02 真机缺陷修复）：
+// 调用方（异步 worker）此前把「本次核对的事件」整批丢弃，于是同源下次登记时
+// `mergeGapResolveEvents` 把新事件与**旧的待核对集合**做并集 —— 待核对集合随运行时间
+// **线性增长**，永不收敛。60 源 × 15 行/s 长稳实测（`landedCount`）：
+//
+//	06:26:29  361 → 06:27:58  1694 → 06:29:54  3428 → 06:32:46  5420
+//
+// 而一次探测的 selector 被 12KB 上限切成 ~180 条/片 ⇒ 5420 条就是 30+ 片，
+// 6s 预算必然超时 ⇒ 缺口永不消解 ⇒ WAL 不回收 ⇒ 积压丢弃 ⇒ 更多缺口（正反馈）。
+//
+// 正确的收敛语义：**核对过且已确认可见的事件不必再核**（它们的可见性已由
+// `recordVerifiedRuns` 持久化成区间凭据）；只有**本次仍未可见**的才需要留在待办里
+// 重试。这样待办的规模由「真实未决量」定界，而不是由「运行时长」定界。
+func (m *Manager) resolveGapsLandedByDeliveryScope(ctx context.Context, source SourceConfig, events []logtypes.Event) []logtypes.Event {
 	if m == nil || len(events) == 0 {
-		return
+		return nil
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	m.mu.Lock()
 	pipe := m.pipes[key]
 	m.mu.Unlock()
 	if pipe == nil {
-		return
+		return events
 	}
 	// 连续覆盖区间，而不是 [min(Start), max(End)] 凸包：写入面里两个事件之间的任何空洞
 	// 都意味着那段字节**没有**被本次写入覆盖（典型：append 被拒的批次从未进 WAL）。
 	proof := m.capturePublishedEvidence(source, events, ctx)
 	runs := gapRangesOfEvents(proof.events)
+	// 仍未确认可见的事件 = 输入里不在可见集合中的那些。
+	// 查不到就留在待办里（下一次重试），这正是「不撒谎」的落地形态。
+	visibleIDs := make(map[string]struct{}, len(proof.events))
+	for _, ev := range proof.events {
+		visibleIDs[ev.EventID] = struct{}{}
+	}
+	unresolved := make([]logtypes.Event, 0)
+	for _, ev := range events {
+		if _, ok := visibleIDs[ev.EventID]; !ok {
+			unresolved = append(unresolved, ev)
+		}
+	}
 	if len(runs) == 0 {
-		return
+		// 一条都不可见：原样留在待办（不消解、不遗忘）。
+		return unresolved
 	}
 	// 先登记区间级凭据（与是否存在缺口无关）：WAL 条目被回收后，这是「已发布投影证据」出口
 	// 唯一成立的区间级凭据，缺了它该出口就只能在末端水位上空转（见 autoResolveGapsFromPublished）。
@@ -150,7 +182,8 @@ func (m *Manager) resolveGapsLandedByDeliveryCtx(ctx context.Context, source Sou
 	if err != nil {
 		slog.Warn("投递成功后自动消解缺口失败（下轮重试）",
 			"logSourceID", source.LogSourceID, "error", err)
-		return
+		// 消解失败：**全部**留在待办里重试（不丢任何一条）。
+		return unresolved
 	}
 	if resolved > 0 {
 		slog.Info("投递成功已确认覆盖，自动消解缺口（无需人工介入）",
@@ -158,6 +191,7 @@ func (m *Manager) resolveGapsLandedByDeliveryCtx(ctx context.Context, source Sou
 			"ranges", len(runs),
 			"unresolvedRemaining", pipe.Ledger().UnresolvedGapCount(pipe.Key()))
 	}
+	return unresolved
 }
 
 // selfHealPausedSource 对「已暂停或仍持有未解决缺口」的源执行一次限频自愈，报告账本是否被改变。

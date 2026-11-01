@@ -115,19 +115,42 @@ const gapResolveIdleTick = time.Second
 
 // executeGapResolve 执行一次异步核对。
 //
-// **关键**：这里调用的是**一字未改**的 `resolveGapsLandedByDelivery`，
-// 所以「区间必须落在某一段逐字段校验通过的写入区间内」这个判定语义完全不变。
-// 异步化只改变了「何时调」。
+// **关键**：这里调用的是**判定语义一字未改**的 `resolveGapsLandedByDeliveryScope`，
+// 所以「区间必须落在某一段逐字段校验通过的写入区间内」完全不变。
+// 异步化只改变了「何时调」；返回值只改变了「下次还要不要重核这批事件」。
 func (m *Manager) executeGapResolve(parent context.Context, req *gapResolveRequest) {
 	s := m.gapResolves
+	// stat 记录本次核对的结果，供 defer 决定「把什么留在待办里」。
+	var unresolved []logtypes.Event
 	defer func() {
-		// 无论成败都释放单飞位，并检查运行期间是否有新事件被合并进来。
 		s.mu.Lock()
+		// 把**本次仍未确认可见**的事件留在待办里重试（而不是整批丢弃）。
+		//
+		// 为什么必须这样（2026-11-02 真机缺陷修复）：此前这里把整批事件用完就丢，
+		// 于是同源下次登记时 `mergeGapResolveEvents` 把新事件与旧待办做并集 ——
+		// 待办规模随运行时间**线性增长**（60 源实测 361 → 5420），
+		// 一次探测因此被切成 30+ 片，任何预算都超时 ⇒ 缺口永不消解（正反馈）。
+		//
+		// 改成「只留未消解的」后，待办规模由**真实未决量**定界，不再随时长增长：
+		// 已确认可见的事件由 `recordVerifiedRuns` 持久化成区间凭据，不需要再核。
 		var requeue *gapResolveRequest
 		if pending := s.pending[req.key]; pending != nil {
-			// 运行期间登记的新事件：要再跑一轮（否则这段增量就丢了）。
-			requeue = pending
+			// 运行期间登记的新事件：与本次未消解的合并（去重）。
+			requeue = &gapResolveRequest{
+				key:    req.key,
+				source: req.source,
+				events: mergeGapResolveEvents(unresolved, pending.events),
+				due:    pending.due,
+			}
 			delete(s.pending, req.key)
+		} else if len(unresolved) > 0 {
+			// 没有新登记，但本次仍有未确认可见的事件 ⇒ 退避后重试。
+			requeue = &gapResolveRequest{
+				key:    req.key,
+				source: req.source,
+				events: unresolved,
+				due:    time.Now().Add(gapResolveRetryBackoff),
+			}
 		}
 		s.doneLocked(req.key, requeue)
 		s.mu.Unlock()
@@ -137,6 +160,6 @@ func (m *Manager) executeGapResolve(parent context.Context, req *gapResolveReque
 	ctx, cancel := context.WithTimeout(parent, gapResolveBudget)
 	defer cancel()
 
-	m.resolveGapsLandedByDeliveryCtx(ctx, req.source, req.events)
+	unresolved = m.resolveGapsLandedByDeliveryScope(ctx, req.source, req.events)
 	s.done.Add(1)
 }
