@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -226,8 +225,3 @@ func TestMCPToolRisk_OnlyKnownValues(t *testing.T) {
 	}
 }
 
-func TestRecoverInFlight_Placeholder(t *testing.T) {
-	// 占位：真实回收逻辑需要 DB，已在 assistant_tool_exec.go 的
-	// RecoverInFlightReceipts 中实现，由 router 层用例覆盖。
-	_ = context.Background()
-}
