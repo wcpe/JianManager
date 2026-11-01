@@ -249,8 +249,24 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 		}
 		if !ok {
 			// 本批未能凑齐 ⇒ 再逐条确认本批内哪些可见（批内通常很小，成本可控）。
-			for _, ev := range events[start:end] {
-				one, _, oneErr := m.verifyProjectionQuery(ctx, client, source, generations[0],
+			//
+			// 为何逐条回退必须旁路限流（2026-11-02 修）：它是**批次失败后的后续诊断**，
+			// 不是新增负载。若每条都重进 verifyLimiter，则
+			// `512 条 × 1/30QPS = 17.1s ≫ 3s 硬超时` ⇒ 必然超时 ⇒ 本批 0 条可见
+			// ⇒ 缺口 0 条消解。本机实测 91% 的验证查询是 events=1 的逐条回退，
+			// 即回退已从“异常兑底”退化为“稳态主形态”。
+			// 详见 verify_bypass.go 的完整算术与生产后果。
+			//
+			// 旁路只消除限流等待；回退本身仍是 N 次 HTTP 往返。若 ctx 剩余时间
+			// 不够跑完，宁可**本批零结论**也不要跑一半：半途超时会让已确认的
+			// 那几条被错当成“整批均可见”，反而造假。
+			oneCtx := withVerifyLimiterBypass(ctx)
+			chunk := events[start:end]
+			if !enoughBudgetForPerEventFallback(ctx, len(chunk)) {
+				return nil, context.DeadlineExceeded
+			}
+			for _, ev := range chunk {
+				one, _, oneErr := m.verifyProjectionQuery(oneCtx, client, source, generations[0],
 					[]logtypes.Event{ev}, nil, generations)
 				if oneErr != nil {
 					return nil, oneErr
