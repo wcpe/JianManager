@@ -115,10 +115,18 @@ func TestDeliveryFailureGapsAutoResolveAfterDeliveryRecovers(t *testing.T) {
 	require.Greater(t, fixture.writeCount(), writesBefore, "投递恢复后必须真正写入 VL")
 
 	// 阶段三：断言缺口自动清零（且留有消解依据，不是被删除）。
+	//
+	// 2026-11-02 异步化：缺口消解已从「投递路径同步执行」改为「登记后由后台 worker 执行」
+	// （见 gap_resolve_async.go）。因此这里不能再假设 pollOnce 返回即已消解——
+	// 必须等后台 worker 真正跑完。**断言本身一条没放宽**：仍要求缺口必须清零、
+	// 仍要求消解依据可审计；只是从"立即"改成"在合理时间内"。
+	require.Eventually(t, func() bool {
+		e := pipe.Ledger().Get(pipe.Key())
+		return e != nil && ledger.UnresolvedGapCountOf(e) == 0
+	}, 10*time.Second, 20*time.Millisecond,
+		"投递恢复后缺口必须自动消解（异步 worker 驱动），不得再等人工")
 	entry = pipe.Ledger().Get(pipe.Key())
 	require.NotNil(t, entry)
-	require.Zero(t, ledger.UnresolvedGapCountOf(entry),
-		"投递恢复后缺口必须自动消解，不得再等人工")
 	require.NotEmpty(t, entry.Gaps)
 	require.True(t, entry.Gaps[0].Resolved)
 	require.NotEmpty(t, entry.Gaps[0].Resolution, "消解依据必须可审计")

@@ -105,6 +105,17 @@ func gapRangesOfEvents(events []logtypes.Event) []ledger.PositionRange {
 //
 // 只做 best-effort：消解失败不影响投递结果本身（投递成功已成立，缺口下轮再试）。
 func (m *Manager) resolveGapsLandedByDelivery(source SourceConfig, events []logtypes.Event) {
+	m.resolveGapsLandedByDeliveryCtx(context.Background(), source, events)
+}
+
+// resolveGapsLandedByDeliveryCtx 与 resolveGapsLandedByDelivery 完全同源，但允许传入 ctx
+// 以使用**独立的超时预算**（见 gap_resolve_async.go 的 gapResolveBudget）。
+//
+// 为何需要：核对 VL 可见性的超时原本是 `verifyBackoffMax*4+1s = 3s`，那是为退避探测设计的；
+// 切片后（12KB selector 上限 ⇒ 180 条/片）三次串行往返会把它吃完。异步 worker 带自己的
+// 30s 预算进来，但**判定语义一字未改**（仍走同一个 capturePublishedEvidence /
+// applyPublishedEvidence / ResolveGapsCoveredByRanges）。
+func (m *Manager) resolveGapsLandedByDeliveryCtx(ctx context.Context, source SourceConfig, events []logtypes.Event) {
 	if m == nil || len(events) == 0 {
 		return
 	}
@@ -117,7 +128,7 @@ func (m *Manager) resolveGapsLandedByDelivery(source SourceConfig, events []logt
 	}
 	// 连续覆盖区间，而不是 [min(Start), max(End)] 凸包：写入面里两个事件之间的任何空洞
 	// 都意味着那段字节**没有**被本次写入覆盖（典型：append 被拒的批次从未进 WAL）。
-	proof := m.capturePublishedEvidence(source, events)
+	proof := m.capturePublishedEvidence(source, events, ctx)
 	runs := gapRangesOfEvents(proof.events)
 	if len(runs) == 0 {
 		return

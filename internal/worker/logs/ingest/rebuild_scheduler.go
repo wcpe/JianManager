@@ -1174,7 +1174,7 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		out.Err = werr
 		return out
 	}
-	m.resolveGapsLandedByDelivery(req.source, writeEvents)
+	m.scheduleGapResolve(req.source, writeEvents)
 	// **护栏判据必须对「权威全量」求，不能只看 `req.days`**（2026-10-21 复审发现的漏洞）：
 	// `beyondWindow` 是从 `req.days` 推的，而对账**早已把超窗口天剔出缺失面**
 	// ⇒ 一个「有超窗口天(从未发布) + 有窗口内天(真缺失)」的源，`req.days` 里只剩窗口内天
