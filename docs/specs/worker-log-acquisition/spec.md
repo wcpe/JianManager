@@ -200,14 +200,51 @@ FileTailer、STDIO_PRIMARY ~~和 ArchiveImporter~~ 统一写入事件管道；�
      **逐字段校验覆盖区间凭据**（`persistedSource.VerifiedRuns`：每次成功投递把校验通过的区间
      合并持久化）消解，覆盖「WAL 条目已被回收、无法再重投」的尾部。该路径较贵（按天聚合事件区间），
      按源限频（默认 10s，`Manager.SetSelfHealInterval` 可注入）。
-  **为什么不能用凸包/末端水位**（2026-10-02 复审 P1-1/P1-2）：`[min(Record.Start), max(Record.End)]`
-  凸包与「缺口末端 ≤ closed」都会把**从未落库**的区间算成已覆盖——`APPEND_REJECTED`（append 被拒，
-  该批从未进 WAL）、容量门禁暂停、`ARCHIVE_*` / `ROTATED_SEGMENT_NOT_READY` 之类的合成缺口
-  （位置为 `(0,0)`）都可能因此被标成「已确认落库」，空洞被永久掩盖并放行 `ResumeAcquire`；
-  `replay=true` 时证据被扩为全量 canonical 集，凸包覆盖整段历史，风险最大。
-  **允许名单**（事件确实在 WAL/段里、本次会被重写并逐字段校验）：`DELIVER_ERROR`、
-  `DELIVER_ERROR_WORKER_SOURCE`、`WAL_COMMIT_FAILED`；名单之外一律不自动消解（含
-  `STDIO_RAW_WRITE_FAILED` 与一切「从未进 WAL」的原因），交重读补投或人工核验。
+   **为什么不能用凸包/末端水位**（2026-10-02 复审 P1-1/P1-2）：`[min(Record.Start), max(Record.End)]`
+   凸包与「缺口末端 ≤ closed」都会把**从未落库**的区间算成已覆盖——`APPEND_REJECTED`（append 被拒，
+   该批从未进 WAL）、容量门禁暂停、`ARCHIVE_*` / `ROTATED_SEGMENT_NOT_READY` 之类的合成缺口
+   （位置为 `(0,0)`）都可能因此被标成「已确认落库」，空洞被永久掩盖并放行 `ResumeAcquire`；
+   `replay=true` 时证据被扩为全量 canonical 集，凸包覆盖整段历史，风险最大。
+
+   **证据核对必须容忍 VL 的写后可见延迟**（**2026-11-02 显式评审修订**）：
+   上面两条出口在取得「逐字段可见性证据」时，都向 VL 发起查询。而 VL 的**写后可见延迟实测恒为
+   1.028~1.057s**（与 `_time` 是当前时刻还是 1 小时前无关，v1.52.0 本机实测）。
+
+   事故形态：投递成功路径上的「投递成功覆盖」核对（`landedVisibleInVL`）此前**只查一次**就定论，
+   于是每一次核对都落在 1 秒可见延迟窗口内查空 →
+
+   ```
+   05:34:52 投影写入结束 events=6 verified=6 status=200   ← 写成功
+   05:34:52 投影校验查询   window=[21:34:50Z, 21:34:53Z]
+   05:34:52 WARN 本地段有、VL 查不到 missingCount=6 visibleCount=0   ← 查空
+   事后直查同一 event_id：查到 9 条（跨 9 个代次）
+   ```
+
+   同一 event 被反复报缺失 9 次、跨 31 秒；缺口永不消解 ⇒ WAL 不回收 ⇒ 积压丢最旧 ⇒
+   产生更多缺口（正反馈）。FR-498 长稳第 1 轮实测 25560 次该类误判。
+
+   **修订后的规则（三条同时成立，缺一不可）**：
+   1. **退避重试**：可见性核对按 `nextVerifyBackoff` 退避重试至预算耗尽
+      （`gapVisibilityBudget`，6s），**不复用** `verifyBackoffMax*4+1s`（3s，那是给退避探测设计的
+      固定预算）。全部可见立即返回 ⇒ 热路径零额外延迟。判据方向不变：查不到的仍然不作证据。
+   2. **异步化**：核对**不在投递主链上同步执行**，由独立调度器按源去重合并、单飞、有界、可关停，
+      使用独立预算（30s）。语义边界不变：只挪动「何时查」，不改变「怎么判」。
+   3. **切片并发**：12KB selector 上限把大批切成 ~180 条/片（生产实测一次核对待查 3778 条 ⇒ 21 片）。
+      切片是同一批待查事件、彼此独立，**必须并发查询**（复用 `verifyChunkConcurrency`，默认 4），
+      否则单次核对的串行往返会吃掉任何预算（实测并发前 340 次 `context deadline exceeded`，并发后 5 次）。
+
+   验收：`ingest.TestLandingVisibilityRetriesUntilVisible`（延迟窗口内必须重试到可见）、
+   `ingest.TestLandingVisibilityNeverLiesWhenTrulyMissing`（真的没有时不得谎报）、
+   `ingest.TestLandingVisibilityReturnsImmediatelyWhenAlreadyVisible`（已可见路径零额外延迟）、
+   `ingest.TestVisibleEventsInVLQueriesSlicesConcurrently`（多片必须并发）、
+   `ingest.TestGapResolveBudgetIsIndependentOfVerifyBackoff`（异步预算不得退回 3s）。
+
+   **允许名单**（事件确实在 WAL/段里、本次会被重写并逐字段校验）：`DELIVER_ERROR`、
+   `DELIVER_ERROR_WORKER_SOURCE`、`WAL_COMMIT_FAILED`、`ROTATED_SEGMENT_NOT_READY`
+   （**2026-11-02** 补入最后一项：它恒为 `[0,0]` 零宽记录，本就不覆盖任何字节，不存在凸包掩盖风险；
+   而它此前在 `gapReasonsHealableOnReResume` 里却不在本名单 ⇒ 源永久卡死，生产实测 86 源受影响）。
+   名单之外一律不自动消解（含
+   `STDIO_RAW_WRITE_FAILED` 与一切「从未进 WAL」的原因），交重读补投或人工核验。
   人工接口 `ResolveGapsThrough` / `ResolveCoveredGapsForSource` 语义不变（仍按末端消解，
   可显式确认放弃不可证明的原因）。永久放弃凭据按实际连续区间并集分别记录，只合并相接/重叠项，
   不以首尾凸包覆盖健康位置；实名操作人、理由、时间、Through 与最近 64 条上限及持久化语义保持。
