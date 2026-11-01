@@ -8898,22 +8898,42 @@ func (m *Manager) verifyProjectionQueryInWindowCore(ctx context.Context, client 
 		}
 		if end < len(events) {
 			complete := true
+			// 子片可见集合必须合并后交出（2026-11-02 定论）。
+			//
+			// 事故形态（两处叠加）：
+			//   ① 第 8906 行原先调的是**薄包装** verifyProjectionQueryInWindow，
+			//      子片算出的集合被它内部 `ok, _, stats, err := ...Core(...)` 丢弃；
+			//   ② 循环结束只能 `return complete, nil, ...`，集合恒为 nil。
+			// 调用方拿到 nil ⇒ visibleSet[id] 恒 false ⇒ 整批全判不可见
+			// ⇒ 缺口永不能消解（实测「缺口已消解」恒 0）。
+			//
+			// 铁证：从被判「VL 查不到」的样本取 eventID 直接查 VL，能查到且代次/时间窗
+			// 全对得上；且 missingCount p50=64 与批 events p50=65 近乎 1:1
+			// —— 正是「整批一个都没命中」的特征。
+			//
+			// 为何这是热路径：当累计 selector 超过 scopedProjectionQueryMaxBytes（12KB）
+			// 就必分片。固定前缀（代次列表 + log_source_id + source_generation +
+			// projectionVerifyFields）本身已占数百字节，60 源常态批就会撞上。
+			merged := make(map[string]bool, len(events))
 			for start := 0; start < len(events); {
 				end, err = scopedProjectionChunkEnd(source, generationScopes[0], events, start)
 				if err != nil {
 					return false, nil, stats, err
 				}
-				ok, part, queryErr := m.verifyProjectionQueryInWindow(ctx, client, source, generation, events[start:end], allowed, window, generationScopes...)
+				ok, partSeen, part, queryErr := m.verifyProjectionQueryInWindowCore(ctx, client, source, generation, events[start:end], allowed, window, generationScopes...)
 				stats.Queries += part.Queries
 				stats.Rows += part.Rows
 				stats.Bytes += part.Bytes
 				if queryErr != nil {
 					return false, nil, stats, queryErr
 				}
+				for id := range partSeen {
+					merged[id] = true
+				}
 				complete = complete && ok
 				start = end
 			}
-			return complete, nil, stats, nil
+			return complete, merged, stats, nil
 		}
 	}
 	generationSelector := "projection_generation:=" + strconv.Quote(generation)
