@@ -112,3 +112,69 @@ go vet -p 1 ./internal/controlplane/logcoord ./internal/controlplane/router
 
 **范围说明（本节为事后追认）**：该修正属 FR-502/503/504 之外的 CP 侧语义修订，
 由用户明确要求后实施；在此登记以避免后续追溯时误认为它属于上述任一 FR 的既定范围。
+
+---
+
+## 2026-11-01 双节点真机验收（首个多节点实例）
+
+> 本节补上此前一直缺的那一环：**FR-480 的核心能力（跨节点联邦）第一次用两个真节点验证**。
+> 此前所有验收都是单节点（只有一个 Worker），「合并/排序/跨节点覆盖」从未被真正执行过。
+
+### 环境
+
+```
+node-main   生产 Worker，PID 1724910，WS 19102，19 个 MC 实例
+node-dev2   临时第二节点，WS 31402，VL 31461，PUSH_ONLY 源 node:2/push（FR-511 /insert/jsonline）
+CP          生产 CP，PID 1448954，端口 19000，未重启
+```
+
+第二节点建在 `/home/wxys233/jm/dev/worker2/`，与生产端口、数据根完全隔离。
+验收完成后进程已停止，节点记录已**软删**（`DELETE /api/v1/nodes/2`，`/nodes/archived` 可还原）。
+
+### 逐条结论
+
+| # | 条款 | 结论 | 证据要点 |
+|---|---|---|---|
+| 1 | 全部授权目标联邦扇出 | **通过** | `n_targets=21`，两个 `worker_id` 都参与 |
+| 2 | Search 稳定复合排序 K-way merge | **通过** | 15 条结果 14 相邻对，按冻结键**0 违规**；同 `event_time` 组按 `record_start DESC`（135→0） |
+| 3 | 覆盖区分 success/offline/not_ready 并随各端点返回 | **通过** | `node:2 state=success, closed_visible_seq=215` |
+| 4 | 离线目标如实降级 | **通过** | 停 node2 后 `complete: true→false`、`exhausted: true→false`、`state=not_ready` + `dial_failed` |
+| 5 | 缺口不交成功附件 | **通过（验得最干净）** | `export_incomplete=true, artifact=null`，7 条 `incomplete_reasons`，无 NDJSON 附件 |
+| 6 | Export 同一 view 与逻辑集合 | **部分通过** | 单节点 `range=page` 交付 10 行 NDJSON（`Content-Disposition: attachment`）；全平台 `range=all` 因下列既有状态无法交付 |
+| 7 | Stats 二次聚合 + 顶层不被单目标成功覆盖 | 结构性通过 | 聚合值无法验（见下） |
+| 8 | Facets 精确合并 / stats_quality 派生 | 同上 | 同上 |
+| 9 | `max_bytes` 整请求预算、零份额不拨号 | 未验 | 需注入预算，本轮范围外 |
+| 10 | 权限覆盖全部端点、越权无侧信道 | 未验 | 本轮只用平台管理员单主体 |
+| 11 | 性能/RSS/磁盘门限 | 未验 | 同期在跑 FR-498 长稳占用 CPU，不能作性能证据 |
+
+### 关于「13 个目标 RANGE_UNAVAILABLE」的澄清（重要，结论与初判不同）
+
+全平台 `export?range=all` / `stats` 上确实有 13 个目标 `not_ready / RANGE_UNAVAILABLE`：
+`node:1, inst:319, 321, 323, 325, 326, 329–335`。
+
+初判曾归因于「生产 VL hot 进程未运行」，**该归因不成立**，复核结果：
+
+- 生产 VL **健康**：`/health` 200，v1.52.0，`-retentionPeriod=180d`，`-search.maxQueryTimeRange=4344h`
+- 生产 `worker.log` 近期**零条**「归因 RANGE_UNAVAILABLE」（该兜底分支根本没走到）
+- 关键对照：`inst:318`（success，`closed_visible_seq` 有值）vs `inst:319`（失败，`closed_visible_seq=None`）
+  ⇒ **Catalog 里没有这些实例的可查分区**
+- 单目标查 `inst:319` 返回 `target_no_data`，不是 `RANGE_UNAVAILABLE`
+
+**结论：这些实例从未产生过日志，是真实的无数据状态，不是缺陷。**
+它们在生产上从未被投递过事件（与此前对 `inst:319/320` 「前面是大段从未投递的历史区」的记录一致）。
+
+因此全平台 `export range=all` 无法交付附件，**根源是这些目标确实没数据**，
+而不是校验逻辑或 VL 就绪态有问题。若要让它交付，需要这些实例真正产生日志。
+
+### 一个已登记的口径差异（本轮未改）
+
+同一目标同一窗口，全量查询判 `success`、单目标查询判 `not_ready/target_no_data`。
+分工在 `internal/controlplane/logcoord/targets.go`（响应非空但缺该目标 ⇒ success）与
+`internal/worker/logs/query/planner.go` 的 `coverEmptyAuthorizedTargets`（单目标要求有可查记录）。
+按现有文档属设计如此，此处登记以备后续追溯，**本轮未修改任何代码**。
+
+### 证据位置
+
+`/home/wxys233/jm/dev/worker2/evidence/`：`online_*` / `offline_*` 对照 JSON、
+`sort_check.txt`、`per_target_stats.csv`、`production_blocker.md`、`raw/` 原始响应。
+第二节点完整复现步骤见同目录 `README.md`。
