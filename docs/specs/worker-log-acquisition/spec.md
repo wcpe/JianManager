@@ -229,15 +229,31 @@ FileTailer、STDIO_PRIMARY ~~和 ArchiveImporter~~ 统一写入事件管道；�
       固定预算）。全部可见立即返回 ⇒ 热路径零额外延迟。判据方向不变：查不到的仍然不作证据。
    2. **异步化**：核对**不在投递主链上同步执行**，由独立调度器按源去重合并、单飞、有界、可关停，
       使用独立预算（30s）。语义边界不变：只挪动「何时查」，不改变「怎么判」。
+      **待办只保留「仍未确认可见」的事件**（**2026-11-02 补充，这条才是根因所在**）：
+      核对完成后，已确认可见的事件**必须移出待办**（它们的可见性已由
+      `persistedSource.VerifiedRuns` 持久化成区间凭据，不需要再核）；只有本次仍不可见的
+      才留在待办里退避重试。
+      若不这样做，同源后续登记会用并集把旧待办重新并入 —— 待办规模由**运行时长**定界
+      而不是由**真实未决量**定界。60 源 × 15 行/s 实测 `landedCount`：
+      `361 → 1694 → 3428 → 5420 → 6452`（线性增长、永不收敛）。
+      一次探测因此被切成 30+ 片，任何预算（3s/6s/30s）都必然超时 ⇒ 缺口永不消解
+      ⇒ WAL 不回收 ⇒ 积压丢弃 ⇒ 更多缺口。
+      语义红线：**一条都不可见时不得返回空**（那是静默抹平欠账），必须原样全留。
    3. **切片并发**：12KB selector 上限把大批切成 ~180 条/片（生产实测一次核对待查 3778 条 ⇒ 21 片）。
       切片是同一批待查事件、彼此独立，**必须并发查询**（复用 `verifyChunkConcurrency`，默认 4），
       否则单次核对的串行往返会吃掉任何预算（实测并发前 340 次 `context deadline exceeded`，并发后 5 次）。
+      同理，**跨天探测也必须并发**：`probes=1` 就超时的现场形态证明首次探测本身
+      就能吃满预算（多天累积 × 单片实测 0.8~1.6s）。
 
    验收：`ingest.TestLandingVisibilityRetriesUntilVisible`（延迟窗口内必须重试到可见）、
    `ingest.TestLandingVisibilityNeverLiesWhenTrulyMissing`（真的没有时不得谎报）、
    `ingest.TestLandingVisibilityReturnsImmediatelyWhenAlreadyVisible`（已可见路径零额外延迟）、
    `ingest.TestVisibleEventsInVLQueriesSlicesConcurrently`（多片必须并发）、
-   `ingest.TestGapResolveBudgetIsIndependentOfVerifyBackoff`（异步预算不得退回 3s）。
+   `ingest.TestLandingVisibilityProbesDaysConcurrently`（跨天必须并发）、
+   `ingest.TestGapResolveBudgetIsIndependentOfVerifyBackoff`（异步预算不得退回 3s）、
+   `ingest.TestGapResolveScopeDoesNotGrowWhenEverythingVisible`（全可见时待办必须清空）、
+   `ingest.TestGapResolveScopeKeepsOnlyInvisible`（只留不可见的）、
+   `ingest.TestGapResolveScopeKeepsAllWhenNoneVisible`（一条都不可见时不许遗忘）。
 
    **允许名单**（事件确实在 WAL/段里、本次会被重写并逐字段校验）：`DELIVER_ERROR`、
    `DELIVER_ERROR_WORKER_SOURCE`、`WAL_COMMIT_FAILED`、`ROTATED_SEGMENT_NOT_READY`
