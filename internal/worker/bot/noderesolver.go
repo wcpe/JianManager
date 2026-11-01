@@ -30,7 +30,25 @@ const (
 
 const nodeProbeTimeout = 5 * time.Second
 
+// MinimumNodeVersion 受支持的 Node.js 最低版本。
+//
+// 导出是为了让测试守卫与运行时用**同一个**判据：测试里另写一份 "22.13.0"
+// 会在升级下限时忘了同步，于是守卫放过低版本、包变红。
+// 数值不在这里重复写：由 minimumBotNodeVersion 单一来源生成，
+// 两处一旦手写就会漂移。
+const MinimumNodeVersion = "22.13.0"
+
 var minimumBotNodeVersion = nodeVersion{major: 22, minor: 13, patch: 0}
+
+// 编译期断言：常量文字必须与结构体一致，改一处不改另一处会直接编译失败。
+var _ = [1]struct{}{}[boolToInt0(MinimumNodeVersion == minimumBotNodeVersion.String())]
+
+func boolToInt0(ok bool) int {
+	if ok {
+		return 0
+	}
+	return 1
+}
 
 type nodeVersion struct {
 	major int
