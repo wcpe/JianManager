@@ -257,8 +257,39 @@ func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfi
 		generationsByDay[day] = gens
 		return gens, len(gens) > 0
 	}
-	visible := make([]logtypes.Event, 0, 16)
-	for _, day := range order {
+	// **跨天也要并发**（2026-11-02 第二处修复）。
+	//
+	// 现场形态（60 源 × 15 行/s 长稳 r1 实测）：
+	//   缺口核对报 `probes=1 error="context deadline exceeded"` —— **首次探测就把预算耗光**。
+	//   原因：一次探测要按天串行遍历 `order` 里的**每一天**（多天累积时会有好几天），
+	//   每天内再按 12KB selector 切成 ~180 条/片。单片的真实耗时实测 0.8~1.6s
+	//   （`投影校验慢查询 elapsedMs=1578` 是生产同规格读数）⇒ 4 天 × 2 片 ÷ 并发 4
+	//   在 6s 预算内就是紧平衡，稍有抖动即超时。
+	//
+	// 为什么跨天并发是安全的：各天的查询用**各自的** `daySource`（含各自的 UTCDay 与白名单）
+	// 与**各自的** client 路由，彼此没有共享可变状态；结果按 order 顺序合并即可。
+	//
+	// 并发度仍复用 `verifyChunkConcurrency`（默认 4），与天内的切片并发同一旋钮。
+	type dayResult struct {
+		idx     int
+		visible []logtypes.Event
+	}
+	dayResults := make([]dayResult, len(order))
+	dayConc := m.verifyChunkConcurrency
+	if dayConc <= 0 {
+		dayConc = defaultVerifyChunkConcurrency
+	}
+	if dayConc > len(order) {
+		dayConc = len(order)
+	}
+	if dayConc < 1 {
+		dayConc = 1
+	}
+	daySem := make(chan struct{}, dayConc)
+	var dayWG sync.WaitGroup
+	var dayMu sync.Mutex
+	var dayErr error
+	for idx, day := range order {
 		gens, ok := generationsFor(day)
 		if !ok {
 			// 该天没有已发布投影 ⇒ 查询侧本来也查不到它，不作证据。
@@ -283,11 +314,39 @@ func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfi
 				candidates = append(candidates, event)
 			}
 		}
-		batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, gens, candidates)
-		if qerr != nil {
-			return nil, qerr
-		}
-		visible = append(visible, batchVisible...)
+		dayWG.Add(1)
+		go func(idx int, daySource SourceConfig, client *vlsup.Client, gens []string, candidates []logtypes.Event) {
+			defer dayWG.Done()
+			select {
+			case daySem <- struct{}{}:
+			case <-ctx.Done():
+				dayMu.Lock()
+				if dayErr == nil {
+					dayErr = ctx.Err()
+				}
+				dayMu.Unlock()
+				return
+			}
+			defer func() { <-daySem }()
+			batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, gens, candidates)
+			if qerr != nil {
+				dayMu.Lock()
+				if dayErr == nil {
+					dayErr = qerr
+				}
+				dayMu.Unlock()
+				return
+			}
+			dayResults[idx] = dayResult{idx: idx, visible: batchVisible}
+		}(idx, daySource, client, gens, candidates)
+	}
+	dayWG.Wait()
+	if dayErr != nil {
+		return nil, dayErr
+	}
+	visible := make([]logtypes.Event, 0, 16)
+	for idx := range order {
+		visible = append(visible, dayResults[idx].visible...)
 	}
 	visibleSet := make(map[string]struct{}, len(visible))
 	for _, ev := range visible {

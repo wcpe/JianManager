@@ -304,3 +304,67 @@ func TestVisibleEventsInVLQueriesSlicesConcurrently(t *testing.T) {
 		"多片查询必须并发执行（串行=%v 并发=%v）；串行会让任何超时预算被单次核对吃掉",
 		serialElapsed, elapsed)
 }
+
+// TestLandingVisibilityProbesDaysConcurrently 钉住「跨天也必须并发」（2026-11-02 第二处修复）。
+//
+// 事故形态（60 源 × 15 行/s 长稳 r1 实测）：
+//
+//	WARN 缺口消解前核对 VL 可见性失败 probes=1 error="context deadline exceeded"
+//	WARN 缺口消解前核对 VL 可见性失败 probes=2 error="context deadline exceeded"
+//
+// **probes=1 就超时 ⇒ 首次探测本身把 6s 预算耗光。** 原因是一次探测要按天**串行**
+// 遍历 order 里的每一天，而单片查询实测可达 1.5s（`投影校验慢查询 elapsedMs=1578`）。
+//
+// 判据：让夹具每次查询固定耗时，然后比较「跨 3 天各查一次」的总耗时。
+// 串行 ≈ 3 × delay；并发 ≈ 1 × delay。
+//
+// 转红方式（实测）：把 landedVisibleProbeOnce 的跨天循环改回串行 ⇒ 本用例必红。
+func TestLandingVisibilityProbesDaysConcurrently(t *testing.T) {
+	source, _ := gapVisibility_TestSource(t)
+	const dayA, dayB, dayC = "2026-11-01", "2026-11-02", "2026-11-03"
+	days := []string{dayA, dayB, dayC}
+
+	client, fixture, _ := newReconcileVL(t)
+	journal := catalog.NewMemJournal()
+	cat := catalog.New(journal)
+
+	events := make([]logtypes.Event, 0, len(days))
+	for _, day := range days {
+		one := gapVisibilityEvents(source, day, [][2]uint64{{0, 100}}, "day-"+day)
+		events = append(events, one...)
+		publishGapVisibilityDay(t, cat, source, one, day)
+	}
+
+	const perQueryDelay = 80 * time.Millisecond
+	fixture.mu.Lock()
+	fixture.contentQueryDelay = perQueryDelay
+	for _, ev := range events {
+		// 取该事件所属天（与 eventUTCDay 同口径：优先 EventTimeUTC）。
+		day := ev.EventTimeUTC[:10]
+		fixture.rows = append(fixture.rows, reconcileVLRow{
+			ProjectionGeneration: "projection-1",
+			EventID:              ev.EventID,
+			EventTimeUTC:         ev.EventTimeUTC,
+			LogSourceID:          source.LogSourceID,
+			SourceGeneration:     source.SourceGeneration,
+			RecordEnd:            ev.Record.End,
+			Message:              ev.Message,
+			Level:                ev.Level,
+			Stream:               ev.Stream,
+			CanonicalHash:        ev.CanonicalHash,
+		})
+		_ = day
+	}
+	fixture.mu.Unlock()
+
+	m := &Manager{cat: cat, vl: client, verifyChunkConcurrency: 4}
+
+	started := time.Now()
+	visible := m.landedVisibleInVL(source, events)
+	elapsed := time.Since(started)
+
+	require.Len(t, visible, len(events), "跨天并发合并后必须拿回全部可见事件")
+	// 串行需 3×80=240ms；并发(4) 只需 ~80ms。阈值取 180ms：串行必超，并发余量充足。
+	require.Less(t, elapsed, 180*time.Millisecond,
+		"跨天探测必须并发；串行会让首次探测就吃掉整个预算（实测 %v）", elapsed)
+}
