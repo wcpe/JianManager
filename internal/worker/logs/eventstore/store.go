@@ -157,12 +157,50 @@ func OpenReadOnly(root string) (*Store, error) {
 //
 // 为什么不直接返回空用内存 map：那要重写 segment/manifest 整套，且会丢掉
 // 「按段滚动 + 回收」的内存上界能力——一个源的无界增长仍然要有人管。
+//
+// ## 安全不变式：不同数据根绝不共享同一个段根（2026-11-02）
+//
+// 调用方必须传入**能唯一标识该数据根**的 base，而不是 `filepath.Base(opts.Root)`。
+// 为什么这是个安全边界而不是命名习惯：段根下的段文件会被 `Prune` / 回收前滚 / 启动
+// 时 `recoverPruneJournal(allowWrite=true)` 删除。只需要两个数据根的**末级目录名相同**
+// （例如生产 `--data-dir /home/wxys233/jm/prod/worker/data` 与任意实验件 `.../data`
+// 的 basename 都是 `data`），它们就会落到同一个 `/dev/shm/jianmanager-events/data`
+// ——实验进程的回收会真删生产的事件段。这不是读数污染，是数据删除。
+//
+// 用 `SegmentRootFor(root)` 生成 base（本包提供，含绝对路径哈希）。
 func MemoryRoot(base string) string {
 	const shm = "/dev/shm"
 	if fi, err := os.Stat(shm); err == nil && fi.IsDir() {
 		return filepath.Join(shm, "jianmanager-events", base)
 	}
 	return filepath.Join(os.TempDir(), "jianmanager-events", base)
+}
+
+// SegmentRootFor 把一个**数据根绝对路径**映射成唯一的段根基名。
+//
+// 为什么不能只用 filepath.Base：basename 不唯一。生产与实验件都可叫 `data`，
+// 而段根下的 Prune/回收前滚会删文件——共享段根等于互相删除对方的事件段。
+//
+// 构造：`<basename>-<绝对路径 sha256 前 12 位>`。保留可读的 basename 便于运维辨认
+// （`ls /dev/shm/jianmanager-events/` 一眼能看出是谁），哈希尾缀保证唯一。
+// 不可读路径（Getwd 失败、相对路径无法绝对化）退化为只保留已清洗的 basename，
+// 此时仍优于原实现（至少消灭了「所有同名目录全撞」这个面）。
+func SegmentRootFor(dataRoot string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(dataRoot))
+	base := filepath.Base(cleaned)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "root"
+	}
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		abs = cleaned
+	}
+	// EvalSymlinks 尽力而为：符号链指向同一目录时应得到同一段根。
+	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+		abs = resolved
+	}
+	sum := sha256.Sum256([]byte(abs))
+	return base + "-" + hex.EncodeToString(sum[:])[:12]
 }
 
 func openStore(root string, readOnly bool) (*Store, error) {

@@ -2495,7 +2495,7 @@ func New(opts Options) (*Manager, error) {
 		// 不可裁定冲突的留痕用**独立阈值**（汇总窗比正常收敛长，见 newConflictThrottle）。
 		conflictTraces: newConflictThrottle(),
 		// 临时中转目录放 tmpfs（见 logScratch 字段注释）。
-		logScratch:            eventstore.MemoryRoot("scratch-" + filepath.Base(opts.Root)),
+		logScratch:            eventstore.MemoryRoot("scratch-" + eventstore.SegmentRootFor(opts.Root)),
 		vlWritePermitRoute:    opts.VLWritePermitRoute,
 		resourceBudget:        opts.ResourceBudget,
 		readLimits:            opts.ReadLimits,
@@ -2645,7 +2645,10 @@ func New(opts Options) (*Manager, error) {
 	// eventstore 的职责是「投递前的暂存 + 投递后可回收」，数据本来就短命；
 	// 放到 /dev/shm 后写入不再碰机械盘，而段滚动与回收的内存上界能力全部保留。
 	// 代价：Worker 重启后段没了——与「cursor 不落盘」是同一取舍。
-	store, err := eventstore.Open(eventstore.MemoryRoot(filepath.Base(opts.Root)))
+	// 安全不变式（2026-11-02）：段根必须由**数据根绝对路径**派生，不能用 filepath.Base。
+	// basename 不唯一——生产 `.../prod/worker/data` 与实验件 `.../fr498/data` 都是 `data`，
+	// 共用段根时实验进程的 Prune/回收前滚会真删生产的事件段。见 eventstore.SegmentRootFor。
+	store, err := eventstore.Open(eventstore.MemoryRoot(eventstore.SegmentRootFor(opts.Root)))
 	if err != nil {
 		return nil, err
 	}
