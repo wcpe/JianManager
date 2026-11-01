@@ -8856,32 +8856,64 @@ func (m *Manager) verifyProjectionQuery(ctx context.Context, client *vlsup.Clien
 	return m.verifyProjectionQueryInWindow(ctx, client, source, generation, events, allowed, window, generationScopes...)
 }
 
+// verifyProjectionQueryWithVisible 与 verifyProjectionQuery 同源，但**交回可见事件 ID 集合**。
+//
+// 用途：调用方需要知道「这一批里哪些在 VL 可见」，而不是「是否全齐」。
+// 不交回集合时，调用方只能在批不齐时逐条重查——真机实测这使 98.3% 的
+// 验证查询退化为 events=1，且在 3s 硬超时下必然超时。
+func (m *Manager) verifyProjectionQueryWithVisible(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event, generationScopes ...[]string) (bool, map[string]bool, verifyQueryStats, error) {
+	window, err := projectionQueryWindowFor(source, events)
+	if err != nil {
+		return false, nil, verifyQueryStats{}, err
+	}
+	return m.verifyProjectionQueryInWindowCore(ctx, client, source, generation, events, allowed, window, generationScopes...)
+}
+
 // verifyProjectionQueryInWindow 的全部字节子片共享原簇窗、ctx和许可器，不能靠缩窗弱化重复证据。
+// verifyProjectionQueryInWindow 是 verifyProjectionQueryInWindowCore 的薄包装：
+// 调用方不需要可见集合时用它，签名与历史保持一致。
 func (m *Manager) verifyProjectionQueryInWindow(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event, window projectionVerifyWindow, generationScopes ...[]string) (bool, verifyQueryStats, error) {
+	ok, _, stats, err := m.verifyProjectionQueryInWindowCore(ctx, client, source, generation, events, allowed, window, generationScopes...)
+	return ok, stats, err
+}
+
+// verifyProjectionQueryInWindowCore 执行一次校验查询，并**同时交回可见事件 ID 集合**。
+//
+// ## 为何交回集合（2026-11-02，真机实测 98.3% 的验证查询是 events=1）
+//
+// 原先本函数只 `return len(seen) == len(want)`——内部算出的 `seen`
+// （VL 返回的每一条可见事件）**被丢弃**。于是调用方 visibleEventsInVL
+// 在批不齐时拿不到“哪些可见”，只能把整批逐个重查一遍：
+//
+//	批次平均 67 条 ⇒ 本应 1 次查询，实际花 67 次
+//	实测：总查询 290,727，其中 events=1 占 285,896（98.3%）
+//
+// 交回集合后，同一批 1 次查询即可得到完整答案。
+func (m *Manager) verifyProjectionQueryInWindowCore(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, allowed map[string]logtypes.Event, window projectionVerifyWindow, generationScopes ...[]string) (bool, map[string]bool, verifyQueryStats, error) {
 	var stats verifyQueryStats
 	if len(generationScopes) > 0 && len(events) > 0 {
 		end, err := scopedProjectionChunkEnd(source, generationScopes[0], events, 0)
 		if err != nil {
-			return false, stats, err
+			return false, nil, stats, err
 		}
 		if end < len(events) {
 			complete := true
 			for start := 0; start < len(events); {
 				end, err = scopedProjectionChunkEnd(source, generationScopes[0], events, start)
 				if err != nil {
-					return false, stats, err
+					return false, nil, stats, err
 				}
 				ok, part, queryErr := m.verifyProjectionQueryInWindow(ctx, client, source, generation, events[start:end], allowed, window, generationScopes...)
 				stats.Queries += part.Queries
 				stats.Rows += part.Rows
 				stats.Bytes += part.Bytes
 				if queryErr != nil {
-					return false, stats, queryErr
+					return false, nil, stats, queryErr
 				}
 				complete = complete && ok
 				start = end
 			}
-			return complete, stats, nil
+			return complete, nil, stats, nil
 		}
 	}
 	generationSelector := "projection_generation:=" + strconv.Quote(generation)
@@ -8901,12 +8933,12 @@ func (m *Manager) verifyProjectionQueryInWindow(ctx context.Context, client *vls
 		// 全局天花板（速率 + 在飞）：**正常路径零等待**（桶容量 = 速率 ⇒ 少量查询一次性放行 ✓），
 		// 只有风暴被削峰 ✓。采集侧的读/写不走这里 ⇒ 其算力与 VL 容量天然优先 ✓。
 		if err := m.verifyLimiter.Acquire(ctx); err != nil {
-			return false, stats, err
+			return false, nil, stats, err
 		}
 		defer m.verifyLimiter.Release()
 	}
 	if client == nil {
-		return false, stats, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
+		return false, nil, stats, fmt.Errorf("ingest: VictoriaLogs verification client is unavailable")
 	}
 	want := make(map[string]logtypes.Event, len(events))
 	for _, event := range events {
@@ -8949,15 +8981,15 @@ func (m *Manager) verifyProjectionQueryInWindow(ctx context.Context, client *vls
 	if len(generationScopes) > 0 {
 		params.Set("query", scopedProjectionQuery(source, generationScopes[0], events))
 		if len(params.Get("query")) > scopedProjectionQueryMaxBytes {
-			return false, stats, fmt.Errorf("ingest: 逐字段证据query超出字节安全界")
+			return false, nil, stats, fmt.Errorf("ingest: 逐字段证据query超出字节安全界")
 		}
 	}
 	slog.Info("投影校验查询", "generation", generation, "events", len(events), "queryBytes", len(params.Get("query")), "start", params.Get("start"), "end", params.Get("end"))
 	if err := ctx.Err(); err != nil {
-		return false, stats, err
+		return false, nil, stats, err
 	}
 	if shared, _ := ctx.Value(publishedPrefixQueryKey{}).(*publishedPrefixQueryBudget); shared != nil && !shared.take() {
-		return false, stats, ErrVerifyDeferred
+		return false, nil, stats, ErrVerifyDeferred
 	}
 	stats.Queries = 1
 	seen := make(map[string]bool, len(events))
@@ -9014,9 +9046,9 @@ func (m *Manager) verifyProjectionQueryInWindow(ctx context.Context, client *vls
 		return scanner.Err()
 	})
 	if err != nil {
-		return false, stats, err
+		return false, nil, stats, err
 	}
-	return len(seen) == len(want), stats, nil
+	return len(seen) == len(want), seen, stats, nil
 }
 
 func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {

@@ -243,25 +243,22 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 		if end > len(events) {
 			end = len(events)
 		}
-		ok, _, err := m.verifyProjectionQuery(ctx, client, source, generations[0], events[start:end], nil, generations)
+		// 直接取回**可见集合**，而不是只拿一个 bool（详见 verifyProjectionQueryInWindowCore 注释）。
+		//
+		// 修前：拿不到集合 ⇒ 批不齐时逐条重查：
+		//	批次平均 67 条 ⇒ 本应 1 次查询，实际花 67 次
+		//	真机实测：总查询 290,727，其中 events=1 占 285,896（98.3%）
+		// 修后：一次查询就能拿到完整答案，逐条回退不再需要。
+		_, visibleSet, _, err := m.verifyProjectionQueryWithVisible(ctx, client, source, generations[0],
+			events[start:end], nil, generations)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			// 本批未能凑齐 ⇒ 再逐条确认本批内哪些可见（批内通常很小，成本可控）。
-			for _, ev := range events[start:end] {
-				one, _, oneErr := m.verifyProjectionQuery(ctx, client, source, generations[0],
-					[]logtypes.Event{ev}, nil, generations)
-				if oneErr != nil {
-					return nil, oneErr
-				}
-				if one {
-					out = append(out, ev)
-				}
+		for _, ev := range events[start:end] {
+			if _, ok := visibleSet[ev.EventID]; ok {
+				out = append(out, ev)
 			}
-			continue
 		}
-		out = append(out, events[start:end]...)
 	}
 	return out, nil
 }
