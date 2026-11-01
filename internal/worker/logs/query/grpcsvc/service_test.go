@@ -737,6 +737,10 @@ func TestLogRuntimeStatusSeparatesHealthFromCatalogReadiness(t *testing.T) {
 	initial, err := svc.LogRuntimeStatus(context.Background(), &workerpb.LogRuntimeStatusRequest{})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, probe.healthCalls, 1)
+	// 2026-10-29 起冷热双层已废除：vlsup 只保留唯一的 NamespaceHot（见 vlsup/cmdline.go），
+	// LogRuntimeStatus 也只遍历那一个。所以必须显式钉住个数——否则一旦实现又长出第二个实例，
+	// “哪些归属算在哪”这个前提就静默变化了。
+	require.Len(t, initial.GetInstances(), 1, "只剩唯一受管 VL 实例（冷热双层已废除）")
 	require.True(t, initial.GetInstances()[0].GetHealthOk())
 	require.True(t, initial.GetInstances()[0].GetPartitionRecoveryComplete())
 	require.False(t, initial.GetInstances()[0].GetQueryReady(), "health without a published projection is not query readiness")
@@ -748,7 +752,19 @@ func TestLogRuntimeStatusSeparatesHealthFromCatalogReadiness(t *testing.T) {
 	after, err := svc.LogRuntimeStatus(context.Background(), &workerpb.LogRuntimeStatusRequest{})
 	require.NoError(t, err)
 	require.True(t, after.GetInstances()[0].GetQueryReady())
-	require.False(t, after.GetInstances()[1].GetQueryReady(), "empty COLD namespace cannot claim query completeness")
+
+	// 第二条断言的语义在冷热废除后仍然存在，只是从“另一个实例”换成了“同一实例内的清单边界”：
+	// 空 catalog（无任何记录）不得自称已恢复/查询就绪——`seen` 为假时两侧都必须为 false，
+	// 否则“什么都没有”会被当成“全部已就绪”返回给调用方。
+	//
+	// 为什么不用“另一个 namespace 的记录”来挖：冷热双层废除后所有**已知**归属（hot/cold/archive）
+	// 的物理数据都在唯一那个 VL 里（见 ownerUsesNamespace 的注释），而未知归属会被 catalog.Put 直接拒绝。
+	// 所以边界在 catalog 清单这一维：有记录且已发布 ⇒ 就绪；无记录 ⇒ 不得自称就绪。
+	recovered, queryReady := runtimeCatalogReadiness(catalog.New(nil), vlsup.NamespaceHot)
+	require.False(t, recovered, "空 catalog 不得自称已恢复（seen=false）")
+	require.False(t, queryReady, "空 catalog 不得自称查询完整")
+	require.False(t, ownerUsesNamespace(catalog.Owner(""), vlsup.NamespaceHot),
+		"空归属没有任何实例负责 ⇒ 不得计入")
 }
 
 func TestLogMigratePartitionValidatesAndDelegates(t *testing.T) {

@@ -609,6 +609,17 @@ func (sec *section) ensureVerifiedContext(ctx context.Context) error {
 	return sec.calibrateLockedContext(ctx)
 }
 
+// TestRoot 返回本 Store 实际使用的段根目录（**仅供测试**）。
+//
+// 为什么需要：2026-11-02（`28abb04d`）起段根由**数据根绝对路径派生**
+// （`SegmentRootFor`），不再位于 `<数据根>/var/log/events`。测试若写死旧路径就会拿到
+// `no such file or directory`——那测的不再是「段目录里的内容」，而是「段目录在哪」；
+// 前者是需要钉的行为，后者不是（而且它本来就不该由测试假设）。
+//
+// 走这个入口而不是在测试里重新拼路径：段根算法只应该有一处实现，测试不应成为第二个副本
+// （那会在下一次算法演进时无声地分叉）。
+func (s *Store) TestRoot() string { return s.root }
+
 // Segments 返回最近成功提交的元数据副本，不触发扫描或暴露在途写入。
 func (s *Store) Segments(key string) []SegmentMeta {
 	sec := s.lookup(key)

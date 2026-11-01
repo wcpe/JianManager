@@ -13,8 +13,6 @@ package ingest
 //  3. 不误裁——刚越过水位一字节的条目必须留下，且迁移校验不被裁剪进度差异误判为不一致。
 
 import (
-	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,21 +88,25 @@ func driveDeliveries(t *testing.T, pipe *pipeline.Pipeline, n int) uint64 {
 }
 
 // deliveryBatchUsage 读出索引里 delivery_batch 的行数与有效载荷字节数（含键与状态文本）。
+//
+// 2026-11-02：索引库已改为 `:memory:`（FR-505，机械盘不落盘裁定）——磁盘上**不再有**
+// `var/log/ingest.index.db`，旧实现用 `stateindex.OpenReadOnly(m.indexPath())` 会直接报
+// 「索引库不可读: stat …: no such file or directory」，它测的已经不是生产形态了。
+// 现在改为从 **Manager 持有的活内存库** 读：那里就是本轮 persist 的真实写入面
+// （`m.persist()` 之后 `m.index` 即当前状态），断言“表里只剩多少行”的语义不变。
 func deliveryBatchUsage(t *testing.T, m *Manager) (rows int, payload int64) {
 	t.Helper()
 	require.NoError(t, m.persist())
-	store, err := stateindex.OpenReadOnly(m.indexPath())
-	require.NoError(t, err)
-	defer func() { _ = store.Close() }()
-	state, err := store.Load()
+	state, err := m.index.Load()
 	require.NoError(t, err)
 	rows = len(state.Batches)
 
-	db, err := sql.Open("sqlite", m.indexPath())
-	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
-	require.NoError(t, db.QueryRowContext(context.Background(),
-		"SELECT COALESCE(SUM(LENGTH(key) + LENGTH(state) + 24), 0) FROM delivery_batch").Scan(&payload))
+	// 体积口径：旧实现用 SQL `SUM(LENGTH(key) + LENGTH(state) + 24)` 量「行内容 + 主键/行开销」。
+	// 内存库不再允许另开一个连接去跑 SQL，但那个公式对**行内容**是确定性的——在 Go 里逐行算出
+	// 同一个数，口径与粒度逐字不变（仍是“随行数与行内容增长的字节估算”，不是进程 RSS）。
+	for _, b := range state.Batches {
+		payload += int64(len(b.Key) + len(b.State) + 24)
+	}
 	return rows, payload
 }
 
@@ -199,12 +201,13 @@ func TestDeliveryBatchPruneKeepsBoundaryAndRoundTrip(t *testing.T) {
 	require.True(t, foundWatermarkEvidence, "被裁的 UNKNOWN 区间必须仍在 DeliveryEvidence 里：%+v", evidence)
 
 	// 落库口径：库里只剩边界那一条，且没有任何「水位之下」的残留行。
+	//
+	// 2026-11-02：索引库已改为 `:memory:`（FR-505）——不再 `OpenReadOnly` 磁盘文件
+	// （那个文件已不存在），改为读 Manager 持有的活内存库。断言语义不变：
+	// “落库后表里到底剩了哪几行”仍是从「真实的索引写入面」读出来的。
 	require.NoError(t, m.persist())
-	store, err := stateindex.OpenReadOnly(m.indexPath())
+	state, err := m.index.Load()
 	require.NoError(t, err)
-	state, err := store.Load()
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
 	require.Len(t, state.Batches, 1, "库中只应留下水位之上的那条")
 	require.Equal(t, aboveStart, state.Batches[0].StartPos)
 	require.Equal(t, aboveStart+1, state.Batches[0].EndPos)
@@ -255,24 +258,62 @@ func TestDeliveryBatchPruneIsIdempotentAcrossRestart(t *testing.T) {
 
 // TestDeliveryBatchPruneKeepsInstanceBindings 覆盖任务点「绑定照旧」：
 // 裁剪只动 delivery_batch，实例绑定行原样往返。
+//
+// ## 2026-11-02：为什么不再跨重启断言
+//
+// 原用例在 `RegisterInstance` → `Stop` → 重启后断言 `restarted.state.Instances["uuid-prune"]`
+// 仍在。索引库改成 `:memory:`（FR-505，机械盘不落盘裁定）之后，**任何**索引行都不跨重启存活，
+// 实例绑定也不例外——实测：同进程 persist 后活库里有那一行（rows.Instances=1），重启后
+// rows.Instances=0、state.Instances=0。所以“跨重启仍在”这个性质在新架构下**已经不存在**，
+// 不是裁剪造成的，也不应该由裁剪来保证。
+//
+// 生产为什么不需要它：实例绑定是 CP 每次登记下发时重建的进程级状态（grpc 的
+// log_acquisition.go 每条登记都走 RegisterInstance；重启后 CP 重连会重新下发）。
+// 真正需要跨重启的是「采集源与读到哪」，那个载体是游标表（var/log/ingest.cursor）。
+//
+// 本用例因此改为锤**在新架构下仍然成立、且仍归裁剪负责**的事：
+//  1. 一次 persist 之后，实例绑定行**真的被写进了索引**（不因裁剪而被跳过/误删）；
+//  2. 同一轮里 delivery_batch 的裁剪不影响绑定行——绑定表与批表是两张独立的表。
 func TestDeliveryBatchPruneKeepsInstanceBindings(t *testing.T) {
-	m, _ := pruneBoundFixture(t, nil)
+	m, pipe := pruneBoundFixture(t, nil)
+	// 先造出会被裁剪的批次（水位推进到 100 倍，前 100 条落在水位之下）。
+	driveDeliveries(t, pipe, 300)
 	work := t.TempDir()
 	// 登记是同步落库的（FR-499：登记只做「读写 state.Instances + 幂等建管道 + persist」）。
 	require.NoError(t, m.RegisterInstance(InstanceRegistration{
 		UUID: "uuid-prune", TargetID: "inst:prune", Generation: "holder-g1",
 		Mode: "STDIO_PRIMARY", WorkDir: work,
 	}))
-	root := m.root
-	require.NoError(t, m.Stop())
 
-	// 重启读回：绑定必须完好（裁剪只动 delivery_batch，与绑定表无关）。
-	restarted, err := newTestManager(t, Options{Root: root, Catalog: catalog.New(catalog.NewMemJournal())})
+	// ① 绑定行确实落在索引里（与裁剪同轮），且内容逐字正确。
+	rows, err := m.index.Load()
 	require.NoError(t, err)
-	binding, ok := restarted.state.Instances["uuid-prune"]
-	require.True(t, ok, "实例绑定必须随索引往返（与裁剪无关）")
-	require.Equal(t, "inst:prune", binding.TargetID)
+	var binding *stateindex.InstanceRow
+	for i := range rows.Instances {
+		if rows.Instances[i].UUID == "uuid-prune" {
+			binding = &rows.Instances[i]
+		}
+	}
+	require.NotNil(t, binding, "实例绑定必须随索引落库（与裁剪无关）")
+	require.Equal(t, "inst:prune", binding.Namespace)
 	require.Equal(t, "holder-g1", binding.Generation)
+	require.Equal(t, work, binding.WorkDir)
+
+	// ② 同一轮里裁剪确实发生了（否则上一条断言测的不是“并行共存”）。
+	require.Less(t, len(rows.Batches), 300,
+		"夹具前置：本次 persist 里裁剪必须真的发生过（否则测不到“裁剪不误伤绑定”）")
+
+	// ③ 再落一轮（稳态幂等）绑定行仍在——裁剪不会在重复 persist 里把它删掉。
+	require.NoError(t, m.persist())
+	rows, err = m.index.Load()
+	require.NoError(t, err)
+	found := false
+	for _, row := range rows.Instances {
+		if row.UUID == "uuid-prune" {
+			found = true
+		}
+	}
+	require.True(t, found, "重复 persist 不得让绑定行消失（裁剪幂等）")
 }
 
 // TestComparisonStateNormalizesPruneProgressOnly 给出**负向对照**：

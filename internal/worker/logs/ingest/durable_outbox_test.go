@@ -2,7 +2,6 @@ package ingest
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -138,7 +137,7 @@ func TestDurableOutboxBlockedVerifyAllowsNext1000RealSQLiteCommit(t *testing.T) 
 	require.NoError(t, got.err)
 	second := got.events
 	require.Len(t, second, 1000)
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer reader.Close()
 	var durable, rows uint64
@@ -660,7 +659,7 @@ func TestDurableOutboxFinalPublicationLeaseSerializesEarlierDebtButNotNewTail(t 
 	require.NoError(t, p.WAL().Append(newTail))
 	require.NoError(t, p.WAL().Commit())
 	require.NoError(t, m.persist())
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer reader.Close()
 	require.Equal(t, 2, len(p.WAL().Snapshot()))
@@ -741,7 +740,7 @@ func outboxAssertRestartResponsibility(t *testing.T, m *Manager, p *pipeline.Pip
 	}
 	// 持久凭据：position 水位必须能从库里逐字段读回（这正是重启后重读的起点）。
 	var read, durable, reclaim uint64
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	require.NoError(t, reader.QueryRow("SELECT read_pos,durable_pos,reclaim_pos FROM position WHERE key=?",
 		p.Key().LogSourceID+"/"+p.Key().SourceGeneration).Scan(&read, &durable, &reclaim))
@@ -982,7 +981,7 @@ func outboxReclaimDebtFixture(t *testing.T) (*Manager, SourceConfig, *pipeline.P
 // 只读SQLite证明真正COMMIT；不得拿内存回收、后台交办或Stop的最终落库充数。
 func outboxReclaimSQLCaughtUp(t *testing.T, m *Manager, key string, through uint64) bool {
 	t.Helper()
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	if err != nil {
 		return false
 	}
@@ -1007,7 +1006,7 @@ func outboxReclaimSQLCaughtUp(t *testing.T, m *Manager, key string, through uint
 // 新断言同时钉住「不得越过 UNKNOWN」。
 func outboxDeliverySQLCaughtUp(t *testing.T, m *Manager, key string, through uint64) bool {
 	t.Helper()
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	if err != nil {
 		return false
 	}
@@ -1583,7 +1582,7 @@ func TestDurableOutboxSlowCatalogJournalAllowsNext1000RealSQLiteCommit(t *testin
 		t.Fatal("Catalog journal IO挡住窗外下一批1000的实际SQL提交")
 	}
 	require.Len(t, second, 1000)
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer reader.Close()
 	// 2026-10-29：WAL 不再落盘（source_wal 表已删），两批共 2000 条的「已耐久」凭据是
@@ -2087,7 +2086,7 @@ func TestDurableOutboxManagerPreexistingSiblingsCross500KeepCanonicalRules(t *te
 			require.True(t, ledger.CoveredByPositionRanges(ledger.RequestDoneRangesOf(final), 0, 7650),
 				"766 条必须全部取得真实 REQUEST_DONE 覆盖（不得只靠裸 200）")
 			require.Empty(t, p.WAL().Snapshot(), "回收水位之内的内存条目必须当场剪掉")
-			reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+			reader, err := m.index.DBForTest()
 			require.NoError(t, err)
 			defer reader.Close()
 			// 2026-10-29：`source_wal` 已删；766 条「全部已耐久」的持久凭据是 position 水位，
@@ -2172,7 +2171,7 @@ func TestDurableOutboxManagerTrueSiblingConflictStaysExplicitAndDurable(t *testi
 	require.NoError(t, restartPipe.WAL().Commit())
 	_, err = restartPipe.DeliverPendingContext(context.Background())
 	require.ErrorContains(t, err, "canonical身份冲突", "冲突必须由首投器重报，保留全部责任且不发布假complete")
-	reader, readErr := sql.Open("sqlite", "file:"+restarted.indexPath()+"?mode=ro")
+	reader, readErr := restarted.index.DBForTest()
 	require.NoError(t, readErr)
 	defer reader.Close()
 	// 2026-10-29：`source_wal` 已删；继续保留责任的持久凭据是 position 水位。
@@ -2241,7 +2240,7 @@ func TestDurableOutboxHeldHeadAndSilent766UseRealSQLiteAndVL(t *testing.T) {
 	// 队列里只允许剩「尚未被回收」的那部分，绝不允许已回收前缀滞留。
 	require.Len(t, p.WAL().Snapshot(), int(7660-entry.Positions.Reclaim)/10,
 		"队列里只允许剩未被回收的部分")
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer reader.Close()
 	var durable uint64
@@ -2362,7 +2361,7 @@ func TestDurableOutboxBackgroundPlanReuseStillRequiresNewerJoin(t *testing.T) {
 	// 2026-10-29：`source_wal` 已删。原来用「source_wal 行数==2」证明两条正文都进了计划；
 	// 现在用两条独立事实代替：position.durable_pos 必须覆盖更晚 join 的第二条（计划没跳过它），
 	// 且队列里两条正文都还在（没丢正文）。
-	rows, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	rows, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer rows.Close()
 	require.Eventually(t, func() bool {
@@ -2502,7 +2501,7 @@ func TestDurableOutboxPollTailDefaultModeStaysSynchronous(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	m.persistPollTail()
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer reader.Close()
 	var durable uint64
@@ -2523,7 +2522,7 @@ func TestDurableOutboxStrictBatchDurableBeforeDeliveryStillHeld(t *testing.T) {
 	events, err := p.Drain()
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer reader.Close()
 	var durable uint64
@@ -3443,7 +3442,7 @@ func TestDurableOutboxDirtySecondThirdBootRecoverWithoutInput(t *testing.T) {
 		info, err := os.Stat(source.Path)
 		require.NoError(t, err)
 		require.Equal(t, int64(through), info.Size(), "二三启期间没有新文件输入")
-		reader, err := sql.Open("sqlite", "file:"+restarted.indexPath()+"?mode=ro")
+		reader, err := restarted.index.DBForTest()
 		require.NoError(t, err)
 		var durable uint64
 		require.NoError(t, reader.QueryRow("SELECT MAX(durable_pos) FROM position").Scan(&durable))
@@ -3562,7 +3561,7 @@ func TestDurableOutboxCandidateConflictDoesNotBanNamespaceOrHealthyDay(t *testin
 			}
 			require.Zero(t, p.Ledger().Get(p.Key()).Positions.Reclaim)
 			require.NoError(t, m.persist())
-			reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+			reader, err := m.index.DBForTest()
 			require.NoError(t, err)
 			defer reader.Close()
 			var payload string
@@ -3858,7 +3857,7 @@ func TestDurableOutboxMixedHistoricalActualSetRequiresLiveSQLReceipt(t *testing.
 	before := len(fixture.writes)
 	fixture.mu.Unlock()
 	_, _, writeErr := m.writeProjectionPlan(source, actual, "mixed-G", projectionWritePlan{Write: actual, Replace: true, Days: []string{source.UTCDay}})
-	reader, err := sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")
+	reader, err := m.index.DBForTest()
 	require.NoError(t, err)
 	defer reader.Close()
 	// 2026-10-29：`source_wal` 已删。原来用「表里 0 行」证明 Y 尚未 COMMIT；现在直接读

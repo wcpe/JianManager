@@ -30,8 +30,9 @@ func TestRecoveryAvoidsProjectionGenerationAlreadyInVL(t *testing.T) {
 
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath, []byte(
-		"[12:00:01] [Server thread/INFO]: hello\n[12:00:02] [Server thread/INFO]: next\n"), 0o644))
+	// 先建空文件；内容等源登记完成（EOF 起点 = 0）后再写。
+	// FILE_PRIMARY 登记一律 StartAtEOF: true（裁定 D），登记前的内容会被整体跳过。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "node:1", SourceGeneration: "g1", Path: logPath,
@@ -42,6 +43,9 @@ func TestRecoveryAvoidsProjectionGenerationAlreadyInVL(t *testing.T) {
 
 	first, err := newTestManager(t, opts)
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"[12:00:01] [Server thread/INFO]: hello\n[12:00:02] [Server thread/INFO]: next\n"), 0o644))
 	first.pollOnce()
 	first.markPublicationPending(key, savedSource(t, first, key).ProjectionGeneration)
 	require.True(t, savedSource(t, first, key).PublicationPending, "夹具必须真实进入需恢复的待发布状态，而非已完整可见的只读确认")

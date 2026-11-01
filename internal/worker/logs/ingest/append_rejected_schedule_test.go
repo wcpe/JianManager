@@ -49,10 +49,8 @@ const ingestNotBlockedWithin = time.Second
 func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
-	// 三行 Paper 风格日志：前两行会被 Poll 读成**两个**完整事件（条目数 2 > 上限 1 ⇒ 越界丢弃），
-	// 最后一行在夹具里永远"未闭合"（见 runtime_test.go 的说明）⇒ 可被 Flush 强制冲刷，
-	// 从而在**暂停之后**再产出一批（这正是"Append 被拒"分支的确定性入口）。
-	require.NoError(t, os.WriteFile(path, []byte(pollTestLines(0, 3)), 0o600))
+	// 先建**空**文件；三行日志在 newTestManager 之后才写（见下方“为何不能在登记前写”）。
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
 	src := SourceConfig{
 		LogSourceID:      "node:append-rejected",
 		SourceGeneration: "g1",
@@ -67,6 +65,14 @@ func TestAppendRejectedSchedulesReplayOutsideIngestPath(t *testing.T) {
 		WALLimits: &acquire.WALLimits{MaxEntries: 1},
 	})
 	require.NoError(t, err)
+	// 三行 Paper 风格日志：前两行会被 Poll 读成**两个**完整事件（条目数 2 > 上限 1 ⇒ 越界丢弃），
+	// 最后一行在夹具里永远"未闭合"（见 runtime_test.go 的说明）⇒ 可被 Flush 强制冲刷，
+	// 从而在**暂停之后**再产出一批（这正是"Append 被拒"分支的确定性入口）。
+	//
+	// **为何不能在登记前写**：FILE_PRIMARY 源登记一律 `StartAtEOF: true`（裁定 D：新源不回头
+	// 吃别人的历史）⇒ 登记前就存在的三行会被整体跳过 ⇒ `p.Flush()` 无未闭合事件可冲刷 ⇒
+	// 永远不进 Append 被拒分支，用例因“前置未成立”而非被测行为失败。
+	appendPollTestLines(t, path, pollTestLines(0, 3))
 	key := src.LogSourceID + "/" + src.SourceGeneration
 	p := m.pipes[key]
 	require.NotNil(t, p)

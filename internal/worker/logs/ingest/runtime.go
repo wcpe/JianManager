@@ -10319,16 +10319,42 @@ func (m *Manager) canonicalRecoveryEventsReusing(key string, saved persistedSour
 // CanonicalRecoveryReuses 返回「一轮投递内复用权威集合」的累计次数（观测用，单位=次）。
 func (m *Manager) CanonicalRecoveryReuses() int64 { return m.canonicalRecoveryReuses.Load() }
 
+// normalizeCanonicalEvent 把一条事件补成"规范形态"：保证 EventTimeUTC 非空，且
+// CanonicalHash 与它那些字段（EventTimeUTC/Level/Stream/Message）**互相自洽**。
+//
+// ## 为什么必须是幂等的（2026-11-02 修复）
+//
+// 同一物理行会在两个地方出现：
+//   - **WAL 副本**：采集时存的是 normalize 的产物，**EventTimeUTC 可能为空**（无时间戳行）；
+//   - **段副本**：投递时存的是**已归一化**形态（非空 EventTimeUTC + 重算过的 hash）。
+//
+// 旧实现只在 EventTimeUTC 为空时重算 hash ⇒ 同一行读两次、算两次会得到**两个不同**的
+// CanonicalHash（"读回再写"不幂等）。它今天不炸只因为它同时**也不重算**已非空的那份，
+// 而两条副本总是被分别当作不同的历史事实记下。
+//
+// 这道修复把它抬成一条**真正的幂等函数**：
+//   - 已归一化形态（EventTimeUTC 非空且 hash 自洽）⇒ 原样返回，零开销（绝大多数情况）；
+//   - **旧段形态**（EventTimeUTC 非空但 hash 不自洽，例如段里存的是未归一化的原始
+//     hash）⇒ 以 EventTimeUTC 为准**重算** hash；
+//   - 无时间戳行（EventTimeUTC 为空）⇒ 仍靠 IngestTimeUTC 反推（旧段兼容的唯一途径，保留）。
+//
+// 于是 f(f(x)) == f(x) 对所有输入成立，而**已发布数据的语义一字未变**：
+// 对任何 hash 本来就自洽的事件（即全部正常路径产出的事件），本函数重算出的值逐字相同。
 func normalizeCanonicalEvent(event logtypes.Event) (logtypes.Event, error) {
-	if event.EventTimeUTC != "" {
+	if event.EventTimeUTC == "" {
+		when, err := time.Parse(time.RFC3339Nano, event.IngestTimeUTC)
+		if err != nil {
+			return event, fmt.Errorf("ingest: event %s has no stable event or ingest time: %w", event.EventID, err)
+		}
+		event.EventTimeUTC = when.UTC().Format(time.RFC3339Nano)
+		event.CanonicalHash = logtypes.CanonicalContentHash(event.EventTimeUTC, event.Level, event.Stream, event.Message)
 		return event, nil
 	}
-	when, err := time.Parse(time.RFC3339Nano, event.IngestTimeUTC)
-	if err != nil {
-		return event, fmt.Errorf("ingest: event %s has no stable event or ingest time: %w", event.EventID, err)
+	// 已归一化形态：hash 必须与字段自洽。不自洽就**重算一次**（这正是幂等的落点）。
+	// 正常路径下这里不需要重算（构造时就是按同一组字段算的）⇒ 一次字符串比较的开销。
+	if self := logtypes.CanonicalContentHash(event.EventTimeUTC, event.Level, event.Stream, event.Message); self != event.CanonicalHash {
+		event.CanonicalHash = self
 	}
-	event.EventTimeUTC = when.UTC().Format(time.RFC3339Nano)
-	event.CanonicalHash = logtypes.CanonicalContentHash(event.EventTimeUTC, event.Level, event.Stream, event.Message)
 	return event, nil
 }
 

@@ -28,7 +28,18 @@ func TestGBKSourceIsDecodedBeforeDelivery(t *testing.T) {
 		"[23:54:03] [Server thread/INFO]: 结束\n"
 	encoded, _, err := transform.String(simplifiedchinese.GBK.NewEncoder(), lines)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(logPath, []byte(encoded), 0o644))
+	// 先建**空**文件，登记之后再写入内容。
+	//
+	// ## 为什么必须这个顺序（2026-11-02）
+	//
+	// FILE_PRIMARY 源登记一律 `StartAtEOF: true`（裁定 D：新源不回头吃别人的历史，
+	// 见 cursor_registry.go 文件头）。若在 `newTestManager` **之前**就把内容写进文件，
+	// 那几行会被 EOF 起点整体跳过 ⇒ 一轮采集零事件 ⇒ 断言报 "Should NOT be empty"。
+	// 本用例要考的是「GBK 字节被正确解码并投递」，而不是「新源从哪里起读」；
+	// 把夹具改成「先登记、再播日志」才能真正测到前者（与生产里一个源从空文件开始播日志同形）。
+	//
+	// 注意：这里**不是**把断言改弱——下面关于正文/字符集/无替换字符的断言逐字未动。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
@@ -39,6 +50,8 @@ func TestGBKSourceIsDecodedBeforeDelivery(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF 起点 = 0）后才写入 GBK 内容。
+	require.NoError(t, os.WriteFile(logPath, []byte(encoded), 0o644))
 	m.pollOnce()
 
 	key := source.LogSourceID + "/" + source.SourceGeneration
@@ -65,7 +78,7 @@ func TestGBKSourceAutoDetectedWithoutExplicitConfig(t *testing.T) {
 	encoded, _, err := transform.String(simplifiedchinese.GBK.NewEncoder(),
 		"[23:54:02] [Server thread/INFO]: 自动检测中文\n[23:54:03] [Server thread/INFO]: 结束\n")
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(logPath, []byte(encoded), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
@@ -76,6 +89,8 @@ func TestGBKSourceAutoDetectedWithoutExplicitConfig(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF 起点 = 0）后才写入正式内容（FILE_PRIMARY 登记一律 StartAtEOF:true）。
+	require.NoError(t, os.WriteFile(logPath, []byte(encoded), 0o644))
 	m.pollOnce()
 
 	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)
@@ -89,8 +104,7 @@ func TestUTF8SourceUnaffectedByCharsetDetection(t *testing.T) {
 	client, fixture := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[23:54:02] [Server thread/INFO]: 正常 UTF-8 日志 🚀\n[23:54:03] [Server thread/INFO]: 结束\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
@@ -101,6 +115,8 @@ func TestUTF8SourceUnaffectedByCharsetDetection(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF 起点 = 0）后才写入正式内容（FILE_PRIMARY 登记一律 StartAtEOF:true）。
+	require.NoError(t, os.WriteFile(logPath, []byte("[23:54:02] [Server thread/INFO]: 正常 UTF-8 日志 🚀\n[23:54:03] [Server thread/INFO]: 结束\n"), 0o644))
 	m.pollOnce()
 
 	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)
@@ -130,7 +146,7 @@ func TestDefaultCharsetAppliesWhenSourceDoesNotConfigure(t *testing.T) {
 	encoded, _, err := transform.String(simplifiedchinese.GBK.NewEncoder(),
 		"[23:54:02] [Server thread/INFO]: 节点默认字符集\n[23:54:03] [Server thread/INFO]: 结束\n")
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(logPath, []byte(encoded), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 
 	cat := catalog.New(catalog.NewMemJournal())
 	// 注意：源**不带** Charset —— 生效值只能来自节点级默认。
@@ -143,6 +159,8 @@ func TestDefaultCharsetAppliesWhenSourceDoesNotConfigure(t *testing.T) {
 		DefaultCharset: "gbk",
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF 起点 = 0）后才写入正式内容（FILE_PRIMARY 登记一律 StartAtEOF:true）。
+	require.NoError(t, os.WriteFile(logPath, []byte(encoded), 0o644))
 	m.pollOnce()
 
 	key := source.LogSourceID + "/" + source.SourceGeneration
