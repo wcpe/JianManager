@@ -709,6 +709,16 @@ type Manager struct {
 	// 为什么必须是字段而不是包级全局：重建的台账（每源连续失败次数/退避/放弃原因）属于
 	// Manager 的生命周期，跨 Manager 共享会让测试之间互相污染、也会让「源换代次后清零」失真。
 	rebuilds *rebuildScheduler
+	// gapResolves 是缺口消解的异步调度器（见 gap_resolve_async.go）。
+	//
+	// 为何必须异步：`resolveGapsLandedByDelivery` 内部要调 `landedVisibleInVLCtx` 核对
+	// VL 可见性，而它的超时是 `verifyBackoffMax*4+1s = 3s`（为退避探测设计）。
+	// 12KB selector 上限把大批切成 180 条/片后，退避预算被三次串行往返吃完
+	// ⇒ 必然超时 ⇒ 缺口不消解 ⇒ WAL 不回收 ⇒ 积压丢最旧 ⇒ 更多缺口（正反馈）。
+	// 长稳第 1 轮实测：1009 次超时 / 599 次丢弃 / RSS 4→693 MiB。
+	gapResolves *gapResolveScheduler
+	// gapWorkerOnce 保证异步 worker 只启动一次（见 ensureGapResolveWorker）。
+	gapWorkerOnce sync.Once
 	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
 	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
 	reconcileViewPublishedAt atomic.Int64 // UnixNano
@@ -2545,6 +2555,8 @@ func New(opts Options) (*Manager, error) {
 	m.persistPriorityStreak = opts.PersistPriorityStreak
 	// 投影重建调度器（见 rebuild_scheduler.go）：每源台账 + 单飞/合并队列 + 限速与退避旋钮。
 	m.rebuilds = newRebuildScheduler()
+	// 缺口消解异步调度器（见 gap_resolve_async.go）：把 VL 可见性核对从投递路径挤出去。
+	m.gapResolves = newGapResolveScheduler()
 	if tuning := opts.RebuildTuning; tuning != nil {
 		if tuning.Throttle > 0 {
 			m.rebuilds.throttle = tuning.Throttle
@@ -3123,6 +3135,14 @@ func (m *Manager) Start(ctx context.Context) {
 	// 投影重建 worker（见 rebuild_scheduler.go）：**独立 goroutine**，且从不取 cycleMu ⇒
 	// 无论一次重建跑多久，采集轮都能照常取锁推进。这是「重建不得占用采集主线」的落点。
 	go m.RunRebuildWorker(ctx)
+	// 缺口消解 worker（见 gap_resolve_async.go）：与重建同一形式的独立 goroutine。
+	// 它把「VL 可见性核对」从投递路径挤出去——投递成功只做 O(1) 登记，
+	// 核对该跑 30s 就跑 30s，不再拖住 WAL 回收链。
+	if m.gapResolves != nil {
+		if m.beginWork() {
+			go m.runGapResolveWorker(ctx)
+		}
+	}
 	// 容量自愈兜底：不依赖采集轮产生新批次（2026-10-03 现场：暂停后无人再评估 ⇒ 成批源停死）。
 	go m.RunCapacityResumeLoop(ctx)
 	m.syncRecoveryQuota() // 启动即同步一次（恢复期独立配额 ✓）
@@ -3160,6 +3180,11 @@ func (m *Manager) Stop() error {
 	// 取消即生效（驱动在每次让路与每步之间校验 ctx），故这里等待是有界的。
 	if m.lifecycleCancel != nil {
 		m.lifecycleCancel()
+	}
+	// 关停缺口消解调度器：不再接受新登记，并唤醒 worker 让它看到 closed 后退出。
+	// 已在跑的任务由 ctx 取消（lifecycleCancel 已生效）⇒ workWG.Wait 有界。
+	if m.gapResolves != nil {
+		m.gapResolves.close()
 	}
 	m.workWG.Wait()
 	m.mu.Lock()
@@ -5198,7 +5223,7 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 		// 窗口过滤只能剔除「这天在热层不可能可见」，而生产缺失的那天（2026-10-21）
 		// **恰在窗口内** —— 它是「窗口内某天的真实投递失败」。判别维度必须是
 		// **「这批事件在 VL 里到底查不查得到」**，而不是「这天是否过期」。
-		m.resolveGapsLandedByDelivery(source, m.landedVisibleInVL(source, landed))
+		m.scheduleGapResolve(source, landed)
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
 	// 权威全量的构建是 O(段行数)（生产单源实测可达 70 万行 ≈ 6 秒）；只有「整窗重发」语义
@@ -5355,7 +5380,7 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	evidence = written
 	// 投递成功（写 VL + 逐字段可见性校验 + catalog 发布）= 该写入面已确认落库 → 自动消解
 	// 被它完全覆盖的缺口。这是缺陷 A 的「成功后自动消解」出口：重投成功即清零，不再依赖人工。
-	m.resolveGapsLandedByDelivery(source, evidence)
+	m.scheduleGapResolve(source, evidence)
 	timing.mark("resolve")
 	if os.Getenv("JIANMANAGER_LOG_INJECT_ACK_LOSS") == "1" {
 		result.AckLost = true
@@ -5428,7 +5453,7 @@ func (m *Manager) routeCapturedSiblings(ctx context.Context, source SourceConfig
 	}
 	complete, queryErr := m.allPublishedEventsCurrent(ctx, source, canonical)
 	if queryErr == nil && complete {
-		m.resolveGapsLandedByDelivery(source, canonical)
+		m.scheduleGapResolve(source, canonical)
 		return true, pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}, nil
 	}
 	m.mu.Lock()
@@ -6269,7 +6294,7 @@ func (m *Manager) confirmWrittenAttempt(ctx context.Context, source SourceConfig
 	}
 	m.clearWrittenAttempt(key, hint)
 	m.rememberActiveTailGeneration(daySource, hint.generation, written)
-	m.resolveGapsLandedByDelivery(source, written)
+	m.scheduleGapResolve(source, written)
 	_, _, incomingDigest, incomingErr := writtenAttemptFingerprint(incoming)
 	active := events[:len(ids)]
 	_, _, activeDigest, activeErr := writtenAttemptFingerprint(active)
