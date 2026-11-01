@@ -292,13 +292,122 @@ internal/worker/
 
 #### Worker 日志平台数据面（FR-473～484）
 
-**状态（2026-10-25）**：Shared Contracts 基线已冻结（FR-473，ADR-094 accepted）；既有 CP/Worker 联邦、采集、Catalog、受管 VL、归档与管理面已装配，当前受管 VL 资产基线仍为 v1.52.0，cutover 默认关闭。历史验收记录见 [受控验收记录](specs/worker-log-platform-contract/acceptance-record.md)，不因本批回归修复而删除，也不能作为本批全部通过的证明。旧 v8 已完成多项组件及双 60 源 30s 各 64000 条责任对账、非空同 view 查询/统计/导出和真后端 Chromium 指定短场景，仅保留为其原 source 的真实结论。当前 r028 代码修复及已覆盖功能回归收口、完整质量门相对基线通过（余留 CFR 条件未测及 lint 存量），最新 live 原 scope 已完成但不扩大覆盖；250ms 首屏、原 9×30min 长窗、追加最终 ACKLoss、严格完整 Worker 静默 766 与 Worker fileCPU 诊断作为延期专项，仍未达标/未执行/未验，不再阻塞本次功能修复提交，范围见 [收口声明](specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。各门绑定各自输入，不挪旧源证据；准确结果统一见 [验证状态](specs/worker-log-platform-contract/spec.md#2026-10-24-验证状态r028性能-hold)，不称全部验收或生产投产。目标与待验收边界以 [Shared Contracts 修复批次](specs/worker-log-platform-contract/spec.md#2026-10-22-修复批次范围与验收) 及各模块规格为准，未核对实现和测试的接口/性能不标已完成。
+> **2026-11-01 重写**：本节整段按**当前真架构**重写。原表述里「cutover 默认关闭」「冷层搬运驱动器」
+> 「HOT/COLD/Rehydrate 三份数据」「Runbook A/B/C 归属 FR-474/476/477」都已**整体废止**
+> （cutover 随 CP `logs` 表下线、冷热分层废除、单 VL 取代三层命名空间、FR-474 已退役）。
+> 旧文以折叠形式保留在本小节末尾 `<details>历史原文（已废止）</details>` 里，**不静默删除**。
 
-**2026-10-02 成本治理与生命周期轮（ADR-098/099）**：采集侧新增 `sampling`（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级，全部默认关且抑制以「汇总事件」承接、不变量 R 区间守恒）；保留侧新增 `retention`（分级档位 + 源级覆盖 + 白名单过滤器 + VL 删除执行器）与**冷层搬运驱动器**（`apps/worker/log_retention.go` 生产适配层，周期调度、首轮立即执行、年龄+磁盘水位取先到）；投递路径消除每批 3 次 O(段总行数) 全量遍历（尾段快路径，同规格夹具批耗时 −82%、吞吐 +68%、达成率 0.555→0.93）；`log_capacity.max_wal_bytes` 由 0（不限）改为有限默认 512MiB（显式 0 仍合法但启动点名）；`log.level`/`log.format` 补上装配点。规则与口径见 ADR-098/099。
+**当前形态一句话**：一条实例日志只在**一处长期落地**（Worker 受管的**单个** VictoriaLogs，
+180 天 / 100GiB 上限）；采集链路上其它一切都是**进程内瞬时结构**，唯一跨重启的采集侧持久面是
+**采集游标**。
 
-目标架构采用 Worker 本地日志数据面（受管 VictoriaLogs，下文简称 VL，选型见 ADR-094；发行资产审批见 FR-476） + CP 联邦查询：Worker 可在受管数据根保存 VL HOT/COLD/Rehydrate 数据、WAL、采集账本、Partition Catalog、canonical projection manifest/checkpoint、冲突和受管 Raw；这些数据属于 Worker-owned 日志数据，不是 CP 业务数据库。Worker 本地 SQLite 仅保存日志元数据，不能成为第二个全文检索引擎。
+##### 介质归属（改任一部件前先看这张表）
 
-Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器；CP 业务 SQLite/MySQL、权限数据和 ADR-013 指标时序仍只由 CP 读写。CP→Worker 日志 RPC 只经 Worker 主动建立的 ADR-081 反向隧道，Worker/VL 只监听 localhost。Search/Stats/Fields/Facets/Tail/Rehydrate/Export 使用 FR-473 Query View、Catalog owner、PublishedProjection 和 coverage；浏览器不得直连 Worker/VL。该边界对应已 accepted 的 ADR-094；Worker 生产组件级 Runbook A/B/C 分别归属 FR-474/476/477 开发验收，不是契约冻结前置。
+| 部件 | 介质 | 重启后 | 依据/入口 |
+|---|---|---|---|
+| **VL 数据** | 磁盘 | ✅ 在 | 唯一可靠长期存储；**单 VL**，180d / 100GiB |
+| **采集游标 `ingest.cursor`** | 磁盘 | ✅ 在 | 每源一行（≈2KB，**不 fsync**），整表重写 + rename 原子（FR-506） |
+| 采集索引库 | `:memory:` SQLite | ❌ 没了 | `stateindex.OpenInMemory`，不建任何磁盘文件（FR-505） |
+| canonical 事件段 | `/dev/shm` tmpfs | ❌ 没了 | `eventstore.MemoryRoot`，**不是** `/tmp`（那是磁盘） |
+| WAL 队列 | 纯内存 | ❌ 没了 | 满则丢最旧（对齐 Fluent Bit `memrb`） |
+| catalog journal | 内存 | ❌ 没了 | 原 `catalog.journal.jsonl` + fsync 已下线 |
+| 账本（缺口/水位/投递证据） | 内存 | ❌ 没了 | 记账面重启后归零，不是被裁剪 |
+
+**代价如实记**：VL 数据根丢失 = 那段日志事实丢失（事件段在 tmpfs 上，重启即丢，
+原「可从事件段重建 projection」的承诺**不再成立**，ADR-095 已追记）；重启后至多重读一段并重复投递
+（允许重复、不丢）；缺口/暂停态/投递批次审计这些记账面重启后归零。
+
+##### 数据面边界
+
+- **CP 不存任何日志行**：`logs` 表已删（2026-10-29）。CP 只有授权与联邦查询两件事。
+- **Worker/VL 只监听 localhost**，CP→Worker 只走 ADR-081 反向隧道；浏览器**不得**直连 Worker/VL。
+- 查询面：Search/Stats/Fields/Facets/Tail/**Rehydrate**/Export 使用 FR-473 Query View、Catalog owner、
+  PublishedProjection 与 coverage。~~Runbook A/B/C 分别归属 FR-474/476/477~~ **2026-11-01 改**：
+  FR-474 已退役（编号不得复用，见 `docs/PRD.md` 规格导航段的退役索引），现存只余 FR-476/477。
+
+##### 落地包与边界（2026-11-01 现状）
+
+| 层 | 包 / 资产 | 对应 FR | 当前实现与验收边界 |
+|---|---|---|---|
+| 共享类型与账本 | `internal/worker/logs/{logtypes,ledger}` | FR-473 | 事件身份/内容哈希契约不变；账本现为**内存态**，回收不变量作用域只在进程内；~~FR-474 共账本~~ 已退役 |
+| 事件体存储 | `internal/worker/logs/eventstore` | FR-484 | **tmpfs 内存段**（`/dev/shm`），投递前暂存 + 投递后可回收；「落盘底本」承诺已废（ADR-095 追记） |
+| 采集通道 | `internal/worker/logs/{acquire,pipeline,ingest}` | FR-475 | tail/stdio→WAL→VL→projection 已接线；gz 归档回读 2026-10-30 删除，只读活文件 |
+| 归一化 | `internal/worker/logs/normalize` + 生产 pipeline | FR-475 | 归一化与 event_id / canonical hash 契约不变；multiline 有界默认值已落地 |
+| 采集侧成本策略 | `internal/worker/logs/sampling` | FR-498 配套 | 四类策略默认关；抑制折叠为汇总事件，不变量 R 区间守恒 |
+| 保留策略 | `internal/worker/logs/retention` + `apps/worker/log_retention.go` | FR-501 | **单 VL**：`retention.NewDriver(…, nil, …)` 的 mover **恒为 nil**，到期分区只会 `archive_copy`（需配目的地）或 `blocked`（保留原物）。~~默认搬运 COLD~~ 2026-10-29 废除 |
+| VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 资产 v1.52.0、localhost、auth、supervisor + 15s 看护（见下一小节） |
+| Partition Catalog + Lifecycle | `internal/worker/logs/{catalog,lifecycle}` | FR-477 | 纯逻辑 + **内存 journal**；permit/lease/pin 保留 |
+| Deep Archive | ~~`internal/worker/logs/archive`~~ | ~~FR-478~~ | **已退役（2026-11-01）**：单 VL 后冷层与 Rehydrate 已删，对象不存在；包内只余 `archive_copy` 导出用的 Provider 抽象（FR-501 用） |
+| Worker 查询 | `internal/worker/logs/query` + `grpcmap/grpcsvc` | FR-479 | 逐源固定 view + budget + read pin |
+| CP 联邦协调 | `internal/controlplane/logcoord` + 反向隧道适配 | FR-480 | 扇出 → 合并 → 游标分页 → 覆盖/质量聚合 → HTTP |
+| 入库切换 | ~~`log_cutover.go` + `log_legacy.go` + DualPath 门面~~ | ~~FR-481~~ | **已下线（2026-10-29）**，**FR-481 已退役（2026-11-01）**：随 CP `logs` 表删除，切换两侧不再存在。残留的 `model.LogCutoverState` 表与 `LogCutoverReadiness` RPC 只是**兼容壳**，无任何开关消费者 |
+| 进程日志诊断 | `apps/*/process_log.go` + `router/diagnostics_log.go` + Worker `PullSelfLog` | — | 自轮转落盘，面板只读尾部；不存储、不检索 |
+| 前端日志面板 | LogsPage、联邦 API/helper、运行时与停机历史 | FR-482 | 前端 DOM/mock/类型/lint/build/Chromium 通过；真后端 Chromium 已验证 1800 行 scope 的分页/三范围、半开窗、abort/失败；**非生产/性能完成** |
+| proto | `proto/worker.proto` Log* | FR-473 | 消息契约不变；兼容 RPC（如 `LogCutoverReadiness`）不再有产品语义 |
+
+##### durable outbox r4 / r8d 私有轮尾
+
+**durable outbox r4（本地候选已实现，联合验收中）**：生产 Worker 组合根内部 `Options.DeferredDelivery=true`，
+独立 Manager 默认 `false`、同步兼容；不新增进程、RPC、产品键、SQLite schema、WAL 格式或预算。
+新事件耐久入原 WAL，有界调度只合并 source-key；actual-set 中的活 WAL 子集必须有实际 plan 回执，
+已回收 immutable 历史另按固定原行界与摘要证明，不能因历史不在 WAL 就跳过活成员资格。
+hint 保原 full actual-set digest/cut/成员/历史证明，不常驻正文；每源 guard、局部 lease/原子条件回收
+和 Stop 真 join 分离采集状态锁与网络。协议与公共测试 fixture 六字段修正的限域见
+[共享契约](specs/worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中)。
+
+> **2026-11-01 注意**：r4 正文里的「SQLite 回执 / schema」指的是 **WAL 落盘时代**的投递回执；
+> WAL 改纯内存 + 索引库改 `:memory:` 后，这些回执是**进程内**的。历史验收结论（旧 v8 全门/双短/live）
+> 只属其原 source，不能核销本候选。
+
+**r8d 私有轮尾**：生产 deferred=true 的轮尾 best-effort 元数据走既有后台通道，不改 strict 新批
+actual-plan 完成门。WAL 短锁私有全 Fields 快照与同 plan 身份相绑定，live 精确歧义回退正文，
+无 EventID 全局缓存。以 [共享规格](specs/worker-log-platform-contract/spec.md#durable-outbox-r8d单次受控耐久门通过联合验收中) 为准。
+
+##### 功能落地 ≠ 生产验证（三层口径）
+
+PRD 里的 ✅ 只表示**代码与回归已落地**，不代表生产跑过。日志域按三层区分：
+
+| 状态 | 含义 | 日志域实例 |
+|---|---|---|
+| 生产在用 | 真跑着、有真实数据 | 采集/VL/联邦查询/日志中心（19 个实例日志全走 FILE_PRIMARY） |
+| 生产已启用但未触发 | 装配好了，路径一次没走过 | **FR-510 磁盘缓冲**：`log_spool.enabled=true`、100MiB，启动日志 `recoveredRecords=0 recoveredStop=bad-magic`（=从未写过记录的零区，**不是故障**）；但 VL 一直可用 ⇒ 该路径从未被真实触发，「VL 真挂时能扛住」**未被证明** |
+| 代码可落地但生产未启用 | 有实现有测试，无使用场景 | **FR-511 HTTP 日志接收**：`worker.yml` 里 `PUSH_ONLY` 出现 0 次 ⇒ `/insert/jsonline` 对任何请求返 404；仅在 FR-480 双节点验收里被真用过 |
+
+##### 未达标/未验收（不得当成已完成）
+
+- **FR-498**：250ms 端到端首屏**仍未达标**（SPA 内点击导航中位 391ms、整页 goto 691ms；API 层早已毫秒级，
+  瓶颈在前端首屏）；**9×30min 长稳窗仍未达标/未完成**——具体有两层障碍：
+  ① 长跑时若出现规模化「不可裁定身份冲突」，旧实现逐条 WARN 会把日志写满
+  （2026-11-01 曾观测到 727MB / 180 万条、4.4GB / 1108 万条）；
+  **但该现象的触发条件在后续复现中无法重建**（当前 HEAD 三轮重跑均为 0 条；段级全量扫描 311 万事件、0 冲突），
+  原因未知、**不作为任何结论的依据**；
+  ② 即使按 §7.10 给该留痕加了节流汇总（防御性：万一再现，日志不应把磁盘写满），
+  **根因仍未定位**——必须从「同一对字节位置被解析两次且内容不同、长度相等」这个唯一形态重建现场。
+  结论：**放大不会再写满磁盘，但 9×30min 仍不能以「已通过」口径宣称**——
+  参见 [log-startup-reconcile §7.10/§7.12](specs/log-startup-reconcile/spec.md)。
+- **FR-497**：60 源重启 ≤60s / 随机强杀 100 次未完成验收。
+- 各 spec 分散是**已知痛点**：完整缺口清单见 [§10.1 日志规格索引](#日志规格索引fr--spec--现状)
+  与 `worker-log-platform-contract/spec.md` 的「收口声明与延期专项」节。
+
+<details>
+<summary>历史原文（已废止，2026-11-01 折叠）</summary>
+
+**状态（2026-10-25）**：Shared Contracts 基线已冻结（FR-473，ADR-094 accepted）；既有 CP/Worker 联邦、采集、Catalog、受管 VL、归档与管理面已装配，当前受管 VL 资产基线仍为 v1.52.0，~~cutover 默认关闭~~。历史验收记录见 [受控验收记录](specs/worker-log-platform-contract/acceptance-record.md)，不因本批回归修复而删除，也不能作为本批全部通过的证明。旧 v8 已完成多项组件及双 60 源 30s 各 64000 条责任对账、非空同 view 查询/统计/导出和真后端 Chromium 指定短场景，仅保留为其原 source 的真实结论。当前 r028 代码修复及已覆盖功能回归收口、完整质量门相对基线通过（余留 CFR 条件未测及 lint 存量），最新 live 原 scope 已完成但不扩大覆盖；250ms 首屏、原 9×30min 长窗、追加最终 ACKLoss、严格完整 Worker 静默 766 与 Worker fileCPU 诊断作为延期专项，仍未达标/未执行/未验，不再阻塞本次功能修复提交，范围见 [收口声明](specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。各门绑定各自输入，不挪旧源证据；准确结果统一见 [验证状态](specs/worker-log-platform-contract/spec.md#2026-10-24-验证状态r028性能-hold)，不称全部验收或生产投产。目标与待验收边界以 [Shared Contracts 修复批次](specs/worker-log-platform-contract/spec.md#2026-10-22-修复批次范围与验收) 及各模块规格为准，未核对实现和测试的接口/性能不标已完成。
+
+**2026-10-02 成本治理与生命周期轮（ADR-098/099）**：采集侧新增 `sampling`（等级过滤/同源同消息高频抑制/每源预算/风暴自动降级，全部默认关且抑制以「汇总事件」承接、不变量 R 区间守恒）；保留侧新增 `retention`（分级档位 + 源级覆盖 + 白名单过滤器 + VL 删除执行器）与~~冷层搬运驱动器~~（`apps/worker/log_retention.go` 生产适配层，周期调度、首轮立即执行、年龄+磁盘水位取先到）；投递路径消除每批 3 次 O(段总行数) 全量遍历（尾段快路径，同规格夹具批耗时 −82%、吞吐 +68%、达成率 0.555→0.93）；`log_capacity.max_wal_bytes` 由 0（不限）改为有限默认 512MiB（显式 0 仍合法但启动点名）；`log.level`/`log.format` 补上装配点。规则与口径见 ADR-098/099。
+
+目标架构采用 Worker 本地日志数据面（受管 VictoriaLogs，下文简称 VL，选型见 ADR-094；发行资产审批见 FR-476） + CP 联邦查询：Worker 可在受管数据根保持~~VL HOT/COLD/Rehydrate 数据~~、WAL、采集账本、Partition Catalog、canonical projection manifest/checkpoint、冲突和受管 Raw；这些数据属于 Worker-owned 日志数据，不是 CP 业务数据库。~~Worker 本地 SQLite 仅保存日志元数据，不能成为第二个全文检索引擎。~~
+
+> 废止原因（2026-11-01 追记）：
+> - **cutover 已整体下线**（CP `logs` 表已删，2026-10-29），开关与其两侧代码都不存在 → 不再有「默认关闭」这回事。
+> - **冷热分层已废**：`retention.NewDriver` 的 mover 生产传 `nil`，只余 `archive_copy` / `blocked` 两种动作。
+> - **HOT/COLD/Rehydrate 三份数据 → 单 VL**：cold / rehydrate 两个 namespace 已删，DR 不再靠搬运，靠 VL 自身 180d/100GiB。
+> - **本地 SQLite 已不是「仅保存元数据」**：索引库整体改 `:memory:`，磁盘上不存在这个库。
+
+</details>
+
+
+Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器；CP 业务 SQLite/MySQL、权限数据和 ADR-013 指标时序仍只由 CP 读写。CP→Worker 日志 RPC 只经 Worker 主动建立的 ADR-081 反向隧道，Worker/VL 只监听 localhost。Search/Stats/Fields/Facets/Tail/Rehydrate/Export 使用 FR-473 Query View、Catalog owner、PublishedProjection 和 coverage；浏览器不得直连 Worker/VL。该边界对应已 accepted 的 ADR-094。~~Worker 生产组件级 Runbook A/B/C 分别归属 FR-474/476/477 开发验收，不是契约冻结前置。~~ **2026-11-01 改**：FR-474 已退役，Runbook 归属现为 FR-476/477；契约冻结仍不以前置 Runbook 为准。
 
 **durable outbox r4（本地候选已实现，联合验收中）**：生产 Worker 组合根内部 `Options.DeferredDelivery=true`，独立 Manager 默认 `false`、同步兼容；不新增进程、RPC、产品键、SQLite schema、WAL 格式或预算。新事件耐久入原 WAL，有界调度只合并 source-key；actual-set 中的活 WAL 子集必须有实际 SQLite plan 回执，已回收 immutable 历史另按固定原行界与摘要证明，不能因历史不在 WAL 就跳过活成员资格。hint 保原 full actual-set digest/cut/成员/历史证明，不常驻正文；每源 guard、局部 lease/原子条件回收和 Stop 真 join 分离采集状态锁与网络。归档采样前原子 reservation 保 Busy 无 sampler 副作用，同对象 CAS 只回退未接收段、关闭 reader，新尾可提交。协议与公共测试 fixture 六字段修正的限域见 [共享契约](specs/worker-log-platform-contract/spec.md#durable-outbox-r4本地候选已实现联合验收中)；旧 v8 全门/双短/live 仅属旧 source，不能核销本候选新全仓、raw Worker/Search、双短/live 或正式性能。
 
@@ -380,6 +489,13 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 **查询质量标记口径（`DuplicateQuality`）**：单 range 路径与合并路径现在对「同 `EventID`、异 canonical hash」给出一致结论——检出异哈希即降级 `unresolved`，两条歧义副本都保留给上层归因；同 id 同哈希的纯重复仍按去重丢弃且**不**降级（普通重复不该把导出封掉）。此前单 range 路径按 `EventID+hash` 去重后恒报 `exact`，于是同一份数据经合并路径报 `unresolved`、经单 range 路径报 `exact`，而 CP 导出门禁只认 `unresolved`/`conflict` ⇒ 歧义数据被放行导出。
 
 **日志保留、分层与成本治理（现状 → 目标形态，ADR-098/099）**
+
+> **2026-11-01 废止说明**：下表的「热层/冷层」两层模型**不再成立**——冷热分层 2026-10-29 整体废除，
+> `apps/worker/main.go` 的 `retention.NewDriver(…, nil, …)` mover **恒为 nil**，cold / rehydrate 两个
+> namespace 已删。因此表中「默认动作=搬运 COLD」「冷层 730d」「`move_to_cold` 排在首位」「按 namespace
+> retention」这几条都**不描述当前代码**。当前真实保留形态：**单 VL，180d / 100GiB**；到期分区只可能
+> 落 `archive_copy`（需配目的地，默认关）或 `blocked`（保留原物、不删）。余下的成本治理 / 采样 / 观测面
+> 口径仍有效。下表作历史参考保留，**不得当作现状引用**。
 
 | 维度 | 当前实现与修复边界（2026-10-22） | 产品决策与未完成范围 |
 |---|---|---|
@@ -1342,7 +1458,7 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 | 通路 | 产生者 | 存哪 | 谁读 | 能做什么 | 不能做什么 |
 |---|---|---|---|---|---|
-| **实例/Worker 运行日志** | 游戏服进程 stdout/stderr、Worker 采集器 | Worker 本地**受管 VictoriaLogs**（HOT/COLD/Rehydrate，ADR-094） | CP 经反向隧道联邦查询；浏览器**不得**直连 Worker/VL | Search / Stats / Fields / Facets / Tail / Export / Rehydrate | CP 业务库**不存任何日志行**（`logs` 表已删） |
+| **实例/Worker 运行日志** | 游戏服进程 stdout/stderr、Worker 采集器 | Worker 本地**受管 VictoriaLogs（单 VL）**（ADR-094；~~HOT/COLD/Rehydrate 三命名空间~~ 2026-10-29 废，现 180d/100GiB） | CP 经反向隧道联邦查询；浏览器**不得**直连 Worker/VL | Search / Stats / Fields / Facets / Tail / Export | CP 业务库**不存任何日志行**（`logs` 表已删） |
 | **平台（CP 自身）进程日志** | CP 进程 slog（含 `middleware.ErrorLog` 的 API 失败响应） | CP 数据根自轮转文件 `<data>/var/log/control-plane.log`（`internal/platform/rollog`） | 面板只读尾部（`GET /diagnostics/log`） | 最近 N 行 + 关键字/级别可见性 + 可复制的 `tail`/`grep` 命令 | **不进** VL、不进联邦查询、无分页/总数/时间窗/导出 |
 | **Worker 进程日志** | Worker 进程 slog | Worker 数据根自轮转文件 `<data>/var/log/worker.log` | CP 经反向隧道 `PullSelfLog` RPC 拉尾部，面板入口在节点页 | 同平台日志 | 同上；也**不是**日志中心的 `node:` 目标（那是该节点上的实例日志） |
 
@@ -1429,7 +1545,8 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
   vlsup     — 受管 VictoriaLogs 进程 supervisor（启动、15s 看护、熔断）
               **诊断日志按行自带级别分流**（2026-10-31）：info⇒Info、warn⇒Warn、
               error/fatal/panic⇒Error、解析不出⇒Error（panic 栈必须保留 ERROR）
-  archive   — Deep Archive + Rehydrate 基础包（Provider 抽象）
+  archive   — ~~Deep Archive + Rehydrate 基础包（Provider 抽象）~~ **2026-11-01 改**：FR-478 已退役，
+              只剩 `archive_copy` 导出用的 Provider 抽象（FR-501 用），没有 Deep Archive/Rehydrate 产品对象
   logassemble — 生产装配入口（把上面这些包按选项拼起来）
 ```
 
@@ -1485,11 +1602,11 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 | FR | 规格目录 | 主题 | 现状 |
 |---|---|---|---|
 | FR-473 | `worker-log-platform-contract/` | **Shared Contracts 基线**（字段/状态/覆盖语义的真源） | **已冻结** — 其它规格不得重定义它 |
-| FR-474 | `worker-log-acquisition/` + `log-ingest-register-lock/` | 采集通道、WAL、账本、注册锁 | 已交付 / 注册锁开发中 |
+| ~~FR-474~~ | ~~`worker-log-acquisition/`~~ + `log-ingest-register-lock/` | 采集通道、WAL、账本、注册锁 | **已退役（2026-11-01）**：WAL 纯内存后 `source_wal` 表已删，编号不得复用；采集实现现挂在 FR-475 下 |
 | FR-475 | `worker-log-normalizer/` | Multiline 与归一化、event_id / hash | 已交付（Linux 范围） |
 | FR-476 | `worker-victorialogs-runtime/` | 受管 VL 资产、supervisor、TTL | 已交付 |
 | FR-477 | `worker-log-lifecycle/` | Partition Catalog 与分区生命周期 | 已交付·~~冷热搬运~~ 2026-10-29 废除（mover 恒 nil） |
-| FR-478 | `worker-log-deep-archive/` | Deep Archive + Rehydrate | 已交付 |
+| ~~FR-478~~ | ~~`worker-log-deep-archive/`~~ | Deep Archive + Rehydrate | **已退役（2026-11-01）**：单 VL 后冷层与 Rehydrate 已删，对象不存在 |
 | FR-479 | `worker-log-query-federation/` | Worker 侧查询规划与租约 | 已交付 |
 | FR-480 | `cp-log-query-coordinator/` | CP 联邦扇出、合并、游标、覆盖 | 已交付 |
 | FR-482 | `logs-center-tiered-ui/` | 分层日志中心、统计、导出、失败态 | 已交付 |

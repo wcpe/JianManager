@@ -62,6 +62,33 @@ proto/                  # Protobuf 定义
 - 使用 `testing` + `testify/assert`
 - 表驱动测试（Table-driven tests）
 
+#### 日志相关包（`internal/worker/logs/**`）的测试**不得并行运行**
+
+**现象**：同一份代码、同一台机器，单独跑 `go test ./internal/worker/logs/ingest` 只有 **8 条**失败，
+而与其他包/其他 worktree 同时跑时会变成 **70+ 条**，且失败内容看起来毫无关联
+（`TestDurableOutbox*` 成片红、`TestAppendRejected*`、`TestDeliver*` 等）。
+
+**根因**：事件段根不是 `t.TempDir()` 本身，而是
+
+```
+/dev/shm/jianmanager-events/<basename(数据根)>      # eventstore.MemoryRoot，见 eventstore/store.go
+```
+
+测试用 `t.TempDir()` 的 basename 形如 `TestXxx123/001`——**同名用例在不同运行/不同 worktree 之间
+会共用同一个 tmpfs 段根**。两个进程并行跑就会互相读到对方的段，报
+`eventstore: corrupt segment: unlisted durable segment` 或「同 event_id 多 hash」这类**假象**。
+
+**规避**：
+
+1. 跑日志包测试**串行**：一次只跑一个 worktree/一个包，不要与压测 harness 同时跑；
+2. 需要调或写用例时，**自己创一个唯一根名**：
+   `t.Cleanup(func() { _ = os.RemoveAll(eventstore.MemoryRoot(filepath.Base(root))) })`
+   并在建 Manager 前先 `RemoveAll` 一次（参见 `cursor_registry_restore_test.go`）；
+3. 排查「突然大片红」时**先看 `/dev/shm/jianmanager-events/` 有没有别的进程在写**，再怀疑代码；
+4. 给结论前必须用「单包、串行、同一 `-timeout`」的口径与干净 HEAD 对照，否则数字不可比。
+
+> 这个坑直接导致过一次误判：同一分支上有 78 条 vs 8 条两种读数，白费一整轮对照实验。
+
 ---
 
 ## TypeScript (前端 + Bot Worker)
