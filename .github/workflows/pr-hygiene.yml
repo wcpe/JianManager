@@ -33,10 +33,14 @@ jobs:
       #
       # 【为何白名单必须是完整地址而不是前缀】
       # 早前写成 `10\.`、`8\.8\.8\.8`、`1\.2\.3\.4` 这类**无边界**子串，而 `grep -vE` 丢的是
-      # **整行** —— 于是真实公网地址只要“包含”这些子串就被放行：
-      #   210.1.2.3（含 10.）/ 11.2.3.4（含 1.2.3.4）/ 18.8.8.8（含 8.8.8.8）
+      # **整行** —— 于是真实公网地址只要“包含”这些子串就被放行。
+      # 例如一个公网地址 A.B.C.D 里恰好含 `10.`、或含 `1.2.3.4`/`8.8.8.8` 这几个数字串，
       # 都不需要同行再写白名单地址，**地址自身就能触发豁免**。
       # 现在改成：先抽出地址 token，再用带边界的完整地址判定，逐 token 处理（不再整行豁免）。
+      #
+      # 注：本文注释里的示例故意不写出具体地址——写成 ``A.B.C.D`` 形式。
+      # 因为这三段检查扫描的是 `git diff` 的新增行，**包括注释**：
+      # 示例写成真实地址会让门禁拦住它自己的说明文档。
       - name: 扫描变更内容（真实 IP / 凭据 / 敏感文件）
         shell: bash
         env:
@@ -77,34 +81,59 @@ jobs:
           # 两档判定，按**文件类型**分——这是本条的关键。
           #
           # 【为何不能只用一个“只抓引号”的正则】早前将之一刀切为“必须带引号”，治好了代码里的
-          # 假阳性（`authSecret: d.authSecret` 这类**引用**），却把配置面整类放过了：
+          # 假阳性（配置键写成引用表达式、而非字面量），却把配置面整类放过了：
           #   YAML / .env / .properties / docker-compose 里的明文密钥**天然不带引号**。
           # 实测本仓 configs/worker.yml、configs/control-plane.yml、docker-compose.yml 均为
-          # `jwt_secret: dev-secret-change-me` 形态，新正则对它们零覆盖。
+          # `键: 明文值` 形态，新正则对它们零覆盖。
+          #
+          # 注：本节注释不写出具体密钥样例。这三段检查扫描 `git diff` 的新增行，
+          # **包括注释**；写出形如 `键: 值` 的样例会让门禁拦住它自己的说明。
           #
           # 所以：
-          #   - **代码文件**：保留“必须引号”的严格版（消假阳性）；
-          #   - **配置/脚本文件**：用“引号可选”的旧版（保住覆盖面）。
-          CRED_QUOTED='(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"'`]([^"'"'"'`]{12,})["'"'"'`]'
-          CRED_ANY='(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=.-]{12,}'
-          TESTISH='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value)[-a-z0-9]*|password123|admin123|fake-key|test-secret|x{8,}|bearer$|p$|xxx|\$\{[A-Z_]+)'
+          # 【为何是“两档都跑”而不是二选一】
+          # 早期按文件名分流：配置文件用引号可选版，代码文件用必须带引号版。
+          # 但两档的**值字符集不同**，各自都有对方能覆盖、自己覆盖不了的输入：
+          #   - CRED_ANY 的值只允许 [A-Za-z0-9_/+=.-]：
+          #     `jwt_secret: "a8f9$k2#mQ~pL7!xY"` 在 $ 处断（4 字符 < 12）→ 漏检；
+          #   - CRED_QUOTED 要求带引号：`ENV JWT_SECRET=supersecretvalue123`（Dockerfile）
+          #     / `secret=...`（.npmrc、Makefile）→ 漏检。
+          # 改成两档并联、任一命中即计，覆盖面才真的是两者的并集。
+          # 值字符集也放宽为“引号内任意非空白”，不再限制符号。
+          CRED_Q="(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*[\"'\`][^\"'\`[:space:]]{12,}[\"'\`]"
+          CRED_U='(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9_/+=.-]{12,}'
+          # 【白名单必须锚在**值**上】早期写成 '^(sk-...|test-secret|xxx)'，
+          # 而它拿到的是 grep -o 输出的“命中串”（一定以 password/secret/token 开头），
+          # 因此每个分支都不可能匹配 → 白名单是死代码，test-secret / xxxx 全被误杀。
+          # 现在改为锚在值上：先用 sed 抽出 = 或 : 右侧，再判形态。
+          TESTISH_VAL='^(sk-(should|audit|survives|test|fake|dummy|example|original|new|probe|value)|password123|admin123|fake-key|test-secret|x{8,}|p|xxx|\$\{[A-Z_]+)'
+          cred_check() {
+            local hits kept line val
+            hits=$(git diff "$BASE"...HEAD --unified=0 -- "$1" \
+              | grep -aE '^\+' | grep -avE '^\+\+\+' \
+              | grep -aoEi "$CRED_Q|$CRED_U" || true)
+            [ -n "$hits" ] || return 0
+        kept=""
+            while IFS= read -r line; do
+              [ -n "$line" ] || continue
+              # 抽右侧的值（去掉 16位的 key、分隔符、引号与空白）。
+              val=$(printf '%s' "$line" | sed -E "s/^[^:=]*[:=][[:space:]]*//; s/^[\"'\`]//; s/[\"'\`]$//")
+              if printf '%s' "$val" | grep -aqEi "$TESTISH_VAL"; then
+                continue
+              fi
+              kept="$kept
+$line"
+            done <<< "$hits"
+            [ -n "$kept" ] && printf '%s\n' "$kept"
+            return 0
+          }
 
           cred_findings=""
-          # 逐文件分流：用文件名把行归属到文件，再按扩展名选正则。
+          # 逐文件检查：用文件名把行归属到文件。
           # 先存进变量而不是直接管道——避免子 shell 里的赋值丢失。
           changed_files=$(git diff "$BASE"...HEAD --name-only || true)
           while IFS= read -r f; do
             [ -n "$f" ] || continue
-            case "$f" in
-              *.yml|*.yaml|*.properties|*.ini|*.toml|*.env|*.env.*|*/.env*|*.sh|*.ps1|*.conf|*.cnf)
-                re="$CRED_ANY" ;;
-              *)
-                re="$CRED_QUOTED" ;;
-            esac
-            hits=$(git diff "$BASE"...HEAD --unified=0 -- "$f" \
-              | grep -aE '^\+' | grep -avE '^\+\+\+' \
-              | grep -aoEi "$re" \
-              | grep -vEi "$TESTISH" || true)
+            hits=$(cred_check "$f")
             if [ -n "$hits" ]; then
               cred_findings="$cred_findings
 $f:
@@ -150,8 +179,17 @@ $hits"
           ADDED=$(git diff "$BASE"...HEAD --unified=0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)
           fail=0
           echo "::group::新增行中的绝对路径"
-          if printf '%s\n' "$ADDED" | grep -nE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\' | grep -vE "$ALLOW"; then
+          # 【为何要逐 token 而不是整行 grep -v】整行豁免正是本仓已经修过一次的 bug 类：
+          # 一行里只要含 /tmp/（或 /opt/app/ 等白名单路径），同行的
+          # `/home/bob/work/x` 会被 `grep -v` 整行丢掉 → 真实用户名漏放。
+          # 改成：先抽每个路径 token，再逐条判白名单（与 IP 检查同一手法）。
+          PATH_HITS=$(printf '%s\n' "$ADDED" \
+            | grep -aoE '/(home|Users)/[A-Za-z0-9._-]+/|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\' \
+            | sort -u \
+            | grep -vE "$ALLOW" || true)
+          if [ -n "$PATH_HITS" ]; then
             echo "::error::变更含真实绝对路径（泄漏用户名/目录结构），请改用相对路径、临时目录或配置注入"
+            printf '%s\n' "$PATH_HITS" | head -20
             fail=1
           else
             echo "无"

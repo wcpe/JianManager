@@ -121,29 +121,36 @@ for f in router_dir.glob('*.go'):
         continue
     for m in pattern.finditer(f.read_text(encoding='utf-8')):
         method, path = m.group(1).upper(), m.group(2)
-        # 只统计对外契约覆盖的路径（白名单，避免误匹配同名接口）
-        if (path == '/instances/:id/business'
-                or path == '/instances/:id/business/manifest'
-                or path == '/instances/:id/business/status'
-                or path == '/instances/business/status/batch'
-                or path == '/instances/:id/bridge/status'
-                or path == '/instances/:id/bridge/subscription'
-                or path == '/business/batch'
-                or path == '/business/batch/preview'
-                or path == '/business/reconcile'
-                or path == '/business/cursor'
-                or path == '/business/stream'
-                or path.startswith('/stats/')):
+        # 只统计对外面路由（白名单）。
+        #
+        # 【为何白名单必须与 external.yaml 的 paths 保持一致】
+        # 反方向检查（only_gin → FAIL）的语义是「被实现、但对外契约没声明」。
+        # 把**内部面**（JWTAuth 保护的 /instances/:id/business*、/business/batch* 等）
+        # 也放进来，就会变成「实现了内部路由 = 契约不一致」，而它们本来就不该出现在
+        # external.yaml（docs/openapi/README.md：不覆盖对内 API）。
+        # 早期白名单是收缩前的 17 条；external.yaml 按鉴权实情收窄到 8 条后没同步，
+        # 结果 only_gin 恒为 9 条 —— 脚本每次必 exit 1，门禁被固定成红的，等于失效。
+        # 改动 external.yaml 的 paths 时**必须**同步这里。
+        if path in ('/business/stream', '/business/cursor') or path.startswith('/stats/'):
             gin_routes.add(f'{method} {path}')
 
-print(f'  Gin 实际    {len(gin_routes)} 条（/business 与 /stats 下）')
+print(f'  Gin 实际    {len(gin_routes)} 条（对外面）')
 
 # 双向比对（忽略路径参数名差异：{id} vs :id）
+#
+# 【为何 key 必须带 method】早期只用归一化后的 path 做 key，HTTP 方法被丢掉：
+# 文档写 `POST /business/cursor` 而实现只有 `GET`，两边会被判成「一致」——
+# 而这是两回事，调用方拿到的是 404/405。key 用 "METHOD path" 才能比到方法级。
 def norm(p):
     return re.sub(r'[:{][^/}]+[}]?', '{}', p)
 
-dn = {norm(x.split(' ', 1)[1].split(' ')[0]): x for x in declared}
-gn = {norm(x.split(' ', 1)[1]): x for x in gin_routes}
+def key_of(entry):
+    """把 'GET /x/:id' 归一成 'GET /x/{}' 作为比对键。"""
+    method, _, path = entry.partition(' ')
+    return f'{method} {norm(path)}'
+
+dn = {key_of(x): x for x in declared}
+gn = {key_of(x): x for x in gin_routes}
 
 only_openapi = set(dn) - set(gn)
 only_gin = set(gn) - set(dn)
@@ -156,13 +163,13 @@ if only_openapi:
         print(f'    {dn[p]}')
     fail = True
 
-# 反方向只对**对外面**强制：入口文件只写对外那几条，内部路由本来就不该出现。
-# 这里的 gin_routes 已经是“对外面白名单”（见上方筛选），所以两边应该完全相等。
+# 反方向：白名单内的实现必须在契约里有同名同方法的声明。
 if only_gin:
-    print('\n  对外路由已实现但 OpenAPI 未声明：')
+    print('\n  对外路由已实现但 OpenAPI 未声明（或方法不一致）：')
     for p in sorted(only_gin):
         print(f'    {gn[p]}')
     fail = True
+
 
 if fail:
     print('\n  FAIL 路由与对外契约不一致（见上方清单）')
