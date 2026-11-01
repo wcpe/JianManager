@@ -23,10 +23,10 @@ import (
 // TestMergeStructured_InvalidLayerMarksResultUnusable 层语法错误 → Valid=false。
 func TestMergeStructured_InvalidLayerMarksResultUnusable(t *testing.T) {
 	res, err := MergeConfigLayers(model.ConfigFormatYAML, []MergeLayer{
-		{Level: model.ConfigScopeLevelGroup, ScopeRefID: 1, Name: "root", VersionNo: 1,
+		{Level: model.ConfigScopeGroup, ScopeRefID: 1, Name: "root", VersionNo: 1,
 			Content: "a: 1\n"},
 		// 故意写坏：未闭合的方括号。
-		{Level: model.ConfigScopeLevelInstance, ScopeRefID: 2, Name: "inst", VersionNo: 1,
+		{Level: model.ConfigScopeInstance, ScopeRefID: 2, Name: "inst", VersionNo: 1,
 			Content: "b: [1, 2\n"},
 	})
 	require.NoError(t, err, "语法错误不应在合并层直接报错（它要能给出带层信息的告警）")
@@ -66,7 +66,7 @@ func TestParseConfigContent_RejectsUnparsablePropertiesLines(t *testing.T) {
 // 仍可能带坏行，合并阶段必须自己也能识别。
 func TestMergeProperties_DroppedLinesSetInvalid(t *testing.T) {
 	res, err := MergeConfigLayers(model.ConfigFormatProperties, []MergeLayer{
-		{Level: model.ConfigScopeLevelGroup, ScopeRefID: 1, Name: "root", VersionNo: 1,
+		{Level: model.ConfigScopeGroup, ScopeRefID: 1, Name: "root", VersionNo: 1,
 			Content: "a=1\nbroken line without separator\n"},
 	})
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestMergeProperties_DroppedLinesSetInvalid(t *testing.T) {
 
 	// 注释与空行不算坏行。
 	ok, err := MergeConfigLayers(model.ConfigFormatProperties, []MergeLayer{
-		{Level: model.ConfigScopeLevelGroup, ScopeRefID: 1, VersionNo: 1,
+		{Level: model.ConfigScopeGroup, ScopeRefID: 1, VersionNo: 1,
 			Content: "# c\n\n!x\na=1\n"},
 	})
 	require.NoError(t, err)
@@ -100,14 +100,25 @@ func TestEffectiveContent_RefusesInvalidChain(t *testing.T) {
 	file := &model.ConfigFile{Name: "server", Format: model.ConfigFormatYAML}
 	require.NoError(t, db.Create(file).Error)
 
-	// 直接写一层坏内容（绕过保存校验，模拟存量数据）。
-	// ContentHash 是 char(64) not null，给个占位值即可——本用例不走 hash 校验路径。
+	// 造一个真实分组，并把层挂在它上面：loadLayerContents 只加载
+	// **作用域链里真实存在**的层的头版本（凭空写 ScopeRefID=1 而分组不存在时，
+	// 该层会被静默跳过——那样这条用例就只能测到“没层”，测不到“层坏了”）。
+	group := seedLayerGroup(t, db, "root-group", nil)
 	require.NoError(t, db.Create(&model.ConfigLayerVersion{
-		ConfigFileID: file.ID, ScopeLevel: model.ConfigScopeLevelGroup, ScopeRefID: 1,
+		ConfigFileID: file.ID, ScopeLevel: model.ConfigScopeGroup, ScopeRefID: group.ID,
 		VersionNo: 1, Content: "bad: [unclosed\n", ContentHash: strings.Repeat("0", 64),
 	}).Error)
 
-	_, _, err := svc.EffectiveContent(file.ID, 7)
+	// 目标实例必须真实存在：EffectiveContent 会先解析作用域链（要查实例）。
+	inst := seedLayerInstance(t, db, "inst-1")
+	// **还要把实例加入该分组**：作用域链是从「实例的组成员关系」推出来的，
+	// 只建分组而不建成员关系，链里就不会有这个分组，那一层也就不会被加载
+	// ——用例会变成“没有任何层 -> 合并成功”，永远测不到“层坏了”。
+	require.NoError(t, db.Create(&model.InstanceGroupMember{
+		GroupID: group.ID, InstanceID: inst.ID,
+	}).Error)
+
+	_, _, err := svc.EffectiveContent(file.ID, inst.ID)
 	require.Error(t, err, "不可信的合成结果必须报错，不得返回内容")
 	require.True(t, errors.Is(err, ErrConfigLayerInvalid), "应返回 ErrConfigLayerInvalid 便于调用方分支, got: %v", err)
 }

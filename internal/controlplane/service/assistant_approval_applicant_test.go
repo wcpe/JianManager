@@ -14,14 +14,26 @@ package service
 import (
 	"testing"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
+	"github.com/wcpe/JianManager/internal/controlplane/database"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // TestAssistantPrincipal_CarriesActAsUserID 助手身份必须带“代表哪个用户”。
 func TestAssistantPrincipal_CarriesActAsUserID(t *testing.T) {
-	db := newApprovalTestDB(t)
+	// 用全量 schema 的库：LoadUserAccess 要查 user_role_bindings 等 RBAC 表，
+	// 而 newApprovalTestDB / newConfigTestDB 都只建了几张业务表。
+	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/principal.db"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, database.AutoMigrate(db))
+	t.Cleanup(func() {
+		if sqlDB, e := db.DB(); e == nil && sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
 	authz := NewAuthzService(db)
 
 	// 造一个真用户，否则 LoadUserAccess 拿不到任何权限。
@@ -49,6 +61,7 @@ func TestSubmitApproval_RejectsZeroApplicant(t *testing.T) {
 	_, _, err := svc.SubmitApproval(SubmitApprovalParams{
 		ApplicantUserID: 0, // 关键：无人
 		ApplicantKind:   model.ApprovalApplicantAgent,
+		RequireApplicant: true, // 助手委托链：必须有真实用户
 		Action:          "instance_stop",
 		TargetType:      "instance",
 		TargetID:        "1",

@@ -38,8 +38,6 @@ func seedWaitingRun(t *testing.T, svc *AssistantChatService) (*model.AssistantCo
 	return conv, run
 }
 
-func strPtr(s string) *string { return &s }
-
 // TestSweepStaleConfirmations_UnlocksConversation 过期票据被收口后，会话不再被占。
 //
 // 这是「用户关页面不处理确认」这条最常见的真实路径。

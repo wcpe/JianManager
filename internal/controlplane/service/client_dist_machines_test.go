@@ -58,9 +58,9 @@ func TestQueryMachines_AggregatesAndPaginates(t *testing.T) {
 	require.Equal(t, "m1", m1.MachineID)
 	require.Equal(t, int64(2), m1.Updates)
 	require.Equal(t, int64(300), m1.DownloadBytes, "bytes 应求和")
-	require.Equal(t, 5, m1.LatestVersion, "latestVersion 取窗口内最大 version")
-	require.Equal(t, 5, m1.CurrentVersion, "currentVersion 取最近一条事件的 version")
-	require.Equal(t, 0, m1.VersionLag)
+	require.Equal(t, 7, m1.LatestVersion, "latestVersion 取**全局**窗口内最大 version（平台最新=7）")
+	require.Equal(t, 5, m1.CurrentVersion, "currentVersion 取该机器最近一条事件的 version")
+	require.Equal(t, 2, m1.VersionLag, "滞后 = 全局最新 7 - 本机 5")
 
 	m2 := res.Items[1]
 	require.Equal(t, "m2", m2.MachineID)

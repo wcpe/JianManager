@@ -74,6 +74,11 @@ type SubmitApprovalParams struct {
 	ApplicantKind string
 	// TokenID Agent 调用时记录是哪把 Token（人类为空）。
 	TokenID string
+	// RequireApplicant 是否强制要求 ApplicantUserID 非 0。
+	//
+	// 助手委托链必须为 true（那里一定代表某个真实用户）；真实 Agent Token 链为 false
+	// （归属可能查不到，原设计允许“申请人未知”照常落票）。
+	RequireApplicant bool
 	// Action 按 action 粒度（如 mcp.instance_stop）。
 	Action string
 	// TargetType / TargetID 由**服务端**解析后传入，客户端不得自报归属。
@@ -96,13 +101,16 @@ func (s *ApprovalService) SubmitApproval(p SubmitApprovalParams) (*model.Approva
 	if p.Action == "" {
 		return nil, false, fmt.Errorf("%w: 缺少 action", ErrAssistantInvalid)
 	}
-	// 申请人必须是具体的人：0 代表“无人”。
+	// 申请人缺失时的语义：**人类/助手委托场景必须有人，Agent Token 场景允许未知**。
 	//
-	// 【为何在服务层也卡】上游（mcp 拦截层）应当已经填对，但一旦漏填，后果不是
-	// 报个错就完了：幂等部分唯一索引含 applicant_user_id，applicant=0 会让**不同用户**
-	// 的同 action+同目标+同参数请求共用同一张票并被回读；而 own.* 按 applicant 过滤，
-	// 真申请人看不到自己的申请也撤不回。两条都是静默的，所以必须在这里 fail-fast。
-	if p.ApplicantUserID == 0 {
+	// 【为何不能一刀切拒绝 0】Agent Token 归属查不到（Token 已被删、或调用方没给
+	// deps.Agent）时会得到 0；原设计是「照常落票，申请人显示未知」——这比因为
+	// 一个归属查询失败就把高危申请全部挡回去安全得多。
+	//
+	// 真正必须拦住的是**助手委托**那条链：那里一定代表某个真实用户，若得到 0
+	// 则是 principal 派生出了 bug（这正是本次修复的缺陷），必须 fail-fast。
+	// 判据不能用 ApplicantKind：两条链都标 agent（助手委托也是“代为执行”）。
+	if p.ApplicantUserID == 0 && p.RequireApplicant {
 		return nil, false, fmt.Errorf("%w: 申请人不能为空（无法确定审批归属）", ErrAssistantInvalid)
 	}
 	if p.ApplicantKind == "" {
@@ -477,6 +485,7 @@ func (s *ApprovalService) Stop() {
 //   - `ExpireStale` 只扫 pending，永远碰不到它；
 //   - 重试被 CAS 拒（consumed_at 已写）；
 //   - `ApprovalTerminalStatuses()` 不含 executing，所以它既不终态也不可再决策。
+//
 // 运维只能回答“谁批准了”，回答不了“到底执行了没有”——而那正是审批中心的核心承诺。
 //
 // 处理方向取**保守的一侧**：回执标 `unverified` + `PROCESS_RESTART`，票据置 `failed`。
@@ -512,7 +521,6 @@ func (s *ApprovalService) RecoverInterruptedExecutions() (int64, int64, error) {
 		Updates(map[string]any{
 			"status":         model.ApprovalStatusFailed,
 			"failure_reason": "PROCESS_RESTART: 进程重启时该审批仍在执行中，结果未知（可能已生效），请人工核对目标状态",
-			"finished_at":    now,
 		})
 	if tickets.Error != nil {
 		return 0, receipts.RowsAffected, fmt.Errorf("收口执行中票据失败: %w", tickets.Error)
@@ -540,7 +548,6 @@ func (s *ApprovalService) MarkExecutionPanicked(ticketID uint, panicValue string
 		Updates(map[string]any{
 			"status":         model.ApprovalStatusFailed,
 			"failure_reason": reason,
-			"finished_at":    s.now(),
 		}).Error
 }
 

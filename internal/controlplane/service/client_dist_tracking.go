@@ -819,10 +819,14 @@ type ClientMachineEventsResult struct {
 
 // machineRow SQL 聚合的中间行（只用于取值，不对外）。
 type machineRow struct {
-	MachineID      string
-	ChannelID      string
-	Updates        int64
-	LastUpdateAt   time.Time
+	MachineID string
+	ChannelID string
+	Updates   int64
+	// LastUpdateAt 用字符串接：`MAX(created_at)` 是**聚合结果**，数据库不会给它带上
+	// 列的时区元信息，SQLite 下驱动返回的是 string，直接 Scan 到 time.Time 会报
+	// `unsupported Scan, storing driver.Value type string into type *time.Time`。
+	// 解析在后处理里做（兼容几种常见时间格式）。
+	LastUpdateAt   string
 	LatestVersion  int
 	CurrentVersion int
 	DownloadBytes  int64
@@ -881,12 +885,17 @@ func (s *ClientDistTrackingService) QueryMachines(q ClientMachineListQuery) (*Cl
 		base = base.Where("channel_id = ?", q.ChannelID)
 	}
 
-	// latest_version 用窗口内出现过的最大 version 近似「当前可用的最新版本」，
-	// current_version 取该机器**最近一次**事件的 version。
-	// 两者相减即版本滞后；用窗口内最大值而不是跨表查 manifest，是为了让本端点
-	// 只碰明细表（spec §3「不改后端 schema」）。
+	// latest_version 必须取**全局最新**（该频道/窗口内所有机器见过的最大 version），
+	// 而不是`MAX(version)` 在对单台机器的事件里取。
+	//
+	// 【为何这么改】在单台的分组里取 MAX，得到的是「这台机器自己用过的最高版本」；
+	// 一台从来只拉过 v4 的机器，按那个口径 lag = 4-4 = 0，而实际上它已经落后好几版。
+	// 版本滞后的语义前提就是「跟平台最新比」，所以基准必须来自全局。
+	// 仍然只碰明细表（spec §3「不改后端 schema」）。
 	selectSQL := "machine_id, MAX(channel_id) AS channel_id, COUNT(*) AS updates, " +
-		"MAX(created_at) AS last_update_at, MAX(version) AS latest_version, " +
+		"MAX(created_at) AS last_update_at, " +
+		"COALESCE((SELECT MAX(e3.version) FROM client_dist_events e3 " +
+		"WHERE e3.created_at >= ? AND e3.created_at <= ? AND e3.version > 0), 0) AS latest_version, " +
 		"COALESCE(SUM(bytes), 0) AS download_bytes"
 
 	// 当前版本：按机器取最近一条事件的 version。用相关子查询而不是再扫一遍全表。
@@ -898,25 +907,37 @@ func (s *ClientDistTrackingService) QueryMachines(q ClientMachineListQuery) (*Cl
 	countStmt := base.Session(&gorm.Session{}).Select("COUNT(DISTINCT machine_id)")
 	var total int64
 	if err := countStmt.Scan(&total).Error; err != nil {
-		return nil, fmt.Errorf("统计机器数失败: %w")
+		return nil, fmt.Errorf("统计机器数失败: %w", err)
 	}
 
 	var rows []machineRow
 	agg := base.Session(&gorm.Session{}).
-		Select(selectSQL, q.From, q.To).
+		Select(selectSQL, q.From, q.To, q.From, q.To).
 		Group("machine_id")
 	// 排序键：version_lag 是派生值（latest_version - current_version），
 	// 它**不是**聚合结果里的真实列，直接 ORDER BY version_lag 在 MySQL/SQLite 都会报未知列。
 	// 因此按表达式排序，而不是按别名。
 	orderExpr := col
 	if col == "version_lag" {
-		orderExpr = "(latest_version - current_version)"
+		// 派生值：latest_version（全局子查询）减 current_version（本机器子查询），
+		// 两者都不是聚合结果里的真实列，必须按**完整表达式**排序。
+		//
+		// 时间用字面量而不带占位符：`Order()` 不接受绑参，而这两个值是服务端
+		// 自己解析出的 time.Time、按固定格式格式化，不含用户输入（无注入面）。
+		from := q.From.UTC().Format("2006-01-02 15:04:05")
+		to := q.To.UTC().Format("2006-01-02 15:04:05")
+		orderExpr = "((SELECT MAX(e3.version) FROM client_dist_events e3 " +
+			"WHERE e3.created_at >= '" + from + "' AND e3.created_at <= '" + to + "' AND e3.version > 0) " +
+			"- COALESCE((SELECT e2.version FROM client_dist_events e2 " +
+			"WHERE e2.machine_id = client_dist_events.machine_id " +
+			"AND e2.created_at >= '" + from + "' AND e2.created_at <= '" + to + "' " +
+			"ORDER BY e2.created_at DESC LIMIT 1), 0))"
 	}
 	agg = agg.Order(fmt.Sprintf("%s %s", orderExpr, dir))
 	// 次序键保证分页稳定：同一排序值下若没有唯一键，翻页可能重复或漏行。
 	agg = agg.Order("machine_id ASC").Offset((page - 1) * size).Limit(size)
 	if err := agg.Scan(&rows).Error; err != nil {
-		return nil, fmt.Errorf("聚合机器清单失败: %w")
+		return nil, fmt.Errorf("聚合机器清单失败: %w", err)
 	}
 
 	items := make([]ClientMachineSummary, 0, len(rows))
@@ -931,7 +952,7 @@ func (s *ClientDistTrackingService) QueryMachines(q ClientMachineListQuery) (*Cl
 			MachineID:      r.MachineID,
 			ChannelID:      r.ChannelID,
 			Updates:        r.Updates,
-			LastUpdateAt:   r.LastUpdateAt.UTC().Format(time.RFC3339),
+			LastUpdateAt:   formatAggregatedTime(r.LastUpdateAt),
 			LatestVersion:  r.LatestVersion,
 			CurrentVersion: r.CurrentVersion,
 			VersionLag:     lag,
@@ -994,6 +1015,35 @@ func (s *ClientDistTrackingService) QueryMachineEvents(machineID, channelID stri
 		To:        to.UTC().Format(time.RFC3339),
 		Items:     items,
 	}, nil
+}
+
+// formatAggregatedTime 把数据库返回的聚合时间值归一成 RFC3339。
+//
+// 【为何不能直接 Scan 到 time.Time】见 machineRow.LastUpdateAt 的注释。
+// 这里兼容 GORM/SQLite 的几种输出形态（含带纳秒、带时区后缀的变体）；
+// 全部解析失败时返回空串——前端对空串的渲染是「—」，
+// 比抛一个 500 让整页无法加载要好（该字段不影响排序主路径）。
+func formatAggregatedTime(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999-07:00:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+	}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t.UTC().Format(time.RFC3339)
+		}
+	}
+	return ""
 }
 
 // machineIdentity 三张表拼出来的机器展示信息。

@@ -89,6 +89,9 @@ type ApprovalInterceptParams struct {
 	ApplicantUserID uint
 	ApplicantKind   string
 	TokenID         string
+	// RequireApplicant 见 SubmitApprovalParams。拦截层按“是否委托身份”填：
+	// 助手链（ActAsUserID!=0）必须有人，真实 Token 链允许未知。
+	RequireApplicant bool
 }
 
 // InterceptForApproval 判定并（必要时）落票据。
@@ -113,15 +116,16 @@ func (s *ApprovalService) InterceptForApproval(p ApprovalInterceptParams) Approv
 		reason = fmt.Sprintf("Agent 申请执行 %s：%s", p.ToolName, req.Reason)
 	}
 	ticket, _, err := s.SubmitApproval(SubmitApprovalParams{
-		ApplicantUserID: p.ApplicantUserID,
-		ApplicantKind:   p.ApplicantKind,
-		TokenID:         p.TokenID,
-		Action:          p.ToolName,
-		TargetType:      p.TargetType,
-		TargetID:        p.TargetID,
-		Payload:         p.Payload,
-		Evidence:        p.Evidence,
-		Reason:          reason,
+		ApplicantUserID:  p.ApplicantUserID,
+		ApplicantKind:    p.ApplicantKind,
+		TokenID:          p.TokenID,
+		RequireApplicant: p.RequireApplicant,
+		Action:           p.ToolName,
+		TargetType:       p.TargetType,
+		TargetID:         p.TargetID,
+		Payload:          p.Payload,
+		Evidence:         p.Evidence,
+		Reason:           reason,
 	})
 	if err != nil {
 		return ApprovalInterceptResult{Blocked: true, Err: err, Message: err.Error()}

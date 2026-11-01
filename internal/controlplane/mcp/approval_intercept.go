@@ -115,6 +115,9 @@ func interceptApproval(
 		ApplicantUserID: applicantUserID,
 		ApplicantKind:   model.ApprovalApplicantAgent,
 		TokenID:         tokenID,
+		// 委托身份（助手链）必须拿到真实用户：拿不到就是 principal 派生 bug，
+		// 宁可直接拒绝也别落一张无主票。真实 Token 链允许归属未知。
+		RequireApplicant: p.ActAsUserID != 0,
 	})
 	if !res.Blocked {
 		return false, ToolResult{}
