@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -121,6 +122,27 @@ func (m *Manager) landedVisibleInVL(source SourceConfig, landed []logtypes.Event
 	return m.landedVisibleInVLCtx(context.Background(), source, landed)
 }
 
+// gapVisibilityBudget 是「缺口核对」在 VL 上等待「写后可见」的总预算。
+//
+// 为何向 6s：VL 的写后可见延迟实测恒为 1.028~1.057s（`_time` 新旧无关）；
+// 退避序列 0/0.2/0.6/1.1s 的四个探测点在 1.0s 附近刚好够，但只要 VL 因负载
+// 把可见延迟推到 1.5~3s 就会再次落空。本路径已异步化（不对投递主链施加延迟），
+// 因此把预算留到 6s，覆盖「可见延迟上行为 3s」的退化情形。
+//
+// 不设为无限：缺口核对是 best-effort，预算耗尽仍要如实放弃本轮（不下任何虚假结论）。
+const gapVisibilityBudget = 6 * time.Second
+
+// gapVisibilityBudgetForTest 让用例能把预算收紧到毫秒级，避免「预算内不可见」
+// 那条用例真的等满 6 秒。生产路径始终走 gapVisibilityBudget。
+var gapVisibilityBudgetForTest = gapVisibilityBudget
+
+func (m *Manager) gapVisibilityBudgetValue() time.Duration {
+	if gapVisibilityBudgetForTest > 0 {
+		return gapVisibilityBudgetForTest
+	}
+	return gapVisibilityBudget
+}
+
 func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConfig, landed []logtypes.Event) []logtypes.Event {
 	if m == nil || len(landed) == 0 || m.cat == nil {
 		return nil
@@ -135,9 +157,91 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 		canonical = append(canonical, normalized)
 	}
 	landed = canonical
+	// 按天分组只需一次：重试轮次只重复「向 VL 查询」，不重复分组与规范化。
+	byDay := make(map[string][]logtypes.Event)
+	order := make([]string, 0, 4)
+	for _, ev := range landed {
+		day, derr := eventUTCDay(source, ev)
+		if derr != nil || day == "" {
+			// 取不到天：保守地不作证据（不消解对应缺口）。
+			continue
+		}
+		if _, seen := byDay[day]; !seen {
+			order = append(order, day)
+		}
+		byDay[day] = append(byDay[day], ev)
+	}
+	ctx, cancel := context.WithTimeout(parent, m.gapVisibilityBudgetValue())
+	defer cancel()
+	// **退避重试，而不是「查一次就定论」**（2026-11-02 真机缺陷修复）。
+	//
+	// 事故形态（FR-498 长稳 + 干净单源实验双重实测）：
+	//   05:34:52 投影写入结束 gen=projection-1 events=6 verified=6 status=200   ← 写成功
+	//   05:34:52 投影校验查询 events=6 window=[21:34:50Z, 21:34:53Z]
+	//   05:34:52 WARN 本地段有、VL 查不到 missingCount=6 visibleCount=0         ← 查空
+	//   同一个 event_id 事后直查 VL：查到 9 条（projection-1/3/5/7/9/11/13/15/17），
+	//   且它在 05:34:52 → 05:35:23 的 31 秒内被反复报缺失 9 次。
+	// ⇒ **数据确实写进去了，只是「写后约 1.0 秒才可见」**（实测 1.028~1.057s，
+	//   与 `_time` 是新是旧无关）。旧实现只查一次 ⇒ 每次都落在 1 秒窗口内 ⇒ 100% 查空
+	//   ⇒ 缺口永不消解 ⇒ WAL 不回收 ⇒ 积压丢最旧 ⇒ 产生更多缺口（正反馈）。
+	//
+	// 为什么这是**唯一的不一致点**：同一个「查 VL 可见性」的动作，投递路径的
+	// `verifyProjectionChunk` 有完整的 `nextVerifyBackoff` 退避环（其注释明确写着
+	// 「封顶 500ms 后探测点变为 0/0.2/0.6/1.1 s，数据一可见就命中并返回」），
+	// 而本函数此前没有任何重试。现在两者同源。
+	//
+	// 语义边界（一个字都没放宽）：
+	//   · 「查不到的就不作证据」方向不变 —— 重试只是多问几次，不改变判据；
+	//   · 查询失败仍整体放弃（保守方向不变）；
+	//   · 全部可见立即返回，**零额外延迟**（正常路径是第一次探测就命中）。
+	//
+	// 为什么预算取 `gapVisibilityBudget`（6s）而不是既有的 `verifyBackoffMax*4+1s`（3s）：
+	// 那 3 秒是给「退避探测」设计的固定预算，实测可见延迟 1.0s 时四个探测点
+	// （0/0.2/0.6/1.1）刚好够；但只要 VL 因负载把可见延迟推到 1.5~3s 就会再次落空。
+	// 本路径已异步化（见 gap_resolve_worker.go），拉长预算不再阻塞投递主链。
+	backoff := m.verifyBackoffMin
+	var kept []logtypes.Event
+	probes := 0
+	for {
+		probes++
+		var qerr error
+		kept, qerr = m.landedVisibleProbeOnce(ctx, source, order, byDay)
+		if qerr != nil {
+			slog.Warn("缺口消解前核对 VL 可见性失败：本轮不消解任何缺口（下轮重试）",
+				"source", source.LogSourceID, "probes", probes, "error", qerr)
+			return nil
+		}
+		if len(kept) == len(landed) {
+			// 全部可见：立即返回（热路径，无额外等待）。
+			return kept
+		}
+		select {
+		case <-ctx.Done():
+			// 预算内未全部可见：如实保留缺口（不消解），并记录探测次数便于现场判断
+			// 「是可见延迟超预算」还是「数据真的没进 VL」。
+			slog.Warn("缺口核对在预算内未等到全部可见，本轮只消解已可见的部分（缺口其余部分保持可见）",
+				"source", source.LogSourceID, "probes", probes,
+				"landedCount", len(landed), "visibleCount", len(kept),
+				"budget", gapVisibilityBudget)
+			return kept
+		case <-time.After(backoff):
+		}
+		backoff = nextVerifyBackoff(backoff, m.verifyBackoffMax)
+	}
+}
+
+// landedVisibleProbeOnce 执行**一次**可见性核对：按天取该天已发布白名单，向 VL 查这批事件里
+// 哪些可见，返回可见的那些（顺序即 landed 的顺序）。
+//
+// 返回 error 表示「查询这一动作失败」（网络/超时/鉴权等）——调用方据此整体放弃本轮，
+// 与历史语义一致（查询不确定时不作任何证据）。
+func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfig, order []string, byDay map[string][]logtypes.Event) ([]logtypes.Event, error) {
 	// **必须按每个事件所属的分区取白名单**，不能统一用 `source.UTCDay`：
 	// 缺口跨越历史天（生产实测缺口在 10-21，而源的当前天可能是今天），
 	// 用当前天分区的白名单去查历史天的事件必然查不到，会把「可见」误判成「不可见」。
+	//
+	// 每轮探测都重新取（不跨轮缓存）：重试窗口内白名单可能被并发发布更新，
+	// 用旧白名单会把「刚变可见」误判成「仍不可见」。catalog.Get 是内存读，成本可忽略。
 	generationsByDay := make(map[string][]string)
 	generationsFor := func(day string) ([]string, bool) {
 		if gens, ok := generationsByDay[day]; ok {
@@ -152,23 +256,7 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 		generationsByDay[day] = gens
 		return gens, len(gens) > 0
 	}
-	ctx, cancel := context.WithTimeout(parent, m.verifyBackoffMax*4+time.Second)
-	defer cancel()
-	// 按天分组后各组用各自的白名单批量查询（见上方 generationsFor 的理由）。
-	visible := make([]logtypes.Event, 0, len(landed))
-	byDay := make(map[string][]logtypes.Event)
-	order := make([]string, 0, 4)
-	for _, ev := range landed {
-		day, derr := eventUTCDay(source, ev)
-		if derr != nil || day == "" {
-			// 取不到天：保守地不作证据（不消解对应缺口）。
-			continue
-		}
-		if _, seen := byDay[day]; !seen {
-			order = append(order, day)
-		}
-		byDay[day] = append(byDay[day], ev)
-	}
+	visible := make([]logtypes.Event, 0, 16)
 	for _, day := range order {
 		gens, ok := generationsFor(day)
 		if !ok {
@@ -185,7 +273,7 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 		rec, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
 		client, qerr := m.publishedEvidenceClient(daySource, rec)
 		if qerr != nil || client == nil {
-			return nil
+			return nil, fmt.Errorf("ingest: 缺口核对目标不可读: %w", qerr)
 		}
 		closed := publishedEvidenceClosed(rec, daySource)
 		candidates := make([]logtypes.Event, 0, len(byDay[day]))
@@ -196,9 +284,7 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 		}
 		batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, gens, candidates)
 		if qerr != nil {
-			slog.Warn("缺口消解前核对 VL 可见性失败：本轮不消解任何缺口（下轮重试）",
-				"source", source.LogSourceID, "utcDay", day, "error", qerr)
-			return nil
+			return nil, qerr
 		}
 		visible = append(visible, batchVisible...)
 	}
@@ -206,25 +292,31 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 	for _, ev := range visible {
 		visibleSet[ev.EventID] = struct{}{}
 	}
-	missing := make([]logtypes.Event, 0)
 	kept := make([]logtypes.Event, 0, len(visible))
-	for _, ev := range landed {
+	var missing []string
+	for _, ev := range byDay0(byDay, order) {
 		if _, ok := visibleSet[ev.EventID]; ok {
 			kept = append(kept, ev)
 			continue
 		}
-		missing = append(missing, ev)
-	}
-	if len(missing) > 0 {
-		ids := make([]string, 0, len(missing))
-		for _, ev := range missing {
-			ids = append(ids, ev.EventID)
+		if len(missing) < 3 {
+			missing = append(missing, ev.EventID)
 		}
-		slog.Warn("本地段有、VL 查不到：这些事件不得作为缺口消解证据（缺口保持可见）",
-			"source", source.LogSourceID, "missingCount", len(missing),
-			"visibleCount", len(visible), "sampleEventIDs", ids[:min(len(ids), 3)])
 	}
-	return kept
+	if len(kept) < len(byDay0(byDay, order)) {
+		slog.Debug("本轮缺口核对仍有事件在 VL 查不到（可能是写后可见延迟，退避重试中）",
+			"source", source.LogSourceID, "sampleEventIDs", missing)
+	}
+	return kept, nil
+}
+
+// byDay0 按 order 展平分组事件（保持 landed 的原始顺序，便于调用方对齐）。
+func byDay0(byDay map[string][]logtypes.Event, order []string) []logtypes.Event {
+	out := make([]logtypes.Event, 0, 16)
+	for _, day := range order {
+		out = append(out, byDay[day]...)
+	}
+	return out
 }
 
 // visibleEventsInVL 用**一次**查询取出这批事件里在 VL 可见的那些（按已发布代次白名单）。

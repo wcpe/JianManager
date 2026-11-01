@@ -64,6 +64,18 @@ type reconcileVLFixture struct {
 	//（模拟「写入自称成功、数据却永远不可见」= 2026-10-09 生产循环的形态：
 	// `投影写入结束 status=200` 之后 `投影校验完成` 恒报 not fully visible）。
 	silentDropInsert bool
+	// delayedVisibilityQueries 让「刚写入的行」在**最初的 N 次内容查询里不可见**，
+	// 之后才出现——精确复刻真实 VL 的「写后约 1 秒才可见」（2026-11-02 实测 1.028~1.057s）。
+	//
+	// 为什么要这个旋钮：缺口核对（landedVisibleInVL）此前**只查一次**，于是每次都在
+	// 可见延迟窗口内查空 ⇒ 缺口永不消解 ⇒ WAL 不回收 ⇒ 积压丢最旧 ⇒ 更多缺口。
+	// 有了它，「重试是否真的生效」就能被断言咬住（去掉重试 ⇒ 必红）。
+	delayedVisibilityQueries int
+	// visibleAfterQuery 记录每个 event_id 第一次变得可见时所处的查询序号（从 1 起），
+	// 仅用于诊断输出。
+	visibleAfterQuery map[string]int
+	// querySeq 是内容查询的单调序号（delayedVisibilityQueries 的判据基准）。
+	querySeq int
 	// queryGate 非 nil 时每次内容查询都挂住，用于把「确认取证进行中」钉在确定位置。
 	queryGate *queryGate
 }
@@ -112,8 +124,30 @@ func (f *reconcileVLFixture) serveContentQuery(w http.ResponseWriter, r *http.Re
 	from, to := reconcileWindow(r)
 	f.mu.Lock()
 	rows := append([]reconcileVLRow(nil), f.rows...)
+	// 可见延迟：只让「本次查询之前就已经存在 N 次查询还看不见」——按写入序号做，
+	// 见 insertVisibilityGate。这里取当前查询序号，供逐行判断是否已过延迟窗口。
+	f.querySeq++
+	seq := f.querySeq
+	if f.visibleAfterQuery == nil {
+		f.visibleAfterQuery = make(map[string]int)
+	}
+	delayed := f.delayedVisibilityQueries
+	for _, row := range rows {
+		if _, ok := f.visibleAfterQuery[row.EventID]; !ok && seq > delayed {
+			f.visibleAfterQuery[row.EventID] = seq
+		}
+	}
 	f.mu.Unlock()
 	for _, row := range rows {
+		// 延迟窗口内：这些行对查询不可见（但要先登记「它此刻变得可见了」）。
+		if delayed > 0 {
+			f.mu.Lock()
+			shown := seq > delayed
+			f.mu.Unlock()
+			if !shown {
+				continue
+			}
+		}
 		if !filter.match(row) || !reconcileWithin(row.EventTimeUTC, from, to) {
 			continue
 		}
