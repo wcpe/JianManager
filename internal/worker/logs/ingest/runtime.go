@@ -525,15 +525,15 @@ type Manager struct {
 	//
 	// 为什么单独一个字段而不是改 root：root 同时用于定位配置文件、诊断等需要长期
 	// 保留的东西；拿它当临时目录会一并搬走不该搬的东西。
-	logScratch     string
-	vl             *vlsup.Client
-	vlRoute        func(SourceConfig) (*vlsup.Client, bool, error)
-	cat            *catalog.Catalog
-	journal        catalog.Journal
-	archive        *archive.Registry
-	sources        map[string]SourceConfig
-	pipes          map[string]*pipeline.Pipeline
-	state          persistedState
+	logScratch string
+	vl         *vlsup.Client
+	vlRoute    func(SourceConfig) (*vlsup.Client, bool, error)
+	cat        *catalog.Catalog
+	journal    catalog.Journal
+	archive    *archive.Registry
+	sources    map[string]SourceConfig
+	pipes      map[string]*pipeline.Pipeline
+	state      persistedState
 	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行。
 	// nil 表示尚未打开（测试直接构造 Manager 的场景在首次 persist 时按需打开）。
 	index *stateindex.Store
@@ -645,6 +645,16 @@ type Manager struct {
 	// adjudications 是「正常身份裁定」留痕的节流聚合状态（见 traceIdentityAdjudication）。
 	// 每个 Manager 一份：无包级可变状态，用例之间互不干扰。
 	adjudications identityAdjudicationThrottle
+	// conflictTraces 是「不可裁定身份冲突」留痕的节流聚合状态（见 traceIdentityConflict），
+	// 由 New 用 newConflictThrottle() 初始化（阈值与正常裁定分开）。
+	//
+	// 为什么它必须与 adjudications **分开计数**：两者是不同性质的信号——正常收敛是收敛，
+	// 真冲突是数据歧义。合用一个节流器会让「今天有多少次真冲突」被正常收敛的洪水量级淹没。
+	conflictTraces identityAdjudicationThrottle
+	// identityConflictTraces 累计「已留痕（含被节流折叠）的不可裁定冲突」条数（观测用）。
+	//
+	// 为什么必须导出读数：节流的前提是「总数仍可查」，否则它就是静默。
+	identityConflictTraces atomic.Int64
 	// canonicalRecoveryReuses 累计「一轮投递内复用权威集合」的次数（观测/回归用：让
 	// "pending 轮不再重复全量重建"这一事实可被断言，而不必依赖耗时阈值）。
 	canonicalRecoveryReuses atomic.Int64
@@ -2482,8 +2492,10 @@ func New(opts Options) (*Manager, error) {
 	}
 	m := &Manager{
 		root: opts.Root, vl: opts.VL, vlRoute: opts.VLRoute, vlReadRoute: opts.VLReadRoute, cat: opts.Catalog, journal: opts.Journal, archive: opts.Archive,
+		// 不可裁定冲突的留痕用**独立阈值**（汇总窗比正常收敛长，见 newConflictThrottle）。
+		conflictTraces: newConflictThrottle(),
 		// 临时中转目录放 tmpfs（见 logScratch 字段注释）。
-		logScratch: eventstore.MemoryRoot("scratch-" + filepath.Base(opts.Root)),
+		logScratch:            eventstore.MemoryRoot("scratch-" + filepath.Base(opts.Root)),
 		vlWritePermitRoute:    opts.VLWritePermitRoute,
 		resourceBudget:        opts.ResourceBudget,
 		readLimits:            opts.ReadLimits,
@@ -4449,8 +4461,17 @@ func adjudicateSameIntervalIdentity(existing eventIdentity, event logtypes.Event
 // adjudicationFlushWindow 或累计 adjudicationFlushEvery 次裁定输出一条**汇总**（次数 + 按源分布）。
 // 于是日志量 = O(源数 + 时间窗)，与裁定**次数脱钩**，而"发生了多少次、涉及哪些源"仍然可查 ✓。
 //
-// 边界（刻意不做）：不可裁定的**真冲突**（identityConflictRecord）不走本机制——它本就稀少、
-// 且必须逐条 fail loud，节流它等于把真信号也压掉 ✗。
+// 边界：~~不可裁定的**真冲突**（identityConflictRecord）不走本机制——它本就稀少、
+// 且必须逐条 fail loud，节流它等于把真信号也压掉 ✗。~~
+//
+// **2026-11-01 修正：这条前提是错的。** 「本就稀少」在长跑下不成立：真机实测 60 源 × 30 行/s
+// 默认周期 10 分钟就有 180 万条冲突（727 MB），30s 周期 30 分钟 1108 万条（4.4 GB）——
+// 因为每轮对账都整段重读并重算身份，同一个冲突会被反复重新发现。
+// 逐条 fail loud 的结果是日志把磁盘写满、可观测性反而崩掉。
+//
+// 真冲突现在也走节流（见 traceIdentityConflict），但**用独立的计数键与更长的汇总窗**，
+// 且隔离记录 IdentityConflicts / 计数器 / 投影质量标记**一律不变**——被压掉的只有日志行数，
+// 不是信号本身。
 const (
 	// adjudicationFlushWindow 是汇总输出的时间窗。
 	adjudicationFlushWindow = 60 * time.Second
@@ -4494,16 +4515,49 @@ type identityAdjudicationThrottle struct {
 	mu sync.Mutex
 	// now 可注入（测试用）；nil ⇒ time.Now。
 	now func() time.Time
+	// flushEvery / flushWindow / maxSamples 是该实例的阈值（零值 ⇒ 用包级默认，
+	// 即 adjudicationFlushEvery / adjudicationFlushWindow / maxAdjudicationSamples）。
+	//
+	// 为什么要可配：同一个节流器要分别服务「正常收敛」与「真冲突」，而两者需要的节奏不同
+	// （真冲突更严重、更不应该重复刷）。抽成字段而不是复制一份实现，保证“样例+汇总+总数守恒」
+	// 这套语义只有一份。
+	flushEvery  uint64
+	flushWindow time.Duration
+	maxSamples  int
 	// lastFlush 是上一次汇总输出的时刻（零值 ⇒ 用首次观察时刻初始化）。
 	lastFlush time.Time
 	// total 是自上次汇总以来的裁定次数。
 	total uint64
 	// perSource 是自上次汇总以来的按源计数。
 	perSource map[string]uint64
-	// sampled 记录已输出过样例的源（有界：样例总数不超过 maxAdjudicationSamples）。
+	// sampled 记录已输出过样例的源（有界：样例总数不超过 maxSamples）。
 	sampled map[string]struct{}
 	// samples 是已输出的样例条数。
 	samples int
+}
+
+// every 返回生效的次数阈值。
+func (t *identityAdjudicationThrottle) every() uint64 {
+	if t.flushEvery > 0 {
+		return t.flushEvery
+	}
+	return adjudicationFlushEvery
+}
+
+// window 返回生效的时间窗。
+func (t *identityAdjudicationThrottle) window() time.Duration {
+	if t.flushWindow > 0 {
+		return t.flushWindow
+	}
+	return adjudicationFlushWindow
+}
+
+// sampleCap 返回生效的样例条数上限。
+func (t *identityAdjudicationThrottle) sampleCap() int {
+	if t.maxSamples > 0 {
+		return t.maxSamples
+	}
+	return maxAdjudicationSamples
 }
 
 // observe 记录一次正常裁定，返回「本次该输出什么」。
@@ -4532,9 +4586,9 @@ func (t *identityAdjudicationThrottle) observe(sourceKey, kind string) identityA
 	}
 	t.perSource[bucket]++
 	// 样例：每源一条、总数有界。源名为空（未知来源）时不发样例——它无法帮助定位，只会成为噪声。
-	if sourceKey != "" && t.samples < maxAdjudicationSamples {
+	if cap := t.sampleCap(); sourceKey != "" && t.samples < cap {
 		if t.sampled == nil {
-			t.sampled = make(map[string]struct{}, maxAdjudicationSamples)
+			t.sampled = make(map[string]struct{}, cap)
 		}
 		if _, ok := t.sampled[sourceKey]; !ok {
 			t.sampled[sourceKey] = struct{}{}
@@ -4542,7 +4596,7 @@ func (t *identityAdjudicationThrottle) observe(sourceKey, kind string) identityA
 			return identityAdjudicationTrace{Sample: true, Kind: kind}
 		}
 	}
-	if t.total >= adjudicationFlushEvery || at.Sub(t.lastFlush) >= adjudicationFlushWindow {
+	if t.total >= t.every() || at.Sub(t.lastFlush) >= t.window() {
 		trace := identityAdjudicationTrace{
 			Summary:   true,
 			Total:     t.total,
@@ -4578,6 +4632,125 @@ func (m *Manager) traceIdentityAdjudication(kind, sourceKey, eventID string, sta
 			"sources", len(trace.PerSource), "per_source", trace.PerSource,
 			"omitted_sources", trace.Omitted)
 	}
+}
+
+// ── 不可裁定身份冲突的留痕节流 ──
+//
+// ## 为什么必须节流（2026-11-01）
+//
+// 旧注释（在 adjudicateSameIntervalIdentity 上方）写的假设是：「不可裁定的真冲突本就稀少、
+// 必须逐条 fail loud，节流它等于把真信号也压掉」。**「本就稀少」这个前提不成立。**
+//
+// 2026-11-01 曾观测到冲突日志放大：默认 15min 对账周期跑 10 分钟 = 727 MB / 180 万条；
+// 压到 30s 周期跑 30 分钟 = 4.4 GB / 1108 万条。
+// **该现象的触发条件在后续复现中无法重建**（当前 HEAD 三轮重跑均为 0 条；
+// 段级全量扫描 311 万事件、同 event_id 异 hash 0 组）。原因未知，**不作为任何结论的依据**。
+// 原始那轮的 tmpfs 段已被后续运行覆盖，取证窗口没了。
+//
+// 所以本改动的定位是**防御性**的：不声称「已定位并修好」某个已观测的缺陷，
+// 而是「万一再次出现规模化冲突，日志不应把磁盘写满」。
+// 但机制上的放大机制是确定的：每轮对账都要整段重读并重算身份
+// （`canonicalRecoveryEvents`），**同一个冲突在每一轮里都会被重新发现一次** ⇒
+// 日志量 = O(冲突数 × 重读轮次)。逐条 fail loud 在规模化后会把可观测性**自己搞崩**。
+//
+// ## 冲突的真实产生条件（2026-11-01 实验取证，不是推理）
+//
+// `event_id = source|gen|record_start|record_end|parser_version`（`logtypes/types.go`，不含内容），
+// 所以**同 event_id 只能来自同一对绝对字节区间**。实验确认了两件事：
+//
+//  1. **「批写把多行挤进同一 record」不会造成冲突**（先前的一个推断，已证伪）：
+//     堆栈续行会被归并进头行（一条多行事件 = 一个区间），而 `NormalizeBoundary.remap`
+//     把行号 record 重映射为**绝对字节位置**（`pipeline/boundary.go`）⇒ 不同物理行
+//     绝不共享同一对 (start,end)。残行 vs 完整行虽然同起点，但 `record_end` 不同 ⇒ event_id 不同。
+//  2. **真正能产生不可裁定的只有一种形态**：同一对绝对字节位置被解析了两次，
+//     而两次内容不同、且**长度相等**（等长才会落 default；不等长会走「取较长者」出口）。
+//     真实可发生的来源：源文件被**原地截断/重写**、轮转后同代位置被重用、
+//     或同一区间被两个身份占用（历史异常数据）。
+//
+// 这也解释了为什么 genload 夹具造不出冲突：它每行一条、区间不重叠、时间戳齐全。
+// **根因（为何会存在「同区间两次不同内容」）仍未定位**——需要真机原始段取证。
+//
+// ## 修的是什么：症状还是根因
+//
+// **诚实地说：这一层修的是「放大」这个症状，不是产生冲突的根因。**
+// 本改动**不减少一条冲突**，也不改变任何裁定结果：
+// 隔离记录数（`IdentityConflicts`，有界 256/源）、`eventStoreIdentityConflicts` 计数器、
+// 投影质量（conflict）标记、`ClearIdentityConflicts` 的人工处置入口——**全部逐字不变**。
+// 变的只有**日志行数**：从 `O(冲突数 × 重读轮次)` 降为 `O(源数 + 时间窗)`，与冲突规模**脱钩**。
+//
+// 为什么不选「记住已报过的 event_id」：冲突是每次重读在 `canonicalRecoveryEvents` 内部
+// 重新算出来的，`seen`/`events` 都是该函数的局部变量，跨轮无状态可复用；要记住就得新增
+// 持久状态，等于把真信号**永久静音**——比节流更糟（见 spec §7.8）。
+//
+// ## 口径（与 traceIdentityAdjudication 同一套机制，只换计数键）
+//
+//   - 每个源首次冲突留一条**样例**（带完整 event_id/区间/双方哈希，可直接排查）；
+//   - 其余只计数；每过 conflictFlushWindow 或累计 conflictFlushEvery 条输出一条**汇总**
+//     （次数 + 按源分布 + 折叠源数）；
+//   - 总计数另走 `identityConflictTraces` 读数，任何时刻都查得到「到底发生了多少次」。
+//
+// 于是：**首条样本在、计数在、按源分布在、汇总在**——只是不再逐条刷。
+const (
+	// conflictFlushWindow 是冲突汇总输出的时间窗。比正常裁定长（真冲突是更严重的信号，
+	// 但同样不需要按分钟级频率重复报告）。
+	conflictFlushWindow = 5 * time.Minute
+	// conflictFlushEvery 是冲突汇总的次数阈值（突发时及时看到，不必等满窗口）。
+	conflictFlushEvery = 2000
+	// 冲突专用节流阈值：样例源上限、汇总窗（比正常裁定长）与汇总次数阈值。
+	conflictSampleSources = maxAdjudicationSamples
+)
+
+// newConflictThrottle 构造「不可裁定冲突」专用的节流器（阈值与正常裁定分开）。
+//
+// 为什么真冲突的汇总窗比正常收敛长：正常收敛是每批都会发生的常态（需要及时看到趋势），
+// 而真冲突是数据歧义，一旦发生往往持续每轮重报；5 分钟一条汇总足以让运维发现并介入，
+// 再密就是重复噪声。
+func newConflictThrottle() identityAdjudicationThrottle {
+	return identityAdjudicationThrottle{
+		flushEvery:  conflictFlushEvery,
+		flushWindow: conflictFlushWindow,
+		maxSamples:  conflictSampleSources,
+	}
+}
+
+// traceIdentityConflict 为一次「不可裁定身份冲突」按节流策略留痕。
+//
+// **纯日志层：不参与裁定、不改变任何持久状态。** 调用方仍必须把冲突计入
+// `IdentityConflicts` 隔离记录与计数器（那是查询面质量标记的真源）。
+func (m *Manager) traceIdentityConflict(sourceKey, eventID string, start, end uint64, keptHash, droppedHash string) {
+	if m == nil {
+		// 零值 Manager（纯单元用例）也必须安全：退回不节流的单条输出，绝不丢信号。
+		slog.Warn("身份冲突：保留先到者并跳过冲突行",
+			"source", sourceKey, "event_id", eventID, "start", start, "end", end,
+			"kept_hash", keptHash, "dropped_hash", droppedHash)
+		return
+	}
+	m.identityConflictTraces.Add(1)
+	trace := m.conflictTraces.observe(sourceKey, "不可裁定（保留先到者）")
+	if trace.Sample {
+		slog.Warn("身份冲突：保留先到者并跳过冲突行（样例；同类此后只做汇总）",
+			"source", sourceKey, "event_id", eventID, "start", start, "end", end,
+			"kept_hash", keptHash, "dropped_hash", droppedHash,
+			"total_so_far", m.identityConflictTraces.Load())
+	}
+	if trace.Summary {
+		slog.Warn("身份冲突汇总（不可裁定的真冲突）",
+			"window", trace.Window.String(), "total", trace.Total,
+			"sources", len(trace.PerSource), "per_source", trace.PerSource,
+			"omitted_sources", trace.Omitted,
+			"cumulative", m.identityConflictTraces.Load())
+	}
+}
+
+// IdentityConflictTraces 返回累计留痕过（含被节流折叠）的不可裁定冲突条数。
+//
+// 导出理由（与 ArchiveImportDeferred 同口径）：节流的前提是「总数仍可查」。
+// 计数器不接到可读面，节流就等于静默——那正是本改动要避免的形态。
+func (m *Manager) IdentityConflictTraces() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.identityConflictTraces.Load()
 }
 
 // planDeliveryBatchOutsideLock 在**锁外**完成本批的「零宽校验 + 规范化 + 去重」（#54 修复）。
@@ -4650,9 +4823,11 @@ func (m *Manager) planDeliveryBatchOutsideLock(events []logtypes.Event, seen map
 					event.Record.Start, event.Record.End, existing.size, incomingSize,
 					existing.hash, event.CanonicalHash)
 			default:
-				slog.Warn("身份冲突：保留先到者并跳过冲突行（不再整批失败）",
-					"event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
-					"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+				// 不可裁定：节流留痕（与恢复路径同一口径，见 traceIdentityConflict）。
+				// 2026-11-01 改：原为逐条 slog.Warn；长跑下会把日志写满（实测 727MB/10min）。
+				m.traceIdentityConflict(event.Source.LogSourceID+"/"+event.Source.SourceGeneration,
+					event.EventID, event.Record.Start, event.Record.End,
+					existing.hash, event.CanonicalHash)
 			}
 			continue
 		}
@@ -9930,9 +10105,11 @@ func (m *Manager) canonicalRecoveryEvents(key string, saved persistedSource, rec
 				existing.hash, event.CanonicalHash)
 			return nil
 		default:
-			slog.Warn("身份冲突：保留先到者并跳过冲突行（恢复/重建路径，不再整批失败）",
-				"key", key, "event_id", event.EventID, "start", event.Record.Start, "end", event.Record.End,
-				"kept_hash", existing.hash, "dropped_hash", event.CanonicalHash)
+			// 不可裁定：隔离记录 + 计数器（真源）照旧，**留痕走节流**。
+			// 2026-11-01 改：旧实现直接 slog.Warn 逐条输出，长跑下放大到百万条把日志写满
+			// （见 traceIdentityConflict 的推导与实测）。
+			m.traceIdentityConflict(key, event.EventID, event.Record.Start, event.Record.End,
+				existing.hash, event.CanonicalHash)
 			return nil
 		}
 	}
