@@ -75,6 +75,11 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-498：[功能收口与延期专项][s176]，原门限保留、不记通过。
 - FR-499/500/501：[登记锁][s171]、[cgroup隔离][s170]、[成本治理][s172]。
 - 合并索引：FR-238→FR-078、FR-239→FR-236、FR-242→FR-241、FR-245→FR-240。
+- **已退役编号索引**（2026-11-01）：FR-474（文件/STDIO/归档共账本——WAL 纯内存后 `source_wal` 表已删）、
+  FR-478（local/S3/MinIO 深归档与 Rehydrate——单 VL 后冷层与 Rehydrate 已删）、
+  FR-481（更早退役）、FR-496（纯 Go SQLite 增量索引——索引库改 `:memory:`）、
+  FR-504（实时停续采与 gz 导入——gz 归档采集已删）。**这五个编号不得复用**：
+  它们在规格与 ADR 里被当作功能标签引用（如 `stateindex` 包注释、`log-index-sqlite/spec.md` 标题）。
 - 其余已交付细节以表内既有规格与 [CHANGELOG](../CHANGELOG.md) 为准；本次不新增需求、验收或发布。
 
 > 验收后缀：全真栈＝真 UI/CP/Worker/外部进程端到端；四档＝单测/集测/单机与浏览器截图（后端 mock）。
