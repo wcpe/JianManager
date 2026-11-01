@@ -8897,12 +8897,9 @@ func (m *Manager) verifyProjectionQueryInWindow(ctx context.Context, client *vls
 		}
 		generationSelector += " AND event_id:in(" + strings.Join(ids, ",") + ")"
 	}
-	if m.verifyLimiter != nil && !verifyLimiterBypassed(ctx) {
+	if m.verifyLimiter != nil {
 		// 全局天花板（速率 + 在飞）：**正常路径零等待**（桶容量 = 速率 ⇒ 少量查询一次性放行 ✓），
 		// 只有风暴被削峰 ✓。采集侧的读/写不走这里 ⇒ 其算力与 VL 容量天然优先 ✓。
-		//
-		// 跳过条件见 verifyLimiterBypassed：逐条回退是**失败批的后续诊断**，
-		// 它不是新增负载，而是已经持有该批许可的那个调用方的后续步骤。
 		if err := m.verifyLimiter.Acquire(ctx); err != nil {
 			return false, stats, err
 		}
