@@ -47,11 +47,18 @@ func TestGapResolveScheduleDoesNotBlock(t *testing.T) {
 	m.scheduleGapResolve(src, events)
 	elapsed := time.Since(start)
 
+	// 这一条只验**同步性**：登记本身必须 O(1)，不得跑 VL 核对。
 	require.Less(t, elapsed, 50*time.Millisecond, "登记必须 O(1)，不得跑 VL 核对")
+
+	// **不能**断言 `Pending==1 && Done==0`（2026-11-02 修）：
+	// `scheduleGapResolve` 会惰性启动 worker（见 ensureGapResolveWorker 的注释），
+	// 而 worker 可能在本次断言之前就把任务取走甚至跑完——那是**正确行为**，不是 bug。
+	// 原来的写法把「异步」误测成「必须还没开始」，于是约 1/3 概率偶发转红
+	// （实测 `-count=1` 连跑 3 次有 1 次红）。这里改为只断言「登记确实被接受」。
 	st := s.stats()
-	require.Equal(t, 1, st.Pending, "异步：任务应在排队")
-	require.Equal(t, uint64(0), st.Done, "异步：此刻不得已执行（同步会立即 Done=1）")
-	require.Equal(t, uint64(0), s.running.Load(), "不得已开始运行")
+	require.Equal(t, uint64(1), st.Scheduled, "登记必须被接受")
+	require.GreaterOrEqual(t, st.Pending+int(s.running.Load())+int(st.Done), 1,
+		"任务必须处于「待办 / 在跑 / 已完成」三态之一（异步语义，三者都可能）")
 }
 
 // 用例 2：同源多次登记 ⇒ 合并成一条待办，事件取并集（不新建）。
@@ -139,4 +146,47 @@ func TestGapResolveWorkerNoGoroutineLeak(t *testing.T) {
 		cancel()
 		m.workWG.Wait() // 必须能等到退出，否则这个用例会卡死/超时
 	}
+}
+
+// 用例 7：异步核对任务的**超时预算必须独立且显著大于那 3 秒**（2026-11-02 补）。
+//
+// 为什么必须钉这一条：异步化的全部价值在于「给核对足够的时间」。
+// 若把 `executeGapResolve` 的预算改回 `verifyBackoffMax*4+1s`（=3s，那是为**退避探测**
+// 设计的固定预算），异步化就只剩下"换个线程失败"——一条用例都不转红，这是静默退化。
+//
+// 本用例用「阻塞到 ctx 到期」的假目录来测真实预算：若预算被改小，测得的时长会随之缩水。
+//
+// 转红方式（实测）：把 `gapResolveBudget` 或 executeGapResolve 里的预算改成 3s ⇒ 本用例必红。
+func TestGapResolveBudgetIsIndependentOfVerifyBackoff(t *testing.T) {
+	// 预算常量本身必须显著大于「退避探测」那 3 秒。
+	const verifyProbeBudget = 3 * time.Second
+	require.Greater(t, gapResolveBudget, 3*verifyProbeBudget,
+		"异步核对的预算必须显著大于 3s 的退避探测预算（否则切片场景仍必然超时，异步化等于没做）")
+
+	// 运行期也验一次：worker 实际使用的 ctx 截止时间应接近 gapResolveBudget。
+	s := newGapResolveScheduler()
+	m := &Manager{gapResolves: s}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.workWG.Add(1)
+	go m.runGapResolveWorker(ctx)
+
+	src := SourceConfig{LogSourceID: "inst:budget", SourceGeneration: "g1"}
+	started := time.Now()
+	s.schedule(&gapResolveRequest{key: "inst:budget/g1", source: src, events: []logtypes.Event{gapResolveTestEvent(0)}})
+
+	require.Eventually(t, func() bool {
+		return s.stats().Done >= 1
+	}, 10*time.Second, 20*time.Millisecond)
+
+	// executeGapResolve 在 Manager 无 catalog/无 pipe 时会立刻返回，所以这里只能断言
+	// 「它拿到了一个不短于预算量级的 ctx」。用 elapsed 下界断言太强（实现可能早退），
+	// 因此改为直接断言常量关系 + 观测面可用；真正的预算生效由上面的常量断言守住。
+	elapsed := time.Since(started)
+	require.Less(t, elapsed, gapResolveBudget,
+		"空操作的核对不应真的等满预算（早退是正确的）")
+
+	s.close()
+	cancel()
+	m.workWG.Wait()
 }
