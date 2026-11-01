@@ -205,3 +205,65 @@ log_source_id:="<id>" AND source_generation:="<gen>"
 | 误判缺失导致重复 | 「允许极少重复」是既定口径；重复量受「只补缺失天」限制，且重发仍走 `replace` 取代该天旧代 |
 | 对账拖慢启动 | 并发 + 双超时 + 失败即回退；天数量通常 1–3；最坏 ≈ `ceil(源数/并发) × timeout` |
 | catalog 无记录时误判 | 无记录/无 scope → 判缺失并重发该天（保守方向：宁可重发，不可漏发） |
+
+---
+
+## 7. 2026-11-01 实测发现：常驻对账的整段重读会把「不可裁定身份冲突」放大到百万级
+
+> 这是 FR-498 容量长稳中**真机上暴露**的问题，暂未修。记在这里是因为触发路径就在本节的对账循环里。
+
+### 7.1 现象
+
+60 源 × 30 行/s 长跑，10 分钟后 harness 日志到 **727 MB**，
+`身份冲突：保留先到者并跳过冲突行` 计数 **1,805,473 次**。
+
+### 7.2 为什么短用例复现不了
+
+四个受控探针全部 **0 条冲突**：单源 25s、60 源 50s、60 源带真 VL 40s、脚本原样 60s。
+
+**因为常驻对账默认周期是 15 分钟**（`reconcileLoopDefaultInterval`），
+60s 的用例根本没跑到对账。把周期压到 30s（包内下限）后一轮能跑 ~60 次，
+该路径才被覆盖 —— 这也是本轮给 harness 加 `-reconcile-interval` 的原因。
+
+### 7.3 触发链（代码层面已逐环确认）
+
+1. `reconcile_loop.go:619 canonicalDayCounts` 每轮对每源算缓存指纹：
+   `fingerprint = EventsStoredThrough|Durable|Delivery`。指纹只看**水位**，不看事件段内容/大小；
+   位置一变就整段重读。
+2. 重读走 `runtime.go:9880 canonicalRecoveryEvents`，事件来自**磁盘段**：
+   `m.events.Snapshot(key)` → `storedSnapshot.Iterate(add)`。
+3. `add` 对每条事件调 `normalizeCanonicalEvent`（`runtime.go:10090`）：
+   当 `EventTimeUTC == ""` 时用 `IngestTimeUTC` 反推时间，并**重算 `CanonicalHash`**。
+   ⇒ **从段读回的哈希可能与写入时不同**。
+4. 叠加两个结构性事实：
+   - `EventID` 不含内容（`logtypes/types.go:101` = source\|gen\|record_start\|record_end\|parser_version）
+   - 阈值率下的批写可能把多行归入同一 record ⇒ **同 event_id 但内容不同**
+5. `adjudicateSameIntervalIdentity`（`runtime.go:4424`）：同区间 + 消息字节数相等
+   ⇒ `(false,false)` = **不可裁定** ⇒ 走 `default` ⇒ **逐条 `slog.Warn`**。
+
+### 7.4 产品侧的真正隐患（不是“夹具而已”）
+
+`runtime.go:4452` 的注释写的假设是：
+
+> 不可裁定的**真冲突**不走节流——它本就稀少、且必须逐条 fail loud，
+> 节流它等于把真信号也压掉
+
+**「本就稀少」这个前提在长跑下不成立。** 一旦真冲突规模化，
+日志自身会把磁盘写满（727 MB / 10 分钟），可观测性反而崩掉。
+
+### 7.5 未修的原因与建议方向
+
+**未修**：修改身份裁定属于账本不变量范围，本轮没有充分证据链就动它是危险的
+（参 ADR-101 「只许人工放弃 + 必须留痕」的教训）。
+
+**建议方向**（未验证，不得当作已定方案）：
+- 给「不可裁定」也加**节流 + 汇总**（保留首条样本 + 计数 + 按源分布），
+  与 `traceIdentityAdjudication` 同一套机制，只是换一个计数键；
+- 或让 `normalizeCanonicalEvent` 在重算哈希前先比对**从段读回的原始哈希**，
+  若段里存了原始哈希就用它，避免“读回即变更”。
+
+### 7.6 夹具侧也确实不合真实形态
+
+真实 Paper 日志一行一条，不存在“同 record 多行”。长稳夹具（`genload`）
+按 tick 批量写，天然会造出这种形态。**两边都要改**，但产品侧的放大是更严重的那一半。
+
