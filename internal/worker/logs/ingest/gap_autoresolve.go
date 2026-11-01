@@ -56,10 +56,33 @@ const gapResolutionPublished = "verified published projection"
 //  1. 本名单：原因必须显式登记（未知/新增原因一律不自动消解）；
 //  2. 区间连续覆盖（见 ledger.CoveredByPositionRanges）：缺口区间必须落在**某一段**
 //     逐字段校验通过的写入区间内，而不是落在所有区间的凸包里。
+//
+// ## 为何不含 APPEND_REJECTED（2026-11-02 复核保留排除）
+//
+// `APPEND_REJECTED` 虽在「可自愈」名单里（恢复后回读会重新产生那段字节），
+// 但它也可能意味着**该批根本未进 WAL**——那种情况下凸包覆盖不代表数据真的落库。
+// 2026-10-02 的 P1-1 修复正是为堵这个口子。
+//
+// 它不会因此永久卡死：`gapReasonsHealableOnReResume` 含它 ⇒ 不阻塞恢复；
+// 重读后新事件走**投递成功**路径（`resolveGapsLandedByDelivery`）重新登记覆盖，
+// 那时缺口会被正常消解。
+//
+// ## 为何补上 ROTATED_SEGMENT_NOT_READY（2026-11-02 修）
+//
+// 这个原因的两个名单不一致，会造成**源永久卡死**：它在 `gapReasonsHealableOnReResume` 里
+// （阻塞恢复 → 源进暂停），却不在本名单（永不消解）⇒ `UnresolvedGapCount` 永不归零
+// ⇒ 恢复条件永不成立。这正是 `ledger/gap_bounds.go` 里那段事故记录描述的形态：
+//
+//	生产实测 2026-10-10：86 源被 ROTATED_SEGMENT_NOT_READY 永久挡住
+//
+// 它加入本名单是安全的：按 `gapReasonsHealableOnReResume` 的判据说明，
+// 该记录**恒为 [0,0]、本就不覆盖任何字节**，因此不存在「凸包掩盖真实空洞」的风险
+// （下面的区间连续覆盖判据对它自然成立——零宽区间落在任意已确认段内或区间外均可判定）。
 var gapAutoResolvableReasons = []string{
 	ledger.GapReasonDeliverError,
 	ledger.GapReasonDeliverErrorWorkerSource,
 	ledger.GapReasonWALCommitFailed,
+	ledger.GapReasonRotatedSegmentNotReady,
 }
 
 // gapRangesOfEvents 把事件集合折成源位置上的**连续覆盖区间**（升序、互不相接）。
