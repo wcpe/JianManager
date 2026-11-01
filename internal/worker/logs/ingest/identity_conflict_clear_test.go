@@ -408,23 +408,59 @@ func TestClearIdentityConflictsCancelledContextWritesNothing(t *testing.T) {
 //
 // 为什么要单独一条：离线路径直接读索引 payload，是"凭据真的落盘"的**独立**证据源——
 // 只在 Manager 内部重载状态的话，两边共用一个实现，搬运错误可能被同一个错误掩盖。
-func TestClearIdentityConflictsReadBackByOfflineEventStatus(t *testing.T) {
+// TestClearIdentityConflictsReadBackByOfflineEventStatus —— **已改为「离线重读」能力下线声明（2026-11-02）**。
+//
+// ## 原测什么
+//
+// 清空冲突 → `m.Stop()` → 从**磁盘索引库**重开，断言 payload 里 identity_conflicts 已空、
+// identity_conflict_clearances 带操作人与理由。
+//
+// ## 为什么“停机后重读磁盘”不再成立
+//
+// 索引库改 `:memory:`（FR-505）后，**进程一停库就没了**，磁盘上根本没有 ingest.index.db。
+// “停机后从磁盘索引重读”这个场景的前提已经不存在（与 `TestExportEventStatusCLIReportsCapabilityRetired`
+// 同一根因）。
+//
+// ## 现在测什么（拆成两部，都不降强度）
+//
+//  1. **能力下线声明**：磁盘上确实没有索引库，且 `stateindex.OpenReadOnly(<indexPath>)` 必须
+//     **明确报错**——不得静默成功（那会让运维以为“清空凭据丢了”）。
+//  2. **原本真正要钉的东西仍然钉着**：凭据确实写进了**索引 payload**、而 identity_conflicts
+//     键已清空。只是读取入口从「另开磁盘只读库」换成「问那个正在被写的活内存库」——
+//     这正是本用例要验证的“落库内容”，与它落在哪种介质无关。
+func TestClearIdentityConflictsPersistedToIndexPayload(t *testing.T) {
 	fixture := newConflictClearFixture(t, 3)
 	m, key := fixture.manager, fixture.key
 	_, err := m.ClearIdentityConflicts(context.Background(), key, "ops-alice", "离线可核验")
 	require.NoError(t, err)
-	// 关闭索引句柄后从磁盘重开（模拟另一个进程/停机后的取证）。
-	require.NoError(t, m.Stop())
+	require.NoError(t, m.persist())
 
-	payload := readAuxPayloadFromDisk(t, m.indexPath(), key)
+	// ① 能力下线声明：磁盘上没有索引库，且只读打开必须**报错**。
+	require.NoFileExists(t, m.indexPath(),
+		"索引库改为 :memory: 后不得在数据根下落盘（这正是“停机后离线重读”失效的原因）")
+	_, err = stateindex.OpenReadOnly(m.indexPath())
+	require.Error(t, err, "离线只读打开必须明确报错，不得静默返回空库")
+	require.Contains(t, err.Error(), "索引库不可读")
+
+	// ② 原本的判据原样保留，只换读取入口（活内存库 = 本次 persist 的真实写入面）。
+	rows, err := m.index.Load()
+	require.NoError(t, err)
+	var payload []byte
+	for _, row := range rows.Aux {
+		if row.Key == key {
+			payload = row.Payload
+		}
+	}
+	require.NotNil(t, payload, "索引里找不到源 %s", key)
+
 	var decoded map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(payload, &decoded))
-	require.Contains(t, string(payload), "ops-alice", "离线只读索引必须能看到清空凭据")
-	// 判据必须落在 identity_conflicts 这个**键**上，不能拿"整份 payload 不含 event_id"当判据——
-	// 凭据里的 cleared_records 明细**本就**含 event_id（那是让"当初保留了哪个版本"可回溯的部分）。
+	require.Contains(t, string(payload), "ops-alice", "索引 payload 必须能看到清空凭据")
+	// 判据必须落在 identity_conflicts 这个**键**上，不能拿“整份 payload 不含 event_id”当判据——
+	// 凭据里的 cleared_records 明细**本就**含 event_id（那是让“当初保留了哪个版本”可回溯的部分）。
 	require.Empty(t, decoded["identity_conflicts"],
-		"离线只读索引里 identity_conflicts 必须已清空（omitempty ⇒ 键消失或为空）")
-	require.NotEmpty(t, decoded["identity_conflict_clearances"], "凭据必须在离线只读索引里可见")
+		"索引 payload 里 identity_conflicts 必须已清空（omitempty ⇒ 键消失或为空）")
+	require.NotEmpty(t, decoded["identity_conflict_clearances"], "凭据必须在索引 payload 里可见")
 }
 
 // readAuxPayloadFromDisk 直接打开索引库文件读某源的 aux payload（不经 Manager 的内存态）。

@@ -129,6 +129,24 @@ func uniqueSegmentRoot(t *testing.T, prefix string) string {
 	return name
 }
 
+// freshSegmentRoot 返回一个**本用例独占且已清空**的数据根，并返回它的段根名。
+//
+// 两个问题一起解：
+//  1. `eventstore.MemoryRoot` 只用 `filepath.Base(root)` 做 tmpfs 目录名，而 `t.TempDir()`
+//     的 basename 跨运行稳定为 `001` ⇒ 不同用例会共用同一个 /dev/shm 段根（CONVENTIONS §2）；
+//  2. 上一轮运行的残留不会自己消失 ⇒ 必须建 Manager **之前**先 RemoveAll 一次。
+//
+// 返回的 root 是 `<t.TempDir()>/<唯一名>`：段根按唯一名隔离（解决 1），
+// 数据根自身仍然由 t.TempDir 管理生命周期。
+func freshSegmentRoot(t *testing.T, prefix string) (root string, segmentName string) {
+	t.Helper()
+	name := uniqueSegmentRoot(t, prefix)
+	require.NoError(t, os.RemoveAll(eventstore.MemoryRoot(name)))
+	root = filepath.Join(t.TempDir(), name)
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	return root, name
+}
+
 // TestV1CursorRegistryKeepsCursorButSkipsSourceRebuild 是向后兼容用例（v1 ⇒ v2 升级路径）。
 //
 // 现场形态：升级前落盘的 `ingest.cursor` 只有 6 列（key/path/dev/ino/cursor/offset）。

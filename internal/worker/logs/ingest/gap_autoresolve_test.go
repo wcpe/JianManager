@@ -77,8 +77,7 @@ func TestDeliveryFailureGapsAutoResolveAfterDeliveryRecovers(t *testing.T) {
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
 	// 两行起步：normalize 以「下一条事件头」闭合多行事件，单行只会停在缓冲里（不产生投递）。
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:gap/file", SourceGeneration: "g1", Path: logPath,
@@ -88,6 +87,8 @@ func TestDeliveryFailureGapsAutoResolveAfterDeliveryRecovers(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
 	pipe := m.pipes[source.LogSourceID+"/"+source.SourceGeneration]
 	require.NotNil(t, pipe)
 
@@ -143,8 +144,7 @@ func TestPausedSourceSelfHealsEndToEnd(t *testing.T) {
 	client, fixture := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:paused/file", SourceGeneration: "g1", Path: logPath,
@@ -154,6 +154,8 @@ func TestPausedSourceSelfHealsEndToEnd(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
 	// 自愈默认按源限频 10 秒（避免每轮重投失败存量）；回归用真实路径驱动，
 	// 因此把间隔压到「两次轮询之间必然过期」的量级，而不是 sleep 或改默认值。
 	m.SetSelfHealInterval(time.Nanosecond)
@@ -231,8 +233,7 @@ func TestAppendRejectedGapInsideDeliveryHullIsNeverAutoResolved(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:hull/file", SourceGeneration: "g1", Path: logPath,
@@ -242,6 +243,8 @@ func TestAppendRejectedGapInsideDeliveryHullIsNeverAutoResolved(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
@@ -319,8 +322,7 @@ func TestDeliveryEvidenceRequiresContiguousCoverage(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: one\n[12:00:02] [Server thread/INFO]: two\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:hole/file", SourceGeneration: "g1", Path: logPath,
@@ -330,6 +332,8 @@ func TestDeliveryEvidenceRequiresContiguousCoverage(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: one\n[12:00:02] [Server thread/INFO]: two\n"), 0o644))
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
@@ -394,8 +398,7 @@ func TestPublishedProjectionGapResolutionNeedsVerifiedRuns(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:published/file", SourceGeneration: "g1", Path: logPath,
@@ -405,6 +408,8 @@ func TestPublishedProjectionGapResolutionNeedsVerifiedRuns(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
@@ -472,8 +477,7 @@ func TestStdioRawWriteFailureGapIsNeverAutoResolved(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:raw/file", SourceGeneration: "g1", Path: logPath,
@@ -483,6 +487,8 @@ func TestStdioRawWriteFailureGapIsNeverAutoResolved(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
 	pipe := m.pipes[source.LogSourceID+"/"+source.SourceGeneration]
 	require.NotNil(t, pipe)
 
@@ -537,8 +543,7 @@ func TestSilentSourceExitAdvancesReclaimOnDeliveryEvidence(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:silent/file", SourceGeneration: "g1", Path: logPath,
@@ -548,6 +553,8 @@ func TestSilentSourceExitAdvancesReclaimOnDeliveryEvidence(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	// 登记完成（EOF = 0）后写入正式内容。
+	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)

@@ -635,6 +635,25 @@ func OpenReadOnly(path string) (*Store, error) {
 	return s, nil
 }
 
+// DBForTest 返回 Store **自己的**连接池句柄（**仅供测试**）。
+//
+// ## 为什么测试必须走到这里（不能另开 `sql.Open("sqlite", path)`）
+//
+// 2026-10-30 起索引库是 `:memory:`（FR-505，机械盘不落盘裁定）——磁盘上**没有**这个文件。
+// 测试若照旧 `sql.Open("sqlite", "file:"+m.indexPath()+"?mode=ro")`：
+//   - 会拿到 `unable to open database file: out of memory (14)`
+//     —— 那是 sqlite 对「打不开文件」的错误码，**不是**真的内存不足，极容易把排障带偏；
+//   - 即便能开，看到的也永远是**空库**——内存库只活在进程内那一个连接上。
+//
+// 所以「断言索引里到底写了什么」只能问那个**正在被写**的库本身。本方法把内部连接开一个小口子
+// 给同模块测试用；生产代码不调用它（命名带 ForTest 就是为此）。
+//
+// 只读语义由调用方的 SQL 决定（测试里都是 `SELECT`）；**不要**用它写数据。
+//
+// 返回 (*sql.DB, error) 而非单值：为了让调用点保持 `reader, err := ...` 的既有时态，
+// 迁移时不必改一遍错误处理（那些 `require.NoError(t, err)` 仍有意义）。
+func (s *Store) DBForTest() (*sql.DB, error) { return s.db, nil }
+
 // Path 返回库文件路径。
 func (s *Store) Path() string { return s.path }
 

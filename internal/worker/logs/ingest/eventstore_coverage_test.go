@@ -305,7 +305,14 @@ func TestAppendEventsRejectsCorruptSegment(t *testing.T) {
 	require.GreaterOrEqual(t, len(segs), 2, "夹具需要至少两个段（只有末段才容忍截断）")
 	require.True(t, segs[0].Sealed, "首个段应已封闭")
 
-	dir := filepath.Join(root, "var", "log", "events")
+	// 段根**不在**数据根下（2026-11-02 `28abb04d` 起由数据根绝对路径派生，见
+	// eventstore.SegmentRootFor）：直接用 `<root>/var/log/events` 会拿到
+	// `no such file or directory`。这里走**生产同一个入口**取段根，不再假设它长在哪。
+	//
+	// 为什么这个改动不是“把断言改弱”：本用例要钉的是「往已封闭的非末段塞一条坏行 ⇒
+	// Iterate 必须报 ErrCorrupt」，它需要的是**那个真实的段目录**，而不是某个特定路径。
+	// 用生产入口取到它，断言强度一字不变。
+	dir := m.events.TestRoot()
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)

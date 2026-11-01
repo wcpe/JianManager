@@ -173,22 +173,49 @@ func TestAbandonmentCredentialsSurviveRestart(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = reopened.Stop() }()
 	ranges := reopened.AbandonedRanges(nil)
-	require.Len(t, ranges, 1, "放弃凭据必须跨重启存活（否则查询面标记与回收放行依据一并消失）")
-	require.Equal(t, uint64(30), ranges[0].From)
-	require.Equal(t, uint64(40), ranges[0].To)
-	require.Equal(t, "ops", ranges[0].Operator)
-	require.Equal(t, ledger.GapReasonPermanentlyLost, ranges[0].ReasonCode)
+	// 2026-11-02：索引库已改 `:memory:`（FR-505）⇒ **任何**索引状态都不跨重启，
+	// 放弃凭据也不例外。原断言「跨重启仍 Len==1」已无对象（新进程 state 是空的）。
+	// 这不是“凭据丢了”的缺陷，而是「索引不落盘」这条架构取舍的直接后果
+	// （与实例绑定、投影代次同一类）。故改为**正面钉住**这条取舍。
+	require.Empty(t, ranges,
+		"索引不落盘 ⇒ 放弃凭据不跨重启（FR-505 的明确取舍；它不是缺陷，但必须被正面钉住）")
 
+	// 因此重启后的视图也不再有「已放弃」那一段（同一根因，一并钉住）。
 	restartedReport, err := reopened.SourceEventStatus(EventStatusQuery{
 		LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, From: 30, To: 40,
 	})
 	require.NoError(t, err)
-	require.Len(t, restartedReport.Segments, 1)
-	require.Equal(t, EventStateAbandoned, restartedReport.Segments[0].State)
+	for _, seg := range restartedReport.Segments {
+		require.NotEqual(t, EventStateAbandoned, seg.State,
+			"放弃凭据不跨重启 ⇒ 重启后不得凭空报出一个「已放弃」段")
+	}
 }
 
-// TestExportEventStatusCLIEndToEnd 覆盖离线出口（索引库只读 + 事件段时间点定位）。
-func TestExportEventStatusCLIEndToEnd(t *testing.T) {
+// TestExportEventStatusCLIEndToEnd —— **已改为「能力下线」声明（2026-11-02）**。
+//
+// ## 原测什么
+//
+// 起一个真 Manager 采集一轮 → Stop → `ExportEventStatus(root, ...)` 从**磁盘索引库**
+// 只读派生事件级状态视图，断言五态判据、`--at` 时间点定位、未知源报错。
+//
+// ## 为什么不再成立（两个独立原因，两处都失效）
+//
+//  1. **索引库改 `:memory:`（FR-505，2026-10-30 机械盘不落盘裁定）**：
+//     `eventStatusIndexPath(root)` 拼的是 `<root>/var/log/ingest.index.db`，
+//     而 `:memory:` 下**磁盘上没有这个文件**，进程一停库就没了。
+//     ⇒「**停机后**离线取证」这个场景的前提（索引在磁盘上）已经不存在。
+//  2. **事件段根搬出数据根（2026-11-02 `28abb04d`）**：
+//     `eventStatusEventsRoot(root)` 拼的 `<root>/var/log/events` 也不再是段根
+//     （现在由 `eventstore.SegmentRootFor` 派生）⇒ `--at` 定位那条腿也断了。
+//
+// ## 现在测什么（语义变了，所以改名并改写断言）
+//
+// 钉住「能力已下线，但**必须明确报错**而不是静默返回空」：
+// 静默返回空结果会让运维以为「没有待处理事件」——那是比报错更危险的行为
+// （这个判据在 `ExportEventStatus` 的注释里已经写明是它要排除的形态）。
+//
+// 离线取证的**正确入口现在是 VL**（长期真源），不是索引库。
+func TestExportEventStatusCLIReportsCapabilityRetired(t *testing.T) {
 	client, _, _ := newReconcileVL(t)
 	root := t.TempDir()
 	journal := catalog.NewMemJournal()
@@ -202,35 +229,30 @@ func TestExportEventStatusCLIEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, manager.Stop())
 
+	// ① 必须先钉住「磁盘上确实没有索引库」——这是能力下线的物理依据，
+	// 而不是“没读到所以报错”。
+	require.NoFileExists(t, eventStatusIndexPath(root),
+		"索引库改为 :memory: 后不得在数据根下落盘（这正是离线取证失效的原因）")
+
 	var out bytes.Buffer
-	require.NoError(t, ExportEventStatus(root, []string{"--source=node:reconcile/g1"}, &out))
-	var payload struct {
-		Reports []EventStatusReport `json:"reports"`
-	}
-	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
-	require.Len(t, payload.Reports, 1)
-	report := payload.Reports[0]
-	require.Equal(t, "node:reconcile/g1", report.Source)
-	require.NotEmpty(t, report.Segments, "离线视图不得为空（正是本项验收要排除的形态）")
-	states := map[EventState]bool{}
-	for _, segment := range report.Segments {
-		states[segment.State] = true
-	}
-	require.True(t, states[EventStateUnknown], "旧索引只有请求位置、没有独立确认或逐字段校验证据，必须诚实未知")
-	require.False(t, states[EventStateAcked], "离线诊断不得由Delivery前缀补造成功回执")
-	require.False(t, states[EventStateVerified], "没有逐字段凭据不能假报已校验")
+	err = ExportEventStatus(root, []string{"--source=node:reconcile/g1"}, &out)
+	// ② 关键：必须**报错**，不得静默成功。
+	require.Error(t, err,
+		"离线取证能力已随 :memory: 下线——必须明确报错，绝不能静默返回空结论（那会被误读成“没有待处理事件”）")
+	require.Contains(t, err.Error(), "索引库不可读",
+		"错误必须直接指向“读不到索引库”，而不是一个含糊的失败（排障需要一眼看懂）")
+	require.Empty(t, out.String(), "报错时不得同时吐出一份看起来正常的报告")
 
-	// --at 时间点查询：真打开事件段定位（端到端）。
+	// ③ `--at` 那条腿也独立失效（段根搬出数据根），断言它同样不会静默成功。
 	out.Reset()
-	require.NoError(t, ExportEventStatus(root, []string{
+	err = ExportEventStatus(root, []string{
 		"--source=node:reconcile/g1", "--at=2026-09-22T01:00:00Z",
-	}, &out))
-	require.NoError(t, json.Unmarshal(out.Bytes(), &payload))
-	require.Len(t, payload.Reports, 1)
-	require.NotEmpty(t, payload.Reports[0].LocatedEventID, "时间点查询必须定位到事件（不得静默为空）")
+	}, &out)
+	require.Error(t, err, "时间点查询不得静默返回空定位结果")
 
-	// 未知源：必须报错（而不是静默给空结论）。
-	require.Error(t, ExportEventStatus(root, []string{"--source=node:nope"}, &out))
+	// ④ 参数解析与未知源分类仍然独立于持久介质（这部分能力未变，继续钉着）。
+	require.Error(t, ExportEventStatus(root, []string{"--source=node:nope"}, &out),
+		"未知源必须报错")
 }
 
 // TestExportEventStatusCLIUsesPersistedRequestReceipts 给旧位置夹具补真实账本回执的持久化正控。

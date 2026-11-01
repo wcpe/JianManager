@@ -330,8 +330,13 @@ func newGateTestManager(t *testing.T, maxEntries int64) gateTestManager {
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	// 4 行（多于上限 3）⇒ 单轮采集即越界，越界事实不依赖后续增量。
-	require.NoError(t, os.WriteFile(logPath, []byte(pollTestLines(0, 4)), 0o600))
+	// 先建**空**文件，让源登记时的 EOF 起点 = 0；日志在 newTestManager 之后才写入。
+	//
+	// 原夹具先写 4 行再建 Manager：FILE_PRIMARY 源登记一律 `StartAtEOF: true`（裁定 D：
+	// 新源不回头吃别人的历史），于是那 4 行被整体跳过 ⇒ 一轮采集零事件 ⇒
+	// 「丢最旧」与「durable 对齐」两个阶段都测不到就结束了。不能改生产默认值（那会违反
+	// 「新源不补历史」），只能把夹具的前置条件改成「先登记、再播日志」。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o600))
 	cat := catalog.New(catalog.NewMemJournal())
 	m, err := newTestManager(t, Options{
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
@@ -343,6 +348,8 @@ func newGateTestManager(t *testing.T, maxEntries int64) gateTestManager {
 		WALLimits: &acquire.WALLimits{MaxEntries: maxEntries},
 	})
 	require.NoError(t, err)
+	// 4 行（多于上限 3）⇒ 单轮采集即越界，越界事实不依赖后续增量。
+	appendPollTestLines(t, logPath, pollTestLines(0, 4))
 	return gateTestManager{m: m, path: logPath, pipes: m.pipes}
 }
 
