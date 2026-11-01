@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -330,24 +331,94 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 	}
 	const batch = 512
 	out := make([]logtypes.Event, 0, len(events))
-	for start := 0; start < len(events); start += batch {
+	// 切片数 <= 1 时走原串行路径：绝大多数调用只有 1 片（批大小就是 512），
+	// 为它起 goroutine 纯属白付调度成本。
+	total := (len(events) + batch - 1) / batch
+	if total <= 1 {
+		_, visibleSet, _, err := m.verifyProjectionQueryWithVisible(ctx, client, source, generations[0],
+			events, nil, generations)
+		if err != nil {
+			return nil, err
+		}
+		for _, ev := range events {
+			if _, ok := visibleSet[ev.EventID]; ok {
+				out = append(out, ev)
+			}
+		}
+		return out, nil
+	}
+	// **切片必须并发查**（2026-11-02 修）。
+	//
+	// 事故形态（60 源 × 15 行/s 实测，与长稳同规格）：
+	//   缺口核对的 selector 被 12KB 上限切成 180 条/片；一次核对待查 3778 条 ⇒ **21 片**。
+	//   原实现串行逐片查询 ⇒ 单片一个 HTTP 往返 ⇒ 一轮核对就要 21 个往返，
+	//   任何预算（3s / 6s / 30s）都会被单次核对的串行往返吃掉：
+	//   实测 154 次 `context deadline exceeded`、20 次「预算内未等到全部可见」。
+	//   而这些是**同一批待查事件**，彼此完全独立 —— 串行没有任何语义上的理由。
+	//
+	// 并发度复用既有的 `verifyChunkConcurrency`（默认 4），与投递路径的分簇校验同一口径，
+	// 不新造并行旋钮。语义不变：仍然是「查到哪些算哪些」，查询失败仍整体返回错误。
+	concurrency := m.verifyChunkConcurrency
+	if concurrency <= 0 {
+		concurrency = defaultVerifyChunkConcurrency
+	}
+	if concurrency > total {
+		concurrency = total
+	}
+	results := make([]map[string]bool, total)
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+	for idx := 0; idx < total; idx++ {
+		start := idx * batch
 		end := start + batch
 		if end > len(events) {
 			end = len(events)
 		}
-		// 直接取回**可见集合**，而不是只拿一个 bool（详见 verifyProjectionQueryInWindowCore 注释）。
-		//
-		// 修前：拿不到集合 ⇒ 批不齐时逐条重查：
-		//	批次平均 67 条 ⇒ 本应 1 次查询，实际花 67 次
-		//	真机实测：总查询 290,727，其中 events=1 占 285,896（98.3%）
-		// 修后：一次查询就能拿到完整答案，逐条回退不再需要。
-		_, visibleSet, _, err := m.verifyProjectionQueryWithVisible(ctx, client, source, generations[0],
-			events[start:end], nil, generations)
-		if err != nil {
-			return nil, err
+		wg.Add(1)
+		go func(idx, start, end int) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				return
+			}
+			defer func() { <-sem }()
+			_, visibleSet, _, err := m.verifyProjectionQueryWithVisible(ctx, client, source, generations[0],
+				events[start:end], nil, generations)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			results[idx] = visibleSet
+		}(idx, start, end)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	// 按原始顺序合并（保持 landed 的顺序语义，调用方按它对齐）。
+	for idx := 0; idx < total; idx++ {
+		if results[idx] == nil {
+			continue
+		}
+		start := idx * batch
+		end := start + batch
+		if end > len(events) {
+			end = len(events)
 		}
 		for _, ev := range events[start:end] {
-			if _, ok := visibleSet[ev.EventID]; ok {
+			if results[idx][ev.EventID] {
 				out = append(out, ev)
 			}
 		}

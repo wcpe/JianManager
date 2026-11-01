@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -231,4 +232,75 @@ func TestLandingVisibilityReturnsImmediatelyWhenAlreadyVisible(t *testing.T) {
 	probes := fixture.contentQueries
 	fixture.mu.Unlock()
 	require.Equal(t, 1, probes, "已可见路径只应有一次查询")
+}
+
+// TestVisibleEventsInVLQueriesSlicesConcurrently 钉住「切片必须并发查」（2026-11-02 修）。
+//
+// 事故形态（60 源 × 15 行/s 实测）：缺口核对的 selector 被 12KB 上限切成 180 条/片，
+// 一次核对待查 3778 条 ⇒ **21 片**。原实现串行逐片查询 ⇒ 一轮核对 21 个 HTTP 往返，
+// 任何预算都会被单次核对的串行往返吃掉（实测 154 次 deadline exceeded）。
+//
+// 判据：让夹具对每次内容查询固定睡一小段，然后比较「一次多片查询」的总耗时。
+// 串行 ≈ 片数 × 延迟；并发（度 c）≈ ceil(片数/c) × 延迟。
+//
+// 转红方式（实测）：把 visibleEventsInVL 的并发段改回串行 ⇒ 本用例必红。
+func TestVisibleEventsInVLQueriesSlicesConcurrently(t *testing.T) {
+	source, _ := gapVisibility_TestSource(t)
+	day := source.UTCDay
+
+	client, fixture, _ := newReconcileVL(t)
+	journal := catalog.NewMemJournal()
+	cat := catalog.New(journal)
+
+	// 900 条事件 ⇒ batch=512 ⇒ 2 个外层片；而每个外层片内部还会被 12KB selector 上限
+	// 再切成约 180 条/子片（≈3 个子片）。故串行往返数 ≈ 6，并发(4) ≈ 2 轮。
+	const total = 900
+	spans := make([][2]uint64, 0, total)
+	for i := 0; i < total; i++ {
+		spans = append(spans, [2]uint64{uint64(i * 10), uint64(i*10 + 5)})
+	}
+	events := gapVisibilityEvents(source, day, spans, "slice")
+	publishGapVisibilityDay(t, cat, source, events, day)
+
+	// 每一片查询固定耗时，便于用总耗时区分串行/并发。
+	const perQueryDelay = 60 * time.Millisecond
+	fixture.mu.Lock()
+	fixture.contentQueryDelay = perQueryDelay
+	for _, ev := range events {
+		fixture.rows = append(fixture.rows, reconcileVLRow{
+			ProjectionGeneration: "projection-1",
+			EventID:              ev.EventID,
+			EventTimeUTC:         ev.EventTimeUTC,
+			LogSourceID:          source.LogSourceID,
+			SourceGeneration:     source.SourceGeneration,
+			RecordEnd:            ev.Record.End,
+			Message:              ev.Message,
+			Level:                ev.Level,
+			Stream:               ev.Stream,
+			CanonicalHash:        ev.CanonicalHash,
+		})
+	}
+	fixture.mu.Unlock()
+
+	// 先量「串行基线」：并发度 1 时同样的查询要多久。
+	serial := &Manager{cat: cat, vl: client, verifyChunkConcurrency: 1}
+	started := time.Now()
+	serialVisible, sErr := serial.visibleEventsInVL(context.Background(), client, source, []string{"projection-1"}, events)
+	serialElapsed := time.Since(started)
+	require.NoError(t, sErr)
+	require.Len(t, serialVisible, total, "串行路径也须拿回全部可见事件")
+
+	// 再量并发版。
+	concurrent := &Manager{cat: cat, vl: client, verifyChunkConcurrency: 4}
+	started = time.Now()
+	visible, vErr := concurrent.visibleEventsInVL(context.Background(), client, source, []string{"projection-1"}, events)
+	elapsed := time.Since(started)
+	require.NoError(t, vErr)
+	require.Len(t, visible, total, "并发合并后必须拿回全部可见事件（不能丢片）")
+
+	// **判据取「相对」而非绝对值**：不同片数下绝对耗时不可预期，
+	// 但并发必须明显快于串行。要求至少快 30%（实测约快 50%~60%）。
+	require.Less(t, float64(elapsed), float64(serialElapsed)*0.7,
+		"多片查询必须并发执行（串行=%v 并发=%v）；串行会让任何超时预算被单次核对吃掉",
+		serialElapsed, elapsed)
 }

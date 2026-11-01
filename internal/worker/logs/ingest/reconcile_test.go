@@ -76,6 +76,9 @@ type reconcileVLFixture struct {
 	visibleAfterQuery map[string]int
 	// querySeq 是内容查询的单调序号（delayedVisibilityQueries 的判据基准）。
 	querySeq int
+	// contentQueryDelay 给每次内容查询加固定延时（毫秒级），用于断言「多片查询是否并发」，
+	// 零值 = 不延时（保持全部既有用例的行为）。
+	contentQueryDelay time.Duration
 	// queryGate 非 nil 时每次内容查询都挂住，用于把「确认取证进行中」钉在确定位置。
 	queryGate *queryGate
 }
@@ -120,6 +123,17 @@ func (f *reconcileVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *reconcileVLFixture) serveContentQuery(w http.ResponseWriter, r *http.Request) {
+	// 固定延时旋钮（零值不延时）：给「多片是否并发」这条断言一个可测量的时间基线。
+	f.mu.Lock()
+	queryDelay := f.contentQueryDelay
+	f.mu.Unlock()
+	if queryDelay > 0 {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(queryDelay):
+		}
+	}
 	filter := parseReconcileSelector(r.URL.Query().Get("query"))
 	from, to := reconcileWindow(r)
 	f.mu.Lock()
