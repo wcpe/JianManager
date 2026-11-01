@@ -879,35 +879,116 @@ func (s *ConfigDeliveryService) Run(orderID uint) error {
 		}
 		if order == nil {
 			// 熔断或已收尾：不再往下走。
-			return nil
+			return s.abandonRun(orderID)
 		}
 
 		if s.isCancelRequested(order.ID) {
 			break
 		}
 
-		// ③ 观察窗：**在锁外** sleeping。这是本次关键修复——
-		// 窗口内没有任何目标级写入，不需要持锁；而它恰好是最长的一段（默认 120s/批）。
+		// ③ 观察窗：**sleep 在锁外**，但进出观察态各持一次锁。
+		//
+		// 为什么要持锁（而不是像最初那样裸调 setStatus）：状态转移本身是
+		// 「读 status → 校验 CanTransitTo → 写 status」的读改写序列，不持锁就会
+		// 和同一时刻的人工 Pause / Cancel / 探针补推交错。而 Paused → Rolling
+		// 在转移表里是**合法**的（Resume 就走这条），所以这里一旦不校验来源状态，
+		// 用户在观察窗内点的暂停会被睡醒后的 setStatus(rolling) 静默推翻——
+		// 放量继续进行，而界面上那张单还写着 paused。
+		//
+		// sleep 本身仍留在锁外：窗口内没有任何目标级写入，而它是最长的一段
+		// （默认 120s/批）。这是本次锁粒度修复的核心，不能被上面的加锁抵消掉。
 		if order.ObserveWindowSec > 0 {
-			if err := s.setStatus(order, model.DeliveryStatusObserving); err != nil {
+			if order, err = s.enterObserveWindow(order, batchNo); err != nil {
 				return err
+			}
+			if order == nil {
+				// 进观察窗前单子已被暂停/取消/熔断收口。
+				// 不能直接 return：若是 Cancel 导致的，cancelRequested 标记
+				// 只能由 clearCancel 清，跳过它会让标记永久残留。
+				return s.abandonRun(orderID)
 			}
 			s.sleepFn(time.Duration(order.ObserveWindowSec) * time.Second)
 			if s.isCancelRequested(order.ID) {
 				break
 			}
-			if broke, err := s.evaluateUnhealthyRate(order, batchNo); err != nil {
+			broke, err := s.exitObserveWindow(order, batchNo)
+			if err != nil {
 				return err
-			} else if broke {
-				return nil
 			}
-			if err := s.setStatus(order, model.DeliveryStatusRolling); err != nil {
-				return err
+			if broke {
+				return nil
 			}
 		}
 	}
 
 	return s.finishRun(order)
+}
+
+// enterObserveWindow 在锁内把单子推进到 observing，返回最新的 order。
+//
+// 返回 (nil, nil) 表示单子已不在放量态（被暂停/取消/熔断），调用方应结束 Run。
+func (s *ConfigDeliveryService) enterObserveWindow(order *model.ConfigDeliveryOrder, batchNo int) (*model.ConfigDeliveryOrder, error) {
+	unlock := s.orderLocks.lock(order.ID)
+	defer unlock()
+
+	// 锁内重读：等锁期间单子可能已被 Pause/Cancel/熔断改过状态。
+	// 用库内行而不是入参的内存副本——内存副本的 Status 可能已经落后了。
+	fresh, err := s.mustGet(order.ID)
+	if err != nil {
+		return nil, err
+	}
+	if fresh.Status != model.DeliveryStatusRolling {
+		return nil, nil
+	}
+	if err := s.db.Model(&model.ConfigDeliveryOrder{}).Where("id = ?", fresh.ID).
+		Updates(map[string]any{"current_batch": batchNo, "status": model.DeliveryStatusObserving}).Error; err != nil {
+		return nil, err
+	}
+	fresh.Status = model.DeliveryStatusObserving
+	fresh.CurrentBatch = batchNo
+	return fresh, nil
+}
+
+// exitObserveWindow 在锁内评估不健康率并决定回 rolling 还是熔断。
+//
+// 返回 broke=true 表示已熔断（调用方直接结束 Run，不能让 finishRun 覆盖熔断现场）。
+func (s *ConfigDeliveryService) exitObserveWindow(order *model.ConfigDeliveryOrder, batchNo int) (bool, error) {
+	unlock := s.orderLocks.lock(order.ID)
+	defer unlock()
+
+	fresh, err := s.mustGet(order.ID)
+	if err != nil {
+		return false, err
+	}
+	// 睡眠期间单子可能被 Pause / Cancel / 回滚（甚至被另一个 CP 熔断）。
+	// 不在 observing 态就说明有人动过它：以库内为准，**不要**把它推回 rolling。
+	if fresh.Status != model.DeliveryStatusObserving {
+		return false, nil
+	}
+
+	broke, err := s.evaluateUnhealthyRate(fresh, batchNo)
+	if err != nil {
+		return false, err
+	}
+	if broke {
+		return true, nil
+	}
+	if err := s.setStatus(fresh, model.DeliveryStatusRolling); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+// abandonRun 结束本次 Run 而**不**写终态（单子已被暂停/取消/熔断接管）。
+//
+// 它的唯一职责是把运行期取消标记清干净。不写清会让标记永久残留：
+// cancelRequested 是进程内 map，只有 clearCancel 会删；而 Run 的多条提前返回路径
+// （熔断、被暂停打断、观察窗前就绪态变化）都不过 finishRun。残留的后果是下次
+// 对同一个 orderID 起 Run 时，循环开头一句 isCancelRequested 就直接 break，
+// 表现为【一张从没被取消过的单子拒绝执行】——这种故障极难从日志看出来。
+func (s *ConfigDeliveryService) abandonRun(orderID uint) error {
+	s.clearCancel(orderID)
+	return nil
 }
 
 // runBatchLocked 在交付单锁内推进一批（离线率判定 → 延迟离线 → 逐台下发）。
@@ -942,6 +1023,8 @@ func (s *ConfigDeliveryService) runBatchLocked(order *model.ConfigDeliveryOrder,
 	if err := s.db.Model(order).Update("current_batch", batchNo).Error; err != nil {
 		return nil, err
 	}
+	// update 会把新值回填进 order（GORM 行为，已用探针测试确认），
+	// 故收尾的 db.Save(order) 不会把 current_batch 倒带。
 
 	// ① 每批开始时算离线率（§8.2）：≥10% 熔断，<10% 标 deferred 继续。
 	offlineCount, err := s.countOfflinePending(order, instances)
@@ -973,6 +1056,37 @@ func (s *ConfigDeliveryService) runBatchLocked(order *model.ConfigDeliveryOrder,
 
 // finishRun 收尾：根据目标终态决定 completed / failed / cancelled。
 func (s *ConfigDeliveryService) finishRun(order *model.ConfigDeliveryOrder) error {
+	// 整行写回前先重读：Run 可能跑了几十分钟，期间 current_batch 等字段被
+	// 锁内路径单独更新过，而手里的内存副本没同步。db.Save 会覆盖所有列，
+	// 拿陈旧副本写回等于把别人刚落的字段抹掉。
+	fresh, err := s.mustGet(order.ID)
+	if err != nil {
+		slog.Warn("配置交付收尾时重读交付单失败，用内存副本写回", "orderId", order.ID, "error", err)
+	} else {
+		// 【为何要用库里状态把关】最后一批准观察窗内用户点 Pause，
+		// exitObserveWindow 会看到非 observing 而安静返回，循环随即自然结束、
+		// 走到这里。若不管库里状态直接写 completed，那张刚被人工暂停的单
+		// 就会被静默改成「已完成」——暂停意图丢失，且 paused → completed
+		// 并不在转移表里，是一笔绕过了状态机的非法转移。
+		// 同理适用于 Cancel / 回滚 / 另一个 CP 已熔断的情形。
+		switch fresh.Status {
+		case model.DeliveryStatusRolling, model.DeliveryStatusObserving, model.DeliveryStatusApproved:
+			// 仍在可收尾的推进态，继续。
+		default:
+			// 已被 pause / cancel / 熔断 / 回滚接管：不覆盖他人的决定。
+			slog.Info("配置交付收尾跳过：单子已被其他动作接管",
+				"orderId", order.ID, "status", fresh.Status)
+			return nil
+		}
+		order.PlannedCount = fresh.PlannedCount
+		order.CurrentBatch = fresh.CurrentBatch
+		order.TotalBatches = fresh.TotalBatches
+		order.FailedBatchNo = fresh.FailedBatchNo
+		order.BatchStatesJSON = fresh.BatchStatesJSON
+		order.StartedAt = fresh.StartedAt
+		// 状态以库内为准：收尾只负责把推进态推到终态，不拿旧副本倒带。
+		order.Status = fresh.Status
+	}
 	if err := s.refreshCounters(order); err != nil {
 		return err
 	}

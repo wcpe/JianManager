@@ -416,7 +416,24 @@ func (s *ApprovalService) FinishExecution(ticketID, receiptID uint, execErr erro
 	if msg != "" {
 		updates["failure_reason"] = msg
 	}
-	return s.db.Model(&model.ApprovalTicket{}).Where("id = ?", ticketID).Updates(updates).Error
+	// 【为何带 status=executing 的 CAS】本方法与 MarkExecutionPanicked、
+	// 启动时的 RecoverExecuting（executing → failed）可能针对同一张票并发执行。
+	// 没有 CAS 时，后写者会把先写者的终态覆盖：典型是 panic 已经被标成 failed、
+	// 执行体的 defer 再调本方法把票改成 succeeded——**一张 panic 过的票显示成功的**，
+	// 而动作实际只做了一半。这与本文件开头「不变量 3：CAS + RowsAffected 判定」
+	// 的要求也不一致。
+	// 回执写入保持无条件（它是 append-only 的执行记录，该次执行确实发生过）。
+	res := s.db.Model(&model.ApprovalTicket{}).
+		Where("id = ? AND status = ?", ticketID, model.ApprovalStatusExecuting).
+		Updates(updates)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		// 票已不归本次执行管（已被标失败/已被重启收口）。以库内为准，不覆盖。
+		slog.Warn("审批：执行收尾时票据已不在 executing，跳过状态覆盖", "ticketId", ticketID)
+	}
+	return nil
 }
 
 // ExpireStale 巡检兜底：把超期未决策的 pending 置 expired（幂等）。

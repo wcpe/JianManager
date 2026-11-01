@@ -627,6 +627,13 @@ func (s *AssistantChatService) SweepStaleConfirmations(now time.Time) (int, int,
 	}
 	expired := 0
 	resumed := 0
+	// 同一 run 可能挂着多张过期票据（早期版本不限制同 run 多张 pending，存量库里确实存在）。
+	// 每张票据都调一次 resumeAfterConfirmation 会为同一个 run 起多个执行体：
+	// executeRun 的 CAS 只让第一个抢先，其余走 finishWithoutTransition 补写 run_end——
+	// 它们不会把状态改坏（ensureRunEnd 幂等、CAS 带 status IN 条件），
+	// 但会白跑一批 goroutine，并在窗口期内反复发 run_end 查询。
+	// 因此按 run 去重：一个 run 在本轮巡检里只续跑一次。
+	resumedRuns := make(map[uint]struct{})
 	for _, tk := range stale {
 		res := s.db.Model(&model.AssistantConfirmation{}).
 			Where("id = ? AND status = ?", tk.ID, model.AssistantConfirmStatusPending).
@@ -641,9 +648,16 @@ func (s *AssistantChatService) SweepStaleConfirmations(now time.Time) (int, int,
 		// 过期票据对应的写操作从未执行，给模型一条明确的「未执行」结果，
 		// 否则续跑后它会在历史里看不到这次调用。
 		s.recordConfirmationToolMessage(&tk, "确认已过期（10 分钟内未处理），本次调用未执行。如需执行请重新发起。")
+		if _, done := resumedRuns[tk.RunID]; done {
+			// 同一 run 的另一张票据已经续跑过：本张只补 tool 消息，不再起执行体。
+			continue
+		}
 		var run model.AssistantRun
 		if err := s.db.First(&run, tk.RunID).Error; err == nil {
+			// 每次都重读库内行：resumeAfterConfirmation 只对
+			// waiting_confirmation 生效，拿循环开始时的陈旧副本判会误判。
 			if err := s.resumeAfterConfirmation(tk.OwnerUserID, &run); err == nil {
+				resumedRuns[tk.RunID] = struct{}{}
 				resumed++
 			}
 		}
@@ -1158,7 +1172,12 @@ func (s *AssistantChatService) startExecutor(owner uint, run *model.AssistantRun
 				// 重读库内当前行再收口（failResume 内部用当前 Version 做 CAS）。
 				var cur model.AssistantRun
 				if err := s.db.First(&cur, execRun.ID).Error; err == nil {
-					s.failResume(&cur, fmt.Sprint("执行体内部错误：", rec))
+					if err := s.failResume(&cur, fmt.Sprint("执行体内部错误：", rec)); err != nil {
+						// 收口失败必须留痕：此时 run 会停在活跃态，占着「单会话单活跃 run」的唯一索引，
+						// 用户侧表现为该会话持续 409（提不了新消息），只能靠重启恢复。
+						slog.Error("panic 后收口 run 失败，会话可能被锁死",
+							"runId", execRun.ID, "conversationId", execRun.ConversationID, "error", err)
+					}
 				} else {
 					slog.Warn("panic 后重读 run 失败，跳过收口", "runId", execRun.ID, "error", err)
 				}
@@ -2198,9 +2217,10 @@ func isTerminalRunStatus(status string) bool {
 //
 // 作用面只有 run 与会话的活跃指针：
 // 处于 waiting_confirmation 的确认失效、已派发的写调用标 unverified，属的
-//     票据/回执，本 FR **不碰**（§8 第 2、3 条由落地）；
-//   - 消息侧无需修补：助手消息是在一轮模型流**结束后**一次性写入的，中断不会留下半条
-//     消息；因此这里不做任何消息改写（改写只会把已确定的内容变成假的「未知」）。
+//
+//	  票据/回执，本 FR **不碰**（§8 第 2、3 条由落地）；
+//	- 消息侧无需修补：助手消息是在一轮模型流**结束后**一次性写入的，中断不会留下半条
+//	  消息；因此这里不做任何消息改写（改写只会把已确定的内容变成假的「未知」）。
 //
 // 幂等：CAS 保证只有真正迁移成功的那次写 run_end，重复调用不会产出第二条终态事件。
 func (s *AssistantChatService) ReapOnStartup() (int, error) {

@@ -789,13 +789,13 @@ type ClientMachineSummary struct {
 
 // ClientMachineListResult 机器清单分页结果。
 type ClientMachineListResult struct {
-	ChannelID string                `json:"channelId"`
-	From      string                `json:"from"`
-	To        string                `json:"to"`
-	Exact     bool                  `json:"exact"`
-	Total     int64                 `json:"total"`
-	Page      int                   `json:"page"`
-	PageSize  int                   `json:"pageSize"`
+	ChannelID string                 `json:"channelId"`
+	From      string                 `json:"from"`
+	To        string                 `json:"to"`
+	Exact     bool                   `json:"exact"`
+	Total     int64                  `json:"total"`
+	Page      int                    `json:"page"`
+	PageSize  int                    `json:"pageSize"`
 	Items     []ClientMachineSummary `json:"items"`
 }
 
@@ -892,16 +892,51 @@ func (s *ClientDistTrackingService) QueryMachines(q ClientMachineListQuery) (*Cl
 	// 一台从来只拉过 v4 的机器，按那个口径 lag = 4-4 = 0，而实际上它已经落后好几版。
 	// 版本滞后的语义前提就是「跟平台最新比」，所以基准必须来自全局。
 	// 仍然只碰明细表（spec §3「不改后端 schema」）。
+	// 【为何必须按频道过滤】latest_version 的语义是「这个频道当前的最新客户端版本」。
+	// 外部查询已经按 channel_id 圈定了「看哪个频道」，但子查询是**独立 SQL 作用域**，
+	// 不带外部 WHERE。早期版本就漏了这一段：按频道 A 看时，子查询把频道 B 的
+	// 更高版本号也算成了 A 的最新版，于是 A 频道里每台机器都显得「落后好几版」。
+	// 版本号跨频道本来就没有可比性（各频道各自发版）。
+	//
+	// 用 SQL 条件分支而不是无条件加参数：未指定频道时语义就是「全局最新」，
+	// 硬拼一个 channel_id = '' 会把基准永远算成 0。
+	latestVersionSub := "COALESCE((SELECT MAX(e3.version) FROM client_dist_events e3 " +
+		"WHERE e3.created_at >= ? AND e3.created_at <= ? AND e3.version > 0"
+	var latestArgs []any
+	// 频道过滤条件单独拼好，SELECT 与 ORDER BY 共用同一份——
+	// 两处一旦漂移，排序基准与展示值就成了两个频道的事。
+	channelCond := ""
+	if q.ChannelID != "" {
+		channelCond = " AND e3.channel_id = ?"
+		latestArgs = append(latestArgs, q.ChannelID)
+	}
+	latestVersionSub += channelCond + "), 0)"
+
 	selectSQL := "machine_id, MAX(channel_id) AS channel_id, COUNT(*) AS updates, " +
 		"MAX(created_at) AS last_update_at, " +
-		"COALESCE((SELECT MAX(e3.version) FROM client_dist_events e3 " +
-		"WHERE e3.created_at >= ? AND e3.created_at <= ? AND e3.version > 0), 0) AS latest_version, " +
+		latestVersionSub + " AS latest_version, " +
 		"COALESCE(SUM(bytes), 0) AS download_bytes"
 
-	// 当前版本：按机器取最近一条事件的 version。用相关子查询而不是再扫一遍全表。
+	// 绑定参数必须与 SQL 里的占位符出现顺序严格一致：
+	// [latest 的时间窗] → [可选的 channel_id] → [current 的时间窗]。
+	selectArgs := []any{q.From, q.To}
+	selectArgs = append(selectArgs, latestArgs...)
+	selectArgs = append(selectArgs, q.From, q.To)
+
+	// current_version：这台机器实际装的版本。
+	//
+	// 【必须限定 kind='manifest' 且 version>0】明细表里并非所有事件都带版本号：
+	// artifact（制品下载）与 core（updater 本体）落库时 Version 恒为 0（跨版本共享）。
+	// updater 的正常时序是「先拉 manifest(vN) → 再下载制品(v0)×N」，
+	// 所以「最近一条事件」通常就是 artifact。
+	// 不看 kind 直接取最近一条，会把一台已经升到最新版的机器算成 v0：
+	// latest 9 - current 0 = 滞后 9，它反而排到了「最需更新」的最前面。
+	// 早期用例没抓住是因为它们只种了 manifest 事件。
+	// 子查询为独立作用域，e2 带 kind 条件不会影响外层分组。
 	selectSQL += ", COALESCE((SELECT e2.version FROM client_dist_events e2 " +
 		"WHERE e2.machine_id = client_dist_events.machine_id " +
 		"AND e2.created_at >= ? AND e2.created_at <= ? " +
+		"AND e2.kind = 'manifest' AND e2.version > 0 " +
 		"ORDER BY e2.created_at DESC LIMIT 1), 0) AS current_version"
 
 	countStmt := base.Session(&gorm.Session{}).Select("COUNT(DISTINCT machine_id)")
@@ -912,30 +947,47 @@ func (s *ClientDistTrackingService) QueryMachines(q ClientMachineListQuery) (*Cl
 
 	var rows []machineRow
 	agg := base.Session(&gorm.Session{}).
-		Select(selectSQL, q.From, q.To, q.From, q.To).
+		Select(selectSQL, selectArgs...).
 		Group("machine_id")
+
 	// 排序键：version_lag 是派生值（latest_version - current_version），
-	// 它**不是**聚合结果里的真实列，直接 ORDER BY version_lag 在 MySQL/SQLite 都会报未知列。
-	// 因此按表达式排序，而不是按别名。
-	orderExpr := col
+	// 它**不是**聚合结果里的真实列；白名单里的真实列（updates / last_update_at）直接按列名排序。
+	//
+	// 【为何必须绑参而不是拼字面量】早期版本在 ORDER BY 里用 Go 格式化的字符串字面量
+	// 重建了同一个时间窗，带来两个真问题：
+	//   ① 时区：字面量强制 UTC 且不带偏移，而 SELECT 侧走的是 time.Time 绑定
+	//      （驱动按落库文本的形态序列化，本地时区 +08:00）。两个基准一旦不等，
+	//      排序用的就是「另一个窗口」的 lag，与展示值矛盾；
+	//   ② 精度：字面量砍到整秒，而上界是 `<=`，于是落在同一秒内的行被文本比较判为
+	//      大于窗口上界而排除——闭区间被变相改成开区间。
+	//
+	// 【为何必须用 clause.OrderBy{Expression} + 单层括号】
+	// 实测三种写法会让排序**静默消失或直接报语法错**：
+	//   - `Order(clause.Expr{...})`：Expr 不是 OrderBy 类型，被整个忽略（SQL 里没有 ORDER BY）；
+	//   - 先 Order(OrderBy{Expression}) 再 Order("machine_id ASC")：
+	//     MergeClause 只拷贝 Columns，Expression 在第二次合并时丢失；
+	//   - 把整个表达式包成**双括号**再跟 DESC：SQLite 报 `near "DESC": syntax error`
+	//     （用裸 db.Raw 同样能复现，所以这是 SQLite 解析器对括号表达式的限制，不是 GORM 的问题）。
+	//     **单层**括号、或不包外层括号都正常。
+	// 所以：主排序键与次序键合成一条 Expression，外层只留一层括号，只调一次 Order。
+	// 方向串 dir 已被二值化成 ASC/DESC（不来自用户拼接）。
 	if col == "version_lag" {
-		// 派生值：latest_version（全局子查询）减 current_version（本机器子查询），
-		// 两者都不是聚合结果里的真实列，必须按**完整表达式**排序。
-		//
-		// 时间用字面量而不带占位符：`Order()` 不接受绑参，而这两个值是服务端
-		// 自己解析出的 time.Time、按固定格式格式化，不含用户输入（无注入面）。
-		from := q.From.UTC().Format("2006-01-02 15:04:05")
-		to := q.To.UTC().Format("2006-01-02 15:04:05")
-		orderExpr = "((SELECT MAX(e3.version) FROM client_dist_events e3 " +
-			"WHERE e3.created_at >= '" + from + "' AND e3.created_at <= '" + to + "' AND e3.version > 0) " +
+		lagSQL := "(COALESCE((SELECT MAX(e3.version) FROM client_dist_events e3 " +
+			"WHERE e3.created_at >= ? AND e3.created_at <= ? AND e3.version > 0" + channelCond + "), 0) " +
 			"- COALESCE((SELECT e2.version FROM client_dist_events e2 " +
 			"WHERE e2.machine_id = client_dist_events.machine_id " +
-			"AND e2.created_at >= '" + from + "' AND e2.created_at <= '" + to + "' " +
-			"ORDER BY e2.created_at DESC LIMIT 1), 0))"
+			"AND e2.created_at >= ? AND e2.created_at <= ? " +
+			"AND e2.kind = 'manifest' AND e2.version > 0 " +
+			"ORDER BY e2.created_at DESC LIMIT 1), 0)) " + dir + ", machine_id ASC"
+		agg = agg.Order(clause.OrderBy{Expression: clause.Expr{SQL: lagSQL, Vars: selectArgs}})
+	} else {
+		// 次序键（machine_id ASC）与主键同批：同排序值下若无唯一键，翻页会重复或漏行。
+		agg = agg.Order(clause.OrderBy{Columns: []clause.OrderByColumn{
+			{Column: clause.Column{Name: col}, Desc: dir == "DESC"},
+			{Column: clause.Column{Name: "machine_id"}},
+		}})
 	}
-	agg = agg.Order(fmt.Sprintf("%s %s", orderExpr, dir))
-	// 次序键保证分页稳定：同一排序值下若没有唯一键，翻页可能重复或漏行。
-	agg = agg.Order("machine_id ASC").Offset((page - 1) * size).Limit(size)
+	agg = agg.Offset((page - 1) * size).Limit(size)
 	if err := agg.Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("聚合机器清单失败: %w", err)
 	}
