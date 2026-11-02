@@ -288,7 +288,11 @@ func (m *Manager) hasResidualUnpublishedDebt(ctx context.Context, source SourceC
 
 // hasKnownUnpublishedDayDebt 只在首次、慢支或已知欠账源检查有界WAL；正常已确认尾部不做全段遍历。
 // 检查按事件UTC日隔离：其他日的未交付正文不阻塞本日，但同日已知洞不能由新尾maxEnd越过。
-func (m *Manager) hasKnownUnpublishedDayDebt(ctx context.Context, source SourceConfig, events []logtypes.Event, observed *catalog.Record, checkWAL bool) (bool, error) {
+//
+// **返回被卡住的那条记录**（2026-11-02 真机缺陷修复）：只回答 `true` 而不告诉调用方「是谁卡住的」，
+// 调用方就无法为它补登记可见性证据 —— 那正是「同一批旧记录被反复判欠账、却永远拿不到自己的
+// verified」的成因（详见 verifyProjectionCtxYieldRuns 里那段说明）。第二个返回值为 nil 表示无欠账。
+func (m *Manager) hasKnownUnpublishedDayDebt(ctx context.Context, source SourceConfig, events []logtypes.Event, observed *catalog.Record, checkWAL bool) (bool, *logtypes.Event, error) {
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	m.mu.Lock()
 	p := m.pipes[key]
@@ -296,7 +300,7 @@ func (m *Manager) hasKnownUnpublishedDayDebt(ctx context.Context, source SourceC
 	m.mu.Unlock()
 	closed := publishedEvidenceClosed(observed, source)
 	if p == nil || (!checkWAL && !retrying && closed > 0) {
-		return false, nil
+		return false, nil, nil
 	}
 	var candidate uint64
 	for _, event := range events {
@@ -306,14 +310,14 @@ func (m *Manager) hasKnownUnpublishedDayDebt(ctx context.Context, source SourceC
 	verified := m.verifiedRuns(key)
 	for _, entry := range p.WAL().Snapshot() {
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return false, nil, err
 		}
 		if !entry.Durable || entry.Event.Record.End > candidate {
 			continue
 		}
 		day, err := eventUTCDay(source, entry.Event)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		if day != source.UTCDay || ledger.CoveredByPositionRanges(written, entry.Event.Record.Start, entry.Event.Record.End) {
 			continue
@@ -321,9 +325,10 @@ func (m *Manager) hasKnownUnpublishedDayDebt(ctx context.Context, source SourceC
 		if entry.Event.Record.End <= closed && ledger.CoveredByPositionRanges(verified, entry.Event.Record.Start, entry.Event.Record.End) {
 			continue
 		}
-		return true, nil
+		blocking := entry.Event
+		return true, &blocking, nil
 	}
-	return false, nil
+	return false, nil, nil
 }
 
 // applyPublishedEvidence 的短临界区只复核权威与修改账本，不跨网络或扫盘。

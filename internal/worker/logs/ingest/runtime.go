@@ -7700,7 +7700,7 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
 	checkWAL := !tailPlanned || (snapshot != nil && snapshot.checkPendingWAL)
-	debt, debtErr := m.hasKnownUnpublishedDayDebt(ctx, source, writeEvents, expectedAuthority, checkWAL)
+	debt, blocking, debtErr := m.hasKnownUnpublishedDayDebt(ctx, source, writeEvents, expectedAuthority, checkWAL)
 	if debtErr != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, debtErr
 	}
@@ -7708,6 +7708,30 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		// 新尾已真实写入，但同日旧正文尚未确认，不能把maxEnd宣称为完整封闭前缀。
 		key := source.LogSourceID + "/" + source.SourceGeneration
 		m.recordVerifiedRuns(key, gapRangesOfEvents(writeEvents))
+		// **给「被卡住的那条历史记录」补登记可见性证据**（2026-11-02 真机缺陷修复）。
+		//
+		// 为什么必须补：`hasKnownUnpublishedDayDebt` 判的是**整条 WAL 里同日的历史条目**，
+		// 而上面这条 `recordVerifiedRuns` 登记的是**本次新写入的**。于是：
+		//
+		//	旧记录 A 从未进 verified → debt 恒真 → 每轮都登记"本次的 B"、A 依然没登记
+		//	→ A 永远等不到自己的区间 → closed 被它拖住（实测停在 150418 / 文件 497879）
+		//
+		// 铁证：被判欠账的记录 69716..69933 在 VL 里已存在 3 份（projection-3/15/17）——
+		// 数据从未丢失，是记账漏了。补验通过的记录即可进入 verified，下一轮它就不再算欠账。
+		//
+		// 保守边界（一条都不放宽）：
+		//   · 只对**这一条**已被判欠账的记录做核对，不扩大范围；
+		//   · 核对**不通过就不登记**（`landedVisibleInVL` 返回空即作罢），
+		//     绝不把"没查到的"写成已验证；
+		//   · 补验失败不影响本次投递结论（仍返回 errKnownUnpublishedDayDebt）。
+		if blocking != nil {
+			if landed := m.landedVisibleInVL(source, []logtypes.Event{*blocking}); len(landed) == 1 {
+				m.recordVerifiedRuns(key, gapRangesOfEvents(landed))
+				slog.Info("已为历史欠账记录补登记可见性证据（下轮不再计入欠账）",
+					"logSourceID", source.LogSourceID,
+					"recordStart", blocking.Record.Start, "recordEnd", blocking.Record.End)
+			}
+		}
 		m.deferDurableDelivery(key)
 		m.scheduleRebuildConfirmPendingAsync(source, []string{source.UTCDay}, "同日已知未投递正文阻止封闭前缀越界")
 		return pipeline.DeliveryResult{HTTPStatus: status}, errKnownUnpublishedDayDebt
@@ -7726,7 +7750,7 @@ func (m *Manager) writeProjectionDay(source SourceConfig, events, writeEvents []
 		}
 		defer releaseWindow()
 		// 租约线性化后再复核候选前缀债务；旧前缀不能在journal落地期间先COMMIT再被closed越过。
-		debt, err := m.hasKnownUnpublishedDayDebt(ctx, source, writeEvents, expectedAuthority, true)
+		debt, _, err := m.hasKnownUnpublishedDayDebt(ctx, source, writeEvents, expectedAuthority, true)
 		if err != nil {
 			return pipeline.DeliveryResult{HTTPStatus: status}, err
 		}
@@ -8489,13 +8513,34 @@ func (m *Manager) verifyProjectionCtxYieldRuns(parent context.Context, client *v
 	if verdict == nil {
 		verdict = parent.Err()
 	}
-	// 只在**未全部通过**时给出「已通过簇」的区间：全通过时调用方手里已有更强的事实
-	//（整批可见），且那条路径已有自己的区间凭据登记（见 resolveGapsLandedByDelivery）——
-	// 在这里为几十万事件做一次合并排序纯属浪费。故 nil 区间在成功路径上**不表示无进展**。
-	passed := []ledger.PositionRange(nil)
-	if verdict != nil {
-		passed = ledger.MergePositionRanges(verifiedRuns)
-	}
+	// **成功路径也必须交出区间**（2026-11-02 真机缺陷修复，本函数原注释的那条假设是错的）。
+	//
+	// 原注释写的是：「全通过时调用方手里已有更强的事实（整批可见），且那条路径已有自己的
+	// 区间凭据登记（见 resolveGapsLandedByDelivery）——在这里为几十万事件做一次合并排序纯属浪费。」
+	//
+	// 实测证明这个假设不成立（单源 15 行/s × 150s，`[DEBT-DIAG]` 观测 + 离线取证）：
+	//   · 投影写入结束 354 次，全部 status=200 verified=N —— 写入一直是成功的；
+	//   · 投影校验查询 694 次，投影校验完成 0 次（成功路径从不产出区间）；
+	//   · 两个调用点（runtime.go:8340、materialization_budget.go:187）都用 `_` 丢弃了返回值；
+	//   · 结果 verifiedRanges 长期只有 1 个，而 WAL 里堆积了数百条"未验证"的历史条目。
+	//
+	// 而 `hasKnownUnpublishedDayDebt` 判的正是**整条 WAL 的历史条目**：
+	//
+	//	某条旧记录 A 从未进入 verified
+	//	  → debt 恒为真
+	//	  → 走 debt 分支，登记的是**本次新写入的 B**（runtime.go:7710），不是 A
+	//	  → A 依然没登记 ⇒ 下一轮 debt 依然为真 ⇒ **A 永远等不到自己的区间**
+	//	  ⇒ closed 被拖着推进（实测停在 150418，而文件已 497879）
+	//
+	// 铁证：被判为欠账的记录 69716..69933，在 VL 里**已存在 3 份**
+	// （projection-3 / projection-15 / projection-17）——数据一份没丢，是记账漏了。
+	//
+	// 所以成功路径必须交出区间：那条「别处会登记」的路径实际上只登记它自己那批，
+	// 没有任何路径回头给历史条目补登记。
+	//
+	// 成本：`MergePositionRanges` 只对**本次校验的事件**做（不是全源几十万条），
+	// 且成功路径本来就是批级操作（已含逐字段查询）。相比"整条链锁死"的代价，这里的合并可忽略。
+	passed := ledger.MergePositionRanges(verifiedRuns)
 	passedRuns := len(passed)
 	mu.Unlock()
 	slog.Info("投影校验完成",

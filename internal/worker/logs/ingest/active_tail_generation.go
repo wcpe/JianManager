@@ -29,7 +29,7 @@ func (m *Manager) claimActiveTailGeneration(source SourceConfig, events []logtyp
 	pending := m.state.Sources[key].PublicationPending
 	m.mu.Unlock()
 	// 已知同日洞会阻止发布；写前就必须隔离，不能先把尾行塞进仍在PP里的活跃旧代次。
-	if debt, debtErr := m.hasKnownUnpublishedDayDebt(context.Background(), daySource, events, observed, pending); debtErr != nil || debt {
+	if debt, _, debtErr := m.hasKnownUnpublishedDayDebt(context.Background(), daySource, events, observed, pending); debtErr != nil || debt {
 		return "", nil
 	}
 	m.publishMu.Lock()
@@ -74,7 +74,7 @@ func (m *Manager) uncertainPublishedTailNeedsReplacement(ctx context.Context, so
 		daySource := source
 		daySource.UTCDay = day
 		current, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
-		debt, debtErr := m.hasKnownUnpublishedDayDebt(ctx, daySource, grouped[day], current, true)
+		debt, _, debtErr := m.hasKnownUnpublishedDayDebt(ctx, daySource, grouped[day], current, true)
 		if debtErr != nil || debt {
 			return false, debtErr
 		}
