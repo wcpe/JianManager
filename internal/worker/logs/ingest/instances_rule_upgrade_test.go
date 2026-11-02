@@ -177,17 +177,23 @@ func TestRuleChangeStartsAtEOFAvoidingReimport(t *testing.T) {
 		require.True(t, ok)
 		return pos
 	}
-	// 重建后水位已锚到新文件末尾（= 文件大小）。
+	// 重建后确实锚在新文件末尾。
+	//
+	// 2026-10-30 裁定 D 后，「起点在 EOF」由 **tailer 自己的 cursor** 表达
+	//（`pipeline.StartAtEOF` → `tailer.AnchorAtEOF()`），**账本水位不再被推到 EOF**：
+	// 索引库已改纯内存，账本不跨重启存活，用账本表达起点只是一层多余状态。
+	// 所以这里不再断言 `positions.Read >= len(historical)`（那个读数结构性为 0），
+	// 改由下面的**行为判据**把关：历史不得进事件段、新增必须采到。
 	rebuilt := positions()
-	require.GreaterOrEqual(t, rebuilt.Read, uint64(len(historical)),
-		"重建后读取位置必须已锚到新文件末尾（否则会重读历史内容造成重复导入）")
 
-	// 行为判据①：文件**未追加任何字节** ⇒ 采集轮不得推进任何水位、不得产出新事件。
+	// 行为判据①：文件**未追加任何字节** ⇒ 采集轮不得产出新事件、水位不得前进。
 	m.pollOnce()
 	idle := positions()
 	require.Equal(t, rebuilt.Read, idle.Read,
 		"文件未追加时读取位置不得前进——前进即等于从文件头重读既有内容")
 	require.Equal(t, rebuilt.Durable, idle.Durable, "文件未追加时持久化位置不得前进")
+	require.Empty(t, eventMessageText(t, m, key.String()),
+		"既有历史内容不得被重读进事件段")
 
 	// 行为判据②：续采能力不受影响——重建后**新增**的内容必须照常采到，且既有历史内容
 	// 不得出现在事件段里。
@@ -203,8 +209,8 @@ func TestRuleChangeStartsAtEOFAvoidingReimport(t *testing.T) {
 		"重建只跳过既有内容，不得连后续追加的新内容一起丢掉")
 	require.NotContains(t, joined, "already-delivered historically",
 		"新载体里的既有历史内容不属于本源的采集范围，不得被重新读入事件段")
-	require.Equal(t, uint64(len(historical)+len(appended)), positions().Durable,
-		"持久化水位应恰好停在已闭合事件之后：既不重读历史，也不跳读")
+	require.Positive(t, positions().Durable,
+		"持久化水位必须真的前进（否则上面的「采到了」就是假绿）")
 }
 
 // eventMessageText 把某源事件段的正文拼成一段文本，用于**子串**断言。
