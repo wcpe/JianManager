@@ -7544,10 +7544,19 @@ func (m *Manager) dropEventsAlreadyWrittenCtx(ctx context.Context, client *vlsup
 		}
 		filter := fmt.Sprintf("log_source_id:=%q AND source_generation:=%q",
 			source.LogSourceID, source.SourceGeneration)
-		if generation != "" {
-			// replace 路径：标签面钉到本次物理代次（只掐同名重复，不动跨代次语义）。
-			filter += fmt.Sprintf(" AND projection_generation:=%q", generation)
-		}
+		// **不再按 `projection_generation` 过滤**（2026-11-02 投递路径简化的直接后果）。
+		//
+		// 本函数原先把非空 generation 拼成 `AND projection_generation:=<代次名>`，用来掐掉
+		// 「同一代次名被写两次」。但简化后 `projectionPayload` **不再写这个标签**
+		// （见该函数的注释：一批数据只写一次，不再有按批次过滤的需要）。
+		// 于是这条选择器在真实数据上永远不命中 —— 实测：写入明明成功、行就在 VL 里，
+		// 本过滤仍把三条事件原样返回（TestDropEventsAlreadyWritten_SameID_SameHashDropped 红）。
+		//
+		// 去掉它会不会放宽判据？不会：本函数的安全方向由**同 id 且同 hash** 这个双重判据承担
+		// （下方 kept 循环），代次维度只是「在哪些行里找同 id」的缩小面。不缩小查询面，
+		// 最坏结果是多看见几条历史同 id 行 —— 而它们要么 hash 相同（本来就该跳过），
+		// 要么 hash 不同（真更正，本来就该照写）。方向与「宁可多写不漏」一致。
+		_ = generation
 		query := fmt.Sprintf("%s AND event_id:in(%s) | fields event_id, canonical_content_hash | limit 20000",
 			filter, strings.Join(ids, ","))
 		if len(query) > scopedProjectionQueryMaxBytes {

@@ -26,8 +26,11 @@ func TestSourceTimeZoneReachesStoredEvent(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[23:54:02] [Server thread/INFO]: 香港时间\n[23:54:03] [Server thread/INFO]: 结束\n"), 0o644))
+	// **先登记再产生日志**：FILE_PRIMARY 源一律 `StartAtEOF: true`（生产裁定 D：新源不回头
+	// 吃别人的历史，见 runtime.go 的 Register）。夹具先前先写两行再建 Manager ⇒ 那两行
+	// 落在 EOF 起点之前被整体跳过 ⇒ 事件段为空、断言恒红（与关切无关的夹具形态问题）。
+	// 正确的前置条件是「先登记源、再产生日志」——正是生产里一个源从空文件开始播日志的形状。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
@@ -39,6 +42,7 @@ func TestSourceTimeZoneReachesStoredEvent(t *testing.T) {
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
 	})
 	require.NoError(t, err)
+	appendPollTestLines(t, logPath, "[23:54:02] [Server thread/INFO]: 香港时间\n[23:54:03] [Server thread/INFO]: 结束\n")
 	m.pollOnce()
 
 	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)
@@ -54,8 +58,8 @@ func TestDefaultTimeZoneAppliesWhenSourceDoesNotConfigure(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[23:54:02] [Server thread/INFO]: 节点默认时区\n[23:54:03] [Server thread/INFO]: 结束\n"), 0o644))
+	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，见上一条用例的说明）。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
@@ -67,6 +71,7 @@ func TestDefaultTimeZoneAppliesWhenSourceDoesNotConfigure(t *testing.T) {
 		Sources: []SourceConfig{source}, DefaultTimeZone: "Asia/Shanghai",
 	})
 	require.NoError(t, err)
+	appendPollTestLines(t, logPath, "[23:54:02] [Server thread/INFO]: 节点默认时区\n[23:54:03] [Server thread/INFO]: 结束\n")
 	m.pollOnce()
 
 	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)
@@ -133,8 +138,8 @@ func TestDefaultTimeZoneLocalFollowsProcessTZ(t *testing.T) {
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[23:54:02] [Server thread/INFO]: local 时区\n[23:54:03] [Server thread/INFO]: 结束\n"), 0o644))
+	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，见 TestSourceTimeZoneReachesStoredEvent）。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
@@ -146,6 +151,7 @@ func TestDefaultTimeZoneLocalFollowsProcessTZ(t *testing.T) {
 		Sources: []SourceConfig{source}, DefaultTimeZone: "local",
 	})
 	require.NoError(t, err)
+	appendPollTestLines(t, logPath, "[23:54:02] [Server thread/INFO]: local 时区\n[23:54:03] [Server thread/INFO]: 结束\n")
 	m.pollOnce()
 
 	events := durableEvents(t, m, source.LogSourceID+"/"+source.SourceGeneration)

@@ -43,7 +43,12 @@ func vlOfflineFixture(t *testing.T, category logtypes.Source, failing *bool) (*M
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(path, []byte("2026-10-16 00:00:00 INFO vl offline probe line\n"), 0o600))
+	// **先登记再产生日志**：FILE_PRIMARY 源一律 `StartAtEOF: true`（生产裁定 D：新源不回头
+	// 吃别人的历史，见 runtime.go 的 Register）。夹具先前先把那一行写进文件再建 Manager
+	// ⇒ 该行落在 EOF 起点之前被整体跳过 ⇒ `Drain()` 返回零事件、WAL 恒空
+	// ⇒ 三条断言全部红在「夹具前提」上，与被测的投递失败留队列行为无关。
+	// 正确的前置条件是「先登记源、再产生日志」——正是生产里源从空文件开始播日志的形状。
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
 	src := SourceConfig{
 		LogSourceID: "vloffline:" + string(category), SourceGeneration: "g1", Path: path,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "vloffline:" + string(category),
@@ -55,6 +60,7 @@ func vlOfflineFixture(t *testing.T, category logtypes.Source, failing *bool) (*M
 		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{src},
 	})
 	require.NoError(t, err)
+	appendPollTestLines(t, path, "2026-10-16 00:00:00 INFO vl offline probe line\n")
 	p := m.pipes[src.LogSourceID+"/"+src.SourceGeneration]
 	require.NotNil(t, p)
 	p.SetDelivery(pipeline.FuncHook(func([]logtypes.Event, bool) (pipeline.DeliveryResult, error) {

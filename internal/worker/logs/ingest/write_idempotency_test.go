@@ -25,6 +25,13 @@ import (
 )
 
 // newWriteIdempotencyFixture 造出「已发布一代、且该代内容已在 VL」的现场。
+//
+// 2026-11-02：`seedProjection` 用**另一个** Manager 实例播种，而采集索引已改纯内存
+// （`stateindex.OpenInMemory`，2026-10-30 机械盘不落盘裁定）⇒ 新 Manager 拿到的是一本
+// 空白内存库，`m.state.Sources[key].ProjectionGeneration` 恒为空 ⇒ 「已发布代次」这个
+// 夹具前提结构性不成立（三条用例全部红在 `require.NotEmpty(t, published)`）。
+// 这不是被测行为的问题：代次名只存在于**写过它的那个实例**的内存里。
+// 所以播种必须发生在同一个 Manager 上——与控制流上真正会发生的事一致。
 func newWriteIdempotencyFixture(t *testing.T) (*Manager, string, SourceConfig, []logtypes.Event, *reconcileVLFixture) {
 	t.Helper()
 	client, fixture, _ := newReconcileVL(t)
@@ -32,12 +39,14 @@ func newWriteIdempotencyFixture(t *testing.T) (*Manager, string, SourceConfig, [
 	journal := catalog.NewMemJournal()
 	source := reconcileTestSource(t, root)
 	events := reconcileTestEvents()
-	seedProjection(t, client, root, journal, catalog.New(journal), source, events)
 
 	m, err := newTestManager(t, Options{
 		Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal,
 		Sources: []SourceConfig{source},
 	})
+	require.NoError(t, err)
+	// 同一实例播种：写入代次 `projection-1` 并把该代次记到内存 state。
+	_, err = m.writeProjection(source, events, "projection-1", events, nil, true)
 	require.NoError(t, err)
 	return m, source.LogSourceID + "/" + source.SourceGeneration, source, events, fixture
 }
@@ -196,6 +205,11 @@ func TestWriteProjectionDayTailPathUnaffected(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(dayEvents), payloadEventCount(fixture.payloadsSince(insertsBefore)),
 		"增量尾部不走过滤：本批就是新数据，须逐条照写")
-	require.Equal(t, queriesBefore+1, fixture.contentQueryCount(), "只做一次逐字段并集校验，不能新增写前去重查询")
+	// 解析式断言原为 `queriesBefore+1`（那一次是写后逐字段并集校验）。2026-11-02 投递路径
+	// 简化后写后校验整个从 `writeProjectionDay` 上摘除 ⇒ 本次写入**一次** `/select/logsql/query`
+	// 都不发。本用例真正要钉的仍是「增量尾部不得新增写前去重查询」这条红线（那才是这处
+	// 接线被撤回时会出现的东西），故断言改成「查询次数不增长」。
+	require.Equal(t, queriesBefore, fixture.contentQueryCount(),
+		"增量尾部不得新增任何查询（写后校验已随简化删除，写前去重查询更不该出现）")
 	require.Len(t, m.landedVisibleInVL(daySource, dayEvents), len(dayEvents), "新尾必须在真实PP中恰好可见一次")
 }
