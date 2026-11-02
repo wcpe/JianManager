@@ -315,6 +315,27 @@ func New(opts Options) (*Pipeline, error) {
 			// cursor machinery while retaining STDIO_PRIMARY source semantics.
 			p.tailer = acquire.NewFileTailer(led, key, opts.Path, wal, bound)
 			p.tailer.SetSourceCategory(cat)
+			// 起点选择与 FILE_PRIMARY **逐条同源**（2026-11-02 修）。
+			//
+			// 旧实现只建了 tailer 就 `break`：`StartAtEOF` 与 `ResumeCursor` 两个分支都被跳过
+			// ⇒ 游标永远是 0 ⇒ **每次重启都把整份 raw spool 从头重读并重投一遍**。
+			// 后果不是“多写一份”：重启后 stdout 流会多出与重启前**逐字相同**的事件（实测
+			// 1 条变 3 条），而它们与重启前的那些 event_id 不同（时间戳是新的）⇒ 下游按
+			// event_id 幂等也爱莫能助 ⇒ 每次 Worker 重启都给实例日志叠一层副本。
+			//
+			// 为什么这不是“只是缺个优化”：裁定 D 把“重启不重复”这类保证全部委托给了
+			// 持久化游标（`ingest.cursor`）。这条分支不读它，等于让**所有实例的
+			// stdout/stderr 源**在每次重启后都丢掉那个保证。
+			if opts.StartAtEOF {
+				if err := p.tailer.AnchorAtEOF(); err != nil {
+					return nil, err
+				}
+			}
+			if opts.ResumeCursor != nil {
+				if err := p.tailer.ResumeFrom(*opts.ResumeCursor); err != nil {
+					return nil, err
+				}
+			}
 			break
 		}
 		if opts.Reader == nil {

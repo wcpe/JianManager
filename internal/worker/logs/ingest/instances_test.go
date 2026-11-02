@@ -17,12 +17,13 @@ import (
 func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) {
 	vl, _ := newProjectionVL(t)
 	root := t.TempDir()
+	work := t.TempDir()
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
 	require.NoError(t, m.RegisterInstance(InstanceRegistration{
 		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
-		Mode: "STDIO_PRIMARY", WorkDir: t.TempDir(),
+		Mode: "STDIO_PRIMARY", WorkDir: work,
 	}))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stdout", []byte("stdout raw\n")))
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stderr", []byte("stderr raw\n")))
@@ -31,13 +32,22 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	require.Equal(t, "stdout raw\n", string(data))
 	require.Empty(t, cat.Keys(), "no query publication before polling")
 	m.pollOnce()
-	rec, ok := cat.Get(catalog.PartitionKey{StorageNamespace: "inst:1", UTCDay: runtimeTestUTCDay()})
-	require.True(t, ok)
-	require.Len(t, rec.PublishedProjection.SourceProjections, 2)
+	// 2026-11-02 投递路径简化：投递不再调用 `publishSnapshot` ⇒ 没有 `rec.PublishedProjection`，
+	// 「两条流都进了同一份发布投影」这条断言失去对象。本用例真正要守的前半段（Raw 字节先落盘、
+	// 采集轮之后确实把两条流都采进事件段）仍在下面两条断言里，且更直接。
+	require.Len(t, durableEvents(t, m, "inst:1/stdout/holder-g1"), 1, "stdout 流必须被采到")
+	require.Len(t, durableEvents(t, m, "inst:1/stderr/holder-g1"), 1, "stderr 流必须被采到")
 	require.NoError(t, m.Stop())
 	restarted, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
 	require.NoError(t, err)
 	require.Len(t, restarted.pipes, 2, "sources restore without CP or config replay")
+	// 2026-10-30 裁定：采集索引改**纯内存** ⇒ 重启后 `state.Instances` 为空，绑定必须由 CP
+	// 重新下发（`RegisterInstance` 幂等）。原夹具直接 AppendInstanceOutput 会拿到
+	// `instance log binding pending`——那不是缺陷，是「绑定还没到」的正常语义。
+	require.NoError(t, restarted.RegisterInstance(InstanceRegistration{
+		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
+		Mode: "STDIO_PRIMARY", WorkDir: work,
+	}))
 	require.NoError(t, restarted.AppendInstanceOutput("uuid-1", "stdout", []byte("after restart\n")))
 	restarted.pollOnce()
 	require.Len(t, durableEvents(t, restarted, "inst:1/stdout/holder-g1"), 2)
@@ -71,7 +81,9 @@ func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {
 	vl, _ := newProjectionVL(t)
 	root, work := t.TempDir(), t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(work, "logs"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"), []byte("file canonical\n"), 0o600))
+	// 先建空文件再登记（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）：夹具先前先写内容再登记
+	// ⇒ 那行落在 EOF 起点之前被整体跳过 ⇒ 事件段恒空，「不得双采控制台输出」无从断言。
+	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"), nil, 0o600))
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal()})
 	require.NoError(t, err)
@@ -84,6 +96,7 @@ func TestInstanceFilePrimaryDoesNotDoubleCollectConsoleOutput(t *testing.T) {
 		UUID: "uuid-1", TargetID: "inst:1", Generation: "holder-g1",
 		Mode: "FILE_PRIMARY", WorkDir: work,
 	}))
+	appendPollTestLines(t, filepath.Join(work, "logs", "latest.log"), "file canonical\n")
 	require.NoError(t, m.AppendInstanceOutput("uuid-1", "stdout", []byte("console copy\n")))
 	m.pollOnce()
 	require.Len(t, m.pipes, 1)

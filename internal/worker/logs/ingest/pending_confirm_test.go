@@ -1,5 +1,15 @@
 package ingest
 
+// 2026-11-02 投递路径简化：本文件两条用例守「pending=true 时先按已发布代次做只读确认，
+// 完整就跳过整窗重发、缺行才回落整窗重发」。那条链（PublicationPending + 代次白名单 +
+// verifyProjectionQuery 复核 + 整窗重发）已随简化整体删除：`deliverCtx` 不再读 pending、
+// 不再取名代次、也不再整窗重写。实测：`state.Sources[key].ProjectionGeneration` 恒为空
+// （夹具首条断言即红），两条用例均失去被测对象。
+//
+// 它们记录的现场形态（实例原地重写 latest.log ⇒ 偏移漂移 ⇒ 每批都整窗重写、量级翻倍）
+// 在简化后**结构上不会发生**：一批数据只写一次，没有「重发」这条路径。
+// 仍然活着的同型关切（同 id 同 hash 不得重复写入）由 write_idempotency_test.go 守着。
+//
 // 发布确认快路径（协议 #5 的①）红绿用例：
 //   T1 「pending=true ∧ VL 完整 ⇒ 零整窗重发」（修复前为红 ✗：每批都整窗重写）
 //   T2 「pending=true ∧ VL 确实缺行 ⇒ 照旧整窗重发」（判据不得放宽 ✗）
@@ -49,6 +59,7 @@ func newPendingConfirmFixture(t *testing.T) (*Manager, string, SourceConfig, []l
 
 // TestPendingConfirmSkipsFullRepublishWhenVLComplete —— T1。
 func TestPendingConfirmSkipsFullRepublishWhenVLComplete(t *testing.T) {
+	t.Skip("投递路径简化（2026-11-02）：pending 只读确认与整窗重发已删，「跳过重发」失去对象")
 	m, key, source, _, payloads, _ := newPendingConfirmFixture(t)
 
 	m.mu.Lock()
@@ -88,6 +99,7 @@ func TestPendingConfirmSkipsFullRepublishWhenVLComplete(t *testing.T) {
 
 // TestPendingConfirmFallsBackWhenVLMissing —— T2。
 func TestPendingConfirmFallsBackWhenVLMissing(t *testing.T) {
+	t.Skip("投递路径简化（2026-11-02）：pending 只读确认与整窗重发已删，「回落整窗重发」失去对象")
 	m, key, source, _, payloads, deleteDay := newPendingConfirmFixture(t)
 
 	m.mu.Lock()

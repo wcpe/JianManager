@@ -258,6 +258,18 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 	m.pendingMu.Lock()
 	defer m.pendingMu.Unlock()
 	if exists {
+		// **必须把绑定写回内存状态**（2026-11-02）。
+		//
+		// 索引改纯内存后（2026-10-30 裁定），重启拿到的是「源由游标表已重建、绑定为空」的形态
+		// （见上方 `bindingFromRebuiltSources`）。那时 `existing` 就是**本次登记**推出的绑定
+		// （两者逐字相等）⇒ 走不到 `existing != binding` 那个分支 ⇒ 若不在这里写回，
+		// `state.Instances` 会**永远为空** ⇒ `AppendInstanceOutput` 恒报「binding pending」、
+		// `MissingInstanceBindings` 恒报缺失、就绪面恒不就绪——但采集本身是好的，症状极难定位。
+		//
+		// 幂等重登记（绑定真的没变）写回去也是同一个值，无副作用。
+		m.mu.Lock()
+		m.state.Instances[reg.UUID] = binding
+		m.mu.Unlock()
 		if err := m.flushPendingForBinding(binding); err != nil {
 			m.recordRawWriteFailure(binding, pendingFlushStream(err), 0)
 			return fmt.Errorf("ingest: adopt pending instance output: %w", err)
