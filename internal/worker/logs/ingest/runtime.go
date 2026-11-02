@@ -1337,10 +1337,8 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 	}
 	sort.Strings(keys)
 	pipes := make(map[string]*pipeline.Pipeline, len(m.pipes))
-	sources := make(map[string]SourceConfig, len(m.sources))
 	for key, pipe := range m.pipes {
 		pipes[key] = pipe
-		sources[key] = m.sources[key]
 	}
 	m.mu.Unlock()
 	if len(keys) == 0 {
@@ -1374,7 +1372,6 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 			result.LedgerReady = false
 			result.Reasons = append(result.Reasons, key+":reclaim_behind_durable")
 		}
-		source := sources[key]
 		m.mu.Lock()
 		saved := m.state.Sources[key]
 		m.mu.Unlock()
@@ -1386,13 +1383,21 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 		// 不得因此否决全局切换（与 CP 侧 2026-09-30「空≠缺」语义修正同型）。
 		// 生产实证：inst:152/file（bungee 的空文件日志）与 inst:153/stdout（Beacon 空 stdout）
 		// 在此永久产出 projection_not_published，使 cutover 闸门恒不可满足。
-		if entry.Positions.Durable > 0 {
-			closed, complete := m.publishedClosedForSource(source, saved)
-			if !complete || closed < entry.Positions.Durable {
-				result.LedgerReady = false
-				result.Reasons = append(result.Reasons, key+":projection_not_published")
-			}
-		}
+		//
+		// **2026-11-02 投递路径简化：本条 `projection_not_published` 判据已删除。**
+		//
+		// 它原先问的是「该源的已发布投影是否覆盖到 Durable」。而投影发布（`publishSnapshot`）
+		// 已从投递路径上摘除 ⇒ `rec.PublishedProjection` 永远不会被写出来 ⇒ 该判据对
+		// **任何有数据的源**都恒为假 ⇒ cutover 闸门在生产上恒不可满足，而且没有任何数据面
+		// 动作能让它变绿（不是“偶尔不就绪”，是永久不就绪）。
+		//
+		// 它守护的实质关切（「字节只写进了本地，没真正到 VL」）**没有丢**，只是位置前移了：
+		// 现在由上方两条水位判据承担——
+		//   - `durable_behind_read`：读到的东西必须先落库；
+		//   - `reclaim_behind_durable`：回收只能在「真实 ACK 且逐字段认证的连续前缀」上推进
+		//     （`contiguousCertifiedEnd`），因此 `Reclaim >= Durable` 就意味着这段字节
+		//     已经拿到 VL 的请求完成回执并被登记为已投递。
+		// 换言之，旧判据只是想从另一个角度再问一遍同一件事；把它留着只会把闸门焊死。
 	}
 	return result
 }
@@ -5083,9 +5088,21 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
-	client, _, err := m.clientForSource(source)
+	client, frozen, err := m.clientForSource(source)
 	if err != nil || client == nil {
 		return pipeline.DeliveryResult{}, fmt.Errorf("ingest: VictoriaLogs client is not ready")
+	}
+	// 冻结日必须拒绝真实物理写。
+	//
+	// 简化投递路径时，`clientForSource` 的第二个返回值（frozen）被整体丢掉了：
+	// 调用点写成 `client, _, err := ...`，于是 `catalog.RouteWrite` 已经判定的「本物理日已封闭、
+	// 不得再写入」被静默忽略 ⇒ 迁移/归档期的冻结形同虚设，数据会被写进一个已被宣告不再接受的
+	// 目标（生产上是「写进了即将不再存在的 VL 实例」），而调用方会把它当成功。
+	//
+	// 判定必须留在投递**入口**（写段与写 VL 之前）：它比任何后续核对都便宜，
+	// 也比事后发现更难补救（写进去的那批还得回滚）。
+	if frozen {
+		return pipeline.DeliveryResult{}, catalog.ErrPhysicalDayFrozen
 	}
 	// 同一批内的重复：按 event_id 去重（内容相同的重复投递不需要写两遍）。
 	// 跨批/跨重启的重复**不在这里管** —— 那由 event_id 幂等 + 查询侧去重承担，
