@@ -261,6 +261,49 @@ FileTailer、STDIO_PRIMARY ~~和 ArchiveImporter~~ 统一写入事件管道；�
    而它此前在 `gapReasonsHealableOnReResume` 里却不在本名单 ⇒ 源永久卡死，生产实测 86 源受影响）。
    名单之外一律不自动消解（含
    `STDIO_RAW_WRITE_FAILED` 与一切「从未进 WAL」的原因），交重读补投或人工核验。
+
+### 3.3.1 「同日欠账闸」必须为被卡记录补登记证据（2026-11-02 显式评审修订）
+
+`hasKnownUnpublishedDayDebt` 是发布前的安全闸：**同日若还有未投递正文，不得把 `maxEnd`
+宣称为完整封闭前缀**（否则会把从未落库的区间记成已发布）。这道闸本身是对的，不改。
+
+**但它曾导致记账漏项**：闸判的是**整条 WAL 里同日的历史条目**，而 debt 分支里
+`recordVerifiedRuns` 登记的是**本次新写入面**。于是：
+
+```
+旧记录 A 从未进入 VerifiedRuns
+  → debt 恒为真
+  → 每轮走 debt 分支、登记"本次新写入的 B"，A 依然没登记
+  → A 永远等不到自己的区间 ⇒ closed 被它拖住
+```
+
+受控实验（单源 15 行/s × 150s）实测：`投影写入结束` 354 次全部 `status=200`、
+`verified` 正常；但 `投影校验完成` **0 次**（成功路径刻意不产出区间，见
+`verifyProjectionCtxYieldRuns` 的旧注释），`VerifiedRuns` 长期只有 1 个区间；
+`closed` 停在 150418 而文件已 497879。
+
+**铁证**：被判为欠账的记录 `69716..69933` 在 VL 里**已存在 3 份**——数据一份没丢，是记账漏了。
+
+**修订后的规则**：
+
+1. `hasKnownUnpublishedDayDebt` **必须返回被卡住的那条记录**（而非只回答 true/false），
+   让调用方能为它补证据；
+2. debt 分支对**那一条**记录单独做一次可见性核对，**通过才登记**它的区间。
+
+**保守边界（一条都不放宽，ADR-101 红线）**：
+- 只对被判欠账的**那一条**做核对，不扩大范围；
+- **核对不通过就不登记**——绝不把"没查到的"写成已验证（自动放弃仍是禁止的，
+  `TestAutoResolveNeverMarksPermanentlyLost` 未触碰）；
+- 补验失败不影响投递结论（仍返回 `errKnownUnpublishedDayDebt`）；
+- 真的不在 VL 里的记录必须**继续算欠账**（真欠账不许被吞掉）。
+
+验收：`ingest.TestDayDebtReturnsBlockingRecord`（判据必须交出具体记录）、
+`ingest.TestDayDebtNilBlockingWhenNoDebt`（无欠账时不得凭空给记录）、
+`ingest.TestBlockingRecordStillDebtsWhenTrulyMissing`（真缺失仍算欠账）、
+`ingest.TestBlockingRecordVerifiedOnlyWhenVisible`（可见才允许登记）。
+
+实测效果（同夹具前后对照）：`closed` 150,418 → **395,623**（+163%），
+`closed / VL 实际` 33.9% → **99.0%**。
   人工接口 `ResolveGapsThrough` / `ResolveCoveredGapsForSource` 语义不变（仍按末端消解，
   可显式确认放弃不可证明的原因）。永久放弃凭据按实际连续区间并集分别记录，只合并相接/重叠项，
   不以首尾凸包覆盖健康位置；实名操作人、理由、时间、Through 与最近 64 条上限及持久化语义保持。
