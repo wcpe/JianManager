@@ -82,6 +82,11 @@ func (r *stageRecorder) hasStage(marker string) bool {
 }
 
 func TestDeliverUsesAppendedTailFastPath(t *testing.T) {
+	t.Skip("2026-11-02 投递路径简化：planDeliveryTail / stageSink 的阶段计时随「增量尾部快路径」" +
+		"整套删除（简化后投递只做「去重 → 写段 → 写 VL」，不再有全量/快路径两条分支，" +
+		"所以也没有「快路径是否生效」可测）。" +
+		"同文件里的 TestDeliverTailFallsBackOnOverlappingRange 仍保留：它验证的是区间重叠时" +
+		"的数据正确性，与分支是否存在无关。")
 	client, _ := newProjectionVL(t)
 	root, _ := freshSegmentRoot(t, "deliver-tail-fast")
 	dir := filepath.Join(root, "s00")

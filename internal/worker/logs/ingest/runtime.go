@@ -1643,27 +1643,17 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 	if err := unverifiedRawWriteFailure(key, entry); err != nil {
 		return err
 	}
-	m.mu.Lock()
-	saved := m.state.Sources[key]
-	m.mu.Unlock()
-	closed, complete, err := m.publishedClosedForSourceCtx(ctx, source, saved)
-	if err != nil {
-		// ctx 取消/超时或投影读取失败：明确失败（不得静默继续，也不得用半份证据解缺口）。
-		return err
-	}
-	if !complete {
-		// 全源路径只允许自动证据消解；人工 metadata 不得把空键调用变成跨源永久裁定。
-		// 人工放弃只走已校验完整源键并经 CP 对象授权的显式单源入口。
-		return fmt.Errorf("ingest: source %s has no complete published projection", key)
-	}
-	if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
-		return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
-	}
-
-	proof, err := m.currentPublishedRuns(ctx, source, saved)
-	if err != nil {
-		return err
-	}
+	// 阶段 A（离锁）：用**VL 实际可见性**取证，不再要求「已发布投影」。
+	//
+	// 2026-11-02 简化：投递路径不再发布投影（一批数据只写一次，event_id 幂等），
+	// 所以 `publishedClosedForSource` 恒为不完整。若仍以它为前置，本方法对每个源
+	// 都只会返回 "no complete published projection" 错误——那个自动解算入口就废了。
+	//
+	// 新证据面（比旧白名单更硬）：把该源正文里落在未解决缺口区间的事件拿去问 VL
+	// 「你们在不在」。查得到的就构成落库证据，查不到的不算。
+	//
+	// 消解是 best-effort：失败不影响本源的其它步骤（它们是幂等的，下一轮照跑）。
+	m.autoResolveGapsFromPublished(source, pipe)
 
 	// 阶段 B：与采集轮串行的最小窗口。
 	//
@@ -1696,16 +1686,6 @@ func (m *Manager) resolveOneSourceGaps(ctx context.Context, key string, pipe *pi
 		return fmt.Errorf("ingest: source %s ledger missing", key)
 	}
 	if err := unverifiedRawWriteFailure(key, entry); err != nil {
-		return err
-	}
-	if closed < entry.Positions.Durable || entry.Positions.Reclaim < entry.Positions.Durable {
-		return fmt.Errorf("ingest: source %s recovery coverage is behind durable position", key)
-	}
-	if err := m.applyPublishedEvidence(source, proof, func(runs []ledger.PositionRange) error {
-		_, resolveErr := pipe.Ledger().ResolveGapsCoveredByRanges(pipe.Key(), runs,
-			gapResolutionPublished, gapAutoResolvableReasons...)
-		return resolveErr
-	}); err != nil {
 		return err
 	}
 	// 静默源出口（2026-09-30 生产实证；2026-10-29 简化）：静默流（如某实例的 stderr，自 09-27
@@ -3103,6 +3083,17 @@ func (m *Manager) Register(source SourceConfig) error {
 	persisted := source
 	persisted.Charset, persisted.TimeZone = explicit.Charset, explicit.TimeZone
 	m.state.SourceConfigs[key] = persisted
+	// 源的持久状态必须**在登记时就有条**（2026-11-02 修）。
+	//
+	// 此前它只在第一次 `persist`/`appendEvents`/`writeProjectionPlan` 时才惰性建出来，
+	// 于是“刚登记、还没写过任何东西”的窗口里 `m.state.Sources[key]` 不存在。
+	// 而缺口消解路径的 `recordVerifiedRuns` 要求它存在（`saved, ok := ...; if !ok { return }`）
+	// ⇒ 那个窗口里已确认可见的区间会被**静默丢掉**，verified runs 永不推进。
+	// 实测（TestIngestSixFixEvidenceFailureAcrossDaysAndRecovery）：缺口已正常消解，
+	// 但 `VerifiedRuns` 恒为空。
+	if _, ok := m.state.Sources[key]; !ok {
+		m.state.Sources[key] = persistedSource{}
+	}
 	// 持久化基线：账本刚由 Restore/WAL.Restore 填好，内存状态与索引内容一致，
 	// 因此这里直接取当前修订号与段覆盖签名作为「已落库」的起点——否则启动后的首轮
 	// persist 会把每个源都当成变更源重写一遍（对 13 源现场就是几 MB 的无效写入）。
@@ -5052,7 +5043,38 @@ func (m *Manager) deliver(source SourceConfig, events []logtypes.Event, replay b
 	return m.deliverCtx(m.deliveryLifetime(), source, events, replay)
 }
 
+// deliverCtx 把一批事件写进 VictoriaLogs。
+//
+// ── 2026-11-02 简化：这里曾经是 335 行、179 个分支 ────────────────────────────
+//
+// 旧实现为了「可证明的完整性」维护了一整套机制：代次取名与预留、发布快照、
+// pending 确认、权威全量重建、replace/累积判断、证据面重算、缺口消解登记。
+// 那套机制自己生出了大量故障（60 源长稳实测）：
+//
+//	· 一个源涨到 projection-299，数据被切成 118 个代次，白名单只认最新一个
+//	  ⇒ 其余 2 万多条虽然在 VL 里、却永远查不到 ⇒ 被误判成「没落库」
+//	· 27 次重建失败 → 每次整窗重写只写进约 1100 条 → 换代 → 再失败（死循环）
+//	· closed / debt / verified 三层账互为前提 ⇒ 谁都不推进
+//	· 待办范围随运行时长线性增长（361 → 6452），任何超时预算都不够
+//
+// 而底层的 VL 客户端本来就只做两件事：`InsertJSONLines` 发 POST、`Stream` 发查询。
+// 所以这里回归本质：
+//
+//	去重（同一批别重复写） → 写 VL → 返回结果
+//
+// **幂等由 event_id 保证**（`event_id = hash(源 + 位置 + 内容)`，见 normalizeCanonicalEvent）：
+// 同一段日志重投多少次，VL 里都是同一批 event_id，查询侧按它去重即可。
+// **读到哪由 cursor 保证**（`ingest.cursor`，已有）。
+//
+// 语义变化（必须知晓）：系统不再维护「哪段数据已完整发布」这个概念。
+// 旧的完整性面板 / 缺口账本 / 重建调度不再参与投递路径。
 func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []logtypes.Event, replay bool) (pipeline.DeliveryResult, error) {
+	// 投递守卫（**必须保留**）：它为本次投递提供带 `pipe` 的 ctx，
+	// 让上层（幂等捕获、段追加、cursor 推进）能拿到本源 pipeline；
+	// 缺它时所有依赖投递结果的路径都拿到空结果（实测：34 条用例报 "Should NOT be empty"）。
+	//
+	// 注意它**不是**账本机制的一部分：与代次/发布确认/debt 无关，
+	// 只是「本源的 delivery 上下文」这个基础设施。
 	ctx, release, guardErr := m.acquireSourceDelivery(ctx, source)
 	if guardErr != nil {
 		return pipeline.DeliveryResult{}, guardErr
@@ -5061,331 +5083,84 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	if len(events) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
-	if m.vl == nil && m.vlRoute == nil {
-		return pipeline.DeliveryResult{HTTPStatus: 0}, fmt.Errorf("ingest: VictoriaLogs client is not ready")
+	client, _, err := m.clientForSource(source)
+	if err != nil || client == nil {
+		return pipeline.DeliveryResult{}, fmt.Errorf("ingest: VictoriaLogs client is not ready")
 	}
-	// 阶段计时（纯观测）：投递路径的单批耗时构成在现场不可见，8.3× 单位成本定位缺的就是它。
-	timing := newDeliveryTiming(source.LogSourceID+"/"+source.SourceGeneration, len(events), m.stageSink)
-	defer timing.report()
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	if handled, result, err := m.confirmWrittenAttempt(ctx, source, events); handled {
-		return result, err
-	}
-	if handled, result, err := m.routeCapturedSiblings(ctx, source, events); handled {
-		return result, err
-	}
-	snapshot := m.capturePublicationSnapshot(source, ctx)
-	// #54 修复（deliver.plan 锁内 O(n) 专项，与 #53 的 A-Step2 同型）：锁内只做**值拷贝快照**。
-	// 修前这里有三段 m.mu 临界区，其中两段是 O(n) 重活：
-	//   - 段 B：遍历 saved.Events（内联集合，旧格式/段未落时非空）逐条规范化；
-	//   - 段 C：遍历**全批** events（零宽校验 + 规范化 + 去重），现场单批 47 万–173 万条，
-	//     实测持锁 1m09.5s（随批量线性）。
-	// 两段都**不读也不写任何共享状态**（只碰入参 events 与本调用私有的 seen/toWrite），
-	// 故整段外移、锁内只留快照 ⇒ 契约（追加序 / 去重语义 / 事件内容 / 持久化产物）逐位不变。
-	w := m.watchMutexWait("deliver.plan")
-	m.mu.Lock()
-	w.acquired()
-	saved := m.state.Sources[key]
-	// 段 B 的值拷贝快照（同型 A-Step2 的 walSnapshot）。安全性：saved 本身已是锁内的值拷贝，
-	// 其 Events 只被**整体置 nil 或重建为新切片**，从不原地改写已有元素
-	//（appendEvents / appendEventTail / migrateInlineEvents / rebuildSource）⇒ 锁外只读遍历安全。
-	inlineEvents := saved.Events
-	eventsStored := saved.EventsStored && m.events != nil
-	m.mu.Unlock()
-	w.done()
-	// 增量尾部快速路径（判据与安全论证见 planDeliveryTail）：满足时跳过「遍历该源全部历史事件」
-	// 重建身份集合——这是单位行成本里最贵的一项（生产单源段实测可达 70 万行，微基准
-	// 单次遍历 8.7 µs/行 ≈ 6 秒/批，而段只增不减，成本随运行时长线性增长）。
-	tailSaved := saved
-	// 历史重建欠账不应强迫全新尾部再造整窗副本；旧欠账必须独立保留。
-	if !replay && saved.EventsStored && saved.EventsStoredThrough > 0 {
-		tailSaved.PublicationPending = false
-	}
-	tail := m.planDeliveryTail(key, tailSaved, events, replay)
-	pendingTail := saved.PublicationPending && tail.Fast
-	// 发布确认快路径（2026-10-06，协议 #5 的①）：pending 的含义是「上次发布**未获确认**」✗。
-	// 整窗重发前先按**最近已发布代次**在查询面逐字段复核：确认已完整可见 ⇒ 发布事实上已完成 ⇒
-	// 清 pending（持久化，终态与 L4019 写成功后清理一致）并放行快路径，**跳过整窗重发** ✓。
-	// 任何不确定（缺行 / 查询出错 / 取证不稳 / 空集）⇒ 维持「整窗重发」原语义，**判据不放宽** ✗。
-	// 红线：**绝不把 pending 降级为「累积」** ✗ —— 这里跳过的是"整窗重发的写入"，不是取代语义，
-	// 否则重现 2026-09-30「查询并集无界 ⇒ VL 排序超 51MB ⇒ 400 ⇒ 该目标恒 not_ready」旧漏洞。
-	// 本轮内「权威集合」的复用凭据：pending 未获确认时，下面的取证与写入面构建问的是同一份
-	// 输入，凭据成立即复用（判据与安全性见 recoveryReceipt）。非 pending 轮恒为 nil ⇒ 零开销。
-	var receipt *recoveryReceipt
-	var missingWriteDays []string
-	if saved.PublicationPending && !replay && !pendingTail {
-		receipt = &recoveryReceipt{}
-		ok, cerr := m.tryConfirmPendingPublicationWithReceipt(source, key, saved, receipt, ctx)
-		if m.deferredDelivery && cerr != nil {
-			if _, days, dayErr := groupEventsByUTCDay(source, events); dayErr == nil {
-				m.scheduleRebuildConfirmPendingAsync(source, days, "发布确认不确定，只读退避，不重新物化")
+	// 同一批内的重复：按 event_id 去重（内容相同的重复投递不需要写两遍）。
+	// 跨批/跨重启的重复**不在这里管** —— 那由 event_id 幂等 + 查询侧去重承担，
+	// 不需要维护「已写过哪些」的全量集合（那正是旧实现的主要成本之一）。
+	seen := make(map[string]struct{}, len(events))
+	write := make([]logtypes.Event, 0, len(events))
+	for _, ev := range events {
+		if ev.EventID != "" {
+			if _, dup := seen[ev.EventID]; dup {
+				continue
 			}
-			return pipeline.DeliveryResult{}, cerr
+			seen[ev.EventID] = struct{}{}
 		}
-		if cerr == nil && ok {
-			// 本地快照同步：否则下方 L3876/L3892 会再次把 replace 拉回整窗重发。
-			saved.PublicationPending = false
-		}
-		// 取证测出的缺失天（可能为空）：仅当判定是 confirmMissingMeasured 时才有值。
-		missingWriteDays = receipt.missingDays
+		write = append(write, ev)
 	}
-	var seen map[string]eventIdentity
-	if tail.Fast {
-		seen = make(map[string]eventIdentity, len(events))
-		timing.mark("seen-skipped")
-	} else {
-		seen = make(map[string]eventIdentity, len(inlineEvents))
-		// 段 B（#54 修复）：内联集合的规范化遍历（O(段行数)）**在锁外** —— 锁内只留上面的快照。
-		for _, event := range inlineEvents {
-			event, err := normalizeCanonicalEvent(event)
-			if err != nil {
-				return pipeline.DeliveryResult{}, err
-			}
-			rememberStoredCanonicalIdentity(seen, event)
-		}
-		// 事件体已落段时，身份集合从段流式重建（不持全量切片）；旧格式仍走内联切片。
-		if eventsStored {
-			if err := m.events.Iterate(key, func(event logtypes.Event) error {
-				normalized, err := normalizeCanonicalEvent(event)
-				if err != nil {
-					return err
-				}
-				rememberStoredCanonicalIdentity(seen, normalized)
-				return nil
-			}); err != nil {
-				return pipeline.DeliveryResult{}, err
-			}
-		}
-		timing.mark("seen")
-	}
-	// 段 C（#54 修复）：本批的「零宽校验 + 规范化 + 去重」（O(本批)）整段移到锁外。
-	// 该段不触碰 m.mu、也不触碰任何共享状态（详见 planDeliveryBatchOutsideLock 的说明）。
-	landed, conflicts := analyzeDeliveryBatch(events, seen)
-	toWrite, fail := m.planDeliveryBatchOutsideLock(events, seen)
-	if fail != nil {
-		return fail.result, fail.err
-	}
-	if len(conflicts) > 0 {
-		m.recordIdentityConflicts(key, conflicts)
-	}
-	timing.mark("toWrite")
-	// 事件段是本地正文真源，不是VL投递资格：慢支可能已把未外发的未来WAL正文合法落段。
-	// 只核对真正来自旧集合的裁定结果；本批内相同内容重复仍由既有批内去重处理。
-	var storedLanded []logtypes.Event
-	checkedStored := make(map[string]struct{}, len(landed))
-	for _, event := range landed {
-		existing, stored := seen[event.EventID]
-		if !stored || existing.idx >= 0 {
-			continue
-		}
-		if _, duplicate := checkedStored[event.EventID]; duplicate {
-			continue
-		}
-		checkedStored[event.EventID] = struct{}{}
-		event.CanonicalHash, event.EventTimeUTC = existing.hash, existing.when
-		event.Record = logtypes.RecordRange{Start: existing.start, End: existing.end}
-		event.Message, event.Level, event.Stream = existing.msg, existing.level, existing.stream
-		storedLanded = append(storedLanded, event)
-	}
-	if len(storedLanded) > 0 {
-		evidenceCtx, cancel := context.WithTimeout(ctx, m.verifyBackoffMax*4+time.Second)
-		complete, queryErr := m.allPublishedEventsCurrent(evidenceCtx, source, storedLanded)
-		cancel()
-		if queryErr != nil || !complete {
-			// 任何缺失或查询不确定都不能返回204并制造ACK；由既有worker先只读取证，再预算化补缺。
-			m.mu.Lock()
-			currentGeneration := m.state.Sources[key].ProjectionGeneration
-			m.mu.Unlock()
-			m.markPublicationPending(key, currentGeneration)
-			m.deferDurableDelivery(key)
-			_, days, dayErr := groupEventsByUTCDay(source, storedLanded)
-			if dayErr == nil {
-				m.scheduleRebuildConfirmPendingAsync(source, days, "本地正文尚无当前VL投递证据")
-			}
-			if queryErr != nil {
-				return pipeline.DeliveryResult{}, fmt.Errorf("ingest: 本地正文投递取证失败，保留WAL并异步修复: %w", queryErr)
-			}
-			return pipeline.DeliveryResult{}, fmt.Errorf("ingest: 本地正文尚无完整已发布VL证据，保留WAL并异步修复")
-		}
-	}
-	if len(toWrite) == 0 {
-		// 只用相同内容重复或已裁定保留的事件作为落库证据；被丢弃的冲突变体不得消解其区间缺口。
-		//
-		// **但「本地有」不等于「VL 里有」**（2026-10-21 真机缺陷，生产主要命中路径）：
-		// 本分支的语义是「这些事件已在本地段里，无需重写」，而本地段是权威副本、
-		// 与 VL 的可见性**没有必然关系**。生产实测：`inst:317` 的区间
-		// `[7583541,7585609)` 里 7 条事件（event_time=2026-10-21）在本地段、却**从未进过 VL**
-		// （该源 VL 上界恰为 7583541 = 缺口起点）。旧代码直接拿 `landed` 消解，于是把
-		// 「投递失败」标成 `delivery confirmed for this range`，`reclaim` 随后越过该区间，
-		// 这笔欠账在账本里彻底消失（`SELECT COUNT(*) FROM gap WHERE resolved=0` = 0）。
-		//
-		// **为什么不能只按「热层保留期窗口」过滤**（我上一版就是这么修的，不够）：
-		// 窗口过滤只能剔除「这天在热层不可能可见」，而生产缺失的那天（2026-10-21）
-		// **恰在窗口内** —— 它是「窗口内某天的真实投递失败」。判别维度必须是
-		// **「这批事件在 VL 里到底查不查得到」**，而不是「这天是否过期」。
-		m.scheduleGapResolve(source, landed)
+	if len(write) == 0 {
 		return pipeline.DeliveryResult{HTTPStatus: 204}, nil
 	}
-	// 权威全量的构建是 O(段行数)（生产单源实测可达 70 万行 ≈ 6 秒）；只有「整窗重发」语义
-	// （重放 / 待发布 / 代次数达上限）才需要它作为写入面与证据面。快路径下本批就是权威集合的
-	// 增量尾部，写入面 / 证据面 / 段追加 / 发布水位全部可由「本批 + 缓存水位」给出，
-	// 故跳过全量重建（判据见 planDeliveryTail）。
-	// 重放/微代支改走**累积**（w21 稿 ② 第三落点，2026-10-06 #13 实测跨代拷贝后定稿）：
-	//   新代只承载「未确认差集」（下方 writeEvents = toWrite），旧代仍留在读白名单里 ⇒ 并集完备 ✓
-	//   且不再产生跨代同 id 拷贝 ✓（差集与已 ack 的旧代内容不相交）。
-	// 硬约束（血训）：差集**绝不能**配 replace=true——publish 内 replace 分支会把白名单重置为仅新代
-	//   （scope.ProjectionGenerations = []string{projectionGeneration}）⇒ 旧事件从读面消失 ✗；
-	//   故一切 replace=true 的路径（代次用尽、待发布整窗支）仍保持整窗写入面，本处只摘掉 replay 的取代项。
-	activeGeneration := ""
-	if tail.Fast && !replay {
-		var activeReservation *generationReservation
-		activeGeneration, activeReservation = m.claimActiveTailGeneration(source, toWrite)
-		defer m.releaseProjectionGeneration(activeReservation)
-	}
-	if pendingTail && activeGeneration == "" {
-		uncertain, err := m.uncertainPublishedTailNeedsReplacement(snapshot.ctx, source, saved, toWrite)
-		if err != nil {
-			return pipeline.DeliveryResult{}, err
-		}
-		if uncertain {
-			pendingTail = false
-		}
-	}
-	replace := saved.PublicationPending && !pendingTail
-	if !replace && activeGeneration == "" && m.projectionGenerationsExhaustedForEvents(source, events) {
-		// 与 writeProjectionDay 内同一判据等价：它只取决于**本源自己**已发布的代次数，
-		// 而同源的投递是串行的，所以提前到这里判定不会与后续判定不一致；
-		// 提前的目的是在构建权威全量**之前**就知道它是否被需要。
-		replace = true
-	}
-	var expected []logtypes.Event
-	if tail.Fast && !replace {
-		expected = toWrite
-		timing.mark("recovery-skipped")
-	} else {
-		var err error
-		// 复用凭据（只在本轮内有效）：pending 轮里取证刚构建过同一份集合，凭据成立即免掉这次
-		// 同样 O(段行数) 的重建；不成立则照旧全量构建（方向恒为"多算一次"）。
-		expected, err = m.canonicalRecoveryEventsReusing(key, saved, receipt)
-		if err != nil {
-			return pipeline.DeliveryResult{}, err
-		}
-		expected = appendCanonicalBatch(expected, toWrite)
-		timing.mark("recovery")
-	}
-	// 代次名必须是 VL 中尚未出现过的名字：状态回滚/重置后计数器会回退，直接进位会重名
-	// （见 nextFreeProjectionGeneration 的事故说明）。
+	// **外发前必须按“稳定摄取时间”规范化一次**（Raw 事件没有语义时间）。
 	//
-	// 取名为**预留**语义（2026-10-10 缺陷修复）：同源并发的两条投递各自实探「未占用」会算出
-	// 同一个名字，随后各写一份完整副本（生产实测 3×）。reserve 在 m.mu 内把「探测 → 预留」
-	// 做成一次原子选择，第二条面只能进位。释放必须在本函数**所有**返回路径上发生——
-	// 用 defer 收口，避免早退路径漏释放把名字钉死（见 releaseProjectionGeneration 注释）。
-	generation := activeGeneration
-	var genRes *generationReservation
-	if generation == "" {
-		generation, genRes = m.reserveProjectionGeneration(source, saved.ProjectionGeneration,
-			fmt.Sprintf("deliver replay=%t", replay), ctx)
-	}
-	// 释放收口到函数出口（成功/失败/所有早退路径一视同仁）：漏释放会把名字钉死到进程结束，
-	// 该源此后每次取名都无谓进位。genRes==nil 时 releaseProjectionGeneration 是安全空操作。
-	defer m.releaseProjectionGeneration(genRes)
-	timing.mark("probe")
-	writeEvents := toWrite
-	if saved.PublicationPending && !pendingTail {
-		// **pending 重试只写「真正缺的那些天」，不再整窗重写全源**（2026-10-21 架构复审）。
-		//
-		// 旧实现：pending ⇒ `writeEvents = expected`（该源**权威全量**，含全部历史天）
-		// ⇒ `writeProjectionPlan` 的 replace 分支把 `writeDays` 展开为全部天
-		// ⇒ **每一天都整份重写一遍**，且每次都换新代次、旧代次的行永不删除。
-		// 这是 VL 体积放大到 75× 的直接原因（生产 inst:318 单日 13 万条 → 984 万行）。
-		//
-		// 更糟的是它是**正反馈**：行数越多 ⇒ 该天查询越慢（VL 对 projection_generation
-		// 无索引，过滤发生在扫描阶段）⇒ 校验越容易超时 ⇒ 再失败 ⇒ 再整窗重写。
-		//
-		// 现在：若本轮取证已测出「实测缺失天」，就只写那些天；取证不可用（或没有缺失天
-		// 信息）时才退回旧的整窗语义 —— 这是保守方向，不会漏写。
-		if len(missingWriteDays) > 0 {
-			converged, cErr := eventsForDays(source, expected, missingWriteDays)
-			if cErr != nil || len(converged) == 0 {
-				// 收敛失败（天解析不出事件）：退回整窗，保守不漏写。
-				converged = expected
-			}
-			writeEvents = converged
-			slog.Warn("发布待定重试收敛到实测缺失天（不再整窗重写全源）",
-				"source", source.LogSourceID, "missingDays", missingWriteDays,
-				"writeEvents", len(writeEvents), "authoritative", len(expected))
-		} else {
-			writeEvents = expected
+	// 2026-11-02 简化时漏掉了这一步，后果是：Raw 事件带着 `EventTimeUTC == ""`
+	// 与基于空时间算出的 `CanonicalHash` 写进 VL。而所有**核对**路径
+	// （`landedVisibleInVL` / `eventIDsVisibleInVL`）都会先 `normalizeCanonicalEvent`，
+	// 得到“摄取时间 + 重算 hash”后再去比对 ⇒ 两边永远不会相等
+	// ⇒ Raw 正文永远被当作「不在 VL」。
+	//
+	// 实测（TestIngestSixFixRawEvidenceUsesStableCanonicalTime）：
+	// 段里 1 条、VL 里 `rowCount()==1`，但 `landedVisibleInVL` 恒返回空。
+	//
+	// 两件事一起做：写进 VL 的**必须就是**核对时看的那一份；
+	// 否则「内容级校验」这种语义在 Raw 源上就整个失效了。
+	for i := range write {
+		normalized, nerr := normalizeCanonicalEvent(write[i])
+		if nerr != nil {
+			// 取不到稳定时间：这是真错误（无法幂等也无法核对），不得静默降级。
+			return pipeline.DeliveryResult{HTTPStatus: http.StatusUnprocessableEntity}, nerr
 		}
+		write[i] = normalized
 	}
-	// 取代 vs 累积（2026-09-30 生产实证）：`expected` 是该源的**全量** canonical 集 ✓，
-	// `toWrite` 是**本批** ✓，且本批恒为全量的子集 ✓。故当两者**条数相等**时，本次写入
-	// 已覆盖全量 → 新代包含旧代的一切 → **取代**安全；否则是增量微代次 → 必须累积
-	// （既有测试 TestManagerNewBatchPublishesIsolatedView 守此契约）。
-	// 此前的漏洞：只认 PublicationPending，**重启后的全量重放也走累积** ✗ → 查询并集无界
-	// （实测 7 代）→ VL 排序超 51MB → 400 → 该目标恒 not_ready。
-	// 取代 vs 累积（2026-09-30 生产实证）：replay=本次是「存量重放」（由 deliverPendingBestEffort
-	// 发起，见 acquire/pipeline.go）；**只有它写入的是全量** → 新代包含旧代一切 → 取代安全
-	// （旧代纯冗余）；普通批次仍累积（既有测试 TestManagerNewBatchPublishesIsolatedView 守此契约）。
-	// 此前只认 PublicationPending，**重启后的存量重放也走累积** ✗ → 查询并集无界（实测 7 代）
-	// → VL 排序超 51MB → 400 → 该目标恒 not_ready。
-	// 注：曾试过用数据形状判别（EventsStored / EventsStoredThrough / eventsStored /
-	// len(toWrite)==len(expected)），全部被证伪：真实重放的批次只是全量的子集。
-	replace = replace || (saved.PublicationPending && !pendingTail)
-	// 本次**实际写入面**（校验逐字段覆盖的就是它）：
-	// replace 为真时 writeProjectionPlan 会把写入面扩为权威全量（整窗重发），否则就是本批。
-	// 自动消解必须按实际写入面取证据，否则重放会「写了却没消解」，缺口又只能等人工。
-	// 同 ID 同哈希/可裁定保留的重复行也属于已落库证据；不可裁定冲突行不在 evidence 内。
-	evidence := append(append([]logtypes.Event(nil), landed...), writeEvents...)
-	if replace {
-		evidence = expected
+	if ctx.Err() != nil {
+		return pipeline.DeliveryResult{}, ctx.Err()
 	}
-	plan := projectionWritePlan{Write: writeEvents, Archive: toWrite, Replace: replace, Snapshot: snapshot, KeepPending: pendingTail}
-	if replace && tail.Fast && !replay && !saved.PublicationPending {
-		plan.MaterializationClass = "live_compaction"
+	// 事件体先写入本地磁盘段（**必须保留**）。
+	//
+	// 段是「投递完成前的暂存与重放来源」：WAL 只是内存队列，进程重启后没有任何东西
+	// 记得「这批日志读过了」。段是**唯一**能把内容带过重启的地方（`canonicalRecoveryEvents`
+	// 从它重建权威集合、`durableEvents` 读它做验收）。
+	//
+	// 顺序：先内容（段），后外发（VL）——外发成功即代表这段内容已经离开本地职责，
+	// 反过来先外发后落段会在「外发成功但落段失败」时丢掉本地副本。
+	//
+	// 注意它**不属于**被删的那套账本机制：段只是正文存储，与代次/发布确认/debt 无关。
+	key := source.LogSourceID + "/" + source.SourceGeneration
+	if err := m.appendEvents(key, write); err != nil {
+		return pipeline.DeliveryResult{}, err
 	}
-	if tail.Fast && !replace && !replay {
-		// 增量尾部：段追加走 O(本批) 路径（省掉 appendEvents 的全量比对与末段校准）。
-		// 发布水位不在此处决定：publishSnapshot 按「本次写入面的最大 record_end」取，
-		// 并与既有 ClosedVisibleSeq 取大保单调。
-		// 重放（replay）不属于增量尾部 ✗：它是全量恢复投递，必须走慢路径——否则会被当成"快路径"
-		// 而绕过恢复期的 staging 幂等过滤（以及其它恢复期判据）✗。
-		tail.Events = toWrite
-		plan.Tail = &tail
-	}
-	result, written, err := m.writeProjectionPlan(source, expected, generation, plan)
+	// generation 传空串：简化后数据行不再带 `projection_generation` 标签，
+	// 查询侧也不再按它过滤（见 vlrange 的同批改动）。
+	status, err := m.insertInBatchesCtxYield(ctx, client, write, "", nil)
 	if err != nil {
-		return result, err
+		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
-	timing.mark("write")
-	if tail.Fast && !replay {
-		m.rememberActiveTailGeneration(source, generation, written)
-	}
-	// **证据面必须等于「真正写进去的」，不能是「计划写的」**（2026-10-21 真机缺陷修复）。
+	// 投递成功 ⇒ 登记一次「缺口核对」（异步，**不阻塞本路径**）。
 	//
-	// 上面 `evidence` 取的是权威全量 / 本批 `toWrite`，而 `writeProjectionPlan` 内部
-	// **按天循环**，且会把超出热层保留期的天**整段跳过**（写进 VL 也只会被静默丢弃）。
-	// 两者一旦不等，`resolveGapsLandedByDelivery` 就会用「计划写入面」的区间去覆盖缺口，
-	// 把**从未落库**的区间标成 `delivery confirmed` —— 账本从此忘掉这笔欠账。
+	// 这**不是**被删的那套账本机制：它只做「查一下这些事件在 VL 里到底可不可见，
+	// 可见就把同源的投递失败缺口标成已消解」。不带代次、不带白名单、不写发布确认。
 	//
-	// 真机铁证（修复前）：`inst:317` 权威全量跨 10-12～10-21（`record_end` 到 7585609），
-	// 但过滤后只写了 09-21 一天（5492 条、`record_end` 仅到 ~955K）。旧代码用全量做证据，
-	// 于是 10-21 的缺口 `[7583541,7585609)` 被消解成 `delivery confirmed`，而 VL 里
-	// 该源最新只到 7583541（实测查询为空）。更糟的是 `reclaim` 随后被推到 `read_pos`，
-	// 这笔 2068 字节的欠账再没有任何信号提示。
+	// 为什么不能一并删掉：缺口仍由 acquire 层在投递失败时登记
+	// （`RecordGap(..., GapReasonDeliverError, ...)`，见 acquire/pipeline.go），
+	// 而 reclaim 要求「没有未决缺口」才推进。缺口只登记不消解 ⇒ 源被永久钉死、
+	// WAL 永不回收 —— 那正是 2026-10-29 那轮修复前的故障形态。
 	//
-	// 为什么改用「函数回传的已写入集合」而不是「对 evidence 再做一次窗口过滤」：窗口过滤只能剔除
-	// 超窗口天，解决不了「计划写全量、实际只写部分天」这个更一般的不一致（本缺陷正是后者）。
-	// 唯一可靠的证据是**函数实际写成功的那批事件**。
-	evidence = written
-	// 投递成功（写 VL + 逐字段可见性校验 + catalog 发布）= 该写入面已确认落库 → 自动消解
-	// 被它完全覆盖的缺口。这是缺陷 A 的「成功后自动消解」出口：重投成功即清零，不再依赖人工。
-	m.scheduleGapResolve(source, evidence)
-	timing.mark("resolve")
-	if os.Getenv("JIANMANAGER_LOG_INJECT_ACK_LOSS") == "1" {
-		result.AckLost = true
-	}
-	return result, nil
+	// 语义与旧实现一致：best-effort，失败不影响投递结果本身。
+	m.scheduleGapResolve(source, write)
+	return pipeline.DeliveryResult{HTTPStatus: status}, nil
 }
 
 // routeCapturedSiblings先把跨批旧兄弟交给既有canonical裁定；cut从不把未写B当成A同end的已发布证据。
@@ -6563,91 +6338,29 @@ func (m *Manager) tryConfirmPendingPublicationVerdict(ctx context.Context, sourc
 		}
 		vs := source
 		vs.UTCDay = day
-		rec, exists := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
+		rec, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
 		observed[day] = rec
-		var generations []string
-		if exists && rec.PublishedProjection != nil {
-			generations = publishedSourceProjectionGenerations(rec.PublishedProjection, vs)
+		client, cerr := m.publishedEvidenceClient(vs, rec)
+		if cerr != nil || client == nil {
+			return confirmInconclusive, cerr
 		}
-		if len(generations) == 0 {
-			missing = append(missing, day)
-			continue
-		}
-		allowed := make(map[string]logtypes.Event, len(dayEvents))
-		for _, event := range dayEvents {
-			allowed[event.EventID] = event
-		}
-		queryTimeout := m.reconcile.QueryTimeout
-		if queryTimeout <= 0 {
-			queryTimeout = 10 * time.Second
-		}
-		client, _, routeErr := m.clientForSource(vs)
-		if routeErr != nil {
-			if m.deferredDelivery {
-				return confirmInconclusive, nil
-			}
-			missing = append(missing, day)
-			continue
-		}
-		scope, scoped := m.publishedScope(vs, day)
-		var maxEnd uint64
-		for _, event := range dayEvents {
-			if event.Record.End > maxEnd {
-				maxEnd = event.Record.End
-			}
-		}
-		if !scoped || scope.ClosedVisibleSeq < maxEnd {
-			missing = append(missing, day)
-			continue
-		}
-		// 计数仅防止未知额外行；还必须逐个身份、哈希、正文及时间校验，不能单凭 count 清 pending。
-		countScope := scope
-		countScope.ClosedVisibleSeq = 0
-		count, countErr := countVLDay(ctx, client, vs, day, countScope, queryTimeout)
-		if m.deferredDelivery && countErr != nil {
-			if verifyErrorIsSemantic(countErr) || vlsup.IsPermanent(countErr) {
-				return confirmInconclusive, countErr
+		// 旧判据是一条三层链：已发布代次白名单 → `publishedScope.ClosedVisibleSeq` 水位 →
+		// `countVLDay` 条数 → 逐字段比对。三层全部以「多代次重写 + 发布确认」为前提；
+		// 简化后一批数据只写一次、行上也没有 `projection_generation` 标签，
+		// 于是任何一层按代次过滤都只会得到 0 条 ⇒ 连**已经写成功的天**也被判缺失。
+		//
+		// 后果实测（TestReplaySlicesAndResumesWithoutLoss，预算 1 天/轮）：
+		// 每轮都把同一个「被误判缺失」的天重写一遍，另一天永远排不上（`rows` 在涨但数据永远不齐）。
+		//
+		// 新判据直接回答「这批 event_id 在不在」——与缺口核对同源（`eventIDsVisibleInVL`）。
+		visible, qerr := m.eventIDsVisibleInVL(ctx, client, vs, dayEvents)
+		if qerr != nil {
+			if verifyErrorIsSemantic(qerr) || vlsup.IsPermanent(qerr) {
+				return confirmInconclusive, qerr
 			}
 			return confirmInconclusive, nil
 		}
-		if m.deferredDelivery && count > len(dayEvents) {
-			return confirmInconclusive, fmt.Errorf("unexpected or duplicate projection count %d, want %d", count, len(dayEvents))
-		}
-		if countErr != nil || count != len(dayEvents) {
-			missing = append(missing, day)
-			continue
-		}
-		complete := true
-		for start := 0; start < len(dayEvents); {
-			end := start
-			bytes := 0
-			for end < len(dayEvents) && end-start < 500 {
-				estimate := 6*len(dayEvents[end].Message) + 4096
-				if end > start && bytes+estimate > 8<<20 {
-					break
-				}
-				bytes += estimate
-				end++
-			}
-			queryCtx, cancel := context.WithTimeout(ctx, queryTimeout)
-			ok, _, queryErr := m.verifyProjectionQuery(queryCtx, client, vs, generations[0], dayEvents[start:end], allowed, generations)
-			cancel()
-			if ctx.Err() != nil {
-				return confirmInconclusive, ctx.Err()
-			}
-			if m.deferredDelivery && queryErr != nil {
-				if verifyErrorIsSemantic(queryErr) || vlsup.IsPermanent(queryErr) {
-					return confirmInconclusive, queryErr
-				}
-				return confirmInconclusive, nil
-			}
-			if queryErr != nil || !ok {
-				complete = false
-				break
-			}
-			start = end
-		}
-		if !complete {
+		if len(visible) < len(dayEvents) {
 			missing = append(missing, day)
 		}
 	}
@@ -7971,7 +7684,16 @@ func projectionPayload(events []logtypes.Event, generation string) ([]byte, erro
 			"parser_version":    event.Source.ParserVersion,
 			"record_start":      event.Record.Start, "record_end": event.Record.End,
 			"ingest_time_utc": event.IngestTimeUTC, "level": event.Level, "stream": event.Stream,
-			"canonical_content_hash": event.CanonicalHash, "projection_generation": generation,
+			"canonical_content_hash": event.CanonicalHash,
+			// **不再写 `projection_generation`**（2026-11-02 简化投递路径）。
+			//
+			// 这个标签唯一的作用是让查询按「批次白名单」过滤，避免同一事件的多份副本查重。
+			// 而它带来的是：同一事件在 VL 里堆 N 份（实测一个源 118 个代次、同一 event 9 份），
+			// 白名单一旦只认最新代次，其余数据就从该源的读面上消失（实测 22334 条只见 1160 条）。
+			//
+			// 简化后**不再有重写**：一批数据只写一次，event_id 幂等保证重投不产生新行。
+			// 因此不需要「按批次过滤」这个维度 —— 查询侧同步去掉（见 vlrange 的同批改动）。
+			// 历史数据仍带该标签，但查询侧不再用它过滤，所以老数据照常可查。
 		}
 		for k, v := range event.Fields {
 			line[k] = v

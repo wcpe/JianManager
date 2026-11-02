@@ -1,10 +1,16 @@
 package ingest
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -186,20 +192,10 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 	//   与 `_time` 是新是旧无关）。旧实现只查一次 ⇒ 每次都落在 1 秒窗口内 ⇒ 100% 查空
 	//   ⇒ 缺口永不消解 ⇒ WAL 不回收 ⇒ 积压丢最旧 ⇒ 产生更多缺口（正反馈）。
 	//
-	// 为什么这是**唯一的不一致点**：同一个「查 VL 可见性」的动作，投递路径的
-	// `verifyProjectionChunk` 有完整的 `nextVerifyBackoff` 退避环（其注释明确写着
-	// 「封顶 500ms 后探测点变为 0/0.2/0.6/1.1 s，数据一可见就命中并返回」），
-	// 而本函数此前没有任何重试。现在两者同源。
-	//
 	// 语义边界（一个字都没放宽）：
 	//   · 「查不到的就不作证据」方向不变 —— 重试只是多问几次，不改变判据；
 	//   · 查询失败仍整体放弃（保守方向不变）；
 	//   · 全部可见立即返回，**零额外延迟**（正常路径是第一次探测就命中）。
-	//
-	// 为什么预算取 `gapVisibilityBudget`（6s）而不是既有的 `verifyBackoffMax*4+1s`（3s）：
-	// 那 3 秒是给「退避探测」设计的固定预算，实测可见延迟 1.0s 时四个探测点
-	// （0/0.2/0.6/1.1）刚好够；但只要 VL 因负载把可见延迟推到 1.5~3s 就会再次落空。
-	// 本路径已异步化（见 gap_resolve_worker.go），拉长预算不再阻塞投递主链。
 	backoff := m.verifyBackoffMin
 	var kept []logtypes.Event
 	probes := 0
@@ -231,32 +227,21 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 	}
 }
 
-// landedVisibleProbeOnce 执行**一次**可见性核对：按天取该天已发布白名单，向 VL 查这批事件里
-// 哪些可见，返回可见的那些（顺序即 landed 的顺序）。
+// landedVisibleProbeOnce 执行**一次**可见性核对：按天向 VL 查这批事件里哪些真的查得到，
+// 返回可见的那些（顺序即 landed 的顺序）。
 //
-// 返回 error 表示「查询这一动作失败」（网络/超时/鉴权等）——调用方据此整体放弃本轮，
-// 与历史语义一致（查询不确定时不作任何证据）。
+// ## 2026-11-02 简化：不再读「已发布代次白名单」
+//
+// 旧实现要先取该天 catalog 的 `PublishedProjection`（`CoverageComplete` + 代次白名单 +
+// `ClosedVisibleSeq` 水位），再用这三样构造查询。它们是「多代次重写 + 按批次过滤」那套
+// 机制的产物：同一事件在 VL 里堆 N 份，不按白名单/水位过滤就会查重。
+//
+// 简化后一批数据**只写一次**（event_id 幂等），不再有代次与发布水位。若仍要求白名单，
+// 则「投递成功但未发布」的源永远拿不到证据 ⇒ 缺口永不消解 ⇒ WAL 不回收 ⇒ 源被钉死。
+// 因此改为**直接按 event_id 问 VL**：「这批事件在不在」本来就是唯一要问的问题。
+//
+// 保守方向不变：查不到、查询失败、取不到客户端 —— 一律不作证据（不消解）。
 func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfig, order []string, byDay map[string][]logtypes.Event) ([]logtypes.Event, error) {
-	// **必须按每个事件所属的分区取白名单**，不能统一用 `source.UTCDay`：
-	// 缺口跨越历史天（生产实测缺口在 10-21，而源的当前天可能是今天），
-	// 用当前天分区的白名单去查历史天的事件必然查不到，会把「可见」误判成「不可见」。
-	//
-	// 每轮探测都重新取（不跨轮缓存）：重试窗口内白名单可能被并发发布更新，
-	// 用旧白名单会把「刚变可见」误判成「仍不可见」。catalog.Get 是内存读，成本可忽略。
-	generationsByDay := make(map[string][]string)
-	generationsFor := func(day string) ([]string, bool) {
-		if gens, ok := generationsByDay[day]; ok {
-			return gens, len(gens) > 0
-		}
-		rec, ok := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
-		if !ok || rec == nil || rec.PublishedProjection == nil || !rec.PublishedProjection.CoverageComplete {
-			generationsByDay[day] = nil
-			return nil, false
-		}
-		gens := publishedSourceProjectionGenerations(rec.PublishedProjection, source)
-		generationsByDay[day] = gens
-		return gens, len(gens) > 0
-	}
 	// **跨天也要并发**（2026-11-02 第二处修复）。
 	//
 	// 现场形态（60 源 × 15 行/s 长稳 r1 实测）：
@@ -266,7 +251,7 @@ func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfi
 	//   （`投影校验慢查询 elapsedMs=1578` 是生产同规格读数）⇒ 4 天 × 2 片 ÷ 并发 4
 	//   在 6s 预算内就是紧平衡，稍有抖动即超时。
 	//
-	// 为什么跨天并发是安全的：各天的查询用**各自的** `daySource`（含各自的 UTCDay 与白名单）
+	// 为什么跨天并发是安全的：各天的查询用**各自的** `daySource`（含各自的 UTCDay）
 	// 与**各自的** client 路由，彼此没有共享可变状态；结果按 order 顺序合并即可。
 	//
 	// 并发度仍复用 `verifyChunkConcurrency`（默认 4），与天内的切片并发同一旋钮。
@@ -290,14 +275,7 @@ func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfi
 	var dayMu sync.Mutex
 	var dayErr error
 	for idx, day := range order {
-		gens, ok := generationsFor(day)
-		if !ok {
-			// 该天没有已发布投影 ⇒ 查询侧本来也查不到它，不作证据。
-			continue
-		}
-		// **必须把 UTCDay 设成该事件所属天**：`verifyProjectionQuery` 会用
-		// `utcDayBounds(source.UTCDay)` 把查询时间窗夹在「源当前天」内
-		// （见 runtime.go 里那段「时间窗必须夹在本源的 UTC 日内」的历史注释）。
+		// **必须把 UTCDay 设成该事件所属天**：查询时间窗会被夹在「源当前天」内，
 		// 若沿用源当前天，跨天缺口的时间窗会落在错误的一天 ⇒ 恒查不到
 		// ⇒ 事件被判「不可见」⇒ 缺口永远无法消解 ⇒ 阻塞 ResumeAcquire ⇒ 源暂停。
 		daySource := source
@@ -307,15 +285,9 @@ func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfi
 		if qerr != nil || client == nil {
 			return nil, fmt.Errorf("ingest: 缺口核对目标不可读: %w", qerr)
 		}
-		closed := publishedEvidenceClosed(rec, daySource)
-		candidates := make([]logtypes.Event, 0, len(byDay[day]))
-		for _, event := range byDay[day] {
-			if event.Record.End <= closed {
-				candidates = append(candidates, event)
-			}
-		}
+		candidates := byDay[day]
 		dayWG.Add(1)
-		go func(idx int, daySource SourceConfig, client *vlsup.Client, gens []string, candidates []logtypes.Event) {
+		go func(idx int, daySource SourceConfig, client *vlsup.Client, candidates []logtypes.Event) {
 			defer dayWG.Done()
 			select {
 			case daySem <- struct{}{}:
@@ -328,7 +300,7 @@ func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfi
 				return
 			}
 			defer func() { <-daySem }()
-			batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, gens, candidates)
+			batchVisible, qerr := m.visibleEventsInVL(ctx, client, daySource, candidates)
 			if qerr != nil {
 				dayMu.Lock()
 				if dayErr == nil {
@@ -338,7 +310,7 @@ func (m *Manager) landedVisibleProbeOnce(ctx context.Context, source SourceConfi
 				return
 			}
 			dayResults[idx] = dayResult{idx: idx, visible: batchVisible}
-		}(idx, daySource, client, gens, candidates)
+		}(idx, daySource, client, candidates)
 	}
 	dayWG.Wait()
 	if dayErr != nil {
@@ -379,23 +351,29 @@ func byDay0(byDay map[string][]logtypes.Event, order []string) []logtypes.Event 
 	return out
 }
 
-// visibleEventsInVL 用**一次**查询取出这批事件里在 VL 可见的那些（按已发布代次白名单）。
+// visibleEventsInVL 用**一次**查询取出这批事件里在 VL 可见的那些。
 //
-// 分批上限取 `verifyChunkEvents` 同量级：单次 LogsQL 的 `event_id:in(...)` 过长会被拒，
-// 且过大的响应体不值得为一个只读核对付成本。超限时按批切分、逐批查询后合并。
+// 分批上限：单批**按查询字节**切（不是按条数），因为单条 selector 的长度取决于 event_id
+// 与固定前缀，而 VL 的 query 文本上限是**字节**（实测固定前缀 + 512 条 id 会超过 16KiB）。
+// 切片上限取 `scopedProjectionQueryMaxBytes`（12KB），与写路径的逐字段校验同一口径。
+//
+// 源标识仍必须带：不同源完全可能撞出相同 event_id（event_id 的稳定性口径不跨源保证），
+// 不带它会把「另一个源写了同一 id」误当成「本源的这条已经在里面」。
 func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, source SourceConfig,
-	generations []string, events []logtypes.Event) ([]logtypes.Event, error) {
-	if len(generations) == 0 || client == nil {
-		return nil, errors.New("ingest: 当前已发布证据面不可用")
+	events []logtypes.Event) ([]logtypes.Event, error) {
+	if client == nil {
+		return nil, errors.New("ingest: 缺口核对客户端不可用")
 	}
-	const batch = 512
+	if len(events) == 0 {
+		return nil, nil
+	}
+	// 按字节切成若干片（每片 ≤ 单个查询的字节安全界）。
+	spans := m.eventIDsQuerySpans(source, events)
 	out := make([]logtypes.Event, 0, len(events))
-	// 切片数 <= 1 时走原串行路径：绝大多数调用只有 1 片（批大小就是 512），
-	// 为它起 goroutine 纯属白付调度成本。
-	total := (len(events) + batch - 1) / batch
+	// 只有一片时走串行路径：绝大多数调用只有 1 片，为它起 goroutine 纯属白付调度成本。
+	total := len(spans)
 	if total <= 1 {
-		_, visibleSet, _, err := m.verifyProjectionQueryWithVisible(ctx, client, source, generations[0],
-			events, nil, generations)
+		visibleSet, err := m.eventIDsVisibleInVL(ctx, client, source, events)
 		if err != nil {
 			return nil, err
 		}
@@ -415,8 +393,8 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 	//   实测 154 次 `context deadline exceeded`、20 次「预算内未等到全部可见」。
 	//   而这些是**同一批待查事件**，彼此完全独立 —— 串行没有任何语义上的理由。
 	//
-	// 并发度复用既有的 `verifyChunkConcurrency`（默认 4），与投递路径的分簇校验同一口径，
-	// 不新造并行旋钮。语义不变：仍然是「查到哪些算哪些」，查询失败仍整体返回错误。
+	// 并发度复用既有的 `verifyChunkConcurrency`（默认 4），不新造并行旋钮。
+	// 语义不变：仍然是「查到哪些算哪些」，查询失败仍整体返回错误。
 	concurrency := m.verifyChunkConcurrency
 	if concurrency <= 0 {
 		concurrency = defaultVerifyChunkConcurrency
@@ -430,11 +408,7 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 	var mu sync.Mutex
 	var firstErr error
 	for idx := 0; idx < total; idx++ {
-		start := idx * batch
-		end := start + batch
-		if end > len(events) {
-			end = len(events)
-		}
+		start, end := spans[idx][0], spans[idx][1]
 		wg.Add(1)
 		go func(idx, start, end int) {
 			defer wg.Done()
@@ -449,8 +423,7 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 				return
 			}
 			defer func() { <-sem }()
-			_, visibleSet, _, err := m.verifyProjectionQueryWithVisible(ctx, client, source, generations[0],
-				events[start:end], nil, generations)
+			visibleSet, err := m.eventIDsVisibleInVL(ctx, client, source, events[start:end])
 			if err != nil {
 				mu.Lock()
 				if firstErr == nil {
@@ -471,11 +444,7 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 		if results[idx] == nil {
 			continue
 		}
-		start := idx * batch
-		end := start + batch
-		if end > len(events) {
-			end = len(events)
-		}
+		start, end := spans[idx][0], spans[idx][1]
 		for _, ev := range events[start:end] {
 			if results[idx][ev.EventID] {
 				out = append(out, ev)
@@ -483,6 +452,127 @@ func (m *Manager) visibleEventsInVL(ctx context.Context, client *vlsup.Client, s
 		}
 	}
 	return out, nil
+}
+
+// eventIDsQuerySpans 把一批事件按**查询字节预算**切成若干 [start,end) 片。
+//
+// 为何不能按条数切：单条 selector 的长度取决于 event_id（32~64 字符）与固定前缀，
+// 而 VL 对 query 文本的限制是**字节**。实测：512 条切一片已经超过 16KiB 被拒 400。
+// 这里用写路径同一个口径——`scopedProjectionQueryMaxBytes`（12KB）——保证每片都能发出。
+//
+// 边界（保守方向）：单条 id 就超过预算时 **不报错、单独成片**——因为 12KB 是我们在
+// 选主上的自设保守值，而 VL 的真实上限更大；单片一条仍会被真实上限保护。
+func (m *Manager) eventIDsQuerySpans(source SourceConfig, events []logtypes.Event) [][2]int {
+	if len(events) == 0 {
+		return nil
+	}
+	const fixed = 512 // 固定前缀（源标识 + `| fields ...`）的保守占位
+	spans := make([][2]int, 0, 1+len(events)/128)
+	start, used := 0, fixed
+	for i, event := range events {
+		cost := len(strconv.Quote(event.EventID)) + 1
+		if i > start && used+cost > scopedProjectionQueryMaxBytes {
+			spans = append(spans, [2]int{start, i})
+			start, used = i, fixed
+		}
+		used += cost
+	}
+	spans = append(spans, [2]int{start, len(events)})
+	return spans
+}
+
+// eventIDsVisibleInVL 向 VL 问一次「这批 event_id 里哪些真的查得到」，返回可见集合。
+//
+// 查询口径（简化后）：
+//
+//	event_id:in("a","b",...) AND log_source_id:="…" AND source_generation:="…"
+//
+// 时间窗夹在该事件所属 UTC 日内（左闭右开推到日末），与写入时的时间口径一致。
+//
+// 只取 `_time`：本函数只回答「在不在」，不承担内容比对（内容一致性由写入路径
+// 的逐字段校验负责，且简化后一批只写一次、不存在同 id 多副本）。
+func (m *Manager) eventIDsVisibleInVL(ctx context.Context, client *vlsup.Client, source SourceConfig, events []logtypes.Event) (map[string]bool, error) {
+	if len(events) == 0 {
+		return map[string]bool{}, nil
+	}
+	window, err := projectionQueryWindowFor(source, events)
+	if err != nil {
+		return nil, err
+	}
+	// 选择器以**事件自身的** source 标识为准，而不是源配置：配置里的 SourceGeneration
+	// 与事件里的 Source.SourceGeneration 可能指向不同实例（2026-09-28 生产实测）。
+	sourceID, sourceGeneration := source.LogSourceID, source.SourceGeneration
+	if v := events[0].Source.LogSourceID; v != "" {
+		sourceID = v
+	}
+	if v := events[0].Source.SourceGeneration; v != "" {
+		sourceGeneration = v
+	}
+	ids := make([]string, 0, len(events))
+	for _, event := range events {
+		ids = append(ids, strconv.Quote(event.EventID))
+	}
+	query := "event_id:in(" + strings.Join(ids, ",") + ")" +
+		" AND log_source_id:=" + strconv.Quote(sourceID) +
+		" AND source_generation:=" + strconv.Quote(sourceGeneration)
+	params := url.Values{
+		// **要把正文比对的字段一起取回来**（2026-11-02）。
+		//
+		// 只查 `event_id` 能回答「在不在」，但回答不了「在 VL 里的到底是不是这一条」。
+		// 同 id 异内容在任何幂等体系里都必须显式拒绝（旧实现的 `projection content mismatch`），
+		// 否则「篡改过的正文」会被当成已落库证据。
+		"query": {query + projectionVerifyFields},
+		"start": {window.start.UTC().Format(time.RFC3339Nano)},
+		"end":   {window.end.UTC().Format(time.RFC3339Nano)},
+	}
+	if m.verifyLimiter != nil {
+		if err := m.verifyLimiter.Acquire(ctx); err != nil {
+			return nil, err
+		}
+		defer m.verifyLimiter.Release()
+	}
+	// want 是本批的权威内容快照：只有**逐字段一致**的行才算可见。
+	want := make(map[string]logtypes.Event, len(events))
+	for _, event := range events {
+		want[event.EventID] = event
+	}
+	visible := make(map[string]bool, len(events))
+	err = client.Stream(ctx, "/select/logsql/query", params, func(body io.Reader) error {
+		scanner := bufio.NewScanner(io.LimitReader(body, 32<<20+1))
+		scanner.Buffer(make([]byte, 64*1024), 4<<20)
+		for scanner.Scan() {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			var row struct {
+				EventID       string `json:"event_id"`
+				CanonicalHash string `json:"canonical_content_hash"`
+				EventTimeUTC  string `json:"_time"`
+				Message       string `json:"_msg"`
+				Level         string `json:"level"`
+				Stream        string `json:"stream"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &row) != nil {
+				continue
+			}
+			expected, ok := want[row.EventID]
+			if !ok {
+				// 不属于本批（窗口宽容导致的邻行）：不作证据。
+				continue
+			}
+			if row.CanonicalHash != expected.CanonicalHash || row.EventTimeUTC != expected.EventTimeUTC ||
+				row.Message != expected.Message || row.Level != expected.Level || row.Stream != expected.Stream {
+				// 同 id 不同内容：**不算可见**（保守方向）。
+				continue
+			}
+			visible[row.EventID] = true
+		}
+		return scanner.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return visible, nil
 }
 
 // errProjectionBeyondHotRetention 表示「本批写入面全部超出热层保留期，注定不可发布」。

@@ -12,22 +12,19 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 )
 
-// 保存重构前的实际渲染算法，不能调用候选的分组实现充当自己的等价性证据。
+// selectorBeforeFactoring 是**未经分组重构**的直白渲染（用于与分组实现交叉验证）。
+//
+// **契约变更（2026-11-02 简化投递路径）**：不再渲染 `projection_generation` 谓词。
+// 原先它渲染的是「重构前」的算法，而算法本身已经随简化一起改了；
+// 这里保留的是「不分组、逐 scope 平铺」这个**独立形状**，等价性证据的意义不变。
 func selectorBeforeFactoring(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	parts := make([]string, 0, 3)
 	scoped := rng.Projection != nil && len(rng.Projection.SourceProjections) > 0
 	var covered []string
 	if scoped {
 		for _, scope := range rng.Projection.SourceProjections {
-			generations := make([]string, 0, len(scope.ProjectionGenerations))
-			for _, generation := range scope.ProjectionGenerations {
-				generations = append(generations, `projection_generation:="`+escape(generation)+`"`)
-			}
-			if len(generations) == 0 {
-				continue
-			}
 			covered = append(covered, `(log_source_id:="`+escape(scope.LogSourceID)+`" AND source_generation:="`+
-				escape(scope.SourceGeneration)+`" AND (`+strings.Join(generations, " OR ")+`) AND record_end:<=`+
+				escape(scope.SourceGeneration)+`" AND record_end:<=`+
 				strconv.FormatUint(scope.ClosedVisibleSeq, 10)+`)`)
 		}
 	} else if rng.Projection != nil {
@@ -38,24 +35,10 @@ func selectorBeforeFactoring(rng query.AuthoritativeRange, q query.RangeQuery) s
 		}
 	}
 	switch {
-	case scoped && len(covered) == 0:
-		parts = append(parts, "record_end:<0")
 	case len(covered) > 0:
 		parts = append(parts, "("+strings.Join(covered, " OR ")+")")
 	case rng.Key.StorageNamespace != "":
 		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
-	}
-	if rng.Projection != nil && !scoped {
-		generations := projectionGenerations(rng.Projection)
-		if len(generations) == 1 {
-			parts = append(parts, `projection_generation:="`+escape(generations[0])+`"`)
-		} else if len(generations) > 1 {
-			terms := make([]string, 0, len(generations))
-			for _, generation := range generations {
-				terms = append(terms, `projection_generation:="`+escape(generation)+`"`)
-			}
-			parts = append(parts, "("+strings.Join(terms, " OR ")+")")
-		}
 	}
 	if !scoped || q.ClosedVisibleSeq > 0 {
 		parts = append(parts, "record_end:<="+strconv.FormatUint(q.ClosedVisibleSeq, 10))
@@ -73,6 +56,18 @@ type selectorCandidate struct {
 }
 
 // 结构化真值机不读取渲染文本，也不复用候选分组键；显式枚举来源、代次和水位关系。
+// selectorOracle 是 selectorQuery 的**独立真值定义**（不复用被测实现）。
+//
+// **契约变更（2026-11-02 简化投递路径）**：真值不再考虑 `projection_generation`。
+// 旧真值在 scoped 分支要求「行的代次 ∈ 该 scope 的白名单」、在非 scoped 分支要求
+// 「行的代次 ∈ 全局白名单」—— 那套语义依赖「同一事件在 VL 里有 N 份副本需要筛掉」，
+// 而简化后写入端不再重写，该前提消失（详见 selectorQuery 里的说明）。
+//
+// 保留的约束（一条都没放宽，仍逐项断言）：
+//   - scoped：log_source_id + source_generation 精确匹配 + record_end<=scope 水位
+//   - 非 scoped 有 CoveredSourceGenerations：按 log_source_id+source_generation 匹配
+//   - 非 scoped 无覆盖：回退 namespace 相等
+//   - range 级水位 record_end<=q.ClosedVisibleSeq
 func selectorOracle(rng query.AuthoritativeRange, q query.RangeQuery, row selectorCandidate) bool {
 	projection := rng.Projection
 	scoped := projection != nil && len(projection.SourceProjections) > 0
@@ -82,9 +77,7 @@ func selectorOracle(rng query.AuthoritativeRange, q query.RangeQuery, row select
 			if row.source != scope.LogSourceID || row.generation != scope.SourceGeneration || row.end > scope.ClosedVisibleSeq {
 				continue
 			}
-			for _, generation := range scope.ProjectionGenerations {
-				matched = matched || generation == row.projection
-			}
+			matched = true
 		}
 	} else {
 		hasCoverage := false
@@ -99,19 +92,6 @@ func selectorOracle(rng query.AuthoritativeRange, q query.RangeQuery, row select
 		}
 		if !hasCoverage {
 			matched = rng.Key.StorageNamespace == "" || rng.Key.StorageNamespace == row.source
-		}
-		if projection != nil {
-			generations := projection.ProjectionGenerations
-			if len(generations) == 0 && projection.ProjectionGeneration != "" {
-				generations = []string{projection.ProjectionGeneration}
-			}
-			if len(generations) > 0 {
-				found := false
-				for _, generation := range generations {
-					found = found || generation == row.projection
-				}
-				matched = matched && found
-			}
 		}
 	}
 	return matched && (scoped && q.ClosedVisibleSeq == 0 || row.end <= q.ClosedVisibleSeq)

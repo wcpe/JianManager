@@ -89,7 +89,7 @@ func TestVisibleEventsInVLChunkedBranchMergesSeen(t *testing.T) {
 	require.NoError(t, err)
 	m := &Manager{}
 
-	got, err := m.visibleEventsInVL(context.Background(), client, src, scope, events)
+	got, err := m.visibleEventsInVL(context.Background(), client, src, events)
 	require.NoError(t, err)
 
 	// 核心断言：分片分支必须把子片查到的集合交回来。

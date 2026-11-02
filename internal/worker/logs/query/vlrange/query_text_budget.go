@@ -67,10 +67,18 @@ func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q quer
 	return out, nil
 }
 
-// 同一来源、来源代次、投影代次的水位前缀只取并集最大值，使分片谓词互斥。
+// disjointScopeTerms 把范围拆成**互斥的物理谓词**，供超长查询二分分片。
+//
+// **契约变更（2026-11-02 简化投递路径）**：原子不再含 `projection_generation` 维度。
+//
+// 旧实现按 (来源, 来源代次, 投影代次) 三元组拆 —— 那是为了「同一事件多份副本时
+// 按批次分别取，再合并去重」。简化后写入端不再重写、查询不再按代次过滤，
+// 谓词形状是 `(log_source_id AND source_generation AND record_end<=水位)`，
+// 分片必须与它同形，否则「一个 scope 一个原子」在 617 个来源时会变成
+// 单个超大不可分的谓词，直接撞 16KiB 预算。
 func disjointScopeTerms(rng query.AuthoritativeRange, q query.RangeQuery) []string {
 	type atom struct {
-		source, sourceGeneration, projection string
+		source, sourceGeneration string
 	}
 	atoms := make(map[atom]uint64)
 	add := func(a atom, seq uint64) {
@@ -86,42 +94,29 @@ func disjointScopeTerms(rng query.AuthoritativeRange, q query.RangeQuery) []stri
 			if q.ClosedVisibleSeq > 0 && seq > q.ClosedVisibleSeq {
 				seq = q.ClosedVisibleSeq
 			}
-			for _, generation := range scope.ProjectionGenerations {
-				add(atom{scope.LogSourceID, scope.SourceGeneration, generation}, seq)
-			}
+			add(atom{scope.LogSourceID, scope.SourceGeneration}, seq)
 		}
 	} else {
-		generations := projectionGenerations(projection)
-		if len(generations) == 0 {
-			generations = []string{""}
-		}
 		if projection != nil {
 			for _, source := range projection.CoveredSourceGenerations {
 				if source.LogSourceID == "" || source.SourceGeneration == "" {
 					continue
 				}
-				for _, generation := range generations {
-					add(atom{source.LogSourceID, source.SourceGeneration, generation}, q.ClosedVisibleSeq)
-				}
+				add(atom{source.LogSourceID, source.SourceGeneration}, q.ClosedVisibleSeq)
 			}
 		}
 		if len(atoms) == 0 {
-			for _, generation := range generations {
-				add(atom{source: rng.Key.StorageNamespace, projection: generation}, q.ClosedVisibleSeq)
-			}
+			add(atom{source: rng.Key.StorageNamespace}, q.ClosedVisibleSeq)
 		}
 	}
 	terms := make([]string, 0, len(atoms))
 	for a, seq := range atoms {
-		parts := make([]string, 0, 4)
+		parts := make([]string, 0, 3)
 		if scoped || a.source != "" {
 			parts = append(parts, `log_source_id:="`+escape(a.source)+`"`)
 		}
 		if scoped || a.sourceGeneration != "" {
 			parts = append(parts, `source_generation:="`+escape(a.sourceGeneration)+`"`)
-		}
-		if scoped || len(projectionGenerations(projection)) > 0 {
-			parts = append(parts, `projection_generation:="`+escape(a.projection)+`"`)
 		}
 		parts = append(parts, "record_end:<="+strconv.FormatUint(seq, 10))
 		terms = append(terms, "("+strings.Join(parts, " AND ")+")")

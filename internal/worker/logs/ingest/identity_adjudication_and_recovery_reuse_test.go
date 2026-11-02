@@ -252,6 +252,16 @@ func TestCanonicalRecoveryReusesWithinRoundWhenInputsUnchanged(t *testing.T) {
 // 形态：pending=true ∧ VL 缺行 ⇒ 本轮先取证（一次全量）再为写入面构建（又一次全量）。
 // 修复后两次问的是同一份输入 ⇒ 只付一次；而写入面仍必须是权威全量（判据不放宽）。
 func TestDeliverReusesCanonicalSetAcrossPendingConfirm(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守的是「pending 轮内取证与写入面构建复用同一份权威全量」。
+	//
+	// 那两者的存在前提是「发布确认 + 整窗重发」——pending 为真时先 `tryConfirmPendingPublication`
+	// 取一份权威全量做可见性验证，再为写入面重建一次同一份集合，于是有「复不复用」可测。
+	// 简化后没有发布确认、没有整窗重发：`deliverCtx` 只做「去重 → 写段 → 写 VL」，
+	// `canonicalRecoveryEvents` 不再在投递路径上被调用，`CanonicalRecoveryReuses` 恒为 0。
+	//
+	// 代价（已向用户报告）：投递不再重发历史，也就不再需要「复用一次全量」这个优化。
+	t.Skip("投递路径简化（2026-11-02）：发布确认与整窗重发已删，`canonicalRecoveryEvents` 不再在投递路径上运行；" +
+		"本用例测的「pending 轮内复用」对象不存在")
 	m, key, source, _, payloads, deleteDay := newPendingConfirmFixture(t)
 
 	m.mu.Lock()

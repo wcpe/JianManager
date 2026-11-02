@@ -47,6 +47,16 @@ func indexEventStoreHashes(t *testing.T, root string) map[string]string {
 }
 
 func TestIndexEventStatusCLIUsesPersistedRealAckAndVerifiedProofs(t *testing.T) {
+	// 2026-11-02：本用例验的是「CLI 从**已落盘的**索引库读真实 ACK/校验凭据」。
+	//
+	// 采集索引已在 2026-10-30 按要求改成纯内存（`stateindex.OpenInMemory`，
+	// 机械盘不落盘裁定）⇒ 磁盘上没有 `var/log/ingest.index.db`
+	// ⇒ `ExportEventStatus`（一个 offline CLI）再也读不到任何东西。
+	//
+	// 这不是简化投递路径引入的回归，而是那次裁定的必然结果。保留为明确跳过，
+	// 与 ExportIndexJSON（已改成总是返回说明性错误）同一口径。
+	t.Skip("采集索引已改纯内存（2026-10-30 机械盘不落盘裁定）：磁盘上没有索引库，offline CLI 无对象可读；" +
+		"见 index_store.go 的 openIndex / ExportIndexJSON 注释")
 	client, _ := newProjectionVL(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")

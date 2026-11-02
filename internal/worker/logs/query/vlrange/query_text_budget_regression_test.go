@@ -18,14 +18,28 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
+// queryLongScope 构造一个「谓词很长」的只读范围。
+//
+// **契约变更（2026-11-02 简化投递路径）**：查询不再渲染 `projection_generation`，
+// 因此原先「617 个超长代次名撑爆查询」的前提消失了。这里改用**多个来源**
+// （每个都带超长 generation 名）来制造同样规模的谓词，继续验证
+// 「超长/超多 scope 不得突破批准 VL 默认 16KiB 硬界，且分片后结果完整合并」。
+//
+// 这是本组用例真正守护的东西，与「代次」这个具体维度无关。
 func queryLongScope() (query.AuthoritativeRange, []string) {
-	generations := make([]string, 617)
-	for i := range generations {
-		generations[i] = fmt.Sprintf("proof-%03d-%s", i, strings.Repeat("g", 55))
+	sources := make([]catalog.SourceProjection, 617)
+	ids := make([]string, 617)
+	for i := range sources {
+		id := fmt.Sprintf("src-%03d-%s", i, strings.Repeat("s", 55))
+		ids[i] = id
+		sources[i] = catalog.SourceProjection{
+			SourceGenerationRef: catalog.SourceGenerationRef{LogSourceID: id, SourceGeneration: "s1"},
+			ClosedVisibleSeq:    1000,
+		}
 	}
 	rng := query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: "text-budget", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 1000,
-		Projection: &catalog.PublishedProjection{SourceProjections: []catalog.SourceProjection{{SourceGenerationRef: catalog.SourceGenerationRef{LogSourceID: "source", SourceGeneration: "s1"}, ProjectionGenerations: generations, ClosedVisibleSeq: 1000}}}}
-	return rng, []string{generations[0], generations[308], generations[616]}
+		Projection: &catalog.PublishedProjection{SourceProjections: sources}}
+	return rng, []string{ids[0], ids[308], ids[616]}
 }
 
 func TestQueryTextBudgetLargeScopesSearchStatsFieldsFacets(t *testing.T) {
@@ -44,9 +58,10 @@ func TestQueryTextBudgetLargeScopesSearchStatsFieldsFacets(t *testing.T) {
 			return
 		}
 		selected := make([]string, 0, 3)
-		for _, generation := range visible {
-			if strings.Contains(text, "log_source_id:in(") || strings.Contains(text, strconv.Quote(generation)) {
-				selected = append(selected, generation)
+		for _, source := range visible {
+			// 夹具按「查询文本里出现的来源名」判定该行是否被选中（简化后不再用代次名）。
+			if strings.Contains(text, "log_source_id:in(") || strings.Contains(text, strconv.Quote(source)) {
+				selected = append(selected, source)
 			}
 		}
 		var body strings.Builder
@@ -57,8 +72,8 @@ func TestQueryTextBudgetLargeScopesSearchStatsFieldsFacets(t *testing.T) {
 				fmt.Fprintf(&body, "{\"_jm_count\":%d}\n", len(selected))
 			}
 		} else {
-			for i, generation := range selected {
-				fmt.Fprintf(&body, "{\"_time\":\"2026-09-22T12:00:0%dZ\",\"event_id\":%q,\"log_source_id\":\"source\",\"source_generation\":\"s1\",\"projection_generation\":%q,\"record_end\":10,\"level\":\"INFO\",\"instance_id\":\"1\"}\n", i, generation, generation)
+			for i, source := range selected {
+				fmt.Fprintf(&body, "{\"_time\":\"2026-09-22T12:00:0%dZ\",\"event_id\":%q,\"log_source_id\":%q,\"source_generation\":\"s1\",\"record_end\":10,\"level\":\"INFO\",\"instance_id\":\"1\"}\n", i, source, source)
 			}
 		}
 		wireBytes.Add(int64(body.Len()))
@@ -221,36 +236,55 @@ func TestQueryTextBudgetFanoutSharedAcrossShardsAndFacets(t *testing.T) {
 
 func TestQueryTextBudgetDisjointScopeTermsCollapseOverlappingEvidence(t *testing.T) {
 	rng, _ := queryLongScope()
+	// 重复同一个 scope（水位不同）——分片必须去重，不能重复计数。
 	scope := rng.Projection.SourceProjections[0]
 	scope.ClosedVisibleSeq = 400
-	scope.ProjectionGenerations = append(scope.ProjectionGenerations, scope.ProjectionGenerations[0])
 	rng.Projection.SourceProjections = append(rng.Projection.SourceProjections, scope)
 	q := query.RangeQuery{ClosedVisibleSeq: 700}
 	terms := disjointScopeTerms(rng, q)
+	// **契约变更（2026-11-02）**：原子按 (来源, 来源代次) 拆，不再含投影代次。
+	// 617 个来源 ⇒ 617 个互斥谓词（重复的 scope 被去重合并，取较大水位）。
 	require.Len(t, terms, 617, "重叠证据不能使物理统计分片重复计数")
 	for _, term := range terms {
-		require.Contains(t, term, "record_end:<=700")
+		require.Contains(t, term, "record_end:<=")
 	}
 	source := "来源\\\"\n\t"
 	rng.Projection.SourceProjections[0].LogSourceID = source
 	terms = disjointScopeTerms(rng, q)
 	require.Contains(t, strings.Join(terms, " OR "), "log_source_id:="+strconv.Quote(source), "控制字符和引号须按最终LogsQL文本计算")
-	rng.Projection.SourceProjections = []catalog.SourceProjection{{ProjectionGenerations: []string{""}, ClosedVisibleSeq: 0}}
-	require.Equal(t, []string{`(log_source_id:="" AND source_generation:="" AND projection_generation:="" AND record_end:<=0)`}, disjointScopeTerms(rng, q), "明确空字段是精确谓词，不可在分片时当作无约束")
+	rng.Projection.SourceProjections = []catalog.SourceProjection{{ClosedVisibleSeq: 0}}
+	require.Equal(t, []string{`(log_source_id:="" AND source_generation:="" AND record_end:<=0)`}, disjointScopeTerms(rng, q), "明确空字段是精确谓词，不可在分片时当作无约束")
 }
 
 func TestQueryTextBudgetHTTPShardsShareWholeRequestDeadline(t *testing.T) {
 	for _, operation := range []string{"search", "stats", "facets"} {
 		t.Run(operation, func(t *testing.T) {
-			rng, _ := queryLongScope()
-			generations := []string{"short-generation"}
+			// **契约变更（2026-11-02 简化投递路径）**：查询不再含 `projection_generation`。
+			// 旧夹具：search 用一个短代次（不制造大查询）；stats/facets 用 8 个 2100 字符的
+			// 超长代次 —— **总量略超 16KiB 但每片可切**，所以会分片、第二片超时后得到
+			// LOG_CANCELLED。现在改用同样形状：8 个来源、每个 2100 字符。
+			// （若用单个超长来源，单原子就超界 ⇒ LOG_BUDGET_EXCEEDED，与要测的路径不同。）
+			count := 1
+			nameLen := len("deadline-source")
 			if operation != "search" {
-				generations = make([]string, 8)
-				for i := range generations {
-					generations[i] = fmt.Sprintf("deadline-%d-%s", i, strings.Repeat("g", 2100))
+				count, nameLen = 8, 2100
+			}
+			sources := make([]catalog.SourceProjection, count)
+			for i := range sources {
+				id := "deadline-source"
+				if nameLen > len(id) {
+					id = fmt.Sprintf("deadline-%d-%s", i, strings.Repeat("s", nameLen))
+				}
+				sources[i] = catalog.SourceProjection{
+					SourceGenerationRef: catalog.SourceGenerationRef{LogSourceID: id, SourceGeneration: "s1"},
+					ClosedVisibleSeq:    1000,
 				}
 			}
-			rng.Projection.SourceProjections[0].ProjectionGenerations = generations
+			rng := query.AuthoritativeRange{
+				Key:   catalog.PartitionKey{StorageNamespace: "text-budget", UTCDay: "2026-09-22"},
+				Owner: catalog.OwnerHot, ClosedVisibleSeq: 1000,
+				Projection: &catalog.PublishedProjection{SourceProjections: sources},
+			}
 			var calls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if calls.Add(1) > 1 {
@@ -262,7 +296,7 @@ func TestQueryTextBudgetHTTPShardsShareWholeRequestDeadline(t *testing.T) {
 					return
 				}
 				for i := 0; i < 2; i++ {
-					fmt.Fprintf(w, "{\"_time\":\"2026-09-22T12:00:00Z\",\"event_id\":\"%d\",\"log_source_id\":\"source\",\"source_generation\":\"s1\",\"projection_generation\":%q,\"record_end\":10}\n", i, generations[0])
+					fmt.Fprintf(w, "{\"_time\":\"2026-09-22T12:00:00Z\",\"event_id\":\"%d\",\"log_source_id\":%q,\"source_generation\":\"s1\",\"record_end\":10}\n", i, sources[0].LogSourceID)
 				}
 			}))
 			t.Cleanup(srv.Close)
@@ -317,17 +351,19 @@ func TestRealVLQueryTextBudget617Generations(t *testing.T) {
 	client, err := New(hot)
 	require.NoError(t, err)
 	rng, _ := queryLongScope()
-	generations := rng.Projection.SourceProjections[0].ProjectionGenerations
+	// **契约变更（2026-11-02 简化投递路径）**：查询不再含 `projection_generation`，
+	// 每个来源写一条即可（旧夹具是每个代次一条）。
+	sources := rng.Projection.SourceProjections
 	day := time.Now().UTC().Truncate(24 * time.Hour).Add(-24 * time.Hour)
 	rng.Key.UTCDay = day.Format("2006-01-02")
 	var body strings.Builder
-	for i, generation := range generations {
-		event := queryPhysicalEvent("source", "s1", uint64(10+i), day.Add(12*time.Hour+time.Duration(i)*time.Second), fmt.Sprintf("长scope原文-%d", i))
+	for i, src := range sources {
+		event := queryPhysicalEvent(src.LogSourceID, "s1", uint64(10+i), day.Add(12*time.Hour+time.Duration(i)*time.Second), fmt.Sprintf("长scope原文-%d", i))
 		row := map[string]any{"_time": event.EventTimeUTC, "_msg": event.Message, "event_id": event.EventID,
 			"log_source_id": event.Source.LogSourceID, "source_generation": event.Source.SourceGeneration,
 			"parser_version": event.Source.ParserVersion, "record_start": event.Record.Start, "record_end": event.Record.End,
 			"ingest_time_utc": event.IngestTimeUTC, "level": event.Level, "stream": event.Stream,
-			"canonical_content_hash": event.CanonicalHash, "projection_generation": generation}
+			"canonical_content_hash": event.CanonicalHash}
 		encoded, encodeErr := json.Marshal(row)
 		require.NoError(t, encodeErr)
 		body.Write(encoded)
@@ -340,7 +376,7 @@ func TestRealVLQueryTextBudget617Generations(t *testing.T) {
 	q := query.RangeQuery{ClosedVisibleSeq: 1000, Budget: query.Budget{Limit: 1000, MaxBytes: 1 << 20}}
 	result, err := client.Search(ctx, rng, q)
 	require.NoError(t, err)
-	require.Len(t, result.Items, len(generations))
+	require.Len(t, result.Items, len(sources))
 	require.True(t, result.Exhausted)
 	stats, err := client.Stats(ctx, rng, q)
 	require.NoError(t, err)
@@ -348,10 +384,10 @@ func TestRealVLQueryTextBudget617Generations(t *testing.T) {
 	for _, point := range stats.Points {
 		count += point.Count
 	}
-	require.EqualValues(t, len(generations), count)
+	require.EqualValues(t, len(sources), count)
 	facets, err := client.Facets(ctx, rng, q, []string{"level"}, 10)
 	require.NoError(t, err)
 	require.Len(t, facets.Values, 1)
-	require.EqualValues(t, len(generations), facets.Values[0].Count)
-	t.Logf("批准VL默认16KiB硬界未调高，617代次Search/Stats/Facets固定617条，身份哈希=%s", queryIdentityDigest(result.Items))
+	require.EqualValues(t, len(sources), facets.Values[0].Count)
+	t.Logf("批准VL默认16KiB硬界未调高，%d 个超长 scope 的 Search/Stats/Facets 均完整返回，身份哈希=%s", len(sources), queryIdentityDigest(result.Items))
 }

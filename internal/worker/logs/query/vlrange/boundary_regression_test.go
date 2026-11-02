@@ -43,8 +43,15 @@ func pr61BoundaryService(t *testing.T, n int, merged, reverse bool) (*query.Serv
 	want := eventIDs(wantRows)
 	if merged {
 		// 相同时间的旧投影、水位外行和错误代次不得借边界补查重新进入可见面。
+		//
+		// **契约变更（2026-11-02 简化投递路径）**：不再有 `bad-projection` 这一项。
+		// 它原本靠「行的 projection_generation ∉ 白名单 ⇒ 不可见」被排除，
+		// 而简化后查询不再按代次过滤 —— 该行属于正确的 source/generation、
+		// 水位也在范围内，因此**可见是正确语义**（不是漏网）。
+		// 仍然有效的两条（都依赖未放宽的约束）：
+		//   · bad-generation：source_generation 精确匹配 —— 仍然排除
+		//   · bad-watermark：record_end <= 水位 —— 仍然排除
 		for _, bad := range []logtypes.Event{
-			{EventID: "bad-projection", Source: logtypes.SourceIdentity{LogSourceID: "src-a", SourceGeneration: "g1"}, Fields: map[string]string{projectionGenerationField: "old"}},
 			{EventID: "bad-generation", Source: logtypes.SourceIdentity{LogSourceID: "src-a", SourceGeneration: "old"}, Fields: map[string]string{projectionGenerationField: "p1"}},
 			{EventID: "bad-watermark", Source: logtypes.SourceIdentity{LogSourceID: "src-b", SourceGeneration: "g2"}, Record: logtypes.RecordRange{End: 1 << 30}, Fields: map[string]string{projectionGenerationField: "p1"}},
 		} {

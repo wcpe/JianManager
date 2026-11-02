@@ -311,17 +311,17 @@ func (m *Manager) reconcileWithExpectation(ctx context.Context, source SourceCon
 		if expected == 0 {
 			continue
 		}
-		scope, scoped := m.publishedScope(source, day)
-		if !scoped {
-			// 无已发布投影（或该源 scope 未建立）→ 无法证明 VL 有数据 → 保守判缺失。
-			report.Days = append(report.Days, ReconcileDayResult{
-				UTCDay: day, Expected: expected, Missing: true,
-				Basis: reconcileBasisCountOnly, Reason: "no_published_scope",
-			})
-			report.MissingDays = append(report.MissingDays, day)
-			continue
-		}
-		observed, countErr := countVLDay(sourceCtx, client, source, day, scope, cfg.QueryTimeout)
+		// 2026-11-02 简化：对账**不再按已发布代次白名单/水位过滤**。
+		//
+		// 旧口径是「按 catalog 的已发布投影 scope 统计」（代次列表 + ClosedVisibleSeq），
+		// 因为那时同一事件在 VL 里有多份副本，不按白名单会重复计数。
+		// 简化投递路径后一份数据只写一次（event_id 幂等）、数据行也不再带
+		// `projection_generation` 标签，任何按代次的过滤都只会得到 0 条
+		// ⇒ 所有天被误判成缺失 ⇒ 每轮全量重发。
+		//
+		// 对账要问的问题本来就只有一个：「VL 里这个源这一天到底有几条」，
+		// 那就按源 + 时间窗直接问。
+		observed, countErr := countVLDay(sourceCtx, client, source, day, catalog.SourceProjection{}, cfg.QueryTimeout)
 		report.Queries++
 		if countErr != nil {
 			// 对账不可信 → 回退整窗重发（绝不因对账失败而少发）。

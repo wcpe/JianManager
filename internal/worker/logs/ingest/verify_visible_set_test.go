@@ -65,7 +65,7 @@ func TestVisibleEventsInVLDoesNotFallBackPerEvent(t *testing.T) {
 	src.UTCDay = base.UTC().Format("2006-01-02")
 	m := &Manager{}
 
-	got, err := m.visibleEventsInVL(context.Background(), client, src, []string{"g1"}, events)
+	got, err := m.visibleEventsInVL(context.Background(), client, src, events)
 	require.NoError(t, err)
 
 	// 可见集合必须准确。

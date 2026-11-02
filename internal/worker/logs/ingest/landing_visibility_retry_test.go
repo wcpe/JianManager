@@ -285,7 +285,7 @@ func TestVisibleEventsInVLQueriesSlicesConcurrently(t *testing.T) {
 	// 先量「串行基线」：并发度 1 时同样的查询要多久。
 	serial := &Manager{cat: cat, vl: client, verifyChunkConcurrency: 1}
 	started := time.Now()
-	serialVisible, sErr := serial.visibleEventsInVL(context.Background(), client, source, []string{"projection-1"}, events)
+	serialVisible, sErr := serial.visibleEventsInVL(context.Background(), client, source, events)
 	serialElapsed := time.Since(started)
 	require.NoError(t, sErr)
 	require.Len(t, serialVisible, total, "串行路径也须拿回全部可见事件")
@@ -293,7 +293,7 @@ func TestVisibleEventsInVLQueriesSlicesConcurrently(t *testing.T) {
 	// 再量并发版。
 	concurrent := &Manager{cat: cat, vl: client, verifyChunkConcurrency: 4}
 	started = time.Now()
-	visible, vErr := concurrent.visibleEventsInVL(context.Background(), client, source, []string{"projection-1"}, events)
+	visible, vErr := concurrent.visibleEventsInVL(context.Background(), client, source, events)
 	elapsed := time.Since(started)
 	require.NoError(t, vErr)
 	require.Len(t, visible, total, "并发合并后必须拿回全部可见事件（不能丢片）")

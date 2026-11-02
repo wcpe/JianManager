@@ -313,6 +313,21 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	scoped := rng.Projection != nil && len(rng.Projection.SourceProjections) > 0
 	var covered []string
 	if scoped {
+		// **不再按 `projection_generation` 过滤**（2026-11-02 简化投递路径）。
+		//
+		// 旧谓词是 `source_generation=... AND (projection_generation IN 白名单) AND record_end<=水位`，
+		// 且白名单为空时该 scope 被整个跳过、全部跳过则生成 `record_end:<0`（什么都查不到）。
+		// 实测后果：一个源 22334 条数据全在 VL 里，但白名单只认 1 个代次
+		// ⇒ 查询只看得见 1160 条 ⇒ 其余被误判成「没落库」⇒ 缺口永不消解 ⇒ 积压丢弃。
+		//
+		// 简化后写入端不再产生重写副本（一批只写一次，event_id 幂等），
+		// 「同一事件多份副本需要按批次筛掉」这个前提消失了，因此直接去掉该维度。
+		// 历史数据虽仍带该标签，但不再被查询，老数据照常可查（这正是要的效果）。
+		//
+		// 保留的约束（一条都没放宽）：
+		//   · `log_source_id` 精确匹配 —— 跨源隔离不变
+		//   · `source_generation` 精确匹配 —— 跨代隔离不变
+		//   · `record_end <= ClosedVisibleSeq` —— 水位语义不变
 		type scopeGroup struct {
 			predicate string
 			sources   []string
@@ -320,16 +335,7 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 		groups := make([]scopeGroup, 0, len(rng.Projection.SourceProjections))
 		indices := make(map[string]int, len(rng.Projection.SourceProjections))
 		for _, scope := range rng.Projection.SourceProjections {
-			generations := make([]string, 0, len(scope.ProjectionGenerations))
-			for _, generation := range scope.ProjectionGenerations {
-				generations = append(generations, `projection_generation:="`+escape(generation)+`"`)
-			}
-			if len(generations) == 0 {
-				continue
-			}
-			// 只以完整非来源谓词分组，不能把不同代次或水位与来源做笛卡尔积。
-			predicate := `source_generation:="` + escape(scope.SourceGeneration) + `" AND (` +
-				strings.Join(generations, " OR ") + `) AND record_end:<=` + strconv.FormatUint(scope.ClosedVisibleSeq, 10)
+			predicate := `source_generation:="` + escape(scope.SourceGeneration) + `" AND record_end:<=` + strconv.FormatUint(scope.ClosedVisibleSeq, 10)
 			index, exists := indices[predicate]
 			if !exists {
 				index = len(groups)
@@ -354,26 +360,12 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 		}
 	}
 	switch {
-	case scoped && len(covered) == 0:
-		// 已声明逐源投影却无任何物理代次，不能降级回命名空间无界读取。
-		parts = append(parts, "record_end:<0")
 	case len(covered) > 0:
 		parts = append(parts, "("+strings.Join(covered, " OR ")+")")
 	case rng.Key.StorageNamespace != "":
 		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
 	}
-	if rng.Projection != nil && !scoped {
-		generations := projectionGenerations(rng.Projection)
-		if len(generations) == 1 {
-			parts = append(parts, `projection_generation:="`+escape(generations[0])+`"`)
-		} else if len(generations) > 1 {
-			terms := make([]string, 0, len(generations))
-			for _, generation := range generations {
-				terms = append(terms, `projection_generation:="`+escape(generation)+`"`)
-			}
-			parts = append(parts, "("+strings.Join(terms, " OR ")+")")
-		}
-	}
+	// 非 scoped 的 `projection_generation` 过滤同样去掉（理由同上）。
 	if !scoped || q.ClosedVisibleSeq > 0 {
 		parts = append(parts, "record_end:<="+strconv.FormatUint(q.ClosedVisibleSeq, 10))
 	}

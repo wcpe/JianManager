@@ -93,23 +93,21 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 
 	proj := rng.Projection
 	scoped := proj != nil && len(proj.SourceProjections) > 0
-	projGen := ev.Fields[projectionGenerationField]
+	_ = ev.Fields[projectionGenerationField] // 简化后不再按代次过滤（见下）
 
 	covered := false
 	hasExpressibleCoverage := false
 	if scoped {
 		for _, scope := range proj.SourceProjections {
-			if len(scope.ProjectionGenerations) == 0 {
-				continue
-			}
+			// **不再按 `projection_generation` 过滤**（2026-11-02 简化投递路径；
+			// 与 selectorQuery 逐字对齐 —— 两处谓词必须等价，merged_test 有对照守护）。
+			//
+			// 保留的约束：log_source_id / source_generation / record_end<=水位，一条都不放宽。
 			hasExpressibleCoverage = true
 			if ev.Source.LogSourceID != scope.LogSourceID {
 				continue
 			}
 			if ev.Source.SourceGeneration != scope.SourceGeneration {
-				continue
-			}
-			if !containsString(scope.ProjectionGenerations, projGen) {
 				continue
 			}
 			if ev.Record.End > scope.ClosedVisibleSeq {
@@ -149,20 +147,11 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 		}
 	}
 
-	// 段 4：非 scoped 的投影代次全局约束（selectorQuery parts 第二段）。
-	if proj != nil && !scoped {
-		gens := projectionGenerations(proj)
-		switch {
-		case len(gens) == 1:
-			if projGen != gens[0] {
-				return false
-			}
-		case len(gens) > 1:
-			if !containsString(gens, projGen) {
-				return false
-			}
-		}
-	}
+	// 段 4：**已删除**（2026-11-02 简化投递路径）。
+	//
+	// 旧逻辑：非 scoped 时还要求行的 `projection_generation` ∈ 白名单。
+	// selectorQuery 里对应的谓词已同批移除，两处必须同步 —— 否则 LogsQL 与内存归因不等价。
+	// 历史数据仍带该标签，但不再被任何一侧使用。
 
 	// range 级前缀水位。
 	if (!scoped || rng.ClosedVisibleSeq > 0) && ev.Record.End > rng.ClosedVisibleSeq {

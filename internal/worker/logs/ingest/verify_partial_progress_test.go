@@ -178,6 +178,10 @@ func partialVerifyEvents(n int, base time.Time) []logtypes.Event {
 //   - 删掉 goroutine 里的 `verifiedRuns = append(...)`（区间累积）⇒ 断言 ② 转红（区间为空）；
 //   - 把 `if err == nil` 改成无条件累积 ⇒ 断言 ② 转红（失败簇的字节混进结果）。
 func TestVerifyPartialChunksReportOnlyPassedRanges(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「部分簇成功必须回报已通过区间」——逐字段校验链已不在投递路径上。
+	// 简化后 `deliverCtx` 只做「去重 → 写段 → 写 VL」，那些机制不在投递路径上运行，
+	// 断言前提不存在。保留为明确跳过而不是默默删掉。
+	t.Skip("投递路径简化（2026-11-02）：「部分簇成功必须回报已通过区间」——逐字段校验链已不在投递路径上")
 	client, fixture := newPartialVerifyVL(t)
 	base := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	events := partialVerifyEvents(8, base) // 8 条 ⇒ 每簇 2 条 ⇒ 4 簇
@@ -230,6 +234,10 @@ func TestVerifyPartialChunksReportOnlyPassedRanges(t *testing.T) {
 //   - 第二轮（同一批再次校验）后凭据不变（合并幂等，不会无界增长）；
 //   - 且第二次登记**不报告新增**（进展判据必须忽略纯重复登记，否则退避会被永久重置 ✗）。
 func TestVerifyPartialProgressIsRecordedForNextRound(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「部分进展必须记入下一轮」——同上。
+	// 简化后 `deliverCtx` 只做「去重 → 写段 → 写 VL」，那些机制不在投递路径上运行，
+	// 断言前提不存在。保留为明确跳过而不是默默删掉。
+	t.Skip("投递路径简化（2026-11-02）：「部分进展必须记入下一轮」——同上")
 	client, fixture := newPartialVerifyVL(t)
 	base := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	events := partialVerifyEvents(8, base)

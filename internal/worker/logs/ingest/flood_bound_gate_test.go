@@ -39,13 +39,20 @@ import (
 func TestFloodWithFailingDeliveryPausesSourceAndKeepsStateBounded(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
+	// **先建空文件**：FILE_PRIMARY 源登记时一律 `StartAtEOF: true`（生产裁定 D：新源不回头吃
+	// 别人的历史）。若先写入 10 万行再建 Manager，那 10 万行全落在 EOF 起点之前
+	// 被整体跳过 ⇒ 一轮采集零事件、WAL 永远空、`dropped` 恒为 0。
+	//
+	// 实测（2026-11-02）：旧夹具下 `positions` 恒为 `{Read:0 Durable:0 ...}`，本用例
+	// 测到的是「什么也没发生」而不是「洪流定界」。
+	// 正确形态是「源从一个刚被绑定的空文件开始播日志」。
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
 
 	var buf strings.Builder
 	const lines = 100000
 	for i := 0; i < lines; i++ {
 		fmt.Fprintf(&buf, "[12:00:%02d] [Server thread/INFO]: flood line %d %s\n", i%60, i, strings.Repeat("x", 40))
 	}
-	require.NoError(t, os.WriteFile(path, []byte(buf.String()), 0o644))
 
 	// 投递恒失败：模拟 VL 长时间不可用/校验不通过。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +76,9 @@ func TestFloodWithFailingDeliveryPausesSourceAndKeepsStateBounded(t *testing.T) 
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	p := m.pipes[key]
 	require.NotNil(t, p, "登记源后应存在对应 pipeline")
+
+	// 管道登记（EOF 起点 = 0）之后才产生日志 —— 全部属于「本进程出生之后的新字节」。
+	require.NoError(t, os.WriteFile(path, []byte(buf.String()), 0o644))
 
 	// 反复推进周期，直到积压确实被裁（上限遍历次数仅用于防止死循环）。
 	//

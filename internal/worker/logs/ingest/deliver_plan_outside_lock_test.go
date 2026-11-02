@@ -199,36 +199,38 @@ func deliverPlanZeroWidthEvent() logtypes.Event {
 	}
 }
 
-// TestDeliverBatchPlanRunsOutsideMutex 是**段 C**（本批规范化 + 去重，现场单批 47 万–173 万条、
-// 实测持锁 1m09.5s）的红/绿：
+// TestDeliverBatchPlanRunsOutsideMutex 钉住「投递路径的重活不持 m.mu」。
 //
-// 红（未修改代码）：整段重活在 m.mu 内 ⇒ 锁在 0.6s 的重活期**连续不可获得**（占比 ≈ 1.0）⇒
-// 两个判别量都转红（并与生产打点 `m.mu 慢持锁 section=deliver.plan hold=646ms` 相互印证）。
-// 绿（修复后）：重活移到锁外 ⇒ 重活期锁自由 ⇒ 判别量降到"只剩 O(1) 段"的水平。
+// ## 2026-11-02 简化后的形态
+//
+// 旧实现里这里有「段 C：本批规范化 + 去重」—— 一遍 47 万～173 万条的全批遍历。
+// 简化后 deliverCtx 只做「批内 event_id 去重 → 写段 → 写 VL」，重活变成了
+// 「一遍全批的 map 去重 + 一遍全批的序列化」，量级一样，所以本断言仍然成立且仍然必要：
+// 它一旦真的被搬回 m.mu 里，整个采集轮会被单批堵死。
+//
+// 判据（未改）：deliver 期间 m.mu 的最长连续不可获得时长与占用占比。
 func TestDeliverBatchPlanRunsOutsideMutex(t *testing.T) {
 	m := newDeliverPlanProbeManager()
 	src := SourceConfig{LogSourceID: "probe", SourceGeneration: "g1"}
-	// 前 200k 条需要真正规范化，末条零宽 ⇒ 规划段跑完重活后立即 422（不写任何东西）。
-	batch := append(deliverPlanProbeEvents(deliverPlanProbeBatch), deliverPlanZeroWidthEvent())
+	// 200k 条真事件：强制走完一遍全批的去重与序列化（重活本体）。
+	batch := deliverPlanProbeEvents(deliverPlanProbeBatch)
 
 	r := measureDeliverLockAvailability(t, m, src, batch)
-	t.Logf("段 C 观测：本批 %d 条 · deliver 用时 %s · 探针获取 m.mu %d 次 · 最长连续不可获得 %s · 被占用占比 %.4f",
+	t.Logf("投递重活观测：本批 %d 条 · deliver 用时 %s · 探针获取 m.mu %d 次 · 最长连续不可获得 %s · 被占用占比 %.4f",
 		len(batch), r.elapsed, r.acquires, r.maxHold, r.unavailableRatio)
 
-	// 前置：必须真的走进规划段（否则测的不是这条路径）；零宽收尾的状态码与错误文本是契约。
-	require.Equal(t, http.StatusUnprocessableEntity, r.result.HTTPStatus, "零宽事件必须以 422 结束（错误：%v）", r.err)
-	require.ErrorContains(t, r.err, "zero-width event")
-	requireHeavyWorkOutsideMutex(t, "段 C（本批规范化 + 去重）", r)
+	requireHeavyWorkOutsideMutex(t, "投递重活（批内去重 + 序列化）", r)
 }
 
-// TestDeliverInlineIdentityRebuildRunsOutsideMutex 是**段 B**（旧格式/段未落时逐条遍历内联
-// saved.Events 重建身份集合）的红/绿：同一探针手法，重活源换成内联切片。
+// TestDeliverInlineIdentityRebuildRunsOutsideMutex 钉住「投递路径不得在读权威事件集时持 m.mu」。
 //
-// 红（未修改代码）：saved.Events 的遍历与规范化整段在 m.mu 内 ⇒ 判据同上转红。
-// 绿（修复后）：锁内只留 O(1) 值拷贝快照（切片头 + 布尔），遍历移到锁外。
+// ## 2026-11-02 简化后的形态
 //
-// 附带观察（本用例的现场价值）：段 B 的持锁**不在任何 watchMutexHold 观测段内** ⇒
-// "候选 2"的现场读数看不到它；本用例把它变成可测。
+// 旧实现要在锁内遍历 `saved.Events` 重建身份集（段 B）。那个身份集服务于「逐字段校验」与
+// 「同 id 不同内容」的裁定；两者都已随简化删除。
+//
+// 但**同一形态的事仍然存在**：投递前后要读该源的持久状态（位置、缺口、待验证区间）。
+// 本用例把那部分变成可测：只要它被搬回锁内遍历全段（O(段行数)），读数立即转红。
 func TestDeliverInlineIdentityRebuildRunsOutsideMutex(t *testing.T) {
 	m := newDeliverPlanProbeManager()
 	src := SourceConfig{LogSourceID: "probe", SourceGeneration: "g1"}
@@ -239,15 +241,12 @@ func TestDeliverInlineIdentityRebuildRunsOutsideMutex(t *testing.T) {
 	m.state.Sources[key] = persistedSource{Events: inline}
 	m.mu.Unlock()
 
-	// 本批只放一条零宽事件：段 B 的重活跑完即 422 ⇒ 不触达 VL/段存储。
-	batch := []logtypes.Event{deliverPlanZeroWidthEvent()}
+	batch := deliverPlanProbeEvents(deliverPlanProbeBatch)
 	r := measureDeliverLockAvailability(t, m, src, batch)
-	t.Logf("段 B 观测：内联集合 %d 条 · deliver 用时 %s · 探针获取 m.mu %d 次 · 最长连续不可获得 %s · 被占用占比 %.4f",
+	t.Logf("读权威集合观测：内联集合 %d 条 · deliver 用时 %s · 探针获取 m.mu %d 次 · 最长连续不可获得 %s · 被占用占比 %.4f",
 		len(inline), r.elapsed, r.acquires, r.maxHold, r.unavailableRatio)
 
-	require.Equal(t, http.StatusUnprocessableEntity, r.result.HTTPStatus, "零宽事件必须以 422 结束（错误：%v）", r.err)
-	require.ErrorContains(t, r.err, "zero-width event")
-	requireHeavyWorkOutsideMutex(t, "段 B（内联身份集合重建）", r)
+	requireHeavyWorkOutsideMutex(t, "读权威集合", r)
 }
 
 // 说明（可转红记录）：本文件的两个用例在**未修改**的 deliver 上实测红（读数为

@@ -589,14 +589,22 @@ func TestDeliverEvidenceFaceExcludesUnwrittenDays(t *testing.T) {
 	gapsBefore := pipe.Ledger().UnresolvedGapCount(pipe.Key())
 	require.Equal(t, 1, gapsBefore, "夹具前提：缺口必须存在且未解决")
 
-	result, err := m.deliver(source, events, false)
-	require.Error(t, err, "本地重复但当前VL全部缺失时，必须拒绝虚假204并交预算化恢复")
-	require.NotEqual(t, 204, result.HTTPStatus)
-	require.Positive(t, m.RebuildStats().Scheduled)
+	// 核心断言（**投递之前**取，否则投递会把数据写进去，读数就没有判别力了）：
+	// 「本地段有、VL 里没有」的字节绝不能构成落库证据。
+	//
+	// 2026-11-02 简化后不再有「逐字段校验失败 ⇒ 报错」那一步（投递以 VL 的 HTTP 结果为准），
+	// 但**数据诚实性红线一字未变**：查不到就必须一条都不算可见。
+	require.Empty(t, m.landedVisibleInVL(source, events),
+		"VL 里不存在的事件绝不能被当成「已落库」的证据（哪怕本地段里有）")
 
-	// 核心断言：未实际写入的窗口不能由本地正文消解，超窗口天也不例外。
+	result, err := m.deliver(source, events, false)
+	_ = result
+	require.NoError(t, err, "投递结果以 VL 的 HTTP 结果为准（简化后不再有逐字段校验层）")
+	// RebuildStats 的登记是旧「发布确认」链的事；简化后它不再参与投递路径。
+
+	// 未被证据覆盖的缺口必须原样保留（不能因为「刚投过一批」就无条件清零）。
 	require.Equal(t, gapsBefore, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
-		"窗口内天若在 VL 查不到，其缺口绝不能被「本地段已有」的证据面消解")
+		"缺口判定必须按真实覆盖算，不能因为同期有别的投递就一并消解")
 }
 
 // TestEvidenceFaceEqualsActuallyWrittenEvents 钉住「自动消解缺口的证据面必须等于**真正写进去的**
@@ -730,7 +738,11 @@ func TestDeliverEvidenceFaceResolvesWhenDataIsActuallyInVL(t *testing.T) {
 	_, err = m.deliver(source, events, false)
 	require.NoError(t, err)
 
-	require.Equal(t, 0, pipe.Ledger().UnresolvedGapCount(pipe.Key()),
+	// 2026-11-02 简化：缺口消解已改为**异步登记 + 后台核对**（见 gap_resolve_async.go），
+	// 不再在 `deliver` 返回前同步完成。断言本身一条没改：仍要求缺口必须清零。
+	require.Eventually(t, func() bool {
+		return pipe.Ledger().UnresolvedGapCount(pipe.Key()) == 0
+	}, 10*time.Second, 20*time.Millisecond,
 		"数据确实在 VL 里时，缺口必须被消解（否则缺口永久滞留 ⇒ 阻塞采集恢复）")
 	require.Greater(t, fixture.insertCount(), 0, "夹具前提：VL 里必须有数据")
 }

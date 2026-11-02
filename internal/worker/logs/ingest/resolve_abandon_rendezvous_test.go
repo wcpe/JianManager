@@ -18,6 +18,11 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
+// abandonProjectionError 是**旧**拒绝文案（简化前：全源路径因「没有完整已发布投影」而拒绝）。
+//
+// 2026-11-02 投递路径简化后，`resolveOneSourceGaps` 不再读已发布投影（那个概念没了），
+// 所以这个文案在生产代码里已完全消失。下面改为直接断言**它要守的语义**：
+// 全源自动路径**无论 metadata 是否齐备都不得放弃缺口**（不断言具体文案）。
 const abandonProjectionError = "has no complete published projection"
 
 func TestResolveGapsAbandonRendezvous(t *testing.T) {
@@ -47,23 +52,19 @@ func TestResolveGapsAbandonRendezvous(t *testing.T) {
 	require.Equal(t, uint64(100), before.Positions.Delivery)
 	require.Len(t, before.Gaps, 1)
 	require.Equal(t, ledger.GapReasonDeliverError, before.Gaps[0].Reason)
-	m.mu.Lock()
-	saved := m.state.Sources[key]
-	m.mu.Unlock()
-	_, complete, err := m.publishedClosedForSourceCtx(context.Background(), source, saved)
-	require.NoError(t, err)
-	require.False(t, complete, "夹具必须命中未发布投影的守卫，不能只测 Raw 提前拒绝")
 
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
 		"x-jm-operator", "admin", "x-jm-reason", "ADR-101 永久空洞"))
 	onlyReason := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-jm-reason", "ADR-101 无操作人"))
 	for _, automatic := range []context.Context{context.Background(), onlyReason, ctx} {
-		// 调用真实全源入口，齐备的人工 metadata 也不能跨过自动消解的证据守卫。
-		err = m.ResolveCoveredGaps(automatic)
-		require.ErrorContains(t, err, abandonProjectionError)
+		// 调用真实全源入口，齐备的人工 metadata 也不能让自动路径放弃缺口。
+		//
+		// 2026-11-02 简化：不再断言旧文案 `has no complete published projection`
+		//（那条分歧线随已发布投影消失），但仍要求**调用不得留下任何放弃凭据**。
+		_ = m.ResolveCoveredGaps(automatic)
 		entry := pipe.Ledger().Get(pipe.Key())
-		require.Equal(t, before.Positions, entry.Positions, "拒绝自动消解后消费水位不得改变")
-		require.Equal(t, before.Gaps, entry.Gaps, "未解决 DELIVER_ERROR 必须原样保留")
+		require.Equal(t, before.Positions, entry.Positions, "全源路径不得改变消费水位")
+		require.Equal(t, before.Gaps, entry.Gaps, "未解决 DELIVER_ERROR 必须原样保留（全源路径不得放弃缺口）")
 		require.Empty(t, entry.Abandonments, "全源路径不得留下永久放弃凭据")
 	}
 

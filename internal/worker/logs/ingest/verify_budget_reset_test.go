@@ -19,6 +19,10 @@ import (
 // "源处理链已耗尽上一轮预算"，本批仍拥有完整预算 ⇒ 校验成功（nil）；
 // 红（变异：删除入口重置）⇒ 预算（含保底已用）仍处耗尽态 ⇒ 返回 ErrVerifyDeferred。
 func TestVerifyBudgetResetsAtVerifyEntry(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「每批校验入口重置预算」——`verifyProjectionChunk` 不再在投递路径上运行。
+	// 简化后 `deliverCtx` 只做「去重 → 写段 → 写 VL」，那些机制不在投递路径上运行，
+	// 断言前提不存在。保留为明确跳过而不是默默删掉。
+	t.Skip("投递路径简化（2026-11-02）：「每批校验入口重置预算」——`verifyProjectionChunk` 不再在投递路径上运行")
 	client, _ := newProjectionVL(t)
 	m := newVerifyTestManager(10*time.Millisecond, 50*time.Millisecond, 5*time.Second)
 	m.verifyRoundBudget = 150 * time.Millisecond // 单源预算注入小值（走真实限额路径）

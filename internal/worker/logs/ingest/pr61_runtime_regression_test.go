@@ -29,6 +29,10 @@ import (
 
 // 真实 HTTP 插入屏障固定旧 H 重放、新 H+B 发布、最新在途尝试三者的完成逆序。
 func TestPR61OldReplayCompletionCannotClearNewPending(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「旧重放完成不得清掉新的 pending」——`PublicationPending` 整套已删除。
+	// 简化后 `deliverCtx` 只做「去重 → 写段 → 写 VL」，那些机制不在投递路径上运行，
+	// 断言前提不存在。保留为明确跳过而不是默默删掉。
+	t.Skip("投递路径简化（2026-11-02）：「旧重放完成不得清掉新的 pending」——`PublicationPending` 整套已删除")
 	fixture := &projectionVLFixture{}
 	oldEntered, oldRelease := make(chan struct{}), make(chan struct{})
 	latestEntered, latestRelease := make(chan struct{}), make(chan struct{})
@@ -260,6 +264,10 @@ func TestPR61ScopedMappingSkipsUnchangedHistory(t *testing.T) {
 
 // 固定 D0 登记、D1 实际事件，65 个尾部小批次必须压缩且旧历史仍在发布白名单中可见。
 func TestPR61CrossDayProjectionCompactionPreservesHistory(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「跨天压缩代必须承载完整 canonical」——代次压缩已随发布快照删除。
+	// 简化后 `deliverCtx` 只做「去重 → 写段 → 写 VL」，那些机制不在投递路径上运行，
+	// 断言前提不存在。保留为明确跳过而不是默默删掉。
+	t.Skip("投递路径简化（2026-11-02）：「跨天压缩代必须承载完整 canonical」——代次压缩已随发布快照删除")
 	client, fixture := newProjectionVL(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")

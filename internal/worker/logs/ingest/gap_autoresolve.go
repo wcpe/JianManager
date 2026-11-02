@@ -232,7 +232,17 @@ func (m *Manager) selfHealPausedSource(source SourceConfig, p *pipeline.Pipeline
 	// 生产仍灌料时每轮覆盖新增的已确认区间 ⇒ **追平生成速率** ✓（及格语义）。
 	m.reclaimStep0RollingOnly(p, source)
 	deliveryFailed := false
-	if entry.AcquirePaused {
+	// 何时排空存量：暂停源（没有新批次充当触发器）**或**账本里还有未解决缺口
+	// （那意味着已有字节未取得落库证据，只有重投它才能产生证据）。
+	//
+	// 为何补上后半个条件：简化投递路径后不再有「整窗重放」，投递失败的那一批
+	// 不会在下一轮被自动重发——它会静静留在 WAL 里，而缺口也因为「没有被覆盖」
+	// 永不消解 ⇒ 源被缺口闸永久挡住。重投这批是唯一能自证的出口。
+	//
+	// 不会因此变成狂热重试：本函数每源最小间隔 `gapAutoResolveInterval`（10s），
+	// 再加下面的无进展指数退避；而且 `DeliverPending` 在没有 durable 未确认条目时
+	// 是个空操作。
+	if entry.AcquirePaused || ledger.UnresolvedGapCountOf(entry) > 0 {
 		// 无进展退避只闸**投递**这一步（而非整个自愈面）：回收滚动与缺口消解是廉价步骤，
 		// 且正是"有进展"的来源；把它们一并闸住会连"发现进展"的机会一起掐掉 ✗。
 		if m.selfHealStallDue(key) {
@@ -402,22 +412,28 @@ func (m *Manager) SelfHealStallCount() int64 {
 	return m.selfHealStallCount.Load()
 }
 
-// autoResolveGapsFromPublished 用「已发布投影 + 逐字段校验覆盖区间」证据自动消解缺口，
+// autoResolveGapsFromPublished 用「该源已有字节在 VL 里真的查得到」这一证据自动消解缺口，
 // 并报告账本是否被改变。
 //
-// 为什么需要它（与投递路径互补）：WAL 条目一旦被回收（reclaim 放行＝恢复责任已转移到
-// 已发布投影），就不可能再通过重投生成覆盖证据；此时唯一成立且可自证的依据是
-// publishedClosedForSource（该源全部事件的区间都落在已发布投影的 ClosedVisibleSeq 内）
-// 加上该源**已持久化的逐字段校验覆盖区间**（verified runs）。
+// ## 2026-11-02 简化：证据从「已发布投影」改为「VL 实际可见」
 //
-// 与旧实现的差别（2026-10-02 复审 P1-2 修复）：旧实现用 ResolveGapsThroughExcept(closed)
-// 做**末端水位**消解，而 closed 是「已发布投影的封闭水位」，与被拒批次是否真的落库毫无关系——
-// 只要缺口末端 ≤ closed 就被宣称已确认落库。现在改为同一判据收口：
-//  1. 缺口区间必须落在 verified runs 的**某一段连续区间**内（该区间来自一次写 VL 后逐字段
-//     可见性校验通过、且 ≤ 已发布封闭水位），而不是落在末端水位之下；
-//  2. 原因必须在允许名单（gapAutoResolvableReasons）内。
+// 旧实现要求 `publishedClosedForSource` 给出完整的已发布投影（`CoverageComplete` + 封闭水位），
+// 再用 verified runs 与白名单求交。那套东西是「多代次重写 + 发布确认」机制的产物。
 //
-// 调用者负责限频（见 selfHealPausedSource）：本方法每次都要遍历该源事件段做按天聚合。
+// 简化投递路径后不再发布任何投影 ⇒ `closed` 恒为 0 ⇒ 本函数永远 return false。
+// 若照旧保留，缺口就只有「重投成功」一个出口；一旦那段字节已经回收（不可能再投），
+// 缺口就永远不会消失 ⇒ `ResumeAcquire` 永久被挡 ⇒ 源永久停摆。
+//
+// 新证据面更直接也更硬：**把该源持久正文里落在待验证区间的那些事件，拿去问 VL
+// 「你们到底在不在」**（`landedVisibleInVLCtx`）。查得到的就构成真实落库证据，
+// 查不到的一律不作证据（方向与原实现完全一致，只是不再经过「发布」这道中间态）。
+//
+// 保留的两重判据（一个都没放宽）：
+//  1. 原因必须在允许名单（gapAutoResolvableReasons）内；
+//  2. 缺口区间必须落在**某一段** VL 确认可见的连续区间内（`CoveredByPositionRanges`），
+//     而不是落在凸包里。
+//
+// 调用者负责限频（见 selfHealPausedSource）：本方法每次都要读该源正文并向 VL 查询。
 func (m *Manager) autoResolveGapsFromPublished(source SourceConfig, p *pipeline.Pipeline) bool {
 	if m == nil || p == nil {
 		return false
@@ -430,34 +446,53 @@ func (m *Manager) autoResolveGapsFromPublished(source SourceConfig, p *pipeline.
 	m.mu.Lock()
 	saved := m.state.Sources[key]
 	m.mu.Unlock()
-	closed, complete := m.publishedClosedForSource(source, saved)
-	if !complete || closed == 0 {
-		// 没有成立的全量发布证据：不得凭空消解（缺口语义红线）。
+	// 待验证的事件：该源权威正文里，位置落在任一段未解决缺口区间内的那些。
+	//
+	// 为何只取缺口区间内的：本方法的目的就是「证明这些缺口其实已经落库」，
+	// 与缺口无关的正文既不需要也不应该花查询预算去核。
+	gaps := make([]ledger.PositionRange, 0, len(entry.Gaps))
+	for _, gap := range entry.Gaps {
+		if !gap.Resolved {
+			gaps = append(gaps, ledger.PositionRange{From: gap.StartPos, To: gap.EndPos})
+		}
+	}
+	if len(gaps) == 0 {
 		return false
 	}
-	// 旧 VerifiedRuns 只代表过去，必须与当前白名单逐字段可见证明求交。
-	proof, err := m.currentPublishedRuns(context.Background(), source, saved)
-	if err != nil || len(proof.events) == 0 {
-		return false
-	}
-	runs := gapRangesOfEvents(proof.events)
-	resolved := 0
-	err = m.applyPublishedEvidence(source, proof, func(currentRuns []ledger.PositionRange) error {
-		var resolveErr error
-		resolved, resolveErr = p.Ledger().ResolveGapsCoveredByRanges(p.Key(), currentRuns,
-			gapResolutionPublished, gapAutoResolvableReasons...)
-		return resolveErr
-	})
+	events, err := m.canonicalRecoveryEvents(key, saved)
 	if err != nil {
-		slog.Warn("已发布投影证据自动消解缺口失败（下轮重试）",
+		slog.Warn("缺口自动消解：读取权威正文失败（下轮重试）",
 			"logSourceID", source.LogSourceID, "error", err)
+		return false
+	}
+	candidates := make([]logtypes.Event, 0, len(events))
+	for _, ev := range events {
+		if ledger.CoveredByPositionRanges(gaps, ev.Record.Start, ev.Record.End) {
+			candidates = append(candidates, ev)
+		}
+	}
+	if len(candidates) == 0 {
+		return false
+	}
+	// 逐字段可见性核对（带预算与退避重试）。查不到的一个都不算证据。
+	visible := m.landedVisibleInVLCtx(context.Background(), source, candidates)
+	if len(visible) == 0 {
+		return false
+	}
+	runs := gapRangesOfEvents(visible)
+	m.recordVerifiedRuns(key, runs)
+	resolved, resolveErr := p.Ledger().ResolveGapsCoveredByRanges(p.Key(), runs,
+		gapResolutionPublished, gapAutoResolvableReasons...)
+	if resolveErr != nil {
+		slog.Warn("VL 可见性证据自动消解缺口失败（下轮重试）",
+			"logSourceID", source.LogSourceID, "error", resolveErr)
 		return false
 	}
 	if resolved == 0 {
 		return false
 	}
-	slog.Info("已发布投影已覆盖缺口区间，自动消解缺口（无需人工介入）",
-		"logSourceID", source.LogSourceID, "resolved", resolved, "closed", closed,
+	slog.Info("VL 已确认覆盖缺口区间，自动消解缺口（无需人工介入）",
+		"logSourceID", source.LogSourceID, "resolved", resolved,
 		"ranges", len(runs),
 		"unresolvedRemaining", p.Ledger().UnresolvedGapCount(p.Key()))
 	return true

@@ -94,16 +94,20 @@ func TestRangeMatchesEventPredicates(t *testing.T) {
 		{"scoped 命中", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 100), true},
 		{"scoped 水位等于上界（<= 保留）", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 100), true},
 		{"scoped 超水位", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-1", 101), false},
-		{"scoped 旧代次", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-OLD", 100), false},
+		{"scoped 旧代次（简化后不再看代次，仍可见）", scoped, mergedTestEvent("src-a", "gen-a", "pgen-A-OLD", 100), true},
 		{"scoped 错来源", scoped, mergedTestEvent("src-x", "gen-a", "pgen-A-1", 100), false},
 		{"scoped 错 source_generation", scoped, mergedTestEvent("src-a", "gen-other", "pgen-A-1", 100), false},
 		{"非 scoped 命中", nonScoped, mergedTestEvent("src-b", "gen-b", "pgen-B", 1000), true},
-		{"非 scoped 代次集合不符", nonScoped, mergedTestEvent("src-b", "gen-b", "pgen-OTHER", 1000), false},
+		{"非 scoped 代次不符（简化后不再看代次）", nonScoped, mergedTestEvent("src-b", "gen-b", "pgen-OTHER", 1000), true},
 		{"非 scoped 来源不符", nonScoped, mergedTestEvent("src-z", "gen-b", "pgen-B", 1000), false},
 		{"无 Projection：按 namespace 命中", plain, mergedTestEvent("src-c", "any", "", 10), true},
 		{"无 Projection：来源不符", plain, mergedTestEvent("src-d", "any", "", 10), false},
 		{
-			"scoped 无物理代次不得回退 namespace",
+			// **契约变更（2026-11-02 简化投递路径）**：
+			// 旧契约「scoped 无物理代次 ⇒ 不回退 namespace」依赖「必须知道合法代次」。
+			// 简化后不再按代次过滤，但**水位约束仍在**：本用例 ClosedVisibleSeq 为 0，
+			// 而事件 end=10 ⇒ 仍然不可见。可见性由 source/generation/水位 三者决定。
+			"scoped 无物理代次且水位为 0（仍不可见）",
 			query.AuthoritativeRange{
 				TargetID: "inst:4",
 				Key:      catalog.PartitionKey{StorageNamespace: "src-e", UTCDay: "2026-09-22"},
@@ -111,7 +115,7 @@ func TestRangeMatchesEventPredicates(t *testing.T) {
 				Projection: &catalog.PublishedProjection{
 					SourceProjections: []catalog.SourceProjection{{
 						SourceGenerationRef:   catalog.SourceGenerationRef{LogSourceID: "src-e", SourceGeneration: "gen-e"},
-						ProjectionGenerations: nil, // 空代次无已发布读取证据
+						ProjectionGenerations: nil,
 					}},
 				},
 			},
@@ -388,7 +392,7 @@ func TestReviewScopedNamespaceFallback(t *testing.T) {
 	rng.Key = catalog.PartitionKey{StorageNamespace: "src-a", UTCDay: "2026-09-22"}
 	rng.ClosedVisibleSeq = 100
 	text := selectorQuery(rng, query.RangeQuery{ClosedVisibleSeq: rng.ClosedVisibleSeq})
-	for _, required := range []string{`source_generation:="GenA"`, `projection_generation:="pgenGood"`, `record_end:<=10`} {
+	for _, required := range []string{`source_generation:="GenA"`, `record_end:<=10`} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("单范围选择器缺少约束 %q，实际=%q", required, text)
 		}
@@ -396,6 +400,9 @@ func TestReviewScopedNamespaceFallback(t *testing.T) {
 	if !rangeMatchesEvent(rng, mergedTestEvent("src-a", "GenA", "pgenGood", 10)) {
 		t.Fatal("有效 scoped 事件应命中")
 	}
+	// **契约变更（2026-11-02 简化投递路径）**：不再断言「不同 projection_generation 必须被排除」。
+	// 简化后查询不按代次过滤，而该行 source/generation/水位 都对，**可见是正确语义**。
+	// 仍逐条断言的项依赖未放宽的约束：来源代次精确匹配、scope 水位上界。
 	for _, tc := range []struct {
 		name string
 		gen  string
@@ -403,7 +410,6 @@ func TestReviewScopedNamespaceFallback(t *testing.T) {
 		end  uint64
 	}{
 		{name: "wrongSourceGeneration", gen: "wrongGen", pgen: "pgenGood", end: 9},
-		{name: "wrongProjectionGeneration", gen: "GenA", pgen: "pgenWrong", end: 9},
 		{name: "beyondScopedWatermark", gen: "GenA", pgen: "pgenGood", end: 11},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

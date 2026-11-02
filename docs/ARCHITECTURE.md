@@ -484,6 +484,14 @@ Control Plane 仍是浏览器唯一入口、用户授权真源和联邦协调器
 
 **热层可发布窗口（2026-10-21 生产缺陷修复）**：VL 对**超出 `-retentionPeriod` 的数据点返回 HTTP 200 但静默丢弃**（已实测：写 45 天前数据得 `200`、随后查询 `0` 行；写当天数据得 `200`、查询 `1` 行）。若不设窗口，重建会把历史天重放成「`status:200, verified:N` 的假成功」，随后逐字段校验恒 `rows:0` ⇒ `not fully visible before deadline` ⇒ `PublicationPending` 永久为真 ⇒ 重试到上限后「已停止自动重试」，且对账每轮又把该天判成 `observed < expected` ⇒ 无限重新登记重建。故新增集中判定（`ingest/hot_retention_window.go`），判据保守：**只有该天整天都早于 `now - retention` 才判超窗口**，跨越边界当天仍按可发布处理；`retention<=0`/空串/脏串一律不启用过滤（零值保持改动前行为，避免「没配就误滤正常数据」）。窗口在**三处**统一应用：重建面（不写、不校验、不计入已发布）、对账期望集（不计入 `MissingDays`，如实进 `Report.BeyondHotRetention`）、pending 确认的缺失天。全部天超窗口时给明确终态：清 `PublicationPending` + WARN，**绝不解算缺口**（缺口继续对用户可见）。写 VL → 逐字段校验 → 通过才 publish 的发布语义一字未改；超窗口天既不生成代次也不宣称已发布。保留期由 `log_vl.retention_period` 经 `Options.HotRetention` 注入（空串回退 `vlsup.DefaultRetentionPeriod`）。**已知边界**：若 VL 由外部部署且 retention 与配置不一致，窗口会偏大或偏小（偏小 ⇒ 多发几次无用重建；偏大 ⇒ 少量仍会被继续重试），属配置一致性风险，不引入数据错误。
 
+**日志投递路径简化（2026-11-02，用户裁定）**：按「边读边扔 VL，`event_id` 做幂等」重写投递路径。`deliverCtx` 从 335 行/179 分支降到约 60 行，只剩：投递守卫 → 批内 `event_id` 去重 → **按稳定摄取时间规范化**（Raw 事件） → 写本地磁盘段 → 写 VL → 异步登记缺口核对。查询侧同步去掉 `projection_generation` 过滤。
+
+**已删除**（投递路径上永久不再运行）：代次取名/预留与 `projection_generation` 标签、发布快照 `publishSnapshot`、`PublicationPending` 发布确认链、整窗重发与 `replace` 分支、增量尾部快路径、物化预算 `reserveMaterialization`、`activeTails` 活跃代次簿记、投递路径上的逐字段校验，以及 closed/debt/verified 三层账。
+
+**语义损失（已知情、已接受）**：① 不再维护「哪段数据已完整发布」（完整性面板/缺口欠账视图不再完整）；② 投递失败→重读重投，但重读也拿不到（文件已轮转）时**数据会静默丢失**，不再有缺口记录；③ WAL 是纯内存队列，重启不保留未投递数据，可靠性由「持久化 cursor + 至少一次重读」承担（对齐 Filebeat `queue.mem` + registry）。
+
+**仍保留的红线**：VL 里查不到的字节绝不因为「本地段有」而算作已落库证据；同 `event_id` 不同内容（被篡改）**不算可见**（逐字段比对）；缺口消解仍要求**原因白名单 + 连续覆盖**两重判据。详见 [简化规格](specs/log-delivery-simplification/spec.md)。
+
 **联邦完整性与位置凭据**：Worker/CP 在读取前分配整请求扫描额度（默认 32 MiB），子调用只能使用正数预留；范围扇出截断及顶层 partial 原因不能被逐目标成功覆盖。同时间戳页边界未完整时仅补取窄时间组，证据不足不得推进跨缺失组 cursor。`LogSearchResponse.ingest_position_gaps` 独立返回人工永久放弃位置：proto 仅追加真实 `log_source_id=7/source_generation=8`，RPC/版本不变；HTTP 位置无损字符串、Worker 身份取可信路由，旧 Worker 未知字段省略，不参与 coverage/quality/Export。详见 [API](API.md) 与 [协调器规格](specs/cp-log-query-coordinator/spec.md)。
 
 **查询质量标记口径（`DuplicateQuality`）**：单 range 路径与合并路径现在对「同 `EventID`、异 canonical hash」给出一致结论——检出异哈希即降级 `unresolved`，两条歧义副本都保留给上层归因；同 id 同哈希的纯重复仍按去重丢弃且**不**降级（普通重复不该把导出封掉）。此前单 range 路径按 `EventID+hash` 去重后恒报 `exact`，于是同一份数据经合并路径报 `unresolved`、经单 range 路径报 `exact`，而 CP 导出门禁只认 `unresolved`/`conflict` ⇒ 歧义数据被放行导出。

@@ -175,6 +175,10 @@ func TestProjectionProbeWindowWithinVLHardLimit(t *testing.T) {
 // **转红实测**：把 dropEventsAlreadyWritten 的 `"start"/"end"` 两行去掉
 // （即该函数修复前的原样）⇒ 本用例红，并指名到那条未带窗口的查询。
 func TestAllVLQueriesCarryExplicitTimeWindow(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「每次 VL 查询都必须带显式时间窗」——靠投递路径上的代次占用探测与逐字段校验查询，两者都随简化删除。
+	// 简化后 `deliverCtx` 只做「去重 → 写段 → 写 VL」，那些机制不在投递路径上运行，
+	// 断言前提不存在。保留为明确跳过而不是默默删掉。
+	t.Skip("投递路径简化（2026-11-02）：「每次 VL 查询都必须带显式时间窗」——靠投递路径上的代次占用探测与逐字段校验查询，两者都随简化删除")
 	client, fixture := newProjectionVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")

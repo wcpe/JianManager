@@ -17,6 +17,18 @@ import (
 )
 
 func TestIndexManagerConfirmedPhysicalFingerprintAndGapThreeOpens(t *testing.T) {
+	// 2026-11-02：本用例验的是「**跨重启**不丢物理指纹 / 精确缺口折叠区间」。
+	//
+	// 但采集索引已在 2026-10-30 按用户裁定（机械盘不落盘）改成 `stateindex.OpenInMemory`
+	// （见 index_store.go 的 openIndex 注释）：**没有磁盘文件可供重开**，
+	// 本用例的前提（“重新 Open 同一个库三次”）整条消失。
+	//
+	// 同一批字段的映射逻辑已经有纯内存形态的用例覆盖（不跨进程）：
+	//   · TestEventStatusFactsSurviveIndexRoundTrip（event_status 相关）
+	//   · 以及 stateindex 包自己的 Apply/Load 往返用例。
+	// 故本条不再有意义，保留为明确跳过而不是默默删掉。
+	t.Skip("采集索引已改纯内存（2026-10-30 机械盘不落盘裁定），没有磁盘库可“重新打开三次”；" +
+		"跨重启不丢这一语义已不可测，见 index_store.go 的 openIndex 与 ExportIndexJSON 注释")
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
 	body := []byte(strings.Repeat("0123456789", 30) + "\n")

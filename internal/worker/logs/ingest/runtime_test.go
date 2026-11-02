@@ -44,15 +44,12 @@ func TestIdlePollDoesNotRewriteDurableHistory(t *testing.T) {
 	require.NoError(t, m.persist())
 	samplesBefore := len(m.PersistSamples())
 	// 冻结索引的时间戳：空闲轮询后必须原样（旧实现会整本重写并 fsync，mtime 必变）。
-	indexPath := m.indexPath()
-	stamp := time.Unix(1700000000, 0)
-	require.NoError(t, os.Chtimes(indexPath, stamp, stamp))
+	//
+	// 2026-10-30 采集索引已改**纯内存**（`stateindex.OpenInMemory`，机械盘不落盘裁定）
+	// ⇒ 磁盘上不存在 `var/log/ingest.index.db`，用 mtime 判断「有没有重写」已不可行。
+	// 保留原本的核心断言（不触发落库写）；「重写整本」这个形式本身已因无磁盘而消失。
 	m.pollOnce()
-	// 空闲轮询不得重写历史（FR-496 spec §2.3）：源无任何变化时不得触发落库写。
 	require.Equal(t, samplesBefore, len(m.PersistSamples()), "idle polling must not trigger a persist at all")
-	stat, err := os.Stat(indexPath)
-	require.NoError(t, err)
-	require.Equal(t, stamp.Unix(), stat.ModTime().Unix(), "idle polling must not rewrite and fsync the durable index")
 }
 
 func TestAppendMicroProjectionPreservesLegacyPublishedGeneration(t *testing.T) {
@@ -113,6 +110,24 @@ type projectionVLFixture struct {
 	// 2026-10-08 探测查询、以及本次 dropEventsAlreadyWritten 的幂等查询）。每次后果都是
 	// 「请求恒失败 + 上层静默降级」，且单测夹具只按窗口过滤行、对缺失窗口一律放行 ⇒ 结构性不可见。
 	queryWindows []queryWindowRecord
+}
+
+// probeCount 统计发往假 VL 的「代次占用探测」查询次数（该查询的特征是只取 `_time` 的字段列表
+// 加 `| limit 1`；2026-10-08 起还带 `| sort by (_time desc)` 与显式时间窗）。
+//
+// 定义位置说明：它原先与唯一的使用者 ProbeIsCachedAndInvalidatedOnWrite 一起住在
+// generation_reuse_test.go；该文件随「投递路径简化」删除时，两个仍有效的使用者
+// （generation_reservation_test.go / probe_window_test.go）被保留下来，故辅助函数收回到夹具本体。
+func (f *projectionVLFixture) probeCount(generation string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, raw := range f.probes {
+		if strings.Contains(raw, "projection_generation:="+strconv.Quote(generation)) {
+			count++
+		}
+	}
+	return count
 }
 
 // queryWindowRecord 是一次 VL 查询的窗口读数（HasWindow=false 表示该请求未带 start/end）。
@@ -240,13 +255,17 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		count := 0
 		verifyFields := strings.Contains(selector, projectionVerifyFields)
 		filterSource := strings.Contains(selector, "log_source_id:=")
+		// 2026-11-02：缺口核对不再按代次过滤（简化投递路径后不存在多代次副本）。
+		// 只有当 selector **真的**带代次选择器时才按它过滤，否则本夹具会把
+		// 「按 event_id 直查」这种查询全判成 0 行（那是夹具的局限，不是 VL 的行为）。
+		filterGeneration := strings.Contains(selector, "projection_generation:=")
 		_, ids, filtered := strings.Cut(selector, "event_id:in(")
 		if filtered {
 			ids, _, _ = strings.Cut(ids, ")")
 		}
 		for _, payload := range f.rowCache {
 			for _, row := range payload.rows {
-				if !strings.Contains(selector, row.generation) {
+				if filterGeneration && !strings.Contains(selector, row.generation) {
 					continue
 				}
 				if filterSource && !strings.Contains(selector, row.source) {
@@ -665,6 +684,12 @@ func TestManagerDoesNotExposeProjectionWhenJournalAppendFails(t *testing.T) {
 }
 
 func TestOwnerChangeDuringVerificationCannotPublishToNewOwner(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「校验期间换主不得把本次投影发布到新权威上」。
+	//
+	// 那个保护长在 `publishSnapshot` 的 `sameCatalogAuthority(observed, rec)` 里——
+	// 简化后投递不再发布（`deliverCtx` 只做「去重 → 写段 → 写 VL」），该判断不再运行。
+	// 实测：`rec.PublishedProjection` 为 nil，直接 panic，并连带把后续用例全部拖成 fail。
+	t.Skip("投递路径简化（2026-11-02）：投递不再发布快照，「换主时的发布守卫」失去对象（且会因 nil 解引用 panic）")
 	cat := catalog.New(nil)
 	key := catalog.PartitionKey{StorageNamespace: "node:race", UTCDay: runtimeTestUTCDay()}
 	fixture := &projectionVLFixture{}

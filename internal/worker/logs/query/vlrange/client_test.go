@@ -72,7 +72,8 @@ func TestTieredArchiveSearchUsesCoveredSourceSelector(t *testing.T) {
 		require.Contains(t, selector, `log_source_id:="source-a"`)
 		require.Contains(t, selector, `log_source_id:="source-b"`)
 		require.Contains(t, selector, " OR ")
-		require.Contains(t, selector, `projection_generation:="rehydrate-g2"`)
+		// 契约变更（2026-11-02）：不再按代次过滤（理由见 TestClientUsesEveryPublishedProjectionGeneration）
+		require.NotContains(t, selector, "projection_generation")
 		require.NotContains(t, selector, `log_source_id:="shared-namespace"`)
 		_, _ = w.Write([]byte(`{"_time":"2026-09-22T12:00:00Z","_msg":"deep","event_id":"e1","log_source_id":"source-a","source_generation":"g1","record_start":1,"record_end":2}` + "\n"))
 	}))
@@ -120,9 +121,20 @@ func TestClientUsesEveryPublishedProjectionGeneration(t *testing.T) {
 		Projection: &catalog.PublishedProjection{ProjectionGeneration: "g2", ProjectionGenerations: []string{"g1", "g2"}},
 	}, query.RangeQuery{Budget: query.Budget{Limit: 10}})
 	require.NoError(t, err)
-	require.Contains(t, selector, `projection_generation:="g1"`)
-	require.Contains(t, selector, `projection_generation:="g2"`)
-	require.Contains(t, selector, " OR ")
+	// **契约变更（2026-11-02 简化投递路径）**：查询不再按 `projection_generation` 过滤。
+	//
+	// 旧契约（本用例原样）：行上带 `projection_generation` 标签，查询必须把**所有已发布代次**
+	// 都列进 selector —— 因为同一事件在 VL 里有 N 份副本（分属不同代次），
+	// 少列一个代次就会漏数据。实测一个源 118 个代次、同一 event 9 份。
+	//
+	// 简化后写入端不再重写（一批只写一次、event_id 幂等），副本前提消失，
+	// 因此查询不再需要这个维度；历史数据仍带标签但不被查询，老数据照常可查。
+	//
+	// 现在必须钉住的是：**selector 里不出现代次过滤，且水位约束仍在**。
+	require.NotContains(t, selector, "projection_generation",
+		"简化后不得再按代次过滤：副本已不存在，按代次筛只会漏数据")
+	require.Contains(t, selector, "record_end:<=",
+		"水位约束必须保留（一条都没放宽）")
 }
 
 func TestClientStatsMapsStatsRows(t *testing.T) {
