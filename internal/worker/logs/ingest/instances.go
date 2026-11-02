@@ -167,6 +167,25 @@ func (m *Manager) RegisterInstance(reg InstanceRegistration) error {
 	m.mu.Lock()
 	existing, exists := m.state.Instances[reg.UUID]
 	m.mu.Unlock()
+	// 重启后没有绑定，但同名源已经存在：这是**索引纯内存**后的必然形态，不是异常。
+	//
+	// 2026-10-30 裁定：采集索引改 `stateindex.OpenInMemory`（机械盘不落盘）⇒ `m.state.Instances`
+	// 重启后恒为空；而源本身由 `cursorRegistry`（带源配置的持久游标表）重建（见
+	// `sourcesFromCursorRegistry`）。于是「CP 重启后首次登记」看到的形态是
+	// 「`m.pipes[key]` 在、`m.state.Instances[uuid]` 不在」。
+	//
+	// 若不做下面这段，`exists=false` ⇒ 直接走完整登记分支 ⇒ `Register` 撞上已存在的 pipe
+	// 且配置（新规则 ⇔ 新路径）不同 ⇒ `source identity already bound to another configuration`
+	// ⇒ **重启后任何规则升级都必定失败**，CP 怎么重试都不会成功。
+	//
+	// 处理方式与「绑定在、但规则变了」全路：用**从游标表重建出来的配置**反向构出旧的生效载体，
+	// 再按下面的同一套判据决定「只刷新元数据」还是「detach 后重建」。
+	// 不得无条件下 detach：与既有配置逐字相同时，重建是纯代价（见 sameEffectiveLogLayout 的注释）。
+	if !exists {
+		if recovered, ok := m.bindingFromRebuiltSources(binding); ok {
+			existing, exists = recovered, true
+		}
+	}
 	if exists && existing != binding {
 		// FR-502：区分「源位置变化」与「采集规则升级」。
 		//
@@ -404,7 +423,57 @@ func (m *Manager) recalcInstanceSourceConfig(source SourceConfig) SourceConfig {
 			return source
 		}
 	}
+	// 重启后 `state.Instances` 恒为空（索引纯内存，2026-10-30 裁定）⇒ 上面的绑定查找找不到东西。
+	// 那时改从持久化的 `Path` 反推规则并重算 glob：这是 FR-504「按当前规则重算归档范围」
+	// 在重启路径上的**唯一**可用证据面。不这样做，规则表改完就是永久不生效。
+	if glob, changed := archiveGlobFromPersistedLayout(source); changed {
+		source.ArchiveGlob = glob
+	}
 	return source
+}
+
+// archiveGlobFromPersistedLayout 在**没有绑定可查**时，从持久化的源配置自身重算归档 glob（FR-504 的重启形态）。
+//
+// 为什么要它：`recalcInstanceSourceConfig` 靠 `m.state.Instances` 定位绑定，而索引已改纯内存
+// （2026-10-30 裁定）⇒ 重启后 `state.Instances` 恒为空 ⇒ FR-504 的「按当前规则重算」
+// **对已登记源永不生效**：规则表改完之后，旧 glob 会永久留在盘上（真机形态：采集轮继续按
+// 旧 glob 去发现归档，修正相当于没上线）。
+//
+// 可用的事实只有一件，但足够：源的 `Path` 是持久化的，而每条内置规则的 `LiveRelative` 是它自己
+// 独有的活动日志文件名。于是「Path 以哪条规则的 LiveRelative 结尾」就能唯一认定规则，
+// 再从该规则重算 glob——**不需要记得规则名，也不需要绑定**。
+//
+// 定位不到（路径被手工改过、或与任何内置规则都不匹配）一律不改：那是运维/CP 的显式选择，
+// 猜测只会把配好的东西改错。
+func archiveGlobFromPersistedLayout(source SourceConfig) (string, bool) {
+	if source.Mode != pipeline.ModeFilePrimary || source.Path == "" {
+		return "", false
+	}
+	// 按 LiveRelative 的长度倒序找：`logs/latest.log` 与 `latest.log` 这类嵌套关系下，
+	// 必须先试更长的那个，否则短的后缀会先命中、反推出错的工作目录。
+	rules := make([]Rule, 0, len(builtinRules))
+	for _, rule := range builtinRules {
+		rules = append(rules, rule)
+	}
+	sort.SliceStable(rules, func(i, j int) bool {
+		return len(rules[i].LiveRelative) > len(rules[j].LiveRelative)
+	})
+	for _, rule := range rules {
+		liveRel := filepath.FromSlash(rule.LiveRelative)
+		if !strings.HasSuffix(source.Path, string(filepath.Separator)+liveRel) {
+			continue
+		}
+		workDir := strings.TrimSuffix(source.Path, string(filepath.Separator)+liveRel)
+		want := ""
+		if rule.ArchiveGlob != "" {
+			want = filepath.Join(workDir, filepath.FromSlash(rule.ArchiveGlob))
+		}
+		if want == source.ArchiveGlob {
+			return "", false // 已经是最新口径，不必改
+		}
+		return want, true
+	}
+	return "", false
 }
 
 // rebindInstanceMetadata 只刷新实例绑定的元数据（规则名/路径覆盖这类**表达**），
@@ -542,6 +611,40 @@ func (m *Manager) instanceRuleChangeUndelivered(old InstanceBinding) (entries in
 		}
 	}
 	return entries, bytes, sourceKey
+}
+
+// bindingFromRebuiltSources 用「已在本进程重建的源配置」反向构出一个历史绑定（仅用于规则升级判定）。
+//
+// 背景：索引纯内存后重启拿不到 `state.Instances`，但源仍然活着（由游标表重建）。此刻若 CP 下发
+// 了新规则，必须能从**现有源的真实路径**反推出「上一次用的是哪套布局」，才能判断
+// 「只是规则名变了」还是「真的有载体切换」。
+//
+// 只从现有源逆推可得的三件事：TargetID（源 ID 的前缀）、Generation、Mode。
+// WorkDir 直接取新登记的（它决定日志目录，且调用方已校验过）——载体判定只需要
+// 「旧路径 vs 新路径」这一个事实，而旧路径在源配置里是现成的。
+// RuleKey/RelativePath 留空，使与 `sameEffectiveLogLayout` 的对比回退到「按路径判」：
+// 那正是重启后唯一可拿到的证据面。
+func (m *Manager) bindingFromRebuiltSources(binding InstanceBinding) (InstanceBinding, bool) {
+	keys := instanceSourceKeys(binding)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	found := false
+	for _, key := range keys {
+		if _, ok := m.pipes[key]; ok {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return InstanceBinding{}, false
+	}
+	// 源在、绑定不在 ⇒ 旧绑定只能靠源配置本身表达。把 RuleKey/RelativePath 留空，
+	// 并把 WorkDir 定为新值：下游的 `sameEffectiveLogLayout` 会重新解析两边的生效路径
+	// 并按「路径是否逐字相同」作答，与重启前是否有 RuleKey 无关。
+	recovered := binding
+	recovered.RuleKey = ""
+	recovered.RelativePath = ""
+	return recovered, true
 }
 
 // ruleChangeRollback 是「规则升级重建」失败时回到旧状态的快照（A6）。

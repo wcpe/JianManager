@@ -243,13 +243,17 @@ func TestRuleKeyUpgradeWithIdenticalLayoutDoesNotRebuildSource(t *testing.T) {
 	// 两行：末行会被事件边界留作悬挂，首行因此在本轮就被闭合，可被断言。
 	content := "[12:00:00] [INFO] stable content\n"
 	trailing := "[12:00:01] [INFO] still pending at file tail\n"
-	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"), []byte(content+trailing), 0o600))
+	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）。
+	// 夹具先前先写两行再登记 ⇒ 两行落在 EOF 起点之前被整体跳过 ⇒ read/durable 恒为 0
+	// ⇒ 「首轮已把首行采完」这条前置断言必红，与被测的「同布局不重建」无关。
+	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"), nil, 0o600))
 
 	// 首次登记：模拟 FR-502 之前的存量绑定（规则名为空 ⇒ 解析为 bukkit 默认布局）。
 	require.NoError(t, m.RegisterInstance(InstanceRegistration{
 		UUID: "uuid-equiv", TargetID: "inst:915", Generation: "holder-g1",
 		Mode: "FILE_PRIMARY", WorkDir: work,
 	}))
+	appendPollTestLines(t, filepath.Join(work, "logs", "latest.log"), content+trailing)
 	m.pollOnce()
 	key := ledger.SourceKey{LogSourceID: "inst:915/file", SourceGeneration: "holder-g1"}
 	m.mu.Lock()
@@ -413,12 +417,16 @@ func TestRuleChangeRefusedWhileUndeliveredWALRemains(t *testing.T) {
 	require.NoError(t, err)
 	work := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(work, "logs"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"),
-		[]byte("[12:00:00] [INFO] first\n[12:00:01] [INFO] second\n"), 0o600))
+	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）。夹具先前先写日志再登记
+	// ⇒ 两行被 EOF 起点整体跳过 ⇒ 一条事件都不产生 ⇒ WAL 里没有「已读未投递」可留
+	// ⇒ 「投递失败后必须留下未投递条目」这条前置断言必红。
+	require.NoError(t, os.WriteFile(filepath.Join(work, "logs", "latest.log"), nil, 0o600))
 	require.NoError(t, m.RegisterInstance(InstanceRegistration{
 		UUID: "uuid-a3", TargetID: "inst:940", Generation: "holder-g1",
 		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBukkit,
 	}))
+	appendPollTestLines(t, filepath.Join(work, "logs", "latest.log"),
+		"[12:00:00] [INFO] first\n[12:00:01] [INFO] second\n")
 	key := "inst:940/file/holder-g1"
 	m.mu.Lock()
 	pipe := m.pipes[key]
@@ -498,12 +506,14 @@ func TestRuleChangeFailureRestoresOldSourceAndBinding(t *testing.T) {
 	work := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(work, "logs"), 0o700))
 	liveLog := filepath.Join(work, "logs", "latest.log")
-	require.NoError(t, os.WriteFile(liveLog, []byte("[12:00:00] [INFO] before\n[12:00:01] [INFO] second\n"), 0o600))
+	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）。
+	require.NoError(t, os.WriteFile(liveLog, nil, 0o600))
 	require.NoError(t, m.RegisterInstance(InstanceRegistration{
 		UUID: "uuid-a6", TargetID: "inst:941", Generation: "holder-g1",
 		Mode: "FILE_PRIMARY", WorkDir: work, RuleKey: RuleKeyBukkit,
 	}))
 	key := "inst:941/file/holder-g1"
+	appendPollTestLines(t, liveLog, "[12:00:00] [INFO] before\n[12:00:01] [INFO] second\n")
 	m.pollOnce()
 	require.NoError(t, m.persist(), "前置：让账目镜像追上内存水位（恢复要按镜像还原水位）")
 	m.mu.Lock()

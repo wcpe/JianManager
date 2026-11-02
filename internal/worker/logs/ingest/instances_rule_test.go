@@ -181,12 +181,20 @@ func TestInstanceRuleBindingSurvivesRestart(t *testing.T) {
 	// 重启读回：规则名与路径覆盖必须随绑定往返。
 	restarted, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: catalog.New(cat.Journal())})
 	require.NoError(t, err)
-	binding, ok := restarted.state.Instances["uuid-restart-bungee"]
-	require.True(t, ok, "重启后应还原实例绑定")
-	require.Equal(t, RuleKeyBungee, binding.RuleKey,
-		"规则名必须随 binding 持久化——否则重启后 BungeeCord 采集退回错误路径")
-	require.Equal(t, "custom/bungee.log", binding.RelativePath,
-		"实例级路径覆盖必须随 binding 持久化")
+	// 2026-10-30 裁定：采集索引改**纯内存**（`stateindex.OpenInMemory`，机械盘不落盘）
+	// ⇒ `state.Instances` 重启后**必然为空**，本断言的前提已被那次裁定取消。
+	//
+	// 取代它的是「按规则重算生效路径」这条路（`recalcInstanceSourceConfig` +
+	// `TestStartupRecoveryRecalcsInstanceArchiveGlob`）：重启后不需要记得规则**名**，
+	// 只要能从绑定重算出同一个生效路径就够了。而绑定本身由 CP 重新下发
+	// （`RegisterInstance` 是幂等的），不依赖本进程残留。
+	//
+	// 顺带说明为什么不能靠 cursorRegistry 补：它只带 SourceConfig（路径/归档 glob），
+	// 不带 RuleKey/RelativePath——那两件只在 CP 的心跳里有。
+	_, ok := restarted.state.Instances["uuid-restart-bungee"]
+	require.False(t, ok,
+		"索引纯内存 ⇒ 重启后绑定为空（这是 2026-10-30 裁定的必然结果，不是缺陷）；"+
+			"规则名与路径覆盖由 CP 重新下发")
 }
 
 // TestRegisterInstanceRuleDoesNotAffectSourceIdentity 验证规则只影响物理路径发现，
