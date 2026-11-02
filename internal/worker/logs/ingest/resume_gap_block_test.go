@@ -32,8 +32,8 @@ func TestBacklogPausedSourceWithResolvableGapRevivesByFallback(t *testing.T) {
 	client, fixture := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	// 先建空文件：FILE_PRIMARY 源登记一律 StartAtEOF（裁定 D），内容必须在登记之后才产生。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:gapblock/file", SourceGeneration: "g1", Path: logPath,
@@ -49,6 +49,8 @@ func TestBacklogPausedSourceWithResolvableGapRevivesByFallback(t *testing.T) {
 	// 造出"现场形态"：投递失败 ⇒ 缺口 + **存量积压暂停**。
 	fixture.failWrites.Store(true)
 	pipe.WAL().SetLimits(1, 0)
+	appendPollTestLines(t, logPath, "[12:00:01] [Server thread/INFO]: first\n"+
+		"[12:00:02] [Server thread/INFO]: second\n")
 	m.pollOnce()
 	appendLogLine(t, logPath, "[12:00:03] [Server thread/INFO]: third\n")
 	m.pollOnce()

@@ -14,7 +14,7 @@ import (
 )
 
 // TestBacklogPausedSourceWithPublishedEvidenceGapRevivesByFallback（补 MUT1 支路的独立红证）：
-// **积压为零（entries=0 ⇒ 无存量可投递 ✗）时，缺口只能靠「已发布投影运行」的证据消解** ⇒ 兜底
+// **积压为零（entries=0 ⇒ 无存量可投递 ✗）时，缺口只能靠「字节确实已经到 VL」的证据消解** ⇒ 兜底
 // 必须接上这条支路，否则现场那种"积压清零仍不复活"的源永远没有第二条路 ✗✗。
 //
 // 现场形态对照：44 源暂停里 27 源 `source_wal entries=0` —— 没有可投递存量 ⇒ 投递证据支路空转 ✗，
@@ -27,8 +27,8 @@ func TestBacklogPausedSourceWithPublishedEvidenceGapRevivesByFallback(t *testing
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath,
-		[]byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
+	// 先建空文件：FILE_PRIMARY 源登记一律 StartAtEOF（裁定 D），内容必须在登记之后才产生。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:pubgap/file", SourceGeneration: "g1", Path: logPath,
@@ -42,13 +42,21 @@ func TestBacklogPausedSourceWithPublishedEvidenceGapRevivesByFallback(t *testing
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
 
-	// 前置一：先完成一次采集 ⇒ 已发布投影证据成立 ✓（与既有 published 用例同型）。
+	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）。
+	appendPollTestLines(t, logPath, "[12:00:01] [Server thread/INFO]: first\n"+
+		"[12:00:02] [Server thread/INFO]: second\n")
+	// 前置一：先完成一次采集 ⇒ 该源的字节确实已经到 VL（简化后不再有「已发布投影」这道中间态）。
 	m.pollOnce()
-	closed, complete := m.publishedClosedForSource(source, m.state.Sources[key])
-	require.True(t, complete, "夹具必须先有已发布投影")
-	require.Greater(t, closed, uint64(0))
+	// 2026-11-02 投递路径简化：本用例守「积压为零（无存量可投递）时，缺口只能靠**已落库证据**消解
+	// ⇒ 兜底环必须接上这条支路」。那段证据原先是「已发布投影的封闭水位」，投递不再发布投影后
+	// 换成同一件事的直接表达：**已认证的回收水位**（`contiguousCertifiedEnd` 只认真实 ACK +
+	// 逐字段认证的连续前缀）。考量的性质一字未变：缺口末端必须落在「真的已经到 VL」的那一段里。
+	entryAfterPoll := pipe.Ledger().Get(pipe.Key())
+	require.NotNil(t, entryAfterPoll)
+	closed := entryAfterPoll.Positions.Reclaim
+	require.Greater(t, closed, uint64(0), "夹具必须先有已落库证据（回收水位 > 0）")
 
-	// 前置二：一条**允许名单内**且被已发布水位覆盖的缺口（投递错误 ⇒ 允许按投影证据消解 ✓）。
+	// 前置二：一条**允许名单内**且被已落库水位覆盖的缺口（投递错误 ⇒ 允许按证据消解 ✓）。
 	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, closed,
 		ledger.GapReasonDeliverError, "transport down"))
 	// 前置三：积压类暂停（现场同型 ✓）+ **积压为零**（无存量可投递 ⇒ 排空支路无法补证据 ✓）。
