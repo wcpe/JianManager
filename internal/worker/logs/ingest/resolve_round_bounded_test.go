@@ -35,6 +35,18 @@ func TestResolveGapsRoundIsBoundedAndYields(t *testing.T) {
 	if raceEnabled {
 		t.Skip("race 构建下时间比例不可通约；本用例的两条性质分别由 TestPublishedClosedScanYieldsToCollection 与 TestPublishedClosedScanRespectsRoundBudget 覆盖 ✓")
 	}
+	// 2026-11-02 投递路径简化：本用例守「解算路径的**段读逐行聚合**必须有界且让路」。
+	// 那段聚合（`publishedClosedForSourceCtx` → `events.DayMaxEndCtx`）唯一的消费者就是
+	// 「已发布投影的封闭水位」，而投递不再发布投影 ⇒ 解算路径改走「VL 实际可见性」取证
+	// （`autoResolveGapsFromPublished`），段读聚合彻底不在解算链上 ⇒ 让路计数结构性为 0
+	// （实测 yields=0，与被测的「让路失效」无法区分）。
+	//
+	// 两条性质各自的活口仍在，且都由确定性计数用例覆盖：
+	//   - 让路：`TestPublishedClosedScanYieldsToCollection`；
+	//   - 轮内预算：`TestPublishedClosedScanRespectsRoundBudget`。
+	// 「解算有界完成」这条本身仍由本组其余三条（LockHold / DoesNotStall / BudgetResumable）守着。
+	t.Skip("投递路径简化（2026-11-02）：解算路径不再做段读聚合，逐行让路失去对象；" +
+		"让路与轮内预算分别由 TestPublishedClosedScanYieldsToCollection / …RespectsRoundBudget 覆盖")
 	client, _ := newFlakyVL(t)
 	root := t.TempDir()
 	logPath := filepath.Join(root, "latest.log")
@@ -42,7 +54,9 @@ func TestResolveGapsRoundIsBoundedAndYields(t *testing.T) {
 	for i := 0; i < 3000; i++ { // 让逐行聚合足够长，让路可观测 ✓
 		buf = append(buf, []byte(fmt.Sprintf("[12:%02d:%02d] [Server thread/INFO]: line %d\n", i/60%60, i%60, i))...)
 	}
-	require.NoError(t, os.WriteFile(logPath, buf, 0o644))
+	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）：夹具先前先写 3000 行再建
+	// Manager ⇒ 全部落在 EOF 起点之前被跳过 ⇒ 一条事件都不产生 ⇒ 解算没有可聚合的东西。
+	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
 	cat := catalog.New(catalog.NewMemJournal())
 	source := SourceConfig{
 		LogSourceID: "inst:resolveheavy/file", SourceGeneration: "g1", Path: logPath,
@@ -57,11 +71,17 @@ func TestResolveGapsRoundIsBoundedAndYields(t *testing.T) {
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	pipe := m.pipes[key]
 	require.NotNil(t, pipe)
+	appendPollTestLines(t, logPath, string(buf))
 
 	// 前置：一次采集让事件落库 ✓ + 造一条**允许名单内**的缺口（解算才会真的干活 ✓）。
 	m.pollOnce()
-	closed, complete := m.publishedClosedForSource(source, m.state.Sources[key])
-	require.True(t, complete)
+	// 2026-11-02 投递路径简化：投递不再调用 `publishSnapshot` ⇒ `publishedClosedForSource` 恒不完整。
+	// 缺口的右端改用**已认证的回收水位**：它是解算真正会去聚合的那个前缀的上界，
+	// 语义与旧口径一致（只覆盖「真的已经到 VL」的那一段），不会把未投递字节算进缺口。
+	entry := pipe.Ledger().Get(pipe.Key())
+	require.NotNil(t, entry)
+	closed := entry.Positions.Reclaim
+	require.Greater(t, closed, uint64(0), "夹具前提：一次采集必须真的产生并投递事件")
 	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, closed, ledger.GapReasonDeliverError, "transport down"))
 
 	// 让路 + 轮内预算（切片取小 ⇒ 确定性见证 ✓；预算压小 ⇒ 截断必然发生 ✓）。

@@ -107,12 +107,10 @@ func newBusyIngestFixture(t *testing.T, sources, linesPerSource int, insertDelay
 		dir := filepath.Join(root, fmt.Sprintf("busy-%d", i))
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		logPath := filepath.Join(dir, "latest.log")
-		var body strings.Builder
-		for line := 0; line < linesPerSource; line++ {
-			fmt.Fprintf(&body, "[12:%02d:%02d] [Server thread/INFO]: backlog %d line %d\n",
-				line/60, line%60, i, line)
-		}
-		require.NoError(t, os.WriteFile(logPath, []byte(body.String()), 0o600))
+		// **先建空文件**：FILE_PRIMARY 源登记一律 `StartAtEOF: true`（生产裁定 D：新源不回头吃
+		// 别人的历史）。夹具先前先把 backlog 行写满再建 Manager ⇒ 全部落在 EOF 起点之前被跳过
+		// ⇒ 一条事件都不产生 ⇒ 水位恒 0、预热永远不就绪。
+		require.NoError(t, os.WriteFile(logPath, nil, 0o600))
 		configs = append(configs, SourceConfig{
 			LogSourceID: fmt.Sprintf("busy:%d", i), SourceGeneration: "g1", Path: logPath,
 			Mode: pipeline.ModeFilePrimary, StorageNamespace: fmt.Sprintf("busy:%d", i), UTCDay: day,
@@ -124,6 +122,10 @@ func newBusyIngestFixture(t *testing.T, sources, linesPerSource int, insertDelay
 		VerificationTimeout: 500 * time.Millisecond,
 	})
 	require.NoError(t, err)
+	// 登记完成后才产生日志：正是生产里「源刚被绑定、随后开始播日志」的形状。
+	for i, cfg := range configs {
+		appendPollTestLines(t, cfg.Path, busySourceBody(i, linesPerSource))
+	}
 	return &busyIngestFixture{manager: m, fixture: fixture, root: root}
 }
 
@@ -442,4 +444,14 @@ func TestRegisterInstanceLatencyBudgetUnderSaturation(t *testing.T) {
 	// 新实现只等短临界区（worst 为毫秒级）。取 1/4 作为判据留出 CI 抖动余量。
 	require.Less(t, worst, roundElapsed/4,
 		"登记耗时与整轮采集同级，说明仍在等待长临界区：登记=%s 单轮=%s", worst, roundElapsed)
+}
+
+// busySourceBody 生成一个忙期源的通知正文（行数与格式与原夹具逐字一致）。
+func busySourceBody(i, lines int) string {
+	var body strings.Builder
+	for line := 0; line < lines; line++ {
+		fmt.Fprintf(&body, "[12:%02d:%02d] [Server thread/INFO]: backlog %d line %d\n",
+			line/60, line%60, i, line)
+	}
+	return body.String()
 }

@@ -99,17 +99,24 @@ func sortedSourceKeys(m *Manager) []string {
 }
 
 // projectionCovered 报告该源当前是否「已发布投影完整」（即整节点解算的准入判据之一）。
+// projectionCovered 报告「这批新行已经真的离开本地职责」——简化投递路径后的等价判据。
+//
+// 2026-11-02：原实现问的是「已发布投影是否完整」，而投递不再调用 `publishSnapshot`
+// ⇒ 那个判据对任何源都恒为假（实测本组四条全部卡在预热期限）。简化后同一件事由水位直接表达：
+// `Reclaim >= Durable > 0` 意味着这段字节已拿到 VL 的请求完成回执并被允许回收
+// （`contiguousCertifiedEnd` 只认真实 ACK 且逐字段认证的连续前缀）。
 func projectionCovered(m *Manager, key string) bool {
 	m.mu.Lock()
 	pipe, ok := m.pipes[key]
-	source := m.sources[key]
-	saved := m.state.Sources[key]
 	m.mu.Unlock()
 	if !ok || pipe == nil {
 		return false
 	}
-	_, complete := m.publishedClosedForSource(source, saved)
-	return complete
+	entry := pipe.Ledger().Get(pipe.Key())
+	if entry == nil {
+		return false
+	}
+	return entry.Positions.Durable > 0 && entry.Positions.Reclaim >= entry.Positions.Durable
 }
 
 // resolveAdmissionReady 报告该源是否已满足 resolveOneSourceGaps 的**完整**准入前提：
@@ -122,21 +129,22 @@ func projectionCovered(m *Manager, key string) bool {
 func resolveAdmissionReady(m *Manager, key string) bool {
 	m.mu.Lock()
 	pipe, ok := m.pipes[key]
-	source := m.sources[key]
-	saved := m.state.Sources[key]
 	m.mu.Unlock()
 	if !ok || pipe == nil {
 		return false
 	}
-	closed, complete := m.publishedClosedForSource(source, saved)
-	if !complete {
-		return false
-	}
+	// 2026-11-02 投递路径简化：原先这里先要求 `publishedClosedForSource` 给出**完整已发布投影**，
+	// 再要求它覆盖到 Durable。而投递不再调用 `publishSnapshot` ⇒ 那个判据对任何源都恒为假
+	// ⇒ 预热循环永远等不到就绪（实测：20s 期限耗尽，未就绪源始终是全部）。
+	//
+	// 准入要看的是「数据真的已经在 VL 里」，简化后同一件事由收盘判据直接承担：
+	// `Reclaim` 只能在「真实 ACK 且逐字段认证的连续前缀」上推进（`contiguousCertifiedEnd`），
+	// 因此 `Reclaim >= Durable` 就意味着这段字节已拿到 VL 的请求完成回执。
 	entry := pipe.Ledger().Get(pipe.Key())
 	if entry == nil {
 		return false
 	}
-	return closed >= entry.Positions.Durable && entry.Positions.Reclaim >= entry.Positions.Durable
+	return entry.Positions.Durable > 0 && entry.Positions.Reclaim >= entry.Positions.Durable
 }
 
 // logResolveAdmissionState 只读记录真实前置，区分未发布、未确认投递与回收停滞。
