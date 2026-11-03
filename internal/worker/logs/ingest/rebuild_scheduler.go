@@ -963,6 +963,15 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 			pending := m.state.Sources[key].PublicationPending
 			m.mu.Unlock()
 			if pending {
+				// 2026-11-02：`confirmWrittenAttempt` 成功（handled=true 且 err=nil）意味着
+				// 「这批字节在 VL 里确实可见」——那就是发布确认本身已经过了，pending 应当收口。
+				//
+				// 原先这里只 `return Pending: true`，把收口寄望于后续的只读确认链；而那条链
+				// 长在已删的写后逐字段校验上 ⇒ pending 永不消退 ⇒ 就绪面恒 `publication_pending`
+				// ⇒ cutover 闸门焊死，且没有任何数据面动作能让它恢复（实测）。
+				if m.clearPublicationPendingIfSettled(key, m.currentProjectionGeneration(key)) {
+					slog.Info("发布确认取证通过：发布待定已收口", "source", key)
+				}
 				return rebuildOutcome{Pending: true}
 			}
 			return rebuildOutcome{Days: append([]string(nil), req.days...), ConfirmedOnly: true}
@@ -1004,6 +1013,11 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		if confirmed {
 			// 已完整可见：**不做任何重建**（零写入）。这不是「跳过校验」，而是校验已经通过
 			// （判据来自既有 `tryConfirmPendingPublicationCtx` 的内容级取证）。
+			//
+			// 2026-11-02：**零写入收尾也必须清 pending**。这个分支原本由调用方在拿到
+			// `ConfirmedOnly` 后自己收口，而那条收口长在已删的发布确认链上。不在这里清，
+			// pending 就永无消退之日 ⇒ 就绪面恒 `publication_pending`（实测）。
+			m.clearPublicationPendingIfSettled(key, m.currentProjectionGeneration(key))
 			return rebuildOutcome{Days: append([]string(nil), req.days...), ConfirmedOnly: true}
 		}
 		// **重建面收敛为「实测缺失天」**（而不是调用方登记时的全部天）：
@@ -1162,10 +1176,18 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 	}
 	// 副本复用只完成本轮目标天的Catalog发布，不等于源级剩余责任已由完整证据收口。
 	// PP仍在时如实交既有按源定时器续做只读确认；不能假Completed或提前消解/回收，也不裸清PP。
-	if needReconfirmPending(m, key) {
-		out.Pending = true
-		return out
-	}
+	//
+	// 2026-11-02 修正：这条「PP 仍在 ⇒ 不完成」原先靠**后续的只读确认**去收口（
+	// `tryConfirmPendingPublication`）。而投递路径简化后，`pending` 唯一的置位点就是本函数的
+	// 「切片预算用尽」（上面的 `markPublicationPending`）——它表达的是「这次没跑完，剩下的留下轮」，
+	// 而不是「写得对不对还不确定」。而能走到这里就意呡着**本次登记的全部天都已写入并逐批成功**。
+	//
+	// 如果不在这里收口，就形成闭环：pending 为真 ⇒ 不标记完成 ⇒ 那只读确认又依赖已被删掉的
+	// 逐字段校验链 ⇒ 永远确认不出结果 ⇒ pending 永不消退 ⇒ 就绪面永久 `publication_pending`
+	// （实测：`TestStartupRecoveryDoesNotBlockNew`）。
+	//
+	// 安全方向不变：仍**不**假 Completed（`out.Days` 只含真实写完的天），仍**不**提前消解缺口、
+	// 仍**不**推进回收——这些由下面的整窗判据与 `releaseRecovery` 各自把关。
 	// 整窗完成（本次请求覆盖的全部天都已发布）：与既有重发路径同一出口——
 	// 消解被本次写入面覆盖的缺口、推进回收责任。**未完成时绝不走到这里**
 	// （releaseRecovery 要求全窗口内容级保证，见其注释）。
@@ -1216,7 +1238,39 @@ func (m *Manager) rebuildDaysInner(ctx context.Context, req *rebuildRequest, yie
 		// best-effort：数据已落库这一事实不受影响，下一轮采集路径会再试。
 		slog.Warn("投影重建后推进回收责任失败（下轮重试）", "source", key, "error", err)
 	}
+	// **重建整窗完成 ⇒ 清掉 `PublicationPending`**（2026-11-02 修）。
+	//
+	// 为什么必须在这里清：pending 由上面「预算用尽」分支置位（见 `markPublicationPending`），
+	// 它原本由**写后逐字段校验 & 发布确认**链负责收口。而逐字段校验已经不在投递路径上
+	// （2026-11-02 投递路径简化）⇒ 那两个收口点都变成不可达 ⇒ **pending 一旦置位就永不消退**
+	// ⇒ `CutoverReadiness` 永久报 `publication_pending` ⇒ cutover 闸门焊死（实测：
+	// `TestStartupRecoveryDoesNotBlockNew` 等三条用例卡在这里）。
+	//
+	// 安全性：能走到这里就意呡着「本次请求覆盖的**全部天都已写入并逐批成功**」
+	// （上面任何一天失败/跳过都会提前 return，不得到达此处）。状态变更仍走同一套锁纪律
+	// （`clearPublicationPendingBeyondHotRetention` 里的代次/在飞校验一字不动）。
+	if m.clearPublicationPendingIfSettled(key, generation) {
+		slog.Info("投影重建整窗完成：发布待定已收口", "source", key, "days", out.Days)
+	}
 	return out
+}
+
+// clearPublicationPendingIfSettled 在本代次已写完且无在飞写入时清掉 `PublicationPending`。
+//
+// 锁纪律与 `markPublicationPending` / `clearPublicationPendingBeyondHotRetention` 逐条同源：
+// 只在「代次仍是本次这次」且「无在飞写入」时才写，避免把别人的新状态倒退成「不确定」。
+func (m *Manager) clearPublicationPendingIfSettled(key, generation string) bool {
+	m.mu.Lock()
+	cur := m.state.Sources[key]
+	if cur.ProjectionGeneration != generation || m.publicationInflight[key] != 0 || !cur.PublicationPending {
+		m.mu.Unlock()
+		return false
+	}
+	cur.PublicationPending = false
+	m.state.Sources[key] = cur
+	m.mu.Unlock()
+	m.requestPersist()
+	return true
 }
 
 // confirmPendingOutsideLine 在**重建 worker goroutine 上**做一次「发布确认」只读取证。

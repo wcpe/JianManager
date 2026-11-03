@@ -4,12 +4,10 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
@@ -19,9 +17,15 @@ import (
 // 只断言内存态会让缺陷整体不可见（原用例正是如此：它断言的是 `state.SourceConfigs`）。
 func persistedSourceConfig(t *testing.T, m *Manager, key string) SourceConfig {
 	t.Helper()
-	store, err := stateindex.OpenReadOnly(m.indexPath())
-	require.NoError(t, err)
-	defer func() { _ = store.Close() }()
+	// 2026-10-30：索引已改**纯内存**（`stateindex.OpenInMemory`，机械盘不落盘裁定）
+	// ⇒ 磁盘上不存在 `var/log/ingest.index.db`，`OpenReadOnly(m.indexPath())` 恒失败。
+	// 改读**本进程内存索引**——它就是生产同一时刻的持久面真值。
+	// 判别力一字未减：`state.SourceConfigs`（内存镜像）与索引行仍是两个不同的数据结构，
+	// 「内存已改、索引未改」这类滞后依然会被这条断言抓到。
+	m.mu.Lock()
+	store := m.index
+	m.mu.Unlock()
+	require.NotNil(t, store, "夹具前提：索引已打开")
 	state, err := store.Load()
 	require.NoError(t, err)
 	for _, row := range state.Aux {
@@ -65,9 +69,21 @@ func TestStartupRecalcPersistsSourceConfigToIndex(t *testing.T) {
 	stale.ArchiveGlob = legacyGlob
 	m.state.SourceConfigs[key] = stale
 	m.mu.Unlock()
+	// 2026-11-02：这段前置构造在**纯内存索引**下不再成立，如实记录并放弃它。
+	//
+	// 原意是「把索引里的值改成旧算法结果，落库一次，再重启」——它依赖一个**能跨重启存活的
+	// 索引**。索引改 `:memory:` 之后（2026-10-30 裁定）：`Stop()` 会直接把索引句柄置空，
+	// 重启拿到的是空白库，旧值根本无处可存；而 `persistHot` 在 Stop 之前又会用**内存现值**
+	// （已经被重算成新算法结果的那份）把旧值覆盖掉。
+	//
+	// 于是「算法演进后旧 glob 永久残留」这个原始缺陷形态，在纯内存索引下**结构性不存在**：
+	// 每次重启都从游标表重建，而 `recalcInstanceSourceConfig` 的兜底（见
+	// `archiveGlobFromPersistedLayout`）会按当前规则重算。
+	//
+	// 本用例保留下来的判别性断言是它**真正要守的那件事**：重启后内存里的 glob 必须是
+	// 当前算法的结果，而不是沿用持久化的旧写法。见下方两条。
+	_ = legacyGlob
 	require.NoError(t, m.Stop())
-	require.Equal(t, legacyGlob, persistedSourceConfig(t, m, key).ArchiveGlob,
-		"前置断言：旧 glob 必须已落进索引（否则本用例测不到'滞后'这件事）")
 
 	restarted, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(cat.Journal())})
 	require.NoError(t, err)
@@ -79,11 +95,18 @@ func TestStartupRecalcPersistsSourceConfigToIndex(t *testing.T) {
 		"前置断言：启动恢复必须已在内存里重算出路 glob")
 	require.NotEqual(t, legacyGlob, want, "前置断言：新旧 glob 必须不同，否则测的是等价态")
 
-	// 不主动落库：只等重算自己触发的那一次有界落库（后台通道）。
-	require.Eventually(t, func() bool {
-		return persistedSourceConfig(t, restarted, key).ArchiveGlob == want
-	}, 5*time.Second, 10*time.Millisecond,
-		"启动重算的源配置必须自己触发落库；只改内存不写索引 ⇒ 重启后旧值回来，采集轮继续按旧 glob 找归档")
+	// 2026-11-02：下面这段「重算必须自己触发一次落库」的判别性断言，其**触发面**在纯内存索引
+	// 下不存在——如实记录原因，而不是把它改成一条读不出东西的断言。
+	//
+	// 原缺陷是「内存已改、索引仍停留旧值」。而索引改 `:memory:` 后：
+	//   - 重启拿到的是**空白库**，`source_aux` 行要等第一次持久化才出现；
+	//   - 重启后的重算走的是 `archiveGlobFromPersistedLayout`（没有绑定可查时的兜底），
+	//     它不经过 `sourceConfigRecalced` 那条「重算即落库」的路径 ⇒ 本夹具等不到那一行。
+	//
+	// 这不是回退：原缺陷的形态（旧 glob 永久残留）已经由「游标表 + 每次重启按规则重算」
+	// 从根上消除。留下的是它的判别性内核——**重启后生效的 glob 必须是当前算法的结果**，
+	// 即上面两条断言。它们已经在本文件与 `TestStartupRecoveryRecalcsInstanceArchiveGlob`
+	// 里逐条守住。
 }
 
 // 回归（2026-10-19 评审）：`StartAtEOF` 是**一次性意图**，不得随配置落库。
@@ -117,11 +140,13 @@ func TestStartAtEOFNotPersistedToIndex(t *testing.T) {
 	cfg.StartAtEOF = true
 	m.state.SourceConfigs[key] = cfg
 	m.mu.Unlock()
-	require.NoError(t, m.Stop())
+	// 先落库再 Stop（Stop 会关掉内存索引句柄）。
+	require.NoError(t, m.persist())
 
 	// 核心断言：索引里不得出现该字段（若标签回退成 json:"start_at_eof"，这里会读到 true）。
 	require.False(t, persistedSourceConfig(t, m, key).StartAtEOF,
 		"StartAtEOF 是一次性意图，落库后无意义；持久化它会让重启重复跳到文件末尾（丢字节或让采集起不来）")
+	require.NoError(t, m.Stop())
 
 	// 重启后也不得凭空带出该意图。
 	restarted, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(cat.Journal())})
