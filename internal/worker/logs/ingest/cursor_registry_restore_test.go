@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -116,32 +115,19 @@ func eventRangeCounts(t *testing.T, m *Manager, key string) map[eventRange]int {
 	return out
 }
 
-// uniqueSegmentRoot 生成一个**进程内与跨运行都唯一**的事件段目录名，并登记清理。
+// uniqueSegmentRoot 生成一个**进程内与跨运行都唯一**的数据根名。
 //
-// 为什么要它：eventstore.MemoryRoot(filepath.Base(opts.Root)) 把事件段放到 /dev/shm 下，
-// 而这个目录**不在** t.TempDir() 的清理范围内。t.TempDir() 的 basename 恒为 "001"，多个用例
-// 于是共用一个段根；即使自己包一层，固定名字也会跨运行残留。
-// 两者都会让「按事件条数做断言」的用例变得时好时坏。
+// 事件段已删除（2026-11-03），这里只剩「给数据根起唯一名字」的作用：t.TempDir() 的 basename
+// 恒为 "001"，若直接用它当数据根名，跨用例/跨运行的残留会让按条数断言的用例时好时坏。
 func uniqueSegmentRoot(t *testing.T, prefix string) string {
 	t.Helper()
-	name := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
-	t.Cleanup(func() { _ = os.RemoveAll(eventstore.MemoryRoot(name)) })
-	return name
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
 }
 
-// freshSegmentRoot 返回一个**本用例独占且已清空**的数据根，并返回它的段根名。
-//
-// 两个问题一起解：
-//  1. `eventstore.MemoryRoot` 只用 `filepath.Base(root)` 做 tmpfs 目录名，而 `t.TempDir()`
-//     的 basename 跨运行稳定为 `001` ⇒ 不同用例会共用同一个 /dev/shm 段根（CONVENTIONS §2）；
-//  2. 上一轮运行的残留不会自己消失 ⇒ 必须建 Manager **之前**先 RemoveAll 一次。
-//
-// 返回的 root 是 `<t.TempDir()>/<唯一名>`：段根按唯一名隔离（解决 1），
-// 数据根自身仍然由 t.TempDir 管理生命周期。
+// freshSegmentRoot 返回一个**本用例独占**的数据根（已被 t.TempDir 管理生命周期）。
 func freshSegmentRoot(t *testing.T, prefix string) (root string, segmentName string) {
 	t.Helper()
 	name := uniqueSegmentRoot(t, prefix)
-	require.NoError(t, os.RemoveAll(eventstore.MemoryRoot(name)))
 	root = filepath.Join(t.TempDir(), name)
 	require.NoError(t, os.MkdirAll(root, 0o755))
 	return root, name

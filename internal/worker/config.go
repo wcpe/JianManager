@@ -70,7 +70,6 @@ type Config struct {
 	LogSpool   LogSpoolConfig    `mapstructure:"log_spool"`
 	LogSources []LogSourceConfig `mapstructure:"log_sources"`
 	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
-	LogReconcile LogReconcileConfig `mapstructure:"log_reconcile"`
 	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
 	LogIndex   LogIndexConfig   `mapstructure:"log_index"`
 	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
@@ -219,66 +218,6 @@ func (c OrphanScanConfig) ScanInterval() time.Duration {
 // 注意：本类型的零值 AutoAdopt=false 无法与「显式关闭」区分，故装配点须用本方法而非直接读字段。
 func (c OrphanScanConfig) AutoAdoptEnabled() bool {
 	return c.AutoAdopt
-}
-
-// LogReconcileConfig 启动增量对账（FR-497）配置面，键为 `log_reconcile.*`。
-//
-// 默认口径的单一真源在 ingest 包（ingest.DefaultReconcileConfig：默认启用，并发 4、单源总超时
-// 30s、单次 count 查询 10s）；本类型只做 YAML → ingest.Options 的搬运，非法/非正值一律回退该
-// 默认——配置误写不得让对账退化为无超时或高并发，关闭只能走显式 `log_reconcile.enabled: false`
-// （该源回退整窗重发）。见 docs/specs/log-startup-reconcile/spec.md §5。
-type LogReconcileConfig struct {
-	// Enabled 启动增量对账开关（默认 true）。false = 放弃增量裁剪、该源回退整窗重发（应急逃生口）。
-	Enabled bool `mapstructure:"enabled"`
-	// Concurrency 并发对账的源数上限（默认 4）；非正回退默认，超上限时由 ingest 收敛到 32。
-	Concurrency int `mapstructure:"concurrency"`
-	// Timeout 单源对账总超时（duration 字符串，默认 30s）；非法/非正回退默认。
-	Timeout string `mapstructure:"timeout"`
-	// QueryTimeout 单天 count 查询超时（duration 字符串，默认 10s）；非法/非正回退默认。
-	QueryTimeout string `mapstructure:"query_timeout"`
-	// Budget 整批对账的总预算（duration 字符串，默认 60s）；非法/非正回退默认。
-	//
-	// 为什么需要它（复审 P2-10）：对账在 ingest.New 里**同步**执行，而单源超时 30s × 60 源 /
-	// 并发 4 ≈ 7.5 分钟的最坏情况会把启动拖成分钟级。预算到期即取消在途查询，未完成的源
-	// 回退整窗重发（只影响「重发多少」，不影响「要不要重发」）。
-	Budget string `mapstructure:"budget"`
-	// VLReadyTimeout 对账/重发前的 VL 就绪探针超时（duration 字符串，默认 2s）；非法/非正回退默认。
-	VLReadyTimeout string `mapstructure:"vl_ready_timeout"`
-	// VLReadyWait 启动恢复**等待** VL 就绪的上界（duration 字符串，默认 90s）；非法/非正回退默认。
-	// 超出即记原因并交给运行期常驻对账重试（不把外部条件当成「源恢复失败」）。
-	VLReadyWait string `mapstructure:"vl_ready_wait"`
-	// ReplayMaxDays / ReplayMaxDuration：整窗重发的切片预算（默认 1 天 / 90s）；非正回退默认。
-	ReplayMaxDays     int    `mapstructure:"replay_max_days"`
-	ReplayMaxDuration string `mapstructure:"replay_max_duration"`
-	// Yield / SliceEvents：**对账 CPU 让路**（每 slice_events 条事件 Sleep(yield) 交还 P）。
-	//
-	// 为什么需要（2026-10-03 现场）：canonicalDayCounts→groupEventsByUTCDay 对整源全量分组，
-	// 与采集轮**抢核** ⇒ 采集轮"无锁无等待却推不动" ✗。默认 5ms / 4096 条（可忽略的额外延迟，
-	// 但每个切片都交还调度器）；配 0 或负数回退默认 ✓。
-	Yield       string `mapstructure:"yield"`
-	SliceEvents int    `mapstructure:"slice_events"`
-}
-
-// ReconcileConfig 把本地配置面收敛为 ingest 的对账配置（非法/非正一律回退归一化默认）。
-//
-// 零值语义：Enabled=false 的零值无法与「显式关闭」区分，故 Load 经 viper SetDefault 写入默认
-// true（与 orphan_scan.auto_adopt 同口径）；手工构造 Config{} 的调用方须自行置位。
-func (c LogReconcileConfig) ReconcileConfig() ingest.ReconcileConfig {
-	out := ingest.DefaultReconcileConfig()
-	out.Enabled = c.Enabled
-	if c.Concurrency > 0 {
-		out.Concurrency = c.Concurrency
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.Timeout)); err == nil && d > 0 {
-		out.Timeout = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.QueryTimeout)); err == nil && d > 0 {
-		out.QueryTimeout = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.Budget)); err == nil && d > 0 {
-		out.Budget = d
-	}
-	return out
 }
 
 // LogIndexConfig 采集索引（FR-496）的配置面，键为 `log_index.*`。
@@ -467,14 +406,6 @@ func (c LogIndexConfig) IndexPrune() ledger.DeliveryBatchPruneConfig {
 
 // CommitBudget 返回可直接交给 ingest.Options.IndexCommit 的提交单元预算。
 func (c LogIndexConfig) CommitBudget() stateindex.CommitBudget { return c.Persist.CommitBudget() }
-
-// EventStorePrune 返回可直接交给 ingest.Options.EventStorePrune 的事件段回收配置。
-//
-// 归一化在 ingest 侧也做一次（eventStorePruneConfigOf），这里只做透传：
-// 越界的小时数不会因为「配置层没管」而变成高频调度。
-func (c LogRetentionEventStorePruneConfig) EventStorePrune() ingest.EventStorePruneConfig {
-	return ingest.EventStorePruneConfig{Enabled: c.Enabled, SweepAtHour: c.SweepAtHour}.Normalized()
-}
 
 // RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
 type RecoverConfig struct {
@@ -1255,8 +1186,6 @@ type LogRetentionConfig struct {
 	Trigger LogRetentionTriggerConfig `mapstructure:"trigger"`
 	// Migration 是启层时必须明确声明的有限复制校验与故障恢复 SLA。
 	Migration LogRetentionMigrationConfig `mapstructure:"migration"`
-	// EventStorePrune 是「事件段回收」的配置面（键 `log_retention.eventstore_prune.*`）。
-	EventStorePrune LogRetentionEventStorePruneConfig `mapstructure:"eventstore_prune"`
 	// ArchiveCopy 是「导出为独立副本」的配置面（键 `log_retention.archive_copy.*`）。
 	ArchiveCopy LogRetentionArchiveCopyConfig `mapstructure:"archive_copy"`
 	// ArchiveObjectRetention 是「归档对象自身的回收」的配置面
@@ -1396,32 +1325,6 @@ func (c LogArchiveInstanceGzAdoptConfig) Normalized() LogArchiveInstanceGzAdoptC
 		out.SweepAtHour = 4
 	}
 	return out
-}
-
-// LogRetentionEventStorePruneConfig 是事件段回收（eventstore.Prune）的自动接线配置。
-//
-// 它与 VL 的保留期（hot_retention / cold_retention）是**两条独立的删除路径**：
-//   - VL 保留期删的是「查询面上的日分区」（原档的索引副本）；
-//   - 本项回收的是「平台的暂存段」（投递完成前的重放来源）。
-//
-// 为什么要独立开关：本项回收的是事件段的**唯一副本**，属删除类能力，用户护栏要求默认全关；
-// 而 VL 保留期（`log_retention.enabled`）默认只搬运不删除，两者语义与风险量级不同，
-// 不能共用一个开关——否则「想关段回收」会被迫连 VL 冷热分层一起关掉。
-//
-// 水位判据（安全论证见 internal/worker/logs/ingest/eventstore_prune.go 文件头）：
-//
-//	watermark = min(Positions.Reclaim, 逐字段校验覆盖的连续前缀末端)
-//
-// 注意**不是** Positions.Delivery：它的语义是「所有字节均有请求结果的连续前缀末端」，
-// 请求失败同样会把推上去，用它当水位会删掉仍需重放的事件正文。
-type LogRetentionEventStorePruneConfig struct {
-	// Enabled 是否允许自动回收事件段（默认 false）。关闭时连水位都不计算。
-	Enabled bool `mapstructure:"enabled"`
-	// SweepAtHour 每日触发的本地整点（0..23，默认 3）；越界回退默认。
-	//
-	// 写成 int 而不是「字符串 + 空 = 默认」：本键的 0 是合法值（午夜），没有可用哨兵，
-	// 因此沿用 LogRetentionTriggerConfig.SweepAtHour 的约定——未配置时由 SetDefault 注入默认值。
-	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
 
 // LogRetentionMigrationConfig 声明搬运所需余量，不代表无限失败下的最后副本保证。
@@ -2014,42 +1917,6 @@ func (c *Config) IngestResolveGapsBudget() (*ingest.ResolveGapsBudget, error) {
 	return budget, nil
 }
 
-// ReconcileReplayTuning 把 `log_reconcile.*` 下「重发的外部条件与切片」旋钮收敛为 ingest 的配置面。
-//
-// 四个键：
-//   - vl_ready_timeout：对账/重发前的 VL ready 探针超时（默认 2s）——现场触发因就是「worker 与 VL
-//     同步重启、对账抢跑」，探针把「必然失败的整窗重发」变成「等下一轮」；
-//   - vl_ready_wait：启动恢复等待 VL 就绪的上界（默认 90s）；超出即交给运行期常驻对账重试；
-//   - replay_max_days / replay_max_duration：整窗重发的切片预算（默认 1 天 / 90s）。
-//
-// 口径：未配置/非法一律回退默认（这几个旋钮回退默认永远是安全方向：等一等、少发一点，都不会丢
-// 数据）；配成 0 或负数同样视为「用默认」。
-func (c *Config) ReconcileReplayTuning() ingest.ReplayTuning {
-	tuning := ingest.ReplayTuning{}
-	if c == nil {
-		return tuning
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.VLReadyTimeout)); err == nil && d > 0 {
-		tuning.VLReadyProbeTimeout = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.VLReadyWait)); err == nil && d > 0 {
-		tuning.VLReadyWait = d
-	}
-	if c.LogReconcile.ReplayMaxDays > 0 {
-		tuning.Budget.MaxDays = c.LogReconcile.ReplayMaxDays
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.ReplayMaxDuration)); err == nil && d > 0 {
-		tuning.Budget.MaxDuration = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.Yield)); err == nil && d > 0 {
-		tuning.ReconcileYield = d
-	}
-	if c.LogReconcile.SliceEvents > 0 {
-		tuning.ReconcileSliceEvents = c.LogReconcile.SliceEvents
-	}
-	return tuning
-}
-
 // ResumeBatchTuning 返回兜底环每轮容量（键 log_index.resume_batch_per_round；非正 ⇒ 默认 8 ✓）。
 func (c *Config) ResumeBatchTuning() int {
 	if c == nil || c.LogIndex.ResumeBatchPerRound <= 0 {
@@ -2183,8 +2050,6 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_retention.migration.copy_verify_budget", "")
 	v.SetDefault("log_retention.migration.recovery_budget", "")
 	// 事件段回收：默认关闭（删除类能力，用户护栏要求默认全关）+ 每日本地 3 点。
-	v.SetDefault("log_retention.eventstore_prune.enabled", false)
-	v.SetDefault("log_retention.eventstore_prune.sweep_at_hour", 3)
 	// 导出归档（硬规则次选路径）：默认关闭，且默认不给根目录——没有目的地就不该有这条路径。
 	v.SetDefault("log_retention.archive_copy.enabled", false)
 	// 默认 local：把默认值定成 s3 会让「本地目录已够用」的部署凭空多出一套凭证要求。
@@ -2225,15 +2090,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
 	v.SetDefault("log_capacity.pause_at_percent", 90.0)
 	v.SetDefault("log_sources", []LogSourceConfig{})
-	// 启动增量对账（FR-497）：默认值直接取自 ingest 的单一真源，不在本地重复字面量。
-	reconcileDefaults := ingest.DefaultReconcileConfig()
-	v.SetDefault("log_reconcile.enabled", reconcileDefaults.Enabled)
-	v.SetDefault("log_reconcile.concurrency", reconcileDefaults.Concurrency)
-	v.SetDefault("log_reconcile.timeout", reconcileDefaults.Timeout.String())
-	v.SetDefault("log_reconcile.query_timeout", reconcileDefaults.QueryTimeout.String())
-	v.SetDefault("log_reconcile.budget", reconcileDefaults.Budget.String())
-	v.SetDefault("log_reconcile.yield", "5ms")
-	v.SetDefault("log_reconcile.slice_events", 4096)
+	// 增量对账（FR-497）已随重建/重放链一并删除：配置键保留但不再产生任何行为。
 	// 采集索引（FR-496）：历史投递批次裁剪 + 持久化提交单元预算。默认值同样取自实现包的单一真源。
 	indexPruneDefaults := ledger.DefaultDeliveryBatchPruneConfig()
 	indexCommitDefaults := stateindex.DefaultCommitBudget()

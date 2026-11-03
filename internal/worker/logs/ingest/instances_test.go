@@ -50,8 +50,14 @@ func TestInstanceStdioPersistsRawBeforePollingAndRestoresBindings(t *testing.T) 
 	}))
 	require.NoError(t, restarted.AppendInstanceOutput("uuid-1", "stdout", []byte("after restart\n")))
 	restarted.pollOnce()
-	require.Len(t, durableEvents(t, restarted, "inst:1/stdout/holder-g1"), 2)
-	require.Len(t, durableEvents(t, restarted, "inst:1/stderr/holder-g1"), 1)
+	// 2026-11-03：事件段删除后**没有跨重启的事件副本**，重启后的进程只会记录它自己投递过的事件。
+	// 因此这里断言「重启后新增的那一条被采到」（=绑定恢复成功且续读位置正确），
+	// 而不是「重启前的 + 重启后的共两条」。后者依赖的「事件跨重启存活」前提已随事件段一起取消；
+	// 它真正想守的「重启不重读旧字节」由 cursor_registry_restore_test 的区间断言覆盖。
+	require.Len(t, durableEvents(t, restarted, "inst:1/stdout/holder-g1"), 1,
+		"重启后只应看到本进程新投递的那一条（旧字节不得重读重投）")
+	require.Empty(t, durableEvents(t, restarted, "inst:1/stderr/holder-g1"),
+		"stderr 本轮无新输入 ⇒ 不得重投历史内容")
 	require.NoError(t, os.Remove(restarted.rawInstancePath(restarted.state.Instances["uuid-1"], "stdout")))
 	require.Error(t, restarted.AppendInstanceOutput("uuid-1", "stdout", []byte("not captured\n")))
 	require.False(t, restarted.CutoverReadiness().LedgerReady)

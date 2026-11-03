@@ -204,19 +204,9 @@ func primeCompleteProjections(t *testing.T, m *Manager) {
 		// 手动夹具没有启动容量兜底环；必须消费耐久交办待办，取得真实请求确认与回收证明。
 		// 对账重建只能证明投影可见，不能替代 Pipeline.DeliverPending 的 ACK 与 WAL 排空。
 		m.drainScheduledReplay()
-		// 手动夹具没有调用 Start，必须补驱生产常驻对账轮，恢复耐久交办后的待投递欠账。
-		// 准备期对账服从既有停滞期限，不用无界背景轮绕过完整投影的前置验证。
-		roundCtx, cancel := context.WithDeadline(context.Background(), deadline)
-		round := m.ReconcileRoundNow(roundCtx)
-		cancel()
-		// **必须补驱重建 worker**（2026-10-09 异步化）：手动夹具没有调用 `Start`，因而生产那条
-		// 「对账轮只登记、重建由专用 worker 执行」的链路缺了后半段。这里用 `drainRebuilds`
-		// 执行**同一套执行体**（`runRebuildRequest` → `rebuildDays`），语义与生产一致，
-		// 只是把执行者换成本 goroutine —— 断言口径（完整投影前置）逐字不变。
-		m.drainRebuilds(context.Background())
-		if len(round.Errors) > 0 {
-			t.Logf("投影预热对账轮暂态错误：%v", round.Errors)
-		}
+		// 对账轮与重建 worker 已随重建/重放链一并删除（2026-11-03）：
+		// 准备期只剩「采集轮 + 消费已排队的重放」这一步，足够让投递欠账走完。
+		_ = deadline
 		var pending []string
 		for _, key := range sortedSourceKeys(m) {
 			if !resolveAdmissionReady(m, key) {

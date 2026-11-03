@@ -1187,9 +1187,6 @@ func runWorker() {
 				StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
 			})
 		}
-		// 启动增量对账（FR-497）：配置键 log_reconcile.*，非法/越界值经 ReconcileConfig()
-		// 收敛为 ingest 的归一化默认（默认启用）。
-		reconcileCfg := cfg.LogReconcile.ReconcileConfig()
 		// 采集索引（FR-496）：历史投递批次裁剪（log_index.batch_prune.*）与持久化提交单元
 		// 预算（log_index.persist.*）分别经 LogIndexConfig 的映射收敛为归一化默认（裁剪默认
 		// 开启；切分默认每提交单元 512 行、目标 40ms——真源是 stateindex.DefaultCommitBudget）。
@@ -1209,9 +1206,6 @@ func runWorker() {
 		verifyChunkEstimatesCfg := cfg.VerifyChunkEstimatesTuning()
 		indexPruneCfg := cfg.LogIndex.IndexPrune()
 		indexCommitCfg := cfg.LogIndex.CommitBudget()
-		// 事件段回收（键 log_retention.eventstore_prune.*）：默认关闭。
-		// 水位判据与安全论证见 internal/worker/logs/ingest/eventstore_prune.go 文件头。
-		eventStorePruneCfg := cfg.LogRetention.EventStorePrune.EventStorePrune()
 		// 热层可发布窗口（2026-10-21 生产缺陷修复）：把热层 VL 的 retention 交给 ingest，
 		// 使「早于 now-retention 的 UTC 天」既不被重建、也不被算成对账缺失天。
 		//
@@ -1248,14 +1242,10 @@ func runWorker() {
 				// 节点采样策略透传每源管线；零值关闭，恢复重放不再重复采样。
 				Sampling:         cfg.SamplingPolicy(),
 				CapacityProvider: logCapacityProvider,
-				// 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天。
-				Reconcile: &reconcileCfg,
 				// 索引有界化（FR-496 §2.4）：历史投递批次按 reclaim 水位裁剪，默认开启。
 				IndexPrune: &indexPruneCfg,
 				// 索引持久化切分（FR-498 P0）：按行数 + 耗时双上界切成多个提交单元。
 				IndexCommit: &indexCommitCfg,
-				// 事件段回收（键 log_retention.eventstore_prune.*）：默认关闭，需显式开启。
-				EventStorePrune: &eventStorePruneCfg,
 				// 持久化门公平性（键 log_index.persist.cycle_yield / priority_streak）：
 				// 让路窗口决定「恢复链 ↔ 采集轮」的权衡，老化阈值决定优先权的反饿保护。
 				PersistYield:          persistYieldCfg,
@@ -1295,12 +1285,8 @@ func runWorker() {
 				// 整节点解算单次调用的预算（键 log_ingest.resolve_gaps_*）：源数 + 墙钟双上界，
 				// 超出即分片返回（不伪装成功），见 ingest.ResolveGapsBudget。
 				ResolveGapsBudget: resolveGapsBudget,
-				// 对账/重发的外部条件与切片（键 log_reconcile.vl_ready_* / replay_*）：
-				// 就绪探针把「VL 未就绪时的必然失败重发」挡在门外；切片把整窗重发变成有界可续。
-				ReplayTuning: func() *ingest.ReplayTuning {
-					tuning := cfg.ReconcileReplayTuning()
-					return &tuning
-				}(),
+				// 重放切片/让路（原 `log_reconcile.replay_*` 配置面）：重建与对账链已删除（2026-11-03），
+				// 这些旋钮不再有生产配置来源，一律走 ingest 的默认值。
 				// 热层 retention（上一段已解析）：零值 = 未启用窗口过滤（保持改动前行为）。
 				HotRetention: resolveHotRetention(cfg),
 				// 兜底环每轮容量（键 log_index.resume_batch_per_round；1 = 每轮一个 = 退回应激行为 ✓）。
@@ -1518,11 +1504,6 @@ func runWorker() {
 			// 与上面的保留驱动器刻意不同：它**不在启动时立即跑一轮**（回收的是平台自己的暂存段，
 			// 早一天晚一天没有正确性差别，而重启风暴下每次启动都全量扫段是纯 IO 浪费）。
 			// 只打「已启用」一种日志：关闭是默认策略，不是配置丢失。
-			if eventStorePruneCfg.Enabled {
-				go manager.RunEventStorePrune(ingestCtx, eventStorePruneCfg)
-				slog.Info("事件段回收已启用（回收平台暂存段，原档仍在各服务器的文本日志里）",
-					"schedule", fmt.Sprintf("每天 %02d:00", eventStorePruneCfg.Normalized().SweepAtHour))
-			}
 			// 实例本地 gz 吸存（ADR-098 §5）：把各实例 logs/*.log.gz 以**文件身份原样**
 			// 吸存到归档（与 Deep Archive 同一个 provider）。
 			//
@@ -1722,10 +1703,8 @@ func runWorker() {
 	// 这里必须先判 nil 再作接口实参：logIngest 是 *ingest.Manager，直接把 nil 指针塞进
 	// 接口会得到**非 nil 的接口值**（带类型的 nil），MetricsHandler 里的 `prune != nil`
 	// 会因此为真，随后调用方法解引用 nil 指针 —— 表现为「采集没起来时抓 /metrics 直接 panic」。
+	// 事件段已整体删除（2026-11-03）：不再有段回收读数可上报。
 	var pruneSource retention.EventStorePruneSource
-	if logIngest != nil {
-		pruneSource = logIngest
-	}
 	// 归档对象回收读数：同一个「带类型的 nil」陷阱——logArchivePurge 是具体指针类型，
 	// 未启用时直接作接口实参会得到非 nil 接口值，`purge != nil` 为真，
 	// 随后调用方法解引用 nil 指针（本方法对 nil 安全，但别指望下一个实现也安全）。

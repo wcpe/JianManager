@@ -263,8 +263,9 @@ func TestJSONLineReceiverInvariants(t *testing.T) {
 // 从未执行 ⇒ REQUEST_DONE 证据不存在 ⇒ 按设计就不该回收（否则会丢掉「已写入但没确认」的数据）。
 //
 // 所以正确的验证方式是：模拟真实路径的**两个步骤**——
-//   1. 投递动作发生（桩）；
-//   2. 投递结果落账（RecordDeliveryResult，真实实现）。
+//  1. 投递动作发生（桩）；
+//  2. 投递结果落账（RecordDeliveryResult，真实实现）。
+//
 // 两步都做过之后，reclaim 必须推进。这才证明 PUSH_ONLY 的伪 record 区间能喂进回收判据。
 func TestJSONLineReceiverWALReclaims(t *testing.T) {
 	m, p, spy := newPushSourceManager(t)

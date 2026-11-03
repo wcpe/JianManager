@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -612,3 +613,11 @@ const (
 	// 「按老清单重写」正是饥饿的成因；当成「没有缺失」又会谎报完成。
 	confirmInconclusive
 )
+
+// sortUTCDays 对 UTC 日字符串（YYYY-MM-DD）排序后返回新切片（不改入参）。
+// 定长 ISO 格式的字典序即时间序，直接 sort.Strings 即可。
+func sortUTCDays(days []string) []string {
+	out := append([]string(nil), days...)
+	sort.Strings(out)
+	return out
+}

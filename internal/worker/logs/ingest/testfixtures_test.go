@@ -8,7 +8,11 @@ package ingest
 // 故单独落在这里，而不是随着 migration_test.go 一起消失。
 
 import (
+	"bytes"
+	"log/slog"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
@@ -138,4 +142,49 @@ func migrationFixture() *persistedState {
 // openIndexForTest 打开测试直接构造的 Manager 的索引库。
 func openIndexForTest(m *Manager) (*stateindex.Store, error) {
 	return stateindex.Open(m.indexPath())
+}
+
+// ── 以下 helper 原本定义在已删除的用例文件里，仍被其他用例使用，故迁到这里 ──
+
+// ingestTestEvents 构造 n 条位置相邻的 canonical 事件（from 为起始序号）。
+func ingestTestEvents(id, gen string, from, n int, payload string) []logtypes.Event {
+	evs := make([]logtypes.Event, 0, n)
+	for i := 0; i < n; i++ {
+		idx := from + i
+		evs = append(evs, logtypes.BuildEvent(
+			logtypes.SourceIdentity{LogSourceID: id, SourceGeneration: gen, ParserVersion: "v1"},
+			logtypes.RecordRange{Start: uint64(idx * 100), End: uint64(idx*100 + 99)},
+			"2026-09-28T00:00:00Z", "2026-09-28T00:00:01Z", "INFO", "stdout", payload,
+		))
+	}
+	return evs
+}
+
+// captureSlogOutput 把默认 slog 输出重定向到 buf（返回还原函数）。
+//
+// 为什么要重定向而不是用 hook：用例要数的正是**日志行数**这一可观测量，
+// 而 slog 无内置的"按前缀计数"钩子；重定向是唯一能直接数到行的做法。
+func captureSlogOutput(buf *bytes.Buffer) func() {
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	return func() { slog.SetDefault(prev) }
+}
+
+// fakeAdjudicationClock 是可注入的时钟桩（`now()` 返回当前时刻，`advance` 推进），
+// 供节流窗口类用例确定性地跨越窗口使用。
+type fakeAdjudicationClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *fakeAdjudicationClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *fakeAdjudicationClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
 }

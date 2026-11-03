@@ -344,49 +344,16 @@ func (m *Manager) publishedClosedForSourceCtx(ctx context.Context, source Source
 		ctx = context.Background()
 	}
 	dayMaxEnd := map[string]uint64{}
-	if saved.EventsStored && m.events != nil {
-		key := source.LogSourceID + "/" + source.SourceGeneration
-		scanRows := 0
-		// **轮内预算**：单源扫描最多花 scanBudgetOf()（超时 ⇒ 证据不完整 ⇒ 不消解/不推进 ✓ 安全方向）。
-		scanCtx, scanCancel := context.WithTimeout(ctx, m.scanBudgetOf())
-		defer scanCancel()
-		agg, err := m.events.DayMaxEndCtx(scanCtx, key, func(ev logtypes.Event) (string, error) {
-			// **段读让路**（2026-10-03 现场 X 光片：readSegment 是每轮重活的 I/O 大头 ✗）：
-			// 每 slice 行交还一次 P ⇒ 与之并行的采集轮不再被单源整段扫描压满 ✓。开销可忽略
-			// （默认 1ms / 8192 行 ⇒ 10 万行源额外 ≈12ms ✓）；ctx 取消仍逐行生效 ✓（语义不变 ✓）。
-			scanRows++
-			if slice := m.scanSliceOf(); slice > 0 && scanRows%slice == 0 {
-				if m.scanYieldNotify != nil {
-					m.scanYieldNotify()
-				}
-				if y := m.scanYieldOf(); y > 0 {
-					time.Sleep(y)
-				}
-			}
-			return eventUTCDay(source, ev)
-		})
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				// 超预算：按"证据不完整"处理（**不是**错误 ⇒ 上层不消解缺口、不推进水位 ✓），
-				// 下一轮继续扫；这样单源大扫描不会把整轮撑成分钟级 ✗。
-				m.scanBudgetExceeded.Add(1) // 观测口：无条件的截断计数 ✓
-				return 0, false, nil
-			}
+	for _, event := range saved.Events {
+		if err := ctx.Err(); err != nil {
 			return 0, false, err
 		}
-		dayMaxEnd = agg
-	} else {
-		for _, event := range saved.Events {
-			if err := ctx.Err(); err != nil {
-				return 0, false, err
-			}
-			day, err := eventUTCDay(source, event)
-			if err != nil {
-				return 0, false, err
-			}
-			if event.Record.End > dayMaxEnd[day] {
-				dayMaxEnd[day] = event.Record.End
-			}
+		day, err := eventUTCDay(source, event)
+		if err != nil {
+			return 0, false, err
+		}
+		if event.Record.End > dayMaxEnd[day] {
+			dayMaxEnd[day] = event.Record.End
 		}
 	}
 	closed, complete := m.publishedClosedFromDayMax(source, dayMaxEnd)
@@ -1491,3 +1458,15 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 
 // deliveryConfirmedSegPrefix 是「投递确认补段」的段名前缀（#61-Z-a）：账本里可一眼认出这类段的来历。
 const deliveryConfirmedSegPrefix = "delivery-confirmed-"
+
+// parseEventTimeUTC 解析事件语义时间（与 eventUTCDay 的时间策略一致：RFC3339Nano）。
+func parseEventTimeUTC(raw string) (time.Time, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, false
+	}
+	moment, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return moment.UTC(), true
+}

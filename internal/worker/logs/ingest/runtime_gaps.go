@@ -7,6 +7,8 @@ package ingest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,7 +21,6 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
@@ -833,23 +834,12 @@ func (m *Manager) republishAfterConflictClear(sources []string) []string {
 		// 再让当前分区的投影走一次正规发布：它除了 ConflictCount 还会重算 manifest 等
 		// 同源派生字段，保持「最后一行为一次真实发布」的因果可读性。
 		// 权威事件集合取自账本/事件段（与恢复路径同源），确保重发布不会丢事件。
-		events, err := m.canonicalRecoveryEvents(sourceKey, m.state.Sources[sourceKey])
-		if err != nil {
-			slog.Warn("清空冲突后重发布：取权威事件失败，派生计数待下次投递刷新",
-				"source", sourceKey, "error", err)
-			failures = appendDerivedRefreshFailure(failures,
-				"source "+sourceKey+": 取权威事件失败，当前分区派生计数未刷新: "+err.Error())
-			continue
-		}
-		gen := p.Key().SourceGeneration
-		if err := m.publishSnapshot(src, gen, events, true, nil, nil, false); err != nil {
-			slog.Warn("清空冲突后重发布：派生计数刷新失败，待下次投递再试",
-				"source", sourceKey, "error", err)
-			failures = appendDerivedRefreshFailure(failures,
-				"source "+sourceKey+": 当前分区重发布失败，派生计数未刷新: "+err.Error())
-			continue
-		}
-		slog.Info("清空冲突后已重发布投影，冲突计数应已归零", "source", sourceKey, "events", len(events))
+		// 事件段已删除：重发布拿不到「全部已登账事件」的完整正文了。
+		// 这里不假装成功：记一条可观测的失败，让下次真实投递去刷新派生计数。
+		slog.Warn("清空冲突后重发布：事件段已删除，派生计数待下次投递刷新", "source", sourceKey)
+		failures = appendDerivedRefreshFailure(failures,
+			"source "+sourceKey+": 事件段已删除，当前分区派生计数未刷新（待下次投递）")
+		continue
 	}
 	return failures
 }
@@ -1035,9 +1025,6 @@ func sameIdentityConflicts(a, b []identityConflictRecord) bool {
 
 // New restores source ledger/WAL/projection state and creates configured pipelines.
 func New(opts Options) (*Manager, error) {
-	if limits := materializationLimitsOf(opts.MaterializationLimits); limits.CompactionReserveBytes < 0 || limits.CompactionReserveBytes > limits.HourlyBytes {
-		return nil, fmt.Errorf("ingest: 必要压缩保留字节必须在总小时物化字节预算以内")
-	}
 	// 在打开索引、创建目录及启动后台任务前校验原值，禁止默认化吞掉非法配置。
 	if err := opts.Sampling.Validate(); err != nil {
 		return nil, fmt.Errorf("ingest: 采样策略无效: %w", err)
@@ -1052,25 +1039,21 @@ func New(opts Options) (*Manager, error) {
 		root: opts.Root, vl: opts.VL, vlRoute: opts.VLRoute, vlReadRoute: opts.VLReadRoute, cat: opts.Catalog, journal: opts.Journal, archive: opts.Archive,
 		// 不可裁定冲突的留痕用**独立阈值**（汇总窗比正常收敛长，见 newConflictThrottle）。
 		conflictTraces: newConflictThrottle(),
-		// 临时中转目录放 tmpfs（见 logScratch 字段注释）。
-		logScratch:            eventstore.MemoryRoot("scratch-" + eventstore.SegmentRootFor(opts.Root)),
-		vlWritePermitRoute:    opts.VLWritePermitRoute,
-		resourceBudget:        opts.ResourceBudget,
-		readLimits:            opts.ReadLimits,
-		walReserve:            opts.WALReserve,
-		deferredDelivery:      opts.DeferredDelivery,
-		materializationLimits: materializationLimitsOf(opts.MaterializationLimits),
-		sources:               make(map[string]SourceConfig), pipes: make(map[string]*pipeline.Pipeline),
+		// 临时中转目录放 tmpfs（不做持久化）。
+		logScratch:         scratchRootFor(opts.Root),
+		vlWritePermitRoute: opts.VLWritePermitRoute,
+		resourceBudget:     opts.ResourceBudget,
+		readLimits:         opts.ReadLimits,
+		walReserve:         opts.WALReserve,
+		deferredDelivery:   opts.DeferredDelivery,
+		sources:            make(map[string]SourceConfig), pipes: make(map[string]*pipeline.Pipeline),
 		state:                    persistedState{Sources: make(map[string]persistedSource)},
 		verificationTimeout:      opts.VerificationTimeout,
 		capacityProvider:         opts.CapacityProvider,
 		sampling:                 opts.Sampling,
 		recoveryHold:             opts.RecoveryHold,
 		resolveGapsBudget:        resolveGapsBudgetOfOpts(opts.ResolveGapsBudget),
-		reconcile:                reconcileConfigOf(opts.Reconcile),
-		reconcileLoop:            reconcileLoopConfigOf(opts.ReconcileLoop),
 		indexPrune:               indexPruneConfigOf(opts.IndexPrune),
-		eventStorePrune:          eventStorePruneConfigOf(opts.EventStorePrune),
 		indexCommit:              indexCommitBudgetOf(opts.IndexCommit),
 		walLimits:                opts.WALLimits,
 		reconcileYield:           reconcileYieldFromOpts(opts),
@@ -1101,20 +1084,8 @@ func New(opts Options) (*Manager, error) {
 	m.persistRequests = make(chan struct{}, 1)
 	m.persistWorkerDone = make(chan struct{})
 	m.persistPriorityStreak = opts.PersistPriorityStreak
-	// 投影重建调度器（见 rebuild_scheduler.go）：每源台账 + 单飞/合并队列 + 限速与退避旋钮。
-	m.rebuilds = newRebuildScheduler()
 	// 缺口消解异步调度器（见 gap_resolve_async.go）：把 VL 可见性核对从投递路径挤出去。
 	m.gapResolves = newGapResolveScheduler()
-	if tuning := opts.RebuildTuning; tuning != nil {
-		if tuning.Throttle > 0 {
-			m.rebuilds.throttle = tuning.Throttle
-		}
-		if tuning.MaxAttempts > 0 {
-			m.rebuilds.maxAttempts = tuning.MaxAttempts
-		}
-	}
-	m.rebuilds.yieldNotify = opts.RebuildYieldNotify
-	m.rebuilds.hookRun = opts.RebuildRunNotify
 	m.replayBudget = replayBudgetOf(opts.ReplayBudget)
 	// 热层可发布窗口（2026-10-21 生产缺陷修复，见 hot_retention_window.go）：
 	// 零值 = 未知/不启用过滤（保持改动前行为）。
@@ -1199,34 +1170,11 @@ func New(opts Options) (*Manager, error) {
 	if err := m.openIndex(); err != nil {
 		return nil, err
 	}
-	// 事件体走追加式磁盘段（FR-484）：state 只留元数据，避免整份重写与常驻切片。
-	// 事件体存到 **tmpfs**（2026-10-30 用户裁定：机械盘不做任何落盘）。
-	//
-	// eventstore 的职责是「投递前的暂存 + 投递后可回收」，数据本来就短命；
-	// 放到 /dev/shm 后写入不再碰机械盘，而段滚动与回收的内存上界能力全部保留。
-	// 代价：Worker 重启后段没了——与「cursor 不落盘」是同一取舍。
-	// 安全不变式（2026-11-02）：段根必须由**数据根绝对路径**派生，不能用 filepath.Base。
-	// basename 不唯一——生产 `.../prod/worker/data` 与实验件 `.../fr498/data` 都是 `data`，
-	// 共用段根时实验进程的 Prune/回收前滚会真删生产的事件段。见 eventstore.SegmentRootFor。
-	store, err := eventstore.Open(eventstore.MemoryRoot(eventstore.SegmentRootFor(opts.Root)))
-	if err != nil {
-		return nil, err
-	}
-	// 段清单落盘策略（键 log_index.persist.manifest_sync_*）：机械盘上把一次追加的
-	// 耐久调用从 3 次降到 1 次（清单里的派生元数据允许滞后，崩溃后由校准精确补齐）。
-	store.SetManifestSyncPolicy(opts.EventStoreManifestSyncEvery, opts.EventStoreManifestSyncInterval)
-	m.events = store
 	// 采集游标（每源一行）必须在建管道**之前**读进来：
 	// 登记路径的 resumeCursorFor 靠它决定「从上次位置继续」还是「从文件末尾起读」。
 	// 读失败只是空表（最坏重读一段），不阻断启动。
 	m.loadCursorRegistryIntoManager()
 	if err := m.load(); err != nil {
-		_ = store.Close()
-		return nil, err
-	}
-	// 旧格式迁移：state 里仍内联事件体时搬到段存储（失败则保留旧格式继续，不丢数据）。
-	if err := m.migrateInlineEvents(); err != nil {
-		_ = store.Close()
 		return nil, err
 	}
 	restoredSources := make(map[string]SourceConfig)
@@ -1277,8 +1225,6 @@ func New(opts Options) (*Manager, error) {
 	//
 	// 为什么要拆开：对账是网络查询，必须能并发且失败只影响单源；而登记与重发仍要保持
 	// 既有的确定性顺序（catalog 发布、段存储、回收责任推进都不接受乱序）。
-	recovery := make([]startupSource, 0, len(keys))
-	recoveryPossible := m.vl != nil || m.vlRoute != nil
 	// sourceConfigRecalced 记录「本次启动恢复确实按新算法改写了某个源的配置」。
 	// 它必须自己触发一次落库，理由见下方 requestPersist 处的说明。
 	sourceConfigRecalced := false
@@ -1305,17 +1251,8 @@ func New(opts Options) (*Manager, error) {
 		if err := m.Register(source); err != nil {
 			return nil, err
 		}
-		if !recoveryPossible {
-			// 无 VL 客户端：没有可对账、也没有可重发的目标（与旧行为一致）。
-			continue
-		}
-		// 只登记「待恢复的源」——**读回权威事件集与对账/重发全部移到后台**（见 runStartupRecovery）。
-		// 改动前这里逐源把 canonical 事件全量读进内存再对账，于是 New 的耗时为
-		// O(全部源的事件总量)（生产 18GB，单线程），期间 worker 完全不可达（2026-10-02 事故）。
-		recovery = append(recovery, startupSource{source: source, key: source.LogSourceID + "/" + source.SourceGeneration})
 	}
 	if err := m.recoverPendingSpools(); err != nil {
-		_ = store.Close()
 		return nil, err
 	}
 	// StartupRecoveryBackground（生产）：恢复不阻塞 New——New 返回后 main 立即继续，
@@ -1338,10 +1275,6 @@ func New(opts Options) (*Manager, error) {
 		// 变更必然被写；真正缺的只是"有没有人触发这一轮"。把配置纳入每轮判据反而要在锁内多做
 		// 一次逐源比对，属于为一个已成立的机制补重复保险。
 		m.requestPersist()
-	}
-	if err := m.startStartupRecovery(recovery, opts.StartupRecoveryBackground); err != nil {
-		_ = store.Close()
-		return nil, err
 	}
 	return m, nil
 }
@@ -1423,4 +1356,26 @@ func DiskCapacityProvider(root string, configured acquire.CapacityBudget) func()
 // 取值：auto / utf-8 / gbk / gb18030（空串表示未配置，按 auto 处理）。
 func IsValidCharset(raw string) bool {
 	return normalize.IsValidCharset(raw)
+}
+
+// scratchRootFor 返回该数据根专属的**临时中转目录**（投递前的暂存，不跨重启）。
+//
+// 优先 /dev/shm（内存文件系统，不碰机械盘）；无 /dev/shm 时退回系统临时目录。
+// 目录名带数据根绝对路径的哈希尾缀：basename 不唯一（生产与实验件都可能叫 data），
+// 共享同一目录会让一方的清理删掉另一方的暂存。
+func scratchRootFor(dataRoot string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(dataRoot))
+	base := filepath.Base(cleaned)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "root"
+	}
+	if abs, err := filepath.Abs(cleaned); err == nil {
+		sum := sha256.Sum256([]byte(abs))
+		base = base + "-" + hex.EncodeToString(sum[:6])
+	}
+	const shm = "/dev/shm"
+	if fi, err := os.Stat(shm); err == nil && fi.IsDir() {
+		return filepath.Join(shm, "jianmanager-scratch", base)
+	}
+	return filepath.Join(os.TempDir(), "jianmanager-scratch", base)
 }

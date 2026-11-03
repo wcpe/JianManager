@@ -308,14 +308,14 @@ internal/worker/
 | **VL 数据** | 磁盘 | ✅ 在 | 唯一可靠长期存储；**单 VL**，180d / 100GiB |
 | **采集游标 `ingest.cursor`** | 磁盘 | ✅ 在 | 每源一行（≈2KB，**不 fsync**），整表重写 + rename 原子（FR-506） |
 | 采集索引库 | `:memory:` SQLite | ❌ 没了 | `stateindex.OpenInMemory`，不建任何磁盘文件（FR-505） |
-| canonical 事件段 | `/dev/shm` tmpfs | ❌ 没了 | `eventstore.MemoryRoot`，**不是** `/tmp`（那是磁盘） |
+| canonical 事件段 | **已删除** | — | 2026-11-03 整体删除（FR-484 退废）：它只服务重建/校验读取正文，而重建链同时删除 |
 | WAL 队列 | 纯内存 | ❌ 没了 | 满则丢最旧（对齐 Fluent Bit `memrb`） |
 | catalog journal | 内存 | ❌ 没了 | 原 `catalog.journal.jsonl` + fsync 已下线 |
 | 账本（缺口/水位/投递证据） | 内存 | ❌ 没了 | 记账面重启后归零，不是被裁剪 |
 
-**代价如实记**：VL 数据根丢失 = 那段日志事实丢失（事件段在 tmpfs 上，重启即丢，
-原「可从事件段重建 projection」的承诺**不再成立**，ADR-095 已追记）；重启后至多重读一段并重复投递
-（允许重复、不丢）；缺口/暂停态/投递批次审计这些记账面重启后归零。
+**代价如实记**：VL 数据根丢失 = 那段日志事实丢失（事件段也已删除，没有可供重建的本地副本）；
+重启后至多重读一段并重复投递（允许重复、不丢，**但仅限源文件仍可读的源**）；
+缺口/暂停态/投递批次审计这些记账面重启后归零。
 
 ##### 数据面边界
 
@@ -1529,9 +1529,9 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
    │   gzip 压缩（实测 73×）+ 连接池 + **流标签 `_stream_fields=log_source_id,stream`**
    │   ~~逐字段回查校验~~ 2026-10-31 删除：HTTP 2xx 即结论（原占整轮 85.6% 时间）
    │   持久痕迹：ledger 的 REQUEST_DONE 证据（回收上界的唯一依据）
-   ▼ canonical 事件体（tmpfs 内存段，**不落盘**）................. 包 eventstore
-   │   ~~磁盘追加落盘段（VL 数据根丢失后的重建底本）~~ 2026-10-30 改 tmpfs：
-   │   **重启即丢，原「可从事件段重建 projection」承诺不再成立**（ADR-095 已追记）
+   ▼ canonical 事件体（**已删除**，2026-11-03）
+   │   ~~tmpfs 内存段（原 FR-484）~~ **整体删除**：该副本存在的唯一理由是「供重建/校验读取
+   │   完整正文」，而重建/重放链已同时删除。现在投递只做「规范化 → 写 VL」，不保留本地正文副本。
    ▼ Partition Catalog 登记“哪些日有可查分区” ................ 包 catalog
    │   纯逻辑 + **内存 journal**（原 catalog.journal.jsonl + fsync 已下线）
    ▼ 发布投影（PublishedProjection）
@@ -1568,13 +1568,13 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 | **VL 数据** | 磁盘 | ✅ 在 | 唯一可靠长期存储，180d / 100GiB 上限 |
 | **采集游标 `ingest.cursor`** | 磁盘 | ✅ 在 | 每源一行（15 列 v2），≈2KB，**不 fsync**，整表重写 + rename 原子 |
 | 采集索引库 | `:memory:` SQLite | ❌ 没了 | 零磁盘 IO；不建任何文件（`path` 仅作标识） |
-| canonical 事件段 | `/dev/shm` tmpfs | ❌ 没了 | 内存文件系统（126G），**不是** `/tmp`（那是磁盘） |
+| canonical 事件段 | **已删除** | — | 2026-11-03 随重建/重放链一并删除 |
 | WAL 队列 | 纯内存 | ❌ 没了 | 满则丢最旧（对齐 Fluent Bit `memrb`） |
 | catalog journal | 内存 | ❌ 没了 | 原 `catalog.journal.jsonl` + fsync 已下线 |
 | 账本（缺口/水位/投递证据） | 内存 | ❌ 没了 | 记账面重启后归零，不是被裁剪 |
 
 **这张表最重要的一行是第二行**：整条采集链路上，只有**采集游标**和 **VL 里的数据**能跨重启存活。
-所有中间状态（队列、事件段、索引、账本）都是进程内的瞬时结构。
+所有中间状态（队列、索引、账本）都是进程内的瞬时结构。
 
 **如实记录的代价**：
 - 重启后至多重读一段并重复投递（允许重复，不丢）

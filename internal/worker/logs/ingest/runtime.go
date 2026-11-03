@@ -25,7 +25,6 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -188,7 +187,6 @@ type Manager struct {
 	readLimits            *acquire.ReadLimits
 	walReserve            func(int64) (func(), error)
 	materializationLimits stateindex.MaterializationLimits
-	activeTails           map[string]activeTailReceipt
 	// cycleMu 持有者观测仪（#57，env/Options 开启；默认关 ⇒ observeCycleMu 返回 nil，调用点只有一次判空）。
 	cycleMuProfile bool
 	// cycleMuMu 是观测仪的**叶子锁**：只保护下面几个普通字段（绝不在持它时调用外部代码，也不打日志）。
@@ -549,9 +547,7 @@ type Manager struct {
 	// 由规则变更路径（detachSourcesForRuleChange）写入，登记时被 takeStartAtEOF 取走并清除。
 	// 用一次性标记而非持久字段：它只描述「这一次重建」的起点选择，落库后无意义
 	// （源一旦建立，位置由账本自己维护）。
-	startAtEOF map[string]bool
-	// events 是 canonical 事件体的追加式磁盘段存储（FR-484）；权威副本，state 只存元数据。
-	events              *eventstore.Store
+	startAtEOF          map[string]bool
 	verificationTimeout time.Duration
 	// verifyMaxQueriesPerChunk 是单簇单次校验的尝试次数上限（0 用默认）。
 	verifyMaxQueriesPerChunk int
@@ -654,17 +650,8 @@ type Manager struct {
 	stageSink        func(string)
 	capacityProvider func() (acquire.CapacityBudget, error)
 	// sampling 保存原始已校验策略，每个源创建独立采样器。
-	sampling     sampling.Policy
-	recoveryHold func(SourceConfig, string) (bool, string)
-	// reconcile 是启动增量对账（FR-497）的生效配置（已归一化）。
-	reconcile ReconcileConfig
-	// reconcileLoop 是常驻增量对账（后续项③）的生效配置（已归一化）：周期驱动、单轮预算与
-	// 源数有界，默认温和（15m / 45s / 8 源轮转）。**关闭即完全不跑**（不打 VL 查询、
-	// 不推进任何状态）；启动对账（reconcile）不受它影响。
-	reconcileLoop ReconcileLoopConfig
-	// reconcileLoopStats / reconcileLoopCursor / reconcileDayCounts 是常驻对账的观测读数、
-	// 全源轮转游标与「按 UTC 天权威条数」缓存（见 reconcile_loop.go 的说明）。
-	reconcileLoopStats  ReconcileLoopStats
+	sampling            sampling.Policy
+	recoveryHold        func(SourceConfig, string) (bool, string)
 	reconcileLoopCursor atomic.Int64 // 候选1：改为无锁游标（视图路径读写；对账单 goroutine 主导，丢失更新仅致幂等重做/跳过）
 	// reconcileViewSnapshot 是"对账只读视图"（候选 1，2026-10-04）：keys+sources 同代快照，
 	// 持锁写侧重建、atomic 发布；对账读侧零取 m.mu（发布点：源变更 force + 采集链/对账节流）。
@@ -678,6 +665,15 @@ type Manager struct {
 	mutexWaitWarnAt    atomic.Int64 // UnixNano；慢等待告警节流窗口（独立于慢持有）
 	// pollDispatchHook 是"采集分发前"的**仅测试用**观测点（D 修复红/绿）：断言进入分发段时 cycleMu 已释放。
 	pollDispatchHook atomic.Value // func()
+	// deliverWriteHook 是"投递成功"后调用的**仅测试用**观测点，参数是本次真正写进 VL 的事件。
+	//
+	// 2026-11-03：事件段（canonical 事件体副本）删除后，用例再无从「从段里读回投递了哪些事件」。
+	// 这个钩子让它们仍能断言投递面到底写了什么；生产 nil ⇒ 零开销。
+	deliverWriteHook atomic.Value // func(SourceConfig, []logtypes.Event)
+	// deliveredBySource / deliveredMu 是**仅测试用**的投递记录（见 durableEvents）：
+	// 事件段删除后，用例靠它读回「投递面写了什么」。生产不挂钩子 ⇒ 永不写入。
+	deliveredBySource map[string][]logtypes.Event
+	deliveredMu       sync.Mutex
 	// deliverPlanHook 是"锁外投递规划（本批规范化 + 去重）"前调用的**仅测试用**观测点
 	// （#54 修复红/绿）：断言该处未持 m.mu。
 	deliverPlanHook atomic.Value // func()
@@ -693,13 +689,6 @@ type Manager struct {
 	rebuildSourceBuildHook atomic.Value // func()
 	mutexHoldWarnAt        atomic.Int64 // UnixNano；告警节流窗口
 
-	// rebuilds 是**投影重建的异步调度器**（见 rebuild_scheduler.go）：把「重放整段历史 → 写 VL →
-	// 逐字段校验 → 发布」这条慢路径从采集主线与对账轮上摘出去，交给专用 goroutine 执行，
-	// 并对其加限速（批间让出）与有界重试（防循环重建）。
-	//
-	// 为什么必须是字段而不是包级全局：重建的台账（每源连续失败次数/退避/放弃原因）属于
-	// Manager 的生命周期，跨 Manager 共享会让测试之间互相污染、也会让「源换代次后清零」失真。
-	rebuilds *rebuildScheduler
 	// gapResolves 是缺口消解的异步调度器（见 gap_resolve_async.go）。
 	//
 	// 为何必须异步：`resolveGapsLandedByDelivery` 内部要调 `landedVisibleInVLCtx` 核对
@@ -710,23 +699,11 @@ type Manager struct {
 	gapResolves *gapResolveScheduler
 	// gapWorkerOnce 保证异步 worker 只启动一次（见 ensureGapResolveWorker）。
 	gapWorkerOnce sync.Once
-	// reconcileLoopCfgSnapshot 是常驻对账配置的快照（候选 1）：写点即时发布 ⇒ 配置读零锁。
-	reconcileLoopCfgSnapshot atomic.Value // ReconcileLoopConfig
-	reconcileViewPublishedAt atomic.Int64 // UnixNano
-	reconcileDayCounts       map[string]reconcileDayCountsCache
+	// ReconcileLoopCfgSnapshot 已随重建/对账链删除。
 	// indexPrune 是历史投递批次裁剪的生效配置（已归一化，默认开启）：建每个源的账本时下发
 	// （ledger.SetDeliveryBatchPrune）。裁剪发生在账本写路径内，因此配置必须落在账本上，
 	// 而不是落库前再过滤一遍——后者只能让库变小，内存仍会随总量线性增长。
 	indexPrune ledger.DeliveryBatchPruneConfig
-	// eventStorePrune 是事件段回收的生效配置（已归一化，默认关闭）：由 RunEventStorePrune
-	// 按每日整点驱动（见 eventstore_prune.go）。
-	eventStorePrune EventStorePruneConfig
-	// lastEventStorePrune 是**最近一轮回收的结果快照**，供 /metrics 读数（受 m.mu 保护）。
-	//
-	// 为什么存快照而不是让指标端点现算：回收要逐源扫描段文件（成本与该源段字节数同阶），
-	// 抓取方可能每 15s 来一次；现算会让一次抓取变成一次全量 IO。快照只在真正跑完一轮时更新，
-	// 抓取变成纯内存读。零值表示「从未运行」，与「运行了但零回收」由 At 是否为零区分。
-	lastEventStorePrune EventStorePruneResult
 	// indexCommit 是索引持久化「提交单元预算」的生效配置（已归一化）：单次持久化按
 	// 行数 + 耗时双上界切成多个提交单元（FR-498 P0，见 stateindex.CommitBudget）。
 	// 打开索引库时下发（stateindex.OpenWithBudget）。
@@ -756,8 +733,6 @@ type Manager struct {
 	maxReplayEventsPerDrain int
 	// multilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（缺陷 B）；≤0 表示关闭强制冲刷。
 	multilineUnclosedTimeout time.Duration
-	// reconcileReports 保留最近一次启动对账的逐源结论（只读观测面）。
-	reconcileReports []ReconcileReport
 	// sourceErrs 记录每源最近一次已上报的采集错误，避免同一错误每 250ms 刷屏。
 	sourceErrs map[string]string
 	// gapAutoResolveAt 记录每源最近一次自愈尝试的时刻（缺陷 A）。
@@ -914,24 +889,10 @@ type Options struct {
 	WALReserve         func(int64) (func(), error)
 	// nil 使用每窗口4份、同源同日每小时8份及1GiB的独立物化预算。
 	MaterializationLimits *stateindex.MaterializationLimits
-	// Reconcile 是启动增量对账（FR-497）的配置面；nil 表示用默认（启用，
-	// 并发 4、单源超时 30s、单查询超时 10s）。配置键登记见 spec §5。
-	Reconcile *ReconcileConfig
-	// ReconcileLoop 是常驻增量对账（后续项③）的配置面；nil 表示用默认（启用、15 分钟周期、
-	// 单轮预算 45s、单轮 8 源轮转）。配置键登记为 `log_reconcile_loop.*`；与 Reconcile 同样，
-	// 当前生效路径是 Options + Set（YAML → Options 接线需改 internal/worker/config.go）。
-	ReconcileLoop *ReconcileLoopConfig
 	// IndexPrune 是采集索引「历史投递批次（delivery_batch）裁剪」的配置面（FR-496 索引有界化，
 	// spec §6）；nil 表示用默认（ledger.DefaultDeliveryBatchPruneConfig：**开启**、严格按
 	// reclaim 水位）。判据与证明见 ledger/delivery_batch_prune.go。
 	IndexPrune *ledger.DeliveryBatchPruneConfig
-	// EventStorePrune 是「事件段回收」的配置面（键 log_retention.eventstore_prune.*）；
-	// nil 表示用默认（DefaultEventStorePruneConfig：**关闭**、每日本地 3 点）。
-	//
-	// 与 IndexPrune 的默认值方向相反是刻意的：那边裁的是账本历史条目（已有独立证据覆盖的冗余），
-	// 这边裁的是**事件段的唯一副本**，属删除类能力 ⇒ 默认全关、必须显式开启。
-	// 判据与安全论证见 eventstore_prune.go 的文件头。
-	EventStorePrune *EventStorePruneConfig
 	// IndexCommit 是索引持久化「提交单元预算」的配置面（FR-498 P0，键 log_index.persist.*，
 	// spec §3.4）；nil 表示用默认（stateindex.DefaultCommitBudget：每提交单元 128 行、目标 40ms、
 	// 下限 32 行——真源是 stateindex 的 DefaultCommitMaxRows/DefaultCommitMinRows/DefaultCommitTarget。
@@ -1295,20 +1256,6 @@ func (m *Manager) CutoverReadiness() CutoverReadiness {
 		result.LedgerReady = false
 		result.Reasons = append(result.Reasons, "startup_recovery_failed")
 		result.Reasons = append(result.Reasons, reasons...)
-	}
-	// 启动恢复登记的重发尚未出结论 ⇒ 同样不可宣告就绪（2026-10-10 第二项修复）。
-	//
-	// 为什么必须显式（而不是靠 InProgress）：判定/登记是秒级的，重发是分钟级的。若只以
-	// `InProgress` 判就绪，平台会在"重发还在写 VL"时宣告可切换——那正是 2026-10-02 事故的
-	// 语义侧。判据取**调度器的未结论集合**而不是"有没有跑过"：放弃（确定性失败达上限）时
-	// 该源已从该集合移除，但同时被记入 `startupRecovery.Failed` ⇒ 依然 not-ready 且带原因，
-	// 绝不把「不再重试」说成「已恢复」。
-	if pendingKeys := m.startupReplayInFlight(); len(pendingKeys) > 0 {
-		result.LedgerReady = false
-		result.Reasons = append(result.Reasons, "startup_replay_in_flight")
-		for _, key := range pendingKeys {
-			result.Reasons = append(result.Reasons, "startup_replay_pending:"+key)
-		}
 	}
 	pending, pendingErr := m.pendingSpoolState()
 	if pendingErr != nil {

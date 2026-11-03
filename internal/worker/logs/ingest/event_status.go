@@ -4,14 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/eventstore"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -408,22 +406,7 @@ func (m *Manager) SourceEventStatus(query EventStatusQuery) (EventStatusReport, 
 	}
 	report := DeriveEventStatus(key, facts, query.From, query.To)
 	if at := strings.TrimSpace(query.AtUTC); at != "" {
-		moment, err := time.Parse(time.RFC3339Nano, at)
-		if err != nil {
-			return EventStatusReport{}, fmt.Errorf("ingest: 时间点必须为 RFC3339 格式: %w", err)
-		}
-		located, ok, err := locateEventAtOrAfter(m.events, key, moment.UTC())
-		if err != nil {
-			return EventStatusReport{}, err
-		}
-		if !ok {
-			report.Notes = append(report.Notes, "该源事件段内没有可定位的事件（时间点查询无结论）")
-			return report, nil
-		}
-		report = DeriveEventStatus(key, facts, located.Record.Start, located.Record.End)
-		report.AtUTC = at
-		report.LocatedEventID = located.EventID
-		report.LocatedAt = located.EventTimeUTC
+		return EventStatusReport{}, fmt.Errorf("ingest: --at 时间点查询依赖于已删除的事件段存储，请改用 From/To 位置区间")
 	}
 	return report, nil
 }
@@ -458,54 +441,6 @@ func (m *Manager) resolveEventStatusSource(sourceID, generation string) (string,
 	}
 }
 
-// locateEventAtOrAfter 在事件段里定位「时间 >= at 的最近事件」；该时刻晚于全部事件时
-// 回退到最后一个事件（并如实标注——调用方据 LocatedAt 与 at 的差异可见）。
-//
-// 只用于**显式的时间点查询**：它要遍历该源事件段（O(段行数)），因此绝不出现在周期路径上。
-func locateEventAtOrAfter(store *eventstore.Store, key string, at time.Time) (logtypes.Event, bool, error) {
-	if store == nil {
-		return logtypes.Event{}, false, fmt.Errorf("ingest: 事件段存储未打开，无法按时间点定位")
-	}
-	var best *logtypes.Event
-	var last *logtypes.Event
-	err := store.Iterate(key, func(event logtypes.Event) error {
-		current := event
-		if last == nil || current.Record.End >= last.Record.End {
-			last = &current
-		}
-		moment, ok := parseEventTimeUTC(event.EventTimeUTC)
-		if !ok || moment.Before(at) {
-			return nil
-		}
-		if best == nil || current.Record.Start < best.Record.Start {
-			best = &current
-		}
-		return nil
-	})
-	if err != nil {
-		return logtypes.Event{}, false, err
-	}
-	if best != nil {
-		return *best, true, nil
-	}
-	if last != nil {
-		return *last, true, nil
-	}
-	return logtypes.Event{}, false, nil
-}
-
-// parseEventTimeUTC 解析事件语义时间（与 eventUTCDay 的时间策略一致：RFC3339Nano）。
-func parseEventTimeUTC(raw string) (time.Time, bool) {
-	if strings.TrimSpace(raw) == "" {
-		return time.Time{}, false
-	}
-	moment, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return moment.UTC(), true
-}
-
 // ---------------------------------------------------------------------------
 // 离线导出（worker CLI `log-event-status`）
 // ---------------------------------------------------------------------------
@@ -513,11 +448,6 @@ func parseEventTimeUTC(raw string) (time.Time, bool) {
 // eventStatusIndexPath 是采集索引库的相对路径（与 ExportIndexJSON 同一口径）。
 func eventStatusIndexPath(root string) string {
 	return filepath.Join(root, "var", "log", "ingest.index.db")
-}
-
-// eventStatusEventsRoot 是事件段（canonical 事件体）的相对目录（与 ingest.New 同一口径）。
-func eventStatusEventsRoot(root string) string {
-	return filepath.Join(root, "var", "log", "events")
 }
 
 // ExportEventStatus 从**索引库**只读派生事件级状态视图（停机/现场取证用；不打开采集运行时）。
@@ -556,39 +486,15 @@ func ExportEventStatus(root string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var eventsStore *eventstore.Store
 	if options.at != "" {
-		eventsRoot := eventStatusEventsRoot(root)
-		if info, statErr := os.Stat(eventsRoot); statErr != nil || !info.IsDir() {
-			return fmt.Errorf("ingest: --at 需要事件段目录 %s（不存在或不可读），请改用 --from/--to 位置区间", eventsRoot)
-		}
-		eventsStore, err = eventstore.OpenReadOnly(eventsRoot)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = eventsStore.Close() }()
+		return fmt.Errorf("ingest: --at 时间点查询依赖于已删除的事件段存储，请改用 --from/--to 位置区间")
 	}
 	reports := make([]EventStatusReport, 0, len(selected))
 	for _, key := range selected {
 		facts := eventStatusFactsOfPersisted(state.Sources[key])
 		report := DeriveEventStatus(key, facts, derefOrZeroUint64(options.from), derefOrZeroUint64(options.to))
 		if options.at != "" {
-			moment, err := time.Parse(time.RFC3339Nano, options.at)
-			if err != nil {
-				return fmt.Errorf("ingest: 事件状态时间点无效: %w", err)
-			}
-			located, ok, err := locateEventAtOrAfter(eventsStore, key, moment.UTC())
-			if err != nil {
-				return err
-			}
-			if !ok {
-				report.Notes = append(report.Notes, "事件段里没有可定位的事件（时间点查询无结论）")
-			} else {
-				report = DeriveEventStatus(key, facts, located.Record.Start, located.Record.End)
-				report.AtUTC = options.at
-				report.LocatedEventID = located.EventID
-				report.LocatedAt = located.EventTimeUTC
-			}
+			return fmt.Errorf("ingest: --at 时间点查询依赖于已删除的事件段存储，请改用 --from/--to 位置区间")
 		}
 		// 离线视图只含已持久化证据（不含事件段正文与运行期内存态）：如实标注口径。
 		report.Notes = append(report.Notes, "离线视图取自索引库（仅已持久化证据）")

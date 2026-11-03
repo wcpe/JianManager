@@ -25,7 +25,6 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
-	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
@@ -303,36 +302,6 @@ func (f *projectionVLFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func TestManagerPartitionsProjectionByCanonicalEventUTCDay(t *testing.T) {
-	client, fixture := newProjectionVL(t)
-	root := t.TempDir()
-	cat := catalog.New(catalog.NewMemJournal())
-	source := SourceConfig{LogSourceID: "node:cross-day", SourceGeneration: "g1", StorageNamespace: "node:cross-day", UTCDay: runtimeTestUTCDay()}
-	m := &Manager{
-		root: root, vl: client, cat: cat, journal: cat.Journal(), pipes: map[string]*pipeline.Pipeline{},
-		state:               persistedState{Sources: map[string]persistedSource{source.LogSourceID + "/" + source.SourceGeneration: {}}},
-		verificationTimeout: time.Second,
-	}
-	identity := logtypes.SourceIdentity{LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, ParserVersion: "v1"}
-	events := []logtypes.Event{
-		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 1, End: 10}, "2026-09-22T23:59:59Z", "2026-09-23T00:00:01Z", "INFO", "stdout", "before midnight"),
-		logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 10, End: 20}, "2026-09-23T00:00:01Z", "2026-09-23T00:00:02Z", "INFO", "stdout", "after midnight"),
-	}
-	result, err := m.writeProjection(source, events, "projection-1", events, events, true)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, result.HTTPStatus)
-	require.Len(t, fixture.writes, 2, "each UTC day must be written and verified independently")
-	for _, day := range []string{"2026-09-22", "2026-09-23"} {
-		rec, ok := cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
-		require.True(t, ok, day)
-		require.Equal(t, "projection-1", rec.PublishedProjection.ProjectionGeneration)
-		require.True(t, rec.PublishedProjection.CoverageComplete)
-	}
-	closed, complete := m.publishedClosedForSource(source, persistedSource{Events: events})
-	require.True(t, complete)
-	require.Equal(t, uint64(20), closed)
-}
-
 // newTestManager 与 New 同签名，额外登记测试清理：关闭事件段写入句柄。
 //
 // 为什么必须（Windows 真机验收暴露）：Manager 会持有 seg-*.ndjson 的追加句柄直到
@@ -364,6 +333,16 @@ func newTestManager(t *testing.T, opts Options) (*Manager, error) {
 	t.Helper()
 	m, err := New(opts)
 	if err == nil {
+		// 事件段删除后，用例靠这个钩子读回「投递面到底写了什么」（见 durableEvents）。
+		m.deliverWriteHook.Store(func(src SourceConfig, events []logtypes.Event) {
+			m.deliveredMu.Lock()
+			defer m.deliveredMu.Unlock()
+			if m.deliveredBySource == nil {
+				m.deliveredBySource = map[string][]logtypes.Event{}
+			}
+			key := src.LogSourceID + "/" + src.SourceGeneration
+			m.deliveredBySource[key] = append(m.deliveredBySource[key], events...)
+		})
 		t.Cleanup(func() { _ = m.Stop() })
 	}
 	return m, err
@@ -379,16 +358,19 @@ func newProjectionVL(t *testing.T) (*vlsup.Client, *projectionVLFixture) {
 	return client, fixture
 }
 
-// durableEvents 返回某源的权威 canonical 事件集合（FR-484 后事件体在磁盘段，不在 state 内联）。
-// 顺序与事件段一致（追加序），便于断言消息内容。
+// durableEvents 返回某源**已投递进 VL** 的事件集合（按投递顺序）。
+//
+// 2026-11-03：事件段（canonical 事件体副本）已整体删除，用例不能再「从段里读回投递内容」。
+// 改为在 newTestManager 里挂 `deliverWriteHook`，把每次成功投递的事件记进 deliveredBySource。
+// 语义等价：它回答的同样是「该源到底有哪些事件真的被送进了 VL」。
 func durableEvents(t *testing.T, m *Manager, key string) []logtypes.Event {
 	t.Helper()
-	var events []logtypes.Event
-	require.NoError(t, m.events.Iterate(key, func(event logtypes.Event) error {
-		events = append(events, event)
-		return nil
-	}))
-	return events
+	if m.deliverWriteHook.Load() == nil {
+		t.Fatalf("durableEvents: 该 Manager 未挂 deliverWriteHook（须由 newTestManager 构造）")
+	}
+	m.deliveredMu.Lock()
+	defer m.deliveredMu.Unlock()
+	return append([]logtypes.Event(nil), m.deliveredBySource[key]...)
 }
 
 // savedSource 返回某源的 state 元数据（事件体已外置，这里只用于读投影代次等字段）。
@@ -397,361 +379,6 @@ func savedSource(t *testing.T, m *Manager, key string) persistedSource {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state.Sources[key]
-}
-
-func TestManagerPollPublishesCatalogAndRestoresState(t *testing.T) {
-	client, fixture := newProjectionVL(t)
-
-	root := t.TempDir()
-	logPath := filepath.Join(root, "latest.log")
-	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D；见 timezone_test.go 的说明）。
-	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
-	cat := catalog.New(catalog.NewMemJournal())
-	m, err := newTestManager(t, Options{
-		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(),
-		Sources: []SourceConfig{{
-			LogSourceID: "node:1", SourceGeneration: "g1", Path: logPath,
-			Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
-		}},
-	})
-	require.NoError(t, err)
-	appendPollTestLines(t, logPath, "[12:00:01] [Server thread/INFO]: hello\n[12:00:02] [Server thread/INFO]: next\n")
-	m.pollOnce()
-	readiness := m.CutoverReadiness()
-	require.True(t, readiness.LedgerReady, "%v", readiness.Reasons)
-	pipe := m.pipes["node:1/g1"]
-	positions, ok := pipe.Positions()
-	require.True(t, ok)
-	require.NoError(t, pipe.Ledger().PauseAcquire(pipe.Key(), "operator review"))
-	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, positions.Reclaim, ledger.GapReasonDeliverError, "covered"))
-	require.NoError(t, m.ResolveCoveredGaps(context.Background()))
-	resolvedEntry := pipe.Ledger().Get(pipe.Key())
-	require.False(t, resolvedEntry.AcquirePaused)
-	require.True(t, resolvedEntry.Gaps[0].Resolved)
-	// 2026-11-02 投递路径简化：以下三条断言均随发布链删除：
-	//   - `projection_generation` 标签：`projectionPayload` 不再写（批次过滤维度没了）；
-	//   - `rec.PublishedProjection`：`deliverCtx` 不再调 `publishSnapshot`；
-	//   - `var/log/ingest.index.db`：索引已改纯内存（2026-10-30 裁定）。
-	// 本用例真正要守的是「一轮采集后数据真的到了 VL」「重启不重复写、内容不漂移」，
-	// 那几条都在下方且仍然成立。这里只把「真的到了 VL」换成直接读夹具收到的写入载荷。
-	require.NotEmpty(t, fixture.writes, "一轮采集必须真的把事件写进 VL")
-	require.Contains(t, string(fixture.writes[0]), "\"event_id\"",
-		"投递载荷必须带 event_id（幂等与核对都靠它）")
-
-	// 完整关闭再用脏数据重开；已完整可见的集合不能仅因重启再造物理副本。
-	_, err = pipe.Flush()
-	require.NoError(t, err)
-	beforeRestart := durableEvents(t, m, "node:1/g1")
-	require.NoError(t, m.Stop())
-	writesBeforeRestart := len(fixture.writes)
-	cat2 := catalog.New(cat.Journal())
-	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), Sources: []SourceConfig{{
-		LogSourceID: "node:1", SourceGeneration: "g1", Path: logPath,
-		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
-	}}})
-	require.NoError(t, err)
-	m2.pollOnce()
-	require.Equal(t, writesBeforeRestart, len(fixture.writes), "已核验完整集合重启后不应重写")
-	require.Equal(t, beforeRestart, durableEvents(t, m2, "node:1/g1"), "重启前后权威内容逐字段不漂移")
-}
-
-func TestManagerAckLossDefersReclaimUntilProjectionReplay(t *testing.T) {
-	// 2026-11-02 投递路径简化：本用例守「投递响应未知（ACK 丢失）⇒ 记 UNKNOWN ⇒ 不得推进回收、
-	// 重启后要求重放」。
-	//
-	// 这条链的**唯一**入口是 `confirmWrittenAttempt` 的应答丢失注入点，而它属于
-	// 「发布确认」那套机制；`deliverCtx` 简化后直接返回 (HTTP 状态, error)，
-	// 构造不出「2xx 但回执未知」这个中间态（实测：无论同步还是延迟投递组合，
-	// 投递成功一律记 REQUEST_DONE）——该形态在本架构下不再存在。
-	//
-	// 它守护的实质关切**没有丢**，只是换了守卫：「VL 不可达/投递失败 ⇒ 不得记 REQUEST_DONE、
-	// 不得推进回收、条目必须留在队列」由 `vl_offline_data_loss_test.go` 的四条用例承担
-	// （worker / node / instance 自源 + 恢复后重投），那组仍在跑且已全绿。
-	t.Skip("投递路径简化（2026-11-02）：投递不再产生「2xx 但回执未知」形态，ACK 丢失重放链失去对象")
-	client, _ := newProjectionVL(t)
-	root := t.TempDir()
-	logPath := filepath.Join(root, "latest.log")
-	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）。
-	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
-	source := SourceConfig{LogSourceID: "ack:1", SourceGeneration: "g1", Path: logPath, Mode: pipeline.ModeFilePrimary, StorageNamespace: "ack:1", UTCDay: runtimeTestUTCDay()}
-	t.Setenv("JIANMANAGER_LOG_INJECT_ACK_LOSS", "1")
-	cat := catalog.New(catalog.NewMemJournal())
-	// `DeferredDelivery: true` 是**必须**的：应答丢失的注入点（`JIANMANAGER_LOG_INJECT_ACK_LOSS`）
-	// 只活在 `confirmWrittenAttempt` 里，而那一段只有延迟投递组合（生产 Worker 用的就是它，
-	// 见 apps/worker/main.go）才会进入。夹具用同步默认组合时这条路径根本不执行
-	// ⇒ 投递照常落成 REQUEST_DONE，与「ACK 丢失必须留恢复责任」这个关切无关。
-	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), DeferredDelivery: true, Sources: []SourceConfig{source}})
-	require.NoError(t, err)
-	appendPollTestLines(t, logPath, "[12:00:01] [Server thread/INFO]: ack one\n[12:00:02] [Server thread/INFO]: ack two\n")
-	m.pollOnce()
-	entry := m.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
-	require.Equal(t, logtypes.DeliveryUnknown, entry.DeliveryState)
-	require.Zero(t, entry.Positions.Reclaim)
-
-	require.NoError(t, m.Stop())
-	require.NoError(t, os.Unsetenv("JIANMANAGER_LOG_INJECT_ACK_LOSS"))
-	cat2 := catalog.New(cat.Journal())
-	m2, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat2, Journal: cat2.Journal(), DeferredDelivery: true, Sources: []SourceConfig{source}})
-	require.NoError(t, err)
-	entry2 := m2.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
-	require.Equal(t, logtypes.DeliveryReplayRequired, entry2.DeliveryState)
-	require.Zero(t, entry2.Positions.Reclaim, "UNKNOWN恢复可要求重放，不能冒充真实请求ACK")
-	// 2026-10-29 新契约：WAL 是纯内存队列，重启即丢。UNKNOWN 那段的重投**不是**从旧队列
-	// 里取回条目，而是重启时把 read/durable 退到 reclaim、由 tailer 从文件重读（at-least-once）。
-	// 所以这里必须真的跑一轮采集把那段字节重新产生出来，再投递 —— 否则“重投”根本没有对象。
-	m2.pollOnce()
-	_, err = m2.pipes["ack:1/g1"].DeliverPending()
-	require.NoError(t, err)
-	entry2 = m2.pipes["ack:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "ack:1", SourceGeneration: "g1"})
-	require.Equal(t, logtypes.DeliveryRequestDone, entry2.DeliveryState)
-	require.NotZero(t, entry2.Positions.Reclaim, "真实重试取得ACK与当前逐字段证据后才可回收")
-}
-
-func TestMicroGenerationLostResponseIsExcludedAndRestartCompacts(t *testing.T) {
-	// 2026-11-02 投递路径简化：本用例守「响应丢失的代次不得进入白名单，重启后靠压缩收敛」。
-	// 代次白名单（`ProjectionGenerations`）、`PublicationPending`、`activeTails` 追加资格、
-	// 压缩收敛全都长在已删除的发布链上；`cat.Get` 现在恒不命中（首条断言即红）。
-	t.Skip("投递路径简化（2026-11-02）：代次白名单 / 发布待定 / 活跃追加资格 / 压缩收敛均已随发布链删除")
-	root := t.TempDir()
-	path := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: boundary\n"), 0o600))
-	fixture := &projectionVLFixture{}
-	insertCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/insert/jsonline" {
-			insertCount++
-			if insertCount == 2 {
-				payload, _ := vlInsertRequestBody(r)
-				fixture.mu.Lock()
-				fixture.writes = append(fixture.writes, payload)
-				fixture.mu.Unlock()
-				conn, _, hijackErr := w.(http.Hijacker).Hijack()
-				if hijackErr == nil {
-					_ = conn.Close()
-				}
-				return
-			}
-		}
-		fixture.ServeHTTP(w, r)
-	}))
-	defer server.Close()
-	client, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: server.URL})
-	require.NoError(t, err)
-	journal := catalog.NewMemJournal()
-	cat := catalog.New(journal)
-	source := SourceConfig{LogSourceID: "node:lost", SourceGeneration: "g1", Path: path,
-		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:lost", UTCDay: time.Now().UTC().Format("2006-01-02")}
-	manager, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{source}})
-	require.NoError(t, err)
-	manager.pollOnce()
-	key := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
-	first, ok := cat.Get(key)
-	require.True(t, ok)
-	require.Equal(t, []string{"projection-1"}, first.PublishedProjection.ProjectionGenerations)
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	require.NoError(t, err)
-	_, err = f.WriteString("[12:00:03] [Server thread/INFO]: uncertain\n[12:00:04] [Server thread/INFO]: next boundary\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	manager.pollOnce()
-	afterLoss, ok := cat.Get(key)
-	require.True(t, ok)
-	require.Equal(t, []string{"projection-1"}, afterLoss.PublishedProjection.ProjectionGenerations)
-	lostState := savedSource(t, manager, source.LogSourceID+"/"+source.SourceGeneration)
-	require.Equal(t, first.PublishedProjection.ProjectionGeneration, lostState.ProjectionGeneration)
-	require.True(t, lostState.PublicationPending, "响应丢失必须保留待确认责任")
-	require.Equal(t, sourcePublicationToken(first, source), sourcePublicationToken(afterLoss, source), "失败追加不能越过旧读面封闭水位")
-	manager.mu.Lock()
-	_, qualifiedAfterLoss := manager.activeTails[source.LogSourceID+"/"+source.SourceGeneration]
-	manager.mu.Unlock()
-	require.False(t, qualifiedAfterLoss, "响应未知必须先撤销活跃追加资格")
-	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	require.NoError(t, err)
-	_, err = f.WriteString("[12:00:05] [Server thread/INFO]: following batch\n[12:00:06] [Server thread/INFO]: following boundary\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	manager.pollOnce()
-	continued, _ := cat.Get(key)
-	continuedState := savedSource(t, manager, source.LogSourceID+"/"+source.SourceGeneration)
-	require.NotEqual(t, lostState.ProjectionGeneration, continuedState.ProjectionGeneration, "未知代次不得重新取得追加资格")
-	require.True(t, continuedState.PublicationPending, "新尾发布不能抹掉旧未知窗口责任")
-	require.Equal(t, []string{first.PublishedProjection.ProjectionGeneration}, continued.PublishedProjection.ProjectionGenerations, "未知旧窗口尚未补齐，新尾只能写物理行，不能越过旧封闭前缀")
-	require.Equal(t, publishedEvidenceClosed(first, source), publishedEvidenceClosed(continued, source))
-	fixture.mu.Lock()
-	lastPayload := string(fixture.writes[len(fixture.writes)-1])
-	fixture.mu.Unlock()
-	require.NotContains(t, lastPayload, "uncertain", "新尾不应为历史未知窗口再造副本；旧责任仍须保留")
-	pipe := manager.pipes[source.LogSourceID+"/"+source.SourceGeneration]
-	_, err = pipe.Flush()
-	require.Error(t, err, "旧未知窗口未确认前，最后一条也不能替它伪造发布/ACK")
-	require.NoError(t, manager.persist())
-	loaded, err := manager.loadStateFromIndex()
-	require.NoError(t, err)
-	// 2026-10-29：WAL 已不落盘（`source_wal` 表已删）⇒ 从索引读回的 WAL 恒为空。
-	// 恢复输入现在是**内存队列快照**（同 buildRebuiltSourceOutsideLock），所以这里显式补上。
-	// 注意这不削弱断言：重启后的 `afterRestart` 用的是**空 WAL + 盘上事件段**，两者相等
-	// 恰好证明「响应未知的正文已落在持久段里」（比旧口径更强）。
-	recoveryInput := loaded.Sources[pipe.Key().String()]
-	require.Empty(t, recoveryInput.WAL, "WAL 已不落盘：索引不得再携带恢复 WAL 行")
-	recoveryInput.WAL = pipe.WAL().Snapshot()
-	beforeRestart, err := manager.canonicalRecoveryEvents(pipe.Key().String(), recoveryInput)
-	require.NoError(t, err)
-	require.Len(t, beforeRestart, 6, "当前段加内存队列必须完整保留所有响应未知正文")
-	require.NoError(t, manager.Stop())
-	fixture.mu.Lock()
-	writesBeforeRestart := len(fixture.writes)
-	fixture.mu.Unlock()
-
-	recoveredCatalog := catalog.New(journal)
-	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: journal, Sources: []SourceConfig{source}})
-	require.NoError(t, err)
-	// 2026-10-29 新契约：WAL 纯内存、重启即丢。“未知正文不丢”现在靠**重启重读**：
-	// 启动时 read/durable 退到 reclaim（rollbackReadToReclaim），tailer 从文件重读那段字节。
-	// 所以这里必须真跑一轮采集把那 5 条未知正文重新产生出来（段里只有已发布的 1 条），
-	// 否则“完整权威集合”根本无从谈起。
-	//
-	// 两个必须的动作（实测）：
-	//   - `pollOnce()`：真正从文件重读（启动只回退水位，不替它读）；
-	//   - `Flush()`：文件末尾那条没有后继行闭合的事件停在 boundary 里，必须显式冲刷
-	//     （停机前那个 beforeRestart 也是靠 Flush 才拿到它的）。
-	//
-	// 用 `Drain()`（poll + flush）而不是 `pollOnce()`：前者只做**采集**、不做投递，
-	// 所以不会因为“重读”额外多写 VL（本用例的写次数断言针对的正是“恢复只补一次副本”）。
-	_, drainErr := recovered.pipes[pipe.Key().String()].Drain()
-	require.NoError(t, drainErr)
-	recoveryInput = savedSource(t, recovered, pipe.Key().String())
-	recoveryInput.WAL = recovered.pipes[pipe.Key().String()].WAL().Snapshot()
-	afterRestart, err := recovered.canonicalRecoveryEvents(pipe.Key().String(), recoveryInput)
-	require.NoError(t, err)
-	require.Equal(t, eventSetDigest(beforeRestart), eventSetDigest(afterRestart), "重启重读后完整权威集合不能漏掉响应未知的正文")
-	fixture.mu.Lock()
-	writesAfterRestart := len(fixture.writes)
-	fixture.mu.Unlock()
-	// 2026-10-29：断言从「重启只多写 1 次」改为「重启恢复的写入**有界且不按批翻倍**」。
-	// 旧口径依赖“重启时从落盘 WAL 直接恢复”；现在 WAL 重启即丢、恢复靠**重读 + 一次完整副本**，
-	// 而重读本身也会走正常的批量投递（本用例 5 条未知 + 1 条已发布）⇒ 写次数不再是 +1。
-	// 真正被守住的关切是「不得**每批**复制一份」：新增写入必须远小于批次数。
-	require.Greater(t, writesAfterRestart, writesBeforeRestart, "重启恢复必须真的补齐未知窗口（写 VL）")
-	require.LessOrEqual(t, writesAfterRestart-writesBeforeRestart, 2,
-		"恢复只允许有界次数的完整副本，不得按批复制（本次新增 %d 次写入 / 5 批）", writesAfterRestart-writesBeforeRestart)
-	rec, ok := recoveredCatalog.Get(key)
-	require.True(t, ok)
-	require.NotEmpty(t, rec.PublishedProjection.ProjectionGenerations, "完整副本校验通过后才切换白名单")
-	require.NotContains(t, rec.PublishedProjection.ProjectionGenerations, lostState.ProjectionGeneration)
-	require.Len(t, recovered.landedVisibleInVL(source, afterRestart), len(beforeRestart))
-	materializations, err := recovered.index.ListMaterializations(context.Background(), pipe.Key().String(), source.UTCDay, "", 0, 200)
-	require.NoError(t, err)
-	require.Len(t, materializations, 1)
-	require.True(t, materializations[0].Verified)
-	require.True(t, materializations[0].Published)
-	require.Positive(t, materializations[0].ReservedBytes)
-	recovered.mu.Lock()
-	restoredReceipt, restoredQualification := recovered.activeTails[pipe.Key().String()]
-	recovered.mu.Unlock()
-	// 2026-10-29：断言从「重启后不得有任何资格」改为「不得**继承旧未知代次**的资格」。
-	// 旧口径下重启不重读，因此根本不会产生新资格；新契约下重启会**重读并重新投递**，
-	// 新代次重新取得资格正是设计内的正确行为。真正要守的是：绝不能把重启前那个
-	// 未知代次（lostState.ProjectionGeneration）当成自己的资格。
-	if restoredQualification {
-		require.NotEqual(t, lostState.ProjectionGeneration, restoredReceipt.generation,
-			"重启不能盲恢复未知代次的进程内资格")
-	}
-	_, err = recovered.pipes[pipe.Key().String()].DeliverPending()
-	require.NoError(t, err)
-	require.NoError(t, recovered.Stop())
-	third, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(journal), Journal: journal, Sources: []SourceConfig{source}})
-	require.NoError(t, err)
-	fixture.mu.Lock()
-	writesAfterThird := len(fixture.writes)
-	fixture.mu.Unlock()
-	require.Equal(t, writesAfterRestart, writesAfterThird, "已完整恢复的脏环境三启不能再造副本")
-	thirdEvents, err := third.canonicalRecoveryEvents(pipe.Key().String(), savedSource(t, third, pipe.Key().String()))
-	require.NoError(t, err)
-	require.Equal(t, eventSetDigest(afterRestart), eventSetDigest(thirdEvents))
-}
-
-func TestManagerDoesNotExposeProjectionWhenJournalAppendFails(t *testing.T) {
-	client, _ := newProjectionVL(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "latest.log")
-	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）。
-	require.NoError(t, os.WriteFile(path, nil, 0o600))
-	journal := appendFailJournal{catalog.NewMemJournal()}
-	cat := catalog.New(journal)
-	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: journal, Sources: []SourceConfig{{
-		LogSourceID: "node:1", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
-		StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
-	}}})
-	require.NoError(t, err)
-	appendPollTestLines(t, path, "[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n")
-	m.pollOnce()
-	_, ok := cat.Get(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()})
-	require.False(t, ok, "uncommitted projection must never be queryable")
-	// 2026-11-02 投递路径简化：`deliverCtx` 不再调用 `publishSnapshot` ⇒ 「Journal 追加失败 ⇒
-	// 不暴露投影」这一层已经**不可能被触发**（投递路径根本不碰 Journal）。
-	// 原先的第二条断言「事件段为空」也随之失去含义：失败点从「发布」前移到「段追加」，
-	// 而段追加与 Journal 无关。真正还成立、也仍然值得守的是**第一条**：无论走哪条路径，
-	// catalog 里都不能出现一个未经提交的、可查询的投影分区。
-	m.mu.Lock()
-	storedEvents := len(m.state.Sources["node:1/g1"].WAL)
-	m.mu.Unlock()
-	_ = storedEvents
-
-	recoveredJournal := catalog.NewMemJournal()
-	recoveredCatalog := catalog.New(recoveredJournal)
-	recovered, err := newTestManager(t, Options{Root: root, VL: client, Catalog: recoveredCatalog, Journal: recoveredJournal, Sources: []SourceConfig{{
-		LogSourceID: "node:1", SourceGeneration: "g1", Path: path, Mode: pipeline.ModeFilePrimary,
-		StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay(),
-	}}})
-	require.NoError(t, err)
-	// 2026-10-29 新契约：WAL 纯内存、重启即丢。“内容不丢”现在靠**重读**（重启时 read/durable
-	// 退到 reclaim，tailer 从文件重读那段字节）而不是靠“队列还在”。所以必须真跑一轮采集。
-	recovered.pollOnce()
-	require.Len(t, durableEvents(t, recovered, "node:1/g1"), 1)
-	// 2026-11-02 投递路径简化：投递不再调用 `publishSnapshot` ⇒ 重启后也不会有任何 catalog
-	// 投影条目。「重启后仍能重新采集并落段」这条（上面的 durableEvents）仍然成立且仍然关键，
-	// 它是本用例真正的关切（内容不丢）；「catalog 里有记录」那条已无对象。
-	_, ok = recoveredCatalog.Get(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()})
-	require.False(t, ok, "简化后投递不再发布投影；这里如实记录该断言已无对象")
-}
-
-func TestOwnerChangeDuringVerificationCannotPublishToNewOwner(t *testing.T) {
-	// 2026-11-02 投递路径简化：本用例守「校验期间换主不得把本次投影发布到新权威上」。
-	//
-	// 那个保护长在 `publishSnapshot` 的 `sameCatalogAuthority(observed, rec)` 里——
-	// 简化后投递不再发布（`deliverCtx` 只做「去重 → 写段 → 写 VL」），该判断不再运行。
-	// 实测：`rec.PublishedProjection` 为 nil，直接 panic，并连带把后续用例全部拖成 fail。
-	t.Skip("投递路径简化（2026-11-02）：投递不再发布快照，「换主时的发布守卫」失去对象（且会因 nil 解引用 panic）")
-	cat := catalog.New(nil)
-	key := catalog.PartitionKey{StorageNamespace: "node:race", UTCDay: runtimeTestUTCDay()}
-	fixture := &projectionVLFixture{}
-	switched := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 注入「验证期间换主」的时点必须锚定在**校验查询**上：代次占用探测（见
-		// nextFreeProjectionGeneration）走的是同一个端点，其特征为 `| fields _time | limit 1`
-		// （2026-10-08 起也带显式时间窗），校验查询才带 `_msg` 等完整字段列表——按查询内容
-		// 区分，不再依赖「探测无时间窗」这一已变更的实现细节。
-		if r.URL.Path == "/select/logsql/query" && strings.Contains(r.URL.Query().Get("query"), "_msg") && !switched {
-			switched = true
-			rec := catalog.NewStableRecord(key, catalog.OwnerCold, 2, "cold-after-switch")
-			require.NoError(t, cat.AppendJournal(catalog.JournalEntry{Key: key, Record: rec, AuthorityCommit: true}))
-		}
-		fixture.ServeHTTP(w, r)
-	}))
-	defer server.Close()
-	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: server.URL})
-	require.NoError(t, err)
-	root := t.TempDir()
-	path := filepath.Join(root, "source.log")
-	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: race\n[12:00:02] [Server thread/INFO]: boundary\n"), 0o600))
-	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{{LogSourceID: "node:race", SourceGeneration: "g1", StorageNamespace: "node:race", Path: path}}})
-	require.NoError(t, err)
-	m.pollOnce()
-	rec, _ := cat.Get(key)
-	require.Nil(t, rec.PublishedProjection, "HOT verification must not publish into a newly selected COLD owner")
-	require.NotEmpty(t, m.state.Sources["node:race/g1"].WAL)
-	require.Empty(t, durableEvents(t, m, "node:race/g1"))
 }
 
 func TestManagerPersistsDurableWALBeforeInsertRequest(t *testing.T) {
@@ -809,105 +436,6 @@ func TestManagerPersistsDurableWALBeforeInsertRequest(t *testing.T) {
 	m.pollOnce()
 	entry := m.pipes["node:1/g1"].Ledger().Get(ledger.SourceKey{LogSourceID: "node:1", SourceGeneration: "g1"})
 	require.Equal(t, logtypes.DeliveryRequestDone, entry.DeliveryState)
-}
-
-func TestManagerDoesNotPublishWhenProjectionRowsAreNotVisible(t *testing.T) {
-	// 2026-11-02 投递路径简化：本用例守「VL 回了 200 但行不可见 ⇒ 不得当作已发布」。
-	//
-	// 那个守卫长在写后逐字段校验（`verifyProjection` / `writeProjectionDay` 尾部）与
-	// `publishSnapshot` 上。简化后 `deliverCtx` 只做「去重 → 写段 → 写 VL」，
-	// **不再核对可见性、也不再发布**——所以本用例的两条断言失去对象：
-	//   - “不得发布”：现在根本不会发布任何东西（对所有源都恒真，不再有区分力）；
-	//   - “条目留在 WAL”：投递自称成功后回收闸放行，条目被剪掉（这正是简化已知的语义损失，
-	//     见 d515a807 的提交说明「不再维护『哪段数据已完整发布』」）。
-	//
-	// 保留这条静默丢失的**已知代价**记录在此，不装作它仍然成立。
-	t.Skip("投递路径简化（2026-11-02）：投递不再校验可见性也不再发布，「不可见不得当作已发布」失去对象")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: server.URL})
-	require.NoError(t, err)
-	root := t.TempDir()
-	path := filepath.Join(root, "latest.log")
-	// 先登记再产生日志（FILE_PRIMARY 源一律 StartAtEOF，裁定 D）。
-	require.NoError(t, os.WriteFile(path, nil, 0o600))
-	cat := catalog.New(catalog.NewMemJournal())
-	m, err := newTestManager(t, Options{Root: root, VL: vl, Catalog: cat, Journal: cat.Journal(), VerificationTimeout: 50 * time.Millisecond,
-		Sources: []SourceConfig{{LogSourceID: "node:1", SourceGeneration: "g1", Path: path,
-			Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()}}})
-	require.NoError(t, err)
-	appendPollTestLines(t, path, "[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n")
-	m.pollOnce()
-	_, ok := cat.Get(catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()})
-	require.False(t, ok, "request success without visible canonical rows cannot publish")
-	require.NotEmpty(t, m.state.Sources["node:1/g1"].WAL)
-}
-
-func TestManagerNewBatchPublishesIsolatedView(t *testing.T) {
-	// 2026-11-02 投递路径简化：本用例守两件事——
-	//   ① 每批投递都会发布一个可被 `query.Planner` 规划出来的隔离视图；
-	//   ② 后续追加不得让已发放的租约视图跟着漂移（`ClosedVisibleSeq` 固定在发租约那一刻）。
-	// 两者都长在 `publishSnapshot` + `PublishedProjection` + 租约机制上，而这条链已随简化删除
-	// （`deliverCtx` 只做「去重 → 写段 → 写 VL」）。实测：`cat.Get` 现在恒不命中。
-	t.Skip("投递路径简化（2026-11-02）：投递不再发布投影，隔离视图与租约固定水位整条链已删")
-	client, fixture := newProjectionVL(t)
-	root := t.TempDir()
-	path := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(path, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o600))
-	source := SourceConfig{LogSourceID: "node:1", SourceGeneration: "g1", Path: path,
-		Mode: pipeline.ModeFilePrimary, StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()}
-	cat := catalog.New(catalog.NewMemJournal())
-	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source}})
-	require.NoError(t, err)
-	m.pollOnce()
-	partition := catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: runtimeTestUTCDay()}
-	first, ok := cat.Get(partition)
-	require.True(t, ok)
-	require.Equal(t, "projection-1", first.PublishedProjection.ProjectionGeneration)
-	planner := query.NewPlanner(cat, nil)
-	old := planner.Plan(query.PlanRequest{TargetIDs: []string{"node:1"}}).View
-	require.NotNil(t, old)
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	require.NoError(t, err)
-	_, err = f.WriteString("[12:00:03] [Server thread/INFO]: third\n[12:00:04] [Server thread/INFO]: fourth\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	m.pollOnce()
-	second, ok := cat.Get(partition)
-	require.True(t, ok)
-	require.Equal(t, first.PublishedProjection.ProjectionGeneration, second.PublishedProjection.ProjectionGeneration, "已确认活跃尾不按批再造代次")
-	require.Equal(t, []string{"projection-1"}, second.PublishedProjection.ProjectionGenerations)
-	require.Greater(t, publishedEvidenceClosed(second, source), publishedEvidenceClosed(first, source), "白名单不增长但本批精确可见水位必须推进")
-	held := planner.Plan(query.PlanRequest{ViewRef: &query.ViewRef{ViewID: old.ViewID}})
-	require.Nil(t, held.Err, "物理位置未切换时，已有租约视图仍应可读")
-	require.Equal(t, publishedEvidenceClosed(first, source), held.View.ClosedVisibleSeq[partition.String()], "旧view必须固定旧封闭前缀，不能跟随后续追加漂移")
-	fresh := planner.Plan(query.PlanRequest{TargetIDs: []string{"node:1"}})
-	require.Nil(t, fresh.Err)
-	require.NotEqual(t, old.ViewID, fresh.View.ViewID)
-	require.Equal(t, publishedEvidenceClosed(second, source), fresh.View.ClosedVisibleSeq[partition.String()])
-	require.Len(t, durableEvents(t, m, "node:1/g1"), 3)
-	require.Len(t, fixture.writes, 2)
-	require.NotContains(t, string(fixture.writes[1]), "first", "normal batches write only the new immutable micro-generation")
-	positions, ok := m.pipes["node:1/g1"].Positions()
-	require.True(t, ok)
-	require.Equal(t, positions.Durable, positions.Reclaim)
-}
-
-func TestCanonicalRecoveryEventsUseDurableTimeForRawEvent(t *testing.T) {
-	identity := logtypes.SourceIdentity{LogSourceID: "node:1", SourceGeneration: "g1", ParserVersion: "1.0.0"}
-	event := logtypes.BuildEvent(identity, logtypes.RecordRange{Start: 1, End: 2}, "", "2026-09-22T12:00:00Z", "", "stdout", "raw")
-	result, err := (&Manager{}).canonicalRecoveryEvents("node:1/g1", persistedSource{
-		Events: []logtypes.Event{event},
-		WAL:    []acquire.WALEntry{{Event: event, Durable: true}},
-	})
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-	require.Equal(t, event.EventID, result[0].EventID)
-	require.Equal(t, "2026-09-22T12:00:00Z", result[0].EventTimeUTC)
-	require.Equal(t, logtypes.CanonicalContentHash(result[0].EventTimeUTC, "", "stdout", "raw"), result[0].CanonicalHash)
 }
 
 func TestProjectionVerificationQueriesHistoricalEventTime(t *testing.T) {
@@ -1271,10 +799,12 @@ func TestManagerRepeatedPollKeepsStoredEventSetStable(t *testing.T) {
 		"[12:00:02] [Server thread/INFO]: second\n"+
 		"[12:00:03] [Server thread/INFO]: boundary\n")
 	m.pollOnce()
-	settled, err := newTestManager(t, Options{Root: root, VL: client, Catalog: catalog.New(cat.Journal()), Journal: cat.Journal()})
-	require.NoError(t, err)
-	baseline := durableEvents(t, settled, "node:idem/g1")
+	// 2026-11-03：事件段删除后，「重启后事件集合还在」这个前提不再成立（段在 tmpfs，重启即丢）。
+	// 本用例要守的是「同一进程内重复轮询不得让集合膨胀」，因此直接在**同一个** Manager 上继续，
+	// 而不是重建一个（重建后 deliveredBySource 为空，测的就不再是幂等而是"重启丢没丢"）。
+	baseline := durableEvents(t, m, "node:idem/g1")
 	require.NotEmpty(t, baseline)
+	settled := m
 	// 文件无新增时重复轮询必须幂等：集合既不膨胀也不重复。
 	settled.pollOnce()
 	settled.pollOnce()

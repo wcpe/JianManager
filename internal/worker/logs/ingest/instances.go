@@ -549,7 +549,6 @@ func (m *Manager) detachSourcesForRuleChange(old InstanceBinding) error {
 	}
 	// 绑定一并摘除：调用方随后以新规则走完整登记分支并写回新绑定。
 	delete(m.state.Instances, old.UUID)
-	m.publishReconcileViewLocked(true)
 	m.mu.Unlock()
 	return nil
 }
@@ -732,7 +731,6 @@ func (m *Manager) restoreRuleChangeRollback(snap *ruleChangeRollback) {
 	}
 	// 绑定先摘掉，全部源都恢复成功后再放回（见下方"未全部恢复"的说明）。
 	delete(m.state.Instances, snap.uuid)
-	m.publishReconcileViewLocked(true)
 	m.mu.Unlock()
 
 	restored := true
@@ -763,7 +761,6 @@ func (m *Manager) restoreRuleChangeRollback(snap *ruleChangeRollback) {
 		m.state.Instances = make(map[string]InstanceBinding)
 	}
 	m.state.Instances[snap.uuid] = snap.binding
-	m.publishReconcileViewLocked(true)
 	m.mu.Unlock()
 }
 
@@ -781,7 +778,6 @@ func (m *Manager) rollbackRegisterSources(keys []string) {
 		delete(m.persistedRev, key)
 		delete(m.persistedCover, key)
 	}
-	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图
 }
 
 // validateInstanceRelativePath 校验实例级日志路径（安全约束，2026-10-19；链接兜底 2026-10-22）。

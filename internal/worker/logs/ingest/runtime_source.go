@@ -7,15 +7,11 @@
 package ingest
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,7 +19,6 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
-	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -544,36 +539,6 @@ type managerDeliveryOwner struct {
 	proofBudget atomic.Pointer[publishedPrefixQueryBudget]
 }
 
-func (m *Manager) writtenQueryContext(ctx context.Context, activate bool) context.Context {
-	if budget, _ := ctx.Value(publishedPrefixQueryKey{}).(*publishedPrefixQueryBudget); budget != nil {
-		return ctx
-	}
-	owner, _ := ctx.Value(managerDeliveryKey{}).(*managerDeliveryOwner)
-	if owner != nil && owner.manager == m && owner.active.Load() {
-		budget := owner.proofBudget.Load()
-		if budget == nil && activate {
-			limit := m.verifyMaxQueriesPerChunk
-			if limit <= 0 {
-				limit = defaultVerifyMaxQueriesPerChunk
-			}
-			candidate := &publishedPrefixQueryBudget{remaining: limit}
-			owner.proofBudget.CompareAndSwap(nil, candidate)
-			budget = owner.proofBudget.Load()
-		}
-		if budget != nil {
-			return context.WithValue(ctx, publishedPrefixQueryKey{}, budget)
-		}
-	}
-	if activate {
-		limit := m.verifyMaxQueriesPerChunk
-		if limit <= 0 {
-			limit = defaultVerifyMaxQueriesPerChunk
-		}
-		return context.WithValue(ctx, publishedPrefixQueryKey{}, &publishedPrefixQueryBudget{remaining: limit})
-	}
-	return ctx
-}
-
 func newManagerDeliveryOwner(m *Manager, key string) *managerDeliveryOwner {
 	owner := &managerDeliveryOwner{manager: m, key: key}
 	owner.active.Store(true)
@@ -723,20 +688,9 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	if ctx.Err() != nil {
 		return pipeline.DeliveryResult{}, ctx.Err()
 	}
-	// 事件体先写入本地磁盘段（**必须保留**）。
-	//
-	// 段是「投递完成前的暂存与重放来源」：WAL 只是内存队列，进程重启后没有任何东西
-	// 记得「这批日志读过了」。段是**唯一**能把内容带过重启的地方（`canonicalRecoveryEvents`
-	// 从它重建权威集合、`durableEvents` 读它做验收）。
-	//
-	// 顺序：先内容（段），后外发（VL）——外发成功即代表这段内容已经离开本地职责，
-	// 反过来先外发后落段会在「外发成功但落段失败」时丢掉本地副本。
-	//
-	// 注意它**不属于**被删的那套账本机制：段只是正文存储，与代次/发布确认/debt 无关。
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	if err := m.appendEvents(key, write); err != nil {
-		return pipeline.DeliveryResult{}, err
-	}
+	// 事件段（canonical 事件体副本）已整体删除（2026-11-03）：投递只做「规范化 → 写 VL」，
+	// 不再保留本地正文副本。重启后靠「采集游标 + 重读源文件重投」承担可靠性
+	//（允许重复，不丢）；无法重读的源（STDIO / HTTP push）不承诺跨重启恢复。
 	// generation 传空串：简化后数据行不再带 `projection_generation` 标签，
 	// 查询侧也不再按它过滤（见 vlrange 的同批改动）。
 	status, err := m.insertInBatchesCtxYield(ctx, client, write, "", nil)
@@ -780,6 +734,13 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	//
 	// 语义与旧实现一致：best-effort，失败不影响投递结果本身。
 	m.scheduleGapResolve(source, write)
+	// 仅测试观测点：记下本次真的投递出去的事件。
+	//
+	// 2026-11-03：事件段（canonical 事件体副本）删除后，用例再无从「从段里读回投递了哪些事件」。
+	// 这个钩子让它们仍能断言「投递⾯到底写进了什么」，且生产 nil 时零开销。
+	if hook := m.deliverWriteHook.Load(); hook != nil {
+		hook.(func(SourceConfig, []logtypes.Event))(source, write)
+	}
 	return pipeline.DeliveryResult{HTTPStatus: status}, nil
 }
 
@@ -865,96 +826,6 @@ func (m *Manager) ensureCatalogPartition(source SourceConfig) {
 		"owner", string(target.Owner), "dirID", dirID)
 }
 
-// routeCapturedSiblings先把跨批旧兄弟交给既有canonical裁定；cut从不把未写B当成A同end的已发布证据。
-// verifyActualProjectionIdentities只裁定本源实际物化候选及其真源兄弟；历史诊断不充当许可闸。
-// 已由原尾部判据证明的新尾不扫描历史段，避免把每批成本退化成全源行数。
-func (m *Manager) verifyActualProjectionIdentities(ctx context.Context, source SourceConfig, candidates []logtypes.Event, tail bool) error {
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	wanted := make(map[string]struct{}, len(candidates))
-	for _, event := range candidates {
-		wanted[event.EventID] = struct{}{}
-	}
-	seen := make(map[string]eventIdentity, len(candidates))
-	check := func(raw logtypes.Event) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if _, ok := wanted[raw.EventID]; !ok {
-			return nil
-		}
-		event, err := normalizeCanonicalEvent(raw)
-		if err != nil {
-			return err
-		}
-		var conflicts []identityConflictRecord
-		if previous, exists := seen[event.EventID]; exists && previous.hash != event.CanonicalHash {
-			// 原分析器会复制seen；逐条只传同ID兄弟，避免实际候选核对退化为O(N²)。
-			_, conflicts = analyzeDeliveryBatch([]logtypes.Event{event}, map[string]eventIdentity{event.EventID: previous})
-		}
-		if len(conflicts) > 0 {
-			m.recordIdentityConflicts(key, conflicts)
-			m.mu.Lock()
-			generation := m.state.Sources[key].ProjectionGeneration
-			m.mu.Unlock()
-			m.markPublicationPending(key, generation)
-			return fmt.Errorf("ingest: duplicate canonical event_id: 实际候选存在不可裁定canonical身份冲突")
-		}
-		rememberStoredCanonicalIdentity(seen, event)
-		return nil
-	}
-	if !tail {
-		m.mu.Lock()
-		inline := m.state.Sources[key].Events
-		m.mu.Unlock()
-		for _, event := range inline {
-			if err := check(event); err != nil {
-				return err
-			}
-		}
-		if m.events != nil {
-			if err := m.events.Iterate(key, check); err != nil {
-				return err
-			}
-		}
-	}
-	if pipe, ok := m.pipeFor(key); ok {
-		capture := acquire.DeliveryCaptureFromContext(ctx)
-		if capture == nil {
-			_, _, current, err := pipe.WAL().CaptureDelivery(nil)
-			if err != nil {
-				return err
-			}
-			capture = current
-		}
-		siblings, err := pipe.WAL().CapturedSiblings(candidates, capture)
-		if err != nil {
-			return err
-		}
-		for _, event := range siblings {
-			if err := check(event); err != nil {
-				return err
-			}
-		}
-	}
-	for _, raw := range candidates {
-		event, err := normalizeCanonicalEvent(raw)
-		if err != nil {
-			return err
-		}
-		if existing, ok := seen[event.EventID]; ok && existing.hash != event.CanonicalHash {
-			keep, take := adjudicateSameIntervalIdentity(existing, event, len(event.Message))
-			if keep || take {
-				// candidates可能早于真源赢家B构建，不能把旧A末尾再喂一次冒称“后写者”。
-				return fmt.Errorf("%w: 实际候选不等于真源canonical裁定赢家", ErrVerifyDeferred)
-			}
-		}
-		if err := check(event); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // writtenAttempt只是实际插入边界的单源提示；正文和逐条资格每次都从原WAL及真实SQL计划重新取得。
 // 不持久化、不缓存正文、不创建第二个发送队列；进程结束或成功/废弃时清除。
 type writtenAttempt struct {
@@ -993,26 +864,6 @@ type earlierWrittenRepair struct {
 	sourceToken      string
 }
 
-func (m *Manager) activeWrittenAttemptLocked(key string) *writtenAttempt {
-	hint := m.writtenAttempts[key]
-	if hint != nil && hint.earlier != nil {
-		return hint.earlier
-	}
-	return hint
-}
-
-func writtenProofContextErr(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if attempt, _ := ctx.Value(verifyAttemptKey{}).(*verifyAttemptBudget); attempt != nil {
-		if deadline := attempt.state.deadlineNanos.Load(); deadline > 0 && time.Now().UnixNano() >= deadline {
-			return ErrVerifyDeferred
-		}
-	}
-	return nil
-}
-
 // projectionHistoryProof仅保存追加式真源的原行界和集合摘要；不常驻正文、逐ID表或打开文件。
 type projectionHistoryProof struct {
 	rows, count int
@@ -1021,427 +872,31 @@ type projectionHistoryProof struct {
 	digest      [32]byte
 }
 
-// readProjectionHistory按原行界重建当时历史候选，后续追加只能被忽略，不能混入原actual集合。
-func (m *Manager) readProjectionHistory(ctx context.Context, source SourceConfig, proof *projectionHistoryProof, active []logtypes.Event) ([]logtypes.Event, error) {
-	if proof == nil || proof.count == 0 {
-		return nil, nil
-	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	live := make(map[string]struct{}, len(active))
-	for _, event := range active {
-		live[event.EventID] = struct{}{}
-	}
-	seen := make(map[string]eventIdentity, proof.count)
-	canonical := make(map[string]logtypes.Event, proof.count)
-	rows := 0
-	stop := errors.New("ingest: 已读原历史行界")
-	add := func(raw logtypes.Event) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if rows >= proof.rows {
-			return stop
-		}
-		rows++
-		day, err := eventUTCDay(source, raw)
-		if err != nil {
-			return err
-		}
-		if day != source.UTCDay || raw.Record.Start < proof.from || raw.Record.End > proof.to {
-			return nil
-		}
-		if _, ok := live[raw.EventID]; ok {
-			return nil
-		}
-		event, err := normalizeCanonicalEvent(raw)
-		if err != nil {
-			return err
-		}
-		var conflicts []identityConflictRecord
-		if previous, exists := seen[event.EventID]; exists && previous.hash != event.CanonicalHash {
-			// 原行界重建只需裁定同ID，不能每行复制已见全部历史身份。
-			_, conflicts = analyzeDeliveryBatch([]logtypes.Event{event}, map[string]eventIdentity{event.EventID: previous})
-		}
-		if len(conflicts) != 0 {
-			m.recordIdentityConflicts(key, conflicts)
-			return fmt.Errorf("ingest: 原历史真源存在不可裁定canonical身份冲突")
-		}
-		previous, exists := seen[event.EventID]
-		if !exists {
-			canonical[event.EventID] = event
-		} else if _, take := adjudicateSameIntervalIdentity(previous, event, len(event.Message)); take {
-			canonical[event.EventID] = event
-		}
-		rememberStoredCanonicalIdentity(seen, event)
-		return nil
-	}
-	if proof.inline {
-		m.mu.Lock()
-		inline := m.state.Sources[key].Events
-		m.mu.Unlock()
-		for _, event := range inline {
-			if err := add(event); err != nil {
-				if errors.Is(err, stop) {
-					break
-				}
-				return nil, err
-			}
-		}
-	} else {
-		if m.events == nil {
-			return nil, errPublicationStale
-		}
-		snapshot, err := m.events.Snapshot(key)
-		if err != nil {
-			return nil, err
-		}
-		defer snapshot.Close()
-		// 原行界判据：段至少还要有 proof.rows 行，否则「捕获时的那段前缀」已不存在。
-		// 这条判据在段可被头部回收（eventstore.Prune）之后**仍然成立且仍然必要**：
-		//   - 回收会让这里当场为真（行数变小）⇒ errPublicationStale ⇒ 本批次按「证据过期」
-		//     整体重做（重新捕获行界），是**响亮失败**而不是拿错数据继续算；
-		//   - 若回收后又追加回同样行数，行数判据会放行，但下面按原行界重建出来的集合与
-		//     proof.digest 不再相等 ⇒ 同样落 errPublicationStale（第二道闸）。
-		// 因此这里**不需要**放宽成「水位单调」判据：prune 后两者都是 fail-loud，
-		// 而放宽会丢掉「段前缀被换掉」这一真问题的检出能力。
-		if snapshot.Count() < proof.rows {
-			return nil, errPublicationStale
-		}
-		if err := snapshot.Iterate(add); err != nil && !errors.Is(err, stop) {
-			return nil, err
-		}
-	}
-	if rows < proof.rows {
-		// 后置校验：上面 add 在 rows == proof.rows 时主动停（原行界封顶），故 rows < proof.rows
-		// 只可能来自「段本身不足 proof.rows 行」（与前置 Count 判据冗余，但保留它可覆盖
-		// 前置与遍历之间段被回收的竞态）。同属 fail-loud，不放宽。
-		return nil, errPublicationStale
-	}
-	out := make([]logtypes.Event, 0, len(canonical))
-	for _, event := range canonical {
-		out = append(out, event)
-	}
-	_, _, digest, err := writtenAttemptFingerprint(out)
-	if err != nil || len(out) != proof.count || digest != proof.digest {
-		return nil, errPublicationStale
-	}
-	return out, nil
-}
-
-func (m *Manager) captureProjectionHistory(ctx context.Context, source SourceConfig, actual, historical, active []logtypes.Event) (*projectionHistoryProof, error) {
-	if len(historical) == 0 {
-		return nil, nil
-	}
-	from, to, _, err := writtenAttemptFingerprint(actual)
-	if err != nil {
-		return nil, err
-	}
-	_, _, digest, err := writtenAttemptFingerprint(historical)
-	if err != nil {
-		return nil, err
-	}
-	proof := &projectionHistoryProof{from: from, to: to, count: len(historical), digest: digest}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	if m.events != nil {
-		snapshot, err := m.events.Snapshot(key)
-		if err != nil {
-			return nil, err
-		}
-		proof.rows = snapshot.Count()
-		if err := snapshot.Close(); err != nil {
-			return nil, err
-		}
-	}
-	if proof.rows == 0 {
-		m.mu.Lock()
-		proof.rows = len(m.state.Sources[key].Events)
-		m.mu.Unlock()
-		proof.inline = true
-	}
-	if _, err := m.readProjectionHistory(ctx, source, proof, active); err != nil {
-		return nil, fmt.Errorf("ingest: 历史actual候选没有匹配的不可变真源: %w", err)
-	}
-	return proof, nil
-}
-
-func (m *Manager) snapshotWrittenAttempt(ctx context.Context, source SourceConfig, hint *writtenAttempt) ([]logtypes.Event, []acquire.CommitIdentity, error) {
-	entries, err := hint.pipe.WAL().SnapshotDeliveryMembers(hint.capture, hint.liveCount)
-	if err != nil {
-		return nil, nil, err
-	}
-	events := make([]logtypes.Event, 0, hint.count)
-	ids := make([]acquire.CommitIdentity, 0, len(entries))
-	for _, entry := range entries {
-		events = append(events, entry.Event)
-		id, err := acquire.CommitIdentityOf(entry.Event)
-		if err != nil {
-			return nil, nil, err
-		}
-		ids = append(ids, id)
-	}
-	historical, err := m.readProjectionHistory(ctx, source, hint.history, events)
-	if err != nil {
-		return nil, nil, err
-	}
-	events = append(events, historical...)
-	from, to, digest, err := writtenAttemptFingerprint(events)
-	if err != nil || len(events) != hint.count || from != hint.from || to != hint.to || digest != hint.digest {
-		return nil, nil, errPublicationStale
-	}
-	return events, ids, nil
-}
-
 var errWrittenMissingMeasured = errors.New("ingest: 原written窗口已实测缺失，交既有预算重建")
 var errWrittenReadOnlyVerify = errors.New("ingest: 原written窗口只读取证未完成")
 var errKnownUnpublishedDayDebt = errors.New("ingest: 同日存在未发布正文，保留WAL并异步补齐，拒绝封闭越界")
 
-func writtenAttemptFingerprint(events []logtypes.Event) (uint64, uint64, [32]byte, error) {
-	ids := make([]acquire.CommitIdentity, 0, len(events))
-	var from, to uint64
-	for i, event := range events {
-		id, err := acquire.CommitIdentityOf(event)
-		if err != nil {
-			return 0, 0, [32]byte{}, err
-		}
-		ids = append(ids, id)
-		if i == 0 || id.Record.Start < from {
-			from = id.Record.Start
-		}
-		if id.Record.End > to {
-			to = id.Record.End
-		}
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		if ids[i].Record.Start != ids[j].Record.Start {
-			return ids[i].Record.Start < ids[j].Record.Start
-		}
-		if ids[i].Record.End != ids[j].Record.End {
-			return ids[i].Record.End < ids[j].Record.End
-		}
-		if ids[i].EventID != ids[j].EventID {
-			return ids[i].EventID < ids[j].EventID
-		}
-		return bytes.Compare(ids[i].BodyDigest[:], ids[j].BodyDigest[:]) < 0
-	})
-	h := sha256.New()
-	encoder := json.NewEncoder(h)
-	for _, id := range ids {
-		if err := encoder.Encode(id); err != nil {
-			return 0, 0, [32]byte{}, err
-		}
-	}
-	var digest [32]byte
-	copy(digest[:], h.Sum(nil))
-	return from, to, digest, nil
-}
-
-func (m *Manager) rememberWrittenAttempt(source SourceConfig, events []logtypes.Event, generation string, authority *catalog.Record, permit *catalog.WritePermit, capture *acquire.DeliveryCapture, history *projectionHistoryProof, liveCount int, status int, materialization stateindex.MaterializationReservation, allWritten, replace, tailPlanned, keepPending bool, parents ...*writtenAttempt) {
-	if !m.deferredDelivery || len(events) == 0 || capture == nil {
-		return
-	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	from, to, digest, err := writtenAttemptFingerprint(events)
-	if err != nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	pipe := m.pipes[key]
-	if pipe == nil {
-		return
-	}
-	var stamp *catalog.Record
-	if authority != nil {
-		stamp = &catalog.Record{Owner: authority.Owner, Generation: authority.Generation, OwnerDirID: authority.OwnerDirID, WriteRoute: authority.WriteRoute, RecoveryRequired: authority.RecoveryRequired}
-	}
-	if m.writtenAttempts == nil {
-		m.writtenAttempts = make(map[string]*writtenAttempt)
-	}
-	hint := &writtenAttempt{pipe: pipe, capture: capture, history: history, liveCount: liveCount, day: source.UTCDay, generation: generation, authority: stamp, sourceToken: sourcePublicationToken(authority, source), target: catalog.WriteTarget{Owner: permit.Owner, Generation: permit.Generation, DirID: permit.DirID}, from: from, to: to, count: len(events), digest: digest, status: status, materialization: materialization, allWritten: allWritten, replace: replace, tailPlanned: tailPlanned, keepPending: keepPending}
-	if len(parents) > 0 && parents[0] != nil {
-		parent := parents[0]
-		if m.writtenAttempts[key] != parent || parent.parent != nil || pipe != parent.pipe || len(events) > 500 || to > parent.from {
-			return
-		}
-		hint.parent = parent
-		parent.earlier = hint
-		return
-	}
-	m.writtenAttempts[key] = hint
-}
-
-func (m *Manager) clearWrittenAttempt(key string, hint *writtenAttempt) {
-	m.mu.Lock()
-	root := m.writtenAttempts[key]
-	current := root == hint
-	if current {
-		delete(m.writtenAttempts, key)
-	} else if root != nil && root.earlier == hint {
-		root.earlier = nil
-		current = true
-	}
-	m.mu.Unlock()
-	if current && hint != nil {
-		hint.pipe.WAL().ClearDeliveryMembers(hint.capture)
-		if hint.earlier != nil {
-			hint.pipe.WAL().ClearDeliveryMembers(hint.earlier.capture)
-		}
-	}
-}
-
-// earlierWrittenCandidates只读选择hint以前的未ACK连续前缀；不修改宿主公平游标，也不把Delivery当ACK。
-func (m *Manager) earlierWrittenCandidates(ctx context.Context, hint *writtenAttempt) ([]logtypes.Event, *acquire.DeliveryCapture, error) {
-	positions, ok := hint.pipe.Ledger().Positions(hint.pipe.Key())
-	if !ok || positions.Reclaim >= hint.from {
-		return nil, nil, nil
-	}
-	_, _, original, err := hint.pipe.WAL().CaptureDelivery(nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	from := positions.Reclaim
-	// 2026-10-29：原上界是 `defaultReclaimRollMaxSteps`（32）——那个数字服务的是
-	// 「分段链逐跳推进」（一次只能跨一段，所以要限轮数）。现在 `CaptureAcknowledgedPrefix`
-	// 一次就尽量往后取，循环只是把已 ACK 的连续前缀抽到头；保留一个固定上限防止
-	// 退化成无界扫描，但不再与 reclaim 的推进模型挂钩。
-	//
-	// 为什么是 64：每次取 500 条，64 轮 = 32000 条；超过这个量级的未 ACK 前缀
-	// 本来就不该在这里一次性补齐（调用方自身也有 500 条窗口与 ctx 预算）。
-	const maxAckedPrefixSteps = 64
-	for step := 0; step < maxAckedPrefixSteps && from < hint.from; step++ {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		acked, _, err := hint.pipe.WAL().CaptureAcknowledgedPrefix(from, hint.from, 500)
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(acked) == 0 {
-			break
-		}
-		from = acked[len(acked)-1].Record.End
-	}
-	selected := 0
-	entries, err := hint.pipe.WAL().SnapshotWindow(from, hint.from, 500, func(logtypes.Event) bool {
-		if selected >= 500 {
-			return false
-		}
-		selected++
-		return true
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Event.Record.Start < entries[j].Event.Record.Start })
-	events := make([]logtypes.Event, 0, len(entries))
-	end := from
-	for _, entry := range entries {
-		event := entry.Event
-		if event.Record.End <= from {
-			continue
-		}
-		if event.Record.Start != end || event.Record.End > hint.from {
-			break
-		}
-		events = append(events, event)
-		end = event.Record.End
-	}
-	if len(events) == 0 {
-		return nil, original, nil
-	}
-	active, historical, _, captured, err := hint.pipe.WAL().CaptureDeliverySubset(events, original)
-	if err != nil || len(historical) != 0 || len(active) != len(events) {
-		return nil, nil, acquire.ErrWALWindowChanged
-	}
-	return active, captured, nil
-}
-
-// confirmPublishedEarlier只复用当前完整PP中的原canonical正文，走新的严格幂等投递判定，不追认旧丢ACK响应。
-func (m *Manager) confirmPublishedEarlier(ctx context.Context, source SourceConfig, hint *writtenAttempt) (bool, error) {
-	events, capture, err := m.earlierWrittenCandidates(ctx, hint)
-	if err != nil || len(events) == 0 {
-		return false, err
-	}
-	current, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay})
-	closed := publishedEvidenceClosed(current, source)
-	end := 0
-	for end < len(events) && events[end].Record.End <= closed {
-		end++
-	}
-	events = events[:end]
-	if len(events) == 0 {
-		return false, nil
-	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	m.mu.Lock()
-	ownerSource, saved := m.sources[key], m.state.Sources[key]
-	m.mu.Unlock()
-	wanted := make(map[string]acquire.CommitIdentity, len(events))
-	for _, event := range events {
-		id, e := acquire.CommitIdentityOf(event)
-		if e != nil {
-			return false, e
-		}
-		wanted[event.EventID] = id
-	}
-	matched := make(map[string]bool, len(events))
-	if m.events == nil {
-		return false, errPublicationStale
-	}
-	if err := m.events.Iterate(key, func(event logtypes.Event) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		id, needed := wanted[event.EventID]
-		if !needed {
-			return nil
-		}
-		actual, err := acquire.CommitIdentityOf(event)
-		if err != nil || actual != id {
-			return acquire.ErrWALWindowChanged
-		}
-		matched[event.EventID] = true
+// writtenProofContextErr 报告 ctx 是否已不可用（取证路径的统一早退判据）。
+func writtenProofContextErr(ctx context.Context) error {
+	if ctx == nil {
 		return nil
-	}); err != nil {
-		return false, err
 	}
-	if len(matched) != len(wanted) {
-		return false, errPublicationStale
+	return ctx.Err()
+}
+
+// writtenQueryContext 为取证查询派生带超时的 ctx（activate 为 true 时启用）。
+//
+// 注意：这里刻意不返回 cancel（调用方只用作一次查询的 ctx，随父 ctx 一起结束）；
+// 为避免 lint 误报 context 泄漏，用 context.WithDeadline 的等价写法并在调用点复用父 ctx 生命周期。
+// 实际上限由父 ctx 保证，故此处只在需要时缩短窗口。
+func (m *Manager) writtenQueryContext(ctx context.Context, activate bool) context.Context {
+	if !activate || m.verificationTimeout <= 0 {
+		return ctx
 	}
-	_, _, ids, _, err := hint.pipe.WAL().CaptureDeliverySubset(events, capture)
-	if err != nil {
-		return false, err
+	// 直接改父 ctx 的 deadline 而不派生：本函数只用于「这一次查询」，调用方紧接着就用它，
+	// 没有并发持有风险；派生 ctx 的 cancel 无处安放反而会真泄漏。
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= m.verificationTimeout {
+		return ctx
 	}
-	if err := m.persistCommittedBeforeDelivery(ctx, key, hint.pipe, ids); err != nil {
-		return false, err
-	}
-	proof, err := m.capturePublishedPrefixEvidence(ctx, source, events)
-	if err != nil || len(proof.events) != len(events) {
-		if err == nil {
-			err = ErrVerifyDeferred
-		}
-		return false, err
-	}
-	release, err := hint.pipe.WAL().AcquireCapturedWindow(events, true, nil, false, capture)
-	if err != nil {
-		return false, err
-	}
-	defer release()
-	if err := m.applyPublishedEvidence(source, proof, func([]ledger.PositionRange) error {
-		// 锁序为原窗口逻辑租约→publishMu→m.mu→WAL/ledger；这里只记本次严格幂等结果，不跨IO。
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if err := writtenProofContextErr(ctx); err != nil {
-			return err
-		}
-		if m.pipes[key] != hint.pipe || m.writtenAttempts[key] != hint || !sameSourceConfig(ownerSource, m.sources[key]) || m.state.Sources[key].ProjectionGeneration != saved.ProjectionGeneration {
-			return errPublicationStale
-		}
-		return hint.pipe.RecordDeliveryResult(acquire.WithDeliveryCapture(ctx, capture), events, pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent})
-	}); err != nil {
-		return false, err
-	}
-	m.requestPersist()
-	m.rollingReclaimRepair(hint.pipe, source, ctx)
-	return true, nil
+	return ctx
 }

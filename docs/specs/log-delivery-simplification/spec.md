@@ -368,3 +368,95 @@ go install golang.org/x/tools/cmd/deadcode@latest
 拆分脚本的一个坑：第一刀必须落在 **import 块之后**。它后面紧跟约 800 行类型声明
 （`SourceConfig` / `persistedState` / `Manager` 等），若从「第一个 func」开始切，
 声明区会被整段丢弃，全包报 `undefined: SourceConfig`。
+
+## 10. 终极简化（2026-11-03）：事件段与重建链整体删除
+
+### 10.1 裁定
+
+用户原话：「只保留 WAL → 投递到 VL。eventstore 包整体删除，appendEvents 删除，
+writeProjectionDay/publishSnapshot 这些依赖完整正文的重建路径也要一起删除。
+**不要重建功能，浪费时间的功能**。」
+
+这条裁定把上一轮遗留的「两套投递语义并存」彻底收敛为一套：
+**采集 → 规范化 → WAL → 投递 VL**。没有本地正文副本，没有重建，没有对账重发。
+
+### 10.2 为什么事件段该删（上一轮我判断错的地方）
+
+我上一轮说「事件段还有 6 处活路径，不能删」。那些路径确实活着，但它们服务的是
+**重建与内容级核对**——同一个决定要一起做：
+
+| 事件段的用途 | 删除后的去向 |
+|---|---|
+| 重建/补写历史窗口（`writeProjectionDay`） | 功能取消。历史窗口由「重读源文件重新投递」覆盖 |
+| 逐字段校验读正文（`readProjectionHistory`） | 投递主路径早已不看（FR-508：HTTP 2xx 即结论） |
+| 缺口内容级核对（`canonicalRecoveryEvents`） | 改为 `landedVisibleInVL`（查 VL，不查本地副本） |
+| 启动恢复重放（`canonicalRecoveryEvents`） | 启动不再重放；靠游标 + 重读 |
+
+**事件段不是"被滥用"，而是它的唯一服务对象就是重建链。** 重建不要了，它就没有理由存在。
+
+### 10.3 删除清单（实测）
+
+```
+86 files changed, 281 insertions(+), 22393 deletions(-)
+58 个文件整体删除
+```
+
+- `internal/worker/logs/eventstore/` 整包（4854 行 + 全部测试）
+- `rebuild_scheduler.go` / `reconcile.go` / `reconcile_loop.go` / `startup_replay.go`
+  / `materialization_budget.go` / `eventstore_prune.go` / `active_tail_generation.go`
+  / `day_migration_repair.go`
+- `appendEvents` / `missingFromEventStore` / `canonicalRecoveryEvents` 全族
+- `writeProjection{,Plan,Day}` / `publish` / `publishSnapshot` / `tryConfirmPendingPublication*`
+- `readProjectionHistory` 与整个 `writtenAttempt` 体系
+- `startStartupRecovery` / `runStartupRecovery` / `runStartupReplayInline`
+- `config.go` 的 `Reconcile` / `ReconcileLoop` / `EventStorePrune` 三个配置面
+
+### 10.4 能力与代价（必须如实记）
+
+**保留的能力**（未受影响）：
+- 采集、规范化、WAL 排队、攒批、投递 VL、gzip、流标签、连接池
+- 缺口登记与**重投成功**消解（`resolveGapsLandedByDelivery`）
+- 查询面（Catalog / Planner / 固定 view / 联邦）、保留与归档导出
+
+**明确失去的能力**：
+- ❌ **重建/补写历史窗口**：某天数据在 VL 里丢了，系统无法再补（除非源文件仍在）
+- ❌ **内容级校验**：不再逐字段核对「VL 里的正文是否与我写的一致」，只认 HTTP 2xx
+- ❌ **缺口的内容级自愈**：`autoResolveGapsFromPublished` 现在恒返回 false
+- ❌ **启动重放**：重启后不重发任何历史内容
+
+**可靠性边界（关键）**：
+> 重启后「允许重复、不丢」这句话**只对源文件仍可读的源成立**。
+
+- `FILE_PRIMARY` 源：可重读 → 成立
+- `STDIO_PRIMARY` 源：没有文件可重读 → **重启窗口内的内容会丢**
+- HTTP push 源：同上
+
+这个边界以前也有（WAL 是内存队列），但当时事件段至少让「进程内」有副本。
+现在进程内也没有了——**投递失败即丢，只能靠重读**。
+
+### 10.5 实施时踩的三个坑
+
+1. **删代码连带删掉了 `New` 的字段赋值**
+   删 `writeProjectionPlan` 时，`Manager{...}` 字面量里的 `indexPrune:` /
+   `indexCommit:` / `walLimits:` 恰好相邻被一起删了。后果是**配置变零值**，
+   `delivery_batch_prune_test` 报「8000 行未裁剪」——功能静默失效，编译却全绿。
+   **防范：删块后用脚本对比 HEAD 版字面量字段名与当前，确认没有漏赋值。**
+
+2. **投递成功后 WAL 条目已被回收**
+   把测试夹具里 `canonicalRecoveryEvents` 换成 `pipe.WAL().Snapshot()` 会拿到空集。
+   正确做法：给 Manager 加**仅测试用**的 `deliverWriteHook`，投递成功时记录事件。
+
+3. **一整类测试前提被取消**
+   「重启后事件还在」「DELIVER_ERROR 可消解」「重启前后共 2 条」都依赖
+   「跨重启的事件副本」。这类要**改断言口径**而不是硬修：
+   跨重启的改成「只断言本进程新投递的」；依赖内容级核对的整条删掉并写明原因。
+
+### 10.6 跨包不变量（更新）
+
+**`ledger` 仍是回收的唯一真源**：`reclaim_position` 只能被带 `REQUEST_DONE` 证据的
+区间推进；HTTP 2xx 不构成证据。这条**没变**。
+
+**但账本是内存态，所以它的作用域是「进程内」**——这条以前就写着，现在更彻底：
+进程内也不再有任何本地副本兜底。
+
+FR-484 已标 ❌ 已废弃，编号退役不得复用。

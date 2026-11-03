@@ -238,7 +238,6 @@ func (m *Manager) Register(source SourceConfig) error {
 	m.pipes[key] = p
 	// Pipeline换主即释放旧owner的回执与轻量索引，不能等下一次持久化才回收。
 	delete(m.committedReceipts, key)
-	m.publishReconcileViewLocked(true) // 源集合变更：立即发布对账只读视图（候选 1）
 	// 归档导入已删除（2026-10-30）：归属闸与补账通道一并下线。
 	if m.state.SourceConfigs == nil {
 		m.state.SourceConfigs = make(map[string]SourceConfig)
@@ -288,13 +287,7 @@ func (m *Manager) Start(ctx context.Context) {
 	if m == nil {
 		return
 	}
-	// 常驻增量对账（后续项③）：与采集轮共用同一 ctx 生命周期。它只读对账不持锁，
-	// 重发阶段持 cycleMu 与采集轮串行（见 reconcile_loop.go 的隔离说明）。
-	go m.RunReconcileLoop(ctx)
-	// 投影重建 worker（见 rebuild_scheduler.go）：**独立 goroutine**，且从不取 cycleMu ⇒
-	// 无论一次重建跑多久，采集轮都能照常取锁推进。这是「重建不得占用采集主线」的落点。
-	go m.RunRebuildWorker(ctx)
-	// 缺口消解 worker（见 gap_resolve_async.go）：与重建同一形式的独立 goroutine。
+	// 缺口消解 worker（见 gap_resolve_async.go）：与采集轮同生命周期的独立 goroutine。
 	// 它把「VL 可见性核对」从投递路径挤出去——投递成功只做 O(1) 登记，
 	// 核对该跑 30s 就跑 30s，不再拖住 WAL 回收链。
 	if m.gapResolves != nil {
@@ -378,16 +371,6 @@ func (m *Manager) Stop() error {
 	// 两个源之间与 Stop 交错——若放任其在 CloseIndex 之后 persist，会把已关闭的索引句柄重新
 	// 打开且无人关闭（留下 WAL 残留），与 registerMu 注释里点名的形态同型。停止后一律拒绝。
 	m.stopped = true
-	// 停止后不得再发起新的只读确认重排：把所有待触发的定时器停掉（已触发的会被
-	// managerStopped 挡在入口，这里停掉的是尚未触发的那批，避免关停后仍有工作排队）。
-	if m.rebuilds != nil {
-		m.rebuilds.mu.Lock()
-		for key, timer := range m.rebuilds.confirmTimers {
-			timer.Stop()
-			delete(m.rebuilds.confirmTimers, key)
-		}
-		m.rebuilds.mu.Unlock()
-	}
 	pipes := make([]*pipeline.Pipeline, 0, len(m.pipes))
 	for _, p := range m.pipes {
 		pipes = append(pipes, p)
@@ -450,14 +433,8 @@ func (m *Manager) Stop() error {
 	// 为什么必须在 Stop 里做（而不是留给进程退出）：演练实测不归并时 `-wal` 会残留到
 	// 数百 MB——迁移的一次性大事务写完即有 453.6 MB，事后进程被 kill 就永久留在盘上。
 	// 这里只有索引句柄关掉了，Manager 之后**不能再 persist**（这是 Stop 的语义）。
-	// 事件段句柄在持久化之后关闭：先让 state 元数据落定，再释放段写入端。
 	if err := m.CloseIndex(); err != nil {
 		return err
-	}
-	if m.events != nil {
-		if err := m.events.Close(); err != nil {
-			return err
-		}
 	}
 	m.stopComplete = true
 	return nil
@@ -601,7 +578,6 @@ func (m *Manager) pollOnce() {
 		pipes = append(pipes, sourcePipe{source: m.sources[key], pipe: p})
 	}
 	workers := m.pollConcurrency
-	m.publishReconcileViewLocked(false) // 采集轮：持续刷新对账只读视图（候选 1，节流发布）
 	m.mu.Unlock()
 	// D 修复：读快照完成即放 cycleMu —— 其后"归一 workers / 分发 work / wg.Wait / 汇总"都在锁外。
 	m.cycleMu.Unlock()
@@ -983,100 +959,12 @@ type deliveryTailPlan struct {
 	Events []logtypes.Event
 }
 
-// planDeliveryTail 判定本批是否可以走「增量尾部」快速路径，并给出段追加与发布水位所需的读数。
-//
-// 判据（三条全部成立才快，任一不成立即回退到原全量路径）：
-//  1. **语义上不需要权威全量**：不是重放、没有待发布语义（「代次预算耗尽」已在 deliver 里并入
-//     replace 判定，故这里只认 replay/PublicationPending）；
-//  2. **事件体已在段存储**：否则权威集合在内联切片里，重建本来便宜，无需快路径；
-//  3. **本批区间整体在水位之后**：最小 record_start >= 段已覆盖水位（不与段内容重叠 ⇒ 无重复可去）
-//     且 >= 已投递水位（该区间从未投递过 ⇒ 身份集合里不可能命中）。
-//
-// 安全论证（为什么跳过身份重建不削弱保证）：
-//   - 身份集合的唯一用途是「跳过已写入的同 ID 事件」与「检出同 ID 不同哈希」。重复只可能来自
-//     「该区间曾经投递过」——判据 3 的第二条把它排除。
-//   - 偶发的 IDENTITY_CONFLICT（同 ID 不同哈希）不会被静默放过：两行都会写入 VL，
-//     随后**逐字段可见性校验**会以 duplicate / content mismatch 失败（fail loud，不是 fail silent）。
-//   - tailer 回退/重读同一区间：第一次投递成功会推进已投递水位，第二次因 minStart < 水位
-//     自动回退慢路径，仍走全量去重；第一次失败（水位未推进）时的重投本就是必须的重试。
-func (m *Manager) planDeliveryTail(key string, saved persistedSource, events []logtypes.Event, replay bool) deliveryTailPlan {
-	plan := deliveryTailPlan{}
-	if replay || saved.PublicationPending || m.events == nil || len(events) == 0 {
-		return plan
-	}
-	// 权威集合仍在**内联切片**里时必须走全量路径：那时重建本来就便宜，而且去重是必需的。
-	// 注意判据不是 EventsStored：该标记是 state 的字段，段已存在但 state 新建/重置时它为假
-	// （夹具与「换机重挂数据根」都命中这一形态），此时权威集合其实已经在段里。
-	if len(saved.Events) > 0 {
-		return plan
-	}
-	p, ok := m.pipeFor(key)
-	if !ok {
-		return plan
-	}
-	positions, ok := p.Positions()
-	if !ok {
-		return plan
-	}
-	// 只需最小 record_start 判定「本批是否整体在水位之后」；最大 record_end 由发布面
-	// writeProjectionDay → publishSnapshot 自行计算（它只应对本次可见面取最大，
-	// 不得并入「已耐久未投递」的 WAL 值，见 publishSnapshot 的注释）。
-	minStart := events[0].Record.Start
-	for _, e := range events[1:] {
-		if e.Record.Start < minStart {
-			minStart = e.Record.Start
-		}
-	}
-	if minStart < saved.EventsStoredThrough || minStart < positions.Delivery {
-		return plan
-	}
-	stored, ok := m.cachedStoredRows(key)
-	if !ok {
-		return plan
-	}
-	plan.Fast = true
-	plan.StoredRows = stored
-	return plan
-}
-
 // pipeFor 返回该源的采集管道（快照语义；调用方只读 Positions）。
 func (m *Manager) pipeFor(key string) (*pipeline.Pipeline, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	p, ok := m.pipes[key]
 	return p, ok
-}
-
-// cachedStoredRows 返回段存储已落行数：首次用 Count 建立基线（含末段校准），此后按追加增量推进。
-//
-// 有效性前提（2026-10 修订）：本进程是段的唯一写者，且**追加路径**没有任何裁剪/改写。
-// 但段现在存在一个刻意的回收出口（Manager.PruneEventStoreSegments → eventstore.Prune），
-// 它会删掉头部前缀并让行数**变小**。因此回收成功后必须调 invalidateEventStoreRowCaches
-// （它推进 eventsStoredEpoch 并删掉本表），否则这里的基线会永久偏高。
-//
-// 本值只进 deliveryTailPlan.StoredRows、最终回写本表（见 appendEventTail），**不参与任何
-// 安全判据** —— 所以即便基线短暂偏高也只是缓存不精确，不会让某次追加/跳过判断出错。
-func (m *Manager) cachedStoredRows(key string) (int, bool) {
-	if m.events == nil {
-		return 0, false
-	}
-	m.mu.Lock()
-	n, ok := m.eventsStoredRows[key]
-	m.mu.Unlock()
-	if ok {
-		return n, true
-	}
-	n, err := m.events.Count(key)
-	if err != nil {
-		return 0, false
-	}
-	m.mu.Lock()
-	if m.eventsStoredRows == nil {
-		m.eventsStoredRows = map[string]int{}
-	}
-	m.eventsStoredRows[key] = n
-	m.mu.Unlock()
-	return n, true
 }
 
 // 本批事件的实际 UTC 日才是代次数预算所属分区，不能只检查源登记日。

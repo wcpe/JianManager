@@ -442,10 +442,6 @@ func (m *Manager) autoResolveGapsFromPublished(source SourceConfig, p *pipeline.
 	if entry == nil || ledger.UnresolvedGapCountOf(entry) == 0 {
 		return false
 	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	m.mu.Lock()
-	saved := m.state.Sources[key]
-	m.mu.Unlock()
 	// 待验证的事件：该源权威正文里，位置落在任一段未解决缺口区间内的那些。
 	//
 	// 为何只取缺口区间内的：本方法的目的就是「证明这些缺口其实已经落库」，
@@ -459,43 +455,10 @@ func (m *Manager) autoResolveGapsFromPublished(source SourceConfig, p *pipeline.
 	if len(gaps) == 0 {
 		return false
 	}
-	events, err := m.canonicalRecoveryEvents(key, saved)
-	if err != nil {
-		slog.Warn("缺口自动消解：读取权威正文失败（下轮重试）",
-			"logSourceID", source.LogSourceID, "error", err)
-		return false
-	}
-	candidates := make([]logtypes.Event, 0, len(events))
-	for _, ev := range events {
-		if ledger.CoveredByPositionRanges(gaps, ev.Record.Start, ev.Record.End) {
-			candidates = append(candidates, ev)
-		}
-	}
-	if len(candidates) == 0 {
-		return false
-	}
-	// 逐字段可见性核对（带预算与退避重试）。查不到的一个都不算证据。
-	visible := m.landedVisibleInVLCtx(context.Background(), source, candidates)
-	if len(visible) == 0 {
-		return false
-	}
-	runs := gapRangesOfEvents(visible)
-	m.recordVerifiedRuns(key, runs)
-	resolved, resolveErr := p.Ledger().ResolveGapsCoveredByRanges(p.Key(), runs,
-		gapResolutionPublished, gapAutoResolvableReasons...)
-	if resolveErr != nil {
-		slog.Warn("VL 可见性证据自动消解缺口失败（下轮重试）",
-			"logSourceID", source.LogSourceID, "error", resolveErr)
-		return false
-	}
-	if resolved == 0 {
-		return false
-	}
-	slog.Info("VL 已确认覆盖缺口区间，自动消解缺口（无需人工介入）",
-		"logSourceID", source.LogSourceID, "resolved", resolved,
-		"ranges", len(runs),
-		"unresolvedRemaining", p.Ledger().UnresolvedGapCount(p.Key()))
-	return true
+	// 事件段已删除：拿不到缺口区间的正文，因此无法再做内容级核对。
+	// 这不是错误而是一个确定的结论：本路径不再能消解缺口。
+	// 缺口仍有其它出口：重投成功（resolveGapsLandedByDelivery）与已发布投影（本函数下半段）。
+	return false
 }
 
 // selfHealDue 判断该源是否已越过最小自愈间隔（越过即立即占用本次机会）。

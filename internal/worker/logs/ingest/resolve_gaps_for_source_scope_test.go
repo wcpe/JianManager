@@ -98,7 +98,7 @@ func (p *cycleMuResolutionProbe) finish() (time.Duration, time.Duration) {
 //   - 断言：解算期间 cycleMu **最长连续不可获得 < 50ms**（修前 ≥400ms）+ 观测仪零慢持有；
 //   - 同时守住语义不变量：缺口被放弃、凭据逐字（reason/operator/区间）、采集被恢复、无错误。
 func TestResolveCoveredGapsForSourceHoldsCycleMuOnlyBriefly(t *testing.T) {
-	m, _, key, p := newRebuildProbeManager(t)
+	m, _, key, p := newProbeManager(t)
 	m.cycleMuProfile = true // #57 观测仪打开：用它的"慢持有"读数做第二条独立判据
 	m.cycleMuWarnAt.Store(time.Now().UnixNano())
 	// 把 persist 撑大 400ms（确定性）：修前这段整段落在 cycleMu 内（现场 1m26s 的形态）。
@@ -144,7 +144,7 @@ func TestResolveCoveredGapsForSourceHoldsCycleMuOnlyBriefly(t *testing.T) {
 // 守卫充分性的直接证据 —— 锁外计算期间该源账本又变（合成：并发 RecordGap 推高修订号）
 // ⇒ 第三段复验必须**不写入任何变更**地返回明确错误（"变则弃"），缺口保持未解决。
 func TestResolveCoveredGapsForSourceDiscardsWhenSourceChangedOutsideLock(t *testing.T) {
-	m, _, key, p := newRebuildProbeManager(t)
+	m, _, key, p := newProbeManager(t)
 	require.NoError(t, p.Ledger().RecordGap(p.Key(), 10, 20, "TEST_PERMANENTLY_LOST", "fixture gap"))
 
 	// 在「锁外计算」窗口的**末尾**注入一次账本写（真实形态：采集轮/回收推进该源账本）。

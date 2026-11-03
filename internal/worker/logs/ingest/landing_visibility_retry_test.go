@@ -73,11 +73,11 @@ func publishGapVisibilityDay(t *testing.T, cat *catalog.Catalog, source SourceCo
 		}
 	}
 	rec.PublishedProjection = &catalog.PublishedProjection{
-		ManifestVersion:   "manifest-test",
-		CoverageComplete:  true,
-		QueryLocationDirID: "hot-projection-1",
-		QueryGeneration:   1,
-		ProjectionGeneration: "projection-1",
+		ManifestVersion:       "manifest-test",
+		CoverageComplete:      true,
+		QueryLocationDirID:    "hot-projection-1",
+		QueryGeneration:       1,
+		ProjectionGeneration:  "projection-1",
 		ProjectionGenerations: []string{"projection-1"},
 		SourceProjections: []catalog.SourceProjection{{
 			SourceGenerationRef: catalog.SourceGenerationRef{
@@ -92,7 +92,7 @@ func publishGapVisibilityDay(t *testing.T, cat *catalog.Catalog, source SourceCo
 }
 
 // TestLandingVisibilityRetriesUntilVisible 是本修复的**核心验收**：
-//「写入后前几次查询查不到、之后可见」时，缺口核对必须重试到看得见为止，
+// 「写入后前几次查询查不到、之后可见」时，缺口核对必须重试到看得见为止，
 // 而不是把「此刻查不到」当成「永远没有」。
 //
 // 转红方式（实测）：

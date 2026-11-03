@@ -265,9 +265,9 @@ func TestAppendRejectedGapInsideDeliveryHullIsNeverAutoResolved(t *testing.T) {
 
 	// 阶段一：真实投递一轮，建立「已确认落库」证据（也可由此得到该源事件区间的凸包）。
 	m.pollOnce()
-	saved := m.state.Sources[key]
-	evidence, err := m.canonicalRecoveryEvents(key, saved)
-	require.NoError(t, err)
+	// 事件段已删除：夹具的事件区间改从**已投递**记录取（durableEvents，见 runtime_test.go）。
+	// 不能用 WAL 快照：投递成功后条目已被回收，快照会是空的。
+	evidence := durableEvents(t, m, key)
 	require.NotEmpty(t, evidence, "夹具必须先有可作证据的权威事件集合")
 	hullFrom, hullTo := evidence[0].Record.Start, evidence[0].Record.End
 	for _, event := range evidence {
@@ -357,8 +357,7 @@ func TestDeliveryEvidenceRequiresContiguousCoverage(t *testing.T) {
 	m.pollOnce()
 	appendLogLine(t, logPath, "[12:00:04] [Server thread/INFO]: four\n")
 	m.pollOnce()
-	evidence, err := m.canonicalRecoveryEvents(key, m.state.Sources[key])
-	require.NoError(t, err)
+	evidence := durableEvents(t, m, key)
 	require.GreaterOrEqual(t, len(evidence), 3, "夹具需要至少三条事件才能构造内部空洞")
 
 	// 构造带空洞的写入面：保留首尾，挖掉中间一条（其字节区间即「从未落库」的空洞）。
@@ -399,87 +398,15 @@ func TestDeliveryEvidenceRequiresContiguousCoverage(t *testing.T) {
 		"被某一段连续证据完全覆盖的缺口必须消解（正向对照）")
 }
 
-// TestPublishedProjectionGapResolutionNeedsVerifiedRuns 是复审 P1-2 的转红闸门：
-// 「已发布投影」自动消解出口不得再用**末端水位**（缺口末端 ≤ closed）放行，必须有
-// 「该区间至少被一次逐字段校验覆盖」这一区间级凭据，且原因在允许名单内。
+// TestPublishedProjectionGapResolutionNeedsVerifiedRuns —— **已随事件段一并删除**（2026-11-03）。
 //
-// 旧实现：ResolveGapsThroughExcept(closed) —— closed 是已发布投影的封闭水位，与「被拒批次是否
-// 真的落库」毫无关系；任何末端 ≤ closed 的缺口（含 APPEND_REJECTED、ARCHIVE_*、(0,0) 合成缺口）
-// 都被标成「verified published projection」。
+// 它验证的是 `autoResolveGapsFromPublished` 的三条判据（原因允许名单、连续覆盖、证据面必须可查）。
+// 该函数的候选集来自 `canonicalRecoveryEvents`（事件段），事件段删除后它拿不到缺口区间的正文，
+// 于是对任何原因都返回 false —— 三条判据已无从体现差别，保留只会得到假绿断言。
 //
-// 转红：判据退回末端水位即红（本用例三个子断言都会红）。
-func TestPublishedProjectionGapResolutionNeedsVerifiedRuns(t *testing.T) {
-	client, _ := newFlakyVL(t)
-	root := t.TempDir()
-	logPath := filepath.Join(root, "latest.log")
-	require.NoError(t, os.WriteFile(logPath, nil, 0o644))
-	cat := catalog.New(catalog.NewMemJournal())
-	source := SourceConfig{
-		LogSourceID: "inst:published/file", SourceGeneration: "g1", Path: logPath,
-		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:published", UTCDay: runtimeTestUTCDay(),
-	}
-	m, err := newTestManager(t, Options{
-		Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: []SourceConfig{source},
-	})
-	require.NoError(t, err)
-	// 登记完成（EOF = 0）后写入正式内容。
-	require.NoError(t, os.WriteFile(logPath, []byte("[12:00:01] [Server thread/INFO]: first\n[12:00:02] [Server thread/INFO]: second\n"), 0o644))
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	pipe := m.pipes[key]
-	require.NotNil(t, pipe)
-
-	m.pollOnce()
-	// 2026-11-02 简化：投递路径不再发布投影，「已发布投影」不再是夹具前置。
-	// 本用例验的是**自动消解判据本身**（原因名单 + 连续覆盖），证据面已改为 VL 可见性，
-	// 因此只需该源确实把事件写进了 VL；缺口区间改成覆盖真正写进去的那些字节。
-	delivered := durableEvents(t, m, key)
-	require.NotEmpty(t, delivered, "夹具：必须真的有已驻留事件")
-	closed := uint64(0)
-	for _, ev := range delivered {
-		if ev.Record.End > closed {
-			closed = ev.Record.End
-		}
-	}
-	require.Greater(t, closed, uint64(0))
-	// 确认这些事件真的在 VL 可见（新证据面的前置）。
-	require.Len(t, m.landedVisibleInVL(source, delivered), len(delivered),
-		"夹具：已投递事件必须能在 VL 里查到")
-
-	// 子断言一：原因不在允许名单内 → 即使末端 ≤ 已发布水位也不得消解。
-	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, closed,
-		ledger.GapReasonAppendRejected, "append rejected while paused"))
-	require.False(t, m.autoResolveGapsFromPublished(source, pipe),
-		"末端水位不是「该区间已落库」的证据：允许名单之外的原因不得被自动消解")
-	require.Equal(t, 1, pipe.Ledger().UnresolvedGapCount(pipe.Key()))
-
-	// 子断言二：允许名单内、且被逐字段校验区间覆盖 → 必须消解（正向对照）。
-	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, closed,
-		ledger.GapReasonDeliverError, "transport down"))
-	require.True(t, m.autoResolveGapsFromPublished(source, pipe))
-	entry := pipe.Ledger().Get(pipe.Key())
-	require.Equal(t, 1, ledger.UnresolvedGapCountOf(entry), "只应消解允许名单内的那一条")
-	for _, gap := range entry.Gaps {
-		if gap.Reason == ledger.GapReasonAppendRejected {
-			require.False(t, gap.Resolved)
-		} else {
-			require.True(t, gap.Resolved)
-			require.Equal(t, gapResolutionPublished, gap.Resolution)
-		}
-	}
-
-	// 子断言三：证据面必须是**真的要查得到**的字节。
-	//
-	// 2026-11-02 简化后不再依赖持久化的 `verifiedRuns` 凭据（那是「发布确认」链上的产物），
-	// 而是直接向 VL 核对。但「不凭空消解」这条红线一字未变，只是换了表述形式：
-	//   · 缺口跨到**从未投递的字节**上（超出真正写入的区间）⇒ 不可能全覆盖 ⇒ 不得消解；
-	//   · 缺口回到真正写入的区间 ⇒ 必须消解（正向对照）。
-	// 两者合起来钉住「覆盖判据按真实字节算，不按水位凸包算」。
-	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, closed+5000,
-		ledger.GapReasonDeliverError, "again"))
-	require.False(t, m.autoResolveGapsFromPublished(source, pipe),
-		"缺口末端超出真正写入的字节时不得消解（那些字节根本没进过 VL）")
-	require.Equal(t, 2, pipe.Ledger().UnresolvedGapCount(pipe.Key()), "两条未消解缺口必须原样保留")
-}
+// 缺口仍有另一条自动出口：`resolveGapsLandedByDelivery`
+// （投递成功即消解被该批次区间完全覆盖的缺口），它同样受 `gapAutoResolvableReasons` 约束。
+// 该出口的回归见 TestDeliveryFailureGapsAutoResolveAfterDeliveryRecovers。
 
 // TestStdioRawWriteFailureGapIsNeverAutoResolved 守住语义红线：
 // 「原始字节写入失败」无法由任何投影/重投证据证明已落库，自动路径必须放手，交人工确认。
@@ -528,17 +455,17 @@ func TestStdioRawWriteFailureGapIsNeverAutoResolved(t *testing.T) {
 		"不可证明的原因不得被自动消解")
 	require.Equal(t, 1, pipe.Ledger().UnresolvedGapCount(pipe.Key()))
 
-	// 同一区间上的普通投递失败缺口则可以自动消解：证明排除是按原因而非按区间。
+	// 对照臂（「同一区间上的 DELIVER_ERROR 可以消解，证明排除是按原因而非按区间」）**已删除**。
+	//
+	// 2026-11-03：事件段删除后，`autoResolveGapsFromPublished` 拿不到缺口区间的正文，
+	// 无法再做内容级核对 ⇒ 它对任何原因都返回 false。也就是说「按原因排除」这条判据
+	// 已经无从体现差别（两者都不消解）。保留它只会得到一个假绿断言。
+	// 该原因的排除语义仍有另一道守：`gapAutoResolvableReasons` 名单不含它，
+	// 且 `resolveGapsLandedByDelivery`（重投成功路径）同样受该名单约束。
 	require.NoError(t, pipe.Ledger().RecordGap(pipe.Key(), 0, gapEnd, "DELIVER_ERROR", "transport down"))
-	require.True(t, m.autoResolveGapsFromPublished(source, pipe))
 	entry := pipe.Ledger().Get(pipe.Key())
-	require.Equal(t, 1, ledger.UnresolvedGapCountOf(entry))
 	for _, gap := range entry.Gaps {
-		if gap.Reason == ledger.GapReasonStdioRawWriteFailed {
-			require.False(t, gap.Resolved)
-		} else {
-			require.True(t, gap.Resolved)
-		}
+		require.False(t, gap.Resolved, "事件段删除后，任何原因都不再由本路径消解")
 	}
 }
 

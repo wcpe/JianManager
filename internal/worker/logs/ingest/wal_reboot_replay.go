@@ -46,7 +46,12 @@ import (
 //
 // 这是 **at-least-once**：重读段的字节会被再投递一次。重复由两层吸收：
 //   - `event_id` 幂等：同 id 同哈希的重复行在查询侧按同一规则收敛；
-//   - `projection_generation` 换代次：`writeProjectionDay` 写新代次，旧代次被白名单过滤。
+//   - 写前幂等（`dropEventsAlreadyWrittenCtx`）：投递前按 `event_id:in(...)` 查一次，
+//     命中同 id 同 hash 的从本批剔除。
+//
+// 2026-11-03：~~`projection_generation` 换代次~~ 这一层已不存在——重建链删除后不再换代次，
+// 而且投递面也不再带 `projection_generation` 标签（`insertInBatchesCtxYield` 传空串）。
+// 现在只剩上面两层。
 //
 // 这与 Filebeat 的语义完全一致：它也只保证至少一次。
 func rollbackReadToReclaim(led *ledger.Ledger, key ledger.SourceKey) {

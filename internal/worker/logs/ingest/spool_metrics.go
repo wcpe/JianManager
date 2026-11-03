@@ -15,12 +15,12 @@ type SpoolMetricsSource interface {
 
 // SpoolMetrics 是磁盘缓冲的读数快照。
 type SpoolMetrics struct {
-	UsedBytes       int64
-	CapacityBytes   int64
-	Records         uint64
-	Dropped         uint64
-	RecoveredRecs   uint64
-	Disabled        bool
+	UsedBytes     int64
+	CapacityBytes int64
+	Records       uint64
+	Dropped       uint64
+	RecoveredRecs uint64
+	Disabled      bool
 }
 
 // WriteSpoolMetrics 把磁盘缓冲读数写成 Prometheus 文本格式。

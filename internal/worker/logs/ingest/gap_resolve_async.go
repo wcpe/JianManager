@@ -80,11 +80,11 @@ type GapResolveStats struct {
 }
 
 type gapResolveScheduler struct {
-	mu      sync.Mutex
-	wake    chan struct{}
-	pending map[string]*gapResolveRequest
+	mu       sync.Mutex
+	wake     chan struct{}
+	pending  map[string]*gapResolveRequest
 	inflight map[string]struct{}
-	closed  bool
+	closed   bool
 
 	scheduled, merged, skipped, rejectedCap atomic.Uint64
 	running, done, failed                   atomic.Uint64

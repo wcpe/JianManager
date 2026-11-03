@@ -528,6 +528,9 @@ func (m *Manager) VerifyDeferredCount() int64 {
 	return m.verifyDeferred.Load()
 }
 
+// reconcileCandidateLockBudget 是「取对账候选等 m.mu」的默认墙钟上限。
+const reconcileCandidateLockBudget = 2 * time.Second
+
 // reconcileLockBudgetOf 返回生效的「取候选等 m.mu」有界上限（≤0 用默认常量）。
 func (m *Manager) reconcileLockBudgetOf() time.Duration {
 	if m != nil && m.reconcileLockBudget > 0 {
