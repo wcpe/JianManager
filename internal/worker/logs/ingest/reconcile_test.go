@@ -530,13 +530,15 @@ func TestStartupReconcileReplaysOnlyDeletedUTCDay(t *testing.T) {
 		}
 	}
 
-	// 缺失天推进到新代；未缺失天保持原代（不动 catalog）。
-	repaired, ok := restartedCatalog.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: "2026-09-22"})
-	require.True(t, ok)
-	require.Equal(t, []string{"projection-2"}, repaired.PublishedProjection.ProjectionGenerations)
-	intact, ok := restartedCatalog.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: "2026-09-23"})
-	require.True(t, ok)
-	require.Equal(t, []string{"projection-1"}, intact.PublishedProjection.ProjectionGenerations)
+	// 2026-11-02 投递路径简化：原先这里断言「缺失天推进到新代 `projection-2`、未缺失天保持
+	// `projection-1`」。代次白名单与发布整条链已删 ⇒ catalog 里不再有 `PublishedProjection`
+	// （实测仍停在 `projection-1`，那是**夹具 seed 的**那份，与本次重发无关）。
+	//
+	// 本用例真正要守的三件事都还在上方且仍然逐条成立：
+	//   ① 只重发被删掉的那一天（载荷只含 day one，不含 day two）；
+	//   ② 对账结论正确（Fallback=false、MissingDays=[09-22]）；
+	//   ③ 未缺失的天不得被重发。
+	// 这三条合起来就是「按天精确重发」的全部内容，代次只是它当时的表现形式。
 }
 
 // 回归 ②：两侧一致 → **零重发**（断言没有多余投递）。
@@ -593,7 +595,14 @@ func TestStartupReconcileFallsBackToFullReplayWhenVLUnreliable(t *testing.T) {
 		elapsed := time.Since(started)
 		require.NoError(t, err, "回退整窗重发必须成功，不得因对账失败而放弃")
 		require.Less(t, elapsed, 3*time.Second, "对账超时必须快速回退，不得卡死启动")
-		require.Equal(t, 2, len(fixture.payloadsSince(insertsBefore)), "回退必须整窗重发（两天各一次）")
+		// 2026-11-02 投递路径简化：回退仍会「登记整窗重发」（下面两条断言守它），但**真正写进 VL 的
+		// 条数**现在由写前幂等（`dropEventsAlreadyWritten`，同 id 同 hash 直接剔除）决定：
+		// 这两天的数据本来就在 VL 里（夹具 seed 过），故重发**不会**再产生新载荷。
+		// 这是简化后正确方向的直接结果——旧断言数的是「写了几次」，现在没有重复写这回事。
+		// 若真的少发了（幂等判据放宽到"命中 id 就跳过"），`TestDropEventsAlreadyWritten_SameID_DifferentHashKept`
+		// 会立刻转红；「真的缺失的天必须补发」由 `TestStartupReconcileReplaysOnlyDeletedUTCDay` 守着。
+		require.Zero(t, len(fixture.payloadsSince(insertsBefore)),
+			"数据本就在 VL 里 ⇒ 整窗重发被写前幂等全部剔除（不得重复写同一批字节）")
 
 		reports := restarted.LastReconcileReports()
 		require.Len(t, reports, 1)
@@ -701,7 +710,10 @@ func TestStartupReconcileDisabledFallsBackToFullReplay(t *testing.T) {
 		Reconcile: &ReconcileConfig{Enabled: false},
 	})
 	require.NoError(t, err)
-	require.Equal(t, 2, len(fixture.payloadsSince(insertsBefore)), "关闭对账 = 现状整窗重发")
+	// 同上：整窗重发仍被登记（下面两条断言守 fallback 结论），但字节已在 VL 里
+	// ⇒ 写前幂等全部剔除，不产生重复载荷。
+	require.Zero(t, len(fixture.payloadsSince(insertsBefore)),
+		"关闭对账仍按整窗重发登记，但已存在的同 id 同 hash 不得重复写入")
 	require.Equal(t, queriesBefore, fixture.statsQueryCount(), "关闭对账不得发出任何 count 查询")
 	reports := restarted.LastReconcileReports()
 	require.Len(t, reports, 1)
@@ -796,8 +808,10 @@ func TestStartupReconcileHonorsTotalBudget(t *testing.T) {
 	// 判别力不变：若预算失效，elapsed 会退到 4s（超时）量级而不是 2s。
 	require.Less(t, elapsed, 3*time.Second,
 		"总预算必须把整批对账收回（实测 %s；预算 200ms，单源/单查询超时都是 4s）", elapsed)
-	require.Equal(t, 2, len(fixture.payloadsSince(insertsBefore)),
-		"预算耗尽的源必须回退整窗重发（两天各一次），绝不因「没来得及对账」而少发")
+	// 预算耗尽仍必须**回退**（下面的 Fallback 断言是判别性的）；载荷条数同样被写前幂等收敛为 0
+	// ——这两天的数据已在 VL 里。「没来得及对账不得少发」这条由下面的 Fallback/MissingDays 断言守。
+	require.Zero(t, len(fixture.payloadsSince(insertsBefore)),
+		"预算耗尽的源仍按整窗重发登记；已存在的同 id 同 hash 不得重复写入")
 
 	reports := m.LastReconcileReports()
 	require.Len(t, reports, 1)
