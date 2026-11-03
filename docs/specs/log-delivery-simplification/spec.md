@@ -223,5 +223,58 @@ Planner.Plan → view targets=[] · queryable={}
 
 `catalog_partition_after_delivery_test.go` 的 `TestDeliveryLeavesCatalogPartitionQueryable`：
 判据① Catalog 记录存在且 owner/dirID 与 `WriteAdmission` 同源；
-判据② `Planner.Plan` 能规划出该目标且 `Queryable == true`。
-**已做变异验证**：注释掉 `ensureCatalogPartition` ⇒ 两条同时转红。
+判据② `Planner.Plan` 能规划出该目标且 `Queryable == true`；
+判据③ 不得被标成 `PROJECTION_INCOMPLETE` / `DupUnresolved` / `StatsPartial`。
+**已做变异验证**：注释掉 `ensureCatalogPartition` ⇒ 三条同时转红。
+
+### 8.5 第 10 个真 bug：新数据全被标成「不完整 / 未对账」
+
+修完第 9 个后，查询能规划出目标了，但 `state=LOG_COVERAGE_PARTIAL`、
+`reasons=[PROJECTION_INCOMPLETE]`、`quality=DupUnresolved/StatsPartial`。
+
+**根因**：`publishSnapshot` 末尾**无条件** `proj.CoverageComplete = true`（runtime.go:10460），
+而这正是简化后不再走到的地方。我补建的空壳投影 `CoverageComplete=false`
+⇒ `planner.go:347` 据它推「不完整/未对账」⇒ 前端**每次查都显示一条降低信任度的横幅**，
+而实际上什么都没错。
+
+**修法**：`query.projectionlessScope(proj)` —— 三条同时成立才认定是简化空壳，不据此降级：
+
+```
+ManifestVersion == ""  &&  len(SourceProjections) == 0  &&  len(ClosedVisibleSeq) == 0
+```
+
+`publishSnapshot` 末尾**总会**写 manifest（`manifest-<sha256>`）⇒ 旧数据三者至少有一个非空，
+不会被误判。修后实测：`state=LOG_COVERAGE_SUCCESS`、`quality=EXACT/EXACT`、`reasons=[]`。
+
+### 8.6 死代码清理（2026-11-03）
+
+对每个被删/弱化的符号做「非测试引用」盘点后，删除 9 个已无生产调用者的函数 + 1 个整文件
+（约 330 行）。清单与本轮验证口径见 commit `16ba55ea`。
+
+值得记录的一条：**删函数不能用「下一个顶层 func」当边界**——类型定义/变量声明经常夹在
+两个函数之间，那样会连带删掉。用**花括号配平**定位函数体，并用 `assert` 校验首行确实是目标函数。
+
+还有一个「半死」形态：`activeTails` 的两个消费者删除后，写入方 `rememberActiveTailGeneration`
+变成**纯写不读**（每次投递白拿 `publishMu` + `m.mu` 两把锁）。这类也要一并清理，
+但保留类型定义与 `Manager` 字段供已 Skip 的回归用例引用（它们是「失去对象」的占位）。
+
+### 8.7 盘点方法（以后改投递/查询链路请照做）
+
+对每个被删的符号，**grep 全仓非测试引用**，逐个确认消费方：
+
+```bash
+grep -rn "\b<symbol>\b" --include='*.go' internal/ apps/ | grep -v '_test.go'
+```
+
+三种归宿：① 有现役等价物（改调用）；② 已合理降级（写注释说明）；③ 真正的消费方丢了（就是 bug）。
+
+**最要紧的一条：「测试全绿」不等于「功能正确」。** 那 47 条 Skip 里隐藏的「发布链已删」
+这个前提，其实还有未被覆盖的消费方——第 9、10 个 bug 就是这么漏过去的。
+
+以后改投递/查询链路，必须端到端验一遍：
+
+```
+投递 → catalog.Get → Planner.Plan → Queryable / state / quality
+```
+
+只验写入侧（VL 有行、事件段有条数）是不够的。

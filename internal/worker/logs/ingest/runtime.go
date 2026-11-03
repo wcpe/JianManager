@@ -6085,7 +6085,6 @@ func (m *Manager) confirmWrittenAttempt(ctx context.Context, source SourceConfig
 		return fail(err)
 	}
 	m.clearWrittenAttempt(key, hint)
-	m.rememberActiveTailGeneration(daySource, hint.generation, written)
 	m.scheduleGapResolve(source, written)
 	_, _, incomingDigest, incomingErr := writtenAttemptFingerprint(incoming)
 	active := events[:len(ids)]
