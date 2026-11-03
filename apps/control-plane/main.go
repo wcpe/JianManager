@@ -615,6 +615,9 @@ func main() {
 		slog.Info("业务事件位点账本已禁用（business_cursor.enabled=false），缺口不可检测")
 	}
 
+	// 时序指标服务句柄：探针连入钩子需要引用它清理差分基准，故提前声明、稍后再构造。
+	var metricSvc *service.MetricService
+
 	// 配置交付的离线补推（§8.2）：探针（重）连入时把该实例上 deferred 的目标补推一次。
 	// 挂在玩家事件服务的 connected 钩子上——那里是全平台唯一消费探针 connected 事件的地方。
 	// 钩子必须非阻塞，故这里起独立 goroutine：补推涉及合并配置 + 落盘 + 生效，可能耗时数秒，
@@ -625,6 +628,10 @@ func main() {
 		// 而 business/status 的 30s 缓存还停在离线时的 probeConnected=false + stale=true，
 		// 同一实例两块面板自相矛盾（真机验收发现）。清缓存只是删 map 键，同步做即可。
 		bridgeSvc.InvalidateOnProbeConnected(instanceUUID)
+		// 同理清掉该实例的差分基准（GC / 桥）。实例重启后累计 counter 从 0 重数，
+		// 旧基准留着只会让首拍差出负值或错值；且这些 map 没有其它释放路径。
+		// 删 map 键是极短操作，同步做即可。
+		metricSvc.ForgetInstance(instanceUUID)
 	})
 	// 生效编排的两个生产依赖（setter 注入：二者构造顺序与配置服务无关）：
 	//   - restart 方式复用 InstanceService.Restart：**必须用 Restart 而不是 Stop+Start**——
@@ -669,7 +676,7 @@ func main() {
 	defer scheduler.Stop()
 
 	// 时序指标卷积器：周期卷积 raw→5m→1h 并按 TTL 清理（ADR-013）。
-	metricSvc := service.NewMetricService(db)
+	metricSvc = service.NewMetricService(db)
 	metricSvc.Start()
 	defer metricSvc.Stop()
 	// 把时序数据源注入告警评估器，启用动态基线/饱和度与实例级 metric 规则评估。

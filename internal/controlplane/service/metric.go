@@ -410,7 +410,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 					}
 				}
 				s.lastBridge[iid] = bridgeCounters{
-					rejected: im.BridgeReliableRejectedTotal + im.BridgeBestEffortDroppedTotal,
+					rejected:  im.BridgeReliableRejectedTotal + im.BridgeBestEffortDroppedTotal,
 					writeFail: im.BridgeWriteFailuresTotal + im.BridgeWriteTimeoutsTotal,
 					ts:        now,
 				}
@@ -859,7 +859,7 @@ func (s *MetricService) overviewAt(now, from, to time.Time, resolution string) (
 		{model.MetricScopeNode, model.MetricNodeLoad, "load", false},
 		{model.MetricScopeNode, model.MetricNodeMemUsed, "bytes", true},
 		{model.MetricScopeInstance, model.MetricInstPlayersOnline, "count", true},
-		/* 
+		/*
 			Bot Worker 的两条共享进程指标也进趋势（首页重构）：
 			它们由 `bot_runtime_metric_sampler` 持续写入，属于「资源视角」，
 			与上面三条同轴呈现才有可比性。前端默认在图例里隐藏，按需勾选显示。
@@ -1577,4 +1577,50 @@ func rateToPct(rate float32) *float64 {
 		pct = 100
 	}
 	return &pct
+}
+
+// ForgetInstance 丢弃某实例的差分基准（GC / 桥），供实例生命周期事件调用。
+//
+// ## 为什么需要这个
+//
+// lastGC / lastBridge 以实例 UUID 为 key，用来把探针上报的**累计 counter** 差分成速率。
+// 它们本身不会被心跳自然清掉：实例被删、或探针降级到不上报桥字段之后，
+// 对应键仍然留在 map 里——每删一个实例就漏一条，进程存活期间永不释放。
+//
+// ## 为什么是「实例连入时清」而不是定时扫描
+//
+// 与 BridgeService.InvalidateOnProbeConnected 同构：实例重启后其累计 counter 从 0 重新计数，
+// 而旧基准还停在重启前的值——两者相减会得到负值。虽然 CP 侧对负差做了跳过（不产生负速率假尖峰），
+// 但基准本就该随实例生命周期重置，而不是依赖下游兜底。
+// 定时扫描不知道「何时该清」，只会在实例已经错位一段时间之后才能补救。
+//
+// 线程安全：两把锁各自独立，分两次 Lock——不需要原子性，因为两路数据互不相关，
+// 且调用方（探针连入）与心跳并发时，最坏情况是某一拍仍然差到了旧值，下一拍即修正。
+//
+// @param instanceUUID 实例 UUID（与心跳里 im.InstanceUuid 一致）。
+func (s *MetricService) ForgetInstance(instanceUUID string) {
+	if s == nil || instanceUUID == "" {
+		return
+	}
+	s.gcMu.Lock()
+	delete(s.lastGC, instanceUUID)
+	s.gcMu.Unlock()
+
+	s.bridgeMu.Lock()
+	delete(s.lastBridge, instanceUUID)
+	s.bridgeMu.Unlock()
+}
+
+// ForgetNode 丢弃某节点的网络差分基准（节点下线/归档时调用）。
+//
+// lastNet 以**节点 UUID** 为 key（不是实例），所以不能与 ForgetInstance 合并。
+//
+// @param nodeUUID 节点 UUID。
+func (s *MetricService) ForgetNode(nodeUUID string) {
+	if s == nil || nodeUUID == "" {
+		return
+	}
+	s.netMu.Lock()
+	delete(s.lastNet, nodeUUID)
+	s.netMu.Unlock()
 }
