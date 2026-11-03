@@ -25,7 +25,7 @@ export interface PlotSeries {
 }
 
 /** 数值格式化器标识：渲染层据此取对应函数（保持本模块纯数据可测）。 */
-export type ValueFormat = 'pct' | 'bytes' | 'bytesPerSec' | 'load' | 'count' | 'tps' | 'ms'
+export type ValueFormat = 'pct' | 'bytes' | 'bytesPerSec' | 'load' | 'count' | 'tps' | 'ms' | 'rate'
 
 /** 一张监控图的定义。 */
 export interface MetricChartDef {
@@ -69,6 +69,10 @@ export function formatterFor(fmt: ValueFormat): (v: number) => string {
       return (v) => `${v.toFixed(1)}ms`
     case 'tps':
       return (v) => v.toFixed(1)
+    case 'rate':
+      // 速率：每秒事件数。小值保留两位（桥正常时拒绝率往往是 0.x 量级），
+      // 大值才取整——否则「0/s」会把“每秒丢 0.4 条”这种真信号抹平。
+      return (v) => (v !== 0 && Math.abs(v) < 10 ? `${v.toFixed(2)}/s` : `${v.toFixed(0)}/s`)
     case 'count':
     default:
       return (v) => v.toFixed(0)
@@ -235,6 +239,35 @@ export const INSTANCE_CHART_DEFS: MetricChartDef[] = [
   { id: 'players', titleKey: 'monitor.chart.players', format: 'count', sources: [{ metricKey: 'inst_players_online', nameKey: 'monitor.metric.players' }] },
   // 区块为分世界序列（world!=''），由渲染层按 world 拆线（buildWorldSeries）。
   { id: 'chunks', titleKey: 'monitor.chart.chunks', format: 'count', sources: [{ metricKey: 'world_loaded_chunks', nameKey: 'monitor.metric.chunks' }] },
+  // ── 业务桥（ServerProbe ↔ JM）中转链路 ────────────────────
+  //
+  // 为何与 TPS/内存并列放在实例页：上面那些回答「服务器怎么样」，
+  // 这三张回答「**事件发得出去吗**」。两者会各自出问题——TPS 正常但桥堵了，
+  // 业务事件就积压/丢失，而实例页看起来一切健康。
+  //
+  // 数据缺失时曲线自然断线（老探针不上报），不做零值填充：
+  // 零值会被读成「队列空、零丢失」，而那恰恰是要区分开的情况。
+  {
+    id: 'bridge-queue',
+    titleKey: 'monitor.chart.bridgeQueue',
+    format: 'count',
+    sources: [
+      { metricKey: 'bridge_reliable_queue', nameKey: 'monitor.metric.bridgeReliableQueue' },
+      { metricKey: 'bridge_best_effort_queue', nameKey: 'monitor.metric.bridgeBestEffortQueue' },
+    ],
+  },
+  {
+    id: 'bridge-rejected',
+    titleKey: 'monitor.chart.bridgeRejected',
+    format: 'rate',
+    sources: [{ metricKey: 'bridge_rejected_rate', nameKey: 'monitor.metric.bridgeRejectedRate' }],
+  },
+  {
+    id: 'bridge-health',
+    titleKey: 'monitor.chart.bridgeHealth',
+    format: 'rate',
+    sources: [{ metricKey: 'bridge_write_failures', nameKey: 'monitor.metric.bridgeWriteFailures' }],
+  },
 ]
 
 /** 逐点把两条序列做 numerator/denominator*100（缺测或分母≤0 处为 null）。按时间戳对齐。 */

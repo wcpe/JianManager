@@ -58,6 +58,14 @@ service WorkerService {
   rpc PreflightStartInstance(InstanceActionRequest) returns (InstanceActionResponse);
   // AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
   rpc AdoptForeignRuntime(InstanceActionRequest) returns (InstanceActionResponse);
+  // AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
+  //
+  // 与 AdoptForeignRuntime 的根本区别就一条：一个会重启，一个不会。
+  // 就地导入（in_place）的服往往由 tmux/systemd 在平台外跑着，业务不能断，
+  // 此时只能「承认它、看着它」——把现有 PID 登记为平台运行态。
+  // 代价：终端输入 / 优雅停止不可用（不是平台 spawn 的），生命周期仍归外部管理器。
+  // 目录下无活进程时返回 success=false，调用方据此回退到正常启动。
+  rpc AdoptInPlaceRuntime(InstanceActionRequest) returns (InstanceActionResponse);
   // SendCommand 向实例发送命令。
   rpc SendCommand(SendCommandRequest) returns (SendCommandResponse);
   // GetInstanceStatus 获取实例状态。
@@ -794,6 +802,32 @@ message InstanceMetricSample {
   // POST /metrics/series/batch 只能读到存好的时序序列。它是 int32、约 4 字节/实例/拍，
   // 相比被排除的 motd/名单/插件/图标（KB 级）可忽略，因此本拍填充并由 CP 落 inst_players_max。
   bool max_players_available = 26;  // max_players 本拍是否真实可用（三源皆无时 false → CP 落 NULL）
+
+  // ── 业务桥（ServerProbe ↔ JM）自身的中转指标 ──────────────────
+  //
+  // ## 为什么单独一组，而不是拌进上面的 TPS/堆/线程
+  // 上面那些是「服务器 / JVM 的快照」，反映业务自身健康；这一组是「通道的快照」，
+  // 反映**中转链路**承不承得住。数据源不同（后者来自 FrameSender.SenderStatus）、
+  // 采样时机不同、告警阀值也完全不同，混在一起会让“TPS 掉了”与“桥堵了”无法区分。
+  //
+  // ## 为何是累计值而不是速率
+  // 探针上报间隔可变（由 metrics-push-interval-ms 控制），在探针侧算速率会把“间隔变化”
+  // 误读成“流量变化”。CP 侧有固定心跳节奏，在那里做差分才准确。
+  //
+  // ## 缺测语义
+  // 老探针不上报这些字段，于是全为零——与“真的没丢”无法区分。
+  // 因此 CP 侧不得仅据“全零”判定健康，必须配合 bridge_metrics_present。
+  int32 bridge_reliable_queue = 27;             // 可靠事件队列当前深度（帧）
+  int32 bridge_best_effort_queue = 28;          // 可丢事件队列当前深度（帧）
+  int64 bridge_reliable_rejected_total = 29;    // 可靠事件因队列满被拒累计数
+  int64 bridge_best_effort_dropped_total = 30;  // 可丢事件被丢累计数
+  int64 bridge_receipt_rejected_total = 31;     // 命令回执被拒累计数（回执被拒会让 JM 误判业务失败）
+  int64 bridge_spill_dropped_total = 32;        // 已受理但被落盘缓冲挤掉的累计数（仅 spill 开启时非零）
+  int64 bridge_write_failures_total = 33;       // 写出失败累计数
+  int64 bridge_write_timeouts_total = 34;       // 写超时累计数（强关 socket）
+  // bridge_metrics_present 区分「上报了 0」与「没上报」——老探针为 false。
+  // 没有它，CP 会把“不知道”画成“健康”，而那正是本项监控要防的事。
+  bool bridge_metrics_present = 35;
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
@@ -2005,6 +2039,18 @@ message DeployServerProbeRequest {
   string sha256 = 6;
   // version 是仅供 Worker 日志与诊断展示的逻辑版本，不参与下载授权。
   string version = 7;
+  // identity_json 是**托管身份文件**内容（plugins/ServerProbe/agent-identity.json）。
+  //
+  // ## 为什么与 config_yaml 分开送
+  // 两者在探针侧是两个独立开关，语义不同：
+  //   - config_yaml → 独立模式的本地行为（监听面、采集参数、bridge 段）；
+  //   - identity_json → **托管模式开关**（存在即托管，删除即回退）。
+  // 把它们揉进同一个文件会让“切换模式”变成改配置文件的一大段，无法原子地开关。
+  // 分开送也让 Worker 能用“原子写 + 0600”单独保护这份带凭证的文件。
+  //
+  // 空 = 不下发/不碰现有身份（向后兼容：未接托管的主流程、旧 CP）。
+  // 非空 = Worker 写入（不存在或内容不同才写，幂等）。
+  string identity_json = 8;
 }
 
 message DeployServerProbeResponse {

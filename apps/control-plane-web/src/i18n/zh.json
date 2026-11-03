@@ -867,7 +867,10 @@
       "heap": "堆内存",
       "threads": "线程",
       "players": "在线玩家",
-      "chunks": "分世界加载区块"
+      "chunks": "分世界加载区块",
+      "bridgeQueue": "业务桥队列积压",
+      "bridgeRejected": "业务桥拒绝速率",
+      "bridgeHealth": "业务桥写失败速率"
     },
     "metric": {
       "cpu": "CPU",
@@ -894,7 +897,11 @@
       "botActive": "活跃 Bot",
       "botConnecting": "连接中 Bot",
       "botCapacity": "容量上限",
-      "botEventLoopP95": "事件循环 P95"
+      "botEventLoopP95": "事件循环 P95",
+      "bridgeReliableQueue": "可靠事件队列",
+      "bridgeBestEffortQueue": "可丢事件队列",
+      "bridgeRejectedRate": "拒绝+丢弃",
+      "bridgeWriteFailures": "写失败"
     },
     "inspectProcess": "探查",
     "processActionDescription": "将只作用于该实例当前受管进程树内的目标 PID；后端会再次确认 PID 归属并要求 confirm=true。",

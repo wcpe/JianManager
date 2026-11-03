@@ -28,6 +28,30 @@ type ProbeSnapshot struct {
 	// GC：cumulative counter，跨收集器（gc 标签）求和。不直接当曲线用，CP 侧据相邻差推导速率。
 	GCCountTotal int64   // Σ serverprobe_gc_count_total{gc=...}
 	GCTimeMillis float64 // Σ serverprobe_gc_time_seconds_total{gc=...} × 1000（秒→毫秒）
+
+	// Bridge 桥自身的中转指标（本通道）；nil = 探针没上报（老探针）。
+	//
+	// 不能把 nil 当 0：“没丢”与“不知道有没丢”在运维上完全相反。
+	Bridge *BridgeSnapshot
+}
+
+// BridgeSnapshot 是插件桥（ServerProbe ↔ JM）自身的运行状态。
+//
+// 与 ProbeSnapshot 其它字段的区别：那些描述「服务器在干什么」，这个描述
+// 「中转通道承不承得住」。通道堵了业务可能一切正常、但事件发不出去，
+// 所以必须独立观测，不能混进 TPS/堆里。
+//
+// 计数全为**累计值**：探针上报间隔可变，在探针侧算速率会把间隔变化
+// 误读成流量变化；差分交给 CP（心跳节奏固定）。
+type BridgeSnapshot struct {
+	ReliableQueue          int32 // 可靠事件队列深度（帧）
+	BestEffortQueue        int32 // 可丢事件队列深度（帧）
+	ReliableRejectedTotal  int64 // 可靠事件因队列满被拒累计
+	BestEffortDroppedTotal int64 // 可丢事件被丢累计
+	ReceiptRejectedTotal   int64 // 命令回执被拒累计（回执被拒 → JM 误判业务失败）
+	SpillDroppedTotal      int64 // 已受理但被落盘缓冲挤掉累计（仅 spill 开启时非零）
+	WriteFailuresTotal     int64 // 写出失败累计
+	WriteTimeoutsTotal     int64 // 写超时累计
 }
 
 // WorldStat 单个世界的负载（serverprobe_world_*{world="..."}）。

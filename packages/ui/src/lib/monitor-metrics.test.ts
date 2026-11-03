@@ -100,9 +100,14 @@ describe('ratioPctSeries', () => {
 })
 
 describe('定义表完整性', () => {
-  it('节点 10 图（含共享 Bot Worker）/ 实例 6 图', () => {
+  it('节点 10 图（含共享 Bot Worker）/ 实例 9 图（含三张业务桥图）', () => {
     expect(NODE_CHART_DEFS).toHaveLength(10)
-    expect(INSTANCE_CHART_DEFS).toHaveLength(6)
+    // 6 张原有 + 3 张桥中转：桥堵了事件发不出去，但实例页看起来一切健康，
+    // 所以这三张必须与 TPS/内存并列放在实例页。
+    expect(INSTANCE_CHART_DEFS).toHaveLength(9)
+    expect(INSTANCE_CHART_DEFS.map((d) => d.id)).toContain('bridge-queue')
+    expect(INSTANCE_CHART_DEFS.map((d) => d.id)).toContain('bridge-rejected')
+    expect(INSTANCE_CHART_DEFS.map((d) => d.id)).toContain('bridge-health')
   })
   it('节点图含共享 Bot Worker 历史指标', () => {
     expect(NODE_CHART_DEFS.map((d) => d.id)).toEqual([

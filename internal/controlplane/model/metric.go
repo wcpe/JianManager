@@ -101,6 +101,34 @@ const (
 	MetricInstGCCount = "inst_gc_count"   // GC 次数速率（count_per_sec）
 	MetricInstGCTime  = "inst_gc_time_ms" // GC 暂停占用（ms_per_sec）
 
+	// ── 业务桥（ServerProbe ↔ JM 插件桥）中转指标 ────────────────────
+	//
+	// ## 为什么这几项要进时序库，而不是只看 bridge_status
+	//
+	// `core.bridge_status` 只能查到**当下这一瞬**的队列深度与计数。
+	// 它回答不了「下午三点那次业务高峰堵了没有」——而那才是运维真正要问的问题。
+	// 入时序库后才有曲线、才能做告警阈值、才能回查历史拐点。
+	//
+	// ## 指标语义（与 ServerProbe SenderStatus 一一对应）
+	//
+	// 本通道的约定是「不可靠 / 幂等 / 不堵塞」：丢弃是**设计内的降级**，
+	// 但必须可观测——静默丢数据比丢数据本身更危险。
+	//
+	// | metric_key | 来源 | 含义 |
+	// |---|---|---|
+	// | bridge_queue_depth | sender.{reliable,bestEffort}Queue | 当前积压（帧） |
+	// | bridge_rejected_rate | sender.{reliableRejected,bestEffortDropped} 差分 | 拒绝/丢弃速率 |
+	// | bridge_receipt_rejected | sender.commandResultRejected | 回执被拒累计——回执被拒会让 JM 误判业务失败 |
+	// | bridge_write_failures | sender.writeFailures/writeTimeouts | 写出失败——链路质量直接信号 |
+	//
+	// 队列深度与拒绝速率成对出现才有意义：只有深度高而拒绝为 0 说明消费跟得上（排队但在消化）；
+	// 深度高且拒绝率高才是真的承不住了。
+	MetricBridgeReliableQueue   = "bridge_reliable_queue"    // 帧，gauge：可靠事件队列深度
+	MetricBridgeBestEffortQueue = "bridge_best_effort_queue" // 帧，gauge：可丢事件队列深度
+	MetricBridgeRejectedRate    = "bridge_rejected_rate"     // 条/秒，rate：拒绝+丢弃总速率
+	MetricBridgeReceiptRejected = "bridge_receipt_rejected"  // 条，累计：回执被拒（JM 会误判业务失败）
+	MetricBridgeWriteFailures   = "bridge_write_failures"    // 次/秒，rate：写失败+写超时
+
 	MetricWorldLoadedChunks = "world_loaded_chunks"
 	MetricWorldEntities     = "world_entities"
 	MetricWorldTileEntities = "world_tile_entities"

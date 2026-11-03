@@ -889,7 +889,10 @@
       "heap": "Heap",
       "threads": "Threads",
       "players": "Online players",
-      "chunks": "Loaded chunks by world"
+      "chunks": "Loaded chunks by world",
+      "bridgeQueue": "Bridge Queue Backlog",
+      "bridgeRejected": "Bridge Rejection Rate",
+      "bridgeHealth": "Bridge Write Failure Rate"
     },
     "metric": {
       "cpu": "CPU",
@@ -916,7 +919,11 @@
       "botActive": "Active Bots",
       "botConnecting": "Connecting Bots",
       "botCapacity": "Capacity limit",
-      "botEventLoopP95": "Event-loop P95"
+      "botEventLoopP95": "Event-loop P95",
+      "bridgeReliableQueue": "Reliable queue",
+      "bridgeBestEffortQueue": "Best-effort queue",
+      "bridgeRejectedRate": "Rejected + dropped",
+      "bridgeWriteFailures": "Write failures"
     },
     "inspectProcess": "Inspect",
     "processActionDescription": "Only targets PIDs within this instance's managed process tree; the backend re-verifies PID ownership and requires confirm=true.",

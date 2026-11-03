@@ -39,6 +39,12 @@ type CollectConfig struct {
 	Host         string        // 直探主机，通常 "localhost"（与实例同机）
 	SLPTimeout   time.Duration // SLP 超时；<=0 用生效默认（见 SetDirectProbeTimeouts）
 	QueryTimeout time.Duration // Query 超时；<=0 用生效默认（见 SetDirectProbeTimeouts）
+	// ProbeSnapshot 是**托管模式**下由插件桥推送来的最新探针快照（ServerProbe PR#64）。
+	//
+	// 非 nil 时编排链**直接用它代替 HTTP 抓取**：托管模式下探针不开 /metrics，
+	// 那条路径必然失败；而推送值与抓取值本来就同源同构（同一份快照投影），
+	// 所以不需要分支两套取值逻辑。SLP / Query 仍照常跑，补探针给不出的基础信息。
+	ProbeSnapshot *ProbeSnapshot
 }
 
 // InstanceTelemetry 是一拍实例遥测：各指标带可用性语义与来源，三档皆无 → 对应可用位为 false（显式「不可用」）。
@@ -62,6 +68,12 @@ type InstanceTelemetry struct {
 	// GC：cumulative counter（跨收集器求和），仅探针提供。
 	GCCountTotal int64
 	GCTimeMillis float64
+
+	// Bridge 桥自身的中转指标（本通道）；nil = 探针未上报（老探针）。
+	//
+	// 与其它字段的区别：它们描述「业务健康」，这个描述「中转链路承不承得住」。
+	// 通道堵了业务可能一切正常、但事件发不出去。
+	Bridge *BridgeSnapshot
 
 	// 基础信息（探针 / SLP / Query 任一命中）。
 	Motd               string
@@ -114,6 +126,7 @@ func Orchestrate(probe *ProbeSnapshot, slp *SLPSnapshot, query *QuerySnapshot) *
 		t.Worlds = probe.Worlds
 		t.GCCountTotal = probe.GCCountTotal
 		t.GCTimeMillis = probe.GCTimeMillis
+		t.Bridge = probe.Bridge
 		// 探针无最大人数/MOTD/版本/名单；仅在线人数可用。
 		t.PlayersOnline = probe.PlayersOnline
 		t.PlayersOnlineAvailable = true
@@ -214,7 +227,12 @@ func CollectInstanceTelemetry(cfg CollectConfig) *InstanceTelemetry {
 
 	var probe *ProbeSnapshot
 	var probeErr error
-	if cfg.ProbePort > 0 {
+	// 托管模式：推送上来的快照优先。它来自探针同一份指标采集管线，与 HTTP 抓取值同构；
+	// 此时不要再尝试抓 /metrics——托管下那个端口根本没开，试一次只是白耗超时预算
+	// 并往日志里刷一条注定失败的记录。
+	if cfg.ProbeSnapshot != nil {
+		probe = cfg.ProbeSnapshot
+	} else if cfg.ProbePort > 0 {
 		if snap, err := ScrapeServerProbe(host, cfg.ProbePort, ""); err == nil {
 			probe = snap
 		} else {

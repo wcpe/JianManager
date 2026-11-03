@@ -106,6 +106,16 @@ type gcCounters struct {
 	ts     time.Time
 }
 
+// bridgeCounters 某实例上次心跳的桥累计计数快照（用于差分推速率）。
+//
+// 把“拒绝”与“写失败”分别求和而不是各存四个字段：CP 对外只有两条速率曲线，
+// 内部保留明细反而多一层不会用到的状态。
+type bridgeCounters struct {
+	rejected  int64 // reliableRejected + bestEffortDropped
+	writeFail int64 // writeFailures + writeTimeouts
+	ts        time.Time
+}
+
 // NewMetricService 创建时序指标服务。
 func NewMetricService(db *gorm.DB) *MetricService {
 	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}, lastVLDrop: map[string]vlDropCounter{}}
@@ -373,6 +383,39 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 			}
 			s.lastGC[iid] = gcCounters{count: im.GcCountTotal, millis: im.GcTimeMillis, ts: now}
 			s.gcMu.Unlock()
+
+			// 桥中转指标：仅当探针**真的上报了**才落点（BridgeMetricsPresent）。
+			//
+			// 这是本项最关键的一条判定：老探针不发这组字段，若拿零值当数据落库，
+			// 曲线会显示“队列空、零丢失”——恰好与“不知道有没有丢”相反。
+			// 宁可断线（NULL 断点），也不画一条看着健康的假曲线。
+			if im.BridgeMetricsPresent {
+				samples = append(samples,
+					instSample(model.MetricBridgeReliableQueue, "frames", ptr(float64(im.BridgeReliableQueue))),
+					instSample(model.MetricBridgeBestEffortQueue, "frames", ptr(float64(im.BridgeBestEffortQueue))),
+					instSample(model.MetricBridgeReceiptRejected, "count", ptr(float64(im.BridgeReceiptRejectedTotal))),
+				)
+				// 拒绝与写出失败走与 GC 同构的差分：存**速率**而非累计值，
+				// 因为运维看的是“现在每秒丢多少”，而不是一个只增不减的累计数。
+				s.bridgeMu.Lock()
+				if prev, ok := s.lastBridge[iid]; ok {
+					if dt := now.Sub(prev.ts).Seconds(); dt > 0 {
+						// 差为负 ⇒ 实例重启导致 counter 归零：跳过该拍，不产生负速率假尖峰。
+						if dc := im.BridgeReliableRejectedTotal + im.BridgeBestEffortDroppedTotal - prev.rejected; dc >= 0 {
+							samples = append(samples, instSample(model.MetricBridgeRejectedRate, "count_per_sec", ptr(float64(dc)/dt)))
+						}
+						if dc := im.BridgeWriteFailuresTotal + im.BridgeWriteTimeoutsTotal - prev.writeFail; dc >= 0 {
+							samples = append(samples, instSample(model.MetricBridgeWriteFailures, "count_per_sec", ptr(float64(dc)/dt)))
+						}
+					}
+				}
+				s.lastBridge[iid] = bridgeCounters{
+					rejected: im.BridgeReliableRejectedTotal + im.BridgeBestEffortDroppedTotal,
+					writeFail: im.BridgeWriteFailuresTotal + im.BridgeWriteTimeoutsTotal,
+					ts:        now,
+				}
+				s.bridgeMu.Unlock()
+			}
 			for _, w := range im.Worlds {
 				if w.Name == "" {
 					continue

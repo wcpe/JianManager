@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -63,15 +64,6 @@ import (
 // docker 模式被 cgroup OOM killer 终止时，容器退出码恒为 137 而宿主侧没有信号——
 // 此处补 "killed"（SIGKILL/137 口径），使 CP 侧崩溃归类能识别为 OOM，而不是退化成 unknown。
 // 其余情况沿用进程/容器给出的信号名（daemon/direct 走 WaitStatus.Signal().String()）。
-// logStartupPhase 打一条启动阶段耗时日志（范围①）。
-//
-// 为什么默认开启而不藏在开关后面：启动期每次进程生命周期只跑一遍，没有噪声成本；
-// 而运行期那套 `JIANMANAGER_STAGE_TIMING=1`（采集轮内计时）是高频路径，才需要开关。
-// 现场出问题时，人最需要的是「上一次启动的日志里本来就有数据」。
-func logStartupPhase(phase string, cost time.Duration) {
-	slog.Info("启动阶段完成", "phase", phase, "elapsed_ms", cost.Milliseconds())
-}
-
 func crashSignal(info process.CrashInfo) string {
 	if info.Signal != "" {
 		return info.Signal

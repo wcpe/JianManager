@@ -35,6 +35,7 @@ const (
 	WorkerService_TerminateManagedProcess_FullMethodName     = "/worker.WorkerService/TerminateManagedProcess"
 	WorkerService_PreflightStartInstance_FullMethodName      = "/worker.WorkerService/PreflightStartInstance"
 	WorkerService_AdoptForeignRuntime_FullMethodName         = "/worker.WorkerService/AdoptForeignRuntime"
+	WorkerService_AdoptInPlaceRuntime_FullMethodName         = "/worker.WorkerService/AdoptInPlaceRuntime"
 	WorkerService_SendCommand_FullMethodName                 = "/worker.WorkerService/SendCommand"
 	WorkerService_GetInstanceStatus_FullMethodName           = "/worker.WorkerService/GetInstanceStatus"
 	WorkerService_ListInstances_FullMethodName               = "/worker.WorkerService/ListInstances"
@@ -203,6 +204,14 @@ type WorkerServiceClient interface {
 	PreflightStartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
 	AdoptForeignRuntime(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
+	// AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
+	//
+	// 与 AdoptForeignRuntime 的根本区别就一条：一个会重启，一个不会。
+	// 就地导入（in_place）的服往往由 tmux/systemd 在平台外跑着，业务不能断，
+	// 此时只能「承认它、看着它」——把现有 PID 登记为平台运行态。
+	// 代价：终端输入 / 优雅停止不可用（不是平台 spawn 的），生命周期仍归外部管理器。
+	// 目录下无活进程时返回 success=false，调用方据此回退到正常启动。
+	AdoptInPlaceRuntime(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// SendCommand 向实例发送命令。
 	SendCommand(ctx context.Context, in *SendCommandRequest, opts ...grpc.CallOption) (*SendCommandResponse, error)
 	// GetInstanceStatus 获取实例状态。
@@ -652,6 +661,16 @@ func (c *workerServiceClient) AdoptForeignRuntime(ctx context.Context, in *Insta
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InstanceActionResponse)
 	err := c.cc.Invoke(ctx, WorkerService_AdoptForeignRuntime_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) AdoptInPlaceRuntime(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstanceActionResponse)
+	err := c.cc.Invoke(ctx, WorkerService_AdoptInPlaceRuntime_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1874,6 +1893,14 @@ type WorkerServiceServer interface {
 	PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// AdoptForeignRuntime 接管已注册实例工作目录下的外来活进程（FR-471）：登记 PID 并纳入受管生命周期。
 	AdoptForeignRuntime(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
+	// AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
+	//
+	// 与 AdoptForeignRuntime 的根本区别就一条：一个会重启，一个不会。
+	// 就地导入（in_place）的服往往由 tmux/systemd 在平台外跑着，业务不能断，
+	// 此时只能「承认它、看着它」——把现有 PID 登记为平台运行态。
+	// 代价：终端输入 / 优雅停止不可用（不是平台 spawn 的），生命周期仍归外部管理器。
+	// 目录下无活进程时返回 success=false，调用方据此回退到正常启动。
+	AdoptInPlaceRuntime(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// SendCommand 向实例发送命令。
 	SendCommand(context.Context, *SendCommandRequest) (*SendCommandResponse, error)
 	// GetInstanceStatus 获取实例状态。
@@ -2213,6 +2240,9 @@ func (UnimplementedWorkerServiceServer) PreflightStartInstance(context.Context, 
 }
 func (UnimplementedWorkerServiceServer) AdoptForeignRuntime(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AdoptForeignRuntime not implemented")
+}
+func (UnimplementedWorkerServiceServer) AdoptInPlaceRuntime(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AdoptInPlaceRuntime not implemented")
 }
 func (UnimplementedWorkerServiceServer) SendCommand(context.Context, *SendCommandRequest) (*SendCommandResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendCommand not implemented")
@@ -2832,6 +2862,24 @@ func _WorkerService_AdoptForeignRuntime_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).AdoptForeignRuntime(ctx, req.(*InstanceActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_AdoptInPlaceRuntime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstanceActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).AdoptInPlaceRuntime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_AdoptInPlaceRuntime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).AdoptInPlaceRuntime(ctx, req.(*InstanceActionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4768,6 +4816,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdoptForeignRuntime",
 			Handler:    _WorkerService_AdoptForeignRuntime_Handler,
+		},
+		{
+			MethodName: "AdoptInPlaceRuntime",
+			Handler:    _WorkerService_AdoptInPlaceRuntime_Handler,
 		},
 		{
 			MethodName: "SendCommand",
