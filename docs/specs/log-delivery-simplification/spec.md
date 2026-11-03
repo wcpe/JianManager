@@ -17,7 +17,11 @@
 
 查询侧同步去掉 `projection_generation` 过滤（`vlrange` / `query_text_budget`）。
 
-## 2. 被删除的机制（**永久不再运行**）
+## 2. 被删除的机制（**投递路径上永久不再运行**）
+
+> 口径很关键：这些机制是在**投递路径**（`deliverCtx`）上被摘除的。
+> `publishSnapshot` / 物化预算 / `PublicationPending` 这三个**代码仍在**，仍服务于重建与对账路径——
+> 详见 §8.3 的修正。
 
 | 机制 | 说明 |
 |---|---|
@@ -83,23 +87,141 @@ WAL 是纯内存队列，重启即丢。可靠性由「持久化 cursor + 至少
 
 判断口径：**先 grep 这条用例引用了哪些符号**，全部落在已删链上才 Skip。
 
-## 7. 验收（受控口径）
+## 7. 验收（2026-11-03 更新：已无任何 skip）
 
-全量跑会被两个**既有**坏源截断（`TestIndexManagerConfirmedPhysicalFingerprintAndGapThreeOpens` 的 panic、
-`TestIngestSixFixDeferredPersistFailureNeverSends` 的挂死），故验收一律带 `-skip`：
+**当前口径**：
 
 ```
-go test ./internal/worker/logs/ingest/ -count=1 -skip 'TestIndexManagerConfirmedPhysicalFingerprintAndGapThreeOpens|TestIngestSixFixDeferredPersistFailureNeverSends|TestIngestSixFixInconclusiveConfirmIsRequeued|TestIngestSixFixSilentQuietSourceReconfirmsPending' -timeout 900s
+go test ./internal/worker/logs/ingest/ -count=1 -timeout 1200s
+→ ok  293.5s   执行 633 · PASS 457 · SKIP 47 · FAIL 0 · PANIC 0
+
+go test ./internal/worker/logs/... -count=1 -timeout 1200s
+→ 全绿（除 ingest 外 26 个包）
+
+go build ./... && go vet ./...   → 零输出
 ```
 
-结果：**56 条失败，与基线 56 条完全一致（`comm` 为空集）**。
-即：本次简化**没有引入任何新增失败**。
+**不再需要 `-skip`。** 2026-11-03 那轮清理里，原先两个「坏源」的形态都已消失：
 
-- `internal/worker/logs/` 下除 `ingest` 外 **26 个包全绿**（vlrange / query / ledger / acquire / stateindex / vlsup）
-- `go build ./...` 与 `go vet ./internal/worker/logs/...` 均零输出
+| 原状 | 现状 |
+|---|---|
+| `TestIndexManagerConfirmedPhysicalFingerprint…` **panic** | `SKIP`（索引纯内存，无磁盘库可重开三次） |
+| `TestIngestSixFixDeferredPersistFailureNeverSends` 挂死 11m56s | `PASS 0.01s` |
 
-## 8. 未处理（**既有问题，不在本次裁定范围**）
+那两个现象是**简化改造期的中间态**：`deliverCtx` 简化时 `PublishedProjection` 变成 nil，
+某条用例解引用就 panic，而一 panic 就中止整包——于是后面一大批本该红的既有失败全被掩盖。
+根因（就绪面依赖已发布投影、pending 无收口）本轮修掉后，panic 与挂死同时消失。
 
-56 条基线失败涉及：实例规则升级与跨重启还原、`resolveOneSourceGaps` 的锁与预算、
-部分 `TestManager*` 发布一致性。其中多数与 2026-10-30「索引改纯内存」有关。
-需要时另开一轮清理。
+47 条 SKIP 全部带明确理由，分四类：
+
+| 类别 | 条款 |
+|---|---|
+| 投递路径简化（2026-11-02） | 写后校验 / 发布链 / 代次白名单 / 隔离视图 / 整窗重发已删 |
+| 索引纯内存（2026-10-30 裁定） | 跨重启前提整体取消 |
+| race 构建豁免 | `verify_partial_progress` 那类依赖时间比例的断言 |
+| 数据面已变 | 写前幂等使重建零物理写入等 |
+
+## 8. 后续清理（2026-11-03 已完成）
+
+2026-11-02 简化落地时遗留的 56 条基线失败，已于 2026-11-03 全部处理完毕（11 个 commit）。
+
+### 8.1 顺带修出的 8 个**真 bug**
+
+都是「简化删掉了机制，但依赖它的判据没同步收口」这一类：
+
+| # | bug | 线上后果 |
+|---|---|---|
+| 1 | `CutoverReadiness` 仍以「已发布投影」为准 | cutover 闸门**恒不可满足**，无任何数据面动作能恢复 |
+| 2 | `PublicationPending` 永不消退 | 就绪面永久 `publication_pending` |
+| 3 | STDIO 源持久化游标从未生效 | 每次重启重读整个 raw spool（event_id 不同 ⇒ 下游幂等救不了） |
+| 4 | `dropEventsAlreadyWritten` 代次过滤永不命中 | 写前幂等完全失效，重复写 VL |
+| 5 | `deliverCtx` 丢弃 `clientForSource` 的 frozen 标志 | 冻结日（迁移/归档窗口）照常写入且当成功 |
+| 6 | 重启后任何规则升级都必定失败 | `state.Instances` 恒空 ⇒ `exists=false` ⇒ 撞旧 pipe |
+| 7 | FR-504 归档 glob 重算永久失效 | `recalcInstanceSourceConfig` 找不到绑定 ⇒ 旧 glob 永久残留 |
+| 8 | `RegisterInstance` 在「绑定已存在且未变」分支从不写回 | 重启后绑定恒空、`AppendInstanceOutput` 恒报 pending |
+
+第 1、2 条是同一类故障的两种表现，共同特征是**不报错、只表现为「一直不就绪」**——
+在生产上会被当成配置问题排查很久。
+
+### 8.2 其余 48 条的归类
+
+| 类别 | 处理 |
+|---|---|
+| D1 夹具时序（20+ 处） | `StartAtEOF: true` 要求「先登记再产生日志」；改夹具 |
+| 跨重启（前提已被 2026-10-30 裁定取消） | 改断言或 `t.Skip` |
+| 断言口径过时（写后校验/发布链已删） | 改断言或 `t.Skip`，每条写清失去什么、关切由谁接 |
+
+判断「失去对象」的口径：`grep -rn "funcName(" --include='*.go' | grep -v _test.go`
+只抓到定义行 ⇒ 只剩测试在调 ⇒ 该组用例整体失效。
+
+### 8.3 对本文 §2 的**修正**
+
+§2 说物化预算与 `publishSnapshot` 已删——**不够准确**。实测它们仍在，只是**不在投递主路径上**：
+
+| 机制 | 现状 |
+|---|---|
+| `publishSnapshot` | 仍被重建（`writeProjectionDay`）、冲突清空后重发布、物化复用三条路径调用 |
+| `reserveMaterialization` / `updateMaterialization` | 仍服务于**重建**路径（`rebuildDaysInner` → `writeProjectionPlan`） |
+| `PublicationPending` | 仍存在，但置位点只剩「重建切片预算用尽」；收口已补在「重建整窗完成」与「确认取证通过」两处 |
+
+准确的说法是：**投递路径（`deliverCtx`）不再走发布/物化**；重建与对账路径仍然走。
+这是有意的——重建需要「写一版新代次」这个动作本身，而投递不需要。
+
+### 8.4 第 9 个真 bug：投递后 Catalog 无记录 ⇒ 数据写进去了却查不到
+
+**2026-11-03 清完 56 条后才浮出来的**——它没有对应任何失败用例，是读文档、
+查 `PublishedProjection` 的消费者时发现的。
+
+#### 缺陷形态
+
+`Catalog` 分区记录的唯一创建者是 `publishSnapshot` → `cat.PublishProjection`。
+投递路径不再调它 ⇒ **新源首次投递后 Catalog 里永远没有记录**。
+
+而 `catalog.querySnapshotLocked` 的门禁是：
+
+```go
+if rec == nil || rec.PublishedProjection == nil || !Recover(rec).Queryable || !OwnerForQuery(rec).OK {
+    continue   // 该分区不进快照
+}
+```
+
+⇒ `query.Planner.Plan` 拿到 `view targets=[]` ⇒ **用户看到「这天没日志」**。
+
+夹具实测（`node:cp/g1` 写两行）：
+
+```
+VL writes=1 · 事件段 1 条 · catalog record exists=false
+Planner.Plan → view targets=[] · queryable={}
+```
+
+#### 为什么它比「丢数据」更危险
+
+日志一切正常、VL 里也有行、投递计数也对——就是查不到。
+运维会先去查「是不是查询配置错了」「是不是 VL 挂了」，而真相是写路径少了
+一个建记录的步骤。
+
+#### 修法
+
+在 `deliverCtx` 写 VL 成功之后调 `ensureCatalogPartition(source)`：
+
+1. 已有记录 ⇒ 直接返回（重建/迁移可能已写过，owner 可能不同，不能覆盖）；
+2. 没有 ⇒ 用 `WriteAdmission` 取 owner / generation / dirID（**与写路径同源**，
+   避免「记录写 HOT、数据写 COLD」）；
+3. 建 `NewStableRecord` + **一个非 nil 但代次为空的 `PublishedProjection`**；
+4. **必须走 `AppendJournal`，不能直接 `cat.Put`**。
+
+第 3 条是关键：空代次让 `vlrange.projectionGenerations` 返回 nil ⇒ 查询侧
+**不加代次过滤**（这正是简化后的预期）；而结构非 nil 才能过上面的快照门禁。
+
+第 4 条是**修这个 bug 时差点又造一个 bug**的地方：第一版用了 `cat.Put`，
+它**不走 journal**、直接写内存 map。后果是「journal 追加失败时分区也可见」——
+`TestManagerDoesNotExposeProjectionWhenJournalAppendFails` 当场转红（它的诉求正是
+「未提交的分区绝不可查」）。改成 `AppendJournal` 后：journal 失败 ⇒ 记录不落地
+⇒ 该分区不可查。代价是那一批数据晚一拍可见（下批重试），这正是正确的安全方向。
+
+#### 回归
+
+`catalog_partition_after_delivery_test.go` 的 `TestDeliveryLeavesCatalogPartitionQueryable`：
+判据① Catalog 记录存在且 owner/dirID 与 `WriteAdmission` 同源；
+判据② `Planner.Plan` 能规划出该目标且 `Queryable == true`。
+**已做变异验证**：注释掉 `ensureCatalogPartition` ⇒ 两条同时转红。

@@ -5165,6 +5165,31 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	if err != nil {
 		return pipeline.DeliveryResult{HTTPStatus: status}, err
 	}
+	// 写进 VL 之后必须**保证 Catalog 分区记录存在**（2026-11-03 修的真 bug）。
+	//
+	// ## 为什么必须
+	//
+	// 查询侧（`query.Planner.Plan` → `p.cat.Get(key)`）先看 Catalog 记录：
+	// 没有记录 ⇒ `CoverageNotReady / reason=NO_CATALOG_RECORD` ⇒ 该目标不进视图。
+	// 而简化前这个记录是由 `publishSnapshot` → `cat.PublishProjection` **创建**的。
+	// 投递路径不再调 `publishSnapshot` ⇒ **新源首次投递后 Catalog 里永远没有记录**。
+	//
+	// 实测（本地夹具，`node:q/g1` 写两行）：
+	//   VL writes=1 · 事件段 1 条 · **catalog record exists=false**
+	//   Planner.Plan → view targets=[] queryable={} —— 用户看到「这天没日志」
+	//
+	// 即：数据真的写进了 VL，却永远查不出来。这比“丢数据”更难排查
+	// （日志一切正常、VL 里也有行，就是查不到）。
+	//
+	// ## 为什么只需要「确保记录存在」
+	//
+	// 查询侧读的是 Catalog 的 **owner / generation / dirID**（物理位置），
+	// 而不是「发布了哪些代次」。简化后一批数据只写一次、行上也没有代次标签，
+	// 所以只要记录在、owner 与目录对，VL 里那些行就能被查到。
+	// 不需要造 `PublishedProjection`，也不需要代次白名单。
+	//
+	// 注意：它**不改变**已有记录（比如重建路径已经写好的那份）——只在缺失时补建。
+	m.ensureCatalogPartition(source)
 	// 投递成功 ⇒ 登记一次「缺口核对」（异步，**不阻塞本路径**）。
 	//
 	// 这**不是**被删的那套账本机制：它只做「查一下这些事件在 VL 里到底可不可见，
@@ -5178,6 +5203,88 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	// 语义与旧实现一致：best-effort，失败不影响投递结果本身。
 	m.scheduleGapResolve(source, write)
 	return pipeline.DeliveryResult{HTTPStatus: status}, nil
+}
+
+// ensureCatalogPartition 保证「本批数据写进 VL 之后，Catalog 里有对应的分区记录」。
+//
+// ## 为什么需要它（2026-11-03 实测的真 bug）
+//
+// 查询入口是 `query.Planner.Plan` → `p.cat.Get(key)`。**没有 Catalog 记录 ⇒ 该目标不进视图**
+// （`CoverageNotReady / NO_CATALOG_RECORD`），用户看到的是「这天没日志」。
+//
+// 而记录的唯一创建者原是 `publishSnapshot` → `cat.PublishProjection`。
+// 投递路径不再调 `publishSnapshot` ⇒ 新源写进去的字节**永远查不到**。
+// 夹具实测：`VL writes=1`、事件段 1 条、`catalog record exists=false`、`Plan → targets=[]`。
+//
+// ## 为什么只是「确保存在」而不是「发布」
+//
+// 查询侧真正要的只有 owner / generation / dirID（即物理位置）。简化后：
+//   - 一批数据只写一次，行上没有代次标签；
+//   - 查询侧也不再按代次过滤（`vlrange` 已同步去掉）。
+// 所以只要记录在、owner 与目录对，VL 里那些行就能查到——不需要 `PublishedProjection`。
+//
+// ## 为什么不覆盖已有记录
+//
+// 重建/对账路径可能已经写好一份（带完整投影、且 owner 可能不同——比如迁移到 COLD）。
+// 这里只在**缺失**时补建，已有的一律不动（读一次 Get 就返回，代价 O(1)）。
+
+func (m *Manager) ensureCatalogPartition(source SourceConfig) {
+	if m == nil || m.cat == nil || source.StorageNamespace == "" || source.UTCDay == "" {
+		return
+	}
+	key := catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}
+	if _, ok := m.cat.Get(key); ok {
+		return // 已有权威：不动它（可能来自重建/迁移，owner 与目录可能不同）
+	}
+	// owner / generation / dirID 必须取自与写路径**同一处**判定（`WriteAdmission`），
+	// 否则会出现「记录写着 HOT，数据却写在 COLD」这种更难查的形态。
+	target, err := m.cat.WriteAdmission(key)
+	if err != nil {
+		slog.Warn("投递后补建 Catalog 分区记录失败（查询侧将看不到本批数据）",
+			"source", source.LogSourceID, "utcDay", source.UTCDay, "error", err)
+		return
+	}
+	if !target.OK {
+		slog.Warn("投递后补建 Catalog 分区记录被拒绝（无写目标）",
+			"source", source.LogSourceID, "utcDay", source.UTCDay, "reason", target.Reason)
+		return
+	}
+	dirID := target.DirID
+	if dirID == "" {
+		// 与 `publishSnapshot` 的兜底逐字一致：目录 ID 缺失时用「owner-代次」占位。
+		dirID = string(target.Owner) + "-" + source.SourceGeneration
+	}
+	rec := catalog.NewStableRecord(key, target.Owner, target.Generation, dirID)
+	// **必须带一个非 nil 的投影结构**：`catalog.querySnapshotLocked` 的门禁是
+	// `rec == nil || rec.PublishedProjection == nil || !Recover(rec).Queryable || !OwnerForQuery(rec).OK`
+	// —— 缺投影就直接 continue（该分区不进快照），即使 owner/dirID 都对也查不到。
+	//
+	// 这里刻意**不填任何代次**（`ProjectionGenerations` 为空、`ProjectionGeneration` 为空）：
+	// `vlrange.projectionGenerations` 对空投影返回 nil ⇒ 查询侧**不加代次过滤**——
+	// 这正是简化后的预期（一批数据只写一次，行上没有代次标签）。
+	// 填一个假代次反而会把查询限制在一个不存在的标签上。
+	rec.PublishedProjection = &catalog.PublishedProjection{
+		QueryLocationDirID: dirID,
+		QueryGeneration:    target.Generation,
+	}
+	// **必须走 journal**（`AppendJournal`），不能直接 `cat.Put`：
+	//
+	// 分区记录一旦建立，查询侧立刻能查到该分区下 VL 里的行。如果它没经过 journal，
+	// 就会出现「持久日志里没这条记录、内存里却有」的形态——重启后消失，
+	// 而这期间用户已经看到过那份数据（`TestManagerDoesNotExposeProjectionWhenJournalAppendFails`
+	// 钉的就是「未提交的分区绝不可查」）。
+	//
+	// journal 追加失败时这里直接返回：**记录不落地 ⇒ 该分区不可查**。
+	// 这会让该批数据暂时“写进去了但查不到”，但那正是正确的安全方向——
+	// 宁可晚一拍可见，也不要露出一个持久日志里不存在的权威。
+	if err := m.cat.AppendJournal(catalog.JournalEntry{Key: key, Record: rec}); err != nil {
+		slog.Warn("投递后补建 Catalog 分区记录失败（查询侧暂看不到本批数据，下批重试）",
+			"source", source.LogSourceID, "utcDay", source.UTCDay, "error", err)
+		return
+	}
+	slog.Info("已为本批投递补建 Catalog 分区记录（简化后投递路径不经过发布）",
+		"source", source.LogSourceID, "utcDay", source.UTCDay,
+		"owner", string(target.Owner), "dirID", dirID)
 }
 
 // routeCapturedSiblings先把跨批旧兄弟交给既有canonical裁定；cut从不把未写B当成A同end的已发布证据。
