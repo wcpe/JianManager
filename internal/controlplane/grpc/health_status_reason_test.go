@@ -268,6 +268,63 @@ func TestSyncInstanceStates_ReconcileReasonClearedAfterReappear(t *testing.T) {
 	require.Empty(t, reason, "实例回归心跳清单并健康后不得残留过期对账文案")
 }
 
+// 心跳明确上报 STOPPED/CRASHED 且未带原因时，心跳自己写的过期巡检文案必须被清掉：
+// 否则面板会停在「已停止 + 进程侧证据显示仍在运行」这种自相矛盾的组合上。
+// 真机现象：lobby-1 已落 STOPPED，却仍挂着上一拍对账写的「仍在运行」文案。
+func TestSyncInstanceStates_StoppedHeartbeatClearsStaleReconcileReason(t *testing.T) {
+	h, db, node := newStateSyncFixture(t)
+	require.NoError(t, db.Create(&model.Instance{
+		UUID: "i-stale", NodeID: node.ID, Name: "stale",
+		Status:             model.InstanceStatusStopped,
+		StatusReason:       "进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）",
+		StatusReasonSource: "worker",
+	}).Error)
+
+	h.syncInstanceStates(node.UUID, []*workerpb.InstanceState{{
+		InstanceUuid: "i-stale",
+		State:        string(model.InstanceStatusStopped),
+	}})
+
+	_, reason := statusOf(t, db, "i-stale")
+	require.Empty(t, reason, "心跳报 STOPPED 后不得残留上一拍的对账巡检文案")
+}
+
+// 反向用例：STOPPED 心跳不得清掉 CP 写入的生命周期失败原因（来源非 worker）。
+func TestSyncInstanceStates_StoppedHeartbeatKeepsCPReason(t *testing.T) {
+	h, db, node := newStateSyncFixture(t)
+	const cpReason = "启动失败: 未绑定 JDK"
+	require.NoError(t, db.Create(&model.Instance{
+		UUID: "i-cp-keep", NodeID: node.ID, Name: "cp-keep",
+		Status:       model.InstanceStatusStopped,
+		StatusReason: cpReason,
+	}).Error)
+
+	h.syncInstanceStates(node.UUID, []*workerpb.InstanceState{{
+		InstanceUuid: "i-cp-keep",
+		State:        string(model.InstanceStatusStopped),
+	}})
+
+	_, reason := statusOf(t, db, "i-cp-keep")
+	require.Equal(t, cpReason, reason, "STOPPED 心跳不得清掉 CP 写入的失败原因")
+}
+
+// 对账集合只应包含运行类状态：已停实例不得被对账写上「仍在运行」文案。
+// （异步派发下快照可能过期，写入侧另有 status 守卫兼容；本用例守查询侧。）
+func TestReconcileMissingInstances_DoesNotStampStopped(t *testing.T) {
+	h, db, node := newReconcileFixture(t)
+	require.NoError(t, db.Create(&model.Instance{
+		UUID: "i-stopped-snapshot", NodeID: node.ID, Name: "stopped-snapshot",
+		Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon,
+		Status: model.InstanceStatusStopped, StartCommand: "java -jar server.jar",
+	}).Error)
+
+	// 直接走对账路径（模拟快照之后状态已落 STOPPED）。
+	h.reconcileMissingInstances(*node, nil)
+
+	_, reason := statusOf(t, db, "i-stopped-snapshot")
+	require.Empty(t, reason, "已停实例不得被对账写成「仍在运行」")
+}
+
 // 老 Worker 不上报 health/status_reason（均空）：不得触碰库中现有原因。
 func TestSyncInstanceStates_LegacyWorkerKeepsReason(t *testing.T) {
 	h, db, node := newStateSyncFixture(t)

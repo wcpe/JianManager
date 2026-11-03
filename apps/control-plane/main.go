@@ -541,6 +541,13 @@ func main() {
 	cloneSvc := service.NewCloneService(db, pool, instanceSvc, registrationSvc)
 	// 导入现有服务器（见 ADR-069）：就地接管 / 搬迁托管区。
 	importServerSvc := service.NewImportServerService(db, pool, instanceSvc)
+	// 导入也下发探针（jar + config + 托管身份）：
+	//
+	// 以前导入只建实例，探针靠人工事先放到 plugins/ 目录里。结果是导入进来的服
+	// 要么没探针（监控全空），要么用着别人手工写的旧 config（不连本平台的桥）。
+	// 接上后走的是与建服**完全相同**的下发链路（provision.deployServerProbe），
+	// 因此两条路径的产物同形，不会出现“新建的能连、导入的连不上”。
+	importServerSvc.SetProbeDeployer(provisionSvc)
 	playerSvc := service.NewPlayerService(db, pool)
 	// 服务器状态查询服务（见 ADR-016）：按需经探针反向 WS 桥的 QueryServerState
 	// 取回某实例全量 Bukkit 内部状态（前端「服务器状态」tab 开/刷新才查）。
@@ -790,6 +797,10 @@ func main() {
 		Report:            botLoadReportSvc,
 		Capacity:          botLoadSvcs.capacity,
 		Metrics:           botLoadMetricSampler,
+		// ServerProbe 诊断代理：复用管理面同一个 businessSvc，不另建桥客户端。
+		// 漏了这行不会编译失败，只会让 probe_tools / probe_diagnose 恒回
+		// 「业务下发服务不可用」——看起来像探针没连上，实际是装配漏了。
+		Business: businessSvc,
 	}
 	mcpHandler := mcp.NewHandler(mcpConns, mcpToolDeps, agentCallLogSvc)
 	// 助手调用平台工具的执行入口：按用户权限派生身份后走 MCP 的 CallTool。

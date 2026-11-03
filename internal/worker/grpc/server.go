@@ -410,6 +410,17 @@ func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstan
 	if registered > 0 || skipped > 0 {
 		slog.Info("已接收 CP 重连重推的实例规格", "registered", registered, "skipped", skipped, "total", len(req.Instances))
 	}
+	// 就地收养的恢复**必须在这里补一次**。
+	//
+	// Startup 阶段的恢复（PhaseProcessRecover）跑在**实例注册之前**：那时内存表还是空的，
+	// 逐条检查"实例是否存在"会全部跳过，记录被原封不动留着。而实例要等 CP 重推
+	// （即本 RPC）才注册进来。不在这里重试的话，重启后全量变回 STOPPED——
+	// 真机上就是这个症状：记录文件还在、进程还在，面板却是停止。
+	//
+	// 恢复幂等：已恢复的不会被重复认领；已清理的记录不会再生。
+	if adopted, cleaned := s.manager.RestoreAdoptedRuntimes(); adopted > 0 || cleaned > 0 {
+		slog.Info("重推后补做就地收养恢复", "restored", adopted, "cleaned", cleaned)
+	}
 	return &workerpb.ResyncInstancesResponse{Registered: registered, Skipped: skipped}, nil
 }
 
@@ -475,6 +486,25 @@ func (s *Server) AdoptForeignRuntime(ctx context.Context, req *workerpb.Instance
 	}
 	if stoppedPID > 0 {
 		slog.Info("已接管实例目录下的外来运行时并重新纳入受管", "instanceId", req.InstanceUuid, "stoppedPid", stoppedPID)
+	}
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+// AdoptInPlaceRuntime 收养就地导入实例的外部运行进程：**不改进程、不重启**。
+//
+// 与 AdoptForeignRuntime（先停后启）的分工见 process.AdoptInPlaceRuntime 的注释：
+// 就地导入的服往往由 tmux/systemd 在平台外跑着，业务不能断，
+// 此时只能“承认它、看着它”，而不是吹掉重启（那样会因端口冲突反复崩溃）。
+//
+// 目录下无活进程时返回 success=false——调用方（CP 导入流程）据此判定为
+// “导入成 STOPPED”的正常结果，而不是错误。
+func (s *Server) AdoptInPlaceRuntime(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
+	pid, err := s.manager.AdoptInPlaceRuntime(req.InstanceUuid)
+	if err != nil {
+		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
+	}
+	if pid > 0 {
+		slog.Info("已收养就地导入实例的外部运行进程（未重启）", "instanceId", req.InstanceUuid, "pid", pid)
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }

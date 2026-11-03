@@ -133,6 +133,14 @@ const (
 	AgentActionPluginToggle          = "agent.plugin_toggle"
 	AgentActionPluginDelete          = "agent.plugin_delete"
 
+	// ServerProbe 诊断代理 action（经探针桥下发）。
+	//
+	// 为什么要走 MCP 代理而不是让调用方直连探针：托管模式下探针**零监听**，
+	// 9267/9943/9945 一个端口都不开，外部没有任何办法直连它。
+	// 唯一可达路径就是 Worker 上的反向 WS 桥，而 CP 是那座桥的持有者。
+	// 把 42 个诊断工具经 CP 代理出去，调用方只需一个 MCP 端点。
+	AgentActionProbeDiagnose = "agent.probe_diagnose"
+
 	// 普通 Bot 舰队 action（resource=bot）。
 	AgentActionBotList        = "agent.bot_list"
 	AgentActionBotGet         = "agent.bot_get"

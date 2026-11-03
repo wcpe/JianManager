@@ -82,6 +82,8 @@ func TestOrphanAuditAllowedActions_Contract(t *testing.T) {
 		"orphan.foreign_runtime_adopt_blocked",
 		"orphan.foreign_runtime_adopted",
 		"orphan.foreign_runtime_detected",
+		// 「目录里有活进程但都不像运行时」的唯一留痕（不写漂移、不上面板，但必须可查）。
+		"orphan.foreign_runtime_unmatched",
 		"health.dead_detected",
 		"health.selfheal_restart",
 		"health.selfheal_exhausted",

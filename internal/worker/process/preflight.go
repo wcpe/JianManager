@@ -215,6 +215,20 @@ func checkWorkDirBusy(workDir string, ownRootPID int) error {
 		if !procInWorkDir(proc, clean) {
 			continue
 		}
+		// 只把“像游戏服运行时的进程”算作占用。
+		//
+		// ## 为什么不能“目录下有东西就算占”
+		// 运维用 tmux 起的服，目录里除了 java 还有 tmux 的 shell（`-bash`）、`tee` 管道、
+		// 启动脚本外壳。它们占着这个目录但**不占端口、不持锁、不影响新进程启动**。
+		// 把它们当占用会得到真实机见过的现象：服已经停了（java 早退出），仅剩 tmux 空壳，
+		// 面板却拒绝启动并报“工作目录下已有活进程（pid=X：-bash），请先接管或清理”——
+		// 而运维对着一台已停的服根本无从“接管”，启动路径就死在了这里。
+		//
+		// 真正的冲突（端口占用、world/session.lock 被持）由后续的端口预检与运行时错误兜住，
+		// 不需要在这里用“目录非空”做代理判据。
+		if !looksLikeRuntimeCmdline(proc.Cmdline) {
+			continue
+		}
 		return fmt.Errorf("工作目录下已有活进程（pid=%d：%s），可能为未纳管进程或残留，请先接管或清理：%s",
 			proc.PID, truncateCmdline(proc.Cmdline), clean)
 	}

@@ -26,6 +26,20 @@ type fakeImportWorker struct {
 	importResp   *workerpb.ImportServerDirResponse
 	created      []*workerpb.CreateInstanceRequest
 	removed      []*workerpb.RemoveInstanceRequest
+	// adoptedInPlace 记录“不重启收养”的调用（导入流程会自动收养目录里的活进程）。
+	// adoptInPlaceResp 为 nil 时回“无活进程”——多数导入用例的目录本来就是停着的，
+	// 那是正常结果（导入成 STOPPED），不是错误。
+	adoptedInPlace   []string
+	adoptInPlaceResp *workerpb.InstanceActionResponse
+}
+
+// AdoptInPlaceRuntime 不重启地收养外部进程（导入后自动调）。
+func (f *fakeImportWorker) AdoptInPlaceRuntime(_ context.Context, req *workerpb.InstanceActionRequest, _ ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	f.adoptedInPlace = append(f.adoptedInPlace, req.InstanceUuid)
+	if f.adoptInPlaceResp != nil {
+		return f.adoptInPlaceResp, nil
+	}
+	return &workerpb.InstanceActionResponse{Success: false, Error: "工作目录下没有可收养的活进程"}, nil
 }
 
 func (f *fakeImportWorker) InspectServerDir(_ context.Context, req *workerpb.InspectServerDirRequest, _ ...grpc.CallOption) (*workerpb.InspectServerDirResponse, error) {

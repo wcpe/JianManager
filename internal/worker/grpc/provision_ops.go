@@ -649,7 +649,56 @@ func (s *Server) DeployServerProbe(ctx context.Context, req *workerpb.DeployServ
 			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针配置失败: %v", err)}, nil
 		}
 	}
+	// 托管身份文件（ServerProbe PR#64）：存在即托管模式，删除即回退独立模式。
+	//
+	// ## 三个必须做对的点
+	// 1. **权限 0600**：文件里带着插件桥凭证（探针把它原样带进 WS 握手 query）。
+	//    与 config.yml 的 0644 不同——那份不含秘密，这份含。
+	// 2. **原子写**：探针在启动早期读它，半写文件会导致它降级到独立模式
+	//    （带着“解析失败”的 WARN），看起来像莫名其妙的模式回退。
+	//    先写 .tmp 再 rename，保证读到的要么是旧内容、要么是完整新内容。
+	// 3. **幂等**：内容相同就不重写。重写会改变 mtime，而排障时“这份身份是什么时候下发的”
+	//    是有用信息，不该每次部署都被刷成当前时间。
+	if identity := req.IdentityJson; strings.TrimSpace(identity) != "" {
+		cfgDir := filepath.Join(pluginsDir, "ServerProbe")
+		if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("创建探针数据目录失败: %v", err)}, nil
+		}
+		if err := writeFileIfChanged(filepath.Join(cfgDir, "agent-identity.json"), identity, 0o600); err != nil {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入托管身份文件失败: %v", err)}, nil
+		}
+		slog.Info("已下发托管身份文件（探针将以托管模式运行）", "instanceId", req.InstanceUuid)
+	}
 	return &workerpb.DeployServerProbeResponse{Success: true}, nil
+}
+
+// writeFileIfChanged 原子写一个文本文件；内容（与权限）已一致则跳过。
+//
+// @param path 目标路径。
+// @param content 新内容。
+// @param perm 目标权限（Linux/macOS 生效）。
+func writeFileIfChanged(path, content string, perm os.FileMode) error {
+	if old, err := os.ReadFile(path); err == nil && string(old) == content {
+		// 内容未变：只补权限（历史文件可能是旧版本写的 0644），不动 mtime。
+		if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm() != perm {
+			return os.Chmod(path, perm)
+		}
+		return nil
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(content), perm); err != nil {
+		return err
+	}
+	// 先落盘再 rename：避免掉电后留下内容为空的正式文件（探针读到会降级）。
+	if f, err := os.OpenFile(tmp, os.O_RDWR, perm); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func validProbeSHA256(value string) bool {

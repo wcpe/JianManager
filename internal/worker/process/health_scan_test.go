@@ -61,6 +61,57 @@ func hasAudit(audits []scanAudit, action string) bool {
 	return false
 }
 
+// TestHealthScan_AdoptedSkipsProbePort 就地收养（托管模式）实例不得用 probePort 做响应探测。
+//
+// 守的是真机踩到的那条：托管模式探针承诺**零监听**，`probe_port` 只是照 config.yml 写进去的
+// 数字，那个端口实际一个都不监听。若仍拿它做 HTTP 探测，每台托管实例都会被刷成
+// 「假死：进程在但 http 响应探测连续失败 N 次」。
+// 真机现象：bc-proxy（BungeeCord 端口在 config.yml，导入探测不到 → serverPort=0）
+// 顶着 RUNNING 挂着假死原因。
+//
+// 修正后：adopted 实例只用 serverPort；连 serverPort 也没有时**不探**（port<=0 →
+// 上层「仅存活即健康」兜底），绝不去敲一个根本不存在的 probePort。
+func TestHealthScan_AdoptedSkipsProbePort(t *testing.T) {
+	alive, responsive := true, false // 响应恒失败：只有「不去探」才可能判健康
+	s, m, audits, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
+	const uuid = "u-adopted-noport"
+	// probePort 有值（29945），serverPort 为 0：旧逻辑会走 HTTP 探测并恒失败。
+	addInstance(m, uuid, StateRunning, true, 29945, 0)
+	m.mu.Lock()
+	m.instances[uuid].AdoptedPID = 9601
+	m.mu.Unlock()
+
+	for i := 0; i < 5; i++ {
+		s.ScanOnce()
+	}
+
+	fault, reason := m.healthFault(uuid)
+	assert.NotEqual(t, HealthFaultDead, fault,
+		"收养实例不得因探一个不存在的 probePort 被判假死（reason=%q）", reason)
+	assert.False(t, hasAudit(*audits, "health.dead_detected"), "不探就无从告假死")
+}
+
+// TestHealthScan_AdoptedUsesServerPort adopted 实例仍保留 serverPort 的 TCP 探测：
+// serverPort 在时，响应失败仍应如实判假死（不能因为「是收养实例」就把响应维全关了）。
+func TestHealthScan_AdoptedUsesServerPort(t *testing.T) {
+	alive, responsive := true, false
+	s, m, audits, _ := newHealthTestScanner(t, HealthActionWarn, 3, &alive, &responsive)
+	const uuid = "u-adopted-withport"
+	addInstance(m, uuid, StateRunning, true, 29945, 30034)
+	m.mu.Lock()
+	m.instances[uuid].AdoptedPID = 9602
+	m.mu.Unlock()
+
+	for i := 0; i < 4; i++ {
+		s.ScanOnce()
+	}
+
+	fault, reason := m.healthFault(uuid)
+	assert.Equal(t, HealthFaultDead, fault, "serverPort 在时响应失败仍须如实判假死")
+	assert.Contains(t, reason, "tcp", "应走 TCP（serverPort），而不是已零监听的 probePort")
+	assert.True(t, hasAudit(*audits, "health.dead_detected"))
+}
+
 // 验收 1：连续 N 次判假死 → 标原因（warn 档仅告警 + 落审计）。
 func TestHealthScan_DeadDetected_Warn(t *testing.T) {
 	alive, responsive := true, false

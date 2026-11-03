@@ -60,11 +60,28 @@ var orphanAuditAllowedActions = map[string]struct{}{
 	"orphan.foreign_runtime_adopt_blocked": {},
 	"orphan.foreign_runtime_adopted":       {},
 	"orphan.foreign_runtime_detected":      {},
-	"health.dead_detected":                 {},
-	"health.selfheal_restart":              {},
-	"health.selfheal_exhausted":            {},
-	"health.circuit_broken":                {},
-	"health.circuit_released":              {},
+	// orphan.inplace_runtime_adopted / _released：**就地收养**（不重启）的成败审计。
+	//
+	// 与上面 foreign_runtime_* 是两条不同的路：前者会先停进程再重新拉起（有重启风险），
+	// 后者只登记现有 PID、不动进程（就地导入场景）。两者必须都能入库：
+	// 就地收养是“平台凭空多认领了一个进程”，如果不在审计面留痕，事后无法回答
+	// “这个 PID 是什么时候、凭什么被算成本平台在跑的”——而正是这一点决定了
+	// 平台能不能对那个进程发信号。
+	"orphan.inplace_runtime_adopted":  {},
+	"orphan.inplace_runtime_released": {},
+	// orphan.foreign_runtime_unmatched：实例目录下有活进程，但**都不像游戏服运行时**
+	//（典型：tmux 会话里的 `-bash` 壳进程）。
+	//
+	// 它与 foreign_runtime_detected 的区别是“不认作漂移”：不写观测缓存、不上心跳、
+	// 不上面板、不可被接管。但它仍然**必须入库**——它是“目录里有东西在跑”这个事实的
+	// 唯一留痕；丢掉就会变成“运维看到一个目录被占着却查不到任何记录”。
+	// 漏了本项时 CP 以 InvalidArgument 拒收，Worker 仅 Warn 后丢弃（真机已撞到）。
+	"orphan.foreign_runtime_unmatched": {},
+	"health.dead_detected":             {},
+	"health.selfheal_restart":          {},
+	"health.selfheal_exhausted":        {},
+	"health.circuit_broken":            {},
+	"health.circuit_released":          {},
 }
 
 // auditTargetTypeFor 按 action 归正审计 targetType（复审项 11）：

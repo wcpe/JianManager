@@ -68,6 +68,14 @@ type Instance struct {
 	operationMu lifecycleGate
 	// launchSpecPending 只凭 PID 收养时为真，CP 补齐前不得先停后启。
 	launchSpecPending bool
+	// AdoptedPID 是「就地收养」持有的外部进程 PID（0 = 非就地收养）。
+	//
+	// 就地导入（in_place）的实例可能由运维用 tmux/systemd 在平台外启动。
+	// 此时平台**不能**去重启它（端口已被占、业务不能断），只能把现有进程登记下来观测。
+	// 本字段就是那条通道的句柄：它存在即表示“平台看着一个不属于它 spawn 的进程”，
+	// 因此终端输入与优雅停止不可用，生命周期仍归外部管理器。
+	// 见 AdoptInPlaceRuntime / ReleaseInPlaceRuntime。
+	AdoptedPID int
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand

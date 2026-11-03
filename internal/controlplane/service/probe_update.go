@@ -421,12 +421,20 @@ func (s *ProbeUpdateService) deployVersionTo(inst *model.Instance, version *mode
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), probeDeployTimeout)
 	defer cancel()
+	// 在线更新同样要带托管身份：否则一台已托管的探针在“更新探针”后
+	// 会因为身份没被重下发而继续用旧 credential——旧 token 到期/轮换后就再也连不上。
+	identity := s.buildManagedIdentity(inst.UUID, inst.Node.WSPort)
+	cfg := buildServerProbeConfig(inst.ProbePort, s.bridgeBlock(inst.UUID, inst.Node.WSPort))
+	if identity != "" {
+		cfg = buildManagedProbeConfig(inst.ProbePort)
+	}
 	resp, err := client.Worker.DeployServerProbe(ctx, buildDeployServerProbeDownloadRequest(
 		inst.UUID,
 		downloadURL,
 		version.ExpectedSHA256,
 		version.Version,
-		buildServerProbeConfig(inst.ProbePort, s.bridgeBlock(inst.UUID, inst.Node.WSPort)),
+		cfg,
+		identity,
 	))
 	if err != nil {
 		return fmt.Errorf("gRPC DeployServerProbe 失败: %w", err)
@@ -454,6 +462,28 @@ func (s *ProbeUpdateService) workerForDeployment(inst *model.Instance) (*cpgrpc.
 		return nil, fmt.Errorf("Worker %s 未连接", inst.Node.UUID)
 	}
 	return client, nil
+}
+
+// buildManagedIdentity 为实例生成托管身份文件内容（与建服路径同一份实现）。
+//
+// 刻意复用同一份 managed_mode 与 bridge：两条下发链路（建服 / 在线更新）必须产出
+// **同形**的身份，否则同一台机器在不同时机更新会有两种行为，极难排障。
+// 返回空串 = 不下发身份（未启用 / 签发失败）。
+func (s *ProbeUpdateService) buildManagedIdentity(instanceUUID string, wsPort int) string {
+	if s.bridge == nil {
+		return ""
+	}
+	token, err := s.bridge.IssueToken(instanceUUID)
+	if err != nil {
+		slog.Warn("更新探针时签发托管凭据失败（探针将保持独立模式）", "instance", instanceUUID, "err", err)
+		return ""
+	}
+	txt, err := defaultManagedMode.BuildIdentityFile(pluginBridgeWSURL(wsPort), instanceUUID, token)
+	if err != nil {
+		slog.Warn("更新探针时生成托管身份失败（探针将保持独立模式）", "instance", instanceUUID, "err", err)
+		return ""
+	}
+	return txt
 }
 
 // bridgeBlock 为实例签发插件桥 token 并生成探针 config.yml 的 bridge 段（与建服一致）。

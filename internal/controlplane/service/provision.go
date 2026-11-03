@@ -523,9 +523,16 @@ func (p *ProvisionService) deployServerProbe(ctx context.Context, inst *model.In
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, probeDeployTimeout)
 	defer cancel()
+	// 托管身份与 config 成对下发（见 probe_managed_assembly.go 的说明）。
+	identity := p.buildManagedIdentity(inst.UUID, node.WSPort)
+	cfg := buildServerProbeConfig(inst.ProbePort, p.bridgeConfigBlock(inst.UUID, node.WSPort))
+	if identity != "" {
+		// 托管模式下连接目标来自身份文件，config 不再写 bridge 段（写了只是噪声）。
+		cfg = buildManagedProbeConfig(inst.ProbePort)
+	}
+	slog.Info("下发探针配置", "instance", inst.UUID, "mode", describeManagedMode(inst.UUID, identity))
 	resp, err := client.Worker.DeployServerProbe(probeCtx, buildDeployServerProbeDownloadRequest(
-		inst.UUID, downloadURL, version.ExpectedSHA256, version.Version,
-		buildServerProbeConfig(inst.ProbePort, p.bridgeConfigBlock(inst.UUID, node.WSPort)),
+		inst.UUID, downloadURL, version.ExpectedSHA256, version.Version, cfg, identity,
 	))
 	if err != nil {
 		return err
@@ -590,13 +597,16 @@ func isSpongeForgeCore(core *CoreInfo) bool {
 }
 
 // buildDeployServerProbeDownloadRequest 构造新版引用式探针下发；Worker 从 CP 本地 CAS 拉 jar。
-func buildDeployServerProbeDownloadRequest(instanceUUID, downloadURL, sha256, version, configYAML string) *workerpb.DeployServerProbeRequest {
+//
+// identityJSON 为空表示“本次不下发托管身份”（Worker 不会碰现有身份文件）。
+func buildDeployServerProbeDownloadRequest(instanceUUID, downloadURL, sha256, version, configYAML, identityJSON string) *workerpb.DeployServerProbeRequest {
 	return &workerpb.DeployServerProbeRequest{
 		InstanceUuid: instanceUUID,
 		DownloadUrl:  downloadURL,
 		Sha256:       sha256,
 		Version:      version,
 		ConfigYaml:   configYAML,
+		IdentityJson: identityJSON,
 	}
 }
 
@@ -621,6 +631,25 @@ func buildServerProbeConfig(probePort int, bridgeBlock string) string {
 	b.WriteString("  token: \"\"\n")
 	b.WriteString("  allowed-ips:\n")
 	b.WriteString("    - \"127.0.0.1\"\n")
+	// mcp 段**必须显式写**，不能依赖探针默认值。
+	//
+	// 探针侧 `DEFAULT_MCP_ENABLED = false`（ProbeConfig.kt），而 JM 经 MCP 代理的
+	// `probe_tools` / `probe_diagnose` 两个工具全靠探针注册 `core.mcp` 这个桥动作。
+	// 不写这一段时（真机踩到）：`mcp.enabled` 取默认 false → `McpBridgeService.bootstrap()`
+	// 打印「托管模式下 MCP 未启用」后直接 return → 动作没注册、能力位没声明，
+	// 于是控制面调任何一个诊断工具都回「本平台未实现治理执行」。
+	// 表现是“桥连着、指标正常、但 42 个诊断工具全不可用”，极难定位。
+	//
+	// 注意：写 `enabled: true` 不会让托管实例开出本地端口——托管模式的传输方式是
+	// 插件桥（见 McpBridgeService 的注释“传输方式才按模式决定”），`host/port` 仅独立模式生效。
+	b.WriteString("\n")
+	b.WriteString("# MCP 工具面：托管模式下经插件桥暴露（不监听本地端口），\n")
+	b.WriteString("# 控制面的 probe_tools / probe_diagnose 依赖它。\n")
+	b.WriteString("mcp:\n")
+	b.WriteString("  enabled: true\n")
+	b.WriteString("  host: \"127.0.0.1\"\n")
+	b.WriteString("  port: 0\n")
+	b.WriteString("  secret: \"\"\n")
 	if bridgeBlock != "" {
 		b.WriteString("\n")
 		b.WriteString(bridgeBlock)

@@ -852,6 +852,9 @@ func (s *HealthScanner) scanOne(uuid string, pol HealthPolicy, now time.Time) He
 	serverPort := inst.ServerPort
 	autoRestart := inst.AutoRestart
 	startedAt := inst.StartedAt
+	// adopted：就地收养的外部进程（不是平台 spawn 的）。托管模式下其探针零监听，
+	// 故不能用 probePort 做响应探测（见 readinessTarget）。
+	adopted := inst.AdoptedPID > 0
 	mgr.mu.RUnlock()
 
 	// 1) 熔断评估（含 RUNNING）。
@@ -874,7 +877,7 @@ func (s *HealthScanner) scanOne(uuid string, pol HealthPolicy, now time.Time) He
 		return HealthReport{UUID: uuid, Liveness: false, Readiness: false, Fault: HealthFaultCrash, Reason: reason}
 	}
 
-	kind, port := readinessTarget(pol, probePort, serverPort)
+	kind, port := readinessTarget(pol, probePort, serverPort, adopted)
 	if port <= 0 {
 		// 无可用响应维度（未部署探针且无端口）：仅存活即健康（spec §5 兜底）。
 		s.clearSuspicion(uuid)
@@ -1069,7 +1072,26 @@ func (s *HealthScanner) probeReadiness(kind string, port int) bool {
 }
 
 // readinessTarget 按策略与端口可用性择响应探测目标（kind, port）；无可探目标时 port<=0。
-func readinessTarget(pol HealthPolicy, probePort, serverPort int) (string, int) {
+//
+// ## adopted（就地收养）实例一律不探 probePort
+//
+// 托管模式（身份文件驱动）下探针承诺**零监听**：`config.yml` 里的 `metrics.port`
+// 与 MCP 端口一个都不会真的开（真机核实：probePort 29940–29945 全部未监听）。
+// 而端口号是照配置写进 instances.probe_port 的，所以对这类实例探 probePort 是**必然失败**——
+// 结果就是每台托管实例都被刷成「假死：进程在但 http 响应探测连续失败 N 次」。
+// 真机实测：bc-proxy 因 serverPort=0（BungeeCord 端口写在 config.yml 而不是 server.properties，
+// 导入探测不到）而只剩 probePort 一条路，于是顶着 RUNNING 挂着假死原因。
+//
+// 对这类实例只保留 serverPort 的 TCP 探测；拿不到 serverPort 时宁可**不探**
+// （返回 port<=0 → 上层按「仅存活即健康」兜底，spec §5）——存活证据本身已由
+// probeOneEvidence 基于 AdoptedPID 给出，不必再用一个不存在的端口去二次怀疑它。
+func readinessTarget(pol HealthPolicy, probePort, serverPort int, adopted bool) (string, int) {
+	if adopted {
+		if serverPort > 0 {
+			return HealthProbeTCP, serverPort
+		}
+		return "", 0
+	}
 	if pol.ProbeKind == HealthProbeHTTP {
 		if probePort > 0 {
 			return HealthProbeHTTP, probePort

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,6 +99,83 @@ func TestResyncInstances_SkipsAlreadyRegistered(t *testing.T) {
 	inst, ok := mgr.GetInstance(uuid)
 	require.True(t, ok)
 	assert.Equal(t, origWorkDir, inst.WorkDir, "已登记实例的工作目录不应被重推覆盖")
+}
+
+// TestResyncInstances_RestoresAdoptedAfterRegister 验证「重推后补做就地收养恢复」。
+//
+// 守的是真机踩到的那条：Startup 阶段的恢复（PhaseProcessRecover）跑在**实例注册之前**，
+// 内存表为空 → 逐条检查全部跳过，记录原封不动留着。若不在重推里补一次，
+// Worker 每次重启都让一批在跑的服变回 STOPPED（面板与磁盘事实分家）。
+func TestResyncInstances_RestoresAdoptedAfterRegister(t *testing.T) {
+	tmp := t.TempDir()
+	mgr := process.NewManager(tmp)
+	srv := NewServer(mgr, "test-node", nil, nil, nil)
+	ctx := context.Background()
+
+	const uuid = "55555555-5555-5555-5555-555555555555"
+	cmdline := "java -jar paper.jar nogui"
+	self := os.Getpid()
+	// 模拟上一次运行留下的收养记录（实例尚未注册，故 Startup 阶段恢复会跳过它）。
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmp, uuid+".adopted"),
+		[]byte(`{"pid":`+strconv.Itoa(self)+`,"cmdline":"`+cmdline+`"}`), 0o600))
+
+	// 启动阶段的恢复在这里等价于「什么都没做」：实例还没注册。
+	if restored, _ := mgr.RestoreAdoptedRuntimes(); restored != 0 {
+		t.Fatalf("未注册实例不应被恢复，实际 restored=%d", restored)
+	}
+
+	// CP 重推规格 → 登记 + 补做恢复。
+	_, err := srv.ResyncInstances(ctx, &workerpb.ResyncInstancesRequest{
+		Instances: []*workerpb.CreateInstanceRequest{{
+			InstanceUuid: uuid,
+			Name:         "adopted-server",
+			ProcessType:  "daemon",
+			StartCommand: cmdline,
+			WorkDir:      filepath.Join(tmp, "adopted-workdir"),
+		}},
+	})
+	require.NoError(t, err)
+
+	inst, ok := mgr.GetInstance(uuid)
+	require.True(t, ok)
+	assert.Equal(t, process.StateRunning, inst.State, "重推后应把落盘的就地收养恢复成 RUNNING")
+	assert.Equal(t, self, inst.AdoptedPID, "应重新认领落盘记录里的 PID")
+}
+
+// TestResyncInstances_AdoptedRestoreIdempotent 验证补做恢复的幂等性：第二次重推不再重复认领。
+func TestResyncInstances_AdoptedRestoreIdempotent(t *testing.T) {
+	tmp := t.TempDir()
+	mgr := process.NewManager(tmp)
+	srv := NewServer(mgr, "test-node", nil, nil, nil)
+	ctx := context.Background()
+
+	const uuid = "66666666-6666-6666-6666-666666666666"
+	cmdline := "java -jar paper.jar nogui"
+	self := os.Getpid()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(tmp, uuid+".adopted"),
+		[]byte(`{"pid":`+strconv.Itoa(self)+`,"cmdline":"`+cmdline+`"}`), 0o600))
+
+	specs := []*workerpb.CreateInstanceRequest{{
+		InstanceUuid: uuid,
+		Name:         "adopted-server",
+		ProcessType:  "daemon",
+		StartCommand: cmdline,
+		WorkDir:      filepath.Join(tmp, "adopted-workdir"),
+	}}
+	for i := 0; i < 3; i++ {
+		_, err := srv.ResyncInstances(ctx, &workerpb.ResyncInstancesRequest{Instances: specs})
+		require.NoError(t, err)
+	}
+
+	inst, ok := mgr.GetInstance(uuid)
+	require.True(t, ok)
+	assert.Equal(t, process.StateRunning, inst.State)
+	assert.Equal(t, self, inst.AdoptedPID)
+	// 记录仍在（恢复成功不删记录：它是重启后唯一的活动证据）。
+	_, statErr := os.Stat(filepath.Join(tmp, uuid+".adopted"))
+	assert.NoError(t, statErr)
 }
 
 // TestResyncInstances_MixedAndIdempotent 验证混合批次（部分新增 + 部分已存在）与幂等重推：

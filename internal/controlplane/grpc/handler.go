@@ -721,7 +721,21 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 			reasonValue = &emptyReason
 			reasonClearCond = true
 		case s.StatusReason == "":
-			// 无原因可写（含老 Worker / 健康实例）：不动 status_reason。
+			// 心跳明确上报了一个**终态**（STOPPED/CRASHED）且未带原因：说明心跳自己此前写的
+			// 巡检原因已经过期，必须清掉，否则面板会停在自相矛盾的组合上——
+			// 真机实测：lobby-1 已落 STOPPED，却仍挂着上一拍对账写的
+			// 「进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）」。
+			//
+			// 为什么之前清不掉：清空路径原本只覆盖「RUNNING + healthy」一种，而实例真正停下来时
+			// 心跳报的正是 STOPPED + 空原因，根本落不到那条分支上。
+			// 只清来源为 worker 的行（reasonClearCond 自带该条件），CP 写入的生命周期失败原因保留。
+			//
+			// STARTING/STOPPING 不在此列：那两态是过程态，心跳可能在中途丢掉巡检原因，
+			// 此时清空会把「假死」这类仍是事实的结论抹掉。
+			if status == model.InstanceStatusStopped || status == model.InstanceStatusCrashed {
+				reasonValue = &emptyReason
+				reasonClearCond = true
+			}
 		case s.Health == healthFaultCircuitBroken:
 			reasonValue = &s.StatusReason
 		case status == model.InstanceStatusCrashed:
@@ -974,7 +988,11 @@ func (h *ControlPlaneHandler) reconcileMissingInstances(node model.Node, reporte
 			// 实例重新出现在心跳清单且健康时应被清掉（否则面板长期残留过期对账文案），
 			// 健康墙的 degraded 口径也据此把它算作降级信号。
 			h.clearReconcileGrace(m.UUID)
-			if err := h.db.Model(&model.Instance{}).Where("uuid = ?", m.UUID).
+			// 带运行类状态守卫：对账是**异步派发**的，「证据显示仍在跑」只对「此刻仍在运行类状态」的
+			// 实例成立。若快照之后状态已落 STOPPED/CRASHED，这条「仍在运行」的文案就是谎言，
+			// 写上去也没人再清（面板自相矛盾）。行不匹配时本次写入自然空转，无需额外处理。
+			if err := h.db.Model(&model.Instance{}).
+				Where("uuid = ? AND status IN ?", m.UUID, runningStatuses).
 				Updates(map[string]interface{}{
 					"status_reason":        "进程侧证据显示实例仍在运行（心跳清单暂缺，已延迟对账）",
 					"status_reason_source": statusReasonSourceWorker,
@@ -991,7 +1009,8 @@ func (h *ControlPlaneHandler) reconcileMissingInstances(node model.Node, reporte
 			if beats >= evidenceReconcileGraceBeats {
 				h.clearReconcileGrace(m.UUID)
 				h.setStopped(m.UUID)
-			} else if err := h.db.Model(&model.Instance{}).Where("uuid = ?", m.UUID).
+			} else if err := h.db.Model(&model.Instance{}).
+				Where("uuid = ? AND status IN ?", m.UUID, runningStatuses).
 				Updates(map[string]interface{}{
 					"status_reason":        fmt.Sprintf("进程侧证据暂不可得，宽限对账中（第 %d/%d 拍）", beats, evidenceReconcileGraceBeats),
 					"status_reason_source": statusReasonSourceWorker,

@@ -160,6 +160,11 @@ type OrphanScanner struct {
 	listContainers  func(ctx context.Context) ([]ManagedContainer, error)
 	removeContainer func(ctx context.Context, name string) error
 	pidAlive        func(pid int) bool
+
+	// unmatchedSeen 是「不像运行时的目录内进程」审计去重集合（key="<uuid>/<pid>"）：
+	// 扫描 60s 一轮，同一个壳进程不应每轮刷一条审计。由 unmatchedMu 保护。
+	unmatchedSeen map[string]struct{}
+	unmatchedMu   sync.Mutex
 }
 
 // NewOrphanScanner 构造运行期孤儿扫描器。interval<=0 时取默认 60s；policy 空取 warn。
@@ -780,9 +785,20 @@ func (s *OrphanScanner) scanForeignInRegisteredWorkdirs(procs []ScannedProcess, 
 	observed := make(map[string]ForeignRuntime, len(targets))
 	findings := make([]OrphanFinding, 0)
 	for _, tgt := range targets {
-		// 取最小 PID 作为该实例的稳定代表：同目录多进程时避免每轮代表抖动。
+		// 选哪个进程作为该实例的代表？
+		//
+		// 旧实现取「最小 PID」：同目录多进程时代表不会每轮抖动。它在一个常见场景下选错了人：
+		// 运维用 tmux 起的服，目录下同时有 tmux 的 shell（`-bash`，pid 较小）与真正的 java（pid 较大），
+		// 于是代表恒为那个 bash。后果不只是"显示不准"——接管时会拿 `-bash` 去和启动命令比对，
+		// 直接判定"命令行不匹配"而拒绝收养（真实机上一开始就卡在这）。
+		//
+		// 现改为：**优先选像运行时的进程**（java / 命令行带 .jar / 可执行名命中启动命令），
+		// 在同一优先级内再取最小 PID 保稳定。全都不像时**不认作漂移**——只落一条审计
+		// （见下方 hitPID == 0 分支），既不上面板也不诱人去接管一个无关进程。
 		hitPID := 0
 		hitCmdline := ""
+		fallbackPID := 0
+		fallbackCmdline := ""
 		for _, proc := range procs {
 			if proc.PID <= 0 || proc.PID == self {
 				continue
@@ -793,12 +809,32 @@ func (s *OrphanScanner) scanForeignInRegisteredWorkdirs(procs []ScannedProcess, 
 			if !procInWorkDir(proc, tgt.workDir) {
 				continue
 			}
+			if fallbackPID == 0 || proc.PID < fallbackPID {
+				fallbackPID = proc.PID
+				fallbackCmdline = truncateCmdline(proc.Cmdline)
+			}
+			if !looksLikeRuntimeCmdline(proc.Cmdline) {
+				continue
+			}
 			if hitPID == 0 || proc.PID < hitPID {
 				hitPID = proc.PID
 				hitCmdline = truncateCmdline(proc.Cmdline)
 			}
 		}
 		if hitPID == 0 {
+			// 目录里有东西在跑，但**都不像游戏服运行时**（典型：运维 tmux 会话里的 `-bash`
+			// 壳进程、备份工具、`tee` 管道）。
+			//
+			// 这里刻意**不写漂移**（旧实现退回最小 PID 写进去）：那个 PID 只是“目录里恰好
+			// 有个人”，把它当漂移会让面板长期挂一个指向 shell 的「外来运行时」——真机实测
+			// lobby-1 就这样，drift 指向 tmux 的 -bash 而服务器根本没跑；更坏的是它会诱使
+			// 运维去点「接管」一个与实例无关的进程。
+			//
+			// 但也不能当没看见：“目录里有东西在跑”本身就是运维该知道的事实，故只落审计
+			// （动作名不带 detected，与真漂移区分），不进缓存、不上面板。
+			if fallbackPID > 0 {
+				s.auditUnmatchedRuntime(tgt.uuid, tgt.workDir, fallbackPID, fallbackCmdline)
+			}
 			continue
 		}
 		observed[tgt.uuid] = ForeignRuntime{PID: hitPID, Cmdline: hitCmdline}
@@ -827,6 +863,34 @@ func (s *OrphanScanner) scanForeignInRegisteredWorkdirs(procs []ScannedProcess, 
 			"instanceId", f.InstanceUUID, "pid", fr.PID, "workDir", f.WorkDir)
 	}
 	return findings
+}
+
+// auditUnmatchedRuntime 落一条「目录里有活进程、但都不像游戏服运行时」的审计。
+//
+// 与 orphan.foreign_runtime_detected 分开命名：后者是**真漂移**（写缓存、上心跳、上面板、
+// 可被接管），本条只是观测记录——不写缓存、不上报、不可被接管。两者混用会让运维
+// 在面板上看到一个指向 shell 的“外来运行时”，并诱使他去接管一个与实例无关的进程。
+//
+// 同一 (UUID, PID) 不重复落审计（扫描 60s 一轮，否则会持续刷）。
+func (s *OrphanScanner) auditUnmatchedRuntime(uuid, workDir string, pid int, cmdline string) {
+	key := fmt.Sprintf("%s/%d", uuid, pid)
+	s.unmatchedMu.Lock()
+	if s.unmatchedSeen == nil {
+		s.unmatchedSeen = make(map[string]struct{})
+	}
+	if _, seen := s.unmatchedSeen[key]; seen {
+		s.unmatchedMu.Unlock()
+		return
+	}
+	s.unmatchedSeen[key] = struct{}{}
+	s.unmatchedMu.Unlock()
+
+	s.mgr.auditOrphan("orphan.foreign_runtime_unmatched", uuid,
+		fmt.Sprintf(`{"kind":"foreign_runtime_unmatched","instanceUuid":%q,"workDir":%q,"pid":%d,"cmdline":%q,"policy":"observe_only"}`,
+			uuid, workDir, pid, cmdline),
+		true, "")
+	slog.Warn("实例目录下有活进程但不像游戏服运行时（不认作漂移，仅记录）",
+		"instanceId", uuid, "pid", pid, "cmdline", cmdline, "workDir", workDir)
 }
 
 // procInWorkDir 报告进程是否「落在」给定工作目录下：cwd 位于该目录之下，或其命令行引用了该目录。

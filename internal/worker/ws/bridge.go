@@ -96,6 +96,13 @@ type bridgeMessage struct {
 	Domain string `json:"domain,omitempty"`
 	// dedupKey 业务事件去重键：业务 event 帧携带，Worker 原样透传给 CP 与下游，本层不做去重。
 	DedupKey string `json:"dedupKey,omitempty"`
+	// managed 托管模式标记（ServerProbe PR#64 hello 帧）：true 表示探针按身份文件运行，
+	// 指标走 WS 推送、本地 metrics/web/mcp 三个监听面已关（零监听承诺）。
+	// 缺该字段＝独立模式探针（老版本或未下发身份文件），行为与改造前一致。
+	Managed bool `json:"managed,omitempty"`
+	// capabilities hello 声明的能力位（托管模式含 metric_push/config_push/config_state，
+	// MCP 挂桥成功后另有 mcp_bridge）。Worker 只记录与展示，不据此改变转发行为。
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // bridgeEventData 是探针 event 帧 data 字段里的结构化玩家载荷。
@@ -144,8 +151,11 @@ type PluginSession struct {
 	InstanceID string
 	Platform   string
 	Version    string
-	Conn       *websocket.Conn
-	writeMu    sync.Mutex // 串行化写，避免 ping/pong 与下发指令并发写同一连接
+	// Managed 托管模式标记（来自 hello）：true 表示探针按身份文件运行。
+	// 供观测与排障区分“独立探针”与“托管探针”，不影响帧转发路径。
+	Managed bool
+	Conn    *websocket.Conn
+	writeMu sync.Mutex // 串行化写，避免 ping/pong 与下发指令并发写同一连接
 
 	// pending 是本会话上「已下发、待 command_result」的同步等待者，键为 request_id。
 	// 读循环收到匹配的 command_result 时投递到对应 channel；调用方超时/会话断开则清理。
@@ -209,6 +219,9 @@ type PluginBridgeServer struct {
 	// chunks 上行分片帧的重组器（§2.5）。跨实例共享一张表，按
 	// (实例, groupId) 隔离；读循环在语义分发之前调用，故下游永远拿到完整原帧。
 	chunks *chunkAssembler
+	// metricHandler 托管模式指标推送的接收者（nil = 不接收）。
+	// 托管模式下探针不再开 /metrics，推送帧是指标的唯一来源。
+	metricHandler MetricSnapshotHandler
 }
 
 // NewPluginBridgeServer 创建插件桥服务端。
@@ -420,12 +433,25 @@ func (s *PluginBridgeServer) dispatchFrame(session *PluginSession, msg bridgeMes
 		// 记录探针自报的平台/版本，供后续事件与连接状态展示携带。
 		session.Platform = msg.Platform
 		session.Version = msg.Version
-		slog.Info("插件桥握手 hello", "instanceId", session.InstanceID, "platform", msg.Platform, "version", msg.Version)
+		// 托管模式标记（ServerProbe PR#64）：true 表示探针按身份文件运行，
+		// 指标走推送、本地面板/MCP/metrics 三个监听面已关。
+		session.Managed = msg.Managed
+		slog.Info("插件桥握手 hello", "instanceId", session.InstanceID, "platform", msg.Platform,
+			"version", msg.Version, "managed", msg.Managed, "capabilities", msg.Capabilities)
 	case "event":
 		// 分片帧（§2.5）：先重组再交给下面既有的语义分发，下游完全无感。
 		// 必须排在 command_result 判定之前——被分片的多半正是超大的命令回执。
 		if allowChunk && msg.Event == chunkEventName {
 			s.handleChunkFrame(session, msgBytes)
+			return
+		}
+		// 托管模式的指标推送：载荷在 `payload` 下（与 command_result 的 `data` 不同）。
+		// 必须就地截获并 return——让它继续当普通 event 冒泡的话，下游会按玩家事件解析，
+		// 得到一堆零值字段，既无用又污染事件流。
+		if msg.Event == metricSnapshotEventName {
+			if frame, ok := parseMetricSnapshot(session, msg, msgBytes); ok {
+				s.emitMetricSnapshot(frame)
+			}
 			return
 		}
 		// command_result：路由给同步等待的治理调用方（按 request_id）；

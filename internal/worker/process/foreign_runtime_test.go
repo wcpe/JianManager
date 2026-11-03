@@ -208,6 +208,72 @@ func TestScanForeign_TakesSmallestPID(t *testing.T) {
 	assert.Equal(t, []int{7010}, findings[0].PIDs)
 }
 
+// TestOrphanScan_ForeignRuntimeIgnoresNonRuntimeProcess：目录里只有「不像运行时」的活进程
+// （真机场景：tmux 会话里的 `-bash` 壳进程，而服务器根本没跑）时：
+//   - **不得**认作漂移（不写观测缓存、不上心跳、不上面板）——否则面板长期挂一个指向 shell 的
+//     「外来运行时」，还会诱使运维去接管一个与实例无关的进程；
+//   - **但也不得静默**：得落一条 orphan.foreign_runtime_unmatched 审计。
+//
+// 同一个壳进程连续多轮只落一条审计（扫描 60s 一轮，否则持续刷）。
+func TestOrphanScan_ForeignRuntimeIgnoresNonRuntimeProcess(t *testing.T) {
+	serversDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "shell-only")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+
+	s, m, audits := newTestScanner(t, serversDir, OrphanPolicyWarn)
+	uuid := "shell-only-uuid"
+	require.NoError(t, m.Create(uuid, "只剩壳的实例", "java -jar paper.jar nogui", "stop", workDir, nil, false, ProcessTypeDirect, "", "", 0, 0))
+
+	s.listProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{
+			{PID: 4101, Cmdline: "-bash", Cwd: workDir},       // tmux 壳，不是游戏服
+			{PID: 4102, Cmdline: "tee run.log", Cwd: workDir}, // 日志管道
+		}, nil
+	}
+
+	for i := 0; i < 3; i++ {
+		findings := s.ScanOnce()
+		assert.Empty(t, findings, "不像运行时的进程不得认作漂移")
+	}
+
+	states := m.GetAllInstanceStates()
+	require.Len(t, states, 1)
+	assert.Zero(t, states[0].ForeignPID, "不写观测缓存（心跳不会上报、面板不会标漂移）")
+	assert.Empty(t, states[0].ForeignCmdline)
+
+	require.Len(t, *audits, 1, "仍需落一条审计（不静默），且同一壳进程不重复落")
+	assert.Equal(t, "orphan.foreign_runtime_unmatched", (*audits)[0].action)
+	assert.Equal(t, uuid, (*audits)[0].targetID)
+	assert.Contains(t, (*audits)[0].detail, `"policy":"observe_only"`)
+	assert.Contains(t, (*audits)[0].detail, `"pid":4101`)
+}
+
+// TestOrphanScan_ForeignRuntimeStillDetectsJavaAlongsideShell：目录里 shell 与 java 共存时，
+// java 仍须被如实认作漂移（不进 fallback 分支）——这是第 4 相的核心召回，不能因上面那条修正而丢失。
+func TestOrphanScan_ForeignRuntimeStillDetectsJavaAlongsideShell(t *testing.T) {
+	serversDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "shell-and-java")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+
+	s, m, audits := newTestScanner(t, serversDir, OrphanPolicyWarn)
+	uuid := "shell-and-java-uuid"
+	require.NoError(t, m.Create(uuid, "实例", "java -jar paper.jar nogui", "stop", workDir, nil, false, ProcessTypeDirect, "", "", 0, 0))
+
+	s.listProcesses = func() ([]ScannedProcess, error) {
+		return []ScannedProcess{
+			{PID: 4201, Cmdline: "-bash", Cwd: workDir},                     // 最小 PID 但是壳
+			{PID: 4202, Cmdline: "java -jar paper.jar nogui", Cwd: workDir}, // 真正的运行时
+		}, nil
+	}
+
+	findings := s.ScanOnce()
+	require.Len(t, findings, 1)
+	assert.Equal(t, []int{4202}, findings[0].PIDs, "必须选 java 而不是壳进程")
+	require.Len(t, *audits, 1)
+	assert.Equal(t, "orphan.foreign_runtime_detected", (*audits)[0].action)
+	assert.Equal(t, 4202, m.GetAllInstanceStates()[0].ForeignPID)
+}
+
 // TestManager_AdoptForeignRuntime_WithDrift接管主路径：有漂移 → 先 SIGTERM 进程树等待退出，
 // 再以受管方式 Start；返回被停止的 PID，实例转为 RUNNING，漂移缓存清空。
 func TestManager_AdoptForeignRuntime_WithDrift(t *testing.T) {

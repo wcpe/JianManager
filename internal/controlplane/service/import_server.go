@@ -29,7 +29,25 @@ type ImportServerService struct {
 	instance *InstanceService
 	// tasks 任务中心：migrate 搬迁经任务异步；nil 时回退同步（旧行为/测试）。
 	tasks *TaskService
+	// probe 是探针下发器（建服/导入共用）。nil 时导入不碰探针文件，
+	// 保持“目录里已有一套手工放好的探针”的旧行为。
+	probe probeDeployer
 }
+
+// probeDeployer 是“向实例下发探针（jar + config + 托管身份）”的能力接口。
+//
+// 抽成接口而不是直接依赖 *ProvisionService：导入服务只需要这一个动作，
+// 而 ProvisionService 带着一大堆建服依赖（core/artifact/binary…），
+// 把整坨注进来会让导入路径在测试里根本拉不起来。
+//
+// 实现方：*ProvisionService（见 SetProbeDeployer 的装配）。
+type probeDeployer interface {
+	// DeployProbeForInstance 为已存在的实例下发探针；返回是否真的下发了（false=none 无可用制品/未启用）。
+	DeployProbeForInstance(inst *model.Instance, node *model.Node, baseURL string) error
+}
+
+// SetProbeDeployer 注入探针下发器（main 接线）：非 nil 后导入与收养都会顺带下发探针。
+func (s *ImportServerService) SetProbeDeployer(d probeDeployer) { s.probe = d }
 
 // NewImportServerService 创建导入服务。
 func NewImportServerService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService) *ImportServerService {
@@ -152,6 +170,11 @@ func (s *ImportServerService) Import(ctx context.Context, req ImportServerReques
 			return nil, "", err
 		}
 		s.registerJdkPaths(req.NodeID, inspect.Jdks, req.RegisterJdkPaths)
+		// 就地导入的目录里「本来就在跑」是常态（运维用 tmux/systemd 起的服），
+		// 而导入后实例记的是 STOPPED——面板写停止、玩家却能进，是一眼就看得出的分裂。
+		// 故导入后立即尝试一次“不重启”的收养：只把现有进程登记为运行态。
+		// 目录本来就停着 → ErrAdoptInPlaceNoRuntime，属正常结果（保持 STOPPED），不算失败。
+		s.adoptInPlaceAfterImport(inst)
 		return inst, "", nil
 	}
 

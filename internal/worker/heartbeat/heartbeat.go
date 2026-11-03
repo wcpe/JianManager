@@ -108,6 +108,27 @@ var directProbeBackoff = struct {
 	entries map[string]*probeBackoffEntry
 }{entries: map[string]*probeBackoffEntry{}}
 
+// pushedStore 是托管模式（ServerProbe PR#64）经插件桥推送的指标快照。
+//
+// ## 为什么要包级单例
+// 写入方在 Worker 的插件桥读循环（ws 包），读取方是本包的心跳采集 goroutine；
+// 两者分属不同包、不同生命周期，但共享“同一进程内的实例——快照”这层状态。
+// 包级单例比给两边都加一层依赖注入更小、也不会漏接（漏接的表现就是托管实例指标永远为空）。
+//
+// nil 安全：未初始化时 Load 返回 false，托管分支自然回退到端口判定，行为与改造前一致。
+var pushedStore = metrics.NewPushedSnapshotStore()
+
+// PushedSnapshotStore 暴露推送存储，供 Worker 主进程把桥回调接进来。
+//
+// 返回指针可直接赋给 `pluginBridge.SetMetricSnapshotHandler` 的回调里使用：
+//
+//	bridge.SetMetricSnapshotHandler(func(f ws.MetricSnapshotFrame) {
+//	    if snap, ok := metrics.ProbeSnapshotFromPushed(f.Metrics); ok {
+//	        heartbeat.PushedSnapshotStore().Store(f.InstanceUUID, snap)
+//	    }
+//	})
+func PushedSnapshotStore() *metrics.PushedSnapshotStore { return pushedStore }
+
 // probeBackoffEntry 单个「实例×来源」的退避状态。
 type probeBackoffEntry struct {
 	fails     int
@@ -474,8 +495,19 @@ func collectInstanceMetricsAt(snaps []process.InstanceSnapshot, now time.Time, b
 
 	targets := make([]process.InstanceSnapshot, 0, len(snaps))
 	for _, s := range snaps {
-		// 运行中且任一来源端口已知（探针 / server-port / query.port）才采集。
-		if s.State == string(process.StateRunning) && (s.ProbePort > 0 || s.ServerPort > 0 || s.QueryPort > 0) {
+		if s.State != string(process.StateRunning) {
+			continue
+		}
+		// 托管模式（ServerProbe PR#64）：探针不开 /metrics，ProbePort 恒为 0，
+		// 但指标会经插件桥推送并由 pushedStore 落住。此时必须采集——
+		// 否则托管实例会因「无任何来源端口」被直接过滤，面板永远为空
+		// （真实机上就是这个症状：桥连上了、config_push 也生效，但 TPS/玩家数全 0）。
+		if _, pushed := pushedStore.Load(s.UUID); pushed {
+			targets = append(targets, s)
+			continue
+		}
+		// 非托管：任一来源端口已知（探针 / server-port / query.port）才采集。
+		if s.ProbePort > 0 || s.ServerPort > 0 || s.QueryPort > 0 {
 			targets = append(targets, s)
 		}
 	}
@@ -499,6 +531,12 @@ func collectInstanceMetricsAt(snaps []process.InstanceSnapshot, now time.Time, b
 			// 端口按来源退避置 0 → 编排链跳过该来源（见 directProbeBackoff 说明）。
 			cfg, att := probeConfigWithBackoff(t, now)
 			sample := &workerpb.InstanceMetricSample{InstanceUuid: t.UUID}
+			// 托管模式：优先用经桥推送的最新快照。它的字段与 HTTP 抓取同构
+			// （已在 metrics.ProbeSnapshotFromPushed 里做过秒→毫秒换算），
+			// 直接交给 CollectInstanceTelemetry 的同一编排链即可，SLP/Query 仍照常补基础信息。
+			if pushed, ok := pushedStore.Load(t.UUID); ok {
+				cfg.ProbeSnapshot = &pushed
+			}
 			tel := metrics.CollectInstanceTelemetry(cfg)
 			fillInstanceMetricSample(sample, tel)
 			// 退避基准取**探测完成时刻**而非拍起点（复审 N4）：以拍起点加冷却时长会与
@@ -587,6 +625,19 @@ func fillInstanceMetricSample(sample *workerpb.InstanceMetricSample, tel *metric
 	// GC：探针 cumulative counter，CP 侧据相邻心跳差推导速率。
 	sample.GcCountTotal = tel.GCCountTotal
 	sample.GcTimeMillis = tel.GCTimeMillis
+	// 桥中转指标：tel.Bridge 为 nil（老探针未上报）时**所有字段保持零值且不置 Present**，
+	// CP 据此落 NULL 断点，而不是把“不知道”画成“健康”。
+	if bridge := tel.Bridge; bridge != nil {
+		sample.BridgeMetricsPresent = true
+		sample.BridgeReliableQueue = bridge.ReliableQueue
+		sample.BridgeBestEffortQueue = bridge.BestEffortQueue
+		sample.BridgeReliableRejectedTotal = bridge.ReliableRejectedTotal
+		sample.BridgeBestEffortDroppedTotal = bridge.BestEffortDroppedTotal
+		sample.BridgeReceiptRejectedTotal = bridge.ReceiptRejectedTotal
+		sample.BridgeSpillDroppedTotal = bridge.SpillDroppedTotal
+		sample.BridgeWriteFailuresTotal = bridge.WriteFailuresTotal
+		sample.BridgeWriteTimeoutsTotal = bridge.WriteTimeoutsTotal
+	}
 	for name, w := range tel.Worlds {
 		sample.Worlds = append(sample.Worlds, &workerpb.WorldMetric{
 			Name:         name,

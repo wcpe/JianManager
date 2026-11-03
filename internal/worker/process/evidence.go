@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -51,12 +52,38 @@ func (m *Manager) probeOneEvidence(uuid string) InstanceEvidence {
 	inst, inTable := m.instances[uuid]
 	var processType ProcessType
 	var strategy IProcessCommand
+	// adoptedPID 非 0 表示这是“就地收养”的外部进程（不是平台 spawn 的，没有 strategy）。
+	// 它必须参与存活判定，否则收养就会被健康巡检当成假死而复盖回 STOPPED——
+	// 真机实测：收养成功后 30s 内状态又变回 STOPPED，而 java 一直在跑。
+	var adoptedPID int
 	if inTable {
 		processType = inst.processType
 		strategy = inst.strategy
+		adoptedPID = inst.AdoptedPID
 	}
 	pidDir := m.pidDir
 	m.mu.RUnlock()
+
+	// 就地收养实例：直接以被收养的 PID 作为存活证据。
+	//
+	// 这条判断必须排在下面的 switch 之前：收养来的进程没有 strategy（不是平台 spawn 的），
+	// 走 ProcessTypeDaemon 分支会得到 RootPID=0 → 去拨 wrapper socket（那条根本不存在于
+	// 外部启动的进程），最后轮到 Running=false。于是“进程活得好好的，平台也认领了它，
+	// 但巡检每 30s 就把它标成假死”——这正是收养闭环里最容易漏掉的一环。
+	//
+	// 只读、不发信号、不拨 socket：活着就是活着，死了就如实报 dead（不替外部管理器做决定）。
+	if adoptedPID > 0 {
+		alive := daemon.IsPIDAlive(adoptedPID)
+		ev.RootPID = adoptedPID
+		ev.ProcessAlive = alive
+		ev.Running = alive
+		if alive {
+			ev.Detail = "就地收养的外部进程存活"
+		} else {
+			ev.Detail = fmt.Sprintf("就地收养的外部进程 pid=%d 已退出", adoptedPID)
+		}
+		return ev
+	}
 
 	// 内存表中无该实例时按证据来源推断模式：优先 daemon PID 文件，其次 docker 容器名。
 	if !inTable {

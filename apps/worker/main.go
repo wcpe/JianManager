@@ -561,6 +561,15 @@ func runWorker() {
 	if recovered > 0 {
 		slog.Info("已恢复 daemon 实例连接", "count", recovered)
 	}
+	// 就地收养的恢复（与 daemon 恢复同一阶段）。
+	//
+	// 这些进程不是平台 spawn 的（tmux/systemd 起的服），没有 wrapper 可重连；
+	// 它们的“活着的证据”只有当初落盘的那条收养记录。不恢复的话，
+	// Worker 每次重启都让一批在跑的服变回 STOPPED——面板与磁盘事实分家。
+	if adopted, cleaned := manager.RestoreAdoptedRuntimes(); adopted > 0 || cleaned > 0 {
+		slog.Info("就地收养状态已恢复", "restored", adopted, "cleaned", cleaned)
+	}
+	phaseDone(startup.PhaseProcessRecover)
 
 	// 运行期周期孤儿扫描：随 Worker 常驻，持续兜底 wrapper 死/Java 活、direct 孤儿、
 	// docker 残留，按策略处置（默认 warn 只告警，可配 auto 自动清理）。补齐「仅启动时清理」的缺口。
@@ -1367,6 +1376,19 @@ func runWorker() {
 	// 插件桥服务端（ServerProbe 反向 WS见 ADR-016）：与终端 WS 并列、同一监听端口。
 	// 探针主动连入 /ws/plugin-bridge，事件经 gRPC StreamPluginEvents 冒泡到 CP；token 校验使用 CP 下发的专用 WS 密钥。
 	pluginBridge := ws.NewPluginBridgeServer(wsTokenSecret)
+	// 托管模式（ServerProbe PR#64）：探针在零监听承诺下不再开 /metrics，
+	// 指标改经桥周期推 metric_snapshot。这里把推送帧接进心跳采集使用的同一份存储。
+	//
+	// 不接的后果是真机实测过的：桥连上了、config_push 也生效，但面板上
+	// TPS / MSPT / 玩家数 / 堆内存永远是 0——托管了个“看不到”的服。
+	pluginBridge.SetMetricSnapshotHandler(func(f ws.MetricSnapshotFrame) {
+		snap, ok := metrics.ProbeSnapshotFromPushed(f.Metrics)
+		if !ok {
+			slog.Debug("托管指标帧解析失败，丢弃本帧", "instanceId", f.InstanceUUID, "ts", f.TS)
+			return
+		}
+		heartbeat.PushedSnapshotStore().Store(f.InstanceUUID, snap)
+	})
 	workerServer.SetPluginBridge(pluginBridge)
 
 	wsMux := http.NewServeMux()

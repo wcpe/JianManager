@@ -84,6 +84,9 @@ type ToolDeps struct {
 	Report        *service.BotLoadReportService
 	Capacity      service.BotLoadCapacityProvider
 	Metrics       *service.BotLoadMetricSampler
+	// Business 经探针桥下发 ServerProbe 诊断命令（probe_* 工具代理）。
+	// nil 时 probe_* 返回中文「服务不可用」。
+	Business *service.BusinessService
 }
 
 // toolExec 工具执行器：参数已校验过会话，action 已从 catalog 解析。

@@ -370,6 +370,14 @@ func init() {
 	registerAgentInstanceActions(AgentCapabilityInstanceConfigure, AgentOperationWrite,
 		AgentActionConfigWriteText, AgentActionConfigWriteFields, AgentActionConfigRollback,
 	)
+	// ServerProbe 诊断代理：只读观测面，按 observability.read 把关。
+	//
+	// 刻意归 read 而不是 write：42 个工具里绝大多数是纯只读（指标/线程/GC/插件清单），
+	// 少数带副作用的（arthas_redefine、server_command）由探针侧自己的策略把关。
+	// CP 这一层不做二次判断——它不解析探针语义，只负责把请求转过去。
+	registerAgentInstanceActions(AgentCapabilityObservabilityRead, AgentOperationRead,
+		AgentActionProbeDiagnose,
+	)
 }
 
 // registerAgentInstanceActions 批量登记同能力同操作等级的实例类 action。

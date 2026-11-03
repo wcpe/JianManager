@@ -546,6 +546,54 @@ func (h *InstanceHandler) AdoptRuntime(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已接管"})
 }
 
+// AdoptInPlaceRuntime 收养实例目录下**已在运行**的外部进程：只登记，不重启。
+//
+// 与 AdoptRuntime 的差别就是“会不会重启”：
+//   - adopt-runtime：停掉外来进程，再由平台按启动规格拉起一份（适合清理残留、统一到受管方式）；
+//   - adopt-inplace：不动进程，只把现有 PID 登记为平台运行态（适合就地导入、不能断服的场景）。
+//
+// 目录下无活进程时返回 200 + adopted=false + 说明：那是**正常结果**而非错误，
+// 前端应提示“目录里没有在跑的进程，可直接启动”，而不是报红。
+func (h *InstanceHandler) AdoptInPlaceRuntime(c *gin.Context) {
+	if !requireNodes(c, "instance.operate") {
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
+	pid, err := h.instanceSvc.AdoptInPlaceRuntime(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrAdoptInPlaceNoRuntime):
+			// 没有可收养的进程：这是正常结果，不报错。
+			c.JSON(http.StatusOK, gin.H{
+				"adopted": false,
+				"message": "工作目录下没有正在运行的进程，可直接启动",
+			})
+		case errors.Is(err, service.ErrNodeOffline):
+			c.JSON(http.StatusConflict, gin.H{"error": "NODE_OFFLINE", "message": err.Error()})
+		case errors.Is(err, service.ErrInstanceNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": err.Error()})
+		default:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "ADOPT_INPLACE_FAILED", "message": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"adopted": true,
+		"pid":     pid,
+		"message": "已收养目录中的运行进程（未重启）",
+	})
+}
+
 // ProcessDetail 探查受管实例进程树内的单个 PID。
 func (h *InstanceHandler) ProcessDetail(c *gin.Context) {
 	id, err := parseID(c)
@@ -735,6 +783,9 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		instances.POST("/:id/restart", h.Restart)
 		instances.POST("/:id/kill", h.Kill)
 		instances.POST("/:id/adopt-runtime", h.AdoptRuntime)
+		// adopt-inplace：只登记现有进程，**不重启**（就地导入的服已在 tmux/systemd 下跑着）。
+		// 与 adopt-runtime（先停后启）是两个语义，不能混为一个端点。
+		instances.POST("/:id/adopt-inplace", h.AdoptInPlaceRuntime)
 		instances.GET("/:id/processes/:pid", h.ProcessDetail)
 		instances.POST("/:id/processes/:pid/actions", h.ProcessAction)
 		instances.POST("/:id/command", h.Command)
