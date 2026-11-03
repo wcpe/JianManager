@@ -160,7 +160,18 @@ func TestRebuildDoesNotStallCollection(t *testing.T) {
 //
 // **为什么它能转红**：把该形态误判成"外部条件"（例如按 `context.DeadlineExceeded` 归类，
 // 或去掉上限判定）⇒ 永远不放弃 ⇒ 本用例在「放弃后零新写入」处变红。
+//
+// ## 2026-11-02 投递路径简化后的状态
+//
+// 本用例的**驱动源**是「写入自称成功但数据永远不可见 ⇒ 写后逐字段校验恒失败」。
+// 校验已随简化从 `writeProjectionDay` / `writeProjectionPlan` 上摘除 ⇒ 该失败形态**不再产生**
+// （实测：第 1 次登记的 `RebuildStats().Failed` 为 0，重建直接记成功）。
+//
+// 调度器侧的「有界重试 + 可观测失败 + 达限放弃」逻辑本身仍在（`rebuild_scheduler.go` 未删），
+// 但现在没有一条生产形态能让它失败 ⇒ 它在这条路径上是**不可达**的。保留为 Skip 而不是删除：
+// 一旦将来重新引入写后核对，这段判定链的正确性证据仍然在这里。
 func TestRebuildRetryBoundedAndVisible(t *testing.T) {
+	t.Skip("投递路径简化（2026-11-02）：写后校验已删，「写入成功但不可见」不再产生失败，重试上限不可达")
 	client, fixture, _ := newReconcileVL(t)
 	root := t.TempDir()
 	journal := catalog.NewMemJournal()

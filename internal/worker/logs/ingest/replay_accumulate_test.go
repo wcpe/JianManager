@@ -1,5 +1,15 @@
 package ingest
 
+// 2026-11-02 投递路径简化：本用例守「重放必须**累积**代次、不得把已发布旧代挤出读白名单」。
+// 代次白名单（`PublishedProjection.ProjectionGenerations`）、`replace` 判据、微代取名
+// 全部随发布链删除：`deliverCtx` 一批数据只写一次，没有「重放写新代」这条路径
+// ⇒ `ProjectionGeneration` 恒为空（夹具首条断言即红）。
+//
+// 它记录的现场事故（#13 run8：重放把已 ack 内容再写进新代、白名单被重置为仅新代、
+// 未变更事件从读面消失）在简化后**结构上不会发生**。仍然活着的同型关切
+// （同一事件不得在 VL 里留多份）由 write_idempotency_test.go 与
+// TestDropEventsAlreadyWritten 系列守着。
+//
 // 段 B 红绿（w21 稿 ② 第三落点）：**重放/微代必须累积，不得取代**。
 //
 // 现场（#13 run8 实测）：重启后的重放把已 ack 内容再写进新代，且 old 的实现让重放走 replace=true
@@ -25,6 +35,7 @@ import (
 )
 
 func TestReplayAccumulatesInsteadOfSuperseding(t *testing.T) {
+	t.Skip("投递路径简化（2026-11-02）：投递不再取名代次也不再发布，累积/取代判据失去对象")
 	client, _ := newProjectionVL(t)
 
 	root := t.TempDir()

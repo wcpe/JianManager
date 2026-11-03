@@ -362,6 +362,12 @@ func TestVerifyChunkBudgetScalesWithEventsBoundedByMax(t *testing.T) {
 // `m.setVerifySourceDeadlineFor(source, len(events))` 改回 `m.setVerifySourceDeadline(source)`
 // ⇒ 本用例转红（大批得到的剩余预算退化为常量档位）。
 func TestVerifySourceDeadlineUsesBatchSize(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「单源校验截止必须按本批**簇数**放大」。
+	// `verifyProjectionCtxYieldRuns` 在非测试代码里已**无调用者**（写后逐字段校验随简化删除），
+	// 被测对象只剩这组用例自己在调。
+	// 同文件里其余两条（部分簇成功的回报、部分进展记入下一轮）已在前一轮批处理里 Skip，
+	// 本文件整体上已不再覆盖任何生产路径。
+	t.Skip("投递路径简化（2026-11-02）：写后逐字段校验已不在投递路径上，按簇放大截止失去对象")
 	client, fixture := newPartialVerifyVL(t)
 	base := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	events := partialVerifyEvents(8, base)

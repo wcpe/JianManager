@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -61,11 +62,12 @@ func TestConcurrentPollPublishesAllSourcesInSharedNamespace(t *testing.T) {
 	root := t.TempDir()
 	day := runtimeTestUTCDay()
 	cfgs := make([]SourceConfig, 0, 2)
-	for i, stream := range []string{"stdout", "stderr"} {
+	for _, stream := range []string{"stdout", "stderr"} {
 		dir := filepath.Join(root, stream)
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		path := filepath.Join(dir, "latest.log")
-		require.NoError(t, os.WriteFile(path, []byte(pollTestLines(i*10, 2)), 0o600))
+		// 先建空文件（FILE_PRIMARY 值 StartAtEOF，裁定 D），内容在登记之后才产生。
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
 		cfgs = append(cfgs, SourceConfig{
 			LogSourceID:      fmt.Sprintf("inst:shared/%s", stream),
 			SourceGeneration: "g1",
@@ -78,11 +80,26 @@ func TestConcurrentPollPublishesAllSourcesInSharedNamespace(t *testing.T) {
 	cat := catalog.New(nil)
 	m, err := newTestManager(t, Options{Root: root, VL: client, Catalog: cat, Journal: cat.Journal(), Sources: cfgs})
 	require.NoError(t, err)
+	for i, cfg := range cfgs {
+		appendPollTestLines(t, cfg.Path, pollTestLines(i*10, 2))
+	}
 
 	m.pollOnce()
 
-	rec, ok := cat.Get(catalog.PartitionKey{StorageNamespace: "inst:shared", UTCDay: day})
-	require.True(t, ok, "共享 namespace 必须产生一条 Catalog 记录")
-	require.Len(t, rec.PublishedProjection.SourceProjections, 2,
-		"并发轮里共享 namespace 的两个源都必须出现在投影清单中（读-改-写不得互相覆盖）")
+	// 2026-11-02 投递路径简化：本用例守「并发轮里共享 namespace 的两个源都进同一份发布清单，
+	// 读-改-写不得互相覆盖」。发布已从投递路径摘除（`deliverCtx` 只写 VL），
+	// `rec.PublishedProjection` 恒为 nil ⇒ 该清单失去对象。
+	//
+	// 仍然成立、也仍然值得守的是**投递面本身**：两个源的事件都必须真的写进 VL
+	// （共享 namespace 不该让其中一个的写入被吞掉）。
+	require.Len(t, fixture.writes, 2, "共享 namespace 的两个源都必须各自完成一次投递")
+	sent := 0
+	for _, payload := range fixture.writes {
+		for _, id := range []string{`"inst:shared/stdout"`, `"inst:shared/stderr"`} {
+			if strings.Contains(string(payload), id) {
+				sent++
+			}
+		}
+	}
+	require.Equal(t, 2, sent, "两个源的事件都必须真的写到 VL（读-改-写互不覆盖）")
 }

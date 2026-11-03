@@ -271,6 +271,15 @@ func appendPollTestLines(t *testing.T, path string, text string) {
 }
 
 func TestPollRoundOverlapsSourceWaits(t *testing.T) {
+	// 2026-11-02 投递路径简化：本用例守「采集轮跨源并发后，多源的**校验查询等待**可以重叠，
+	// 而不是逐源串行叠加」。它的见证物是 `/select/logsql/query`（延迟 100ms 的假 VL）——
+	// 而投递不再做写后逐字段校验（`deliverCtx` 只写 VL）⇒ 一轮采集里**一次校验查询都不发**
+	// （实测 serialQueries=0，夹具首条断言即红）⇒ 被测的“等待”本身不存在了。
+	//
+	// 仍然活着的同型关切（跨源并发不得互相阻塞）由 register_lock_contention_test.go 的
+	// 「登记不被饱和采集轮阻塞」与 resolve_gaps_lock_test.go 的「解算不阻塞采集轮」两组守着，
+	// 它们的见证物是**采集轮本身的推进**，不依赖校验查询。
+	t.Skip("投递路径简化（2026-11-02）：投递不再做写后校验查询，跨源等待重叠失去见证物")
 	const sources = 12
 	// 单次校验延迟取 100ms：与真实 VL 上实测的单次校验往返（141ms/次，60 源 × 2000 行基线）
 	// 同量级，足以让「源数 × 单源等待」显著大于轮内**串行资源**（索引持久化 / 事件段 fsync /
