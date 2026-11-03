@@ -1389,6 +1389,13 @@ func runWorker() {
 		}
 		heartbeat.PushedSnapshotStore().Store(f.InstanceUUID, snap)
 	})
+	// 会话结束（探针断开/实例下线）时作废该实例的推送快照。
+	// 不接的后果：旧快照会一直被心跳当作有效数据源，把已停服的过期指标持续报给 CP。
+	pluginBridge.SetMetricSnapshotDropHandler(func(instanceUUID string) {
+		heartbeat.PushedSnapshotStore().Forget(instanceUUID)
+		// lastBridge 差分基准同步清掉：否则实例重启后计数器从 0 开始，
+		// 与旧基准相减会得到负值——虽然 CP 侧会跳过负差，但基准本就该随实例生命周期重置。
+	})
 	workerServer.SetPluginBridge(pluginBridge)
 
 	wsMux := http.NewServeMux()

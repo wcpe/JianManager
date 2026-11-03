@@ -62,3 +62,33 @@ func TestParseMetricSnapshotBadJSON(t *testing.T) {
 		t.Fatal("坏帧不应产生数据")
 	}
 }
+
+// TestEmitMetricDropNotifiesHandler 验证会话结束时会把实例 UUID 交给作废回调。
+//
+// 回归防线：这个回调曾经根本不存在。探针断开后 pushedStore 里留着旧快照，
+// 心跳拼装时 Load 拿到 pushed=true，于是一个已经停掉的实例仍被当作有数据源
+// 去采集，把过期 TPS/堆/桥指标一路报到 CP。
+func TestEmitMetricDropNotifiesHandler(t *testing.T) {
+	server := NewPluginBridgeServer("secret")
+	var got []string
+	server.SetMetricSnapshotDropHandler(func(uuid string) { got = append(got, uuid) })
+
+	server.emitMetricDrop("inst-1")
+
+	if len(got) != 1 || got[0] != "inst-1" {
+		t.Fatalf("应收到一次作废通知，实际 %v", got)
+	}
+}
+
+// TestEmitMetricDropIgnoresEmptyAndMissingHandler 验证未注入与空 UUID 都不 panic。
+func TestEmitMetricDropIgnoresEmptyAndMissingHandler(t *testing.T) {
+	server := NewPluginBridgeServer("secret")
+	server.emitMetricDrop("inst-1") // 未注入 handler：不应 panic
+
+	called := false
+	server.SetMetricSnapshotDropHandler(func(string) { called = true })
+	server.emitMetricDrop("") // 空 UUID：不应回调
+	if called {
+		t.Fatal("空 UUID 不应触发回调")
+	}
+}

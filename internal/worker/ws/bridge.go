@@ -222,6 +222,9 @@ type PluginBridgeServer struct {
 	// metricHandler 托管模式指标推送的接收者（nil = 不接收）。
 	// 托管模式下探针不再开 /metrics，推送帧是指标的唯一来源。
 	metricHandler MetricSnapshotHandler
+	// metricDropHandler 会话结束时作废该实例的推送快照（nil = 不清理）。
+	// 不清理会让已停实例的旧快照继续被心跳当数据源用，把过期指标报上去。
+	metricDropHandler MetricSnapshotDropHandler
 }
 
 // NewPluginBridgeServer 创建插件桥服务端。
@@ -344,6 +347,9 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 		}
 		// 会话结束即清掉本实例全部在途重组组：半组已无从拼完，留着只占内存。
 		s.dropInstanceChunks(session.InstanceID)
+		// 推送快照同理：探针已断开，旧快照不再代表任何真实状态。
+		// 不清理会让心跳继续把该实例当作有推送源去采集，上报过期指标。
+		s.emitMetricDrop(session.InstanceID)
 		if s.removeSession(session) {
 			s.emit(PluginEvent{
 				InstanceUUID: session.InstanceID,

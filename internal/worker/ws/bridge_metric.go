@@ -71,6 +71,18 @@ func (s *PluginBridgeServer) SetMetricSnapshotHandler(h MetricSnapshotHandler) {
 	s.metricHandler = h
 }
 
+// MetricSnapshotDropHandler 在实例的推送快照应当作废时被调用（会话断开/实例下线）。
+//
+// 不清理的后果真机可复现：探针断开后 pushedStore 里还留着旧快照，
+// 心跳拼装时 Load 拿到 pushed=true，于是仍然把**已经停掉的实例**当作有数据源
+// 去采集，把过期的 TPS/堆/桥指标一路报到 CP——面板上会显示一个已停服的实例在“跑”。
+type MetricSnapshotDropHandler func(instanceUUID string)
+
+// SetMetricSnapshotDropHandler 注入快照作废回调。nil 表示不清理。
+func (s *PluginBridgeServer) SetMetricSnapshotDropHandler(h MetricSnapshotDropHandler) {
+	s.metricDropHandler = h
+}
+
 // parseMetricSnapshot 把一帧 metric_snapshot 解析为结构化结果。
 //
 // 解不开的帧返回 ok=false 并记 DEBUG：指标是 best-effort 可丢通道，
@@ -105,4 +117,12 @@ func (s *PluginBridgeServer) emitMetricSnapshot(frame MetricSnapshotFrame) {
 		return
 	}
 	s.metricHandler(frame)
+}
+
+// emitMetricDrop 通知注入者作废某实例的推送快照（未注入则什么都不做）。
+func (s *PluginBridgeServer) emitMetricDrop(instanceUUID string) {
+	if s.metricDropHandler == nil || instanceUUID == "" {
+		return
+	}
+	s.metricDropHandler(instanceUUID)
 }
