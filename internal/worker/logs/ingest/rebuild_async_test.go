@@ -502,7 +502,7 @@ func TestRebuildSuccessDoesNotResetCopyBudget(t *testing.T) {
 	const key = "ns/g1"
 	events := []logtypes.Event{hotRetentionTestEvent(source.UTCDay, 10, 20, "稳定内容")}
 	for i := 0; i < 3; i++ {
-		reservation, release, err := m.reserveMaterialization(context.Background(), source, fmt.Sprintf("projection-%d", i+1), events)
+		reservation, release, err := m.reserveMaterializationClass(context.Background(), source, fmt.Sprintf("projection-%d", i+1), events, events, "rebuild")
 		require.NoError(t, err)
 		release()
 		require.NoError(t, m.updateMaterialization(context.Background(), reservation, "published", true, true, "预算状态机夹具"))
@@ -510,7 +510,7 @@ func TestRebuildSuccessDoesNotResetCopyBudget(t *testing.T) {
 		m.rebuilds.noteSuccess(key)
 	}
 	// 成功只能清连续失败退避，不能退款持久窗口副本预算。
-	_, release, err := m.reserveMaterialization(context.Background(), source, "projection-next", events)
+	_, release, err := m.reserveMaterializationClass(context.Background(), source, "projection-next", events, events, "rebuild")
 	if release != nil {
 		release()
 	}

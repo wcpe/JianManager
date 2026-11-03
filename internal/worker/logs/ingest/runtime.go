@@ -3823,11 +3823,6 @@ type deliveryTiming struct {
 	sink func(string)
 }
 
-func newDeliveryTiming(key string, events int, sink func(string)) *deliveryTiming {
-	now := time.Now()
-	return &deliveryTiming{key: key, events: events, start: now, last: now, sink: sink}
-}
-
 // mark 记录自上一个 mark 起（或函数入口起）的耗时。
 func (t *deliveryTiming) mark(stage string) {
 	if t == nil {
@@ -4021,23 +4016,6 @@ func (m *Manager) projectionGenerationsExhausted(source SourceConfig) bool {
 }
 
 // 本批事件的实际 UTC 日才是代次数预算所属分区，不能只检查源登记日。
-func (m *Manager) projectionGenerationsExhaustedForEvents(source SourceConfig, events []logtypes.Event) bool {
-	seen := map[string]bool{}
-	for _, event := range events {
-		day, err := eventUTCDay(source, event)
-		if err != nil || seen[day] {
-			continue
-		}
-		seen[day] = true
-		daySource := source
-		daySource.UTCDay = day
-		if m.projectionGenerationsExhausted(daySource) {
-			return true
-		}
-	}
-	return false
-}
-
 // ── #57：cycleMu 持有者观测仪（env 默认关；单变量观测件，零行为变更） ─────────────────────
 //
 // 动因（现场强证据）：resolve-gaps 探针 20/20 全忙、19/20 耗时 5.020–5.075s（±55ms）⇒ 每次都
@@ -5288,91 +5266,6 @@ func (m *Manager) ensureCatalogPartition(source SourceConfig) {
 }
 
 // routeCapturedSiblings先把跨批旧兄弟交给既有canonical裁定；cut从不把未写B当成A同end的已发布证据。
-func (m *Manager) routeCapturedSiblings(ctx context.Context, source SourceConfig, events []logtypes.Event) (bool, pipeline.DeliveryResult, error) {
-	if !m.deferredDelivery {
-		return false, pipeline.DeliveryResult{}, nil
-	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	pipe, ok := m.pipeFor(key)
-	if !ok {
-		return false, pipeline.DeliveryResult{}, nil
-	}
-	capture := acquire.DeliveryCaptureFromContext(ctx)
-	if capture == nil {
-		_, _, captured, captureErr := pipe.WAL().CaptureDelivery(events)
-		if captureErr != nil {
-			return true, pipeline.DeliveryResult{}, captureErr
-		}
-		capture = captured
-	}
-	siblings, err := pipe.WAL().CapturedSiblings(events, capture)
-	if err != nil {
-		return true, pipeline.DeliveryResult{}, err
-	}
-	seen := make(map[string]eventIdentity, len(events))
-	winners := make(map[string]logtypes.Event, len(events))
-	different := false
-	for _, raw := range siblings {
-		event, nerr := normalizeCanonicalEvent(raw)
-		if nerr != nil {
-			return true, pipeline.DeliveryResult{}, nerr
-		}
-		existing, exists := seen[event.EventID]
-		if exists && existing.hash != event.CanonicalHash {
-			different = true
-			_, take := adjudicateSameIntervalIdentity(existing, event, len(event.Message))
-			if take {
-				winners[event.EventID] = event
-			}
-		} else if !exists {
-			winners[event.EventID] = event
-		}
-		rememberStoredCanonicalIdentity(seen, event)
-	}
-	if !different {
-		return false, pipeline.DeliveryResult{}, nil
-	}
-	_, conflicts := analyzeDeliveryBatch(siblings, map[string]eventIdentity{})
-	if len(conflicts) > 0 {
-		m.recordIdentityConflicts(key, conflicts)
-		m.mu.Lock()
-		generation := m.state.Sources[key].ProjectionGeneration
-		m.mu.Unlock()
-		m.markPublicationPending(key, generation)
-		return true, pipeline.DeliveryResult{}, fmt.Errorf("ingest: 预存兄弟存在不可裁定canonical身份冲突，保留全部WAL责任")
-	}
-	canonical := make([]logtypes.Event, 0, len(events))
-	used := make(map[string]struct{}, len(events))
-	for _, event := range events {
-		if _, ok := used[event.EventID]; ok {
-			continue
-		}
-		used[event.EventID] = struct{}{}
-		canonical = append(canonical, winners[event.EventID])
-	}
-	complete, queryErr := m.allPublishedEventsCurrent(ctx, source, canonical)
-	if queryErr == nil && complete {
-		m.scheduleGapResolve(source, canonical)
-		return true, pipeline.DeliveryResult{HTTPStatus: http.StatusNoContent}, nil
-	}
-	m.mu.Lock()
-	generation := m.state.Sources[key].ProjectionGeneration
-	m.mu.Unlock()
-	m.markPublicationPending(key, generation)
-	_, days, dayErr := groupEventsByUTCDay(source, canonical)
-	if dayErr != nil {
-		return true, pipeline.DeliveryResult{}, dayErr
-	}
-	if queryErr != nil {
-		if !verifyErrorIsSemantic(queryErr) && !vlsup.IsPermanent(queryErr) {
-			m.scheduleRebuildConfirmPendingAsync(source, days, "canonical兄弟赢家只读取证未知")
-		}
-		return true, pipeline.DeliveryResult{}, queryErr
-	}
-	m.scheduleRebuildAsync(source, days, "既有canonical兄弟裁定赢家未发布，交预算G完整物化")
-	return true, pipeline.DeliveryResult{}, ErrVerifyDeferred
-}
-
 // verifyActualProjectionIdentities只裁定本源实际物化候选及其真源兄弟；历史诊断不充当许可闸。
 // 已由原尾部判据证明的新尾不扫描历史段，避免把每批成本退化成全源行数。
 func (m *Manager) verifyActualProjectionIdentities(ctx context.Context, source SourceConfig, candidates []logtypes.Event, tail bool) error {
@@ -6217,48 +6110,6 @@ func (m *Manager) confirmWrittenAttempt(ctx context.Context, source SourceConfig
 }
 
 // 部分插入/响应未知只有完成有效全字段查询后才可称实测missing；错误、限流、预算耗尽均保持未知。
-func (m *Manager) verifyWrittenAttemptOnce(ctx context.Context, client *vlsup.Client, source SourceConfig, generation string, events []logtypes.Event, scopes ...[]string) ([]ledger.PositionRange, error) {
-	if attempt, _ := ctx.Value(verifyAttemptKey{}).(*verifyAttemptBudget); attempt != nil {
-		attempt.once.Do(func() {
-			attempt.state.deadlineNanos.Store(time.Now().Add(m.verifyBudgetOfEvents(len(events))).UnixNano())
-		})
-	}
-	allowed := make(map[string]logtypes.Event, len(events))
-	for _, event := range events {
-		allowed[event.EventID] = event
-	}
-	for _, part := range planVerifyChunks(events, m.verifyChunkEvents) {
-		if len(scopes) > 0 {
-			spans, err := planScopedVerifySpans(source, scopes[0], part)
-			if err != nil {
-				return nil, err
-			}
-			budget := m.verifyMaxQueriesPerChunk
-			if budget <= 0 {
-				budget = defaultVerifyMaxQueriesPerChunk
-			}
-			if len(spans) > budget {
-				return nil, ErrVerifyDeferred
-			}
-		}
-		timeout, err := m.verifyBudgetForContext(ctx, source, generation)
-		if err != nil {
-			return nil, err
-		}
-		queryCtx, cancel := context.WithTimeout(ctx, timeout)
-		queryCtx = context.WithValue(queryCtx, scopedVerifyEvidenceKey{}, &scopedVerifyEvidence{seen: make(map[string]struct{})})
-		complete, _, queryErr := m.verifyProjectionQuery(queryCtx, client, source, generation, part, allowed, scopes...)
-		cancel()
-		if queryErr != nil {
-			return nil, queryErr
-		}
-		if !complete {
-			return nil, errWrittenMissingMeasured
-		}
-	}
-	return gapRangesOfEvents(events), nil
-}
-
 // projectionWritePlan 描述一次投影写入的「写入面」与「发布语义」（FR-497 spec §2.2）。
 //
 // 为什么要拆开：重启恢复原先只有「整窗重发」一种形态——Replace=true 时把写入面**扩为
@@ -8735,11 +8586,6 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
-}
-
-func (m *Manager) verifyProjectionOnce(ctx context.Context, source SourceConfig, generation string, events []logtypes.Event) (bool, error) {
-	complete, _, err := m.verifyProjectionQuery(ctx, m.vl, source, generation, events, nil)
-	return complete, err
 }
 
 // utcDayBounds 返回 "2006-01-02" 形式的 UTC 日的闭区间 [起, 止]。

@@ -922,11 +922,19 @@ func TestProjectionVerificationQueriesHistoricalEventTime(t *testing.T) {
 	defer server.Close()
 	client, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: server.URL})
 	require.NoError(t, err)
-	m := &Manager{vl: client}
-	complete, err := m.verifyProjectionOnce(context.Background(), SourceConfig{LogSourceID: "node:1", SourceGeneration: "g1"},
-		"projection-old", []logtypes.Event{event})
+	// 2026-11-03：`verifyProjectionOnce` 已随投递路径简化删除（它只剩本用例一个调用者）。
+	// 被测的语义——**校验查询必须用事件的语义时间（`_time`）而非摄取时间做窗口**——
+	// 现在由 `verifyProjectionCtxYieldRuns` 承载，改调它即可，判据一字不变。
+	//
+	// 必须用 `newTestManager`（而不是零值 `&Manager{vl: client}`）：后者会让
+	// `verifyBudgetOfEvents` 拿到零值配置、预算退化成即时超时，与「窗口取哪个时间」无关。
+	cat := catalog.New(catalog.NewMemJournal())
+	m, merr := newTestManager(t, Options{Root: t.TempDir(), VL: client, Catalog: cat, Journal: cat.Journal()})
+	require.NoError(t, merr)
+	_, err = m.verifyProjectionCtxYieldRuns(context.Background(), client,
+		SourceConfig{LogSourceID: "node:1", SourceGeneration: "g1"},
+		"projection-old", []logtypes.Event{event}, nil)
 	require.NoError(t, err)
-	require.True(t, complete)
 	require.NotEmpty(t, from)
 	require.NotEmpty(t, to)
 	require.Less(t, from, event.EventTimeUTC)

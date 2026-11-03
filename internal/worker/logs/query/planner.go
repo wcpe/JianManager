@@ -344,7 +344,7 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 			// key.String() 升序给出，无条件赋值会让「后处理的 target」冲掉「先处理的
 			// target」已判定的更差等级——同一份数据仅因 namespace 命名顺序不同就上报
 			// 不同等级（conflict 被 unresolved 覆盖即丢失唯一的人工修复入口）。
-			if !ref.Projection.CoverageComplete {
+			if !ref.Projection.CoverageComplete && !projectionlessScope(ref.Projection) {
 				reasons = appendUniqueStr(reasons, ReasonProjectionIncomplete)
 				res.Quality.DuplicateQuality = worstDuplicateQuality(res.Quality.DuplicateQuality, DupUnresolved)
 				res.Quality.StatsQuality = worstStatsQuality(res.Quality.StatsQuality, StatsPartial)
@@ -832,6 +832,33 @@ func hasStr(list []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// projectionlessScope 报告该投影是不是「简化投递路径补建的空壳」。
+//
+// ## 背景
+//
+// 2026-11-02 投递路径简化后，`deliverCtx` 不再走 `publishSnapshot`，也就不再维护
+// 「已发布投影」这个概念。为了让查得到数据，写入侧会补建一个**最小分区记录**
+// （`ingest.ensureCatalogPartition`）：owner / dirID / 一个代次为空的投影结构。
+//
+// 那个空壳的 `CoverageComplete` 是 false（没有「发布」这回事）。若照旧据此推
+// `PROJECTION_INCOMPLETE` + `DupUnresolved/StatsPartial`，**所有新数据都会被标成
+// “不完整/未对账”**——用户每次查都会看到一条降低信任度的横幅，而实际上什么都没错。
+//
+// ## 判据
+//
+// 三条同时成立才算空壳（三条都只对简化路径产生，`publishSnapshot` 走不到）：
+//   - `ManifestVersion` 为空：`publishSnapshot` 末尾**总会**写 manifest（`manifest-<sha256>`）；
+//   - `SourceProjections` 为空；
+//   - `ClosedVisibleSeq` 为空。
+//
+// 旧数据（简化前的已发布投影）三者至少有一个非空，不会被误判。
+func projectionlessScope(proj *catalog.PublishedProjection) bool {
+	if proj == nil {
+		return false
+	}
+	return proj.ManifestVersion == "" && len(proj.SourceProjections) == 0 && len(proj.ClosedVisibleSeq) == 0
 }
 
 // recOwner / recOwnerDirID 是 nil 安全的记录读取，供覆盖登记使用。

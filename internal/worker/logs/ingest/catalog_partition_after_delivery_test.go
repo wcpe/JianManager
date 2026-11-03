@@ -75,4 +75,24 @@ func TestDeliveryLeavesCatalogPartitionQueryable(t *testing.T) {
 	require.Contains(t, res.View.TargetIDs, key.String(),
 		"该分区必须进入视图；缺失即代表「数据在 VL 里却查不到」")
 	require.True(t, res.View.QueryableTargets[key.String()], "该分区必须标记为可查")
+
+	// 判据 ③：不得因为「没有已发布投影」而被标成不完整/未对账。
+	//
+	// 简化后的分区记录本来就没有 `CoverageComplete`（没有「发布」这回事）。
+	// 若查询侧照旧据此推 `PROJECTION_INCOMPLETE` + `DupUnresolved/StatsPartial`，
+	// 用户每次查都会看到一条降低信任度的横幅（实测：state=LOG_COVERAGE_PARTIAL）。
+	//
+	// 判据在 `query.projectionlessScope`：三条同时成立（无 manifest / 无源投影 / 无水位）
+	// 才认定是简化空壳，不据此降级；旧数据三者至少有一个非空，不会被误判。
+	for _, cov := range res.Coverage.Targets {
+		if cov.TargetID != key.String() {
+			continue
+		}
+		require.NotContains(t, cov.Reasons, query.ReasonProjectionIncomplete,
+			"简化后的分区不得被标成 PROJECTION_INCOMPLETE")
+	}
+	require.NotEqual(t, query.DupUnresolved, res.Quality.DuplicateQuality,
+		"简化后的分区不得被标成「未对账」")
+	require.NotEqual(t, query.StatsPartial, res.Quality.StatsQuality,
+		"简化后的分区不得被标成「统计不完整」")
 }

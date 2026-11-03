@@ -38,7 +38,8 @@ func TestIngestSixFixActiveTailBoundedPastGenerationCap(t *testing.T) {
 	_, err = m.deliver(source, []logtypes.Event{first}, false)
 	require.NoError(t, err)
 	for i := 0; i < 8; i++ {
-		_, release, err := m.reserveMaterialization(context.Background(), source, fmt.Sprintf("wasted-%d", i), []logtypes.Event{hotRetentionTestEvent(source.UTCDay, 0, 10, fmt.Sprintf("独立失败窗口%d", i))})
+		window := []logtypes.Event{hotRetentionTestEvent(source.UTCDay, 0, 10, fmt.Sprintf("独立失败窗口%d", i))}
+		_, release, err := m.reserveMaterializationClass(context.Background(), source, fmt.Sprintf("wasted-%d", i), window, window, "rebuild")
 		require.NoError(t, err)
 		release()
 	}
@@ -461,7 +462,7 @@ func TestIngestSixFixManagerStartStopThreeDirtyOpens(t *testing.T) {
 			require.NotEmpty(t, generation)
 			require.NotEqual(t, previousGeneration, generation)
 			previousGeneration = generation
-			reservation, release, err := m.reserveMaterialization(context.Background(), source, fmt.Sprintf("dirty-open-%d", round), budgetEvents)
+			reservation, release, err := m.reserveMaterializationClass(context.Background(), source, fmt.Sprintf("dirty-open-%d", round), budgetEvents, budgetEvents, "rebuild")
 			if release != nil {
 				release()
 			}

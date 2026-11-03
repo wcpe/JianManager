@@ -73,14 +73,6 @@ func (m *Manager) materializationNow() time.Time {
 	return time.Now()
 }
 
-func (m *Manager) reserveMaterialization(ctx context.Context, source SourceConfig, generation string, events []logtypes.Event, windows ...[]logtypes.Event) (stateindex.MaterializationReservation, func(), error) {
-	window := events
-	if len(windows) > 0 {
-		window = windows[0]
-	}
-	return m.reserveMaterializationClass(ctx, source, generation, events, window, "rebuild")
-}
-
 func (m *Manager) reserveMaterializationClass(ctx context.Context, source SourceConfig, generation string, events, window []logtypes.Event, class string) (stateindex.MaterializationReservation, func(), error) {
 	if class == "" {
 		class = "rebuild"

@@ -31,18 +31,18 @@ func TestIngestSixFixMaterializationSourceDayMatrix(t *testing.T) {
 			source := SourceConfig{LogSourceID: "matrix", SourceGeneration: "g1", UTCDay: "2026-10-22"}
 			events := []logtypes.Event{sixFixEvent(source, source.UTCDay, 0, 10, "稳定窗口")}
 			for copy := 0; copy < 2; copy++ {
-				row, release, err := m.reserveMaterialization(context.Background(), source, fmt.Sprintf("copy-%d", copy), events)
+				row, release, err := m.reserveMaterializationClass(context.Background(), source, fmt.Sprintf("copy-%d", copy), events, events, "rebuild")
 				require.NoError(t, err)
 				release()
 				require.NoError(t, m.updateMaterialization(context.Background(), row, state, state == "verified" || state == "published", state == "published", "成功、失败、未知均不退款"))
 			}
-			_, release, err := m.reserveMaterialization(context.Background(), source, "copy-over", events)
+			_, release, err := m.reserveMaterializationClass(context.Background(), source, "copy-over", events, events, "rebuild")
 			if release != nil {
 				release()
 			}
 			require.ErrorIs(t, err, ErrMaterializationBudget)
 			for _, other := range []SourceConfig{{LogSourceID: "other", SourceGeneration: "g1", UTCDay: source.UTCDay}, {LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration, UTCDay: "2026-10-23"}} {
-				row, release, err := m.reserveMaterialization(context.Background(), other, "fresh", events)
+				row, release, err := m.reserveMaterializationClass(context.Background(), other, "fresh", events, events, "rebuild")
 				require.NoError(t, err)
 				require.Positive(t, row.ID)
 				release()
@@ -68,7 +68,7 @@ func TestIngestSixFixMaterializationBudgetSurvivesThreeOpens(t *testing.T) {
 	for open := 0; open < 3; open++ {
 		m, err := New(Options{Root: root, Catalog: catalog.New(nil), MaterializationLimits: &stateindex.MaterializationLimits{WindowCopies: 2, HourlyCopies: 3, HourlyBytes: 1 << 20}})
 		require.NoError(t, err)
-		row, release, reserveErr := m.reserveMaterialization(context.Background(), source, fmt.Sprintf("generation-%d", open), events)
+		row, release, reserveErr := m.reserveMaterializationClass(context.Background(), source, fmt.Sprintf("generation-%d", open), events, events, "rebuild")
 		if release != nil {
 			release()
 		}
@@ -93,7 +93,7 @@ func TestIngestSixFixHourlyBudgetCannotBeBypassedByNewContent(t *testing.T) {
 	source := SourceConfig{LogSourceID: "hourly", SourceGeneration: "g1", UTCDay: "2026-10-22"}
 	for i := 0; i < 3; i++ {
 		events := []logtypes.Event{sixFixEvent(source, source.UTCDay, 0, 10, fmt.Sprintf("新内容%d", i))}
-		_, release, err := m.reserveMaterialization(context.Background(), source, fmt.Sprintf("gen-%d", i), events)
+		_, release, err := m.reserveMaterializationClass(context.Background(), source, fmt.Sprintf("gen-%d", i), events, events, "rebuild")
 		if release != nil {
 			release()
 		}
@@ -104,7 +104,7 @@ func TestIngestSixFixHourlyBudgetCannotBeBypassedByNewContent(t *testing.T) {
 		}
 	}
 	now = now.Add(time.Hour + time.Nanosecond)
-	_, release, err := m.reserveMaterialization(context.Background(), source, "after-hour", []logtypes.Event{sixFixEvent(source, source.UTCDay, 0, 10, "新窗口")})
+	_, release, err := m.reserveMaterializationClass(context.Background(), source, "after-hour", []logtypes.Event{sixFixEvent(source, source.UTCDay, 0, 10, "新窗口")}, []logtypes.Event{sixFixEvent(source, source.UTCDay, 0, 10, "新窗口")}, "rebuild")
 	require.NoError(t, err)
 	release()
 }
@@ -410,7 +410,7 @@ func TestIngestSixFixFreshBatchDuplicateDoesNotRequireOldProjection(t *testing.T
 				require.Equal(t, a.EventID, b.EventID)
 				require.NotEqual(t, a.CanonicalHash, b.CanonicalHash)
 			}
-			_, release, err := m.reserveMaterialization(context.Background(), source, "已用完的后台份额", []logtypes.Event{a})
+			_, release, err := m.reserveMaterializationClass(context.Background(), source, "已用完的后台份额", []logtypes.Event{a}, []logtypes.Event{a}, "rebuild")
 			require.NoError(t, err)
 			release()
 			_, err = m.deliver(source, []logtypes.Event{a, b}, false)
@@ -650,7 +650,7 @@ func TestIngestSixFixLostActiveAppendRetryCannotExposeDuplicate(t *testing.T) {
 			}
 			if scenario == "预算不足" {
 				m.materializationLimits = stateindex.MaterializationLimits{WindowCopies: 1, HourlyCopies: 1, HourlyBytes: 1 << 20}
-				_, release, reserveErr := m.reserveMaterialization(context.Background(), source, "spent-window", []logtypes.Event{hotRetentionTestEvent(source.UTCDay, 0, 10, "已花费的其他稳定窗口")})
+				_, release, reserveErr := m.reserveMaterializationClass(context.Background(), source, "spent-window", []logtypes.Event{hotRetentionTestEvent(source.UTCDay, 0, 10, "已花费的其他稳定窗口")}, []logtypes.Event{hotRetentionTestEvent(source.UTCDay, 0, 10, "已花费的其他稳定窗口")}, "rebuild")
 				require.NoError(t, reserveErr)
 				release()
 			}
