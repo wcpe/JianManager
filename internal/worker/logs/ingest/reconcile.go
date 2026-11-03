@@ -345,31 +345,6 @@ func (m *Manager) reconcileWithExpectation(ctx context.Context, source SourceCon
 	return report
 }
 
-// publishedScope 返回该源在该 UTC 天的「已发布代次白名单 + 封闭水位」。
-//
-// 与查询侧（query/vlrange.selectorQuery）同口径：对账测的是「查询侧能不能看到」。
-// 白名单缺失（scope 不存在或 ProjectionGenerations 为空）时返回 ok=false，调用方据此
-// 保守判缺失（宁可重发，不可漏发）。
-func (m *Manager) publishedScope(source SourceConfig, day string) (catalog.SourceProjection, bool) {
-	if m.cat == nil {
-		return catalog.SourceProjection{}, false
-	}
-	record, ok := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
-	if !ok || record.PublishedProjection == nil {
-		return catalog.SourceProjection{}, false
-	}
-	for _, scope := range record.PublishedProjection.SourceProjections {
-		if scope.LogSourceID != source.LogSourceID || scope.SourceGeneration != source.SourceGeneration {
-			continue
-		}
-		if len(scope.ProjectionGenerations) == 0 {
-			return catalog.SourceProjection{}, false
-		}
-		return scope, true
-	}
-	return catalog.SourceProjection{}, false
-}
-
 // countVLDay 查询该源该 UTC 天在 VL 中的条数（只读 stats count）。
 func countVLDay(ctx context.Context, client *vlsup.Client, source SourceConfig, day string, scope catalog.SourceProjection, queryTimeout time.Duration) (int, error) {
 	if client == nil {

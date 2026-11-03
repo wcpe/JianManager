@@ -278,3 +278,93 @@ grep -rn "\b<symbol>\b" --include='*.go' internal/ apps/ | grep -v '_test.go'
 ```
 
 只验写入侧（VL 有行、事件段有条数）是不够的。
+
+## 9. 结构性收尾（2026-11-03 晚）：死代码裁剪与 runtime.go 拆分
+
+### 9.1 先纠正一个误判：「重建链是多余功能」是错的
+
+上一轮结束时曾判断「为重建服务的平行链路（writeProjectionDay / publishSnapshot /
+物化预算 / 代次白名单）已与投递语义分叉，可整组删除」。**实测推翻了它。**
+
+调用链仍是完整的：
+
+```
+rebuild_scheduler.go:1164 ─┐
+reconcile.go:748          ─┴→ writeProjectionPlan → writeProjectionDay
+                                                      → verifyProjectionChunk
+                                                      → publishSnapshot
+```
+
+重建链**活着**，由重建调度器与对账环驱动，是「重放/补写历史窗口」的唯一通路。
+真正死掉的是**上一轮投递简化遗留的旧投递链残骸**。
+
+### 9.2 权威判定：用 deadcode，不要用 grep
+
+```bash
+go install golang.org/x/tools/cmd/deadcode@latest
+~/go/bin/deadcode ./...          # 生产不可达（以所有 main 为根）
+~/go/bin/deadcode -test ./pkg    # 连测试都不用的
+```
+
+**两者不是一回事**：`-test` 把测试文件也算作根，只能找「连测试都不用的」；
+不带 `-test` 才是「生产不可达」。本轮要找的「多余功能」是后者。
+
+结果：ingest 包 **48 个生产不可达函数 / 791 行**。
+
+### 9.3 三条删代码的硬规则（都踩过）
+
+1. **按传递闭包删，不能只删叶子。**
+   `prunedBatchesForComparison` 只被 `comparisonState` 调用，而后者自己也是死代码。
+   单独删前者 ⇒ 后者悬空 ⇒ `undefined` 编译失败。**死代码树要么整片删、要么整片留。**
+
+2. **已 Skip 的测试仍然参与编译。**
+   `t.Skip` 只是运行期跳过，符号在编译期仍需存在。第一版闭包排除了 Skip 用例，
+   漏掉 `reconcile_test.go` 引用的 `verifyProjectionOnceWithClient` ⇒ `go vet` 报
+   `undefined`。**算闭包时要把 Skip 用例一并算进来。**
+
+3. **多文件改动后不要只 `git checkout -- <单个文件>`。**
+   其余文件仍是删除后的状态，会在下一轮重复删除并提交破损代码。
+   要么全 `git checkout -- .`，要么立刻 commit。
+
+### 9.4 处置结果
+
+| 类别 | 数量 | 处置 |
+|---|---|---|
+| 生产不可达 + 测试也不引用（整片死树） | 14（322 行） | **已删**（commit `9f52a26b` 前身） |
+| 生产不可达 + 被测试直接/传递引用 | 32 | 保留：编译期仍需符号 |
+| `stateindex` 包的 Open/OpenWithBudget/bytesAt | 3 | 另属一个包的公开面，本轮不动 |
+
+删掉的 14 个都是投递简化的残骸：`archiveOwnerLookup`、`deliveryTiming.{mark,report}`、
+`projectionGenerationsExhausted`、`tryConfirmPendingPublicationWithReceipt`、
+`verifyProjectionQueryWithVisible`、`nextFreeProjectionGeneration`、
+`projectionGenerationKnownFree`、`allPublishedEventsCurrent`、`currentPublishedRuns`、
+`publishedScope`、`replayMissingDays{,Ctx}`、`appendPendingInstanceOutput`。
+
+**保留的那 32 个不是「以后再说」而是「不能单独删」**：它们在编译期仍被测试引用，
+要删必须连同那些用例一起处理。这是下一轮的工作面。
+
+### 9.5 runtime.go 拆分：12914 行 → 9 个文件
+
+拆分纪律（与既有 `runtime_startup.go` / `runtime_observe.go` 一致，必须保持）：
+**同包拆文件，不改任何导出 API、不改可见性、不改行为**；方法仍直接访问 `m.mu`
+等私有字段（同包内合法）。跨文件互相调用是正常的——文件边界是阅读边界，不是模块边界。
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `runtime.go` | 1456 | Manager 类型 / Options / persistedState / 常量、装配入口 |
+| `runtime_gaps.go` | 1426 | 缺口裁定（ResolveCoveredGaps*）、身份冲突人工清空 |
+| `runtime_lifecycle.go` | 1493 | New/Register/Start/Stop、pollOnce/pollSource、轮锁观测 |
+| `runtime_source.go` | 1447 | 投递规划、身份裁定、writtenAttempt、deliverCtx、ensureCatalogPartition |
+| `runtime_projection.go` | 1634 | writeProjection{,Plan,Day}、appendEvents、事件段落盘 |
+| `runtime_delivery_pipeline.go` | 1493 | insertInBatches、写前幂等、VL 逐字段校验全链 |
+| `runtime_generation.go` | 1434 | 物理代次保留/探测、canonical 重建、publishSnapshot |
+| `runtime_recovery.go` | 1422 | maybeResumePausedSources、配额、调度回放、延迟投递前置 |
+| `runtime_persist.go` | 1150 | persistCtx 分步让路、planPersist/commitPersist、持久化门 |
+
+**为什么按「读文件的人要找什么」切，而不按调用图切**：本包的方法调用近乎全连通
+（任何入口都会走到投递与持久化），按调用图切出来的文件彼此无法区分用途，
+只会得到九个「什么都有一点」的文件。
+
+拆分脚本的一个坑：第一刀必须落在 **import 块之后**。它后面紧跟约 800 行类型声明
+（`SourceConfig` / `persistedState` / `Manager` 等），若从「第一个 func」开始切，
+声明区会被整段丢弃，全包报 `undefined: SourceConfig`。

@@ -667,63 +667,6 @@ func (m *Manager) canonicalDayCounts(key string, source SourceConfig) (reconcile
 	return reconcileExpectation{Days: onlyNonEmpty, Counts: counts}, nil
 }
 
-// replayMissingDays 运行期重发一个源的指定 UTC 天（发布语义仍为「取代该天旧代」）。
-//
-// 复用既有机制（与启动恢复 applyStartupRecovery 的缺失天分支同源）：
-//
-//	eventsForDays 限定写入面 → writeProjectionPlan（写 VL + 逐字段可见性校验 + 发布 + 落段）
-//	→ resolveGapsLandedByDelivery（重发成功即消解被它覆盖的缺口，并登记 VerifiedRuns 区间凭据）
-//	→ releaseRecovery（把 WAL 回收责任推进到已发布投影；与投递成功路径同一出口）。
-//
-// **并发纪律（2026-10-03 收紧，取代此前那条「调用方必须持 cycleMu」的声明）**：
-// 此前这里写着「调用方必须持 cycleMu」，但 `ReconcileRoundNow` 从未取过它——声明与实现分叉，
-// 谁也拿不到它声称的互斥，而**真按字面实现会把整节点采集堵在重发之后**（现场：54 个未暂停源
-// 被串行在 330MB 重发之后）。现在的纪律是 E1 那条：**快照 → 离锁 → 短临界区**——
-//   - 重放的读取与 VL 写入（`canonicalRecoveryEvents` / `writeProjectionPlan` 的插入与校验）
-//     一律**不持** cycleMu（它们本来就不持：这条纪律只是把它写实）；
-//   - 只有代次推进、发布、账本/水位变更走各自既有的短临界区（`m.mu` / `publishMu` / 账本锁）；
-//   - 全程受**切片预算**约束（ReplayBudget）并可被 ctx 取消，故「与采集轮并发」是有界且让路的。
-//
-// 采集轮因此**不再被重发串行在身后**——这也是回归 `TestReplayDoesNotStallCollection` 钉住的性质。
-//
-// **与 deliveryTailPlan 三条约束的兼容性**：本路径不调用 deliver/planDeliveryTail，
-// 构造的 projectionWritePlan 恒有 Replace=true 且 Days 非空（plan.Tail 恒为 nil），
-// 因此「重放/待发布语义、事件体已在段、本批区间在水位之后」三条 tail 判据一个都不涉及；
-// 段只追加（appendEvents 全量形态）、水位单调、发布在 cycleMu 内串行——三条约束逐字保持。
-//
-// 为什么 releaseRecovery 传**全量** events 而不是本批：对账保证参与重发的源在其
-// 非缺失天上「VL 可见条数 ≥ 应有条数」，缺失天刚被写入并逐字段校验通过——合起来即
-// 「该源全量数据已在 VL 可见」，正是 releaseRecovery 要求的责任转移前提。
-func (m *Manager) replayMissingDays(source SourceConfig, missingDays []string) error {
-	return m.replayMissingDaysCtx(context.Background(), source, missingDays)
-}
-
-func (m *Manager) replayMissingDaysCtx(ctx context.Context, source SourceConfig, missingDays []string) error {
-	if len(missingDays) == 0 {
-		return nil
-	}
-	// **单实现**：与异步重建 worker 共用 rebuildDaysInner（同一套发布语义、同一套切片预算、
-	// 同一套待发布登记）。这里不传 yield —— 同步调用方要求「返回即已推进」，让出会拖长它；
-	// 而需要让出以保护采集主线的路径（对账轮 / 启动恢复）已经改走异步调度器
-	// （见 reconcileOneCandidate 的 scheduleRebuildAsync），故本入口只剩测试与
-	// 需要同步语义的既有调用方。
-	//
-	// 保留本入口的理由：它是既有回归（d12 / pr61 / gap_autoresolve 等）用来**确定性**断言
-	// 「切片预算 / 待发布登记 / 回收责任不提前推进」的同步路径——把它换成异步会让那些断言
-	// 变成时序竞猜，那才是真正的覆盖度下降。
-	out := m.rebuildDaysInner(ctx, &rebuildRequest{
-		key: source.LogSourceID + "/" + source.SourceGeneration, source: source, days: missingDays,
-	}, nil)
-	if out.Err != nil {
-		return out.Err
-	}
-	if len(out.Days) > 0 {
-		slog.Info("常驻增量对账已重发缺失天",
-			"source", source.LogSourceID+"/"+source.SourceGeneration, "days", out.Days)
-	}
-	return nil
-}
-
 // reconcileLoopConfig 返回常驻对账配置快照（未启用时 Enabled=false，调用方据此完全不跑）。
 // reconcileLoopConfigBounded 有界读取常驻对账配置（锁紧张时 ≤lockBudget 返回 ok=false）。
 //

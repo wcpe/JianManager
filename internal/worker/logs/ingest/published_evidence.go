@@ -188,49 +188,6 @@ func (m *Manager) capturePublishedPrefixEvidence(parent context.Context, source 
 	return proof, nil
 }
 
-// allPublishedEventsCurrent 是ACK的全批门：任一缺失即拒绝，不为取得部分证据逐ID发起数百次查询。
-func (m *Manager) allPublishedEventsCurrent(ctx context.Context, source SourceConfig, events []logtypes.Event) (bool, error) {
-	if m == nil || m.cat == nil || len(events) == 0 {
-		return false, nil
-	}
-	grouped, days, err := groupEventsByUTCDay(source, events)
-	if err != nil {
-		return false, err
-	}
-	proof := publishedEvidence{events: events, authorities: make(map[string]*catalog.Record, len(days))}
-	for _, day := range days {
-		daySource := source
-		daySource.UTCDay = day
-		rec, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
-		proof.authorities[day] = rec
-		if rec == nil || rec.PublishedProjection == nil || !rec.PublishedProjection.CoverageComplete {
-			return false, nil
-		}
-		generations := publishedSourceProjectionGenerations(rec.PublishedProjection, daySource)
-		closed := publishedEvidenceClosed(rec, daySource)
-		if len(generations) == 0 {
-			return false, nil
-		}
-		for _, event := range grouped[day] {
-			if event.Record.End > closed {
-				return false, nil
-			}
-		}
-		client, err := m.publishedEvidenceClient(daySource, rec)
-		if err != nil || client == nil {
-			return false, fmt.Errorf("ingest: ACK取证目标不可读: %w", err)
-		}
-		complete, _, err := m.verifyProjectionQuery(ctx, client, daySource, generations[0], grouped[day], nil, generations)
-		if err != nil || !complete {
-			return false, err
-		}
-	}
-	if err := m.applyPublishedEvidence(source, proof, func([]ledger.PositionRange) error { return nil }); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // hasResidualUnpublishedDebt 回答「除本批已写入并校验的这些事件外，是否还有未获发布证据的持久正文」。
 //
 // 为什么需要它（2026-10-22 生产 r5 直接阻塞）：`PublicationPending` 的含义是「上次发布未获确认」，
@@ -345,27 +302,4 @@ func (m *Manager) applyPublishedEvidence(source SourceConfig, proof publishedEvi
 		}
 	}
 	return apply(gapRangesOfEvents(proof.events))
-}
-
-// currentPublishedRuns 只返回当前权威中逐字段查得到且属于既有验证区间的精确证据。
-func (m *Manager) currentPublishedRuns(ctx context.Context, source SourceConfig, saved persistedSource) (publishedEvidence, error) {
-	if err := ctx.Err(); err != nil {
-		return publishedEvidence{}, err
-	}
-	key := source.LogSourceID + "/" + source.SourceGeneration
-	events, err := m.canonicalRecoveryEvents(key, saved)
-	if err != nil {
-		return publishedEvidence{}, fmt.Errorf("ingest: 缺口取权威正文失败: %w", err)
-	}
-	runs := m.verifiedRuns(key)
-	candidates := make([]logtypes.Event, 0, len(events))
-	for _, ev := range events {
-		if err := ctx.Err(); err != nil {
-			return publishedEvidence{}, err
-		}
-		if ledger.CoveredByPositionRanges(runs, ev.Record.Start, ev.Record.End) {
-			candidates = append(candidates, ev)
-		}
-	}
-	return m.capturePublishedEvidence(source, candidates, ctx), nil
 }

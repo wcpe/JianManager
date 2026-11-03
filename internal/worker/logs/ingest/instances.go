@@ -1085,12 +1085,6 @@ func (m *Manager) ensureRawFile(path string) error {
 	return f.Close()
 }
 
-func (m *Manager) appendPendingInstanceOutput(uuid, stream string, data []byte) error {
-	m.pendingMu.Lock()
-	defer m.pendingMu.Unlock()
-	return m.appendPendingInstanceOutputLocked(uuid, stream, data)
-}
-
 // Pending 暂存上限（M-6）。未绑定实例的输出在绑定到达前无 pipeline/ledger 兜底，
 // 若不加界，持续 stdout/stderr 可耗尽 Worker 数据盘，进而拖垮 ingest.state.json、
 // 事件段、WAL 与 VL 运行时。上限取值需容纳正常的重启接管窗口（CP 不可达时可能持续
