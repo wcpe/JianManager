@@ -191,3 +191,79 @@ func TestPlanner_ReusePathMustNotFabricateEmptySuccessForUnplannedTarget(t *test
 	require.Contains(t, reused.Coverage.PartialReasons, ReasonRangeUnavailable,
 		"未就绪原因必须随覆盖上报，供 CP 归一化为可读的 partial reason")
 }
+
+// 回归（2026-11-05 生产真机）：查询窗口**整体早于**该源最早分区时，不得判「空成功」。
+//
+// # 故障形态
+//
+// VL 直查 inst:318 的 2026-11-02 有 1746 条，但接口响应是
+//
+//	items=0  complete=true  enumeration_state=EXHAUSTED  reasons=None
+//
+// 也就是一个**静默的错误空**——用户看到「这天没日志」，而数据就在那里。
+//
+// # 根因
+//
+// `coverEmptyAuthorizedTargets` 的判据 2 只问「该命名空间在**任意**一天有没有可查记录」。
+// 重启后 Catalog 纯内存（2026-10-30 裁定不落盘），只有重启后补建的天（11-04）有记录；
+// 查 11-02 时窗口内无分区 → 进补空逻辑 → 按命名空间找到 11-04 的记录 → 命中
+// ⇒ 给 11-02 也补了「空成功」⇒ `complete=true`。
+//
+// # 为什么不能简单改成「窗口内必须有记录」
+//
+// 那会杀掉 `TestPlanner_AuthorizedTargetWithoutPartitionInWindowIsEmptySuccess`（#60）：
+// 静默源 inst:153 的最后分区早于窗口，本应判空；严要求会让停产源把平台判成
+// missing_coverage。所以判据取**方向**：窗口晚于源最早分区 → 空成功；
+// 窗口整体早于源最早分区 → 未就绪（fail-closed）。
+//
+// 转红方式（实测）：删掉 `namespaceWindowPrecedesEarliestDay` 那道闸，本用例在
+// 「必须是 CoverageNotReady」处红（会得到 CoverageSuccess + complete=true）。
+func TestPlanner_WindowBeforeEarliestPartitionIsNotReady(t *testing.T) {
+	cat := catalog.New(nil)
+	// 该源只有 11-04 的记录（真机重启后的形态）。
+	require.NoError(t, cat.Put(queryableRecord(
+		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-11-04"}, catalog.OwnerHot, 1, "hot-318")))
+
+	p := NewPlanner(cat, nil)
+	// 查 11-02：窗口整体早于该源最早分区。
+	res := p.Plan(PlanRequest{
+		RequestID: "silent-empty-before-earliest",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-11-02T00:00:00Z", ToUTC: "2026-11-03T00:00:00Z"},
+	})
+	require.Nil(t, res.Err)
+	require.Empty(t, res.Ranges, "该窗口内无分区 ⇒ 不产出 range")
+
+	got := coverageEntryFor(res.Coverage, "inst:318")
+	require.NotNil(t, got, "授权目标必须出现在覆盖里")
+	require.Equal(t, CoverageNotReady, got.State,
+		"窗口早于最早分区时本地记录无法证明「那天没有数据」⇒ 必须 fail-closed，"+
+			"不得粉饰成空成功（否则用户看到「这天没日志」而 VL 里确有数据）")
+	require.Contains(t, got.Reasons, ReasonNoCatalogRecord)
+	require.False(t, res.Coverage.Complete,
+		"静默空不得报成完整覆盖")
+
+	// 对照：同一份 Catalog，查 11-04（窗口 == 最早分区）仍须给出 range。
+	ok := p.Plan(PlanRequest{
+		RequestID: "in-window",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-11-04T00:00:00Z", ToUTC: "2026-11-05T00:00:00Z"},
+	})
+	require.Nil(t, ok.Err)
+	require.Len(t, ok.Ranges, 1, "窗口内的分区必须产出 range")
+	require.Equal(t, "inst:318/2026-11-04", ok.Ranges[0].TargetID)
+
+	// 对照 #60：窗口**晚于**最早分区（静默源）仍按空成功计入。
+	silent := p.Plan(PlanRequest{
+		RequestID: "silent-after",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-12-01T00:00:00Z", ToUTC: "2026-12-02T00:00:00Z"},
+	})
+	require.Nil(t, silent.Err)
+	require.Empty(t, silent.Ranges)
+	entry := coverageEntryFor(silent.Coverage, "inst:318")
+	require.NotNil(t, entry)
+	require.Equal(t, CoverageSuccess, entry.State,
+		"窗口晚于该源最后数据时，#60 的空成功裁定不变（否则停产源会把平台判成未就绪）")
+	require.True(t, silent.Coverage.Complete)
+}

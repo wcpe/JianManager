@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
@@ -463,9 +464,12 @@ func (p *Planner) Plan(req PlanRequest) PlanResult {
 // 判据（缺一不可）：
 //  1. 视图内没有任何条目承载该授权目标（判据与 remapCoverageTargets/CP 侧一致：条目 ID 等于
 //     授权目标，或条目是它的分区子项）——已有覆盖就不得重复计入；
-//  2. Catalog 里确实存在同命名空间、且 `OwnerForQuery` 给得出权威的记录（按命名空间找**任意**
-//     一天：静默源的最后分区可能早于窗口，故绝不能用窗口内那一天去 Get，那必然落空）；
-//  3. **不**把它标为可查（不进 QueryableTargets）——否则会为它追加一个指向不存在分区的 range，
+//  2. 窗口**不早于**该命名空间在 Catalog 里最早的分区（
+//     `namespaceWindowPrecedesEarliestDay` 为假）——窗口横跨历史且该源有的天无记录时我们
+//     **无法区分「那天确实无数据」与「那天的记录已不在本地」**，不得粉饰成空；
+//     反之「窗口晚于该源最后数据」（静默源）仍按空成功计入，那是 #60 的既有裁定；
+//  3. Catalog 里确实存在同命名空间、且 `OwnerForQuery` 给得出权威的记录；
+//  4. **不**把它标为可查（不进 QueryableTargets）——否则会为它追加一个指向不存在分区的 range，
 //     反而制造 range-unavailable。
 //
 // 找不到可查记录的授权目标**保持未就绪**（不发明空成功）：worker 侧无法区分「该源在本 Worker
@@ -499,6 +503,20 @@ func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, 
 		if allKeys == nil {
 			allKeys = p.cat.Keys()
 		}
+		// 2026-11-05 生产真机（日志页「这天没日志」但 VL 里确有数据）：
+		// 原实现只问「该命名空间在**任意**一天有没有可查记录」，于是「有 11-04 的记录」
+		// 被当成「11-02 也可以合法判空」⇒ `items=0` + `complete=true` + `EXHAUSTED`，
+		// 一个静默的错误空。判据 2 因此收紧：窗口完整地**早于**该源最早记录时必须保持未就绪。
+		if p.namespaceWindowPrecedesEarliestDay(allKeys, auth, req.TimeRange) {
+			NamespaceWindowBeforeEarliestCount.Add(1)
+			res.Coverage.AddTarget(TargetCoverage{
+				TargetID: auth,
+				State:    CoverageNotReady,
+				Reasons:  []string{ReasonNoCatalogRecord},
+			})
+			covered[auth] = true
+			continue
+		}
 		// 授权目标可能是命名空间（其自身可含 '/'，如 ns/game-1），也可能是 ns/day：
 		// 先按整串当命名空间找；找不到再按 parseTargetKey 拆出的命名空间找一次。
 		if !p.catalogHasQueryableRecord(allKeys, auth) {
@@ -515,6 +533,60 @@ func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, 
 		// 故走「不可查」分支 ⇒ 只给覆盖、不给 range（空 = 结果里 0 行）。
 		view.TargetIDs = append(view.TargetIDs, auth)
 	}
+}
+
+// NamespaceWindowBeforeEarliestCount 记录「因窗口早于该源最早分区而拒绝判空」的次数。
+//
+// 为什么需要计数而不是只打日志（2026-11-05）：这是「本来会静默返回 0 行」被拦下的
+// 次数，是最有诊断价值的指标。没有它时，用户只能看到「查询无数据」而不知道
+// 自己的时间窗早于平台数据起点——这正是本次事故的报告形态（「这天没日志」）。
+var NamespaceWindowBeforeEarliestCount atomic.Int64
+
+// namespaceWindowPrecedesEarliestDay 报告该授权目标的查询窗口是否**整体早于**其最早分区。
+//
+// 2026-11-05 真机：VL 里 inst:318 的 11-02 有 1746 条，但接口返回 0 行 +
+// `complete=true` + `EXHAUSTED`（一个静默的错误空）。根因是 `coverEmptyAuthorizedTargets`
+// 只问「该命名空间在**任意**一天有没有可查记录」：重启后 Catalog 纯内存，只有重启后
+// 补建的天（11-04）有记录 ⇒ 命中任意一天 ⇒ 给 11-02 也补了「空成功」。
+//
+// 为什么不能简单改成「窗口内那一天必须有记录」：那会同时杀掉 #60 的正当情形——
+// 静默源（最后分区早于窗口，如 inst:153）本应判为「空」；若严格要求窗口内有记录，
+// 一个已停产的源会把整个平台判成 missing_coverage。
+//
+// 所以判据取**方向**而非交集：
+//   - 窗口**晚于**该源最早分区 ⇒ 保留空成功（源在那段时间还没开工或已停产，无从推翻）；
+//   - 窗口**整体早于**该源最早分区 ⇒ 判未就绪（本地记录无法覆盖这段历史，
+//     「那天真没数据」与「那天的记录不在了」不可区分，按 fail-closed 不粉饰）。
+//
+// 时间窗缺失时（`FromUTC`/`ToUTC` 都空）不做判断：那是「不限分区日」，
+// 已由 selectKeys 取全部分区，走到这里就说明确实无分区，按既有口径处理。
+func (p *Planner) namespaceWindowPrecedesEarliestDay(allKeys []catalog.PartitionKey, namespace string, tr TimeRange) bool {
+	if namespace == "" || tr.ToUTC == "" {
+		return false
+	}
+	to, err := time.Parse(time.RFC3339, tr.ToUTC)
+	if err != nil {
+		return false
+	}
+	earliest := ""
+	for _, k := range allKeys {
+		// 授权目标可能带 "/day" 后缀，故命中命名空间或 ns/day 两种形态都算。
+		if k.StorageNamespace != namespace && namespace != k.String() {
+			continue
+		}
+		if k.UTCDay != "" && (earliest == "" || k.UTCDay < earliest) {
+			earliest = k.UTCDay
+		}
+	}
+	if earliest == "" {
+		return false
+	}
+	dayStart, err := time.Parse("2006-01-02", earliest)
+	if err != nil {
+		return false
+	}
+	// 窗口终点不晚于最早分区的起点 ⇒ 整段窗口全在该分区之前。
+	return !to.After(dayStart)
 }
 
 // catalogHasQueryableRecord 报告 Catalog 中是否存在该命名空间下**可查**的记录（任意一天）。
