@@ -134,6 +134,27 @@ func NewBatchedStore(inner Store, interval time.Duration, maxBatch int) *Batched
 	return s
 }
 
+// LeaseStorePath 实现 LeaseStoreProvider：把能力**透传**给被包裹的 store。
+//
+// # 为什么必须有它（2026-11-05 生产事故的直接教训）
+//
+// `NewJournalWithStore` 原本靠 `store.(*JSONLFileStore)` 这个具体类型断言来找租约
+// 旁路文件。加了一层 `BatchedStore` 之后断言失败，租约降级，而当时的降级实现是
+// **报错**⇒ 查询租约准入全线拒绝 ⇒ 整个查询面挂掉。
+//
+// 接口化之后，本方法让“包装一层”不再损失能力：内层能给路径，本层就如实给。
+// 透传（而不是自己造一个路径）是必须的：租约旁路必须与 journal 同目录同前缀，
+// 否则两个 store 写两个不同步的文件。
+func (s *BatchedStore) LeaseStorePath() (string, bool) {
+	if s == nil || s.inner == nil {
+		return "", false
+	}
+	if provider, ok := s.inner.(LeaseStoreProvider); ok {
+		return provider.LeaseStorePath()
+	}
+	return "", false
+}
+
 // BatchedStoreStats 是本层的可观测读数。
 //
 // 三个数字对应三种现场：`Flushed` 持续增长而 `FlushFailed` 不动 = 正常；
