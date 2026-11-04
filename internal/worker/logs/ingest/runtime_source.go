@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -721,7 +722,32 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 	// 不需要造 `PublishedProjection`，也不需要代次白名单。
 	//
 	// 注意：它**不改变**已有记录（比如重建路径已经写好的那份）——只在缺失时补建。
-	m.ensureCatalogPartition(source)
+	//
+	// ## 必须按「事件所属天」补建，不能沿用源级 UTCDay（2026-11-05 真机修复）
+	//
+	// `source.UTCDay` 是源**登记那一刻**的 UTC 日（`runtime_lifecycle.go` 只在它为空时
+	// 用 `time.Now()` 填一次，此后固定）。而这批事件按各自的 `EventTimeUTC` 落进不同分区。
+	// 一旦跨天，两者必然不一致：
+	//
+	//   真机：18 个源的 Catalog 记录 utcDay=2026-10-30（登记日），
+	//         实际数据落点 2026-11-04 分区，VL 直查 239 条。
+	//         查询 11-04 时 `Planner.selectKeys` 按时间范围过滤掉 10-30 的记录
+	//         ⇒ 该 target 拿不到 Catalog 记录 ⇒ 日志页空。
+	//
+	// 既有代码里已经有正确模式可循（`hot_retention_window.go` 的 daySource）：
+	//
+	//	// 必须把 UTCDay 设成该事件所属天：查询时间窗会被夹在「源当前天」内，
+	//	// 若沿用源当前天，跨天缺口的时间窗会落在错误的一天 ⇒ 恒查不到 ...
+	//	daySource := source
+	//	daySource.UTCDay = day
+	//
+	// 本处照同一模式：从本批 `write` 事件算出涉及的所有 UTC 天，逐天补建。
+	// 一批可能跨天（长时间没 poll、或重放一段跨天区间），故不能只取第一天的。
+	for _, day := range eventUTCDays(write) {
+		daySource := source
+		daySource.UTCDay = day
+		m.ensureCatalogPartition(daySource)
+	}
 	// 投递成功 ⇒ 登记一次「缺口核对」（异步，**不阻塞本路径**）。
 	//
 	// 这**不是**被删的那套账本机制：它只做「查一下这些事件在 VL 里到底可不可见，
@@ -742,6 +768,51 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 		hook.(func(SourceConfig, []logtypes.Event))(source, write)
 	}
 	return pipeline.DeliveryResult{HTTPStatus: status}, nil
+}
+
+// eventUTCDays 返回该批事件涉及的**所有** UTC 日（升序去重）。
+//
+// 为什么需要它：Catalog 分区键是 (namespace, utcDay)，查询侧 `Planner.selectKeys`
+// 按时间范围过滤分区键。若补建记录时沿用源级 `source.UTCDay`（= 源登记当天），
+// 跨天后记录会落在错误的天上 ⇒ 查询当天时选不到 ⇒ 日志页空。
+//
+// 为什么取「所有」而不是第一条：一批可能跨天——长时间没 poll 会一次读回多天，
+// 恢复/重放路径也可能一次带上跨天区间。只补第一天会让其余天仍然查不到。
+//
+// 时间来源用 `EventTimeUTC`（规范化之后必有值；`normalizeCanonicalEvent` 保证），
+// 不用 `IngestTimeUTC`——后者是「什么时候写进来的」，与分区归属无关。
+func eventUTCDays(events []logtypes.Event) []string {
+	seen := make(map[string]struct{}, 2)
+	for _, ev := range events {
+		day := utcDayOfEventTime(ev.EventTimeUTC)
+		if day != "" {
+			seen[day] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	days := make([]string, 0, len(seen))
+	for day := range seen {
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	return days
+}
+
+// utcDayOfEventTime 把 RFC3339 事件时间转成 `2006-01-02`；解析失败返回空串。
+//
+// 解析失败**不猜**：调用方会因此跳过补建（宁可晚一拍可见，也不写一条错天的记录——
+// 错天的记录会让查询选不中，比没有记录更难排查）。
+func utcDayOfEventTime(eventTimeUTC string) string {
+	if eventTimeUTC == "" {
+		return ""
+	}
+	ts, err := time.Parse(time.RFC3339Nano, eventTimeUTC)
+	if err != nil {
+		return ""
+	}
+	return ts.UTC().Format("2006-01-02")
 }
 
 // ensureCatalogPartition 保证「本批数据写进 VL 之后，Catalog 里有对应的分区记录」。
