@@ -106,17 +106,27 @@ func disjointScopeTerms(rng query.AuthoritativeRange, q query.RangeQuery) []stri
 			}
 		}
 		if len(atoms) == 0 {
+			// 回退分区命名空间（简化投递路径补建的记录只有它）。
+			// 原子里的 sourceGeneration 留空，渲染时不得带上 `source_generation:=`
+			// ——历史行/未知代次的行没有可枚举的代次值。
 			add(atom{source: rng.Key.StorageNamespace}, q.ClosedVisibleSeq)
 		}
 	}
 	terms := make([]string, 0, len(atoms))
 	for a, seq := range atoms {
 		parts := make([]string, 0, 3)
-		if scoped || a.source != "" {
-			parts = append(parts, `log_source_id:="`+escape(a.source)+`"`)
-		}
-		if scoped || a.sourceGeneration != "" {
-			parts = append(parts, `source_generation:="`+escape(a.sourceGeneration)+`"`)
+		isNamespaceAtom := !scoped && a.sourceGeneration == "" && a.source != ""
+		if isNamespaceAtom {
+			// 与 selectorQuery 同口径：命名空间回退必须匹配 `<ns>/...` 的子源，
+			// 否则超长查询分片时同样一条都查不到（同源缺陷，见 namespaceSelector）。
+			parts = append(parts, "("+namespaceSelector(a.source)+")")
+		} else {
+			if scoped || a.source != "" {
+				parts = append(parts, `log_source_id:="`+escape(a.source)+`"`)
+			}
+			if scoped || a.sourceGeneration != "" {
+				parts = append(parts, `source_generation:="`+escape(a.sourceGeneration)+`"`)
+			}
 		}
 		parts = append(parts, "record_end:<="+strconv.FormatUint(seq, 10))
 		terms = append(terms, "("+strings.Join(parts, " AND ")+")")
@@ -125,13 +135,13 @@ func disjointScopeTerms(rng query.AuthoritativeRange, q query.RangeQuery) []stri
 	return terms
 }
 
-// 只按最终转义后的物理文本字节递归划分，不用 ID 个数猜测引擎边界。
-func splitPhysicalTerms(terms []string, build func([]string) string, filter string) ([][]string, error) {
+// splitPhysicalTerms 按最终转义后的物理文本字节递归划分，不用 ID 个数猜测引擎边界。
+func splitPhysicalTerms[T any](terms []T, build func([]T) string, filter string) ([][]T, error) {
 	if len(terms) == 0 {
 		return nil, query.ErrRangeQueryBudget
 	}
 	if physicalQueryFits(build(terms), filter) {
-		return [][]string{terms}, nil
+		return [][]T{terms}, nil
 	}
 	if len(terms) == 1 {
 		return nil, fmt.Errorf("%w: one physical scope exceeds %d bytes", query.ErrRangeQueryBudget, physicalMaxQueryBytes)
@@ -188,8 +198,8 @@ func mergePhysicalStats(dst, src []query.StatsPoint) []query.StatsPoint {
 	return dst
 }
 
-func (c *Client) splitMergedSources(ctx context.Context, rngs []query.AuthoritativeRange, sources []string, q query.RangeQuery) (query.RangeResult, error) {
-	groups, err := splitPhysicalTerms(sources, func(group []string) string { return mergedSearchQuery(group, q) }, q.Filter)
+func (c *Client) splitMergedSources(ctx context.Context, rngs []query.AuthoritativeRange, sources []query.SourceScope, q query.RangeQuery) (query.RangeResult, error) {
+	groups, err := splitPhysicalTerms(sources, func(group []query.SourceScope) string { return mergedSearchQuery(group, q) }, q.Filter)
 	if err != nil {
 		return query.RangeResult{}, err
 	}

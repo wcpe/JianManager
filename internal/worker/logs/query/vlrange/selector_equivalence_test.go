@@ -37,8 +37,12 @@ func selectorBeforeFactoring(rng query.AuthoritativeRange, q query.RangeQuery) s
 	switch {
 	case len(covered) > 0:
 		parts = append(parts, "("+strings.Join(covered, " OR ")+")")
-	case rng.Key.StorageNamespace != "":
-		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
+	default:
+		if rng.Key.StorageNamespace != "" {
+			// 与 selectorQuery 同口径（2026-11-05 真机修复）：命名空间回退必须
+			// 同时匹配裸命名空间与 `<ns>/...` 的子源，否则恒查不到。
+			parts = append(parts, "("+namespaceSelector(rng.Key.StorageNamespace)+")")
+		}
 	}
 	// 与 selectorQuery 同口径（2026-11-05）：只有**明确**水位（>0）才加上界。
 	// 原先这里是 `!scoped || cvs > 0`，详见 selectorOracle 的注释与
@@ -94,7 +98,12 @@ func selectorOracle(rng query.AuthoritativeRange, q query.RangeQuery, row select
 			}
 		}
 		if !hasCoverage {
-			matched = rng.Key.StorageNamespace == "" || rng.Key.StorageNamespace == row.source
+			// 非 scoped 无覆盖：回退命名空间——**“属于该命名空间”**，即裸命名空间本身
+			// 或其 `/` 子流（2026-11-05 真机：VL 行的 log_source_id 恒为
+			// `<TargetID>/<stream>`，只比等值就恒不命中）。前缀必须以 `/` 收口，
+			// 否则 `a` 会命中 `ab`（universe 里两条都有，靠它钉住）。
+			ns := rng.Key.StorageNamespace
+			matched = ns == "" || ns == row.source || strings.HasPrefix(row.source, ns+"/")
 		}
 	}
 	// 契约变更（2026-11-05）：零水位不再按 `scoped` 分支。
@@ -145,6 +154,12 @@ func (n *selectorTruthNode) matches(row selectorCandidate) bool {
 		return true
 	case "<=":
 		return row.end <= n.bound
+	case "prefix":
+		// 只有 log_source_id 有前缀语义（命名空间回退）；其它字段用了就是渲染写错了。
+		if n.field != "log_source_id" {
+			panic("前缀匹配只能用于 log_source_id")
+		}
+		return strings.HasPrefix(row.source, n.value)
 	default:
 		switch n.field {
 		case "log_source_id":
@@ -223,10 +238,20 @@ func (p *selectorTruthParser) atom() *selectorTruthNode {
 		p.text = strings.TrimLeft(p.text[i:], " ")
 		return &selectorTruthNode{op: "<=", bound: n}
 	}
-	i := strings.Index(p.text, `:="`)
-	require.Positive(p.t, i, "必须为已有精确匹配语法: %s", p.text)
+	// 两种来源谓词写法都必须认：精确等值 `field:="…"` 与字面前缀 `field:"…"*`。
+	// operator 只含 `:` 与可选的 `=`（**不吞开引号**）——后面从 1 开始扫描闭合引号，
+	// 前提就是 p.text[0] 是开引号。
+	idxEq := strings.Index(p.text, `:="`)
+	idxPrefix := strings.Index(p.text, `:"`)
+	i, operator := idxEq, `:=`
+	// `:"` 是 `:="` 的前缀，两者可能命中同一位置 ⇒ 有 `:="` 时必须优先它，
+	// 否则会把精确等值误读成前缀（Unquote 收到多出的 `=` 直接报 invalid syntax）。
+	if i < 0 {
+		i, operator = idxPrefix, `:`
+	}
+	require.Positive(p.t, i, "必须为已有来源匹配语法: %s", p.text)
 	field := p.text[:i]
-	p.text = p.text[i+2:]
+	p.text = p.text[i+len(operator):]
 	end := 1
 	for end < len(p.text) {
 		if p.text[end] == '\\' {
@@ -238,10 +263,19 @@ func (p *selectorTruthParser) atom() *selectorTruthNode {
 		}
 		end++
 	}
-	require.Less(p.t, end, len(p.text), "精确匹配引号必须闭合")
+	require.Less(p.t, end, len(p.text), "匹配引号必须闭合")
 	value, err := strconv.Unquote(p.text[:end+1])
 	require.NoError(p.t, err)
 	p.text = strings.TrimLeft(p.text[end+1:], " ")
+	// VL 的字面前缀语法：`field:"…"*`（`*` 紧跟闭合引号）。
+	// 命名空间回退靠它匹配 `<ns>/...` 的子源（2026-11-05 真机修复），
+	// 真值机必须认识它，否则“形状变了”这件事在等价性测试里看不出来。
+	if strings.HasPrefix(p.text, "*") {
+		require.Equal(p.t, ":", operator, "前缀语法只能写成 `field:\"…\"*`（无等号）")
+		p.text = strings.TrimLeft(p.text[1:], " ")
+		return &selectorTruthNode{op: "prefix", field: field, value: value}
+	}
+	require.Equal(p.t, ":=", operator, "精确相等必须写成 `field:=\"…\"`")
 	return &selectorTruthNode{field: field, value: value}
 }
 

@@ -371,8 +371,34 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	switch {
 	case len(covered) > 0:
 		parts = append(parts, "("+strings.Join(covered, " OR ")+")")
-	case rng.Key.StorageNamespace != "":
-		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
+	default:
+		// 回退到分区命名空间（`PartitionKey.StorageNamespace`）。
+		//
+		// 2026-11-05 修正（生产日志查询整页为空的**第三个**真 bug）：
+		// 原写法把命名空间当**完整源 id** 做等值匹配 `log_source_id:="inst:318"`。
+		// 而 VL 行上的 `log_source_id` 恒为 `<TargetID>/<stream>`（`inst:318/file`），
+		// 两者从不相等 ⇒ 该 range 恒查到 0 行，且接口仍报
+		// `complete=true` / `EXHAUSTED` / `quality=exact`（空结果被粉饰成「完整无数据」）。
+		//
+		// 何时会走到这里：简化投递路径后，Catalog 记录由 `ingest.ensureCatalogPartition`
+		// 补建，它只填命名空间、**刻意不填** `SourceProjections`/`CoveredSourceGenerations`
+		// ⇒ `scoped=false` 且 `covered` 为空 ⇒ 必然走本分支。也就是说这不是边角情况，
+		// 而是新架构下投递路径产生的**唯一**形态。
+		//
+		// 真机证据（inst:318，2026-11-04 单日窗，VL v1.52.0）：
+		//   - log_source_id:="inst:318"                       -> 0 条
+		//   - log_source_id:="inst:318/file"                  -> 615 条
+		//   - (log_source_id:="inst:318" OR log_source_id:"inst:318/"*) -> 615 条
+		//
+		// 为何保留「等值」那一支：历史上存在 `LogSourceID == StorageNamespace` 的源
+		// （如 `node:1` 这种没有 `/stream` 后缀的），丢了它会把它们变不可见。
+		// 前缀以 `/` 收口：不加则 `inst:3` 会顺带匹配到 `inst:31`（跨源泄漏）。
+		//
+		// 与内存归因侧同源：`query.SourceScope.MatchesLogSourceID` 是唯一判据，
+		// 两处不得各写一套（那正是本次故障的同源形态）。
+		if scope := (query.SourceScope{Namespace: rng.Key.StorageNamespace}); scope.Namespace != "" {
+			parts = append(parts, "("+namespaceSelector(scope.Namespace)+")")
+		}
 	}
 	// 非 scoped 的 `projection_generation` 过滤同样去掉（理由同上）。
 	//
@@ -414,6 +440,17 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	// 会被解析为 `(scope AND f) OR (*)`），或借管道重扫越界。用户过滤统一由
 	// params() 放进 extra_filters，由 VL 独立解析后与本 query AND 组合。
 	return base
+}
+
+// namespaceSelector 把命名空间渲染成「等值 OR 前缀」的 LogsQL 来源谓词。
+//
+// 为何不是单条等值：VL 行的 `log_source_id` 是完整源 id（`<TargetID>/<stream>`），
+// 与命名空间从不相等，只写等值就恒查不到（2026-11-05 真机故障）。
+// 为何前缀以 `/` 收口：不收口会让 `inst:3` 匹配到 `inst:31` —— 那是跨源泄漏，
+// 比查不到严重得多。VL 的 `"…"*` 是字面前缀匹配（已在本机 v1.52.0 实测：
+// `log_source_id:"inst:31/"*` 得 0 条，`log_source_id:"inst:318/"*` 得 615 条）。
+func namespaceSelector(namespace string) string {
+	return `log_source_id:="` + escape(namespace) + `" OR log_source_id:"` + escape(namespace) + `/"*`
 }
 
 func projectionGenerations(projection *catalog.PublishedProjection) []string {

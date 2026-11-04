@@ -142,7 +142,13 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 			// 若仍被调用则按不匹配处理（宁可少收，不可放大可见范围）。
 			return false
 		}
-		if ev.Source.LogSourceID != rng.Key.StorageNamespace {
+		// 与 selectorQuery 共用同一判据（`query.SourceScope.MatchesLogSourceID`）：
+		// 命名空间形态匹配 `<ns>` 与 `<ns>/...` 两种行，而不是只等值匹配。
+		//
+		// 2026-11-05：旧写法 `ev.Source.LogSourceID != rng.Key.StorageNamespace`
+		// 把命名空间当完整源 id，而真实行是 `inst:318/file` ⇒ 全部归因失败 ⇒
+		// 粗筛有行、结果却空（与 selectorQuery 同根同源的第三个生产 bug）。
+		if !(query.SourceScope{Namespace: rng.Key.StorageNamespace}).MatchesLogSourceID(ev.Source.LogSourceID) {
 			return false
 		}
 	}
@@ -160,15 +166,37 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 	return true
 }
 
-// mergedSearchQuery 构造合并粗筛的 LogsQL：`log_source_id:in(...)` 覆盖组内全部
-// 来源，管道与 searchQuery 逐字一致；fields 额外带 projection_generation（供内存
+// mergedSearchQuery 构造合并粗筛的 LogsQL：覆盖组内全部来源，
+// 管道与 searchQuery 逐字一致；fields 额外带 projection_generation（供内存
 // 归因过滤）。管道顺序（fields → sort → limit 相邻）的原因见 searchQuery 注释。
-func mergedSearchQuery(sources []string, q query.RangeQuery) string {
+//
+// **来源段不能一律用 `in()`**：`in()` 是精确匹配，而命名空间形态的来源（简化投递
+// 路径补建的 Catalog 记录）需要匹配 `<ns>/...` 的子源。两类来源分开渲染：
+//   - 精确形态 → 聚合成一次 `log_source_id:in(...)`（PoC 实测比 OR 组快 ~4.6 倍）；
+//   - 命名空间形态 → 各自的「等值 OR 前缀」谓词（见 namespaceSelector）。
+//
+// 两者之间用 OR 连接（同一个 OR 组）：语义上各来源是并集，且这是 VL 的
+// 普通布尔组合，不会引入管道逃逸。
+func mergedSearchQuery(sources []query.SourceScope, q query.RangeQuery) string {
+	exact := make([]string, 0, len(sources))
 	terms := make([]string, 0, len(sources))
 	for _, s := range sources {
-		terms = append(terms, `"`+escape(s)+`"`)
+		if s.LogSourceID != "" {
+			exact = append(exact, `"`+escape(s.LogSourceID)+`"`)
+			continue
+		}
+		if s.Namespace != "" {
+			terms = append(terms, "("+namespaceSelector(s.Namespace)+")")
+		}
 	}
-	return "log_source_id:in(" + strings.Join(terms, ",") + ")" +
+	if len(exact) > 0 {
+		terms = append(terms, "log_source_id:in("+strings.Join(exact, ",")+")")
+	}
+	source := "*"
+	if len(terms) > 0 {
+		source = strings.Join(terms, " OR ")
+	}
+	return "(" + source + ")" +
 		" | fields _time, _msg, event_id, log_source_id, source_generation, " +
 		projectionGenerationField +
 		", parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
@@ -187,7 +215,7 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	return c.searchMerged(query.WithPhysicalReadBudget(ctx, q.Budget), rngs, q, nil)
 }
 
-func (c *Client) searchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery, physicalSources []string) (query.RangeResult, error) {
+func (c *Client) searchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery, physicalSources []query.SourceScope) (query.RangeResult, error) {
 	if c == nil || c.vl == nil {
 		return query.RangeResult{}, query.ErrRangeClientUnimplemented
 	}
@@ -195,8 +223,8 @@ func (c *Client) searchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 		return query.RangeResult{}, fmt.Errorf("vlrange: empty merged range set")
 	}
 	first := rngs[0]
-	sources := make([]string, 0, len(rngs))
-	seen := make(map[string]bool, len(rngs))
+	sources := make([]query.SourceScope, 0, len(rngs))
+	seen := make(map[query.SourceScope]bool, len(rngs))
 	for _, rng := range rngs {
 		// 2026-10-08 修正：合并组**允许跨 UTC 天**（窗口取各天并集，行归因按各 rng
 		// 权威谓词）——此前的"同天"防御与跨天合并改造冲突，会让整组报错并使
@@ -219,11 +247,11 @@ func (c *Client) searchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 			}
 		}
 	}
-	if physicalSources != nil {
+	if len(physicalSources) > 0 {
 		sources = physicalSources
 	}
 	// 查询文本确定性：来源排序后拼接（便于日志/调试对照，不影响命中集合）。
-	sort.Strings(sources)
+	sort.Slice(sources, func(i, j int) bool { return sources[i].SortKey() < sources[j].SortKey() })
 	if !physicalQueryFits(mergedSearchQuery(sources, q), q.Filter) {
 		return c.splitMergedSources(ctx, rngs, sources, q)
 	}
