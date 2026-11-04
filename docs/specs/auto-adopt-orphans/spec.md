@@ -240,8 +240,10 @@ ADR-093 决策 1 规定：**重试耗尽但 wrapper 仍存活**（确属本实�
 **① 生产 wrapper 的真实环境值**（`/proc/<wrapper pid>/environ`，原样摘）：
 
 ```
-JM_DAEMON_WRAPPER_CONFIG={"instance_uuid":"17b4cbb9-d3f0-48e9-b943-31dd0d869676","start_command":"java -Xms1024M -Xmx1024M -jar paper-1.20.1-196.jar nogui","stop_command":"stop","work_dir":"/home/wxys233/servers/game-01",...}
+JM_DAEMON_WRAPPER_CONFIG={"instance_uuid":"17b4cbb9-d3f0-48e9-b943-31dd0d869676","start_command":"java -Xms1024M -Xmx1024M -jar paper-1.20.1-196.jar nogui","stop_command":"stop","work_dir":"<实例工作目录>",...}
 ```
+
+（`work_dir` 原值为本机绝对路径，已脱敏；其余字段为原样摘录。）
 
 UUID 两侧是 `"`（JSON 引号），不属 UUID 字符集 ⇒ **命中**，现有收养路径不受影响。
 

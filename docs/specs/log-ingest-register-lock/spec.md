@@ -235,7 +235,7 @@ $ go test ./internal/worker/logs/ingest/ -run 'TestRegisterInstanceNotBlockedByS
 
 | 检查项 | 读数 | 意义 |
 |---|---|---|
-| 生产 Worker 在跑 | `/proc/2350148` comm=`jianmanager-wor`，`data_dir=/home/wxys233/jm/prod/worker/data` | 是真部署，非 lab |
+| 生产 Worker 在跑 | `/proc/<worker_pid>` comm=`jianmanager-wor`，`data_dir=$JM_WORKER_INSTALL_DIR/data`（本机实测值已脱敏） | 是真部署，非 lab |
 | 生产 CP 在跑 | `/proc/1984408` comm=`jianmanager-cp` | 同上 |
 | 心跳与实例连接正常 | 19 条 `已恢复 daemon 实例连接`、心跳循环正常推进 | 连通性本身成立 |
 
@@ -303,7 +303,7 @@ PRD 原写「CP 连通性超时残余未全取证」。查证原文（spec §1�
 
 lab 只能证明 Worker 侧清白。CP 侧是否有残余，必须在生产 CP 日志上数。本次做了：
 
-`/home/wxys233/jm/prod/cp/logs/cp.out`（196MB）按 msg 与日期分组统计 `DeadlineExceeded`：
+`$JM_CP_INSTALL_DIR/logs/cp.out`（196MB，本机实测路径已脱敏）按 msg 与日期分组统计 `DeadlineExceeded`：
 
 | 日期 | 条数 |
 |---|---|

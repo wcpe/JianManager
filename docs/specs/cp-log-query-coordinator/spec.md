@@ -185,7 +185,7 @@ node-dev2   临时第二节点，WS 31402，VL 31461，PUSH_ONLY 源 node:2/push
 CP          生产 CP，PID 1448954，端口 19000，未重启
 ```
 
-第二节点建在 `/home/wxys233/jm/dev/worker2/`，与生产端口、数据根完全隔离。
+第二节点建在 `$JM_CP_INSTALL_DIR/../dev/worker2/`（本机实测路径已脱敏），与生产端口、数据根完全隔离。
 验收完成后进程已停止，节点记录已**软删**（`DELETE /api/v1/nodes/2`，`/nodes/archived` 可还原）。
 
 ### 逐条结论
@@ -232,6 +232,6 @@ CP          生产 CP，PID 1448954，端口 19000，未重启
 
 ### 证据位置
 
-`/home/wxys233/jm/dev/worker2/evidence/`：`online_*` / `offline_*` 对照 JSON、
+`<第二节点目录>/evidence/`（本机实测路径已脱敏）：`online_*` / `offline_*` 对照 JSON、
 `sort_check.txt`、`per_target_stats.csv`、`production_blocker.md`、`raw/` 原始响应。
 第二节点完整复现步骤见同目录 `README.md`。

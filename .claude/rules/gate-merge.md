@@ -93,7 +93,7 @@
 
 **定向复跑才是判断依据**：对 6 个重点包用 `TMPDIR=/tmp go test -race` 跑，DATA RACE = 0、5 包 ok。全量跑慢到超时的包不等于有竞争——但也不能因此跳过它们。
 
-**跑 go test 一律加 `TMPDIR=/tmp`**：本机默认 `TMPDIR=/home/wxys233/tmpwork`，会让 wrapper 类用例的 unix socket 路径到 111 字节、超过内核 `sockaddr_un` 的 107 上限，表现为「20 秒后某个产物仍未出现」这种离根因很远的报错。
+**跑 go test 一律加 `TMPDIR=/tmp`**：若本机默认 `TMPDIR` 指向一个长目录（如 `$HOME/tmpwork`），会让 wrapper 类用例的 unix socket 路径超到 111 字节、超过内核 `sockaddr_un` 的 107 上限，表现为「20 秒后某个产物仍未出现」这种离根因很远的报错。
 
 **2026-10-27 最终验证**（HEAD `6194c8c5`，`TMPDIR=/tmp`）：对四处修复涉及的 4 个包跑
 `go test -race` —— `retention` / `query` / `vlsup` / `process` **全 ok，`DATA RACE` 计数 = 0**。

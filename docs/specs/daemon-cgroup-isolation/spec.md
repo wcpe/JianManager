@@ -254,7 +254,7 @@ ActiveState=inactive    ← CP 也不在自己的单元里
 | 逐进程核对 | `sed 's/^0:://' /proc/2074628/cgroup`<br>`sed 's/^0:://' /proc/2074677/cgroup` | 两者同为 `…/jianmanager-daemons/17b4cbb9-d3f0-48e9-b943-31dd0d869676` |
 | 先迁后生 | `/proc/2074677/status` 的 `PPid` | `2074628`（= wrapper）且同 cgroup ⇒ java 在隔离目录内 fork 出来 |
 | 进程身份 | `/proc/2074628/comm` / `/proc/2074677/comm` | `jianmanager-wor` / `java` |
-| PID 文件佐证 | `data/var/servers/17b4cbb9-….pid` | `{"wrapper_pid":2074628,"java_pid":2074677,"work_dir":"/home/wxys233/servers/game-01","probe_port":29947}` |
+| PID 文件佐证 | `data/var/servers/17b4cbb9-….pid` | `{"wrapper_pid":2074628,"java_pid":2074677,"work_dir":"<实例工作目录>","probe_port":29947}`（原始 work_dir 为本机路径，已脱敏） |
 | cgroup 存活态 | 19 个叶目录的 `cgroup.events` | 全部 `populated 1` |
 | 迁移日志 | `worker-supervised.log` | 19 条 `已把接管的 daemon 子树迁出 Worker 单元 cgroup … moved=2`，随后 `已恢复 daemon 实例连接 count=19`（12:52:22~12:52:23） |
 | 反向证据 | 单元 cgroup 成员身份分布 | 该 cgroup 内的 java 全是 Gradle/Kotlin daemon（构建工具），**无 MC 游戏服 java** |

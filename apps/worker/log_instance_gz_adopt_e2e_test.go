@@ -17,13 +17,13 @@ import (
 // 本文件是 ADR-098 §5「实例本地 gz 长期吸存」在**真实生产数据**上的验收用例。
 //
 // 它补充的是 log_instance_gz_adopt_test.go 覆盖不到的那一层：那边用 t.TempDir()
-// 造三五个假 .gz 验语义，这边用现场 `/home/wxys233/servers` 下 19 个实例、上千个
+// 造三五个假 .gz 验语义，这边用现场 `$JM_FR501_ADOPT_SERVERS` 下 19 个实例、上千个
 // 真实 .gz 验**规模与副作用**——尤其是 ADR §5 第 4 条（本地 gz 一律不动）在真文件上
 // 是否成立，以及第二轮是否真的全部幂等跳过。
 //
 // 门控（缺任一即 skip，不影响常规 CI）：
 //
-//	JM_FR501_ADOPT_SERVERS  实例根目录（如 /home/wxys233/servers）
+//	JM_FR501_ADOPT_SERVERS  实例根目录（如 /srv/game/instances）
 //	JM_FR501_ADOPT_ARCHIVE  归档目的地根目录（必须可写；用例只写这个目录）
 //
 // 为什么必须门控而不是默认跑：它会真的读 1157 个生产文件、真的往归档目录写 6.8MB 副本，
