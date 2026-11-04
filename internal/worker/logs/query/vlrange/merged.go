@@ -157,7 +157,30 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 	// 历史数据仍带该标签，但不再被任何一侧使用。
 
 	// range 级前缀水位。
-	if (!scoped || rng.ClosedVisibleSeq > 0) && ev.Record.End > rng.ClosedVisibleSeq {
+	//
+	// `cvs=0` 表示「没有封窗信息」，不得解释成「上界为 0」（2026-11-05，第四个同根缺陷）。
+	//
+	// 旧条件是 `(!scoped || rng.ClosedVisibleSeq > 0) && ev.Record.End > rng.ClosedVisibleSeq`——
+	// 那是 selectorQuery 修复**之前**的形状，只改了 LogsQL 侧与单 range 回调，漏了这一处。
+	// 于是 unscoped（`ingest.ensureCatalogPartition` 补建的记录，scoped=false 且 cvs=0）
+	// 进入合并粗筛时每一条行都被丢弃，下游却看到 `Exhausted=true` / `quality=exact`
+	// ⇒ 报 `complete=true`。与前三起事故同一个用户可见症状：整页为空且伪装成「完整无数据」。
+	//
+	// 真机证据（inst:318，2026-11-02，VL v1.52.0 直查）：
+	//
+	//	min(record_end)=5105686  max(record_end)=5219246  count()=1746
+	//	再加 record_end<=0  ⇒  count()=0
+	//
+	// 即：只要把零水位当成零上界，那 1746 条一条都活不下来。
+	//
+	// 三处判据必须逐字等价（这是本文件开头那条「两处必须等价」纪律的最漏网的一处）：
+	//	A. 单 range 行级 client.go `cvs == 0 || ev.Record.End <= cvs`
+	//	B. LogsQL selector client.go `if cvs > 0 { record_end<=cvs }`
+	//	C. 本处——必须与 A/B 同口径。
+	//
+	// scoped 分支的 per-scope 水位在上面（`ev.Record.End > scope.ClosedVisibleSeq`）
+	// 已经独立生效，range 级水位不再需要按 scoped 分流。
+	if rng.ClosedVisibleSeq > 0 && ev.Record.End > rng.ClosedVisibleSeq {
 		return false
 	}
 	return true

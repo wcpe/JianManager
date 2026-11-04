@@ -85,9 +85,48 @@ func TestReview05ProjectionDriftChangesPerSourceSnapshot(t *testing.T) {
 	}
 }
 
+// 零封闭前缀（cvs=0）的语义：**不加上界**，不是「无限读取」。
+//
+// # 这条用例原来锁的是相反的方向（2026-11-05 订正）
+//
+// 原文断言 `require.False(t, rangeMatchesEvent(rng, ev), "零封闭前缀不能代表无限读取")`。
+// 但同一个 rng 喂给 `selectorQuery` 得到的是
+//
+//	(log_source_id:="slow" OR log_source_id:"slow/"*)
+//
+// ——**根本没有 record_end 谓词**，VL 会把行返回给客户端。也就是说旧断言要求
+// 「LogsQL 放行、内存归因丢弃」：粗筛有行、结果为空。那正是本次事故的同源形态，
+// 而且它在合并路径上表现为「整页静默为空 + Exhausted=true + quality=exact」。
+//
+// # 为什么 cvs=0 不是「无限读取」
+//
+// 来源约束仍然生效：命名空间前缀 + 该 range 的 UTC 天窗口（本用例里是
+// inst:slow / 2026-09-22）。cvs 只是「已封水位的记录前缀」，0 = 没有封窗信息，
+// 并不意味着可以越过任何边界——边界是分区本身。
+//
+// 这也是 8324d505（零水位不再当零上界）已定下的口径，单 range 路径与 selector
+// 两侧都是它；本条把合并路径也钉到同一口径上。
 func TestReview05LegacyZeroClosedPrefixIsUnlimited(t *testing.T) {
 	rng := query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: "slow", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 0, Projection: &catalog.PublishedProjection{ProjectionGeneration: "p1"}}
 	ev := review05ScopedEvent(10)
-	t.Logf("legacy ClosedVisibleSeq=0；selector=%s，内存归因匹配=%v", selectorQuery(rng, query.RangeQuery{ClosedVisibleSeq: 0}), rangeMatchesEvent(rng, ev))
-	require.False(t, rangeMatchesEvent(rng, ev), "零封闭前缀不能代表无限读取")
+	sel := selectorQuery(rng, query.RangeQuery{ClosedVisibleSeq: 0})
+	matched := rangeMatchesEvent(rng, ev)
+	t.Logf("legacy ClosedVisibleSeq=0；selector=%s，内存归因匹配=%v", sel, matched)
+
+	// ① 零水位不得渲染成 `record_end:<=0`（否则恒 0 行）。
+	require.NotContains(t, sel, "record_end:<=", "零水位是「无封窗信息」，不是「上界为 0」")
+	// ② 来源约束仍在：只读该命名空间，不是整个实例。
+	require.Contains(t, sel, `log_source_id:="slow"`)
+	// ③ **两条路径必须一致**：selector 放行的行，内存归因也必须放行。
+	//    这是本次故障的根因形式（一处改了另一处没改 → 粗筛有行、结果全丢）。
+	require.Equal(t, true, matched,
+		"selectorQuery 不加上界 ⇒ 内存归因也不得上界，两侧必须等价（否则合并路径静默丢整页）")
+}
+
+// 反向守卫：cvs>0 是真实封窗语义，两侧都不能放宽。
+func TestReview05NonZeroClosedPrefixStillBounds(t *testing.T) {
+	rng := query.AuthoritativeRange{Key: catalog.PartitionKey{StorageNamespace: "slow", UTCDay: "2026-09-22"}, Owner: catalog.OwnerHot, ClosedVisibleSeq: 100, Projection: &catalog.PublishedProjection{ProjectionGeneration: "p1"}}
+	require.Contains(t, selectorQuery(rng, query.RangeQuery{ClosedVisibleSeq: 100}), "record_end:<=100")
+	require.False(t, rangeMatchesEvent(rng, review05ScopedEvent(101)), "越过水位的行不得放行")
+	require.True(t, rangeMatchesEvent(rng, review05ScopedEvent(100)), "恰好等于水位的行必须可见")
 }
