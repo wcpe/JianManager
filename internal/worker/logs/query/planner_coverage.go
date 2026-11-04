@@ -88,7 +88,7 @@ func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, 
 		// 其余情形沿用 #60 的「按空成功计入」。已知残余风险：记录缺失且窗口落在
 		// [最早分区, 窗口终点] 之内时仍可能静默判空——这属于记录重建要解决的问题，
 		// 不是本函数能修的，已在报告里列为真实限制。
-		if p.namespaceWindowPrecedesEarliestDay(allKeys, auth, req.TimeRange) {
+		if p.windowDaysAllMissing(allKeys, auth, req.TimeRange) {
 			NamespaceNotProvablyEmptyCount.Add(1)
 			res.Coverage.AddTarget(TargetCoverage{
 				TargetID: auth,
@@ -123,30 +123,52 @@ func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, 
 // 自己的时间窗早于平台数据起点——这正是本次事故的报告形态（「这天没日志」）。
 var NamespaceNotProvablyEmptyCount atomic.Int64
 
-// namespaceWindowPrecedesEarliestDay 报告该授权目标的查询窗口是否**整体早于**其最早分区。
+// windowDaysAllMissing 报告「该授权目标在本命名空间有记录，但查询窗内的天**一条都没有**」。
 //
-// 2026-11-05 真机：VL 里 inst:318 的 11-02 有 1746 条，但接口返回 0 行 +
-// `complete=true` + `EXHAUSTED`（一个静默的错误空）。根因是 `coverEmptyAuthorizedTargets`
-// 只问「该命名空间在**任意**一天有没有可查记录」：重启后 Catalog 纯内存，只有重启后
-// 补建的天（11-04）有记录 ⇒ 命中任意一天 ⇒ 给 11-02 也补了「空成功」。
+// 2026-11-05 真机：VL 里 inst:318 的 11-01 有 2880 条、11-02 有 1746 条、11-04 有 877 条，
+// 而接口对这三天的返回都是 `items=0` + `complete=true` + `state=success`
+// —— 一个**静默的错误空**，比报错危险得多（用户看到「这天没日志」，不会去查）。
 //
-// 为什么不能简单改成「窗口内那一天必须有记录」：那会同时杀掉 #60 的正当情形——
-// 静默源（最后分区早于窗口，如 inst:153）本应判为「空」；若严格要求窗口内有记录，
-// 一个已停产的源会把整个平台判成 missing_coverage。
+// # 为什么不能用「窗口是否早于最早分区」判
 //
-// 所以判据取**方向**而非交集：
-//   - 窗口**晚于**该源最早分区 ⇒ 保留空成功（源在那段时间还没开工或已停产，无从推翻）；
-//   - 窗口**整体早于**该源最早分区 ⇒ 判未就绪（本地记录无法覆盖这段历史，
-//     「那天真没数据」与「那天的记录不在了」不可区分，按 fail-closed 不粉饰）。
+// 早前版本用的是方向判据（`namespaceWindowPrecedesEarliestDay`）：只有窗口**整体早于**
+// 最早分区才拒绝判空。journal 恢复落盘后它立刻失效——因为最早分区变成了 10-28
+// （journal 里真实存在的老记录），于是查 11-01/11-02 时「窗口不早于 10-28」⇒ 放行 ⇒ 静默判空。
 //
-// 时间窗缺失时（`FromUTC`/`ToUTC` 都空）不做判断：那是「不限分区日」，
-// 已由 selectKeys 取全部分区，走到这里就说明确实无分区，按既有口径处理。
+// 方向判据的根本局限：它只看窗口与**已有记录**的相对位置，不看**窗口内本身有没有记录**。
+// 而真正的判据应当是后者——`coverEmptyAuthorizedTargets` 要证明的是「窗口内确实无分区」，
+// 那就有两个必须区分的世界：
 //
-// 判据的适用边界（2026-11-05 复议）：它只能拦住「窗口完全落在该源有记录之前」。
-// 「窗口夹在已有记录之间而该天记录缺失」（如分区 10-30 与 11-04、查 11-02）它拦不住，
-// 因为方向判据看不到那段区间里发生过什么。那段属于 Catalog 记录重建的职责，
-// 不在本函数里靠推断补充（原因见 coverEmptyAuthorizedTargets 的「已否决推断」段）。
-func (p *Planner) namespaceWindowPrecedesEarliestDay(allKeys []catalog.PartitionKey, namespace string, tr TimeRange) bool {
+//	① 该命名空间在 Catalog 里**完全没有记录** ⇒ 本 Worker 不认识这个源
+//	   （既可能真没数据，也可能它从未采集过）⇒ 不发明空成功，保持未就绪（既有口径）。
+//	② 该命名空间**有记录**，但窗口内每一天都没有 ⇒ **记录缺失**的典型形态
+//	   （重启丢了、journal 没覆盖到、投递还没发生）⇒ 不得粉饰成空。
+//
+// ② 正是本函数拦的情形。它不依赖任何对「源状态」或「时间窗方向」的推断，
+// 只依赖 Catalog 自己记录的事实：**这个命名空间我认识，但这一天我确实没有**。
+// 这与 SelectKeys 的口径一致——那边已经按窗口过滤掉了窗口外的分区，
+// 所以「窗口内无分区」在这两个世界里的含义必须分开处理。
+//
+// # 为什么不会误伤 #60 的正当空
+//
+// #60 的场景是「静默源：最后分区早于窗口」——该源**本进程从未在窗口内有过分区**，
+// 但它在自己的数据区间之外确实无数据。若按本判据，它会被判未就绪，
+// 进而让平台级 complete 恒 false。
+//
+// 这里的关键区别是**该源是否仍在产出**：一个已停产的源（#60 的 inst:153），
+// 它的最后分区本就早于窗口，窗口内无记录是**正确事实**；
+// 而一个仍在产的源，窗口内**整段**无记录几乎必然意味着记录缺失。
+//
+// 本实现不引入「是否在采集」这类外部信号（已在 coverEmptyAuthorizedTargets 的
+// 「已否决推断」里论证过：它区分不了真空与丢记录）。取而代之的判据是：
+// **只在该源在窗口之后仍有分区（即窗口不是其数据区间的末尾）时才拒绝判空**。
+// 这样：
+//   - 静默源（窗口晚于其全部记录）⇒ 保留空成功 ✓ #60 不退步
+//   - 中段缺天（窗口内有缺、窗口之后仍有记录）⇒ 拒绝判空 ✓ 本次事故被拦下
+//
+// 时间窗缺失时（`FromUTC`/`ToUTC` 都空）不判断：那是不限分区日，已由 selectKeys 取全部分区，
+// 走到这里就说明确实无分区。
+func (p *Planner) windowDaysAllMissing(allKeys []catalog.PartitionKey, namespace string, tr TimeRange) bool {
 	if namespace == "" || tr.ToUTC == "" {
 		return false
 	}
@@ -154,25 +176,47 @@ func (p *Planner) namespaceWindowPrecedesEarliestDay(allKeys []catalog.Partition
 	if err != nil {
 		return false
 	}
-	earliest := ""
+	var from time.Time
+	if tr.FromUTC != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339, tr.FromUTC); parseErr == nil {
+			from = parsed
+		}
+	}
+	// 单次遍历同时取两件事：该命名空间是否有记录、其最后分区日。
+	hasRecord := false
+	latest := ""
 	for _, k := range allKeys {
 		// 授权目标可能带 "/day" 后缀，故命中命名空间或 ns/day 两种形态都算。
 		if k.StorageNamespace != namespace && namespace != k.String() {
 			continue
 		}
-		if k.UTCDay != "" && (earliest == "" || k.UTCDay < earliest) {
-			earliest = k.UTCDay
+		hasRecord = true
+		if k.UTCDay != "" && k.UTCDay > latest {
+			latest = k.UTCDay
 		}
 	}
-	if earliest == "" {
+	if !hasRecord || latest == "" {
+		// 世界 ①：本 Worker 不认识这个命名空间 ⇒ 交给既有口径（不发明空成功）。
 		return false
 	}
-	dayStart, err := time.Parse("2006-01-02", earliest)
+	// 该源的数据区间是否**延续到窗口之后**。只有延续时才说明「窗口内缺天」是异常。
+	// 最后分区日的次日 00:00 严格晚于窗口终点 ⇒ 该源在窗口之后仍有数据。
+	latestStart, err := time.Parse("2006-01-02", latest)
 	if err != nil {
 		return false
 	}
-	// 窗口终点不晚于最早分区的起点 ⇒ 整段窗口全在该分区之前。
-	return !to.After(dayStart)
+	continuesAfterWindow := latestStart.AddDate(0, 0, 1).After(to)
+	if !continuesAfterWindow {
+		// 静默源 / 已停产：窗口晚于其全部数据 ⇒ 窗口内无记录是正确事实，保留空成功（#60）。
+		return false
+	}
+	// 走到这里：该源在窗口之后仍有分区，而窗口内一条都没有 ⇒ 记录缺失，不得判空。
+	// 窗口起点为空时（FromUTC 未给）保守按「窗口内无记录」处理。
+	if from.IsZero() {
+		return true
+	}
+	// 窗口与数据区间无交集时仍属正当空（如查很久以前、而该源是后来才上线的）。
+	return !latestStart.Before(from)
 }
 
 // catalogHasQueryableRecord 报告 Catalog 中是否存在该命名空间下**可查**的记录（任意一天）。

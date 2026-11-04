@@ -326,9 +326,13 @@ func TestPlanner_EmptySuccessIgnoresWhetherSourceStillCollects(t *testing.T) {
 //
 // # 这条用例的作用
 //
-// 它不是「期望行为」，而是**把已知缺陷钉住**：记录重建（journal 持久化 + 启动重放）
-// 落地后，本用例应当反过来断言 not_ready 或产出 range，届时必须改这条用例。
-// 谁在查询侧加了新的启发式，只会让这条用例继续绿而问题依旧——所以不要那样做。
+// 2026-11-05 订正（本用例原先锁的是**已知缺陷**）：原断言要求 Success，注释写着
+// 「记录重建（journal 持久化 + 启动重放）落地后，本用例应当反过来断言 not_ready
+// 或产出 range，届时必须改这条用例」——现在就是那个时候。
+//
+// 记录重建只保证「从现在起不再丢」，**捞不回从未写进 journal 的历史天**
+// （生产 journal 只写到 2026-10-30，11-02 从未被写入过）。因此查询侧必须 fail-closed：
+// 不能把「我不知道」粉饰成「那天没有」。
 func TestPlanner_MiddleGapIsKnownSilentEmptyUntilRecordsRebuilt(t *testing.T) {
 	cat := catalog.New(nil)
 	require.NoError(t, cat.Put(queryableRecord(
@@ -343,11 +347,39 @@ func TestPlanner_MiddleGapIsKnownSilentEmptyUntilRecordsRebuilt(t *testing.T) {
 		TimeRange: TimeRange{FromUTC: "2026-11-02T00:00:00Z", ToUTC: "2026-11-03T00:00:00Z"},
 	})
 	require.Nil(t, res.Err)
-	require.Empty(t, res.Ranges, "11-02 无分区 ⇒ 无 range")
+	require.Empty(t, res.Ranges, "11-02 无分区 ⇒ 无 range（不发明指向不存在分区的 range）")
 
 	entry := coverageEntryFor(res.Coverage, "inst:318")
 	require.NotNil(t, entry)
+	// 真机依据（inst:318）：
+	//   2026-11-02  VL=1746 条  ← 有数据，但本进程无该天分区记录
+	require.Equal(t, CoverageNotReady, entry.State,
+		"夹在已有记录之间的缺天不得判空成功：VL 里那天实有数据，静默空会被读成「这天没日志」")
+	require.Contains(t, entry.Reasons, ReasonNoCatalogRecord,
+		"必须给出「无 Catalog 记录」这一真实原因，而不是发明空成功")
+}
+
+// TestPlanner_SilentSourceStillEmptySuccessAfterGapGuard 守住 #60 不退步。
+//
+// 上一版方向判据的问题之一是：任何收紧都可能把「静默源」一并打成未就绪，
+// 于是平台级 complete 恒 false（把 #60 换个方向重演）。
+// 本用例钉住：已停产源（窗口晚于其全部记录）仍必须按空成功计入。
+func TestPlanner_SilentSourceStillEmptySuccessAfterGapGuard(t *testing.T) {
+	cat := catalog.New(nil)
+	// inst:153 的最后分区是 09-27，用户查 10-11 ⇒ 窗口晚于其全部数据（已停产）。
+	require.NoError(t, cat.Put(queryableRecord(
+		catalog.PartitionKey{StorageNamespace: "inst:153", UTCDay: "2026-09-27"}, catalog.OwnerHot, 1, "hot-153")))
+
+	p := NewPlanner(cat, nil)
+	res := p.Plan(PlanRequest{
+		RequestID: "silent-after-gap-guard",
+		TargetIDs: []string{"inst:153"},
+		TimeRange: TimeRange{FromUTC: "2026-10-11T00:00:00Z", ToUTC: "2026-10-12T00:00:00Z"},
+	})
+	require.Nil(t, res.Err)
+	entry := coverageEntryFor(res.Coverage, "inst:153")
+	require.NotNil(t, entry)
 	require.Equal(t, CoverageSuccess, entry.State,
-		"已知缺陷：夹在已有记录之间的缺天仍被判空成功（VL 里那天实有 1746 条）。"+
-			"记录重建落地后本条必须改为断言 not_ready 或产出 range。")
+		"静默源（窗口晚于其全部记录）必须仍按空成功计入；否则 #60 退步，平台级 complete 恒 false")
+	require.True(t, res.Coverage.Complete)
 }
