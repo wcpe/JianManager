@@ -551,6 +551,43 @@ function componentStatusForNode(n: MockNode) {
 }
 
 export const handlers = [
+  /* ===================== 进程日志尾部（平台诊断） ===================== */
+  // `/diagnostics/log` 是日志中心「平台日志」视图的**唯一**数据源（2026-10-29 起：
+  // CP 的 `logs` 表已下线，平台视图改读进程日志文件尾部。见 LogsPage 中
+  //「平台视图（view=platform）的权威来源已改为进程日志文件尾部诊断」一段）。
+  //
+  // 为什么 mock 必须提供它：缺了这个端点时，平台视图永远拿不到数据 ⇒
+  // `logs-virtual` 的 `data-total-count` 恒为 0 ⇒ navigation-benchmark 的
+  //「虚拟化需要 1000+ 条」断言必然超时——那是**mock 缺件**，不是产品缺陷。
+  //
+  // 形状对齐 `web/src/api/nodeDiagnostics.ts` 的 ProcessLogTail：
+  //   content（尾部原文，旧→新）/ truncated / fileBytes / path / note?
+  domainRoute('get', '/diagnostics/log', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const reqLines = Number(new URL(info.request.url).searchParams.get('lines') ?? 500)
+    const lines = Math.max(1, Math.min(5000, Number.isFinite(reqLines) ? reqLines : 500))
+    // 造 1200 行：超过 navigation-benchmark 要求的 1000+ 下限，且能真实触发虚拟化。
+    // 用 slog text 形态（`time=... level=... msg=...`）——前端 inferLineLevel 按行内
+    // `level=` 推级别、inferLineTime 按时间字段排序，两者都靠这个行格式。
+    const total = 1200
+    const start = Math.max(0, total - lines)
+    const rows: string[] = []
+    const base = Date.now() - total * 1500
+    for (let i = start; i < total; i++) {
+      const level = i % 17 === 0 ? 'ERROR' : i % 5 === 0 ? 'WARN' : 'INFO'
+      const ts = new Date(base + i * 1500).toISOString()
+      rows.push(`time=${ts} level=${level} msg="mock platform log line ${i}" source=control_plane`)
+    }
+    return HttpResponse.json({
+      content: rows.join('\n'),
+      truncated: start > 0,
+      fileBytes: total * 96,
+      path: '/var/log/jianmanager/control-plane.log',
+      note: '',
+    })
+  }),
+
   /* ===================== 连通性测试（FR-229） ===================== */
   domainRoute('post', '/diagnostics/http-test', async (info) => {
     const denied = requireAuth(info)

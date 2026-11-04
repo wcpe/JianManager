@@ -31,7 +31,12 @@ test.describe('配置文件管理引擎（FR-031，mock 模式）', () => {
     await page.getByRole('button', { name: '表单', exact: true }).click()
     await expectInputValue(page, 'A Mock Minecraft Server')
     await expectInputValue(page, '20')
-    await expect(page.getByText('valid')).toBeVisible()
+    // 用 testid 定位编辑器自己的校验徽标。
+    //
+    // 不能写成 getByText('valid')：页面上资源列表等处也有相同文案，实测会命中 5 个
+    // 元素 ⇒ Playwright 严格模式报错。这不是超时问题，仅增 timeout 也治不好；
+    // 原写法能过是运气（列表恰好未渲染出那些单元格）。
+    await expect(page.getByTestId('config-validation-badge')).toHaveText('valid')
 
     await page.getByRole('button', { name: '校验', exact: true }).click()
     await expect(page.getByText('跨实例一致性校验通过')).toBeVisible()

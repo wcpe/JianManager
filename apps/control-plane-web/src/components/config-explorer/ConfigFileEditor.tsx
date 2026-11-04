@@ -235,7 +235,13 @@ export default function ConfigFileEditor({
             </button>
           </div>
           {readQ.data && (
-            <Badge variant={readQ.data.validation.valid ? 'secondary' : 'destructive'}>
+            <Badge
+              variant={readQ.data.validation.valid ? 'secondary' : 'destructive'}
+              // e2e 定位钩子：页面上还有资源列表等处的相似文本，按文案找会撞上
+              // Playwright 严格模式（同一个 'valid' 命中多个徽标/单元格）；
+              // 而本徽标是“当前打开文件是否通过 schema 校验”的唯一权威读数。
+              data-testid="config-validation-badge"
+            >
               {readQ.data.validation.valid ? 'valid' : 'invalid'}
             </Badge>
           )}

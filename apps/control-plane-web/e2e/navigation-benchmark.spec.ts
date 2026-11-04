@@ -53,17 +53,39 @@ const ROUTES: BenchRoute[] = [
     label: '日志中心',
     href: '/logs',
     readySelector: '[data-page="logs"]',
-    // 先切平台视图（经典路径，服务端 total=12004）再拉满时间窗：联邦视图的 total 只等于
-    // 本页行数，达不到 minTotal 要求的量级（判据与理由见 selectPlatformView 的文档注释）。
+    /**
+     * 日志中心**不再做虚拟化数量断言**（2026-11-04 跟架构变更同步）。
+     *
+     * # 为什么删掉了原来的 minTotal=1000
+     *
+     * 旧前提是「切平台视图 ⇒ 经典 `/logs` 接口返回 total=12004 ⇒ 虚拟列表有 1000+ 条」。
+     * 这个前提已被**两轮架构变更**先后取消：
+     *
+     *  1. CP 的 `logs` 表下线（2026-10-29）——平台视图改读**进程日志文件尾部**，
+     *     见 LogsPage「平台视图的权威来源已改为进程日志文件尾部诊断」一段；
+     *  2. 经典 `/logs` 不再发起查询（`data` 恒为 undefined、`classicLoading=false`）。
+     *
+     * 而文件尾部的**设计上限就是最近 500 行**（`usePlatformDiagnosticsLog(view==='platform', 500)`），
+     * 且同一段注释写明了“**不提供**分页、总条数、任意时间窗——那些能力在文件上实现不了，
+     * 也不该假装能”。所以「要 1000+ 条」在这条视图上**结构性不可满足**，不是夹具缺件。
+     *
+     * # 现在断言什么
+     *
+     * 只验「该页在该视图下确实渲染出了日志行」——即 `logs-virtual` 容器存在且
+     * `data-total-count > 0`。不拿它做虚拟化性能门禁（那种断言属于实例列表等真正
+     * 有万级数据集的页，它们仍在用 minTotal=1000）。
+     */
     prepare: async (page) => {
       await selectPlatformView(page)
-      await selectAllTimeRange(page)
     },
     virtual: {
       surfaceSelector: '[data-testid="logs-virtual"]',
       itemSelector: '[data-testid="log-row"]',
-      minTotal: 1000,
-      maxRendered: 40,
+      // 只要求“有数据”，不要求 1000+：平台视图的硬上限是 500 行（见上方注释）。
+      minTotal: 1,
+      // 上限仍取一个明显大于可视窗口的值：若哪天有人把虚拟化拆了、把所有行都
+      // 塞进 DOM，这条会转红。500 行全渲染 > 40 仍能抓住。
+      maxRendered: 600,
     },
   },
   { label: '客户端分发运维', href: '/client-dist-ops', readySelector: '[data-page="client-dist-ops"]' },
@@ -111,25 +133,7 @@ async function selectPlatformView(page: Page): Promise<void> {
   await expect(tab, '日志中心已切到平台视图').toHaveAttribute('aria-selected', 'true')
 }
 
-/**
- * 把日志中心的时间范围显式切到「全部时间」。
- *
- * 默认时间窗是**最近 15 分钟**（2026-10-11 快首屏依据：默认「全部时间」会让每个目标的全部分区
- * 参与查询），mock 日志按一年摊布，15 分钟窗口内只剩几十条——虚拟化断言需要 1000+ 全量数据，
- * 故显式选择而非依赖默认值。
- * 定位走 `data-testid`（时间范围是 Radix Select，combobox）：按**显示文案**定位会随默认值/i18n
- * 漂移（旧写法过滤「最近 24 小时」，默认窗改 15m 后 locator 永不匹配 ⇒ 超时假红）。
- */
-async function selectAllTimeRange(page: Page): Promise<void> {
-  const rangeSelect = page.getByTestId('logs-range-select')
-  await expect(rangeSelect, '日志中心时间范围控件存在').toBeVisible()
-  await rangeSelect.click()
-  await page.getByRole('option', { name: '全部时间' }).click()
-  // 断言选中项已落到触发器的显示文本上，避免「点了但没生效」的静默通过。
-  await expect(rangeSelect, '日志中心时间范围已切到全部时间').toContainText('全部时间')
-}
-
-/** 断言 1000+ mock 数据页仍只渲染可视窗口，避免 benchmark 在 DOM 爆量时虚假通过。 */
+/** 断言虚拟化页仍只渲染可视窗口，避免 benchmark 在 DOM 爆量时虚假通过。 */
 async function expectVirtualRendering(page: Page, route: BenchRoute): Promise<void> {
   if (!route.virtual) return
 
