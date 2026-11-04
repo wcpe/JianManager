@@ -158,47 +158,72 @@ func TestSoakWindow60Sources(t *testing.T) {
 		time.Sleep(interval)
 	}
 
-	// 判据（2026-11-04 重写）：**堆随 WAL 积压涨不算泄漏**。
+	// 判据（2026-11-04 重写，同日再修正一次）：**堆随 WAL 积压涨不算泄漏**。
 	//
 	// # 为什么不能直接拿「后 1/3 / 前 1/3 ≤ 1.5」当判据
 	//
 	// WAL 是**有界缓存**：只要后台投递跑得比写入慢一点，积压就会震荡上升，堆跟着涨——
-	// 这是设计行为，不是泄漏。拿裸堆做比值判据会把「积压震荡」全部误报成慢泄漏：
-	// 修好夹具后的 900 轮实测，裸堆比值 2.02（判红），但同期的量是：
+	// 这是设计行为，不是泄漏。拿裸堆做比值判据会把「积压震荡」全部误报成慢泄漏。
 	//
-	//   前 1/3  heap=8.9 MiB  WAL=0.63 MiB       后 1/3  heap=18.0 MiB  WAL=1.70 MiB
-	//   回归 heap = 4.58 × WAL_MiB + 8.01       残差 std=2.89 MiB（即 GC 噪声）
-	//   单位积压的堆成本: 前 14.1 → 后 10.6（**在下降**）
+	// # 为什么又不能只留「单位积压成本」（同日实跑后发现的自身缺陷）
 	//
-	// 也就是说：堆增长 100% 可由 WAL 积压解释，且每字节积压的内存成本并未变差。
+	// 本窗是 1 行/s/源 的低速长稳（对齐长时间作业的真实节奏），WAL 积压一直只有
+	// **0.06–0.09 MiB**（300 轮也才 1 条/源左右）。这个量级下「单位积压成本」的
+	// 分母近乎噪声，无论怎么算都在几十~几百之间跳。
 	//
-	// ⇒ 判据改成两条，必须**同时**成立才算通过：
-	//   ① 每 MiB WAL 积压的堆成本不得上升（>1.5 倍判泄漏）；
-	//   ② WAL 积压本身必须受限（不得撞到 60 源 × 2000 条 = 120000 条的跌顶）。
-	// 任一条破就红：①破 = 真有常驻增长；②破 = 投递跟不上，那是吞吐问题而不是内存问题。
+	// 更糟的是：如果给分母加一个下限 floor，那两者就变成同一个常数 floor，
+	// 比值退化成裸堆比值（实测：加 floor=0.1 时两边都是 X/0.1，比值与裸堆完全相同）——
+	// 这个指标就完全失去诊断价值了。
+	//
+	// ⇒ 两个量必须**分别**验，各自在自己的量级上有意义：
+	//   ① 裸堆形状：后 1/3 / 前 1/3 ≤ 1.5（低速窗里积压几乎不涨，裸堆就该稳；
+	//      高速窗里它可以超，那时由②③负责解释）；
+	//   ② 单位积压成本：仅在积压足够大（≥ minWALMiB）时才计算与断言，否则报 n/a；
+	//   ③ 积压不得撞跌顶：撞顶说明投递长期跟不上（吞吐问题，非内存问题）。
+	//
+	// 历史读数（用于校准阈值）：
+	//   - 900 轮加速窗（20ms 轮间隔）：堆 9.6→14.3（1.49），WAL 0.74→1.31，成本 13.0→10.9（0.84）
+	//   - 1800 轮 × 1s 低速窗（本窗）：堆 5.7→6.1（1.08），WAL 0.07→0.06（几乎不积压）
 	third := len(rssSamples) / 3
 	require.Greater(t, third, 0, "轮数太少，无法分段比较")
 	head, tail := rssSamples[:third], rssSamples[len(rssSamples)-third:]
 	headWAL, tailWAL := walSamples[:third], walSamples[len(walSamples)-third:]
 	headHeap, tailHeap := avg(head), avg(tail)
 	headW, tailW := avg(headWAL), avg(tailWAL)
-	// 单位积压成本（字节/字节）。WAL 积压近零时比值会放大，故分母加一个最小积压下限（0.1 MiB）。
-	const minWALMiB = 0.1
-	headPer, tailPer := headHeap/max(headW, minWALMiB), tailHeap/max(tailW, minWALMiB)
-	t.Logf("堆前1/3=%.1f MiB  后1/3=%.1f MiB  比值=%.2f（仅供参考，不作判据）",
-		headHeap, tailHeap, tailHeap/headHeap)
-	t.Logf("WAL前1/3=%.2f MiB  后1/3=%.2f MiB", headW, tailW)
-	t.Logf("单位积压堆成本：前=%.1f MiB/MiB  后=%.1f MiB/MiB  比值=%.2f", headPer, tailPer, tailPer/headPer)
+	t.Logf("堆前1/3=%.1f MiB  后1/3=%.1f MiB  比值=%.2f", headHeap, tailHeap, tailHeap/headHeap)
+	t.Logf("WAL前1/3=%.3f MiB  后1/3=%.3f MiB", headW, tailW)
+
+	// ② 单位积压成本：只在积压足够大时才有意义。
+	// 门槛 0.3 MiB：低于这个量级时积压本身是噪声，相除只会放大噪声。
+	const minWALMiB = 0.3
+	if headW >= minWALMiB && tailW >= minWALMiB {
+		headPer, tailPer := headHeap/headW, tailHeap/tailW
+		t.Logf("单位积压堆成本：前=%.1f MiB/MiB  后=%.1f MiB/MiB  比值=%.2f", headPer, tailPer, tailPer/headPer)
+		require.LessOrEqual(t, tailPer, headPer*1.5,
+			"每 MiB WAL 积压的堆成本不得上升 1.5 倍（%.1f → %.1f MiB/MiB）", headPer, tailPer)
+	} else {
+		t.Logf("单位积压堆成本：n/a（积压两侧均需 ≥%.1f MiB，实测前=%.3f 后=%.3f；"+
+			"本窗是低速窗，积压几乎不涨，该项不适用）", minWALMiB, headW, tailW)
+	}
 	t.Logf("poll 延迟 p50≈%.0f ms  max=%.0f ms",
 		median(latencySamples), maxOf(latencySamples))
 	t.Logf("总运行=%s  总轮数=%d  源数=%d", time.Since(started).Round(time.Second), rounds, sources)
 
-	require.LessOrEqual(t, tailPer, headPer*1.5,
-		"每 MiB WAL 积压的堆成本不得上升 1.5 倍（%.1f → %.1f MiB/MiB）；堆涨不能完全由积压解释 ⇒ 存在常驻增长",
-		headPer, tailPer)
-	// 跌顶上界：单源 2000 条（acquire.defaultWALMaxEntries）× 源数。撞顶意味着投递长期跟不上。
-	// 单源默认两条闸：2000 条（acquire.defaultWALMaxEntries）与 16 MiB（defaultWALMaxBytes）。
-	// 这里只验字节闸（条目数没样本）；跑满全窗后仍低于 60×16MiB 才说明投递能跟上。
+	// ① 裸堆形状：低速窗里积压几乎不涨，堆就该稳；高速窗可放宽到只靠②解释。
+	// 用「积压是否真的在涨」来选门限，避免拿一个阈值硬套两种节奏。
+	walGrew := tailW > headW*2 && tailW > 0.1
+	budget := 1.5
+	if walGrew {
+		budget = 3.0
+		t.Logf("积压明显在涨（%.2f → %.2f MiB）⇒ 裸堆门限放宽到 %.1f（由积压解释）", headW, tailW, budget)
+	}
+	require.LessOrEqual(t, tailHeap, headHeap*budget,
+		"堆增长超预算（%.1f → %.1f MiB，门限 %.1f）。积压几乎未涨时这只能意味着常驻增长",
+		headHeap, tailHeap, budget)
+
+	// ③ 跌顶上界：单源两条闸——2000 条（acquire.defaultWALMaxEntries）与 16 MiB
+	// （defaultWALMaxBytes）。这里只验字节闸（条目数没样本）；跑满全窗后仍低于
+	// 60×16MiB 才说明投递能跟上。
 	require.Less(t, walSamples[len(walSamples)-1], 16.0*float64(sources),
 		"WAL 积压（%.1f MiB）不得撞字节跌顶（%.0f MiB）——撞顶说明投递长期跟不上，那是吞吐问题",
 		walSamples[len(walSamples)-1], 16.0*float64(sources))
