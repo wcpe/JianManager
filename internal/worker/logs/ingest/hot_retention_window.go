@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/utcday"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
@@ -54,18 +54,14 @@ func hotRetentionBoundary(now time.Time, retention time.Duration) time.Time {
 //   - 只有当该天**整天**（含最后一纳秒）都早于边界时才判 true；**跨越边界的那一天**
 //     （部分数据点仍落在窗口内）一律按可发布处理，不得误伤。
 //
-// 为什么用「含最后一纳秒的日末」而不是「次日零点」：`utcDayBounds` 给出的日末是
-// `次日零点 - 1ns`，对它做 `Before(boundary)` 恰好等价于「次日零点 <= 边界」——
-// 而天区间是左闭右开，边界之后的数据点才可能保留，故这个口径既严格又不多滤一天。
+// 日末口径已收口到 `utcday.WholeDayBefore`：它用「日末 = 次日零点 - 1ns」再做
+// `dayEnd.Before(boundary)`，恰好等价于「次日零点 <= 边界」，而天区间是左闭右开
+// ⇒ 既严格又不多滤一天。
 func hotRetentionDayBeyondWindow(utcDay string, now time.Time, retention time.Duration) bool {
 	if retention <= 0 || utcDay == "" {
 		return false
 	}
-	_, dayEnd, ok := utcDayBounds(utcDay)
-	if !ok {
-		return false
-	}
-	return dayEnd.Before(hotRetentionBoundary(now, retention))
+	return utcday.WholeDayBefore(utcDay, hotRetentionBoundary(now, retention))
 }
 
 // beyondHotRetention 是 `hotRetentionDayBeyondWindow` 在 Manager 上的绑定形态
@@ -615,9 +611,7 @@ const (
 )
 
 // sortUTCDays 对 UTC 日字符串（YYYY-MM-DD）排序后返回新切片（不改入参）。
-// 定长 ISO 格式的字典序即时间序，直接 sort.Strings 即可。
+// 定长 ISO 格式的字典序即时间序，直接 sort.Strings 即可。实现已收口到 `utcday.Sorted`。
 func sortUTCDays(days []string) []string {
-	out := append([]string(nil), days...)
-	sort.Strings(out)
-	return out
+	return utcday.Sorted(days)
 }

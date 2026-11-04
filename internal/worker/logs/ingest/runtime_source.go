@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/utcday"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
@@ -772,47 +772,19 @@ func (m *Manager) deliverCtx(ctx context.Context, source SourceConfig, events []
 
 // eventUTCDays 返回该批事件涉及的**所有** UTC 日（升序去重）。
 //
-// 为什么需要它：Catalog 分区键是 (namespace, utcDay)，查询侧 `Planner.selectKeys`
-// 按时间范围过滤分区键。若补建记录时沿用源级 `source.UTCDay`（= 源登记当天），
-// 跨天后记录会落在错误的天上 ⇒ 查询当天时选不到 ⇒ 日志页空。
-//
-// 为什么取「所有」而不是第一条：一批可能跨天——长时间没 poll 会一次读回多天，
-// 恢复/重放路径也可能一次带上跨天区间。只补第一天会让其余天仍然查不到。
-//
-// 时间来源用 `EventTimeUTC`（规范化之后必有值；`normalizeCanonicalEvent` 保证），
-// 不用 `IngestTimeUTC`——后者是「什么时候写进来的」，与分区归属无关。
+// 实现已收口到 `utcday.EventDays`：**取「所有」而不是第一条** 的理由（一批可能跨天，
+// 只补第一天会让其余天仍然查不到）写在那里；只读 `EventTimeUTC` 而不看 `IngestTimeUTC`
+// 的理由也在那里。
 func eventUTCDays(events []logtypes.Event) []string {
-	seen := make(map[string]struct{}, 2)
-	for _, ev := range events {
-		day := utcDayOfEventTime(ev.EventTimeUTC)
-		if day != "" {
-			seen[day] = struct{}{}
-		}
-	}
-	if len(seen) == 0 {
-		return nil
-	}
-	days := make([]string, 0, len(seen))
-	for day := range seen {
-		days = append(days, day)
-	}
-	sort.Strings(days)
-	return days
+	return utcday.EventDays(events)
 }
 
 // utcDayOfEventTime 把 RFC3339 事件时间转成 `2006-01-02`；解析失败返回空串。
 //
-// 解析失败**不猜**：调用方会因此跳过补建（宁可晚一拍可见，也不写一条错天的记录——
-// 错天的记录会让查询选不中，比没有记录更难排查）。
+// 实现已收口到 `utcday.OfEventTime`。解析失败**不猜**：调用方会因此跳过补建
+// （宁可晚一拍可见，也不写一条错天的记录——错天的记录会让查询选不中，比没有记录更难排查）。
 func utcDayOfEventTime(eventTimeUTC string) string {
-	if eventTimeUTC == "" {
-		return ""
-	}
-	ts, err := time.Parse(time.RFC3339Nano, eventTimeUTC)
-	if err != nil {
-		return ""
-	}
-	return ts.UTC().Format("2006-01-02")
+	return utcday.OfEventTime(eventTimeUTC)
 }
 
 // ensureCatalogPartition 保证「本批数据写进 VL 之后，Catalog 里有对应的分区记录」。

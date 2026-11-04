@@ -25,6 +25,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
+	"github.com/wcpe/JianManager/internal/worker/logs/utcday"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
@@ -264,25 +265,21 @@ func projectionPayload(events []logtypes.Event, generation string) ([]byte, erro
 	return []byte(b.String()), nil
 }
 
-// eventUTCDay 解析事件所属 UTC 日，与 normalizeCanonicalEvent 的时间策略一致：
-// 优先事件语义时间，缺失/不可解析时回退 ingest 时间，再回退源配置的 UTCDay。
+// eventUTCDay 解析事件所属 UTC 日。
 //
-// 为什么必须回退而不是报错：真实日志行可能没有可解析的语义时间（解析失败或非标准格式）。
-// 若此处直接报错，投递/投影路径会失败 → 受管恢复责任无法转移 → reclaim 永不推进 → WAL 保留
-// 全部事件（真机 64 源实测：Worker RSS 涨到 2GiB、state 文件 285MB）。事件时间回退是既有契约行为。
+// 语义与回退顺序（`EventTimeUTC` → `IngestTimeUTC` → 源配置的 `UTCDay`）
+// 已收口到 `utcday.EventDay`：那是全仓唯一的归天实现，三个已修的生产缺陷
+// （零水位当零上界、Catalog 记录建在源登记日、接收时间冻结）都属于那一族问题。
+//
+// 本函数保留为薄封装：ingest 内有 10 处调用点都传 `SourceConfig`，
+// 改成直接调 utcday 会带来 10 处参数拆包、收益为零。
+//
+// 为什么必须回退而不是报错（原始说明）：真实日志行可能没有可解析的语义时间
+// （解析失败或非标准格式）。若此处直接报错，投递/投影路径会失败 → 受管恢复责任
+// 无法转移 → reclaim 永不推进 → WAL 保留全部事件（真机 64 源实测：Worker RSS
+// 涨到 2GiB、state 文件 285MB）。事件时间回退是既有契约行为。
 func eventUTCDay(source SourceConfig, event logtypes.Event) (string, error) {
-	for _, raw := range []string{event.EventTimeUTC, event.IngestTimeUTC} {
-		if raw == "" {
-			continue
-		}
-		if when, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-			return when.UTC().Format("2006-01-02"), nil
-		}
-	}
-	if source.UTCDay != "" {
-		return source.UTCDay, nil
-	}
-	return "", fmt.Errorf("ingest: event %s has no usable event/ingest time or partition day", event.EventID)
+	return utcday.EventDay(event, source.UTCDay)
 }
 
 // canonicalEventTime 解析事件的规范时间：优先语义时间 event_time，缺失/不可解析时回退 ingest 时间。
@@ -1127,14 +1124,12 @@ func errText(err error) string {
 	return err.Error()
 }
 
-// utcDayBounds 返回 "2006-01-02" 形式的 UTC 日的闭区间 [起, 止]。
-// 格式不符时返回 ok=false，调用方保持原行为（向后兼容）。
+// utcDayBounds 返回 "2006-01-02" 形式的 UTC 日的闭区间 [起, 止]（止 = 次日零点 - 1ns）。
+//
+// 归天语义已收口到 `utcday.Bounds`（全仓唯一天界实现）；本薄封装只是为了让
+// ingest 内 6 处调用点不必改名。
 func utcDayBounds(utcDay string) (time.Time, time.Time, bool) {
-	day, err := time.Parse("2006-01-02", utcDay)
-	if err != nil {
-		return time.Time{}, time.Time{}, false
-	}
-	return day, day.Add(24*time.Hour - time.Nanosecond), true
+	return utcday.Bounds(utcDay)
 }
 
 // sameSourceConfig 判定两次登记是否属于同一份源配置。
@@ -1475,14 +1470,9 @@ func (m *Manager) verifyProjectionOnceWithClient(ctx context.Context, client *vl
 // deliveryConfirmedSegPrefix 是「投递确认补段」的段名前缀（#61-Z-a）：账本里可一眼认出这类段的来历。
 const deliveryConfirmedSegPrefix = "delivery-confirmed-"
 
-// parseEventTimeUTC 解析事件语义时间（与 eventUTCDay 的时间策略一致：RFC3339Nano）。
+// parseEventTimeUTC 解析事件语义时间（RFC3339Nano，归一到 UTC）。
+//
+// 实现已收口到 `utcday.Parse`：全仓不允许多份"解析事件时间"的实现各自容错。
 func parseEventTimeUTC(raw string) (time.Time, bool) {
-	if strings.TrimSpace(raw) == "" {
-		return time.Time{}, false
-	}
-	moment, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return moment.UTC(), true
+	return utcday.Parse(raw)
 }
