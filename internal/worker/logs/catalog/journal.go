@@ -169,7 +169,29 @@ func NewJSONLFileStore(path string) (*JSONLFileStore, error) {
 }
 
 // AppendEntry 追加一行 JSON。
+//
+// 每次调用都是「open + write + Sync + close」——在机械盘上单条写入的代价几乎全在
+// Sync 的寻道。因此**攒批场景应改用 `AppendEntries`**（见 `BatchedStore`）：
+// 它把 N 条合并成一次 open + 一次 Sync。
 func (s *JSONLFileStore) AppendEntry(entry JournalEntry) error {
+	return s.AppendEntries([]JournalEntry{entry})
+}
+
+// AppendEntries 一次 open + 一次 Sync 追加**多条**（BatchedStore 的批量落盘入口）。
+//
+// 语义与逐条调用 `AppendEntry` 等价（同样的行格式、同样的顺序），差别只是 I/O 次数：
+// N 条从 N 次 open/N 次 Sync 降为 1 次。这正是把 2026-10-30 那个「每批投递都要付的
+// 寻道开销」真正摊薄的地方。
+//
+// 空入参直接返回 nil（不碰盘）。
+//
+// 可用性是**全有或全无**的近似：单次 write 失败则整批报错，而已写出的前缀留在文件里
+// ——行的 JSON 自描述，重放时逐行解析，前缀完整即可用；只有**最后一行**可能被截断
+// （见 `LoadEntries` 对截断尾巴的容忍）。这正是追加日志的正常形态，不需要额外事务。
+func (s *JSONLFileStore) AppendEntries(entries []JournalEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -177,20 +199,40 @@ func (s *JSONLFileStore) AppendEntry(entry JournalEntry) error {
 		return fmt.Errorf("catalog: open journal file: %w", err)
 	}
 	defer f.Close()
-	b, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("catalog: marshal journal entry: %w", err)
+	buf := make([]byte, 0, 512*len(entries))
+	for _, entry := range entries {
+		b, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			// 先不动盘：一条也无法序列化就整批放弃，避免写出半个批次。
+			return fmt.Errorf("catalog: marshal journal entry: %w", marshalErr)
+		}
+		buf = append(buf, b...)
+		buf = append(buf, '\n')
 	}
-	if _, err := f.Write(append(b, '\n')); err != nil {
-		return fmt.Errorf("catalog: write journal entry: %w", err)
+	if _, err := f.Write(buf); err != nil {
+		return fmt.Errorf("catalog: write journal entries: %w", err)
 	}
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("catalog: sync journal entry: %w", err)
+		return fmt.Errorf("catalog: sync journal entries: %w", err)
 	}
 	return nil
 }
 
 // LoadEntries 读取全部 journal 项。
+//
+// ## 容忍**末行截断**，其余损坏一律报错（2026-11-05）
+//
+// 追加日志在崩溃/断电时天然会留下**写了一半的末行**（write 返回之前进程死了）。
+// 旧实现逐行 `json.Unmarshal` 并对**任何**解码失败直接返回错误 ⇒ 一旦启用文件
+// journal，一次崩溃就会让**下次启动直接失败**（`NewJournalWithStore` 把错误上抛，
+// 装配层只能拒启）。这条在纯内存形态下永远不会触发，所以一直没暴露，但它是
+// 「重新启用持久化」的必经门槛。
+//
+// 判据（严格区分两种尾巴）：
+//   - **末行**解码失败 ⇒ 视为崩溃残留，跳过并 WARN（前缀完整可用，这正是追加日志的
+//     设计语义：已 Sync 过的行一定是完整行）；
+//   - **非末行**解码失败 ⇒ 真损坏（中间出现坏行意味着文件被改写/被别的写者踩过）
+//     ⇒ 仍然报错，判据不放宽。
 func (s *JSONLFileStore) LoadEntries() ([]JournalEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -207,19 +249,35 @@ func (s *JSONLFileStore) LoadEntries() ([]JournalEntry, error) {
 	// journal 单行不应巨大；放大 buffer 防御异常 detail。
 	buf := make([]byte, 0, 64*1024)
 	sc.Buffer(buf, 1024*1024)
+	// 记录上一条坏行的行号；只有当坏行是**最后一条**时才容忍。
+	// 做法：先把行读进内存列表（行数=1217 量级，与既有全量重放同档），
+	// 这样能确定「是否末行」而不用两次扫盘。
+	var lines [][]byte
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
 		}
-		var e JournalEntry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("catalog: decode journal line: %w", err)
-		}
-		out = append(out, e)
+		// Scanner 复用底层数组，必须拷贝。
+		dup := make([]byte, len(line))
+		copy(dup, line)
+		lines = append(lines, dup)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("catalog: scan journal file: %w", err)
+	}
+	for i, line := range lines {
+		var e JournalEntry
+		if decodeErr := json.Unmarshal(line, &e); decodeErr != nil {
+			if i == len(lines)-1 {
+				// 崩溃残留的末行：跳过它，前缀照常重放。
+				slog.Warn("journal 末行不完整（崩溃残留），已跳过；前缀照常重放",
+					"path", s.path, "line", i+1, "bytes", len(line), "error", decodeErr.Error())
+				break
+			}
+			return nil, fmt.Errorf("catalog: decode journal line %d: %w", i+1, decodeErr)
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
