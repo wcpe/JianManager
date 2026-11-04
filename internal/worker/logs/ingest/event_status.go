@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -464,6 +465,21 @@ func ExportEventStatus(root string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// 索引库已在 2026-10-30 改为纯内存（`stateindex.OpenInMemory`，机械盘不落盘裁定），
+	// 磁盘上不再有 `var/log/ingest.index.db`。因此本命令的离线形态**必然读不到索引**：
+	// 进程运行时库只活在该进程内存里（外部不可读），停机后什么都不剩。
+	//
+	// 这里给出明确说明而不是把 os.Stat 的 ENOENT 原样抛给运维——后者看起来像
+	// 「文件被误删/路径写错」，而真相是「这个架构下根本就没有这个文件」。
+	// 两者会导向完全不同的排查方向，这正是本函数存在的意义。
+	if _, statErr := os.Stat(eventStatusIndexPath(root)); statErr != nil {
+		return fmt.Errorf("ingest: 索引库不可读——事件级状态离线视图不可用。原因不是文件被误删，"+
+			"而是采集索引已改为**纯内存**（2026-10-30 机械盘不落盘裁定），"+
+			"磁盘上本就不存在 %s。"+
+			"该视图只能从**运行中的 Worker** 取（`Manager.SourceEventStatus`，经 gRPC 暴露）；"+
+			"当前唯一跨重启存活的采集侧状态是 var/log/ingest.cursor（每源一行位置）",
+			eventStatusIndexPath(root))
+	}
 	store, err := stateindex.OpenReadOnly(eventStatusIndexPath(root))
 	if err != nil {
 		return err
@@ -617,6 +633,13 @@ func parseEventStatusArgs(args []string) (eventStatusArgs, error) {
 			out.at = strings.TrimSpace(v)
 		case strings.HasPrefix(arg, "--at="):
 			out.at = strings.TrimSpace(strings.TrimPrefix(arg, "--at="))
+		case arg == "--data-dir":
+			// 由 worker 的 main 解析并用于定位数据根，本函数不消费它的取值。
+			if _, err := takeValue(arg, "data-dir", "", false, &i); err != nil {
+				return out, err
+			}
+		case strings.HasPrefix(arg, "--data-dir="):
+			// 同上：值已在 main 里用过，这里只需跳过。
 		default:
 			return out, fmt.Errorf("ingest: 未知参数 %q（支持 --source/--from/--to/--at，等号或空格分隔）", arg)
 		}

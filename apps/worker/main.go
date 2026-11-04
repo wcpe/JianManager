@@ -1712,8 +1712,14 @@ func runWorker() {
 	if logArchivePurge != nil {
 		purgeSource = logArchivePurge
 	}
+	// 索引库 SQL 慢查询读数（FR-485）：同样先判 nil 再作接口实参，避开「带类型的 nil」陷阱。
+	// logIngest 为 nil（采集未启用）时三条序列输出 0，抓取侧无需分支。
+	var indexSQLSource retention.IndexSQLSource
+	if logIngest != nil {
+		indexSQLSource = logIngest
+	}
 	wsMux.HandleFunc("/metrics", combineMetrics(
-		retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource),
+		retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource, indexSQLSource),
 		logIngest,
 		spoolMetricsSource,
 	))

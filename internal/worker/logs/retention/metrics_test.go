@@ -62,7 +62,7 @@ func scrapeMetrics(t *testing.T, d *Driver) (*httptest.ResponseRecorder, exposit
 func scrapeMetricsWithPrune(t *testing.T, d *Driver, prune EventStorePruneSource) (*httptest.ResponseRecorder, exposition) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	MetricsHandler(d, prune, nil)(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	MetricsHandler(d, prune, nil, nil)(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics 必须 200，得到 %d", rec.Code)
@@ -200,6 +200,10 @@ func TestMetricsHandlerNilDriverEmitsZeros(t *testing.T) {
 		"jm_log_retention_archive_purge_failed_total",
 		"jm_log_retention_archive_purge_rolled_back_total",
 		"jm_log_retention_archive_purge_last_run_timestamp_seconds",
+		// 索引库 SQL 慢查询（FR-485）：未装配时同样必须输出 0 而非缺序列。
+		"jm_log_index_slow_queries_total",
+		"jm_log_index_slow_query_max_seconds",
+		"jm_log_index_slow_query_last_timestamp_seconds",
 	}
 	if len(ex.value) != len(wantNames) {
 		t.Errorf("应有 %d 个序列，得到 %d（%v）", len(wantNames), len(ex.value), ex.order)
@@ -340,7 +344,7 @@ func TestMetricsHandlerReportsLastErrorPresence(t *testing.T) {
 func TestMetricsHandlerConcurrentScrapeDuringStep(t *testing.T) {
 	const rounds = 50
 	d := NewDriver(enabledPolicy(), &fakeLister{parts: metricsFixture()}, metricsNoopMover(), nil)
-	handler := MetricsHandler(d, nil, nil)
+	handler := MetricsHandler(d, nil, nil, nil)
 
 	var wg sync.WaitGroup
 	stepDone := make(chan struct{})
@@ -494,7 +498,7 @@ func TestMetricsHandlerEventStorePruneDisabled(t *testing.T) {
 func scrapeMetricsWithPurge(t *testing.T, purge ArchivePurgeSource) exposition {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	MetricsHandler(nil, nil, purge)(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	MetricsHandler(nil, nil, purge, nil)(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("/metrics 必须 200，得到 %d", rec.Code)
 	}

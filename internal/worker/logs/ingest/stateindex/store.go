@@ -367,6 +367,18 @@ type Store struct {
 	ckptMoved           atomic.Int64 // 最近一次已拷页数
 	ckptLastAt          atomic.Int64 // 最近一次尝试时刻（unix nano；0=从未）
 	ckptTruncate        atomic.Int64 // 走"受控 TRUNCATE"点的次数
+	// SQL 慢查询计数（FR-485 的最后一项缺口，2026-11-04 补）。
+	//
+	// 为什么必须有：索引库改纯内存后，SQL 延迟不再受机械盘影响，但**长事务/大批次**
+	// 仍会让单条语句爬到百毫秒级，进而拖住采集轮（persist 在 m.mu 之外但占连接）。
+	// 没有这个读数时，现场只能看到「采集卡了」，无法定位到「是某条 SQL 慢」。
+	//
+	// 口径：单条语句墙钟 ≥ slowQueryThreshold 即计数并留痕（**按语句级，不按整次 Apply**——
+	// Apply 慢可能是语句多，而语句慢才是真问题）。只统计写路径与主要读路径的 SQL，
+	// 不包 PRAGMA 与 DDL（那些是启动期一次性动作，慢不构成持续风险）。
+	slowQueries     atomic.Int64 // 累计慢语句条数
+	slowQueryMaxNs  atomic.Int64 // 观测到的最大单条耗时（纳秒）
+	slowQueryLastAt atomic.Int64 // 最近一次慢语句时刻（unix nano；0=从未）
 	// #67-B：受控截断**默认关闭**（(c)）；开关与残余门一起才允许截断 ✓。
 	controlledTruncate bool
 	// readersInFlight 指向**该库路径上**的在飞只读句柄计数（M1，2026-10-12 修复）。
@@ -985,7 +997,9 @@ func (s *Store) load(ctx context.Context) (State, error) {
 	for index := range specs {
 		spec := specs[index]
 		columns := strings.Join(loadColumns[index], ", ")
+		done := s.observeSQL("select:" + spec.name)
 		rows, err := tx.QueryContext(ctx, "SELECT "+columns+" FROM "+spec.name+" ORDER BY "+spec.orderBy)
+		done()
 		if err != nil {
 			return State{}, fmt.Errorf("stateindex: 读取 %s 失败: %w", spec.name, err)
 		}
@@ -1664,7 +1678,9 @@ func (s *Store) applyTableDeletes(ctx context.Context, conn *sql.Conn, spec tabl
 		if err != nil {
 			return err
 		}
+		done := s.observeSQL("delete:" + spec.name)
 		result, err := conn.ExecContext(ctx, statement, args...)
+		done()
 		if err != nil {
 			return fmt.Errorf("stateindex: 批量删除 %s 旧行失败: %w", spec.name, err)
 		}
@@ -1734,7 +1750,9 @@ func (s *Store) applyTableWrites(ctx context.Context, conn *sql.Conn, spec table
 			if err != nil {
 				return err
 			}
+			done := s.observeSQL("upsert1:" + spec.name)
 			result, err := conn.ExecContext(ctx, spec.upsert, values...)
+			done()
 			if err != nil {
 				return fmt.Errorf("stateindex: 写入 %s 失败: %w", spec.name, err)
 			}
@@ -1756,7 +1774,9 @@ func (s *Store) applyTableWrites(ctx context.Context, conn *sql.Conn, spec table
 		if err != nil {
 			return err
 		}
+		done := s.observeSQL("upsert:" + spec.name)
 		result, err := conn.ExecContext(ctx, statement, args...)
+		done()
 		if err != nil {
 			return fmt.Errorf("stateindex: 批量写入 %s 失败: %w", spec.name, err)
 		}
@@ -2235,4 +2255,72 @@ func percentile(sorted []time.Duration, fraction float64) time.Duration {
 		index = len(sorted) - 1
 	}
 	return sorted[index]
+}
+
+// slowQueryThreshold 是单条 SQL 语句的慢查询阈值（FR-485）。
+//
+// 取值理由：稳态单条语句实测在百微秒级（内存库 + 批量 upsert），50ms 已是正常值的百倍以上；
+// 而 persist 的目标 P95 是 50ms，单条语句吃掉整个预算即说明该语句有问题。
+// 阈值可取 0 关闭（对齐其他观测旋钮：0 = 关）。
+const slowQueryThreshold = 50 * time.Millisecond
+
+// observeSQL 记录一条语句的耗时；超过 slowQueryThreshold 时累加计数并更新最大值。
+//
+// 设计成「调用方 defer 一行」的形态，避免在 26 个调用点各写一遍计时逻辑：
+//
+//	defer s.observeSQL("upsert:gaps")()
+//
+// 为什么按语句名而不是按 SQL 文本：文本含表名变量且可能很长，按名聚合才能拉出序列。
+func (s *Store) observeSQL(name string) func() {
+	if s == nil {
+		return func() {}
+	}
+	start := time.Now()
+	return func() {
+		elapsed := time.Since(start)
+		if elapsed < slowQueryThreshold {
+			return
+		}
+		s.slowQueries.Add(1)
+		// CAS 更新最大值（并发下允许略旧，观测值不许阻塞写入路径）。
+		for {
+			cur := s.slowQueryMaxNs.Load()
+			if int64(elapsed) <= cur {
+				break
+			}
+			if s.slowQueryMaxNs.CompareAndSwap(cur, int64(elapsed)) {
+				break
+			}
+		}
+		s.slowQueryLastAt.Store(time.Now().UnixNano())
+		slog.Warn("索引库慢 SQL（超过阈值，已计数）",
+			"statement", name, "elapsed", elapsed.String(),
+			"threshold", slowQueryThreshold.String(),
+			"slowTotal", s.slowQueries.Load())
+	}
+}
+
+// SQLStats 是索引库 SQL 侧的只读读数快照（供 /metrics 与排障使用）。
+type SQLStats struct {
+	// SlowQueries 是累计超过 slowQueryThreshold 的语句条数。
+	SlowQueries int64
+	// SlowQueryMax 是观测到的最大单条语句耗时（0 = 从未有慢语句）。
+	SlowQueryMax time.Duration
+	// SlowQueryLastAt 是最近一次慢语句时刻（零值 = 从未）。
+	SlowQueryLastAt time.Time
+}
+
+// SQLStats 返回 SQL 慢查询读数快照（FR-485；只读，不阻塞写入路径）。
+func (s *Store) SQLStats() SQLStats {
+	if s == nil {
+		return SQLStats{}
+	}
+	out := SQLStats{
+		SlowQueries:  s.slowQueries.Load(),
+		SlowQueryMax: time.Duration(s.slowQueryMaxNs.Load()),
+	}
+	if at := s.slowQueryLastAt.Load(); at > 0 {
+		out.SlowQueryLastAt = time.Unix(0, at)
+	}
+	return out
 }

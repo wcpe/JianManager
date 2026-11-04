@@ -409,9 +409,16 @@ func TestLogFederation_Unauthorized403_NoToken(t *testing.T) {
 	coord := logcoord.New(&fedResolver{}, &fedDialer{})
 	r, _ := setupFederationRouter(t, coord)
 
+	// FR-480 验收项 10「权限覆盖**全部**端点、越权无侧信道」：
+	// 这里逐个列出 7 个端点（原来只列了 4 个）——路由虽挂在同一 `permRead("log.read")` 组下，
+	// 但「组挂对了」与「每个端点都真的在组里」是两件事：有人把某个 handler 挪到组外
+	// 注册就会漏掉，而只测 4 个端点的用例抓不到。
 	for _, tc := range []struct{ method, path string }{
+		{"GET", "/api/v1/logs/federation"},
 		{"GET", "/api/v1/logs/federation/search"},
+		{"GET", "/api/v1/logs/federation/tail"},
 		{"GET", "/api/v1/logs/federation/stats"},
+		{"GET", "/api/v1/logs/federation/fields"},
 		{"GET", "/api/v1/logs/federation/facets?dimensions=level"},
 		{"POST", "/api/v1/logs/federation/export"},
 	} {

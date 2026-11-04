@@ -3,6 +3,7 @@ package ingest
 import (
 	"fmt"
 	"io"
+	"time"
 )
 
 // DeliveryMetricsSource 是投递链路的读数接口，供 /metrics 端点使用（FR-485）。
@@ -174,4 +175,16 @@ func WriteDeliveryMetrics(w io.Writer, src DeliveryMetricsSource) error {
 	}
 
 	return nil
+}
+
+// IndexSQLSnapshot 实现 retention.IndexSQLSource（FR-485：SQL 慢查询读数）。
+//
+// 为什么放在 ingest 而不是直接把 stateindex.Store 交出去：stateindex 是 ingest 的子包，
+// retention 不能依赖它（会成环）。这里做一层最小转接，retention 只看到三个标量。
+func (m *Manager) IndexSQLSnapshot() (slowQueries int64, maxDuration time.Duration, lastAt time.Time) {
+	if m == nil {
+		return 0, 0, time.Time{}
+	}
+	st := m.index.SQLStats()
+	return st.SlowQueries, st.SlowQueryMax, st.SlowQueryLastAt
 }

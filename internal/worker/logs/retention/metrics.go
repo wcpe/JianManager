@@ -58,6 +58,16 @@ type ArchivePurgeSource interface {
 	ArchivePurgeSnapshot() (lastRun time.Time, purged, failed, rolledBack int64)
 }
 
+// IndexSQLSource 是索引库 SQL 慢查询读数的**最小口径**（FR-485），由 ingest.Manager 实现。
+//
+// 与上面两个接口同样的理由：retention 不能反向依赖 ingest（会成环），故只声明要读的方法。
+// nil 表示未装配（例如采集未启用）——那时三条序列输出 0，抓取侧无需写特殊分支。
+type IndexSQLSource interface {
+	// IndexSQLSnapshot 返回累计慢语句条数、最大单条耗时与最近一次慢语句时刻。
+	// 从未有慢语句时 max 为 0、lastAt 为零值。
+	IndexSQLSnapshot() (slowQueries int64, maxDuration time.Duration, lastAt time.Time)
+}
+
 // MetricsHandler 返回 `/metrics` 的处理器。
 //
 // d 为 nil（保留策略未启用）时**不返回 404、也不返回空 body**：照样输出全部序列、值取 0，
@@ -67,21 +77,38 @@ type ArchivePurgeSource interface {
 //
 // prune 为 nil 时回收相关序列输出 0 且 ran=0，理由同上：抓取侧不必区分「没装配」与「没跑」。
 // purge 为 nil 时归档对象回收序列同样输出 0（含 `_enabled`），口径一致。
-func MetricsHandler(d *Driver, prune EventStorePruneSource, purge ArchivePurgeSource) http.HandlerFunc {
+func MetricsHandler(d *Driver, prune EventStorePruneSource, purge ArchivePurgeSource, indexSQL IndexSQLSource) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", promTextContentType)
 		// 输出走 bufio：一次抓取是十几行小写入，逐行写 ResponseWriter 会产生多次小包。
 		bw := bufio.NewWriter(w)
 		// 写错误只可能来自连接已断（客户端放弃本次抓取），此时既无处上报也无从补救；
 		// bufio 会把首个错误粘住，Flush 一并带出，统一丢弃。
-		_ = writeMetrics(bw, d, prune, purge)
+		_ = writeMetrics(bw, d, prune, purge, indexSQL)
 		_ = bw.Flush()
 	}
 }
 
 // writeMetrics 逐行写出全部序列（HELP/TYPE 紧挨着各自的样本，顺序固定，
 // 使 `curl -s /metrics | diff` 这种最土的核对方式可用）。
-func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource, purge ArchivePurgeSource) error {
+func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource, purge ArchivePurgeSource, indexSQL IndexSQLSource) error {
+	// 索引库慢查询读数：indexSQL 未装配（采集未启用）时全部保持 0。
+	var (
+		sqlSlowQueries int64
+		sqlMaxSeconds  = "0"
+		sqlLastAt      int64
+	)
+	if indexSQL != nil {
+		slow, maxDur, lastAt := indexSQL.IndexSQLSnapshot()
+		sqlSlowQueries = slow
+		if maxDur > 0 {
+			sqlMaxSeconds = strconv.FormatFloat(maxDur.Seconds(), 'f', -1, 64)
+		}
+		if !lastAt.IsZero() {
+			sqlLastAt = lastAt.Unix()
+		}
+	}
+
 	var st ArchiveStats
 	enabled := int64(0)
 	if d != nil {
@@ -257,6 +284,15 @@ func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource, purge Arc
 			name: "jm_log_retention_archive_purge_last_run_timestamp_seconds", kind: "gauge", value: purgeLastRun,
 			help: "最近一轮归档对象清除的时刻（Unix 秒），0 表示从未运行",
 		},
+		// 索引库 SQL 慢查询（FR-485 的最后一项）。indexSQL 未装配时三条恒为 0。
+		{
+			name: "jm_log_index_slow_queries_total", kind: "counter", value: sqlSlowQueries,
+			help: "累计超过阈值的索引库 SQL 语句条数（单条语句级，不含 PRAGMA/DDL）",
+		},
+		{
+			name: "jm_log_index_slow_query_last_timestamp_seconds", kind: "gauge", value: sqlLastAt,
+			help: "最近一次慢 SQL 的时刻（Unix 秒），0 表示从未出现",
+		},
 	}
 	for _, s := range samples {
 		// 注意不要用 %d 直接拼值：一旦有人把 value 换成浮点或负值，格式会静默变形；
@@ -265,6 +301,14 @@ func writeMetrics(w io.Writer, d *Driver, prune EventStorePruneSource, purge Arc
 			s.name, s.help, s.name, s.kind, s.name, strconv.FormatInt(s.value, 10)); err != nil {
 			return err
 		}
+	}
+	// 唯一一条浮点序列单独输出：Prometheus 文本格式里 gauge 可以是浮点，
+	// 但上面的 samples 循环统一走 FormatInt，混进来会静默截断成整数。
+	if _, err := fmt.Fprintf(w,
+		"# HELP jm_log_index_slow_query_max_seconds 观测到的最大单条慢 SQL 耗时（秒），0 表示从未出现慢语句\n"+
+			"# TYPE jm_log_index_slow_query_max_seconds gauge\n"+
+			"jm_log_index_slow_query_max_seconds %s\n", sqlMaxSeconds); err != nil {
+		return err
 	}
 	return nil
 }
