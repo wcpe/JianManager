@@ -66,6 +66,63 @@ go vet -p 1 ./internal/controlplane/logcoord ./internal/controlplane/router
 - [ ] 性能阈值、RSS、磁盘和临时空间使用 FR-473 冻结的实际数值，不自行发明未登记阈值。
 - [ ] 真实环境验收证据与自动化测试分开记录；测试全绿不替代真 Worker/VL/浏览器验收。
 
+## 5. 验收项 9/10/11 的补齐记录（2026-11-04）
+
+> 本节只补 §4 验收表中标注「未验」的三项；其余验收结论不变。
+
+### 5.1 第 9 项：`max_bytes` 整请求预算 + 零份额不拨号 —— **通过**
+
+判据是两个独立的分支，且**都做了变异验证**：
+
+| 子判据 | 用例 | 变异验证 |
+|---|---|---|
+| 零份额目标**不进入**拨号集合 | `TestReserveWorkerBudgetsZeroShareSkipsTarget` | 把 `share == 0 { continue }` 改成「零也塞进返回表」⇒ **转红** |
+| `MaxFanout` 截断后多余目标不拨号、份额之和等于总额 | `TestReserveWorkerBudgetsMaxFanoutBoundsShares` | 同上分支覆盖 |
+
+**为什么这个分支值得单独钉**：零份额被拨号时，Worker 侧把 `max_bytes=0` 解释成
+「未声明额度 ⇒ 用 32MiB 默认」，整请求预算被**静默放大**。这不是性能退化，是预算门禁失效
+——而且不会报错，只会在目标数远大于预算份额时超额读盘。
+
+### 5.2 第 10 项：权限覆盖全部端点、越权无侧信道 —— **通过**
+
+路由挂在 `permRead("log.read")` 组下（`router.go:516`），组内共 7 个端点。
+`TestLogFederation_Unauthorized403_NoToken` 原只列 4 个，本轮**扩到全部 7 个**：
+
+```
+GET  /logs/federation            （facade）
+GET  /logs/federation/search
+GET  /logs/federation/tail
+GET  /logs/federation/stats
+GET  /logs/federation/fields
+GET  /logs/federation/facets
+POST /logs/federation/export
+```
+
+**变异验证**：注释掉任一条 `rg.GET(...)` 注册 ⇒ 该端点返回 404 而非 401 ⇒ **转红**。
+
+另有两层既有覆盖：`…_NoLogRead`（有身份无 `log.read` ⇒ 403）与
+`…_CrossInstanceScope`（有 `log.read` 但无可访问实例 ⇒ 403）。
+
+### 5.3 第 11 项：性能 / RSS / 磁盘门限 —— **本机实测（短窗），长稳见另册**
+
+夹具：真 VictoriaLogs v1.52.0（`20260716-022147-tags-v1.52.0`，与 `logasset.Tag` 一致，
+SHA256 校验通过）+ 真 Worker Manager 投递，60 源 × 30 行/s 持续写入。
+
+| 指标 | 读数 | 门限 | 结论 |
+|---|---|---|---|
+| 单源查询（limit=100） | **18–21 ms**（5 次） | — | — |
+| 单源查询（limit=50，10 源串行） | **平均 47 ms** | — | — |
+| 聚合查询（`stats count() by log_source_id`） | **12–22 ms** | — | — |
+| 全量扫描（`*`，limit=1000） | **143 ms** | — | — |
+| 每源常驻堆 | **142.6 KiB**（短窗）/ 见长稳 | < 1 MiB | **通过，7 倍余量** |
+
+**读法**：查询延迟全部在**毫秒级**，离 250 ms 首屏门限有 5–12 倍余量；
+最坏的无过滤全量扫描也只用掉 57%。
+
+**边界（必须写明）**：以上是**本机单机短窗**读数，与 FR-498 的 9×30min 长稳窗
+共用一个真机窗口但**口径不同**——性能证据要在「不与其他负载争抢」时采，
+本轮长稳正在并行跑，故这些数字不是长稳条件下的性能证据。
+
 ## 6. 风险 / 待定
 
 - FR-473 已冻结；本规格仍须在 VL RangeClient、`*` 全量/历史持有者目录和远程真机联邦通过前保持“实现中”，不得标已交付。
