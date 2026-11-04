@@ -795,6 +795,8 @@ func runWorker() {
 		"namespaceBudgets", budgetConfig.Namespaces, "reservationBudgets", budgetConfig.Reservations)
 	go sampleLogBudget(logRuntimeCtx, vlSupervisor, resourceBudget, logBudgetRoots, externalHot)
 	var logJournal catalog.Journal
+	// logJournalCloser 负责关停时把 journal 最后一攒批记录落盘（nil = 纯内存形态，无可关闭）。
+	var logJournalCloser func() error
 	// 日志容量读数（磁盘使用率 / WAL 上限）的**唯一**构造点：采集侧容量门禁与
 	// 保留策略的磁盘触发共用同一份提供者。两者各采一次磁盘迟早会给出不同结论，
 	// 而现场只会表现成「有时降级有时不降级」，极难归因。
@@ -832,19 +834,42 @@ func runWorker() {
 	// 磁盘缓冲（FR-510）：VL 不可用时把即将丢弃的 WAL 条目先写盘。
 	// 默认关闭（log_ingest.spool.enabled=false），未启用时为 nil，装配处会上报 Disabled。
 	var spoolMetricsSource ingest.SpoolMetricsSource
-	// 日志 Catalog journal：改用**纯内存**（2026-10-30 用户裁定：机械盘不做落盘）。
+	// 日志 Catalog journal：**落盘**（2026-11-05 真机事故修复，推翻 2026-10-30 的纯内存裁定）。
 	//
-	// 它原本写 catalog.journal.jsonl（生产已 1MB，每次发布追加一行 + fsync）。
-	// 在机械盘上那是每批投递都要付费的寻道开销，而它记录的只是「哪些分区已发布」——
-	// 查询侧靠它判断可查性，而这个判断只对**当前进程**有意义（重启后重新采集、重新发布）。
+	// ## 为什么必须推翻旧裁定
 	//
-	// 代价：重启后查询侧短暂显示「无已发布分区」，直到采到新数据重新发布。
+	// 旧裁定的前提是「分区记录是可随时重建的派生状态」——在**旧架构**下成立：
+	// 记录由 `publishSnapshot` 在投递时创建，重启后重新发布即可重建。
 	//
-	// 保留写入磁盘的路径在新代码里已无调用点；历史文件保留在原处供老数据取证。
-	{
-		logJournal = catalog.NewMemJournal()
-		slog.Info("日志 Catalog journal 使用纯内存模式（零磁盘写入）",
-			"note", "重启后已发布分区状态从头重建")
+	// 但 2026-11-02「简化投递路径」之后前提被推翻了：记录改由 ingest 的
+	// `ensureCatalogPartition` **只在投递成功时**补建（非测试调用点 = 1）。
+	// 于是它变成「承载历史的唯一事实」，而纯内存意味着进程重启后归零：
+	// 该源**之前所有天**在查询侧变成「不存在」——VL 里行还在，没人知道去查它。
+	//
+	// 真机实证（inst:318）：
+	//
+	//	2026-11-02  VL=1746 条  查询：complete=false（NO_CATALOG_RECORD）
+	//	2026-11-04  VL=806  条  查询：complete=true     ← 只因重启后又采到了这天的数据
+	//
+	// 所以旧注释里「重启后查询侧**短暂**显示无已发布分区」那句是错的：不是短暂，
+	// 是**永久**（只要那天已经采集完、不再有新数据触发补建）。
+	//
+	// ## 为什么不会退回当年的机械盘开销
+	//
+	// 当年砍它的理由是 `JSONLFileStore.AppendEntry` 每条都 `f.Sync()`。现在写路径走
+	// `catalog.BatchedStore`：攒批（默认 2s / 256 条）后用 `AppendEntries` **一次
+	// open + 一次 Sync** 写入 N 条。读路径完全不进队列（仍是 `MemJournal` 内存视图），
+	// 查询性能零变化。
+	//
+	// 权衡已在 catalog.BatchedStore 的注释里逐条写明：崩溃最多丢最近一个 interval 的记录，
+	// 正常关停走 Close 会最后 flush 一次（不丢），落盘失败不静默（WARN + Stats）。
+	logJournal, logJournalCloser = openLogCatalogJournal(cfg, root, logJournal)
+	if logJournalCloser != nil {
+		defer func() {
+			if closeErr := logJournalCloser(); closeErr != nil {
+				slog.Warn("日志 Catalog journal 退出落盘失败（最后一批分区记录可能未持久）", "error", closeErr)
+			}
+		}()
 	}
 	logStack := logassemble.Build(logJournal, rangeClient, version.Version)
 	logStack.LogRPC.SetResourceBudget(resourceBudget)
@@ -1370,14 +1395,23 @@ func runWorker() {
 					slog.Error("磁盘缓冲打开失败，本次启动不使用缓冲（采集继续，VL 不可用时仍会丢最旧）",
 						"path", spoolPath, "error", spoolErr)
 				} else {
-					spoolMetricsSource = spoolAdapter{s: sp}
-					manager.AttachSpool(sp)
-					rc := sp.Recovered()
-					slog.Info("磁盘缓冲已启用",
-						"path", spoolPath,
-						"capacity", cfg.EffectiveSpoolCapacity(),
-						"recoveredRecords", rc.Records,
-						"recoveredStop", rc.Stopped.String())
+					if !ingest.SpoolConsumerAvailable() {
+						// 打开开关但本构建没有读端：写进去永远不会被重投。
+						// 这里必须明确报错而不是“已启用”，否则运维会以为多了一层保障。
+						slog.Error("磁盘缓冲无法启用：本构建的 spool 只有写端、没有消费者（PeekEvents/Ack 无调用点）；"+
+							"写进去的事件不会被重投。请把 log_spool.enabled 置为 false，否则会造成「已缓冲」的错觉",
+							"path", spoolPath)
+						_ = sp.Close()
+					} else {
+						spoolMetricsSource = spoolAdapter{s: sp}
+						manager.AttachSpool(sp)
+						rc := sp.Recovered()
+						slog.Info("磁盘缓冲已启用",
+							"path", spoolPath,
+							"capacity", cfg.EffectiveSpoolCapacity(),
+							"recoveredRecords", rc.Records,
+							"recoveredStop", rc.Stopped.String())
+					}
 				}
 			} else {
 				slog.Info("磁盘缓冲未启用（log_spool.enabled=false）：VL 不可用且 WAL 到上限时会丢最旧条目")
@@ -2330,6 +2364,76 @@ func sampleLogBudget(ctx context.Context, sup *vlsup.Supervisor, budget *vlsup.B
 			}
 		}
 	}
+}
+
+// openLogCatalogJournal 装配日志分区 Catalog 的 journal（有界攒批落盘）。
+//
+// 返回的 Journal 用于 `logassemble.Build`；第二个返回值非 nil 时必须在退出前调用
+// （把最后一攒批记录 flush 落盘）。文件 journal 启动失败时**降级为纯内存**并大声告警，
+// 而不是拒启：日志查询能力倒退不应拖坠整个 Worker（它还跑实例/进程管理）。
+//
+// 失败方向的诚实说明：降级 = 回到本次修复前的形态（重启后历史天不可查），
+// 因此必须打 ERROR 级别的日志（不能用 Info 混在正常启动日志里）。
+func openLogCatalogJournal(cfg *workercfg.Config, root *dataroot.Root, fallback catalog.Journal) (catalog.Journal, func() error) {
+	if cfg != nil && cfg.LogCatalog.JournalDisabled() {
+		slog.Warn("日志 Catalog journal 落盘已显式关闭（log_catalog.journal_enabled=false）：重启后历史天的分区记录将不可重建，查询侧会报「无分区记录」",
+			"note", "仅建议在只读盘或排障时关闭")
+		return fallback, nil
+	}
+	path := ""
+	if cfg != nil && root != nil {
+		path = cfg.LogCatalog.JournalPath(root.Base())
+	}
+	if path == "" {
+		slog.Error("日志 Catalog journal 无法定位文件路径（缺少数据根）：退化为纯内存，重启后历史天分区记录将丢失")
+		return fallback, nil
+	}
+	store, err := catalog.NewJSONLFileStore(path)
+	if err != nil {
+		// 不拒启（理由见函数头），但必须 ERROR：这条降级会让历史天在查询侧变「不存在」。
+		slog.Error("日志 Catalog journal 文件不可用，退化为纯内存：重启后历史天分区记录将丢失，查询侧会报「无分区记录」",
+			"path", path, "error", err.Error())
+		return fallback, nil
+	}
+	// 零值语义（与 manifest_sync_* 同口径）：未设 ⇒ 用 catalog 默认 2s；
+	// 显式 "0s" ⇒ 同步写（每次追加即 fsync，最耗 IO 但零丢弃窗口）。
+	interval := catalog.DefaultJournalSyncInterval
+	if d, set := cfg.LogCatalog.JournalSyncIntervalValue(); set {
+		interval = d
+	}
+	maxBatch := catalog.DefaultJournalMaxBatch
+	if cfg != nil && cfg.LogCatalog.JournalMaxBatch > 0 {
+		maxBatch = cfg.LogCatalog.JournalMaxBatch
+	}
+	batch := catalog.NewBatchedStore(store, interval, maxBatch)
+	journal, err := catalog.NewJournalWithStore(batch)
+	if err != nil {
+		// **重放失败不静默**：它意味着 journal 内容与将重放出的状态不一致。
+		// 先把已打开的 store 收尾，再把坏文件改名保留（出事现场比能启动更重要），
+		// 重建空 journal 后继续住上跑（分区记录需重新累积）。
+		_ = batch.Close()
+		backup := path + ".corrupt-" + time.Now().Format("20060102T150405")
+		if renameErr := os.Rename(path, backup); renameErr == nil {
+			slog.Error("日志 Catalog journal 重放失败，已把原文件改名保留并重建空 journal（分区记录需重新累积）",
+				"path", path, "backup", backup, "error", err.Error())
+			if reopened, reopenErr := catalog.NewJSONLFileStore(path); reopenErr == nil {
+				retryBatch := catalog.NewBatchedStore(reopened, interval, maxBatch)
+				if retryJournal, retryErr := catalog.NewJournalWithStore(retryBatch); retryErr == nil {
+					slog.Info("日志 Catalog journal 已落盘启用（重建后）", "path", path,
+						"syncInterval", interval.String(), "maxBatch", maxBatch)
+					return retryJournal, retryBatch.Close
+				}
+				_ = retryBatch.Close()
+			}
+		} else {
+			slog.Error("日志 Catalog journal 重放失败且无法改名保留，退化为纯内存；重启后历史天分区记录将丢失",
+				"path", path, "error", err.Error(), "renameError", renameErr.Error())
+		}
+		return fallback, nil
+	}
+	slog.Info("日志 Catalog journal 已落盘启用（有界攒批，重启后历史天分区记录可恢复）",
+		"path", path, "syncInterval", interval.String(), "maxBatch", maxBatch)
+	return journal, batch.Close
 }
 
 // resolveHotRetention 把 `log_vl.retention_period` 解析成热层保留期时长。

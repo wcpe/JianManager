@@ -167,8 +167,6 @@ type eventStoreCoverage struct {
 	epoch uint64
 }
 
-const maxPublishedProjectionGenerations = 64
-
 // insertBatchMaxEvents / insertBatchMaxBytes / insertBatchFlushTimeout 等攒批常量已移到
 // insert_batch.go（双阈值攒批层），本文件只保留调用点。
 //

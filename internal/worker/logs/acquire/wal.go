@@ -852,6 +852,11 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 	//
 	// 未挂载缓冲时（spoolCh == nil）offerSpoolLocked 直接返回 0，
 	// 行为与改造前逐字一致。
+	//
+	// **注意（2026-11-05 实测）**：当前的 spool 实现只有写端，`Peek`/`PeekEvents`/`Ack`
+	// 在 spool 包外零调用 ⇒ 写进去的事件不会被重投。所以“交给磁盘缓冲”不等于“数据
+	// 得救”，只是“不再占内存”。装配层已改为在无消费者时根本不挂 sink
+	// （`ingest.SpoolConsumerAvailable`），使本分支默认不逃触发。
 	spooled := w.offerSpoolLocked(cut)
 
 	// 先算丢弃区间的真实位置（半开区间，取被丢条目首尾）。
@@ -883,9 +888,18 @@ func (w *WAL) enforceBacklogLimitLocked(protectFrom int) {
 		detail := fmt.Sprintf("WAL backlog exceeded (entries=%d/%d, approx_bytes=%d/%d); dropped %d oldest entries to stay in memory",
 			entriesBefore, maxEntries, bytesBefore, maxBytes, dropped)
 		if spooled > 0 {
-			// 有 spool 时必须如实区分“真丢”与“交给磁盘缓冲” ——
-			// 否则缺口审计面会把已经救回来的数据也报成损失。
-			detail = fmt.Sprintf("WAL backlog exceeded (entries=%d/%d, approx_bytes=%d/%d); dropped %d oldest entries to stay in memory; %d handed to disk spool",
+			// 有 spool 时必须如实区分“真丢”与“交给磁盘缓冲”。
+			//
+			// **2026-11-05 订正**：这里曾写“%d handed to disk spool”，读起来像“这批数据
+			// 已经得救了”。事实上 spool 的**读端没有生产消费者**（`Peek` / `PeekEvents` /
+			// `Ack` 在 spool 包外零调用，全仓只有测试在用），所以落盘的事件**永远不会
+			// 被重投**。把它写成“救回”会让缺口审计面说谎：排障的人会以为只需去看磁盘
+			// 缓冲，而实际上只能从源重采。
+			//
+			// 装配层（`ingest.AttachSpool`）现在会先查消费者是否到位，不到位就不挂 sink
+			// （见 `SpoolConsumerAvailable`），所以本分支在生产上应恒不触发；保留它是为了
+			// “有人重新接上 sink 却没接消费者”时仍然说实话。
+			detail = fmt.Sprintf("WAL backlog exceeded (entries=%d/%d, approx_bytes=%d/%d); dropped %d oldest entries to stay in memory; %d written to disk spool (NOT redelivered: no spool consumer in this build)",
 				entriesBefore, maxEntries, bytesBefore, maxBytes, dropped, spooled)
 		}
 		if err := w.led.RecordGap(w.key, from, to, walBacklogDropReason, detail); err != nil {

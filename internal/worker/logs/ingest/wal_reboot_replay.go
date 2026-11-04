@@ -44,14 +44,16 @@ import (
 //
 // ## 重复怎么办
 //
-// 这是 **at-least-once**：重读段的字节会被再投递一次。重复由两层吸收：
-//   - `event_id` 幂等：同 id 同哈希的重复行在查询侧按同一规则收敛；
-//   - 写前幂等（`dropEventsAlreadyWrittenCtx`）：投递前按 `event_id:in(...)` 查一次，
-//     命中同 id 同 hash 的从本批剔除。
+// 这是 **at-least-once**：重读段的字节会被再投递一次。重复只由一层吸收：
+//   - `event_id` 幂等：同 id 同哈希的重复行在 VL 写入侧收敛（同 id 同 hash 不产生新行）。
 //
-// 2026-11-03：~~`projection_generation` 换代次~~ 这一层已不存在——重建链删除后不再换代次，
+// **2026-11-05 订正**：这里曾写着第二层「写前幂等（`dropEventsAlreadyWrittenCtx`）：
+// 投递前按 `event_id:in(...)` 查一次」。**那句话描述的行为不存在**——那个函数在
+// 2026-11-02 投递路径简化后失去了全部生产调用点（见它在 runtime_delivery_pipeline.go
+// 的注释）。所以不要指望写前会先筛一遍；能重复写，靠 VL 侧 event_id 幂等收。
+//
+// 2026-11-03：~~`projection_generation` 换代次~~ 这一层也已不存在——重建链删除后不再换代次，
 // 而且投递面也不再带 `projection_generation` 标签（`insertInBatchesCtxYield` 传空串）。
-// 现在只剩上面两层。
 //
 // 这与 Filebeat 的语义完全一致：它也只保证至少一次。
 func rollbackReadToReclaim(led *ledger.Ledger, key ledger.SourceKey) {

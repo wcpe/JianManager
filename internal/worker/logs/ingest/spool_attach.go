@@ -17,10 +17,49 @@ import (
 // # 幂等
 //
 // `WAL.SetSpoolSink` 内部有「已挂则跳过」的判断，所以重复调用安全。
+//
+// # 为什么默认拒绝挂载（2026-11-05）
+//
+// FR-510 的 spool 在本快照里**只有写端**：`spool.Spool` 的 `Peek` / `PeekEvents` /
+// `Ack` 在 spool 包外零调用（全仓只有它自己的测试在用）。也就是说写进去的事件
+// **永远不会被重投**。
+//
+// 那不叫「缓冲」，叫「换个地方丢」，而且比直接丢更坏：
+//   - 缺口 detail 会因为「交给了磁盘缓冲」而显得数据得救了（易误导排障方向）；
+//   - 磁盘上堆着一堆永远不会被读的数据，还会撞容量上限后再丢一轮。
+//
+// 所以装配层必须先声明消费者已到位，否则本方法直接拒绝并大声告警。
+// 将来真的把读端（`PeekEvents → 投递 → Ack`）接上了，就把
+// `Options.SpoolConsumerReady` 置为 true，这里会自动放行。
 func (m *Manager) AttachSpool(sink acquire.SpoolSink) {
 	if m == nil || sink == nil {
 		return
 	}
+	if !SpoolConsumerAvailable() {
+		slog.Error("磁盘缓冲未挂接：本构建的 spool 只有写端、没有消费者，写进去的事件不会被重投；"+
+			"挂上它只会把「丢弃」打扮成「已缓冲」",
+			"hint", "要么把 log_spool.enabled 保持关闭，要么先接上读端")
+		return
+	}
+	m.attachSpoolUnchecked(sink)
+}
+
+// SpoolConsumerAvailable 报告本构建是否真的具备 spool 读端（`PeekEvents` + `Ack`）。
+//
+// 它是 `AttachSpool` 的门禁，也是测试可以直接断言的事实。改这个值之前请先读
+// `AttachSpool` 的注释：开启它就必须同步把消费者接上，否则审计面会说谎。
+func SpoolConsumerAvailable() bool {
+	return spoolConsumerReady
+}
+
+// spoolConsumerReady 是编入本二进制的常量，不是可配开关。
+//
+// 为什么不做成配置项：它不是运维选项而是**构建能力**。「写端在、读端不在」是代码事实，
+// 不该让运维以为改一行 yml 就能把数据救回来。
+const spoolConsumerReady = false
+
+// attachSpoolUnchecked 是实际挂载（已有消费者时的路径，以及将来接上读端后复用）。
+func (m *Manager) attachSpoolUnchecked(sink acquire.SpoolSink) {
 	m.mu.Lock()
 	pipes := make([]interface{ WAL() *acquire.WAL }, 0, len(m.pipes))
 	for _, p := range m.pipes {
