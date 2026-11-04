@@ -403,6 +403,40 @@ type LogCatalogConfig struct {
 	// JournalMaxBatch 是攒批落盘的**条数上界**（键 log_catalog.journal_max_batch）。
 	// 待落盘条目达到该数就当场 flush，给内存队列一个硬上界。0/未设 = 用默认 256。
 	JournalMaxBatch int `mapstructure:"journal_max_batch"`
+	// BackfillDays 是启动期「从 VL 反推天集合补建分区记录」的回溯窗口（天）。
+	//
+	// 键 log_catalog.backfill_days。0/未设 = 用 ingest 默认（30 天）；显式负值 = **关闭**该补建。
+	//
+	// 为何存在：journal 落盘只保证「从现在起不再丢」，它修不了已经掉的天。
+	// 唯一知道「那天有数据」的地方是 VL 自己，所以启动期向 VL 问一次天集合，
+	// 把「VL 有数据但 Catalog 没记录」的天补回来（详见 ingest/catalog_backfill.go）。
+	//
+	// 为何有上界：VL 单查询跨度上限是 31d（`-search.maxQueryTimeRange`），
+	// 且无界回溯会产生大量查询与记录。30 天是可查范围内最宽的一档。
+	BackfillDays int `mapstructure:"backfill_days"`
+}
+
+// backfillDisabledSentinel 是「显式关闭补建」的配置值。
+//
+// 用负值而不是 0 表示关闭：0 需要保留给「未设 ⇒ 用默认」，否则运维无法区分
+// 「我没配」与「我要关掉」。这与 `journal_sync_interval` 用 bool 区分
+// 「未设」与「显式 0s」是同一个理由（见 JournalSyncIntervalValue）。
+const backfillDisabledSentinel = -1
+
+// BackfillDisabled 报告是否显式关闭了启动期分区补建。
+func (c LogCatalogConfig) BackfillDisabled() bool {
+	return c.BackfillDays <= backfillDisabledSentinel
+}
+
+// BackfillDaysValue 把配置收敛为「回搜多少天」。
+//
+// 返回 0 表示「用 ingest 默认值」（未设）。负值不应到达这里（调用方先查
+// BackfillDisabled）；若到了也按 0 处理，绝不能变成「全量历史」。
+func (c LogCatalogConfig) BackfillDaysValue() int {
+	if c.BackfillDays < 0 {
+		return 0
+	}
+	return c.BackfillDays
 }
 
 // JournalPath 返回 journal 文件路径（位于数据根下 var/log）。

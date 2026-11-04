@@ -99,3 +99,56 @@ func TestLogCatalogConfig_JournalPath(t *testing.T) {
 		t.Fatalf("空根目录应返回空路径，实测 %q", p)
 	}
 }
+
+// TestLogCatalogConfig_BackfillDays 钉住补建窗口的配置面三态语义。
+//
+// 为何需要三态：0 必须保留给「未设 ⇒ 用 ingest 默认（30 天）」，否则运维无法
+// 区分「我没配」与「我要关掉」。所以「显式关闭」用负值，而不是 0。
+// 这与 journal_sync_interval 用 bool 区分「未设」与「显式 0s」是同一个理由。
+func TestLogCatalogConfig_BackfillDays(t *testing.T) {
+	// 未设（0）⇒ 用 ingest 默认值：BackfillDaysValue 返回 0，由 ingest 回落到 30。
+	var unset LogCatalogConfig
+	if unset.BackfillDisabled() {
+		t.Fatal("未设时不得视为关闭")
+	}
+	if got := unset.BackfillDaysValue(); got != 0 {
+		t.Fatalf("未设时应返回 0（表示用默认），实测 %d", got)
+	}
+
+	// 显式正值 ⇒ 用它。
+	explicit := LogCatalogConfig{BackfillDays: 7}
+	if explicit.BackfillDisabled() {
+		t.Fatal("正值不得视为关闭")
+	}
+	if got := explicit.BackfillDaysValue(); got != 7 {
+		t.Fatalf("应返回 7，实测 %d", got)
+	}
+
+	// 显式负值 ⇒ 关闭；且取值绝不能落到「全量历史」。
+	disabled := LogCatalogConfig{BackfillDays: -1}
+	if !disabled.BackfillDisabled() {
+		t.Fatal("backfill_days=-1 必须表示显式关闭")
+	}
+	if got := disabled.BackfillDaysValue(); got != 0 {
+		t.Fatalf("关闭时取值应为 0（而非负数导致无界回溯），实测 %d", got)
+	}
+	// 更小的负值也应被识别为关闭（防御手写配置）。
+	if !(LogCatalogConfig{BackfillDays: -100}).BackfillDisabled() {
+		t.Fatal("任意负值都应识别为关闭")
+	}
+}
+
+// TestLoad_LogCatalogBackfillDays 配置键 log_catalog.backfill_days 必须能读进来。
+func TestLoad_LogCatalogBackfillDays(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "worker.yml")
+	if err := os.WriteFile(path, []byte("node:\n  name: test\nlog_catalog:\n  backfill_days: 14\n"), 0o600); err != nil {
+		t.Fatalf("write worker.yml: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := cfg.LogCatalog.BackfillDaysValue(); got != 14 {
+		t.Fatalf("log_catalog.backfill_days: 14 应生效，实测 %d", got)
+	}
+}

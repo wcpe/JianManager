@@ -1491,6 +1491,35 @@ func runWorker() {
 				}
 			}()
 			go manager.Start(ingestCtx)
+			// B1（2026-11-05）：从 VL 反推天集合，把「有数据但 Catalog 没记录」的历史天
+			// 补建回来。
+			//
+			// 为何必须有：journal 落盘只保证「从现在起不再丢」，它修不了已经丢掉的。
+			// 生产 inst:318 的 2026-11-01 有 2880 行、11-02 有 1746 行，而 journal
+			// 文件只写到 10-30 ⇒ 那两天重放不出来。唯一知道「那天有数据」的只能是 VL。
+			//
+			// 为何放在 Start 之后而非之前：需要**已登记的源**才能知道要查哪些 namespace
+			// （不靠「VL 里所有 namespace」——那会把别的 Worker 的命名空间拉进来）。
+			// 先给 Start 一个很短的启动窗口让登记跑起来，然后才开补建。
+			//
+			// 为何异步：它不是引用路径的一部分，绝不能阻塞 Worker 启动；
+			// 失败也只打 ERROR 不拒启（补建是补救动作，不该拖坠进程）。
+			go func() {
+				if cfg.LogCatalog.BackfillDisabled() {
+					slog.Info("启动补建 Catalog 分区已显式关闭（log_catalog.backfill_days<0）",
+						"note", "历史天仍会在查询侧报「无分区记录」")
+					return
+				}
+				// 让登记先跑一轮：没登记完时补建只能看到空源表，白跑一次。
+				select {
+				case <-ingestCtx.Done():
+					return
+				case <-time.After(catalogBackfillStartDelay):
+				}
+				manager.RunCatalogBackfillOnStartup(ingestCtx, ingest.CatalogBackfillOptions{
+					Days: cfg.LogCatalog.BackfillDaysValue(),
+				})
+			}()
 			// 2026-10-29：不再有「未完成的冷层搬迁」需要续跑 —— 迁移链已删，
 			// `PendingPhysicalDays()` 里若有历史残留，不再由本循环推进（它只负责物理搬迁）。
 			// 存量残留用 `logStack.Catalog.PendingArchiveReclaims()` 的告警可见，不影响采集。
@@ -2365,6 +2394,16 @@ func sampleLogBudget(ctx context.Context, sup *vlsup.Supervisor, budget *vlsup.B
 		}
 	}
 }
+
+// catalogBackfillStartDelay 是启动期分区补建的**让位窗口**。
+//
+// 为何需要：补建要知道「本节点负责哪些 namespace」，而那来自**已登记的源**。
+// 采集运行时（manager.Start）与源登记都在异步路径上，立即开跑只能看到空源表。
+//
+// 取值权衡：太长会推迟历史天恢复可查的时间，太短会让首轮白跑（白跑不会错，
+// 只是浪费一次查询）。30s 覆盖了常规启动的登记耗时（实例发现 + 游标恢复）。
+// 即使没赶上，补建也就在那一轮返回零计数，不会假装成功。
+const catalogBackfillStartDelay = 30 * time.Second
 
 // openLogCatalogJournal 装配日志分区 Catalog 的 journal（有界攒批落盘）。
 //
