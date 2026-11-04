@@ -694,7 +694,21 @@ func (p *Pipeline) pollFile() ([]logtypes.Event, error) {
 		// 仍尝试冲刷已完整事件。
 		evs := p.bound.DrainEvents()
 		if len(evs) > 0 {
-			evs, _ = p.emit(evs)
+			// emit 的错误**不能丢**（2026-11-05 审查）。
+			//
+			// emit 失败意味着这批事件既没进 WAL 也没进 p.acquired，
+			// 因此不会被提交/投递；而它们的 record 区间已由 tailer 的
+			// AdvanceRead 覆盖，并已随返回值交给调用方。旧写法
+			// `evs, _ = p.emit(evs)` 只报 tailer 的错误，emit 失败连日志都没有，
+			// 上层 finishAcquisition 又因 len(p.acquired)==0 不报错 ⇒ **静默少一批**。
+			//
+			// 两个错误都要交出去（errors.Join 保留两者），采集轮据此
+			// noteSourceError，现场才能同时看到「tailer 报错」与「这批没进 WAL」。
+			var emitErr error
+			evs, emitErr = p.emit(evs)
+			if emitErr != nil {
+				return evs, errors.Join(err, emitErr)
+			}
 		}
 		return evs, err
 	}
@@ -807,7 +821,23 @@ func (p *Pipeline) RefreshDegrade(now time.Time) bool {
 	}
 	sig := sampling.Signal{DiskPercent: budget.DiskUsagePercent}
 	if budget.MaxWALBytes > 0 {
-		sig.BacklogBytes = 0 // WAL 字节数未从 acquire 暴露；见 spec 的「未做」栏
+		// 积压信号必须真的接上（2026-11-05 审查）。
+		//
+		// 旧实现写的是 `sig.BacklogBytes = 0  // WAL 字节数未从 acquire 暴露`——
+		// 但 `acquire.WAL.Backlog()` 一直就在，就在本文件的 `p.wal` 上。
+		// 后果是一条「配置合法、代码存在、现场永远不生效」的路径：
+		// `sampling.Policy.Validate` 接受 `Degrade.BacklogBytes > 0`，
+		// `sampler.evaluate` 也真的实现了该判据；于是运维按「磁盘 + 积压」双阀值
+		// 配好后，积压打满也不会降级——**保命阀值静默失效**，而且没有任何告警。
+		//
+		// 现在如实取 WAL 当前积压字节数。取不到（wal 为 nil）时保持 0——
+		// 0 会让 `evaluate` 里 `BacklogBytes > 0 && ...` 的判据不成立，
+		// 即「不因读数缺失而误降级」，方向与上面 capacityProvider 失败时一致。
+		if p.wal != nil {
+			if _, backlogBytes := p.wal.Backlog(); backlogBytes > 0 {
+				sig.BacklogBytes = uint64(backlogBytes)
+			}
+		}
 	}
 	changed, _ := p.sampler.UpdateSignal(sig, now)
 	return changed
