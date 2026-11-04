@@ -46,9 +46,6 @@ const (
 // 窗口一旦真的超过 VL 上限，代次占用探测与合并粗筛会整组失败。
 const searchMaxWindow = 31 * 24 * time.Hour
 
-// projectionGenerationField 是投影代次字段名（eventFromJSON 会把它放进 Event.Fields）。
-const projectionGenerationField = "projection_generation"
-
 // mergedScanRows 返回合并粗筛的 VL 行预算（页预算 × 系数，钳制在上下限内）。
 func mergedScanRows(q query.RangeQuery) uint64 {
 	rows := lookaheadRows(q) * mergedScanFactor
@@ -65,14 +62,15 @@ func mergedScanRows(q query.RangeQuery) uint64 {
 // 谓词语义，用于合并粗筛后的行级归因。两处（LogsQL 与内存）必须逐字等价——
 // merged_test.go 有对照测试守护。
 //
-// 语义分四段（全部为非空段的合取）：
+// 语义分三段（全部为非空段的合取）：
 //  1. scoped（SourceProjections 非空）：命中任一 scope 的
-//     (log_source_id, source_generation, projection_generation ∈ set,
-//     且 record_end <= scope.ClosedVisibleSeq)；
+//     (log_source_id, source_generation, 且 record_end <= scope.ClosedVisibleSeq)；
 //  2. 非 scoped 且 Projection 非空：命中任一 CoveredSourceGenerations 的
 //     (log_source_id, source_generation)；
-//  3. covered 为空 → 回退 Key.StorageNamespace 相等；
-//  4. 非 scoped 且有 generation 集 → 行的 projection_generation 必须 ∈ 集合。
+//  3. covered 为空 → 回退 Key.StorageNamespace（命名空间形态）。
+//
+// 第四段「非 scoped 时行的 projection_generation 必须 ∈ 白名单」已于 2026-11-02
+// 随简化投递路径**删除**：selectorQuery 侧对应的谓词同批移除，两处必须同步。
 //
 // range 级前缀水位（selectorQuery 第三段 + Search 回调双重检查的对象）在此一并
 // 用 rng.ClosedVisibleSeq 表达（合并路径不得使用全局 q.ClosedVisibleSeq——
@@ -93,7 +91,6 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 
 	proj := rng.Projection
 	scoped := proj != nil && len(proj.SourceProjections) > 0
-	_ = ev.Fields[projectionGenerationField] // 简化后不再按代次过滤（见下）
 
 	covered := false
 	hasExpressibleCoverage := false
@@ -167,8 +164,7 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 }
 
 // mergedSearchQuery 构造合并粗筛的 LogsQL：覆盖组内全部来源，
-// 管道与 searchQuery 逐字一致；fields 额外带 projection_generation（供内存
-// 归因过滤）。管道顺序（fields → sort → limit 相邻）的原因见 searchQuery 注释。
+// 管道与 searchQuery 逐字一致。fields 不再带 projection_generation（无消费方）。
 //
 // **来源段不能一律用 `in()`**：`in()` 是精确匹配，而命名空间形态的来源（简化投递
 // 路径补建的 Catalog 记录）需要匹配 `<ns>/...` 的子源。两类来源分开渲染：
@@ -198,8 +194,7 @@ func mergedSearchQuery(sources []query.SourceScope, q query.RangeQuery) string {
 	}
 	return "(" + source + ")" +
 		" | fields _time, _msg, event_id, log_source_id, source_generation, " +
-		projectionGenerationField +
-		", parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
+		"parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
 		" | sort by (_time desc)" +
 		" | limit " + strconv.FormatUint(mergedScanRows(q), 10)
 }

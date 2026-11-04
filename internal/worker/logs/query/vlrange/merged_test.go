@@ -54,7 +54,9 @@ func TestMergedSearchQueryShape(t *testing.T) {
 	text := mergedSearchQuery([]query.SourceScope{{LogSourceID: "src-a"}, {LogSourceID: "src-b"}}, q)
 	// in() 语法（PoC 实测比 OR 组快 ~4.6 倍）+ 管道与 searchQuery 同形。
 	require.Contains(t, text, `log_source_id:in("src-a","src-b")`)
-	require.Contains(t, text, projectionGenerationField)
+	// 管道不再取用投影代次（2026-11-02 简化投递路径）：fields 列表也把它移除了。
+	// 反向断言，防止有人以为「内存归因还在按代次过滤」而把两处谓词的关系看错。
+	require.NotContains(t, text, projectionGenerationField)
 	require.Contains(t, text, "| sort by (_time desc)")
 	require.Contains(t, text, "| limit 303") // (页 100 + 1 前瞻) × 3
 	// 转义：字符串中的引号/反斜杠必须转义（与 selectorQuery 同款）。
