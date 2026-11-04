@@ -253,7 +253,22 @@ func TestQueryTextBudgetDisjointScopeTermsCollapseOverlappingEvidence(t *testing
 	terms = disjointScopeTerms(rng, q)
 	require.Contains(t, strings.Join(terms, " OR "), "log_source_id:="+strconv.Quote(source), "控制字符和引号须按最终LogsQL文本计算")
 	rng.Projection.SourceProjections = []catalog.SourceProjection{{ClosedVisibleSeq: 0}}
-	require.Equal(t, []string{`(log_source_id:="" AND source_generation:="" AND record_end:<=0)`}, disjointScopeTerms(rng, q), "明确空字段是精确谓词，不可在分片时当作无约束")
+
+	// 零水位（seq=0）= 「没有封窗信息」，不得渲染成 `record_end:<=0`（2026-11-05 订正）。
+	//
+	// 原断言把 `... AND record_end:<=0` 当成了期望值——那是把「零水位当零上界」在
+	// **第五处**位置锁死。同一份输入进 `selectorQuery` 时不加上界（`if cvs > 0`），
+	// 两处不等价就是本事故的同源形态：超长查询一旦走进分片路径，每个分片恒返 0 行，
+	// Stats 全零却报 `StatsExact`。
+	//
+	// 空字段仍必须渲染成精确谓词（不能当作无约束）——这一点保留。
+	require.Equal(t, []string{`(log_source_id:="" AND source_generation:="")`}, disjointScopeTerms(rng, q),
+		"空字段是精确谓词（不可当无约束），但零水位不得拼 record_end 上界")
+
+	// 反向上界：非零水位一个字都不能少。
+	rng.Projection.SourceProjections = []catalog.SourceProjection{{ClosedVisibleSeq: 400}}
+	require.Equal(t, []string{`(log_source_id:="" AND source_generation:="" AND record_end:<=400)`}, disjointScopeTerms(rng, q),
+		"非零水位必须继续渲染 record_end 上界（封窗语义）")
 }
 
 func TestQueryTextBudgetHTTPShardsShareWholeRequestDeadline(t *testing.T) {

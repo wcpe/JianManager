@@ -128,7 +128,17 @@ func disjointScopeTerms(rng query.AuthoritativeRange, q query.RangeQuery) []stri
 				parts = append(parts, `source_generation:="`+escape(a.sourceGeneration)+`"`)
 			}
 		}
-		parts = append(parts, "record_end:<="+strconv.FormatUint(seq, 10))
+		// 零水位（seq=0）= 「没有封窗信息」，**不得**渲染成 `record_end:<=0`。
+		//
+		// 与 selectorQuery（`if q.ClosedVisibleSeq > 0`）及 rangeMatchesEvent
+		// （`cvs > 0 && ...`）同口径。旧写法无条件拼，于是
+		// `ensureCatalogPartition` 补建的记录（cvs=0）一旦因超长查询走进分片路径，
+		// 每个分片都恒返回 0 行 ⇒ Stats 全零且报 `StatsExact`（静默的错误统计）。
+		//
+		// 这是「零水位当零上界」的**第五处**同根位置。
+		if seq > 0 {
+			parts = append(parts, "record_end:<="+strconv.FormatUint(seq, 10))
+		}
 		terms = append(terms, "("+strings.Join(parts, " AND ")+")")
 	}
 	sort.Strings(terms)
