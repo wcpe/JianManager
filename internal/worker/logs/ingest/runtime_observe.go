@@ -212,6 +212,44 @@ func (m *Manager) PositionInvariantViolations() []string {
 	return out
 }
 
+// CollectingNamespaces 返回当前**仍在采集**的分区命名空间（去重）。
+//
+// 用途（2026-11-05 真机事故）：Catalog journal 是纯内存的（2026-10-30 裁定），
+// 重启后分区记录从零重建；而 `SourceConfigs` 是持久化的，重启后能恢复。
+// 于是存在「Catalog 看不到、但源其实在采集」的命名空间——它的历史分区确有数据，
+// 只是本进程还没重建出记录。查询侧据此就能拒绝把这天判成「空成功」，
+// 否则用户看到「这天没日志」而 VL 里明明有 1746 条（本次事故）。
+//
+// 为什么取 pipes 的键而非直接遍历 SourceConfigs：pipes 是本进程**真的在跑**的源，
+// 已停产的源不在其中 —— 正好符合「仍在采集」的语义。停产源的历史查询仍可按空计入，
+// 那是 #60 的既有裁定，不得回退。
+//
+// 锁纪律：与 ResumeDiagnostics 一致 —— 在 m.mu 内一次性取值并释放，
+// 不在临界区里做任何 IO 或遍历大结构。
+func (m *Manager) CollectingNamespaces() []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	out := make([]string, 0, len(m.pipes))
+	seen := make(map[string]struct{}, len(m.pipes))
+	for key := range m.pipes {
+		// StorageNamespace（inst:318）是分区命名空间；LogSourceID 是完整源 id
+		// （inst:318/file）。查询侧按命名空间判空，故必须给前者。
+		ns := m.state.SourceConfigs[key].StorageNamespace
+		if ns == "" {
+			continue
+		}
+		if _, ok := seen[ns]; ok {
+			continue
+		}
+		seen[ns] = struct{}{}
+		out = append(out, ns)
+	}
+	m.mu.Unlock()
+	return out
+}
+
 // SelfFailureReasons 汇总各管道**最近的自愈失败原因**（新→旧、有界 ✓），供分钟打点消费 ✓。
 func (m *Manager) SelfFailureReasons() []string {
 	if m == nil {
