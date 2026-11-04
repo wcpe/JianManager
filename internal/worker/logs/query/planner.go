@@ -59,8 +59,8 @@ type Planner struct {
 	timers      map[string]*time.Timer
 	activeViews map[string]time.Time
 	closed      bool
-	// collectingNamespaces 为「仍在采集的命名空间」来源；nil 时不启用该守卫。
-	collectingNamespaces EmptyTargetResolver
+	// 注：曾尝试接一路「仍在采集的命名空间」信号来区分「真空」与「丢记录」，
+	// 2026-11-05 回退——源是否在采集与「那天有没有数据」无关（见 coverEmptyAuthorizedTargets 论证）。
 }
 
 // maxRetainedViews 内存视图注册表上限。
@@ -510,21 +510,35 @@ func (p *Planner) coverEmptyAuthorizedTargets(req PlanRequest, view *QueryView, 
 		// 被当成「11-02 也可以合法判空」⇒ `items=0` + `complete=true` + `EXHAUSTED`，
 		// 一个静默的错误空。
 		//
-		// 两道守卫，都要过才允许判空：
+		// 守卫：窗口整体早于该源最早分区 ⇒ 本地记录无法覆盖这段历史，不得判空。
+		// 它用的是「记录本身能证明的范围」（earliest 来自 Catalog 真实分区行），
+		// 而不是对源状态的时间推断，因此是有信息量的判据。
 		//
-		// ① 该源仍在采集 ⇒ 本进程可能还没重建它的分区记录（journal 纯内存、重启归零）。
-		//    此时「查不到」不构成「没有数据」的证据，必须 fail-closed。
-		//    这条比窗口判据更本质：它不依赖时间窗形状，能盖住「窗口夹在记录区间中间」
-		//    （如源有 10-30 与 11-04 的记录、用户查 11-02）这类只靠方向判不出来的情形。
-		// ② 窗口整体早于该源最早分区 ⇒ 同上，本地记录无法覆盖这段历史。
+		// ----- 已被否决的两条推断（切勿重加）-----
 		//
-		// 反过来，若该源已停止采集（停产源，如 inst:153）且窗口在其数据之后，
-		// 仍按空成功计入 —— 那是 #60 的既有裁定，不得回退。
-		nsForGuard := auth
-		if parsed, ok := parseTargetKey(auth); ok && parsed.StorageNamespace != auth {
-			nsForGuard = parsed.StorageNamespace
-		}
-		if p.isActivelyCollecting(nsForGuard) || p.namespaceWindowPrecedesEarliestDay(allKeys, auth, req.TimeRange) {
+		// ① 「窗口晚于最早分区且源仍在采集 ⇒ 判空」的反面——把「源仍在采集」当作
+		//    「记录可能没重建」的代理信号。已否决，理由是它区分不了两件事：
+		//
+		//      2026-11-02  VL=1746 条  ← 有数据，Catalog 记录丢了
+		//      2026-11-03  VL=0   条  ← 真空（那天服务器没产生这类日志）
+		//      2026-11-05  VL=0   条  ← 真空
+		//
+		//    三者都发生在「活着的源」身上。按「是否在采集」判，两个真空天会被一起
+		//    打成 not_ready ⇒ 平台级 complete 永远为 false（把 #60 换个方向重演），
+		//    而且报出的 ENGINE_NOT_READY 会把现场引向「引擎没起来」的错误方向。
+		//
+		// ② 任何基于「源状态 / 时间窗方向」的新推断。根因不在这里：Catalog journal
+		//    是纯内存的（2026-10-30 裁定），重启后 `ensureCatalogPartition` 只在投递
+		//    成功时补建分区记录 ⇒ 一个源**重启前**所有天的记录永远回不来。这是写入
+		//    侧的事实缺失，查询侧拿自己的信息去补只会越补越多坑。
+		//    正确的修法是让记录能重建（恢复 journal 持久化 + 启动重放），那之后
+		//    11-02 查得到、11-03/11-05 是正当空，查询侧**不需要任何猜测**。
+		//
+		// 因此在记录重建落地之前，这里的口径是：**窗口整体早于最早分区**才 fail-closed；
+		// 其余情形沿用 #60 的「按空成功计入」。已知残余风险：记录缺失且窗口落在
+		// [最早分区, 窗口终点] 之内时仍可能静默判空——这属于记录重建要解决的问题，
+		// 不是本函数能修的，已在报告里列为真实限制。
+		if p.namespaceWindowPrecedesEarliestDay(allKeys, auth, req.TimeRange) {
 			NamespaceNotProvablyEmptyCount.Add(1)
 			res.Coverage.AddTarget(TargetCoverage{
 				TargetID: auth,
@@ -577,6 +591,11 @@ var NamespaceNotProvablyEmptyCount atomic.Int64
 //
 // 时间窗缺失时（`FromUTC`/`ToUTC` 都空）不做判断：那是「不限分区日」，
 // 已由 selectKeys 取全部分区，走到这里就说明确实无分区，按既有口径处理。
+//
+// 判据的适用边界（2026-11-05 复议）：它只能拦住「窗口完全落在该源有记录之前」。
+// 「窗口夹在已有记录之间而该天记录缺失」（如分区 10-30 与 11-04、查 11-02）它拦不住，
+// 因为方向判据看不到那段区间里发生过什么。那段属于 Catalog 记录重建的职责，
+// 不在本函数里靠推断补充（原因见 coverEmptyAuthorizedTargets 的「已否决推断」段）。
 func (p *Planner) namespaceWindowPrecedesEarliestDay(allKeys []catalog.PartitionKey, namespace string, tr TimeRange) bool {
 	if namespace == "" || tr.ToUTC == "" {
 		return false
@@ -604,49 +623,6 @@ func (p *Planner) namespaceWindowPrecedesEarliestDay(allKeys []catalog.Partition
 	}
 	// 窗口终点不晚于最早分区的起点 ⇒ 整段窗口全在该分区之前。
 	return !to.After(dayStart)
-}
-
-// EmptyTargetResolver 报告某个分区命名空间是否**当前仍在采集**（即该源的配置已知）。
-//
-// 为什么需要它（2026-11-05 真机，日志页「这天没日志」但 VL 里确有数据）：
-// Catalog journal 是**纯内存**的（2026-10-30 裁定），重启后分区记录从零重建。
-// 而采集侧持久化的是 `SourceConfigs`（哪些源、采什么）——重启后**能恢复**。
-// ⇒ 存在一个 Catalog 看不到却仍在采集的命名空间：它的历史分区确实有数据，
-// 但本进程还没重建出分区记录。
-//
-// 没有这个信号时，worker 只能看到「无记录」，于是要么报未就绪（对“源确实没数据”误报），
-// 要么补空成功（对“有数据但记录未重建”漏报，即本次事故）。两者都是猜。
-// 接上它之后，「该源在采集 ⇒ 本进程可能还没重建它的分区记录」就能被显式表达，
-// `coverEmptyAuthorizedTargets` 据此拒绝判空（fail-closed，宁可让 CP 判未就绪）。
-type EmptyTargetResolver func() []string
-
-// SetEmptyTargetResolver 接上「仍在采集的命名空间」来源。nil = 不启用（既有行为不变）。
-func (p *Planner) SetEmptyTargetResolver(resolve EmptyTargetResolver) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	p.collectingNamespaces = resolve
-	p.mu.Unlock()
-}
-
-// isActivelyCollecting 报告该命名空间是否仍在采集。
-func (p *Planner) isActivelyCollecting(namespace string) bool {
-	if p == nil || namespace == "" {
-		return false
-	}
-	p.mu.Lock()
-	resolve := p.collectingNamespaces
-	p.mu.Unlock()
-	if resolve == nil {
-		return false
-	}
-	for _, ns := range resolve() {
-		if ns == namespace {
-			return true
-		}
-	}
-	return false
 }
 
 // catalogHasQueryableRecord 报告 Catalog 中是否存在该命名空间下**可查**的记录（任意一天）。

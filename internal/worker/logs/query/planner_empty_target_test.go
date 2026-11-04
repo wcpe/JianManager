@@ -268,113 +268,75 @@ func TestPlanner_WindowBeforeEarliestPartitionIsNotReady(t *testing.T) {
 	require.True(t, silent.Coverage.Complete)
 }
 
-// 回归（2026-11-05，跨窗口场景）：窗口**横跨**该源的最早分区时，方向判据分不开
-// 「该源那时还没上线」与「那天记录丢了」，必须靠「该源是否仍在采集」来判。
+// 回归（2026-11-05）：源**仍在采集**不再改变空成功的判定。
 //
-// # 为什么方向判据不够（子代理实测指出）
+// # 为什么这条用例反向锁定了「已否决的推断」
 //
-// `namespaceWindowPrecedesEarliestDay` 只看窗口终点与最早分区的先后。于是：
+// 曾有一版修法把「源是否仍在采集」当成「记录可能没重建」的代理信号：仍在采集
+// ⇒ fail-closed。它在真机上同时把真空天打成了故障：
 //
-//	窗口 [11-01, 11-05)，最早分区 11-04  →  to(11-05) > earliest(11-04) → 判空成功 ✗
+//	2026-11-02  VL=1746 条  ← 有数据，Catalog 记录丢了
+//	2026-11-03  VL=0   条  ← 真空（服务器那天没产生这类日志）
+//	2026-11-05  VL=0   条  ← 真空
 //
-// 而窗口里的 11-01～11-03 恰恰是「没有记录的天」，其中 11-02 在 VL 里有 1746 条。
-// 用户点「最近 7 天」就会踩中。
+// 三者都在活着的源身上——「是否在采集」与「那天有没有数据」无关，两个真空天
+// 会被一起判成 not_ready ⇒ 平台级 complete 永远为 false（把 #60 反向重演），
+// 且报出的 ENGINE_NOT_READY 把现场引向「引擎没起来」的错误方向。
 //
-// # 修法
-//
-// 用 `EmptyTargetResolver` 问「这个源还在采集吗」：
-//   - 还在采集 ⇒ 本进程可能还没重建它的分区记录（journal 纯内存、重启归零）
-//     ⇒ 查不到不构成「没有数据」的证据 ⇒ fail-closed；
-//   - 已停产（如 inst:153）⇒ 历史已封闭，窗口在其数据之后仍按空计入（#60）。
-//
-// 转红方式（实测）：把 `isActivelyCollecting` 那半条件去掉，本用例在
-// 「跨窗也必须 not_ready」处红。
-func TestPlanner_CrossWindowOverActivelyCollectedSourceIsNotReady(t *testing.T) {
+// 所以本条固定：**已停产/仍在采集都不是判据**。窗口晚于该源最早分区时，无论源
+// 是否还在采集，一律按 #60 的空成功计入。这一条现在**故意**不区分两者，
+// 谁再往 `coverEmptyAuthorizedTargets` 里塞状态推断，都会在这里转红。
+func TestPlanner_EmptySuccessIgnoresWhetherSourceStillCollects(t *testing.T) {
 	cat := catalog.New(nil)
-	// 只有 11-04 的记录（重启后的形态）。
 	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-11-04"}, catalog.OwnerHot, 1, "hot-318")))
 
 	p := NewPlanner(cat, nil)
-	p.SetEmptyTargetResolver(func() []string { return []string{"inst:318"} })
-
-	// 窗口横跨最早分区：11-01 ~ 11-05（含 11-04，也含无记录的 11-01~11-03）。
+	// 窗口晚于该源最早分区（11-04），且该源**仍在采集**的典型形态（如查 11-05 当天）。
 	res := p.Plan(PlanRequest{
-		RequestID: "cross-window-collecting",
+		RequestID: "live-source-after-data",
 		TargetIDs: []string{"inst:318"},
-		TimeRange: TimeRange{FromUTC: "2026-11-01T00:00:00Z", ToUTC: "2026-11-05T00:00:00Z"},
+		TimeRange: TimeRange{FromUTC: "2026-11-05T00:00:00Z", ToUTC: "2026-11-06T00:00:00Z"},
 	})
 	require.Nil(t, res.Err)
-	// 11-04 在窗口内 ⇒ 有 range；但这不豁免「其余天无记录」的判断。
-	require.NotEmpty(t, res.Ranges, "窗口内的 11-04 必须产出 range")
+	require.Empty(t, res.Ranges, "窗口内无分区 ⇒ 无 range")
 
-	// 关键：孤立查一段没有记录、且落在「采集中的源」历史里的窗口 ⇒ 不得判空。
-	only := p.Plan(PlanRequest{
-		RequestID: "cross-window-gap-day",
-		TargetIDs: []string{"inst:318"},
-		TimeRange: TimeRange{FromUTC: "2026-11-02T00:00:00Z", ToUTC: "2026-11-03T00:00:00Z"},
-	})
-	require.Nil(t, only.Err)
-	entry := coverageEntryFor(only.Coverage, "inst:318")
-	require.NotNil(t, entry)
-	require.Equal(t, CoverageNotReady, entry.State,
-		"源仍在采集 ⇒ 查不到不等于没有数据（journal 纯内存，重启后尚未重建该天记录）")
-	require.False(t, only.Coverage.Complete, "不得把「记录未重建」粉饰成完整空结果")
-}
-
-// 反向：同一个源**已经停产**（resolver 不再返回它）时，窗口在其数据之后仍按空成功计入。
-// 这条守住 #60 的裁定不被上面的 fail-closed 顺手推翻。
-func TestPlanner_StoppedSourceAfterDataStillCountsEmptySuccess(t *testing.T) {
-	cat := catalog.New(nil)
-	require.NoError(t, cat.Put(queryableRecord(
-		catalog.PartitionKey{StorageNamespace: "inst:153", UTCDay: "2026-09-27"}, catalog.OwnerHot, 1, "hot-153")))
-
-	p := NewPlanner(cat, nil)
-	// resolver 不返回 inst:153 ⇒ 该源已停产（不在 pipes 里）。
-	p.SetEmptyTargetResolver(func() []string { return []string{"inst:318"} })
-
-	res := p.Plan(PlanRequest{
-		RequestID: "stopped-source",
-		TargetIDs: []string{"inst:153"},
-		TimeRange: TimeRange{FromUTC: "2026-10-11T00:00:00Z", ToUTC: "2026-10-12T00:00:00Z"},
-	})
-	require.Nil(t, res.Err)
-	entry := coverageEntryFor(res.Coverage, "inst:153")
+	entry := coverageEntryFor(res.Coverage, "inst:318")
 	require.NotNil(t, entry)
 	require.Equal(t, CoverageSuccess, entry.State,
-		"停产源在窗口之后没有新数据 ⇒ 空成功（#60 裁定，不得因 fail-closed 被推翻）")
-	require.True(t, res.Coverage.Complete)
+		"活着的源在没有日志的一天是正常工作状态，不得报成故障（11-03/11-05 真机实证 VL=0 条）")
+	require.True(t, res.Coverage.Complete,
+		"平台级 complete 不能被「活着的源 + 真空天」永久拖成 false")
 }
 
-// 回归（2026-11-05，真·跨窗口）：该源有**两个**分区（10-30 与 11-04），用户查 11-02。
+// 记录已知的覆盖盲区（**记录重建落地前的残余风险**，不是可接受行为）。
 //
-// # 为什么前一条用例守不住这个场景
+// # 场景
 //
-// 前一条里该源只有 11-04 一个分区，于是「窗口 [11-02,11-03)」整体早于最早分区（11-04）
-// ⇒ 方向判据自己就判了 not_ready ⇒ 去掉「仍在采集」守卫也照样绿（变异实测确认）。
+// 该源有 10-30 与 11-04 两个分区，用户查 11-02（VL 里实有 1746 条）。
+// 方向判据只拦「窗口完全落在最早分区之前」，而 11-02 夹在两个已有记录之间
+// ⇒ 判不出 ⇒ 仍按空成功计入。这是一个**真实的静默空**。
 //
-// 真正需要采集判据的是**两分区夹击**的情形：
+// # 为什么不用查询侧的推断去修
 //
-//	分区：10-30, 11-04
-//	最早分区 = 10-30 ⇒ 窗口 [11-02,11-03) 并不早于它 ⇒ 方向判据判空成功 ✗
-//	但 11-02 那天既无记录、又落在「采集中的源」的数据区间里
-//	⇒ 只有「该源仍在采集」这条判据能拦住（VL 里 11-02 有 1746 条，正是本次事故）
+// 根因在写入侧：Catalog journal 纯内存（2026-10-30 裁定），重启后
+// `ensureCatalogPartition` 只在投递成功时补建记录 ⇒ 重启前所有天的记录永远回不来。
+// 查询侧没有「那天到底有没有数据」的事实，任何时间/状态推断都只能猜，
+// 而猜错的两种方向都是事故（静默空、或把真空报成故障）。
 //
-// 这也是子代理实测指出的跨窗漏洞的**最小复现**：点「最近 7 天」就会踩中。
+// # 这条用例的作用
 //
-// 转红方式（实测）：把 `isActivelyCollecting` 的返回值固定为 false，本用例在
-// 「必须是 CoverageNotReady」处红——它是这条守卫的唯一守卫。
-func TestPlanner_MiddleGapBetweenPartitionsIsNotProvablyEmpty(t *testing.T) {
+// 它不是「期望行为」，而是**把已知缺陷钉住**：记录重建（journal 持久化 + 启动重放）
+// 落地后，本用例应当反过来断言 not_ready 或产出 range，届时必须改这条用例。
+// 谁在查询侧加了新的启发式，只会让这条用例继续绿而问题依旧——所以不要那样做。
+func TestPlanner_MiddleGapIsKnownSilentEmptyUntilRecordsRebuilt(t *testing.T) {
 	cat := catalog.New(nil)
-	// 该源有 10-30 与 11-04 两个分区，中间 11-02 那天没有记录。
 	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-10-30"}, catalog.OwnerHot, 1, "hot-318-a")))
 	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-11-04"}, catalog.OwnerHot, 2, "hot-318-b")))
 
 	p := NewPlanner(cat, nil)
-	p.SetEmptyTargetResolver(func() []string { return []string{"inst:318"} })
-
 	res := p.Plan(PlanRequest{
 		RequestID: "middle-gap",
 		TargetIDs: []string{"inst:318"},
@@ -385,22 +347,7 @@ func TestPlanner_MiddleGapBetweenPartitionsIsNotProvablyEmpty(t *testing.T) {
 
 	entry := coverageEntryFor(res.Coverage, "inst:318")
 	require.NotNil(t, entry)
-	require.Equal(t, CoverageNotReady, entry.State,
-		"窗口夹在该源两个分区之间、该天无记录、且源仍在采集 ⇒ 查不到不构成「没有数据」的证据，"+
-			"必须 fail-closed（VL 里那天实有 1746 条，报空成功就是静默丢数据）")
-	require.False(t, res.Coverage.Complete)
-
-	// 对照：同一个源、同一天，若**已停产**则历史封闭，按空成功计入（#60）。
-	stopped := NewPlanner(cat, nil)
-	stopped.SetEmptyTargetResolver(func() []string { return nil })
-	viaStopped := stopped.Plan(PlanRequest{
-		RequestID: "middle-gap-stopped",
-		TargetIDs: []string{"inst:318"},
-		TimeRange: TimeRange{FromUTC: "2026-11-02T00:00:00Z", ToUTC: "2026-11-03T00:00:00Z"},
-	})
-	require.Nil(t, viaStopped.Err)
-	stoppedEntry := coverageEntryFor(viaStopped.Coverage, "inst:318")
-	require.NotNil(t, stoppedEntry)
-	require.Equal(t, CoverageSuccess, stoppedEntry.State,
-		"停产源的历史已封闭 ⇒ 那一天确实没有数据，按空成功计入")
+	require.Equal(t, CoverageSuccess, entry.State,
+		"已知缺陷：夹在已有记录之间的缺天仍被判空成功（VL 里那天实有 1746 条）。"+
+			"记录重建落地后本条必须改为断言 not_ready 或产出 range。")
 }

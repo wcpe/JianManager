@@ -1350,26 +1350,6 @@ func runWorker() {
 			logIngest = manager
 			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
-			// 查询侧「可证明为空」判据的数据来源（2026-11-05 真机事故）。
-			//
-			// Catalog journal 是纯内存的（2026-10-30 裁定），重启后分区记录从零重建；
-			// 而 SourceConfigs 是持久化的、能恢复 ⇒ 存在「Catalog 看不到、但源在采集」
-			// 的命名空间，它的历史分区确有数据。没有这个接线时，查询侧面对这种形态
-			// 只能猜，且猜错的方向是「补空成功」：
-			//
-			//   items=0  complete=true  reasons=None   ← 用户看到「这天没日志」
-			//
-			// 而 VL 直查同一天有 1746 条。接上之后，采集中的源一律拒绝判空
-			// （fail-closed：宁可让 CP 判未就绪，也不把「记录未重建」粉饰成「没有数据」）。
-			//
-			// 用闭包而非快照：logIngest 在本块之后才可被替换（重试路径），
-			// 闭包每次现读字段，避免拿到旧值。
-			logStack.Planner.SetEmptyTargetResolver(func() []string {
-				if logIngest == nil {
-					return nil
-				}
-				return logIngest.CollectingNamespaces()
-			})
 			// FR-510：磁盘缓冲（VL 不可用时把即将被丢弃的 WAL 条目先写盘）。
 			//
 			// 默认关闭——它是采集侧唯一会写磁盘的路径，而生产盘是机械盘、
