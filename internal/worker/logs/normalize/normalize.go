@@ -106,7 +106,16 @@ type Options struct {
 	// Stream stdout|stderr，写入 Event.Stream。
 	Stream string
 	// IngestTimeUTC Worker 接收时间（RFC3339）；空则在 New 时取 now UTC。
+	//
+	// 它只在 `FixedIngestTime` 为 true 时被当作事件的 `ingest_time_utc`；否则
+	// 每个事件取“此刻”（见 `ingestAt`）。保留该字段是为了不打断既有调用方。
 	IngestTimeUTC string
+	// FixedIngestTime 显式声明「请把 IngestTimeUTC 当成固定时间轴」。
+	//
+	// 只为重放/测试而设：它们需要可复现的时间轴。**生产采集路径必须保持 false**——
+	// 否则长驻进程跨过 UTC 午夜后，今天的无时间戳行会被归进启动日的分区，
+	// 而查询侧按天过滤 ⇒ 当天查不到（2026-11-05 真机缺陷，详见 `ingestAt`）。
+	FixedIngestTime bool
 	// Location 解释 [HH:MM:SS] 的时区；默认 UTC。
 	Location *time.Location
 	// Charset 源正文的字符集（auto/utf-8/gbk/gb18030）；空串为 auto。
@@ -516,6 +525,50 @@ func (n *Normalizer) emit(p *pending, st ParseStatus) logtypes.Event {
 	return ev
 }
 
+// ingestAt 返回本事件应当标注的「接收时间」UTC（RFC3339Nano）。
+//
+// ## 为什么不能直接用构造时冻结的 n.ingest（2026-11-05 真机缺陷修复）
+//
+// 原实现只在 `New()` 里取一次 `time.Now()`（n.ingest）。而 `ingest` 包构造 Normalizer
+// 时**从不设置** `pipeline.Options.IngestTimeUTC`（全仓非测试无一处设它），于是每个源
+// 的 Normalizer 永久携带「该源被登记那一刻」的时间。长驻进程（生产常态）跑过 UTC
+// 午夜后：
+//
+//   - 所有 `EventTimeUTC == ""` 的行（RAW 解析失败行、无前缀的堆栈续行、GBK 乱码行）
+//     都拿到同一个冻结时间；
+//   - `ingest.eventUTCDay`（runtime_delivery_pipeline.go）与 `utcDayOfEventTime`
+//     （runtime_source.go）都优先用 `EventTimeUTC` 归 UTC 日；
+//   - `normalizeCanonicalEvent` 在该字段为空时回填 `IngestTimeUTC`。
+//
+// 于是**今天的 RAW 行被写进启动日那天**的分区键——查询当天时按天选不到，日志页空。
+// 这与已经修过的两个缺陷同根（「Catalog 记录建在源登记日而非事件日」、
+// 「中段缺天的静默空」）：都是「用错了时间基准去归天」。
+//
+// ## 取值优先级
+//
+//  1. `FeedAt` 显式传入的 `at`（调用方知道的真实接收时刻）—— 最准；
+//  2. `opts.IngestTimeUTC`
+//     当且仅当调用方**显式**给出了“已知接收时刻”时。它只用于重放/测试
+//     （需要固定时间轴），**不是**用来把进程启动时刻冻成常量的。
+//  3. `time.Now()` —— 即「此刻」，这是“接收时间”本来的语义。
+//
+// 为什么不能用 `opts.IngestTimeUTC != ""` 作为“用固定时间”的判据（本修复的第二个坑）：
+// 那会让任何传入了该字段的调用方重新变回“冻结时间”。本仓库的 ingest 不传它，
+// 所以只修 ① 已能治生产；但把 ② 做成条件分支后，往后任何人“顺手”把它接上
+// 也不会再退化成同一个 bug —— 要固定时间轴必须显式说明意图（`FixedIngestTime`）。
+//
+// 注意：它**不影响**事件正文、`event_time`、哈希身份（`event_id` 不含时间），
+// 也不影响有语义时间的行（那些行的 `EventTimeUTC` 非空，根本不看本字段）。
+func (n *Normalizer) ingestAt() string {
+	if n.hasFeedT && !n.feedNow.IsZero() {
+		return n.feedNow.UTC().Format(time.RFC3339Nano)
+	}
+	if n.opts.FixedIngestTime && n.opts.IngestTimeUTC != "" {
+		return n.opts.IngestTimeUTC
+	}
+	return time.Now().UTC().Format(time.RFC3339Nano)
+}
+
 func (n *Normalizer) buildEvent(
 	lines []string,
 	startLine, endLine int,
@@ -545,7 +598,12 @@ func (n *Normalizer) buildEvent(
 		End:   n.opts.RecordBase + uint64(endLine),
 	}
 	// level 可能为空（解析失败）：绝不发明；身份字段照常组装。
-	ev := logtypes.BuildEvent(src, rec, eventTimeUTC, n.ingest, level, n.opts.Stream, message)
+	//
+	// IngestTimeUTC 用**本事件被接收的时刻**，而不是 Normalizer 创建时冻结的那个值——
+	// 原因见 `ingestAt` 的注释：长驻进程跨过 UTC 午夜后，冻结值会把今天的无时间戳行
+	// 归进启动日的分区，而查询侧按天过滤 ⇒ 当天查不到（与「Catalog 记录建在源登记日」
+	// 同一族问题）。
+	ev := logtypes.BuildEvent(src, rec, eventTimeUTC, n.ingestAt(), level, n.opts.Stream, message)
 	ev.Fields = map[string]string{
 		FieldParseStatus: string(st),
 		FieldMessage:     message,

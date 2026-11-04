@@ -66,6 +66,13 @@ type Config struct {
 	LogQuery        LogQueryConfig    `mapstructure:"log_query"`
 	LogVL           LogVLConfig       `mapstructure:"log_vl"`
 	LogCapacity     LogCapacityConfig `mapstructure:"log_capacity"`
+	// LogCatalog 日志分区 Catalog 的持久化面（真机事故 2026-11-05）。
+	//
+	// 背景：分区记录曾改为纯内存（机械盘不做落盘），前提是「记录可随时重建」。
+	// 该前提已被 2026-11-02 的投递路径简化推翻（记录改为只在投递成功时补建）。
+	// 不落盘的后果是：进程重启后该源**之前所有天**在查询侧变成「不存在」——
+	// VL 里行还在，没人知道去查它。详见 catalog.BatchedStore 的注释。
+	LogCatalog LogCatalogConfig `mapstructure:"log_catalog"`
 	// LogSpool 是 VL 不可用时的磁盘缓冲（FR-510）。
 	LogSpool   LogSpoolConfig    `mapstructure:"log_spool"`
 	LogSources []LogSourceConfig `mapstructure:"log_sources"`
@@ -376,6 +383,58 @@ type LogIndexPersistConfig struct {
 	// 它与 ManifestSyncEvery 是「或」的关系，两个都设 0 表示完全由段集合变化驱动
 	// （最省 IO：8 MiB 一段，段滚动本身就是天然的次数上界）。
 	ManifestSyncInterval string `mapstructure:"manifest_sync_interval"`
+}
+
+// LogCatalogConfig 是分区 Catalog journal 的持久化配置面（键 log_catalog.*）。
+//
+// 与 log_index.persist.manifest_sync_* 同一套取舍口径：同步频率越低，机械盘寻道越少，
+// 崩溃时可能丢的记录窗口就越长；0 表示“不设该维度上界”。
+type LogCatalogConfig struct {
+	// JournalEnabled 控制 journal 是否落盘（键 log_catalog.journal_enabled，默认 true）。
+	//
+	// 默认**开**的理由：分区记录是查询侧判断「那天有没有数据」的唯一事实，
+	// 不落盘就会在每次重启后丢失全部历史天。它不是可选优化，是正确性依赖。
+	// 保留关闭开关供极端场景（如只读盘/排障）使用，关闭时退化为修复前的纯内存行为。
+	JournalEnabled *bool `mapstructure:"journal_enabled"`
+	// JournalSyncInterval 是攒批落盘的**时间上界**（duration 字符串；键
+	// log_catalog.journal_sync_interval）。空/未设 = 用 catalog 默认（2s）；
+	// 显式 `0s` = 同步写（每次追加立即 fsync，等价于修复前行为，最耗 IO）。
+	JournalSyncInterval string `mapstructure:"journal_sync_interval"`
+	// JournalMaxBatch 是攒批落盘的**条数上界**（键 log_catalog.journal_max_batch）。
+	// 待落盘条目达到该数就当场 flush，给内存队列一个硬上界。0/未设 = 用默认 256。
+	JournalMaxBatch int `mapstructure:"journal_max_batch"`
+}
+
+// JournalPath 返回 journal 文件路径（位于数据根下 var/log）。
+func (c LogCatalogConfig) JournalPath(root string) string {
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, "var", "log", "catalog.journal.jsonl")
+}
+
+// JournalDisabled 返回是否显式关闭了 journal 落盘（未设 = 不关闭）。
+func (c LogCatalogConfig) JournalDisabled() bool {
+	return c.JournalEnabled != nil && !*c.JournalEnabled
+}
+
+// JournalSyncIntervalValue 收敛为 time.Duration。
+//
+// 三种取值需区分清楚（都靠“未设 vs 显式 0”区分，不能用零值主义）：
+//
+//	未设（空串）  ⇒ (0, false)：调用方用 catalog 默认（2s）
+//	显式 "0s"     ⇒ (0, true) ：同步写（每次追加即 fsync）
+//	显式非法值     ⇒ (0, false)：回退默认（与既有 manifest_sync_interval 同口径）
+func (c LogCatalogConfig) JournalSyncIntervalValue() (time.Duration, bool) {
+	raw := strings.TrimSpace(c.JournalSyncInterval)
+	if raw == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return 0, false
+	}
+	return d, true
 }
 
 // CommitBudget 把本地配置面收敛为 stateindex 的提交单元预算（非法值一律回退归一化默认）。
