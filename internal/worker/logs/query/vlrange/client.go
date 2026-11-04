@@ -68,7 +68,16 @@ func (c *Client) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 	params.Set("limit", strconv.FormatUint(lookaheadRows(q), 10))
 	return c.searchPage(ctx, params, q, lookaheadRows(q), func(ev logtypes.Event) bool {
 		// 现代 scope 在 LogsQL 中已逐源封闭；旧格式的零水位绝不解释成无限。
-		return rng.Projection != nil && len(rng.Projection.SourceProjections) > 0 && q.ClosedVisibleSeq == 0 || ev.Record.End <= q.ClosedVisibleSeq
+		//
+		// 2026-11-05：与 selectorQuery 同步修正。原条件把「零水位放行」绑定在 `scoped` 上：
+		//     scoped && cvs == 0  ||  ev.Record.End <= cvs
+		// 而 `ingest.ensureCatalogPartition` 补建的记录 `scoped=false` 且 `cvs=0`
+		// ⇒ 第二个子项要求 `Record.End <= 0` ⇒ **行级也把每一条丢掉**。
+		// 只改 selector 不改这里仍然查不到——两处必须同口径。
+		//
+		// 改后：`cvs == 0` 一律表示「没有封窗信息」⇒ 不加上界；
+		// `cvs > 0` 时仍要求 `Record.End <= cvs`（封窗语义一字未变）。
+		return q.ClosedVisibleSeq == 0 || ev.Record.End <= q.ClosedVisibleSeq
 	})
 }
 
@@ -366,7 +375,34 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
 	}
 	// 非 scoped 的 `projection_generation` 过滤同样去掉（理由同上）。
-	if !scoped || q.ClosedVisibleSeq > 0 {
+	//
+	// 2026-11-05 修正（生产日志查询整页为空的真 bug）：条件从 `!scoped || cvs > 0`
+	// 收紧为 `cvs > 0`。
+	//
+	// # 为什么 `!scoped` 不能无条件加上界
+	//
+	// 简化投递路径后，Catalog 分区记录由 `ingest.ensureCatalogPartition` 补建，
+	// 它**刻意不填** `SourceProjections` 与 `ClosedVisibleSeq`（见该函数注释：
+	// 一批数据只写一次、行上没有代次标签）。于是这条记录来到此处时 `scoped=false`
+	// 且 `cvs=0` ⇒ 旧条件命中 `!scoped` 分支 ⇒ 内建 `record_end:<=0`
+	// ⇒ **VL 里每条都被过滤掉**。
+	//
+	// 真机证据（inst:320/file，同一时间窗）：
+	//   加   record_end:<=0     -> 0 条
+	//   去掉 record_end 上界   -> 194 条
+	// 而接口报的是 `complete=true` / `EXHAUSTED` / `quality=exact`——
+	// 空结果被当成“完整且无数据”，比报错更难排查。
+	//
+	// # 为什么 `cvs > 0` 就够
+	//
+	// 水位 > 0 是“该分区已封窗”的真实语义，上界必须保留（反面用例：
+	// TestSelectorStillBoundsWhenClosedVisibleSeqIsSet）。而 cvs=0 只有一个含义：
+	// “没有封窗信息” ⇒ 不得解释成零上界，否则就是把「不知道」当成「什么都不包含」。
+	// 这与 Search 的行级归因谓词逐字同口径（client.go 的
+	// `Projection != nil && len(SourceProjections) > 0 && ClosedVisibleSeq == 0 ||
+	// ev.Record.End <= q.ClosedVisibleSeq`）——两处必须一致，否则 selector 会
+	// 先把行筛掉，行级判断再好也无力回天。
+	if q.ClosedVisibleSeq > 0 {
 		parts = append(parts, "record_end:<="+strconv.FormatUint(q.ClosedVisibleSeq, 10))
 	}
 	base := "*"

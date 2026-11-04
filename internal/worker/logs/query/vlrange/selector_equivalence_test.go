@@ -40,7 +40,10 @@ func selectorBeforeFactoring(rng query.AuthoritativeRange, q query.RangeQuery) s
 	case rng.Key.StorageNamespace != "":
 		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
 	}
-	if !scoped || q.ClosedVisibleSeq > 0 {
+	// 与 selectorQuery 同口径（2026-11-05）：只有**明确**水位（>0）才加上界。
+	// 原先这里是 `!scoped || cvs > 0`，详见 selectorOracle 的注释与
+	// scope_less_projection_regression_test.go 的真机证据。
+	if q.ClosedVisibleSeq > 0 {
 		parts = append(parts, "record_end:<="+strconv.FormatUint(q.ClosedVisibleSeq, 10))
 	}
 	base := "*"
@@ -94,7 +97,34 @@ func selectorOracle(rng query.AuthoritativeRange, q query.RangeQuery, row select
 			matched = rng.Key.StorageNamespace == "" || rng.Key.StorageNamespace == row.source
 		}
 	}
-	return matched && (scoped && q.ClosedVisibleSeq == 0 || row.end <= q.ClosedVisibleSeq)
+	// 契约变更（2026-11-05）：零水位不再按 `scoped` 分支。
+	//
+	// # 旧真值为什么在这里是错的
+	//
+	// 旧式：`matched && (scoped && cvs == 0 || row.end <= cvs)`。
+	// 它把「零水位放行」绑定在 `scoped`（= 有 SourceProjections）上。这在那时成立：
+	// 记录只由 `publishSnapshot` → `PublishProjection` 创建，而它总会填 SourceProjections。
+	//
+	// 简化投递路径后，Catalog 记录改由 `ingest.ensureCatalogPartition` 补建，它**刻意不填**
+	// SourceProjections 与 ClosedVisibleSeq（一批数据只写一次、行上没有代次标签）。
+	// 于是真实记录恒为 `scoped=false && cvs=0` ⇒ 旧真值要求 `row.end <= 0`
+	// ⇒ **声明「这些行一条都不该被返回」**，与生产事实相反。
+	//
+	// 真机证据（inst:320/file，同一时间窗）：
+	//   加   record_end:<=0     -> 0 条
+	//   去掉 record_end 上界   -> 194 条
+	// 且接口报 `complete=true` / `EXHAUSTED` / `quality=exact`——空结果被当成「完整无数据」。
+	//
+	// # 新真值没有放宽任何一条实质约束
+	//
+	// 上面的 `matched` 仍然逐条要求：
+	//   - scoped：log_source_id + source_generation 精确匹配 + row.end <= scope 水位
+	//   - 非 scoped 有 CoveredSourceGenerations：按 log_source_id + source_generation 匹配
+	//   - 非 scoped 无覆盖：回退 namespace 相等
+	// 这里只改 range 级水位那一层：`cvs == 0` 表示**没有封窗信息**（不知道），
+	// 不能解释成「封锁一切」（`row.end <= 0`）。`cvs > 0` 时 `row.end <= cvs` 一字未变。
+	// 这与 client.go 的 Search 行级归因谓词逐字同口径。
+	return matched && (q.ClosedVisibleSeq == 0 || row.end <= q.ClosedVisibleSeq)
 }
 
 type selectorTruthNode struct {

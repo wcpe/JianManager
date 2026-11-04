@@ -119,7 +119,7 @@ func TestClientUsesEveryPublishedProjectionGeneration(t *testing.T) {
 	_, err = client.Search(context.Background(), query.AuthoritativeRange{
 		Key:        catalog.PartitionKey{StorageNamespace: "node:1", UTCDay: "2026-09-22"},
 		Projection: &catalog.PublishedProjection{ProjectionGeneration: "g2", ProjectionGenerations: []string{"g1", "g2"}},
-	}, query.RangeQuery{Budget: query.Budget{Limit: 10}})
+	}, query.RangeQuery{Budget: query.Budget{Limit: 10}, ClosedVisibleSeq: 4096})
 	require.NoError(t, err)
 	// **契约变更（2026-11-02 简化投递路径）**：查询不再按 `projection_generation` 过滤。
 	//
@@ -133,7 +133,11 @@ func TestClientUsesEveryPublishedProjectionGeneration(t *testing.T) {
 	// 现在必须钉住的是：**selector 里不出现代次过滤，且水位约束仍在**。
 	require.NotContains(t, selector, "projection_generation",
 		"简化后不得再按代次过滤：副本已不存在，按代次筛只会漏数据")
-	require.Contains(t, selector, "record_end:<=",
+	// 注：本用例显式传入非零水位（4096）。零水位在简化后的语义里表示「没有封窗信息」，
+	// 不加上界（否则会把 `ensureCatalogPartition` 补建的记录全部过滤成 0 行，
+	// 真机实证见 scope_less_projection_regression_test.go）。这里要钉的是
+	// **有水位时上界必须在**，所以水位不能留空。
+	require.Contains(t, selector, "record_end:<=4096",
 		"水位约束必须保留（一条都没放宽）")
 }
 
