@@ -8,6 +8,15 @@ import (
 
 // validateViewAgainstCatalog 由 Catalog 原子验证租约及原集合仍然可读。
 // 正常追加不改旧 projection；历史读取权不会借默认 OwnerForQuery 获得。
+//
+// 第三个参数（原为 `AllowProjectionDrift bool`）**目前被显式丢弃**，不是遗漏：
+// 2026-11 之後这里不再因为「投影清单版本变化」而判 VIEW_STALE——视图复用一律以
+// Catalog 的租约与「原集合是否仍可读」为准，所以没有需要豁免的检查。
+// 保留 `req.AllowProjectionDrift` 字段与它的调用点，是因为它在**别处仍然生效**：
+// `resource_budget.go` 用它为该请求预留一份导出读额度（`vlsup.ReservationExport`）。
+// 删字段会把那条预算预留一起丢掉，那是行为变更，不是清理。
+//
+// 若将来真要让本函数重新分支，把 `_ bool` 改回具名参数即可；在此之前不要删。
 func (p *Planner) validateViewAgainstCatalog(view *QueryView, cov *Coverage, _ bool) *QueryError {
 	for id, projection := range view.Projections {
 		if projection != nil {
