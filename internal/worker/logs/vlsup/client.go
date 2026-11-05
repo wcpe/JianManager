@@ -600,6 +600,25 @@ func gzipPayload(lines []byte) ([]byte, error) {
 
 // Post calls a localhost management endpoint with Basic auth and returns a
 // bounded response. Partition endpoints in VictoriaLogs v1.52.0 require POST.
+//
+// # 超时与体积上限按路径分流（2026-11-06 审查修复）
+//
+// 本函数同时承载两类完全不同的请求：
+//
+//   - **管理类**（`/internal/partition/*`、`/delete/run_task`）：写侧语义，5s 起步、
+//     响应极小，用 `hc` 与 4MiB 上限是对的；
+//   - **查询类**（`/select/logsql/*`）：读侧语义，耗时与返回体积都由**数据量**决定。
+//
+// 原实现一律用 `hc`（5s）与 4MiB，对查询类是两处硬伤：
+//
+//  1. 超时：实测 `field_values` 对 `_msg` 的 180 天窗聚合耗时 **3.44s**（仅 20 源），
+//     距 5s 只剩 1.5 倍余量；按 60 源设计目标必然被掐断。而同包 `Get`/`Stream`
+//     早已用 60s 的 `hq`（见 `query_timeout_test.go` 钉住的事故结论），只有这里是异类。
+//  2. 体积：同一个 `field_values` 实测返回 **44.8MiB**。4MiB 上限会把它整个判成
+//     `response exceeds limit` —— 本该可用的结果变成报错。
+//
+// 所以按路径前缀分流，而不是笼统改一个。查询端点保留**独立的**体积上限
+// `maxQueryResponseBytes`，而且它必须大于服务端 field_values 的合理返回值。
 func (c *Client) Post(ctx context.Context, path string, query url.Values) ([]byte, error) {
 	if c == nil {
 		return nil, fmt.Errorf("vlsup: nil client")
@@ -619,17 +638,22 @@ func (c *Client) Post(ctx context.Context, path string, query url.Values) ([]byt
 		token := base64.StdEncoding.EncodeToString([]byte(c.username + ":" + c.password))
 		req.Header.Set("Authorization", "Basic "+token)
 	}
-	resp, err := c.hc.Do(req)
+	// 按路径分流：查询类走 hq（默认 60s）与大体积上限，管理类保持原样。
+	client, limit := c.hc, int64(4<<20)
+	if strings.HasPrefix(path, "/select/") {
+		client, limit = c.hq, maxQueryResponseBytes
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("vlsup: POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20+1))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if readErr != nil {
 		return nil, readErr
 	}
-	if len(body) > 4<<20 {
-		return nil, fmt.Errorf("vlsup: POST %s response exceeds limit", path)
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("vlsup: POST %s response exceeds limit (%d bytes)", path, limit)
 	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, fmt.Errorf("%w: %s status %d", ErrUnauthorized, path, resp.StatusCode)
@@ -639,3 +663,15 @@ func (c *Client) Post(ctx context.Context, path string, query url.Values) ([]byt
 	}
 	return body, nil
 }
+
+// maxQueryResponseBytes 是 `/select/logsql/*` 响应的体积上限。
+//
+// 取 256MiB 的依据：实测 `field_values` 对 `_msg` 的 180 天窗返回 **44.8MiB**（20 源）。
+// 按 60 源设计目标外推约 134MiB，再留一倍余量。
+//
+// 为何不能沿用管理类的 4MiB：那会把合法的聚合结果判成「响应超限」——
+// 用户看到的是报错，而不是数据。
+//
+// 仍然要有上限：无界的 `io.ReadAll` 会让一个异常响应把 Worker 内存拖死，
+// 而 Worker 的 RSS 预算是硬约束（FR-498）。
+const maxQueryResponseBytes int64 = 256 << 20

@@ -193,7 +193,7 @@ func (c *Client) fieldValuesOnce(ctx context.Context, selector, filter, dimensio
 	// field_values 不支持服务端字节限流（没有等价于 limit 的字节参数），
 	// 所以只能「登记后按实读计数退差价」。登记本身已经验证了 fanout 与额度门。
 	_ = admittedBytes
-	values, err := c.vl.FieldValues(ctx, selector, dimension, start, end)
+	values, err := c.vl.FieldValues(ctx, selector, filter, dimension, start, end)
 	if err != nil {
 		return nil, false, 0, err
 	}

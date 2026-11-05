@@ -160,6 +160,16 @@ type fieldNamesResponse struct {
 
 // FieldNames 返回给定查询与时间窗内**出现过的全部字段名**。
 //
+// # filter 与 query 的区别（2026-11-06 审查修复）
+//
+// 两者在 VL 里是两个独立参数，缺一不可：
+//   - `query` 是 LogsQL 主查询；
+//   - `extra_filters` 是附加上滤条件（VL 会 AND 上去）。
+//
+// 原实现只接 `query`，而在 vlrange 侧作用域约束是拼进 `query` 的，
+// 而**用户的结构化筛选项**（level / keyword / source）走的是 `filter`
+// ⇒ 原实现把它们全丢了：用户选 `level=ERROR` 后看字段列表，拿到的是全量字段集合。
+//
 // # 为什么需要它（2026-11-05 架构审计 D3）
 //
 // 旧实现（`vlrange.Client.Fields`）是靠 `Search` 拿一页日志、再遍历返回行的
@@ -169,7 +179,7 @@ type fieldNamesResponse struct {
 // 官方端点是专门为这个问题设计的，一次聚合即得全集。
 //
 // 返回的字段名按 VL 给的顺序（通常是 hits 降序），调用方可自行排序。
-func (c *Client) FieldNames(ctx context.Context, query string, start, end time.Time) ([]string, error) {
+func (c *Client) FieldNames(ctx context.Context, query, filter string, start, end time.Time) ([]string, error) {
 	if c == nil {
 		return nil, fmt.Errorf("vlsup: nil client")
 	}
@@ -183,6 +193,9 @@ func (c *Client) FieldNames(ctx context.Context, query string, start, end time.T
 	params.Set("query", query)
 	params.Set("start", start.UTC().Format(time.RFC3339Nano))
 	params.Set("end", end.UTC().Format(time.RFC3339Nano))
+	if filter != "" {
+		params.Set("extra_filters", filter)
+	}
 	body, err := c.Post(ctx, fieldNamesPath, params)
 	if err != nil {
 		return nil, err
@@ -233,7 +246,9 @@ type FieldValue struct {
 // `field_values` 才是「按指定字段精确聚合」，与服务契约同形。
 //
 // 实测两者对 level 的结果逐值一致（INFO 880 / WARN 10）。
-func (c *Client) FieldValues(ctx context.Context, query, field string, start, end time.Time) ([]FieldValue, error) {
+//
+// filter 与 query 的分工见 `FieldNames`——两个参数都必须下发。
+func (c *Client) FieldValues(ctx context.Context, query, filter, field string, start, end time.Time) ([]FieldValue, error) {
 	if c == nil {
 		return nil, fmt.Errorf("vlsup: nil client")
 	}
@@ -251,6 +266,9 @@ func (c *Client) FieldValues(ctx context.Context, query, field string, start, en
 	params.Set("field", field)
 	params.Set("start", start.UTC().Format(time.RFC3339Nano))
 	params.Set("end", end.UTC().Format(time.RFC3339Nano))
+	if filter != "" {
+		params.Set("extra_filters", filter)
+	}
 	body, err := c.Post(ctx, fieldValuesPath, params)
 	if err != nil {
 		return nil, err

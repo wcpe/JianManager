@@ -82,7 +82,7 @@ type Stream struct {
 //
 // **不传 `offset`**：它是时区平移（会移动桶/统计边界），而我们的分区键是 UTC 日。
 // 实测 offset 对 streams 的总量无影响，但为了与 hits 保持同一口径，一律不用。
-func (c *Client) Streams(ctx context.Context, query string, start, end time.Time) ([]Stream, bool, error) {
+func (c *Client) Streams(ctx context.Context, query, filter string, start, end time.Time) ([]Stream, bool, error) {
 	if c == nil {
 		return nil, false, fmt.Errorf("vlsup: nil client")
 	}
@@ -97,6 +97,11 @@ func (c *Client) Streams(ctx context.Context, query string, start, end time.Time
 	params.Set("start", start.UTC().Format(time.RFC3339Nano))
 	params.Set("end", end.UTC().Format(time.RFC3339Nano))
 	// 显式不传 limit / offset：见函数头两节。
+	if filter != "" {
+		// 用户的结构化筛选（level / keyword / source）走 extra_filters，
+		// 不能只靠 query——见 FieldNames 的注释。
+		params.Set("extra_filters", filter)
+	}
 	body, err := c.Post(ctx, streamsPath, params)
 	if err != nil {
 		return nil, false, err
@@ -176,7 +181,7 @@ func parseStreamLabels(raw string) map[string]string {
 // 但**不在客户端写死**：将来 VL 给流加了新标签，这里自动跟随。
 //
 // 与 `FieldNames`（文档字段全集）的区别见 streamsPath 注释。
-func (c *Client) StreamFieldNames(ctx context.Context, query string, start, end time.Time) ([]string, error) {
+func (c *Client) StreamFieldNames(ctx context.Context, query, filter string, start, end time.Time) ([]string, error) {
 	if c == nil {
 		return nil, fmt.Errorf("vlsup: nil client")
 	}
@@ -190,6 +195,9 @@ func (c *Client) StreamFieldNames(ctx context.Context, query string, start, end 
 	params.Set("query", query)
 	params.Set("start", start.UTC().Format(time.RFC3339Nano))
 	params.Set("end", end.UTC().Format(time.RFC3339Nano))
+	if filter != "" {
+		params.Set("extra_filters", filter)
+	}
 	body, err := c.Post(ctx, streamFieldNamesPath, params)
 	if err != nil {
 		return nil, err
@@ -214,7 +222,7 @@ func (c *Client) StreamFieldNames(ctx context.Context, query string, start, end 
 // 「非法字段」与「合法但空」在 VL 层不可区分，硬造一个判据只会引入假错误）。
 //
 // 返回的 Complete 与 Streams 同口径：有项但全零 ⇒ 上游截断。
-func (c *Client) StreamFieldValues(ctx context.Context, query, field string, start, end time.Time) ([]FieldValue, bool, error) {
+func (c *Client) StreamFieldValues(ctx context.Context, query, filter, field string, start, end time.Time) ([]FieldValue, bool, error) {
 	if c == nil {
 		return nil, false, fmt.Errorf("vlsup: nil client")
 	}
@@ -232,6 +240,9 @@ func (c *Client) StreamFieldValues(ctx context.Context, query, field string, sta
 	params.Set("field", field)
 	params.Set("start", start.UTC().Format(time.RFC3339Nano))
 	params.Set("end", end.UTC().Format(time.RFC3339Nano))
+	if filter != "" {
+		params.Set("extra_filters", filter)
+	}
 	body, err := c.Post(ctx, streamFieldValuesPath, params)
 	if err != nil {
 		return nil, false, err

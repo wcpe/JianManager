@@ -44,7 +44,7 @@ func (c *Client) Streams(ctx context.Context, rng query.AuthoritativeRange, q qu
 		// 不能报 Complete=false —— 那会让前端把「这天没数据」显示成「数据不完整」。
 		return query.RangeStreamsResult{Complete: true}, nil
 	}
-	streams, complete, err := c.vl.Streams(ctx, selectorQuery(rng, q), start, end)
+	streams, complete, err := c.vl.Streams(ctx, selectorQuery(rng, q), q.Filter, start, end)
 	if err != nil {
 		// 聚合失败不得伪装成「没有流」：那会让前端把筛选面板整个清空。
 		return query.RangeStreamsResult{Complete: false, CoverageReasons: []string{query.ReasonRangeUnavailable}}, err
@@ -80,7 +80,7 @@ func (c *Client) StreamFieldNames(ctx context.Context, rng query.AuthoritativeRa
 	if empty {
 		return query.StreamFieldNamesResult{}, nil
 	}
-	names, err := c.vl.StreamFieldNames(ctx, selectorQuery(rng, q), start, end)
+	names, err := c.vl.StreamFieldNames(ctx, selectorQuery(rng, q), q.Filter, start, end)
 	if err != nil {
 		return query.StreamFieldNamesResult{CoverageReasons: []string{query.ReasonRangeUnavailable}}, err
 	}
@@ -109,7 +109,7 @@ func (c *Client) StreamFieldValues(ctx context.Context, rng query.AuthoritativeR
 	if empty {
 		return query.RangeStreamFieldValuesResult{Complete: true}, nil
 	}
-	values, complete, err := c.vl.StreamFieldValues(ctx, selectorQuery(rng, q), field, start, end)
+	values, complete, err := c.vl.StreamFieldValues(ctx, selectorQuery(rng, q), q.Filter, field, start, end)
 	if err != nil {
 		return query.RangeStreamFieldValuesResult{Complete: false, CoverageReasons: []string{query.ReasonRangeUnavailable}}, err
 	}

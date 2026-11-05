@@ -152,7 +152,7 @@ func (c *Client) Fields(ctx context.Context, rng query.AuthoritativeRange, q que
 	if empty {
 		return query.FieldsResult{Fields: nil, Truncated: false}, nil
 	}
-	names, err := c.vl.FieldNames(ctx, selectorQuery(rng, q), start, end)
+	names, err := c.vl.FieldNames(ctx, selectorQuery(rng, q), q.Filter, start, end)
 	if err != nil {
 		// 聚合查询失败不得伪装成「没有字段」：那会让前端把筛选面板整个清空。
 		return query.FieldsResult{Truncated: true, CoverageReasons: []string{query.ReasonRangeUnavailable}}, err
