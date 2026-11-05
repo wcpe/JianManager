@@ -554,6 +554,18 @@ p50 ≈ 12.5 ms / p95 ≈ 40.6 ms；1024 行时 p95 已达 47 ms（独立探针�
 「可愈合白名单」与「永久丢失名单」的第三个分类：前者语义是“回读会重新产生”（不适用，
 游标已过），后者带 1h 宽限期（会形成“越界→丢→暂停1h→继续丢”的循环，与不暂停矛盾）。
 
+> **这个名单同时是“回收可穿行”的唯一真源（2026-11-05）**：
+> `ledger.capacityDroppedRangesLocked` 只认 `IsGapReasonNonBlocking`，被它收录的原因
+> 会被并入 `contiguousCertifiedEnd` 的 certified 区间，从而让 `reclaim` 跨过那段空洞。
+>
+> 收录前必须自问：**这段字节真的进过投递流、且确定再也不会有了吗？**
+> - `DELIVERED_NOT_VISIBLE`（真）：字节进了 WAL、被真实 POST 过、VL 回了 2xx 却没存下，
+>   且已逐轮核对过（轮次 + 墙钟双重界）才下的结论 —— 与容量丢弃完全同域，已收录；
+> - `CURSOR_SKIPPED_ON_RESTART`（假）：游标已越过、WAL 已亡，字节**从未进过投递流**，
+>   因此仍在 `gapReasonsPermanentlyLost`，不得给回收通行证。
+>
+> 可穿行 ≠ 谎报已投递：这些路径只推 `Delivery`/`DROPPED`，**绝不写 `RequestDoneRanges`**。
+
 ### 7.5 旧库兼容
 
 既有生产库（含 20 万行 `source_wal`）打开时必须不报错。迁移为幂等

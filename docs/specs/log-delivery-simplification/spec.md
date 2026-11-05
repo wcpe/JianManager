@@ -15,6 +15,49 @@
 ⑥ scheduleGapResolve（异步登记缺口核对，不阻塞）
 ```
 
+### 1.1 投递后的可见性核对与「确定不可见」的降级出口（2026-11-05）
+
+第 ⑥ 步原先只有一半：`scheduleGapResolve` → `executeGapResolve` 会在投递成功后
+**异步**问「这批到底在不在 VL」，查不到就留在待办里下一轮再问——而这是**无界**的。
+
+闭环形态（审计 P0-1）：`/insert/jsonline` 在数据点超出 `-retentionPeriod`、单行字段数
+超上限等服务端拒绝下会 **返回 HTTP 200 但静默丢弃整批**；投递路径只看状态码 ⇒ 登记
+`REQUEST_DONE` ⇒ reclaim 随它推进 ⇒ `pruneReclaimedLocked` 物理删掉 WAL 条目。
+净效果是「`EventStateAcked`、VL 里 0 行、WAL 已删、无缺口凭据、无告警」。
+
+补上的出口（`ingest/delivery_visibility.go`）：
+
+| 项 | 值 | 依据 |
+|---|---|---|
+| `maxGapResolveMissRounds` | 3 | 只数轮次会在十几秒内凑满（新批次登记会提前唤醒待办） |
+| `gapResolveMissWindow` | 60s | 只数墙钟时一次 VL 抖动期间没核对过也会满足 |
+| 判定 | 两个条件**同时**成立 | 既是「问过几次」的证据，也是「等了多久」的证据 |
+
+处置：记 `DELIVERED_NOT_VISIBLE` 缺口（按 `gapRangesOfEvents` 的**精确区间**逐段，
+不取首尾凸包）+ `RecordDroppedRange` 降级 DROPPED + 从待办移除。
+
+**三态必须分清**（这是本机制成立的前提）：
+
+| 形态 | 含义 | 处置 |
+|---|---|---|
+| 可见 | 正常 | 走 `recordVerifiedRuns` 记区间凭据 |
+| 查询失败（网络/超时/5xx/事件取不到天） | **不知道** | 保留待办、**不计轮次**，下轮再问 |
+| 查询成功但查不到 | 证据 | 计入不可见轮次 |
+
+旧签名把前两者压成「空集合」，于是「VL 挂一小时」会被当成「连续多轮确认丢了」，
+把完好数据记成永久丢失 —— 比漏报更糟。故 `landedVisibleInVLCtxStatus` /
+`resolveGapsLandedByDeliveryReport` 把 `probeOK` 单独带出来。
+
+**回收通行证**：`GapReasonDeliveredNotVisible` 归 `gapReasonsNonBlocking`（不是
+`gapReasonsPermanentlyLost`）——retention 超限不会自愈，走 1h 宽限只会形成
+「投一批→暂停 1h→再投」的循环；而这个名单同时是 `capacityDroppedRangesLocked`
+的可穿名单，缺了它回收链会永久停在第一个洞上。
+**红线不变**：只推 `Delivery`/`DROPPED`，绝不写 `RequestDoneRanges`。
+
+相对的，`CURSOR_SKIPPED_ON_RESTART` **仍在** `gapReasonsPermanentlyLost`：
+它的字节从未进过投递流（游标已越过、WAL 已亡），给它通行证会让回收链越过一段
+本应重新从源采的区间。
+
 查询侧同步去掉 `projection_generation` 过滤（`vlrange` / `query_text_budget`）。
 
 ## 2. 被删除的机制（**投递路径上永久不再运行**）
