@@ -42,20 +42,34 @@ import (
 // 重启就没了。而 tailer 的游标取 `min(durable, read)`（见 acquire/tailer.go 的
 // NewFileTailer）——只退 read 不退 durable 等于白退。
 //
-// ## 重复怎么办
+// ## 重复怎么办：**没有去重层**（已实测，勿再假设）
 //
-// 这是 **at-least-once**：重读段的字节会被再投递一次。重复只由一层吸收：
-//   - `event_id` 幂等：同 id 同哈希的重复行在 VL 写入侧收敛（同 id 同 hash 不产生新行）。
+// 这是 **at-least-once**：重读段的字节会被再投递一次，而**没有任何一层会把重复抹掉**。
 //
-// **2026-11-05 订正**：这里曾写着第二层「写前幂等（`dropEventsAlreadyWrittenCtx`）：
-// 投递前按 `event_id:in(...)` 查一次」。**那句话描述的行为不存在**——那个函数在
-// 2026-11-02 投递路径简化后失去了全部生产调用点（见它在 runtime_delivery_pipeline.go
-// 的注释）。所以不要指望写前会先筛一遍；能重复写，靠 VL 侧 event_id 幂等收。
+// 仓库里先后有三处被当作“去重层”的假设，现在**三个都不成立**：
 //
-// 2026-11-03：~~`projection_generation` 换代次~~ 这一层也已不存在——重建链删除后不再换代次，
-// 而且投递面也不再带 `projection_generation` 标签（`insertInBatchesCtxYield` 传空串）。
+//  1. 写前幂等（`dropEventsAlreadyWrittenCtx`）：2026-11-02 简化后失去全部生产调用点；
+//  2. `projection_generation` 换代次过滤：2026-11-03 重建链删除后不再写该标签；
+//  3. vl 侧 `event_id` 幂等去重：**2026-11-05 实测证伪**（重要）。
 //
-// 这与 Filebeat 的语义完全一致：它也只保证至少一次。
+// 第 3 条的实测（生产 VL 19461，2026-11-05）：
+//
+//	向 /insert/jsonline 写两次**完全相同**的行（同 _time、同 event_id、同 _msg）
+//	两次都 HTTP 200；随后查询得到 count = 2，两行 _stream_id 也完全相同。
+//
+// ⇒ VictoriaLogs 是 append-only 时序库，`/insert/jsonline` **不做任何字段级唯一约束**。
+// `event_id` 只是一个普通字段。
+//
+// 所以：**重投就是真的多写行**。后果不是“重复不影响”，而是：
+//   - 查询侧按行数统计的读数会偏大；
+//   - 回滚/重启循环会让存储无界增长（历史事故同形：
+//     `recovery_generation.go` 里记的「projection-130 落 2,294,248 行 = 573,562 × 4」）。
+//
+// 这也意味着「下游按 event_id 幂等」不能在稳定性论证里当前提用。
+// 真要消除重复，得在**写入前**做 event_id 去重（即重新接上第 1 条的能力）——
+// 那是待办，不是已具备的能力。
+//
+// 这与 Filebeat 的语义一致：它也只保证至少一次（不保证去重）。
 func rollbackReadToReclaim(led *ledger.Ledger, key ledger.SourceKey) {
 	if led == nil {
 		return

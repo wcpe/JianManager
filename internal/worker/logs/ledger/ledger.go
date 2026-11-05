@@ -1734,7 +1734,7 @@ func (l *Ledger) tryReclaimLocked(e *Entry, conditions ...func(ReclaimTarget) bo
 // ## 为什么要把「容量裁定丢弃」也当成可穿过的段（2026-10-29 生产死锁）
 //
 // 用户裁定「WAL 内存满就直接丢最旧」后，丢弃会在投递流上留下一段**真实字节空地**
-//（`WAL_BACKLOG_DROPPED`，真实位置区间，已进 `gapReasonsNonBlocking` ⇒ 不挡恢复）。
+// （`WAL_BACKLOG_DROPPED`，真实位置区间，已进 `gapReasonsNonBlocking` ⇒ 不挡恢复）。
 // 但 `RequestDoneRangesOf` **只认真实投递证据**（这是对的：绝不能把没投出去的说成投出去了 ✗），
 // 于是那段空地永远没有 REQUEST_DONE 覆盖 ⇒ 连续覆盖断在那里 ⇒ reclaim 永久钉死。
 //
@@ -1787,6 +1787,29 @@ func contiguousCertifiedEnd(e *Entry) uint64 {
 // 容量丢弃才是「字节确实进过 WAL、又被确定性地扔掉」这种形态，与 reclaim 的连续性判断同域。
 //
 // 调用方必须已持锁（读或写）。
+// capacityDroppedRangesLocked 返回可被「当作不阻断连续」的容量丢弃区间。
+//
+// ## 为什么不能用 gap.StartPos/EndPos 直接并入 certified（2026-11-05 修复）
+//
+// 那两个字段在**折叠**之后是**凸包**：`foldUnresolvedGapsLocked` 把同因的旧缺口并成一条时，
+// StartPos 取最小、EndPos 取最大（gap_bounds.go:520-523）。凸包跨越了夹在中间的
+// **健康区间** —— 而那些字节既未经投递确认、也**没被裁定丢弃**。
+//
+// 旧实现把凸包整段当「可穿过的洞」并入 certified ⇒ `contiguousCertifiedEnd` 一路推过
+// 凸包末端 ⇒ `tryReclaimLocked` 写入 Reclaim ⇒ `pruneReclaimedLocked` 把中间那批
+// **从未投递**的 WAL 条目剪掉。
+//
+// 后果是最坏的一类：**数据静默消失，且账本上读不出真实空洞**——缺口条目还在，但它的区间
+// 已是凸包，审计只能看到一个宽洞，无法知道中间哪些字节本来是健康的。
+//
+// ## 修法：与人工放弃路径同一口径（保守拒绝）
+//
+// `AbandonGapsThrough`（本文件约 337 行）对 `FoldSpansUnknown || FoldSpanMerges > 0`
+// 是**直接报错拒绝**。这里用同一个方向：折叠过的缺口**不并入** certified，
+// reclaim 停在那里等人裁定，而不是赌凸包内部全是真洞。
+//
+// 未折叠的缺口用 `gapEvidenceSpans` 展开（它本身也对折叠过的返回 nil，两道保险）。
+// 单洞未折叠形态（生产 inst:322 那一例）行为逐字不变。
 func capacityDroppedRangesLocked(e *Entry) []PositionRange {
 	if e == nil || len(e.Gaps) == 0 {
 		return nil
@@ -1796,7 +1819,26 @@ func capacityDroppedRangesLocked(e *Entry) []PositionRange {
 		if gap.Resolved || !IsGapReasonNonBlocking(gap.Reason) {
 			continue
 		}
-		holes = append(holes, PositionRange{From: gap.StartPos, To: gap.EndPos})
+		// **证据已丢**：`FoldSpansUnknown` 表示折叠时精确子区间已被丢弃，
+		// 只剩凸包。那种情况绝不得当可穿洞 —— reclaim 停在这里等人裁定。
+		//
+		// 注意与「折叠过但证据完整」区分：`FoldSpanMerges > 0` 只说明子区间
+		// 数超过上限、多段被并成一段凸包，但剩下的 `FoldSpans` 仍是**精确**区间，
+		// 逐段并入是安全的（更保守：只放行真实空洞，不放行夹间健康字节）。
+		// 2026-11-05 修复前这里直接取 `[StartPos,EndPos)` 凸包，把夹间健康字节
+		// 一起放行了 —— 那才是真正会静默丢数据的那一步。
+		if gap.FoldSpansUnknown {
+			continue
+		}
+		// 精确子区间展开：未折叠 ⇒ [StartPos,EndPos)；已折叠 ⇒ 逐段。
+		// 子区间数超上限时 `capFoldSpans` 会在最前面放一段凸包并把
+		// `FoldSpanMerges` 置 >0 —— 那种段必须剔除（它又是凸包）。
+		spans := gapEvidenceSpans(gap)
+		if gap.FoldSpanMerges > 0 && len(spans) > 0 {
+			// 第一段是 capFoldSpans 造的凸包，不能当凭据。
+			spans = spans[1:]
+		}
+		holes = append(holes, spans...)
 	}
 	if len(holes) == 0 {
 		return nil
