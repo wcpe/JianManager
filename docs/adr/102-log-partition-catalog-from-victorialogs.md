@@ -1,0 +1,95 @@
+# ADR-102：日志分区目录以 VictoriaLogs 为事实来源
+
+- 状态：已采纳
+- 日期：2026-11-05
+- 相关：[`docs/logs-vl-capability-matrix.md`](../logs-vl-capability-matrix.md)、[`docs/logs-architecture-audit.md`](../logs-architecture-audit.md)
+
+## 背景
+
+日志查询的第一道判据是「分区目录」——哪些源在哪些天有数据。没有它，查询侧不知道
+要去 VictoriaLogs 查什么范围，用户看到的是「这天没日志」。
+
+这个目录历史上经历三层补救，每层都在解决上一层留下的问题：
+
+| 层 | 做法 | 引入的问题 |
+|---|---|---|
+| 1 | Catalog journal 纯内存 | 重启后历史天全丢 → 日志页整页为空 |
+| 2 | 改成 JSONL 落盘 | 与 2026-10-30「机械盘不落盘」裁定冲突；生产 journal 只写到 10-30，之后的天从未写入 |
+| 3 | 启动期从 VL 反推 30 天 | 每源一次查询；窗口固定易漏；天桶在 Go 侧归天 |
+
+三层都建立在同一个前提上：**我们自己维护一份 VL 事实的副本**。
+而副本一丢，就得再加一层补救。
+
+## 决策
+
+分区目录的事实来源改为 VictoriaLogs 的 `POST /select/logsql/hits`。
+启动期一次请求拿到全部 (源, 天) 分布，写入 Catalog。
+
+## 理由
+
+**一次请求即得完整事实。** 实测：31 源 × 36 天 = 372 个 (源,天)，217ms，31KB。
+
+**无副本，故无副本失同步。** 这是三层补救的全部病根。
+
+**完整性比 journal 更强。** journal 只在「分区状态变化」时写一条，会漏天。
+实测同一源：hits 覆盖 37 天，旧 journal 只有 32 天。
+
+## 权威边界（不可越）
+
+hits 只回答「哪天有数据」这个**物理输入**。
+owner / generation / dirID 仍必须由 `Catalog.WriteAdmission` 决定（**权威**）。
+
+实现复用既有的 `ensureCatalogPartitionForDay`，与投递补建路径逐字同形。
+**本决策不发明任何权威**：不能因为 VL 有数据就伪造 owner。
+
+## 天界口径（红线）
+
+分区键是 **UTC 日**。hits 的 `offset` 参数会平移桶边界：
+
+```
+不传 offset（UTC 日）: 11-01=2880  11-02=1746  11-04=890
+offset=8h（HKT 日）  : 11-01=2706  11-04=1663
+```
+
+**绝不传 offset**，且 `utcDayOfBucketStart` 强制 `ts.UTC()`。
+有用例 `TestParseHitsSourceDaysUsesUTCDayNotLocal` 锁死（变异：改 Local 即转红）。
+
+这类「天界口径各自为政」是历史上三次事故的共同根因。
+
+## 只重建已登记的源
+
+实测 hits 返回 31 个源，其中 11 个是 `probe:*` 探针写入，不属于平台管理的实例。
+未登记的命名空间一律跳过，否则查询侧会为不存在的实例建立可查覆盖，
+用户点进去得到一个必然为空的 range。
+
+## 已有记录一律不覆盖
+
+把迁移到 COLD 的分区强行改回 HOT 比「查不到」更严重——那是数据面破坏。
+用例 `TestRebuildCatalogPartitionsFromHitsNeverOverwritesExisting` 钉死。
+
+## 后果
+
+**得**：历史天覆盖更全（含 30 天窗口外）；不需要每源一次查询；数据正确性由 VL 单点保证。
+
+**失/待评估**：journal 落盘暂未撤除，目前与 hits 功能重叠。
+撤除前需确认 journal 是否还承担 hits 覆盖不到的职责（Catalog 内部一致性重放、
+已发布投影完整性）。**不凭直觉删。**
+
+## 顺带订正的过时假设
+
+代码多处注释写「`maxQueryTimeRange` 是 31d」，据此把回溯窗口设为 30 天。
+实际启动参数是 `-retentionPeriod=180d -search.maxQueryTimeRange=4344h(=181d)`，
+二者关系是 `maxQueryTimeRange = retention + 1d`。
+
+30 天窗口的实际后果：清空 journal 重建时少补 88 个分区（2026-09-20 ~ 10-06），
+而那 88 天 VL 里确有数据。改为 180 天后 `created` 由 300 升至 417。
+
+**教训**：注释里的技术前提会过期，而过期的前提会把正确的实现锁成错误的。
+凡注释里出现具体数值前提（上限、默认值、版本号），都该有一条用例把它钉住。
+
+## 明确不做的相关项
+
+- **分页保持自建复合键游标**：官方 `limit+offset` 是简易分页，数据变动时会漂移；
+  我们的游标保证跨页无重无漏。
+- **Stats/Facets wire 契约不动**：改用官方 `stats_query_range`/`facets` 属优化，
+  不影响正确性，另排期。
