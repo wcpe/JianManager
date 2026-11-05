@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -50,12 +51,27 @@ func TestDeliverThenPlanYieldsRangeForRealSourceShape(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, nil, 0o644))
 
 	// **真机形状**：三者刻意互不相同。
+	//
+	// 2026-11-05 订正（时间炸弹）：原先这里写死 `eventDay = "2026-11-04"`，
+	// 并用 `[2026-11-04T10:00:00Z] ...` 作为行首。两处都有问题：
+	//
+	//  1. 写死日期在 11-05 当天就会红（分区记录落到今天，断言却要 11-04）；
+	//  2. 更根本的是：`[2026-11-04T10:00:00Z]` **不是解析器认识的格式**。
+	//     Minecraft 行首只有 `[HH:MM:SS]` / `[HH:MM:SS.mmm]`（**无日期**），
+	//     日期由 `applyClock` 用采集基准（base）的年月日补齐。写完整 ISO 时间戳
+	//     会让 `hasTime=false` ⇒ 事件时间 fallback 到 `IngestTimeUTC`（= 今天）。
+	//     所以旧夹具实际验证的是一条不存在的时间戳路径。
+	//
+	// 现在用真实格式：事件日 = 今天（采集基准日）⇒ 断言随之跟随，永不因跨天而红。
+	// 而“事件日 ≠ 源登记日”这个核心前提仍然成立（sourceDay 固定在很久以前）。
 	const (
 		namespace = "inst:318"      // 授权目标 / Catalog StorageNamespace
 		sourceID  = "inst:318/file" // 物理源 id（VL 行上的 log_source_id）
-		sourceDay = "2026-10-30"    // 源登记日
-		eventDay  = "2026-11-04"    // 事件所属天（数据真正落的分区）
+		sourceDay = "2026-10-30"    // 源登记日（早已过去，与事件日必然不同）
 	)
+	eventDay := time.Now().UTC().Format("2006-01-02")
+	require.NotEqual(t, sourceDay, eventDay,
+		"夹具前提：事件日必须与源登记日不同，否则本用例守不到「按事件日归天」")
 	source := SourceConfig{
 		LogSourceID: sourceID, SourceGeneration: "gen-1", Path: path,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: namespace,
@@ -69,10 +85,18 @@ func TestDeliverThenPlanYieldsRangeForRealSourceShape(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 行内时间戳就是 eventDay ⇒ 事件落进 eventDay 分区。
+	// 行首用**真实 Minecraft 格式**（HH:MM:SS，无日期）；日期由采集基准补齐 ⇒
+	// 事件落进今天的分区。若写成完整 ISO 时间戳，解析器不认，会 fallback 到
+	// IngestTimeUTC，那时本用例除了今天以外什么都验不到。
+	//
+	// 时刻取**当前 UTC 时刻**而不是写死的 10:00：`applyClock` 有跨午夜修正——
+	// 若“今天的该时刻”比采集基准晚超过 12h，会回拨一天（不把时间猜进未来）。
+	// 写死 10:00 在凌晨运行时（基准 08:xx）会被判为“未来 2h”，仍属今天；
+	// 但在深夜运行时它会变成“昨天”⇒ 断言今天分区即红。取当前时刻恒安全。
+	stamp := time.Now().UTC().Format("15:04:05")
 	appendPollTestLines(t, path,
-		"["+eventDay+"T10:00:00Z] [Server thread/INFO]: e2e contract probe\n"+
-			"["+eventDay+"T10:00:01Z] [Server thread/INFO]: e2e contract probe 2\n")
+		"["+stamp+"] [Server thread/INFO]: e2e contract probe\n"+
+			"["+stamp+"] [Server thread/INFO]: e2e contract probe 2\n")
 	m.pollOnce()
 
 	// —— 前置：数据真的进了 VL，否则后面测的是「没投出去」而不是「投出去却查不到」——
@@ -100,11 +124,19 @@ func TestDeliverThenPlanYieldsRangeForRealSourceShape(t *testing.T) {
 	// 这一条当时没人断言。目标进了视图、`Queryable=true`，却一条 range 也没有，
 	// 于是 service 走「无 range 但 coverage 完整」分支 ⇒ 返回空成功。
 	planner := query.NewPlanner(cat, nil)
+	// 窗口取「事件当天」的完整一天。
+	//
+	// 2026-11-05 订正：原先 `ToUTC` 写死为字符串常量 `"2026-11-05T00:00:00Z"`，
+	// 一旦 eventDay 变成今天（11-05），区间就退化为 `[11-05, 11-05)` ——**空区间**，→
+	// `dayOverlapsRange` 把分区滤掉 ⇒ Ranges 为空，而失败信息会把锅归给产品。
+	// 窗口必须由 eventDay 推导，不能与它脱钩。
+	dayStart, parseErr := time.Parse("2006-01-02", eventDay)
+	require.NoError(t, parseErr)
 	res := planner.Plan(query.PlanRequest{
 		TargetIDs: []string{namespace},
 		TimeRange: query.TimeRange{
-			FromUTC: eventDay + "T00:00:00Z",
-			ToUTC:   "2026-11-05T00:00:00Z",
+			FromUTC: dayStart.Format(time.RFC3339),
+			ToUTC:   dayStart.AddDate(0, 0, 1).Format(time.RFC3339),
 		},
 		Budget: query.Budget{Limit: 10},
 	})

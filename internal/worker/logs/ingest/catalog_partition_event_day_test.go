@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -36,10 +37,26 @@ func TestDeliverCreatesCatalogPartitionForEventDayNotSourceDay(t *testing.T) {
 	p := filepath.Join(logDir, "a.log")
 	require.NoError(t, os.WriteFile(p, nil, 0o644))
 
-	// 关键夹具：源的 UTCDay 是**登记日** 2026-10-30，而事件时间是 2026-11-04。
-	// 真实生产的形态就是如此（源 10-30 登记，之后一直采集到今天）。
+	// 关键夹具：源的 UTCDay 是**登记日**（很久以前），而事件时间是**今天**。
+	// 真实生产的形态就是如此（源早先登记，之后一直采集到今天）。
+	//
+	// 2026-11-05 订正（时间炸弹 + 无效输入）：原先这里写死
+	// `eventDay = "2026-11-04"` 并用 `[2026-11-04T17:23:19Z]` 作为行首。
+	//
+	//  1. 写死日期跨天后必红（记录落到今天，断言却要 11-04）；
+	//  2. 更根本：`[2026-11-04T17:23:19Z]` **不是解析器认识的格式**。
+	//     Minecraft 行首只有 `[HH:MM:SS]`（无日期），日期由 `applyClock`
+	//     用采集基准补齐。完整 ISO 时间戳会被当成未知行 ⇒ 事件时间
+	//     fallback 到 IngestTimeUTC ⇒ 本用例实际验的是「fallback 到摄取时间」，
+	//     不是「按事件天归天」。（下方 TestDeliverCatalogCoversEveryDayInCrossDayBatch
+	//     的注释已明确警告过这个坑。）
+	//
+	// 现在用真实格式：事件日 = 今天 ⇒ 断言随之跟随，永不会因跨天而红；
+	// 而「事件日 ≠ 源登记日」这个核心前提仍然成立。
 	const sourceDay = "2026-10-30"
-	const eventDay = "2026-11-04"
+	eventDay := time.Now().UTC().Format("2006-01-02")
+	require.NotEqual(t, sourceDay, eventDay,
+		"夹具前提：事件日必须与源登记日不同，否则本用例守不到「按事件天归天」")
 	source := SourceConfig{
 		LogSourceID: "inst:utcday-probe", SourceGeneration: "g1", Path: p,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:utcday-probe",
@@ -53,10 +70,13 @@ func TestDeliverCreatesCatalogPartitionForEventDayNotSourceDay(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 真实采集链路：日志行的时间戳就是 eventDay，所以事件会落进 eventDay 分区。
+	// 真实采集链路：用**真实 Minecraft 行首格式**（HH:MM:SS，无日期），
+	// 时刻取当前 UTC 时刻（避开 applyClock 的跨午夜修正）。日期由采集基准补齐
+	// ⇒ 事件落进今天的分区。
+	stamp := time.Now().UTC().Format("15:04:05")
 	appendPollTestLines(t, p,
-		"["+eventDay+"T17:23:19Z] [Server thread/INFO]: event day probe\n"+
-			"["+eventDay+"T17:23:20Z] [Server thread/INFO]: event day probe 2\n")
+		"["+stamp+"] [Server thread/INFO]: event day probe\n"+
+			"["+stamp+"] [Server thread/INFO]: event day probe 2\n")
 	m.pollOnce()
 	require.NotEmpty(t, fixture.writes, "夹具前提：一轮采集必须真的写进 VL")
 
