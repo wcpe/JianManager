@@ -15,6 +15,7 @@ import {
 	useLogsFederation,
 	useLogsFederationFacets,
 	useLogsFederationStats,
+	useLogsFederationStreams,
 	type LogsFederationResult,
 } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
@@ -540,6 +541,14 @@ export default function LogsPage() {
 		federationActive && !follow && !federationQuery.isPlaceholderData && !federationQuery.isFetching && !!federation?.response.viewId
 			&& (federationStats.isSuccess || federationStats.isError),
 	)
+	// 流清单：等 facets 落定后取（保持「任一时刻最多一个聚合请求在飞」的串行纪律）。
+	// 与 facets 的区别：facets 给「级别分布」，streams 给「哪些源在刷日志、多少条」——
+	// 后者才是「哪个实例在刷屏」这个问题的直接答案。
+	const federationStreams = useLogsFederationStreams(
+		aggregateParams,
+		federationActive && !follow && !federationQuery.isPlaceholderData && !federationQuery.isFetching && !!federation?.response.viewId
+			&& (federationFacets.isSuccess || federationFacets.isError),
+	)
 	// Stats 计数来自后端 `agg.count`（wire 真源）；兼容扁平 `count`。
   const statsPoints = federationStats.data?.points
   const statsCount = !federationStats.isError && Array.isArray(statsPoints)
@@ -548,11 +557,15 @@ export default function LogsPage() {
   const statsSummary = describeLogAggregate(federationStats.data)
   const facetsSummary = describeLogAggregate(federationFacets.data)
   const levelDimension = federationFacets.data?.dimensions?.find((dimension) => dimension.dimension === 'level')
-  const levelFacets = !federationFacets.isError ? levelDimension?.values ?? [] : []
-  const facetsTruncated = facetsSummary.truncated || federationFacets.data?.dimensions?.some((dimension) => dimension.truncated) === true
-  const insightsVisible = federationActive && !federationQuery.isPlaceholderData && (
-    federationStats.isSuccess || federationStats.isError || federationFacets.isSuccess || federationFacets.isError
-  )
+	const levelFacets = !federationFacets.isError ? levelDimension?.values ?? [] : []
+	const facetsTruncated = facetsSummary.truncated || federationFacets.data?.dimensions?.some((dimension) => dimension.truncated) === true
+	// 流清单（源 + 流名 + 条数）。complete=false 时条数不可信（VL 截断会把 hits 全归零）。
+	const streamItems = !federationStreams.isError ? federationStreams.data?.streams ?? [] : []
+	const streamsComplete = federationStreams.data?.complete === true
+	const insightsVisible = federationActive && !federationQuery.isPlaceholderData && (
+		federationStats.isSuccess || federationStats.isError || federationFacets.isSuccess || federationFacets.isError
+		|| federationStreams.isSuccess || federationStreams.isError
+	)
   /**
    * 列表主数据源。限流中断时回落到 {@link lastGoodFederation} 的最近一份成功列表：
    * 已有行继续可见（不清空），绝不把限流呈成「暂无日志」。
@@ -1055,6 +1068,50 @@ export default function LogsPage() {
             <StatusBadge key={facet.value} level={logLevelStatus(facet.value.toLowerCase())}
               label={`${facet.value} ${facet.count}${facetsSummary.exact && !facetsTruncated ? '' : ` (${t('logs.aggregateObserved')})`}`} />
           ))}
+          {/* 流清单：窗内有哪些源在刷日志、各多少条。
+              这是「哪个实例在刷屏」的直接答案，比 facets 的 stream 维度更全
+              （后者只是 stdout/stderr 两个值，不含源）。
+              条数只能在 complete=true 时当断言：VL 在截断时会把所有 hits 归零。 */}
+          {streamItems.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  data-testid="logs-streams-trigger"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground transition-colors duration-200 ease-ios hover:bg-accent"
+                >
+                  {t('logs.streamsCount', { count: streamItems.length })}
+                  {!streamsComplete && ` · ${t('logs.streamsCountsUnreliable')}`}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-80 w-80 overflow-y-auto">
+                {streamItems.slice(0, 50).map((item) => (
+                  <DropdownMenuItem
+                    key={`${item.log_source_id}\u0000${item.stream}`}
+                    // 只展示不筛选：`source` 参数是**来源类别前缀**（instance/worker），
+                    // 不是具体源 id，拿 log_source_id 去砸它会把查询砸成 0 条。
+                    // 真要做「点一下就筛这个源」得先给后端加一个按 log_source_id 的
+                    // 精确筛选参数，那是另一件事。
+                    disabled
+                    title={item.raw ?? `${item.log_source_id} ${item.stream}`}
+                    className="flex items-center justify-between gap-3 text-xs"
+                  >
+                    <span className="truncate">{item.log_source_id || t('logs.streamsUnknownSource')}
+                      {item.stream ? <span className="ml-1 text-muted-foreground">{item.stream}</span> : null}
+                    </span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                      {streamsComplete ? item.hits : '?'}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+                {streamItems.length > 50 && (
+                  <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                    {t('logs.streamsMore', { count: streamItems.length - 50 })}
+                  </div>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </>
       )}
 		</div>

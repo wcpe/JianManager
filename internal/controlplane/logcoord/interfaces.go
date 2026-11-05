@@ -113,6 +113,54 @@ type WorkerClient interface {
 	Fields(ctx context.Context, req WorkerSearchRequest) (*WorkerFieldsResponse, error)
 	Stats(ctx context.Context, req WorkerSearchRequest, groupBy []string, timeBucket string) (*WorkerStatsResponse, error)
 	Facets(ctx context.Context, req WorkerSearchRequest, dimensions []string, dimensionLimit uint32) (*WorkerFacetsResponse, error)
+	Streams(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamsResponse, error)
+	StreamFieldNames(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamFieldNamesResponse, error)
+	StreamFieldValues(ctx context.Context, req WorkerSearchRequest, field string) (*WorkerStreamFieldValuesResponse, error)
+}
+
+// WorkerStream 单 Worker 上报的一条流。
+//
+// 与 Worker 侧 query.StreamValue 同形；CP 只做合并与转发，不重新定义语义。
+type WorkerStream struct {
+	LogSourceID string `json:"log_source_id"`
+	Stream      string `json:"stream"`
+	Raw         string `json:"raw,omitempty"`
+	Hits        uint64 `json:"hits"`
+}
+
+// WorkerStreamsResponse 单 Worker 的 stream 枚举响应。
+//
+// Complete=false 表示**条数不可信**（上游截断时 VL 会把所有 hits 归零）。
+type WorkerStreamsResponse struct {
+	ViewID      string               `json:"view_id"`
+	Streams     []WorkerStream       `json:"streams"`
+	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Complete    bool                 `json:"complete"`
+	Unsupported bool                 `json:"unsupported"`
+	Error       string               `json:"error,omitempty"`
+}
+
+// WorkerStreamFieldNamesResponse 单 Worker 的 stream 标签维度名。
+type WorkerStreamFieldNamesResponse struct {
+	ViewID      string               `json:"view_id"`
+	Fields      []string             `json:"fields"`
+	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Unsupported bool                 `json:"unsupported"`
+	Error       string               `json:"error,omitempty"`
+}
+
+// WorkerStreamFieldValuesResponse 单 Worker 的 stream 标签维度取值分布。
+type WorkerStreamFieldValuesResponse struct {
+	ViewID      string               `json:"view_id"`
+	Field       string               `json:"field"`
+	Values      []FacetValue         `json:"values"`
+	Targets     []WorkerTargetResult `json:"targets"`
+	Coverage    *Coverage            `json:"coverage,omitempty"`
+	Complete    bool                 `json:"complete"`
+	Unsupported bool                 `json:"unsupported"`
+	Error       string               `json:"error,omitempty"`
 }
 
 // WorkerFieldsResponse 保留字段枚举的顶层覆盖与截断，空字段也不能丢失不完整证据。

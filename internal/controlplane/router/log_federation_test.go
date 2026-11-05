@@ -122,9 +122,10 @@ type fedWorker struct {
 	unsup   bool
 	fail    string
 	searchN int
-	// statsN/facetN 记录聚合 RPC 次数：聚合类同参缓存命中时不得增长（CP-8 回归）。
-	statsN int
-	facetN int
+	// statsN/facetN/streamN 记录聚合 RPC 次数：聚合类同参缓存命中时不得增长（CP-8 回归）。
+	statsN  int
+	facetN  int
+	streamN int
 	// lastFilter 记录最近一次 Search 收到的过滤表达式，供断言结构化筛选是否已组合下发。
 	lastFilter string
 	// quality 覆盖 Search 上报的质量；nil 表示按真实 Worker 的默认值上报 exact/exact。
@@ -192,6 +193,29 @@ func (w *fedWorker) Facets(_ context.Context, req logcoord.WorkerSearchRequest, 
 		ViewID:  req.ViewID,
 		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...),
 	}, nil
+}
+
+// Streams / StreamFieldNames / StreamFieldValues 是 WorkerClient 新增能力。
+//
+// 本替身只建模「老 Worker 不支持 streams」这一路：返回 Unsupported，
+// 与生产上混版节点的行为一致（CP 会归入「本次不提供该能力」而不是报错）。
+// streamN 同样参与同参缓存断言：缓存命中时不得增长。
+func (w *fedWorker) Streams(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerStreamsResponse, error) {
+	w.streamN++
+	return &logcoord.WorkerStreamsResponse{ViewID: req.ViewID, Unsupported: true,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...)}, nil
+}
+
+func (w *fedWorker) StreamFieldNames(_ context.Context, req logcoord.WorkerSearchRequest) (*logcoord.WorkerStreamFieldNamesResponse, error) {
+	w.streamN++
+	return &logcoord.WorkerStreamFieldNamesResponse{ViewID: req.ViewID, Unsupported: true,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...)}, nil
+}
+
+func (w *fedWorker) StreamFieldValues(_ context.Context, req logcoord.WorkerSearchRequest, field string) (*logcoord.WorkerStreamFieldValuesResponse, error) {
+	w.streamN++
+	return &logcoord.WorkerStreamFieldValuesResponse{ViewID: req.ViewID, Field: field, Unsupported: true,
+		Targets: append([]logcoord.WorkerTargetResult(nil), w.targets...)}, nil
 }
 
 // fedDialer workerID → client。

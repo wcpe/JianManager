@@ -227,6 +227,11 @@ func TestPartitionDayBoundsApplyToSearchStatsAndFacets(t *testing.T) {
 		calls++
 		require.Equal(t, "2026-09-22T12:00:00Z", r.URL.Query().Get("start"))
 		require.Equal(t, "2026-09-23T00:00:00Z", r.URL.Query().Get("end"))
+		// 2026-11-05：Facets 改走官方 /select/logsql/field_values（不再借 Stats 管道）。
+		// 夹具必须给合法 JSON，否则解析失败会把「窗口正确」这个断言掩盖掉。
+		if strings.HasSuffix(r.URL.Path, "/select/logsql/field_values") {
+			_, _ = w.Write([]byte(`{"values":[{"value":"INFO","hits":2}]}`))
+		}
 	}))
 	defer srv.Close()
 	vl, err := vlsup.NewClient(vlsup.ClientOptions{BaseURL: srv.URL})

@@ -3214,6 +3214,26 @@
 - **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`**
   - 继承 Search 的 scope/view 与 FR-473/480 语义；Stats 返回独立 coverage/quality，Facets 保留顶层 coverage、`truncated` 与逐维度截断信息，任一来源 partial/截断时 CP `quality.stats_quality=partial`，不能把空桶报为精确 0。
   - HTTP 聚合结果可能使用 4s 同参缓存；它不构成点击下载时的新鲜授权/质量证明，当前页导出不借用该缓存。
+  - Facets 的维度聚合走 VictoriaLogs 官方 `/select/logsql/field_values`（**不是** `/select/logsql/facets`——后者的语义是「自动发现低基数字段」，会忽略 `field=`，与「按指定维度查」的契约不匹配）。
+
+- **`GET /api/v1/logs/federation/streams`** — 窗内流清单
+  - **关联 FR**: FR-479, FR-480
+  - **权限**：同 Search。
+  - **Query**：继承 Search 的 `from/to`、筛选、目标、`onlineOnly`、`viewId`。
+  - **响应**：`{ view, coverage, quality, streams:[{log_source_id, stream, raw, hits}], complete }`
+  - **与 `/fields` 的区别**：`/fields` 给的是窗内出现过的**文档字段名**（level / parser_version …）；`/streams` 给的是窗内有哪些**流**、各多少条。前者回答「能按什么筛」，后者回答「谁在刷日志」。
+  - **`complete=false` 的语义**：条数**不可信**。VictoriaLogs 的 `streams` 端点在结果被截断时会把**所有** hits 静默归零，所以此时 `hits=0` 不等于「该流没有数据」。服务端因此**从不向 VL 传 `limit`**。
+  - 同样可能命中 4s 同参缓存。
+
+- **`GET /api/v1/logs/federation/stream-field-names`** — stream 的标签维度名
+  - **响应**：`{ view, coverage, fields[] }`。
+  - **实测恒为 `[log_source_id, stream]`**：VL 在入库时按流标签建索引，而我们行上的流标签就这两个。接口保留该端点而不是在代码里写死，是为了将来 VL 给流加新标签时前端无需改码。
+
+- **`GET /api/v1/logs/federation/stream-field-values`** — stream 标签维度的取值分布
+  - **Query**：多一个必填 `field`。
+  - **`field` 只能取 `log_source_id` / `stream`**；其他值 ⇒ 400 `INVALID_REQUEST`。提前拦下是因为向 VL 传文档字段（如 `level`）会返回**空结果而不报错**，前端会显示「这个维度可选但永远没数据」。
+  - **响应**：`{ view, coverage, quality, field, values:[{value, count}], complete }`。
+  - 同样**不向 VL 传 `limit`**（同一截断归零陷阱），由服务端拿全量后自行裁剪。
 
 - **`POST /api/v1/logs/federation/export`** — 三种界面范围复用此端点，不新增 Worker Export RPC。
   - **参数位置**：全部使用 query，继承 `from/to`、筛选、目标、`onlineOnly`、`viewId`、`cursor`、`limit`；不接收客户端原始行作为产物来源。

@@ -71,6 +71,13 @@ func TestQueryTextBudgetLargeScopesSearchStatsFieldsFacets(t *testing.T) {
 				selected = append(selected, source)
 			}
 		}
+		// 2026-11-05：Facets 改走官方 /select/logsql/field_values（不再借 Stats 管道）。
+		// 它必须放在上面「选中集合 + 预算统计」之后：这样请求文本仍然参与
+		// maxQuery 统计与 16KiB 判定，「分片后不超预算」这个断言才仍然成立。
+		if strings.HasSuffix(r.URL.Path, "/select/logsql/field_values") {
+			_, _ = w.Write([]byte(`{"values":[{"value":"INFO","hits":` + strconv.Itoa(len(selected)) + `}]}`))
+			return
+		}
 		var body strings.Builder
 		if strings.Contains(text, " | stats") {
 			if strings.Contains(text, " by (level)") {

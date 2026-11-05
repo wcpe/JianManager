@@ -44,6 +44,14 @@ type FacetsQuerier interface {
 	Facets(ctx context.Context, req query.QueryRequest, dimensions []string, dimensionLimit uint32) query.FacetsResponse
 }
 
+// StreamsQuerier 是可选扩展：实现后三个 LogStream* RPC 走真实路径，
+// 否则 stub 返回 LOG_UNSUPPORTED（不返回空成功——空成功会被前端当成「没有流」）。
+type StreamsQuerier interface {
+	Streams(ctx context.Context, req query.QueryRequest) query.StreamsResponse
+	StreamFieldNames(ctx context.Context, req query.QueryRequest) query.StreamFieldNamesResponse
+	StreamFieldValues(ctx context.Context, req query.QueryRequest, field string) query.StreamFieldValuesResponse
+}
+
 // ArchiveQuerier 是可选的真实归档/恢复能力。
 type ArchiveQuerier interface {
 	Rehydrate(ctx context.Context, req query.QueryRequest, objectIDs []string) query.ArchiveTaskResponse
@@ -586,6 +594,115 @@ func (s *Service) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest)
 		Coverage:  grpcmap.CoverageToProto(res.Coverage),
 		Values:    values,
 		Truncated: res.Truncated,
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreams 枚举查询窗内的 stream。未接入 StreamsQuerier 时返回 LOG_UNSUPPORTED。
+//
+// 语义边界（与 Fields 区分）：
+//   - LogFields  = 「窗内出现过哪些**文档字段名**」（/field_names）
+//   - LogStreams = 「窗内有哪些**流**、各多少条」（/streams）
+//
+// 两者都能回答「有哪些流字段」，但只有后者能给出**条数**，
+// 而条数正是前端「按日志量排序看哪个源在刷屏」所需。
+func (s *Service) LogStreams(ctx context.Context, req *workerpb.LogStreamsRequest) (*workerpb.LogStreamsResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamsResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log streams disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamsResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log streams unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.Streams(ctx, qreq)
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	streams := make([]*workerpb.LogStream, 0, len(res.Streams))
+	for _, sv := range res.Streams {
+		streams = append(streams, &workerpb.LogStream{
+			Raw:         sv.Raw,
+			LogSourceId: sv.LogSourceID,
+			Stream:      sv.Stream,
+			Hits:        sv.Hits,
+		})
+	}
+	out := &workerpb.LogStreamsResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Streams:   streams,
+		Complete:  res.Complete,
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreamFieldNames 列出 stream 的标签维度名。
+func (s *Service) LogStreamFieldNames(ctx context.Context, req *workerpb.LogStreamFieldNamesRequest) (*workerpb.LogStreamFieldNamesResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamFieldNamesResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log stream field names disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamFieldNamesResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log stream field names unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.StreamFieldNames(ctx, qreq)
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	out := &workerpb.LogStreamFieldNamesResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Fields:    append([]string(nil), res.Fields...),
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreamFieldValues 按单个 stream 标签维度取取值分布。
+func (s *Service) LogStreamFieldValues(ctx context.Context, req *workerpb.LogStreamFieldValuesRequest) (*workerpb.LogStreamFieldValuesResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamFieldValuesResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log stream field values disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamFieldValuesResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log stream field values unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.StreamFieldValues(ctx, qreq, req.GetField())
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	values := make([]*workerpb.LogStreamFieldValue, 0, len(res.Values))
+	for _, v := range res.Values {
+		values = append(values, &workerpb.LogStreamFieldValue{Value: v.Value, Hits: v.Count})
+	}
+	out := &workerpb.LogStreamFieldValuesResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Values:    values,
+		Complete:  res.Complete,
 		Error:     grpcmap.QueryErrorToProto(res.Err),
 	}
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())

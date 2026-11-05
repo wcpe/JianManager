@@ -72,6 +72,34 @@ func (s *Server) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest) 
 	return s.UnimplementedWorkerServiceServer.LogFacets(ctx, req)
 }
 
+// LogStreams FR-479 stream 枚举（窗内有哪些流、各多少条）。
+//
+// 必须在此显式 delegate：Server 嵌入的是 UnimplementedWorkerServiceServer，
+// 缺了这些方法时调用会**恒返回 Unimplemented**，而 CP 会把它当成
+// 「这台 Worker 不支持 streams」——功能上线了但永远用不了。
+func (s *Server) LogStreams(ctx context.Context, req *workerpb.LogStreamsRequest) (*workerpb.LogStreamsResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogStreams(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogStreams(ctx, req)
+}
+
+// LogStreamFieldNames FR-479 stream 标签维度名。
+func (s *Server) LogStreamFieldNames(ctx context.Context, req *workerpb.LogStreamFieldNamesRequest) (*workerpb.LogStreamFieldNamesResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogStreamFieldNames(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogStreamFieldNames(ctx, req)
+}
+
+// LogStreamFieldValues FR-479 stream 标签维度取值分布。
+func (s *Server) LogStreamFieldValues(ctx context.Context, req *workerpb.LogStreamFieldValuesRequest) (*workerpb.LogStreamFieldValuesResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogStreamFieldValues(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogStreamFieldValues(ctx, req)
+}
+
 // LogTail FR-479 流式 Tail。
 func (s *Server) LogTail(req *workerpb.LogTailRequest, stream workerpb.WorkerService_LogTailServer) error {
 	if q := s.logRPC(); q != nil {

@@ -360,6 +360,12 @@ func (h *LogFederationHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/logs/federation/stats", h.Stats)
 	rg.GET("/logs/federation/fields", h.Fields)
 	rg.GET("/logs/federation/facets", h.Facets)
+	// streams 与 fields 的区别（必须分清）：
+	//   /fields  = 窗内出现过哪些**文档字段名**（VL /field_names）
+	//   /streams = 窗内有哪些**流**、各多少条（VL /streams）
+	rg.GET("/logs/federation/streams", h.Streams)
+	rg.GET("/logs/federation/stream-field-names", h.StreamFieldNames)
+	rg.GET("/logs/federation/stream-field-values", h.StreamFieldValues)
 	rg.POST("/logs/federation/export", h.Export)
 }
 
@@ -704,6 +710,99 @@ func (h *LogFederationHandler) Fields(c *gin.Context) {
 	resp, err := h.coord.Fields(c.Request.Context(), q)
 	if err != nil {
 		writeFederationError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// Streams 跨 Worker 流枚举（窗内有哪些流、各多少条）。
+//
+// 与 Fields 的区别：Fields 给的是**文档字段名全集**，Streams 给的是**流清单 + 条数**。
+// 前端「按日志量看哪个源在刷屏」用的是后者。
+func (h *LogFederationHandler) Streams(c *gin.Context) {
+	q, ok := h.buildQuery(c)
+	if !ok {
+		return
+	}
+	// 同参 TTL：与 Stats/Facets 同口径（键含主体/scope/RawQuery）。
+	key := "st\x1f" + fedAggCacheKey(q, c)
+	if body, ok := h.aggCache.get(key); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
+	resp, err := h.coord.Streams(c.Request.Context(), logcoord.StreamsQuery{Query: q})
+	if err != nil {
+		writeFederationError(c, err)
+		return
+	}
+	if body, mErr := json.Marshal(resp); mErr == nil {
+		h.aggCache.put(key, body)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// StreamFieldNames 跨 Worker stream 标签维度名（实测恒为 log_source_id / stream）。
+func (h *LogFederationHandler) StreamFieldNames(c *gin.Context) {
+	q, ok := h.buildQuery(c)
+	if !ok {
+		return
+	}
+	key := "sfn\x1f" + fedAggCacheKey(q, c)
+	if body, ok := h.aggCache.get(key); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
+	resp, err := h.coord.StreamFieldNames(c.Request.Context(), logcoord.StreamsQuery{Query: q})
+	if err != nil {
+		writeFederationError(c, err)
+		return
+	}
+	if body, mErr := json.Marshal(resp); mErr == nil {
+		h.aggCache.put(key, body)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// StreamFieldValues 跨 Worker stream 标签维度取值分布。
+//
+// field 必填，且必须是 stream 标签维度（log_source_id / stream）；
+// 传文档字段（如 level）会拿到空结果而不报错（VL 行为），所以这里提前拦下——
+// 否则前端会显示「这个维度可选但永远没数据」。
+func (h *LogFederationHandler) StreamFieldValues(c *gin.Context) {
+	q, ok := h.buildQuery(c)
+	if !ok {
+		return
+	}
+	field := strings.TrimSpace(c.Query("field"))
+	if field == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "field 不能为空"})
+		return
+	}
+	if !logcoord.StreamLabelDimension(field) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "field 只支持 stream 标签维度（log_source_id / stream）",
+		})
+		return
+	}
+	key := "sfv\x1f" + field + "\x1f" + fedAggCacheKey(q, c)
+	if body, ok := h.aggCache.get(key); ok {
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
+	resp, err := h.coord.StreamFieldValues(c.Request.Context(),
+		logcoord.StreamFieldValuesQuery{Query: q, Field: field})
+	if err != nil {
+		writeFederationError(c, err)
+		return
+	}
+	if body, mErr := json.Marshal(resp); mErr == nil {
+		h.aggCache.put(key, body)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 		return
 	}
 	c.JSON(http.StatusOK, resp)

@@ -160,6 +160,41 @@ type FacetsResponse struct {
 	Err       *QueryError  `json:"error,omitempty"`
 }
 
+// StreamsResponse 是 stream 枚举结果。
+//
+// Complete 与 Facets 的 Truncated 不同：Truncated 说「少给了一些」；
+// Complete=false 说「**条数不可信**」。截断时条数仍可能是真的（只是不全），
+// 而 streams 端点被上游截断时条数会**全部归零**，所以必须单独一个字段
+// 让前端知道「别把这些 0 当成没数据」。
+type StreamsResponse struct {
+	RequestID string        `json:"request_id"`
+	View      *ViewRef      `json:"view,omitempty"`
+	Coverage  Coverage      `json:"coverage"`
+	Streams   []StreamValue `json:"streams,omitempty"`
+	Complete  bool          `json:"complete"`
+	Err       *QueryError   `json:"error,omitempty"`
+}
+
+// StreamFieldNamesResponse 是 stream 标签维度名结果。
+type StreamFieldNamesResponse struct {
+	RequestID string      `json:"request_id"`
+	View      *ViewRef    `json:"view,omitempty"`
+	Coverage  Coverage    `json:"coverage"`
+	Fields    []string    `json:"fields,omitempty"`
+	Err       *QueryError `json:"error,omitempty"`
+}
+
+// StreamFieldValuesResponse 是 stream 标签维度取值分布结果。
+type StreamFieldValuesResponse struct {
+	RequestID string       `json:"request_id"`
+	View      *ViewRef     `json:"view,omitempty"`
+	Coverage  Coverage     `json:"coverage"`
+	Field     string       `json:"field,omitempty"`
+	Values    []FacetValue `json:"values,omitempty"`
+	Complete  bool         `json:"complete"`
+	Err       *QueryError  `json:"error,omitempty"`
+}
+
 // ArchiveTaskResponse 是归档/恢复任务的查询面投影。
 type ArchiveTaskResponse struct {
 	TaskID string

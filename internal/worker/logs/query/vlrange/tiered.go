@@ -94,8 +94,49 @@ func (t *Tiered) FollowLive(ctx context.Context, rng query.AuthoritativeRange, q
 	return c.FollowLive(ctx, rng, q)
 }
 
+// Streams 转发到受管实例（流的枚举与条数）。
+//
+// # 为什么这三个转发是必需的（2026-11-05 真机踩到）
+//
+// 生产装配走的是 `&vlrange.Tiered{Main: client}`（见 apps/worker/log_rpc_wiring），
+// **不是**直接丢 `*vlrange.Client`。而 Service 是用类型断言
+// `s.client.(StreamsRangeClient)` 探测能力的：
+//
+//	Tiered 没有 Streams ⇒ 断言失败 ⇒ LOG_UNSUPPORTED「streams unimplemented on this worker」
+//
+// 表现是 CP 侧 `coverage.targets[].reasons=["streams_unsupported"]`，而
+// 单测全绿（单测直接用 `*Client`，跑的路径与生产不同）。
+//
+// 教训：**新增可选能力接口时，所有包装层都必须同步转发**，并靠下面的 var 断言兜住。
+func (t *Tiered) Streams(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.RangeStreamsResult, error) {
+	c, err := t.forRange(ctx, rng)
+	if err != nil {
+		return query.RangeStreamsResult{}, err
+	}
+	return c.Streams(ctx, rng, q)
+}
+
+func (t *Tiered) StreamFieldNames(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.StreamFieldNamesResult, error) {
+	c, err := t.forRange(ctx, rng)
+	if err != nil {
+		return query.StreamFieldNamesResult{}, err
+	}
+	return c.StreamFieldNames(ctx, rng, q)
+}
+
+func (t *Tiered) StreamFieldValues(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, field string) (query.RangeStreamFieldValuesResult, error) {
+	c, err := t.forRange(ctx, rng)
+	if err != nil {
+		return query.RangeStreamFieldValuesResult{}, err
+	}
+	return c.StreamFieldValues(ctx, rng, q, field)
+}
+
 var _ query.RangeClient = (*Tiered)(nil)
 var _ query.MergedRangeClient = (*Tiered)(nil)
 var _ query.FieldsRangeClient = (*Tiered)(nil)
 var _ query.FacetsRangeClient = (*Tiered)(nil)
+// StreamsRangeClient 断言必须写出来：漏掉转发时靠它当场编译失败，
+// 而不是等到生产上只看到一句 streams unimplemented。
+var _ query.StreamsRangeClient = (*Tiered)(nil)
 var _ query.FollowLiveRangeClient = (*Tiered)(nil)

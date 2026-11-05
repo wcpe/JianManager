@@ -175,6 +175,36 @@ func (a *WorkerClientAdapter) Facets(ctx context.Context, req WorkerSearchReques
 	return mapFacetsResponse(resp, err)
 }
 
+// Streams 实现 WorkerClient（窗内有哪些流、各多少条）。
+func (a *WorkerClientAdapter) Streams(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamsResponse, error) {
+	if a == nil || a.client == nil {
+		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
+	}
+	resp, err := a.client.LogStreams(ctx, &workerpb.LogStreamsRequest{Query: toProtoQueryBase(req)})
+	return mapStreamsResponse(resp, err)
+}
+
+// StreamFieldNames 实现 WorkerClient。
+func (a *WorkerClientAdapter) StreamFieldNames(ctx context.Context, req WorkerSearchRequest) (*WorkerStreamFieldNamesResponse, error) {
+	if a == nil || a.client == nil {
+		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
+	}
+	resp, err := a.client.LogStreamFieldNames(ctx, &workerpb.LogStreamFieldNamesRequest{Query: toProtoQueryBase(req)})
+	return mapStreamFieldNamesResponse(resp, err)
+}
+
+// StreamFieldValues 实现 WorkerClient。
+func (a *WorkerClientAdapter) StreamFieldValues(ctx context.Context, req WorkerSearchRequest, field string) (*WorkerStreamFieldValuesResponse, error) {
+	if a == nil || a.client == nil {
+		return nil, fmt.Errorf("logcoord: worker client adapter not wired")
+	}
+	resp, err := a.client.LogStreamFieldValues(ctx, &workerpb.LogStreamFieldValuesRequest{
+		Query: toProtoQueryBase(req),
+		Field: field,
+	})
+	return mapStreamFieldValuesResponse(resp, err)
+}
+
 func toProtoQueryBase(req WorkerSearchRequest) *workerpb.LogQueryRequestBase {
 	order := req.OrderVersion
 	if order == "" {
@@ -487,6 +517,100 @@ func mapFacetsResponse(resp *workerpb.LogFacetsResponse, err error) (*WorkerFace
 	}
 	for _, dim := range order {
 		out.Dimensions = append(out.Dimensions, *byDim[dim])
+	}
+	return out, nil
+}
+
+// mapStreamsResponse 把 proto → logcoord。
+//
+// Complete 直传不重算：它是 Worker 侧「条数是否可信」的唯一判据，
+// CP 不掌握 VL 的截断细节，在这里重新推导只会引入第二个真相。
+func mapStreamsResponse(resp *workerpb.LogStreamsResponse, err error) (*WorkerStreamsResponse, error) {
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return &WorkerStreamsResponse{Unsupported: true, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if resp == nil {
+		return &WorkerStreamsResponse{Error: "empty_worker_response"}, nil
+	}
+	out := &WorkerStreamsResponse{
+		ViewID:   resp.GetView().GetViewId(),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+		Complete: resp.GetComplete(),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+		return out, nil
+	}
+	out.Streams = make([]WorkerStream, 0, len(resp.GetStreams()))
+	for _, s := range resp.GetStreams() {
+		if s == nil {
+			continue
+		}
+		out.Streams = append(out.Streams, WorkerStream{
+			LogSourceID: s.GetLogSourceId(),
+			Stream:      s.GetStream(),
+			Raw:         s.GetRaw(),
+			Hits:        s.GetHits(),
+		})
+	}
+	return out, nil
+}
+
+func mapStreamFieldNamesResponse(resp *workerpb.LogStreamFieldNamesResponse, err error) (*WorkerStreamFieldNamesResponse, error) {
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return &WorkerStreamFieldNamesResponse{Unsupported: true, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if resp == nil {
+		return &WorkerStreamFieldNamesResponse{Error: "empty_worker_response"}, nil
+	}
+	out := &WorkerStreamFieldNamesResponse{
+		ViewID:   resp.GetView().GetViewId(),
+		Fields:   append([]string(nil), resp.GetFields()...),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+	}
+	return out, nil
+}
+
+func mapStreamFieldValuesResponse(resp *workerpb.LogStreamFieldValuesResponse, err error) (*WorkerStreamFieldValuesResponse, error) {
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return &WorkerStreamFieldValuesResponse{Unsupported: true, Error: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if resp == nil {
+		return &WorkerStreamFieldValuesResponse{Error: "empty_worker_response"}, nil
+	}
+	out := &WorkerStreamFieldValuesResponse{
+		ViewID:   resp.GetView().GetViewId(),
+		Targets:  mapCoverageTargets(resp.GetCoverage().GetTargets()),
+		Coverage: coverageFromProto(resp.GetCoverage()),
+		Complete: resp.GetComplete(),
+	}
+	if e := resp.GetError(); e != nil {
+		out.Error = e.GetMessage()
+		out.Unsupported = e.GetCode() == workerpb.LogErrorCode_LOG_UNSUPPORTED
+		return out, nil
+	}
+	out.Values = make([]FacetValue, 0, len(resp.GetValues()))
+	for _, v := range resp.GetValues() {
+		if v == nil {
+			continue
+		}
+		out.Values = append(out.Values, FacetValue{Value: v.GetValue(), Count: v.GetHits()})
 	}
 	return out, nil
 }

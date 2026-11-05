@@ -14,6 +14,16 @@ import (
 // 留出引擎组合额外过滤器的余量，不调整批准 VL 默认的 16KiB 上限。
 const physicalMaxQueryBytes = 12 << 10
 
+// physicalRequestLineMaxBytes 是 VL 实际卡的**请求行总长**上限（含 URL 编码）。
+//
+// 与 physicalMaxQueryBytes 的区别：
+//   - physicalMaxQueryBytes 是**字面量**分片目标（留 4KiB 余量给引擎组合额外过滤器）；
+//   - 本常量是 VL 服务端的真实硬界，用于「编码后长度」复核。
+//
+// 两者不能合一个：URL 编码会把引号/空格/中文放大，字面量 11KB 的 selector
+// 编码后可能 14KB——那个请求是合法的，不应该被自己的分片逻辑拦下。
+const physicalRequestLineMaxBytes = 16 << 10
+
 func physicalQueryFits(text, filter string) bool {
 	return len(text) <= physicalMaxQueryBytes && len(filter) <= physicalMaxQueryBytes-len(text)
 }

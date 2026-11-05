@@ -16,6 +16,8 @@ import (
 )
 
 type cursorWorker struct {
+	// noStreamWorker 提供 stream 三方法的「未实现」实现（接口扩展时不用逐个改 fake）。
+	noStreamWorker
 	id     string
 	target string
 	items  []Event

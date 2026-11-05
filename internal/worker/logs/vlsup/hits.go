@@ -199,3 +199,69 @@ func (c *Client) FieldNames(ctx context.Context, query string, start, end time.T
 	}
 	return out, nil
 }
+
+// fieldValuesPath 是「某个字段的值分布」端点。
+const fieldValuesPath = "/select/logsql/field_values"
+
+// fieldValuesResponse 是 /select/logsql/field_values 的返回结构。
+//
+// 形态（实测 v1.52.0）：
+//
+//	{"values":[{"value":"INFO","hits":880},{"value":"WARN","hits":10}]}
+type fieldValuesResponse struct {
+	Values []struct {
+		Value string `json:"value"`
+		Hits  uint64 `json:"hits"`
+	} `json:"values"`
+}
+
+// FieldValue 是一个字段值的聚合结果。
+type FieldValue struct {
+	Value string
+	Hits  uint64
+}
+
+// FieldValues 返回某字段在给定查询与时间窗内的值分布（按 hits 降序，由 VL 给）。
+//
+// # 为什么用它而不是 /select/logsql/facets
+//
+// 2026-11-05 实测：官方 `facets` 的语义是「**自动发现**低基数字段」——
+// 它扫描所有字段、返回「值数量 ≤ max_values_per_field 的那些字段」，
+// 而 `field=` / `fields=` 参数都会被忽略。
+//
+// 我们的查询契约是「按调用方指定的 dimensions 聚合」，与它不匹配。
+// `field_values` 才是「按指定字段精确聚合」，与服务契约同形。
+//
+// 实测两者对 level 的结果逐值一致（INFO 880 / WARN 10）。
+func (c *Client) FieldValues(ctx context.Context, query, field string, start, end time.Time) ([]FieldValue, error) {
+	if c == nil {
+		return nil, fmt.Errorf("vlsup: nil client")
+	}
+	if strings.TrimSpace(field) == "" {
+		return nil, fmt.Errorf("vlsup: field_values 需要非空 field")
+	}
+	if !start.Before(end) {
+		return nil, fmt.Errorf("vlsup: field_values 时间窗无效 [%s, %s)", start, end)
+	}
+	params := url.Values{}
+	if query == "" {
+		query = "*"
+	}
+	params.Set("query", query)
+	params.Set("field", field)
+	params.Set("start", start.UTC().Format(time.RFC3339Nano))
+	params.Set("end", end.UTC().Format(time.RFC3339Nano))
+	body, err := c.Post(ctx, fieldValuesPath, params)
+	if err != nil {
+		return nil, err
+	}
+	var parsed fieldValuesResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("vlsup: field_values 响应解析失败: %w", err)
+	}
+	out := make([]FieldValue, 0, len(parsed.Values))
+	for _, v := range parsed.Values {
+		out = append(out, FieldValue{Value: v.Value, Hits: v.Hits})
+	}
+	return out, nil
+}

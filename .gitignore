@@ -92,3 +92,5 @@ blob-report/
 
 # Vantaloom 运行时生成的项目文档（含本机绝对路径，不入库）
 vantaloom.md
+# Vantaloom 本地运行时产物（技能副本 / 私有记忆副本），不属于工程源码
+.vantaloom/

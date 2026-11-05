@@ -803,6 +803,102 @@ export function useLogsFederationFacets(params: Record<string, unknown>, enabled
   return query
 }
 
+/** 一条流（粒度：源 + 流名）与其在窗内的条数。 */
+export interface FederationStreamItem {
+  log_source_id: string
+  stream: string
+  raw?: string
+  /**
+   * 窗内条数。
+   *
+   * ⚠️ **必须结合响应体的 complete 一起读**：complete=false 时这个数不可信。
+   * 原因（实测 VictoriaLogs）：`streams` 端点一旦被上游截断，会把**所有**
+   * hits 静默归零——所以「0」在那种情况下不是「没数据」，而是「不知道」。
+   */
+  hits: number
+}
+
+export interface FederationStreamsResponse extends FederationAggregateResponse {
+  streams?: FederationStreamItem[]
+  /** false ⇒ 条数不可信（上游截断）；不得把 hits=0 当成该流没有数据。 */
+  complete?: boolean
+}
+
+export interface FederationStreamFieldNamesResponse extends FederationAggregateResponse {
+  fields?: string[]
+}
+
+export interface FederationStreamFieldValue {
+  value: string
+  count: number
+}
+
+export interface FederationStreamFieldValuesResponse extends FederationAggregateResponse {
+  field?: string
+  values?: FederationStreamFieldValue[]
+  complete?: boolean
+}
+
+/**
+ * 联邦流枚举（窗内有哪些流、各多少条）。
+ *
+ * 与 Fields 的区别（别搞混）：
+ *   - Fields   = 窗内出现过哪些**文档字段名**（level / parser_version …）
+ *   - Streams  = 窗内有哪些**流**、各多少条（源 + stdout/stderr）
+ *
+ * 失败不阻断页面（与 stats/facets 同口径：它们都是可选装饰）。
+ */
+export function useLogsFederationStreams(params: Record<string, unknown>, enabled: boolean) {
+  const query = useQuery({
+    queryKey: ['logsFederationStreams', params],
+    queryFn: async ({ signal }) =>
+      (await getWithRateLimitRetry<FederationStreamsResponse>('/logs/federation/streams', { params, signal, timeout: 60_000 })).data,
+    enabled,
+    retry: rateLimitRetry,
+    retryDelay: rateLimitRetryDelay,
+  })
+  useCancelDisabledLogQuery('logsFederationStreams', params, enabled)
+  return query
+}
+
+/** 联邦 stream 标签维度名（实测恒为 log_source_id / stream）。 */
+export function useLogsFederationStreamFieldNames(params: Record<string, unknown>, enabled: boolean) {
+  const query = useQuery({
+    queryKey: ['logsFederationStreamFieldNames', params],
+    queryFn: async ({ signal }) =>
+      (await getWithRateLimitRetry<FederationStreamFieldNamesResponse>('/logs/federation/stream-field-names', { params, signal, timeout: 60_000 })).data,
+    enabled,
+    retry: rateLimitRetry,
+    retryDelay: rateLimitRetryDelay,
+  })
+  useCancelDisabledLogQuery('logsFederationStreamFieldNames', params, enabled)
+  return query
+}
+
+/**
+ * 联邦 stream 标签维度取值分布。
+ *
+ * `field` 只能是 stream 标签维度（log_source_id / stream）；传文档字段会拿到
+ * 空结果而**不报错**（VL 行为），所以后端与本层都提前拦下。
+ */
+export function useLogsFederationStreamFieldValues(
+  params: Record<string, unknown>,
+  field: string,
+  enabled: boolean,
+) {
+  const withField = { ...params, field }
+  const query = useQuery({
+    queryKey: ['logsFederationStreamFieldValues', withField],
+    queryFn: async ({ signal }) =>
+      (await getWithRateLimitRetry<FederationStreamFieldValuesResponse>('/logs/federation/stream-field-values', { params: withField, signal, timeout: 60_000 })).data,
+    enabled,
+    retry: rateLimitRetry,
+    retryDelay: rateLimitRetryDelay,
+  })
+  useCancelDisabledLogQuery('logsFederationStreamFieldValues', withField, enabled)
+  return query
+}
+
 /**
  * 后端导出闸阻断（200 JSON 报告 + artifact:null，不交付附件）。
  *

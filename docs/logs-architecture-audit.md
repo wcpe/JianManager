@@ -291,3 +291,71 @@ field_names → 15+ 个                 ← 该窗口真实的字段全集
 3. **注释里的数值前提要能被验证**。写了「上限是 31d」，就该有一条用例或一次实测支撑，
    否则它会在下次被读到时误导人（本轮 D9 就是这么埋下的）。
 4. **夹具必须用真实形状**。命名空间与源 id 写成同值，等于把缺陷从测试里删掉了。
+
+## 八、Facets / Stats 改用官方聚合：实测后的取舍（2026-11-05）
+
+审计里 D4 记为「优化非缺陷」。真正动手前逐端点实测，结论**与最初设想不同**，
+逐条记录以便后人不必重跑。
+
+### Facets：官方 `facets` 端点**不适用**，应改用 `field_values`
+
+`/select/logsql/facets` 的语义是「**自动发现**低基数字段」——它会扫描所有字段，
+返回「值数量 ≤ max_values_per_field 的那些字段」。实测：
+
+```
+max_values_per_field=2 → ['level']
+max_values_per_field=3 → ['level']
+max_values_per_field=5 → ['level']
+不传该参数          → 7 个维度，含 _time / event_id / canonical_content_hash
+```
+
+**无法指定「我要 level 和 stream」**：`field=` / `fields=` 参数都被忽略。
+
+而我们的契约是 `Facets(ctx, rng, q, dimensions []string, limit)` —— **按指定维度查**。
+两者语义不匹配，直接换会破坏契约。
+
+**正确的替代是 `/select/logsql/field_values`**：它接受单个 `field` 参数，精确聚合。
+实测与现有实现逐值一致：
+
+```
+field_values level        → [('INFO',880), ('WARN',10)]
+现有 LogsQL stats by level → INFO 880 / WARN 10
+```
+
+⇒ Facets 的改造方向是「每个维度一次 `field_values`」，不是「一次 `facets`」。
+
+**但这带来一个反直觉的结论**：我们现在是「遍历 dimensions，每个维度调一次 Stats」，
+换成 `field_values` 后**仍然**是「每个维度一次请求」——请求数没变。
+收益只是「少一层 LogsQL 管道解析」，不是「少 N-1 次扇出」。
+
+### Stats：`stats_query_range` 只对**带时间桶**的请求有优势
+
+实测两者数据一致：
+
+```
+stats_query_range → {"resultType":"matrix","result":[{metric:{level:INFO},values:[[ts,"880"]]}, ...]}
+现有 LogsQL 管道   → {"level":"INFO","_jm_count":"880"}
+```
+
+差别在形状：
+- `stats_query_range` 返回 **Prometheus matrix**（按 `step` 分桶的时间序列）
+- 我们现有实现返回**不带时间桶的聚合**
+
+我们的 `RangeQuery.TimeBucket` **确实存在**，CP 侧也透传（`log_federation.go:721`
+的 `c.Query("timeBucket")`），但**前端目前没有使用它**。
+
+⇒ 结论：
+- 带 `TimeBucket` 的请求：`stats_query_range` 更契合（它天生按 step 分桶）
+- 不带 `TimeBucket` 的请求：两者等价，换过去只是多一层 matrix→Points 转换
+
+### 最终决定
+
+| 项 | 决定 | 理由 |
+|---|---|---|
+| Facets | **不改成一次 `facets`**，改走 `field_values` | 官方 `facets` 语义不匹配我们的「按指定维度」契约 |
+| Stats | **保留现有 LogsQL 管道** | 契约只要求聚合值；matrix 转换是净增复杂度，且无性能收益 |
+| `TimeBucket` 支持 | 保留现状 | 契约有、前端未用；真正需要时再按 `stats_query_range` 实现 |
+
+**记这一条的目的是防止下一次有人「按审计建议直接换掉」**：
+D4 当时写「改用官方聚合」，实测后发现官方 `facets` 的语义根本不同。
+**审计结论也必须经过实测验证才能执行**——这本身就是本轮 D9 那个教训的又一次体现。

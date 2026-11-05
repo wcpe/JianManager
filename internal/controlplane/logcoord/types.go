@@ -420,6 +420,56 @@ type FacetsResponse struct {
 	Truncated bool `json:"truncated"`
 }
 
+// StreamsQuery 流枚举请求。
+type StreamsQuery struct {
+	Query
+}
+
+// StreamItem 是一条流（粒度：源 + 流名）与它在窗内的条数。
+//
+// 与 FacetValue 的区别：FacetValue 是「维度 + 值 + 计数」的通用形态，
+// 而这里是**已拆好的二元组**——前端拿它直接渲染表，不必再拆一层。
+type StreamItem struct {
+	LogSourceID string `json:"log_source_id"`
+	Stream      string `json:"stream"`
+	Raw         string `json:"raw,omitempty"`
+	Hits        uint64 `json:"hits"`
+}
+
+// StreamsResponse 流枚举结果。
+//
+// Complete 是「条数是否可信」：false 时不得把 Hits=0 读成「该流没数据」。
+type StreamsResponse struct {
+	View     View         `json:"view"`
+	Coverage Coverage     `json:"coverage"`
+	Quality  Quality      `json:"quality"`
+	Streams  []StreamItem `json:"streams"`
+	Complete bool         `json:"complete"`
+}
+
+// StreamFieldValuesQuery stream 标签维度取值分布请求。
+type StreamFieldValuesQuery struct {
+	Query
+	Field string `json:"field"`
+}
+
+// StreamFieldNamesResponse stream 标签维度名结果。
+type StreamFieldNamesResponse struct {
+	View     View     `json:"view"`
+	Coverage Coverage `json:"coverage"`
+	Fields   []string `json:"fields"`
+}
+
+// StreamFieldValuesResponse stream 标签维度取值分布结果。
+type StreamFieldValuesResponse struct {
+	View     View         `json:"view"`
+	Coverage Coverage     `json:"coverage"`
+	Quality  Quality      `json:"quality"`
+	Field    string       `json:"field"`
+	Values   []FacetValue `json:"values"`
+	Complete bool         `json:"complete"`
+}
+
 // ExportResult 导出物化结果。
 //
 // 完整校验通过前不得生成成功产物：partial / 截断 / 超预算一律 ExportIncomplete，

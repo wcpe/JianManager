@@ -44,6 +44,9 @@ const (
 	WorkerService_LogStats_FullMethodName                    = "/worker.WorkerService/LogStats"
 	WorkerService_LogFields_FullMethodName                   = "/worker.WorkerService/LogFields"
 	WorkerService_LogFacets_FullMethodName                   = "/worker.WorkerService/LogFacets"
+	WorkerService_LogStreams_FullMethodName                  = "/worker.WorkerService/LogStreams"
+	WorkerService_LogStreamFieldNames_FullMethodName         = "/worker.WorkerService/LogStreamFieldNames"
+	WorkerService_LogStreamFieldValues_FullMethodName        = "/worker.WorkerService/LogStreamFieldValues"
 	WorkerService_LogTail_FullMethodName                     = "/worker.WorkerService/LogTail"
 	WorkerService_LogRehydrate_FullMethodName                = "/worker.WorkerService/LogRehydrate"
 	WorkerService_LogArchiveStatus_FullMethodName            = "/worker.WorkerService/LogArchiveStatus"
@@ -200,6 +203,27 @@ type WorkerServiceClient interface {
 	LogStats(ctx context.Context, in *LogStatsRequest, opts ...grpc.CallOption) (*LogStatsResponse, error)
 	LogFields(ctx context.Context, in *LogFieldsRequest, opts ...grpc.CallOption) (*LogFieldsResponse, error)
 	LogFacets(ctx context.Context, in *LogFacetsRequest, opts ...grpc.CallOption) (*LogFacetsResponse, error)
+	// LogStreams 列出查询窗内的 stream 及其条数。
+	//
+	// 语义来源：VictoriaLogs `/select/logsql/streams`。stream 由 VL 在入库时按
+	// 「流标签集合」建立索引，而我们的行上流标签只有 `log_source_id` 与 `stream`
+	// （实测 `stream_field_names` 恒为这两项）——所以本接口的粒度就是
+	// 「(源, 流) 二元组」，不是「窗内出现过的字段全集」。
+	//
+	// ⚠️ 与 `/field_names`（Fields）**不是**同一件事：后者给的是文档字段名全集，
+	// 前者给的是流的身份。名字里的 stream 指后者，别混用。
+	LogStreams(ctx context.Context, in *LogStreamsRequest, opts ...grpc.CallOption) (*LogStreamsResponse, error)
+	// LogStreamFieldNames 列出 stream 的标签维度名。
+	//
+	// 实测恒为 [`log_source_id`, `stream`]：流的标签就是这两个。
+	// 保留该端点是因为它是「stream 有哪些可筛维度」的唯一权威来源——
+	// 若未来 VL 给流加上新标签，前端无需改码即可看到。
+	LogStreamFieldNames(ctx context.Context, in *LogStreamFieldNamesRequest, opts ...grpc.CallOption) (*LogStreamFieldNamesResponse, error)
+	// LogStreamFieldValues 列出 stream 某标签维度的取值及其条数。
+	//
+	// 只对 stream 标签维度（`log_source_id` / `stream`）有值；
+	// 传文档字段（如 `level`）返回空 `values` 而非报错（实测 v1.52.0）。
+	LogStreamFieldValues(ctx context.Context, in *LogStreamFieldValuesRequest, opts ...grpc.CallOption) (*LogStreamFieldValuesResponse, error)
 	// Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
 	LogTail(ctx context.Context, in *LogTailRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogEvent], error)
 	LogRehydrate(ctx context.Context, in *LogRehydrateRequest, opts ...grpc.CallOption) (*LogTaskResponse, error)
@@ -698,6 +722,36 @@ func (c *workerServiceClient) LogFacets(ctx context.Context, in *LogFacetsReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LogFacetsResponse)
 	err := c.cc.Invoke(ctx, WorkerService_LogFacets_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) LogStreams(ctx context.Context, in *LogStreamsRequest, opts ...grpc.CallOption) (*LogStreamsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogStreamsResponse)
+	err := c.cc.Invoke(ctx, WorkerService_LogStreams_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) LogStreamFieldNames(ctx context.Context, in *LogStreamFieldNamesRequest, opts ...grpc.CallOption) (*LogStreamFieldNamesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogStreamFieldNamesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_LogStreamFieldNames_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) LogStreamFieldValues(ctx context.Context, in *LogStreamFieldValuesRequest, opts ...grpc.CallOption) (*LogStreamFieldValuesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogStreamFieldValuesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_LogStreamFieldValues_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1746,6 +1800,27 @@ type WorkerServiceServer interface {
 	LogStats(context.Context, *LogStatsRequest) (*LogStatsResponse, error)
 	LogFields(context.Context, *LogFieldsRequest) (*LogFieldsResponse, error)
 	LogFacets(context.Context, *LogFacetsRequest) (*LogFacetsResponse, error)
+	// LogStreams 列出查询窗内的 stream 及其条数。
+	//
+	// 语义来源：VictoriaLogs `/select/logsql/streams`。stream 由 VL 在入库时按
+	// 「流标签集合」建立索引，而我们的行上流标签只有 `log_source_id` 与 `stream`
+	// （实测 `stream_field_names` 恒为这两项）——所以本接口的粒度就是
+	// 「(源, 流) 二元组」，不是「窗内出现过的字段全集」。
+	//
+	// ⚠️ 与 `/field_names`（Fields）**不是**同一件事：后者给的是文档字段名全集，
+	// 前者给的是流的身份。名字里的 stream 指后者，别混用。
+	LogStreams(context.Context, *LogStreamsRequest) (*LogStreamsResponse, error)
+	// LogStreamFieldNames 列出 stream 的标签维度名。
+	//
+	// 实测恒为 [`log_source_id`, `stream`]：流的标签就是这两个。
+	// 保留该端点是因为它是「stream 有哪些可筛维度」的唯一权威来源——
+	// 若未来 VL 给流加上新标签，前端无需改码即可看到。
+	LogStreamFieldNames(context.Context, *LogStreamFieldNamesRequest) (*LogStreamFieldNamesResponse, error)
+	// LogStreamFieldValues 列出 stream 某标签维度的取值及其条数。
+	//
+	// 只对 stream 标签维度（`log_source_id` / `stream`）有值；
+	// 传文档字段（如 `level`）返回空 `values` 而非报错（实测 v1.52.0）。
+	LogStreamFieldValues(context.Context, *LogStreamFieldValuesRequest) (*LogStreamFieldValuesResponse, error)
 	// Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
 	LogTail(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error
 	LogRehydrate(context.Context, *LogRehydrateRequest) (*LogTaskResponse, error)
@@ -2062,6 +2137,15 @@ func (UnimplementedWorkerServiceServer) LogFields(context.Context, *LogFieldsReq
 }
 func (UnimplementedWorkerServiceServer) LogFacets(context.Context, *LogFacetsRequest) (*LogFacetsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LogFacets not implemented")
+}
+func (UnimplementedWorkerServiceServer) LogStreams(context.Context, *LogStreamsRequest) (*LogStreamsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LogStreams not implemented")
+}
+func (UnimplementedWorkerServiceServer) LogStreamFieldNames(context.Context, *LogStreamFieldNamesRequest) (*LogStreamFieldNamesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LogStreamFieldNames not implemented")
+}
+func (UnimplementedWorkerServiceServer) LogStreamFieldValues(context.Context, *LogStreamFieldValuesRequest) (*LogStreamFieldValuesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LogStreamFieldValues not implemented")
 }
 func (UnimplementedWorkerServiceServer) LogTail(*LogTailRequest, grpc.ServerStreamingServer[LogEvent]) error {
 	return status.Errorf(codes.Unimplemented, "method LogTail not implemented")
@@ -2785,6 +2869,60 @@ func _WorkerService_LogFacets_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).LogFacets(ctx, req.(*LogFacetsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_LogStreams_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogStreamsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).LogStreams(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_LogStreams_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).LogStreams(ctx, req.(*LogStreamsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_LogStreamFieldNames_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogStreamFieldNamesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).LogStreamFieldNames(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_LogStreamFieldNames_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).LogStreamFieldNames(ctx, req.(*LogStreamFieldNamesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_LogStreamFieldValues_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LogStreamFieldValuesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).LogStreamFieldValues(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_LogStreamFieldValues_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).LogStreamFieldValues(ctx, req.(*LogStreamFieldValuesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -4454,6 +4592,18 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LogFacets",
 			Handler:    _WorkerService_LogFacets_Handler,
+		},
+		{
+			MethodName: "LogStreams",
+			Handler:    _WorkerService_LogStreams_Handler,
+		},
+		{
+			MethodName: "LogStreamFieldNames",
+			Handler:    _WorkerService_LogStreamFieldNames_Handler,
+		},
+		{
+			MethodName: "LogStreamFieldValues",
+			Handler:    _WorkerService_LogStreamFieldValues_Handler,
 		},
 		{
 			MethodName: "LogRehydrate",

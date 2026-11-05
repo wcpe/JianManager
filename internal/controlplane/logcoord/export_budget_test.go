@@ -28,6 +28,8 @@ import (
 // time.Parse（O(页数 × n log n)），在万行级导出用例里会跑到超时——
 // 那是替身的开销，不是被测逻辑的开销。此处排序键只算一次，逐页线性定位。
 type pagedWorker struct {
+	// noStreamWorker 提供 stream 三方法的「未实现」实现。
+	noStreamWorker
 	id     string
 	target string
 

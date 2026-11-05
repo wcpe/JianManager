@@ -63,6 +63,27 @@ service WorkerService {
   rpc LogStats(LogStatsRequest) returns (LogStatsResponse);
   rpc LogFields(LogFieldsRequest) returns (LogFieldsResponse);
   rpc LogFacets(LogFacetsRequest) returns (LogFacetsResponse);
+  // LogStreams 列出查询窗内的 stream 及其条数。
+  //
+  // 语义来源：VictoriaLogs `/select/logsql/streams`。stream 由 VL 在入库时按
+  // 「流标签集合」建立索引，而我们的行上流标签只有 `log_source_id` 与 `stream`
+  // （实测 `stream_field_names` 恒为这两项）——所以本接口的粒度就是
+  // 「(源, 流) 二元组」，不是「窗内出现过的字段全集」。
+  //
+  // ⚠️ 与 `/field_names`（Fields）**不是**同一件事：后者给的是文档字段名全集，
+  // 前者给的是流的身份。名字里的 stream 指后者，别混用。
+  rpc LogStreams(LogStreamsRequest) returns (LogStreamsResponse);
+  // LogStreamFieldNames 列出 stream 的标签维度名。
+  //
+  // 实测恒为 [`log_source_id`, `stream`]：流的标签就是这两个。
+  // 保留该端点是因为它是「stream 有哪些可筛维度」的唯一权威来源——
+  // 若未来 VL 给流加上新标签，前端无需改码即可看到。
+  rpc LogStreamFieldNames(LogStreamFieldNamesRequest) returns (LogStreamFieldNamesResponse);
+  // LogStreamFieldValues 列出 stream 某标签维度的取值及其条数。
+  //
+  // 只对 stream 标签维度（`log_source_id` / `stream`）有值；
+  // 传文档字段（如 `level`）返回空 `values` 而非报错（实测 v1.52.0）。
+  rpc LogStreamFieldValues(LogStreamFieldValuesRequest) returns (LogStreamFieldValuesResponse);
   // Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
   rpc LogTail(LogTailRequest) returns (stream LogEvent);
   rpc LogRehydrate(LogRehydrateRequest) returns (LogTaskResponse);
@@ -2713,6 +2734,79 @@ message LogFacetsResponse {
 message LogTailRequest {
   LogQueryRequestBase query = 1;
   LogTailMode mode = 2;
+}
+
+// LogStreamsRequest 请求查询窗内的 stream 集合。
+//
+// 本请求**刻意不带 limit**：实测 VictoriaLogs 的 `streams` 端点一旦 limit 小于
+// 实际 stream 数，会把**所有** hits 静默归零（不是截断返回，是全零）：
+//
+//	limit=20（真实 21 个流） -> 20 项, sum_hits=0
+//	limit=21                -> 21 项, sum_hits=11784
+//
+// 把这种「少了一条就全零」的参数暴露给调用方等于给前端埋一个必踩的坑，
+// 所以请求侧根本不允许指定：流数量本身受限于源数量（生产 21 个量级）。
+message LogStreamsRequest { LogQueryRequestBase query = 1; }
+
+// LogStream 是一条流与其在窗内的条数。
+//
+// stream 的 value 是 VL 原始形态（`{log_source_id="inst:318/file",stream="stdout"}`），
+// 同时拆成两个标签字段供前端直接用：解析放在 Worker 一处，避免前端各写一套。
+message LogStream {
+  // raw 是 VL 原始串，保留它是因为「标签值里含 `"` / `{` 怎么办」的解析细节
+  // 只有一份实现才可靠；原始串是唯一无损的形式。
+  string raw = 1;
+  // log_source_id 与 stream 从 raw 拆出；拆不出时留空（不得猜测）。
+  string log_source_id = 2;
+  string stream = 3;
+  // hits 是该流在窗内的**精确条数**。
+  //
+  // ⚠️ 0 有两种含义，不得混同：
+  //   - complete=true  时：该流确实没有数据；
+  //   - complete=false 时：数量未确定（可能被上游截断），不是「0 条」。
+  uint64 hits = 4;
+}
+
+message LogStreamsResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated LogStream streams = 4;
+  // complete=false 表示条数不可信（上游截断）；调用方不得把 hits=0 当断言。
+  bool complete = 5;
+  LogError error = 6;
+}
+
+message LogStreamFieldNamesRequest { LogQueryRequestBase query = 1; }
+
+message LogStreamFieldNamesResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated string fields = 4;
+  LogError error = 5;
+}
+
+// LogStreamFieldValuesRequest 按单个 stream 标签维度取取值分布。
+message LogStreamFieldValuesRequest {
+  LogQueryRequestBase query = 1;
+  // field 必须是 stream 标签维度（`log_source_id` / `stream`）；
+  // 传文档字段不报错但返回空 values（VL 行为，此处不对它做二次猜测）。
+  string field = 2;
+}
+
+message LogStreamFieldValue {
+  string value = 1;
+  uint64 hits = 2;
+}
+
+message LogStreamFieldValuesResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated LogStreamFieldValue values = 4;
+  bool complete = 5;
+  LogError error = 6;
 }
 
 message LogRehydrateRequest {

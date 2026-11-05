@@ -71,6 +71,16 @@ type fakeWorker struct {
 	facetCalls    int
 	openViewCalls int
 
+	streams      []WorkerStream
+	streamValues []FacetValue
+	streamFields []string
+	// streamCalls 三个 stream RPC 共用一个计数器：测试关心「扇出了几次」，
+	// 而不是具体哪个端点。
+	streamCalls int
+	// streamsIncomplete 置 true 时 Streams/StreamFieldValues 报 Complete=false，
+	// 模拟「上游截断 ⇒ 条数不可信」。
+	streamsIncomplete bool
+
 	// openViewFail 模拟本地 Query View 建立失败（未启用日志查询服务、混版
 	// Unimplemented、绑定缺失等）。置为非空时 OpenView 返回其文本作为错误，
 	// 使 bindWorkerViews 写入 WorkerViewErrors，从而构造 worker_view_failed 场景。
@@ -153,6 +163,52 @@ func (w *fakeWorker) Facets(_ context.Context, req WorkerSearchRequest, _ []stri
 		ViewID:     req.ViewID,
 		Dimensions: append([]WorkerFacetDimension(nil), w.facets...),
 		Targets:    append([]WorkerTargetResult(nil), w.facetTargets...),
+	}, nil
+}
+
+// Streams 实现 WorkerClient：返回预置的流清单。
+//
+// Complete 默认 true（与真实 Worker 未截断时一致）；测截断态时置 streamsIncomplete。
+func (w *fakeWorker) Streams(_ context.Context, req WorkerSearchRequest) (*WorkerStreamsResponse, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.streamCalls++
+	return &WorkerStreamsResponse{
+		ViewID:   req.ViewID,
+		Streams:  append([]WorkerStream(nil), w.streams...),
+		Targets:  append([]WorkerTargetResult(nil), w.searchTarget...),
+		Complete: !w.streamsIncomplete,
+	}, nil
+}
+
+// StreamFieldNames 实现 WorkerClient。
+func (w *fakeWorker) StreamFieldNames(_ context.Context, req WorkerSearchRequest) (*WorkerStreamFieldNamesResponse, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.streamCalls++
+	fields := w.streamFields
+	if fields == nil {
+		// 与真实 VL 一致：流的标签就这两个。
+		fields = []string{"log_source_id", "stream"}
+	}
+	return &WorkerStreamFieldNamesResponse{
+		ViewID:  req.ViewID,
+		Fields:  append([]string(nil), fields...),
+		Targets: append([]WorkerTargetResult(nil), w.searchTarget...),
+	}, nil
+}
+
+// StreamFieldValues 实现 WorkerClient。
+func (w *fakeWorker) StreamFieldValues(_ context.Context, req WorkerSearchRequest, field string) (*WorkerStreamFieldValuesResponse, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.streamCalls++
+	return &WorkerStreamFieldValuesResponse{
+		ViewID:   req.ViewID,
+		Field:    field,
+		Values:   append([]FacetValue(nil), w.streamValues...),
+		Targets:  append([]WorkerTargetResult(nil), w.searchTarget...),
+		Complete: !w.streamsIncomplete,
 	}, nil
 }
 

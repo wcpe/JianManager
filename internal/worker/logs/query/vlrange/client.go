@@ -188,8 +188,27 @@ func (c *Client) fieldNamesWindow(rng query.AuthoritativeRange, q query.RangeQue
 	return start, end, false, nil
 }
 
-// Facets aggregates controlled dimensions through the same Stats path and
-// preserves the range budget/truncation signal.
+// Facets 按调用方指定的维度聚合，走官方 `/select/logsql/field_values`。
+//
+// # 与旧实现的区别
+//
+// 旧实现借 Stats 的 LogsQL 管道（`| stats by (dim) count()`）：每个维度一次请求，
+// 且要自己拼管道、自己解 NDJSON。新实现打官方聚合端点，语义同为「按指定字段
+// 精确聚合」，但由服务端直接给结构化结果、少一层管道解析。
+//
+// 请求数**不变**（仍然每个维度一次）——这是 VL 的接口形状决定的：
+// `field_values` 只接受单个 `field`。所以本次改造的收益是「用对端点」，
+// 不是「减少往返」。
+//
+// # 为什么不直接打官方 `/select/logsql/facets`
+//
+// 见 facets_field_values.go 文件头：它的语义是「自动发现低基数字段」，
+// `field=` 被忽略，与「按指定维度查」的契约不匹配。
+//
+// # 预算与截断
+//
+// 单维度超长查询走互斥物理分片（与 Stats 同一份实现），逐片聚合后按值相加；
+// 总字节额度递减与「见底即 partial」的语义与旧实现一致。
 func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, dimensions []string, limit uint32) (query.RangeFacetsResult, error) {
 	if c == nil || c.vl == nil {
 		return query.RangeFacetsResult{}, query.ErrRangeClientUnimplemented
@@ -200,6 +219,14 @@ func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
 	defer cancel()
 	ctx = query.WithPhysicalReadBudget(ctx, q.Budget)
+	return c.facetsAllDimensions(ctx, rng, q, dimensions, limit)
+}
+
+// facetsAllDimensions 逐维度聚合，共用同一份字节额度。
+//
+// 抽出来是因为 Facets 需要先建 ctx（deadline + 物理读预算）再进扇出；
+// 维度循环本身不关心 ctx 怎么来的。
+func (c *Client) facetsAllDimensions(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, dimensions []string, limit uint32) (query.RangeFacetsResult, error) {
 	var out query.RangeFacetsResult
 	for _, dimension := range dimensions {
 		if !validField(dimension) || dimension == "event_id" || dimension == "message" || dimension == "_time" {
@@ -212,24 +239,15 @@ func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 		}
 		copyQ := q
 		copyQ.Budget.MaxBytes = scanLimit(q.Budget) - out.Bytes
-		copyQ.GroupBy = []string{dimension}
-		stats, err := c.Stats(ctx, rng, copyQ)
-		out.Bytes += stats.Bytes
+		part, err := c.facetsViaFieldValues(ctx, rng, copyQ, dimension, limit)
+		out.Bytes += part.Bytes
+		out.CoverageReasons = append(out.CoverageReasons, part.CoverageReasons...)
+		if part.Truncated {
+			out.Truncated = true
+		}
+		out.Values = append(out.Values, part.Values...)
 		if err != nil {
 			return out, err
-		}
-		out.CoverageReasons = append(out.CoverageReasons, stats.CoverageReasons...)
-		if stats.StatsQuality == query.StatsPartial || len(stats.CoverageReasons) > 0 {
-			out.Truncated = true
-		}
-		if len(stats.Points) > int(limit) {
-			out.Truncated = true
-		}
-		for i, point := range stats.Points {
-			if uint32(i) >= limit {
-				break
-			}
-			out.Values = append(out.Values, query.FacetValue{Dimension: dimension, Value: point.Dimensions[dimension], Count: point.Count})
 		}
 	}
 	return out, nil
