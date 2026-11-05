@@ -718,9 +718,23 @@ func (s *Service) ArchiveStatus(ctx context.Context, req QueryRequest, objectIDs
 // 而本白名单此前只认 level/stream/instance_id —— 结果是**写入侧按源分了流，
 // 查询侧却不承认这个维度**，按源分面会被静默过滤掉，流标签对平台查询面等于没接。
 // log_source_id 的基数 = 源数（生产 19），与 instance_id 同量级，可安全开放。
+//
+// 2026-11-05：新增三个**低基数、有查询价值**的字段（用户决策）。
+// 每条都按生产实测基数（近 30 天全平台）评估，不是凭直觉加：
+//
+//	event_time_zone  基数 2（"", "Asia/Hong_Kong"）  跨时区排查「这条日志是哪的本地时间」
+//	parser_version   基数 2（"", "1.0.0"）           排查解析器升级前后的行为差异
+//	parse_status     基数 4（RAW/OK/PARTIAL/""）     找出没解析成功的行
+//
+// 三者基数都与既有 `level`（4）同量级，做 Facets 聚合的代价与 level 相当。
+//
+// **明确不加 source_generation**（基数 21，与 log_source_id 同量级但**值极长**——
+// 形如 `instance:<uuid>@worker:<uuid>`，单值 85+ 字符）。它做聚合会让响应体积膨胀数倍，
+// 而「按源看」已经有 log_source_id；它作为**内部身份**更适合出现在事件详情而非分面维度。
 func streamFieldAllowed(field string) bool {
 	switch field {
-	case "level", "stream", "instance_id", "log_source_id":
+	case "level", "stream", "instance_id", "log_source_id",
+		"event_time_zone", "parser_version", "parse_status":
 		return true
 	default:
 		return false
