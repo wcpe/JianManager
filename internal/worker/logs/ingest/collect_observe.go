@@ -283,6 +283,14 @@ type ResumeSweepStats struct {
 	SkipHysteresis   int64
 	SkipEnumeration  int64
 	RisingStreak     int64
+	// ResumedDisk（2026-11-05 F4）：**磁盘容量暂停**被兜底环解除的累计次数。
+	//
+	// 读法（这是本字段的全部价值）：
+	//   - 恒为 0 ⇒ 从未有源从磁盘暂停中恢复。修前这是**永久**成立的（候选门只认积压前缀，
+	//     磁盘暂停根本不进候选）；修后若要区分「没发生过磁盘暂停」与「发生了但没恢复」，
+	//     与 EligibleNow 并读：EligibleNow 不涨且本字段不涨 ⇒ 根本没暂停过。
+	//   - 开始增长 ⇒ 磁盘降下来之后源真的自己活过来了，不需要重启。
+	ResumedDisk int64
 	// SweepTicks / SweepPanics：**心跳与崩溃计数**（现场据此判"环活着吗" ✓）。
 	SweepTicks  int64
 	SweepPanics int64
@@ -335,6 +343,7 @@ func (m *Manager) ResumeSweepStats() ResumeSweepStats {
 		SkipHysteresis:   m.skipHysteresis.Load(),
 		SkipEnumeration:  m.skipEnumeration.Load(),
 		RisingStreak:     m.risingStreak.Load(),
+		ResumedDisk:      m.resumedDiskSources.Load(),
 		SweepTicks:       m.sweepTicks.Load(),
 		SweepPanics:      m.sweepPanics.Load(),
 		EligibleNow:      m.sweepEligibleNow.Load(),

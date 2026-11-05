@@ -2195,6 +2195,9 @@ func sweepStatsLogAttrs(st ingest.ResumeSweepStats) []any {
 		"skip_backpressure", st.SkipBackpressure,
 		"skip_hysteresis", st.SkipHysteresis,
 		"skip_enumeration", st.SkipEnumeration,
+		// 磁盘容量暂停的恢复次数（F4，2026-11-05）：恒为 0 ⇒ 从未有源从磁盘暂停中恢复过；
+		// 开始增长 ⇒ 磁盘降下来后源真的自己活过来了（旧版本这条永久为 0，因为磁盘暂停根本不进候选）。
+		"resumed_disk", st.ResumedDisk,
 		"rising_streak", st.RisingStreak,
 		// **轮转窗口内三档自愈步的实发次数与耗时**（#66-⑤/⑥、#179-②、INGEST-12）：
 		// 这三步都带 O(1) 欠账前置（无欠账不发起），故「次数 × 耗时」就是**成本定界的直接证据**：
