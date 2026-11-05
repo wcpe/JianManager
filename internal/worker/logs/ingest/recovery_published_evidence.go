@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -16,6 +17,11 @@ import (
 type publishedEvidence struct {
 	events      []logtypes.Event
 	authorities map[string]*catalog.Record
+	// probeErr 非 nil 表示**可见性查询本身失败**（网络/超时/5xx/无法构造查询）。
+	//
+	// 它与「查不到」必须分开：查询失败时 events 为空**不意味着数据不在 VL**。
+	// 消费方（尤其可见性降级判据）只能把 events 当空证据，绝不能把它当「确定丢了」。
+	probeErr error
 }
 
 func (m *Manager) publishedEvidenceClient(source SourceConfig, rec *catalog.Record) (*vlsup.Client, error) {
@@ -54,12 +60,15 @@ func publishedEvidenceClosed(rec *catalog.Record, source SourceConfig) uint64 {
 func (m *Manager) capturePublishedEvidence(source SourceConfig, events []logtypes.Event, contexts ...context.Context) publishedEvidence {
 	proof := publishedEvidence{authorities: make(map[string]*catalog.Record)}
 	if m == nil || m.cat == nil {
+		proof.probeErr = errors.New("ingest: 可见性证据需要 catalog")
 		return proof
 	}
 	for _, ev := range events {
 		day, err := eventUTCDay(source, ev)
 		if err != nil {
-			return publishedEvidence{}
+			// 连天都算不出来 ⇒ 无法为它构造查询。返回带 probeErr 的空证据：
+			// 上层只能当“不知道”，不得当“它不在 VL”。
+			return publishedEvidence{probeErr: err}
 		}
 		if _, exists := proof.authorities[day]; !exists {
 			rec, _ := m.cat.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: day})
@@ -70,7 +79,9 @@ func (m *Manager) capturePublishedEvidence(source SourceConfig, events []logtype
 	if len(contexts) > 0 && contexts[0] != nil {
 		ctx = contexts[0]
 	}
-	proof.events = m.landedVisibleInVLCtx(ctx, source, events)
+	// 带状态版本：查询失败时 events 仍为空（与旧行为逐字一致 ⇒ 本轮不消解），
+	// 但另把错误带出去，供**不可逆**的降级判据区分「查不到」与「不知道」。
+	proof.events, proof.probeErr = m.landedVisibleInVLCtxStatus(ctx, source, events)
 	return proof
 }
 

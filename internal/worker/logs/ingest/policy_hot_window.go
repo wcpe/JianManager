@@ -148,15 +148,38 @@ func (m *Manager) gapVisibilityBudgetValue() time.Duration {
 }
 
 func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConfig, landed []logtypes.Event) []logtypes.Event {
-	if m == nil || len(landed) == 0 || m.cat == nil {
-		return nil
+	kept, _ := m.landedVisibleInVLCtxStatus(parent, source, landed)
+	return kept
+}
+
+// landedVisibleInVLCtxStatus 与 landedVisibleInVLCtx 同源，但把「**查询本身失败**」与
+// 「查询成功但查不到」**分开**输出。
+//
+// # 为何必须分开（2026-11-05，P0-1 的可见性降级判据全靠它）
+//
+// 上层要用「连续多轮都查不到」来判「VL 确实拒收了这批」并降级 DROPPED（见
+// delivery_visibility.go）。而那两种情形的可信度完全不同：
+//   - **查不到**：我们问过 VL 了，它说没有 ⇒ 这是证据；
+//   - **查询失败**（网络/超时/5xx/没有账本无法构造查询）：我们什么都不知道 ⇒ 这不是证据。
+//
+// 旧签名把两者都压成「空集合」，于是「VL 挂了一个小时」也会被当成「连续多轮确认丢了」，
+// 然后把一段完好的数据记成永久丢失并放行回收 —— 那是比漏报更糟的谎报。
+//
+// 旧行为逐字保留：包装函数在 err != nil 时返回 nil（与历史上「查询失败 ⇒ 空证据 ⇒ 本轮不消解」一致）。
+func (m *Manager) landedVisibleInVLCtxStatus(parent context.Context, source SourceConfig, landed []logtypes.Event) ([]logtypes.Event, error) {
+	if m == nil || len(landed) == 0 {
+		return nil, nil
+	}
+	if m.cat == nil {
+		// 没有 catalog 就无法为任何事件构造 VL 查询 ⇒ 这是「无法核对」，不是「不可见」。
+		return nil, errors.New("ingest: 可见性核对缺少 catalog（无法判断这批在不在 VL）")
 	}
 	// Raw事件在外发时已按稳定IngestTime规范化；回收/重复取证必须使用同一时间与内容哈希口径。
 	canonical := make([]logtypes.Event, 0, len(landed))
 	for _, event := range landed {
 		normalized, err := normalizeCanonicalEvent(event)
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		canonical = append(canonical, normalized)
 	}
@@ -164,10 +187,17 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 	// 按天分组只需一次：重试轮次只重复「向 VL 查询」，不重复分组与规范化。
 	byDay := make(map[string][]logtypes.Event)
 	order := make([]string, 0, 4)
+	// unqueryable 记录「取不到天、因而**根本没法被查询**」的事件数。
+	//
+	// 它们不能归入「查不到」：查不到的前提是「问过了」，而这些根本没被问。
+	// 所以本轮照旧跳过它们（既有行为不变：它们永远不被消解），
+	// 但要把「本轮不完整」带出去 —— 否则上层会把“没问”当成“问了它说没有”，
+	// 进而把它们计入连续不可见轮次，最终降级 DROPPED（不可逆）。
+	unqueryable := 0
 	for _, ev := range landed {
 		day, derr := eventUTCDay(source, ev)
 		if derr != nil || day == "" {
-			// 取不到天：保守地不作证据（不消解对应缺口）。
+			unqueryable++
 			continue
 		}
 		if _, seen := byDay[day]; !seen {
@@ -203,25 +233,49 @@ func (m *Manager) landedVisibleInVLCtx(parent context.Context, source SourceConf
 		if qerr != nil {
 			slog.Warn("缺口消解前核对 VL 可见性失败：本轮不消解任何缺口（下轮重试）",
 				"source", source.LogSourceID, "probes", probes, "error", qerr)
-			return nil
+			return nil, qerr
 		}
 		if len(kept) == len(landed) {
 			// 全部可见：立即返回（热路径，无额外等待）。
-			return kept
+			return kept, queryableErr(unqueryable, landed)
 		}
 		select {
 		case <-ctx.Done():
 			// 预算内未全部可见：如实保留缺口（不消解），并记录探测次数便于现场判断
 			// 「是可见延迟超预算」还是「数据真的没进 VL」。
+			//
+			// **不返回错误**：预算耗尽前每一次探测都**查询成功**（否则已经在上面 qerr 分支
+			// 返回了）⇒ 「问过、查不到」这个结论是成立的，只是窗口不够长。降级判据另有
+			// 轮次 + 墙钟双重界（见 delivery_visibility.go），不会因为一次预算耗尽就下定论。
 			slog.Warn("缺口核对在预算内未等到全部可见，本轮只消解已可见的部分（缺口其余部分保持可见）",
 				"source", source.LogSourceID, "probes", probes,
 				"landedCount", len(landed), "visibleCount", len(kept),
 				"budget", gapVisibilityBudget)
-			return kept
+			return kept, queryableErr(unqueryable, landed)
 		case <-time.After(backoff):
 		}
 		backoff = nextVerifyBackoff(backoff, m.verifyBackoffMax)
 	}
+}
+
+// queryableErr 把「有事件根本没法被查询」变成返回的错误。
+//
+// # 它为什么必须是个错误（而不是一个布尔返回值）
+//
+// 返回的事件集合会流向两个用途：
+//   - 「没列出来的就是没消解」——这部分行为不受影响（旧实现也是跳过它们）；
+//   - 可见性降级的轮次计数（见 delivery_visibility.go）—— 这里**必须**区分
+//     「问了、它说没有」与「压根没问」。后者若被当后者（或反之）计入，
+//     就会把不可查询的事件静默判成「VL 丢弃了它们」并永久降级，不可逆。
+//
+// 用 error 而不是再加一个返回值：调用链上已经有 `(events, error)` 的形态，
+// 多一个返回值要让 `publishedEvidence` / `resolveGapsLandedByDeliveryReport` / worker
+// 三处都改签名，而错误的语义恰好对齐「本轮结论不完整」。
+func queryableErr(unqueryable int, landed []logtypes.Event) error {
+	if unqueryable == 0 {
+		return nil
+	}
+	return fmt.Errorf("ingest: %d/%d events have no usable UTC day and were never queried", unqueryable, len(landed))
 }
 
 // landedVisibleProbeOnce 执行**一次**可见性核对：按天向 VL 查这批事件里哪些真的查得到，

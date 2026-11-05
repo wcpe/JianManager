@@ -64,6 +64,19 @@ type gapResolveRequest struct {
 	source SourceConfig
 	events []logtypes.Event
 	due    time.Time
+	// missRounds 是该源连续「**查询成功但查不到**」的核对轮次（见 delivery_visibility.go）。
+	//
+	// # 为何必须逐轮计数，而不能在投递路径里同步退避重试
+	//
+	// 同步退避（10/20/30s）会阻塞采集轮 —— 本仓历史读数里「写后强制可见性校验」
+	// 曾占单轮 91.2% 中的 85.6%，正是因此被整条移出投递路径。本字段让计数
+	// 落在**已经异步的**核对链上：每一轮都是一次真实、独立的 VL 查询。
+	//
+	// 只在 probeOK（本轮真的问过 VL）时递增；查询失败一律不计（否则 VL 挂一小时
+	// 就会被当成「连续多轮确认丢了」）。
+	missRounds int
+	// firstMissAt 是 missRounds 首次从 0 变 1 的时刻（判定「延迟 vs 真丢」的墙钟依据）。
+	firstMissAt time.Time
 }
 
 // GapResolveStats 是异步缺口消解的观测面。

@@ -135,19 +135,39 @@ func (m *Manager) resolveGapsLandedByDeliveryCtx(ctx context.Context, source Sou
 // `recordVerifiedRuns` 持久化成区间凭据）；只有**本次仍未可见**的才需要留在待办里
 // 重试。这样待办的规模由「真实未决量」定界，而不是由「运行时长」定界。
 func (m *Manager) resolveGapsLandedByDeliveryScope(ctx context.Context, source SourceConfig, events []logtypes.Event) []logtypes.Event {
+	unresolved, _ := m.resolveGapsLandedByDeliveryReport(ctx, source, events)
+	return unresolved
+}
+
+// resolveGapsLandedByDeliveryReport 与 resolveGapsLandedByDeliveryScope 同源，但**额外报告**
+// 「本轮到底有没有真的问过 VL」。
+//
+// # 为何需要这个额外的值（2026-11-05，P0-1 的关键前提）
+//
+// 调用方（异步核对 worker）现在要拿「连续多轮查不到」去判「VL 确实拒收了这批」并**降级
+// 丢弃**（不可逆）。而旧签名把「查询失败」与「查不到」都压成「返回全部未解决」，两者
+// 在调用方看来一模一样 ⇒ VL 长达一小时不可用时会被当成「确认丢失」⇒ 正常数据被记丢失
+// 并放行回收，比漏报更糟。
+//
+// 所以把 probeOK 单独带出去：
+//   - probeOK=true  ⇒ 本轮真的问过 VL（哪怕问到的是「不在」）⇒ 可计入不可见轮次；
+//   - probeOK=false ⇒ 不知道⇒ 绝不能计入（待办原样保留，下轮再问）。
+func (m *Manager) resolveGapsLandedByDeliveryReport(ctx context.Context, source SourceConfig, events []logtypes.Event) ([]logtypes.Event, bool) {
 	if m == nil || len(events) == 0 {
-		return nil
+		return nil, false
 	}
 	key := source.LogSourceID + "/" + source.SourceGeneration
 	m.mu.Lock()
 	pipe := m.pipes[key]
 	m.mu.Unlock()
 	if pipe == nil {
-		return events
+		return events, false
 	}
 	// 连续覆盖区间，而不是 [min(Start), max(End)] 凸包：写入面里两个事件之间的任何空洞
 	// 都意味着那段字节**没有**被本次写入覆盖（典型：append 被拒的批次从未进 WAL）。
 	proof := m.capturePublishedEvidence(source, events, ctx)
+	// probeOK 是本次判定的可信度闸：查询失败时「一条都不可见」不构成证据。
+	probeOK := proof.probeErr == nil
 	runs := gapRangesOfEvents(proof.events)
 	// 仍未确认可见的事件 = 输入里不在可见集合中的那些。
 	// 查不到就留在待办里（下一次重试），这正是「不撒谎」的落地形态。
@@ -163,7 +183,7 @@ func (m *Manager) resolveGapsLandedByDeliveryScope(ctx context.Context, source S
 	}
 	if len(runs) == 0 {
 		// 一条都不可见：原样留在待办（不消解、不遗忘）。
-		return unresolved
+		return unresolved, probeOK
 	}
 	// 先登记区间级凭据（与是否存在缺口无关）：WAL 条目被回收后，这是「已发布投影证据」出口
 	// 唯一成立的区间级凭据，缺了它该出口就只能在末端水位上空转（见 autoResolveGapsFromPublished）。
@@ -183,7 +203,7 @@ func (m *Manager) resolveGapsLandedByDeliveryScope(ctx context.Context, source S
 		slog.Warn("投递成功后自动消解缺口失败（下轮重试）",
 			"logSourceID", source.LogSourceID, "error", err)
 		// 消解失败：**全部**留在待办里重试（不丢任何一条）。
-		return unresolved
+		return unresolved, probeOK
 	}
 	if resolved > 0 {
 		slog.Info("投递成功已确认覆盖，自动消解缺口（无需人工介入）",
@@ -191,7 +211,7 @@ func (m *Manager) resolveGapsLandedByDeliveryScope(ctx context.Context, source S
 			"ranges", len(runs),
 			"unresolvedRemaining", pipe.Ledger().UnresolvedGapCount(pipe.Key()))
 	}
-	return unresolved
+	return unresolved, probeOK
 }
 
 // selfHealPausedSource 对「已暂停或仍持有未解决缺口」的源执行一次限频自愈，报告账本是否被改变。

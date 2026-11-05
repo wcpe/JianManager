@@ -78,6 +78,21 @@ const (
 	// 而这里恰恰相反——回读不会发生（游标已过）⇒ 进了名单就等于把真丢的数据当成已愈合。
 	GapReasonWALBacklogDropped = "WAL_BACKLOG_DROPPED"
 
+	// GapReasonDeliveredNotVisible 表示**VL 接受但查不到**（2026-11-05，审计 P0-1）。
+	//
+	// 投递拿到 HTTP 2xx，但随后对本批 event_id 的可见性核对在有限重试窗口内始终
+	// 查不到 ⇒ VL 静默丢弃了这批（超 retention / 字段数超限 / 服务端其它拒绝）。
+	// 这些成因**都不会自己变好**，重投同一批还会照样丢。
+	//
+	// 与 `DELIVER_ERROR` 必须分开：后者是「这次没投出去」，事件还在 WAL、重投能解决；
+	// 本原因是「投出去了、VL 收了、但没存」，重投只会重复被丢。混用会让自愈环
+	// 反复尝试一个永远不会成功的动作。
+	//
+	// 归「永久丢失」：阻塞救不回来，只会拿之后所有新日志陪葬。
+	// 但必须**显式登记**——降级 DROPPED 会放行 reclaim，这条缺口就是那段数据
+	// 「曾经存在过」的唯一痕迹。
+	GapReasonDeliveredNotVisible = "DELIVERED_NOT_VISIBLE"
+
 	// GapReasonCursorSkippedOnRestart 表示**重启续读时跳过了一段未投递的已读字节**（2026-11-05）。
 	//
 	// # 它要说什么
@@ -200,6 +215,10 @@ var gapReasonsPermanentlyLost = []string{
 	"FILE_REWRITTEN",
 	// 重启续读时游标已越过未投递区间：WAL 随进程消亡，新进程从游标继续读，
 	// 中间那段「已读未投递」的字节再也回不来 ⇒ 确认丢了。只能从源重采。
+	//
+	// 为何**不能**归 `gapReasonsNonBlocking`：那个名单同时是
+	// `capacityDroppedRangesLocked` 的可穿名单，而本原因的字节**从未进过投递流**
+	// （游标已越过、WAL 已亡）—— 给它通行证会让回收链越过一段“本应重新从源采”的区间。
 	GapReasonCursorSkippedOnRestart,
 }
 
@@ -234,6 +253,13 @@ func GapReasonsPermanentlyLost() []string {
 // 本名单的语义是：**已经不存在任何等待能改变的事**，所以从第一秒起就不阻塞；
 // 缺口仍进账本、仍可查、仍能告警（可见性一点不少），只是不把源钉死。
 //
+// ## 它同时是“回收可穿行”的唯一真源（务必知晓）
+//
+// `capacityDroppedRangesLocked` 只认本名单 —— 所以往本名单里加一个原因，
+// 就等于给它发了「回收链可以跨过这段」的通行证。收录前必须自问：
+// **这段字节真的进过投递流、且确定再也不会有了吗？**
+// 答否的原因（如 `CURSOR_SKIPPED_ON_RESTART`：游标已越过、从未进投递流）一律不得入本名单。
+//
 // 收录标准（极窄）：只收「系统按设计主动做的、确定性的处置」，
 // 不收任何“可能坏、可能丢、也许能救”的。
 var gapReasonsNonBlocking = []string{
@@ -253,6 +279,30 @@ var gapReasonsNonBlocking = []string{
 	// 裁定：**直接丢掉**。既然账本从未认领、也拿不出本进程校验证据，
 	// 它就不属于当前权威集；留着只会永久卡死采集。丢弃必须可查（进缺口账）。
 	GapReasonUnclaimedHistoryDropped,
+
+	// VL 接受但查不到（2026-11-05，审计 P0-1）。
+	//
+	// # 为何归入本名单而不是 `gapReasonsPermanentlyLost`
+	//
+	// 两者都会“不阻塞采集”，但时机与效应不同：
+	//   - `permanentlyLost` 先阻塞 1h（给人工告警留窗）再放行，适用于「先告警、宽限后放弃」
+	//     的一次性历史事故；
+	//   - 本名单从第一秒起就不阻塞，适用于「等待不改变任何事」的确定性处置。
+	//
+	// 本原因属于后者：VL 静默拒收（retention 超限 / 字段数超限）**不会自己变好**。
+	// 若走 1h 宽限，那么只要有一个源持续被 VL 拒收，它就会“投一批→暂停 1h→再投→再暂停”，
+	// 周而复始，之后所有新日志一起死 —— 那正是 2026-10-28 那轮（10/19 源停采 20+ 小时）
+	// 已经踩过的形态，只是换了个原因码。
+	//
+	// # 为何可以当 reclaim 的穿行凭据
+	//
+	// `capacityDroppedRangesLocked` 的收录标准是「字节确实进过 WAL、又被确定性地扔掉」。
+	// 本原因完全符合：这批字节进了 WAL、被真实 POST 过、VL 回了 2xx 却没存下，
+	// 而我们已逐轮核对过（轮次 + 墙钟双重界）才下的结论。
+	// 它与 `WAL_BACKLOG_DROPPED` 的唯一差别只是“谁做的丢弃决定”（我们的容量闸 vs VL）。
+	//
+	// 红线不变：可穿行 ≠ 谎报已投递。本路径**只推 Delivery/DROPPED，绝不写 RequestDoneRanges**。
+	GapReasonDeliveredNotVisible,
 }
 
 // IsGapReasonNonBlocking 报告某原因是否属于「立即不阻塞但仍可见」类。
