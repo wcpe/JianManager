@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net"
 	"os"
@@ -265,33 +264,34 @@ func TestFlagValueRejectsDuplicates(t *testing.T) {
 	}
 }
 
-// TestWriteIndexExportAtomicallyOverwritesTarget 守成功路径：导出成功后目标文件就是新的合法
-// JSON 快照，且目录里不留临时文件。
+// TestWriteIndexExportAtomicallyOverwritesTarget 已随功能退场（2026-11-05 订正）。
+//
+// 它原本守的是「导出成功后目标文件是新的合法 JSON 快照，且不留临时文件」。
+// 但采集索引在 2026-10-30 改成纯内存后（机械盘不落盘裁定），磁盘上已不存在
+// `var/log/ingest.index.db`，`ingest.ExportIndexJSON` 也随之变成恒返错的桩：
+//
+//	"ingest: 采集索引已改为纯内存……无法离线导出；
+//	 当前唯一跨重启命存的采集侧状态是 var/log/ingest.cursor"
+//
+// 于是本用例的断言（导出应成功）与产品现状直接矛盾——它从一开始就是**死测试**：
+// 测的是一条已经不存在的成功路径。改成断言「如实报错」后，它重新变成有效的守护：
+// 若有人将来把 ExportIndexJSON 改回静默成功（或静默写空文件），本用例会转红。
 func TestWriteIndexExportAtomicallyOverwritesTarget(t *testing.T) {
 	root := t.TempDir()
-	// 造一个真实可读的索引库（导出真源）：Open 会建表，空库即可导出。
-	store, err := stateindex.Open(filepath.Join(root, "var", "log", "ingest.index.db"))
-	if err != nil {
-		t.Fatalf("创建索引库失败: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatalf("关闭索引库失败: %v", err)
-	}
-
 	outPath := filepath.Join(root, "snapshot.json")
 	if err := os.WriteFile(outPath, []byte("old-snapshot"), 0o600); err != nil {
 		t.Fatalf("预置旧快照失败: %v", err)
 	}
-	if err := writeIndexExportAtomically(root, outPath); err != nil {
-		t.Fatalf("导出应成功，实际报错: %v", err)
-	}
-	data, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatalf("读取导出结果失败: %v", err)
-	}
-	if !json.Valid(data) {
-		t.Fatalf("导出结果应为合法 JSON，实际 %q", string(data))
-	}
+	err := writeIndexExportAtomically(root, outPath)
+	require.Error(t, err, "采集索引已纯内存化，导出必须如实报错而不是假装成功")
+	require.Contains(t, err.Error(), "纯内存",
+		"报错必须说清真实原因（纯内存化），而不是一个笼统的 IO 错误")
+
+	// 关键：失败时**不得**动目标文件（这是该函数原子性的真正价值）。
+	data, readErr := os.ReadFile(outPath)
+	require.NoError(t, readErr)
+	require.Equal(t, "old-snapshot", string(data),
+		"导出失败不得清空/截断已有的旧快照——那正是回滚时最需要的东西")
 	assertNoTempExportLeftovers(t, filepath.Dir(outPath))
 }
 

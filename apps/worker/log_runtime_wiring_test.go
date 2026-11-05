@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -71,7 +72,29 @@ func (transport *wiringTransport) RoundTrip(request *http.Request) (*http.Respon
 		if err != nil {
 			return nil, err
 		}
-		transport.rows[request.URL.Host] = append(transport.rows[request.URL.Host], payload...)
+		// 真实 VL 接受 gzip 压缩的写入体，解压后存成 NDJSON 再供查询返回。
+		//
+		// 2026-11-05 订正：本夹具原先直接透传请求体（`rows[host] += payload`）。
+		// 而 vlsup.Client.InsertJSONLines 在 compressionEnabled() 为真时默认就发 gzip
+		// ⇒ 存进 rows 的是**压缩流**（首字节 0x1f）⇒ 查询时被当作 NDJSON 逐行 JSON
+		// 解码 ⇒ `invalid character '\x1f' looking for beginning of value`。
+		//
+		// 这不是产品缺陷，是夹具与真实 VL 行为不一致：假服务端必须像真服务端那样
+		// 先按 Content-Encoding 解压，否则它验证的其实是「压缩字节能不能当 JSON 读」。
+		stored := payload
+		if len(payload) > 1 && payload[0] == 0x1f && payload[1] == 0x8b {
+			reader, gzErr := gzip.NewReader(bytes.NewReader(payload))
+			if gzErr != nil {
+				return nil, fmt.Errorf("夹具解压写入体失败: %w", gzErr)
+			}
+			plain, readErr := io.ReadAll(reader)
+			_ = reader.Close()
+			if readErr != nil {
+				return nil, fmt.Errorf("夹具读取解压后写入体失败: %w", readErr)
+			}
+			stored = plain
+		}
+		transport.rows[request.URL.Host] = append(transport.rows[request.URL.Host], stored...)
 		transport.inserts++
 	case "/select/logsql/query":
 		body = string(transport.rows[request.URL.Host])
