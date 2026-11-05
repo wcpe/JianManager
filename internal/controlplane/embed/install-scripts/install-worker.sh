@@ -338,6 +338,25 @@ UNIT_EOF
     $SYSCTL daemon-reload
     $SYSCTL enable "$SERVICE_NAME" >/dev/null 2>&1 || true
     $SYSCTL restart "$SERVICE_NAME"
+
+    # 日志轮转（2026-10-27 真机事故后补）：此前安装脚本**没有**这一项，于是生产
+    # worker.out 长到 35GB 且从未轮转（日志目录总计 40GB），取证必须先 tail -c 绕开。
+    # 轮转是**部署资产**（configs/logrotate.d/jianmanager），不能靠运维个人记得配。
+    #
+    # 需要 root 写 /etc/logrotate.d；非 root 时**只提示不失败**——安装脚本的核心职责
+    # 是把 Worker 装起来跑通，缺一个轮转配置不该让整次安装退出（那是把边角问题放大成
+    # 阻塞问题，与 copy_verify_budget 那类「升级即挂」同一错误形态）。
+    if [ -f "$SCRIPT_DIR/../configs/logrotate.d/jianmanager" ]; then
+        if [ "$(id -u)" = "0" ]; then
+            install -m 0644 "$SCRIPT_DIR/../configs/logrotate.d/jianmanager" /etc/logrotate.d/jianmanager 2>/dev/null \
+                && echo "      日志轮转已安装: /etc/logrotate.d/jianmanager (1GB x 5)" \
+                || echo "      警告: 日志轮转安装失败（日志将无限增长），请手工安装 configs/logrotate.d/jianmanager" >&2
+        else
+            echo "      提示: 未以 root 运行，跳过日志轮转安装。" >&2
+            echo "            生产环境请手动执行: sudo install -m 0644 configs/logrotate.d/jianmanager /etc/logrotate.d/jianmanager" >&2
+            echo "            否则日志会无限增长（真机曾见到单文件 35GB）。" >&2
+        fi
+    fi
     if [ "$SERVICE_SCOPE" = "user" ]; then
         echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl --user -u $SERVICE_NAME -f"
     else
