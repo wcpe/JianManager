@@ -749,6 +749,23 @@ func IsBacklogPauseReason(reason string) bool {
 	return strings.HasPrefix(reason, legacyWALBacklogPauseReason)
 }
 
+// IsDiskPauseReason 报告该暂停原因是否来自**磁盘容量**门禁（`EvaluateCapacity` 的暂停分支）。
+//
+// 为什么需要它（2026-11-05 F4，生产形态）：
+// 磁盘达到 `pauseAtPercent`（默认 90%）时 `ApplyCapacity` 会 `PauseAcquire`，
+// 而当时**唯一的**恢复通道 `maybeResumePausedSources` 的候选门只看
+// `IsBacklogPauseReason` ⇒ 磁盘暂停**永不进入候选**，源停到进程重启为止。
+//
+// 两者语义完全不同，不能用同一个恢复策略：
+//   - **积压暂停**：暂停本身能减轻积压 ⇒ 积压回落 ⇒ 自愈。暂停是解药。
+//   - **磁盘暂停**：暂停**不影响**磁盘占用（文件还在，别的进程还在写）。
+//     暂停只会让源停摆 ⇒ 必须靠**重新采样磁盘**发现它已经把下去了。
+//
+// 判别用前缀常量而不是内联字面量：原因文案改了而判别没跟，就是本次这种静默停摆。
+func IsDiskPauseReason(reason string) bool {
+	return strings.HasPrefix(reason, CapacityPauseReasonDiskPrefix)
+}
+
 // TrimBacklog 在**批次已被取走且落库之后**裁剪积压（越界则丢最旧）。
 //
 // 为什么需要独立入口（2026-10-29，这轮踩了三次的坑）：

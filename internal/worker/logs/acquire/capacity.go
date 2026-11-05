@@ -38,6 +38,27 @@ const (
 	CapacityPaused   CapacityAction = "PAUSED"
 )
 
+// 暂停原因的前缀常量（与 Reason 的实际渲染逐字对齐）。
+//
+// 为什么要常量化而不是各处写字面量（2026-11-05 F4）：
+// 暂停原因既是**给人看的一句话**，又是**恢复路径的判别键**。
+// 后者一旦靠子串/前缀去猜，就会出现「原因文案改了，恢复静默失效」——
+// 这正是 F4 的形态：磁盘暂停写的是 `disk usage ...`，而恢复门只认积压前缀
+// `wal backlog limit exceeded` ⇒ 磁盘暂停**永不进入恢复候选**，源停到进程重启为止。
+const (
+	// CapacityPauseReasonDiskPrefix 是磁盘容量暂停的原因前缀（`disk usage 91.2% >= 90.0%; ...`）。
+	CapacityPauseReasonDiskPrefix = "disk usage "
+)
+
+// diskPauseReason 渲染磁盘暂停原因，保证前缀与 CapacityPauseReasonDiskPrefix 一致。
+//
+// 导出供测试与诊断路径构造**同一个**文案：原因既是给人看的话，又是恢复判别的键，
+// 两处各写一份字面量就会出现「文案改了、判别没跟」的静默失效（F4 的成因）。
+func DiskPauseReason(usage, pause float64) string {
+	return fmt.Sprintf("%s%.1f%% >= %.1f%%; pause irreversible writes",
+		CapacityPauseReasonDiskPrefix, usage, pause)
+}
+
 // CapacityDecision 门禁输出：禁止静默丢弃。
 type CapacityDecision struct {
 	Action CapacityAction
@@ -71,7 +92,7 @@ func EvaluateCapacity(budget CapacityBudget, walBacklogBytes uint64, gapCount in
 	if budget.DiskUsagePercent >= pause {
 		return CapacityDecision{
 			Action:        CapacityPaused,
-			Reason:        fmt.Sprintf("disk usage %.1f%% >= %.1f%%; pause irreversible writes", budget.DiskUsagePercent, pause),
+			Reason:        DiskPauseReason(budget.DiskUsagePercent, pause),
 			MustRecordGap: true,
 		}
 	}

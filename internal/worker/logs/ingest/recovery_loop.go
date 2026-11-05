@@ -18,6 +18,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -540,6 +541,85 @@ func (m *Manager) resumeBatchOf() int {
 	return m.resumeBatchPerRound
 }
 
+// tryResumeDiskPausedSource 尝试解除**磁盘容量**导致的采集暂停，成功返回 true。
+//
+// # 为什么需要它（2026-11-05 F4）
+//
+// 磁盘达到 `pauseAtPercent`（默认 90%）时 `ApplyCapacity` 会 `PauseAcquire`。
+// 而解除暂停的三条路径全都到不了它：
+//
+//	① 追加前重估（pipeline 的 EvaluateCapacity）——源已暂停 ⇒ 不产生新批次 ⇒ 走不到；
+//	② 兜底环候选门——只认 `IsBacklogPauseReason` ⇒ 磁盘原因被 `continue` 跳过；
+//	③ WAL 的 maybeResumeBacklogLocked —— 同样只认积压前缀。
+//
+// ⇒ 源**停到进程重启为止**。而生产上磁盘占用是常态波动（日志轮转、其它服务释放空间），
+// 不是单调恶化——“暂停”这个动作对磁盘占用**毫无帮助**（文件还在、别的进程还在写），
+// 它只会白白停摆采集。
+//
+// # 为什么必须带滞回（两个阈值，不是一个）
+//
+// 若“磁盘降到 90% 以下”就恢复，会在 89.9% ⇄ 90.1% 之间反复“暂停→恢复→暂停”，
+// 每轮都重建一次 tailer 与采集通道。所以：
+//
+//	暂停线：pauseAtPercent（默认 90）
+//	恢复线：degradedAtPercent（默认 80）——**回升到 80% 以下才恢复**
+//
+// 这与 WAL 积压闸的“上限一半”滞回同一精神：避免在阈值附近抖动。
+//
+// # 为什么必须重新采样而不是读缓存
+//
+// `m.capacityProvider()` 每次调用都**当场采样**（`SampleDiskUsagePercent`），不是缓存值。
+// 这正是本修复成立的前提：磁盘真的降下去了，这里就读得到。
+//
+// # 不做什么
+//
+// 不自行解除其它原因的暂停（只处理 `IsDiskPauseReason`）；不改水位；
+// 不越过缺口闸——`ResumeAcquire` 自己会因为未消解缺口而拒绝，那是**正确**的（本例只负责
+// “磁盘已回落到可接受区间”这一条判据，其余判据仍由既有机制把守）。
+func (m *Manager) tryResumeDiskPausedSource(p *pipeline.Pipeline, entry *ledger.Entry) bool {
+	if m == nil || p == nil || entry == nil || m.capacityProvider == nil {
+		return false
+	}
+	// **先判原因**：本通道只处理磁盘容量暂停。
+	//
+	// 为何把判别放在函数内部而不只依靠调用方：调用方将来可能多一个（例如诊断入口、
+	// 手动恢复），而“磁盘通道接管积压源”会绕过积压自己的滞回与缺口闸——
+	// 那是比 F4 更难查的错误。放在这里，任何调用者都受同一道约束。
+	if !entry.AcquirePaused || !acquire.IsDiskPauseReason(entry.PauseReason) {
+		return false
+	}
+	budget, err := m.capacityProvider()
+	if err != nil {
+		// 采样失败不是“磁盘已降”。保持暂停，下轮重试（与既有保守方向一致）。
+		return false
+	}
+	// 恢复线取 degraded 阈值（默认 80），而不是暂停线——滞回，避免阈值附近抖动。
+	resumeBelow := budget.DegradedAtPercent
+	if resumeBelow <= 0 {
+		resumeBelow = 80
+	}
+	if budget.DiskUsagePercent >= resumeBelow {
+		// 仍然偏高：保持暂停。不刷日志（兜底环频率高，每轮刷会淹没现场）。
+		return false
+	}
+	if err := p.Ledger().ResumeAcquire(p.Key()); err != nil {
+		// 磁盘已回落但**其余闸**仍拒绝（典型：未消解缺口）。
+		// 这是正确行为，不是失败——把原因记下来即可，下轮磁盘仍低时会再试一次。
+		slog.Debug("磁盘已回落但采集仍不能恢复（其余判据拒绝）",
+			"logSourceID", p.Key().LogSourceID,
+			"diskUsagePercent", budget.DiskUsagePercent,
+			"resumeBelow", resumeBelow,
+			"error", err.Error())
+		return false
+	}
+	slog.Info("磁盘占用已回落，已解除因磁盘容量导致的采集暂停",
+		"logSourceID", p.Key().LogSourceID,
+		"diskUsagePercent", budget.DiskUsagePercent,
+		"resumeBelow", resumeBelow,
+		"pausedReasonBefore", entry.PauseReason)
+	return true
+}
+
 func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 	muT0 := time.Now()
 	m.mu.Lock()
@@ -695,6 +775,18 @@ func (m *Manager) maybeResumePausedSources() (candidates, revived int) {
 			continue
 		}
 		if !acquire.IsBacklogPauseReason(entry.PauseReason) {
+			// 2026-11-05 F4：磁盘容量暂停走**自己的**恢复通道。
+			//
+			// 它不能落进下面的积压候选分支——两者的恢复前提不同：
+			// 积压靠「积压回落」自愈，而磁盘暂停**与积压无关**，只能靠重新采样磁盘。
+			// 旧实现在这里直接 continue，于是磁盘暂停永不进入任何恢复路径，
+			// 源会一直停到进程重启（生产常态：磁盘占用是波动量，不是单调恶化）。
+			if acquire.IsDiskPauseReason(entry.PauseReason) {
+				if m.tryResumeDiskPausedSource(p, entry) {
+					m.resumedDiskSources.Add(1)
+				}
+				continue
+			}
 			m.skipEnumeration.Add(1) // 枚举类跳过（原因非积压类 ✓）——红线不变 ✓，但要可读 ✓
 			continue
 		}

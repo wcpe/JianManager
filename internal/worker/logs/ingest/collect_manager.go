@@ -434,6 +434,13 @@ type Manager struct {
 	skipEnumeration  atomic.Int64
 	sweepCandidates  atomic.Int64
 	sweepRevived     atomic.Int64
+	// resumedDiskSources（2026-11-05 F4，只读观测）：**磁盘容量暂停**被兜底环解除的累计次数。
+	//
+	// 为什么必须单列：磁盘暂停过去没有任何恢复通道（候选门只认积压前缀），
+	// 所以这个读数恰好是一个可判定的信号——恒为 0 ＝源从未从磁盘暂停中恢复过（修前的形态）；
+	// 开始增长 ＝兜底环真的把它们拉回来了。运维不用翻日志就能回答
+	// 「磁盘降下来之后源到底有没有自己活过来」。
+	resumedDiskSources atomic.Int64
 	// selfHealDuePass / selfHealDueSkip（#66-⑤ 诊断，只读）：自愈面**限频闸**的命中/未命中计数。
 	// 为什么要它：现场"四落后源零 `滚动回收` 行"的第一嫌疑是"自愈面根本没轮到它们"——而准入链上
 	// 可能拦住它们的位置只有两处：① **状态闸**（未暂停且零未解决缺口 ⇒ 直接返回，**不计入**本对计数）；
