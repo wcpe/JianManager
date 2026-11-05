@@ -82,3 +82,21 @@ func TestJournalWithoutLeaseStore_LeaseOpsInMemory(t *testing.T) {
 		t.Fatalf("compact 后应只剩 v-2，实测 %+v", deltas)
 	}
 }
+
+// writePartition 往 Catalog 写一条可查的分区记录（测试辅助）。
+//
+// 原本定义在 journal_wiring_e2e_test.go（那份文件随落盘接线一起删除时被带走），
+// 本文件的租约降级用例仍需要它，故在此本地提供。
+func writePartition(t *testing.T, cat *catalog.Catalog, namespace, day string) catalog.PartitionKey {
+	t.Helper()
+	key := catalog.PartitionKey{StorageNamespace: namespace, UTCDay: day}
+	rec := catalog.NewStableRecord(key, catalog.OwnerHot, 1, "hot-"+day)
+	rec.PublishedProjection = &catalog.PublishedProjection{
+		QueryLocationDirID: "hot-" + day,
+		QueryGeneration:    1,
+	}
+	if err := cat.AppendJournal(catalog.JournalEntry{Key: key, Record: rec}); err != nil {
+		t.Fatalf("append journal %s: %v", key.String(), err)
+	}
+	return key
+}

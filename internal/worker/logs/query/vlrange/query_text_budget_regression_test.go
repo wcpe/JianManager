@@ -47,6 +47,13 @@ func TestQueryTextBudgetLargeScopesSearchStatsFieldsFacets(t *testing.T) {
 	var maxQuery, wireBytes, requests atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, r.ParseForm())
+		// 2026-11-05：Fields 改走官方 /select/logsql/field_names（不再从返回行猜字段），
+		// 夹具必须同时支持这个端点，否则 Fields 会拿到非 200 而失败。
+		if strings.HasSuffix(r.URL.Path, "/select/logsql/field_names") {
+			_, _ = w.Write([]byte(`{"values":[{"value":"instance_id","hits":3},` +
+				`{"value":"level","hits":3},{"value":"_msg","hits":3}]}`))
+			return
+		}
 		text := r.Form.Get("query")
 		n := int64(len(text) + len(r.Form.Get("extra_filters")))
 		requests.Add(1)

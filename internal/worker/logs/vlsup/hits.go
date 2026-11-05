@@ -142,3 +142,60 @@ func utcDayOfBucketStart(stamp string) (string, error) {
 	}
 	return "", fmt.Errorf("vlsup: 无法解析 hits 桶时间 %q", stamp)
 }
+
+// fieldNamesPath 是「该时间窗内出现过的字段名全集」端点。
+const fieldNamesPath = "/select/logsql/field_names"
+
+// fieldNamesResponse 是 /select/logsql/field_names 的返回结构。
+//
+// 形态（实测 v1.52.0）：
+//
+//	{"values":[{"value":"_msg","hits":5276},{"value":"event_id","hits":5276}, ...]}
+type fieldNamesResponse struct {
+	Values []struct {
+		Value string `json:"value"`
+		Hits  uint64 `json:"hits"`
+	} `json:"values"`
+}
+
+// FieldNames 返回给定查询与时间窗内**出现过的全部字段名**。
+//
+// # 为什么需要它（2026-11-05 架构审计 D3）
+//
+// 旧实现（`vlrange.Client.Fields`）是靠 `Search` 拿一页日志、再遍历返回行的
+// `Fields` map 去重。那只能看到**本页那几十条**日志恰好带的字段——不是该时间窗的
+// 字段全集。实测同一窗口：旧实现返回 `[level, stream]` 两项，而 VL 里实际有 15+ 个。
+//
+// 官方端点是专门为这个问题设计的，一次聚合即得全集。
+//
+// 返回的字段名按 VL 给的顺序（通常是 hits 降序），调用方可自行排序。
+func (c *Client) FieldNames(ctx context.Context, query string, start, end time.Time) ([]string, error) {
+	if c == nil {
+		return nil, fmt.Errorf("vlsup: nil client")
+	}
+	if !start.Before(end) {
+		return nil, fmt.Errorf("vlsup: field_names 时间窗无效 [%s, %s)", start, end)
+	}
+	params := url.Values{}
+	if query == "" {
+		query = "*"
+	}
+	params.Set("query", query)
+	params.Set("start", start.UTC().Format(time.RFC3339Nano))
+	params.Set("end", end.UTC().Format(time.RFC3339Nano))
+	body, err := c.Post(ctx, fieldNamesPath, params)
+	if err != nil {
+		return nil, err
+	}
+	var parsed fieldNamesResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("vlsup: field_names 响应解析失败: %w", err)
+	}
+	out := make([]string, 0, len(parsed.Values))
+	for _, v := range parsed.Values {
+		if name := strings.TrimSpace(v.Value); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}

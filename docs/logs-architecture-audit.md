@@ -201,3 +201,56 @@ journal 只在「分区状态变化」时写一条，会漏掉一些天；hits �
 这次审计的价值不在“发现新 API”，而在**核对既有假设是否还成立**。
 凡注释里出现具体的数值前提（上限、默认值、版本号），都该有一条用例或一个判据把它钉住，
 否则它只会在下次读到时误导人。
+
+## 六、收尾改造（2026-11-05 第二轮）
+
+### D10. journal 落盘撤除（D1 的最终收尾）
+
+hits 重建上线后，journal 落盘与它功能重叠。撤除前逐项核过它承担的职责：
+
+| 职责 | 结论 | 依据 |
+|---|---|---|
+| 分区记录持久化 | **已被 hits 取代** | hits 覆盖更全（37 天 vs journal 32 天） |
+| 租约旁路文件 `<journal>.leases` | 可撤 | `leaseDeltaLog` 注释已明确它是「可用性辅助」：视图 TTL 到期即失效，重启后旧视图 ID 本就不该复活 |
+| `StartingRecover` 的 journal 重放 | **不依赖落盘** | `ReplayJournal` 只读传入的 entries 切片，而 entries 来自内存 journal |
+
+⇒ 回到 2026-10-30 的纯内存裁定，与之一致。
+
+**代价（已写进代码注释与 ADR）**：重启后约 30s 窗口内（hits 重建启动前）历史天报
+「无分区记录」。这是短暂降级，换掉「副本可能长期与真源不一致」这个更危险的风险。
+
+**删除的死代码**：
+- `catalog/journal_batched.go` + 其测试（`BatchedStore` 攒批层，零生产调用者）
+- `logassemble/journal_wiring_e2e_test.go`（只测落盘接线）
+- `apps/worker/log_catalog_journal_wiring_test.go`（同上）
+
+**保留的**：`journal.go` 里的 `JSONLFileStore` / `JournalWithStore` 与 `lease_journal.go`
+——它们是有测试覆盖的通用持久化能力，且 `leaseDeltaLog` 的降级路径有真实事故回归用例
+（`journal_lease_degrade_test.go`）。删它们要连带清理大量测试、收益低风险高。
+
+### D11. Fields 改用官方 field_names（D3 落地）
+
+旧实现：调 `Search` 拿一页日志、遍历返回行的 `Fields` map 去重。
+
+**实测缺陷**（inst:318 / 2026-11-04 同一窗口）：
+
+```
+旧实现      → [level, stream]        ← 只是那页日志恰好带的额外字段
+field_names → 15+ 个                 ← 该窗口真实的字段全集
+```
+
+改为直接问 `/select/logsql/field_names`，同时要求：
+
+1. **必须带 range 的作用域谓词**（`selectorQuery`）——否则用户会在实例 A 的筛选面板里
+   看到只有实例 B 才有的字段，点了必然查不到。
+2. **失败不得伪装成「没有字段」**——返回空列表会让前端把筛选面板整个清空。
+
+三条回归用例 + 两处变异（退回从行里猜 / 去掉作用域谓词）均实测转红。
+
+### 仍然明确不做
+
+| 项 | 理由 |
+|---|---|
+| Facets/Stats 改用官方聚合 | 纯优化：实测数值与官方一致（INFO 4699 / WARN 546 / ERROR 31），只是多绕一圈。改它要动 wire 契约，风险 > 收益 |
+| streams 系列 | 产品能力缺口，非缺陷，按需求排期 |
+| 分页改用官方 offset | 官方 offset 分页在数据变动下会漂移；自建复合键游标保证跨页无重无漏 |

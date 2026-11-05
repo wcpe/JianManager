@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -121,30 +122,70 @@ func (c *Client) statsSelector(ctx context.Context, rng query.AuthoritativeRange
 	return out, nil
 }
 
-// Fields enumerates fields from the same canonical range used by Search.
-// The result is bounded by the request budget and therefore reports truncation.
+// Fields 返回该时间窗内**出现过的字段名全集**。
+//
+// # 2026-11-05 修正（架构审计 D3）
+//
+// 旧实现调 `Search` 拿一页日志、遍历返回行的 `Fields` map 去重——
+// 那只能看到**本页那几十条**日志恰好带的字段，不是该时间窗的字段全集。
+//
+// 实测同一窗口（inst:318 / 2026-11-04）：
+//
+//	旧实现      → [level, stream]（因为那页日志只带这两个额外字段）
+//	field_names → 15+ 个（_msg / event_id / canonical_content_hash / record_start / ...）
+//
+// 后者才是「这个窗口里有哪些字段」的正确答案。官方端点专为此设计，一次聚合即得。
+//
+// 仍然用 range 的权威谓词做作用域约束（`selectorQuery`）：字段名不能跨源泄漏，
+// 否则用户会看到别的实例才有、本实例根本没有的字段，点了必然查不到。
 func (c *Client) Fields(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.FieldsResult, error) {
 	if c == nil || c.vl == nil {
 		return query.FieldsResult{}, query.ErrRangeClientUnimplemented
 	}
-	if q.Budget.Limit == 0 || q.Budget.Limit > 1000 {
-		q.Budget.Limit = 1000
-	}
-	res, err := c.Search(ctx, rng, q)
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+
+	start, end, empty, err := c.fieldNamesWindow(rng, q)
 	if err != nil {
-		return query.FieldsResult{Bytes: res.Bytes, CoverageReasons: res.CoverageReasons, Truncated: true}, err
+		return query.FieldsResult{Truncated: true}, err
 	}
-	set := make(map[string]struct{})
-	for _, ev := range res.Items {
-		for field := range ev.Fields {
-			set[field] = struct{}{}
+	if empty {
+		return query.FieldsResult{Fields: nil, Truncated: false}, nil
+	}
+	names, err := c.vl.FieldNames(ctx, selectorQuery(rng, q), start, end)
+	if err != nil {
+		// 聚合查询失败不得伪装成「没有字段」：那会让前端把筛选面板整个清空。
+		return query.FieldsResult{Truncated: true, CoverageReasons: []string{query.ReasonRangeUnavailable}}, err
+	}
+	sort.Strings(names)
+	return query.FieldsResult{Fields: names, Truncated: false}, nil
+}
+
+// fieldNamesWindow 算出 field_names 查询该用的时间窗（与 range 的分区日 + 请求窗取交集）。
+func (c *Client) fieldNamesWindow(rng query.AuthoritativeRange, q query.RangeQuery) (time.Time, time.Time, bool, error) {
+	day := rng.Key.UTCDay
+	if day == "" {
+		return time.Time{}, time.Time{}, true, nil
+	}
+	parsed, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return time.Time{}, time.Time{}, false, fmt.Errorf("vlrange: invalid Catalog UTC day: %w", err)
+	}
+	start, end := parsed, parsed.AddDate(0, 0, 1)
+	if q.TimeRange.FromUTC != "" {
+		if from, parseErr := time.Parse(time.RFC3339Nano, q.TimeRange.FromUTC); parseErr == nil && from.After(start) {
+			start = from
 		}
 	}
-	fields := make([]string, 0, len(set))
-	for field := range set {
-		fields = append(fields, field)
+	if q.TimeRange.ToUTC != "" {
+		if to, parseErr := time.Parse(time.RFC3339Nano, q.TimeRange.ToUTC); parseErr == nil && to.Before(end) {
+			end = to
+		}
 	}
-	return query.FieldsResult{Fields: fields, Bytes: res.Bytes, CoverageReasons: res.CoverageReasons, Truncated: !res.Exhausted}, nil
+	if !start.Before(end) {
+		return time.Time{}, time.Time{}, true, nil
+	}
+	return start, end, false, nil
 }
 
 // Facets aggregates controlled dimensions through the same Stats path and

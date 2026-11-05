@@ -834,35 +834,31 @@ func runWorker() {
 	// 磁盘缓冲（FR-510）：VL 不可用时把即将丢弃的 WAL 条目先写盘。
 	// 默认关闭（log_ingest.spool.enabled=false），未启用时为 nil，装配处会上报 Disabled。
 	var spoolMetricsSource ingest.SpoolMetricsSource
-	// 日志 Catalog journal：**落盘**（2026-11-05 真机事故修复，推翻 2026-10-30 的纯内存裁定）。
+	// 日志 Catalog journal：**纯内存**（2026-11-05 架构决策 ADR-102）。
 	//
-	// ## 为什么必须推翻旧裁定
+	// # 历史沿革（读到这里的人需要知道为什么绕了一圈）
 	//
-	// 旧裁定的前提是「分区记录是可随时重建的派生状态」——在**旧架构**下成立：
-	// 记录由 `publishSnapshot` 在投递时创建，重启后重新发布即可重建。
+	// 2026-10-30 裁定纯内存，理由是「分区记录是可随时重建的派生状态」。
+	// 2026-11-02 简化投递路径后那前提失效（记录改由 `ensureCatalogPartition` 只在
+	// 投递成功时补建），于是 2026-11-05 早上改成 JSONL 落盘来保住历史天。
 	//
-	// 但 2026-11-02「简化投递路径」之后前提被推翻了：记录改由 ingest 的
-	// `ensureCatalogPartition` **只在投递成功时**补建（非测试调用点 = 1）。
-	// 于是它变成「承载历史的唯一事实」，而纯内存意味着进程重启后归零：
-	// 该源**之前所有天**在查询侧变成「不存在」——VL 里行还在，没人知道去查它。
+	// 但落盘只保得住「写进去过的」：生产 journal 只写到 10-30，11-01/11-02 从没写入
+	// ⇒ 那两天照样查不到。于是又加了「启动期从 VL 反推 30 天」的第三层补救。
 	//
-	// 真机实证（inst:318）：
+	// **三层补救的共同病根是「我们维护了一份 VL 事实的副本」**。
 	//
-	//	2026-11-02  VL=1746 条  查询：complete=false（NO_CATALOG_RECORD）
-	//	2026-11-04  VL=806  条  查询：complete=true     ← 只因重启后又采到了这天的数据
+	// # 现在为什么又回到纯内存
 	//
-	// 所以旧注释里「重启后查询侧**短暂**显示无已发布分区」那句是错的：不是短暂，
-	// 是**永久**（只要那天已经采集完、不再有新数据触发补建）。
+	// 分区目录改由 VictoriaLogs 的 `hits` 一次请求重建（实测 428 个 (源,天) / 206ms）。
+	// 副本被「直接问真源」取代后，落盘这层就没有存在理由了：
 	//
-	// ## 为什么不会退回当年的机械盘开销
+	//   - 它维护的副本已被 hits 取代；
+	//   - 它顺带承担的「租约旁路文件」已明确降级为可用性辅助（视图 TTL 到期即失效，
+	//     重启后旧视图 ID 本就不该复活）；
+	//   - `ReplayJournal` 只读内存 entries，不依赖落盘。
 	//
-	// 当年砍它的理由是 `JSONLFileStore.AppendEntry` 每条都 `f.Sync()`。现在写路径走
-	// `catalog.BatchedStore`：攒批（默认 2s / 256 条）后用 `AppendEntries` **一次
-	// open + 一次 Sync** 写入 N 条。读路径完全不进队列（仍是 `MemJournal` 内存视图），
-	// 查询性能零变化。
-	//
-	// 权衡已在 catalog.BatchedStore 的注释里逐条写明：崩溃最多丢最近一个 interval 的记录，
-	// 正常关停走 Close 会最后 flush 一次（不丢），落盘失败不静默（WARN + Stats）。
+	// 代价：重启后约 30s 窗口内（hits 重建启动前）历史天报「无分区记录」。
+	// 这是**短暂降级**，换掉了「副本可能长期与真源不一致」这个更危险的风险。
 	logJournal, logJournalCloser = openLogCatalogJournal(cfg, root, logJournal)
 	if logJournalCloser != nil {
 		defer func() {
@@ -2438,74 +2434,37 @@ func sampleLogBudget(ctx context.Context, sup *vlsup.Supervisor, budget *vlsup.B
 // 即使没赶上，补建也就在那一轮返回零计数，不会假装成功。
 const catalogBackfillStartDelay = 30 * time.Second
 
-// openLogCatalogJournal 装配日志分区 Catalog 的 journal（有界攒批落盘）。
+// 日志分区 Catalog 的 journal 使用**纯内存**（2026-11-05 架构决策，ADR-102）。
 //
-// 返回的 Journal 用于 `logassemble.Build`；第二个返回值非 nil 时必须在退出前调用
-// （把最后一攒批记录 flush 落盘）。文件 journal 启动失败时**降级为纯内存**并大声告警，
-// 而不是拒启：日志查询能力倒退不应拖坠整个 Worker（它还跑实例/进程管理）。
+// # 为什么不再落盘
 //
-// 失败方向的诚实说明：降级 = 回到本次修复前的形态（重启后历史天不可查），
-// 因此必须打 ERROR 级别的日志（不能用 Info 混在正常启动日志里）。
+// 分区目录（「哪些源在哪些天有数据」）此前靠三层补救去近似一个 VL 已经知道的事实：
+//
+//	第 1 层  journal 纯内存      → 重启后历史天全丢
+//	第 2 层  改成 JSONL 落盘     → 与 2026-10-30「机械盘不落盘」裁定冲突
+//	第 3 层  启动期从 VL 反推    → 每源一次查询、窗口易漏
+//
+// 现在由 `hits` 在启动期一次请求重建完整分区目录（实测 428 个 (源,天) / 206ms），
+// 落盘这一层就失去了存在理由——它维护的副本已经被「直接问 VL」取代。
+//
+// # 落盘原本承担的另外两项职责，逐项核过
+//
+//  1. **租约旁路文件**（`<journal>.leases`）：`leaseDeltaLog` 的注释已明确它降级为
+//     「可用性辅助」——租约是短生命周期运行时状态，视图 TTL 到期就失效，进程重启后
+//     旧视图 ID 本来就不该复活。丢了它唯一后果是「旧视图失效得早一点」，不影响正确性。
+//  2. **StartingRecover 的 journal 重放**：`ReplayJournal` 只读传入的 entries 切片，
+//     而 entries 来自内存 journal；落盘与否不影响恢复语义。
+//
+// # 代价（诚实说明）
+//
+// 重启后分区目录从空开始，由 hits 重建补齐（异步，约 30s 后启动）。重建完成前查询侧
+// 对历史天报「无分区记录」——这与改造前的落盘形态相比是**短暂降级**，但换掉了
+// 「副本可能与真源不一致」这个长期风险（journal 只写到 10-30 那类事故不会再发生）。
 func openLogCatalogJournal(cfg *workercfg.Config, root *dataroot.Root, fallback catalog.Journal) (catalog.Journal, func() error) {
 	if cfg != nil && cfg.LogCatalog.JournalDisabled() {
-		slog.Warn("日志 Catalog journal 落盘已显式关闭（log_catalog.journal_enabled=false）：重启后历史天的分区记录将不可重建，查询侧会报「无分区记录」",
-			"note", "仅建议在只读盘或排障时关闭")
-		return fallback, nil
+		slog.Info("日志 Catalog journal 为纯内存（log_catalog.journal_enabled=false）")
 	}
-	path := ""
-	if cfg != nil && root != nil {
-		path = cfg.LogCatalog.JournalPath(root.Base())
-	}
-	if path == "" {
-		slog.Error("日志 Catalog journal 无法定位文件路径（缺少数据根）：退化为纯内存，重启后历史天分区记录将丢失")
-		return fallback, nil
-	}
-	store, err := catalog.NewJSONLFileStore(path)
-	if err != nil {
-		// 不拒启（理由见函数头），但必须 ERROR：这条降级会让历史天在查询侧变「不存在」。
-		slog.Error("日志 Catalog journal 文件不可用，退化为纯内存：重启后历史天分区记录将丢失，查询侧会报「无分区记录」",
-			"path", path, "error", err.Error())
-		return fallback, nil
-	}
-	// 零值语义（与 manifest_sync_* 同口径）：未设 ⇒ 用 catalog 默认 2s；
-	// 显式 "0s" ⇒ 同步写（每次追加即 fsync，最耗 IO 但零丢弃窗口）。
-	interval := catalog.DefaultJournalSyncInterval
-	if d, set := cfg.LogCatalog.JournalSyncIntervalValue(); set {
-		interval = d
-	}
-	maxBatch := catalog.DefaultJournalMaxBatch
-	if cfg != nil && cfg.LogCatalog.JournalMaxBatch > 0 {
-		maxBatch = cfg.LogCatalog.JournalMaxBatch
-	}
-	batch := catalog.NewBatchedStore(store, interval, maxBatch)
-	journal, err := catalog.NewJournalWithStore(batch)
-	if err != nil {
-		// **重放失败不静默**：它意味着 journal 内容与将重放出的状态不一致。
-		// 先把已打开的 store 收尾，再把坏文件改名保留（出事现场比能启动更重要），
-		// 重建空 journal 后继续住上跑（分区记录需重新累积）。
-		_ = batch.Close()
-		backup := path + ".corrupt-" + time.Now().Format("20060102T150405")
-		if renameErr := os.Rename(path, backup); renameErr == nil {
-			slog.Error("日志 Catalog journal 重放失败，已把原文件改名保留并重建空 journal（分区记录需重新累积）",
-				"path", path, "backup", backup, "error", err.Error())
-			if reopened, reopenErr := catalog.NewJSONLFileStore(path); reopenErr == nil {
-				retryBatch := catalog.NewBatchedStore(reopened, interval, maxBatch)
-				if retryJournal, retryErr := catalog.NewJournalWithStore(retryBatch); retryErr == nil {
-					slog.Info("日志 Catalog journal 已落盘启用（重建后）", "path", path,
-						"syncInterval", interval.String(), "maxBatch", maxBatch)
-					return retryJournal, retryBatch.Close
-				}
-				_ = retryBatch.Close()
-			}
-		} else {
-			slog.Error("日志 Catalog journal 重放失败且无法改名保留，退化为纯内存；重启后历史天分区记录将丢失",
-				"path", path, "error", err.Error(), "renameError", renameErr.Error())
-		}
-		return fallback, nil
-	}
-	slog.Info("日志 Catalog journal 已落盘启用（有界攒批，重启后历史天分区记录可恢复）",
-		"path", path, "syncInterval", interval.String(), "maxBatch", maxBatch)
-	return journal, batch.Close
+	return fallback, nil
 }
 
 // resolveHotRetention 把 `log_vl.retention_period` 解析成热层保留期时长。
