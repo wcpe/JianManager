@@ -89,8 +89,21 @@ reclaim = min(contiguousCertifiedEnd(entry), max(read_position, durable_position
 
 - **投递主路径以 HTTP 状态码为唯一结论**：单批要么整批被 VL 接受（2xx）、要么整批失败
   （非 2xx / 传输错）。**没有第三种「写没写进去未知」的状态**——请求体是一次 POST 送完的。
-- 事件重发幂等由 `event_id` 承担（VL 侧按 `event_id` 去重），所以「宁可重发」仍然安全。
-- **逐字段核验保留在取证路径上**，不再在投递主路径上同步执行：
+- **不要假定 VL 会去重——它不会。** 2026-11-05 在生产 VL v1.52.0 上实测（同 `_time`、
+  同 `event_id`、同 `_msg` 写两次）：两次都 200，查询 `stats count()` 得到 **2**，且两条行的
+  `_stream_id` 也相同。VictoriaLogs 是 append-only 时序库，`/insert/jsonline`
+  **不做任何字段级唯一约束；`event_id` 只是个普通字段**。
+  ⇒ **重投真的会多写行**，「宁可重发」不再天然安全，去重责任必须由写入侧自己承担。
+
+  历史上仓库里曾有三处把去重交给下游，现全部不成立，不得据此论证 at-least-once：
+
+  | # | 原假设 | 现状 |
+  |---|---|---|
+  | 1 | 写前幂等 `dropEventsAlreadyWritten*` | 2026-11-02 简化后**零生产调用点** |
+  | 2 | `projection_generation` 代次过滤 | 2026-11-03 后不再写该标签 |
+  | 3 | VL 侧 `event_id` 幂等 | **本次实测证伪**（见上） |
+
+- **逐字段核验保留在取证路径上**，不在投递主路径上同步执行：
   `repairWrittenEarlierDebt` / `tryConfirmPendingPublication` / `hot_retention_window` /
   `scoped_query_budget`。那里面对的是「历史欠账是否真的在 VL 里」，
   与「本批刚发出去的 POST 是否被接受」是两个问题。
