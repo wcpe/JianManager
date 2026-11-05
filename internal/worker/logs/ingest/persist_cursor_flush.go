@@ -95,14 +95,18 @@ func (m *Manager) resumeCursorFor(key, path string) *acquire.SourceCursor {
 	// 而 `m.pipes[key] = p` 在那之后才赋值 ⇒ 此刻 `pipes[key]` 还是 nil，
 	// 拿不到账本，登记会静默失效。
 	//
-	// 所以改为把「本次续读的游标」记进一个待处置集合，由 RegisterSource
-	// 在管道入表之后调 `recordPendingResumeSkipGaps` 统一登记。
-	m.mu.Lock()
+	// 所以改为把「本次续读的游标」记进一个待处置集合，由 `Register` 在管道入表之后
+	// 调 `recordPendingResumeSkipGapsLocked` 统一登记。
+	// ## 为何写 pendingResumeCursor **不**加 m.mu（2026-11-05 第三处死锁）
+	//
+	// 本函数**只**在 `Register` 的持锁区里被调用（collect_lifecycle.go 里
+	// `pipeline.New` 的参数处），而 `pendingResumeCursor` 的读与清空也全在同一个
+	// 持锁区内（`recordPendingResumeSkipGapsLocked`）。既然唯一读写者已持锁，
+	// 这里再锁就是**自锁死锁**。实测栈：本文件 m.mu.Lock ← collect_lifecycle.go 的 Register。
 	if m.pendingResumeCursor == nil {
 		m.pendingResumeCursor = make(map[string]resumeCursorNotice, 1)
 	}
 	m.pendingResumeCursor[key] = resumeCursorNotice{path: path, cursor: out}
-	m.mu.Unlock()
 	return &out
 }
 
@@ -116,14 +120,49 @@ type resumeCursorNotice struct {
 	cursor acquire.SourceCursor
 }
 
-// recordPendingResumeSkipGaps 处置 `pendingResumeCursor` 里累积的续读记录。
+// recordPendingResumeSkipGapsLocked 处置 `pendingResumeCursor` 里累积的续读记录。
 //
-// 由 RegisterSource 在 `m.pipes[key] = p` **之后**调用——此时账本已可用。
-func (m *Manager) recordPendingResumeSkipGaps() {
-	m.mu.Lock()
+// # 调用纪律：**调用方必须已持有 m.mu**
+//
+// 名字带 Locked 就是为了让这条约束在调用点可见。
+//
+// ## 为何不自己加锁（2026-11-05 修死锁）
+//
+// `Register` 是**整函数持锁**（`m.mu.Lock(); defer m.mu.Unlock()`），而它正是本函数的
+// 唯一调用方。旧实现自己在内部 `m.mu.Lock()` ⇒ **自锁死锁**。
+// 实测形态：用例挂满超时，栈停在 `recordPendingResumeSkipGaps` 的 `sync.Mutex.Lock`。
+//
+// ## 为何可以在持锁时做这一点 I/O
+//
+// 单源至多一条通知；`recordCursorSkipGap` 只有一次 `os.Stat` + 一次账本写入
+// （纯内存结构），不涉及网络或大块磁盘 I/O，不会把 `Register` 的持锁时间显著拉长。
+func (m *Manager) recordPendingResumeSkipGapsLocked() {
+	if m == nil || len(m.pendingResumeCursor) == 0 {
+		return
+	}
 	pending := m.pendingResumeCursor
 	m.pendingResumeCursor = nil
-	m.mu.Unlock()
+	for key, notice := range pending {
+		m.recordCursorSkipGap(key, notice.path, notice.cursor)
+	}
+}
+
+// takePendingResumeSkipGaps 把待处置的续读通知**替出来**，不改动账本、不做 I/O。
+//
+// **调用方必须已持 m.mu** —— 它只做一次 map 替换；返回的 map 由调用方在锁外交给
+// `applyResumeSkipGaps`。这样把「持锁」与「做 I/O」彻底分开，避免与 Register 的
+// 整函数持锁互相自锁。
+func (m *Manager) takePendingResumeSkipGapsLocked() map[string]resumeCursorNotice {
+	if m == nil || len(m.pendingResumeCursor) == 0 {
+		return nil
+	}
+	pending := m.pendingResumeCursor
+	m.pendingResumeCursor = nil
+	return pending
+}
+
+// applyResumeSkipGaps 处置替出来的续读通知。**不得在持有 m.mu 时调用**。
+func (m *Manager) applyResumeSkipGaps(pending map[string]resumeCursorNotice) {
 	for key, notice := range pending {
 		m.recordCursorSkipGap(key, notice.path, notice.cursor)
 	}
@@ -157,7 +196,7 @@ func (m *Manager) recordCursorSkipGap(key, path string, cursor acquire.SourceCur
 		return // 游标已到/超过文件长度：没跳过任何东西
 	}
 	from, to := cursor.LogicalPos, end
-	led := m.ledgerForKey(key)
+	led := m.ledgerForKeyLocked(key)
 	if led == nil {
 		return
 	}
@@ -179,11 +218,14 @@ func (m *Manager) recordCursorSkipGap(key, path string, cursor acquire.SourceCur
 		"cursorLogicalPos", cursor.LogicalPos, "fileSize", end)
 }
 
-// ledgerForKey 取该源键对应的账本（管理器的管道还没建好时返回 nil）。
-func (m *Manager) ledgerForKey(key string) *ledger.Ledger {
-	m.mu.Lock()
+// ledgerForKeyLocked 取该源键对应的账本。**调用方必须已持有 m.mu**。
+//
+// 为何不自已加锁（2026-11-05 修死锁）：本函数只在 `recordPendingResumeSkipGapsLocked`
+// 里被调用，而后者由 `Register`（整函数持锁）调用。旧版这里 `m.mu.Lock()` ⇒
+// **第二处自锁**。第一处是处置函数本身；两个都被实测抓到（用例超时，栈停在
+// sync.Mutex.Lock）。
+func (m *Manager) ledgerForKeyLocked(key string) *ledger.Ledger {
 	p := m.pipes[key]
-	m.mu.Unlock()
 	if p == nil {
 		return nil
 	}

@@ -27,31 +27,36 @@ import (
 // # 为什么选「登记缺口」而不是「回退游标重读」
 //
 // 重读能让数据不丢，但 ⇒ 重投；而 **VictoriaLogs 不按 event_id 去重**
-// （2026-11-05 实测：同一行写两次 count = 2）⇒ 每次重启都多写一遍。
-// 而 `Delivery` 不前进的条件（VL 持续失败 / 磁盘暂停）恰恰最需要重启
-// ⇒ 重复量随重启次数**无界增长**。
+// （2026-11-05 实测：同一行写两次 count = 2）⇒ 每次重启都多写一遍；而 `Delivery`
+// 不前进的条件（VL 持续失败 / 磁盘暂停）恰恰最需要重启 ⇒ 重复量随重启次数**无界增长**。
 //
 // 两边代价不对称时选诚实：**承认丢，但让它可查、可告警、可人工裁定**。
 //
-// # 两个我写错过的版本（都靠变异验证抓出来，写在这里免得再犯）
+// # 三个我写错过的版本（全部靠变异/实跑抓出来，写在这里免得再犯）
 //
-//  1. 把登记点放在 `flushCursorRegistry`，判据 `Delivery < Read`。
-//     错：运行期 `Delivery < Read` 是**正常态**（本批正在投递中），
-//     于是给每个源每轮都加一条缺口，打挂三条既有用例（它们断言"投递失败只留 1 条"）。已 revert。
+//  1. 登记点放 `flushCursorRegistry`，判据 `Delivery < Read`。
+//     错：运行期 `Delivery < Read` 是**正常态**（本批投递中），于是给每个源每轮都加
+//     一条缺口，打挂三条既有用例（它们断言「投递失败只留 1 条未解决缺口」）。已 revert。
 //  2. 直接在 `resumeCursorFor` 里登记。
 //     错：它在 `pipeline.New` 的**参数**里被调用，那时 `m.pipes[key]` 还是 nil，
 //     拿不到账本 ⇒ 登记静默失效。
+//  3. 在 `Register`（整函数持锁）里调用一个**自己加锁**的处置函数。
+//     错：**自锁死锁**。实测形态：用例挂满超时，栈停在 `sync.Mutex.Lock`。
+//     修法：处置函数改为 `...Locked`（不加锁），由持锁的调用方直接调。
 //
-// 正确做法：`resumeCursorFor` 只记下通知，由 **`Register` 在 `m.pipes[key] = p` 之后**
-// 统一处置。所以本文件的用例必须**走真实 `Register`**——手动调两步会绕开时序，
-// 让变异验证失效（第二版就吃过这个亏：手动调 `recordPendingResumeSkipGaps` 后，
-// 把调用点移到入表前，用例仍然绿）。
+// 因此本文件的用例必须**走真实 `Register`** —— 手动复现其中的两步会绕开真实时序与
+// 锁范围，让变异验证失效（第 2 版就吃过这个亏）。
+
+// seedRestartSkip 用**真实 `New`** 造一个「重启续读、文件已比游标长」的 Manager。
+//
+// 为什么不手工构造 `&Manager{}`：`Register` 依赖若干必须初始化的字段
+// （`persistedRev` / `persistedCover` / `state.Sources` …），手搭会 panic
+// （我第一次就踩到 `assignment to entry in nil map`）。`newTestManager` 走完整 `New`。
 func seedRestartSkip(t *testing.T, cursorPos int64) (*Manager, SourceConfig, string) {
 	t.Helper()
 	root := t.TempDir()
 	path := filepath.Join(root, "latest.log")
 
-	// 文件 200 字节；游标停在 cursorPos。
 	line := "[2026-11-05T00:00:00Z] [Server thread/INFO]: padding line for restart skip test\n"
 	for len(line) < 200 {
 		line += line
@@ -62,15 +67,13 @@ func seedRestartSkip(t *testing.T, cursorPos int64) (*Manager, SourceConfig, str
 		LogSourceID: "inst:9/file", SourceGeneration: "g1", Path: path,
 		Mode: pipeline.ModeFilePrimary, StorageNamespace: "inst:9",
 	}
-	cat := catalog.New(catalog.NewMemJournal())
-	m := &Manager{}
-	m.cat = cat
-	m.mu.Lock()
-	m.sources = map[string]SourceConfig{}
-	m.pipes = map[string]*pipeline.Pipeline{}
-	m.state.SourceConfigs = map[string]SourceConfig{}
-	m.mu.Unlock()
 
+	code, err := catalog.New(catalog.NewMemJournal()), error(nil)
+	require.NoError(t, err)
+	m, err := newTestManager(t, Options{Root: root, Catalog: code, Journal: code.Journal()})
+	require.NoError(t, err)
+
+	// 游标表：上次读到 cursorPos（模拟上次进程读到那里就死了、未投递）。
 	m.cursorRegistryMu.Lock()
 	m.cursorRegistry = cursorRegistry{
 		"inst:9/file/g1": {SourceCursor: acquire.SourceCursor{
@@ -81,7 +84,7 @@ func seedRestartSkip(t *testing.T, cursorPos int64) (*Manager, SourceConfig, str
 	return m, source, path
 }
 
-// gapsOf 返回该源全部缺口。
+// gapsOf 返回该源全部缺口（走真实管道取账本）。
 func gapsOf(m *Manager) []ledger.Gap {
 	m.mu.Lock()
 	p := m.pipes["inst:9/file/g1"]
@@ -96,15 +99,22 @@ func gapsOf(m *Manager) []ledger.Gap {
 	return e.Gaps
 }
 
+func hasSkipGap(m *Manager) bool {
+	for _, g := range gapsOf(m) {
+		if g.Reason == ledger.GapReasonCursorSkippedOnRestart && !g.Resolved {
+			return true
+		}
+	}
+	return false
+}
+
 // TestRestartSkipGap_RegisteredOnResume 核心：走真实 Register，重启续读必须登记缺口。
 //
 // 转红方式（实测）：
-//   - 把 `recordPendingResumeSkipGaps()` 移到 `m.pipes[key] = p` 之前 ⇒ 红
-//     （那正是第二版实现踩过的时序 bug）
-//   - 删掉 `resumeCursorFor` 里的通知入账 ⇒ 红
+//   - 把处置改成「自己加锁」⇒ 死锁（超时 / 栈停在 sync.Mutex.Lock）
+//   - 删掉 `resumeCursorFor` 里的通知入账 ⇒ 找不到该缺口
 func TestRestartSkipGap_RegisteredOnResume(t *testing.T) {
 	m, source, _ := seedRestartSkip(t, 100)
-
 	require.NoError(t, m.Register(source), "登记应成功")
 
 	all := gapsOf(m)
@@ -118,6 +128,7 @@ func TestRestartSkipGap_RegisteredOnResume(t *testing.T) {
 	require.NotEqual(t, -1, idx,
 		"重启续读必须登记 %s 缺口；否则那段数据丢了却毫无痕迹",
 		ledger.GapReasonCursorSkippedOnRestart)
+
 	found := all[idx]
 	require.EqualValues(t, 100, found.StartPos, "缺口起点应是持久化游标位")
 	require.EqualValues(t, 200, found.EndPos, "缺口终点应是文件当前长度")
@@ -128,13 +139,9 @@ func TestRestartSkipGap_RegisteredOnResume(t *testing.T) {
 
 // TestRestartSkipGap_NoGapWhenCursorAtEOF 游标已到文件末尾 ⇒ 没跳过东西，不登记。
 func TestRestartSkipGap_NoGapWhenCursorAtEOF(t *testing.T) {
-	m, source, _ := seedRestartSkip(t, 200)
+	m, source, _ := seedRestartSkip(t, 200) // 游标 == 文件长度
 	require.NoError(t, m.Register(source))
-
-	for _, g := range gapsOf(m) {
-		require.NotEqual(t, ledger.GapReasonCursorSkippedOnRestart, g.Reason,
-			"游标已在 EOF 时不得登记跳过缺口（纯噪音）")
-	}
+	require.False(t, hasSkipGap(m), "游标已在 EOF 时不得登记跳过缺口（纯噪音）")
 }
 
 // TestRestartSkipGap_NoGapOnFreshSource 首次登记（无游标）⇒ 不登记。
@@ -147,39 +154,38 @@ func TestRestartSkipGap_NoGapOnFreshSource(t *testing.T) {
 	m.cursorRegistryMu.Unlock()
 
 	require.NoError(t, m.Register(source))
-
-	for _, g := range gapsOf(m) {
-		require.NotEqual(t, ledger.GapReasonCursorSkippedOnRestart, g.Reason,
-			"首次登记没有「跳过」可言，不得登记该缺口")
-	}
+	require.False(t, hasSkipGap(m), "首次登记没有「跳过」可言，不得登记该缺口")
 }
 
-// TestRestartSkipGap_NoGapForNormalPolling 正常运行期绝不登记（防回归：第一版就错在这）。
+// TestRestartSkipGap_NoGapForNormalPolling 正常运行期绝不登记（防回归：第 1 版错在这）。
 //
-// 第一版按 `Delivery < Read` 判，给正常源每轮都加缺口，打挂三条既有用例。
+// 第 1 版按 `Delivery < Read` 判，给正常源每轮都加缺口，打挂三条既有用例。
 // 这条用例把「正常采集轮不产生该缺口」钉死。
+//
+// 注意：这里**不走 `pollOnce`**（它只轮询 `Options.Sources` 里登记的源，而本夹具是事后
+// `Register` 的，`pollOnce` 拿不到它 ⇒ Read 恒 0，夹具前提不成立）。
+// 改为直接推账本水位造出「Read 前进、Delivery 不同步」这个形态，再确认**没有任何路径**
+// 会因为水位差距而登记跳过缺口。
 func TestRestartSkipGap_NoGapForNormalPolling(t *testing.T) {
-	m, source, path := seedRestartSkip(t, 200) // 游标 == 文件长度，恢复后无跳过
+	m, source, _ := seedRestartSkip(t, 200) // 游标 == 文件长度，恢复后无跳过
 	require.NoError(t, m.Register(source))
-
-	// 追加两行并跑一轮采集：Read 前进、Delivery 仍 0（没有投递钩子）。
-	require.NoError(t, os.WriteFile(path,
-		[]byte("[2026-11-05T00:00:01Z] [Server thread/INFO]: a\n"+
-			"[2026-11-05T00:00:02Z] [Server thread/INFO]: b\n"), 0o644))
-	m.pollOnce()
 
 	m.mu.Lock()
 	p := m.pipes["inst:9/file/g1"]
 	m.mu.Unlock()
 	require.NotNil(t, p)
+
+	// 正常采集：Read 前进，Delivery 仍为 0（本批还在投递/或未投）。
+	require.NoError(t, p.Ledger().AdvanceRead(p.Key(), 150))
 	pos, ok := p.Positions()
 	require.True(t, ok)
 	require.Greater(t, pos.Read, pos.Delivery, "夹具前提：正常投递滞后（Read > Delivery）")
 
-	for _, g := range gapsOf(m) {
-		require.NotEqual(t, ledger.GapReasonCursorSkippedOnRestart, g.Reason,
-			"正常采集轮 Read>Delivery 是常态，绝不能登记跳过缺口（第一版就错在这）")
-	}
+	// 跑一轮刷盘（它是第 1 版放错位置的那个路径）。
+	m.flushCursorRegistry()
+
+	require.False(t, hasSkipGap(m),
+		"正常采集轮 Read>Delivery 是常态，绝不能登记跳过缺口（第 1 版就错在这）")
 }
 
 // TestRestartSkipGap_ReasonClassification 该原因的归类判据。

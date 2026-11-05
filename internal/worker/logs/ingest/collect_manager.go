@@ -716,7 +716,7 @@ type Manager struct {
 	//
 	// 为何需要这层间接：`resumeCursorFor` 在 `pipeline.New` 的**参数**里被调用，
 	// 而 `m.pipes[key] = p` 在那之后才赋值 ⇒ 那一刻拿不到账本，
-	// 直接登记会静默失效。详见 persist_cursor_flush.go 的 recordPendingResumeSkipGaps。
+	// 直接登记会静默失效。详见 persist_cursor_flush.go 的 recordPendingResumeSkipGapsLocked。
 	pendingResumeCursor map[string]resumeCursorNotice
 	// cursorRegistryMu 保护 cursorRegistry 这张 map **本身**的并发访问。
 	//
