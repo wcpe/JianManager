@@ -61,11 +61,25 @@ import (
 const (
 	// DefaultCatalogBackfillDays 是回溯窗口默认值（天）。
 	//
-	// 取 30 的理由：与 VL 热层 retention 的常见配置同量级（本仓 `DefaultRetentionPeriod`
-	// 是 180d，但 `-search.maxQueryTimeRange` 是 31d）——超出 31d 的单次查询会被 VL 以
-	// 400 拒绝，所以窗口取 30 是可查询范围内最宽的一档。
-	// 要更久的历史，把它调大即可（VL 侧会用逐窗切分兜住 maxQueryTimeRange）。
-	DefaultCatalogBackfillDays = 30
+	// # 2026-11-05 订正（原值 30，依据是过时的假设）
+	//
+	// 原注释写「`-search.maxQueryTimeRange` 是 31d，所以窗口取 30 是可查询范围内最宽的一档」。
+	// **这个前提已经不成立**：本仓 VL 的实际启动参数是
+	//
+	//	-retentionPeriod=180d  -search.maxQueryTimeRange=4344h(=181d)
+	//
+	// 二者的关系是「maxQueryTimeRange = retention + 1d」（见 vlsup.BuildArgs）。
+	// 按 30 天回搜的实际后果，生产实测：
+	//
+	//	旧 journal 有 388 个分区，hits 只补回 300 个
+	//	缺的 88 个全部落在 2026-09-20 ~ 2026-10-06（早于 30 天窗口起点 10-07）
+	//	而 VL 里那几天**确实有数据**（9-20: 11562 条、9-21: 29422 条）
+	//
+	// ⇒ 窗口设小了不是「保守」，而是**直接丢掉能查到的历史**。
+	//
+	// 现在取 180 天，与默认 retention 同量级；仍受 maxQueryTimeRange(181d) 约束，
+	// 因此不会撞 400。要更长历史再调 retention 与该值即可。
+	DefaultCatalogBackfillDays = 180
 
 	// catalogBackfillMaxNamespaces 是单次运行最多处理的命名空间数。
 	// 保留期外的 namespace 不会产生查询；这只是给「源数异常膨胀」一个硬上界。
@@ -78,8 +92,15 @@ const (
 	catalogBackfillQueryTimeout = 45 * time.Second
 
 	// catalogBackfillMaxRange 是 VL 单次查询允许的最大时间跨度。
-	// 超出会被 400 拒绝（`-search.maxQueryTimeRange`），所以按它切窗。
-	catalogBackfillMaxRange = 30 * 24 * time.Hour
+	//
+	// 2026-11-05 订正：原值 30d，注释写「超出会被 400 拒绝（-search.maxQueryTimeRange）」——
+	// 依据的前提是那个上限为 31d。实际启动参数是 `-search.maxQueryTimeRange=4344h`（=181d，
+	// 由 retention(180d)+1d 派生，见 vlsup.BuildArgs），所以 30d 是**自己加的限制**，
+	// 不是 VL 的要求。
+	//
+	// 但仍保留切窗：单次聚合扫描跨度越大，单查询内存与超时风险越高。
+	// 取 90d 作为切窗粒度——既低于 VL 上限（181d），又比 30d 少一半往返。
+	catalogBackfillMaxRange = 90 * 24 * time.Hour
 )
 
 // CatalogBackfillStats 是一次补建运行的读数（供日志与测试断言）。

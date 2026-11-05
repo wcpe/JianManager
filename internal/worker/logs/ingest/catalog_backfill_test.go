@@ -249,13 +249,40 @@ func TestBackfillDaysWindow_Bounded(t *testing.T) {
 	require.Equal(t, time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC), to.UTC())
 
 	// 0/负值必须落到默认值，而不是「全量历史」。
-	from, _ = backfillDaysWindow(now, 0)
-	require.Equal(t, time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC), from.UTC(),
+	from, to = backfillDaysWindow(now, 0)
+	// 2026-11-05：默认值由 30 改为 180（依据订正见 DefaultCatalogBackfillDays 注释）。
+	// 180 天含今天 ⇒ 起点 = 11-05 往前 179 天 = 2026-05-10。
+	require.Equal(t, time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC), from.UTC(),
 		"0 应取默认 %d 天", DefaultCatalogBackfillDays)
-	// 窗口跨度不得超出单次查询上限（否则会被 VL 以 400 拒绝）。
-	_, to = backfillDaysWindow(now, DefaultCatalogBackfillDays)
-	require.LessOrEqual(t, to.Sub(from), catalogBackfillMaxRange+24*time.Hour,
-		"默认窗口不得超出 VL 单查询跨度上限太多")
+
+	// 总窗口（180d）**可以**大于单段上限：回填按 catalogBackfillMaxRange 切窗后逐段查询。
+	// 因此这里不能断言「总跨度 ≤ 单段上限」——那会把正确的切窗逻辑判成违规。
+	// 真正要守的是「每一段都不超上限」，由 TestBackfillDaysWindow_SegmentsBounded 覆盖。
+	require.Greater(t, to.Sub(from), catalogBackfillMaxRange,
+		"默认窗口应大于单段上限，否则切窗逻辑失去意义（这说明默认值被误设小了）")
+}
+
+// TestBackfillDaysWindow_SegmentsBounded 切窗后的**每一段**都不得超出单段上限。
+//
+// 为什么单独一条：总窗口变大后，「总跨度 ≤ 上限」这条断言必然失败，
+// 而它想守的其实是「不要一次查太大」。判据必须落在切出来的段上。
+func TestBackfillDaysWindow_SegmentsBounded(t *testing.T) {
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	from, to := backfillDaysWindow(now, DefaultCatalogBackfillDays)
+
+	segments := 0
+	for windowStart := from; windowStart.Before(to); {
+		windowEnd := windowStart.Add(catalogBackfillMaxRange)
+		if windowEnd.After(to) {
+			windowEnd = to
+		}
+		require.LessOrEqual(t, windowEnd.Sub(windowStart), catalogBackfillMaxRange,
+			"第 %d 段跨度超出单段上限", segments)
+		segments++
+		windowStart = windowEnd
+	}
+	require.GreaterOrEqual(t, segments, 2,
+		"180 天默认窗口按 90 天切窗应至少 2 段，实际 %d 段", segments)
 }
 
 // TestBackfill_NoSourcesIsNotAnError 启动早期还没登记源 ⇒ 零计数、不报错。

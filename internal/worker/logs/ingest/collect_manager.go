@@ -526,10 +526,16 @@ type Manager struct {
 	vlRoute    func(SourceConfig) (*vlsup.Client, bool, error)
 	cat        *catalog.Catalog
 	journal    catalog.Journal
-	archive    *archive.Registry
-	sources    map[string]SourceConfig
-	pipes      map[string]*pipeline.Pipeline
-	state      persistedState
+	// hits 是「哪些天有数据」的事实来源（VictoriaLogs /select/logsql/hits）。
+	//
+	// 2026-11-05 架构审计 D1：分区目录此前靠 Catalog 副本 + journal 落盘 + 30 天回填
+	// 三层补救去近似这个事实。接上 hits 后，启动期一次请求即可重建完整分区目录，
+	// 副本与落盘都不再需要。nil = 未接线（行为与改动前一致，分区目录靠投递增量维护）。
+	hits    HitsSource
+	archive *archive.Registry
+	sources map[string]SourceConfig
+	pipes   map[string]*pipeline.Pipeline
+	state   persistedState
 	// index 是采集索引的嵌入式 SQLite 存储（FR-496，spec §2.1）：persist 只写变更行。
 	// nil 表示尚未打开（测试直接构造 Manager 的场景在首次 persist 时按需打开）。
 	index *stateindex.Store

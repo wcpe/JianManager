@@ -1504,19 +1504,49 @@ func runWorker() {
 			//
 			// 为何异步：它不是引用路径的一部分，绝不能阻塞 Worker 启动；
 			// 失败也只打 ERROR 不拒启（补建是补救动作，不该拖坠进程）。
+			//
+			// 接上 hits 数据源：它是重建的唯一事实来源。没接时重建会打 WARN 并跳过，
+			// 分区目录退回「投递增量维护」的旧形态（历史天查不到，但不静默、不谎报）。
+			//
+			// 这里用适配器而不是让 vlsup 直接返回 ingest.SourceDayFact：ingest 依赖 vlsup，
+			// 反向依赖会成环。适配层放在装配点，两边都不必知道对方的类型。
+			if vlHTTPClient != nil {
+				manager.SetHitsSource(ingest.HitsSourceFunc(func(ctx context.Context, start, end time.Time) ([]ingest.SourceDayFact, error) {
+					days, err := vlHTTPClient.HitsBySourceDay(ctx, start, end)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]ingest.SourceDayFact, len(days))
+					for i, d := range days {
+						out[i] = ingest.SourceDayFact{LogSourceID: d.LogSourceID, UTCDay: d.UTCDay, Weight: d.Weight}
+					}
+					return out, nil
+				}))
+			}
 			go func() {
 				if cfg.LogCatalog.BackfillDisabled() {
-					slog.Info("启动补建 Catalog 分区已显式关闭（log_catalog.backfill_days<0）",
+					slog.Info("启动重建 Catalog 分区已显式关闭（log_catalog.backfill_days<0）",
 						"note", "历史天仍会在查询侧报「无分区记录」")
 					return
 				}
-				// 让登记先跑一轮：没登记完时补建只能看到空源表，白跑一次。
+				// 让登记先跑一轮：没登记完时重建只能看到空源表，白跑一次。
 				select {
 				case <-ingestCtx.Done():
 					return
 				case <-time.After(catalogBackfillStartDelay):
 				}
-				manager.RunCatalogBackfillOnStartup(ingestCtx, ingest.CatalogBackfillOptions{
+				// 2026-11-05 架构审计 D1：改用 VictoriaLogs 的 `hits` 端点重建分区目录。
+				//
+				// 「哪些源在哪些天有数据」是 VL 已经知道的物理事实。此前我们靠三层补救
+				// 去近似它（journal 落盘 → 投递补建 → 30 天逐源回填），三层都建立在
+				// 「自己维护副本」这个前提上，副本一丢就再加一层。
+				//
+				// hits 一次请求给出完整事实（实测 372 个 (源,天) / 217ms / 31KB），
+				// 且天然覆盖「从来没被写进 journal」的历史天——那正是回填要解决的问题。
+				//
+				// 权威边界不变：hits 只回答「哪天有数据」，owner/generation/dirID
+				// 仍由 Catalog.WriteAdmission 决定（与 ensureCatalogPartition 同一形状）。
+				manager.RunCatalogHitsRebuildOnStartup(ingestCtx, ingest.CatalogBackfillOptions{
 					Days: cfg.LogCatalog.BackfillDaysValue(),
 				})
 			}()
