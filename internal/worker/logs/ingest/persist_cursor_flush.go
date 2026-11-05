@@ -12,9 +12,11 @@ package ingest
 // 最坏丢一个周期的进度，代价是那一段重读一遍（不丢数据）。
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
@@ -170,9 +172,75 @@ func (m *Manager) collectCursorRegistryCandidates() []cursorRegistryCandidate {
 	for _, kp := range pipes {
 		if c, ok := kp.pipe.Cursor(); ok {
 			entries = append(entries, cursorRegistryCandidate{key: kp.key, cursor: c, source: kp.source})
+			// 落盘前把这个「将被跳过」的区间登记成可见缺口（2026-11-05）。
+			m.recordCursorSkipGap(kp.pipe)
 		}
 	}
 	return entries
+}
+
+// recordCursorSkipGap 把 `[已投递, 已读)` 区间登记为 `CURSOR_SKIPPED_ON_RESTART` 缺口。
+//
+// # 它在说什么（「静默丢数据变成可见」的那个转折点）
+//
+// 游标表落盘的是 tailer 的**已读位**。而 WAL 是纯内存队列、重启即丢；账本来自纯内存
+// 索引（`stateindex.OpenInMemory`）重启恒空 ⇒ `rollbackReadToReclaim` 的前提
+// `m.state.Sources[key]` 不成立 ⇒ **永不执行**。
+//
+// 于是新进程从「已读位」继续读，`[已投递, 已读)` 那段就**永久跳过了**：
+// WAL 已亡、账本空白、游标已越过。原本这个过程**完全无声**——
+// 现在每次落盘前把它记下来，运维就能查到「哪一段没投递成功就丢掉了」，
+// 然后从源重采或裁定永久丢失。
+//
+// # 为何不直接回退游标把它重读一遍
+//
+// 重读能让数据不丢，但代价是重投；而 **VictoriaLogs 不按 event_id 去重**
+// （2026-11-05 实测：同一行写两次 count = 2）⇒ 每次重启都会多写一遍。
+// 而 `Delivery` 不前进的条件（VL 持续失败 / 磁盘暂停）恰恰是最需要重启的场景
+// ⇒ 重复量随重启次数**无界增长**。
+//
+// 两边代价不对称时选诚实：承认丢，但让它可查、可告警、可人工裁定。
+//
+// # 为何用 WARN 而不是 INFO
+//
+// 这是数据丢失。虽然区间通常很小（单轮未投递量），但它是**唯一**会留下痕迹的地方——
+// 用 INFO 会淹没在正常启动日志里。
+//
+// # 为何不进「可自动消解」名单
+//
+// 与 `DELIVER_ERROR` 语义不同：后者重试能解决（事件还在 WAL / 还可重读），
+// 本原因只能从**源重采**或人工裁定。混用会让自愈环反复尝试一个永远不会成功的动作。
+func (m *Manager) recordCursorSkipGap(p *pipeline.Pipeline) {
+	if m == nil || p == nil {
+		return
+	}
+	pos, ok := p.Positions()
+	if !ok {
+		// 账本还没建（刚登记的源）：没有「已投递水位」可参照，也就无从判定跳过区间。
+		return
+	}
+	// 跳过区间 = [Delivery, Read)。两者同属账本坐标系（`RecordRange` 由 RecordBase 对齐）。
+	if pos.Read <= pos.Delivery {
+		return // 没有未投递的已读字节（高频正常态，零开销）
+	}
+	from, to := pos.Delivery, pos.Read
+	// Detail 写清三件事（区间大小、为何跳、怎么补）——运维看这一条就能判断怎么补救。
+	detail := fmt.Sprintf(
+		"restart cursor already passed %d un-delivered bytes [%d,%d); "+
+			"WAL is memory-only so those bytes died with the previous process and "+
+			"rollbackReadToReclaim never runs because the index is in-memory; "+
+			"remedy: re-collect this range from the source, or accept it as permanently lost",
+		to-from, from, to)
+	if err := p.Ledger().RecordGap(p.Key(), from, to, ledger.GapReasonCursorSkippedOnRestart, detail); err != nil {
+		slog.Warn("登记「重启跳过未投递区间」缺口失败（该段丢失将不可见）",
+			"logSourceID", p.Key().LogSourceID, "from", from, "to", to, "error", err)
+		return
+	}
+	slog.Warn("重启将跳过一段未投递的已读字节（已登记缺口，可从源重采）",
+		"logSourceID", p.Key().LogSourceID,
+		"sourceGeneration", p.Key().SourceGeneration,
+		"from", from, "to", to, "bytes", to-from,
+		"delivery", pos.Delivery, "read", pos.Read)
 }
 
 // applyCursorRegistryCandidates 把候选行并入内存表，**有变更才落盘**。返回是否写了盘。
