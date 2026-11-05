@@ -12,9 +12,13 @@ package ingest
 // 最坏丢一个周期的进度，代价是那一段重读一遍（不丢数据）。
 
 import (
+	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
+	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
@@ -77,13 +81,121 @@ func (m *Manager) sourcesFromCursorRegistry() map[string]SourceConfig {
 // acquire.FileTailer.ResumeFrom 复核——两层判据各管一段，不重复也不冲突。
 func (m *Manager) resumeCursorFor(key, path string) *acquire.SourceCursor {
 	m.cursorRegistryMu.Lock()
-	defer m.cursorRegistryMu.Unlock()
 	c, ok := m.cursorRegistry[key]
 	if !ok || c.Path != path {
+		m.cursorRegistryMu.Unlock()
 		return nil
 	}
 	out := c.SourceCursor
+	m.cursorRegistryMu.Unlock()
+
+	// **注意：这里只返回游标，不登记缺口。**
+	//
+	// 原因（2026-11-05 第二次修正）：本函数在 `pipeline.New` 的**参数**里被调用，
+	// 而 `m.pipes[key] = p` 在那之后才赋值 ⇒ 此刻 `pipes[key]` 还是 nil，
+	// 拿不到账本，登记会静默失效。
+	//
+	// 所以改为把「本次续读的游标」记进一个待处置集合，由 RegisterSource
+	// 在管道入表之后调 `recordPendingResumeSkipGaps` 统一登记。
+	m.mu.Lock()
+	if m.pendingResumeCursor == nil {
+		m.pendingResumeCursor = make(map[string]resumeCursorNotice, 1)
+	}
+	m.pendingResumeCursor[key] = resumeCursorNotice{path: path, cursor: out}
+	m.mu.Unlock()
 	return &out
+}
+
+// resumeCursorNotice 记下「本次是重启续读，起点在这里」。
+//
+// 为什么不直接在 resumeCursorFor 里登记：那个调用点在 `pipeline.New` 的**参数**里，
+// 而管道要等 `pipeline.New` 返回后才 `m.pipes[key] = p` ⇒ 那一刻拿不到账本。
+// 所以先记下，由 RegisterSource 在管道入表之后统一处置。
+type resumeCursorNotice struct {
+	path   string
+	cursor acquire.SourceCursor
+}
+
+// recordPendingResumeSkipGaps 处置 `pendingResumeCursor` 里累积的续读记录。
+//
+// 由 RegisterSource 在 `m.pipes[key] = p` **之后**调用——此时账本已可用。
+func (m *Manager) recordPendingResumeSkipGaps() {
+	m.mu.Lock()
+	pending := m.pendingResumeCursor
+	m.pendingResumeCursor = nil
+	m.mu.Unlock()
+	for key, notice := range pending {
+		m.recordCursorSkipGap(key, notice.path, notice.cursor)
+	}
+}
+
+// recordCursorSkipGap 把重启续读时跳过的未投递区间登记为可见缺口。
+//
+// # 区间怎么算
+//
+// 起点 = 持久化游标的**逻辑位置**（上次进程"已读"到哪）；
+// 终点 = 文件**当前长度**。
+//
+// 两者之间就是「上次进程读过、没投递成功、重启后不会再读」的字节。
+//
+// # 为何终点取文件长度而不是账本 read 水位
+//
+// 新进程此时刚登记、账本还是空的（Read=Delivery=0），拿不到"那时读到哪"。
+// 文件长度是那个跳过区间上界的**保守估计**：实际跳过量 ≤ 文件长度-游标位。
+// 宁可报大一点（让它可查），也不报小把真正的丢失埋掉。
+func (m *Manager) recordCursorSkipGap(key, path string, cursor acquire.SourceCursor) {
+	if m == nil || path == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		// 文件不在/不可读：无从判断跳过多少。不猜（宁可少报）。
+		return
+	}
+	end := uint64(info.Size())
+	if end <= cursor.LogicalPos {
+		return // 游标已到/超过文件长度：没跳过任何东西
+	}
+	from, to := cursor.LogicalPos, end
+	led := m.ledgerForKey(key)
+	if led == nil {
+		return
+	}
+	// Detail 写清三件事（区间大小 / 为何跳 / 怎么补）——运维看这一条就能判断怎么补救。
+	detail := fmt.Sprintf(
+		"restart resumed from persisted cursor %d; %d un-delivered bytes in [%d,%d) are skipped: "+
+			"the WAL is memory-only so those bytes died with the previous process, and "+
+			"rollbackReadToReclaim never runs because the source index is in-memory; "+
+			"remedy: re-collect this range from the source, or accept it as permanently lost",
+		cursor.LogicalPos, to-from, from, to)
+	if err := led.RecordGap(sourceKeyOf(key), from, to, ledger.GapReasonCursorSkippedOnRestart, detail); err != nil {
+		slog.Warn("登记「重启跳过未投递区间」缺口失败（该段丢失将不可见）",
+			"source", key, "from", from, "to", to, "error", err)
+		return
+	}
+	// 数据丢失用 WARN 而不是 INFO：它是「静默变可见」的转折点，不能淹没在启动日志里。
+	slog.Warn("重启续读跳过一段未投递的已读字节（已登记缺口，可从源重采）",
+		"source", key, "from", from, "to", to, "bytes", to-from,
+		"cursorLogicalPos", cursor.LogicalPos, "fileSize", end)
+}
+
+// ledgerForKey 取该源键对应的账本（管理器的管道还没建好时返回 nil）。
+func (m *Manager) ledgerForKey(key string) *ledger.Ledger {
+	m.mu.Lock()
+	p := m.pipes[key]
+	m.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	return p.Ledger()
+}
+
+// sourceKeyOf 把 "logSourceID/sourceGeneration" 拆成账本主键。
+func sourceKeyOf(key string) ledger.SourceKey {
+	if i := strings.LastIndex(key, "/"); i > 0 {
+		return ledger.SourceKey{LogSourceID: key[:i], SourceGeneration: key[i+1:]}
+	}
+	return ledger.SourceKey{LogSourceID: key}
 }
 
 // flushCursorRegistry 把各源 tailer 的**当前**游标与各源的**显式**配置写回表中并落盘。

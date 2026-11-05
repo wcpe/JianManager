@@ -712,6 +712,12 @@ type Manager struct {
 	// 每源一行（path+inode+cursor），整表约 2KB；整表重写 + rename，**不 fsync**。
 	// 详见 cursor_registry.go 文件头。
 	cursorRegistry cursorRegistry
+	// pendingResumeCursor 记下「本次登记是重启续读、起点在这里」，待管道入表后统一处置。
+	//
+	// 为何需要这层间接：`resumeCursorFor` 在 `pipeline.New` 的**参数**里被调用，
+	// 而 `m.pipes[key] = p` 在那之后才赋值 ⇒ 那一刻拿不到账本，
+	// 直接登记会静默失效。详见 persist_cursor_flush.go 的 recordPendingResumeSkipGaps。
+	pendingResumeCursor map[string]resumeCursorNotice
 	// cursorRegistryMu 保护 cursorRegistry 这张 map **本身**的并发访问。
 	//
 	// 为什么需要独立一把锁（而不是复用 m.mu）：写方有两条互不相同的线程——

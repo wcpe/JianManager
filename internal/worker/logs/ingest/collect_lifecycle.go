@@ -236,6 +236,12 @@ func (m *Manager) Register(source SourceConfig) error {
 	}
 	m.sources[key] = source
 	m.pipes[key] = p
+	// 管道已入表 ⇒ 账本可用 ⇒ 现在才能处置「重启续读跳过的未投递区间」。
+	//
+	// 为什么必须在这里而不是 resumeCursorFor 里（2026-11-05 第二次修正）：
+	// resumeCursorFor 在 `pipeline.New` 的**参数**里被调用，那时 pipes[key] 还是 nil，
+	// 拿不到账本，登记会静默失效。
+	m.recordPendingResumeSkipGaps()
 	// Pipeline换主即释放旧owner的回执与轻量索引，不能等下一次持久化才回收。
 	delete(m.committedReceipts, key)
 	// 归档导入已删除（2026-10-30）：归属闸与补账通道一并下线。

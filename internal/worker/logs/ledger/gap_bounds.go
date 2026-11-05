@@ -78,6 +78,33 @@ const (
 	// 而这里恰恰相反——回读不会发生（游标已过）⇒ 进了名单就等于把真丢的数据当成已愈合。
 	GapReasonWALBacklogDropped = "WAL_BACKLOG_DROPPED"
 
+	// GapReasonCursorSkippedOnRestart 表示**重启续读时跳过了一段未投递的已读字节**（2026-11-05）。
+	//
+	// # 它要说什么
+	//
+	// 游标表落盘的是 tailer 的**已读位**。而 WAL 是纯内存队列、重启即丢；账本来自纯内存
+	// 索引（`stateindex.OpenInMemory`）重启恒空 ⇒ `rollbackReadToReclaim` 的前提
+	// `m.state.Sources[key]` 不成立 ⇒ **永不执行**。
+	//
+	// 于是新进程从持久化游标继续读，`[游标位, 文件当时位置)` 之间那段「已读但未投递」的
+	// 字节：WAL 已亡、账本空白、游标已越过 ⇒ **永久跳过，且原本完全无声**。
+	// 本原因就是把这个「无声」变成「有据可查」。
+	//
+	// # 为何是「登记缺口」而不是「回退游标重读」
+	//
+	// 重读能让数据不丢，但 ⇒ 重投；而 **VictoriaLogs 不按 event_id 去重**
+	// （2026-11-05 实测：同一行写两次 count = 2）⇒ 每次重启都会多写一遍。
+	// 而 `Delivery` 不前进的条件（VL 持续失败 / 磁盘暂停）恰恰最需要重启
+	// ⇒ 重复量随重启次数**无界增长**。
+	//
+	// 两边代价不对称时选诚实：**承认丢，但让它可查、可告警、可人工裁定**。
+	//
+	// # 它为什么归「永久丢失」而不是「可愈合」
+	//
+	// 回读不会发生（游标已过）。唯一补救是从**源**重采那段时间，那是人工动作，
+	// 不是自愈环能做的。阻塞采集也救不回来，只会拿之后所有新日志陪葬。
+	GapReasonCursorSkippedOnRestart = "CURSOR_SKIPPED_ON_RESTART"
+
 	// GapReasonUnclaimedHistoryDropped 表示事件段中「从未被本进程认领」的区间
 	// （既无 verified_runs 也无 request_done）被主动丢弃（2026-10-30）。
 	//
@@ -171,6 +198,9 @@ var gapReasonsPermanentlyLost = []string{
 	"ARCHIVE_READ_ERROR",         // 读归档出错（损坏/截断）
 	// 文件被重写：游标已重锦到 EOF，被跨过的历史内容不再回读（w18 防护）。
 	"FILE_REWRITTEN",
+	// 重启续读时游标已越过未投递区间：WAL 随进程消亡，新进程从游标继续读，
+	// 中间那段「已读未投递」的字节再也回不来 ⇒ 确认丢了。只能从源重采。
+	GapReasonCursorSkippedOnRestart,
 }
 
 // IsGapReasonPermanentlyLost 报告某原因是否属于「已确认丢失、不应阻塞采集」类。
