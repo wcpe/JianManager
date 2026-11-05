@@ -12,11 +12,6 @@ type fakeDelivery struct{ st InsertBatchStats }
 
 func (f fakeDelivery) InsertBatchStats() InsertBatchStats { return f.st }
 
-// fakeSpoolMetrics 固定读数。
-type fakeSpoolMetrics struct{ m SpoolMetrics }
-
-func (f fakeSpoolMetrics) SpoolMetricsSnapshot() SpoolMetrics { return f.m }
-
 // TestWriteDeliveryMetricsFormat 验证 Prometheus 文本格式与字段映射。
 //
 // 变异验证：把某个指标的值硬编码成 0，对应断言会转红。
@@ -82,53 +77,9 @@ func TestWriteDeliveryMetricsNilSafe(t *testing.T) {
 	}
 }
 
-// TestWriteSpoolMetricsFormat 验证磁盘缓冲指标。
-func TestWriteSpoolMetricsFormat(t *testing.T) {
-	src := fakeSpoolMetrics{m: SpoolMetrics{
-		UsedBytes:     1024,
-		CapacityBytes: 100 << 20,
-		Records:       5,
-		Dropped:       2,
-		RecoveredRecs: 3,
-	}}
-	var buf bytes.Buffer
-	if err := WriteSpoolMetrics(&buf, src); err != nil {
-		t.Fatalf("WriteSpoolMetrics: %v", err)
-	}
-	out := buf.String()
-	for _, want := range []string{
-		"log_spool_enabled 1",
-		"log_spool_used_bytes 1024",
-		"log_spool_capacity_bytes 104857600",
-		"log_spool_records 5",
-		"log_spool_dropped_total 2",
-		"log_spool_recovered_records 3",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("缺少 %q\n实际输出：\n%s", want, out)
-		}
-	}
-}
-
-// TestWriteSpoolMetricsDisabled 未启用时 enabled=0。
-func TestWriteSpoolMetricsDisabled(t *testing.T) {
-	var buf bytes.Buffer
-	if err := WriteSpoolMetrics(&buf, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(buf.String(), "log_spool_enabled 0") {
-		t.Errorf("未启用应当 enabled=0：\n%s", buf.String())
-	}
-}
-
-// TestDeliveryMetricsNoHighCardinalityLabels 高基数护栏：
-//
-// 输出里不得出现 log_source_id 这类每源/每事件不同的标签。
-// 它们会让时序库序列数爆炸，而按源看问题应该用日志本身。
 func TestDeliveryMetricsNoHighCardinalityLabels(t *testing.T) {
 	var buf bytes.Buffer
 	_ = WriteDeliveryMetrics(&buf, fakeDelivery{st: InsertBatchStats{Batches: 1}})
-	_ = WriteSpoolMetrics(&buf, fakeSpoolMetrics{})
 	out := buf.String()
 	for _, bad := range []string{"log_source_id=", "event_id=", "record_start=", "instance_id="} {
 		if strings.Contains(out, bad) {

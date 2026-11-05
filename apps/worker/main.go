@@ -47,7 +47,6 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
-	"github.com/wcpe/JianManager/internal/worker/logs/spool"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/orphanaudit"
@@ -831,9 +830,6 @@ func runWorker() {
 	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
 	// 且必须与 /metrics 的读数出口共用同一个实例。
 	var logArchivePurge *retention.ArchiveObjectReclaimer
-	// 磁盘缓冲（FR-510）：VL 不可用时把即将丢弃的 WAL 条目先写盘。
-	// 默认关闭（log_ingest.spool.enabled=false），未启用时为 nil，装配处会上报 Disabled。
-	var spoolMetricsSource ingest.SpoolMetricsSource
 	// 日志 Catalog journal：**纯内存**（2026-11-05 架构决策 ADR-102）。
 	//
 	// # 历史沿革（读到这里的人需要知道为什么绕了一圈）
@@ -1371,47 +1367,8 @@ func runWorker() {
 			logIngest = manager
 			register.SetLogIngestHealth(true, "")
 			workerServer.SetInstanceLogCollector(manager)
-			// FR-510：磁盘缓冲（VL 不可用时把即将被丢弃的 WAL 条目先写盘）。
-			//
-			// 默认关闭——它是采集侧唯一会写磁盘的路径，而生产盘是机械盘、
-			// 且 2026-10-30 已裁定采集侧不做 fsync。开关由运维显式打开。
-			//
-			// 路径解析：相对路径相对 Worker 数据根（不是进程 cwd）。
-			// 配 `var/log/ingest.spool` 即落在 <dataRoot>/var/log/ingest.spool，
-			// 运维不必把宿主绝对路径硬编码进配置文件。
-			if cfg.LogSpool.Enabled {
-				spoolPath := cfg.ResolveSpoolPath(root.Base())
-				sp, spoolErr := spool.Open(spoolPath, spool.Options{
-					Capacity:  cfg.EffectiveSpoolCapacity(),
-					MaxRecord: cfg.EffectiveSpoolMaxRecord(),
-				})
-				if spoolErr != nil {
-					// 不因缓冲打不开而拒绝启动采集：缓冲是「额外的救命层」，
-					// 它的失败不该让本来能跑的采集停摆。
-					slog.Error("磁盘缓冲打开失败，本次启动不使用缓冲（采集继续，VL 不可用时仍会丢最旧）",
-						"path", spoolPath, "error", spoolErr)
-				} else {
-					if !ingest.SpoolConsumerAvailable() {
-						// 打开开关但本构建没有读端：写进去永远不会被重投。
-						// 这里必须明确报错而不是“已启用”，否则运维会以为多了一层保障。
-						slog.Error("磁盘缓冲无法启用：本构建的 spool 只有写端、没有消费者（PeekEvents/Ack 无调用点）；"+
-							"写进去的事件不会被重投。请把 log_spool.enabled 置为 false，否则会造成「已缓冲」的错觉",
-							"path", spoolPath)
-						_ = sp.Close()
-					} else {
-						spoolMetricsSource = spoolAdapter{s: sp}
-						manager.AttachSpool(sp)
-						rc := sp.Recovered()
-						slog.Info("磁盘缓冲已启用",
-							"path", spoolPath,
-							"capacity", cfg.EffectiveSpoolCapacity(),
-							"recoveredRecords", rc.Records,
-							"recoveredStop", rc.Stopped.String())
-					}
-				}
-			} else {
-				slog.Info("磁盘缓冲未启用（log_spool.enabled=false）：VL 不可用且 WAL 到上限时会丢最旧条目")
-			}
+			// FR-510 磁盘缓冲已于 2026-11-06 整体删除（详见 config.go 的说明）：
+			// 它只有写端、没有读端，写进去的事件永远不会被重投。
 			// FR-502 §3.4：把 log_sources 配置接线到实例注册路径。
 			// 按实例的日志命名空间（inst:<id>）匹配配置条目，命中时以其 path
 			// 覆盖规则默认路径（运维在节点侧的显式配置优先于 CP 推导的规则）。
@@ -1810,7 +1767,6 @@ func runWorker() {
 	wsMux.HandleFunc("/metrics", combineMetrics(
 		retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource, indexSQLSource),
 		logIngest,
-		spoolMetricsSource,
 	))
 	// 运行期日志等级调整（GET 读 / POST 改）。
 	// 同样挂在 127.0.0.1 回环 mux 上，不新增暴露面；只调等级不改格式、不持久化，

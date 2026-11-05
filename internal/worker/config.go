@@ -73,8 +73,6 @@ type Config struct {
 	// 不落盘的后果是：进程重启后该源**之前所有天**在查询侧变成「不存在」——
 	// VL 里行还在，没人知道去查它。详见 catalog.BatchedStore 的注释。
 	LogCatalog LogCatalogConfig `mapstructure:"log_catalog"`
-	// LogSpool 是 VL 不可用时的磁盘缓冲（FR-510）。
-	LogSpool   LogSpoolConfig    `mapstructure:"log_spool"`
 	LogSources []LogSourceConfig `mapstructure:"log_sources"`
 	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
 	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
@@ -842,123 +840,6 @@ const DefaultMaxWALEntries int64 = 5000
 // 一次自我制造的流量尖峰。限速只把尖峰摊成若干轮（采集轮持续在跑），未发的条目留在
 // WAL 与位置账本里，**不丢数据**。
 const DefaultMaxReplayEventsPerDrain int = 500
-
-// LogSpoolConfig 是 VL 不可用时的磁盘缓冲配置（FR-510）。
-//
-// # 默认关闭
-//
-// 它只在「VL 挂了几分钟」这类场景下救回本来会被 WAL 丢掉的条目；
-// 但它是采集侧唯一会写磁盘的路径，而生产盘是机械盘、且 2026-10-30 已裁定
-// 采集侧不做 fsync 落盘。所以默认关闭，由运维显式开启并承担那块磁盘占用。
-//
-// # 边界（必须写清，否则会误以为开了就「绝不丢」）
-//
-// 它只把「VL 重启几分钟」从丢日志变成不丢。VL 挂很久、缓冲写满之后仍然丢最旧，
-// 与官方 vlagent 的 -remoteWrite.maxDiskUsagePerURL 语义一致。
-type LogSpoolConfig struct {
-	// Enabled 是否启用。
-	Enabled bool `mapstructure:"enabled"`
-	// Path 缓冲文件路径。
-	//
-	// 相对路径**相对 Worker 数据根**（不是进程 cwd）：运维写 `var/log/ingest.spool`
-	// 即可，不必把宿主绝对路径硬编码进配置文件。绝对路径原样使用。
-	Path string `mapstructure:"path"`
-	// CapacityBytes 数据区字节数，默认 100MiB。
-	CapacityBytes int64 `mapstructure:"capacity_bytes"`
-	// MaxRecordBytes 单条 payload 上限，默认 1MiB。
-	MaxRecordBytes int `mapstructure:"max_record_bytes"`
-}
-
-// DefaultLogSpoolCapacity 磁盘缓冲默认容量：100MiB。
-//
-// 取值依据：100MiB ÷ 平均 2KB/条 ≈ 5 万条；生产 19 源在正常负载下 VL 重启几分钟
-// 产生的量远低于此。再大就变成「用机械盘做一个不可靠队列」，得不偿失。
-const DefaultLogSpoolCapacity int64 = 100 << 20
-
-// DefaultLogSpoolMaxRecord 单条上限 1MiB（与 spool 包默认一致）。
-const DefaultLogSpoolMaxRecord = 1 << 20
-
-// spoolPathUnset 表示未配置路径时用的相对路径（相对数据根）。
-const spoolPathUnset = "var/log/ingest.spool"
-
-// ResolveSpoolPath 把配置里的缓冲路径解析成**绝对路径**。
-//
-// 支持三种写法（用户明确要求「支持 ./ 相对路径也支持绝对路径」）：
-//
-//  1. **绝对路径**（`/mnt/ssd/ingest.spool`、`D:\\spool\\s.bin`）—— 原样返回。
-//  2. **显式相对路径**（`./spool/ingest.spool`、`../spool/s.bin`）—— 相对**进程 cwd**；
-//     这是调用方显式表达了「就是当前目录」的意图，不应被数据根改写。
-//  3. **隐式相对路径**（`var/log/ingest.spool`）—— 相对 **Worker 数据根**（base）。
-//     为什么这一类比 cwd 优先于数据根：运维写这个配置时想的是「放在 Worker 自己的数据目录里」，
-//     而 cwd 会随 systemd 的 WorkingDirectory 变化，无法预期。
-//
-// base 是 Worker 数据根（dataroot.Root.Base()）。它不从 cfg 读——数据根不是配置项
-// （可被 --data-dir / 环境变量覆盖），由拿到 Root 的地方传进来才是唯一真源。
-//
-// 没给 base 且是隐式相对路径时，**保持原样**，不偷偷用 cwd 或临时目录：
-// 那会产出运维根本找不到的缓冲文件，比「不开缓冲」更坑。
-func (c *Config) ResolveSpoolPath(base string) string {
-	if c == nil {
-		return ""
-	}
-	p := strings.TrimSpace(c.LogSpool.Path)
-	if p == "" {
-		p = spoolPathUnset
-	}
-
-	// 1) 绝对路径：原样。
-	if filepath.IsAbs(p) {
-		return p
-	}
-
-	// 2) 显式相对（./ 或 ../ 开头）：相对 cwd。
-	//
-	// 判据用 Clean 后的前两级，而不是简单看 `strings.HasPrefix(p, "./")`：
-	// `./a` 与 `.\\a`（Windows 写法）都应识到；而 `.hidden/x`（以点开头的目录名）
-	// 不应被误判为「./」——它不是路径前缀，是个正常目录名。
-	if isExplicitRelative(p) {
-		if abs, err := filepath.Abs(p); err == nil {
-			return abs
-		}
-		return p
-	}
-
-	// 3) 隐式相对：相对数据根。
-	base = strings.TrimSpace(base)
-	if base == "" {
-		// 没给数据根：保持原样。
-		return p
-	}
-	return filepath.Join(base, p)
-}
-
-// isExplicitRelative 报告路径是否以 `./` 或 `../` 显式开头。
-//
-// 分开判断而不是看首字符是 `.`：`.hidden/x` 是个以点开头的目录名，
-// 不是「当前目录」的表示。误判会把一个本来相对数据根的路径偷偷改成相对 cwd。
-func isExplicitRelative(p string) bool {
-	if p == "." || p == ".." {
-		return true
-	}
-	return strings.HasPrefix(p, "./") || strings.HasPrefix(p, ".\\") ||
-		strings.HasPrefix(p, "../") || strings.HasPrefix(p, "..\\")
-}
-
-// EffectiveSpoolCapacity 返回数据区容量；非正值回退默认。
-func (c *Config) EffectiveSpoolCapacity() int64 {
-	if c == nil || c.LogSpool.CapacityBytes <= 0 {
-		return DefaultLogSpoolCapacity
-	}
-	return c.LogSpool.CapacityBytes
-}
-
-// EffectiveSpoolMaxRecord 返回单条上限；非正值回退默认。
-func (c *Config) EffectiveSpoolMaxRecord() int {
-	if c == nil || c.LogSpool.MaxRecordBytes <= 0 {
-		return DefaultLogSpoolMaxRecord
-	}
-	return c.LogSpool.MaxRecordBytes
-}
 
 type LogCapacityConfig struct {
 	MaxWALBytes uint64 `mapstructure:"max_wal_bytes"`
@@ -2170,10 +2051,10 @@ func Load(path string) (*Config, error) {
 	// 2026-10-29：冷热双层废除后这 4 个键已删（结构体字段不存在）。
 	// 此处不再写它们的 SetDefault——那只会造成「键还在」的错觉；viper 对未知键不报错，
 	// 旧 worker.yml 里留着它们也不会出问题。
-	v.SetDefault("log_spool.enabled", false)
-	v.SetDefault("log_spool.path", spoolPathUnset)
-	v.SetDefault("log_spool.capacity_bytes", DefaultLogSpoolCapacity)
-	v.SetDefault("log_spool.max_record_bytes", DefaultLogSpoolMaxRecord)
+	// 2026-11-06：FR-510 磁盘缓冲（log_spool.*）已整体删除。
+	// 它只有写端、没有读端（Peek/PeekEvents/Ack 在 spool 包外零调用），
+	// 写进去的事件永远不会被重投——那不是缓冲，是「换个地方丢」。
+	// 生产配置里曾开着 enabled=true，导致每次启动白报一条 ERROR。
 	v.SetDefault("log_capacity.max_wal_bytes", DefaultMaxWALBytes)
 	v.SetDefault("log_capacity.recovery_quota_factor", 4)
 	v.SetDefault("log_capacity.recovery_drain_grace", "30m")
