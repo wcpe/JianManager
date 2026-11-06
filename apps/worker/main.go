@@ -1242,6 +1242,7 @@ func runWorker() {
 				ProgressInterval: progressIv,
 				StdioRoot:        stdioRoot,
 				TimeZone:         loc,
+				Catalog:          logStack.Catalog,
 			}, vlHTTPClient, nil)
 			if startErr != nil {
 				slog.Error("新日志采集器启动失败（本次启动不采集，需告警介入）", "error", startErr)

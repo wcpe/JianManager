@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
@@ -61,6 +62,12 @@ type Config struct {
 	// 给调用方留的入口：装配层需要在**启动前**就把已落盘的绑定灌进去，
 	// 以免启动时那几秒的扫描把历史文件判成「无法识别源」而丢弃。
 	Bindings *Bindings
+
+	// Catalog 是日志分区目录（传 nil = 不补建分区）。
+	//
+	// **生产必须传**：查询入口是 `Planner.Plan` → `cat.Get(key)`，没有分区记录
+	// ⇒ 该目标不进视图 ⇒ 用户看到「这天没日志」。而 VL 里明明有一堆行。
+	Catalog *catalog.Catalog
 }
 
 // Runner 是运行中的新采集器（供 main.go 启动与停止）。
@@ -141,6 +148,8 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 	}
 
 	sink := NewSink(vl, resolver, cfg.TimeZone)
+	// 分区补建：没有它，采集照常、VL 有数据，但查询侧全报「这天没日志」。
+	sink.SetPartitionEnsurer(NewPartitionEnsurer(cfg.Catalog))
 	collectorCfg := tailer.CollectorConfig{
 		ID:               "instance-logs",
 		Paths:            paths,

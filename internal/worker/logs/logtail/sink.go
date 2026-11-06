@@ -77,6 +77,10 @@ type Sink struct {
 	// 它会由文件名里的日期校正（见 resolveEventTime）。
 	lastMu    sync.Mutex
 	lastEvent map[string]time.Time // key: logSourceID
+	// partitions 保证「写进 VL 的那一天，查询侧能查到」。
+	//
+	// nil 时不做任何事（未装配查询面，如单测）。
+	partitions *PartitionEnsurer
 }
 
 // Stats 是采集统计（供 /metrics 与排障）。
@@ -101,6 +105,17 @@ func NewSink(client *vlsup.Client, resolver SourceResolver, loc *time.Location) 
 	return &Sink{client: client, resolver: resolver, loc: loc, lastEvent: map[string]time.Time{}}
 }
 
+// SetPartitionEnsurer 注入 Catalog 分区补建器（装配层调用）。
+//
+// 不注入就是「写得进 VL、但查询侧完全看不到」——与历史上那个
+// “数据进 VL 却查不到”的缺陷同型，所以生产装配必须注入。
+func (s *Sink) SetPartitionEnsurer(e *PartitionEnsurer) {
+	if s == nil {
+		return
+	}
+	s.partitions = e
+}
+
 // Consume 实现 tailer.Sink。
 //
 // # 写入失败怎么办
@@ -121,6 +136,15 @@ func (s *Sink) Consume(ctx context.Context, lines []tailer.Line) error {
 	s.mu.Unlock()
 
 	written := 0
+	// touched 记录本批涉及的 (namespace, 事件时间)，用于写成功后补建分区记录。
+	//
+	// 为何等写成功才补：先建记录再写失败，会得到「分区可查、但 VL 里没有行」的
+	// 空分区，查询侧会把它当成「这天有日志但内容是空」——比查不到更具欺骗性。
+	type partitionHit struct {
+		namespace string
+		when      time.Time
+	}
+	var touched []partitionHit
 	for _, l := range lines {
 		logSourceID, stream := s.resolver.Resolve(l.Path)
 		if logSourceID == "" {
@@ -129,13 +153,17 @@ func (s *Sink) Consume(ctx context.Context, lines []tailer.Line) error {
 			s.mu.Unlock()
 			continue
 		}
-		row, err := buildRow(l, logSourceID, stream, s.eventTime(l, logSourceID))
+		when := s.eventTime(l, logSourceID)
+		row, err := buildRow(l, logSourceID, stream, when)
 		if err != nil {
 			continue
 		}
 		payload.WriteString(row)
 		payload.WriteByte('\n')
 		written++
+		if t, perr := time.Parse(time.RFC3339Nano, when); perr == nil {
+			touched = append(touched, partitionHit{namespace: namespaceOf(logSourceID), when: t})
+		}
 	}
 	if written == 0 {
 		return nil
@@ -150,6 +178,11 @@ func (s *Sink) Consume(ctx context.Context, lines []tailer.Line) error {
 	s.mu.Unlock()
 	if err != nil {
 		return fmt.Errorf("logtail: 写 VL 失败(%d 行): %w", written, err)
+	}
+	// 写成功后才补分区记录（见 touched 的注释）。失败不影响采集：
+	// “分区缺记录”是查不到，“中断采集”是彻底没了，严重程度差一个数量级。
+	for _, hit := range touched {
+		_ = s.partitions.EnsureForEventTime(hit.namespace, hit.when)
 	}
 	return nil
 }

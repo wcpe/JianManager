@@ -16,7 +16,6 @@ import (
 //
 // 适配层放在 apps（同时依赖两边）正是本仓既有的跨包适配模式：
 // `HitsSourceFunc` 也是这么桥接的。
-//
 type logTailCollector struct {
 	runner *logtail.Runner
 }
