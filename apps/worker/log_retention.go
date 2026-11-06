@@ -8,7 +8,6 @@ import (
 	"time"
 
 	workercfg "github.com/wcpe/JianManager/internal/worker"
-	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
@@ -234,16 +233,15 @@ func parsePartitionDay(raw string) (time.Time, error) {
 
 // newDiskPercentReader 返回磁盘使用率读数。
 //
-// 直接复用采集侧**同一份** CapacityProvider（`ingest.DiskCapacityProvider`）：
-// 容量门禁与保留触发若各采一次磁盘，两者迟早会给出不同结论，
-// 而现场只会表现成「有时降级有时不降级」，极难归因。
-func newDiskPercentReader(provider func() (acquire.CapacityBudget, error)) retention.DiskReader {
+// # 为何签名收窄成 float64
+//
+// 原实现要一个 `acquire.CapacityBudget`（旧链路的容量模型：WAL 上限、缺口上限、
+// 降级/暂停阈值）。而保留策略只用到其中的 `DiskUsagePercent` —— 其余字段属于
+// 采集侧内部概念，新架构里根本不存在。保留整包会让“为取一个字段而传一整个模型”
+// 的分歧永久留着；直接收窄到数字，两边都清楚。
+func newDiskPercentReader(provider func() (float64, error)) retention.DiskReader {
 	return func() (float64, error) {
-		budget, err := provider()
-		if err != nil {
-			return 0, err
-		}
-		return budget.DiskUsagePercent, nil
+		return provider()
 	}
 }
 

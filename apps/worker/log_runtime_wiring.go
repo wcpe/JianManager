@@ -85,67 +85,6 @@ func (c *managedLogClients) client(owner catalog.Owner) (*vlsup.Client, error) {
 	return c.Main, nil
 }
 
-// managedLogWriteRoute 只做物理日路由预检；真正许可由 ingest 持有到写、校验和发布结束。
-func managedLogWriteRoute(cat *catalog.Catalog, clients *managedLogClients, hot *vlsup.Client) func(ingest.SourceConfig) (*vlsup.Client, bool, error) {
-	return func(source ingest.SourceConfig) (*vlsup.Client, bool, error) {
-		if cat == nil {
-			return nil, false, fmt.Errorf("日志 Catalog 不可用，不能猜测写入层")
-		}
-		target, err := cat.WriteAdmission(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay})
-		if err != nil {
-			return nil, true, err
-		}
-		if clients == nil {
-			if target.Owner == catalog.OwnerHot && hot != nil {
-				return hot, false, nil
-			}
-			return nil, false, fmt.Errorf("日志 owner %s 接收端未装配", target.Owner)
-		}
-		if err := clients.ready(context.Background(), target.Owner); err != nil {
-			return nil, false, err
-		}
-		client, err := clients.client(target.Owner)
-		return client, false, err
-	}
-}
-
-// managedLogPermitRoute 只使用已获取许可的固定目标，后续冻结不能反向取消在途提交。
-func managedLogPermitRoute(clients *managedLogClients, hot *vlsup.Client) func(ingest.SourceConfig, *catalog.WritePermit) (*vlsup.Client, error) {
-	return func(_ ingest.SourceConfig, permit *catalog.WritePermit) (*vlsup.Client, error) {
-		if permit == nil || (permit.Owner != catalog.OwnerHot && permit.Owner != catalog.OwnerCold) {
-			return nil, fmt.Errorf("日志写入缺少有效 HOT/COLD 物理日许可")
-		}
-		if clients == nil {
-			if permit.Owner == catalog.OwnerHot && hot != nil {
-				return hot, nil
-			}
-			return nil, fmt.Errorf("日志许可 owner %s 接收端未装配", permit.Owner)
-		}
-		if err := clients.ready(context.Background(), permit.Owner); err != nil {
-			return nil, err
-		}
-		return clients.client(permit.Owner)
-	}
-}
-
-func managedLogReadRoute(clients *managedLogClients, hot *vlsup.Client) func(ingest.SourceConfig, *catalog.Record) (*vlsup.Client, error) {
-	return func(_ ingest.SourceConfig, record *catalog.Record) (*vlsup.Client, error) {
-		if record == nil || record.PublishedProjection == nil {
-			return nil, fmt.Errorf("日志没有已发布的权威投影")
-		}
-		if clients == nil {
-			if record.Owner == catalog.OwnerHot && hot != nil {
-				return hot, nil
-			}
-			return nil, fmt.Errorf("日志 owner %s 读取端未装配", record.Owner)
-		}
-		if err := clients.ready(context.Background(), record.Owner); err != nil {
-			return nil, err
-		}
-		return clients.client(record.Owner)
-	}
-}
-
 // readyRetentionMover 不修改开关；冷层停止或传输失效时保留原物，后续同一驱动可恢复。
 func readyRetentionMover(mover retention.Mover, clients *managedLogClients, budget *vlsup.BudgetController) retention.Mover {
 	return retention.MoverFunc(func(ctx context.Context, namespace, day string) (string, error) {

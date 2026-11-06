@@ -40,7 +40,6 @@ type instanceGzAdopter struct {
 }
 
 // adoptStats 是一轮的读数。
-//
 type adoptStats struct {
 	// Scanned 是候选 .gz 文件数（已去重前）。
 	Scanned int

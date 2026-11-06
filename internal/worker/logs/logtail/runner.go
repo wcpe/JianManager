@@ -65,6 +65,13 @@ type Config struct {
 	// 以免启动时那几秒的扫描把历史文件判成「无法识别源」而丢弃。
 	Bindings *Bindings
 
+	// HitsSource 提供「(源,天) 有数据」事实，用于**启动期重建** Catalog 分区。
+	//
+	// nil = 不做启动重建（历史天在查询侧仍不可查，但不静默——会在启动日志说明）。
+	HitsSource HitsSource
+	// CatalogRebuildDays 是启动重建的回溯天数（<=0 用默认 30）。
+	CatalogRebuildDays int
+
 	// Catalog 是日志分区目录（传 nil = 不补建分区）。
 	//
 	// **生产必须传**：查询入口是 `Planner.Plan` → `cat.Get(key)`，没有分区记录
@@ -165,7 +172,8 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 	sink := NewSink(vl, resolver, cfg.TimeZone)
 	sink.SetCharset(cfg.Charset)
 	// 分区补建：没有它，采集照常、VL 有数据，但查询侧全报「这天没日志」。
-	sink.SetPartitionEnsurer(NewPartitionEnsurer(cfg.Catalog))
+	ensurer := NewPartitionEnsurer(cfg.Catalog)
+	sink.SetPartitionEnsurer(ensurer)
 	// 静态路径：stdio 目录 + 调用方显式给的额外路径。
 	paths := append([]string{}, cfg.Paths...)
 	paths = append(paths, stdio.Paths()...)
@@ -218,6 +226,15 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 			slog.Error("logtail: 采集循环退出", "error", err)
 		}
 	}()
+
+	// 启动重建：补上「投递当时没建」的历史分区（停机期间 / 功能上线前的数据）。
+	// 必须异步且不拒启——它是补救动作，失败不该拖坠 Worker。
+	if cfg.HitsSource != nil && cfg.Catalog != nil {
+		RunCatalogRebuildOnStartup(runCtx, cfg.Catalog, ensurer, bindings, cfg.HitsSource,
+			CatalogRebuildOptions{Days: cfg.CatalogRebuildDays})
+	} else if cfg.Catalog != nil {
+		slog.Info("未接 hits 数据源：跳过启动期 Catalog 分区重建（历史天在查询侧仍不可查）")
+	}
 
 	scanIv, progressIv := collectorCfg.EffectiveIntervals()
 	slog.Info("日志采集器已启动（tailer 模式：对齐 Fluent Bit / Filebeat）",

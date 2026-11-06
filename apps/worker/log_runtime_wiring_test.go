@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
@@ -207,52 +206,6 @@ func TestWiringHealthFailureDoesNotReplaceClientsAndIsNotPublication(t *testing.
 	snapshots, err := cat.SnapshotAndLease(catalog.QuerySnapshotRequest{ViewID: viewID, Keys: []catalog.PartitionKey{key}, TTL: time.Minute})
 	require.NoError(t, err)
 	require.Empty(t, snapshots, "没有可发布投影时不能因HTTP健康登记可读快照")
-}
-
-// TestWiringAdmissionNeverFallsBackDuringFreeze 冻结日零外发，已持许可仍可完成。
-//
-// 2026-10-29：只剩一个受管实例，「回退到 HOT」这条路本身不存在了 ——
-// 但本用例钉的不变量更重要且仍然成立：**物理日冻结后，未持有许可的写入必须被拒且零外发**。
-func TestWiringAdmissionNeverFallsBackDuringFreeze(t *testing.T) {
-	transport := &wiringTransport{rows: map[string][]byte{}, health: true}
-	supervisor := newWiringSupervisor(t, t.TempDir(), &wiringFakeFactory{}, transport, "constructed-password")
-	clients, err := newManagedLogClients(supervisor)
-	require.NoError(t, err)
-	require.NoError(t, supervisor.Start(context.Background(), vlsup.NamespaceHot))
-	cat := catalog.New(nil)
-	key := catalog.PartitionKey{StorageNamespace: "inst:1", UTCDay: "2026-09-22"}
-	record := catalog.NewStableRecord(key, catalog.OwnerHot, 1, "20260922")
-	record.PublishedProjection = wiringRange(catalog.OwnerHot).Projection
-	record.PublishedProjection.ManifestVersion = "manifest"
-	require.NoError(t, cat.Put(record))
-	permit, err := cat.AcquireWritePermit(key)
-	require.NoError(t, err)
-	defer cat.ReleaseWritePermit(permit)
-	_, err = cat.BeginDayMigration(key.UTCDay, catalog.OwnerCold, "20260922")
-	require.ErrorIs(t, err, catalog.ErrWritePermitsActive)
-	client, frozen, err := managedLogWriteRoute(cat, clients, clients.Main)(ingest.SourceConfig{StorageNamespace: "new", UTCDay: key.UTCDay})
-	require.ErrorIs(t, err, catalog.ErrPhysicalDayFrozen)
-	require.Nil(t, client)
-	require.True(t, frozen)
-	client, err = managedLogPermitRoute(clients, clients.Main)(ingest.SourceConfig{}, permit)
-	require.NoError(t, err)
-	require.Same(t, clients.Main, client)
-	coldKey := catalog.PartitionKey{StorageNamespace: "old", UTCDay: "2026-09-21"}
-	require.NoError(t, cat.Put(catalog.NewStableRecord(coldKey, catalog.OwnerCold, 2, "20260921")))
-	client, frozen, err = managedLogWriteRoute(cat, clients, clients.Main)(ingest.SourceConfig{StorageNamespace: "new", UTCDay: coldKey.UTCDay})
-	require.NoError(t, err)
-	require.False(t, frozen)
-	require.Same(t, clients.Main, client, "缺key时必须遵守同物理日COLD归属而非默认HOT")
-	readRoute := managedLogReadRoute(clients, clients.Main)
-	coldRecord := catalog.NewStableRecord(coldKey, catalog.OwnerCold, 2, "20260921")
-	coldRecord.PublishedProjection = wiringRange(catalog.OwnerCold).Projection
-	client, err = readRoute(ingest.SourceConfig{}, coldRecord)
-	require.NoError(t, err)
-	require.Same(t, clients.Main, client, "只读取证不能误走冻结写路由或默认HOT")
-	_, err = readRoute(ingest.SourceConfig{}, nil)
-	require.Error(t, err)
-	_, err = managedLogPermitRoute(clients, clients.Main)(ingest.SourceConfig{}, nil)
-	require.Error(t, err)
 }
 
 type wiringPublisher struct{ calls int }

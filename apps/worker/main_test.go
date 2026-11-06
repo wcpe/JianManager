@@ -5,15 +5,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 )
 
@@ -264,65 +260,6 @@ func TestFlagValueRejectsDuplicates(t *testing.T) {
 	}
 }
 
-// TestWriteIndexExportAtomicallyOverwritesTarget 已随功能退场（2026-11-05 订正）。
-//
-// 它原本守的是「导出成功后目标文件是新的合法 JSON 快照，且不留临时文件」。
-// 但采集索引在 2026-10-30 改成纯内存后（机械盘不落盘裁定），磁盘上已不存在
-// `var/log/ingest.index.db`，`ingest.ExportIndexJSON` 也随之变成恒返错的桩：
-//
-//	"ingest: 采集索引已改为纯内存……无法离线导出；
-//	 当前唯一跨重启命存的采集侧状态是 var/log/ingest.cursor"
-//
-// 于是本用例的断言（导出应成功）与产品现状直接矛盾——它从一开始就是**死测试**：
-// 测的是一条已经不存在的成功路径。改成断言「如实报错」后，它重新变成有效的守护：
-// 若有人将来把 ExportIndexJSON 改回静默成功（或静默写空文件），本用例会转红。
-func TestWriteIndexExportAtomicallyOverwritesTarget(t *testing.T) {
-	root := t.TempDir()
-	outPath := filepath.Join(root, "snapshot.json")
-	if err := os.WriteFile(outPath, []byte("old-snapshot"), 0o600); err != nil {
-		t.Fatalf("预置旧快照失败: %v", err)
-	}
-	err := writeIndexExportAtomically(root, outPath)
-	require.Error(t, err, "采集索引已纯内存化，导出必须如实报错而不是假装成功")
-	require.Contains(t, err.Error(), "纯内存",
-		"报错必须说清真实原因（纯内存化），而不是一个笼统的 IO 错误")
-
-	// 关键：失败时**不得**动目标文件（这是该函数原子性的真正价值）。
-	data, readErr := os.ReadFile(outPath)
-	require.NoError(t, readErr)
-	require.Equal(t, "old-snapshot", string(data),
-		"导出失败不得清空/截断已有的旧快照——那正是回滚时最需要的东西")
-	assertNoTempExportLeftovers(t, filepath.Dir(outPath))
-}
-
-// TestWriteIndexExportAtomicallyKeepsOldSnapshotOnFailure 守失败路径（本轮修复的核心理由）：
-// 目标文件是「回滚前的快照」，导出失败**不得**把它清零。
-//
-// 为什么能转红：改回 `os.OpenFile(out, O_CREATE|O_TRUNC|O_WRONLY)` 后再导出的旧写法，
-// 本用例里旧快照会被截断成 0 字节 ⇒ 断言读到空内容即失败。
-func TestWriteIndexExportAtomicallyKeepsOldSnapshotOnFailure(t *testing.T) {
-	dir := t.TempDir()
-	outPath := filepath.Join(dir, "snapshot.json")
-	const oldSnapshot = "old-snapshot"
-	if err := os.WriteFile(outPath, []byte(oldSnapshot), 0o600); err != nil {
-		t.Fatalf("预置旧快照失败: %v", err)
-	}
-
-	// 根目录下没有索引库 ⇒ 导出必然失败。
-	if err := writeIndexExportAtomically(filepath.Join(dir, "empty-root"), outPath); err == nil {
-		t.Fatal("索引库缺失时导出应报错")
-	}
-
-	data, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatalf("旧快照应仍然存在: %v", err)
-	}
-	if string(data) != oldSnapshot {
-		t.Fatalf("导出失败后旧快照必须原样保留，实际内容 %q", string(data))
-	}
-	assertNoTempExportLeftovers(t, dir)
-}
-
 // assertNoTempExportLeftovers 断言导出目录里没有残留的临时文件（成功/失败路径都不许留）。
 func assertNoTempExportLeftovers(t *testing.T, dir string) {
 	t.Helper()
@@ -334,76 +271,5 @@ func assertNoTempExportLeftovers(t *testing.T, dir string) {
 		if strings.Contains(entry.Name(), ".tmp-") {
 			t.Fatalf("导出目录残留临时文件 %q", entry.Name())
 		}
-	}
-}
-
-// 回归（INGEST-12 可达面，2026-10-12 终审修复）：兜底环读数的打点面必须**真的包含**
-// 三档自愈步的实发次数与耗时——尤其是「破环直投」步（`DirectDeliverProbes` /
-// `NsRollingDirectDeliver`）。
-//
-// 为什么需要这条守门：本仓纪律是「任何新增导出必须同批带可达面 + 可达性红证」
-// （用户 2026-10-05 定的）。而 INGEST-12 首次修复**违反了自己引用的这条纪律**——
-// `sweepDirectDeliverProbes` / `nsRollingDirectDeliver` 两个探针在 9091 行落了值、
-// 在 ResumeSweepStats 里也导出了，但**没有任何外部读者**：打点行里根本没有它们，
-// 于是"该步在兜底环诊断里不可见"这个原始诉求实际未被解决（修了缺陷也无人能观测）。
-//
-// 转红方式（实测）：删掉 `sweepStatsLogAttrs` 里任一 `*_probes` 键（例如把
-// `"direct_deliver_probes", st.DirectDeliverProbes,` 整行删除）⇒ 对应断言立即红。
-func TestSweepStatsLogAttrsExposeAllSelfHealSteps(t *testing.T) {
-	st := ingest.ResumeSweepStats{
-		SweepTicks:             7,
-		SweepPanics:            0,
-		EligibleNow:            3,
-		RollingProbes:          11,
-		NsRolling:              22_000_000, // 22ms
-		DeliveryProbes:         12,
-		NsRollingDelivery:      33_000_000, // 33ms
-		DirectDeliverProbes:    13,
-		NsRollingDirectDeliver: 44_000_000, // 44ms
-	}
-	attrs := sweepStatsLogAttrs(st)
-
-	// 摊平成 key → value，便于按名断言（也顺带验证「键值对成对」这一 slog 前置条件）。
-	require.Equal(t, 0, len(attrs)%2, "slog 键值对必须成对（奇数个参数会让 slog 打 !BADKEY）")
-	byKey := make(map[string]any, len(attrs)/2)
-	for i := 0; i < len(attrs); i += 2 {
-		key, ok := attrs[i].(string)
-		require.True(t, ok, "第 %d 个参数必须是键（字符串），实际 %T", i, attrs[i])
-		byKey[key] = attrs[i+1]
-	}
-
-	// 三档自愈步：次数 + 耗时（ms）都必须可达。
-	for _, want := range []struct {
-		probesKey string
-		msKey     string
-		probes    int64
-		ms        int64
-	}{
-		{"rolling_probes", "ms_rolling", st.RollingProbes, st.NsRolling / 1e6},
-		{"delivery_probes", "ms_rolling_delivery", st.DeliveryProbes, st.NsRollingDelivery / 1e6},
-		{"direct_deliver_probes", "ms_rolling_direct_deliver", st.DirectDeliverProbes, st.NsRollingDirectDeliver / 1e6},
-	} {
-		got, ok := byKey[want.probesKey]
-		require.True(t, ok,
-			"打点面缺 %q：该探针将重新变成「只有定义、没有读者」的不可达导出（INGEST-12 的原始诉求）",
-			want.probesKey)
-		require.Equal(t, want.probes, got, "%s 必须原样透出探针值", want.probesKey)
-
-		gotMs, ok := byKey[want.msKey]
-		require.True(t, ok, "打点面缺耗时 %q（只报次数无法判「该步是否又在拖慢整轮」）", want.msKey)
-		require.Equal(t, want.ms, gotMs, "%s 必须按 ms 透出耗时", want.msKey)
-	}
-
-	// 心跳哨兵与既有读数不得在重构中丢失（本次把整段抽成函数，属高风险改动面）。
-	for _, key := range []string{
-		"ticks", "panics", "eligible", "skip_blocked",
-		"ms_delivery", "ms_resolve", "ms_evaluate", "ms_round_total", "last_round_sources",
-		"ms_round_other", "ms_scan_elig", "ms_backlog_total", "ms_sync_quota", "ms_other_rest",
-		"ms_wait_backlog_max", "ms_wait_quota_max", "ms_wait_sources_max", "ms_wait_resume_max",
-		"inflight", "skip_inflight_cap", "candidates", "revived",
-		"skip_backpressure", "skip_hysteresis", "skip_enumeration", "rising_streak",
-	} {
-		_, ok := byKey[key]
-		require.True(t, ok, "抽取 sweepStatsLogAttrs 时丢失了既有读数 %q", key)
 	}
 }

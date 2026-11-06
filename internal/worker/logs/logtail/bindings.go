@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -91,6 +92,24 @@ func OpenBindings(path, stdioRoot string) (*Bindings, error) {
 		b.entries[e.UUID] = e
 	}
 	return b, nil
+}
+
+// Entries 返回当前全部绑定的副本（按 UUID 排序，便于断言与日志对比）。
+//
+// 供启动期 Catalog 重建用：它需要知道「哪些命名空间是平台管理的」，
+// 不能把 VL 里的探针数据也建成分区。
+func (b *Bindings) Entries() []BindingEntry {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	out := make([]BindingEntry, 0, len(b.entries))
+	for _, e := range b.entries {
+		out = append(out, e)
+	}
+	b.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].UUID < out[j].UUID })
+	return out
 }
 
 // WorkDirs 返回当前已绑定实例的工作目录（去重、已 Clean）。
