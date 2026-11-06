@@ -19,14 +19,16 @@ type Config struct {
 	// Enabled 是总开关。false 时 Runner 不会被创建（走旧路径）。
 	Enabled bool
 
-	// Paths 是采集 glob 列表。
+	// Paths 是**额外的**采集 glob（通常留空，由绑定表推导）。
 	//
-	// 典型值（生产）：
+	// # 为何通常不用配
 	//
-	//	/home/wxys233/servers/*/logs/*.log     ← bukkit/login/lobby
-	//	/home/wxys233/servers/*/proxy.log.[0-9]*  ← bungee
+	// 采集路径由**已绑定实例的 WorkDir** 每轮现算（见 Bindings.PathsProvider）。
+	// 这样新建实例的日志无需重启就能被采到，也不会因为“猜错一个 serversRoot”
+	// 而静默采不到任何东西（真机实测：生产实例在 /home/wxys233/servers，
+	// 而 dataRoot/var/servers 里 0 个实例目录）。
 	//
-	// 已排除的扩展（.gz/.lck/.zip/.tmp）写在 Exclude。
+	// 只有需要采**非实例**日志（节点自身日志等）时才需要在这里显式给出。
 	Paths []string
 
 	// Exclude 是排除规则。默认含 .gz（用户明确要求不采归档）。
@@ -114,18 +116,16 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 	if vl == nil {
 		return nil, fmt.Errorf("logtail: VL 客户端未装配")
 	}
-	if len(cfg.Paths) == 0 && strings.TrimSpace(cfg.StdioRoot) == "" {
-		return nil, fmt.Errorf("logtail: 未配置采集路径")
-	}
+	// 路径来源有三处：调用方显式给的、stdio 桥接目录、以及**绑定表推导的实例目录**（动态）。
+	// 所以这里不要求 Paths 非空——生产就是“静态一个都不配，全靠绑定表”的形态。
 
 	// stdio 桥接：把进程输出（STDIO_PRIMARY 类实例的唯一日志来源）落成文件，
 	// 再交给同一个 tailer 采——避免“管道直写 VL”与“文件采集”两套字段/去重口径分叉。
 	stdio := NewStdioBridge(cfg.StdioRoot)
-	paths := append([]string{}, cfg.Paths...)
-	paths = append(paths, stdio.Paths()...)
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("logtail: 未配置采集路径")
-	}
+	// 静态路径可以一个都没有（生产就是这种情况：全靠绑定表推导），
+	// 所以这里不要求 len(paths)>0——真正的“到底有哪些文件”由每轮扫描决定。
+	// 没有任何绑定 + 没配 paths 时扫描结果恒为空，但这**不是错误**：
+	// 新装的节点在 CP 下发第一个实例前本来就没有日志可采。
 
 	reg, err := tailer.OpenRegistry(cfg.RegistryPath)
 	if err != nil {
@@ -150,9 +150,17 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 	sink := NewSink(vl, resolver, cfg.TimeZone)
 	// 分区补建：没有它，采集照常、VL 有数据，但查询侧全报「这天没日志」。
 	sink.SetPartitionEnsurer(NewPartitionEnsurer(cfg.Catalog))
+	// 静态路径：stdio 目录 + 调用方显式给的额外路径。
+	paths := append([]string{}, cfg.Paths...)
+	paths = append(paths, stdio.Paths()...)
+
 	collectorCfg := tailer.CollectorConfig{
-		ID:               "instance-logs",
-		Paths:            paths,
+		ID:    "instance-logs",
+		Paths: paths,
+		// 动态采集路径：每轮扫描现取「当前已绑定实例的 WorkDir」× 两种日志布局。
+		// 不这样做的话，新建实例的日志要等到 Worker 重启才被采——而 Worker
+		// 可能几个月不重启，那段时间的日志就静默地不存在。
+		ExtraPaths:       bindings.PathsProvider(),
 		Exclude:          cfg.Exclude,
 		ScanInterval:     cfg.ScanInterval,
 		ProgressInterval: cfg.ProgressInterval,
@@ -275,22 +283,40 @@ func ResolveRegistryPath(base, configured string) string {
 	return filepath.Join(base, p)
 }
 
-// DefaultPaths 返回生产的默认采集路径（基于服务器根目录）。
+// DefaultPaths 返回按**实例工作目录**构造的采集 glob（不再是“猜一个 root”）。
 //
-// 与旧实现 `policy_rules.go` 的规则表同口径：
-//   - bukkit/waterfall/velocity: `<workdir>/logs/latest.log`
-//   - bungee: `<workdir>/proxy.log.0`
+// # 为何不能用一个 serversRoot 推导
 //
-// 用两个 glob 覆盖两种形态，并依赖 Exclude 排掉归档。
-func DefaultPaths(serversRoot string) []string {
-	root := strings.TrimSpace(serversRoot)
-	if root == "" {
-		return nil
+// 真机实测：生产实例的 WorkDir 由 CP 逐个下发，可以是任意绝对路径
+// （现场是 `/home/wxys233/servers/*`，而 `<dataRoot>/var/servers` 里只有
+// `.pid`/`.sock`，0 个实例目录）。用一个 root 推 glob 就得到 0 个匹配——
+// 采集“静默无数据”，而日志里只有一句“已启动”。
+//
+// 故改为：每个已绑定实例的 WorkDir × 规则表里的两种布局。
+//
+// 取三种可能：
+//   - `<workDir>/logs/*.log`   bukkit / waterfall / velocity（含 latest.log 与轮转出的日期.log）
+//   - `<workDir>/proxy.log.*`  bungee（proxy.log.0 与 proxy.log.N）
+func DefaultPathsFor(workDirs []string) []string {
+	// 同一 workDir 只产生两条 pattern，去重后返回（重复 pattern 会白白多扫一遍）。
+	seen := make(map[string]struct{}, len(workDirs)*2)
+	out := make([]string, 0, len(workDirs)*2)
+	add := func(p string) {
+		if _, dup := seen[p]; dup {
+			return
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
 	}
-	return []string{
-		filepath.Join(root, "*", "logs", "*.log"), // bukkit / login / lobby
-		filepath.Join(root, "*", "proxy.log.*"),   // bungee
+	for _, wd := range workDirs {
+		root := strings.TrimSpace(wd)
+		if root == "" {
+			continue
+		}
+		add(filepath.Join(root, "logs", "*.log"))
+		add(filepath.Join(root, "proxy.log.*"))
 	}
+	return out
 }
 
 // EnsureDir 建目录（测试与部署辅助）。

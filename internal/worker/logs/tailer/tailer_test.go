@@ -25,8 +25,8 @@ func appendTo(t *testing.T, path, content string) {
 
 // collectSink 收集所有经过的行（线程安全）。
 type collectSink struct {
-	mu    sync.Mutex
-	lines []string
+	mu       sync.Mutex
+	lines    []string
 	failNext bool
 }
 

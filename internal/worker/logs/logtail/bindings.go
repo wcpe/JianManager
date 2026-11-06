@@ -93,6 +93,37 @@ func OpenBindings(path, stdioRoot string) (*Bindings, error) {
 	return b, nil
 }
 
+// WorkDirs 返回当前已绑定实例的工作目录（去重、已 Clean）。
+//
+// 供采集器每轮现取采集 glob——实例由 CP 在运行期下发，启动时不知道全量。
+func (b *Bindings) WorkDirs() []string {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	seen := make(map[string]struct{}, len(b.entries))
+	out := make([]string, 0, len(b.entries))
+	for _, e := range b.entries {
+		if e.WorkDir == "" {
+			continue
+		}
+		if _, dup := seen[e.WorkDir]; dup {
+			continue
+		}
+		seen[e.WorkDir] = struct{}{}
+		out = append(out, e.WorkDir)
+	}
+	return out
+}
+
+// PathsProvider 返回采集 glob 的实时提供函数（供 tailer.CollectorConfig.ExtraPaths）。
+//
+// 每轮扫描现算，因此**新建实例的日志无需重启就能被采到**。
+func (b *Bindings) PathsProvider() func() []string {
+	return func() []string { return DefaultPathsFor(b.WorkDirs()) }
+}
+
 // Path 返回绑定表路径（空串 = 纯内存）。
 func (b *Bindings) Path() string {
 	if b == nil {

@@ -15,6 +15,29 @@ type DiscoveredFile struct {
 	Identity FileIdentity
 }
 
+// Patterns 返回当前生效的采集 glob（含运行期追加项）。
+//
+// # 为何路径可以动态加
+//
+// 实例的工作目录由 CP 在**运行期**逐个下发（建实例 / 重启后重注册），启动时
+// 不可能知道全量。若只认启动时那批 glob，新建实例的日志要等到 Worker 重启才被采——
+// 而 Worker 可能几个月不重启，那段时间的日志就静默地不存在。
+//
+// 所以按需读取额外路径：只在本函数里合并，扫描本身仍是无状态纯函数。
+func (c CollectorConfig) Patterns() []string {
+	if c.ExtraPaths == nil {
+		return c.Paths
+	}
+	extra := c.ExtraPaths()
+	if len(extra) == 0 {
+		return c.Paths
+	}
+	out := make([]string, 0, len(c.Paths)+len(extra))
+	out = append(out, c.Paths...)
+	out = append(out, extra...)
+	return out
+}
+
 // Scan 执行一次 glob 扫描，返回当前匹配且未被排除的文件。
 //
 // # 对齐官方设计
@@ -41,7 +64,8 @@ type DiscoveredFile struct {
 func (c CollectorConfig) Scan() ([]DiscoveredFile, error) {
 	seen := make(map[string]struct{})
 	var out []DiscoveredFile
-	for _, pattern := range c.Paths {
+	patterns := c.Patterns()
+	for _, pattern := range patterns {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			// 单个 pattern 语法错不拖垮整体：其余 pattern 照常扫。

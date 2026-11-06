@@ -1214,10 +1214,11 @@ func runWorker() {
 			slog.Error("log_tailer 采集周期非法，新采集器不启动", "error", ivErr)
 			register.SetLogIngestHealth(false, ivErr.Error())
 		} else {
+			// 实例日志的采集路径**不在这里推导**：它由绑定表（CP 下发的���例登记）每轮现算。
+			// 在这里猜一个 serversRoot 推 glob 是错的——真机实测生产实例位于
+			// /home/wxys233/servers，而 dataRoot/var/servers 里 0 个实例目录，
+			// 按后者扫就是“静默采不到任何东西”。
 			paths := cfg.LogTailer.Paths
-			if len(paths) == 0 {
-				paths = logtail.DefaultPaths(serversDir)
-			}
 			// 时区：与旧链路共用同一个节点级默认（键 log_ingest.time_zone）。
 			// 为什么复用而不是新开一个键：它表达的是「这台机器上的 JVM 写的是哪个时区的时间」，
 			// 与用哪个采集器无关；两个键会立刻出现在同一部署上配得不一致。

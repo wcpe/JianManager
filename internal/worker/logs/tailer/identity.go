@@ -259,6 +259,12 @@ type CollectorConfig struct {
 
 	// RegistryPath 是位点表路径（Fluent Bit `db`）。
 	RegistryPath string
+
+	// ExtraPaths 在每次扫描时提供**运行期新增**的采集 glob（nil = 无动态项）。
+	//
+	// 为何不用额外字段存一个切片：实例由 CP 在运行期逐个下发，启动时不可能
+	// 知道全量。用回调让调用方每轮现取，避免“启动快照定了就再也不变”。
+	ExtraPaths func() []string
 }
 
 // EffectiveIntervals 返回生效的扫描/读取间隔（含默认值）。
