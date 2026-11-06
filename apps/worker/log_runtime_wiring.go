@@ -9,13 +9,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
-	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
@@ -130,20 +127,6 @@ func (p readyRehydratePublisher) ReportFailure(key archive.PartitionKey, reason 
 		return reporter.ReportFailure(key, reason)
 	}
 	return nil
-}
-
-// dayMigrationInputBridge 只发布已构造的采集运行时，避免迁移早于 canonical 存储恢复。
-type dayMigrationInputBridge struct {
-	manager atomic.Pointer[ingest.Manager]
-}
-
-func (b *dayMigrationInputBridge) input(record *catalog.Record) ([]logtypes.Event, error) {
-	manager := b.manager.Load()
-	if manager == nil {
-		return nil, fmt.Errorf("日志迁移 canonical 输入尚未恢复，稍后重试")
-	}
-	// 事件段已整体删除：canonical 迁移输入不再可用。
-	return nil, fmt.Errorf("ingest: canonical 迁移依赖的事件段存储已删除")
 }
 
 // logStreamFieldsState 在启动时输出一次 VL 流标签的生效形态。

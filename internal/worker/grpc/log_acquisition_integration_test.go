@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
@@ -80,4 +81,22 @@ func TestRealProcessStdoutAndStderrReachManagedVL(t *testing.T) {
 		}
 		return got["stdout"] == "instance-stdout" && got["stderr"] == "instance-stderr"
 	}, 25*time.Second, 200*time.Millisecond)
+}
+
+// ingestCollectorAdapter 把 *ingest.Manager 适配到中立接口（仅本集成用例使用）。
+//
+// 本用例验的是「真实进程的 stdout/stderr 最终到达受管 VL」这条端到端链路，
+// 需要 JM_VL_BIN 才运行。gRPC 接口参数已改为 logconf.InstanceRegistration，
+// 这里做一次字段转换即可。旧链路删除后本用例一并删除。
+type ingestCollectorAdapter struct{ m *ingest.Manager }
+
+func (a ingestCollectorAdapter) RegisterInstance(reg logconf.InstanceRegistration) error {
+	return a.m.RegisterInstance(ingest.InstanceRegistration{
+		UUID: reg.UUID, TargetID: reg.TargetID, Generation: reg.Generation,
+		Mode: reg.Mode, WorkDir: reg.WorkDir, RuleKey: reg.RuleKey, RelativePath: reg.RelativePath,
+	})
+}
+
+func (a ingestCollectorAdapter) AppendInstanceOutput(uuid, stream string, data []byte) error {
+	return a.m.AppendInstanceOutput(uuid, stream, data)
 }

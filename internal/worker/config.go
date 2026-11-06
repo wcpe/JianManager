@@ -21,8 +21,6 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	"github.com/wcpe/JianManager/internal/platform/vlruntime"
-	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
@@ -1221,28 +1219,6 @@ type LogReadLimitsConfig struct {
 	MaxBytesPerPoll int64 `mapstructure:"max_bytes_per_poll"`
 }
 
-// IngestReadLimits 归并采集默认并拒绝不能容纳一行的配置，绝不把超长记录截断成普通事件。
-func (c *Config) IngestReadLimits() (acquire.ReadLimits, error) {
-	limits := acquire.DefaultReadLimits()
-	if c == nil {
-		return limits, nil
-	}
-	raw := c.LogIngest.ReadLimits
-	if raw.MaxLineBytes < 0 || raw.MaxBytesPerPoll < 0 {
-		return acquire.ReadLimits{}, fmt.Errorf("log_ingest.read_limits 必须非负，零表示使用默认")
-	}
-	if raw.MaxLineBytes > 0 {
-		limits.MaxLineBytes = raw.MaxLineBytes
-	}
-	if raw.MaxBytesPerPoll > 0 {
-		limits.MaxBytesPerPoll = raw.MaxBytesPerPoll
-	}
-	if int64(limits.MaxLineBytes) >= limits.MaxBytesPerPoll {
-		return acquire.ReadLimits{}, fmt.Errorf("log_ingest.read_limits.max_bytes_per_poll 必须大于 max_line_bytes，才能保留换行边界")
-	}
-	return limits, nil
-}
-
 // LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
 //
 // 默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，属于必须由运维显式开启的能力。
@@ -1938,40 +1914,6 @@ func (c *Config) IngestDefaultCharset() string {
 	return strings.TrimSpace(c.LogIngest.Charset)
 }
 
-// IngestMultilineUnclosedTimeout 解析 `log_ingest.multiline_unclosed_timeout`。
-//
-// 口径：空串 ⇒ 默认（normalize.DefaultUnclosedTimeout，5s，零配置零行为变化）；
-// 非空必须是合法 duration；<0 表示**关闭**强制冲刷（仅排障用，悬挂记录会一直挂着）；
-// 0 同样视为关闭（显式写 0 的人意图就是「不要自动冲刷」）。
-// 非法值启动即拒：静默回退默认会让「我明明关了它」变成隐性行为，难以归因。
-func (c *Config) IngestMultilineUnclosedTimeout() (time.Duration, error) {
-	if c == nil {
-		return ingest.DefaultMultilineUnclosedTimeout(), nil
-	}
-	raw := strings.TrimSpace(c.LogIngest.MultilineUnclosedTimeout)
-	if raw == "" {
-		return ingest.DefaultMultilineUnclosedTimeout(), nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("log_ingest.multiline_unclosed_timeout 非法: %q（应为时长如 5s/30s；0 或负值表示关闭强制冲刷）", raw)
-	}
-	return d, nil
-}
-
-// VerifyQueryTuning 把 `log_index.verify.*` 收敛为 ingest 的校验查询预算（非正一律回退默认）。
-//
-// 天花板语义：正常路径（少量查询）零等待，只有超过上限的风暴被削峰 ✓；采集侧不经此闸 ✓。
-func (c *Config) VerifyQueryTuning() (budget ingest.VerifyBudget, maxQueriesPerChunk int) {
-	if c == nil {
-		return ingest.VerifyBudget{}, 0
-	}
-	return ingest.VerifyBudget{
-		MaxPerSecond: c.LogIndex.Verify.MaxPerSecond,
-		MaxInFlight:  c.LogIndex.Verify.MaxInFlight,
-	}, c.LogIndex.Verify.MaxQueriesPerChunk
-}
-
 // VerifyBudgetTuning 把 `log_index.verify.round_budget / visibility_floor` 收敛为 ingest 档位
 // （2026-10-03 回退修复：f237ae32 引入轮预算时键未接线，运维无法调档）。
 //
@@ -1987,127 +1929,6 @@ func (c *Config) VerifyBudgetTuning() (roundBudget, visibilityFloor time.Duratio
 		visibilityFloor = d
 	}
 	return roundBudget, visibilityFloor
-}
-
-// VerifyChunkEstimatesTuning 把 `log_index.verify.chunk_estimate / chunk_budget_max` 收敛为
-// ingest 的「预算随事件数放大」档位（2026-10-10 生产活锁修复，改动 B）。
-//
-// 口径（与 round_budget 同向的保守默认）：**空/非法/非正一律视为「不放大」**——返回零值让
-// ingest 走常量预算，与修复前逐字一致。绝不因为误写而让某个源悄悄拿到几十倍的校验额度 ✗。
-func (c *Config) VerifyChunkEstimatesTuning() ingest.VerifyChunkEstimates {
-	if c == nil {
-		return ingest.VerifyChunkEstimates{}
-	}
-	var est ingest.VerifyChunkEstimates
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.ChunkEstimate)); err == nil && d > 0 {
-		est.PerChunk = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.ChunkBudgetMax)); err == nil && d > 0 {
-		est.Max = d
-	}
-	return est
-}
-
-// PersistGateTuning 把 `log_index.persist.*` 下**持久化门公平性**的两枚旋钮收敛为 ingest 配置面。
-//
-//   - cycle_yield：让路窗口（空/非正 = 用 ingest 默认 max(20ms, GOMAXPROCS×5ms)）；
-//   - priority_streak：老化阈值（0 = 默认 8；负值 = 关闭老化，仅排障用）。
-//
-// 口径：非法值一律回退默认（回退默认永远是安全方向：窗口够大、老化够宽松都不会丢数据）。
-func (c *Config) PersistGateTuning() (persistYield, hotBudget time.Duration, priorityStreak int) {
-	if c == nil {
-		return 0, 0, 0
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.CycleYield)); err == nil && d > 0 {
-		persistYield = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.HotBudget)); err == nil && d > 0 {
-		hotBudget = d
-	}
-	return persistYield, hotBudget, c.LogIndex.Persist.PriorityStreak
-}
-
-// EventStoreManifestTuning 把事件段清单的「落盘滞后上界」两枚旋钮收敛为 ingest 配置面
-// （键 log_index.persist.manifest_sync_every / manifest_sync_interval）。
-//
-// 口径：两者都为 0/空 = 只在段集合变化时落清单（最省 IO，且崩溃不丢事件体）；
-// 负值按 0 处理（「我不想让它滞后」应该写成 1 / 一个正的时长，而不是负数）。
-// 非法 duration 一律回退 0（默认方向 = 更省 IO，且安全性不依赖该上界）。
-func (c *Config) EventStoreManifestTuning() (every int, interval time.Duration) {
-	if c == nil {
-		return 0, 0
-	}
-	if c.LogIndex.Persist.ManifestSyncEvery > 0 {
-		every = c.LogIndex.Persist.ManifestSyncEvery
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.ManifestSyncInterval)); err == nil && d > 0 {
-		interval = d
-	}
-	return every, interval
-}
-
-// IngestResolveGapsBudget 把 `log_ingest.resolve_gaps_*` 收敛为 ingest 的预算配置面。
-//
-// 口径：源数 ≤0 或 duration 空串 ⇒ 用默认（零配置零行为变化）；duration 非空必须是合法
-// duration 且 >0（配 0/负值是「我不想让它跑」的错误表达方式——那会让解算恒不可用，
-// 而接口上没有任何线索说明原因，故启动即拒并把合法写法写进错误消息）。
-func (c *Config) IngestResolveGapsBudget() (*ingest.ResolveGapsBudget, error) {
-	if c == nil {
-		return nil, nil
-	}
-	budget := &ingest.ResolveGapsBudget{MaxSources: c.LogIngest.ResolveGapsMaxSources}
-	if budget.MaxSources < 0 {
-		return nil, fmt.Errorf("log_ingest.resolve_gaps_max_sources 非法: %d（应为正整数，或 0/空表示用默认 %d）",
-			budget.MaxSources, ingest.DefaultResolveGapsMaxSources())
-	}
-	raw := strings.TrimSpace(c.LogIngest.ResolveGapsMaxDuration)
-	if raw == "" {
-		return budget, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return nil, fmt.Errorf("log_ingest.resolve_gaps_max_duration 非法: %q（应为正时长如 30s/2m；空表示用默认 %s）",
-			raw, ingest.DefaultResolveGapsMaxDuration())
-	}
-	budget.MaxDuration = d
-	return budget, nil
-}
-
-// ResumeBatchTuning 返回兜底环每轮容量（键 log_index.resume_batch_per_round；非正 ⇒ 默认 8 ✓）。
-func (c *Config) ResumeBatchTuning() int {
-	if c == nil || c.LogIndex.ResumeBatchPerRound <= 0 {
-		return 8
-	}
-	return c.LogIndex.ResumeBatchPerRound
-}
-
-// ResumeBackpressureStreakTuning 返回窗口化背压阈值（默认 3 ✓；置 1 = 单轮判定=应急退回 ✓）。
-func (c *Config) ResumeBackpressureStreakTuning() int {
-	if c == nil || c.LogIndex.ResumeBackpressureStreak <= 0 {
-		return 3
-	}
-	return c.LogIndex.ResumeBackpressureStreak
-}
-
-// ScanTuning 把 `log_index.scan.*` 收敛为 ingest 的段读让路/预算旋钮（零值 ⇒ ingest 侧默认 ✓）。
-//
-// 口径：非法 duration / 非正数一律回退默认（这类旋钮回退默认永远安全：让路多一点、扫描短一点
-// 都不会丢数据，最坏只是"下一轮续扫" ✓）。
-func (c *Config) ScanTuning() ingest.ScanTuning {
-	tuning := ingest.ScanTuning{}
-	if c == nil {
-		return tuning
-	}
-	if c.LogIndex.Scan.SliceRows > 0 {
-		tuning.SliceRows = c.LogIndex.Scan.SliceRows
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Scan.Yield)); err == nil && d > 0 {
-		tuning.Yield = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Scan.Budget)); err == nil && d > 0 {
-		tuning.Budget = d
-	}
-	return tuning
 }
 
 // ReclaimRollTuning 已于 2026-10-29 删除：它收敛的两个旋钮（max_steps / budget）
@@ -2478,9 +2299,6 @@ func Load(path string) (*Config, error) {
 	if err := cfg.LogVL.ValidateStreamFields(); err != nil {
 		return nil, err
 	}
-	if _, err := cfg.IngestReadLimits(); err != nil {
-		return nil, err
-	}
 	if cfg.EnrollToken == "" && strings.TrimSpace(cfg.EnrollTokenFile) != "" {
 		data, readErr := os.ReadFile(cfg.EnrollTokenFile)
 		if readErr != nil {
@@ -2512,16 +2330,6 @@ func Load(path string) (*Config, error) {
 	if cs := cfg.IngestDefaultCharset(); cs != "" && !logconf.IsValidCharset(cs) {
 		return nil, fmt.Errorf("log_ingest.charset 非法: %q（支持 auto/utf-8/gbk/gb18030）", cfg.LogIngest.Charset)
 	}
-	// 静默源未闭合缓冲超时（缺陷 B）：非法值启动即拒。
-	// 静默回退默认会让「我明明配了 30s」变成 5s，而这件事只在「轮转恢复卡住」时才暴露，
-	// 排查方向会被完全带偏——与 timezone/charset 同属「配错就静默」的危险项。
-	if _, err := cfg.IngestMultilineUnclosedTimeout(); err != nil {
-		return nil, err
-	}
-	// 定时归档导入扫描（④）：非法值启动即拒（同上：静默回退会把"开了"变成隐性关闭）。
-	if _, err := cfg.IngestArchiveScanInterval(); err != nil {
-		return nil, err
-	}
 	// 新采集器周期（键 log_tailer.scan_interval / progress_interval）：非法值启动即拒。
 	if _, _, err := cfg.LogTailerIntervals(); err != nil {
 		return nil, err
@@ -2538,11 +2346,6 @@ func Load(path string) (*Config, error) {
 	if cfg.LogTailer.Enabled && len(cfg.LogSources) > 0 {
 		slog.Warn("log_tailer.enabled=true：旧采集链路的 log_sources 配置将被忽略（新采集器按绑定表推导路径）",
 			"logSources", len(cfg.LogSources))
-	}
-	// 整节点解算预算（2026-10-02 缺陷修复）：非法值启动即拒——把「有界」配成 0 会让解算恒不可用，
-	// 而现场只会看到「解缺口不生效」，无从归因。
-	if _, err := cfg.IngestResolveGapsBudget(); err != nil {
-		return nil, err
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||
 		cfg.LogCapacity.PauseAtPercent <= cfg.LogCapacity.DegradedAtPercent || cfg.LogCapacity.PauseAtPercent > 100 {
