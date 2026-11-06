@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
@@ -81,6 +82,16 @@ type Sink struct {
 	//
 	// nil 时不做任何事（未装配查询面，如单测）。
 	partitions *PartitionEnsurer
+	// charset 是节点级默认字符集配置（键 log_ingest.charset；空 = auto）。
+	charset string
+	// decoders 是按源持有的字符集解码器。
+	//
+	// # 为何必须按源持有而不是每行新建
+	//
+	// auto 模式的判定是**按源粘滞**的：纯 ASCII 行与中文行必须得到同一个判定，
+	// 否则同一段日志里会交替出现「已解码」与「未解码」。
+	decMu    sync.Mutex
+	decoders map[string]*normalize.CharsetDecoder
 }
 
 // Stats 是采集统计（供 /metrics 与排障）。
@@ -102,7 +113,24 @@ func NewSink(client *vlsup.Client, resolver SourceResolver, loc *time.Location) 
 	if loc == nil {
 		loc = time.UTC
 	}
-	return &Sink{client: client, resolver: resolver, loc: loc, lastEvent: map[string]time.Time{}}
+	return &Sink{client: client, resolver: resolver, loc: loc, lastEvent: map[string]time.Time{},
+		decoders: map[string]*normalize.CharsetDecoder{}}
+}
+
+// SetCharset 设置节点级默认字符集（空串 = auto）。
+//
+// # 为何要有它（静默失效风险）
+//
+// `log_ingest.charset` 这个配置项存在，运维配了 `gbk` 却不会生效——因为新采集器
+// 直接写行正文，没经过旧链路的归一化。那类“配了但没用”的项比报错更难查。
+//
+// 生产实测 19 个实例的日志全部是合法 UTF-8，所以这不是急迫问题；但配置面存在
+// 就必须真实生效，否则它会变成下一个“改了没反应”的现场。
+func (s *Sink) SetCharset(configured string) {
+	if s == nil {
+		return
+	}
+	s.charset = configured
 }
 
 // SetPartitionEnsurer 注入 Catalog 分区补建器（装配层调用）。
@@ -154,7 +182,7 @@ func (s *Sink) Consume(ctx context.Context, lines []tailer.Line) error {
 			continue
 		}
 		when := s.eventTime(l, logSourceID)
-		row, err := buildRow(l, logSourceID, stream, when)
+		row, err := buildRow(l, logSourceID, stream, when, s.textOf(l, logSourceID))
 		if err != nil {
 			continue
 		}
@@ -212,8 +240,8 @@ func (s *Sink) RecordGap(path string, unreadBytes int64) {
 //   - `log_source_id` / `stream`：流的标签（VL 的 stream 索引靠它们）
 //   - `level`：从 `[Server thread/INFO]` 这类段里提取，提不出留空
 //   - `event_id`：内容指纹（源+时间+内容），供将来去重
-func buildRow(l tailer.Line, logSourceID, stream, eventTime string) (string, error) {
-	msg := string(l.Content)
+func buildRow(l tailer.Line, logSourceID, stream, eventTime string, decoded textInfo) (string, error) {
+	msg := decoded.text
 	_, level := parseMinecraftLine(msg)
 	row := map[string]string{
 		"_time":         eventTime,
@@ -225,11 +253,47 @@ func buildRow(l tailer.Line, logSourceID, stream, eventTime string) (string, err
 		// 供当前/将来「回补前去重」使用。
 		"event_id": contentID(logSourceID, stream, eventTime, msg),
 	}
+	// 仅在真的发生转码时写这个字段。
+	//
+	// 为何不无脑写：它是查询侧「这个源的字节到底按什么编码解释的」的唯一依据。
+	// 每行都写会让合法 UTF-8 的行也背上一个恒等于 utf-8 的字段（纯噪音），
+	// 而只在转码时写，就能用 `source_charset:gbk` 一条查询把「被转码过的源」捞出来。
+	if decoded.charset != "" && string(decoded.charset) != string(normalize.CharsetUTF8) {
+		row["source_charset"] = string(decoded.charset)
+	}
 	b, err := json.Marshal(row)
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// textInfo 是一行的解码结果。
+type textInfo struct {
+	text    string
+	charset normalize.Charset
+}
+
+// textOf 按源字符集解码行正文（按源粘滞，见 Sink.decoders）。
+//
+// # 为何不能直接 string(l.Content)
+//
+// 中文 locale 的 JVM 写 GBK 日志；按 UTF-8 直读会得到 `[Lodestone] �Ѱַ�ѽ� BC �ʵ�`。
+// 判定与转码逻辑在 normalize 包（唯一真源），这里只负责按源持有解码器。
+func (s *Sink) textOf(l tailer.Line, logSourceID string) textInfo {
+	raw := string(l.Content)
+	if s == nil {
+		return textInfo{text: raw, charset: normalize.CharsetUTF8}
+	}
+	s.decMu.Lock()
+	dec := s.decoders[logSourceID]
+	if dec == nil {
+		dec = normalize.NewCharsetDecoder(s.charset)
+		s.decoders[logSourceID] = dec
+	}
+	s.decMu.Unlock()
+	text, charset := dec.Decode(raw)
+	return textInfo{text: text, charset: charset}
 }
 
 // parseMinecraftLine 从 MC 日志行里提取时间与级别。

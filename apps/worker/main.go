@@ -1243,6 +1243,7 @@ func runWorker() {
 				ProgressInterval: progressIv,
 				StdioRoot:        stdioRoot,
 				TimeZone:         loc,
+				Charset:          cfg.IngestDefaultCharset(),
 				Catalog:          logStack.Catalog,
 			}, vlHTTPClient, nil)
 			if startErr != nil {

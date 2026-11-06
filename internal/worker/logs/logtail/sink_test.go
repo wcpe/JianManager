@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wcpe/JianManager/internal/worker/logs/normalize"
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 )
 
@@ -183,7 +184,7 @@ func TestBuildRowFields(t *testing.T) {
 	if !strings.HasSuffix(ts, "18:28:02Z") {
 		t.Errorf("_time 应保留行内时刻 18:28:02，实际 %q", ts)
 	}
-	row, err := buildRow(line, "inst:318/file", "stdout", ts)
+	row, err := buildRow(line, "inst:318/file", "stdout", ts, textInfo{text: string(line.Content), charset: normalize.CharsetUTF8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +225,7 @@ func TestBuildRowFallsBackToNowWhenNoTimestamp(t *testing.T) {
 	if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
 		t.Errorf("兜底时间应为 RFC3339，实际 %q", ts)
 	}
-	row, err := buildRow(line, "inst:318/file", "stdout", ts)
+	row, err := buildRow(line, "inst:318/file", "stdout", ts, textInfo{text: string(line.Content), charset: normalize.CharsetUTF8})
 	if err != nil {
 		t.Fatal(err)
 	}

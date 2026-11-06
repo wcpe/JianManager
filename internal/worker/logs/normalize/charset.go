@@ -43,6 +43,36 @@ const (
 // Charset 是日志源正文的字符集标识。
 type Charset string
 
+// CharsetDecoder 是**单源会话内**的字符集解码器。
+//
+// # 为何导出它（2026-11-06）
+//
+// 新采集器（logtail）不走旧的 Normalizer 链路，但**字符集判定与解码不应有第二套实现**——
+// 同一份字节在不同采集器上得到不同文本，是这类系统最难查的缺陷。
+// 所以把判定逻辑原样开放给新采集器复用，而不是在 logtail 里重写一遍 auto 粘滞启发式。
+//
+// # 生命周期
+//
+// **按源**创建并长期持有：auto 模式的判定按源粘滞（buffer 在 decoder 里），
+// 每行新建一个 decoder 会让粘滞失效，纯 ASCII 行与中文行得到不一致的判定。
+type CharsetDecoder struct{ inner *charsetDecoder }
+
+// NewCharsetDecoder 创建单源解码器。configured 取值同 ParseCharset；
+// 未知取值按 auto 兜底（登记/配置层应已显式拒绝非法值）。
+func NewCharsetDecoder(configured string) *CharsetDecoder {
+	return &CharsetDecoder{inner: newCharsetDecoder(configured)}
+}
+
+// Decode 返回本行解码后的文本与生效字符集。
+//
+// 只做编码转码，不做净化：无法判定的输入原样返回，由调用方决定如何兜底。
+func (d *CharsetDecoder) Decode(raw string) (string, Charset) {
+	if d == nil || d.inner == nil {
+		return raw, CharsetUTF8
+	}
+	return d.inner.decode(raw)
+}
+
 // ParseCharset 归一化配置取值（大小写不敏感，容忍 `GB2312`/`CP936` 这类常见别名）。
 // 空串视为 auto；未知取值返回错误（调用方必须显式失败，不得静默按 UTF-8 处理）。
 func ParseCharset(raw string) (Charset, error) {

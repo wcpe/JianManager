@@ -70,6 +70,14 @@ type Config struct {
 	// **生产必须传**：查询入口是 `Planner.Plan` → `cat.Get(key)`，没有分区记录
 	// ⇒ 该目标不进视图 ⇒ 用户看到「这天没日志」。而 VL 里明明有一堆行。
 	Catalog *catalog.Catalog
+
+	// Charset 是节点级默认日志字符集（键 log_ingest.charset；空 = auto）。
+	//
+	// # 为何复用旧配置键
+	//
+	// 它表达的是「这台机器上的 JVM 用哪个编码写日志」，与用哪个采集器无关。
+	// 新开一个键会让同一台机器上两套配置可以配得不一致。
+	Charset string
 }
 
 // Runner 是运行中的新采集器（供 main.go 启动与停止）。
@@ -148,6 +156,7 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 	}
 
 	sink := NewSink(vl, resolver, cfg.TimeZone)
+	sink.SetCharset(cfg.Charset)
 	// 分区补建：没有它，采集照常、VL 有数据，但查询侧全报「这天没日志」。
 	sink.SetPartitionEnsurer(NewPartitionEnsurer(cfg.Catalog))
 	// 静态路径：stdio 目录 + 调用方显式给的额外路径。
