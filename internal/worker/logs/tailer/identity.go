@@ -246,6 +246,20 @@ type CollectorConfig struct {
 	RegistryPath string
 }
 
+// EffectiveIntervals 返回生效的扫描/读取间隔（含默认值）。
+//
+// 导出它是因为装配层要在启动日志里打出「实际生效的值」——
+// 运维排障时最需要知道真实值，而不是配置里写了什么。
+func (c CollectorConfig) EffectiveIntervals() (scan, progress time.Duration) {
+	d := c.withDefaults()
+	return d.ScanInterval, d.ProgressInterval
+}
+
+// EffectiveExclude 返回生效的排除规则（含默认值）。
+func (c CollectorConfig) EffectiveExclude() []string {
+	return c.withDefaults().Exclude
+}
+
 // withDefaults 补默认值（不改调用方传进来的结构体本身，返回副本）。
 func (c CollectorConfig) withDefaults() CollectorConfig {
 	if c.ScanInterval <= 0 {
