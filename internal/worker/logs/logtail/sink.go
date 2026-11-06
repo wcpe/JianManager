@@ -242,7 +242,7 @@ func (s *Sink) RecordGap(path string, unreadBytes int64) {
 //   - `event_id`：内容指纹（源+时间+内容），供将来去重
 func buildRow(l tailer.Line, logSourceID, stream, eventTime string, decoded textInfo) (string, error) {
 	msg := decoded.text
-	_, level := parseMinecraftLine(msg)
+	_, level := parseLogLine(msg)
 	row := map[string]string{
 		"_time":         eventTime,
 		"_msg":          msg,
@@ -294,42 +294,6 @@ func (s *Sink) textOf(l tailer.Line, logSourceID string) textInfo {
 	s.decMu.Unlock()
 	text, charset := dec.Decode(raw)
 	return textInfo{text: text, charset: charset}
-}
-
-// parseMinecraftLine 从 MC 日志行里提取时间与级别。
-//
-// 典型形态：
-//
-//	[18:28:02] [Server thread/INFO]: Environment: authHost=...
-//	[19:07:39] [Server thread/ERROR]: Could not pass event
-//
-// # 为什么要解析而不是直接用采集时间
-//
-// 采集时间是「我们什么时候读到的」，不是「日志什么时候产生的」。
-// 回补历史文件时两者可能相差几个月 —— 用采集时间会把历史日志全标成今天。
-//
-// # 为什么缺日期
-//
-// MC 日志行里只有 `HH:MM:SS`，日期要从未名推（`2026-11-06-14.log`）或不推。
-// 本函数只管提取时刻，日期由调用方根据文件名补全——不在这里猜。
-func parseMinecraftLine(line string) (timestamp, level string) {
-	// 时间：[HH:MM:SS]
-	if strings.HasPrefix(line, "[") {
-		if end := strings.Index(line, "]"); end > 1 {
-			candidate := line[1:end]
-			if _, err := time.Parse("15:04:05", candidate); err == nil {
-				timestamp = candidate
-			}
-		}
-	}
-	// 级别：[xxx/LEVEL]
-	for _, lv := range []string{"ERROR", "WARN", "INFO", "DEBUG", "TRACE", "FATAL"} {
-		if strings.Contains(line, "/"+lv+"]") {
-			level = lv
-			break
-		}
-	}
-	return timestamp, level
 }
 
 // contentID 用 (源, 流, 时间, 内容) 算内容指纹。

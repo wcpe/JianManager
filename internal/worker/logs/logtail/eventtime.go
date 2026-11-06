@@ -35,7 +35,7 @@ var fileDayPattern = regexp.MustCompile(`(\d{4}-\d{2}-\d{2})`)
 // （12 小时这个阈值对齐旧 normalize.applyClock 的跨午夜回拨口径，也远大于
 // 正常日志的乱序幅度；用 24 小时会漏掉「回拨后又写了 23:59」这种形态。）
 func (s *Sink) eventTime(l tailer.Line, logSourceID string) string {
-	clock, _ := parseMinecraftLine(string(l.Content))
+	clock, _ := parseLogLine(string(l.Content))
 	now := time.Now().In(s.loc)
 	if clock == "" {
 		// 无法解析行内时间：用采集时刻。这是有意的降级——宁可时间不准也不要丢行。

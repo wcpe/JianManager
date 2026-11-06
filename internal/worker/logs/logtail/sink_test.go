@@ -11,64 +11,6 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 )
 
-// TestParseMinecraftLine 锤死 MC 日志行的时间/级别提取。
-//
-// # 为什么这条重要
-//
-// 时间解析错了，整个查询面的时间过滤就是错的（回补时尤其明显：
-// 2026-09 的日志会被标成今天）。
-func TestParseMinecraftLine(t *testing.T) {
-	cases := []struct {
-		name      string
-		line      string
-		wantTime  string
-		wantLevel string
-	}{
-		{
-			name:      "标准 INFO 行",
-			line:      `[18:28:02] [Server thread/INFO]: Environment: authHost=...`,
-			wantTime:  "18:28:02",
-			wantLevel: "INFO",
-		},
-		{
-			name:      "ERROR 行",
-			line:      `[19:07:39] [Server thread/ERROR]: Could not pass event`,
-			wantTime:  "19:07:39",
-			wantLevel: "ERROR",
-		},
-		{
-			name:      "WARN 行",
-			line:      `[00:00:11] [Server thread/WARN]: L1_131578_002 lost connection`,
-			wantTime:  "00:00:11",
-			wantLevel: "WARN",
-		},
-		{
-			// 堆栈行：没有时间也没有级别，两者都应留空（不得瞎猜）
-			name:      "堆栈行（无时间无级别）",
-			line:      `	at AllinMailBox-1.4.0.jar//top.wcpe.TabooLib.run(TabooLib.java:119)`,
-			wantTime:  "",
-			wantLevel: "",
-		},
-		{
-			name:      "非 MC 格式",
-			line:      `plain text without brackets`,
-			wantTime:  "",
-			wantLevel: "",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotTime, gotLevel := parseMinecraftLine(tc.line)
-			if gotTime != tc.wantTime {
-				t.Errorf("时间：期望 %q 实际 %q", tc.wantTime, gotTime)
-			}
-			if gotLevel != tc.wantLevel {
-				t.Errorf("级别：期望 %q 实际 %q", tc.wantLevel, gotLevel)
-			}
-		})
-	}
-}
-
 // TestInstanceNameFromPath 锤死路径 → 实例名的推导。
 //
 // 推导错了会直接导致「日志写到错的源」——比查不到更难排查。
