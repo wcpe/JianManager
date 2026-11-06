@@ -49,6 +49,20 @@ type InstanceRegistration struct {
 	RelativePath string
 }
 
+// 采集模式常量（与 CP 下发的 `log_acquire_mode` 逐字一致）。
+//
+// # 为什么放在这里而不是留在旧 pipeline 包
+//
+// 这两个字符串是**协议取值**（CP 下发、Worker 据此分流），不属于任何采集实现。
+// 旧 `pipeline` 包已随旧链路删除；把它们搬到这里，新的桥接层就不必依赖一个
+// 正在消失的包。取值必须逐字保持，否则存量实例的登记会被判成未知模式。
+const (
+	// ModeFilePrimary 实例自己写日志文件（Minecraft Java），进程输出不要重复落盘。
+	ModeFilePrimary = "FILE_PRIMARY"
+	// ModeStdioPrimary 日志只存在于进程管道（代理 / 通用二进制 / Beacon）。
+	ModeStdioPrimary = "STDIO_PRIMARY"
+)
+
 // 时区取值常量（供配置与登记使用）。
 const (
 	// TimeZoneUTC 显式 UTC。

@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtail"
-	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
 
 // logTailCollector 把新采集器（logtail.Runner）接到旧链路的两个入口上。
@@ -57,7 +56,7 @@ func (c logTailCollector) AppendInstanceOutput(uuid, stream string, data []byte)
 		return nil
 	}
 	if b := c.runner.Bindings(); b != nil {
-		if e, ok := b.Get(uuid); ok && e.Mode == string(pipeline.ModeFilePrimary) {
+		if e, ok := b.Get(uuid); ok && e.Mode == logconf.ModeFilePrimary {
 			return nil
 		}
 	}

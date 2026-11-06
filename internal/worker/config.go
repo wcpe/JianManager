@@ -21,12 +21,9 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	"github.com/wcpe/JianManager/internal/platform/vlruntime"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
-	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
-	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/process"
@@ -75,8 +72,6 @@ type Config struct {
 	LogCatalog LogCatalogConfig  `mapstructure:"log_catalog"`
 	LogSources []LogSourceConfig `mapstructure:"log_sources"`
 	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
-	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
-	LogIndex   LogIndexConfig   `mapstructure:"log_index"`
 	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
 	// LogIngest 采集归一化的节点级默认（缺陷 C 时区配置面）：源未显式配置时生效。
 	LogIngest LogIngestConfig `mapstructure:"log_ingest"`
@@ -231,163 +226,7 @@ func (c OrphanScanConfig) AutoAdoptEnabled() bool {
 	return c.AutoAdopt
 }
 
-// LogIndexConfig 采集索引（FR-496）的配置面，键为 `log_index.*`。
-//
-// 默认口径的单一真源在两个实现包里：ledger.DefaultDeliveryBatchPruneConfig（默认开启裁剪）
-// 与 stateindex.DefaultCommitBudget（每提交单元 128 行、目标 40ms）。本类型只做 YAML →
-// ingest.Options 的搬运，非法值一律回退默认——配置误写不得让裁剪失效或让切分消失
-// （那会把「单次持久化 ≤50ms」的达标线交还给配置运气）。见
-// docs/specs/log-index-sqlite/spec.md §3.4（切分）与 §6（配置键登记）。
-type LogIndexConfig struct {
-	// BatchPrune 历史投递批次（delivery_batch）裁剪：索引有界化的唯一裁剪路径。
-	BatchPrune LogIndexBatchPruneConfig `mapstructure:"batch_prune"`
-	// Persist 持久化提交单元预算：单次持久化按行数 + 耗时双上界切成多个提交单元。
-	Persist LogIndexPersistConfig `mapstructure:"persist"`
-	// Verify 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义（正常路径零等待）。
-	Verify LogIndexVerifyConfig `mapstructure:"verify"`
-	// ResumeBatchPerRound 是**兜底环每轮最多处理几个可解源**（键 log_index.resume_batch_per_round）。
-	//
-	// 为什么要有键（2026-10-04 现场澄清 ✓）：该容量此前只在 ingest.Options（默认 8 ✓）⇒ 现场无法
-	// 关闭，也无法退回应激行为 ✗。置 **1** = "每轮只处理一个"= 最小冲击 ✓；非正 ⇒ 默认 8 ✓。
-	ResumeBatchPerRound int `mapstructure:"resume_batch_per_round"`
-	// ResumeBackpressureStreak 是**窗口化背压**阈值：连续 N 轮闸视图积压净涨才跳过本轮
-	// （键 `log_index.resume_backpressure_streak`；默认 3 ✓；非正 ⇒ 默认）。
-	//
-	// 为什么需要（2026-10-05 现场 41 家 ✗✓）：原实现**单轮比较即跳过** ⇒ WAL 一有噪声抖动就
-	// 永久挡住复活 ✗（"三项前置全满足却不复活"的形态 ✓）。置 **1** = 退回单轮判定（现场应急用 ✓）。
-	ResumeBackpressureStreak int `mapstructure:"resume_backpressure_streak"`
-	// Scan 段读聚合（publishedClosedForSourceCtx→readSegment）的让路与轮内预算：
-	// 现场点名它是每轮重活的 I/O 大头 ✗，且**既不让路也无上界** ⇒ `pollOnce` 的 WaitGroup 等分钟级。
-	Scan LogIndexScanConfig `mapstructure:"scan"`
-	// ReclaimRoll（log_index.reclaim_roll.*）已于 2026-10-29 删除。
-}
-
 // LogIndexReclaimRollConfig 已于 2026-10-29 删除（随 reclaim 改按投递证据推进）。
-
-// LogIndexScanConfig 是**段读聚合**的让路与轮内预算（键 `log_index.scan.*`）。
-//
-// 语义（与"限速"区分）：让路 = 每 slice 行把 P 交还调度器（不影响正确性 ✓）；
-// 预算 = 单源单轮扫描的墙钟上界，超预算按**"证据不完整"**返回（不消解缺口、不推进水位 ✓
-// 安全方向），下一轮续扫 ✓。
-type LogIndexScanConfig struct {
-	// SliceRows 每多少行让路一次；非正回退默认（8192）。
-	SliceRows int `mapstructure:"slice_rows"`
-	// Yield 每次让路的睡眠时长（duration 字符串）；非正/非法回退默认（1ms）。
-	Yield string `mapstructure:"yield"`
-	// Budget 单源单轮扫描的墙钟预算（duration 字符串）；非正/非法回退默认（2s）。
-	Budget string `mapstructure:"budget"`
-}
-
-// LogIndexVerifyConfig 是**校验/对账查询**的全局上限配置面（键 `log_index.verify.*`）。
-//
-// 为什么需要（2026-10-03 现场：近 5 分钟 `投影校验查询 ×410` 占满算力、未暂停源 readΔ=0）：
-// 校验按簇退避重试到窗口耗尽，而并发上界只有"单批内 4"✗——多源同时校验时没有全局上限，
-// 少量失败簇的重试就能吃光算力与 VL 容量。本配置给它们一个**天花板**。
-//
-// 天花板语义（务必与"限速节拍"区分）：令牌桶容量 = 速率 ⇒ 正常路径（几簇、1–2 次查询）
-// 一次性放行、**零等待** ✓；只有超过上限的风暴被削峰 ✓；采集侧的读/写不经过该闸 ✓。
-type LogIndexVerifyConfig struct {
-	// MaxPerSecond 是校验/对账查询的每秒上限；非正回退默认（30）。
-	MaxPerSecond int `mapstructure:"max_per_second"`
-	// MaxInFlight 是同时在飞的校验/对账查询数上限；非正回退默认（6）。
-	MaxInFlight int `mapstructure:"max_in_flight"`
-	// MaxQueriesPerChunk 是单簇单次校验的尝试次数上限；非正回退默认（12）。
-	MaxQueriesPerChunk int `mapstructure:"max_queries_per_chunk"`
-	// RoundBudget 是**每源每轮**的校验时间预算（duration 字符串，键
-	// log_index.verify.round_budget）：空/非法/非正一律回退 ingest 默认。
-	// 背景：该键在 f237ae32 引入时**只有注释、没有接线**（无法调档），且默认 1.5s 在
-	// "VL 可见性地板 ~1.02s"环境下整轮预算被少数源用尽 ⇒ 其余源每轮 defer（2026-10-03 回退）。
-	RoundBudget string `mapstructure:"round_budget"`
-	// VisibilityFloor 是**可见性错开**等待（duration 字符串，键
-	// log_index.verify.visibility_floor）：>0 时首探前先等到"距批写入 ≥ floor"
-	// （对齐 VL 写入→可查询的硬地板，避免 0/0.2/0.6s 三次无效探测）。0/非正 = 关（默认关）。
-	VisibilityFloor string `mapstructure:"visibility_floor"`
-	// ChunkEstimate 是**单簇校验查询的保守耗时估计**（duration 字符串，键
-	// log_index.verify.chunk_estimate）：空/非法/非正 = **不放大预算**（默认，行为与修复前
-	// 逐字一致）。
-	//
-	// 为什么需要（2026-10-10 生产活锁）：单源预算原先是与事件数无关的常数，而大积压会被切成
-	// 数百簇（现场 544205 事件 / 2000 ⇒ 272 簇，实测单簇 17–23 秒）⇒ 常量预算永远跑不完。
-	// 给出本估计后，预算按 `⌈事件数/簇粒度⌉ × 估计 × 安全系数` 放大，并被 chunk_budget_max 封顶。
-	ChunkEstimate string `mapstructure:"chunk_estimate"`
-	// ChunkBudgetMax 是放大后预算的上限（duration 字符串，键
-	// log_index.verify.chunk_budget_max）：空/非法/非正 = 用 ingest 默认（5 分钟）。
-	//
-	// 上限的意义：超过它的批次只能靠**逐轮渐进收敛**（校验部分通过也登记已通过区间），
-	// 而不是让单源占住校验额度一小时（272 簇 × 23s ≈ 104 分钟 ✗）。
-	ChunkBudgetMax string `mapstructure:"chunk_budget_max"`
-}
-
-// LogIndexBatchPruneConfig 是历史投递批次裁剪的配置面（键 `log_index.batch_prune.*`）。
-//
-// 零值语义：Enabled=false 的零值无法与「显式关闭」区分（与 log_reconcile.enabled、
-// orphan_scan.auto_adopt 同口径），故 Load 经 viper SetDefault 写入默认 true；
-// 手工构造 Config{} 的调用方须自行置位。
-type LogIndexBatchPruneConfig struct {
-	// Enabled 为 false 时完全不裁（应急逃生口：怀疑裁剪影响判定时先关它）。
-	Enabled bool `mapstructure:"enabled"`
-	// KeepRecent 是无条件保留的最近批次条数（审计尾窗），只多留不少留；负数为误写 → 回退默认。
-	KeepRecent int `mapstructure:"keep_recent"`
-}
-
-// DeliveryBatchPruneConfig 把本地配置面收敛为 ledger 的裁剪配置（负尾窗回退默认 0）。
-func (c LogIndexBatchPruneConfig) DeliveryBatchPruneConfig() ledger.DeliveryBatchPruneConfig {
-	return ledger.DeliveryBatchPruneConfig{Enabled: c.Enabled, KeepRecent: c.KeepRecent}.Normalized()
-}
-
-// LogIndexPersistConfig 是索引持久化提交单元预算的配置面（键 `log_index.persist.*`）。
-type LogIndexPersistConfig struct {
-	// MaxTxRows 单个提交单元（一次 IMMEDIATE 事务）的行数上限；非正回退默认 128
-	// （真源是 stateindex.DefaultCommitMaxRows；FR-498 性能根治从 512 降到 128，
-	// 依据见该常量的注释：单单元 p95 随行数近似线性，512→128 把尾巴压到 1/4，
-	// 而完成同一份工作的周期总耗时不变）。
-	MaxTxRows int `mapstructure:"max_tx_rows"`
-	// MinTxRows 自适应收缩的下限（再慢也不退化成逐行）；非正/大于上限时回退默认 32
-	// （真源是 stateindex.DefaultCommitMinRows）。
-	MinTxRows int `mapstructure:"min_tx_rows"`
-	// TxDurationTarget 单个提交单元的耗时目标（duration 字符串，默认 40ms）；非法/非正回退默认。
-	// 执行中的耗时硬上界取它的 5/4（默认 50ms = 验收线「单次持久化 ≤50ms」本身）。
-	TxDurationTarget string `mapstructure:"tx_duration_target"`
-	// CycleMaxRows 是**单次落库调用**最多处理的行数（写 + 删；键 log_index.persist.cycle_max_rows）。
-	// 非正回退默认（stateindex.DefaultCycleMaxRows）。
-	//
-	// 与 max_tx_rows 的区别（2026-10-02 生产事故的直接对策）：max_tx_rows 约束「一个事务多大」，
-	// 本键约束「一次调用做多少」。事故现场是启动恢复一次判出整段积压（3.4M 行）要删，单次调用
-	// 必须把 10.6 万条 DELETE 跑完才返回 ⇒ 启动链上跑 20–30 分钟、worker 不监听。有了本键，一次
-	// 调用有界返回（Incomplete），剩余差异由下一轮续做（镜像按提交单元更新 ⇒ 重算即续跑）。
-	CycleMaxRows int `mapstructure:"cycle_max_rows"`
-	// CycleMaxDuration 是单次落库调用的墙钟预算（duration 字符串；键
-	// log_index.persist.cycle_max_duration）；非法/非正回退默认。检查落在提交单元之间。
-	CycleMaxDuration string `mapstructure:"cycle_max_duration"`
-	// CycleYield 是持久化门的**让路窗口**（duration 字符串；键 log_index.persist.cycle_yield）：
-	// 长链做完一步后必须让出这么久的门，让排队者（含采集轮）拿走。空/非正回退默认
-	// （max(20ms, GOMAXPROCS×5ms)）。
-	//
-	// 为什么可配（2026-10-03 现场：门闩饿死采集轮）：默认值按「一次完整调度量级」估，
-	// 但不同部署的核数与负载差异大；上线后可据此调「恢复链吞吐 ↔ 采集轮延迟」的取舍。
-	CycleYield string `mapstructure:"cycle_yield"`
-	// HotBudget 是热路径（采集/投递侧）在持久化门上的等待上界（duration 字符串；键
-	// log_index.persist.hot_budget）；空/非正回退默认 30ms。热路径**绝不为落库阻塞**：超时即把
-	// 落库交给后台通道（现场"投递侧等门 ⇒ VL 零写入"的根治点）。
-	HotBudget string `mapstructure:"hot_budget"`
-	// PriorityStreak 是**老化阈值**（键 log_index.persist.priority_streak）：连续授予优先档
-	// （采集轮/登记/解算）多少次后必须放行一次普通档（恢复/重放链），防止反方向饿死。0/空 = 默认 8。
-	PriorityStreak int `mapstructure:"priority_streak"`
-	// ManifestSyncEvery 是事件段清单「派生元数据滞后」的**次数上界**（键
-	// log_index.persist.manifest_sync_every）：每 N 次追加至少落一次清单。0（默认）= 不设次数上界。
-	//
-	// 背景：一次 Append 原先固定触发 3 次耐久调用（段数据 fsync + 清单 fsync + 目录 fsync）。
-	// 清单里未封末段的 count/bytes/首末身份/覆盖区间都是**可从段内容逐字段重算**的派生值
-	// （eventstore.calibrateSegment），因此允许滞后不会丢事件体。机械盘上（现场 ROTA=1、
-	// 75 IOPS）这是采集持久化的主要寻道来源；默认 0 即「只在段集合变化时落清单」。
-	ManifestSyncEvery int `mapstructure:"manifest_sync_every"`
-	// ManifestSyncInterval 是同一滞后策略的**时间上界**（duration 字符串；键
-	// log_index.persist.manifest_sync_interval）：距上次落盘超过该时长就落一次。空/0 = 不设时间上界。
-	//
-	// 它与 ManifestSyncEvery 是「或」的关系，两个都设 0 表示完全由段集合变化驱动
-	// （最省 IO：8 MiB 一段，段滚动本身就是天然的次数上界）。
-	ManifestSyncInterval string `mapstructure:"manifest_sync_interval"`
-}
 
 // LogCatalogConfig 是分区 Catalog journal 的持久化配置面（键 log_catalog.*）。
 //
@@ -474,35 +313,6 @@ func (c LogCatalogConfig) JournalSyncIntervalValue() (time.Duration, bool) {
 	}
 	return d, true
 }
-
-// CommitBudget 把本地配置面收敛为 stateindex 的提交单元预算（非法值一律回退归一化默认）。
-func (c LogIndexPersistConfig) CommitBudget() stateindex.CommitBudget {
-	out := stateindex.DefaultCommitBudget()
-	if c.MaxTxRows > 0 {
-		out.MaxRows = c.MaxTxRows
-	}
-	if c.MinTxRows > 0 {
-		out.MinRows = c.MinTxRows
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.TxDurationTarget)); err == nil && d > 0 {
-		out.Target = d
-	}
-	if c.CycleMaxRows > 0 {
-		out.CycleMaxRows = c.CycleMaxRows
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.CycleMaxDuration)); err == nil && d > 0 {
-		out.CycleMaxDuration = d
-	}
-	return out.Normalized()
-}
-
-// IndexPrune 返回可直接交给 ingest.Options.IndexPrune 的裁剪配置。
-func (c LogIndexConfig) IndexPrune() ledger.DeliveryBatchPruneConfig {
-	return c.BatchPrune.DeliveryBatchPruneConfig()
-}
-
-// CommitBudget 返回可直接交给 ingest.Options.IndexCommit 的提交单元预算。
-func (c LogIndexConfig) CommitBudget() stateindex.CommitBudget { return c.Persist.CommitBudget() }
 
 // RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
 type RecoverConfig struct {
@@ -1002,11 +812,6 @@ type LogIngestConfig struct {
 	// 依赖粘滞启发式，运维显式声明才是确定性方案。
 	// 源可用 SourceConfig.Charset 覆盖本默认；非法值在 Load 阶段启动即拒。
 	Charset string `mapstructure:"charset"`
-	// Sampling 采集侧采样与降级策略（键 log_ingest.sampling.*）。
-	//
-	// 挂在 log_ingest 下而不是顶层：它与时区/字符集同属「采集归一化」的节点级默认，
-	// 作用域与装配点完全一致（都在构造 ingest.Options 时接线）。
-	Sampling LogSamplingConfig `mapstructure:"sampling"`
 	// MultilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（键
 	// log_ingest.multiline_unclosed_timeout）：超过它仍无新行，就以显式 `multiline_unclosed`
 	// 标记强制闭合该缓冲并推进 durable。空串表示用默认（normalize.DefaultUnclosedTimeout = 5s）。
@@ -1217,70 +1022,6 @@ func (c *Config) LogTailerIntervals() (scan, progress time.Duration, err error) 
 type LogReadLimitsConfig struct {
 	MaxLineBytes    int   `mapstructure:"max_line_bytes"`
 	MaxBytesPerPoll int64 `mapstructure:"max_bytes_per_poll"`
-}
-
-// LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
-//
-// 默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，属于必须由运维显式开启的能力。
-// 取值口径与 retention 一致（0 = 没填走默认，负数 = 写错启动即拒）——
-// 采样配错的后果是日志静默少存，现场只会表现为「查不到」，不会表现为报错。
-type LogSamplingConfig struct {
-	// Enabled 总开关。
-	Enabled bool `mapstructure:"enabled"`
-	// MinLevel 等级过滤：低于该级别的原文折叠为汇总事件。空串 = 不启用。
-	// 无法归类的级别一律放行。
-	MinLevel string `mapstructure:"min_level"`
-	// BurstWindow / BurstThreshold 同源同消息高频抑制：窗口内前 N 条放行原文，
-	// 其余合并为汇总事件（含条数与样例）。BurstWindow 为 0 = 不启用。
-	BurstWindow    time.Duration `mapstructure:"burst_window"`
-	BurstThreshold int           `mapstructure:"burst_threshold"`
-	// MaxSignatures 模式表上限（有界：采样自身不得成为无界增长点）。
-	MaxSignatures int `mapstructure:"max_signatures"`
-	// BudgetMaxEventsPerWindow / BudgetWindow / BudgetKeepEvery 每源预算：
-	// 窗口内允许原文落库 N 条，超出后每 KeepEvery 条保留 1 条原文，其余折叠。
-	BudgetMaxEventsPerWindow int           `mapstructure:"budget_max_events_per_window"`
-	BudgetWindow             time.Duration `mapstructure:"budget_window"`
-	BudgetKeepEvery          int           `mapstructure:"budget_keep_every"`
-	// MaxAggregateEvents 单条汇总事件承接的原文条数上限。
-	MaxAggregateEvents int `mapstructure:"max_aggregate_events"`
-	// DegradeEnabled 风暴自动降级开关；触发源复用容量门禁的磁盘读数（同一真源）。
-	DegradeEnabled     bool          `mapstructure:"degrade_enabled"`
-	DegradeTargetLevel string        `mapstructure:"degrade_target_level"`
-	DegradeDiskPercent float64       `mapstructure:"degrade_disk_percent"`
-	DegradeHold        time.Duration `mapstructure:"degrade_hold"`
-}
-
-// SamplingPolicy 装配为 pipeline.Options.Sampling / ingest.Options.Sampling。
-//
-// 独立成方法而不是在装配点内联读字段：这条接线一旦断掉，运维会以为「已经开了采样」，
-// 而实际上一条都没压，成本问题会以「配了没用」的形态长期挂着——
-// 与 IngestDefaultTimeZone/Charset 同一条理由（配置 → 实现之间没有任何编译期约束）。
-func (c *Config) SamplingPolicy() sampling.Policy {
-	if c == nil {
-		return sampling.Policy{}
-	}
-	s := c.LogIngest.Sampling
-	return sampling.Policy{
-		Enabled: s.Enabled,
-		Level:   sampling.LevelFilter{MinLevel: s.MinLevel},
-		Burst: sampling.Burst{
-			Window:        s.BurstWindow,
-			Threshold:     s.BurstThreshold,
-			MaxSignatures: s.MaxSignatures,
-		},
-		Budget: sampling.Budget{
-			MaxEventsPerWindow: s.BudgetMaxEventsPerWindow,
-			Window:             s.BudgetWindow,
-			KeepEvery:          s.BudgetKeepEvery,
-		},
-		Degrade: sampling.Degrade{
-			Enabled:     s.DegradeEnabled,
-			TargetLevel: s.DegradeTargetLevel,
-			DiskPercent: s.DegradeDiskPercent,
-			Hold:        s.DegradeHold,
-		},
-		MaxAggregateEvents: s.MaxAggregateEvents,
-	}
 }
 
 // LogRetentionConfig 保留策略的配置面（键 `log_retention.*`）。
@@ -1914,23 +1655,6 @@ func (c *Config) IngestDefaultCharset() string {
 	return strings.TrimSpace(c.LogIngest.Charset)
 }
 
-// VerifyBudgetTuning 把 `log_index.verify.round_budget / visibility_floor` 收敛为 ingest 档位
-// （2026-10-03 回退修复：f237ae32 引入轮预算时键未接线，运维无法调档）。
-//
-// 口径：空/非法/非正一律返回 0 ⇒ 由 ingest 侧回退各自默认（安全方向：预算保留、错开关闭）。
-func (c *Config) VerifyBudgetTuning() (roundBudget, visibilityFloor time.Duration) {
-	if c == nil {
-		return 0, 0
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.RoundBudget)); err == nil && d > 0 {
-		roundBudget = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.VisibilityFloor)); err == nil && d > 0 {
-		visibilityFloor = d
-	}
-	return roundBudget, visibilityFloor
-}
-
 // ReclaimRollTuning 已于 2026-10-29 删除：它收敛的两个旋钮（max_steps / budget）
 // 服务的是「分段链逐跳推进」，reclaim 改按投递证据推进后一次就到顶，旋钮失去作用对象。
 // 配置键 `log_index.reclaim_roll.*` 同步删除（viper 忽略未知键，旧 worker.yml 留着不报错）。
@@ -2067,15 +1791,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
 	v.SetDefault("log_capacity.pause_at_percent", 90.0)
 	v.SetDefault("log_sources", []LogSourceConfig{})
-	// 增量对账（FR-497）已随重建/重放链一并删除：配置键保留但不再产生任何行为。
-	// 采集索引（FR-496）：历史投递批次裁剪 + 持久化提交单元预算。默认值同样取自实现包的单一真源。
-	indexPruneDefaults := ledger.DefaultDeliveryBatchPruneConfig()
-	indexCommitDefaults := stateindex.DefaultCommitBudget()
-	v.SetDefault("log_index.batch_prune.enabled", indexPruneDefaults.Enabled)
-	v.SetDefault("log_index.batch_prune.keep_recent", indexPruneDefaults.KeepRecent)
-	v.SetDefault("log_index.persist.max_tx_rows", indexCommitDefaults.MaxRows)
-	v.SetDefault("log_index.persist.min_tx_rows", indexCommitDefaults.MinRows)
-	v.SetDefault("log_index.persist.tx_duration_target", indexCommitDefaults.Target.String())
+	// 采集索引（FR-496，`log_index.*`）整组已随旧链路删除：新架构没有 SQLite 采集索引，
+	// 也没有「投递批次裁剪 / 持久化提交单元」这些概念（逐批直写 VL）。
+	// 旧 worker.yml 里留着这些键不会报错（viper 忽略未知键）。
 	v.SetDefault("log_archive.enabled", false)
 	v.SetDefault("log_archive.provider", "local")
 	v.SetDefault("log_archive.endpoint", "")
@@ -2106,36 +1824,17 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_reconcile.replay_max_duration", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_sources", 0)
 	// 每周期总预算（2026-10-02 事故修复）：单次落库调用做多少；0/空 = 用 stateindex 默认。
-	v.SetDefault("log_index.persist.cycle_max_rows", 0)
-	v.SetDefault("log_index.persist.cycle_max_duration", "")
 	// 持久化门的让路窗口与老化阈值（2026-10-03 门闩饿死采集轮）：空/0 = 用 ingest 默认。
-	v.SetDefault("log_index.persist.cycle_yield", "")
-	v.SetDefault("log_index.resume_batch_per_round", 8)
-	v.SetDefault("log_index.resume_backpressure_streak", 3)
-	v.SetDefault("log_index.scan.slice_rows", 8192)
-	v.SetDefault("log_index.scan.yield", "1ms")
-	v.SetDefault("log_index.scan.budget", "2s")
 	// 滚动回收单轮上界（#64）：0/空 = 用 ingest 默认（32 步 / 1s ✓）。
-	v.SetDefault("log_index.persist.priority_streak", 0)
-	v.SetDefault("log_index.persist.hot_budget", "")
 	// 事件段清单的落盘滞后上界（机械盘 IO 收敛）：0/空 = 只在段集合变化时落清单。
 	// 未封末段的 count/bytes/首末身份是派生值，重启由 eventstore 校准逐字段重算 ⇒ 不丢事件体；
 	// 一次追加的耐久调用由 3 次（段数据 + 清单 + 目录）降到 1 次（段数据，不可省）。
 	// 想让清单更"新鲜"可配 manifest_sync_every=N 或 manifest_sync_interval=30s（或两者）。
-	v.SetDefault("log_index.persist.manifest_sync_every", 0)
-	v.SetDefault("log_index.persist.manifest_sync_interval", "")
 	// 校验查询的全局天花板（2026-10-03 现场 ×410 重试风暴）：0 = 用 ingest 默认（30/s、6 在飞、单簇 12 次）。
-	v.SetDefault("log_index.verify.max_per_second", 0)
-	v.SetDefault("log_index.verify.max_in_flight", 0)
-	v.SetDefault("log_index.verify.max_queries_per_chunk", 0)
 	// 每源每轮校验预算与可见性错开（2026-10-03 回退修复）：空串 = 用 ingest 默认（预算 1.5s、错开关）。
-	v.SetDefault("log_index.verify.round_budget", "")
-	v.SetDefault("log_index.verify.visibility_floor", "")
 	// 校验预算随事件数放大（2026-10-10 生产活锁修复，改动 B）：空串 = **不放大**（保守默认，
 	// 与修复前逐字一致）；chunk_estimate 给了正数才按「簇数 × 估计 × 安全系数」放大，
 	// 并由 chunk_budget_max 封顶（空 = ingest 默认 5 分钟）。
-	v.SetDefault("log_index.verify.chunk_estimate", "")
-	v.SetDefault("log_index.verify.chunk_budget_max", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
 	// 新采集器（tailer/logtail）：**默认开**（2026-11-06 切换）。
 	// 旧链路保留为回退：配 `log_tailer.enabled: false` 即可退回（两套互斥）。
@@ -2247,11 +1946,8 @@ func Load(path string) (*Config, error) {
 			}
 		}
 	}
-	// 在读取其它运行态文件、更不用说启动受管 VL 之前校验原始策略。
-	// 不先 Normalize：负值不能被默认值掩盖，错误配置也不能只让 main 静默停用驱动器。
-	if err := cfg.SamplingPolicy().Validate(); err != nil {
-		return nil, fmt.Errorf("log_ingest.sampling: %w", err)
-	}
+	// `log_ingest.sampling.*` 的校验已随采样下线：新采集器没有采样实现，
+	// 这组键配了不再产生效果（旧 worker.yml 留着不报错，viper 忽略未知键）。
 	// 静态采集源的**目标形态**校验（非法即拒）：写错命名空间的源会被照常采集，
 	// 却永远匹配不到 CP 的目标枚举，最终表现为「日志查询服务未启用」这类误导性状态。
 	// 见 validateLogSources 的文档注释（含 2026-10-17 dev 实测现场）。

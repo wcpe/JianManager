@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"sort"
 	"strings"
 	"sync"
@@ -279,7 +281,7 @@ func (b *Bindings) Resolver() SourceResolver {
 		var best BindingEntry
 		bestLen := -1
 		for _, e := range b.entries {
-			if e.WorkDir == "" || e.Mode == "STDIO_PRIMARY" {
+			if e.WorkDir == "" || e.Mode == logconf.ModeStdioPrimary {
 				continue
 			}
 			if _, ok := relUnderRoot(clean, e.WorkDir); !ok {

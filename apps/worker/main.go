@@ -35,7 +35,6 @@ import (
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
@@ -1662,84 +1661,8 @@ const maxNeedsManualPartitionsLogged = 20
 // 新增样本已被挤出环外，读数只能是下界。生产上采集循环节拍 250 ms、采样节拍 1 分钟，单窗口最多
 // 约 240 次持久化周期；切分（FR-498 P0）后一次周期会产生多个**提交单元**采样，60 源 × 60 行/s
 // 实测约 2 单元/周期 ⇒ 单窗口约 400 个样本，仍远小于 4096（环容量正是为此从 512 提到 4096）。
-type logIndexPersistWindow struct {
-	// cursor 是上一次读数时环内最新样本的 StartedAt。采样时间戳由 recordSample 在每次 Apply
-	// 开始时用 time.Now() 记录（带单调读数），同一进程内严格递增，可当环内样本的身份游标用。
-	cursor time.Time
-}
 
 // logIndexPersistDelta 是一个窗口内的写入增量，与同一条日志里的 P50/P95/Max 同窗口。
-type logIndexPersistDelta struct {
-	RowsWritten  int64
-	RowsDeleted  int64
-	BytesWritten int64
-}
-
-// advance 推进一个窗口并返回本窗口增量：只累计游标之后的样本，因此环未满（环和 = 自启动累计）
-// 与环已满（环和 = 滑动和）两种形态下都成立。
-func (w *logIndexPersistWindow) advance(samples []stateindex.Sample) logIndexPersistDelta {
-	var delta logIndexPersistDelta
-	var newest time.Time
-	for _, sample := range samples {
-		if sample.StartedAt.After(newest) {
-			newest = sample.StartedAt
-		}
-		if !sample.StartedAt.After(w.cursor) {
-			continue
-		}
-		delta.RowsWritten += int64(sample.RowsWritten)
-		delta.RowsDeleted += int64(sample.RowsDeleted)
-		delta.BytesWritten += sample.BytesWritten
-	}
-	// 游标只前进不后退：时钟回拨时若直接覆写，已结账的样本会被重复计入下一个窗口。
-	if newest.After(w.cursor) {
-		w.cursor = newest
-	}
-	return delta
-}
-
-// logIndexPersistSample 把一个窗口的读数落成一条采样日志：分位取整环（口径不变），三个 Delta
-// 取本窗口增量（见 logIndexPersistWindow）。
-//
-// 口径（FR-498 切分改造）：P50/P95/Max 是**单个提交单元**（一次 IMMEDIATE 事务）的耗时——
-// 验收线「单次持久化 ≤50ms」约束的就是它，一个周期按行数 + 耗时双上界切成若干个单元
-// （见 stateindex.CommitBudget）。`cycles` 是环内周期数、`samples` 是单元数，两者之比即
-// 「一周期切了几个单元」；`maxRows` 是环内单个单元的最大写+删行数（每事务行数有界的直读值）。
-func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Latency, samples []stateindex.Sample) {
-	delta := window.advance(samples)
-	slog.Info("采集索引持久化耗时采样",
-		"samples", latency.Count,
-		"cycles", latency.Cycles,
-		"p50ms", latency.P50.Milliseconds(),
-		"p95ms", latency.P95.Milliseconds(),
-		"maxMs", latency.Max.Milliseconds(),
-		"maxRows", latency.MaxRows,
-		// 空转周期（零差异、不开事务）单独读数：它们**不进**上面的 p50/p95/max——
-		// 那几个字段只描述提交单元（验收线约束的对象）。空转耗时的主体是规划
-		// （scopeState + Validate + planState），是真实成本但不属于这条线。
-		// 两者混算的后果有实例：2026-10-27 真机 p50=2ms 与 p95=107ms 相差两个量级，
-		// 归因就错在了“提交偶发变慢”上。
-		"noopCount", latency.NoopCount,
-		"noopP95ms", latency.NoopP95.Milliseconds(),
-		"rowsWrittenDelta", delta.RowsWritten,
-		"rowsDeletedDelta", delta.RowsDeleted,
-		"bytesWrittenDelta", delta.BytesWritten,
-		// #67-C：两段耗时的**累计**读数（只加不减，单位 ns）——把"单元慢"拆成
-		// 规划 / 镜像重建两处，真机排障一眼可辨 ✓（maxRows 与 rowsDeletedDelta
-		// 本就在本行，正是"行数有界却仍慢"与"慢在删不在写"两个判据 ✓）。
-		// 原第三项 nsPrune（谓词范围剪枝耗时）已随 source_wal 表下线，不再有该段。
-		"nsPlan", latency.NsPlan,
-		"nsMirrorRebuild", latency.NsMirrorRebuild,
-		// #67-A′：WAL 归并面 —— "-wal 3.59GB 与阈值 4MiB 并存"的两种解释（读者持旧快照 / 归并没被
-		// 排到执行点）由 busy 与 walBytes 一次分辨 ✓；truncate 计受控截断点被走到几次 ✓。
-		"walBytes", latency.WALBytes,
-		"checkpointAttempts", latency.CheckpointAttempts,
-		"checkpointBusy", latency.CheckpointBusy,
-		"checkpointTruncate", latency.CheckpointTruncate,
-		"readersInFlight", latency.ReadersInFlight,
-	)
-}
-
 // catalogBackfillStartDelay 是启动期分区补建的**让位窗口**。
 //
 // 为何需要：补建要知道「本节点负责哪些 namespace」，而那来自**已登记的源**。

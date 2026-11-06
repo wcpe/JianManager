@@ -62,31 +62,3 @@ func TestLoadRetentionDefaultsMonthsAndDisabledCompatibility(t *testing.T) {
 		}
 	}
 }
-
-func TestLoadRejectsRawSamplingPolicy(t *testing.T) {
-	for _, body := range []string{
-		"min_level: unknown", "burst_window: -1s", "burst_window: 1s\n    burst_threshold: -1",
-		"budget_max_events_per_window: -1", "max_aggregate_events: -1",
-		"degrade_enabled: true\n    degrade_disk_percent: 101",
-	} {
-		_, err := loadLogPolicyFixture(t, "log_ingest:\n  sampling:\n    enabled: true\n    "+body+"\n")
-		if err == nil || !strings.Contains(err.Error(), "sampling") {
-			t.Fatalf("必须拒绝采样原值 %q，得到 %v", body, err)
-		}
-	}
-}
-
-func TestLoadSamplingPolicyPreservesRawValues(t *testing.T) {
-	cfg, err := loadLogPolicyFixture(t, "log_ingest:\n  sampling:\n    enabled: true\n    min_level: WARN\n    burst_window: 2s\n    burst_threshold: 3\n    max_signatures: 4\n    budget_max_events_per_window: 5\n    budget_window: 6s\n    budget_keep_every: 7\n    max_aggregate_events: 8\n    degrade_enabled: true\n    degrade_target_level: ERROR\n    degrade_disk_percent: 85\n    degrade_hold: 9s\n")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := cfg.SamplingPolicy()
-	if !p.Enabled || p.Level.MinLevel != "WARN" || p.Burst.Threshold != 3 || p.Burst.MaxSignatures != 4 || p.Budget.KeepEvery != 7 || p.MaxAggregateEvents != 8 || !p.Degrade.Enabled || p.Degrade.DiskPercent != 85 {
-		t.Fatalf("采样策略接线丢字段: %+v", p)
-	}
-	cfg, err = loadLogPolicyFixture(t, "log_ingest:\n  sampling:\n    enabled: false\n    max_aggregate_events: -1\n")
-	if err != nil || cfg.SamplingPolicy().Enabled {
-		t.Fatalf("关闭保持兼容: %v", err)
-	}
-}
