@@ -50,9 +50,9 @@ type FileState struct {
 //
 // 这也与用户 2026-10-30 的裁定一致：机械盘不做 fsync。
 type Registry struct {
-	path string
-	mu   sync.Mutex
-	m    map[string]FileState // key: Identity.Key()
+	path  string
+	mu    sync.Mutex
+	m     map[string]FileState // key: Identity.Key()
 	dirty bool
 }
 
@@ -97,6 +97,53 @@ func (r *Registry) Get(id FileIdentity) (FileState, bool) {
 	defer r.mu.Unlock()
 	st, ok := r.m[id.Key()]
 	return st, ok
+}
+
+// GetGrowing 查一个文件的位点，按指纹**前缀**容忍小文件增长。
+//
+// # 为什么不能只用 Get
+//
+// 指纹只哈希前 min(1024, 文件大小) 字节。文件小于 1024 时，追加会让参与哈希的字节
+// 变多 ⇒ 指纹变 ⇒ Get 不命中 ⇒ 整文件从头重读，已投递的行全部重复。
+//
+// # 判据（可证，不靠猜）
+//
+// 对每条**同路径**且 Size < 文件当前大小 的记录，用**记录当时的前缀长度**重算指纹；
+// 相等即证明这是同一文件的延长（sha256 碰撞可忽）。
+//
+// # 为何限定同路径
+//
+// 指纹本来就是为了避开 inode 复用（文件删了后 inode 可能被新文件拿到）。
+// 用前缀相等去跨路径匹配，把「同模板的两个实例日志」当成一个的风险就回来了；
+// 限定同路径后，最坏情况是同一路径被重写——那时前缀本来就不同，自然不会命中。
+func (r *Registry) GetGrowing(id FileIdentity, path string, size int64) (FileState, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if st, ok := r.m[id.Key()]; ok {
+		return st, true
+	}
+	if id.Fingerprint == "" || path == "" {
+		return FileState{}, false
+	}
+	clean := filepath.Clean(path)
+	for _, st := range r.m {
+		if st.Path == "" || filepath.Clean(st.Path) != clean {
+			continue
+		}
+		// 只接受「记录时更短、现在更长」的方向：反向（文件被截断）不能复用 offset。
+		if st.Size <= 0 || st.Size >= size {
+			continue
+		}
+		n := FingerprintPrefixLen(st)
+		if n <= 0 {
+			continue
+		}
+		fp, ok := fingerprintOfPrefix(clean, n)
+		if ok && fp == st.Identity.Fingerprint {
+			return st, true
+		}
+	}
+	return FileState{}, false
 }
 
 // Put 写入/更新一个文件的位点（内存，不立即落盘）。

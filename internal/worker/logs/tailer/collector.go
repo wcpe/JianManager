@@ -49,17 +49,31 @@ func (f SinkFunc) Consume(ctx context.Context, lines []Line) error { return f(ct
 // 两个间隔分开的理由（与官方一致）：扫描目录是重操作（Glob + Stat + 指纹），
 // 而读文件是轻操作（只是 Seek + Read）。
 type Collector struct {
-	cfg    CollectorConfig
-	reg    *Registry
-	sink   Sink
+	cfg  CollectorConfig
+	reg  *Registry
+	sink Sink
 
-	mu        sync.Mutex
+	mu         sync.Mutex
 	harvesters map[string]*Harvester // key: Identity.Key()
 
 	// batchSize 是单次交给 Sink 的最大行数。
 	batchSize int
 	// onGap 在“有文件未读完就消失”时被调用（对齐用户要求：丢得明白）。
 	onGap func(path string, unreadBytes int64)
+	// harvestable 决定一个**新发现**的文件是否值得建 harvester（nil = 全部）。
+	//
+	// # 为什么需要它（丢数据的硬防护）
+	//
+	// 上层靠 resolver 把路径映成源标签，映射不上就跳过该行——但 offset 照旧推进。
+	// 于是在「绑定表还没就绪」的窗口里（首次部署、CP 重启后尚未下发登记），
+	// ReadFromHead 会把整个历史文件读一遍后逐行丢弃，而位点已经推到文件末尾——
+	// 那段历史**永久不采了**，且日志里只有一条“无法识别源”的计数。
+	//
+	// 装配层传入判别函数后，这类文件根本不建 harvester，位点不动，等绑定到达后
+	// 再从头采——这是同一件事的正确方向：**宁可晚采，不可静默丢**。
+	harvestable func(path string) bool
+	// warnedUnready 记录已告警过的「暂不可采」路径（避免每轮扫描刷屏）。
+	warnedUnready map[string]struct{}
 }
 
 // NewCollector 创建一个采集器。
@@ -71,12 +85,21 @@ func NewCollector(cfg CollectorConfig, reg *Registry, sink Sink) *Collector {
 		reg = &Registry{m: make(map[string]FileState)}
 	}
 	return &Collector{
-		cfg:        cfg,
-		reg:        reg,
-		sink:       sink,
-		harvesters: make(map[string]*Harvester),
-		batchSize:  500,
+		cfg:           cfg,
+		reg:           reg,
+		sink:          sink,
+		harvesters:    make(map[string]*Harvester),
+		batchSize:     500,
+		warnedUnready: make(map[string]struct{}),
 	}
+}
+
+// SetHarvestable 注入「新发现的文件是否值得采」的判据（nil = 全部采）。
+//
+// 仅影响**新建 harvester**；已在采的文件不受后加的判据影响（否则中途改判据会
+// 把在跑的文件当成“消失”而误报 gap）。
+func (c *Collector) SetHarvestable(fn func(path string) bool) {
+	c.harvestable = fn
 }
 
 // SetGapReporter 注入“文件未读完就消失”的回调。
@@ -144,6 +167,16 @@ func (c *Collector) scanOnce(ctx context.Context) error {
 			continue
 		}
 		// 新文件：决定起始位置。
+		if c.harvestable != nil && !c.harvestable(f.Path) {
+			// 暂不可采（如绑定表里还没有这个目录的归属）：**不建 harvester、不碰位点**。
+			// 详见 Collector.harvestable 的注释：先读后丢是不可恢复的丢数据。
+			if _, warned := c.warnedUnready[f.Path]; !warned {
+				c.warnedUnready[f.Path] = struct{}{}
+				slog.Warn("tailer: 文件暂不可采（尚未识别所属源），位点不推进，等绑定到达后再采",
+					"path", f.Path)
+			}
+			continue
+		}
 		startAt := c.startOffsetFor(f)
 		h, hErr := NewHarvester(f, startAt, 0)
 		if hErr != nil {
@@ -187,8 +220,8 @@ func (c *Collector) scanOnce(ctx context.Context) error {
 
 // startOffsetFor 决定新发现的文件从哪里开始读。
 func (c *Collector) startOffsetFor(f DiscoveredFile) int64 {
-	if st, ok := c.reg.Get(f.Identity); ok {
-		// 已有位点：从上次位置继续。
+	// 已有位点：从上次位置继续（含小文件增长的前缀匹配，见 Registry.GetGrowing）。
+	if st, ok := c.reg.GetGrowing(f.Identity, f.Path, f.Size); ok {
 		// 若文件变小了（截断/换文件），NewHarvester 会自己校正到 0。
 		return st.Offset
 	}
@@ -250,10 +283,14 @@ func (c *Collector) readOnce(ctx context.Context) error {
 			return fmt.Errorf("tailer: 读 %s: %w", path, readErr)
 		}
 		// 每读完一个文件就更新它的位点。
+		//
+		// Size 必须写**算指纹时**的大小（IdentitySize），而不是当前大小：
+		// 它是 FingerprintPrefixLen 反推前缀长度的依据，写错会让增长判定永远失败。
 		c.reg.Put(FileState{
 			Identity:       identity,
 			Path:           path,
 			Offset:         h.Offset(),
+			Size:           h.IdentitySize(),
 			LastActiveUnix: time.Now().Unix(),
 		})
 	}

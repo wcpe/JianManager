@@ -64,9 +64,19 @@ func (f SourceResolverFunc) Resolve(path string) (string, string) { return f(pat
 type Sink struct {
 	client   *vlsup.Client
 	resolver SourceResolver
+	// loc 解释行内 `[HH:MM:SS]` 的时区；nil 视为 UTC。
+	//
+	// 它不是“展示用时区”——它直接决定落库的 `_time` 值，配错就是整源时间轴偏移。
+	loc *time.Location
 
-	mu       sync.Mutex
-	stats    Stats
+	mu    sync.Mutex
+	stats Stats
+	// lastEvent 是同一源最近一条事件的时间（用于给只有时刻的行补日期 + 跨午夜回拨）。
+	//
+	// 采集是单调前进的，所以「上一条的时间」是判定日期的可靠参照；而回补历史文件时
+	// 它会由文件名里的日期校正（见 resolveEventTime）。
+	lastMu    sync.Mutex
+	lastEvent map[string]time.Time // key: logSourceID
 }
 
 // Stats 是采集统计（供 /metrics 与排障）。
@@ -83,9 +93,12 @@ type Stats struct {
 	Gaps int64
 }
 
-// NewSink 创建写入端。
-func NewSink(client *vlsup.Client, resolver SourceResolver) *Sink {
-	return &Sink{client: client, resolver: resolver}
+// NewSink 创建写入端。loc 为 nil 时按 UTC 解释行内时刻。
+func NewSink(client *vlsup.Client, resolver SourceResolver, loc *time.Location) *Sink {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return &Sink{client: client, resolver: resolver, loc: loc, lastEvent: map[string]time.Time{}}
 }
 
 // Consume 实现 tailer.Sink。
@@ -116,7 +129,7 @@ func (s *Sink) Consume(ctx context.Context, lines []tailer.Line) error {
 			s.mu.Unlock()
 			continue
 		}
-		row, err := buildRow(l, logSourceID, stream)
+		row, err := buildRow(l, logSourceID, stream, s.eventTime(l, logSourceID))
 		if err != nil {
 			continue
 		}
@@ -161,29 +174,23 @@ func (s *Sink) RecordGap(path string, unreadBytes int64) {
 //
 // # 字段选择（对齐旧链路的行形态，保证查询侧不用改）
 //
-//   - `_time`：从行首的 `[HH:MM:SS]` 解析（MC 日志格式）；解析不出就用当前时间，
-//     并把 `parse_status` 标为 `NO_TIMESTAMP`，让查询侧能识别
+//   - `_time`：完整 RFC3339（行内 `[HH:MM:SS]` + 日期 + 时区），解析不出就用当前时间
 //   - `_msg`：原始行（不再做多行合并与级别剥离）
 //   - `log_source_id` / `stream`：流的标签（VL 的 stream 索引靠它们）
 //   - `level`：从 `[Server thread/INFO]` 这类段里提取，提不出留空
 //   - `event_id`：内容指纹（源+时间+内容），供将来去重
-func buildRow(l tailer.Line, logSourceID, stream string) (string, error) {
+func buildRow(l tailer.Line, logSourceID, stream, eventTime string) (string, error) {
 	msg := string(l.Content)
-	ts, level := parseMinecraftLine(msg)
-	if ts == "" {
-		// 解析不出时间：用当前时间。这是有意的降级——
-		// 宁可时间不准也不要整行丢掉（用户原话：日志不重要，有就行）。
-		ts = time.Now().UTC().Format(time.RFC3339Nano)
-	}
+	_, level := parseMinecraftLine(msg)
 	row := map[string]string{
-		"_time":         ts,
+		"_time":         eventTime,
 		"_msg":          msg,
 		"log_source_id": logSourceID,
 		"stream":        stream,
 		"level":         level,
 		// event_id 用内容指纹：同一条日志无论采几次都得相同的 id，
-		// 供未来「回补前去重」使用（详见设计讨论）。
-		"event_id": contentID(logSourceID, stream, ts, msg),
+		// 供当前/将来「回补前去重」使用。
+		"event_id": contentID(logSourceID, stream, eventTime, msg),
 	}
 	b, err := json.Marshal(row)
 	if err != nil {
@@ -242,6 +249,7 @@ func parseMinecraftLine(line string) (timestamp, level string) {
 //   - 每条日志都要算，SHA-256 在这里的 CPU 开销不必要
 //   - event_id 只用于「同一批内去重 / 回补前查重」，不需要密码学强度
 //   - 64 位碰撞概率在百万量级下约 1e-8，可接受
+//
 // 输出 16 位十六进制，便于人读与日志对比。
 func contentID(logSourceID, stream, ts, msg string) string {
 	h := fnv.New64a()

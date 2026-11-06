@@ -41,6 +41,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtail"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
@@ -1159,6 +1160,11 @@ func runWorker() {
 	// FR-474：将配置化 FileTailer/STDIO/ArchiveImporter 接入常驻 Worker。
 	// 未配置 source 时不猜测实例目录；实例生命周期可通过同一 Manager 动态登记。
 	var logIngest *ingest.Manager
+	// 新采集器（tailer/logtail）。两者互斥：至多一个非 nil。
+	//
+	// 用两个具体指针而不是一个接口变量：旧链路的错误处理分支要区分
+	// `ingest.ErrInstanceBindingPending`，并成接口会把这个信息丢掉。
+	var logTailRunner *logtail.Runner
 	// 定时归档导入扫描的基线周期（FR-504）：worker.yml 的 log_ingest.archive_scan_interval。
 	// 实际周期由采集策略决定（策略周期优先、未配置回落基线、总开关关闭一律不扫描）。
 	baseArchiveScanInterval, baseArchiveErr := cfg.IngestArchiveScanInterval()
@@ -1194,7 +1200,69 @@ func runWorker() {
 		slog.Info("已恢复本地日志采集快照", "dir", etcDir)
 	}
 	registeredLogInstanceIDs := manager.ListInstances
-	if len(cfg.LogSources) > 0 || vlHTTPClient != nil {
+	// 新采集器（tailer/logtail，阶段二并行接入）：开关打开时走它，**不构造** ingest.Manager。
+	//
+	// # 为何必须互斥
+	//
+	// 两套采集器会读同一批文件（旧链路按 log_sources / 登记源读，新采集器按 glob 读），
+	// 同一行日志进 VL 两次。event_id 相同不保证 VL 去重（那只是我们的内容指纹字段），
+	// 所以必须从装配层就保证只开一套。
+	if cfg.LogTailer.Enabled {
+		scanIv, progressIv, ivErr := cfg.LogTailerIntervals()
+		if ivErr != nil {
+			// 已在 config.Load 拦过一次；这里兜底不静默。
+			slog.Error("log_tailer 采集周期非法，新采集器不启动", "error", ivErr)
+			register.SetLogIngestHealth(false, ivErr.Error())
+		} else {
+			paths := cfg.LogTailer.Paths
+			if len(paths) == 0 {
+				paths = logtail.DefaultPaths(serversDir)
+			}
+			// 时区：与旧链路共用同一个节点级默认（键 log_ingest.time_zone）。
+			// 为什么复用而不是新开一个键：它表达的是「这台机器上的 JVM 写的是哪个时区的时间」，
+			// 与用哪个采集器无关；两个键会立刻出现在同一部署上配得不一致。
+			loc, tzErr := ingest.ParseTimeZone(cfg.IngestDefaultTimeZone())
+			if tzErr != nil {
+				slog.Error("日志时区非法，新采集器按 UTC 启动（时间轴可能整体偏移）", "error", tzErr)
+				loc = nil
+			}
+			// stdio 落盘目录：必须放在数据根下（随数据根一起迁移/清理），
+			// 且必须在采集 glob 覆盖范围内——它自己就是一条采集路径。
+			stdioRoot := root.LogDir()
+			if stdioRoot != "" {
+				stdioRoot = filepath.Join(stdioRoot, "stdio")
+			}
+			runner, startErr := logtail.Start(context.Background(), logtail.Config{
+				Enabled:          true,
+				Paths:            paths,
+				Exclude:          cfg.LogTailer.Exclude,
+				ReadFromHead:     cfg.LogTailer.ReadFromHead,
+				RegistryPath:     logtail.ResolveRegistryPath(root.Base(), cfg.LogTailer.RegistryPath),
+				ScanInterval:     scanIv,
+				ProgressInterval: progressIv,
+				StdioRoot:        stdioRoot,
+				TimeZone:         loc,
+			}, vlHTTPClient, nil)
+			if startErr != nil {
+				slog.Error("新日志采集器启动失败（本次启动不采集，需告警介入）", "error", startErr)
+				register.SetLogIngestHealth(false, startErr.Error())
+			} else {
+				logTailRunner = runner
+				register.SetLogIngestHealth(true, "")
+				// 登记入口：CP 下发的实例日志绑定写进新采集器的绑定表。
+				// 只有这里知道 `inst:<id>` 与工作目录的对应关系。
+				workerServer.SetInstanceLogCollector(logTailCollector{runner: runner})
+				defer runner.Stop()
+				stats := runner.Stats()
+				slog.Info("新日志采集器已接管采集（旧 ingest 链路本次不构造）",
+					"lines", stats.Lines, "written", stats.Written)
+				startup.Mark("logTailer")
+			}
+		}
+	}
+	// 旧采集链路：开关关闭时才是主路径（默认）。开新采集器时**整个块跳过**——
+	// 不是为了省事，而是两块都会调用 `ingest.New(...)` 并启动采集循环。
+	if !cfg.LogTailer.Enabled && (len(cfg.LogSources) > 0 || vlHTTPClient != nil) {
 		sources := make([]ingest.SourceConfig, 0, len(cfg.LogSources))
 		for _, source := range cfg.LogSources {
 			sources = append(sources, ingest.SourceConfig{
@@ -1702,6 +1770,14 @@ func runWorker() {
 				} else {
 					slog.Error("实例日志受管 Raw 持久化失败", "instanceId", instanceID, "stream", stream, "error", err)
 				}
+			}
+		} else if logTailRunner != nil {
+			// 新采集器的 stdio 入口：落成按天文件交给 tailer 采。
+			//
+			// FILE_PRIMARY（Minecraft Java）实例自己写 latest.log，进程输出与它是同一份，
+			// 这里直接返回——否则同一条日志会在 VL 里出现两次。分流在 logTailCollector 里。
+			if err := (logTailCollector{runner: logTailRunner}).AppendInstanceOutput(instanceID, stream, data); err != nil {
+				slog.Error("实例进程输出落盘失败", "instanceId", instanceID, "stream", stream, "error", err)
 			}
 		}
 	})

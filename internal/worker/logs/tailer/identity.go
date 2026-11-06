@@ -178,19 +178,34 @@ func IdentifyFile(path string) (FileIdentity, error) {
 //
 // 如果将来要支持小文件的高频写入场景，再补迁移逻辑。
 func fingerprintOf(path string, _ int64) (string, error) {
+	return fingerprintOfFixed(path, FingerprintLength)
+}
+
+// fingerprintOfFixed 对文件前 n 字节算指纹（n 固定时，指纹只与那 n 字节有关）。
+//
+// # 为何把长度参数化
+//
+// 判定「同一文件的延长」时（见 growing.go），必须对**记录当时**的字节数重算；
+// 而默认身份用固定 1024。两者必须走同一算法（仅长度不同），否则不可比。
+//
+// 为什么不是“哈希全部内容”：那样每次追加都会得到新指纹 ⇒ registry 永远命中不到
+// ⇒ **每次重启都从头重读**。这正是本文件最初写错的地方（把 buf[:read] 而 read 随长度变）。
+func fingerprintOfFixed(path string, n int) (string, error) {
+	if n <= 0 {
+		return "", nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	// **固定读 FingerprintLength**：这是稳定的根。
-	// 文件更短时 ReadFull 返回 ErrUnexpectedEOF，用已读到的字节算。
-	buf := make([]byte, FingerprintLength)
-	n, err := io.ReadFull(f, buf)
+	// 文件比 n 短时 ReadFull 返回 ErrUnexpectedEOF，用已读到的字节算。
+	buf := make([]byte, n)
+	read, err := io.ReadFull(f, buf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
 		return "", err
 	}
-	sum := sha256.Sum256(buf[:n])
+	sum := sha256.Sum256(buf[:read])
 	return hex.EncodeToString(sum[:]), nil
 }
 

@@ -46,6 +46,11 @@ type Harvester struct {
 
 	// offset 是已读到的字节位置（下一个未读字节）。
 	offset int64
+	// identitySize 是**算指纹时**的文件字节数（min(1024, 打开时的大小)）。
+	//
+	// 它必须随 identity 一起写回 registry：GetGrowing 靠它重算前缀指纹。
+	// 写“当前大小”会让前缀长度与已经算过的哈希不匹配 ⇒ 增长判定永远失败。
+	identitySize int64
 	// maxLine 是单行上限。超过则截断该行（不丢后续）。
 	maxLine int
 	// pending 是不完整的末行（尚未遇到换行符）。
@@ -69,11 +74,12 @@ func NewHarvester(f DiscoveredFile, startAt int64, maxLine int) (*Harvester, err
 		return nil, fmt.Errorf("tailer: 打开 %s: %w", f.Path, err)
 	}
 	h := &Harvester{
-		path:       f.Path,
-		identity:   f.Identity,
-		file:       f2,
-		maxLine:    maxLine,
-		lastActive: time.Now(),
+		path:         f.Path,
+		identity:     f.Identity,
+		identitySize: f.Size,
+		file:         f2,
+		maxLine:      maxLine,
+		lastActive:   time.Now(),
 	}
 	if h.maxLine <= 0 {
 		h.maxLine = 64 * 1024 // 单行 64KB 默认上限
@@ -100,6 +106,9 @@ func (h *Harvester) Identity() FileIdentity { return h.identity }
 
 // Offset 返回已读到的位置。
 func (h *Harvester) Offset() int64 { return h.offset }
+
+// IdentitySize 返回算指纹时的文件字节数（供 registry 回写）。
+func (h *Harvester) IdentitySize() int64 { return h.identitySize }
 
 // LastActive 返回最后一次读到新内容的时间。
 func (h *Harvester) LastActive() time.Time { return h.lastActive }

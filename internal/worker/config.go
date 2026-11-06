@@ -72,7 +72,7 @@ type Config struct {
 	// 该前提已被 2026-11-02 的投递路径简化推翻（记录改为只在投递成功时补建）。
 	// 不落盘的后果是：进程重启后该源**之前所有天**在查询侧变成「不存在」——
 	// VL 里行还在，没人知道去查它。详见 catalog.BatchedStore 的注释。
-	LogCatalog LogCatalogConfig `mapstructure:"log_catalog"`
+	LogCatalog LogCatalogConfig  `mapstructure:"log_catalog"`
 	LogSources []LogSourceConfig `mapstructure:"log_sources"`
 	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
 	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
@@ -80,6 +80,12 @@ type Config struct {
 	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
 	// LogIngest 采集归一化的节点级默认（缺陷 C 时区配置面）：源未显式配置时生效。
 	LogIngest LogIngestConfig `mapstructure:"log_ingest"`
+	// LogTailer 是新采集器（tailer/logtail，对齐 Fluent Bit / Filebeat 三层模型）的配置面。
+	//
+	// **与旧采集链路互斥**：Enabled=true 时 Worker 不构造 ingest.Manager，改由
+	// logtail.Runner 直接扫 glob 采文件。两套同时跑会把同一文件读两遍（重复采集），
+	// 故装配层必须保证只开一套——这不是建议，是硬约束。
+	LogTailer LogTailerConfig `mapstructure:"log_tailer"`
 	// LogRetention 保留策略（按级别/来源设保留期）与执行器。
 	LogRetention LogRetentionConfig `mapstructure:"log_retention"`
 	Decompiler   DecompilerConfig   `mapstructure:"decompiler"`
@@ -1031,6 +1037,73 @@ type LogIngestConfig struct {
 	// 如 "2m"）。空串表示用默认（ingest.defaultResolveGapsMaxDuration）。
 	// 它服务于**没有 deadline 的调用方**（RPC/HTTP 侧自有截止时间，ctx 会先到点）。
 	ResolveGapsMaxDuration string `mapstructure:"resolve_gaps_max_duration"`
+}
+
+// LogTailerConfig 是新采集器的配置面，键为 `log_tailer.*`。
+//
+// # 为什么是独立的一段而不是复用 log_ingest
+//
+// 两者的模型根本不同：旧链路「一个源 = 一个文件 = 四水位账本」，新采集器「每个文件平级、
+// 只记 offset」。配置项也因此不同（旧的是源级预算，新的是 glob + 位点表）。
+// 阶段三删除旧链路后，`log_ingest.*` 里属于旧链路的键会随之消失。
+type LogTailerConfig struct {
+	// Enabled 是新采集器总开关。默认 **false**（走旧链路）——开关开着就代表
+	// 「旧采集器不构造」，误开会让线上采集整体切走，所以默认关闭是唯一安全起点。
+	Enabled bool `mapstructure:"enabled"`
+	// Paths 是采集 glob 列表（支持 `*`/`?`/`[a-z]`，**不支持 `**` 递归**）。
+	// 空 = 用 `logtail.DefaultPaths(serversDir)`：`<serversDir>/*/logs/*.log` 与
+	// `<serversDir>/*/proxy.log.*`。
+	Paths []string `mapstructure:"paths"`
+	// Exclude 是排除规则（文件名 glob）。空 = 用实现包的默认值
+	// `*.gz,*.lck,*.zip,*.tmp`——gz 是用户明确要求不采的归档。
+	Exclude []string `mapstructure:"exclude"`
+	// ReadFromHead 决定首次发现的文件从哪里开始读。
+	//
+	// 默认 **true**：首次部署时要能补上部署前的历史日志（用户明确要这个）。
+	// 想只采新行就配 false。
+	ReadFromHead bool `mapstructure:"read_from_head"`
+	// RegistryPath 是位点表路径。空 = `var/log/tailer.registry.jsonl`（相对数据根）。
+	//
+	// 位点表的兄弟文件 `<同名>.bindings.json` 存「实例工作目录 → 日志目标」映射，
+	// 重启后据此继续定位源（否则要等 CP 重新下发实例登记，期间的日志会因
+	// 「无法识别源」被跳过）。
+	RegistryPath string `mapstructure:"registry_path"`
+	// ScanInterval 是目录扫描周期（发现新文件）。空 = 实现包默认 10s。
+	ScanInterval string `mapstructure:"scan_interval"`
+	// ProgressInterval 是读文件周期。空 = 实现包默认 2s。
+	ProgressInterval string `mapstructure:"progress_interval"`
+}
+
+// LogTailerIntervals 解析 log_tailer.scan_interval / progress_interval。
+//
+// 空串表示用实现包默认值（10s / 2s），此时返回 0 让调用方走零值分支。
+// 非法值返回 error（在 Load 阶段启动即拒）：采集周期配错会让「实时性」静默变形，
+// 而这件事只有在「日志怎么半天不上来」时才会被发现，排查方向会完全带偏。
+func (c *Config) LogTailerIntervals() (scan, progress time.Duration, err error) {
+	if c == nil {
+		return 0, 0, nil
+	}
+	parse := func(key, raw string) (time.Duration, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return 0, nil
+		}
+		d, parseErr := time.ParseDuration(raw)
+		if parseErr != nil {
+			return 0, fmt.Errorf("log_tailer.%s 非法: %q（应为时长如 2s/10s）", key, raw)
+		}
+		if d <= 0 {
+			return 0, fmt.Errorf("log_tailer.%s 必须为正: %q", key, raw)
+		}
+		return d, nil
+	}
+	if scan, err = parse("scan_interval", c.LogTailer.ScanInterval); err != nil {
+		return 0, 0, err
+	}
+	if progress, err = parse("progress_interval", c.LogTailer.ProgressInterval); err != nil {
+		return 0, 0, err
+	}
+	return scan, progress, nil
 }
 
 // LogReadLimitsConfig 配置单物理行与单轮读取字节上界，包含换行字节。
@@ -2134,6 +2207,16 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_index.verify.chunk_estimate", "")
 	v.SetDefault("log_index.verify.chunk_budget_max", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
+	// 新采集器（tailer/logtail）：默认**关**——开关开着就代表旧采集器不构造，
+	// 让默认值把线上采集整体切走是不可接受的风险。阶段二用配置显式打开验证。
+	v.SetDefault("log_tailer.enabled", false)
+	v.SetDefault("log_tailer.paths", []string{})
+	v.SetDefault("log_tailer.exclude", []string{})
+	// 首次部署要能补上部署前的历史日志（用户明确要这个）。
+	v.SetDefault("log_tailer.read_from_head", true)
+	v.SetDefault("log_tailer.registry_path", "")
+	v.SetDefault("log_tailer.scan_interval", "")
+	v.SetDefault("log_tailer.progress_interval", "")
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -2318,6 +2401,17 @@ func Load(path string) (*Config, error) {
 	// 定时归档导入扫描（④）：非法值启动即拒（同上：静默回退会把"开了"变成隐性关闭）。
 	if _, err := cfg.IngestArchiveScanInterval(); err != nil {
 		return nil, err
+	}
+	// 新采集器周期（键 log_tailer.scan_interval / progress_interval）：非法值启动即拒。
+	if _, _, err := cfg.LogTailerIntervals(); err != nil {
+		return nil, err
+	}
+	// 新旧采集器互斥的**配置面**检查（2026-11-06）：两者同时开就是同一文件读两遍。
+	// 装配层已经用 if/else 保证只会构造一套，这里再加一道启动即拒是因为「配了两套」
+	// 本身就是运维的误解，而它的表现（日志重复、EVENT 条数翻倍）不会指向配置。
+	if cfg.LogTailer.Enabled && len(cfg.LogSources) > 0 {
+		slog.Warn("log_tailer.enabled=true：旧采集链路的 log_sources 配置将被忽略（新采集器按 glob 扫文件）",
+			"logSources", len(cfg.LogSources))
 	}
 	// 整节点解算预算（2026-10-02 缺陷修复）：非法值启动即拒——把「有界」配成 0 会让解算恒不可用，
 	// 而现场只会看到「解缺口不生效」，无从归因。

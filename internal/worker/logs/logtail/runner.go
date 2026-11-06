@@ -44,14 +44,49 @@ type Config struct {
 	// ScanInterval / ProgressInterval 留空时用 tailer 的默认值（10s / 2s）。
 	ScanInterval     time.Duration
 	ProgressInterval time.Duration
+
+	// StdioRoot 是实例进程输出的落盘根目录（空 = 不桥接 stdio）。
+	//
+	// 它加入采集路径后，stdio 类实例的日志与文件日志走完全相同的后续链路。
+	StdioRoot string
+
+	// TimeZone 解释日志行内 `[HH:MM:SS]` 所用时区（空 = UTC）。
+	//
+	// 为什么必须有：MC 日志行只有时刻没有时区，而中文 locale 的 JVM 写的是本地时间。
+	// 按 UTC 解释会让整源时间轴静默偏移（现场 +8 小时）——那正是旧链路缺陷 C。
+	TimeZone *time.Location
+
+	// Bindings 是预先打开的绑定表（nil = Start 自己按 RegistryPath 打开）。
+	//
+	// 给调用方留的入口：装配层需要在**启动前**就把已落盘的绑定灌进去，
+	// 以免启动时那几秒的扫描把历史文件判成「无法识别源」而丢弃。
+	Bindings *Bindings
 }
 
 // Runner 是运行中的新采集器（供 main.go 启动与停止）。
 type Runner struct {
 	collector *tailer.Collector
 	sink      *Sink
+	bindings  *Bindings
+	stdio     *StdioBridge
 	cancel    context.CancelFunc
 	done      chan struct{}
+}
+
+// Bindings 返回绑定表（供登记路径写入）。
+func (r *Runner) Bindings() *Bindings {
+	if r == nil {
+		return nil
+	}
+	return r.bindings
+}
+
+// Stdio 返回 stdio 桥接器（供进程输出回调写入）。
+func (r *Runner) Stdio() *StdioBridge {
+	if r == nil {
+		return nil
+	}
+	return r.stdio
 }
 
 // Start 创建并启动新采集器。
@@ -72,22 +107,43 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 	if vl == nil {
 		return nil, fmt.Errorf("logtail: VL 客户端未装配")
 	}
-	if len(cfg.Paths) == 0 {
+	if len(cfg.Paths) == 0 && strings.TrimSpace(cfg.StdioRoot) == "" {
 		return nil, fmt.Errorf("logtail: 未配置采集路径")
 	}
-	if resolver == nil {
-		return nil, fmt.Errorf("logtail: 源解析器未装配")
+
+	// stdio 桥接：把进程输出（STDIO_PRIMARY 类实例的唯一日志来源）落成文件，
+	// 再交给同一个 tailer 采——避免“管道直写 VL”与“文件采集”两套字段/去重口径分叉。
+	stdio := NewStdioBridge(cfg.StdioRoot)
+	paths := append([]string{}, cfg.Paths...)
+	paths = append(paths, stdio.Paths()...)
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("logtail: 未配置采集路径")
 	}
 
 	reg, err := tailer.OpenRegistry(cfg.RegistryPath)
 	if err != nil {
 		return nil, fmt.Errorf("logtail: 打开位点表: %w", err)
 	}
+	// 绑定表与采集器本身解耦：调用方既可传自己的（重启后立即能定位源），
+	// 也可不传（纯内存，仅测试用）。
+	bindings := cfg.Bindings
+	if bindings == nil {
+		bindings, err = OpenBindings(BindingsPathFor(cfg.RegistryPath), stdio.Root())
+		if err != nil {
+			return nil, fmt.Errorf("logtail: 打开绑定表: %w", err)
+		}
+	}
+	if resolver == nil {
+		resolver = bindings.Resolver()
+	}
+	if resolver == nil {
+		return nil, fmt.Errorf("logtail: 源解析器未装配")
+	}
 
-	sink := NewSink(vl, resolver)
+	sink := NewSink(vl, resolver, cfg.TimeZone)
 	collectorCfg := tailer.CollectorConfig{
 		ID:               "instance-logs",
-		Paths:            cfg.Paths,
+		Paths:            paths,
 		Exclude:          cfg.Exclude,
 		ScanInterval:     cfg.ScanInterval,
 		ProgressInterval: cfg.ProgressInterval,
@@ -100,9 +156,21 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 	}
 	c := tailer.NewCollector(collectorCfg, reg, sink)
 	c.SetGapReporter(sink.RecordGap)
+	// 「源可识别」闸门：resolve 不出来的文件**不建 harvester**。
+	//
+	// 不加这道闸时，典型故障是：Worker 刚重启、绑定表里还没有某个实例（或首次部署），
+	// 而 ReadFromHead 会把整个 latest.log 读一遍、逐行因「无法识别源」被丢——
+	// 但位点已推到 EOF，那段历史**永久不采**。用户看不到报错，只会发现“这几天没日志”。
+	//
+	// 加上后这些文件被原地跳过（每路径告警一次），绑定到达后的下一轮扫描就正常采。
+	c.SetHarvestable(func(path string) bool {
+		id, _ := resolver.Resolve(path)
+		return id != ""
+	})
 
 	runCtx, cancel := context.WithCancel(ctx)
-	r := &Runner{collector: c, sink: sink, cancel: cancel, done: make(chan struct{})}
+	r := &Runner{collector: c, sink: sink, bindings: bindings, stdio: stdio,
+		cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(r.done)
 		defer func() {
@@ -117,10 +185,19 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 
 	scanIv, progressIv := collectorCfg.EffectiveIntervals()
 	slog.Info("日志采集器已启动（tailer 模式：对齐 Fluent Bit / Filebeat）",
-		"paths", cfg.Paths,
+		"paths", paths,
 		"exclude", collectorCfg.EffectiveExclude(),
 		"readFromHead", cfg.ReadFromHead,
 		"registry", cfg.RegistryPath,
+		"bindings", bindings.Path(),
+		"knownBindings", bindings.Len(),
+		"stdioRoot", stdio.Root(),
+		"timeZone", func() string {
+			if cfg.TimeZone == nil {
+				return time.UTC.String()
+			}
+			return cfg.TimeZone.String()
+		}(),
 		"scanInterval", scanIv,
 		"progressInterval", progressIv)
 	return r, nil
@@ -136,6 +213,13 @@ func (r *Runner) Stop() {
 	case <-r.done:
 	case <-time.After(10 * time.Second):
 		slog.Warn("logtail: 采集器停止超时")
+	}
+	// stdio 句柄必须关：它们不属于采集线，但同样需要在退出时释放。
+	if err := r.stdio.Close(); err != nil {
+		slog.Warn("logtail: 关闭 stdio 落盘句柄失败", "error", err)
+	}
+	if err := r.bindings.Flush(); err != nil {
+		slog.Warn("logtail: 关停时绑定表落盘失败", "error", err)
 	}
 }
 
@@ -196,7 +280,7 @@ func DefaultPaths(serversRoot string) []string {
 	}
 	return []string{
 		filepath.Join(root, "*", "logs", "*.log"), // bukkit / login / lobby
-		filepath.Join(root, "*", "proxy.log.*"),    // bungee
+		filepath.Join(root, "*", "proxy.log.*"),   // bungee
 	}
 }
 

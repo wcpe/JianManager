@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 )
@@ -163,12 +164,26 @@ func TestContentIDStableAndDistinct(t *testing.T) {
 }
 
 // TestBuildRowFields 验证写入 VL 的字段完整且可解析。
+//
+// # 为什么 `_time` 必须是完整 RFC3339
+//
+// MC 日志行只写 `[18:28:02]`，不带日期也不带时区。直接把它当 `_time` 落库，
+// VL 会按「接收时间所在的年-月-日 + 这个时刻」自己猜一个——回补历史文件时
+// 整批数据会落到今天，时间窗查询直接失效。所以归一化的产物必须是带日期与时区的时间。
 func TestBuildRowFields(t *testing.T) {
 	line := tailer.Line{
 		Path:    "/home/x/servers/game-01/logs/latest.log",
 		Content: []byte(`[18:28:02] [Server thread/INFO]: hello world`),
 	}
-	row, err := buildRow(line, "inst:318/stdout", "stdout")
+	sink := NewSink(nil, SourceResolverFunc(func(string) (string, string) { return "inst:318/file", "stdout" }), time.UTC)
+	ts := sink.eventTime(line, "inst:318/file")
+	if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
+		t.Fatalf("_time 必须是可解析的 RFC3339，实际 %q: %v", ts, err)
+	}
+	if !strings.HasSuffix(ts, "18:28:02Z") {
+		t.Errorf("_time 应保留行内时刻 18:28:02，实际 %q", ts)
+	}
+	row, err := buildRow(line, "inst:318/file", "stdout", ts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,13 +191,13 @@ func TestBuildRowFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(row), &parsed); err != nil {
 		t.Fatalf("产出的行必须是合法 JSON: %v", err)
 	}
-	if parsed["_time"] != "18:28:02" {
-		t.Errorf("_time 期望 18:28:02，实际 %q", parsed["_time"])
+	if parsed["_time"] != ts {
+		t.Errorf("_time 应为 %q，实际 %q", ts, parsed["_time"])
 	}
 	if !strings.Contains(parsed["_msg"], "hello world") {
 		t.Errorf("_msg 应保留原文，实际 %q", parsed["_msg"])
 	}
-	if parsed["log_source_id"] != "inst:318/stdout" {
+	if parsed["log_source_id"] != "inst:318/file" {
 		t.Errorf("log_source_id 错：%q", parsed["log_source_id"])
 	}
 	if parsed["level"] != "INFO" {
@@ -201,24 +216,28 @@ func TestBuildRowFallsBackToNowWhenNoTimestamp(t *testing.T) {
 		Path:    "/home/x/servers/game-01/logs/latest.log",
 		Content: []byte(`	at SomeClass.method(SomeClass.java:119)`),
 	}
-	row, err := buildRow(line, "inst:318/stdout", "stdout")
+	sink := NewSink(nil, nil, time.UTC)
+	ts := sink.eventTime(line, "inst:318/file")
+	if ts == "" {
+		t.Fatal("解析不出时间时必须用当前时间兜底，不能为空")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
+		t.Errorf("兜底时间应为 RFC3339，实际 %q", ts)
+	}
+	row, err := buildRow(line, "inst:318/file", "stdout", ts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var parsed map[string]string
 	_ = json.Unmarshal([]byte(row), &parsed)
-	if parsed["_time"] == "" {
-		t.Fatal("解析不出时间时必须用当前时间兜底，不能为空")
-	}
-	// 兜底的时间应看起来像 RFC3339（含 T）
-	if !strings.Contains(parsed["_time"], "T") {
-		t.Errorf("兜底时间应为 RFC3339 格式，实际 %q", parsed["_time"])
+	if parsed["_time"] != ts {
+		t.Errorf("_time 应为 %q，实际 %q", ts, parsed["_time"])
 	}
 }
 
 // TestSinkSkipsUnresolvedSource 验证「无法识别源」时跳过而不是写错标签。
 func TestSinkSkipsUnresolvedSource(t *testing.T) {
-	s := NewSink(nil, SourceResolverFunc(func(string) (string, string) { return "", "" }))
+	s := NewSink(nil, SourceResolverFunc(func(string) (string, string) { return "", "" }), time.UTC)
 	lines := []tailer.Line{{Path: "/unknown/path.log", Content: []byte("hello")}}
 	if err := s.Consume(context.Background(), lines); err != nil {
 		// client 为 nil，但因为所有行都被跳过，不应走到写入
