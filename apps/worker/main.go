@@ -1255,6 +1255,11 @@ func runWorker() {
 				// 只有这里知道 `inst:<id>` 与工作目录的对应关系。
 				workerServer.SetInstanceLogCollector(logTailCollector{runner: runner})
 				defer runner.Stop()
+				// 周期性采集读数：新采集器的典型故障是「静默无数据」（路径推导错、
+				// 绑定没到达、VL 拒收），三者都不报错。没有读数就只能猜。
+				tailStatsCtx, cancelTailStats := context.WithCancel(context.Background())
+				defer cancelTailStats()
+				go sampleLogTailStats(tailStatsCtx, runner, time.Minute)
 				stats := runner.Stats()
 				slog.Info("新日志采集器已接管采集（旧 ingest 链路本次不构造）",
 					"lines", stats.Lines, "written", stats.Written)

@@ -1047,12 +1047,24 @@ type LogIngestConfig struct {
 // 只记 offset」。配置项也因此不同（旧的是源级预算，新的是 glob + 位点表）。
 // 阶段三删除旧链路后，`log_ingest.*` 里属于旧链路的键会随之消失。
 type LogTailerConfig struct {
-	// Enabled 是新采集器总开关。默认 **false**（走旧链路）——开关开着就代表
-	// 「旧采集器不构造」，误开会让线上采集整体切走，所以默认关闭是唯一安全起点。
+	// Enabled 是新采集器总开关。**默认 true**（2026-11-06 切换）。
+	//
+	// # 为何可以默认开了
+	//
+	// 阶段二已用真机验证：多实例采集、重启续读、轮转跟随、gz 排除、stdio 桥接、
+	// 查询可见性（Catalog 补建）均正常；并用变异测试钉住了四个丢数据形态
+	// （忽略位点 / 去掉可采闸门 / 去掉前缀容忍 / 不注入分区补建）。
+	//
+	// # 回退开关
+	//
+	// 配 `log_tailer.enabled: false` 即退回旧 ingest 链路（两套互斥，不会同时跑）。
+	// 旧链路代码在阶段三删除前一直保留，所以回退是**改一行配置**的事。
 	Enabled bool `mapstructure:"enabled"`
-	// Paths 是采集 glob 列表（支持 `*`/`?`/`[a-z]`，**不支持 `**` 递归**）。
-	// 空 = 用 `logtail.DefaultPaths(serversDir)`：`<serversDir>/*/logs/*.log` 与
-	// `<serversDir>/*/proxy.log.*`。
+	// Paths 是**额外的**采集 glob（通常留空）。
+	//
+	// 实例日志的采集路径由**已绑定实例的 WorkDir** 每轮现算
+	// （`logtail.DefaultPathsFor`），不再靠一个 serversRoot 猜。
+	// 这里只用于采非实例日志（节点自身日志等）。
 	Paths []string `mapstructure:"paths"`
 	// Exclude 是排除规则（文件名 glob）。空 = 用实现包的默认值
 	// `*.gz,*.lck,*.zip,*.tmp`——gz 是用户明确要求不采的归档。
@@ -2207,9 +2219,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_index.verify.chunk_estimate", "")
 	v.SetDefault("log_index.verify.chunk_budget_max", "")
 	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
-	// 新采集器（tailer/logtail）：默认**关**——开关开着就代表旧采集器不构造，
-	// 让默认值把线上采集整体切走是不可接受的风险。阶段二用配置显式打开验证。
-	v.SetDefault("log_tailer.enabled", false)
+	// 新采集器（tailer/logtail）：**默认开**（2026-11-06 切换）。
+	// 旧链路保留为回退：配 `log_tailer.enabled: false` 即可退回（两套互斥）。
+	v.SetDefault("log_tailer.enabled", true)
 	v.SetDefault("log_tailer.paths", []string{})
 	v.SetDefault("log_tailer.exclude", []string{})
 	// 首次部署要能补上部署前的历史日志（用户明确要这个）。
@@ -2410,7 +2422,7 @@ func Load(path string) (*Config, error) {
 	// 装配层已经用 if/else 保证只会构造一套，这里再加一道启动即拒是因为「配了两套」
 	// 本身就是运维的误解，而它的表现（日志重复、EVENT 条数翻倍）不会指向配置。
 	if cfg.LogTailer.Enabled && len(cfg.LogSources) > 0 {
-		slog.Warn("log_tailer.enabled=true：旧采集链路的 log_sources 配置将被忽略（新采集器按 glob 扫文件）",
+		slog.Warn("log_tailer.enabled=true：旧采集链路的 log_sources 配置将被忽略（新采集器按绑定表推导路径）",
 			"logSources", len(cfg.LogSources))
 	}
 	// 整节点解算预算（2026-10-02 缺陷修复）：非法值启动即拒——把「有界」配成 0 会让解算恒不可用，

@@ -174,6 +174,31 @@ log:
 # log_ingest:
 #   archive_scan_interval: 5m
 
+# 日志采集器（键 log_tailer.*，对齐 Fluent Bit / Filebeat 三层模型）。
+#
+# 2026-11-06 起**默认开启**。启用后旧的 ingest 链路**不再构造**——两套会读同一批
+# 文件、同一行进 VL 两次，所以互斥是硬约束而不是建议。
+#
+# 采集哪些文件**不在这里配**：路径由 CP 下发的实例登记（绑定表）每轮现算——
+# 每个实例的 `<WorkDir>/logs/*.log` 与 `<WorkDir>/proxy.log.*`。这样新建实例的
+# 日志无需重启 Worker 就能被采到。
+#
+# 回退：配 enabled: false 即退回旧 ingest 链路（阶段三删旧代码前一直可用）。
+# log_tailer:
+#   enabled: true
+#   # 额外的采集 glob（通常留空；只用于非实例日志，如节点自身日志）。
+#   paths: []
+#   # 排除规则；留空 = *.gz,*.lck,*.zip,*.tmp（gz 是归档，明确不采）。
+#   exclude: []
+#   # 首次发现的文件从哪里读。true = 从头（能补上部署前的历史日志）。
+#   read_from_head: true
+#   # 位点表路径；留空 = var/log/tailer.registry.jsonl（相对数据根）。
+#   # 兄弟文件 <同名>.bindings.json 保存实例绑定，重启后不必等 CP 重新下发。
+#   registry_path: ""
+#   # 目录扫描 / 读文件周期；留空 = 10s / 2s。
+#   scan_interval: ""
+#   progress_interval: ""
+
 # 整节点解算的有界化（键 log_ingest.resolve_gaps_max_sources / resolve_gaps_max_duration）：
 # 作用于 POST /nodes/:id/log-runtime/ingest/resolve-gaps **不传 storageNamespace** 的路径，
 # 限制单次调用最多处理多少源、最多跑多久；超出即分片并由调用方续跑。
