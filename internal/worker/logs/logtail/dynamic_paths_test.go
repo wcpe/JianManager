@@ -22,10 +22,10 @@ import (
 func TestDefaultPathsForDerivesFromWorkDirs(t *testing.T) {
 	got := logtail.DefaultPathsFor([]string{"/srv/inst-a", "/srv/inst-b"})
 	want := map[string]bool{
-		filepath.Join("/srv/inst-a", "logs", "*.log"):   false,
-		filepath.Join("/srv/inst-a", "proxy.log.*"):     false,
-		filepath.Join("/srv/inst-b", "logs", "*.log"):   false,
-		filepath.Join("/srv/inst-b", "proxy.log.*"):     false,
+		filepath.Join("/srv/inst-a", "logs", "*.log"): false,
+		filepath.Join("/srv/inst-a", "proxy.log.*"):   false,
+		filepath.Join("/srv/inst-b", "logs", "*.log"): false,
+		filepath.Join("/srv/inst-b", "proxy.log.*"):   false,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("期望 %d 条 pattern，实际 %d：%v", len(want), len(got), got)
