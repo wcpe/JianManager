@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -23,7 +24,7 @@ type registrationLogCollector struct {
 	err                            error
 }
 
-func (c *registrationLogCollector) RegisterInstance(reg ingest.InstanceRegistration) error {
+func (c *registrationLogCollector) RegisterInstance(reg logconf.InstanceRegistration) error {
 	c.calls++
 	c.target, c.generation, c.mode, c.path = reg.TargetID, reg.Generation, reg.Mode, reg.WorkDir
 	c.ruleKey, c.relativePath = reg.RuleKey, reg.RelativePath
@@ -65,7 +66,7 @@ func TestCreateInstanceAdoptsPendingOutputThroughGrpcBinding(t *testing.T) {
 
 	manager := process.NewManager(t.TempDir())
 	srv := NewServer(manager, "node", nil, nil, nil)
-	srv.SetInstanceLogCollector(collector)
+	srv.SetInstanceLogCollector(ingestCollectorAdapter{m: collector})
 	request := &workerpb.CreateInstanceRequest{InstanceUuid: "uuid-grpc-spool", Name: "fixture", WorkDir: t.TempDir(), ProcessType: "direct",
 		LogTargetId: "inst:grpc-spool", LogAcquireMode: "STDIO_PRIMARY", LogSourceGeneration: "holder-g1"}
 	response, err := srv.CreateInstance(context.Background(), request)
@@ -76,4 +77,22 @@ func TestCreateInstanceAdoptsPendingOutputThroughGrpcBinding(t *testing.T) {
 	data, err := os.ReadFile(rawPath)
 	require.NoError(t, err)
 	require.Equal(t, "before grpc binding\n", string(data))
+}
+
+// ingestCollectorAdapter 把 *ingest.Manager 适配到中立接口（仅测试用）。
+//
+// gRPC 接口的参数类型已改为 logconf.InstanceRegistration；本组用例验的是
+// **旧链路**的集成行为，所以在这里做一次转换而不是改被测实现。
+// 旧链路删除后这些用例一并删除。
+type ingestCollectorAdapter struct{ m *ingest.Manager }
+
+func (a ingestCollectorAdapter) RegisterInstance(reg logconf.InstanceRegistration) error {
+	return a.m.RegisterInstance(ingest.InstanceRegistration{
+		UUID: reg.UUID, TargetID: reg.TargetID, Generation: reg.Generation,
+		Mode: reg.Mode, WorkDir: reg.WorkDir, RuleKey: reg.RuleKey, RelativePath: reg.RelativePath,
+	})
+}
+
+func (a ingestCollectorAdapter) AppendInstanceOutput(uuid, stream string, data []byte) error {
+	return a.m.AppendInstanceOutput(uuid, stream, data)
 }

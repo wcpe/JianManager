@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtail"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
 )
@@ -10,7 +10,7 @@ import (
 //
 // # 为什么要适配而不是让 logtail 直接实现接口
 //
-// `grpc.InstanceLogCollector` 的签名用的是 `ingest.InstanceRegistration`，
+// `grpc.InstanceLogCollector` 的签名用的是 `logconf.InstanceRegistration`，
 // 而 logtail 包**刻意不 import ingest**（它与旧链路平行存在，阶段三要删的正是 ingest）。
 // 让它为了一条接口去依赖一个待删包，等于把两者重新绑在一起。
 //
@@ -26,7 +26,7 @@ type logTailCollector struct {
 //
 // 旧链路登记还要建源、建账本、建 WAL。新采集器的模型是「扫描发现文件、按绑定归源」，
 // 没有“注册一个源”这个动作——只需知道「这个实例的工作目录属于哪个 target」。
-func (c logTailCollector) RegisterInstance(reg ingest.InstanceRegistration) error {
+func (c logTailCollector) RegisterInstance(reg logconf.InstanceRegistration) error {
 	if c.runner == nil {
 		return nil
 	}

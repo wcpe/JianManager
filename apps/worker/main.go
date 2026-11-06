@@ -41,6 +41,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtail"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
@@ -1222,7 +1223,7 @@ func runWorker() {
 			// 时区：与旧链路共用同一个节点级默认（键 log_ingest.time_zone）。
 			// 为什么复用而不是新开一个键：它表达的是「这台机器上的 JVM 写的是哪个时区的时间」，
 			// 与用哪个采集器无关；两个键会立刻出现在同一部署上配得不一致。
-			loc, tzErr := ingest.ParseTimeZone(cfg.IngestDefaultTimeZone())
+			loc, tzErr := logconf.ParseTimeZone(cfg.IngestDefaultTimeZone())
 			if tzErr != nil {
 				slog.Error("日志时区非法，新采集器按 UTC 启动（时间轴可能整体偏移）", "error", tzErr)
 				loc = nil
@@ -1458,7 +1459,7 @@ func runWorker() {
 		} else {
 			logIngest = manager
 			register.SetLogIngestHealth(true, "")
-			workerServer.SetInstanceLogCollector(manager)
+			workerServer.SetInstanceLogCollector(legacyInstanceCollector{m: manager})
 			// FR-510 磁盘缓冲已于 2026-11-06 整体删除（详见 config.go 的说明）：
 			// 它只有写端、没有读端，写进去的事件永远不会被重投。
 			// FR-502 §3.4：把 log_sources 配置接线到实例注册路径。

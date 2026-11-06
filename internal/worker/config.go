@@ -25,6 +25,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
 	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
@@ -2502,13 +2503,13 @@ func Load(path string) (*Config, error) {
 	}
 	// 采集时区（缺陷 C）：非法值必须在启动即拒——时区配错会让整源时间轴静默偏移，
 	// 等查询结果对不上账才发现（与登记阶段拒绝非法源级时区同一取舍）。
-	if tz := cfg.IngestDefaultTimeZone(); tz != "" && !ingest.IsValidTimeZone(tz) {
+	if tz := cfg.IngestDefaultTimeZone(); tz != "" && !logconf.IsValidTimeZone(tz) {
 		return nil, fmt.Errorf("log_ingest.time_zone 非法: %q（支持 UTC/local 或 IANA 名，如 Asia/Hong_Kong）", cfg.LogIngest.TimeZone)
 	}
 	// 采集字符集（复审 P2-3）：非法取值必须在启动即拒——按未知字符集「回退 auto」会让
 	// GBK 中文被当作非法 UTF-8 净化成替换字符，正文静默损坏，等运维在日志里发现已经晚了
 	// （与源级登记拒绝非法字符集同一取舍）。
-	if cs := cfg.IngestDefaultCharset(); cs != "" && !ingest.IsValidCharset(cs) {
+	if cs := cfg.IngestDefaultCharset(); cs != "" && !logconf.IsValidCharset(cs) {
 		return nil, fmt.Errorf("log_ingest.charset 非法: %q（支持 auto/utf-8/gbk/gb18030）", cfg.LogIngest.Charset)
 	}
 	// 静默源未闭合缓冲超时（缺陷 B）：非法值启动即拒。

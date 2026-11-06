@@ -1,12 +1,12 @@
 package grpc
 
 import (
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 type InstanceLogCollector interface {
-	RegisterInstance(reg ingest.InstanceRegistration) error
+	RegisterInstance(reg logconf.InstanceRegistration) error
 	AppendInstanceOutput(uuid, stream string, data []byte) error
 }
 
@@ -49,7 +49,7 @@ func (s *Server) registerInstanceLogs(req *workerpb.CreateInstanceRequest, workD
 			relativePath = override
 		}
 	}
-	return s.instanceLogs.RegisterInstance(ingest.InstanceRegistration{
+	return s.instanceLogs.RegisterInstance(logconf.InstanceRegistration{
 		UUID:         req.GetInstanceUuid(),
 		TargetID:     req.GetLogTargetId(),
 		Generation:   req.GetLogSourceGeneration(),

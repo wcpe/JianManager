@@ -53,7 +53,7 @@ func TestRealProcessStdoutAndStderrReachManagedVL(t *testing.T) {
 		}
 	})
 	srv := NewServer(manager, "fixture-node", nil, nil, nil)
-	srv.SetInstanceLogCollector(collector)
+	srv.SetInstanceLogCollector(ingestCollectorAdapter{m: collector})
 	srv.SetLogQueryService(stack.LogRPC)
 	command := "printf 'instance-stdout\\n'; printf 'instance-stderr\\n' >&2"
 	if runtime.GOOS == "windows" {
