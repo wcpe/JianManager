@@ -1227,6 +1227,19 @@ func runWorker() {
 				slog.Error("日志时区非法，新采集器按 UTC 启动（时间轴可能整体偏移）", "error", tzErr)
 				loc = nil
 			}
+			// 多行规则（键 log_tailer.multiline.*）：非法值已在 config.Load 拦过，
+			// 这里再取一次是为了拿到编译好的规则对象。
+			multilineRule, multilineTimeout, mlErr := cfg.MultilineSettings()
+			if mlErr != nil {
+				slog.Error("多行规则非法，本次按「不合并」启动（堆栈会被拆成多行）", "error", mlErr)
+				multilineRule, multilineTimeout = nil, 0
+			}
+			if multilineRule != nil {
+				slog.Info("日志多行合并已启用（对齐 Filebeat parsers.multiline）",
+					"pattern", cfg.LogTailer.Multiline.Pattern,
+					"negate", cfg.LogTailer.Multiline.Negate,
+					"match", cfg.LogTailer.Multiline.Match, "maxLines", multilineRule.MaxLines())
+			}
 			// stdio 落盘目录：必须放在数据根下（随数据根一起迁移/清理），
 			// 且必须在采集 glob 覆盖范围内——它自己就是一条采集路径。
 			stdioRoot := root.LogDir()
@@ -1244,6 +1257,9 @@ func runWorker() {
 				StdioRoot:        stdioRoot,
 				TimeZone:         loc,
 				Charset:          cfg.IngestDefaultCharset(),
+				Multiline:        multilineRule,
+				MultilineTimeout: multilineTimeout,
+				IncludeGzip:      cfg.LogTailer.IncludeGzip,
 				Catalog:          logStack.Catalog,
 			}, vlHTTPClient, nil)
 			if startErr != nil {

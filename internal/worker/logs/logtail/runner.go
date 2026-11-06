@@ -71,6 +71,13 @@ type Config struct {
 	// ⇒ 该目标不进视图 ⇒ 用户看到「这天没日志」。而 VL 里明明有一堆行。
 	Catalog *catalog.Catalog
 
+	// Multiline 是多行规则（键 log_tailer.multiline.*；nil = 不合并）。
+	Multiline *tailer.Multiline
+	// MultilineTimeout 是 `multiline.timeout`（零值用 tailer 默认 5s）。
+	MultilineTimeout time.Duration
+	// IncludeGzip 报告是否导入 `.gz` 历史归档（实时采集仍不碰归档）。
+	IncludeGzip bool
+
 	// Charset 是节点级默认日志字符集（键 log_ingest.charset；空 = auto）。
 	//
 	// # 为何复用旧配置键
@@ -170,6 +177,9 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 		// 不这样做的话，新建实例的日志要等到 Worker 重启才被采——而 Worker
 		// 可能几个月不重启，那段时间的日志就静默地不存在。
 		ExtraPaths:       bindings.PathsProvider(),
+		Multiline:        cfg.Multiline,
+		MultilineTimeout: cfg.MultilineTimeout,
+		IncludeGzip:      cfg.IncludeGzip,
 		Exclude:          cfg.Exclude,
 		ScanInterval:     cfg.ScanInterval,
 		ProgressInterval: cfg.ProgressInterval,

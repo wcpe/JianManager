@@ -74,6 +74,20 @@ type Collector struct {
 	harvestable func(path string) bool
 	// warnedUnready 记录已告警过的「暂不可采」路径（避免每轮扫描刷屏）。
 	warnedUnready map[string]struct{}
+	// aggs 是按 Identity 持有的多行聚合器（每个文件独立缓冲）。
+	//
+	// # 为何按文件而不是按源
+	//
+	// 两个文件的日志在时间上是交错的，共用一个缓冲会把 A 文件的堆栈接到 B 文件的行上。
+	// 官方也是对每个 harvester 各自维护 multiline 状态。
+	aggs map[string]*MultilineAggregator
+	// gzDone 是已完成读取的 gz 文件（Identity → 行数）。
+	//
+	// # 为何要记
+	//
+	// gz 没有 offset 概念（不能随机定位），所以“已读完”只能靠标记。
+	// 不记的话每轮扫描都会把整份归档重读一遍，重复投递。
+	gzDone map[string]int64
 }
 
 // NewCollector 创建一个采集器。
@@ -91,6 +105,8 @@ func NewCollector(cfg CollectorConfig, reg *Registry, sink Sink) *Collector {
 		harvesters:    make(map[string]*Harvester),
 		batchSize:     500,
 		warnedUnready: make(map[string]struct{}),
+		aggs:          make(map[string]*MultilineAggregator),
+		gzDone:        make(map[string]int64),
 	}
 }
 
@@ -265,6 +281,26 @@ func (c *Collector) readOnce(ctx context.Context) error {
 		return nil
 	}
 
+	emit := func(path string, identity FileIdentity, text string) error {
+		batch = append(batch, Line{Path: path, Content: []byte(text), Identity: identity})
+		if len(batch) >= c.batchSize {
+			return flush()
+		}
+		return nil
+	}
+
+	// 把一行经过多行聚合后交出（可能一条都不交，也可能交多条）。
+	feed := func(path string, identity FileIdentity, line []byte) error {
+		agg := c.aggregatorFor(identity)
+		for _, ev := range agg.Add(string(line)) {
+			if err := emit(path, identity, ev); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	now := time.Now()
 	for _, h := range hs {
 		// 截断检测：文件被清空重写时 offset 失效，必须重置。
 		if truncated, err := h.DetectTruncation(); err == nil && truncated {
@@ -273,14 +309,20 @@ func (c *Collector) readOnce(ctx context.Context) error {
 		identity := h.Identity()
 		path := h.Path()
 		_, readErr := h.ReadLines(func(line []byte) error {
-			batch = append(batch, Line{Path: path, Content: line, Identity: identity})
-			if len(batch) >= c.batchSize {
-				return flush()
-			}
-			return nil
+			return feed(path, identity, line)
 		})
 		if readErr != nil {
 			return fmt.Errorf("tailer: 读 %s: %w", path, readErr)
+		}
+		// 多行超时：源静默后，缓冲里最后一条事件只能靠超时收起。
+		// 不做这件事的后果是「offset 已推进，但那段时间的数据在查询侧不存在」。
+		agg := c.aggregatorFor(identity)
+		if agg.Due(now) {
+			for _, ev := range agg.Flush() {
+				if err := emit(path, identity, ev); err != nil {
+					return err
+				}
+			}
 		}
 		// 每读完一个文件就更新它的位点。
 		//
@@ -294,7 +336,108 @@ func (c *Collector) readOnce(ctx context.Context) error {
 			LastActiveUnix: time.Now().Unix(),
 		})
 	}
+
+	// gz 归档：一次性读完（没有 offset 可用），读完标记，不再重读。
+	if c.cfg.IncludeGzip {
+		if err := c.readGzOnce(ctx, feed, flush); err != nil {
+			return err
+		}
+	}
 	return flush()
+}
+
+// aggregatorFor 返回某个文件的聚合器（按需创建）。
+func (c *Collector) aggregatorFor(identity FileIdentity) *MultilineAggregator {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := identity.Key()
+	agg := c.aggs[key]
+	if agg == nil {
+		agg = NewMultilineAggregator(c.cfg.Multiline, c.cfg.MultilineTimeout)
+		c.aggs[key] = agg
+	}
+	return agg
+}
+
+// readGzOnce 把尚未读过的 .gz 归档读一遍。
+//
+// # 为何完全独立于 harvester
+//
+// gzip 不能随机定位（要解到第 N 字节必须从头解），所以它没有 offset 概念，
+// 也就无法复用 Harvester 的续读模型。它是「一次性读完、读完就不再来」的输入形状。
+//
+// # 为何用 gzDone 而不是 registry
+//
+// registry 记的是 (identity → offset)，而 gz 读完后的 offset 就是解压字节数，
+// 下次仍然“看起来没读完”（文件大小对不上）。用一个进程内集合标记“这份归档已处理过”
+// 语义更直白；代价是重启后会重读一遍（重复但不会丢，且 gz 是历史归档、重读量有限）。
+func (c *Collector) readGzOnce(ctx context.Context, feed func(string, FileIdentity, []byte) error, flush func() error) error {
+	files, err := c.cfg.ScanGzip()
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		key := f.Identity.Key()
+		c.mu.Lock()
+		_, done := c.gzDone[key]
+		c.mu.Unlock()
+		if done {
+			continue
+		}
+		// 源可识别性闸门：与实时文件同一判据（读进来却认不出源 = 静默丢）。
+		if c.harvestable != nil && !c.harvestable(f.Path) {
+			continue
+		}
+		first := true
+		g, openErr := OpenGzip(f.Path)
+		if openErr != nil {
+			// 打不开的归档（非 gzip 内容/权限）：标记为已处理，避免每轮重试刷日志。
+			slog.Warn("tailer: 跳过无法打开的 gz 归档", "path", f.Path, "error", openErr)
+			c.markGzDone(key, 0)
+			continue
+		}
+		readErr := g.ReadAll(func(line []byte) error {
+			if first {
+				// gz 的第一行也要进多行聚合（归档里也可能有堆栈）。
+				first = false
+			}
+			return feed(f.Path, f.Identity, line)
+		})
+		lines := g.Lines()
+		_ = g.Close()
+		if readErr != nil {
+			// 已读出的行照常投递（它们是对的），只标记这份归档不完整。
+			slog.Error("tailer: gz 归档读取中断（已投递的行不回退，该归档视为不完整）",
+				"path", f.Path, "lines", lines, "error", readErr)
+		}
+		// 多行缓冲收尾：归档读完边界上不会再有下一行。
+		c.mu.Lock()
+		agg := c.aggs[f.Identity.Key()]
+		c.mu.Unlock()
+		if agg != nil {
+			for _, ev := range agg.Flush() {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := feed(f.Path, f.Identity, []byte(ev)); err != nil {
+					return err
+				}
+			}
+		}
+		if err := flush(); err != nil {
+			return err
+		}
+		c.markGzDone(key, lines)
+		slog.Info("tailer: gz 归档已导入", "path", f.Path, "lines", lines, "complete", readErr == nil)
+	}
+	return nil
+}
+
+// markGzDone 记录某份归档已处理过。
+func (c *Collector) markGzDone(key string, lines int64) {
+	c.mu.Lock()
+	c.gzDone[key] = lines
+	c.mu.Unlock()
 }
 
 // flushHarvester 把某个 harvester 的残留半行交出去。
@@ -325,6 +468,21 @@ func (c *Collector) shutdown() {
 	for _, h := range hs {
 		c.flushHarvester(ctx, h)
 		_ = h.Close()
+	}
+	// 多行缓冲也必须在停机时冲出：否则最后一条（往往正是崩溃堆栈）会留在内存里丢掉。
+	// 这与「半行 pending 要冲」是同一件事的两层——pending 是文件层，aggs 是事件层。
+	c.mu.Lock()
+	pendings := make(map[string]*MultilineAggregator, len(c.aggs))
+	for k, a := range c.aggs {
+		pendings[k] = a
+	}
+	c.mu.Unlock()
+	for _, agg := range pendings {
+		for _, ev := range agg.Flush() {
+			if err := c.sink.Consume(ctx, []Line{{Content: []byte(ev)}}); err != nil {
+				slog.Warn("tailer: 关停时冲刷多行缓冲失败", "error", err)
+			}
+		}
 	}
 	if err := c.reg.Flush(); err != nil {
 		slog.Warn("tailer: 关停时位点落盘失败", "error", err)

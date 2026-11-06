@@ -61,6 +61,75 @@ func (c CollectorConfig) Patterns() []string {
 // 自行展开 `**` 会引入“展开多深才够”这个无法回答的问题。
 // 如果调用方传了 `**`，按字面量 glob 处理（会匹配到名字里真含 `**` 的文件），
 // 并在日志里告警——不静默地丢掉这条规则。
+// ScanGzip 扫描 `.gz` 归档（只在 IncludeGzip 时使用）。
+//
+// # 为何不能复用 Scan
+//
+// `Scan` 会应用 Exclude（默认含 `*.gz`），而这里的意图正好相反：**只**要 gz。
+// 用同一函数再传一组“相反的排除规则”会让语义绕一圈，不如显式分开。
+//
+// # 为何不按“gzip 内容”判定
+//
+// 扫描期要对每个候选文件读 2 字节验魔数，而生产有 1374 个 gz、且每轮都要扫。
+// 按扩展名筛是廉价的第一层；真正的魔数校验在 OpenGzip 里做（打不开就跳过并告警）。
+func (c CollectorConfig) ScanGzip() ([]DiscoveredFile, error) {
+	if !c.IncludeGzip {
+		return nil, nil
+	}
+	seen := make(map[string]struct{})
+	var out []DiscoveredFile
+	for _, pattern := range c.Patterns() {
+		// 采集 glob 通常写 `*.log`；要覆盖归档得同时试 `*.log.gz`。
+		// 这里把 pattern 的最后一个 `*` 后缀替换成 `*.gz` 的两种常见形态。
+		for _, gzPattern := range gzipPatternsOf(pattern) {
+			matches, err := filepath.Glob(gzPattern)
+			if err != nil {
+				continue
+			}
+			for _, path := range matches {
+				if _, dup := seen[path]; dup {
+					continue
+				}
+				if !IsGzipPath(path) || c.excluded(path) {
+					continue
+				}
+				info, statErr := os.Stat(path)
+				if statErr != nil || info.IsDir() {
+					continue
+				}
+				identity, idErr := IdentifyFile(path)
+				if idErr != nil && identity.Fingerprint == "" && identity.Inode == 0 {
+					continue
+				}
+				seen[path] = struct{}{}
+				out = append(out, DiscoveredFile{
+					Path:     path,
+					Size:     info.Size(),
+					ModTime:  info.ModTime().UnixNano(),
+					Identity: identity,
+				})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out, nil
+}
+
+// gzipPatternsOf 由一个采集 glob 推出可能的 gz 归档 glob。
+//
+// 两种真实形态：
+//
+//	<dir>/logs/*.log   ⇒ <dir>/logs/*.log.gz（log4j2 的 `%d-...log.gz`）与 <dir>/logs/*.gz
+//	<dir>/proxy.log.*  ⇒ <dir>/proxy.log.*.gz（少数核型）
+func gzipPatternsOf(pattern string) []string {
+	out := []string{pattern + ".gz"}
+	if i := strings.LastIndex(pattern, "*"); i >= 0 {
+		// 把 `*.log` 变成 `*.gz`：覆盖「归档文件名不带 .log」的核型。
+		out = append(out, pattern[:i+1]+".gz")
+	}
+	return out
+}
+
 func (c CollectorConfig) Scan() ([]DiscoveredFile, error) {
 	seen := make(map[string]struct{})
 	var out []DiscoveredFile

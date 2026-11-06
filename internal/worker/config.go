@@ -28,6 +28,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
 	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
+	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
@@ -1084,6 +1085,101 @@ type LogTailerConfig struct {
 	ScanInterval string `mapstructure:"scan_interval"`
 	// ProgressInterval 是读文件周期。空 = 实现包默认 2s。
 	ProgressInterval string `mapstructure:"progress_interval"`
+
+	// Multiline 是多行合并规则（键 log_tailer.multiline.*），对齐 Filebeat 的
+	// `parsers: - multiline:`。留空 = 不合并（每行一条事件）。
+	Multiline MultilineConfig `mapstructure:"multiline"`
+
+	// IncludeGzip 决定是否导入历史 `.gz` 归档（键 log_tailer.include_gzip）。
+	//
+	// # 与「不采 gz」不矛盾
+	//
+	// 用户明确要求**实时采集**不碰归档（那是重复：live 文件已经采过了）。
+	// 但生产有 1374 个从未进过平台的 gz 归档，那些历史需要能补进来。
+	// 两者是不同的事：live 文件持续追读，归档一次性读完。
+	//
+	// 默认 **false**：导入历史归档是「主动补数据」的动作，该由运维明确打开，
+	// 而不是升级后突然开始读几千个文件、把 VL 打满。
+	IncludeGzip bool `mapstructure:"include_gzip"`
+}
+
+// MultilineConfig 是多行合并的配置面（键 log_tailer.multiline.*）。
+//
+// # 字段与官方一一对应
+//
+// Filebeat filestream：
+//
+//	parsers:
+//	- multiline:
+//	    type: pattern        （本项目只实现 pattern 型）
+//	    pattern: '^\['
+//	    negate: true
+//	    match: after
+//	    flush_pattern: 'END$'
+//	    max_lines: 500
+//	    timeout: 5s
+//
+// # 为什么不做 XML/JSON 那种结构化合并
+//
+// 那些是「解析器」，不是「行组装」。本项目的需求是 Java 堆栈，pattern 型就够；
+// 多实现一种就多一套要验证的语义（而配置写错的表现是「日志变乱」而非报错）。
+type MultilineConfig struct {
+	// Pattern 是 `multiline.pattern`（RE2 语法，与官方一致：Go regexp）。
+	// 留空表示不启用多行合并。
+	Pattern string `mapstructure:"pattern"`
+	// Negate 对应 `multiline.negate`，默认 false。
+	Negate bool `mapstructure:"negate"`
+	// Match 对应 `multiline.match`：after（默认）或 before。
+	Match string `mapstructure:"match"`
+	// FlushPattern 对应 `multiline.flush_pattern`（可选）。
+	FlushPattern string `mapstructure:"flush_pattern"`
+	// MaxLines 对应 `multiline.max_lines`，零值用实现包默认 500。
+	MaxLines int `mapstructure:"max_lines"`
+	// Timeout 对应 `multiline.timeout`（如 "5s"），空 = 实现包默认 5s。
+	Timeout string `mapstructure:"timeout"`
+}
+
+// MultilineSettings 把配置编译成实现包的规则。
+//
+// 返回 (nil, 0, nil) 表示未启用多行（Pattern 为空）。
+// pattern/match/flush_pattern/timeout 非法一律返回错误——启动即拒。
+//
+// # 为何必须启动即拒而不是回退默认
+//
+// 多行规则写错的表现是「日志被错误地拼在一起」或「堆栈被拆散」，
+// 都不是报错，而是**数据变脏**。那种错误只能靠人眼在查询结果里发现，
+// 而发现时脏数据已经进库了。所以在启动时就把非法配置挡掉。
+func (c *Config) MultilineSettings() (*tailer.Multiline, time.Duration, error) {
+	if c == nil {
+		return nil, 0, nil
+	}
+	mc := c.LogTailer.Multiline
+	if strings.TrimSpace(mc.Pattern) == "" {
+		// 允许只配了 timeout 但没有 pattern 的形态：视为未启用。
+		return nil, 0, nil
+	}
+	rule, err := tailer.NewMultiline(tailer.MultilineConfig{
+		Pattern:      mc.Pattern,
+		Negate:       mc.Negate,
+		Match:        tailer.MultilineMatch(strings.ToLower(strings.TrimSpace(mc.Match))),
+		FlushPattern: mc.FlushPattern,
+		MaxLines:     mc.MaxLines,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("log_tailer.multiline: %w", err)
+	}
+	var timeout time.Duration
+	if raw := strings.TrimSpace(mc.Timeout); raw != "" {
+		d, perr := time.ParseDuration(raw)
+		if perr != nil {
+			return nil, 0, fmt.Errorf("log_tailer.multiline.timeout 非法: %q（应为时长如 5s）", raw)
+		}
+		if d <= 0 {
+			return nil, 0, fmt.Errorf("log_tailer.multiline.timeout 必须为正: %q", raw)
+		}
+		timeout = d
+	}
+	return rule, timeout, nil
 }
 
 // LogTailerIntervals 解析 log_tailer.scan_interval / progress_interval。
@@ -2229,6 +2325,17 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_tailer.registry_path", "")
 	v.SetDefault("log_tailer.scan_interval", "")
 	v.SetDefault("log_tailer.progress_interval", "")
+	// 多行合并（键 log_tailer.multiline.*）：默认**不启用**——它对日志语义有实质影响
+	// （决定“一条事件是什么”），与采样一样属于“开了就改变存下来的东西”，
+	// 必须由运维显式打开。
+	v.SetDefault("log_tailer.multiline.pattern", "")
+	v.SetDefault("log_tailer.multiline.negate", false)
+	v.SetDefault("log_tailer.multiline.match", "after")
+	v.SetDefault("log_tailer.multiline.flush_pattern", "")
+	v.SetDefault("log_tailer.multiline.max_lines", 500)
+	v.SetDefault("log_tailer.multiline.timeout", "5s")
+	// 历史 gz 导入：默认**关**（主动补数据才开，避免升级后突然读几千个文件）。
+	v.SetDefault("log_tailer.include_gzip", false)
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -2416,6 +2523,12 @@ func Load(path string) (*Config, error) {
 	}
 	// 新采集器周期（键 log_tailer.scan_interval / progress_interval）：非法值启动即拒。
 	if _, _, err := cfg.LogTailerIntervals(); err != nil {
+		return nil, err
+	}
+	// 多行规则（键 log_tailer.multiline.*）：非法值启动即拒。
+	// 多行配错的表现是「日志被错误拼接」而非报错——那种脏数据只能人眼发现，
+	// 而发现时已经入库了。所以必须在启动时挡掉。
+	if _, _, err := cfg.MultilineSettings(); err != nil {
 		return nil, err
 	}
 	// 新旧采集器互斥的**配置面**检查（2026-11-06）：两者同时开就是同一文件读两遍。

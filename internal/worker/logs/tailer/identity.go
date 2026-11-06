@@ -265,6 +265,22 @@ type CollectorConfig struct {
 	// 为何不用额外字段存一个切片：实例由 CP 在运行期逐个下发，启动时不可能
 	// 知道全量。用回调让调用方每轮现取，避免“启动快照定了就再也不变”。
 	ExtraPaths func() []string
+
+	// Multiline 是多行合并规则（nil = 每行一条事件）。
+	//
+	// 对应 Filebeat 的 `parsers: - multiline:`。
+	Multiline *Multiline
+
+	// MultilineTimeout 是 `multiline.timeout`（零值用 DefaultMultilineTimeout）。
+	MultilineTimeout time.Duration
+
+	// IncludeGzip 报告是否把 `.gz` 归档当作输入。
+	//
+	// # 与 Exclude 的关系
+	//
+	// 默认 Exclude 包含 `*.gz`（实时采集不碰归档）。打开本项时，
+	// Collector 会把 gzip 从生效的 exclude 规则中**显式排除掉**，两者不打架。
+	IncludeGzip bool
 }
 
 // EffectiveIntervals 返回生效的扫描/读取间隔（含默认值）。
@@ -277,8 +293,22 @@ func (c CollectorConfig) EffectiveIntervals() (scan, progress time.Duration) {
 }
 
 // EffectiveExclude 返回生效的排除规则（含默认值）。
+//
+// IncludeGzip 为真时把 gzip 相关规则去掉：两者是对同一个路径的相反意图，
+// 保留两者会让“到底采不采 gz”变得不可预测（而它正是最难发现的静默行为差异）。
 func (c CollectorConfig) EffectiveExclude() []string {
-	return c.withDefaults().Exclude
+	exclude := c.withDefaults().Exclude
+	if !c.IncludeGzip {
+		return exclude
+	}
+	out := make([]string, 0, len(exclude))
+	for _, p := range exclude {
+		if p == "*.gz" || p == "*.gzip" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // withDefaults 补默认值（不改调用方传进来的结构体本身，返回副本）。
@@ -306,7 +336,9 @@ func (c CollectorConfig) withDefaults() CollectorConfig {
 // 而不是“只在根目录的 gz”。与 Filebeat 的 exclude_files（对文件名做正则）同精神。
 func (c CollectorConfig) excluded(path string) bool {
 	base := filepath.Base(path)
-	for _, pat := range c.Exclude {
+	// 必须走 EffectiveExclude 而不是 c.Exclude：IncludeGzip 的效果是在这里生效的。
+	// （最初这里直接用 c.Exclude，导致 IncludeGzip 加了配置但不起作用。）
+	for _, pat := range c.EffectiveExclude() {
 		// 路径模式里带 / 的按全路径匹配，否则只匹配文件名。
 		target := base
 		if strings.ContainsRune(pat, filepath.Separator) || strings.Contains(pat, "/") {
