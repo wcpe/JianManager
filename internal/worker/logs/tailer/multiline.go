@@ -134,6 +134,35 @@ func (m *Multiline) ShouldFlushBefore(line string) bool {
 }
 
 // MaxLines 返回生效的 max_lines。
+// Pattern / Negate / Match 是只读访问器，**供启动日志如实打印生效规则**。
+//
+// 为什么需要：默认开启多行后，没配 pattern 的部署里原始配置是空串，
+// 而实际跑的是默认规则。装配层若照原始配置打印，会出现
+// 「已启用」与「pattern: (空)」并排的误导性日志（2026-11-07 部署时踩过）。
+// 规则对象才是真源，故把它的取值暴露出来。
+func (m *Multiline) Pattern() string {
+	if m == nil || m.re == nil {
+		return ""
+	}
+	return m.re.String()
+}
+
+// Negate 返回生效的 negate 设置。
+func (m *Multiline) Negate() bool {
+	if m == nil {
+		return false
+	}
+	return m.negate
+}
+
+// Match 返回生效的 match 模式。
+func (m *Multiline) Match() MultilineMatch {
+	if m == nil {
+		return ""
+	}
+	return m.match
+}
+
 func (m *Multiline) MaxLines() int { return m.maxLines }
 
 // Truncated 在超过 maxLines 时被调用，返回是否应丢弃该行。

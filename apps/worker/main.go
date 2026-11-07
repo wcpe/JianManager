@@ -1072,10 +1072,18 @@ func runWorker() {
 				multilineRule, multilineTimeout = nil, 0
 			}
 			if multilineRule != nil {
+				// 打**生效**的规则，不是原始配置值。
+				//
+				// 默认开启后，没配 pattern 的部署里 `cfg.LogTailer.Multiline.Pattern` 是空串，
+				// 而实际跑的是 DefaultMultilinePattern。照原样打会把"已启用"和"pattern 为空"
+				// 并排打在同一行，读日志的人会以为规则没生效（2026-11-07 部署时就这样误解过）。
+				// 规则来自编译后的对象，它才是真源。
 				slog.Info("日志多行合并已启用（对齐 Filebeat parsers.multiline）",
-					"pattern", cfg.LogTailer.Multiline.Pattern,
-					"negate", cfg.LogTailer.Multiline.Negate,
-					"match", cfg.LogTailer.Multiline.Match, "maxLines", multilineRule.MaxLines())
+					"pattern", multilineRule.Pattern(),
+					"negate", multilineRule.Negate(),
+					"match", multilineRule.Match(),
+					"maxLines", multilineRule.MaxLines(),
+					"source", multilineRuleSource(cfg))
 			}
 			// stdio 落盘目录：必须放在数据根下（随数据根一起迁移/清理），
 			// 且必须在采集 glob 覆盖范围内——它自己就是一条采集路径。
@@ -1821,4 +1829,15 @@ func hitsSourceAdapter(c *vlsup.Client) logtail.HitsSource {
 		}
 		return out, nil
 	}
+}
+
+// multilineRuleSource 说明生效的多行规则来自哪里（默认 vs 显式配置）。
+//
+// 它只服务启动日志：让读日志的人一眼知道"这条规则是我配的，还是用的默认"，
+// 不必回头看 worker.yml 才知道。
+func multilineRuleSource(cfg *workercfg.Config) string {
+	if cfg != nil && strings.TrimSpace(cfg.LogTailer.Multiline.Pattern) != "" {
+		return "配置显式指定"
+	}
+	return "默认规则（log_tailer.multiline.pattern 留空）"
 }
