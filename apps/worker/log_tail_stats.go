@@ -51,7 +51,10 @@ func sampleLogTailStats(ctx context.Context, runner *logtail.Runner, interval ti
 				"writtenTotal", cur.Written,
 				"failedTotal", cur.Failed,
 				"unresolvedSourceTotal", cur.UnresolvedSource,
-				"gapsTotal", cur.Gaps)
+				"gapsTotal", cur.Gaps,
+				// 多行合并因 max_lines 丢弃的行数。非零意味着**日志在采集侧被截断**：
+				// 日志页看到的堆栈会比应用实际打的短，且不会有任何报错。
+				"multilineDroppedTotal", runner.DroppedLines())
 			prev = cur
 		}
 	}

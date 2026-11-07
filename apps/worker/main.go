@@ -1506,7 +1506,20 @@ func runWorker() {
 		// FR-486：所有关键阶段都已就绪，这时输出分段耗时最有意义。
 		startup.Report()
 		if err := wsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("WS 服务器退出", "error", err)
+			// WS 监听失败是**致命**的：本节点已无法被 CP 接入终端与插件桥；
+			// 更关键的是，它通常意味着**另一个 Worker 实例正占着这个端口**。
+			//
+			// 历史上的错（2026-11-07 实测）：这里只打 ERROR 就返回，**主进程照常运行**。
+			// 于是两个 Worker 同时活着、同时采集同一批文件：
+			//   · 两份数据写进 VictoriaLogs（重复）
+			//   · 两边 registry 互相覆盖（各自以为自己读到不同位置）
+			// 而 registry 只有进程内锁、没有文件锁，两个进程谁也不知道对方存在。
+			//
+			// 一个节点只应有一个 Worker（启动脚本 / systemd unit 都是这个模型）。
+			// 所以这里必须退出，而不是降级继续跑：后者把"启动失败"变成"静默损坏"。
+			slog.Error("WebSocket 服务器退出，进程终止（一个节点只允许一个 Worker；"+
+				"端口被占通常意味着已有另一个实例在运行）", "addr", wsAddr, "error", err)
+			os.Exit(1)
 		}
 	}()
 

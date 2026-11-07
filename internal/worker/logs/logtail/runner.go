@@ -288,6 +288,17 @@ func (r *Runner) Stats() Stats {
 	return r.sink.Snapshot()
 }
 
+// DroppedLines 返回因 multiline.max_lines 丢弃的物理行数。
+//
+// 透传 Collector 的计数，供采集读数打出——它必须可见，否则"堆栈被截断"
+// 与"应用本来只打了这么多"在日志页上无法区分。
+func (r *Runner) DroppedLines() int64 {
+	if r == nil || r.collector == nil {
+		return 0
+	}
+	return r.collector.DroppedLines()
+}
+
 // Harvesters 返回当前活跃的 harvester 数量。
 func (r *Runner) Harvesters() int {
 	if r == nil {

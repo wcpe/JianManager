@@ -350,6 +350,30 @@ func (c *Collector) readOnce(ctx context.Context) error {
 }
 
 // aggregatorFor 返回某个文件的聚合器（按需创建）。
+// DroppedLines 返回因 multiline.max_lines 被丢弃的物理行数。
+//
+// # 为什么必须能读到它
+//
+// max_lines（默认 500）是多行合并的保护阀：一条事件无限增长会吃光内存，
+// 所以超限的行会被丢掉。但"丢掉"本身不能是静默的——用户的要求是
+// 「丢得明白」，而原来这个计数只存在于聚合器里、没有任何观测面读它
+// （`MultilineAggregator.Dropped()` 只有单测在调）。
+//
+// 一个正常场景：某插件刷出 600 行堆栈 ⇒ 后 100 行消失，日志页看到的堆栈是断的，
+// 而运维无从判断"是应用没打那么多"还是"采集器丢了一半"。
+func (c *Collector) DroppedLines() int64 {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var total int64
+	for _, agg := range c.aggs {
+		total += agg.Dropped()
+	}
+	return total
+}
+
 func (c *Collector) aggregatorFor(identity FileIdentity) *MultilineAggregator {
 	c.mu.Lock()
 	defer c.mu.Unlock()
