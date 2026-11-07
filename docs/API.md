@@ -3288,8 +3288,8 @@
 
 「缺口」是旧采集账本（`ingest` / `ledger`）的概念：它记录源位置上哪段没被投递、哪段被人工裁定永久放弃。
 2026-11-06 采集链路整体重建为 Fluent Bit / Filebeat 模型（`tailer` + `logtail`），新采集器**主动不追踪完整性**，
-没有缺口账本、没有放弃裁定，也就没有可核销的对象。Worker 侧 RPC `LogResolveIngestGaps` 保留为兼容壳，
-恒返回 `LOG_UNSUPPORTED`（文案点名「已随旧采集链路退役」），CP 侧路由与前端入口均已删除。
+没有缺口账本、没有放弃裁定，也就没有可核销的对象。Worker 侧已**不再实现** `LogResolveIngestGaps`（调用得 gRPC `UNIMPLEMENTED`），CP 侧路由与前端入口均已删除。
+proto 定义保留仅为 wire 兼容（详见 [ARCHITECTURE](ARCHITECTURE.md) 采集链路一节）。
 
 用户裁定原文：「日志不重要，投递失败就失败了，做好提示消息就行」。
 
@@ -3301,8 +3301,7 @@
 「源区间 + 逐字段校验」，随采集链路重建一并消失；新采集器按文件 fingerprint + offset 采集，
 用内容指纹（`logtail.contentID`）做 `event_id`，**不产生也不累积身份冲突**。
 
-因此「清空冲突记录」没有作用对象。Worker 侧 RPC `LogClearIdentityConflicts` 保留为兼容壳，
-恒返回 `LOG_UNSUPPORTED`；CP 侧路由与前端「清空冲突」对话框均已删除。
+因此「清空冲突记录」没有作用对象。Worker 侧已**不再实现** `LogClearIdentityConflicts`（调用得 `UNIMPLEMENTED`）；CP 侧路由与前端「清空冲突」对话框均已删除。
 
 > 日志页仍会展示「数据可能有歧义 / 不完整」这类**只读提示**（来自 `coverage` / `quality` 聚合），
 > 但不再提供「一键清掉提示」的动作——那个动作的前提（可枚举、可裁定的冲突记录）已不存在。
@@ -3315,7 +3314,7 @@
 `ArchiveImporter` 导入的 `.gz` 走一遍与自动路径相同的管道。
 
 新采集器没有「待导入队列」这个概念——它要么按 `log_tailer.include_gzip` 直接读 gz（在采集线径内），
-要么不读。Worker 侧 RPC `LogImportArchives` 保留为兼容壳，恒返回 `LOG_UNSUPPORTED`；
+要么不读。Worker 侧已**不再实现** `LogImportArchives`（调用得 `UNIMPLEMENTED`）；
 CP 侧路由与前端「手动导入归档」对话框均已删除。
 
 > **想补历史 gz？** 把 `log_tailer.include_gzip` 打开、并让采集 glob 覆盖到那些 `.gz` 即可——

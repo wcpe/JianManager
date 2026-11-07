@@ -41,6 +41,20 @@ func startLogRPCWorkerGRPC(t *testing.T, srv *Server) workerpb.WorkerServiceClie
 	return workerpb.NewWorkerServiceClient(conn)
 }
 
+// retiredLogRPCs 是**已随旧采集链路退役**的 RPC 名单（2026-11-06）。
+//
+// 它们的 proto 定义还在（wire 兼容：混版 CP 调用时得到 UNIMPLEMENTED 而不是连接错误），
+// 但 Worker 已不再实现，也不再有 delegate。对它们不做「必须有 delegate」的检查。
+//
+// 为什么不在 proto 里删掉：proto 是已发布的线格式契约，删 message/RPC 会让老 CP 的
+// 代码生成与反序列化失效。保留定义 + 不实现，是这类下线最安全的形态。
+var retiredLogRPCs = map[string]string{
+	"LogCutoverReadiness":       "旧账本的「能否接管写入」判定，账本已删",
+	"LogResolveIngestGaps":      "旧账本的缺口/放弃裁定，新采集器不追踪完整性",
+	"LogImportArchives":         "旧链路的归档回灌，新采集器无「待导入队列」",
+	"LogClearIdentityConflicts": "旧账本的冲突记录，新采集器不产生身份冲突",
+}
+
 func TestLogRPCs_AllHaveExplicitDelegate(t *testing.T) {
 	declared := declaredServerMethods(t)
 	clientIface := reflect.TypeOf((*workerpb.WorkerServiceClient)(nil)).Elem()
@@ -49,6 +63,13 @@ func TestLogRPCs_AllHaveExplicitDelegate(t *testing.T) {
 	for i := 0; i < clientIface.NumMethod(); i++ {
 		name := clientIface.Method(i).Name
 		if !strings.HasPrefix(name, "Log") {
+			continue
+		}
+		if reason, retired := retiredLogRPCs[name]; retired {
+			// 退役的 RPC 不得残留 delegate：留着等于“看起来支持、实际恒失败”。
+			_, stillDeclared := declared[name]
+			require.False(t, stillDeclared,
+				"%s 已退役（%s），不应再用 delegate——proto 保留是为了 wire 兼容，不是为了让实现活过来", name, reason)
 			continue
 		}
 		checked++

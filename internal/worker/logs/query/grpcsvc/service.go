@@ -193,42 +193,6 @@ func (s *Service) SetRuntimeInstaller(installer RuntimeInstaller) { s.installer 
 func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)          { s.catalog = cat }
 func (s *Service) SetPartitionMigrator(migrator PartitionMigrator) { s.migrator = migrator }
 
-// LogClearIdentityConflicts 人工确认并清空身份冲突记录。
-//
-// # 为何现在是固定 unsupported（2026-11-06）
-//
-// 冲突记录的唯一写入方是旧采集链路的账本（`ingest.Manager`），它已在阶段三删除。
-// 新采集器（tailer/logtail）按文件 fingerprint + offset 采集，不维护「同区间多哈希」
-// 的概念，**不产生也不累积身份冲突**。既然不再有冲突记录，清空动作就没有作用对象。
-//
-// 保留 RPC 本身（而非直接删 proto）的理由：CP 与 Worker 可独立滚动发版。
-// 混版期间老 CP 仍会发起该 RPC，本层必须回一个**明确的 unsupported**，
-// 而不能因为方法不存在而让调用方吃 UNIMPLEMENTED 或 panic。
-// 返回 unsupported 而不是空成功：后者会让运维以为「标记已清」，从此不再排查。
-func (s *Service) LogClearIdentityConflicts(_ context.Context, req *workerpb.LogClearIdentityConflictsRequest) (*workerpb.LogClearIdentityConflictsResponse, error) {
-	return &workerpb.LogClearIdentityConflictsResponse{
-		RequestId: req.GetRequestId(),
-		Error:     unsupportedErr(ingestRetiredReason("ingest identity conflict clearing")),
-	}, nil
-}
-
-// LogImportArchives 手动触发归档（.gz）导入扫描。
-//
-// # 为何现在是固定 unsupported（2026-11-06）
-//
-// 手动导入服务的是旧采集链路的「归档回灌」：把躺在源目录里、尚未被 ArchiveImporter
-// 导入的历史 .gz 走一遍与自动路径相同的管道。新采集器不再回灌历史文件——
-// 它要么按 `log_tailer.include_gzip` 直接读 gz（在线径内），要么不读。
-// 没有「待导入队列」这个概念，手动触发也就没有意义。
-//
-// 保留 RPC 的理由同 LogClearIdentityConflicts（混版兼容，明确 unsupported）。
-func (s *Service) LogImportArchives(_ context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
-	return &workerpb.LogTaskResponse{
-		State: workerpb.LogTaskState_LOG_TASK_FAILED,
-		Error: unsupportedErr(ingestRetiredReason("ingest archive import")),
-	}, nil
-}
-
 // Enabled 报告服务是否启用。
 func (s *Service) Enabled() bool { return s.enabled && s.query != nil }
 
@@ -709,40 +673,6 @@ func (s *Service) LogMigratePartition(ctx context.Context, req *workerpb.LogMigr
 	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
 }
 
-// LogCutoverReadiness 报告日志平台切换就绪度。
-//
-// # 为何现在是固定 unsupported（2026-11-06）
-//
-// 它回答的是旧链路的「账本能否接管写入」：ledgerReady 来自账本的 CutoverReadiness，
-// 即「已发布投影是否覆盖了需接管的位置区间」。账本已在阶段三删除，新采集器用
-// registry（fingerprint → offset）续读，不存在「接管判定」这个环节。
-//
-// 保留 RPC 的理由同 LogClearIdentityConflicts（混版兼容，明确 unsupported）。
-func (s *Service) LogCutoverReadiness(_ context.Context, req *workerpb.LogCutoverReadinessRequest) (*workerpb.LogCutoverReadinessResponse, error) {
-	return &workerpb.LogCutoverReadinessResponse{
-		RequestId: req.GetRequestId(),
-		Error:     unsupportedErr(ingestRetiredReason("log cutover readiness")),
-	}, nil
-}
-
-// LogResolveIngestGaps 核销/放弃采集缺口。
-//
-// # 为何现在是固定 unsupported（2026-11-06）
-//
-// 「缺口」是旧账本的概念：它记录源位置上哪段没被投递（含被放弃的永久丢失区间），
-// 并由人工裁定去核销。新采集器**主动不追踪完整性**（用户裁定："日志不重要，投递失败
-// 就失败了，做好提示消息就行"），因此没有缺口账本、没有放弃裁定、也没有可核销的对象。
-//
-// 保留 RPC 的理由同上。注意：本方法**不再**校验操作人/理由——那两个校验的存在意义
-// 是「永久放弃不可无痕」，而放弃动作本身已不存在，留着校验只会给运维一个
-// 「填了理由就能成功」的错觉。
-func (s *Service) LogResolveIngestGaps(_ context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
-	return &workerpb.LogTaskResponse{
-		State: workerpb.LogTaskState_LOG_TASK_FAILED,
-		Error: unsupportedErr(ingestRetiredReason("ingest gap resolution")),
-	}, nil
-}
-
 // LogTail 尾部查询（server-streaming LogEvent）。
 // stream 协议没有独立 response envelope：unsupported/partial 以 gRPC status 返回，
 // 不得静默结束空流伪装成功。成功路径逐条推送 LogEvent。
@@ -795,16 +725,6 @@ func unsupportedErr(msg string) *workerpb.LogError {
 		Code:    workerpb.LogErrorCode_LOG_UNSUPPORTED,
 		Message: msg,
 	}
-}
-
-// ingestRetiredReason 构造「该能力已随旧采集链路退役」的统一错误文案。
-//
-// 与普通 unsupported 区分开的理由：运维看到 `... is not configured` 会去查配置
-// （以为是漏配了），而实际是**代码已经没了**——两种处置完全不同。
-// 文案里显式点名退役与替代路径，能把排查引向正确方向。
-func ingestRetiredReason(capability string) string {
-	return capability + " 已随旧采集链路（ingest/ledger）退役：新采集器（tailer/logtail）不维护缺口账本、" +
-		"不产生身份冲突、不回灌历史归档。详见 docs/ARCHITECTURE.md 的采集链路说明。"
 }
 
 // taskStateFromString 把归档任务状态字符串映射为 proto 枚举。
