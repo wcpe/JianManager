@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -69,10 +70,33 @@ func TestFile_Rename_InstanceNotFound(t *testing.T) {
 }
 
 // TestAlert_CreateListDelete 告警规则创建→列表→删除完整流程。
+//
+// # 为什么断言是「相对基线」而不是绝对条数
+//
+// CP 首次启动会预置 5 条推荐规则（`database/alert_seed.go`，FR-485，全部 enabled=false）。
+// 旧断言写的是 `Len(rules, 1)` / `Len(rules, 0)`——那是预置功能上线**之前**的世界。
+// 直接改成 6 / 5 同样脆弱：预置清单增删一条就会再红一次，而那种红与该用例真正
+// 想守的东西（创建→列表→删除这条闭环）毫无关系。
+//
+// 所以改为先取基线、再断言**增量**。这条用例的契约是：
+//   - 创建后能按 id 在列表里查到，且字段原样回读；
+//   - 删除后该 id 从列表消失；
+//   - 其余规则（无论预置还是别人建的）不受影响。
+//
+// 这三条与"库里本来有几条规则"无关，预置清单怎么变都不会误伤它。
 func TestAlert_CreateListDelete(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	token := getAdminToken(t, r)
+
+	// 基线：预置规则在 setup 时已入库，先数清楚。
+	w := makeRequest(r, "GET", "/api/v1/alerts/rules", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	baseline := parseJSONArray(t, w)
+	baselineIDs := make(map[float64]bool, len(baseline))
+	for _, raw := range baseline {
+		baselineIDs[ruleField(raw, "id")] = true
+	}
 
 	// 创建告警规则
 	ruleBody := map[string]interface{}{
@@ -85,28 +109,44 @@ func TestAlert_CreateListDelete(t *testing.T) {
 		"notifyType":   "webhook",
 		"notifyTarget": "${JM_ALERT_WEBHOOK}",
 	}
-	w := makeRequest(r, "POST", "/api/v1/alerts/rules", ruleBody, token)
+	w = makeRequest(r, "POST", "/api/v1/alerts/rules", ruleBody, token)
 	assert.Equal(t, http.StatusCreated, w.Code)
 	resp := parseJSON(t, w)
 	assert.Equal(t, "CPU 告警", resp["name"])
 	assert.Equal(t, "cpu", resp["metric"])
 	ruleID := uint(resp["id"].(float64))
 
-	// 列表
+	// 列表：基线 + 1，且新规则可查到（字段原样回读）
 	w = makeRequest(r, "GET", "/api/v1/alerts/rules", nil, token)
 	assert.Equal(t, http.StatusOK, w.Code)
 	rules := parseJSONArray(t, w)
-	require.Len(t, rules, 1)
+	require.Len(t, rules, len(baseline)+1, "创建后应比基线多一条")
+
+	var found interface{}
+	for _, raw := range rules {
+		if uint(ruleField(raw, "id")) == ruleID {
+			found = raw
+			break
+		}
+	}
+	require.NotNil(t, found, "新建的规则必须能在列表里按 id 查到")
+	assert.Equal(t, "CPU 告警", ruleStr(rawMap(found), "name"))
+	assert.Equal(t, "cpu", ruleStr(rawMap(found), "metric"))
 
 	// 删除
 	w = makeRequest(r, "DELETE", "/api/v1/alerts/rules/"+itoa(ruleID), nil, token)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// 删除后列表为空
+	// 删除后：回到基线，且**不含**被删的那条
 	w = makeRequest(r, "GET", "/api/v1/alerts/rules", nil, token)
 	assert.Equal(t, http.StatusOK, w.Code)
 	rules = parseJSONArray(t, w)
-	assert.Len(t, rules, 0)
+	assert.Len(t, rules, len(baseline), "删除后应回到基线条数")
+	for _, raw := range rules {
+		id := ruleField(raw, "id")
+		assert.NotEqual(t, float64(ruleID), id, "被删的规则不得仍出现在列表里")
+		assert.True(t, baselineIDs[id], "其余规则（含预置）不得被这次删除波及")
+	}
 }
 
 // TestAlert_ListEvents_Empty 告警事件列表为空时返回空数组。
@@ -392,4 +432,25 @@ func TestBackup_Create_MissingName(t *testing.T) {
 
 	w = makeRequest(r, "POST", "/api/v1/instances/"+itoa(instID)+"/backups", map[string]interface{}{}, token)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// rawMap 把 parseJSONArray 的元素断成对象；不是对象就 Fatal（说明响应形状变了）。
+func rawMap(v interface{}) map[string]interface{} {
+	m, ok := v.(map[string]interface{})
+	if !ok {
+		panic("期望 JSON 对象，实际 " + fmt.Sprint(v))
+	}
+	return m
+}
+
+// ruleField 取对象里的数值字段（JSON 数字统一是 float64）。
+func ruleField(v interface{}, key string) float64 {
+	f, _ := rawMap(v)[key].(float64)
+	return f
+}
+
+// ruleStr 取对象里的字符串字段。
+func ruleStr(m map[string]interface{}, key string) string {
+	s, _ := m[key].(string)
+	return s
 }
