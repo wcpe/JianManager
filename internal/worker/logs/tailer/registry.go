@@ -150,6 +150,36 @@ func (r *Registry) GetGrowing(id FileIdentity, path string, size int64) (FileSta
 func (r *Registry) Put(st FileState) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// 清掉「同一物理文件（dev+inode）但指纹不同」的陈旧条目。
+	//
+	// # 为什么必须清（2026-11-07 生产实测的缺陷）
+	//
+	// `latest.log` 被**截断重写**时（MC 每日轮转就是清空后重写，copytruncate 式），
+	// 内容变了 ⇒ 指纹变了 ⇒ 新条目键不同 ⇒ 旧条目**原地残留**。
+	// 生产实测 `region1-zone1-lobby-01/logs/latest.log` 一个文件积了 5 条记录，
+	// 全部指向同一个 inode 43284036。
+	//
+	// 后果不是"多余记录"这么轻：`GetGrowing` 的首查是 `m[id.Key()]` 精确命中，
+	// 一旦文件内容再次与某个旧指纹重合（重写后写回相似开头、或日志滚动一圈），
+	// 就会命中那条**旧条目**并返回它的 offset。若该 offset 已等于当前文件大小，
+	// startOffsetFor 判为"已读完" ⇒ **这段日志一条不采**（实测可复现，见
+	// TestStaleEntryCausesDataLoss）。那是静默丢数据，比重复更难发现。
+	//
+	// # 为什么按 dev+inode 而不是按路径
+	//
+	// 路径会被轮转复用（latest.log → 2026-11-07-1.log，新 latest.log 出现）。
+	// 按路径清会误删轮转目标的位点。dev+inode 是"同一个物理文件"的准确判据；
+	// inode 为 0（拿不到物理身份）时不做清理，宁可留一条多余记录也不误删。
+	if st.Identity.Inode != 0 {
+		for k, old := range r.m {
+			if k == st.Identity.Key() {
+				continue
+			}
+			if old.Identity.Inode == st.Identity.Inode && old.Identity.Dev == st.Identity.Dev {
+				delete(r.m, k)
+			}
+		}
+	}
 	r.m[st.Identity.Key()] = st
 	r.dirty = true
 }
