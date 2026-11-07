@@ -94,3 +94,4 @@ blob-report/
 vantaloom.md
 # Vantaloom 本地运行时产物（技能副本 / 私有记忆副本），不属于工程源码
 .vantaloom/
+/.vantaloom/
