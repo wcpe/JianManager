@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/wcpe/JianManager/internal/controlplane/embed"
+	scriptsembed "github.com/wcpe/JianManager/scripts/embed"
 )
 
 // registerInstallScriptRoutes 注册 Worker 一键安装脚本的匿名静态端点（FR-080，见 ADR-020 §2）。
@@ -18,10 +18,10 @@ import (
 // 显式注册为真实路由（而非靠 SPA NoRoute 回退），避免被前端 index.html 回退吞掉。
 func registerInstallScriptRoutes(r *gin.Engine) {
 	r.GET("/install-worker.sh", func(c *gin.Context) {
-		serveInstallScript(c, embed.InstallWorkerScriptSh(), "text/x-shellscript; charset=utf-8")
+		serveInstallScript(c, scriptsembed.InstallWorkerScriptSh(), "text/x-shellscript; charset=utf-8")
 	})
 	r.GET("/install-worker.ps1", func(c *gin.Context) {
-		serveInstallScript(c, embed.InstallWorkerScriptPs1(), "text/plain; charset=utf-8")
+		serveInstallScript(c, scriptsembed.InstallWorkerScriptPs1(), "text/plain; charset=utf-8")
 	})
 }
 
