@@ -1035,17 +1035,8 @@ func runWorker() {
 	}
 	// 新采集器（tailer/logtail）。旧链路已删除，不存在「两者互斥」的问题。
 	var logTailRunner *logtail.Runner
-	// 定时归档导入扫描的基线周期（FR-504）：worker.yml 的 log_ingest.archive_scan_interval。
-	// 实际周期由采集策略决定（策略周期优先、未配置回落基线、总开关关闭一律不扫描）。
-	baseArchiveScanInterval, baseArchiveErr := cfg.IngestArchiveScanInterval()
-	if baseArchiveErr != nil {
-		slog.Warn("log_ingest.archive_scan_interval 无法解析，定时扫描按关闭处理", "error", baseArchiveErr)
-		baseArchiveScanInterval = 0
-	}
 	// FR-503/504 的采集策略（含定时归档导入扫描周期）已随旧链路删除：
-	// 新采集器不读这些策略——路径来自 CP 下发的实例登记，归档导入由 include_gzip 决定。
-	// 这里的 baseArchiveScanInterval 也随之无用（留一处说明，避免下一个人再去查它）。
-	_ = baseArchiveScanInterval
+	// 新采集器不读这些策略——路径来自 CP 下发的实例登记，gzip 由 `log_tailer.include_gzip` 决定。
 	// 新采集器（tailer/logtail，阶段二并行接入）：开关打开时走它，**不构造** ingest.Manager。
 	//
 	// # 为何必须互斥

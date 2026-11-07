@@ -14,7 +14,6 @@ describe('NodeLogRuntimePanel', () => {
     loginMockUser(`mock.${payload}.sig`)
     let installs = 0
     let migrations = 0
-    let resolutions = 0
     server.use(
       http.get(API('/log-runtime/assets'), () => HttpResponse.json({ assets: [{ tag: 'v1.52.0', os: 'linux', arch: 'amd64', cached: true }] })),
       http.get(API('/nodes/1/log-runtime'), () => HttpResponse.json({ supported: true, instances: [
@@ -31,10 +30,6 @@ describe('NodeLogRuntimePanel', () => {
         migrations++
         return HttpResponse.json({ state: 'migrated' })
       }),
-      http.post(API('/nodes/1/log-runtime/ingest/resolve-gaps'), () => {
-        resolutions++
-        return HttpResponse.json({ state: 'resolved' })
-      }),
     )
     const user = userEvent.setup()
     renderWithProviders(<NodeLogRuntimePanel nodeId={1} os="linux" arch="amd64" online />)
@@ -50,8 +45,6 @@ describe('NodeLogRuntimePanel', () => {
     expect(migrations).toBe(0)
     await user.click(screen.getByRole('button', { name: '确认迁移' }))
     await waitFor(() => expect(migrations).toBe(1))
-    await user.click(screen.getByRole('button', { name: '核销已覆盖缺口' }))
-    await waitFor(() => expect(resolutions).toBe(1))
   })
 
   it('keeps asset deployment disabled while offline or uncached', async () => {

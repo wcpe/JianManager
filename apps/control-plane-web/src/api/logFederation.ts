@@ -24,7 +24,6 @@ import {
   type CoverageBannerProps,
   type ExportDownloadAffordance,
   type LogFederationResponse,
-  type IngestPositionGap,
   type PartialReason,
   type Quality,
   type TargetCoverage,
@@ -70,17 +69,6 @@ export interface LogsFederationEnvelope {
   federatedReady?: boolean
   statsExact?: boolean
   items?: unknown[] | null
-  ingest_position_gaps?: Array<{
-    worker_id: string
-    storage_namespace: string
-    from: string
-    to: string
-    reason_code: string
-    operator: string
-    at_utc: string
-    log_source_id?: string
-    source_generation?: string
-  }> | null
   total?: number
   page?: number
   pageSize?: number
@@ -321,22 +309,6 @@ function normalizeQuality(
   }
 }
 
-/** 每条证据独立映射，不折叠同namespace，也不对uint64位置做数值转换。 */
-function normalizeIngestPositionGaps(raw: LogsFederationEnvelope['ingest_position_gaps']): IngestPositionGap[] {
-  if (!Array.isArray(raw)) return []
-  return raw.map((gap) => ({
-    workerId: gap.worker_id,
-    storageNamespace: gap.storage_namespace,
-    from: gap.from,
-    to: gap.to,
-    reasonCode: gap.reason_code,
-    operator: gap.operator,
-    atUTC: gap.at_utc,
-    logSourceId: asString(gap.log_source_id),
-    sourceGeneration: asString(gap.source_generation),
-  }))
-}
-
 /** envelope → foundation response + 来源标记。 */
 export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
   sourceTag: LogSourceTag | null
@@ -422,7 +394,6 @@ export function mapFederationEnvelope(envelope: LogsFederationEnvelope): {
     response: {
       ok,
       items,
-      ingestPositionGaps: normalizeIngestPositionGaps(envelope.ingest_position_gaps),
       coverage,
       quality,
       viewId: asString(envelope.view?.view_id) ?? asString(envelope.view?.viewId),

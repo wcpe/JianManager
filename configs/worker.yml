@@ -158,32 +158,15 @@ log:
 # log_ingest:
 #   charset: gbk
 
-# 未闭合多行缓冲的闲置超时（缺陷 B）：超过它仍没有新行，就以显式 `multiline_unclosed`
-# 标记强制闭合该缓冲并推进 durable。未闭合缓冲平时只由「下一行到达」推进——源长时间
-# 静默时它既不产出事件也不推进 durable，而轮转恢复要靠 durable 覆盖已读前缀，于是这段
-# 悬挂区间既没被覆盖也没有事件，链路会卡在「轮转分段不可读」。
-# 空 = 默认 5s（normalize.DefaultUnclosedTimeout）；非正数（含 "0"）= **关闭**强制冲刷，
-# 悬挂记录会一直挂着（仅排障用）。非法值启动即拒。
-# log_ingest:
-#   multiline_unclosed_timeout: 5s
-
-# 「定时归档导入扫描」的周期（键 log_ingest.archive_scan_interval）。
-# 空或 "0" = **关闭（默认关）**。为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，
-# 定时扫描的价值只在「采集轮停了、归档还在攒」（源被暂停/停止采集）的场景；默认开会在每个
-# 部署上多出一份周期性目录扫描与账本写入——收益不明显而成本确定，故由运维显式打开。
-# log_ingest:
-#   archive_scan_interval: 5m
-
 # 日志采集器（键 log_tailer.*，对齐 Fluent Bit / Filebeat 三层模型）。
 #
-# 2026-11-06 起**默认开启**。启用后旧的 ingest 链路**不再构造**——两套会读同一批
-# 文件、同一行进 VL 两次，所以互斥是硬约束而不是建议。
+# 2026-11-06 起**默认开启**，且它是**唯一**的采集链路（旧 ingest/ledger 链路已删除）。
 #
 # 采集哪些文件**不在这里配**：路径由 CP 下发的实例登记（绑定表）每轮现算——
 # 每个实例的 `<WorkDir>/logs/*.log` 与 `<WorkDir>/proxy.log.*`。这样新建实例的
 # 日志无需重启 Worker 就能被采到。
 #
-# 回退：配 enabled: false 即退回旧 ingest 链路（阶段三删旧代码前一直可用）。
+# 关闭采集：配 enabled: false（此时不再有任何采集，VL 里只剩存量与保留策略的动作）。
 # log_tailer:
 #   enabled: true
 #   # 额外的采集 glob（通常留空；只用于非实例日志，如节点自身日志）。
@@ -199,39 +182,8 @@ log:
 #   scan_interval: ""
 #   progress_interval: ""
 
-# 整节点解算的有界化（键 log_ingest.resolve_gaps_max_sources / resolve_gaps_max_duration）：
-# 作用于 POST /nodes/:id/log-runtime/ingest/resolve-gaps **不传 storageNamespace** 的路径，
-# 限制单次调用最多处理多少源、最多跑多久；超出即分片并由调用方续跑。
-# 0/空 = 源数用默认 256；空 = 时长用默认 2m（主要服务于没有 deadline 的调用方）。
-# ⚠ 为什么必须有界（2026-10-02 压测现场）：该路径此前对全部源做投影查询且**整段持采集轮锁**，
-# 一次调用即让**整节点采集停摆 30 分钟**（read_pos 冻结、索引 WAL 涨到 10.2 GB），
-# 且调用方超时后服务端仍继续跑。锁纪律已修（解算不再跨投影查询持锁、ctx 可取消），
-# 本项是「有界」那一半——遍历必须有上界。非法值（负数 / 非法时长）启动即拒。
-# log_ingest:
-#   resolve_gaps_max_sources: 256
-#   resolve_gaps_max_duration: 2m
-
-# 采集侧采样与降级（成本治理）。默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，
-# 必须由运维显式开启。取值口径：0 = 没填走默认，负数 = 写错启动即拒。
-#
-# 抑制**不丢弃**：被压掉的行由一条**汇总事件**承接其区间（正文含条数/级别/首条样例，
-# 字段 sampling_rule/采样计数），因此「丢了多少、丢了什么」在查询面可见，
-# 且既有的缺口自动消解判据（要求连续覆盖）不受影响。
-# log_ingest:
-#   sampling:
-#     enabled: true
-#     min_level: info                  # 等级过滤：低于它的折叠为汇总事件（无法归类的级别一律放行）
-#     burst_window: 1s                 # 同源同消息高频抑制窗口（0 = 不启用）
-#     burst_threshold: 20              # 窗口内前 N 条放行原文，其余合并
-#     max_signatures: 4096             # 模式表上限（有界，采样自身不得成为无界增长点）
-#     budget_max_events_per_window: 0  # 每源预算：窗口内允许原文落库条数（0 = 不启用）
-#     budget_window: 1s
-#     budget_keep_every: 10            # 预算用尽后每 N 条保留 1 条原文，其余折叠
-#     max_aggregate_events: 4096       # 单条汇总承接的原文条数上限
-#     degrade_enabled: false           # 风暴自动降级（触发源复用容量门禁的磁盘读数）
-#     degrade_target_level: ERROR      # 降级期间压到 error-only
-#     degrade_disk_percent: 80         # 与 log_capacity 的降级阈值同口径
-#     degrade_hold: 30s                # 触发消失后连续保持多久才恢复
+# 采集侧采样（log_ingest.sampling.*）已随旧链路删除（2026-11-06）：新采集器逐行写入、无采样实现。
+# 旧 worker.yml 里留着这些键不会报错（viper 忽略未知键），但它们**不再有任何效果**。
 
 # 保留策略（成本治理）。**默认不启用**，且默认动作是「搬运到冷层」而**不是删除**。
 #

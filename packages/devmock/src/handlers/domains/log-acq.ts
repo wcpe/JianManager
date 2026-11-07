@@ -4,11 +4,13 @@ import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-mid
 import { db } from '@jianmanager/devmock/db'
 
 /**
- * 节点级日志采集域 mock handler（FR-503 节点端 + FR-504 手动导入归档）。
+ * 节点级日志采集域 mock handler（FR-503 节点端）。
  *
  * 覆盖 api 模块：`api/nodes.ts` 的节点端 3 条（GET/PUT/DELETE
- * `/nodes/:id/settings/log-acquisition`）+ `api/logRuntime.ts` 的
- * `POST /nodes/:id/log-runtime/ingest/import-archives`。
+ * `/nodes/:id/settings/log-acquisition`）。
+ *
+ * ~~`POST /nodes/:id/log-runtime/ingest/import-archives`~~ 已于 2026-11-06 随旧采集链路删除：
+ * 后端端点与前端入口都不存在了，这里也不再提供 mock。
  *
  * **为什么必须单独补这个域**：平台端 seed 在 client.ts（`GET/PUT /settings` 能读写那 5 个
  * `log.acq.*` 行），但节点详情「日志采集」分段走的是**另一组端点**。mock 模式下未实现的端点
@@ -226,50 +228,4 @@ export const handlers = [
     return HttpResponse.json(nodeAcqView(resolved.node))
   }),
 
-  // ── 手动导入归档（.gz，FR-504）────────────────────────────────────────────
-  // 理由必填（审计凭据）；空 storageNamespace = 该节点全部源 ⇒ 仅平台管理员。
-  // 与真后端一致：**不返回计数**（导入按 WAL 余量分批、可能跨多个采集轮），
-  // 只回报「已触发且无错」，计数以 Worker 日志为准——避免面板做出"已完成"的假承诺。
-  domainRoute('post', '/nodes/:id/log-runtime/ingest/import-archives', async (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const resolved = resolveNode(info.params.id as string)
-    if (!resolved.ok) return resolved.response
-    let body: { storageNamespace?: string; reason?: string }
-    try {
-      body = (await info.request.json()) as { storageNamespace?: string; reason?: string }
-    } catch {
-      return HttpResponse.json({ error: 'INVALID_REQUEST' }, { status: 400 })
-    }
-    const reason = (body.reason ?? '').trim()
-    if (reason === '') {
-      return HttpResponse.json(
-        {
-          error: 'REASON_REQUIRED',
-          message: '手动导入归档必须给出理由（审计凭据需要记录为何可以导入）',
-        },
-        { status: 400 },
-      )
-    }
-    const namespace = (body.storageNamespace ?? '').trim()
-    if (namespace === '') {
-      // 全节点范围导入仅平台管理员（与 authorizeImportAllSources 同判据）。
-      const forbidden = requirePlatformAdmin(info)
-      if (forbidden) return forbidden
-    } else if (!/^inst:[0-9]+$/.test(namespace)) {
-      return HttpResponse.json(
-        {
-          error: 'INVALID_REQUEST',
-          message: '须提供实例存储命名空间（形如 inst:317）；留空表示本节点全部源',
-        },
-        { status: 400 },
-      )
-    }
-    return HttpResponse.json({
-      state: 'imported',
-      message:
-        '已触发归档导入扫描；导入计数见 Worker 日志。' +
-        '批量导入按 WAL 余量分批，可能跨多个采集轮完成。',
-    })
-  }),
 ]

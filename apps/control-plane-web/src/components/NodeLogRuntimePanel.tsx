@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { CircleHelp } from 'lucide-react'
-import { Archive, CheckCheck, Download, LoaderCircle, Play, RotateCw, Square, Upload } from 'lucide-react'
+import { Archive, Download, LoaderCircle, Play, RotateCw, Square, Upload } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -14,7 +14,6 @@ import {
   useInstallLogAsset,
   useLogRuntime,
   useMigrateLogPartition,
-  useResolveLogIngestGaps,
   useUploadLogAsset,
   type LogRuntimeInstance,
 } from '@/api/logRuntime'
@@ -75,7 +74,6 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
   const install = useInstallLogAsset(nodeId)
   const control = useControlLogRuntime(nodeId)
 	const migrate = useMigrateLogPartition(nodeId)
-	const resolveGaps = useResolveLogIngestGaps(nodeId)
 	const [migrationDay, setMigrationDay] = useState('')
   const [migrationTarget, setMigrationTarget] = useState<{ nodeId: number; storageNamespace: string; utcDay: string } | null>(null)
   const [migrationError, setMigrationError] = useState('')
@@ -97,7 +95,7 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
   }
   const normalizedArch = arch.toLowerCase() === 'x64' ? 'amd64' : arch.toLowerCase()
   const approved = assets.data?.find((asset) => asset.os === os.toLowerCase() && asset.arch === normalizedArch)
-  const busy = upload.isPending || install.isPending || control.isPending || migrate.isPending || resolveGaps.isPending
+  const busy = upload.isPending || install.isPending || control.isPending || migrate.isPending
 
   const act = (namespace: LogRuntimeInstance['namespace'], action: 'start' | 'stop' | 'restart') => {
     control.mutate({ namespace, action }, {
@@ -197,15 +195,6 @@ export default function NodeLogRuntimePanel({ nodeId, os, arch, online }: {
         })}
       </div>
 	  <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-		<Button type="button" size="sm" variant="outline" disabled={busy || !online}
-		  onClick={() => resolveGaps.mutate(undefined, { onSuccess: () => toast.success('已核销 projection 覆盖的缺口'), onError: (error) => toast.error(errorMessage(error)) })}>
-		  {resolveGaps.isPending ? <LoaderCircle className="mr-1 size-4 animate-spin" /> : <CheckCheck className="mr-1 size-4" />}
-		  {t('logsRuntime.gaps.resolve')}
-		</Button>
-		{/* 问号放在按钮外侧：放进按钮会并入其可访问名（读屏与测试都读不到「核销已覆盖缺口」）。 */}
-		<span title={t('logsRuntime.gaps.help')} className="inline-flex items-center">
-		  <CircleHelp className="size-3.5 text-muted-foreground" aria-label={t('logsRuntime.gaps.help')} />
-		</span>
 		<span className="inline-flex items-center gap-1">
 		  <input type="date" aria-label={t('logsRuntime.date.label')} title={t('logsRuntime.date.help')} value={migrationDay} onChange={(event) => setMigrationDay(event.target.value)}
 			className="h-8 rounded-md border bg-background px-2 text-sm" />

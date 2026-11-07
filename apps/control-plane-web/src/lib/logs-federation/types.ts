@@ -234,22 +234,7 @@ export type ExportStatus = 'READY' | 'PENDING' | 'FAILED' | 'INCOMPLETE' | (stri
  * 日志联邦查询 / 导出响应的前端信封。
  * 覆盖 useLogs 未来升级后的字段，以及错误注入 / mock 的传输失败形态。
  */
-/** 已裁定永久位置缺失；独立于时间覆盖与质量，位置始终保留十进制字符串。 */
-export interface IngestPositionGap {
-  workerId: string
-  storageNamespace: string
-  from: string
-  to: string
-  reasonCode: string
-  operator: string
-  atUTC: string
-  /** 旧Worker未提供时保持未知，禁止由namespace或当前事件推测。 */
-  logSourceId?: string
-  sourceGeneration?: string
-}
-
 export interface LogFederationResponse {
-  ingestPositionGaps?: IngestPositionGap[]
   /** 传输 / HTTP 层是否成功；undefined 表示调用方未提供（按成功路径继续看 coverage）。 */
   ok?: boolean
   viewId?: string

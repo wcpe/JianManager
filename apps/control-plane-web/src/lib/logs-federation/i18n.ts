@@ -67,7 +67,7 @@ export const LOGS_FEDERATION_KEYS = {
   exportPermissionRecheckHint: 'logsFederation.export.permissionRecheckHint',
   exportNextCursorHint: 'logsFederation.export.nextCursorHint',
 
-  // 质量维度阻断导出时的自救引导（缺陷 2）：没有可用清理入口时必须给出路。
+  // 质量维度阻断导出时的自救引导：没有可人工清空的入口时必须给出路。
   qualityConflictNeedsNode: 'logsFederation.quality.conflictNeedsNode',
   qualityUnresolvedNoRemedy: 'logsFederation.quality.unresolvedNoRemedy',
 } as const
@@ -178,7 +178,7 @@ export const LOGS_FEDERATION_LOCALES = {
         nextCursorHint: '游标结束仅表示当前视图枚举完毕，不代表全部历史完整。',
       },
       quality: {
-        conflictNeedsNode: '身份冲突按节点清空：请先在上方「节点」选择器选中具体节点，再点「确认并清空冲突」。',
+        conflictNeedsNode: '存在身份冲突时导出被阻断：这是只读的质量提示，当前没有可人工清空的入口；请缩小时间范围或稍后重试。',
         unresolvedNoRemedy: '重复事件无法自动对账，也没有可人工清空的冲突；导出暂不可用，请缩小时间范围或稍后重试。',
       },
     },
@@ -261,7 +261,7 @@ export const LOGS_FEDERATION_LOCALES = {
       },
       quality: {
         conflictNeedsNode:
-          'Identity conflicts are cleared per node. Select a specific node in the toolbar first, then choose “Confirm and clear conflicts”.',
+          'Identity conflicts block export: this is a read-only quality marker and there is no manual clearing entry; narrow the time range or retry later.',
         unresolvedNoRemedy:
           'Duplicate events cannot be reconciled automatically and there is no conflict to clear manually. Export is unavailable; narrow the time range or retry later.',
       },

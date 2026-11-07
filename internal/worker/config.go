@@ -812,37 +812,8 @@ type LogIngestConfig struct {
 	// 依赖粘滞启发式，运维显式声明才是确定性方案。
 	// 源可用 SourceConfig.Charset 覆盖本默认；非法值在 Load 阶段启动即拒。
 	Charset string `mapstructure:"charset"`
-	// MultilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（键
-	// log_ingest.multiline_unclosed_timeout）：超过它仍无新行，就以显式 `multiline_unclosed`
-	// 标记强制闭合该缓冲并推进 durable。空串表示用默认（normalize.DefaultUnclosedTimeout = 5s）。
-	//
-	// 为什么必须有这条出路（缺陷 B）：未闭合缓冲平时只由「下一行到达」推进。源一旦长时间
-	// 静默，缓冲既不产出事件也不推进 durable——而轮转恢复要靠 durable 覆盖已读前缀，
-	// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
-	// 非正数（含 "0"）表示**关闭**强制冲刷，此时悬挂记录会一直挂着（仅排障用）。
-	MultilineUnclosedTimeout string `mapstructure:"multiline_unclosed_timeout"`
-	// ArchiveScanInterval 是「定时归档导入扫描」的周期（键 log_ingest.archive_scan_interval）。
-	// 空串或 "0" 表示**关闭**（默认关）。
-	//
-	// 为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，定时扫描的价值只在
-	// 「采集轮停了、归档还在攒」的场景（源被暂停/停止采集）。默认开会在每个部署上多出
-	// 一份周期性目录扫描与账本写入——收益不明显而成本确定，故由配置显式打开。
-	// 手动入口不受本开关影响（gRPC LogImportArchives 始终可用）。
-	ArchiveScanInterval string `mapstructure:"archive_scan_interval"`
-	// ResolveGapsMaxSources 是整节点解算（POST /nodes/:id/log-runtime/ingest/resolve-gaps
-	// 不传 storageNamespace 的路径）单次调用最多处理的源数（键 log_ingest.resolve_gaps_max_sources）。
-	// 0 或空表示用默认（ingest.defaultResolveGapsMaxSources = 256）。
-	//
-	// 为什么需要它（2026-10-02 压测现场）：该路径此前对全部源做投影查询且**整段持采集轮锁**，
-	// 一次调用即让整节点采集停摆 30 分钟（read_pos 冻结、索引 WAL 涨到 10.2 GB），且调用方
-	// 超时后服务端仍继续跑。锁纪律已修（解算不再跨投影查询持锁、ctx 可取消），本条配置是
-	// 「有界」那一半：遍历必须有上界，超出即分片并由调用方续跑（见 ResolveGapsBudget）。
-	ResolveGapsMaxSources int `mapstructure:"resolve_gaps_max_sources"`
-	// ResolveGapsMaxDuration 是同一次调用的墙钟预算（键 log_ingest.resolve_gaps_max_duration，
-	// 如 "2m"）。空串表示用默认（ingest.defaultResolveGapsMaxDuration）。
-	// 它服务于**没有 deadline 的调用方**（RPC/HTTP 侧自有截止时间，ctx 会先到点）。
-	ResolveGapsMaxDuration string `mapstructure:"resolve_gaps_max_duration"`
 }
+
 
 // LogTailerConfig 是新采集器的配置面，键为 `log_tailer.*`。
 //
@@ -1556,28 +1527,6 @@ func (c *Config) WALBudgetNotice() string {
 	return "log_capacity.max_wal_bytes=0（字节维度不限）：暂停仍由 log_capacity.max_wal_entries 兜住，但单条超大事件（如整段堆栈）不再有字节上界，请确认这是有意为之"
 }
 
-// IngestArchiveScanInterval 解析 `log_ingest.archive_scan_interval`。
-//
-// 口径：空串 ⇒ 0（**关闭**，默认）；"0" 或负值 ⇒ 0（关闭）；其余必须是合法 duration。
-// 非法值启动即拒：静默回退会让「我明明开了定时扫描」变成隐性关闭，而这件事只在
-// 「源被暂停、归档攒着没人导」时才暴露——与 timezone/charset 同属「配错就静默」的危险项。
-func (c *Config) IngestArchiveScanInterval() (time.Duration, error) {
-	if c == nil {
-		return 0, nil
-	}
-	raw := strings.TrimSpace(c.LogIngest.ArchiveScanInterval)
-	if raw == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("log_ingest.archive_scan_interval 非法: %q（应为时长如 5m/1h；0 或空表示关闭）", raw)
-	}
-	if d < 0 {
-		return 0, nil
-	}
-	return d, nil
-}
 
 // LogLevel 解析 `log.level` 为 slog 等级。
 //
@@ -1814,30 +1763,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_ingest.charset", "")
 	v.SetDefault("log_ingest.read_limits.max_line_bytes", 0)
 	v.SetDefault("log_ingest.read_limits.max_bytes_per_poll", int64(0))
-	v.SetDefault("log_ingest.multiline_unclosed_timeout", "")
-	v.SetDefault("log_ingest.archive_scan_interval", "")
-	// 整节点解算预算（2026-10-02 缺陷修复）：0/空 = 用 ingest 包默认（256 源 / 2m）。
-	// 重发的外部条件与切片（2026-10-03 现场）：探针超时/等待上界/切片预算；空或 0 = 用 ingest 默认。
-	v.SetDefault("log_reconcile.vl_ready_timeout", "")
-	v.SetDefault("log_reconcile.vl_ready_wait", "")
-	v.SetDefault("log_reconcile.replay_max_days", 0)
-	v.SetDefault("log_reconcile.replay_max_duration", "")
-	v.SetDefault("log_ingest.resolve_gaps_max_sources", 0)
-	// 每周期总预算（2026-10-02 事故修复）：单次落库调用做多少；0/空 = 用 stateindex 默认。
-	// 持久化门的让路窗口与老化阈值（2026-10-03 门闩饿死采集轮）：空/0 = 用 ingest 默认。
-	// 滚动回收单轮上界（#64）：0/空 = 用 ingest 默认（32 步 / 1s ✓）。
-	// 事件段清单的落盘滞后上界（机械盘 IO 收敛）：0/空 = 只在段集合变化时落清单。
-	// 未封末段的 count/bytes/首末身份是派生值，重启由 eventstore 校准逐字段重算 ⇒ 不丢事件体；
-	// 一次追加的耐久调用由 3 次（段数据 + 清单 + 目录）降到 1 次（段数据，不可省）。
-	// 想让清单更"新鲜"可配 manifest_sync_every=N 或 manifest_sync_interval=30s（或两者）。
-	// 校验查询的全局天花板（2026-10-03 现场 ×410 重试风暴）：0 = 用 ingest 默认（30/s、6 在飞、单簇 12 次）。
-	// 每源每轮校验预算与可见性错开（2026-10-03 回退修复）：空串 = 用 ingest 默认（预算 1.5s、错开关）。
-	// 校验预算随事件数放大（2026-10-10 生产活锁修复，改动 B）：空串 = **不放大**（保守默认，
-	// 与修复前逐字一致）；chunk_estimate 给了正数才按「簇数 × 估计 × 安全系数」放大，
-	// 并由 chunk_budget_max 封顶（空 = ingest 默认 5 分钟）。
-	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
-	// 新采集器（tailer/logtail）：**默认开**（2026-11-06 切换）。
-	// 旧链路保留为回退：配 `log_tailer.enabled: false` 即可退回（两套互斥）。
+	// 新采集器（tailer/logtail）：**默认开**（2026-11-06 切换）。旧链路（ingest/ledger）已于同批删除，
+	// 不存在“两套互斥”的配置面了：本开关只控制“开不开采集”。
 	v.SetDefault("log_tailer.enabled", true)
 	v.SetDefault("log_tailer.paths", []string{})
 	v.SetDefault("log_tailer.exclude", []string{})

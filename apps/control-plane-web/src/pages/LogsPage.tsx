@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { AlertTriangle, Download, Info, PackageOpen, Radio } from 'lucide-react'
+import { AlertTriangle, Download, Info, Radio } from 'lucide-react'
 import { type LogQueryParams } from '@/api/logs'
 import {
 	buildFederationResult,
@@ -22,8 +22,6 @@ import { useAuthStore } from '@/stores/auth'
 import { usePlatformDiagnosticsLog } from '@/api/nodeDiagnostics'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
-import { ClearConflictsDialog } from '@/components/ClearConflictsDialog'
-import { ImportArchivesDialog } from '@/components/ImportArchivesDialog'
 import { LogExportRangeDialog } from '@/components/LogExportRangeDialog'
 import { useDebounced } from '@/lib/use-debounced'
 import { Button } from '@jianmanager/ui/components/button'
@@ -44,7 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons, type CoverageBannerProps, type IngestPositionGap } from '@/lib/logs-federation'
+import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons, type CoverageBannerProps } from '@/lib/logs-federation'
 import type { LogEntry } from '@/api/logs'
 import {
   logLevelStatus,
@@ -313,10 +311,6 @@ export default function LogsPage() {
    * 内容却属于旧条件，运维会把 A 实例的日志读成 B 实例的。复用前必须比对 filterKey。
    */
   const [lastGoodFederation, setLastGoodFederation] = useState<{ filterKey: string; result: LogsFederationResult } | null>(null)
-  // 「确认并清空身份冲突」对话框开关（质量标记的运维入口，见 ClearConflictsDialog）。
-  const [clearConflictsOpen, setClearConflictsOpen] = useState(false)
-  // 「手动导入归档（.gz）」对话框开关（FR-504，历史归档补采的运维入口）。
-  const [importArchivesOpen, setImportArchivesOpen] = useState(false)
   /**
    * 限流提示闩锁：重试耗尽观测到 429 即置位，直到重新拿到**真实成功**结果才清除。
    *
@@ -381,64 +375,27 @@ export default function LogsPage() {
   const federationNotReady = federation?.federatedNotReady === true
   /**
    * 质量标记（与横幅同源）：**身份冲突**与**未对账重复**是两个不同状态。
-   *
-   * `duplicateConflict`（proto `LOG_QUALITY_DUPLICATE_CONFLICT`）才有可清对象；
-   * `duplicateUnresolved`（`..._UNRESOLVED`，重复事件无法对账）没有任何可人工清空的东西。
-   * 混用会让 unresolved 用户看到一个「点了也没东西可清」的死按钮。
+   * 只有 CONFLICT 曾可由人工清空诊断记录；UNRESOLVED（重复事件无法对账）从来没有
+   * 可人工清空的东西。两者仍分开呈现，不得混成一个布尔。
    */
   const duplicateConflict = federation?.classified.coverage.duplicateConflict === true
   const duplicateUnresolved = federation?.classified.coverage.duplicateUnresolved === true
 
   /**
-   * 「确认并清空身份冲突」入口可用性。
+   * 质量维度阻断导出时的**自救引导**。
    *
-   * 三个条件缺一不可：
-   * - 确有**身份冲突**（`duplicateConflict`，与横幅同源）—— 只有 CONFLICT 能由
-   *   `LogClearIdentityConflicts` 清空；UNRESOLVED 不是冲突，不得凭它给按钮；
-   * - 选中了单一节点 —— 清空是**按节点**下发的（Worker 持有该节点的源），
-   *   未选节点时无法确定目标，此时不给入口，而不是默认拿第一个节点去清；
-   * - 联邦视图可用 —— 不可用时列表为空，本入口没有可清的东西。
-   */
-  const canClearConflicts = federationActive && nodeId !== null && duplicateConflict
-
-  /**
-   * 质量维度阻断导出时的**自救引导**（缺陷修复）。
-   *
-   * 为什么必须有：导出被质量标记禁用后，若当前又没有可用的清理入口（未选节点、或压根
-   * 没有可清的冲突），用户会停在一个「按钮灰着、不知为何」的死路。引导只在
-   * 「确实因为质量被阻断、且没有清理入口」时出现，正常态不加噪音。
-   * - 有冲突但未选节点 → 指明要先选节点（清空是按节点下发的）；
-   * - 只有未对账重复 → 明说无法人工清空，给出缩小范围/重试的出路。
+   * 为什么必须有：导出被质量标记禁用后，若不给任何说明，用户会停在一个「按钮灰着、
+   * 不知为何」的死路。引导只在「确实因为质量被阻断」时出现，正常态不加噪音。
+   * 两类标记都没有可人工清空的入口，引导只说实情与可执行范围（缩小范围/稍后重试）。
    */
   const qualityGuidanceKey = !federationActive
     ? undefined
     : duplicateConflict
-      ? canClearConflicts
-        ? undefined
-        : LOGS_FEDERATION_KEYS.qualityConflictNeedsNode
+      ? LOGS_FEDERATION_KEYS.qualityConflictNeedsNode
       : duplicateUnresolved
         ? LOGS_FEDERATION_KEYS.qualityUnresolvedNoRemedy
         : undefined
 
-  /**
-   * 「手动导入归档」入口的门控（FR-504）。
-   *
-   * 与清空冲突不同，它**不要求存在冲突标记**——它的用途是补历史（源目录里躺着但从未被
-   * 导入的 .gz）。两个必要条件：
-   * - 选中了单一节点：导入按节点下发给该 Worker，未选节点时无法确定目标；
-   * - 当前用户是平台管理员：全节点范围导入在后端**仅平台管理员**放行
-   *   （`authorizeImportAllSources`），而本入口的可达路径恒为全节点范围（`LogsPage`
-   *   不传 `sourceKey`）。不判角色会给出一个「填完必填理由再吃 403」的入口。
-   *   ——若要为实例级角色开放，需要先收集 `inst:<id>` 作为 `sourceKey`（后端已支持）。
-   *
-   * **刻意不绑定 `federationActive`**（与清空冲突的判据不同）：导入走的是 `LogImportArchives`
-   * RPC，与联邦**查询**面（`LogSearch` 一族）不是同一能力。生产实测存在这样的组合——
-   * 「日志查询服务未启用 ⇒ 联邦视图为空、`federationActive=false`」而导入 RPC 完全可用
-   * （同一时刻 `POST /nodes/:id/log-runtime/ingest/import-archives` 返回 200 并成功导入）。
-   * 若把入口绑在查询可用性上，最需要补历史归档的降级场景反而没有按钮。端点自身不可用时
-   * 由后端返回错误，前端按既有错误处理提示——**不做乐观预判**。
-   */
-  const canImportArchives = nodeId !== null && isPlatformAdmin
 
   /**
    * 经典表格查询（**仅**平台视图的权威来源）。
@@ -501,34 +458,18 @@ export default function LogsPage() {
     ...scope,
     ...(federation?.response.viewId ? { viewId: federation.response.viewId } : {}),
   }
-	// Tail无永久位置字段：复用既有Search每30秒刷新证据，固定窗口避免每个3秒轮询桶重查。
-	const followEvidenceQuery = useLogsFederation({
-    ...normalizeLogScope({ ...scope, ...timeParamsFor(range, new Date(rangeAnchor), true), to: undefined }),
-		limit: 1,
-  }, { enabled: federationEnabled && follow && !federationQuery.isFetching })
   const mainFetching = federationEnabled ? federationQuery.isFetching : classicLoading
   const refetchMain = federationEnabled ? federationQuery.refetch : refetchLogs
   useEffect(() => {
-    if (!follow || mainFetching || followEvidenceQuery.isFetching || exporting) return
+    if (!follow || mainFetching || exporting) return
     // 上一轮真正落定后再计时，慢请求不会被新桶打断，也不会形成重叠轮询。
     const timer = window.setTimeout(() => {
       if (timeParams.from) setFollowAnchorMs(bucketFloor(Date.now()))
       else void refetchMain()
     }, FOLLOW_INTERVAL)
     return () => window.clearTimeout(timer)
-  }, [follow, mainFetching, followEvidenceQuery.isFetching, exporting, timeParams.from, refetchMain])
+  }, [follow, mainFetching, exporting, timeParams.from, refetchMain])
 
-  const positionScopeKey = logScopeKey({ ...scope, from: undefined, to: undefined })
-  const [positionEvidence, setPositionEvidence] = useState<{ scopeKey: string; gaps: IngestPositionGap[] } | null>(null)
-  const freshEvidence = follow
-    ? followEvidenceQuery.isSuccess && !followEvidenceQuery.isPlaceholderData && !followEvidenceQuery.data.degraded
-      ? followEvidenceQuery.data.response.ingestPositionGaps : undefined
-    : federationEnabled && federationSettled && federationActive ? federation?.response.ingestPositionGaps : undefined
-  if (freshEvidence && (positionEvidence?.scopeKey !== positionScopeKey || positionEvidence?.gaps !== freshEvidence)) {
-    // Tail和永久位置证据串行；新证据在途时保留同目标已获得的凭据，禁止跨目标占位复用。
-    setPositionEvidence({ scopeKey: positionScopeKey, gaps: freshEvidence })
-  }
-  const ingestPositionGaps = positionEvidence?.scopeKey === positionScopeKey ? positionEvidence.gaps : []
 	// 编排（§1 延后串行）：① 主列表先出——stats/facets 均已 gate 在「主查询有数据且拿到 viewId」之后 ✓；
 	// ② stats → facets 再串行——facets 额外等 stats 落定（成功或失败），
 	// 任一时刻最多一个聚合请求在飞 ⇒ 不再与主列表/彼此并发挤 VL 的 maxConcurrentRequests=2 两个槽 ✗。
@@ -993,25 +934,6 @@ export default function LogsPage() {
             </SelectContent>
           </Select>
 
-        {/* 手动导入归档（FR-504）：补采「躺在源目录里但从未被导入」的历史 .gz 的运维入口。
-            为什么放在工具栏、而不是覆盖/失败态横幅的动作行里：目标场景恰恰是「采集一切正常、
-            只是历史 .gz 没导」，而横幅在覆盖完整时不渲染（`props.visible` 由
-            `isFailure || isIncomplete || !coverage.complete` 决定）——挂在横幅内会让入口在它
-            最该出现的健康态整体消失（review D-01）。不为此改动横幅的 visible 语义：
-            「无异常不打扰」是既有设计。 */}
-        {canImportArchives && (
-          <Button
-            variant="outline"
-            size="sm"
-            data-testid="logs-import-archives-open"
-            title={t('logsFederation.importArchives.scopeNode')}
-            onClick={() => setImportArchivesOpen(true)}
-          >
-            <PackageOpen className="size-3.5" />
-            {t('logsFederation.importArchives.button')}
-          </Button>
-        )}
-
         {/* 实时跟随开关 pill，靠右 */}
         <button
           type="button"
@@ -1122,62 +1044,11 @@ export default function LogsPage() {
         <CoverageBanner
           federation={federation}
           onAction={handleFederationAction}
-          onClearConflicts={canClearConflicts ? () => setClearConflictsOpen(true) : undefined}
           qualityGuidanceKey={qualityGuidanceKey}
           onRetry={() => {
 			void federationQuery.refetch(); void refetchLogs()
           }}
         />
-      )}
-
-      {/* 身份冲突人工清空（运维入口）：只在有冲突、且当前选中单一节点时可用。
-          未选中单一节点时无法确定要清哪个节点，故不给入口（而不是默认清第一个）。 */}
-      {canClearConflicts && (
-        <ClearConflictsDialog
-          nodeId={nodeId}
-          open={clearConflictsOpen}
-          onOpenChange={setClearConflictsOpen}
-          onCleared={() => {
-            void federationQuery.refetch(); void refetchLogs()
-          }}
-        />
-      )}
-
-      {/* 手动导入归档（FR-504）：补采历史 .gz 的运维入口。
-          与清空冲突不同，它不依赖任何冲突标记——但要求单一节点上下文 + 平台管理员
-          （全节点范围导入仅管理员放行，见 canImportArchives）。入口按钮在工具栏。 */}
-      {canImportArchives && (
-        <ImportArchivesDialog
-          nodeId={nodeId}
-          open={importArchivesOpen}
-          onOpenChange={setImportArchivesOpen}
-        />
-      )}
-
-      {/* 永久位置凭据独立于时间覆盖；空items也必须可见，来源未知时不推测归属。 */}
-      {federationActive && ingestPositionGaps.length > 0 && (
-        <section data-testid="logs-ingest-position-gaps" role="status"
-          className="max-h-48 shrink-0 overflow-auto rounded-md border border-status-warning/30 bg-status-warning/10 px-3 py-2 text-sm">
-          <h2 className="flex items-center gap-1.5 font-medium">
-            <AlertTriangle className="size-4 shrink-0" />
-            {t('logsFederation.positionGaps.title', { count: ingestPositionGaps.length })}
-          </h2>
-          <p className="text-xs text-muted-foreground">{t('logsFederation.positionGaps.description')}</p>
-          <ul className="mt-1.5 space-y-1.5">
-            {ingestPositionGaps.map((gap, index) => (
-              <li key={index} data-testid="logs-ingest-position-gap" className="break-all text-xs">
-                <p>{t('logsFederation.positionGaps.identity', {
-                  worker: gap.workerId, source: gap.logSourceId ?? t('logsFederation.positionGaps.unknown'),
-                  generation: gap.sourceGeneration ?? t('logsFederation.positionGaps.unknown'),
-                })}</p>
-                <p>{t('logsFederation.positionGaps.evidence', {
-                  namespace: gap.storageNamespace, from: gap.from, to: gap.to, reason: gap.reasonCode,
-                  operator: gap.operator, at: gap.atUTC,
-                })}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
       )}
 
       {isLoading && !hasData ? (
@@ -1238,17 +1109,14 @@ function CoverageBanner({
   federation,
   onRetry,
   onAction,
-  onClearConflicts,
   qualityGuidanceKey,
 }: {
   federation: LogsFederationResult
   onRetry: () => void
   onAction: (key: string) => void
-  /** 存在"身份冲突待确认"时提供运维入口；未传则该入口不渲染。 */
-  onClearConflicts?: () => void
   /**
-   * 质量维度阻断导出时的自救引导 key（未选节点 / 无冲突可清）。
-   * 未传表示当前有可用出路（例如清空入口已出现），不渲染额外提示。
+   * 质量维度阻断导出时的自救引导 key（身份冲突 / 未对账重复）。
+   * 未传表示当前不因质量维度阻断导出，不渲染额外提示。
    */
   qualityGuidanceKey?: string
 }) {
@@ -1258,8 +1126,8 @@ function CoverageBanner({
   const sourceTag = federation.sourceTag
   const degraded = federation.degraded
   const federatedNotReady = federation.federatedNotReady
-  // 质量标记与 foundation 同源，不另造一套：两边若漂移，会出现「横幅说有冲突、按钮却不见」
-  // 或反之的矛盾呈现。**必须分开读**：只有 conflict 有可清对象，unresolved 没有。
+  // 质量标记与 foundation 同源，不另造一套：两边若漂移，会出现「横幅说有冲突、页面上看不到标记」
+  // 的矛盾呈现。**必须分开读**：conflict 与 unresolved 是两个不同状态。
   const duplicateConflict = classified.coverage.duplicateConflict
   const duplicateUnresolved = classified.coverage.duplicateUnresolved
   // 不可达/未就绪始终展示横幅（即使 foundation 因 items 路径判定 visible=false）。
@@ -1339,8 +1207,8 @@ function CoverageBanner({
             {t(federation.exportAffordance.blockedKey)}
           </p>
         )}
-      {/* 质量维度阻断导出且当前没有可用的清理入口时的自救引导：不能把用户留在
-          「导出灰着、既不知道原因也没有出路」的禁用态（未选节点 / 无冲突可清）。 */}
+      {/* 质量维度阻断导出时的自救引导：不能把用户留在「导出灰着、既不知道原因也没有出路」
+          的禁用态。 */}
       {qualityGuidanceKey && (
         <p data-testid="logs-quality-guidance" className="text-xs opacity-90">
           {t(qualityGuidanceKey)}
@@ -1356,7 +1224,7 @@ function CoverageBanner({
           {t('logsFederation.export.nextCursorHint')}
         </p>
       )}
-      {(props.showRetry || guidanceActions.length > 0 || (duplicateConflict && onClearConflicts)) && !degraded && (
+      {(props.showRetry || guidanceActions.length > 0) && !degraded && (
         <div className="flex flex-wrap gap-2">
           {props.showRetry && (
             <Button size="sm" variant="outline" onClick={onRetry} data-testid="logs-coverage-retry">
@@ -1374,22 +1242,6 @@ function CoverageBanner({
               {t(key)}
             </Button>
           ))}
-          {/* 身份冲突人工清空：只在**确有身份冲突**时出现（UNRESOLVED 没有可清对象，
-              给它按钮就是一条点了也没用的死路）。
-              它改的是查询面语义（标记消失），故走二次确认 + 必填理由（见 ClearConflictsDialog）。 */}
-          {duplicateConflict && onClearConflicts && (
-            <Button
-              size="sm"
-              variant="destructive"
-              data-testid="logs-clear-conflicts-open"
-              onClick={onClearConflicts}
-            >
-              {t('logsFederation.clearConflicts.button')}
-            </Button>
-          )}
-          {/* 手动导入归档（FR-504）**不在这里**：它不依赖任何冲突/覆盖标记，而横幅在覆盖完整时
-              根本不渲染 ⇒ 留在横幅内会让入口在最需要它的健康态消失。现由工具栏的独立入口承担
-              （见 LogsPage 工具栏 `logs-import-archives-open`），门控同样在页面级。 */}
         </div>
       )}
     </div>

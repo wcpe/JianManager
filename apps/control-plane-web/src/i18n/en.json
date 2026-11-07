@@ -3496,13 +3496,6 @@
     "platformTailHint": "Showing the last {{count}} lines of the log file (the file is the only source; no server-side paging). For older entries, grep on that machine — see the diagnostics log for the command."
   },
   "logsFederation": {
-    "positionGaps": {
-      "title": "Permanent position gaps ({{count}})",
-      "description": "These ingest positions were manually abandoned. This independent evidence does not change time coverage, statistical quality, or export verification.",
-      "unknown": "Unknown (not supplied by older worker)",
-      "identity": "Worker: {{worker}} · Source: {{source}} · Generation: {{generation}}",
-      "evidence": "Storage namespace: {{namespace}} · Positions: [{{from}}, {{to}}] · Reason: {{reason}} · Operator: {{operator}} · Time: {{at}}"
-    },
     "coverage": {
       "complete": "Coverage complete",
       "partial": "Coverage incomplete (partial results)",
@@ -3559,32 +3552,6 @@
       "reopenView": "Reopen view",
       "contactAdmin": "Contact administrator"
     },
-    "clearConflicts": {
-      "button": "Confirm and clear conflicts",
-      "title": "Confirm and clear identity conflict records",
-      "description": "This node holds identity conflicts that cannot be resolved automatically (the same event ID appears with different content). In such cases the system keeps the first-seen variant and skips the conflicting row, so the retained version is the correct one; clearing only removes this diagnostic notice and changes no log content. The quality marker disappears after clearing, so verify the retained versions first.",
-      "reasonLabel": "Reason (required, recorded in the audit credential)",
-      "reasonPlaceholder": "e.g. Verified each retained version in VL",
-      "confirmLabel": "Confirm and clear",
-      "reasonRequired": "Enter a reason — the audit credential must record why clearing is allowed",
-      "success": "Cleared {{count}} identity conflict record(s)",
-      "partial": "Cleared {{count}}; {{skipped}} source(s) were skipped because new records appeared — re-query to confirm",
-      "failed": "Failed to clear identity conflicts",
-      "scopeHint": "Clears every source on this node that holds conflict records (platform admins only)"
-    },
-    "importArchives": {
-      "button": "Import archives",
-      "title": "Import historical archives (.gz)",
-      "description": "Runs the same import pipeline as the automatic path over every historical archive (.gz and rotated files) that is present in this node's source directories but has never been imported. Use it to backfill history: scheduled scanning is off by default, and the collection loop only imports history for newly adopted sources, so existing sources have no other way in. Imports are batched by write headroom and may span several collection rounds — check the logs page later, or the node's Worker log line for the manual archive import. This entry is unaffected by the gz import switch.",
-      "scopeNode": "Scope: every importable source on this node (platform admins only)",
-      "scopeSource": "Scope: the log sources of one instance (inst:<id>)",
-      "reasonLabel": "Reason (required, recorded in the audit credential)",
-      "reasonPlaceholder": "e.g. Backfill rotated archives",
-      "confirmLabel": "Trigger import",
-      "reasonRequired": "Enter a reason — the audit credential must record why importing is allowed",
-      "triggered": "Archive import scan triggered; imports are batched by write headroom and may span several collection rounds",
-      "failed": "Failed to trigger archive import"
-    },
     "export": {
       "allowed": "Coverage complete and verified; download available",
       "blockedIncomplete": "Coverage incomplete; export download is not available",
@@ -3601,7 +3568,7 @@
       "nextCursorHint": "A null cursor only ends enumeration of the current view; it does not mean full history is complete."
     },
     "quality": {
-      "conflictNeedsNode": "Identity conflicts are cleared per node. Select a specific node in the toolbar first, then choose “Confirm and clear conflicts”.",
+      "conflictNeedsNode": "Identity conflicts block export: this is a read-only quality marker and there is no manual clearing entry; narrow the time range or retry later.",
       "unresolvedNoRemedy": "Duplicate events cannot be reconciled automatically and there is no conflict to clear manually. Export is unavailable; narrow the time range or retry later."
     },
     "sourceTag": {
@@ -5536,10 +5503,6 @@
       "restart": "Restart",
       "migrate": "Migrate partition",
       "migrateHelp": "Move a partition from HOT to COLD to free hot storage; the partition is briefly unqueryable during migration."
-    },
-    "gaps": {
-      "resolve": "Resolve covered gaps",
-      "help": "Collection or delivery interruptions leave \"gaps\". Once a complete projection proves that window is intact, the gap can be resolved so it stops counting as a risk."
     },
     "date": {
       "label": "Migration date (that day partition)",

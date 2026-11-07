@@ -3187,7 +3187,7 @@
 
 - **Worker 单 range 路径**：同一 `event_id` 出现两个不同规范化哈希（`canonical_hash`）⇒ `unresolved`，检出即置、不复位。**同 `event_id` 同哈希的纯重复不降级**——该重复按 `id+哈希` 去重丢弃，不构成内容歧义；把它算进来会让普通重复误封导出
 - **Worker 合并路径**（多 range 并集）：同一 `event_id` 在跨 range 合并时**再次出现**即 ⇒ `unresolved`（哈希相同也置位：该行按 `event_id` 去重丢弃，但质量仍降级——同一事件身份出现在两个分区本就需要归因）。不同哈希的两行都保留给上层归因
-- **Worker planner**：投影 `coverage_complete=false` ⇒ `unresolved`；该投影 `conflict_count>0`（存在未裁定的身份冲突记录）⇒ `conflict`（优先于 `unresolved`，清空须经 `POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts`）
+- **Worker planner**：投影 `coverage_complete=false` ⇒ `unresolved`；该投影 `conflict_count>0`（存在未裁定的身份冲突记录）⇒ `conflict`（优先于 `unresolved`）。⚠️ **2026-11-06 起 `conflict` 基本不会出现**：冲突记录的写入方（旧采集账本）已删除，新采集器不产生身份冲突；连带的「清空冲突」端点也已下线（见下方）。该标记保留是为了兼容旧数据快照。
 - **CP 联邦聚合**：逐 Worker 按最差值合并（`conflict > unresolved > unspecified > exact`），任一 Worker 报非 `exact` 即整体降级，不被其它 Worker 的 `exact` 掩盖；未上报（`unspecified`）**也高于** `exact`，不会被当成 `exact` 放行。此外任一目标 `coverage.state` 为 `partial` / `stale` ⇒ 提升为 `unresolved`
 - **导出闸门**：要求 `duplicate_quality=exact` **且** `stats_quality=exact`，否则不交付 NDJSON 附件，并在 `incomplete_reasons` 追加 `quality_<值>` / `stats_<值>`（如 `quality_unresolved`）
 
@@ -3282,39 +3282,45 @@
 - **审计**: **仅成功分支**落 `node.log_partition.migrate`（`targetType=node`、`targetId=路由节点`），detail 含 `migrationScope=physical_utc_day`、入口 `storageNamespace`、`utcDay`、`targetTier`、`operator`；失败不写成功迁移行。审计由 handler 主动记录，不依赖通用中间件。
 - **状态**：真实 RBAC 反例已红转绿，定向 `TestSixModulePhysicalDayMigration|TestLogMigratePartition` 回归退出码 0；CP 末轮完整普通、分范围 race/vet 的准确范围见 [CP 规格](specs/cp-log-query-coordinator/spec.md)。特定真实双 VL/三启证据见 [Lifecycle 规格](specs/worker-log-lifecycle/spec.md)；真后端 Chromium 已验证确认单 POST 收 409 时无假成功/重放，准确短验范围见 [共享规格](specs/worker-log-platform-contract/spec.md#2026-10-22-有限真实联合短验与剩余门禁)，不是浏览器成功搬迁或本批全部失败矩阵、独立最终复核与生产验收通过。
 
-### POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps
+### ~~POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps~~（已下线 2026-11-06）
 
-- **请求**：可选 `{ "storageNamespace": "完整源键", "reason": "人工裁定理由" }`；`storageNamespace` 在本端点表示完整 `LogSourceID/SourceGeneration`，不是存储分区名。
-- **授权**：非空键须在下发任何裁定 RPC 前绑定真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；节点能力或知道源键不能替代对象授权。畸形键 400；未知实例、组外、错节点或未登记代次统一 403，拒绝路径不发裁定 RPC。操作人取已认证主体，不信任请求 body 自报身份；取不到认证主体 ⇒ 403 `OPERATOR_UNKNOWN`，同样不下发 RPC。
-- **语义**：空键仍仅走原整节点自动解算，不能落入永久放弃分支；终局人工放弃需实名、理由及 Worker 证据门禁。成功 `{ "state": "resolved" }`；Worker 拒绝返回 409 `GAP_RESOLUTION_FAILED`（另带 `code`：缺省 `LOG_NOT_READY`，否则取 Worker 错误码；以及 Worker 的 `message`），传输失败 502 `WORKER_RPC_FAILED`。
-- **审计**：**仅当请求体 `storageNamespace` 非空**（显式单源放弃裁定）时，成功分支落 `node.log_ingest.abandon_gap`（`targetType=node`、`targetId=路由节点`），detail 含 `storageNamespace`、`reason`、`operator`、`state`（恒 `resolved`）。**空键的自动解算路径不产生审计**——它不是人工永久裁定，不得在审计面为自动路径伪造责任主体。`operator` 单列于 detail：Agent（API 密钥）通道下审计行的 `user_id` 是 token id，可读主体只存在于该字段。
+**端点已删除，请求返回 404。**
 
-### POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts
+「缺口」是旧采集账本（`ingest` / `ledger`）的概念：它记录源位置上哪段没被投递、哪段被人工裁定永久放弃。
+2026-11-06 采集链路整体重建为 Fluent Bit / Filebeat 模型（`tailer` + `logtail`），新采集器**主动不追踪完整性**，
+没有缺口账本、没有放弃裁定，也就没有可核销的对象。Worker 侧 RPC `LogResolveIngestGaps` 保留为兼容壳，
+恒返回 `LOG_UNSUPPORTED`（文案点名「已随旧采集链路退役」），CP 侧路由与前端入口均已删除。
 
-- **请求**：`{ "storageNamespace": "完整源键（可选）", "reason": "清空理由（必填）" }`。`storageNamespace` 与 resolve-gaps 取同一口径的完整 `LogSourceID/SourceGeneration`；**空 = 清该节点全部持有冲突记录的源**。
-- **语义**：人工确认并清空「身份冲突」记录（同 event_id 异内容、且系统无法按确定性证据裁定）。系统在该形态下保留先到者并跳过冲突行（保留的是正确版本，冲突行从未进入写入面），故清空只移除**诊断记录**、使查询面质量标记不再为 `conflict`/`partial`，**不改动任何日志内容**。
-- **授权**：非空键先做对象授权（与 resolve-gaps 同一判据：真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；畸形键 400，未知实例/组外/错节点/未登记代次 403，拒绝路径不发 RPC）。**空键（批量）额外要求平台管理员**（仅 `node.manage` 的组管理员 403），因为一次调用会清掉整节点所有源的歧义提示。
-- **审计**：操作人取已认证主体（不信任请求 body 自报身份），理由必填；两者均经 `x-jm-operator` / `x-jm-reason` 下传 Worker，并随该源 payload 落库（`identity_conflict_clearances`：操作人 / 理由 / 时间 / 条数 / 被清记录明细）。缺失任一 ⇒ 400 `REASON_REQUIRED` 或 403 `OPERATOR_UNKNOWN`，且**不下发 RPC**。**CP 侧成功后另落一条** `node.log_ingest.clear_conflicts`（`targetType=node`、`targetId=路由节点`），detail 含 `storageNamespace`、`reason`、`operator`、`clearedCount`、`clearedSources`、`skippedSources`——「请求覆盖了谁」与「实际清了谁」必须在同一行里对得上；`operator` 单列的原因同 resolve-gaps（Agent 通道下审计行 `user_id` 是 token id）。
-- **响应**：成功 `{ "state": "cleared", "clearedCount": N, "clearedSources": [...], "skippedSources": [...] }`；`skippedSources` 是计划内但未清的源（期间新增了未经审阅的冲突记录，或本就已无冲突记录）。Worker 拒绝返回 409 `CLEAR_CONFLICTS_FAILED`（含具体原因，如「采集轮忙」），传输失败 502 `WORKER_RPC_FAILED`。
-- **标记消失时机**：Worker 内存与索引里的记录已清空后，`ConflictCount` 由**下一次投影发布**重算为 0。仍在投递的源下次投递即归零；**已停止投递的源**要等其再次投递才归零（本操作不回退任何查询语义，只是不再提示该源的内容歧义）。
-- **状态**: 已注册并有路由层测试（`log_clear_identity_conflicts_test.go`）与 Worker 侧回归（`identity_conflict_clear_test.go`）。
+用户裁定原文：「日志不重要，投递失败就失败了，做好提示消息就行」。
 
-### POST /api/v1/nodes/:id/log-runtime/ingest/import-archives
+### ~~POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts~~（已下线 2026-11-06）
 
-> **2026-10-30 状态变更：归档采集已整体删除，本端点保留但恒返回「无归档可导」。**
-> 用户裁定「把读取gz归档日志通通给我删了，只需要读取日志然后往vl塞，有就有没有就算了」。
-> 端点、授权、审计与下传链路均**未改动**（删接口要跳 proto/grpcsvc/前端三处），
-> 但 Worker 侧 `ImportArchivesNow` 现在**恒返回 `(0, 0, nil)`** ⇒ 响应仍是「成功触发」，
-> 而 `scanned=0 / imported=0`。**这不是故障，是功能已下线。**
-> 下文描述的是**下线前的语义**，保留作历史参考。
+**端点已删除，请求返回 404。**
 
-- **请求**：`{ "storageNamespace": "实例存储命名空间（可选）", "reason": "导入理由（必填）" }`。`storageNamespace` 取值形如 `inst:317`，与 Worker 侧 `ImportArchivesNow` 的过滤口径一致——**传完整源键不会匹配到任何源**（实测得到 `scanned=0`，看着像"成功但没东西可导"）；**空 = 本 Worker 全部可导入源**。
-- **语义**：把「已经躺在源目录里、但还没被导入」的历史归档（`.gz`）走一遍与自动路径完全相同的导入管道。**不受 `log.acq.gz_import_enabled` 总开关影响**——应急补历史永远可用。为什么需要它：定时扫描默认关闭，且采集轮的历史导入受 acquire 层不变量约束（历史段只能前置到**未被读过**的当前段），存量源因此没有别的自动出口。
-- **授权**：非空命名空间须绑定真实实例并做实例级对象授权（畸形 400；未知实例/组外 403），**空命名空间（全 Worker 范围）额外要求平台管理员**。
-- **审计**：操作人取已认证主体（不信任 body 自报身份）、理由必填，两者经 `x-jm-operator` / `x-jm-reason` 下传；CP 侧成功触发后写审计 `node.log_archive.import`（detail 含 `storageNamespace` 与 `reason`）。缺失任一 ⇒ 400 `REASON_REQUIRED` / 403 `OPERATOR_UNKNOWN`，且不下发 RPC。
-- **响应**：成功 `{ "state": "imported", "message": "..." }` —— 只表示「已触发且无错」；**导入按 WAL 余量分批、可能跨多个采集轮**，计数以 Worker 日志「已执行手动归档导入」（含 `scanned`/`imported`）为准。Worker 拒绝返回 409 `IMPORT_ARCHIVES_FAILED`，传输失败 502 `WORKER_RPC_FAILED`。
-- **状态**: 已注册并有路由层回归（`log_import_archives_test.go`：越权 / 缺操作人 / 缺理由 / Worker 报错不伪装成功 / 审计闭环）。
-- **关联 FR**: FR-504
+「身份冲突」指同一个 `event_id` 对应多份不同内容（同区间多哈希）。这套检测依赖旧账本的
+「源区间 + 逐字段校验」，随采集链路重建一并消失；新采集器按文件 fingerprint + offset 采集，
+用内容指纹（`logtail.contentID`）做 `event_id`，**不产生也不累积身份冲突**。
+
+因此「清空冲突记录」没有作用对象。Worker 侧 RPC `LogClearIdentityConflicts` 保留为兼容壳，
+恒返回 `LOG_UNSUPPORTED`；CP 侧路由与前端「清空冲突」对话框均已删除。
+
+> 日志页仍会展示「数据可能有歧义 / 不完整」这类**只读提示**（来自 `coverage` / `quality` 聚合），
+> 但不再提供「一键清掉提示」的动作——那个动作的前提（可枚举、可裁定的冲突记录）已不存在。
+
+### ~~POST /api/v1/nodes/:id/log-runtime/ingest/import-archives~~（已下线 2026-11-06）
+
+**端点已删除，请求返回 404。**
+
+手动触发历史 `.gz` 归档导入，服务的是旧采集链路的「归档回灌」：把躺在源目录里、尚未被
+`ArchiveImporter` 导入的 `.gz` 走一遍与自动路径相同的管道。
+
+新采集器没有「待导入队列」这个概念——它要么按 `log_tailer.include_gzip` 直接读 gz（在采集线径内），
+要么不读。Worker 侧 RPC `LogImportArchives` 保留为兼容壳，恒返回 `LOG_UNSUPPORTED`；
+CP 侧路由与前端「手动导入归档」对话框均已删除。
+
+> **想补历史 gz？** 把 `log_tailer.include_gzip` 打开、并让采集 glob 覆盖到那些 `.gz` 即可——
+> 采集器会把它们当普通文件逐行读取（gzip 流式解压，见 `tailer/gzip.go`）。
+> 注意 VL **不按 `event_id` 去重**，同一份内容若被重复采集会重复入库。
 
 ### GET /api/v1/nodes/:id/log-runtime
 

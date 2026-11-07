@@ -73,61 +73,6 @@ type PartitionMigrator interface {
 	Migrate(ctx context.Context, storageNamespace, utcDay, targetTier string) error
 }
 
-type CutoverReadinessProvider interface {
-	Readiness() (ledgerReady bool, cutoff time.Time, reasons []string)
-}
-
-type IngestGapResolver interface {
-	// ResolveCoveredGaps 是整节点自动路径。ctx 是调用方（HTTP/RPC）的请求上下文：超时/断开
-	// 必须让服务端**真正停止**工作并返回明确错误——解算会扫全源投影（生产实测可跑 30 分钟），
-	// 不可取消就等于「调用方早已放弃、服务端还在为没人要的响应扫盘」。
-	ResolveCoveredGaps(ctx context.Context) error
-	// ResolveCoveredGapsForSource 是显式人工确认（**放弃裁定**）路径：只解指名源的缺口。
-	// operator 是做出裁定的认证主体，为空一律拒绝（放弃不可无痕）。
-	// ctx 语义同上：取消即不得落盘（放弃裁定必须来自一次完成的显式请求）。
-	ResolveCoveredGapsForSource(ctx context.Context, storageNamespace, operator string) error
-}
-
-// IngestPositionGap 是「已放弃位置」查询面 DTO（与 logcoord 的 coverage 语义无关）。
-type IngestPositionGap struct {
-	// 源身份由采集凭据提供；未知时留空，不能从命名空间或查询事件推断。
-	LogSourceID      string
-	SourceGeneration string
-	StorageNamespace string
-	From             uint64
-	To               uint64
-	ReasonCode       string
-	Operator         string
-	AtUTC            string
-}
-
-// IngestAbandonmentProvider 提供「已被人工裁定永久丢失」的源位置区间。
-//
-// 与 logcoord 的分区可查询性**分开**：本接口只回答「分区内部哪些位置永久缺失」，
-// 不参与、也不修改 coverage 的状态判定。缺了它，下游查询会把"永久丢失"当成"本来就没有"，
-// 即静默跳过。
-type IngestAbandonmentProvider interface {
-	AbandonedRanges(targetIDs []string) []IngestPositionGap
-}
-
-// IngestAbandonmentFunc 把普通函数适配成 IngestAbandonmentProvider
-// （与既有 CutoverReadinessFunc 同一模式：让 apps/worker 做跨包适配，服务层不反向依赖 ingest）。
-type IngestAbandonmentFunc func(targetIDs []string) []IngestPositionGap
-
-// AbandonedRanges 实现 IngestAbandonmentProvider。
-func (f IngestAbandonmentFunc) AbandonedRanges(targetIDs []string) []IngestPositionGap {
-	if f == nil {
-		return nil
-	}
-	return f(targetIDs)
-}
-
-// IngestArchiveImporter 是「手动触发归档导入」的提供者（由 ingest.Manager 满足）。
-type IngestArchiveImporter interface {
-	// ImportArchivesNow 扫描并导入待导入归档，返回 (扫描数, 导入数)。operator 为空必须拒绝。
-	ImportArchivesNow(storageNamespace, operator string) (int, int, error)
-}
-
 // OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。//
 // 为什么用 metadata 而不是给 proto 加字段：本路径的操作人来自**调用方的认证上下文**，
 // 而不是请求体（请求体可被任意伪造，PUT 一个字段就把责任推给别人）。用 metadata 让
@@ -201,22 +146,13 @@ func (f RuntimeInstallFunc) Install(ctx context.Context, packageURL, packageSHA 
 type Service struct {
 	workerpb.UnimplementedWorkerServiceServer
 
-	query       QueryService
-	views       ViewLookup
-	enabled     bool
-	runtime     RuntimeController
-	installer   RuntimeInstaller
-	catalog     *catalog.Catalog
-	migrator    PartitionMigrator
-	cutover     CutoverReadinessProvider
-	gapResolver IngestGapResolver
-	// abandonments 提供「已放弃位置」标记（可空：未接线时不返回该标记，而不是编造空成功）。
-	abandonments IngestAbandonmentProvider
-	// archiveImporter 提供手动归档导入入口（可空 = 未接线，返回明确不支持）。
-	archiveImporter IngestArchiveImporter
-	// identityClearer 提供「人工确认并清空身份冲突」入口（可空 = 未接线，返回明确不支持，
-	// 而不是回一个"清空 0 条"的空成功——那会让运维以为标记已经消掉）。
-	identityClearer IngestIdentityConflictClearer
+	query     QueryService
+	views     ViewLookup
+	enabled   bool
+	runtime   RuntimeController
+	installer RuntimeInstaller
+	catalog   *catalog.Catalog
+	migrator  PartitionMigrator
 }
 
 // New 构造已启用的日志 RPC 服务层。
@@ -254,108 +190,43 @@ func (s *Service) SetRuntimeController(controller RuntimeController) { s.runtime
 
 func (s *Service) SetRuntimeInstaller(installer RuntimeInstaller) { s.installer = installer }
 
-func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)                { s.catalog = cat }
-func (s *Service) SetPartitionMigrator(migrator PartitionMigrator)       { s.migrator = migrator }
-func (s *Service) SetCutoverReadiness(provider CutoverReadinessProvider) { s.cutover = provider }
-func (s *Service) SetIngestGapResolver(resolver IngestGapResolver)       { s.gapResolver = resolver }
-func (s *Service) SetIngestAbandonmentProvider(p IngestAbandonmentProvider) {
-	s.abandonments = p
-}
+func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)          { s.catalog = cat }
+func (s *Service) SetPartitionMigrator(migrator PartitionMigrator) { s.migrator = migrator }
 
-// SetIngestArchiveImporter 注入手动归档导入入口。
-func (s *Service) SetIngestArchiveImporter(i IngestArchiveImporter) { s.archiveImporter = i }
-
-// IngestIdentityConflictClearer 是「人工确认并清空身份冲突」的提供者（由 ingest.Manager 满足）。
-type IngestIdentityConflictClearer interface {
-	// ClearIdentityConflicts 清空指定源（sourceKey 为空 = 全部持有冲突记录的源）的冲突记录；
-	// 返回清空的条数与逐源结果。operator / reason 为空必须拒绝。
-	ClearIdentityConflicts(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error)
-}
-
-// IdentityConflictClearOutcome 是清空的逐源结果（服务层 DTO，避免反向依赖 ingest 包）。
-type IdentityConflictClearOutcome struct {
-	ClearedCount   int
-	ClearedSources []string
-	SkippedSources []string
-}
-
-// SetIngestIdentityConflictClearer 注入身份冲突人工清空入口。
-func (s *Service) SetIngestIdentityConflictClearer(c IngestIdentityConflictClearer) {
-	s.identityClearer = c
-}
-
-// IngestIdentityConflictClearerFunc 把普通函数适配成 IngestIdentityConflictClearer
-// （与 IngestAbandonmentFunc / PartitionMigrateFunc 同一模式：让 apps/worker 做跨包适配，
-// 服务层不反向依赖 ingest 包）。
-type IngestIdentityConflictClearerFunc func(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error)
-
-// ClearIdentityConflicts 实现 IngestIdentityConflictClearer。
-func (f IngestIdentityConflictClearerFunc) ClearIdentityConflicts(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error) {
-	if f == nil {
-		return IdentityConflictClearOutcome{}, fmt.Errorf("ingest identity conflict clearing is not configured")
-	}
-	return f(ctx, sourceKey, operator, reason)
-}
-
-// LogClearIdentityConflicts 人工确认并清空身份冲突记录（操作人与理由均必需，审计留痕）。
+// LogClearIdentityConflicts 人工确认并清空身份冲突记录。
 //
-// 与放弃裁定的口径一致：本操作会让查询面不再提示该源存在内容歧义（质量标记消失），
-// 无痕清空等于给「掩盖数据歧义」开后门，故取不到操作人/理由一律拒绝、不下发任何变更。
-func (s *Service) LogClearIdentityConflicts(ctx context.Context, req *workerpb.LogClearIdentityConflictsRequest) (*workerpb.LogClearIdentityConflictsResponse, error) {
-	resp := &workerpb.LogClearIdentityConflictsResponse{RequestId: req.GetRequestId()}
-	// 理由与操作人同源同口径（都是传输层 metadata，见 OperatorMetadataKey 的说明）：
-	// 理由不由请求体携带，因为请求体可被任意伪造，而那会让审计凭据里的"为什么"不可信。
-	reason := reasonFromContext(ctx)
-	if s.identityClearer == nil {
-		resp.Error = unsupportedErr("ingest identity conflict clearing is not configured")
-		return resp, nil
-	}
-	operator := operatorFromContext(ctx)
-	if operator == "" {
-		resp.Error = unsupportedErr(fmt.Sprintf(
-			"清空身份冲突需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))
-		return resp, nil
-	}
-	if reason == "" {
-		resp.Error = unsupportedErr(fmt.Sprintf(
-			"清空身份冲突需要理由：请在 incoming gRPC metadata 设置 %q（审计凭据必须记录为何可以清）", ReasonMetadataKey))
-		return resp, nil
-	}
-	outcome, err := s.identityClearer.ClearIdentityConflicts(ctx, strings.TrimSpace(req.GetStorageNamespace()), operator, reason)
-	if err != nil {
-		return &workerpb.LogClearIdentityConflictsResponse{RequestId: req.GetRequestId(),
-			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
-	}
-	resp.ClearedCount = uint64(outcome.ClearedCount)
-	resp.ClearedSources = outcome.ClearedSources
-	resp.SkippedSources = outcome.SkippedSources
-	slog.Info("已执行身份冲突人工清空", "operator", operator, "reason", reason,
-		"sourceKey", req.GetStorageNamespace(), "cleared", outcome.ClearedCount,
-		"sources", len(outcome.ClearedSources), "skipped", len(outcome.SkippedSources))
-	return resp, nil
+// # 为何现在是固定 unsupported（2026-11-06）
+//
+// 冲突记录的唯一写入方是旧采集链路的账本（`ingest.Manager`），它已在阶段三删除。
+// 新采集器（tailer/logtail）按文件 fingerprint + offset 采集，不维护「同区间多哈希」
+// 的概念，**不产生也不累积身份冲突**。既然不再有冲突记录，清空动作就没有作用对象。
+//
+// 保留 RPC 本身（而非直接删 proto）的理由：CP 与 Worker 可独立滚动发版。
+// 混版期间老 CP 仍会发起该 RPC，本层必须回一个**明确的 unsupported**，
+// 而不能因为方法不存在而让调用方吃 UNIMPLEMENTED 或 panic。
+// 返回 unsupported 而不是空成功：后者会让运维以为「标记已清」，从此不再排查。
+func (s *Service) LogClearIdentityConflicts(_ context.Context, req *workerpb.LogClearIdentityConflictsRequest) (*workerpb.LogClearIdentityConflictsResponse, error) {
+	return &workerpb.LogClearIdentityConflictsResponse{
+		RequestId: req.GetRequestId(),
+		Error:     unsupportedErr(ingestRetiredReason("ingest identity conflict clearing")),
+	}, nil
 }
 
-// LogImportArchives 手动触发归档导入扫描（操作人必需，审计留痕）。
-func (s *Service) LogImportArchives(ctx context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
-	if s.archiveImporter == nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: unsupportedErr("ingest archive import is not configured")}, nil
-	}
-	// 与放弃裁定同一口径：状态改变类动作必须带操作人，取不到即拒绝（不可无痕）。
-	operator := operatorFromContext(ctx)
-	if operator == "" {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: unsupportedErr(fmt.Sprintf(
-				"手动导入归档需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
-	}
-	scanned, imported, err := s.archiveImporter.ImportArchivesNow(strings.TrimSpace(req.GetStorageNamespace()), operator)
-	if err != nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_ERROR_UNSPECIFIED, Message: err.Error()}}, nil
-	}
-	slog.Info("已执行手动归档导入", "operator", operator,
-		"storageNamespace", req.GetStorageNamespace(), "scanned", scanned, "imported", imported)
-	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
+// LogImportArchives 手动触发归档（.gz）导入扫描。
+//
+// # 为何现在是固定 unsupported（2026-11-06）
+//
+// 手动导入服务的是旧采集链路的「归档回灌」：把躺在源目录里、尚未被 ArchiveImporter
+// 导入的历史 .gz 走一遍与自动路径相同的管道。新采集器不再回灌历史文件——
+// 它要么按 `log_tailer.include_gzip` 直接读 gz（在线径内），要么不读。
+// 没有「待导入队列」这个概念，手动触发也就没有意义。
+//
+// 保留 RPC 的理由同 LogClearIdentityConflicts（混版兼容，明确 unsupported）。
+func (s *Service) LogImportArchives(_ context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
+	return &workerpb.LogTaskResponse{
+		State: workerpb.LogTaskState_LOG_TASK_FAILED,
+		Error: unsupportedErr(ingestRetiredReason("ingest archive import")),
+	}, nil
 }
 
 // Enabled 报告服务是否启用。
@@ -477,42 +348,7 @@ func (s *Service) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest)
 	out := grpcmap.SearchResponseToProto(resp)
 	// 二次回填：确保 proto 侧 targets 携带 planner view 的 closed_visible_seq。
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
-	s.fillIngestPositionGaps(out, qreq.AuthorizedTargets)
 	return out, nil
-}
-
-// fillIngestPositionGaps 回填「已放弃位置」标记：本响应涉及的命名空间里，哪些源位置区间
-// 已被人工裁定为永久丢失。
-//
-// 为什么必须单独回填而不是并进 coverage：两者语义不同（见 proto 注释），把"永久丢失"塞进
-// coverage 的枚举或在 partial_reasons 里混写，会让下游误以为那是"暂时查不到"，
-// 从而按重试处理一个永远不会恢复的区间——那正是要消灭的静默跳过。
-// 目标集取请求的授权目标（形如 storage_namespace 或 storage_namespace/YYYY-MM-DD）；
-// **空 = 本 Worker 全部**（与 planner「空 = 全部 Catalog 分区」同一口径），由提供者展开为全源。
-func (s *Service) fillIngestPositionGaps(out *workerpb.LogSearchResponse, targetIDs []string) {
-	// 注意：**不因 targetIDs 为空而提前返回**。空在 planner 语义下是「本 Worker 全部」
-	// （见 query.Planner 的 TargetIDs 说明），若此处提前返回，一次不带授权目标的查询就会
-	// 拿到"没有永久丢失"的空结果——那正是要消灭的静默跳过（标记看似实现了、实际永远为空）。
-	if s.abandonments == nil || out == nil {
-		return
-	}
-	gaps := s.abandonments.AbandonedRanges(targetIDs)
-	if len(gaps) == 0 {
-		return
-	}
-	out.IngestPositionGaps = make([]*workerpb.IngestPositionGap, 0, len(gaps))
-	for _, g := range gaps {
-		out.IngestPositionGaps = append(out.IngestPositionGaps, &workerpb.IngestPositionGap{
-			LogSourceId:      g.LogSourceID,
-			SourceGeneration: g.SourceGeneration,
-			StorageNamespace: g.StorageNamespace,
-			From:             g.From,
-			To:               g.To,
-			ReasonCode:       g.ReasonCode,
-			Operator:         g.Operator,
-			AtUtc:            g.AtUTC,
-		})
-	}
 }
 
 // LogStats 聚合逻辑事件集合。
@@ -873,62 +709,38 @@ func (s *Service) LogMigratePartition(ctx context.Context, req *workerpb.LogMigr
 	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
 }
 
+// LogCutoverReadiness 报告日志平台切换就绪度。
+//
+// # 为何现在是固定 unsupported（2026-11-06）
+//
+// 它回答的是旧链路的「账本能否接管写入」：ledgerReady 来自账本的 CutoverReadiness，
+// 即「已发布投影是否覆盖了需接管的位置区间」。账本已在阶段三删除，新采集器用
+// registry（fingerprint → offset）续读，不存在「接管判定」这个环节。
+//
+// 保留 RPC 的理由同 LogClearIdentityConflicts（混版兼容，明确 unsupported）。
 func (s *Service) LogCutoverReadiness(_ context.Context, req *workerpb.LogCutoverReadinessRequest) (*workerpb.LogCutoverReadinessResponse, error) {
-	resp := &workerpb.LogCutoverReadinessResponse{RequestId: req.GetRequestId()}
-	if s.cutover == nil || s.query == nil {
-		resp.Error = unsupportedErr("log cutover readiness is not configured")
-		return resp, nil
-	}
-	caps := s.query.GetCapabilities(query.CapabilitiesRequest{ProtocolVersion: req.GetProtocolVersion(), RequestID: req.GetRequestId()})
-	required := map[string]bool{"query_view": false, "search": false, "stats": false}
-	for _, capability := range caps.Capabilities {
-		if _, ok := required[capability]; ok {
-			required[capability] = true
-		}
-	}
-	confirmed := caps.Supported
-	for _, present := range required {
-		confirmed = confirmed && present
-	}
-	ready, cutoff, reasons := s.cutover.Readiness()
-	resp.CapabilityConfirmed, resp.LedgerReady = confirmed, ready
-	resp.Reasons = append(resp.Reasons, reasons...)
-	if !confirmed {
-		resp.Reasons = append(resp.Reasons, "required_log_capabilities_missing")
-	}
-	if !cutoff.IsZero() {
-		resp.CutoffTimeUtc = cutoff.UTC().Format(time.RFC3339Nano)
-	}
-	return resp, nil
+	return &workerpb.LogCutoverReadinessResponse{
+		RequestId: req.GetRequestId(),
+		Error:     unsupportedErr(ingestRetiredReason("log cutover readiness")),
+	}, nil
 }
 
-func (s *Service) LogResolveIngestGaps(ctx context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
-	if s.gapResolver == nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: unsupportedErr("ingest gap resolution is not configured")}, nil
-	}
-	var err error
-	if ns := strings.TrimSpace(req.GetStorageNamespace()); ns != "" {
-		// 显式人工确认（**放弃裁定**）：只解指名源（含自动路径拒绝的 Raw 写失败缺口，理由见 Manager 注释）。
-		// 操作人必须来自认证上下文：取不到就拒绝——放弃是唯一允许回收链跨过永久空洞的动作，
-		// 无痕放弃等于给静默丢日志开后门。
-		operator := operatorFromContext(ctx)
-		if operator == "" {
-			return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-				Error: unsupportedErr(fmt.Sprintf(
-					"放弃缺口需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
-		}
-		err = s.gapResolver.ResolveCoveredGapsForSource(ctx, ns, operator)
-	} else {
-		// 不传命名空间：整节点自动解。除「解算判据」逐字未改外，2026-10-02 缺陷修复了它的两条
-		// 服务端纪律：**不跨投影查询持有采集轮锁**、且把 RPC ctx 贯穿下去（超时/断连 → 真正停止）。
-		err = s.gapResolver.ResolveCoveredGaps(ctx)
-	}
-	if err != nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
-	}
-	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
+// LogResolveIngestGaps 核销/放弃采集缺口。
+//
+// # 为何现在是固定 unsupported（2026-11-06）
+//
+// 「缺口」是旧账本的概念：它记录源位置上哪段没被投递（含被放弃的永久丢失区间），
+// 并由人工裁定去核销。新采集器**主动不追踪完整性**（用户裁定："日志不重要，投递失败
+// 就失败了，做好提示消息就行"），因此没有缺口账本、没有放弃裁定、也没有可核销的对象。
+//
+// 保留 RPC 的理由同上。注意：本方法**不再**校验操作人/理由——那两个校验的存在意义
+// 是「永久放弃不可无痕」，而放弃动作本身已不存在，留着校验只会给运维一个
+// 「填了理由就能成功」的错觉。
+func (s *Service) LogResolveIngestGaps(_ context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
+	return &workerpb.LogTaskResponse{
+		State: workerpb.LogTaskState_LOG_TASK_FAILED,
+		Error: unsupportedErr(ingestRetiredReason("ingest gap resolution")),
+	}, nil
 }
 
 // LogTail 尾部查询（server-streaming LogEvent）。
@@ -983,6 +795,16 @@ func unsupportedErr(msg string) *workerpb.LogError {
 		Code:    workerpb.LogErrorCode_LOG_UNSUPPORTED,
 		Message: msg,
 	}
+}
+
+// ingestRetiredReason 构造「该能力已随旧采集链路退役」的统一错误文案。
+//
+// 与普通 unsupported 区分开的理由：运维看到 `... is not configured` 会去查配置
+// （以为是漏配了），而实际是**代码已经没了**——两种处置完全不同。
+// 文案里显式点名退役与替代路径，能把排查引向正确方向。
+func ingestRetiredReason(capability string) string {
+	return capability + " 已随旧采集链路（ingest/ledger）退役：新采集器（tailer/logtail）不维护缺口账本、" +
+		"不产生身份冲突、不回灌历史归档。详见 docs/ARCHITECTURE.md 的采集链路说明。"
 }
 
 // taskStateFromString 把归档任务状态字符串映射为 proto 枚举。

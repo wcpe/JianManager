@@ -306,16 +306,22 @@ internal/worker/
 | 部件 | 介质 | 重启后 | 依据/入口 |
 |---|---|---|---|
 | **VL 数据** | 磁盘 | ✅ 在 | 唯一可靠长期存储；**单 VL**，180d / 100GiB |
-| **采集游标 `ingest.cursor`** | 磁盘 | ✅ 在 | 每源一行（≈2KB，**不 fsync**），整表重写 + rename 原子（FR-506） |
-| 采集索引库 | `:memory:` SQLite | ❌ 没了 | `stateindex.OpenInMemory`，不建任何磁盘文件（FR-505） |
-| canonical 事件段 | **已删除** | — | 2026-11-03 整体删除（FR-484 退废）：它只服务重建/校验读取正文，而重建链同时删除 |
-| WAL 队列 | 纯内存 | ❌ 没了 | 满则丢最旧（对齐 Fluent Bit `memrb`） |
-| catalog journal | 内存 | ❌ 没了 | 原 `catalog.journal.jsonl` + fsync 已下线 |
-| 账本（缺口/水位/投递证据） | 内存 | ❌ 没了 | 记账面重启后归零，不是被裁剪 |
+| **采集位点 registry** | 磁盘 | ✅ 在 | 每文件一条 `fingerprint → offset`（`log_tailer.registry_path`，默认 `var/log/tailer-registry.json`）|
+| catalog journal | 内存 | ❌ 没了 | 分区记录由新采集器在**写成功时**补建（`logtail.PartitionEnsurer`），重启后靠重写重建 |
+| 采集统计（lines/written/failed） | 内存 | ❌ 没了 | 每 60s 打一行读数；进程重启后归零 |
 
-**代价如实记**：VL 数据根丢失 = 那段日志事实丢失（事件段也已删除，没有可供重建的本地副本）；
-重启后至多重读一段并重复投递（允许重复、不丢，**但仅限源文件仍可读的源**）；
-缺口/暂停态/投递批次审计这些记账面重启后归零。
+**代价如实记**（《2026-11-06 采集链路重建后的真实边界》）
+
+- VL 数据根丢失 = 那段日志事实丢失；本地没有可供重建的第二份底本。
+- **记录的是字节，不是完整的“事件”**：采集器逐行写入，**不做多行合并**（堆栈行会拆成多条独立事件）。
+  多行合并是旧 `normalize` 包的能力，随链路重建一并下线；用户已裁定不做。
+- **不回答“数据完不完整”**：没有四水位、没有缺口账本、没有投递证据、没有遮拦（pause/resume）。
+  投递失败只做统计与告警，**不重投**（用户裁定：“日志不重要，投递失败就失败了，做好提示消息就行”）。
+  因此重启后至多**重复投递**一段（按 registry offset 续读，允许重复、不丢）。
+- **不采 gz 归档**（`log_tailer.include_gzip` 默认 false）；存量的历史 `.gz` 不会自动进平台。
+- **不追踪身份冲突**：冲突计数/放弃裁定/清空动作的前提都已不存在。
+- **不做归档回灌**（手动/定时都没有）：新采集器要么直接读 gz（在线径内），要么不读；
+  没有“待导入队列”这个概念。
 
 ##### 数据面边界
 
@@ -329,11 +335,10 @@ internal/worker/
 
 | 层 | 包 / 资产 | 对应 FR | 当前实现与验收边界 |
 |---|---|---|---|
-| 共享类型与账本 | `internal/worker/logs/{logtypes,ledger}` | FR-473 | 事件身份/内容哈希契约不变；账本现为**内存态**，回收不变量作用域只在进程内；~~FR-474 共账本~~ 已退役 |
-| 事件体存储 | `internal/worker/logs/eventstore` | FR-484 | **tmpfs 内存段**（`/dev/shm`），投递前暂存 + 投递后可回收；「落盘底本」承诺已废（ADR-095 追记） |
-| 采集通道 | `internal/worker/logs/{acquire,pipeline,ingest}` | FR-475 | tail/stdio→WAL→VL→projection 已接线；gz 归档回读 2026-10-30 删除，只读活文件 |
-| 归一化 | `internal/worker/logs/normalize` + 生产 pipeline | FR-475 | 归一化与 event_id / canonical hash 契约不变；multiline 有界默认值已落地 |
-| 采集侧成本策略 | `internal/worker/logs/sampling` | FR-498 配套 | 四类策略默认关；抑制折叠为汇总事件，不变量 R 区间守恒 |
+| 共享类型与事件身份 | `internal/worker/logs/logtypes` | FR-473 | 事件身份/内容哈希契约不变；~~账本~~ 已随采集链路重建删除（2026-11-06） |
+| 归档导出 | `internal/worker/logs/archive` | FR-501 | 只余 `archive_copy` 导出用的 Provider 抽象与 manifest/校验；~~冷层搬迁 / Rehydrate / 回灌~~ 已退役（2026-11-01） |
+| 采集器（新） | `internal/worker/logs/{tailer,logtail}` | FR-475 | **当前唯一采集链路**。对齐 Fluent Bit / Filebeat：prospector（glob）→ harvester（每文件一个）→ registry（fingerprint→offset）。见下方小节 |
+| 行解析与字符集 | `internal/worker/logs/logtail`（`parseline.go`）/ `normalize`（charset） | FR-475 | 级别/时刻提取的**唯一实现**；字符集解码复用 `normalize.CharsetDecoder`（auto 粘滞按源） |
 | 保留策略 | `internal/worker/logs/retention` + `apps/worker/log_retention.go` | FR-501 | **单 VL**：`retention.NewDriver(…, nil, …)` 的 mover **恒为 nil**，到期分区只会 `archive_copy`（需配目的地）或 `blocked`（保留原物）。~~默认搬运 COLD~~ 2026-10-29 废除 |
 | VL 运行时 | `internal/worker/logs/vlsup` | FR-476 | 资产 v1.52.0、localhost、auth、supervisor + 15s 看护（见下一小节） |
 | Partition Catalog + Lifecycle | `internal/worker/logs/{catalog,lifecycle}` | FR-477 | 纯逻辑 + **内存 journal**；permit/lease/pin 保留 |
@@ -1512,33 +1517,35 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 > 并说明它原本承担什么。**“持久痕迹”一行现在很短**——整条链路只剩两处能跨重启存活。
 
 ```
-【采集】进程 stdout/stderr → 实例日志文件（logs/latest.log 等，路径由采集规则解析）
+【采集】进程 stdout/stderr → 实例日志文件（logs/latest.log、proxy.log.N 等）
    │
-   ▼ acquire.FileTailer ....................................... 包 acquire
-   │   读文件尾巴与轮转产物；物理身份 + 游标决定“从哪读到哪”
-   │   持久痕迹：**ingest.cursor（每源一行，≈2KB，不 fsync）** ← 全链路唯一采集侧持久面
-   │   ~~ArchiveImporter（gz 归档回读）~~ 2026-10-30 删除：只读活文件，轮转后直接读新文件
-   ▼ NormalizeBoundary（实现 acquire.EventBoundaryHook）....... 包 pipeline → normalize
-   │   把物理行聚成 Multiline 事件（堆栈行归入头行）、算 event_id / canonical hash
-   │   不持久化：纯函数式转换
-   ▼ WAL（纯内存有界队列，满则丢最旧）............................ 包 acquire
-   │   已 durable 但未确认投递的事件暂存处 —— **重启即丢**
-   ▼ 攒批（4MiB / 1s / 500 条三阈值先到先发 + 4 路并发）..... 包 ingest
-   │   ~~单请求 500 条直发~~ 2026-10-31 改：单批体量有硬上界（事故形态：40MiB 单请求撞5s超时）
-   ▼ 投递（deliverContext）→ 受管 VictoriaLogs .............. 包 pipeline → vlsup
-   │   gzip 压缩（实测 73×）+ 连接池 + **流标签 `_stream_fields=log_source_id,stream`**
-   │   ~~逐字段回查校验~~ 2026-10-31 删除：HTTP 2xx 即结论（原占整轮 85.6% 时间）
-   │   持久痕迹：ledger 的 REQUEST_DONE 证据（回收上界的唯一依据）
-   ▼ canonical 事件体（**已删除**，2026-11-03）
-   │   ~~tmpfs 内存段（原 FR-484）~~ **整体删除**：该副本存在的唯一理由是「供重建/校验读取
-   │   完整正文」，而重建/重放链已同时删除。现在投递只做「规范化 → 写 VL」，不保留本地正文副本。
-   ▼ Partition Catalog 登记“哪些日有可查分区” ................ 包 catalog
-   │   纯逻辑 + **内存 journal**（原 catalog.journal.jsonl + fsync 已下线）
-   ▼ 发布投影（PublishedProjection）
+   ▼ scanner（prospector）................................... 包 tailer
+   │   glob 扇开 → exclude 过滤 → 为每个文件算 fingerprint（hash（≤1024B 前缀 + 大小））
+   │   为何用 fingerprint 而不是 inode：inode 会被复用，导致“旧位点被新文件误用”。
+   │   对应 Filebeat `file_identity: fingerprint`、Fluent Bit 的 `inode=offset` 改良版。
+   ▼ harvester（每文件一个）............................... 包 tailer
+   │   从 registry 的 offset 续读；只交**完整行**（末行半行留 pending 等下一轮）；
+   │   单行上限 64KB（超长截断而非丢弃）；轮转靠 fingerprint 自然跟随（文件改名内容不变 ⇒ 同一条目）
+   │   可选：gzip 直接读取（`log_tailer.include_gzip`，默认 false）
+   │   可选：多行合并（`log_tailer.multiline.*`，对齐 Filebeat parsers.multiline）
+   │   持久痕迹：**registry（fingerprint → offset）** ← 全链路唯一采集侧持久面
+   ▼ Sink.Consume ............................................ 包 logtail
+   │   ①字符集解码（`normalize.CharsetDecoder`，auto 粘滞按源，只在真转码时写 `source_charset`）
+   │   ②行首解析（`parseline.go` 的 `parseLogLine`）→ `_time` / `level`
+   │       时刻：[HH:MM:SS] / HH:MM:SS [LEVEL] / 带毫秒；日期从未名推 / 上一条推（跟 12h 跟午夜回拨）
+   │       级别：归一为保留策略白名单（WARNING→WARN、SEVERE/FATAL→ERROR）
+   │   ③构行：`_time` / `_msg` / `log_source_id` / `stream` / `level` / `event_id`（内容指纹）
+   ▼ 写 VL（InsertJSONLines）................................ 包 vlsup
+   │   流标签 `_stream_fields=log_source_id,stream`；HTTP 2xx 即结论
+   │   失败：计入 stats.Failed 并告警，**不重投、不回退 offset**（用户裁定）
+   ▼ Partition Catalog 补建「哪些日有可查分区」............. 包 catalog
+   │   `logtail.PartitionEnsurer` 在**写成功后**才补（先建后写会让空分区可查）
+   │   owner / generation / dirID 必须取自 `Catalog.WriteAdmission`（不自己编）；只补缺失、不改已有
+   ▼ 查询
          │
          ├──【查询】query.Planner 按 Catalog 选分区、算 ranges、发租约 ........ 包 query
          │      逐源固定 view + budget + read pin；Search/Stats/Fields/Facets/Tail 共享
-         │      受控分面白名单：level / stream / instance_id / **log_source_id**（2026-10-31 补）
+         │      受控分面白名单：level / stream / instance_id / **log_source_id**
          │      │
          │      ▼ 【跨节点】CP logcoord 联邦（反向 gRPC 隧道）................ 包 internal/controlplane/logcoord
          │           扇出到各 Worker → 合并流 → 游标分页 → 覆盖/质量聚合 → HTTP
@@ -1549,50 +1556,54 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
                  持久痕迹：Journal 状态机（ROUTING_FROZEN→…→CLEANED）
 
 旁路：
-  sampling  — 采集侧采样/抑制/风暴降级（默认全关）
   vlsup     — 受管 VictoriaLogs 进程 supervisor（启动、15s 看护、熔断）
-              **诊断日志按行自带级别分流**（2026-10-31）：info⇒Info、warn⇒Warn、
-              error/fatal/panic⇒Error、解析不出⇒Error（panic 栈必须保留 ERROR）
-  archive   — ~~Deep Archive + Rehydrate 基础包（Provider 抽象）~~ **2026-11-01 改**：FR-478 已退役，
-              只剩 `archive_copy` 导出用的 Provider 抽象（FR-501 用），没有 Deep Archive/Rehydrate 产品对象
+              诊断日志按行自带级别分流（info⇒Info、warn⇒Warn、error/fatal/panic⇒Error）
+  archive   — 只剩 `archive_copy` 导出用的 Provider 抽象（FR-501 用）
+              ~~Deep Archive / Rehydrate / 归档回灌~~ 已退役（FR-478，2026-11-01）
   logassemble — 生产装配入口（把上面这些包按选项拼起来）
 ```
 
-### 整个日志子系统的介质归属（2026-10-31 终态）
+### 整个日志子系统的介质归属（**2026-11-06 采集链路重建后终态**）
 
 > 用户裁定（2026-10-30）：「**不要做任何落盘的操作，因为是机械盘，性能不行**」。
-> 下表是这条裁定落实到每个部件后的最终形态。
+> 2026-11-06 采集链路重建后，采集侧唯一的跨重启持久面就是 registry。
 
 | 组件 | 介质 | 重启后 | 说明 |
 |---|---|---|---|
 | **VL 数据** | 磁盘 | ✅ 在 | 唯一可靠长期存储，180d / 100GiB 上限 |
-| **采集游标 `ingest.cursor`** | 磁盘 | ✅ 在 | 每源一行（15 列 v2），≈2KB，**不 fsync**，整表重写 + rename 原子 |
-| 采集索引库 | `:memory:` SQLite | ❌ 没了 | 零磁盘 IO；不建任何文件（`path` 仅作标识） |
-| canonical 事件段 | **已删除** | — | 2026-11-03 随重建/重放链一并删除 |
-| WAL 队列 | 纯内存 | ❌ 没了 | 满则丢最旧（对齐 Fluent Bit `memrb`） |
-| catalog journal | 内存 | ❌ 没了 | 原 `catalog.journal.jsonl` + fsync 已下线 |
-| 账本（缺口/水位/投递证据） | 内存 | ❌ 没了 | 记账面重启后归零，不是被裁剪 |
+| **采集位点 registry** | 磁盘 | ✅ 在 | 每文件一条 `fingerprint → offset`；不 fsync |
+| catalog journal | 内存 | ❌ 没了 | 重启后靠重写重建 |
+| 采集统计 | 内存 | ❌ 没了 | 每 60s 一行读数 |
 
-**这张表最重要的一行是第二行**：整条采集链路上，只有**采集游标**和 **VL 里的数据**能跨重启存活。
-所有中间状态（队列、索引、账本）都是进程内的瞬时结构。
+
+**这张表最重要的一行是第二行**：整条采集链路上，只有**采集位点 registry**和 **VL 里的数据**能跨重启存活。
+所有中间状态（采集统计、catalog journal）都是进程内的瞬时结构。
 
 **如实记录的代价**：
 - 重启后至多重读一段并重复投递（允许重复，不丢）
 - **VL 数据根丢失 = 那段日志事实丢失**，没有可重建的权威集合
-- 缺口、暂停态、投递批次审计这些记账面重启后同样归零
+- **不回答“数据完不完整”**：没有四水位、没有缺口账本、没有投递证据、没有遮拦。
+  投递失败只计入统计并告警，不重投（用户裁定）
+- **不做多行合并**：堆栈行会被拆成多条独立事件（用户已裁定不做）
+- **不采历史 gz**：`log_tailer.include_gzip` 默认 false，存量 `.gz` 不会自动进平台
 
 **跨包不变量（改任何一个包前先看这条）**：
 
-- **`ledger` 是回收的唯一真源**。`reclaim_position` 只能被带 `REQUEST_DONE` 证据的区间推进；
-  HTTP 2xx 不构成证据，“我认为已写入”也不构成。丢了这条就会**静默丢日志而不报错**。
-  **2026-10-31 补注**：账本本身现在是**内存态**（重启即空），所以这条不变量的作用域是「**进程内**」——
-  它保证进程运行期间不静默丢日志；跨重启的保护靠「采集游标 + 至少一次重发」而不是账本。
-  另：投递主路径已不再逐字段回查（HTTP 2xx 即结论，见 FR-508），
-  但「回收只看 `REQUEST_DONE`、不看 HTTP 结果」这条**没变**——两者是两个不同的东西。
-- **`normalize` 的 event_id / canonical hash 一旦写下就不能变**。它是去重、对账、导出的身份；
-  改算法等于让旧数据与新数据彼此不相认。
+- **采集位点只看 registry**（2026-11-06 起）。`offset` 在行被交给 Sink 之前推进：
+  写 VL 失败**不回退** offset，也不重投——这是用户明确裁定过的取舍：
+  「日志不重要，投递失败就失败了，做好提示消息就行」。不要自作主张加回重试逻辑，那会把
+  “丢弃”变成“卡住”。
+- **`level` 必须落在保留策略白名单内**（`TRACE/DEBUG/INFO/WARN/ERROR`）。
+  写入侧（`logtail.parseLogLine` → `normalize.CanonicalLevel`）与删除侧（`retention.LevelKeyOf`）
+  是**两个不同的地方**，新日志格式接入时必须同时验证两侧：写进一个不在白名单里的 `level`
+  意味着那批日志永远不会被按级别清理（静默堆积到磁盘告警）。
+- **行首解析只有一处实现**（`logtail/parseline.go` 的 `parseLogLine`）。
+  它同时负责“时刻”与“级别”，且要兼容并存的多种前缀形态（Paper/MC 的
+  `[HH:MM:SS] [thread/LEVEL]:`、BungeeCord 的 `HH:MM:SS [LEVEL]`）。
+  生产上两种都存在；只覆盖一种会让另一类源的 `level` 全空、时间全退采集时刻。
 - **`catalog` 的 owner/generation 决定“该去哪读”**。迟到事件必须按 Catalog 路由，
-  禁止按 `now-7d` 重新生成 HOT 权威。
+  禁止按 `now-7d` 重新生成 HOT 权威。新采集器补建分区时必须取 `Catalog.WriteAdmission`，
+  不自己编 owner。
 - **`query` 的 view 是固定快照**。Search/Stats/Facets 必须同 view，否则统计与列表对不上；
   旧 cursor 遇到 view 失效要显式 `VIEW_STALE`，不能静默重查。
 - **`Open` 的值在 Search 与 Tail 里含义不同**：Search = 枚举没跑完（边界不安全，不可翻页/导出）；
