@@ -328,12 +328,15 @@ func (c *Collector) readOnce(ctx context.Context) error {
 		//
 		// Size 必须写**算指纹时**的大小（IdentitySize），而不是当前大小：
 		// 它是 FingerprintPrefixLen 反推前缀长度的依据，写错会让增长判定永远失败。
+		//
+		// 这里**不再写时间戳**：LastActiveUnix 曾是纯写不读的字段（CloseInactive 读的是
+		// harvester 内存里的 LastActive），但它让每轮 Put 的内容都与上一轮不同，
+		// 从而使 Put 的幂等判据永远不成立 ⇒ 每轮都重写整份 registry。已删除。
 		c.reg.Put(FileState{
-			Identity:       identity,
-			Path:           path,
-			Offset:         h.Offset(),
-			Size:           h.IdentitySize(),
-			LastActiveUnix: time.Now().Unix(),
+			Identity: identity,
+			Path:     path,
+			Offset:   h.Offset(),
+			Size:     h.IdentitySize(),
 		})
 	}
 

@@ -27,8 +27,6 @@ type FileState struct {
 	// 此时 offset 已失效，必须重置。这是 Fluent Bit `db.compare_filename`
 	// 与 Filebeat `rotation.external.strategy.copytruncate` 共同处理的问题。
 	Size int64 `json:"size"`
-	// LastActiveUnix 是最后一次读到新内容的秒级时间戳（用于 CloseInactive）。
-	LastActiveUnix int64 `json:"last_active"`
 }
 
 // Registry 是位点表的磁盘存储（对齐 Fluent Bit 的 `db` / Filebeat 的 registry）。
@@ -179,6 +177,17 @@ func (r *Registry) Put(st FileState) {
 				delete(r.m, k)
 			}
 		}
+	}
+	// 同一个文件内容未变就不标脏：这是**写放大的根源**。
+	//
+	// 原来无条件 `dirty = true`，而 collector 每轮读完每个文件都会 Put 一次
+	// （哪怕 offset 一个字节都没动）。于是“只要还有 harvester 在轮询，就每
+	// progress_interval（默认 2s）重写整份 registry”——与“有没有新日志”无关。
+	// 实测生产：19 个文件里大部分分钟级无写入，却每 2 秒被完整重写一遍。
+	//
+	// 改为：内容（除诊断字段外）完全相同时直接返回。
+	if old, ok := r.m[st.Identity.Key()]; ok && old == st {
+		return
 	}
 	r.m[st.Identity.Key()] = st
 	r.dirty = true
