@@ -136,7 +136,11 @@ func Start(ctx context.Context, cfg Config, vl *vlsup.Client, resolver SourceRes
 		return nil, nil
 	}
 	if vl == nil {
-		return nil, fmt.Errorf("logtail: VL 客户端未装配")
+		// 没有写入目标就不要空转采集：读到行却写不进去，只会白读一遍文件、
+		// 让 offset 前进、把这段日志永久跳过。宁可整个采集器不启动（装配层会把
+		// LogIngestHealth 置为 false），也不做这种"看起来在采、其实全丢"的事。
+		return nil, fmt.Errorf("logtail: VL 客户端未装配（采集器需要写入目标；" +
+			"请确认 log_query.vl_url 可达或受管 VL 已启动）")
 	}
 	// 路径来源有三处：调用方显式给的、stdio 桥接目录、以及**绑定表推导的实例目录**（动态）。
 	// 所以这里不要求 Paths 非空——生产就是“静态一个都不配，全靠绑定表”的形态。
