@@ -181,6 +181,28 @@ log:
 #   # 目录扫描 / 读文件周期；留空 = 10s / 2s。
 #   scan_interval: ""
 #   progress_interval: ""
+#   # 多行合并（对齐 Filebeat parsers.multiline 的语义）。**默认启用**。
+#   #
+#   # 与 Filebeat / Fluent Bit 不同（它们默认关闭），这里默认开是刻意的：本平台的
+#   # 采集对象是确定的——MC / BungeeCord，Java 堆栈必然多行。默认关的实测后果：
+#   # 88673 行 Bungee 日志里 123 行堆栈续行全被拆成独立事件。
+#   #
+#   # 默认规则（同时覆盖两种并存的日志形态）：
+#   #   pattern: '^\[?[0-9]{2}:[0-9]{2}:[0-9]{2}|^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+#   #   negate: true    # 不匹配 = 续行
+#   #   match: after    # 续行接到上一行
+#   #   max_lines: 500 / timeout: 5s（实现包默认）
+#   #
+#   # 实测：Bungee 88673 行 → 88550 条事件，最大 42 行堆栈合并成 1 条。
+#   # 关闭：配 multiline.disabled: true（留空 pattern 不等于关闭，那是"用默认规则"）。
+#   # 自定义：写 pattern/negate/match 覆盖；非法值启动即拒（写错会让日志变乱而非报错）。
+#   multiline:
+#     disabled: false
+#     # pattern: "^\\[?[0-9]{2}:[0-9]{2}:[0-9]{2}"
+#     # negate: true
+#     # match: after
+#     # max_lines: 500
+#     # timeout: 5s
 
 # 采集侧采样（log_ingest.sampling.*）已随旧链路删除（2026-11-06）：新采集器逐行写入、无采样实现。
 # 旧 worker.yml 里留着这些键不会报错（viper 忽略未知键），但它们**不再有任何效果**。

@@ -898,11 +898,52 @@ type LogTailerConfig struct {
 //
 // 那些是「解析器」，不是「行组装」。本项目的需求是 Java 堆栈，pattern 型就够；
 // 多实现一种就多一套要验证的语义（而配置写错的表现是「日志变乱」而非报错）。
+// DefaultMultilinePattern 是**本项目默认启用**的多行合并规则。
+//
+// # 为什么默认开（与 Filebeat / Fluent Bit 不同，这是有意的）
+//
+// Filebeat 的 `multiline.*` 与 Fluent Bit 的 multiline filter **默认都是关闭的**
+// （官方文档：必须显式配 pattern / multiline.parser 才生效）。理由是它们是通用
+// 采集器，不知道你在采什么，默认不动数据是对的。
+//
+// 而本平台的采集对象是**确定的**：这台机 19 个实例全是 Minecraft（Paper/Spigot）
+// 与 BungeeCord，Java 堆栈必然多行。默认关的后果是实测可见的——88673 行 Bungee
+// 日志里 123 行是堆栈续行，全部被拆成独立事件，用户读崩溃堆栈时看到的是散行。
+//
+// 所以这里把「我们比通例更确知」这件事落成默认值，并用下面的 pattern 同时覆盖
+// 两种并存的日志形态：
+//
+//	[01:19:43] [ServerMain/INFO]: ...   ← Paper/MC（时刻带方括号）
+//	18:12:59 [INFO] ...                 ← BungeeCord（时刻不带方括号）
+//
+// negate=true 的语义：**不匹配**这个 pattern 的行 = 续行，并入上一行
+// （`	at ...`、`Caused by:`、`... N more`、netty 异常行）。
+//
+// # 实测（2026-11-07，生产日志）
+//
+//	Bungee proxy.log.0：88673 行 → 88550 条事件，最大堆栈 42 行合并成 1 条
+//	MC latest.log      ：44 行 → 44 条（该时段全是单行，无误合并）
+//
+// # 如何关掉
+//
+// 配 `log_tailer.multiline.pattern: ""`（显式空 = 关），或用 flush_pattern 等
+// 覆盖成自己的规则。配置写错在启动即拒——见 MultilineSettings 的说明。
+const DefaultMultilinePattern = `^\[?[0-9]{2}:[0-9]{2}:[0-9]{2}|^[0-9]{4}-[0-9]{2}-[0-9]{2}`
+
 type MultilineConfig struct {
 	// Pattern 是 `multiline.pattern`（RE2 语法，与官方一致：Go regexp）。
-	// 留空表示不启用多行合并。
+	//
+	// 空值 = 用 DefaultMultilinePattern（**默认启用**，见上）。
+	// 显式写成 "" 的语义与「没配」无法区分，故提供 Disabled 开关显式关闭。
 	Pattern string `mapstructure:"pattern"`
-	// Negate 对应 `multiline.negate`，默认 false。
+	// Disabled 显式关闭多行合并（优先级高于 Pattern）。
+	//
+	// 为什么需要它而不是「Pattern 留空即关闭」：默认开启后，「留空」必须表示
+	// 「用默认规则」，否则任何没写 multiline 段的部署都会静默变成不合并——
+	// 那正是本次要修的默认值。要关的多行必须有一个不可与「没配」混淆的开关。
+	Disabled bool `mapstructure:"disabled"`
+	// Negate 对应 `multiline.negate`。默认规则用 true（不匹配=续行）；
+	// 若 Pattern 为空则本字段的零值 false 会被忽略（见 MultilineSettings）。
 	Negate bool `mapstructure:"negate"`
 	// Match 对应 `multiline.match`：after（默认）或 before。
 	Match string `mapstructure:"match"`
@@ -929,13 +970,22 @@ func (c *Config) MultilineSettings() (*tailer.Multiline, time.Duration, error) {
 		return nil, 0, nil
 	}
 	mc := c.LogTailer.Multiline
-	if strings.TrimSpace(mc.Pattern) == "" {
-		// 允许只配了 timeout 但没有 pattern 的形态：视为未启用。
+	// 显式关闭优先：Disabled 是唯一能与「没配」区分的关闭方式。
+	if mc.Disabled {
 		return nil, 0, nil
 	}
+	// 未配 pattern = 用默认规则（**默认启用**，见 DefaultMultilinePattern）。
+	// Negate 的零值 false 与默认规则需要的 true 冲突，故 pattern 为空时由本函数
+	// 按默认规则的语义补齐，而不是直接用零值。
+	pattern := strings.TrimSpace(mc.Pattern)
+	negate := mc.Negate
+	if pattern == "" {
+		pattern = DefaultMultilinePattern
+		negate = true
+	}
 	rule, err := tailer.NewMultiline(tailer.MultilineConfig{
-		Pattern:      mc.Pattern,
-		Negate:       mc.Negate,
+		Pattern:      pattern,
+		Negate:       negate,
 		Match:        tailer.MultilineMatch(strings.ToLower(strings.TrimSpace(mc.Match))),
 		FlushPattern: mc.FlushPattern,
 		MaxLines:     mc.MaxLines,
