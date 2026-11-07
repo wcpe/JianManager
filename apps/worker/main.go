@@ -1098,6 +1098,17 @@ func runWorker() {
 				MultilineTimeout: multilineTimeout,
 				IncludeGzip:      cfg.LogTailer.IncludeGzip,
 				Catalog:          logStack.Catalog,
+				// 启动期分区重建：向 VL 问「哪些 (源,天) 有数据」，把「VL 有行但 Catalog 没记录」
+				// 的天补回来。
+				//
+				// # 为何必须接
+				//
+				// Catalog journal 自 42a1b728 起是**纯内存**的（有意取舍：避免副本与真源不一致）。
+				// 代价是重启后分区目录从空开始——设计上应由 hits 重建补齐。
+				// 但两者都不接就会出现双重真空：重启后既无 journal、也不重建，
+				// **历史天在查询侧永久变成「不存在」**（VL 里行还在，没人知道去查）。
+				// 2026-11-07 部署时实测确认了这个状态（日志：「未接 hits 数据源」）。
+				HitsSource: hitsSourceAdapter(vlHTTPClient),
 			}, vlHTTPClient, nil)
 			if startErr != nil {
 				slog.Error("新日志采集器启动失败（本次启动不采集，需告警介入）", "error", startErr)
@@ -1775,5 +1786,39 @@ func sampleLogBudget(ctx context.Context, sup *vlsup.Supervisor, budget *vlsup.B
 				last = state
 			}
 		}
+	}
+}
+
+// hitsSourceAdapter 把 vlsup.Client 的 hits 能力适配成 logtail.HitsSource。
+//
+// # 为何需要这一层
+//
+// 两个包各自定义了形状相同的 SourceDay（vlsup 是「VL 客户端」，logtail 是「采集器」，
+// 互不依赖是对的）。装配层做一次转换，比让其中一个包 import 另一个更轻。
+// 这与旧链路 HitsSourceFunc 是同一模式。
+//
+// # 为何 nil 客户端返回 nil
+//
+// nil HitsSource 在 logtail 里有明确语义：**不做启动重建**，并在启动日志里说明
+// （「未接 hits 数据源」）。宁可如实说「没接」，也不要给一个恒返回空的结果——
+// 那样日志会显示「重建完成，补齐 0 天」，把一个缺失的能力伪装成正常结果。
+func hitsSourceAdapter(c *vlsup.Client) logtail.HitsSource {
+	if c == nil {
+		return nil
+	}
+	return func(ctx context.Context, start, end time.Time) ([]logtail.SourceDay, error) {
+		days, err := c.HitsBySourceDay(ctx, start, end)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]logtail.SourceDay, 0, len(days))
+		for _, d := range days {
+			out = append(out, logtail.SourceDay{
+				LogSourceID: d.LogSourceID,
+				UTCDay:      d.UTCDay,
+				Weight:      d.Weight,
+			})
+		}
+		return out, nil
 	}
 }
