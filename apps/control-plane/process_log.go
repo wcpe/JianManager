@@ -45,8 +45,13 @@ func installPlatformLogger(cfg config.LogConfig) {
 		fmt.Fprintf(os.Stderr, "[cp] 解析数据根失败（仅写 stdout）: %v\n", err)
 	} else {
 		path := filepath.Join(root.LogDir(), "control-plane.log")
+		ret := cfg.Retention()
 		w, openErr := rollog.Open(rollog.Config{
-			Path: path,
+			Path:            path,
+			MaxSizeBytes:    ret.MaxSizeBytes,
+			MaxBackups:      ret.MaxBackups,
+			MaxAgeDays:      ret.MaxAgeDays,
+			DisableCompress: !ret.Compress,
 			OnError: func(e error) {
 				// 刻意不经 slog：日志组件自身的错误写回 slog 会递归。
 				fmt.Fprintf(os.Stderr, "[rollog] %v\n", e)

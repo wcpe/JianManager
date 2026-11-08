@@ -42,6 +42,15 @@ log:
   # 1 = 全采（诊断窗口），数值越大采样越稀（5 = 1/5），0 = 关闭（默认）。
   # mutex_profile_fraction: 0
 
+  # 进程自身日志文件（<数据根>/var/log/worker.log）的轮转与保留，
+  # 与实例日志 / VictoriaLogs 完全无关。零值回退内置默认（1 GiB / 5 份 / 30 天 / 压缩），
+  # 旧配置无需改动。
+  #
+  # max_size_mb: 1024      # 单文件触发轮转的大小（MB）
+  # max_backups: 5         # 保留份数（含未压缩与已压缩）；负值 = 不限
+  # max_age_days: 30       # 保留天数（按档名里的轮转时间算，一天 = 24h）；负值 = 关闭按天保留
+  # compress: true         # 轮转档是否 gzip；显式写 false 才关
+
 # Optional localhost VictoriaLogs query client. Empty vl_url keeps the explicit
 # LOG_UNSUPPORTED compatibility path until a managed VL instance is healthy.
 # log_query:

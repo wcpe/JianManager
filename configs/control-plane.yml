@@ -23,6 +23,15 @@ jwt:
 log:
   level: info
   format: text
+  # 进程自身日志文件的轮转与保留（internal/platform/rollog；与实例日志 / VictoriaLogs 无关）。
+  # 四项均可省略：零值回退内置默认（1 GiB / 5 份 / 30 天 / 开压缩），旧配置无需改动。
+  #
+  # 为什么可配：此前它们是编译期常量，运维面对「磁盘被日志吃满」时唯一的手段是等版本更新。
+  #
+  # max_size_mb: 1024      # 单文件触发轮转的大小（MB）
+  # max_backups: 5         # 保留份数（含未压缩与已压缩）；负值 = 不限
+  # max_age_days: 30       # 保留天数（按档名里的轮转时间算，一天 = 24h）；负值 = 关闭按天保留
+  # compress: true         # 轮转档是否 gzip；显式写 false 才关
 
 # 日志中心（2026-10-29 变更）：CP 本地 `logs` 表已**废弃**，以下 log_store 不再生效。
 #

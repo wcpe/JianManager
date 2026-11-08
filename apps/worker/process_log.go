@@ -9,6 +9,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/platform/rollog"
+	workercfg "github.com/wcpe/JianManager/internal/worker"
 )
 
 // processLogFile 是 Worker 进程自身日志的文件写入器（自轮转）。
@@ -32,13 +33,18 @@ var processLogFile *rollog.Writer
 // 用 dataroot.Resolve 而不是 dataroot.Init：Resolve 只算路径不建目录，
 // 而日志必须先于 Init 初始化——启动早期的失败（如数据根不可写）本身就要能落到文件上。
 // rollog.Open 会自建父目录，两者相容。
-func openProcessLogger(dataDir string) (io.Writer, error) {
+func openProcessLogger(dataDir string, cfg workercfg.LogConfig) (io.Writer, error) {
 	root, err := dataroot.Resolve(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("解析数据根失败: %w", err)
 	}
+	ret := cfg.Retention()
 	w, err := rollog.Open(rollog.Config{
-		Path: filepath.Join(root.LogDir(), "worker.log"),
+		Path:            filepath.Join(root.LogDir(), "worker.log"),
+		MaxSizeBytes:    ret.MaxSizeBytes,
+		MaxBackups:      ret.MaxBackups,
+		MaxAgeDays:      ret.MaxAgeDays,
+		DisableCompress: !ret.Compress,
 		OnError: func(e error) {
 			// 刻意不经 slog：日志组件自身的错误写回 slog 会递归。
 			fmt.Fprintf(os.Stderr, "[rollog] %v\n", e)
@@ -72,8 +78,8 @@ func closeProcessLogger() {
 
 // installProcessLogger 是 main 里的单点装配：打开文件、组装 handler、替换默认 logger。
 // 失败直接退出（日志完全不可写属于必须 fail-fast 的启动条件）。
-func installProcessLogger(dataDir string, lv *slog.LevelVar, format string) {
-	out, err := openProcessLogger(dataDir)
+func installProcessLogger(dataDir string, lv *slog.LevelVar, format string, cfg workercfg.LogConfig) {
+	out, err := openProcessLogger(dataDir, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[worker] 初始化进程日志失败: %v\n", err)
 		os.Exit(1)

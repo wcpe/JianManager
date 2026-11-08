@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/platform/rollog"
 	"github.com/wcpe/JianManager/internal/platform/vlruntime"
 	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
 	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
@@ -441,6 +442,39 @@ type LogConfig struct {
 	// 此前该旋钮只认环境变量 JM_MUTEX_PROFILE_FRACTION（绕过配置体系 ⇒ 运维无法从配置面发现
 	// 它、也无法纳入版本化管理）。1 = 全采（诊断窗口），数值越大采样越稀（5 = 1/5）。
 	MutexProfileFraction int `mapstructure:"mutex_profile_fraction"`
+
+	// 以下四项只看「进程自身日志文件」的轮转与保留（internal/platform/rollog），
+	// 与实例日志 / VictoriaLogs 无关。零值一律回退内置默认，老配置不需要改。
+	//
+	// MaxSizeMB 单个日志文件触发轮转的大小（MB）。
+	MaxSizeMB int `mapstructure:"max_size_mb"`
+	// MaxBackups 轮转档保留份数（含未压缩与已压缩）。负值 = 不限。
+	MaxBackups int `mapstructure:"max_backups"`
+	// MaxAgeDays 轮转档保留天数。负值 = 关闭按天保留。
+	MaxAgeDays int `mapstructure:"max_age_days"`
+	// Compress 是否对轮转档做 gzip。默认 true；显式写 false 才关（用指针区分未配置）。
+	Compress *bool `mapstructure:"compress"`
+}
+
+// Retention 把 YAML 里的日志保留旋钮转成 rollog 的保留策略。
+//
+// 零值语义（与 rollog 一致）：尺寸/份数/天数零值 → 回退内置默认；天数负值 → 关闭按天保留；
+// 份数负值 → 不限；Compress 未配置（nil）→ 开。
+func (c LogConfig) Retention() rollog.Retention {
+	r := rollog.DefaultRetention()
+	if c.MaxSizeMB > 0 {
+		r.MaxSizeBytes = int64(c.MaxSizeMB) << 20
+	}
+	if c.MaxBackups != 0 {
+		r.MaxBackups = c.MaxBackups
+	}
+	if c.MaxAgeDays != 0 {
+		r.MaxAgeDays = c.MaxAgeDays
+	}
+	if c.Compress != nil {
+		r.Compress = *c.Compress
+	}
+	return r
 }
 
 // LogQueryConfig configures the optional localhost VictoriaLogs query client.

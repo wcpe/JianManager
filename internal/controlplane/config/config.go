@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/platform/rollog"
 )
 
 // LogLevelVar 是 Control Plane 日志器的动态级别持有者（FR-063 / ADR-015）。
@@ -269,6 +270,45 @@ func ValidateLogExportConfig(c LogExportConfig) error {
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
+
+	// 以下四项只看「进程自身日志文件」的轮转与保留（internal/platform/rollog），
+	// 与实例日志 / VictoriaLogs 无关。零值一律回退内置默认，老配置不需要改。
+	//
+	// 为何现在才暴露：此前它们硬编码为编译期常量（1 GiB / 5 份 / 无天数），
+	// 要改就得重新编译——运维面对「磁盘被日志吃满」时唯一手段是等下一个版本。
+
+	// MaxSizeMB 单个日志文件触发轮转的大小（MB）。
+	MaxSizeMB int `mapstructure:"max_size_mb"`
+	// MaxBackups 轮转档保留份数（含未压缩与已压缩）。负值 = 不限。
+	MaxBackups int `mapstructure:"max_backups"`
+	// MaxAgeDays 轮转档保留天数。负值 = 关闭按天保留。
+	MaxAgeDays int `mapstructure:"max_age_days"`
+	// Compress 是否对轮转档做 gzip。默认 true；显式写 false 才关。
+	//
+	// 用指针是因为布尔零值 false 与「未配置」无法区分：
+	// 只有 *bool 才能表达「没写就开、写了 false 才关」。
+	Compress *bool `mapstructure:"compress"`
+}
+
+// Retention 把 YAML 里的日志保留旋钮转成 rollog 的保留策略。
+//
+// 零值语义（与 rollog 一致）：尺寸/份数/天数零值 → 回退内置默认；天数负值 → 关闭按天保留；
+// 份数负值 → 不限；Compress 未配置（nil）→ 开。
+func (c LogConfig) Retention() rollog.Retention {
+	r := rollog.DefaultRetention()
+	if c.MaxSizeMB > 0 {
+		r.MaxSizeBytes = int64(c.MaxSizeMB) << 20
+	}
+	if c.MaxBackups != 0 {
+		r.MaxBackups = c.MaxBackups
+	}
+	if c.MaxAgeDays != 0 {
+		r.MaxAgeDays = c.MaxAgeDays
+	}
+	if c.Compress != nil {
+		r.Compress = *c.Compress
+	}
+	return r
 }
 
 // 说明（2026-10-29）：这里曾有 LogStoreConfig / LogCutoverStoreConfig 与
@@ -277,10 +317,11 @@ type LogConfig struct {
 //
 //   - 实例日志 → Worker 的受管 VictoriaLogs（ADR-094），CP 只做授权与联邦查询；
 //   - 平台（CP 自身）日志 → 自轮转文件（internal/platform/rollog），
-//     面板读尾部（/api/v1/diagnostics/log），保留期 = 轮转档数 MaxBackups。
+//     面板读尾部（/api/v1/diagnostics/log）。
 //
-// 因此**没有** log_store 配置面了：日志存哪个文件、留几个档由进程自己决定，
-// 不再经 yaml / 数据库设置暴露。
+// 注意不要把这套删除误读成「日志落盘完全不可配」：**存哪个文件**仍由进程
+// 按数据根自行决定（不暴露），而**留多少、存多久、压不压** 已在 LogConfig
+// 里开放（2026-11-07），因为那是磁盘保护的运维旋钮，不是部署布局。
 
 // FileVersionConfig 通用文件版本（FR-051）配置。
 type FileVersionConfig struct {

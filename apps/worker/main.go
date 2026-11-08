@@ -324,7 +324,10 @@ func runWorker() {
 	}
 	// 日志落地：stderr 之外再写一份自轮转文件（见 process_log.go 的说明）。
 	// stderr 保留，因此前台/容器/CI 场景不变；文件供面板诊断与运维 grep。
-	installProcessLogger(cfg.DataDir, logLevelVar, logFormat)
+	//
+	// cfg.Log 传入轮转与保留策略（大小/份数/天数/压缩）：零值回退内置默认，
+	// 因此老配置不需要改。
+	installProcessLogger(cfg.DataDir, logLevelVar, logFormat, cfg.Log)
 	// 诊断接口需要知道日志文件在哪：注入路径提供者（见 internal/worker/grpc/self_log.go）。
 	// 为空时 PullSelfLog 返回结构化错误而不是空成功。
 	wgrpc.SetSelfLogPathProvider(ProcessLogPath)
