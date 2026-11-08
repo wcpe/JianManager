@@ -214,7 +214,11 @@ func TestResumePendingCompression(t *testing.T) {
 	path := filepath.Join(dir, "app.log")
 
 	// 手工造一个“上次遗留”的未压缩轮转档。
-	leftover := filepath.Join(dir, "app-20260101-000000.log")
+	//
+	// 时间戳必须落在保留窗口内（默认 30 天）：用一个十个月前的固定日期，
+	// 它会被 MaxAgeDays 当成过期档删掉，测的就不是补压而是清理了。
+	leftoverTS := time.Now().Add(-2 * time.Hour).Format(rotatedTimeLayout)
+	leftover := filepath.Join(dir, "app-"+leftoverTS+".log")
 	if err := os.WriteFile(leftover, []byte("leftover-content\n"), 0o644); err != nil {
 		t.Fatalf("写入遗留档失败: %v", err)
 	}
@@ -355,5 +359,327 @@ func TestOnErrorCallback(t *testing.T) {
 	case e := <-errs:
 		t.Fatalf("正常写入不应回调 OnError，实际: %v", e)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestRetentionByAge 验证 MaxAgeDays：超过保留天数的轮转档被删除，未超的保留。
+//
+// 注意造档方式：把文件名里的时间戳设成过去，而 **mtime 故意设成现在**。
+// 这是本用例的关键——若实现用 mtime 而非文件名，两个档会因 mtime 新而都活下来，
+// 用例即转红（已做变异验证）。
+func TestRetentionByAge(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+
+	oldName := filepath.Join(dir, "app-"+time.Now().AddDate(0, 0, -40).Format(rotatedTimeLayout)+".log")
+	freshName := filepath.Join(dir, "app-"+time.Now().AddDate(0, 0, -1).Format(rotatedTimeLayout)+".log")
+	for _, p := range []string{oldName, freshName} {
+		if err := os.WriteFile(p, []byte("content\n"), 0o644); err != nil {
+			t.Fatalf("造档失败: %v", err)
+		}
+		// mtime 统一设为现在：证明判据不依赖它。
+		now := time.Now()
+		if err := os.Chtimes(p, now, now); err != nil {
+			t.Fatalf("改 mtime 失败: %v", err)
+		}
+	}
+
+	// MaxBackups 放开，只留 MaxAgeDays 一条规则。
+	// 构造一次轮转即触发一次维护（保留清理）。
+	w, err := Open(Config{Path: path, MaxSizeBytes: 8, MaxBackups: -1, MaxAgeDays: 30, DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	if _, err := w.Write([]byte("0123456789\n")); err != nil {
+		t.Fatalf("Write 失败: %v", err)
+	}
+
+	waitFor(t, "超过 30 天的档被删除", func() bool {
+		_, statErr := os.Stat(oldName)
+		return os.IsNotExist(statErr)
+	})
+
+	if _, err := os.Stat(freshName); err != nil {
+		t.Fatalf("未超期的档（1 天前）不应被删: %v", err)
+	}
+}
+
+// TestRetentionByAgeDisabled 验证 MaxAgeDays 为负时关闭按天保留。
+func TestRetentionByAgeDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+
+	// 一年前的档：保留天数为负时必须留下。
+	veryOld := filepath.Join(dir, "app-"+time.Now().AddDate(-1, 0, 0).Format(rotatedTimeLayout)+".log")
+	if err := os.WriteFile(veryOld, []byte("ancient\n"), 0o644); err != nil {
+		t.Fatalf("造档失败: %v", err)
+	}
+
+	w, err := Open(Config{Path: path, MaxSizeBytes: 8, MaxBackups: -1, MaxAgeDays: -1, DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	if _, err := w.Write([]byte("0123456789\n")); err != nil {
+		t.Fatalf("Write 失败: %v", err)
+	}
+
+	// 等维护轮跑完（轮转档会出现），再断言旧档仍在。
+	waitFor(t, "本次轮转档产生", func() bool {
+		n := 0
+		for _, f := range mustGlob(t, filepath.Join(dir, "app-*.log")) {
+			if f != veryOld {
+				n++
+			}
+		}
+		return n > 0
+	})
+	// 给维护协程一点时间做（错误的）清理；如果它要错删，这里才看得到。
+	time.Sleep(50 * time.Millisecond)
+
+	if _, err := os.Stat(veryOld); err != nil {
+		t.Fatalf("MaxAgeDays<0 表示关闭按天保留，旧档不应被删: %v", err)
+	}
+}
+
+// TestRetentionWithoutCompress 是“DisableCompress 时 MaxBackups 失效”的回归。
+//
+// # 缺陷形态
+//
+// 旧实现把保留清理放在压缩协程里顺带做。而 DisableCompress 时压缩协程根本不启动，
+// 于是**MaxBackups 完全不生效**——保留 N 份的承诺静默作废，磁盘无界增长。
+// 而默认配置（压缩开启）下一切正常，所以原有用例测不出来。
+func TestRetentionWithoutCompress(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+
+	w, err := Open(Config{Path: path, MaxSizeBytes: 4, MaxBackups: 2, DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	for i := 0; i < 6; i++ {
+		if _, err := w.Write([]byte(fmt.Sprintf("line-%d\n", i))); err != nil {
+			t.Fatalf("Write %d 失败: %v", i, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	waitFor(t, "关压缩时轮转档仍收敛到 MaxBackups 以内", func() bool {
+		return len(mustGlob(t, filepath.Join(dir, "app-*.log"))) <= 2
+	})
+}
+
+// TestRetentionKeepsNewestWhenSameSecond 是“同秒序号档排序反转”的回归。
+//
+// # 缺陷形态
+//
+// 同秒多次轮转会生成 `app-<ts>.log` 与 `app-<ts>-1.log`。旧实现按字符串排序，
+// 而 `-`(0x2D) < `.`(0x2E) ⇒ 无序号的那个被当成更早的，保留策略**删错文件**：
+// 留下更旧的、删掉更新的。
+//
+// 本用例直接手造成同秒两档，断言留下的是序号更大的（更新的）那份。
+func TestRetentionKeepsNewestWhenSameSecond(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+
+	ts := time.Now().Add(-time.Hour).Format(rotatedTimeLayout)
+	a := filepath.Join(dir, "app-"+ts+".log")   // 同秒第 0 次
+	b := filepath.Join(dir, "app-"+ts+"-1.log") // 同秒第 1 次（更新）
+	if err := os.WriteFile(a, []byte("older\n"), 0o644); err != nil {
+		t.Fatalf("造档失败: %v", err)
+	}
+	if err := os.WriteFile(b, []byte("newer\n"), 0o644); err != nil {
+		t.Fatalf("造档失败: %v", err)
+	}
+
+	// MaxBackups=1：只能留一个，而且必须是 b（同秒内序号更大的）。
+	w, err := Open(Config{Path: path, MaxSizeBytes: 8, MaxBackups: 1, DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	// 触发一次维护。
+	if _, err := w.Write([]byte("0123456789\n")); err != nil {
+		t.Fatalf("Write 失败: %v", err)
+	}
+
+	waitFor(t, "同秒两档收敛到 1 份", func() bool {
+		return len(mustGlob(t, filepath.Join(dir, "app-*.log"))) <= 2 // 本次轮转档 + 可能还没清的旧档
+	})
+
+	// 关键断言：更新的那个必须留下。
+	waitFor(t, "留下的是同秒内更新的那一份", func() bool {
+		if _, statErr := os.Stat(b); statErr != nil {
+			return false
+		}
+		if _, statErr := os.Stat(a); statErr == nil {
+			return false
+		}
+		return true
+	})
+}
+
+// TestRetentionIgnoresForeignFiles 验证保留策略不删自己认不得的文件。
+//
+// 理由：日志目录里可能有运维手工拷进来的文件（取证快照、改名的旧日志）。
+// 「认不得就不删」比「尽量清干净」安全——后者误删证据的代价不可逆。
+func TestRetentionIgnoresForeignFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+
+	// 名字不符合本包命名规则的旧文件（用 Unrelated 前缀，glob 都不会匹配）。
+	foreign := filepath.Join(dir, "unrelated-backup.log")
+	if err := os.WriteFile(foreign, []byte("evidence\n"), 0o644); err != nil {
+		t.Fatalf("造档失败: %v", err)
+	}
+	// 前缀匹配但时间戳不合法的文件（如人工命名 app-important.log）。
+	oddName := filepath.Join(dir, "app-important.log")
+	if err := os.WriteFile(oddName, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatalf("造档失败: %v", err)
+	}
+
+	w, err := Open(Config{Path: path, MaxSizeBytes: 4, MaxBackups: 1, DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	for i := 0; i < 4; i++ {
+		if _, err := w.Write([]byte(fmt.Sprintf("line-%d\n", i))); err != nil {
+			t.Fatalf("Write %d 失败: %v", i, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	waitFor(t, "轮转档收敛", func() bool {
+		return len(mustGlob(t, filepath.Join(dir, "app-*.log"))) <= 2
+	})
+
+	for _, p := range []string{foreign, oddName} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("不应删除认不得的文件 %s: %v", filepath.Base(p), err)
+		}
+	}
+}
+
+// TestMaxAgeDefaultApplied 验证零值 Config 会填上默认保留天数（与 MaxBackups 同口径）。
+func TestMaxAgeDefaultApplied(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(Config{Path: filepath.Join(dir, "app.log"), DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	if w.cfg.MaxAgeDays != DefaultMaxAgeDays {
+		t.Fatalf("MaxAgeDays 零值应填充为 %d，实际 %d", DefaultMaxAgeDays, w.cfg.MaxAgeDays)
+	}
+}
+
+// mustGlob 是 filepath.Glob 的测试封装：出错即失败（测试里不该忽略错误）。
+func mustGlob(t *testing.T, pattern string) []string {
+	t.Helper()
+	m, err := filepath.Glob(pattern)
+	if err != nil {
+		t.Fatalf("Glob %q 失败: %v", pattern, err)
+	}
+	return m
+}
+
+// TestNextRotatedNameAvoidsCompressedSibling 是 2026-11-08 真机并发压测暴露的缺陷的回归。
+//
+// # 缺陷形态
+//
+// `nextRotatedName` 原先只检查候选名的 `.log` 是否存在。而轮转档会被异步压缩
+// 成 `.log.gz`（`.log` 随之消失），于是同一秒内就出现“名字被再次发放”：
+//
+//	t0  轮转 → <ts>.log
+//	t1  压缩完成 → 只剩 <ts>.log.gz
+//	t2  同秒再轮转 → 看起来 <ts>.log 不存在 ⇒ 又发 <ts>.log
+//
+// 结果 `<ts>.log` 与 `<ts>.log.gz` 并存，内容却是**两批不同数据**：
+// 真机现场实测前者的 seq 区间是 114314..112882，后者是 113641..112703，毫无重叠。
+// 两者在 parseRotatedName 眼里都是 (when, seq=0)，保留策略无法区分先后。
+//
+// # 为什么要直接测 nextRotatedName
+//
+// 想用“真实写入压出同秒多次轮转”非常依赖机器速度（本次就是靠 8 协程才撞出来的），
+// 不适合放进 CI。直接造出“同名 .gz 已存在”这一状态，用小代价钉住判据。
+func TestNextRotatedNameAvoidsCompressedSibling(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+
+	w, err := Open(Config{Path: path, DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	ts := time.Now().Format(rotatedTimeLayout)
+
+	// 造出三种“名字已被占”的形态，逐个验证 nextRotatedName 会跳过它们。
+	cases := []struct {
+		name string
+		file string
+	}{
+		{"未压缩 .log 已占", "app-" + ts + ".log"},
+		{"已压缩 .gz 已占（真机遇到的形态）", "app-" + ts + ".log.gz"},
+		{"压缩中 .gz.tmp 已占", "app-" + ts + ".log.gz.tmp"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(dir, tc.file)
+			if err := os.WriteFile(p, []byte("occupied\n"), 0o644); err != nil {
+				t.Fatalf("造占位文件失败: %v", err)
+			}
+			defer os.Remove(p)
+
+			got, err := w.nextRotatedName()
+			if err != nil {
+				t.Fatalf("nextRotatedName 失败: %v", err)
+			}
+			if filepath.Base(got) == filepath.Base(p) {
+				t.Fatalf("候选名 %q 已被 %q 占用，却仍被发放", filepath.Base(got), tc.file)
+			}
+		})
+	}
+}
+
+// TestNextRotatedNameUniqueAcrossSiblingForms 验证：同一秒内 .log 与 .log.gz
+// 不会拿到同一个基础名，且序号递增。
+func TestNextRotatedNameUniqueAcrossSiblingForms(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(Config{Path: filepath.Join(dir, "app.log"), DisableCompress: true})
+	if err != nil {
+		t.Fatalf("Open 失败: %v", err)
+	}
+	defer w.Close()
+
+	// 模拟“第一次轮转已完成并压缩”：只有 .gz，没有 .log。
+	ts := time.Now().Format(rotatedTimeLayout)
+	gz := filepath.Join(dir, "app-"+ts+".log.gz")
+	if err := os.WriteFile(gz, []byte("old-batch\n"), 0o644); err != nil {
+		t.Fatalf("造档失败: %v", err)
+	}
+
+	name, err := w.nextRotatedName()
+	if err != nil {
+		t.Fatalf("nextRotatedName 失败: %v", err)
+	}
+
+	// 必须拿到带序号的名字（因为同秒无序号名已被 .gz 占领）。
+	base := filepath.Base(name)
+	if base == "app-"+ts+".log" {
+		t.Fatalf("同秒基础名已被 .gz 占用，却仍发放了无序号名 %q", base)
+	}
+	if !strings.HasPrefix(base, "app-"+ts+"-") {
+		t.Fatalf("应拿到带序号的名字，实际 %q", base)
 	}
 }

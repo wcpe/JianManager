@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,19 +41,49 @@ import (
 // 默认参数。调用方通常只覆盖 Path。
 const (
 	// DefaultMaxSizeBytes 单个活跃文件触发轮转的大小（1 GiB）。
-	// 与既有 logrotate 配置（configs/logrotate.d/jianmanager 的 size 1G）保持一致，
-	// 使“进程内轮转”与“外部兜底轮转”在同一阈值上，不会互相抢先。
+	// 轮转只有这一处实现（进程内 rename），没有需要与之对齐的外部阈值。
 	DefaultMaxSizeBytes int64 = 1 << 30
 	// DefaultMaxBackups 轮转档保留数量（含未压缩与已压缩）。
 	DefaultMaxBackups = 5
-	// compressQueueSize 待压缩队列容量。轮转是低频事件，16 足够；
-	// 队列满时宁可放弃压缩（留一个未压缩 .log）也不阻塞写路径。
-	compressQueueSize = 16
+	// DefaultMaxAgeDays 轮转档保留天数。按文件名里的轮转时间计，一天 = 24h。
+	// 与 DefaultMaxBackups 是两个独立上限，谁更严格谁生效（同 lumberjack 语义）。
+	//
+	// 为什么要有它：MaxBackups 数的是「份数」，而份数在不同负载下代表的时长差很多——
+	// 事故期一小时转 5 次就只剩 1 小时历史，平常一周不轮转就堆着几个月的日志。
+	// 天数口径直接对齐运维的心智（「保留 30 天」）。
+	DefaultMaxAgeDays = 30
+	// maintQueueSize 后台维护（压缩 + 保留清理）队列容量。轮转是低频事件，64 足够；
+	// 队列满时宁可放弃本次维护（下次启动会补做）也不阻塞写路径。
+	maintQueueSize = 64
 	// defaultStatInterval 是“活跃文件是否被外部删除”的检测窗口。
 	// 1s 是两方面的折中：偏长会让自愈变慢（期间日志写进已删除 inode），
 	// 偏短会把 os.Stat 变成高频系统调用。日志是秒级可接受的路径。
 	defaultStatInterval = time.Second
 )
+
+// Retention 是应用层（CP / Worker 各自的 LogConfig）转过来的保留策略。
+//
+// # 为何不直接让应用传 Config
+//
+// Config 里还有 Path / OnError 这类进程相关项，而「留多少、存多久、压不压」三项
+// 是**同一个运维语义**，两个应用应完全一致。把转换放在本包里，
+// 两边就不会因为“一个传了 max_age、另一个忘了”而双轨。
+type Retention struct {
+	MaxSizeBytes int64
+	MaxBackups   int
+	MaxAgeDays   int
+	Compress     bool
+}
+
+// DefaultRetention 返回内置默认（1 GiB / 5 份 / 30 天 / 开压缩）。
+func DefaultRetention() Retention {
+	return Retention{
+		MaxSizeBytes: DefaultMaxSizeBytes,
+		MaxBackups:   DefaultMaxBackups,
+		MaxAgeDays:   DefaultMaxAgeDays,
+		Compress:     true,
+	}
+}
 
 // Config 是 Writer 的配置。
 type Config struct {
@@ -61,9 +92,15 @@ type Config struct {
 	Path string
 	// MaxSizeBytes 单文件触发轮转的字节数。<=0 表示用 DefaultMaxSizeBytes。
 	MaxSizeBytes int64
-	// MaxBackups 保留的轮转档数量（未压缩与已压缩一起计数）。<=0 表示用 DefaultMaxBackups；
+	// MaxBackups 保留的轮转档数量（未压缩与已压缩一起计数）。0 表示用 DefaultMaxBackups；
 	// 负值表示不限（不推荐，会导致磁盘无限增长）。
 	MaxBackups int
+	// MaxAgeDays 轮转档保留天数，超过该天数的档会被删除（与 MaxBackups 各自独立生效，
+	// 任一条件命中即删）。0 表示用 DefaultMaxAgeDays；**负值表示关闭按天保留**。
+	//
+	// 时间取自文件名里的轮转时间戳（不是 mtime）：mtime 会被解压、备份、rsync 等
+	// 外部动作改掉，一旦被改晚，一份早该删的日志就能无限留存。
+	MaxAgeDays int
 	// Compress 是否对轮转档做异步 gzip。默认 true 由 New 填充（零值 Config 走默认开启）。
 	DisableCompress bool
 	// OnError 接收轮转/压缩/清理过程中的非致命错误。
@@ -94,10 +131,15 @@ type Writer struct {
 	lastStat     time.Time
 	statInterval time.Duration
 
-	// compressQ 待压缩的轮转档路径。
-	compressQ chan string
+	// maintQ 后台维护队列（压缩 + 保留清理）。
+	//
+	// # 为什么把两件事放进同一条队列
+	//
+	// 曾经只用一条「待压缩路径」队列，并在压缩协程里顺带做保留清理。代价是：
+	// DisableCompress 时协程根本不启动 ⇒ **MaxBackups 完全不生效**（保留 N 份的承诺
+	// 静默作废）。保留清理与压缩是否开启无关，它必须有自己的驱动来源。
+	maintQ    chan maintTask
 	closeOnce sync.Once
-	done      chan struct{}
 	wg        sync.WaitGroup
 }
 
@@ -114,6 +156,9 @@ func Open(cfg Config) (*Writer, error) {
 	}
 	if cfg.MaxBackups == 0 {
 		cfg.MaxBackups = DefaultMaxBackups
+	}
+	if cfg.MaxAgeDays == 0 {
+		cfg.MaxAgeDays = DefaultMaxAgeDays
 	}
 	if cfg.OnError == nil {
 		cfg.OnError = func(error) {}
@@ -136,24 +181,24 @@ func Open(cfg Config) (*Writer, error) {
 		dir:          dir,
 		base:         base,
 		ext:          ext,
-		done:         make(chan struct{}),
+		maintQ:       make(chan maintTask, maintQueueSize),
 		statInterval: defaultStatInterval,
-	}
-	if !cfg.DisableCompress {
-		w.compressQ = make(chan string, compressQueueSize)
 	}
 
 	if err := w.openActiveLocked(); err != nil {
 		return nil, err
 	}
 
-	if w.compressQ != nil {
-		w.wg.Add(1)
-		go w.compressLoop()
-		// 启动时补压：上次进程可能在 rename 之后、压缩之前退出，
-		// 留下未压缩的轮转档。这里把它们扫出来重新入队。
-		w.enqueueExistingRotated()
-	}
+	// 维护协程总是启动：即使禁用压缩，保留清理仍必须生效（见 Writer.maintQ 的说明）。
+	w.wg.Add(1)
+	go w.maintenanceLoop()
+
+	// 启动时补做上次运行的收尾：
+	//   - 进程可能在 rename 之后、压缩之前退出，留下未压缩的轮转档；
+	//   - 退出期间可能已跨过 MaxAgeDays（停机数天后重启，旧档该清而无人清）。
+	// 这两件事都归第一次维护任务处理。
+	w.scheduleMaint(maintTask{compressPaths: w.pendingCompressPaths()})
+
 	return w, nil
 }
 
@@ -262,7 +307,7 @@ func (w *Writer) Size() int64 {
 	return w.size
 }
 
-// Close 刷新并关闭 Writer，等待后台压缩任务收尾。可重复调用。
+// Close 刷新并关闭 Writer，等待后台维护（压缩 + 保留清理）收尾。可重复调用。
 func (w *Writer) Close() error {
 	var err error
 	w.closeOnce.Do(func() {
@@ -276,10 +321,9 @@ func (w *Writer) Close() error {
 		}
 		w.mu.Unlock()
 
-		if w.compressQ != nil {
-			close(w.compressQ)
-		}
-		close(w.done)
+		// 关闭队列让维护协程把积压任务做完再退出（range 语义），
+		// 这样正常退出时不会留下未压缩的轮转档。
+		close(w.maintQ)
 		w.wg.Wait()
 	})
 	return err
@@ -342,103 +386,228 @@ func (w *Writer) rotateLocked() error {
 		return fmt.Errorf("轮转后新建活跃文件失败: %w", err)
 	}
 
-	w.enqueueCompress(target)
+	w.enqueueMaint(target)
 	return nil
 }
 
+// rotatedTimeLayout 是轮转档名里的时间戳格式（与 nextRotatedName 一致）。
+const rotatedTimeLayout = "20060102-150405"
+
 // nextRotatedName 生成轮转目标名，同秒冲突时追加序号。
+//
+// # 为什么必须同时检查 .log 与 .log.gz
+//
+// 轮转档会经异步压缩从 `<ts>.log` 变成 `<ts>.log.gz`。若只检查 `.log`，
+// 同一秒内就会发生这个序列：
+//
+//	t0  轮转 → 得到 <ts>.log
+//	t1  压缩完成 → <ts>.log 消失，只剩 <ts>.log.gz
+//	t2  同秒内再次轮转 → 检查 <ts>.log 不存在 ⇒ **复用同名** → 两份不同数据撞车
+//
+// 后果不只是“名字难看”：parseRotatedName 对两者都解出 (when, seq=0)，
+// 保留策略无法区分先后，可能删错其中一份。
+// 这是 2026-11-08 真机并发压测（8 协程 / 200KB 阈值）直接暴露出来的缺陷，
+// 单元测试因为写入速率较慢、没压出同秒多次轮转而没能发现。
 func (w *Writer) nextRotatedName() (string, error) {
-	ts := time.Now().Format("20060102-150405")
+	ts := time.Now().Format(rotatedTimeLayout)
 	for i := 0; i < 100; i++ {
 		name := filepath.Join(w.dir, fmt.Sprintf("%s-%s%s", w.base, ts, w.ext))
 		if i > 0 {
 			name = filepath.Join(w.dir, fmt.Sprintf("%s-%s-%d%s", w.base, ts, i, w.ext))
 		}
-		if _, err := os.Stat(name); os.IsNotExist(err) {
+		if !w.rotatedNameTaken(name) {
 			return name, nil
 		}
 	}
 	return "", fmt.Errorf("同一秒内轮转次数过多")
 }
 
-// enqueueCompress 把轮转档交给后台压缩。队列满时放弃（留未压缩文件），不阻塞。
-func (w *Writer) enqueueCompress(path string) {
-	if w.compressQ == nil {
-		return
+// rotatedNameTaken 检查某个候选轮转名是否已被占用。
+//
+// 同时看三种形态：未压缩的 .log、已发布的 .gz、以及压缩中的 .gz.tmp。
+// 最后一种是必要的：压缩还没完成时 .gz 尚不存在，但 .tmp 已经占着这个名字了。
+func (w *Writer) rotatedNameTaken(name string) bool {
+	for _, p := range []string{name, name + compressSuffix, name + compressSuffix + tmpSuffix} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
 	}
-	select {
-	case w.compressQ <- path:
-	default:
-		// 有意丢弃：轮转不能因为压缩排队而阻塞。未压缩的轮转档会在
-		// 下次 Open 的补压扫描中被处理。
-		w.cfg.OnError(fmt.Errorf("rollog: 压缩队列已满，暂不压缩 %s（下次启动补压）", filepath.Base(path)))
+	return false
+}
+
+// enqueueMaint 投递一次后台维护任务（压缩刚轮转出的档 + 统一做保留清理）。
+//
+// 队列满时**只放弃压缩**，保留清理仍必须执行——所以打印告警时不能把整件事
+// 说成“跳过维护”（那会让人以为磁盘不会收敛）。清理与压缩走同一个任务的另一个字段。
+func (w *Writer) enqueueMaint(rotatedPath string) {
+	task := maintTask{}
+	if !w.cfg.DisableCompress {
+		task.compressPaths = []string{rotatedPath}
+	}
+	if !w.scheduleMaint(task) && !w.cfg.DisableCompress {
+		w.cfg.OnError(fmt.Errorf("rollog: 维护队列已满，暂不压缩 %s（下次启动补压）", filepath.Base(rotatedPath)))
 	}
 }
 
-// enqueueExistingRotated 扫描上次运行遗留的未压缩轮转档并入队。
-func (w *Writer) enqueueExistingRotated() {
-	paths, err := w.listRotated(false)
+// scheduleMaint 尝试非阻塞地投递一次维护任务，返回是否投递成功。
+//
+// 队列满时投递失败是**可接受**的：压缩会在下次 Open 的补压扫描里补上，
+// 而保留清理在下一次轮转时再做。写路径绝不能因此阻塞。
+func (w *Writer) scheduleMaint(task maintTask) bool {
+	select {
+	case w.maintQ <- task:
+		return true
+	default:
+		return false
+	}
+}
+
+// pendingCompressPaths 返回当前尚未压缩的轮转档（不含 .gz）。
+func (w *Writer) pendingCompressPaths() []string {
+	if w.cfg.DisableCompress {
+		return nil
+	}
+	files, err := w.listRotated()
 	if err != nil {
 		w.cfg.OnError(fmt.Errorf("rollog: 扫描遗留轮转档失败: %w", err))
-		return
+		return nil
 	}
-	for _, p := range paths {
-		w.enqueueCompress(p)
+	var out []string
+	for _, f := range files {
+		if !strings.HasSuffix(f.path, ".gz") {
+			out = append(out, f.path)
+		}
 	}
+	return out
 }
 
-// listRotated 返回轮转档路径（按文件名降序，即最新在前）。
-// onlyCompressed=true 只返回 .gz，false 只返回未压缩。
-func (w *Writer) listRotated(onlyCompressed bool) ([]string, error) {
-	var out []string
-
-	pattern := filepath.Join(w.dir, w.base+"-*"+w.ext)
-	matches, err := filepath.Glob(pattern)
+// listRotated 返回轮转档路径，**按轮转时间递增**（最旧在前）。
+//
+// 排序按从文件名里解析出的时间戳与同秒序号进行，而**不是**按字符串排序。
+//
+// # 为什么不能按字符串排
+//
+// 同秒多次轮转的档名形如 `app-20260101-120000.log` 与 `app-20260101-120000-1.log`。
+// 字符串升序里 `-`(0x2D) < `.`(0x2E)，于是**无序号的那个排在前面**——即把后
+// 轮转出来的档当成了更早的。保留策略因此会删错文件（删掉较新的，留下更早的）。
+func (w *Writer) listRotated() ([]rotatedFile, error) {
+	plain, err := filepath.Glob(filepath.Join(w.dir, w.base+"-*"+w.ext))
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range matches {
-		if !onlyCompressed {
-			out = append(out, m)
-		}
+	gz, err := filepath.Glob(filepath.Join(w.dir, w.base+"-*"+w.ext+".gz"))
+	if err != nil {
+		return nil, err
 	}
 
-	if onlyCompressed {
-		gzMatches, err := filepath.Glob(pattern + ".gz")
-		if err != nil {
-			return nil, err
+	out := make([]rotatedFile, 0, len(plain)+len(gz))
+	for _, p := range append(plain, gz...) {
+		rf, ok := w.parseRotatedName(p)
+		if !ok {
+			// 名字不由本包生成（人工拷贝进来的、或换个名字的日志）：
+			// **不纳入管理**，既不压缩也不删。"不删自己认不得的文件" 比 "尽量清干净" 更重要。
+			continue
 		}
-		out = append(out, gzMatches...)
+		out = append(out, rf)
 	}
 
-	sort.Sort(sort.Reverse(sort.StringSlice(out)))
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].when.Equal(out[j].when) {
+			return out[i].seq < out[j].seq
+		}
+		return out[i].when.Before(out[j].when)
+	})
 	return out, nil
 }
 
-// applyRetention 删除超过 MaxBackups 的最旧轮转档（未压缩与已压缩一起计数）。
-func (w *Writer) applyRetention() error {
-	if w.cfg.MaxBackups < 0 {
-		return nil
+// rotatedFile 是一个被本包认可的轮转档。
+type rotatedFile struct {
+	path string
+	when time.Time // 轮转时间（取自文件名）
+	seq  int       // 同秒序号，无序号为 0
+}
+
+// parseRotatedName 从文件名解析轮转时间与同秒序号。
+// 不匹配本包命名规则时返回 ok=false。
+func (w *Writer) parseRotatedName(path string) (rotatedFile, bool) {
+	name := filepath.Base(path)
+	name = strings.TrimSuffix(name, ".gz")
+	name = strings.TrimSuffix(name, w.ext)
+
+	prefix := w.base + "-"
+	if !strings.HasPrefix(name, prefix) {
+		return rotatedFile{}, false
 	}
-	plain, err := w.listRotated(false)
-	if err != nil {
-		return err
-	}
-	compressed, err := w.listRotated(true)
-	if err != nil {
-		return err
+	rest := name[len(prefix):]
+
+	// 先试“无序号”形态：时间戳本身含 `-`（20260101-120000），
+	// 若先拆序号会把时间的前半段当成序号吃掉（20260101 | 120000），
+	// 整体解析必然失败且匹配不到任何档——**顺序错了就全盘失效**。
+	if when, err := time.ParseInLocation(rotatedTimeLayout, rest, time.Local); err == nil {
+		return rotatedFile{path: path, when: when, seq: 0}, true
 	}
 
-	all := make([]string, 0, len(plain)+len(compressed))
-	all = append(all, plain...)
-	all = append(all, compressed...)
-	// 再统一排序：未压缩与已压缩混在一起按名字（含时间戳）降序。
-	sort.Sort(sort.Reverse(sort.StringSlice(all)))
-
-	for i := w.cfg.MaxBackups; i < len(all); i++ {
-		if err := os.Remove(all[i]); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("删除过期轮转档 %s 失败: %w", filepath.Base(all[i]), err)
+	// 再试“<ts>-<seq>”形态（同秒多次轮转）。
+	if dash := strings.LastIndex(rest, "-"); dash > 0 {
+		if n, err := strconv.Atoi(rest[dash+1:]); err == nil {
+			if when, perr := time.ParseInLocation(rotatedTimeLayout, rest[:dash], time.Local); perr == nil {
+				return rotatedFile{path: path, when: when, seq: n}, true
+			}
 		}
 	}
-	return nil
+	return rotatedFile{}, false
+}
+
+// applyRetention 删除过期轮转档。
+//
+// 两条独立上限，任一命中即删：
+//   - MaxBackups：保留份数（负值 = 不限）；
+//   - MaxAgeDays：保留天数（负值 = 关闭）。
+//
+// 保留清理与压不压缩**无关**，必须无条件生效（见 Writer.maintQ 的说明）。
+func (w *Writer) applyRetention() error {
+	files, err := w.listRotated()
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	// 待删集合：最新的排在前（files 是递增序，从尾部开始数）。
+	doomed := make([]bool, len(files))
+
+	if w.cfg.MaxBackups >= 0 {
+		// 保留最新的 MaxBackups 份；更早的全部删除。
+		keep := w.cfg.MaxBackups
+		if keep < 0 {
+			keep = 0
+		}
+		for i := 0; i < len(files)-keep; i++ {
+			doomed[i] = true
+		}
+	}
+
+	if w.cfg.MaxAgeDays > 0 {
+		// 一天 = 24h（与 lumberjack 同口径）；用档名里的轮转时间，不用 mtime。
+		cutoff := time.Now().Add(-time.Duration(w.cfg.MaxAgeDays) * 24 * time.Hour)
+		for i, f := range files {
+			if f.when.Before(cutoff) {
+				doomed[i] = true
+			}
+		}
+	}
+
+	var firstErr error
+	for i, f := range files {
+		if !doomed[i] {
+			continue
+		}
+		if err := os.Remove(f.path); err != nil && !os.IsNotExist(err) {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("删除过期轮转档 %s 失败: %w", filepath.Base(f.path), err)
+			}
+		}
+	}
+	return firstErr
 }
