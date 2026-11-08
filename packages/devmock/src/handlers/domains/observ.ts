@@ -1,6 +1,6 @@
 import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
-import { requireAuth } from '@jianmanager/devmock/auth-middleware'
+import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
 import type {
   AttributionInfo,
@@ -562,6 +562,99 @@ function seedLogs(): LogRow[] {
     })
   }
   return [...base, ...generated]
+}
+
+/**
+ * 日志筛选 + `time DESC` 排序（FR-049/050）：经典 `/logs` 与联邦 `/logs/federation` 共用。
+ *
+ * 为什么必须共用一份而不是各写一份：两条路径服务的是**同一批种子行**，前端据此渲染同一张
+ * 列表。筛选/排序若各写一份，任何一侧的改动都会让 mock 里的「节点/实例日志」与
+ * 「联邦视图」相互漂移——用例的红绿会由数据源差异决定，而不是由被测的页面行为决定。
+ * 支持维度：source / level / nodeId / instanceId / keyword / from / to。
+ * 联邦采用 [from,to)，经典端点仍保留闭区间，不能把两者的上界契约混为一谈。
+ */
+function selectLogRows(url: URL, exclusiveTo = false): LogRow[] {
+  const source = url.searchParams.get('source')
+  const level = url.searchParams.get('level')
+  const nodeId = url.searchParams.get('nodeId')
+  const instanceId = url.searchParams.get('instanceId')
+  const keyword = url.searchParams.get('keyword')?.trim()
+  const from = url.searchParams.get('from')
+  const to = url.searchParams.get('to')
+
+  let items = logs.list()
+  const view = url.searchParams.get('view')
+  if (view === 'platform') items = items.filter((row) => row.source === 'control_plane')
+  if (view === 'node_instance') items = items.filter((row) => row.source !== 'control_plane')
+  if (url.searchParams.get('onlineOnly') === 'true') {
+    const onlineIds = new Set(db<{ id: number; status: number }>('nodes').list().filter((node) => node.status === 1).map((node) => node.id))
+    items = items.filter((row) => row.nodeId === 0 || onlineIds.has(row.nodeId))
+  }
+  if (source) items = items.filter((l) => l.source === source)
+  if (level) items = items.filter((l) => l.level === level)
+  if (nodeId) items = items.filter((l) => l.nodeId === Number(nodeId))
+  if (instanceId) items = items.filter((l) => l.instanceId === Number(instanceId))
+  if (keyword) items = items.filter((l) => l.message.includes(keyword))
+  if (from) items = items.filter((l) => l.time >= from)
+  if (to) items = items.filter((l) => exclusiveTo ? l.time < to : l.time <= to)
+
+  // 对齐真后端 log.go 的 time DESC 稳定排序（真后端有序，mock 此前漏排造成「实时正序+历史倒序」假象）。
+  return [...items].sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0))
+}
+
+interface MockLogView {
+  id: string
+  scope: string
+  items: LogRow[]
+  limit: number
+  expiresAt: number
+}
+const logViews = new Map<string, MockLogView>()
+let logViewSequence = 0
+
+/** 模拟固定视图和严格条件复用，不能靠恒定成功掩盖错配请求。 */
+function mockLogScope(url: URL): string {
+  return JSON.stringify(['view', 'source', 'level', 'nodeId', 'instanceId', 'keyword', 'onlineOnly', 'from', 'to']
+    .map((key) => [key, key === 'keyword' ? (url.searchParams.get(key) ?? '').trim() : url.searchParams.get(key) ?? '']))
+}
+function mockLogView(url: URL, required = false): MockLogView | HttpResponse {
+  const id = url.searchParams.get('viewId')
+  if (id) {
+    const stored = logViews.get(id)
+    if (!stored || stored.expiresAt <= Date.now() || stored.scope !== mockLogScope(url)) {
+      return HttpResponse.json({ error: 'VIEW_STALE' }, { status: 409 })
+    }
+    return stored
+  }
+  if (required) return HttpResponse.json({ error: 'VIEW_REQUIRED' }, { status: 400 })
+  const created: MockLogView = {
+    id: `mock-log-view-${++logViewSequence}`, scope: mockLogScope(url),
+    items: structuredClone(selectLogRows(url, true)), limit: Number(url.searchParams.get('limit') ?? '100'), expiresAt: Date.now() + 60_000,
+  }
+  if (logViews.size >= 64) logViews.delete(logViews.keys().next().value!)
+  logViews.set(created.id, created)
+  return created
+}
+function mockLogPage(url: URL, view: MockLogView): { start: number; items: LogRow[] } | HttpResponse {
+  const cursor = url.searchParams.get('cursor')
+  const prefix = `${view.id}:`
+  if (cursor && (!cursor.startsWith(prefix) || !/^\d+$/.test(cursor.slice(prefix.length)))) {
+    return HttpResponse.json({ error: 'INVALID_CURSOR' }, { status: 400 })
+  }
+  const start = cursor ? Number(cursor.slice(prefix.length)) : 0
+  if (url.searchParams.has('limit') && Number(url.searchParams.get('limit')) !== view.limit) {
+    return HttpResponse.json({ error: 'VIEW_STALE' }, { status: 409 })
+  }
+  return { start, items: view.items.slice(start, start + view.limit) }
+}
+const exactLogSummary = { coverage: { complete: true, targets: [], partial_reasons: [] }, quality: { duplicate_quality: 'exact', stats_quality: 'exact' }, truncated: false }
+
+/** 日志分页参数（经典 / 联邦两条路径共用；缺省 1 / 100，与前端 PAGE_SIZE 一致）。 */
+function logPageParams(url: URL): { page: number; pageSize: number } {
+  return {
+    page: Number(url.searchParams.get('page') ?? '1'),
+    pageSize: Number(url.searchParams.get('pageSize') ?? '100'),
+  }
 }
 
 // ── 指标时序生成（无独立集合，纯派生让图表有内容） ──
@@ -1950,45 +2043,119 @@ export const handlers = [
     return HttpResponse.json({ message: '已请求停止' })
   }),
 
+  // 日志运行时仅供本地确认交互验收；失败仍可由标准注入框架独立覆盖。
+  domainRoute('get', '/log-runtime/assets', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ assets: [] })
+  }),
+  domainRoute('get', '/nodes/:id/log-runtime', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ supported: true, instances: [
+      { namespace: 'hot', state: 'RUNNING', health_ok: true, query_ready: true },
+      { namespace: 'cold', state: 'RUNNING', health_ok: true, query_ready: true },
+    ] })
+  }),
+  domainRoute('post', '/nodes/:id/log-runtime/migrate', async (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    const body = await info.request.json() as { storageNamespace?: string; utcDay?: string }
+    if (body.storageNamespace !== `node:${info.params.id}` || !/^\d{4}-\d{2}-\d{2}$/.test(body.utcDay ?? '')) {
+      return HttpResponse.json({ error: 'INVALID_MIGRATION_TARGET' }, { status: 400 })
+    }
+    return HttpResponse.json({ state: 'migrated' })
+  }),
+
   // ===== logs 日志中心（FR-049/050/150） =====
   domainRoute('get', '/logs', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
-    const source = url.searchParams.get('source')
-    const level = url.searchParams.get('level')
-    const nodeId = url.searchParams.get('nodeId')
-    const instanceId = url.searchParams.get('instanceId')
-    const keyword = url.searchParams.get('keyword')
-    const from = url.searchParams.get('from')
-    const to = url.searchParams.get('to')
-    const page = Number(url.searchParams.get('page') ?? '1')
-    const pageSize = Number(url.searchParams.get('pageSize') ?? '100')
-
-    let items = logs.list()
-    if (source) items = items.filter((l) => l.source === source)
-    if (level) items = items.filter((l) => l.level === level)
-    if (nodeId) items = items.filter((l) => l.nodeId === Number(nodeId))
-    if (instanceId) items = items.filter((l) => l.instanceId === Number(instanceId))
-    if (keyword) items = items.filter((l) => l.message.includes(keyword))
-    if (from) items = items.filter((l) => l.time >= from)
-    if (to) items = items.filter((l) => l.time <= to)
-
-    // 对齐真后端 log.go 的 time DESC 稳定排序（真后端有序，mock 此前漏排造成「实时正序+历史倒序」假象）。
-    items = [...items].sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0))
+    const items = selectLogRows(url)
+    const { page, pageSize } = logPageParams(url)
 
     const total = items.length
     const start = (page - 1) * pageSize
     return HttpResponse.json({ items: items.slice(start, start + pageSize), total, page, pageSize })
   }),
 
+  // ===== logs 联邦查询（FR-482/FR-480） =====
+  //
+  // 假后端只提供**正常可用**的联邦信封（ok:true + available:true）：前端「查询服务不可用」
+  // 的各种降级态由测试按需用 server.use 覆写（404/失败/partial 各有专门用例），
+  // mock 自身不模拟降级——否则默认路径不再是生产同款，页面用例会跑在一条生产不存在的分支上。
+  domainRoute('get', '/logs/federation', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const view = mockLogView(url)
+    if (view instanceof HttpResponse) return view
+    const page = mockLogPage(url, view)
+    if (page instanceof HttpResponse) return page
+    const exhausted = page.start + page.items.length >= view.items.length
+    return HttpResponse.json({
+      ok: true, sourceTag: 'federated', available: true, ...exactLogSummary,
+      items: page.items, total: view.items.length, exhausted,
+      next_cursor: exhausted ? undefined : `${view.id}:${page.start + page.items.length}`,
+      view: { view_id: view.id },
+    })
+  }),
+
+  domainRoute('get', '/logs/federation/tail', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    return HttpResponse.json({ ok: true, sourceTag: 'federated', items: selectLogRows(url, true).slice(0, Number(url.searchParams.get('limit') ?? 100)), ...exactLogSummary })
+  }),
+
+  // 聚合与导出必须复用同条件的固定视图；错配或到期明确拒绝。
+  domainRoute('get', '/logs/federation/stats', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const view = mockLogView(new URL(info.request.url))
+    if (view instanceof HttpResponse) return view
+    return HttpResponse.json({ points: [{ agg: { count: view.items.length } }], ...exactLogSummary, view: { view_id: view.id } })
+  }),
+
+  domainRoute('get', '/logs/federation/facets', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const view = mockLogView(new URL(info.request.url))
+    if (view instanceof HttpResponse) return view
+    const counts = new Map<string, number>()
+    for (const row of view.items) counts.set(row.level.toUpperCase(), (counts.get(row.level.toUpperCase()) ?? 0) + 1)
+    return HttpResponse.json({ dimensions: [{ dimension: 'level', values: [...counts].map(([value, count]) => ({ value, count })), truncated: false }], ...exactLogSummary, view: { view_id: view.id } })
+  }),
+
+  /**
+   * 联邦导出（FR-482）：POST + 物化当前 Query View，响应是 NDJSON 附件。
+   *
+   * 前端 `exportFederatedLogs` 用响应 `content-type` 判定结果：非 `application/x-ndjson`
+   * 会被当成「导出闸阻断」（200 + 报告 JSON）并抛出结构化错误。故此处必须回 NDJSON，
+   * 否则 mock 模式下点「导出」恒定报阻断，与真实可用后端行为不符。
+   * 全窗与当前页真实区分；当前页要求匹配的既有视图、入页游标与固定页大小。
+   */
+  domainRoute('post', '/logs/federation/export', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const range = url.searchParams.get('range') ?? 'all'
+    if (range !== 'all' && range !== 'page') return HttpResponse.json({ error: 'INVALID_EXPORT_RANGE' }, { status: 400 })
+    const view = mockLogView(url, range === 'page')
+    if (view instanceof HttpResponse) return view
+    const page = range === 'page' ? mockLogPage(url, view) : null
+    if (page instanceof HttpResponse) return page
+    const rows = page ? page.items : view.items
+    return new HttpResponse(rows.map((row) => JSON.stringify(row)).join('\n'), {
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    })
+  }),
+
   domainRoute('get', '/logs/export', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    const ndjson = logs
-      .list()
-      .map((l) => JSON.stringify(l))
-      .join('\n')
+    const ndjson = selectLogRows(new URL(info.request.url)).map((row) => JSON.stringify(row)).join('\n')
     return new HttpResponse(ndjson, {
       headers: { 'Content-Type': 'application/x-ndjson' },
     })

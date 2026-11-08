@@ -58,6 +58,9 @@ type Server struct {
 	// logQuery FR-479 日志 RPC 装配点（T11）；nil 时 Log* 走 Unimplemented。
 	logQuery     interface{}
 	instanceLogs InstanceLogCollector
+	// logSourceOverrides 提供实例日志路径的配置化覆盖（FR-502 §3.4）；nil = 不覆盖。
+	// 由 SetInstanceLogSourceOverrides 注入。
+	logSourceOverrides InstanceLogSourceOverrides
 	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。
 	root *dataroot.Root
 	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
@@ -266,11 +269,40 @@ func (s *Server) EmitOutput(instanceUUID, stream, data string) {
 	})
 }
 
-// CreateInstance 创建实例。
+// CreateInstance 创建实例（FR-499）。
 // CP 下发的 WorkDir 按数据根相对存储（系统分配的 var/servers/<slug>-<shortid>），
 // 此处解析为本节点绝对路径并确保目录存在。参见 ADR-010。
+//
+// 它是「登记不能被长周期锁拖死」这个事故面的**唯一可观测点**：
+// 呼叫方（CP）关心的就是「从我发出到拿回响应花了多久」。
+// 所以在入口处埋段计时，并把结果写进一条结构化日志。
+//
+// 为什么不在内部各处埋点：事故面在呼叫方的体感，不在内部分支。
+// 内部再加十几个点只会把真正的端到端数字弄淡。
 func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanceRequest) (*workerpb.CreateInstanceResponse, error) {
-	if _, err := s.registerInstanceFromProto(req); err != nil {
+	started := time.Now()
+	created, err := s.registerInstanceFromProto(req)
+	elapsed := time.Since(started)
+
+	// 超阈时用 Warn，正常用 Debug：这条日志每次建实例都会打，
+	// 但只有慢的那些值得在默认日志等级下看见。
+	//
+	// 阈值 100ms 的由来：FR-499 的生产复验里登记 1.246ms 返回，
+	// 整轮采集墙钟 11.95s 时也不受影响。100ms 是「已经慢了但还没到事故」的量级，
+	// 用它做告警线可以把「开始不对」和「真出事」分开。
+	const slowRegisterThreshold = 100 * time.Millisecond
+	logFn := slog.Debug
+	if elapsed >= slowRegisterThreshold {
+		logFn = slog.Warn
+	}
+	logFn("实例登记完成（FR-499 端到端耗时）",
+		"instanceUUID", req.InstanceUuid,
+		"created", created,
+		"elapsedMs", float64(elapsed.Microseconds())/1000.0,
+		"success", err == nil,
+	)
+
+	if err != nil {
 		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &workerpb.CreateInstanceResponse{Success: true}, nil

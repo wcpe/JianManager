@@ -2,6 +2,7 @@ package vlrange
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -45,9 +46,6 @@ const (
 // 窗口一旦真的超过 VL 上限，代次占用探测与合并粗筛会整组失败。
 const searchMaxWindow = 31 * 24 * time.Hour
 
-// projectionGenerationField 是投影代次字段名（eventFromJSON 会把它放进 Event.Fields）。
-const projectionGenerationField = "projection_generation"
-
 // mergedScanRows 返回合并粗筛的 VL 行预算（页预算 × 系数，钳制在上下限内）。
 func mergedScanRows(q query.RangeQuery) uint64 {
 	rows := lookaheadRows(q) * mergedScanFactor
@@ -64,14 +62,15 @@ func mergedScanRows(q query.RangeQuery) uint64 {
 // 谓词语义，用于合并粗筛后的行级归因。两处（LogsQL 与内存）必须逐字等价——
 // merged_test.go 有对照测试守护。
 //
-// 语义分四段（全部为非空段的合取）：
+// 语义分三段（全部为非空段的合取）：
 //  1. scoped（SourceProjections 非空）：命中任一 scope 的
-//     (log_source_id, source_generation, projection_generation ∈ set,
-//     且 record_end <= scope.ClosedVisibleSeq)；
+//     (log_source_id, source_generation, 且 record_end <= scope.ClosedVisibleSeq)；
 //  2. 非 scoped 且 Projection 非空：命中任一 CoveredSourceGenerations 的
 //     (log_source_id, source_generation)；
-//  3. covered 为空 → 回退 Key.StorageNamespace 相等；
-//  4. 非 scoped 且有 generation 集 → 行的 projection_generation 必须 ∈ 集合。
+//  3. covered 为空 → 回退 Key.StorageNamespace（命名空间形态）。
+//
+// 第四段「非 scoped 时行的 projection_generation 必须 ∈ 白名单」已于 2026-11-02
+// 随简化投递路径**删除**：selectorQuery 侧对应的谓词同批移除，两处必须同步。
 //
 // range 级前缀水位（selectorQuery 第三段 + Search 回调双重检查的对象）在此一并
 // 用 rng.ClosedVisibleSeq 表达（合并路径不得使用全局 q.ClosedVisibleSeq——
@@ -92,23 +91,20 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 
 	proj := rng.Projection
 	scoped := proj != nil && len(proj.SourceProjections) > 0
-	projGen := ev.Fields[projectionGenerationField]
 
 	covered := false
 	hasExpressibleCoverage := false
 	if scoped {
 		for _, scope := range proj.SourceProjections {
-			if len(scope.ProjectionGenerations) == 0 {
-				continue
-			}
+			// **不再按 `projection_generation` 过滤**（2026-11-02 简化投递路径；
+			// 与 selectorQuery 逐字对齐 —— 两处谓词必须等价，merged_test 有对照守护）。
+			//
+			// 保留的约束：log_source_id / source_generation / record_end<=水位，一条都不放宽。
 			hasExpressibleCoverage = true
 			if ev.Source.LogSourceID != scope.LogSourceID {
 				continue
 			}
 			if ev.Source.SourceGeneration != scope.SourceGeneration {
-				continue
-			}
-			if !containsString(scope.ProjectionGenerations, projGen) {
 				continue
 			}
 			if ev.Record.End > scope.ClosedVisibleSeq {
@@ -129,6 +125,9 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 			}
 		}
 	}
+	if scoped && !hasExpressibleCoverage {
+		return false
+	}
 	if hasExpressibleCoverage {
 		// selectorQuery 有可表达的来源约束时不会回退 namespace；必须命中其中一项。
 		if !covered {
@@ -140,45 +139,85 @@ func rangeMatchesEvent(rng query.AuthoritativeRange, ev logtypes.Event) bool {
 			// 若仍被调用则按不匹配处理（宁可少收，不可放大可见范围）。
 			return false
 		}
-		if ev.Source.LogSourceID != rng.Key.StorageNamespace {
+		// 与 selectorQuery 共用同一判据（`query.SourceScope.MatchesLogSourceID`）：
+		// 命名空间形态匹配 `<ns>` 与 `<ns>/...` 两种行，而不是只等值匹配。
+		//
+		// 2026-11-05：旧写法 `ev.Source.LogSourceID != rng.Key.StorageNamespace`
+		// 把命名空间当完整源 id，而真实行是 `inst:318/file` ⇒ 全部归因失败 ⇒
+		// 粗筛有行、结果却空（与 selectorQuery 同根同源的第三个生产 bug）。
+		if !(query.SourceScope{Namespace: rng.Key.StorageNamespace}).MatchesLogSourceID(ev.Source.LogSourceID) {
 			return false
 		}
 	}
 
-	// 段 4：非 scoped 的投影代次全局约束（selectorQuery parts 第二段）。
-	if proj != nil && !scoped {
-		gens := projectionGenerations(proj)
-		switch {
-		case len(gens) == 1:
-			if projGen != gens[0] {
-				return false
-			}
-		case len(gens) > 1:
-			if !containsString(gens, projGen) {
-				return false
-			}
-		}
-	}
+	// 段 4：**已删除**（2026-11-02 简化投递路径）。
+	//
+	// 旧逻辑：非 scoped 时还要求行的 `projection_generation` ∈ 白名单。
+	// selectorQuery 里对应的谓词已同批移除，两处必须同步 —— 否则 LogsQL 与内存归因不等价。
+	// 历史数据仍带该标签，但不再被任何一侧使用。
 
 	// range 级前缀水位。
+	//
+	// `cvs=0` 表示「没有封窗信息」，不得解释成「上界为 0」（2026-11-05，第四个同根缺陷）。
+	//
+	// 旧条件是 `(!scoped || rng.ClosedVisibleSeq > 0) && ev.Record.End > rng.ClosedVisibleSeq`——
+	// 那是 selectorQuery 修复**之前**的形状，只改了 LogsQL 侧与单 range 回调，漏了这一处。
+	// 于是 unscoped（`ingest.ensureCatalogPartition` 补建的记录，scoped=false 且 cvs=0）
+	// 进入合并粗筛时每一条行都被丢弃，下游却看到 `Exhausted=true` / `quality=exact`
+	// ⇒ 报 `complete=true`。与前三起事故同一个用户可见症状：整页为空且伪装成「完整无数据」。
+	//
+	// 真机证据（inst:318，2026-11-02，VL v1.52.0 直查）：
+	//
+	//	min(record_end)=5105686  max(record_end)=5219246  count()=1746
+	//	再加 record_end<=0  ⇒  count()=0
+	//
+	// 即：只要把零水位当成零上界，那 1746 条一条都活不下来。
+	//
+	// 三处判据必须逐字等价（这是本文件开头那条「两处必须等价」纪律的最漏网的一处）：
+	//	A. 单 range 行级 client.go `cvs == 0 || ev.Record.End <= cvs`
+	//	B. LogsQL selector client.go `if cvs > 0 { record_end<=cvs }`
+	//	C. 本处——必须与 A/B 同口径。
+	//
+	// scoped 分支的 per-scope 水位在上面（`ev.Record.End > scope.ClosedVisibleSeq`）
+	// 已经独立生效，range 级水位不再需要按 scoped 分流。
 	if rng.ClosedVisibleSeq > 0 && ev.Record.End > rng.ClosedVisibleSeq {
 		return false
 	}
 	return true
 }
 
-// mergedSearchQuery 构造合并粗筛的 LogsQL：`log_source_id:in(...)` 覆盖组内全部
-// 来源，管道与 searchQuery 逐字一致；fields 额外带 projection_generation（供内存
-// 归因过滤）。管道顺序（fields → sort → limit 相邻）的原因见 searchQuery 注释。
-func mergedSearchQuery(sources []string, q query.RangeQuery) string {
+// mergedSearchQuery 构造合并粗筛的 LogsQL：覆盖组内全部来源，
+// 管道与 searchQuery 逐字一致。fields 不再带 projection_generation（无消费方）。
+//
+// **来源段不能一律用 `in()`**：`in()` 是精确匹配，而命名空间形态的来源（简化投递
+// 路径补建的 Catalog 记录）需要匹配 `<ns>/...` 的子源。两类来源分开渲染：
+//   - 精确形态 → 聚合成一次 `log_source_id:in(...)`（PoC 实测比 OR 组快 ~4.6 倍）；
+//   - 命名空间形态 → 各自的「等值 OR 前缀」谓词（见 namespaceSelector）。
+//
+// 两者之间用 OR 连接（同一个 OR 组）：语义上各来源是并集，且这是 VL 的
+// 普通布尔组合，不会引入管道逃逸。
+func mergedSearchQuery(sources []query.SourceScope, q query.RangeQuery) string {
+	exact := make([]string, 0, len(sources))
 	terms := make([]string, 0, len(sources))
 	for _, s := range sources {
-		terms = append(terms, `"`+escape(s)+`"`)
+		if s.LogSourceID != "" {
+			exact = append(exact, `"`+escape(s.LogSourceID)+`"`)
+			continue
+		}
+		if s.Namespace != "" {
+			terms = append(terms, "("+namespaceSelector(s.Namespace)+")")
+		}
 	}
-	return "log_source_id:in(" + strings.Join(terms, ",") + ")" +
+	if len(exact) > 0 {
+		terms = append(terms, "log_source_id:in("+strings.Join(exact, ",")+")")
+	}
+	source := "*"
+	if len(terms) > 0 {
+		source = strings.Join(terms, " OR ")
+	}
+	return "(" + source + ")" +
 		" | fields _time, _msg, event_id, log_source_id, source_generation, " +
-		projectionGenerationField +
-		", parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
+		"parser_version, record_start, record_end, ingest_time_utc, level, stream, instance_id, canonical_content_hash" +
 		" | sort by (_time desc)" +
 		" | limit " + strconv.FormatUint(mergedScanRows(q), 10)
 }
@@ -189,6 +228,12 @@ func mergedSearchQuery(sources []string, q query.RangeQuery) string {
 // （query.MergeableScope ok）；任一不满足即返回错误——由调用方降级回逐 range
 // 执行，绝不静默放大可见范围。
 func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery) (query.RangeResult, error) {
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+	return c.searchMerged(query.WithPhysicalReadBudget(ctx, q.Budget), rngs, q, nil)
+}
+
+func (c *Client) searchMerged(ctx context.Context, rngs []query.AuthoritativeRange, q query.RangeQuery, physicalSources []query.SourceScope) (query.RangeResult, error) {
 	if c == nil || c.vl == nil {
 		return query.RangeResult{}, query.ErrRangeClientUnimplemented
 	}
@@ -196,8 +241,8 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 		return query.RangeResult{}, fmt.Errorf("vlrange: empty merged range set")
 	}
 	first := rngs[0]
-	sources := make([]string, 0, len(rngs))
-	seen := make(map[string]bool, len(rngs))
+	sources := make([]query.SourceScope, 0, len(rngs))
+	seen := make(map[query.SourceScope]bool, len(rngs))
 	for _, rng := range rngs {
 		// 2026-10-08 修正：合并组**允许跨 UTC 天**（窗口取各天并集，行归因按各 rng
 		// 权威谓词）——此前的"同天"防御与跨天合并改造冲突，会让整组报错并使
@@ -220,8 +265,14 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 			}
 		}
 	}
+	if len(physicalSources) > 0 {
+		sources = physicalSources
+	}
 	// 查询文本确定性：来源排序后拼接（便于日志/调试对照，不影响命中集合）。
-	sort.Strings(sources)
+	sort.Slice(sources, func(i, j int) bool { return sources[i].SortKey() < sources[j].SortKey() })
+	if !physicalQueryFits(mergedSearchQuery(sources, q), q.Filter) {
+		return c.splitMergedSources(ctx, rngs, sources, q)
+	}
 
 	// 窗口 = 组内各天分区的**并集**（跨天一次查）。按天拆分会让 VL 对每个窗口
 	// 独立全扫（"窗口内匹配行数 < limit"时无法 top-K 早停）——实测 154 源 24h
@@ -312,15 +363,35 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 			}
 			for _, ev := range segment.Items {
 				if prev, ok := seenHash[ev.EventID]; ok {
-					duplicated = true
 					if prev == ev.CanonicalHash {
+						// 同 id 同哈希 = 内容完全一致的纯重复副本：下面直接丢弃，用户看到的
+						// 结果没有任何歧义 ⇒ 按「不谎报未对账」的取向**不得**降级质量，
+						// 否则普通重复行就会把导出门闸误封（与单 range 路径 client.go 的
+						// searchPage 同口径：只有「同 id 异哈希」才算歧义）。
+						//
+						// 为何本分支在本层实际不可达（2026-10 核实）：canonical_content_hash
+						// 由 (event_time, level, stream, message) 哈希而来，含事件时间 ⇒ 同哈希
+						// 必然同一时刻；而滑段窗口是首尾相接的 [start,end)（windowParams），
+						// 同一时刻不可能落进两段，段内又已被 searchPage 按 id+哈希去重。
+						// 唯一可达的退化情形是「canonical_content_hash 字段缺失导致两行哈希
+						// 都是空串」——此时与单 range 路径行为一致：静默丢弃，同样不降级。
 						continue
 					}
+					// 同 id 异哈希 = 内容已分歧却共用同一事件身份（同一 record 区间被解析出
+					// 不同内容/时间），属无法判定真伪的歧义副本：两条都要保留给上层归因，
+					// 但质量必须降级，不得对外宣称 exact。
+					duplicated = true
 				}
 				seenHash[ev.EventID] = ev.CanonicalHash
 				out.Items = append(out.Items, ev)
 			}
 			if err != nil {
+				if errors.Is(err, query.ErrRangeQueryBudget) {
+					out.Exhausted = false
+					out.CoverageReasons = append(out.CoverageReasons, query.ReasonBudgetExceeded)
+					out.StatsQuality = query.StatsPartial
+					return out, err
+				}
 				if len(out.Items) == 0 {
 					return out, err
 				}
@@ -364,8 +435,9 @@ func (c *Client) SearchMerged(ctx context.Context, rngs []query.AuthoritativeRan
 	out.Exhausted = exhausted
 	out.DuplicateQuality = query.DupExact
 	if duplicated {
-		// 跨 range 并集出现同 id 多哈希：不得对外宣称 exact（与逐 range 路径
-		// 「任一 partial → unresolved」的保守取向一致）。
+		// 跨 range 并集出现**同 id 异哈希**：内容已分歧却共用同一事件身份，两份都保留在
+		// 结果里、且无法判定哪份为真，故不得对外宣称 exact（与单 range 路径
+		// client.go 的判据逐字同源：同 id 同哈希的纯重复不降级）。
 		out.DuplicateQuality = query.DupUnresolved
 	}
 	out.StatsQuality = query.StatsExact

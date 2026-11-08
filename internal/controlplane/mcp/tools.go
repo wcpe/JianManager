@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/wcpe/JianManager/internal/controlplane/logcoord"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
@@ -34,7 +35,12 @@ type ToolContent struct {
 type ToolDeps struct {
 	Instance *service.InstanceService
 	Node     *service.NodeService
-	Log      *service.LogService        // 可选；nil 时 agent_get_instance_logs 返回中文错误
+	// LogCoord 是日志联邦查询协调器（实例日志的真源在 Worker 的 VL 里）。
+	//
+	// 历史：这里原先是 *service.LogService（读 CP `logs` 表）。那张表正在废弃——
+	// 它把日志正文与业务数据混在同一个库，且关键词检索是 LIKE 全表扫。
+	// nil 时 agent_get_instance_logs 返回中文错误。
+	LogCoord *logcoord.Coordinator
 	Agent    *service.AgentTokenService // FR-395：可信目标解析与 scope 查询
 	// FR-396 扩展依赖；nil 时对应工具返回中文「服务不可用」。
 	Provision *service.ProvisionService
@@ -141,7 +147,7 @@ var allToolSpecs = []toolSpec{
 	{
 		Def: ToolDef{
 			Name:        "agent_get_instance_logs",
-			Description: "获取指定实例最近日志（须在 scope 内）；可选 limit",
+			Description: "获取指定实例最近日志（须在 scope 内）；可选 limit。日志来自 Worker 的 VictoriaLogs（经 CP 联邦查询），不读 CP 本地表",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -409,7 +415,7 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		if _, _, err := deps.Agent.AuthorizeInstanceAction(p, action, id); err != nil {
 			return toolForbidden(err)
 		}
-		if deps.Log == nil {
+		if deps.LogCoord == nil {
 			return toolErr("日志服务不可用")
 		}
 		limit := 50
@@ -423,17 +429,24 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 				limit = 200
 			}
 		}
-		src := model.LogSourceInstance
-		page, err := deps.Log.Query(service.LogFilter{
-			InstanceID: &id,
-			Source:     &src,
-			Page:       1,
-			PageSize:   limit,
+		// 走联邦查询：实例日志的权威副本在 Worker 的 VL 里，CP 只做授权与归集。
+		// 目标集合仅含已通过 AuthorizeInstanceAction 校验的这一个实例（inst:<id>），
+		// 不扩到其他实例，也不读 CP 本地任何表。
+		resp, err := deps.LogCoord.Search(ctx, logcoord.Query{
+			RequestID:           fmt.Sprintf("mcp-instance-logs-%d", id),
+			AuthorizedTargetIDs: []string{fmt.Sprintf("inst:%d", id)},
+			PrincipalKey:        fmt.Sprintf("agent:%d", p.TokenID),
+			Fast:                true,
+			Budget:              logcoord.QueryBudget{Limit: limit},
 		})
 		if err != nil {
 			return toolErr("查询日志失败: " + err.Error())
 		}
-		return toolOK(page)
+		return toolOK(map[string]any{
+			"sourceTag": "federated",
+			"items":     resp.Items,
+			"coverage":  resp.Coverage,
+		})
 
 	case "instance_start", "instance_stop", "instance_restart":
 		return callLifecycle(ctx, deps, p, action, args)

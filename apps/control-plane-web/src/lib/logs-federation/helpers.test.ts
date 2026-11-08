@@ -121,15 +121,43 @@ describe('formatCoverageSummary（FR-482 foundation）', () => {
     expect(s.targetStats.excluded).toBe(1)
   })
 
-  it('quality.duplicateQuality=UNRESOLVED → 即使 complete=true 也不得当完整成功', () => {
+  it('quality.duplicateQuality=UNRESOLVED → 只标质量，不谎报覆盖不完整（complete 保持 true）', () => {
     const s = formatCoverageSummary(coverage({ complete: true }), {
       duplicateQuality: 'UNRESOLVED',
       statsQuality: 'APPROXIMATE',
     })
-    expect(s.status).toBe('partial')
-    expect(s.complete).toBe(false)
-    expect(s.emptySuccessAllowed).toBe(false)
+    // 质量与完整性正交（types.ts / spec §3.1）：quality 不得把 complete 翻成 partial，
+    // 否则 `coverage.complete=true` 的响应会被渲染成「覆盖不完整（部分结果）」——谎报。
+    expect(s.status).toBe('complete')
+    expect(s.complete).toBe(true)
+    expect(s.summaryKey).toBe(LOGS_FEDERATION_KEYS.coverageComplete)
+    // 但质量标记必须保留（导出阻断仍由它驱动）。
     expect(s.duplicateUnresolved).toBe(true)
+    expect(s.duplicateConflict).toBe(false)
+  })
+
+  it('CONFLICT 与 UNRESOLVED 是两个判据，不得混成一个布尔', () => {
+    const conflict = formatCoverageSummary(coverage({ complete: true }), {
+      duplicateQuality: 'CONFLICT',
+      statsQuality: 'PARTIAL',
+    })
+    expect(conflict.duplicateConflict).toBe(true)
+    expect(conflict.duplicateUnresolved).toBe(false)
+
+    const unresolved = formatCoverageSummary(coverage({ complete: true }), {
+      duplicateQuality: 'UNRESOLVED',
+      statsQuality: 'UNKNOWN',
+    })
+    expect(unresolved.duplicateConflict).toBe(false)
+    expect(unresolved.duplicateUnresolved).toBe(true)
+
+    // 覆盖原因里的 DUPLICATE_UNRESOLVED 只表示「未对账」，不代表身份冲突：
+    // 它必须驱动 unresolved 判据，但绝不能打开「清空身份冲突」的入口。
+    const reasonOnly = formatCoverageSummary(
+      coverage({ complete: false, partialReasons: [PARTIAL_REASONS.DUPLICATE_UNRESOLVED] }),
+    )
+    expect(reasonOnly.duplicateConflict).toBe(false)
+    expect(reasonOnly.duplicateUnresolved).toBe(true)
   })
 
   it('legacy 目标计入 stats 并携带 reason key', () => {
@@ -331,7 +359,7 @@ describe('classifyLogViewState（FR-482 foundation）', () => {
     expect(v.historyFullyEnumerated).toBe(false)
   })
 
-  it('duplicateQuality=UNRESOLVED 阻断导出，即使 coverage.complete', () => {
+  it('duplicateQuality=UNRESOLVED 阻断导出，但覆盖完整性与文案不降级', () => {
     const v = classifyLogViewState({
       ok: true,
       items: [{ id: 1 }],
@@ -341,8 +369,57 @@ describe('classifyLogViewState（FR-482 foundation）', () => {
       exportVerified: true,
     })
     expect(v.coverage.duplicateUnresolved).toBe(true)
+    expect(v.coverage.duplicateConflict).toBe(false)
+    // 覆盖结论仍是完整（质量维度不参与完整性判定）。
+    expect(v.coverage.status).toBe('complete')
+    expect(v.coverage.complete).toBe(true)
+    expect(v.isIncomplete).toBe(false)
+    // 导出照样阻断——这是质量维度**唯一**允许产生的影响。
     expect(v.allowsExportDownload).toBe(false)
     expect(v.exportBlockedKey).toBe(LOGS_FEDERATION_KEYS.exportBlockedUnresolved)
+  })
+
+  it('duplicateQuality=CONFLICT 阻断导出，且与 UNRESOLVED 使用不同阻断文案', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [{ id: 1 }],
+      coverage: coverage({ complete: true }),
+      quality: { duplicateQuality: 'CONFLICT', statsQuality: 'PARTIAL' },
+      exportStatus: 'READY',
+      exportVerified: true,
+    })
+    expect(v.coverage.duplicateConflict).toBe(true)
+    expect(v.coverage.duplicateUnresolved).toBe(false)
+    expect(v.allowsExportDownload).toBe(false)
+    expect(v.exportBlockedKey).toBe(LOGS_FEDERATION_KEYS.exportBlockedConflict)
+    expect(v.exportBlockedKey).not.toBe(LOGS_FEDERATION_KEYS.exportBlockedUnresolved)
+  })
+
+  it('complete=true + 质量降级：横幅标题只讲质量，绝不说「覆盖不完整」', () => {
+    for (const [duplicateQuality, expectedKey] of [
+      ['CONFLICT', LOGS_FEDERATION_KEYS.viewQualityConflict],
+      ['UNRESOLVED', LOGS_FEDERATION_KEYS.viewQualityUnresolved],
+    ] as const) {
+      const v = classifyLogViewState({
+        ok: true,
+        items: [{ id: 1 }],
+        coverage: coverage({ complete: true }),
+        quality: { duplicateQuality, statsQuality: 'PARTIAL' },
+      })
+      expect(v.state).toBe('ready_complete')
+      expect(v.coverage.status).toBe('complete')
+      expect(v.coverage.summaryKey).toBe(LOGS_FEDERATION_KEYS.coverageComplete)
+      expect(v.bannerKey).toBe(expectedKey)
+      // 不得落到 partial 的「部分日志无法查询」文案。
+      expect(v.bannerKey).not.toBe(LOGS_FEDERATION_KEYS.viewPartial)
+
+      const props = toCoverageBannerProps(v)
+      // 覆盖完整但质量降级时横幅仍须可见，否则用户只看到导出灰着、不知为何。
+      expect(props.visible).toBe(true)
+      expect(props.tone).toBe('warning')
+      expect(props.showExport).toBe(false)
+      expect(props.exportBlockedKey).toBeDefined()
+    }
   })
 })
 
@@ -541,6 +618,25 @@ describe('导出预算上限文案（FR-480 导出闸）', () => {
         expect(exportBlockedKeyForReasons([reason]), `非预算原因 ${reason} 不得映射到专用键`).toBeUndefined()
       }
     })
+
+    // 质量维度（conflict / unresolved）的文案是「区分两个状态」的载体：漏一条就会让
+    // 用户看到空文案或回退到泛化提示，因此逐键断言真实包非空。
+    it('质量标记与引导文案键在真实 zh / en 语言包中都存在且非空', () => {
+      for (const key of [
+        LOGS_FEDERATION_KEYS.viewQualityConflict,
+        LOGS_FEDERATION_KEYS.viewQualityUnresolved,
+        LOGS_FEDERATION_KEYS.exportBlockedConflict,
+        LOGS_FEDERATION_KEYS.qualityConflictNeedsNode,
+        LOGS_FEDERATION_KEYS.qualityUnresolvedNoRemedy,
+      ]) {
+        for (const [localeName, locale] of Object.entries({ zh: realZh, en: realEn })) {
+          const value = get(locale, key)
+          expect(typeof value, `键 ${key} 在真实 ${localeName} 语言包中缺失`).toBe('string')
+          expect((value as string).length, `键 ${key} 在真实 ${localeName} 语言包中为空串`)
+            .toBeGreaterThan(0)
+        }
+      }
+    })
   })
 
 describe('toCoverageBannerProps / mergeQualityIntoSummary / i18n', () => {
@@ -560,15 +656,29 @@ describe('toCoverageBannerProps / mergeQualityIntoSummary / i18n', () => {
     expect(props.reasonKeys.length).toBe(2)
   })
 
-  it('mergeQualityIntoSummary：UNRESOLVED 把 complete 降为 partial', () => {
+  it('mergeQualityIntoSummary：只并入质量标记，不改覆盖完整性', () => {
     const base = formatCoverageSummary(coverage({ complete: true }))
     expect(base.status).toBe('complete')
     const merged = mergeQualityIntoSummary(base, {
       duplicateQuality: 'UNRESOLVED',
       statsQuality: 'EXACT',
     })
-    expect(merged.status).toBe('partial')
-    expect(merged.emptySuccessAllowed).toBe(false)
+    // 质量与完整性正交：合并质量不得把 complete 降为 partial（那是谎报覆盖不完整）。
+    expect(merged.status).toBe('complete')
+    expect(merged.complete).toBe(true)
+    expect(merged.emptySuccessAllowed).toBe(true)
+    expect(merged.duplicateUnresolved).toBe(true)
+    expect(merged.duplicateConflict).toBe(false)
+  })
+
+  it('mergeQualityIntoSummary：CONFLICT 单独标记，不与 UNRESOLVED 混淆', () => {
+    const merged = mergeQualityIntoSummary(
+      formatCoverageSummary(coverage({ complete: true })),
+      { duplicateQuality: 'CONFLICT', statsQuality: 'PARTIAL' },
+    )
+    expect(merged.duplicateConflict).toBe(true)
+    expect(merged.duplicateUnresolved).toBe(false)
+    expect(merged.status).toBe('complete')
   })
 
   it('i18n zh/en logsFederation 键对齐', () => {
@@ -694,5 +804,43 @@ describe('pending 未校验态（Coverage.Pending，首屏快路径）', () => {
     expect(s.pending).toBe(true)
     expect(s.status).toBe('partial')
     expect(s.emptySuccessAllowed).toBe(false)
+  })
+})
+
+/**
+ * 回归（2026-10-19）：`TARGET_NO_DATA` 与 `ENGINE_NOT_READY` 必须区分开。
+ *
+ * 后端自本日起把「RPC 成功但该目标没有 Catalog 分区」记为 TARGET_NO_DATA 且保持
+ * success；它绝不能显示成「日志查询服务未启用」——那样会把排查引向 VL
+ * （2026-10-17 dev 实测：VL 有数据、vlReady=true，日志页却显示服务未启用）。
+ */
+describe('TARGET_NO_DATA 与引擎未就绪区分', () => {
+  it('TARGET_NO_DATA 有独立文案，不复用 engineNotReady', () => {
+    expect(reasonI18nKey(PARTIAL_REASONS.TARGET_NO_DATA)).toBe(
+      'logsFederation.reasons.targetNoData',
+    )
+    expect(reasonI18nKey(PARTIAL_REASONS.TARGET_NO_DATA)).not.toBe(
+      reasonI18nKey(PARTIAL_REASONS.ENGINE_NOT_READY),
+    )
+  })
+
+  it('只有 TARGET_NO_DATA 时不得判成 engine_not_ready 视图态', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [],
+      coverage: coverage({ complete: false, partialReasons: [PARTIAL_REASONS.TARGET_NO_DATA] }),
+    })
+    expect(v.state).not.toBe('engine_not_ready')
+    // 未知码走 generic partial：仍然不是「成功空态」，避免把「没查到」说成「没有日志」。
+    expect(v.emptySuccessAllowed).toBe(false)
+  })
+
+  it('ENGINE_NOT_READY 仍判成 engine_not_ready（真故障语义不许丢失）', () => {
+    const v = classifyLogViewState({
+      ok: true,
+      items: [],
+      coverage: coverage({ complete: false, partialReasons: [PARTIAL_REASONS.ENGINE_NOT_READY] }),
+    })
+    expect(v.state).toBe('engine_not_ready')
   })
 })

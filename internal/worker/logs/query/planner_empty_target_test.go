@@ -28,9 +28,9 @@ func coverageEntryFor(cov Coverage, targetID string) *TargetCoverage {
 func TestPlanner_AuthorizedTargetWithoutPartitionInWindowIsEmptySuccess(t *testing.T) {
 	cat := catalog.New(nil)
 	// inst:153：最后分区早于窗口（静默源）；inst:160：窗口内有分区（对照）。
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:153", UTCDay: "2026-09-27"}, catalog.OwnerHot, 1, "hot-153")))
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:160", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-160")))
 
 	req := PlanRequest{
@@ -77,7 +77,7 @@ func TestPlanner_AuthorizedTargetWithoutPartitionInWindowIsEmptySuccess(t *testi
 // 目标误拆成 ns/day，故判据必须「先按整串当命名空间找」。
 func TestPlanner_EmptySuccessCoverageForSlashNamespace(t *testing.T) {
 	cat := catalog.New(nil)
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "ns/game-1", UTCDay: "2026-09-20"}, catalog.OwnerHot, 1, "hot-old")))
 
 	p := NewPlanner(cat, nil)
@@ -97,7 +97,7 @@ func TestPlanner_EmptySuccessCoverageForSlashNamespace(t *testing.T) {
 // 宁可让 CP 判 missing_coverage，也不把「不知道」粉饰成「空」。
 func TestPlanner_UnknownAuthorizedTargetNotFabricatedAsEmptySuccess(t *testing.T) {
 	cat := catalog.New(nil)
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:160", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-160")))
 
 	p := NewPlanner(cat, nil)
@@ -143,7 +143,7 @@ func TestPlanner_UnknownAuthorizedTargetNotFabricatedAsEmptySuccess(t *testing.T
 // 改成什么都不做（仅删除该行）⇒ 断言②（必须有条目）立即红——两条路都被本用例封死。
 func TestPlanner_ReusePathMustNotFabricateEmptySuccessForUnplannedTarget(t *testing.T) {
 	cat := catalog.New(nil)
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:160", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-160")))
 
 	tr := TimeRange{FromUTC: "2026-10-11T00:00:00Z", ToUTC: "2026-10-12T00:00:00Z"}
@@ -161,7 +161,7 @@ func TestPlanner_ReusePathMustNotFabricateEmptySuccessForUnplannedTarget(t *test
 		"前置：创建时无 Catalog 记录的目标不得被补空成功")
 
 	// 视图冻结后 inst:170 才有可查记录（新源开始写日志），且它**仍在**本次授权集合内。
-	require.NoError(t, cat.Put(catalog.NewStableRecord(
+	require.NoError(t, cat.Put(queryableRecord(
 		catalog.PartitionKey{StorageNamespace: "inst:170", UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-170")))
 
 	reused := p.Plan(PlanRequest{
@@ -190,4 +190,196 @@ func TestPlanner_ReusePathMustNotFabricateEmptySuccessForUnplannedTarget(t *test
 		"存在未覆盖的授权目标时 complete 必须为 false（否则导出会放行不完整附件）")
 	require.Contains(t, reused.Coverage.PartialReasons, ReasonRangeUnavailable,
 		"未就绪原因必须随覆盖上报，供 CP 归一化为可读的 partial reason")
+}
+
+// 回归（2026-11-05 生产真机）：查询窗口**整体早于**该源最早分区时，不得判「空成功」。
+//
+// # 故障形态
+//
+// VL 直查 inst:318 的 2026-11-02 有 1746 条，但接口响应是
+//
+//	items=0  complete=true  enumeration_state=EXHAUSTED  reasons=None
+//
+// 也就是一个**静默的错误空**——用户看到「这天没日志」，而数据就在那里。
+//
+// # 根因
+//
+// `coverEmptyAuthorizedTargets` 的判据 2 只问「该命名空间在**任意**一天有没有可查记录」。
+// 重启后 Catalog 纯内存（2026-10-30 裁定不落盘），只有重启后补建的天（11-04）有记录；
+// 查 11-02 时窗口内无分区 → 进补空逻辑 → 按命名空间找到 11-04 的记录 → 命中
+// ⇒ 给 11-02 也补了「空成功」⇒ `complete=true`。
+//
+// # 为什么不能简单改成「窗口内必须有记录」
+//
+// 那会杀掉 `TestPlanner_AuthorizedTargetWithoutPartitionInWindowIsEmptySuccess`（#60）：
+// 静默源 inst:153 的最后分区早于窗口，本应判空；严要求会让停产源把平台判成
+// missing_coverage。所以判据取**方向**：窗口晚于源最早分区 → 空成功；
+// 窗口整体早于源最早分区 → 未就绪（fail-closed）。
+//
+// 转红方式（实测）：删掉 `namespaceWindowPrecedesEarliestDay` 那道闸，本用例在
+// 「必须是 CoverageNotReady」处红（会得到 CoverageSuccess + complete=true）。
+func TestPlanner_WindowBeforeEarliestPartitionIsNotReady(t *testing.T) {
+	cat := catalog.New(nil)
+	// 该源只有 11-04 的记录（真机重启后的形态）。
+	require.NoError(t, cat.Put(queryableRecord(
+		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-11-04"}, catalog.OwnerHot, 1, "hot-318")))
+
+	p := NewPlanner(cat, nil)
+	// 查 11-02：窗口整体早于该源最早分区。
+	res := p.Plan(PlanRequest{
+		RequestID: "silent-empty-before-earliest",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-11-02T00:00:00Z", ToUTC: "2026-11-03T00:00:00Z"},
+	})
+	require.Nil(t, res.Err)
+	require.Empty(t, res.Ranges, "该窗口内无分区 ⇒ 不产出 range")
+
+	got := coverageEntryFor(res.Coverage, "inst:318")
+	require.NotNil(t, got, "授权目标必须出现在覆盖里")
+	require.Equal(t, CoverageNotReady, got.State,
+		"窗口早于最早分区时本地记录无法证明「那天没有数据」⇒ 必须 fail-closed，"+
+			"不得粉饰成空成功（否则用户看到「这天没日志」而 VL 里确有数据）")
+	require.Contains(t, got.Reasons, ReasonNoCatalogRecord)
+	require.False(t, res.Coverage.Complete,
+		"静默空不得报成完整覆盖")
+
+	// 对照：同一份 Catalog，查 11-04（窗口 == 最早分区）仍须给出 range。
+	ok := p.Plan(PlanRequest{
+		RequestID: "in-window",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-11-04T00:00:00Z", ToUTC: "2026-11-05T00:00:00Z"},
+	})
+	require.Nil(t, ok.Err)
+	require.Len(t, ok.Ranges, 1, "窗口内的分区必须产出 range")
+	require.Equal(t, "inst:318/2026-11-04", ok.Ranges[0].TargetID)
+
+	// 对照 #60：窗口**晚于**最早分区（静默源）仍按空成功计入。
+	silent := p.Plan(PlanRequest{
+		RequestID: "silent-after",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-12-01T00:00:00Z", ToUTC: "2026-12-02T00:00:00Z"},
+	})
+	require.Nil(t, silent.Err)
+	require.Empty(t, silent.Ranges)
+	entry := coverageEntryFor(silent.Coverage, "inst:318")
+	require.NotNil(t, entry)
+	require.Equal(t, CoverageSuccess, entry.State,
+		"窗口晚于该源最后数据时，#60 的空成功裁定不变（否则停产源会把平台判成未就绪）")
+	require.True(t, silent.Coverage.Complete)
+}
+
+// 回归（2026-11-05）：源**仍在采集**不再改变空成功的判定。
+//
+// # 为什么这条用例反向锁定了「已否决的推断」
+//
+// 曾有一版修法把「源是否仍在采集」当成「记录可能没重建」的代理信号：仍在采集
+// ⇒ fail-closed。它在真机上同时把真空天打成了故障：
+//
+//	2026-11-02  VL=1746 条  ← 有数据，Catalog 记录丢了
+//	2026-11-03  VL=0   条  ← 真空（服务器那天没产生这类日志）
+//	2026-11-05  VL=0   条  ← 真空
+//
+// 三者都在活着的源身上——「是否在采集」与「那天有没有数据」无关，两个真空天
+// 会被一起判成 not_ready ⇒ 平台级 complete 永远为 false（把 #60 反向重演），
+// 且报出的 ENGINE_NOT_READY 把现场引向「引擎没起来」的错误方向。
+//
+// 所以本条固定：**已停产/仍在采集都不是判据**。窗口晚于该源最早分区时，无论源
+// 是否还在采集，一律按 #60 的空成功计入。这一条现在**故意**不区分两者，
+// 谁再往 `coverEmptyAuthorizedTargets` 里塞状态推断，都会在这里转红。
+func TestPlanner_EmptySuccessIgnoresWhetherSourceStillCollects(t *testing.T) {
+	cat := catalog.New(nil)
+	require.NoError(t, cat.Put(queryableRecord(
+		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-11-04"}, catalog.OwnerHot, 1, "hot-318")))
+
+	p := NewPlanner(cat, nil)
+	// 窗口晚于该源最早分区（11-04），且该源**仍在采集**的典型形态（如查 11-05 当天）。
+	res := p.Plan(PlanRequest{
+		RequestID: "live-source-after-data",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-11-05T00:00:00Z", ToUTC: "2026-11-06T00:00:00Z"},
+	})
+	require.Nil(t, res.Err)
+	require.Empty(t, res.Ranges, "窗口内无分区 ⇒ 无 range")
+
+	entry := coverageEntryFor(res.Coverage, "inst:318")
+	require.NotNil(t, entry)
+	require.Equal(t, CoverageSuccess, entry.State,
+		"活着的源在没有日志的一天是正常工作状态，不得报成故障（11-03/11-05 真机实证 VL=0 条）")
+	require.True(t, res.Coverage.Complete,
+		"平台级 complete 不能被「活着的源 + 真空天」永久拖成 false")
+}
+
+// 记录已知的覆盖盲区（**记录重建落地前的残余风险**，不是可接受行为）。
+//
+// # 场景
+//
+// 该源有 10-30 与 11-04 两个分区，用户查 11-02（VL 里实有 1746 条）。
+// 方向判据只拦「窗口完全落在最早分区之前」，而 11-02 夹在两个已有记录之间
+// ⇒ 判不出 ⇒ 仍按空成功计入。这是一个**真实的静默空**。
+//
+// # 为什么不用查询侧的推断去修
+//
+// 根因在写入侧：Catalog journal 纯内存（2026-10-30 裁定），重启后
+// `ensureCatalogPartition` 只在投递成功时补建记录 ⇒ 重启前所有天的记录永远回不来。
+// 查询侧没有「那天到底有没有数据」的事实，任何时间/状态推断都只能猜，
+// 而猜错的两种方向都是事故（静默空、或把真空报成故障）。
+//
+// # 这条用例的作用
+//
+// 2026-11-05 订正（本用例原先锁的是**已知缺陷**）：原断言要求 Success，注释写着
+// 「记录重建（journal 持久化 + 启动重放）落地后，本用例应当反过来断言 not_ready
+// 或产出 range，届时必须改这条用例」——现在就是那个时候。
+//
+// 记录重建只保证「从现在起不再丢」，**捞不回从未写进 journal 的历史天**
+// （生产 journal 只写到 2026-10-30，11-02 从未被写入过）。因此查询侧必须 fail-closed：
+// 不能把「我不知道」粉饰成「那天没有」。
+func TestPlanner_MiddleGapIsKnownSilentEmptyUntilRecordsRebuilt(t *testing.T) {
+	cat := catalog.New(nil)
+	require.NoError(t, cat.Put(queryableRecord(
+		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-10-30"}, catalog.OwnerHot, 1, "hot-318-a")))
+	require.NoError(t, cat.Put(queryableRecord(
+		catalog.PartitionKey{StorageNamespace: "inst:318", UTCDay: "2026-11-04"}, catalog.OwnerHot, 2, "hot-318-b")))
+
+	p := NewPlanner(cat, nil)
+	res := p.Plan(PlanRequest{
+		RequestID: "middle-gap",
+		TargetIDs: []string{"inst:318"},
+		TimeRange: TimeRange{FromUTC: "2026-11-02T00:00:00Z", ToUTC: "2026-11-03T00:00:00Z"},
+	})
+	require.Nil(t, res.Err)
+	require.Empty(t, res.Ranges, "11-02 无分区 ⇒ 无 range（不发明指向不存在分区的 range）")
+
+	entry := coverageEntryFor(res.Coverage, "inst:318")
+	require.NotNil(t, entry)
+	// 真机依据（inst:318）：
+	//   2026-11-02  VL=1746 条  ← 有数据，但本进程无该天分区记录
+	require.Equal(t, CoverageNotReady, entry.State,
+		"夹在已有记录之间的缺天不得判空成功：VL 里那天实有数据，静默空会被读成「这天没日志」")
+	require.Contains(t, entry.Reasons, ReasonNoCatalogRecord,
+		"必须给出「无 Catalog 记录」这一真实原因，而不是发明空成功")
+}
+
+// TestPlanner_SilentSourceStillEmptySuccessAfterGapGuard 守住 #60 不退步。
+//
+// 上一版方向判据的问题之一是：任何收紧都可能把「静默源」一并打成未就绪，
+// 于是平台级 complete 恒 false（把 #60 换个方向重演）。
+// 本用例钉住：已停产源（窗口晚于其全部记录）仍必须按空成功计入。
+func TestPlanner_SilentSourceStillEmptySuccessAfterGapGuard(t *testing.T) {
+	cat := catalog.New(nil)
+	// inst:153 的最后分区是 09-27，用户查 10-11 ⇒ 窗口晚于其全部数据（已停产）。
+	require.NoError(t, cat.Put(queryableRecord(
+		catalog.PartitionKey{StorageNamespace: "inst:153", UTCDay: "2026-09-27"}, catalog.OwnerHot, 1, "hot-153")))
+
+	p := NewPlanner(cat, nil)
+	res := p.Plan(PlanRequest{
+		RequestID: "silent-after-gap-guard",
+		TargetIDs: []string{"inst:153"},
+		TimeRange: TimeRange{FromUTC: "2026-10-11T00:00:00Z", ToUTC: "2026-10-12T00:00:00Z"},
+	})
+	require.Nil(t, res.Err)
+	entry := coverageEntryFor(res.Coverage, "inst:153")
+	require.NotNil(t, entry)
+	require.Equal(t, CoverageSuccess, entry.State,
+		"静默源（窗口晚于其全部记录）必须仍按空成功计入；否则 #60 退步，平台级 complete 恒 false")
+	require.True(t, res.Coverage.Complete)
 }

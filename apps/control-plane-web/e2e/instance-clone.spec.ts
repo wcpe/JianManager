@@ -45,9 +45,9 @@ test.describe('FR-036 一键复制子服（mock 模式真浏览器）', () => {
     await page.screenshot({ path: path.join(artifactsDir, 'fr036-e2e-clone-dialog.png'), fullPage: true })
 
     await form.getByRole('button', { name: '复制', exact: true }).click()
-    await expect(page.getByRole('heading', { name: '复制子服 — creative-1' })).toHaveCount(0, { timeout: 10_000 })
+    await expect(page.getByRole('heading', { name: '复制子服 — creative-1' })).toHaveCount(0)
     await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
-    await expect(page.getByRole('button', { name, exact: true })).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByRole('button', { name, exact: true })).toBeVisible()
     await expect(page.getByText('后端').last()).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr036-e2e-clone-created.png'), fullPage: true })
   })

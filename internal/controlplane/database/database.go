@@ -224,7 +224,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ArtifactReconcileRun{},
 		&model.ArtifactReconcileDiff{},
 		&model.ArtifactReconcileSetting{},
-		&model.LogEntry{},
 		&model.MetricSeries{},
 		&model.MetricSampleRaw{},
 		&model.ProcessMetricSnapshot{},
@@ -292,7 +291,20 @@ func AutoMigrate(db *gorm.DB) error {
 		slog.Warn("FR-454 Beacon 实例 type/probe_port 归正未完成（不阻断启动）", "error", err)
 	}
 	// FR-365：幂等回填 bots.desired_state / desired_state_generation。
-	return backfillBotDesiredState(db)
+	if err := backfillBotDesiredState(db); err != nil {
+		return err
+	}
+	// FR-485：幂等预置推荐告警规则（**默认不启用**）。
+	//
+	// 生产实测 alert_rules 表原本一条规则都没有——指标采了、时序库写了，
+	// 但没有任何东西在看它们。预置几条推荐值让运维知道「有哪些可用指标、
+	// 阈值该写多少」，但阈值是业务判断，不替用户默认打开。
+	//
+	// best-effort：预置是体验改进，不是启动关键路径，失败只告警不阻断。
+	if err := seedDefaultAlertRules(db); err != nil {
+		slog.Warn("预置推荐告警规则未完成（不阻断启动）", "error", err)
+	}
+	return nil
 }
 
 // backfillBeaconInstanceType 幂等归正 role=beacon 的历史实例 type → generic（FR-454 验收③），

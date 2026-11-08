@@ -13,8 +13,14 @@
 /** FR-473 Coverage.enumeration_state。 */
 export type EnumerationState = 'OPEN' | 'EXHAUSTED' | 'STALE' | 'CANCELLED'
 
-/** FR-473 Quality.duplicate_quality / stats_quality 的已登记取值。 */
-export type QualityLevel = 'EXACT' | 'APPROXIMATE' | 'UNRESOLVED' | 'UNKNOWN'
+/**
+ * FR-473 Quality.duplicate_quality / stats_quality 的已登记取值。
+ *
+ * `CONFLICT` 对应 proto 的 `LOG_QUALITY_DUPLICATE_CONFLICT`（身份冲突，可由
+ * `LogClearIdentityConflicts` 清除），与 `UNRESOLVED`（`LOG_QUALITY_DUPLICATE_UNRESOLVED`，
+ * 重复事件无法对账、没有任何可清对象）是**两个不同状态**，展示与处置都必须分开。
+ */
+export type QualityLevel = 'EXACT' | 'APPROXIMATE' | 'UNRESOLVED' | 'CONFLICT' | 'UNKNOWN'
 
 /**
  * 已登记的 partial_reasons / 失败原因码（FR-482 §3.1 + FR-473 §6.3）。
@@ -43,6 +49,14 @@ export const PARTIAL_REASONS = {
   OFFLINE: 'OFFLINE',
   /** 归档层缺失（Archive 开启但副本不可用）。 */
   ARCHIVE_MISSING: 'ARCHIVE_MISSING',
+  /**
+   * 归档副本已按保留期清除（FR-501 归档对象回收）。
+   *
+   * **不能**与 {@link ARCHIVE_MISSING} 合并：MISSING 是「归档还在、只是一时没恢复」，
+   * 界面的处置是「去恢复」；而 PURGED 是「平台按保留期删掉了，恢复不了」，
+   * 任何「去恢复」的引导都是死路。两者混用会让用户反复点恢复、反复收到第二条错误。
+   */
+  ARCHIVE_PURGED: 'ARCHIVE_PURGED',
   /** closed_visible_seq / 投影存在数据缺口。 */
   GAP: 'GAP',
   /** Query View 失效（集合变化 / 权限 / 过期）。 */
@@ -59,6 +73,16 @@ export const PARTIAL_REASONS = {
   EXPORT_INCOMPLETE: 'EXPORT_INCOMPLETE',
   /** 启动恢复中，受影响范围 PARTIAL/RECOVERY_REQUIRED。 */
   RECOVERY_REQUIRED: 'RECOVERY_REQUIRED',
+  /**
+   * 该目标没有可查日志数据（Worker 侧没有它的 Catalog 分区）。
+   *
+   * 与 {@link ENGINE_NOT_READY} 严格区分：后者是「查询引擎 / 数据面未就绪」（Worker 失能、
+   * 视图未建立、空响应），前者是「引擎好好的，只是这个目标确实没有日志」。
+   * 后端自 2026-10-19 起把 `target_missing_in_worker_response` 归一化到这里——它只在
+   * **RPC 成功返回**时产生，因此不能再被说成「服务未启用」（2026-10-17 dev 实测：VL 有数据、
+   * `vlReady=true`，日志页却显示「日志查询服务未启用」，把排查引向 VL）。
+   */
+  TARGET_NO_DATA: 'TARGET_NO_DATA',
 } as const
 
 export type PartialReasonCode = (typeof PARTIAL_REASONS)[keyof typeof PARTIAL_REASONS]
@@ -210,22 +234,7 @@ export type ExportStatus = 'READY' | 'PENDING' | 'FAILED' | 'INCOMPLETE' | (stri
  * 日志联邦查询 / 导出响应的前端信封。
  * 覆盖 useLogs 未来升级后的字段，以及错误注入 / mock 的传输失败形态。
  */
-/** 已裁定永久位置缺失；独立于时间覆盖与质量，位置始终保留十进制字符串。 */
-export interface IngestPositionGap {
-  workerId: string
-  storageNamespace: string
-  from: string
-  to: string
-  reasonCode: string
-  operator: string
-  atUTC: string
-  /** 旧Worker未提供时保持未知，禁止由namespace或当前事件推测。 */
-  logSourceId?: string
-  sourceGeneration?: string
-}
-
 export interface LogFederationResponse {
-  ingestPositionGaps?: IngestPositionGap[]
   /** 传输 / HTTP 层是否成功；undefined 表示调用方未提供（按成功路径继续看 coverage）。 */
   ok?: boolean
   viewId?: string
@@ -259,10 +268,13 @@ export interface CoverageTargetStats {
 export interface FormattedCoverageSummary {
   /**
    * 横幅档位。
-   * - complete：显式 complete 且无 partial / 未解析重复
+   * - complete：显式 complete 且无 partial / 目标被排除（**只看覆盖维度**）
    * - partial：有 coverage 但不完整（含 pending 未校验；由 pending 字段区分语义）
    * - failed：无 coverage（查询失败信封），**禁止**当成空成功
    * - unknown：coverage 形状无法识别
+   *
+   * 质量维度（{@link duplicateConflict} / {@link duplicateUnresolved}）与完整性正交，
+   * 不得把质量降级映射成 partial——那会把 `coverage.complete=true` 谎报成「覆盖不完整」。
    */
   status: 'complete' | 'partial' | 'failed' | 'unknown'
   /** 仅 status=complete 时为 true。 */
@@ -282,7 +294,18 @@ export interface FormattedCoverageSummary {
   reasonKeys: string[]
   targetStats: CoverageTargetStats
   enumerationState?: EnumerationState
-  /** 重复未对账时为 true（即使 coverage.complete 也不得当完整成功）。 */
+  /**
+   * 是否存在**身份冲突**（`duplicate_quality=CONFLICT`）：同一事件 ID 出现不同内容。
+   * 这是唯一能由 `LogClearIdentityConflicts` 人工清空的质量状态，因此「清空冲突」入口
+   * 只能由它驱动，不能由 {@link duplicateUnresolved} 驱动。
+   */
+  duplicateConflict: boolean
+  /**
+   * 是否存在**未对账的重复事件**（`duplicate_quality=UNRESOLVED`，或覆盖原因里带
+   * `DUPLICATE_UNRESOLVED`）。它没有可人工清空的对象，处置方式是缩小范围 / 重试。
+   *
+   * 与 {@link duplicateConflict} 严格区分；两者都只阻断导出，**不参与**覆盖完整性判定。
+   */
   duplicateUnresolved: boolean
 }
 

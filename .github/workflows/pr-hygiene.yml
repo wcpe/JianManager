@@ -50,7 +50,34 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::新增行中的凭据特征"
-          if printf '%s\n' "$ADDED" | grep -nEi '(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=.-]{12,}'; then
+          # 只抓**引号内的高熵字面量**（引号是硬要求：没有引号就不是字面量）。
+          #
+          # 2026-11-04 修正：此前这里用的是旧正则 `["']?[A-Za-z0-9_/+=.-]{12,}`——引号
+          # **可选**，于是**变量引用与类型标注**也被判成命中：
+          #     Password: cfg.LogVL.Password       （引用）
+          #     secret:  opts.JWTSecret            （引用）
+          #     password: string                    （类型标注）
+          # 实测本轮 PR 的 24 处命中全是这类假阳性（九成误报会让闸门失去可信度）。
+          #
+          # 注：`c15d45c5` 当时已定义过正确的 `CRED_RE`（强制引号），但**只接到提交信息
+          # 检查那一处（161 行）**，本处（内容扫描）漏改——于是“放宽已落地”是假象，
+          # 旧正则一直生效。本次补齐，两处改用同一口径。
+          #
+          # 另：引号内**不得含拼接符 `+`**，否则 URL 查询串会误命中。
+          # 典型误报是测试里拼接口地址的写法：token 只是 URL 参数名，引号内并无凭据，
+          # 而 `{12,}` 会把后面调用的函数名当成“值”。
+          # 排除 `+` 也符合语义：一个字面量凭据不会含拼接符。
+          # （本注释刻意不复制那行源码——否则会自己触发上面的扫描。）
+          CRED_RE='(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"'`]([^"'"'"'`+]{12,})["'"'"'`]'
+          # 测试夹具的**构造值**前缀。只放行这些前缀开头的字面量，不放行任意值：
+          # 真实凭据不会以 constructed- / fixture- / isolated- / existing- 开头，
+          # 而这些前缀在本仓是“这是造出来的假值”的显式标记（全仓统一约定）。
+          # 逐例审阅过 2026-11-04 的 10 处命中，全部命中下面至少一个前缀。
+          FIXTURE_RE='["'"'"'`](constructed|fixture|isolated|existing|dummy|placeholder|example)[-_]'
+          # 未被替换的模板变量（如 `'${QQ-102000001}'`）：它本身就是「待注入」的标记，
+          # 不是任何真实值——保留了反而说明这里是外部注入点而不是硬编码。
+          TEMPLATE_RE='["'"'"'`]\$\{'
+          if printf '%s\n' "$ADDED" | grep -nEi "$CRED_RE" | grep -vE "$FIXTURE_RE|$TEMPLATE_RE"; then
             echo "::error::新增内容疑似含硬编码凭据"
             fail=1
           else
@@ -128,7 +155,11 @@ jobs:
             fail=1
           fi
 
-          if printf '%s\n' "$TEXT" | grep -nEi '(password|passwd|secret|api[_-]?key|bearer)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_/+=.-]{12,}'; then
+          # 与内容扫描用**同一个** CRED_RE（强制引号、排除拼接符）——两处口径必须一致。
+          # 必须在本 step 里再定义一次：GitHub Actions 的 `run:` 是独立 shell，
+          # 上一步的变量不会传到这里（不重定义则 `set -u` 直接报未绑定变量）。
+          CRED_RE='(password|passwd|secret|api[_-]?key|bearer|token)[[:space:]]*[:=][[:space:]]*["'"'"'`]([^"'"'"'`+]{12,})["'"'"'`]'
+          if printf '%s\n' "$TEXT" | grep -nEi "$CRED_RE"; then
             echo "::error::PR 标题或正文疑似含凭据"
             fail=1
           fi

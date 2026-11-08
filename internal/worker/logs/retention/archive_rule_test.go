@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -17,22 +18,53 @@ import (
 // 这四条用例对应用户指定的四条验收，每条都刻意断言「没有被删」，而不只是「搬了」。
 
 // fakeMover 记录搬运调用，可注入失败。
+//
+// **mu 不是摆设（2026-10-27 补）**：本夹具同时服务于两类用例——一类在单 goroutine 里
+// `Execute` 后直接读 `calls`（无需同步），另一类（如 `TestDriverRunUsesDailySchedule`）把
+// `Driver.Run` 丢进 goroutine、主 goroutine 轮询 `calls` 等首轮发生。后者在 `-race` 下
+// **必然报数据竞争**：写方是 Run 里的 MoveToCold，读方是主 goroutine 的 `len(mv.calls)`，
+// 两者对同一个 slice 头无同步地读写。
+//
+// 修法保持既有调用形状（各处仍直接写 `mv.calls`，单 goroutine 用例不受影响），
+// 只把**并发场景的读写**换成 `record` / `snapshot` / `count` 三个带锁方法。
+// 这是测试夹具的缺陷，不是产品代码的：产品侧 Mover 的并发安全由它自己的实现负责。
 type fakeMover struct {
+	mu        sync.Mutex
 	calls     []string
 	failWith  error
 	targetDir string
 }
 
 func (m *fakeMover) MoveToCold(_ context.Context, ns, day string) (string, error) {
+	m.mu.Lock()
 	m.calls = append(m.calls, ns+"/"+day)
-	if m.failWith != nil {
-		return "", m.failWith
+	failWith := m.failWith
+	targetDir := m.targetDir
+	m.mu.Unlock()
+	if failWith != nil {
+		return "", failWith
 	}
-	dir := m.targetDir
+	dir := targetDir
 	if dir == "" {
 		dir = ns + "-" + day
 	}
 	return dir, nil
+}
+
+// snapshot 返回 calls 的副本（并发安全；调用方不得修改返回值）。
+func (m *fakeMover) snapshot() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+// count 返回已记录的搬运次数（并发安全）。
+func (m *fakeMover) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.calls)
 }
 
 // 归档夹具：以基准日 2026-10-02、热层窗口 30d 为口径。
@@ -56,7 +88,7 @@ func TestArchiveRule1_MoveFailureKeepsOriginalAndAlerts(t *testing.T) {
 	ex := NewArchiveExecutor(p, mv)
 
 	out := ex.Execute(context.Background(), hv, archiveFixture())
-	if len(mv.calls) == 0 {
+	if mv.count() == 0 {
 		t.Fatal("前置条件：夹具必须确实尝试过搬运")
 	}
 
@@ -252,7 +284,7 @@ func TestArchiveRule4_MoveYieldsAuditableTargetAndLeavesUndueData(t *testing.T) 
 	if recent.Result != ArchiveNotDue {
 		t.Fatalf("未到保留期的分区必须保持不动，得到 %s", recent.Result)
 	}
-	for _, call := range mv.calls {
+	for _, call := range mv.snapshot() {
 		if call == "inst:147/20260930" {
 			t.Error("未到点的分区不得搬运")
 		}
@@ -281,7 +313,7 @@ func TestArchiveSkipsUnparseableDay(t *testing.T) {
 	if len(out) != 0 {
 		t.Fatalf("无法解析的分区不得产出计划，得到 %d 条", len(out))
 	}
-	if len(mv.calls) != 0 {
+	if mv.count() != 0 {
 		t.Fatal("不得对无法解析的分区动手")
 	}
 }
@@ -400,7 +432,9 @@ func TestArchivePrefersMoveEvenWhenDiscardIsExplicit(t *testing.T) {
 	hv := time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
 	mv := &fakeMover{}
 
-	plan := p.PlanArchive(hv, archiveFixture(), true)
+	// 第四个参数留 false：本用例守的是「搬运 vs discard」的次序，
+	// 「搬运 vs 导出归档」的次序由 archive_copy 的专项用例守。
+	plan := p.PlanArchive(hv, archiveFixture(), true, false)
 	if len(plan) == 0 {
 		t.Fatal("前置条件：夹具应产出计划")
 	}

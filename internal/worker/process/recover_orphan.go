@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/daemon"
@@ -113,11 +114,21 @@ func (m *Manager) retrySleep(d time.Duration) {
 // 首拨失败后按当前生效的重试序列（配置注入优先，缺省 DefaultRecoverRetryBackoff）递增间隔重试；
 // 期间不动 PID 文件（保证实例在后续扫描中仍可发现）。全部失败返回最后一次错误。
 func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUID string) error {
-	backoffs := m.recoverRetrySequence()
 	err := m.dialWrapper(strategy, addr)
 	if err == nil {
 		return nil
 	}
+	return m.retryReconnect(strategy, addr, instanceUUID, err)
+}
+
+// retryReconnect 在「首拨已失败」的前提下，按当前生效序列继续有界重试（FR-455①）。
+//
+// firstErr 是首拨的错误，作为本轮重试的起点错误；重试间隔与次数与旧实现逐字一致
+// （reconnectWithRetry = 首拨 + 本函数），差别只在于调用时机——启动路径把它搬到后台，
+// 使一段可能长达 127s 的等待不再挡住运行期孤儿扫描器的启用。
+func (m *Manager) retryReconnect(strategy *daemonStrategy, addr, instanceUUID string, firstErr error) error {
+	backoffs := m.recoverRetrySequence()
+	err := firstErr
 	for i, backoff := range backoffs {
 		slog.Warn("reconnect wrapper 失败，保留 PID 文件稍后重试",
 			"instanceId", instanceUUID, "attempt", i+1, "maxRetries", len(backoffs),
@@ -129,6 +140,228 @@ func (m *Manager) reconnectWithRetry(strategy *daemonStrategy, addr, instanceUUI
 		}
 	}
 	return err
+}
+
+// startupTakeoverTask 是一条「wrapper 存活但首拨失败」的 PID 记录：启动路径已放弃就地重试，
+// 转由后台继续（见 startStartupTakeoverRetries）。
+//
+// strategy 复用首拨时构造的同一对象（与旧实现的就地重试同源），不对 wrapper 建立第二条控制连接。
+type startupTakeoverTask struct {
+	instanceUUID string
+	rec          *daemon.PIDRecord
+	strategy     *daemonStrategy
+	firstErr     error
+}
+
+// takeoverPeer 是「启动接管在飞」期间对外声明的一条保护信息，供运行期孤儿扫描识别并让路。
+type takeoverPeer struct {
+	instanceUUID string
+	wrapperPID   int
+	javaPID      int
+	workDir      string
+}
+
+// markTakeoverPending 声明某实例的启动接管仍在后台重试（本缺陷修复的并发隔离面）。
+// 扫描器的第 0 相会跳过它、direct 相会保护它的 PID 与工作目录，避免争抢控制连接或误判强杀。
+func (m *Manager) markTakeoverPending(instanceUUID string, rec *daemon.PIDRecord) {
+	if m == nil || instanceUUID == "" || rec == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.takeoverPending == nil {
+		m.takeoverPending = make(map[string]takeoverPeer, 1)
+	}
+	m.takeoverPending[instanceUUID] = takeoverPeer{
+		instanceUUID: instanceUUID,
+		wrapperPID:   rec.WrapperPID,
+		javaPID:      rec.JavaPID,
+		workDir:      rec.WorkDir,
+	}
+	m.mu.Unlock()
+}
+
+// clearTakeoverPending 撤销在飞声明：该实例的接管已收尾（成功登记或已落审计），扫描不必再让路。
+func (m *Manager) clearTakeoverPending(instanceUUID string) {
+	if m == nil || instanceUUID == "" {
+		return
+	}
+	m.mu.Lock()
+	delete(m.takeoverPending, instanceUUID)
+	m.mu.Unlock()
+}
+
+// takeoverPendingHas 报告该实例的启动接管是否仍在后台重试（第 0 相据此跳过，避免并发拨号）。
+func (m *Manager) takeoverPendingHas(instanceUUID string) bool {
+	if m == nil || instanceUUID == "" {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.takeoverPending[instanceUUID]
+	return ok
+}
+
+// takeoverPendingPeers 返回在飞集合的快照（扫描轮开始时取一次，避免整轮反复加锁）。
+func (m *Manager) takeoverPendingPeers() []takeoverPeer {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.takeoverPending) == 0 {
+		return nil
+	}
+	out := make([]takeoverPeer, 0, len(m.takeoverPending))
+	for _, peer := range m.takeoverPending {
+		out = append(out, peer)
+	}
+	return out
+}
+
+// takeoverProtects 报告 pid / workDir 是否属于「仍在飞的启动接管」。
+//
+// 处置动作（killTree）前的最后一道复核用它兜住 TOCTOU：direct 相的受管集合在轮首取一次，
+// 若后台接管在此期间登记成功，集合就已成陈旧视图——此时唯一正确的动作是放弃处置。
+func (m *Manager) takeoverProtects(pid int, workDir string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.takeoverPending) == 0 {
+		return false
+	}
+	cleanWorkDir := ""
+	if workDir != "" {
+		cleanWorkDir = filepath.Clean(workDir)
+	}
+	for _, peer := range m.takeoverPending {
+		if pid > 0 && (pid == peer.wrapperPID || pid == peer.javaPID) {
+			return true
+		}
+		if cleanWorkDir != "" && peer.workDir != "" && filepath.Clean(peer.workDir) == cleanWorkDir {
+			return true
+		}
+	}
+	return false
+}
+
+// WaitStartupTakeover 等待启动接管的后台重试收敛；timeout<=0 表示无限等待。超时返回 false。
+//
+// 生产启动路径**不**等（后台重试本就允许慢），本方法供测试断言与优雅关闭路径使用。
+func (m *Manager) WaitStartupTakeover(timeout time.Duration) bool {
+	if m == nil {
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		m.takeoverWG.Wait()
+		close(done)
+	}()
+	if timeout <= 0 {
+		<-done
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// startStartupTakeoverRetries 启动后台协程，按原序列继续完成首拨失败记录的有界重试（本缺陷修复）。
+//
+// 串行处理各记录（与旧实现同序），因此单条最长 ~127s 的等待只推迟**其它记录的接管**，
+// 不再推迟扫描器启用；接管收尾语义（成功登记 / alive_unreachable 审计 / 只观测不强杀）逐字沿用。
+func (m *Manager) startStartupTakeoverRetries(tasks []startupTakeoverTask) {
+	if len(tasks) == 0 {
+		return
+	}
+	m.takeoverWG.Add(1)
+	go func() {
+		defer m.takeoverWG.Done()
+		for _, task := range tasks {
+			err := m.retryReconnect(task.strategy, task.rec.SocketAddr, task.instanceUUID, task.firstErr)
+			if err == nil {
+				m.registerAdoptedDaemon(task.instanceUUID, task.rec, task.strategy)
+			} else {
+				m.settleStartupTakeoverFailure(task.instanceUUID, task.rec, err)
+			}
+			// 撤销让路必须在收尾动作**之后**：处置/登记期间扫描器仍须回避该实例。
+			m.clearTakeoverPending(task.instanceUUID)
+		}
+	}()
+}
+
+// settleStartupTakeoverFailure 接管重试彻底失败后的归类处置（FR-325 / ADR-093 / FR-471，语义与旧实现一致）：
+//   - wrapper 仍存活：属「确属本实例、仅 socket 瞬时不可达」→ 只告警 + 落审计、保留 PID 文件、不杀
+//     （强杀会误杀一个 wrapper 与 Java 都健康、只是暂时拨不通的服务器）；
+//   - wrapper 已死：只观测 + 落审计（启动路径无任何静默破坏），交由周期扫描按 policy 与 FR-471 接管处置。
+func (m *Manager) settleStartupTakeoverFailure(instanceUUID string, rec *daemon.PIDRecord, reconnectErr error) {
+	if rec.WrapperPID > 0 && m.pidAlive(rec.WrapperPID) {
+		detail := fmt.Sprintf(`{"instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"reason":"alive_unreachable"}`,
+			instanceUUID, rec.WrapperPID, rec.JavaPID)
+		m.auditOrphan("orphan.dispose_blocked", instanceUUID, detail, false,
+			"接管重试耗尽但 wrapper 仍存活（仅瞬时不可达），按 ADR-093 只告警不杀")
+		slog.Warn("接管重试耗尽但 wrapper 仍存活，按 ADR-093 只告警不杀，保留 PID 文件等下一轮/人工介入",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "javaPid", rec.JavaPID, "error", reconnectErr)
+		return
+	}
+	m.observeOrphanAtStartup(instanceUUID, rec, "startup_reconnect_failed")
+}
+
+// registerAdoptedDaemon 把「已与 wrapper 建立控制连接」的接管结果登记为 RUNNING
+// （FR-455① 启动接管 / FR-497③ 自动收养共用同一收尾口径）。
+//
+// 登记前在锁内**二次确认未纳管**（与 adoptUnmanagedRecord 同口径）：拨号期间可能有并发路径抢先
+// 纳管（运行期扫描的第 0 相自动收养、CP 重推后的人工 Start）。此时丢弃本次连接（strategy.Close()
+// 只断连接、不下发停止帧、不杀进程），避免两个策略对象争抢 wrapper 只保留最新一条的控制连接。
+//
+// 旧实现无条件覆盖内存表即可，因为扫描器在接管之后才启动、不存在并发路径；本缺陷修复让接管重试
+// 与扫描器并行后，这条确认从「防御」变成**现实必需**。
+func (m *Manager) registerAdoptedDaemon(instanceUUID string, rec *daemon.PIDRecord, strategy *daemonStrategy) bool {
+	strategy.SetWrapperPID(rec.WrapperPID)
+	// 接管侧的 cgroup 隔离（见 daemon/cgroup.go）：已运行的 wrapper 由**旧二进制** spawn，仍在 Worker
+	// 单元 cgroup 内。若不在此刻迁移，本次部署后的第一个 `systemctl restart` 依旧会连坐杀掉全部实例
+	// ——那正是本缺陷的验收场景本身。迁移只改 cgroup 归属、不发任何信号，失败仅告警、保持原状。
+	m.isolateAdoptedWrapper(instanceUUID, rec)
+
+	// FR-459 终验 Low #3：若 Worker 重启前该实例已熔断，从状态文件恢复熔断态——否则 Worker
+	// 会「忘掉」熔断（以为可自动重启）而 wrapper 粘性 autoRestartOff 仍在拒绝重启，形成反向 desync。
+	restored := m.restorePersistedCircuit(instanceUUID)
+
+	m.mu.Lock()
+	if cur, ok := m.instances[instanceUUID]; ok && (cur.strategy != nil || mayOwnLiveProcess(cur.State)) {
+		state := cur.State
+		m.mu.Unlock()
+		_ = strategy.Close()
+		slog.Info("启动接管在登记前发现实例已被其它路径纳管，放弃本次连接",
+			"instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "state", string(state))
+		return false
+	}
+	m.instances[instanceUUID] = &Instance{
+		UUID:  instanceUUID,
+		State: StateRunning,
+		// StartedAt：与自动收养同口径（FR-497③ 补验）——本路径同样是「从无到 RUNNING」的跳变，
+		// 不写则 warmupRemaining 拿不到纪元、直接返回 0，刚接管的实例失去启动宽限期。
+		StartedAt:         time.Now(),
+		AutoRestart:       !restored,
+		WorkDir:           rec.WorkDir,
+		ProbePort:         rec.ProbePort,
+		strategy:          strategy,
+		strategyStale:     true,
+		launchSpecPending: true,
+		processType:       ProcessTypeDaemon,
+	}
+	m.mu.Unlock()
+	if restored {
+		// 恢复熔断后须让 wrapper 与 Worker 记账对齐：worker 重启前 wrapper 的粘性开关可能已置位，
+		// 也可能因重启窗口丢失该帧——幂等补发一次禁用帧（wrapper 已置位时无副作用）。
+		m.disarmAutoRestart(instanceUUID, "恢复熔断态（Worker 重启）")
+	}
+	slog.Info("已恢复 daemon 实例", "instanceId", instanceUUID, "wrapperPid", rec.WrapperPID, "circuitRestored", restored)
+	return true
 }
 
 // observeOrphanAtStartup 在 Worker 启动恢复路径上「只观测、不处置」一条孤儿（FR-471）。

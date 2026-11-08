@@ -65,6 +65,38 @@ func TestLogCoord_QualityBlocksExport_Unresolved(t *testing.T) {
 	assert.False(t, QualityBlocksExport(Quality{DuplicateQuality: "exact", StatsQuality: "exact"}))
 }
 
+// M-3 fail-closed：未指定/未识别的质量必须阻断导出，而不是被当成良好放行。
+//
+// 缺陷形态：原实现只列举 unresolved/conflict/partial/unavailable 四个坏值，
+// 于是 unspecified 落在集合之外 ⇒ 放行。而 Worker 未上报 LogQuality（proto 为 nil）
+// 或上报本版本不认识的未来枚举时，解析结果正是 unspecified——未识别质量因此以
+// 「良好」状态通过导出闸门。
+//
+// 转红方式（实测）：把 QualityBlocksExport 改回「只列举已知坏值」的写法，
+// 本用例前五条断言立即红。
+func TestLogCoord_QualityBlocksExport_UnspecifiedBlocks(t *testing.T) {
+	// Worker 未上报 LogQuality（proto 字段缺省 / nil）→ Quality 零值。
+	assert.True(t, QualityBlocksExport(qualityFromProto(nil)),
+		"Worker 未上报质量必须阻断：不能把「未知」当成「良好」")
+	assert.True(t, QualityBlocksExport(Quality{}), "零值 Quality 解析为 unspecified，必须阻断")
+
+	// 显式 unspecified 与「只有一个维度未知」同样阻断。
+	assert.True(t, QualityBlocksExport(Quality{DuplicateQuality: DupUnspecified, StatsQuality: StatsQExact}))
+	assert.True(t, QualityBlocksExport(Quality{DuplicateQuality: DupExact, StatsQuality: StatsQUnspecified}))
+
+	// 未来枚举值（本版本不认识）解析为 unspecified：天然落在阻断侧。
+	assert.True(t, QualityBlocksExport(Quality{
+		DuplicateQuality: "duplicate_state_from_future_worker",
+		StatsQuality:     "stats_state_from_future_worker",
+	}))
+	assert.True(t, QualityBlocksExport(Quality{DuplicateQuality: DupExact, StatsQuality: "stats_state_from_future_worker"}))
+
+	// 防过度收紧：两个维度都明确 exact 时仍必须放行（这是唯一放行口径）。
+	assert.False(t, QualityBlocksExport(exactQuality), "exact/exact 必须继续放行")
+	assert.False(t, QualityBlocksExport(Quality{DuplicateQuality: "EXACT", StatsQuality: "Exact"}),
+		"大小写不敏感的 exact 仍应放行")
+}
+
 func TestCoverageStateFromProto(t *testing.T) {
 	assert.Equal(t, CoverageSuccess, CoverageStateFromProto(workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS))
 	assert.Equal(t, CoveragePartial, CoverageStateFromProto(workerpb.LogCoverageState_LOG_COVERAGE_PARTIAL))
@@ -290,6 +322,70 @@ func TestWorkerQualityReachesCPAndBlocksExport(t *testing.T) {
 		assert.Equal(t, DupExact, worstDuplicateQuality(DupExact, DupExact))
 		assert.Equal(t, StatsQUnavailable, worstStatsQuality(StatsQPartial, StatsQUnavailable))
 		assert.Equal(t, StatsQPartial, worstStatsQuality(StatsQExact, StatsQPartial))
+	})
+
+	// M-3 聚合口径回归：unspecified（含零值空串、未来枚举）绝不能被 exact 掩盖。
+	//
+	// 缺陷形态：旧 rank 把 default（unspecified 与一切未知取值）记 0，即**比 exact 更好**，
+	// 于是 worst(exact, unspecified) 返回 exact；多 Worker 场景下一个未上报质量的 Worker
+	// 会被另一个 Worker 的 exact 掩盖 ⇒ QualityBlocksExport 的 fail-closed 从聚合侧被绕过。
+	//
+	// 转红方式（实测）：把 rank 的 unspecified 分支改回 0，本子测试中所有
+	// 「合并后必须是 unspecified / 必须阻断」的断言立即红。
+	t.Run("unspecified_never_masked_by_exact", func(t *testing.T) {
+		// ① 显式 unspecified：双向都必须阻断。
+		for _, merged := range []DuplicateQuality{
+			worstDuplicateQuality(DupExact, DupUnspecified),
+			worstDuplicateQuality(DupUnspecified, DupExact),
+		} {
+			assert.Equal(t, DupUnspecified, ParseDuplicateQuality(string(merged)),
+				"unspecified 与 exact 合并后必须仍是 unspecified")
+			assert.True(t, QualityBlocksExport(Quality{
+				DuplicateQuality: merged, StatsQuality: StatsQExact,
+			}), "重复质量 unspecified 必须阻断导出")
+		}
+		// ② Worker 未上报质量（proto 为 nil ⇒ 适配层给零值 Quality，字段是空串，
+		//    不是字面量 "unspecified"）：同样必须阻断，这是生产最可能命中的路径。
+		for _, merged := range []DuplicateQuality{
+			worstDuplicateQuality(DupExact, ""),
+			worstDuplicateQuality("", DupExact),
+		} {
+			assert.Equal(t, DupUnspecified, ParseDuplicateQuality(string(merged)),
+				"空串（未上报）与 exact 合并后必须解析为 unspecified")
+			assert.True(t, QualityBlocksExport(Quality{
+				DuplicateQuality: merged, StatsQuality: StatsQExact,
+			}), "未上报的重复质量必须阻断导出")
+		}
+		// ③ 未来版本的未知枚举：不得因为「不认识」而被当成无信息放行。
+		assert.Equal(t, DupUnspecified,
+			ParseDuplicateQuality(string(worstDuplicateQuality(DupExact, "duplicate_state_from_future_worker"))))
+		assert.Equal(t, StatsQUnspecified,
+			ParseStatsQuality(string(worstStatsQuality(StatsQExact, "stats_state_from_future_worker"))))
+		// ④ stats 维度同口径。
+		for _, merged := range []StatsQuality{
+			worstStatsQuality(StatsQExact, StatsQUnspecified),
+			worstStatsQuality(StatsQUnspecified, StatsQExact),
+			worstStatsQuality(StatsQExact, ""),
+			worstStatsQuality("", StatsQExact),
+		} {
+			assert.Equal(t, StatsQUnspecified, ParseStatsQuality(string(merged)),
+				"未指定/未上报的统计质量与 exact 合并后必须仍是 unspecified")
+			assert.True(t, QualityBlocksExport(Quality{
+				DuplicateQuality: DupExact, StatsQuality: merged,
+			}), "统计质量 unspecified 必须阻断导出")
+		}
+		// ⑤ 细分顺序：unspecified 比 exact 差、但比 unresolved 轻（后者信息更明确，
+		//    合并时优先保留可归因的值），conflict 依旧最差。
+		assert.Equal(t, DupUnresolved, worstDuplicateQuality(DupUnresolved, DupUnspecified))
+		assert.Equal(t, DupConflict, worstDuplicateQuality(DupUnspecified, DupConflict))
+		assert.Equal(t, StatsQPartial, worstStatsQuality(StatsQPartial, StatsQUnspecified))
+		// ⑥ 反向约束：全 exact 仍必须精确保持 exact（防过度收紧）。
+		assert.Equal(t, DupExact, worstDuplicateQuality(DupExact, DupExact))
+		assert.Equal(t, StatsQExact, worstStatsQuality(StatsQExact, StatsQExact))
+		assert.False(t, QualityBlocksExport(Quality{
+			DuplicateQuality: worstDuplicateQuality(DupExact, DupExact),
+			StatsQuality:     worstStatsQuality(StatsQExact, StatsQExact),
+		}), "全 exact 必须放行")
 	})
 
 	t.Run("conflict_blocks_export", func(t *testing.T) {

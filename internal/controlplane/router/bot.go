@@ -285,6 +285,16 @@ func (h *BotHandler) UpdateBehavior(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN"})
 		return
 	}
+	// 权限节点闸：与 Batch / Create 同口径（docs/API.md 声明 behavior 需 `bot:manage`）。
+	//
+	// 只做 CanManageBot（资源级）是不够的：它最终落到 CanManageInstance，
+	// 而那个只看 IsPlatformAdmin || CanAccessGroup，**根本不看 bot:manage**。
+	// 缺这一行时，有实例组访问权但未授予 bot:manage 的普通组员可以发消息/切行为，
+	// 而同样操作走 /bots/batch 却被拒——同一类能力两条路一开一闭。
+	if !access.HasPermission(service.PermBotManage) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
 	ok, err := h.authz.CanManageBot(access, id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
@@ -325,6 +335,12 @@ func (h *BotHandler) SendCommand(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN"})
+		return
+	}
+	// 权限节点闸：与 Batch / Create 同口径（docs/API.md 声明 command 需 `bot:manage`）。
+	// 这是**下发游戏内命令**的路径，越权代价比读类接口高得多，因此不能只靠资源级判定。
+	if !access.HasPermission(service.PermBotManage) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
 	ok, err := h.authz.CanManageBot(access, id)

@@ -38,6 +38,7 @@ const (
 	ErrCodeBudgetExceeded      ErrorCode = "LOG_BUDGET_EXCEEDED"
 	ErrCodeNotReady            ErrorCode = "LOG_NOT_READY"
 	ErrCodeArchiveMissing      ErrorCode = "LOG_ARCHIVE_MISSING"
+	ErrCodeArchivePurged       ErrorCode = "LOG_ARCHIVE_PURGED"
 	ErrCodeDuplicateUnresolved ErrorCode = "LOG_ERR_DUPLICATE_UNRESOLVED"
 	ErrCodeRecoveryRequired    ErrorCode = "LOG_RECOVERY_REQUIRED"
 	ErrCodeCancelled           ErrorCode = "LOG_CANCELLED"
@@ -105,6 +106,15 @@ const (
 const (
 	ReasonColdMissing          = "COLD_MISSING"
 	ReasonArchiveNotRestored   = "ARCHIVE_NOT_RESTORED"
+	// ReasonArchivePurged 表示「该分区的归档副本已按保留期清除」。
+	//
+	// 为什么必须与 ARCHIVE_NOT_RESTORED 分开（而不是复用 LOG_ARCHIVE_MISSING）：
+	// 两者对用户的**处置动作完全相反**——未恢复是「点一下 rehydrate 就能看」，
+	// 已清除是「这段日志确实不在了，任何操作都取不回来」。
+	// 复用 MISSING 会让界面把「已按保留期删除」显示成「历史日志尚未取回」，
+	// 用户点恢复、恢复失败、再报错，最后还是要人来解释——而那时用户已经
+	// 对「平台说数据在、其实不在」这件事失去了信任。
+	ReasonArchivePurged = "ARCHIVE_PURGED"
 	ReasonRehydrateFailed      = "REHYDRATE_FAILED"
 	ReasonStagingExcluded      = "STAGING_EXCLUDED"
 	ReasonRecoveryRequired     = "RECOVERY_REQUIRED"
@@ -118,7 +128,14 @@ const (
 	ReasonCancelled            = "CANCELLED"
 	ReasonUnsupported          = "UNSUPPORTED"
 	ReasonRangeUnavailable     = "RANGE_UNAVAILABLE"
-	ReasonUnauthorizedTarget   = "UNAUTHORIZED_TARGET"
+	// ReasonFilteredOut 表示「粗筛取到的候选行全部被代次/水位等归因条件过滤掉」。
+	//
+	// 为什么要单独一个原因（2026-10-21 架构复审 D4）：合并粗筛先按 top-K 取最新 N 行、
+	// 再在内存里按 `projection_generation` 白名单与 `ClosedVisibleSeq` 过滤。当这 N 行
+	// 全部是旧代次副本（生产 hot 层确有此事）时，本页 0 行但枚举远未结束。
+	// 若不上报该原因，coverage 会显示 complete，用户看到「0 条且无法翻页」而无任何解释。
+	ReasonFilteredOut        = "CANDIDATES_FILTERED_OUT"
+	ReasonUnauthorizedTarget = "UNAUTHORIZED_TARGET"
 )
 
 // QueryError 是结构化查询错误；partial 不得伪装成空成功。
@@ -410,15 +427,20 @@ type QueryView struct {
 	Filter       string    `json:"filter,omitempty"`
 	TargetIDs    []string  `json:"target_ids,omitempty"`
 	// 每个目标创建时固定的 closed_visible_seq / generation / owner。
-	ClosedVisibleSeq   map[string]uint64         `json:"closed_visible_seq,omitempty"`
-	Generations        map[string]uint64         `json:"generations,omitempty"`
-	Owners             map[string]string         `json:"owners,omitempty"`
-	DirIDs             map[string]string         `json:"dir_ids,omitempty"`
-	ProjectionVersions map[string]string         `json:"projection_versions,omitempty"`
-	QueryableTargets   map[string]bool           `json:"queryable_targets,omitempty"`
-	TargetCoverage     map[string]TargetCoverage `json:"target_coverage,omitempty"`
-	CreatedAt          time.Time                 `json:"created_at"`
-	ExpiresAt          time.Time                 `json:"expires_at"`
+	ClosedVisibleSeq   map[string]uint64 `json:"closed_visible_seq,omitempty"`
+	Generations        map[string]uint64 `json:"generations,omitempty"`
+	Owners             map[string]string `json:"owners,omitempty"`
+	DirIDs             map[string]string `json:"dir_ids,omitempty"`
+	ProjectionVersions map[string]string `json:"projection_versions,omitempty"`
+	// Projections 与租约位置同次捕获；后页不能再拼接最新逐源列表。
+	Projections      map[string]*catalog.PublishedProjection `json:"projections,omitempty"`
+	LeaseIDs         map[string]string                       `json:"lease_ids,omitempty"`
+	Transient        bool                                    `json:"-"`
+	QueryableTargets map[string]bool                         `json:"queryable_targets,omitempty"`
+	TargetCoverage     map[string]TargetCoverage             `json:"target_coverage,omitempty"`
+	Quality            Quality                               `json:"quality"`
+	CreatedAt        time.Time                               `json:"created_at"`
+	ExpiresAt        time.Time                               `json:"expires_at"`
 }
 
 // AuthoritativeRange 是 planner 选出的不重叠权威查询副本。
@@ -461,6 +483,20 @@ func DefaultPartitionStatus(key catalog.PartitionKey, rec *catalog.Record, ref c
 	if !ref.OK {
 		return PartitionStatus{Queryable: false, NotReadyReasons: []string{ReasonNoCatalogAuthority}}
 	}
+	// 已按保留期清除（FR-501 归档对象回收）：Queryable 恒为假，且原因不能是
+	// ARCHIVE_NOT_RESTORED——那条建议（去 rehydrate）此时是死路。
+	//
+	// 这里必须**在** Recover 之前判并直接返回：Recover 只看 Owner/Dir，不认清除标记，
+	// 若走正常分支，status 会带着一份「查询能力在归档」的形态进 classifyStatus，
+	// 于是出现「已清除 + 请去恢复」这种自相矛盾的原因组合。
+	if rec != nil && rec.Owner == catalog.OwnerArchive && rec.ArchiveEvidence.ArchiveObjectPurged() {
+		return PartitionStatus{
+			Queryable:         false,
+			ArchiveConfigured: true,
+			ArchiveRestored:   false,
+			NotReadyReasons:   []string{ReasonArchivePurged},
+		}
+	}
 	rv := catalog.Recover(rec)
 	archiveRestored := rv.Queryable && ref.Owner == catalog.OwnerArchive && !rec.RecoveryRequired &&
 		ref.Projection != nil && ref.Projection.CoverageComplete &&
@@ -494,12 +530,17 @@ func DefaultPartitionStatus(key catalog.PartitionKey, rec *catalog.Record, ref c
 	return st
 }
 
-// CatalogSource 是 planner 依赖的 Catalog 只读视图。
-// *catalog.Catalog 满足本接口。
+// CatalogSource 将权威快照与租约作为同一原子读取操作。
+// Planner 不自行修改 Catalog 记录，也不借当前 owner 读取历史位置。
 type CatalogSource interface {
 	Keys() []catalog.PartitionKey
 	Get(key catalog.PartitionKey) (*catalog.Record, bool)
 	OwnerForQuery(key catalog.PartitionKey) (catalog.QueryRef, bool)
+	NewQueryViewID(now time.Time) (string, error)
+	SnapshotAndLease(catalog.QuerySnapshotRequest) ([]catalog.QuerySnapshot, error)
+	PinLeasedRead(viewID string, now time.Time) (func(), error)
+	ReleaseQueryView(viewID string) error
+	PruneQueryLeases(now time.Time) error
 }
 
 // TierOf 将 catalog.Owner 映射为查询 Tier。

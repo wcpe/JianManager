@@ -13,7 +13,7 @@
 
 - **根路径、非 `/api/v1`**：一键命令拼 `curl <cp>/install-worker.sh | sh` / `iex (iwr <cp>/install-worker.ps1 -UseBasicParsing).Content`，URL 是 `<scriptBase>/install-worker.{sh,ps1}`（`scriptBase` 默认 = 签发请求的 `scheme://Host`）。**此前 CP 从不托管这两路径** → curl/iwr 404 → 一键安装失败（BUG-B 根因）。
 - **匿名可拉、鉴权隔离**：脚本本身不含任何机密；准入凭据（enrollment token）在一键命令的参数里、不在脚本里。故与签发 token 的平台管理员 JWT 端点（`POST /api/v1/nodes/enroll-token`）暴露面与鉴权物理隔离，符合 ADR-020 §2「也可由 CP 静态托管」。
-- **内容来源**：脚本经 `go:embed` 内嵌进 CP 二进制（`internal/controlplane/embed/install_scripts.go`，源 = `internal/controlplane/embed/install-scripts/install-worker.{sh,ps1}`，由 `make embed-install-scripts` 从 canonical `scripts/install-worker.{sh,ps1}` 同步、字节一致由测试守护）。未内嵌时返回 `503 INSTALL_SCRIPT_UNAVAILABLE`，绝不静默回退到 SPA `index.html`（否则 `curl|sh` 会把 HTML 当脚本执行）。
+- **内容来源**：脚本经 `go:embed` 内嵌进 CP 二进制（嵌入包 `scripts/embed`，`go:embed` 不允许 `..` ⇒ 嵌入声明必须与被嵌文件同目录）。`scripts/embed/install-worker.{sh,ps1}` **既是真源也是嵌入输入，只有一份**：不再有 `internal/controlplane/embed/install-scripts/` 副本，也不需要 `make embed-install-scripts` 同步，副本字节一致守护测试随之删除（无第二份可漂移）。未内嵌时返回 `503 INSTALL_SCRIPT_UNAVAILABLE`，绝不静默回退到 SPA `index.html`（否则 `curl|sh` 会把 HTML 当脚本执行）。
 - 显式注册为真实路由（先于前端 SPA `NoRoute` 回退命中），避免被 `index.html` 回退吞掉。
 
 ### 签发 enrollment token（仅平台管理员）

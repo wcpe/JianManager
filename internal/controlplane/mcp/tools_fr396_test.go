@@ -26,6 +26,10 @@ func fr396TestDB(t *testing.T) *gorm.DB {
 		&model.Node{}, &model.Instance{}, &model.AgentToken{}, &model.AgentCallLog{},
 		&model.GroupInstance{}, &model.ServerRegistration{}, &model.NetworkMember{},
 		&model.Task{}, &model.TaskLog{},
+		// FR-503：NodeService.Purge 会在同一事务内清理该节点的 Worker 级采集覆盖键
+		// （platform_settings 的 `@node:<uuid>` 行），故本夹具必须建这张表，否则清理报
+		// 「no such table: platform_settings」而误判为清理失败。
+		&model.PlatformSetting{},
 	))
 	return db
 }

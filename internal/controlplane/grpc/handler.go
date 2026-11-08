@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -92,6 +93,27 @@ type HealthPolicyResolver interface {
 	HealthScanPolicy() HealthPolicySnapshot
 }
 
+// LogAcqPolicySnapshot 是某节点当前生效的日志采集配置（FR-503）的只读快照，供心跳响应下发。
+//
+// GzScanInterval <=0 表示未配置（关闭定时扫描）；PathOverrides 为空表示无覆盖。
+type LogAcqPolicySnapshot struct {
+	RulesEnabled    bool
+	RealtimeTail    bool
+	GzImportEnabled bool
+	GzScanInterval  time.Duration
+	// PathOverrides 是实例级路径覆盖：targetID（`inst:<id>`）→ 相对实例工作目录的路径
+	// （安全约束：不接受绝对路径，也不接受折叠 .. 后逃出工作目录的路径）。
+	PathOverrides map[string]string
+}
+
+// LogAcqPolicyResolver 提供某节点当前生效的日志采集配置，供心跳响应下发（FR-503）。
+//
+// 按 nodeUUID 解析以支持 Worker 级覆盖（两层语义：Worker 覆盖 > 平台默认）；
+// 同 HealthPolicyResolver 以接口声明、由 service.SettingsService 实现，避免反向依赖。
+type LogAcqPolicyResolver interface {
+	LogAcqPolicy(nodeUUID string) LogAcqPolicySnapshot
+}
+
 // HealthAlertNotifier 在健康巡检上报熔断时投递站内信告警（FR-459 T4「发站内信告警」）。
 // 由 service 侧实现（组装站内信 + 收件人查询），以接口声明避免 grpc→service 反向依赖。
 // 未注入则只落审计与日志（仍保证「不静默」）。
@@ -118,6 +140,8 @@ type ControlPlaneHandler struct {
 	directProbe DirectProbeTimeoutResolver // MC 直探超时解析（nil 时心跳响应不携带直探超时，FR-446）
 	// healthPolicy 实例健康巡检策略解析（nil 时心跳响应不携带巡检策略，FR-459）。
 	healthPolicy HealthPolicyResolver
+	// logAcqPolicy 日志采集配置解析（nil 时心跳响应不携带该配置，FR-503）。
+	logAcqPolicy LogAcqPolicyResolver
 	// healthNotifier 健康熔断站内信告警投递（nil 时只落审计/日志，FR-459）。
 	healthNotifier HealthAlertNotifier
 	// healthAlerted 记录各实例最近一次已告警的熔断原因，避免每拍重复发信（FR-459，按 nodeUUID+uuid 去重）。
@@ -200,6 +224,14 @@ func (h *ControlPlaneHandler) SetDirectProbeTimeoutResolver(r DirectProbeTimeout
 // 巡检器（无需重启 Worker）；不注入则心跳响应不带该字段，Worker 回退本地 worker.yml。
 func (h *ControlPlaneHandler) SetHealthPolicyResolver(r HealthPolicyResolver) {
 	h.healthPolicy = r
+}
+
+// SetLogAcqPolicyResolver 注入日志采集配置解析器（FR-503）。
+// 注入后每次心跳响应携带该节点生效的采集配置（规则开关/gz/实时采集/路径覆盖），
+// Worker 比对生效值变化才热应用（无需重启）；不注入则心跳响应不带该字段，
+// Worker 回退本地 worker.yml（向后兼容）。
+func (h *ControlPlaneHandler) SetLogAcqPolicyResolver(r LogAcqPolicyResolver) {
+	h.logAcqPolicy = r
 }
 
 // SetHealthAlertNotifier 注入健康熔断站内信告警投递器（FR-459）；不注入则只落审计/日志。
@@ -498,6 +530,24 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			resp.HealthCircuitBreakerWindowMs = int32(p.CircuitBreakerWindow / time.Millisecond)
 			resp.HealthStartupWarmupMs = int32(p.StartupWarmup / time.Millisecond)
 			resp.HealthSelfHealMaxRestarts = int32(p.SelfHealMaxRestarts)
+		}
+		// 携带该节点生效的日志采集配置（FR-503）：按 nodeUUID 解析以支持 Worker 级覆盖
+		// （两层语义：Worker 覆盖 > 平台默认）。present 用 optional（非 nil）表达
+		// 「本 CP 已下发配置」，每次心跳重发、幂等；Worker 比对生效值变化才热应用。
+		if h.logAcqPolicy != nil {
+			p := h.logAcqPolicy.LogAcqPolicy(req.NodeUuid)
+			present := true
+			resp.LogAcqPresent = &present
+			resp.LogAcqRulesEnabled = p.RulesEnabled
+			resp.LogAcqRealtimeTail = p.RealtimeTail
+			resp.LogAcqGzImportEnabled = p.GzImportEnabled
+			resp.LogAcqGzScanIntervalMs = int32(p.GzScanInterval / time.Millisecond)
+			// 路径覆盖序列化为 JSON 文本（proto 侧是 string，见 proto 注释）。
+			if len(p.PathOverrides) > 0 {
+				if b, err := json.Marshal(p.PathOverrides); err == nil {
+					resp.LogAcqPathOverridesJson = string(b)
+				}
+			}
 		}
 		// 携带该节点「已请求取消」的任务 id，Worker 据此真中断对应运行中任务（FR-227）。
 		if h.tasks != nil {

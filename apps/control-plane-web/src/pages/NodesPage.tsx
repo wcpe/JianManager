@@ -69,10 +69,12 @@ import NodeLogRuntimePanel from '@/components/NodeLogRuntimePanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import NodeArtifactCachePanel from '@/components/NodeArtifactCachePanel'
 import NodeProxyPanel from '@/components/NodeProxyPanel'
+import NodeLogAcqPanel from '@/components/NodeLogAcqPanel'
 import NodeProbeVersionPanel from '@/components/NodeProbeVersionPanel'
 import NodeRepairPanel from '@/components/NodeRepairPanel'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
+import DiagnosticsLogDialog from '@/components/DiagnosticsLogDialog'
 import { Button } from '@jianmanager/ui/components/button'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
@@ -212,9 +214,9 @@ function NodePurgeBlockedDialog({
   )
 }
 
-/** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
-type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'probe' | 'monitor' | 'repair'
-const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'runtime', 'cache', 'ports', 'proxy', 'probe', 'monitor', 'repair']
+/** 右栏分段（FR-177 §3.3 + FR-185 + FR-503）：概览/实例/JDK/缓存/端口/代理/日志采集/探针/监控/坏节点修复。 */
+type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'logAcq' | 'probe' | 'monitor' | 'repair'
+const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'runtime', 'cache', 'ports', 'proxy', 'logAcq', 'probe', 'monitor', 'repair']
 
 /** 从 URL `?tab=` 解析激活分段（FR-128 可寻址；非法值回退默认 overview）。 */
 function readDetailTab(searchParams: URLSearchParams): DetailTab {
@@ -374,11 +376,13 @@ function NodeActionsMenu({
   onToggleMaintenance,
   onDrain,
   onDelete,
+  onShowDiagnostics,
 }: {
   node: NodeInfo
   onToggleMaintenance: () => void
   onDrain: () => void
   onDelete: () => void
+  onShowDiagnostics: () => void
 }) {
   const { t } = useTranslation()
   const online = node.status === 1
@@ -390,6 +394,21 @@ function NodeActionsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {/* 进程日志诊断：只读尾部、不存储、不检索。节点离线时无意义，置灰。 */}
+        <DropdownMenuItem
+          title={online ? undefined : t('diagnostics.offlineHint')}
+          className={online ? undefined : 'opacity-50 cursor-not-allowed'}
+          onSelect={(e) => {
+            if (!online) {
+              e.preventDefault()
+              return
+            }
+            onShowDiagnostics()
+          }}
+        >
+          {t('diagnostics.openNodeLog')}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onToggleMaintenance}>
           {node.maintenance ? t('nodes.uncordon') : t('nodes.cordon')}
         </DropdownMenuItem>
@@ -541,6 +560,9 @@ export default function NodesPage() {
   const tab = readDetailTab(searchParams)
   const [query, setQuery] = useState('')
   const [pending, setPending] = useState<PendingAction | null>(null)
+  // 进程日志诊断抽屉的目标节点：null = 未打开。
+  // 与「日志中心」严格分开：这里只看该 Worker 进程自身最近几行，不做检索。
+  const [diagnosticsNode, setDiagnosticsNode] = useState<NodeInfo | null>(null)
   // FR-309：下线被实例守卫 409 拒绝 → 清单模态；离线节点走强制下线需再过一道输入名称确认。
   const [conflict, setConflict] = useState<DeleteConflict | null>(null)
   const [forcePending, setForcePending] = useState<DeleteConflict | null>(null)
@@ -910,6 +932,7 @@ export default function NodesPage() {
             onToggleMaintenance={() => toggleMaintenance(selected)}
             onDrain={() => setPending({ kind: 'drain', node: selected })}
             onDelete={() => setPending({ kind: 'delete', node: selected })}
+            onShowDiagnostics={() => setDiagnosticsNode(selected)}
           />
         ) : (
           <div className="grid h-full place-items-center rounded-lg border border-dashed bg-card/50 shadow-soft">
@@ -922,6 +945,14 @@ export default function NodesPage() {
       </section>
 
       <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
+      <DiagnosticsLogDialog
+        open={diagnosticsNode !== null}
+        onOpenChange={(o) => {
+          if (!o) setDiagnosticsNode(null)
+        }}
+        nodeId={diagnosticsNode?.id ?? null}
+        title={t('diagnostics.nodeTitle', { name: diagnosticsNode?.name ?? '' })}
+      />
       <DangerConfirm
         open={pending !== null}
         title={pending?.kind === 'drain' ? t('nodes.drainConfirmTitle') : t('nodes.deleteConfirmTitle')}
@@ -1096,6 +1127,7 @@ function NodeDetailPane({
   onToggleMaintenance,
   onDrain,
   onDelete,
+  onShowDiagnostics,
 }: {
   node: NodeInfo
   instanceCount: number
@@ -1104,6 +1136,7 @@ function NodeDetailPane({
   onToggleMaintenance: () => void
   onDrain: () => void
   onDelete: () => void
+  onShowDiagnostics: () => void
 }) {
   const { t } = useTranslation()
   const online = node.status === 1
@@ -1155,7 +1188,13 @@ function NodeDetailPane({
             <ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={56} />
             <ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={56} />
           </div>
-          <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} />
+          <NodeActionsMenu
+          node={node}
+          onToggleMaintenance={onToggleMaintenance}
+          onDrain={onDrain}
+          onDelete={onDelete}
+          onShowDiagnostics={onShowDiagnostics}
+        />
         </div>
 
         {/* 窄屏降级：仪表 2×2 紧凑网格（md 以上已内联到身份行）。 */}
@@ -1202,6 +1241,11 @@ function NodeDetailPane({
         {tab === 'proxy' && (
           <Panel title={t('nodeProxy.title')}>
             <NodeProxyPanel nodeId={node.id} active />
+          </Panel>
+        )}
+        {tab === 'logAcq' && (
+          <Panel title={t('nodeLogAcq.title')}>
+            <NodeLogAcqPanel nodeId={node.id} active online={online} />
           </Panel>
         )}
         {tab === 'probe' && (

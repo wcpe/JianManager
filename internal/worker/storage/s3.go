@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -177,10 +179,59 @@ func (s *s3Backend) Download(ctx context.Context, key string) (io.ReadCloser, er
 		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
-		drainClose(resp.Body)
-		return nil, fmt.Errorf("S3 下载失败: HTTP %d", resp.StatusCode)
+		drainErr := drainS3DownloadError(ctx, resp.Body)
+		return nil, &s3DownloadStatusError{status: resp.StatusCode, cause: drainErr}
 	}
 	return resp.Body, nil
+}
+
+const s3DownloadErrorDrainBytes int64 = 64 << 10
+
+// s3DownloadStatusError 保留既有HTTP主错误文本，附属读/关闭/取消错误可由errors.Is核实。
+// 不输出远端正文或任意reader错误文本，避免改变状态契约和暴露对象内容。
+type s3DownloadStatusError struct {
+	status int
+	cause  error
+}
+
+func (e *s3DownloadStatusError) Error() string {
+	return fmt.Sprintf("S3 下载失败: HTTP %d", e.status)
+}
+
+func (e *s3DownloadStatusError) Unwrap() error { return e.cause }
+
+// drainS3DownloadError 仅有限复用连接，不让远端错误正文绕过归档预读预算。
+// 错误正文不缓冲、不输出；读/关闭失败不能覆盖原HTTP状态，也不声称传输层零预取。
+func drainS3DownloadError(ctx context.Context, body io.ReadCloser) (drainErr error) {
+	if body == nil {
+		return ctx.Err()
+	}
+	var once sync.Once
+	var closeErr error
+	closeBody := func() { once.Do(func() { closeErr = body.Close() }) }
+	stop := context.AfterFunc(ctx, closeBody)
+	defer func() {
+		stop()
+		closeBody()
+		drainErr = errors.Join(drainErr, closeErr, ctx.Err())
+	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, drainErr = io.Copy(io.Discard, io.LimitReader(s3DownloadErrorReader{ctx: ctx, body: body}, s3DownloadErrorDrainBytes))
+	return drainErr
+}
+
+type s3DownloadErrorReader struct {
+	ctx  context.Context
+	body io.Reader
+}
+
+func (r s3DownloadErrorReader) Read(dst []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.body.Read(dst)
 }
 
 func (s *s3Backend) Delete(ctx context.Context, key string) error {

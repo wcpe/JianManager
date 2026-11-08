@@ -28,6 +28,9 @@ export const LOGS_FEDERATION_KEYS = {
 
   viewReadyComplete: 'logsFederation.viewState.ready_complete',
   viewReadyCompleteEmpty: 'logsFederation.viewState.ready_complete_empty',
+  // 覆盖完整、仅质量维度降级时的标题：只描述质量问题，不得说成「覆盖不完整」。
+  viewQualityConflict: 'logsFederation.viewState.quality_conflict',
+  viewQualityUnresolved: 'logsFederation.viewState.quality_unresolved',
   viewVerifying: 'logsFederation.viewState.verifying',
   viewPartial: 'logsFederation.viewState.partial',
   viewRateLimited: 'logsFederation.viewState.rate_limited',
@@ -54,6 +57,7 @@ export const LOGS_FEDERATION_KEYS = {
   exportBlockedIncomplete: 'logsFederation.export.blockedIncomplete',
   exportBlockedFailed: 'logsFederation.export.blockedFailed',
   exportBlockedViewStale: 'logsFederation.export.blockedViewStale',
+  exportBlockedConflict: 'logsFederation.export.blockedConflict',
   exportBlockedUnresolved: 'logsFederation.export.blockedUnresolved',
   exportBlockedNotReady: 'logsFederation.export.blockedNotReady',
   exportBlockedPermission: 'logsFederation.export.blockedPermission',
@@ -62,6 +66,10 @@ export const LOGS_FEDERATION_KEYS = {
   exportBlockedBudget: 'logsFederation.export.blockedBudget',
   exportPermissionRecheckHint: 'logsFederation.export.permissionRecheckHint',
   exportNextCursorHint: 'logsFederation.export.nextCursorHint',
+
+  // 质量维度阻断导出时的自救引导：没有可人工清空的入口时必须给出路。
+  qualityConflictNeedsNode: 'logsFederation.quality.conflictNeedsNode',
+  qualityUnresolvedNoRemedy: 'logsFederation.quality.unresolvedNoRemedy',
 } as const
 
 /** reason 码 → i18n key 前缀下的叶子名（未知码回退 unknown）。 */
@@ -73,6 +81,8 @@ export function reasonI18nKey(reason: string): string {
 const REASON_LEAF = {
   RATE_LIMITED: 'rateLimited',
   ENGINE_NOT_READY: 'engineNotReady',
+  /** 该目标没有日志数据（引擎正常）；与 engineNotReady 严格区分。 */
+  TARGET_NO_DATA: 'targetNoData',
   LOG_UNSUPPORTED: 'logUnsupported',
   LEGACY: 'legacy',
   REHYDRATE_FAILED: 'rehydrateFailed',
@@ -80,6 +90,9 @@ const REASON_LEAF = {
   TRUNCATED: 'truncated',
   OFFLINE: 'offline',
   ARCHIVE_MISSING: 'archiveMissing',
+  // 已按保留期清除：与 ARCHIVE_MISSING 是**相反**的处置（一个去恢复、一个恢复不了），
+  // 故单独一条文案而不是复用「归档缺失」。
+  ARCHIVE_PURGED: 'archivePurged',
   GAP: 'gap',
   VIEW_STALE: 'viewStale',
   DUPLICATE_UNRESOLVED: 'duplicateUnresolved',
@@ -103,6 +116,8 @@ export const LOGS_FEDERATION_LOCALES = {
       viewState: {
         ready_complete: '结果完整',
         ready_complete_empty: '所选范围内无日志（覆盖完整）',
+        quality_conflict: '覆盖完整，但存在待确认的身份冲突',
+        quality_unresolved: '覆盖完整，但存在未对账的重复事件',
         verifying: '正在校验完整覆盖，先展示已取到的结果；导出时将做完整校验',
         partial: '部分结果：覆盖不完整',
         rate_limited: '请求过于频繁，本次查询未取到数据；已保留上一次结果，请稍后重试',
@@ -128,6 +143,7 @@ export const LOGS_FEDERATION_LOCALES = {
         truncated: '结果截断',
         offline: '节点离线',
         archiveMissing: '归档缺失',
+        archivePurged: '已按保留期清除',
         gap: '数据缺口',
         viewStale: '视图已失效',
         duplicateUnresolved: '重复事件未对账',
@@ -151,6 +167,7 @@ export const LOGS_FEDERATION_LOCALES = {
         blockedIncomplete: '覆盖不完整，不可下载导出附件',
         blockedFailed: '查询失败，不可下载导出附件',
         blockedViewStale: '视图已失效，请重新查询后再导出',
+        blockedConflict: '存在身份冲突待确认，暂不可导出',
         blockedUnresolved: '重复事件未对账，导出不发布成功附件',
         blockedNotReady: '导出尚未就绪或校验未通过',
         blockedPermission: '权限不足或已撤销，无法下载',
@@ -159,6 +176,10 @@ export const LOGS_FEDERATION_LOCALES = {
         blockedBudget: '导出数据超过服务端单次上限，请缩小时间范围或调大 log_export 配置',
         permissionRecheckHint: '下载前将再次复核权限',
         nextCursorHint: '游标结束仅表示当前视图枚举完毕，不代表全部历史完整。',
+      },
+      quality: {
+        conflictNeedsNode: '存在身份冲突时导出被阻断：这是只读的质量提示，当前没有可人工清空的入口；请缩小时间范围或稍后重试。',
+        unresolvedNoRemedy: '重复事件无法自动对账，也没有可人工清空的冲突；导出暂不可用，请缩小时间范围或稍后重试。',
       },
     },
   },
@@ -173,6 +194,8 @@ export const LOGS_FEDERATION_LOCALES = {
       viewState: {
         ready_complete: 'Complete results',
         ready_complete_empty: 'No logs in selected range (coverage complete)',
+        quality_conflict: 'Coverage complete, but identity conflicts need review',
+        quality_unresolved: 'Coverage complete, but duplicate events are unresolved',
         verifying: 'Verifying full coverage; showing available results (export performs a full verification)',
         partial: 'Partial results: coverage incomplete',
         rate_limited: 'Too many requests; this query returned no data. Previous results are kept; retry shortly',
@@ -198,6 +221,7 @@ export const LOGS_FEDERATION_LOCALES = {
         truncated: 'Results truncated',
         offline: 'Node offline',
         archiveMissing: 'Archive missing',
+        archivePurged: 'Purged per retention policy',
         gap: 'Data gap',
         viewStale: 'View stale',
         duplicateUnresolved: 'Duplicates unresolved',
@@ -221,6 +245,7 @@ export const LOGS_FEDERATION_LOCALES = {
         blockedIncomplete: 'Coverage incomplete; export download is not available',
         blockedFailed: 'Query failed; export download is not available',
         blockedViewStale: 'View is stale; re-query before exporting',
+        blockedConflict: 'Identity conflicts need review; export is not available',
         blockedUnresolved: 'Duplicates unresolved; export will not publish a success artifact',
         blockedNotReady: 'Export not ready or not verified',
         blockedPermission: 'Insufficient or revoked permission; cannot download',
@@ -233,6 +258,12 @@ export const LOGS_FEDERATION_LOCALES = {
         permissionRecheckHint: 'Permission is rechecked before download',
         nextCursorHint:
           'A null cursor only ends enumeration of the current view; it does not mean full history is complete.',
+      },
+      quality: {
+        conflictNeedsNode:
+          'Identity conflicts block export: this is a read-only quality marker and there is no manual clearing entry; narrow the time range or retry later.',
+        unresolvedNoRemedy:
+          'Duplicate events cannot be reconciled automatically and there is no conflict to clear manually. Export is unavailable; narrow the time range or retry later.',
       },
     },
   },

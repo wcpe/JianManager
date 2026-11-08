@@ -2,6 +2,7 @@ package vlsup
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/process"
@@ -25,9 +26,13 @@ func EvaluateReserveRatio(budget CacheBudget) (reserved, allowed int64, ok bool)
 		return 0, 0, false
 	}
 	for _, key := range ReserveSubBudgetKeys {
-		reserved += budget.SubBudgets[key]
+		n := budget.SubBudgets[key]
+		if n < 0 || n > math.MaxInt64-reserved {
+			return math.MaxInt64, budget.TotalWorkerLogBudgetBytes / 4, true
+		}
+		reserved += n
 	}
-	allowed = budget.TotalWorkerLogBudgetBytes * ReserveRatioPercent / 100
+	allowed = budget.TotalWorkerLogBudgetBytes / 4
 	return reserved, allowed, true
 }
 
@@ -51,11 +56,10 @@ func EnforceReserveRatio(budget CacheBudget) error {
 //   - HotCacheBytes：VL HOT 实例 -memory.allowedBytes（默认模板 512MiB），是**进程 cache 预算**；
 //     它**不等于** RSS 上限。
 //   - ProcessRSSBytes：Worker 日志数据面 RSS 判据（契约初始工程门禁：单 Worker ≤ 1GiB，不含 page cache）。
-//   - TotalWorkerLogBudgetBytes：Worker 级日志总预算，独立覆盖 WAL、HOT、COLD、staging、Rehydrate、
-//     canonical projection、查询并发、临时导出空间和 RSS。
+//   - TotalWorkerLogBudgetBytes：兼容的磁盘总字节预算，覆盖WAL/各层数据/staging/export；
+//     绝不能再与RSS比较。新装配使用RuntimeBudget和BudgetController进行真实准入/预留。
 //
-// foundation 阶段 EnforceCacheBudget 只做占位校验与语义登记；预算采样与降级评估
-// 由 EvaluateBudget + Sample* 提供（FR-476 Runbook C / 契约 §6.6）。
+// 兼容登记接口不冒充运行期强制限制；采样失败显式未知，不能以0字节伪装通过。
 type CacheBudget struct {
 	HotCacheBytes             int64
 	ProcessRSSBytes           int64
@@ -135,6 +139,9 @@ type BudgetSample struct {
 	ProcessRSSBytes int64
 	// DiskUsagePercent 数据盘使用率（0..100）。
 	DiskUsagePercent float64
+	// 兼容旧调用的显式未知位；采样失败不会变成零占用的OK。
+	RSSUnknown  bool
+	DiskUnknown bool
 }
 
 // BudgetVerdict 预算评估结果。
@@ -181,10 +188,12 @@ func EvaluateBudget(budget CacheBudget, sample BudgetSample, th BudgetThresholds
 		setState(BudgetDegraded, fmt.Sprintf(
 			"VL RSS %d bytes exceeds RSS budget %d bytes", sample.ProcessRSSBytes, budget.ProcessRSSBytes))
 	}
-	if budget.TotalWorkerLogBudgetBytes > 0 && sample.ProcessRSSBytes > budget.TotalWorkerLogBudgetBytes {
-		setState(BudgetDegraded, fmt.Sprintf(
-			"VL RSS %d bytes exceeds total worker log budget %d bytes",
-			sample.ProcessRSSBytes, budget.TotalWorkerLogBudgetBytes))
+	// TotalWorkerLogBudgetBytes是兼容磁盘容量，绝不与RSS进行跨维度比较。
+	if sample.RSSUnknown {
+		setState(BudgetDegraded, "RSS采样未知，不得按0放行后台成本")
+	}
+	if sample.DiskUnknown {
+		setState(BudgetDegraded, "磁盘采样未知，不得按0放行后台成本")
 	}
 	return v
 }
@@ -203,7 +212,10 @@ func SampleProcessRSSBytes(pid int) (int64, error) {
 		return 0, fmt.Errorf("vlsup: memory info for %d: %w", pid, err)
 	}
 	if mi == nil {
-		return 0, nil
+		return 0, fmt.Errorf("vlsup: 进程RSS采样返回未知")
+	}
+	if mi.RSS > uint64(math.MaxInt64) {
+		return 0, fmt.Errorf("vlsup: RSS采样超出字节范围")
 	}
 	return int64(mi.RSS), nil
 }
@@ -218,7 +230,7 @@ func SampleDiskUsagePercent(path string) (float64, error) {
 		return 0, fmt.Errorf("vlsup: disk usage for %q: %w", path, err)
 	}
 	if usage == nil {
-		return 0, nil
+		return 0, fmt.Errorf("vlsup: 磁盘采样返回未知")
 	}
 	return usage.UsedPercent, nil
 }

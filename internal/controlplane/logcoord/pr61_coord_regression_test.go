@@ -30,7 +30,7 @@ func (w *pr61Worker) Search(ctx context.Context, req WorkerSearchRequest) (*Work
 	w.muBudget.Unlock()
 	resp, err := mapSearchResponse(w.searchPB, nil)
 	if resp != nil {
-		resp.ViewID = req.ViewID
+		resp.ViewID = firstNonEmpty(req.ViewID, "worker-view-"+w.workerID)
 	}
 	return resp, err
 }
@@ -41,7 +41,7 @@ func (w *pr61Worker) Stats(ctx context.Context, req WorkerSearchRequest, dims []
 	w.muBudget.Unlock()
 	resp, err := mapStatsResponse(w.statsPB, nil)
 	if resp != nil {
-		resp.ViewID = req.ViewID
+		resp.ViewID = firstNonEmpty(req.ViewID, "worker-view-"+w.workerID)
 	}
 	return resp, err
 }
@@ -52,6 +52,21 @@ func pr61Coverage(partial bool) *workerpb.LogCoverage {
 		}
 		return nil
 	}(), EnumerationState: workerpb.LogEnumerationState_LOG_ENUMERATION_OPEN, Targets: []*workerpb.LogCoverageTarget{{TargetId: "inst:1", State: workerpb.LogCoverageState_LOG_COVERAGE_SUCCESS}}}
+}
+
+// pr61ExactQuality 是 pr61Worker 替身的默认上报质量，对齐真实 Worker 的行为
+// （planner 以上报 duplicate=exact / stats=exact 为初值，见 fake_test.go 的同名说明）。
+//
+// 为什么替身必须显式给：CP 的聚合现在是 fail-closed 的——proto 缺省 Quality 会被
+// 解析成 unspecified，而 unspecified 排在 exact 之上，因此「未上报质量」会让聚合结果
+// 变成 unspecified。那些只关心 gaps / budget 的用例若不自报 exact，断言的 exact/partial
+// 就会被「未上报」这条完全无关的路径改写。未上报本身的拦截语义由
+// TestExportBlocksWhenAnyWorkerOmitsQuality 与 TestExportBlocksWhenWorkerOmitsQuality 覆盖。
+func pr61ExactQuality() *workerpb.LogQuality {
+	return &workerpb.LogQuality{
+		DuplicateQuality: workerpb.LogDuplicateQuality_LOG_QUALITY_DUPLICATE_EXACT,
+		StatsQuality:     workerpb.LogStatsQuality_LOG_QUALITY_STATS_EXACT,
+	}
 }
 func pr61Query() Query {
 	return Query{AuthorizedTargetIDs: []string{"inst:1"}, PrincipalKey: "user:1", PermissionScope: "scope:1", FromUTC: "2026-10-08T00:00:00Z", ToUTC: "2026-10-09T00:00:00Z", Budget: QueryBudget{Limit: 10, MaxBytes: 10000}}
@@ -84,8 +99,11 @@ func TestPR61SearchTopLevelCutOpen(t *testing.T) {
 		})
 	}
 }
+
+// TestPR61StatsTopLevelPartial 锁定「coverage 不完整时顶层 stats 质量必须降为 partial」这条兜底规则。
+// 替身必须自报 exact：该规则的前提是 Worker 已表态 exact（见 pr61ExactQuality）。
 func TestPR61StatsTopLevelPartial(t *testing.T) {
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, statsPB: &workerpb.LogStatsResponse{Coverage: pr61Coverage(true)}}
+	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, statsPB: &workerpb.LogStatsResponse{Coverage: pr61Coverage(true), Quality: pr61ExactQuality()}}
 	resp, err := pr61Coord(map[string]*pr61Worker{"w1": w}).Stats(context.Background(), StatsQuery{Query: pr61Query()})
 	require.NoError(t, err)
 	require.False(t, resp.Coverage.Complete)
@@ -98,7 +116,7 @@ func TestPR61GapProtoNormalFastCache(t *testing.T) {
 		t.Run(map[bool]string{false: "normal", true: "fast"}[fast], func(t *testing.T) {
 			workers := map[string]*pr61Worker{}
 			for _, id := range []string{"w1", "w2"} {
-				workers[id] = &pr61Worker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true, IngestPositionGaps: []*workerpb.IngestPositionGap{gap}}}
+				workers[id] = &pr61Worker{fakeWorker: &fakeWorker{workerID: id}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Quality: pr61ExactQuality(), Exhausted: true, IngestPositionGaps: []*workerpb.IngestPositionGap{gap}}}
 			}
 			c := pr61Coord(workers)
 			q := pr61Query()
@@ -230,7 +248,7 @@ func TestPR61GapSourceGenerationNotMerged(t *testing.T) {
 		{StorageNamespace: "inst:1/shared", From: 1, To: 3, ReasonCode: "PERMANENTLY_LOST", LogSourceId: "inst:1/file-b", SourceGeneration: "g1"},
 		{StorageNamespace: "inst:1/shared", From: 1, To: 3, ReasonCode: "PERMANENTLY_LOST"},
 	}
-	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Exhausted: true, IngestPositionGaps: gaps}}
+	w := &pr61Worker{fakeWorker: &fakeWorker{workerID: "w1"}, searchPB: &workerpb.LogSearchResponse{Coverage: pr61Coverage(false), Quality: pr61ExactQuality(), Exhausted: true, IngestPositionGaps: gaps}}
 	c := pr61Coord(map[string]*pr61Worker{"w1": w})
 	q := pr61Query()
 	q.Fast = true

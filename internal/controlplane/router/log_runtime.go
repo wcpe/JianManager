@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
@@ -25,6 +24,9 @@ type LogRuntimeHandler struct {
 	authz     *service.AuthzService
 	instances *service.InstanceService
 	holders   *service.LogTargetHolderService
+	// audit 记录「人工应急动作」的审计行（见 MigratePartition / Rehydrate）。
+	// 可为 nil（未接线时不落审计，但**不阻断主流程**）。
+	audit *service.AuditService
 }
 
 func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, authz *service.AuthzService, instances *service.InstanceService, holders ...*service.LogTargetHolderService) *LogRuntimeHandler {
@@ -35,6 +37,20 @@ func NewLogRuntimeHandler(nodes *service.NodeService, pool *cpgrpc.ClientPool, a
 	return h
 }
 
+// SetAudit 注入审计服务（装配期调用，与同族 handler 的可选注入同口径）。
+// nil 为合法值：审计未接线时人工动作照常执行，仅不留 CP 侧审计行。
+func (h *LogRuntimeHandler) SetAudit(audit *service.AuditService) { h.audit = audit }
+
+// recordAudit 记录一条节点级操作审计；audit 未注入时静默跳过（口径同 LogAcqSettingsHandler）。
+func (h *LogRuntimeHandler) recordAudit(c *gin.Context, action string, detail map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	userID, _ := uid.(uint)
+	h.audit.RecordSafe(userID, action, "node", c.Param("id"), marshalAuditDetail(detail), c.ClientIP())
+}
+
 func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	if h == nil || h.nodes == nil || h.pool == nil {
 		return
@@ -42,8 +58,6 @@ func (h *LogRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/nodes/:id/log-runtime", h.Status)
 	rg.POST("/nodes/:id/log-runtime/:namespace/:action", h.Control)
 	rg.POST("/nodes/:id/log-runtime/migrate", h.MigratePartition)
-	rg.POST("/nodes/:id/log-runtime/ingest/resolve-gaps", h.ResolveIngestGaps)
-	rg.POST("/nodes/:id/log-runtime/ingest/clear-identity-conflicts", h.ClearIdentityConflicts)
 	rg.GET("/nodes/:id/log-archive/status", h.ArchiveStatus)
 	rg.POST("/nodes/:id/log-archive/rehydrate", h.Rehydrate)
 }
@@ -77,266 +91,51 @@ func (h *LogRuntimeHandler) operatorFromRequest(c *gin.Context) (string, bool) {
 	return "", false
 }
 
-func (h *LogRuntimeHandler) ResolveIngestGaps(c *gin.Context) {
-	// 操作人必须在**任何 RPC 之前**解析：取不到就拒绝（不下发请求）。
-	operator, ok := h.operatorFromRequest(c)
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": "OPERATOR_UNKNOWN",
-			"message": "无法确定操作人：认证主体缺失（放弃裁定必须可审计）。" +
-				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
-		})
-		return
-	}
-	// 可选 body：storageNamespace 必须是完整 LogSourceID/SourceGeneration 源键。
-	// 传了：只解该源（显式人工确认，见 Worker 侧 ResolveCoveredGapsForSource——
-	// 用于解开「唯一未就绪目标正是持有缺口者」的自我指涉死锁）；
-	// 不传：与既有整节点行为逐字一致（向后兼容）。
-	var body struct {
-		StorageNamespace string `json:"storageNamespace"`
-		// Reason 是「放弃裁定」的显式理由（ADR-101 / FR-483 §6）：仅当某源"从未有完整已发布投影"
-		// 这类死结需要人工裁定终局时才必填；缺失 ⇒ Worker 侧照旧拒绝（不开静默放宽的口子 ✗）。
-		Reason string `json:"reason"`
-	}
-	if c.Request.ContentLength > 0 {
-		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
-			return
-		}
-	}
-	body.StorageNamespace = strings.TrimSpace(body.StorageNamespace)
-	// 非空源键是永久裁定，须先完成对象授权；空键仍只走既有自动解算，不能扩大其判据。
-	if body.StorageNamespace != "" && !h.authorizeResolveSource(c, body.StorageNamespace) {
-		return
-	}
-	client, ok := h.client(c)
-	if !ok {
-		return
-	}
-	// 只有已经完成对象授权的显式单源裁定才下传人工凭据。
-	// 空键自动解算不得携带操作人/理由，防止全源路径把请求理由解释为永久裁定授权。
-	var mdPairs []string
-	if body.StorageNamespace != "" {
-		mdPairs = append(mdPairs, operatorMetadataKey, operator)
-		if reason := strings.TrimSpace(body.Reason); reason != "" {
-			mdPairs = append(mdPairs, "x-jm-reason", reason)
-		}
-	}
-	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(mdPairs...))
-	resp, err := client.Worker.LogResolveIngestGaps(ctx, &workerpb.LogResolveIngestGapsRequest{
-		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
-		StorageNamespace: strings.TrimSpace(body.StorageNamespace),
-	})
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_RPC_FAILED"})
-		return
-	}
-	if resp == nil || resp.GetError() != nil || resp.GetState() != workerpb.LogTaskState_LOG_TASK_SUCCEEDED {
-		code := "LOG_NOT_READY"
-		// 转述 Worker 的具体原因：只回裸 code 会让运维无从判断是「源不存在」「账本不一致」
-		// 还是「缺口未覆盖」，实测会把排查拖成盲猜。
-		message := ""
-		if resp != nil && resp.GetError() != nil {
-			code = resp.GetError().GetCode().String()
-			message = resp.GetError().GetMessage()
-		}
-		c.JSON(http.StatusConflict, gin.H{"error": "GAP_RESOLUTION_FAILED", "code": code, "message": message})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"state": "resolved"})
-}
-
-// ClearIdentityConflicts 人工确认并清空「身份冲突」记录，使日志页的质量标记不再为
-// conflict / partial（见 Worker planner 的 DupConflict / StatsPartial 派生）。
-//
-// 语义：运维审阅后确认这些冲突已被正确处理（系统在不可裁定形态下保留先到者，即保留正确
-// 版本；冲突行从未进入写入面），同意清空诊断记录以消除质量标记。只移除诊断记录，不改日志内容。
-//
-// 与 resolve-gaps 同族的纪律（逐条对应）：
-//  1. 操作人在**任何 RPC 之前**解析：取不到就拒绝，不下发请求（请求体可被伪造，责任由传输层带）；
-//  2. 理由必填：它要进审计凭据，故与操作人同走 metadata（同样不受请求体伪造影响）；
-//  3. 指名源须先完成对象授权（与放弃裁定同一判据，防止跨实例/跨组越权）；
-//  4. 不传源键 = 全 Worker 范围：那是**批量**动作，只允许平台管理员（见 authorizeClearAllSources），
-//     否则任何持有 node.manage 的调用方都能一次性清掉整节点所有源的歧义提示。
-func (h *LogRuntimeHandler) ClearIdentityConflicts(c *gin.Context) {
-	operator, ok := h.operatorFromRequest(c)
-	if !ok {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": "OPERATOR_UNKNOWN",
-			"message": "无法确定操作人：认证主体缺失（清空身份冲突必须可审计）。" +
-				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
-		})
-		return
-	}
-	var body struct {
-		// StorageNamespace 是完整源键 LogSourceID/SourceGeneration（沿用 resolve-gaps 的字段名与
-		// 取值口径）；空 = 本 Worker 全部持有冲突记录的源。
-		StorageNamespace string `json:"storageNamespace"`
-		// Reason 是本次清空的显式理由：**必填**（凭据必须记录"为什么可以清"）。
-		Reason string `json:"reason"`
-	}
-	if c.Request.ContentLength > 0 {
-		if bindErr := c.ShouldBindJSON(&body); bindErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
-			return
-		}
-	}
-	body.StorageNamespace = strings.TrimSpace(body.StorageNamespace)
-	body.Reason = strings.TrimSpace(body.Reason)
-	if body.Reason == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "REASON_REQUIRED",
-			"message": "清空身份冲突必须给出理由（审计凭据需要记录为何可以清）",
-		})
-		return
-	}
-	if body.StorageNamespace != "" {
-		// 单源是永久性裁定，须先完成对象授权；判据与消失的缺口裁定完全一致。
-		if !h.authorizeResolveSource(c, body.StorageNamespace) {
-			return
-		}
-	} else if !h.authorizeClearAllSources(c) {
-		return
-	}
-	client, ok := h.client(c)
-	if !ok {
-		return
-	}
-	ctx := metadata.NewOutgoingContext(c.Request.Context(), metadata.Pairs(
-		operatorMetadataKey, operator, "x-jm-reason", body.Reason))
-	resp, err := client.Worker.LogClearIdentityConflicts(ctx, &workerpb.LogClearIdentityConflictsRequest{
-		RequestId: c.GetHeader("X-Request-ID"), ProtocolVersion: "log-query/1",
-		StorageNamespace: body.StorageNamespace,
-	})
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_RPC_FAILED", "message": err.Error()})
-		return
-	}
-	if resp == nil || resp.GetError() != nil {
-		code, message := "LOG_NOT_READY", ""
-		if resp != nil && resp.GetError() != nil {
-			code = resp.GetError().GetCode().String()
-			message = resp.GetError().GetMessage()
-		}
-		c.JSON(http.StatusConflict, gin.H{"error": "CLEAR_CONFLICTS_FAILED", "code": code, "message": message})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"state":          "cleared",
-		"clearedCount":   resp.GetClearedCount(),
-		"clearedSources": resp.GetClearedSources(),
-		"skippedSources": resp.GetSkippedSources(),
-	})
-}
-
-// authorizeClearAllSources 校验「清空全部源」的授权：只有平台管理员可做。
-//
-// 为什么比单源更严：单源清空绑定到一个已授权的实例（越权面最小），而空源键会一次性清掉本
-// Worker 上**所有**源的歧义提示。若沿用节点级权限（node.manage），任何能操作该节点的调用方
-// 都能借一次调用把整节点的质量标记抹平——那是本功能最不希望出现的越权形态。
-//
-// 判据用 access.IsPlatformAdmin 而非新增权限节点：与 bot / bot_load 等既有"批量或跨资源"
-// 端点的口径一致（组管理员走单源路径即可，不需要为它扩权限树）。
-func (h *LogRuntimeHandler) authorizeClearAllSources(c *gin.Context) bool {
-	access := getAccess(c)
-	if h.authz == nil || access == nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "清空全部源的授权未就绪"})
-		return false
-	}
-	if !access.IsPlatformAdmin {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error":   "FORBIDDEN",
-			"message": "清空全部源的身份冲突仅限平台管理员；请指定单个日志源（storageNamespace）逐源清空",
-		})
-		return false
-	}
-	return true
-}
-
-// authorizeResolveSource 在裁定 RPC 前绑定完整源键，节点能力不能代替实例组授权。
-func (h *LogRuntimeHandler) authorizeResolveSource(c *gin.Context, sourceKey string) bool {
-	parts := strings.Split(sourceKey, "/")
-	if len(parts) != 3 || !strings.HasPrefix(parts[0], "inst:") || parts[2] == "" ||
-		(parts[1] != "stdout" && parts[1] != "stderr" && parts[1] != "file") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "须提供完整的实例日志源键及代次"})
-		return false
-	}
-	id, err := strconv.ParseUint(strings.TrimPrefix(parts[0], "inst:"), 10, strconv.IntSize)
-	if err != nil || id == 0 || parts[0] != fmt.Sprintf("inst:%d", id) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "实例日志源键无效"})
-		return false
-	}
-	access := getAccess(c)
-	if h.authz == nil || h.instances == nil || h.nodes == nil || access == nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "日志源裁定授权未就绪"})
-		return false
-	}
-	deny := func() bool {
-		// 不区分源不存在、组外、代次或归属错误，避免借此枚举实例及历史源。
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权裁定该日志源"})
-		return false
-	}
-	// 即便平台管理员在组授权中短路，也必须取得真实实例，不能只信客户端的数字 ID。
-	inst, err := h.instances.GetByID(uint(id))
-	if err != nil || inst == nil || inst.UUID == "" {
-		return deny()
-	}
-	allowed, err := h.authz.CanAccessInstance(access, inst.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "日志源授权校验失败"})
-		return false
-	}
-	if !allowed {
-		return deny()
-	}
-	nodeID, err := strconv.ParseUint(c.Param("id"), 10, strconv.IntSize)
-	if err != nil || nodeID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_NODE_ID"})
-		return false
-	}
-	node, err := h.nodes.GetByID(uint(nodeID))
-	if err != nil || node == nil || node.UUID == "" {
-		return deny()
-	}
-	// 当前绑定由 CP 数据库派生，与下发 CreateInstanceRequest 的身份契约一致；不能剥离代次。
-	generation := fmt.Sprintf("instance:%s@worker:%s", inst.UUID, node.UUID)
-	if inst.NodeID == node.ID && parts[2] == generation {
-		return true
-	}
-	// 实例迁移后，旧 Worker 只可访问已登记的历史 holder；客户端提供的旧 UUID 不是凭证。
-	if h.holders != nil {
-		holders, err := h.holders.ListForInstance(inst.ID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "日志源绑定校验失败"})
-			return false
-		}
-		for _, holder := range holders {
-			if !holder.Current && holder.InstanceID == inst.ID && holder.StorageNamespace == parts[0] &&
-				holder.WorkerUUID == node.UUID && holder.SourceGeneration == parts[2] {
-				return true
-			}
-		}
-	}
-	return deny()
-}
-
 type logMigratePartitionRequest struct {
 	StorageNamespace string `json:"storageNamespace"`
 	UTCDay           string `json:"utcDay"`
 }
 
 func (h *LogRuntimeHandler) MigratePartition(c *gin.Context) {
-	client, ok := h.client(c)
+	// 操作人必须在**任何 RPC 之前**解析（对齐同族 resolve-gaps / clear-identity-conflicts /
+	// import-archives）：分区下沉把历史日志挪到冷层，事后必须能回答「谁让它动的」。
+	// Worker 侧该 RPC 不消费操作人，CP 侧不解析就真的没有任何主体记录。
+	operator, ok := h.operatorFromRequest(c)
 	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（分区迁移必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
 		return
 	}
 	var body logMigratePartitionRequest
-	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.StorageNamespace) == "" {
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+		return
+	}
+	body.StorageNamespace = strings.TrimSpace(body.StorageNamespace)
+	if body.StorageNamespace == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
 		return
 	}
 	if _, err := time.Parse("2006-01-02", body.UTCDay); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_UTC_DAY"})
+		return
+	}
+	// namespace 只是存在性探针，Worker 实际搬运整物理 UTC 日的全部命名空间。
+	// 单实例组授权不能代表组外日成员已获授权；沿全量导入判据要求平台管理员，不新增权限节点。
+	access := getAccess(c)
+	if access == nil || !access.IsPlatformAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "整物理 UTC 日日志迁移仅限平台管理员"})
+		return
+	}
+	// 全范围主体仍须通过原探针格式与节点绑定检查，不能借本节点通道迁移别处目标。
+	if !h.authorizeArchiveTarget(c, body.StorageNamespace) {
+		return
+	}
+	client, ok := h.client(c)
+	if !ok {
 		return
 	}
 	resp, err := client.Worker.LogMigratePartition(c.Request.Context(), &workerpb.LogMigratePartitionRequest{
@@ -359,6 +158,15 @@ func (h *LogRuntimeHandler) MigratePartition(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "MIGRATION_FAILED", "code": code})
 		return
 	}
+	// 冷层仍可按 Catalog 权威位置查询；审计记录触发探针、整日影响范围和操作人。
+	// 本路径不由通用审计中间件记录 action，且 Worker RPC 不消费操作人，因此必须在 CP 留痕。
+	h.recordAudit(c, "node.log_partition.migrate", map[string]any{
+		"migrationScope":   "physical_utc_day",
+		"storageNamespace": body.StorageNamespace,
+		"utcDay":           body.UTCDay,
+		"targetTier":       "cold",
+		"operator":         operator,
+	})
 	c.JSON(http.StatusOK, gin.H{"state": "migrated", "targetTier": "cold", "storageNamespace": body.StorageNamespace, "utcDay": body.UTCDay})
 }
 
@@ -402,7 +210,37 @@ func (h *LogRuntimeHandler) Status(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// Control 经反向隧道启停/重启 Worker 上的 VictoriaLogs 运行时。
+//
+// 为什么必须补操作人与审计：启停/重启会直接中断该节点日志的查询面与写入面，是**有副作用的
+// 写操作**；而审计中间件对 POST /nodes/:id/log-runtime/... 不产生 action，Worker 侧
+// LogRuntimeControl 也不消费操作人 ⇒ 不在这里留痕，一次误停在生产上就查不到「谁干的」。
+//
+// 为什么不在这里做目标级授权（与 migrate / rehydrate 的差异，已按实际取值核实，不是想当然）：
+// 本端点的 `:namespace` 是 **VictoriaLogs 运行时命名空间**，合法取值只有 hot / cold /
+// rehydrate（Worker 侧 LogRuntimeControl 逐个比对 vlsup.NamespaceHot/Cold/Rehydrate 之后才
+// 落到 Start/Stop/Restart；前端 LogRuntimeInstance["namespace"] 也是同一组字面量）。它回答的是
+// 「动这个节点上的哪个日志库进程」，既不携带 node:/inst: 前缀，也不指向任何租户对象。
+// 而同族的 authorizeArchiveTarget 只承认空串 / inst:<id> / node:<id>，其余一律 400 ——
+// 硬套在这里会把 hot/start 这类正常调用打成 400，等于用错误的语义换一个「看着补齐」的勾。
+// 三个命名空间属于同一节点的同一套日志基础设施，不存在跨实例组或跨节点的可见性差异，
+// 故目标面隔离由**节点级权限**承担（见下面的 requireNodes），不做实例级授权。
 func (h *LogRuntimeHandler) Control(c *gin.Context) {
+	// 操作人必须在**任何 RPC 之前**解析（同族纪律）：取不到主体就不下发请求。
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（日志运行时启停必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
+	// 节点级权限校验：路由门虽已挂 node.manage，但写操作不应只依赖挂载点——一旦本 handler
+	// 被复用到更宽的路由组，静默失去写门是查不出来的（与 asset / node 等 handler 的自查同口径）。
+	if !requireNodes(c, "node.manage") {
+		return
+	}
 	client, ok := h.client(c)
 	if !ok {
 		return
@@ -428,6 +266,15 @@ func (h *LogRuntimeHandler) Control(c *gin.Context) {
 		c.JSON(status, gin.H{"error": resp.GetError().GetCode().String(), "message": resp.GetError().GetMessage()})
 		return
 	}
+	// 成功受理后落 CP 侧审计行：命名空间 + 动作是复盘「停的是哪一层日志库」的唯一凭据，
+	// operator 单列进 detail（Agent 通道下 user_id 写的是 token id，可读主体只在这里）。
+	// 只记成功受理：Worker 报错走上面的分支，不落行，避免审计证明一次从未发生的启停。
+	h.recordAudit(c, "node.log_runtime.control", map[string]any{
+		"namespace": ns,
+		"action":    action,
+		"operator":  operator,
+		"state":     resp.GetState().String(),
+	})
 	c.JSON(http.StatusAccepted, resp)
 }
 
@@ -566,6 +413,15 @@ func (h *LogRuntimeHandler) ArchiveStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// rehydrateTarget 把请求里的 target 归一成审计口径：与 archiveQueryBase 的默认值一致，
+// 空 target 表示「本节点自身」。
+func rehydrateTarget(c *gin.Context, target string) string {
+	if trimmed := strings.TrimSpace(target); trimmed != "" {
+		return trimmed
+	}
+	return "node:" + c.Param("id")
+}
+
 type logRehydrateRequest struct {
 	ArchiveObjectIDs []string `json:"archiveObjectIds"`
 	Target           string   `json:"target"`
@@ -573,7 +429,22 @@ type logRehydrateRequest struct {
 	ToUTC            string   `json:"toUtc"`
 }
 
+// Rehydrate 把冷层归档对象恢复回可查询面（读取 + 校验 + 发布归档事件）。
+//
+// 为什么必须补操作人与审计：它会把归档数据重新写进查询面，是「谁在什么时候把哪批对象放回了
+// 可查范围」必须能回答的高影响动作。目标级授权（authorizeArchiveTarget）此前已补齐，但操作人
+// 从未解析、CP 侧也不落行——Worker 侧 LogRehydrate 同样不消费操作人，等于全程无痕。
 func (h *LogRuntimeHandler) Rehydrate(c *gin.Context) {
+	// 操作人必须在**任何 RPC 之前**解析（同族纪律）：取不到主体就不下发请求。
+	operator, ok := h.operatorFromRequest(c)
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "OPERATOR_UNKNOWN",
+			"message": "无法确定操作人：认证主体缺失（归档恢复必须可审计）。" +
+				"请以已认证用户或 API 密钥身份调用本端点；自定义认证通道需注入 username。",
+		})
+		return
+	}
 	var body logRehydrateRequest
 	if err := c.ShouldBindJSON(&body); err != nil || len(body.ArchiveObjectIDs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "archiveObjectIds required"})
@@ -600,5 +471,17 @@ func (h *LogRuntimeHandler) Rehydrate(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": resp.GetError().GetCode().String(), "message": resp.GetError().GetMessage()})
 		return
 	}
+	// 成功受理后落 CP 侧审计行。target 按 archiveQueryBase 的口径归一（空 target 即本节点
+	// 自身）：否则同一件事在审计里会出现「空」与「node:<id>」两副面孔，事后无法按目标检索。
+	// 归档对象 ID 一并入 detail——「把哪批对象放回了可查范围」正是这次操作的实质。
+	// 只记成功受理：Worker 报错走上面两个分支，不落行，避免审计证明一次从未发生的恢复。
+	h.recordAudit(c, "node.log_archive.rehydrate", map[string]any{
+		"target":           rehydrateTarget(c, body.Target),
+		"archiveObjectIds": body.ArchiveObjectIDs,
+		"fromUtc":          body.FromUTC,
+		"toUtc":            body.ToUTC,
+		"operator":         operator,
+		"state":            resp.GetState().String(),
+	})
 	c.JSON(http.StatusAccepted, resp)
 }

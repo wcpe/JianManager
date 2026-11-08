@@ -16,6 +16,8 @@ import (
 )
 
 type cursorWorker struct {
+	// noStreamWorker 提供 stream 三方法的「未实现」实现（接口扩展时不用逐个改 fake）。
+	noStreamWorker
 	id     string
 	target string
 	items  []Event
@@ -50,8 +52,9 @@ func (w *cursorWorker) Search(_ context.Context, req WorkerSearchRequest) (*Work
 		items = items[:limit]
 		exhausted = false
 	}
-	return &WorkerSearchResponse{ViewID: req.ViewID, Items: items, Exhausted: exhausted,
-		NextCursor: "worker-next", Targets: []WorkerTargetResult{{TargetID: w.target, State: CoverageSuccess, CatalogGeneration: "1"}}}, nil
+	return &WorkerSearchResponse{ViewID: firstNonEmpty(req.ViewID, "wv-"+w.id), Items: items, Exhausted: exhausted,
+		NextCursor: "worker-next", Targets: []WorkerTargetResult{{TargetID: w.target, State: CoverageSuccess, CatalogGeneration: "1"}},
+		Quality: exactQuality}, nil
 }
 
 func (w *cursorWorker) Tail(ctx context.Context, req WorkerSearchRequest, _ string) (*WorkerSearchResponse, error) {
@@ -1509,4 +1512,138 @@ func TestExportEmptyWindowYieldsNonNilArtifact(t *testing.T) {
 	assert.False(t, res.ExportIncomplete, "空窗口不是「导出不完整」")
 	assert.True(t, res.Coverage.Complete, "前置：该窗口覆盖完整")
 	assert.False(t, res.BudgetExceeded)
+}
+
+// M-3 回归：Worker 未上报质量时导出必须判为不完整且不产出附件。
+//
+// 缺陷形态：Worker 上报 nil 的 LogQuality（或未来枚举）经 qualityFromProto 解析为
+// unspecified，而导出闸门只拦 unresolved/conflict/partial/unavailable ⇒ 放行，
+// 最终在覆盖完整时交出一个「质量未知」的成功附件。数据本身可能不缺，但「这份导出
+// 是否可信」没有任何来源断言过，属于典型的 fail-open。
+//
+// 转红方式（实测）：让 QualityBlocksExport 回退成只列举已知坏值的写法，
+// 本用例的 ExportIncomplete / Artifact 断言立即红（旧行为：完整 + 有附件）。
+func TestExportBlocksWhenWorkerOmitsQuality(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "t1", WorkerID: "w1", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{
+		workerID:    "w1",
+		searchItems: []Event{mkEvent("e1", "s", "g", 1, "2026-09-20T12:00:00Z", "I", "hello")},
+		searchTarget: []WorkerTargetResult{
+			successTarget("t1", "w1", "s/g:1", "1"),
+		},
+		// 模拟 Worker 未上报 LogQuality：proto 为 nil 时适配层得到的就是零值 Quality。
+		searchQuality: &Quality{},
+	}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"t1"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, res.ExportIncomplete, "质量未知的导出不得判为完整")
+	assert.Nil(t, res.Artifact, "质量未知时不得下发成功附件")
+	assert.Contains(t, res.IncompleteReasons, "stats_unspecified",
+		"阻断原因需可归因到「统计质量未指定」")
+	// 覆盖本身是完整的：本用例证明质量闸门独立生效，不是被 coverage 顺带拦下。
+	assert.True(t, res.Coverage.Complete, "前置：覆盖完整，阻断只能来自质量闸门")
+}
+
+// M-3 跨 Worker 回归：任一 Worker **未上报质量**时，另一个 Worker 的 exact 不得把它掩盖。
+//
+// 缺陷形态（本轮修复）：worstDuplicateQuality/worstStatsQuality 把 unspecified（含零值
+// 空串与未来枚举）排在 **exact 之下**，于是「w1=exact、w2=未上报」被聚合成 exact，
+// 导出闸门看到 exact 就放行——而 QualityBlocksExport 自身已是 fail-closed，这等于从
+// **聚合侧**绕过它。单 Worker 场景此前能拦住，纯粹因为 stats 聚合种子恰好是空串：
+// 那是种子在替聚合结果表态，属另一个缺陷（种子不该参与语义，见修复后的显式种子）。
+//
+// 转红方式（实测）：把 worstDuplicateQuality/worstStatsQuality 的 rank 改回
+// default:return 0 的旧写法（unspecified 落在 exact 之下），本用例的
+// ExportIncomplete / Artifact / IncompleteReasons 断言立即红。
+func TestExportBlocksWhenAnyWorkerOmitsQuality(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: ReadyOnline},
+		{ID: "inst:2", WorkerID: "w2", Readiness: ReadyOnline},
+	}}
+	// w1 正常上报 exact/exact；w2 模拟旧版 Worker / proto 缺省 ⇒ 零值 Quality。
+	w1 := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "inst:1/stdout", "g1", 1, "2026-09-20T12:00:00Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:1", "w1", "1", "1")}}
+	w2 := &fakeWorker{workerID: "w2",
+		searchItems:   []Event{mkEvent("e2", "inst:2/stdout", "g1", 1, "2026-09-20T12:00:01Z", "INFO", "ok")},
+		searchTarget:  []WorkerTargetResult{successTarget("inst:2", "w2", "1", "1")},
+		searchQuality: &Quality{}} // 未上报质量
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	dialer.clients["w2"] = w2
+	coord := New(resolver, dialer)
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, res.ExportIncomplete, "任一 Worker 未上报质量时导出必须判为不完整")
+	assert.Nil(t, res.Artifact, "未上报质量的来源不得被另一个 Worker 的 exact 掩盖后放行")
+	assert.True(t, res.Coverage.Complete, "前置：覆盖完整，阻断只能来自质量闸门")
+	// 两个维度都是「未上报」，阻断原因必须可归因（rather than 只丢一个笼统码）。
+	assert.Contains(t, res.IncompleteReasons, "quality_unspecified",
+		"重复质量未上报必须被聚合成 unspecified 并阻断")
+	assert.Contains(t, res.IncompleteReasons, "stats_unspecified",
+		"统计质量未上报必须被聚合成 unspecified 并阻断")
+}
+
+// 反向约束（防过度收紧）：全部 Worker 都上报 exact/exact 时导出必须照常放行。
+//
+// 为什么必须有这条：把 unspecified 提到 exact 之上后，若聚合**种子**仍是零值空串
+// （fanoutSearch 的 stats 种子、Export 的 exportQuality 初值），种子本身会被解析成
+// unspecified ⇒ **每次** Search/Export 都被判不完整，全 exact 的集群再也导不出任何东西。
+// 种子必须显式表示「尚无 Worker 表态时先按最好」。
+//
+// 转红方式（实测）：把 fanoutSearch 的 StatsQuality 种子或 Export 的 exportQuality
+// 初值改回零值，本用例立即红（Artifact 变 nil）。
+func TestExportPassesWhenAllWorkersReportExact(t *testing.T) {
+	resolver := &fakeTargetResolver{targets: []TargetInfo{
+		{ID: "inst:1", WorkerID: "w1", Readiness: ReadyOnline},
+		{ID: "inst:2", WorkerID: "w2", Readiness: ReadyOnline},
+	}}
+	w1 := &fakeWorker{workerID: "w1",
+		searchItems:  []Event{mkEvent("e1", "inst:1/stdout", "g1", 1, "2026-09-20T12:00:00Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:1", "w1", "1", "1")}}
+	w2 := &fakeWorker{workerID: "w2",
+		searchItems:  []Event{mkEvent("e2", "inst:2/stdout", "g1", 1, "2026-09-20T12:00:01Z", "INFO", "ok")},
+		searchTarget: []WorkerTargetResult{successTarget("inst:2", "w2", "1", "1")}}
+	dialer := newFakeDialer()
+	dialer.clients["w1"] = w1
+	dialer.clients["w2"] = w2
+	coord := New(resolver, dialer)
+
+	// 先经 Search 断言聚合结果本身是 exact/exact：否则「放行」只能证明闸门被削弱。
+	searchResp, err := coord.Search(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, DupExact, ParseDuplicateQuality(string(searchResp.Quality.DuplicateQuality)),
+		"全 exact 场景的聚合重复质量必须是 exact")
+	assert.Equal(t, StatsQExact, ParseStatsQuality(string(searchResp.Quality.StatsQuality)),
+		"全 exact 场景的聚合统计质量必须是 exact（种子不得引入 unspecified）")
+
+	res, err := coord.Export(context.Background(), Query{
+		AuthorizedTargetIDs: []string{"inst:1", "inst:2"},
+		PrincipalKey:        "user:1|role:10|targets:test",
+		Budget:              QueryBudget{Limit: 100},
+	})
+	require.NoError(t, err)
+	assert.False(t, res.ExportIncomplete, "全 exact 的导出必须判为完整")
+	assert.NotNil(t, res.Artifact, "全 exact 的导出必须下发成功附件")
 }

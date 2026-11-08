@@ -139,7 +139,9 @@ func main() {
 		log.Fatalf("日志导出配置无效: %v", err)
 	}
 
-	initLogger(cfg.Log)
+	// 日志装配：stdout 之外再写一份自轮转文件（见 process_log.go）。
+	// stdout 保留，journald/容器场景不受影响；文件供面板诊断与运维 grep。
+	installPlatformLogger(cfg.Log)
 
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：CP 所有出站下载（自更新 feed/二进制、
 	// 服务端 jar、客户端制品入库等）经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。
@@ -313,9 +315,9 @@ func main() {
 	}
 	eventSvc := service.NewEventService(pool)
 	// 日志中心：采集实例输出与平台日志入库、归档到数据根 var/log、按策略保留（FR-049）。
-	logSvc := service.NewLogService(db, root, cfg.LogStore)
-	logSvc.Start()
-	defer logSvc.Stop()
+	// CP `logs` 表已废弃（2026-10-29）：日志不再入库。
+	// 实例日志 → Worker 的 VL（经 /logs/federation 联邦查询）；
+	// 平台日志 → rollog 文件（面板读尾部，见 /diagnostics/log）。
 	// FR-480 日志联邦协调器（T11 装配）：实例/节点目标解析 + ClientPool 隧道 Dialer。
 	// Readiness 以节点状态∩活跃隧道判定；onlineOnly 不扇出离线节点。
 	logHolderSvc := service.NewLogTargetHolderService(db)
@@ -334,12 +336,11 @@ func main() {
 		MaxRows:  cfg.LogExport.MaxRows,
 		MaxBytes: cfg.LogExport.MaxBytes,
 	})
-	// 实例 stdout/stderr 经事件流采集落库。
-	eventSvc.SetLogSink(logSvc)
-	// 平台结构化日志在输出 stdout 之外同时落库（持久化开关由 log_store.persist_platform 控制）。
-	if persist := service.NewPersistSlogHandler(slog.Default().Handler(), logSvc); persist != slog.Default().Handler() {
-		slog.SetDefault(slog.New(persist))
-	}
+	// 实例 stdout/stderr 不再落 CP `logs` 表（2026-10-29）：
+	// 实例日志的权威副本在 Worker 的 VL 里，CP 只做授权与联邦归集。
+	// 面板的停机历史、控制台尾行、MCP 日志工具均已改走 /logs/federation。
+	// 平台自身日志也不再落库：它落 rollog 文件（见 process_log.go），
+	// 面板平台视图读文件尾部。
 	assetSvc := service.NewAssetService(db, root)
 	// 制品入库下载（如服务端核心 IngestFromURL）经进程级出站代理（FR-174，见 ADR-037）。
 	// 用持有者注入，使全局代理改动运行时即时生效（FR-185，见 ADR-043）。
@@ -643,7 +644,8 @@ func main() {
 	mcpHandler := mcp.NewHandler(mcpConns, mcp.ToolDeps{
 		Instance:  instanceSvc,
 		Node:      nodeSvc,
-		Log:       logSvc,
+		// 实例日志走联邦（真源在 Worker 的 VL）；不再注入 CP logs 表服务。
+		LogCoord:  logCoord,
 		Agent:     agentTokenSvc,
 		Provision: provisionSvc,
 		Import:    importServerSvc,
@@ -794,6 +796,8 @@ func main() {
 		RuntimeLibrary: runtimeLibrarySvc,
 		PMConfig:       pmConfigSvc,
 		Diagnostics:    diagnosticsSvc,
+		// 进程自身日志诊断的路径提供者（见 /diagnostics/log）。
+		ProcessLogPath: platformLogPath,
 		DockerImage:    dockerImageSvc,
 		Terminal:       terminalSvc,
 		File:           fileSvc,
@@ -845,7 +849,6 @@ func main() {
 		ImportServer:            importServerSvc,
 		Registration:            registrationSvc,
 		Network:                 networkSvc,
-		Log:                     logSvc,
 		LogCoord:                logCoord,
 		LogRuntimePool:          pool,
 		LogRuntimeHolders:       logHolderSvc,
@@ -957,6 +960,10 @@ func main() {
 	// 注入实例健康巡检策略解析器（FR-459）：每次心跳响应携带 health.* 生效策略（enabled/周期/
 	// 探针类型/阈值/动作/熔断阈值），Worker 写入巡检器生效值，无需重启 Worker。
 	grpcHandler.SetHealthPolicyResolver(settingsSvc)
+	// 注入日志采集配置解析器（FR-503）：每次心跳响应携带该 Worker 生效的采集配置
+	// （规则/gz/实时采集/路径覆盖）。解析按 nodeUUID 做两层合并（Worker 覆盖 > 平台默认），
+	// 使单个 Worker 可单独配置而无需重启；不注入则心跳不带该字段，Worker 回退 worker.yml。
+	grpcHandler.SetLogAcqPolicyResolver(settingsSvc)
 	// 注入健康熔断站内信告警投递器（FR-459）：Worker 经心跳上报熔断时给平台管理员发站内信。
 	grpcHandler.SetHealthAlertNotifier(service.NewHealthAlertNotifier(db, notificationSvc))
 	// 反向隧道注册表（FR-281，见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，
@@ -996,20 +1003,6 @@ func main() {
 	if err := runControlPlaneServer(func() error { return r.Run(addr) }, botLoadSvcs.subscriptions.Close); err != nil {
 		slog.Error("启动服务器失败", "error", err)
 	}
-}
-
-func initLogger(cfg config.LogConfig) {
-	// 用动态 LevelVar 而非静态 Level，使日志级别可经平台设置运行时切换（FR-063 / ADR-015）。
-	config.LogLevelVar.Set(config.ParseLogLevel(cfg.Level))
-
-	opts := &slog.HandlerOptions{Level: config.LogLevelVar}
-	var handler slog.Handler
-	if cfg.Format == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
-	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
-	}
-	slog.SetDefault(slog.New(handler))
 }
 
 // runResetPassword 本机应急重置用户密码子命令（FR-333）。

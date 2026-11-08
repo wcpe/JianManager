@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	containertypes "github.com/docker/docker/api/types/container"
@@ -62,6 +63,7 @@ const (
 	// OrphanKindUnmanagedLiveRuntime PID 目录中未纳管的活进程对（wrapper 与 Java 均活、PID 文件有效，
 	// 但本 Worker 尚未纳管；FR-497③）。它不是孤儿——平台自有 wrapper 仍在托管服务器，只是控制连接
 	// 缺失；处置是**非破坏**的：归属复核通过即自动重连并登记 RUNNING（见 adopt_orphan.go）。
+	// 自动收养关闭（auto_adopt=false）时本类仍会被发现并告警，只是 Adopted 恒为 false（不接管）。
 	OrphanKindUnmanagedLiveRuntime OrphanKind = "unmanaged_live_runtime"
 )
 
@@ -111,14 +113,47 @@ type ManagedContainer struct {
 	LabelInstanceUUID string
 }
 
+// unmanagedLivePeer 一条「未纳管但存活」进程对的保护信息（本缺陷修复的降级依据）。
+//
+// 字段取自第 0 相的发现结果（`unmanagedLiveFinding`）：PIDs 固定为 [wrapperPID, javaPID]，
+// workDir 取自 PID 记录。命中判据与命中后的降级动作见 unmanagedLiveGuardHit / scanDirectOrphans。
+type unmanagedLivePeer struct {
+	instanceUUID string
+	wrapperPID   int
+	javaPID      int
+	workDir      string
+}
+
 // OrphanScanner 运行期周期孤儿扫描器（FR-456）。
 type OrphanScanner struct {
 	mgr      *Manager
 	interval time.Duration
 	policy   OrphanDisposePolicy
 	// autoAdopt 未纳管活进程自动收养开关（FR-497③，默认 DefaultOrphanAutoAdopt=true）。
-	// 只影响 ScanOnce 第 0 相；三态孤儿的 warn/auto 处置策略不受其影响。装配期写入、运行期读取。
+	// 关闭时第 0 相降级为「只发现 + 告警」，仍不收养（见 autoAdoptUnmanaged）。装配期写入、运行期读取。
+	//
+	// **本开关也是处置策略的闸门（本缺陷修复）**：关闭时不只关掉收养，「本轮发现到的未纳管活进程对」
+	// 在 dispose_policy=auto 下也一并降级为 warn、不做处置（见 scanDirectOrphans / warnDowngradedDirectOrphans）。
+	// 理由是语义而非偏好：`auto_adopt=false` 是运维明确表达「这些进程我来管」，自动处置若照旧执行，
+	// 等于用处置策略绕过运维的明示意图，最坏后果是杀掉运维正在手动管理的服务器。
+	// 已纳管实例与未能被本相发现的其它进程不受此闸门影响，仍照旧走 dispose_policy。
 	autoAdopt bool
+
+	// warnedUnmanaged 记录「开关关闭时已告警过」的未纳管进程对（key=实例 UUID，value=wrapper/java PID
+	// 签名），用于降噪：同一进程对只在首次出现或 PID 变化时告警 + 落审计，其余轮次静默。
+	// 仅由扫描 goroutine 读写，经 warnMu 保护（ScanOnce 是导出方法，可能与 Start 的 ticker 并发）。
+	warnedUnmanaged map[string]string
+	warnMu          sync.Mutex
+
+	// unmanagedLive 是本轮「未纳管 + 活」进程对的保护快照：第 0 相发现后写入，第二相（direct 孤儿）
+	// 据此把它们的处置**降级为 warn**（本缺陷修复，只有 autoAdopt=false 时填充，每轮整体替换）。
+	// 由 unmanagedMu 保护（ScanOnce 是导出方法，可能与 Start 的 ticker 并发）。
+	unmanagedLive []unmanagedLivePeer
+	// warnedDowngraded 记录「已落过降级留痕」的进程对（key=实例 UUID，value=wrapper/java PID 签名），
+	// 降噪口径与 warnedUnmanaged 相同：同一进程对只留一条 WARN + 一条审计，PID 变化才算新事件。
+	// 由 unmanagedMu 保护。
+	warnedDowngraded map[string]string
+	unmanagedMu      sync.Mutex
 
 	// 以下为可注入桩：nil=真实现，测试注入以免真枚举进程/真连 Docker。
 	listProcesses   func() ([]ScannedProcess, error)
@@ -159,8 +194,13 @@ func (s *OrphanScanner) SetAutoAdopt(enabled bool) {
 // Start 启动周期扫描 goroutine（随 ctx 取消而退出）。interval<=0 或 mgr 为空时不启动。
 //
 // 启动后**立即执行一轮**再进入 ticker（FR-497③）：「Worker 启动」窗口与新产生的未纳管活进程
-// 不能等到第一个周期才发现——main 在 RecoverDaemonInstances 之后启动本扫描器，故这一轮正好接在
-// 启动接管之后，既不与它重复拨号，又能在接管只告警（socket 瞬时不可达）后第一时间补齐收养。
+// 不能等到第一个周期才发现。
+//
+// 与启动接管的时序（本缺陷修复）：main 在 RecoverDaemonInstances 之后启动本扫描器，而
+// RecoverDaemonInstances 现只同步完成「快速首拨」——首拨失败的记录转后台重试，故本扫描器
+// 不会再被 ~127s 的重试阻塞（旧实现下一条不可达 PID 记录就把扫描器推迟 127s，N 条线性累加）。
+// 代价是接管重试可能与扫描并行，故第 0 相与 direct 相都要为「在飞接管」让路
+// （见 takeoverPendingHas / takeoverProtects），避免并发拨号与误判强杀。
 func (s *OrphanScanner) Start(ctx context.Context) {
 	if s == nil || s.mgr == nil || s.interval <= 0 {
 		return
@@ -188,7 +228,9 @@ func (s *OrphanScanner) Start(ctx context.Context) {
 //
 // 相位顺序（FR-497③）：第 0 相 autoAdoptUnmanaged 先跑——把本轮可收养的未纳管活进程纳入管理，
 // 使同一轮后续相位的「受管 PID / 工作目录」集合立刻包含它们，避免刚收养实例的 Java 在同轮被
-// direct 相误判为无主进程。
+// direct 相误判为无主进程。开关关闭时该相降级为「只发现 + 告警」（不收养，故不会改变受管集合），
+// 并把本轮发现到的进程对登记为**处置保护快照**：第二相据此把它们的 auto 处置降级为 warn
+// （`auto_adopt=false` 的意图是「不要动这些进程」，不是「放弃它们的保护」，见 scanDirectOrphans）。
 //
 // FR-471：第四相 scanForeignInRegisteredWorkdirs 与前三相共用同一轮进程枚举快照
 // （procs 只枚举一次），观测「已注册实例目录下的外来活进程」并写入 Manager 缓存供心跳上报。
@@ -216,16 +258,160 @@ func (s *OrphanScanner) ScanOnce() []OrphanFinding {
 }
 
 // autoAdoptUnmanaged 是扫描的第 0 相（FR-497③）：把 PID 目录中未纳管的活进程对自动收养为 RUNNING。
-// 开关关闭（autoAdopt=false）时不做任何事——不拨号、不登记、不落审计。
+//
+// 开关关闭（autoAdopt=false）时**只关闭收养动作**（归属复核 + 重连 + 登记），不关闭「发现 + 告警」这个
+// 观测能力——规格 §2.3/§4 的口径是「`false` 只关收养」「不收养（仍只告警）」。理由有两条：
+//  1. 开关是**收养的逃生口**，不是观测的逃生口。连发现一并关掉会让「磁盘在跑、平台记账 STOPPED、
+//     控制面完全沉默」这一缺陷形态原样复活，运维连排查线索都没有；
+//  2. 开关关闭恰恰是最需要告警的时候——有人主动关掉了自愈，运维更该知道还有多少未纳管进程在跑。
+//
+// 开关关闭时更不杀进程（护栏五.1「校验不过只告警，不得杀进程」同口径）：本相全程不调用
+// Start / killTree / signalTree，只读取 PID 记录与存活状态。
+//
+// 开关关闭时还会把本轮发现到的未纳管活进程对登记为**处置保护快照**（setUnmanagedLiveGuard），
+// 使第二相（direct 孤儿）的 auto 处置对它们降级为 warn——见 scanDirectOrphans 与
+// warnDowngradedDirectOrphans。开关开启时不登记（开关开启路径本就先把它们收养为受管，
+// 或由启动接管在飞集合 takeoverPending 让路），并清空任何残留快照，保证「行为完全不变」。
 func (s *OrphanScanner) autoAdoptUnmanaged() []OrphanFinding {
-	if !s.autoAdopt {
-		return nil
+	if s.autoAdopt {
+		s.resetUnmanagedLiveGuard()
+		adopted, findings := s.mgr.AdoptUnmanagedDaemonInstances()
+		if adopted > 0 {
+			slog.Info("运行期扫描已自动收养未纳管的活进程", "adopted", adopted)
+		}
+		return findings
 	}
-	adopted, findings := s.mgr.AdoptUnmanagedDaemonInstances()
-	if adopted > 0 {
-		slog.Info("运行期扫描已自动收养未纳管的活进程", "adopted", adopted)
-	}
+	findings := s.mgr.DiscoverUnmanagedDaemonInstances()
+	s.setUnmanagedLiveGuard(findings)
+	s.warnUnmanagedNotAdopted(findings)
 	return findings
+}
+
+// setUnmanagedLiveGuard 把本轮「未纳管 + 活」的发现结果登记为处置保护快照（整体替换）。
+// 只收 OrphanKindUnmanagedLiveRuntime；PIDs 不足两条时按 0 处理（上界防御，发现阶段恒为两条）。
+func (s *OrphanScanner) setUnmanagedLiveGuard(findings []OrphanFinding) {
+	if s == nil {
+		return
+	}
+	peers := make([]unmanagedLivePeer, 0, len(findings))
+	for _, f := range findings {
+		if f.Kind != OrphanKindUnmanagedLiveRuntime {
+			continue
+		}
+		wrapperPID, javaPID := 0, 0
+		if len(f.PIDs) >= 2 {
+			wrapperPID, javaPID = f.PIDs[0], f.PIDs[1]
+		}
+		peers = append(peers, unmanagedLivePeer{
+			instanceUUID: f.InstanceUUID,
+			wrapperPID:   wrapperPID,
+			javaPID:      javaPID,
+			workDir:      f.WorkDir,
+		})
+	}
+	s.unmanagedMu.Lock()
+	s.unmanagedLive = peers
+	s.unmanagedMu.Unlock()
+}
+
+// resetUnmanagedLiveGuard 清空处置保护快照与降级留痕去重表（开关开启时的每轮收尾）。
+//
+// 必须每轮清空：开关若在运行期由 false 翻回 true，上一轮的快照会让 direct 相继续放过真孤儿，
+// 使「auto_adopt=true 行为完全不变」失效。清空后继起名条目，等于让下一次降级重新留痕。
+func (s *OrphanScanner) resetUnmanagedLiveGuard() {
+	if s == nil {
+		return
+	}
+	s.unmanagedMu.Lock()
+	s.unmanagedLive = nil
+	s.warnedDowngraded = nil
+	s.unmanagedMu.Unlock()
+}
+
+// unmanagedLiveGuardHit 报告 pid / workDir 是否属本轮「未纳管 + 活」的进程对，命中则返回该对。
+//
+// 口径与 handleDirectOrphan 的 takeoverProtects 一致（PID 与工作目录双口径，任一命中）：
+//   - PID 口径覆盖「wrapper 的 cwd 与实例工作目录不一致」的真实形态（wrapper 由 Worker 拉起、
+//     不设 cmd.Dir，其 cwd 常不是 workDir，见 auto-adopt-orphans spec §5）；
+//   - workDir 口径覆盖「同目录下由该进程对派生出的子进程」（如 sh -c 中间层）。
+func (s *OrphanScanner) unmanagedLiveGuardHit(pid int, workDir string) (unmanagedLivePeer, bool) {
+	if s == nil {
+		return unmanagedLivePeer{}, false
+	}
+	s.unmanagedMu.Lock()
+	defer s.unmanagedMu.Unlock()
+	if len(s.unmanagedLive) == 0 {
+		return unmanagedLivePeer{}, false
+	}
+	cleanWorkDir := ""
+	if workDir != "" {
+		cleanWorkDir = filepath.Clean(workDir)
+	}
+	for _, peer := range s.unmanagedLive {
+		if pid > 0 && (pid == peer.wrapperPID || pid == peer.javaPID) {
+			return peer, true
+		}
+		if cleanWorkDir != "" && peer.workDir != "" && filepath.Clean(peer.workDir) == cleanWorkDir {
+			return peer, true
+		}
+	}
+	return unmanagedLivePeer{}, false
+}
+
+// warnUnmanagedNotAdopted 对「开关关闭时发现的未纳管活进程」告警 + 落审计，并按变化去重。
+//
+// 降噪口径与第四相（FR-471 scanForeignInRegisteredWorkdirs）同一手法：同一 (实例 UUID, wrapper/java PID
+// 签名) 只在本轮签名与上一轮**不同**时（首次出现，或 PID 变了＝确实是新事件）才 WARN + 落审计；签名未变
+// 的轮次完全静默。扫描默认 60s 一拍，故一个长期驻留的未纳管进程整段生命周期只产生**一条** WARN 与
+// **一条**审计，不会每轮刷屏，也不会把审计表撑大。
+//
+// 缓存整体替换（而非逐条更新）：进程消失后条目自然过期，下次再出现会当作新事件重新告警一次。
+//
+// 只告警、不处置——开关关闭时绝不杀进程（护栏五.1）。
+func (s *OrphanScanner) warnUnmanagedNotAdopted(findings []OrphanFinding) {
+	if s == nil || s.mgr == nil {
+		return
+	}
+	fresh := s.newlyWarnedUnmanaged(findings)
+	for _, f := range fresh {
+		// 发现阶段固定产出 [wrapperPID, javaPID]；此处仍做长度防御，避免上游形态变化时越界。
+		wrapperPID, javaPID := 0, 0
+		if len(f.PIDs) >= 2 {
+			wrapperPID, javaPID = f.PIDs[0], f.PIDs[1]
+		}
+		slog.Warn("运行期扫描发现未纳管的活进程（自动收养已关闭，只告警不接管）",
+			"instanceId", f.InstanceUUID, "wrapperPid", wrapperPID, "javaPid", javaPID, "workDir", f.WorkDir)
+		s.mgr.auditOrphan("orphan.scan_detected", f.InstanceUUID,
+			fmt.Sprintf(`{"kind":"unmanaged_live_runtime","instanceUuid":%q,"wrapperPid":%d,"javaPid":%d,"workDir":%q,"policy":"warn","reason":"auto_adopt_disabled"}`,
+				f.InstanceUUID, wrapperPID, javaPID, f.WorkDir),
+			true, "")
+	}
+}
+
+// newlyWarnedUnmanaged 返回本轮「签名相对上一轮发生变化」的发现，并把缓存整体替换为本轮观测。
+// 单个临界区内完成比对 + 替换，且**锁内不做日志与审计**（避免持锁做 I/O）。
+// 缓存整体替换（而非逐条更新）：进程消失后条目自然过期，下次再出现会当作新事件重新告警一次。
+func (s *OrphanScanner) newlyWarnedUnmanaged(findings []OrphanFinding) []OrphanFinding {
+	s.warnMu.Lock()
+	defer s.warnMu.Unlock()
+
+	seen := make(map[string]string, len(findings))
+	fresh := make([]OrphanFinding, 0, len(findings))
+	for _, f := range findings {
+		sig := pidSignature(f.PIDs)
+		seen[f.InstanceUUID] = sig
+		if prev, warned := s.warnedUnmanaged[f.InstanceUUID]; warned && prev == sig {
+			continue // 与上一轮同一进程对：本轮不重复告警、不重复审计
+		}
+		fresh = append(fresh, f)
+	}
+	s.warnedUnmanaged = seen
+	return fresh
+}
+
+// pidSignature 生成进程对的稳定签名（告警去重用）：PID 任一变化即视为新事件。
+func pidSignature(pids []int) string {
+	return fmt.Sprint(pids)
 }
 
 // scanWrapperGone 遍历 PID 目录，识别「wrapper 已死 / Java 仍活」的 daemon 孤儿。
@@ -282,6 +468,12 @@ func (s *OrphanScanner) handleWrapperGone(pidPath string, rec *daemon.PIDRecord,
 
 // scanDirectOrphans 枚举本机进程（procs 由 ScanOnce 统一枚举一次后传入），识别工作目录落在受管
 // 服务器根下、却无对应受管实例的无主进程。枚举失败仅告警降级（spec §5：全机进程枚举成本/权限风险）。
+//
+// **未纳管活进程对的处置降级（本缺陷修复）**：`dispose_policy=auto` + `auto_adopt=false` 时，第 0 相
+// 发现到的未纳管进程对（wrapper 与 Java 均活、PID 记录有效）也在受管服务器根下运行、且不在受管集合中，
+// 会被本相判为 direct 孤儿并在 auto 档 killTree——这等于用处置策略绕过 `auto_adopt=false` 表达的
+// 「这些进程我来管」，最坏后果是杀掉运维正在手动管理的服务器。故命中保护快照者一律降级为 warn：
+// 只落 WARN + 审计，不进入 handleDirectOrphan。开关开启时快照为空，本分支恒不命中（行为不变）。
 func (s *OrphanScanner) scanDirectOrphans(procs []ScannedProcess) []OrphanFinding {
 	if len(procs) == 0 {
 		return nil
@@ -290,6 +482,9 @@ func (s *OrphanScanner) scanDirectOrphans(procs []ScannedProcess) []OrphanFindin
 	managedPIDs, managedWorkDirs := s.mgr.managedInstanceRuntime()
 
 	var out []OrphanFinding
+	// 本轮被降级的未纳管进程对（key=实例 UUID）：wrapper 与 Java 各产出**一条**进程级 finding，
+	// 但整对只留**一条**降级痕迹——循环内只收集，循环后统一留痕（不在循环里加锁/写审计）。
+	downgraded := make(map[string]unmanagedLivePeer)
 	for _, proc := range procs {
 		if proc.PID <= 0 {
 			continue
@@ -304,6 +499,23 @@ func (s *OrphanScanner) scanDirectOrphans(procs []ScannedProcess) []OrphanFindin
 		if _, ok := managedWorkDirs[filepath.Clean(workDir)]; ok {
 			continue // 其工作目录有受管实例在跑
 		}
+		// 降级判据只在 auto 档生效：warn 档本就只告警不处置，无须（也不该）多落一条「降级」审计，
+		// 否则 dispose_policy=warn 的既有行为与审计形态会变（硬约束：warn 档行为不变）。
+		if s.policy == OrphanPolicyAuto {
+			if peer, guarded := s.unmanagedLiveGuardHit(proc.PID, workDir); guarded {
+				finding := OrphanFinding{
+					Kind:         OrphanKindDirect,
+					InstanceUUID: peer.instanceUUID,
+					WorkDir:      workDir,
+					PIDs:         []int{proc.PID},
+					Detail: fmt.Sprintf("无主进程在受管服务器目录运行，但属未纳管活进程对（auto_adopt=false，已降级为 warn 不处置）：%s",
+						truncateCmdline(proc.Cmdline)),
+				}
+				downgraded[peer.instanceUUID] = peer
+				out = append(out, finding)
+				continue
+			}
+		}
 		finding := OrphanFinding{
 			Kind:    OrphanKindDirect,
 			WorkDir: workDir,
@@ -313,7 +525,53 @@ func (s *OrphanScanner) scanDirectOrphans(procs []ScannedProcess) []OrphanFindin
 		s.handleDirectOrphan(&finding)
 		out = append(out, finding)
 	}
+	if len(downgraded) > 0 {
+		s.warnDowngradedDirectOrphans(downgraded)
+	}
 	return out
+}
+
+// warnDowngradedDirectOrphans 对「按 dispose_policy=auto 本应处置、但因 auto_adopt=false 降级为 warn」
+// 的未纳管进程对留痕：WARN + 审计，并按变化去重（同一进程对只留一条，PID 变化才算新事件）。
+//
+// 为什么必须留痕：降级是**有意的行为差异**，不是静默跳过。若不留痕，运维既看不到「配置的处置策略
+// 在这一类上没生效」，也无法解释「扫描报了 direct 孤儿却没杀」——那正是「策略静默失效」这类最危险
+// 的事故形态（与护栏五.1「不静默」同源）。审计复用既有 action，不新增审计输入面：
+// `orphan.scan_dispose_blocked`（success=false），detail 用 `reason=auto_adopt_disabled` 与
+// `effectivePolicy=warn` 与「归属复核不过 / 启动接管在飞」两种拦截区分开。
+func (s *OrphanScanner) warnDowngradedDirectOrphans(peers map[string]unmanagedLivePeer) {
+	if s == nil || s.mgr == nil {
+		return
+	}
+	for _, peer := range s.newlyDowngraded(peers) {
+		slog.Warn("运行期扫描：未纳管活进程对在 dispose_policy=auto 下本应处置，因 auto_adopt=false 降级为 warn，不做处置",
+			"instanceId", peer.instanceUUID, "wrapperPid", peer.wrapperPID, "javaPid", peer.javaPID, "workDir", peer.workDir)
+		s.mgr.auditOrphan("orphan.scan_dispose_blocked", peer.instanceUUID,
+			fmt.Sprintf(`{"kind":"direct_orphan","instanceUuid":%q,"workDir":%q,"wrapperPid":%d,"javaPid":%d,"policy":"auto","effectivePolicy":"warn","reason":"auto_adopt_disabled"}`,
+				peer.instanceUUID, peer.workDir, peer.wrapperPID, peer.javaPID),
+			false, "未纳管活进程对因 auto_adopt=false 降级为 warn，不做处置")
+	}
+}
+
+// newlyDowngraded 返回本轮「签名相对上一轮发生变化」的降级进程对（按 UUID 序，保证审计顺序可复现），
+// 并把去重表整体替换为本轮集合。单个临界区内完成比对 + 替换，**锁内不做日志与审计**（避免持锁做 I/O）。
+func (s *OrphanScanner) newlyDowngraded(peers map[string]unmanagedLivePeer) []unmanagedLivePeer {
+	s.unmanagedMu.Lock()
+	defer s.unmanagedMu.Unlock()
+
+	seen := make(map[string]string, len(peers))
+	fresh := make([]unmanagedLivePeer, 0, len(peers))
+	for uuid, peer := range peers {
+		sig := pidSignature([]int{peer.wrapperPID, peer.javaPID})
+		seen[uuid] = sig
+		if prev, warned := s.warnedDowngraded[uuid]; warned && prev == sig {
+			continue // 与上一轮同一进程对：本轮不重复告警、不重复审计
+		}
+		fresh = append(fresh, peer)
+	}
+	s.warnedDowngraded = seen
+	sort.Slice(fresh, func(i, j int) bool { return fresh[i].instanceUUID < fresh[j].instanceUUID })
+	return fresh
 }
 
 // handleDirectOrphan 按策略处置 direct 孤儿。
@@ -335,6 +593,20 @@ func (s *OrphanScanner) handleDirectOrphan(finding *OrphanFinding) {
 					fmt.Sprintf(`{"kind":"direct_orphan","workDir":%q,"pid":%d,"reason":"ownership_unverified"}`, finding.WorkDir, pid),
 					false, "direct 孤儿处置前置归属复核不通过，拒绝强杀")
 				slog.Warn("direct 孤儿处置前置归属复核不通过，只告警不杀",
+					"pid", pid, "workDir", finding.WorkDir)
+				continue
+			}
+			// 处置前最后一道并发复核（本缺陷修复）：受管集合在轮首取一次，若启动接管的后台重试在此
+			// 期间登记成功，集合就是陈旧视图。此时唯一正确的动作是放弃处置——宁可少杀一个真孤儿
+			// （下一轮 60s 后仍会抓到），也绝不因视图陈旧杀掉一台正在服务的服务器。
+			// 注意：本分支**不**置 killAttempted——它没有发起任何杀树尝试，不应参与「已处置」审计。
+			if s.mgr.takeoverProtects(pid, finding.WorkDir) {
+				blocked++
+				allDisposed = false
+				s.mgr.auditOrphan("orphan.scan_dispose_blocked", finding.InstanceUUID,
+					fmt.Sprintf(`{"kind":"direct_orphan","workDir":%q,"pid":%d,"reason":"startup_takeover_inflight"}`, finding.WorkDir, pid),
+					false, "该 PID 属启动接管在飞实例，扫描让路不处置")
+				slog.Info("direct 孤儿候选属启动接管在飞实例，本轮放弃处置（让路给启动接管）",
 					"pid", pid, "workDir", finding.WorkDir)
 				continue
 			}
@@ -583,6 +855,11 @@ func procInWorkDir(proc ScannedProcess, workDir string) bool {
 //     影响。PID 是精确身份，且处置前仍有 verifyProcessOwnership 归属复核兜底；重登记路径的 STOPPED
 //     实例 strategy 为 nil（无 PID），故此集合的宽口径不会复活上述漏报。
 //
+// **启动接管在飞集合（本缺陷修复）**：还需把「首拨失败、仍由启动接管后台重试」的记录并进来。
+// 它们尚未登记进 instances（拨号没通，无法登记），但磁盘上确有属于本平台的活进程对；若不保护，
+// auto 档会把在跑的服务器当无主进程强杀——这正是「扫描器提前启动」若不配并发隔离会引入的事故。
+// 保护范围取 PID（wrapper/Java）与工作目录双口径，与上表两集合的语义一致。
+//
 // 语义：运行期扫描是「Worker 内存表已丢失该实例（Worker 曾硬崩）」的兜底——实例仍登记且可能拥有
 // 活进程时，其进程属受管，交由各自生命周期操作（stop/start/kill）负责，扫描不插手。
 func (m *Manager) managedInstanceRuntime() (pids map[int]struct{}, workDirs map[string]struct{}) {
@@ -598,6 +875,17 @@ func (m *Manager) managedInstanceRuntime() (pids map[int]struct{}, workDirs map[
 			if pid := inst.strategy.GetPID(); pid > 0 {
 				pids[pid] = struct{}{}
 			}
+		}
+	}
+	for _, peer := range m.takeoverPending {
+		if peer.workDir != "" {
+			workDirs[filepath.Clean(peer.workDir)] = struct{}{}
+		}
+		if peer.wrapperPID > 0 {
+			pids[peer.wrapperPID] = struct{}{}
+		}
+		if peer.javaPID > 0 {
+			pids[peer.javaPID] = struct{}{}
 		}
 	}
 	return

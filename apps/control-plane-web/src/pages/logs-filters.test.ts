@@ -2,13 +2,12 @@ import { describe, it, expect } from 'vitest'
 import {
   logLevelStatus,
   timeRangeToParams,
-  buildExportParams,
+  normalizeLogScope,
+  logScopeKey,
   computeVirtualWindow,
   TIME_RANGE_PRESETS,
   LOG_VIEWS,
-  type LogExportScope,
 } from './logs-filters'
-import type { LogQueryParams } from '@/api/logs'
 
 describe('logLevelStatus', () => {
   it('maps error to danger and warn to warning (unified with alerts semantics)', () => {
@@ -28,9 +27,10 @@ describe('logLevelStatus', () => {
 })
 
 describe('LOG_VIEWS', () => {
-  it('defines the primary views plus the administrator-only full search and legacy view', () => {
-    // legacy 由 FR-482 引入：切换后存量日志走 Legacy 只读路径，需与 federated 视图分列。
-    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all', 'legacy'])
+  it('defines the primary views plus the administrator-only full search view', () => {
+    // legacy 已于 2026-10-29 随 CP logs 表下线并从取值域移除：留着它会让 ?view=legacy
+    // 深链落进一个不存在的数据源（不报错也不给数据，静默失效）。
+    expect(LOG_VIEWS).toEqual(['platform', 'node_instance', 'all'])
   })
 })
 
@@ -64,50 +64,23 @@ describe('timeRangeToParams', () => {
   })
 })
 
-describe('buildExportParams', () => {
-  const base: LogQueryParams = {
-    level: 'error',
-    keyword: 'boom',
-    page: 3,
-    pageSize: 50,
-    from: '2026-06-26T11:00:00.000Z',
-    to: '2026-06-26T12:00:00.000Z',
-  }
+describe('唯一规范化scope', () => {
+  const base = { view: 'node_instance' as const, level: 'error', keyword: '  boom  ', onlineOnly: true, nodeId: 7, instanceId: 11, from: '2026-06-26T11:00:00.000Z', to: '2026-06-26T12:00:00.000Z' }
 
-  it('currentPage keeps the exact page/pageSize so only the visible page exports', () => {
-    const out = buildExportParams(base, 'currentPage')
-    expect(out.page).toBe(3)
-    expect(out.pageSize).toBe(50)
-    expect(out.level).toBe('error')
+  it('保留所有实际条件并trim关键字，不携分页或聚合参数', () => {
+    const out = normalizeLogScope({ ...base, ...{ page: 3, cursor: 'opaque', viewId: 'old-view', groupBy: 'level' } })
+    expect(out).toEqual({ ...base, keyword: 'boom' })
+    expect(base.keyword).toBe('  boom  ')
   })
 
-  it('allMatched drops pagination so the whole filtered set exports', () => {
-    const out = buildExportParams(base, 'allMatched')
-    expect(out.page).toBeUndefined()
-    expect(out.pageSize).toBeUndefined()
-    // 但保留筛选条件（含时间）。
-    expect(out.level).toBe('error')
-    expect(out.from).toBe('2026-06-26T11:00:00.000Z')
-    expect(out.to).toBe('2026-06-26T12:00:00.000Z')
+  it('字段输入顺序与空白不改变指纹', () => {
+    expect(logScopeKey(base)).toBe(logScopeKey({ to: base.to, from: base.from, instanceId: 11, nodeId: 7, onlineOnly: true, keyword: 'boom', level: 'error', view: 'node_instance' }))
+    expect(normalizeLogScope({ keyword: '  ', onlineOnly: false })).toEqual({})
   })
 
-  it('range drops pagination but keeps the from/to window', () => {
-    const out = buildExportParams(base, 'range')
-    expect(out.page).toBeUndefined()
-    expect(out.pageSize).toBeUndefined()
-    expect(out.from).toBe('2026-06-26T11:00:00.000Z')
-    expect(out.to).toBe('2026-06-26T12:00:00.000Z')
-  })
-
-  it('does not mutate the input params', () => {
-    const snapshot = JSON.parse(JSON.stringify(base))
-    buildExportParams(base, 'allMatched')
-    expect(base).toEqual(snapshot)
-  })
-
-  it('treats an unknown scope like allMatched (safe default)', () => {
-    const out = buildExportParams(base, 'bogus' as LogExportScope)
-    expect(out.page).toBeUndefined()
+  it.each(['onlineOnly', 'from', 'to', 'nodeId', 'instanceId', 'keyword'])('%s变化必须产生新视图身份', (field) => {
+    const changed = { ...base, [field]: field === 'onlineOnly' ? false : field.endsWith('Id') ? 99 : 'changed' }
+    expect(logScopeKey(changed)).not.toBe(logScopeKey(base))
   })
 })
 

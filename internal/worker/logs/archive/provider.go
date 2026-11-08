@@ -36,7 +36,7 @@ func NewLocalArchive(root string) *LocalArchive {
 	return &LocalArchive{Root: root}
 }
 
-func (l *LocalArchive) Kind() string { return "local" }
+func (l *LocalArchive) Kind() string { return KindLocal }
 
 // PartitionDir 返回分区根目录（generation 隔离）。
 func (l *LocalArchive) PartitionDir(key PartitionKey) string {
@@ -144,6 +144,10 @@ func (l *LocalArchive) Delete(ctx context.Context, key PartitionKey, relPath str
 
 // 对象存储 Provider 种类。
 const (
+	// KindLocal 本地目录 Provider。单独成常量（而不是只在 Kind() 里写字面量）：
+	// 归档对象回收的装配处必须按 kind 复核「Catalog 记录的归档目的地」与
+	// 「此刻装配的 Provider」是否同一个，那里的比较对象就是这个常量。
+	KindLocal = "local"
 	KindS3    = "s3"
 	KindMinio = "minio"
 	KindMem   = "memory"

@@ -1,0 +1,355 @@
+#!/bin/sh
+# JianManager Worker Node 安装脚本（Linux/macOS，POSIX sh）。
+# 见 FR-223 / ADR-051（改写 ADR-020 的安装编排立场）：脚本退化为「取二进制 + 调 worker setup」。
+#
+# 两阶段（参考 GitHub Actions Runner「下载」与「config+run」分离）：
+#   [下载阶段] 取 Worker 二进制。安装目录（或 --binary 指向处）已有完整二进制则跳过下载。
+#   [上线阶段] 调 `worker --control-plane ... --token ...`，由 Worker 自己写 worker.yml +
+#              携 enrollment token 首注册 + 持久化身份 + 转入 run（worker 免配置自启 setup，FR-222）。
+#              本脚本不再自己写 worker.yml（配置归属回到 Worker 自身）。
+#   可选 --service 注册 systemd 服务常驻：服务 ExecStart 直接跑 worker（首次 setup 写配置 +
+#   持久化身份后，服务重启复用持久化配置，不再依赖 token）。
+#
+# 阶段控制：
+#   --download-only   只下载/准备二进制，不上线（下载与上线分两次执行时用）
+#   --skip-download   跳过下载，直接用安装目录已有二进制上线
+#   缺省              顺序两段：下载（按需）→ 上线
+#
+# 一键命令形态（面板「添加节点」生成、直接粘贴）：
+#   curl -fsSL <cp>/install-worker.sh | sh -s -- --control-plane <cp-grpc> --token <jmet_...> [--name N] [--service]
+#
+# enrollment token 一次性、限时；仅经命令行/环境变量传入，绝不写入磁盘（worker setup 同样不落盘）。
+# 注册成功后 CP 换发的 node_uuid/node_secret 由 Worker 持久化到 <data-dir>/etc/node-identity.json。
+set -eu
+
+# ---- 默认值 ----
+CONTROL_PLANE=""        # CP gRPC 地址 host:port（上线阶段必填）
+TOKEN="${JIANMANAGER_ENROLL_TOKEN:-}"  # enrollment token 明文（上线阶段必填；可经 env 传入避免出现在命令行，FR-277）
+NODE_NAME=""            # 节点名（可选，留空由 Worker/CP 预设名生效）
+BINARY=""               # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）
+# Worker 二进制下载地址（可选）。优先级见下载阶段注释。
+# 环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL 可指向镜像/内网基址（优先于下方默认 GitHub）。
+# 面板一键命令通常传入 CP-local worker-assets；脚本直接运行时回退 GitHub Releases
+# （ADR-036 产物命名：worker-<os>-<arch>[.exe]）。
+DOWNLOAD_URL="${JIANMANAGER_WORKER_DOWNLOAD_URL:-https://github.com/wcpe/JianManager/releases/latest/download}"
+INSTALL_DIR="/opt/jianmanager"   # 安装目录
+DATA_DIR=""             # 数据根（缺省 <install-dir>/data）
+WS_PORT="9102"          # Worker WS 终端端口
+INSTALL_SERVICE="0"     # 是否注册 systemd 服务
+SERVICE_SCOPE="system"  # systemd 档位：system（/etc/systemd/system，需 root）| user（~/.config/systemd/user，普通用户，FR-277/ADR-063）
+SERVICE_EXEC=""         # 可选 systemd ExecStart 路径（版本化部署指向 current）
+SERVICE_NAME_OVERRIDE="" # 可选 systemd 服务名（多 Worker 部署与编排脚本共用）
+DOWNLOAD_ONLY="0"       # 仅下载、不上线
+SKIP_DOWNLOAD="0"       # 跳过下载、直接上线
+
+usage() {
+    cat <<'USAGE'
+用法: install-worker.sh --control-plane <host:port> --token <jmet_...> [选项]
+
+上线阶段必填（--download-only 时可省）:
+  --control-plane <addr>   Control Plane gRPC 地址 host:port
+  --token <jmet_...>       一次性 enrollment token（面板「添加节点」生成）
+
+可选:
+  --name <node>            节点名（留空由 Worker/CP 预设名生效）
+  --binary <path>          本地 Worker 二进制路径（离线/内网，跳过下载）
+  --download-url <url>     Worker 下载基址或完整 URL（镜像/内网/CP-local；也可用
+                           环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL）
+  --install-dir <dir>      安装目录（默认 /opt/jianmanager）
+  --data-dir <dir>         数据根目录（默认 <install-dir>/data）
+  --ws-port <port>         Worker WS 端口（默认 9102）
+  --service                注册 systemd 服务（开机自启、常驻自连）
+  --service-scope <s>      systemd 档位：system（默认，需 root）| user（普通用户
+                           unit，需 linger 保断连常驻，脚本自动检查/尝试开启）
+  --service-exec <path>    systemd ExecStart 路径（版本化部署使用 current 内二进制）
+  --service-name <name>    systemd 服务名（默认根据安装目录推导）
+  --download-only          只下载/准备二进制，不上线
+  --skip-download          跳过下载，直接用安装目录已有二进制上线
+  -h, --help               显示本帮助
+
+取二进制优先级（未 --binary / --skip-download 时）:
+  1) 安装目录已有完整 jianmanager-worker
+  2) 当前工作目录下的 worker 候选文件（见脚本内 LOCAL_WORKER_CANDIDATES）
+  3) --download-url / JIANMANAGER_WORKER_DOWNLOAD_URL / GitHub Releases
+USAGE
+}
+
+# ---- 解析参数 ----
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --control-plane) CONTROL_PLANE="$2"; shift 2 ;;
+        --token)         TOKEN="$2"; shift 2 ;;
+        --name)          NODE_NAME="$2"; shift 2 ;;
+        --binary)        BINARY="$2"; shift 2 ;;
+        --download-url)  DOWNLOAD_URL="$2"; shift 2 ;;
+        --install-dir)   INSTALL_DIR="$2"; shift 2 ;;
+        --data-dir)      DATA_DIR="$2"; shift 2 ;;
+        --ws-port)       WS_PORT="$2"; shift 2 ;;
+        --service)       INSTALL_SERVICE="1"; shift ;;
+        --service-scope) SERVICE_SCOPE="$2"; shift 2 ;;
+        --service-exec)  SERVICE_EXEC="$2"; shift 2 ;;
+        --service-name)  SERVICE_NAME_OVERRIDE="$2"; shift 2 ;;
+        --download-only) DOWNLOAD_ONLY="1"; shift ;;
+        --skip-download) SKIP_DOWNLOAD="1"; shift ;;
+        -h|--help)       usage; exit 0 ;;
+        *) echo "未知参数: $1" >&2; usage; exit 1 ;;
+    esac
+done
+
+if [ "$DOWNLOAD_ONLY" = "1" ] && [ "$SKIP_DOWNLOAD" = "1" ]; then
+    echo "错误: --download-only 与 --skip-download 互斥" >&2; exit 1
+fi
+
+case "$SERVICE_SCOPE" in
+    system|user) : ;;
+    *) echo "错误: --service-scope 仅支持 system|user（收到: $SERVICE_SCOPE）" >&2; exit 1 ;;
+esac
+
+# 上线阶段才校验 CP/token（仅下载时无需）。
+if [ "$DOWNLOAD_ONLY" != "1" ]; then
+    if [ -z "$CONTROL_PLANE" ]; then
+        echo "错误: 缺少 --control-plane（上线阶段必填）" >&2; usage; exit 1
+    fi
+    if [ -z "$TOKEN" ]; then
+        echo "错误: 缺少 --token（enrollment token，上线阶段必填）" >&2; usage; exit 1
+    fi
+fi
+[ -n "$DATA_DIR" ] || DATA_DIR="$INSTALL_DIR/data"
+
+# ---- 探测平台 ----
+detect_os() {
+    os="$(uname -s)"
+    case "$os" in
+        Linux)  echo "linux" ;;
+        Darwin) echo "darwin" ;;
+        *) echo "错误: 不支持的操作系统 $os（请用 --binary 指定二进制）" >&2; exit 1 ;;
+    esac
+}
+detect_arch() {
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64|amd64) echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) echo "错误: 不支持的架构 $arch（请用 --binary 指定二进制）" >&2; exit 1 ;;
+    esac
+}
+
+OS="$(detect_os)"
+ARCH="$(detect_arch)"
+echo "[1/4] 平台: $OS/$ARCH，安装目录: $INSTALL_DIR，数据根: $DATA_DIR"
+
+mkdir -p "$INSTALL_DIR" "$DATA_DIR"
+BIN_PATH="$INSTALL_DIR/jianmanager-worker"
+
+# has_complete_binary 判定指定路径是否为「完整」Worker 二进制：存在 + 非空。
+# 命中即视为已就绪、可跳过下载（安装目录/工作目录已有文件时绝不联网）。
+# 可执行位在取用后统一 chmod，避免用户拷贝后未 +x 被误判为「不完整」。
+has_complete_binary() {
+    p="$1"
+    [ -f "$p" ] && [ -s "$p" ]
+}
+
+# find_local_worker_candidate 在「当前工作目录」与「安装目录」查找常见 Worker 文件名。
+# 用于 slim CP / 离线场景：运维把 release 里的 worker-linux-amd64 解到同目录再装节点。
+# 返回首个命中的绝对/相对路径；无命中打印空串。
+find_local_worker_candidate() {
+    # 顺序：安装目录内正式名 → 安装目录 ADR-036 名 → 当前目录同名 → 当前目录 ADR-036 名
+    set -- \
+        "$BIN_PATH" \
+        "$INSTALL_DIR/worker-${OS}-${ARCH}" \
+        "$INSTALL_DIR/jianmanager-worker" \
+        "./worker-${OS}-${ARCH}" \
+        "./jianmanager-worker" \
+        "./worker" \
+        "worker-${OS}-${ARCH}" \
+        "jianmanager-worker"
+    for c in "$@"; do
+        if has_complete_binary "$c"; then
+            # 规范化为可 cp 的路径
+            echo "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---- 下载阶段：取 Worker 二进制 ----
+# 优先级：--skip-download → --binary → 安装目录/工作目录已有完整文件 → 镜像/下载 URL。
+# 精简版 CP（不内嵌 Worker）场景下，本机已有 worker 时绝不会去下载。
+echo "[2/4] 准备 Worker 二进制"
+if [ "$SKIP_DOWNLOAD" = "1" ]; then
+    if has_complete_binary "$BIN_PATH"; then
+        echo "      --skip-download：已存在完整二进制，跳过下载 ($BIN_PATH)"
+    else
+        echo "错误: --skip-download 但安装目录无完整二进制: $BIN_PATH" >&2
+        echo "      请先 --download-only 下载，或用 --binary 指向已有二进制，或把 worker 放到安装目录。" >&2
+        exit 1
+    fi
+elif [ -n "$BINARY" ]; then
+    # 显式 --binary：若它本身就是目标路径且已完整，免拷贝。
+    [ -f "$BINARY" ] || { echo "错误: --binary 指定的文件不存在: $BINARY" >&2; exit 1; }
+    if [ "$BINARY" = "$BIN_PATH" ] && has_complete_binary "$BIN_PATH"; then
+        echo "      --binary 即安装路径且已完整，跳过拷贝 ($BIN_PATH)"
+    else
+        echo "      拷贝本地二进制: $BINARY -> $BIN_PATH"
+        cp -f "$BINARY" "$BIN_PATH"
+    fi
+elif has_complete_binary "$BIN_PATH"; then
+    # 安装目录已有完整二进制（前一次 --download-only 或手动拷贝）→ 跳过下载。
+    echo "      安装目录已有完整二进制，跳过下载 ($BIN_PATH)"
+elif local_src=$(find_local_worker_candidate); then
+    # 工作目录 / 安装目录下的 ADR-036 命名产物 → 拷入正式路径，仍不联网。
+    if [ "$local_src" = "$BIN_PATH" ]; then
+        echo "      已存在完整二进制，跳过下载 ($BIN_PATH)"
+    else
+        echo "      使用本机已有 Worker（不下载）: $local_src -> $BIN_PATH"
+        cp -f "$local_src" "$BIN_PATH"
+    fi
+elif [ -n "$DOWNLOAD_URL" ]; then
+    url="$DOWNLOAD_URL"
+    case "$url" in
+        *"{os}"*|*"{arch}"*) url="$(printf '%s' "$url" | sed "s/{os}/$OS/g; s/{arch}/$ARCH/g")" ;;
+    esac
+    # ADR-036 产物命名契约: <base>/worker-<os>-<arch>（os=GOOS、arch=GOARCH）。
+    # 若 --download-url 已指向具体产物文件或 CP-local worker-assets 端点则原样用。
+    case "$url" in
+        */worker-*|*/worker-assets/*/worker*) : ;;
+        */) url="${url}worker-${OS}-${ARCH}" ;;
+        *) url="${url}/worker-${OS}-${ARCH}" ;;
+    esac
+    echo "      本机无 Worker，从镜像/源下载: $url"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$BIN_PATH"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$BIN_PATH" "$url"
+    else
+        echo "错误: 需要 curl 或 wget 下载二进制" >&2; exit 1
+    fi
+else
+    echo "错误: 本机无 Worker，且未提供 --download-url / JIANMANAGER_WORKER_DOWNLOAD_URL" >&2
+    echo "      可将 worker-${OS}-${ARCH} 放到安装目录或当前目录，或用 --binary / 镜像基址。" >&2
+    exit 1
+fi
+chmod +x "$BIN_PATH"
+
+if [ "$DOWNLOAD_ONLY" = "1" ]; then
+    echo "[3/4] --download-only：二进制已就绪，跳过上线 ($BIN_PATH)"
+    echo "[4/4] 完成。上线请再跑: $BIN_PATH --control-plane <cp:9100> --token <jmet_...> [--name N]"
+    echo "      或经本脚本: install-worker.sh --skip-download --control-plane <cp> --token <jmet_...>"
+    exit 0
+fi
+
+# ---- 上线阶段：调 worker setup（传参/env），由 Worker 自配 + 注册 + run ----
+# Worker 免配置自启 setup（FR-222）：非 TTY 下从 --control-plane/--token/--name/--ws-port/
+# --data-dir + JIANMANAGER_* env 读，自己写 worker.yml + 注册 + 持久化身份 + 转 run。
+# 脚本据此把入参喂给 worker，不再自己写 worker.yml。token 仅经 env 传、绝不落盘。
+if [ "$INSTALL_SERVICE" = "1" ]; then
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "错误: 系统无 systemd（systemctl 不存在），无法 --service 注册服务" >&2; exit 1
+    fi
+    # 按档位选 unit 路径与 systemctl 形态（FR-277/ADR-063）。user 档面向纯普通用户：
+    # unit 进 $HOME、systemctl --user 管理，并强制 linger——不开 linger 的 user 服务
+    # 在 SSH 会话断开后会被 systemd 回收，「装成功但断连即死」比失败更糟，开不了就报错。
+    if [ "$SERVICE_SCOPE" = "user" ]; then
+        SYSCTL="systemctl --user"
+        UNIT_DIR="$HOME/.config/systemd/user"
+        WANTED_BY="default.target"
+        # SSH 非交互会话常缺 XDG_RUNTIME_DIR，user bus 定位靠它。
+        [ -n "${XDG_RUNTIME_DIR:-}" ] || XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        export XDG_RUNTIME_DIR
+        if command -v loginctl >/dev/null 2>&1; then
+            if [ "$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null)" != "yes" ]; then
+                if loginctl enable-linger "$(id -un)" 2>/dev/null; then
+                    echo "      已为用户 $(id -un) 开启 linger（断连后服务常驻）"
+                else
+                    echo "错误: 用户 $(id -un) 未开启 linger 且无权自开，user 档服务在 SSH 断开后会被杀。" >&2
+                    echo "      请让管理员执行一次: loginctl enable-linger $(id -un)  然后重试。" >&2
+                    exit 1
+                fi
+            fi
+        else
+            echo "警告: 无 loginctl，无法确认 linger 状态；若 SSH 断开后服务消失，请管理员开启 linger。" >&2
+        fi
+        mkdir -p "$UNIT_DIR"
+    else
+        if [ "$(id -u)" != "0" ]; then
+            echo "错误: --service-scope system 需要 root（写 /etc/systemd/system 与 systemctl）。" >&2
+            echo "      普通用户请改用 --service-scope user。" >&2
+            exit 1
+        fi
+        SYSCTL="systemctl"
+        UNIT_DIR="/etc/systemd/system"
+        WANTED_BY="multi-user.target"
+    fi
+    # systemd unit 名据安装目录派生（FR-282）：同机多 worker（各自不同 --install-dir）各占独立 unit、
+    # 互不覆盖。默认目录（basename=jianmanager，含 /opt/jianmanager 与 ~/jianmanager）保持
+    # jianmanager-worker 保向后兼容；其余取 basename 去 jianmanager- 前缀作后缀、非法字符归一为 -。
+    SERVICE_NAME="jianmanager-worker"
+    _dir_base=$(basename "$INSTALL_DIR")
+    if [ "$_dir_base" != "jianmanager" ]; then
+        _suffix=$(printf '%s' "$_dir_base" | sed -e 's/^jianmanager-\{0,1\}//' -e 's/[^A-Za-z0-9_-]/-/g')
+        [ -n "$_suffix" ] && SERVICE_NAME="jianmanager-worker-$_suffix"
+    fi
+    [ -z "$SERVICE_NAME_OVERRIDE" ] || SERVICE_NAME="$SERVICE_NAME_OVERRIDE"
+    case "$SERVICE_NAME" in
+        *[!A-Za-z0-9_.@-]*|"")
+            echo "错误: --service-name 仅支持字母、数字、.、_、@、-" >&2; exit 1 ;;
+    esac
+    UNIT_EXEC="$BIN_PATH"
+    if [ -n "$SERVICE_EXEC" ]; then
+        case "$SERVICE_EXEC" in
+            /*) : ;;
+            *) echo "错误: --service-exec 必须是绝对路径" >&2; exit 1 ;;
+        esac
+        [ -f "$SERVICE_EXEC" ] || { echo "错误: --service-exec 指向的文件不存在: $SERVICE_EXEC" >&2; exit 1; }
+        UNIT_EXEC="$SERVICE_EXEC"
+    fi
+    echo "[3/4] 注册 systemd 服务 $SERVICE_NAME（$SERVICE_SCOPE 档，ExecStart 跑 worker 自配 setup）"
+    UNIT="$UNIT_DIR/$SERVICE_NAME.service"
+    # 首次启动：worker 无配置 → 自启 setup，读环境里的 CP/token/节点名等完成写配置 + 注册 +
+    # 持久化身份 + 转 run。注册成功后落本地身份文件，后续重启 worker 判「已配置」直接 run、不再用 token。
+    # token 经服务进程环境注入（一次性），不写入任何配置文件。
+    SVC_ENV="Environment=JIANMANAGER_CONTROL_PLANE=$CONTROL_PLANE
+Environment=JIANMANAGER_ENROLL_TOKEN=$TOKEN
+Environment=JIANMANAGER_WS_PORT=$WS_PORT
+Environment=JIANMANAGER_DATA_DIR=$DATA_DIR"
+    [ -z "$NODE_NAME" ] || SVC_ENV="$SVC_ENV
+Environment=JIANMANAGER_NODE_NAME=$NODE_NAME"
+    cat > "$UNIT" <<UNIT_EOF
+[Unit]
+Description=JianManager Worker Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$INSTALL_DIR
+ExecStart=$UNIT_EXEC
+$SVC_ENV
+Restart=always
+RestartSec=5
+# KillMode=process：停止/重启时仅向主进程(Worker)发信号，不波及 cgroup 内经 setsid 脱离的 daemon
+# wrapper，使游戏服在 Worker 重启后存活、由恢复的 Worker 经 socket 重连接管（ADR-003、FR-341）
+KillMode=process
+
+[Install]
+WantedBy=$WANTED_BY
+UNIT_EOF
+    $SYSCTL daemon-reload
+    $SYSCTL enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+    $SYSCTL restart "$SERVICE_NAME"
+
+    if [ "$SERVICE_SCOPE" = "user" ]; then
+        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl --user -u $SERVICE_NAME -f"
+    else
+        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl -u $SERVICE_NAME -f"
+    fi
+else
+    echo "[3/4] 未指定 --service，前台调 worker 自配上线（Ctrl+C 退出；生产建议加 --service）"
+    echo "[4/4] 启动 Worker（首次自配 setup）..."
+    # 前台上线：CP/节点名/WS 端口经 flag 传，token 仅经 env（不出现在进程命令行参数里）。
+    set -- --control-plane "$CONTROL_PLANE" --ws-port "$WS_PORT" --data-dir "$DATA_DIR"
+    [ -z "$NODE_NAME" ] || set -- "$@" --name "$NODE_NAME"
+    cd "$INSTALL_DIR"
+    JIANMANAGER_ENROLL_TOKEN="$TOKEN" exec "$BIN_PATH" "$@"
+fi

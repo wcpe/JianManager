@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/platform/rollog"
 )
 
 // LogLevelVar 是 Control Plane 日志器的动态级别持有者（FR-063 / ADR-015）。
@@ -57,7 +58,6 @@ type Config struct {
 	Database    DatabaseConfig    `mapstructure:"database"`
 	JWT         JWTConfig         `mapstructure:"jwt"`
 	Log         LogConfig         `mapstructure:"log"`
-	LogStore    LogStoreConfig    `mapstructure:"log_store"`
 	FileVersion FileVersionConfig `mapstructure:"file_version"`
 	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
 	Enroll      EnrollConfig      `mapstructure:"enroll"`
@@ -270,46 +270,58 @@ func ValidateLogExportConfig(c LogExportConfig) error {
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
+
+	// 以下四项只看「进程自身日志文件」的轮转与保留（internal/platform/rollog），
+	// 与实例日志 / VictoriaLogs 无关。零值一律回退内置默认，老配置不需要改。
+	//
+	// 为何现在才暴露：此前它们硬编码为编译期常量（1 GiB / 5 份 / 无天数），
+	// 要改就得重新编译——运维面对「磁盘被日志吃满」时唯一手段是等下一个版本。
+
+	// MaxSizeMB 单个日志文件触发轮转的大小（MB）。
+	MaxSizeMB int `mapstructure:"max_size_mb"`
+	// MaxBackups 轮转档保留份数（含未压缩与已压缩）。负值 = 不限。
+	MaxBackups int `mapstructure:"max_backups"`
+	// MaxAgeDays 轮转档保留天数。负值 = 关闭按天保留。
+	MaxAgeDays int `mapstructure:"max_age_days"`
+	// Compress 是否对轮转档做 gzip。默认 true；显式写 false 才关。
+	//
+	// 用指针是因为布尔零值 false 与「未配置」无法区分：
+	// 只有 *bool 才能表达「没写就开、写了 false 才关」。
+	Compress *bool `mapstructure:"compress"`
 }
 
-// FR-481 日志入库切换与 Legacy 独立保留预算的配置默认值。
-// 默认关闭切换：旧行为不变，platform（control_plane）入库不受影响。
-const (
-	// DefaultLogCutoverEnabled 全局切换开关默认关闭。
-	DefaultLogCutoverEnabled = false
-	// DefaultLegacyRetentionDays Legacy 独立时间保留预算默认 30 天（刻意长于 platform 默认 14 天）。
-	DefaultLegacyRetentionDays = 30
-	// DefaultLegacyMaxTotalMB Legacy 独立总量预算默认不限（<=0 不按总量清理）。
-	DefaultLegacyMaxTotalMB = 0
-)
-
-// LogCutoverStoreConfig FR-481 日志入库切换与 Legacy 独立保留预算配置。
-// 嵌在 LogStoreConfig 下：与 platform 保留字段解耦，零值走 Default* 常量。
-type LogCutoverStoreConfig struct {
-	// Enabled 全局切换开关。true 时 instance/worker 来源停止新入 CP logs；platform 持久化不受影响。默认 false。
-	Enabled bool `mapstructure:"enabled"`
-	// LegacyRetentionDays Legacy 独立时间保留预算（天）。默认 30。<=0 且总量未配时不按时间清理（构造层见 NewLegacyLogReader）。
-	LegacyRetentionDays int `mapstructure:"legacy_retention_days"`
-	// LegacyMaxTotalMB Legacy 独立总量预算（MB）。默认 0（不限）。与 platform MaxTotalMB 无关。
-	LegacyMaxTotalMB int `mapstructure:"legacy_max_total_mb"`
+// Retention 把 YAML 里的日志保留旋钮转成 rollog 的保留策略。
+//
+// 零值语义（与 rollog 一致）：尺寸/份数/天数零值 → 回退内置默认；天数负值 → 关闭按天保留；
+// 份数负值 → 不限；Compress 未配置（nil）→ 开。
+func (c LogConfig) Retention() rollog.Retention {
+	r := rollog.DefaultRetention()
+	if c.MaxSizeMB > 0 {
+		r.MaxSizeBytes = int64(c.MaxSizeMB) << 20
+	}
+	if c.MaxBackups != 0 {
+		r.MaxBackups = c.MaxBackups
+	}
+	if c.MaxAgeDays != 0 {
+		r.MaxAgeDays = c.MaxAgeDays
+	}
+	if c.Compress != nil {
+		r.Compress = *c.Compress
+	}
+	return r
 }
 
-// LogStoreConfig 日志持久化、归档与保留配置（FR-049）。
-// 所有字段都有合理默认值，零配置即可工作；归档目录恒为数据根 var/log（不可配，保证便携自洽）。
-type LogStoreConfig struct {
-	// Enabled 是否启用日志入库与归档。默认 true。
-	Enabled bool `mapstructure:"enabled"`
-	// PersistPlatform 是否把平台（Control Plane）结构化日志一并落库。默认 true。
-	PersistPlatform bool `mapstructure:"persist_platform"`
-	// RetentionDays 保留天数：早于此天数的日志在每轮归档时滚动落盘并从表中清理。默认 14。<=0 表示不按时间清理。
-	RetentionDays int `mapstructure:"retention_days"`
-	// MaxTotalMB 表内日志总量上限（MB）：超出时从最旧开始归档落盘直到回落阈值内。默认 512。<=0 表示不按总量清理。
-	MaxTotalMB int `mapstructure:"max_total_mb"`
-	// ArchiveIntervalMinutes 后台归档/保留巡检周期（分钟）。默认 30。
-	ArchiveIntervalMinutes int `mapstructure:"archive_interval_minutes"`
-	// Cutover FR-481 切换开关与 Legacy 独立保留预算。零值 = 切换关闭 + Legacy 默认预算。
-	Cutover LogCutoverStoreConfig `mapstructure:"cutover"`
-}
+// 说明（2026-10-29）：这里曾有 LogStoreConfig / LogCutoverStoreConfig 与
+// DefaultLogCutover* 常量，用于配置「CP 本地 logs 表的入库、归档与保留」与
+// FR-481 的入库切换。整套已随 `logs` 表一并删除：
+//
+//   - 实例日志 → Worker 的受管 VictoriaLogs（ADR-094），CP 只做授权与联邦查询；
+//   - 平台（CP 自身）日志 → 自轮转文件（internal/platform/rollog），
+//     面板读尾部（/api/v1/diagnostics/log）。
+//
+// 注意不要把这套删除误读成「日志落盘完全不可配」：**存哪个文件**仍由进程
+// 按数据根自行决定（不暴露），而**留多少、存多久、压不压** 已在 LogConfig
+// 里开放（2026-11-07），因为那是磁盘保护的运维旋钮，不是部署布局。
 
 // FileVersionConfig 通用文件版本（FR-051）配置。
 type FileVersionConfig struct {
@@ -337,15 +349,6 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("jwt.ws_secret", "")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
-	v.SetDefault("log_store.enabled", true)
-	v.SetDefault("log_store.persist_platform", true)
-	v.SetDefault("log_store.retention_days", 14)
-	v.SetDefault("log_store.max_total_mb", 512)
-	v.SetDefault("log_store.archive_interval_minutes", 30)
-	// FR-481：切换默认关闭；Legacy 独立预算默认 30 天 / 不限总量。
-	v.SetDefault("log_store.cutover.enabled", DefaultLogCutoverEnabled)
-	v.SetDefault("log_store.cutover.legacy_retention_days", DefaultLegacyRetentionDays)
-	v.SetDefault("log_store.cutover.legacy_max_total_mb", DefaultLegacyMaxTotalMB)
 	// 文件版本（FR-051）：默认每文件保留 20 个版本，单文件 ≤5MiB 才快照。
 	v.SetDefault("file_version.max_per_file", 20)
 	v.SetDefault("file_version.max_size_bytes", 5*1024*1024)

@@ -40,6 +40,10 @@ func TestErrorCode_RoundTrip(t *testing.T) {
 		query.ErrCodeBudgetExceeded,
 		query.ErrCodeNotReady,
 		query.ErrCodeArchiveMissing,
+		// 归档对象已按保留期清除（FR-501）：与 MISSING 是不同的码，必须能过 wire。
+		// 若哪天有人只改了 query 侧的常量而忘了 proto，这里会转红（映射会退化成
+		// LOG_ERROR_UNSPECIFIED，前端把它当未知码、回落到原始英文 message）。
+		query.ErrCodeArchivePurged,
 		query.ErrCodeDuplicateUnresolved,
 		query.ErrCodeRecoveryRequired,
 		query.ErrCodeCancelled,

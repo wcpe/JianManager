@@ -50,14 +50,13 @@ embed-web:
 	mkdir -p internal/controlplane/embed/dist
 	cp -r apps/control-plane-web/dist/* internal/controlplane/embed/dist/
 
-# 同步 Worker 一键安装脚本内嵌副本（FR-080，见 ADR-020 §2 CP 静态托管）。
-# canonical 真源在 scripts/install-worker.{sh,ps1}（随发布分发 / 手动拷贝）；本目标把它们复制到
-# CP 内嵌目录，go:embed 在 go build 时拉入二进制，使 `curl <cp>/install-worker.sh` 可拉。
-# 内嵌副本已入库（保证 fresh checkout 即可 build），install_scripts_test 守护两者字节一致防漂移。
+# Worker 一键安装脚本（FR-080，见 ADR-020 §2 CP 静态托管）。
+#
+# **脚本只有一份**：scripts/embed/install-worker.{sh,ps1}，由同目录的 embed.go 直接 go:embed。
+# 没有「复制到别处再嵌入」这一步——那样改了真源忘同步会让内嵌的悄悄变成旧版。
+# 本目标保留为空，只是为了不让 `make build` / `make dist-prep` 的依赖链断掉。
 embed-install-scripts:
-	mkdir -p internal/controlplane/embed/install-scripts
-	cp scripts/install-worker.sh internal/controlplane/embed/install-scripts/install-worker.sh
-	cp scripts/install-worker.ps1 internal/controlplane/embed/install-scripts/install-worker.ps1
+	@echo "embed-install-scripts: 无需操作（脚本与嵌入同目录，只有一份）"
 
 # 构建客户端 OTA 更新器两件套 jar 并注入 CP 内嵌目录（FR-107 运营方接入指引，可选）。
 # 需 client-updater 可构建（toolchain 解析 Java 8）。不跑此目标时 CP 不捆绑更新器 jar，

@@ -1,6 +1,9 @@
 package query
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // 合并检索的任务规划（2026-10-08）：把 plan.Ranges 按 Owner 聚为
 // 执行任务——同组多 range 由 MergedRangeClient 一次粗筛 + 内存归因完成
@@ -17,31 +20,62 @@ type searchTask struct {
 	merged bool
 }
 
-// MergeableScope 返回该 range 可用于 `log_source_id:in(...)` 粗筛的来源集合；
+// SourceScope 是 range 在物理存储层（VictoriaLogs）的一条来源约束。
+//
+// **两种形态互斥，且绝不可互换**——这正是 2026-11-05 真机「日志页整页为空」的根因。
+//
+//   - 精确形态：LogSourceID 是**完整源 id**（`inst:318/file`），来自
+//     `PublishedProjection.SourceProjections` / `CoveredSourceGenerations`；
+//   - 命名空间形态：只有 Namespace（`inst:318`），来自 `PartitionKey.StorageNamespace`。
+//
+// VL 行上的 `log_source_id` 恒为完整源 id（`<TargetID>/<stream>`），**从不等于命名空间**。
+// 简化投递路径补建的 Catalog 记录（`ingest.ensureCatalogPartition`）只填命名空间、
+// 不填逐源投影，于是该 range 只能靠命名空间匹配；若此时拿命名空间去**精确**匹配
+// `log_source_id`，就会一条都查不到，而接口仍报 complete=true / EXHAUSTED / quality=exact
+// ——空结果被当成「完整且无数据」，比报错更难排查。
+//
+// 真机证据（inst:318，2026-11-04 单日窗，VL v1.52.0 直查）：
+//
+//	log_source_id:="inst:318"           -> 0 条
+//	log_source_id:="inst:318/file"      -> 615 条
+//	(log_source_id:="inst:318" OR log_source_id:"inst:318/"*) -> 615 条
+//
+// 因此命名空间形态必须渲染成「等值 OR 前缀」两条，而不是等值一条。
+type SourceScope struct {
+	// LogSourceID 非空 ⇒ 精确形态（此时 Namespace 为空）。
+	LogSourceID string
+	// Namespace 非空 ⇒ 命名空间形态：匹配 `<Namespace>` 本身与 `<Namespace>/...` 的全部源。
+	Namespace string
+}
+
+// MergeableScope 返回该 range 可用于合并粗筛的来源约束集合；
 // ok=false 表示该 range 在 LogsQL 里没有显式来源约束（单 range 查询退化为 `*`），
 // 不能进入合并组（粗筛会放大其可见范围）。
 //
 // 判定与 vlrange.selectorQuery 的来源段逐字对齐：
-//   - scoped：SourceProjections 里 generation 非空的 scope 的 LogSourceID；
-//   - 非 scoped 且 Projection 非空：CoveredSourceGenerations 的 LogSourceID；
-//   - covered 为空时回退 Key.StorageNamespace。
-func MergeableScope(rng AuthoritativeRange) ([]string, bool) {
-	var covered []string
+//   - scoped：SourceProjections 的 LogSourceID（**不按 ProjectionGenerations 过滤**）；
+//   - 非 scoped 且 Projection 非空：CoveredSourceGenerations 的 LogSourceID（精确形态）；
+//   - covered 为空时回退 Key.StorageNamespace（**命名空间形态**，见 SourceScope）。
+//
+// 曾经的 `len(scope.ProjectionGenerations) == 0 → 跳过` 已删（2026-11-05）：
+// 简化投递路径后 selectorQuery 不再渲染任何 `projection_generation` 谓词，
+// 于是「有无代次白名单」不再影响 range 的真实谓词。保留它会让合并粗筛回退到
+// 命名空间，而 range 谓词是精确源 id —— 两边不相等就破坏了合并的前提
+// （粗筛集合必须恰好覆盖该 range 的可读来源，不多不少）。
+func MergeableScope(rng AuthoritativeRange) ([]SourceScope, bool) {
+	var covered []SourceScope
 	proj := rng.Projection
 	scoped := proj != nil && len(proj.SourceProjections) > 0
 	if scoped {
 		for _, scope := range proj.SourceProjections {
-			if len(scope.ProjectionGenerations) == 0 {
-				continue
-			}
 			if scope.LogSourceID != "" {
-				covered = append(covered, scope.LogSourceID)
+				covered = append(covered, SourceScope{LogSourceID: scope.LogSourceID})
 			}
 		}
 	} else if proj != nil {
 		for _, src := range proj.CoveredSourceGenerations {
 			if src.LogSourceID != "" && src.SourceGeneration != "" {
-				covered = append(covered, src.LogSourceID)
+				covered = append(covered, SourceScope{LogSourceID: src.LogSourceID})
 			}
 		}
 	}
@@ -49,9 +83,37 @@ func MergeableScope(rng AuthoritativeRange) ([]string, bool) {
 		return covered, true
 	}
 	if rng.Key.StorageNamespace != "" {
-		return []string{rng.Key.StorageNamespace}, true
+		return []SourceScope{{Namespace: rng.Key.StorageNamespace}}, true
 	}
 	return nil, false
+}
+
+// SortKey 是来源约束的确定性排序键（只用于查询文本稳定，不参与匹配）。
+// 精确与命名空间两种形态按固定前缀区分，避免「等值 id」与「命名空间」排序交错
+// 导致同集合渲染出不同查询文本（会让日志/快照对照失真）。
+func (s SourceScope) SortKey() string {
+	if s.LogSourceID != "" {
+		return "0" + s.LogSourceID
+	}
+	return "1" + s.Namespace
+}
+
+// MatchesLogSourceID 报告某个完整的 `log_source_id` 是否落在该来源约束内。
+//
+// 这是 selectorQuery（LogsQL 侧）与 rangeMatchesEvent（内存归因侧）**共用的唯一判据**：
+// 两处各写一套正是这次故障的同源形态（一处改了另一处没改，就表现为「粗筛有行、归因全丢」
+// 或反过来的静默漏行）。
+//
+// 命名空间形态接受两种行：`<ns>` 本身（历史上 StorageNamespace 与 LogSourceID 相同的源）
+// 与 `<ns>/...`（实例/节点的每个流）。前缀必须以 `/` 收口，否则 `inst:3` 会匹配到 `inst:31`。
+func (s SourceScope) MatchesLogSourceID(logSourceID string) bool {
+	if s.LogSourceID != "" {
+		return logSourceID == s.LogSourceID
+	}
+	if s.Namespace == "" {
+		return false
+	}
+	return logSourceID == s.Namespace || strings.HasPrefix(logSourceID, s.Namespace+"/")
 }
 
 // groupTasksByOwner 把任务按 Owner 聚为批次（批内保持原顺序）。

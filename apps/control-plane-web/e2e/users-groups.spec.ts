@@ -62,6 +62,6 @@ test('FR-156 真机流: 停用账户被拒登录', async ({ page }) => {
   await page.getByLabel('用户名', { exact: true }).fill('operator')
   await page.getByLabel('密码', { exact: true }).fill('op123456')
   await page.getByRole('button', { name: '登录', exact: true }).click()
-  await expect(page.getByText(/用户名或密码错误|已停用|禁用/).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText(/用户名或密码错误|已停用|禁用/).first()).toBeVisible()
   await expect(page.locator('[data-page="overview"]')).toHaveCount(0)
 })

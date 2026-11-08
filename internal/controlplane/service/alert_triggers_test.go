@@ -138,12 +138,16 @@ func TestPlayerEventSubtype(t *testing.T) {
 	assert.Equal(t, "", playerEventSubtype("connected"))
 }
 
-// TestTriggers_LogKeywordUnaffectedByCutover 锁定 FR-473 §9「现有日志关键字告警在切换后仍有效、未被新数据路径绕过」。
+// TestTriggers_LogKeywordIndependentOfStorage 锁定一个**仍然成立且更重要**的不变量：
 //
-// 关键事实（设计层不变量）：关键字告警消费的是实例事件流（`InstanceEvent` stdout/stderr，见
-// consumeInstanceEvents），与 CP `logs` 表的入库切换（LogCutover）是两条独立路径——切换停止的是
-// 表内入库，不触及事件流。本测试把该不变量固化：无论 cutover 开关如何，关键字告警都必须照常触发。
-func TestTriggers_LogKeywordUnaffectedByCutover(t *testing.T) {
+// 关键字告警消费的是实例事件流（`InstanceEvent` stdout/stderr，见 consumeInstanceEvents），
+// 与“日志存在哪”完全无关。
+//
+// 历史（已失效的前提）：本测试原名 `...UnaffectedByCutover`，参数化验证「cutover 开关
+// 不影响告警」。2026-10-29 删除 CP `logs` 表与 LogCutover 后，那个变量已不存在；
+// 但**该不变量本身反而更关键**了——因为日志存储路径整个换掉了（CP 表 → VL 联邦），
+// 一旦告警意外取决于存储，这次改造就会静默停掉告警。故保留并改写为直接验证。
+func TestTriggers_LogKeywordIndependentOfStorage(t *testing.T) {
 	db := newTriggersTestDB(t)
 	tr := NewAlertEventTriggers(db, NewAlertDispatcher(db), nil, nil)
 	require.NoError(t, db.Create(&model.Instance{Name: "smp", UUID: "uuid-1"}).Error)
@@ -151,15 +155,9 @@ func TestTriggers_LogKeywordUnaffectedByCutover(t *testing.T) {
 		Name: "oom", Enabled: true, TriggerType: model.AlertTriggerLogKeyword, Keyword: "OutOfMemoryError",
 	}).Error)
 
-	cutover := NewPersistentLogCutover(db)
-	for _, enabled := range []bool{false, true} {
-		cutover.SetEnabled(enabled)
-		require.NoError(t, db.Exec("DELETE FROM alert_events").Error)
+	tr.handleLogLine(InstanceEvent{InstanceUUID: "uuid-1", Type: "stderr", Data: "java.lang.OutOfMemoryError: Java heap space"})
 
-		tr.handleLogLine(InstanceEvent{InstanceUUID: "uuid-1", Type: "stderr", Data: "java.lang.OutOfMemoryError: Java heap space"})
-
-		var count int64
-		db.Model(&model.AlertEvent{}).Count(&count)
-		require.EqualValues(t, 1, count, "cutover=%v 时关键字告警必须仍然触发（切换只停 CP logs 入库）", enabled)
-	}
+	var count int64
+	db.Model(&model.AlertEvent{}).Count(&count)
+	require.EqualValues(t, 1, count, "关键字告警必须照常触发（它消费事件流，与日志存储路径无关）")
 }

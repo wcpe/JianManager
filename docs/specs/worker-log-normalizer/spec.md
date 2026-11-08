@@ -1,6 +1,16 @@
 # 功能规格：Worker 日志 Multiline 与归一化（FR-475）
 
-> 状态：实现中（地基包 `internal/worker/logs/normalize` 已落地；**真机验收通过**——Multiline 5 行归并为 1 事件、跨午夜回拨、损坏编码完整性与半条事件恢复均以真 VL 核对，见 [`acceptance-real.md`](acceptance-real.md)）　·　关联 PRD：FR-475　·　依赖：FR-473/474
+> 状态：已交付@v0.24.0（Linux 范围；本轮生产 pipeline 逻辑事件有限默认/溢出守恒修复与已覆盖回归完成；既有 Multiline/字符集/时区真机证据见 [验收记录](acceptance-real.md)，Windows 运行时本轮不测、未认证）
+> 本次提交/功能修复验收不承诺性能、长稳或全部故障覆盖；已有验收及延期专项统一见 [收口范围与验收表](../worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)。　·　关联 PRD：FR-475　·　依赖：FR-473/474
+
+## 2026-10-22 生产逻辑事件边界修复契约
+
+- 单物理行 256KiB、每轮 4MiB 的读取界不能限制多行事件总缓存：连续合法 continuation 仍可在超时前累计成超大事件。生产 pipeline 必须在统一默认入口提供明确有限的 Multiline 字节/行数上限，Manager/Worker 装配消费同一入口，不另设冲突默认。
+- 生产唯一默认已落地：`pipeline.DefaultMultilineLimits()` 为 MaxBytes 1MiB / MaxLines 512；`pipeline.New` 只补零字段，保留显式非零限制与原 Timeout。独立 `normalize.New` 库零值“未设限制”语义不改；这不是对所有层统一重定义零值。
+- 溢出沿既有 `PARTIAL/TRUNCATED` 等显式状态封片承接，后续 continuation 不裸丢、不静默截正文，不另造事件 ID 算法。必须证明原文行序列/字节及源位置区间并集不变，区分事件数增加与源行丢失。
+- 单事件编码不满足 eventstore 约束时，存储层仍须自身在落盘前校验并保持失败状态机可读/可重开；不能只依靠上游默认界掩盖下游损坏。
+
+已取得真实文件反例红证：首轮 Poll 曾缓存约 3.93MB/31 行或 1201 行；补生产默认后 acquire+pipeline 包测退出码 0，核对完整原文重拼、源区间并集与规范 EventID 推导不变。既有 Normalizer 的 TRUNCATED 不丢正文，容量切分后的无头 continuation 尾片显式 PARTIAL，并带 `multiline_limit_continuation=true`。该具名守恒回归与最终完整 ingest/全 Go 回归结合，收口本轮 Linux 范围修复；不由“单行不超限”或整包总数推导全部逻辑事件场景已通过，Windows 运行时仍未认证。
 
 ## 1. 背景与目标
 
@@ -37,7 +47,7 @@
 
 ## 6. 风险 / 待定
 
-- FR-473 已冻结。**Multiline 真实采集与恢复验收已完成**（见状态行与 [`acceptance-real.md`](acceptance-real.md)）；**Windows 真机证据仍缺**。
+- FR-473 基线已冻结。既有 Multiline 真实采集与恢复历史记录保留于 [验收记录](acceptance-real.md)，本轮生产缓存默认与溢出守恒修复按已有反例及回归证据收口；本批 Windows 运行时未执行，不标通过。
   - Windows 就绪的部分语义已按字节级夹具覆盖（Windows 日志经 log4j2 `%n` 输出 **CRLF**）：**行终止符归一**——`\r` 视为行终止符而非正文，`normalize.FeedAt` 收口剥除单个行尾 `\r`，故 CRLF 与 LF 的同一逻辑内容产出相同 `message` 与 `canonical`，多行归并一致；回归见 `internal/worker/logs/normalize/crlf_test.go` 与 `internal/worker/logs/pipeline/crlf_line_ending_test.go`（含 record 位置**字节精确**与追加后游标对齐）。修复前 `\r` 会进入正文并改变 canonical（见 CHANGELOG [Unreleased]）。
   - **仍未覆盖**：Windows 上的真机采集/恢复行为（文件锁与改名语义、路径分隔符、服务与编码环境），须在 Windows 主机执行，本机 linux-amd64 无法替代。复验入口已入库：`go run ./scripts/acceptance-normalizer/`（Windows 用 `ACCEPT_LINE_ENDING=crlf` 指定 CRLF 夹具）。
 - 具体 VL tag、资产哈希和兼容矩阵由 FR-476 资产审批冻结。

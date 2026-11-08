@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   normalizeQQDiscoveredGroups,
+  normalizeQQDiscoveredGroupsPage,
   type QQDiscoveredGroup,
   type QQDiscoveredGroupList,
 } from './alerts'
@@ -42,5 +43,42 @@ describe('normalizeQQDiscoveredGroups', () => {
   it('半截信封（缺 items 字段）→ []，不退化成 undefined', () => {
     const truncated = { total: 3 } as unknown as QQDiscoveredGroupList
     expect(normalizeQQDiscoveredGroups(truncated)).toEqual([])
+  })
+})
+
+/**
+ * 归一化为「一页群 + 总数」（FR-495 只读观测区的计数）。
+ *
+ * 存在的理由：页面标题写的是「已发现群（N）」。后端默认 pageSize=20，直接用 items.length
+ * 当 N 会在群超过 20 个时静默少报——而那正好是运维判断「机器人到底进了多少群」的唯一数字。
+ */
+describe('normalizeQQDiscoveredGroupsPage', () => {
+  it('信封：items 与 total 各自取其值（total 可以大于本页条数）', () => {
+    expect(normalizeQQDiscoveredGroupsPage({ items: [GROUP], total: 25 })).toEqual({
+      items: [GROUP],
+      total: 25,
+    })
+  })
+
+  it('纯数组（无总数信息）：total 退化为条数，不谎报 0', () => {
+    expect(normalizeQQDiscoveredGroupsPage([GROUP, GROUP])).toEqual({
+      items: [GROUP, GROUP],
+      total: 2,
+    })
+  })
+
+  it('信封 total 缺失或小于条数：取条数（计数不得低于实际展示到的条数）', () => {
+    const noTotal = { items: [GROUP, GROUP] } as unknown as QQDiscoveredGroupList
+    expect(normalizeQQDiscoveredGroupsPage(noTotal).total).toBe(2)
+    expect(normalizeQQDiscoveredGroupsPage({ items: [GROUP, GROUP], total: 1 }).total).toBe(2)
+  })
+
+  it('空输入一律 0 条 0 总数', () => {
+    for (const input of [undefined, null, [], { items: [], total: 0 }]) {
+      expect(normalizeQQDiscoveredGroupsPage(input as QQDiscoveredGroupList | null | undefined)).toEqual({
+        items: [],
+        total: 0,
+      })
+    }
   })
 })

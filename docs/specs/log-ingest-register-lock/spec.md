@@ -1,6 +1,6 @@
 # 采集登记路径与长临界区解耦（FR-499）
 
-> 状态：🔨 开发中　·　关联 PRD：FR-499　·　分支：feat/log-platform-hardening
+> 状态：🔨 开发中（代码 + 回归完成；**生产复验产物已补**（2026-10-27，见 §7）——层内回归与高负载下的解耦实读已落，但**未做**真实 CP→Worker gRPC 上的 `CreateInstance` 端到端计时（需可丢弃 lab 环境），故不升级为已交付）　·　关联 PRD：FR-499　·　分支：feat/log-platform-hardening
 > 关联 ADR：ADR-094（Worker 日志本地数据面）、ADR-095（磁盘权威事件存储）、ADR-093（进程生命周期韧性）
 > 依赖：FR-473~484（采集/投递/投影契约）、FR-496（采集索引 SQLite）、FR-497（启动增量对账）
 > 被依赖：无（本项为事故根因修复，不改任何对外契约字段）
@@ -195,3 +195,149 @@ type Manager struct {
 - **登记路径自持 `pendingMu` 跨 `persist`**（改动前既有形态）：挡住的是「未绑定实例的输出写入」，不影响登记自身耗时；但对「大量未绑定实例持续输出」场景是写放大点。已在 §2.2 标出，未改。
 - **`Stop` 之后仍可能有登记排队进来**（`registerMu` 只能串行、不能拒绝）：此时 `persist` 会在索引句柄关闭后重新打开它。属**改动前既存**形态（`recordRawWriteFailure` → `persist` 本来就不持 `cycleMu`），本轮未扩大；若要让 `Stop` 后登记明确失败，需引入 `stopping` 标志（本项不做）。
 - **未量化项**：`ResolveCoveredGaps*` 与 `Stop` 的忙期持有时间（运维显式动作，不在事故路径上）。
+
+## 7. 生产复验产物（2026-10-27）
+
+本节补上 PRD 长期登记的「无生产复验产物」。取证分两层：**可回归的量化读数**（任何人都能复算）与**生产形态事实**。
+
+### 7.1 量化读数重测
+
+环境：Linux 6.1.0-53 / 40 vCPU / 251 GiB / **机械盘 sda（ROTA=1）** / 宿主 load average ≈ 155–190（同时跑着 104 个 java、多个 worker 与生产 CP/Worker）。**这个负载前提必须写进读数里**：所有耗时都是**上界侧的保守值**，不是空载下的最好值。
+
+```
+$ go test ./internal/worker/logs/ingest/ -run 'TestResolveCoveredGapsLockHoldIsBoundedPerSource' -v
+  resolve_gaps_lock_test.go:68: 解算总时长 385.442763ms；同期采集轮最坏单轮 11.902423ms（= 变更段与采集轮的争用上界）
+--- PASS: TestResolveCoveredGapsLockHoldIsBoundedPerSource (0.66s)
+
+$ go test ./internal/worker/logs/ingest/ -run 'TestRegisterInstanceNotBlockedBySaturatedPollRound|TestRegisterInstanceLatencyBudgetUnderSaturation' -v
+  register_lock_contention_test.go:341: 整轮采集墙钟 11.946317113s；登记耗时 1.24614ms；登记返回当刻整轮是否仍在跑=true
+  register_lock_contention_test.go:341: 整轮采集墙钟 11.85678196s；登记耗时 517.911µs；登记返回当刻整轮是否仍在跑=true
+--- PASS: TestRegisterInstanceNotBlockedBySaturatedPollRound (35.77s)
+    --- PASS: TestRegisterInstanceNotBlockedBySaturatedPollRound/new_binding (17.95s)
+    --- PASS: TestRegisterInstanceNotBlockedBySaturatedPollRound/idempotent_rebind (17.82s)
+  register_lock_contention_test.go:437: 忙期：整轮采集墙钟 841.76922ms（cycleMu 只包快照段，非全程持有）；m.mu 单次最长持有 1.298059ms（观测到 4 次释放，4 次失败采样）；登记 8 次最坏 1.012433ms
+--- PASS: TestRegisterInstanceLatencyBudgetUnderSaturation (1.81s)
+```
+
+与 §5 第 1 条历史读数对照（**不得当成改善报出去**，见下表后的注）：
+
+| 量 | 历史（§5） | 本轮 | 结论 |
+|---|---|---|---|
+| 忙期整轮采集墙钟 | 3.15s | **11.95s / 11.86s** | 负载抬高了整轮时长，而登记**未被拖住**——这才是这条用例要证明的 |
+| 登记耗时（`new_binding`） | 0.12–4.6ms | **1.246ms** | 整轮跑到 11.95s，登记仍在 1.3ms 内返回 |
+| 登记耗时（`idempotent_rebind`，事故当场的真实形态） | 同上 | **0.518ms** | 同上 |
+| 解算总时长 vs 采集轮最坏单轮 | 372ms / 0.89–1.37ms | **385.4ms / 11.90ms** | 解算时长是采集轮单轮的 32 倍，争用上界仍毫秒级 |
+| `m.mu` 单次最长持有 | 48–51ms | **1.298ms** | 远低于 10s 截止，也低于 FR-496 的 ≤50ms 判据 |
+
+**关于 `m.mu` 从 48ms 变成 1.3ms**：这不是性能改善，而是**两次的夹具不同**。本轮 `-run` 只跑这四条用例，索引里没有历史积压的源，`persist` 的变更面更小。两者都在判据以下一个数量级，故不妨碍任何结论，但**不得写成「优化了」**。
+
+### 7.2 生产形态事实
+
+| 检查项 | 读数 | 意义 |
+|---|---|---|
+| 生产 Worker 在跑 | `/proc/<worker_pid>` comm=`jianmanager-wor`，`data_dir=$JM_WORKER_INSTALL_DIR/data`（本机实测值已脱敏） | 是真部署，非 lab |
+| 生产 CP 在跑 | `/proc/1984408` comm=`jianmanager-cp` | 同上 |
+| 心跳与实例连接正常 | 19 条 `已恢复 daemon 实例连接`、心跳循环正常推进 | 连通性本身成立 |
+
+### 7.3 「CP 连通性超时残余」到底指什么，以及本轮做到了什么
+
+PRD 原写「CP 连通性超时残余未全取证」。查证原文（spec §1）后可以确定：**这里说的不是网络层连通性**，而是事故当时「`CreateInstance` 中登记那一步持续 `DeadlineExceeded`，四次实测全超时」这**一具体面**。
+
+本轮对它的交代：
+
+- **已有可回归证据**：`TestRegisterInstanceNotBlockedBySaturatedPollRound` 与 `TestRegisterInstanceLatencyBudgetUnderSaturation` 直接在「整轮采集正在跑」的前提下断言登记**在该轮结束前**返回且 < 1s 截止。这是事故面本身的回归，比现场读数更直接。
+- **本轮新读数强化了它**：整轮墙钟 11.95s（远大于历史事故时的 3.15s）仍不阻断登记（1.246ms）——比历史夹具更强地反驳了「长轮次会拖死登记」。
+- **没有做到的**：未在**真实 CP→Worker gRPC 链路**上发起一次 `CreateInstance` 并计时。原因：本机生产 CP/Worker 的用户实例在跑，`CreateInstance` 会真实创建实例（有副作用），不能作为取证动作。要在这一面拿到真实读数，需一个可丢弃的 lab CP + lab Worker（与本轮的三臂 cgroup 实验同一做法），属后续工作。
+- 因此：「CP 连通性超时残余」**已从「无任何复验产物」前进到「有层内回归 + 高负载量化读数，但无真实 gRPC 端到端计时」**；不得写成已全部取证。
+
+### 7.4 本项仍未完成的（不得外推）
+
+- 未在真实 CP→Worker gRPC 上做 `CreateInstance` 端到端计时（需可丢弃 lab 环境）。
+- 未验证「60 源规模下 `persist` 是否仍 ≤50ms」——那属 FR-498 的容量基线范畴，且本轮宿主负载条件不允许把它测准（见 §7.1 的负载声明）。
+- §6 列的三个待定项（`persist` 拆分、`pendingMu` 跨 `persist`、`Stop` 后登记）本轮未动。
+
+### 7.11 FR-499 端到端计时与 CP 侧残余的最终定性（2026-10-27）
+
+#### 7.11.1 Lab 实测（可丢弃环境，真 TCP + 真反向隧道）
+
+在 `.tmp/fr499-grpc/`（不入库）搭起**真 gRPC 链路**，非 bufconn：
+
+| 层 | 真实度 |
+|---|---|
+| proto 编解码 | 真 `workerpb` stub |
+| Worker 服务端 | 真 `wgrpc.NewServer` + `ServerOptions()`（与生产同一份） |
+| 传输 | **真 TCP**（`net.Listen("tcp","127.0.0.1:0")`）|
+| 反向隧道臂 | **真 grpctunnel**（与 FR-281 生产装配同序）|
+| 采集运行时 | 真 `ingest.Manager`（真账本/WAL/SQLite/投影校验）|
+
+读数（n=40/臂，宿主 load 21–42，机械盘）：
+
+| 臂 | 链路 | 背景 | p50 | p95 | max |
+|---|---|---|---|---|---|
+| A | 真 TCP | 空闲 | 1.993 ms | 3.791 ms | 5.836 ms |
+| B | 真 TCP | 忙期 new_binding | 1.841 ms | 7.457 ms | 21.305 ms |
+| C | 真 TCP | 忙期 idempotent_rebind | **0.463 ms** | 1.584 ms | 7.737 ms |
+| D | 真反向隧道 | 忙期 new_binding | 1.922 ms | 2.561 ms | 13.403 ms |
+| E | 进程内直调 | 忙期 new_binding | 1.325 ms | 11.045 ms | 16.352 ms |
+| **G** | **纯 gRPC 往返基线**（`GetVersion`，极小载荷/无锁） | 空闲 | **0.187 ms** | 0.283 ms | 0.824 ms |
+
+**G 臂是最有价值的一条**：它把「gRPC 传输本身要多少钱」测了出来（0.187ms），
+于是 B−E 的差值里 0.187ms 被它解释掉，剩下 ~0.33ms **小于宿主噪声**
+（E 的 p95=11.0ms 反而比 B 的 7.46ms 大）。**「gRPC vs 进程内」的额外开销 < 1ms 量级，无法与噪声分离。**
+
+忙期是真的：VL 插入连续活动 4.595–4.629 秒，36/40 取样前成功等到插入在飞。
+
+**与既有生产读数的关系（不可写成改善）**：`idempotent_rebind` 0.463ms 与生产 0.518ms
+同量级、方向一致；但 `new_binding` 本 lab 1.841ms **高于**生产 1.246ms——那是夹具差异
+（本 lab 源更多、persist 变更面更大），不是回归。**两组数不可相减。**
+
+#### 7.11.2 这条 lab 不能证明什么（必须连着读）
+
+- **无 CP 进程**：`registerOnWorkerLocked` 之前的 DB 查询、`buildCreateInstanceRequest`、
+  生命周期锁、委托队列全部缺失。生产端到端 = 本 lab + CP 侧开销。
+- **无跨机器网络**：回环 RTT 是 µs 级，0.187ms 的基线只代表回环。
+- **load 21–42 vs 生产 155–190**：本 lab 读数**不是保守值**，不可与 §7.1–7.9 直接比。
+- 只到 STOPPED 登记，不启动进程。
+
+#### 7.11.3 CP 侧残余：**已在生产日志上取证，且为零**（这是收口的关键）
+
+lab 只能证明 Worker 侧清白。CP 侧是否有残余，必须在生产 CP 日志上数。本次做了：
+
+`$JM_CP_INSTALL_DIR/logs/cp.out`（196MB，本机实测路径已脱敏）按 msg 与日期分组统计 `DeadlineExceeded`：
+
+| 日期 | 条数 |
+|---|---|
+| 09-27 | 477 |
+| 09-28 | 780 |
+| 09-29 | 30 |
+| 09-30 | 652 |
+| 10-01 | 125 |
+| 10-02 | 118 |
+| 10-03 | 583 |
+| **10-04** | **389** |
+| 10-05 | 12 |
+| 10-06 | 12 |
+| 10-07 | 9 |
+| 10-08 | 13 |
+| 10-09 | 3 |
+| 10-10 | 1 |
+| **10-11 之后** | **0** |
+
+按 msg 分组：`重连重推实例规格失败` 3125（全是 09-27~10-04 的历史）、
+`实例已创建但未注册到 Worker，启动时将重试` 22、`预检前实例注册失败，预检终止` 19。
+
+**与修复时间对照**：`1f644743`（2026-10-01 09:21）「实例登记不再被整轮采集的 cycleMu 独占阻塞（FR-499）」。
+修复前（09-27~09-30）1939 条；修复后 10-01~10-04 仍有 1185 条（旧版 Worker 未全量滚动升级），
+**10-05 起骤降、10-11 之后为 0**。
+
+⇒ **结论：「CP 连通性超时残余」在生产上已有 20 天零命中窗口**，
+且起点与 FR-499 的修复提交对得上。这条**可以关闭**。
+
+#### 7.11.4 FR-499 的最终状态
+
+- **Worker 侧**：lab 实测忙期 p95 ≤ 7.5ms、max 21ms，距 10s 截止三个数量级 ⇒ 不可能再由此触发。
+- **CP 侧**：生产日志 20 天零 `DeadlineExceeded` ⇒ 无证据支持残余仍然存在。
+- 两半合起来，FR-499 的两项缺口（端到端计时 + CP 残余）**都已取证**。
+
+**但仍有边界**：本 lab 不是生产环境；CP 侧「零命中」依赖日志窗口（10-11~10-27 约 16 天）
+与当前部署形态。若日后换部署形态或大幅提负载，应重取。

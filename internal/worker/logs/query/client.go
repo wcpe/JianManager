@@ -11,6 +11,9 @@ import (
 // Service 必须映射为 LOG_UNSUPPORTED，不得返回空完整结果。
 var ErrRangeClientUnimplemented = errors.New("query: range client unimplemented")
 
+// ErrRangeQueryBudget 表示物理查询文本不能在批准引擎硬界内安全表达。
+var ErrRangeQueryBudget = errors.New("query: physical query text budget exceeded")
+
 // RangeQuery 是对单个 AuthoritativeRange 的执行参数。
 type RangeQuery struct {
 	RequestID   string
@@ -83,6 +86,31 @@ type FacetsRangeClient interface {
 	Facets(ctx context.Context, rng AuthoritativeRange, q RangeQuery, dimensions []string, limit uint32) (RangeFacetsResult, error)
 }
 
+// StreamsRangeClient 扩展 stream 枚举与统计。
+//
+// # 「stream」在这里指什么（先读这段再用）
+//
+// 指 VictoriaLogs 的 **stream 概念**：入库时按「流标签集合」建立的索引。
+// 我们的行上流标签只有 `log_source_id` 与 `stream` 两个（实测
+// `stream_field_names` 恒为这两项），所以本接口的粒度是「(源, 流) 二元组」。
+//
+// **不是**「窗内出现过的字段全集」——那是 FieldsRangeClient（`/field_names`）。
+// 两者名字相近、语义完全不同，别抓错。
+//
+// 实现必须读取同一 authoritative range（用 range 的 selector 约束作用域），
+// 不得从物理副本集合自行拼接。
+type StreamsRangeClient interface {
+	// Streams 返回该 range 内的 stream 集合与条数。
+	//
+	// Complete=false 表示条数不可信（上游截断）；
+	// 调用方不得把 Hits=0 当作「该流没有数据」。
+	Streams(ctx context.Context, rng AuthoritativeRange, q RangeQuery) (RangeStreamsResult, error)
+	// StreamFieldNames 返回 stream 的标签维度名。
+	StreamFieldNames(ctx context.Context, rng AuthoritativeRange, q RangeQuery) (StreamFieldNamesResult, error)
+	// StreamFieldValues 返回某 stream 标签维度的取值分布。
+	StreamFieldValues(ctx context.Context, rng AuthoritativeRange, q RangeQuery, field string) (RangeStreamFieldValuesResult, error)
+}
+
 // FollowLiveRangeClient 提供与固定 View 分离的实时尾流语义。
 type FollowLiveRangeClient interface {
 	FollowLive(ctx context.Context, rng AuthoritativeRange, q RangeQuery) (RangeResult, error)
@@ -118,6 +146,42 @@ type RangeFacetsResult struct {
 	Bytes           uint64
 	CoverageReasons []string
 	Truncated       bool
+}
+
+// StreamValue 是一条 stream（粒度：源 + 流名）与其在窗内的条数。
+type StreamValue struct {
+	// LogSourceID 与 Stream 已从 VL 原始串拆出；拆不出时为空（不猜测）。
+	LogSourceID string `json:"log_source_id"`
+	Stream      string `json:"stream"`
+	// Raw 是 VL 原始 stream 串，无损保留以应对标签值含特殊字符的形态。
+	Raw string `json:"raw,omitempty"`
+	// Hits 在 Complete=true 时是精确条数。
+	Hits uint64 `json:"hits"`
+}
+
+// RangeStreamsResult 是单 range 的 stream 枚举结果。
+//
+// Complete=false 表示条数不可信（上游截断）：调用方不得把 Hits=0 当断言。
+type RangeStreamsResult struct {
+	Streams         []StreamValue
+	Bytes           uint64
+	CoverageReasons []string
+	Complete        bool
+}
+
+// StreamFieldNamesResult 是单 range 的 stream 标签维度名。
+type StreamFieldNamesResult struct {
+	Fields          []string
+	Bytes           uint64
+	CoverageReasons []string
+}
+
+// RangeStreamFieldValuesResult 是单 range 的 stream 标签维度取值分布。
+type RangeStreamFieldValuesResult struct {
+	Values          []FacetValue
+	Bytes           uint64
+	CoverageReasons []string
+	Complete        bool
 }
 
 // StatsPoint 对应 LogStatsPoint；AVG 以 sum/count 二次聚合。

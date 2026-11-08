@@ -22,6 +22,10 @@ type pr61FederationPB struct {
 
 func (p *pr61FederationPB) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest, opts ...grpc.CallOption) (*workerpb.LogSearchResponse, error) {
 	p.calls++
+	// 对齐真实 Worker：首屏自动建出的本地视图也必须随 PB 返回。
+	if p.response != nil && p.response.View == nil {
+		p.response.View = &workerpb.LogQueryViewRef{ViewId: "pr61-worker-view"}
+	}
 	return p.response, nil
 }
 func TestPR61FederationGapProtoToHTTPAndCache(t *testing.T) {

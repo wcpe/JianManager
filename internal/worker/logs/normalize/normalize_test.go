@@ -350,3 +350,267 @@ func TestProcessLinesStats(t *testing.T) {
 	require.NotContains(t, levels, "WARNING")
 	require.Less(t, res.Stats.EventCount, res.Stats.LineCount)
 }
+
+// TestBungeeClockOnlyLineGetsDeterministicEventTime 锁定 BungeeCord 形态的解析与时间确定性。
+//
+// 2026-10-20 真机验收根因：BungeeCord 写的是 `18:12:59 [INFO] body` —— 时刻**不带方括号**，
+// 而当时三条 Java 形态正则都要求 `[]` 包住时刻，于是该行匹配不到任何时间形态：
+// hasTime=false ⇒ EventTimeUTC 留空 ⇒ 落 normalizeCanonicalEvent 回退到 IngestTimeUTC（采集时刻）
+// ⇒ 同一行每次重新导入都得到不同的 event_time_utc ⇒ CanonicalContentHash 不同；而 EventID
+// 只由「来源+代次+区间」决定、不含内容 ⇒ 同一 event_id 多哈希、且「同区间等长」不可裁定
+// ⇒ 每次启动对账重新裁定并累计 IdentityConflicts ⇒ ConflictCount>0 ⇒ 查询降级 + 禁用导出。
+// 生产实测：inst:318 的 eventstore 13.0 万条里只有 6.4 万个唯一 event_id（6.4 万个有多份副本）。
+//
+// 判据：同一行在**同一 base** 下必须解析出确定的事件时间（= base 当日 + 行内时刻），
+// 且必须带出级别；这样事件时间不再依赖「何时被采集」。
+//
+// 转红方式：移除 bungeeTimeLevelRe 分支，本用例第一处 require.NotEmpty 立即转红。
+func TestBungeeClockOnlyLineGetsDeterministicEventTime(t *testing.T) {
+	opts := testOpts("stdout")
+	opts.BaseTime = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	n := New(opts)
+
+	// 下一条带时刻的行闭合它。
+	require.Empty(t, n.Feed("18:12:59 [INFO] Using mbed TLS based native cipher."))
+	out := n.Feed("18:13:00 [INFO] next line")
+	require.Len(t, out, 1)
+
+	ev := out[0]
+	require.NotEmpty(t, ev.EventTimeUTC,
+		"BungeeCord 形态必须解析出确定事件时间，不得留空回落采集时刻")
+	require.Equal(t, "2026-10-15T18:12:59Z", ev.EventTimeUTC,
+		"事件时间必须由 base 的当日 + 行内时刻决定，与采集时刻无关")
+	require.Equal(t, "INFO", ev.Level, "级别必须从 [INFO] 正确带出")
+	require.Contains(t, ev.Message, "Using mbed TLS")
+
+	// 同一个 base 下重复解析同一行：时间与哈希必须完全一致（这正是重导不漂移的前提）。
+	n2 := New(opts)
+	require.Empty(t, n2.Feed("18:12:59 [INFO] Using mbed TLS based native cipher."))
+	out2 := n2.Feed("18:13:00 [INFO] next line")
+	require.Len(t, out2, 1)
+	require.Equal(t, ev.EventTimeUTC, out2[0].EventTimeUTC)
+	require.Equal(t, ev.CanonicalHash, out2[0].CanonicalHash,
+		"同一行在确定锚点下必须得到同一规范哈希（否则重导必然产生身份冲突）")
+}
+
+// driftTestBase 是新形态用例的固定锚点：取正午，使 18:12:59 一类时刻离 base 不足 12h，
+// 不触发 applyClock 的跨午夜回拨——只考察「时刻/日期是否被解析出来」，不考察跨日猜测。
+var driftTestBase = time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+
+type timeFormCase struct {
+	name    string
+	line    string
+	level   string
+	thread  string
+	body    string
+	wantUTC string
+}
+
+// newTimeFormCases 覆盖本次新增的三族形态的样例（毫秒 clock / 毫秒方括号 / 裸日期）。
+//
+// 每一行的共同判据：必须解析出**确定**事件时间。缺任一条规则时这些行 hasTime=false
+// ⇒ EventTimeUTC 留空 ⇒ ingest 的 normalizeCanonicalEvent 回退 IngestTimeUTC（采集时刻）
+// ⇒ 同一行每次重导得到不同哈希，而 EventID 不含内容 ⇒ 同一 event_id 多哈希身份冲突。
+var newTimeFormCases = []timeFormCase{
+	{
+		// 族 1：BungeeCord/Velocity 带毫秒（逗号小数，时刻不带方括号）。
+		name: "bungee 毫秒逗号", line: `18:12:59,123 [INFO] Using mbed TLS based native cipher.`,
+		level: "INFO", body: "Using mbed TLS based native cipher.",
+		wantUTC: "2026-10-15T18:12:59.123Z",
+	},
+	{
+		// 族 1：同一形态的点号小数写法。
+		name: "bungee 毫秒点号", line: `18:12:59.456 [WARN] disk almost full`,
+		level: "WARN", body: "disk almost full",
+		wantUTC: "2026-10-15T18:12:59.456Z",
+	},
+	{
+		// 族 2：方括号毫秒 + thread/LEVEL（logback/log4j2 `%d{HH:mm:ss.SSS}`）。
+		name: "方括号毫秒 thread/level", line: `[18:12:59.789] [Server thread/ERROR]: Encountered an unexpected exception`,
+		level: "ERROR", thread: "Server thread", body: "Encountered an unexpected exception",
+		wantUTC: "2026-10-15T18:12:59.789Z",
+	},
+	{
+		// 族 2：逗号毫秒 + thread/LEVEL。
+		name: "方括号逗号毫秒 thread/level", line: `[18:12:59,012] [Server thread/INFO]: Done (1.234s)!`,
+		level: "INFO", thread: "Server thread", body: "Done (1.234s)!",
+		wantUTC: "2026-10-15T18:12:59.012Z",
+	},
+	{
+		// 族 2：方括号毫秒 + LEVEL（无 thread）。
+		name: "方括号毫秒 level", line: `[18:12:59,500 INFO]: ok`,
+		level: "INFO", body: "ok",
+		wantUTC: "2026-10-15T18:12:59.5Z",
+	},
+	{
+		// 族 2：方括号毫秒，无级别（level 不发明）。
+		name: "方括号毫秒无级别", line: `[18:12:59.001] plain body`,
+		body:    "plain body",
+		wantUTC: "2026-10-15T18:12:59.001Z",
+	},
+	{
+		// 族 3：Log4j2 默认裸日期形态；日期 10-14 **早于** base 一天，
+		// 必须原样保留（若误走 applyClock 会被改写成 10-15 ⇒ 本用例转红）。
+		name: "裸日期", line: `2026-10-14 09:30:00 INFO [main] com.example.App - started`,
+		body:    "INFO [main] com.example.App - started",
+		wantUTC: "2026-10-14T09:30:00Z",
+	},
+	{
+		// 族 3：裸日期 + 毫秒小数。
+		name: "裸日期毫秒", line: `2026-10-14 09:30:00,250 [main/INFO] loaded`,
+		body:    "[main/INFO] loaded",
+		wantUTC: "2026-10-14T09:30:00.25Z",
+	},
+}
+
+// TestNewTimeFormsGetDeterministicEventTime 断言三族新形态都能解析出确定事件时间与级别/线程/正文。
+//
+// 转红方式（实测）：逐个移除 parser.go 中对应的新分支，相关子用例立即红——要么
+// kind != kindEventStart（整行落空），要么 hasTime=false（事件时间留空）。
+func TestNewTimeFormsGetDeterministicEventTime(t *testing.T) {
+	for _, tc := range newTimeFormCases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := parseLine(tc.line, time.UTC, driftTestBase)
+			require.Equal(t, kindEventStart, p.kind, "必须识别为事件起点（否则事件时间无从谈起）")
+			require.True(t, p.hasTime, "必须解析出确定事件时间，不得留空回落采集时刻")
+			require.Equal(t, tc.wantUTC, p.eventTime.UTC().Format(time.RFC3339Nano),
+				"事件时间必须由行内时刻/日期决定")
+			require.Equal(t, tc.level, p.level, "级别只能来自行内显式 token，不发明")
+			require.Equal(t, tc.thread, p.thread)
+			require.Equal(t, tc.body, p.body)
+		})
+	}
+}
+
+// TestNewTimeFormDateRespectsSourceTimeZone 裸日期形态按**源时区**解释（与 clock 形态同口径）。
+func TestNewTimeFormDateRespectsSourceTimeZone(t *testing.T) {
+	hkt, err := time.LoadLocation("Asia/Hong_Kong")
+	require.NoError(t, err)
+
+	p := parseLine(`2026-10-14 09:30:00 started`, hkt, driftTestBase)
+	require.True(t, p.hasTime)
+	require.Equal(t, "2026-10-14T01:30:00Z", p.eventTime.Format(time.RFC3339Nano),
+		"源时区 09:30 必须换算为 01:30Z，而不是把本地时间直接当 UTC")
+}
+
+// TestNewTimeFormRejectsInvalidDate 形态像日期但分量越界时**不接管**：维持改动前的 RAW 行为。
+//
+// 为什么必须拒绝：time.Date 会把越界分量静默归一化成另一个合法时刻（2 月 30 日 → 3 月 2 日），
+// 那等于往事件里写一个错误时间，比不解析更糟（会落到错误日期/分区）。
+func TestNewTimeFormRejectsInvalidDate(t *testing.T) {
+	for _, line := range []string{
+		`2026-13-45 99:99:99 not a real timestamp`,
+		`2026-02-30 10:00:00 normalized away`,
+	} {
+		p := parseLine(line, time.UTC, driftTestBase)
+		require.Equal(t, kindUnknown, p.kind, "非法日期不得被接管为事件起点：%s", line)
+		require.False(t, p.hasTime, "非法日期不得产出事件时间：%s", line)
+	}
+}
+
+// TestExistingTimeFormsUnchanged 守住「既有格式零行为变化」。
+//
+// 新增正则是严格加集的前提：它们只可能匹配毫秒/裸日期形态，绝不抢走既有行的归属，
+// 也不得改变既有行的 level/thread/body/eventTime。本表就是这条不变量。
+func TestExistingTimeFormsUnchanged(t *testing.T) {
+	cases := []timeFormCase{
+		{
+			name: "Paper 原生 thread/LEVEL", line: `[12:00:01] [Server thread/INFO]: Done (1.0s)!`,
+			level: "INFO", thread: "Server thread", body: "Done (1.0s)!",
+			wantUTC: "2026-10-15T12:00:01Z",
+		},
+		{
+			name: "Java 时刻+级别", line: `[12:00:02 WARN]: disk almost full`,
+			level: "WARN", body: "disk almost full",
+			wantUTC: "2026-10-15T12:00:02Z",
+		},
+		{
+			name: "Java 仅时刻", line: `[12:00:03] plain body`,
+			body:    "plain body",
+			wantUTC: "2026-10-15T12:00:03Z",
+		},
+		{
+			name: "Bungee 形态（无毫秒）", line: `12:00:04 [INFO] Using mbed TLS`,
+			level: "INFO", body: "Using mbed TLS",
+			wantUTC: "2026-10-15T12:00:04Z",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := parseLine(tc.line, time.UTC, driftTestBase)
+			require.Equal(t, kindEventStart, p.kind)
+			require.True(t, p.hasTime)
+			require.Equal(t, tc.wantUTC, p.eventTime.UTC().Format(time.RFC3339Nano))
+			require.Equal(t, tc.level, p.level)
+			require.Equal(t, tc.thread, p.thread)
+			require.Equal(t, tc.body, p.body)
+		})
+	}
+
+	// slog 形态同样零变化：body 保留整行原文（slogRaw），时间来自 time=。
+	slogLine := `time=2026-10-15T18:24:28.732+08:00 level=INFO msg=hello`
+	p := parseLine(slogLine, time.UTC, driftTestBase)
+	require.Equal(t, kindEventStart, p.kind)
+	require.Equal(t, "INFO", p.level)
+	require.Equal(t, slogLine, p.body, "slog 正文仍是整行原文")
+	require.True(t, p.hasTime)
+	require.Equal(t, "2026-10-15T10:24:28.732Z", p.eventTime.Format(time.RFC3339Nano))
+
+	// 刻意**不**接管「裸时刻、无方括号、无级别」：本包既有口径是这类行不算事件起点
+	// （javaTimeOnlyRe 要求方括号、bungeeTimeLevelRe 要求带级别）。新增毫秒规则
+	// 只跟随该口径补 `[,.]mmm`，不借机放宽成 `HH:MM:SS.mmm body`。
+	p = parseLine(`12:00:05.500 bare clock without level`, time.UTC, driftTestBase)
+	require.Equal(t, kindUnknown, p.kind, "裸时刻无级别不接管（保持既有口径）")
+}
+
+// canonicalEventUnderIngest 复刻 ingest 运行时口径取一条事件的规范身份。
+//
+// 必须复刻 internal/worker/logs/ingest/runtime.go 的 normalizeCanonicalEvent：
+// 事件时间留空时回退 IngestTimeUTC **并重算哈希**。少了这一步，「事件时间留空」
+// 在两次解析里都是空串 ⇒ 哈希仍然相等 ⇒ 下面的防漂移用例无法转红。
+func canonicalEventUnderIngest(t *testing.T, line string, base time.Time, ingest string) logtypes.Event {
+	t.Helper()
+	res := ProcessLines([]string{line}, Options{
+		Source:        logtypes.SourceIdentity{LogSourceID: "src-drift", SourceGeneration: "g1"},
+		Stream:        "stdout",
+		Location:      time.UTC,
+		BaseTime:      base,
+		IngestTimeUTC: ingest,
+	})
+	require.Len(t, res.Events, 1)
+	ev := res.Events[0]
+	if ev.EventTimeUTC == "" {
+		ev.EventTimeUTC = ev.IngestTimeUTC
+		ev.CanonicalHash = logtypes.CanonicalContentHash(ev.EventTimeUTC, ev.Level, ev.Stream, ev.Message)
+	}
+	return ev
+}
+
+// TestNewTimeFormsHashStableAcrossReimport 是本次修复的**防漂移核心断言**。
+//
+// 同一行、同一锚点，在**不同采集时刻**（IngestTimeUTC）下重复解析，必须得到同一
+// EventTimeUTC 与同一 CanonicalHash。这正是生产上「每次重新导入都重新裁定并累计
+// IdentityConflicts」的根因闸门：只要事件时间来自行内，采集时刻就再也影响不到哈希。
+//
+// 转红方式（实测）：移除任一新增分支，该行的 EventTimeUTC 变空 ⇒ 回退各自的
+// IngestTimeUTC（两个用例刻意不同）⇒ 哈希不同 ⇒ 断言红。
+func TestNewTimeFormsHashStableAcrossReimport(t *testing.T) {
+	// 两个差异极大的采集时刻：模拟同一段日志在不同时间被重新导入/接管。
+	const ingestA = "2026-10-16T01:02:03.000000001Z"
+	const ingestB = "2026-11-30T23:59:59.123456789Z"
+
+	for _, tc := range newTimeFormCases {
+		t.Run(tc.name, func(t *testing.T) {
+			first := canonicalEventUnderIngest(t, tc.line, driftTestBase, ingestA)
+			second := canonicalEventUnderIngest(t, tc.line, driftTestBase, ingestB)
+
+			require.NotEmpty(t, first.EventTimeUTC, "事件时间不得留空（留空即回退采集时刻）")
+			require.Equal(t, tc.wantUTC, first.EventTimeUTC)
+			require.Equal(t, first.EventTimeUTC, second.EventTimeUTC,
+				"事件时间不得随采集时刻变化")
+			require.Equal(t, first.EventID, second.EventID)
+			require.Equal(t, first.CanonicalHash, second.CanonicalHash,
+				"同一行在确定锚点下必须得到同一规范哈希（否则重导必然产生身份冲突）")
+		})
+	}
+}

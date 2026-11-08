@@ -16,7 +16,7 @@ test.describe('配置文件管理引擎（FR-031，mock 模式）', () => {
   test('文件配置页可打开 schema 文件、切表单、校验并查看版本 diff/回滚入口', async ({ page }) => {
     await page.goto('/instances/1')
     // FR-412：标题为实例名，无「服务器控制台 /」前缀
-    await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByRole('heading', { name: 'survival-1', exact: true })).toBeVisible()
     await expect(page.locator('[data-page="instance-console"]')).toBeVisible()
 
     // FR-413：实例分区为 role=tab（tablist「实例页签」）
@@ -31,7 +31,12 @@ test.describe('配置文件管理引擎（FR-031，mock 模式）', () => {
     await page.getByRole('button', { name: '表单', exact: true }).click()
     await expectInputValue(page, 'A Mock Minecraft Server')
     await expectInputValue(page, '20')
-    await expect(page.getByText('valid')).toBeVisible()
+    // 用 testid 定位编辑器自己的校验徽标。
+    //
+    // 不能写成 getByText('valid')：页面上资源列表等处也有相同文案，实测会命中 5 个
+    // 元素 ⇒ Playwright 严格模式报错。这不是超时问题，仅增 timeout 也治不好；
+    // 原写法能过是运气（列表恰好未渲染出那些单元格）。
+    await expect(page.getByTestId('config-validation-badge')).toHaveText('valid')
 
     await page.getByRole('button', { name: '校验', exact: true }).click()
     await expect(page.getByText('跨实例一致性校验通过')).toBeVisible()

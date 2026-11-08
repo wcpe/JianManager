@@ -80,6 +80,17 @@ type MetricService struct {
 	// lastGC 记录每实例上次心跳的累计 GC counter（FR-465），用于据相邻差推导 GC 速率。
 	gcMu   sync.Mutex
 	lastGC map[string]gcCounters
+
+	// lastVLDrop 记录每节点上次心跳的 VL 超保留期丢弃累计量（2026-10-29），
+	// 用于据相邻差推导丢弃速率（与 lastNet / lastGC 同构）。
+	vlDropMu   sync.Mutex
+	lastVLDrop map[string]vlDropCounter
+}
+
+// vlDropCounter 是 VL 丢弃计数器的上次读数。
+type vlDropCounter struct {
+	dropped uint64
+	ts      time.Time
 }
 
 // netCounters 某节点上次心跳的累计网络字节快照。
@@ -97,7 +108,7 @@ type gcCounters struct {
 
 // NewMetricService 创建时序指标服务。
 func NewMetricService(db *gorm.DB) *MetricService {
-	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}}
+	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}, lastVLDrop: map[string]vlDropCounter{}}
 }
 
 // ResolveInstanceUUID 由数值实例 ID 取 UUID，供进程 TOPN 查询过滤。
@@ -268,18 +279,7 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	nodeSample := func(key, unit string, v *float64) Sample {
 		return Sample{NodeUUID: node, Scope: model.MetricScopeNode, MetricKey: key, Unit: unit, TS: now, Value: v}
 	}
-	samples = append(samples,
-		nodeSample(model.MetricNodeCPUPct, "pct", ptr(float64(req.CpuUsage)*100)),
-		// iowait（FR-485）：与 cpu_pct 同量纲（0..100），老 Worker 不上报即为 0。
-		nodeSample(model.MetricNodeIOWait, "pct", ptr(float64(req.Iowait)*100)),
-		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
-		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
-		nodeSample(model.MetricLogIngestHealthy, "bool", ptr(boolToFloat(req.LogIngestHealthy))),
-	)
-	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空（FR-062）。
-	if req.LoadAvg1 > 0 {
-		samples = append(samples, nodeSample(model.MetricNodeLoad, "load", ptr(req.LoadAvg1)))
-	}
+	samples = append(samples, buildNodeSamplesAt(req, now)...)
 
 	// 网络速率：相邻心跳累计字节差 / 间隔秒。差为负（节点重启计数器回绕）时跳过该拍。
 	s.netMu.Lock()
@@ -295,6 +295,43 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 	}
 	s.lastNet[node] = netCounters{sent: req.NetworkBytesSent, recv: req.NetworkBytesRecv, ts: now}
 	s.netMu.Unlock()
+
+	// ── 日志存储层（VL）磁盘占用（2026-10-29）──
+	//
+	// 老 Worker 不上报这四个字段（全为 0）⇒ 不落任何点，不误报成「磁盘 0 字节」。
+	// UsedBytes>0 作为「有读数」的判据：受管 VL 一定占着磁盘。
+	if req.LogVlDiskUsedBytes > 0 {
+		samples = append(samples, nodeSample(model.MetricLogVLDiskUsed, "bytes", ptr(float64(req.LogVlDiskUsedBytes))))
+		samples = append(samples, nodeSample(model.MetricLogVLPartitions, "count", ptr(float64(req.LogVlPartitions))))
+		// 上限已配时才能算百分比：未配（0）就没有「离上限多远」这个概念。
+		//
+		// 两种口径必须都处理（2026-10-29 审计修复）：字节上限与百分比上限**互斥**，
+		// 配上百分比时 LogVlDiskLimitBytes 恒为 0。原先只按字节算 pct
+		// ⇒ 百分比部署永远没有 log_vl_disk_pct，与配置样例推荐的告警对不上。
+		if req.LogVlDiskLimitBytes > 0 {
+			samples = append(samples, nodeSample(model.MetricLogVLDiskLimit, "bytes", ptr(float64(req.LogVlDiskLimitBytes))))
+			pct := float64(req.LogVlDiskUsedBytes) / float64(req.LogVlDiskLimitBytes) * 100
+			samples = append(samples, nodeSample(model.MetricLogVLDiskPct, "pct", ptr(pct)))
+		} else if req.LogVlDiskLimitPercent > 0 {
+			// 百分比口径：Worker 报的 UsedBytes 是**目录自身大小**，不能直接算百分比
+			// （VL 的 maxDiskUsagePercent 比的是**整块文件系统**使用率）。
+			// 这里只把声明的上限记下来，pct 不落点——真正该盯的信号仍是丢弃计数。
+			samples = append(samples, nodeSample(model.MetricLogVLDiskLimit, "pct", ptr(float64(req.LogVlDiskLimitPercent))))
+		}
+		// 丢弃速率：累计 counter 据相邻心跳差推导（与 lastNet / lastGC 同构）。
+		// 差为负（VL 重启 counter 归零）→ 跳过该拍，不产生负速率假尖峰；首拍无前值同样跳过。
+		// 读前值与写现值放在**同一段**临界区（与上方 lastNet 同构）。
+		s.vlDropMu.Lock()
+		if prev, ok := s.lastVLDrop[node]; ok {
+			if dt := now.Sub(prev.ts).Seconds(); dt > 0 {
+				if d := req.LogVlRowsDroppedTotal; d >= prev.dropped {
+					samples = append(samples, nodeSample(model.MetricLogVLRowsDropped, "rows_per_sec", ptr(float64(d-prev.dropped)/dt)))
+				}
+			}
+		}
+		s.lastVLDrop[node] = vlDropCounter{dropped: req.LogVlRowsDroppedTotal, ts: now}
+		s.vlDropMu.Unlock()
+	}
 
 	// 每实例 ServerProbe 快照（instance 维度 + 分世界 world 维度）。
 	for _, im := range req.InstanceMetrics {
@@ -1392,4 +1429,74 @@ func boolToFloat(v bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+// buildNodeSamplesAt 构造节点级样本（FR-485）。
+//
+// 从 ingestHeartbeatAt 里拆出来是为了**可测**：这些样本全是纯计算，
+// 但之前混在带网络速率状态（s.lastNet）和 VL 读数的函数里，写一条断言就要
+// 起整个服务。拆开后测试只验「字段到指标的映射对不对」，不必关心副作用。
+//
+// 注意：网络速率与 VL 磁盘读数**不在**本函数里——它们依赖相邻两次心跳的差分
+// 与外部进程状态，不是纯粹由 req 决定的。
+func buildNodeSamplesAt(req *workerpb.HeartbeatRequest, now time.Time) []Sample {
+	if req == nil {
+		return nil
+	}
+	ptr := func(v float64) *float64 { return &v }
+	node := req.NodeUuid
+	nodeSample := func(key, unit string, v *float64) Sample {
+		return Sample{NodeUUID: node, Scope: model.MetricScopeNode, MetricKey: key, Unit: unit, TS: now, Value: v}
+	}
+
+	out := make([]Sample, 0, 10)
+	out = append(out,
+		nodeSample(model.MetricNodeCPUPct, "pct", ptr(float64(req.CpuUsage)*100)),
+		// iowait（FR-485）：与 cpu_pct 同量纲（0..100），老 Worker 不上报即为 0。
+		nodeSample(model.MetricNodeIOWait, "pct", ptr(float64(req.Iowait)*100)),
+		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
+		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
+		nodeSample(model.MetricLogIngestHealthy, "bool", ptr(boolToFloat(req.LogIngestHealthy))),
+	)
+
+	// 百分比指标（FR-485）：内存/磁盘利用率。
+	//
+	// 直接用心跳已有的 `memory_usage` / `disk_usage`（0..1 的比值，Worker 侧已填），
+	// 而不是在这里拿 used/total 除——**心跳根本没有 total 字段**
+	// （只有 RegisterRequest 和 GetNodeMetricsResponse 有）。
+	//
+	// 为什么需要这两个指标：告警规则引擎只比「单个指标 vs 阈值」
+	// （evaluateNodeMetricRule），不支持跨指标运算。不落百分比就只能写绝对字节阈值，
+	// 而节点磁盘大小差异很大——同一个字节值在一个节点是告警、在另一个是常态。
+	//
+	// 值为 0 时**不落点**：老 Worker 不上报时 proto 零值也是 0，
+	// 落 0 会让「内存占用 0%」看起来像健康，图表上是一条平坦的好线。
+	// 真·0% 占用物理上不可能（内核自己就要占内存）。
+	if p := rateToPct(req.MemoryUsage); p != nil {
+		out = append(out, nodeSample(model.MetricNodeMemPct, "pct", p))
+	}
+	if p := rateToPct(req.DiskUsage); p != nil {
+		out = append(out, nodeSample(model.MetricNodeDiskPct, "pct", p))
+	}
+
+	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空（FR-062）。
+	if req.LoadAvg1 > 0 {
+		out = append(out, nodeSample(model.MetricNodeLoad, "load", ptr(req.LoadAvg1)))
+	}
+	return out
+}
+
+// rateToPct 把 0..1 的占比转成 0..100 的百分比；非正数返回 nil（不落点）。
+//
+// 钳位到 [0,100]：used > total 只可能来自采集口径不一致（如 tmpfs 计入内存），
+// 那种情况下 100% 比 103% 更能被告警规则正确理解。
+func rateToPct(rate float32) *float64 {
+	if rate <= 0 {
+		return nil
+	}
+	pct := float64(rate) * 100
+	if pct > 100 {
+		pct = 100
+	}
+	return &pct
 }

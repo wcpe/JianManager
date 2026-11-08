@@ -1,3 +1,5 @@
+//go:build linux
+
 package process
 
 import (
@@ -76,6 +78,18 @@ func TestDaemonSubtreeSurvivesWorkerUnitCgroupKill(t *testing.T) {
 	require.NoError(t, os.MkdirAll(unitDir, 0o755))
 
 	pidDir := t.TempDir()
+	// 前置检查：wrapper 的 unix socket 建在 pidDir 下，路径长度受 sockaddr_un.sun_path 限（107 字节）。
+	//
+	// 为什么必须在此之前就判（2026-10-27）：`t.TempDir()` 跟着 `TMPDIR` 走。若本机 `TMPDIR`
+	// 被设成一个长目录（例：`$HOME/tmpwork`，约 20 字节），加上 t.TempDir 的测试名目录与 UUID，
+	// 拼接后恰好 111 字节 > 107 ⇒ wrapper 启动失败退出（日志只有一句
+	// “socket 路径过长”），而用例的表现是「20 秒后 PID 记录仍未写出」——
+	// 看上去像产品缺陷，实际是环境路径太长。这种「环境前置不满足却报成产品失败」最难查，
+	// 所以显式检测并 skip，同时把解决办法写在 skip 文本里。
+	if probe := filepath.Join(pidDir, uuid+".sock"); len(probe) > 107 {
+		t.Skipf("TMPDIR 过长：socket 路径 %d 字节超过 sockaddr_un 上限 107（%s）。"+
+			"用 TMPDIR=/tmp go test … 或缩短 TMPDIR 重跑", len(probe), probe)
+	}
 	cfg := daemon.WrapperConfig{
 		InstanceUUID: uuid,
 		StartCommand: "sleep 300", // 替身 java：常驻且不消费 stdin

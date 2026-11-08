@@ -32,6 +32,7 @@
 ### POST /api/v1/auth/login
 - **描述**: 用户登录
 - **关联 FR**: FR-001
+- **权限**: 无需认证（登录入口）
 - **请求**:
   ```json
   { "username": "string", "password": "string" }
@@ -45,6 +46,7 @@
 ### POST /api/v1/auth/refresh
 - **描述**: 刷新 Access Token
 - **关联 FR**: FR-001
+- **权限**: 无需认证（凭 refreshToken 换 accessToken）
 - **请求**:
   ```json
   { "refreshToken": "string" }
@@ -170,36 +172,40 @@
 ### GET /api/v1/groups/:id
 - **描述**: 用户组详情（含成员列表和配额）
 - **关联 FR**: FR-003
+- **权限**: `group:read`（且须可访问该组）
 
 ### PUT /api/v1/groups/:id
 - **描述**: 更新用户组
 - **关联 FR**: FR-003
-- **权限**: `group.write`
+- **权限**: `group:manage`（`CanManageGroup` 资源级判断；原文档写的 `group.write` 不是本仓库的权限节点）
 
 ### DELETE /api/v1/groups/:id
 - **描述**: 删除用户组
 - **关联 FR**: FR-003
-- **权限**: `group.delete`
+- **权限**: `group:manage`（`HasPermission(PermGroupManage)`；原文档写的 `group.delete` 不是本仓库的权限节点）
 
 ### POST /api/v1/groups/:id/members
 - **描述**: 添加组成员
 - **关联 FR**: FR-003
+- **权限**: `group:member:write`（且须为该组组管理员）
 - **请求**: `{ "userId": "int", "role": 0 }`
 
 ### DELETE /api/v1/groups/:id/members/:userId
 - **描述**: 移除组成员
 - **关联 FR**: FR-003
+- **权限**: `group:member:write`（且须为该组组管理员）
 
 ### PUT /api/v1/groups/:id/quota
 - **描述**: 更新组配额（平台管理员）。FR-467 起新增 `enforceMode`：组级运行期配额强制档位，留空表示继承平台默认 `quota.enforce_mode`
 - **关联 FR**: FR-003 ｜ **关联 FR**: FR-467
+- **权限**: `group:quota:write`
 - **请求**: `{ "maxInstances": 10, "maxBots": 50, "maxStorageMb": 10240, "enforceMode": "alert" }`
   - `enforceMode`（可选）：`alert` | `throttle` | `stop` 或 `""`（继承默认）；非法值 `400 INVALID_REQUEST`
 
 ### GET /api/v1/groups/:id/quota
 - **描述**: 查询组配额及当前用量（组成员可查看本组，组管理员/平台管理员同）。FR-467 起响应含 `enforceMode`（空串 = 继承平台默认）
 - **关联 FR**: FR-003 ｜ **关联 FR**: FR-467
-- **权限**: `group:quota:read`（本组可访问）
+- **权限**: `group:read`（`CanAccessGroup` 资源级；函数体不检查 `PermGroupQuotaRead`，原文档标注偏严）
 - **响应**:
   ```json
   {
@@ -228,6 +234,7 @@
 ### GET /api/v1/nodes/:id
 - **描述**: 节点详情（含资源使用率）
 - **关联 FR**: FR-004
+- **权限**: `node.read` 或 `node.manage`
 
 ### POST /api/v1/nodes/:id/maintenance
 - **描述**: 置/解节点维护模式（cordon）。维护中拒绝新实例调度到该节点，与在线/离线状态正交
@@ -320,7 +327,7 @@
 - **路径**: 根路径（**非** `/api/v1`），显式注册、先于前端 SPA `NoRoute` 回退
 - **权限**: 匿名（无 JWT）。脚本不含机密；准入凭据 enrollment token 在一键命令参数里、不在脚本里，故与签发 token 的平台管理员 JWT 端点暴露面/鉴权物理隔离
 - **响应**: `200` 脚本字节（`.sh` → `text/x-shellscript`、`.ps1` → `text/plain`）；脚本未内嵌时 `503 INSTALL_SCRIPT_UNAVAILABLE`（不回退到 `index.html`）
-- **内容来源**: `go:embed` 内嵌进 CP 二进制（源 = canonical `scripts/install-worker.{sh,ps1}`，`make embed-install-scripts` 同步、字节一致由测试守护）
+- **内容来源**: `go:embed` 内嵌进 CP 二进制。嵌入包 `scripts/embed`（`go:embed` 不允许 `..`，声明嵌入的文件必须与被嵌文件同目录）**就是**脚本真源所在处——`scripts/embed/install-worker.{sh,ps1}` 既是 canonical 也是嵌入输入，**不存在副本，因此不需要同步步骤**，也不再有字节一致守护测试（没有第二个副本可漂移）。`make embed-install-scripts` 保留为空目标以免既有依赖链断裂
 
 ### POST /api/v1/nodes/enroll-token
 - **描述**: 签发一次性、限时的节点准入 enrollment token，返回明文 + Linux/Windows 一键安装命令（傻瓜部署）
@@ -442,6 +449,7 @@
 ### GET /api/v1/instances/:id
 - **描述**: 实例详情
 - **关联 FR**: FR-005, FR-445
+- **权限**: `instance:read`（且须可访问该实例）
 - **说明**: 详情/单查响应增 `capabilities` —— 按当前 `(type, role)` 现算的实例能力画像（FR-445/ADR-091，结构见 `model.InstanceCapabilityProfile`：`type`/`role`/`mcSemantics`/有序 `capabilities[]`/各能力 `sources`）。**不落库、不缓存**，仅在详情/单查路径填充（列表响应不带）；前端据此显隐详情页 Tab。Tab 显隐只由 `capabilities` 决定，`mcSemantics` 只影响同一 Tab 内字段取舍。MCP `agent_get_instance` 同源透出。
 
 ### PUT /api/v1/instances/:id
@@ -1329,6 +1337,7 @@
 
 ### GET /api/v1/nodes/:id/ports
 - **描述**: 查看某节点端口占用与分配范围
+- **权限**: `instance.create` 或 `node.manage`
 - **响应**: `{ nodeId, ranges:{serverPortBase,rconPortBase,rangeSize}, occupied:[{instanceId,name,role,serverPort,rconPort,queryPort}] }`
 
 ### GET /api/v1/nodes/:id/docker/images
@@ -1360,15 +1369,18 @@
 - **错误**: `503 NODE_OFFLINE`（节点未连接）
 
 ### GET / POST /api/v1/networks，GET / PATCH / DELETE …/:id
+- **权限**: `network.read` 或 `network.manage`（读）；`POST`/`PATCH`/`DELETE` 函数体内要求 `network.manage`
 - **描述**: 群组（Network 非独占软标签）CRUD；删除群组不影响成员实例与代理注册
 - **请求(POST)**: `{ "name":"survival","description":"" }`；**错误**: `409 NETWORK_NAME_CONFLICT`、`404 NETWORK_NOT_FOUND`
 - **列表概要（FR-335）**: 每项增 `memberStatus:{running,stopped,crashed,starting,stopping}`（JOIN 实例一次聚合、五态零补齐，供列表健康分布直接消费，消逐 network 拉详情的 N+1）；`memberCount` 口径为 JOIN 后实际成员数（悬空成员剔除，只减不增）
 
 ### POST /api/v1/networks/:id/members，DELETE …/members/:instanceId
+- **权限**: `network.manage`（组级另有 `network.read`/`network.manage`，写操作取交集）
 - **描述**: 群组成员增删（幂等）；**请求(POST)**: `{ "instanceIds":[12,13] }`
 
 ### POST /api/v1/networks/:id/actions
 - **描述**: 群组成员批量生命周期操作；**请求**: `{ "action":"start"|"stop"|"restart" }`
+- **权限**: `network.read` 或 `network.manage`
 - **响应**: `{ action,total,succeeded,failed,results }`
 
 ---
@@ -1424,11 +1436,13 @@
 ### GET /api/v1/instances/:id/files/read
 - **描述**: 读取文件内容（在线编辑器用；Worker `ReadFile` 带 10MiB 编辑器护栏，超限截断——下载文件请用 `download` 端点，不受此上限）
 - **关联 FR**: FR-008
+- **权限**: `file.read`
 - **Query**: `?path=plugins/essentials/config.yml`
 
 ### POST /api/v1/instances/:id/files/write
 - **描述**: 写入文件内容
 - **关联 FR**: FR-008
+- **权限**: `file.read`
 - **请求**: `{ "path": "string", "content": "string" }`
 
 ### POST /api/v1/instances/:id/files/upload
@@ -1466,11 +1480,13 @@
 ### DELETE /api/v1/instances/:id/files
 - **描述**: 删除文件
 - **关联 FR**: FR-008
+- **权限**: `file.read`
 - **请求**: `{ "path": "string" }`
 
 ### POST /api/v1/instances/:id/files/rename
 - **描述**: 重命名/移动文件或目录。`newPath` 跨目录时即「移动」（Worker `os.Rename`），故资源管理器树内拖拽移动复用本端点，无需独立 move 端点
 - **关联 FR**: FR-008, FR-020, FR-070
+- **权限**: `file.read`
 - **请求**: `{ "oldPath": "string", "newPath": "string" }`
 
 ### GET /api/v1/instances/:id/files/versions
@@ -1540,35 +1556,42 @@
 ### GET /api/v1/instances/:id/configs/read
 - **描述**: 读取单配置文件：原文 + 字段 + schema JSON + 校验结果。`?path=server.properties`
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 
 ### POST /api/v1/instances/:id/configs/write
 - **描述**: 文本模式写入配置，保存成功生成配置版本
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "path": "string", "content": "string", "message": "string?" }`
 - **响应**: `{ "versionId": 12, "validation": { "valid": true, "issues": [] } }`
 
 ### POST /api/v1/instances/:id/configs/write-fields
 - **描述**: 表单模式写入：字段级补丁回原文（保留注释/键顺序），生成配置版本
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "path": "string", "fields": { "server-port": "25566" }, "message": "string?" }`
 
 ### POST /api/v1/instances/:id/configs/cross-check
 - **描述**: 跨文件/跨实例一致性校验（端口唯一 / online-mode 与转发配套 / forwarding secret 跨代理一致）。返回 warning 列表，不影响写入
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "path": "string", "content": "string" }`
 - **响应**: `{ "issues": [{ "level": "warning", "message": "string", "key": "string?" }] }`
 
 ### GET /api/v1/instances/:id/configs/versions/*file
 - **描述**: 列出某配置文件历史版本（按 ID 倒序）
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 
 ### GET /api/v1/instances/:id/configs/diff/*file
 - **描述**: 配置版本差异。`?from=11&to=12`，`to` 省略表示与当前文件对比
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 
 ### POST /api/v1/instances/:id/configs/rollback/*file
 - **描述**: 回滚配置到指定版本并生成新版本记录
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "versionId": 12, "message": "string?" }`
 
 ### GET /api/v1/instances/:id/configs/surface
@@ -1822,10 +1845,12 @@
 ### DELETE /api/v1/bots/:id
 - **描述**: 删除 Bot
 - **关联 FR**: FR-009
+- **权限**: `bot:manage`（且须可访问该 Bot 所属实例所在组）
 
 ### GET /api/v1/bots/:id
 - **描述**: Bot 基础详情（DB 基础字段 + 读取时经 Worker `ListBots` 懒回填 `status`）；位置/血量/背包/事件流等富遥测归 FR-041，当前 HTTP 详情不承诺返回
 - **关联 FR**: FR-009（基础详情）, FR-041（富遥测延后）
+- **权限**: `bot:read`（按 Bot 所属实例隔离）
 
 ### GET /api/v1/bots/:id/events
 - **描述**: 单 Bot 实时事件 SSE（状态、血量、饥饿、位置、聊天/行为事件）
@@ -1848,12 +1873,14 @@
 ### POST /api/v1/bots/:id/behavior
 - **描述**: 切换 legacy Bot 行为模式；Worker 委托成功后才更新 DB 行为账本
 - **关联 FR**: FR-009, FR-352
+- **权限**: `bot:manage`（且须可访问该 Bot 所属实例所在组）
 - **请求**: `{ "behavior": "follow", "target": "PlayerName" }`
 - **错误**: 409 `BOT_FLEET_MANAGED`（Bot 的 `loadBatchId` 或 `stressSessionId` 非空，由 Fleet 场景账本管理，禁止旧行为接口修改）；500 `INTERNAL_ERROR`（Worker 委托或 DB 更新失败，DB 行为保持原值）
 
 ### POST /api/v1/bots/:id/command
 - **描述**: 向 Bot 下发聊天/控制命令（链路：CP → Worker SendBotCommand → bot-worker send-command IPC → Mineflayer chat）
 - **关联 FR**: FR-009
+- **权限**: `bot:manage`（且须可访问该 Bot 所属实例所在组）
 - **请求**: `{ "command": "/tp 0 64 0" }`
 - **响应**: `200 { "message": "已发送" }`；表示 Worker 已接受并写入 `send-command` IPC，不代表 Bot Worker 已调用 `bot.chat`，也不证明服务器接受、权限通过或产生业务效果
 - **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（Bot 不存在/无权访问）；503 `COMMAND_FAILED`（Worker 未连接或 IPC 委托失败）。当前端点不等待 Bot Worker 执行回执，`bot.chat` 同步抛错不会回传到本次 HTTP 请求
@@ -2104,11 +2131,13 @@
 ### GET /api/v1/schedules
 - **描述**: 定时任务列表
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 - **Query**: `?instanceId=xxx`
 
 ### POST /api/v1/schedules
 - **描述**: 创建定时任务
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 - **请求**:
   ```json
   {
@@ -2122,14 +2151,17 @@
 ### PUT /api/v1/schedules/:id
 - **描述**: 更新定时任务（`cronExpr`/`action`/`enabled` 可选；`action=command` 时可携 `payload` 改命令，FR-153）
 - **关联 FR**: FR-012, FR-153
+- **权限**: `schedule.read`
 
 ### DELETE /api/v1/schedules/:id
 - **描述**: 删除定时任务
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 
 ### GET /api/v1/schedules/:id/logs
 - **描述**: 定时任务执行日志列表
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 - **Query**: `?page=1&pageSize=20`
 - **响应** (200):
   ```json
@@ -2148,21 +2180,25 @@
 ### GET /api/v1/instances/:id/backups
 - **描述**: 实例备份列表（含 `mode` 全量/增量、`parentId` 备份链、`storageId` 存储位置、`checksum`/`checksumAlgo` 完整性校验字段；历史备份可能为空）
 - **关联 FR**: FR-013, FR-056, FR-057, FR-171
+- **权限**: `backup.read` 或 `backup.write`
 
 ### POST /api/v1/instances/:id/backups
 - **描述**: 创建备份。`incremental=true` 时挂到该实例最近一次已完成备份后形成备份链（仅打包变化文件）；`storageId` 指定远程存储后端，缺省存于节点本地；Worker 完成后返回并持久化归档 SHA-256
 - **关联 FR**: FR-013, FR-056, FR-057, FR-171
+- **权限**: `backup.read` 或 `backup.write`
 - **请求**: `{ "name": "string", "incremental": false, "storageId": 0 }`
 - **错误**: 422 `BUSINESS_ERROR`（增量但无可作基准的已完成全量备份）
 
 ### POST /api/v1/backups/:id/restore
 - **描述**: 恢复备份。增量备份沿父链回溯解析整链（全量基 + 各增量），委托 Worker 按序回放；远程备份先拉回本地再回放；有 `checksum` 的归档在解压前校验，不一致则拒绝恢复
 - **关联 FR**: FR-013, FR-056, FR-057, FR-171
+- **权限**: `backup.read` 或 `backup.write`
 - **错误**: 409 `INSTANCE_NOT_STOPPED`（实例进程可能存活——STARTING/RUNNING/STOPPING 时拒绝恢复，须先停止实例；STOPPED/CRASHED 放行）；422 `BUSINESS_ERROR`（备份未完成/链断裂等）
 
 ### DELETE /api/v1/backups/:id
 - **描述**: 删除备份。被增量子备份依赖时拒绝（422），避免割裂备份链
 - **关联 FR**: FR-013, FR-056
+- **权限**: `backup.read` 或 `backup.write`
 
 ### GET /api/v1/backup-storages
 - **描述**: 备份远程存储后端列表（凭证以 `${ENV_VAR}` 引用，不返回明文），并返回容量聚合与最近一次人工测试结果
@@ -2279,38 +2315,46 @@
 
 ### GET /api/v1/artifact-reconcile/settings
 - **描述**: 读取定期对账设置。缺失时初始化为启用、24 小时周期；`nextRunAt` 为空表示尚未排期或已禁用
+- **权限**: `node.manage`
 - **响应**: `{ "enabled": true, "intervalHours": 24, "nextRunAt": "datetime" }`
 
 ### PUT /api/v1/artifact-reconcile/settings
+- **权限**: `node.manage`
 - **请求**: `{ "enabled": true, "intervalHours": 24 }`，周期范围 `[1,720]`；启用时从当前时间重算下次执行，禁用时清空 `nextRunAt`
 - **响应**: 同 GET；写审计 `artifact_reconcile.settings_update`
 - **错误**: 400 `INVALID_REQUEST`；422 `BUSINESS_ERROR`
 
 ### POST /api/v1/artifact-reconcile/runs
+- **权限**: `node.manage`
 - **请求**: `{ "channelId": 2 }` 触发单渠道；缺省或 0 触发全部 S3 渠道
 - **响应** (202): `{ "started": [Run], "skipped": [{ "channelId": 2, "channelName": "rustfs", "reason": "该渠道对账正在进行中" }] }`
 - **语义**: 单渠道在途返回 409；全局触发跳过在途渠道。无 S3 渠道或指定 local 渠道返回 422。写审计 `artifact_reconcile.trigger`
 
 ### GET /api/v1/artifact-reconcile/runs
+- **权限**: `node.manage`
 - **查询参数**: `channelId` 可选；`limit` 默认 20、上限 100
 - **响应**: `Run[]`，按 ID 倒序。`Run.status` 为 `running|succeeded|failed`，包含索引/对象/一致/缺失/孤儿计数与失败原因
 
 ### GET /api/v1/artifact-reconcile/runs/:id
+- **权限**: `node.manage`
 - **响应**: 单条 `Run`
 - **错误**: 404 `NOT_FOUND`
 
 ### GET /api/v1/artifact-reconcile/runs/:id/diffs
+- **权限**: `node.manage`
 - **查询参数**: `kind=missing|orphan`；`page` 默认 1；`pageSize` 默认 50、上限 200
 - **响应**: `{ "items": [Diff], "total": 1, "page": 1, "pageSize": 50 }`。处置态为 `open|resolved`，处置动作 `marked_lost|cleaned|stale`
 - **错误**: 400 `INVALID_REQUEST`；404 `NOT_FOUND`
 
 ### POST /api/v1/artifact-reconcile/runs/:id/resolve-missing
 - **描述**: 将成功报告内仍有效的 open missing 资产标为 `storageState=lost`；已删除或迁走的差异翻 `stale`
+- **权限**: `node.manage`
 - **响应**: `{ "marked": 1, "stale": 0 }`；写审计 `artifact_reconcile.mark_lost`
 - **错误**: 404；409（运行中）；422（运行失败、无完整报告）
 
 ### POST /api/v1/artifact-reconcile/runs/:id/cleanup-orphans
 - **描述**: 删除成功报告内仍未被索引引用的 open orphan 对象；处置前再次检查同渠道同键索引，命中则翻 `stale` 不删除；删除失败保持 open 可重试
+- **权限**: `node.manage`
 - **响应**: `{ "cleaned": 1, "stale": 0, "failed": 0 }`；写审计 `artifact_reconcile.cleanup_orphans`
 - **错误**: 404；409（运行中）；422（运行失败、无完整报告）
 
@@ -2500,14 +2544,17 @@
 ### GET /api/v1/templates
 - **描述**: 服务端模板列表
 - **关联 FR**: FR-014
+- **权限**: `template.read` 或 `template.manage`
 
 ### POST /api/v1/templates
 - **描述**: 创建模板（平台管理员）
 - **关联 FR**: FR-014
+- **权限**: `template.read` 或 `template.manage`
 
 ### DELETE /api/v1/templates/:id
 - **描述**: 删除模板。模板与实例为松关联（建实例时拷贝 startCommand），删除模板不影响已创建的实例。
 - **关联 FR**: FR-064
+- **权限**: `template.read` 或 `template.manage`
 - **响应 200**: `{ "message": "已删除" }`
 - **错误**: `400 INVALID_REQUEST`（ID 非法）、`500 INTERNAL_ERROR`
 
@@ -2521,6 +2568,7 @@
 ### GET /api/v1/assets
 - **描述**: 列出资产，可按类型筛选、分页
 - **关联 FR**: FR-045
+- **权限**: `node.manage` 或 `node.read`
 - **Query**: `?type=core&page=1&pageSize=20`
   - `type`: 可选，`core|plugin|image|video|archive|blob`，非法值返回 400 `INVALID_TYPE`
 - **响应 200**:
@@ -2544,11 +2592,13 @@
 ### GET /api/v1/assets/:id
 - **描述**: 资产详情
 - **关联 FR**: FR-045
+- **权限**: `node.manage` 或 `node.read`
 - **响应**: 单个资产对象（字段同上）；不存在返回 404 `NOT_FOUND`
 
 ### POST /api/v1/assets
 - **描述**: 入库一个资产——multipart 上传 **或** 从本地路径登记。入库即算 sha256+md5；同 `(type, sha256)` 去重复用并刷新 `last_used_at`；提供期望校验和则比对，不符拒收。
 - **关联 FR**: FR-045
+- **权限**: `node.manage` 或 `node.read`
 - **方式 A（multipart 上传）** `Content-Type: multipart/form-data`：
   - `file`（必填，文件）、`type`（必填）
   - 可选：`name`、`version`、`contentType`、`sourceUrl`、`metadata`(JSON 字符串)、`expectedSha256`、`expectedMd5`
@@ -2568,6 +2618,7 @@
 ### DELETE /api/v1/assets/:id
 - **描述**: 删除资产；被引用（`refCount>0`）时拒绝。`client-updater-core` 内置归档或被频道选定时同样拒绝删除，避免楔子首次/下次启动拉不到 updater-core
 - **关联 FR**: FR-045 / FR-259
+- **权限**: `node.manage` 或 `node.read`
 - **错误**: 404 `NOT_FOUND`；409 `ASSET_IN_USE`（附当前引用数；`client-updater-core` 内置或被频道选定时也返回该错误）
 
 > 备注：内部「下载入库」（download → store）能力已实现于服务层（`AssetService.IngestFromURL`），供 FR-034 建服取核心时复用，暂未单独暴露为公开 endpoint。
@@ -2762,6 +2813,7 @@
 ### GET /api/v1/audit
 - **描述**: 审计日志列表（平台管理员）
 - **关联 FR**: FR-015, FR-172
+- **权限**: `audit.read`
 - **Query**: `?userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z&page=1&pageSize=50`
 - **参数说明**:
   - `from`/`to`: RFC3339 格式时间，按 created_at 筛选范围
@@ -2775,6 +2827,7 @@
 ### GET /api/v1/audit/export
 - **描述**: 按过滤条件导出审计日志 NDJSON（平台管理员）
 - **关联 FR**: FR-172
+- **权限**: `audit.read`
 - **Query**: `?format=ndjson&userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z`
 - **参数说明**:
   - `format`: 当前仅支持 `ndjson`；传其它值返回 `400 UNSUPPORTED_FORMAT`
@@ -3064,10 +3117,18 @@
 
 ## 日志中心（FR-049 / FR-403）
 
-> 实例运行日志（stdout/stderr）、Worker 日志与平台结构化日志统一持久化、检索与导出。FR-403 在同一路径按视图分流，存储模型不变；过滤与分页在 DB 完成，不全量序列化。
+> 实例运行日志（stdout/stderr）与 Worker 日志经受管 VictoriaLogs 联邦检索（`/logs/federation`，见下文 Worker 日志平台节）；
+> 平台（CP 自身）日志落自轮转文件，面板只读尾部（`GET /api/v1/diagnostics/log`）。
+> **CP `logs` 表已废弃（2026-10-29）**：`GET /api/v1/logs`、`/logs/export`、`/logs/legacy`、`/logs/cutover` 全部下线（一律 404）。
 
-### GET /api/v1/logs
-- **描述**: 分页查询日志；默认进入节点/实例视图。页码模式供日志中心任意跳页；游标模式供实例控制台稳定地向更早日志回溯。
+### ~~GET /api/v1/logs~~（已下线 2026-10-29）
+
+> **端点已随 CP `logs` 表删除而移除，现返回 404。**
+> 实例日志请用 `GET /api/v1/logs/federation`（游标分页，`range=all` 跨全时段）；
+> 平台日志请用 `GET /api/v1/diagnostics/log`（文件尾部，无分页、无总数）。
+> 下方历史文档仅存作演进参考，**不要按它接入**。
+
+- **描述（历史）**: 分页查询日志；默认进入节点/实例视图。页码模式供日志中心任意跳页；游标模式供实例控制台稳定地向更早日志回溯。
 - **关联 FR**: FR-049, FR-050, FR-403, FR-419
 - **权限**: 所有认证用户可查节点/实例视图。平台管理员可另查平台或全部视图；组成员/组管理员仅见有权实例日志，平台和全部视图均返回 `403 FORBIDDEN`，节点 Worker 日志不对其开放。
 - **Query**: `?view=node_instance&level=error&instanceId=12&nodeId=3&keyword=NPE&from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z&page=1&pageSize=50`
@@ -3092,8 +3153,13 @@
 }
 ```
 
-### GET /api/v1/logs/export
-- **描述**: 按当前筛选导出日志为 NDJSON 附件（每行一条 JSON，按时间正序）
+### ~~GET /api/v1/logs/export~~（已下线 2026-10-29）
+
+> **同上，端点已随 CP `logs` 表删除，现返回 404。**
+> 联邦视图的导出走 `POST /api/v1/logs/federation/export`（NDJSON，带覆盖/质量门禁）；
+> 平台文件尾部不提供导出——要留存就在该机器上 `grep` 重定向。
+
+- **描述（历史）**: 按当前筛选导出日志为 NDJSON 附件（每行一条 JSON，按时间正序）
 - **关联 FR**: FR-049, FR-050, FR-403
 - **权限**: 同 `GET /logs`（同样的视图限制与资源可见性收敛）
 - **Query**: 同 `GET /logs` 的筛选参数；额外 `limit`（最大导出行数，默认/上限 50000）。分页参数忽略
@@ -3101,9 +3167,45 @@
 
 ---
 
-## Worker 日志平台（FR-473～484，地基 + 接线中）
+## 进程日志诊断（2026-10-29，非日志检索）
 
-> **接线状态（FR-483 对账）**：Shared Contracts 已冻结。CP `main` 已装配 `logcoord.Assemble`，Worker `main` 已装配持久 Catalog、采集运行时、受管 VL（VictoriaLogs，选型见 ADR-094）supervisor、RangeClient、归档 Provider 和 Log RPC。配置受管 VL 时能力真实可用；未配置或不健康时仍明确返回 `LOG_UNSUPPORTED`。联邦、runtime status/control、归档状态/恢复管理面已注册；cutover **默认关闭**。Runbook A/B/C、失败态矩阵（DOM 19 项 + 真浏览器）与发布级性能（30 分钟压测 + 64 源容量曲线）均已真机验收通过；证据在 `.tmp/fr433-experiments/`。
+> **不是日志中心。** 这两个端点只回答「某个进程最近发生了什么」：不做关键字检索、时间窗、分页、多目标聚合。
+> 需要按条件检索请用日志中心的联邦查询；这里只用于排障时看几百行。
+> 存在理由：CP / Worker 的进程日志此前只写 stdout/stderr（systemd journald 或外部重定向），CP 读不到 Worker 的 journald，节点出问题时只能 SSH。
+
+### GET /api/v1/diagnostics/log
+- **描述**: 读 CP **自身**进程日志文件的尾部（`<data>/var/log/control-plane.log`）
+- **权限**: 平台管理员（路由 `system.update` + handler 内再判）
+- **Query**: `lines`（目标行数，默认 200；页面上可选 100/200/500）
+- **响应**:
+```json
+{
+  "content": "{\"time\":\"…\",\"level\":\"INFO\",\"msg\":\"…\"}\n…",
+  "truncated": true,
+  "fileBytes": 472453,
+  "path": "/…/data/var/log/control-plane.log",
+  "note": ""
+}
+```
+  - `content`：尾部原文（旧→新）。读取只读有界区间，**与文件大小无关**（不因文件大而变慢或 OOM）。
+  - `truncated`：是否因行数/字节上限被裁——UI 必须显式标出，否则会让人以为看到全部。
+  - `fileBytes`：文件总大小，让运维知道「还有多少没看到」。
+  - `path`：实际读取的文件路径，供 UI 展示可复制的 `tail -n N <path>` 命令。
+  - `note`：读取失败/文件尚未创建时的说明；非空时 `content` 通常为空。
+- **与日志中心的关系**: 严格分开。平台日志**不进** VictoriaLogs，不参与联邦查询、不参与检索/聚合/导出——文件是唯一来源。
+
+### GET /api/v1/nodes/:id/diagnostics/log
+- **描述**: 读**节点 Worker** 进程日志文件的尾部，经反向隧道调 Worker 的 `PullSelfLog` RPC 拉取
+- **权限**: `node.manage`（路由）+ 目标节点存在性校验
+- **Query**: 同 CP 版（`lines`，默认 200）
+- **响应**: 同 CP 版（`content` / `truncated` / `fileBytes` / `path` / `note`）；`path` 是**该节点本机**的路径，命令需在该节点上执行
+- **失败语义**: 节点离线 / 隧道未建立 / Worker 过旧无此 RPC ⇒ 明确错误，**不得返回空 content 冒充「没有日志」**
+
+---
+
+## Worker 日志平台（FR-473～484，2026-10-22 回归修复中）
+
+> **接线与验收边界（FR-483 对账）**：Shared Contracts 基线已冻结，既有 CP/Worker 联邦、采集、持久 Catalog、受管 VL、RangeClient、归档与管理面已装配，cutover 默认关闭；能力禁用/未就绪须结构化失败，不能空成功。当前页导出和顶层覆盖字段已按实际代码及定向 HTTP→CP→Adapter→Service 回归对账，见下文及 [协调器规格](specs/cp-log-query-coordinator/spec.md)。历史验收见 [受控记录](specs/worker-log-platform-contract/acceptance-record.md)。本节标题日期保留修复批次定位；当前本轮代码修复及已覆盖回归、指定真实 VL/浏览器原 scope 已收口，250ms 首屏、长稳与追加故障覆盖等专项延期且未计通过，范围统一见 [收口声明及验收表](specs/worker-log-platform-contract/spec.md#2026-10-25-功能修复收口与延期专项)，不外推全部分支或新增生产验收。
 
 ### Worker Log RPC 摘要（gRPC，`proto/worker.proto`）
 
@@ -3116,13 +3218,31 @@
 | `LogStats` | `LogStatsRequest` → `LogStatsResponse` | 可合并聚合；`time_bucket` + `group_by` | 同上 |
 | `LogFields` | `LogFieldsRequest` → `LogFieldsResponse` | 可查询字段 + coverage | 同上 |
 | `LogFacets` | `LogFacetsRequest` → `LogFacetsResponse` | 受控维度 Facets；高基数 `truncated` | 同上 |
-| `LogTail` | `LogTailRequest` → stream `LogEvent` | FOLLOW_LIVE / VIEW_BOUNDED | `VIEW_BOUNDED` 可走 VL；`FOLLOW_LIVE` 仍显式 unsupported |
+| `LogTail` | `LogTailRequest` → stream `LogEvent` | FOLLOW_LIVE / VIEW_BOUNDED | `VIEW_BOUNDED` 复用固定 view；支持动态读的 RangeClient 可执行有界 `FOLLOW_LIVE`（默认 1 秒、最多 30 秒），不支持者明确 unsupported |
 | `LogRehydrate` | `LogRehydrateRequest` → `LogTaskResponse` | Deep Archive 回灌（FR-478） | Worker Registry/Rehydrate 已接线；CP 节点归档管理面可触发 |
 | `LogArchiveStatus` | `LogArchiveStatusRequest` → `LogArchiveStatusResponse` | 归档对象 available/missing + coverage | Worker 真实 manifest/provider 查询；CP 节点归档管理面可查询 |
 
-公共请求基座 `LogQueryRequestBase`：`request_id` / `protocol_version` / `time_range`（UTC 闭开）/ `authorized_targets`（CP 计算；`online_only` 仅显式选择）/ `budget`（limit/max_bytes/timeout_ms/max_fanout）/ `view`（view_id/cursor/order_version）/ `filter` / `permission_scope` / `cancellation_token`。响应统一携带 `LogCoverage`（complete/partial_reasons/targets/enumeration_state）与 `LogQuality`。
+公共请求基座 `LogQueryRequestBase`：`request_id` / `protocol_version` / `time_range`（UTC 闭开）/ `authorized_targets`（CP 计算；`online_only` 仅显式选择）/ `budget`（limit/max_bytes/timeout_ms/max_fanout）/ `view`（view_id/cursor/order_version）/ `filter` / `permission_scope` / `cancellation_token`。Search/Stats 响应携带 `LogCoverage` 与 `LogQuality`；Fields/Facets 当前 proto 只有 coverage、字段/维度值及现有截断证据，没有 `LogQuality`，不得虚构 Worker quality。CP Facets 的统计质量可依据覆盖/截断保守派生，Fields 无独立 quality 字段。
 
 `LogSearchResponse.ingest_position_gaps` 是独立的人工永久放弃位置凭据，不表示查询时间覆盖缺口。`IngestPositionGap` 原字段 1～6 保持 `storage_namespace/from/to/reason_code/operator/at_utc`，仅追加 `log_source_id=7`、`source_generation=8`（来自真实源键）；既有 RPC 与 `fr433/v1` 不变。CP Search 与门面可选返回 `ingest_position_gaps[]`：`worker_id` 为可信路由绑定的 Worker UUID，`from/to` 为无损十进制字符串，其余字段沿用上述 snake_case。空集合省略，旧 Worker 未提供的真实源/代次字段省略，禁止从 namespace 或结果事件推断；不同 Worker/源/代次的凭据不得按 namespace 合并。即使 `items=[]` 也可返回凭据；它不参与 `coverage`、`quality` 或 Export 闸门判断。
+
+`coverage.partial_reasons` 里 `ENGINE_NOT_READY` 与 `TARGET_NO_DATA` 语义不同，不可互相替代：前者表示**查询引擎 / Worker 数据面未就绪**（调用失败、空响应、Query View 未建立、混版 Unimplemented），后者表示**该目标没有可查日志**（RPC 成功返回，但该目标在 Worker 侧没有 Catalog 分区）。二者按以下口径区分（2026-10-19 定稿）：
+
+- **响应非空、但缺该目标** ⇒ 该目标无数据，`state=success`，不进入 `partial_reasons`、不使 `complete=false`。
+- **响应本身为空** ⇒ 记 `TARGET_NO_DATA` 且该目标 `state=not_ready`，使 `complete=false`（不静默放行导出）。原因：Worker 在「没有任何匹配分区」与「有分区却枚举不出来」两种情形下都返回空 targets（`planner.selectKeys` 为空 ⇒ `coverage.targets` 亦为空，`Coverage` 只是 `Targets` 的另一投影），现有 wire 无法区分，因此不能判 success——否则会把后一类故障静默成「无数据」。
+- 前端**不得**把 `TARGET_NO_DATA` 映射为「日志查询服务未启用」（它走 partial 分支），以免把排查引向 VL。
+
+**2026-10-19 语义修正**：该情形此前归一化为 `ENGINE_NOT_READY`，导致「VL 有数据、采集正常」的节点在日志页显示「日志查询服务未启用」，把排查引向 VL。
+
+`quality`（`LogQuality`）与 `coverage` 正交：覆盖完整**不**代表内容无歧义。CP→浏览器为 snake_case 小写枚举：`quality.duplicate_quality` = `exact` | `unresolved` | `conflict` | `unspecified`，`quality.stats_quality` = `exact` | `partial` | `unavailable` | `unspecified`（wire 上是 `LOG_QUALITY_DUPLICATE_*` / `LOG_QUALITY_STATS_*`；适配层归一，空串与本版本不认识的枚举一律收敛为 `unspecified`）。
+
+`duplicate_quality` 回答「同一事件身份（`event_id`）是否出现内容分歧」，下列任一条成立即**不得**报 `exact`：
+
+- **Worker 单 range 路径**：同一 `event_id` 出现两个不同规范化哈希（`canonical_hash`）⇒ `unresolved`，检出即置、不复位。**同 `event_id` 同哈希的纯重复不降级**——该重复按 `id+哈希` 去重丢弃，不构成内容歧义；把它算进来会让普通重复误封导出
+- **Worker 合并路径**（多 range 并集）：同一 `event_id` 在跨 range 合并时**再次出现**即 ⇒ `unresolved`（哈希相同也置位：该行按 `event_id` 去重丢弃，但质量仍降级——同一事件身份出现在两个分区本就需要归因）。不同哈希的两行都保留给上层归因
+- **Worker planner**：投影 `coverage_complete=false` ⇒ `unresolved`；该投影 `conflict_count>0`（存在未裁定的身份冲突记录）⇒ `conflict`（优先于 `unresolved`）。⚠️ **2026-11-06 起 `conflict` 基本不会出现**：冲突记录的写入方（旧采集账本）已删除，新采集器不产生身份冲突；连带的「清空冲突」端点也已下线（见下方）。该标记保留是为了兼容旧数据快照。
+- **CP 联邦聚合**：逐 Worker 按最差值合并（`conflict > unresolved > unspecified > exact`），任一 Worker 报非 `exact` 即整体降级，不被其它 Worker 的 `exact` 掩盖；未上报（`unspecified`）**也高于** `exact`，不会被当成 `exact` 放行。此外任一目标 `coverage.state` 为 `partial` / `stale` ⇒ 提升为 `unresolved`
+- **导出闸门**：要求 `duplicate_quality=exact` **且** `stats_quality=exact`，否则不交付 NDJSON 附件，并在 `incomplete_reasons` 追加 `quality_<值>` / `stats_<值>`（如 `quality_unresolved`）
 
 查询预算是整请求扫描额度而非每 Worker/range 独享额度：入口 `max_bytes=0` 使用 32 MiB 默认，执行前分配正数子额度，零份额不发请求；正常 `limit` 分页不等于扫描预算耗尽。Search/Stats 顶层保留 Worker 的 partial 原因与预算截断，不能被逐目标成功覆盖；未完整页边界同戳组或扫描截断时不提供可跨过缺失集合的全局游标。固定窗口续页须携原 view 与复合 cursor，不以毫秒时间锚点替代。
 
@@ -3132,23 +3252,51 @@
 
 - **`GET /api/v1/logs/federation`** — 前端门面（FR-482）：内部调用 Search，返回 `{ok,sourceTag,items,coverage,quality,view,notes,…}`；coverage/quality 为 FR-473 snake_case
 - **`GET /api/v1/logs/federation/search|stats|facets`** / **`POST /api/v1/logs/federation/export`** — FR-480 精确端点；导出 incomplete 时不返回 NDJSON 附件
-- **状态**: CP `main` 已 `logcoord.Assemble` 并注册路由；受管 VL 可用时走真实 RangeClient，缺失能力时返回 `LOG_UNSUPPORTED`（非空成功）。LogsPage 探测门面，404 降级 legacy `/logs`。远程正常联邦和浏览器正常导出已通过，失败态矩阵仍待
+- **状态**: 既有 Assemble/门面路由保留；本批真实 Worker view、覆盖和当前页导出已通过定向 HTTP 跨层回归，真实 VL/浏览器与持续性能仍待联合验收。LogsPage 探测门面，404 可降级 legacy `/logs`，不得将其它错误伪装为完整零结果。
 
 > 服务层真源：`internal/controlplane/logcoord` + `internal/worker/logs/query`。联邦侧经过 Worker-local View、Catalog、coverage 和权限校验；能力不可用时仍返回结构化 not-ready，禁止空成功。**CP 为浏览器唯一入口**；覆盖语义继承 FR-473。
 
 - **`GET /api/v1/logs/federation`** — 跨 Worker 联邦检索（FR-480）
   - **关联 FR**: FR-479, FR-480, FR-482
   - **权限**: 认证用户；资源收敛到授权实例；平台/全量视图仅平台管理员
-  - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`limit`、`cursor`、`orderVersion`
+  - **Query**: `from`/`to`、`keyword`/`filter`、`level`、`source`、`nodeId`/`instanceId`、`onlineOnly`（默认 false）、`viewId`、`limit`、`cursor`、`orderVersion`；续页使用原 view 和入页 cursor，固定时间/筛选/授权 scope 不能悄悄改变。
   - **筛选语义**: `level` 与 `source` 在 CP 侧组合进单一 `filter` 表达式（wire 契约只有该字段），取值走白名单防注入。`source` 取 `instance`/`worker`/`control_plane`，按事件 `log_source_id` 前缀（`inst:`/`node:`）推导——事件结构不含类别字段，前端来源下拉与其不同构，故两侧用同一套前缀约定对齐。`control_plane` 类日志只落 CP 库、不进联邦数据面，该值会诚实返回零结果而非放行全量。
-  - **响应**: `{ view, coverage, quality, items[], nextCursor, exhausted }`
-  - **状态**: logcoord + HTTP + **生产 Assemble（pool/node/instance）**；远程与真机联邦 Search/Stats/Facets/Export 通过，失败态矩阵（DOM 19 项 + 真浏览器）已验收
+  - **响应**: `{ view, coverage, quality, items[], next_cursor, exhausted }`；门面另含 `ok/sourceTag/notes`，不把前端内部 camelCase 名称当作原始 HTTP 字段。
+  - **状态**: 既有 logcoord + HTTP + Assemble 保留；本批定向跨层回归通过，真实多进程/浏览器联合验收未完成。Fast 首屏以实际 Worker Search 的 view/vector 原子绑定，缓存保留同一引用；任一 Worker 未证明安全页边界时无新 cursor、`exhausted=false`，可见 `PAGE_RETRY_REQUIRED` 供同页重试。
 
-- **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`** / **`POST /api/v1/logs/federation/export`**
-  - Stats/Facets/Export 语义继承 FR-473/480；导出缺口/截断/超预算 **不交付成功附件**
-  - 导出物化预算（行数/累计字节）由 CP 配置 `log_export.max_rows` / `log_export.max_bytes` 决定，默认 10000 行 / 64MiB。请求侧 `limit` **只能收紧**（取配置与请求值的较小者），放宽必须改配置——导出是单次请求读全量并在内存物化 NDJSON 的操作，请求侧可放大即等于无界资源入口。前端导出固定携带 `limit`（`FEDERATED_EXPORT_REQUEST_LIMIT`），不再依赖服务端默认值
-  - 阻断响应（200 JSON，`artifact: null`）除既有 `incomplete_reasons` 外，新增 `limits: { max_rows, max_bytes, rows }` 回传本次实际采用的上限与实取行数；预算类阻断的 `incomplete_reasons` 同时含笼统码 `budget_exceeded` 与精确码 `row_limit_exceeded` / `byte_budget_exceeded`，供 UI 给出「缩小时间范围或调大配置」的可操作提示
-  - **状态**: 聚合与导出门禁已注册到 HTTP；真实 managed VL 结果路径与真机联邦已通过，跨 Tier/失败态矩阵已验收
+- **`GET /api/v1/logs/federation/stats`** / **`GET /api/v1/logs/federation/facets`**
+  - 继承 Search 的 scope/view 与 FR-473/480 语义；Stats 返回独立 coverage/quality，Facets 保留顶层 coverage、`truncated` 与逐维度截断信息，任一来源 partial/截断时 CP `quality.stats_quality=partial`，不能把空桶报为精确 0。
+  - HTTP 聚合结果可能使用 4s 同参缓存；它不构成点击下载时的新鲜授权/质量证明，当前页导出不借用该缓存。
+  - Facets 的维度聚合走 VictoriaLogs 官方 `/select/logsql/field_values`（**不是** `/select/logsql/facets`——后者的语义是「自动发现低基数字段」，会忽略 `field=`，与「按指定维度查」的契约不匹配）。
+
+- **`GET /api/v1/logs/federation/streams`** — 窗内流清单
+  - **关联 FR**: FR-479, FR-480
+  - **权限**：同 Search。
+  - **Query**：继承 Search 的 `from/to`、筛选、目标、`onlineOnly`、`viewId`。
+  - **响应**：`{ view, coverage, quality, streams:[{log_source_id, stream, raw, hits}], complete }`
+  - **与 `/fields` 的区别**：`/fields` 给的是窗内出现过的**文档字段名**（level / parser_version …）；`/streams` 给的是窗内有哪些**流**、各多少条。前者回答「能按什么筛」，后者回答「谁在刷日志」。
+  - **`complete=false` 的语义**：条数**不可信**。VictoriaLogs 的 `streams` 端点在结果被截断时会把**所有** hits 静默归零，所以此时 `hits=0` 不等于「该流没有数据」。服务端因此**从不向 VL 传 `limit`**。
+  - 同样可能命中 4s 同参缓存。
+
+- **`GET /api/v1/logs/federation/stream-field-names`** — stream 的标签维度名
+  - **响应**：`{ view, coverage, fields[] }`。
+  - **实测恒为 `[log_source_id, stream]`**：VL 在入库时按流标签建索引，而我们行上的流标签就这两个。接口保留该端点而不是在代码里写死，是为了将来 VL 给流加新标签时前端无需改码。
+
+- **`GET /api/v1/logs/federation/stream-field-values`** — stream 标签维度的取值分布
+  - **Query**：多一个必填 `field`。
+  - **`field` 只能取 `log_source_id` / `stream`**；其他值 ⇒ 400 `INVALID_REQUEST`。提前拦下是因为向 VL 传文档字段（如 `level`）会返回**空结果而不报错**，前端会显示「这个维度可选但永远没数据」。
+  - **响应**：`{ view, coverage, quality, field, values:[{value, count}], complete }`。
+  - 同样**不向 VL 传 `limit`**（同一截断归零陷阱），由服务端拿全量后自行裁剪。
+
+- **`POST /api/v1/logs/federation/export`** — 三种界面范围复用此端点，不新增 Worker Export RPC。
+  - **参数位置**：全部使用 query，继承 `from/to`、筛选、目标、`onlineOnly`、`viewId`、`cursor`、`limit`；不接收客户端原始行作为产物来源。
+  - **`range=all`（默认）**：省略 range 保持兼容；服务端清除 cursor，导出当前有效时间窗内全部匹配，不因界面位于后页漏掉前页。显式自选时间段改变 scope 时使用匹配新 view，不能混用旧 viewId。
+  - **`range=page`**：必须有已存在且匹配的 `viewId`，入页 cursor 首屏省略；使用该 view 固定 page limit，指定非零 `limit` 时必须相等，省略/0 沿 view。前端须显式携带点击时页面的 limit，不能把整窗导出上限代入当前页。
+  - **新鲜闸门**：服务端禁用 Search 缓存并对同 view 新鲜 Search、直接 Stats，重新复核主体/授权、coverage 完整、无 pending/partial 原因、重复与统计质量均 exact、无预算截断；页面和 Stats 共用本请求累计字节预留；显式超时贯穿整次页导出，取消沿请求上下文传播。仅物化服务端实际当前逻辑页，页面无须把整个 Search 集合枚举到尾。
+  - **错误**：未知 range 或 page 缺 viewId ⇒ 400 `INVALID_REQUEST`；view 不存在 ⇒ 400；固定 scope/filter/time/onlineOnly 或非零 page limit 不匹配 ⇒ 409 `VIEW_STALE`（`errorCode=LOG_VIEW_STALE`）；主体/授权范围变化 ⇒ 403 `FORBIDDEN`（`errorCode=LOG_VIEW_AUTHZ_DENIED`）。
+  - **成功**：200 `application/x-ndjson` + attachment。完整性/质量/pending/预算阻断返回 200 JSON、`export_incomplete=true`、`incomplete_reasons[]`、`artifact:null`，不交付附件；`limits:{max_rows,max_bytes,rows}` 回传实际采用上限与实取行数，预算原因含 `budget_exceeded` 及 `row_limit_exceeded`/`byte_budget_exceeded` 等精确码。
+  - **物化预算**：CP `log_export.max_rows/max_bytes` 默认 10000 行/64MiB，请求只能收紧；page limit 仍受固定 view 与配置共同约束，不能以当前页名义绕过预算。
+  - **验收边界**：本批已通过定向 HTTP→CP→Adapter→Service 回归和跨 Worker Reader 字节/并发追加验证；不含真实网络、真实 VL 或浏览器下载验收。
 
 - **`GET /api/v1/logs/federation/tail`** — 实时跟随（FR-482）
   - **关联 FR**: FR-479, FR-480, FR-482
@@ -3156,7 +3304,7 @@
   - **Query**: 继承 Search 的筛选参数，另加 `mode`
     - `mode=FOLLOW_LIVE`（默认）— 有界动态窗口，随水位前移返回新事件；LogsPage「实时跟随」即用此档
     - `mode=VIEW_BOUNDED` — 在既有 view 边界内取尾（不随水位扩展）
-  - **响应**: 同 Search `{ view, coverage, quality, items[], nextCursor, exhausted }`；`coverage.enumerationState=OPEN` 表示窗口仍在推进
+  - **响应**: 同 Search `{ view, coverage, quality, items[], next_cursor, exhausted }`；`coverage.enumeration_state=OPEN` 表示窗口仍在推进
   - **状态**: 已注册并有路由层测试（`log_federation_test.go` 覆盖 `mode=FOLLOW_LIVE`）；前端 `LOGS_FEDERATION_TAIL_PATH` 按 `follow` 态轮询
 
 - **`GET /api/v1/logs/federation/fields`** — 可用字段发现（FR-479）
@@ -3166,27 +3314,207 @@
   - **响应**: `{ view, coverage, fields: string[] }`
   - **状态**: 已注册并有路由层测试；用于在授权范围内列出可检索字段，能力不可用时同样返回结构化 not-ready（不空成功）
 
-### POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps
+### POST /api/v1/nodes/:id/log-runtime/migrate
 
-- **请求**：可选 `{ "storageNamespace": "完整源键", "reason": "人工裁定理由" }`；`storageNamespace` 在本端点表示完整 `LogSourceID/SourceGeneration`，不是存储分区名。
-- **授权**：非空键须在下发任何裁定 RPC 前绑定真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；节点能力或知道源键不能替代对象授权。畸形键 400；未知实例、组外、错节点或未登记代次统一 403，拒绝路径不发裁定 RPC。操作人取已认证主体，不信任请求 body 自报身份。
-- **语义**：空键仍仅走原整节点自动解算，不能落入永久放弃分支；终局人工放弃需实名、理由及 Worker 证据门禁。成功 `{ "state": "resolved" }`；Worker 拒绝返回 409 `GAP_RESOLUTION_FAILED`，传输失败 502 `WORKER_RPC_FAILED`。
+- **描述**：以存储 namespace 与 UTC 日定位准入，迁移 Worker 的同一物理 UTC 日固定批次到**冷层**，可能涉及多个 namespace；入口 namespace 不是物理隔离或搬运范围。`targetTier` 由服务端固定为 `cold`，请求无法指定其它层级。COLD 是受管 VL 可查询层，健康客户端与 Catalog 权威就绪时可直接查询，不等同必须 Rehydrate 的 DEEP。迁移仍会长期改变物理 owner/目录与恢复责任，须确认 UTC 日和目标范围并留审计；物理日批次/退休屏障正在联合复验。
+- **权限**：`node.manage` 路由门 + 平台管理员主体（`getAccess.IsPlatformAdmin`），并保留操作者、入口 namespace 格式与节点绑定校验；单实例组授权不代表已获同物理日全部成员授权。非平台主体返回 403 `FORBIDDEN`，message 为 `整物理 UTC 日日志迁移仅限平台管理员`，RPC 调用数为 0；不新增权限 schema，也不把此平台门扩大到普通 runtime control。授权服务未就绪仍失败关闭。
+- **请求**：`{ "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`
+  - `storageNamespace` 去空白后不得为空，否则 400 `INVALID_REQUEST`
+  - `utcDay` 须为 `YYYY-MM-DD`（Go 布局 `2006-01-02`），否则 400 `INVALID_UTC_DAY`
+- **校验顺序**（handler 内；外层 `node.manage` 路由门先行，2026-10-22 整日授权收口）：
+  1. **操作人**：取认证主体（JWT 用户名 / Agent 的 `agent:<名称>`，兜底 `user:<id>`）；取不到 ⇒ 403 `OPERATOR_UNKNOWN`，且不下发 RPC。
+  2. **请求体**：JSON/namespace 非空/UTC 日格式 ⇒ 400 `INVALID_REQUEST` / `INVALID_UTC_DAY`。
+  3. **平台主体**：`getAccess.IsPlatformAdmin` 必须为真，否则 403 `FORBIDDEN`，不下发 RPC。
+  4. **入口探针归属**（保留 `authorizeArchiveTarget`，在取 Worker client 前；不是单 namespace 搬运授权）：
+     - `node:<id>`：只允许指向路由节点自身（**逐字符串比较**，不做数值归一 ⇒ `node:007` 与路由 `7` 不等而 403）；否则 403 `FORBIDDEN`（`仅允许访问本节点归档`）
+     - `inst:<id>`：须通过 `CanAccessInstance`，且该实例确实归属路由节点。`inst:` 后非十进制 ID ⇒ 400 `INVALID_REQUEST`；路由节点本身不存在 ⇒ 404 `NOT_FOUND`；实例不存在或组外 ⇒ 403 `FORBIDDEN`（不区分「不存在」与「无权限」，避免实例存在性枚举）；实例存在但不属于该路由节点 ⇒ 403 `FORBIDDEN`（`目标实例不属于该节点`）
+     - 其它形态（无 `inst:` / `node:` 前缀）⇒ 400 `INVALID_REQUEST`（`target 仅支持 inst:<id> 或 node:<id>`）
+  5. **取 client**：`:id` 非十进制 ⇒ 400 `INVALID_NODE_ID`；节点不存在或无 UUID ⇒ 404 `NODE_NOT_FOUND`；Worker 离线 ⇒ 503 `WORKER_OFFLINE`
+- **响应** (200): `{ "state": "migrated", "targetTier": "cold", "storageNamespace": "inst:317", "utcDay": "2026-10-21" }`。`storageNamespace` 仅回显入口定位目标，不是完整受影响成员清单；物理日批次/逐记录 journal 才记录固定成员与进度。
+- **错误**: Worker 返回错误或状态非 `LOG_TASK_SUCCEEDED` ⇒ 409 `MIGRATION_FAILED`（另带 `code`：缺省 `LOG_NOT_READY`，否则取 Worker 错误码）；Worker 不支持该 RPC（Unimplemented）⇒ 501 `WORKER_RPC_FAILED`；其它传输失败 ⇒ 502 `WORKER_RPC_FAILED`
+- **审计**: **仅成功分支**落 `node.log_partition.migrate`（`targetType=node`、`targetId=路由节点`），detail 含 `migrationScope=physical_utc_day`、入口 `storageNamespace`、`utcDay`、`targetTier`、`operator`；失败不写成功迁移行。审计由 handler 主动记录，不依赖通用中间件。
+- **状态**：真实 RBAC 反例已红转绿，定向 `TestSixModulePhysicalDayMigration|TestLogMigratePartition` 回归退出码 0；CP 末轮完整普通、分范围 race/vet 的准确范围见 [CP 规格](specs/cp-log-query-coordinator/spec.md)。特定真实双 VL/三启证据见 [Lifecycle 规格](specs/worker-log-lifecycle/spec.md)；真后端 Chromium 已验证确认单 POST 收 409 时无假成功/重放，准确短验范围见 [共享规格](specs/worker-log-platform-contract/spec.md#2026-10-22-有限真实联合短验与剩余门禁)，不是浏览器成功搬迁或本批全部失败矩阵、独立最终复核与生产验收通过。
 
-### POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts
+### ~~POST /api/v1/nodes/:id/log-runtime/ingest/resolve-gaps~~（已下线 2026-11-06）
 
-- **请求**：`{ "storageNamespace": "完整源键（可选）", "reason": "清空理由（必填）" }`。`storageNamespace` 与 resolve-gaps 取同一口径的完整 `LogSourceID/SourceGeneration`；**空 = 清该节点全部持有冲突记录的源**。
-- **语义**：人工确认并清空「身份冲突」记录（同 event_id 异内容、且系统无法按确定性证据裁定）。系统在该形态下保留先到者并跳过冲突行（保留的是正确版本，冲突行从未进入写入面），故清空只移除**诊断记录**、使查询面质量标记不再为 `conflict`/`partial`，**不改动任何日志内容**。
-- **授权**：非空键先做对象授权（与 resolve-gaps 同一判据：真实实例、实例组权限、当前或已登记历史 holder 的 Worker UUID/代次与路由节点；畸形键 400，未知实例/组外/错节点/未登记代次 403，拒绝路径不发 RPC）。**空键（批量）额外要求平台管理员**（仅 `node.manage` 的组管理员 403），因为一次调用会清掉整节点所有源的歧义提示。
-- **审计**：操作人取已认证主体（不信任请求 body 自报身份），理由必填；两者均经 `x-jm-operator` / `x-jm-reason` 下传 Worker，并随该源 payload 落库（`identity_conflict_clearances`：操作人 / 理由 / 时间 / 条数 / 被清记录明细）。缺失任一 ⇒ 400 `REASON_REQUIRED` 或 403 `OPERATOR_UNKNOWN`，且**不下发 RPC**。
-- **响应**：成功 `{ "state": "cleared", "clearedCount": N, "clearedSources": [...], "skippedSources": [...] }`；`skippedSources` 是计划内但未清的源（期间新增了未经审阅的冲突记录，或本就已无冲突记录）。Worker 拒绝返回 409 `CLEAR_CONFLICTS_FAILED`（含具体原因，如「采集轮忙」），传输失败 502 `WORKER_RPC_FAILED`。
-- **标记消失时机**：Worker 内存与索引里的记录已清空后，`ConflictCount` 由**下一次投影发布**重算为 0。仍在投递的源下次投递即归零；**已停止投递的源**要等其再次投递才归零（本操作不回退任何查询语义，只是不再提示该源的内容歧义）。
-- **状态**: 已注册并有路由层测试（`log_clear_identity_conflicts_test.go`）与 Worker 侧回归（`identity_conflict_clear_test.go`）。
+**端点已删除，请求返回 404。**
 
-### 日志入库切换与 Legacy 端点（FR-481，**HTTP 已注册**）
+「缺口」是旧采集账本（`ingest` / `ledger`）的概念：它记录源位置上哪段没被投递、哪段被人工裁定永久放弃。
+2026-11-06 采集链路整体重建为 Fluent Bit / Filebeat 模型（`tailer` + `logtail`），新采集器**主动不追踪完整性**，
+没有缺口账本、没有放弃裁定，也就没有可核销的对象。Worker 侧已**不再实现** `LogResolveIngestGaps`（调用得 gRPC `UNIMPLEMENTED`），CP 侧路由与前端入口均已删除。
+proto 定义保留仅为 wire 兼容（详见 [ARCHITECTURE](ARCHITECTURE.md) 采集链路一节）。
 
-> 路由：`internal/controlplane/router/log_cutover.go`，在 `router.go` 经 `permRead("node.manage")` 挂载；handler 再判 **平台管理员**。PUT 写审计 `log.cutover.update`。**默认 `enabled=false`**。
+用户裁定原文：「日志不重要，投递失败就失败了，做好提示消息就行」。
 
-#### GET /api/v1/logs/cutover
+### ~~POST /api/v1/nodes/:id/log-runtime/ingest/clear-identity-conflicts~~（已下线 2026-11-06）
+
+**端点已删除，请求返回 404。**
+
+「身份冲突」指同一个 `event_id` 对应多份不同内容（同区间多哈希）。这套检测依赖旧账本的
+「源区间 + 逐字段校验」，随采集链路重建一并消失；新采集器按文件 fingerprint + offset 采集，
+用内容指纹（`logtail.contentID`）做 `event_id`，**不产生也不累积身份冲突**。
+
+因此「清空冲突记录」没有作用对象。Worker 侧已**不再实现** `LogClearIdentityConflicts`（调用得 `UNIMPLEMENTED`）；CP 侧路由与前端「清空冲突」对话框均已删除。
+
+> 日志页仍会展示「数据可能有歧义 / 不完整」这类**只读提示**（来自 `coverage` / `quality` 聚合），
+> 但不再提供「一键清掉提示」的动作——那个动作的前提（可枚举、可裁定的冲突记录）已不存在。
+
+### ~~POST /api/v1/nodes/:id/log-runtime/ingest/import-archives~~（已下线 2026-11-06）
+
+**端点已删除，请求返回 404。**
+
+手动触发历史 `.gz` 归档导入，服务的是旧采集链路的「归档回灌」：把躺在源目录里、尚未被
+`ArchiveImporter` 导入的 `.gz` 走一遍与自动路径相同的管道。
+
+新采集器没有「待导入队列」这个概念——它要么按 `log_tailer.include_gzip` 直接读 gz（在采集线径内），
+要么不读。Worker 侧已**不再实现** `LogImportArchives`（调用得 `UNIMPLEMENTED`）；
+CP 侧路由与前端「手动导入归档」对话框均已删除。
+
+> **想补历史 gz？** 把 `log_tailer.include_gzip` 打开、并让采集 glob 覆盖到那些 `.gz` 即可——
+> 采集器会把它们当普通文件逐行读取（gzip 流式解压，见 `tailer/gzip.go`）。
+> 注意 VL **不按 `event_id` 去重**，同一份内容若被重复采集会重复入库。
+
+### GET /api/v1/nodes/:id/log-runtime
+
+- **描述**：读取该节点受管 VictoriaLogs 的运行时状态。CP 经反向隧道代理 Worker（不直连 VictoriaLogs），按 `hot` / `cold` / `rehydrate` 三个命名空间逐个采集。
+  > **2026-10-30 修订**：`cold` / `rehydrate` 两个 namespace 已随「单 VL」改造从**装配层**移除，
+  > 当前只启动 `hot`。`vlsup` 包本身仍是通用的 namespace 管理器（引擎能力保留），
+  > 所以接口形状不变，只是返回里只剩 `hot` 一项。
+- **权限**：路由经 `permRead("node.manage")` 挂载（`RequireAnyPerm`，任一命中即放行）。**无目标级授权**：handler 只按 `:id` 解析节点与隧道 client，不做 `CanAccessInstance` 或归属校验 ⇒ 任何持有 `node.manage` 的自定义角色都能读取任意节点的运行时状态。
+- **请求**：无 body、无 query 参数影响行为；可选 header `X-Request-ID`，作为 `request_id` 下发并由 Worker 回显。CP **不填** `protocol_version`。
+- **错误顺序**（顺序即优先级）：
+  1. `:id` 非十进制 ⇒ 400 `INVALID_NODE_ID`（`0` 可解析成功，随后走第 2 步 ⇒ 404）
+  2. 节点不存在或无 UUID ⇒ 404 `NODE_NOT_FOUND`
+  3. 隧道无 client 或 Worker 离线 ⇒ 503 `WORKER_OFFLINE`
+  4. RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`（另带 `message: <err.Error()>`）
+  5. Worker 回 `error` ⇒ 503，`code == LOG_UNSUPPORTED` 时 501；body 为 `{ "error": "<错误码名>", "message": "<Worker 文案>" }`——注意此处 `error` 是**码名字符串**，与成功响应里的 `error` 对象不同形
+- **响应** (200)：Worker 的 `LogRuntimeStatusResponse` 原样序列化：
+```json
+{
+  "request_id": "…",
+  "supported": true,
+  "instances": [
+    {
+      "namespace": "hot",
+      "state": "RUNNING",
+      "port": 9428,
+      "listen_addr": "127.0.0.1:9428",
+      "storage_data_path": "/var/lib/…",
+      "pid": 1234,
+      "asset_tag": "v1.52.0",
+      "asset_build_id": "…",
+      "asset_sha256": "…",
+      "last_error": "",
+      "health_ok": true,
+      "partition_recovery_complete": true,
+      "query_ready": true
+    }
+  ]
+}
+```
+- **JSON 形状注意**：响应体由 proto 结构体直接 `encoding/json` 序列化（非 protojson），故 `omitempty` 生效——`supported=false`、空 `instances`、空串 / `0` / `false` 的字段**整个不出现**；成功响应里若带 `error`，其 `code` 是**整数枚举**（`LogErrorCode`），不是码名。`instances[].state` 是 supervisor 账面字符串状态，取值 `STOPPED` / `STARTING` / `RUNNING` / `STOPPING` / `FAILED`（与「进程健康」「分区恢复完成」「查询可用」是四件独立的事，见下方三个布尔/字段）。
+- **Worker 侧语义**：`runtime` 未配置 ⇒ `error.code=LOG_UNSUPPORTED`（CP 501）；否则三命名空间逐个取状态，`supported` 置 `true`。`query_ready` = 健康探测通过 **且** catalog 该命名空间下所有键的恢复已完成、投影已发布（`runtimeCatalogReadiness`）；健康探测带 2s 超时。**任一命名空间 `Status()` 出错会写入 `error` 并跳过该命名空间**，而 CP 见 `error` 非空即整体返回 503 ⇒ 其它命名空间已采集到的信息一并丢弃（同一响应无法既报错又给部分状态）。
+- **审计**：**无**。GET 不进入审计中间件（其只记录非 GET），handler 也未调用 `recordAudit`、不解析操作人。
+- **状态**: 已注册；前端 `NodeLogRuntimePanel` 经 `useLogRuntime` 每 10s 轮询。
+
+### POST /api/v1/nodes/:id/log-runtime/:namespace/:action
+
+- **描述**：启动 / 停止 / 重启该节点上某个受管 VictoriaLogs 命名空间实例。CP 只做转发，取值合法性由 Worker 判定。
+- **权限**：路由级 `node.manage`，handler 另以 `requireNodes("node.manage")` 复核；任何 RPC 前从已认证上下文解析操作人，缺失返回 403 `OPERATOR_UNKNOWN`。这里的 namespace 仅指 `hot/cold/rehydrate` 三个节点级日志基础设施进程，不是 `inst:`/`node:` 业务目标，不套用实例归属授权。
+- **路径参数**（CP 侧 `ToLower` + `TrimSpace` 后原样下发，**CP 不校验取值集合**）：
+  - `:namespace`：允许 `hot` | `cold` | `rehydrate`（Worker `vlsup.Namespace`）。其它值 ⇒ Worker 回 `LOG_ERROR_UNSPECIFIED` / `unknown VictoriaLogs namespace` ⇒ CP **503**
+  - `:action`：允许 `start` | `stop` | `restart`
+    - `restart` 实现为 `Stop` 后 `Start`；**`Stop` 的错误被丢弃**（`_ = s.runtime.Stop(...)`），只有 `Start` 的错误会上报
+    - 未知 action ⇒ Worker 回 `LOG_NOT_READY` / `unknown VictoriaLogs runtime action "<action>"` ⇒ CP **503**
+    - proto 另声明了 `install`，但本路由下 CP **不下发** `package_url` / `package_sha256`，Worker 的 install 分支因两者为空必然失败（`LOG_ERROR_UNSPECIFIED` / `approved package URL and SHA-256 required`，CP 503；安装器未配置则 `LOG_UNSUPPORTED`，CP 501），且该分支**在命名空间校验之前**、完全不看 `:namespace`。制品安装请走 `POST /api/v1/nodes/:id/log-runtime/install`（另一 handler，另有授权）
+- **请求**：无 body（CP 不读请求体，`Content-Type` 随意）；可选 header `X-Request-ID`。
+- **校验顺序**（顺序即优先级）：
+  1. 解析已认证操作人，缺失 ⇒ 403 `OPERATOR_UNKNOWN`；再复核 `node.manage`，失败不发 RPC。
+  2. 取 client ⇒ 400 `INVALID_NODE_ID` / 404 `NODE_NOT_FOUND` / 503 `WORKER_OFFLINE`，早于路径参数空值校验。
+  3. `namespace` 或 `action` 去空白后为空 ⇒ 400 `INVALID_RUNTIME_ACTION`；只在空白路径段等异常输入时可达。
+  4. 下发 RPC（`request_id` 取 `X-Request-ID`；`protocol_version`、`package_url`、`package_sha256` 均不填）。
+  5. RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`；Worker 回 `error` ⇒ 503，`LOG_UNSUPPORTED` ⇒ 501，body `{ "error": "<码名>", "message": "…" }`。
+  6. 成功受理写 CP 审计，再返回 202 Accepted。
+- **响应** (202)：`LogTaskResponse` 原样序列化：`{ "task_id": "…", "state": 2, "error": {...} }`。`state` 是**整数枚举**（`LogTaskState`：`QUEUED=0`、`RUNNING=1`、`SUCCEEDED=2`、`FAILED=3`、`CANCELLED=4`、`STALE=5`）；因 `omitempty`，`state=0` 时该字段**不出现**。前端当前不读取该字段。
+- **审计**：成功受理由 handler 写 `node.log_runtime.control`，目标为路由节点，detail 包含 `namespace/action/operator/state`。Worker 错误或传输失败不写成功受理行；不依赖通用 POST 审计中间件推导动作。
+- **状态**: 已注册；前端仅使用 `start` / `stop` / `restart` 与三个命名空间（`useControlLogRuntime`）。
+
+### GET /api/v1/nodes/:id/log-archive/status
+
+- **描述**：查询某归档分区下若干归档对象是否**存在且校验通过**，返回可用 / 缺失两组对象 ID 及覆盖情况。
+- **权限**：路由级 `node.manage`，**另有目标级授权** `authorizeArchiveTarget`（M-4B）；授权校验在**取 Worker client 之前**执行，拒绝路径不下发 RPC。
+- **Query 参数**：
+  - `target`：归档目标。空 / 全空白 = 路由节点自身（下发时补成 `node:<id>`）；非空须为 `inst:<id>` 或 `node:<id>`
+  - `from` / `to`：时间范围，原样作为 `time_range.from_utc` / `to_utc`
+  - `objectIds`：逗号分隔的归档对象 ID 列表，逐项去空白、空项丢弃（不去重）
+  - 由 CP 固定填充：`protocol_version="log-query/1"`、`budget.limit=200`
+- **目标授权规则与错误**（顺序即优先级）：
+  - 授权服务未接线 ⇒ 403 `FORBIDDEN`（`日志归档授权未就绪`）
+  - 无访问上下文 ⇒ 403 `FORBIDDEN`（`权限不足`）
+  - 空 target ⇒ 放行
+  - `inst:<id>`：`inst:` 后非十进制 ⇒ 400 `INVALID_REQUEST`（`target 无效`）；`CanAccessInstance` 内部错误 ⇒ 500 `INTERNAL_ERROR`；无权限 ⇒ 403 `FORBIDDEN`（`无权访问该实例归档`）；路由节点不存在 ⇒ 404 `NOT_FOUND`（`节点不存在`；`:id` 非数字时经 `parseUintOrZero` 归 0 同样落此分支，即返回 404 而非 400 `INVALID_NODE_ID`）；实例服务未接线 ⇒ 500 `INTERNAL_ERROR`；实例不存在 ⇒ 403（与无权限同码，不区分以避免实例存在性枚举）；实例存在但不属于该路由节点 ⇒ 403 `FORBIDDEN`（`目标实例不属于该节点`）
+  - `node:<id>`：与路由 `:id` 做**字符串逐字比较**（不做数值归一）⇒ `node:007` 对路由 `7` 判 403 `FORBIDDEN`（`仅允许访问本节点归档`）
+  - 其它形态（无 `inst:` / `node:` 前缀）⇒ 400 `INVALID_REQUEST`（`target 仅支持 inst:<id> 或 node:<id>`）
+- **后续错误**：取 client ⇒ 400 `INVALID_NODE_ID` / 404 `NODE_NOT_FOUND` / 503 `WORKER_OFFLINE`；RPC 传输失败 ⇒ 502 `WORKER_RPC_FAILED`（含 `message`）；Worker 回 `error` ⇒ **503** `{ "error": "<码名>", "message": "…" }`
+- **响应** (200)：`LogArchiveStatusResponse` 原样序列化：
+```json
+{
+  "request_id": "…",
+  "coverage": {
+    "complete": true,
+    "partial_reasons": [],
+    "targets": [
+      { "target_id": "node:1", "state": 1, "reasons": [], "closed_visible_seq": "…", "catalog_generation": "…" }
+    ],
+    "enumeration_state": 1
+  },
+  "available_archive_object_ids": ["…"],
+  "missing_archive_object_ids": ["…"]
+}
+```
+- **字段说明**：`coverage.targets[].state` 与 `coverage.enumeration_state` 在 JSON 里是**整数枚举**；`partial_reasons` / `reasons` 是字符串码（如 `ARCHIVE_NOT_RESTORED`、`ARCHIVE_PURGED`、`UNSUPPORTED`、`NO_CATALOG_AUTHORITY`）。`available_archive_object_ids` = 在 manifest 中命中且内容哈希校验通过；`missing_archive_object_ids` = manifest 无该 ID、取对象失败或哈希不符（三者不区分）。
+- **`ARCHIVE_PURGED` 与 `ARCHIVE_NOT_RESTORED` 不可互换**（FR-501 归档对象回收）：前者是「归档副本已按保留期清除，恢复不了」，后者是「副本还在归档里、只是本地未恢复，去 rehydrate」，两者的处置动作**相反**。`LogSearch` 在无任何可读 range 时据此返回 `LOG_ARCHIVE_PURGED`（proto `LogErrorCode = 11`）或 `LOG_ARCHIVE_MISSING`（= 6），**不返回空成功**；两者在 CP 侧也不归一（`normalizeCoverageReason` 保持 `ARCHIVE_PURGED` 原样）。
+- **Worker 侧语义（决定实际结果）**：planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`archive status disabled on this worker`）；归档后端未接线 ⇒ `LOG_UNSUPPORTED`；registry 不可用 ⇒ `LOG_UNSUPPORTED` 且 coverage 标 `UNSUPPORTED`。分区键由**首个** `authorized_targets` 生成：单段 target（`node:1` / `inst:317`）的 UTC 日取 `from_utc` 前 10 字符，**`from` 缺失或长度不足 ⇒ `LOG_NOT_READY`（`archive target must include a UTC day or query range`）**；多段 target 形如 `<namespace>/<YYYY-MM-DD>`，可选 `/<YYYY-MM-DD>/g<N>` 指定代次。manifest 不存在 ⇒ `LOG_NOT_READY` + coverage `ARCHIVE_NOT_RESTORED`；逐对象「manifest 无该 ID / 取对象失败 / 内容哈希不符」一律计入 `missing`，任一缺失即把 coverage 标为不完整。
+- **错误映射不一致**：本端点（及下方 rehydrate）对 `LOG_UNSUPPORTED` **不做 501 映射**，一律 503；同族 `GET /log-runtime` 与 `POST /log-runtime/:namespace/:action` 会映射为 501。属当前真貌，如实记录。
+- **审计**：**无**（GET 不进审计中间件；handler 不调 `recordAudit`、不解析操作人）。
+- **状态**: 已注册；**当前无调用方**（前端与其它后端均无引用），仅有 M-4B 目标授权回归 `log_archive_authz_test.go`。
+
+### POST /api/v1/nodes/:id/log-archive/rehydrate
+
+- **描述**：把归档对象回灌（Rehydrate）为可查询投影，使冷 / 归档层历史重新可被查询面读取。按归档分区为单位成立受管任务。
+- **权限**：路由级 `node.manage` + 目标级授权（同 `GET /log-archive/status`）；任何 RPC 与请求体处理前解析已认证操作人，缺失返回 403 `OPERATOR_UNKNOWN`。
+- **请求体**：
+  - `archiveObjectIds`：必填且非空数组；在操作人解析通过后，缺参、空数组或非法 JSON 返回 400 `INVALID_REQUEST`（`archiveObjectIds required`），早于目标授权与取 client。
+  - `target`：可选，同 status 的 `target` 判据；空 = 本节点自身
+  - `fromUtc` / `toUtc`：可选，覆盖 `time_range`。**target 为单段时 Worker 用 `fromUtc` 前 10 字符作 UTC 日**，故留空会 503（`archive target must include a UTC day or query range`）。Query 上的 `from` / `to` 在本端点**会被 body 值无条件覆盖**（恒忽略 query 时间）
+  - CP 不校验 `archiveObjectIds` 的元素内容、不去重：空串元素只会把集合撑大，通常触发下方「完整对象集」拒绝
+  - CP 固定 `protocol_version="log-query/1"`、`budget.limit=200`
+- **校验顺序**：操作人（403）⇒ 请求体（400）⇒ 目标授权（400 / 403 / 404 / 500，见 status 节）⇒ 取 client（400 / 404 / 503）⇒ RPC（失败 502）⇒ Worker `error`（503）⇒ 成功受理审计 ⇒ 202。
+- **响应** (202)：`LogTaskResponse` 原样序列化 `{ "task_id": "…", "state": <int>, "error": {...} }`。任务状态映射兼容 `LOG_TASK_` 前缀与裸值，只剥一层前缀；成功映射 `SUCCEEDED=2`，未知状态仍失败关闭为 `FAILED=3`，不再把成功回灌统一报成失败。
+- **Worker 侧语义（决定 503 的真实条件）**：
+  - planner 未就绪 ⇒ `LOG_UNSUPPORTED`（`rehydrate disabled on this worker`）
+  - 归档后端未接线 ⇒ `LOG_UNSUPPORTED`（`rehydrate unimplemented on this worker`）
+  - 投影发布器未就绪 ⇒ `LOG_NOT_READY`（`rehydrate projection publisher is not ready`）
+  - 分区键无法成立（target 单段且无 `from`）⇒ `LOG_NOT_READY`
+  - manifest 不存在 / `coverage.complete=false` / 枚举状态非 `EXHAUSTED` ⇒ `LOG_NOT_READY`（`archive generation has no closed, verified manifest`）
+  - **`archiveObjectIds` 必须是该分区 manifest 的完整对象集合**（长度相等且逐个命中），否则 `LOG_NOT_READY`（`rehydrate requires the full closed archive object set`）——**不支持只回灌子集**
+  - 无已验证的规范化事件 ⇒ `LOG_NOT_READY`（`archive has no verified canonical events`）
+  - 加载对象失败 ⇒ `LOG_NOT_READY`（可重试），并给该分区打 `REHYDRATE_FAILED` 标记
+  - 并发合并：同分区任务已在跑（`waiters>1`）⇒ 直接返回既有 `task_id` / `state`，**不重复发布**
+  - 发布失败 ⇒ 任务置 `LOG_TASK_FAILED` + `LOG_NOT_READY`（可重试），并标记该分区回灌失败
+  - 注意：以上 `LOG_NOT_READY` 经 CP 一律变成 **503**（不是 409），与 `migrate` / `resolve-gaps` 的 409 口径不同
+- **审计**：成功受理由 handler 写 `node.log_archive.rehydrate`，目标为路由节点，detail 包含归一后的 `target`、`archiveObjectIds`、`fromUtc/toUtc`、`operator` 和任务 `state`。拒绝或 Worker/传输失败不写成功受理行。
+- **状态**: 已注册；**当前无调用方**；仅有目标授权回归 `log_archive_authz_test.go`。
+
+### ~~日志入库切换与 Legacy 端点~~（FR-481，已下线 2026-10-29）
+
+> **本节描述的三个端点（`/logs/cutover` GET/PUT、`/logs/legacy` GET）已随 CP `logs` 表删除而下线：**
+> `router/log_cutover.go` 与 `service/log_cutover.go` 已删除，路径不再注册（404）。
+> 切换的前提「CP 与 Worker 双写同一张表」已不存在——现在实例日志只进 Worker 的 VL，
+> 平台日志只进本地文件，**没有可切换的两侧**，FR-481 随表废弃而失去意义。
+> 下方历史文档仅存作演进参考，**不要按它接入**。
+
+#### ~~GET /api/v1/logs/cutover~~（已下线）
 - **描述**: 读取全局切换开关、逐 Worker 水位与 Legacy 独立保留预算
 - **关联 FR**: FR-481
 - **权限**: 平台管理员（非管理员 403）
@@ -3210,7 +3538,7 @@
 }
 ```
 
-#### PUT /api/v1/logs/cutover
+#### ~~PUT /api/v1/logs/cutover~~（已下线）
 - **描述**: 设置全局开关与/或登记逐 Worker 水位
 - **关联 FR**: FR-481
 - **权限**: 平台管理员
@@ -3236,7 +3564,7 @@
 - **响应**: 同 GET，并附 `applied[]`（本次写入的水位）
 - **审计**: `action=log.cutover.update`
 
-#### GET /api/v1/logs/legacy
+#### ~~GET /api/v1/logs/legacy~~（已下线）
 - **描述**: Legacy 只读查询——切换水位前仍留在 CP `logs` 的 instance/worker 存量
 - **关联 FR**: FR-481
 - **权限**: 平台管理员
@@ -3337,6 +3665,47 @@
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
 
 ---
+
+## 日志采集配置（FR-502 / FR-503 / FR-504）
+
+> 两层语义：**Worker 覆盖 > 平台默认 > worker.yml 基线**，经心跳下发（≤1 心跳周期生效、无需重启 Worker）。平台键 `log.acq.*`，节点级覆盖写作 `log.acq.*@node:<nodeUuid>`。键清单：`log.acq.rules_enabled`（规则引擎）/ `log.acq.realtime_tail`（实时采集应急开关）/ `log.acq.gz_import_enabled`（gz 导入总开关）/ `log.acq.gz_scan_interval`（定时扫描周期）/ `log.acq.path_overrides`（实例路径覆盖 JSON）。参见 `docs/specs/log-config-delivery/spec.md`。
+
+### GET /api/v1/settings/log-acquisition
+- **描述**: 读取日志采集的**平台默认**视图
+- **权限**: `settings.read` / `settings.write` / `license.read`
+- **关联 FR**: FR-503
+- **响应** (200): `{ "items": [ { "key", "default", "platform", "effective", "override", "overridden" } ] }`（平台视图下 `override` 恒为空）
+
+### PUT /api/v1/settings/log-acquisition
+- **描述**: 写平台默认（批量键值）
+- **权限**: `settings.write`；写审计
+- **关联 FR**: FR-503
+- **请求**: `{ "values": { "log.acq.rules_enabled": "false", ... } }`。仅接受上述 5 个键，含其它键整体拒绝（422）。值语义逐项校验：布尔项 `true|false`；`gz_scan_interval` 按下方校验口径；`path_overrides` 留空或 JSON 对象文本，且逐条校验（2026-10-20）：键须为规范的 `inst:<十进制ID>`；值须非空、**非绝对路径**、不含 Windows 盘符/UNC、折叠 `..` 后不得逃出实例工作目录、首尾不得有空白。任一不合返回 422 `BUSINESS_ERROR`。
+- **`log.acq.gz_scan_interval` 校验口径**（顺序敏感；前端 `validateSettingDraft` 与后端 `validateSettingValue` 逐层对齐）：
+  - 空 / 纯空白 ⇒ 合法，语义是**未配置**：Worker 回落该节点 `worker.yml` 的 `log_ingest.archive_scan_interval` 基线。它**不是**「关闭定时扫描」——要停定时扫描只有把 `log.acq.gz_import_enabled` 置 `false`
+  - `time.ParseDuration` 失败或 `d <= 0` ⇒ 拒（含 `0s`：零周期属语义非法，提示不混入越界文案）
+  - `d > math.MaxInt32` 毫秒（≈ 24.855 天）⇒ 拒。下发载体是 int32 毫秒，超限会被截断成错值——`720h`（30 天）截成负数后被 Worker 当作「未配置」，`1200h`（50 天）截成 ≈ 6.96 小时并按错误周期扫描
+  - `d < 1ms` ⇒ 拒。不足 1ms 会被截断成 0，语义变回「未配置」
+  - 错误文案语义：后端逐层给不同提示（「须留空或为正的 Go duration」/「上限约 24 天（协议以 int32 毫秒下发）」/「不得小于 1ms」）；前端用两条独立 i18n key 分别提示「请调小」与「请调大」。前端上界比较前先截断到整毫秒（对齐后端 `d/time.Millisecond` 的整数除法），故 `2147483647.5ms` 合法、`2147483648ms` 被拒
+- **生效**: 经心跳下发 Worker（`effectiveImmediately=false`）
+
+### GET /api/v1/nodes/:id/settings/log-acquisition
+- **描述**: 读取某节点的**对照视图**（平台默认 / 本节点生效值 / 是否被覆盖）+ 节点名
+- **权限**: `node.read` / `node.manage`
+- **关联 FR**: FR-503
+- **响应** (200): 同平台视图，另含 `nodeUuid` / `nodeName`；`overridden=true` 表示该键**存在**节点级覆盖——**空串也是显式覆盖**（对 `gz_scan_interval` 而言即「本节点回落 `worker.yml` 基线，且**不再继承平台默认**」，不是「关闭定时扫描」；对 `path_overrides` 而言即「无路径覆盖」）
+
+### PUT /api/v1/nodes/:id/settings/log-acquisition
+- **描述**: 写某节点的采集覆盖（仅平台管理员）；写审计 `node.log_acq.override.set`
+- **权限**: `node.read` 或 `node.manage`
+- **请求/校验**: 同平台端点（键必须属于上述 5 项；服务端自动加 `@node:<uuid>` 后缀，客户端不需要拼），含 `gz_scan_interval` 的 1ms～`math.MaxInt32` 毫秒上下界判据；节点级置空 = 本节点回落 `worker.yml` 基线（覆盖优先于平台值，不会继承平台默认）
+
+### DELETE /api/v1/nodes/:id/settings/log-acquisition
+- **描述**: 清除节点级覆盖（恢复继承平台默认，幂等）；仅平台管理员；写审计 `node.log_acq.override.clear`
+- **权限**: `node.read` 或 `node.manage`
+- **查询**: 可选 `?key=<平台键>` 只清一项；缺省清全部 5 项
+
+> 节点**彻底删除**（`Purge`）时在同一事务内清理该节点全部 `log.acq.*@node:<uuid>` 键；软删除 / 归档**不清理**（归档节点可恢复，其配置保留）。
 
 ## 无主运行时反向对账（FR-326）
 
@@ -3473,7 +3842,7 @@
 ### GET /api/v1/client-channels
 - **描述**: 列出全部分发频道（含密钥数量）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200):
   ```json
   [ { "id": 1, "channelId": "skyblock-s1", "name": "空岛一服", "description": "",
@@ -3483,7 +3852,7 @@
 ### POST /api/v1/client-channels
 - **描述**: 创建分发频道（每服一个）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "channelId": "skyblock-s1", "name": "空岛一服", "description": "可选" }`
 - **响应** (201): 频道对象
 - **错误**: 400 `INVALID_CHANNEL_ID`（slug 非法，须 `^[a-z0-9][a-z0-9-]{1,63}$`）| 409 `CHANNEL_EXISTS`
@@ -3491,7 +3860,7 @@
 ### GET /api/v1/client-channels/:id
 - **描述**: 频道详情（含密钥元数据列表，无明文）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200):
   ```json
   { "id": 1, "channelId": "skyblock-s1", "name": "空岛一服", "description": "", "currentVersion": 0,
@@ -3504,7 +3873,7 @@
 ### PUT /api/v1/client-channels/:id
 - **描述**: 更新频道名称/描述（channelId 不可改）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "name": "新名", "description": "新描述" }`
 - **响应** (200): 频道对象
 - **错误**: 404 `CHANNEL_NOT_FOUND`
@@ -3512,7 +3881,7 @@
 ### DELETE /api/v1/client-channels/:id
 - **描述**: 删除频道及其全部拉取密钥
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **响应** (200): `{ "message": "已删除" }`
 - **错误**: 404 `CHANNEL_NOT_FOUND`
 - **审计**: `client_channel.delete`
@@ -3520,14 +3889,14 @@
 ### GET /api/v1/client-channels/:id/keys
 - **描述**: 列出频道下拉取密钥（仅元数据，无明文）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200): 密钥元数据数组（同详情 `keys`）
 - **错误**: 404 `CHANNEL_NOT_FOUND`
 
 ### POST /api/v1/client-channels/:id/keys
 - **描述**: 创建拉取密钥；明文随此响应一次性返回，**创建后亦可经 reveal 端点查看**（FR-192：密钥发出后永久使用）。`value` 可选——留空自动生成，填入则用作自定义密钥明文值（管理员自控这把永久 key）
 - **关联 FR**: FR-086 / FR-192
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "name": "正式包", "expiresAt": "2027-01-01T00:00:00Z", "value": "自定义值" }`（`expiresAt`/`value` 均可选）
 - **响应** (201):
   ```json
@@ -3541,7 +3910,7 @@
 ### PUT /api/v1/client-channels/:id/keys/:kid
 - **描述**: 编辑拉取密钥（FR-192，见 ADR-044）。改名必填；`value` 可选——留空仅改名，填入则改值（重算 `KeyHash` 使鉴权切到新值 + 重写 `KeyEnc` 供查看）。**改值会使持旧值的已分发客户端失效**。取代原「轮换」（已删除）
 - **关联 FR**: FR-192
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "name": "灰度", "value": "新密钥明文", "expiresAt": "2027-01-01T00:00:00Z" }`（`value` 可空=只改名；`expiresAt` 不传=保持原过期时间，传 ISO 时间=设置过期时间，传 `null`/空字符串=清空为永不过期）
 - **响应** (200): 同创建响应；改值时 `key`=新明文（回显供复制），仅改名/改过期时间时 `key` 为空串
 - **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND` | 400 `INVALID_REQUEST`
@@ -3550,7 +3919,7 @@
 ### GET /api/v1/client-channels/:id/keys/:kid/reveal
 - **描述**: 查看拉取密钥明文（FR-192，见 ADR-044）。密钥改可逆加密存储后管理员可随时查看明文 + 复制；鉴权仍只用哈希比对，行为不变。仅当后端存有可逆加密副本（`KeyEnc`）时可查看
 - **关联 FR**: FR-192
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200): `{ "key": "jmck_<明文>" }`
 - **错误**: 404 `KEY_NOT_REVEALABLE`（存量老哈希密钥 / 创建时未配 `JIANMANAGER_CLIENT_KEY_ENC_SECRET`，明文不可找回；可经 PUT 改值为已知值后再查看）| 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
 - **审计**: `client_key.reveal`（detail 仅元数据 channelId/keyId，**绝不含明文**）
@@ -3559,7 +3928,7 @@
 ### DELETE /api/v1/client-channels/:id/keys/:kid
 - **描述**: 吊销密钥（保留记录、标记 revoked，立即鉴权失效）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **响应** (200): `{ "message": "已吊销" }`
 - **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
 - **审计**: `client_key.revoke`
@@ -3567,6 +3936,7 @@
 ### GET /api/v1/client-channels/:id/updater-config
 - **描述**: 按频道生成 `jm-updater.json`（FR-259，见 ADR-054）。返回完整配置字段，运营者直接下载放入整合包。FR-256 起不再含签名公钥（验签已去，信任靠 HTTPS + 拉取密钥鉴权，推翻 ADR-022/053）；`coreEndpoint` 配置字段已移除，楔子用 `endpoint + channel` 自动拼接 updater-core 端点。`endpoint` 按 CP 请求推断 API 根路径预填（可改，但必须保持 `/api/v1` 根路径，禁止填写 `/client-channels/...` 后缀）；`key` 留空占位由运营粘贴拉取密钥
 - **关联 FR**: FR-259、FR-258
+- **权限**: `channel.read` 或 `channel.write`（且需 `node.manage`）
 - **鉴权**: **JWT，平台管理员**
 - **响应** (200):
   ```json
@@ -3588,6 +3958,7 @@
 ### POST /api/v1/client-channels/:id/files
 - **描述**: 上传客户端文件制品（入 FR-045 制品库 `type=client-file`，按制品自身 sha256 内容寻址去重）。返回的 `sha256` 即 manifest `files[].artifact.sha256`
 - **关联 FR**: FR-087
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **请求**: `multipart/form-data` — `file`（必）、`codec`（可，`zstd`|`none`）、`expectedSha256`（可，制品自身 sha256 校验）
 - **响应** (201): `{ "sha256": "ef56…", "md5": "cd34…", "size": 45678, "codec": "zstd" }`（`md5` 供发布向导填 `file.md5`；codec=none 时制品即原始内容，`sha256`/`md5`/`size` 可直接作 `files[]` 的解压后字段）
@@ -3597,6 +3968,7 @@
 ### POST /api/v1/client-channels/:id/uploads
 - **描述**: 大文件**分块上传**初始化（FR-251，增强 FR-088 单次上传）。声明文件总大小 → 建上传会话 → 返回 `uploadId` 与服务端敲定的 `chunkSize`/`chunkCount`（前端据此切片）。用于 4G+ 整合包，避免单请求超时、无进度、失败整传重来
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作，与 `POST .../files` 同组）
 - **请求**: `{ "filename": "pack.zip", "totalSize": 5368709120, "chunkSize": 8388608 }`（`totalSize` 必 >=0，**0=空文件**（整合包常见 `.gitkeep`/空配置）此时 `chunkCount=0`、无片可传、直接 complete 落空内容；`chunkSize` 可空，<=0 用默认 8 MiB，越界夹取到 [1 MiB, 64 MiB]）
 - **响应** (201): `{ "uploadId": "a1b2…", "chunkSize": 8388608, "chunkCount": 640 }`
@@ -3605,6 +3977,7 @@
 ### PUT /api/v1/client-channels/:id/uploads/:uploadId/chunks/:index
 - **描述**: 上传第 `index`（0 基）个分片。**幂等**——重传同 index 覆盖，支持失败重试；分片先落临时文件再原子 rename，避免半写脏片被 complete 采纳
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **请求**: body 为该分片**原始字节**（`application/octet-stream`，流式落盘、不缓冲整片进内存）；非末片须恰为 `chunkSize`，末片为末段余量
 - **响应** (200): `{ "received": 12, "total": 640 }`（已收片数 / 总片数）
@@ -3613,6 +3986,7 @@
 ### POST /api/v1/client-channels/:id/uploads/:uploadId/complete
 - **描述**: 完成分块上传。校验分片齐全 + 总字节匹配 → 顺序拼装（`io.MultiReader` 流式，不额外落整文件）喂入 FR-045 制品库（同 `POST .../files` 的内容寻址 CAS）→ 返回与单次上传**逐字段一致**的结果 → 清理临时分片
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **请求**: `{ "codec": "none", "expectedSha256": "ef56…" }`（**均可选**，请求体可空；codec 空补 `none`）
 - **响应** (201): `{ "sha256": "ef56…", "md5": "cd34…", "size": 5368709120, "codec": "none" }`（同 `POST .../files`，即 manifest `files[].artifact.sha256`）
@@ -3622,6 +3996,7 @@
 ### DELETE /api/v1/client-channels/:id/uploads/:uploadId
 - **描述**: 弃单——移除上传会话 + 清临时分片。幂等（会话不存在亦返回 204）。前端取消上传时调用；空闲超 1h 的会话由后台 TTL 自动回收，CP 重启清残留分片
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **响应**: `204 No Content`
 - **错误**: 403 `UPLOAD_CHANNEL_MISMATCH`（跨频道弃他人会话）
@@ -3629,6 +4004,7 @@
 ### POST /api/v1/client-channels/:id/files/precheck
 - **描述**: 批量**秒传预查**（FR-346，增强 FR-250/251）。前端上传前算好各文件**原始内容** sha256，一个请求查 ≤500 个：命中制品库（发布链路恒 `codec=none`，`assets.sha256` 即原始内容 hash，见 spec §2 对齐语义）且 `size` 精确相等者返回与真上传**同构**的结果——前端跳过字节上传直接引用既有制品。命中 bump `last_used_at`；只读预查不产生审计。历史 `codec≠none` 制品天然不命中（其 sha256 为压缩态 hash），无错误引用风险
 - **关联 FR**: FR-346
+- **权限**: `dist.publish` 或 `channel.write`（且需 `node.manage`）
 - **鉴权**: **JWT，平台管理员**（运营操作，与 `POST .../files` 同组）
 - **请求**: `{ "files": [ { "sha256": "ab34…64hex", "size": 12345 } ] }`（1..500 项；sha256 大小写不敏感、归一小写；size ≥ 0）
 - **响应** (200): `{ "results": [ { "sha256": "ab34…", "hit": true, "result": { "sha256": "ab34…", "md5": "…", "size": 12345, "codec": "none" } }, { "sha256": "cd56…", "hit": false } ] }`（与请求顺序对齐、等长；`result` 与 `POST .../files` 返回同构）
@@ -3637,6 +4013,7 @@
 ### POST /api/v1/client-channels/:id/files/batch
 - **描述**: **小文件聚合上传**（FR-346）。一个 multipart 请求携带多个 ≤8 MiB 小文件（≤200 个 / 总 ≤32 MiB），替代逐文件三段分块协议；每项逐个喂入同一 CAS（`Ingest` 按声明 sha256 强校验 + 去重），结果与单次/分块上传**逐字段一致**。**fail-fast**：任一文件校验失败即中止返回错误，已入库的前序文件保留（CAS 无引用制品无害，重试整批即秒传）。>8 MiB 文件仍走 FR-251 分块协议
 - **关联 FR**: FR-346
+- **权限**: `dist.publish` 或 `channel.write`（且需 `node.manage`）
 - **鉴权**: **JWT，平台管理员**
 - **请求**: `multipart/form-data`，part 顺序强约束——首 part 字段 `meta`（JSON 数组 `[{ "filename": "a.jar", "size": 2048, "sha256": "ab34…64hex" }]`，sha256 必填），随后**恰好 len(meta) 个**字段 `files` 的 part 与 meta 同序（原始字节）
 - **响应** (201): `{ "results": [ { "sha256": "ab34…", "md5": "…", "size": 2048, "codec": "none" } ] }`（与 meta 顺序对齐、等长）
@@ -3646,6 +4023,7 @@
 ### POST /api/v1/client-channels/:id/versions
 - **描述**: 发布版本并切 latest 指针。`version` 由服务端**单调递增分配**（防降级基准，contract §3），不接受客户端指定
 - **关联 FR**: FR-087
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **请求**:
   ```json
@@ -3667,6 +4045,7 @@
 ### GET /api/v1/client-channels/:id/versions
 - **描述**: 版本历史列表（版本号 DESC）。**仅管理面**——玩家侧只认 latest，不经此端点拉取任意版本（FR-088）
 - **关联 FR**: FR-088
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **响应** (200): `[ { "version": 2, "note": "…", "fileCount": 3, "createdBy": 1, "createdAt": "datetime", "isLatest": true }, { "version": 1, …, "isLatest": false } ]`
 - **错误**: 404 `CHANNEL_NOT_FOUND`
@@ -3674,6 +4053,7 @@
 ### GET /api/v1/client-channels/:id/versions/:version
 - **描述**: 版本详情（含完整文件清单 + 托管目录 + 自更新段），供管理台查看与回滚前确认（FR-088）
 - **关联 FR**: FR-088
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **响应** (200): `{ "version": 1, "note": "…", "createdBy": 1, "createdAt": "datetime", "isLatest": false, "managedDirs": ["mods"], "cleanExclude": ["custom-mods"], "files": [ { "path": "mods/foo.jar", "sha256": "…", "md5": "…", "size": 0, "sync": "strict", "platform": null, "artifact": { … } } ], "agent": { … } }`
 - **错误**: 400 `INVALID_REQUEST`（版本号非法）| 404 `CHANNEL_NOT_FOUND` / `VERSION_NOT_FOUND`
@@ -3681,6 +4061,7 @@
 ### GET /api/v1/client-channels/:id/files/content
 - **描述**: 按制品 `sha256` 读取 client-file 制品内容用于**管理台文本预览**（FR-214，复用 FR-213 共享文件浏览器预览发布草稿/版本文件）。**只读**。玩家消费端点 `GET /client-artifacts/:sha256` 走拉取密钥、与浏览器 JWT 入口物理隔离（ADR-022/023），管理台无拉取密钥不能复用之取内容预览，故补此 JWT 路径。降级由 `kind` 显式表达，前端据此渲染或降级（不可预览必可下载）
 - **关联 FR**: FR-214 | **鉴权**: **JWT，平台管理员**（运营操作）
+- **权限**: `dist.publish` 或 `channel.write`
 - **查询参数**: `sha256`（必，制品自身 sha256 = `files[].artifact.sha256`）
 - **响应** (200): `{ "kind": "text"|"binary"|"too-large", "content": "…", "size": 45678, "codec": "none" }`
   - `kind=text`：`content` 为 UTF-8 文本；`kind=binary`（含 NUL 或已压缩制品，本期发布恒 `codec=none`，`zstd` 等不在管理面解压）/`kind=too-large`（超 1 MiB 不读全量）：仅 `size`/`codec`，无 `content`，前端降级为「仅下载」
@@ -3689,6 +4070,7 @@
 ### GET /api/v1/client-channels/:id/files/download
 - **描述**: 按制品 `sha256` 下载 client-file 制品（**管理台**，FR-214）。与上同理：浏览器需一个 JWT 下载入口（含预览降级态的下载兜底），与玩家拉取密钥制品端点隔离。s3 制品 **CP 经 BlobStore 代理直流、不走 302**（浏览器 axios blob fetch 跨域跟随预签名 URL 会撞对象存储 CORS；管理面低频运维动作，CP 中继代价可接受，FR-347/ADR-073 决策 6）
 - **关联 FR**: FR-214, FR-347 | **鉴权**: **JWT，平台管理员**（运营操作）
+- **权限**: `dist.publish` 或 `channel.write`
 - **查询参数**: `sha256`（必）
 - **响应** (200): 制品二进制（`Content-Disposition: attachment`）。local 支持 `Range`（`http.ServeContent`）；s3 代理直流带 `Content-Length`
 - **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN` | 404 `ARTIFACT_NOT_FOUND` | 410 `ARTIFACT_LOST`（外置对象已确认缺失，重传同内容可自愈）
@@ -3696,6 +4078,7 @@
 ### POST /api/v1/client-channels/:id/rollback
 - **描述**: 运营回滚——取历史版本 `sourceVersion` 的内容，**以更高版本号重发为新 latest**（保持 `version` 单调，客户端按防降级正常前进、不被拒，ADR-022 §3 / contract §3）。不下发更低版本号
 - **关联 FR**: FR-088
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **请求**: `{ "sourceVersion": 1, "note": "可选，空则生成「回滚至 vN」" }`
 - **响应** (201): `{ "id": 7, "channelId": "skyblock-s1", "version": 3, "sourceVersion": 1, "note": "回滚至 v1", "createdAt": "datetime" }`
@@ -3705,6 +4088,7 @@
 ### GET /api/v1/client-dist/events
 - **描述**: 拉取/下载明细检索（FR-093 全链路追踪；FR-249 错误追踪；FR-265 日志 Tab 兼容入口）。拉取失败（含 401 鉴权失败）也记录事件并带语义错误码 `errCode`。明细短保留（默认 14 天滚动清理）；发布事件审计见 `/audit`（`client_*.publish`/`rollback`）
 - **关联 FR**: FR-093、FR-249、FR-265
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `outcome`(success|failure，空=全部；failure⟺status≥400，success⟺0<status<400 含 200/206/304) / `errCode`(精确筛，如 `INVALID_CLIENT_KEY`) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
 - **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt" } ]`（created_at DESC）。`errCode` 成功事件为空、失败事件填语义码（`INVALID_CLIENT_KEY`/`NO_LATEST_VERSION`/`ARTIFACT_NOT_FOUND`/`SIGN_KEY_NOT_CONFIGURED`/`CHANNEL_NOT_FOUND`/`INTERNAL_ERROR`）
@@ -3712,30 +4096,35 @@
 ### GET /api/v1/client-dist/events/search
 - **描述**: 分发请求日志分页检索（FR-265）。在兼容 `/client-dist/events` 数组响应的基础上，提供日志 Tab 使用的分页对象，并支持运行态维度筛选。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **查询参数**: 兼容 `/client-dist/events` 的 `channelId` / `machineId` / `ip` / `kind` / `outcome` / `errCode` / `version`，并新增 `artifactSha` / `runtimeVersion` / `coreVersion` / `platform` / `lag` / `page`(默认 1) / `pageSize`(默认 100，上限 500)
 - **响应** (200): `{ "items":[{ "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt" }], "page":1, "pageSize":100, "total":1234 }`
 
 ### GET /api/v1/client-dist/events/:id
 - **描述**: 单条分发请求脱敏详情（FR-265）。仅返回白名单请求/响应头；`X-Client-Key` 只保存 `present`/脱敏标记，绝不保存明文。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_event.detail`
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **响应** (200): `{ "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt", "requestHeaders":{}, "responseHeaders":{} }`
 - **错误**: 400 `INVALID_REQUEST`（事件 ID 非法）| 404 `EVENT_NOT_FOUND`
 
 ### GET /api/v1/client-dist/realtime
 - **描述**: 分发请求近实时聚合（FR-265 监控 Tab）。只统计 manifest/artifact HTTP 请求健康度，不混入客户端更新成功率或运行版本。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **查询参数**: `channelId`（可选）
 - **响应** (200): `{ "summary1h":{ "manifestPulls", "artifactPulls", "errorRequests", "activeMachines" }, "requestRate24h":[{ "ts", "manifest", "artifact", "error" }], "recentErrors":[{ "id", "time", "channelId", "kind", "target", "ip", "status", "errCode" }], "topIps1h":[{ "ip", "count" }] }`
 
 ### GET /api/v1/client-dist/clients
 - **描述**: 客户端运行态聚合（FR-265 客户端 Tab）。读取启动心跳最新态与 `client_telemetry` 更新结果；不承诺“在线客户端”。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_clients.query`
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **查询参数**: `channelId`（可选）、`range`(`24h`|`7d`|`30d`|`90d`，默认 `7d`)
 - **响应** (200): `{ "channelId", "from", "to", "summary":{ "recentStarted", "todayStarted", "recentStarts", "todayStarts", "updateSuccessRate", "updateFailureRate" }, "items":[{ "channelId", "machineId", "playerName", "ip", "platform", "javaVersion", "launcher", "coreVersion", "localVersion", "firstSeenAt", "lastHeartbeatAt" }], "runtimeVersionDist":[{ "version", "count" }], "coreVersionDist":[{ "value", "count" }], "platformDist":[{ "value", "count" }], "launcherDist":[{ "value", "count" }], "lagDist":[{ "lag", "count" }], "updateResultSeries":[{ "ts", "success", "failStatic", "rolledBack", "error" }] }`
 
 ### POST /api/v1/client-channels/:id/telemetry/heartbeat
 - **描述**: updater-core 启动心跳（FR-265）。按 `channel_id + machine_id` upsert `client_runtime_states`，只更新运行态，不写 `client_telemetry`，因此不会污染更新成功率。`playerName` 优先兼容 `X-Player-Name`，为空时按 `channel + X-Machine-Id + X-Install-Id` 从 `client_security_profiles` 反查最近安全画像补全。
 - **关联 FR**: FR-265 | **鉴权**: 玩家侧拉取密钥（`X-Client-Key`，必须属于该频道）
+- **权限**: 客户端密钥（`X-Client-Key` + `X-Machine-Id`；`X-Machine-Id` 缺失则不入库）
 - **请求头**: `X-Machine-Id`（必需，否则 best-effort 忽略心跳）、`X-Install-Id`（可选但推荐，用于关联安全画像）、`X-Player-Name`（兼容旧客户端，可选且不可信，仅用于观测与排障）
 - **请求**: `{ "platform":"windows", "javaVersion":"17.0.10", "launcher":"HMCL", "coreVersion":"3", "localVersion":15 }`
 - **响应**: `202 Accepted`
@@ -3744,11 +4133,13 @@
 ### GET /api/v1/client-dist/ip-rules
 - **描述**: 列出分发端点 IP 防护规则（FR-096 L7 防护）
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **响应** (200): `[ { "id", "cidr", "mode"(deny|allow), "note", "createdBy", "createdAt" } ]`
 
 ### POST /api/v1/client-dist/ip-rules
 - **描述**: 新增 IP 防护规则（运行时生效、入审计）。`mode=deny` 黑名单（deny 优先）；`mode=allow` 存在即白名单模式
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **请求**: `{ "cidr": "1.2.3.4 或 10.0.0.0/8", "mode": "deny|allow", "note": "可选" }`
 - **响应** (201): 规则对象 | **错误**: 400 `INVALID_IP_RULE`（CIDR/mode 非法）
 - **审计**: `client_ip_rule.add`
@@ -3756,12 +4147,14 @@
 ### DELETE /api/v1/client-dist/ip-rules/:id
 - **描述**: 删除 IP 防护规则（运行时生效、入审计）
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **响应** (200): `{ "message": "已删除" }` | **错误**: 404 `IP_RULE_NOT_FOUND`
 - **审计**: `client_ip_rule.remove`
 
 ### GET /api/v1/client-dist/protection-stats
 - **描述**: 防护拦截计数（FR-096 可观测；内存计数、不写库）
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **响应** (200): `{ "denyBlocked", "rateLimited", "concurrencyLimited" }`
 
 ---
@@ -3771,6 +4164,7 @@
 ### POST /api/v1/client-security/hello
 - **描述**: updater-core 启动早期上报安全画像。`machineId`、`installId`、`channel` 必填；`playerName` 来自 body 或 `X-Player-Name`，可为空且可伪造，仅作粗略排查线索。IP 临时封禁先于密钥校验生效。
 - **关联 FR**: FR-264
+- **权限**: 客户端密钥（`X-Client-Key`，须绑定 `body.channel`；machineId/installId 必填）
 - **鉴权**: 玩家侧拉取密钥（`X-Client-Key`）
 - **请求**:
   ```json
@@ -3785,44 +4179,52 @@
 
 ### GET /api/v1/client-dist/security/overview
 - **描述**: 防护中心安全总览（画像、风险事件、动作、活跃封禁等聚合）。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "activeDownloads", "downloadBytesPerSecond", "abnormalRequests", "unauthorizedRequests", "forbiddenRequests", "rateLimitedRequests", "blockedIpCount", "throttledKeyCount", "protectedChannelCount", "topIps", "topKeys", "topChannels", "topPlayers" }`
 
 ### GET /api/v1/client-dist/security/events
 - **描述**: 风险事件列表，按创建时间倒序。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "subjectType", "subjectValue", "channelId", "machineId", "installId", "playerName", "ip", "keyId", "keyPrefix", "ruleCode", "severity", "scoreDelta", "action", "reason", "createdAt" } ]`
 
 ### GET /api/v1/client-dist/security/logs
 - **描述**: 客户端分发安全全量日志详情，合并 security hello、风险事件、保护动作、分发请求日志、运行态心跳与更新遥测。管理台「客户端分发安全 / 日志详情」消费此接口。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **查询参数**: `type`（可选，`hello|risk|action|request|runtime|telemetry`）、`channelId`、`machineId`、`playerName`、`ip`、`page`、`pageSize`（默认 50，上限 200）
 - **响应** (200): `{ "items":[{ "id", "type", "title", "channelId", "machineId", "playerName", "ip", "status", "errCode", "createdAt", "detail" }], "total", "page", "pageSize" }`
 
 ### GET /api/v1/client-dist/security/profiles
 - **描述**: 客户端安全画像列表，按最近出现倒序。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "channelId", "machineId", "installId", "playerName", "keyId", "keyPrefix", "lastIp", "coreVersion", "os", "javaVersion", "riskLevel", "protectionState", "lastSeen" } ]`
 
 ### GET /api/v1/client-dist/security/ip-analysis
 - **描述**: IP 剖析聚合，用于查异常来源 IP。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **查询参数**: `limit`（默认 200）
 - **响应** (200): `[ { "ip", "requestCount", "rejectCount", "invalidKeyCount", "notFoundCount", "rangeCount", "downloadBytes", "keyCount", "channelCount", "riskScore", "blocked", "lastSeen" } ]`
 
 ### GET /api/v1/client-dist/security/player-analysis
 - **描述**: 玩家名剖析聚合。玩家名可伪造，不作为可信身份。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **查询参数**: `limit`（默认 200）
 - **响应** (200): `[ { "playerName", "installCount", "machineCount", "ipCount", "keyCount", "channelCount", "downloadBytes", "abnormalRequests", "riskScore", "lastSeen" } ]`
 
 ### GET /api/v1/client-dist/security/actions
 - **描述**: 保护动作列表（IP 封禁、key 状态、频道保护等）。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "targetType", "targetValue", "channelId", "action", "status", "reason", "auto", "expiresAt", "createdBy", "createdAt", "canceledAt" } ]`
 
 ### POST /api/v1/client-dist/security/ip-blocks
 - **描述**: 手动临时封禁 IP。命中消费端点返回 `IP_TEMP_BLOCKED` + `Retry-After`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "ip":"192.0.2.1", "reason":"异常拉取", "ttlSeconds":3600 }`（也兼容 `durationMinutes`）
 - **响应** (201): `ClientProtectionAction`
@@ -3830,17 +4232,20 @@
 
 ### POST /api/v1/client-dist/security/ip-blocks/:id/cancel
 - **描述**: 取消 IP 临时封禁 / 处置动作，状态置 `canceled`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "ok": true }`
 
 ### POST /api/v1/client-dist/security/keys/:id/state
 - **描述**: 切换拉取密钥安全状态：`normal` / `observe` / `throttled` / `suspended` / `revoked`。`suspended` 拉取返回 `CLIENT_KEY_SUSPENDED`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "state":"suspended", "reason":"异常拉取" }`
 - **响应** (200): `{ "ok": true }`
 
 ### PUT /api/v1/client-dist/security/channels/:id/protection
 - **描述**: 设置频道保护模式。频道只允许降速 / 降级保护，不做自动封禁。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "mode":"protected", "reason":"异常流量" }`
 - **响应** (200): `{ "ok": true }`
@@ -3848,33 +4253,39 @@
 
 ### DELETE /api/v1/client-dist/security/channels/:id/protection
 - **描述**: 清除频道保护模式，恢复 `normal`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "ok": true }`
 
 ### GET /api/v1/client-dist/security/groups
 - **描述**: 安全分组列表。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "name", "kind", "targetType", "enabled", "createdBy", "createdAt", "updatedAt" } ]`
 
 ### POST /api/v1/client-dist/security/groups
 - **描述**: 创建安全分组。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "name":"高风险 IP", "kind":"manual", "targetType":"ip", "rule":{}, "actionPolicy":{}, "enabled":true }`
 - **响应** (201): `ClientSecurityGroup`
 
 ### PUT /api/v1/client-dist/security/groups/:id
 - **描述**: 更新安全分组。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: 同创建分组
 - **响应** (200): `ClientSecurityGroup`
 
 ### DELETE /api/v1/client-dist/security/groups/:id
 - **描述**: 删除安全分组。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "ok": true }`
 
 ### GET /api/v1/client-dist/security/privacy-notice
 - **描述**: 防护中心遥测告知文案。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "requiredFields", "diagnosticFields", "notice", "retentionDays" }`
 
@@ -3895,6 +4306,7 @@
 ### GET /api/v1/client-dist/export
 - **描述**: 导出当前请求筛选窗口的 KPI 汇总、分发请求事件或安全全量日志 CSV（FR-361）。
 - **关联 FR**: FR-361、FR-356、FR-360 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist.export.csv`
+- **权限**: `dist.ops.read` 或 `stats.read`
 - **限流**: 按用户 ID（无则 IP）每分钟 1 次；超限返回 `429 RATE_LIMITED` 与 `Retry-After: 60`。
 - **查询参数**:
   - `kind`（必填）：`stats-summary` | `dist-events` | `security-logs`。
@@ -3909,6 +4321,7 @@
 ### GET /api/v1/client-dist/stats
 - **描述**: 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，按频道 + 时间窗
 - **关联 FR**: FR-095、FR-356 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.read` 或 `stats.read` 或 `channel.read`
 - **查询参数**: `channelId`（频道）、`days`（窗口天数，默认 30，上限 365）
 - **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "failureRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
 - **KPI 语义（FR-356）**: 本端点 `successRate`/`failureRate` 是 **HTTP 请求**成功率（`client_dist_events.status`），**不是**更新成功率；`activeMachines` 为近窗 machineId 去重，无 `activeMachinesExact` 标志，前端回退展示时不得标「精确去重」。更新侧率权威源见下方 observability `summary`。
@@ -3916,6 +4329,7 @@
 ### GET /api/v1/client-dist/observability
 - **描述**: 客户端分发**观测数据底座**（FR-217，见 ADR-049；FR-265 修订指标边界）：消费后台离线卷积的小时级时序快照 `client_dist_snapshots`（源 FR-093 events + FR-094 telemetry），返**跨频道/单频道**的时序 + 区间分布聚合 + 汇总标量。与 FR-095 `/client-dist/stats`（单频道按日看板）并存不替代——本端点服务观测·分发监控页的跨频道/平台时序
 - **关联 FR**: FR-217（消费方 FR-218/219）、FR-265、FR-356 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_observability.query`
+- **权限**: `dist.ops.read` 或 `stats.read`（且需 `node.manage`）
 - **查询参数**: `channelId`（可，省略=**总**，跨频道合并含空频道桶）、`from`/`to`（可，RFC3339，同时给且 `to>from`）、`range`（可，无 from/to 时回退枚举 `24h`/`7d`/`30d`/`90d`/`180d`，默认 `7d`）
 - **响应** (200):
   ```
@@ -3940,6 +4354,7 @@
 ### GET /api/v1/client-dist/updater-jars
 - **描述**: 内嵌客户端更新器 jar 的版本与可用性（FR-107/352 接入引导与版本页旁路摘要，供前端展示 + 禁用缺失下载）
 - **关联 FR**: FR-107、FR-352 | **鉴权**: **JWT，平台管理员**
+- **权限**: `channel.read` 或 `channel.write`（且需 `node.manage`）
 - **响应** (200): `{ "version": "0.1.0", "coreVersion": "1", "wedge": {"available": true, "size": 32768}, "core": {"available": true, "size": 1048576} }`
   - `version`: 展示用语义版本串
   - `coreVersion`: updater-core 单调整数版本，按字符串返回
@@ -3948,12 +4363,14 @@
 ### GET /api/v1/client-dist/updater-jars/:component
 - **描述**: 下载内嵌更新器 jar（`component` ∈ `wedge` | `core`），供运营方接入（FR-107）。属管理面，走 JWT、不用拉取密钥
 - **关联 FR**: FR-107 | **鉴权**: **JWT，平台管理员**
+- **权限**: `channel.read` 或 `channel.write`（且需 `node.manage`）
 - **响应** (200): jar 二进制（`Content-Type: application/java-archive`、`Content-Disposition: attachment; filename=...`）
 - **错误**: 400 `INVALID_COMPONENT`（非 wedge/core）| 404 `JAR_NOT_EMBEDDED`（构建未 `make embed-client-updater`）
 
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的 manifest（contract §2；FR-256 起去 `sig` 段不再验签，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。只提供当前版本，不暴露历史。`agent.core` 由频道选定 updater-core 版本驱动（FR-259，见 ADR-054 修订 ADR-045）；无选定版本时回退手填透传（兼容）。`agent.wedge` 仍来自发布快照（楔子冻结、信息性）
 - **关联 FR**: FR-087、FR-092（机器码登记）、FR-259（`agent.core` 由选定 core 版本驱动）
+- **权限**: 客户端密钥（`X-Client-Key`，须绑定该频道；`X-Machine-Id` 可选）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）；`X-Machine-Id`（可，机器码统计/辅助限流）。**无 JWT**
 - **机器码登记（FR-092）**: 鉴权通过后若 `X-Machine-Id` 非空，则 best-effort 登记入 `client_machines`（弱一致、失败不阻断）。机器码**客户端生成、不可信**，仅统计 + 辅助限流（限流主键 IP，FR-096），**不作授权依据**
 - **响应** (200): contract §2 的 manifest（去 `sig` 段）
@@ -3964,6 +4381,7 @@
 ### GET /api/v1/client-artifacts/:sha256
 - **描述**: 按内容寻址下载客户端制品（zstd 压缩流或原文，按 codec）。制品跨频道共享，路径无频道段。鉴权/防护/限流/带宽检查全部通过后按 `Asset.StorageBackend` 分流（FR-347，见 ADR-073）：local → CP `ServeContent` 直出（如旧）；s3 → **302** 跳转对象存储预签名短时效 URL，字节流量不经 CP
 - **关联 FR**: FR-087, FR-347, FR-349
+- **权限**: 客户端密钥（`X-Client-Key`，任一有效密钥；`X-Machine-Id` 可选）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥即授权）；`X-Machine-Id`（可）。**无 JWT**
 - **响应** (200/206，local): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
 - **响应** (302，s3): `Location=` SigV4 query 预签名 GET URL（TTL 取渠道 `presignTtlSeconds`，默认 600s）+ `Cache-Control: no-store`（短时效 URL 禁缓存）。updater 已 `followRedirects(true)` 自动跟随；**http↔https 跨协议不自动跟随**——部署要求 CP 与 S3 endpoint 同协议（ADR-073 决策 6）
@@ -3972,6 +4390,7 @@
 ### GET /api/v1/client-channels/:id/updater-core
 - **描述**: 返回频道当前选定 updater-core 分发信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动只按 `version` 是否大于本地 `selectedVersion` 决定是否下载；这里的 `version` 是频道级递增分发版本，不等同于归档列表里的 jar 版本。切回旧 `sha256` 回滚时，后端仍会抬高分发版本，确保冻结 wedge 会下载目标旧 jar。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
 - **关联 FR**: FR-259、FR-258
+- **权限**: 客户端密钥（`X-Client-Key`，须绑定该频道）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）。**无 JWT**
 - **响应** (200): `{ "version": 3, "sha256": "ab12…", "downloadUrl": "/api/v1/client-artifacts/<sha256>", "size": 2097152 }`（`version` 为频道级分发版本；`sha256` 才是实际 core jar 制品；`downloadUrl` 指向制品分发端点，可 Range 续传）
 - **错误**: 401 `INVALID_CLIENT_KEY` | 404 `CHANNEL_NOT_FOUND` / `NO_SELECTED_CORE`（频道未选定 core 版本）
@@ -3979,12 +4398,14 @@
 ### GET /api/v1/client-channels/:id/updater-core/versions
 - **描述**: 列出全部归档 updater-core 版本（含选定标记），供运营面板切换回滚（FR-259）
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.publish` 或 `channel.write`
 - **响应** (200): `[ { "version": 2, "coreVersion":"0.1.0-SNAPSHOT", "displayVersion":"0.1.0-SNAPSHOT+abc123def456.dirty", "gitCommit":"abc123def456", "dirty":true, "buildTime":"datetime", "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }, { "version": 1, "sha256": "cd34…", "size": 2048000, "createdAt": "datetime", "selected": false } ]`（`version` 是数字归档版本；`coreVersion/displayVersion/gitCommit/dirty/buildTime` 来自 jar 内元信息，旧 jar 可为空）
 - **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
 
 ### POST /api/v1/client-channels/:id/updater-core/versions
 - **描述**: 手动上传 updater-core.jar hotfix，归档为 `client-updater-core` 制品；可选择上传后立即作为当前频道选定版本（FR-259 增强）。客户端下次启动按 updater-core 端点拿到该版本。
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.publish` 或 `channel.write`
 - **请求**: `multipart/form-data`，字段：`file`（必填，jar 文件）、`version`（可选兜底；后端优先读取 jar 内 `META-INF/jm-updater-core.properties` / Manifest 元信息）、`select`（可选，`true`/`1` 表示上传后立即选用）。缺少元信息的紧急 hotfix jar 也允许上传。
 - **响应** (200): `{ "version": 9, "coreVersion":"0.1.1-hotfix", "displayVersion":"0.1.1-hotfix+def456abc789", "gitCommit":"def456abc789", "dirty":false, "buildTime":"datetime", "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }`
 - **错误**: 400 `INVALID_REQUEST`（缺文件/文件不可读）| 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
@@ -3993,6 +4414,7 @@
 ### PUT /api/v1/client-channels/:id/updater-core/selected
 - **描述**: 切换频道选定的 updater-core 版本（一键回滚，FR-259）。后端写入目标 `sha256` 并维护频道级递增分发版本；客户端下次启动按 API 根 `endpoint` 自动查询 updater-core 端点，看到更大的 `version` 后下载目标 `sha256`，因此即使回滚到旧归档 jar 也会生效
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.publish` 或 `channel.write`
 - **请求**: `{ "sha256": "ab12…" }`
 - **响应** (200): `{ "ok": true }`
 - **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND` / `CORE_VERSION_NOT_FOUND`
@@ -4001,6 +4423,7 @@
 ### POST /api/v1/client-telemetry
 - **描述**: 客户端遥测上报（FR-094 / FR-360，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端（`telemetry:false` 整包不上报）
 - **关联 FR**: FR-094、FR-360
+- **权限**: 客户端密钥（`X-Client-Key` + Machine/Install Id；任一有效密钥）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可但推荐）、`X-Install-Id`（可但推荐，用于关联安全画像）、`X-Player-Name`（兼容旧客户端，可选且不可信；为空时按 `channel + machineId + installId` 从安全画像补全）。**无 JWT**
 - **请求**（缺字段不 4xx；旧客户端兼容）:
   - **required**：`channel`, `result`(success|fail-static|rolled-back|error), `fromVersion`, `toVersion`, `coreVersion`, `os`, `arch`, `durationMs`, `bootSuccess`
@@ -4106,19 +4529,23 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 - **V2**: 显式实例 ∪ 授权节点上的当前实例；空 scope 且无节点继承 → 403；`nodeId` 仅作结果过滤
 
 ### GET /api/v1/agent/instances/:id
+- **权限**: Agent Token（`AgentAuth` 中间件校验，scope 见 token 签发处）
 ### GET /api/v1/agent/instances/:id/metrics
 - **描述**: 实例详情 / 指标
+- **权限**: Agent Token（`AgentAuth` 中间件校验，scope 见 token 签发处）
 - **V2 能力**: 详情需 `instance.read`；指标需 `observability.read`
 - **错误**: 403 越权或不存在（Agent 面收敛为同一拒绝语义，不泄露存在性）
 
 ### POST /api/v1/agent/instances/:id/start|stop|restart
 - **描述**: 实例生命周期
+- **权限**: Agent Token（`AgentAuth`）+ `AuthorizeInstanceAction` 校验 token 能力/scope 与该实例归属
 - **V1**: 写白名单 `instance.life` + 显式实例 scope  
 - **V2**: 能力 `instance.life` + 显式实例或节点继承 scope；派发前锁内重验归属
 - **错误**: 403 能力/scope 不足；kill **永不**对 agent 开放（未登记 action）
 
 ### POST /api/v1/agent/nodes/:id/maintenance/enter|leave
 - **描述**: 节点维护模式
+- **权限**: Agent Token（`AgentAuth`）+ token 能力/scope 校验该节点
 - **V1**: 写白名单 `node.maintenance` + 节点 scope  
 - **V2**: 能力 `node.operate` + 节点 scope
 - **错误**: 403

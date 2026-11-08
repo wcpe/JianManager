@@ -22,11 +22,32 @@
 - **更长退避**：`recoverRetryBackoff` 从 `{1s,2s,4s}` 扩为覆盖分钟级的递增序列（如 `{1s,2s,4s,8s,16s,32s,64s}` ≈ 127s），并可经配置注入（测试用小值）。理由：交接窗口的 socket 未就绪/资源紧张常是瞬时的，多等一轮即可接管，无需牺牲服务器。
 - **处置前 cmdline/环境存活复核**：新增 `verifyProcessOwnership(pid int, instanceUUID string, workDir string, expectWrapper bool) bool`，在 `reapOrphanWrapper` **任何** `killTree` 之前调用：
   - Unix：读 `/proc/<pid>/cmdline`，校验其确含该实例工作目录/启动命令特征；wrapper 分支再读 `/proc/<pid>/environ` 校验 `JM_DAEMON_WRAPPER_CONFIG` 内的实例 UUID（wrapper argv 仅 `<worker> daemon`、不含 UUID，单凭 argv 会把**任何**实例的 wrapper 都判真）；
-  - Windows：以 PID 查进程镜像路径与命令行做同口径匹配，wrapper 分支同样要求命令行携带实例 UUID（wrapper argv 携带 UUID）；
+  - Windows：以 PID 查进程镜像路径与命令行做同口径匹配（`proc.Cmdline()` 跨平台可用）；但 wrapper 分支**同样只认进程环境里的实例 UUID，不认命令行**——UUID 仅经 `JM_DAEMON_WRAPPER_CONFIG` 注入 env，wrapper 的 argv 恒为 `<worker 二进制> daemon`、**对本节点所有实例完全相同**，单凭 argv 判真等于把任何一个 wrapper 都认成本实例（wrapper 自身也不切 cwd，故「cwd 等于工作目录」这条弱特征对它同样不成立）。
+    - **Windows 降级行为（fail-closed，安全方向，勿当 bug 修）**：`readProcessEnviron` 只有 `/proc/<pid>/environ` 一条读取实现（`owner_verify.go`，无平台分支），Windows 无 `/proc` ⇒ 读取恒失败 ⇒ 环境强特征恒为 false ⇒ wrapper 分支永不成立。后果分两侧：收养路径 `DefaultVerifyAdoptOwnership` 返回 `env_uuid_missing` 并**拒绝收养**；强杀路径 `DefaultVerifyProcessOwnership` 因「argv 形如 daemon **且** env 携带 UUID」的合取不成立而**判不出归属、不杀**（只告警）。净效果：Windows 上「wrapper 已死、仅剩 Java 孤儿」仍可靠 Java 的 cmdline/cwd 特征确证并处置，而**存活 wrapper 永远不会被自动收养、wrapper 孤儿也永不被自动强杀**。要解除该降级须补一条 Windows 进程环境读取实现（如 gopsutil `Process.Environ()`），当前有意不做；macOS 无 `/proc`，同理。
   - **复核不通过 → 只告警 + 落审计，不杀**，保留 PID 文件等下一轮扫描或人工介入（PID 被 OS 复用给无关进程时，杜绝误杀）。
 
 > **ADR-093 决策（本节旧表述「复核不通过→只告警」的对齐）**：处置判据是「**确属真孤儿**」——即 **wrapper 已确证死亡、仅剩 Java 孤儿**。当复核**通过**（确属本实例）但进程**仍存活/仅瞬时不可达**时（典型：接管 `reconnectWithRetry` 重试耗尽、wrapper 进程未死），**只告警、保留 PID 文件、不杀**——绝不强杀一个 wrapper 与 Java 都健康、只是 socket 一时拨不通的运行中服务器。存活判据优先于「socket 是否拨通」。
 - `pidAlive`（`daemon.IsPIDAlive`）保留用于「是否还活着」判断；`verifyProcessOwnership` 用于「是否确属目标实例」判断，二者正交。
+
+#### 2.1.1 启动接管两阶段化（扫描器不再被重试拖住，2026-11-03 可用性缺陷修复）
+
+**缺陷（实测确认）**：旧实现把「初拨 + 就地 127s 递增重试」串行摊在启动主流程上，而运行期孤儿扫描器（§2.2）在其后才启动。于是一条不可达的 PID 记录就把扫描器推迟到 Worker 启动后约 127 秒（N 条僵死记录线性累加），该窗口内**完全没有运行期扫描能力**。实测证据：T7 的 D 臂因一条不可达记录，扫描器直到 Worker 启动后 127 秒才启用。
+
+**修复**：`RecoverDaemonInstances` 拆成两个阶段，**重试窗口与收尾语义逐字保留**，只把「等待」移出启动主流程：
+
+1. **快速首拨**（同步）：每条记录只拨一次，可达者当场登记为 RUNNING —— 与旧实现的首次拨号一致；返回值 `recovered` 只统计此刻已完成的接管数；
+2. **后台有界重试**（首拨失败者，`startStartupTakeoverRetries`）：按同一 `recover.retry_backoff` 序列、同一串行顺序继续重试，成功则登记，耗尽则照旧落 `orphan.dispose_blocked`（`alive_unreachable`）或 `orphan.startup_detected_not_reaped` —— 审计与「只告警不强杀」语义不变。
+
+**并发隔离（本修复的必要配套）**：接管重试与扫描器并行后，原先靠「扫描器在接管之后才启动」规避的两处竞争必须显式处理，否则修复本身会引入误杀：
+
+| 竞争面 | 后果 | 对策 |
+|---|---|---|
+| 扫描器第 0 相自动收养 vs 接管重试**并发拨号**同一 wrapper | wrapper 只保留**最新**一条控制连接（`wrapper.acceptLoop` 接到新连接即替换旧连接），两个策略对象争抢 → 可能双输 | `Manager.takeoverPending` 声明「在飞接管」，第 0 相跳过该实例（`takeoverPendingHas`）；`registerAdoptedDaemon` 登记前在锁内二次确认未纳管，输者 `strategy.Close()` 只断连不杀 |
+| direct 相把**尚未登记**的在飞实例进程判为「无主进程」 | `dispose_policy=auto` 时直接强杀正在服务的服务器 | `managedInstanceRuntime` 把在飞记录的 wrapper/java PID 与工作目录并入受管集合；`handleDirectOrphan` 在 **killTree 前**再复核一次 `takeoverProtects`（关闭「轮首取集合 → 处置」之间的 TOCTOU 窗口） |
+
+**不变的安全语义**：启动路径仍不杀任何进程（FR-471）；归属复核不过仍只告警（护栏五.1）；`orphan_scan.auto_adopt=false` 仍不收养；接管重试耗尽但 wrapper 仍存活仍落 `alive_unreachable` 审计并保留 PID 文件。
+
+**回归**：`internal/worker/process/startup_takeover_scan_decoupling_test.go` —— 一条「永不成功」的接管记录 + 被阻塞的退避等待下，断言 ①`RecoverDaemonInstances` < 2s 返回 ②扫描器 < 5s 内完成首轮并真的处置了一个**无关**无主进程 ③在飞实例的 wrapper/java 一次都没被 killTree ④放行后接管仍完整收尾（`alive_unreachable` 审计、PID 文件保留、不登记、不补杀）。对照实验（把接管改回就地阻塞）该用例 10s 转红。
 
 ### 2.2 运行期周期孤儿扫描（FR-456）
 
@@ -37,7 +58,7 @@
   - 复用启动期 `RecoverDaemonInstances` 的扫描基座与 `daemon.KillPIDTree`。
 - 扫描三态孤儿，按策略处置：
   1. **wrapper 死 / Java 活**：遍历 PID 目录，`!pidAlive(WrapperPID) && pidAlive(JavaPID)` → 走 `reapOrphanWrapper(..., errOrphanedWrapperGone)`（经 2.1 复核）。
-  2. **direct 孤儿**：Worker 内存表已丢失该实例（Worker 曾硬崩），故需按进程命令行匹配本节点所有受管实例的启动命令/工作目录，发现无主 Java → 按策略告警/清理。判据以内存表为准：**受保护工作目录集合只收「可能仍有活进程」的状态（RUNNING/STARTING/STOPPING）**——含 STOPPING 可避免优雅停止期 Java 被误杀、绕过优雅关服；STOPPED/CRASHED 的进程已死，其工作目录**不**受保护（其 WorkDir 下的残留 Java 须能被识别：Worker 硬崩重启后 CP 会把 direct 实例按 STOPPED + WorkDir 重登记，若一并保护则残留 Java 被漏报）。根 PID 集合按「管理器记名」收（实例 strategy 报出的 PID 即受管）。与 FR-326 反向对账（`orphanRuntimeSvc`）互补。
+  2. **direct 孤儿**：Worker 内存表已丢失该实例（Worker 曾硬崩），故需按进程命令行匹配本节点所有受管实例的启动命令/工作目录，发现无主 Java → 按策略告警/清理。判据以内存表为准：**受保护工作目录集合只收「可能仍有活进程」的状态（RUNNING/STARTING/STOPPING）**——含 STOPPING 可避免优雅停止期 Java 被误杀、绕过优雅关服；STOPPED/CRASHED 的进程已死，其工作目录**不**受保护（其 WorkDir 下的残留 Java 须能被识别：Worker 硬崩重启后 CP 会把 direct 实例按 STOPPED + WorkDir 重登记，若一并保护则残留 Java 被漏报）。根 PID 集合按「管理器记名」收（实例 strategy 报出的 PID 即受管）。与 FR-326 反向对账（`orphanRuntimeSvc`）互补。**`orphan_scan.auto_adopt=false` 时的处置降级**：本轮由第 0 相发现的「未纳管 + 活」进程对（wrapper 与 Java 均活、PID 记录有效）也满足上述 direct 判据（cwd 即实例工作目录），但不得被 auto 档处置——开关关闭的意图是「这些进程我来管」，自动处置等于用处置策略绕过运维的明示意图。故命中保护快照（PID 或工作目录双口径）即降级为 warn：WARN + `orphan.scan_dispose_blocked`（`reason=auto_adopt_disabled`、`effectivePolicy=warn`、success=false），不 `killTree`。边界：只降级这一类；已纳管实例照旧走 `dispose_policy`；`auto_adopt=true` 与 `dispose_policy=warn` 下行为不变。详见 [自动收养规格 §2.5](../auto-adopt-orphans/spec.md#25-开关关闭时的处置降级组合风险修复)。
   3. **docker 残留**：列本机容器（名字 `jianmanager-<uuid>`，见 `dockerStrategy.containerName`），DB/内存表未认作 RUNNING 却容器在跑（含已退出容器）→ 按策略告警/清理。**auto 档保守**：`Running=true` 的容器或内存表仍登记该实例时只告警不删（避免误删启动中/停止中实例的容器），仅删「已退出且内存表无该实例」的平台容器。
 - **任何 killTree/removeContainer 前先做归属复核**（FR-455①）：direct 走 `verifyProcessOwnership`；docker 走 `verifyContainerOwnership`——**显式两级证据**：(a) 容器带平台受管标签（`com.jianmanager.managed=true`）且标签内实例 UUID 与容器名一致 = 强归属确证；(b) 标签与容器名不一致 = 归属不通过、拒绝删除；(c) 无标签（本 FR 之前创建的存量容器）= 退化为**容器名格式校验**（`name_format_only`），不构成强归属证明，该降级如实写入审计 detail 的 `evidence` 字段供运维核查。复核不通过只告警不杀，审计 success 依逐项实际结果判定。
 - 处置动作一律落审计（`internal/controlplane/service/audit.go` 的 `RecordResultSafe`，经 Worker→CP 出站信道 `ReportOrphanAudit` 上报），保证「不静默」。
@@ -118,7 +139,6 @@
 | `orphan_scan.interval` | `60s` | 扫描周期；非法/空回退 60s。 |
 | `orphan_scan.dispose_policy` | `warn` | `warn` 只告警 + 落审计 / `auto` 自动清理。 |
 | `recover.retry_backoff` | `1s,2s,4s,8s,16s,32s,64s` | 启动接管存活 wrapper 的重试退避序列（逗号分隔 duration，总窗口 ≈127s）。缺省与进程包 `DefaultRecoverRetryBackoff` 同源；越界/空值回退默认。**注入须在 `RecoverDaemonInstances` 之前装配**（见 `apps/worker/main.go`），否则该轮接管用不到配置。 |
-
 **关键常量**：
 
 | 常量 | 值 | 位置 | 语义 |

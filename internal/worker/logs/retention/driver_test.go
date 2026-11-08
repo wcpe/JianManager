@@ -20,6 +20,8 @@ func TestPolicyRejectsRawExecutionValues(t *testing.T) {
 		{Enabled: true, Trigger: Trigger{DiskPercent: 101}},
 		{Enabled: true, Trigger: Trigger{MinAge: -time.Hour}},
 		{Enabled: true, Trigger: Trigger{Interval: -time.Hour}},
+		{Enabled: true, Trigger: Trigger{SweepAtHour: 24}},
+		{Enabled: true, Trigger: Trigger{SweepAtHour: -2}},
 	} {
 		if err := p.Validate(); err == nil {
 			t.Errorf("必须拒绝原始非法策略：%+v", p)
@@ -95,8 +97,8 @@ func TestDriverMovesDuePartitions(t *testing.T) {
 	if res.Moved != 1 {
 		t.Fatalf("恰好 1 个分区已到点，应搬运 1 个，得到 %d（分区结果 %+v）", res.Moved, res.Outcomes)
 	}
-	if len(mv.calls) != 1 || mv.calls[0] != "inst:147/20260101" {
-		t.Fatalf("搬错了分区：%v", mv.calls)
+	if calls := mv.snapshot(); len(calls) != 1 || calls[0] != "inst:147/20260101" {
+		t.Fatalf("搬错了分区：%v", calls)
 	}
 	if res.NotDue != 2 {
 		t.Fatalf("其余 2 个未到点，应记 not_due，得到 %d", res.NotDue)
@@ -161,7 +163,7 @@ func TestDriverSkipsColdAndInFlight(t *testing.T) {
 	if res.Moved != 1 {
 		t.Fatalf("只剩 1 个可搬，得到 %d", res.Moved)
 	}
-	for _, call := range mv.calls {
+	for _, call := range mv.snapshot() {
 		if call != "inst:147/20260102" {
 			t.Fatalf("不得驱动已在冷层/在途的分区，却搬了 %s", call)
 		}
@@ -211,8 +213,8 @@ func TestDriverDiskTriggerRespectsMinAge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("驱动失败：%v", err)
 	}
-	if res.Moved != 0 || len(mv.calls) != 0 {
-		t.Fatalf("磁盘触发必须尊重最小年龄下限，却搬了 %v", mv.calls)
+	if res.Moved != 0 || mv.count() != 0 {
+		t.Fatalf("磁盘触发必须尊重最小年龄下限，却搬了 %v", mv.snapshot())
 	}
 	if res.NotDue != 1 {
 		t.Fatalf("应记 not_due，得到 %d", res.NotDue)
@@ -242,14 +244,14 @@ func TestDriverNoopWhenDisabledOrEmpty(t *testing.T) {
 
 	disabled := NewDriver(DefaultPolicy(), &fakeLister{parts: driverFixture()}, mv, nil)
 	res, err := disabled.Step(context.Background(), driverNow)
-	if err != nil || res.Listed != 0 || len(mv.calls) != 0 {
-		t.Fatalf("未启用时应完全不动：listed=%d calls=%d err=%v", res.Listed, len(mv.calls), err)
+	if err != nil || res.Listed != 0 || mv.count() != 0 {
+		t.Fatalf("未启用时应完全不动：listed=%d calls=%d err=%v", res.Listed, mv.count(), err)
 	}
 
 	empty := newTestDriver(t, mv, nil, nil)
 	res, err = empty.Step(context.Background(), driverNow)
-	if err != nil || res.Listed != 0 || len(mv.calls) != 0 {
-		t.Fatalf("无分区时应完全不动：listed=%d calls=%d err=%v", res.Listed, len(mv.calls), err)
+	if err != nil || res.Listed != 0 || mv.count() != 0 {
+		t.Fatalf("无分区时应完全不动：listed=%d calls=%d err=%v", res.Listed, mv.count(), err)
 	}
 }
 
@@ -302,7 +304,7 @@ func TestDriverRunStopsOnContextCancel(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run 未随 context 取消退出")
 	}
-	if len(mv.calls) == 0 {
+	if mv.count() == 0 {
 		t.Fatal("Run 应至少执行一轮（首轮立即执行，不等第一个 tick）")
 	}
 }

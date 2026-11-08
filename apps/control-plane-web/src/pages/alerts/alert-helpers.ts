@@ -134,6 +134,82 @@ export function isQQTargetType(value: string): value is QQTargetType {
   return value === 'c2c'
 }
 
+/**
+ * QQ 网关连接状态 → 状态等级（FR-495 只读观测区）。
+ *
+ * connected=成功、connecting=过渡（黄）、error=危险（人工介入态，重连无意义）、
+ * disconnected 与未知取值一律中性：`disconnected` 在「还没配 qq 通道」时同样成立，
+ * 属正常待机而非故障，染红会制造假告警。
+ */
+export function qqGatewayLevel(status: string | undefined): StatusLevel {
+  switch (status) {
+    case 'connected':
+      return 'success'
+    case 'connecting':
+      return 'warning'
+    case 'error':
+      return 'danger'
+    case 'disconnected':
+    default:
+      return 'neutral'
+  }
+}
+
+/** QQ 网关状态 → i18n key 后缀。 */
+export type QQGatewayStatusKey = 'connected' | 'connecting' | 'disconnected' | 'error' | 'unknown'
+
+/**
+ * 网关状态串 → i18n key 后缀，未知取值回落 `unknown`。
+ *
+ * 不直接把后端串拼进 key（`alerts.qqGateway_${status}`）：状态串来自 DB/内存，历史值或
+ * 未来新增态会拼出缺失 key，i18next 届时把 key 本身显示给用户。收敛成枚举再查表，
+ * 未知态还能显示「未知」而不是一片空白。
+ */
+export function qqGatewayStatusKey(status: string | undefined): QQGatewayStatusKey {
+  switch (status) {
+    case 'connected':
+    case 'connecting':
+    case 'disconnected':
+    case 'error':
+      return status
+    default:
+      return 'unknown'
+  }
+}
+
+/**
+ * 网关 `lastError` 里「申请一下权限就能修好」的那类，翻译成可操作提示的 i18n key；
+ * 无需额外提示返回 null。
+ *
+ * 只认 4014（intent 无权限）：它是唯一「去开放平台申请即修复」的常见失败，而且是后端
+ * `last_error` 里唯一值得复制到别处行动的诊断。后端文案是中文、不能直接塞进英文界面，
+ * 故此处按内容识别再换成本地化文案。匹配同时接受关闭码 `4014`、intent 字面量 `1<<25`
+ * 与官方常量名 `GROUP_AND_C2C_EVENT`——三者出现任一即认定是该故障（后端 closeErrorText
+ * 与 persistSecret/ResolveCredentials 的失败文案都可能带其中之一）。
+ *
+ * 4914（下架）/4915（封禁）刻意不在此列：没有「自己动手就能修好」的动作，原样展示后端
+ * 文案比给一句空泛的「请联系平台」更诚实。
+ */
+export function qqGatewayFatalHintKey(lastError: string | undefined): string | null {
+  const text = (lastError ?? '').trim()
+  if (text === '') return null
+  if (text.includes('4014') || text.includes('1<<25') || text.includes('GROUP_AND_C2C_EVENT')) {
+    return 'alerts.qqGatewayHint4014'
+  }
+  return null
+}
+
+/**
+ * 群 openid 短码：列表里只展示前 8 位。
+ *
+ * `group_openid` 是平台标识（不是凭证），但完整值又长又没有辨识度；前 8 位足以在几条
+ * 入口间区分并与人核对。不足 8 位原样返回——不补位、不截断成空串，避免造出假标识。
+ */
+export function shortGroupOpenid(openid: string): string {
+  const v = (openid ?? '').trim()
+  return v.length <= 8 ? v : `${v.slice(0, 8)}…`
+}
+
 /** 通道类型为站内（无外部配置）。 */
 export function channelIsInApp(channelType: string): boolean {
   return channelType === 'inapp'

@@ -343,23 +343,56 @@ export function normalizeQQDiscoveredGroups(
 }
 
 /**
+ * 已发现群一页：items 用于展示，total 用于「共 N 个」计数。
+ *
+ * 为什么需要单独包一层 total：后端 `/qq/groups` 默认 pageSize=20（internal/controlplane/router/alert.go
+ * 的 QQGroups 默认 pageSize），items 只会是其中一页。只拿 items.length 当「已发现群总数」会在
+ * 超过 20 个群时静默少报，而这正是运维判断「机器人到底进了多少群」的唯一入口。
+ */
+export interface QQDiscoveredGroupPage {
+  items: QQDiscoveredGroup[]
+  total: number
+}
+
+/**
+ * 归一化为「一页群 + 总数」，形状宽容与 {@link normalizeQQDiscoveredGroups} 一致。
+ * total 取 `max(items.length, 信封 total)`：信封缺 total / 给小了都不能让计数低于实际展示到的条数。
+ */
+export function normalizeQQDiscoveredGroupsPage(
+  data: QQDiscoveredGroupList | undefined | null,
+): QQDiscoveredGroupPage {
+  const items = normalizeQQDiscoveredGroups(data)
+  const rawTotal = Array.isArray(data) || !data ? 0 : (data.total ?? 0)
+  return { items, total: Math.max(items.length, rawTotal) }
+}
+
+/**
  * 已发现群列表（enabled=false 时不请求）。
  *
- * 群聊路径已从前端下线（QQ 平台拒绝群主动消息 40034105），故当前无 UI 调用点；保留是因为
- * 后端端点与 `qq_discovered_groups` 表同样保留（平台开放后可即时启用），且响应形状被
- * devmock 契约测试钉住——删掉会让「平台开放时」重新接回失去现成的对齐实现。
+ * 群聊投递路径已从前端下线（QQ 平台拒绝群主动消息 40034105），但**群发现状态仍需可观测**：
+ * 后端网关在连、`qq_discovered_groups` 在落库，运维却只能翻日志看「机器人进了哪些群」。
+ * 现有调用点是通道对话框的只读折叠区（QQConnectivityPanel）——只看不选，不提供建群通道入口。
  */
 export function useQQDiscoveredGroups(enabled = true, refetchInterval: number | false = false) {
   return useQuery({
     queryKey: ['qqDiscoveredGroups'],
     queryFn: async () => {
       const { data } = await api.get<QQDiscoveredGroupList>('/alerts/qq/groups')
-      return normalizeQQDiscoveredGroups(data)
+      return normalizeQQDiscoveredGroupsPage(data)
     },
     enabled,
     refetchInterval,
   })
 }
+
+/**
+ * 接入状态轮询节拍：30s。
+ *
+ * 网关掉线（1<<25 权限失效、4006 会话失效）后运维需要尽快看到，而这两个端点都是单条 SELECT/
+ * 内存读，30s 对 CP 无感。不用更密是因为：① 对话框可能长时间开着，刷太快只是噪声；② 与
+ * `useQQGatewayStatus` 现有 semantics 一致（组件卸载即停）。
+ */
+export const QQ_GATEWAY_POLL_MS = 30_000
 
 /** QQ 网关连接状态（后端 QQGatewayConnection：connected/connecting/disconnected/error）。 */
 export interface QQGatewayStatusInfo {

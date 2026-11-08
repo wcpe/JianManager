@@ -43,6 +43,10 @@ func writeOrphanPIDRecord(t *testing.T, dir, uuid string) string {
 //     交由周期孤儿扫描（默认 warn）与 FR-471 漂移/接管流程处置。
 //
 // 本用例集据此只断言「重试次数、PID 文件保留、是否登记、审计」——**断言不再出现杀树**。
+//
+// 两阶段化（可用性缺陷修复）说明：`RecoverDaemonInstances` 现在只同步做「快速首拨」，首拨失败的
+// 记录转到后台继续重试。故本用例在断言前先 `WaitStartupTakeover` 收敛后台重试——重试次数、间隔、
+// 审计与登记结果全部照旧，只有「不再阻塞启动主流程」这一点变了。
 func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 	tests := []struct {
 		name string
@@ -50,17 +54,27 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 		succeedOnDial int
 		// wrapperDiesDuringRetry 模拟「进入 reconnect 时 wrapper 存活、重试期间才死亡」。
 		wrapperDiesDuringRetry bool
-		wantRecovered          int
-		wantDials              int
-		wantPIDFile            bool
-		wantRegistered         bool
-		wantBlocked            bool
-		wantStartupObserve     bool
+		// wantRecovered 是 `RecoverDaemonInstances` **返回时**的即时计数：只有首拨即成功才计 1，
+		// 靠后台重试补上的不计（后台另行登记并打日志）。
+		wantRecovered      int
+		wantDials          int
+		wantPIDFile        bool
+		wantRegistered     bool
+		wantBlocked        bool
+		wantStartupObserve bool
 	}{
 		{
-			name:           "reconnect 失败→重试→成功恢复",
-			succeedOnDial:  3,
+			name:           "首拨即成功→当场登记并计数",
+			succeedOnDial:  1,
 			wantRecovered:  1,
+			wantDials:      1,
+			wantPIDFile:    true,
+			wantRegistered: true,
+		},
+		{
+			name:           "reconnect 失败→后台重试→成功恢复（返回时不计，收敛后登记 RUNNING）",
+			succeedOnDial:  3,
+			wantRecovered:  0,
 			wantDials:      3,
 			wantPIDFile:    true,
 			wantRegistered: true,
@@ -133,6 +147,7 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 
 			recovered, err := m.RecoverDaemonInstances()
 			require.NoError(t, err)
+			require.True(t, m.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
 			assert.Equal(t, tt.wantRecovered, recovered)
 			assert.Equal(t, tt.wantDials, dials, "拨号次数 = 初拨 + 有界重试")
 			assert.Empty(t, killed, "FR-471：启动恢复路径任何分支都不得强杀")
@@ -151,7 +166,11 @@ func TestRecoverDaemonInstances_ReconnectFailureFallback(t *testing.T) {
 				retrySleeps = tt.succeedOnDial - 1
 			}
 			require.GreaterOrEqual(t, len(sleeps), retrySleeps)
-			assert.Equal(t, DefaultRecoverRetryBackoff[:retrySleeps], sleeps[:retrySleeps], "重试间隔应按递增序列")
+			if retrySleeps > 0 {
+				assert.Equal(t, DefaultRecoverRetryBackoff[:retrySleeps], sleeps[:retrySleeps], "重试间隔应按递增序列")
+			} else {
+				assert.Empty(t, sleeps, "首拨即成功时不应有任何重试等待")
+			}
 
 			// FR-471：启动路径不删 PID 文件（交由周期扫描/接管），故恒保留。
 			assert.FileExists(t, pidPath, "启动恢复路径应保留 PID 文件")
@@ -468,7 +487,8 @@ func TestRecoverDaemonInstances_ShortRetryWindowNeverKillsLiveServer(t *testing.
 
 	recovered, err := m.RecoverDaemonInstances()
 	require.NoError(t, err)
-	assert.Equal(t, 0, recovered, "拨不通不应登记实例")
+	require.True(t, m.WaitStartupTakeover(10*time.Second), "后台接管重试应在超时内收敛")
+	assert.Equal(t, 0, recovered, "拨不通不应登记实例（后台重试另行登记，不计入即时返回值）")
 	assert.Equal(t, 1+3, dials, "重试次数应等于注入序列长度 + 初拨")
 	assert.Equal(t, injected, sleeps, "重试间隔应逐项取注入序列")
 	assert.Empty(t, *killed, "重试耗尽但 wrapper 仍存活时不得强杀任何进程")

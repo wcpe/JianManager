@@ -3,7 +3,6 @@ package logcoord
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 )
 
 // 导出物化的默认预算。与修复前的硬编常量一字不差：零配置部署的行为完全不变
@@ -101,6 +100,13 @@ func BuildExportWithCut(view View, coverage Coverage, quality Quality, items []E
 	}
 
 	var reasons []string
+	if coverage.Pending {
+		reasons = append(reasons, "coverage_pending")
+	}
+	if coverage.Complete && len(coverage.PartialReasons) > 0 {
+		reasons = append(reasons, "coverage_incomplete")
+		reasons = append(reasons, coverage.PartialReasons...)
+	}
 	if !coverage.Complete {
 		reasons = append(reasons, "coverage_incomplete")
 		reasons = append(reasons, coverage.PartialReasons...)
@@ -143,12 +149,15 @@ func BuildExportWithCut(view View, coverage Coverage, quality Quality, items []E
 	}
 
 	// 契约 §4.5：projection 未决/冲突时 Export 不得发布成功附件（Quality 与 Coverage 正交）。
-	// 枚举大小写不敏感（wire 可能为 exact/unresolved 或 EXACT/UNRESOLVED）。
-	dq := strings.ToLower(string(quality.DuplicateQuality))
-	sq := strings.ToLower(string(quality.StatsQuality))
-	if dq == "unresolved" || dq == "conflict" || sq == "partial" || sq == "unavailable" {
+	// 判定统一交给 QualityBlocksExport（fail-closed：非 exact 即阻断），不再在此内联
+	// 一份枚举清单：同一语义两处各写一套必然会漂移，而这一处漏掉 unspecified 时，
+	// 「Worker 未上报质量」的导出会被标成完整并产出附件，比路由层拦不住更隐蔽。
+	if QualityBlocksExport(quality) {
 		res.ExportIncomplete = true
-		res.IncompleteReasons = []string{"quality_" + dq, "stats_" + sq}
+		res.IncompleteReasons = []string{
+			"quality_" + string(ParseDuplicateQuality(string(quality.DuplicateQuality))),
+			"stats_" + string(ParseStatsQuality(string(quality.StatsQuality))),
+		}
 		res.Artifact = nil
 		return res
 	}

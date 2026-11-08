@@ -63,6 +63,27 @@ service WorkerService {
   rpc LogStats(LogStatsRequest) returns (LogStatsResponse);
   rpc LogFields(LogFieldsRequest) returns (LogFieldsResponse);
   rpc LogFacets(LogFacetsRequest) returns (LogFacetsResponse);
+  // LogStreams 列出查询窗内的 stream 及其条数。
+  //
+  // 语义来源：VictoriaLogs `/select/logsql/streams`。stream 由 VL 在入库时按
+  // 「流标签集合」建立索引，而我们的行上流标签只有 `log_source_id` 与 `stream`
+  // （实测 `stream_field_names` 恒为这两项）——所以本接口的粒度就是
+  // 「(源, 流) 二元组」，不是「窗内出现过的字段全集」。
+  //
+  // ⚠️ 与 `/field_names`（Fields）**不是**同一件事：后者给的是文档字段名全集，
+  // 前者给的是流的身份。名字里的 stream 指后者，别混用。
+  rpc LogStreams(LogStreamsRequest) returns (LogStreamsResponse);
+  // LogStreamFieldNames 列出 stream 的标签维度名。
+  //
+  // 实测恒为 [`log_source_id`, `stream`]：流的标签就是这两个。
+  // 保留该端点是因为它是「stream 有哪些可筛维度」的唯一权威来源——
+  // 若未来 VL 给流加上新标签，前端无需改码即可看到。
+  rpc LogStreamFieldNames(LogStreamFieldNamesRequest) returns (LogStreamFieldNamesResponse);
+  // LogStreamFieldValues 列出 stream 某标签维度的取值及其条数。
+  //
+  // 只对 stream 标签维度（`log_source_id` / `stream`）有值；
+  // 传文档字段（如 `level`）返回空 `values` 而非报错（实测 v1.52.0）。
+  rpc LogStreamFieldValues(LogStreamFieldValuesRequest) returns (LogStreamFieldValuesResponse);
   // Tail 的 FOLLOW_LIVE 与 VIEW_BOUNDED 语义必须由 mode 明确区分。
   rpc LogTail(LogTailRequest) returns (stream LogEvent);
   rpc LogRehydrate(LogRehydrateRequest) returns (LogTaskResponse);
@@ -141,6 +162,12 @@ service WorkerService {
   rpc ValidateConfig(ValidateConfigRequest) returns (ValidateConfigResponse);
   // GetNodeMetrics 获取节点指标。
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
+  // PullSelfLog 按需拉取 Worker 进程自身日志的尾部（诊断用）。
+  //
+  // 设计约束（不可放宽）：不落任何存储、不进 VL、不做检索；只返回尾部有界片段，
+  // 使响应耗时与文件大小无关（事故现场日志可达 35GB）。上限由 Worker 强制夹紧，
+  // 调用方传入值只能收紧不能放宽。
+  rpc PullSelfLog(PullSelfLogRequest) returns (PullSelfLogResponse);
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
   // GetInstanceResourceSnapshot 获取实例根进程及子进程树的资源快照（FR-399）。
@@ -438,6 +465,29 @@ message HeartbeatRequest {
   // 2026-09-28 事故教训：采集静默停摆 40+ 分钟无人知晓——该信号让「采集健康」进入告警。
   bool log_ingest_healthy = 15;
   string log_ingest_detail = 16;  // 不健康原因（可空）
+  // 日志存储层（VL）的磁盘占用读数（2026-10-29）。
+  //
+  // 为什么需要：配了 `-retention.maxDiskSpaceUsageBytes` 后，VL 会在超过上限时
+  // **丢弃最旧的按日分区**，默认完全静默。而它一旦把磁盘写满进入只读模式，
+  // 就**连丢弃都做不了**（丢弃也要写元数据）——这是必须提前告警的失效态。
+  //
+  // 只采几个读数，不自建一套指标体系：VL 自身已在 /metrics 暴露全部数据，
+  // 这里只是把关键几项带到 CP 的告警链路上。
+  // 老 Worker 不上报 ⇒ 0，CP 侧按「无读数」处理，不误报。
+  int64 log_vl_disk_used_bytes = 18;          // -storageDataPath 目录当前占用
+  int64 log_vl_disk_limit_bytes = 19;         // 生效的磁盘上限；0 = 未配置（不限制）
+  // log_vl_partitions 是当前日分区数。用它判断「能不能丢」：
+  // VL 至少保留最近 2 天，分区数 <=2 时即使超限也不会丢。
+  int32 log_vl_partitions = 20;
+  // log_vl_rows_dropped_total 是 vl_rows_dropped_total（因时间超保留期被丢的行数累计值）。
+  // CP 用相邻心跳差推导速率；累计值不直接当曲线。
+  uint64 log_vl_rows_dropped_total = 21;
+  // log_vl_disk_limit_percent 是**百分比口径**的磁盘上限（`-retention.maxDiskUsagePercent`）。
+  //
+  // 为什么需要（2026-10-29 审计发现）：它与 `log_vl_disk_limit_bytes` **互斥**（VL 官方限制）。
+  // 配上百分比时字节上限恒为 0，而 CP 原先只按字节上限算 `log_vl_disk_pct`
+  // ⇒ 百分比部署**永远没有 disk_pct 指标**，与配置样例推荐的告警对不上。
+  int32 log_vl_disk_limit_percent = 22;
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
@@ -596,6 +646,36 @@ message HeartbeatResponse {
   // health_self_heal_max_restarts 是假死自愈在熔断窗口内的重启次数上限（FR-459 复审项 7，
   // 避免假死路径重启风暴）。<=0 = 未配置，Worker 回退内置默认 3。
   int32 health_self_heal_max_restarts = 17;
+  // === FR-503 日志采集配置下发 ===
+  // log_acq_present 是「CP 是否下发了日志采集配置」的存在标记（proto3 optional）：
+  // nil = 老 CP 未下发 → Worker 不动作，沿用本地 worker.yml 配置（向后兼容）；
+  // 非 nil = 采用本响应全部 log_acq_* 字段。与 FR-459 的 health_scan_enabled 同款语义，
+  // 避免 proto3 零值无法区分「关闭」与「未配置」。
+  optional bool log_acq_present = 18;
+  // log_acq_rules_enabled 是采集规则引擎总开关（FR-502 的规则匹配是否生效）。
+  // 关闭时 Worker 回退 bukkit 规则（等价于 FR-502 落地前的行为）。
+  bool log_acq_rules_enabled = 19;
+  // log_acq_realtime_tail 是实时采集应急开关（FR-504）：关闭时停 tail 不采集新日志，
+  // 服务照常运行、账本位置保持，恢复后从断点续采。
+  bool log_acq_realtime_tail = 20;
+  // log_acq_gz_import_enabled 是 gz 归档导入**总开关**（FR-504）。
+  // 关闭 = 不启用定时归档扫描（折算后的扫描周期一律为 0），**手动导入入口不受影响**
+  // （应急补历史永远可用）。
+  // 注意：它**不停**常驻采集循环的自动发现——那是 FR-474 的既有承诺（新接管的源先导入
+  // 历史再给当前段分配位置），停掉会造成静默的历史缺失。
+  bool log_acq_gz_import_enabled = 21;
+  // log_acq_gz_scan_interval_ms 是 gz 定时扫描周期（毫秒，FR-504）。
+  // 空/0 = **未配置**（写入侧禁止配 0 或负数）→ Worker 回落 worker.yml 基线
+  // `log_ingest.archive_scan_interval`；协议上 0 只表示未配置，不与「关闭」混用。
+  // 默认（周期空 ⇒ 回落基线，内置基线周期为 0）⇒ **不扫描**；
+  // 要显式停定时扫描请关总开关（log_acq_gz_import_enabled），而不是清周期。
+  int32 log_acq_gz_scan_interval_ms = 22;
+  // log_acq_path_overrides_json 是实例级日志路径覆盖映射（JSON 对象，FR-502 §3.4）：
+  // {"inst:<id>": "<相对实例工作目录的路径>"}。空 = 无覆盖，各实例用规则默认路径。
+  // 安全约束：不接受绝对路径，也不接受折叠 `..` 后逃出工作目录的路径。
+  // 用 JSON 而非 map<string,string> 是为了与既有 platform_settings 的文本值形态一致
+  // （该表的 value 是 TEXT，存 JSON 无需额外编解码约定）。
+  string log_acq_path_overrides_json = 23;
 }
 
 // === 实例操作 ===
@@ -650,6 +730,13 @@ message CreateInstanceRequest {
   string log_target_id = 22;
   string log_acquire_mode = 23; // FILE_PRIMARY | STDIO_PRIMARY
   string log_source_generation = 24; // stable across reconnects on this holder
+  // log_rule_key 是日志采集规则名（FR-502）：bukkit | bungee | waterfall | velocity。
+  // 由 CP 按实例 role + launch_spec.coreJar 推导后下发（如 BungeeCord.jar → bungee）。
+  // 空 = 旧 CP 未下发，Worker 回退 bukkit 规则（行为与历史逐字一致）。
+  string log_rule_key = 25;
+  // log_relative_path 是实例级活动日志相对路径覆盖（相对 work_dir，FR-502）。
+  // 空 = 使用 log_rule_key 对应规则的默认路径。用于规则外的自定义日志布局。
+  string log_relative_path = 26;
 }
 
 // PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
@@ -1085,6 +1172,31 @@ message DiffConfigResponse {
 // === 指标 ===
 
 message GetNodeMetricsRequest {}
+
+// PullSelfLogRequest 拉取 Worker 自身进程日志尾部。
+message PullSelfLogRequest {
+  // max_lines 期望行数上限；0 = 默认 200，超过硬上限被夹紧。
+  int32 max_lines = 1;
+  // max_bytes 期望字节上限；0 = 默认 64KiB，超过硬上限被夹紧。
+  int32 max_bytes = 2;
+}
+
+// PullSelfLogResponse 是日志尾部快照。
+//
+// 为什么带 path/file_bytes/truncated 而不是只回文本：诊断是给人排障的，
+// 人需要知道“这是不是全部”以及“下一步该在哪台机器上 grep 什么”。
+message PullSelfLogResponse {
+  // content 尾部原文（已按行/字节上限裁剪）。
+  string content = 1;
+  // truncated 表示因上限被截断（UI 必须显式标注，否则会让人误以为看到全部）。
+  bool truncated = 2;
+  // file_bytes 日志文件总大小，让调用方知道“还有多少没看到”。
+  int64 file_bytes = 3;
+  // path 实际读取的文件路径（供 UI 展示可复制的 grep 命令）。
+  string path = 4;
+  // error_msg 读取失败原因（文件不存在/未启用等）；非空时 content 为空。
+  string error_msg = 5;
+}
 
 message GetNodeMetricsResponse {
   float cpu_usage = 1;
@@ -2366,6 +2478,13 @@ enum LogErrorCode {
   LOG_RECOVERY_REQUIRED = 8;
   LOG_CANCELLED = 9;
   LOG_UNSUPPORTED = 10;
+  // 归档副本已按保留期清除（FR-501 归档对象回收）。
+  //
+  // 与 LOG_ARCHIVE_MISSING 分开的理由是**处置动作相反**：MISSING 是「归档还在、
+  // 只是本地没恢复 ⇒ 去 rehydrate」；PURGED 是「归档已按保留期删掉 ⇒ 取不回来了」。
+  // 合成一个码会让界面把「已按保留期删除」显示成「历史日志尚未取回」，
+  // 用户点恢复、恢复失败、再报错，最后仍要人工解释。
+  LOG_ARCHIVE_PURGED = 11;
 }
 
 enum LogTailMode {
@@ -2615,6 +2734,79 @@ message LogFacetsResponse {
 message LogTailRequest {
   LogQueryRequestBase query = 1;
   LogTailMode mode = 2;
+}
+
+// LogStreamsRequest 请求查询窗内的 stream 集合。
+//
+// 本请求**刻意不带 limit**：实测 VictoriaLogs 的 `streams` 端点一旦 limit 小于
+// 实际 stream 数，会把**所有** hits 静默归零（不是截断返回，是全零）：
+//
+//	limit=20（真实 21 个流） -> 20 项, sum_hits=0
+//	limit=21                -> 21 项, sum_hits=11784
+//
+// 把这种「少了一条就全零」的参数暴露给调用方等于给前端埋一个必踩的坑，
+// 所以请求侧根本不允许指定：流数量本身受限于源数量（生产 21 个量级）。
+message LogStreamsRequest { LogQueryRequestBase query = 1; }
+
+// LogStream 是一条流与其在窗内的条数。
+//
+// stream 的 value 是 VL 原始形态（`{log_source_id="inst:318/file",stream="stdout"}`），
+// 同时拆成两个标签字段供前端直接用：解析放在 Worker 一处，避免前端各写一套。
+message LogStream {
+  // raw 是 VL 原始串，保留它是因为「标签值里含 `"` / `{` 怎么办」的解析细节
+  // 只有一份实现才可靠；原始串是唯一无损的形式。
+  string raw = 1;
+  // log_source_id 与 stream 从 raw 拆出；拆不出时留空（不得猜测）。
+  string log_source_id = 2;
+  string stream = 3;
+  // hits 是该流在窗内的**精确条数**。
+  //
+  // ⚠️ 0 有两种含义，不得混同：
+  //   - complete=true  时：该流确实没有数据；
+  //   - complete=false 时：数量未确定（可能被上游截断），不是「0 条」。
+  uint64 hits = 4;
+}
+
+message LogStreamsResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated LogStream streams = 4;
+  // complete=false 表示条数不可信（上游截断）；调用方不得把 hits=0 当断言。
+  bool complete = 5;
+  LogError error = 6;
+}
+
+message LogStreamFieldNamesRequest { LogQueryRequestBase query = 1; }
+
+message LogStreamFieldNamesResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated string fields = 4;
+  LogError error = 5;
+}
+
+// LogStreamFieldValuesRequest 按单个 stream 标签维度取取值分布。
+message LogStreamFieldValuesRequest {
+  LogQueryRequestBase query = 1;
+  // field 必须是 stream 标签维度（`log_source_id` / `stream`）；
+  // 传文档字段不报错但返回空 values（VL 行为，此处不对它做二次猜测）。
+  string field = 2;
+}
+
+message LogStreamFieldValue {
+  string value = 1;
+  uint64 hits = 2;
+}
+
+message LogStreamFieldValuesResponse {
+  string request_id = 1;
+  LogQueryViewRef view = 2;
+  LogCoverage coverage = 3;
+  repeated LogStreamFieldValue values = 4;
+  bool complete = 5;
+  LogError error = 6;
 }
 
 message LogRehydrateRequest {

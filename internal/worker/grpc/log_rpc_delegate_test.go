@@ -13,30 +13,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
-	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
-
-// fakeArchiveImporter 是 grpcsvc.IngestArchiveImporter 的替身，记录被调用时的入参。
-type fakeArchiveImporter struct {
-	calls     int
-	namespace string
-	operator  string
-}
-
-func (f *fakeArchiveImporter) ImportArchivesNow(namespace, operator string) (int, int, error) {
-	f.calls++
-	f.namespace = namespace
-	f.operator = operator
-	return 1, 1, nil
-}
 
 // startLogRPCWorkerGRPC 起 bufconn 真 gRPC server 挂本包的 *Server，返回生成的客户端。
 // 为什么必须穿透 gRPC 边界：直接调 grpcsvc 层会绕过 Server 的 delegate 装配，
@@ -60,56 +41,20 @@ func startLogRPCWorkerGRPC(t *testing.T, srv *Server) workerpb.WorkerServiceClie
 	return workerpb.NewWorkerServiceClient(conn)
 }
 
-// newLogRPCTestServer 构造装配了日志 RPC 服务的 Worker Server（内存进程管理器即可）。
-func newLogRPCTestServer(t *testing.T, importer grpcsvc.IngestArchiveImporter) *Server {
-	t.Helper()
-	srv := NewServer(process.NewManager(t.TempDir()), "fixture-node", nil, nil, nil)
-	svc := grpcsvc.New(nil, nil)
-	svc.SetIngestArchiveImporter(importer)
-	srv.SetLogQueryService(svc)
-	return srv
-}
-
-// TestLogImportArchives_ReachesServiceThroughGRPC 守护 PROTO-1：
-// 手动归档导入入口必须在 Worker 的 gRPC Server 上有 delegate——否则调用恒返回 Unimplemented，
-// 而配置注释与 CHANGELOG 都宣称该入口「始终可用」，形成「文档说能用、实际不可用」的静默断链。
-// 旧实现（缺 delegate）下本用例必红：gRPC 层直接回 codes.Unimplemented。
-func TestLogImportArchives_ReachesServiceThroughGRPC(t *testing.T) {
-	importer := &fakeArchiveImporter{}
-	client := startLogRPCWorkerGRPC(t, newLogRPCTestServer(t, importer))
-
-	// 操作人经 metadata 携带（与 grpcsvc 的 OperatorMetadataKey 同源约定）。
-	ctx := metadata.NewOutgoingContext(context.Background(),
-		metadata.Pairs(grpcsvc.OperatorMetadataKey, "ops@example"))
-	resp, err := client.LogImportArchives(ctx, &workerpb.LogImportArchivesRequest{StorageNamespace: " ns:game "})
-	require.NoError(t, err)
-	require.Equal(t, workerpb.LogTaskState_LOG_TASK_SUCCEEDED, resp.GetState(), resp.GetError().GetMessage())
-	require.Equal(t, 1, importer.calls, "请求必须穿透到服务层，而不是被 Unimplemented 兜底吃掉")
-	require.Equal(t, "ops@example", importer.operator)
-	require.Equal(t, "ns:game", importer.namespace, "命名空间应 trim 后下传")
-}
-
-// TestLogImportArchives_OperatorRequiredThroughGRPC 守护「不可无痕触发」在 gRPC 边界同样成立：
-// 缺操作人时服务层拒绝，且不得调用导入器。旧实现（缺 delegate）下本用例在断言错误码处必红
-// （收到的是 Unimplemented 而非业务拒绝）。
-func TestLogImportArchives_OperatorRequiredThroughGRPC(t *testing.T) {
-	importer := &fakeArchiveImporter{}
-	client := startLogRPCWorkerGRPC(t, newLogRPCTestServer(t, importer))
-
-	resp, err := client.LogImportArchives(context.Background(), &workerpb.LogImportArchivesRequest{StorageNamespace: "ns:game"})
-	require.NoError(t, err)
-	require.Equal(t, workerpb.LogTaskState_LOG_TASK_FAILED, resp.GetState())
-	require.Contains(t, resp.GetError().GetMessage(), grpcsvc.OperatorMetadataKey)
-	require.Zero(t, importer.calls, "无操作人时不得执行导入（不可无痕）")
-}
-
-// TestLogRPCs_AllHaveExplicitDelegate 系统性守住 delegate 装配：
-// Server 嵌入的是 UnimplementedWorkerServiceServer，**任何** Log* RPC 只要漏写 delegate 就会
-// 恒返回 Unimplemented，且不被编译期发现。
+// retiredLogRPCs 是**已随旧采集链路退役**的 RPC 名单（2026-11-06）。
 //
-// 为什么读源码而不是用反射：反射无法区分「Server 自己的实现」与「嵌入字段的提升方法」——
-// 提升方法的 Func 是编译器生成的包装器，指针与原型不同、也无法与对照类型比较（实测两者不等）。
-// 因此直接解析本包生产源码，核对每个 Log* 方法都有 `func (s *Server) <Name>(` 声明。
+// 它们的 proto 定义还在（wire 兼容：混版 CP 调用时得到 UNIMPLEMENTED 而不是连接错误），
+// 但 Worker 已不再实现，也不再有 delegate。对它们不做「必须有 delegate」的检查。
+//
+// 为什么不在 proto 里删掉：proto 是已发布的线格式契约，删 message/RPC 会让老 CP 的
+// 代码生成与反序列化失效。保留定义 + 不实现，是这类下线最安全的形态。
+var retiredLogRPCs = map[string]string{
+	"LogCutoverReadiness":       "旧账本的「能否接管写入」判定，账本已删",
+	"LogResolveIngestGaps":      "旧账本的缺口/放弃裁定，新采集器不追踪完整性",
+	"LogImportArchives":         "旧链路的归档回灌，新采集器无「待导入队列」",
+	"LogClearIdentityConflicts": "旧账本的冲突记录，新采集器不产生身份冲突",
+}
+
 func TestLogRPCs_AllHaveExplicitDelegate(t *testing.T) {
 	declared := declaredServerMethods(t)
 	clientIface := reflect.TypeOf((*workerpb.WorkerServiceClient)(nil)).Elem()
@@ -118,6 +63,13 @@ func TestLogRPCs_AllHaveExplicitDelegate(t *testing.T) {
 	for i := 0; i < clientIface.NumMethod(); i++ {
 		name := clientIface.Method(i).Name
 		if !strings.HasPrefix(name, "Log") {
+			continue
+		}
+		if reason, retired := retiredLogRPCs[name]; retired {
+			// 退役的 RPC 不得残留 delegate：留着等于“看起来支持、实际恒失败”。
+			_, stillDeclared := declared[name]
+			require.False(t, stillDeclared,
+				"%s 已退役（%s），不应再用 delegate——proto 保留是为了 wire 兼容，不是为了让实现活过来", name, reason)
 			continue
 		}
 		checked++
@@ -160,11 +112,3 @@ func declaredServerMethods(t *testing.T) map[string]struct{} {
 	return out
 }
 
-// TestLogImportArchives_UnimplementedWithoutService 守护向后兼容路径：
-// 未装配日志查询服务（老 Worker / 未启用日志平台）时仍回 Unimplemented，不 panic。
-func TestLogImportArchives_UnimplementedWithoutService(t *testing.T) {
-	srv := NewServer(process.NewManager(t.TempDir()), "fixture-node", nil, nil, nil)
-	_, err := srv.LogImportArchives(context.Background(), &workerpb.LogImportArchivesRequest{})
-	require.Error(t, err)
-	require.Equal(t, codes.Unimplemented, status.Code(err))
-}

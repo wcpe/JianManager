@@ -12,17 +12,20 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
-	"github.com/wcpe/JianManager/internal/worker/logs/ledger"
+	"github.com/wcpe/JianManager/internal/platform/rollog"
+	"github.com/wcpe/JianManager/internal/platform/vlruntime"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/retention"
-	"github.com/wcpe/JianManager/internal/worker/logs/sampling"
+	"github.com/wcpe/JianManager/internal/worker/logs/tailer"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 	"github.com/wcpe/JianManager/internal/worker/process"
 )
@@ -61,14 +64,24 @@ type Config struct {
 	LogQuery        LogQueryConfig    `mapstructure:"log_query"`
 	LogVL           LogVLConfig       `mapstructure:"log_vl"`
 	LogCapacity     LogCapacityConfig `mapstructure:"log_capacity"`
-	LogSources      []LogSourceConfig `mapstructure:"log_sources"`
+	// LogCatalog 日志分区 Catalog 的持久化面（真机事故 2026-11-05）。
+	//
+	// 背景：分区记录曾改为纯内存（机械盘不做落盘），前提是「记录可随时重建」。
+	// 该前提已被 2026-11-02 的投递路径简化推翻（记录改为只在投递成功时补建）。
+	// 不落盘的后果是：进程重启后该源**之前所有天**在查询侧变成「不存在」——
+	// VL 里行还在，没人知道去查它。详见 catalog.BatchedStore 的注释。
+	LogCatalog LogCatalogConfig  `mapstructure:"log_catalog"`
+	LogSources []LogSourceConfig `mapstructure:"log_sources"`
 	// LogReconcile 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天，对账不可信则回退整窗重发。
-	LogReconcile LogReconcileConfig `mapstructure:"log_reconcile"`
-	// LogIndex 采集索引（FR-496）的配置面：历史投递批次裁剪（§6）与持久化提交单元预算（§3.4）。
-	LogIndex   LogIndexConfig   `mapstructure:"log_index"`
 	LogArchive LogArchiveConfig `mapstructure:"log_archive"`
 	// LogIngest 采集归一化的节点级默认（缺陷 C 时区配置面）：源未显式配置时生效。
 	LogIngest LogIngestConfig `mapstructure:"log_ingest"`
+	// LogTailer 是新采集器（tailer/logtail，对齐 Fluent Bit / Filebeat 三层模型）的配置面。
+	//
+	// **与旧采集链路互斥**：Enabled=true 时 Worker 不构造 ingest.Manager，改由
+	// logtail.Runner 直接扫 glob 采文件。两套同时跑会把同一文件读两遍（重复采集），
+	// 故装配层必须保证只开一套——这不是建议，是硬约束。
+	LogTailer LogTailerConfig `mapstructure:"log_tailer"`
 	// LogRetention 保留策略（按级别/来源设保留期）与执行器。
 	LogRetention LogRetentionConfig `mapstructure:"log_retention"`
 	Decompiler   DecompilerConfig   `mapstructure:"decompiler"`
@@ -189,6 +202,10 @@ type OrphanScanConfig struct {
 	// （verifyProcessOwnership）通过即自动重连并登记为 RUNNING——**不重启也不杀进程**；复核不通过
 	// 只告警。显式 false 只关收养，其余三态孤儿扫描与告警不变；见
 	// docs/specs/auto-adopt-orphans/spec.md。默认口径的单一真源为 process.DefaultOrphanAutoAdopt。
+	//
+	// 关闭时**同时关闭对这些进程对的处置**：未纳管即不在受管集合中，它们本会被运行期扫描的
+	// direct 相判为无主进程；`dispose_policy=auto` 若照旧 killTree，等于用处置策略绕过运维
+	// 「这些进程我来管」的明示意图。故关闭时该类在 auto 档降级为 warn（WARN + 审计留痕）。
 	AutoAdopt bool `mapstructure:"auto_adopt"`
 }
 
@@ -210,243 +227,93 @@ func (c OrphanScanConfig) AutoAdoptEnabled() bool {
 	return c.AutoAdopt
 }
 
-// LogReconcileConfig 启动增量对账（FR-497）配置面，键为 `log_reconcile.*`。
+// LogIndexReclaimRollConfig 已于 2026-10-29 删除（随 reclaim 改按投递证据推进）。
+
+// LogCatalogConfig 是分区 Catalog journal 的持久化配置面（键 log_catalog.*）。
 //
-// 默认口径的单一真源在 ingest 包（ingest.DefaultReconcileConfig：默认启用，并发 4、单源总超时
-// 30s、单次 count 查询 10s）；本类型只做 YAML → ingest.Options 的搬运，非法/非正值一律回退该
-// 默认——配置误写不得让对账退化为无超时或高并发，关闭只能走显式 `log_reconcile.enabled: false`
-// （该源回退整窗重发）。见 docs/specs/log-startup-reconcile/spec.md §5。
-type LogReconcileConfig struct {
-	// Enabled 启动增量对账开关（默认 true）。false = 放弃增量裁剪、该源回退整窗重发（应急逃生口）。
-	Enabled bool `mapstructure:"enabled"`
-	// Concurrency 并发对账的源数上限（默认 4）；非正回退默认，超上限时由 ingest 收敛到 32。
-	Concurrency int `mapstructure:"concurrency"`
-	// Timeout 单源对账总超时（duration 字符串，默认 30s）；非法/非正回退默认。
-	Timeout string `mapstructure:"timeout"`
-	// QueryTimeout 单天 count 查询超时（duration 字符串，默认 10s）；非法/非正回退默认。
-	QueryTimeout string `mapstructure:"query_timeout"`
-	// Budget 整批对账的总预算（duration 字符串，默认 60s）；非法/非正回退默认。
+// 与 log_index.persist.manifest_sync_* 同一套取舍口径：同步频率越低，机械盘寻道越少，
+// 崩溃时可能丢的记录窗口就越长；0 表示“不设该维度上界”。
+type LogCatalogConfig struct {
+	// JournalEnabled 控制 journal 是否落盘（键 log_catalog.journal_enabled，默认 true）。
 	//
-	// 为什么需要它（复审 P2-10）：对账在 ingest.New 里**同步**执行，而单源超时 30s × 60 源 /
-	// 并发 4 ≈ 7.5 分钟的最坏情况会把启动拖成分钟级。预算到期即取消在途查询，未完成的源
-	// 回退整窗重发（只影响「重发多少」，不影响「要不要重发」）。
-	Budget string `mapstructure:"budget"`
-	// VLReadyTimeout 对账/重发前的 VL 就绪探针超时（duration 字符串，默认 2s）；非法/非正回退默认。
-	VLReadyTimeout string `mapstructure:"vl_ready_timeout"`
-	// VLReadyWait 启动恢复**等待** VL 就绪的上界（duration 字符串，默认 90s）；非法/非正回退默认。
-	// 超出即记原因并交给运行期常驻对账重试（不把外部条件当成「源恢复失败」）。
-	VLReadyWait string `mapstructure:"vl_ready_wait"`
-	// ReplayMaxDays / ReplayMaxDuration：整窗重发的切片预算（默认 1 天 / 90s）；非正回退默认。
-	ReplayMaxDays     int    `mapstructure:"replay_max_days"`
-	ReplayMaxDuration string `mapstructure:"replay_max_duration"`
-	// Yield / SliceEvents：**对账 CPU 让路**（每 slice_events 条事件 Sleep(yield) 交还 P）。
+	// 默认**开**的理由：分区记录是查询侧判断「那天有没有数据」的唯一事实，
+	// 不落盘就会在每次重启后丢失全部历史天。它不是可选优化，是正确性依赖。
+	// 保留关闭开关供极端场景（如只读盘/排障）使用，关闭时退化为修复前的纯内存行为。
+	JournalEnabled *bool `mapstructure:"journal_enabled"`
+	// JournalSyncInterval 是攒批落盘的**时间上界**（duration 字符串；键
+	// log_catalog.journal_sync_interval）。空/未设 = 用 catalog 默认（2s）；
+	// 显式 `0s` = 同步写（每次追加立即 fsync，等价于修复前行为，最耗 IO）。
+	JournalSyncInterval string `mapstructure:"journal_sync_interval"`
+	// JournalMaxBatch 是攒批落盘的**条数上界**（键 log_catalog.journal_max_batch）。
+	// 待落盘条目达到该数就当场 flush，给内存队列一个硬上界。0/未设 = 用默认 256。
+	JournalMaxBatch int `mapstructure:"journal_max_batch"`
+	// BackfillDays 是启动期「从 VL 反推天集合补建分区记录」的回溯窗口（天）。
 	//
-	// 为什么需要（2026-10-03 现场）：canonicalDayCounts→groupEventsByUTCDay 对整源全量分组，
-	// 与采集轮**抢核** ⇒ 采集轮"无锁无等待却推不动" ✗。默认 5ms / 4096 条（可忽略的额外延迟，
-	// 但每个切片都交还调度器）；配 0 或负数回退默认 ✓。
-	Yield       string `mapstructure:"yield"`
-	SliceEvents int    `mapstructure:"slice_events"`
+	// 键 log_catalog.backfill_days。0/未设 = 用 ingest 默认（30 天）；显式负值 = **关闭**该补建。
+	//
+	// 为何存在：journal 落盘只保证「从现在起不再丢」，它修不了已经掉的天。
+	// 唯一知道「那天有数据」的地方是 VL 自己，所以启动期向 VL 问一次天集合，
+	// 把「VL 有数据但 Catalog 没记录」的天补回来（详见 ingest/catalog_backfill.go）。
+	//
+	// 为何有上界：VL 单查询跨度上限是 31d（`-search.maxQueryTimeRange`），
+	// 且无界回溯会产生大量查询与记录。30 天是可查范围内最宽的一档。
+	BackfillDays int `mapstructure:"backfill_days"`
 }
 
-// ReconcileConfig 把本地配置面收敛为 ingest 的对账配置（非法/非正一律回退归一化默认）。
+// backfillDisabledSentinel 是「显式关闭补建」的配置值。
 //
-// 零值语义：Enabled=false 的零值无法与「显式关闭」区分，故 Load 经 viper SetDefault 写入默认
-// true（与 orphan_scan.auto_adopt 同口径）；手工构造 Config{} 的调用方须自行置位。
-func (c LogReconcileConfig) ReconcileConfig() ingest.ReconcileConfig {
-	out := ingest.DefaultReconcileConfig()
-	out.Enabled = c.Enabled
-	if c.Concurrency > 0 {
-		out.Concurrency = c.Concurrency
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.Timeout)); err == nil && d > 0 {
-		out.Timeout = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.QueryTimeout)); err == nil && d > 0 {
-		out.QueryTimeout = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.Budget)); err == nil && d > 0 {
-		out.Budget = d
-	}
-	return out
+// 用负值而不是 0 表示关闭：0 需要保留给「未设 ⇒ 用默认」，否则运维无法区分
+// 「我没配」与「我要关掉」。这与 `journal_sync_interval` 用 bool 区分
+// 「未设」与「显式 0s」是同一个理由（见 JournalSyncIntervalValue）。
+const backfillDisabledSentinel = -1
+
+// BackfillDisabled 报告是否显式关闭了启动期分区补建。
+func (c LogCatalogConfig) BackfillDisabled() bool {
+	return c.BackfillDays <= backfillDisabledSentinel
 }
 
-// LogIndexConfig 采集索引（FR-496）的配置面，键为 `log_index.*`。
+// BackfillDaysValue 把配置收敛为「回搜多少天」。
 //
-// 默认口径的单一真源在两个实现包里：ledger.DefaultDeliveryBatchPruneConfig（默认开启裁剪）
-// 与 stateindex.DefaultCommitBudget（每提交单元 512 行、目标 40ms）。本类型只做 YAML →
-// ingest.Options 的搬运，非法值一律回退默认——配置误写不得让裁剪失效或让切分消失
-// （那会把「单次持久化 ≤50ms」的达标线交还给配置运气）。见
-// docs/specs/log-index-sqlite/spec.md §3.4（切分）与 §6（配置键登记）。
-type LogIndexConfig struct {
-	// BatchPrune 历史投递批次（delivery_batch）裁剪：索引有界化的唯一裁剪路径。
-	BatchPrune LogIndexBatchPruneConfig `mapstructure:"batch_prune"`
-	// Persist 持久化提交单元预算：单次持久化按行数 + 耗时双上界切成多个提交单元。
-	Persist LogIndexPersistConfig `mapstructure:"persist"`
-	// Verify 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义（正常路径零等待）。
-	Verify LogIndexVerifyConfig `mapstructure:"verify"`
-	// ResumeBatchPerRound 是**兜底环每轮最多处理几个可解源**（键 log_index.resume_batch_per_round）。
-	//
-	// 为什么要有键（2026-10-04 现场澄清 ✓）：该容量此前只在 ingest.Options（默认 8 ✓）⇒ 现场无法
-	// 关闭，也无法退回应激行为 ✗。置 **1** = "每轮只处理一个"= 最小冲击 ✓；非正 ⇒ 默认 8 ✓。
-	ResumeBatchPerRound int `mapstructure:"resume_batch_per_round"`
-	// ResumeBackpressureStreak 是**窗口化背压**阈值：连续 N 轮闸视图积压净涨才跳过本轮
-	// （键 `log_index.resume_backpressure_streak`；默认 3 ✓；非正 ⇒ 默认）。
-	//
-	// 为什么需要（2026-10-05 现场 41 家 ✗✓）：原实现**单轮比较即跳过** ⇒ WAL 一有噪声抖动就
-	// 永久挡住复活 ✗（"三项前置全满足却不复活"的形态 ✓）。置 **1** = 退回单轮判定（现场应急用 ✓）。
-	ResumeBackpressureStreak int `mapstructure:"resume_backpressure_streak"`
-	// Scan 段读聚合（publishedClosedForSourceCtx→readSegment）的让路与轮内预算：
-	// 现场点名它是每轮重活的 I/O 大头 ✗，且**既不让路也无上界** ⇒ `pollOnce` 的 WaitGroup 等分钟级。
-	Scan LogIndexScanConfig `mapstructure:"scan"`
-	// ReclaimRoll 滚动回收（#63/#64）的单轮上界：现场见 `steps` 打满 ⇒ 需要热调（免发版 ✓）。
-	ReclaimRoll LogIndexReclaimRollConfig `mapstructure:"reclaim_roll"`
-}
-
-// LogIndexReclaimRollConfig 是**滚动回收**的单轮上界（键 `log_index.reclaim_roll.*`）。
-//
-// 语义：单次自愈调用里"探测→补段→推进"最多做多少步、最多花多久。**非正/非法一律回退默认**
-// （32 步 / 1s ✓）：这类旋钮回退默认永远安全（最坏只是下一轮继续滚 ✓），绝不解释成"关闭"✗。
-type LogIndexReclaimRollConfig struct {
-	MaxSteps int    `mapstructure:"max_steps"`
-	Budget   string `mapstructure:"budget"`
-}
-
-// LogIndexScanConfig 是**段读聚合**的让路与轮内预算（键 `log_index.scan.*`）。
-//
-// 语义（与"限速"区分）：让路 = 每 slice 行把 P 交还调度器（不影响正确性 ✓）；
-// 预算 = 单源单轮扫描的墙钟上界，超预算按**"证据不完整"**返回（不消解缺口、不推进水位 ✓
-// 安全方向），下一轮续扫 ✓。
-type LogIndexScanConfig struct {
-	// SliceRows 每多少行让路一次；非正回退默认（8192）。
-	SliceRows int `mapstructure:"slice_rows"`
-	// Yield 每次让路的睡眠时长（duration 字符串）；非正/非法回退默认（1ms）。
-	Yield string `mapstructure:"yield"`
-	// Budget 单源单轮扫描的墙钟预算（duration 字符串）；非正/非法回退默认（2s）。
-	Budget string `mapstructure:"budget"`
-}
-
-// LogIndexVerifyConfig 是**校验/对账查询**的全局上限配置面（键 `log_index.verify.*`）。
-//
-// 为什么需要（2026-10-03 现场：近 5 分钟 `投影校验查询 ×410` 占满算力、未暂停源 readΔ=0）：
-// 校验按簇退避重试到窗口耗尽，而并发上界只有"单批内 4"✗——多源同时校验时没有全局上限，
-// 少量失败簇的重试就能吃光算力与 VL 容量。本配置给它们一个**天花板**。
-//
-// 天花板语义（务必与"限速节拍"区分）：令牌桶容量 = 速率 ⇒ 正常路径（几簇、1–2 次查询）
-// 一次性放行、**零等待** ✓；只有超过上限的风暴被削峰 ✓；采集侧的读/写不经过该闸 ✓。
-type LogIndexVerifyConfig struct {
-	// MaxPerSecond 是校验/对账查询的每秒上限；非正回退默认（30）。
-	MaxPerSecond int `mapstructure:"max_per_second"`
-	// MaxInFlight 是同时在飞的校验/对账查询数上限；非正回退默认（6）。
-	MaxInFlight int `mapstructure:"max_in_flight"`
-	// MaxQueriesPerChunk 是单簇单次校验的尝试次数上限；非正回退默认（12）。
-	MaxQueriesPerChunk int `mapstructure:"max_queries_per_chunk"`
-	// RoundBudget 是**每源每轮**的校验时间预算（duration 字符串，键
-	// log_index.verify.round_budget）：空/非法/非正一律回退 ingest 默认。
-	// 背景：该键在 f237ae32 引入时**只有注释、没有接线**（无法调档），且默认 1.5s 在
-	// "VL 可见性地板 ~1.02s"环境下整轮预算被少数源用尽 ⇒ 其余源每轮 defer（2026-10-03 回退）。
-	RoundBudget string `mapstructure:"round_budget"`
-	// VisibilityFloor 是**可见性错开**等待（duration 字符串，键
-	// log_index.verify.visibility_floor）：>0 时首探前先等到"距批写入 ≥ floor"
-	// （对齐 VL 写入→可查询的硬地板，避免 0/0.2/0.6s 三次无效探测）。0/非正 = 关（默认关）。
-	VisibilityFloor string `mapstructure:"visibility_floor"`
-	// ChunkEstimate 是**单簇校验查询的保守耗时估计**（duration 字符串，键
-	// log_index.verify.chunk_estimate）：空/非法/非正 = **不放大预算**（默认，行为与修复前
-	// 逐字一致）。
-	//
-	// 为什么需要（2026-10-10 生产活锁）：单源预算原先是与事件数无关的常数，而大积压会被切成
-	// 数百簇（现场 544205 事件 / 2000 ⇒ 272 簇，实测单簇 17–23 秒）⇒ 常量预算永远跑不完。
-	// 给出本估计后，预算按 `⌈事件数/簇粒度⌉ × 估计 × 安全系数` 放大，并被 chunk_budget_max 封顶。
-	ChunkEstimate string `mapstructure:"chunk_estimate"`
-	// ChunkBudgetMax 是放大后预算的上限（duration 字符串，键
-	// log_index.verify.chunk_budget_max）：空/非法/非正 = 用 ingest 默认（5 分钟）。
-	//
-	// 上限的意义：超过它的批次只能靠**逐轮渐进收敛**（校验部分通过也登记已通过区间），
-	// 而不是让单源占住校验额度一小时（272 簇 × 23s ≈ 104 分钟 ✗）。
-	ChunkBudgetMax string `mapstructure:"chunk_budget_max"`
-}
-
-// LogIndexBatchPruneConfig 是历史投递批次裁剪的配置面（键 `log_index.batch_prune.*`）。
-//
-// 零值语义：Enabled=false 的零值无法与「显式关闭」区分（与 log_reconcile.enabled、
-// orphan_scan.auto_adopt 同口径），故 Load 经 viper SetDefault 写入默认 true；
-// 手工构造 Config{} 的调用方须自行置位。
-type LogIndexBatchPruneConfig struct {
-	// Enabled 为 false 时完全不裁（应急逃生口：怀疑裁剪影响判定时先关它）。
-	Enabled bool `mapstructure:"enabled"`
-	// KeepRecent 是无条件保留的最近批次条数（审计尾窗），只多留不少留；负数为误写 → 回退默认。
-	KeepRecent int `mapstructure:"keep_recent"`
-}
-
-// DeliveryBatchPruneConfig 把本地配置面收敛为 ledger 的裁剪配置（负尾窗回退默认 0）。
-func (c LogIndexBatchPruneConfig) DeliveryBatchPruneConfig() ledger.DeliveryBatchPruneConfig {
-	return ledger.DeliveryBatchPruneConfig{Enabled: c.Enabled, KeepRecent: c.KeepRecent}.Normalized()
-}
-
-// LogIndexPersistConfig 是索引持久化提交单元预算的配置面（键 `log_index.persist.*`）。
-type LogIndexPersistConfig struct {
-	// MaxTxRows 单个提交单元（一次 IMMEDIATE 事务）的行数上限；非正回退默认 512
-	// （真源是 stateindex.DefaultCommitMaxRows）。
-	MaxTxRows int `mapstructure:"max_tx_rows"`
-	// MinTxRows 自适应收缩的下限（再慢也不退化成逐行）；非正/大于上限时回退默认 64。
-	MinTxRows int `mapstructure:"min_tx_rows"`
-	// TxDurationTarget 单个提交单元的耗时目标（duration 字符串，默认 40ms）；非法/非正回退默认。
-	// 执行中的耗时硬上界取它的 5/4（默认 50ms = 验收线「单次持久化 ≤50ms」本身）。
-	TxDurationTarget string `mapstructure:"tx_duration_target"`
-	// CycleMaxRows 是**单次落库调用**最多处理的行数（写 + 删；键 log_index.persist.cycle_max_rows）。
-	// 非正回退默认（stateindex.DefaultCycleMaxRows）。
-	//
-	// 与 max_tx_rows 的区别（2026-10-02 生产事故的直接对策）：max_tx_rows 约束「一个事务多大」，
-	// 本键约束「一次调用做多少」。事故现场是启动恢复一次判出整段积压（3.4M 行）要删，单次调用
-	// 必须把 10.6 万条 DELETE 跑完才返回 ⇒ 启动链上跑 20–30 分钟、worker 不监听。有了本键，一次
-	// 调用有界返回（Incomplete），剩余差异由下一轮续做（镜像按提交单元更新 ⇒ 重算即续跑）。
-	CycleMaxRows int `mapstructure:"cycle_max_rows"`
-	// CycleMaxDuration 是单次落库调用的墙钟预算（duration 字符串；键
-	// log_index.persist.cycle_max_duration）；非法/非正回退默认。检查落在提交单元之间。
-	CycleMaxDuration string `mapstructure:"cycle_max_duration"`
-	// CycleYield 是持久化门的**让路窗口**（duration 字符串；键 log_index.persist.cycle_yield）：
-	// 长链做完一步后必须让出这么久的门，让排队者（含采集轮）拿走。空/非正回退默认
-	// （max(20ms, GOMAXPROCS×5ms)）。
-	//
-	// 为什么可配（2026-10-03 现场：门闩饿死采集轮）：默认值按「一次完整调度量级」估，
-	// 但不同部署的核数与负载差异大；上线后可据此调「恢复链吞吐 ↔ 采集轮延迟」的取舍。
-	CycleYield string `mapstructure:"cycle_yield"`
-	// HotBudget 是热路径（采集/投递侧）在持久化门上的等待上界（duration 字符串；键
-	// log_index.persist.hot_budget）；空/非正回退默认 30ms。热路径**绝不为落库阻塞**：超时即把
-	// 落库交给后台通道（现场"投递侧等门 ⇒ VL 零写入"的根治点）。
-	HotBudget string `mapstructure:"hot_budget"`
-	// PriorityStreak 是**老化阈值**（键 log_index.persist.priority_streak）：连续授予优先档
-	// （采集轮/登记/解算）多少次后必须放行一次普通档（恢复/重放链），防止反方向饿死。0/空 = 默认 8。
-	PriorityStreak int `mapstructure:"priority_streak"`
-}
-
-// CommitBudget 把本地配置面收敛为 stateindex 的提交单元预算（非法值一律回退归一化默认）。
-func (c LogIndexPersistConfig) CommitBudget() stateindex.CommitBudget {
-	out := stateindex.DefaultCommitBudget()
-	if c.MaxTxRows > 0 {
-		out.MaxRows = c.MaxTxRows
+// 返回 0 表示「用 ingest 默认值」（未设）。负值不应到达这里（调用方先查
+// BackfillDisabled）；若到了也按 0 处理，绝不能变成「全量历史」。
+func (c LogCatalogConfig) BackfillDaysValue() int {
+	if c.BackfillDays < 0 {
+		return 0
 	}
-	if c.MinTxRows > 0 {
-		out.MinRows = c.MinTxRows
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.TxDurationTarget)); err == nil && d > 0 {
-		out.Target = d
-	}
-	if c.CycleMaxRows > 0 {
-		out.CycleMaxRows = c.CycleMaxRows
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.CycleMaxDuration)); err == nil && d > 0 {
-		out.CycleMaxDuration = d
-	}
-	return out.Normalized()
+	return c.BackfillDays
 }
 
-// IndexPrune 返回可直接交给 ingest.Options.IndexPrune 的裁剪配置。
-func (c LogIndexConfig) IndexPrune() ledger.DeliveryBatchPruneConfig {
-	return c.BatchPrune.DeliveryBatchPruneConfig()
+// JournalPath 返回 journal 文件路径（位于数据根下 var/log）。
+func (c LogCatalogConfig) JournalPath(root string) string {
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, "var", "log", "catalog.journal.jsonl")
 }
 
-// CommitBudget 返回可直接交给 ingest.Options.IndexCommit 的提交单元预算。
-func (c LogIndexConfig) CommitBudget() stateindex.CommitBudget { return c.Persist.CommitBudget() }
+// JournalDisabled 返回是否显式关闭了 journal 落盘（未设 = 不关闭）。
+func (c LogCatalogConfig) JournalDisabled() bool {
+	return c.JournalEnabled != nil && !*c.JournalEnabled
+}
+
+// JournalSyncIntervalValue 收敛为 time.Duration。
+//
+// 三种取值需区分清楚（都靠“未设 vs 显式 0”区分，不能用零值主义）：
+//
+//	未设（空串）  ⇒ (0, false)：调用方用 catalog 默认（2s）
+//	显式 "0s"     ⇒ (0, true) ：同步写（每次追加即 fsync）
+//	显式非法值     ⇒ (0, false)：回退默认（与既有 manifest_sync_interval 同口径）
+func (c LogCatalogConfig) JournalSyncIntervalValue() (time.Duration, bool) {
+	raw := strings.TrimSpace(c.JournalSyncInterval)
+	if raw == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return 0, false
+	}
+	return d, true
+}
 
 // RecoverConfig 接管恢复（Worker 重启后接管存活 wrapper）配置（FR-455①）。
 type RecoverConfig struct {
@@ -575,6 +442,39 @@ type LogConfig struct {
 	// 此前该旋钮只认环境变量 JM_MUTEX_PROFILE_FRACTION（绕过配置体系 ⇒ 运维无法从配置面发现
 	// 它、也无法纳入版本化管理）。1 = 全采（诊断窗口），数值越大采样越稀（5 = 1/5）。
 	MutexProfileFraction int `mapstructure:"mutex_profile_fraction"`
+
+	// 以下四项只看「进程自身日志文件」的轮转与保留（internal/platform/rollog），
+	// 与实例日志 / VictoriaLogs 无关。零值一律回退内置默认，老配置不需要改。
+	//
+	// MaxSizeMB 单个日志文件触发轮转的大小（MB）。
+	MaxSizeMB int `mapstructure:"max_size_mb"`
+	// MaxBackups 轮转档保留份数（含未压缩与已压缩）。负值 = 不限。
+	MaxBackups int `mapstructure:"max_backups"`
+	// MaxAgeDays 轮转档保留天数。负值 = 关闭按天保留。
+	MaxAgeDays int `mapstructure:"max_age_days"`
+	// Compress 是否对轮转档做 gzip。默认 true；显式写 false 才关（用指针区分未配置）。
+	Compress *bool `mapstructure:"compress"`
+}
+
+// Retention 把 YAML 里的日志保留旋钮转成 rollog 的保留策略。
+//
+// 零值语义（与 rollog 一致）：尺寸/份数/天数零值 → 回退内置默认；天数负值 → 关闭按天保留；
+// 份数负值 → 不限；Compress 未配置（nil）→ 开。
+func (c LogConfig) Retention() rollog.Retention {
+	r := rollog.DefaultRetention()
+	if c.MaxSizeMB > 0 {
+		r.MaxSizeBytes = int64(c.MaxSizeMB) << 20
+	}
+	if c.MaxBackups != 0 {
+		r.MaxBackups = c.MaxBackups
+	}
+	if c.MaxAgeDays != 0 {
+		r.MaxAgeDays = c.MaxAgeDays
+	}
+	if c.Compress != nil {
+		r.Compress = *c.Compress
+	}
+	return r
 }
 
 // LogQueryConfig configures the optional localhost VictoriaLogs query client.
@@ -585,8 +485,8 @@ type LogQueryConfig struct {
 	Password string `mapstructure:"password"`
 }
 
-// LogVLConfig enables the managed HOT/COLD/Rehydrate supervisor. Empty BinaryPath
-// keeps externally managed localhost VL compatibility mode.
+// LogVLConfig 配置受管 HOT/COLD/Rehydrate；未指定资产时兼容外部回环 VL。
+// cache、Go 软限制与 RSS 是不同维度，不能互相充当硬内存上限。
 type LogVLConfig struct {
 	BinaryPath      string `mapstructure:"binary_path"`
 	PackagePath     string `mapstructure:"package_path"`
@@ -595,50 +495,194 @@ type LogVLConfig struct {
 	Password        string `mapstructure:"password"`
 	DataRoot        string `mapstructure:"data_root"`
 	RetentionPeriod string `mapstructure:"retention_period"`
-	// ColdRetentionPeriod 冷层（COLD namespace）的 VL runtime retention。
+	// 2026-10-29：`cold_retention_period` 已删除 —— 冷热双层已废除，只剩余一个 VL，
+	// `retention_period` 就是唯一的保留期（既管热也管长期），不再存在「冷层留存多久」。
+	// DeleteEnabled 打开受管 VL 的 -delete.enable（默认 false）。
 	//
-	// 为什么要独立于 RetentionPeriod：VL 的 retention 到期是**直接删**，绕过平台侧
-	// 「删前归档」。热层 retention 必须不短于保留策略的热层窗口（默认同为 90d，留出搬运余量），
-	// 冷层则是「冷留存多久」的唯一执行者（用户口径：冷 730 天，所有级别统一）。
-	ColdRetentionPeriod string `mapstructure:"cold_retention_period"`
-	HotCacheBytes       int64  `mapstructure:"hot_cache_bytes"`
+	// 为什么要这个开关：`projection_generation` 白名单只让旧代次「看不见」，
+	// **不会让旧行不存在**；VL 只追加。缺删除能力时，任何「整窗重写 + 换代次」
+	// 都会线性放大体积（生产实测单日 75×、880MB）。打开后可由孤儿代次 GC 回收。
+	// 默认关：删除不可逆，必须运维显式承担。
+	DeleteEnabled bool `mapstructure:"delete_enabled"`
+	// MaxDiskSpaceBytes / MaxDiskUsagePercent 是受管 VL 的**磁盘占用上限**（二者互斥）。
+	//
+	// 为什么需要它（2026-10-29）：只有 `retention_period` 时，磁盘用量 = 保留期 × 实际写入量，
+	// 没有任何上限——单个源日志暴增就会把磁盘拖涨。VL 提供两种上限：
+	//   - `max_disk_space_bytes`：`-retention.maxDiskSpaceUsageBytes`，按绝对字节数；
+	//   - `max_disk_usage_percent`：`-retention.maxDiskUsagePercent`，按磁盘使用百分比（1-100）。
+	//
+	// **推荐用字节数**（本项目生产是 VL 与游戏服**共享磁盘**，`/home` 已 71%）：
+	// 百分比口径在共享盘上会被**其它进程**的写入触发，那会把日志丢掉而非删别的，风险更大。
+	//
+	// 注意 VL 的语义：超过上限时**丢最旧的按日分区**，不是按字节精确切；
+	// 它与 `retention_period` **同时生效**（谁先到谁触发），不是替代关系。
+	MaxDiskSpaceBytes   int64 `mapstructure:"max_disk_space_bytes"`
+	MaxDiskUsagePercent int   `mapstructure:"max_disk_usage_percent"`
+	HotCacheBytes       int64 `mapstructure:"hot_cache_bytes"`
 	// MemoryLimitBytes 受管 VL 进程 Go 软内存上限（GOMEMLIMIT，字节）；0 用默认 512MiB，负值不注入。
 	MemoryLimitBytes int64 `mapstructure:"memory_limit_bytes"`
-	HotPort          int   `mapstructure:"hot_port"`
-	ColdPort         int   `mapstructure:"cold_port"`
-	RehydratePort    int   `mapstructure:"rehydrate_port"`
-	StartCold        bool  `mapstructure:"start_cold"`
-	StartRehydrate   bool  `mapstructure:"start_rehydrate"`
+	// MemoryAllowedPercent 非 0 时用 VL 官方推荐的 -memory.allowedPercent，
+	// 让 VL 按宿主机可用内存自适应；显式 hot_cache_bytes 仍优先。
+	// 默认 10（256GiB 机器约 25GiB 上限，实际用量远低）。
+	MemoryAllowedPercent int `mapstructure:"memory_allowed_percent"`
+	// NamespaceBudgets 显式按层覆盖预算；零字段沿用旧键和各层有限模板。
+	NamespaceBudgets map[string]LogVLNamespaceBudget `mapstructure:"namespace_budgets"`
+	// Budget 区分全局日志磁盘与数据面 RSS，并限制临时空间预留。
+	Budget  LogVLRuntimeBudget `mapstructure:"budget"`
+	HotPort int                `mapstructure:"hot_port"`
+	// StreamFields 是 `/insert/jsonline` 的 `_stream_fields`（逗号分隔）；空 = 默认 `log_source_id,stream`。
+	//
+	// 默认开流标签（与 VL 官方接入方式对齐）：流是**分区键**，把逐行变化的字段放进去
+	// 会让 VL 为每行建一个 stream。取值默认由架构裁定，这里只作为**诊断/应急**旋钮，
+	// 且构造客户端时会校验——无界基数字段（event_id / record_* / ingest_time_utc …）
+	// 一律报错拒启，不会静默生效。
+	StreamFields string `mapstructure:"stream_fields"`
+	// DisableStreamFields 关闭流标签（不发 `_stream_fields` 等写入参数）。
+	//
+	// 供「外部回环 VL 由其他系统一并写入」或需要与既有 stream 布局对齐的部署退回：
+	// 一旦启用流标签，同一个 VL 里新旧数据的分区形态就不一致。关掉后与本改动前的
+	// 线上请求字节级一致（连 `_msg_field` / `_time_field` 也不发）。
+	DisableStreamFields bool `mapstructure:"disable_stream_fields"`
+}
+
+// LogVLNamespaceBudget 表达单层 cache、Go 软限制与 RSS 准入阈值。
+// RSS 为零不设置该层上界；Go 软限制的负值兼容旧键，表示不注入 GOMEMLIMIT。
+type LogVLNamespaceBudget struct {
+	CacheBytes         int64 `mapstructure:"cache_bytes"`
+	GoMemoryLimitBytes int64 `mapstructure:"go_memory_limit_bytes"`
+	RSSBytes           int64 `mapstructure:"rss_bytes"`
+}
+
+// LogVLRuntimeBudget 分开约束日志磁盘占用、聚合 RSS 与三类临时预留。
+// 全局零值表示不配置该维度的上界，不会从 cache 或另一维度猜测。
+type LogVLRuntimeBudget struct {
+	DiskBytes    int64                   `mapstructure:"disk_bytes"`
+	RSSBytes     int64                   `mapstructure:"rss_bytes"`
+	Reservations LogVLReservationBudgets `mapstructure:"reservations"`
+}
+
+// LogVLReservationBudgets 是 WAL、迁移暂存和临时导出的独立预留上限。
+type LogVLReservationBudgets struct {
+	WAL     int64 `mapstructure:"wal"`
+	Staging int64 `mapstructure:"staging"`
+	Export  int64 `mapstructure:"export"`
+}
+
+// ValidateDiskLimit 校验受管 VL 的磁盘占用上限配置。
+//
+// 三条红线（均在**启动时**拒绝，不静默忽略）：
+//  1. 负数：无意义，几乎必然是配置写错；
+//  2. 两者同时非零：VL 官方明确二者**互斥**。2026-10-29 用真实 v1.52.0 实跑确认：
+//     同配时 VL 自己直接 `fatal` 退出（不是告警、也不是选一个）。我们提前到配置层拦，
+//     是为了给出中文原因与键名，而不是让运维去看 VL 的 fatal；
+//  3. 百分比 > 100：超出 VL 接受范围（1-100）。
+//
+// 为什么特意不把“两个都配”降级成告警：这是那种“只在出事时才暴露”的配置——
+// 磁盘满的那一刻，运维以为自己设了 N GiB，实际生效的是另一条，事故现场才发現。
+func (c LogVLConfig) ValidateDiskLimit() error {
+	if c.MaxDiskSpaceBytes < 0 {
+		return fmt.Errorf("log_vl.max_disk_space_bytes 必须非负（0 = 不限制）")
+	}
+	if c.MaxDiskUsagePercent < 0 || c.MaxDiskUsagePercent > 100 {
+		return fmt.Errorf("log_vl.max_disk_usage_percent 必须在 [0,100]（0 = 不限制）")
+	}
+	if c.MaxDiskSpaceBytes > 0 && c.MaxDiskUsagePercent > 0 {
+		return fmt.Errorf("log_vl.max_disk_space_bytes 与 max_disk_usage_percent 互斥（VL 官方限制），只能配一个")
+	}
+	return nil
+}
+
+// ValidateStreamFields 校验流标签配置（启动即拒，不静默忽略）。
+//
+// 为什么要单独校验而不是只靠 vlsup.NewClient：这个错误的代价是**单向不可逆**的（写进 VL 的
+// stream 元数据只能靠删分区回收），且生效点深在写入链路里、首次写入时才暴露。放到 Load
+// 阶段拒，运维在启动日志里就能看到中文原因与具体字段名。
+func (c LogVLConfig) ValidateStreamFields() error {
+	if c.DisableStreamFields {
+		return nil
+	}
+	spec := strings.TrimSpace(c.StreamFields)
+	if spec == "" {
+		spec = vlsup.DefaultStreamFields
+	}
+	return vlsup.ValidateStreamFields(spec)
+}
+
+// RuntimeBudget 将新键与旧内存键归并为运行时唯一预算，拒绝拼错层名和负上界。
+func (c LogVLConfig) RuntimeBudget() (vlsup.RuntimeBudget, error) {
+	namespaces := vlsup.DefaultNamespaceBudgets()
+	if c.HotCacheBytes < 0 {
+		return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.hot_cache_bytes 必须非负")
+	}
+	for ns, budget := range namespaces {
+		if ns == vlsup.NamespaceHot && c.HotCacheBytes > 0 {
+			budget.CacheBytes = c.HotCacheBytes
+		}
+		if c.MemoryLimitBytes != 0 {
+			budget.GoMemoryLimitBytes = c.MemoryLimitBytes
+		}
+		namespaces[ns] = budget
+	}
+	for name, override := range c.NamespaceBudgets {
+		ns := vlsup.Namespace(name)
+		budget, ok := namespaces[ns]
+		if !ok {
+			return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.namespace_budgets 含未知层 %q", name)
+		}
+		if override.CacheBytes < 0 || override.RSSBytes < 0 {
+			return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.namespace_budgets.%s 的 cache_bytes/rss_bytes 必须非负", name)
+		}
+		if override.CacheBytes != 0 {
+			budget.CacheBytes = override.CacheBytes
+		}
+		if override.GoMemoryLimitBytes != 0 {
+			budget.GoMemoryLimitBytes = override.GoMemoryLimitBytes
+		}
+		budget.RSSBytes = override.RSSBytes
+		namespaces[ns] = budget
+	}
+	budget := vlsup.RuntimeBudget{
+		Namespaces: namespaces, DiskBytes: c.Budget.DiskBytes, RSSBytes: c.Budget.RSSBytes,
+		Reservations: map[vlsup.ReservationKind]int64{
+			vlsup.ReservationWAL:     c.Budget.Reservations.WAL,
+			vlsup.ReservationStaging: c.Budget.Reservations.Staging,
+			vlsup.ReservationExport:  c.Budget.Reservations.Export,
+		},
+	}
+	if _, err := vlsup.NewBudgetController(budget); err != nil {
+		return vlsup.RuntimeBudget{}, fmt.Errorf("log_vl.budget: %w", err)
+	}
+	return budget, nil
 }
 
 // DefaultMaxWALBytes 是单源 WAL **当前积压**的字节上限默认值。
 //
-// 此前默认是 0 = 不限，于是唯一的体积防护形同不存在：压测实测单 Worker WAL 涨到 1.9GB
-// 而容量门禁的 PASSIVE 分支从不触发（「不限」不是「很宽」，是「没有上界」）。
+// 2026-10-29：语义已从「越界暂停采集」改为「越界丢弃最旧、不暂停」（见
+// acquire.WAL.enforceBacklogLimitLocked）。因此本值现在是**丢多少的阈值**，
+// 而不是“守多久”的阈值——取太大意味着卡住时丢得更多。
 //
 // 取 512MiB 的依据：稳态 WAL 在 reclaim 正常推进后是 KB 量级（真机实测 107MB → 256B），
-// 只有 reclaim 停滞时才会累积到百 MB 级。故 512MiB 远高于任何正常态，
-// 只在真的失控时才触发——触发后的动作是暂停采集 + 登记缺口（不静默丢），正合「宁停不丢」。
-//
-// 接线（2026-10-02 修正）：本值现在是 **WAL.SetLimits 的字节上限**（真实积压，见
-// acquire.WALLimits），也是容量门禁的高水位读数阈值。此前它被接到采集管道的累计追加量上，
-// 而该累计量只增不减 → 单源累计追加满 512MiB 即被永久暂停（容量 PAUSE 不由积压滞回清除）。
+// 只有 reclaim 停滞时才会累积到百 MB 级。故 512MiB 远高于任何正常态。
 // 0 表示字节维度不设上限（此时条目维度仍由 MaxWALEntries 兜住）。
 const DefaultMaxWALBytes uint64 = 512 << 20
 
 // DefaultMaxWALEntries 是单源 WAL **当前积压**的条目数上限默认值。
 //
-// 为什么条目维度必须独立兜底（不能只靠字节）：WAL 条目会内联进 ingest.state.json 持久化，
-// 2026-09-28 生产事故正是「单源积压无界 → 状态文件 1.2GB → 每次持久化全量重写 →
-// 持续 117MB/s、Worker CPU 138%」。5000 条把每源对状态的贡献限定在十几 MB 级，
-// 与字节上限同时生效、**先到者触发**。
-// 5000 → 20000（2026-10-03，60 台规模复核）：现场 60 台/113 万条压力下**字节闸先咬**
-// （最小 32.6 MiB 即停 ⇒ 单条事件体量远大于典型值），条目闸 5000 会在正常积压时先把源钉死 ✗。
-// 上抬到 20000（≈ 20000 × 6.5KiB ≈ 130 MiB 典型占用）；字节闸仍是硬停（默认 512 MiB），
-// 单节点暂存上界 ≈ 源数 × 512 MiB ≈ 1.5–2.5 GiB ✓。两闸**同时有效**，谁先到谁停 ✓。
-// 依据（现场自证）：显式配了 max_wal_bytes 的源停在 512 MiB，未配（=0，本意"不限"）的源停在
-// 32.6 MiB ⇒ 说明"正常积压"的量级本就超过 16 MiB 与 5000 条目两个旧默认值 ✓✓。
-const DefaultMaxWALEntries int64 = 20000
+// ## 2026-10-29 下调：20000 → 5000
+//
+// 两个原因，都是这次改造直接带来的：
+//
+//  1. **语义变了**：原来是“超了就停采”（保留全部积压、停止读新数据），现在是
+//     “超了就丢弃”（不暂停、不背压）。上限不再代表“能守多久”，而是**丢多少**。
+//     20000 条在生产上（单条约 900B 均值、60 源）意味着卡住时每个源先丢 20000 条，
+//     而实际上更早丢就能更早腾出内存、更早恢复投递。
+//  2. **内存上界**：WAL 改纯内存后，条目数直接决定进程内存。5000 条 × 约 1KB ≈ 5MB/源，
+//     60 源约 300MB，对 251GB 机器可接受；20000 条则是 1.2GB，且会随源数线性放大。
+//
+// 为什么仍保留这个键：它是运维手上唯一的“积压容量旋钮”，完全去掉会让
+// “这个节点到底能容多少未投递日志”变成不可配的魔法值。
+// 字节维度同时生效、**先到者触发**。
+const DefaultMaxWALEntries int64 = 5000
 
 // DefaultMaxReplayEventsPerDrain 是暂停/恢复期单轮外发事件数的默认上限（回放限速）。
 //
@@ -664,7 +708,13 @@ type LogCapacityConfig struct {
 }
 
 // LogSourceConfig 配置一个由 Worker 常驻采集的日志源。
-// 实例生命周期可以在创建/迁移时动态登记同一模型；配置源用于 Worker/Node 日志和离线部署。
+//
+// 实际用途只有一处（2026-10-19 更正，评审 m-1）：**给实例/节点日志源做路径覆盖**——
+// apps/worker/main.go 按 `storage_namespace == targetID` 匹配，命中则以其 path 覆盖
+// 采集规则推导出的默认路径（见 docs/specs/log-acquisition-rules/spec.md §3.4）。
+// 早先这里写的是「配置源用于 Worker/Node 日志和离线部署」，与实现不符：并不存在
+// 「Worker 自身日志走 log_sources」这条路径，`node:<id>` 指的是**节点维度目标**，
+// 不是 Worker 进程自己的 stdout。validateLogSources 的白名单口径正建立在这个事实上。
 type LogSourceConfig struct {
 	LogSourceID      string `mapstructure:"log_source_id"`
 	SourceGeneration string `mapstructure:"source_generation"`
@@ -678,6 +728,97 @@ type LogSourceConfig struct {
 	UTCDay           string `mapstructure:"utc_day"`
 }
 
+// logSourceTargetRe 是可被查询枚举到的目标标识形态：`inst:<实例ID>` / `node:<节点ID>`。
+//
+// 与 retention.sourceIDRe 的字符集白名单互补：那条回答「能否安全用于删除过滤器」，
+// 本正则回答「这个命名空间是否可能被 CP 枚举到」。
+//
+// 三种合法形态（与 CP 侧 logcoord/assemble.go 的目标解析一一对应）：
+//   - `inst:<实例ID>`  实例日志（CP 按实例 ID 枚举）
+//   - `node:<节点ID>`  节点自身日志（CP 按节点 ID 枚举）
+//   - `node:<节点UUID>` 同上，但用 UUID 寻址
+//
+// 为什么必须支持 UUID（2026-10-19，评审 M-3）：节点数字 ID 由 CP 在**注册时**自增分配，
+// 运维写 worker.yml 时无法预知；只允许 `node:<数字>` 等于要求"先注册、查 ID、再改配置重启"，
+// 而且写错数字仍能通过校验、静默查不到。CP 的 assemble.go 对未知前缀走 default 分支
+// 按 UUID 解析并归一成 `node:<id>`，因此用本节点 UUID 是**可发现、可验证**的写法：
+// 它就在 `<dataDir>/etc/node-identity.json` 里。
+var logSourceTargetRe = regexp.MustCompile(
+	`^(inst:[1-9][0-9]*|node:[1-9][0-9]*|node:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`)
+
+// validateLogSources 校验静态 `log_sources` 的目标形态，非法即拒绝启动。
+//
+// 为什么必须拒（2026-10-17 dev 实测）：CP 的日志查询按**目标**收敛覆盖率
+// （`node:<节点ID>` / `inst:<实例ID>`），而 Worker 侧 coverage 只从自己持有的 Catalog
+// 分区反推，匹配依据正是分区键的 `storage_namespace`。若配置里写了一个不会被任何 CP 目标
+// 匹配到的命名空间，整条链路会**全程静默**——采集照常、VL 里有数据、日志页却显示
+// 「日志查询服务未启用」（CP 收到空目标列表 → target_missing_in_worker_response →
+// 归一化为 ENGINE_NOT_READY）。现场排查会一路去怀疑 VL，而真因只是命名空间写错。
+//
+// 形态由平台自己生成、可完全枚举，因此不预留宽松口子：`log_sources` 的
+// `storage_namespace` 语义本就是「等于 targetID」（见 docs/specs/log-acquisition-rules/spec.md §3.4），
+// 实例级条目必须是 `inst:<id>`；节点自身日志用 `node:<节点ID>` 或 `node:<节点UUID>`。
+func validateLogSources(sources []LogSourceConfig) error {
+	seen := make(map[string]struct{}, len(sources))
+	for i, s := range sources {
+		where := fmt.Sprintf("log_sources[%d]", i)
+		id := strings.TrimSpace(s.LogSourceID)
+		ns := strings.TrimSpace(s.StorageNamespace)
+		if id == "" {
+			return fmt.Errorf("%s.log_source_id 不能为空", where)
+		}
+		if ns == "" {
+			return fmt.Errorf("%s.storage_namespace 不能为空：必须是 inst:<实例ID> 或 node:<节点ID|节点UUID>", where)
+		}
+		if !logSourceTargetRe.MatchString(ns) {
+			return fmt.Errorf("%s.storage_namespace = %q 不是可被查询的目标形态：必须是 inst:<实例ID>、"+
+				"node:<节点ID> 或 node:<节点UUID>（UUID 见 <dataDir>/etc/node-identity.json）。"+
+				"写成其它值（如 dev:smoke）时该源仍会被采集并写入 VL，但 CP 按目标枚举永远匹配不到，"+
+				"日志页会显示「日志查询服务未启用」而真因只是命名空间不对", where, s.StorageNamespace)
+		}
+		// 源标识与命名空间的关系按类别分流（2026-10-19 评审修正）：
+		//   - instance 类：必须是 `<storage_namespace>/<流名>`（生产形态 `inst:317/file`），
+		//     否则分区键与源身份脱节；
+		//   - worker / node 类：允许 `id == storage_namespace`（即 `node:1` 自身），
+		//     这是 configs/worker.yml 的出厂示例形态（`log_source_id: node:1` +
+		//     `storage_namespace: node:1`）——此前一律强制 `<ns>/` 会把它判成非法，
+		//     存量部署按示例配置升级后直接起不来。
+		isInstanceCategory := s.SourceCategory == "" || s.SourceCategory == string(logtypes.SourceInstance)
+		if isInstanceCategory {
+			if !strings.HasPrefix(id, ns+"/") || len(id) == len(ns)+1 {
+				return fmt.Errorf("%s.log_source_id = %q 必须以 %q 开头（形态 <storage_namespace>/<流名>，例如 %s/file）",
+					where, s.LogSourceID, ns+"/", ns)
+			}
+		} else if id != ns && !strings.HasPrefix(id, ns+"/") {
+			return fmt.Errorf("%s.log_source_id = %q 必须是 %q 本身或以 %q 开头（%s 类源的两种合法写法）",
+				where, s.LogSourceID, ns, ns+"/", s.SourceCategory)
+		}
+		if cat := strings.TrimSpace(s.SourceCategory); cat != "" &&
+			cat != string(logtypes.SourceInstance) && cat != string(logtypes.SourceWorker) && cat != string(logtypes.SourceNode) {
+			return fmt.Errorf("%s.source_category = %q 非法：只接受 instance / worker / node（留空按 instance）", where, cat)
+		}
+		// 采集模式白名单校验（与 pipeline.AcquireMode 的合法值逐字一致：worker.yml 直接写
+		// 字面量 FILE_PRIMARY / STDIO_PRIMARY / PUSH_ONLY，由 main.go 透传为 pipeline.AcquireMode）。
+		// 空串沿用 FILE_PRIMARY（pipeline 默认值）。PUSH_ONLY 为纯接收源（FR-511 的 HTTP 端点）：
+		// 不读取任何物理文件，因此允许 path 为空——它走自己的 ledger+WAL，事件经 Ingest 注入。
+		mode := strings.TrimSpace(s.Mode)
+		if mode != "" && mode != "FILE_PRIMARY" && mode != "STDIO_PRIMARY" && mode != "PUSH_ONLY" {
+			return fmt.Errorf("%s.mode = %q 非法：只接受 FILE_PRIMARY / STDIO_PRIMARY / PUSH_ONLY（留空按 FILE_PRIMARY）", where, s.Mode)
+		}
+		if mode == "FILE_PRIMARY" && strings.TrimSpace(s.Path) == "" {
+			return fmt.Errorf("%s.mode = FILE_PRIMARY 必须有 path（采集文件的绝对路径）", where)
+		}
+		if mode == "PUSH_ONLY" && strings.TrimSpace(s.Path) != "" {
+			return fmt.Errorf("%s.mode = PUSH_ONLY 为纯接收源，不应配置 path（事件经 HTTP 注入）", where)
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("%s.log_source_id = %q 与前面的源重复：同一源不能登记两次", where, s.LogSourceID)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
 // LogIngestConfig 采集归一化的节点级默认配置面，键为 `log_ingest.*`。
 //
 // 缺陷 C（时间戳偏移）的配置面：`[HH:MM:SS]` 行内时间按哪个时区解释。换算逻辑早已在归一化层
@@ -689,6 +830,8 @@ type LogSourceConfig struct {
 // 不能让运维在查询结果里发现；与登记阶段拒绝非法源级时区是同一取舍。
 // 见 docs/specs/worker-log-normalizer/spec.md §3.4。
 type LogIngestConfig struct {
+	// ReadLimits 在分配整行正文之前限制单行和单轮读入，零字段沿用采集模板。
+	ReadLimits LogReadLimitsConfig `mapstructure:"read_limits"`
 	// TimeZone 解释日志行内 [HH:MM:SS] 所用的节点级默认时区：空串 = UTC（既有行为）；
 	// "local" = 跟随节点进程本地时区（TZ）；其余按 IANA 名解析（如 Asia/Hong_Kong）。
 	// 源可用 SourceConfig.TimeZone 覆盖本默认。
@@ -703,105 +846,237 @@ type LogIngestConfig struct {
 	// 依赖粘滞启发式，运维显式声明才是确定性方案。
 	// 源可用 SourceConfig.Charset 覆盖本默认；非法值在 Load 阶段启动即拒。
 	Charset string `mapstructure:"charset"`
-	// Sampling 采集侧采样与降级策略（键 log_ingest.sampling.*）。
-	//
-	// 挂在 log_ingest 下而不是顶层：它与时区/字符集同属「采集归一化」的节点级默认，
-	// 作用域与装配点完全一致（都在构造 ingest.Options 时接线）。
-	Sampling LogSamplingConfig `mapstructure:"sampling"`
-	// MultilineUnclosedTimeout 是未闭合多行缓冲的闲置超时（键
-	// log_ingest.multiline_unclosed_timeout）：超过它仍无新行，就以显式 `multiline_unclosed`
-	// 标记强制闭合该缓冲并推进 durable。空串表示用默认（normalize.DefaultUnclosedTimeout = 5s）。
-	//
-	// 为什么必须有这条出路（缺陷 B）：未闭合缓冲平时只由「下一行到达」推进。源一旦长时间
-	// 静默，缓冲既不产出事件也不推进 durable——而轮转恢复要靠 durable 覆盖已读前缀，
-	// 于是这段悬挂区间既没被覆盖、也没有事件，链路卡在「轮转分段不可读」。
-	// 非正数（含 "0"）表示**关闭**强制冲刷，此时悬挂记录会一直挂着（仅排障用）。
-	MultilineUnclosedTimeout string `mapstructure:"multiline_unclosed_timeout"`
-	// ArchiveScanInterval 是「定时归档导入扫描」的周期（键 log_ingest.archive_scan_interval）。
-	// 空串或 "0" 表示**关闭**（默认关）。
-	//
-	// 为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，定时扫描的价值只在
-	// 「采集轮停了、归档还在攒」的场景（源被暂停/停止采集）。默认开会在每个部署上多出
-	// 一份周期性目录扫描与账本写入——收益不明显而成本确定，故由配置显式打开。
-	// 手动入口不受本开关影响（gRPC LogImportArchives 始终可用）。
-	ArchiveScanInterval string `mapstructure:"archive_scan_interval"`
-	// ResolveGapsMaxSources 是整节点解算（POST /nodes/:id/log-runtime/ingest/resolve-gaps
-	// 不传 storageNamespace 的路径）单次调用最多处理的源数（键 log_ingest.resolve_gaps_max_sources）。
-	// 0 或空表示用默认（ingest.defaultResolveGapsMaxSources = 256）。
-	//
-	// 为什么需要它（2026-10-02 压测现场）：该路径此前对全部源做投影查询且**整段持采集轮锁**，
-	// 一次调用即让整节点采集停摆 30 分钟（read_pos 冻结、索引 WAL 涨到 10.2 GB），且调用方
-	// 超时后服务端仍继续跑。锁纪律已修（解算不再跨投影查询持锁、ctx 可取消），本条配置是
-	// 「有界」那一半：遍历必须有上界，超出即分片并由调用方续跑（见 ResolveGapsBudget）。
-	ResolveGapsMaxSources int `mapstructure:"resolve_gaps_max_sources"`
-	// ResolveGapsMaxDuration 是同一次调用的墙钟预算（键 log_ingest.resolve_gaps_max_duration，
-	// 如 "2m"）。空串表示用默认（ingest.defaultResolveGapsMaxDuration）。
-	// 它服务于**没有 deadline 的调用方**（RPC/HTTP 侧自有截止时间，ctx 会先到点）。
-	ResolveGapsMaxDuration string `mapstructure:"resolve_gaps_max_duration"`
 }
 
-// LogSamplingConfig 采集侧采样与降级策略的配置面（键 `log_ingest.sampling.*`）。
+
+// LogTailerConfig 是新采集器的配置面，键为 `log_tailer.*`。
 //
-// 默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，属于必须由运维显式开启的能力。
-// 取值口径与 retention 一致（0 = 没填走默认，负数 = 写错启动即拒）——
-// 采样配错的后果是日志静默少存，现场只会表现为「查不到」，不会表现为报错。
-type LogSamplingConfig struct {
-	// Enabled 总开关。
+// # 为什么是独立的一段而不是复用 log_ingest
+//
+// 两者的模型根本不同：旧链路「一个源 = 一个文件 = 四水位账本」，新采集器「每个文件平级、
+// 只记 offset」。配置项也因此不同（旧的是源级预算，新的是 glob + 位点表）。
+// 阶段三删除旧链路后，`log_ingest.*` 里属于旧链路的键会随之消失。
+type LogTailerConfig struct {
+	// Enabled 是新采集器总开关。**默认 true**（2026-11-06 切换）。
+	//
+	// # 为何可以默认开了
+	//
+	// 阶段二已用真机验证：多实例采集、重启续读、轮转跟随、gz 排除、stdio 桥接、
+	// 查询可见性（Catalog 补建）均正常；并用变异测试钉住了四个丢数据形态
+	// （忽略位点 / 去掉可采闸门 / 去掉前缀容忍 / 不注入分区补建）。
+	//
+	// # 回退开关
+	//
+	// 配 `log_tailer.enabled: false` 即退回旧 ingest 链路（两套互斥，不会同时跑）。
+	// 旧链路代码在阶段三删除前一直保留，所以回退是**改一行配置**的事。
 	Enabled bool `mapstructure:"enabled"`
-	// MinLevel 等级过滤：低于该级别的原文折叠为汇总事件。空串 = 不启用。
-	// 无法归类的级别一律放行。
-	MinLevel string `mapstructure:"min_level"`
-	// BurstWindow / BurstThreshold 同源同消息高频抑制：窗口内前 N 条放行原文，
-	// 其余合并为汇总事件（含条数与样例）。BurstWindow 为 0 = 不启用。
-	BurstWindow    time.Duration `mapstructure:"burst_window"`
-	BurstThreshold int           `mapstructure:"burst_threshold"`
-	// MaxSignatures 模式表上限（有界：采样自身不得成为无界增长点）。
-	MaxSignatures int `mapstructure:"max_signatures"`
-	// BudgetMaxEventsPerWindow / BudgetWindow / BudgetKeepEvery 每源预算：
-	// 窗口内允许原文落库 N 条，超出后每 KeepEvery 条保留 1 条原文，其余折叠。
-	BudgetMaxEventsPerWindow int           `mapstructure:"budget_max_events_per_window"`
-	BudgetWindow             time.Duration `mapstructure:"budget_window"`
-	BudgetKeepEvery          int           `mapstructure:"budget_keep_every"`
-	// MaxAggregateEvents 单条汇总事件承接的原文条数上限。
-	MaxAggregateEvents int `mapstructure:"max_aggregate_events"`
-	// DegradeEnabled 风暴自动降级开关；触发源复用容量门禁的磁盘读数（同一真源）。
-	DegradeEnabled     bool          `mapstructure:"degrade_enabled"`
-	DegradeTargetLevel string        `mapstructure:"degrade_target_level"`
-	DegradeDiskPercent float64       `mapstructure:"degrade_disk_percent"`
-	DegradeHold        time.Duration `mapstructure:"degrade_hold"`
+	// Paths 是**额外的**采集 glob（通常留空）。
+	//
+	// 实例日志的采集路径由**已绑定实例的 WorkDir** 每轮现算
+	// （`logtail.DefaultPathsFor`），不再靠一个 serversRoot 猜。
+	// 这里只用于采非实例日志（节点自身日志等）。
+	Paths []string `mapstructure:"paths"`
+	// Exclude 是排除规则（文件名 glob）。空 = 用实现包的默认值
+	// `*.gz,*.lck,*.zip,*.tmp`——gz 是用户明确要求不采的归档。
+	Exclude []string `mapstructure:"exclude"`
+	// ReadFromHead 决定首次发现的文件从哪里开始读。
+	//
+	// 默认 **true**：首次部署时要能补上部署前的历史日志（用户明确要这个）。
+	// 想只采新行就配 false。
+	ReadFromHead bool `mapstructure:"read_from_head"`
+	// RegistryPath 是位点表路径。空 = `var/log/tailer.registry.jsonl`（相对数据根）。
+	//
+	// 位点表的兄弟文件 `<同名>.bindings.json` 存「实例工作目录 → 日志目标」映射，
+	// 重启后据此继续定位源（否则要等 CP 重新下发实例登记，期间的日志会因
+	// 「无法识别源」被跳过）。
+	RegistryPath string `mapstructure:"registry_path"`
+	// ScanInterval 是目录扫描周期（发现新文件）。空 = 实现包默认 10s。
+	ScanInterval string `mapstructure:"scan_interval"`
+	// ProgressInterval 是读文件周期。空 = 实现包默认 2s。
+	ProgressInterval string `mapstructure:"progress_interval"`
+
+	// Multiline 是多行合并规则（键 log_tailer.multiline.*），对齐 Filebeat 的
+	// `parsers: - multiline:`。留空 = 不合并（每行一条事件）。
+	Multiline MultilineConfig `mapstructure:"multiline"`
+
+	// IncludeGzip 决定是否导入历史 `.gz` 归档（键 log_tailer.include_gzip）。
+	//
+	// # 与「不采 gz」不矛盾
+	//
+	// 用户明确要求**实时采集**不碰归档（那是重复：live 文件已经采过了）。
+	// 但生产有 1374 个从未进过平台的 gz 归档，那些历史需要能补进来。
+	// 两者是不同的事：live 文件持续追读，归档一次性读完。
+	//
+	// 默认 **false**：导入历史归档是「主动补数据」的动作，该由运维明确打开，
+	// 而不是升级后突然开始读几千个文件、把 VL 打满。
+	IncludeGzip bool `mapstructure:"include_gzip"`
 }
 
-// SamplingPolicy 装配为 pipeline.Options.Sampling / ingest.Options.Sampling。
+// MultilineConfig 是多行合并的配置面（键 log_tailer.multiline.*）。
 //
-// 独立成方法而不是在装配点内联读字段：这条接线一旦断掉，运维会以为「已经开了采样」，
-// 而实际上一条都没压，成本问题会以「配了没用」的形态长期挂着——
-// 与 IngestDefaultTimeZone/Charset 同一条理由（配置 → 实现之间没有任何编译期约束）。
-func (c *Config) SamplingPolicy() sampling.Policy {
+// # 字段与官方一一对应
+//
+// Filebeat filestream：
+//
+//	parsers:
+//	- multiline:
+//	    type: pattern        （本项目只实现 pattern 型）
+//	    pattern: '^\['
+//	    negate: true
+//	    match: after
+//	    flush_pattern: 'END$'
+//	    max_lines: 500
+//	    timeout: 5s
+//
+// # 为什么不做 XML/JSON 那种结构化合并
+//
+// 那些是「解析器」，不是「行组装」。本项目的需求是 Java 堆栈，pattern 型就够；
+// 多实现一种就多一套要验证的语义（而配置写错的表现是「日志变乱」而非报错）。
+// DefaultMultilinePattern 是**本项目默认启用**的多行合并规则。
+//
+// # 为什么默认开（与 Filebeat / Fluent Bit 不同，这是有意的）
+//
+// Filebeat 的 `multiline.*` 与 Fluent Bit 的 multiline filter **默认都是关闭的**
+// （官方文档：必须显式配 pattern / multiline.parser 才生效）。理由是它们是通用
+// 采集器，不知道你在采什么，默认不动数据是对的。
+//
+// 而本平台的采集对象是**确定的**：这台机 19 个实例全是 Minecraft（Paper/Spigot）
+// 与 BungeeCord，Java 堆栈必然多行。默认关的后果是实测可见的——88673 行 Bungee
+// 日志里 123 行是堆栈续行，全部被拆成独立事件，用户读崩溃堆栈时看到的是散行。
+//
+// 所以这里把「我们比通例更确知」这件事落成默认值，并用下面的 pattern 同时覆盖
+// 两种并存的日志形态：
+//
+//	[01:19:43] [ServerMain/INFO]: ...   ← Paper/MC（时刻带方括号）
+//	18:12:59 [INFO] ...                 ← BungeeCord（时刻不带方括号）
+//
+// negate=true 的语义：**不匹配**这个 pattern 的行 = 续行，并入上一行
+// （`	at ...`、`Caused by:`、`... N more`、netty 异常行）。
+//
+// # 实测（2026-11-07，生产日志）
+//
+//	Bungee proxy.log.0：88673 行 → 88550 条事件，最大堆栈 42 行合并成 1 条
+//	MC latest.log      ：44 行 → 44 条（该时段全是单行，无误合并）
+//
+// # 如何关掉
+//
+// 配 `log_tailer.multiline.pattern: ""`（显式空 = 关），或用 flush_pattern 等
+// 覆盖成自己的规则。配置写错在启动即拒——见 MultilineSettings 的说明。
+const DefaultMultilinePattern = `^\[?[0-9]{2}:[0-9]{2}:[0-9]{2}|^[0-9]{4}-[0-9]{2}-[0-9]{2}`
+
+type MultilineConfig struct {
+	// Pattern 是 `multiline.pattern`（RE2 语法，与官方一致：Go regexp）。
+	//
+	// 空值 = 用 DefaultMultilinePattern（**默认启用**，见上）。
+	// 显式写成 "" 的语义与「没配」无法区分，故提供 Disabled 开关显式关闭。
+	Pattern string `mapstructure:"pattern"`
+	// Disabled 显式关闭多行合并（优先级高于 Pattern）。
+	//
+	// 为什么需要它而不是「Pattern 留空即关闭」：默认开启后，「留空」必须表示
+	// 「用默认规则」，否则任何没写 multiline 段的部署都会静默变成不合并——
+	// 那正是本次要修的默认值。要关的多行必须有一个不可与「没配」混淆的开关。
+	Disabled bool `mapstructure:"disabled"`
+	// Negate 对应 `multiline.negate`。默认规则用 true（不匹配=续行）；
+	// 若 Pattern 为空则本字段的零值 false 会被忽略（见 MultilineSettings）。
+	Negate bool `mapstructure:"negate"`
+	// Match 对应 `multiline.match`：after（默认）或 before。
+	Match string `mapstructure:"match"`
+	// FlushPattern 对应 `multiline.flush_pattern`（可选）。
+	FlushPattern string `mapstructure:"flush_pattern"`
+	// MaxLines 对应 `multiline.max_lines`，零值用实现包默认 500。
+	MaxLines int `mapstructure:"max_lines"`
+	// Timeout 对应 `multiline.timeout`（如 "5s"），空 = 实现包默认 5s。
+	Timeout string `mapstructure:"timeout"`
+}
+
+// MultilineSettings 把配置编译成实现包的规则。
+//
+// 返回 (nil, 0, nil) 表示未启用多行（Pattern 为空）。
+// pattern/match/flush_pattern/timeout 非法一律返回错误——启动即拒。
+//
+// # 为何必须启动即拒而不是回退默认
+//
+// 多行规则写错的表现是「日志被错误地拼在一起」或「堆栈被拆散」，
+// 都不是报错，而是**数据变脏**。那种错误只能靠人眼在查询结果里发现，
+// 而发现时脏数据已经进库了。所以在启动时就把非法配置挡掉。
+func (c *Config) MultilineSettings() (*tailer.Multiline, time.Duration, error) {
 	if c == nil {
-		return sampling.Policy{}
+		return nil, 0, nil
 	}
-	s := c.LogIngest.Sampling
-	return sampling.Policy{
-		Enabled: s.Enabled,
-		Level:   sampling.LevelFilter{MinLevel: s.MinLevel},
-		Burst: sampling.Burst{
-			Window:        s.BurstWindow,
-			Threshold:     s.BurstThreshold,
-			MaxSignatures: s.MaxSignatures,
-		},
-		Budget: sampling.Budget{
-			MaxEventsPerWindow: s.BudgetMaxEventsPerWindow,
-			Window:             s.BudgetWindow,
-			KeepEvery:          s.BudgetKeepEvery,
-		},
-		Degrade: sampling.Degrade{
-			Enabled:     s.DegradeEnabled,
-			TargetLevel: s.DegradeTargetLevel,
-			DiskPercent: s.DegradeDiskPercent,
-			Hold:        s.DegradeHold,
-		},
-		MaxAggregateEvents: s.MaxAggregateEvents,
+	mc := c.LogTailer.Multiline
+	// 显式关闭优先：Disabled 是唯一能与「没配」区分的关闭方式。
+	if mc.Disabled {
+		return nil, 0, nil
 	}
+	// 未配 pattern = 用默认规则（**默认启用**，见 DefaultMultilinePattern）。
+	// Negate 的零值 false 与默认规则需要的 true 冲突，故 pattern 为空时由本函数
+	// 按默认规则的语义补齐，而不是直接用零值。
+	pattern := strings.TrimSpace(mc.Pattern)
+	negate := mc.Negate
+	if pattern == "" {
+		pattern = DefaultMultilinePattern
+		negate = true
+	}
+	rule, err := tailer.NewMultiline(tailer.MultilineConfig{
+		Pattern:      pattern,
+		Negate:       negate,
+		Match:        tailer.MultilineMatch(strings.ToLower(strings.TrimSpace(mc.Match))),
+		FlushPattern: mc.FlushPattern,
+		MaxLines:     mc.MaxLines,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("log_tailer.multiline: %w", err)
+	}
+	var timeout time.Duration
+	if raw := strings.TrimSpace(mc.Timeout); raw != "" {
+		d, perr := time.ParseDuration(raw)
+		if perr != nil {
+			return nil, 0, fmt.Errorf("log_tailer.multiline.timeout 非法: %q（应为时长如 5s）", raw)
+		}
+		if d <= 0 {
+			return nil, 0, fmt.Errorf("log_tailer.multiline.timeout 必须为正: %q", raw)
+		}
+		timeout = d
+	}
+	return rule, timeout, nil
+}
+
+// LogTailerIntervals 解析 log_tailer.scan_interval / progress_interval。
+//
+// 空串表示用实现包默认值（10s / 2s），此时返回 0 让调用方走零值分支。
+// 非法值返回 error（在 Load 阶段启动即拒）：采集周期配错会让「实时性」静默变形，
+// 而这件事只有在「日志怎么半天不上来」时才会被发现，排查方向会完全带偏。
+func (c *Config) LogTailerIntervals() (scan, progress time.Duration, err error) {
+	if c == nil {
+		return 0, 0, nil
+	}
+	parse := func(key, raw string) (time.Duration, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return 0, nil
+		}
+		d, parseErr := time.ParseDuration(raw)
+		if parseErr != nil {
+			return 0, fmt.Errorf("log_tailer.%s 非法: %q（应为时长如 2s/10s）", key, raw)
+		}
+		if d <= 0 {
+			return 0, fmt.Errorf("log_tailer.%s 必须为正: %q", key, raw)
+		}
+		return d, nil
+	}
+	if scan, err = parse("scan_interval", c.LogTailer.ScanInterval); err != nil {
+		return 0, 0, err
+	}
+	if progress, err = parse("progress_interval", c.LogTailer.ProgressInterval); err != nil {
+		return 0, 0, err
+	}
+	return scan, progress, nil
+}
+
+// LogReadLimitsConfig 配置单物理行与单轮读取字节上界，包含换行字节。
+type LogReadLimitsConfig struct {
+	MaxLineBytes    int   `mapstructure:"max_line_bytes"`
+	MaxBytesPerPoll int64 `mapstructure:"max_bytes_per_poll"`
 }
 
 // LogRetentionConfig 保留策略的配置面（键 `log_retention.*`）。
@@ -837,6 +1112,153 @@ type LogRetentionConfig struct {
 	ColdRetention string `mapstructure:"cold_retention"`
 	// Trigger 搬运触发口径（年龄 + 磁盘水位取先到）。
 	Trigger LogRetentionTriggerConfig `mapstructure:"trigger"`
+	// Migration 是启层时必须明确声明的有限复制校验与故障恢复 SLA。
+	Migration LogRetentionMigrationConfig `mapstructure:"migration"`
+	// ArchiveCopy 是「导出为独立副本」的配置面（键 `log_retention.archive_copy.*`）。
+	ArchiveCopy LogRetentionArchiveCopyConfig `mapstructure:"archive_copy"`
+	// ArchiveObjectRetention 是「归档对象自身的回收」的配置面
+	// （键 `log_retention.archive_object_retention.*`）。
+	ArchiveObjectRetention LogRetentionArchiveObjectRetentionConfig `mapstructure:"archive_object_retention"`
+}
+
+// LogRetentionArchiveObjectRetentionConfig 是归档目的地自身保留期的配置面。
+//
+// 定位：`archive_copy` 回答「到期数据往哪写一份副本」，本项回答「那份副本留多久」。
+// 没有本项时归档目的地**只增不减**——热层清得再干净，归档桶仍按天累积
+// （spec §7 的「归档对象自身的回收未做」正是这条）。
+//
+// 两道配置分家的理由：写副本与删副本的风险量级不同（删除不可逆）。
+// 合成一个开关会让「想清旧归档、但不想再导出新的」变成不可能，也会让
+// 「打开导出」顺带获得删归档的授权。
+//
+// 为什么 Retention 是字符串而不是 time.Duration：与 hot_retention 同一取舍——
+// Go 的 time.ParseDuration 不认 `d`/`w`，而归档保留期天然按天写（如 730d）。
+// 用 time.Duration 会让 viper 解码 `730d` 直接失败，连带**整个 Load 失败**。
+//
+// 默认值口径：enabled=false、retention 空。**空 = 不启用**，不补默认天数。
+// 平台不该替运维决定「归档留几年」：补一个 730d 意味着打开开关就承诺两年后无条件删除，
+// 而那个数字是合规/成本口径的事，必须由运维说出口。
+type LogRetentionArchiveObjectRetentionConfig struct {
+	// Enabled 是否允许按保留期清除归档对象（默认 false）。
+	//
+	// 打开它**仍然不是**删除授权：执行侧还要过与热层删除**同一套**三闸
+	// （`discard` + `sweep.vl_sweep` + `log_vl.delete_enabled`），默认全关。
+	Enabled bool `mapstructure:"enabled"`
+	// Retention 归档副本保留期（自 ArchiveEvidence.ArchivedAt 起算）；空 = 不启用。
+	//
+	// 支持 `730d` / `104w` / `17520h` 等写法（经 retention.ParseTTL 解析）。
+	// 启用但为空 ⇒ 启动即拒（与 archive_copy.root 同一取舍：
+	// 静默按未启用处理会让运维以为归档在按保留期清理，而它一条都没删）。
+	Retention string `mapstructure:"retention"`
+	// SweepAtHour 每日触发的本地整点（0..23，默认 3）。
+	//
+	// 写成 int 并靠 SetDefault 注入默认值：0 是合法值（午夜），没有可用哨兵，
+	// 与 eventstore_prune.sweep_at_hour 同一约定。越界值启动即拒
+	// （时刻写错只会表现成「清理在业务高峰跑」，从日志里几乎看不出来）。
+	SweepAtHour int `mapstructure:"sweep_at_hour"`
+}
+
+// LogRetentionArchiveCopyConfig 是硬规则次选路径「导出归档」的配置面。
+//
+// 定位：`move_to_cold` 搬不了（COLD 不可用）时的**替代 blocked** 的路径——
+// 导出一份独立副本 + 逐文件回读校验，校验通过且删除三闸全开时才允许回收热层。
+//
+// 为什么需要 Root：导出必须写到一个**独立于热层与冷层**的目的地，否则「副本」不成立。
+// 没有默认值——平台不该替运维决定归档写在哪块盘上（写错盘与写不下都是现场事故）。
+// 启用但 Root 为空 ⇒ 启动即拒（见 Config.RetentionPolicy），不允许「开了开关但没处写」。
+type LogRetentionArchiveCopyConfig struct {
+	// Enabled 是否允许在搬不了冷层时导出为独立副本（默认 false）。
+	Enabled bool `mapstructure:"enabled"`
+	// Provider 归档目的地类型：local（默认）| s3 | minio。
+	//
+	// 为什么这里要允许 s3/minio（FR-501 收尾）：导出归档的价值在「另存一份」——
+	// 若目的地只能是与热层同机同盘的本地目录，那么单盘故障/整机报废时副本跟着没，
+	// 「删前归档」这条硬规则就只剩「省空间」而丢掉了「保一份」。
+	// Provider 抽象（`archive.Provider`）与真实 SigV4 实现（`archive.RemoteS3Provider`，
+	// 底层 `internal/worker/storage/s3.go`）早由 FR-478 交付并在真机 RustFS 上验过，
+	// 本项只是把同一个接口接到导出侧——不新造协议、不新造凭证模型。
+	Provider string `mapstructure:"provider"`
+	// Root 归档目的地根目录（`provider=local` 时必填；`archive.LocalArchive` 的 Root）。
+	//
+	// 布局由 archive 包固定：`<root>/<storage_namespace>/<utc_day>/g<generation>/…`，
+	// manifest 落在分区根下的 `manifest.json`（与 FR-478 的 `logs/archive` 契约一致）。
+	Root string `mapstructure:"root"`
+	// —— 以下仅在 provider=s3|minio 时生效，语义与 `log_archive.*` 完全一致（同一份
+	// `storage.Config`，同一个 SigV4 客户端）——
+	// Endpoint 对象存储端点（如 s3.example.com:9000，不带 scheme；scheme 由 UseSSL 决定）。
+	Endpoint string `mapstructure:"endpoint"`
+	// Bucket 桶名。
+	Bucket string `mapstructure:"bucket"`
+	// Region SigV4 区域，缺省 us-east-1。
+	Region string `mapstructure:"region"`
+	// Prefix 对象键前缀（与本地布局相同，前缀之后仍是 `<ns>/<day>/g<gen>/…`）。
+	Prefix string `mapstructure:"prefix"`
+	// AccessKey/SecretKey 明文凭证引用。
+	//
+	// 与 `log_archive.secret_key` 同一纪律：只接受 `${ENV}` 引用，不在 yaml 里写死明文
+	// （见 .claude/rules/config-files.md）。解析在装配处完成，本结构只承载已解析值。
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+	// UseSSL 是否启用 TLS。
+	UseSSL bool `mapstructure:"use_ssl"`
+}
+
+// ArchiveProviderKind 归一化归档目的地类型（空 = local）。
+func (c LogRetentionArchiveCopyConfig) ArchiveProviderKind() string {
+	kind := strings.ToLower(strings.TrimSpace(c.Provider))
+	if kind == "" {
+		return "local"
+	}
+	return kind
+}
+
+// ValidateArchiveCopyDestination 校验「导出归档的目的地是否真的给全了」。
+//
+// 为什么这件事必须挡在启动阶段（而不是等到第一次导出时才发现）：
+// 静默按「未启用」处理会让运维以为归档在跑（策略说 enabled=true），而到期数据
+// 继续占着热层直到盘满——这正是本功能要避免的结局。反过来对 s3/minio 分支
+// 少判一个键，就会在第一次导出时以「对象键拼不出来」的形式失败，而那时**热层
+// 已经冻结**，退出路径还要解冻，失败面比启动拒绝大得多。
+func (c LogRetentionArchiveCopyConfig) ValidateArchiveCopyDestination() error {
+	switch c.ArchiveProviderKind() {
+	case "local":
+		if strings.TrimSpace(c.Root) == "" {
+			return fmt.Errorf("log_retention.archive_copy.root 不能为空（启用导出归档必须给出独立的目的地根目录）")
+		}
+	case "s3", "minio":
+		if strings.TrimSpace(c.Endpoint) == "" {
+			return fmt.Errorf("log_retention.archive_copy.endpoint 不能为空（provider=%s 必须给出对象存储端点）", c.ArchiveProviderKind())
+		}
+		if strings.TrimSpace(c.Bucket) == "" {
+			return fmt.Errorf("log_retention.archive_copy.bucket 不能为空（provider=%s 必须给出桶名）", c.ArchiveProviderKind())
+		}
+	default:
+		return fmt.Errorf("log_retention.archive_copy.provider 不支持 %q（支持 local / s3 / minio）", c.Provider)
+	}
+	return nil
+}
+
+// Normalized 把非法配置收敛到安全默认（不拒启：本项不影响安全边界，
+// 与 budget 类参数同一口径——丢一个不合法的时刻不值得让节点升不上来）。
+func (c LogArchiveInstanceGzAdoptConfig) Normalized() LogArchiveInstanceGzAdoptConfig {
+	out := c
+	if out.SweepAtHour < 0 || out.SweepAtHour > 23 {
+		// 越界即告警并用默认值，而不是拒启。
+		//
+		// 为什么不拒：本项只控制「每日几点开始扫描并吸存」。吸存是只增不删、幂等的动作，
+		// 时刻写错只是推迟一天，没有正确性后果。把它做成启动即拒，会把一个手误放大成
+		// 「整个节点起不来」——那正是 2026-10-27 `copy_verify_budget` 那次事故的形态。
+		slog.Warn("log_archive.instance_gz_adopt.sweep_at_hour 越界，回退默认 4 点（本项不拒启）",
+			"configured", out.SweepAtHour)
+		out.SweepAtHour = 4
+	}
+	return out
+}
+
+// LogRetentionMigrationConfig 声明搬运所需余量，不代表无限失败下的最后副本保证。
+type LogRetentionMigrationConfig struct {
+	CopyVerifyBudget string `mapstructure:"copy_verify_budget"`
+	RecoveryBudget   string `mapstructure:"recovery_budget"`
 }
 
 // LogRetentionTriggerConfig 搬运触发口径（键 `log_retention.trigger.*`）。
@@ -857,6 +1279,17 @@ type LogRetentionTriggerConfig struct {
 	// `sweep.interval` 当作调度旋钮呈现 ⇒ 形成"文档说的键不生效、生效的键配不了"的死旋钮。
 	// 空/非法回退 DefaultDriverInterval。
 	Interval string `mapstructure:"interval"`
+	// SweepAtHour 是**每日搬运触发的本地整点**（字符串，如 "3" 表示凌晨 3 点；默认 3）。
+	//
+	// 为什么是字符串而不是 int：本结构体的另两个键（min_age / interval）都用「字符串 + 空 = 默认」
+	// 的约定，而同包其它「0 是有效值」的键没有可用哨兵（0 点就是合法的午夜），
+	// 用 int 会让"未配置"与"配成 0 点"不可区分 —— 前者必须取默认 3 点，后者是用户明确的午夜。
+	// 写成字符串后空串即"未配置"，与 min_age / interval 的读法完全一致。
+	//
+	// 取值：0..23 为本地整点；-1 表示**不启用每日调度**，回退到上面的 Interval 间隔 ticker
+	// （保留旧行为的兼容档，避免存量 `trigger.interval` 变成静默失效的死键）。
+	// 其余值启动即拒（时刻写错只会表现成"搬运在业务高峰跑"，从日志里极难发现）。
+	SweepAtHour string `mapstructure:"sweep_at_hour"`
 }
 
 // LogRetentionSource 某个来源的保留期覆盖。
@@ -897,7 +1330,51 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 			VLSweep:  cfg.Sweep.VLSweep,
 			Interval: cfg.Sweep.Interval,
 			Timeout:  cfg.Sweep.Timeout,
+			// 第三闸（VL 侧）来自 log_vl.delete_enabled：它是受管 VL 进程的参数事实，
+			// 由 vlsup 按同一配置位注入 -delete.enable。两处读同一个键，避免「策略以为开了、
+			// VL 其实没开」的分裂读数（见 retention.Policy.DeleteGatesOpen）。
+			VLDeleteEnabled: c.LogVL.DeleteEnabled,
 		},
+		ArchiveCopy: retention.ArchiveCopyPolicy{Enabled: cfg.ArchiveCopy.Enabled},
+	}
+	// 导出归档启用但没给目的地 ⇒ 启动即拒。
+	//
+	// 为什么用拒绝而不是「静默按未启用处理」：静默处理会让运维以为归档在跑
+	// （策略说 enabled=true），而到期数据继续占着热层直到盘满——这正是本功能要避免的结局。
+	// 反过来，把「没有目的地」显式挡在启动阶段，问题在第一次部署时就暴露。
+	if cfg.ArchiveCopy.Enabled {
+		if err := cfg.ArchiveCopy.ValidateArchiveCopyDestination(); err != nil {
+			return retention.Policy{}, err
+		}
+	}
+	// 归档对象回收：开了开关就必须给出保留期，否则启动即拒。
+	//
+	// 与 archive_copy.root 同一取舍——「开了但没参数」在生产表现为「什么都没发生」：
+	// 运维看到 enabled=true，去面板看归档仍然一天天涨，而日志里没有任何报错。
+	// 静默空转是这类「默认关闭 + 必须显式配置」的功能最典型的现场。
+	if cfg.ArchiveObjectRetention.Enabled && strings.TrimSpace(cfg.ArchiveObjectRetention.Retention) == "" {
+		return retention.Policy{}, fmt.Errorf(
+			"log_retention.archive_object_retention.retention 不能为空（启用归档对象回收必须给出明确的保留期，如 730d）")
+	}
+	if raw := strings.TrimSpace(cfg.ArchiveObjectRetention.Retention); raw != "" {
+		d, err := retention.ParseTTL(raw)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf("log_retention.archive_object_retention.retention: %w", err)
+		}
+		// 解析成 0 表示「永久保留」——对**删除**类配置来说这是个陷阱：
+		// 运维写 "0" 的直觉可能是「立刻删」，而语义恰好相反。
+		// 明确拒绝，避免「以为配了保留期，实际一条都不会删」。
+		if d <= 0 {
+			return retention.Policy{}, fmt.Errorf(
+				"log_retention.archive_object_retention.retention 必须为正的有限时长，得到 %q（0 表示永久保留，与「启用回收」相矛盾）", raw)
+		}
+		p.ArchiveObjectRetention.Retention = d
+	}
+	p.ArchiveObjectRetention.Enabled = cfg.ArchiveObjectRetention.Enabled
+	p.ArchiveObjectRetention.SweepAtHour = cfg.ArchiveObjectRetention.SweepAtHour
+	if h := p.ArchiveObjectRetention.SweepAtHour; h < 0 || h > 23 {
+		return retention.Policy{}, fmt.Errorf(
+			"log_retention.archive_object_retention.sweep_at_hour 必须在 0..23（本地整点），得到 %d", h)
 	}
 	if strings.TrimSpace(cfg.HotRetention) != "" {
 		d, err := retention.ParseTTL(cfg.HotRetention)
@@ -928,6 +1405,19 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 			return retention.Policy{}, fmt.Errorf("log_retention.trigger.interval: %w", err)
 		}
 		p.Trigger.Interval = d
+	}
+
+	// 每日搬运触发时刻（默认凌晨 3 点）。空 = 默认值；-1 = 回退上面的 interval ticker 兼容档。
+	// 不在这里做范围判断以外的事：0..23 的有效性由 retention.Policy.Validate 统一拦
+	// （启动即拒，与 hot_retention 等键同一取舍）。
+	p.Trigger.SweepAtHour = retention.DefaultSweepAtHour
+	if raw := strings.TrimSpace(cfg.Trigger.SweepAtHour); raw != "" {
+		hour, err := strconv.Atoi(raw)
+		if err != nil {
+			return retention.Policy{}, fmt.Errorf(
+				"log_retention.trigger.sweep_at_hour: 无法解析 %q（应为本地整点小时数 0..23，或 -1 表示回退间隔 ticker）", raw)
+		}
+		p.Trigger.SweepAtHour = hour
 	}
 	if len(cfg.ByLevel) > 0 {
 		p.ByLevel = make(map[string]time.Duration, len(cfg.ByLevel))
@@ -967,31 +1457,106 @@ func (c *Config) RetentionPolicy() (retention.Policy, error) {
 	return p, nil
 }
 
-// validateRuntimeRetention 对照 vlsup.New 的实际回退：全局空串为 30d，
-// 冷层空白覆盖沿用全局。相等保留期兼容默认值，但不是扫描/搬运余量或无限失败保护。
+// defaultCopyVerifyBudget / defaultRecoveryBudget 是「未声明时」的保守默认值。
+//
+// 取值依据：它们只参与 `ValidateRuntimeHeadroom` 的**余量评估**
+// （`required = 24h + DriverInterval + CopyVerifyBudget + RecoveryBudget`），
+// 不控制任何实际执行路径——所以「缺省」不会让功能少做一步，只会让余量估算偏保守。
+//
+// 取 1h 的理由：真机上单日分区的导出 + 三重校验是分钟级（见 log-cost-governance spec），
+// 1h 给出 60× 上界余量；恢复同理。取得更大只会无谓抬高余量门，
+// 让「hot 27d / native 30d」这类余量只剩 3d 的存量配置被误拒。
+const (
+	defaultCopyVerifyBudget = time.Hour
+	defaultRecoveryBudget   = time.Hour
+)
+
+// validateRuntimeRetention 使用与子进程相同的默认和解析规则，启层必须留出明确迁移余量。
+// 有限原生 TTL 在故障超出声明 SLA 时仍可能淘汰，不能替代独立副本。
+//
+// 2026-10-29：冷热双层已废除 ⇒ 不再校验 `cold_retention_period`（该键已删除），
+// 也不再要求 `start_cold`（没有第二个接收端可启）。剩下的是一个 VL 的保留期校验。
 func (c *Config) validateRuntimeRetention(p retention.Policy) error {
-	hotRaw := c.LogVL.RetentionPeriod
+	hotRaw := strings.TrimSpace(c.LogVL.RetentionPeriod)
 	if hotRaw == "" {
 		hotRaw = vlsup.DefaultRetentionPeriod
 	}
-	coldRaw := c.LogVL.ColdRetentionPeriod
-	if strings.TrimSpace(coldRaw) == "" {
-		coldRaw = hotRaw
+	actual, err := retention.ParseRuntimeTTL(hotRaw)
+	if err != nil {
+		return fmt.Errorf("log_vl.retention_period: %w", err)
 	}
-	for _, check := range []struct {
+	// 保留期必须覆盖**两段声明**：产品热窗口（到期前可查）与冷留存（长期可查）。
+	// 单实例下同一份 retention 同时承担两者，取两者最大值才不会静默提前淘汰。
+	declared := p.HotWindow()
+	if cold := p.Normalize().ColdRetention; cold > declared {
+		declared = cold
+	}
+	if actual < declared {
+		return fmt.Errorf("log_vl.retention_period 实际生效 %q (%s) 短于 log_retention 声明 %s；VL 原生淘汰不受应用删除开关保护", hotRaw, actual, declared)
+	}
+	if !p.Enabled {
+		return nil
+	}
+	requirements := retention.RuntimeHeadroom{DriverInterval: p.Trigger.Normalize().Interval}
+	if _, err := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
+		return fmt.Errorf("log_vl.retention_period: %w", err)
+	}
+	if strings.TrimSpace(c.LogVL.BinaryPath) == "" && strings.TrimSpace(c.LogVL.PackagePath) == "" {
+		return fmt.Errorf("log_vl: 启用分层需要受管 binary_path 或 package_path，外部 HOT-only 无接收端/搬运驱动")
+	}
+	if strings.TrimSpace(c.LogVL.BinaryPath) != "" && strings.TrimSpace(c.LogVL.PackagePath) == "" && strings.TrimSpace(c.LogVL.AssetSHA256) == "" {
+		return fmt.Errorf("log_vl.asset_sha256: 启用分层需要明确受管资产校验")
+	}
+	if c.LogVL.Username == "" || c.LogVL.Password == "" {
+		return fmt.Errorf("log_vl: 启用分层需要非空本地鉴权凭据")
+	}
+	for _, field := range []struct {
 		key      string
 		raw      string
-		declared time.Duration
+		dst      *time.Duration
+		fallback time.Duration
 	}{
-		{"log_vl.retention_period", hotRaw, p.HotWindow()},
-		{"log_vl.cold_retention_period", coldRaw, p.Normalize().ColdRetention},
+		{"copy_verify_budget", c.LogRetention.Migration.CopyVerifyBudget, &requirements.CopyVerifyBudget, defaultCopyVerifyBudget},
+		{"recovery_budget", c.LogRetention.Migration.RecoveryBudget, &requirements.RecoveryBudget, defaultRecoveryBudget},
 	} {
-		actual, err := retention.ParseRuntimeTTL(check.raw)
+		d, err := retention.ParseTTL(strings.TrimSpace(field.raw))
 		if err != nil {
-			return fmt.Errorf("%s: %w", check.key, err)
+			return fmt.Errorf("log_retention.migration.%s 无法解析：%w", field.key, err)
 		}
-		if actual < check.declared {
-			return fmt.Errorf("%s 实际生效 %q (%s) 短于 log_retention 声明 %s；VL 原生淘汰会绕过搬运与最后副本保护", check.key, check.raw, actual, check.declared)
+		if d <= 0 {
+			// 显式写了 0 / 负数要拒：那是“声明了一个用不了的预算”，静默改成默认等于把运维的意图掉包。
+			if strings.TrimSpace(field.raw) != "" {
+				return fmt.Errorf("log_retention.migration.%s 必须为正的有限时长，实际 %q", field.key, field.raw)
+			}
+			// **未声明则取默认值，而不是拒启**。
+			//
+			// 为什么（2026-10-27 真机事故）：这两项原本要求必须显式声明，而 SetDefault 给的是空串、
+			// `configs/worker.yml` 样例也没写。于是**任何升级前合法的存量配置**（包括正在生产跑的
+			// 那份）升级后都启动失败。这直接违反本函数下方自己写下的那条原则：
+			// 「启动即拒会让存量节点升不上来」。预算类参数缺的是“耗时上界”而非安全边界，
+			// 有安全默认值可用，没有强制人工指定的必要。
+			d = field.fallback
+		}
+		*field.dst = d
+	}
+	if _, err := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), requirements); err != nil {
+		return fmt.Errorf("log_vl.retention_period: %w", err)
+	}
+	// 每日固定时刻调度（默认凌晨 3 点）把「到点 → 开始搬」的最坏等待从 ticker 的 15m
+	// 放宽到一整天（见 retention.Policy.SweepWaitBudget），于是上面那条按 interval 预留扫描余量的
+	// 校验，对**余量偏紧**的存量配置不再足够。这里只**告警不拒绝**：那些配置在升级前是被接受的
+	// （启动即拒会让存量节点升不上来），但按新口径确实差了一点，必须在启动日志里点名，
+	// 否则「少留了一天」永远不会有人看见。
+	dailyReqs := retention.RuntimeHeadroom{
+		DriverInterval:   p.SweepWaitBudget(),
+		CopyVerifyBudget: requirements.CopyVerifyBudget,
+		RecoveryBudget:   requirements.RecoveryBudget,
+	}
+	if dailyReqs.DriverInterval != requirements.DriverInterval { // ticker 兼容档下两个口径相同，不重复告警
+		if _, tight := retention.ValidateRuntimeHeadroom(hotRaw, p.HotWindow(), dailyReqs); tight != nil {
+			slog.Warn("原生TTL相对热窗口的余量按每日调度口径偏紧（不阻断启动，但 VL 原生淘汰可能抢先删）",
+				"hotRetention", p.HotWindow().String(), "nativeRetention", hotRaw,
+				"scheduleWait", dailyReqs.DriverInterval.String(), "error", tight)
 		}
 	}
 	return nil
@@ -1046,28 +1611,6 @@ func (c *Config) WALBudgetNotice() string {
 	return "log_capacity.max_wal_bytes=0（字节维度不限）：暂停仍由 log_capacity.max_wal_entries 兜住，但单条超大事件（如整段堆栈）不再有字节上界，请确认这是有意为之"
 }
 
-// IngestArchiveScanInterval 解析 `log_ingest.archive_scan_interval`。
-//
-// 口径：空串 ⇒ 0（**关闭**，默认）；"0" 或负值 ⇒ 0（关闭）；其余必须是合法 duration。
-// 非法值启动即拒：静默回退会让「我明明开了定时扫描」变成隐性关闭，而这件事只在
-// 「源被暂停、归档攒着没人导」时才暴露——与 timezone/charset 同属「配错就静默」的危险项。
-func (c *Config) IngestArchiveScanInterval() (time.Duration, error) {
-	if c == nil {
-		return 0, nil
-	}
-	raw := strings.TrimSpace(c.LogIngest.ArchiveScanInterval)
-	if raw == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("log_ingest.archive_scan_interval 非法: %q（应为时长如 5m/1h；0 或空表示关闭）", raw)
-	}
-	if d < 0 {
-		return 0, nil
-	}
-	return d, nil
-}
 
 // LogLevel 解析 `log.level` 为 slog 等级。
 //
@@ -1145,209 +1688,9 @@ func (c *Config) IngestDefaultCharset() string {
 	return strings.TrimSpace(c.LogIngest.Charset)
 }
 
-// IngestMultilineUnclosedTimeout 解析 `log_ingest.multiline_unclosed_timeout`。
-//
-// 口径：空串 ⇒ 默认（normalize.DefaultUnclosedTimeout，5s，零配置零行为变化）；
-// 非空必须是合法 duration；<0 表示**关闭**强制冲刷（仅排障用，悬挂记录会一直挂着）；
-// 0 同样视为关闭（显式写 0 的人意图就是「不要自动冲刷」）。
-// 非法值启动即拒：静默回退默认会让「我明明关了它」变成隐性行为，难以归因。
-func (c *Config) IngestMultilineUnclosedTimeout() (time.Duration, error) {
-	if c == nil {
-		return ingest.DefaultMultilineUnclosedTimeout(), nil
-	}
-	raw := strings.TrimSpace(c.LogIngest.MultilineUnclosedTimeout)
-	if raw == "" {
-		return ingest.DefaultMultilineUnclosedTimeout(), nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("log_ingest.multiline_unclosed_timeout 非法: %q（应为时长如 5s/30s；0 或负值表示关闭强制冲刷）", raw)
-	}
-	return d, nil
-}
-
-// VerifyQueryTuning 把 `log_index.verify.*` 收敛为 ingest 的校验查询预算（非正一律回退默认）。
-//
-// 天花板语义：正常路径（少量查询）零等待，只有超过上限的风暴被削峰 ✓；采集侧不经此闸 ✓。
-func (c *Config) VerifyQueryTuning() (budget ingest.VerifyBudget, maxQueriesPerChunk int) {
-	if c == nil {
-		return ingest.VerifyBudget{}, 0
-	}
-	return ingest.VerifyBudget{
-		MaxPerSecond: c.LogIndex.Verify.MaxPerSecond,
-		MaxInFlight:  c.LogIndex.Verify.MaxInFlight,
-	}, c.LogIndex.Verify.MaxQueriesPerChunk
-}
-
-// VerifyBudgetTuning 把 `log_index.verify.round_budget / visibility_floor` 收敛为 ingest 档位
-// （2026-10-03 回退修复：f237ae32 引入轮预算时键未接线，运维无法调档）。
-//
-// 口径：空/非法/非正一律返回 0 ⇒ 由 ingest 侧回退各自默认（安全方向：预算保留、错开关闭）。
-func (c *Config) VerifyBudgetTuning() (roundBudget, visibilityFloor time.Duration) {
-	if c == nil {
-		return 0, 0
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.RoundBudget)); err == nil && d > 0 {
-		roundBudget = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.VisibilityFloor)); err == nil && d > 0 {
-		visibilityFloor = d
-	}
-	return roundBudget, visibilityFloor
-}
-
-// VerifyChunkEstimatesTuning 把 `log_index.verify.chunk_estimate / chunk_budget_max` 收敛为
-// ingest 的「预算随事件数放大」档位（2026-10-10 生产活锁修复，改动 B）。
-//
-// 口径（与 round_budget 同向的保守默认）：**空/非法/非正一律视为「不放大」**——返回零值让
-// ingest 走常量预算，与修复前逐字一致。绝不因为误写而让某个源悄悄拿到几十倍的校验额度 ✗。
-func (c *Config) VerifyChunkEstimatesTuning() ingest.VerifyChunkEstimates {
-	if c == nil {
-		return ingest.VerifyChunkEstimates{}
-	}
-	var est ingest.VerifyChunkEstimates
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.ChunkEstimate)); err == nil && d > 0 {
-		est.PerChunk = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Verify.ChunkBudgetMax)); err == nil && d > 0 {
-		est.Max = d
-	}
-	return est
-}
-
-// PersistGateTuning 把 `log_index.persist.*` 下**持久化门公平性**的两枚旋钮收敛为 ingest 配置面。
-//
-//   - cycle_yield：让路窗口（空/非正 = 用 ingest 默认 max(20ms, GOMAXPROCS×5ms)）；
-//   - priority_streak：老化阈值（0 = 默认 8；负值 = 关闭老化，仅排障用）。
-//
-// 口径：非法值一律回退默认（回退默认永远是安全方向：窗口够大、老化够宽松都不会丢数据）。
-func (c *Config) PersistGateTuning() (persistYield, hotBudget time.Duration, priorityStreak int) {
-	if c == nil {
-		return 0, 0, 0
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.CycleYield)); err == nil && d > 0 {
-		persistYield = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Persist.HotBudget)); err == nil && d > 0 {
-		hotBudget = d
-	}
-	return persistYield, hotBudget, c.LogIndex.Persist.PriorityStreak
-}
-
-// IngestResolveGapsBudget 把 `log_ingest.resolve_gaps_*` 收敛为 ingest 的预算配置面。
-//
-// 口径：源数 ≤0 或 duration 空串 ⇒ 用默认（零配置零行为变化）；duration 非空必须是合法
-// duration 且 >0（配 0/负值是「我不想让它跑」的错误表达方式——那会让解算恒不可用，
-// 而接口上没有任何线索说明原因，故启动即拒并把合法写法写进错误消息）。
-func (c *Config) IngestResolveGapsBudget() (*ingest.ResolveGapsBudget, error) {
-	if c == nil {
-		return nil, nil
-	}
-	budget := &ingest.ResolveGapsBudget{MaxSources: c.LogIngest.ResolveGapsMaxSources}
-	if budget.MaxSources < 0 {
-		return nil, fmt.Errorf("log_ingest.resolve_gaps_max_sources 非法: %d（应为正整数，或 0/空表示用默认 %d）",
-			budget.MaxSources, ingest.DefaultResolveGapsMaxSources())
-	}
-	raw := strings.TrimSpace(c.LogIngest.ResolveGapsMaxDuration)
-	if raw == "" {
-		return budget, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return nil, fmt.Errorf("log_ingest.resolve_gaps_max_duration 非法: %q（应为正时长如 30s/2m；空表示用默认 %s）",
-			raw, ingest.DefaultResolveGapsMaxDuration())
-	}
-	budget.MaxDuration = d
-	return budget, nil
-}
-
-// ReconcileReplayTuning 把 `log_reconcile.*` 下「重发的外部条件与切片」旋钮收敛为 ingest 的配置面。
-//
-// 四个键：
-//   - vl_ready_timeout：对账/重发前的 VL ready 探针超时（默认 2s）——现场触发因就是「worker 与 VL
-//     同步重启、对账抢跑」，探针把「必然失败的整窗重发」变成「等下一轮」；
-//   - vl_ready_wait：启动恢复等待 VL 就绪的上界（默认 90s）；超出即交给运行期常驻对账重试；
-//   - replay_max_days / replay_max_duration：整窗重发的切片预算（默认 1 天 / 90s）。
-//
-// 口径：未配置/非法一律回退默认（这几个旋钮回退默认永远是安全方向：等一等、少发一点，都不会丢
-// 数据）；配成 0 或负数同样视为「用默认」。
-func (c *Config) ReconcileReplayTuning() ingest.ReplayTuning {
-	tuning := ingest.ReplayTuning{}
-	if c == nil {
-		return tuning
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.VLReadyTimeout)); err == nil && d > 0 {
-		tuning.VLReadyProbeTimeout = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.VLReadyWait)); err == nil && d > 0 {
-		tuning.VLReadyWait = d
-	}
-	if c.LogReconcile.ReplayMaxDays > 0 {
-		tuning.Budget.MaxDays = c.LogReconcile.ReplayMaxDays
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.ReplayMaxDuration)); err == nil && d > 0 {
-		tuning.Budget.MaxDuration = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogReconcile.Yield)); err == nil && d > 0 {
-		tuning.ReconcileYield = d
-	}
-	if c.LogReconcile.SliceEvents > 0 {
-		tuning.ReconcileSliceEvents = c.LogReconcile.SliceEvents
-	}
-	return tuning
-}
-
-// ResumeBatchTuning 返回兜底环每轮容量（键 log_index.resume_batch_per_round；非正 ⇒ 默认 8 ✓）。
-func (c *Config) ResumeBatchTuning() int {
-	if c == nil || c.LogIndex.ResumeBatchPerRound <= 0 {
-		return 8
-	}
-	return c.LogIndex.ResumeBatchPerRound
-}
-
-// ResumeBackpressureStreakTuning 返回窗口化背压阈值（默认 3 ✓；置 1 = 单轮判定=应急退回 ✓）。
-func (c *Config) ResumeBackpressureStreakTuning() int {
-	if c == nil || c.LogIndex.ResumeBackpressureStreak <= 0 {
-		return 3
-	}
-	return c.LogIndex.ResumeBackpressureStreak
-}
-
-// ScanTuning 把 `log_index.scan.*` 收敛为 ingest 的段读让路/预算旋钮（零值 ⇒ ingest 侧默认 ✓）。
-//
-// 口径：非法 duration / 非正数一律回退默认（这类旋钮回退默认永远安全：让路多一点、扫描短一点
-// 都不会丢数据，最坏只是"下一轮续扫" ✓）。
-func (c *Config) ScanTuning() ingest.ScanTuning {
-	tuning := ingest.ScanTuning{}
-	if c == nil {
-		return tuning
-	}
-	if c.LogIndex.Scan.SliceRows > 0 {
-		tuning.SliceRows = c.LogIndex.Scan.SliceRows
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Scan.Yield)); err == nil && d > 0 {
-		tuning.Yield = d
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.Scan.Budget)); err == nil && d > 0 {
-		tuning.Budget = d
-	}
-	return tuning
-}
-
-// ReclaimRollTuning 把 `log_index.reclaim_roll.*` 收敛为 ingest 的滚动回收旋钮（零值 ⇒ ingest 默认 ✓）。
-func (c *Config) ReclaimRollTuning() *ingest.ReclaimRollTuning {
-	if c == nil {
-		return nil
-	}
-	tuning := ingest.ReclaimRollTuning{}
-	if c.LogIndex.ReclaimRoll.MaxSteps > 0 {
-		tuning.MaxSteps = c.LogIndex.ReclaimRoll.MaxSteps
-	}
-	if d, err := time.ParseDuration(strings.TrimSpace(c.LogIndex.ReclaimRoll.Budget)); err == nil && d > 0 {
-		tuning.Budget = d
-	}
-	return &tuning
-}
+// ReclaimRollTuning 已于 2026-10-29 删除：它收敛的两个旋钮（max_steps / budget）
+// 服务的是「分段链逐跳推进」，reclaim 改按投递证据推进后一次就到顶，旋钮失去作用对象。
+// 配置键 `log_index.reclaim_roll.*` 同步删除（viper 忽略未知键，旧 worker.yml 留着不报错）。
 
 // LogArchiveConfig 是 Worker Deep Archive 的受管对象存储配置。
 // SecretKey 只允许由环境变量注入，禁止写入 worker.yml 或诊断快照。
@@ -1360,6 +1703,25 @@ type LogArchiveConfig struct {
 	Prefix    string `mapstructure:"prefix"`
 	AccessKey string `mapstructure:"access_key"`
 	SecretKey string `mapstructure:"secret_key"`
+	// InstanceGzAdopt 是 ADR-098 §5「实例本地 logs/*.log.gz 归档吸存」的调度面。
+	InstanceGzAdopt LogArchiveInstanceGzAdoptConfig `mapstructure:"instance_gz_adopt"`
+}
+
+// LogArchiveInstanceGzAdoptConfig 是实例 gz 吸存的开关与时刻。
+//
+// 默认**开**——这与删除类能力（默认全关）的口径刻意相反，理由不是标尺不一致：
+// 吸存只**增加**一份副本，不删任何东西（连实例本地的 .gz 也不动，见 ADR-098 §5 第 4 条）。
+// 它唯一的代价是归档盘占用，而那正是「吸存」这个动作的目的。
+// 反之若默认关，则默认部署下这条能力永远为零调用——正是此前它被登记为
+// 「骨架具备、生产零调用」的原因。
+//
+// 关掉它不会删除任何已吸存的副本。
+type LogArchiveInstanceGzAdoptConfig struct {
+	// Enabled 控制每日扫描；默认 true。
+	Enabled bool `mapstructure:"enabled"`
+	// SweepAtHour 是每日执行的小时（进程本地时区），默认 4 点——
+	// 比保留驱动器与归档对象回收（都是 3 点）错开一小时，避开同一个 IO 高峰。
+	SweepAtHour int `mapstructure:"sweep_at_hour"`
 }
 
 // Load 从配置文件和环境变量加载 Worker 配置（FR-080，见 ADR-020）。
@@ -1392,16 +1754,67 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_vl.username", "")
 	v.SetDefault("log_vl.password", "")
 	v.SetDefault("log_vl.data_root", "")
-	v.SetDefault("log_vl.retention_period", "90d")
-	v.SetDefault("log_vl.cold_retention_period", "730d")
-	v.SetDefault("log_retention.hot_retention", "90d")
-	v.SetDefault("log_retention.cold_retention", "730d")
-	v.SetDefault("log_vl.hot_cache_bytes", int64(512*1024*1024))
+	v.SetDefault("log_vl.retention_period", vlruntime.DefaultRetentionPeriod)
+	// 磁盘占用上限（2026-10-29）：默认 0 = 不限制，与改动前行为逐字一致。
+	// 不在这里给“聪明”的默认值：上限该设多少取决于运维给 VL 划了多少盘，代码猜不出来。
+	v.SetDefault("log_vl.max_disk_space_bytes", 0)
+	v.SetDefault("log_vl.max_disk_usage_percent", 0)
+	// 2026-10-29：`log_vl.cold_retention_period` 已删除（冷热双层废除）。
+	// `log_retention.cold_retention` 作为**声明**保留：它现在表达「期望的可查范围」，
+	// 与 hot_retention 一起取最大值去校 `log_vl.retention_period`（见 validateRuntimeRetention）。
+	v.SetDefault("log_retention.hot_retention", vlruntime.DefaultHotRetention.String())
+	v.SetDefault("log_retention.cold_retention", vlruntime.DefaultColdRetention.String())
+	v.SetDefault("log_vl.hot_cache_bytes", vlsup.DefaultHotCacheBytes)
+	// VL 官方推荐按可用内存百分比自适应；显式设为 0 可退回按 hot_cache_bytes 的旧行为。
+	v.SetDefault("log_vl.memory_allowed_percent", 10)
+	v.SetDefault("log_vl.memory_limit_bytes", int64(0))
+	v.SetDefault("log_vl.delete_enabled", false)
+	// 2026-10-29：只为唯一的受管实例（hot）登记默认。
+	// 旧键 `namespace_budgets.cold.*` / `.rehydrate.*` 不再登记——它们会被
+	// `RuntimeBudget()` 当成未知层而拒绝，这是刻意的：静默忽略一个运维真写下的限额
+	// 比启动失败更危险。
+	for _, key := range []string{"cache_bytes", "go_memory_limit_bytes", "rss_bytes"} {
+		v.SetDefault("log_vl.namespace_budgets.hot."+key, int64(0))
+	}
+	v.SetDefault("log_vl.budget.disk_bytes", int64(0))
+	v.SetDefault("log_vl.budget.rss_bytes", int64(0))
+	v.SetDefault("log_vl.budget.reservations.wal", int64(0))
+	v.SetDefault("log_vl.budget.reservations.staging", int64(0))
+	v.SetDefault("log_vl.budget.reservations.export", int64(0))
+	v.SetDefault("log_retention.migration.copy_verify_budget", "")
+	v.SetDefault("log_retention.migration.recovery_budget", "")
+	// 事件段回收：默认关闭（删除类能力，用户护栏要求默认全关）+ 每日本地 3 点。
+	// 导出归档（硬规则次选路径）：默认关闭，且默认不给根目录——没有目的地就不该有这条路径。
+	v.SetDefault("log_retention.archive_copy.enabled", false)
+	// 默认 local：把默认值定成 s3 会让「本地目录已够用」的部署凭空多出一套凭证要求。
+	v.SetDefault("log_retention.archive_copy.provider", "local")
+	v.SetDefault("log_retention.archive_copy.root", "")
+	v.SetDefault("log_retention.archive_copy.endpoint", "")
+	v.SetDefault("log_retention.archive_copy.bucket", "")
+	v.SetDefault("log_retention.archive_copy.region", "us-east-1")
+	v.SetDefault("log_retention.archive_copy.prefix", "")
+	v.SetDefault("log_retention.archive_copy.access_key", "")
+	v.SetDefault("log_retention.archive_copy.secret_key", "")
+	v.SetDefault("log_retention.archive_copy.use_ssl", false)
+	// 归档对象自身的回收：默认关闭、默认**无保留期**、每日本地 3 点。
+	// 不开 `retention` 的默认值是有意的：平台不替运维决定「归档留几年」
+	// （730d 是例子里最常见的值，但它属于合规/成本口径，必须由运维说出口）。
+	v.SetDefault("log_retention.archive_object_retention.enabled", false)
+	v.SetDefault("log_retention.archive_object_retention.retention", "")
+	v.SetDefault("log_retention.archive_object_retention.sweep_at_hour", 3)
 	v.SetDefault("log_vl.hot_port", 0)
-	v.SetDefault("log_vl.cold_port", 0)
-	v.SetDefault("log_vl.rehydrate_port", 0)
-	v.SetDefault("log_vl.start_cold", false)
-	v.SetDefault("log_vl.start_rehydrate", false)
+	// 流标签（2026-10-31）：默认开启，取值就是架构裁定的 `log_source_id,stream`。
+	// 与以往保持一致：默认值不写在 SetDefault 里（那是 vlsup 的单一真源），
+	// 这里只登记空串，让未配置时走 vlsup.DefaultStreamFields。
+	v.SetDefault("log_vl.stream_fields", "")
+	v.SetDefault("log_vl.disable_stream_fields", false)
+	// 2026-10-29：冷热双层废除后这 4 个键已删（结构体字段不存在）。
+	// 此处不再写它们的 SetDefault——那只会造成「键还在」的错觉；viper 对未知键不报错，
+	// 旧 worker.yml 里留着它们也不会出问题。
+	// 2026-11-06：FR-510 磁盘缓冲（log_spool.*）已整体删除。
+	// 它只有写端、没有读端（Peek/PeekEvents/Ack 在 spool 包外零调用），
+	// 写进去的事件永远不会被重投——那不是缓冲，是「换个地方丢」。
+	// 生产配置里曾开着 enabled=true，导致每次启动白报一条 ERROR。
 	v.SetDefault("log_capacity.max_wal_bytes", DefaultMaxWALBytes)
 	v.SetDefault("log_capacity.recovery_quota_factor", 4)
 	v.SetDefault("log_capacity.recovery_drain_grace", "30m")
@@ -1411,23 +1824,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_capacity.degraded_at_percent", 80.0)
 	v.SetDefault("log_capacity.pause_at_percent", 90.0)
 	v.SetDefault("log_sources", []LogSourceConfig{})
-	// 启动增量对账（FR-497）：默认值直接取自 ingest 的单一真源，不在本地重复字面量。
-	reconcileDefaults := ingest.DefaultReconcileConfig()
-	v.SetDefault("log_reconcile.enabled", reconcileDefaults.Enabled)
-	v.SetDefault("log_reconcile.concurrency", reconcileDefaults.Concurrency)
-	v.SetDefault("log_reconcile.timeout", reconcileDefaults.Timeout.String())
-	v.SetDefault("log_reconcile.query_timeout", reconcileDefaults.QueryTimeout.String())
-	v.SetDefault("log_reconcile.budget", reconcileDefaults.Budget.String())
-	v.SetDefault("log_reconcile.yield", "5ms")
-	v.SetDefault("log_reconcile.slice_events", 4096)
-	// 采集索引（FR-496）：历史投递批次裁剪 + 持久化提交单元预算。默认值同样取自实现包的单一真源。
-	indexPruneDefaults := ledger.DefaultDeliveryBatchPruneConfig()
-	indexCommitDefaults := stateindex.DefaultCommitBudget()
-	v.SetDefault("log_index.batch_prune.enabled", indexPruneDefaults.Enabled)
-	v.SetDefault("log_index.batch_prune.keep_recent", indexPruneDefaults.KeepRecent)
-	v.SetDefault("log_index.persist.max_tx_rows", indexCommitDefaults.MaxRows)
-	v.SetDefault("log_index.persist.min_tx_rows", indexCommitDefaults.MinRows)
-	v.SetDefault("log_index.persist.tx_duration_target", indexCommitDefaults.Target.String())
+	// 采集索引（FR-496，`log_index.*`）整组已随旧链路删除：新架构没有 SQLite 采集索引，
+	// 也没有「投递批次裁剪 / 持久化提交单元」这些概念（逐批直写 VL）。
+	// 旧 worker.yml 里留着这些键不会报错（viper 忽略未知键）。
 	v.SetDefault("log_archive.enabled", false)
 	v.SetDefault("log_archive.provider", "local")
 	v.SetDefault("log_archive.endpoint", "")
@@ -1436,49 +1835,39 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_archive.prefix", "logs")
 	v.SetDefault("log_archive.access_key", "")
 	v.SetDefault("log_archive.secret_key", "")
+	// 实例 gz 吸存（ADR-098 §5）：默认**开**——它只增加副本、不删任何东西。
+	// 默认 4 点，与保留驱动器/归档对象回收（都是 3 点）错开，避开同一个 IO 高峰。
+	v.SetDefault("log_archive.instance_gz_adopt.enabled", true)
+	v.SetDefault("log_archive.instance_gz_adopt.sweep_at_hour", 4)
 	// 采集归一化的节点级默认时区（缺陷 C）：留空 = UTC，未配置时零行为变化。
 	// 中文 locale 的 JVM 与 Worker 同机部署时配 `local` 即可对齐本地时间。
 	v.SetDefault("log_ingest.time_zone", "")
 	// 采集归一化的节点级默认字符集（复审 P2-3）：留空 = auto。中文 locale 的 JVM 与 Worker
 	// 同机部署且日志为 GBK 时配 gbk 即可（显式声明优于自动判定）。
 	v.SetDefault("log_ingest.charset", "")
-	v.SetDefault("log_ingest.multiline_unclosed_timeout", "")
-	v.SetDefault("log_ingest.archive_scan_interval", "")
-	// 整节点解算预算（2026-10-02 缺陷修复）：0/空 = 用 ingest 包默认（256 源 / 2m）。
-	// 重发的外部条件与切片（2026-10-03 现场）：探针超时/等待上界/切片预算；空或 0 = 用 ingest 默认。
-	v.SetDefault("log_reconcile.vl_ready_timeout", "")
-	v.SetDefault("log_reconcile.vl_ready_wait", "")
-	v.SetDefault("log_reconcile.replay_max_days", 0)
-	v.SetDefault("log_reconcile.replay_max_duration", "")
-	v.SetDefault("log_ingest.resolve_gaps_max_sources", 0)
-	// 每周期总预算（2026-10-02 事故修复）：单次落库调用做多少；0/空 = 用 stateindex 默认。
-	v.SetDefault("log_index.persist.cycle_max_rows", 0)
-	v.SetDefault("log_index.persist.cycle_max_duration", "")
-	// 持久化门的让路窗口与老化阈值（2026-10-03 门闩饿死采集轮）：空/0 = 用 ingest 默认。
-	v.SetDefault("log_index.persist.cycle_yield", "")
-	v.SetDefault("log_index.resume_batch_per_round", 8)
-	v.SetDefault("log_index.resume_backpressure_streak", 3)
-	v.SetDefault("log_index.scan.slice_rows", 8192)
-	v.SetDefault("log_index.scan.yield", "1ms")
-	v.SetDefault("log_index.scan.budget", "2s")
-	// 滚动回收单轮上界（#64）：0/空 = 用 ingest 默认（32 步 / 1s ✓）。
-	v.SetDefault("log_index.reclaim_roll.max_steps", 0)
-	v.SetDefault("log_index.reclaim_roll.budget", "")
-	v.SetDefault("log_index.persist.priority_streak", 0)
-	v.SetDefault("log_index.persist.hot_budget", "")
-	// 校验查询的全局天花板（2026-10-03 现场 ×410 重试风暴）：0 = 用 ingest 默认（30/s、6 在飞、单簇 12 次）。
-	v.SetDefault("log_index.verify.max_per_second", 0)
-	v.SetDefault("log_index.verify.max_in_flight", 0)
-	v.SetDefault("log_index.verify.max_queries_per_chunk", 0)
-	// 每源每轮校验预算与可见性错开（2026-10-03 回退修复）：空串 = 用 ingest 默认（预算 1.5s、错开关）。
-	v.SetDefault("log_index.verify.round_budget", "")
-	v.SetDefault("log_index.verify.visibility_floor", "")
-	// 校验预算随事件数放大（2026-10-10 生产活锁修复，改动 B）：空串 = **不放大**（保守默认，
-	// 与修复前逐字一致）；chunk_estimate 给了正数才按「簇数 × 估计 × 安全系数」放大，
-	// 并由 chunk_budget_max 封顶（空 = ingest 默认 5 分钟）。
-	v.SetDefault("log_index.verify.chunk_estimate", "")
-	v.SetDefault("log_index.verify.chunk_budget_max", "")
-	v.SetDefault("log_ingest.resolve_gaps_max_duration", "")
+	v.SetDefault("log_ingest.read_limits.max_line_bytes", 0)
+	v.SetDefault("log_ingest.read_limits.max_bytes_per_poll", int64(0))
+	// 新采集器（tailer/logtail）：**默认开**（2026-11-06 切换）。旧链路（ingest/ledger）已于同批删除，
+	// 不存在“两套互斥”的配置面了：本开关只控制“开不开采集”。
+	v.SetDefault("log_tailer.enabled", true)
+	v.SetDefault("log_tailer.paths", []string{})
+	v.SetDefault("log_tailer.exclude", []string{})
+	// 首次部署要能补上部署前的历史日志（用户明确要这个）。
+	v.SetDefault("log_tailer.read_from_head", true)
+	v.SetDefault("log_tailer.registry_path", "")
+	v.SetDefault("log_tailer.scan_interval", "")
+	v.SetDefault("log_tailer.progress_interval", "")
+	// 多行合并（键 log_tailer.multiline.*）：默认**不启用**——它对日志语义有实质影响
+	// （决定“一条事件是什么”），与采样一样属于“开了就改变存下来的东西”，
+	// 必须由运维显式打开。
+	v.SetDefault("log_tailer.multiline.pattern", "")
+	v.SetDefault("log_tailer.multiline.negate", false)
+	v.SetDefault("log_tailer.multiline.match", "after")
+	v.SetDefault("log_tailer.multiline.flush_pattern", "")
+	v.SetDefault("log_tailer.multiline.max_lines", 500)
+	v.SetDefault("log_tailer.multiline.timeout", "5s")
+	// 历史 gz 导入：默认**关**（主动补数据才开，避免升级后突然读几千个文件）。
+	v.SetDefault("log_tailer.include_gzip", false)
 	v.SetDefault("search.ignore", []string{})
 	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
 	v.SetDefault("artifact_cache.max_bytes", int64(0))
@@ -1568,19 +1957,54 @@ func Load(path string) (*Config, error) {
 			}
 		}
 	}
-	// 在读取其它运行态文件、更不用说启动受管 VL 之前校验原始策略。
-	// 不先 Normalize：负值不能被默认值掩盖，错误配置也不能只让 main 静默停用驱动器。
-	if err := cfg.SamplingPolicy().Validate(); err != nil {
-		return nil, fmt.Errorf("log_ingest.sampling: %w", err)
+	// `log_ingest.sampling.*` 的校验已随采样下线：新采集器没有采样实现，
+	// 这组键配了不再产生效果（旧 worker.yml 留着不报错，viper 忽略未知键）。
+	// 静态采集源的**目标形态**校验（非法即拒）：写错命名空间的源会被照常采集，
+	// 却永远匹配不到 CP 的目标枚举，最终表现为「日志查询服务未启用」这类误导性状态。
+	// 见 validateLogSources 的文档注释（含 2026-10-17 dev 实测现场）。
+	if err := validateLogSources(cfg.LogSources); err != nil {
+		return nil, fmt.Errorf("log_sources: %w", err)
 	}
-	if cfg.LogRetention.Enabled {
+	// **无条件校验保留期一致性**（2026-10-21 架构复审）：旧实现在 `Enabled` 为假时
+	// 整段跳过，于是最危险的组合「搬运关闭 + VL retention 有限」**完全不报错**
+	// ⇒ 热层数据到期被 VictoriaLogs **直接删除**，不写审计、不经「删前归档」、
+	// 不受最后副本保护，而且没人知道。
+	//
+	// 这里分成两种处置：
+	//   · `Enabled=false`（默认）：**只告警不拒绝**——这是出厂默认，直接拒启动会让
+	//     所有既有部署起不来；但必须把「数据会在 N 天后消失」说清楚（见下方 Warn）。
+	//   · `Enabled=true`：保留期必须严格长于热层窗口并留搬运余量，否则拒绝启动。
+	{
 		policy, err := cfg.RetentionPolicy()
 		if err != nil {
 			return nil, err
 		}
 		if err := cfg.validateRuntimeRetention(policy); err != nil {
-			return nil, err
+			if cfg.LogRetention.Enabled {
+				return nil, err
+			}
+			slog.Warn("保留期配置不一致，但保留策略未启用（不阻断启动）：数据到期将由 VictoriaLogs 直接删除",
+				"error", err, "hint", "设置 log_retention.enabled: true 以启用到期处理")
 		}
+		if !cfg.LogRetention.Enabled {
+			slog.Warn("日志自动保留关闭：原生有限 TTL 仍独立淘汰；关闭应用删除不等于永久保留或已有副本",
+				"automaticRetention", false, "nativeRetention", cfg.LogVL.RetentionPeriod,
+				"applicationDeleteEnabled", cfg.LogVL.DeleteEnabled)
+		} else {
+			slog.Info("日志保留策略已启用：到期分区只能导出独立副本或保留原物",
+				"nativeRetention", cfg.LogVL.RetentionPeriod,
+				"copyVerifyBudget", cfg.LogRetention.Migration.CopyVerifyBudget,
+				"recoveryBudget", cfg.LogRetention.Migration.RecoveryBudget)
+		}
+	}
+	if _, err := cfg.LogVL.RuntimeBudget(); err != nil {
+		return nil, err
+	}
+	if err := cfg.LogVL.ValidateDiskLimit(); err != nil {
+		return nil, err
+	}
+	if err := cfg.LogVL.ValidateStreamFields(); err != nil {
+		return nil, err
 	}
 	if cfg.EnrollToken == "" && strings.TrimSpace(cfg.EnrollTokenFile) != "" {
 		data, readErr := os.ReadFile(cfg.EnrollTokenFile)
@@ -1604,35 +2028,37 @@ func Load(path string) (*Config, error) {
 	}
 	// 采集时区（缺陷 C）：非法值必须在启动即拒——时区配错会让整源时间轴静默偏移，
 	// 等查询结果对不上账才发现（与登记阶段拒绝非法源级时区同一取舍）。
-	if tz := cfg.IngestDefaultTimeZone(); tz != "" && !ingest.IsValidTimeZone(tz) {
+	if tz := cfg.IngestDefaultTimeZone(); tz != "" && !logconf.IsValidTimeZone(tz) {
 		return nil, fmt.Errorf("log_ingest.time_zone 非法: %q（支持 UTC/local 或 IANA 名，如 Asia/Hong_Kong）", cfg.LogIngest.TimeZone)
 	}
 	// 采集字符集（复审 P2-3）：非法取值必须在启动即拒——按未知字符集「回退 auto」会让
 	// GBK 中文被当作非法 UTF-8 净化成替换字符，正文静默损坏，等运维在日志里发现已经晚了
 	// （与源级登记拒绝非法字符集同一取舍）。
-	if cs := cfg.IngestDefaultCharset(); cs != "" && !ingest.IsValidCharset(cs) {
+	if cs := cfg.IngestDefaultCharset(); cs != "" && !logconf.IsValidCharset(cs) {
 		return nil, fmt.Errorf("log_ingest.charset 非法: %q（支持 auto/utf-8/gbk/gb18030）", cfg.LogIngest.Charset)
 	}
-	// 静默源未闭合缓冲超时（缺陷 B）：非法值启动即拒。
-	// 静默回退默认会让「我明明配了 30s」变成 5s，而这件事只在「轮转恢复卡住」时才暴露，
-	// 排查方向会被完全带偏——与 timezone/charset 同属「配错就静默」的危险项。
-	if _, err := cfg.IngestMultilineUnclosedTimeout(); err != nil {
+	// 新采集器周期（键 log_tailer.scan_interval / progress_interval）：非法值启动即拒。
+	if _, _, err := cfg.LogTailerIntervals(); err != nil {
 		return nil, err
 	}
-	// 定时归档导入扫描（④）：非法值启动即拒（同上：静默回退会把"开了"变成隐性关闭）。
-	if _, err := cfg.IngestArchiveScanInterval(); err != nil {
+	// 多行规则（键 log_tailer.multiline.*）：非法值启动即拒。
+	// 多行配错的表现是「日志被错误拼接」而非报错——那种脏数据只能人眼发现，
+	// 而发现时已经入库了。所以必须在启动时挡掉。
+	if _, _, err := cfg.MultilineSettings(); err != nil {
 		return nil, err
 	}
-	// 整节点解算预算（2026-10-02 缺陷修复）：非法值启动即拒——把「有界」配成 0 会让解算恒不可用，
-	// 而现场只会看到「解缺口不生效」，无从归因。
-	if _, err := cfg.IngestResolveGapsBudget(); err != nil {
-		return nil, err
+	// 新旧采集器互斥的**配置面**检查（2026-11-06）：两者同时开就是同一文件读两遍。
+	// 装配层已经用 if/else 保证只会构造一套，这里再加一道启动即拒是因为「配了两套」
+	// 本身就是运维的误解，而它的表现（日志重复、EVENT 条数翻倍）不会指向配置。
+	if cfg.LogTailer.Enabled && len(cfg.LogSources) > 0 {
+		slog.Warn("log_tailer.enabled=true：旧采集链路的 log_sources 配置将被忽略（新采集器按绑定表推导路径）",
+			"logSources", len(cfg.LogSources))
 	}
 	if cfg.LogCapacity.DegradedAtPercent <= 0 || cfg.LogCapacity.DegradedAtPercent >= 100 ||
 		cfg.LogCapacity.PauseAtPercent <= cfg.LogCapacity.DegradedAtPercent || cfg.LogCapacity.PauseAtPercent > 100 {
 		return nil, fmt.Errorf("log_capacity thresholds must satisfy 0 < degraded < pause <= 100")
 	}
-	configuredPorts := []int{cfg.LogVL.HotPort, cfg.LogVL.ColdPort, cfg.LogVL.RehydratePort}
+	configuredPorts := []int{cfg.LogVL.HotPort}
 	seenPorts := make(map[int]bool)
 	for _, port := range configuredPorts {
 		if port == 0 {

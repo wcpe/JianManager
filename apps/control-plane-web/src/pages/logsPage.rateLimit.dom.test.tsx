@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -25,6 +25,14 @@ import LogsPage from './LogsPage'
 import { RATE_LIMIT_QUERY_RETRIES } from '@/api/logFederation'
 
 const FOLLOW_INTERVAL = 3000
+
+/** 完成后调度依赖 React 提交；推进挂钟时也落定本轮状态，不用旧固定interval假定。 */
+async function advanceFollowClock(ms: number) {
+  // 分段提交，让一次轮询完成→React提交→下一次调度按真实顺序发生；一次跳6s会把提交推到末尾。
+  for (let elapsed = 0; elapsed < ms; elapsed += 50) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(Math.min(50, ms - elapsed)) })
+  }
+}
 
 /** 联邦主查询与经典 `/logs` 的请求计数（每例重置）。 */
 let tailCalls = 0
@@ -89,9 +97,9 @@ function stubHandlers({ rateLimited }: { rateLimited: () => boolean }) {
 async function renderFollowing() {
   renderWithProviders(<LogsPage />)
   // 让首屏探测（/nodes、/instances、联邦）落地后再开跟随，避免把启动请求算进 tick 统计。
-  await vi.advanceTimersByTimeAsync(300)
+  await advanceFollowClock(300)
   fireEvent.click(screen.getByRole('button', { name: '实时跟随' }))
-  await vi.advanceTimersByTimeAsync(300)
+  await advanceFollowClock(300)
 }
 
 describe('日志中心限流保留与轮询节流（FR-482）', () => {
@@ -120,7 +128,7 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
 
     // 先把「开跟随」到首个桶边界之间的半拍走完，让采样起点与 3 秒桶边界对齐
     // （否则首个采样窗会被这段残差切开，看起来像少一次请求，而非真实行为差异）。
-    await vi.advanceTimersByTimeAsync(FOLLOW_INTERVAL)
+    await advanceFollowClock(FOLLOW_INTERVAL)
 
     // 逐个 tick 采样：稳态下每 3 秒必须恰好 1 条 tail 请求。
     // 改前的渲染期分桶会让同一 tick 变成 2 条（queryKey 变化 1 条 + refetchInterval 1 条），
@@ -130,7 +138,7 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     for (let i = 0; i < 4; i++) {
       const beforeTail = tailCalls
       const beforeFederation = federationCalls
-      await vi.advanceTimersByTimeAsync(FOLLOW_INTERVAL)
+      await advanceFollowClock(FOLLOW_INTERVAL)
       tailPerTick.push(tailCalls - beforeTail)
       federationPerTick.push(federationCalls - beforeFederation)
     }
@@ -150,12 +158,12 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     await renderFollowing()
 
     // 先拿到一份真实行，确认它在限流后仍然可见。
-    await vi.advanceTimersByTimeAsync(FOLLOW_INTERVAL)
+    await advanceFollowClock(FOLLOW_INTERVAL)
     expect(screen.getByText('federation-kept-row')).toBeInTheDocument()
 
     // 服务端开始持续限流：跨越多个 tick（重试耗尽须先发生）。
     rateLimited = true
-    await vi.advanceTimersByTimeAsync(FOLLOW_INTERVAL * 2)
+    await advanceFollowClock(FOLLOW_INTERVAL * 2)
 
     // ① 已有行不得被清空（改前：429 落入 transportFailure 且 degraded=false ⇒ 列表空白）。
     expect(screen.getByText('federation-kept-row')).toBeInTheDocument()
@@ -175,14 +183,14 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     stubHandlers({ rateLimited: () => rateLimited })
     await renderFollowing()
 
-    await vi.advanceTimersByTimeAsync(FOLLOW_INTERVAL)
+    await advanceFollowClock(FOLLOW_INTERVAL)
     rateLimited = true
-    await vi.advanceTimersByTimeAsync(FOLLOW_INTERVAL * 2)
+    await advanceFollowClock(FOLLOW_INTERVAL * 2)
     expect(screen.getByTestId('logs-coverage-banner')).toHaveAttribute('data-state', 'rate_limited')
 
     // 限流解除：提示必须收回，否则会把已恢复正常误报成持续故障。
     rateLimited = false
-    await vi.advanceTimersByTimeAsync(FOLLOW_INTERVAL * 2)
+    await advanceFollowClock(FOLLOW_INTERVAL * 2)
     expect(screen.getByText('federation-kept-row')).toBeInTheDocument()
     expect(screen.queryByTestId('logs-coverage-banner')).not.toBeInTheDocument()
   })
@@ -213,7 +221,7 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     )
     renderWithProviders(<LogsPage />)
     // 假时钟下推进一小段让首屏联邦查询落地（比照下方 stats/facets 用例）。
-    await vi.advanceTimersByTimeAsync(300)
+    await advanceFollowClock(300)
     // 筛选 A 先拿到真实行。
     expect(screen.getByText('federation-kept-row')).toBeInTheDocument()
 
@@ -230,11 +238,11 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     const trigger = screen.getAllByRole('combobox')[0]!
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
     fireEvent.click(trigger)
-    await vi.advanceTimersByTimeAsync(50)
+    await advanceFollowClock(50)
     fireEvent.click(screen.getByRole('option', { name: '最近 1 小时' }))
-    await vi.advanceTimersByTimeAsync(50)
+    await advanceFollowClock(50)
     // 等两层重试耗尽（内层 250/600ms + react-query 500/1000ms，合计约 4s）落定为错误终态。
-    await vi.advanceTimersByTimeAsync(6000)
+    await advanceFollowClock(6000)
 
     // ① 旧筛选的行不得继续可见：保留项与筛选身份绑定，filterKey 变了即判失效。
     expect(screen.queryByText('federation-kept-row')).not.toBeInTheDocument()
@@ -278,8 +286,8 @@ describe('日志中心限流保留与轮询节流（FR-482）', () => {
     renderWithProviders(<LogsPage />)
     // 聚合是延后串行的：facets 要等 stats 落定（成功或失败）才发起，而 stats 自身还要
     // 走完「短退避 250/600ms × react-query 退避 500/1000ms」才落定 ⇒ 需推进足够时长。
-    await vi.advanceTimersByTimeAsync(300)
-    await vi.advanceTimersByTimeAsync(5000)
+    await advanceFollowClock(300)
+    await advanceFollowClock(5000)
 
     // 行列表不因聚合失败而消失。
     expect(screen.getByText('federation-kept-row')).toBeInTheDocument()
@@ -353,9 +361,9 @@ describe('联邦主查询的 429 重试接线（端到端）', () => {
 
     renderWithProviders(<LogsPage />)
     // 推进足够时长，让两层退避（helper 250/600ms + react-query 500/1000ms）都跑完。
-    await vi.advanceTimersByTimeAsync(500)
-    await vi.advanceTimersByTimeAsync(5000)
-    await vi.advanceTimersByTimeAsync(5000)
+    await advanceFollowClock(500)
+    await advanceFollowClock(5000)
+    await advanceFollowClock(5000)
 
     // 核心：单层重试最多 3 次（1 首次 + 2 重试）；两层叠加才会显著更多。
     // helper 接线在 ⇒ 至少 1×3；被拆 ⇒ 只有 1×3 但其中「同一 queryFn 内」不会连发。

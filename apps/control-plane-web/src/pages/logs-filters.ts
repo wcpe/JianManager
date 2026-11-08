@@ -6,8 +6,14 @@
 import type { StatusLevel } from '@jianmanager/ui'
 import type { LogQueryParams } from '@/api/logs'
 
-/** 日志中心固定主视图，顺序与管理员可见的切换控件一致。 */
-export const LOG_VIEWS = ['platform', 'node_instance', 'all', 'legacy'] as const
+/**
+ * 日志中心固定主视图，顺序与管理员可见的切换控件一致。
+ *
+ * 2026-10-29：`legacy`（CP `logs` 表的切换前存量）随该表删除而下线，从取值域里移除。
+ * 留着它会让 `?view=legacy` 深链落进一个「不存在的数据源」——页面既不报错也不给数据，
+ * 是最难察觉的一类静默失效。现在这类深链按非法值回退默认视图。
+ */
+export const LOG_VIEWS = ['platform', 'node_instance', 'all'] as const
 
 /**
  * 日志级别 → 状态等级（FR-150）。
@@ -74,23 +80,33 @@ export function windowForAnchor(
   return timeRangeToParams(range, new Date(anchor))
 }
 
+/** 所有联邦操作共用的条件；分页、游标和聚合维度不属于固定视图身份。 */
+export interface LogQueryScope extends Omit<LogQueryParams, 'page' | 'pageSize'> {
+  onlineOnly?: boolean
+}
+
+/** 固定字段顺序，同时剔除空条件，保证查询、聚合及导出的指纹一致。 */
+export function normalizeLogScope(params: LogQueryScope): LogQueryScope {
+  return {
+    ...(params.view ? { view: params.view } : {}),
+    ...(params.source ? { source: params.source } : {}),
+    ...(params.level ? { level: params.level } : {}),
+    ...(params.nodeId ? { nodeId: params.nodeId } : {}),
+    ...(params.instanceId ? { instanceId: params.instanceId } : {}),
+    ...(params.keyword?.trim() ? { keyword: params.keyword.trim() } : {}),
+    ...(params.onlineOnly ? { onlineOnly: true } : {}),
+    ...(params.from ? { from: params.from } : {}),
+    ...(params.to ? { to: params.to } : {}),
+  }
+}
+
+/** 查询身份包含实际移窗边界，不能把占位旧页认作新条件的响应。 */
+export function logScopeKey(params: LogQueryScope): string {
+  return JSON.stringify(normalizeLogScope(params))
+}
+
 /** 导出范围：当前页 / 全部匹配 / 时间段（FR-150 导出范围可选）。 */
 export type LogExportScope = 'currentPage' | 'allMatched' | 'range'
-
-/**
- * 按导出范围裁剪查询参数（FR-150）。
- * - currentPage：保留 page/pageSize，仅导出可见页。
- * - allMatched / range：去掉分页，导出整个筛选结果集（range 复用筛选区已设的 from/to）。
- * 始终返回新对象，不修改入参。未知范围按 allMatched 兜底。
- */
-export function buildExportParams(base: LogQueryParams, scope: LogExportScope): LogQueryParams {
-  const out: LogQueryParams = { ...base }
-  if (scope === 'currentPage') return out
-  // allMatched 与 range 都导出全量匹配；range 的时间窗已在 base.from/to 内。
-  delete out.page
-  delete out.pageSize
-  return out
-}
 
 /** 虚拟滚动窗口计算入参。 */
 export interface VirtualWindowInput {

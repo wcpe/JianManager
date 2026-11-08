@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -34,15 +33,12 @@ import (
 	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
 	"github.com/wcpe/JianManager/internal/worker/heartbeat"
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
-	"github.com/wcpe/JianManager/internal/worker/logs/acquire"
 	"github.com/wcpe/JianManager/internal/worker/logs/archive"
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest"
-	"github.com/wcpe/JianManager/internal/worker/logs/ingest/stateindex"
 	"github.com/wcpe/JianManager/internal/worker/logs/lifecycle"
 	"github.com/wcpe/JianManager/internal/worker/logs/logassemble"
-	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
-	"github.com/wcpe/JianManager/internal/worker/logs/pipeline"
+	"github.com/wcpe/JianManager/internal/worker/logs/logconf"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtail"
 	"github.com/wcpe/JianManager/internal/worker/logs/query"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/grpcsvc"
 	"github.com/wcpe/JianManager/internal/worker/logs/query/vlrange"
@@ -89,20 +85,10 @@ func main() {
 		runDaemonWrapper()
 		return
 	}
-	// 采集索引只读导出（FR-496 spec §2.3）：`worker log-index-export [--data-dir DIR] [--out FILE]`。
-	// 用于排障与回滚前的快照，不改动索引库或任何状态。两种写法等价（`--k v` / `--k=v`）；
-	// 未知、缺值、重复的参数一律报错退出（退出码 1）。
-	if len(os.Args) > 1 && os.Args[1] == "log-index-export" {
-		runLogIndexExport(os.Args[2:])
-		return
-	}
-	// 事件级状态派生态视图（后续项③）：`worker log-event-status [--data-dir DIR] [--source ID[/GEN]]
-	// [--from N --to M | --at RFC3339]`。只读索引库（+ 可选事件段），不改动任何状态。
-	// 两种写法等价：`--k v` 与 `--k=v` 均可；未知参数或缺值参数一律报错退出（退出码 1）。
-	if len(os.Args) > 1 && os.Args[1] == "log-event-status" {
-		runLogEventStatus(os.Args[2:])
-		return
-	}
+	// `log-index-export` / `log-event-status` 两个只读导出子命令已随旧链路删除：
+	// 它们读的是 ingest 的采集索引库（SQLite），新架构没有索引库。
+	// **这是功能下线点**：`scripts/rollback-log-index.sh` 里的 `--export` 路径会退化为
+	// 直接读 sqlite3（该脚本本身还有兜底分支）。
 	runWorker()
 }
 
@@ -162,102 +148,6 @@ func flagValue(args []string, name string) (string, error) {
 		return "", fmt.Errorf("参数 %s 重复出现 %d 次", name, count)
 	}
 	return found, nil
-}
-
-// runLogEventStatus 输出“某源某区间/某时间点当前处于哪一态”的派生态视图（JSON 到 stdout）。
-//
-// 只读：索引库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
-func runLogEventStatus(args []string) {
-	normalized, err := normalizeSubcommandArgs(args, "--data-dir", "--source", "--from", "--to", "--at")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "事件级状态导出参数非法: %v\n", err)
-		os.Exit(1)
-	}
-	override, err := flagValue(normalized, "--data-dir")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "事件级状态导出参数非法: %v\n", err)
-		os.Exit(1)
-	}
-	dataRoot, err := dataroot.Resolve(override)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "解析数据目录失败: %v\n", err)
-		os.Exit(1)
-	}
-	if err := ingest.ExportEventStatus(dataRoot.Base(), normalized, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "导出事件级状态失败: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// runLogIndexExport 把采集索引（SQLite）导出为旧 ingest.state.json 结构的 JSON。
-//
-// 只读：库不存在或不可读时报错退出（退出码 1），不创建、不修改任何文件。
-// `--out FILE` 的语义是「回滚前快照」，故**先写同目录临时文件、导出成功后原子改名**：
-// 旧实现先 O_TRUNC 打开目标再导出，导出失败（索引损坏/不可读）就把上一份快照清零了。
-// 两种写法等价（`--out FILE` 与 `--out=FILE`）；缺值、重复出现一律报错退出。
-func runLogIndexExport(args []string) {
-	normalized, err := normalizeSubcommandArgs(args, "--data-dir", "--out")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "采集索引导出参数非法: %v\n", err)
-		os.Exit(1)
-	}
-	override, err := flagValue(normalized, "--data-dir")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "采集索引导出参数非法: %v\n", err)
-		os.Exit(1)
-	}
-	outPath, err := flagValue(normalized, "--out")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "采集索引导出参数非法: %v\n", err)
-		os.Exit(1)
-	}
-	dataRoot, err := dataroot.Resolve(override)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "解析数据目录失败: %v\n", err)
-		os.Exit(1)
-	}
-	root := dataRoot.Base()
-	if outPath == "" {
-		if err := ingest.ExportIndexJSON(root, os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "导出采集索引失败: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-	if err := writeIndexExportAtomically(root, outPath); err != nil {
-		fmt.Fprintf(os.Stderr, "导出采集索引失败: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Fprintln(os.Stderr, "采集索引已导出")
-}
-
-/**
- * writeIndexExportAtomically 把索引导出到 outPath，且**不破坏已有文件**：
- * 先写同目录临时文件（同一文件系统，改名是原子的），导出与落盘都成功后才覆盖目标。
- * 失败路径删除临时文件并保留旧快照——它正是「回滚前快照」，被清零就失去了意义。
- */
-func writeIndexExportAtomically(root, outPath string) error {
-	dir := filepath.Dir(outPath)
-	tmp, err := os.CreateTemp(dir, filepath.Base(outPath)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("创建临时导出文件失败: %w", err)
-	}
-	tmpPath := tmp.Name()
-	// CreateTemp 默认 0600：快照可能含日志正文，权限不放宽。
-	if err := ingest.ExportIndexJSON(root, tmp); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("关闭临时导出文件失败: %w", err)
-	}
-	if err := os.Rename(tmpPath, outPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("替换导出文件失败: %w", err)
-	}
-	return nil
 }
 
 // runDaemonWrapper 以 wrapper 子进程模式运行。
@@ -347,6 +237,9 @@ func parseDataDirArg(args []string) []string {
 }
 
 func runWorker() {
+	// FR-486：启动分段计时。放在最前面，第一个 Mark 才有意义。
+	startup := newStartupTimer()
+
 	// Windows 服务默认 cwd=System32，会把 setup 写出的 worker.yml 落到错误位置且重启找不到（FIX-2/3）。
 	// 以服务身份运行时先把工作目录切到 exe 所在的安装目录（与 Linux systemd WorkingDirectory 对齐）。
 	chdirToExeDirIfService()
@@ -429,12 +322,15 @@ func runWorker() {
 		slog.Error("日志格式配置非法，拒绝启动", "error", logFormatErr)
 		os.Exit(1)
 	}
-	logOpts := &slog.HandlerOptions{Level: logLevelVar}
-	if logFormat == "json" {
-		slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, logOpts)))
-	} else {
-		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, logOpts)))
-	}
+	// 日志落地：stderr 之外再写一份自轮转文件（见 process_log.go 的说明）。
+	// stderr 保留，因此前台/容器/CI 场景不变；文件供面板诊断与运维 grep。
+	//
+	// cfg.Log 传入轮转与保留策略（大小/份数/天数/压缩）：零值回退内置默认，
+	// 因此老配置不需要改。
+	installProcessLogger(cfg.DataDir, logLevelVar, logFormat, cfg.Log)
+	// 诊断接口需要知道日志文件在哪：注入路径提供者（见 internal/worker/grpc/self_log.go）。
+	// 为空时 PullSelfLog 返回结构化错误而不是空成功。
+	wgrpc.SetSelfLogPathProvider(ProcessLogPath)
 	slog.Info("Worker 日志已按配置装配", "level", logLevel.String(), "format", logFormat,
 		"note", "等级在启动期生效，调整需重启进程")
 
@@ -450,6 +346,7 @@ func runWorker() {
 		"configPath", configSource,
 		"logIngestTimeZone", cfg.IngestDefaultTimeZone(),
 		"logIngestCharset", cfg.IngestDefaultCharset())
+	startup.Mark("config")
 
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
@@ -504,6 +401,7 @@ func runWorker() {
 	}
 
 	slog.Info("Worker Node 启动", "name", nodeName, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
+	startup.Mark("bootstrap")
 
 	// 启后自检：本 Worker 所在 systemd 单元的 KillMode 是否会让「重启单元」连坐杀掉全部游戏服
 	// （见 daemon.WarnIfUnitKillModeUnprotected：该属性是部署期属性，手工 systemd-run / 手写单元
@@ -515,9 +413,7 @@ func runWorker() {
 	// 继续占用 hot/cold 端口 ⇒ 新 worker 报 `hot exited immediately after start`（现场 ✓，只能靠
 	// RangeClient 接旧实例 ⇒ 采集面降级 ✗）。判据＝**本 data 根**（cmdline 含根 ＋ exe 在根下，两道都过 ✓）
 	// ⇒ 不误杀他进程 ✓；回收本身有界（每个孤儿 TERM→5s→KILL ✓）；非 Linux（无 /proc）仅 Debug 降级 ✓。
-	if reaped, err := vlsup.ReapOrphans(root.Base(), "startup", func(o vlsup.OrphanMatch) {
-		slog.Warn("已回收本节点 vlsup 孤儿（启前）", "pid", o.PID, "cmdline", o.Cmdline, "exe", o.Exe)
-	}); err != nil {
+	if reaped, err := vlsup.ReapOrphans(root.Base(), "startup", logReapedVLOrphan); err != nil {
 		slog.Debug("vlsup 孤儿回收不可用（非致命）", "error", err)
 	} else if len(reaped) > 0 {
 		slog.Warn("启前 vlsup 孤儿回收完成", "count", len(reaped), "pids", reaped)
@@ -529,6 +425,13 @@ func runWorker() {
 	}
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
+	// procManager 与 manager 同一实例，只是给它一个**不会被日志采集代码块遮蔽**的名字。
+	//
+	// 为什么不直接用 manager：下方日志采集段会写 `manager, ingestErr = newIngest()`，
+	// 把同名变量改成 `*ingest.Manager`。那个遮蔽是既有的、改动面很大的，而吸存需要的是
+	// 进程管理器（要拿实例的 WorkDir），两类 Manager 类型名相近但不能互换——
+	// 留着同名只用一次容易在下一个人改代码时静默传错。
+	procManager := manager
 	// 接管重试窗口（FR-455①）：Worker 重启后对存活 wrapper 的 reconnect 重试序列（默认 ≈127s），
 	// 覆盖分钟级瞬时故障；必须在下方 RecoverDaemonInstances 之前装配，否则该轮接管仍用默认序列。
 	manager.SetRecoverRetryBackoff(cfg.Recover.RetryBackoffSequence())
@@ -583,6 +486,11 @@ func runWorker() {
 	})
 
 	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
+	//
+	// 本函数只同步完成「快速首拨」（每条 PID 记录拨一次），首拨失败的记录转后台按
+	// recover.retry_backoff 序列继续重试（最长 ≈127s）。故下面的运行期孤儿扫描不会被接管重试
+	// 拖住——旧实现把重试串行摊在启动主流程上，一条不可达记录即把扫描器推迟 127s（N 条线性累加），
+	// 启动窗口内完全没有扫描能力。接管重试与扫描并行的并发隔离见 process.takeoverProtects。
 	recovered, recoverErr := manager.RecoverDaemonInstances()
 	if recoverErr != nil {
 		slog.Warn("恢复 daemon 实例失败", "error", recoverErr)
@@ -632,9 +540,23 @@ func runWorker() {
 	// 配置了健康的 localhost VL 时接入真实 RangeClient；否则保留显式 LOG_UNSUPPORTED。
 	var rangeClient query.RangeClient
 	var vlHTTPClient *vlsup.Client
-	var coldVLClient *vlsup.Client
-	var rehydrateVLClient *vlsup.Client
 	var vlSupervisor *vlsup.Supervisor
+	var managedClients *managedLogClients
+	budgetConfig, budgetErr := cfg.LogVL.RuntimeBudget()
+	if budgetErr != nil {
+		slog.Error("日志资源预算配置非法", "error", budgetErr)
+		return
+	}
+	resourceBudget, budgetErr := vlsup.NewBudgetController(budgetConfig)
+	if budgetErr != nil {
+		slog.Error("日志资源预算控制器创建失败", "error", budgetErr)
+		return
+	}
+	logRuntimeCtx, cancelLogRuntime := context.WithCancel(context.Background())
+	defer cancelLogRuntime()
+	// 运行期自愈看护的取消函数（缺陷修复：VL 运行期崩溃后无自愈）。
+	// 必须在 StopAll 之前调用：先停止看护，再停进程，避免"刚停就被看护判成崩溃又拉起"。
+	var cancelVLGuardian context.CancelFunc
 	managedBinary, managedSHA := cfg.LogVL.BinaryPath, cfg.LogVL.AssetSHA256
 	var packageErr error
 	if strings.TrimSpace(cfg.LogVL.PackagePath) != "" {
@@ -655,37 +577,57 @@ func runWorker() {
 		vlSupervisor, err = vlsup.New(vlsup.Options{
 			BinaryPath: managedBinary, AssetSHA256: managedSHA,
 			DataRoot: dataRoot, RetentionPeriod: cfg.LogVL.RetentionPeriod,
-			RetentionByNamespace: map[vlsup.Namespace]string{
-				// 冷层 retention 是「冷留存多久」的唯一执行者（用户口径：730d，所有级别统一）。
-				vlsup.NamespaceCold: cfg.LogVL.ColdRetentionPeriod,
-			},
-			AuthUsername: cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
+			// 删除三闸保持默认关闭；原生整日 TTL 仍独立运行，不提供永久副本保证。
+			DeleteEnabled: cfg.LogVL.DeleteEnabled,
+			// 磁盘占用上限（2026-10-29）：与 retention_period 同时生效，谁先到谁触发。
+			// 默认 0 = 不限制（保持改动前行为）；生产建议显式配 max_disk_space_bytes。
+			MaxDiskSpaceUsageBytes: cfg.LogVL.MaxDiskSpaceBytes,
+			MaxDiskUsagePercent:    cfg.LogVL.MaxDiskUsagePercent,
+			AuthUsername:           cfg.LogVL.Username, AuthPassword: cfg.LogVL.Password,
 			Ports: map[vlsup.Namespace]int{
-				vlsup.NamespaceHot:       cfg.LogVL.HotPort,
-				vlsup.NamespaceCold:      cfg.LogVL.ColdPort,
-				vlsup.NamespaceRehydrate: cfg.LogVL.RehydratePort,
+				vlsup.NamespaceHot: cfg.LogVL.HotPort,
 			},
-			MemoryAllowedBytes: map[vlsup.Namespace]int64{vlsup.NamespaceHot: cfg.LogVL.HotCacheBytes},
-			// 受管 VL 进程 Go 软内存上限（契约 §6.6 RSS 预算）。
+			NamespaceBudgets: budgetConfig.Namespaces,
+			// 新键已归并旧 cache/Go 软限制；RSS 另由唯一控制器执行真实准入。
 			MemoryLimitBytes: cfg.LogVL.MemoryLimitBytes,
+			// 官方推荐按可用内存百分比自适应；显式 hot_cache_bytes 时由
+			// EffectiveCacheBytes 走 allowedBytes，此处仅作默认路径。
+			MemoryAllowedPercent: cfg.LogVL.MemoryAllowedPercent,
+			// 流标签（2026-10-31）：默认开，取值由架构裁定（`_stream_fields=log_source_id,stream`）。
+			// 写入客户端一律经 supervisor.ClientFor 得到，所以开关必须传到这里。
+			DisableStreamFields: cfg.LogVL.DisableStreamFields,
 		})
 		if err != nil {
 			slog.Error("VictoriaLogs supervisor 创建失败", "error", err)
-		} else if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceHot); err != nil {
-			slog.Error("VictoriaLogs HOT 启动失败", "error", err)
 		} else {
-			if cfg.LogVL.StartCold {
-				if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceCold); err != nil {
-					slog.Error("VictoriaLogs COLD 启动失败", "error", err)
+			// 先装配所有固定地址，首次关闭或失败不影响后续运行期启动的业务接线。
+			if clients, clientErr := newManagedLogClients(vlSupervisor); clientErr != nil {
+				slog.Error("VictoriaLogs 固定客户端装配失败", "error", clientErr)
+			} else {
+				managedClients = clients
+				vlHTTPClient = clients.Main
+				rangeClient = clients.Ranges
+			}
+			if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceHot); err != nil {
+				slog.Error("VictoriaLogs 启动失败，保留运行期恢复接线", "error", err)
+			}
+			// 运行期自愈看护：过去只在启动路径做一次孤儿回收，VL 运行期崩溃（OOM、段损坏）后
+			// 账面只会被读状态时改成 FAILED，进程不会自己起来 ⇒ 采集/查询长期降级，直到人工
+			// 重启 Worker。这里启动守护循环：只重启「此前健康（稳定存活超过窗口）、现已退出」
+			// 的实例；指数退避 + 连续重启上限，达上限熔断并告警；与显式 Start/Stop 互斥。
+			//
+			// 默认开启的理由：判据保守（存活窗口 + 真实退出）、失败有上限（默认 5 次后停手）、
+			// 且不改变任何显式操作语义；关闭用 JIANMANAGER_DISABLE_LOG_VL_GUARDIAN=1
+			// （与 JIANMANAGER_DISABLE_JDK 同口径，避免为开关改配置结构）。
+			if os.Getenv("JIANMANAGER_DISABLE_LOG_VL_GUARDIAN") != "1" {
+				guardCtx, cancelGuard := context.WithCancel(context.Background())
+				cancelVLGuardian = cancelGuard
+				// 兜底：任何提前返回/致命退出路径都不会留下看护 goroutine。
+				defer cancelGuard()
+				if guardErr := vlSupervisor.StartGuardian(guardCtx, vlsup.GuardianOptions{}); guardErr != nil {
+					slog.Warn("VictoriaLogs 运行期看护启动失败（不影响既有行为）", "error", guardErr)
 				}
 			}
-			if cfg.LogVL.StartRehydrate {
-				if err = vlSupervisor.Start(context.Background(), vlsup.NamespaceRehydrate); err != nil {
-					slog.Error("VictoriaLogs Rehydrate 启动失败", "error", err)
-				}
-			}
-			// FR-476 / 契约 §6.6：周期采样 VL RSS 与数据盘预算并暴露降级。
-			go sampleLogBudget(vlSupervisor)
 			// 受管 VL 启动是异步的：接线 ingest/查询前先等 HOT 就绪，避免启动期写连接被拒
 			// 导致采集运行时创建失败（重启时序 / Runbook C）。
 			hotReadyCtx, cancelHotReady := context.WithTimeout(context.Background(), 15*time.Second)
@@ -693,33 +635,8 @@ func runWorker() {
 				slog.Warn("VictoriaLogs HOT 未在超时内就绪，采集/查询将保持降级", "error", waitErr)
 			}
 			cancelHotReady()
-			if vlClient, clientErr := vlSupervisor.ClientFor(vlsup.NamespaceHot); clientErr == nil {
-				vlHTTPClient = vlClient
-				hotRange, _ := vlrange.New(vlClient)
-				tiered := &vlrange.Tiered{Hot: hotRange}
-				for _, ns := range []vlsup.Namespace{vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
-					status, statusErr := vlSupervisor.Status(ns)
-					if statusErr != nil || status.State != vlsup.StateRunning {
-						continue
-					}
-					client, clientErr := vlSupervisor.ClientFor(ns)
-					if clientErr != nil {
-						continue
-					}
-					rangeClient, rangeErr := vlrange.New(client)
-					if rangeErr != nil {
-						continue
-					}
-					if ns == vlsup.NamespaceCold {
-						tiered.Cold = rangeClient
-						coldVLClient = client
-					} else {
-						tiered.Rehydrate = rangeClient
-						rehydrateVLClient = client
-					}
-				}
-				rangeClient = tiered
-				slog.Info("VictoriaLogs supervisor RangeClient 已接线", "baseURL", vlClient.BaseURL())
+			if managedClients != nil {
+				slog.Info("VictoriaLogs 三层固定客户端已装配；进程健康与 Catalog/投影就绪分别判定")
 			}
 		}
 	}
@@ -728,6 +645,10 @@ func runWorker() {
 			BaseURL:  cfg.LogQuery.VLURL,
 			Username: cfg.LogQuery.Username,
 			Password: cfg.LogQuery.Password,
+			// 外部回环 VL 同时兼任写入端（未配受管 binary 时 vlHTTPClient 就是它），
+			// 因此流标签开关必须与受管路径同口径，否则两种部署的写入形态会不一致。
+			StreamFields:        cfg.LogVL.StreamFields,
+			DisableStreamFields: cfg.LogVL.DisableStreamFields,
 		})
 		if vlErr != nil {
 			slog.Warn("VictoriaLogs 查询客户端配置无效，保持 LOG_UNSUPPORTED", "error", vlErr)
@@ -746,46 +667,90 @@ func runWorker() {
 			}
 		}
 	}
+	// VL 流标签生效形态（启动时打一次）。
+	//
+	// 为什么值得占一行启动日志：流是**分区键**，启用它会在 VL 里留下永久的 `_stream` 形态；
+	// 而切换点之前写入的历史数据 `_stream` 是空串，不会被自动迁移。运维将来一定会问
+	// 「为什么查询里有的日志没有 stream 标签？」，没有这条线索就只能当故障排查。
+	// 它只出现一次（不是每轮采集都打），不存在噪声问题。
+	logStreamFieldsState(cfg.LogVL.DisableStreamFields, cfg.LogVL.StreamFields)
+
+	logBudgetRoots := []string{root.Abs("var/log")}
+	if strings.TrimSpace(cfg.LogVL.DataRoot) != "" {
+		logBudgetRoots = append(logBudgetRoots, cfg.LogVL.DataRoot)
+	}
+	// 先获得有界采样，昂贵后台工作才有准入依据；之后只更新同一控制器。
+	externalHot := vlSupervisor == nil && vlHTTPClient != nil
+	resourceBudget.Update(sampleLogResources(vlSupervisor, logBudgetRoots, externalHot))
+	slog.Info("日志资源预算准入已装配；零全局上界只计量，Go 软限制不是 RSS 硬限",
+		"diskBudgetBytes", budgetConfig.DiskBytes, "rssBudgetBytes", budgetConfig.RSSBytes,
+		"namespaceBudgets", budgetConfig.Namespaces, "reservationBudgets", budgetConfig.Reservations)
+	go sampleLogBudget(logRuntimeCtx, vlSupervisor, resourceBudget, logBudgetRoots, externalHot)
 	var logJournal catalog.Journal
+	// logJournalCloser 负责关停时把 journal 最后一攒批记录落盘（nil = 纯内存形态，无可关闭）。
+	var logJournalCloser func() error
 	// 日志容量读数（磁盘使用率 / WAL 上限）的**唯一**构造点：采集侧容量门禁与
 	// 保留策略的磁盘触发共用同一份提供者。两者各采一次磁盘迟早会给出不同结论，
 	// 而现场只会表现成「有时降级有时不降级」，极难归因。
 	if notice := cfg.WALBudgetNotice(); notice != "" {
 		slog.Warn(notice)
 	}
-	// 静默源的未闭合缓冲超时（缺陷 B）：非法值在 config.Load 阶段已被拒，
-	// 此处是防御性兜底——退回默认而不是中断装配（这一层没有可返回的错误通道）。
-	unclosedTimeout, unclosedErr := cfg.IngestMultilineUnclosedTimeout()
-	if unclosedErr != nil {
-		slog.Warn("log_ingest.multiline_unclosed_timeout 无法解析，退回默认", "error", unclosedErr)
-		unclosedTimeout = ingest.DefaultMultilineUnclosedTimeout()
-	}
-	// 整节点解算（POST /nodes/:id/log-runtime/ingest/resolve-gaps 无 storageNamespace 路径）的
-	// 单次调用预算（键 log_ingest.resolve_gaps_max_sources / resolve_gaps_max_duration）。
-	// 2026-10-02 压测现场：该路径此前整段持采集轮锁且无上界，一次调用让整节点采集停摆 30 分钟。
-	// 锁纪律已在 ingest 侧修正；这条接线补上「有界」。非法值在 config.Load 阶段已被拒，
-	// 此处同 unclosedTimeout 做防御性兜底（本层没有可返回的错误通道）。
-	resolveGapsBudget, resolveGapsErr := cfg.IngestResolveGapsBudget()
-	if resolveGapsErr != nil {
-		slog.Warn("log_ingest.resolve_gaps_* 无法解析，退回默认预算", "error", resolveGapsErr)
-		resolveGapsBudget = nil
-	}
-	logCapacityProvider := ingest.DiskCapacityProvider(root.Base(), acquire.CapacityBudget{
-		MaxWALBytes: cfg.LogCapacity.MaxWALBytes, MaxGaps: cfg.LogCapacity.MaxGaps,
-		DegradedAtPercent: cfg.LogCapacity.DegradedAtPercent, PauseAtPercent: cfg.LogCapacity.PauseAtPercent,
-	})
+	// 未闭合多行缓冲超时与整节点解算预算都已随旧链路删除：
+	// 前者是旧 normalize 的多行缓冲概念（新采集器在 tailer 层用 multiline.timeout 处理），
+	// 后者服务的是旧链路的缺口解算（新架构没有缺口记账）。
+	// 磁盘使用率读数（保留策略的磁盘触发用）。
+	//
+	// 原由 `ingest.DiskCapacityProvider` 提供（返回整个旧链路的 CapacityBudget）。
+	// 保留策略只用到「用了百分之几」这一个数字，所以这里只提供那个数字——
+	// 为一个字段传一整个已废弃的模型会让两边的概念永久绑在一起。
+	logCapacityProvider := newDiskUsageProvider(root.Base())
 	// 保留策略驱动器（G6）。声明在这里（而非 lifecycle 块内）是因为它要在采集运行时
 	// 启动之后才有意义：搬运的是已经落库的分区，采集还没起来时搬没有意义。
 	var logRetentionDriver *retention.Driver
-	if store, journalErr := catalog.NewJSONLFileStore(root.Abs("var/log/catalog.journal.jsonl")); journalErr != nil {
-		slog.Error("日志 Catalog journal 打开失败，查询面保持无权威分区", "error", journalErr)
-	} else if journal, journalErr := catalog.NewJournalWithStore(store); journalErr != nil {
-		slog.Error("日志 Catalog journal 恢复失败，查询面保持无权威分区", "error", journalErr)
-	} else {
-		logJournal = journal
-		slog.Info("日志 Catalog journal 已恢复", "path", root.Abs("var/log/catalog.journal.jsonl"), "entries", journal.LastSeq())
+	// 归档对象自身的回收（FR-501 的最后一块）：把「归档目的地里的副本」按保留期清掉。
+	// 声明在驱动器之外，是因为它由两个独立开关共同决定（保留策略总开关 + 本项开关），
+	// 且必须与 /metrics 的读数出口共用同一个实例。
+	var logArchivePurge *retention.ArchiveObjectReclaimer
+	// 日志 Catalog journal：**纯内存**（2026-11-05 架构决策 ADR-102）。
+	//
+	// # 历史沿革（读到这里的人需要知道为什么绕了一圈）
+	//
+	// 2026-10-30 裁定纯内存，理由是「分区记录是可随时重建的派生状态」。
+	// 2026-11-02 简化投递路径后那前提失效（记录改由 `ensureCatalogPartition` 只在
+	// 投递成功时补建），于是 2026-11-05 早上改成 JSONL 落盘来保住历史天。
+	//
+	// 但落盘只保得住「写进去过的」：生产 journal 只写到 10-30，11-01/11-02 从没写入
+	// ⇒ 那两天照样查不到。于是又加了「启动期从 VL 反推 30 天」的第三层补救。
+	//
+	// **三层补救的共同病根是「我们维护了一份 VL 事实的副本」**。
+	//
+	// # 现在为什么又回到纯内存
+	//
+	// 分区目录改由 VictoriaLogs 的 `hits` 一次请求重建（实测 428 个 (源,天) / 206ms）。
+	// 副本被「直接问真源」取代后，落盘这层就没有存在理由了：
+	//
+	//   - 它维护的副本已被 hits 取代；
+	//   - 它顺带承担的「租约旁路文件」已明确降级为可用性辅助（视图 TTL 到期即失效，
+	//     重启后旧视图 ID 本就不该复活）；
+	//   - `ReplayJournal` 只读内存 entries，不依赖落盘。
+	//
+	// 代价：重启后约 30s 窗口内（hits 重建启动前）历史天报「无分区记录」。
+	// 这是**短暂降级**，换掉了「副本可能长期与真源不一致」这个更危险的风险。
+	logJournal, logJournalCloser = openLogCatalogJournal(cfg, root, logJournal)
+	if logJournalCloser != nil {
+		defer func() {
+			if closeErr := logJournalCloser(); closeErr != nil {
+				slog.Warn("日志 Catalog journal 退出落盘失败（最后一批分区记录可能未持久）", "error", closeErr)
+			}
+		}()
 	}
 	logStack := logassemble.Build(logJournal, rangeClient, version.Version)
+	logStack.LogRPC.SetResourceBudget(resourceBudget)
+	defer func() {
+		if closeErr := logStack.LogRPC.Close(); closeErr != nil {
+			slog.Warn("日志查询视图退出清理失败", "error", closeErr)
+		}
+	}()
 	logStack.LogRPC.SetRuntimeCatalog(logStack.Catalog)
 	// FR-477：先完成 Catalog/journal 逻辑恢复，再开放 Log RPC；物理目录残留
 	// 不能替代 owner/generation 权威。不可查询范围保持 recovery-required，
@@ -795,65 +760,194 @@ func runWorker() {
 			slog.Warn("日志分区启动恢复未完成，查询范围降级", "partition", key.String(), "reasons", recovery.PartialReasons)
 		}
 	}
-	if vlHTTPClient != nil && coldVLClient != nil && vlSupervisor != nil {
+	// 投影 query_generation 与权威 generation 的一致性自愈（2026-10-21 生产既成损害）。
+	//
+	// 为什么要做：`resetNamespaceConflictCounts` 的旧实现用无 CAS 的 AppendJournal 做派生
+	// 计数对齐，把 Generation 自增 1 却不动 PublishedProjection.QueryGeneration，造出一批
+	// `generation=2 ∧ query_generation=1` 的分区（生产 inst:320 实测 28 个，覆盖 09-20～10-19
+	// 的活跃日期）。这类分区**永远无法再发布**（`PublishProjection` 一进门就
+	// `projection and authority do not match`），采集侧的补投/重建因此恒失败。
+	//
+	// 为什么放在这里：必须在 journal 逻辑恢复完成后（否则读到的是中间态）、在采集/查询
+	// 对外服务之前（否则首轮发布仍会撞前置校验）。修复本身是带 CAS 的单条提交，幂等，
+	// 并发下失败即放弃、下轮再来 —— 不阻塞启动，也不假装成功。
+	if repaired, failed, needsManual := repairProjectionQueryGenerations(logStack.Catalog); repaired > 0 || failed > 0 || len(needsManual) > 0 {
+		if repaired > 0 || failed > 0 {
+			slog.Warn("投影代次一致性自愈完成（历史缺陷的既成损害修复）",
+				"repaired", repaired, "failed", failed)
+		}
+		// 需人工处置的分区**单独**一条 WARN（2026-10-21 复审修正）：这些分区既没被修好、
+		// 也没返回 error，若与上面那条汇总混在一起或干脆不报，运维看到的就是「自愈完成」，
+		// 而实际上它们永久不可发布（PublishProjection 恒拒），且没有任何别的入口能发现。
+		if len(needsManual) > 0 {
+			sample := needsManual
+			if len(sample) > maxNeedsManualPartitionsLogged {
+				sample = sample[:maxNeedsManualPartitionsLogged]
+			}
+			slog.Warn("投影代次一致性自愈：存在需人工处置的分区（未自动修复，也不会自愈）",
+				"count", len(needsManual), "partitions", sample,
+				"truncated", len(needsManual) > len(sample))
+		}
+	}
+	// 已归档但热层尚未回收的分区（FR-501 回收闭环的可观测面）。
+	//
+	// 为什么会存在这种状态：权威态先改 ARCHIVED、再删热层。若进程恰在两步之间退出，
+	// 就会留下一份「数据安全、盘没省下来」的残留副本。这是**安全方向**的不一致
+	// （数据多一份而不是少一份），但必须有人知道——否则它永远不会被清理。
+	// 这里只报出来，不自动重试：自动删除必须重新过三闸与 Catalog 复核，
+	// 由保留策略的下一轮驱动承担（那是唯一持有完整判据的地方）。
+	if pending := logStack.Catalog.PendingArchiveReclaims(); len(pending) > 0 {
+		sample := pending
+		if len(sample) > maxNeedsManualPartitionsLogged {
+			sample = sample[:maxNeedsManualPartitionsLogged]
+		}
+		keys := make([]string, 0, len(sample))
+		for _, key := range sample {
+			keys = append(keys, key.String())
+		}
+		slog.Warn("存在已归档但热层未回收的分区（数据安全、磁盘未释放；下一轮保留策略会按三闸重试）",
+			"count", len(pending), "partitions", keys, "truncated", len(pending) > len(sample))
+	}
+	if vlHTTPClient != nil && vlSupervisor != nil {
 		hotCfg, hotErr := vlSupervisor.Config(vlsup.NamespaceHot)
-		coldCfg, coldErr := vlSupervisor.Config(vlsup.NamespaceCold)
-		if hotErr != nil || coldErr != nil {
-			slog.Error("日志 Lifecycle namespace 配置不可用", "hotError", hotErr, "coldError", coldErr)
-		} else if physical, lifecycleErr := lifecycle.NewVLPartitionOps(vlHTTPClient, coldVLClient,
-			hotCfg.StorageDataPath, coldCfg.StorageDataPath, logStack.Catalog); lifecycleErr != nil {
+		if hotErr != nil {
+			slog.Error("日志 Lifecycle namespace 配置不可用", "error", hotErr)
+		} else if physical, lifecycleErr := lifecycle.NewVLPartitionOps(vlHTTPClient,
+			hotCfg.StorageDataPath, logStack.Catalog); lifecycleErr != nil {
 			slog.Error("日志 Lifecycle 物理适配器创建失败", "error", lifecycleErr)
 		} else {
-			dayManager := lifecycle.NewDayManager(logStack.Catalog, physical.Ops(), physical)
-			// 保留策略驱动器（G6）：把 catalog 的日分区按「年龄 + 磁盘水位取先到」搬到冷层。
-			// 没有它，HOT 永不自动转 COLD——plan/executor/Mover 都对，但没人周期性把它们串起来。
+			physical.ResourceBudget = resourceBudget
+			// 2026-10-29：不再构造 DayManager / CanonicalDayInput —— 它们只服务冷层搬迁，
+			// 而搬迁已随冷热分层一起删除（见 lifecycle 包注释）。
+			// 保留策略驱动器（G6）：到期分区要么导出独立副本、要么如实落 blocked 保留原物。
+			//
+			// 2026-10-29：冷热双层已废除 ⇒ **不再装配 mover**（第三个参数传 nil）。
+			// `retention.Policy.PlanArchive` 的动作序会自动落到：
+			//   配了导出 → archive_copy；否则 → blocked（保留原物，不删）。
+			// 这正是单 VL 想要的语义，不需要改 Policy 本身。
 			if retentionPolicy, policyErr := cfg.RetentionPolicy(); policyErr != nil {
-				slog.Error("日志保留策略非法，冷热分层驱动未启用", "error", policyErr)
+				slog.Error("日志保留策略非法，保留驱动未启用", "error", policyErr)
 			} else if retentionPolicy.Enabled {
 				logRetentionDriver = retention.NewDriver(retentionPolicy,
 					newCatalogPartitionLister(logStack.Catalog),
-					newDayManagerMover(dayManager, logStack.Catalog),
+					nil,
 					newDiskPercentReader(logCapacityProvider))
+				// 导出归档（FR-501，硬规则的次选路径）：搬不了冷层时导出为独立副本。
+				//
+				// 默认关闭（`log_retention.archive_copy.enabled=false`）。这里**不做**任何
+				// 默认兜底目录：没有目的地就不装出口，计划阶段于是不会产出 archive_copy，
+				// 到期分区继续落 blocked（保留原物）——与本次改动之前的行为完全一致。
+				if retentionPolicy.ArchiveCopy.Enabled {
+					// 目的地的三种形态（local / s3 / minio）都在 newArchiveCopyProvider 里构造，
+					// 失败一律**只降级导出器**、不让 Worker 启动失败：拿不到目的地时正确的行为
+					// 是「不出副本、保留原物」，而不是「整个节点起不来」。方向与本次改动之前
+					// 「开关开了但没目的地」那条分支完全一致（blocked + 保留原物）。
+					provider, providerErr := newArchiveCopyProvider(cfg.LogRetention.ArchiveCopy)
+					if providerErr != nil {
+						slog.Error("导出归档目的地构造失败，归档出口未装配（到期分区将继续保留原物）",
+							"provider", cfg.LogRetention.ArchiveCopy.ArchiveProviderKind(), "error", providerErr)
+					} else {
+						// 导出器住在 logs/archive（manifest/Provider 契约的家），
+						// 但「冻结快照怎么取、能读哪里」属于物理布局，仍由 lifecycle 提供，
+						// 在这里注入——依赖方向因此保持单向：lifecycle 不认识 archive。
+						exporter := archive.NewArchiveCopyExporter(logStack.Catalog, physical.ExportSnapshot, provider)
+						logRetentionDriver.Executor().SetArchiveExporter(retention.ArchiveExporterFunc(
+							func(ctx context.Context, namespace, day string) (retention.ArchiveExportResult, error) {
+								sum, err := exporter.Export(ctx, namespace, day)
+								if err != nil {
+									return retention.ArchiveExportResult{}, err
+								}
+								return retention.ArchiveExportResult{
+									ObjectCount:      sum.ObjectCount,
+									SourceBytes:      sum.SourceBytes,
+									StoredBytes:      sum.StoredBytes,
+									Location:         sum.Location,
+									ProviderKind:     sum.ProviderKind,
+									ObjectPrefix:     sum.ObjectPrefix,
+									ManifestChecksum: sum.ManifestChecksum,
+									CoverageComplete: sum.CoverageComplete,
+								}, nil
+							}))
+						// 「已归档」权威态迁移出口 + 热层回收出口（FR-501 回收热层闭环）。
+						//
+						// 三个出口必须成套装配才有回收：导出证明「副本可信」、authority 证明
+						// 「Catalog 已承认正本在归档」、remover 才允许真的删。缺 authority 时
+						// 执行器会拒绝删除（否则查询面会指向一个不存在的目录），这是硬判据。
+						//
+						// 三闸（discard + sweep.vl_sweep + log_vl.delete_enabled）仍然默认全关：
+						// 装配这几个出口**不等于**允许删，删不删由 Policy.DeleteGatesOpen 决定。
+						logRetentionDriver.Executor().SetArchiveAuthority(newCatalogArchiveAuthority(logStack.Catalog))
+						logRetentionDriver.Executor().SetRemover(retention.RemoverFunc(physical.RemoveArchivedPartition))
+						if ok, reason := logRetentionDriver.Executor().ArchiveReadyForReclaim(); !ok {
+							slog.Info("日志归档热层回收未就绪（导出仍会执行，原物保留）", "reason", reason)
+						} else {
+							slog.Warn("日志归档热层回收已就绪：三闸全开时将删除已归档分区的热层数据",
+								"provider", provider.Kind())
+						}
+						// 日志里只打 kind 与「本地根目录」；s3/minio 的 endpoint/bucket 也不打
+						// 是刻意的：现场日志常被导出传阅，少一个泄漏面。
+						slog.Info("日志导出归档已装配（搬不了冷层时导出为独立副本；回收热层仍需删除三闸全开）",
+							"provider", provider.Kind(), "root", strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root))
+					}
+				}
+				// 归档对象自身的回收（FR-501）：把归档目的地里**已过保留期**的副本删掉。
+				//
+				// 装配条件是「本项生效 **且** 有归档根」，**不**要求 archive_copy.enabled：
+				// 「停止写新归档，但仍要清理旧归档」是一个真实且合理的运维动作
+				// （例如归档盘快满了、或已经决定不再新增归档）。若把它绑在导出开关上，
+				// 那个动作就只能靠「继续导出 + 同时清理」来实现——反而多写数据。
+				// 注意**反方向不成立**：开了导出不等于授权清除（删除比写入危险得多），
+				// 清除仍要过同一套三闸。
+				//
+				// 三个出口必须成套：lister 提供候选、authority 提供「已清除」权威态、
+				// store 才是真正删除对象的那一步。任一缺失都让 reclaimer 为空，
+				// 于是启动日志会明确写出「未装配」——而不是一个永远不动的计数器。
+				if retentionPolicy.ArchiveObjectRetention.Active() {
+					// 目的地与导出侧**同源**：用同一个构造器（newArchiveCopyProvider）
+					// 按 `archive_copy.provider` 选 local / s3 / minio。
+					//
+					// 此前这里硬编码 `archive.NewLocalArchive(root)`，于是配了 s3 导出
+					// 的人在回收侧拿不到 provider，只能如实拒绝——「导出已能写 s3、却永远
+					// 不会清理 s3」就是这么来的。
+					//
+					// 注意：这里**不复用**导出器那个 provider 实例（两者不同 goroutine，
+					// 各自持有自己的连接状态更安全），但必须是**同一个目的地配置**。
+					provider, providerErr := newArchiveCopyProvider(cfg.LogRetention.ArchiveCopy)
+					if providerErr != nil {
+						slog.Warn("归档对象回收目的地构造失败，回收未装配（归档副本将继续累积）",
+							"provider", cfg.LogRetention.ArchiveCopy.ArchiveProviderKind(), "error", providerErr)
+					} else {
+						// root 只对本地目录有意义（清空目录骨架）；对象存储传空串。
+						root := ""
+						if provider.Kind() == archive.KindLocal {
+							root = strings.TrimSpace(cfg.LogRetention.ArchiveCopy.Root)
+						}
+						logArchivePurge = newArchiveObjectReclaimer(retentionPolicy, logStack.Catalog, provider, root)
+						if logArchivePurge == nil {
+							slog.Warn("归档对象回收已启用但出口装配失败（将在 /metrics 与下方日志中体现为零行动）",
+								"provider", provider.Kind())
+						} else if ok, reason := logArchivePurge.Ready(); !ok {
+							slog.Warn("归档对象回收出口不完整，本轮不会删除任何对象", "reason", reason)
+						} else if open, gateReason := retentionPolicy.DeleteGatesOpen(); !open {
+							slog.Info("归档对象回收已装配但删除三闸未全开（一个对象都不会删）", "reason", gateReason)
+						} else {
+							slog.Warn("归档对象回收已就绪：三闸全开时将按保留期删除归档目的地里的副本",
+								"provider", provider.Kind(), "root", root,
+								"retention", retentionPolicy.ArchiveObjectRetention.Retention.String(),
+								"archiveCopyEnabled", retentionPolicy.ArchiveCopy.Enabled)
+						}
+					}
+				}
 				slog.Info("日志保留策略已装配（默认只搬运不删除）", retentionPolicyLogFields(retentionPolicy)...)
 			}
-			resumedDays := make(map[string]bool)
-			for _, key := range logStack.Catalog.Keys() {
-				rec, ok := logStack.Catalog.Get(key)
-				if !ok || rec.MigrationState == "" || rec.MigrationState == catalog.StateCleaned ||
-					!rec.TargetOwner.Valid() || rec.TargetDirID == "" || rec.MigrationFromDirID == "" {
-					continue
-				}
-				if resumedDays[key.UTCDay] {
-					continue
-				}
-				resumedDays[key.UTCDay] = true
-				if resumeErr := dayManager.Resume(key.UTCDay); resumeErr != nil {
-					slog.Error("日志分区迁移启动恢复失败", "partition", key.String(), "error", resumeErr)
-				}
-			}
+			// 2026-10-29：分区下沉（hot→cold）能力已随冷热双层一起删除。
+			// 这里**显式**装一个明确拒绝的出口，而不是不装配：
+			// 不装配时 RPC 返回「log partition migration is not configured」，
+			// 运维会以为是漏配了某项；装配一个说出真实原因的拒绝，才能让人知道
+			// 「这个动作在新架构里不存在了」，而不是去翻配置找开关。
 			logStack.LogRPC.SetPartitionMigrator(grpcsvc.PartitionMigrateFunc(func(ctx context.Context, namespace, day, target string) error {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if target != "cold" {
-					return fmt.Errorf("unsupported lifecycle target %s", target)
-				}
-				key := catalog.PartitionKey{StorageNamespace: namespace, UTCDay: day}
-				rec, ok := logStack.Catalog.Get(key)
-				if !ok {
-					return fmt.Errorf("log partition %s is not in Catalog", key)
-				}
-				if rec.Owner == catalog.OwnerCold {
-					return nil
-				}
-				if rec.MigrationState != "" && rec.MigrationState != catalog.StateCleaned && rec.TargetOwner.Valid() {
-					return dayManager.Resume(day)
-				}
-				parsed, err := time.Parse("2006-01-02", day)
-				if err != nil {
-					return err
-				}
-				return dayManager.Start(day, catalog.OwnerCold, parsed.Format("20060102"))
+				return fmt.Errorf("分区下沉已废弃：单个 VictoriaLogs 实例既是热层也是长期层，"+
+					"没有第二层可搬（storage_namespace=%s utc_day=%s target_tier=%s）", namespace, day, target)
 			}))
 		}
 	}
@@ -876,7 +970,6 @@ func runWorker() {
 	// FR-478：归档 Registry/Rehydrate 进入同一 Worker 查询面。凭据只来自
 	// 环境覆盖的配置对象，不写入日志或诊断响应。
 	var archiveRegistry *archive.Registry
-	var rehydrateManager *archive.RehydrateManager
 	if cfg.LogArchive.Enabled {
 		var provider archive.Provider
 		archiveCfg := cfg.LogArchive
@@ -913,264 +1006,155 @@ func runWorker() {
 			rehydrate := archive.NewRehydrateManager(archive.RehydrateOptions{
 				DefaultTimeout: 5 * time.Minute, DefaultLeaseTTL: 5 * time.Minute,
 			})
-			rehydrateManager = rehydrate
+			// rehydrate 实例直接交给 query backend（下方 backend）；旧链路的 RecoveryHold 回调已删。
 			backend := archive.NewQueryBackend(registry, rehydrate)
-			if rehydrateVLClient != nil {
-				backend.SetPublisher(&archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: rehydrateVLClient})
+			backend.SetResourceBudget(archive.RehydrateResourceBudget{
+				Admit: func(ctx context.Context) error {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					return resourceBudget.Admit(vlsup.WorkBackground)
+				},
+				ReserveStaging: func(ctx context.Context, bytes int64) (func(), error) {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+					return resourceBudget.Reserve(vlsup.ReservationStaging, bytes)
+				},
+			})
+			if vlHTTPClient != nil {
+				backend.SetPublisher(readyRehydratePublisher{clients: managedClients,
+					// Retention 与主实例同源：传进去让 rehydrate 能当场认出「这个分区日已超出
+					// 目标 VL 保留期、注定写不进去」，而不是写一遍 200、verify 查不到、再报一个
+					// 看似瞬时的失败。
+					//
+					// 2026-10-29：回灌目标从 Rehydrate 层改为主实例 —— 已没有第二个实例，
+					// 而归档还原的语义是「把归档副本重新变成可查」，落在主实例上正是它该做的。
+					publisher: &archive.VLRehydratePublisher{Catalog: logStack.Catalog, VL: vlHTTPClient, Retention: resolveHotRetention(cfg)}})
 			}
 			logStack.SetArchiveBackend(backend)
 			slog.Info("日志归档运行时已装配", "provider", provider.Kind())
 		}
 	}
-	// FR-474：将配置化 FileTailer/STDIO/ArchiveImporter 接入常驻 Worker。
-	// 未配置 source 时不猜测实例目录；实例生命周期可通过同一 Manager 动态登记。
-	var logIngest *ingest.Manager
-	registeredLogInstanceIDs := manager.ListInstances
-	if len(cfg.LogSources) > 0 || vlHTTPClient != nil {
-		sources := make([]ingest.SourceConfig, 0, len(cfg.LogSources))
-		for _, source := range cfg.LogSources {
-			sources = append(sources, ingest.SourceConfig{
-				LogSourceID: source.LogSourceID, SourceGeneration: source.SourceGeneration,
-				Path: source.Path, Mode: pipeline.AcquireMode(source.Mode), RotateTo: source.RotateTo, ArchiveGlob: source.ArchiveGlob,
-				Stream: source.Stream, SourceCategory: logtypes.Source(source.SourceCategory),
-				StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
-			})
-		}
-		// 启动增量对账（FR-497）：配置键 log_reconcile.*，非法/越界值经 ReconcileConfig()
-		// 收敛为 ingest 的归一化默认（默认启用）。
-		reconcileCfg := cfg.LogReconcile.ReconcileConfig()
-		// 采集索引（FR-496）：历史投递批次裁剪（log_index.batch_prune.*）与持久化提交单元
-		// 预算（log_index.persist.*）分别经 LogIndexConfig 的映射收敛为归一化默认（裁剪默认
-		// 开启；切分默认每提交单元 512 行、目标 40ms——真源是 stateindex.DefaultCommitBudget）。
-		persistYieldCfg, persistHotBudgetCfg, persistPriorityStreak := cfg.PersistGateTuning()
-		verifyBudgetCfg, verifyMaxQueriesPerChunk := cfg.VerifyQueryTuning()
-		// 每源每轮校验预算与可见性错开（键 log_index.verify.round_budget / visibility_floor）：
-		// 回退修复 ② —— 该预算在 f237ae32 引入时只有注释没有接线，默认 1.5s 在
-		// "VL 可见性地板 ~1.02s"下整轮被用尽 ⇒ 其余源每轮 defer（2026-10-03 实测）。
-		verifyRoundBudgetCfg, verifyVisibilityFloorCfg := cfg.VerifyBudgetTuning()
-		// 校验预算随事件数放大（2026-10-10 生产活锁修复，改动 B；键
-		// log_index.verify.chunk_estimate / chunk_budget_max）：空/非法 = 不放大（保守默认，
-		// 与修复前逐字一致）⇒ 不影响任何现有源。
-		verifyChunkEstimatesCfg := cfg.VerifyChunkEstimatesTuning()
-		indexPruneCfg := cfg.LogIndex.IndexPrune()
-		indexCommitCfg := cfg.LogIndex.CommitBudget()
-		newIngest := func() (*ingest.Manager, error) {
-			return ingest.New(ingest.Options{
-				Root: root.Base(), VL: vlHTTPClient, Catalog: logStack.Catalog,
-				Journal: logStack.Catalog.Journal(), Archive: archiveRegistry, Sources: sources,
-				// 采集归一化的节点级默认时区（缺陷 C，键 log_ingest.time_zone）：源未显式配置时
-				// 生效，空串 = UTC（零配置零行为变化）。中文 locale 的 JVM 与 Worker 同机部署时
-				// 配 local 即可对齐本地时间；非法值已在 config.Load 阶段启动即拒。
-				DefaultTimeZone: cfg.IngestDefaultTimeZone(),
-				// 采集归一化的节点级默认字符集（复审 P2-3，键 log_ingest.charset）：源未显式配置时
-				// 生效，空串 = auto（零配置零行为变化）。GBK 日志源配 gbk 可免去自动判定的启发式
-				// 不确定性；非法值已在 config.Load 阶段启动即拒。
-				DefaultCharset: cfg.IngestDefaultCharset(),
-				// 节点采样策略透传每源管线；零值关闭，恢复重放不再重复采样。
-				Sampling:         cfg.SamplingPolicy(),
-				CapacityProvider: logCapacityProvider,
-				// 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天。
-				Reconcile: &reconcileCfg,
-				// 索引有界化（FR-496 §2.4）：历史投递批次按 reclaim 水位裁剪，默认开启。
-				IndexPrune: &indexPruneCfg,
-				// 索引持久化切分（FR-498 P0）：按行数 + 耗时双上界切成多个提交单元。
-				IndexCommit: &indexCommitCfg,
-				// 持久化门公平性（键 log_index.persist.cycle_yield / priority_streak）：
-				// 让路窗口决定「恢复链 ↔ 采集轮」的权衡，老化阈值决定优先权的反饿保护。
-				PersistYield:          persistYieldCfg,
-				PersistHotBudget:      persistHotBudgetCfg,
-				PersistPriorityStreak: persistPriorityStreak,
-				// 校验/对账查询的全局天花板（键 log_index.verify.*）：天花板语义，正常路径零等待。
-				VerifyBudget:             verifyBudgetCfg,
-				VerifyMaxQueriesPerChunk: verifyMaxQueriesPerChunk,
-				// 每源每轮校验预算与可见性错开（回退修复 ②，同上）。
-				VerifyRoundBudget:     verifyRoundBudgetCfg,
-				VerifyVisibilityFloor: verifyVisibilityFloorCfg,
-				// 预算随事件数放大（改动 B，同上）：只在 chunk_estimate 显式给出正数时生效。
-				VerifyChunkEstimates: verifyChunkEstimatesCfg,
-				// 单源 WAL **真实积压**上限（键 log_capacity.max_wal_entries / max_wal_bytes）：
-				// 直接下发到 WAL.SetLimits。此前 SetLimits 无任何调用点（现场只剩硬编码
-				// 16MiB/5000），而配置里的 max_wal_bytes 被接到了只增不减的累计量上。
-				// 恢复期独立配额（方案②）：恢复中/排空宽限内按 factor 倍判（仍有界 ✓），
-				// 宽限过期回归常规闸 ✓。旋钮键 log_capacity.recovery_quota_factor /
-				// recovery_drain_grace（默认 4 / 30m ✓）。
-				RecoveryQuotaFactor: func() float64 { f, _ := cfg.RecoveryQuotaTuning(); return f }(),
-				RecoveryDrainGrace:  func() time.Duration { _, g := cfg.RecoveryQuotaTuning(); return g }(),
-				WALLimits: &acquire.WALLimits{
-					MaxEntries: cfg.LogCapacity.MaxWALEntries,
-					// 配置 0 = 字节维度**不限**（见 Config.WALBudgetNotice）⇒ 传负值哨兵，
-					// 绝不能让它退化成 acquire 包的硬编码 16 MiB（2026-10-03 现场 16 MiB 之谜 ✗）。
-					MaxBytes: cfg.EffectiveMaxWALBytes(),
-				},
-				// 回放限速（键 log_capacity.max_replay_events_per_drain）：恢复期单轮外发上限，
-				// 把「恢复瞬间」从一次流量尖峰摊成若干轮，不丢数据。
-				MaxReplayEventsPerDrain: cfg.LogCapacity.MaxReplayEvents,
-				// 静默源的未闭合缓冲超时（键 log_ingest.multiline_unclosed_timeout，默认 5s）：
-				// 到期未闭合即以显式标记强制闭合并推进 durable，否则悬挂区间会挡住轮转恢复。
-				MultilineUnclosedTimeout: unclosedTimeout,
-				// 整节点解算单次调用的预算（键 log_ingest.resolve_gaps_*）：源数 + 墙钟双上界，
-				// 超出即分片返回（不伪装成功），见 ingest.ResolveGapsBudget。
-				ResolveGapsBudget: resolveGapsBudget,
-				// 对账/重发的外部条件与切片（键 log_reconcile.vl_ready_* / replay_*）：
-				// 就绪探针把「VL 未就绪时的必然失败重发」挡在门外；切片把整窗重发变成有界可续。
-				ReplayTuning: func() *ingest.ReplayTuning {
-					tuning := cfg.ReconcileReplayTuning()
-					return &tuning
-				}(),
-				// 兜底环每轮容量（键 log_index.resume_batch_per_round；1 = 每轮一个 = 退回应激行为 ✓）。
-				ResumeBatchPerRound: cfg.ResumeBatchTuning(),
-				// 窗口化背压阈值（键 log_index.resume_backpressure_streak；默认 3 ✓，置 1 = 单轮判定 ✓）。
-				SweepBackpressureStreak: cfg.ResumeBackpressureStreakTuning(),
-				// 段读聚合的让路与轮内预算（键 log_index.scan.*）：现场点名 readSegment 是每轮重活
-				// 的 I/O 大头且"既不让路也无上界" ✗ ⇒ 由配置面驱动（默认 8192 行 / 1ms / 2s ✓）。
-				Scan: func() *ingest.ScanTuning {
-					tuning := cfg.ScanTuning()
-					return &tuning
-				}(),
-				// 滚动回收单轮上界（键 log_index.reclaim_roll.*；#64）：现场可热调，默认 32 步 / 1s ✓。
-				ReclaimRoll: cfg.ReclaimRollTuning(),
-				// 启动恢复放到后台：New 立刻返回 ⇒ 反向隧道/WS/HTTP 立即可达（2026-10-02 事故：
-				// 恢复链与规模成正比且阻塞 New，worker 20–30 分钟不监听）。恢复进度经就绪面
-				// （startup_recovery_in_progress / _failed）如实上报，不放宽任何就绪判据。
-				StartupRecoveryBackground: true,
-				RecoveryHold: func(source ingest.SourceConfig, _ string) (bool, string) {
-					if rehydrateManager == nil {
-						return false, ""
-					}
-					generation := uint64(1)
-					if rec, ok := logStack.Catalog.Get(catalog.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay}); ok && rec.Generation > 0 {
-						generation = rec.Generation
-					}
-					key := archive.PartitionKey{StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay, Generation: generation}
-					if !rehydrateManager.CanCleanup(key) {
-						return true, "active archive rehydrate or query-view lease"
-					}
-					return false, ""
-				},
-				VLRoute: func(source ingest.SourceConfig) (*vlsup.Client, bool, error) {
-					target, ok := logStack.Catalog.RouteWrite(catalog.PartitionKey{
-						StorageNamespace: source.StorageNamespace, UTCDay: source.UTCDay,
-					}, source.UTCDay)
-					if !ok {
-						return vlHTTPClient, false, nil
-					}
-					switch target.Owner {
-					case catalog.OwnerHot:
-						return vlHTTPClient, target.Frozen, nil
-					case catalog.OwnerCold:
-						return coldVLClient, target.Frozen, nil
-					default:
-						return nil, target.Frozen, fmt.Errorf("ingest: Catalog write owner %s requires an explicit recovery path", target.Owner)
-					}
-				},
-			})
-		}
-		// 采集运行时创建失败不再一次性放弃（2026-09-28 生产教训：一次瞬时失败即让整个采集
-		// 静默停摆——无重试、无告警，实例在跑而日志不再入库）。带退避重试，使 VL 就绪延迟或
-		// 瞬时故障恢复后能自愈；仍失败则打出显式 ERROR（供日志告警规则捕获）。
-		const (
-			ingestCreateAttempts   = 6
-			ingestCreateRetryDelay = 20 * time.Second
-		)
-		var manager *ingest.Manager
-		var ingestErr error
-		for attempt := 1; attempt <= ingestCreateAttempts; attempt++ {
-			manager, ingestErr = newIngest()
-			if ingestErr == nil {
-				break
-			}
-			slog.Error("日志采集运行时创建失败（将重试）",
-				"attempt", attempt, "maxAttempts", ingestCreateAttempts, "error", ingestErr)
-			if attempt < ingestCreateAttempts {
-				time.Sleep(time.Duration(attempt) * ingestCreateRetryDelay)
-			}
-		}
-		if ingestErr != nil {
-			slog.Error("日志采集运行时创建失败：已达重试上限，本次启动不再采集（需告警介入）", "error", ingestErr)
-			register.SetLogIngestHealth(false, ingestErr.Error())
+	// 新采集器（tailer/logtail）。旧链路已删除，不存在「两者互斥」的问题。
+	var logTailRunner *logtail.Runner
+	// FR-503/504 的采集策略（含定时归档导入扫描周期）已随旧链路删除：
+	// 新采集器不读这些策略——路径来自 CP 下发的实例登记，gzip 由 `log_tailer.include_gzip` 决定。
+	// 新采集器（tailer/logtail，阶段二并行接入）：开关打开时走它，**不构造** ingest.Manager。
+	//
+	// # 为何必须互斥
+	//
+	// 两套采集器会读同一批文件（旧链路按 log_sources / 登记源读，新采集器按 glob 读），
+	// 同一行日志进 VL 两次。event_id 相同不保证 VL 去重（那只是我们的内容指纹字段），
+	// 所以必须从装配层就保证只开一套。
+	if cfg.LogTailer.Enabled {
+		scanIv, progressIv, ivErr := cfg.LogTailerIntervals()
+		if ivErr != nil {
+			// 已在 config.Load 拦过一次；这里兜底不静默。
+			slog.Error("log_tailer 采集周期非法，新采集器不启动", "error", ivErr)
+			register.SetLogIngestHealth(false, ivErr.Error())
 		} else {
-			logIngest = manager
-			register.SetLogIngestHealth(true, "")
-			workerServer.SetInstanceLogCollector(manager)
-			logStack.LogRPC.SetCutoverReadiness(grpcsvc.CutoverReadinessFunc(func() (bool, time.Time, []string) {
-				readiness := manager.PrepareCutoverReadiness()
-				for _, id := range manager.MissingInstanceBindings(registeredLogInstanceIDs()) {
-					readiness.LedgerReady = false
-					readiness.Reasons = append(readiness.Reasons, "instance:"+id+":acquisition_not_bound")
-				}
-				return readiness.LedgerReady, readiness.CutoffTime, readiness.Reasons
-			}))
-			logStack.LogRPC.SetIngestGapResolver(manager)
-			// 手动归档导入入口（④）：把「扫描并导入待导入 gz」接到 gRPC 上，
-			// 供采集轮停摆（源被暂停/停止）时由运维显式触发；操作人经 metadata 携带。
-			logStack.LogRPC.SetIngestArchiveImporter(manager)
-			// 身份冲突人工清空入口：运维审阅后确认「冲突已被正确处理（保留先到者）」，
-			// 清空诊断记录以消掉日志页的质量标记（duplicate_quality=conflict / stats_quality=partial）。
-			// 操作人与理由都经 metadata 携带（取不到即拒），凭据随该源 payload 落库。
-			logStack.LogRPC.SetIngestIdentityConflictClearer(grpcsvc.IngestIdentityConflictClearerFunc(
-				func(ctx context.Context, sourceKey, operator, reason string) (grpcsvc.IdentityConflictClearOutcome, error) {
-					result, err := manager.ClearIdentityConflicts(ctx, sourceKey, operator, reason)
-					if err != nil {
-						return grpcsvc.IdentityConflictClearOutcome{}, err
-					}
-					return grpcsvc.IdentityConflictClearOutcome{
-						ClearedCount:   result.ClearedCount,
-						ClearedSources: result.ClearedSources,
-						SkippedSources: result.SkippedSources,
-					}, nil
-				}))
-			// 「已放弃位置」查询面标记（缺口 B 批2）：把 ingest 的放弃凭据接到搜索响应上，
-			// 使下游能区分「本来就没有」与「已被确认永久丢失」——不再静默跳过。
-			// 跨包适配放在这里（apps 同时依赖 ingest 与 grpcsvc），服务层不反向依赖 ingest。
-			logStack.LogRPC.SetIngestAbandonmentProvider(grpcsvc.IngestAbandonmentFunc(
-				func(targetIDs []string) []grpcsvc.IngestPositionGap {
-					ranges := manager.AbandonedRanges(targetIDs)
-					if len(ranges) == 0 {
-						return nil
-					}
-					out := make([]grpcsvc.IngestPositionGap, 0, len(ranges))
-					for _, r := range ranges {
-						out = append(out, grpcsvc.IngestPositionGap{
-							StorageNamespace: r.StorageNamespace, From: r.From, To: r.To,
-							LogSourceID: r.LogSourceID, SourceGeneration: r.SourceGeneration,
-							ReasonCode: r.ReasonCode, Operator: r.Operator, AtUTC: r.AtUTC,
-						})
-					}
-					return out
-				}))
-			ingestCtx, cancelIngest := context.WithCancel(context.Background())
-			defer cancelIngest()
-			defer func() {
-				if stopErr := manager.Stop(); stopErr != nil {
-					slog.Error("日志采集运行时停止持久化失败", "error", stopErr)
-				}
-			}()
-			go manager.Start(ingestCtx)
-			// 定时归档导入扫描（④，键 log_ingest.archive_scan_interval）：**默认关**。
-			// 打开后按周期把「躺在源目录里但还没被导入」的 gz 走一遍与自动路径完全相同的
-			// 导入管道；关闭时 RunArchiveScan 返回 nil（不启动任何 goroutine）。
-			if scanInterval, scanErr := cfg.IngestArchiveScanInterval(); scanErr != nil {
-				slog.Warn("log_ingest.archive_scan_interval 无法解析，定时扫描保持关闭", "error", scanErr)
-			} else if stopScan := manager.RunArchiveScan(scanInterval); stopScan != nil {
-				slog.Info("定时归档导入扫描已启用", "interval", scanInterval)
-				defer stopScan()
+			// 实例日志的采集路径**不在这里推导**：它由绑定表（CP 下发的���例登记）每轮现算。
+			// 在这里猜一个 serversRoot 推 glob 是错的——真机实测生产实例位于
+			// /home/user/servers，而 dataRoot/var/servers 里 0 个实例目录，
+			// 按后者扫就是“静默采不到任何东西”。
+			paths := cfg.LogTailer.Paths
+			// 时区：与旧链路共用同一个节点级默认（键 log_ingest.time_zone）。
+			// 为什么复用而不是新开一个键：它表达的是「这台机器上的 JVM 写的是哪个时区的时间」，
+			// 与用哪个采集器无关；两个键会立刻出现在同一部署上配得不一致。
+			loc, tzErr := logconf.ParseTimeZone(cfg.IngestDefaultTimeZone())
+			if tzErr != nil {
+				slog.Error("日志时区非法，新采集器按 UTC 启动（时间轴可能整体偏移）", "error", tzErr)
+				loc = nil
 			}
-			// 采集索引持久化耗时采样（FR-496 spec §3.3）：每分钟以 Debug 打印 P50/P95/Max 与
-			// 本窗口写入行数/字节数，供真机「60 源单次持久化 ≤50ms」验收直接取证
-			// （整本重写会让写入行数逼近索引总行数，读数一眼可辨）。
-			go sampleLogIndexPersistLatency(ingestCtx, manager)
-			// 恢复判据快照**接在同一分钟打点上**（2026-10-05：新工具必须有生产可达面 ✗✓）：
-			// 只打"暂停 / 有未消解缺口 / 有回放在飞"的源 ✓，正常源不打，避免刷屏 ✓。
-			go sampleResumeDiagnostics(ingestCtx, manager)
-			// 保留策略驱动器：首轮立即执行（启动时正是「停机期间攒下的过期分区」最需要处理的时刻），
-			// 之后按 log_retention.sweep.interval 周期跑。与采集运行时共用同一 ctx 生命周期。
-			if logRetentionDriver != nil {
-				go logRetentionDriver.Run(ingestCtx)
-				slog.Info("日志冷热分层驱动器已启动", "interval", logRetentionDriver.Interval().String())
+			// 多行规则（键 log_tailer.multiline.*）：非法值已在 config.Load 拦过，
+			// 这里再取一次是为了拿到编译好的规则对象。
+			multilineRule, multilineTimeout, mlErr := cfg.MultilineSettings()
+			if mlErr != nil {
+				slog.Error("多行规则非法，本次按「不合并」启动（堆栈会被拆成多行）", "error", mlErr)
+				multilineRule, multilineTimeout = nil, 0
 			}
-			slog.Info("日志采集运行时已启动", "sources", len(sources), "vlReady", vlHTTPClient != nil)
+			if multilineRule != nil {
+				// 打**生效**的规则，不是原始配置值。
+				//
+				// 默认开启后，没配 pattern 的部署里 `cfg.LogTailer.Multiline.Pattern` 是空串，
+				// 而实际跑的是 DefaultMultilinePattern。照原样打会把"已启用"和"pattern 为空"
+				// 并排打在同一行，读日志的人会以为规则没生效（2026-11-07 部署时就这样误解过）。
+				// 规则来自编译后的对象，它才是真源。
+				slog.Info("日志多行合并已启用（对齐 Filebeat parsers.multiline）",
+					"pattern", multilineRule.Pattern(),
+					"negate", multilineRule.Negate(),
+					"match", multilineRule.Match(),
+					"maxLines", multilineRule.MaxLines(),
+					"source", multilineRuleSource(cfg))
+			}
+			// stdio 落盘目录：必须放在数据根下（随数据根一起迁移/清理），
+			// 且必须在采集 glob 覆盖范围内——它自己就是一条采集路径。
+			stdioRoot := root.LogDir()
+			if stdioRoot != "" {
+				stdioRoot = filepath.Join(stdioRoot, "stdio")
+			}
+			runner, startErr := logtail.Start(context.Background(), logtail.Config{
+				Enabled:          true,
+				Paths:            paths,
+				Exclude:          cfg.LogTailer.Exclude,
+				ReadFromHead:     cfg.LogTailer.ReadFromHead,
+				RegistryPath:     logtail.ResolveRegistryPath(root.Base(), cfg.LogTailer.RegistryPath),
+				ScanInterval:     scanIv,
+				ProgressInterval: progressIv,
+				StdioRoot:        stdioRoot,
+				TimeZone:         loc,
+				Charset:          cfg.IngestDefaultCharset(),
+				Multiline:        multilineRule,
+				MultilineTimeout: multilineTimeout,
+				IncludeGzip:      cfg.LogTailer.IncludeGzip,
+				Catalog:          logStack.Catalog,
+				// 启动期分区重建：向 VL 问「哪些 (源,天) 有数据」，把「VL 有行但 Catalog 没记录」
+				// 的天补回来。
+				//
+				// # 为何必须接
+				//
+				// Catalog journal 自 42a1b728 起是**纯内存**的（有意取舍：避免副本与真源不一致）。
+				// 代价是重启后分区目录从空开始——设计上应由 hits 重建补齐。
+				// 但两者都不接就会出现双重真空：重启后既无 journal、也不重建，
+				// **历史天在查询侧永久变成「不存在」**（VL 里行还在，没人知道去查）。
+				// 2026-11-07 部署时实测确认了这个状态（日志：「未接 hits 数据源」）。
+				HitsSource: hitsSourceAdapter(vlHTTPClient),
+			}, vlHTTPClient, nil)
+			if startErr != nil {
+				slog.Error("新日志采集器启动失败（本次启动不采集，需告警介入）", "error", startErr)
+				register.SetLogIngestHealth(false, startErr.Error())
+			} else {
+				logTailRunner = runner
+				register.SetLogIngestHealth(true, "")
+				// 登记入口：CP 下发的实例日志绑定写进新采集器的绑定表。
+				// 只有这里知道 `inst:<id>` 与工作目录的对应关系。
+				workerServer.SetInstanceLogCollector(logTailCollector{runner: runner})
+				defer runner.Stop()
+				// 周期性采集读数：新采集器的典型故障是「静默无数据」（路径推导错、
+				// 绑定没到达、VL 拒收），三者都不报错。没有读数就只能猜。
+				tailStatsCtx, cancelTailStats := context.WithCancel(context.Background())
+				defer cancelTailStats()
+				go sampleLogTailStats(tailStatsCtx, runner, time.Minute)
+				stats := runner.Stats()
+				// 与采集器**无关**的生命周期驱动器（保留策略 / 归档回收 / 实例 gz 吸存）。
+				// 它们原本住在旧采集块内；不迁到这里就会随旧链路一起消失，
+				// 表现为“数据到期不淘汰、归档副本不回收”——静默且极难归因。
+				logLifecycle{
+					retentionDriver: logRetentionDriver,
+					archivePurge:    logArchivePurge,
+					archiveRegistry: archiveRegistry,
+					procManager:     procManager,
+					adoptCfg:        cfg.LogArchive.InstanceGzAdopt.Normalized(),
+				}.run(context.Background())
+				slog.Info("新日志采集器已接管采集（旧 ingest 链路本次不构造）",
+					"lines", stats.Lines, "written", stats.Written)
+				startup.Mark("logTailer")
+			}
 		}
 	}
+	// 旧采集链路已删除（阶段三）：采集只走 tailer/logtail。
+	// 回退开关 `log_tailer.enabled: false` 随之失效——旧实现不在本版本里。
 	if rangeClient == nil {
 		slog.Info("Worker 日志查询面已装配", "buildId", version.Version, "rangeClient", "unimplemented-stub")
 	}
@@ -1292,13 +1276,13 @@ func runWorker() {
 		text := string(data)
 		terminalServer.Broadcast(instanceID, stream, text)
 		workerServer.EmitOutput(instanceID, stream, text)
-		if logIngest != nil {
-			if err := logIngest.AppendInstanceOutput(instanceID, stream, data); err != nil {
-				if errors.Is(err, ingest.ErrInstanceBindingPending) {
-					slog.Debug("实例日志绑定尚未完成，输出已写入 pending spool", "instanceId", instanceID, "stream", stream)
-				} else {
-					slog.Error("实例日志受管 Raw 持久化失败", "instanceId", instanceID, "stream", stream, "error", err)
-				}
+		if logTailRunner != nil {
+			// 新采集器的 stdio 入口：落成按天文件交给 tailer 采。
+			//
+			// FILE_PRIMARY（Minecraft Java）实例自己写 latest.log，进程输出与它是同一份，
+			// 这里直接返回——否则同一条日志会在 VL 里出现两次。分流在 logTailCollector 里。
+			if err := (logTailCollector{runner: logTailRunner}).AppendInstanceOutput(instanceID, stream, data); err != nil {
+				slog.Error("实例进程输出落盘失败", "instanceId", instanceID, "stream", stream, "error", err)
 			}
 		}
 	})
@@ -1333,6 +1317,44 @@ func runWorker() {
 	wsMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	wsMux.HandleFunc("/ws/terminal", terminalServer.Handler())
 	wsMux.HandleFunc("/ws/plugin-bridge", pluginBridge.Handler())
+	// 日志保留策略的读数端点（Prometheus 文本格式）。
+	// 挂载位置与 pprof 同口径：同一个 **127.0.0.1 绑定**的 mux ⇒ **不新增暴露面** ✓
+	// （wsAddr 由 localWSAddr 固定回环，见下）。要跨机抓取请走 SSH 隧道或节点上的本地
+	// exporter，别把这个 mux 绑到 0.0.0.0——它没有令牌门，与 pprof 一样只靠回环隔离。
+	// 取舍说明：读数只有 8 个标量，故手写文本格式而不引 prometheus/client_golang（见
+	// retention.MetricsHandler 的注释）；logRetentionDriver 可能为 nil（保留策略未启用），
+	// 处理器照样输出全零序列 + jm_log_retention_driver_enabled 0，抓取侧不必写特殊分支。
+	// 事件段回收读数同理由 logIngest 提供：它可能为 nil（采集运行时创建失败），此时
+	// 回收序列输出 0、jm_log_eventstore_prune_enabled 0，同样是「全零而非缺序列」。
+	//
+	// 这里必须先判 nil 再作接口实参：logIngest 是 *ingest.Manager，直接把 nil 指针塞进
+	// 接口会得到**非 nil 的接口值**（带类型的 nil），MetricsHandler 里的 `prune != nil`
+	// 会因此为真，随后调用方法解引用 nil 指针 —— 表现为「采集没起来时抓 /metrics 直接 panic」。
+	// 事件段已整体删除（2026-11-03）：不再有段回收读数可上报。
+	var pruneSource retention.EventStorePruneSource
+	// 归档对象回收读数：同一个「带类型的 nil」陷阱——logArchivePurge 是具体指针类型，
+	// 未启用时直接作接口实参会得到非 nil 接口值，`purge != nil` 为真，
+	// 随后调用方法解引用 nil 指针（本方法对 nil 安全，但别指望下一个实现也安全）。
+	var purgeSource retention.ArchivePurgeSource
+	if logArchivePurge != nil {
+		purgeSource = logArchivePurge
+	}
+	// 索引库 SQL 慢查询读数（FR-485）随旧链路删除：数据源是 ingest.Manager 的索引库，
+	// 新架构没有索引库。此处显式传 nil，让 /metrics 输出「全零序列」而不是缺序列。
+	var indexSQLSource retention.IndexSQLSource
+	// 投递批次与索引 SQL 指标随旧链路删除（数据源是 ingest.Manager）。
+	// 保留策略的三条读数（prune/purge）照常输出。
+	wsMux.HandleFunc("/metrics", retention.MetricsHandler(logRetentionDriver, pruneSource, purgeSource, indexSQLSource))
+	// 运行期日志等级调整（GET 读 / POST 改）。
+	// 同样挂在 127.0.0.1 回环 mux 上，不新增暴露面；只调等级不改格式、不持久化，
+	// 重启后回到 log.level 配置值（见 retention.LogLevelController 的边界说明）。
+	// 这里正是 logLevelVar 注释里预留的接线点：此前它是 runWorker 的局部量、无任何可达入口。
+	wsMux.HandleFunc("/debug/log-level", retention.NewLogLevelController(logLevelVar).Handler())
+	// FR-511 的 HTTP 日志推送端点（/insert/jsonline）已随旧链路删除。
+	//
+	// 它依赖 `PUSH_ONLY` 源与 `Pipeline.Ingest` 的 WAL 攒批/背压语义——新采集器的模型里
+	// 没有「推送源」这个概念（只有「扫描文件」）。**这是功能下线点**：原本靠 HTTP 推日志
+	// 进来的外部系统需要改为「落盘 + 采集」。
 
 	wsAddr := localWSAddr(wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}
@@ -1483,8 +1505,24 @@ func runWorker() {
 	}
 	go func() {
 		slog.Info("WebSocket 服务器就绪", "addr", wsAddr)
+		startup.Mark("wsReady")
+		// FR-486：所有关键阶段都已就绪，这时输出分段耗时最有意义。
+		startup.Report()
 		if err := wsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("WS 服务器退出", "error", err)
+			// WS 监听失败是**致命**的：本节点已无法被 CP 接入终端与插件桥；
+			// 更关键的是，它通常意味着**另一个 Worker 实例正占着这个端口**。
+			//
+			// 历史上的错（2026-11-07 实测）：这里只打 ERROR 就返回，**主进程照常运行**。
+			// 于是两个 Worker 同时活着、同时采集同一批文件：
+			//   · 两份数据写进 VictoriaLogs（重复）
+			//   · 两边 registry 互相覆盖（各自以为自己读到不同位置）
+			// 而 registry 只有进程内锁、没有文件锁，两个进程谁也不知道对方存在。
+			//
+			// 一个节点只应有一个 Worker（启动脚本 / systemd unit 都是这个模型）。
+			// 所以这里必须退出，而不是降级继续跑：后者把"启动失败"变成"静默损坏"。
+			slog.Error("WebSocket 服务器退出，进程终止（一个节点只允许一个 Worker；"+
+				"端口被占通常意味着已有另一个实例在运行）", "addr", wsAddr, "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -1496,6 +1534,16 @@ func runWorker() {
 	hb.SetCPUReader(cpuSampler)
 	// 受管运行时快照随反向隧道 Heartbeat 上报；只读取既有 Worker/Bot Worker，不会拉起 Bot 子进程。
 	hb.SetManagedRuntimeProvider(workerServer)
+	// 日志存储层（VL）磁盘占用读数随心跳上报（2026-10-29）：
+	//
+	// 配了磁盘上限后，VL 超限会**丢弃最旧的按日分区**；而它把磁盘写满时会进入
+	// **只读模式、连丢弃都做不了**。两种情形默认全静 ⇒ 必须进告警链路。
+	//
+	// 未启用受管 VL（vlSupervisor==nil）时不注入：心跳不带这四个字段，
+	// CP 按「无读数」处理，不会误报成「磁盘 0 字节」。
+	if vlSupervisor != nil {
+		hb.SetVLDiskProvider(vlDiskProviderAdapter{sup: vlSupervisor})
+	}
 	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
 	hb.SetTaskProvider(workerServer)
 	// CP 经心跳响应下发节点期望出站代理（FR-185，见 ADR-043）：generation 变化时重建出站持有者，
@@ -1524,6 +1572,11 @@ func runWorker() {
 	hb.SetHealthPolicyApplier(func(p process.HealthPolicy) {
 		healthScanner.SetPolicy(p)
 	})
+	// 日志采集配置（FR-503）：先加载本地持久化快照——CP 不可达时也能沿用上次生效值
+	// （离线保持），并作为首拍去重的基准。文件缺失/损坏不阻断启动：采集配置问题
+	// FR-503/504 的面板热更新链路已随旧链路删除：它的消费方是 ingest.Manager 的
+	// 采集策略与定时扫描，而新采集器不读这些策略（路径来自 CP 下发的实例登记）。
+	// **这是功能下线点**：面板上「采集策略 / 归档导入扫描周期」改了不会再产生效果。
 	hb.Start()
 	defer hb.Stop()
 
@@ -1546,11 +1599,23 @@ func runWorker() {
 		slog.Warn("WS 服务关闭超时", "error", err)
 	}
 	manager.StopAll()
+	cancelLogRuntime()
+	if err := logStack.LogRPC.Close(); err != nil {
+		slog.Warn("日志查询视图关闭失败", "error", err)
+	}
+	// 先停看护再停 VL：反过来的话，停止过程中进程退出会被看护判成崩溃并尝试拉起
+	// （epoch 已挡住，但显式取消更直白，也不留残余 goroutine）。
+	if cancelVLGuardian != nil {
+		cancelVLGuardian()
+	}
 	// 受管 VL 必须随 Worker 一起回收：否则它们会成为孤儿并继续占用 hot/cold/rehydrate
 	// 端口，导致下次启动的新 VL 因端口被占而立即退出（真机事故），采集面长期降级。
 	if vlSupervisor != nil {
 		vlSupervisor.StopAll(shutdownCtx)
 	}
+	// 日志文件放在最后关：上面每一条 Warn/Info 还要落到它里；
+	// Close 会等后台 gzip 收尾，避免刚 rename 的轮转档卡在未压缩状态。
+	closeProcessLogger()
 	slog.Info("Worker Node 已停止")
 }
 
@@ -1559,155 +1624,51 @@ func localWSAddr(port int) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-// sampleLogIndexPersistLatency 周期性打印采集索引（FR-496，本地 SQLite）的单次持久化耗时
-// P50/P95/Max 与本窗口的写入行数/删除行数/字节数。
+// repairProjectionQueryGenerations 扫描 Catalog 并把「投影 query_generation 落后于权威
+// generation」的分区对齐，返回（修复数, 失败数, 需人工处置的分区清单）。
 //
-// 为什么以 Info 打印：真机验收口径是「60 源规模下单次持久化 ≤50ms」，而现场默认日志级别是
-// Info——Debug 打点在真机上默认不落盘，验收人只能临时改级别才能读数，读数口径随人而变。
-// 升为 Info 后现场按默认配置即可取值，且节拍（1 分钟）与字段原样不变，仍可与旧格式
-// （整本重写 JSON）直接对比：写入行数是最直接的判据——回到整本重写时该值会逼近索引总行数，
-// 而增量实现只随本批次变更增长。采样环由 stateindex 维护（最近 4096 次，见 stateindex.sampleRing）。
+// 背景与修法见 catalog.RepairProjectionQueryGeneration 的注释；这里只负责遍历与汇总。
 //
-// 三个 Delta 的窗口口径见 logIndexPersistWindow 的注释：它们与 P50/P95/Max 取自同一个窗口，
-// 都是「本窗口新增」。
-func sampleLogIndexPersistLatency(ctx context.Context, manager *ingest.Manager) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	// 首个窗口的基准取采样器启动时刻（它与采集循环同时启动，见 main 里的 `go manager.Start`）：
-	// 早于这一刻的持久化不属于任何一个窗口，不会被计入首条日志。
-	window := &logIndexPersistWindow{cursor: time.Now()}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			latency := manager.PersistLatency()
-			if latency.Count == 0 {
-				// 本窗口一次都没持久化（空闲），环里没有新增样本可结账——保持基准不动，
-				// 下一个窗口把这段时间的持久化一并结清。
-				continue
-			}
-			logIndexPersistSample(window, latency, manager.PersistSamples())
+// 第三个返回值是 2026-10-21 复审补上的可观测性缺口：该自愈对三种形态**不修也不报错**
+// （分区没有已发布投影 / 投影代次反向矛盾 / 投影目录与权威目录不一致）。早前调用方只在
+// 「修复数或失败数 > 0」时打日志 ⇒ 这些分区既不计数也不留痕，运维完全看不到「还有 N 个
+// 待人工」。它们必须被汇总出来单独打一条 WARN，否则沉默的「不修」等于假装健康。
+//
+// 为什么逐条独立处理、失败不中断：单个分区的 CAS 冲突（并发发布抢先生效）只应影响它自己，
+// 不该让其余分区也修不上。失败计数会由调用方以 WARN 打出，不静默。
+//
+// 为什么用 `Keys()` 而不是另建索引：分区数量级是「节点数 × 天数」（生产 283 个），
+// 启动扫一遍是 O(分区数) 的内存读，与既有 `StartingRecover()` 同档，无需额外索引。
+func repairProjectionQueryGenerations(cat *catalog.Catalog) (repaired, failed int, needsManual []string) {
+	if cat == nil {
+		return 0, 0, nil
+	}
+	for _, key := range cat.Keys() {
+		ok, manual, err := cat.RepairProjectionQueryGeneration(key)
+		if err != nil {
+			failed++
+			slog.Warn("投影代次一致性自愈失败（该分区待下一轮或人工处理）",
+				"partition", key.String(), "error", err)
+			continue
+		}
+		if ok {
+			repaired++
+			slog.Info("投影代次一致性已修复", "partition", key.String(),
+				"detail", "query_generation 对齐到权威 generation，该分区恢复可发布")
+			continue
+		}
+		if manual != "" {
+			needsManual = append(needsManual, key.String()+": "+manual)
 		}
 	}
+	return repaired, failed, needsManual
 }
 
-// sampleResumeDiagnostics 每分钟打印一次"恢复判据快照"（只含异常项 ✓）。
+// maxNeedsManualPartitionsLogged 限制「需人工」清单在**单条日志行**里的条数。
 //
-// 为什么需要（2026-10-05 用户点名 ✗✓）：`ResumeDiagnostics` 一度**只有定义与测试引用** ⇒
-// 生产不可达 ⇒ 现场只能靠 SQL 反推"清零却仍暂停" ✗。接在同一条分钟打点上，读数即日志 ✓。
-// sweepStatsLogAttrs 把兜底环读数摊成 slog 的键值对（**抽成纯函数以便单测**）。
-//
-// 为什么必须抽出来（INGEST-12 复核，2026-10-12）：本仓纪律是「任何新增导出必须同批带
-// 可达面 + 可达性红证」（用户 2026-10-05 定的，见 sampleResumeDiagnostics 内的注释）。
-// 而 RollingProbes / DeliveryProbes / DirectDeliverProbes 三个字段此前**只有定义、没有任何
-// 外部读者**——include 在本函数返回的键值对里，才让 "导出 → 可达面" 这条链闭合，
-// 也才能被 apps/worker 的单测直接断言（否则打点埋在 ticker 循环里，无法测）。
-//
-// 语义分三组：
-//   - 心跳/门哨兵：ticks 不涨即环停；panics 非零即环崩过；
-//   - 跳过原因分类：现场"41 家为何不动"的直接答案；
-//   - 耗时与在飞：单轮耗时按四相拆解 + 逐相最长 m.mu 等待 + 在飞定界；
-//   - 三档自愈步实发次数与耗时：都带 O(1) 欠账前置 ⇒「次数 × 耗时」即成本定界的直接证据。
-func sweepStatsLogAttrs(st ingest.ResumeSweepStats) []any {
-	return []any{
-		"ticks", st.SweepTicks, "panics", st.SweepPanics, // 门哨兵：ticks 不涨 ⇒ 环停了
-		"eligible", st.EligibleNow, // gauge：合格暂停源总数 ⇒ 与累计 candidates 并读看出覆盖进度
-		"skip_blocked", st.SkipBlocked, // 有界等待超时次数 ⇒ 现场判"是否被 m.mu 挡住"
-		// 耗时读数：三步各 ms + 每轮 ms + 上轮源数 ⇒ avg=round/sources 一眼可算。
-		"ms_delivery", st.NsDelivery / 1e6, "ms_resolve", st.NsResolve / 1e6,
-		"ms_evaluate", st.NsEvaluate / 1e6, "ms_round_total", st.NsRoundTotal / 1e6,
-		"last_round_sources", st.LastRoundSources,
-		// **三步之外（"其它"）**（2026-10-05 分型结论）：现场单轮 395s 而三步合计仅 1.2s（0.31%）
-		// ⇒ 99.7% 藏在**未计时的那部分**（每轮全量遍历：sweepBacklogTotal / 资格扫描+排序 /
-		// syncRecoveryQuota）⇒ 这一项定性后即可对号入座。
-		"ms_round_other", (st.NsRoundTotal - st.NsDelivery - st.NsResolve - st.NsEvaluate) / 1e6,
-		// 四相下探：三相各 ms + 派生"其余"。
-		"ms_scan_elig", st.NsScanElig / 1e6,
-		"ms_backlog_total", st.NsBacklogTotal / 1e6,
-		"ms_sync_quota", st.NsSyncQuota / 1e6,
-		"ms_other_rest", (st.NsRoundTotal - st.NsDelivery - st.NsResolve - st.NsEvaluate -
-			st.NsScanElig - st.NsBacklogTotal - st.NsSyncQuota) / 1e6,
-		// 逐相"最长单次 m.mu 等待"ms。
-		"ms_wait_backlog_max", st.MuWaitBacklogMax / 1e6,
-		"ms_wait_quota_max", st.MuWaitQuotaMax / 1e6,
-		"ms_wait_sources_max", st.MuWaitSourcesMax / 1e6,
-		"ms_wait_resume_max", st.MuWaitResumeMax / 1e6,
-		// 在飞定界：在飞数逼近上限 ⇒ 叠加压力大（应查被谁挡住）。
-		"inflight", st.InFlight, "skip_inflight_cap", st.SkipInflightCap,
-		"candidates", st.Candidates, "revived", st.Revived,
-		"skip_backpressure", st.SkipBackpressure,
-		"skip_hysteresis", st.SkipHysteresis,
-		"skip_enumeration", st.SkipEnumeration,
-		"rising_streak", st.RisingStreak,
-		// **轮转窗口内三档自愈步的实发次数与耗时**（#66-⑤/⑥、#179-②、INGEST-12）：
-		// 这三步都带 O(1) 欠账前置（无欠账不发起），故「次数 × 耗时」就是**成本定界的直接证据**：
-		//   - rolling：只滚动/补段（⑤）；
-		//   - delivery：有界投递步（⑥）；
-		//   - direct_deliver：**破环直投**——含 Ledger 深克隆 + WAL 全量快照 + 同步 VL 写，
-		//     是把单轮拖到 48.5 分钟的 O(n) 重活所在步 ⇒ 其耗时是「兜底环是否又被它拖住」的
-		//     第一手读数（INGEST-12 把它纳入有界执行器后，据此可验证"每轮有界"是否真的成立）。
-		// 为什么必须显式打出来：本仓纪律要求「新增导出必须同批带可达面 + 可达性红证」，
-		// 而这三个字段此前只有定义、没有任何外部读者 ⇒ 修了缺陷也无人能观测。
-		"rolling_probes", st.RollingProbes, "ms_rolling", st.NsRolling / 1e6,
-		"delivery_probes", st.DeliveryProbes, "ms_rolling_delivery", st.NsRollingDelivery / 1e6,
-		"direct_deliver_probes", st.DirectDeliverProbes,
-		"ms_rolling_direct_deliver", st.NsRollingDirectDeliver / 1e6,
-	}
-}
-
-func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
-	if manager == nil {
-		return
-	}
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// 回退修复 ① 的显式指标（2026-10-03）：规划次数/复用次数累计值（"每轮只规划一次"
-			// ⇒ plans 增速应 ≈ 轮频、reuses 占绝对多数）+ 校验延期累计（② 的效果面）。
-			// 独立于下方诊断行（后者为空会 continue，不能把读数挂在它后面）。
-			if builds, reuses := manager.PersistPlanStats(); builds > 0 || reuses > 0 {
-				slog.Info("持久化规划读数", "plans", builds, "reuses", reuses,
-					"verify_deferred", manager.VerifyDeferredCount())
-			}
-			lines := manager.ResumeDiagnosticLines()
-			// 常规诊断行为空时**不能**跳过本次打点：下方「永久阻塞」清单恰恰在没有常规诊断行时
-			// 才最需要可见（其源可能既不 paused 也无 backlog）。
-			for _, line := range lines {
-				slog.Info("恢复判据快照", "detail", line)
-			}
-			// **被不可分类缺口永久阻塞的源**（2026-10-10 生产实测：65 源 / 215 条未决缺口，
-			// 其中 WAL_BODY_MISSING、ROTATED_SEGMENT_NOT_READY 不在任何恢复白名单里 ⇒
-			// 不重启、不人工介入就**永不起采集**）。此前这些源与其他"还在等滞回"的源在日志里
-			// 长得一模一样（都只印「积压已回落但暂不能恢复采集」），外部无从区分 ✗。
-			// 这里以 WARN 显式点名，使"卡死"与"等待"可分辨 ✓（只读，不改任何行为）。
-			for _, line := range manager.GapBlockedDiagnosticLines() {
-				slog.Warn("源被不可分类缺口阻塞（无自动出路，需人工裁定或重置）", "detail", line)
-			}
-			// **兜底环读数与不变量读数一并落在这条分钟打点上**（用户 2026-10-05：第三次"无消费面" ✗✗
-			// ⇒ 从此**任何新增导出必须同批带可达面 + 可达性红证** ✓）。
-			// 只打**非零**项 ✓（避免刷屏 ✗）。
-			st := manager.ResumeSweepStats()
-			// **无条件打点**（用户 2026-10-05 现场第 5 次"不可达"变体 ✓）：原来有 `if …Revived>0` 之门 ✗
-			// ⇒ 环挂住/空闲时**整行都不打** ⇒ "没有行"与"环挂了"在外部**无法区分** ✗✗。
-			// 心跳的意义就是"**无需其它任何计数即可判读**" ✓ ⇒ 只要环跑过就每分钟打一行（ticks 不涨即环停 ✓）。
-			if st.SweepTicks > 0 {
-				slog.Info("兜底环读数", sweepStatsLogAttrs(st)...)
-			}
-			// 自愈失败原因（有界、新→旧 ✓）：**与读数同批打**，别让它成为"值可读但没人看" ✗。
-			if rs := manager.SelfFailureReasons(); len(rs) > 0 {
-				slog.Warn("最近自愈失败原因（新→旧，最多 8 条）", "reasons", rs)
-			}
-			if v := manager.PositionInvariantViolations(); len(v) > 0 {
-				slog.Warn("位置不变量越界（reclaim > read）：离线核这条即可定位", "count", len(v), "sources", v)
-			}
-		}
-	}
-}
+// 汇总条数（count）永远是准确的，被截断的只是逐条列举：分区数量级是「节点数 × 天数」
+// （生产 283 个），若全部属于需人工形态，一整行几百个键会让这条日志本身失去可读性。
+const maxNeedsManualPartitionsLogged = 20
 
 // logIndexPersistWindow 把 stateindex 采样环换算成「本窗口的增量」。
 //
@@ -1726,98 +1687,173 @@ func sampleResumeDiagnostics(ctx context.Context, manager *ingest.Manager) {
 // 新增样本已被挤出环外，读数只能是下界。生产上采集循环节拍 250 ms、采样节拍 1 分钟，单窗口最多
 // 约 240 次持久化周期；切分（FR-498 P0）后一次周期会产生多个**提交单元**采样，60 源 × 60 行/s
 // 实测约 2 单元/周期 ⇒ 单窗口约 400 个样本，仍远小于 4096（环容量正是为此从 512 提到 4096）。
-type logIndexPersistWindow struct {
-	// cursor 是上一次读数时环内最新样本的 StartedAt。采样时间戳由 recordSample 在每次 Apply
-	// 开始时用 time.Now() 记录（带单调读数），同一进程内严格递增，可当环内样本的身份游标用。
-	cursor time.Time
-}
 
 // logIndexPersistDelta 是一个窗口内的写入增量，与同一条日志里的 P50/P95/Max 同窗口。
-type logIndexPersistDelta struct {
-	RowsWritten  int64
-	RowsDeleted  int64
-	BytesWritten int64
-}
-
-// advance 推进一个窗口并返回本窗口增量：只累计游标之后的样本，因此环未满（环和 = 自启动累计）
-// 与环已满（环和 = 滑动和）两种形态下都成立。
-func (w *logIndexPersistWindow) advance(samples []stateindex.Sample) logIndexPersistDelta {
-	var delta logIndexPersistDelta
-	var newest time.Time
-	for _, sample := range samples {
-		if sample.StartedAt.After(newest) {
-			newest = sample.StartedAt
-		}
-		if !sample.StartedAt.After(w.cursor) {
-			continue
-		}
-		delta.RowsWritten += int64(sample.RowsWritten)
-		delta.RowsDeleted += int64(sample.RowsDeleted)
-		delta.BytesWritten += sample.BytesWritten
-	}
-	// 游标只前进不后退：时钟回拨时若直接覆写，已结账的样本会被重复计入下一个窗口。
-	if newest.After(w.cursor) {
-		w.cursor = newest
-	}
-	return delta
-}
-
-// logIndexPersistSample 把一个窗口的读数落成一条采样日志：分位取整环（口径不变），三个 Delta
-// 取本窗口增量（见 logIndexPersistWindow）。
+// catalogBackfillStartDelay 是启动期分区补建的**让位窗口**。
 //
-// 口径（FR-498 切分改造）：P50/P95/Max 是**单个提交单元**（一次 IMMEDIATE 事务）的耗时——
-// 验收线「单次持久化 ≤50ms」约束的就是它，一个周期按行数 + 耗时双上界切成若干个单元
-// （见 stateindex.CommitBudget）。`cycles` 是环内周期数、`samples` 是单元数，两者之比即
-// 「一周期切了几个单元」；`maxRows` 是环内单个单元的最大写+删行数（每事务行数有界的直读值）。
-func logIndexPersistSample(window *logIndexPersistWindow, latency stateindex.Latency, samples []stateindex.Sample) {
-	delta := window.advance(samples)
-	slog.Info("采集索引持久化耗时采样",
-		"samples", latency.Count,
-		"cycles", latency.Cycles,
-		"p50ms", latency.P50.Milliseconds(),
-		"p95ms", latency.P95.Milliseconds(),
-		"maxMs", latency.Max.Milliseconds(),
-		"maxRows", latency.MaxRows,
-		"rowsWrittenDelta", delta.RowsWritten,
-		"rowsDeletedDelta", delta.RowsDeleted,
-		"bytesWrittenDelta", delta.BytesWritten,
-		// #67-C：三段耗时的**累计**读数（只加不减，单位 ns）——把"单元慢"拆成
-		// 规划 / 范围剪枝 / 镜像重建三处，真机排障一眼可辨 ✓（maxRows 与 rowsDeletedDelta
-		// 本就在本行，正是"行数有界却仍慢"与"慢在删不在写"两个判据 ✓）。
-		"nsPlan", latency.NsPlan,
-		"nsPrune", latency.NsPrune,
-		"nsMirrorRebuild", latency.NsMirrorRebuild,
-		// #67-A′：WAL 归并面 —— "-wal 3.59GB 与阈值 4MiB 并存"的两种解释（读者持旧快照 / 归并没被
-		// 排到执行点）由 busy 与 walBytes 一次分辨 ✓；truncate 计受控截断点被走到几次 ✓。
-		"walBytes", latency.WALBytes,
-		"checkpointAttempts", latency.CheckpointAttempts,
-		"checkpointBusy", latency.CheckpointBusy,
-		"checkpointTruncate", latency.CheckpointTruncate,
-		"readersInFlight", latency.ReadersInFlight,
-	)
+// 为何需要：补建要知道「本节点负责哪些 namespace」，而那来自**已登记的源**。
+// 采集运行时（manager.Start）与源登记都在异步路径上，立即开跑只能看到空源表。
+//
+// 取值权衡：太长会推迟历史天恢复可查的时间，太短会让首轮白跑（白跑不会错，
+// 只是浪费一次查询）。30s 覆盖了常规启动的登记耗时（实例发现 + 游标恢复）。
+// 即使没赶上，补建也就在那一轮返回零计数，不会假装成功。
+const catalogBackfillStartDelay = 30 * time.Second
+
+// 日志分区 Catalog 的 journal 使用**纯内存**（2026-11-05 架构决策，ADR-102）。
+//
+// # 为什么不再落盘
+//
+// 分区目录（「哪些源在哪些天有数据」）此前靠三层补救去近似一个 VL 已经知道的事实：
+//
+//	第 1 层  journal 纯内存      → 重启后历史天全丢
+//	第 2 层  改成 JSONL 落盘     → 与 2026-10-30「机械盘不落盘」裁定冲突
+//	第 3 层  启动期从 VL 反推    → 每源一次查询、窗口易漏
+//
+// 现在由 `hits` 在启动期一次请求重建完整分区目录（实测 428 个 (源,天) / 206ms），
+// 落盘这一层就失去了存在理由——它维护的副本已经被「直接问 VL」取代。
+//
+// # 落盘原本承担的另外两项职责，逐项核过
+//
+//  1. **租约旁路文件**（`<journal>.leases`）：`leaseDeltaLog` 的注释已明确它降级为
+//     「可用性辅助」——租约是短生命周期运行时状态，视图 TTL 到期就失效，进程重启后
+//     旧视图 ID 本来就不该复活。丢了它唯一后果是「旧视图失效得早一点」，不影响正确性。
+//  2. **StartingRecover 的 journal 重放**：`ReplayJournal` 只读传入的 entries 切片，
+//     而 entries 来自内存 journal；落盘与否不影响恢复语义。
+//
+// # 代价（诚实说明）
+//
+// 重启后分区目录从空开始，由 hits 重建补齐（异步，约 30s 后启动）。重建完成前查询侧
+// 对历史天报「无分区记录」——这与改造前的落盘形态相比是**短暂降级**，但换掉了
+// 「副本可能与真源不一致」这个长期风险（journal 只写到 10-30 那类事故不会再发生）。
+func openLogCatalogJournal(cfg *workercfg.Config, root *dataroot.Root, fallback catalog.Journal) (catalog.Journal, func() error) {
+	if cfg != nil && cfg.LogCatalog.JournalDisabled() {
+		slog.Info("日志 Catalog journal 为纯内存（log_catalog.journal_enabled=false）")
+	}
+	return fallback, nil
 }
 
-// sampleLogBudget 周期性采样受管 VL 的 RSS 与数据盘预算并暴露降级（FR-476 / 契约 §6.6）。
-// 每次采样以 Debug 记录实际数值（供 Runbook C 取证）；状态变化时升为 Info/Warn。
-func sampleLogBudget(sup *vlsup.Supervisor) {
+// resolveHotRetention 把 `log_vl.retention_period` 解析成热层保留期时长。
+//
+// 为什么抽成包级函数（2026-10-28）：这个值现在有两处消费者——ingest 侧的「热层可发布窗口」，
+// 以及归档还原（Rehydrate）侧「这个分区日是否注定写不进去」的判定。两处必须用**同一口径**，
+// 否则会出现「ingest 认为超窗口、rehydrate 认为没超」这种自相矛盾。
+//
+// 解析失败返回 0（= 不启用过滤，保持改动前行为）：与 ingest 侧 hot_retention_window.go
+// 同一取舍——没配置就把数据全过滤掉，比不修更糟。
+func resolveHotRetention(cfg *workercfg.Config) time.Duration {
+	raw := strings.TrimSpace(cfg.LogVL.RetentionPeriod)
+	if raw == "" {
+		raw = vlsup.DefaultRetentionPeriod
+	}
+	period, err := retention.ParseRuntimeTTL(raw)
+	if err != nil {
+		slog.Warn("热层 retention 解析失败：不启用「热层可发布窗口」过滤（行为与改动前一致）",
+			"retentionPeriod", raw, "error", err)
+		return 0
+	}
+	slog.Info("热层可发布窗口已启用：超出热层保留期的 UTC 天不再重建、也不算对账缺失天",
+		"retentionPeriod", raw, "hotRetention", period)
+	return period
+}
+
+// vlDiskProviderAdapter 把 vlsup.Supervisor 的磁盘读数适配成 heartbeat.VLDiskProvider。
+//
+// 为什么要这么一层：vlsup 不 import heartbeat（heartbeat 已经 import ingest/metrics，
+// 反向依赖会成环），所以两边各自定义同形结构体，由装配层在这里做一次转换。
+type vlDiskProviderAdapter struct {
+	sup *vlsup.Supervisor
+}
+
+func (a vlDiskProviderAdapter) VLDiskSnapshot() heartbeat.VLDiskReading {
+	r := a.sup.VLDiskSnapshot()
+	return heartbeat.VLDiskReading{
+		UsedBytes:        r.UsedBytes,
+		LimitBytes:       r.LimitBytes,
+		LimitPercent:     r.LimitPercent,
+		Partitions:       r.Partitions,
+		RowsDroppedTotal: r.RowsDroppedTotal,
+	}
+}
+
+// sampleLogBudget 更新真实准入所使用的唯一预算控制器，采样失败保持未知而非伪造零。
+//
+// 注意：这是 **VL 资源预算**的采样（Worker RSS / 日志盘用量 / 预留字节），
+// 与采集器无关——它随 VL 一起存在，不随旧采集链路删除。
+func sampleLogBudget(ctx context.Context, sup *vlsup.Supervisor, budget *vlsup.BudgetController, roots []string, externalHot bool) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	last := vlsup.BudgetOK
-	for range ticker.C {
-		verdict := sup.SampleBudget()
-		slog.Debug("日志资源预算采样",
-			"state", string(verdict.State),
-			"vlRssBytes", verdict.Sample.ProcessRSSBytes,
-			"diskUsagePercent", verdict.Sample.DiskUsagePercent,
-		)
-		if verdict.State == last {
-			continue
+	last := ""
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sample := sampleLogResources(sup, roots, externalHot)
+			budget.Update(sample)
+			foregroundErr, backgroundErr := budget.Admit(vlsup.WorkForeground), budget.Admit(vlsup.WorkBackground)
+			state := fmt.Sprint(foregroundErr, ";", backgroundErr)
+			snapshot := budget.Snapshot()
+			slog.Debug("日志资源预算采样", "workerRssBytes", sample.WorkerRSSBytes,
+				"workerRssKnown", sample.WorkerRSSKnown, "namespaceRss", sample.Namespaces,
+				"diskUsagePercent", sample.DiskUsagePercent, "diskKnown", sample.DiskKnown,
+				"logDiskBytes", sample.DiskUsedBytes, "logDiskBytesKnown", sample.DiskBytesKnown,
+				"reservedBytes", snapshot.TotalReservedBytes,
+				"reservedWalBytes", snapshot.Reserved[vlsup.ReservationWAL],
+				"reservedStagingBytes", snapshot.Reserved[vlsup.ReservationStaging],
+				"reservedExportBytes", snapshot.Reserved[vlsup.ReservationExport])
+			if state != last {
+				if foregroundErr != nil || backgroundErr != nil {
+					slog.Warn("日志资源预算准入受限；WAL 仍允许有界排空", "foreground", foregroundErr, "background", backgroundErr)
+				} else {
+					slog.Info("日志资源预算准入正常")
+				}
+				last = state
+			}
 		}
-		if verdict.State == vlsup.BudgetOK {
-			slog.Info("日志资源预算恢复正常", "state", string(verdict.State))
-		} else {
-			slog.Warn("日志资源预算降级", "state", string(verdict.State), "reasons", verdict.Reasons)
-		}
-		last = verdict.State
 	}
+}
+
+// hitsSourceAdapter 把 vlsup.Client 的 hits 能力适配成 logtail.HitsSource。
+//
+// # 为何需要这一层
+//
+// 两个包各自定义了形状相同的 SourceDay（vlsup 是「VL 客户端」，logtail 是「采集器」，
+// 互不依赖是对的）。装配层做一次转换，比让其中一个包 import 另一个更轻。
+// 这与旧链路 HitsSourceFunc 是同一模式。
+//
+// # 为何 nil 客户端返回 nil
+//
+// nil HitsSource 在 logtail 里有明确语义：**不做启动重建**，并在启动日志里说明
+// （「未接 hits 数据源」）。宁可如实说「没接」，也不要给一个恒返回空的结果——
+// 那样日志会显示「重建完成，补齐 0 天」，把一个缺失的能力伪装成正常结果。
+func hitsSourceAdapter(c *vlsup.Client) logtail.HitsSource {
+	if c == nil {
+		return nil
+	}
+	return func(ctx context.Context, start, end time.Time) ([]logtail.SourceDay, error) {
+		days, err := c.HitsBySourceDay(ctx, start, end)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]logtail.SourceDay, 0, len(days))
+		for _, d := range days {
+			out = append(out, logtail.SourceDay{
+				LogSourceID: d.LogSourceID,
+				UTCDay:      d.UTCDay,
+				Weight:      d.Weight,
+			})
+		}
+		return out, nil
+	}
+}
+
+// multilineRuleSource 说明生效的多行规则来自哪里（默认 vs 显式配置）。
+//
+// 它只服务启动日志：让读日志的人一眼知道"这条规则是我配的，还是用的默认"，
+// 不必回头看 worker.yml 才知道。
+func multilineRuleSource(cfg *workercfg.Config) string {
+	if cfg != nil && strings.TrimSpace(cfg.LogTailer.Multiline.Pattern) != "" {
+		return "配置显式指定"
+	}
+	return "默认规则（log_tailer.multiline.pattern 留空）"
 }

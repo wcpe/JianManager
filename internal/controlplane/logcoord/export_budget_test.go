@@ -28,6 +28,8 @@ import (
 // time.Parse（O(页数 × n log n)），在万行级导出用例里会跑到超时——
 // 那是替身的开销，不是被测逻辑的开销。此处排序键只算一次，逐页线性定位。
 type pagedWorker struct {
+	// noStreamWorker 提供 stream 三方法的「未实现」实现。
+	noStreamWorker
 	id     string
 	target string
 
@@ -81,6 +83,7 @@ func (w *pagedWorker) Search(_ context.Context, req WorkerSearchRequest) (*Worke
 	return &WorkerSearchResponse{
 		ViewID: req.ViewID, Items: append([]Event(nil), rest...),
 		Exhausted: exhausted, NextCursor: "worker-next", Targets: w.targetResult(),
+		Quality: exactQuality,
 	}, nil
 }
 
@@ -282,7 +285,7 @@ func TestBuildExportReasonAndLimits(t *testing.T) {
 
 	t.Run("完整通过时 Limits 仍回传且无预算 reason", func(t *testing.T) {
 		res := BuildExport(View{Budget: QueryBudget{Limit: 100, MaxBytes: 1 << 30}},
-			Coverage{Complete: true}, Quality{}, items, false, false)
+			Coverage{Complete: true}, exactQuality, items, false, false)
 		assert.False(t, res.ExportIncomplete)
 		assert.NotNil(t, res.Artifact)
 		assert.Equal(t, 100, res.Limits.MaxRows)

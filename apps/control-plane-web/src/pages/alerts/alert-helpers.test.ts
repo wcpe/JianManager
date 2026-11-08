@@ -11,6 +11,10 @@ import {
   channelIsInApp,
   channelIsQQ,
   isQQTargetType,
+  qqGatewayLevel,
+  qqGatewayStatusKey,
+  qqGatewayFatalHintKey,
+  shortGroupOpenid,
   isEnvRef,
   formatSilenceWindow,
   isValidHHMM,
@@ -176,5 +180,75 @@ describe('parseChannelIds', () => {
     expect(parseChannelIds(null)).toEqual([])
     expect(parseChannelIds('not json')).toEqual([])
     expect(parseChannelIds('{"a":1}')).toEqual([])
+  })
+})
+
+/**
+ * QQ 接入状态的展示映射（FR-495 只读观测区）。
+ *
+ * 这层纯函数的意义就是「后端串 → 能展示的东西」：状态串来自 DB/内存，任何历史值或未来
+ * 新态都不能变成缺失 i18n key 或假颜色（`disconnected` 染红会把正常待机报成故障）。
+ */
+describe('qqGatewayLevel', () => {
+  it('四态各自对应状态等级', () => {
+    expect(qqGatewayLevel('connected')).toBe('success')
+    expect(qqGatewayLevel('connecting')).toBe('warning')
+    expect(qqGatewayLevel('error')).toBe('danger')
+    // disconnected = 未配置/正常待机，不是故障；中性色才不会制造假告警。
+    expect(qqGatewayLevel('disconnected')).toBe('neutral')
+  })
+
+  it('未知/空值一律中性（不因脏串报错）', () => {
+    expect(qqGatewayLevel('weird')).toBe('neutral')
+    expect(qqGatewayLevel(undefined)).toBe('neutral')
+    expect(qqGatewayLevel('')).toBe('neutral')
+  })
+})
+
+describe('qqGatewayStatusKey', () => {
+  it('已知四态原样返回', () => {
+    expect(qqGatewayStatusKey('connected')).toBe('connected')
+    expect(qqGatewayStatusKey('connecting')).toBe('connecting')
+    expect(qqGatewayStatusKey('disconnected')).toBe('disconnected')
+    expect(qqGatewayStatusKey('error')).toBe('error')
+  })
+
+  it('未知值回落 unknown（不拼出缺失的 i18n key）', () => {
+    expect(qqGatewayStatusKey('banned')).toBe('unknown')
+    expect(qqGatewayStatusKey(undefined)).toBe('unknown')
+  })
+})
+
+describe('qqGatewayFatalHintKey', () => {
+  it('4014 三种写法都能识别（关闭码 / intent 字面量 / 官方常量名）', () => {
+    expect(qqGatewayFatalHintKey('QQ 机器人缺少 1<<25（GROUP_AND_C2C_EVENT）intent 权限')).toBe(
+      'alerts.qqGatewayHint4014',
+    )
+    expect(qqGatewayFatalHintKey('close 4014')).toBe('alerts.qqGatewayHint4014')
+    expect(qqGatewayFatalHintKey('intent GROUP_AND_C2C_EVENT 未授权')).toBe('alerts.qqGatewayHint4014')
+  })
+
+  it('其他错误 / 空值不给提示（没有自己能动手修好的动作）', () => {
+    expect(qqGatewayFatalHintKey('QQ 机器人已下架（4914），需人工处理')).toBeNull()
+    expect(qqGatewayFatalHintKey('未配置启用的 QQ 通知通道，请先创建 qq 通道')).toBeNull()
+    expect(qqGatewayFatalHintKey('')).toBeNull()
+    expect(qqGatewayFatalHintKey(undefined)).toBeNull()
+    expect(qqGatewayFatalHintKey('   ')).toBeNull()
+  })
+})
+
+describe('shortGroupOpenid', () => {
+  it('超过 8 位截断并加省略号', () => {
+    expect(shortGroupOpenid('GROUP_OPENID_DEMO_1')).toBe('GROUP_OP…')
+  })
+
+  it('不足/等于 8 位原样返回（不补位、不裁成空串）', () => {
+    expect(shortGroupOpenid('ABCDEFGH')).toBe('ABCDEFGH')
+    expect(shortGroupOpenid('ABC')).toBe('ABC')
+    expect(shortGroupOpenid('')).toBe('')
+  })
+
+  it('两端空白先剔除再截断', () => {
+    expect(shortGroupOpenid('  ABC  ')).toBe('ABC')
   })
 })

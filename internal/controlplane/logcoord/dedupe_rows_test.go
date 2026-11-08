@@ -8,10 +8,10 @@ import (
 
 // 红绿（145 族 / f2cfbd5b）：读面双键去重 ＋ 重复降级，三态直测。
 //
-//  ① 两代次持同 id 同 hash（跨代次并集残留，实测 145 同页 91/500）⇒
-//     去重后 uniq==items ✓，且 duplicated=true ⇒ 调用方把质量从 exact 降级 unresolved ✓（现行红 ✗）；
-//  ② 守门：同 id **不同 hash**（内容不同）⇒ 必须保留 ✓，不得误删；
-//  ③ 无重复 ⇒ 不做任何改动、不回报 duplicated ✓。
+//	① 两代次持同 id 同 hash（跨代次并集残留，实测 145 同页 91/500）⇒
+//	   去重后 uniq==items ✓，且 duplicated=true ⇒ 调用方把质量从 exact 降级 unresolved ✓（现行红 ✗）；
+//	② 守门：同 id **不同 hash**（内容不同）⇒ 必须保留 ✓，不得误删；
+//	③ 无重复 ⇒ 不做任何改动、不回报 duplicated ✓。
 func TestDedupeMergedRowsDoubleKey(t *testing.T) {
 	// ① 同 id 同 hash：跨代次并集的两条 ⇒ 去一保一，且回报重复。
 	dup := []Event{

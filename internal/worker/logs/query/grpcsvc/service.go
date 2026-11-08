@@ -44,6 +44,14 @@ type FacetsQuerier interface {
 	Facets(ctx context.Context, req query.QueryRequest, dimensions []string, dimensionLimit uint32) query.FacetsResponse
 }
 
+// StreamsQuerier 是可选扩展：实现后三个 LogStream* RPC 走真实路径，
+// 否则 stub 返回 LOG_UNSUPPORTED（不返回空成功——空成功会被前端当成「没有流」）。
+type StreamsQuerier interface {
+	Streams(ctx context.Context, req query.QueryRequest) query.StreamsResponse
+	StreamFieldNames(ctx context.Context, req query.QueryRequest) query.StreamFieldNamesResponse
+	StreamFieldValues(ctx context.Context, req query.QueryRequest, field string) query.StreamFieldValuesResponse
+}
+
 // ArchiveQuerier 是可选的真实归档/恢复能力。
 type ArchiveQuerier interface {
 	Rehydrate(ctx context.Context, req query.QueryRequest, objectIDs []string) query.ArchiveTaskResponse
@@ -63,61 +71,6 @@ type RuntimeInstaller interface {
 
 type PartitionMigrator interface {
 	Migrate(ctx context.Context, storageNamespace, utcDay, targetTier string) error
-}
-
-type CutoverReadinessProvider interface {
-	Readiness() (ledgerReady bool, cutoff time.Time, reasons []string)
-}
-
-type IngestGapResolver interface {
-	// ResolveCoveredGaps 是整节点自动路径。ctx 是调用方（HTTP/RPC）的请求上下文：超时/断开
-	// 必须让服务端**真正停止**工作并返回明确错误——解算会扫全源投影（生产实测可跑 30 分钟），
-	// 不可取消就等于「调用方早已放弃、服务端还在为没人要的响应扫盘」。
-	ResolveCoveredGaps(ctx context.Context) error
-	// ResolveCoveredGapsForSource 是显式人工确认（**放弃裁定**）路径：只解指名源的缺口。
-	// operator 是做出裁定的认证主体，为空一律拒绝（放弃不可无痕）。
-	// ctx 语义同上：取消即不得落盘（放弃裁定必须来自一次完成的显式请求）。
-	ResolveCoveredGapsForSource(ctx context.Context, storageNamespace, operator string) error
-}
-
-// IngestPositionGap 是「已放弃位置」查询面 DTO（与 logcoord 的 coverage 语义无关）。
-type IngestPositionGap struct {
-	// 源身份由采集凭据提供；未知时留空，不能从命名空间或查询事件推断。
-	LogSourceID      string
-	SourceGeneration string
-	StorageNamespace string
-	From             uint64
-	To               uint64
-	ReasonCode       string
-	Operator         string
-	AtUTC            string
-}
-
-// IngestAbandonmentProvider 提供「已被人工裁定永久丢失」的源位置区间。
-//
-// 与 logcoord 的分区可查询性**分开**：本接口只回答「分区内部哪些位置永久缺失」，
-// 不参与、也不修改 coverage 的状态判定。缺了它，下游查询会把"永久丢失"当成"本来就没有"，
-// 即静默跳过。
-type IngestAbandonmentProvider interface {
-	AbandonedRanges(targetIDs []string) []IngestPositionGap
-}
-
-// IngestAbandonmentFunc 把普通函数适配成 IngestAbandonmentProvider
-// （与既有 CutoverReadinessFunc 同一模式：让 apps/worker 做跨包适配，服务层不反向依赖 ingest）。
-type IngestAbandonmentFunc func(targetIDs []string) []IngestPositionGap
-
-// AbandonedRanges 实现 IngestAbandonmentProvider。
-func (f IngestAbandonmentFunc) AbandonedRanges(targetIDs []string) []IngestPositionGap {
-	if f == nil {
-		return nil
-	}
-	return f(targetIDs)
-}
-
-// IngestArchiveImporter 是「手动触发归档导入」的提供者（由 ingest.Manager 满足）。
-type IngestArchiveImporter interface {
-	// ImportArchivesNow 扫描并导入待导入归档，返回 (扫描数, 导入数)。operator 为空必须拒绝。
-	ImportArchivesNow(storageNamespace, operator string) (int, int, error)
 }
 
 // OperatorMetadataKey 是承载「操作人认证主体」的 incoming gRPC metadata 键。//
@@ -193,22 +146,13 @@ func (f RuntimeInstallFunc) Install(ctx context.Context, packageURL, packageSHA 
 type Service struct {
 	workerpb.UnimplementedWorkerServiceServer
 
-	query       QueryService
-	views       ViewLookup
-	enabled     bool
-	runtime     RuntimeController
-	installer   RuntimeInstaller
-	catalog     *catalog.Catalog
-	migrator    PartitionMigrator
-	cutover     CutoverReadinessProvider
-	gapResolver IngestGapResolver
-	// abandonments 提供「已放弃位置」标记（可空：未接线时不返回该标记，而不是编造空成功）。
-	abandonments IngestAbandonmentProvider
-	// archiveImporter 提供手动归档导入入口（可空 = 未接线，返回明确不支持）。
-	archiveImporter IngestArchiveImporter
-	// identityClearer 提供「人工确认并清空身份冲突」入口（可空 = 未接线，返回明确不支持，
-	// 而不是回一个"清空 0 条"的空成功——那会让运维以为标记已经消掉）。
-	identityClearer IngestIdentityConflictClearer
+	query     QueryService
+	views     ViewLookup
+	enabled   bool
+	runtime   RuntimeController
+	installer RuntimeInstaller
+	catalog   *catalog.Catalog
+	migrator  PartitionMigrator
 }
 
 // New 构造已启用的日志 RPC 服务层。
@@ -216,6 +160,21 @@ type Service struct {
 // views 可为 nil（不做 view 回填）。
 func New(q QueryService, views ViewLookup) *Service {
 	return &Service{query: q, views: views, enabled: q != nil}
+}
+
+// SetResourceBudget 将 Worker 共享资源预算交给真实查询面。
+func (s *Service) SetResourceBudget(budget query.ResourceBudget) {
+	if target, ok := s.query.(interface{ SetResourceBudget(query.ResourceBudget) }); ok {
+		target.SetResourceBudget(budget)
+	}
+}
+
+// Close 在 Worker 停机时释放固定视图，但不提前解除在途读取 pin。
+func (s *Service) Close() error {
+	if target, ok := s.query.(interface{ Close() error }); ok {
+		return target.Close()
+	}
+	return nil
 }
 
 // NewDisabled 构造显式禁用的服务（老 Worker / 未启用日志平台）。
@@ -231,109 +190,8 @@ func (s *Service) SetRuntimeController(controller RuntimeController) { s.runtime
 
 func (s *Service) SetRuntimeInstaller(installer RuntimeInstaller) { s.installer = installer }
 
-func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)                { s.catalog = cat }
-func (s *Service) SetPartitionMigrator(migrator PartitionMigrator)       { s.migrator = migrator }
-func (s *Service) SetCutoverReadiness(provider CutoverReadinessProvider) { s.cutover = provider }
-func (s *Service) SetIngestGapResolver(resolver IngestGapResolver)       { s.gapResolver = resolver }
-func (s *Service) SetIngestAbandonmentProvider(p IngestAbandonmentProvider) {
-	s.abandonments = p
-}
-
-// SetIngestArchiveImporter 注入手动归档导入入口。
-func (s *Service) SetIngestArchiveImporter(i IngestArchiveImporter) { s.archiveImporter = i }
-
-// IngestIdentityConflictClearer 是「人工确认并清空身份冲突」的提供者（由 ingest.Manager 满足）。
-type IngestIdentityConflictClearer interface {
-	// ClearIdentityConflicts 清空指定源（sourceKey 为空 = 全部持有冲突记录的源）的冲突记录；
-	// 返回清空的条数与逐源结果。operator / reason 为空必须拒绝。
-	ClearIdentityConflicts(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error)
-}
-
-// IdentityConflictClearOutcome 是清空的逐源结果（服务层 DTO，避免反向依赖 ingest 包）。
-type IdentityConflictClearOutcome struct {
-	ClearedCount   int
-	ClearedSources []string
-	SkippedSources []string
-}
-
-// SetIngestIdentityConflictClearer 注入身份冲突人工清空入口。
-func (s *Service) SetIngestIdentityConflictClearer(c IngestIdentityConflictClearer) {
-	s.identityClearer = c
-}
-
-// IngestIdentityConflictClearerFunc 把普通函数适配成 IngestIdentityConflictClearer
-// （与 IngestAbandonmentFunc / PartitionMigrateFunc 同一模式：让 apps/worker 做跨包适配，
-// 服务层不反向依赖 ingest 包）。
-type IngestIdentityConflictClearerFunc func(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error)
-
-// ClearIdentityConflicts 实现 IngestIdentityConflictClearer。
-func (f IngestIdentityConflictClearerFunc) ClearIdentityConflicts(ctx context.Context, sourceKey, operator, reason string) (IdentityConflictClearOutcome, error) {
-	if f == nil {
-		return IdentityConflictClearOutcome{}, fmt.Errorf("ingest identity conflict clearing is not configured")
-	}
-	return f(ctx, sourceKey, operator, reason)
-}
-
-// LogClearIdentityConflicts 人工确认并清空身份冲突记录（操作人与理由均必需，审计留痕）。
-//
-// 与放弃裁定的口径一致：本操作会让查询面不再提示该源存在内容歧义（质量标记消失），
-// 无痕清空等于给「掩盖数据歧义」开后门，故取不到操作人/理由一律拒绝、不下发任何变更。
-func (s *Service) LogClearIdentityConflicts(ctx context.Context, req *workerpb.LogClearIdentityConflictsRequest) (*workerpb.LogClearIdentityConflictsResponse, error) {
-	resp := &workerpb.LogClearIdentityConflictsResponse{RequestId: req.GetRequestId()}
-	// 理由与操作人同源同口径（都是传输层 metadata，见 OperatorMetadataKey 的说明）：
-	// 理由不由请求体携带，因为请求体可被任意伪造，而那会让审计凭据里的"为什么"不可信。
-	reason := reasonFromContext(ctx)
-	if s.identityClearer == nil {
-		resp.Error = unsupportedErr("ingest identity conflict clearing is not configured")
-		return resp, nil
-	}
-	operator := operatorFromContext(ctx)
-	if operator == "" {
-		resp.Error = unsupportedErr(fmt.Sprintf(
-			"清空身份冲突需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))
-		return resp, nil
-	}
-	if reason == "" {
-		resp.Error = unsupportedErr(fmt.Sprintf(
-			"清空身份冲突需要理由：请在 incoming gRPC metadata 设置 %q（审计凭据必须记录为何可以清）", ReasonMetadataKey))
-		return resp, nil
-	}
-	outcome, err := s.identityClearer.ClearIdentityConflicts(ctx, strings.TrimSpace(req.GetStorageNamespace()), operator, reason)
-	if err != nil {
-		return &workerpb.LogClearIdentityConflictsResponse{RequestId: req.GetRequestId(),
-			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
-	}
-	resp.ClearedCount = uint64(outcome.ClearedCount)
-	resp.ClearedSources = outcome.ClearedSources
-	resp.SkippedSources = outcome.SkippedSources
-	slog.Info("已执行身份冲突人工清空", "operator", operator, "reason", reason,
-		"sourceKey", req.GetStorageNamespace(), "cleared", outcome.ClearedCount,
-		"sources", len(outcome.ClearedSources), "skipped", len(outcome.SkippedSources))
-	return resp, nil
-}
-
-// LogImportArchives 手动触发归档导入扫描（操作人必需，审计留痕）。
-func (s *Service) LogImportArchives(ctx context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
-	if s.archiveImporter == nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: unsupportedErr("ingest archive import is not configured")}, nil
-	}
-	// 与放弃裁定同一口径：状态改变类动作必须带操作人，取不到即拒绝（不可无痕）。
-	operator := operatorFromContext(ctx)
-	if operator == "" {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: unsupportedErr(fmt.Sprintf(
-				"手动导入归档需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
-	}
-	scanned, imported, err := s.archiveImporter.ImportArchivesNow(strings.TrimSpace(req.GetStorageNamespace()), operator)
-	if err != nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_ERROR_UNSPECIFIED, Message: err.Error()}}, nil
-	}
-	slog.Info("已执行手动归档导入", "operator", operator,
-		"storageNamespace", req.GetStorageNamespace(), "scanned", scanned, "imported", imported)
-	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
-}
+func (s *Service) SetRuntimeCatalog(cat *catalog.Catalog)          { s.catalog = cat }
+func (s *Service) SetPartitionMigrator(migrator PartitionMigrator) { s.migrator = migrator }
 
 // Enabled 报告服务是否启用。
 func (s *Service) Enabled() bool { return s.enabled && s.query != nil }
@@ -395,9 +253,11 @@ func unauthorizedSearch(req *workerpb.LogSearchRequest, err error) *workerpb.Log
 	}
 }
 
-// LogCreateView creates the Worker-local view used by subsequent federated calls.
+// LogCreateView 创建后续联邦请求复用的 Worker 固定视图。
 func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateViewRequest) (*workerpb.LogCreateViewResponse, error) {
-	_ = ctx
+	if ctx.Err() != nil {
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	if !s.plannerReady() {
 		return &workerpb.LogCreateViewResponse{
 			RequestId: requestIDOfQuery(req.GetQuery()),
@@ -412,7 +272,22 @@ func (s *Service) LogCreateView(ctx context.Context, req *workerpb.LogCreateView
 			Error:     &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_UNAUTHORIZED, Message: err.Error()},
 		}, nil
 	}
-	resp := s.query.OpenView(qreq)
+	var resp query.SearchResponse
+	if contextual, ok := s.query.(interface {
+		OpenViewContext(context.Context, query.QueryRequest) query.SearchResponse
+	}); ok {
+		resp = contextual.OpenViewContext(ctx, qreq)
+	} else {
+		resp = s.query.OpenView(qreq)
+	}
+	if ctx.Err() != nil {
+		if target, ok := s.query.(interface{ ReleaseView(string) error }); ok && resp.View != nil {
+			if err := target.ReleaseView(resp.View.ViewID); err != nil {
+				slog.Warn("取消建View后的租约清理失败", "err", err)
+			}
+		}
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	s.fillClosedVisibleSeq(&resp.Coverage, viewIDOf(resp.View, qreq.View))
 	return &workerpb.LogCreateViewResponse{
 		RequestId: resp.RequestID,
@@ -437,42 +312,7 @@ func (s *Service) LogSearch(ctx context.Context, req *workerpb.LogSearchRequest)
 	out := grpcmap.SearchResponseToProto(resp)
 	// 二次回填：确保 proto 侧 targets 携带 planner view 的 closed_visible_seq。
 	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
-	s.fillIngestPositionGaps(out, qreq.AuthorizedTargets)
 	return out, nil
-}
-
-// fillIngestPositionGaps 回填「已放弃位置」标记：本响应涉及的命名空间里，哪些源位置区间
-// 已被人工裁定为永久丢失。
-//
-// 为什么必须单独回填而不是并进 coverage：两者语义不同（见 proto 注释），把"永久丢失"塞进
-// coverage 的枚举或在 partial_reasons 里混写，会让下游误以为那是"暂时查不到"，
-// 从而按重试处理一个永远不会恢复的区间——那正是要消灭的静默跳过。
-// 目标集取请求的授权目标（形如 storage_namespace 或 storage_namespace/YYYY-MM-DD）；
-// **空 = 本 Worker 全部**（与 planner「空 = 全部 Catalog 分区」同一口径），由提供者展开为全源。
-func (s *Service) fillIngestPositionGaps(out *workerpb.LogSearchResponse, targetIDs []string) {
-	// 注意：**不因 targetIDs 为空而提前返回**。空在 planner 语义下是「本 Worker 全部」
-	// （见 query.Planner 的 TargetIDs 说明），若此处提前返回，一次不带授权目标的查询就会
-	// 拿到"没有永久丢失"的空结果——那正是要消灭的静默跳过（标记看似实现了、实际永远为空）。
-	if s.abandonments == nil || out == nil {
-		return
-	}
-	gaps := s.abandonments.AbandonedRanges(targetIDs)
-	if len(gaps) == 0 {
-		return
-	}
-	out.IngestPositionGaps = make([]*workerpb.IngestPositionGap, 0, len(gaps))
-	for _, g := range gaps {
-		out.IngestPositionGaps = append(out.IngestPositionGaps, &workerpb.IngestPositionGap{
-			LogSourceId:      g.LogSourceID,
-			SourceGeneration: g.SourceGeneration,
-			StorageNamespace: g.StorageNamespace,
-			From:             g.From,
-			To:               g.To,
-			ReasonCode:       g.ReasonCode,
-			Operator:         g.Operator,
-			AtUtc:            g.AtUTC,
-		})
-	}
 }
 
 // LogStats 聚合逻辑事件集合。
@@ -560,6 +400,115 @@ func (s *Service) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest)
 	return out, nil
 }
 
+// LogStreams 枚举查询窗内的 stream。未接入 StreamsQuerier 时返回 LOG_UNSUPPORTED。
+//
+// 语义边界（与 Fields 区分）：
+//   - LogFields  = 「窗内出现过哪些**文档字段名**」（/field_names）
+//   - LogStreams = 「窗内有哪些**流**、各多少条」（/streams）
+//
+// 两者都能回答「有哪些流字段」，但只有后者能给出**条数**，
+// 而条数正是前端「按日志量排序看哪个源在刷屏」所需。
+func (s *Service) LogStreams(ctx context.Context, req *workerpb.LogStreamsRequest) (*workerpb.LogStreamsResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamsResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log streams disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamsResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log streams unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.Streams(ctx, qreq)
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	streams := make([]*workerpb.LogStream, 0, len(res.Streams))
+	for _, sv := range res.Streams {
+		streams = append(streams, &workerpb.LogStream{
+			Raw:         sv.Raw,
+			LogSourceId: sv.LogSourceID,
+			Stream:      sv.Stream,
+			Hits:        sv.Hits,
+		})
+	}
+	out := &workerpb.LogStreamsResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Streams:   streams,
+		Complete:  res.Complete,
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreamFieldNames 列出 stream 的标签维度名。
+func (s *Service) LogStreamFieldNames(ctx context.Context, req *workerpb.LogStreamFieldNamesRequest) (*workerpb.LogStreamFieldNamesResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamFieldNamesResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log stream field names disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamFieldNamesResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log stream field names unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.StreamFieldNames(ctx, qreq)
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	out := &workerpb.LogStreamFieldNamesResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Fields:    append([]string(nil), res.Fields...),
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
+// LogStreamFieldValues 按单个 stream 标签维度取取值分布。
+func (s *Service) LogStreamFieldValues(ctx context.Context, req *workerpb.LogStreamFieldValuesRequest) (*workerpb.LogStreamFieldValuesResponse, error) {
+	if !s.plannerReady() {
+		return &workerpb.LogStreamFieldValuesResponse{
+			RequestId: requestIDOfQuery(req.GetQuery()),
+			Error:     unsupportedErr("log stream field values disabled on this worker"),
+		}, nil
+	}
+	qreq := grpcmap.QueryRequestFromBase(req.GetQuery())
+	sq, ok := s.query.(StreamsQuerier)
+	if !ok {
+		return &workerpb.LogStreamFieldValuesResponse{
+			RequestId: qreq.RequestID,
+			Error:     unsupportedErr("log stream field values unimplemented on this worker"),
+		}, nil
+	}
+	res := sq.StreamFieldValues(ctx, qreq, req.GetField())
+	s.fillClosedVisibleSeq(&res.Coverage, viewIDOf(res.View, qreq.View))
+	values := make([]*workerpb.LogStreamFieldValue, 0, len(res.Values))
+	for _, v := range res.Values {
+		values = append(values, &workerpb.LogStreamFieldValue{Value: v.Value, Hits: v.Count})
+	}
+	out := &workerpb.LogStreamFieldValuesResponse{
+		RequestId: res.RequestID,
+		View:      grpcmap.ViewRefToProto(res.View),
+		Coverage:  grpcmap.CoverageToProto(res.Coverage),
+		Values:    values,
+		Complete:  res.Complete,
+		Error:     grpcmap.QueryErrorToProto(res.Err),
+	}
+	s.fillProtoClosedVisibleSeq(out.GetCoverage(), out.GetView().GetViewId())
+	return out, nil
+}
+
 // LogRehydrate 创建或复用受管 Rehydrate 任务。
 func (s *Service) LogRehydrate(ctx context.Context, req *workerpb.LogRehydrateRequest) (*workerpb.LogTaskResponse, error) {
 	if !s.plannerReady() {
@@ -600,7 +549,7 @@ func (s *Service) LogRuntimeStatus(ctx context.Context, req *workerpb.LogRuntime
 		resp.Error = unsupportedErr("managed VictoriaLogs supervisor is not configured")
 		return resp, nil
 	}
-	for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot, vlsup.NamespaceCold, vlsup.NamespaceRehydrate} {
+	for _, ns := range []vlsup.Namespace{vlsup.NamespaceHot} {
 		if probe, ok := s.runtime.(interface {
 			Health(context.Context, vlsup.Namespace) error
 		}); ok {
@@ -650,17 +599,16 @@ func runtimeCatalogReadiness(cat *catalog.Catalog, ns vlsup.Namespace) (recovere
 	return seen && complete, seen && complete && published
 }
 
+// ownerUsesNamespace 报告某归属的数据在不在该受管实例里。
+//
+// 2026-10-29：只剩余一个 VL，冷热双层已废除 ⇒ 所有归属的数据都在这唯一的实例里。
+// 保留这个函数而不是直接 return true，是因为 catalog 里仍可能有历史记录的 Owner=cold/archive
+// （今天之前搬过去的），那些记录同样是这一个 VL 的（它们的物理分区现在都在同一 data_root 下）。
 func ownerUsesNamespace(owner catalog.Owner, ns vlsup.Namespace) bool {
-	switch owner {
-	case catalog.OwnerHot:
-		return ns == vlsup.NamespaceHot
-	case catalog.OwnerCold:
-		return ns == vlsup.NamespaceCold
-	case catalog.OwnerArchive:
-		return ns == vlsup.NamespaceRehydrate
-	default:
+	if ns != vlsup.NamespaceHot {
 		return false
 	}
+	return owner.Valid()
 }
 
 func (s *Service) LogRuntimeControl(ctx context.Context, req *workerpb.LogRuntimeControlRequest) (*workerpb.LogTaskResponse, error) {
@@ -683,7 +631,7 @@ func (s *Service) LogRuntimeControl(ctx context.Context, req *workerpb.LogRuntim
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED, Error: unsupportedErr("managed VictoriaLogs supervisor is not configured")}, nil
 	}
 	ns := vlsup.Namespace(strings.ToLower(strings.TrimSpace(req.GetNamespace())))
-	if ns != vlsup.NamespaceHot && ns != vlsup.NamespaceCold && ns != vlsup.NamespaceRehydrate {
+	if !vlsup.ValidNamespace(ns) {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED, Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_ERROR_UNSPECIFIED, Message: "unknown VictoriaLogs namespace"}}, nil
 	}
 	var err error
@@ -721,64 +669,6 @@ func (s *Service) LogMigratePartition(ctx context.Context, req *workerpb.LogMigr
 	if err := s.migrator.Migrate(ctx, namespace, day, target); err != nil {
 		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
 			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error(), Retryable: true}}, nil
-	}
-	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
-}
-
-func (s *Service) LogCutoverReadiness(_ context.Context, req *workerpb.LogCutoverReadinessRequest) (*workerpb.LogCutoverReadinessResponse, error) {
-	resp := &workerpb.LogCutoverReadinessResponse{RequestId: req.GetRequestId()}
-	if s.cutover == nil || s.query == nil {
-		resp.Error = unsupportedErr("log cutover readiness is not configured")
-		return resp, nil
-	}
-	caps := s.query.GetCapabilities(query.CapabilitiesRequest{ProtocolVersion: req.GetProtocolVersion(), RequestID: req.GetRequestId()})
-	required := map[string]bool{"query_view": false, "search": false, "stats": false}
-	for _, capability := range caps.Capabilities {
-		if _, ok := required[capability]; ok {
-			required[capability] = true
-		}
-	}
-	confirmed := caps.Supported
-	for _, present := range required {
-		confirmed = confirmed && present
-	}
-	ready, cutoff, reasons := s.cutover.Readiness()
-	resp.CapabilityConfirmed, resp.LedgerReady = confirmed, ready
-	resp.Reasons = append(resp.Reasons, reasons...)
-	if !confirmed {
-		resp.Reasons = append(resp.Reasons, "required_log_capabilities_missing")
-	}
-	if !cutoff.IsZero() {
-		resp.CutoffTimeUtc = cutoff.UTC().Format(time.RFC3339Nano)
-	}
-	return resp, nil
-}
-
-func (s *Service) LogResolveIngestGaps(ctx context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
-	if s.gapResolver == nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: unsupportedErr("ingest gap resolution is not configured")}, nil
-	}
-	var err error
-	if ns := strings.TrimSpace(req.GetStorageNamespace()); ns != "" {
-		// 显式人工确认（**放弃裁定**）：只解指名源（含自动路径拒绝的 Raw 写失败缺口，理由见 Manager 注释）。
-		// 操作人必须来自认证上下文：取不到就拒绝——放弃是唯一允许回收链跨过永久空洞的动作，
-		// 无痕放弃等于给静默丢日志开后门。
-		operator := operatorFromContext(ctx)
-		if operator == "" {
-			return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-				Error: unsupportedErr(fmt.Sprintf(
-					"放弃缺口需要操作人认证主体：请在 incoming gRPC metadata 设置 %q", OperatorMetadataKey))}, nil
-		}
-		err = s.gapResolver.ResolveCoveredGapsForSource(ctx, ns, operator)
-	} else {
-		// 不传命名空间：整节点自动解。除「解算判据」逐字未改外，2026-10-02 缺陷修复了它的两条
-		// 服务端纪律：**不跨投影查询持有采集轮锁**、且把 RPC ctx 贯穿下去（超时/断连 → 真正停止）。
-		err = s.gapResolver.ResolveCoveredGaps(ctx)
-	}
-	if err != nil {
-		return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_FAILED,
-			Error: &workerpb.LogError{Code: workerpb.LogErrorCode_LOG_NOT_READY, Message: err.Error()}}, nil
 	}
 	return &workerpb.LogTaskResponse{State: workerpb.LogTaskState_LOG_TASK_SUCCEEDED}, nil
 }
@@ -837,8 +727,20 @@ func unsupportedErr(msg string) *workerpb.LogError {
 	}
 }
 
+// taskStateFromString 把归档任务状态字符串映射为 proto 枚举。
+//
+// archive.TaskState 的取值自带 LOG_TASK_ 前缀（与 proto 枚举同名，见
+// archive/types.go），而历史调用方与测试也可能传裸值（QUEUED/SUCCEEDED…），
+// 因此这里**先剥前缀再匹配**，两种形态都认。
+// 此前只匹配裸值，带前缀的取值全部落入 default：成功回灌被报成 FAILED 且
+// error 为空，调用方无法用 state 判定成功。
+// 选在映射层归一化而不是改 archive 常量：TaskState 会随 RehydrateJob 的
+// `json:"state"` 出现在持久化快照里，改常量等于改那份表示；proto 枚举是外部契约，
+// 更不能动。无法识别的取值仍 fail-closed 归到 FAILED。
 func taskStateFromString(state string) workerpb.LogTaskState {
-	switch strings.ToUpper(strings.TrimSpace(state)) {
+	// 只剥一层：`LOG_TASK_` 已是两种形态的唯一差异，多剥会把异常输入误判成合法值。
+	norm := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(state)), "LOG_TASK_")
+	switch norm {
 	case "QUEUED":
 		return workerpb.LogTaskState_LOG_TASK_QUEUED
 	case "RUNNING":

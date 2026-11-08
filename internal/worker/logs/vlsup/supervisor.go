@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -34,12 +33,26 @@ type InstanceStatus struct {
 	AssetBuildID    string
 	AssetSHA256     string
 	LastError       string
+	// 退出证据来自真实进程的单一Wait；不是读取status时的墙钟。
+	StartedAt     time.Time
+	ExitedAt      time.Time
+	ExitCode      int
+	ExitCodeKnown bool
 	// HealthOK 表示最近一次 HTTP /health 成功；不蕴含分区恢复或查询可用。
 	HealthOK bool
 	// PartitionRecoveryComplete 分区恢复完成；foundation 不自动推断，保持 false 直至上层登记。
 	PartitionRecoveryComplete bool
 	// QueryReady 查询范围完整可用；同上，与 HealthOK 分离。
 	QueryReady bool
+	// RestartAttempts 运行期看护已连续自动重启的次数。
+	//
+	// 归零条件只有一个：实例重启后**稳定存活**超过看护的稳定窗口。启动成功不清零——
+	// 否则「启动即崩」的循环永远打不满上限，退避与熔断都会失效。
+	RestartAttempts int
+	// RestartsSuspended 表示自动重启已达上限、看护已停止重启（需人工介入）。
+	RestartsSuspended bool
+	// LastRestartError 最近一次自动重启失败的错误；重启成功或稳定存活后清空。
+	LastRestartError string
 }
 
 // Options 构造 Supervisor。
@@ -50,16 +63,24 @@ type Options struct {
 	AssetSHA256 string
 	// DataRoot 受管数据根；各 namespace 使用 DataRoot/<ns>/data。
 	DataRoot string
-	// RetentionPeriod VL runtime retention 的**回退值**；空则 DefaultRetentionPeriod。
-	// 未在 RetentionByNamespace 里单独指定的 namespace 用它。
-	RetentionPeriod string
-	// RetentionByNamespace 按 namespace 覆盖 VL runtime retention。
+	// RetentionPeriod VL runtime retention（唯一的保留期）。
 	//
-	// 为什么必须能分开：VL 的 retention 是**实例级**的，且到期是**直接删**——
-	// 它绕过平台侧「删前归档」的硬规则：搬运驱动器还没搬，VL 自己先把热层数据删了。
-	// 因此热层实例的 retention 必须**不短于**保留策略的热层窗口（留出搬运余量），
-	// 冷层实例的 retention 则是「冷留存多久」的唯一执行者。
-	RetentionByNamespace map[Namespace]string
+	// 2026-10-29：`RetentionByNamespace` 已删除 —— 只剩余一个受管实例，不存在「按层各配各的」。
+	// 历史上的必要性（热层 TTL 必须 ≥ 产品热窗口、冷层 TTL 是冷留存唯一执行者）
+	// 随着冷热分层一起消失了：现在只有一份 TTL，它同时承担两段声明。
+	RetentionPeriod string
+	// DeleteEnabled 打开 VL 的 -delete.enable（默认关）。
+	// 只有它为真时才允许孤儿代次 GC / 按级别 TTL 真正删除数据；关闭时行为与改动前一致。
+	DeleteEnabled bool
+	// MaxDiskSpaceUsageBytes / MaxDiskUsagePercent 是 VL 的**磁盘占用上限**（二者互斥）。
+	//
+	// 与 RetentionPeriod 的关系：保留期管「最老留多久」，磁盘上限管「总共能占多少」，
+	// 谁先到谁触发，两者可以同时开（VL 官方也推荐搭配）。
+	//
+	// 为什么需要它（2026-10-29 用户要求）：只有 retentionPeriod 时，磁盘用量由
+	// 「180 天 × 实际写入量」决定——某个源日志暴增会让磁盘跟着涨，没有上限。
+	MaxDiskSpaceUsageBytes int64
+	MaxDiskUsagePercent    int
 	// AuthUsername / AuthPassword 本地 Basic-auth；生产必须非空。
 	AuthUsername string
 	AuthPassword string
@@ -67,10 +88,15 @@ type Options struct {
 	Ports map[Namespace]int
 	// MemoryAllowedBytes 可选 per-namespace cache 覆盖；HOT 缺省 DefaultHotCacheBytes。
 	MemoryAllowedBytes map[Namespace]int64
+	// MemoryAllowedPercent 非 0 时改用 VL 官方推荐的 -memory.allowedPercent，
+	// 让 VL 按宿主机可用内存自适应；显式 MemoryAllowedBytes 仍优先。
+	MemoryAllowedPercent int
 	// MemoryLimitBytes 受管 VL 进程的 Go 软内存上限（GOMEMLIMIT，字节）。
 	// 0 使用 DefaultVLMemoryLimitBytes；负值表示不注入（保留 VL 默认行为）。
-	// 用于约束单 Worker 日志数据面 RSS（契约 §6.6）。
+	// 仅为Go软目标，不承诺RSS或mmap硬上限。
 	MemoryLimitBytes int64
+	// NamespaceBudgets 分别配置各层cache、Go软限制、RSS判据；优先于兼容字段。
+	NamespaceBudgets map[Namespace]NamespaceBudget
 	// Factory 进程工厂；nil 使用 RealFactory。测试注入 fake。
 	Factory CmdFactory
 	// Sink 独立失败 sink；nil 使用 slog 默认 IndependentLoggerSink。
@@ -83,6 +109,12 @@ type Options struct {
 	AssetBuildID string
 	// HealthClient 可选：按实例 base URL 构造健康客户端；nil 时用 NewClient。
 	HealthClient func(baseURL, user, pass string) (*Client, error)
+	// DisableStreamFields 关闭 `/insert/jsonline` 的流标签（见 ClientOptions.DisableStreamFields）。
+	//
+	// 只作用于本 supervisor **默认构造**的客户端；注入了 HealthClient 时由注入方决定。
+	// 放在这一层的原因：写入客户端一律经 ClientFor 得到（采集侧的写路由最终指向这里），
+	// 不经过这一层就无法用配置关掉流标签。
+	DisableStreamFields bool
 }
 
 type instance struct {
@@ -90,38 +122,71 @@ type instance struct {
 	state  InstanceState
 	proc   Process
 	status InstanceStatus
+
+	// epoch 是显式状态迁移（Start/Stop）的代数。看护在决定重启时记下它，真正重启前
+	// 再比对一次：只要人工动过实例，本轮自愈就放弃——避免「人工刚停、看护又拉起」。
+	epoch uint64
+	// startedAt 本代进程启动成功的时刻（零值表示当前没有成功启动过）。
+	// 看护用它判断「此前健康」：存活不足稳定窗口的实例按启动失败处理，不进重启循环。
+	startedAt time.Time
+	// stableObserved 只由活态越过稳定窗口置位；死亡后的墙钟不能生成资格。
+	stableObserved bool
+	// restartAttempts 连续自动重启次数；restartsSuspended 为真表示已达上限并熔断。
+	restartAttempts   int
+	restartsSuspended bool
+	// nextRestartAt 下一次允许重启的最早时刻（退避；零值表示无限制）。
+	nextRestartAt time.Time
+	// lastRestartErr 最近一次自动重启失败原因（用于告警与状态展示）。
+	lastRestartErr string
 }
 
-// Supervisor 管理 named VL 实例（hot|cold|rehydrate）。
+// Supervisor 管理受管 VL 实例（2026-10-29 起只有一个）。
 type Supervisor struct {
-	binPath   string
-	assetSHA  string
-	dataRoot  string
-	retention string
-	// retentionNS 按 namespace 覆盖 retention（空 = 用 retention）。
-	retentionNS map[Namespace]string
-	authUser    string
-	authPass    string
-	ports       map[Namespace]int
-	memOverride map[Namespace]int64
-	factory     CmdFactory
-	sink        Sink
-	allowVLRec  bool
-	assetTag    string
-	assetBuild  string
-	newClient   func(baseURL, user, pass string) (*Client, error)
+	binPath        string
+	assetSHA       string
+	dataRoot       string
+	retention      string
+	authUser       string
+	deleteEnabled  bool
+	maxDiskBytes   int64
+	maxDiskPercent int
+	authPass       string
+	ports          map[Namespace]int
+	memOverride    map[Namespace]int64
+	memPercent     int
+	factory        CmdFactory
+	sink           Sink
+	allowVLRec     bool
+	assetTag       string
+	assetBuild     string
+	newClient      func(baseURL, user, pass string) (*Client, error)
 
 	mu          sync.Mutex
 	instances   map[Namespace]*instance
 	budget      CacheBudget
 	guardBlocks int
+
+	// opMu 串行化"会改变进程归属"的操作：显式 Start/Stop 与看护重启。
+	//
+	// 必要性：看护判定崩溃后到真正 fork 之间有一段窗口，若此时人工 Stop，仅靠 s.mu
+	// 无法阻止「停止完成 → 看护又拉起」。用一把操作锁把两者排成先后，再用 epoch 判定
+	// 谁先发生：谁后拿到 opMu，谁看到对方已改动就退让。
+	// 锁序固定为 opMu → mu，guardian 与 Start/Stop 均遵守，避免死锁。
+	opMu sync.Mutex
+
+	// guardMu 保护看护的启停与参数（不参与上述锁序：只做短临界区，不嵌套 opMu/mu）。
+	guardMu     sync.Mutex
+	guardCancel context.CancelFunc
+	guardOpts   GuardianOptions
+	// guardGen 是看护循环的代际号：旧循环退出时只在代际未变时清空 guardCancel，
+	// 避免把新一代的取消函数误清（重启看护后 StopGuardian 失效、goroutine 泄漏）。
+	guardGen int
 }
 
 // DefaultVLMemoryLimitBytes 受管 VL 进程的默认 Go 软内存上限。
 //
-// 取值依据：契约 §6.6「单 Worker 日志数据面 RSS ≤ 1GiB（不含 page cache）」。Worker 进程自身约
-// 0.3GiB，故给单 VL 进程 512MiB 软上限，使默认配置（HOT-only）整体留在 1GiB 以内。
-// GOMEMLIMIT 是 Go 软上限（引导 GC 更早回收），不是硬 cgroup 限制。
+// 保留512MiB的Go软目标基线，不据此推断Worker+各层RSS总量。
+// GOMEMLIMIT不含所有RSS/mmap/page cache，实际准入必须消费独立RSS采样与预算。
 const DefaultVLMemoryLimitBytes int64 = 512 << 20
 
 // vlProcessEnv 依据配置构造受管 VL 进程的额外环境变量。
@@ -151,25 +216,50 @@ func New(opts Options) (*Supervisor, error) {
 	if opts.AuthUsername == "" || opts.AuthPassword == "" {
 		return nil, fmt.Errorf("vlsup: local basic-auth username/password are required")
 	}
-	factory := opts.Factory
-	if factory == nil {
-		// 默认真实工厂：注入 VL 进程级 Go 软内存上限（GOMEMLIMIT），使受管 VL RSS 受预算约束
-		// （契约 §6.6 单 Worker 日志数据面 RSS ≤ 1GiB；-memory.allowedBytes 只约束 cache 不约束 Go heap）。
-		factory = RealFactory{Env: vlProcessEnv(opts.MemoryLimitBytes)}
-	}
 	sink := opts.Sink
 	if sink == nil {
 		sink = IndependentLoggerSink{}
 	}
+	budgets := DefaultNamespaceBudgets()
+	for ns, n := range opts.MemoryAllowedBytes {
+		if !ValidNamespace(ns) || n < 0 {
+			return nil, fmt.Errorf("vlsup: 非法兼容cache预算 %q", ns)
+		}
+	}
+	for ns, b := range opts.NamespaceBudgets {
+		if !ValidNamespace(ns) || b.CacheBytes < 0 || b.RSSBytes < 0 {
+			return nil, fmt.Errorf("vlsup: 非法namespace预算 %q", ns)
+		}
+	}
+	for ns, b := range budgets {
+		if n, ok := opts.MemoryAllowedBytes[ns]; ok && n > 0 {
+			b.CacheBytes = n
+		}
+		if opts.MemoryLimitBytes != 0 {
+			b.GoMemoryLimitBytes = opts.MemoryLimitBytes
+		}
+		if n, ok := opts.NamespaceBudgets[ns]; ok {
+			if n.CacheBytes != 0 {
+				b.CacheBytes = n.CacheBytes
+			}
+			if n.GoMemoryLimitBytes != 0 {
+				b.GoMemoryLimitBytes = n.GoMemoryLimitBytes
+			}
+			b.RSSBytes = n.RSSBytes
+		}
+		budgets[ns] = b
+	}
+	factory := opts.Factory
+	if factory == nil {
+		env := map[Namespace][]string{}
+		for ns, b := range budgets {
+			env[ns] = vlProcessEnv(b.GoMemoryLimitBytes)
+		}
+		factory = RealFactory{Env: vlProcessEnv(opts.MemoryLimitBytes), NamespaceEnv: env, DiagnosticSink: sink, Secrets: []string{opts.AuthPassword}}
+	}
 	retention := opts.RetentionPeriod
 	if retention == "" {
 		retention = DefaultRetentionPeriod
-	}
-	retentionByNS := make(map[Namespace]string, len(opts.RetentionByNamespace))
-	for ns, v := range opts.RetentionByNamespace {
-		if strings.TrimSpace(v) != "" {
-			retentionByNS[ns] = v
-		}
 	}
 	tag := opts.AssetTag
 	if tag == "" {
@@ -182,37 +272,41 @@ func New(opts Options) (*Supervisor, error) {
 	newClient := opts.HealthClient
 	if newClient == nil {
 		newClient = func(baseURL, user, pass string) (*Client, error) {
-			return NewClient(ClientOptions{BaseURL: baseURL, Username: user, Password: pass})
+			return NewClient(ClientOptions{
+				BaseURL: baseURL, Username: user, Password: pass,
+				DisableStreamFields: opts.DisableStreamFields,
+			})
 		}
 	}
 	s := &Supervisor{
-		binPath:     opts.BinaryPath,
-		assetSHA:    opts.AssetSHA256,
-		dataRoot:    opts.DataRoot,
-		retention:   retention,
-		retentionNS: retentionByNS,
-		authUser:    opts.AuthUsername,
-		authPass:    opts.AuthPassword,
-		ports:       map[Namespace]int{},
-		memOverride: map[Namespace]int64{},
-		factory:     factory,
-		sink:        sink,
-		allowVLRec:  opts.AllowVLRecursiveSink,
-		assetTag:    tag,
-		assetBuild:  build,
-		newClient:   newClient,
-		instances:   map[Namespace]*instance{},
-		budget:      DefaultCacheBudget(),
+		binPath:        opts.BinaryPath,
+		assetSHA:       opts.AssetSHA256,
+		dataRoot:       opts.DataRoot,
+		retention:      retention,
+		authUser:       opts.AuthUsername,
+		deleteEnabled:  opts.DeleteEnabled,
+		maxDiskBytes:   opts.MaxDiskSpaceUsageBytes,
+		maxDiskPercent: opts.MaxDiskUsagePercent,
+		authPass:       opts.AuthPassword,
+		ports:          map[Namespace]int{},
+		memOverride:    map[Namespace]int64{},
+		memPercent:     opts.MemoryAllowedPercent,
+		factory:        factory,
+		sink:           sink,
+		allowVLRec:     opts.AllowVLRecursiveSink,
+		assetTag:       tag,
+		assetBuild:     build,
+		newClient:      newClient,
+		instances:      map[Namespace]*instance{},
+		budget:         DefaultCacheBudget(),
 	}
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		port := DefaultPort(ns)
 		if p, ok := opts.Ports[ns]; ok && p > 0 {
 			port = p
 		}
 		s.ports[ns] = port
-		if m, ok := opts.MemoryAllowedBytes[ns]; ok {
-			s.memOverride[ns] = m
-		}
+		s.memOverride[ns] = budgets[ns].CacheBytes
 		s.instances[ns] = &instance{
 			cfg:   s.configFor(ns),
 			state: StateStopped,
@@ -231,11 +325,11 @@ func New(opts Options) (*Supervisor, error) {
 	return s, nil
 }
 
-// retentionFor 返回 namespace 生效的 VL runtime retention。
+// retentionFor 返回生效的 VL runtime retention。
+//
+// 2026-10-29：只剩一个实例 ⇒ 恒为全局 retention（`RetentionByNamespace` 已删）。
 func (s *Supervisor) retentionFor(ns Namespace) string {
-	if v, ok := s.retentionNS[ns]; ok && strings.TrimSpace(v) != "" {
-		return v
-	}
+	_ = ns
 	return s.retention
 }
 
@@ -245,13 +339,17 @@ func (s *Supervisor) configFor(ns Namespace) InstanceConfig {
 		port = DefaultPort(ns)
 	}
 	return InstanceConfig{
-		Namespace:          ns,
-		Port:               port,
-		StorageDataPath:    StoragePathUnder(s.dataRoot, ns),
-		RetentionPeriod:    s.retentionFor(ns),
-		MemoryAllowedBytes: s.memOverride[ns],
-		AuthUsername:       s.authUser,
-		AuthPassword:       s.authPass,
+		Namespace:              ns,
+		Port:                   port,
+		StorageDataPath:        StoragePathUnder(s.dataRoot, ns),
+		RetentionPeriod:        s.retentionFor(ns),
+		MemoryAllowedBytes:     s.memOverride[ns],
+		MemoryAllowedPercent:   s.memPercent,
+		AuthUsername:           s.authUser,
+		AuthPassword:           s.authPass,
+		EnableDelete:           s.deleteEnabled,
+		MaxDiskSpaceUsageBytes: s.maxDiskBytes,
+		MaxDiskUsagePercent:    s.maxDiskPercent,
 	}
 }
 
@@ -266,9 +364,29 @@ func (s *Supervisor) Config(ns Namespace) (InstanceConfig, error) {
 	return inst.cfg, nil
 }
 
-// Start 校验资产并启动指定 namespace 实例。
-// 流程：VerifyAsset → BuildArgs → Factory.Start → 记录 tag/build id 到 status。
+// Start 校验资产并启动指定 namespace 实例（显式操作）。
+//
+// 与看护重启共享同一把操作锁：显式启动会自增 epoch 并清空看护账面，等于「人工介入后
+// 重新武装自愈」——此前因达上限而熔断的实例，人工 Start 一次即可恢复自动重启资格。
 func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if inst, ok := s.instances[ns]; ok {
+		inst.epoch++
+		inst.restartAttempts = 0
+		inst.restartsSuspended = false
+		inst.nextRestartAt = time.Time{}
+		inst.lastRestartErr = ""
+		s.syncGuardStatusLocked(inst)
+	}
+	s.mu.Unlock()
+	return s.start(ctx, ns)
+}
+
+// start 是 Start 的实现体，调用方须持有 opMu（显式启动或看护重启）。
+// 流程：VerifyAsset → BuildArgs → Factory.Start → 记录 tag/build id 到 status。
+func (s *Supervisor) start(ctx context.Context, ns Namespace) error {
 	s.mu.Lock()
 	inst, ok := s.instances[ns]
 	if !ok {
@@ -286,10 +404,12 @@ func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
 	s.mu.Unlock()
 
 	fail := func(err error) error {
+		err = s.safeError(err)
 		s.mu.Lock()
 		inst.state = StateFailed
 		inst.status.State = StateFailed
 		inst.status.LastError = err.Error()
+		s.syncProcessStatusLocked(inst)
 		s.mu.Unlock()
 		if blocked := reportViaSink(s.sink, s.allowVLRec, string(ns), err); blocked {
 			s.mu.Lock()
@@ -313,21 +433,40 @@ func (s *Supervisor) Start(ctx context.Context, ns Namespace) error {
 	if err != nil {
 		return fail(err)
 	}
-	proc, err := s.factory.Start(ctx, s.binPath, args)
+	var proc Process
+	startedAt := time.Now()
+	if factory, ok := s.factory.(namespaceCmdFactory); ok {
+		proc, err = factory.StartNamespace(ctx, ns, s.binPath, args)
+	} else {
+		proc, err = s.factory.Start(ctx, s.binPath, args)
+	}
 	if err != nil {
 		return fail(fmt.Errorf("vlsup: start %s: %w", ns, err))
 	}
+	if handle, ok := proc.(ExecHandle); ok {
+		startedAt = handle.Snapshot().StartedAt
+	}
+	s.mu.Lock()
+	inst.proc = proc
+	inst.startedAt = startedAt
+	inst.stableObserved = false
+	s.syncProcessStatusLocked(inst)
+	s.mu.Unlock()
 	// 启动后必须确认进程真存活：Start 成功只代表 fork/exec 成功，二进制仍可能立即退出
 	// （真机实测：数据目录缺失时 VL 秒退，控制面却报「启动成功」）。此处给一个极短窗口
 	// 让失败进程暴露，并把已退出的进程句柄立即回收，避免僵尸堆积。
-	if exited, waitErr := waitStartupLiveness(ctx, proc, startLivenessWindow); exited {
+	if exited, waitErr := waitStartupLiveness(ctx, proc, startLivenessWindow); exited || waitErr != nil {
 		_ = proc.Stop(DefaultStopGrace)
-		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s", ns, detailSuffix(waitErr)))
+		detail := processExitDetail(proc)
+		return fail(fmt.Errorf("vlsup: %s exited immediately after start%s%s", ns, detailSuffix(waitErr), detail))
 	}
 
 	s.mu.Lock()
 	inst.proc = proc
 	inst.state = StateRunning
+	// StartedAt取真实exec证据；启动观察窗口不从实际存活时长中扣除。
+	inst.startedAt = startedAt
+	s.syncProcessStatusLocked(inst)
 	inst.status.State = StateRunning
 	inst.status.PID = proc.PID()
 	inst.status.AssetTag = s.assetTag
@@ -380,8 +519,24 @@ func detailSuffix(err error) string {
 	return ": " + err.Error()
 }
 
-// Stop 停止指定 namespace 实例。
+// Stop 停止指定 namespace 实例（显式操作）。
+//
+// 显式停止会自增 epoch：看护即使已在"判定崩溃"的半途，也会因 epoch 不符而放弃本轮重启。
+// 这条保证是「停止中不得被重新拉起」的核心，不能只靠状态字段（状态在 proc.Stop 窗口里
+// 仍是 STOPPING，但看护如果已越过判定点，状态检查就来不及了）。
 func (s *Supervisor) Stop(ctx context.Context, ns Namespace) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if inst, ok := s.instances[ns]; ok {
+		inst.epoch++
+	}
+	s.mu.Unlock()
+	return s.stop(ctx, ns)
+}
+
+// stop 是 Stop 的实现体，调用方须持有 opMu。
+func (s *Supervisor) stop(ctx context.Context, ns Namespace) error {
 	_ = ctx
 	s.mu.Lock()
 	inst, ok := s.instances[ns]
@@ -395,20 +550,28 @@ func (s *Supervisor) Stop(ctx context.Context, ns Namespace) error {
 		inst.status.PID = 0
 		inst.status.HealthOK = false
 		inst.status.QueryReady = false
+		inst.startedAt = time.Time{}
+		inst.stableObserved = false
 		s.mu.Unlock()
 		return nil
 	}
+	// 先做状态迁移再释放锁：看护看到的要么是 STOPPING，要么是 STOPPED，
+	// 不会在 proc.Stop 的窗口里把实例误判成「崩溃」。
 	inst.state = StateStopping
 	inst.status.State = StateStopping
+	// 清掉启动时刻：本代进程不再算「此前健康」，避免停止后又被判成可自愈实例。
+	inst.startedAt = time.Time{}
+	inst.stableObserved = false
 	proc := inst.proc
 	s.mu.Unlock()
 
 	var err error
 	if proc != nil {
-		err = proc.Stop(DefaultStopGrace)
+		err = s.safeError(proc.Stop(DefaultStopGrace))
 	}
 
 	s.mu.Lock()
+	s.syncProcessStatusLocked(inst)
 	inst.proc = nil
 	inst.state = StateStopped
 	inst.status.State = StateStopped
@@ -435,11 +598,10 @@ func (s *Supervisor) Stop(ctx context.Context, ns Namespace) error {
 
 // StopAll 停止全部受管 namespace，供 Worker 退出时回收受管子进程。
 //
-// 必要性（真机事故）：Worker 退出若不停受管 VL，VL 会成为 PPID=1 的孤儿并继续占用
-// hot/cold/rehydrate 端口；下次启动时新 VL 因端口被占而立即退出，采集面长期降级。
-// 各 namespace 独立停止，单个失败不阻断其余回收。
+// 必要性（真机事故）：Worker 退出若不停受管 VL，VL 会成为 PPID=1 的孤儿并继续占用端口；
+// 下次启动时新 VL 因端口被占而立即退出，采集面长期降级。
 func (s *Supervisor) StopAll(ctx context.Context) {
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		s.mu.Lock()
 		inst, ok := s.instances[ns]
 		running := ok && (inst.state == StateRunning || inst.proc != nil)
@@ -468,7 +630,7 @@ func (s *Supervisor) ReplaceBinary(ctx context.Context, path, sha string) error 
 		return nil
 	}
 	var running []Namespace
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		if s.instances[ns].state == StateRunning {
 			running = append(running, ns)
 		}
@@ -526,9 +688,9 @@ func (s *Supervisor) Health(ctx context.Context, ns Namespace) error {
 	base := "http://" + ListenAddr(cfg.Port)
 	cli, err := s.newClient(base, cfg.AuthUsername, cfg.AuthPassword)
 	if err != nil {
-		return err
+		return s.safeError(err)
 	}
-	herr := cli.Health(ctx)
+	herr := s.safeError(cli.Health(ctx))
 
 	s.mu.Lock()
 	if herr == nil {
@@ -585,7 +747,8 @@ func (s *Supervisor) ClientFor(ns Namespace) (*Client, error) {
 	}
 	cfg := inst.cfg
 	s.mu.Unlock()
-	return s.newClient("http://"+ListenAddr(cfg.Port), cfg.AuthUsername, cfg.AuthPassword)
+	client, err := s.newClient("http://"+ListenAddr(cfg.Port), cfg.AuthUsername, cfg.AuthPassword)
+	return client, s.safeError(err)
 }
 
 // Status 返回 namespace 状态快照。
@@ -607,6 +770,7 @@ func (s *Supervisor) Status(ns Namespace) (InstanceStatus, error) {
 // 报 RUNNING 而实际端口无监听；故在任何状态读取点都以进程句柄为准校正，避免误导性成功上报。
 // 调用方须持有 s.mu。
 func (s *Supervisor) reconcileExitedLocked(inst *instance) {
+	s.syncProcessStatusLocked(inst)
 	if inst == nil || inst.proc == nil || inst.state != StateRunning {
 		return
 	}
@@ -618,7 +782,7 @@ func (s *Supervisor) reconcileExitedLocked(inst *instance) {
 	inst.status.HealthOK = false
 	inst.status.QueryReady = false
 	if inst.status.LastError == "" {
-		inst.status.LastError = "managed VictoriaLogs process exited unexpectedly"
+		inst.status.LastError = s.safeError(fmt.Errorf("managed VictoriaLogs process exited unexpectedly%s", processExitDetail(inst.proc))).Error()
 	}
 }
 
@@ -627,7 +791,7 @@ func (s *Supervisor) StatusAll() []InstanceStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]InstanceStatus, 0, len(s.instances))
-	for _, ns := range []Namespace{NamespaceHot, NamespaceCold, NamespaceRehydrate} {
+	for _, ns := range managedNamespaces() {
 		if inst, ok := s.instances[ns]; ok {
 			// 与 Status 一致：以进程实况校正，避免已退出实例仍报 RUNNING。
 			s.reconcileExitedLocked(inst)
@@ -652,7 +816,12 @@ func (s *Supervisor) EnforceCacheBudget(cacheBytes int64) error {
 func (s *Supervisor) Budget() CacheBudget {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.budget
+	out := s.budget
+	out.SubBudgets = make(map[string]int64, len(s.budget.SubBudgets))
+	for key, value := range s.budget.SubBudgets {
+		out.SubBudgets[key] = value
+	}
+	return out
 }
 
 // SetSubBudget 登记一项 Worker 日志子预算（wal/staging/export/cold/rehydrate/projection/rss）。
@@ -713,10 +882,14 @@ func (s *Supervisor) SampleBudget() BudgetVerdict {
 	for _, pid := range pids {
 		if rss, err := SampleProcessRSSBytes(pid); err == nil {
 			sample.ProcessRSSBytes += rss
+		} else {
+			sample.RSSUnknown = true
 		}
 	}
 	if pct, err := SampleDiskUsagePercent(dataRoot); err == nil {
 		sample.DiskUsagePercent = pct
+	} else {
+		sample.DiskUnknown = true
 	}
 	return EvaluateBudget(budget, sample, DefaultBudgetThresholds())
 }

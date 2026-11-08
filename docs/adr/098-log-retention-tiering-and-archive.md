@@ -68,7 +68,19 @@ FR-473～484 建成了日志平台的骨架：Worker 本地采集 + 账本 + WAL
 - FR-478 已有的 S3 Provider / Rehydrate **能力不删除**，保留为第 3 档（异地 / 超长期 / 合规）的能力位与后续评估位；
 - Deep Archive 与 COLD 的关系：COLD 是"可分层的本地长期留存"，DEEP 是"异地/独立副本"；启用 DEEP 的唯一条件由后续评估决定，不以对标为由默认开启。
 
-### 7. 已知边界（如实登记）
+### 7. **归档目的地自身也有保留期**（桶内生命周期）
+
+搬运/导出解决了「热层到期后往哪去」，但**归档目的地本身**此前只增不减：热层清得再干净，归档桶仍按天累积，730d 之后仍留着的每一天都是白占。故补上第 7 条决策：
+
+- **配置面**：`log_retention.archive_object_retention.{enabled,retention,sweep_at_hour}`，默认 `false` / **空（= 不启用）** / `3`；启用但 `retention` 为空 ⇒ **启动即拒**；`retention` 为 `0`（永久保留，与「启用回收」自相矛盾）或负数同样启动即拒。
+- **保留期起点是归档时刻**（`ArchiveEvidence.ArchivedAt`），不是热层回收时刻：`730d` 的语义是「这份**归档副本**留两年」。
+- **复用第 3 条的三闸**，不新造开关：删归档对象与删热层是同一量级的不可逆删除（甚至更彻底——热层删了还有归档，归档删了就真没了），换一条路径就换一套闸门等于把「三闸」变成「看情况几闸」。
+- **次序与热层回收同构且不可调换**：先落权威态（`MarkArchiveObjectPurgeRequested`，进 journal）→ 再逐对象 `Delete` → 全部成功才 `MarkArchiveObjectsPurged`；任一失败回滚（`Purged` 保持假、尝试次数不清零）。反序会留下「对象没了而 Catalog 仍说归档里有」的窗口，查询面照旧把用户引向一条必然失败的 rehydrate。
+- **终态是证据的属性，不新增 Owner**：`Owner` 的语义是「正本在哪一层」，而对象被清掉不是「搬到另一层」。新增 `OwnerPurged` 会让全仓十余处 `Owner == OwnerHot/OwnerCold/OwnerArchive` 的 switch 落进各自 default（`TierOf` 返回不存在的 tier、`NamespaceForOwner` 找不存在的 namespace、写准入退化成「按 owner 猜新位置」）——一个「数据已经不在」的事实会伪装成「另一个存储层」。故清除表达为 `ArchiveEvidence.Purged/PurgedAt/PurgeReason/PurgeAttempts/LastPurgeError`，`Owner` 保持 `archive`。
+- **查询面必须能区分**：已清除 ⇒ 新原因 `ARCHIVE_PURGED` + 新错误码 `LOG_ARCHIVE_PURGED`（proto `LogErrorCode = 11`）。**绝不复用** `LOG_ARCHIVE_MISSING`——那是「归档还在、只是一时没恢复」，引导用户去点 rehydrate；而档案被按保留期删掉后，那条引导是死路。也**绝不返回空成功**：静默 0 行会被读成「那天没有日志」。
+- **清除前置（全部满足才动手）**：归档证据完整；**热层副本已回收**（否则归档是第二份副本，删掉它再让热层回收跑一轮，最后一份就没了）；**无待恢复标记**（此时归档是唯一可用副本）；无活跃查询租约；**无本地已恢复投影**（rehydrate 副本是临时的，归档才是它的耐久来源）。
+
+### 8. 已知边界（如实登记）
 
 - **粒度的张力**：日分区（`catalog.PartitionKey = (namespace, utcDay)`）里混着所有级别，而搬运的最小粒度就是"一天"。因此**按级别的 TTL 无法在热层独立生效**——`HotWindow()` 取显式热层窗口；真正的独立分级需要把级别分流到不同存储命名空间（与采样侧"把低价值等级路由到独立流"是同一类改动），列为后续评估项，不在本 ADR 内承诺。
 - **冷层保留的执行责任**在受管 COLD 实例的 `-retentionPeriod`；平台侧 `cold_retention` 承担**声明与校验**（让"热多久 / 冷多久"在同一处可读、可校验），不重复实现一套删除逻辑。
@@ -88,7 +100,8 @@ FR-473～484 建成了日志平台的骨架：Worker 本地采集 + 账本 + WAL
 - **实现状态（截至本 ADR 写入时）**：
   - 已落地（提交 `692e714b`、`282c60af`）：`internal/worker/logs/retention`（策略/计划/执行器/VL 客户端/驱动器）、`apps/worker/log_retention.go` 生产适配层、`log_retention.*` 配置面主体、**冷层搬运驱动器**（周期调度 + 首轮立即执行 + 年龄/水位取先到）；变异 retention 21/21（含驱动器 5 条）全红，与 sampling 11/11 合计 32/32（计数口径见 `docs/specs/log-cost-governance/spec.md` §6.6）。
   - **已接线（提交 `08eb2386`；本条 2026-10-11 订正）**：`log_retention.cold_retention`、`log_retention.trigger.*` 配置面；受管 VL 的**按 namespace retention**（`vlsup.RetentionByNamespace`）；热层窗口与受管 HOT 的 `-retentionPeriod` 对齐到 90 天（同提交内修复「VL 自带 `-retentionPeriod` 30d 短于热层 90d ⇒ 绕过删前归档直接删」）。COLD 侧 `-delete.enable` 的显式默认关闭说明见本 ADR 决策表与 `docs/specs/log-cost-governance/spec.md` §3 门禁 / §7 未做项。
-  - 待实现：gz 文件吸存（第 5 条）；到期/搬运/删除的指标与日志行对外暴露（"谁、何时、多少、去哪"可审计）。
+  - **已接线（2026-10，FR-501 归档对象回收）**：第 7 条决策的全部落地——`retention.ArchiveObjectReclaimer` + `retention.ArchivePurgeDriver`（每日固定时刻 + 首轮立即执行）、`catalog.ArchiveEvidence.Purged*` 与 `MarkArchiveObjectPurgeRequested`/`MarkArchiveObjectsPurged`/`RollbackArchiveObjectPurge`、`apps/worker/log_archive_purge.go` 适配层（Catalog 候选枚举 + 本地归档 Provider 的对象层删除 + 空目录清理）、查询面 `ARCHIVE_PURGED`/`LOG_ARCHIVE_PURGED`、`/metrics` 4 条新序列。三闸仍默认全关。
+  - 待实现：gz 文件吸存（第 5 条）；到期/搬运/删除的指标与日志行对外暴露（"谁、何时、多少、去哪"可审计）——归档对象回收的读数已补（见上一条），搬运/删除侧仍部分。
   - 文档对账：`docs/specs/log-cost-governance/spec.md` 的 D1/D2 口径按本 ADR 更新为热 90d / 冷 730d（该 spec 正由实现侧同步）；PRD 的 FR 编号需对账（`log-cost-governance` 一侧的 FR 编号与 PRD `FR-499`（采集登记锁解耦）冲突，CHANGELOG 亦标 FR-499）。
 - **可转红防护**：`log_retention` 的 21+5 条回归与 `retention`/`sampling` 合计 32 条变异（含"搬运失败留存+零删除""穷举组合下未显式 discard 零裸删""显式 discard 后删除确实可达"的正反对照）钉住本 ADR 的规则；改动规则必须同步这些用例。
 - **不影响**：`.claude/rules/architecture-invariants.md` 与 `decision-alignment.md` 的同步不在本次写入范围（由文档纪律流程后续处理）。

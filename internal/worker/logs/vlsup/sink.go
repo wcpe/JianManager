@@ -1,8 +1,10 @@
 package vlsup
 
 import (
+	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 )
 
@@ -35,11 +37,55 @@ type IndependentLoggerSink struct {
 func (s IndependentLoggerSink) WritesIntoVL() bool { return false }
 
 // ReportFailure 实现 Sink。
+//
+// ## 为什么不能无条件用 Error（2026-10-31 生产缺陷）
+//
+// VictoriaLogs 把**所有级别**的日志都写到 stderr（info / warn / error 同一流），
+// 而 supervisor 把这个流的**每一行**都当失败上报。旧实现无条件调 `logger.Error`，
+// 于是 VL 每次启动打的几十行 info（内存上限、版本、监听地址）全部变成 ERROR：
+//
+//	生产实测：重启后 20 条 ERROR，逐条查全部是 VL 的 `info` 级日志
+//
+// 危害不是“多几行日志”，而是**真错会被噪音淹没**——运维 `grep ERROR` 看不到真正的问题。
+// 本项目已经吃过一次“观测面失真”的亏（`log_vl_disk_used` 读到 903%、实际 4.5%）。
+//
+// 因此按 VL 行自带的级别字段分流。**解析不出级别时必须保持 Error**：
+// Go panic 栈、segfault 信息这些非结构化输出恰恰最需要 ERROR，
+// 不能因为“解析失败”就静默降级成 info。
 func (s IndependentLoggerSink) ReportFailure(instance string, err error) {
-	if s.Logger == nil || err == nil {
+	if err == nil {
 		return
 	}
-	s.Logger.Error("vlsup supervisor failure", "instance", instance, "error", err)
+	logger := s.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Log(context.Background(), vlDiagnosticLevel(err.Error()),
+		"vlsup 独立进程诊断", "instance", instance, "error", err)
+}
+
+// vlDiagnosticLevel 从 VL 日志行里读出它自带的级别。
+//
+// VL 的 stderr 行格式（实测 v1.52.0，TAB 分隔）：
+//
+//	2026-10-31T07:53:00.041Z\tinfo\tVictoriaMetrics@…/memory.go:45\tlimiting caches to …
+//	                         ↑ 级别字段
+//
+// **default 必须是 Error**（见 ReportFailure 的注释）。
+func vlDiagnosticLevel(line string) slog.Level {
+	// 只看前 4 段：级别在开头附近，不必扫描整行（行可能很长，脱敏后仍可很长）。
+	for _, field := range strings.SplitN(line, "\t", 4) {
+		switch strings.TrimSpace(strings.ToLower(field)) {
+		case "info":
+			return slog.LevelInfo
+		case "warn", "warning":
+			return slog.LevelWarn
+		case "error", "fatal", "panic", "dpanic":
+			return slog.LevelError
+		}
+	}
+	// 非结构化输出（panic 栈 / 段错误 / 被截断行）⇒ 当错误处理（保守方向）。
+	return slog.LevelError
 }
 
 // RecordingSink 用于测试：记录上报，并可模拟“写入 VL 管道”的非法 sink。

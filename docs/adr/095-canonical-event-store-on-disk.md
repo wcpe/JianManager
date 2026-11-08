@@ -1,8 +1,52 @@
 # ADR-095: canonical 事件体的落盘 compact 存储
 
 - **日期**: 2026-09-24
-- **状态**: accepted
+- **状态**: accepted（**2026-10-30 部分推翻：存储介质已改为内存 tmpfs，见下方追记**）
 - **关联**: FR-484 · FR-473 · ADR-094
+
+> ### 2026-10-30 追记：事件段改 tmpfs，不再落磁盘
+>
+> **本 ADR 的标题与决策提案第 1 条（“追加式 NDJSON 段 + fsync 后原子替换 MANIFEST”）
+> 已在存储介质上被推翻；决策的其余部分全部保留。**
+>
+> #### 前提怎么消失的
+>
+> 生产机的磁盘是**机械盘**（`/dev/sda7`，`ROTA=1`）。在这张盘上 fsync 是寻道 + 旋转惩罚，
+> 而决策提案第 1 条恰把 fsync 当成达成崩溃一致性的必要手段。
+> 用户 2026-10-30 裁定：「现在不做任何的索引 账本落盘 因为是机械盘 性能不行」。
+>
+> #### 新规则
+>
+> - `eventstore.MemoryRoot()` 把段根目录设为 `/dev/shm/jianmanager-events/<base>`
+>   （无 `/dev/shm` 时回退 `os.TempDir()`）。写路径**不碰机械盘**。
+> - 段格式、`MANIFEST.json` 语义、只增不减、按日分区、流式读回、`Store.DayMaxEnd`
+>   等**全部保留**（决策提案第 3/4/5 条不变）。
+> - 崩溃一致性简化为“重启即空”：不再需要“只容忍最后一段尾部截断”那套判据，
+>   也不再需要目录项 fsync。
+>
+> #### 代价（必须如实读）
+>
+> **本 ADR 背景章写的那个承诺——“persistedSource.Events 是 VL 数据根丢失后重建 projection
+> 的权威集合”——现在不成立了。** 段在 tmpfs 里，Worker 重启后它们就没了。因此：
+>
+> - VL 数据根丢失时，**无法再从事件段重建 projection**；重建只能依赖 VL 自身数据。
+> - “事件体占用转移到磁盘”这条后果描述失效（现在是转移到内存盘）。
+> - `eventStorePrune` 的段回收水位依赖 `VerifiedRuns`，而后者已从投递主路径移出，
+>   该机制现在是“默认关闭 + 数据源已空”的僵态（生产未配置启用）。
+>
+> 这不是 bug，是刻意取舍：把“跨重启重建能力”换成“机械盘上无写入延迟”。
+> 当前唯一跨重启存活的东西只有两样：**采集游标**（`ingest.cursor`，
+> 每源一行几十字节，不 fsync）与 **VL 里的数据**。
+>
+> #### 代码落点
+>
+> - 介质：`internal/worker/logs/eventstore/store.go` 的 `MemoryRoot`
+> - 装配：`internal/worker/logs/ingest/runtime.go` 的 `eventstore.Open(eventstore.MemoryRoot(...))`
+> - 落地提交：`7456d716`
+>
+> #### 不变的部分
+> 段格式与 MANIFEST 语义、只增不减、幂等追加、内存上界能力、量测口径的两条硬约束、
+> 以及「事件体落盘不能当作可按 reclaim 裁剪」这条区分（两者仍然严格分开）。
 
 ## 背景
 
@@ -57,3 +101,7 @@ FR-473 Shared Contracts §4.3/§5.3 规定 `persistedSource.Events` 是 VL 数�
 ## 取代关系
 
 本 ADR 不取代 ADR-094（Worker 日志数据面边界）或 FR-473 契约；它细化 §4.3/§5.3 中权威集合的**存储介质**，不改变其内容、语义或裁剪禁则。
+
+> **2026-10-30 补充**：本 ADR 的“存储介质”选择（磁盘 NDJSON 段）已被上方追记推翻；
+> 但“内容、语义、裁剪禁则不变”这一点仍然成立。现行契约中关于事件段的细节
+> 以 `docs/specs/worker-log-canonical-eventstore/spec.md` 的 2026-10-30 修订节为准。

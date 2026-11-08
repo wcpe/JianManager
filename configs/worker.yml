@@ -42,6 +42,15 @@ log:
   # 1 = 全采（诊断窗口），数值越大采样越稀（5 = 1/5），0 = 关闭（默认）。
   # mutex_profile_fraction: 0
 
+  # 进程自身日志文件（<数据根>/var/log/worker.log）的轮转与保留，
+  # 与实例日志 / VictoriaLogs 完全无关。零值回退内置默认（1 GiB / 5 份 / 30 天 / 压缩），
+  # 旧配置无需改动。
+  #
+  # max_size_mb: 1024      # 单文件触发轮转的大小（MB）
+  # max_backups: 5         # 保留份数（含未压缩与已压缩）；负值 = 不限
+  # max_age_days: 30       # 保留天数（按档名里的轮转时间算，一天 = 24h）；负值 = 关闭按天保留
+  # compress: true         # 轮转档是否 gzip；显式写 false 才关
+
 # Optional localhost VictoriaLogs query client. Empty vl_url keeps the explicit
 # LOG_UNSUPPORTED compatibility path until a managed VL instance is healthy.
 # log_query:
@@ -58,15 +67,64 @@ log:
 #   username: jm
 #   password: ${JIANMANAGER_VL_PASSWORD}
 #   data_root: /home/jianmanager/var/log/vl
-#   retention_period: 90d        # ⚠ 必须**不短于** log_retention.hot_retention（默认 90d）。
-#                                # VL 的 retention 到期是**直接删**，会绕过「删前归档」：
-#                                # 热层实例 TTL 比 hot_retention 短，VL 会在搬运之前先删掉数据。
-#                                # 启用保留策略时 Load 在启动受管进程之前就拒绝（配错即拒绝启动）。
-#                                # 本项不配置时取默认 90d；**显式写成空串**则回退到受管 supervisor
-#                                # 的模板值 30d，同样短于默认 90d 声明 ⇒ 会被拒。
-#   cold_retention_period: 730d  # 同上：不得短于 log_retention.cold_retention（默认 730d）
-#   start_cold: false
-#   start_rehydrate: false
+#   retention_period: 180d       # 唯一的保留期（既管可查窗口也管长期留存）。
+#                                # ⚠ 必须 **不短于** log_retention 声明的 max(hot_retention, cold_retention)；
+#                                # 否则 Load 在启动受管进程之前就 **拒绝启动**（不是告警）。
+#                                # 默认值：retention_period=180d、hot_retention=90d、cold_retention=180d
+#                                # ⇒ max(90d,180d)=180d，与 180d 相等，默认就能启动。
+#                                # ℹ 若只改 `log_vl.retention_period` 而不改 cold_retention，
+#                                # 只要新值 >= 180d（默认 cold）依然合法；改小则必被拒。
+#                                # ℹ 冷热双层已废除（2026-10-29），`cold_retention` 现在只是**声明**，
+#                                # 它是 retention_period 的下界，本身不执行任何淘汰。
+#                                # 2026-10-29：冷热双层已废除，只剩余一个 VL；`cold_retention_period`
+#                                # / `cold_port` / `rehydrate_port` / `start_cold` / `start_rehydrate`
+#                                # 均已删除，写了也不会生效。
+#
+#   # ── 磁盘占用上限（2026-10-29）───────────────────────────────────────────
+#   # 只有 retention_period 时，磁盘用量 = 保留期 × 实际写入量，**没有上限**：
+#   # 某个源日志暴增就会把磁盘拖涨。下列**两选一**（同时配会在启动时报错）：
+#   #
+#   # max_disk_space_bytes：按绝对字节数（**推荐**，尤其 VL 与其它进程共享盘时）。
+#   # max_disk_usage_percent：按磁盘使用百分比 1-100。
+#   #   ⚠ 百分比口径在**共享盘**上会被其它进程的写入触发（比如游戏服自己在写），
+#   #     结果是把日志丢掉而不是删别的 ⇒ 只在 VL 独占一块盘时才是好口径。
+#   #
+#   # 两者与 retention_period **同时生效**（谁先到谁触发），不是替代关系：
+#   # 日志量稳定时满保留期才淘汰；暴涨时先撞磁盘上限、旧分区提前丢。
+#   # VL 的行为是**丢最旧的按日分区**，不是按字节精确切。
+#   #
+#   # ⚠ 两条官方限制（2026-10-29 实读文档），它们决定了「上限 != 沙盘」：
+#   #   1. VL **至少保留最近 2 天**：最近 2 天数据超过上限时，占用**必然**超过阈值；
+#   #   2. 占用检查是**周期性**的，两次检查之间可以涨穿；而磁盘写满时 VL 会进入
+#   #      **只读模式、反而无法执行丢弃**（丢弃也要写元数据）。
+#   # ⇒ 上限必须**远低于**可用空间（建议 <= 可用量的 40%），并配 disk_full 告警。
+#   #
+#   # 配套告警（代码已打通读数，规则需在 CP 面板/API 建）：
+#   #   log_vl_disk_pct      >= 90 持续 300s ⇒ critical（离上限多近）
+#   #   log_vl_rows_dropped  >  0  持续 60s  ⇒ warn（已经因保留期在丢日志）
+#   max_disk_space_bytes: 107374182400  # 100 GiB；0/不写 = 不限制
+#   # max_disk_usage_percent: 85
+#
+#   # ── 流标签（2026-10-31，对齐 VL 官方接入方式）───────────────────────────
+#   # VictoriaLogs 的「流」是**分区键**：同一 stream 内的行共享元数据与索引，
+#   # 所以 stream 的基数直接决定 VL 的元数据/内存开销。默认值就是架构裁定的：
+#   #   stream_fields: log_source_id,stream     # 总流数上界 ≈ 19 × 3 ≈ 57
+#   #
+#   # ✅ 入流：log_source_id（19 个，查询最常用）、stream（2-3 个，stdout/stderr）
+#   # ❌ 不入流：level（随内容变化 ⇒ 同一源今天全 INFO、明天冒 WARN 就切新分区）
+#   # ❌ 绝对禁止：event_id / record_start / record_end / ingest_time_utc / …
+#   #     这些字段基数**无界**，每行不同 ⇒ VL 为每行建一个 stream ⇒ 元数据爆炸。
+#   #     写进这些字段会在 Load 阶段直接**拒绝启动**（不是告警），因为这一步不可逆：
+#   #     stream 元数据只能靠删分区回收。
+#   #
+#   # 验一下生效没有（写入后执行，看返回的 values 是不是按源/通道分开了）：
+#   #   curl -u $USER:$PASS 'http://127.0.0.1:19441/select/logsql/field_values?field=_stream&query=*'
+#   # stream_fields: log_source_id,stream
+#   #
+#   # 关闭流标签（一般**不要**关）：适用于「外部回环 VL 由别的系统一并写入」或
+#   # 需要与既有 stream 布局对齐的部署。关掉后写入请求**一个参数都不带**（与本改动前
+#   # 字节级一致）。⚠ 注意：同一个 VL 里新旧数据的分区形态会不一致（旧数据全在 "{}" 里）。
+#   # disable_stream_fields: false
 
 # Optional persistent Worker/Node or offline FILE_PRIMARY sources. Instance
 # sources are registered automatically by CP instance lifecycle RPCs.
@@ -98,16 +156,7 @@ log:
 # log_ingest:
 #   time_zone: local
 
-# 启动增量对账（FR-497）：按「源 × UTC 天」只补缺失天；回退方向永远是「多写一次」而不是「少写一次」。
-# 默认启用、并发 4、单源总超时 30s、单次 count 查询 10s、**整批总预算 60s**（复审 P2-10：对账在
-# ingest.New 里同步执行，预算到期即取消在途查询，未完成的源回退整窗重发）。
-# 需要「启动时一律整窗重发」时把它显式关掉（应急逃生口）。
-# log_reconcile:
-#   enabled: true
-#   concurrency: 4
-#   timeout: 30s
-#   query_timeout: 10s
-#   budget: 60s
+# 增量对账（log_reconcile.*）已随重建/重放链删除（2026-11-03），相关键不再生效。
 
 # 采集归一化的节点级默认字符集（复审 P2-3）：源未显式配置 Charset 时继承本默认。
 # 留空 = auto（合法 UTF-8 原样返回；非法 UTF-8 才按 GB18030 解码并做「含替换字符即放弃」的
@@ -118,55 +167,54 @@ log:
 # log_ingest:
 #   charset: gbk
 
-# 未闭合多行缓冲的闲置超时（缺陷 B）：超过它仍没有新行，就以显式 `multiline_unclosed`
-# 标记强制闭合该缓冲并推进 durable。未闭合缓冲平时只由「下一行到达」推进——源长时间
-# 静默时它既不产出事件也不推进 durable，而轮转恢复要靠 durable 覆盖已读前缀，于是这段
-# 悬挂区间既没被覆盖也没有事件，链路会卡在「轮转分段不可读」。
-# 空 = 默认 5s（normalize.DefaultUnclosedTimeout）；非正数（含 "0"）= **关闭**强制冲刷，
-# 悬挂记录会一直挂着（仅排障用）。非法值启动即拒。
-# log_ingest:
-#   multiline_unclosed_timeout: 5s
-
-# 「定时归档导入扫描」的周期（键 log_ingest.archive_scan_interval）。
-# 空或 "0" = **关闭（默认关）**。为什么默认关：常规源在每个采集轮里已经自动发现并导入归档，
-# 定时扫描的价值只在「采集轮停了、归档还在攒」（源被暂停/停止采集）的场景；默认开会在每个
-# 部署上多出一份周期性目录扫描与账本写入——收益不明显而成本确定，故由运维显式打开。
-# log_ingest:
-#   archive_scan_interval: 5m
-
-# 整节点解算的有界化（键 log_ingest.resolve_gaps_max_sources / resolve_gaps_max_duration）：
-# 作用于 POST /nodes/:id/log-runtime/ingest/resolve-gaps **不传 storageNamespace** 的路径，
-# 限制单次调用最多处理多少源、最多跑多久；超出即分片并由调用方续跑。
-# 0/空 = 源数用默认 256；空 = 时长用默认 2m（主要服务于没有 deadline 的调用方）。
-# ⚠ 为什么必须有界（2026-10-02 压测现场）：该路径此前对全部源做投影查询且**整段持采集轮锁**，
-# 一次调用即让**整节点采集停摆 30 分钟**（read_pos 冻结、索引 WAL 涨到 10.2 GB），
-# 且调用方超时后服务端仍继续跑。锁纪律已修（解算不再跨投影查询持锁、ctx 可取消），
-# 本项是「有界」那一半——遍历必须有上界。非法值（负数 / 非法时长）启动即拒。
-# log_ingest:
-#   resolve_gaps_max_sources: 256
-#   resolve_gaps_max_duration: 2m
-
-# 采集侧采样与降级（成本治理）。默认**全关**：本项一旦启用就会改变「哪些日志被存下来」，
-# 必须由运维显式开启。取值口径：0 = 没填走默认，负数 = 写错启动即拒。
+# 日志采集器（键 log_tailer.*，对齐 Fluent Bit / Filebeat 三层模型）。
 #
-# 抑制**不丢弃**：被压掉的行由一条**汇总事件**承接其区间（正文含条数/级别/首条样例，
-# 字段 sampling_rule/采样计数），因此「丢了多少、丢了什么」在查询面可见，
-# 且既有的缺口自动消解判据（要求连续覆盖）不受影响。
-# log_ingest:
-#   sampling:
-#     enabled: true
-#     min_level: info                  # 等级过滤：低于它的折叠为汇总事件（无法归类的级别一律放行）
-#     burst_window: 1s                 # 同源同消息高频抑制窗口（0 = 不启用）
-#     burst_threshold: 20              # 窗口内前 N 条放行原文，其余合并
-#     max_signatures: 4096             # 模式表上限（有界，采样自身不得成为无界增长点）
-#     budget_max_events_per_window: 0  # 每源预算：窗口内允许原文落库条数（0 = 不启用）
-#     budget_window: 1s
-#     budget_keep_every: 10            # 预算用尽后每 N 条保留 1 条原文，其余折叠
-#     max_aggregate_events: 4096       # 单条汇总承接的原文条数上限
-#     degrade_enabled: false           # 风暴自动降级（触发源复用容量门禁的磁盘读数）
-#     degrade_target_level: ERROR      # 降级期间压到 error-only
-#     degrade_disk_percent: 80         # 与 log_capacity 的降级阈值同口径
-#     degrade_hold: 30s                # 触发消失后连续保持多久才恢复
+# 2026-11-06 起**默认开启**，且它是**唯一**的采集链路（旧 ingest/ledger 链路已删除）。
+#
+# 采集哪些文件**不在这里配**：路径由 CP 下发的实例登记（绑定表）每轮现算——
+# 每个实例的 `<WorkDir>/logs/*.log` 与 `<WorkDir>/proxy.log.*`。这样新建实例的
+# 日志无需重启 Worker 就能被采到。
+#
+# 关闭采集：配 enabled: false（此时不再有任何采集，VL 里只剩存量与保留策略的动作）。
+# log_tailer:
+#   enabled: true
+#   # 额外的采集 glob（通常留空；只用于非实例日志，如节点自身日志）。
+#   paths: []
+#   # 排除规则；留空 = *.gz,*.lck,*.zip,*.tmp（gz 是归档，明确不采）。
+#   exclude: []
+#   # 首次发现的文件从哪里读。true = 从头（能补上部署前的历史日志）。
+#   read_from_head: true
+#   # 位点表路径；留空 = var/log/tailer.registry.jsonl（相对数据根）。
+#   # 兄弟文件 <同名>.bindings.json 保存实例绑定，重启后不必等 CP 重新下发。
+#   registry_path: ""
+#   # 目录扫描 / 读文件周期；留空 = 10s / 2s。
+#   scan_interval: ""
+#   progress_interval: ""
+#   # 多行合并（对齐 Filebeat parsers.multiline 的语义）。**默认启用**。
+#   #
+#   # 与 Filebeat / Fluent Bit 不同（它们默认关闭），这里默认开是刻意的：本平台的
+#   # 采集对象是确定的——MC / BungeeCord，Java 堆栈必然多行。默认关的实测后果：
+#   # 88673 行 Bungee 日志里 123 行堆栈续行全被拆成独立事件。
+#   #
+#   # 默认规则（同时覆盖两种并存的日志形态）：
+#   #   pattern: '^\[?[0-9]{2}:[0-9]{2}:[0-9]{2}|^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+#   #   negate: true    # 不匹配 = 续行
+#   #   match: after    # 续行接到上一行
+#   #   max_lines: 500 / timeout: 5s（实现包默认）
+#   #
+#   # 实测：Bungee 88673 行 → 88550 条事件，最大 42 行堆栈合并成 1 条。
+#   # 关闭：配 multiline.disabled: true（留空 pattern 不等于关闭，那是"用默认规则"）。
+#   # 自定义：写 pattern/negate/match 覆盖；非法值启动即拒（写错会让日志变乱而非报错）。
+#   multiline:
+#     disabled: false
+#     # pattern: "^\\[?[0-9]{2}:[0-9]{2}:[0-9]{2}"
+#     # negate: true
+#     # match: after
+#     # max_lines: 500
+#     # timeout: 5s
+
+# 采集侧采样（log_ingest.sampling.*）已随旧链路删除（2026-11-06）：新采集器逐行写入、无采样实现。
+# 旧 worker.yml 里留着这些键不会报错（viper 忽略未知键），但它们**不再有任何效果**。
 
 # 保留策略（成本治理）。**默认不启用**，且默认动作是「搬运到冷层」而**不是删除**。
 #
@@ -191,11 +239,20 @@ log:
 # 原生有限 TTL 不受平台最后副本/租约闸控制，不能保证无限期搬运失败时仍保留原物。
 # log_retention:
 #   enabled: true
-#   hot_retention: 90d                 # 热层窗口：超期即搬运到冷层（默认 90d）
-#   cold_retention: 730d               # 冷层保留期（所有级别统一；由 COLD 实例的 -retentionPeriod 执行）
+#   hot_retention: 90d                 # 声明：期望可查的热窗口（默认 90d）
+#   cold_retention: 180d               # 声明：期望可查的长期窗口（默认 180d）。
+#                                      # ⚠ 不是“冷层保留期”——**没有 COLD 实例**（2026-10-29 已废除）。
+#                                      # 它现在唯一的作用是抬高 `log_vl.retention_period` 的下界；
+#                                      # 真正执行淘汰的是 VL 自己的 -retentionPeriod。
 #   trigger:
 #     disk_percent: 0                  # >0 时启用磁盘水位提前搬运（与 log_capacity 同口径读数）
 #     min_age: 7d                      # 磁盘触发的最小分区年龄（盘再满也不搬正在写的日分区）
+#     sweep_at_hour: 3                 # 每日搬运触发的**本地整点**（默认 3 = 凌晨 3 点；0..23）。
+#                                      # 日志按 UTC 日分区、一天只新增一个分区，故按「每天一次」而不是
+#                                      # 分钟级周期扫描：其余轮次只会空转。本地时区取进程时区，
+#                                      # 东八区 3 点 = UTC 19:00（昨天分区已封口，不与写入抢同一分区）。
+#                                      # 写 -1 = 关闭每日调度，回退 trigger.interval 的间隔 ticker（旧行为）。
+#     interval: 15m                    # 仅在上面的 -1 兼容档下生效（搬运间隔；默认 15m）
 #   discard: false                     # 意图闸：显式允许直接删（默认 false；即使打开，能搬仍优先搬）
 #   by_level:                          # 推荐档位（D1）
 #     debug: 3d
@@ -210,13 +267,31 @@ log:
 #     vl_sweep: false                  # 执行闸（默认 false = 只计算并暴露，不动手）
 #     interval: 1h
 #     timeout: 30s
-
-# 出站网络代理（FR-174，见 ADR-037；可视化配置 + CP 下发见 FR-185 / ADR-043）。本节点所有出站
-# 下载（自更新二进制、JDK 归档、CFR 反编译器、服务端 jar）经此代理。url 留空=直连（仍尊重
-# HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。
-# scheme 决定类型：http:// / https:// / socks5://。含凭据时经 ${ENV} 注入、勿硬编码。
-# 也可在面板「节点页 → 代理」为本节点配「继承全局 / 自定义」，经心跳下发、运行时生效（无需改本文件/重启）；
-# 节点出站优先级：节点自定义（DB 下发） > 全局默认（DB 下发） > worker.yml > 环境变量。
-# proxy:
-#   url: ""                       # 例：http://127.0.0.1:7890 或 socks5://user:${PROXY_PASS}@127.0.0.1:1080
-#   no_proxy: ""                  # 逗号分隔免代理：localhost,127.0.0.1,10.0.0.0/8,.internal.example
+#   archive_copy:                      # 次选路径（默认关）：搬不了冷层时导出为**独立副本**
+#                                      # 语义：冻结快照 → 逐文件 gzip → 写 manifest(sha256/字节数/
+#                                      # coverage) → 逐文件回读校验。导出成功且校验通过**才**谈回收热层。
+#                                      # ⚠ 回收热层与 discard 走**同一套三闸**（discard + sweep.vl_sweep +
+#                                      # log_vl.delete_enabled）；三闸未全开时是「副本与原物并存」，
+#                                      # 不是「只有副本」。这是有意的：多留一份盘 ≪ 少一份数据。
+#     enabled: false                   # 默认 false：它会把数据写到另一个目的地，必须显式授权
+#     provider: local                  # local（默认）| s3 | minio。
+#                                      # 为什么允许 s3/minio：导出归档的价值在「另存一份」——若目的地只能
+#                                      # 与热层同机同盘，单盘故障/整机报废时副本跟着没，「删前归档」只剩
+#                                      # 「省空间」而丢了「保一份」。复用 FR-478 已在真机 RustFS 验过的
+#                                      # SigV4 客户端，不新造协议也不新造凭证模型。
+#     root: /var/lib/jianmanager/log-archive
+#                                      # [provider=local] 归档根目录（启用且 provider=local 时必填，
+#                                      # 为空则**启动即拒**）。
+#                                      # 布局由 archive 包固定：<root>/<namespace>/<utc_day>/g<gen>/
+#                                      # 其中 manifest.json 与 raw/files/<源相对路径>.gz 构成一份完整副本。
+#                                      # 请放在**独立于热层与冷层的盘**上，否则省不下空间也保不了险。
+#     endpoint: s3.example.com:9000    # [provider=s3|minio] 必填（不带 scheme，scheme 由 use_ssl 决定）
+#     bucket: jm-log-archive           # [provider=s3|minio] 必填；省略或留空则**启动即拒**
+#     region: us-east-1                # [provider=s3|minio] SigV4 区域
+#     prefix: logs/retention           # [provider=s3|minio] 对象键前缀；前缀之后仍是 <ns>/<day>/g<gen>/
+#     access_key: ${JM_ARCHIVE_AK}     # 凭证只写 ${ENV} 引用，不写明文（见 .claude/rules/config-files.md）
+#     secret_key: ${JM_ARCHIVE_SK}
+#     use_ssl: true                    # 默认 false
+#                                      # 目的地不完整（local 无 root / s3|minio 无 endpoint 或 bucket /
+#                                      # provider 写错）一律启动即拒：静默按「未启用」处理会让运维以为
+#                                      # 归档在跑，而到期数据继续占着热层直到盘满。

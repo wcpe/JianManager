@@ -33,7 +33,7 @@ test('FR-139 多选实例 → 批量栏出现并可触发批量重启（有反�
 
   await restartBtn.click()
   // 反馈：批量完成 toast（instanceBatch.result）。
-  await expect(page.getByText(/批量完成：成功/).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText(/批量完成：成功/).first()).toBeVisible()
 })
 
 test('FR-139 批量停止走二次确认弹窗（防回车直提）', async ({ page }) => {
@@ -54,5 +54,5 @@ test('FR-139 批量停止走二次确认弹窗（防回车直提）', async ({ p
 
   // 确认执行 → 成功反馈。
   await dialog.getByRole('button', { name: '执行' }).click()
-  await expect(page.getByText(/批量完成：成功/).first()).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByText(/批量完成：成功/).first()).toBeVisible()
 })

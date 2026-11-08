@@ -23,6 +23,10 @@ type JournalEntry struct {
 	// Records is a single-line atomic batch for all logical namespaces sharing
 	// one physical VictoriaLogs UTC-day partition.
 	Records []*Record `json:"records,omitempty"`
+	// LeaseDelta 仅变更读租约，不改变发布 CAS 使用的记录修订。
+	LeaseDelta *LeaseDelta `json:"lease_delta,omitempty"`
+	// DayMigration 保存物理日固定批次及物理步骤进度。
+	DayMigration *PhysicalDayMigration `json:"day_migration,omitempty"`
 	// State 是本条 journal 记录的迁移状态（幂等重放目标）。
 	State MigrationState `json:"state"`
 	// FromState 变更前状态，便于失败恢复定位。
@@ -66,17 +70,40 @@ type Store interface {
 	LoadEntries() ([]JournalEntry, error)
 }
 
+// LeaseStoreProvider 是可选的「我能给租约旁路文件一个路径」能力。
+//
+// # 为什么需要它（2026-11-05 生产事故）
+//
+// `NewJournalWithStore` 原本用**具体类型断言** `store.(*JSONLFileStore)` 来决定租约
+// 旁路文件的路径（`<journal>.leases`）。只要在中间加一层包装（比如 `BatchedStore`
+// 攒批层），断言就失败，而失败分支写的是 `leases.unavailable = true` —— 接着
+// `leaseDeltaLog.loadLocked()` 返错，`Catalog` 的查询租约准入全线拒绝，**整个查询面
+// 挂掉**。事故形态：部署后所有 target 都是
+// `catalog: query lease admission rejected: custom journal has no durable lease store`。
+//
+// 教训不是「忘了实现某个方法」，而是**把能力判断写成了具体类型判断**：
+// 装饰一层（无论多薄、语义多无关）就会静默降级。所以改成接口：
+// 「能不能给我一个租约文件路径」是能力，跟我是哪个具体类型无关。
+//
+// 实现者只需返回 `(path, true)`；不想提供就走默认（未实现本接口），
+// 此时租约退化为进程内内存态（见 `NewJournalWithStore` 的降级说明）。
+type LeaseStoreProvider interface {
+	// LeaseStorePath 返回租约旁路文件的路径。true 表示可持久化。
+	LeaseStorePath() (string, bool)
+}
+
 // MemJournal 是线程安全的内存 append-only journal。
 type MemJournal struct {
 	mu      sync.RWMutex
 	entries []JournalEntry
 	byKey   map[PartitionKey][]int
 	nextSeq uint64
+	leases  *leaseDeltaLog
 }
 
 // NewMemJournal 创建空的内存 journal。
 func NewMemJournal() *MemJournal {
-	return &MemJournal{byKey: make(map[PartitionKey][]int)}
+	return &MemJournal{byKey: make(map[PartitionKey][]int), leases: &leaseDeltaLog{}}
 }
 
 // Append 追加 journal 项。实现分配单调 seq；若调用方指定 seq，必须大于当前 last。
@@ -164,7 +191,29 @@ func NewJSONLFileStore(path string) (*JSONLFileStore, error) {
 }
 
 // AppendEntry 追加一行 JSON。
+//
+// 每次调用都是「open + write + Sync + close」——在机械盘上单条写入的代价几乎全在
+// Sync 的寻道。因此**攒批场景应改用 `AppendEntries`**（见 `BatchedStore`）：
+// 它把 N 条合并成一次 open + 一次 Sync。
 func (s *JSONLFileStore) AppendEntry(entry JournalEntry) error {
+	return s.AppendEntries([]JournalEntry{entry})
+}
+
+// AppendEntries 一次 open + 一次 Sync 追加**多条**（BatchedStore 的批量落盘入口）。
+//
+// 语义与逐条调用 `AppendEntry` 等价（同样的行格式、同样的顺序），差别只是 I/O 次数：
+// N 条从 N 次 open/N 次 Sync 降为 1 次。这正是把 2026-10-30 那个「每批投递都要付的
+// 寻道开销」真正摊薄的地方。
+//
+// 空入参直接返回 nil（不碰盘）。
+//
+// 可用性是**全有或全无**的近似：单次 write 失败则整批报错，而已写出的前缀留在文件里
+// ——行的 JSON 自描述，重放时逐行解析，前缀完整即可用；只有**最后一行**可能被截断
+// （见 `LoadEntries` 对截断尾巴的容忍）。这正是追加日志的正常形态，不需要额外事务。
+func (s *JSONLFileStore) AppendEntries(entries []JournalEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -172,20 +221,40 @@ func (s *JSONLFileStore) AppendEntry(entry JournalEntry) error {
 		return fmt.Errorf("catalog: open journal file: %w", err)
 	}
 	defer f.Close()
-	b, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("catalog: marshal journal entry: %w", err)
+	buf := make([]byte, 0, 512*len(entries))
+	for _, entry := range entries {
+		b, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			// 先不动盘：一条也无法序列化就整批放弃，避免写出半个批次。
+			return fmt.Errorf("catalog: marshal journal entry: %w", marshalErr)
+		}
+		buf = append(buf, b...)
+		buf = append(buf, '\n')
 	}
-	if _, err := f.Write(append(b, '\n')); err != nil {
-		return fmt.Errorf("catalog: write journal entry: %w", err)
+	if _, err := f.Write(buf); err != nil {
+		return fmt.Errorf("catalog: write journal entries: %w", err)
 	}
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("catalog: sync journal entry: %w", err)
+		return fmt.Errorf("catalog: sync journal entries: %w", err)
 	}
 	return nil
 }
 
 // LoadEntries 读取全部 journal 项。
+//
+// ## 容忍**末行截断**，其余损坏一律报错（2026-11-05）
+//
+// 追加日志在崩溃/断电时天然会留下**写了一半的末行**（write 返回之前进程死了）。
+// 旧实现逐行 `json.Unmarshal` 并对**任何**解码失败直接返回错误 ⇒ 一旦启用文件
+// journal，一次崩溃就会让**下次启动直接失败**（`NewJournalWithStore` 把错误上抛，
+// 装配层只能拒启）。这条在纯内存形态下永远不会触发，所以一直没暴露，但它是
+// 「重新启用持久化」的必经门槛。
+//
+// 判据（严格区分两种尾巴）：
+//   - **末行**解码失败 ⇒ 视为崩溃残留，跳过并 WARN（前缀完整可用，这正是追加日志的
+//     设计语义：已 Sync 过的行一定是完整行）；
+//   - **非末行**解码失败 ⇒ 真损坏（中间出现坏行意味着文件被改写/被别的写者踩过）
+//     ⇒ 仍然报错，判据不放宽。
 func (s *JSONLFileStore) LoadEntries() ([]JournalEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,28 +271,45 @@ func (s *JSONLFileStore) LoadEntries() ([]JournalEntry, error) {
 	// journal 单行不应巨大；放大 buffer 防御异常 detail。
 	buf := make([]byte, 0, 64*1024)
 	sc.Buffer(buf, 1024*1024)
+	// 记录上一条坏行的行号；只有当坏行是**最后一条**时才容忍。
+	// 做法：先把行读进内存列表（行数=1217 量级，与既有全量重放同档），
+	// 这样能确定「是否末行」而不用两次扫盘。
+	var lines [][]byte
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
 		}
-		var e JournalEntry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, fmt.Errorf("catalog: decode journal line: %w", err)
-		}
-		out = append(out, e)
+		// Scanner 复用底层数组，必须拷贝。
+		dup := make([]byte, len(line))
+		copy(dup, line)
+		lines = append(lines, dup)
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("catalog: scan journal file: %w", err)
+	}
+	for i, line := range lines {
+		var e JournalEntry
+		if decodeErr := json.Unmarshal(line, &e); decodeErr != nil {
+			if i == len(lines)-1 {
+				// 崩溃残留的末行：跳过它，前缀照常重放。
+				slog.Warn("journal 末行不完整（崩溃残留），已跳过；前缀照常重放",
+					"path", s.path, "line", i+1, "bytes", len(line), "error", decodeErr.Error())
+				break
+			}
+			return nil, fmt.Errorf("catalog: decode journal line %d: %w", i+1, decodeErr)
+		}
+		out = append(out, e)
 	}
 	return out, nil
 }
 
 // JournalWithStore 组合内存 journal 与可选文件 store：每次 Append 同步写 store。
 type JournalWithStore struct {
-	mu    sync.Mutex
-	mem   *MemJournal
-	store Store
+	mu     sync.Mutex
+	mem    *MemJournal
+	store  Store
+	leases *leaseDeltaLog
 }
 
 // NewJournalWithStore 创建带可选持久化的 journal。store 为 nil 时退化为纯内存。
@@ -236,9 +322,29 @@ type JournalWithStore struct {
 //   - 同 seq 且内容完全相同 ⇒ 视为精确重复，跳过 ✓；
 //   - 同 seq 但内容不同 ⇒ **真损坏，仍拒绝** ✗（判据不放宽）；
 //   - seq==0 ⇒ 写入器不可能产生（Append 必先分配 seq）⇒ 拒绝 ✗。
+//
 // 发现乱序时显式告警（可见，不静默 ✗）。
 func NewJournalWithStore(store Store) (*JournalWithStore, error) {
-	j := &JournalWithStore{mem: NewMemJournal(), store: store}
+	j := &JournalWithStore{mem: NewMemJournal(), store: store, leases: &leaseDeltaLog{}}
+	if store != nil {
+		// 能力判断，不是类型判断（见 LeaseStoreProvider 的注释：
+		// 用具体类型断言曾导致一次生产事故——加一层攒批包装就全线拒查）。
+		if provider, ok := store.(LeaseStoreProvider); ok {
+			if path, ok := provider.LeaseStorePath(); ok && path != "" {
+				j.leases.path = path
+			} else {
+				j.leases.degraded = true
+			}
+		} else {
+			j.leases.degraded = true
+		}
+		if j.leases.degraded {
+			// **降级而不是拒绝**（见 journal.go 顶部的取舍说明）：
+			// 租约是短生命周期的运行时状态，丢了只是旧视图失效，不该阻断查询。
+			slog.Warn("journal 存储未提供租约旁路文件：查询租约退化为进程内内存态"+
+				"（重启后旧视图 ID 自然失效，不影响查询可用性）")
+		}
+	}
 	if store == nil {
 		return j, nil
 	}
@@ -354,12 +460,18 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 	}
 	var lastAuth *JournalEntry
 	for _, e := range entries {
+		if e.LeaseDelta != nil || (e.DayMigration != nil && len(e.Records) == 0 && e.Record == nil) {
+			continue
+		}
+		fullRecord := false
 		if len(e.Records) > 0 {
 			matched := false
 			for _, candidate := range e.Records {
 				if candidate != nil && candidate.Key == rec.Key {
 					*rec = *candidate.Clone()
 					e.Owner, e.Generation, e.DirID = candidate.Owner, candidate.Generation, candidate.OwnerDirID
+					e.State, e.JournalComplete = candidate.MigrationState, candidate.JournalComplete
+					fullRecord = true
 					matched = true
 					break
 				}
@@ -375,6 +487,8 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 			// 完整 Record 是新版 journal 的权威后状态；同步填充旧格式兼容字段，
 			// 避免 AuthorityCommit 将缺省顶层字段误判为一次“切到空权威”。
 			e.Owner, e.Generation, e.DirID = e.Record.Owner, e.Record.Generation, e.Record.OwnerDirID
+			e.State, e.JournalComplete = e.Record.MigrationState, e.Record.JournalComplete
+			fullRecord = true
 		}
 		if e.JournalComplete {
 			rec.JournalComplete = true
@@ -412,7 +526,7 @@ func ReplayJournal(rec *Record, entries []JournalEntry) (conflict string) {
 			if e.Generation != 0 {
 				rec.Generation = e.Generation
 			}
-			if e.DirID != "" {
+			if e.DirID != "" && !fullRecord {
 				rec.OwnerDirID = e.DirID
 				rec.WriteRoute.Owner = rec.Owner
 				rec.WriteRoute.DirID = e.DirID

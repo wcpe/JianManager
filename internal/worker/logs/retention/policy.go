@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/wcpe/JianManager/internal/platform/vlruntime"
 )
 
 // 推荐保留期（用户决策 D1）。这套值只在运维「启用保留」后生效；
@@ -19,26 +21,19 @@ const (
 	DefaultTTLError = 90 * 24 * time.Hour
 )
 
-// DefaultHotRetention 是热层保留窗口的默认值，与既有受管 VL 的 `-retentionPeriod: 30d`
-// 对齐（用户决策：热层保持现状 30d，快查靠热层、长留靠冷层）。
-//
-// 为什么不让它默认按级别 TTL 取最长档（那是 90d，ERROR 那一档）：
-// 那会让热层实际保留 90 天，比现状**多**留两个月——与「省热层空间」的目标相反。
-// 级别 TTL 表达的是「各级别希望被留多久」，而热层窗口是「多快搬到冷层」，
-// 两者是不同的量，故各自有独立默认：热层 30d 搬走，冷层 365d 长留。
-// DefaultHotRetention 是热层保留窗口的默认值（用户最终口径：**热 90 天**）。
-//
-// 语义定稿：D1 的分级档位（debug 3d / info 7d / warn 30d / error 90d）表达的是
-// **「在热层停留多久」**；冷层则**所有级别统一**（见 DefaultColdRetention）——
-// 即「热的几个月、冷的两年」。到期动作不变：**搬**（不裸删，双闸默认关）。
-const DefaultHotRetention = 90 * 24 * time.Hour
+// DefaultHotRetention 复用唯一默认热窗口；到期默认搬运而非裸删。
+const DefaultHotRetention = vlruntime.DefaultHotRetention
 
-// DefaultColdRetention 是冷层保留期的默认值（用户最终口径：**冷 730 天**）。
+// DefaultColdRetention 是「长期可查范围」的默认值。
 //
-// 冷层**不按级别分档**：热层按级别是为了「快查最近的高价值级别 + 尽快腾出热层空间」，
-// 而冷层的目的只有一个——**长期留存**。对冷层再做一套级别档位，
-// 只会让「同一条日志在两层的保留期不一致」变成常态，而那种不一致没有运维价值。
-const DefaultColdRetention = 730 * 24 * time.Hour
+// 2026-10-29：冷热双层废除后，它不再对应一个独立的物理层（没有“冷层”，
+// 只有一个 VL），而是**同一个 VL 能查多久**的声明。取值与 VL 原生 TTL 对齐（180d）：
+// 声明比 TTL 长，启动校验会直接拒绝（那是正确的——声明了却做不到，比静默少存更糟）。
+//
+// 保留这个字段与「不按级别分档」的口径：热层按级别是为了快查高价值日志并腾空间，
+// 而长期留存的目的只有一个——**留得住**；再对它做级别档位只会让“同一条日志在不同层
+// 保留期不一致”成为常态，而那种不一致没有运维价值。
+const DefaultColdRetention = vlruntime.DefaultColdRetention
 
 // 执行器默认值。
 const (
@@ -120,6 +115,14 @@ type Sweep struct {
 	Interval time.Duration `mapstructure:"interval"`
 	// Timeout 单次删除请求超时；<=0 取 DefaultSweepTimeout。
 	Timeout time.Duration `mapstructure:"timeout"`
+	// VLDeleteEnabled 报告受管 VL 进程是否带 `-delete.enable`（VL 侧那一道闸）。
+	//
+	// 为什么这一闸要放进本包：它是删除三闸里的第三道，而三闸的判定必须只有一个来源
+	// （见 Policy.DeleteGatesOpen）。若把「VL 是否允许删除」留在装配侧自己记着，
+	// 迟早会出现「策略说三闸全开、VL 其实没开」的分裂读数。
+	//
+	// 本字段只**声明事实**，不负责打开 VL 的参数（那是 vlsup 的事）。
+	VLDeleteEnabled bool `mapstructure:"-"`
 }
 
 // DefaultSweepTimeout 单次删除请求超时。
@@ -152,6 +155,56 @@ type Policy struct {
 	// 执行（见 vlsup 的按 namespace retention）。放在策略里是为了让「热多久 / 冷多久」
 	// 在同一处可读、可校验，而不是散在两个配置段里各说各话。
 	ColdRetention time.Duration `mapstructure:"cold_retention"`
+	// ArchiveCopy 是硬规则的**次选**路径：搬不了冷层时导出为独立副本。
+	//
+	// 默认关闭（零行为变化）：它把数据写到另一个目的地，那是运维必须明确授权的事——
+	// 「归档根目录写在哪、写多少、谁来清理」都不是平台能替运维默认的。
+	ArchiveCopy ArchiveCopyPolicy `mapstructure:"archive_copy"`
+	// ArchiveObjectRetention 是**归档目的地自身**的保留期（桶内生命周期）。
+	//
+	// 默认关闭，且与 ArchiveCopy 分开：导出的开关回答「要不要写副本」，
+	// 本项回答「副本留多久」。合成一个开关会让「想清归档、但不想再导出新的」变成不可能，
+	// 也会让「打开导出」顺带获得删除归档的权限——而删除比写入危险得多。
+	ArchiveObjectRetention ArchiveObjectRetentionPolicy `mapstructure:"archive_object_retention"`
+}
+
+// ArchiveCopyPolicy 是「导出归档」这条次选路径的开关。
+//
+// 为什么只有一个开关：目的地/压缩/manifest 布局都属于实现细节，由装配侧（谁能提供
+// 归档 Provider、根目录在哪）决定；策略层只该回答「允不允许把到期数据导出」。
+type ArchiveCopyPolicy struct {
+	// Enabled 是否允许在搬不了冷层时导出为独立副本（默认 false）。
+	//
+	// 打开它**不等于**允许删热层：回收还要过删除三闸（见 Policy.DeleteGatesOpen）。
+	Enabled bool `mapstructure:"enabled"`
+}
+
+// DeleteGatesOpen 报告**删除三闸**是否同时成立，第二返回值是未成立的原因。
+//
+// 三闸（护栏要求默认全关，且三者**相互独立**）：
+//  1. 意图闸 `log_retention.discard`：运维显式声明「我知道这会永久删掉日志」；
+//  2. 执行闸 `log_retention.sweep.vl_sweep`：运维显式打开删除执行路径；
+//  3. VL 侧闸 `log_vl.delete_enabled`：受管 VL 进程真的带 `-delete.enable`
+//     （VL 自身默认关，没这条参数时 /delete/* 一律 400）。
+//
+// 为什么回收热层也要过这三闸而不能另造一套：`ActionArchiveCopy` 校验通过后的那一步
+// 与 `ActionDiscard` 删的是**同一样东西**（一个日分区的热层数据），后果同样是不可逆的。
+// 换一条路径就换一套闸门，等于把「三闸」变成「看情况几闸」——而闸门数量正是它的安全论证。
+//
+// 注意本方法**不做任何副作用判断**（不检查出口是否装配）：那是调用方的第二层判据，
+// 两者都要满足才允许删。这里只回答「运维授权是否齐了」这一个问题。
+func (p Policy) DeleteGatesOpen() (bool, string) {
+	n := p.Normalize()
+	if !n.Discard {
+		return false, "意图闸 log_retention.discard 未打开"
+	}
+	if !n.Sweep.VLSweep {
+		return false, "执行闸 log_retention.sweep.vl_sweep 未打开"
+	}
+	if !n.Sweep.VLDeleteEnabled {
+		return false, "VL 侧闸 log_vl.delete_enabled 未打开（受管 VL 缺 -delete.enable）"
+	}
+	return true, ""
 }
 
 // DefaultPolicy 返回 D1 推荐的保留策略。
@@ -169,6 +222,7 @@ func DefaultPolicy() Policy {
 			"ERROR": DefaultTTLError,
 		},
 		Sweep:         Sweep{Interval: DefaultSweepInterval, Timeout: DefaultSweepTimeout},
+		Trigger:       Trigger{SweepAtHour: DefaultSweepAtHour},
 		HotRetention:  DefaultHotRetention,
 		ColdRetention: DefaultColdRetention,
 	}
@@ -202,6 +256,11 @@ func (p Policy) Normalize() Policy {
 	if out.ColdRetention <= 0 {
 		out.ColdRetention = DefaultColdRetention
 	}
+	// 归档对象保留期**刻意不在这里补任何默认值**（连 Normalize 都不调）：
+	// 默认必须是「无值 = 不启用」。若在这里补一个 730d，那么只要运维打开 enabled，
+	// 就会在两年后无条件开始删归档——而「留多久」是合规/成本口径，必须由运维说出口。
+	// 小时数的归一化在 ArchiveObjectRetentionPolicy.Normalize 里，由驱动器构造时调用
+	// （见 NewArchivePurgeDriver），与「保留期要不要有默认」是两件独立的事。
 	return out
 }
 
@@ -238,6 +297,20 @@ func (p Policy) Validate() error {
 	}
 	if math.IsNaN(p.Trigger.DiskPercent) || math.IsInf(p.Trigger.DiskPercent, 0) || p.Trigger.DiskPercent < 0 || p.Trigger.DiskPercent > 100 {
 		return fmt.Errorf("retention: trigger.disk_percent 必须在 0..100，得到 %v", p.Trigger.DiskPercent)
+	}
+	// 每日触发时刻：0..23 是本地整点，-1 是「回退间隔 ticker」的兼容档；其余一律拒绝。
+	// 为什么启动即拒而不是归一：时刻配错的后果是「搬运永远在业务高峰跑」（写错 13 与 3 只差一个数字），
+	// 现场只会表现为「盘上涨得比预期快」，从日志里几乎看不出来。归一化会把这种配置事故静默吃掉。
+	if p.Trigger.SweepAtHour < SweepAtHourIntervalTicker || p.Trigger.SweepAtHour > 23 {
+		return fmt.Errorf("retention: trigger.sweep_at_hour 必须在 %d..23（%d = 回退间隔 ticker，0 = 本地午夜），得到 %d",
+			SweepAtHourIntervalTicker, SweepAtHourIntervalTicker, p.Trigger.SweepAtHour)
+	}
+	// 归档对象保留期：负数一律拒（与其它保留期同口径）。
+	// 「开了开关却没有保留期」由 config 层拒——那里的措辞要点名具体键
+	// `log_retention.archive_object_retention.retention`，运维才能直接定位。
+	if p.ArchiveObjectRetention.Retention < 0 {
+		return fmt.Errorf("retention: archive_object_retention.retention 不能为负，得到 %s",
+			p.ArchiveObjectRetention.Retention)
 	}
 	for k, v := range p.ByLevel {
 		if LevelKeyOf(k) == "" {
@@ -395,7 +468,7 @@ func DescribeDeleteExecutor(p Policy) string {
 	}
 	if !DeleteExecutorWired {
 		return "删除执行器未接线：sweep.vl_sweep=true 只让计划进入「只计划」档，" +
-			"本版本不会产生任何删除调用（第三闸 -delete.enable 不可达）"
+			"本版本生产Sweeper不会产生删除调用（开启VL第三闸不能替代执行器装配）"
 	}
 	return "删除执行器已接线（仍需受管 VL 带 -delete.enable，否则下发被拒）"
 }
@@ -406,7 +479,7 @@ func DescribeDeleteExecutor(p Policy) string {
 // 那一档的实际效果只是「计划可审计」。
 func (p Policy) Describe() string {
 	if !p.Enabled {
-		return "disabled"
+		return "disabled；平台搬运/删除关闭不影响VL有限原生TTL独立淘汰，不是永久保留保证"
 	}
 	n := p.Normalize()
 	keys := make([]string, 0, len(n.ByLevel))
@@ -423,7 +496,7 @@ func (p Policy) Describe() string {
 		// 措辞与 DescribeDeleteExecutor 一致：本版本没有删除执行器的生产构造点。
 		mode = "planned-only"
 	}
-	return fmt.Sprintf("%s overrides=%d (%s)；%s",
+	return fmt.Sprintf("%s overrides=%d (%s)；%s；有限原生TTL仍独立淘汰，平台保留原物不构成无限故障保证",
 		mode, len(p.Sources), strings.Join(parts, " "), DescribeDeleteExecutor(n))
 }
 

@@ -14,7 +14,8 @@ func TestBuildVelocityToml(t *testing.T) {
 		{Alias: "lobby", Address: "127.0.0.1:25566"},
 		{Alias: "smp", Address: "10.0.0.2:25567", ForcedHost: "smp.example.com", Restricted: true},
 	}
-	out := buildVelocityToml(25565, "Hi \"there\"", true, entries)
+	out, err := buildVelocityToml(25565, "Hi \"there\"", true, entries)
+	require.NoError(t, err)
 
 	var parsed map[string]interface{}
 	require.NoError(t, toml.Unmarshal([]byte(out), &parsed), "生成的 velocity.toml 必须可解析")
@@ -22,7 +23,9 @@ func TestBuildVelocityToml(t *testing.T) {
 	require.Equal(t, true, parsed["online-mode"])
 	// 离线模式透传
 	off := map[string]interface{}{}
-	require.NoError(t, toml.Unmarshal([]byte(buildVelocityToml(25565, "x", false, entries)), &off))
+	offContent, err := buildVelocityToml(25565, "x", false, entries)
+	require.NoError(t, err)
+	require.NoError(t, toml.Unmarshal([]byte(offContent), &off))
 	require.Equal(t, false, off["online-mode"])
 	require.Equal(t, "forwarding.secret", parsed["forwarding-secret-file"])
 	require.Equal(t, "0.0.0.0:25565", parsed["bind"])
@@ -39,7 +42,8 @@ func TestBuildVelocityToml(t *testing.T) {
 }
 
 func TestBuildVelocityToml_Empty(t *testing.T) {
-	out := buildVelocityToml(25565, "Hi", true, nil)
+	out, err := buildVelocityToml(25565, "Hi", true, nil)
+	require.NoError(t, err)
 	var parsed map[string]interface{}
 	require.NoError(t, toml.Unmarshal([]byte(out), &parsed))
 	servers := parsed["servers"].(map[string]interface{})
@@ -59,7 +63,8 @@ func TestBuildVelocityToml_AlwaysEmitsForcedHosts(t *testing.T) {
 	}
 	for name, entries := range cases {
 		t.Run(name, func(t *testing.T) {
-			out := buildVelocityToml(25565, "Hi", true, entries)
+			out, err := buildVelocityToml(25565, "Hi", true, entries)
+			require.NoError(t, err)
 			require.Contains(t, out, "[forced-hosts]", "必须显式输出 [forced-hosts] 段以覆盖 Velocity 内置示例默认")
 			var parsed map[string]interface{}
 			require.NoError(t, toml.Unmarshal([]byte(out), &parsed), "生成的 velocity.toml 必须可解析")
@@ -84,8 +89,41 @@ func TestBuildBungeeConfig(t *testing.T) {
 	require.Contains(t, l0["forced_hosts"].(map[string]interface{}), "play.example.com")
 }
 
-func TestMergeVelocitySecretIntoPaperGlobal(t *testing.T) {
-	// 从空生成最小档
+// TestBuildProxyConfigRejectsZeroListenPort 锁住「端口为 0 时不得写出配置」这条护栏。
+//
+// 为什么必须有这条回归锁：代理实例从现网导入时 server_port 常常是 0（代理没有
+// server.properties，端口探测探不到）。一旦照 0 生成配置，BungeeCord 得到
+// `host: "0.0.0.0:0"`、Velocity 得到 `bind = "0.0.0.0:0"`，代理会绑定到随机端口，
+// 玩家入口当场消失，而日志里只有一行 `Listening on 0.0.0.0:0`，很难定位。
+//
+// 该缺陷真实发生过：bungee-main 的 server_port 长期为 0，一次后端注册触发的
+// SyncProxy 就把 config.yml 改写成 0，生产入口中断。所以这里同时锁两层：
+// 生成函数自己不许产出 0 端口，同步链路在写盘前必须先拦下。
+func TestBuildProxyConfigRejectsZeroListenPort(t *testing.T) {
+	entries := []proxyServerEntry{{Alias: "lobby", Address: "127.0.0.1:25566"}}
+
+	// 0 端口必须是错误，而不是「生成一份坏配置」
+	_, err := buildBungeeConfig(0, "Hi", false, entries)
+	require.Error(t, err, "端口为 0 时不得生成 bungee 配置")
+	_, err = buildVelocityToml(0, "Hi", false, entries)
+	require.Error(t, err, "端口为 0 时不得生成 velocity 配置")
+
+	// 负数同理（防御非法数据），且报错要能定位到问题
+	_, err = buildBungeeConfig(-1, "Hi", false, entries)
+	require.Error(t, err)
+
+	// 正端口照常生成，且监听地址精确等于该端口（证明护栏没有误伤正常路径）
+	out, err := buildBungeeConfig(20010, "Hi", false, entries)
+	require.NoError(t, err)
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal([]byte(out), &parsed))
+	listeners := parsed["listeners"].([]interface{})
+	l0 := listeners[0].(map[string]interface{})
+	require.Equal(t, "0.0.0.0:20010", l0["host"])
+	require.Equal(t, 20010, l0["query_port"])
+}
+
+func TestMergeVelocitySecretIntoPaperGlobal(t *testing.T) {	// 从空生成最小档
 	out, err := mergeVelocitySecretIntoPaperGlobal("", "abc123")
 	require.NoError(t, err)
 	var m map[string]interface{}

@@ -35,7 +35,6 @@ func testConfig() *config.Config {
 	cfg.JWT.AccessTTL = 15 * time.Minute
 	cfg.JWT.RefreshTTL = 168 * time.Hour
 	cfg.Log.Level = "info"
-	cfg.LogStore.RetentionDays = 14
 	return cfg
 }
 
@@ -63,7 +62,7 @@ func TestGet_BaselineWhenNoOverride(t *testing.T) {
 
 	retention, ok := findItem(view.Editable, SettingKeyBackupRetentionDays)
 	require.True(t, ok)
-	require.Equal(t, "14", retention.Value)
+	require.Equal(t, "7", retention.Value)
 }
 
 // TestGet_DBOverrideWins DB 覆盖存在时，有效值取覆盖值（DB > env > YAML）。

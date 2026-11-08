@@ -39,20 +39,20 @@ func (t SweepTarget) String() string {
 //   - 级别必须命中白名单，否则报错（不接受调用方传来的任意字符串）；
 //   - 源标识必须通过字符集白名单（ValidSourceID），否则报错。
 //
-// 之所以用 `level:DEBUG` 这种无引号形态：级别键全是 `[A-Z]`，LogsQL 不需要引号也不会
-// 有歧义；而源标识含冒号（`inst:147`），**必须加引号**，否则会被解析成字段过滤。
+// 两字段都使用:=全值匹配并加引号；仅加引号仍是短语匹配，
+// 会误中合法邻接来源或DEBUG-EXTRA等级别，白名单本身不能替代精确选择器。
 func buildFilter(sourceID, level string) (string, error) {
 	key := LevelKeyOf(level)
 	if key == "" {
 		return "", fmt.Errorf("retention: 级别 %q 不在白名单内（%s）", level, strings.Join(levelKeys, "/"))
 	}
 	if sourceID == "" {
-		return "level:" + key, nil
+		return fmt.Sprintf("level:=%q", key), nil
 	}
 	if !ValidSourceID(sourceID) {
 		return "", fmt.Errorf("retention: 源标识 %q 含非法字符，拒绝拼入删除过滤器", sourceID)
 	}
-	return fmt.Sprintf("level:%s AND log_source_id:%q", key, sourceID), nil
+	return fmt.Sprintf("level:=%q AND log_source_id:=%q", key, sourceID), nil
 }
 
 // hasExtendingOverride 报告该级别上是否存在**延长型**来源覆盖：

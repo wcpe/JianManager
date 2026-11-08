@@ -107,8 +107,8 @@ type Query struct {
 	// OnlineOnly 仅在调用方显式选择「仅在线」时为 true；不得默认。
 	OnlineOnly bool        `json:"online_only"`
 	Budget     QueryBudget `json:"budget"`
-	// Fast：首屏快路径 ✗——跳过视图绑定（OpenView 往返）与逐目标完整性校验，直接以有界查询返回 items，
-	// coverage 以 Pending 标记；导出路径（export.go 的逐页 Search）**不得**置位，校验语义一律不动 ✓。
+	// Fast 首屏省去 OpenView 往返，汇总 Search 返回的真实 Worker 快照后才公开 CP 视图。
+	// 完整性校验仍以 Pending 标记；导出必须用同一快照重新读取并完成校验。
 	Fast bool `json:"fast,omitempty"`
 	// AllowProjectionDrift：本次查询豁免 Worker 侧「投影清单版本（ManifestVersion）变化」判 VIEW_STALE。
 	//
@@ -134,6 +134,8 @@ type Query struct {
 	// 的空结果）反复续写进新桶形成「雪球」，用户落进这些桶即拿到 0 条/陈旧数据
 	// （2026-10-08 面板恒冷复盘）。只读路径不受影响。
 	BypassCache bool `json:"-"`
+	// disableCache 只供导出内部使用，既不读取也不写入列表缓存。
+	disableCache bool
 }
 
 // SortKey 稳定复合排序键。
@@ -262,13 +264,15 @@ type View struct {
 	ToUTC         string   `json:"to_utc"`
 	TargetIDs     []string `json:"target_ids"` // 解析后的查询目标集合
 	AuthorizedIDs []string `json:"authorized_ids"`
+	// CoverageTargets 固定首次授权覆盖全集，含仅在线排除项及历史持有者身份。
+	CoverageTargets []TargetInfo `json:"-"`
 	// PrincipalKey 创建时的授权主体；复用 viewId 时必须与当前调用方一致（F-001）。
 	PrincipalKey    string      `json:"principal_key,omitempty"`
 	OnlineOnly      bool        `json:"online_only"`
 	Budget          QueryBudget `json:"budget"`
 	Filter          string      `json:"filter,omitempty"`
 	PermissionScope string      `json:"permission_scope,omitempty"`
-	// WorkerViewIDs binds the CP view to each Worker-local planner view.
+	// WorkerViewIDs 绑定每个 Worker 实际创建的本地固定视图。
 	WorkerViewIDs            map[string]string `json:"-"`
 	WorkerViewErrors         map[string]string `json:"-"`
 	TargetAuthorizationIDs   map[string]string `json:"-"`
@@ -305,9 +309,10 @@ type SearchResponse struct {
 }
 
 type FieldsResponse struct {
-	View     View     `json:"view"`
-	Coverage Coverage `json:"coverage"`
-	Fields   []string `json:"fields"`
+	View      View     `json:"view"`
+	Coverage  Coverage `json:"coverage"`
+	Fields    []string `json:"fields"`
+	Truncated bool     `json:"truncated"`
 }
 
 // StatsQuery 统计请求。
@@ -413,6 +418,56 @@ type FacetsResponse struct {
 	Dimensions []FacetDimension `json:"dimensions"`
 	// Truncated 任一维度存在截断语义。
 	Truncated bool `json:"truncated"`
+}
+
+// StreamsQuery 流枚举请求。
+type StreamsQuery struct {
+	Query
+}
+
+// StreamItem 是一条流（粒度：源 + 流名）与它在窗内的条数。
+//
+// 与 FacetValue 的区别：FacetValue 是「维度 + 值 + 计数」的通用形态，
+// 而这里是**已拆好的二元组**——前端拿它直接渲染表，不必再拆一层。
+type StreamItem struct {
+	LogSourceID string `json:"log_source_id"`
+	Stream      string `json:"stream"`
+	Raw         string `json:"raw,omitempty"`
+	Hits        uint64 `json:"hits"`
+}
+
+// StreamsResponse 流枚举结果。
+//
+// Complete 是「条数是否可信」：false 时不得把 Hits=0 读成「该流没数据」。
+type StreamsResponse struct {
+	View     View         `json:"view"`
+	Coverage Coverage     `json:"coverage"`
+	Quality  Quality      `json:"quality"`
+	Streams  []StreamItem `json:"streams"`
+	Complete bool         `json:"complete"`
+}
+
+// StreamFieldValuesQuery stream 标签维度取值分布请求。
+type StreamFieldValuesQuery struct {
+	Query
+	Field string `json:"field"`
+}
+
+// StreamFieldNamesResponse stream 标签维度名结果。
+type StreamFieldNamesResponse struct {
+	View     View     `json:"view"`
+	Coverage Coverage `json:"coverage"`
+	Fields   []string `json:"fields"`
+}
+
+// StreamFieldValuesResponse stream 标签维度取值分布结果。
+type StreamFieldValuesResponse struct {
+	View     View         `json:"view"`
+	Coverage Coverage     `json:"coverage"`
+	Quality  Quality      `json:"quality"`
+	Field    string       `json:"field"`
+	Values   []FacetValue `json:"values"`
+	Complete bool         `json:"complete"`
 }
 
 // ExportResult 导出物化结果。

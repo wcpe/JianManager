@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +48,9 @@ func (c *Client) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 	if c == nil || c.vl == nil {
 		return query.RangeResult{}, query.ErrRangeClientUnimplemented
 	}
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+	ctx = query.WithPhysicalReadBudget(ctx, q.Budget)
 	params, empty, err := c.params(rng, q)
 	if err != nil {
 		return query.RangeResult{}, err
@@ -54,16 +58,33 @@ func (c *Client) Search(ctx context.Context, rng query.AuthoritativeRange, q que
 	if empty {
 		return query.RangeResult{Exhausted: true, DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
 	}
-	params.Set("query", searchQuery(rng, q))
+	text := searchQuery(rng, q)
+	if !physicalQueryFits(text, q.Filter) {
+		// 长代次列表只粗筛有界来源，完整冻结谓词仍由逐行归因执行。
+		boundedRange := rng
+		boundedRange.ClosedVisibleSeq = q.ClosedVisibleSeq
+		return c.SearchMerged(ctx, []query.AuthoritativeRange{boundedRange}, q)
+	}
+	params.Set("query", text)
 	params.Set("limit", strconv.FormatUint(lookaheadRows(q), 10))
 	return c.searchPage(ctx, params, q, lookaheadRows(q), func(ev logtypes.Event) bool {
+		// 现代 scope 在 LogsQL 中已逐源封闭；旧格式的零水位绝不解释成无限。
+		//
+		// 2026-11-05：与 selectorQuery 同步修正。原条件把「零水位放行」绑定在 `scoped` 上：
+		//     scoped && cvs == 0  ||  ev.Record.End <= cvs
+		// 而 `ingest.ensureCatalogPartition` 补建的记录 `scoped=false` 且 `cvs=0`
+		// ⇒ 第二个子项要求 `Record.End <= 0` ⇒ **行级也把每一条丢掉**。
+		// 只改 selector 不改这里仍然查不到——两处必须同口径。
+		//
+		// 改后：`cvs == 0` 一律表示「没有封窗信息」⇒ 不加上界；
+		// `cvs > 0` 时仍要求 `Record.End <= cvs`（封窗语义一字未变）。
 		return q.ClosedVisibleSeq == 0 || ev.Record.End <= q.ClosedVisibleSeq
 	})
 }
 
 // Stats uses the LogsQL stats pipe so aggregation happens in VL over the
 // authoritative range, then maps each NDJSON row to the worker aggregate type.
-func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.StatsResult, error) {
+func (c *Client) statsSelector(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, selector string) (query.StatsResult, error) {
 	if c == nil || c.vl == nil {
 		return query.StatsResult{}, query.ErrRangeClientUnimplemented
 	}
@@ -78,7 +99,7 @@ func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q quer
 	if empty {
 		return query.StatsResult{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}, nil
 	}
-	params.Set("query", selectorQuery(rng, q)+pipe)
+	params.Set("query", selector+pipe)
 	var out query.StatsResult
 	bytesRead, truncated, err := c.stream(ctx, params, scanLimit(q.Budget), 0, func(line []byte) error {
 		point, err := statsFromJSON(line, q)
@@ -101,34 +122,93 @@ func (c *Client) Stats(ctx context.Context, rng query.AuthoritativeRange, q quer
 	return out, nil
 }
 
-// Fields enumerates fields from the same canonical range used by Search.
-// The result is bounded by the request budget and therefore reports truncation.
+// Fields 返回该时间窗内**出现过的字段名全集**。
+//
+// # 2026-11-05 修正（架构审计 D3）
+//
+// 旧实现调 `Search` 拿一页日志、遍历返回行的 `Fields` map 去重——
+// 那只能看到**本页那几十条**日志恰好带的字段，不是该时间窗的字段全集。
+//
+// 实测同一窗口（inst:318 / 2026-11-04）：
+//
+//	旧实现      → [level, stream]（因为那页日志只带这两个额外字段）
+//	field_names → 15+ 个（_msg / event_id / canonical_content_hash / record_start / ...）
+//
+// 后者才是「这个窗口里有哪些字段」的正确答案。官方端点专为此设计，一次聚合即得。
+//
+// 仍然用 range 的权威谓词做作用域约束（`selectorQuery`）：字段名不能跨源泄漏，
+// 否则用户会看到别的实例才有、本实例根本没有的字段，点了必然查不到。
 func (c *Client) Fields(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery) (query.FieldsResult, error) {
 	if c == nil || c.vl == nil {
 		return query.FieldsResult{}, query.ErrRangeClientUnimplemented
 	}
-	if q.Budget.Limit == 0 || q.Budget.Limit > 1000 {
-		q.Budget.Limit = 1000
-	}
-	res, err := c.Search(ctx, rng, q)
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+
+	start, end, empty, err := c.fieldNamesWindow(rng, q)
 	if err != nil {
-		return query.FieldsResult{Bytes: res.Bytes, CoverageReasons: res.CoverageReasons, Truncated: true}, err
+		return query.FieldsResult{Truncated: true}, err
 	}
-	set := make(map[string]struct{})
-	for _, ev := range res.Items {
-		for field := range ev.Fields {
-			set[field] = struct{}{}
-		}
+	if empty {
+		return query.FieldsResult{Fields: nil, Truncated: false}, nil
 	}
-	fields := make([]string, 0, len(set))
-	for field := range set {
-		fields = append(fields, field)
+	names, err := c.vl.FieldNames(ctx, selectorQuery(rng, q), q.Filter, start, end)
+	if err != nil {
+		// 聚合查询失败不得伪装成「没有字段」：那会让前端把筛选面板整个清空。
+		return query.FieldsResult{Truncated: true, CoverageReasons: []string{query.ReasonRangeUnavailable}}, err
 	}
-	return query.FieldsResult{Fields: fields, Bytes: res.Bytes, CoverageReasons: res.CoverageReasons, Truncated: !res.Exhausted}, nil
+	sort.Strings(names)
+	return query.FieldsResult{Fields: names, Truncated: false}, nil
 }
 
-// Facets aggregates controlled dimensions through the same Stats path and
-// preserves the range budget/truncation signal.
+// fieldNamesWindow 算出 field_names 查询该用的时间窗（与 range 的分区日 + 请求窗取交集）。
+func (c *Client) fieldNamesWindow(rng query.AuthoritativeRange, q query.RangeQuery) (time.Time, time.Time, bool, error) {
+	day := rng.Key.UTCDay
+	if day == "" {
+		return time.Time{}, time.Time{}, true, nil
+	}
+	parsed, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return time.Time{}, time.Time{}, false, fmt.Errorf("vlrange: invalid Catalog UTC day: %w", err)
+	}
+	start, end := parsed, parsed.AddDate(0, 0, 1)
+	if q.TimeRange.FromUTC != "" {
+		if from, parseErr := time.Parse(time.RFC3339Nano, q.TimeRange.FromUTC); parseErr == nil && from.After(start) {
+			start = from
+		}
+	}
+	if q.TimeRange.ToUTC != "" {
+		if to, parseErr := time.Parse(time.RFC3339Nano, q.TimeRange.ToUTC); parseErr == nil && to.Before(end) {
+			end = to
+		}
+	}
+	if !start.Before(end) {
+		return time.Time{}, time.Time{}, true, nil
+	}
+	return start, end, false, nil
+}
+
+// Facets 按调用方指定的维度聚合，走官方 `/select/logsql/field_values`。
+//
+// # 与旧实现的区别
+//
+// 旧实现借 Stats 的 LogsQL 管道（`| stats by (dim) count()`）：每个维度一次请求，
+// 且要自己拼管道、自己解 NDJSON。新实现打官方聚合端点，语义同为「按指定字段
+// 精确聚合」，但由服务端直接给结构化结果、少一层管道解析。
+//
+// 请求数**不变**（仍然每个维度一次）——这是 VL 的接口形状决定的：
+// `field_values` 只接受单个 `field`。所以本次改造的收益是「用对端点」，
+// 不是「减少往返」。
+//
+// # 为什么不直接打官方 `/select/logsql/facets`
+//
+// 见 facets_field_values.go 文件头：它的语义是「自动发现低基数字段」，
+// `field=` 被忽略，与「按指定维度查」的契约不匹配。
+//
+// # 预算与截断
+//
+// 单维度超长查询走互斥物理分片（与 Stats 同一份实现），逐片聚合后按值相加；
+// 总字节额度递减与「见底即 partial」的语义与旧实现一致。
 func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, dimensions []string, limit uint32) (query.RangeFacetsResult, error) {
 	if c == nil || c.vl == nil {
 		return query.RangeFacetsResult{}, query.ErrRangeClientUnimplemented
@@ -136,6 +216,17 @@ func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 	if limit == 0 {
 		limit = 100
 	}
+	ctx, cancel := query.WithQueryDeadline(ctx, q.Budget)
+	defer cancel()
+	ctx = query.WithPhysicalReadBudget(ctx, q.Budget)
+	return c.facetsAllDimensions(ctx, rng, q, dimensions, limit)
+}
+
+// facetsAllDimensions 逐维度聚合，共用同一份字节额度。
+//
+// 抽出来是因为 Facets 需要先建 ctx（deadline + 物理读预算）再进扇出；
+// 维度循环本身不关心 ctx 怎么来的。
+func (c *Client) facetsAllDimensions(ctx context.Context, rng query.AuthoritativeRange, q query.RangeQuery, dimensions []string, limit uint32) (query.RangeFacetsResult, error) {
 	var out query.RangeFacetsResult
 	for _, dimension := range dimensions {
 		if !validField(dimension) || dimension == "event_id" || dimension == "message" || dimension == "_time" {
@@ -148,21 +239,15 @@ func (c *Client) Facets(ctx context.Context, rng query.AuthoritativeRange, q que
 		}
 		copyQ := q
 		copyQ.Budget.MaxBytes = scanLimit(q.Budget) - out.Bytes
-		copyQ.GroupBy = []string{dimension}
-		stats, err := c.Stats(ctx, rng, copyQ)
-		out.Bytes += stats.Bytes
-		if err != nil {
-			return out, err
-		}
-		out.CoverageReasons = append(out.CoverageReasons, stats.CoverageReasons...)
-		if len(stats.Points) > int(limit) {
+		part, err := c.facetsViaFieldValues(ctx, rng, copyQ, dimension, limit)
+		out.Bytes += part.Bytes
+		out.CoverageReasons = append(out.CoverageReasons, part.CoverageReasons...)
+		if part.Truncated {
 			out.Truncated = true
 		}
-		for i, point := range stats.Points {
-			if uint32(i) >= limit {
-				break
-			}
-			out.Values = append(out.Values, query.FacetValue{Dimension: dimension, Value: point.Dimensions[dimension], Count: point.Count})
+		out.Values = append(out.Values, part.Values...)
+		if err != nil {
+			return out, err
 		}
 	}
 	return out, nil
@@ -296,17 +381,44 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	scoped := rng.Projection != nil && len(rng.Projection.SourceProjections) > 0
 	var covered []string
 	if scoped {
+		// **不再按 `projection_generation` 过滤**（2026-11-02 简化投递路径）。
+		//
+		// 旧谓词是 `source_generation=... AND (projection_generation IN 白名单) AND record_end<=水位`，
+		// 且白名单为空时该 scope 被整个跳过、全部跳过则生成 `record_end:<0`（什么都查不到）。
+		// 实测后果：一个源 22334 条数据全在 VL 里，但白名单只认 1 个代次
+		// ⇒ 查询只看得见 1160 条 ⇒ 其余被误判成「没落库」⇒ 缺口永不消解 ⇒ 积压丢弃。
+		//
+		// 简化后写入端不再产生重写副本（一批只写一次，event_id 幂等），
+		// 「同一事件多份副本需要按批次筛掉」这个前提消失了，因此直接去掉该维度。
+		// 历史数据虽仍带该标签，但不再被查询，老数据照常可查（这正是要的效果）。
+		//
+		// 保留的约束（一条都没放宽）：
+		//   · `log_source_id` 精确匹配 —— 跨源隔离不变
+		//   · `source_generation` 精确匹配 —— 跨代隔离不变
+		//   · `record_end <= ClosedVisibleSeq` —— 水位语义不变
+		type scopeGroup struct {
+			predicate string
+			sources   []string
+		}
+		groups := make([]scopeGroup, 0, len(rng.Projection.SourceProjections))
+		indices := make(map[string]int, len(rng.Projection.SourceProjections))
 		for _, scope := range rng.Projection.SourceProjections {
-			generations := make([]string, 0, len(scope.ProjectionGenerations))
-			for _, generation := range scope.ProjectionGenerations {
-				generations = append(generations, `projection_generation:="`+escape(generation)+`"`)
+			predicate := `source_generation:="` + escape(scope.SourceGeneration) + `" AND record_end:<=` + strconv.FormatUint(scope.ClosedVisibleSeq, 10)
+			index, exists := indices[predicate]
+			if !exists {
+				index = len(groups)
+				indices[predicate] = index
+				groups = append(groups, scopeGroup{predicate: predicate})
 			}
-			if len(generations) == 0 {
-				continue
+			groups[index].sources = append(groups[index].sources, `log_source_id:="`+escape(scope.LogSourceID)+`"`)
+		}
+		// 分组与成员均按首次出现顺序输出；单成员保持原谓词形状。
+		for _, group := range groups {
+			sources := group.sources[0]
+			if len(group.sources) > 1 {
+				sources = "(" + strings.Join(group.sources, " OR ") + ")"
 			}
-			covered = append(covered, `(log_source_id:="`+escape(scope.LogSourceID)+`" AND source_generation:="`+
-				escape(scope.SourceGeneration)+`" AND (`+strings.Join(generations, " OR ")+`) AND record_end:<=`+
-				strconv.FormatUint(scope.ClosedVisibleSeq, 10)+`)`)
+			covered = append(covered, "("+sources+" AND "+group.predicate+")")
 		}
 	} else if rng.Projection != nil {
 		for _, src := range rng.Projection.CoveredSourceGenerations {
@@ -315,23 +427,66 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 			}
 		}
 	}
-	if len(covered) > 0 {
+	switch {
+	case len(covered) > 0:
 		parts = append(parts, "("+strings.Join(covered, " OR ")+")")
-	} else if rng.Key.StorageNamespace != "" {
-		parts = append(parts, `log_source_id:="`+escape(rng.Key.StorageNamespace)+`"`)
-	}
-	if rng.Projection != nil && !scoped {
-		generations := projectionGenerations(rng.Projection)
-		if len(generations) == 1 {
-			parts = append(parts, `projection_generation:="`+escape(generations[0])+`"`)
-		} else if len(generations) > 1 {
-			terms := make([]string, 0, len(generations))
-			for _, generation := range generations {
-				terms = append(terms, `projection_generation:="`+escape(generation)+`"`)
-			}
-			parts = append(parts, "("+strings.Join(terms, " OR ")+")")
+	default:
+		// 回退到分区命名空间（`PartitionKey.StorageNamespace`）。
+		//
+		// 2026-11-05 修正（生产日志查询整页为空的**第三个**真 bug）：
+		// 原写法把命名空间当**完整源 id** 做等值匹配 `log_source_id:="inst:318"`。
+		// 而 VL 行上的 `log_source_id` 恒为 `<TargetID>/<stream>`（`inst:318/file`），
+		// 两者从不相等 ⇒ 该 range 恒查到 0 行，且接口仍报
+		// `complete=true` / `EXHAUSTED` / `quality=exact`（空结果被粉饰成「完整无数据」）。
+		//
+		// 何时会走到这里：简化投递路径后，Catalog 记录由 `ingest.ensureCatalogPartition`
+		// 补建，它只填命名空间、**刻意不填** `SourceProjections`/`CoveredSourceGenerations`
+		// ⇒ `scoped=false` 且 `covered` 为空 ⇒ 必然走本分支。也就是说这不是边角情况，
+		// 而是新架构下投递路径产生的**唯一**形态。
+		//
+		// 真机证据（inst:318，2026-11-04 单日窗，VL v1.52.0）：
+		//   - log_source_id:="inst:318"                       -> 0 条
+		//   - log_source_id:="inst:318/file"                  -> 615 条
+		//   - (log_source_id:="inst:318" OR log_source_id:"inst:318/"*) -> 615 条
+		//
+		// 为何保留「等值」那一支：历史上存在 `LogSourceID == StorageNamespace` 的源
+		// （如 `node:1` 这种没有 `/stream` 后缀的），丢了它会把它们变不可见。
+		// 前缀以 `/` 收口：不加则 `inst:3` 会顺带匹配到 `inst:31`（跨源泄漏）。
+		//
+		// 与内存归因侧同源：`query.SourceScope.MatchesLogSourceID` 是唯一判据，
+		// 两处不得各写一套（那正是本次故障的同源形态）。
+		if scope := (query.SourceScope{Namespace: rng.Key.StorageNamespace}); scope.Namespace != "" {
+			parts = append(parts, "("+namespaceSelector(scope.Namespace)+")")
 		}
 	}
+	// 非 scoped 的 `projection_generation` 过滤同样去掉（理由同上）。
+	//
+	// 2026-11-05 修正（生产日志查询整页为空的真 bug）：条件从 `!scoped || cvs > 0`
+	// 收紧为 `cvs > 0`。
+	//
+	// # 为什么 `!scoped` 不能无条件加上界
+	//
+	// 简化投递路径后，Catalog 分区记录由 `ingest.ensureCatalogPartition` 补建，
+	// 它**刻意不填** `SourceProjections` 与 `ClosedVisibleSeq`（见该函数注释：
+	// 一批数据只写一次、行上没有代次标签）。于是这条记录来到此处时 `scoped=false`
+	// 且 `cvs=0` ⇒ 旧条件命中 `!scoped` 分支 ⇒ 内建 `record_end:<=0`
+	// ⇒ **VL 里每条都被过滤掉**。
+	//
+	// 真机证据（inst:320/file，同一时间窗）：
+	//   加   record_end:<=0     -> 0 条
+	//   去掉 record_end 上界   -> 194 条
+	// 而接口报的是 `complete=true` / `EXHAUSTED` / `quality=exact`——
+	// 空结果被当成“完整且无数据”，比报错更难排查。
+	//
+	// # 为什么 `cvs > 0` 就够
+	//
+	// 水位 > 0 是“该分区已封窗”的真实语义，上界必须保留（反面用例：
+	// TestSelectorStillBoundsWhenClosedVisibleSeqIsSet）。而 cvs=0 只有一个含义：
+	// “没有封窗信息” ⇒ 不得解释成零上界，否则就是把「不知道」当成「什么都不包含」。
+	// 这与 Search 的行级归因谓词逐字同口径（client.go 的
+	// `Projection != nil && len(SourceProjections) > 0 && ClosedVisibleSeq == 0 ||
+	// ev.Record.End <= q.ClosedVisibleSeq`）——两处必须一致，否则 selector 会
+	// 先把行筛掉，行级判断再好也无力回天。
 	if q.ClosedVisibleSeq > 0 {
 		parts = append(parts, "record_end:<="+strconv.FormatUint(q.ClosedVisibleSeq, 10))
 	}
@@ -344,6 +499,17 @@ func selectorQuery(rng query.AuthoritativeRange, q query.RangeQuery) string {
 	// 会被解析为 `(scope AND f) OR (*)`），或借管道重扫越界。用户过滤统一由
 	// params() 放进 extra_filters，由 VL 独立解析后与本 query AND 组合。
 	return base
+}
+
+// namespaceSelector 把命名空间渲染成「等值 OR 前缀」的 LogsQL 来源谓词。
+//
+// 为何不是单条等值：VL 行的 `log_source_id` 是完整源 id（`<TargetID>/<stream>`），
+// 与命名空间从不相等，只写等值就恒查不到（2026-11-05 真机故障）。
+// 为何前缀以 `/` 收口：不收口会让 `inst:3` 匹配到 `inst:31` —— 那是跨源泄漏，
+// 比查不到严重得多。VL 的 `"…"*` 是字面前缀匹配（已在本机 v1.52.0 实测：
+// `log_source_id:"inst:31/"*` 得 0 条，`log_source_id:"inst:318/"*` 得 615 条）。
+func namespaceSelector(namespace string) string {
+	return `log_source_id:="` + escape(namespace) + `" OR log_source_id:"` + escape(namespace) + `/"*`
 }
 
 func projectionGenerations(projection *catalog.PublishedProjection) []string {
@@ -402,17 +568,35 @@ func statsPipe(q query.RangeQuery) (string, error) {
 func (c *Client) searchPage(ctx context.Context, params url.Values, q query.RangeQuery, rows uint64, matches func(logtypes.Event) bool) (query.RangeResult, error) {
 	out := query.RangeResult{DuplicateQuality: query.DupExact, StatsQuality: query.StatsExact}
 	maxBytes := scanLimit(q.Budget)
+	// seen 按「id+哈希」去重：同一事件被重复写入时只保留一条。
 	seen := make(map[string]bool)
+	// hashByID 记录每个 event_id 首次出现的规范化哈希，用于识别「同 id 异哈希」。
+	// 为什么需要它：同 id 异哈希是**无法判定真伪**的歧义副本（内容已分歧，却共用同一事件身份），
+	// 两条都必须保留给上层归因，因此去重键不能只取 event_id；但质量维度必须据此降级，
+	// 否则同一份数据经单 range 路径报 exact、经合并路径（merged.go 对同 id 多哈希置
+	// DupUnresolved）报 unresolved，且导出门闸会放行这份歧义数据。
+	hashByID := make(map[string]string)
 	appendEvents := func(events []logtypes.Event) {
 		for _, ev := range events {
 			if !matches(ev) || (q.CursorSortKey != nil && query.CompareSortKey(query.SortKeyOf(ev), *q.CursorSortKey) <= 0) {
 				continue
 			}
 			key := ev.EventID + "\x00" + ev.CanonicalHash
-			if !seen[key] {
-				seen[key] = true
-				out.Items = append(out.Items, ev)
+			if seen[key] {
+				// 同 id 同哈希的纯重复：已在上方按 id+哈希丢弃，不构成歧义，
+				// 因此这里**不能**降级质量（否则普通重复会把导出误封）。
+				continue
 			}
+			seen[key] = true
+			if prev, ok := hashByID[ev.EventID]; ok {
+				if prev != ev.CanonicalHash {
+					// 同 id 已出现不同哈希 ⇒ 歧义副本；标记一旦置上不回头（与合并路径一致）。
+					out.DuplicateQuality = query.DupUnresolved
+				}
+			} else {
+				hashByID[ev.EventID] = ev.CanonicalHash
+			}
+			out.Items = append(out.Items, ev)
 		}
 	}
 	partial := func(stamp string) {
@@ -520,9 +704,18 @@ func (c *Client) searchPage(ctx context.Context, params url.Values, q query.Rang
 func (c *Client) stream(ctx context.Context, params url.Values, maxBytes, maxRows uint64, consume func([]byte) error) (uint64, bool, error) {
 	var read, rows uint64
 	truncated := false
+	if !physicalQueryFits(params.Get("query"), params.Get("extra_filters")) {
+		return 0, false, query.ErrRangeQueryBudget
+	}
 	if maxBytes == 0 {
 		return 0, true, nil
 	}
+	admittedBytes, refund, err := query.ReservePhysicalRead(ctx, maxBytes)
+	if err != nil {
+		return 0, false, err
+	}
+	maxBytes = admittedBytes
+	defer func() { refund(read) }()
 	actual, err := c.vl.StreamBudget(ctx, queryPath, params, maxBytes, func(body io.Reader) error {
 		// 在读入前限制真实字节数，Scanner 预读和超大单行也不能突破预留额度。
 		n := maxBytes
@@ -690,8 +883,8 @@ func rawFloat(fields map[string]json.RawMessage, key string) float64 {
 }
 
 func escape(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `"`, `\"`)
+	quoted := strconv.Quote(s)
+	return quoted[1 : len(quoted)-1]
 }
 
 func validField(s string) bool {

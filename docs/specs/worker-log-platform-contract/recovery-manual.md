@@ -7,7 +7,9 @@
 ## 1. 适用范围与真源
 
 - 覆盖 Worker 本地日志数据面（采集 / 归一化 / WAL / HOT VL / COLD Lifecycle / Deep Archive+Rehydrate）
-  与 CP 联邦查询、入库切换、Legacy 只读。架构见 `docs/ARCHITECTURE.md`「Worker 日志平台数据面」。
+  与 CP 联邦查询。架构见 `docs/ARCHITECTURE.md`「Worker 日志平台数据面」。
+- **入库切换与 Legacy 只读已于 2026-10-29 下线**：CP `logs` 表整张删除，`/logs/cutover` 与
+  `/logs/legacy` 不再注册（404）。本手册 §5 与 §6-H 中与之相关的条目仅存作历史。
 - **CP 是浏览器唯一入口**；浏览器不得直连 Worker/VL。跨 Worker 调用只经 CP 反向 gRPC 隧道（ADR-081/090）。
 - 能力不可用时**必须返回结构化 not-ready/unsupported**，禁止把空响应当作完整结果。
 
@@ -34,19 +36,21 @@
 
 ## 4. 数据损失边界
 
-- **同盘进程崩溃**（Worker/VL 强杀、重启）：可从持久账本 + WAL + 已登记受管恢复分段恢复，正常重启不丢已 `durable` 事件。
+- **同盘进程崩溃**（Worker/VL 强杀、重启）：从持久账本 + 持久 position 水位 + 重启重读恢复；WAL 是纯内存队列，不再跨重启保留（**2026-10-29**：受管恢复分段已废除）。因此「正常重启不丢已 `durable` 事件」这个旧承诺**不再成立**——只能保证已取得确认投递证据（`REQUEST_DONE`）的部分不重不漏，其余依赖重读 + 至少一次投递。
 - **整盘 / 整机损失**：本地 WAL+Raw **无法推导零损失**；必须依赖 Deep Archive 归档副本或外部备份作为独立证据。
-- HTTP 2xx **不构成**回收依据；未知投递结果的 WAL 前缀在恢复来源未解除前**不得回收或删除**。
+- HTTP 2xx **不构成**回收依据；未知投递结果的区间在重投成功前**不得回收或删除**（`UNKNOWN` 区间不进入 `REQUEST_DONE` 覆盖）。
 
 ## 5. 运维与管理入口
 
-CP HTTP 管理面（默认全部经 `node.manage`/`log.read` 权限；cutover 默认关闭）：
+CP HTTP 管理面（默认全部经 `node.manage`/`log.read` 权限）：
 
 | 用途 | 端点 |
 |---|---|
 | 联邦查询门面 | `GET /api/v1/logs/federation`（+`/search`、`/stats`、`/fields`、`/facets`、`/tail`、`POST /export`）|
-| 切换状态 / 更新 | `GET`/`PUT /api/v1/logs/cutover` |
-| Legacy 只读 | `GET /api/v1/logs/legacy` |
+| ~~切换状态 / 更新~~ | ~~`GET`/`PUT /api/v1/logs/cutover`~~ **已下线（404）** |
+| ~~Legacy 只读~~ | ~~`GET /api/v1/logs/legacy`~~ **已下线（404）** |
+| 平台（CP 自身）进程日志尾部 | `GET /api/v1/diagnostics/log?lines=N` |
+| Worker 进程日志尾部 | `GET /api/v1/nodes/:id/diagnostics/log?lines=N`（经反向隧道 `PullSelfLog`）|
 | 受管 VL 运行时状态 | `GET /api/v1/nodes/:id/log-runtime` |
 | 运行时控制（含 install/启停） | `POST /api/v1/nodes/:id/log-runtime/:namespace/:action` |
 | 触发分区迁移 | `POST /api/v1/nodes/:id/log-runtime/migrate` |
@@ -65,11 +69,11 @@ Worker 侧配置键（`worker.yml`，零配置默认关闭）：`log_sources`、
 
 ### A. 投递结果未知（`delivery_state=UNKNOWN`）
 - 触发：HTTP 请求已发出、响应丢失（如 VL 在确认窗口重启）。
-- 处置：保留受管恢复分段，按 `event_id`/范围核验；无法确认则重放并记录可能重复。**不得**进入坏记录隔离，**不得**据此推进 `reclaim_position`。
+- 处置：按 `event_id`/范围核验；无法确认则重放并记录可能重复。**不得**进入坏记录隔离，**不得**据此推进 `reclaim_position`。（`UNKNOWN` 区间本身就不参与回收，所以它会自然等重投。）
 
 ### B. WAL 回收与恢复责任
-- `reclaim_position` 仅在受管恢复分段完成持久提交、校验、登记（`WAL_RESPONSIBILITY_TRANSFERRED`）后推进。
-- 释放证明（`PROJECTION_BACKED` / `NEXT_COPY_VERIFIED` / `RETENTION_EXPIRED_WITHOUT_HOLDS`）的接收者与理由必须持久记录；证明不完整、有 hold 或预算不足时**保留分段并降级**，后台清理不得自行推断释放理由。
+- `reclaim_position` 在回收上界（`REQUEST_DONE` 证据的连续覆盖末端）能被 `max(read, durable)` 夹住时推进；**不再需要**受管恢复分段完成持久提交、校验、登记（**2026-10-29**：`WAL_RESPONSIBILITY_TRANSFERRED` 等状态已删除）。
+- 释放证明（`PROJECTION_BACKED` / `NEXT_COPY_VERIFIED` / `RETENTION_EXPIRED_WITHOUT_HOLDS`）的接收者与理由必须持久记录；证明不完整、有 hold 或预算不足时**保留分段并降级**，后台清理不得自行推断释放理由。 ~~**2026-10-29 删**：受管恢复分段、三种 `release_reason` 与分段 hold 均已废除。~~
 - `/internal/force_flush` 只可用于可查询性实验，**不是**耐久凭证。
 
 ### C. Catalog 迁移崩溃
@@ -95,10 +99,12 @@ Worker 侧配置键（`worker.yml`，零配置默认关闭）：`log_sources`、
 - 恢复不改原始 `_time`/`event_id`/`ingest_seq`；临时分区清理不得删除仍被 Query View 或恢复任务持有的副本。
 - Rehydrate 完成后**不得**悄悄把 DEEP 数据加入旧 view：等待并新建 view，或使旧 Cursor 显式 `VIEW_STALE`。
 
-### H. 入库切换 / Legacy
-- 逐 Worker 切换前完成能力确认、watermark、Legacy 保留预算预检；不足则不切换并报阻断原因。
-- 切换后实例与 Worker/Node 日志都停止新入 CP `logs`；未到期 Legacy 不受 platform 容量淘汰挤出。
-- 旧日志按行、新日志按 Multiline 事件时，未建等价映射前**禁止**拼接精确趋势。
+### H. 入库切换 / Legacy（已废弃）
+- ~~逐 Worker 切换前完成能力确认、watermark、Legacy 保留预算预检；不足则不切换并报阻断原因。~~
+- ~~切换后实例与 Worker/Node 日志都停止新入 CP `logs`；未到期 Legacy 不受 platform 容量淘汰挤出。~~
+- **2026-10-29**：CP `logs` 表已整体删除，没有可切换的两侧，本节失去作用对象。
+  实例日志只进 Worker 的 VL、平台日志只进本地自轮转文件。运维不再需要执行任何“切换”动作。
+- 仍成立的一条口径：旧日志按行、新日志按 Multiline 事件时，未建等价映射前**禁止**拼接精确趋势。
 
 ### I. 源"无完整已发布投影"（收尾死结，ADR-101 出口）
 

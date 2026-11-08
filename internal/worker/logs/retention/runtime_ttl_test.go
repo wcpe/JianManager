@@ -37,7 +37,8 @@ func TestHotWindowUTCDayAndScanBoundary(t *testing.T) {
 	}{
 		{eligible.Add(-time.Nanosecond), false}, {eligible, true}, {eligible.Add(p.Sweep.Interval), true},
 	} {
-		plan := p.PlanArchive(tc.now, []PartitionRef{part}, true)
+		// 第四个参数是「导出归档可用性」：本用例只关心年龄口径，故固定为不可用。
+		plan := p.PlanArchive(tc.now, []PartitionRef{part}, true, false)
 		if len(plan) != 1 || !plan[0].EligibleAt.Equal(eligible) || plan[0].Due != tc.due {
 			t.Fatalf("日结束与扫描边界错误: %+v", plan)
 		}
@@ -59,7 +60,10 @@ func TestRetryableArchiveIgnoresAgeButNeverDiscardsWithoutMover(t *testing.T) {
 	part := PartitionRef{StorageNamespace: "inst:1", UTCDay: "20261001", Owner: OwnerColdName, InFlight: true, Retryable: true}
 	now := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
 	for _, available := range []bool{false, true} {
-		plan := p.PlanArchive(now, []PartitionRef{part}, available)
+		// 导出归档在本用例里固定为不可用：本用例守的是「续跑不得降级成 discard」，
+		// 而导出归档**不是**续跑入口（见 PlanArchive 的 Retryable 分支），
+		// 故 archiver 是否可用都不该改变这里的结论（另有专门用例覆盖该性质）。
+		plan := p.PlanArchive(now, []PartitionRef{part}, available, false)
 		if len(plan) != 1 || !plan[0].Due || plan[0].Action == ActionDiscard {
 			t.Fatalf("恢复不得裸删或被年龄阻塞: %+v", plan)
 		}

@@ -72,6 +72,34 @@ func (s *Server) LogFacets(ctx context.Context, req *workerpb.LogFacetsRequest) 
 	return s.UnimplementedWorkerServiceServer.LogFacets(ctx, req)
 }
 
+// LogStreams FR-479 stream 枚举（窗内有哪些流、各多少条）。
+//
+// 必须在此显式 delegate：Server 嵌入的是 UnimplementedWorkerServiceServer，
+// 缺了这些方法时调用会**恒返回 Unimplemented**，而 CP 会把它当成
+// 「这台 Worker 不支持 streams」——功能上线了但永远用不了。
+func (s *Server) LogStreams(ctx context.Context, req *workerpb.LogStreamsRequest) (*workerpb.LogStreamsResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogStreams(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogStreams(ctx, req)
+}
+
+// LogStreamFieldNames FR-479 stream 标签维度名。
+func (s *Server) LogStreamFieldNames(ctx context.Context, req *workerpb.LogStreamFieldNamesRequest) (*workerpb.LogStreamFieldNamesResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogStreamFieldNames(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogStreamFieldNames(ctx, req)
+}
+
+// LogStreamFieldValues FR-479 stream 标签维度取值分布。
+func (s *Server) LogStreamFieldValues(ctx context.Context, req *workerpb.LogStreamFieldValuesRequest) (*workerpb.LogStreamFieldValuesResponse, error) {
+	if q := s.logRPC(); q != nil {
+		return q.LogStreamFieldValues(ctx, req)
+	}
+	return s.UnimplementedWorkerServiceServer.LogStreamFieldValues(ctx, req)
+}
+
 // LogTail FR-479 流式 Tail。
 func (s *Server) LogTail(req *workerpb.LogTailRequest, stream workerpb.WorkerService_LogTailServer) error {
 	if q := s.logRPC(); q != nil {
@@ -119,37 +147,3 @@ func (s *Server) LogMigratePartition(ctx context.Context, req *workerpb.LogMigra
 	return s.UnimplementedWorkerServiceServer.LogMigratePartition(ctx, req)
 }
 
-func (s *Server) LogCutoverReadiness(ctx context.Context, req *workerpb.LogCutoverReadinessRequest) (*workerpb.LogCutoverReadinessResponse, error) {
-	if q := s.logRPC(); q != nil {
-		return q.LogCutoverReadiness(ctx, req)
-	}
-	return s.UnimplementedWorkerServiceServer.LogCutoverReadiness(ctx, req)
-}
-
-func (s *Server) LogResolveIngestGaps(ctx context.Context, req *workerpb.LogResolveIngestGapsRequest) (*workerpb.LogTaskResponse, error) {
-	if q := s.logRPC(); q != nil {
-		return q.LogResolveIngestGaps(ctx, req)
-	}
-	return s.UnimplementedWorkerServiceServer.LogResolveIngestGaps(ctx, req)
-}
-
-// LogClearIdentityConflicts 人工确认并清空身份冲突记录（操作人与理由经 metadata 携带）。
-func (s *Server) LogClearIdentityConflicts(ctx context.Context, req *workerpb.LogClearIdentityConflictsRequest) (*workerpb.LogClearIdentityConflictsResponse, error) {
-	if q := s.logRPC(); q != nil {
-		return q.LogClearIdentityConflicts(ctx, req)
-	}
-	return s.UnimplementedWorkerServiceServer.LogClearIdentityConflicts(ctx, req)
-}
-
-// LogImportArchives 手动触发归档（.gz）导入扫描（操作人经 metadata 携带）。
-//
-// 必须在此显式 delegate：Server 嵌入的是 UnimplementedWorkerServiceServer，缺了这个方法时
-// 调用会**恒返回 Unimplemented**——而 worker/config.go 的注释与 CHANGELOG 都对外宣称该入口
-// 「始终可用（不受定时扫描开关影响）」，形成「文档说能用、实际不可用」的静默断链。
-// 回归见 log_rpc_delegate_test.go（穿透 bufconn 真 gRPC，而非直接调 grpcsvc 层）。
-func (s *Server) LogImportArchives(ctx context.Context, req *workerpb.LogImportArchivesRequest) (*workerpb.LogTaskResponse, error) {
-	if q := s.logRPC(); q != nil {
-		return q.LogImportArchives(ctx, req)
-	}
-	return s.UnimplementedWorkerServiceServer.LogImportArchives(ctx, req)
-}

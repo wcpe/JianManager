@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { toast } from 'sonner'
-import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, Mail, ExternalLink, type LucideIcon } from 'lucide-react'
+import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, Mail, ExternalLink, FileCog, type LucideIcon } from 'lucide-react'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
@@ -59,6 +59,8 @@ const GITHUB_TOKEN_NEW_URL = `https://github.com/settings/personal-access-tokens
 const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
   appearance: Palette,
   logging: ScrollText,
+  // 日志采集（FR-503）：与 logging（CP 自身日志级别）分开——它的作用是配置 Worker 采集行为。
+  logAcquisition: FileCog,
   runtime: Cpu,
   network: Network,
   backup: Archive,
@@ -70,6 +72,13 @@ const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
 function settingLabel(t: TFunction, key: string): string {
   return t(`settings.keys.${key}`, key)
 }
+
+/** 日志采集的布尔型配置项（FR-503）：用 Select 呈现 true|false，与后端校验同口径。 */
+const LOG_ACQ_BOOLEAN_KEYS = new Set([
+  'log.acq.rules_enabled',
+  'log.acq.realtime_tail',
+  'log.acq.gz_import_enabled',
+])
 
 /**
  * 系统设置页（FR-037 + FR-063 + FR-158）：内部侧边栏分类 + 右侧分类面板，套「设置表单」范式。
@@ -90,7 +99,7 @@ export default function SettingsPage() {
   const [pendingCat, setPendingCat] = useState<SettingCategory | null>(null)
 
   const categories: SettingCategory[] = isPlatformAdmin
-    ? ['appearance', 'logging', 'runtime', 'network', 'backup', 'email', 'security']
+    ? ['appearance', 'logging', 'logAcquisition', 'runtime', 'network', 'backup', 'email', 'security']
     : ['appearance']
 
   // 当前分类的可编辑项（appearance 无平台项）。
@@ -438,6 +447,17 @@ function EditableRow({
                 {lv}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+      ) : LOG_ACQ_BOOLEAN_KEYS.has(item.key) ? (
+        // 日志采集布尔项（FR-503）：开/关为唯一合法取值（后端 validateSettingValue 同口径）。
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger size="sm" className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="true">{t('settings.logAcqOn', '开启')}</SelectItem>
+            <SelectItem value="false">{t('settings.logAcqOff', '关闭')}</SelectItem>
           </SelectContent>
         </Select>
       ) : (

@@ -2052,4 +2052,11 @@ db<SettingsRow>('settings', () => [
   // MC 直探超时（FR-446）：同 graceful_stop.timeout 的 Go duration；Worker 侧生效（经心跳下发）。
   { id: 8, key: 'direct_probe.slp_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
   { id: 9, key: 'direct_probe.query_timeout', value: '3s', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  // 日志采集（FR-503）：平台默认值，经心跳下发 Worker（Worker 侧生效，非 CP 内即时生效）。
+  // 后端默认：规则引擎与实时采集开、gz 导入与定时扫描关、路径覆盖为空（见 DefaultAcqPolicy）。
+  { id: 10, key: 'log.acq.rules_enabled', value: 'true', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { id: 11, key: 'log.acq.realtime_tail', value: 'true', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { id: 12, key: 'log.acq.gz_import_enabled', value: 'false', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { id: 13, key: 'log.acq.gz_scan_interval', value: '', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
+  { id: 14, key: 'log.acq.path_overrides', value: '', editable: true, sensitive: false, overridden: false, effectiveImmediately: false },
 ])

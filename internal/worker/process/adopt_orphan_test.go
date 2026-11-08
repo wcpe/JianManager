@@ -1,8 +1,10 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -53,7 +55,8 @@ func newAdoptFixture(t *testing.T) *adoptFixture {
 	// 任何杀/终止动作都要被看见（收养路径必须一次都不调用）。
 	m.recoverKillTree = func(pid int) error { f.kills = append(f.kills, pid); return nil }
 	m.recoverTermTree = func(pid int) error { f.kills = append(f.kills, pid); return nil }
-	m.recoverVerifyOwner = func(int, string, string, bool) bool { return true }
+	// 收养专用的归属复核桩（FR-497③ 收紧后收养走 verifyAdoptOwnership，不再复用强杀路径的宽口径桩）。
+	m.adoptVerifyOwner = func(int, string, string, bool) (bool, string) { return true, "test_stub" }
 	m.recoverSleep = func(time.Duration) {}
 
 	require.NoError(t, daemon.NewPIDFile(filepath.Join(dir, adoptUUID+".pid")).WriteRecord(daemon.PIDRecord{
@@ -139,7 +142,12 @@ func TestOrphanScan_AutoAdoptOwnershipBlocked(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newAdoptFixture(t)
 			deny := tc.denyPID
-			f.m.recoverVerifyOwner = func(pid int, _ string, _ string, _ bool) bool { return pid != deny }
+			f.m.adoptVerifyOwner = func(pid int, _ string, _ string, _ bool) (bool, string) {
+				if pid == deny {
+					return false, "test_denied"
+				}
+				return true, "test_stub"
+			}
 
 			findings := f.s.ScanOnce()
 
@@ -179,24 +187,130 @@ func TestOrphanScan_AutoAdoptIdempotent(t *testing.T) {
 	require.Empty(t, f.kills)
 }
 
-// TestOrphanScan_AutoAdoptDisabled ④：关闭开关后不自动收养。
+// TestOrphanScan_AutoAdoptDisabled ④：关闭开关后不自动收养，但**发现与告警必须保留**。
+//
+// 规格 §2.3/§4 的口径是「`false` 只关收养」「不收养（仍只告警）」：开关是**收养动作**的逃生口，
+// 不是**观测能力**的逃生口。此前实现开关关闭后直接 return nil——不拨号、不登记、也不告警，
+// 使「磁盘在跑、平台记账 STOPPED、控制面完全沉默」的缺陷形态原样复活（实测 7 轮扫描 0 条日志）。
 func TestOrphanScan_AutoAdoptDisabled(t *testing.T) {
 	f := newAdoptFixture(t)
 	f.s.SetAutoAdopt(false)
+	logs := captureScanLogs(t)
 
 	findings := f.s.ScanOnce()
 
-	require.Empty(t, findings, "关闭收养后不应产生收养 finding")
-	require.False(t, f.m.instanceKnown(adoptUUID))
-	require.Empty(t, f.dials)
-	require.Empty(t, f.kills)
+	// 发现保留：仍然报出「有个未纳管活进程在这儿」，只是 Adopted=false。
+	require.Len(t, findings, 1, "开关关闭只关收养，发现能力必须保留")
+	require.Equal(t, OrphanKindUnmanagedLiveRuntime, findings[0].Kind)
+	require.Equal(t, adoptUUID, findings[0].InstanceUUID)
+	require.Equal(t, []int{adoptWrapperPID, adoptJavaPID}, findings[0].PIDs)
+	require.False(t, findings[0].Adopted, "开关关闭不得收养")
+
+	// 收养动作一概不执行：不登记、不拨号（重连属收养动作）、更不杀进程（护栏五.1）。
+	require.False(t, f.m.instanceKnown(adoptUUID), "开关关闭不得登记进内存表")
+	require.Empty(t, f.dials, "开关关闭不得拨号")
+	require.Empty(t, f.kills, "开关关闭更不得杀进程（护栏五.1）")
+	require.True(t, pidFileExists(filepath.Join(f.dir, adoptUUID+".pid")), "保留 PID 文件")
+
+	// 告警 + 审计：运维必须能看到这条线索。
+	out := logs()
+	require.Contains(t, out, "自动收养已关闭", "开关关闭时应产出 WARN 级告警")
+	require.Contains(t, out, adoptUUID)
+	require.Equal(t, 1, f.countAudit("orphan.scan_detected"), "应落一条「发现但未处置」审计")
 	require.Equal(t, 0, f.countAudit("orphan.auto_adopted"))
 	require.Equal(t, 0, f.countAudit("orphan.adopt_blocked"))
-	require.True(t, pidFileExists(filepath.Join(f.dir, adoptUUID+".pid")))
+	for _, a := range f.audits {
+		if a.action != "orphan.scan_detected" {
+			continue
+		}
+		require.Contains(t, a.detail, "unmanaged_live_runtime")
+		require.Contains(t, a.detail, "auto_adopt_disabled", "审计须写明未收养的原因")
+		require.True(t, a.success)
+	}
 
 	// 默认口径：构造即开（配置层默认 true 的单一真源见 DefaultOrphanAutoAdopt）。
 	require.True(t, DefaultOrphanAutoAdopt)
 	require.True(t, NewOrphanScanner(f.m, time.Minute, OrphanPolicyWarn).autoAdopt)
+}
+
+// TestOrphanScan_AutoAdoptDisabledNoRepeatNoise ④-a：开关关闭时的告警按变化去重，不每轮刷屏。
+//
+// 扫描默认 60s 一拍，若每轮都 WARN + 落审计，一个长期驻留的未纳管进程会以 1440 条/天的量刷屏并
+// 撑大审计表。故同一 (UUID, wrapper/java PID) 只在首次出现或 PID 变化时告警一次。
+func TestOrphanScan_AutoAdoptDisabledNoRepeatNoise(t *testing.T) {
+	f := newAdoptFixture(t)
+	f.s.SetAutoAdopt(false)
+
+	// 连续 5 轮：每轮都继续发现（观测不缓存），但只告警 + 落审计一次。
+	for i := 0; i < 5; i++ {
+		require.Len(t, f.s.ScanOnce(), 1, "每轮都应继续发现")
+	}
+	require.Equal(t, 1, f.countAudit("orphan.scan_detected"), "同一进程对多轮只落一条审计")
+	require.Empty(t, f.dials)
+	require.Empty(t, f.kills)
+
+	// PID 变化＝确实是新事件（旧进程已被换掉），应重新告警一次。
+	newWrapperPID, newJavaPID := adoptWrapperPID+10, adoptJavaPID+10
+	f.m.recoverPIDAlive = func(pid int) bool { return pid == newWrapperPID || pid == newJavaPID }
+	require.NoError(t, daemon.NewPIDFile(filepath.Join(f.dir, adoptUUID+".pid")).WriteRecord(daemon.PIDRecord{
+		WrapperPID:   newWrapperPID,
+		JavaPID:      newJavaPID,
+		SocketAddr:   f.socket,
+		InstanceUUID: adoptUUID,
+		WorkDir:      filepath.Join(f.dir, "server"),
+		ProbePort:    25566,
+	}))
+	require.Len(t, f.s.ScanOnce(), 1)
+	require.Equal(t, 2, f.countAudit("orphan.scan_detected"), "PID 变化应重新告警")
+	require.Empty(t, f.kills)
+}
+
+// TestOrphanScan_AutoAdoptDisabledNoCandidateNoNoise ④-b：开关关闭且无未纳管进程时不产生任何噪音。
+func TestOrphanScan_AutoAdoptDisabledNoCandidateNoNoise(t *testing.T) {
+	f := newAdoptFixture(t)
+	f.s.SetAutoAdopt(false)
+	// PID 记录仍在，但两个进程都已死：不构成「未纳管活进程」。
+	f.m.recoverPIDAlive = func(int) bool { return false }
+	logs := captureScanLogs(t)
+
+	require.Empty(t, f.s.ScanOnce(), "无未纳管活进程不应产出 finding")
+
+	out := logs()
+	require.NotContains(t, out, "未纳管的活进程", "无候选时不得产出噪音日志")
+	require.NotContains(t, out, "自动收养已关闭")
+	require.Empty(t, f.audits, "无候选时不得落审计")
+	require.Empty(t, f.dials)
+	require.Empty(t, f.kills)
+}
+
+// TestOrphanScan_AutoAdoptDisabledIgnoresOwnershipGate ④-c：归属复核不是「观测闸」。
+//
+// 归属复核是**收养动作**的安全闸；开关关闭时根本不存在收养动作，故复核不通过也不该让发现静默——
+// 否则 Windows（无 /proc，wrapper 分支恒 fail-closed）会连告警都发不出，退回原始缺陷。
+func TestOrphanScan_AutoAdoptDisabledIgnoresOwnershipGate(t *testing.T) {
+	f := newAdoptFixture(t)
+	f.s.SetAutoAdopt(false)
+	f.m.recoverVerifyOwner = func(int, string, string, bool) bool { return false }
+
+	findings := f.s.ScanOnce()
+
+	require.Len(t, findings, 1, "复核不过不应让发现静默")
+	require.False(t, findings[0].Adopted)
+	require.Equal(t, 1, f.countAudit("orphan.scan_detected"))
+	require.Equal(t, 0, f.countAudit("orphan.adopt_blocked"), "开关关闭时不存在收养动作")
+	require.Empty(t, f.dials)
+	require.Empty(t, f.kills)
+}
+
+// captureScanLogs 把默认 logger 临时重定向到内存缓冲，返回读取函数（还原由 t.Cleanup 负责）。
+// 本包测试不使用 t.Parallel()，故替换默认 logger 不会与其它用例互相干扰。
+func captureScanLogs(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf.String
 }
 
 // TestOrphanScan_AutoAdoptRegisteredStoppedKeepsSpec ⑦：实例已在内存表但脱管（STOPPED、无策略，

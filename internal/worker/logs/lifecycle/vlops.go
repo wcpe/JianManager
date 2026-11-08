@@ -17,32 +17,103 @@ import (
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/logs/catalog"
+	"github.com/wcpe/JianManager/internal/worker/logs/logtypes"
 	"github.com/wcpe/JianManager/internal/worker/logs/vlsup"
 )
 
+// VLPartitionOps 是「VL 物理分区操作」的生产实现。
+//
+// 2026-10-29：冷热双层已废除，只剩余一个 VL ⇒ **迁移状态机（copy / verify / attach /
+// detach / cleanup）连同它的 Cold 客户端一起删除**。不是为少写代码，而是因为它已经变成
+// 一条数据毁灭路径：
+//
+//	它的每一步都只为了「换到另一个物理位置」——
+//	drain → snapshot → copy 到 ColdDataRoot → attach 到 Cold 客户端
+//	→ detach 热层 → 删热层原物。
+//
+// 单实例下 Hot ≡ Cold，这条链的净效果是「把日分区抄到自己身上、再把自己删掉」。
+// 生产 `log_retention.enabled: true`，留着它就等于留着一颗定时炸弹。
+//
+// **保留下来的是「到期数据的出口」**（三条，都只用 Hot / HotDataRoot / Catalog）：
+//   - 冻结快照（snapshot）：ExportSnapshot 靠它取独立副本；
+//   - 归档热层回收（archive_reclaim.go）：RemoveArchivedPartition 靠 Hot + HotDataRoot；
+//   - 工作日修复（repairDay）：修已存在的日，不换位置。
+
 type VLPartitionOps struct {
-	Hot, Cold                 *vlsup.Client
-	HotDataRoot, ColdDataRoot string
-	Catalog                   *catalog.Catalog
+	Hot               *vlsup.Client
+	HotDataRoot       string
+	Catalog           *catalog.Catalog
+	CanonicalDayInput func(*catalog.Record) ([]logtypes.Event, error)
+	ResourceBudget    *vlsup.BudgetController
 
-	mu        sync.Mutex
-	snapshots map[catalog.PartitionKey]string
-	verified  map[catalog.PartitionKey]string
+	reservations map[string]func()
+	mu           sync.Mutex
+	snapshots    map[catalog.PartitionKey]string
 }
 
-func NewVLPartitionOps(hot, cold *vlsup.Client, hotRoot, coldRoot string, cat *catalog.Catalog) (*VLPartitionOps, error) {
-	if hot == nil || cold == nil || hotRoot == "" || coldRoot == "" || cat == nil {
-		return nil, fmt.Errorf("lifecycle: HOT/COLD clients, data roots and Catalog are required")
+// NewVLPartitionOps 构造物理适配器。只需要一个 VL 客户端。
+func NewVLPartitionOps(hot *vlsup.Client, hotRoot string, cat *catalog.Catalog) (*VLPartitionOps, error) {
+	if hot == nil || hotRoot == "" || cat == nil {
+		return nil, fmt.Errorf("lifecycle: VL client, data root and Catalog are required")
 	}
-	return &VLPartitionOps{Hot: hot, Cold: cold, HotDataRoot: hotRoot, ColdDataRoot: coldRoot,
-		Catalog: cat, snapshots: make(map[catalog.PartitionKey]string), verified: make(map[catalog.PartitionKey]string)}, nil
+	return &VLPartitionOps{
+		Hot: hot, HotDataRoot: hotRoot, Catalog: cat,
+		snapshots:    make(map[catalog.PartitionKey]string),
+		reservations: make(map[string]func()),
+	}, nil
 }
 
-func (v *VLPartitionOps) Ops() Ops {
-	return Ops{
-		Drain: v.drain, Snapshot: v.snapshot, Copy: v.copySnapshot, Verify: v.verifyCopy,
-		Attach: v.attachCold, LeaseDrain: v.drainLeases, Detach: v.detachHot, Cleanup: v.cleanupHot,
+// Ops 返回可注入的物理操作面。
+//
+// 2026-10-29：迁移各步（Drain / Snapshot / Copy / Verify / Attach / Detach / Cleanup）
+// 连同 DayManager、RepairDay 一起删了 —— 它们全部是「把日搬到另一层」的组件。
+// 现在 Ops 是空结构，保留类型是因为 manager.StartMigration/ResumeMigration 的状态查询
+// 仍需要它（那些是只读状态机，不产生物理动作）。
+func (v *VLPartitionOps) Ops() Ops { return Ops{} }
+
+// releaseReservations 释放某一天登记的全部磁盘预留（按 key 后缀匹配）。
+func (v *VLPartitionOps) releaseReservations(day string) {
+	v.mu.Lock()
+	var releases []func()
+	for key, release := range v.reservations {
+		if strings.HasSuffix(key, "/"+day) {
+			releases = append(releases, release)
+			delete(v.reservations, key)
+		}
 	}
+	v.mu.Unlock()
+	for _, release := range releases {
+		release()
+	}
+}
+
+// prepareHotSource 确保目标物理日可被快照：
+//   - 该日必须是已冻结的受控物理日（未冻结就取快照 = 取到还在写的数据）；
+//   - 该日分区必须已挂在 VL 上，否则 /internal/partition/snapshot/create 找不到它。
+//
+// 2026-10-29：原实现还带一个 `RecordDayReattached` 登记（迁移状态机的一部分）。
+// 迁移链删掉后不再需要它：导出归档的快照是**只读**动作，不改变归属。
+func (v *VLPartitionOps) prepareHotSource(key catalog.PartitionKey) error {
+	day, ok := v.Catalog.PhysicalDay(key.UTCDay)
+	if !ok || !day.Frozen || len(day.Batches) == 0 {
+		return fmt.Errorf("lifecycle: no controlled physical-day source batch")
+	}
+	name, err := dayName(key)
+	if err != nil {
+		return err
+	}
+	return v.withTimeout(func(ctx context.Context) error {
+		active, err := partitionActive(ctx, v.Hot, name)
+		if err != nil || active {
+			return err
+		}
+		root := filepath.Join(v.HotDataRoot, "partitions", name)
+		if err := requirePathUnder(filepath.Join(v.HotDataRoot, "partitions"), root); err != nil {
+			return err
+		}
+		_, err = v.Hot.Post(ctx, "/internal/partition/attach", url.Values{"name": {name}})
+		return err
+	})
 }
 
 func dayName(key catalog.PartitionKey) (string, error) {
@@ -59,14 +130,19 @@ func (v *VLPartitionOps) withTimeout(fn func(context.Context) error) error {
 	return fn(ctx)
 }
 
-func (v *VLPartitionOps) drain(catalog.PartitionKey) error {
-	return v.withTimeout(func(ctx context.Context) error {
-		_, err := v.Hot.Post(ctx, "/internal/force_flush", nil)
-		return err
-	})
-}
-
+// snapshot 取一个冻结快照目录。
+//
+// 它是「导出独立副本」的唯一取数入口：
+//   - `CheckPhysicalDayDrained` 是双闸（无在途写许可 + 无活跃读取），不是可选的前置；
+//   - `prepareHotSource` 确保该日的物理目录存在且可读；
+//   - VL 必须返回**恰好一个**位于受管 snapshots 根下的稳定目录（多于一个是状态不明，不是“挑一个”）。
 func (v *VLPartitionOps) snapshot(key catalog.PartitionKey, _ string) (string, error) {
+	if err := v.Catalog.CheckPhysicalDayDrained(key.UTCDay); err != nil {
+		return "", err
+	}
+	if err := v.prepareHotSource(key); err != nil {
+		return "", err
+	}
 	day, err := dayName(key)
 	if err != nil {
 		return "", err
@@ -94,179 +170,13 @@ func (v *VLPartitionOps) snapshot(key catalog.PartitionKey, _ string) (string, e
 	return paths[0], nil
 }
 
-func (v *VLPartitionOps) copySnapshot(key catalog.PartitionKey, snapshotID, _ string) (string, error) {
-	day, err := dayName(key)
-	if err != nil {
-		return "", err
-	}
-	if snapshotID == "" {
-		snapshotID, err = v.snapshot(key, "")
-		if err != nil {
-			return "", err
-		}
-	}
-	// Copy 返回的是目标目录句柄，但 Verify 仍必须能找到本次复制使用的真实源快照。
-	// 记录源快照，避免后续把 copyID 误当成源路径。
-	v.mu.Lock()
-	v.snapshots[key] = snapshotID
-	v.mu.Unlock()
-	dest := filepath.Join(v.ColdDataRoot, "partitions", day)
-	if _, err := os.Stat(dest); err == nil {
-		sourceDigest, sourceErr := treeDigest(snapshotID)
-		destDigest, verifyErr := treeDigest(dest)
-		if sourceErr == nil && verifyErr == nil && sourceDigest == destDigest {
-			return dest, nil
-		}
-		return "", fmt.Errorf("lifecycle: COLD destination already exists with different content")
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-		return "", err
-	}
-	stage, err := os.MkdirTemp(filepath.Dir(dest), ".staging-"+day+"-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(stage)
-	if err := copyTree(snapshotID, stage); err != nil {
-		return "", err
-	}
-	if err := os.Rename(stage, dest); err != nil {
-		return "", err
-	}
-	return dest, nil
-}
-
-func (v *VLPartitionOps) verifyCopy(key catalog.PartitionKey, _ string, _ string) (string, error) {
-	day, err := dayName(key)
-	if err != nil {
-		return "", err
-	}
-	v.mu.Lock()
-	snapshotID := v.snapshots[key]
-	v.mu.Unlock()
-	if snapshotID == "" {
-		return "", fmt.Errorf("lifecycle: snapshot reference unavailable")
-	}
-	dest := filepath.Join(v.ColdDataRoot, "partitions", day)
-	if filepath.Clean(snapshotID) == filepath.Clean(dest) {
-		return "", fmt.Errorf("lifecycle: snapshot reference points to COLD destination")
-	}
-	sourceDigest, err := treeDigest(snapshotID)
-	if err != nil {
-		return "", err
-	}
-	destDigest, err := treeDigest(dest)
-	if err != nil {
-		return "", err
-	}
-	if sourceDigest != destDigest {
-		return "", fmt.Errorf("lifecycle: staging checksum mismatch")
-	}
-	v.mu.Lock()
-	v.verified[key] = destDigest
-	v.mu.Unlock()
-	return destDigest, nil
-}
-
-func (v *VLPartitionOps) attachCold(key catalog.PartitionKey, _ string) error {
-	day, err := dayName(key)
-	if err != nil {
-		return err
-	}
-	return v.withTimeout(func(ctx context.Context) error {
-		active, err := partitionActive(ctx, v.Cold, day)
-		if err != nil || active {
-			return err
-		}
-		_, err = v.Cold.Post(ctx, "/internal/partition/attach", url.Values{"name": {day}})
-		return err
-	})
-}
-
-func (v *VLPartitionOps) drainLeases(key catalog.PartitionKey, oldGeneration uint64) error {
-	rec, ok := v.Catalog.Get(key)
-	if !ok {
-		return fmt.Errorf("lifecycle: Catalog partition disappeared")
-	}
-	for _, lease := range rec.QueryLeases {
-		if lease.Generation == oldGeneration && lease.Active(time.Now().UTC(), oldGeneration) {
-			return fmt.Errorf("lifecycle: query lease %s is still active", lease.LeaseID)
-		}
-	}
-	return nil
-}
-
-func (v *VLPartitionOps) detachHot(key catalog.PartitionKey, _ string) error {
-	day, err := dayName(key)
-	if err != nil {
-		return err
-	}
-	return v.withTimeout(func(ctx context.Context) error {
-		active, err := partitionActive(ctx, v.Hot, day)
-		if err != nil || !active {
-			return err
-		}
-		_, err = v.Hot.Post(ctx, "/internal/partition/detach", url.Values{"name": {day}})
-		return err
-	})
-}
-
-func (v *VLPartitionOps) cleanupHot(key catalog.PartitionKey, _ string) error {
-	day, err := dayName(key)
-	if err != nil {
-		return err
-	}
-	v.mu.Lock()
-	checksum := v.verified[key]
-	snapshot := v.snapshots[key]
-	v.mu.Unlock()
-	if checksum == "" {
-		if rec, ok := v.Catalog.Get(key); ok && rec.LastVerifyCompleted {
-			checksum = rec.LastVerifyChecksum
-		}
-	}
-	if checksum == "" {
-		return fmt.Errorf("lifecycle: target responsibility was not verified")
-	}
-	hotPartition := filepath.Join(v.HotDataRoot, "partitions", day)
-	if err := requirePathUnder(filepath.Join(v.HotDataRoot, "partitions"), hotPartition); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(hotPartition); err != nil {
-		return err
-	}
-	if snapshot != "" {
-		_ = v.withTimeout(func(ctx context.Context) error {
-			_, err := v.Hot.Post(ctx, "/internal/partition/snapshot/delete", url.Values{"path": {snapshot}})
-			return err
-		})
-	}
-	return nil
-}
-
+// AllowDetach 是 last-copy 保留门禁。
+//
+// 2026-10-29：迁移链已删，不再存在「把最后一份拷走再删源」的路径 ⇒ 恒为拒绝。
+// 保留这个方法是因为 RetentionGate 接口仍有装配点，而「拒绝」是唯一安全的默认：
+// 任何未来调用者拿到 unsupported 都会保留原物。
 func (v *VLPartitionOps) AllowDetach(key catalog.PartitionKey, _, _ string) (bool, string) {
-	v.mu.Lock()
-	checksum := v.verified[key]
-	v.mu.Unlock()
-	if checksum == "" {
-		if rec, ok := v.Catalog.Get(key); ok && rec.LastVerifyCompleted {
-			checksum = rec.LastVerifyChecksum
-		}
-	}
-	if checksum == "" {
-		return false, "verified COLD partition copy required"
-	}
-	day, err := dayName(key)
-	if err != nil {
-		return false, err.Error()
-	}
-	got, err := treeDigest(filepath.Join(v.ColdDataRoot, "partitions", day))
-	if err != nil || got != checksum {
-		return false, "COLD partition checksum no longer matches the verified receiver"
-	}
-	return true, "verified COLD partition copy"
+	return false, "cold-tier migration has been removed; the only VL instance is the authoritative copy"
 }
 
 func partitionActive(ctx context.Context, client *vlsup.Client, day string) (bool, error) {
@@ -302,56 +212,9 @@ func requirePathUnder(root, target string) error {
 	return nil
 }
 
-func copyTree(source, target string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		dest := filepath.Join(target, rel)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("lifecycle: snapshot symlink is not allowed")
-		}
-		if entry.IsDir() {
-			return os.MkdirAll(dest, info.Mode().Perm())
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("lifecycle: unsupported snapshot file type")
-		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0o750); err != nil {
-			return err
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
-		if err != nil {
-			in.Close()
-			return err
-		}
-		_, copyErr := io.Copy(out, in)
-		if copyErr == nil {
-			copyErr = out.Sync()
-		}
-		closeOut, closeIn := out.Close(), in.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeOut != nil {
-			return closeOut
-		}
-		return closeIn
-	})
-}
-
+// treeDigest 计算目录树的稳定摘要（路径 + 内容）。
+//
+// 只被「导出副本校验」与快照完整性使用；符号链一律拒绝（它可能指向快照之外）。
 func treeDigest(root string) (string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {

@@ -38,14 +38,14 @@ func TestPlannerConcurrentViewReuseIsRaceFree(t *testing.T) {
 	for i := 0; i < targets; i++ {
 		ns := fmt.Sprintf("inst:%d", i)
 		targetIDs = append(targetIDs, ns)
-		require.NoError(t, cat.Put(catalog.NewStableRecord(
+		require.NoError(t, cat.Put(queryableRecord(
 			catalog.PartitionKey{StorageNamespace: ns, UTCDay: "2026-10-11"}, catalog.OwnerHot, 1, "hot-"+ns)))
 	}
 	// 另造两个「窗口内无分区」的授权目标（覆盖空成功覆盖路径，使 TargetCoverage 更满）。
 	for i := 100; i < 102; i++ {
 		ns := fmt.Sprintf("inst:%d", i)
 		targetIDs = append(targetIDs, ns)
-		require.NoError(t, cat.Put(catalog.NewStableRecord(
+		require.NoError(t, cat.Put(queryableRecord(
 			catalog.PartitionKey{StorageNamespace: ns, UTCDay: "2026-09-01"}, catalog.OwnerHot, 1, "hot-"+ns)))
 	}
 

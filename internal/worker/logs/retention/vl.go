@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,13 +25,9 @@ type VLDeleter interface {
 
 // ClientDeleter 把 vlsup.Client 适配为 VLDeleter。
 //
-// VL v1.52.0 的删除接口（真机实测，见 spec 的探针记录）：
-//
-//	POST /delete/run_task  参数 filter=<LogsQL> [&start=] [&end=]  → {"task_id":"..."}
-//	GET  /delete/active_tasks                                     → 在跑的任务
-//
-// 两道门禁：受管 VL 进程必须带 `-delete.enable`（不带则 400
-// "requests to /delete/* are disabled"），且受 basic auth 保护（与插入/查询同一套凭据）。
+// 批准版v1.52.0仅消费filter，不消费独立start/end；这里主动使用POST，
+// 不能声称该版服务端只接受POST。截止时间必须进入白名单生成的LogsQL过滤器。
+// 意图闸、执行闸和受管VL的delete.enable三闸继续默认关闭，生产Sweeper未接线。
 type ClientDeleter struct {
 	Client *vlsup.Client
 }
@@ -39,11 +37,12 @@ func (d ClientDeleter) RunDeleteTask(ctx context.Context, filter string, before 
 	if d.Client == nil {
 		return "", fmt.Errorf("retention: VictoriaLogs 客户端未就绪")
 	}
+	safeFilter, err := boundedDeleteFilter(filter, before)
+	if err != nil {
+		return "", err
+	}
 	q := url.Values{}
-	q.Set("filter", filter)
-	// end 是**闭区间上界**语义：只删早于它的条目。start 不传 = 不设下界
-	// （保留期的作用就是「保留最近 N」，下界无意义，传了反而会漏掉更早的历史）。
-	q.Set("end", before.UTC().Format(time.RFC3339Nano))
+	q.Set("filter", safeFilter)
 	body, err := d.Client.Post(ctx, "/delete/run_task", q)
 	if err != nil {
 		return "", err
@@ -58,6 +57,37 @@ func (d ClientDeleter) RunDeleteTask(ctx context.Context, filter string, before 
 		return "", fmt.Errorf("retention: 删除任务响应缺少 task_id（响应 %q）", truncateForLog(body, 200))
 	}
 	return resp.TaskID, nil
+}
+
+// boundedDeleteFilter 只接收buildFilter能生成的规范字符串，拒绝任何自由LogsQL。
+// 批准引擎时间区间闭合，用cutoff-1ns实现严格_time<cutoff的半开语义。
+func boundedDeleteFilter(filter string, before time.Time) (string, error) {
+	levelLiteral, source, found := strings.Cut(strings.TrimPrefix(filter, "level:="), " AND log_source_id:=")
+	if !strings.HasPrefix(filter, "level:=") {
+		return "", fmt.Errorf("retention: 删除filter不在精确值白名单内")
+	}
+	level, err := strconv.Unquote(levelLiteral)
+	if err != nil {
+		return "", fmt.Errorf("retention: 删除级别必须为精确值")
+	}
+	if found {
+		value, err := strconv.Unquote(source)
+		if err != nil {
+			return "", fmt.Errorf("retention: 非法删除来源")
+		}
+		source = value
+	}
+	canonical, err := buildFilter(source, level)
+	if err != nil || canonical != filter {
+		return "", fmt.Errorf("retention: 删除filter不是规范白名单表达式")
+	}
+	ns := before.UnixNano()
+	if !time.Unix(0, ns).Equal(before) || ns == math.MinInt64 {
+		return "", fmt.Errorf("retention: 截止时间超出纳秒范围或cutoff-1ns下溢")
+	}
+	lower := time.Unix(0, math.MinInt64).UTC().Format(time.RFC3339Nano)
+	upper := time.Unix(0, ns-1).UTC().Format(time.RFC3339Nano)
+	return canonical + " AND _time:[" + lower + ", " + upper + "]", nil
 }
 
 func truncateForLog(b []byte, n int) string {
@@ -101,8 +131,8 @@ type SweepResult struct {
 // 并发口径：由单个后台循环调用（与采集轮无关），内部不加锁；节流表只在本实例内生效，
 // 进程重启后立刻补扫一次——删除是幂等的，多扫一次只是多一次索引遍历，不会删错。
 //
-// **生产接线状态（RET-2）**：本版本没有 `NewSweeper` 的生产调用点，也没有给受管 VL 注入
-// `-delete.enable` 的配置位，因此第三闸在生产不可达：打开两闸的真实效果是「零删除」。
+// **生产接线状态（RET-2）**：本版本没有NewSweeper的生产调用点；
+// 即使存在受管VL的delete.enable配置位，也不能把打开开关描述成执行器已接线。
 // 这是 fail-closed 方向，但启动日志不得声称删除已生效（措辞见 Policy.Describe 与
 // DescribeDeleteExecutor）。补接线时必须一并补上 `-delete.enable` 的显式配置位
 // （默认关、开启需二次确认）与 SweepStats 的消费点。
