@@ -32,6 +32,7 @@
 ### POST /api/v1/auth/login
 - **描述**: 用户登录
 - **关联 FR**: FR-001
+- **权限**: 无需认证（登录入口）
 - **请求**:
   ```json
   { "username": "string", "password": "string" }
@@ -45,6 +46,7 @@
 ### POST /api/v1/auth/refresh
 - **描述**: 刷新 Access Token
 - **关联 FR**: FR-001
+- **权限**: 无需认证（凭 refreshToken 换 accessToken）
 - **请求**:
   ```json
   { "refreshToken": "string" }
@@ -170,36 +172,40 @@
 ### GET /api/v1/groups/:id
 - **描述**: 用户组详情（含成员列表和配额）
 - **关联 FR**: FR-003
+- **权限**: `group:read`（且须可访问该组）
 
 ### PUT /api/v1/groups/:id
 - **描述**: 更新用户组
 - **关联 FR**: FR-003
-- **权限**: `group.write`
+- **权限**: `group:manage`（`CanManageGroup` 资源级判断；原文档写的 `group.write` 不是本仓库的权限节点）
 
 ### DELETE /api/v1/groups/:id
 - **描述**: 删除用户组
 - **关联 FR**: FR-003
-- **权限**: `group.delete`
+- **权限**: `group:manage`（`HasPermission(PermGroupManage)`；原文档写的 `group.delete` 不是本仓库的权限节点）
 
 ### POST /api/v1/groups/:id/members
 - **描述**: 添加组成员
 - **关联 FR**: FR-003
+- **权限**: `group:member:write`（且须为该组组管理员）
 - **请求**: `{ "userId": "int", "role": 0 }`
 
 ### DELETE /api/v1/groups/:id/members/:userId
 - **描述**: 移除组成员
 - **关联 FR**: FR-003
+- **权限**: `group:member:write`（且须为该组组管理员）
 
 ### PUT /api/v1/groups/:id/quota
 - **描述**: 更新组配额（平台管理员）。FR-467 起新增 `enforceMode`：组级运行期配额强制档位，留空表示继承平台默认 `quota.enforce_mode`
 - **关联 FR**: FR-003 ｜ **关联 FR**: FR-467
+- **权限**: `group:quota:write`
 - **请求**: `{ "maxInstances": 10, "maxBots": 50, "maxStorageMb": 10240, "enforceMode": "alert" }`
   - `enforceMode`（可选）：`alert` | `throttle` | `stop` 或 `""`（继承默认）；非法值 `400 INVALID_REQUEST`
 
 ### GET /api/v1/groups/:id/quota
 - **描述**: 查询组配额及当前用量（组成员可查看本组，组管理员/平台管理员同）。FR-467 起响应含 `enforceMode`（空串 = 继承平台默认）
 - **关联 FR**: FR-003 ｜ **关联 FR**: FR-467
-- **权限**: `group:quota:read`（本组可访问）
+- **权限**: `group:read`（`CanAccessGroup` 资源级；函数体不检查 `PermGroupQuotaRead`，原文档标注偏严）
 - **响应**:
   ```json
   {
@@ -228,6 +234,7 @@
 ### GET /api/v1/nodes/:id
 - **描述**: 节点详情（含资源使用率）
 - **关联 FR**: FR-004
+- **权限**: `node.read` 或 `node.manage`
 
 ### POST /api/v1/nodes/:id/maintenance
 - **描述**: 置/解节点维护模式（cordon）。维护中拒绝新实例调度到该节点，与在线/离线状态正交
@@ -442,6 +449,7 @@
 ### GET /api/v1/instances/:id
 - **描述**: 实例详情
 - **关联 FR**: FR-005, FR-445
+- **权限**: `instance:read`（且须可访问该实例）
 - **说明**: 详情/单查响应增 `capabilities` —— 按当前 `(type, role)` 现算的实例能力画像（FR-445/ADR-091，结构见 `model.InstanceCapabilityProfile`：`type`/`role`/`mcSemantics`/有序 `capabilities[]`/各能力 `sources`）。**不落库、不缓存**，仅在详情/单查路径填充（列表响应不带）；前端据此显隐详情页 Tab。Tab 显隐只由 `capabilities` 决定，`mcSemantics` 只影响同一 Tab 内字段取舍。MCP `agent_get_instance` 同源透出。
 
 ### PUT /api/v1/instances/:id
@@ -1329,6 +1337,7 @@
 
 ### GET /api/v1/nodes/:id/ports
 - **描述**: 查看某节点端口占用与分配范围
+- **权限**: `instance.create` 或 `node.manage`
 - **响应**: `{ nodeId, ranges:{serverPortBase,rconPortBase,rangeSize}, occupied:[{instanceId,name,role,serverPort,rconPort,queryPort}] }`
 
 ### GET /api/v1/nodes/:id/docker/images
@@ -1360,15 +1369,18 @@
 - **错误**: `503 NODE_OFFLINE`（节点未连接）
 
 ### GET / POST /api/v1/networks，GET / PATCH / DELETE …/:id
+- **权限**: `network.read` 或 `network.manage`（读）；`POST`/`PATCH`/`DELETE` 函数体内要求 `network.manage`
 - **描述**: 群组（Network 非独占软标签）CRUD；删除群组不影响成员实例与代理注册
 - **请求(POST)**: `{ "name":"survival","description":"" }`；**错误**: `409 NETWORK_NAME_CONFLICT`、`404 NETWORK_NOT_FOUND`
 - **列表概要（FR-335）**: 每项增 `memberStatus:{running,stopped,crashed,starting,stopping}`（JOIN 实例一次聚合、五态零补齐，供列表健康分布直接消费，消逐 network 拉详情的 N+1）；`memberCount` 口径为 JOIN 后实际成员数（悬空成员剔除，只减不增）
 
 ### POST /api/v1/networks/:id/members，DELETE …/members/:instanceId
+- **权限**: `network.manage`（组级另有 `network.read`/`network.manage`，写操作取交集）
 - **描述**: 群组成员增删（幂等）；**请求(POST)**: `{ "instanceIds":[12,13] }`
 
 ### POST /api/v1/networks/:id/actions
 - **描述**: 群组成员批量生命周期操作；**请求**: `{ "action":"start"|"stop"|"restart" }`
+- **权限**: `network.read` 或 `network.manage`
 - **响应**: `{ action,total,succeeded,failed,results }`
 
 ---
@@ -1424,11 +1436,13 @@
 ### GET /api/v1/instances/:id/files/read
 - **描述**: 读取文件内容（在线编辑器用；Worker `ReadFile` 带 10MiB 编辑器护栏，超限截断——下载文件请用 `download` 端点，不受此上限）
 - **关联 FR**: FR-008
+- **权限**: `file.read`
 - **Query**: `?path=plugins/essentials/config.yml`
 
 ### POST /api/v1/instances/:id/files/write
 - **描述**: 写入文件内容
 - **关联 FR**: FR-008
+- **权限**: `file.read`
 - **请求**: `{ "path": "string", "content": "string" }`
 
 ### POST /api/v1/instances/:id/files/upload
@@ -1466,11 +1480,13 @@
 ### DELETE /api/v1/instances/:id/files
 - **描述**: 删除文件
 - **关联 FR**: FR-008
+- **权限**: `file.read`
 - **请求**: `{ "path": "string" }`
 
 ### POST /api/v1/instances/:id/files/rename
 - **描述**: 重命名/移动文件或目录。`newPath` 跨目录时即「移动」（Worker `os.Rename`），故资源管理器树内拖拽移动复用本端点，无需独立 move 端点
 - **关联 FR**: FR-008, FR-020, FR-070
+- **权限**: `file.read`
 - **请求**: `{ "oldPath": "string", "newPath": "string" }`
 
 ### GET /api/v1/instances/:id/files/versions
@@ -1540,35 +1556,42 @@
 ### GET /api/v1/instances/:id/configs/read
 - **描述**: 读取单配置文件：原文 + 字段 + schema JSON + 校验结果。`?path=server.properties`
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 
 ### POST /api/v1/instances/:id/configs/write
 - **描述**: 文本模式写入配置，保存成功生成配置版本
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "path": "string", "content": "string", "message": "string?" }`
 - **响应**: `{ "versionId": 12, "validation": { "valid": true, "issues": [] } }`
 
 ### POST /api/v1/instances/:id/configs/write-fields
 - **描述**: 表单模式写入：字段级补丁回原文（保留注释/键顺序），生成配置版本
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "path": "string", "fields": { "server-port": "25566" }, "message": "string?" }`
 
 ### POST /api/v1/instances/:id/configs/cross-check
 - **描述**: 跨文件/跨实例一致性校验（端口唯一 / online-mode 与转发配套 / forwarding secret 跨代理一致）。返回 warning 列表，不影响写入
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "path": "string", "content": "string" }`
 - **响应**: `{ "issues": [{ "level": "warning", "message": "string", "key": "string?" }] }`
 
 ### GET /api/v1/instances/:id/configs/versions/*file
 - **描述**: 列出某配置文件历史版本（按 ID 倒序）
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 
 ### GET /api/v1/instances/:id/configs/diff/*file
 - **描述**: 配置版本差异。`?from=11&to=12`，`to` 省略表示与当前文件对比
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 
 ### POST /api/v1/instances/:id/configs/rollback/*file
 - **描述**: 回滚配置到指定版本并生成新版本记录
 - **关联 FR**: FR-031
+- **权限**: `file.read` 或 `instance.read` 或 `file.write` 或 `instance.write`
 - **请求**: `{ "versionId": 12, "message": "string?" }`
 
 ### GET /api/v1/instances/:id/configs/surface
@@ -1822,10 +1845,12 @@
 ### DELETE /api/v1/bots/:id
 - **描述**: 删除 Bot
 - **关联 FR**: FR-009
+- **权限**: `bot:manage`（且须可访问该 Bot 所属实例所在组）
 
 ### GET /api/v1/bots/:id
 - **描述**: Bot 基础详情（DB 基础字段 + 读取时经 Worker `ListBots` 懒回填 `status`）；位置/血量/背包/事件流等富遥测归 FR-041，当前 HTTP 详情不承诺返回
 - **关联 FR**: FR-009（基础详情）, FR-041（富遥测延后）
+- **权限**: `bot:read`（按 Bot 所属实例隔离）
 
 ### GET /api/v1/bots/:id/events
 - **描述**: 单 Bot 实时事件 SSE（状态、血量、饥饿、位置、聊天/行为事件）
@@ -1848,12 +1873,14 @@
 ### POST /api/v1/bots/:id/behavior
 - **描述**: 切换 legacy Bot 行为模式；Worker 委托成功后才更新 DB 行为账本
 - **关联 FR**: FR-009, FR-352
+- **权限**: `bot:manage`（且须可访问该 Bot 所属实例所在组）
 - **请求**: `{ "behavior": "follow", "target": "PlayerName" }`
 - **错误**: 409 `BOT_FLEET_MANAGED`（Bot 的 `loadBatchId` 或 `stressSessionId` 非空，由 Fleet 场景账本管理，禁止旧行为接口修改）；500 `INTERNAL_ERROR`（Worker 委托或 DB 更新失败，DB 行为保持原值）
 
 ### POST /api/v1/bots/:id/command
 - **描述**: 向 Bot 下发聊天/控制命令（链路：CP → Worker SendBotCommand → bot-worker send-command IPC → Mineflayer chat）
 - **关联 FR**: FR-009
+- **权限**: `bot:manage`（且须可访问该 Bot 所属实例所在组）
 - **请求**: `{ "command": "/tp 0 64 0" }`
 - **响应**: `200 { "message": "已发送" }`；表示 Worker 已接受并写入 `send-command` IPC，不代表 Bot Worker 已调用 `bot.chat`，也不证明服务器接受、权限通过或产生业务效果
 - **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（Bot 不存在/无权访问）；503 `COMMAND_FAILED`（Worker 未连接或 IPC 委托失败）。当前端点不等待 Bot Worker 执行回执，`bot.chat` 同步抛错不会回传到本次 HTTP 请求
@@ -2104,11 +2131,13 @@
 ### GET /api/v1/schedules
 - **描述**: 定时任务列表
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 - **Query**: `?instanceId=xxx`
 
 ### POST /api/v1/schedules
 - **描述**: 创建定时任务
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 - **请求**:
   ```json
   {
@@ -2122,14 +2151,17 @@
 ### PUT /api/v1/schedules/:id
 - **描述**: 更新定时任务（`cronExpr`/`action`/`enabled` 可选；`action=command` 时可携 `payload` 改命令，FR-153）
 - **关联 FR**: FR-012, FR-153
+- **权限**: `schedule.read`
 
 ### DELETE /api/v1/schedules/:id
 - **描述**: 删除定时任务
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 
 ### GET /api/v1/schedules/:id/logs
 - **描述**: 定时任务执行日志列表
 - **关联 FR**: FR-012
+- **权限**: `schedule.read`
 - **Query**: `?page=1&pageSize=20`
 - **响应** (200):
   ```json
@@ -2148,21 +2180,25 @@
 ### GET /api/v1/instances/:id/backups
 - **描述**: 实例备份列表（含 `mode` 全量/增量、`parentId` 备份链、`storageId` 存储位置、`checksum`/`checksumAlgo` 完整性校验字段；历史备份可能为空）
 - **关联 FR**: FR-013, FR-056, FR-057, FR-171
+- **权限**: `backup.read` 或 `backup.write`
 
 ### POST /api/v1/instances/:id/backups
 - **描述**: 创建备份。`incremental=true` 时挂到该实例最近一次已完成备份后形成备份链（仅打包变化文件）；`storageId` 指定远程存储后端，缺省存于节点本地；Worker 完成后返回并持久化归档 SHA-256
 - **关联 FR**: FR-013, FR-056, FR-057, FR-171
+- **权限**: `backup.read` 或 `backup.write`
 - **请求**: `{ "name": "string", "incremental": false, "storageId": 0 }`
 - **错误**: 422 `BUSINESS_ERROR`（增量但无可作基准的已完成全量备份）
 
 ### POST /api/v1/backups/:id/restore
 - **描述**: 恢复备份。增量备份沿父链回溯解析整链（全量基 + 各增量），委托 Worker 按序回放；远程备份先拉回本地再回放；有 `checksum` 的归档在解压前校验，不一致则拒绝恢复
 - **关联 FR**: FR-013, FR-056, FR-057, FR-171
+- **权限**: `backup.read` 或 `backup.write`
 - **错误**: 409 `INSTANCE_NOT_STOPPED`（实例进程可能存活——STARTING/RUNNING/STOPPING 时拒绝恢复，须先停止实例；STOPPED/CRASHED 放行）；422 `BUSINESS_ERROR`（备份未完成/链断裂等）
 
 ### DELETE /api/v1/backups/:id
 - **描述**: 删除备份。被增量子备份依赖时拒绝（422），避免割裂备份链
 - **关联 FR**: FR-013, FR-056
+- **权限**: `backup.read` 或 `backup.write`
 
 ### GET /api/v1/backup-storages
 - **描述**: 备份远程存储后端列表（凭证以 `${ENV_VAR}` 引用，不返回明文），并返回容量聚合与最近一次人工测试结果
@@ -2279,38 +2315,46 @@
 
 ### GET /api/v1/artifact-reconcile/settings
 - **描述**: 读取定期对账设置。缺失时初始化为启用、24 小时周期；`nextRunAt` 为空表示尚未排期或已禁用
+- **权限**: `node.manage`
 - **响应**: `{ "enabled": true, "intervalHours": 24, "nextRunAt": "datetime" }`
 
 ### PUT /api/v1/artifact-reconcile/settings
+- **权限**: `node.manage`
 - **请求**: `{ "enabled": true, "intervalHours": 24 }`，周期范围 `[1,720]`；启用时从当前时间重算下次执行，禁用时清空 `nextRunAt`
 - **响应**: 同 GET；写审计 `artifact_reconcile.settings_update`
 - **错误**: 400 `INVALID_REQUEST`；422 `BUSINESS_ERROR`
 
 ### POST /api/v1/artifact-reconcile/runs
+- **权限**: `node.manage`
 - **请求**: `{ "channelId": 2 }` 触发单渠道；缺省或 0 触发全部 S3 渠道
 - **响应** (202): `{ "started": [Run], "skipped": [{ "channelId": 2, "channelName": "rustfs", "reason": "该渠道对账正在进行中" }] }`
 - **语义**: 单渠道在途返回 409；全局触发跳过在途渠道。无 S3 渠道或指定 local 渠道返回 422。写审计 `artifact_reconcile.trigger`
 
 ### GET /api/v1/artifact-reconcile/runs
+- **权限**: `node.manage`
 - **查询参数**: `channelId` 可选；`limit` 默认 20、上限 100
 - **响应**: `Run[]`，按 ID 倒序。`Run.status` 为 `running|succeeded|failed`，包含索引/对象/一致/缺失/孤儿计数与失败原因
 
 ### GET /api/v1/artifact-reconcile/runs/:id
+- **权限**: `node.manage`
 - **响应**: 单条 `Run`
 - **错误**: 404 `NOT_FOUND`
 
 ### GET /api/v1/artifact-reconcile/runs/:id/diffs
+- **权限**: `node.manage`
 - **查询参数**: `kind=missing|orphan`；`page` 默认 1；`pageSize` 默认 50、上限 200
 - **响应**: `{ "items": [Diff], "total": 1, "page": 1, "pageSize": 50 }`。处置态为 `open|resolved`，处置动作 `marked_lost|cleaned|stale`
 - **错误**: 400 `INVALID_REQUEST`；404 `NOT_FOUND`
 
 ### POST /api/v1/artifact-reconcile/runs/:id/resolve-missing
 - **描述**: 将成功报告内仍有效的 open missing 资产标为 `storageState=lost`；已删除或迁走的差异翻 `stale`
+- **权限**: `node.manage`
 - **响应**: `{ "marked": 1, "stale": 0 }`；写审计 `artifact_reconcile.mark_lost`
 - **错误**: 404；409（运行中）；422（运行失败、无完整报告）
 
 ### POST /api/v1/artifact-reconcile/runs/:id/cleanup-orphans
 - **描述**: 删除成功报告内仍未被索引引用的 open orphan 对象；处置前再次检查同渠道同键索引，命中则翻 `stale` 不删除；删除失败保持 open 可重试
+- **权限**: `node.manage`
 - **响应**: `{ "cleaned": 1, "stale": 0, "failed": 0 }`；写审计 `artifact_reconcile.cleanup_orphans`
 - **错误**: 404；409（运行中）；422（运行失败、无完整报告）
 
@@ -2500,14 +2544,17 @@
 ### GET /api/v1/templates
 - **描述**: 服务端模板列表
 - **关联 FR**: FR-014
+- **权限**: `template.read` 或 `template.manage`
 
 ### POST /api/v1/templates
 - **描述**: 创建模板（平台管理员）
 - **关联 FR**: FR-014
+- **权限**: `template.read` 或 `template.manage`
 
 ### DELETE /api/v1/templates/:id
 - **描述**: 删除模板。模板与实例为松关联（建实例时拷贝 startCommand），删除模板不影响已创建的实例。
 - **关联 FR**: FR-064
+- **权限**: `template.read` 或 `template.manage`
 - **响应 200**: `{ "message": "已删除" }`
 - **错误**: `400 INVALID_REQUEST`（ID 非法）、`500 INTERNAL_ERROR`
 
@@ -2521,6 +2568,7 @@
 ### GET /api/v1/assets
 - **描述**: 列出资产，可按类型筛选、分页
 - **关联 FR**: FR-045
+- **权限**: `node.manage` 或 `node.read`
 - **Query**: `?type=core&page=1&pageSize=20`
   - `type`: 可选，`core|plugin|image|video|archive|blob`，非法值返回 400 `INVALID_TYPE`
 - **响应 200**:
@@ -2544,11 +2592,13 @@
 ### GET /api/v1/assets/:id
 - **描述**: 资产详情
 - **关联 FR**: FR-045
+- **权限**: `node.manage` 或 `node.read`
 - **响应**: 单个资产对象（字段同上）；不存在返回 404 `NOT_FOUND`
 
 ### POST /api/v1/assets
 - **描述**: 入库一个资产——multipart 上传 **或** 从本地路径登记。入库即算 sha256+md5；同 `(type, sha256)` 去重复用并刷新 `last_used_at`；提供期望校验和则比对，不符拒收。
 - **关联 FR**: FR-045
+- **权限**: `node.manage` 或 `node.read`
 - **方式 A（multipart 上传）** `Content-Type: multipart/form-data`：
   - `file`（必填，文件）、`type`（必填）
   - 可选：`name`、`version`、`contentType`、`sourceUrl`、`metadata`(JSON 字符串)、`expectedSha256`、`expectedMd5`
@@ -2568,6 +2618,7 @@
 ### DELETE /api/v1/assets/:id
 - **描述**: 删除资产；被引用（`refCount>0`）时拒绝。`client-updater-core` 内置归档或被频道选定时同样拒绝删除，避免楔子首次/下次启动拉不到 updater-core
 - **关联 FR**: FR-045 / FR-259
+- **权限**: `node.manage` 或 `node.read`
 - **错误**: 404 `NOT_FOUND`；409 `ASSET_IN_USE`（附当前引用数；`client-updater-core` 内置或被频道选定时也返回该错误）
 
 > 备注：内部「下载入库」（download → store）能力已实现于服务层（`AssetService.IngestFromURL`），供 FR-034 建服取核心时复用，暂未单独暴露为公开 endpoint。
@@ -2762,6 +2813,7 @@
 ### GET /api/v1/audit
 - **描述**: 审计日志列表（平台管理员）
 - **关联 FR**: FR-015, FR-172
+- **权限**: `audit.read`
 - **Query**: `?userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z&page=1&pageSize=50`
 - **参数说明**:
   - `from`/`to`: RFC3339 格式时间，按 created_at 筛选范围
@@ -2775,6 +2827,7 @@
 ### GET /api/v1/audit/export
 - **描述**: 按过滤条件导出审计日志 NDJSON（平台管理员）
 - **关联 FR**: FR-172
+- **权限**: `audit.read`
 - **Query**: `?format=ndjson&userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z`
 - **参数说明**:
   - `format`: 当前仅支持 `ndjson`；传其它值返回 `400 UNSUPPORTED_FORMAT`
@@ -3644,10 +3697,12 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 
 ### PUT /api/v1/nodes/:id/settings/log-acquisition
 - **描述**: 写某节点的采集覆盖（仅平台管理员）；写审计 `node.log_acq.override.set`
+- **权限**: `node.read` 或 `node.manage`
 - **请求/校验**: 同平台端点（键必须属于上述 5 项；服务端自动加 `@node:<uuid>` 后缀，客户端不需要拼），含 `gz_scan_interval` 的 1ms～`math.MaxInt32` 毫秒上下界判据；节点级置空 = 本节点回落 `worker.yml` 基线（覆盖优先于平台值，不会继承平台默认）
 
 ### DELETE /api/v1/nodes/:id/settings/log-acquisition
 - **描述**: 清除节点级覆盖（恢复继承平台默认，幂等）；仅平台管理员；写审计 `node.log_acq.override.clear`
+- **权限**: `node.read` 或 `node.manage`
 - **查询**: 可选 `?key=<平台键>` 只清一项；缺省清全部 5 项
 
 > 节点**彻底删除**（`Purge`）时在同一事务内清理该节点全部 `log.acq.*@node:<uuid>` 键；软删除 / 归档**不清理**（归档节点可恢复，其配置保留）。
@@ -3787,7 +3842,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels
 - **描述**: 列出全部分发频道（含密钥数量）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200):
   ```json
   [ { "id": 1, "channelId": "skyblock-s1", "name": "空岛一服", "description": "",
@@ -3797,7 +3852,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels
 - **描述**: 创建分发频道（每服一个）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "channelId": "skyblock-s1", "name": "空岛一服", "description": "可选" }`
 - **响应** (201): 频道对象
 - **错误**: 400 `INVALID_CHANNEL_ID`（slug 非法，须 `^[a-z0-9][a-z0-9-]{1,63}$`）| 409 `CHANNEL_EXISTS`
@@ -3805,7 +3860,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id
 - **描述**: 频道详情（含密钥元数据列表，无明文）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200):
   ```json
   { "id": 1, "channelId": "skyblock-s1", "name": "空岛一服", "description": "", "currentVersion": 0,
@@ -3818,7 +3873,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### PUT /api/v1/client-channels/:id
 - **描述**: 更新频道名称/描述（channelId 不可改）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "name": "新名", "description": "新描述" }`
 - **响应** (200): 频道对象
 - **错误**: 404 `CHANNEL_NOT_FOUND`
@@ -3826,7 +3881,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### DELETE /api/v1/client-channels/:id
 - **描述**: 删除频道及其全部拉取密钥
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **响应** (200): `{ "message": "已删除" }`
 - **错误**: 404 `CHANNEL_NOT_FOUND`
 - **审计**: `client_channel.delete`
@@ -3834,14 +3889,14 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/keys
 - **描述**: 列出频道下拉取密钥（仅元数据，无明文）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200): 密钥元数据数组（同详情 `keys`）
 - **错误**: 404 `CHANNEL_NOT_FOUND`
 
 ### POST /api/v1/client-channels/:id/keys
 - **描述**: 创建拉取密钥；明文随此响应一次性返回，**创建后亦可经 reveal 端点查看**（FR-192：密钥发出后永久使用）。`value` 可选——留空自动生成，填入则用作自定义密钥明文值（管理员自控这把永久 key）
 - **关联 FR**: FR-086 / FR-192
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "name": "正式包", "expiresAt": "2027-01-01T00:00:00Z", "value": "自定义值" }`（`expiresAt`/`value` 均可选）
 - **响应** (201):
   ```json
@@ -3855,7 +3910,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### PUT /api/v1/client-channels/:id/keys/:kid
 - **描述**: 编辑拉取密钥（FR-192，见 ADR-044）。改名必填；`value` 可选——留空仅改名，填入则改值（重算 `KeyHash` 使鉴权切到新值 + 重写 `KeyEnc` 供查看）。**改值会使持旧值的已分发客户端失效**。取代原「轮换」（已删除）
 - **关联 FR**: FR-192
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **请求**: `{ "name": "灰度", "value": "新密钥明文", "expiresAt": "2027-01-01T00:00:00Z" }`（`value` 可空=只改名；`expiresAt` 不传=保持原过期时间，传 ISO 时间=设置过期时间，传 `null`/空字符串=清空为永不过期）
 - **响应** (200): 同创建响应；改值时 `key`=新明文（回显供复制），仅改名/改过期时间时 `key` 为空串
 - **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND` | 400 `INVALID_REQUEST`
@@ -3864,7 +3919,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/keys/:kid/reveal
 - **描述**: 查看拉取密钥明文（FR-192，见 ADR-044）。密钥改可逆加密存储后管理员可随时查看明文 + 复制；鉴权仍只用哈希比对，行为不变。仅当后端存有可逆加密副本（`KeyEnc`）时可查看
 - **关联 FR**: FR-192
-- **权限**: 平台管理员
+- **权限**: `channel.read` 或 `channel.write`
 - **响应** (200): `{ "key": "jmck_<明文>" }`
 - **错误**: 404 `KEY_NOT_REVEALABLE`（存量老哈希密钥 / 创建时未配 `JIANMANAGER_CLIENT_KEY_ENC_SECRET`，明文不可找回；可经 PUT 改值为已知值后再查看）| 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
 - **审计**: `client_key.reveal`（detail 仅元数据 channelId/keyId，**绝不含明文**）
@@ -3873,7 +3928,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### DELETE /api/v1/client-channels/:id/keys/:kid
 - **描述**: 吊销密钥（保留记录、标记 revoked，立即鉴权失效）
 - **关联 FR**: FR-086
-- **权限**: 平台管理员
+- **权限**: `channel.write`
 - **响应** (200): `{ "message": "已吊销" }`
 - **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
 - **审计**: `client_key.revoke`
@@ -3881,6 +3936,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/updater-config
 - **描述**: 按频道生成 `jm-updater.json`（FR-259，见 ADR-054）。返回完整配置字段，运营者直接下载放入整合包。FR-256 起不再含签名公钥（验签已去，信任靠 HTTPS + 拉取密钥鉴权，推翻 ADR-022/053）；`coreEndpoint` 配置字段已移除，楔子用 `endpoint + channel` 自动拼接 updater-core 端点。`endpoint` 按 CP 请求推断 API 根路径预填（可改，但必须保持 `/api/v1` 根路径，禁止填写 `/client-channels/...` 后缀）；`key` 留空占位由运营粘贴拉取密钥
 - **关联 FR**: FR-259、FR-258
+- **权限**: `channel.read` 或 `channel.write`（且需 `node.manage`）
 - **鉴权**: **JWT，平台管理员**
 - **响应** (200):
   ```json
@@ -3902,6 +3958,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels/:id/files
 - **描述**: 上传客户端文件制品（入 FR-045 制品库 `type=client-file`，按制品自身 sha256 内容寻址去重）。返回的 `sha256` 即 manifest `files[].artifact.sha256`
 - **关联 FR**: FR-087
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **请求**: `multipart/form-data` — `file`（必）、`codec`（可，`zstd`|`none`）、`expectedSha256`（可，制品自身 sha256 校验）
 - **响应** (201): `{ "sha256": "ef56…", "md5": "cd34…", "size": 45678, "codec": "zstd" }`（`md5` 供发布向导填 `file.md5`；codec=none 时制品即原始内容，`sha256`/`md5`/`size` 可直接作 `files[]` 的解压后字段）
@@ -3911,6 +3968,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels/:id/uploads
 - **描述**: 大文件**分块上传**初始化（FR-251，增强 FR-088 单次上传）。声明文件总大小 → 建上传会话 → 返回 `uploadId` 与服务端敲定的 `chunkSize`/`chunkCount`（前端据此切片）。用于 4G+ 整合包，避免单请求超时、无进度、失败整传重来
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作，与 `POST .../files` 同组）
 - **请求**: `{ "filename": "pack.zip", "totalSize": 5368709120, "chunkSize": 8388608 }`（`totalSize` 必 >=0，**0=空文件**（整合包常见 `.gitkeep`/空配置）此时 `chunkCount=0`、无片可传、直接 complete 落空内容；`chunkSize` 可空，<=0 用默认 8 MiB，越界夹取到 [1 MiB, 64 MiB]）
 - **响应** (201): `{ "uploadId": "a1b2…", "chunkSize": 8388608, "chunkCount": 640 }`
@@ -3919,6 +3977,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### PUT /api/v1/client-channels/:id/uploads/:uploadId/chunks/:index
 - **描述**: 上传第 `index`（0 基）个分片。**幂等**——重传同 index 覆盖，支持失败重试；分片先落临时文件再原子 rename，避免半写脏片被 complete 采纳
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **请求**: body 为该分片**原始字节**（`application/octet-stream`，流式落盘、不缓冲整片进内存）；非末片须恰为 `chunkSize`，末片为末段余量
 - **响应** (200): `{ "received": 12, "total": 640 }`（已收片数 / 总片数）
@@ -3927,6 +3986,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels/:id/uploads/:uploadId/complete
 - **描述**: 完成分块上传。校验分片齐全 + 总字节匹配 → 顺序拼装（`io.MultiReader` 流式，不额外落整文件）喂入 FR-045 制品库（同 `POST .../files` 的内容寻址 CAS）→ 返回与单次上传**逐字段一致**的结果 → 清理临时分片
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **请求**: `{ "codec": "none", "expectedSha256": "ef56…" }`（**均可选**，请求体可空；codec 空补 `none`）
 - **响应** (201): `{ "sha256": "ef56…", "md5": "cd34…", "size": 5368709120, "codec": "none" }`（同 `POST .../files`，即 manifest `files[].artifact.sha256`）
@@ -3936,6 +3996,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### DELETE /api/v1/client-channels/:id/uploads/:uploadId
 - **描述**: 弃单——移除上传会话 + 清临时分片。幂等（会话不存在亦返回 204）。前端取消上传时调用；空闲超 1h 的会话由后台 TTL 自动回收，CP 重启清残留分片
 - **关联 FR**: FR-251
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **响应**: `204 No Content`
 - **错误**: 403 `UPLOAD_CHANNEL_MISMATCH`（跨频道弃他人会话）
@@ -3943,6 +4004,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels/:id/files/precheck
 - **描述**: 批量**秒传预查**（FR-346，增强 FR-250/251）。前端上传前算好各文件**原始内容** sha256，一个请求查 ≤500 个：命中制品库（发布链路恒 `codec=none`，`assets.sha256` 即原始内容 hash，见 spec §2 对齐语义）且 `size` 精确相等者返回与真上传**同构**的结果——前端跳过字节上传直接引用既有制品。命中 bump `last_used_at`；只读预查不产生审计。历史 `codec≠none` 制品天然不命中（其 sha256 为压缩态 hash），无错误引用风险
 - **关联 FR**: FR-346
+- **权限**: `dist.publish` 或 `channel.write`（且需 `node.manage`）
 - **鉴权**: **JWT，平台管理员**（运营操作，与 `POST .../files` 同组）
 - **请求**: `{ "files": [ { "sha256": "ab34…64hex", "size": 12345 } ] }`（1..500 项；sha256 大小写不敏感、归一小写；size ≥ 0）
 - **响应** (200): `{ "results": [ { "sha256": "ab34…", "hit": true, "result": { "sha256": "ab34…", "md5": "…", "size": 12345, "codec": "none" } }, { "sha256": "cd56…", "hit": false } ] }`（与请求顺序对齐、等长；`result` 与 `POST .../files` 返回同构）
@@ -3951,6 +4013,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels/:id/files/batch
 - **描述**: **小文件聚合上传**（FR-346）。一个 multipart 请求携带多个 ≤8 MiB 小文件（≤200 个 / 总 ≤32 MiB），替代逐文件三段分块协议；每项逐个喂入同一 CAS（`Ingest` 按声明 sha256 强校验 + 去重），结果与单次/分块上传**逐字段一致**。**fail-fast**：任一文件校验失败即中止返回错误，已入库的前序文件保留（CAS 无引用制品无害，重试整批即秒传）。>8 MiB 文件仍走 FR-251 分块协议
 - **关联 FR**: FR-346
+- **权限**: `dist.publish` 或 `channel.write`（且需 `node.manage`）
 - **鉴权**: **JWT，平台管理员**
 - **请求**: `multipart/form-data`，part 顺序强约束——首 part 字段 `meta`（JSON 数组 `[{ "filename": "a.jar", "size": 2048, "sha256": "ab34…64hex" }]`，sha256 必填），随后**恰好 len(meta) 个**字段 `files` 的 part 与 meta 同序（原始字节）
 - **响应** (201): `{ "results": [ { "sha256": "ab34…", "md5": "…", "size": 2048, "codec": "none" } ] }`（与 meta 顺序对齐、等长）
@@ -3960,6 +4023,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels/:id/versions
 - **描述**: 发布版本并切 latest 指针。`version` 由服务端**单调递增分配**（防降级基准，contract §3），不接受客户端指定
 - **关联 FR**: FR-087
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **请求**:
   ```json
@@ -3981,6 +4045,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/versions
 - **描述**: 版本历史列表（版本号 DESC）。**仅管理面**——玩家侧只认 latest，不经此端点拉取任意版本（FR-088）
 - **关联 FR**: FR-088
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **响应** (200): `[ { "version": 2, "note": "…", "fileCount": 3, "createdBy": 1, "createdAt": "datetime", "isLatest": true }, { "version": 1, …, "isLatest": false } ]`
 - **错误**: 404 `CHANNEL_NOT_FOUND`
@@ -3988,6 +4053,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/versions/:version
 - **描述**: 版本详情（含完整文件清单 + 托管目录 + 自更新段），供管理台查看与回滚前确认（FR-088）
 - **关联 FR**: FR-088
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **响应** (200): `{ "version": 1, "note": "…", "createdBy": 1, "createdAt": "datetime", "isLatest": false, "managedDirs": ["mods"], "cleanExclude": ["custom-mods"], "files": [ { "path": "mods/foo.jar", "sha256": "…", "md5": "…", "size": 0, "sync": "strict", "platform": null, "artifact": { … } } ], "agent": { … } }`
 - **错误**: 400 `INVALID_REQUEST`（版本号非法）| 404 `CHANNEL_NOT_FOUND` / `VERSION_NOT_FOUND`
@@ -3995,6 +4061,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/files/content
 - **描述**: 按制品 `sha256` 读取 client-file 制品内容用于**管理台文本预览**（FR-214，复用 FR-213 共享文件浏览器预览发布草稿/版本文件）。**只读**。玩家消费端点 `GET /client-artifacts/:sha256` 走拉取密钥、与浏览器 JWT 入口物理隔离（ADR-022/023），管理台无拉取密钥不能复用之取内容预览，故补此 JWT 路径。降级由 `kind` 显式表达，前端据此渲染或降级（不可预览必可下载）
 - **关联 FR**: FR-214 | **鉴权**: **JWT，平台管理员**（运营操作）
+- **权限**: `dist.publish` 或 `channel.write`
 - **查询参数**: `sha256`（必，制品自身 sha256 = `files[].artifact.sha256`）
 - **响应** (200): `{ "kind": "text"|"binary"|"too-large", "content": "…", "size": 45678, "codec": "none" }`
   - `kind=text`：`content` 为 UTF-8 文本；`kind=binary`（含 NUL 或已压缩制品，本期发布恒 `codec=none`，`zstd` 等不在管理面解压）/`kind=too-large`（超 1 MiB 不读全量）：仅 `size`/`codec`，无 `content`，前端降级为「仅下载」
@@ -4003,6 +4070,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/files/download
 - **描述**: 按制品 `sha256` 下载 client-file 制品（**管理台**，FR-214）。与上同理：浏览器需一个 JWT 下载入口（含预览降级态的下载兜底），与玩家拉取密钥制品端点隔离。s3 制品 **CP 经 BlobStore 代理直流、不走 302**（浏览器 axios blob fetch 跨域跟随预签名 URL 会撞对象存储 CORS；管理面低频运维动作，CP 中继代价可接受，FR-347/ADR-073 决策 6）
 - **关联 FR**: FR-214, FR-347 | **鉴权**: **JWT，平台管理员**（运营操作）
+- **权限**: `dist.publish` 或 `channel.write`
 - **查询参数**: `sha256`（必）
 - **响应** (200): 制品二进制（`Content-Disposition: attachment`）。local 支持 `Range`（`http.ServeContent`）；s3 代理直流带 `Content-Length`
 - **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN` | 404 `ARTIFACT_NOT_FOUND` | 410 `ARTIFACT_LOST`（外置对象已确认缺失，重传同内容可自愈）
@@ -4010,6 +4078,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-channels/:id/rollback
 - **描述**: 运营回滚——取历史版本 `sourceVersion` 的内容，**以更高版本号重发为新 latest**（保持 `version` 单调，客户端按防降级正常前进、不被拒，ADR-022 §3 / contract §3）。不下发更低版本号
 - **关联 FR**: FR-088
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **请求**: `{ "sourceVersion": 1, "note": "可选，空则生成「回滚至 vN」" }`
 - **响应** (201): `{ "id": 7, "channelId": "skyblock-s1", "version": 3, "sourceVersion": 1, "note": "回滚至 v1", "createdAt": "datetime" }`
@@ -4019,6 +4088,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/events
 - **描述**: 拉取/下载明细检索（FR-093 全链路追踪；FR-249 错误追踪；FR-265 日志 Tab 兼容入口）。拉取失败（含 401 鉴权失败）也记录事件并带语义错误码 `errCode`。明细短保留（默认 14 天滚动清理）；发布事件审计见 `/audit`（`client_*.publish`/`rollback`）
 - **关联 FR**: FR-093、FR-249、FR-265
+- **权限**: `dist.publish` 或 `channel.write`
 - **鉴权**: **JWT，平台管理员**
 - **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `outcome`(success|failure，空=全部；failure⟺status≥400，success⟺0<status<400 含 200/206/304) / `errCode`(精确筛，如 `INVALID_CLIENT_KEY`) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
 - **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt" } ]`（created_at DESC）。`errCode` 成功事件为空、失败事件填语义码（`INVALID_CLIENT_KEY`/`NO_LATEST_VERSION`/`ARTIFACT_NOT_FOUND`/`SIGN_KEY_NOT_CONFIGURED`/`CHANNEL_NOT_FOUND`/`INTERNAL_ERROR`）
@@ -4026,30 +4096,35 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/events/search
 - **描述**: 分发请求日志分页检索（FR-265）。在兼容 `/client-dist/events` 数组响应的基础上，提供日志 Tab 使用的分页对象，并支持运行态维度筛选。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **查询参数**: 兼容 `/client-dist/events` 的 `channelId` / `machineId` / `ip` / `kind` / `outcome` / `errCode` / `version`，并新增 `artifactSha` / `runtimeVersion` / `coreVersion` / `platform` / `lag` / `page`(默认 1) / `pageSize`(默认 100，上限 500)
 - **响应** (200): `{ "items":[{ "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt" }], "page":1, "pageSize":100, "total":1234 }`
 
 ### GET /api/v1/client-dist/events/:id
 - **描述**: 单条分发请求脱敏详情（FR-265）。仅返回白名单请求/响应头；`X-Client-Key` 只保存 `present`/脱敏标记，绝不保存明文。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_event.detail`
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **响应** (200): `{ "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt", "requestHeaders":{}, "responseHeaders":{} }`
 - **错误**: 400 `INVALID_REQUEST`（事件 ID 非法）| 404 `EVENT_NOT_FOUND`
 
 ### GET /api/v1/client-dist/realtime
 - **描述**: 分发请求近实时聚合（FR-265 监控 Tab）。只统计 manifest/artifact HTTP 请求健康度，不混入客户端更新成功率或运行版本。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **查询参数**: `channelId`（可选）
 - **响应** (200): `{ "summary1h":{ "manifestPulls", "artifactPulls", "errorRequests", "activeMachines" }, "requestRate24h":[{ "ts", "manifest", "artifact", "error" }], "recentErrors":[{ "id", "time", "channelId", "kind", "target", "ip", "status", "errCode" }], "topIps1h":[{ "ip", "count" }] }`
 
 ### GET /api/v1/client-dist/clients
 - **描述**: 客户端运行态聚合（FR-265 客户端 Tab）。读取启动心跳最新态与 `client_telemetry` 更新结果；不承诺“在线客户端”。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_clients.query`
+- **权限**: `dist.ops.read`（且需 `node.manage`）
 - **查询参数**: `channelId`（可选）、`range`(`24h`|`7d`|`30d`|`90d`，默认 `7d`)
 - **响应** (200): `{ "channelId", "from", "to", "summary":{ "recentStarted", "todayStarted", "recentStarts", "todayStarts", "updateSuccessRate", "updateFailureRate" }, "items":[{ "channelId", "machineId", "playerName", "ip", "platform", "javaVersion", "launcher", "coreVersion", "localVersion", "firstSeenAt", "lastHeartbeatAt" }], "runtimeVersionDist":[{ "version", "count" }], "coreVersionDist":[{ "value", "count" }], "platformDist":[{ "value", "count" }], "launcherDist":[{ "value", "count" }], "lagDist":[{ "lag", "count" }], "updateResultSeries":[{ "ts", "success", "failStatic", "rolledBack", "error" }] }`
 
 ### POST /api/v1/client-channels/:id/telemetry/heartbeat
 - **描述**: updater-core 启动心跳（FR-265）。按 `channel_id + machine_id` upsert `client_runtime_states`，只更新运行态，不写 `client_telemetry`，因此不会污染更新成功率。`playerName` 优先兼容 `X-Player-Name`，为空时按 `channel + X-Machine-Id + X-Install-Id` 从 `client_security_profiles` 反查最近安全画像补全。
 - **关联 FR**: FR-265 | **鉴权**: 玩家侧拉取密钥（`X-Client-Key`，必须属于该频道）
+- **权限**: 客户端密钥（`X-Client-Key` + `X-Machine-Id`；`X-Machine-Id` 缺失则不入库）
 - **请求头**: `X-Machine-Id`（必需，否则 best-effort 忽略心跳）、`X-Install-Id`（可选但推荐，用于关联安全画像）、`X-Player-Name`（兼容旧客户端，可选且不可信，仅用于观测与排障）
 - **请求**: `{ "platform":"windows", "javaVersion":"17.0.10", "launcher":"HMCL", "coreVersion":"3", "localVersion":15 }`
 - **响应**: `202 Accepted`
@@ -4058,11 +4133,13 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/ip-rules
 - **描述**: 列出分发端点 IP 防护规则（FR-096 L7 防护）
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **响应** (200): `[ { "id", "cidr", "mode"(deny|allow), "note", "createdBy", "createdAt" } ]`
 
 ### POST /api/v1/client-dist/ip-rules
 - **描述**: 新增 IP 防护规则（运行时生效、入审计）。`mode=deny` 黑名单（deny 优先）；`mode=allow` 存在即白名单模式
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **请求**: `{ "cidr": "1.2.3.4 或 10.0.0.0/8", "mode": "deny|allow", "note": "可选" }`
 - **响应** (201): 规则对象 | **错误**: 400 `INVALID_IP_RULE`（CIDR/mode 非法）
 - **审计**: `client_ip_rule.add`
@@ -4070,12 +4147,14 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### DELETE /api/v1/client-dist/ip-rules/:id
 - **描述**: 删除 IP 防护规则（运行时生效、入审计）
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **响应** (200): `{ "message": "已删除" }` | **错误**: 404 `IP_RULE_NOT_FOUND`
 - **审计**: `client_ip_rule.remove`
 
 ### GET /api/v1/client-dist/protection-stats
 - **描述**: 防护拦截计数（FR-096 可观测；内存计数、不写库）
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.write` 或 `dist.ops.read`
 - **响应** (200): `{ "denyBlocked", "rateLimited", "concurrencyLimited" }`
 
 ---
@@ -4085,6 +4164,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-security/hello
 - **描述**: updater-core 启动早期上报安全画像。`machineId`、`installId`、`channel` 必填；`playerName` 来自 body 或 `X-Player-Name`，可为空且可伪造，仅作粗略排查线索。IP 临时封禁先于密钥校验生效。
 - **关联 FR**: FR-264
+- **权限**: 客户端密钥（`X-Client-Key`，须绑定 `body.channel`；machineId/installId 必填）
 - **鉴权**: 玩家侧拉取密钥（`X-Client-Key`）
 - **请求**:
   ```json
@@ -4099,44 +4179,52 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 
 ### GET /api/v1/client-dist/security/overview
 - **描述**: 防护中心安全总览（画像、风险事件、动作、活跃封禁等聚合）。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "activeDownloads", "downloadBytesPerSecond", "abnormalRequests", "unauthorizedRequests", "forbiddenRequests", "rateLimitedRequests", "blockedIpCount", "throttledKeyCount", "protectedChannelCount", "topIps", "topKeys", "topChannels", "topPlayers" }`
 
 ### GET /api/v1/client-dist/security/events
 - **描述**: 风险事件列表，按创建时间倒序。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "subjectType", "subjectValue", "channelId", "machineId", "installId", "playerName", "ip", "keyId", "keyPrefix", "ruleCode", "severity", "scoreDelta", "action", "reason", "createdAt" } ]`
 
 ### GET /api/v1/client-dist/security/logs
 - **描述**: 客户端分发安全全量日志详情，合并 security hello、风险事件、保护动作、分发请求日志、运行态心跳与更新遥测。管理台「客户端分发安全 / 日志详情」消费此接口。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **查询参数**: `type`（可选，`hello|risk|action|request|runtime|telemetry`）、`channelId`、`machineId`、`playerName`、`ip`、`page`、`pageSize`（默认 50，上限 200）
 - **响应** (200): `{ "items":[{ "id", "type", "title", "channelId", "machineId", "playerName", "ip", "status", "errCode", "createdAt", "detail" }], "total", "page", "pageSize" }`
 
 ### GET /api/v1/client-dist/security/profiles
 - **描述**: 客户端安全画像列表，按最近出现倒序。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "channelId", "machineId", "installId", "playerName", "keyId", "keyPrefix", "lastIp", "coreVersion", "os", "javaVersion", "riskLevel", "protectionState", "lastSeen" } ]`
 
 ### GET /api/v1/client-dist/security/ip-analysis
 - **描述**: IP 剖析聚合，用于查异常来源 IP。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **查询参数**: `limit`（默认 200）
 - **响应** (200): `[ { "ip", "requestCount", "rejectCount", "invalidKeyCount", "notFoundCount", "rangeCount", "downloadBytes", "keyCount", "channelCount", "riskScore", "blocked", "lastSeen" } ]`
 
 ### GET /api/v1/client-dist/security/player-analysis
 - **描述**: 玩家名剖析聚合。玩家名可伪造，不作为可信身份。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **查询参数**: `limit`（默认 200）
 - **响应** (200): `[ { "playerName", "installCount", "machineCount", "ipCount", "keyCount", "channelCount", "downloadBytes", "abnormalRequests", "riskScore", "lastSeen" } ]`
 
 ### GET /api/v1/client-dist/security/actions
 - **描述**: 保护动作列表（IP 封禁、key 状态、频道保护等）。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "targetType", "targetValue", "channelId", "action", "status", "reason", "auto", "expiresAt", "createdBy", "createdAt", "canceledAt" } ]`
 
 ### POST /api/v1/client-dist/security/ip-blocks
 - **描述**: 手动临时封禁 IP。命中消费端点返回 `IP_TEMP_BLOCKED` + `Retry-After`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "ip":"192.0.2.1", "reason":"异常拉取", "ttlSeconds":3600 }`（也兼容 `durationMinutes`）
 - **响应** (201): `ClientProtectionAction`
@@ -4144,17 +4232,20 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 
 ### POST /api/v1/client-dist/security/ip-blocks/:id/cancel
 - **描述**: 取消 IP 临时封禁 / 处置动作，状态置 `canceled`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "ok": true }`
 
 ### POST /api/v1/client-dist/security/keys/:id/state
 - **描述**: 切换拉取密钥安全状态：`normal` / `observe` / `throttled` / `suspended` / `revoked`。`suspended` 拉取返回 `CLIENT_KEY_SUSPENDED`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "state":"suspended", "reason":"异常拉取" }`
 - **响应** (200): `{ "ok": true }`
 
 ### PUT /api/v1/client-dist/security/channels/:id/protection
 - **描述**: 设置频道保护模式。频道只允许降速 / 降级保护，不做自动封禁。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "mode":"protected", "reason":"异常流量" }`
 - **响应** (200): `{ "ok": true }`
@@ -4162,33 +4253,39 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 
 ### DELETE /api/v1/client-dist/security/channels/:id/protection
 - **描述**: 清除频道保护模式，恢复 `normal`。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "ok": true }`
 
 ### GET /api/v1/client-dist/security/groups
 - **描述**: 安全分组列表。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "name", "kind", "targetType", "enabled", "createdBy", "createdAt", "updatedAt" } ]`
 
 ### POST /api/v1/client-dist/security/groups
 - **描述**: 创建安全分组。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: `{ "name":"高风险 IP", "kind":"manual", "targetType":"ip", "rule":{}, "actionPolicy":{}, "enabled":true }`
 - **响应** (201): `ClientSecurityGroup`
 
 ### PUT /api/v1/client-dist/security/groups/:id
 - **描述**: 更新安全分组。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **请求**: 同创建分组
 - **响应** (200): `ClientSecurityGroup`
 
 ### DELETE /api/v1/client-dist/security/groups/:id
 - **描述**: 删除安全分组。
+- **权限**: `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "ok": true }`
 
 ### GET /api/v1/client-dist/security/privacy-notice
 - **描述**: 防护中心遥测告知文案。
+- **权限**: `dist.ops.read` 或 `dist.ops.write`
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `{ "requiredFields", "diagnosticFields", "notice", "retentionDays" }`
 
@@ -4209,6 +4306,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/export
 - **描述**: 导出当前请求筛选窗口的 KPI 汇总、分发请求事件或安全全量日志 CSV（FR-361）。
 - **关联 FR**: FR-361、FR-356、FR-360 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist.export.csv`
+- **权限**: `dist.ops.read` 或 `stats.read`
 - **限流**: 按用户 ID（无则 IP）每分钟 1 次；超限返回 `429 RATE_LIMITED` 与 `Retry-After: 60`。
 - **查询参数**:
   - `kind`（必填）：`stats-summary` | `dist-events` | `security-logs`。
@@ -4223,6 +4321,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/stats
 - **描述**: 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，按频道 + 时间窗
 - **关联 FR**: FR-095、FR-356 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.ops.read` 或 `stats.read` 或 `channel.read`
 - **查询参数**: `channelId`（频道）、`days`（窗口天数，默认 30，上限 365）
 - **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "failureRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
 - **KPI 语义（FR-356）**: 本端点 `successRate`/`failureRate` 是 **HTTP 请求**成功率（`client_dist_events.status`），**不是**更新成功率；`activeMachines` 为近窗 machineId 去重，无 `activeMachinesExact` 标志，前端回退展示时不得标「精确去重」。更新侧率权威源见下方 observability `summary`。
@@ -4230,6 +4329,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/observability
 - **描述**: 客户端分发**观测数据底座**（FR-217，见 ADR-049；FR-265 修订指标边界）：消费后台离线卷积的小时级时序快照 `client_dist_snapshots`（源 FR-093 events + FR-094 telemetry），返**跨频道/单频道**的时序 + 区间分布聚合 + 汇总标量。与 FR-095 `/client-dist/stats`（单频道按日看板）并存不替代——本端点服务观测·分发监控页的跨频道/平台时序
 - **关联 FR**: FR-217（消费方 FR-218/219）、FR-265、FR-356 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_observability.query`
+- **权限**: `dist.ops.read` 或 `stats.read`（且需 `node.manage`）
 - **查询参数**: `channelId`（可，省略=**总**，跨频道合并含空频道桶）、`from`/`to`（可，RFC3339，同时给且 `to>from`）、`range`（可，无 from/to 时回退枚举 `24h`/`7d`/`30d`/`90d`/`180d`，默认 `7d`）
 - **响应** (200):
   ```
@@ -4254,6 +4354,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/updater-jars
 - **描述**: 内嵌客户端更新器 jar 的版本与可用性（FR-107/352 接入引导与版本页旁路摘要，供前端展示 + 禁用缺失下载）
 - **关联 FR**: FR-107、FR-352 | **鉴权**: **JWT，平台管理员**
+- **权限**: `channel.read` 或 `channel.write`（且需 `node.manage`）
 - **响应** (200): `{ "version": "0.1.0", "coreVersion": "1", "wedge": {"available": true, "size": 32768}, "core": {"available": true, "size": 1048576} }`
   - `version`: 展示用语义版本串
   - `coreVersion`: updater-core 单调整数版本，按字符串返回
@@ -4262,12 +4363,14 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-dist/updater-jars/:component
 - **描述**: 下载内嵌更新器 jar（`component` ∈ `wedge` | `core`），供运营方接入（FR-107）。属管理面，走 JWT、不用拉取密钥
 - **关联 FR**: FR-107 | **鉴权**: **JWT，平台管理员**
+- **权限**: `channel.read` 或 `channel.write`（且需 `node.manage`）
 - **响应** (200): jar 二进制（`Content-Type: application/java-archive`、`Content-Disposition: attachment; filename=...`）
 - **错误**: 400 `INVALID_COMPONENT`（非 wedge/core）| 404 `JAR_NOT_EMBEDDED`（构建未 `make embed-client-updater`）
 
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的 manifest（contract §2；FR-256 起去 `sig` 段不再验签，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。只提供当前版本，不暴露历史。`agent.core` 由频道选定 updater-core 版本驱动（FR-259，见 ADR-054 修订 ADR-045）；无选定版本时回退手填透传（兼容）。`agent.wedge` 仍来自发布快照（楔子冻结、信息性）
 - **关联 FR**: FR-087、FR-092（机器码登记）、FR-259（`agent.core` 由选定 core 版本驱动）
+- **权限**: 客户端密钥（`X-Client-Key`，须绑定该频道；`X-Machine-Id` 可选）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）；`X-Machine-Id`（可，机器码统计/辅助限流）。**无 JWT**
 - **机器码登记（FR-092）**: 鉴权通过后若 `X-Machine-Id` 非空，则 best-effort 登记入 `client_machines`（弱一致、失败不阻断）。机器码**客户端生成、不可信**，仅统计 + 辅助限流（限流主键 IP，FR-096），**不作授权依据**
 - **响应** (200): contract §2 的 manifest（去 `sig` 段）
@@ -4278,6 +4381,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-artifacts/:sha256
 - **描述**: 按内容寻址下载客户端制品（zstd 压缩流或原文，按 codec）。制品跨频道共享，路径无频道段。鉴权/防护/限流/带宽检查全部通过后按 `Asset.StorageBackend` 分流（FR-347，见 ADR-073）：local → CP `ServeContent` 直出（如旧）；s3 → **302** 跳转对象存储预签名短时效 URL，字节流量不经 CP
 - **关联 FR**: FR-087, FR-347, FR-349
+- **权限**: 客户端密钥（`X-Client-Key`，任一有效密钥；`X-Machine-Id` 可选）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥即授权）；`X-Machine-Id`（可）。**无 JWT**
 - **响应** (200/206，local): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
 - **响应** (302，s3): `Location=` SigV4 query 预签名 GET URL（TTL 取渠道 `presignTtlSeconds`，默认 600s）+ `Cache-Control: no-store`（短时效 URL 禁缓存）。updater 已 `followRedirects(true)` 自动跟随；**http↔https 跨协议不自动跟随**——部署要求 CP 与 S3 endpoint 同协议（ADR-073 决策 6）
@@ -4286,6 +4390,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/updater-core
 - **描述**: 返回频道当前选定 updater-core 分发信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动只按 `version` 是否大于本地 `selectedVersion` 决定是否下载；这里的 `version` 是频道级递增分发版本，不等同于归档列表里的 jar 版本。切回旧 `sha256` 回滚时，后端仍会抬高分发版本，确保冻结 wedge 会下载目标旧 jar。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
 - **关联 FR**: FR-259、FR-258
+- **权限**: 客户端密钥（`X-Client-Key`，须绑定该频道）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）。**无 JWT**
 - **响应** (200): `{ "version": 3, "sha256": "ab12…", "downloadUrl": "/api/v1/client-artifacts/<sha256>", "size": 2097152 }`（`version` 为频道级分发版本；`sha256` 才是实际 core jar 制品；`downloadUrl` 指向制品分发端点，可 Range 续传）
 - **错误**: 401 `INVALID_CLIENT_KEY` | 404 `CHANNEL_NOT_FOUND` / `NO_SELECTED_CORE`（频道未选定 core 版本）
@@ -4293,12 +4398,14 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### GET /api/v1/client-channels/:id/updater-core/versions
 - **描述**: 列出全部归档 updater-core 版本（含选定标记），供运营面板切换回滚（FR-259）
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.publish` 或 `channel.write`
 - **响应** (200): `[ { "version": 2, "coreVersion":"0.1.0-SNAPSHOT", "displayVersion":"0.1.0-SNAPSHOT+abc123def456.dirty", "gitCommit":"abc123def456", "dirty":true, "buildTime":"datetime", "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }, { "version": 1, "sha256": "cd34…", "size": 2048000, "createdAt": "datetime", "selected": false } ]`（`version` 是数字归档版本；`coreVersion/displayVersion/gitCommit/dirty/buildTime` 来自 jar 内元信息，旧 jar 可为空）
 - **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
 
 ### POST /api/v1/client-channels/:id/updater-core/versions
 - **描述**: 手动上传 updater-core.jar hotfix，归档为 `client-updater-core` 制品；可选择上传后立即作为当前频道选定版本（FR-259 增强）。客户端下次启动按 updater-core 端点拿到该版本。
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.publish` 或 `channel.write`
 - **请求**: `multipart/form-data`，字段：`file`（必填，jar 文件）、`version`（可选兜底；后端优先读取 jar 内 `META-INF/jm-updater-core.properties` / Manifest 元信息）、`select`（可选，`true`/`1` 表示上传后立即选用）。缺少元信息的紧急 hotfix jar 也允许上传。
 - **响应** (200): `{ "version": 9, "coreVersion":"0.1.1-hotfix", "displayVersion":"0.1.1-hotfix+def456abc789", "gitCommit":"def456abc789", "dirty":false, "buildTime":"datetime", "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }`
 - **错误**: 400 `INVALID_REQUEST`（缺文件/文件不可读）| 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
@@ -4307,6 +4414,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### PUT /api/v1/client-channels/:id/updater-core/selected
 - **描述**: 切换频道选定的 updater-core 版本（一键回滚，FR-259）。后端写入目标 `sha256` 并维护频道级递增分发版本；客户端下次启动按 API 根 `endpoint` 自动查询 updater-core 端点，看到更大的 `version` 后下载目标 `sha256`，因此即使回滚到旧归档 jar 也会生效
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **权限**: `dist.publish` 或 `channel.write`
 - **请求**: `{ "sha256": "ab12…" }`
 - **响应** (200): `{ "ok": true }`
 - **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND` / `CORE_VERSION_NOT_FOUND`
@@ -4315,6 +4423,7 @@ CP 侧路由与前端「手动导入归档」对话框均已删除。
 ### POST /api/v1/client-telemetry
 - **描述**: 客户端遥测上报（FR-094 / FR-360，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端（`telemetry:false` 整包不上报）
 - **关联 FR**: FR-094、FR-360
+- **权限**: 客户端密钥（`X-Client-Key` + Machine/Install Id；任一有效密钥）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可但推荐）、`X-Install-Id`（可但推荐，用于关联安全画像）、`X-Player-Name`（兼容旧客户端，可选且不可信；为空时按 `channel + machineId + installId` 从安全画像补全）。**无 JWT**
 - **请求**（缺字段不 4xx；旧客户端兼容）:
   - **required**：`channel`, `result`(success|fail-static|rolled-back|error), `fromVersion`, `toVersion`, `coreVersion`, `os`, `arch`, `durationMs`, `bootSuccess`
@@ -4420,19 +4529,23 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 - **V2**: 显式实例 ∪ 授权节点上的当前实例；空 scope 且无节点继承 → 403；`nodeId` 仅作结果过滤
 
 ### GET /api/v1/agent/instances/:id
+- **权限**: Agent Token（`AgentAuth` 中间件校验，scope 见 token 签发处）
 ### GET /api/v1/agent/instances/:id/metrics
 - **描述**: 实例详情 / 指标
+- **权限**: Agent Token（`AgentAuth` 中间件校验，scope 见 token 签发处）
 - **V2 能力**: 详情需 `instance.read`；指标需 `observability.read`
 - **错误**: 403 越权或不存在（Agent 面收敛为同一拒绝语义，不泄露存在性）
 
 ### POST /api/v1/agent/instances/:id/start|stop|restart
 - **描述**: 实例生命周期
+- **权限**: Agent Token（`AgentAuth`）+ `AuthorizeInstanceAction` 校验 token 能力/scope 与该实例归属
 - **V1**: 写白名单 `instance.life` + 显式实例 scope  
 - **V2**: 能力 `instance.life` + 显式实例或节点继承 scope；派发前锁内重验归属
 - **错误**: 403 能力/scope 不足；kill **永不**对 agent 开放（未登记 action）
 
 ### POST /api/v1/agent/nodes/:id/maintenance/enter|leave
 - **描述**: 节点维护模式
+- **权限**: Agent Token（`AgentAuth`）+ token 能力/scope 校验该节点
 - **V1**: 写白名单 `node.maintenance` + 节点 scope  
 - **V2**: 能力 `node.operate` + 节点 scope
 - **错误**: 403

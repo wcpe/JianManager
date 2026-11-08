@@ -85,14 +85,17 @@ check_api() {
     echo "--- Gate 3: API Spec ---"
     if [ ! -f "docs/API.md" ]; then fail "缺少 docs/API.md"; return; fi
 
-    endpoint_count=$(grep -c '^### [A-Z]' docs/API.md || true)
+    # 只认真正的端点标题 `### METHOD /path`（或 `|` 合写的 `### M1 /  M2 /path`）。
+    # 旧版用 `^### [A-Z]`，会把 `### FR-352 内部场景契约（非 HTTP endpoint）`、
+    # `### Worker Log RPC 摘要（gRPC...）`、`### FR-264 消费端错误码` 也当成端点
+    # ⇒ 永远多报 5 条假缺口（实测）。
+    ep_re='^### (GET|POST|PUT|DELETE|PATCH|HEAD) /'
+    endpoint_count=$(grep -cE "$ep_re" docs/API.md || true)
     if [ "$endpoint_count" -eq 0 ]; then warn "API.md 中无 endpoint 定义"; else ok "API endpoint 数量: $endpoint_count"; fi
 
     # endpoint 块级覆盖度：`### METHOD /path` 到下一个标题之间的**块内**应有「权限」行。
-    # 旧版用 `grep -B1`，只看标题的**前一行**且方向反了（它在数「上一行是权限」的个数）
-    # ⇒ 恒输出一个无意义的比例（实测声称 1/378，真实是 115/378）。
-    missing_perm=$(awk '
-        /^### [A-Z]/ { if (inblk && !has) n++; title=$0; has=0; inblk=1; next }
+    missing_perm=$(awk -v re="$ep_re" '
+        $0 ~ re { if (inblk && !has) n++; title=$0; has=0; inblk=1; next }
         /^#{1,3} /   { if (inblk && !has) n++; inblk=0; next }
         inblk && /权限/ { has=1 }
         END { if (inblk && !has) n++; print n+0 }
