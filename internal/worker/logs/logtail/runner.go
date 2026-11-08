@@ -25,7 +25,7 @@ type Config struct {
 	//
 	// 采集路径由**已绑定实例的 WorkDir** 每轮现算（见 Bindings.PathsProvider）。
 	// 这样新建实例的日志无需重启就能被采到，也不会因为“猜错一个 serversRoot”
-	// 而静默采不到任何东西（真机实测：生产实例在 /home/wxys233/servers，
+	// 而静默采不到任何东西（真机实测：生产实例在 /home/user/servers，
 	// 而 dataRoot/var/servers 里 0 个实例目录）。
 	//
 	// 只有需要采**非实例**日志（节点自身日志等）时才需要在这里显式给出。
@@ -339,7 +339,7 @@ func ResolveRegistryPath(base, configured string) string {
 // # 为何不能用一个 serversRoot 推导
 //
 // 真机实测：生产实例的 WorkDir 由 CP 逐个下发，可以是任意绝对路径
-// （现场是 `/home/wxys233/servers/*`，而 `<dataRoot>/var/servers` 里只有
+// （现场是 `/home/user/servers/*`，而 `<dataRoot>/var/servers` 里只有
 // `.pid`/`.sock`，0 个实例目录）。用一个 root 推 glob 就得到 0 个匹配——
 // 采集“静默无数据”，而日志里只有一句“已启动”。
 //

@@ -15,7 +15,7 @@ import (
 //	[01:19:43] [ServerMain/INFO]: Environment: ...   ← Paper/MC 原生（时刻与线程/级别各一个方括号）
 //	18:12:59 [INFO] Using mbed TLS ...               ← BungeeCord（时刻**没有**方括号，级别带）
 //
-// 2026-11-06 真机实测：`/home/wxys233/servers/*/proxy.log.0` 共 88234 行全是后者，
+// 2026-11-06 真机实测：`/home/user/servers/*/proxy.log.0` 共 88234 行全是后者，
 // 而只按前者的形态解析时**一行都识别不出** —— level 全空、eventTime 全部退回采集时刻。
 // 后者对按级别保留策略是硬伤（`level:="WARN"` 匹配不到任何 proxy 行 ⇒ 永不清理）。
 //

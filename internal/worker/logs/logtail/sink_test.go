@@ -21,18 +21,18 @@ func TestInstanceNameFromPath(t *testing.T) {
 		wantStream string
 	}{
 		{
-			path:       "/home/x/servers/game-01/logs/latest.log",
+			path:       "/home/user/servers/game-01/logs/latest.log",
 			wantName:   "game-01",
 			wantStream: "stdout",
 		},
 		{
-			path:       "/home/x/servers/login-02/logs/2026-11-05-1.log",
+			path:       "/home/user/servers/login-02/logs/2026-11-05-1.log",
 			wantName:   "login-02",
 			wantStream: "stdout",
 		},
 		{
 			// bungee 形态：日志在工作目录根
-			path:       "/home/x/servers/bungee-main/proxy.log.0",
+			path:       "/home/user/servers/bungee-main/proxy.log.0",
 			wantName:   "bungee-main",
 			wantStream: "stdout",
 		},
@@ -63,7 +63,7 @@ func TestInstancePathResolver(t *testing.T) {
 		return "", false
 	})
 
-	id, stream := resolve.Resolve("/home/x/servers/game-01/logs/latest.log")
+	id, stream := resolve.Resolve("/home/user/servers/game-01/logs/latest.log")
 	if id != "inst:318/stdout" {
 		t.Fatalf("期望 inst:318/stdout，实际 %q", id)
 	}
@@ -72,7 +72,7 @@ func TestInstancePathResolver(t *testing.T) {
 	}
 
 	// 未注册的实例：必须返回空（不得猜测）
-	id2, _ := resolve.Resolve("/home/x/servers/unknown/logs/latest.log")
+	id2, _ := resolve.Resolve("/home/user/servers/unknown/logs/latest.log")
 	if id2 != "" {
 		t.Fatalf("未注册实例应返回空，实际 %q", id2)
 	}
@@ -115,7 +115,7 @@ func TestContentIDStableAndDistinct(t *testing.T) {
 // 整批数据会落到今天，时间窗查询直接失效。所以归一化的产物必须是带日期与时区的时间。
 func TestBuildRowFields(t *testing.T) {
 	line := tailer.Line{
-		Path:    "/home/x/servers/game-01/logs/latest.log",
+		Path:    "/home/user/servers/game-01/logs/latest.log",
 		Content: []byte(`[18:28:02] [Server thread/INFO]: hello world`),
 	}
 	sink := NewSink(nil, SourceResolverFunc(func(string) (string, string) { return "inst:318/file", "stdout" }), time.UTC)
@@ -156,7 +156,7 @@ func TestBuildRowFields(t *testing.T) {
 // 不能因为解析不出时间就丢行——用户明确说过日志不重要、有就行。
 func TestBuildRowFallsBackToNowWhenNoTimestamp(t *testing.T) {
 	line := tailer.Line{
-		Path:    "/home/x/servers/game-01/logs/latest.log",
+		Path:    "/home/user/servers/game-01/logs/latest.log",
 		Content: []byte(`	at SomeClass.method(SomeClass.java:119)`),
 	}
 	sink := NewSink(nil, nil, time.UTC)

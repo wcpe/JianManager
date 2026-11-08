@@ -9,7 +9,7 @@ import (
 // # 为什么必须覆盖 BungeeCord 形态
 //
 // 2026-11-06 真机实测：生产 19 个实例里既有 Paper/MC 原生 `[HH:MM:SS] [thread/LEVEL]:`，
-// 也有 BungeeCord 的 `HH:MM:SS [LEVEL] `（`/home/wxys233/servers/*/proxy.log.0`，
+// 也有 BungeeCord 的 `HH:MM:SS [LEVEL] `（`/home/user/servers/*/proxy.log.0`，
 // 共 88234 行）。只按第一形态解析时，后者**一行都识别不出**：
 //   - `level` 全空 ⇒ `level:="WARN"` 过滤不到任何 proxy 行，按级别保留策略永不生效；
 //   - `eventTime` 全部退回采集时刻 ⇒ 补录历史时整段时间轴错位。

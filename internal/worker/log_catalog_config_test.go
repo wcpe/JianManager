@@ -86,7 +86,7 @@ func TestLogCatalogConfig_SyncIntervalZeroMeansSync(t *testing.T) {
 
 // TestLogCatalogConfig_JournalPath journal 落在数据根的 var/log 下（与历史产物同址）。
 //
-// 同址是刻意的：生产上已有 /home/wxys233/jm/prod/worker/data/var/log/catalog.journal.jsonl
+// 同址是刻意的：生产上已有 /home/user/jm/prod/worker/data/var/log/catalog.journal.jsonl
 // （2MB / 1217 行 / 198 分区），启用后应直接在其上续写而不是另起一份。
 func TestLogCatalogConfig_JournalPath(t *testing.T) {
 	var cfg LogCatalogConfig

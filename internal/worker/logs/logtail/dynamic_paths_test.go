@@ -5,7 +5,7 @@ package logtail_test
 // # 为何必须单写（真机实测踩到）
 //
 // 最初按 `DefaultPaths(serversDir)` 猜一个根目录推 glob。真机上生产实例在
-// `/home/wxys233/servers/*`，而 `dataRoot/var/servers` 里只有 `.pid`/`.sock`、
+// `/home/user/servers/*`，而 `dataRoot/var/servers` 里只有 `.pid`/`.sock`、
 // 0 个实例目录 ⇒ 采集器启动正常、日志里一句“已启动”，但**一条日志也采不到**。
 // 这类“静默无数据”只在真机上才暴露，所以必须有用例钉住。
 

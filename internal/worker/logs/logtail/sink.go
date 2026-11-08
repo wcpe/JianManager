@@ -330,8 +330,8 @@ func contentID(logSourceID, stream, ts, msg string) string {
 //
 // 实例日志路径形如：
 //
-//	/home/xxx/servers/<实例名>/logs/latest.log     （bukkit/paper）
-//	/home/xxx/servers/<实例名>/proxy.log.0          （bungee）
+//	/home/user/servers/<实例名>/logs/latest.log     （bukkit/paper）
+//	/home/user/servers/<实例名>/proxy.log.0          （bungee）
 //
 // 从中取 `<实例名>` 并映射到 `inst:<实例ID>`。但**实例名 ≠ 实例 ID**，
 // 映射必须由装配层提供（那需要实例注册表）。所以本函数只做「提取实例名」，

@@ -324,7 +324,7 @@ func runWorker() {
 	}
 	// 日志落地：stderr 之外再写一份自轮转文件（见 process_log.go 的说明）。
 	// stderr 保留，因此前台/容器/CI 场景不变；文件供面板诊断与运维 grep。
-	installProcessLogger(cfg.DataDir, logLevelVar, logFormat)
+	installProcessLogger(cfg.DataDir, logLevelVar, logFormat, cfg.Log)
 	// 诊断接口需要知道日志文件在哪：注入路径提供者（见 internal/worker/grpc/self_log.go）。
 	// 为空时 PullSelfLog 返回结构化错误而不是空成功。
 	wgrpc.SetSelfLogPathProvider(ProcessLogPath)
@@ -1053,7 +1053,7 @@ func runWorker() {
 		} else {
 			// 实例日志的采集路径**不在这里推导**：它由绑定表（CP 下发的���例登记）每轮现算。
 			// 在这里猜一个 serversRoot 推 glob 是错的——真机实测生产实例位于
-			// /home/wxys233/servers，而 dataRoot/var/servers 里 0 个实例目录，
+			// /home/user/servers，而 dataRoot/var/servers 里 0 个实例目录，
 			// 按后者扫就是“静默采不到任何东西”。
 			paths := cfg.LogTailer.Paths
 			// 时区：与旧链路共用同一个节点级默认（键 log_ingest.time_zone）。
