@@ -320,7 +320,7 @@
 - **路径**: 根路径（**非** `/api/v1`），显式注册、先于前端 SPA `NoRoute` 回退
 - **权限**: 匿名（无 JWT）。脚本不含机密；准入凭据 enrollment token 在一键命令参数里、不在脚本里，故与签发 token 的平台管理员 JWT 端点暴露面/鉴权物理隔离
 - **响应**: `200` 脚本字节（`.sh` → `text/x-shellscript`、`.ps1` → `text/plain`）；脚本未内嵌时 `503 INSTALL_SCRIPT_UNAVAILABLE`（不回退到 `index.html`）
-- **内容来源**: `go:embed` 内嵌进 CP 二进制（源 = canonical `scripts/install-worker.{sh,ps1}`，`make embed-install-scripts` 同步、字节一致由测试守护）
+- **内容来源**: `go:embed` 内嵌进 CP 二进制。嵌入包 `scripts/embed`（`go:embed` 不允许 `..`，声明嵌入的文件必须与被嵌文件同目录）**就是**脚本真源所在处——`scripts/embed/install-worker.{sh,ps1}` 既是 canonical 也是嵌入输入，**不存在副本，因此不需要同步步骤**，也不再有字节一致守护测试（没有第二个副本可漂移）。`make embed-install-scripts` 保留为空目标以免既有依赖链断裂
 
 ### POST /api/v1/nodes/enroll-token
 - **描述**: 签发一次性、限时的节点准入 enrollment token，返回明文 + Linux/Windows 一键安装命令（傻瓜部署）
