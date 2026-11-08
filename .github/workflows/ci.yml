@@ -29,6 +29,13 @@
 # go-quality：Go 编译与静态检查门禁，并固定执行日志联邦回归测试；
 #   使用 Go 1.26.2 与模块缓存，避免后端质量回归只在发布工作流暴露。
 #
+# go-test-router / go-test-shard：Go **全量单元测试**，分片并行。
+#   router 单独一个 job（它是规模问题包，单包 ~880s）、其余包按包名哈希切 4 片；
+#   6 个 runner 并行，总墙钟≈ router 的时长。分片口径与本地 `scripts/go-test.sh` 共用一个脚本，
+#   不另维护一份包列表（两边走同一个函数，防止口径漂移）。
+#   在此之前 PR 只有 build/vet 与两个 -run 窄子集，全量只在 release 跑——
+#   导致间歇红的 Go 用例可以一路绿灯合入。
+#
 # workflow-contract：发布工作流契约闸（脚本 release-metadata.test.mjs）。
 #   断言 ci.yml / release.yml 的触发条件、runner 与版本来源；原先只在 release.yml 里跑，
 #   而 release.yml 不挂 PR，故契约被改坏时 PR 全绿、合入主干才红。前移到 PR 门禁堵住该缺口。
@@ -284,6 +291,69 @@ jobs:
   #   但前者不依赖 TestMCP_ 命名前缀，避免后续 MCP 用例换个前缀就被静默漏跑。
   # 仅 mcp 包加 -race：SSE 连接注册表是多协程并发读写的共享状态；实测 -race 增量约
   #   +13s（热缓存）/ +43s（含 race 插桩重建），在 job 预算内，故不拆 job 也不全量加 -race。
+  # Go 单元测试（分片并行）。
+  #
+  # 为何要加：在此之前 PR 阶段只有 `go build` + `go vet` + 两个 `-run` 窄子集，
+  # **全量 `go test` 只在 release.yml 跑**。代价是 PR 阶段没有任何测试能拦住 Go 回归：
+  # 实测曾有一条间歇红的 daemon 用例（FR-455 两阶段化后测试漏改）在 CI 全绿的情况下
+  # 未被发现。release 才拦 = 问题晚了一个部门。
+  #
+  # 为何分片而不是一个大 job：本机串行跑全量约 20 分钟，其中
+  # `internal/controlplane/router` 独占 ~880s（893 处 setupTestDB × 每次 AutoMigrate
+  # 115 个模型）。不拆的话单 job 要跑满并容易撑爆 timeout。拆成
+  # 「router 一个 job + core 四片」后**全部并行**，总墙钟 ≈ max(router, 单片 core)。
+  #
+  # 口径与本地完全一致（不另立一份）：
+  #   本地复现单片：sh scripts/go-test.sh shard 0 4
+  #   本地复现全量：sh scripts/go-test.sh
+  go-test-router:
+    runs-on: ubuntu-24.04
+    # go-test.sh 的 ROUTER_TIMEOUT 默认 25m；本机实测 880s，留余量给慢机。
+    timeout-minutes: 30
+    steps:
+      - name: Checkout（不需子模块，Go 单元测试）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: go test（router，单独一组）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh scripts/go-test.sh router
+
+  go-test-shard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      # 一片红不影响其他片继续跑完：一次看到全部失败面，而不是修一个 rebuild 一次。
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Checkout（不需子模块，Go 单元测试）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: go test（core shard ${{ matrix.shard }}/4）
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh scripts/go-test.sh shard ${{ matrix.shard }} 4
+
   agent-gate:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

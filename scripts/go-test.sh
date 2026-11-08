@@ -17,8 +17,16 @@
 #   scripts/go-test.sh              # 两组都跑
 #   scripts/go-test.sh core         # 只跑除 router 外的包
 #   scripts/go-test.sh router       # 只跑 router 包
+#   scripts/go-test.sh shard 0 4    # core shard 0/4（CI 并行用，见下）
 #   ROUTER_TIMEOUT=40m scripts/go-test.sh
 #   GO_TEST_FLAGS=-cover scripts/go-test.sh   # 追加原样透传给 go test 的参数
+#
+# # shard 模式的用途（CI 并行）
+#
+# 单机串行跑全量在本机实测约 20 分钟，其中 router 独占 ~880s。CI 上把它拆成
+# 「router 一个 job + core 分 N 片 N 个 job」并行，总墙钟≈ max(router, 单片 core)。
+# 分片用**包名的稳定哈希**而不是下标：包增删不会让 shard 编号整体漂移，
+# 同一个包永远落在同一片上（便于对比历史红/绿）。
 #
 # 退出码：任一组失败即非零（与 `go test` 一致）。
 set -uo pipefail
@@ -64,13 +72,28 @@ case "$MODE" in
   router)
     run_group router "$ROUTER_TIMEOUT" "$ROUTER_PKG"
     ;;
+  shard)
+    # shard <index> <total>：把 core 包按包名哈希切成 total 片，只跑第 index 片。
+    # 不包含 router（它单独一个 job，时限不同）。
+    idx="${2:-}"; total="${3:-}"
+    if ! [[ "$idx" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]] || [ "$total" -lt 1 ] || [ "$idx" -ge "$total" ]; then
+      echo "用法: $0 shard <index> <total>（index 从 0 起，且 < total）" >&2
+      exit 2
+    fi
+    mapfile -t pkgs < <(core_pkgs | while IFS= read -r p; do
+      # 用包名的 cksum 取模分片：稳定、不随增删漂移。
+      h=$(printf '%s' "$p" | cksum | awk '{print $1}')
+      [ $((h % total)) -eq "$idx" ] && printf '%s\n' "$p"
+    done)
+    run_group "core-shard-$idx/$total" "$CORE_TIMEOUT" "${pkgs[@]}"
+    ;;
   all)
     mapfile -t pkgs < <(core_pkgs)
     run_group core "$CORE_TIMEOUT" "${pkgs[@]}"
     run_group router "$ROUTER_TIMEOUT" "$ROUTER_PKG"
     ;;
   *)
-    echo "用法: $0 [all|core|router]" >&2
+    echo "用法: $0 [all|core|router|shard]" >&2
     exit 2
     ;;
 esac
