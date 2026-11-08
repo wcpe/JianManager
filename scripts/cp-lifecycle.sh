@@ -339,6 +339,23 @@ acquire_lock() {
     trap release_lock 0 HUP INT TERM
 }
 
+# rotate_stderr_log 在启动前把上一轮的 stderr 兜底文件改名归档（有界：只留 .prev）。
+#
+# 为什么需要它：本脚本的 stderr 重定向是「启动期崩溃栈」的兜底通道——
+# CP 在进入 slog 之前死掉时（配置解析失败等）错误只会走到这里。但它同样会无界增长，
+# 而 rollog 管不到它（文件由 shell 创建，fd 在 shell 手里）。
+#
+# 为什么用 mv 而不是 copytruncate：这里不持有目标进程的 fd（进程还没起），
+# 直接 rename 即可，O(1) 且不复制任何字节。上一轮 CP 已退出，不存在仍需写入的旧 fd。
+rotate_stderr_log() {
+    [ -f "$LOG_FILE" ] || return 0
+    mv -f "$LOG_FILE" "$LOG_FILE.prev" 2>/dev/null || {
+        # 改不动（权限/RO fs）不算启动失败：日志写到旧文件里总比启动不了强。
+        echo "警告: 无法轮转 $LOG_FILE，本轮将继续追加到既有文件" >&2
+        return 0
+    }
+}
+
 wait_for_start() {
     pid=$1
     elapsed=0
@@ -391,7 +408,27 @@ start_cp() {
     echo "启动 Control Plane: $BINARY $CONFIG"
     (
         cd "$INSTALL_DIR"
-        nohup "$BINARY" "$CONFIG" >>"$LOG_FILE" 2>&1 </dev/null &
+        # 日志去向（2026-11-07 修正）：
+        #
+        # CP 自己已经把日志写进 `<数据根>/var/log/control-plane.log`，并由 rollog
+        # 进程内轮转（rename + 异步 gzip + 份数/天数保留）。但本脚本过去用
+        # `>>"$LOG_FILE"` 再重定向一份，于是产生**第二个文件**：
+        #   - 它由 shell 创建、shell 持 fd，**rollog 完全轮转不到**；
+        #   - 结果是在非 systemd 部署下无界增长——正是 2026-10-27 `worker.out` 35GB 的同一形态。
+        #
+        # 现在只保留 stderr 落盘（启动期崩溃栈必须能取到，而那时日志组件可能还没 init），
+        # stdout 丢弃：进程内的 rollog 已经负责持久化，再抢救一遍只会得到两份不同步的日志。
+        #
+        # 为什么不干脆都写 /dev/null：CP 在进入 slog 之前就死掉时（如配置解析失败），
+        # 错误走的是 stderr 而没进过 rollog。那一小段必须能取到，否则运维只能看到
+        # “启动校验失败”而不知道为什么。
+        #
+        # **仍然必须封顶**：只保留 stderr 不等于不会涨——一个反复崩溃重启的进程
+        # 能把崩溃栈刷到几个 GB。这里在启动前做一次有界的自轮转（同样只 mv，
+        # 不复制任何字节），把旧文件改成 `<name>.prev` 供取证，新文件从零开始。
+        # 保留 1 份旧档就够：这是崩溃栈兜底，不是业务日志。
+        rotate_stderr_log
+        nohup "$BINARY" "$CONFIG" >/dev/null 2>>"$LOG_FILE" </dev/null &
         printf '%s\n' "$!"
     ) >"$PID_FILE.launch.$$"
     pid=$(cat "$PID_FILE.launch.$$" )

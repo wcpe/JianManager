@@ -276,4 +276,20 @@ kill_line=$(awk '/kill -KILL "\$PID"/ { print NR; exit }' "$SCRIPT")
 [ "$recheck_line" -lt "$kill_line" ] || fail "KILL 排在二次身份校验之前"
 
 # 检查 stale / reuse / 二次复核 / 锁等关键分支均已走过。
+
+# stderr 兜底日志必须有界：启动前把上一轮的文件改名成 .prev，而不是无界追加。
+# 为什么锁它：这里曾用 `>>"$LOG_FILE"` 常驻追加，而该文件由 shell 创建、
+# rollog 轮转不到它——非 systemd 部署下就是第二个无界增长的文件。
+assert_contains "$SCRIPT" 'rotate_stderr_log'
+assert_contains "$SCRIPT" 'mv -f "$LOG_FILE" "$LOG_FILE.prev"'
+if grep -Fq '>>"$LOG_FILE" 2>&1' "$SCRIPT"; then
+    fail "stdout 不应再重定向到日志文件（会与进程内 rollog 形成第二份不同步日志）"
+fi
+# 封顶调用必须在启动之前（顺序错了等于本轮启动不受保护）。
+rotate_call_line=$(awk '/^        rotate_stderr_log$/ { print NR; exit }' "$SCRIPT")
+start_line=$(awk '/nohup "\$BINARY"/ { print NR; exit }' "$SCRIPT")
+[ -n "$rotate_call_line" ] || fail "start 分支未调用 rotate_stderr_log"
+[ "$rotate_call_line" -lt "$start_line" ] || fail "rotate_stderr_log 必须排在启动之前"
+
+# 检查 stale / reuse / 二次复核 / 锁等关键分支均已走过。
 echo 'CP 生命周期脚本契约测试通过'
