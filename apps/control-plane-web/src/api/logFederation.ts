@@ -578,8 +578,10 @@ export async function getWithRateLimitRetry<T>(
     try {
       return await api.get<T>(path, config)
     } catch (error) {
-      if (isLogRequestCanceled(error) || !isRateLimitError(error) || attempt >= delaysMs.length) throw error
-      await waitForLogRetry(delaysMs[attempt], config?.signal as AbortSignal | undefined)
+		if (isLogRequestCanceled(error) || !isRateLimitError(error) || attempt >= delaysMs.length) throw error
+		// delaysMs[attempt] 在 attempt < length 时必有值（上一行已先排除越界），
+		// 但 TS 的 noUncheckedIndexedAccess 不知道这层关系，故显式断言。
+		await waitForLogRetry(delaysMs[attempt]!, config?.signal as AbortSignal | undefined)
     }
   }
 }

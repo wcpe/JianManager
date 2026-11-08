@@ -78,6 +78,7 @@ func NewEmbeddedCoreFromJar(jar []byte, versionStr string) *EmbeddedCore {
 // 职责：
 // PublishFile：把客户端文件制品入制品库（type=client-file，内容寻址 + 去重）；
 //   - PublishVersion：以一组文件 + managedDirs + 自更新段组成版本，version 单调递增、切 latest 指针；
+//
 // BuildManifest：组装频道 latest 的 manifest（起不再签名）；
 //   - OpenArtifact：按 sha256 取制品（供 Range 分发）。
 //

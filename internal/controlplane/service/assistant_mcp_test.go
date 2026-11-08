@@ -224,4 +224,3 @@ func TestMCPToolRisk_OnlyKnownValues(t *testing.T) {
 		t.Fatal("风险分类不得采用 annotations 的字段名")
 	}
 }
-

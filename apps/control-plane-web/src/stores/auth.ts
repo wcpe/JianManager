@@ -10,7 +10,7 @@ function schedulePermissionsLoad(): void {
   // 「模块就绪」时就返回，而 ② 仍在飞 → 拆卸环境时它才去读 axios，报
   // EnvironmentTeardownError（CI 实测：408 files / 3294 tests 全 passed 却判失败）。
   void trackDynamicImport(
-    trackDynamicImport(loadPermissionsModule()).then((m) =>
+    trackDynamicImport(loadPermissionsModule(), (m) =>
       m.usePermissionsStore.getState().loadFromAuthMe(),
     ),
   )
@@ -172,12 +172,12 @@ export const useAuthStore = create<AuthState>((set) => ({
     // 登记整条链（含 .then 里的同步 reset）：只登记模块 import 的话，flush 会提前返回，
     // 后面的 reset 仍可能在拆卸后才跑（虽不快，但保持与 schedulePermissionsLoad 同一口径）。
     void trackDynamicImport(
-      trackDynamicImport(loadPermissionsModule()).then((m) => m.usePermissionsStore.getState().reset()),
+      trackDynamicImport(loadPermissionsModule(), (m) => m.usePermissionsStore.getState().reset()),
     )
     // 登出即整体释放全部终端会话（296，ADR-067）：连接常驻管理器不随组件卸载断开，
     // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把会话管理器卷进首屏 chunk。
     void trackDynamicImport(
-      trackDynamicImport(loadTerminalSessionManager()).then((m) => m.terminalSessionManager.disposeAll()),
+      trackDynamicImport(loadTerminalSessionManager(), (m) => m.terminalSessionManager.disposeAll()),
     )
   },
 

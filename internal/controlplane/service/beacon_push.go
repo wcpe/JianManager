@@ -83,8 +83,8 @@ type BeaconServerPush struct {
 	Namespace string `json:"namespace"`
 	ServerID  string `json:"serverId"`
 	// Role 取 Beacon 侧 agent 角色取值（bukkit / bungee），由 JM 的实例角色映射而来。
-	Role    string            `json:"role"`
-	Address string            `json:"address,omitempty"`
+	Role     string            `json:"role"`
+	Address  string            `json:"address,omitempty"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
@@ -137,7 +137,7 @@ func (c *BeaconPushClient) Namespace() string {
 // 语义严格对齐「不重试、不回滚、不阻塞」（决策 3A）：本方法只做一次请求并把结果如实返回，
 // 不含任何重试或补偿。返回 nil 表示**已成功投递**，不表示「已在 Beacon 生效」——Beacon 侧
 // allow-machine-register 关闭时注册落 pending（成功投递但不生效），该状态由 Beacon 侧审计呈现
-//（spec §3.2 明文：JianManager 侧视为成功投递但不生效）。
+// （spec §3.2 明文：JianManager 侧视为成功投递但不生效）。
 func (c *BeaconPushClient) PushServer(ctx context.Context, payload BeaconServerPush) error {
 	if c == nil || !c.base.Enabled() {
 		return ErrBeaconNotConfigured

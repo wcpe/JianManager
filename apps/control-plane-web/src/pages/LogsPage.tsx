@@ -26,7 +26,6 @@ import {
 } from '@/api/logFederation'
 import { useAuthStore } from '@/stores/auth'
 import { useNodes } from '@/api/nodes'
-import { ClearConflictsDialog } from '@/components/logs/ClearConflictsDialog'
 import { InstancePicker } from '@/components/instances/InstancePicker'
 import { LOGS_FEDERATION_KEYS, exportBlockedKeyForReasons } from '@/lib/logs-federation'
 import { LogsPageView } from '@/components/views/logs/LogsPageView'
@@ -255,8 +254,7 @@ export default function LogsPage() {
    * 内容却属于旧条件，运维会把 A 实例的日志读成 B 实例的。复用前必须比对 filterKey。
    */
   const [lastGoodFederation, setLastGoodFederation] = useState<{ filterKey: string; result: LogsFederationResult } | null>(null)
-  // 「确认并清空身份冲突」对话框开关（质量标记的运维入口，见 ClearConflictsDialog）。
-  const [clearConflictsOpen, setClearConflictsOpen] = useState(false)
+  // 「确认并清空身份冲突」对话框开关已随旧采集链路下线（相关组件与服务端接口均已删除）。
   /** 
    * 限流提示闩锁：重试耗尽观测到 429 即置位，直到重新拿到**真实成功**结果才清除。
    *
@@ -316,20 +314,6 @@ export default function LogsPage() {
   // F-003：联邦可用（非降级）时列表以 federation.items 为主数据源；
   // 404 降级才回退 useLogs 的 Legacy 表。禁止「联邦横幅 + Legacy 内容」错配。
   const federationActive = !!federation && !federation.degraded && federation.available
-
-  /** 
-   * 「确认并清空身份冲突」入口可用性。
-   *
-   * 三个条件缺一不可：
-   * - 确有冲突（`duplicateUnresolved`，与横幅同源）—— 否则这个按钮没有任何可清的东西；
-   * - 选中了单一节点 —— 清空是**按节点**下发的（Worker 持有该节点的源），
-   *   未选节点时无法确定目标，此时不给入口，而不是默认拿第一个节点去清；
-   * - 联邦不是降级态 —— 降级时质量标记来自 legacy 路径，本入口对其无效。
-   */
-  const canClearConflicts =
-    federationActive &&
-    filter.nodeId !== null &&
-    federation?.classified.coverage.duplicateUnresolved === true
 
   /** 
    * 经典表格查询（联邦视图下作降级回退源）。
@@ -624,7 +608,6 @@ export default function LogsPage() {
         // 筛选身份键：视图据此复位时间线滚动，且与限流保留项同源判归属。
         filterKey={filterKey}
         ingestPositionGaps={ingestPositionGaps}
-        onClearConflicts={canClearConflicts ? () => setClearConflictsOpen(true) : undefined}
         // 联邦态的可翻性由服务端 next_cursor / 可移窗驱动；非联邦回退页码比较。
         canNext={federationActive ? federationNextAvailable : undefined}
         onChangeFilter={applyFilter}
@@ -648,19 +631,6 @@ export default function LogsPage() {
           />
         )}
       />
-      {/* 身份冲突人工清空（运维入口）：只在有冲突、且当前选中单一节点时可用。
-          未选中单一节点时无法确定要清哪个节点，故不给入口（而不是默认清第一个）。 */}
-      {canClearConflicts && filter.nodeId !== null && (
-        <ClearConflictsDialog
-          nodeId={filter.nodeId}
-          open={clearConflictsOpen}
-          onOpenChange={setClearConflictsOpen}
-          onCleared={() => {
-            if (legacyMode) void legacyQuery.refetch()
-            else { void federationQuery.refetch(); void refetchLogs() }
-          }}
-        />
-      )}
     </>
   )
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"io"
 	"net/http"
 	"regexp"
@@ -14,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // paperAPIBase 是 PaperMC 下载 API 根（035 核心下载源：paper/velocity/waterfall）。
@@ -43,9 +43,9 @@ const CoreTypeBinary = "binary"
 // CoreTypeBeacon 是内置 Beacon 快速搭建预设的核心类型（见 ADR-090）。
 //
 // 它是 coreType=binary 之上的**语法糖**：内部展开为 binary + 固定参数
-//（落盘名 `beacon-{version}-linux-amd64`、启动命令 `./beacon-{version}-linux-amd64`、
+// （落盘名 `beacon-{version}-linux-amd64`、启动命令 `./beacon-{version}-linux-amd64`、
 // 角色 beacon、不绑 JDK）。制品来源优先级（制品库 > GitHub Releases）由搭建层实现
-//（见 ProvisionService.resolveBeaconPresetSource）；本服务只负责「官方来源」的版本解析。
+// （见 ProvisionService.resolveBeaconPresetSource）；本服务只负责「官方来源」的版本解析。
 const CoreTypeBeacon = "beacon"
 
 // beaconReleaseRepo 是 Beacon 官方发布仓库（§4.1 的回落来源）。
@@ -83,7 +83,7 @@ func IsBeaconCore(coreType string) bool { return project(coreType) == CoreTypeBe
 // IsBinaryCore 判断核心类型是否走通用二进制搭建路径。
 //
 // beacon 是 binary 之上的预设语法糖，取件形态（Worker FetchBinary）+ 实例默认属性
-//（generic 类型、不绑 JDK、startCommand 承载启动）与 binary 完全一致，故一并归入该路径；
+// （generic 类型、不绑 JDK、startCommand 承载启动）与 binary 完全一致，故一并归入该路径；
 // 差异只有「来源自动解析 + 角色 beacon + 预设落盘名」，由 ProvisionService 内部分支处理。
 func IsBinaryCore(coreType string) bool {
 	switch project(coreType) {
@@ -302,7 +302,7 @@ func (s *CoreService) ResolveBeaconRelease(ctx context.Context) (*BeaconRelease,
 // 命中条件（大小写不敏感）：文件名含 `linux-amd64`，且不是 .sha256/.jar/.zip/.tar.gz 等附属产物。
 // 带版本号的名字（`beacon-{version}-linux-amd64`）优先——上游若同时发布版本化与不带版本号的同一
 // 文件，版本化命名与预设落盘名一致，取它语义最清晰；无版本化命名时回落到第一个匹配项
-//（如 `beacon-linux-amd64`，其内容相同、按预设落盘名重命名后使用）。
+// （如 `beacon-linux-amd64`，其内容相同、按预设落盘名重命名后使用）。
 func beaconLinuxAsset(assets []githubReleaseAsset, version string) (githubReleaseAsset, bool) {
 	preferred := beaconBinaryFilename(version)
 	var fallback githubReleaseAsset

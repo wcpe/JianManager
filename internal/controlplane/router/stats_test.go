@@ -66,7 +66,6 @@ func TestStatsRoutes_Registered(t *testing.T) {
 		"GET /api/v1/stats/overview":  false,
 		"GET /api/v1/stats/instances": false,
 		"GET /api/v1/stats/nodes":     false,
-		"GET /api/v1/stats/logs":      false,
 		"GET /api/v1/stats/crashes":   false,
 		"GET /api/v1/stats/changes":   false,
 	}
@@ -87,10 +86,6 @@ func TestStats_JWTAccess(t *testing.T) {
 	base := time.Now().UTC()
 	require.NoError(t, db.Create(&model.MetricRollup5m{
 		SeriesID: series.ID, BucketTS: base.Add(-10 * time.Minute).Truncate(5 * time.Minute), Avg: 42.5, Count: 1,
-	}).Error)
-	require.NoError(t, db.Create(&model.LogEntry{
-		Source: model.LogSourceInstance, Level: model.LogLevelInfo, InstanceID: inst.ID,
-		NodeID: inst.NodeID, Stream: "stdout", Message: "hello", Time: base.Add(-time.Minute),
 	}).Error)
 	require.NoError(t, db.Create(&model.InstanceCrashStat{
 		InstanceID: inst.ID, BucketDay: base.Format("2006-01-02"), RootCause: "OOM",
@@ -136,15 +131,6 @@ func TestStats_JWTAccess(t *testing.T) {
 	require.NotNil(t, nodeResp.Series, "series 必须是 [] 而非 null")
 	require.Contains(t, w.Body.String(), `"series":[]`)
 
-	// logs
-	w = makeRequest(r, "GET", "/api/v1/stats/logs?page=1&pageSize=50", nil, jwt)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var logResp service.StatsLogQueryResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &logResp))
-	require.Len(t, logResp.Entries, 1)
-	require.Equal(t, "INFO", logResp.Entries[0].Level)
-	require.Equal(t, "hello", logResp.Entries[0].Message)
-
 	// crashes
 	w = makeRequest(r, "GET", "/api/v1/stats/crashes?days=30", nil, jwt)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -175,7 +161,6 @@ func TestStats_AgentTokenAccess(t *testing.T) {
 		"/api/v1/stats/overview",
 		"/api/v1/stats/instances?resolution=5m",
 		"/api/v1/stats/nodes?resolution=5m",
-		"/api/v1/stats/logs",
 		"/api/v1/stats/crashes?days=7",
 		"/api/v1/stats/changes",
 	} {
@@ -230,7 +215,6 @@ func TestStats_PageSizeExceeded(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/stats/instances?pageSize=201",
 		"/api/v1/stats/nodes?pageSize=201",
-		"/api/v1/stats/logs?pageSize=201",
 		"/api/v1/stats/changes?pageSize=201",
 	} {
 		w := makeRequest(r, "GET", path, nil, jwt)
@@ -263,18 +247,10 @@ func TestStats_TimeRangeExceeded(t *testing.T) {
 		require.Equal(t, "720h", body["maxRange"], "path=%s", path)
 	}
 
-	// 日志：7 天上限。
-	logFrom := now.Add(-8 * 24 * time.Hour).Format(time.RFC3339)
-	w := makeRequest(r, "GET", "/api/v1/stats/logs?from="+logFrom, nil, jwt)
+	// 崩溃：365 天上限。
+	w := makeRequest(r, "GET", "/api/v1/stats/crashes?days=400", nil, jwt)
 	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 	body := statsJSONBody(t, w.Body.Bytes())
-	require.Equal(t, "TIME_RANGE_EXCEEDED", body["code"])
-	require.Equal(t, "168h", body["maxRange"])
-
-	// 崩溃：365 天上限。
-	w = makeRequest(r, "GET", "/api/v1/stats/crashes?days=400", nil, jwt)
-	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-	body = statsJSONBody(t, w.Body.Bytes())
 	require.Equal(t, "TIME_RANGE_EXCEEDED", body["code"])
 	require.NotEmpty(t, body["maxRange"])
 
@@ -294,7 +270,6 @@ func TestStats_Unauthorized(t *testing.T) {
 		"/api/v1/stats/overview",
 		"/api/v1/stats/instances",
 		"/api/v1/stats/nodes",
-		"/api/v1/stats/logs",
 		"/api/v1/stats/crashes",
 		"/api/v1/stats/changes",
 	} {
@@ -310,7 +285,6 @@ func TestStats_InvalidArguments(t *testing.T) {
 		"/api/v1/stats/instances?resolution=bogus",
 		"/api/v1/stats/instances?instanceIds=abc",
 		"/api/v1/stats/instances?from=not-a-time",
-		"/api/v1/stats/logs?level=TRACE",
 		"/api/v1/stats/crashes?days=abc",
 		"/api/v1/stats/changes?status=nope",
 	}

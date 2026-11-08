@@ -145,7 +145,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const rebuilding = isRebuildingInstance(instance)
   // 运行态漂移：>0 即存在未纳管活进程；无漂移时为 undefined（不渲染任何标记）。
   const runtimeDrift = runtimeDriftOf(instance)
-  const overviewLogs = logs?.items ?? []
+	const overviewLogs = logs ?? []
 
   const setActiveTab = (tab: TabKey) => {
     const next = new URLSearchParams(searchParams)

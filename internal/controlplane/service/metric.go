@@ -85,6 +85,11 @@ type MetricService struct {
 	// 用于据相邻差推导丢弃速率（与 lastNet / lastGC 同构）。
 	vlDropMu   sync.Mutex
 	lastVLDrop map[string]vlDropCounter
+
+	// bridgeMu/lastBridge 记录每实例上次心跳的桥拒绝/写失败累计量，用于差分推导速率。
+	// 与 lastGC 同构：差为负（实例重启计数器归零）时跳过该拍。
+	bridgeMu   sync.Mutex
+	lastBridge map[string]bridgeCounters
 }
 
 // vlDropCounter 是 VL 丢弃计数器的上次读数。
@@ -118,7 +123,7 @@ type bridgeCounters struct {
 
 // NewMetricService 创建时序指标服务。
 func NewMetricService(db *gorm.DB) *MetricService {
-	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}, lastVLDrop: map[string]vlDropCounter{}}
+	return &MetricService{db: db, lastNet: map[string]netCounters{}, lastGC: map[string]gcCounters{}, lastVLDrop: map[string]vlDropCounter{}, lastBridge: map[string]bridgeCounters{}}
 }
 
 // ResolveInstanceUUID 由数值实例 ID 取 UUID，供进程 TOPN 查询过滤。

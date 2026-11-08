@@ -8,7 +8,7 @@ import {
   useClearNodeLogAcq,
   type LogAcqSettingItem,
 } from '@/api/nodes'
-import { validateSettingDraft } from '@/pages/settings-form'
+import { validateSettingDraft } from '@/lib/settings/settings-form'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'

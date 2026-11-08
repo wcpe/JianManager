@@ -37,7 +37,7 @@ func newStatsSvc(t *testing.T, name string) *StatsService {
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.MetricSeries{},
 		&model.MetricSampleRaw{}, &model.MetricRollup5m{}, &model.MetricRollup1h{},
-		&model.LogEntry{}, &model.InstanceCrashStat{}, &model.InstanceRollingOp{},
+		&model.InstanceCrashStat{}, &model.InstanceRollingOp{},
 	))
 	return NewStatsService(db)
 }
@@ -56,7 +56,7 @@ func newStatsSvcWithSQLLog(t *testing.T, name string, out *[]string) *StatsServi
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.MetricSeries{},
 		&model.MetricSampleRaw{}, &model.MetricRollup5m{}, &model.MetricRollup1h{},
-		&model.LogEntry{}, &model.InstanceCrashStat{}, &model.InstanceRollingOp{},
+		&model.InstanceCrashStat{}, &model.InstanceRollingOp{},
 	))
 	return NewStatsService(db)
 }
@@ -277,12 +277,6 @@ func TestStats_EmptyResultsAreArrays(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, nodeSeries.Series)
 
-	logs, err := svc.QueryLogs(StatsLogQuery{
-		From: time.Now().Add(-time.Hour), To: time.Now(), Page: 1, PageSize: 100,
-	}, Unscoped())
-	require.NoError(t, err)
-	require.NotNil(t, logs.Entries, "entries 必须是 []，不能是 null")
-
 	crashes, err := svc.QueryCrashTrend(StatsCrashQuery{Days: 30}, Unscoped())
 	require.NoError(t, err)
 	require.NotNil(t, crashes.ByDay, "byDay 必须是 []，不能是 null")
@@ -393,54 +387,6 @@ func TestStats_MetricNameStripsScopePrefix(t *testing.T) {
 	require.Equal(t, "cpu_pct", statsMetricName(model.MetricScopeNode, model.MetricNodeCPUPct))
 	// 未知前缀原样返回，避免新增指标键被静默改名。
 	require.Equal(t, "custom_thing", statsMetricName(model.MetricScopeInstance, "custom_thing"))
-}
-
-// TestStats_LogsQuery 日志检索：级别/关键字/时间窗过滤与字段投影。
-func TestStats_LogsQuery(t *testing.T) {
-	svc := newStatsSvc(t, "logs")
-	base := statsMetricBase()
-	require.NoError(t, svc.db.Create(&model.LogEntry{
-		Source: model.LogSourceInstance, Level: model.LogLevelError, InstanceID: 7,
-		NodeID: 1, Stream: "stderr", Message: "Exception in tick", Time: base.Add(-time.Minute),
-	}).Error)
-	require.NoError(t, svc.db.Create(&model.LogEntry{
-		Source: model.LogSourceInstance, Level: model.LogLevelInfo, InstanceID: 7,
-		NodeID: 1, Stream: "stdout", Message: "Loaded 12 chunks", Time: base.Add(-2 * time.Minute),
-	}).Error)
-
-	all, err := svc.QueryLogs(StatsLogQuery{
-		From: base.Add(-time.Hour), To: base, Page: 1, PageSize: 100,
-	}, Unscoped())
-	require.NoError(t, err)
-	require.Equal(t, 2, all.Pagination.Total)
-	require.Len(t, all.Entries, 2)
-	// 倒序：最新的在前。
-	require.Equal(t, "Exception in tick", all.Entries[0].Message)
-	// 级别投影为契约的大写枚举。
-	require.Equal(t, "ERROR", all.Entries[0].Level)
-	require.Equal(t, "INFO", all.Entries[1].Level)
-	require.Equal(t, "stderr", all.Entries[0].Source)
-
-	errOnly, err := svc.QueryLogs(StatsLogQuery{
-		Level: "ERROR", From: base.Add(-time.Hour), To: base, Page: 1, PageSize: 100,
-	}, Unscoped())
-	require.NoError(t, err)
-	require.Equal(t, 1, errOnly.Pagination.Total)
-
-	kw, err := svc.QueryLogs(StatsLogQuery{
-		Keyword: "chunks", From: base.Add(-time.Hour), To: base, Page: 1, PageSize: 100,
-	}, Unscoped())
-	require.NoError(t, err)
-	require.Equal(t, 1, kw.Pagination.Total)
-
-	// 非法级别：明确 400 语义，不静默忽略。
-	_, err = svc.QueryLogs(StatsLogQuery{
-		Level: "TRACE", From: base.Add(-time.Hour), To: base, Page: 1, PageSize: 100,
-	}, Unscoped())
-	require.Error(t, err)
-	stErr, ok := err.(*StatsError)
-	require.True(t, ok)
-	require.Equal(t, StatsCodeInvalidArgument, stErr.Code)
 }
 
 // TestStats_CrashTrend 崩溃趋势：按天 + 按根因聚合，且一天多指纹要合并（不得逐行 append）。

@@ -626,7 +626,7 @@ type BusinessStatusBatchItem struct {
 	//
 	// 存在性隐藏原则与单实例接口一致：不区分"不存在"与"无权"，
 	// 否则调用方能靠批量接口枚举出自己无权访问的实例 ID 是否存在。
-	NotFound bool                 `json:"notFound"`
+	NotFound bool                  `json:"notFound"`
 	Status   *BusinessStatusResult `json:"status,omitempty"`
 }
 

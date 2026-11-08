@@ -1007,15 +1007,15 @@ func validateSettingValue(key, val string) error {
 				// Windows 形态（盘符 / UNC）在 Linux 的 CP 上 IsAbs 为 false，但下发给
 				// Windows 节点时会被 Worker 判为绝对路径并拒绝登记——届时表现为
 				// 「保存成功、实例日志登记失败」。这里提前拒掉。
-			if isWindowsAbsPath(trimmed) {
-				return fmt.Errorf("%w: 路径覆盖不支持 Windows 盘符或 UNC 路径（%s = %q）", ErrSettingValueInvalid, target, p)
-			}
-			// Windows 分隔符下的逃逸与盘符/UNC 同属「CP 放行、Windows 节点必拒」的一类：
-			// 下面那道宿主判据在 Linux 上把 `..\..\etc\passwd` 当普通文件名放行，
-			// 到 Windows 节点才失败。这里提前拒掉，让用户在保存时就看到错误。
-			if escapesUnderWindowsSeparators(trimmed) {
-				return fmt.Errorf("%w: 路径覆盖不得逃出实例工作目录（按 Windows 分隔符语义）（%s = %q）", ErrSettingValueInvalid, target, p)
-			}
+				if isWindowsAbsPath(trimmed) {
+					return fmt.Errorf("%w: 路径覆盖不支持 Windows 盘符或 UNC 路径（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
+				// Windows 分隔符下的逃逸与盘符/UNC 同属「CP 放行、Windows 节点必拒」的一类：
+				// 下面那道宿主判据在 Linux 上把 `..\..\etc\passwd` 当普通文件名放行，
+				// 到 Windows 节点才失败。这里提前拒掉，让用户在保存时就看到错误。
+				if escapesUnderWindowsSeparators(trimmed) {
+					return fmt.Errorf("%w: 路径覆盖不得逃出实例工作目录（按 Windows 分隔符语义）（%s = %q）", ErrSettingValueInvalid, target, p)
+				}
 				clean := filepath.Clean(filepath.FromSlash(trimmed))
 				if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 					return fmt.Errorf("%w: 路径覆盖不得逃出实例工作目录（%s = %q）", ErrSettingValueInvalid, target, p)

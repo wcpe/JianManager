@@ -13,11 +13,12 @@ import (
 //
 // 缺陷现场（真机验收 2026-09-23 发现）：
 // `evaluateInstanceMetricRule` 早已支持实例级 metric 规则（补齐），
-//     `CapacityTrendAlerter.Notify` 也按 `target_type="instance"` 查规则；
-//   - 但 `expectedTargetTypeForTrigger` 仍把 `metric` 硬编码为必须 `node` 目标，
-//     且前端 `targetTypeForTrigger` 同规则 → **实例级 metric 规则根本建不出来**。
-//   - 后果：`Notify` 的 `Find(&rules)` 返回空 → 实例维度容量预测即使算出
-//     `exhaustLowDays` 也永远 `return 0`，趋势告警静默失效。
+//
+//	  `CapacityTrendAlerter.Notify` 也按 `target_type="instance"` 查规则；
+//	- 但 `expectedTargetTypeForTrigger` 仍把 `metric` 硬编码为必须 `node` 目标，
+//	  且前端 `targetTypeForTrigger` 同规则 → **实例级 metric 规则根本建不出来**。
+//	- 后果：`Notify` 的 `Find(&rules)` 返回空 → 实例维度容量预测即使算出
+//	  `exhaustLowDays` 也永远 `return 0`，趋势告警静默失效。
 //
 // 本用例断言「实例级 metric 规则可创建」——修复前必失败。
 func TestP3Fix_InstanceMetricRuleIsCreatable(t *testing.T) {

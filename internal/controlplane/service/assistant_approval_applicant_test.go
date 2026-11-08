@@ -59,14 +59,14 @@ func TestSubmitApproval_RejectsZeroApplicant(t *testing.T) {
 	svc := NewApprovalService(db)
 
 	_, _, err := svc.SubmitApproval(SubmitApprovalParams{
-		ApplicantUserID: 0, // 关键：无人
-		ApplicantKind:   model.ApprovalApplicantAgent,
+		ApplicantUserID:  0, // 关键：无人
+		ApplicantKind:    model.ApprovalApplicantAgent,
 		RequireApplicant: true, // 助手委托链：必须有真实用户
-		Action:          "instance_stop",
-		TargetType:      "instance",
-		TargetID:        "1",
-		Payload:         map[string]any{"id": 1},
-		Reason:          "test",
+		Action:           "instance_stop",
+		TargetType:       "instance",
+		TargetID:         "1",
+		Payload:          map[string]any{"id": 1},
+		Reason:           "test",
 	})
 	require.Error(t, err, "applicant=0 必须被拒绝")
 	require.Contains(t, err.Error(), "申请人")

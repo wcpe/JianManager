@@ -209,13 +209,13 @@ func normalizeResourceLimitMB(v int64) int64 {
 
 // CreateInstanceRequest 创建实例请求。
 type CreateInstanceRequest struct {
-	NodeID           uint               `json:"nodeId" binding:"required"`
-	Name             string             `json:"name" binding:"required,min=1,max=128"`
-	Type             model.InstanceType `json:"type" binding:"required"`
-	Role             model.InstanceRole `json:"role"`
+	NodeID uint               `json:"nodeId" binding:"required"`
+	Name   string             `json:"name" binding:"required,min=1,max=128"`
+	Type   model.InstanceType `json:"type" binding:"required"`
+	Role   model.InstanceRole `json:"role"`
 	// Kind 服务端类别：plugin / proxy / binary。留空由 Create 按 type+role 回退推断，
 	// 但各搭建入口应显式传入（它们知道用户的 coreType，比推断准确）。
-	Kind model.InstanceKind `json:"kind"`
+	Kind             model.InstanceKind `json:"kind"`
 	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
 	StartCommand     string             `json:"startCommand"`
 	JDKID            uint               `json:"jdkId"`

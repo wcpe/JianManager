@@ -555,6 +555,7 @@ func isManagedItemKey(key string) bool {
 // 语义对齐能力画像的 `MCSemantics`：仅「运行 Minecraft 服务端（server.properties）」的实例
 // 呈现 startup.* / props.* 受管项。明文排除：
 //   - proxy：BungeeCord/Waterfall/Velocity 使用 config.yml，无 server.properties 语义（W6 画像 MCSemantics=false）；
+//
 // beacon：配套服务角色，走各自画像；
 //   - generic 类型：通用二进制。
 //
@@ -581,6 +582,7 @@ func instanceMCSemantics(t model.InstanceType, r model.InstanceRole) bool {
 	}
 	return true
 }
+
 // truncatePreview 截断过长的预览文本（按 rune 计数，避免截断 UTF-8）。
 func truncatePreview(s string, max int) string {
 	if max <= 0 {

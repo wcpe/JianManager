@@ -3,8 +3,8 @@ package service
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"

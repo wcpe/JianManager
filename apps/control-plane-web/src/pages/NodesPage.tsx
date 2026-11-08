@@ -50,7 +50,6 @@ import {
   type ProcessInstanceRef,
 } from '@/components/views/nodes/NodeProcessPanel'
 import NodeArtifactCacheTab from '@/components/nodes/NodeArtifactCacheTab'
-import NodeLogAcqPanel from '@/components/NodeLogAcqPanel'
 import NodeProxyTab from '@/components/nodes/NodeProxyTab'
 import NodeProbeVersionTab from '@/components/nodes/NodeProbeVersionTab'
 import DangerConfirm from '@/components/views/common/DangerConfirm'
@@ -124,10 +123,6 @@ function readNodesLayout(searchParams: URLSearchParams): NodesLayout {
   return 'list'
 }
 
-
-/** 右栏分段（§3.3 + + ）：概览/实例/JDK/缓存/端口/代理/日志采集/探针/监控/坏节点修复。 */
-type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'logAcq' | 'probe' | 'monitor' | 'repair'
-const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'runtime', 'cache', 'ports', 'proxy', 'logAcq', 'probe', 'monitor', 'repair']
 
 /** 从 URL `?tab=` 解析激活分段（可寻址；非法值回退默认 overview）。 */
 function readDetailTab(searchParams: URLSearchParams): DetailTab {

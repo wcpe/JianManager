@@ -308,27 +308,6 @@ var nodeMetricAliases = map[string]string{
 	"iowait": model.MetricNodeIOWait, "io_wait": model.MetricNodeIOWait,
 	model.MetricNodeIOWait: model.MetricNodeIOWait,
 
-	// 日志采集面。每个键都给出**可读别名**：规则是运维手写的，
-	// 逼他们背 log_state_file_growth_bytes_per_sec 这种长名会直接导致写错而静默不告警。
-	"log_state_size": model.MetricLogStateFileSize, "log_state_bytes": model.MetricLogStateFileSize,
-	model.MetricLogStateFileSize: model.MetricLogStateFileSize,
-	"log_state_growth":           model.MetricLogStateFileGrowth, "log_index_growth": model.MetricLogStateFileGrowth,
-	model.MetricLogStateFileGrowth: model.MetricLogStateFileGrowth,
-	"log_persist_write":            model.MetricLogPersistWrite, "log_write_rate": model.MetricLogPersistWrite,
-	model.MetricLogPersistWrite: model.MetricLogPersistWrite,
-	"log_wal_backlog":           model.MetricLogWALBacklog, "wal_backlog": model.MetricLogWALBacklog,
-	model.MetricLogWALBacklog: model.MetricLogWALBacklog,
-	"log_wal_paused":          model.MetricLogWALPaused, "wal_paused": model.MetricLogWALPaused,
-	model.MetricLogWALPaused:        model.MetricLogWALPaused,
-	"log_delivery_failure":          model.MetricLogDeliveryFailRate,
-	model.MetricLogDeliveryFailRate: model.MetricLogDeliveryFailRate,
-	"log_verify_backoff":            model.MetricLogVerifyBackoff, "verify_backoff": model.MetricLogVerifyBackoff,
-	model.MetricLogVerifyBackoff: model.MetricLogVerifyBackoff,
-	"log_slow_sql":               model.MetricLogSlowSQLCount, "slow_sql": model.MetricLogSlowSQLCount,
-	model.MetricLogSlowSQLCount: model.MetricLogSlowSQLCount,
-	"log_slow_sql_max":          model.MetricLogSlowSQLMaxMs, "slow_sql_max_ms": model.MetricLogSlowSQLMaxMs,
-	model.MetricLogSlowSQLMaxMs: model.MetricLogSlowSQLMaxMs,
-
 	// 百分比口径的节点资源键：nodes 表存 0..1 分数，而阈值是百分比。
 	// 用这些键可以写出「磁盘 > 85」这种直觉阈值；旧键（disk/memory/cpu）语义**保持不变**，
 	// 因为改它会悄悄放大全部存量规则的阈值（见 getNodeMetric 的量纲说明）。
@@ -393,8 +372,7 @@ func saturationPercent(usedKey string, used, limit *float64) (float64, bool) {
 	// 投递失败率同理（unit=pct，0..100）：「失败率饱和到 100%」本身就是规则想表达的意思，
 	// 它没有配对的「上限」序列，若不按百分比处理，饱和度型失败率规则会静默永不触发。
 	switch usedKey {
-	case model.MetricNodeCPUPct, model.MetricInstCPUPct, model.MetricNodeIOWait,
-		model.MetricLogDeliveryFailRate:
+	case model.MetricNodeCPUPct, model.MetricInstCPUPct, model.MetricNodeIOWait:
 		return *used, true
 	}
 	return 0, false

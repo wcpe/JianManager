@@ -193,3 +193,45 @@ export function parseChannelIds(raw: string | null | undefined): number[] {
     return []
   }
 }
+
+// ── QQ 网关状态展示（FR-494）──
+export type QQGatewayStatusKey = 'connected' | 'connecting' | 'disconnected' | 'error' | 'unknown'
+export function qqGatewayLevel(status: string | undefined): StatusLevel {
+  switch (status) {
+    case 'connected':
+      return 'success'
+    case 'connecting':
+      return 'warning'
+    case 'error':
+      return 'danger'
+    case 'disconnected':
+    default:
+      return 'neutral'
+  }
+}
+
+export function qqGatewayStatusKey(status: string | undefined): QQGatewayStatusKey {
+  switch (status) {
+    case 'connected':
+    case 'connecting':
+    case 'disconnected':
+    case 'error':
+      return status
+    default:
+      return 'unknown'
+  }
+}
+
+export function qqGatewayFatalHintKey(lastError: string | undefined): string | null {
+  const text = (lastError ?? '').trim()
+  if (text === '') return null
+  if (text.includes('4014') || text.includes('1<<25') || text.includes('GROUP_AND_C2C_EVENT')) {
+    return 'alerts.qqGatewayHint4014'
+  }
+  return null
+}
+
+export function shortGroupOpenid(openid: string): string {
+  const v = (openid ?? '').trim()
+  return v.length <= 8 ? v : `${v.slice(0, 8)}…`
+}

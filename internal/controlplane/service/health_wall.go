@@ -222,9 +222,11 @@ func (s *PlatformObservabilityService) healthWallAlertCounts() (map[uint]int, er
 // 触发类型家族（node_offline 恒为节点，实例家族恒为实例）。
 //   - 节点维度：target 直接作节点 ID；
 //   - 实例维度：经 instances 映射回所属节点，映射不到则不归因；
+//
 // 维度完全缺失（scope/target_type 皆空，如前存量行的 baseline/saturation）：node 与
-//     instance 的 target_id 数字空间重叠，无法安全判别，故不归因（宁可少计，也不把 instance 的
-//     target_id 当节点 ID 错归因到某台节点）。
+//
+//	instance 的 target_id 数字空间重叠，无法安全判别，故不归因（宁可少计，也不把 instance 的
+//	target_id 当节点 ID 错归因到某台节点）。
 func attributeAlertNode(targetID uint, targetType, scope, triggerType string, instanceNodeID *uint) (uint, bool) {
 	if targetType == "node" || scope == "node" || triggerType == model.AlertTriggerNodeOffline {
 		return targetID, true

@@ -569,7 +569,7 @@ func runWorker() {
 	if adopted, cleaned := manager.RestoreAdoptedRuntimes(); adopted > 0 || cleaned > 0 {
 		slog.Info("就地收养状态已恢复", "restored", adopted, "cleaned", cleaned)
 	}
-	phaseDone(startup.PhaseProcessRecover)
+	startup.Mark("processRecover")
 
 	// 运行期周期孤儿扫描：随 Worker 常驻，持续兜底 wrapper 死/Java 活、direct 孤儿、
 	// docker 残留，按策略处置（默认 warn 只告警，可配 auto 自动清理）。补齐「仅启动时清理」的缺口。

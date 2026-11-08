@@ -8,13 +8,13 @@ import {
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { formatRelativeTime } from '@/lib/relative-time'
+import { formatRelativeTime } from '@/lib/shared/relative-time'
 import {
   qqGatewayFatalHintKey,
   qqGatewayLevel,
   qqGatewayStatusKey,
   shortGroupOpenid,
-} from './alert-helpers'
+} from '@/lib/alerts/alert-helpers'
 
 /** 折叠区里最多列几个群——超过部分只报总数（后端默认一页 20 条，全展开会把对话框撞满）。 */
 const GROUP_PREVIEW_LIMIT = 8

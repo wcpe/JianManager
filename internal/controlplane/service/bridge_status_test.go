@@ -329,7 +329,7 @@ func TestBridge_BusinessStatus_DomainsSorted(t *testing.T) {
 // probeConnected=false + stale=true —— 同一实例两块面板同时展示就互相打脸。
 //
 // 修法：连入事件到来时清缓存，而不是在查询路径上每次反查连接态
-//（后者会让 TTL 内的每次命中都多打一次 QueryBridgeStatus，代价过大）。
+// （后者会让 TTL 内的每次命中都多打一次 QueryBridgeStatus，代价过大）。
 func TestBridge_BusinessStatus_InvalidatedOnProbeReconnect(t *testing.T) {
 	worker := &bridgeFakeWorker{bizStatusResp: &workerpb.QueryBusinessStatusResponse{
 		Success: true, Connected: true, FetchedAtMs: time.Now().UnixMilli(),

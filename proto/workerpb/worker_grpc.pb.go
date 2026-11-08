@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: worker.proto
+// source: proto/worker.proto
 
 package workerpb
 
@@ -5273,5 +5273,5 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "worker.proto",
+	Metadata: "proto/worker.proto",
 }

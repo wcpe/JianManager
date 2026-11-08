@@ -28,18 +28,18 @@ const (
 // `payload` 是**不透明载荷**：JM 只做 JSON 透传，不解析、不校验业务内容（§5）。
 // 未导出成员是缓冲内部状态，不参与序列化。
 type BusinessFrame struct {
-	Node         string          `json:"node,omitempty"`
-	Instance     uint            `json:"instance,omitempty"`
-	InstanceName string          `json:"instanceName,omitempty"`
-	Domain       string          `json:"domain"`
+	Node         string `json:"node,omitempty"`
+	Instance     uint   `json:"instance,omitempty"`
+	InstanceName string `json:"instanceName,omitempty"`
+	Domain       string `json:"domain"`
 	// Action 域内动作（deposit / mail_sent …）。JM 只透传，不校验、不枚举。
 	// 下游（Loom）用它区分同一域内的不同事件类型，不必自己挖 payload。
-	Action       string          `json:"action,omitempty"`
-	Topic        string          `json:"topic,omitempty"`
-	DedupKey     string          `json:"dedupKey,omitempty"`
-	Seq          int64           `json:"seq"`
-	OccurredAt   int64           `json:"occurredAt"`
-	Payload      json.RawMessage `json:"payload"`
+	Action     string          `json:"action,omitempty"`
+	Topic      string          `json:"topic,omitempty"`
+	DedupKey   string          `json:"dedupKey,omitempty"`
+	Seq        int64           `json:"seq"`
+	OccurredAt int64           `json:"occurredAt"`
+	Payload    json.RawMessage `json:"payload"`
 
 	// rendered 是预渲染的整帧 SSE 字节（`id:` + `event:` + `data:` + 空行）。
 	// 一次序列化、全部订阅者共享只读切片：把「每订阅者各序列化一次」的 CPU 从扇出热路径上移走。

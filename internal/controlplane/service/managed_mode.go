@@ -66,8 +66,8 @@ const managedProviderName = "jianmanager"
 //
 // **探针完全不消费该字段**（只在 JSON 编解码与 toString 里出现），真实能力协商走
 // hello / core.bridge_status 的 capabilities。这里填全仍有两个用处：
-//   1. 人读排障：一眼看出这条身份是按哪个协议代写的；
-//   2. 未来若探针改为消费，不至于下发空数组把能力关掉。
+//  1. 人读排障：一眼看出这条身份是按哪个协议代写的；
+//  2. 未来若探针改为消费，不至于下发空数组把能力关掉。
 var managedCapabilities = []string{"metric_push", "config_push", "config_state", "mcp_bridge"}
 
 // ManagedModeService 生成托管身份文件。
@@ -82,8 +82,10 @@ func NewManagedModeService() *ManagedModeService { return &ManagedModeService{} 
 // BuildIdentity 组装一份托管身份。
 //
 // @param endpoint    探针反向 WS 接入地址，形如 ws://<host>:9102/ws/plugin-bridge。
-//                    必须带 `ws://` 前缀——探针只支持明文 ws，`wss://` 会在建连期被拒绝。
-//                    地址里**不要自带 query**：探针会整段丢弃并用自己的 `token=&instance=` 覆盖。
+//
+//	必须带 `ws://` 前缀——探针只支持明文 ws，`wss://` 会在建连期被拒绝。
+//	地址里**不要自带 query**：探针会整段丢弃并用自己的 `token=&instance=` 覆盖。
+//
 // @param instanceUUID 实例 UUID；它同时是握手 query 的 `instance=` 与所有上行帧的 `instance` 字段。
 // @param credential  不透明凭据（此处为 scope=plugin-bridge 的 JWT）。
 // @return 身份结构体；调用方再经 MarshalIdentity 取 JSON 文本。

@@ -112,10 +112,10 @@ type AuditFilter struct {
 	// 用于「某个节点/实例被改过什么」这类按对象回溯；与 TargetType 合用才精确。
 	TargetID *string
 	From     *time.Time
-	To         *time.Time
-	Limit      int
-	Page       int
-	PageSize   int
+	To       *time.Time
+	Limit    int
+	Page     int
+	PageSize int
 	// 助手调用串联过滤（§9）：任一非空即按该维度收敛。
 	// 有了这三项，运维才能回答「某一轮助手到底执行了哪些写操作」。
 	ConversationID *uint

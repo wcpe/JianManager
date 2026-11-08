@@ -80,12 +80,12 @@ func (p ManagedConfigPush) BuildConfigPushPayload() (json.RawMessage, error) {
 // 它是 `rejected` 的 error 前缀（基线不符时探针回 `rejected` 且 error 以 conflict 开头）。
 // 判错这两者会导致"版本冲突"被当成"协议错误"处理。
 type ManagedConfigApplied struct {
-	ConfigVersion int64             `json:"configVersion"`
-	Result        string            `json:"result"`
-	Effective     map[string]any    `json:"effective,omitempty"`
-	SelfCheck     map[string]any    `json:"selfCheck,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	AppliedAt     int64             `json:"appliedAt,omitempty"`
+	ConfigVersion int64          `json:"configVersion"`
+	Result        string         `json:"result"`
+	Effective     map[string]any `json:"effective,omitempty"`
+	SelfCheck     map[string]any `json:"selfCheck,omitempty"`
+	Error         string         `json:"error,omitempty"`
+	AppliedAt     int64          `json:"appliedAt,omitempty"`
 }
 
 // 配置应用结果码（探针侧 ConfigPushOutcome.result 的原值）。
@@ -140,18 +140,18 @@ type ManagedMetricSnapshot struct {
 // ManagedMetrics 是 metric_snapshot.metrics 的字段集（协议规格 §7.2 的投影表）。
 // 全部用指针：缺失与 0 必须能区分（见上）。
 type ManagedMetrics struct {
-	TPS             *float64                  `json:"tps,omitempty"`
-	MSPTAvg         *float64                  `json:"msptAvg,omitempty"`   // 秒
-	MSPTP95         *float64                  `json:"msptP95,omitempty"`   // 秒
-	PlayersOnline   *int32                    `json:"playersOnline,omitempty"`
-	HeapUsed        *int64                    `json:"heapUsed,omitempty"`  // 字节
-	HeapMax         *int64                    `json:"heapMax,omitempty"`   // 字节
-	Threads         *int32                    `json:"threads,omitempty"`
-	CPULoad         *float64                  `json:"cpuLoad,omitempty"`   // 0~1
-	UptimeSeconds   *float64                  `json:"uptimeSeconds,omitempty"`
-	GCCountTotal    *float64                  `json:"gcCountTotal,omitempty"`
-	GCTimeMillis    *float64                  `json:"gcTimeMillis,omitempty"`
-	Worlds          map[string]ManagedWorldStat `json:"worlds,omitempty"`
+	TPS           *float64                    `json:"tps,omitempty"`
+	MSPTAvg       *float64                    `json:"msptAvg,omitempty"` // 秒
+	MSPTP95       *float64                    `json:"msptP95,omitempty"` // 秒
+	PlayersOnline *int32                      `json:"playersOnline,omitempty"`
+	HeapUsed      *int64                      `json:"heapUsed,omitempty"` // 字节
+	HeapMax       *int64                      `json:"heapMax,omitempty"`  // 字节
+	Threads       *int32                      `json:"threads,omitempty"`
+	CPULoad       *float64                    `json:"cpuLoad,omitempty"` // 0~1
+	UptimeSeconds *float64                    `json:"uptimeSeconds,omitempty"`
+	GCCountTotal  *float64                    `json:"gcCountTotal,omitempty"`
+	GCTimeMillis  *float64                    `json:"gcTimeMillis,omitempty"`
+	Worlds        map[string]ManagedWorldStat `json:"worlds,omitempty"`
 }
 
 // ManagedWorldStat 是逐世界的区块 / 实体 / 方块实体计数。

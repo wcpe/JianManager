@@ -50,7 +50,6 @@ func (h *StatsHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/stats/overview", h.Overview)
 	rg.GET("/stats/instances", h.Instances)
 	rg.GET("/stats/nodes", h.Nodes)
-	rg.GET("/stats/logs", h.Logs)
 	rg.GET("/stats/crashes", h.Crashes)
 	rg.GET("/stats/changes", h.Changes)
 }
@@ -258,59 +257,6 @@ func (h *StatsHandler) Nodes(c *gin.Context) {
 }
 
 // Logs 检索实例或节点日志。
-func (h *StatsHandler) Logs(c *gin.Context) {
-	from, to, stErr := parseStatsTimeRange(c, service.StatsLogsDefaultRange,
-		service.StatsLogsMaxRange, service.StatsLogsMaxRangeLabel)
-	if stErr != nil {
-		writeStatsError(c, stErr)
-		return
-	}
-	page, pageSize, stErr := parseStatsPagination(c)
-	if stErr != nil {
-		writeStatsError(c, stErr)
-		return
-	}
-	q := service.StatsLogQuery{
-		Level:    c.Query("level"),
-		Keyword:  c.Query("q"),
-		From:     from,
-		To:       to,
-		Page:     page,
-		PageSize: pageSize,
-	}
-	instID, hasInst, stErr := parseStatsOptionalID(c.Query("instanceId"))
-	if stErr != nil {
-		writeStatsError(c, stErr)
-		return
-	}
-	if hasInst {
-		q.InstanceID = &instID
-	}
-	nodeID, hasNode, stErr := parseStatsOptionalID(c.Query("nodeId"))
-	if stErr != nil {
-		writeStatsError(c, stErr)
-		return
-	}
-	if hasNode {
-		q.NodeID = &nodeID
-	}
-	scope, ok := h.resolveScope(c)
-	if !ok {
-		return
-	}
-	res, err := h.stats.QueryLogs(q, scope)
-	if err != nil {
-		if stErr, ok := err.(*service.StatsError); ok {
-			writeStatsError(c, stErr)
-			return
-		}
-		writeStatsInternalError(c, err)
-		return
-	}
-	writeStatsPaginationHeaders(c, res.Pagination)
-	c.JSON(http.StatusOK, res)
-}
-
 // Crashes 返回崩溃趋势。
 func (h *StatsHandler) Crashes(c *gin.Context) {
 	days := 0

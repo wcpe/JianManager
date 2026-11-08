@@ -543,23 +543,6 @@ func getNodeMetric(node *model.Node, metric string) float64 {
 	}
 }
 
-// logMetricKeys 是「只存在于时序库、不在 nodes 表」的日志采集面指标键集合。
-//
-// 单独成集合而不是塞进 case 分支的理由：evaluateNodeMetricRule 必须先知道
-// 「这个指标不该从快照取」，才能改走时序路径；两层各写一份判断会出现
-// 「快照返回 -1 但没人去时序取值」的静默不告警。故判据只在这里定义一次。
-var logMetricKeys = map[string]struct{}{
-	model.MetricLogStateFileSize:    {},
-	model.MetricLogStateFileGrowth:  {},
-	model.MetricLogPersistWrite:     {},
-	model.MetricLogWALBacklog:       {},
-	model.MetricLogWALPaused:        {},
-	model.MetricLogDeliveryFailRate: {},
-	model.MetricLogVerifyBackoff:    {},
-	model.MetricLogSlowSQLCount:     {},
-	model.MetricLogSlowSQLMaxMs:     {},
-}
-
 // isSeriesOnlyNodeMetric 判断节点指标是否只能从时序库取（不在 nodes 快照里）。
 //
 // iowait 与全部日志采集面指标同属此类：snapshot 里没有它们，只有心跳写入的时序序列。
@@ -571,8 +554,7 @@ func isSeriesOnlyNodeMetric(ruleMetric string) bool {
 	if metricKey == model.MetricNodeIOWait {
 		return true
 	}
-	_, isLog := logMetricKeys[metricKey]
-	return isLog
+	return false
 }
 
 // nodeSnapshotPercent 把节点快照的分数读数换算为百分比（0..100）。

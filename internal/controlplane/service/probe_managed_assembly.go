@@ -51,11 +51,11 @@ func (p *ProvisionService) buildManagedIdentity(instanceUUID string, wsPort int)
 // buildManagedProbeConfig 生成托管模式下的探针 config.yml。
 //
 // ## 与独立模式版的差异（都不是风格问题）
-// 1. **不写 bridge 段**：托管模式下连接目标来自身份文件，`bridge.*` 会被探针忽略；
-//    写进去只会让排障时误以为还是独立模式（且迁移逻辑会认为存在残留）。
-// 2. **metrics.enabled 仍写 true**：这是历史行为，但托管模式下探针会**强制关断**监听面，
-//    不看这个值。保留 true 是为了让“以后退回独立模式”时立即恢复监控，不必再改文件。
-//    （探针侧零监听是按运行模式判定的，不是按配置值——见 managed-mode.md §3.9）
+//  1. **不写 bridge 段**：托管模式下连接目标来自身份文件，`bridge.*` 会被探针忽略；
+//     写进去只会让排障时误以为还是独立模式（且迁移逻辑会认为存在残留）。
+//  2. **metrics.enabled 仍写 true**：这是历史行为，但托管模式下探针会**强制关断**监听面，
+//     不看这个值。保留 true 是为了让“以后退回独立模式”时立即恢复监控，不必再改文件。
+//     （探针侧零监听是按运行模式判定的，不是按配置值——见 managed-mode.md §3.9）
 func buildManagedProbeConfig(probePort int) string {
 	return buildServerProbeConfig(probePort, "")
 }

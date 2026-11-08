@@ -59,6 +59,7 @@ func (s *AgentTokenService) ListAccessibleInstances(p *AgentPrincipal, optionalN
 //   - bot id 与某个实例 id 恰好相同时「碰巧通过」——这掩盖了缺陷；
 //   - 不同时解析失败，回退成 `{InstanceID: botID}`，再被判越权，返回笼统的
 //     「能力/scope 不足」——即使调用者是平台管理员、bot 就在他完全可访问的实例上。
+//
 // 两种表现都不指向真实原因，排障成本极高。
 //
 // 存在性收敛为 ErrBotNotFound 由调用方决定如何对外表达（授权路径一律不泄露存在性）。
