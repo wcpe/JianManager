@@ -2,7 +2,7 @@
 
 - 状态：已采纳
 - 日期：2026-11-05
-- 相关：[`docs/logs-vl-capability-matrix.md`](../logs-vl-capability-matrix.md)、[`docs/logs-architecture-audit.md`](../logs-architecture-audit.md)
+- 相关：本文合并了 2026-11-05 那次 VictoriaLogs 能力实测与架构审计的结论（原独立对照表/审计稿已删除）
 
 ## 背景
 
