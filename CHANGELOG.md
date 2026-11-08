@@ -285,6 +285,39 @@
 ### 变更
 - **MCP 端点在 Streamable HTTP 路径上去会话化，运维视图由会话维度改为 Token 维度（FR-489，ADR-096）**：原模型把「会话」做成协议一等公民（`initialize` 建会话并以响应头 `Mcp-Session-Id` 下发，后续请求必须携带），本质是「服务端必须记得客户端」的契约，**通道因此脆弱**——CP 进程重启（部署/崩溃/滚动升级）或会话空闲到期后，客户端手里的 session id 即失效，后续请求得到 `404 SESSION_GONE`；而主流 MCP 客户端收到该错误后不会自动重发 `initialize`，通道**永久卡死**，只能人工重连。方向亦与 MCP 规范演进相悖（会话无状态化提案 SEP-2567 已合并）。会话快照还带来一处**授权缺口**：`tools/list` / `tools/call` 的能力判定取初始化时写进会话的 principal 快照，而每请求其实已由鉴权链重新解析过 principal——二者不一致时以快照为准，意味着 **Token 被吊销、scope 被下调之后既有会话仍按旧能力放行**。现 `POST /api/v1/mcp` 去会话：**不读也不写** `Mcp-Session-Id`，`initialize` 直接返回结果，授权一律取**每请求重建的 principal**（Token 吊销/降权在下一个请求即生效）；`GET /api/v1/mcp` 改为 **405** + `Allow: POST`，`DELETE` 注册后回 **405** + `Allow: POST`（无会话可终止，与 `GET` 对称）。**SSE 兼容路径保留**（`/sse` + `/message`），其连接态收敛为**传输连接登记**——那是该传输能工作的前提（`/message` 必须把工具结果回推到已建立的 SSE 响应流），不承载超时、并发上限或能力快照。随之移除协议会话的全部运维语义：空闲与绝对超时、超时巡检、全局与每 Token 并发上限、会话列表与踢线、`SESSION_GONE` 与超限 429 响应、`mcp.session.open/close/kick` 流水。**客户端兼容**：携带旧 `mcp-session-id` 的调用被**忽略而非拒绝**，故存量客户端在会话失效后不再卡死，而是自动恢复正常。**配置项移除**：`mcp.idle_timeout` / `mcp.absolute_timeout` / `mcp.max_global_sessions` / `mcp.max_sessions_per_token` 失去意义，配置结构、示例配置 `configs/control-plane.yml` 同步移除，全仓已无这四项残留（不留「配置里有但代码不读」的项；`docker-compose.yml` 本就未配置这些键）。**管理端点替换**：`GET/DELETE /api/v1/agent/mcp/sessions` 由 `GET /api/v1/agent/mcp/activity?window=`（默认 `24h`，允许 `1h`~`168h`）取代，按 `agent_call_logs` 在窗口内 `GROUP BY token_id` 聚合出 Token 级活动（最近活动 / 最近操作 / 调用数 / 失败数 / 来源 IP / 客户端分布），**不依赖任何进程内状态**故跨 CP 重启连续；前端「MCP 会话」页改为「MCP 活动」（`McpActivityPage`，路由 `/mcp-activity`，旧路径保留重定向），踢线按钮改为「吊销 Token」（无会话可踢）。
 
+- **日志轮转收敛到代码一处：删除外部 logrotate 部署资产与两份一次性审计稿（2026-11-07）**：轮转早已由进程内的 `internal/platform/rollog` 完成（`rename` O(1) + 异步 gzip + `MaxBackups`），外部 logrotate 片段在 2026-10-29 之后只是「兜底档」，却仍以**部署资产**的形式存在并被安装脚本主动往 `/etc/logrotate.d/` 里装——两套阈值、两套保留策略，没有谁守得住它们同步。现**删掉 `configs/logrotate.d/jianmanager`** 及全部引入点：安装脚本里的自动安装段、内嵌副本（`make embed-install-scripts` 同步）、`rollog` 注释里指向它的阈值说明、`ARCHITECTURE` §11 的「降级为外部兜底」表述。顺带删掉 `docs/logs-architecture-audit.md` 与 `docs/logs-vl-capability-matrix.md` 两份**一次性**实测/审计稿（结论已分别沉淀进 ADR-102、`API.md` 的 Facets 口径、`vlrange` 代码注释与 `fields_endpoint_test.go`），仅 ADR-102 的「相关」行做了改写。
+  **删除时发现的一处真缺陷（已随删除消失）**：`scripts/install-worker.sh` 的自装段引用 `$SCRIPT_DIR`，而该脚本**从未定义过**这个变量（`git log -S` 无记录），又跑在 `set -eu` 下 ⇒ 非 root 执行到此行即 `SCRIPT_DIR: unbound variable` 退出，恰好把注释里声明的「非 root 只提示不失败」变成了「非 root 安装失败」。删段即修。
+  **遗留风险（已于同日后续轮次修复，见下条）**：`scripts/cp-lifecycle.sh` 仍以 `nohup "$BINARY" "$CONFIG" >>$LOG_FILE` 重定向到 `$INSTALL_DIR/logs/control-plane.log`——该文件由 shell 创建，rollog 轮转不到它（rollog 只轮转 `<dataRoot>/var/log/control-plane.log`），删除 logrotate 后它在非 systemd 部署下**重归无界增长**。这正是 2026-10-27 事故的同一形态。
+  **未随文档删除而留存的一项**：原审计稿末尾「同一概念多处实现」的四条通用纪律（概念出现第二遍就收成类型 / 跨层概念必须有跨层用例 / 注释里的数值前提要能被验证 / 夹具必须用真实形状）**未进 `CONVENTIONS.md`**，目前随文档一起消失了。
+
+- **CP/Worker 进程日志保留能力补齐：按天保留 + 四项可配 + 两个真实缺陷（2026-11-07）**：原先只有「按大小轮转 + 保留 N 份 + gzip + rename」，**缺按天保留**，且四项阈值全是编译期常量（`docs/ARCHITECTURE.md` 的「已知遗留」里占着一条）。份数上限的单维度问题很具体：事故期一小时转 5 次就只剩 1 小时历史，平常一周不轮转就堆着几个月——同一份配置在不同负载下含义完全不同。
+  现新增 `MaxAgeDays`（默认 30 天，**负值关闭**），与 `MaxBackups` 是**两个独立上限、任一命中即删**；时间判据取**档名里的轮转时间戳**而非 mtime（mtime 会被解压/备份/rsync 改晚，一份早该删的日志就能无限留存）。四项旋钮经 `log.max_size_mb` / `log.max_backups` / `log.max_age_days` / `log.compress` 开放给 CP 与 Worker，零值回退内置默认，旧配置不需改。
+  **顺带修掉两个真实缺陷**：
+  ① **`DisableCompress` 时 `MaxBackups` 完全不生效**——保留清理当时挂在压缩协程里顺带做，而关压缩时该协程根本不启动，于是「保留 N 份」静默作废、磁盘无界增长；默认配置（压缩开启）下一切正常，所以既有的 `TestRetention` 测不出来。现把压缩与清理统一成一条维护队列，**清理无条件执行**，且与压缩解耦。
+  ② **同秒轮转档排序反转、保留策略删错文件**——同秒多次轮转会产出 `app-<ts>.log` 与 `app-<ts>-1.log`，旧实现按字符串排序，而 `-`(0x2D) < `.`(0x2E)，于是无序号的那个被当成更早的，**留下更旧的、删掉更新的**。现改为按解析出的时间戳 + 同秒序号排序。
+  **行为变化（有意）**：维护顺序调为**先清理后压缩**（压缩一份马上要删的 1 GiB 文件是纯浪费）；空转不再产生无意义任务。
+  **另一处封顶**：`scripts/cp-lifecycle.sh` 的 `nohup >> logs/control-plane.log` 已改为 stdout 丢 `/dev/null`、stderr 仍落盘且每次 start 前 `mv` 成 `<name>.prev`（只留 1 份）——该文件由 shell 创建、rollog 轮转不到，是删掉 logrotate 后**最后一个无界增长口子**。同时修复了上一轮在本条上文登记的遗留风险。
+  **验证**：`internal/platform/rollog` 全绿（`-race`）；新增 6 条用例（按天保留、按天保留关闭、关压缩下的保留、同秒排序、不删认不得的文件、默认值填充）。**三条关键用例均做变异验证**：把清理改回挂在压缩里 → `TestRetentionWithoutCompress` 红；把天数判据改用 mtime → `TestRetentionByAge` 红；把排序改回字符串 → `TestRetentionKeepsNewestWhenSameSecond` 红，逐一还原后复绿。`scripts/cp-lifecycle.test.sh` 新增 4 条源码契约断言（含顺序断言），并把 `nohup >>` 与「删掉 rotate 调用」两种旧形态变异验证至确定性红。`go build ./...` 与 `go vet` 退出 0。
+
+- **【真机压测暴露】轮转档名在「同秒 + 已压缩」时重叠，导致两份不同数据撞名（2026-11-08）**：用真实的 `internal/platform/rollog` 编译真实二进制，在真实文件系统上跑 **8 协程并发写入 + 真实 `kill -9`**，磁盘现场出现：
+  ```
+  control-plane-20261108-105849.log      204900 字节  seq 114314..112882
+  control-plane-20261108-105849.log.gz     3342 字节  seq 113641..112703
+  control-plane-20261108-105849.log.gz.tmp    10 字节  （只有 gzip 头）
+  ```
+  两份内容的序号区间**毫无重叠**——它们是两批不同的日志，却共用了同一个基础名。
+  **根因**：`nextRotatedName` 只检查候选名的 `.log` 是否存在；而轮转档会被异步压缩成 `.log.gz`（`.log` 随之消失），于是同一秒内再次轮转时“看起来名字空着”，又被发放一次。更严重的后果不是名字难看：`parseRotatedName` 对两者都解出 `(when, seq=0)`，**保留策略无法区分先后，可能删错其中一份**。
+  **为何之前没发现**：单元测试写入速率慢，压不出“同一秒多次轮转”；既有用例也从未构造过“同名 `.gz` 已存在”这个状态。这是典型的**「默认配置/默认速率下的绿灯」不等于「压力下也绿灯」**。
+  **修法**：`nextRotatedName` 改用 `rotatedNameTaken`，同时检查 `.log` / `.log.gz` / `.log.gz.tmp` 三种形态（`.tmp` 必查——压缩未完成时 `.gz` 尚不存在，但 `.tmp` 已占着名字）。后缀常量化（`compressSuffix` / `tmpSuffix`），命名占领检查与压缩实现看**同一套后缀**。
+  **验证**：新增 `TestNextRotatedNameAvoidsCompressedSibling`（三种占位形态各一例）与 `TestNextRotatedNameUniqueAcrossSiblingForms`；变异回“只查 `.log`”后前者红（报「同秒基础名已被 .gz 占用，却仍发放了无序号名」），还原复绿。真机复测：修复后 `kill -9` 现场为 `-1`..`-5` 全部带序号、**无撞车**；再跑 3 轮（16 协程/100KB 阈值）均无撞车，归档数稳定停在 `MaxBackups=8`。
+
+- **孤儿 `.gz.tmp` 永久残留：压缩中途崩溃 + 源文件被保留策略删掉（2026-11-08）**：上一条修的是"占名"，本条修的是那个 `.tmp` 本身的下场。
+  压缩中途崩溃只留下 `.log` + `.log.gz.tmp`。下次启动时：`.log` 还在 → 补压任务重做，`.tmp` 被 `O_TRUNC` 覆盖后随 rename 发布自然消化；**但 `.log` 已不在时，这个 `.tmp` 就永远没人管了**——`.gz.tmp` 既不在 `listRotated` 的 glob（只看 `.log` / `.log.gz`）里，也不受任何保留规则约束。
+  这个组合不是理论风险，而是上一轮改动**亲手造出来的**：维护顺序被调成「先清理后压缩」，于是「超期的 `.log` 被删、它的 `.tmp` 留在原地」成为一个自然形成的状态。真机实测：预置该组合后启动一次，目录里就真的只剩一个 4 字节的 `.log.gz.tmp`，验证程序报「孤儿 .tmp 数量: 1」。
+  **修法**：① `compressOne` 在发现源 `.log` 已不存在时，顺带删掉对应的 `.tmp`；② 新增 `sweepOrphanTmp` 在每次启动的首次维护里做一次目录级扫描（补压路径由"存在的 `.log`"驱动，天生看不到这类孤儿）；③ 顺带改正那句与实现不符的注释（"下次启动的补压扫描会重新处理原 `.log`"——只在 `.log` 还在时成立）。
+  **验证**：新增 `orphan_tmp_test.go` 三条（源文件没了要清、源文件还在要能正常压缩、只剩 `.gz` 时也要清）。变异回"去掉 sweep 调用"后前两条确定性转红（"超时未等到：孤儿 .tmp 被清扫"），还原复绿。
+  **一条诚实的记录**：我最初想给「sweep 不检查源文件就删」也做一个转红变异，但它**不会造成任何可观测后果**（`compressOne` 会 `O_CREATE|O_TRUNC` 重建 `.tmp`，压缩结果仍正确）。我没有为它编造断言，而是把测试意图改成锁「端到端内容一致性」，并在用例注释里写明它锁不住什么——**不可验证的约束不该伪装成被测过的约束**（与 CONVENTIONS「注释里的数值前提要能被验证」同源）。
+
 ### 已知问题（发布前待处置）
 - （暂无 FR-484 相关遗留；原「高密度下采集期瞬时内存峰值」已随阶段5 的三处累积结构加界收敛：
   64/150 源峰值 73.5/77.0MiB，且不再随源数线性增长。）
