@@ -96,6 +96,29 @@
   `proxy.log.N.lck`（N≥1、0 字节）会被 glob 匹配但按**空归档**无害消化（0 事件、无缺口、记已导入）；
   单行超长不做额外限制（有界性由「单轮事件数预算 + 跨轮续读」保证，与 gzip 路径同源）。
 
+> ⚠️ **2026-11-08 重核（本节上文的纯文本归档导入能力已被删除）**
+>
+> 上文「纯文本轮转归档导入（本项新增能力）」描述的是 `ArchiveImporter` 时代的实现。
+> 2026-11-03 起 ingest 只走 WAL（`FR-474` 已标 ❌ 已废弃、ArchiveImporter 整体删除），
+> 当前代码里 `ImportArchivesNow` / `rotated_text` / `IsArchiveSegmentKind` **均已不存在**。
+>
+> **所以真正的问题变成：BungeeCord 的纯文本轮转历史现在到底采不采得到？**
+> 2026-11-08 在真机（`bungee-main` / inst:318）实测结论：
+>
+> | 项 | 结果 |
+> |---|---|
+> | 活文件 `proxy.log.0` 新行入 VL | ✅ 采到 |
+> | 轮转档 `proxy.log.1` 的**历史内容**入 VL | ❌ **采不到** |
+> | `proxy.log.1` 是否被发现并登记 | ✅ 登记了（registry 有记录） |
+>
+> 根因：`read_from_head` 未配置（默认 `false`），而 `tailer.Collector` 在
+> `ReadFromHead == false` 时把新发现文件的位点直接设为 **EOF**（`collector.go:244-249`）。
+> 所以 `proxy.log.1` 那 6MB 历史被跳过，只采它们被发现之后新追加的行。
+>
+> **结论（供 PR 登记）**：需 `read_from_head: true` 才能采到轮转档历史，或另做归档回读。
+> `DefaultPathsFor` 的 `proxy.log.*` glob 本身没问题（纯文本轮转档能被发现），
+> 缺的是「发现之后从哪读」这一段。修之前不要再声称「纯文本轮转已支持」。
+
 **缺陷 B：手动入口运维不可达**（真实、已修）
 - CP 新增 `POST /api/v1/nodes/:id/log-runtime/ingest/import-archives`，经反向隧道调 Worker
   既有 gRPC `LogImportArchives`；纪律同 clear-identity-conflicts：操作人取自认证上下文、

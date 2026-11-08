@@ -1672,7 +1672,7 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 
 ### 已知遗留（不影响使用，但别当成已完成）
 
-- rollog 的轮转阈值与保留档数仍是**编译期默认**（1 GiB / 5 档），未配置化；要改需重新编译。
+- ~~rollog 的轮转阈值与保留档数仍是**编译期默认**（1 GiB / 5 档），未配置化；要改需重新编译。~~（2026-11-07 已消）`log.max_size_mb` / `log.max_backups` / `log.max_age_days` / `log.compress` 已开放，零值回退默认；同时补齐**按天保留**（此前只有份数上限，份数在不同负载下代表的时长差很多）。
 - 联邦 tail 的 `coverage.complete` 现为 `true`（实时流没有“完整边界”这回事，且它不可分页/导出）；
   若后续要给 tail 加“覆盖已追平”的语义，需在契约里单独定义，**不要**再次借用 Search 的枚举状态。
 
@@ -1690,7 +1690,11 @@ apps/control-plane-web/src/components/DiagnosticsLogDialog.tsx  # 节点诊断�
 
 两处**能力降级是刻意的**（不伪装成能力）：平台日志视图不再提供分页、总条数、任意时间窗——文件上做不到，也不该假装能；要看更早的走面板给出的 `grep` 命令。联邦视图仍保有 Search/Stats/Facets/Tail/Export。
 
-轮转形态：进程内 `rename`（O(1)、零字节复制）→ 后台异步 gzip → 保留 `MaxBackups` 个档。这取代了旧形态下的 logrotate `copytruncate`（每次轮转要读写整个文件；2026-10-27 现场 35GB 就是该风险的实证）。`configs/logrotate.d/jianmanager` 降级为**外部兜底**，仅在进程自轮转失效或旧版二进制上生效。
+轮转形态：进程内 `rename`（O(1)、零字节复制）→ 后台异步 gzip → 保留 `MaxBackups` 个档。这取代了旧形态下的 logrotate `copytruncate`（每次轮转要读写整个文件；2026-10-27 现场 35GB 就是该风险的实证）。**轮转只有这一处实现**：项目不再随包分发外部 logrotate 片段，也没有第二套阈值或外部兜底档需要与之对齐。
+
+**四条保留规则**（`internal/platform/rollog`，CP 与 Worker 共用）：按大小轮转（`max_size_mb`，rename 零复制）、保留份数（`max_backups`）、保留天数（`max_age_days`，按**档名里的轮转时间**而非 mtime）、异步 gzip（`compress`）。份数与天数是**两个独立上限，任一命中即删**。保留清理**不依赖压缩开关**——它是磁盘保护，与「压不压」无关。维护顺序是先清理后压缩：压缩一份马上要删的 1 GiB 文件是纯浪费。
+
+**外部重定向的那一份也已封顶**（2026-11-07）：`scripts/cp-lifecycle.sh`（非 systemd 部署）过去用 `nohup >> logs/control-plane.log` 再落一份，而该文件由 shell 创建、shell 持 fd，**rollog 轮转不到**。现改为 stdout 丢 `/dev/null`（进程内 rollog 已负责持久化，双写只会得到两份不同步的日志）、stderr 仍落盘（启动期崩溃栈是 rollog 接管之前的唯一通道），且每次 start 前把它 `mv` 成 `<name>.prev`（只留 1 份）——仍是无界增长的最后一个口子。
 
 `log_export`（联邦日志导出物化预算，FR-480；均有默认值，零配置即用）：
 
