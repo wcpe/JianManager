@@ -196,10 +196,16 @@ func hashApprovalPayload(payload map[string]any) (string, error) {
 type ApprovalListFilter struct {
 	// ApplicantUserID 非空时只查该申请人的票（own.list）。
 	ApplicantUserID *uint
-	Status          string
-	Action          string
-	Limit           int
-	Offset          int
+	// TokenID 非空时只查该 Token 提交的票（Agent 自查，spec §8.4）。
+	//
+	// 为何不只用 ApplicantUserID：一个用户可能持多把 Agent Token，按用户限域会让他
+	// 从 Token A 看到 Token B 的票（含冻结参数与目标）。按 Token 限域比按用户更窄，
+	// 显式区分「同一人的两把钥匙」。
+	TokenID *string
+	Status  string
+	Action  string
+	Limit   int
+	Offset  int
 }
 
 // ListApprovals 列表查询（调用方负责传入正确的范围）。
@@ -214,6 +220,9 @@ func (s *ApprovalService) ListApprovals(f ApprovalListFilter) ([]model.ApprovalT
 	q := s.db.Model(&model.ApprovalTicket{})
 	if f.ApplicantUserID != nil {
 		q = q.Where("applicant_user_id = ?", *f.ApplicantUserID)
+	}
+	if f.TokenID != nil {
+		q = q.Where("token_id = ?", *f.TokenID)
 	}
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)

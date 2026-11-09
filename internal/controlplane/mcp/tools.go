@@ -220,6 +220,8 @@ func init() {
 	allToolSpecs = append(allToolSpecs, fileToolSpecs...)
 	allToolSpecs = append(allToolSpecs, configToolSpecs...)
 	allToolSpecs = append(allToolSpecs, pluginToolSpecs...)
+	// 审批票据自查（spec §8.4）：Agent 提交高危操作后能回读结果，不必盲等。
+	allToolSpecs = append(allToolSpecs, approvalToolSpecs...)
 }
 
 // init 追加Bot 舰队与压测编排工具，保持 allToolSpecs 的追加式演进。

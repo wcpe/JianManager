@@ -190,6 +190,13 @@ var fr396DomainActions = []AgentActionDescriptor{
 	{Action: AgentActionInstanceUpdateTags, V2Capability: AgentCapabilityInstanceWrite, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
 	// task_get 无固定资源类型：先按 task 关联实例归属重验，再走 instance.read 能力。
 	{Action: AgentActionTaskGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	// 审批票据自查：无固定资源类型（按 TokenID 限域，见 ApprovalService 的按票过滤）。
+	// list/get 是读；withdraw 是写但**不产生任何外部副作用**（只改自己的票状态），
+	// 因此 V1WriteAllow 留空且 V1Allowed=false——V1 白名单里没有“审批”这一档，
+	// 宁可让 V1 Token 用不了自查，也不给它新开口子。
+	{Action: AgentActionApprovalList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	{Action: AgentActionApprovalGet, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	{Action: AgentActionApprovalWithdraw, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
 	// 实例分组：分组自身无独立资源类型，按节点/实例 scope 判定可发现性（复用 instance 分支）。
 	{Action: AgentActionInstanceGroupList, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
 	{Action: AgentActionInstanceGroupRead, V2Capability: AgentCapabilityInstanceRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},

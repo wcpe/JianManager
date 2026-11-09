@@ -67,8 +67,14 @@ const (
 	AgentActionInstanceSnapshotRollback = "agent.instance_snapshot_rollback"
 	// 实例标签维护：与 UpdateConfig 分离为独立动作，使打标签与改配置各有清晰授权面
 	// （UpdateConfig 走 instance.configure，本动作走 instance.write，语义更轻）。
-	AgentActionInstanceUpdateTags  = "agent.instance_update_tags"
-	AgentActionTaskGet             = "agent.task_get"
+	AgentActionInstanceUpdateTags = "agent.instance_update_tags"
+	AgentActionTaskGet            = "agent.task_get"
+	// 审批票据自查（spec §8.4 补齐）：Agent 提交高危操作后能自己查票据结果，
+	// 而不是「提交完只能盲等」。按 TokenID 严格限域——同一用户的多把 Token
+	// 互相看不到对方的票（比按 applicant 更窄，避免越界）。
+	AgentActionApprovalList        = "agent.approval_list"
+	AgentActionApprovalGet         = "agent.approval_get"
+	AgentActionApprovalWithdraw    = "agent.approval_withdraw"
 	AgentActionInstanceSendCommand = "agent.instance_send_command"
 	// 实例分组（ADR-033）：分组仅承载运维归类，读走 instance.read、写走 instance.write。
 	AgentActionInstanceGroupList          = "agent.instance_group_list"

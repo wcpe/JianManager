@@ -125,7 +125,8 @@ func interceptApproval(
 	if res.Err != nil {
 		return true, toolErr(res.Message)
 	}
-	// 已落票：返回 requestId（供人工在审批中心核对；MCP 工具面无审批查询工具）。
+	// 已落票：返回 requestId + ticketId。Agent 后续用 approval_list / approval_get
+	// 自查结果（spec §8.4 已于 2026-11-09 补齐，按 TokenID 限域）。
 	return true, toolOK(map[string]any{
 		"status":    "awaiting_approval",
 		"requestId": res.RequestID,

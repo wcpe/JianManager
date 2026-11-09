@@ -4,9 +4,9 @@
 > 四者是一条**依赖链**，按 490 → 491 → 492 → 493 顺序交付（本批一并完成）。
 > 本文件合并四份 spec：它们共享同一套票据与执行器，分开写会各写一份状态机。
 >
-> **遗留（仅一项，不阻塞交付）**：§8.4 —— MCP 工具面没有审批查询工具，Agent 提交后
-> 无法自行轮询票据结果。需新增 `approval_own_list/get/withdraw` 三个工具并扩 action 目录，
-> 属独立改动，尚未实施。
+> **§8.4 已补齐（2026-11-09）**：MCP 工具面新增 `approval_list` / `approval_get` /
+> `approval_withdraw` 三个自查工具（按 TokenID 严格限域），Agent 提交后能自己轮询票据结果。
+> 详见 §8.4 的实现记录。
 
 ## 1. 背景与目标
 
@@ -272,13 +272,25 @@ Agent 无法自行轮询票据结果），属独立改动，不作为本次交�
 1. **双人复核**是否需要（PRD 未提，Beacon 语义里是单人批准）。
 2. **撤销已批准但未执行**（`executing` 之前）是否允许——当前设计为不允许。
 3. 审批通知（邮件/IM）不在本批范围（FR-105 邮件通知仍在 V1.1）。
-4. **Agent 面缺审批查询工具**（本轮核查发现，待决策）。
-   `own.list` / `own.get` / `own.withdraw` 三个端点已实现，但挂在**人类 JWT 会话**组
-   （`/approvals/own/*`），按登录用户归属限域；MCP 工具面 108 个工具里**没有**任何审批查询工具。
-   因此 Agent 提交后**无法自行轮询**结果，与 FR-490 原文「使 Agent 提交后能轮询结果、
+4. ~~**Agent 面缺审批查询工具**（本轮核查发现，待决策）。~~ **已于 2026-11-09 补齐**。
+   `own.list` / `own.get` / `own.withdraw` 三个 HTTP 端点挂在人类 JWT 会话组
+   （`/approvals/own/*`），按登录用户归属限域；而 MCP 工具面原**没有**任何审批查询工具，
+   导致 Agent 提交后**无法自行轮询**结果，与 FR-490 原文「使 Agent 提交后能轮询结果、
    闭环不断在盲等」存在差距。
-   - 已做的处理：出票返回文案不再声称「用 own.get 轮询」（那会让调用方去调不存在的东西），
-     改为如实说明「批准后由服务端执行，请稍后重新查询目标状态」。
-   - 补齐方案（未实施）：新增 `approval_own_list` / `approval_own_get` / `approval_own_withdraw`
-     三个 MCP 工具，按票据 `token_id` 严格限域（比按申请人用户更窄，避免同一人的多把 Token 互相可见）。
-     代价是要扩 action 目录与 108 条工具契约投影，属独立改动。
+
+   **实现（`internal/controlplane/mcp/tools_approval.go`）**：新增三个 MCP 工具——
+   `approval_list`（可按 status 过滤、默认 20 条）、`approval_get`（含冻结参数，
+   供 Agent 核对当时提交了什么）、`approval_withdraw`（仅 pending 可撤）。
+
+   **限域口径改为按 TokenID 而非申请人**（比 spec 原提案更窄）：一个用户可能持多把
+   Token（CI 一把、本地调试一把），按 applicant 限域会让 Token A 看到 Token B 的票
+   （含冻结参数与目标）。`ApprovalListFilter` 因此新增 `TokenID *string`；
+   三个工具都强制带当前 principal 的 TokenID，**拿不到 TokenID（助手委托链）直接拒绝**
+   —— 那条链的票 `token_id` 为空，按空串查会把所有人的无 Token 票混在一起。
+
+   越权与不存在共用同一文案（不区分 404/403）：分开回等于给出「这个 id 存在吗」的探测接口。
+   `approval_withdraw` 先取出票验 `token_id` 归属、再用票内 applicant 去撤；
+   两步之间票据状态可能变，但 `Withdraw` 本身是 CAS（仅 pending），不会误撤。
+
+   回归：`tools_approval_test.go` 6 条（跨 Token 不可见 / 跨 Token 不可撤 /
+   无 Token 直接拒 / 工具已注册 / 服务未装配明确报错 / 详情回冻结参数）。
