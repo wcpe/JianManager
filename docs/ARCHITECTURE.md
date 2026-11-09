@@ -1784,7 +1784,7 @@ proxy:
 **生产**: 多节点部署，Control Plane 一个 + Worker Node 多个
 **Docker**: `Dockerfile.control-plane` + `Dockerfile.worker` + `docker-compose.yml`
 
-### 12.1 构建与发布管线（GitHub Actions，FR-173，见 ADR-036 / ADR-074）
+### 12.1 构建与发布管线（GitHub Actions，FR-173，见 ADR-036 / ADR-108）
 
 `.github/workflows/release.yml` 固定使用 Go 1.26.2、Node.js 22 与 JDK21，当前 job 链路为 `metadata → prepare-embeds → test → build → smoke → release`：
 
@@ -1795,7 +1795,7 @@ proxy:
 - **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-24.04` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。全部 runner 显式锁定版本，不用 `-latest` 浮动标签。
 - **release**：汇总 4 个二进制并生成 `checksums.txt`（ADR-036 命名 / sha256 契约），说明由 `gh release create --generate-notes` 自动生成（只统计相邻两 tag 间合并的 PR，故必须「先合 PR 到主干、后打 tag」）。唯一发布动作是 push tag `vX.Y.Z`；`release.yml` 不监听主干 push 与 `pull_request`（非 tag ref 上源码版本解析不出合法版本），主干与 PR 的构建校验由 `ci.yml` 承担，`latest` 滚动预发布渠道已移除。
 
-ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
+ADR-108 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
 
 ### 12.2 SSH 推送式远程部署（FR-277 / FR-410，见 ADR-063 / ADR-084）
 

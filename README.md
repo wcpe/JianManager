@@ -212,7 +212,7 @@ docs/                  # 架构 / API / 部署 / ADR 全套文档
 
 CI 在 PR 与分支 push 上跑 `web-quality`（lint + vitest + 构建 + E2E）与 `bot-quality`（生产依赖审计 + typecheck + lint + build）双门禁。发布 workflow 另以独立 metadata job 校验源码版本、Git ref 与 tag，同版本构建/内嵌 Bot Worker 和四个 Go 产物，再分别在 Linux / Windows 原生 runner 执行四项 `--version` smoke；全部通过后才创建 Release。
 
-版本规则见 [ADR-074](docs/adr/074-release-version-provenance-and-smoke.md)：正式 Git tag / Release 为 `vX.Y.Z`，二进制内部版本为裸 `X.Y.Z`；开发构建为 `X.Y.Z-dev+g<sha>`。当前工作区实现尚未 push，远端 GitHub Actions 运行结果待验。提交信息遵循 Conventional Commits（中文描述），详见 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
+版本规则见 [ADR-108](docs/adr/108-release-version-provenance-and-smoke.md)：正式 Git tag / Release 为 `vX.Y.Z`，二进制内部版本为裸 `X.Y.Z`；开发构建为 `X.Y.Z-dev+g<sha>`。当前工作区实现尚未 push，远端 GitHub Actions 运行结果待验。提交信息遵循 Conventional Commits（中文描述），详见 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
 
 ## 📚 文档
 

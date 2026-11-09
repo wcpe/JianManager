@@ -9,6 +9,12 @@
 > 本段为 `v0.24.0` 开发版归档区；正式发版时整理为新版本段。
 
 ### 新增
+- **FR 编号与 ADR 编号对账：rebase 丢文档与两处重号（2026-11-09）**：文档核验发现两类编号事故，均已修复。
+  **① rebase 丢 44 条 PRD 条目**：`e1b65260`「同步 master 侧文档更新」用 master 版 PRD 整份覆盖分支版，把分支独有、master 无的条目一并删掉（788 增 / 464 删）。其中 **33 条**（FR-513～545，AI 助手 / 业务退役 / 配置分层 / 主体观测）分支与 master 无编号冲突，已原文补回；另 **11 条**属 Web 重构批，与 master 日志系列在 502～512 号段真重号，见 ②。
+  **② Web 重构批改号 502～512 → 546～556**（消除与日志系列跨文件重号）：分支上 Web 批占 502～512，master 上同号是日志系列（四核心采集规则 / 配置基线 / 不落盘架构 / VL 投递 / HTTP 入口 / 采集模式对齐）。两边都不是孤立笔误：日志系列**已被代码引用**（`log_rule_derive.go`、`instance.go`、`launch.go`、`worker.pb.go` 等 20+ 处），Web 批仅存于 `unspecced-fr-records/spec.md` 与 PRD，已无代码引用后。按「改引用面小的一方」整体平移 +44 号。内部交叉引用同步（`FR-504 内容页布局原语` → `FR-548`、`FR-509 同批` → `FR-553`、`依赖 FR-502~506` → `FR-546~550`）。功能代码未动，仅改编号。
+  **③ ADR-074 拆重号**：`074-bot-distributed-load`（2026-07-18）与 `074-release-version-provenance-and-smoke`（2026-07-19）连续两天各自取了同一编号，且两个都没进 README 索引以外的地方被显式区分。按同一原则把**引用面小的** release 版改号为 **ADR-108**（Bot 版 32 处含 4 处 Go 注释 vs release 版 6 处纯文档链接）；同步 `README`、`CONTRIBUTING`、`ARCHITECTURE` §12.1、`ADR-083`、`release-pipeline/spec.md`。**ADR-102 此前遗漏未入 README 索引，一并补上**。
+  **未做**：FR-504 在 PRD §4 表内**仍缺**——它与「已退役编号索引」里的日志 FR-504（实时停续采与 gz 导入）同号。退役索引那条在 master 上就只存于表格外的说明段、从未作为表内条目存在，但按「已合入 master 的号不得复用」仍不可占用；Web 批的「内容页布局规范层」因此改号为 **FR-548**。若要彻底消除歧义，下一步应在退役索引里明确标注「FR-504 表内无条目，只在此索引留痕」。
+  **校验**：PRD §4 重号为空、条目 500 → 544、最大号 556；`unspecced-fr-records/spec.md` 的 Web 系列 11 条编号、交叉引用、范围写法（`FR-546~551`）均已同步，502～512 无残留；ADR 目录编号无重复；`074-release-version` 旧路径零残留。
 - **导出归档目的地接线 S3/MinIO（FR-501，2026-10-27，未发布）**：此前后者只能写本地目录，副本与热层同机同盘 ⇒ 单盘故障/整机报废时副本跟着没，「删前归档」只剩「省空间」而丢了「保一份」。现 `log_retention.archive_copy.provider` 支持 `local`（默认）/`s3`/`minio`，新增 endpoint/bucket/region/prefix/access_key/secret_key/use_ssl；复用 FR-478 已真机验过的 SigV4 `archive.RemoteS3Provider`，不新造协议也不新造凭证模型。目的地不完整（local 无 root / s3|minio 无 endpoint 或 bucket / provider 写错）一律**启动即拒**；构造失败只降级导出器（不装出口 ⇒ 到期分区落 blocked 保留原物），不让 Worker 启动失败。顺手修了既有装配对 `provider: minio` 也走 S3 构造函数、导致 Kind 恒报 `s3`（归档证据里因此分不出 MinIO/AWS）的分支。
   已验证：四组配置面用例（缺键各拒且点名缺失键、未知 provider、逐字段 YAML 解析、默认 local + 校验无副作用）；`go build ./...`、`go vet ./...` 退出 0；`go test ./internal/worker/ -run TestRetentionArchiveCopy` 全绿。
   **当时的未接线项已补齐**：归档对象自身的回收（桶内生命周期）见下一条；当时卡住它的正是「删了归档对象后权威态该怎么表达」这个必须先裁定的问题。

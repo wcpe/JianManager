@@ -2,8 +2,8 @@
 
 - **日期**: 2026-08-24
 - **状态**: accepted
-- **关联**: FR-409、ADR-011、ADR-014、ADR-016、ADR-036、ADR-037、ADR-059、ADR-074
-- **部分取代**: ADR-014 的 ServerProbe 子模块 / 构建期内嵌 / CP 直传 jar 决策；ADR-016 决策 6 的制品来源与部署载荷；ADR-036 §5、ADR-074 决策 3 中的 ServerProbe 内嵌资产描述
+- **关联**: FR-409、ADR-011、ADR-014、ADR-016、ADR-036、ADR-037、ADR-059、ADR-108
+- **部分取代**: ADR-014 的 ServerProbe 子模块 / 构建期内嵌 / CP 直传 jar 决策；ADR-016 决策 6 的制品来源与部署载荷；ADR-036 §5、ADR-108 决策 3 中的 ServerProbe 内嵌资产描述
 
 ## 上下文
 
@@ -87,6 +87,6 @@ JVM 不能热替换已加载插件 jar。实例版本切换的成功语义是「
 
 - **ADR-011**：继续作为物理 CAS、校验和引用保护基础；本 ADR 新增其上的逻辑版本层。
 - **ADR-014 / ADR-016**：保留 ServerProbe 作为监控与治理桥载体、本机回环和配置语义；仅替换制品来源与部署载荷。
-- **ADR-036 / ADR-074**：保留发布版本、渠道和其他内嵌资产契约；移除 ServerProbe 内嵌资产。
+- **ADR-036 / ADR-108**：保留发布版本、渠道和其他内嵌资产契约；移除 ServerProbe 内嵌资产。
 - **ADR-037**：CP 从 GitHub 获取 jar 必须经统一出站代理客户端。
 - **ADR-059**：复用 CP-local、短期 scope token、Worker 主动下载的安全模式。
