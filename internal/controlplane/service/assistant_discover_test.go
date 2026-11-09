@@ -14,10 +14,10 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 模型自动发现（FR-538）。
+// 模型自动发现。
 //
 // 为何单独补：该功能（DiscoverModels / discoverModelsURL / applyDiscoverAuth /
-// parseDiscoveredModels）此前**零测试覆盖**——PRD 里 FR-538 标「部分交付·需契约补测」
+// parseDiscoveredModels）此前**零测试覆盖**——PRD 里该条标「部分交付·需契约补测」
 // 指的就是这块。功能实现已有，缺的是钉住契约的回归。
 //
 // 本文件钉住四件事（都是「看着能用但会错」的形态）：
