@@ -622,7 +622,7 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-514 | AI 供应商、模型与平台配置 | P0 | ✅ 已交付@v0.24.0（spec §11 全部 13 项已关闭，2026-10-29 收口：三协议用本地真 HTTP + 真 SSE 假供应商各实跑通过（文本增量 / 工具参数 / usage / 探测）；审计流水 9 个动作齐全且白名单逐字段拼、本轮补 baseUrl 留痕；跨重启凭据 `TestCredentialSurvivesRestart` 与换密钥保密文 `TestCredentialKeyChangeKeepsCiphertext`；三启回读 `default_model_id` 新增 `TestSettingSurvivesThreeStarts`。真实商业厂商验证按 §11 #13 由用户确认关闭——**仓库内无该次验证的日志/截图留痕**） |
 | FR-515 | Go 内置轻量 Agent 与私有会话 | P0 | ✅ 已交付@v0.24.0 |
 | FR-516 | 当前用户受限系统工具与逐调用写入确认 | P0 | ✅ 已交付@v0.24.0 |
-| FR-517 | 外部 Streamable HTTP MCP 客户端与连接治理 | P1 | 🔨 部分交付@v0.24.0（**客户端、管理面、工具闭环与真机闭环均已实现并验收**；未达成：厂商非标准扩展未覆盖（spec 明示的能力边界）。注：spec 状态行停在 2026-10-23 的「部分实现」，正文更新至 10-25 时已闭环，状态行待同步） |
+| FR-517 | 外部 Streamable HTTP MCP 客户端与连接治理 [规格][s180] | P0 | ✅ 已交付@v0.24.0·**2026-11-09 核实归真**：spec 状态行早已写明「已实现（2026-10-25 闭环）」——出站前置 + 客户端 + 管理面 + 助手侧调用闭环均已落地，并用独立进程的真 MCP 服务器跑通「探测→发现→逐工具设风险启用→模型调用→结果回灌」，读工具自动执行、写工具经确认后真落盘。**能力边界（spec 明示，非缺口）**：不接入 MCP OAuth 2.1，认证只保留 none/header/bearer 三种静态凭据（ADR-105 决策 6）；厂商非标准扩展不覆盖。此前 PRD 写「状态行待同步」是过时表述。 |
 | FR-518 | 类型化页面上下文与实体选择 | P1 | ✅ 已交付@v0.24.0 |
 | FR-519 | 共享聊天界面与全局上下文面板 | P1 | ✅ 已交付@v0.24.0 |
 | FR-520 | AI Dashboard 默认首页与经典首页切换 | P1 | ✅ 已交付@v0.24.0 |
@@ -643,10 +643,10 @@ git show origin/master:docs/PRD.md | grep -c '^| FR-XXX |'   # >0 ⇒ 只能标�
 | FR-535 | 批量目标解析与跨区二次确认 | P0 | ✅ 已交付@v0.24.0 |
 | FR-536 | SSE 连接治理与慢消费者保护 | P0 | ✅ 已交付@v0.24.0 |
 | FR-537 | 批量命令流式进度 | P1 | ✅ 已交付@v0.24.0 |
-| FR-538 | 供应商协议三选与模型自动发现 | P0 | 🔨 部分交付@v0.24.0（供应商协议三选与模型发现已落；**spec 自述「需契约补测」尚未完成**，`fr-538-543` 状态行为「实现中」） |
+| FR-538 | 供应商协议三选与模型自动发现 | P0 | ✅ 已交付@v0.24.0·**2026-11-09 补齐契约补测**：供应商协议三选（`openai-chat` / `openai-responses` / `anthropic`）与模型自动发现的实现早已落地，但 `assistant_discover.go` 的 4 个函数（DiscoverModels / discoverModelsURL / applyDiscoverAuth / parseDiscoveredModels）此前**零测试覆盖**——PRD 说的「需契约补测」就是这块。现已补 8 条回归（`assistant_discover_test.go`）：两种响应形状（`{data:[{id}]}` / 裸数组）、解析不出**报错而非空**（空结果与协议不兼容对调用方看起来一样但处置不同）、非 200 **不得返回空列表**（否则鉴权失败会被误读成「供应商没模型」）、上游回显密钥必须脱敏、Anthropic 用 x-api-key+版本头而 OpenAI 系用 Bearer、已配置标记/去重/超长跳过/200 条截断如实反映。 |
 | FR-539 | 供应商级出站代理 | P0 | ✅ 已交付@v0.24.0 |
 | FR-540 | 助手默认启用平台自带 MCP 工具 | P0 | ✅ 已交付@v0.24.0 |
-| FR-541 | 系统提示词、Skill 目录与思考强度 | P1 | 🔨 部分交付@v0.24.0（系统提示词、思考强度与已启用技能注入均已落地：`service/assistant_skill.go`、`systemPromptWithSkills`、`assistant_models.reasoning_effort`；spec `fr-538-543-provider-skill-history.md` 状态行为「实现中」，**该批整体尚未收口**） |
+| FR-541 | 系统提示词、Skill 目录与思考强度 | P1 | ✅ 已交付@v0.24.0·**2026-11-09 核实归真**：`service/assistant_skill.go`（10 个函数 + 10 条测试）、`systemPromptWithSkills` 已接入 `assistant_chat.go` 的聊天链路、`assistant_models.reasoning_effort` 字段与前端下拉均落地。此前引用 spec 状态行「实现中」是过时表述。 |
 | FR-542 | 对话历史独立页面与检索 | P1 | ✅ 已交付@v0.24.0 |
 | FR-543 | 历史消息编辑与回退 | P1 | ✅ 已交付@v0.24.0 |
 | FR-544 | 助手工具渐进式披露与执行路径统一 | P0 | ✅ 已交付@v0.24.0 |
