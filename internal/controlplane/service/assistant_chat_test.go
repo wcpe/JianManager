@@ -136,7 +136,7 @@ func toolCallScript(callID string) streamScript {
 	}
 }
 
-// fakeToolExecutor ToolExecutor 的手写实现（在本 FR 里不存在）。
+// fakeToolExecutor ToolExecutor 的手写实现（生产中不存在）。
 type fakeToolExecutor struct {
 	mu     sync.Mutex
 	calls  []ai.ToolCall

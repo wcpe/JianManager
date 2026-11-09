@@ -412,7 +412,7 @@ func (s *AssistantChatService) contextEntityAccessible(
 		return true, fmt.Sprintf("%d", task.ID)
 	case "alert":
 		// 告警事件：目标按规则维度解释，这里只校验「这条事件存在」。
-		// 是否展示内容由工具按权限取（本 FR 不把告警正文放进上下文）。
+		// 是否展示内容由工具按权限取（此处不把告警正文放进上下文）。
 		var ev model.AlertEvent
 		if err := s.db.Where("id = ?", string(ref.ID)).First(&ev).Error; err != nil {
 			return false, string(ref.ID)

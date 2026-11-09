@@ -96,7 +96,7 @@ func TestGroupUsedStorageMB_NoneAvailableFallsBackToBackups(t *testing.T) {
 	require.Equal(t, float64(20), got)
 }
 
-// TestGroupUsedStorageMB_UnavailableNotCountedAsZero **回退不能低估**（本 FR 的核心约束）。
+// TestGroupUsedStorageMB_UnavailableNotCountedAsZero **回退不能低估**（核心约束）。
 //
 // Available=false 的实例必须按备份大小计入，而不是 0。若按 0 计，下面这个 1 GB 上限
 // 的组会算出「已用 50 MB」并放行创建，实际已占 1.05 GB —— 超卖。

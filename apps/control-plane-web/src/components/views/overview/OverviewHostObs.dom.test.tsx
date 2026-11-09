@@ -149,7 +149,7 @@ describe('GaugeAttributionTooltip（主机级观测）', () => {
   })
 
   it('整机 Top 进程与「Top 受管进程」标题可区分', () => {
-    // 这是本 FR 最容易被误读的地方：两份数据源完全不同。
+    // 这是最容易被误读的地方：两份数据源完全不同。
     // 整机 Top 含系统进程与别人的进程；受管 Top 只看我们托管的实例进程树。
     renderTooltip(
       snapshot({

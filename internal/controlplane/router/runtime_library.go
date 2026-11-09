@@ -13,7 +13,7 @@ import (
 
 // RuntimeLibraryHandler 节点运行时库路由：统一 Runtime 视图（node_jdks +
 // node_runtimes 读侧拼装）+ 扫描发现 + 泛化登记 + 删除。全部仅平台管理员可达；
-// 扫描/登记/删除写审计（action 见 node.runtime.*，i18n 翻译随本 FR 进 audit.actions.*）。
+// 扫描/登记/删除写审计（action 见 node.runtime.*，i18n 翻译进 audit.actions.*）。
 type RuntimeLibraryHandler struct {
 	svc   *service.RuntimeLibraryService
 	audit *service.AuditService

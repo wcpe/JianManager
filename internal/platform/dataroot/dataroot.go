@@ -28,7 +28,6 @@ type Root struct {
 }
 
 // layoutDirs 是首次启动需确保存在的 FHS 式子目录（相对数据根）。
-//。
 var layoutDirs = []string{
 	"bin",
 	"etc",

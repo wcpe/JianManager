@@ -287,7 +287,7 @@ func (p *ProvisionService) ProvisionBinaryAsync(ctx context.Context, req Provisi
 	}
 	if p.tasks == nil {
 		// 与 MC 路径的取舍不同：彼处无任务中心时回退同步（保持旧行为），此处 binary 是新增能力，
-		// 没有需要兼容的旧行为，而「同步下载 30MB」正是本 FR 要消除的形态，故直接拒绝而非降级。
+		// 没有需要兼容的旧行为，而「同步下载 30MB」正是要消除的形态，故直接拒绝而非降级。
 		return nil, "", errors.New("二进制搭建需要任务中心支撑（强制异步），当前未装配任务服务")
 	}
 	inst, err := p.createBinaryInstance(req, plan)
@@ -349,7 +349,7 @@ func (p *ProvisionService) provisionBeaconPresetAsync(ctx context.Context, req P
 		sourceText = "来源解析失败"
 	}
 	if p.tasks == nil {
-		// 与 binary 同口径：二进制搭建拒绝降级为同步（「同步下 30MB」正是本 FR 要消除的形态）。
+		// 与 binary 同口径：二进制搭建拒绝降级为同步（「同步下 30MB」正是要消除的形态）。
 		// 此处的额外好处是——解析失败也必须走任务才能保留原因，没有任务中心就无从呈现。
 		if resolveErr != nil {
 			return nil, "", resolveErr

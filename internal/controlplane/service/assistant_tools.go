@@ -13,7 +13,7 @@ import (
 //     避免「同一个动作在两处有两套说法」。
 //  2. **读自动、写必确认**：不看模型自述、不看 MCP annotations。
 //     即使目录里 `RequiresConfirm=false`，write/destructive 也强制确认——
-//     「写必确认」是本 FR 的不变量。
+//     「写必确认」是不变量。
 //  3. **平台治理类永久排除**：助手不得改自身配置、不得读秘密明文、不得任意读写 CP 文件。
 
 // assistantToolSourceSystem 内置工具来源前缀（`system_<action>`）。

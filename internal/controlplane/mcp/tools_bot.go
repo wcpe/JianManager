@@ -23,7 +23,7 @@ type BotLoadExecutor interface {
 	RetryFailed(ctx context.Context, sessionID uint, req service.BotLoadRetryRequest) (*service.BotLoadRetryResult, error)
 }
 
-// botDomainExecutors 汇总本 FR 全部工具执行器。
+// botDomainExecutors 汇总全部 Bot 域工具执行器。
 func botDomainExecutors() map[string]botToolExec {
 	all := make(map[string]botToolExec, 24)
 	for name, exec := range botToolExecutors() {

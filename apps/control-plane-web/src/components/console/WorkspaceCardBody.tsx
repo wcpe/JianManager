@@ -22,7 +22,7 @@ import PluginManager from '@/components/plugins/PluginManager'
  * 故终端 WS / metrics 轮询只对画布上的卡建立。
  */
 interface WorkspaceCardBodyProps {
-  /** 卡片所属实例 id（本 FR 单实例，全部卡片同一 id）。 */
+  /** 卡片所属实例 id（单实例工作区，全部卡片同一 id）。 */
   instanceId: number
   /** 卡片功能类型。 */
   type: CardType

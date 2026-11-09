@@ -89,7 +89,7 @@ func (s *BackupService) SetBackupFailedHook(fn func(backup *model.Backup, msg st
 type CreateOptions struct {
 	// Incremental 为 true 时创建增量备份，自动挂到该实例最近一次已完成备份之后形成链。
 	Incremental bool
-	// StorageID 指定远程存储后端；nil 表示本地（存储解析在该 FR 接入）。
+	// StorageID 指定远程存储后端；nil 表示本地（远程存储解析另行接入）。
 	StorageID *uint
 }
 

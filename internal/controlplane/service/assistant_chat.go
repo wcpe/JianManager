@@ -46,7 +46,7 @@ const (
 	// assistantChatDefaultMaxOutputTokens 模型未声明输出上限时的默认值（MAX_OUTPUT_TOKENS）。
 	assistantChatDefaultMaxOutputTokens = 2048
 	// assistantChatRunWallClock run 总运行预算（RUN_WALL_CLOCK）。等待人工确认的时间按 §7
-	// 单独计时，但本 FR 不实现确认环节，故此处无需扣除。
+	// 单独计时，但此处不实现确认环节，故无需扣除。
 	assistantChatRunWallClock = 300 * time.Second
 	// assistantChatModelRequestTimeout 单次模型请求超时（MODEL_REQUEST_TIMEOUT）。
 	assistantChatModelRequestTimeout = 120 * time.Second
@@ -153,7 +153,7 @@ func (e *AssistantConversationBusyError) Unwrap() error { return ErrAssistantCon
 
 // ── 工具执行缝 ──────────────────────────────────────────────────────────
 
-// ToolExecutor 由实现；本 FR **不提供任何业务工具**。
+// ToolExecutor 由实现；此处**不提供任何业务工具**。
 //
 // 之所以现在就把缝留出来：运行循环的形状（何时暴露工具、何时回灌结果、何时判定预算耗尽）
 // 是的产出，若等工具实现到位再改循环，等于让重写一次编排。
@@ -204,7 +204,7 @@ func (s assistantModelSnapshot) maxOutputTokens() int {
 type SubmitRunBody struct {
 	// Text 本轮用户消息正文（必填）。
 	Text string
-	// ContextSnapshot 页面上下文快照（写入）。本 FR 只原样落库，不解析、不外发。
+	// ContextSnapshot 页面上下文快照（写入）。此处只原样落库，不解析、不外发。
 	ContextSnapshot *string
 }
 
@@ -460,7 +460,7 @@ func (s *AssistantChatService) modelPreparer() runModelPreparer {
 // **部署前提（§8.1，冻结）**：V1 只支持单个 CP 实例。启动回收的逻辑是「一律把非终态 run
 // 置 interrupted」，它在多实例下会误伤另一个实例正在正常工作的 run 并释放它占用的会话槽。
 // 要让回收在多实例下安全，需要 run 所有者标识 + 租约续期 + 心跳失效判定 + fencing
-// generation 一整套分布式协调，与本 FR「轻量运行时」的定位冲突，**不在本 FR 范围**：
+// generation 一整套分布式协调，与「轻量运行时」的定位冲突，**不在本范围**：
 // 因此这里既不做租约也不做心跳，而是把「单实例」写成部署约束。
 func (s *AssistantChatService) Start() {
 	if s == nil || s.db == nil {
@@ -2211,14 +2211,14 @@ func isTerminalRunStatus(status string) bool {
 //
 // **部署前提（§8.1，冻结）**：V1 只支持单个 CP 实例。「启动即回收全部非终态 run」与
 // 「多实例」不能同时成立——第二个实例启动会把第一个实例正在正常工作的 run 全部标成
-// interrupted 并释放它的会话槽。本 FR 选择「单实例」并在这里写明，而不是引入租约/心跳：
+// interrupted 并释放它的会话槽。此处选择「单实例」并写明，而不引入租约/心跳：
 // 那需要 run 所有者标识 + 续期 + 失效判定 + fencing generation 一整套协调机制，
 // 与「轻量运行时」的定位冲突（§8.1 末段）。
 //
 // 作用面只有 run 与会话的活跃指针：
 // 处于 waiting_confirmation 的确认失效、已派发的写调用标 unverified，属的
 //
-//	  票据/回执，本 FR **不碰**（§8 第 2、3 条由落地）；
+//	  票据/回执，此处**不碰**（§8 第 2、3 条另行落地）；
 //	- 消息侧无需修补：助手消息是在一轮模型流**结束后**一次性写入的，中断不会留下半条
 //	  消息；因此这里不做任何消息改写（改写只会把已确定的内容变成假的「未知」）。
 //

@@ -11,7 +11,7 @@ import "time"
 // 票据来源枚举（§6.1：受限枚举，不是自由文本）。
 const (
 	AssistantConfirmSourceChat = "chat"
-	// AssistantConfirmSourceJmat 预留给统一骨架，本 FR 不写入。
+	// AssistantConfirmSourceJmat 预留给统一骨架，当前不写入。
 	AssistantConfirmSourceJmat = "jmat"
 )
 
@@ -27,7 +27,7 @@ const (
 
 // 执行策略枚举（§6.1）。
 const (
-	// AssistantPolicySelfConfirm 本 FR 唯一写入值：用户在聊天里自行确认。
+	// AssistantPolicySelfConfirm 当前唯一写入值：用户在聊天里自行确认。
 	AssistantPolicySelfConfirm = "self_confirm"
 	// AssistantPolicyPlatformGate 预留（～493 平台审批中心）。
 	AssistantPolicyPlatformGate = "platform_gate"
@@ -60,7 +60,7 @@ type AssistantConfirmation struct {
 	RunID          uint   `gorm:"index;not null" json:"runId"`
 	CallID         string `gorm:"size:64;not null" json:"callId"`
 
-	// ToolName 命名空间名（本 FR 为 system.<action>）。
+	// ToolName 命名空间名（形如 system.<action>）。
 	ToolName string `gorm:"size:128;not null" json:"toolName"`
 	// SchemaFingerprint 工具 schema 指纹。内置工具用版本号，外部 MCP 用 schema_hash；
 	// 统一按「字符串不等即失效」处理，不假设存在单调递增的版本号。
@@ -76,7 +76,7 @@ type AssistantConfirmation struct {
 	// **必要不充分**：角色模板改权/绑定变更/组成员移除都不会递增它，
 	// 因此执行前必须重跑完整有效权限判定（§5.1），本字段只挡明显失效。
 	AuthVersion uint `gorm:"not null;default:0" json:"authVersion"`
-	// Policy 执行策略（本 FR 只写 self_confirm）。
+	// Policy 执行策略（当前只写 self_confirm）。
 	Policy string `gorm:"size:24;not null;default:'self_confirm'" json:"policy"`
 	// TargetFingerprint 真实目标指纹（resourceType + ID）。
 	TargetFingerprint string `gorm:"size:128;not null" json:"targetFingerprint"`

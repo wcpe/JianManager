@@ -566,7 +566,7 @@ func (s *SelfUpdateService) persistCheckCache(res *CheckResult, checkedAt time.T
 }
 
 // resolveArtifact 取 feed（按目标版本或最新）中目标 component+平台的制品。
-// version 留空取 feed 最新；非空时校验 feed.Version 与之一致（本 FR feed 为 latest-only，
+// version 留空取 feed 最新；非空时校验 feed.Version 与之一致（feed 为 latest-only，
 // 指定版本仅作确认，不做多版本检索）。
 func (s *SelfUpdateService) resolveArtifact(ctx context.Context, component, goos, goarch, wantVersion string) (*Feed, *FeedArtifact, error) {
 	feed, err := s.resolveRelease(ctx)
@@ -574,7 +574,7 @@ func (s *SelfUpdateService) resolveArtifact(ctx context.Context, component, goos
 		return nil, nil, err
 	}
 	if wantVersion != "" && versionDiffers(wantVersion, feed.Version) {
-		// 指定版本与 feed 当前版本不一致：本 FR 不支持任意历史版本回拉。
+		// 指定版本与 feed 当前版本不一致：不支持任意历史版本回拉。
 		return nil, nil, fmt.Errorf("更新源当前版本为 %s，无法升级到指定的 %s", feed.Version, wantVersion)
 	}
 	art, ok := SelectArtifact(feed, component, goos, goarch)

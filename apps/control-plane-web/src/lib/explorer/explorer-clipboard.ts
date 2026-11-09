@@ -5,7 +5,7 @@ import { baseName, joinPath, isWithin } from '@/lib/shared/paths'
  *
  * 范围决策（见 specs/file-explorer/impl.md）：
  * - 剪切（cut）→ 粘贴 = 移动，经后端 rename（跨目录），文件与目录均支持；
- * - 复制（copy）→ 粘贴 = 真复制，经后端 read+write 组合，**仅文件**（无目录复制后端，目录复制本 FR 不做）。
+ * - 复制（copy）→ 粘贴 = 真复制，经后端 read+write 组合，**仅文件**（无目录复制后端，目录复制不支持）。
  *
  * 纯函数，便于 vitest 单测。粘贴的具体 API 编排由组件层按本模块产出的计划执行。
  */
@@ -43,7 +43,7 @@ export interface PastePlan {
 }
 
 export type SkipReason =
-  | 'dir-copy-unsupported' // 复制目录：本 FR 不支持
+  | 'dir-copy-unsupported' // 复制目录：不支持
   | 'same-dir' // 移动/复制到原目录，无意义
   | 'into-self' // 把目录移动/复制进自身或子目录
   | 'name-conflict' // 目标已存在同名

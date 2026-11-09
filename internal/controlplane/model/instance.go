@@ -84,8 +84,6 @@ func (i *Instance) KindOrInfer() InstanceKind {
 //   - MC 群组服角色（backend/proxy）：参与 proxy↔backend 拓扑、后端注册、玩家查询，
 //     是 server_registrations 的合法两端。
 //   - 非群组服角色（universal/beacon）：受 JM 生命周期管理，但不参与群组拓扑。
-//
-//。
 type InstanceRole string
 
 const (
@@ -126,6 +124,7 @@ func ValidInstanceRole(r InstanceRole) bool {
 //
 // ServerProbe 是 Bukkit 插件，只有 Minecraft Java 服务端能加载：
 //   - 代理端（BungeeCord/Waterfall/Velocity，role=proxy）无法加载 Bukkit 插件；
+//
 // 通用二进制（type=generic）与 Beacon（role=beacon）不是 MC Java 进程。
 //
 // 因此不适用探针的实例不应被分配探针端口、不参与 /metrics 抓取、也不接收探针 jar 推送。
@@ -171,13 +170,13 @@ const (
 
 // Instance 实例。
 type Instance struct {
-	ID          uint           `gorm:"primaryKey" json:"id"`
-	UUID        string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	NodeID      uint           `gorm:"not null;index" json:"nodeId"`
-	Name        string         `gorm:"type:varchar(128);not null;index" json:"name"`
-	Type        InstanceType   `gorm:"type:varchar(64);not null" json:"type"`
+	ID     uint         `gorm:"primaryKey" json:"id"`
+	UUID   string       `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	NodeID uint         `gorm:"not null;index" json:"nodeId"`
+	Name   string       `gorm:"type:varchar(128);not null;index" json:"name"`
+	Type   InstanceType `gorm:"type:varchar(64);not null" json:"type"`
 	// Kind 服务端类别：plugin / proxy / binary。空值=旧数据，读时经 KindOrInfer 回退。
-	Kind InstanceKind `gorm:"type:varchar(16);default:'';index" json:"kind"`
+	Kind        InstanceKind   `gorm:"type:varchar(16);default:'';index" json:"kind"`
 	Role        InstanceRole   `gorm:"type:varchar(16);default:universal;index" json:"role"`
 	ProcessType ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
 	Status      InstanceStatus `gorm:"type:varchar(32);default:STOPPED;index" json:"status"`
@@ -245,7 +244,7 @@ type Instance struct {
 	// RuntimeDriftPID 是「实例工作目录下存在活进程、但平台未认作运行」时该外来进程的 PID。
 	// 由心跳携带 Worker 观测结果写入；0 表示无漂移（已对齐或已被接管）。仅观测不自动处置。
 	// 显式固定列名 runtime_drift_pid：gorm 默认命名会把 PID 转成 p_id（见既有 PID 字段），
-	// 而本列仅由本 FR 的 SQL/前端/文档按 runtime_drift_pid 引用，值得钉死以免歧义。
+	// 而本列仅由对应的 SQL/前端/文档按 runtime_drift_pid 引用，值得钉死以免歧义。
 	RuntimeDriftPID int64 `gorm:"column:runtime_drift_pid;default:0" json:"runtimeDriftPid"`
 	// RuntimeDriftCmdline 上述漂移进程的命令行摘要（落库前已截断至 512 字节，与列宽对齐）。
 	RuntimeDriftCmdline string `gorm:"type:varchar(512)" json:"runtimeDriftCmdline"`

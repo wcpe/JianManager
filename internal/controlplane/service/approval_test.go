@@ -59,7 +59,7 @@ func submitOne(t *testing.T, svc *ApprovalService, owner uint, action string, pa
 
 // TestApproval_AgentCanNeverDecide Agent 身份无论权限如何都不可批准。
 //
-// 这是本 FR 最重要的一条：如果把「谁能批」实现成「有 approval.decide 节点就能批」，
+// 这是最重要的一条：如果把「谁能批」实现成「有 approval.decide 节点就能批」，
 // 那么一把拥有该节点的 Agent Token 就能自己提、自己批，审批环节彻底失效。
 func TestApproval_AgentCanNeverDecide(t *testing.T) {
 	db := newApprovalTestDB(t)

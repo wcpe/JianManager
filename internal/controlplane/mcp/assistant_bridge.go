@@ -69,7 +69,7 @@ func assistantToolDetailForService(name string) (service.AssistantToolDetail, bo
 //
 // 为什么需要它：执行一次 MCP 工具需要 `ToolDeps`（全套领域服务）与该用户的
 // authz——这两样只有装配层（main.go）拿得到。mcp 包不自己造 ToolDeps，
-// 否则会在这里再造一份装配，正是本 FR 要消除的「重复造轮子」。
+// 否则会在这里再造一份装配，正是要消除的「重复造轮子」。
 var assistantExecutorResolver func() func(ctx context.Context, owner uint, name string, args map[string]any) (string, error)
 
 // SetAssistantExecutorResolver 由装配层注入执行器解析器。

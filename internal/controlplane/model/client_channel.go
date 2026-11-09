@@ -8,7 +8,6 @@ import (
 
 // ClientChannel 客户端分发频道：每服/每整合包一个，作为 manifest/制品端点的对外标识与路由键。
 // ChannelID 为运营者指定的 slug（URL 段），CurrentVersion 为 latest 版本指针占位（编排）。
-//。
 type ClientChannel struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// ChannelID 频道 slug：对外标识与端点路径段，全局唯一。约束 `^[a-z0-9][a-z0-9-]{1,63}$`。
@@ -17,7 +16,7 @@ type ClientChannel struct {
 	Name string `gorm:"type:varchar(128);not null" json:"name"`
 	// Description 描述，可空。
 	Description string `gorm:"type:varchar(512)" json:"description"`
-	// CurrentVersion 当前 latest 版本指针占位；0=未发布。本 FR 仅建字段，编排见。
+	// CurrentVersion 当前 latest 版本指针占位；0=未发布。此处仅建字段，编排另见。
 	CurrentVersion int `gorm:"default:0;not null" json:"currentVersion"`
 	// Deprecated: PinnedCoreVersion 原为频道 pin 的 updater-core 版本号（初版，已随反转废弃，改写）。
 	// updater-core 现由 CP 内嵌默认版本自动驱动 manifest agent.core，运营不再 pin/管理。保留此列（加性、默认 0）
@@ -41,7 +40,7 @@ type ClientChannel struct {
 // ClientPullKey 频道拉取密钥：玩家侧 updater 拉 manifest/制品时经请求头携带。
 // 半公开凭据（随整包分发会泄露）——仅作鉴权路由 + 吊销，不作内容可信依据（内容可信靠 manifest 签名）。
 // 鉴权只用 KeyHash（SHA-256）比对；另存 AES-256-GCM 可逆加密副本 KeyEnc供管理员查看明文。
-//（拉取密钥可逆加密 + 管理员可查看，修订决策①的「只存哈希」）。
+// （拉取密钥可逆加密 + 管理员可查看，修订决策①的「只存哈希」）。
 type ClientPullKey struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// ChannelID 所属频道 slug（随频道删除级联清理）。

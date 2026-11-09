@@ -249,7 +249,7 @@ const legacyUploadMaxBytes = 64*1024*1024 - 64*1024
 
 // UploadFile 单文件流式上传：经 Worker UploadFile client-stream 分片转发，
 // 任意大小不受单消息上限约束、CP 侧内存占用 O(chunk)。老 Worker 回退 WriteFile unary（≤64MB）。
-// 流式需贯穿整个 HTTP 请求，故由调用方传入请求级 ctx（不设固定超时——这正是本 FR 要移除的 10s 硬超时）。
+// 流式需贯穿整个 HTTP 请求，故由调用方传入请求级 ctx（不设固定超时——正是要移除的 10s 硬超时）。
 func (s *FileService) UploadFile(ctx context.Context, instanceID uint, filePath string, r io.Reader) error {
 	if err := validatePath(filePath); err != nil {
 		return err

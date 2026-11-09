@@ -23,7 +23,7 @@ const (
 	CapClone Capability = "clone"
 )
 
-// DataSource 能力的数据来源偏好，按序降级（编排语义，本 FR 只声明不实现编排）。
+// DataSource 能力的数据来源偏好，按序降级（编排语义，此处只声明不实现编排）。
 type DataSource string
 
 const (

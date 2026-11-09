@@ -46,7 +46,7 @@ const (
 	maxPluginMetadataEntryBytes = 256 * 1024
 )
 
-// pluginDirs 列出本 FR 扫描的受控目录（相对实例 workDir）。
+// pluginDirs 列出受控扫描目录（相对实例 workDir）。
 // Bukkit 系用 plugins/，Forge/Fabric 系用 mods/，资源包/数据包分别走 resourcepacks/ 与 datapacks/。
 var pluginDirs = []string{"plugins", "mods", "resourcepacks", "datapacks"}
 

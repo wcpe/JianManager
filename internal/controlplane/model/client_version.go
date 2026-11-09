@@ -6,7 +6,7 @@ import "time"
 // 一条记录 = 频道某次发布的完整文件清单 + 同步策略 + 自更新段。Version 单调递增、与 ClientChannel.CurrentVersion
 // 配合定位 latest。manifest 由该快照即时组装 + Ed25519 签名（不缓存签名，密钥轮换/防降级）。
 //
-// 本 FR（latest-only）只需「能发布一版并以 latest 返回」；完整版本历史/运营回滚/管理台见。
+// 当前口径（latest-only）只需「能发布一版并以 latest 返回」；完整版本历史/运营回滚/管理台另见。
 type ClientVersion struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// ChannelID 所属频道 slug（随频道删除级联清理）。

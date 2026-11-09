@@ -560,7 +560,7 @@ func isManagedItemKey(key string) bool {
 //   - generic 类型：通用二进制。
 //
 // 取舍：W6 画像把未知组合 `(minecraft_java, universal)` 归入「兜底 universal（MCSemantics=false）」，
-// 但本 FR 保留该组合为 MC 语义——`minecraft_java` 且未显式设角色（GORM 默认 universal）是
+// 但此处保留该组合为 MC 语义——`minecraft_java` 且未显式设角色（GORM 默认 universal）是
 // 手动/MCP `instance_create` 创建 MC 服务端的现实路径（provision/proxy/import/clone 才显式落 backend/proxy），
 // 若一并排除会把这些存量实例的关键配置面板静默清空。故此处按「排除 proxy/beacon/generic」收敛，
 // 与spec（`props.*`/`startup.*` 对 `minecraft_java` 呈现）一致。
@@ -571,7 +571,7 @@ func mcSemanticConfigSurface(inst *model.Instance) bool {
 	return instanceMCSemantics(inst.Type, inst.Role)
 }
 
-// instanceMCSemantics 是能力画像 `MCSemantics` 在本 FR 的最小实现（以 (type, role) 为键）。
+// instanceMCSemantics 是能力画像 `MCSemantics` 的最小实现（以 (type, role) 为键）。
 func instanceMCSemantics(t model.InstanceType, r model.InstanceRole) bool {
 	if t != model.InstanceTypeMinecraftJava {
 		return false
